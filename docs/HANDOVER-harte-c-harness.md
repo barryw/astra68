@@ -1,178 +1,123 @@
-# HANDOVER — Harte harness C rewrite (next session)
+# HANDOVER — Harte harness (next session)
 
-**Date:** 2026-07-08
-**Branch:** `harte-harness`
-**Guiding principle (from Barry):** simplest thing that works. No cleverness. Reuse the
-**proven** 68k patterns already in this repo. 45+ years of 68k wisdom exists — lean on it.
+**Date:** 2026-07-08  **Branch:** `harte-harness`  **HEAD:** `bd4a2fe`
+**Rule (Barry):** correct fixes only — no workarounds (they break later). Always know exactly
+what bitstream is loaded.
 
 ---
 
-## ⏩ STATUS UPDATE (2026-07-08 — Phases 0+1 VERIFIED on silicon; Phase 2 RUN blocked on a RAM-exec bug, candidate fix flashed)
+## TL;DR
 
-### ✅ Phase 0 (echo) + Phase 1 (PING/PONG) — DONE and VERIFIED on the ULX3S
-- `sw/harte/harness.c` (C, reuses `../boot/{crt0.S,astra_st.ld}`), `sw/harte/harness_exec.S`, `sw/harte/Makefile`.
-- `sw/include/vesta.h`: added `UART_RXSTATUS`/`UART_RXDATA`/`UART_RX_READY` (verified vs `astra_soc.sv:183-184`).
-- Bare-asm `harness.S`/`harness.ld` deleted. The bare-asm boot blocker is **fully gone** (C boots via crt0's RTE handler).
-- **Silicon results:** echo gate 7/7 (incl. 0x00/0xFF/0x55/0xAA); PING/PONG gate 8/8 (incl. edge payloads; 0x55 as data;
-  all checksums correct). Host `proto` pytest 2/2. Commits `1dafbf2`, `5a82747`, `4f126fc`.
+The Harte per-case harness is **functionally complete and simulation-verified**. It boots, does
+bidirectional UART, speaks the PING/RUN protocol, and executes a case correctly **in simulation**.
+The ONE blocker is a **hardware timing bug**: a `MOVEM` read-burst immediately followed by an
+instruction fetch from RAM hangs the CPU on silicon. It does **not** reproduce in functional sim,
+so the harness logic is right — the fix is in the **timing domain** (the WF68K30L's negedge
+DSACK/read-data paths, already flagged marginal at `astra_soc.sv:27`).
 
-### ⛔ Phase 2 (RUN — load/single-step/dump): CODE COMPLETE, HW-blocked by a **RAM instruction-execution hang**
-The harness relocates each test instruction into `codebuf` (RAM `.bss`) and single-steps it. On this SoC **executing
-that relocated instruction hangs the CPU** — root-caused on silicon by bisection (all before the board went UART-dead):
-- `harte_exec` reaching `codebuf` via **`jmp <RAM>`** and returning via a **`JMP abs.L` fetched from RAM** → **HANGS**
-  (confirmed with a real instruction, with `ilen=0` = codebuf is only `JMP abs.L`, and with `JMP (a0)`).
-- Skipping codebuf (`jmp harte_dump`, a ROM target) → **works** (dump/return path is fine).
-- A bare **`RTS` fetched from RAM, reached via `jsr <RAM>`** (a C fn-ptr call) → **works** ('XY').
-- ⟹ The distinguishing variable is **`jmp`-entry to RAM (hangs) vs `jsr`-entry to RAM (works)**, and/or a
-  multi-word change-of-flow instruction (`JMP abs.L`) fetched from RAM. A bare 1-word `RTS` from RAM is fine.
-- **NOT yet distinguished:** true fetch-hang vs a bus-error-exception RETRY loop (the `_default_handler` RTE would
-  re-run the faulting fetch forever = looks hung). The test to settle this **never ran** — the board's FT231X went
-  UART-silent (needs a physical power-cycle) right before it.
+**Start here:** pull the nextpnr timing report for the negedge paths, then fix clock margin /
+bus wait-states / core bus-interface retiming and verify on the NUC.
 
-### 🔧 Candidate fix APPLIED + FLASHED (untested — needs power-cycle to verify)
-Switched `harte_exec` to the **proven-working RAM-exec pattern**: enter with **`jsr codebuf`** (not `jmp`), and C now
-appends a **one-word `RTS`** to codebuf (not a multi-word `JMP abs.L`). No multi-word change-of-flow is ever fetched
-from RAM. This is the exact shape that worked ('XY'). Compiles clean; encodings disassembly-verified
-(`4eb9 jsr codebuf` … trailing `4e75 rts`). **This jsr-fix bitstream is currently flashed to the board.**
+---
 
-### ▶️ NEXT SESSION — do these in order
-1. **Power-cycle the board** (physical USB replug — mandatory; the FT231X is stuck in JTAG mode after many loads).
-2. `cd sw/harte/host && python3 runone.py` (retry-capable; expects 5/5 known ALU cases incl. CCR).
-   - **PASS ⟹ Phase 2 is unblocked.** Proceed to Task 6 (host driver `harte_run.py`: parse/filter Harte JSON, stream
-     ADD/MOVE/ASL register-only cases, compare regs+CCR).
-   - **FAIL ⟹** the jsr entry alone didn't fix it. Confirm exception-vs-hang: rebuild with the instrumented
-     `_default_handler` (emit a byte + spin instead of `rte` — snippet below) and run one RUN; a `'E'` byte ⟹
-     bus-error exception on RAM fetch ⟹ the fix is in the **SoC bus/prefetch RTL** (`astra_soc.sv` bus FSM,
-     lines 187-235), not the harness. Then also try TRACE-bit single-step (set T in SR, no appended instruction at all).
-3. Iteration tips (hard-won this session): **SRAM load** `openFPGALoader --board ulx3s astra.bit` (no `-f`) is **~10 s**
-   vs `-f` flash ~3 min — use it while iterating. BUT repeated JTAG loads **drift the FT231X** until the UART goes
-   silent; when PING stops answering, **power-cycle**. Always warm up with a PING (the first transaction after a load
-   is often dropped). Changing ROM firmware still needs a full `mkbit.sh` (~3 min, ROM is `$readmemh`'d at synth).
+## Hardware + workflow (the FTDI nightmare is SOLVED)
 
-Instrumented `_default_handler` for the exception test (drop into a harness-local `crt0.S`, build with it instead of
-`../boot/crt0.S`):
-```gas
-_default_handler:                 | emit 'E' then spin (no rte -> no fault-retry loop)
-6:  move.l #0xFFF00504,%a0 ; move.l (%a0),%d0 ; btst #0,%d0 ; beq 6b
-    move.l #0xFFF00500,%a0 ; move.l #0x45,(%a0)
-7:  bra 7b
+The ULX3S now lives on the **NUC** (Ubuntu 24.04, `ssh nuc`). Linux `ftdi_sio` re-binds the serial
+port cleanly after openFPGALoader, so **no more power-cycles** between flashes. Everything (m68k-gcc
+firmware build, yosys/nextpnr/ecppack bitstream, openFPGALoader flash, pyserial, iverilog/verilator
+sim) runs on the NUC. Repo is at `nuc:~/astra68` (keep it in sync with `rsync -a <file> nuc:~/astra68/...`).
+Toolchain: `~/oss-cad-suite` (source its `environment`), apt `gcc-m68k-linux-gnu` + `python3-serial`,
+udev rule `/etc/udev/rules.d/99-ulx3s.rules` (0403:6015 → plugdev).
+
+### ALWAYS build+flash via the provenance pipeline — never flash a bare .bit
 ```
-
----
-
-## TL;DR for next session
-
-The CPU core is **done and solid on silicon** (5/5 `SELFTEST: PASS`). We're building the Harte
-vector test harness. Phase 0 hardware plumbing (UART RX in the SoC + host framing library) is
-built and the **SoC is confirmed good on silicon**. The ONE blocker: the harness ROM was written
-in **bare 68k assembly** and won't boot on hardware. The fix is not to debug the bare-asm — it's
-to **rewrite the harness in C, reusing the exact scaffolding the working selftest already uses**
-(`crt0.S` + `astra_st.ld`). That path is proven to boot and do UART. Start there.
-
----
-
-## What is DONE and verified (do not redo)
-
-- **git**: repo initialized; vendored WF68K30L core flattened in (one repo); branch `harte-harness`.
-  Commits: `e3bb2f9` uart_rx, `c17e284`+`7d5711f` SoC RX wiring, `7b9b4ab` build infra, `4ba578e` harness skeleton+proto.
-- **Task 1 — `fpga/soc/uart_rx.sv`**: 8N1 receiver, iverilog-tested. Good.
-- **Task 2 — SoC RX wired** into `fpga/soc/astra_soc.sv`: read regs
-  `0xFFF00508` bit0 = `rx_ready`, `0xFFF0050C` = RX byte (reading it clears `rx_ready`).
-  TX unchanged (`0xFFF00500` write, `0xFFF00504` bit0 = TX ready). **Confirmed good on silicon**
-  (the known-good selftest prints `PASS sum=574D530E` on this exact SoC).
-- **Task 3 code — `sw/harte/host/proto.py`** (+ passing pytest), **`ping.py`**: host-side framing. Good.
-- **Build flow self-contained**: `fpga/soc/oss_flow/mkbit.sh <rom.hex> <tag>` builds the canonical
-  repo SoC → `astra.bit`. Confirmed loop-free (nextpnr rc=0) and boots.
-
-## The BLOCKER (why we stopped)
-
-`sw/harte/harness.S` (bare 68k asm, linked with `sw/harte/harness.ld`) **does not boot on hardware** —
-it freezes right after its first peripheral read (LEDs: heartbeat blinks, `uart_busy` off, address
-bus frozen at `…8`, i.e. halted). The gcc-C selftest (`crt0.S` + `astra_st.ld`) boots fine on the
-same SoC. So it is a bare-asm-vs-C problem, not a SoC problem. Leading theory: a spurious early
-exception hits the bare-asm's `STOP` handler (vectors 2–255 → `_halt` = `STOP #0x2700`), which
-**freezes**; the selftest's crt0 handler does `RTE` and survives. **Do not rabbit-hole on this.**
-
----
-
-## THE PLAN: rewrite the harness in C (simplest proven path)
-
-Reuse the selftest's scaffolding **verbatim**. The selftest lives in `sw/boot/` and is known to
-boot + do UART on this exact hardware. Copy its structure.
-
-### Files to create (`sw/harte/`)
-- **Reuse as-is** (copy from `sw/boot/`, do not modify): `crt0.S`, `astra_st.ld`. These give you a
-  working reset vector table, SSP setup, `.data`/`.bss` init, `jsr kmain`, and an `RTE`
-  `_default_handler` for spurious exceptions — the whole reason C boots and bare-asm didn't.
-- **`sw/harte/harness.c`** — `kmain()`: the whole harness in C. Structure it exactly like
-  `sw/boot/selftest.c`'s UART helpers (proven):
-  ```c
-  #include "vesta.h"
-  static void putc(char c){ while(!(VESTA->UART_STATUS & UART_TX_READY)){} VESTA->UART_DATA=(uint8_t)c; }
-  static uint8_t getc(void){ while(!(VESTA->UART_RXSTATUS & 1)){} return VESTA->UART_RXDATA; }  // add RXSTATUS/RXDATA to vesta.h
-  ```
-  (Add `UART_RXSTATUS` @ offset 0x08 and `UART_RXDATA` @ 0x0C to `sw/include/vesta.h` — mirror the
-  existing UART_STATUS/UART_DATA fields.)
-
-### Phase 0 first — prove the C harness boots + bidirectional UART (SMALL, do this before anything else)
-`kmain()` = a PING/echo loop:
-```c
-void kmain(void){
-    putc('R');                         // boot marker (proves C harness boots + TX)
-    for(;;){
-        uint8_t b = getc();            // blocks for a host byte (proves RX)
-        putc(b);                       // echo it
-    }
-}
+ssh nuc 'cd ~/astra68 && bash sw/harte/build_flash.sh "one-line description of this build"'
 ```
-Build (same recipe as selftest, on beast `~/astra_st`):
-`m68k-linux-gnu-gcc -m68020 -msoft-float -Os -ffreestanding -fno-builtin -nostdlib -I ../include -T astra_st.ld -o h.elf crt0.S harness.c && objcopy -O binary h.elf h.bin && python3 bin2hex.py h.bin rom_harness.hex`
-→ pull hex → `mkbit.sh rom_harness.hex harness` → flash → power-cycle → host sends bytes, expects echo + sees 'R'.
-**If 'R' streams and bytes echo, the C harness works — the whole bare-asm problem is gone.**
+It: builds fw (regenerates `build_id.h` = SHA-1 of ALL RTL+fw source) → builds bitstream → flashes →
+**queries the running device (CMD_ID) and hard-fails unless it reports the exact BUILD_ID just built**
+→ appends to `sw/harte/BUILD_LOG.md`. So a stale/failed flash can't masquerade as success.
 
-### Then the protocol (proto.py already exists, host side done)
-Implement the wire protocol from the spec in C:
-- **PING** `0x55 0x03 0x02 <byte> cksum` → **PONG** `0xAA 0x03 0x80 <byte> cksum`.
-  ⚠️ **Known bug to avoid:** the old bare-asm sent PONG `LEN=0x02`; it MUST be **`0x03`** (CMD+byte+cksum
-  = 3 bytes after LEN). `proto.py`'s `parse()` requires the correct LEN.
-- Keep it dead simple: read byte-by-byte, match `0x55`, read LEN/CMD/payload, dispatch.
+Know what's loaded any time: `ssh nuc 'cd ~/astra68/sw/harte/host && python3 whatsloaded.py'`
+→ prints the device BUILD_ID + its BUILD_LOG row (fixes/features).
 
-### Then Task 5 — per-case execution (the only part that needs asm, keep it minimal)
-Do the register load + single-step in ONE small inline-asm block inside a C function (the
-established 68k way — don't hand-roll a whole asm program):
-- Host sends a case (regs, CCR, instruction bytes) — see spec §5 wire protocol.
-- C writes the instruction bytes + a trailing `JMP dump` into a RAM buffer at a fixed `harness_pc`.
-- Inline asm: `movem.l regtable,%d0-%d7/%a0-%a6` ; `move.b ccr,%d0 ; move.w %d0,%ccr` (set CCR LAST) ;
-  `jmp harness_pc`. The test instruction runs, falls into `JMP dump`.
-- `dump`: `movem.l %d0-%d7/%a0-%a6,(resultbuf).l` FIRST (absolute dest, no reg clobber), then read SR,
-  send regs+CCR to host. Host (`harte_run.py`, to be written) compares d0-7/a0-6 + CCR (masked).
-- Full detail: `docs/superpowers/plans/2026-07-07-harte-vector-harness.md` Task 5 (the asm sequence is
-  correct there; just host it in C instead of a standalone .S).
-
-### Scope (unchanged, approved)
-Register-only data-processing Harte 68000 cases (ADD/MOVE/ASL first, then the DP set). No memory
-operands / A7 / privileged / trace / undefined-flags. Memory cases = Phase 3 (SDRAM or sim). Compare
-final d0-7, a0-6, CCR (masked by per-opcode defined-flags). Skip prefetch + cycle counts.
+Fast reset without rebuild (SRAM reload of current astra.bit):
+`ssh nuc 'source ~/oss-cad-suite/environment; cd ~/astra68/fpga/soc/oss_flow && openFPGALoader --board ulx3s astra.bit'`
+(full mkbit ~5-6 min on the NUC; run it backgrounded — `run_in_background` — and wait for the notify.)
 
 ---
 
-## Delete / supersede
-- `sw/harte/harness.S` + `sw/harte/harness.ld` (bare-asm) — **superseded by the C rewrite**. The plan's
-  Task 3/5 "bare-asm" wording is superseded by this doc. `sw/harte/host/proto.py`, `ping.py`, tests stay.
-- Scratchpad `echo.S`/`echo2.S` were throwaway debug ROMs (session temp, gone).
+## THE BLOCKER — RAM-exec hang = hardware TIMING, not logic
 
-## Hardware workflow (hard-won — follow exactly)
-1. Build firmware on **beast** (`ssh beast`, `~/astra_st/`, `m68k-linux-gnu-gcc`), pull the `.hex`.
-2. `cd fpga/soc/oss_flow && bash mkbit.sh <rom.hex> <tag>` → `astra.bit` (expect `nextpnr rc=0`).
-3. `openFPGALoader --board ulx3s -f astra.bit` (~3 min, writes SPI flash).
-4. **Power-cycle the board** (unplug/replug USB) — mandatory, resets the FT231X to UART mode.
-5. Host serial: **115740 baud** (NOT 115200) on `/dev/cu.usbserial-D01457`. macOS FTDI VCP is flaky —
-   use a retry loop. NEVER "start a reader then unplug" — the reader crashes (Errno 6) on the unplug.
-6. Liveness oracle when UART is silent: LEDs = `{hb[23] heartbeat, ~AS, ~RW, uart_busy, adr[3:0]}`.
+**Symptom:** a RUN case hangs the CPU. Localized (markers + LED bus-state reads) to `harte_exec`
+(`sw/harte/harness_exec.S`): the sequence `movem.l regtable,%d0-%d7/%a0-%a6` **then** `jsr codebuf`
+(fetch+execute from RAM) hangs — a silent fault-retry loop (plain crt0 `rte` retries the faulting
+access forever; there is no bus-error watchdog, so no exception is ever reported).
+
+**Ruled OUT by bisection (all on silicon):** buffer misalignment (4-aligned regtable/resultbuf — no
+help), jmp-vs-jsr entry, a-reg values (0 vs nonzero), codebuf content (even a bare `RTS` after the
+movem hangs; `jsr` to a RAM `RTS` *without* the preceding movem WORKS). So the trigger is specifically
+**MOVEM-read-burst → instruction-fetch-from-RAM**.
+
+**The decisive test:** a Verilator sim of the whole SoC (`fpga/soc/sim/`) runs `harte_exec` to
+**completion with the correct result** (`R B A 0` = boot, before/after exec, CCR=0 for 1+2=3). Functional
+sim has zero path delays → it passes. **Therefore the logic is correct and this is a hardware TIMING
+violation.** It matches the standing warning at `astra_soc.sv:27-32`: the WF68K30L samples DSACK and
+latches read data on the **negedge**, giving negedge→posedge paths only half a clock; 10 MHz failed on
+HW, 3.125 MHz boots. The movem→fetch sequence stresses one of those negedge paths past margin.
+
+### Correct-fix directions (timing domain — NOT the harness, NO NOP padding)
+1. `cd fpga/soc/oss_flow && cat pnr_*.log` — read nextpnr's timing report; find the marginal
+   negedge path(s) in the core's bus interface (`wf68k30L_bus_interface.vhd`) / DSACK/data mux.
+2. Candidate correct fixes: more bus wait states (`astra_soc.sv` bus FSM `waitc`, give the negedge
+   latch more settle time — legit for an async bus); slower clock (`clkdiv`, currently /8=3.125 MHz);
+   register/retime the read-data path so it's posedge-stable well before the core's negedge sample;
+   or constrain the negedge paths in the flow. Verify on the NUC (cheap now).
+3. Can't be caught in functional sim — needs HW verify or post-PnR timing (SDF) sim.
+
+---
+
+## Second bug — UART RX overrun (also correct-fix, smaller)
+
+`uart_rx`/SoC RX has **no FIFO** — a single `rx_data` register. At full baud the NUC delivers bytes
+back-to-back and long frames (the 66-byte RUN frame) drop bytes → `getc` blocks. macOS's slow FTDI hid
+this; the NUC exposed it. Host currently paces bytes (`probe.py` sends byte-by-byte with 1 ms gaps) as a
+stopgap for debugging. **Correct fix: add a small RX FIFO** (a few bytes) in `fpga/soc/uart_rx.sv` /
+the SoC RX register block so full-baud frames don't overrun. Needed before the real Harte sweep (pacing
+every byte is too slow for thousands of cases).
+
+---
+
+## What is DONE + verified (do not redo)
+
+- **Phases 0+1 verified on silicon:** boot, TX/RX, PING/PONG (`harness.c`). Earlier commits.
+- **RUN handler (Phase 2) logic:** `harness.c` `run_case` (frame checksum-validated, drops corrupt
+  frames) + `harness_exec.S` `harte_exec` (movem-load regs+CCR, jsr codebuf, capture regs+CCR to
+  aligned buffers). **Sim-verified correct.** Blocked only by the HW timing bug.
+- **Provenance:** `build_id.h`/CMD_ID, `build_flash.sh`, `whatsloaded.py`, `BUILD_LOG.md`.
+- **Sim:** `fpga/soc/sim/{mkcore.sh,tb_soc.sv,sim_harness.c}` + `astra_soc.sv` `RST_MAX` param.
+  Verilator: `cd fpga/soc/sim && bash mkcore.sh && verilator --binary -j 0 --top-module tb_soc -Wno-fatal
+  -Wno-lint --timing tb_soc.sv ../astra_soc.sv ../uart_tx.sv ../uart_rx.sv wf68k_core.v && ./obj_dir/Vtb_soc`
+  (needs `rom_init.hex` = sim_harness ROM in cwd; build it with m68k-gcc, see mkcore/Makefile pattern).
+
+## Debug aids kept in-tree
+- `sw/harte/crt0_diag.S` — crt0 with per-vector (2/3/4) emit handlers (NOTE: didn't boot cleanly —
+  emit-at-boot is fragile if a spurious boot exception fires before UART is usable; a fault-COUNTING
+  handler that `rte`s until N faults then reports would be more robust if you need the vector).
+- `sw/harte/host/probe.py` / `probe_seq.py` — single paced RUN probe (overrun-safe).
+- LED map `astra_soc.sv`: `{hb[23], ~as_n, ~rw_n, uart_busy, adr[3:0]}` — read at a hang to see
+  stuck-cycle (as_n) + address nibble. (A hang-address latch+cycle-out LED mode was used and reverted;
+  git has it if needed.)
+
+## Next steps (in order)
+1. **Fix the movem→fetch timing bug** (directions above). Verify on NUC. This unblocks Phase 2.
+2. **Add the RX FIFO** to `uart_rx`/SoC.
+3. **Task 6:** host driver `sw/harte/host/harte_run.py` — parse/filter Harte JSON (register-only,
+   non-A7, non-trace, defined-flags), stream ADD/MOVE/ASL cases, compare regs+CCR. Spec §5–6,
+   plan Task 6. Harte data on beast `~/astra_soc/harte/` or fetch SingleStepTests/ProcessorTests.
 
 ## Pointers
-- Memory (basic-memory, project claude-memory): note "Astra68 — Harte harness Phase 0 in progress…"
-  and the prior "RESOLVED" note. Ledger: `.superpowers/sdd/progress.md`.
-- Spec: `docs/superpowers/specs/2026-07-07-harte-vector-harness-design.md`.
-- Plan: `docs/superpowers/plans/2026-07-07-harte-vector-harness.md` (Task 5 asm sequence is the reference).
-- Working reference to copy: `sw/boot/{crt0.S,astra_st.ld,selftest.c,Makefile}`, `sw/include/vesta.h`.
+- Spec: `docs/superpowers/specs/2026-07-07-harte-vector-harness-design.md`
+- Plan: `docs/superpowers/plans/2026-07-07-harte-vector-harness.md`
+- Memory (basic-memory, project claude-memory): the "Astra68 — Harte harness" note (has all 3
+  sessions' findings appended).
+- Ledger: `.superpowers/sdd/progress.md`.
