@@ -11,8 +11,8 @@ LD       = ../boot/astra_st.ld
 
 all: rom_harness.hex
 
-harness.elf: harness.c $(CRT0) $(LD)
-	$(CC) $(CFLAGS) -T $(LD) -o $@ $(CRT0) harness.c
+harness.elf: harness.c harness_exec.S $(CRT0) $(LD)
+	$(CC) $(CFLAGS) -T $(LD) -o $@ $(CRT0) harness_exec.S harness.c
 
 harness.bin: harness.elf
 	$(OBJCOPY) -O binary $< $@

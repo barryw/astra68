@@ -7,17 +7,56 @@
 
 ---
 
-## ⏩ STATUS UPDATE (2026-07-08, commit `1dafbf2`)
+## ⏩ STATUS UPDATE (2026-07-08 — Phases 0+1 VERIFIED on silicon; Phase 2 RUN blocked on a RAM-exec bug, candidate fix flashed)
 
-**Phase 0 C harness is written and build-verified — pending only the on-silicon flash.**
-- `sw/harte/harness.c` = the exact `'R'` + echo loop below. Reuses `../boot/{crt0.S,astra_st.ld}`.
-- `sw/include/vesta.h` got `UART_RXSTATUS`/`UART_RXDATA`/`UART_RX_READY` (addresses verified vs `astra_soc.sv:183-184`).
-- Bare-asm `harness.S`/`harness.ld` deleted (superseded).
-- `sw/harte/Makefile` builds `rom_harness.hex`. Built on beast: compile+link clean, no undefined refs,
-  reset vectors correct (SSP=`0x02000000`, PC=`0xFFE00400`, vec2+=RTE handler). `rom_harness.hex` is on the Mac (gitignored).
-- **NEXT ACTION (hardware, Barry):** `cd fpga/soc/oss_flow && bash mkbit.sh ../../../sw/harte/rom_harness.hex harness`
-  → `openFPGALoader --board ulx3s -f astra.bit` → **power-cycle** → open serial @115740 → expect `'R'` then echoes.
-- **If echo passes:** the bare-asm blocker is gone. Proceed to PING/PONG (host side ready; PONG LEN=`0x03`), then Task 5.
+### ✅ Phase 0 (echo) + Phase 1 (PING/PONG) — DONE and VERIFIED on the ULX3S
+- `sw/harte/harness.c` (C, reuses `../boot/{crt0.S,astra_st.ld}`), `sw/harte/harness_exec.S`, `sw/harte/Makefile`.
+- `sw/include/vesta.h`: added `UART_RXSTATUS`/`UART_RXDATA`/`UART_RX_READY` (verified vs `astra_soc.sv:183-184`).
+- Bare-asm `harness.S`/`harness.ld` deleted. The bare-asm boot blocker is **fully gone** (C boots via crt0's RTE handler).
+- **Silicon results:** echo gate 7/7 (incl. 0x00/0xFF/0x55/0xAA); PING/PONG gate 8/8 (incl. edge payloads; 0x55 as data;
+  all checksums correct). Host `proto` pytest 2/2. Commits `1dafbf2`, `5a82747`, `4f126fc`.
+
+### ⛔ Phase 2 (RUN — load/single-step/dump): CODE COMPLETE, HW-blocked by a **RAM instruction-execution hang**
+The harness relocates each test instruction into `codebuf` (RAM `.bss`) and single-steps it. On this SoC **executing
+that relocated instruction hangs the CPU** — root-caused on silicon by bisection (all before the board went UART-dead):
+- `harte_exec` reaching `codebuf` via **`jmp <RAM>`** and returning via a **`JMP abs.L` fetched from RAM** → **HANGS**
+  (confirmed with a real instruction, with `ilen=0` = codebuf is only `JMP abs.L`, and with `JMP (a0)`).
+- Skipping codebuf (`jmp harte_dump`, a ROM target) → **works** (dump/return path is fine).
+- A bare **`RTS` fetched from RAM, reached via `jsr <RAM>`** (a C fn-ptr call) → **works** ('XY').
+- ⟹ The distinguishing variable is **`jmp`-entry to RAM (hangs) vs `jsr`-entry to RAM (works)**, and/or a
+  multi-word change-of-flow instruction (`JMP abs.L`) fetched from RAM. A bare 1-word `RTS` from RAM is fine.
+- **NOT yet distinguished:** true fetch-hang vs a bus-error-exception RETRY loop (the `_default_handler` RTE would
+  re-run the faulting fetch forever = looks hung). The test to settle this **never ran** — the board's FT231X went
+  UART-silent (needs a physical power-cycle) right before it.
+
+### 🔧 Candidate fix APPLIED + FLASHED (untested — needs power-cycle to verify)
+Switched `harte_exec` to the **proven-working RAM-exec pattern**: enter with **`jsr codebuf`** (not `jmp`), and C now
+appends a **one-word `RTS`** to codebuf (not a multi-word `JMP abs.L`). No multi-word change-of-flow is ever fetched
+from RAM. This is the exact shape that worked ('XY'). Compiles clean; encodings disassembly-verified
+(`4eb9 jsr codebuf` … trailing `4e75 rts`). **This jsr-fix bitstream is currently flashed to the board.**
+
+### ▶️ NEXT SESSION — do these in order
+1. **Power-cycle the board** (physical USB replug — mandatory; the FT231X is stuck in JTAG mode after many loads).
+2. `cd sw/harte/host && python3 runone.py` (retry-capable; expects 5/5 known ALU cases incl. CCR).
+   - **PASS ⟹ Phase 2 is unblocked.** Proceed to Task 6 (host driver `harte_run.py`: parse/filter Harte JSON, stream
+     ADD/MOVE/ASL register-only cases, compare regs+CCR).
+   - **FAIL ⟹** the jsr entry alone didn't fix it. Confirm exception-vs-hang: rebuild with the instrumented
+     `_default_handler` (emit a byte + spin instead of `rte` — snippet below) and run one RUN; a `'E'` byte ⟹
+     bus-error exception on RAM fetch ⟹ the fix is in the **SoC bus/prefetch RTL** (`astra_soc.sv` bus FSM,
+     lines 187-235), not the harness. Then also try TRACE-bit single-step (set T in SR, no appended instruction at all).
+3. Iteration tips (hard-won this session): **SRAM load** `openFPGALoader --board ulx3s astra.bit` (no `-f`) is **~10 s**
+   vs `-f` flash ~3 min — use it while iterating. BUT repeated JTAG loads **drift the FT231X** until the UART goes
+   silent; when PING stops answering, **power-cycle**. Always warm up with a PING (the first transaction after a load
+   is often dropped). Changing ROM firmware still needs a full `mkbit.sh` (~3 min, ROM is `$readmemh`'d at synth).
+
+Instrumented `_default_handler` for the exception test (drop into a harness-local `crt0.S`, build with it instead of
+`../boot/crt0.S`):
+```gas
+_default_handler:                 | emit 'E' then spin (no rte -> no fault-retry loop)
+6:  move.l #0xFFF00504,%a0 ; move.l (%a0),%d0 ; btst #0,%d0 ; beq 6b
+    move.l #0xFFF00500,%a0 ; move.l #0x45,(%a0)
+7:  bra 7b
+```
 
 ---
 
