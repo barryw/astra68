@@ -3,7 +3,13 @@
 # Builds the canonical repo SoC (fpga/soc/*.sv + fpga/cpu/wf68k30L) via yosys+nextpnr.
 # nextpnr rc=0 == combinational-loop-free (it refuses loops instead of cutting them).
 set -e
-OSS=/opt/homebrew/oss-cad-suite
+# Locate oss-cad-suite: $OSS override, then common install dirs (Linux NUC, macOS brew).
+if [ -z "${OSS:-}" ]; then
+  for d in "$HOME/oss-cad-suite" /opt/homebrew/oss-cad-suite /opt/oss-cad-suite /usr/local/oss-cad-suite; do
+    [ -d "$d" ] && OSS="$d" && break
+  done
+fi
+[ -d "${OSS:-}" ] || { echo "oss-cad-suite not found (set \$OSS)"; exit 1; }
 source "$OSS/environment"
 export GHDL_PREFIX="$OSS/lib/ghdl"
 cd "$(dirname "$0")"                 # fpga/soc/oss_flow/
