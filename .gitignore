@@ -21,5 +21,12 @@ __pycache__/
 sw/harte/data/
 *.json.gz
 
+# oss_flow build products
+fpga/soc/oss_flow/rom_init.hex
+fpga/soc/oss_flow/astra.json
+fpga/soc/oss_flow/astra.config
+fpga/soc/oss_flow/*.log
+.superpowers/
+
 # OS
 .DS_Store
