@@ -21,8 +21,10 @@ __pycache__/
 sw/harte/data/
 *.json.gz
 
+# ROM hex build products (regenerated from source via each ROM's Makefile)
+*.hex
+
 # oss_flow build products
-fpga/soc/oss_flow/*.hex
 fpga/soc/oss_flow/astra.json
 fpga/soc/oss_flow/astra.config
 fpga/soc/oss_flow/*.log
