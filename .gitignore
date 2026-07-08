@@ -1,0 +1,25 @@
+# build artifacts
+**/build/
+*.bit
+*.elf
+*.bin
+*.o
+*.map
+
+# HDL sim
+work/
+*.wlf
+transcript
+vsim.log
+*.vcd
+
+# python
+__pycache__/
+*.pyc
+
+# Harte test data (large, fetched on demand)
+sw/harte/data/
+*.json.gz
+
+# OS
+.DS_Store
