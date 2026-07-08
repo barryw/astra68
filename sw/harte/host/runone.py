@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
 # Hand-built RUN smoke test — proves load -> single-step -> dump on silicon.
 # Sends a few register-only cases with known ALU results and checks regs + CCR.
-import serial, struct, sys, time
+import serial, struct, sys, time, os, glob
 sys.path.insert(0, ".")
 from proto import frame, parse, CMD_RUN
 
-PORT, BAUD = "/dev/cu.usbserial-D01457", 115740
+def find_port():                       # NUC=/dev/ttyUSB*, macOS=/dev/cu.usbserial*
+    if os.environ.get("ASTRA_PORT"):
+        return os.environ["ASTRA_PORT"]
+    for pat in ("/dev/ttyUSB*", "/dev/cu.usbserial*"):
+        m = sorted(glob.glob(pat))
+        if m:
+            return m[0]
+    return "/dev/ttyUSB0"
+
+PORT, BAUD = find_port(), 115740
 
 # CCR bits (low byte of SR): X N Z V C
 X, N, Z, V, C = 0x10, 0x08, 0x04, 0x02, 0x01
