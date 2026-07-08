@@ -168,8 +168,8 @@ module astra_soc (
     always @(posedge clk) begin
         if (rst) rx_ready <= 1'b0;
         else begin
-            if (rx_valid) begin rx_data <= rx_byte; rx_ready <= 1'b1; end
             if (rx_data_rd) rx_ready <= 1'b0;         // read of 0x...C consumes the byte
+            if (rx_valid) begin rx_data <= rx_byte; rx_ready <= 1'b1; end
         end
     end
     // MMIO regs are accessed as 32-bit longs (volatile uint32_t), value natural
