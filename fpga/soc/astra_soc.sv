@@ -19,6 +19,7 @@ module astra_soc (
     input  wire       clk25_mhz,
     input  wire       reset_n,     // btn[0] / BTN_PWRn, active low
     output wire       ftdi_rxd,    // FPGA TX -> host
+    input  wire       ftdi_txd,    // host -> FPGA RX
     output wire [7:0] leds
 );
     // -------------------------------------------------------------------------
@@ -154,11 +155,34 @@ module astra_soc (
         .clk(clk), .rst(rst), .data(uart_data), .start(uart_start),
         .tx(ftdi_rxd), .busy(uart_busy)
     );
+    // UART RX (host -> FPGA). rx_ready set on byte arrival, cleared on data read.
+    wire [7:0] rx_byte; wire rx_valid;
+    uart_rx #(.CLK_HZ(3125000), .BAUD(115200)) urx (.clk(clk), .rst(rst), .rx(ftdi_txd),
+        .data(rx_byte), .valid(rx_valid));
+    reg [7:0] rx_data; reg rx_ready;
+    // Read-commit strobe, not bus_write_stb: cpu_data_en is WRITE_ACCESS-only (see
+    // wf68k30L_bus_interface.vhd DATA_PORT_EN), so it (and bus_write_stb, which is
+    // only ever set alongside it) is always 0 during a read — bus_read_stb below is
+    // its read-side twin, set in the bus FSM when cpu_rw_n=1 (verified: 1 = read).
+    wire rx_data_rd = sel_uart & (cpu_adr[3:0]==4'hC) & bus_read_stb;
+    always @(posedge clk) begin
+        if (rst) rx_ready <= 1'b0;
+        else begin
+            if (rx_valid) begin rx_data <= rx_byte; rx_ready <= 1'b1; end
+            if (rx_data_rd) rx_ready <= 1'b0;         // read of 0x...C consumes the byte
+        end
+    end
     // MMIO regs are accessed as 32-bit longs (volatile uint32_t), value natural
     // in [31:0]. UART_DATA @ 0xFFF00500 (write, char in [7:0]);
     // UART_STATUS @ 0xFFF00504 (read, [0]=TX_READY, [1]=BUSY).
+    // UART_RXSTATUS @ 0xFFF00508 (read, [0]=RX_READY); UART_RXDATA @ 0xFFF0050C
+    // (read, byte in [7:0]; reading clears RX_READY).
     wire uart_data_wr = sel_uart & (cpu_adr[3:0]==4'h0) & cpu_data_en & ~cpu_rw_n & bus_write_stb;
-    wire [31:0] uart_rdata = (cpu_adr[3:0]==4'h4) ? {30'd0, uart_busy, ~uart_busy} : 32'd0;
+    wire [31:0] uart_rdata =
+        (cpu_adr[3:0]==4'h4) ? {30'd0, uart_busy, ~uart_busy} :   // TX status (existing)
+        (cpu_adr[3:0]==4'h8) ? {31'd0, rx_ready}            :     // RX status
+        (cpu_adr[3:0]==4'hC) ? {24'd0, rx_data}             :     // RX data
+        32'd0;
 
     // -------------------------------------------------------------------------
     // Bus interface FSM (async 68030 slave, registered, a few wait states)
@@ -167,10 +191,12 @@ module astra_soc (
     reg [1:0] bs;
     reg [1:0] waitc;
     reg       bus_write_stb;   // 1-cycle write pulse to memory/uart
+    reg       bus_read_stb;    // 1-cycle read-commit pulse (for read-clears-flag regs)
 
     always @(posedge clk) begin
         uart_start    <= 1'b0;
         bus_write_stb <= 1'b0;
+        bus_read_stb  <= 1'b0;
         if (rst) begin
             bs <= BS_IDLE; dsack_n <= 2'b11;
         end else case (bs)
@@ -186,6 +212,8 @@ module astra_soc (
                         if (sel_uart && cpu_adr[3:0]==4'h0) begin
                             uart_data <= cpu_dout[7:0]; uart_start <= 1'b1;
                         end
+                    end else if (cpu_rw_n) begin
+                        bus_read_stb <= 1'b1;              // commit read this cycle
                     end
                     bs <= BS_ACK;
                 end
