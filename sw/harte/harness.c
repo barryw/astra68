@@ -14,19 +14,27 @@
 //   RESULT  dev->host : 0xAA 0x3F 0x81 [d0..d7:32][a0..a6:28][ccr:1] cksum
 //   cksum = sum(CMD..last payload byte) & 0xFF.  LEN = bytes after LEN (= CMD+payload+cksum).
 #include "vesta.h"
+#include "build_id.h"       // generated: #define BUILD_ID 0x........u (hash of RTL+firmware source)
 
 #define SYNC_RX     0x55u   // host -> device sync byte
 #define SYNC_TX     0xAAu   // device -> host sync byte
 #define CMD_RUN     0x01u
 #define CMD_PING    0x02u
+#define CMD_ID      0x03u   // host asks "what build are you?"
 #define CMD_PONG    0x80u
 #define CMD_RESULT  0x81u
+#define CMD_IDR     0x83u   // reply carries BUILD_ID
 
 // Per-case buffers. NON-static on purpose: the exec_case() inline asm references these
 // by symbol name so the assembler emits absolute (abs.L) addressing — the only movem
 // addressing mode that is safe once a0..a6 hold the test result (no base register survives).
-uint32_t regtable[15];                             // d0..d7, a0..a6 (big-endian byte order == m68k)
-uint32_t resultbuf[15];                            // same layout, captured after the test instruction
+// aligned(4): m68k defaults uint32_t[] to 2-byte alignment, which put these at 0x..E/0x..2
+// offsets — making `movem.l` a MISALIGNED longword access that spans two words. This SoC's
+// bus interface does not support misaligned/dynamic-bus-sizing: the cycle stalls (AS held,
+// no completion) and the CPU hangs forever (no bus-error watchdog). 4-byte alignment keeps
+// every movem transfer a clean aligned longword. (Verified on silicon via LED bus-state read.)
+uint32_t regtable[15]  __attribute__((aligned(4))); // d0..d7, a0..a6 (big-endian byte order == m68k)
+uint32_t resultbuf[15] __attribute__((aligned(4))); // same layout, captured after the test instruction
 uint8_t  ccr_in;                                   // initial CCR for the case
 uint8_t  result_ccr;                               // captured CCR (low byte of SR)
 uint8_t  codebuf[32] __attribute__((aligned(4)));  // relocated test instruction + trailing RTS
@@ -91,6 +99,13 @@ void kmain(void) {
             uint8_t b = getc();                      // payload
             getc();                                  // cksum (ignored)
             putc(SYNC_TX); putc(0x03); putc(CMD_PONG); putc(b); putc((uint8_t)(CMD_PONG + b));
+        } else if (cmd == CMD_ID) {                  // report BUILD_ID: proves what firmware is running
+            getc(); getc();                          // payload byte + cksum (ignored)
+            uint32_t id = BUILD_ID;
+            uint8_t b3 = id >> 24, b2 = id >> 16, b1 = id >> 8, b0 = id;
+            putc(SYNC_TX); putc(6); putc(CMD_IDR);   // LEN = CMD + 4 payload + cksum
+            putc(b3); putc(b2); putc(b1); putc(b0);
+            putc((uint8_t)(CMD_IDR + b3 + b2 + b1 + b0));
         }
         // Unknown CMD self-heals via the resync-on-SYNC above.
     }

@@ -15,7 +15,9 @@
 // =============================================================================
 `default_nettype none
 
-module astra_soc (
+module astra_soc #(
+    parameter [15:0] RST_MAX = 16'hFFFF   // power-on reset length in CPU clocks (sim shortens it)
+) (
     input  wire       clk25_mhz,
     input  wire       reset_n,     // btn[0] / BTN_PWRn, active low
     output wire       ftdi_rxd,    // FPGA TX -> host
@@ -39,7 +41,7 @@ module astra_soc (
     reg        rst = 1'b1;
     always @(posedge clk) begin
         if (!reset_n)                  begin rst_cnt <= 0; rst <= 1'b1; end
-        else if (rst_cnt != 16'hFFFF)  rst_cnt <= rst_cnt + 1'b1;
+        else if (rst_cnt != RST_MAX)   rst_cnt <= rst_cnt + 1'b1;
         else                           rst <= 1'b0;
     end
 
@@ -54,6 +56,8 @@ module astra_soc (
     wire [1:0]  cpu_siz;
     wire [2:0]  cpu_fc;
     reg  [1:0]  dsack_n = 2'b11;
+    reg         bus_write_stb;   // 1-cycle write pulse to memory/uart (driven by the bus FSM below)
+    reg         bus_read_stb;    // 1-cycle read-commit pulse for read-clears-flag regs
 
     // Bus-control inputs {BGACKn,BRn,STERMn,AVECn,HALT_INn,BERRn}.
     // HALT_INn (bit 1) is asserted LOW during reset together with RESET_INn: the
@@ -190,8 +194,6 @@ module astra_soc (
     localparam BS_IDLE=2'd0, BS_WAIT=2'd1, BS_ACK=2'd2, BS_END=2'd3;
     reg [1:0] bs;
     reg [1:0] waitc;
-    reg       bus_write_stb;   // 1-cycle write pulse to memory/uart
-    reg       bus_read_stb;    // 1-cycle read-commit pulse (for read-clears-flag regs)
 
     always @(posedge clk) begin
         uart_start    <= 1'b0;
