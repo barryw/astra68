@@ -7,6 +7,20 @@
 
 ---
 
+## ⏩ STATUS UPDATE (2026-07-08, commit `1dafbf2`)
+
+**Phase 0 C harness is written and build-verified — pending only the on-silicon flash.**
+- `sw/harte/harness.c` = the exact `'R'` + echo loop below. Reuses `../boot/{crt0.S,astra_st.ld}`.
+- `sw/include/vesta.h` got `UART_RXSTATUS`/`UART_RXDATA`/`UART_RX_READY` (addresses verified vs `astra_soc.sv:183-184`).
+- Bare-asm `harness.S`/`harness.ld` deleted (superseded).
+- `sw/harte/Makefile` builds `rom_harness.hex`. Built on beast: compile+link clean, no undefined refs,
+  reset vectors correct (SSP=`0x02000000`, PC=`0xFFE00400`, vec2+=RTE handler). `rom_harness.hex` is on the Mac (gitignored).
+- **NEXT ACTION (hardware, Barry):** `cd fpga/soc/oss_flow && bash mkbit.sh ../../../sw/harte/rom_harness.hex harness`
+  → `openFPGALoader --board ulx3s -f astra.bit` → **power-cycle** → open serial @115740 → expect `'R'` then echoes.
+- **If echo passes:** the bare-asm blocker is gone. Proceed to PING/PONG (host side ready; PONG LEN=`0x03`), then Task 5.
+
+---
+
 ## TL;DR for next session
 
 The CPU core is **done and solid on silicon** (5/5 `SELFTEST: PASS`). We're building the Harte
