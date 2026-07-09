@@ -12,6 +12,7 @@
 #define EXC_FAKE_STACK (SCRATCH_BASE + 0x300u)
 #define EXC_ALT_VBR (SCRATCH_BASE + 0x400u)
 #define IRQ_SIM_REQ (SCRATCH_BASE + 0x500u)
+#define STACK_TEST_BASE (SCRATCH_BASE + 0x600u)
 
 static volatile uint32_t g_sum;
 
@@ -621,6 +622,64 @@ static void test_control_flow_directed(void)
     chk32(0x00090030u, got, 0x2au);
 }
 
+static void test_stack_frame_control_directed(void)
+{
+    uint32_t got0;
+    uint32_t got1;
+    uint32_t got2;
+    uint32_t got3;
+    uint32_t got4;
+
+    __asm__ volatile(
+        "move.l %%sp,%%a2\n\t"
+        "lea 0x01ff9700,%%sp\n\t"
+        "pea (%%sp)\n\t"
+        "move.l (%%sp),%0\n\t"
+        "move.l %%sp,%1\n\t"
+        "lea 4(%%sp),%%sp\n\t"
+        "move.l %%a2,%%sp"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a2", "memory");
+    chk32(0x00091000u, got0, STACK_TEST_BASE);
+    chk32(0x00091004u, got1, STACK_TEST_BASE - 4u);
+
+    __asm__ volatile(
+        "move.l %%sp,%%a2\n\t"
+        "lea 0x01ff9720,%%sp\n\t"
+        "movea.l #0x13579bdf,%%a3\n\t"
+        "link %%a3,#-8\n\t"
+        "move.l (%%a3),%0\n\t"
+        "move.l %%a3,%1\n\t"
+        "move.l %%sp,%2\n\t"
+        "unlk %%a3\n\t"
+        "move.l %%a3,%3\n\t"
+        "move.l %%sp,%4\n\t"
+        "move.l %%a2,%%sp"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2), "=&d"(got3), "=&d"(got4)
+        :
+        : "a2", "a3", "memory");
+    chk32(0x00091010u, got0, 0x13579bdfu);
+    chk32(0x00091014u, got1, STACK_TEST_BASE + 0x1cu);
+    chk32(0x00091018u, got2, STACK_TEST_BASE + 0x14u);
+    chk32(0x0009101cu, got3, 0x13579bdfu);
+    chk32(0x00091020u, got4, STACK_TEST_BASE + 0x20u);
+
+    __asm__ volatile(
+        "move.l %%sp,%%a2\n\t"
+        "lea 0x01ff9740,%%sp\n\t"
+        "link %%a7,#-4\n\t"
+        "move.l 4(%%sp),%0\n\t"
+        "move.l %%sp,%1\n\t"
+        "move.l 4(%%sp),%%sp\n\t"
+        "move.l %%a2,%%sp"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a2", "memory");
+    chk32(0x00091030u, got0, STACK_TEST_BASE + 0x40u);
+    chk32(0x00091034u, got1, STACK_TEST_BASE + 0x38u);
+}
+
 static void test_system_control_directed(void)
 {
     uint32_t got;
@@ -1204,6 +1263,7 @@ void kmain(void)
     test_an_post_pre_byte();
     test_movem_directed();
     test_control_flow_directed();
+    test_stack_frame_control_directed();
     test_system_control_directed();
     test_exception_recovery_directed();
 #ifdef CORETEST_SIM_IRQ
