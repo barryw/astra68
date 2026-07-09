@@ -7,6 +7,8 @@
 
 #define SCRATCH_BASE 0x01ff9100u
 #define SCRATCH      ((volatile uint8_t *)SCRATCH_BASE)
+#define EXC_REC_BASE (SCRATCH_BASE + 0x170u)
+#define EXC_RECOVERY_PC (EXC_REC_BASE + 0x14u)
 
 static volatile uint32_t g_sum;
 
@@ -91,6 +93,17 @@ static void wr32(uint32_t addr, uint32_t value)
     *(volatile uint32_t *)addr = value;
 }
 
+static void arm_exception_recovery(uint32_t vector_offset)
+{
+    wr32(EXC_REC_BASE + 0x00, 0u);
+    wr32(EXC_REC_BASE + 0x04, 0u);
+    wr32(EXC_REC_BASE + 0x08, 0u);
+    wr32(EXC_REC_BASE + 0x0c, 0u);
+    wr32(EXC_REC_BASE + 0x10, 0u);
+    wr32(EXC_RECOVERY_PC, 0u);
+    wr32(EXC_REC_BASE + 0x18, vector_offset);
+}
+
 static void chk32(uint32_t id, uint32_t got, uint32_t exp)
 {
     mark(id, got);
@@ -107,6 +120,18 @@ static void chk8(uint32_t id, uint32_t got, uint32_t exp)
 {
     mark(id, got);
     if ((got & 0xffu) != (exp & 0xffu)) stop_fail(id, got & 0xffu, exp & 0xffu);
+}
+
+static void chk_exception_frame(uint32_t id, uint32_t vector_offset,
+                                uint32_t frame_format,
+                                uint32_t sr_mask, uint32_t sr_exp)
+{
+    chk32(id + 0x00u, rd32(EXC_REC_BASE + 0x00), 1u);
+    chk32(id + 0x04u, rd32(EXC_REC_BASE + 0x0c) & 0x0fffu, vector_offset);
+    chk32(id + 0x08u, rd32(EXC_REC_BASE + 0x0c) & 0xf000u, frame_format);
+    chk32(id + 0x0cu, rd32(EXC_REC_BASE + 0x04) & sr_mask, sr_exp);
+    chk32(id + 0x10u, rd32(EXC_REC_BASE + 0x10) & 1u, 0u);
+    chk32(id + 0x14u, rd32(EXC_REC_BASE + 0x08) & 1u, 0u);
 }
 
 static void test_aligned_long(void)
@@ -655,6 +680,91 @@ static void test_system_control_directed(void)
     chk32(0x000a0034u, rd32(SCRATCH_BASE + 0xf0), 2u);
 }
 
+static void test_exception_recovery_directed(void)
+{
+    arm_exception_recovery(0x0010u);
+    __asm__ volatile(
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        ".word 0x4afc\n"
+        "1:"
+        :
+        :
+        : "a0", "memory");
+    chk_exception_frame(0x00100000u, 0x0010u, 0x0000u, 0x2000u, 0x2000u);
+
+    arm_exception_recovery(0x0014u);
+    __asm__ volatile(
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.l #1234,%%d0\n\t"
+        "divu.w #0,%%d0\n"
+        "1:"
+        :
+        :
+        : "a0", "d0", "cc", "memory");
+    chk_exception_frame(0x00100020u, 0x0014u, 0x2000u, 0x2000u, 0x2000u);
+
+    *(volatile uint16_t *)(SCRATCH_BASE + 0x1a0u) = 4u;
+    arm_exception_recovery(0x0018u);
+    __asm__ volatile(
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "moveq #5,%%d0\n\t"
+        "chk.w 0x01ff92a0,%%d0\n"
+        "1:"
+        :
+        :
+        : "a0", "d0", "cc", "memory");
+    chk_exception_frame(0x00100040u, 0x0018u, 0x2000u, 0x2000u, 0x2000u);
+
+    arm_exception_recovery(0x001cu);
+    __asm__ volatile(
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.w #0x02,%%ccr\n\t"
+        "trapv\n"
+        "1:"
+        :
+        :
+        : "a0", "cc", "memory");
+    chk_exception_frame(0x00100060u, 0x001cu, 0x2000u, 0x201fu, 0x2002u);
+
+    arm_exception_recovery(0x0020u);
+    __asm__ volatile(
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.w #0x0015,%%sr\n\t"
+        "move.w #0x2700,%%sr\n"
+        "1:"
+        :
+        :
+        : "a0", "cc", "memory");
+    chk_exception_frame(0x00100080u, 0x0020u, 0x0000u, 0x201fu, 0x0015u);
+
+    arm_exception_recovery(0x0028u);
+    __asm__ volatile(
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        ".word 0xa000\n"
+        "1:"
+        :
+        :
+        : "a0", "memory");
+    chk_exception_frame(0x001000a0u, 0x0028u, 0x0000u, 0x2000u, 0x2000u);
+
+    arm_exception_recovery(0x002cu);
+    __asm__ volatile(
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        ".word 0xf000\n"
+        "1:"
+        :
+        :
+        : "a0", "memory");
+    chk_exception_frame(0x001000c0u, 0x002cu, 0x0000u, 0x2000u, 0x2000u);
+}
+
 static void test_alu_shift_bitfield_bcd_directed(void)
 {
     wr32(SCRATCH_BASE + 0xe0, 0u);
@@ -977,6 +1087,7 @@ void kmain(void)
     test_movem_directed();
     test_control_flow_directed();
     test_system_control_directed();
+    test_exception_recovery_directed();
     test_alu_shift_bitfield_bcd_directed();
     test_condition_codes_directed();
     test_signed_mul_div_directed();

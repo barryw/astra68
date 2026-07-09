@@ -6,6 +6,7 @@ module tb_coretest;
     localparam DEBUG_MOVE_11BC = 1'b0;
     localparam DEBUG_BF = 1'b0;
     localparam DEBUG_CAS = 1'b0;
+    localparam DEBUG_EXC = 1'b0;
 
     reg clk25 = 0;
     reg rstn = 0;
@@ -65,6 +66,24 @@ module tb_coretest;
                      dut.cpu_dout,
                      dut.cpu_din,
                      dut.ram_q);
+        end
+    end
+
+    always @(posedge dut.clk) begin
+        if (DEBUG_EXC && (dut.bus_write_stb || dut.bus_read_stb)
+            && dut.cpu_adr >= 32'h01ff9270 && dut.cpu_adr < 32'h01ff9290) begin
+            $display("[%0t] EXC %s adr=0x%08x siz=%b be=%b dout=0x%08x din=0x%08x ram_q=0x%08x sr=%04x biw0=%04x fc=%b",
+                     $time,
+                     dut.bus_write_stb ? "WR" : "RD",
+                     dut.cpu_adr,
+                     dut.cpu_siz,
+                     dut.be,
+                     dut.cpu_dout,
+                     dut.cpu_din,
+                     dut.ram_q,
+                     dut.cpu.u_cpu.i_alu.status_reg,
+                     dut.cpu.u_cpu.biw_0,
+                     dut.cpu_fc);
         end
     end
 
