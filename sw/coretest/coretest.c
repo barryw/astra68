@@ -868,6 +868,26 @@ static void test_cas2_directed(void)
     chk32(0x000a0300u, rd32(CAS2_TEST_BASE + 0x00u), 0xaaaaaaaau);
     chk32(0x000a0304u, rd32(CAS2_TEST_BASE + 0x04u), 0xbbbbbbbbu);
     chk32(0x000a0308u, got & 0x1fu, 0x04u);
+
+    wr32(CAS2_TEST_BASE + 0x08u, 0x33333333u);
+    wr32(CAS2_TEST_BASE + 0x0cu, 0x44444444u);
+    __asm__ volatile(
+        "lea 0x01ff9848,%%a0\n\t"
+        "lea 0x01ff984c,%%a1\n\t"
+        "move.l #0x33333333,%%d0\n\t"
+        "move.l #0xaaaaaaaa,%%d1\n\t"
+        "move.l #0x99999999,%%d2\n\t"
+        "move.l #0xbbbbbbbb,%%d3\n\t"
+        "move.w #4,%%ccr\n\t"
+        "cas2.l %%d0:%%d2,%%d1:%%d3,(%%a0):(%%a1)\n\t"
+        "move.w %%sr,%%d4\n\t"
+        "move.l %%d4,%0"
+        : "=&d"(got)
+        :
+        : "a0", "a1", "d0", "d1", "d2", "d3", "d4", "cc", "memory");
+    chk32(0x000a0310u, rd32(CAS2_TEST_BASE + 0x08u), 0x33333333u);
+    chk32(0x000a0314u, rd32(CAS2_TEST_BASE + 0x0cu), 0x44444444u);
+    chk32(0x000a0318u, got & 0x04u, 0x00u);
 }
 
 static void test_exception_recovery_directed(void)
