@@ -4,6 +4,8 @@
 module tb_coretest;
     localparam DEBUG_SCRATCH = 1'b0;
     localparam DEBUG_MOVE_11BC = 1'b0;
+    localparam DEBUG_BF = 1'b0;
+    localparam DEBUG_CAS = 1'b0;
 
     reg clk25 = 0;
     reg rstn = 0;
@@ -63,6 +65,118 @@ module tb_coretest;
                      dut.cpu_dout,
                      dut.cpu_din,
                      dut.ram_q);
+        end
+    end
+
+    reg trace_bf = 1'b0;
+    integer trace_bf_left = 0;
+    wire trace_bf_hit =
+        (dut.cpu.u_cpu.biw_0 == 16'he9f9) ||
+        (dut.cpu.u_cpu.biw_0 == 16'heff9) ||
+        (dut.bus_read_stb && dut.cpu_adr >= 32'hffe012d8 && dut.cpu_adr < 32'hffe012e8) ||
+        (dut.bus_read_stb && dut.cpu_adr >= 32'hffe01300 && dut.cpu_adr < 32'hffe01320) ||
+        (dut.bus_read_stb && dut.cpu_adr == 32'h01ff9230) ||
+        (dut.bus_read_stb && dut.cpu_adr == 32'h01ff9231) ||
+        (dut.bus_read_stb && dut.cpu_adr == 32'h01ff9232) ||
+        (dut.bus_write_stb && dut.cpu_adr == 32'h01ff9230) ||
+        (dut.bus_write_stb && dut.cpu_adr == 32'h01ff9231) ||
+        (dut.bus_write_stb && dut.cpu_adr == 32'h01ff9232) ||
+        (dut.bus_write_stb && dut.cpu_adr == 32'h01ff9234);
+
+    always @(posedge dut.clk) begin
+        if (DEBUG_BF && trace_bf_hit) begin
+            trace_bf <= 1'b1;
+            trace_bf_left <= 120;
+        end else if (trace_bf_left > 0) begin
+            trace_bf_left <= trace_bf_left - 1;
+        end else begin
+            trace_bf <= 1'b0;
+        end
+
+        if (DEBUG_BF && (trace_bf || trace_bf_hit)) begin
+            $display("[%0t] BF adr=0x%08x rd=%b wr=%b siz=%b din=0x%08x dout=0x%08x ram_q=0x%08x fs=%0d nfs=%0d ex=%0d nex=%0d op=%0h biw0=%04x biw1=%04x alu_i=%b req=%b ack=%b bsy=%b bf_bytes=%0d bf_ctl_hilo=%b hilo=%b bf_off=%0d bf_w=%0d lower=%0d upper=%0d op2=0x%08x op3=0x%08x bf_data=0x%010x bf_res=0x%010x alu_res=0x%016x",
+                     $time,
+                     dut.cpu_adr,
+                     dut.bus_read_stb,
+                     dut.bus_write_stb,
+                     dut.cpu_siz,
+                     dut.cpu_din,
+                     dut.cpu_dout,
+                     dut.ram_q,
+                     dut.cpu.u_cpu.i_control.fetch_state,
+                     dut.cpu.u_cpu.i_control.next_fetch_state,
+                     dut.cpu.u_cpu.i_control.exec_wb_state,
+                     dut.cpu.u_cpu.i_control.next_exec_wb_state,
+                     dut.cpu.u_cpu.op,
+                     dut.cpu.u_cpu.biw_0,
+                     dut.cpu.u_cpu.biw_1,
+                     dut.cpu.u_cpu.i_control.alu_init,
+                     dut.cpu.u_cpu.alu_req,
+                     dut.cpu.u_cpu.i_control.alu_ack,
+                     dut.cpu.u_cpu.alu_bsy,
+                     dut.cpu.u_cpu.i_control.bf_bytes,
+                     dut.cpu.u_cpu.i_control.bf_hilon,
+                     dut.cpu.u_cpu.hilon,
+                     dut.cpu.u_cpu.bf_offset,
+                     dut.cpu.u_cpu.bf_width,
+                     dut.cpu.u_cpu.i_alu.bf_lower_bnd,
+                     dut.cpu.u_cpu.i_alu.bf_upper_bnd,
+                     dut.cpu.u_cpu.i_alu.op2,
+                     dut.cpu.u_cpu.i_alu.op3,
+                     dut.cpu.u_cpu.i_alu.bf_data_in,
+                     dut.cpu.u_cpu.i_alu.result_bitfield,
+                     dut.cpu.u_cpu.i_alu.result);
+        end
+    end
+
+    reg trace_cas = 1'b0;
+    integer trace_cas_left = 0;
+    wire trace_cas_hit =
+        (dut.cpu.u_cpu.biw_0 == 16'h0ed0) ||
+        (dut.bus_read_stb && dut.cpu_adr >= 32'hffe015d0 && dut.cpu_adr < 32'hffe01670) ||
+        (dut.bus_write_stb && dut.cpu_adr >= 32'h01ff9260 && dut.cpu_adr < 32'h01ff9268);
+
+    always @(posedge dut.clk) begin
+        if (DEBUG_CAS && trace_cas_hit) begin
+            trace_cas <= 1'b1;
+            trace_cas_left <= 180;
+        end else if (trace_cas_left > 0) begin
+            trace_cas_left <= trace_cas_left - 1;
+        end else begin
+            trace_cas <= 1'b0;
+        end
+
+        if (DEBUG_CAS && (trace_cas || trace_cas_hit)) begin
+            $display("[%0t] CAS adr=0x%08x rd=%b wr=%b siz=%b be=%b din=0x%08x dout=0x%08x ram_q=0x%08x fs=%0d nfs=%0d ex=%0d nex=%0d op=%0h opwb=%0h biw0=%04x biw1=%04x alu_i=%b req=%b ack=%b bsy=%b cc=%b cond=%b xnzvc=%05b sr=%04x op1=0x%08x op2=0x%08x intop=0x%08x result=0x%016x",
+                     $time,
+                     dut.cpu_adr,
+                     dut.bus_read_stb,
+                     dut.bus_write_stb,
+                     dut.cpu_siz,
+                     dut.be,
+                     dut.cpu_din,
+                     dut.cpu_dout,
+                     dut.ram_q,
+                     dut.cpu.u_cpu.i_control.fetch_state,
+                     dut.cpu.u_cpu.i_control.next_fetch_state,
+                     dut.cpu.u_cpu.i_control.exec_wb_state,
+                     dut.cpu.u_cpu.i_control.next_exec_wb_state,
+                     dut.cpu.u_cpu.op,
+                     dut.cpu.u_cpu.i_control.op_wb_i,
+                     dut.cpu.u_cpu.biw_0,
+                     dut.cpu.u_cpu.biw_1,
+                     dut.cpu.u_cpu.i_control.alu_init,
+                     dut.cpu.u_cpu.alu_req,
+                     dut.cpu.u_cpu.i_control.alu_ack,
+                     dut.cpu.u_cpu.alu_bsy,
+                     dut.cpu.u_cpu.i_control.cc_updt,
+                     dut.cpu.u_cpu.alu_cond,
+                     dut.cpu.u_cpu.i_alu.xnzvc,
+                     dut.cpu.u_cpu.i_alu.status_reg,
+                     dut.cpu.u_cpu.i_alu.op1,
+                     dut.cpu.u_cpu.i_alu.op2,
+                     dut.cpu.u_cpu.i_alu.result_intop,
+                     dut.cpu.u_cpu.i_alu.result);
         end
     end
 

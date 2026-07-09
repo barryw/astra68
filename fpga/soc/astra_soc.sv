@@ -129,13 +129,39 @@ module astra_soc #(
     reg  [31:0] ram_q;
 
     // 68030 32-bit-port byte enables from SIZE + A[1:0] (big-endian lanes).
-    // lane3=[31:24]=A..00, lane2=A..01, lane1=A..10, lane0=A..11
+    // SIZE is the current transfer portion from the CPU: 00=4 bytes, 11=3
+    // bytes, 10=2 bytes, 01=1 byte. Unaligned word/long cycles are split by
+    // the WF68K30L bus interface, so each portion enables only the lanes
+    // reachable from the current address to the end of this 32-bit port word.
+    // lane3=[31:24]=A..00, lane2=A..01, lane1=A..10, lane0=A..11.
     reg [3:0] be;
     always @* begin
         case (cpu_siz)
-            2'b01: be = 4'b1000 >> cpu_adr[1:0];              // byte
-            2'b10: be = cpu_adr[1] ? 4'b0011 : 4'b1100;       // word (aligned)
-            default: be = 4'b1111;                            // long / line
+            2'b00: begin                                      // long / line
+                case (cpu_adr[1:0])
+                    2'b00: be = 4'b1111;
+                    2'b01: be = 4'b0111;
+                    2'b10: be = 4'b0011;
+                    default: be = 4'b0001;
+                endcase
+            end
+            2'b11: begin                                      // 3 bytes
+                case (cpu_adr[1:0])
+                    2'b00: be = 4'b1110;
+                    2'b01: be = 4'b0111;
+                    2'b10: be = 4'b0011;
+                    default: be = 4'b0001;
+                endcase
+            end
+            2'b10: begin                                      // word
+                case (cpu_adr[1:0])
+                    2'b00: be = 4'b1100;
+                    2'b01: be = 4'b0110;
+                    2'b10: be = 4'b0011;
+                    default: be = 4'b0001;
+                endcase
+            end
+            default: be = 4'b1000 >> cpu_adr[1:0];            // byte
         endcase
     end
 

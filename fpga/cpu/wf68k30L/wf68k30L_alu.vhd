@@ -824,7 +824,17 @@ begin
             case OP is
                 when ABCD | NBCD | SBCD => 
                     RESULT <= x"00000000000000" & RESULT_BCDOP; -- Byte only.
-                when BFCHG | BFCLR | BFEXTS | BFEXTU | BFFFO | BFINS | BFSET | BFTST => 
+                when BFCHG | BFCLR | BFINS | BFSET =>
+                    if HILOn = '0' then
+                        RESULT <= x"00000000000000" & RESULT_BITFIELD(7 downto 0);
+                    elsif BIW_0(5 downto 3) /= "000" and OP_SIZE = BYTE then
+                        RESULT <= x"00000000000000" & RESULT_BITFIELD(39 downto 32);
+                    elsif BIW_0(5 downto 3) /= "000" and OP_SIZE = WORD then
+                        RESULT <= x"000000000000" & RESULT_BITFIELD(39 downto 24);
+                    else
+                        RESULT <= x"00000000" & RESULT_BITFIELD(39 downto 8);
+                    end if;
+                when BFEXTS | BFEXTU | BFFFO | BFTST =>
                     case HILOn is
                         when '1' => RESULT <= x"00000000" & RESULT_BITFIELD(39 downto 8);
                         when others => RESULT <= x"00000000000000" & RESULT_BITFIELD(7 downto 0);

@@ -239,6 +239,7 @@ signal ALU_LOAD_OP3             : bit;
 signal ALU_OP1_IN               : std_logic_vector(31 downto 0);
 signal ALU_OP2_IN               : std_logic_vector(31 downto 0);
 signal ALU_OP3_IN               : std_logic_vector(31 downto 0);
+signal BF_MEM_DATA_TO_ALU       : std_logic_vector(31 downto 0);
 signal ALU_REQ                  : bit;
 signal ALU_RESULT               : std_logic_vector(63 downto 0);
 signal AMODE_SEL                : std_logic_vector(2 downto 0);
@@ -627,8 +628,14 @@ begin
                   DR_OUT_2 when BIW_0(5 downto 3) = "000" else
                   AR_OUT_2 when BIW_0(5 downto 3) = "001" else DATA_TO_CORE;
 
-    ALU_OP3_IN <= DATA_TO_CORE when (OP = BFCHG or OP = BFCLR or OP = BFEXTS or OP = BFEXTU) and BIW_0(5 downto 3) /= "000" else 
-                  DATA_TO_CORE when (OP = BFFFO or OP = BFINS or OP = BFSET or OP = BFTST) and BIW_0(5 downto 3) /= "000" else 
+    -- Normal byte/word reads are right-justified by the bus interface. Memory
+    -- bitfield operations need a window whose first addressed byte is the MSB.
+    BF_MEM_DATA_TO_ALU <= DATA_TO_CORE(7 downto 0) & x"000000" when OP_SIZE = BYTE else
+                          DATA_TO_CORE(15 downto 0) & x"0000" when OP_SIZE = WORD else
+                          DATA_TO_CORE;
+
+    ALU_OP3_IN <= BF_MEM_DATA_TO_ALU when (OP = BFCHG or OP = BFCLR or OP = BFEXTS or OP = BFEXTU) and BIW_0(5 downto 3) /= "000" else
+                  BF_MEM_DATA_TO_ALU when (OP = BFFFO or OP = BFINS or OP = BFSET or OP = BFTST) and BIW_0(5 downto 3) /= "000" else
                   DATA_TO_CORE when OP = CAS2 or OP = CHK2 or OP = CMP2 else DR_OUT_1;
 
     OP_SIZE <= OP_SIZE_EXH when BUSY_EXH = '1' else OP_SIZE_MAIN;

@@ -823,6 +823,8 @@ begin
         elsif ALU_INIT_I = '1' then
             if OP = DIVS or OP = DIVU or OP = MULS or OP = MULU then
                 OP_SIZE_WB <= LONG;
+            elsif OP = BFEXTS or OP = BFEXTU or OP = BFFFO then
+                OP_SIZE_WB <= LONG; -- Result-producing bitfield ops always write a full Dn.
             elsif OP = MOVEM and BIW_0(10) = '1' then -- Memory to register.
                 OP_SIZE_WB <= LONG; -- Registers are always written long.
             else
