@@ -13,7 +13,7 @@
 	.long   _h_recover     | CHK/CHK2
 	.long   _h_recover     | TRAPV
 	.long   _h_recover     | privilege violation
-	.long   _h_default     | trace
+	.long   _h_recover     | trace
 	.long   _h_recover     | line 1010 emulator
 	.long   _h_recover     | line 1111 emulator
 	.rept   20

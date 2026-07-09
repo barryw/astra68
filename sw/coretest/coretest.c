@@ -742,6 +742,18 @@ static void test_exception_recovery_directed(void)
         : "a0", "cc", "memory");
     chk_exception_frame(0x00100080u, 0x0020u, 0x0000u, 0x201fu, 0x0015u);
 
+    arm_exception_recovery(0x0024u);
+    __asm__ volatile(
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.w #0xa700,%%sr\n\t"
+        "nop\n"
+        "1:"
+        :
+        :
+        : "a0", "cc", "memory");
+    chk_exception_frame(0x001000a0u, 0x0024u, 0x2000u, 0xe700u, 0xa700u);
+
     arm_exception_recovery(0x0028u);
     __asm__ volatile(
         "lea 1f,%%a0\n\t"
@@ -751,7 +763,7 @@ static void test_exception_recovery_directed(void)
         :
         :
         : "a0", "memory");
-    chk_exception_frame(0x001000a0u, 0x0028u, 0x0000u, 0x2000u, 0x2000u);
+    chk_exception_frame(0x001000c0u, 0x0028u, 0x0000u, 0x2000u, 0x2000u);
 
     arm_exception_recovery(0x002cu);
     __asm__ volatile(
@@ -762,7 +774,7 @@ static void test_exception_recovery_directed(void)
         :
         :
         : "a0", "memory");
-    chk_exception_frame(0x001000c0u, 0x002cu, 0x0000u, 0x2000u, 0x2000u);
+    chk_exception_frame(0x001000e0u, 0x002cu, 0x0000u, 0x2000u, 0x2000u);
 }
 
 static void test_alu_shift_bitfield_bcd_directed(void)
