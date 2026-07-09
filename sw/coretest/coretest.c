@@ -13,6 +13,7 @@
 #define EXC_ALT_VBR (SCRATCH_BASE + 0x400u)
 #define IRQ_SIM_REQ (SCRATCH_BASE + 0x500u)
 #define STACK_TEST_BASE (SCRATCH_BASE + 0x600u)
+#define MOVES_TEST_BASE (SCRATCH_BASE + 0x700u)
 
 static volatile uint32_t g_sum;
 
@@ -745,6 +746,37 @@ static void test_system_control_directed(void)
     chk32(0x000a0034u, rd32(SCRATCH_BASE + 0xf0), 2u);
 }
 
+static void test_moves_directed(void)
+{
+    uint32_t got0;
+    uint32_t got1;
+
+    wr32(MOVES_TEST_BASE + 0x00u, 0u);
+    wr32(MOVES_TEST_BASE + 0x04u, 0u);
+    __asm__ volatile(
+        "moveq #1,%%d2\n\t"
+        "movec %%d2,%%sfc\n\t"
+        "movec %%d2,%%dfc\n\t"
+        "lea 0x01ff9800,%%a0\n\t"
+        "move.l #0xa5a55a5a,%%d0\n\t"
+        "moves.l %%d0,(%%a0)\n\t"
+        "moveq #0,%%d1\n\t"
+        "moves.l (%%a0),%%d1\n\t"
+        "move.l %%d1,%0\n\t"
+        "movea.l #0x01020304,%%a1\n\t"
+        "moves.l %%a1,4(%%a0)\n\t"
+        "suba.l %%a2,%%a2\n\t"
+        "moves.l 4(%%a0),%%a2\n\t"
+        "move.l %%a2,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "a2", "d0", "d1", "d2", "memory");
+    chk32(0x000a0100u, rd32(MOVES_TEST_BASE + 0x00u), 0xa5a55a5au);
+    chk32(0x000a0104u, got0, 0xa5a55a5au);
+    chk32(0x000a0108u, rd32(MOVES_TEST_BASE + 0x04u), 0x01020304u);
+    chk32(0x000a010cu, got1, 0x01020304u);
+}
+
 static void test_exception_recovery_directed(void)
 {
     for (uint32_t off = 0; off < 0x100u; off += 4u) {
@@ -1265,6 +1297,7 @@ void kmain(void)
     test_control_flow_directed();
     test_stack_frame_control_directed();
     test_system_control_directed();
+    test_moves_directed();
     test_exception_recovery_directed();
 #ifdef CORETEST_SIM_IRQ
     test_interrupt_autovector_directed();
