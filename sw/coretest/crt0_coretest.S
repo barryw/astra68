@@ -75,6 +75,7 @@ _h_illegal:
 _h_default:
 	putc_imm 0x45      | 'E'
 	bra     .
+	.globl _h_recover
 _h_recover:
 	move.l  #0x01ff9270, %a0
 	addq.l  #1, (%a0)
