@@ -894,6 +894,21 @@ static void test_alu_shift_bitfield_bcd_directed(void)
     wr32(SCRATCH_BASE + 0xe0, 0u);
     wr32(SCRATCH_BASE + 0xe4, 0u);
     __asm__ volatile(
+        "move.l #0x00f00000,%%d0\n\t"
+        "bfexts %%d0{#8:#8},%%d1\n\t"
+        "move.l %%d1,0x01ff91e0\n\t"
+        "move.l #0x000f0000,%%d0\n\t"
+        "bfffo %%d0{#8:#8},%%d1\n\t"
+        "move.l %%d1,0x01ff91e4"
+        :
+        :
+        : "d0", "d1", "cc", "memory");
+    chk32(0x000b0048u, rd32(SCRATCH_BASE + 0xe0), 0xfffffff0u);
+    chk32(0x000b004cu, rd32(SCRATCH_BASE + 0xe4), 12u);
+
+    wr32(SCRATCH_BASE + 0xe0, 0u);
+    wr32(SCRATCH_BASE + 0xe4, 0u);
+    __asm__ volatile(
         "move.w #0x0205,%%d0\n\t"
         "pack %%d0,%%d0,#0\n\t"
         "move.l %%d0,0x01ff91e0\n\t"
@@ -1016,6 +1031,18 @@ static void test_memory_bitfield_directed(void)
         :
         : "d0", "cc", "memory");
     chk32(0x000e0001u, rd32(SCRATCH_BASE + 0x130), 0x123ab678u);
+
+    wr32(SCRATCH_BASE + 0x130, 0x12345678u);
+    __asm__ volatile("bfchg 0x01ff9230{#8:#4}" : : : "cc", "memory");
+    chk32(0x000e0002u, rd32(SCRATCH_BASE + 0x130), 0x12c45678u);
+
+    wr32(SCRATCH_BASE + 0x130, 0x12345678u);
+    __asm__ volatile("bfclr 0x01ff9230{#12:#4}" : : : "cc", "memory");
+    chk32(0x000e0003u, rd32(SCRATCH_BASE + 0x130), 0x12305678u);
+
+    wr32(SCRATCH_BASE + 0x130, 0x12345678u);
+    __asm__ volatile("bfset 0x01ff9230{#16:#8}" : : : "cc", "memory");
+    chk32(0x000e0004u, rd32(SCRATCH_BASE + 0x130), 0x1234ff78u);
 }
 
 static void test_movep_tas_cas_directed(void)
