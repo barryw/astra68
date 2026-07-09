@@ -9,6 +9,7 @@
 #define SCRATCH      ((volatile uint8_t *)SCRATCH_BASE)
 #define EXC_REC_BASE (SCRATCH_BASE + 0x170u)
 #define EXC_RECOVERY_PC (EXC_REC_BASE + 0x14u)
+#define EXC_FAKE_STACK (SCRATCH_BASE + 0x300u)
 
 static volatile uint32_t g_sum;
 
@@ -775,6 +776,23 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "memory");
     chk_exception_frame(0x001000e0u, 0x002cu, 0x0000u, 0x2000u, 0x2000u);
+
+    arm_exception_recovery(0x0038u);
+    __asm__ volatile(
+        "move.l %%sp,%%a1\n\t"
+        "lea 0x01ff9400,%%sp\n\t"
+        "move.w #0x2700,(%%sp)\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,2(%%sp)\n\t"
+        "move.w #0xf038,6(%%sp)\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "rte\n"
+        "1:\n\t"
+        "move.l %%a1,%%sp"
+        :
+        :
+        : "a0", "a1", "cc", "memory");
+    chk_exception_frame(0x00100100u, 0x0038u, 0x0000u, 0x2000u, 0x2000u);
 }
 
 static void test_alu_shift_bitfield_bcd_directed(void)

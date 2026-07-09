@@ -16,7 +16,10 @@
 	.long   _h_recover     | trace
 	.long   _h_recover     | line 1010 emulator
 	.long   _h_recover     | line 1111 emulator
-	.rept   20
+	.long   _h_default     | reserved
+	.long   _h_default     | coprocessor protocol violation
+	.long   _h_recover     | format error
+	.rept   17
 	.long   _h_default
 	.endr
 	.long   _h_trap0
