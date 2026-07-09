@@ -1235,49 +1235,49 @@ begin
             when x"E" => -- Shift / Rotate / Bit Field.
                 if IPIPE.D(11 downto 6) = "101011" and (IPIPE.D(5 downto 3) = "000" or IPIPE.D(5 downto 3) = "010") then
                     OP_I <= BFCHG;
-                elsif IPIPE.D(11 downto 6) = "101011" and (IPIPE.D(5 downto 3) >= "101" or IPIPE.D(5 downto 3) <= "110") then
+                elsif IPIPE.D(11 downto 6) = "101011" and (IPIPE.D(5 downto 3) >= "101" and IPIPE.D(5 downto 3) <= "110") then
                     OP_I <= BFCHG;
                 elsif IPIPE.D(11 downto 6) = "101011" and IPIPE.D(5 downto 3) = "111" and IPIPE.D(2 downto 0) < "010" then
                     OP_I <= BFCHG;
                 elsif IPIPE.D(11 downto 6) = "110011" and (IPIPE.D(5 downto 3) = "000" or IPIPE.D(5 downto 3) = "010") then
                     OP_I <= BFCLR;
-                elsif IPIPE.D(11 downto 6) = "110011" and (IPIPE.D(5 downto 3) >= "101" or IPIPE.D(5 downto 3) <= "110") then
+                elsif IPIPE.D(11 downto 6) = "110011" and (IPIPE.D(5 downto 3) >= "101" and IPIPE.D(5 downto 3) <= "110") then
                     OP_I <= BFCLR;
                 elsif IPIPE.D(11 downto 6) = "110011" and IPIPE.D(5 downto 3) = "111" and IPIPE.D(2 downto 0) < "010" then
                     OP_I <= BFCLR;
                 elsif IPIPE.D(11 downto 6) = "101111" and (IPIPE.D(5 downto 3) = "000" or IPIPE.D(5 downto 3) = "010") then
                     OP_I <= BFEXTS;
-                elsif IPIPE.D(11 downto 6) = "101111" and (IPIPE.D(5 downto 3) >= "101" or IPIPE.D(5 downto 3) <= "110") then
+                elsif IPIPE.D(11 downto 6) = "101111" and (IPIPE.D(5 downto 3) >= "101" and IPIPE.D(5 downto 3) <= "110") then
                     OP_I <= BFEXTS;
                 elsif IPIPE.D(11 downto 6) = "101111" and IPIPE.D(5 downto 3) = "111" and IPIPE.D(2 downto 0) < "100" then
                     OP_I <= BFEXTS;
                 elsif IPIPE.D(11 downto 6) = "100111" and (IPIPE.D(5 downto 3) = "000" or IPIPE.D(5 downto 3) = "010") then
                     OP_I <= BFEXTU;
-                elsif IPIPE.D(11 downto 6) = "100111" and (IPIPE.D(5 downto 3) >= "101" or IPIPE.D(5 downto 3) <= "110") then
+                elsif IPIPE.D(11 downto 6) = "100111" and (IPIPE.D(5 downto 3) >= "101" and IPIPE.D(5 downto 3) <= "110") then
                     OP_I <= BFEXTU;
                 elsif IPIPE.D(11 downto 6) = "100111" and IPIPE.D(5 downto 3) = "111" and IPIPE.D(2 downto 0) < "100" then
                     OP_I <= BFEXTU;
                 elsif IPIPE.D(11 downto 6) = "110111" and (IPIPE.D(5 downto 3) = "000" or IPIPE.D(5 downto 3) = "010") then
                     OP_I <= BFFFO;
-                elsif IPIPE.D(11 downto 6) = "110111" and (IPIPE.D(5 downto 3) >= "101" or IPIPE.D(5 downto 3) <= "110") then
+                elsif IPIPE.D(11 downto 6) = "110111" and (IPIPE.D(5 downto 3) >= "101" and IPIPE.D(5 downto 3) <= "110") then
                     OP_I <= BFFFO;
                 elsif IPIPE.D(11 downto 6) = "110111" and IPIPE.D(5 downto 3) = "111" and IPIPE.D(2 downto 0) < "100" then
                     OP_I <= BFFFO;
                 elsif IPIPE.D(11 downto 6) = "111111" and (IPIPE.D(5 downto 3) = "000" or IPIPE.D(5 downto 3) = "010") then
                     OP_I <= BFINS;
-                elsif IPIPE.D(11 downto 6) = "111111" and (IPIPE.D(5 downto 3) >= "101" or IPIPE.D(5 downto 3) <= "110") then
+                elsif IPIPE.D(11 downto 6) = "111111" and (IPIPE.D(5 downto 3) >= "101" and IPIPE.D(5 downto 3) <= "110") then
                     OP_I <= BFINS;
                 elsif IPIPE.D(11 downto 6) = "111111" and IPIPE.D(5 downto 3) = "111" and IPIPE.D(2 downto 0) < "010" then
                     OP_I <= BFINS;
                 elsif IPIPE.D(11 downto 6) = "111011" and (IPIPE.D(5 downto 3) = "000" or IPIPE.D(5 downto 3) = "010") then
                     OP_I <= BFSET;
-                elsif IPIPE.D(11 downto 6) = "111011" and (IPIPE.D(5 downto 3) >= "101" or IPIPE.D(5 downto 3) <= "110") then
+                elsif IPIPE.D(11 downto 6) = "111011" and (IPIPE.D(5 downto 3) >= "101" and IPIPE.D(5 downto 3) <= "110") then
                     OP_I <= BFSET;
                 elsif IPIPE.D(11 downto 6) = "111011" and IPIPE.D(5 downto 3) = "111" and IPIPE.D(2 downto 0) < "010" then
                     OP_I <= BFSET;
                 elsif IPIPE.D(11 downto 6) = "100011" and (IPIPE.D(5 downto 3) = "000" or IPIPE.D(5 downto 3) = "010") then
                     OP_I <= BFTST;
-                elsif IPIPE.D(11 downto 6) = "100011" and (IPIPE.D(5 downto 3) >= "101" or IPIPE.D(5 downto 3) <= "110") then
+                elsif IPIPE.D(11 downto 6) = "100011" and (IPIPE.D(5 downto 3) >= "101" and IPIPE.D(5 downto 3) <= "110") then
                     OP_I <= BFTST;
                 elsif IPIPE.D(11 downto 6) = "100011" and IPIPE.D(5 downto 3) = "111" and IPIPE.D(2 downto 0) < "100" then
                     OP_I <= BFTST;

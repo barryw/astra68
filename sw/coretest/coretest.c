@@ -1263,6 +1263,31 @@ static void test_exception_recovery_directed(void)
         : "a0", "memory");
     chk_exception_frame(0x00100100u, 0x002cu, 0x0000u, 0x2000u, 0x2000u);
 
+    arm_exception_recovery(0x0010u);
+    __asm__ volatile(
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        ".word 0xefc8\n\t" /* BFINS with invalid address-register direct EA. */
+        ".word 0x0001\n"
+        "1:"
+        :
+        :
+        : "a0", "memory");
+    chk_exception_frame(0x00100200u, 0x0010u, 0x0000u, 0x2000u, 0x2000u);
+
+    arm_exception_recovery(0x0010u);
+    __asm__ volatile(
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "lea 0x01ff9100,%%a1\n\t"
+        ".word 0xeed9\n\t" /* BFSET with invalid postincrement EA. */
+        ".word 0x0001\n"
+        "1:"
+        :
+        :
+        : "a0", "a1", "memory");
+    chk_exception_frame(0x00100220u, 0x0010u, 0x0000u, 0x2000u, 0x2000u);
+
     arm_exception_recovery(0x0038u);
     __asm__ volatile(
         "move.l %%sp,%%a1\n\t"
