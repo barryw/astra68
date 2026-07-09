@@ -777,6 +777,8 @@ begin
                    BIW_1(14 downto 12) when OP = BFINS and FETCH_STATE = START_OP and BIW_0(5 downto 3) = "000" else
                    BIW_1(14 downto 12) when OP = BFINS and FETCH_STATE = START_OP and BIW_0(5 downto 3) = "001" else
                    BIW_1(14 downto 12) when OP = BFINS and FETCH_STATE = FETCH_ABS_LO else
+                   BIW_1(2 downto 0) when (OP = BFCHG or OP = BFCLR or OP = BFEXTS or OP = BFEXTU) and BIW_1(5) = '1' else
+                   BIW_1(2 downto 0) when (OP = BFFFO or OP = BFINS or OP = BFSET or OP = BFTST) and BIW_1(5) = '1' else
                    BIW_1(8 downto 6) when OP = CAS else -- Update operand.
                    BIW_1(8 downto 6) when OP = CAS2 and PHASE2 = false else -- Update operand.
                    BIW_2(8 downto 6) when OP = CAS2 else -- Update operand.

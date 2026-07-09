@@ -716,7 +716,7 @@ begin
     -- The bit field offset is bit wise.
     BF_OFFSET <= (x"000000" & "000" & BIW_1(10 downto 6)) when BIW_1(11) = '0' else DR_OUT_1;
     BF_WIDTH <= '0' & BIW_1(4 downto 0) when BIW_1(4 downto 0) /= "00000" and BIW_1(5) = '0' else 
-                '0' & DR_OUT_1(4 downto 0) when DR_OUT_1(4 downto 0) /= "00000" and BIW_1(5) = '1' else "100000";
+                '0' & DR_OUT_2(4 downto 0) when DR_OUT_2(4 downto 0) /= "00000" and BIW_1(5) = '1' else "100000";
 
     -- The BITPOS is valid for bit operations and bit field operations. For BCHG, BCLR, BSET and BTST
     -- the BITPOS spans 0 to 31 bytes, when it is in register direct mode. It is modulo 8 in memory
