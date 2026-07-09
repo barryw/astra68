@@ -516,7 +516,8 @@ begin
     STORE_IDATA_B2 <= '1' when FETCH_STATE = FETCH_IDATA_B2 and EW_ACK = '1' else '0';
     STORE_IDATA_B1 <= '1' when FETCH_STATE = FETCH_IDATA_B1 and EW_ACK = '1' else '0';
 
-    LOAD_OP1 <= '1' when OP = BFINS and FETCH_STATE = FETCH_EXWORD_1 and EW_ACK = '1' else -- Load insertion pattern.
+    LOAD_OP1 <= '1' when OP = BFINS and FETCH_STATE = START_OP and BIW_0(5 downto 3) = "000" else -- Preload register-direct insertion pattern before dynamic width uses DR_OUT_2.
+                '1' when OP = BFINS and FETCH_STATE = FETCH_EXWORD_1 and EW_ACK = '1' else -- Load insertion pattern.
                 '1' when (OP = CHK2 or OP = CMP2) and FETCH_STATE = FETCH_OPERAND and RD_RDY = '1' and DATA_VALID = '1' and PHASE2 = false else 
                 '1' when OP = CMPM and FETCH_STATE = FETCH_OPERAND and RD_RDY = '1' and DATA_VALID = '1' and PHASE2 = true else
                 '1' when OP = MOVE and BIW_0(8 downto 6) = "100" and BIW_0(5 downto 3) = "001" and BIW_0(11 downto 9) = BIW_0(2 downto 0) and INIT_ENTRY = '1' else -- Load early to write the undecremented Register for Ax, -(Ax).

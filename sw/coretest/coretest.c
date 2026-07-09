@@ -1601,6 +1601,64 @@ static void test_memory_bitfield_extended_directed(void)
         : "d0", "d1", "d2", "cc", "memory");
     chk32(0x000e007cu, rd32(BITFIELD_TEST_BASE + 0x00), 0x0123456au);
     chk32(0x000e0080u, rd32(BITFIELD_TEST_BASE + 0x04), 0xbcabcdefu);
+
+    wr32(BITFIELD_TEST_BASE + 0x00, 0x01234567u);
+    wr32(BITFIELD_TEST_BASE + 0x04, 0x89abcdefu);
+    __asm__ volatile(
+        "moveq #12,%%d1\n\t"
+        "bfclr 0x01ff9d00{#28:%%d1}"
+        :
+        :
+        : "d1", "cc", "memory");
+    chk32(0x000e0084u, rd32(BITFIELD_TEST_BASE + 0x00), 0x01234560u);
+    chk32(0x000e0088u, rd32(BITFIELD_TEST_BASE + 0x04), 0x00abcdefu);
+
+    wr32(BITFIELD_TEST_BASE + 0x00, 0x01234567u);
+    wr32(BITFIELD_TEST_BASE + 0x04, 0x89abcdefu);
+    __asm__ volatile(
+        "moveq #12,%%d1\n\t"
+        "bfset 0x01ff9d00{#28:%%d1}"
+        :
+        :
+        : "d1", "cc", "memory");
+    chk32(0x000e008cu, rd32(BITFIELD_TEST_BASE + 0x00), 0x0123456fu);
+    chk32(0x000e0090u, rd32(BITFIELD_TEST_BASE + 0x04), 0xffabcdefu);
+
+    wr32(BITFIELD_TEST_BASE + 0x00, 0x01234567u);
+    wr32(BITFIELD_TEST_BASE + 0x04, 0x89abcdefu);
+    __asm__ volatile(
+        "moveq #12,%%d1\n\t"
+        "bfchg 0x01ff9d00{#28:%%d1}"
+        :
+        :
+        : "d1", "cc", "memory");
+    chk32(0x000e0094u, rd32(BITFIELD_TEST_BASE + 0x00), 0x01234568u);
+    chk32(0x000e0098u, rd32(BITFIELD_TEST_BASE + 0x04), 0x76abcdefu);
+
+    wr32(BITFIELD_TEST_BASE + 0x08, 0u);
+    __asm__ volatile(
+        "move.l #0x12345678,%%d0\n\t"
+        "moveq #12,%%d1\n\t"
+        "move.l #0xabc,%%d2\n\t"
+        "bfins %%d2,%%d0{#16:%%d1}\n\t"
+        "move.l %%d0,0x01ff9d08"
+        :
+        :
+        : "d0", "d1", "d2", "cc", "memory");
+    chk32(0x000e009cu, rd32(BITFIELD_TEST_BASE + 0x08), 0x1234abc8u);
+
+    wr32(BITFIELD_TEST_BASE + 0x08, 0u);
+    __asm__ volatile(
+        "moveq #16,%%d0\n\t"
+        "moveq #12,%%d1\n\t"
+        "move.l #0xabc,%%d2\n\t"
+        "move.l #0x12345678,%%d3\n\t"
+        "bfins %%d2,%%d3{%%d0:%%d1}\n\t"
+        "move.l %%d3,0x01ff9d08"
+        :
+        :
+        : "d0", "d1", "d2", "d3", "cc", "memory");
+    chk32(0x000e00a0u, rd32(BITFIELD_TEST_BASE + 0x08), 0x1234abc8u);
 }
 
 static void test_movep_tas_cas_directed(void)
