@@ -1288,6 +1288,31 @@ static void test_exception_recovery_directed(void)
         : "a0", "a1", "memory");
     chk_exception_frame(0x00100220u, 0x0010u, 0x0000u, 0x2000u, 0x2000u);
 
+#define EXPECT_ILLEGAL_BF_OP(ID, OPWORD) \
+    do { \
+        arm_exception_recovery(0x0010u); \
+        __asm__ volatile( \
+            "lea 1f,%%a0\n\t" \
+            "move.l %%a0,0x01ff9284\n\t" \
+            ".word " #OPWORD "\n\t" \
+            ".word 0x0001\n" \
+            "1:" \
+            : \
+            : \
+            : "a0", "memory"); \
+        chk_exception_frame((ID), 0x0010u, 0x0000u, 0x2000u, 0x2000u); \
+    } while (0)
+
+    EXPECT_ILLEGAL_BF_OP(0x00100240u, 0xeac8); /* BFCHG invalid address-register direct EA. */
+    EXPECT_ILLEGAL_BF_OP(0x00100260u, 0xecc8); /* BFCLR invalid address-register direct EA. */
+    EXPECT_ILLEGAL_BF_OP(0x00100280u, 0xebc8); /* BFEXTS invalid address-register direct EA. */
+    EXPECT_ILLEGAL_BF_OP(0x001002a0u, 0xe9c8); /* BFEXTU invalid address-register direct EA. */
+    EXPECT_ILLEGAL_BF_OP(0x001002c0u, 0xedc8); /* BFFFO invalid address-register direct EA. */
+    EXPECT_ILLEGAL_BF_OP(0x001002e0u, 0xeec8); /* BFSET invalid address-register direct EA. */
+    EXPECT_ILLEGAL_BF_OP(0x00100300u, 0xe8c8); /* BFTST invalid address-register direct EA. */
+
+#undef EXPECT_ILLEGAL_BF_OP
+
     arm_exception_recovery(0x0038u);
     __asm__ volatile(
         "move.l %%sp,%%a1\n\t"
