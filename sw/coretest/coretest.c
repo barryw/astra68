@@ -11,6 +11,7 @@
 #define EXC_RECOVERY_PC (EXC_REC_BASE + 0x14u)
 #define EXC_FAKE_STACK (SCRATCH_BASE + 0x300u)
 #define EXC_ALT_VBR (SCRATCH_BASE + 0x400u)
+#define IRQ_SIM_REQ (SCRATCH_BASE + 0x500u)
 
 static volatile uint32_t g_sum;
 
@@ -818,6 +819,43 @@ static void test_exception_recovery_directed(void)
     chk_exception_frame(0x00100120u, 0x0038u, 0x0000u, 0x2000u, 0x2000u);
 }
 
+#ifdef CORETEST_SIM_IRQ
+static void test_interrupt_autovector_directed(void)
+{
+    for (uint32_t off = 0; off < 0x100u; off += 4u) {
+        wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
+    }
+    wr32(EXC_ALT_VBR + 0x6cu, (uint32_t)(uintptr_t)_h_recover);
+
+    arm_exception_recovery(0x006cu);
+    wr32(IRQ_SIM_REQ, 0u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.l #3,0x01ff9600\n\t"
+        "move.w #0x2000,%%sr\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n"
+        "1:\n\t"
+        "move.w #0x2700,%%sr\n\t"
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "move.l #0,0x01ff9600"
+        :
+        :
+        : "a0", "d0", "cc", "memory");
+    chk_exception_frame(0x00110000u, 0x006cu, 0x0000u, 0x2700u, 0x2000u);
+}
+#endif
+
 static void test_alu_shift_bitfield_bcd_directed(void)
 {
     wr32(SCRATCH_BASE + 0xe0, 0u);
@@ -1168,6 +1206,9 @@ void kmain(void)
     test_control_flow_directed();
     test_system_control_directed();
     test_exception_recovery_directed();
+#ifdef CORETEST_SIM_IRQ
+    test_interrupt_autovector_directed();
+#endif
     test_alu_shift_bitfield_bcd_directed();
     test_condition_codes_directed();
     test_signed_mul_div_directed();

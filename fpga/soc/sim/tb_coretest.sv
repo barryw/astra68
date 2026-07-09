@@ -7,11 +7,15 @@ module tb_coretest;
     localparam DEBUG_BF = 1'b0;
     localparam DEBUG_CAS = 1'b0;
     localparam DEBUG_EXC = 1'b0;
+    localparam DEBUG_IRQ = 1'b0;
 
     reg clk25 = 0;
     reg rstn = 0;
     wire tx;
     wire [7:0] leds;
+    localparam IRQ_REQ_ADDR = 32'h01ff9600;
+    reg [2:0] sim_ipln = 3'b111;
+    reg sim_avecn = 1'b1;
 
     astra_soc #(.RST_MAX(16'd16)) dut (
         .clk25_mhz(clk25),
@@ -19,6 +23,10 @@ module tb_coretest;
         .ftdi_rxd(tx),
         .ftdi_txd(1'b1),
         .leds(leds)
+`ifdef ASTRA_SOC_SIM_IRQ
+        , .sim_ipln(sim_ipln)
+        , .sim_avecn(sim_avecn)
+`endif
     );
 
     always #4 clk25 = ~clk25;
@@ -27,6 +35,86 @@ module tb_coretest;
         rstn = 0;
         repeat (40) @(posedge clk25);
         rstn = 1;
+    end
+
+    always @(posedge dut.clk) begin
+        if (!rstn || dut.rst) begin
+            sim_ipln <= 3'b111;
+            sim_avecn <= 1'b1;
+        end else if (dut.bus_write_stb && dut.cpu_adr == IRQ_REQ_ADDR) begin
+            if (dut.cpu_dout[2:0] == 3'd0) begin
+                sim_ipln <= 3'b111;
+                sim_avecn <= 1'b1;
+            end else begin
+                sim_ipln <= ~dut.cpu_dout[2:0];
+                sim_avecn <= 1'b0;
+            end
+        end
+    end
+
+    integer irq_trace_left = 0;
+    reg [4:0] last_ex_state = 5'hxx;
+    always @(posedge dut.clk) begin
+        if (DEBUG_IRQ && dut.bus_write_stb && dut.cpu_adr == IRQ_REQ_ADDR) begin
+            irq_trace_left <= 5000;
+            $display("[%0t] IRQ_REQ dout=0x%08x sr=%04x ipln=%b avecn=%b",
+                     $time, dut.cpu_dout, dut.cpu.u_cpu.i_alu.status_reg,
+                     sim_ipln, sim_avecn);
+        end else if (irq_trace_left > 0) begin
+            irq_trace_left <= irq_trace_left - 1;
+        end
+
+        if (DEBUG_IRQ && irq_trace_left > 0
+            && dut.cpu.u_cpu.i_exc_handler.ex_state !== last_ex_state) begin
+            last_ex_state <= dut.cpu.u_cpu.i_exc_handler.ex_state;
+            $display("[%0t] IRQ_EX state=%0d next=%0d exc=%0d ex_p_int=%b irq=%b pend=%b sr=%04x ipln=%b avecn=%b",
+                     $time,
+                     dut.cpu.u_cpu.i_exc_handler.ex_state,
+                     dut.cpu.u_cpu.i_exc_handler.next_ex_state,
+                     dut.cpu.u_cpu.i_exc_handler.exception,
+                     dut.cpu.u_cpu.i_exc_handler.ex_p_int,
+                     dut.cpu.u_cpu.i_exc_handler.irq,
+                     dut.cpu.u_cpu.i_exc_handler.irq_pend_i,
+                     dut.cpu.u_cpu.i_alu.status_reg,
+                     sim_ipln,
+                     sim_avecn);
+        end
+
+        if (DEBUG_IRQ && irq_trace_left > 0
+            && (dut.bus_read_stb || dut.bus_write_stb || dut.cpu_fc == 3'b111
+                || (dut.cpu_adr >= 32'h01ff9560 && dut.cpu_adr < 32'h01ff9578)
+                || (dut.cpu_adr >= 32'h01ff9270 && dut.cpu_adr < 32'h01ff9290))) begin
+            $display("[%0t] IRQ_BUS adr=0x%08x rd=%b wr=%b asn=%b rwn=%b fc=%b siz=%b din=0x%08x dout=0x%08x rdy=%b valid=%b sr=%04x",
+                     $time,
+                     dut.cpu_adr,
+                     dut.bus_read_stb,
+                     dut.bus_write_stb,
+                     dut.cpu_as_n,
+                     dut.cpu_rw_n,
+                     dut.cpu_fc,
+                     dut.cpu_siz,
+                     dut.cpu_din,
+                     dut.cpu_dout,
+                     dut.cpu.u_cpu.data_rdy,
+                     dut.cpu.u_cpu.data_valid,
+                     dut.cpu.u_cpu.i_alu.status_reg);
+        end
+
+        if (DEBUG_IRQ && irq_trace_left > 0
+            && (dut.cpu.u_cpu.pc_load || dut.cpu.u_cpu.pc_load_exh
+                || dut.cpu.u_cpu.i_exc_handler.ex_state == 5'd8
+                || dut.cpu.u_cpu.i_exc_handler.ex_state == 5'd11)) begin
+            $display("[%0t] IRQ_PC pc=0x%08x pc_load=%b pc_load_exh=%b ar_in_1=0x%08x data_to_core=0x%08x data_in=0x%08x state=%0d next=%0d",
+                     $time,
+                     dut.cpu.u_cpu.pc,
+                     dut.cpu.u_cpu.pc_load,
+                     dut.cpu.u_cpu.pc_load_exh,
+                     dut.cpu.u_cpu.ar_in_1,
+                     dut.cpu.u_cpu.data_to_core,
+                     dut.cpu.u_cpu.data_in,
+                     dut.cpu.u_cpu.i_exc_handler.ex_state,
+                     dut.cpu.u_cpu.i_exc_handler.next_ex_state);
+        end
     end
 
     reg [127:0] shift = 128'd0;

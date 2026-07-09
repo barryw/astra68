@@ -24,6 +24,10 @@ module astra_soc #(
     output wire       ftdi_rxd,    // FPGA TX -> host
     input  wire       ftdi_txd,    // host -> FPGA RX
     output wire [7:0] leds
+`ifdef ASTRA_SOC_SIM_IRQ
+    , input wire [2:0] sim_ipln
+    , input wire       sim_avecn
+`endif
 );
     // -------------------------------------------------------------------------
     // Clock: 25 MHz / 8 = 3.125 MHz CPU/bus clock, from a fabric divider (clean
@@ -72,6 +76,13 @@ module astra_soc #(
     // when SDRAM/stray-access handling lands (a stray access now hangs on no DSACK).
     (* syn_preserve = 1 *) reg [5:0] cpu_ctl = 6'b111111;
     always @(posedge clk) cpu_ctl <= {4'b1111, ~rst, 1'b1};   // bit1 = HALT_INn = ~rst
+`ifdef ASTRA_SOC_SIM_IRQ
+    wire [2:0]  cpu_ipln = sim_ipln;
+    wire        cpu_avecn = sim_avecn;
+`else
+    wire [2:0]  cpu_ipln = 3'b111;
+    wire        cpu_avecn = cpu_ctl[2];
+`endif
 
     // Generic-free VHDL wrapper (mixed-lang can't bind the core's std_logic_vector
     // generic directly); it opens the unused status/arbitration outputs.
@@ -83,7 +94,7 @@ module astra_soc #(
         .DATA_EN    (cpu_data_en),
         .RESET_INn  (~rst),
         .FC_OUT     (cpu_fc),
-        .IPLn       (3'b111),      // no interrupts
+        .IPLn       (cpu_ipln),
         .DSACKn     (dsack_n),
         .SIZE       (cpu_siz),
         .ASn        (cpu_as_n),
@@ -91,7 +102,7 @@ module astra_soc #(
         .DSn        (cpu_ds_n),
         .BERRn      (cpu_ctl[0]),
         .HALT_INn   (cpu_ctl[1]),
-        .AVECn      (cpu_ctl[2]),
+        .AVECn      (cpu_avecn),
         .STERMn     (cpu_ctl[3]),
         .BRn        (cpu_ctl[4]),
         .BGACKn     (cpu_ctl[5])
@@ -323,6 +334,9 @@ module astra_soc #(
                             uart_cpu_data <= cpu_dout[7:0]; uart_cpu_start <= 1'b1;
                         end
                     end else if (cpu_rw_n) begin
+                        cpu_din <= sel_rom  ? rom_q :
+                                   sel_ram  ? ram_q :
+                                   sel_uart ? uart_rdata : 32'd0;
                         bus_read_stb <= 1'b1;              // commit read this cycle
                         if (!dbg_fault_valid && sel_rom && cpu_adr[31:20] == 12'hFFE && cpu_fc == 3'b110) begin
                             dbg_prog_adr3 <= dbg_prog_adr2;
@@ -362,7 +376,7 @@ module astra_soc #(
                 end
             end
             BS_ACK: begin
-                // present read data
+                // Read data was presented in BS_WAIT so it is stable before DSACK.
                 cpu_din <= sel_rom  ? rom_q :
                            sel_ram  ? ram_q :
                            sel_uart ? uart_rdata : 32'd0;
