@@ -15,6 +15,7 @@
 #define STACK_TEST_BASE (SCRATCH_BASE + 0x600u)
 #define MOVES_TEST_BASE (SCRATCH_BASE + 0x700u)
 #define BOUNDS_TEST_BASE (SCRATCH_BASE + 0x720u)
+#define CAS2_TEST_BASE (SCRATCH_BASE + 0x740u)
 
 static volatile uint32_t g_sum;
 
@@ -844,6 +845,31 @@ static void test_cmp2_chk2_directed(void)
     chk_exception_frame(0x00120000u, 0x0018u, 0x2000u, 0x2700u, 0x2700u);
 }
 
+static void test_cas2_directed(void)
+{
+    uint32_t got;
+
+    wr32(CAS2_TEST_BASE + 0x00u, 0x11111111u);
+    wr32(CAS2_TEST_BASE + 0x04u, 0x22222222u);
+    __asm__ volatile(
+        "lea 0x01ff9840,%%a0\n\t"
+        "lea 0x01ff9844,%%a1\n\t"
+        "move.l #0x11111111,%%d0\n\t"
+        "move.l #0xaaaaaaaa,%%d1\n\t"
+        "move.l #0x22222222,%%d2\n\t"
+        "move.l #0xbbbbbbbb,%%d3\n\t"
+        "move.w #0,%%ccr\n\t"
+        "cas2.l %%d0:%%d2,%%d1:%%d3,(%%a0):(%%a1)\n\t"
+        "move.w %%sr,%%d4\n\t"
+        "move.l %%d4,%0"
+        : "=&d"(got)
+        :
+        : "a0", "a1", "d0", "d1", "d2", "d3", "d4", "cc", "memory");
+    chk32(0x000a0300u, rd32(CAS2_TEST_BASE + 0x00u), 0xaaaaaaaau);
+    chk32(0x000a0304u, rd32(CAS2_TEST_BASE + 0x04u), 0xbbbbbbbbu);
+    chk32(0x000a0308u, got & 0x1fu, 0x04u);
+}
+
 static void test_exception_recovery_directed(void)
 {
     for (uint32_t off = 0; off < 0x100u; off += 4u) {
@@ -1366,6 +1392,7 @@ void kmain(void)
     test_system_control_directed();
     test_moves_directed();
     test_cmp2_chk2_directed();
+    test_cas2_directed();
     test_exception_recovery_directed();
 #ifdef CORETEST_SIM_IRQ
     test_interrupt_autovector_directed();
