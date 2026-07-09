@@ -160,6 +160,16 @@ signal STATUS_REG           : Std_Logic_Vector(15 downto 0);
 signal VFLAG_DIV            : std_logic;
 signal XFLAG_SHFT           : std_logic;
 signal XNZVC                : Std_Logic_Vector(4 downto 0);
+
+function BOUNDS_OUTSIDE(LOWER_LE_UPPER, R_LT_LOWER, R_GT_UPPER : boolean) return boolean is
+begin
+    if LOWER_LE_UPPER then
+        return R_LT_LOWER or R_GT_UPPER;
+    else
+        return R_LT_LOWER and R_GT_UPPER;
+    end if;
+end function BOUNDS_OUTSIDE;
+
 begin
     PARAMETER_BUFFER: process
     begin
@@ -870,14 +880,20 @@ begin
     -- Out of bounds condition:
     CHK_CMP_COND <= true when OP = CHK and OP2_SIGNEXT(MSB) = '1' else -- Negative destination.
                     true when OP = CHK and signed(OP2_SIGNEXT) > signed(OP1_SIGNEXT) else
-                    true when (OP = CHK2 or OP = CMP2) and CHK2CMP2_DR = '1' and OP_SIZE = LONG and OP2 < OP1 else
-                    true when (OP = CHK2 or OP = CMP2) and CHK2CMP2_DR = '1' and OP_SIZE = LONG and OP2 > OP3 else
-                    true when (OP = CHK2 or OP = CMP2) and CHK2CMP2_DR = '1' and OP_SIZE = WORD and OP2(15 downto 0) < OP1(15 downto 0) else
-                    true when (OP = CHK2 or OP = CMP2) and CHK2CMP2_DR = '1' and OP_SIZE = WORD and OP2(15 downto 0) > OP3(15 downto 0) else
-                    true when (OP = CHK2 or OP = CMP2) and CHK2CMP2_DR = '1' and OP2(7 downto 0) < OP1(7 downto 0) else
-                    true when (OP = CHK2 or OP = CMP2) and CHK2CMP2_DR = '1' and OP2(7 downto 0) > OP3(7 downto 0) else
-                    true when (OP = CHK2 or OP = CMP2) and CHK2CMP2_DR = '0' and signed(OP2_SIGNEXT) < signed(OP1_SIGNEXT) else
-                    true when (OP = CHK2 or OP = CMP2) and CHK2CMP2_DR = '0' and signed(OP2_SIGNEXT) > signed(OP3_SIGNEXT) else false;
+                    true when (OP = CHK2 or OP = CMP2) and CHK2CMP2_DR = '1' and OP_SIZE = LONG and
+                              BOUNDS_OUTSIDE(OP1 <= OP3, OP2 < OP1, OP2 > OP3) else
+                    true when (OP = CHK2 or OP = CMP2) and CHK2CMP2_DR = '1' and OP_SIZE = WORD and
+                              BOUNDS_OUTSIDE(OP1(15 downto 0) <= OP3(15 downto 0),
+                                             OP2(15 downto 0) < OP1(15 downto 0),
+                                             OP2(15 downto 0) > OP3(15 downto 0)) else
+                    true when (OP = CHK2 or OP = CMP2) and CHK2CMP2_DR = '1' and OP_SIZE = BYTE and
+                              BOUNDS_OUTSIDE(OP1(7 downto 0) <= OP3(7 downto 0),
+                                             OP2(7 downto 0) < OP1(7 downto 0),
+                                             OP2(7 downto 0) > OP3(7 downto 0)) else
+                    true when (OP = CHK2 or OP = CMP2) and CHK2CMP2_DR = '0' and
+                              BOUNDS_OUTSIDE(signed(OP1_SIGNEXT) <= signed(OP3_SIGNEXT),
+                                             signed(OP2_SIGNEXT) < signed(OP1_SIGNEXT),
+                                             signed(OP2_SIGNEXT) > signed(OP3_SIGNEXT)) else false;
 
     -- All traps must be modeled as strobes.
     TRAP_CHK <= '1' when ALU_ACK = '1' and (OP = CHK or OP = CHK2) and CHK_CMP_COND = true else '0';
