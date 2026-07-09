@@ -998,7 +998,8 @@ begin
     --   changing the RAM space (status register MSBs).
     --   changing Function codes or the active stack pointer.
     IPIPE_FLUSH <= IPIPE_FLUSH_I;
-    IPIPE_FLUSH_I <= '1' when (OP = BRA or OP = BSR) and FETCH_STATE /= START_OP and NEXT_FETCH_STATE = START_OP else
+    IPIPE_FLUSH_I <= '1' when RESET_CPU = '1' else
+                     '1' when (OP = BRA or OP = BSR) and FETCH_STATE /= START_OP and NEXT_FETCH_STATE = START_OP else
                      '1' when OP = Bcc and FETCH_STATE /= START_OP and NEXT_FETCH_STATE = START_OP and ALU_COND = true else
                      '1' when OP = DBcc and LOOP_BSY = '0' and FETCH_STATE /= START_OP and NEXT_FETCH_STATE = START_OP and ALU_COND = false and DBcc_COND = false else
                      '1' when OP = DBcc and LOOP_EXIT_I = '1' and (ALU_COND = true or DBcc_COND = true) else -- Flush the pipe after a finished loop.
@@ -1854,8 +1855,12 @@ begin
                             NEXT_FETCH_STATE <= FETCH_DISPL;
                         end if;
                     when ADDA | BCHG | BCLR | BFCHG | BFCLR | BFEXTS | BFEXTU | BFFFO | BFINS | BFSET | BFTST | BSET | BTST | CHK | CHK2 | CMP2 | CMPA | DIVS | DIVU | MULS | MULU | MOVE | MOVEA | MOVE_TO_CCR | MOVE_TO_SR | SUBA =>
+                        -- MOVE destination EA writeback uses ADR_EFF_WB, which is captured from
+                        -- the registered ADR_EFF_I.  After fetching the final extension word,
+                        -- route through SWITCH_STATE so ADR_EFF_I contains the completed
+                        -- destination address before INIT_EXEC_WB asserts ADR_MARK_USED.
                         if (EW_ACK = '1' or EW_RDY = '1') and OP = MOVE and PHASE2 = true and AR_IN_USE = '0' then -- ADH.
-                            NEXT_FETCH_STATE <= INIT_EXEC_WB;
+                            NEXT_FETCH_STATE <= SWITCH_STATE;
                         elsif (EW_ACK = '1' or EW_RDY = '1') and AR_IN_USE = '0' then -- ADH.
                             NEXT_FETCH_STATE <= CALC_AEFF;
                         else
@@ -1912,10 +1917,12 @@ begin
                                 NEXT_FETCH_STATE <= FETCH_EXWORD_1;
                             end if;
                         when ADDA | BCHG | BCLR | BFCHG | BFCLR | BFEXTS | BFEXTU | BFFFO | BFINS | BFSET | BFTST | BSET | BTST | CHK | CHK2 | CMP2 | CMPA | DIVS | DIVU | MULS | MULU | MOVE | MOVEA | MOVE_TO_CCR | MOVE_TO_SR | SUBA =>
+                            -- See FETCH_DISPL: MOVE destination EA needs one registered-address
+                            -- cycle before ADR_MARK_USED captures ADR_EFF_WB.
                             if OP = MOVE and PHASE2 = true and BIW_1(15) = '0' and AR_IN_USE = '0' and DR_IN_USE = '0' then -- ADH.
-                                NEXT_FETCH_STATE <= INIT_EXEC_WB;
+                                NEXT_FETCH_STATE <= SWITCH_STATE;
                             elsif OP = MOVE and PHASE2 = true and BIW_1(15) = '1' and AR_IN_USE = '0' then -- ADH.
-                                NEXT_FETCH_STATE <= INIT_EXEC_WB;
+                                NEXT_FETCH_STATE <= SWITCH_STATE;
                             elsif (BIW_1(15) = '0' and AR_IN_USE = '0' and DR_IN_USE = '0') or (BIW_1(15) = '1' and AR_IN_USE = '0') then -- ADH.
                                 NEXT_FETCH_STATE <= CALC_AEFF;
                             else
@@ -1975,8 +1982,10 @@ begin
                                 NEXT_FETCH_STATE <=  FETCH_D_LO;
                             end if;
                         when ADDA | BCHG | BCLR | BFCHG | BFCLR | BFEXTS | BFEXTU | BFFFO | BFINS | BFSET | BFTST | BSET | BTST | CHK | CHK2| CMP2 | CMPA | DIVS | DIVU | MULS | MULU | MOVE | MOVEA | MOVE_TO_CCR | MOVE_TO_SR | SUBA =>
+                            -- See FETCH_DISPL: MOVE destination EA needs one registered-address
+                            -- cycle before ADR_MARK_USED captures ADR_EFF_WB.
                             if OP = MOVE and PHASE2 = true and AR_IN_USE = '0' then -- ADH.
-                                NEXT_FETCH_STATE <= INIT_EXEC_WB;
+                                NEXT_FETCH_STATE <= SWITCH_STATE;
                             elsif AR_IN_USE = '0' then -- ADH.
                                 NEXT_FETCH_STATE <= CALC_AEFF;
                             else
@@ -2034,8 +2043,10 @@ begin
                                 NEXT_FETCH_STATE <= FETCH_MEMADR;
                             end if;
                         when ADDA | BCHG | BCLR | BFCHG | BFCLR | BFEXTS | BFEXTU | BFFFO | BFINS | BFSET | BFTST | BSET | BTST | CHK | CHK2| CMP2 | CMPA | DIVS | DIVU | MULS | MULU | MOVE | MOVEA | MOVE_TO_CCR | MOVE_TO_SR | SUBA =>
+                            -- See FETCH_DISPL: MOVE destination EA needs one registered-address
+                            -- cycle before ADR_MARK_USED captures ADR_EFF_WB.
                             if OP = MOVE and PHASE2 = true and AR_IN_USE = '0' then -- ADH.
-                                NEXT_FETCH_STATE <= INIT_EXEC_WB;
+                                NEXT_FETCH_STATE <= SWITCH_STATE;
                             elsif AR_IN_USE = '0' then -- ADH.
                                 NEXT_FETCH_STATE <= CALC_AEFF;
                             else

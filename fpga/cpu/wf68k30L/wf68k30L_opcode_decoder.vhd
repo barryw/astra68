@@ -223,7 +223,11 @@ begin
             IPIPE.D <= (others => '0');
             IPIPE.C <= (others => '0');
             IPIPE.B <= (others => '0');
+            IPIPE_D_FAULT <= '0';
+            IPIPE_C_FAULT <= '0';
+            IPIPE_B_FAULT <= '0';
             IPIPE_PNTR <= 0;
+            BKPT_REQ <= '0';
         elsif BKPT_INSERT = '1' then
             IPIPE_D_VAR := IPIPE.D;
             IPIPE.D <= BKPT_DATA; -- Insert the breakpoint data.

@@ -1,0 +1,154 @@
+// Astra 68 coretest SoC simulation gate.
+`timescale 1ns/1ps
+
+module tb_coretest;
+    localparam DEBUG_SCRATCH = 1'b0;
+    localparam DEBUG_MOVE_11BC = 1'b0;
+
+    reg clk25 = 0;
+    reg rstn = 0;
+    wire tx;
+    wire [7:0] leds;
+
+    astra_soc #(.RST_MAX(16'd16)) dut (
+        .clk25_mhz(clk25),
+        .reset_n(rstn),
+        .ftdi_rxd(tx),
+        .ftdi_txd(1'b1),
+        .leds(leds)
+    );
+
+    always #4 clk25 = ~clk25;
+
+    initial begin
+        rstn = 0;
+        repeat (40) @(posedge clk25);
+        rstn = 1;
+    end
+
+    reg [127:0] shift = 128'd0;
+    reg [127:0] next_shift;
+    reg saw_fail = 1'b0;
+    localparam [13*8-1:0] PASS_SIG = "CORETEST PASS";
+    localparam [13*8-1:0] FAIL_SIG = "CORETEST FAIL";
+
+    always @(posedge dut.clk) begin
+        if (dut.uart_start) begin
+            $write("%c", dut.uart_data);
+            next_shift = {shift[119:0], dut.uart_data};
+            shift <= next_shift;
+            if (next_shift[13*8-1:0] == PASS_SIG) begin
+                $display("\n*** CORETEST PASS detected ***");
+                $finish;
+            end
+            if (next_shift[13*8-1:0] == FAIL_SIG) begin
+                saw_fail <= 1'b1;
+            end
+            if (saw_fail && dut.uart_data == 8'h0a) begin
+                $display("*** CORETEST FAIL detected ***");
+                $fatal(1);
+            end
+        end
+    end
+
+    always @(posedge dut.clk) begin
+        if (DEBUG_SCRATCH && (dut.bus_write_stb || dut.bus_read_stb)
+            && dut.cpu_adr >= 32'h01ff9100 && dut.cpu_adr < 32'h01ff9200) begin
+            $display("[%0t] SCR %s adr=0x%08x siz=%b be=%b dout=0x%08x din=0x%08x ram_q=0x%08x",
+                     $time,
+                     dut.bus_write_stb ? "WR" : "RD",
+                     dut.cpu_adr,
+                     dut.cpu_siz,
+                     dut.be,
+                     dut.cpu_dout,
+                     dut.cpu_din,
+                     dut.ram_q);
+        end
+    end
+
+    reg trace_ctrl = 1'b0;
+    integer trace_left = 0;
+    wire trace_move_11bc =
+        (dut.cpu.u_cpu.biw_0 == 16'h11bc) ||
+        (dut.cpu.u_cpu.i_control.biw_0_wb == 12'h1bc) ||
+        (dut.bus_read_stb && dut.cpu_adr >= 32'hffe0078c && dut.cpu_adr < 32'hffe00798);
+
+    always @(posedge dut.clk) begin
+        if (DEBUG_MOVE_11BC && trace_move_11bc) begin
+            trace_ctrl <= 1'b1;
+            trace_left <= 220;
+        end else if (trace_left > 0) begin
+            trace_left <= trace_left - 1;
+        end else begin
+            trace_ctrl <= 1'b0;
+        end
+
+        if (DEBUG_MOVE_11BC && (trace_ctrl || trace_move_11bc)) begin
+            $display("[%0t] M11BC adr=0x%08x fs=%0d nfs=%0d exec=%0d nexec=%0d op=%0h opwb=%0h biw0=%04x biw0wb=%03x phase2=%b alu_i=%b alu_req=%b alu_ack=%b alu_bsy=%b data_wr=%b data_wr_i=%b rd=%b wr=%b rdy=%b valid=%b adr_eff=0x%08x adr_wb=0x%08x mark=%b inuse=%b mode=%0d sel=%0d ext=%04x disp=%08x fmt=%b d32h=%b d32l=%b abs_h=%b abs_l=%b",
+                     $time,
+                     dut.cpu_adr,
+                     dut.cpu.u_cpu.i_control.fetch_state,
+                     dut.cpu.u_cpu.i_control.next_fetch_state,
+                     dut.cpu.u_cpu.i_control.exec_wb_state,
+                     dut.cpu.u_cpu.i_control.next_exec_wb_state,
+                     dut.cpu.u_cpu.op,
+                     dut.cpu.u_cpu.i_control.op_wb_i,
+                     dut.cpu.u_cpu.biw_0,
+                     dut.cpu.u_cpu.i_control.biw_0_wb,
+                     dut.cpu.u_cpu.i_control.phase2,
+                     dut.cpu.u_cpu.i_control.alu_init,
+                     dut.cpu.u_cpu.alu_req,
+                     dut.cpu.u_cpu.i_control.alu_ack,
+                     dut.cpu.u_cpu.alu_bsy,
+                     dut.cpu.u_cpu.i_control.data_wr,
+                     dut.cpu.u_cpu.i_control.data_wr_i,
+                     dut.cpu.u_cpu.i_control.read_cycle,
+                     dut.cpu.u_cpu.i_control.write_cycle,
+                     dut.cpu.u_cpu.data_rdy,
+                     dut.cpu.u_cpu.data_valid,
+                     dut.cpu.u_cpu.adr_eff,
+                     dut.cpu.u_cpu.adr_eff_wb,
+                     dut.cpu.u_cpu.adr_mark_used,
+                     dut.cpu.u_cpu.adr_in_use,
+                     dut.cpu.u_cpu.adr_mode,
+                     dut.cpu.u_cpu.amode_sel,
+                     dut.cpu.u_cpu.ext_word,
+                     dut.cpu.u_cpu.displacement,
+                     dut.cpu.u_cpu.store_adr_format,
+                     dut.cpu.u_cpu.store_d32_hi,
+                     dut.cpu.u_cpu.store_d32_lo,
+                     dut.cpu.u_cpu.store_abs_hi,
+                     dut.cpu.u_cpu.store_abs_lo);
+        end
+    end
+
+    reg [31:0] last_adr = 32'hx;
+    integer stall = 0;
+    always @(posedge dut.clk) begin
+        if (^dut.cpu_adr === 1'bx) begin
+            stall = 0;
+        end else if (dut.cpu_adr === last_adr && !dut.cpu_as_n) begin
+            stall = stall + 1;
+        end else begin
+            stall = 0;
+            last_adr = dut.cpu_adr;
+        end
+
+        if (stall == 3000) begin
+            $display("\n*** HANG: cpu_adr frozen at 0x%08x for 3000 CPU clocks ***", dut.cpu_adr);
+            $display("  bs=%0d as_n=%b ds_n=%b rw_n=%b dsack_n=%b siz=%b fc=%b",
+                     dut.bs, dut.cpu_as_n, dut.cpu_ds_n, dut.cpu_rw_n, dut.dsack_n, dut.cpu_siz, dut.cpu_fc);
+            $display("  sel_rom=%b sel_ram=%b sel_uart=%b cpu_din=0x%08x ram_q=0x%08x rom_q=0x%08x",
+                     dut.sel_rom, dut.sel_ram, dut.sel_uart, dut.cpu_din, dut.ram_q, dut.rom_q);
+            $display("  data_en=%b dout=0x%08x waitc=%0d read_stb=%b write_stb=%b be=%b",
+                     dut.cpu_data_en, dut.cpu_dout, dut.waitc, dut.bus_read_stb, dut.bus_write_stb, dut.be);
+            $fatal(1);
+        end
+    end
+
+    initial begin
+        #200_000_000;
+        $display("\n*** TIMEOUT: no CORETEST PASS/FAIL seen ***");
+        $fatal(1);
+    end
+endmodule

@@ -263,107 +263,10 @@ begin
         wait until CLK = '1' and CLK' event;
         if RESET = '1' then
             EX_P_RESET <= '1';
-        elsif EX_STATE = RESTORE_PC and DATA_RDY = '1' and EXCEPTION = EX_RESET then
-            EX_P_RESET <= '0';
-        end if;
-        --
-        if TRAP_BERR = '1' then
-            EX_P_BERR <= '1';
-        elsif EX_STATE /= IDLE and DATA_RDY = '1' and DATA_VALID = '0' then
-            EX_P_BERR <= '1';
-        elsif EX_STATE = INIT and EXCEPTION = EX_BERR then
-            EX_P_BERR <= '0'; -- Reset in the beginning to enable retriggering.
-        elsif SYS_INIT = '1' then
             EX_P_BERR <= '0';
-        end if;
-        --
-        if TRAP_AERR = '1' then
-            EX_P_AERR <= '1';
-        elsif EX_STATE = BUILD_STACK and EXCEPTION = EX_AERR then
             EX_P_AERR <= '0';
-        elsif SYS_INIT = '1' then
-            EX_P_AERR <= '0';
-        end if;
-        --
-        if EX_TRACE_IN = '1' then
-            EX_P_TRACE <= '1';
-        elsif EX_STATE = BUILD_STACK and EXCEPTION = EX_TRACE then
             EX_P_TRACE <= '0';
-        elsif SYS_INIT = '1' then
-            EX_P_TRACE <= '0';
-        end if;
-        --
-        if IRQ = "111" and SR_VAR = "111" and STATUS_REG_IN(10 downto 8) /= "111" then
-            INT7_TRIG := true; -- Trigger by lowering the mask from 7 to any value.
-        elsif IRQ = "111" and INT_VAR < "111" then
-            INT7_TRIG := true; -- Trigger when level 7 is entered.
-        else
-            INT7_TRIG := false;
-        end if;
-        --
-        SR_VAR := STATUS_REG_IN(10 downto 8); -- Update after use!
-        INT_VAR := IRQ; -- Update after use!
-        --
-        if SYS_INIT = '1' then -- Reset when disabling the interrupts.
             EX_P_INT <= '0';
-            IRQ_PEND_I <= "111"; -- This is required for system startup.
-        elsif EX_STATE = GET_VECTOR and DATA_RDY = '1' then
-            EX_P_INT <= '0';
-        elsif INT7_TRIG = true then -- Level 7 is nonmaskable ...
-            EX_P_INT <= '1';
-            IRQ_PEND_I <= IRQ;
-        elsif INT_TRIG = '1' and STATUS_REG_IN(10 downto 8) < IRQ then
-            EX_P_INT <= '1';
-            IRQ_PEND_I <= IRQ;
-        end if;
-        --
-        -- The following nine traps never appear at the same time:
-        if TRAP_CHK = '1' then
-            EX_P_CHK <= '1';
-        elsif TRAP_DIVZERO = '1' then
-            EX_P_DIVZERO <= '1';
-        elsif TRAP_CODE_OPC = T_TRAP then
-            EX_P_TRAP <= '1';
-        elsif TRAP_cc = '1' then
-            EX_P_TRAPcc <= '1';
-        elsif TRAP_V = '1' then
-            EX_P_TRAPV <= '1';
-        elsif TRAP_CODE_OPC = T_PRIV then
-            EX_P_PRIV <= '1';
-        elsif TRAP_CODE_OPC = T_1010 then
-            EX_P_1010 <= '1';
-        elsif TRAP_CODE_OPC = T_1111 then
-            EX_P_1111 <= '1';
-        elsif TRAP_CODE_OPC = T_ILLEGAL then
-            EX_P_ILLEGAL <= '1';
-        elsif TRAP_ILLEGAL = '1' then -- Used for BKPT.
-            EX_P_ILLEGAL <= '1';
-        elsif EX_STATE = VALIDATE_FRAME and DATA_RDY = '1' and DATA_VALID = '1' and NEXT_EX_STATE = IDLE then
-            EX_P_FORMAT <= '1';
-        elsif EX_STATE = EXAMINE_VERSION and DATA_RDY = '1' and DATA_VALID = '1' and NEXT_EX_STATE = IDLE then
-            EX_P_FORMAT <= '1';
-        elsif TRAP_CODE_OPC = T_RTE then
-            EX_P_RTE <= '1';
-        elsif EX_STATE = REFILL_PIPE and NEXT_EX_STATE /= REFILL_PIPE then -- Clear after IPIPE_FLUSH.
-            case EXCEPTION is
-                when EX_1010 | EX_1111 | EX_CHK | EX_DIVZERO | EX_ILLEGAL | EX_TRAP | EX_TRAPcc | EX_TRAPV | EX_FORMAT | EX_PRIV | EX_RTE =>
-                    EX_P_CHK <= '0';
-                    EX_P_DIVZERO <= '0';
-                    EX_P_PRIV <= '0';
-                    EX_P_1010 <= '0';
-                    EX_P_1111 <= '0';
-                    EX_P_ILLEGAL <= '0';
-                    EX_P_RTE <= '0';
-                    EX_P_TRAP <= '0';
-                    EX_P_TRAPcc <= '0';
-                    EX_P_TRAPV <= '0';
-                    EX_P_FORMAT <= '0';
-                when others =>
-                    null;
-            end case;
-        -- Clear all possible traps during reset exception because the
-        -- signal EXCEPTION is not valid at this time:
-        elsif SYS_INIT = '1' then
             EX_P_CHK <= '0';
             EX_P_DIVZERO <= '0';
             EX_P_PRIV <= '0';
@@ -372,8 +275,126 @@ begin
             EX_P_ILLEGAL <= '0';
             EX_P_RTE <= '0';
             EX_P_TRAP <= '0';
+            EX_P_TRAPcc <= '0';
             EX_P_TRAPV <= '0';
             EX_P_FORMAT <= '0';
+            IRQ_PEND_I <= "111";
+            SR_VAR := "111";
+            INT_VAR := "111";
+        else
+            if EX_STATE = RESTORE_PC and DATA_RDY = '1' and EXCEPTION = EX_RESET then
+                EX_P_RESET <= '0';
+            end if;
+            --
+            if TRAP_BERR = '1' then
+                EX_P_BERR <= '1';
+            elsif EX_STATE /= IDLE and DATA_RDY = '1' and DATA_VALID = '0' then
+                EX_P_BERR <= '1';
+            elsif EX_STATE = INIT and EXCEPTION = EX_BERR then
+                EX_P_BERR <= '0'; -- Reset in the beginning to enable retriggering.
+            elsif SYS_INIT = '1' then
+                EX_P_BERR <= '0';
+            end if;
+            --
+            if TRAP_AERR = '1' then
+                EX_P_AERR <= '1';
+            elsif EX_STATE = BUILD_STACK and EXCEPTION = EX_AERR then
+                EX_P_AERR <= '0';
+            elsif SYS_INIT = '1' then
+                EX_P_AERR <= '0';
+            end if;
+            --
+            if EX_TRACE_IN = '1' then
+                EX_P_TRACE <= '1';
+            elsif EX_STATE = BUILD_STACK and EXCEPTION = EX_TRACE then
+                EX_P_TRACE <= '0';
+            elsif SYS_INIT = '1' then
+                EX_P_TRACE <= '0';
+            end if;
+            --
+            if IRQ = "111" and SR_VAR = "111" and STATUS_REG_IN(10 downto 8) /= "111" then
+                INT7_TRIG := true; -- Trigger by lowering the mask from 7 to any value.
+            elsif IRQ = "111" and INT_VAR < "111" then
+                INT7_TRIG := true; -- Trigger when level 7 is entered.
+            else
+                INT7_TRIG := false;
+            end if;
+            --
+            SR_VAR := STATUS_REG_IN(10 downto 8); -- Update after use!
+            INT_VAR := IRQ; -- Update after use!
+            --
+            if SYS_INIT = '1' then -- Reset when disabling the interrupts.
+                EX_P_INT <= '0';
+                IRQ_PEND_I <= "111"; -- This is required for system startup.
+            elsif EX_STATE = GET_VECTOR and DATA_RDY = '1' then
+                EX_P_INT <= '0';
+            elsif INT7_TRIG = true then -- Level 7 is nonmaskable ...
+                EX_P_INT <= '1';
+                IRQ_PEND_I <= IRQ;
+            elsif INT_TRIG = '1' and STATUS_REG_IN(10 downto 8) < IRQ then
+                EX_P_INT <= '1';
+                IRQ_PEND_I <= IRQ;
+            end if;
+            --
+            -- The following nine traps never appear at the same time:
+            if TRAP_CHK = '1' then
+                EX_P_CHK <= '1';
+            elsif TRAP_DIVZERO = '1' then
+                EX_P_DIVZERO <= '1';
+            elsif TRAP_CODE_OPC = T_TRAP then
+                EX_P_TRAP <= '1';
+            elsif TRAP_cc = '1' then
+                EX_P_TRAPcc <= '1';
+            elsif TRAP_V = '1' then
+                EX_P_TRAPV <= '1';
+            elsif TRAP_CODE_OPC = T_PRIV then
+                EX_P_PRIV <= '1';
+            elsif TRAP_CODE_OPC = T_1010 then
+                EX_P_1010 <= '1';
+            elsif TRAP_CODE_OPC = T_1111 then
+                EX_P_1111 <= '1';
+            elsif TRAP_CODE_OPC = T_ILLEGAL then
+                EX_P_ILLEGAL <= '1';
+            elsif TRAP_ILLEGAL = '1' then -- Used for BKPT.
+                EX_P_ILLEGAL <= '1';
+            elsif EX_STATE = VALIDATE_FRAME and DATA_RDY = '1' and DATA_VALID = '1' and NEXT_EX_STATE = IDLE then
+                EX_P_FORMAT <= '1';
+            elsif EX_STATE = EXAMINE_VERSION and DATA_RDY = '1' and DATA_VALID = '1' and NEXT_EX_STATE = IDLE then
+                EX_P_FORMAT <= '1';
+            elsif TRAP_CODE_OPC = T_RTE then
+                EX_P_RTE <= '1';
+            elsif EX_STATE = REFILL_PIPE and NEXT_EX_STATE /= REFILL_PIPE then -- Clear after IPIPE_FLUSH.
+                case EXCEPTION is
+                    when EX_1010 | EX_1111 | EX_CHK | EX_DIVZERO | EX_ILLEGAL | EX_TRAP | EX_TRAPcc | EX_TRAPV | EX_FORMAT | EX_PRIV | EX_RTE =>
+                        EX_P_CHK <= '0';
+                        EX_P_DIVZERO <= '0';
+                        EX_P_PRIV <= '0';
+                        EX_P_1010 <= '0';
+                        EX_P_1111 <= '0';
+                        EX_P_ILLEGAL <= '0';
+                        EX_P_RTE <= '0';
+                        EX_P_TRAP <= '0';
+                        EX_P_TRAPcc <= '0';
+                        EX_P_TRAPV <= '0';
+                        EX_P_FORMAT <= '0';
+                    when others =>
+                        null;
+                end case;
+            -- Clear all possible traps during reset exception because the
+            -- signal EXCEPTION is not valid at this time:
+            elsif SYS_INIT = '1' then
+                EX_P_CHK <= '0';
+                EX_P_DIVZERO <= '0';
+                EX_P_PRIV <= '0';
+                EX_P_1010 <= '0';
+                EX_P_1111 <= '0';
+                EX_P_ILLEGAL <= '0';
+                EX_P_RTE <= '0';
+                EX_P_TRAP <= '0';
+                EX_P_TRAPcc <= '0';
+                EX_P_TRAPV <= '0';
+                EX_P_FORMAT <= '0';
+            end if;
         end if;
     end process PENDING;
 
@@ -920,4 +941,3 @@ begin
         end case;
     end process EXCEPTION_HANDLER_DEC;
 end BEHAVIOR;
-

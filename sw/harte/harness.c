@@ -44,9 +44,9 @@ static void putc(uint8_t c) {
     VESTA->UART_DATA = c;
 }
 
-static uint8_t getc(void) {
+static uint32_t getc(void) {
     while (!(UART_RXSTATUS & UART_RX_READY)) { }
-    return (uint8_t)UART_RXDATA;   // read consumes the byte (clears RX_READY)
+    return UART_RXDATA & 0xFFu;    // read consumes the byte (clears RX_READY)
 }
 
 // Per-case executor in harness_exec.S. harte_exec loads regs+CCR, JSRs into the relocated
@@ -59,21 +59,23 @@ static void run_case(void) {
     // frame (flaky FTDI drops bytes) MUST be dropped, never executed: garbage in codebuf
     // would send `jmp codebuf` into the weeds and hang the CPU. On mismatch we return, and
     // kmain's resync-on-SYNC recovers; the host times out and retries.
-    uint8_t ck = CMD_RUN;
+    uint32_t ck = CMD_RUN;
     uint8_t *rt = (uint8_t *)regtable;
-    for (int i = 0; i < 60; i++) { uint8_t b = getc(); rt[i] = b; ck += b; }   // d0..d7, a0..a6
-    ccr_in = getc();       ck += ccr_in;             // initial CCR
-    uint8_t ilen = getc(); ck += ilen;               // instruction length in bytes
-    for (uint8_t i = 0; i < ilen; i++) {             // read ALL instr bytes (keep frame in sync)...
-        uint8_t b = getc(); ck += b;
-        if (i < sizeof(codebuf) - 6) codebuf[i] = b; // ...but store only what fits
+    for (uint32_t i = 0; i < 60; i++) { uint32_t b = getc(); rt[i] = (uint8_t)b; ck += b; } // d0..d7, a0..a6
+    uint32_t ccr = getc();  ck += ccr;               // initial CCR
+    ccr_in = (uint8_t)ccr;
+    uint32_t ilen = getc(); ck += ilen;              // instruction length in bytes
+    uint8_t *cp = codebuf;
+    for (uint32_t i = 0; i < ilen; i++) {            // read ALL instr bytes (keep frame in sync)...
+        uint32_t b = getc(); ck += b;
+        if (i < sizeof(codebuf) - 2) *cp++ = (uint8_t)b; // ...but store only what fits
     }
-    uint8_t rxck = getc();
-    if (ck != rxck) return;                          // bad checksum: drop frame, resync
+    uint32_t rxck = getc();
+    if (((uint8_t)ck) != (uint8_t)rxck) return;      // bad checksum: drop frame, resync
     if (ilen > sizeof(codebuf) - 2) return;          // instruction too long for our scope: drop
 
-    codebuf[ilen]     = 0x4E;                        // trailing RTS (0x4E75): returns to harte_exec.
-    codebuf[ilen + 1] = 0x75;                        // one word — never a multi-word fetch from RAM.
+    *cp++ = 0x4E;                                    // trailing RTS (0x4E75): returns to harte_exec.
+    *cp   = 0x75;                                    // one word — never a multi-word fetch from RAM.
     harte_exec();
 
     // TX RESULT: 0xAA 0x3F 0x81 <60 reg bytes> <ccr> cksum

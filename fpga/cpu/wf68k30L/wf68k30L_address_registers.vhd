@@ -361,9 +361,9 @@ begin
             end if;
         end if;
 
-        if ADR_MODE = "110" and FETCH_MEM_ADR = '1' and F_E = '1' and B_S = '1' then
+        if ADR_MODE = "110" and F_E = '1' and B_S = '1' then
             ADR_MUX := x"00000000"; -- Base register suppress.
-        elsif ADR_MODE = "111" and FETCH_MEM_ADR = '1' and AMODE_SEL = "011" and F_E = '1' and B_S = '1' then
+        elsif ADR_MODE = "111" and AMODE_SEL = "011" and F_E = '1' and B_S = '1' then
             ADR_MUX := x"00000000"; -- Base register suppress.
         elsif USE_DREG = '1' then
             ADR_MUX := AR_IN_1;
