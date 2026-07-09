@@ -16,6 +16,7 @@
 #define MOVES_TEST_BASE (SCRATCH_BASE + 0x700u)
 #define BOUNDS_TEST_BASE (SCRATCH_BASE + 0x720u)
 #define CAS2_TEST_BASE (SCRATCH_BASE + 0x740u)
+#define RETURN_TEST_BASE (SCRATCH_BASE + 0x800u)
 
 static volatile uint32_t g_sum;
 
@@ -890,6 +891,63 @@ static void test_cas2_directed(void)
     chk32(0x000a0318u, got & 0x04u, 0x00u);
 }
 
+static void test_return_control_directed(void)
+{
+    uint32_t got0;
+    uint32_t got1;
+
+    __asm__ volatile(
+        "move.l %%sp,%%a2\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9900\n\t"
+        "move.l #0xdeadbeef,0x01ff9904\n\t"
+        "lea 0x01ff9900,%%sp\n\t"
+        "rtd #4\n"
+        "1:\n\t"
+        "move.l %%sp,%0\n\t"
+        "move.l %%a2,%%sp"
+        : "=&d"(got0)
+        :
+        : "a0", "a2", "memory");
+    chk32(0x000a0400u, got0, RETURN_TEST_BASE + 0x08u);
+
+    __asm__ volatile(
+        "move.l %%sp,%%a2\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9910\n\t"
+        "move.l #0xdeadbeef,0x01ff9914\n\t"
+        "lea 0x01ff9910,%%sp\n\t"
+        "rtd #-2\n"
+        "1:\n\t"
+        "move.l %%sp,%0\n\t"
+        "move.l %%a2,%%sp"
+        : "=&d"(got0)
+        :
+        : "a0", "a2", "memory");
+    chk32(0x000a0408u, got0, RETURN_TEST_BASE + 0x12u);
+
+    __asm__ volatile(
+        "move.l %%sp,%%a2\n\t"
+        "move.l #0xaaaaaaaa,%%d0\n\t"
+        "lea 0x01ff9920,%%a0\n\t"
+        "move.w #0x0015,(%%a0)\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,2(%%a0)\n\t"
+        "move.w #0,%%ccr\n\t"
+        "move.l %%a0,%%sp\n\t"
+        "rtr\n"
+        "1:\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%sp,%1\n\t"
+        "move.l %%a2,%%sp"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "a2", "d0", "cc", "memory");
+    chk32(0x000a0410u, got0 & 0x1fu, 0x15u);
+    chk32(0x000a0414u, got1, RETURN_TEST_BASE + 0x26u);
+}
+
 static void test_exception_recovery_directed(void)
 {
     for (uint32_t off = 0; off < 0x100u; off += 4u) {
@@ -1413,6 +1471,7 @@ void kmain(void)
     test_moves_directed();
     test_cmp2_chk2_directed();
     test_cas2_directed();
+    test_return_control_directed();
     test_exception_recovery_directed();
 #ifdef CORETEST_SIM_IRQ
     test_interrupt_autovector_directed();

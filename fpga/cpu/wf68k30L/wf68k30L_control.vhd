@@ -979,7 +979,7 @@ begin
         end case;
         --
         case OP is
-            when LINK | MOVEP => DISPLACEMENT <= DISPL_VAR;
+            when LINK | MOVEP | RTD => DISPLACEMENT <= DISPL_VAR;
             when others => DISPLACEMENT <= DISPL_VAR + "10";
         end case;
     end process P_DISPLACEMENT;
