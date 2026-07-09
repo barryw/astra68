@@ -114,7 +114,7 @@ module astra_soc #(
     //   RAM  0x01FF8000..0x01FFFFFF (32 KB, stack top = 0x02000000)
     //   UART 0xFFF00500..0xFFF0050F (Vesta UART)
     // -------------------------------------------------------------------------
-    localparam ROM_WORDS = 2048;              // 8 KB ROM (selftest ~5 KB; must match sim tb_soc.sv=2048)
+    localparam ROM_WORDS = 4096;              // 16 KB ROM, matching the low-ROM reset/vector alias window.
     localparam RAM_WORDS = 8192;              // 32 KB system RAM (BRAM)
 
     wire sel_rom  = (cpu_adr[31:20] == 12'hFFE) || (cpu_adr[31:14] == 18'd0); // 0xFFE0xxxx or low 16KB
