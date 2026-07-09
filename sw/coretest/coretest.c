@@ -990,6 +990,52 @@ static void test_cas2_directed(void)
     chk32(0x000a0348u, rd32(CAS2_TEST_BASE + 0x28u), 0x11111111u);
     chk32(0x000a034cu, rd32(CAS2_TEST_BASE + 0x2cu), 0x33333333u);
     chk32(0x000a0350u, got & 0x04u, 0x00u);
+
+    wr32(CAS2_TEST_BASE + 0x40u, 0x01010101u);
+    wr32(CAS2_TEST_BASE + 0x44u, 0x02020202u);
+    __asm__ volatile(
+        "move.l #0x01ff9880,%%d4\n\t"
+        "move.l #0x01ff9884,%%d5\n\t"
+        "move.l #0x01010101,%%d0\n\t"
+        "move.l #0xaaaaaaaa,%%d1\n\t"
+        "move.l #0x02020202,%%d2\n\t"
+        "move.l #0xbbbbbbbb,%%d3\n\t"
+        "move.w #0,%%ccr\n\t"
+        "cas2.l %%d0:%%d2,%%d1:%%d3,(%%d4):(%%d5)\n\t"
+        "move.w %%sr,%%d6\n\t"
+        "move.l %%d6,%0"
+        : "=&d"(got)
+        :
+        : "d0", "d1", "d2", "d3", "d4", "d5", "d6", "cc", "memory");
+    chk32(0x000a0360u, rd32(CAS2_TEST_BASE + 0x40u), 0xaaaaaaaau);
+    chk32(0x000a0364u, rd32(CAS2_TEST_BASE + 0x44u), 0xbbbbbbbbu);
+    chk32(0x000a0368u, got & 0x1fu, 0x04u);
+
+    wr32(CAS2_TEST_BASE + 0x48u, 0x03030303u);
+    wr32(CAS2_TEST_BASE + 0x4cu, 0x04040404u);
+    wr32(CAS2_TEST_BASE + 0x50u, 0u);
+    wr32(CAS2_TEST_BASE + 0x54u, 0u);
+    __asm__ volatile(
+        "move.l #0x01ff9888,%%d4\n\t"
+        "move.l #0x01ff988c,%%d5\n\t"
+        "move.l #0x03030303,%%d0\n\t"
+        "move.l #0xaaaaaaaa,%%d1\n\t"
+        "move.l #0x99999999,%%d2\n\t"
+        "move.l #0xbbbbbbbb,%%d3\n\t"
+        "move.w #4,%%ccr\n\t"
+        "cas2.l %%d0:%%d2,%%d1:%%d3,(%%d4):(%%d5)\n\t"
+        "move.w %%sr,%%d6\n\t"
+        "move.l %%d0,0x01ff9890\n\t"
+        "move.l %%d2,0x01ff9894\n\t"
+        "move.l %%d6,%0"
+        : "=&d"(got)
+        :
+        : "d0", "d1", "d2", "d3", "d4", "d5", "d6", "cc", "memory");
+    chk32(0x000a0370u, rd32(CAS2_TEST_BASE + 0x48u), 0x03030303u);
+    chk32(0x000a0374u, rd32(CAS2_TEST_BASE + 0x4cu), 0x04040404u);
+    chk32(0x000a0378u, rd32(CAS2_TEST_BASE + 0x50u), 0x03030303u);
+    chk32(0x000a037cu, rd32(CAS2_TEST_BASE + 0x54u), 0x04040404u);
+    chk32(0x000a0380u, got & 0x04u, 0x00u);
 }
 
 static void test_return_control_directed(void)
