@@ -1716,18 +1716,49 @@ static void test_signed_mul_div_directed(void)
 {
     wr32(SCRATCH_BASE + 0x120, 0u);
     wr32(SCRATCH_BASE + 0x124, 0u);
+    wr32(SCRATCH_BASE + 0x128, 0u);
+    wr32(SCRATCH_BASE + 0x12c, 0u);
+    wr32(SCRATCH_BASE + 0x130, 0u);
+    wr32(SCRATCH_BASE + 0x134, 0u);
+    wr32(SCRATCH_BASE + 0x138, 0u);
+    wr32(SCRATCH_BASE + 0x13c, 0u);
     __asm__ volatile(
         "move.l #-1234,%%d0\n\t"
         "muls.w #45,%%d0\n\t"
         "move.l %%d0,0x01ff9220\n\t"
         "move.l #-60000,%%d0\n\t"
         "divs.w #-7,%%d0\n\t"
-        "move.l %%d0,0x01ff9224"
+        "move.l %%d0,0x01ff9224\n\t"
+        "move.l #1000,%%d0\n\t"
+        "divu.l #7,%%d0\n\t"
+        "move.l %%d0,0x01ff9228\n\t"
+        "move.l #-1000,%%d0\n\t"
+        "move.l #7,%%d4\n\t"
+        "divs.l %%d4,%%d0\n\t"
+        "move.l %%d0,0x01ff922c\n\t"
+        "moveq #0,%%d0\n\t"
+        "moveq #1,%%d1\n\t"
+        "moveq #3,%%d4\n\t"
+        "divu.l %%d4,%%d1:%%d0\n\t"
+        "move.l %%d0,0x01ff9230\n\t"
+        "move.l %%d1,0x01ff9234\n\t"
+        "move.l #-1000,%%d0\n\t"
+        "moveq #-1,%%d1\n\t"
+        "moveq #7,%%d4\n\t"
+        "divs.l %%d4,%%d1:%%d0\n\t"
+        "move.l %%d0,0x01ff9238\n\t"
+        "move.l %%d1,0x01ff923c"
         :
         :
-        : "d0", "cc", "memory");
+        : "d0", "d1", "d4", "cc", "memory");
     chk32(0x000d0000u, rd32(SCRATCH_BASE + 0x120), 0xffff2716u);
     chk32(0x000d0004u, rd32(SCRATCH_BASE + 0x124), 0xfffd217bu);
+    chk32(0x000d0010u, rd32(SCRATCH_BASE + 0x128), 0x0000008eu);
+    chk32(0x000d0014u, rd32(SCRATCH_BASE + 0x12c), 0xffffff72u);
+    chk32(0x000d0018u, rd32(SCRATCH_BASE + 0x130), 0x55555555u);
+    chk32(0x000d001cu, rd32(SCRATCH_BASE + 0x134), 0x00000001u);
+    chk32(0x000d0020u, rd32(SCRATCH_BASE + 0x138), 0xffffff72u);
+    chk32(0x000d0024u, rd32(SCRATCH_BASE + 0x13c), 0xfffffffau);
 }
 
 static void test_memory_bitfield_directed(void)
