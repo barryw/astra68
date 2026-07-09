@@ -125,6 +125,7 @@ signal BF_WIDTH             : integer range 1 to 32;
 signal BIW_0                : Std_Logic_Vector(11 downto 0);
 signal BIW_1                : Std_Logic_Vector(15 downto 0);
 signal CAS2_COND            : boolean;
+signal CAS2_SECOND_COMPARE  : boolean;
 signal CB_BCD               : std_logic;
 signal CHK_CMP_COND         : boolean;
 signal CHK2CMP2_DR          : bit;
@@ -882,7 +883,7 @@ begin
     TRAP_CHK <= '1' when ALU_ACK = '1' and (OP = CHK or OP = CHK2) and CHK_CMP_COND = true else '0';
     TRAP_DIVZERO <= '1' when ALU_INIT = '1' and (OP_IN = DIVS or OP_IN = DIVU) and OP1_IN = x"00000000" else '0';
     
-    COND_CODES: process(BF_DATA_IN, BF_LOWER_BND, BF_UPPER_BND, BIW_1, BITPOS, CB_BCD, CHK_CMP_COND, CLK, OP1, OP1_SIGNEXT, OP2, OP2_SIGNEXT,
+    COND_CODES: process(BF_DATA_IN, BF_LOWER_BND, BF_UPPER_BND, BIW_1, BITPOS, CAS2_COND, CB_BCD, CHK_CMP_COND, CLK, OP1, OP1_SIGNEXT, OP2, OP2_SIGNEXT,
                         OP3, OP3_SIGNEXT, MSB, OP, OP_SIZE, QUOTIENT, RESULT_BCDOP, RESULT_INTOP, RESULT_LOGOP, RESULT_MUL, RESULT_SHIFTOP, 
                         RESULT_OTHERS, SHIFT_WIDTH, STATUS_REG, USE_DREG, VFLAG_DIV, XFLAG_SHFT)
     -- In this process all the condition codes X (eXtended), N (Negative)
@@ -1156,25 +1157,29 @@ begin
                     when others => XNZVC(1) <= '0';
                 end case;
             when CAS | CAS2 | CMP | CMPA | CMPI | CMPM =>
-                XNZVC(4) <= STATUS_REG(4);
-                --
-                if Z = '1' then
-                    XNZVC(3 downto 2) <= "01";
+                if OP = CAS2 and CAS2_COND = false then
+                    XNZVC <= STATUS_REG(4 downto 0);
                 else
-                    XNZVC(3 downto 2) <= RM & '0';
+                    XNZVC(4) <= STATUS_REG(4);
+                    --
+                    if Z = '1' then
+                        XNZVC(3 downto 2) <= "01";
+                    else
+                        XNZVC(3 downto 2) <= RM & '0';
+                    end if;
+                    --
+                    case RM_SM_DM is
+                        when "001" => XNZVC(1) <= '1';
+                        when "110" => XNZVC(1) <= '1';
+                        when others => XNZVC(1) <= '0';
+                    end case;
+                    --
+                    if (SM = '1' and DM = '0') or (RM = '1' and SM = '1') or (RM = '1' and DM = '0') then
+                        XNZVC(0) <= '1';
+                    else
+                        XNZVC(0) <= '0';
+                    end if;
                 end if;
-                --
-                case RM_SM_DM is
-                    when "001" => XNZVC(1) <= '1';
-                    when "110" => XNZVC(1) <= '1';
-                    when others => XNZVC(1) <= '0';
-                end case;
-                --
-                if (SM = '1' and DM = '0') or (RM = '1' and SM = '1') or (RM = '1' and DM = '0') then
-                    XNZVC(0) <= '1';
-                else
-                    XNZVC(0) <= '0';
-                end if;                     
             when CHK =>
                 if OP2_SIGNEXT(MSB) = '1' then
                     XNZVC <= STATUS_REG(4) & '1' & "000";
@@ -1228,10 +1233,20 @@ begin
     CAS_CONDITIONS: process(CLK)
     begin
         if CLK = '1' and CLK' event then
-            if LOAD_OP2 = '1' and XNZVC(2) = '1' then
+            if RESET = '1' then
                 CAS2_COND <= true;
-            elsif LOAD_OP2 = '1' then
-                CAS2_COND <= false;
+                CAS2_SECOND_COMPARE <= false;
+            elsif ALU_INIT = '1' and OP_IN = CAS2 then
+                if CAS2_SECOND_COMPARE = true then
+                    CAS2_COND <= XNZVC(2) = '1';
+                    CAS2_SECOND_COMPARE <= false;
+                else
+                    CAS2_COND <= true;
+                    CAS2_SECOND_COMPARE <= true;
+                end if;
+            elsif ALU_INIT = '1' then
+                CAS2_COND <= true;
+                CAS2_SECOND_COMPARE <= false;
             end if;
         end if;
     end process CAS_CONDITIONS;

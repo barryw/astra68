@@ -757,7 +757,7 @@ begin
                    BIW_0(11 downto 9) when OP = PACK or OP = UNPK else
                    BIW_1(2 downto 0) when OP = CAS else -- Compare operand.
                    BIW_1(2 downto 0) when OP_WB_I = CAS2 and EXEC_WB_STATE = EXECUTE else -- Compare operand 1.
-                   BIW_2(2 downto 0) when OP_WB_I = CAS2 and EXEC_WB_STATE = WRITEBACK else -- Compare operand 2.
+                   BIW_1(2 downto 0) when OP_WB_I = CAS2 and EXEC_WB_STATE = WRITEBACK else -- Compare operand 1.
                    MOVEM_PNTR(2 downto 0) when OP = MOVEM else
                    BIW_0(2 downto 0);
 
@@ -769,6 +769,7 @@ begin
                '0' when OP_WB_I = MOVE_USP else -- USP is written.
                '0' when OP_WB_I = MOVEC and BIW_0_WB(0) = '1' else -- To control register.
                '0' when OP_WB_I = STOP else -- SR is written but not DR.
+               '0' when OP_WB_I = CAS2 and EXEC_WB_STATE = WRITEBACK and PHASE2 = false else
                '1' when EXEC_WB_STATE = WRITEBACK else '0';
 
     DR_SEL_RD_2 <= BIW_0(11 downto 9) when OP = ABCD or OP = SBCD or OP = ADDX or OP = SUBX else
@@ -796,10 +797,12 @@ begin
                    BIW_0(2 downto 0) when OP = ASL or OP = ASR or OP = LSL or OP = LSR else
                    BIW_0(2 downto 0) when OP = ROTL or OP = ROTR or OP = ROXL or OP = ROXR else "000";
 
-    DR_SEL_WR_2 <= BIW_0(2 downto 0) when OP = EXG else BIW_1(2 downto 0); -- Default is for DIVS and DIVU, MULS, MULU.
+    DR_SEL_WR_2 <= BIW_2(2 downto 0) when OP_WB_I = CAS2 else
+                   BIW_0(2 downto 0) when OP = EXG else BIW_1(2 downto 0); -- Default is for DIVS and DIVU, MULS, MULU.
 
     -- Normally source register. Writte in a few exceptions.
-    DR_WR_2 <= '1' when OP_WB_I = EXG and EXEC_WB_STATE = WRITEBACK and BIW_0_WB(7 downto 3) = "01000" else -- Two data registers.
+    DR_WR_2 <= '1' when OP_WB_I = CAS2 and EXEC_WB_STATE = WRITEBACK and PHASE2 = true else -- Compare operand 2.
+               '1' when OP_WB_I = EXG and EXEC_WB_STATE = WRITEBACK and BIW_0_WB(7 downto 3) = "01000" else -- Two data registers.
                '1' when OP_WB_I = DIVS and EXEC_WB_STATE = WRITEBACK and BIW_0_WB(8 downto 6) = "001" and BIW_1_WB(14 downto 12) /= BIW_1_WB(2 downto 0) else
                '1' when OP_WB_I = DIVU and EXEC_WB_STATE = WRITEBACK and BIW_0_WB(8 downto 6) = "001" and BIW_1_WB(14 downto 12) /= BIW_1_WB(2 downto 0) else
                '1' when OP_WB_I = MULS and EXEC_WB_STATE = WRITEBACK and BIW_0_WB(8 downto 6) = "000" and BIW_1_WB(10) = '1' and BIW_1_WB(14 downto 12) /= BIW_1_WB(2 downto 0) else
@@ -1115,8 +1118,7 @@ begin
                     '1' when OP = UNLK else '0';
 
     DR_MARK_USED <= '1' when OP_WB_I = CAS and EXEC_WB_STATE = EXECUTE and ALU_COND = false else
-                    '1' when OP_WB_I = CAS2 and EXEC_WB_STATE = EXECUTE and ALU_COND = false else
-                    '1' when OP_WB_I = CAS2 and EXEC_WB_STATE = WRITEBACK and PHASE2 = false else
+                    '1' when OP_WB_I = CAS2 and EXEC_WB_STATE = EXECUTE and ALU_COND = false and PHASE2 = false else
                     '0' when FETCH_STATE /= INIT_EXEC_WB or NEXT_FETCH_STATE = INIT_EXEC_WB else -- Deactivate except in the end of INIT_EXEC_WB.
                     '1' when (OP = ABCD or OP = SBCD) and BIW_0(3) = '0' else
                     '1' when (OP = ADDX or OP = SUBX) and BIW_0(3) = '0' else
@@ -1150,7 +1152,8 @@ begin
     -- These signals indicates, that two registers are prepared to be written. In this case, the values
     -- in both of these registers are invalidated before the writeback.
     USE_APAIR <= true when OP = EXG and BIW_0(7 downto 3) = "01001" else false;
-    USE_DPAIR <= true when OP = EXG and BIW_0(7 downto 3) = "01000" else
+    USE_DPAIR <= true when OP_WB_I = CAS2 and EXEC_WB_STATE = EXECUTE and ALU_COND = false and PHASE2 = false else
+                 true when OP = EXG and BIW_0(7 downto 3) = "01000" else
                  true when (OP = DIVS or OP = DIVU) and OP_SIZE_I = LONG and BIW_1(14 downto 12) /= BIW_1(2 downto 0) else
                  true when (OP = MULS or OP = MULU) and OP_SIZE_I = LONG and BIW_1(10) = '1' and BIW_1(14 downto 12) /= BIW_1(2 downto 0) else false;
 
@@ -2489,6 +2492,8 @@ begin
                         when CAS2 =>
                             if FETCH_STATE = FETCH_OPERAND then
                                 NEXT_EXEC_WB_STATE <= IDLE; -- Second read access.
+                            elsif PHASE2 = true then
+                                NEXT_EXEC_WB_STATE <= IDLE; -- First compare only gates the second compare.
                             elsif ALU_COND = false then
                                 NEXT_EXEC_WB_STATE <= WRITEBACK; -- Update Dc.
                             else
@@ -2546,7 +2551,7 @@ begin
                 case OP_WB_I is
                     when CAS2 =>
                         if PHASE2 = false then
-                            NEXT_EXEC_WB_STATE <= WRITEBACK;  -- Update Dc2
+                            NEXT_EXEC_WB_STATE <= WRITEBACK; -- Prepare the paired compare-register update.
                         else
                             NEXT_EXEC_WB_STATE <= IDLE;
                         end if;
