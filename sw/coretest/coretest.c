@@ -17,6 +17,7 @@
 #define BOUNDS_TEST_BASE (SCRATCH_BASE + 0x720u)
 #define CAS2_TEST_BASE (SCRATCH_BASE + 0x740u)
 #define RETURN_TEST_BASE (SCRATCH_BASE + 0x800u)
+#define BCD_TEST_BASE (SCRATCH_BASE + 0x900u)
 
 static volatile uint32_t g_sum;
 
@@ -948,6 +949,121 @@ static void test_return_control_directed(void)
     chk32(0x000a0414u, got1, RETURN_TEST_BASE + 0x26u);
 }
 
+static void test_bcd_directed(void)
+{
+    uint32_t got0;
+    uint32_t got1;
+    uint32_t got2;
+
+    __asm__ volatile(
+        "moveq #0x15,%%d0\n\t"
+        "moveq #0x27,%%d1\n\t"
+        "move.w #0,%%ccr\n\t"
+        "abcd %%d0,%%d1\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d1,%0\n\t"
+        "move.l %%d2,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1", "d2", "cc");
+    chk8(0x000a0500u, got0, 0x42u);
+    chk32(0x000a0504u, got1 & 0x15u, 0x00u);
+
+    __asm__ volatile(
+        "moveq #0,%%d0\n\t"
+        "move.b #0x99,%%d0\n\t"
+        "moveq #0x00,%%d1\n\t"
+        "move.w #0x0014,%%ccr\n\t"
+        "abcd %%d0,%%d1\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d1,%0\n\t"
+        "move.l %%d2,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1", "d2", "cc");
+    chk8(0x000a0510u, got0, 0x00u);
+    chk32(0x000a0514u, got1 & 0x15u, 0x15u);
+
+    __asm__ volatile(
+        "moveq #0x15,%%d0\n\t"
+        "moveq #0x42,%%d1\n\t"
+        "move.w #0,%%ccr\n\t"
+        "sbcd %%d0,%%d1\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d1,%0\n\t"
+        "move.l %%d2,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1", "d2", "cc");
+    chk8(0x000a0520u, got0, 0x27u);
+    chk32(0x000a0524u, got1 & 0x15u, 0x00u);
+
+    __asm__ volatile(
+        "moveq #0x01,%%d0\n\t"
+        "moveq #0x00,%%d1\n\t"
+        "move.w #0,%%ccr\n\t"
+        "sbcd %%d0,%%d1\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d1,%0\n\t"
+        "move.l %%d2,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1", "d2", "cc");
+    chk8(0x000a0530u, got0, 0x99u);
+    chk32(0x000a0534u, got1 & 0x15u, 0x11u);
+
+    __asm__ volatile(
+        "moveq #0x45,%%d0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "nbcd %%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1", "cc");
+    chk8(0x000a0540u, got0, 0x55u);
+    chk32(0x000a0544u, got1 & 0x15u, 0x11u);
+
+    *(volatile uint8_t *)(BCD_TEST_BASE + 0x21u) = 0x15u;
+    *(volatile uint8_t *)(BCD_TEST_BASE + 0x31u) = 0x27u;
+    __asm__ volatile(
+        "lea 0x01ff9a22,%%a0\n\t"
+        "lea 0x01ff9a32,%%a1\n\t"
+        "move.w #0,%%ccr\n\t"
+        "abcd -(%%a0),-(%%a1)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1\n\t"
+        "move.l %%d1,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "a1", "d1", "cc", "memory");
+    chk32(0x000a0550u, got0, BCD_TEST_BASE + 0x21u);
+    chk32(0x000a0554u, got1, BCD_TEST_BASE + 0x31u);
+    chk8(0x000a0558u, rd8(BCD_TEST_BASE + 0x31u), 0x42u);
+    chk32(0x000a055cu, got2 & 0x15u, 0x00u);
+
+    *(volatile uint8_t *)(BCD_TEST_BASE + 0x41u) = 0x15u;
+    *(volatile uint8_t *)(BCD_TEST_BASE + 0x51u) = 0x42u;
+    __asm__ volatile(
+        "lea 0x01ff9a42,%%a0\n\t"
+        "lea 0x01ff9a52,%%a1\n\t"
+        "move.w #0,%%ccr\n\t"
+        "sbcd -(%%a0),-(%%a1)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1\n\t"
+        "move.l %%d1,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "a1", "d1", "cc", "memory");
+    chk32(0x000a0560u, got0, BCD_TEST_BASE + 0x41u);
+    chk32(0x000a0564u, got1, BCD_TEST_BASE + 0x51u);
+    chk8(0x000a0568u, rd8(BCD_TEST_BASE + 0x51u), 0x27u);
+    chk32(0x000a056cu, got2 & 0x15u, 0x00u);
+}
+
 static void test_exception_recovery_directed(void)
 {
     for (uint32_t off = 0; off < 0x100u; off += 4u) {
@@ -1472,6 +1588,7 @@ void kmain(void)
     test_cmp2_chk2_directed();
     test_cas2_directed();
     test_return_control_directed();
+    test_bcd_directed();
     test_exception_recovery_directed();
 #ifdef CORETEST_SIM_IRQ
     test_interrupt_autovector_directed();

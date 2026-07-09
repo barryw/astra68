@@ -307,7 +307,7 @@ begin
             when ABCD =>
                 TEMP1 := unsigned('0' & OP2(7 downto 4)) + unsigned('0' & OP1(7 downto 4)) + ("0000" & C_0);
             when NBCD =>
-                TEMP1 := unsigned(OP1(4 downto 0)) - unsigned('0' & OP2(7 downto 4)) - ("0000" & X_IN_I);
+                TEMP1 := unsigned(OP1(4 downto 0)) - unsigned('0' & OP2(7 downto 4)) - ("0000" & C_0);
             when others => -- Valid for SBCD.
                 TEMP1 := unsigned('0' & OP2(7 downto 4)) - unsigned('0' & OP1(7 downto 4)) - ("0000" & C_0);
         end case;
