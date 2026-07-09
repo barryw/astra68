@@ -202,6 +202,7 @@ entity WF68K30L_CONTROL is
         -- System control signals:
         OP                  : in OP_68K;
         OP_SIZE             : out OP_SIZETYPE;
+        AR_SIZE             : out OP_SIZETYPE;
         BIW_0               : in std_logic_vector(13 downto 0);
         BIW_1               : in std_logic_vector(15 downto 0);
         BIW_2               : in std_logic_vector(15 downto 0);
@@ -691,7 +692,7 @@ begin
     with OP select
         AR_DEC_I <= '1' when ABCD | ADD | ADDA | ADDI | ADDQ | ADDX | AND_B | ANDI | ASL | ASR | BCHG | BCLR | BSET | BTST | CHK | CMP | CMPA | CMPI | 
                              DIVS | DIVU | EOR | EORI | LSL | LSR | MOVE | MOVEA | MOVE_TO_CCR | MOVE_TO_SR | MOVES | MULS | MULU | NBCD | NEG | NEGX | 
-                             NOT_B | OR_B | ORI | ROTL | ROTR | ROXL | ROXR | SBCD | SUB | SUBA | SUBI | SUBQ | SUBX | TAS | TST, '0' when others;
+                             NOT_B | OR_B | ORI | PACK | ROTL | ROTR | ROXL | ROXR | SBCD | SUB | SUBA | SUBI | SUBQ | SUBX | TAS | TST | UNPK, '0' when others;
 
     AR_DEC <= AR_DEC_I when ADR_MODE_I = "100" and FETCH_STATE /= CALC_AEFF and NEXT_FETCH_STATE = CALC_AEFF else
               '1' when (OP = BSR or OP = JSR or OP = LINK) and FETCH_STATE = START_OP and NEXT_FETCH_STATE /= START_OP else
@@ -903,6 +904,11 @@ begin
                  BYTE when OP = UNPK else -- Read data is byte wide.
                  BYTE when BIW_0(7 downto 6) = "00" else
                  WORD when BIW_0(7 downto 6) = "01" else LONG;
+
+    AR_SIZE <= WORD when OP = PACK and BIW_0(3) = '1' and FETCH_STATE = START_OP and NEXT_FETCH_STATE = CALC_AEFF else
+               BYTE when OP = PACK and BIW_0(3) = '1' and FETCH_STATE = FETCH_OPERAND and INIT_ENTRY = '1' else
+               WORD when OP = UNPK and BIW_0(3) = '1' and FETCH_STATE = FETCH_OPERAND and INIT_ENTRY = '1' else
+               OP_SIZE_I;
 
     BKPT_CYCLE <= '1' when OP = BKPT and FETCH_STATE = FETCH_OPERAND and DATA_RD_I = '1' else '0';
     BKPT_INSERT <= '1' when OP = BKPT and FETCH_STATE = FETCH_OPERAND and RD_RDY = '1' and DATA_VALID = '1' else '0';

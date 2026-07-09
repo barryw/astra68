@@ -256,6 +256,8 @@ signal AR_SEL_RD_1_MAIN         : std_logic_vector(2 downto 0);
 signal AR_SEL_RD_2              : std_logic_vector(2 downto 0);
 signal AR_SEL_WR_1              : std_logic_vector(2 downto 0);
 signal AR_SEL_WR_2              : std_logic_vector(2 downto 0);
+signal AR_SIZE                  : OP_SIZETYPE;
+signal AR_SIZE_MAIN             : OP_SIZETYPE;
 signal AR_WR_1                  : bit;
 signal AR_WR_2                  : bit;
 signal AVECn_BUSIF              : std_logic;
@@ -639,6 +641,7 @@ begin
                   DATA_TO_CORE when OP = CAS2 or OP = CHK2 or OP = CMP2 else DR_OUT_1;
 
     OP_SIZE <= OP_SIZE_EXH when BUSY_EXH = '1' else OP_SIZE_MAIN;
+    AR_SIZE <= OP_SIZE_EXH when BUSY_EXH = '1' else AR_SIZE_MAIN;
     OP_SIZE_BUS <= OP_SIZE_WB when DATA_WR_MAIN = '1' else OP_SIZE;
 
 
@@ -808,7 +811,7 @@ begin
             STORE_OD_HI             => STORE_OD_HI,
             STORE_OD_LO             => STORE_OD_LO,
             STORE_AEFF              => STORE_AEFF,
-            OP_SIZE                 => OP_SIZE,
+            AR_SIZE                 => AR_SIZE,
             AR_MARK_USED            => AR_MARK_USED,
             USE_APAIR               => USE_APAIR,
             AR_IN_USE               => AR_IN_USE,
@@ -995,6 +998,7 @@ begin
             STORE_IDATA_B2          => STORE_IDATA_B2,
             OP                      => OP,
             OP_SIZE                 => OP_SIZE_MAIN,
+            AR_SIZE                 => AR_SIZE_MAIN,
             BIW_0                   => BIW_0(13 downto 0),
             BIW_1                   => BIW_1,
             BIW_2                   => BIW_2,

@@ -76,7 +76,7 @@ entity WF68K30L_ADDRESS_REGISTERS is
         STORE_OD_HI         : in bit;
         STORE_OD_LO         : in bit;
         STORE_AEFF          : in bit;
-        OP_SIZE             : in OP_SIZETYPE;
+        AR_SIZE             : in OP_SIZETYPE;
 
         ADR_OFFSET          : in std_logic_vector(31 downto 0);
         ADR_MARK_USED       : in bit;
@@ -525,7 +525,7 @@ begin
         end if;
         
         if AR_INC = '1' and AR_PNTR_1 = 7 and SBIT = '1' and MBIT = '1' then
-            case OP_SIZE is
+            case AR_SIZE is
                 when BYTE       => MSP_REG <= MSP_REG + "10"; -- Increment by two!
                 when WORD       => MSP_REG <= MSP_REG + "10"; -- Increment by two.
                 when others     => MSP_REG <= MSP_REG + "100"; -- Increment by four, (LONG).
@@ -533,7 +533,7 @@ begin
         end if;
         
         if AR_DEC = '1' and AR_PNTR_1 = 7 and SBIT = '1' and MBIT = '1' then
-            case OP_SIZE is
+            case AR_SIZE is
                 when BYTE       => MSP_REG <= MSP_REG - "10"; -- Decrement by two!
                 when WORD       => MSP_REG <= MSP_REG - "10"; -- Decrement by two.
                 when others     => MSP_REG <= MSP_REG - "100"; -- Decrement by four, (LONG).
@@ -556,7 +556,7 @@ begin
         end if;
         
         if AR_INC = '1' and AR_PNTR_1 = 7 and SBIT = '1' and MBIT = '0' then
-            case OP_SIZE is
+            case AR_SIZE is
                 when BYTE       => ISP_REG <= ISP_REG + "10"; -- Increment by two!
                 when WORD       => ISP_REG <= ISP_REG + "10"; -- Increment by two.
                 when others     => ISP_REG <= ISP_REG + "100"; -- Increment by four, (LONG).
@@ -564,7 +564,7 @@ begin
         end if;
         
         if ISP_DEC = '1' or (AR_DEC = '1' and AR_PNTR_1 = 7 and SBIT = '1' and MBIT = '0') then
-            case OP_SIZE is
+            case AR_SIZE is
                 when BYTE       => ISP_REG <= ISP_REG - "10"; -- Decrement by two!
                 when WORD       => ISP_REG <= ISP_REG - "10"; -- Decrement by two.
                 when others     => ISP_REG <= ISP_REG - "100"; -- Decrement by four, (LONG).
@@ -587,7 +587,7 @@ begin
         end if;
         
         if AR_INC = '1' and AR_PNTR_1 = 7 and SBIT = '0' then
-            case OP_SIZE is
+            case AR_SIZE is
                 when BYTE       => USP_REG <= USP_REG + "10"; -- Increment by two!
                 when WORD       => USP_REG <= USP_REG + "10"; -- Increment by two.
                 when others     => USP_REG <= USP_REG + "100"; -- Increment by four, (LONG).
@@ -595,7 +595,7 @@ begin
         end if;
         
         if AR_DEC = '1' and AR_PNTR_1 = 7 and SBIT = '0' then
-            case OP_SIZE is
+            case AR_SIZE is
                 when BYTE       => USP_REG <= USP_REG - "10"; -- Decrement by two!
                 when WORD       => USP_REG <= USP_REG - "10"; -- Decrement by two.
                 when others     => USP_REG <= USP_REG - "100"; -- Decrement by four, (LONG).
@@ -637,7 +637,7 @@ begin
         end if;
         
         if AR_INC = '1' and AR_PNTR_1 < 7 then
-            case OP_SIZE is
+            case AR_SIZE is
                 when BYTE       => AR(AR_PNTR_1) <= AR(AR_PNTR_1) + '1';
                 when WORD       => AR(AR_PNTR_1) <= AR(AR_PNTR_1) + "10";
                 when others     => AR(AR_PNTR_1) <= AR(AR_PNTR_1) + "100";
@@ -645,7 +645,7 @@ begin
         end if;
         
         if AR_DEC = '1' and AR_PNTR_1 < 7 then
-            case OP_SIZE is
+            case AR_SIZE is
                 when BYTE       => AR(AR_PNTR_1) <= AR(AR_PNTR_1) - '1';
                 when WORD       => AR(AR_PNTR_1) <= AR(AR_PNTR_1) - "10";
                 when others     => AR(AR_PNTR_1) <= AR(AR_PNTR_1) - "100";

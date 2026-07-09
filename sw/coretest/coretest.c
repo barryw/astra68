@@ -18,6 +18,7 @@
 #define CAS2_TEST_BASE (SCRATCH_BASE + 0x740u)
 #define RETURN_TEST_BASE (SCRATCH_BASE + 0x800u)
 #define BCD_TEST_BASE (SCRATCH_BASE + 0x900u)
+#define PACK_TEST_BASE (SCRATCH_BASE + 0xa00u)
 
 static volatile uint32_t g_sum;
 
@@ -1064,6 +1065,42 @@ static void test_bcd_directed(void)
     chk32(0x000a056cu, got2 & 0x15u, 0x00u);
 }
 
+static void test_pack_unpk_directed(void)
+{
+    uint32_t got0;
+    uint32_t got1;
+
+    *(volatile uint16_t *)(PACK_TEST_BASE + 0x20u) = 0x0205u;
+    *(volatile uint8_t *)(PACK_TEST_BASE + 0x31u) = 0u;
+    __asm__ volatile(
+        "lea 0x01ff9b22,%%a0\n\t"
+        "lea 0x01ff9b32,%%a1\n\t"
+        "pack -(%%a0),-(%%a1),#0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "cc", "memory");
+    chk32(0x000a0600u, got0, PACK_TEST_BASE + 0x20u);
+    chk32(0x000a0604u, got1, PACK_TEST_BASE + 0x31u);
+    chk8(0x000a0608u, rd8(PACK_TEST_BASE + 0x31u), 0x25u);
+
+    *(volatile uint8_t *)(PACK_TEST_BASE + 0x41u) = 0x25u;
+    *(volatile uint16_t *)(PACK_TEST_BASE + 0x50u) = 0u;
+    __asm__ volatile(
+        "lea 0x01ff9b42,%%a0\n\t"
+        "lea 0x01ff9b52,%%a1\n\t"
+        "unpk -(%%a0),-(%%a1),#0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "cc", "memory");
+    chk32(0x000a0610u, got0, PACK_TEST_BASE + 0x41u);
+    chk32(0x000a0614u, got1, PACK_TEST_BASE + 0x50u);
+    chk16(0x000a0618u, rd16(PACK_TEST_BASE + 0x50u), 0x0205u);
+}
+
 static void test_exception_recovery_directed(void)
 {
     for (uint32_t off = 0; off < 0x100u; off += 4u) {
@@ -1589,6 +1626,7 @@ void kmain(void)
     test_cas2_directed();
     test_return_control_directed();
     test_bcd_directed();
+    test_pack_unpk_directed();
     test_exception_recovery_directed();
 #ifdef CORETEST_SIM_IRQ
     test_interrupt_autovector_directed();

@@ -70,7 +70,7 @@ component WF68K30L_ADDRESS_REGISTERS
         STORE_OD_HI         : in bit;
         STORE_OD_LO         : in bit;
         STORE_AEFF          : in bit;
-        OP_SIZE             : in OP_SIZETYPE;
+        AR_SIZE             : in OP_SIZETYPE;
         ADR_OFFSET          : in std_logic_vector(31 downto 0);
         ADR_MARK_USED       : in bit;
         ADR_IN_USE          : out bit;
@@ -247,6 +247,7 @@ component WF68K30L_CONTROL
         STORE_AEFF          : out bit;
         OP                  : in OP_68K;
         OP_SIZE             : out OP_SIZETYPE;
+        AR_SIZE             : out OP_SIZETYPE;
         BIW_0               : in std_logic_vector(13 downto 0);
         BIW_1               : in std_logic_vector(15 downto 0);
         BIW_2               : in std_logic_vector(15 downto 0);
