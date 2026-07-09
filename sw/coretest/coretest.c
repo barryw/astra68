@@ -19,6 +19,7 @@
 #define RETURN_TEST_BASE (SCRATCH_BASE + 0x800u)
 #define BCD_TEST_BASE (SCRATCH_BASE + 0x900u)
 #define PACK_TEST_BASE (SCRATCH_BASE + 0xa00u)
+#define MOVEP_TEST_BASE (SCRATCH_BASE + 0xb00u)
 
 static volatile uint32_t g_sum;
 
@@ -1604,6 +1605,49 @@ static void test_movep_tas_cas_directed(void)
     chk32(0x000f0048u, rd32(SCRATCH_BASE + 0x168) & 0x04u, 0x04u);
 }
 
+static void test_movep_displacement_directed(void)
+{
+    wr32(MOVEP_TEST_BASE + 0x00, 0u);
+    wr32(MOVEP_TEST_BASE + 0x04, 0u);
+    wr32(MOVEP_TEST_BASE + 0x08, 0u);
+    wr32(MOVEP_TEST_BASE + 0x0c, 0u);
+    __asm__ volatile(
+        "lea 0x01ff9c00,%%a0\n\t"
+        "move.l #0xffffa1b2,%%d0\n\t"
+        "movep.w %%d0,2(%%a0)\n\t"
+        "moveq #0,%%d1\n\t"
+        "movep.w 2(%%a0),%%d1\n\t"
+        "move.l %%d1,0x01ff9c08\n\t"
+        "move.l %%a0,0x01ff9c0c"
+        :
+        :
+        : "a0", "d0", "d1", "memory");
+    chk32(0x000f0050u, rd32(MOVEP_TEST_BASE + 0x00), 0x0000a100u);
+    chk32(0x000f0054u, rd32(MOVEP_TEST_BASE + 0x04), 0xb2000000u);
+    chk32(0x000f0058u, rd32(MOVEP_TEST_BASE + 0x08), 0x0000a1b2u);
+    chk32(0x000f005cu, rd32(MOVEP_TEST_BASE + 0x0c), MOVEP_TEST_BASE);
+
+    wr32(MOVEP_TEST_BASE + 0x18, 0u);
+    wr32(MOVEP_TEST_BASE + 0x1c, 0u);
+    wr32(MOVEP_TEST_BASE + 0x30, 0u);
+    wr32(MOVEP_TEST_BASE + 0x34, 0u);
+    __asm__ volatile(
+        "lea 0x01ff9c20,%%a0\n\t"
+        "move.l #0x55667788,%%d0\n\t"
+        "movep.l %%d0,-8(%%a0)\n\t"
+        "moveq #0,%%d1\n\t"
+        "movep.l -8(%%a0),%%d1\n\t"
+        "move.l %%d1,0x01ff9c30\n\t"
+        "move.l %%a0,0x01ff9c34"
+        :
+        :
+        : "a0", "d0", "d1", "memory");
+    chk32(0x000f0060u, rd32(MOVEP_TEST_BASE + 0x18), 0x55006600u);
+    chk32(0x000f0064u, rd32(MOVEP_TEST_BASE + 0x1c), 0x77008800u);
+    chk32(0x000f0068u, rd32(MOVEP_TEST_BASE + 0x30), 0x55667788u);
+    chk32(0x000f006cu, rd32(MOVEP_TEST_BASE + 0x34), MOVEP_TEST_BASE + 0x20u);
+}
+
 void kmain(void)
 {
     delay_poll_window();
@@ -1636,6 +1680,7 @@ void kmain(void)
     test_signed_mul_div_directed();
     test_memory_bitfield_directed();
     test_movep_tas_cas_directed();
+    test_movep_displacement_directed();
 
     for (;;) {
         uart_puts("CORETEST PASS sum=");
