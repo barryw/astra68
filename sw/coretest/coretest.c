@@ -14,6 +14,7 @@
 #define IRQ_SIM_REQ (SCRATCH_BASE + 0x500u)
 #define STACK_TEST_BASE (SCRATCH_BASE + 0x600u)
 #define MOVES_TEST_BASE (SCRATCH_BASE + 0x700u)
+#define BOUNDS_TEST_BASE (SCRATCH_BASE + 0x720u)
 
 static volatile uint32_t g_sum;
 
@@ -777,6 +778,72 @@ static void test_moves_directed(void)
     chk32(0x000a010cu, got1, 0x01020304u);
 }
 
+static void test_cmp2_chk2_directed(void)
+{
+    uint32_t got0;
+    uint32_t got1;
+    uint32_t got2;
+
+    wr32(BOUNDS_TEST_BASE + 0x00u, 0x00000010u);
+    wr32(BOUNDS_TEST_BASE + 0x04u, 0x00000020u);
+    __asm__ volatile(
+        "lea 0x01ff9820,%%a0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "move.l #0x10,%%d0\n\t"
+        "cmp2.l (%%a0),%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,%0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "move.l #0x15,%%d0\n\t"
+        "cmp2.l (%%a0),%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.w #0,%%ccr\n\t"
+        "move.l #0x30,%%d0\n\t"
+        "cmp2.l (%%a0),%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "d0", "d1", "cc", "memory");
+    chk32(0x000a0200u, got0 & 0x1fu, 0x04u);
+    chk32(0x000a0204u, got1 & 0x1fu, 0x00u);
+    chk32(0x000a0208u, got2 & 0x1fu, 0x01u);
+
+    got0 = 0u;
+    __asm__ volatile(
+        "lea 0x01ff9820,%%a0\n\t"
+        "move.l #0x15,%%d0\n\t"
+        "chk2.l (%%a0),%%d0\n\t"
+        "moveq #0x5a,%%d1\n\t"
+        "move.l %%d1,%0"
+        : "=&d"(got0)
+        :
+        : "a0", "d0", "d1", "cc", "memory");
+    chk32(0x000a0210u, got0, 0x5au);
+
+    for (uint32_t off = 0; off < 0x100u; off += 4u) {
+        wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
+    }
+    wr32(EXC_ALT_VBR + 0x18u, (uint32_t)(uintptr_t)_h_recover);
+    arm_exception_recovery(0x0018u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d1\n\t"
+        "movec %%d1,%%vbr\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "lea 0x01ff9820,%%a0\n\t"
+        "move.l #0x30,%%d0\n\t"
+        "chk2.l (%%a0),%%d0\n"
+        "1:\n\t"
+        "moveq #0,%%d1\n\t"
+        "movec %%d1,%%vbr"
+        :
+        :
+        : "a0", "a1", "d0", "d1", "cc", "memory");
+    chk_exception_frame(0x00120000u, 0x0018u, 0x2000u, 0x2700u, 0x2700u);
+}
+
 static void test_exception_recovery_directed(void)
 {
     for (uint32_t off = 0; off < 0x100u; off += 4u) {
@@ -1298,6 +1365,7 @@ void kmain(void)
     test_stack_frame_control_directed();
     test_system_control_directed();
     test_moves_directed();
+    test_cmp2_chk2_directed();
     test_exception_recovery_directed();
 #ifdef CORETEST_SIM_IRQ
     test_interrupt_autovector_directed();
