@@ -1567,6 +1567,30 @@ static void test_interrupt_autovector_directed(void)
         :
         : "a0", "d0", "cc", "memory");
     chk_exception_frame(0x00110000u, 0x006cu, 0x0000u, 0x2700u, 0x2000u);
+
+    for (uint32_t off = 0; off < 0x100u; off += 4u) {
+        wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
+    }
+    wr32(EXC_ALT_VBR + 0x6cu, (uint32_t)(uintptr_t)_h_recover);
+
+    arm_exception_recovery(0x006cu);
+    wr32(IRQ_SIM_REQ, 0u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.l #3,0x01ff9600\n\t"
+        "stop #0x2000\n"
+        "1:\n\t"
+        "move.w #0x2700,%%sr\n\t"
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "move.l #0,0x01ff9600"
+        :
+        :
+        : "a0", "d0", "cc", "memory");
+    chk_exception_frame(0x00110020u, 0x006cu, 0x0000u, 0x2700u, 0x2000u);
 }
 #endif
 
