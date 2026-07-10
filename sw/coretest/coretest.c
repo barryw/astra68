@@ -9800,6 +9800,137 @@ static void test_div_long_register_differential(void)
     mark(0x0027f000u, 0xd1750001u);
 }
 
+static void test_div_overflow_register_directed(void)
+{
+    uint32_t got0;
+    uint32_t got1;
+    uint32_t got2;
+    uint32_t got3;
+
+    __asm__ volatile(
+        "move.l #0x00010000,%%d0\n\t"
+        "moveq #1,%%d1\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "divu.w %%d1,%%d0\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.l %%d2,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "d0", "d1", "d2", "cc");
+    chk32(0x00290000u, got0, 0x00010000u);
+    chk32(0x00290004u, got1, 0x00000001u);
+    chk32(0x00290008u, got2 & 0x12u, 0x12u);
+
+    __asm__ volatile(
+        "move.l #0x00008000,%%d0\n\t"
+        "moveq #1,%%d1\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "divs.w %%d1,%%d0\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.l %%d2,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "d0", "d1", "d2", "cc");
+    chk32(0x00290010u, got0, 0x00008000u);
+    chk32(0x00290014u, got1, 0x00000001u);
+    chk32(0x00290018u, got2 & 0x12u, 0x12u);
+
+    __asm__ volatile(
+        "move.l #0xffff7fff,%%d0\n\t"
+        "moveq #1,%%d1\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "divs.w %%d1,%%d0\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.l %%d2,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "d0", "d1", "d2", "cc");
+    chk32(0x00290020u, got0, 0xffff7fffu);
+    chk32(0x00290024u, got1, 0x00000001u);
+    chk32(0x00290028u, got2 & 0x12u, 0x12u);
+
+    __asm__ volatile(
+        "move.l #0x80000000,%%d0\n\t"
+        "moveq #-1,%%d1\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "divs.l %%d1,%%d0\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.l %%d2,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "d0", "d1", "d2", "cc");
+    chk32(0x00290030u, got0, 0x80000000u);
+    chk32(0x00290034u, got1, 0xffffffffu);
+    chk32(0x00290038u, got2 & 0x12u, 0x12u);
+
+    __asm__ volatile(
+        "moveq #1,%%d0\n\t"
+        "moveq #2,%%d1\n\t"
+        "moveq #0,%%d2\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "divu.l %%d0,%%d1:%%d2\n\t"
+        "move.w %%sr,%%d3\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.l %%d2,%2\n\t"
+        "move.l %%d3,%3"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2), "=&d"(got3)
+        :
+        : "d0", "d1", "d2", "d3", "cc");
+    chk32(0x00290040u, got0, 0x00000001u);
+    chk32(0x00290044u, got1, 0x00000002u);
+    chk32(0x00290048u, got2, 0x00000000u);
+    chk32(0x0029004cu, got3 & 0x12u, 0x12u);
+
+    __asm__ volatile(
+        "moveq #1,%%d0\n\t"
+        "moveq #1,%%d1\n\t"
+        "moveq #0,%%d2\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "divs.l %%d0,%%d1:%%d2\n\t"
+        "move.w %%sr,%%d3\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.l %%d2,%2\n\t"
+        "move.l %%d3,%3"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2), "=&d"(got3)
+        :
+        : "d0", "d1", "d2", "d3", "cc");
+    chk32(0x00290050u, got0, 0x00000001u);
+    chk32(0x00290054u, got1, 0x00000001u);
+    chk32(0x00290058u, got2, 0x00000000u);
+    chk32(0x0029005cu, got3 & 0x12u, 0x12u);
+
+    __asm__ volatile(
+        "moveq #1,%%d0\n\t"
+        "moveq #-1,%%d1\n\t"
+        "moveq #0,%%d2\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "divs.l %%d0,%%d1:%%d2\n\t"
+        "move.w %%sr,%%d3\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.l %%d2,%2\n\t"
+        "move.l %%d3,%3"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2), "=&d"(got3)
+        :
+        : "d0", "d1", "d2", "d3", "cc");
+    chk32(0x00290060u, got0, 0x00000001u);
+    chk32(0x00290064u, got1, 0xffffffffu);
+    chk32(0x00290068u, got2, 0x00000000u);
+    chk32(0x0029006cu, got3 & 0x12u, 0x12u);
+
+    mark(0x0029f000u, 0xd1e00000u);
+}
+
 static void test_signed_mul_div_directed(void)
 {
     wr32(SCRATCH_BASE + 0x120, 0u);
@@ -11342,6 +11473,7 @@ void kmain(void)
     test_mul_long_register_differential();
     test_mul_long_one_register_differential();
     test_div_long_register_differential();
+    test_div_overflow_register_directed();
     test_signed_mul_div_directed();
     test_mul_div_memory_directed();
     test_memory_bitfield_directed();

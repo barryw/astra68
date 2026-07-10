@@ -560,7 +560,15 @@ begin
                 end if;
                 --
                 if BITCNT = 0 then
-                    if OP = DIVS and OP_SIZE = WORD and (OP2(31) xor OP1(15)) = '0' and QUOTIENT_VAR > x"00007FFF" then
+                    if OP = DIVS and OP_SIZE = LONG and (DVD_SIGN xor DVS_SIGN) = '0' and QUOTIENT_VAR > x"7FFFFFFF" then
+                        VFLAG_DIV <= '1';
+                        QUOTIENT <= QUOTIENT_REST;
+                        REMAINDER <= REMAINDER_REST;
+                    elsif OP = DIVS and OP_SIZE = LONG and (DVD_SIGN xor DVS_SIGN) = '1' and QUOTIENT_VAR > x"80000000" then
+                        VFLAG_DIV <= '1';
+                        QUOTIENT <= QUOTIENT_REST;
+                        REMAINDER <= REMAINDER_REST;
+                    elsif OP = DIVS and OP_SIZE = WORD and (OP2(31) xor OP1(15)) = '0' and QUOTIENT_VAR > x"00007FFF" then
                         VFLAG_DIV <= '1';
                         QUOTIENT <= QUOTIENT_REST;
                         REMAINDER <= REMAINDER_REST;
