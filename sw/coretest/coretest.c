@@ -6581,6 +6581,43 @@ static void test_condition_codes_directed(void)
     chk32(0x000c0148u, rd32(COND_TEST_BASE + 0x88u), 0x0badc000u);
     chk32(0x000c014cu, rd32(COND_TEST_BASE + 0x8cu), 0x556677ffu);
 
+    for (uint32_t off = 0x90u; off <= 0xa0u; off += 4u) {
+        wr32(COND_TEST_BASE + off, 0x55555555u);
+    }
+    __asm__ volatile(
+        "moveq #1,%%d4\n\t"
+        "moveq #0,%%d0\n\t"
+        "cmp.l %%d0,%%d0\n\t"
+        "seq 0x01ffa190(%%d4:l)\n\t"
+        "moveq #2,%%d4\n\t"
+        "moveq #1,%%d0\n\t"
+        "cmpi.l #0,%%d0\n\t"
+        "seq 0x01ffa190(%%d4:l)\n\t"
+        "moveq #3,%%d4\n\t"
+        "moveq #1,%%d0\n\t"
+        "cmpi.l #0,%%d0\n\t"
+        "sne 0x01ffa190(%%d4:l)\n\t"
+        "move.l #0x7fff0004,%%d4\n\t"
+        "st 0x01ffa190(%%d4:w)\n\t"
+        "move.l #0x7fff0005,%%d4\n\t"
+        "sf 0x01ffa190(%%d4:w)\n\t"
+        "moveq #2,%%d4\n\t"
+        "move.w #0,%%ccr\n\t"
+        "spl 0x01ffa194(%%d4:l:2)\n\t"
+        "movea.l #3,%%a1\n\t"
+        "move.w #0x08,%%ccr\n\t"
+        "smi 0x01ffa198(%%a1:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa1a0"
+        :
+        :
+        : "a1", "d0", "d1", "d4", "cc", "memory");
+    chk32(0x000c0150u, rd32(COND_TEST_BASE + 0x90u), 0x55ff00ffu);
+    chk32(0x000c0154u, rd32(COND_TEST_BASE + 0x94u), 0xff005555u);
+    chk32(0x000c0158u, rd32(COND_TEST_BASE + 0x98u), 0xff5555ffu);
+    chk32(0x000c015cu, rd32(COND_TEST_BASE + 0x9cu), 0x55555555u);
+    chk32(0x000c0160u, rd32(COND_TEST_BASE + 0xa0u) & 0x271fu, 0x2708u);
+
     for (uint32_t ccr = 0; ccr < 0x20u; ++ccr) {
         uint32_t row = COND_TEST_BASE + 0x100u;
 
