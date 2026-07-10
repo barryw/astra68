@@ -624,7 +624,7 @@ begin
             DATA_VALID <= '1';
         elsif READ_ACCESS = '1' and BUS_CTRL_STATE = DATA_C1C4 and BUS_FLT = '1' and HALT_In = '0' then
             null; -- This is the RETRY condition, no bus error.
-        elsif BUS_CTRL_STATE = DATA_C1C4 and BUS_FLT = '1' then
+        elsif BUS_CTRL_STATE = DATA_C1C4 and (READ_ACCESS = '1' or WRITE_ACCESS = '1') and BUS_FLT = '1' then
             DATA_VALID <= '0';
         elsif DATA_RDY_I = '1' then
             DATA_VALID <= '1'; -- Reset after use, TRAP_BERR is asserted during DATA_RDY.

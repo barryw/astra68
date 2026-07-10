@@ -855,7 +855,9 @@ begin
                     case DATA_IN(15 downto 12) is
                         when x"0" | x"1" | x"2" | x"9" =>
                             NEXT_EX_STATE <= RESTORE_PC;
-                        when x"A" | x"B" =>
+                        when x"A" =>
+                            NEXT_EX_STATE <= RESTORE_PC;
+                        when x"B" =>
                             NEXT_EX_STATE <= EXAMINE_VERSION;
                         when others =>
                             NEXT_EX_STATE <= IDLE; -- Format error.
