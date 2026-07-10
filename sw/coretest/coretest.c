@@ -39,6 +39,7 @@
 #define XMEM_TEST_BASE (SCRATCH_BASE + 0x1600u)
 #define MUL_DIV_TEST_BASE (SCRATCH_BASE + 0x1800u)
 #define CHK_TEST_BASE (SCRATCH_BASE + 0x1a00u)
+#define DATA_ALU_TEST_BASE (SCRATCH_BASE + 0x1f00u)
 
 static volatile uint32_t g_sum;
 
@@ -3278,6 +3279,100 @@ static void test_immediate_alu_directed(void)
     chk32(0x000950a4u, rd32(IMM_TEST_BASE + 0xacu) & 0x1fu, 0x18u);
     chk32(0x000950a8u, rd32(IMM_TEST_BASE + 0xb0u) & 0x1fu, 0x19u);
     chk32(0x000950acu, rd32(IMM_TEST_BASE + 0xb4u) & 0x1fu, 0x10u);
+}
+
+static void test_data_alu_indexed_directed(void)
+{
+    wr32(DATA_ALU_TEST_BASE + 0x00u, 0x127f8000u);
+    wr32(DATA_ALU_TEST_BASE + 0x04u, 0xaaaa0001u);
+    wr32(DATA_ALU_TEST_BASE + 0x08u, 0x7fffffffu);
+    wr32(DATA_ALU_TEST_BASE + 0x0cu, 0x12345600u);
+    wr32(DATA_ALU_TEST_BASE + 0x10u, 0x55558000u);
+    wr32(DATA_ALU_TEST_BASE + 0x14u, 0x80000000u);
+    wr32(DATA_ALU_TEST_BASE + 0x18u, 0x00aa80bbu);
+    wr32(DATA_ALU_TEST_BASE + 0x1cu, 0xaaaa7fffu);
+    wr32(DATA_ALU_TEST_BASE + 0x20u, 0x12345678u);
+    for (uint32_t off = 0x80u; off <= 0xa0u; off += 4u) {
+        wr32(DATA_ALU_TEST_BASE + off, 0u);
+    }
+
+    __asm__ volatile(
+        "moveq #1,%%d0\n\t"
+        "moveq #1,%%d4\n\t"
+        "move.w #0,%%ccr\n\t"
+        "add.b %%d0,0x01ffb000(%%d4:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffb080\n\t"
+        "moveq #-1,%%d0\n\t"
+        "moveq #6,%%d4\n\t"
+        "move.w #0,%%ccr\n\t"
+        "add.w %%d0,0x01ffb000(%%d4:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffb084\n\t"
+        "moveq #1,%%d0\n\t"
+        "movea.l #8,%%a1\n\t"
+        "move.w #0,%%ccr\n\t"
+        "add.l %%d0,0x01ffb000(%%a1:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffb088\n\t"
+        "moveq #1,%%d0\n\t"
+        "move.l #0x7fff000f,%%d4\n\t"
+        "move.w #0,%%ccr\n\t"
+        "sub.b %%d0,0x01ffb000(%%d4:w)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffb08c\n\t"
+        "moveq #1,%%d0\n\t"
+        "moveq #9,%%d4\n\t"
+        "move.w #0,%%ccr\n\t"
+        "sub.w %%d0,0x01ffb000(%%d4:l:2)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffb090\n\t"
+        "moveq #1,%%d0\n\t"
+        "movea.l #20,%%a1\n\t"
+        "move.w #0,%%ccr\n\t"
+        "sub.l %%d0,0x01ffb000(%%a1:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffb094\n\t"
+        "move.l #0x0000007f,%%d0\n\t"
+        "move.l #0x0000001a,%%d4\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmp.b 0x01ffb000(%%d4:l),%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffb098\n\t"
+        "move.l #0x00008000,%%d0\n\t"
+        "moveq #-1,%%d4\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmp.w 0x01ffb01f(%%d4:w),%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffb09c\n\t"
+        "move.l #0x12345678,%%d0\n\t"
+        "movea.l #0,%%a1\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmp.l 0x01ffb020(%%a1:l),%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffb0a0"
+        :
+        :
+        : "a1", "d0", "d1", "d4", "cc", "memory");
+
+    chk32(0x00095100u, rd32(DATA_ALU_TEST_BASE + 0x00u), 0x12808000u);
+    chk32(0x00095104u, rd32(DATA_ALU_TEST_BASE + 0x04u), 0xaaaa0000u);
+    chk32(0x00095108u, rd32(DATA_ALU_TEST_BASE + 0x08u), 0x80000000u);
+    chk32(0x0009510cu, rd32(DATA_ALU_TEST_BASE + 0x0cu), 0x123456ffu);
+    chk32(0x00095110u, rd32(DATA_ALU_TEST_BASE + 0x10u), 0x55557fffu);
+    chk32(0x00095114u, rd32(DATA_ALU_TEST_BASE + 0x14u), 0x7fffffffu);
+    chk32(0x00095118u, rd32(DATA_ALU_TEST_BASE + 0x18u), 0x00aa80bbu);
+    chk32(0x0009511cu, rd32(DATA_ALU_TEST_BASE + 0x1cu), 0xaaaa7fffu);
+    chk32(0x00095120u, rd32(DATA_ALU_TEST_BASE + 0x20u), 0x12345678u);
+    chk32(0x00095124u, rd32(DATA_ALU_TEST_BASE + 0x80u) & 0x1fu, 0x0au);
+    chk32(0x00095128u, rd32(DATA_ALU_TEST_BASE + 0x84u) & 0x1fu, 0x15u);
+    chk32(0x0009512cu, rd32(DATA_ALU_TEST_BASE + 0x88u) & 0x1fu, 0x0au);
+    chk32(0x00095130u, rd32(DATA_ALU_TEST_BASE + 0x8cu) & 0x1fu, 0x19u);
+    chk32(0x00095134u, rd32(DATA_ALU_TEST_BASE + 0x90u) & 0x1fu, 0x02u);
+    chk32(0x00095138u, rd32(DATA_ALU_TEST_BASE + 0x94u) & 0x1fu, 0x02u);
+    chk32(0x0009513cu, rd32(DATA_ALU_TEST_BASE + 0x98u) & 0x1fu, 0x1bu);
+    chk32(0x00095140u, rd32(DATA_ALU_TEST_BASE + 0x9cu) & 0x1fu, 0x12u);
+    chk32(0x00095144u, rd32(DATA_ALU_TEST_BASE + 0xa0u) & 0x1fu, 0x14u);
 }
 
 static void test_addx_subx_cmpm_memory_directed(void)
@@ -8618,6 +8713,7 @@ void kmain(void)
     test_register_transform_directed();
     test_unary_logic_directed();
     test_immediate_alu_directed();
+    test_data_alu_indexed_directed();
     test_addx_subx_cmpm_memory_directed();
     test_system_control_directed();
     test_moves_directed();
