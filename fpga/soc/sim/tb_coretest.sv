@@ -18,15 +18,18 @@ module tb_coretest;
     localparam BERR_TARGET_ADDR = 32'h01ff9608;
     localparam MOVES_FC_READ_ADDR = 32'h01ffad00;
     localparam MOVES_FC_WRITE_ADDR = 32'h01ffad04;
-    localparam ATOMIC_RMC_TARGET_ADDR = 32'h01ffae00;
+    localparam ATOMIC_RMC_CAS_ADDR = 32'h01ffae00;
     localparam ATOMIC_RMC_ARM_ADDR = 32'h01ffae04;
+    localparam ATOMIC_RMC_TAS_ADDR = 32'h01ffae10;
+    localparam ATOMIC_RMC_CAS2_ADDR0 = 32'h01ffae20;
+    localparam ATOMIC_RMC_CAS2_ADDR1 = 32'h01ffae24;
     reg [2:0] sim_ipln = 3'b111;
     reg sim_avecn = 1'b1;
     reg sim_berrn = 1'b1;
     reg sim_berr_arm = 1'b0;
-    reg atomic_rmc_arm = 1'b0;
-    reg atomic_rmc_seen_read = 1'b0;
-    reg atomic_rmc_seen_write = 1'b0;
+    reg [1:0] atomic_rmc_mode = 2'd0;
+    reg [3:0] atomic_rmc_seen_read = 4'd0;
+    reg [3:0] atomic_rmc_seen_write = 4'd0;
 
     astra_soc #(.RST_MAX(16'd16)) dut (
         .clk25_mhz(clk25),
@@ -90,39 +93,70 @@ module tb_coretest;
         end
     end
 
+    function automatic [3:0] atomic_rmc_addr_bit(input [31:0] addr);
+        begin
+            case (addr)
+                ATOMIC_RMC_CAS_ADDR: atomic_rmc_addr_bit = 4'b0001;
+                ATOMIC_RMC_TAS_ADDR: atomic_rmc_addr_bit = 4'b0010;
+                ATOMIC_RMC_CAS2_ADDR0: atomic_rmc_addr_bit = 4'b0100;
+                ATOMIC_RMC_CAS2_ADDR1: atomic_rmc_addr_bit = 4'b1000;
+                default: atomic_rmc_addr_bit = 4'b0000;
+            endcase
+        end
+    endfunction
+
+    function automatic [3:0] atomic_rmc_expected(input [1:0] mode);
+        begin
+            case (mode)
+                2'd1: atomic_rmc_expected = 4'b0001;
+                2'd2: atomic_rmc_expected = 4'b0010;
+                2'd3: atomic_rmc_expected = 4'b1100;
+                default: atomic_rmc_expected = 4'b0000;
+            endcase
+        end
+    endfunction
+
     always @(posedge dut.clk) begin
         if (!rstn || dut.rst) begin
-            atomic_rmc_arm <= 1'b0;
-            atomic_rmc_seen_read <= 1'b0;
-            atomic_rmc_seen_write <= 1'b0;
+            atomic_rmc_mode <= 2'd0;
+            atomic_rmc_seen_read <= 4'd0;
+            atomic_rmc_seen_write <= 4'd0;
         end else begin
-            if (atomic_rmc_arm && dut.bus_read_stb
-                && dut.cpu_adr == ATOMIC_RMC_TARGET_ADDR) begin
-                atomic_rmc_seen_read <= 1'b1;
+            if (atomic_rmc_mode != 2'd0 && dut.bus_read_stb
+                && atomic_rmc_addr_bit(dut.cpu_adr) != 4'd0) begin
+                atomic_rmc_seen_read <= atomic_rmc_seen_read
+                    | atomic_rmc_addr_bit(dut.cpu_adr);
                 if (dut.cpu_rmc_n !== 1'b0) begin
-                    $fatal(1, "CAS RMC probe expected read RMCn=0");
+                    $fatal(1, "atomic RMC probe expected read RMCn=0");
                 end
             end
-            if (atomic_rmc_arm && dut.bus_write_stb
-                && dut.cpu_adr == ATOMIC_RMC_TARGET_ADDR) begin
-                atomic_rmc_seen_write <= 1'b1;
+            if (atomic_rmc_mode != 2'd0 && dut.bus_write_stb
+                && atomic_rmc_addr_bit(dut.cpu_adr) != 4'd0) begin
+                atomic_rmc_seen_write <= atomic_rmc_seen_write
+                    | atomic_rmc_addr_bit(dut.cpu_adr);
                 if (dut.cpu_rmc_n !== 1'b0) begin
-                    $fatal(1, "CAS RMC probe expected write RMCn=0");
+                    $fatal(1, "atomic RMC probe expected write RMCn=0");
                 end
             end
             if (dut.bus_write_stb && dut.cpu_adr == ATOMIC_RMC_ARM_ADDR) begin
-                if (dut.cpu_dout[0]) begin
-                    atomic_rmc_arm <= 1'b1;
-                    atomic_rmc_seen_read <= 1'b0;
-                    atomic_rmc_seen_write <= 1'b0;
+                if (dut.cpu_dout[1:0] != 2'd0) begin
+                    atomic_rmc_mode <= dut.cpu_dout[1:0];
+                    atomic_rmc_seen_read <= 4'd0;
+                    atomic_rmc_seen_write <= 4'd0;
                 end else begin
-                    if (!atomic_rmc_seen_read) begin
-                        $fatal(1, "CAS RMC probe did not observe read cycle");
+                    if ((atomic_rmc_seen_read & atomic_rmc_expected(atomic_rmc_mode))
+                        != atomic_rmc_expected(atomic_rmc_mode)) begin
+                        $fatal(1, "atomic RMC probe missing read mode=%0d seen=%b exp=%b",
+                               atomic_rmc_mode, atomic_rmc_seen_read,
+                               atomic_rmc_expected(atomic_rmc_mode));
                     end
-                    if (!atomic_rmc_seen_write) begin
-                        $fatal(1, "CAS RMC probe did not observe write cycle");
+                    if ((atomic_rmc_seen_write & atomic_rmc_expected(atomic_rmc_mode))
+                        != atomic_rmc_expected(atomic_rmc_mode)) begin
+                        $fatal(1, "atomic RMC probe missing write mode=%0d seen=%b exp=%b",
+                               atomic_rmc_mode, atomic_rmc_seen_write,
+                               atomic_rmc_expected(atomic_rmc_mode));
                     end
-                    atomic_rmc_arm <= 1'b0;
+                    atomic_rmc_mode <= 2'd0;
                 end
             end
         end
