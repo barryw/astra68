@@ -23,6 +23,10 @@ module tb_coretest;
     localparam ATOMIC_RMC_TAS_ADDR = 32'h01ffae10;
     localparam ATOMIC_RMC_CAS2_ADDR0 = 32'h01ffae20;
     localparam ATOMIC_RMC_CAS2_ADDR1 = 32'h01ffae24;
+    localparam DATA_FC_SUP_WRITE_ADDR = 32'h01ffaf00;
+    localparam DATA_FC_SUP_READ_ADDR = 32'h01ffaf04;
+    localparam DATA_FC_USER_WRITE_ADDR = 32'h01ffaf08;
+    localparam DATA_FC_USER_READ_ADDR = 32'h01ffaf0c;
     reg [2:0] sim_ipln = 3'b111;
     reg sim_avecn = 1'b1;
     reg sim_berrn = 1'b1;
@@ -89,6 +93,22 @@ module tb_coretest;
             if (dut.bus_write_stb && dut.cpu_adr == MOVES_FC_WRITE_ADDR
                 && dut.cpu_fc !== 3'b001) begin
                 $fatal(1, "MOVES DFC probe expected FC=001, got %b", dut.cpu_fc);
+            end
+            if (dut.bus_write_stb && dut.cpu_adr == DATA_FC_SUP_WRITE_ADDR
+                && dut.cpu_fc !== 3'b101) begin
+                $fatal(1, "supervisor data write expected FC=101, got %b", dut.cpu_fc);
+            end
+            if (dut.bus_read_stb && dut.cpu_adr == DATA_FC_SUP_READ_ADDR
+                && dut.cpu_fc !== 3'b101) begin
+                $fatal(1, "supervisor data read expected FC=101, got %b", dut.cpu_fc);
+            end
+            if (dut.bus_write_stb && dut.cpu_adr == DATA_FC_USER_WRITE_ADDR
+                && dut.cpu_fc !== 3'b001) begin
+                $fatal(1, "user data write expected FC=001, got %b", dut.cpu_fc);
+            end
+            if (dut.bus_read_stb && dut.cpu_adr == DATA_FC_USER_READ_ADDR
+                && dut.cpu_fc !== 3'b001) begin
+                $fatal(1, "user data read expected FC=001, got %b", dut.cpu_fc);
             end
         end
     end

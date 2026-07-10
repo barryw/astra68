@@ -19,6 +19,7 @@
 #define MOVES_EXT_TEST_BASE (SCRATCH_BASE + 0x1b00u)
 #define MOVES_FC_TEST_BASE (MOVES_EXT_TEST_BASE + 0x100u)
 #define ATOMIC_RMC_TEST_BASE (MOVES_FC_TEST_BASE + 0x100u)
+#define DATA_FC_TEST_BASE (ATOMIC_RMC_TEST_BASE + 0x100u)
 #define BOUNDS_TEST_BASE (SCRATCH_BASE + 0x720u)
 #define CAS2_TEST_BASE (SCRATCH_BASE + 0x740u)
 #define RETURN_TEST_BASE (SCRATCH_BASE + 0x800u)
@@ -3465,6 +3466,37 @@ static void test_system_control_directed(void)
         : "a0", "a1", "d0", "d1", "cc", "memory");
     chk_exception_frame(0x000a0090u, 0x0080u, 0x0000u, 0x2000u, 0x0000u);
     chk32(0x000a00a8u, got, RETURN_TEST_BASE + 0xe0u);
+
+    wr32(DATA_FC_TEST_BASE + 0x00u, 0x1234abcdu);
+    wr32(DATA_FC_TEST_BASE + 0x04u, 0xfeedfaceu);
+    chk32(0x00160040u, rd32(DATA_FC_TEST_BASE + 0x04u), 0xfeedfaceu);
+
+    for (uint32_t off = 0; off < 0x100u; off += 4u) {
+        wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
+    }
+    wr32(EXC_ALT_VBR + 0x80u, (uint32_t)(uintptr_t)_h_recover);
+    wr32(DATA_FC_TEST_BASE + 0x0cu, 0x2468ace0u);
+    arm_exception_recovery(0x0080u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d1\n\t"
+        "movec %%d1,%%vbr\n\t"
+        "lea 0x01ff99e0,%%a1\n\t"
+        "move.l %%a1,%%usp\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.w #0x0000,%%sr\n\t"
+        "move.l 0x01ffaf0c,%%d0\n\t"
+        "move.l %%d0,0x01ffaf08\n\t"
+        "trap #0\n"
+        "1:\n\t"
+        "move.l 0x01ffaf08,%0\n\t"
+        "moveq #0,%%d1\n\t"
+        "movec %%d1,%%vbr"
+        : "=&d"(got)
+        :
+        : "a0", "a1", "d0", "d1", "cc", "memory");
+    chk_exception_frame(0x00160048u, 0x0080u, 0x0000u, 0x2000u, 0x0000u);
+    chk32(0x00160060u, got, 0x2468ace0u);
 
     arm_exception_recovery(0x0020u);
     __asm__ volatile(
