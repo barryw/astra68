@@ -1617,6 +1617,47 @@ static void test_stack_frame_control_directed(void)
     chk32(0x00091058u, got1, STACK_TEST_BASE + 0x60u);
     chk32(0x0009105cu, got2, got0);
 
+    for (uint32_t off = 0x180u; off <= 0x19cu; off += 4u) {
+        wr32(STACK_TEST_BASE + off, 0u);
+    }
+    __asm__ volatile(
+        "move.l %%sp,%%a2\n\t"
+        "movec %%msp,%%d7\n\t"
+        "move.l #0x01ff9780,%%d0\n\t"
+        "move.l #0x01ff97a0,%%d1\n\t"
+        "movec %%d0,%%isp\n\t"
+        "movec %%d1,%%msp\n\t"
+        "move.w #0x2700,%%sr\n\t"
+        "lea 0x01ff97c0,%%a0\n\t"
+        "exg %%a0,%%sp\n\t"
+        "move.l %%a0,0x01ff9880\n\t"
+        "move.l %%sp,0x01ff9884\n\t"
+        "movec %%isp,%%d2\n\t"
+        "move.l %%d2,0x01ff9888\n\t"
+        "move.w #0x3700,%%sr\n\t"
+        "move.l %%sp,0x01ff988c\n\t"
+        "lea 0x01ff97e0,%%a1\n\t"
+        "exg %%a1,%%sp\n\t"
+        "move.l %%a1,0x01ff9890\n\t"
+        "move.l %%sp,0x01ff9894\n\t"
+        "movec %%msp,%%d3\n\t"
+        "move.l %%d3,0x01ff9898\n\t"
+        "move.w #0x2700,%%sr\n\t"
+        "move.l %%sp,0x01ff989c\n\t"
+        "move.l %%a2,%%sp\n\t"
+        "movec %%d7,%%msp"
+        :
+        :
+        : "a0", "a1", "a2", "d0", "d1", "d2", "d3", "d7", "cc", "memory");
+    chk32(0x000910e0u, rd32(STACK_TEST_BASE + 0x180u), STACK_TEST_BASE + 0x80u);
+    chk32(0x000910e4u, rd32(STACK_TEST_BASE + 0x184u), STACK_TEST_BASE + 0xc0u);
+    chk32(0x000910e8u, rd32(STACK_TEST_BASE + 0x188u), STACK_TEST_BASE + 0xc0u);
+    chk32(0x000910ecu, rd32(STACK_TEST_BASE + 0x18cu), STACK_TEST_BASE + 0xa0u);
+    chk32(0x000910f0u, rd32(STACK_TEST_BASE + 0x190u), STACK_TEST_BASE + 0xa0u);
+    chk32(0x000910f4u, rd32(STACK_TEST_BASE + 0x194u), STACK_TEST_BASE + 0xe0u);
+    chk32(0x000910f8u, rd32(STACK_TEST_BASE + 0x198u), STACK_TEST_BASE + 0xe0u);
+    chk32(0x000910fcu, rd32(STACK_TEST_BASE + 0x19cu), STACK_TEST_BASE + 0xc0u);
+
     wr32(STACK_TEST_BASE + 0xf4u, 0xaaaaaaaau);
     wr32(STACK_TEST_BASE + 0xf8u, 0xbbbbbbbbu);
     __asm__ volatile(
