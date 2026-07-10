@@ -816,6 +816,25 @@ static void test_movem_directed(void)
     chk32(0x000800a4u, rd32(SCRATCH_BASE + 0x144), 0xffff8000u);
     chk32(0x000800a8u, rd32(SCRATCH_BASE + 0x148), 0x00000001u);
     chk32(0x000800acu, rd32(SCRATCH_BASE + 0x14c), 0xffffffffu);
+
+    wr32(SCRATCH_BASE + 0x160, 0u);
+    wr32(SCRATCH_BASE + 0x164, 0u);
+    wr32(SCRATCH_BASE + 0x168, 0u);
+    wr32(SCRATCH_BASE + 0x16c, 0u);
+    __asm__ volatile(
+        "lea 0x01ff9268,%%a2\n\t"
+        "move.l #0xaaaa1357,%%d0\n\t"
+        "move.l #0xbbbb2468,%%d1\n\t"
+        "move.l #0xcccc369a,%%d2\n\t"
+        "move.l #0xdddd48bc,%%d3\n\t"
+        "movem.w %%d0-%%d3,-(%%a2)\n\t"
+        "move.l %%a2,0x01ff926c"
+        :
+        :
+        : "d0", "d1", "d2", "d3", "a2", "memory");
+    chk32(0x000800b0u, rd32(SCRATCH_BASE + 0x160), 0x13572468u);
+    chk32(0x000800b4u, rd32(SCRATCH_BASE + 0x164), 0x369a48bcu);
+    chk32(0x000800b8u, rd32(SCRATCH_BASE + 0x16c), SCRATCH_BASE + 0x160u);
 }
 
 static void test_control_flow_directed(void)
