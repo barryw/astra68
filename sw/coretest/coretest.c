@@ -40,6 +40,7 @@
 #define MUL_DIV_TEST_BASE (SCRATCH_BASE + 0x1800u)
 #define CHK_TEST_BASE (SCRATCH_BASE + 0x1a00u)
 #define DATA_ALU_TEST_BASE (SCRATCH_BASE + 0x1f00u)
+#define RTE_USER_TEST_BASE (SCRATCH_BASE + 0x2100u)
 
 static volatile uint32_t g_sum;
 
@@ -4998,6 +4999,54 @@ static void test_return_control_directed(void)
     chk_exception_frame(0x000a0440u, 0x0080u, 0x0000u, 0x2000u, 0x0000u);
     chk32(0x000a0458u, got0, RETURN_TEST_BASE + 0xf8u);
     chk32(0x000a045cu, got2 & 1u, 0u);
+
+    for (uint32_t off = 0; off < 0x100u; off += 4u) {
+        wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
+    }
+    wr32(EXC_ALT_VBR + 0x80u, (uint32_t)(uintptr_t)_h_recover);
+    for (uint32_t off = 0; off < 0x90u; off += 4u) {
+        wr32(RTE_USER_TEST_BASE + off, 0u);
+    }
+    arm_exception_recovery(0x0080u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d1\n\t"
+        "movec %%d1,%%vbr\n\t"
+        "move.l %%sp,%%a2\n\t"
+        "lea 0x01ffb280,%%a0\n\t"
+        "move.l %%a0,%%usp\n\t"
+        "lea 0x01ffb240,%%a0\n\t"
+        "move.w #0x0015,(%%a0)\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,2(%%a0)\n\t"
+        "move.w #0x0000,6(%%a0)\n\t"
+        "lea 2f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "move.l %%a0,%%sp\n\t"
+        "rte\n"
+        "1:\n\t"
+        "movem.l %%sp,0x01ffb200\n\t"
+        "lea 0x5a5aa55a,%%a0\n\t"
+        "pea 0(%%a0)\n\t"
+        "movem.l %%sp,0x01ffb204\n\t"
+        "lea 3f,%%a0\n\t"
+        "movem.l %%a0,0x01ffb208\n\t"
+        "trap #0\n"
+        "3:\n\t"
+        "move.l #0xbadbad,0x01ffb20c\n"
+        "2:\n\t"
+        "move.l %%sp,0x01ffb20c\n\t"
+        "moveq #0,%%d1\n\t"
+        "movec %%d1,%%vbr\n\t"
+        "move.l %%a2,%%sp"
+        :
+        :
+        : "a0", "a1", "a2", "d0", "d1", "cc", "memory");
+    chk_exception_frame(0x000a0460u, 0x0080u, 0x0000u, 0x201fu, 0x0015u);
+    chk_exception_pc(0x000a0478u, rd32(RTE_USER_TEST_BASE + 0x08u));
+    chk32(0x000a047cu, rd32(RTE_USER_TEST_BASE + 0x00u), RTE_USER_TEST_BASE + 0x80u);
+    chk32(0x000a0480u, rd32(RTE_USER_TEST_BASE + 0x04u), RTE_USER_TEST_BASE + 0x7cu);
+    chk32(0x000a0484u, rd32(RTE_USER_TEST_BASE + 0x0cu), RTE_USER_TEST_BASE + 0x48u);
+    chk32(0x000a0488u, rd32(RTE_USER_TEST_BASE + 0x7cu), 0x5a5aa55au);
 }
 
 static void test_bcd_directed(void)
