@@ -110,14 +110,14 @@ module astra_soc #(
 
     // -------------------------------------------------------------------------
     // Address decode (skeleton map)
-    //   ROM  0x00000000 & 0xFFE00000 (aliased so $0/$4 vectors fetch from ROM)
+    //   ROM  0x00000000 & 0xFFE00000 (256 KB, aliased so $0/$4 vectors fetch from ROM)
     //   RAM  0x01FF8000..0x01FFFFFF (32 KB, stack top = 0x02000000)
     //   UART 0xFFF00500..0xFFF0050F (Vesta UART)
     // -------------------------------------------------------------------------
-    localparam ROM_WORDS = 4096;              // 16 KB ROM, matching the low-ROM reset/vector alias window.
+    localparam ROM_WORDS = 65536;             // 256 KB ROM, matching sw/boot/astra_st.ld.
     localparam RAM_WORDS = 8192;              // 32 KB system RAM (BRAM)
 
-    wire sel_rom  = (cpu_adr[31:20] == 12'hFFE) || (cpu_adr[31:14] == 18'd0); // 0xFFE0xxxx or low 16KB
+    wire sel_rom  = (cpu_adr[31:18] == 14'h3ff8) || (cpu_adr[31:18] == 14'd0); // 0xFFE00000..0xFFE3FFFF or low 256KB
     wire sel_ram  = (cpu_adr[31:15] == 17'h03FF); // 0x01FF8000..0x01FFFFFF
     wire sel_uart = (cpu_adr[31:8]  == 24'hFFF005);
 
