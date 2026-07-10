@@ -5079,6 +5079,130 @@ static void store_bcc_mask(uint32_t addr, uint32_t ccr)
         : "a0", "d0", "d1", "cc", "memory");
 }
 
+static void store_dbcc_mask(uint32_t addr, uint32_t ccr)
+{
+    __asm__ volatile(
+        "move.l %0,%%a0\n\t"
+        "move.l %1,%%d1\n\t"
+        "moveq #0,%%d0\n\t"
+        "moveq #1,%%d2\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "dbt %%d2,1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000001,%%d0\n"
+        "2:\n\t"
+        "moveq #1,%%d2\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "dbf %%d2,1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000002,%%d0\n"
+        "2:\n\t"
+        "moveq #1,%%d2\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "dbhi %%d2,1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000004,%%d0\n"
+        "2:\n\t"
+        "moveq #1,%%d2\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "dbls %%d2,1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000008,%%d0\n"
+        "2:\n\t"
+        "moveq #1,%%d2\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "dbcc %%d2,1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000010,%%d0\n"
+        "2:\n\t"
+        "moveq #1,%%d2\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "dbcs %%d2,1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000020,%%d0\n"
+        "2:\n\t"
+        "moveq #1,%%d2\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "dbne %%d2,1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000040,%%d0\n"
+        "2:\n\t"
+        "moveq #1,%%d2\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "dbeq %%d2,1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000080,%%d0\n"
+        "2:\n\t"
+        "moveq #1,%%d2\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "dbvc %%d2,1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000100,%%d0\n"
+        "2:\n\t"
+        "moveq #1,%%d2\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "dbvs %%d2,1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000200,%%d0\n"
+        "2:\n\t"
+        "moveq #1,%%d2\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "dbpl %%d2,1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000400,%%d0\n"
+        "2:\n\t"
+        "moveq #1,%%d2\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "dbmi %%d2,1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000800,%%d0\n"
+        "2:\n\t"
+        "moveq #1,%%d2\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "dbge %%d2,1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00001000,%%d0\n"
+        "2:\n\t"
+        "moveq #1,%%d2\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "dblt %%d2,1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00002000,%%d0\n"
+        "2:\n\t"
+        "moveq #1,%%d2\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "dbgt %%d2,1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00004000,%%d0\n"
+        "2:\n\t"
+        "moveq #1,%%d2\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "dble %%d2,1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00008000,%%d0\n"
+        "2:\n\t"
+        "move.l %%d0,(%%a0)"
+        :
+        : "d"(addr), "d"(ccr & 0x1fu)
+        : "a0", "d0", "d1", "d2", "cc", "memory");
+}
+
 static void test_condition_codes_directed(void)
 {
     uint32_t got;
@@ -5259,6 +5383,21 @@ static void test_condition_codes_directed(void)
         }
 
         chk32(0x000c0800u + (ccr << 2), rd32(COND_TEST_BASE + 0x110u), exp);
+    }
+
+    for (uint32_t ccr = 0; ccr < 0x20u; ++ccr) {
+        uint32_t exp = 0u;
+
+        wr32(COND_TEST_BASE + 0x114u, 0xaaaaaaaau);
+        store_dbcc_mask(COND_TEST_BASE + 0x114u, ccr);
+
+        for (uint32_t cond = 0; cond < 0x10u; ++cond) {
+            if (!condition_true_ref(cond, ccr)) {
+                exp |= 1u << cond;
+            }
+        }
+
+        chk32(0x000c0c00u + (ccr << 2), rd32(COND_TEST_BASE + 0x114u), exp);
     }
 }
 
