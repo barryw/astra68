@@ -4588,6 +4588,8 @@ static void test_exception_recovery_directed(void)
 #ifdef CORETEST_SIM_IRQ
 static void test_interrupt_autovector_directed(void)
 {
+    uint32_t got;
+
     for (uint32_t off = 0; off < 0x100u; off += 4u) {
         wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
     }
@@ -4643,6 +4645,73 @@ static void test_interrupt_autovector_directed(void)
         :
         : "a0", "d0", "cc", "memory");
     chk_exception_frame(0x00110020u, 0x006cu, 0x0000u, 0x2700u, 0x2000u);
+
+    for (uint32_t off = 0; off < 0x100u; off += 4u) {
+        wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
+    }
+    wr32(EXC_ALT_VBR + 0x6cu, (uint32_t)(uintptr_t)_h_recover);
+
+    arm_exception_recovery(0x006cu);
+    wr32(IRQ_SIM_REQ, 0u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.l #3,0x01ff9600\n\t"
+        "move.w #0x2300,%%sr\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n"
+        "1:\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.w #0x2700,%%sr\n\t"
+        "move.l #0,0x01ff9600\n\t"
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "move.l %%d1,%0"
+        : "=&d"(got)
+        :
+        : "a0", "d0", "d1", "cc", "memory");
+    chk32(0x00110040u, rd32(EXC_REC_BASE + 0x00u), 0u);
+    chk32(0x00110044u, got & 0x2700u, 0x2300u);
+
+    for (uint32_t off = 0; off < 0x100u; off += 4u) {
+        wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
+    }
+    wr32(EXC_ALT_VBR + 0x74u, (uint32_t)(uintptr_t)_h_recover);
+
+    arm_exception_recovery(0x0074u);
+    wr32(IRQ_SIM_REQ, 0u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.l #5,0x01ff9600\n\t"
+        "move.w #0x2300,%%sr\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n"
+        "1:\n\t"
+        "move.w #0x2700,%%sr\n\t"
+        "move.l #0,0x01ff9600\n\t"
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr"
+        :
+        :
+        : "a0", "d0", "cc", "memory");
+    chk_exception_frame(0x00110060u, 0x0074u, 0x0000u, 0x2700u, 0x2300u);
 }
 #endif
 
