@@ -12,8 +12,8 @@ CRT0   = crt0_coretest.S
 
 all: rom_coretest.hex
 
-coretest.elf: $(CRT0) coretest.c $(LD)
-	$(CC) $(CFLAGS) -T $(LD) -o $@ $(CRT0) coretest.c
+coretest.elf: $(CRT0) coretest_movem.S coretest.c $(LD)
+	$(CC) $(CFLAGS) -T $(LD) -o $@ $(CRT0) coretest_movem.S coretest.c
 
 coretest.bin: coretest.elf
 	$(OBJCOPY) -O binary $< $@
