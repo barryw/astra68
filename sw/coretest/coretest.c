@@ -3688,6 +3688,29 @@ static void test_bcd_directed(void)
     chk32(0x000a0564u, got1, BCD_TEST_BASE + 0x51u);
     chk8(0x000a0568u, rd8(BCD_TEST_BASE + 0x51u), 0x27u);
     chk32(0x000a056cu, got2 & 0x15u, 0x00u);
+
+    wr32(BCD_TEST_BASE + 0x60u, 0x11452233u);
+    wr32(BCD_TEST_BASE + 0x64u, 0xaa00bbccu);
+    wr32(BCD_TEST_BASE + 0x68u, 0u);
+    wr32(BCD_TEST_BASE + 0x6cu, 0u);
+    __asm__ volatile(
+        "lea 0x01ff9a60,%%a0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "nbcd 1(%%a0)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ff9a68\n\t"
+        "lea 0x01ff9a64,%%a0\n\t"
+        "move.w #0x04,%%ccr\n\t"
+        "nbcd 1(%%a0)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ff9a6c"
+        :
+        :
+        : "a0", "d1", "cc", "memory");
+    chk32(0x000a0570u, rd32(BCD_TEST_BASE + 0x60u), 0x11552233u);
+    chk32(0x000a0574u, rd32(BCD_TEST_BASE + 0x68u) & 0x15u, 0x11u);
+    chk32(0x000a0578u, rd32(BCD_TEST_BASE + 0x64u), 0xaa00bbccu);
+    chk32(0x000a057cu, rd32(BCD_TEST_BASE + 0x6cu) & 0x15u, 0x04u);
 }
 
 static void test_pack_unpk_directed(void)

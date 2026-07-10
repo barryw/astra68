@@ -157,6 +157,7 @@ signal SHFT_LOAD            : bit;
 signal SHFT_RDY             : bit;
 signal SHFT_EN              : bit;
 signal STATUS_REG           : Std_Logic_Vector(15 downto 0);
+signal STATUS_REG_OP        : Std_Logic_Vector(15 downto 0);
 signal VFLAG_DIV            : std_logic;
 signal XFLAG_SHFT           : std_logic;
 signal XNZVC                : Std_Logic_Vector(4 downto 0);
@@ -184,6 +185,7 @@ begin
             BF_OFFSET <= BF_OFFSET_IN;
             BITPOS <= To_Integer(unsigned(BITPOS_IN));
             BF_WIDTH <= To_Integer(unsigned(BF_WIDTH_IN));
+            STATUS_REG_OP <= STATUS_REG;
             BF_UPPER_BND <= 39 - To_Integer(unsigned(BITPOS_IN));
             SHIFT_WIDTH <= SHIFT_WIDTH_IN;
             --
@@ -283,7 +285,7 @@ begin
         end case;
     end process SIGNEXT;
 
-    P_BCDOP: process(OP, STATUS_REG, OP1, OP2)
+    P_BCDOP: process(OP, STATUS_REG_OP, OP1, OP2)
     -- The BCD operations are all byte wide and unsigned.
     variable X_IN_I         : unsigned(0 downto 0);
     variable TEMP0          : unsigned(4 downto 0);
@@ -295,7 +297,7 @@ begin
     variable S_0            : unsigned(3 downto 0);
     variable S_1            : unsigned(3 downto 0);
     begin
-        X_IN_I(0) := STATUS_REG(4); -- Inverted extended Flag.
+        X_IN_I(0) := STATUS_REG_OP(4); -- Inverted extended Flag.
 
         case OP is
             when ABCD =>
@@ -590,12 +592,12 @@ begin
             end case;
     end process DIVISION;
 
-    P_INTOP: process(OP, OP1, OP1_SIGNEXT, OP2, OP2_SIGNEXT, ADR_MODE, STATUS_REG, RESULT_INTOP)
+    P_INTOP: process(OP, OP1, OP1_SIGNEXT, OP2, OP2_SIGNEXT, ADR_MODE, STATUS_REG_OP, RESULT_INTOP)
     -- The integer arithmetics ADD, SUB, NEG and CMP in their different variations are modelled here.
     variable X_IN_I         : Std_Logic_Vector(0 downto 0);
     variable RESULT         : unsigned(31 downto 0);
     begin
-        X_IN_I(0) := STATUS_REG(4); -- Extended Flag.
+        X_IN_I(0) := STATUS_REG_OP(4); -- Extended Flag.
         case OP is
             when ADDA => -- No sign extension for the destination.
                 RESULT := unsigned(OP2) + unsigned(OP1_SIGNEXT);
@@ -911,7 +913,7 @@ begin
     
     COND_CODES: process(BF_DATA_IN, BF_LOWER_BND, BF_UPPER_BND, BIW_1, BITPOS, CAS2_COND, CB_BCD, CHK_CMP_COND, CLK, OP1, OP1_SIGNEXT, OP2, OP2_SIGNEXT,
                         OP3, OP3_SIGNEXT, MSB, OP, OP_SIZE, QUOTIENT, RESULT_BCDOP, RESULT_INTOP, RESULT_LOGOP, RESULT_MUL, RESULT_SHIFTOP, 
-                        RESULT_OTHERS, SHIFT_WIDTH, STATUS_REG, USE_DREG, VFLAG_DIV, XFLAG_SHFT)
+                        RESULT_OTHERS, SHIFT_WIDTH, STATUS_REG, STATUS_REG_OP, USE_DREG, VFLAG_DIV, XFLAG_SHFT)
     -- In this process all the condition codes X (eXtended), N (Negative)
     -- Z (Zero), V (oVerflow) and C (Carry / borrow) are calculated for
     -- all integer operations. Except for the MULS, MULU, DIVS, DIVU the
@@ -1118,7 +1120,7 @@ begin
         case OP is
             when ABCD | NBCD | SBCD =>
                 if RESULT_BCDOP = x"00" then -- N and V are undefined, don't care.
-                    XNZVC <= CB_BCD & '-' & STATUS_REG(2) & '-' & CB_BCD;
+                    XNZVC <= CB_BCD & '-' & STATUS_REG_OP(2) & '-' & CB_BCD;
                 else
                     XNZVC <= CB_BCD & '-' & '0' & '-' & CB_BCD;
                 end if;
@@ -1133,7 +1135,7 @@ begin
                 --
                 if Z = '1' then
                     if OP = ADDX then
-                        XNZVC(3 downto 2) <= '0' & STATUS_REG(2);
+                        XNZVC(3 downto 2) <= '0' & STATUS_REG_OP(2);
                     else
                         XNZVC(3 downto 2) <= "01";
                     end if;
@@ -1147,17 +1149,17 @@ begin
                     when others => XNZVC(1) <= '0';
                 end case;
             when AND_B | ANDI | EOR | EORI | OR_B | ORI | NOT_B =>
-                XNZVC <= STATUS_REG(4) & RESULT_LOGOP(MSB) & Z & "00";
+                XNZVC <= STATUS_REG_OP(4) & RESULT_LOGOP(MSB) & Z & "00";
             when ANDI_TO_CCR | EORI_TO_CCR | ORI_TO_CCR =>
                 XNZVC <= RESULT_LOGOP(4 downto 0);
             when ASL | ASR | LSL | LSR | ROTL | ROTR | ROXL | ROXR =>
                 XNZVC <= XFLAG_SHFT & RESULT_SHIFTOP(MSB) & Z & VFLAG_SHFT & CFLAG_SHFT;
             when BCHG | BCLR | BSET | BTST =>
-                XNZVC <= STATUS_REG(4 downto 3) & Z & STATUS_REG(1 downto 0);
+                XNZVC <= STATUS_REG_OP(4 downto 3) & Z & STATUS_REG_OP(1 downto 0);
             when BFCHG | BFCLR | BFEXTS | BFEXTU | BFFFO | BFINS | BFSET | BFTST =>
-                XNZVC <= STATUS_REG(4) & BF_DATA_IN(BF_UPPER_BND) & Z & "00";
+                XNZVC <= STATUS_REG_OP(4) & BF_DATA_IN(BF_UPPER_BND) & Z & "00";
             when CLR =>
-                XNZVC <= STATUS_REG(4) & "0100";
+                XNZVC <= STATUS_REG_OP(4) & "0100";
             when SUB | SUBI | SUBQ | SUBX =>
                 if (SM = '1' and DM = '0') or (RM = '1' and SM = '1') or (RM = '1' and DM = '0') then
                     XNZVC(4) <= '1';
@@ -1169,7 +1171,7 @@ begin
                 --
                 if Z = '1' then
                     if OP = SUBX then
-                        XNZVC(3 downto 2) <= '0' & STATUS_REG(2);
+                        XNZVC(3 downto 2) <= '0' & STATUS_REG_OP(2);
                     else
                         XNZVC(3 downto 2) <= "01";
                     end if;
@@ -1184,9 +1186,9 @@ begin
                 end case;
             when CAS | CAS2 | CMP | CMPA | CMPI | CMPM =>
                 if OP = CAS2 and CAS2_COND = false then
-                    XNZVC <= STATUS_REG(4 downto 0);
+                    XNZVC <= STATUS_REG_OP(4 downto 0);
                 else
-                    XNZVC(4) <= STATUS_REG(4);
+                    XNZVC(4) <= STATUS_REG_OP(4);
                     --
                     if Z = '1' then
                         XNZVC(3 downto 2) <= "01";
@@ -1208,36 +1210,36 @@ begin
                 end if;
             when CHK =>
                 if OP2_SIGNEXT(MSB) = '1' then
-                    XNZVC <= STATUS_REG(4) & '1' & "000";
+                    XNZVC <= STATUS_REG_OP(4) & '1' & "000";
                 elsif CHK_CMP_COND = true then
-                    XNZVC <= STATUS_REG(4) & '0' & "000";
+                    XNZVC <= STATUS_REG_OP(4) & '0' & "000";
                 else
-                    XNZVC <= STATUS_REG(4 downto 3) & "000";
+                    XNZVC <= STATUS_REG_OP(4 downto 3) & "000";
                 end if;
             when CHK2 | CMP2 =>
                 if CHK_CMP_COND = true then
-                    XNZVC <= STATUS_REG(4) & '0' & '0' & '0' & '1';
+                    XNZVC <= STATUS_REG_OP(4) & '0' & '0' & '0' & '1';
                 else
-                    XNZVC <= STATUS_REG(4) & '0' & Z & '0' & '0';
+                    XNZVC <= STATUS_REG_OP(4) & '0' & Z & '0' & '0';
                 end if;
             when DIVS | DIVU =>
-                XNZVC <= STATUS_REG(4) & NFLAG_DIV & Z & VFLAG_DIV & '0';
+                XNZVC <= STATUS_REG_OP(4) & NFLAG_DIV & Z & VFLAG_DIV & '0';
             when EXT | EXTB | MOVE | TST =>
-                XNZVC <= STATUS_REG(4) & RESULT_OTHERS(MSB) & Z & "00";
+                XNZVC <= STATUS_REG_OP(4) & RESULT_OTHERS(MSB) & Z & "00";
             when MOVEQ =>
                 if OP1_SIGNEXT(7 downto 0) = x"00" then
-                    XNZVC <= STATUS_REG(4) & "0100";
+                    XNZVC <= STATUS_REG_OP(4) & "0100";
                 else
-                    XNZVC <= STATUS_REG(4) & OP1_SIGNEXT(7) & "000";
+                    XNZVC <= STATUS_REG_OP(4) & OP1_SIGNEXT(7) & "000";
                 end if;
             when MULS | MULU =>
-                XNZVC <= STATUS_REG(4) & NFLAG_MUL & Z & VFLAG_MUL & '0';
+                XNZVC <= STATUS_REG_OP(4) & NFLAG_MUL & Z & VFLAG_MUL & '0';
             when NEG | NEGX =>
                 XNZVC(4) <= DM or RM;
                 --
                 if Z = '1' then
                     if OP = NEGX then
-                        XNZVC(3 downto 2) <= '0' & STATUS_REG(2);
+                        XNZVC(3 downto 2) <= '0' & STATUS_REG_OP(2);
                     else
                         XNZVC(3 downto 2) <= "01";
                     end if;
@@ -1250,9 +1252,9 @@ begin
             when RTR =>
                 XNZVC <= OP2(4 downto 0);
             when SWAP =>
-                XNZVC <= STATUS_REG(4) & RESULT_OTHERS(MSB) & Z & "00";
+                XNZVC <= STATUS_REG_OP(4) & RESULT_OTHERS(MSB) & Z & "00";
             when others => -- TAS, Byte only.
-                XNZVC <= STATUS_REG(4) & OP2_SIGNEXT(MSB) & Z & "00";
+                XNZVC <= STATUS_REG_OP(4) & OP2_SIGNEXT(MSB) & Z & "00";
         end case;
     end process COND_CODES;
 
