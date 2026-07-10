@@ -4263,6 +4263,24 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "d0", "d1", "cc", "memory");
     chk_access_fault_frame(0x00100720u, 0x0008u, 0x2000u, 0x2000u, 0u);
+
+    arm_exception_recovery(0x0008u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.l #0x13579bdf,%%d1\n\t"
+        "move.l #1,0x01ff9604\n\t"
+        "move.l %%d1,0x01ff9608\n\t"
+        "move.l #0xbadbad,%%d1\n"
+        "1:\n\t"
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr"
+        :
+        :
+        : "a0", "d0", "d1", "cc", "memory");
+    chk_access_fault_frame(0x00100740u, 0x0008u, 0x2000u, 0x2000u, 0u);
 #endif
 
     for (uint32_t off = 0; off < 0x100u; off += 4u) {
