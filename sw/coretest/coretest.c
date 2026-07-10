@@ -2285,6 +2285,27 @@ static void test_system_control_directed(void)
     chk32(0x000a007cu, got_sp1 & 0x271fu, 0x271bu);
 
     __asm__ volatile(
+        "move.w #0x2700,%%sr\n\t"
+        "ori.w #0x0015,%%sr\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.w #0x271f,%%sr\n\t"
+        "andi.w #0x270a,%%sr\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.w #0x2705,%%sr\n\t"
+        "eori.w #0x000f,%%sr\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.w #0x2700,%%sr\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.l %%d2,%2"
+        : "=&d"(got), "=&d"(got_sp0), "=&d"(got_sp1)
+        :
+        : "d0", "d1", "d2", "cc", "memory");
+    chk32(0x000a0080u, got & 0x271fu, 0x2715u);
+    chk32(0x000a0084u, got_sp0 & 0x271fu, 0x270au);
+    chk32(0x000a0088u, got_sp1 & 0x271fu, 0x270au);
+
+    __asm__ volatile(
         "moveq #5,%%d0\n\t"
         "movec %%d0,%%sfc\n\t"
         "moveq #6,%%d1\n\t"
