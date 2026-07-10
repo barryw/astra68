@@ -472,6 +472,105 @@ static void test_full_format_indexed_memory_ops(void)
     chk32(0x000701d4u, rd32(FULLFMT_TEST_BASE + 0xd4u), 0x00b80000u);
 }
 
+static void test_indexed_ea_scale_directed(void)
+{
+    uint32_t got0;
+    uint32_t got1;
+    uint32_t got2;
+    uint32_t got3;
+
+    __asm__ volatile(
+        "lea 0x01ffa000,%%a0\n\t"
+        "moveq #3,%%d4\n\t"
+        "lea 0x10(%%a0,%%d4:l:8),%%a1\n\t"
+        "move.l %%a1,%0\n\t"
+        "lea 0x10(%%a0,%%d4:l),%%a1\n\t"
+        "move.l %%a1,%1\n\t"
+        "lea 0x10(%%a0,%%d4:l:2),%%a1\n\t"
+        "move.l %%a1,%2\n\t"
+        "lea 0x10(%%a0,%%d4:l:4),%%a1\n\t"
+        "move.l %%a1,%3"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2), "=&d"(got3)
+        :
+        : "a0", "a1", "d4");
+    chk32(0x00070200u, got0, 0x01ffa028u);
+    chk32(0x00070204u, got1, 0x01ffa013u);
+    chk32(0x00070208u, got2, 0x01ffa016u);
+    chk32(0x0007020cu, got3, 0x01ffa01cu);
+
+    __asm__ volatile(
+        "lea 0x01ffa100,%%a0\n\t"
+        "movea.l #5,%%a2\n\t"
+        "move.l #-2,%%d4\n\t"
+        "lea 0x20(%%a0,%%a2:l:4),%%a1\n\t"
+        "move.l %%a1,%0\n\t"
+        "lea 0x30(%%a0,%%d4:w:8),%%a1\n\t"
+        "move.l %%a1,%1\n\t"
+        "move.l #0x00010002,%%d4\n\t"
+        "lea 0x30(%%a0,%%d4:w:4),%%a1\n\t"
+        "move.l %%a1,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "a1", "a2", "d4");
+    chk32(0x00070210u, got0, 0x01ffa134u);
+    chk32(0x00070214u, got1, 0x01ffa120u);
+    chk32(0x00070218u, got2, 0x01ffa138u);
+
+    __asm__ volatile(
+        "move.l %%sp,%%a2\n\t"
+        "lea 0x01ff96e0,%%sp\n\t"
+        "lea 0x01ffa200,%%a0\n\t"
+        "moveq #3,%%d4\n\t"
+        "pea 0x10(%%a0,%%d4:l:8)\n\t"
+        "move.l (%%sp),%0\n\t"
+        "lea 4(%%sp),%%sp\n\t"
+        "pea 0x10(%%a0,%%d4:l)\n\t"
+        "move.l (%%sp),%1\n\t"
+        "lea 4(%%sp),%%sp\n\t"
+        "move.l %%a2,%%sp"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a2", "d4", "memory");
+    chk32(0x00070220u, got0, 0x01ffa228u);
+    chk32(0x00070224u, got1, 0x01ffa213u);
+
+    __asm__ volatile(
+        "moveq #3,%%d4\n\t"
+        "lea 1f,%%a0\n\t"
+        "lea 1f-24(%%pc,%%d4:l:8),%%a1\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1\n\t"
+        "lea 1f-3(%%pc,%%d4:l),%%a1\n\t"
+        "move.l %%a1,%2\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "nop\n"
+        "2:"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "a1", "d4", "memory");
+    chk32(0x00070230u, got1, got0);
+    chk32(0x00070234u, got2, got0);
+
+    __asm__ volatile(
+        "moveq #2,%%d4\n\t"
+        "lea 1f,%%a0\n\t"
+        "pea 1f-8(%%pc,%%d4:l:4)\n\t"
+        "move.l (%%sp)+,%0\n\t"
+        "lea 1f-2(%%pc,%%d4:l),%%a1\n\t"
+        "move.l %%a0,%1\n\t"
+        "move.l %%a1,%2\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "nop\n"
+        "2:"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "a1", "d4", "memory");
+    chk32(0x00070240u, got0, got1);
+    chk32(0x00070244u, got2, got1);
+}
+
 static void test_an_indexed_stores(void)
 {
     wr32(SCRATCH_BASE + 0x80, 0x00000000u);
@@ -3955,6 +4054,7 @@ void kmain(void)
     test_unaligned_lanes_asm();
     test_absolute_indexed_stores();
     test_full_format_indexed_memory_ops();
+    test_indexed_ea_scale_directed();
     test_an_indexed_stores();
     test_an_post_pre_byte();
     test_movem_directed();
