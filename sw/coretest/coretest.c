@@ -4969,6 +4969,10 @@ static void test_signed_mul_div_directed(void)
     wr32(SCRATCH_BASE + 0x154, 0u);
     wr32(SCRATCH_BASE + 0x158, 0u);
     wr32(SCRATCH_BASE + 0x15c, 0u);
+    wr32(SCRATCH_BASE + 0x160, 0u);
+    wr32(SCRATCH_BASE + 0x164, 0u);
+    wr32(SCRATCH_BASE + 0x168, 0u);
+    wr32(SCRATCH_BASE + 0x16c, 0u);
     __asm__ volatile(
         "move.l #-1234,%%d0\n\t"
         "muls.w #45,%%d0\n\t"
@@ -5018,7 +5022,19 @@ static void test_signed_mul_div_directed(void)
         "divs.w #1,%%d0\n\t"
         "move.w %%sr,%%d1\n\t"
         "move.l %%d0,0x01ff9258\n\t"
-        "move.l %%d1,0x01ff925c"
+        "move.l %%d1,0x01ff925c\n\t"
+        "move.l #0x12340003,%%d0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "mulu.w #5,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ff9260\n\t"
+        "move.l %%d1,0x01ff9264\n\t"
+        "move.l #0x5678fffd,%%d0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "muls.w #7,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ff9268\n\t"
+        "move.l %%d1,0x01ff926c"
         :
         :
         : "d0", "d1", "d4", "cc", "memory");
@@ -5038,6 +5054,10 @@ static void test_signed_mul_div_directed(void)
     chk32(0x000d0044u, rd32(SCRATCH_BASE + 0x154) & 0x02u, 0x00u);
     chk32(0x000d0048u, rd32(SCRATCH_BASE + 0x158), 0xffff7fffu);
     chk32(0x000d004cu, rd32(SCRATCH_BASE + 0x15c) & 0x02u, 0x02u);
+    chk32(0x000d0050u, rd32(SCRATCH_BASE + 0x160), 0x0000000fu);
+    chk32(0x000d0054u, rd32(SCRATCH_BASE + 0x164) & 0x1fu, 0x10u);
+    chk32(0x000d0058u, rd32(SCRATCH_BASE + 0x168), 0xffffffebu);
+    chk32(0x000d005cu, rd32(SCRATCH_BASE + 0x16c) & 0x1fu, 0x18u);
 }
 
 static void test_mul_div_memory_directed(void)
