@@ -728,6 +728,46 @@ static void test_full_format_indexed_memory_ops(void)
     chk32(0x0007029cu, rd32(FULLFMT_TEST_BASE + 0x348u), 0u);
     chk32(0x000702a0u, rd32(FULLFMT_TEST_BASE + 0x370u), 0u);
     chk32(0x000702a4u, rd32(FULLFMT_TEST_BASE + 0x378u), 0u);
+
+    wr32(FULLFMT_TEST_BASE + 0x390u, FULLFMT_TEST_BASE + 0x3a0u);
+    wr32(FULLFMT_TEST_BASE + 0x3a0u, 0x11223344u);
+    wr32(FULLFMT_TEST_BASE + 0x394u, FULLFMT_TEST_BASE + 0x3b0u);
+    wr32(FULLFMT_TEST_BASE + 0x3bcu, 0u);
+    wr32(FULLFMT_TEST_BASE + 0x398u, FULLFMT_TEST_BASE + 0x3c0u);
+    wr32(FULLFMT_TEST_BASE + 0x3c4u, 0x00007fffu);
+    wr32(FULLFMT_TEST_BASE + 0x3a4u, FULLFMT_TEST_BASE + 0x3d8u);
+    wr32(FULLFMT_TEST_BASE + 0x3d8u, 0x0f0f00f0u);
+    wr32(FULLFMT_TEST_BASE + 0x3e0u, 0u);
+    wr32(FULLFMT_TEST_BASE + 0x3e4u, 0u);
+    __asm__ volatile(
+        "lea 0x01ff9f00,%%a0\n\t"
+        "moveq #8,%%d4\n\t"
+        "moveq #0,%%d0\n\t"
+        "move.w ([0x380,%%a0,%%d4:l:2],0x02),%%d0\n\t"
+        "moveq #3,%%d4\n\t"
+        "move.l #0x55667788,%%d1\n\t"
+        "move.l %%d1,([0x394,%%a0],%%d4:l:4,0x00)\n\t"
+        "moveq #2,%%d4\n\t"
+        "moveq #1,%%d1\n\t"
+        "move.w #0,%%ccr\n\t"
+        "add.w %%d1,([0x398,%%a0],%%d4:l:2,0x02)\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d2,0x01ffa2e0\n\t"
+        "moveq #4,%%d4\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "not.l ([0x39c,%%a0,%%d4:l:2])\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d2,0x01ffa2e4\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got)
+        :
+        : "a0", "d0", "d1", "d2", "d4", "cc", "memory");
+    chk32(0x000702b0u, got, 0x3344u);
+    chk32(0x000702b4u, rd32(FULLFMT_TEST_BASE + 0x3bcu), 0x55667788u);
+    chk32(0x000702b8u, rd32(FULLFMT_TEST_BASE + 0x3c4u), 0x00008000u);
+    chk32(0x000702bcu, rd32(FULLFMT_TEST_BASE + 0x3d8u), 0xf0f0ff0fu);
+    chk32(0x000702c0u, rd32(FULLFMT_TEST_BASE + 0x3e0u) & 0x1fu, 0x0au);
+    chk32(0x000702c4u, rd32(FULLFMT_TEST_BASE + 0x3e4u) & 0x1fu, 0x18u);
 }
 
 static void test_indexed_ea_scale_directed(void)
