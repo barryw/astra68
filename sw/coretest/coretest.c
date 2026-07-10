@@ -2512,6 +2512,52 @@ static void test_cas2_directed(void)
     chk32(0x000a0378u, rd32(CAS2_TEST_BASE + 0x50u), 0x03030303u);
     chk32(0x000a037cu, rd32(CAS2_TEST_BASE + 0x54u), 0x04040404u);
     chk32(0x000a0380u, got & 0x04u, 0x00u);
+
+    wr32(CAS2_TEST_BASE + 0x60u, 0x11112222u);
+    wr32(CAS2_TEST_BASE + 0x64u, 0x33334444u);
+    __asm__ volatile(
+        "lea 0x01ff98a0,%%a0\n\t"
+        "lea 0x01ff98a4,%%a1\n\t"
+        "move.l #0xffff1111,%%d0\n\t"
+        "move.l #0xeeeeaaaa,%%d1\n\t"
+        "move.l #0xdddd3333,%%d2\n\t"
+        "move.l #0xccccbbbb,%%d3\n\t"
+        "move.w #0,%%ccr\n\t"
+        "cas2.w %%d0:%%d2,%%d1:%%d3,(%%a0):(%%a1)\n\t"
+        "move.w %%sr,%%d4\n\t"
+        "move.l %%d4,%0"
+        : "=&d"(got)
+        :
+        : "a0", "a1", "d0", "d1", "d2", "d3", "d4", "cc", "memory");
+    chk32(0x000a0390u, rd32(CAS2_TEST_BASE + 0x60u), 0xaaaa2222u);
+    chk32(0x000a0394u, rd32(CAS2_TEST_BASE + 0x64u), 0xbbbb4444u);
+    chk32(0x000a0398u, got & 0x1fu, 0x04u);
+
+    wr32(CAS2_TEST_BASE + 0x70u, 0x12345678u);
+    wr32(CAS2_TEST_BASE + 0x74u, 0x9abcdef0u);
+    wr32(CAS2_TEST_BASE + 0x78u, 0u);
+    wr32(CAS2_TEST_BASE + 0x7cu, 0u);
+    __asm__ volatile(
+        "lea 0x01ff98b0,%%a0\n\t"
+        "lea 0x01ff98b4,%%a1\n\t"
+        "move.l #0xaaaa1111,%%d0\n\t"
+        "move.l #0x1111aaaa,%%d1\n\t"
+        "move.l #0xbbbb2222,%%d2\n\t"
+        "move.l #0x2222bbbb,%%d3\n\t"
+        "move.w #4,%%ccr\n\t"
+        "cas2.w %%d0:%%d2,%%d1:%%d3,(%%a0):(%%a1)\n\t"
+        "move.w %%sr,%%d4\n\t"
+        "move.l %%d0,0x01ff98b8\n\t"
+        "move.l %%d2,0x01ff98bc\n\t"
+        "move.l %%d4,%0"
+        : "=&d"(got)
+        :
+        : "a0", "a1", "d0", "d1", "d2", "d3", "d4", "cc", "memory");
+    chk32(0x000a03a0u, rd32(CAS2_TEST_BASE + 0x70u), 0x12345678u);
+    chk32(0x000a03a4u, rd32(CAS2_TEST_BASE + 0x74u), 0x9abcdef0u);
+    chk16(0x000a03a8u, rd32(CAS2_TEST_BASE + 0x78u), 0x1234u);
+    chk16(0x000a03acu, rd32(CAS2_TEST_BASE + 0x7cu), 0x9abcu);
+    chk32(0x000a03b0u, got & 0x04u, 0x00u);
 }
 
 static void test_return_control_directed(void)
