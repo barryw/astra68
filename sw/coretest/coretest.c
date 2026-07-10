@@ -1908,6 +1908,65 @@ static void test_unary_logic_directed(void)
     chk32(0x00094078u, got2 & 0xff00u, 0x2700u);
 
     __asm__ volatile(
+        "move.l #0x0f0f0f0f,%%d0\n\t"
+        "move.l #0xf0f0f0f0,%%d1\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "eor.l %%d0,%%d1\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.l %%d2,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "d0", "d1", "d2", "cc");
+    chk32(0x00094080u, got0, 0x0f0f0f0fu);
+    chk32(0x00094084u, got1, 0xffffffffu);
+    chk32(0x00094088u, got2 & 0x1fu, 0x18u);
+
+    __asm__ volatile(
+        "move.l #0x000000aa,%%d0\n\t"
+        "move.l #0x123456aa,%%d1\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "eor.b %%d0,%%d1\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d1,%0\n\t"
+        "move.l %%d2,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1", "d2", "cc");
+    chk32(0x0009408cu, got0, 0x12345600u);
+    chk32(0x00094090u, got1 & 0x1fu, 0x14u);
+
+    wr32(UNARY_TEST_BASE + 0x14u, 0x123455aau);
+    __asm__ volatile(
+        "move.l #0x0000ff00,%%d0\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "eor.w %%d0,0x01ffa516\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,%0"
+        : "=&d"(got0)
+        :
+        : "d0", "d1", "cc", "memory");
+    chk32(0x00094094u, rd32(UNARY_TEST_BASE + 0x14u), 0x1234aaaau);
+    chk32(0x00094098u, got0 & 0x1fu, 0x18u);
+
+    *(volatile uint8_t *)(UNARY_TEST_BASE + 0x21u) = 0xf0u;
+    __asm__ volatile(
+        "lea 0x01ffa521,%%a0\n\t"
+        "moveq #0x0f,%%d0\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "eor.b %%d0,(%%a0)+\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%d1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "d0", "d1", "cc", "memory");
+    chk32(0x0009409cu, got0, UNARY_TEST_BASE + 0x22u);
+    chk8(0x000940a0u, rd8(UNARY_TEST_BASE + 0x21u), 0xffu);
+    chk32(0x000940a4u, got1 & 0x1fu, 0x18u);
+
+    __asm__ volatile(
         "move.w #0x2700,%%sr\n\t"
         "ori.w #0x0015,%%sr\n\t"
         "move.w %%sr,%%d0\n\t"
