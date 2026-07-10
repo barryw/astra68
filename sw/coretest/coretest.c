@@ -4228,6 +4228,7 @@ static void test_chk_directed(void)
         :
         : "a0", "d0", "cc", "memory");
     chk_exception_frame(0x00120120u, 0x0018u, 0x2000u, 0x2000u, 0x2000u);
+    chk_exception_pc(0x00120138u, rd32(EXC_RECOVERY_PC));
 
     arm_exception_recovery(0x0018u);
     __asm__ volatile(
@@ -4240,6 +4241,7 @@ static void test_chk_directed(void)
         :
         : "a0", "d0", "cc", "memory");
     chk_exception_frame(0x00120140u, 0x0018u, 0x2000u, 0x2000u, 0x2000u);
+    chk_exception_pc(0x00120158u, rd32(EXC_RECOVERY_PC));
 
     wr32(CHK_TEST_BASE + 0x10u, 0x00010000u);
     got = 0u;
@@ -4265,6 +4267,7 @@ static void test_chk_directed(void)
         :
         : "a0", "d0", "cc", "memory");
     chk_exception_frame(0x00120180u, 0x0018u, 0x2000u, 0x2000u, 0x2000u);
+    chk_exception_pc(0x00120198u, rd32(EXC_RECOVERY_PC));
 
     arm_exception_recovery(0x0018u);
     __asm__ volatile(
@@ -4277,6 +4280,7 @@ static void test_chk_directed(void)
         :
         : "a0", "d0", "cc", "memory");
     chk_exception_frame(0x001201a0u, 0x0018u, 0x2000u, 0x2000u, 0x2000u);
+    chk_exception_pc(0x001201b8u, rd32(EXC_RECOVERY_PC));
 }
 
 static void test_cas2_directed(void)
@@ -4990,8 +4994,11 @@ static void test_exception_recovery_directed(void)
     __asm__ volatile(
         "move.l #0x01ff9500,%%d0\n\t"
         "movec %%d0,%%vbr\n\t"
+        "lea 2f,%%a0\n\t"
+        "move.l %%a0,0x01ff92a0\n\t"
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
+        "2:\n\t"
         ".word 0x4afc\n"
         "1:\n\t"
         "moveq #0,%%d0\n\t"
@@ -5000,28 +5007,37 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "d0", "memory");
     chk_exception_frame(0x00100000u, 0x0010u, 0x0000u, 0x2000u, 0x2000u);
+    chk_exception_pc(0x00100800u, rd32(EXC_EXPECTED_ADDR));
 
     arm_exception_recovery(0x0010u);
     __asm__ volatile(
+        "lea 2f,%%a0\n\t"
+        "move.l %%a0,0x01ff92a0\n\t"
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
+        "2:\n\t"
         ".word 0x4afc\n"
         "1:"
         :
         :
         : "a0", "memory");
     chk_exception_frame(0x00100020u, 0x0010u, 0x0000u, 0x2000u, 0x2000u);
+    chk_exception_pc(0x00100804u, rd32(EXC_EXPECTED_ADDR));
 
     arm_exception_recovery(0x0010u);
     __asm__ volatile(
+        "lea 2f,%%a0\n\t"
+        "move.l %%a0,0x01ff92a0\n\t"
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
+        "2:\n\t"
         ".word 0x4848\n"
         "1:"
         :
         :
         : "a0", "memory");
     chk_exception_frame(0x00100030u, 0x0010u, 0x0000u, 0x2000u, 0x2000u);
+    chk_exception_pc(0x00100808u, rd32(EXC_EXPECTED_ADDR));
 
     arm_exception_recovery(0x0010u);
     __asm__ volatile(
@@ -5107,6 +5123,7 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "d0", "cc", "memory");
     chk_exception_frame(0x00100060u, 0x0018u, 0x2000u, 0x2000u, 0x2000u);
+    chk_exception_pc(0x00100814u, rd32(EXC_RECOVERY_PC));
 
     arm_exception_recovery(0x001cu);
     __asm__ volatile(
@@ -5295,30 +5312,41 @@ static void test_exception_recovery_directed(void)
 
     arm_exception_recovery(0x0028u);
     __asm__ volatile(
+        "lea 2f,%%a0\n\t"
+        "move.l %%a0,0x01ff92a0\n\t"
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
+        "2:\n\t"
         ".word 0xa000\n"
         "1:"
         :
         :
         : "a0", "memory");
     chk_exception_frame(0x001000e0u, 0x0028u, 0x0000u, 0x2000u, 0x2000u);
+    chk_exception_pc(0x0010080cu, rd32(EXC_EXPECTED_ADDR));
 
     arm_exception_recovery(0x002cu);
     __asm__ volatile(
+        "lea 2f,%%a0\n\t"
+        "move.l %%a0,0x01ff92a0\n\t"
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
+        "2:\n\t"
         ".word 0xf000\n"
         "1:"
         :
         :
         : "a0", "memory");
     chk_exception_frame(0x00100100u, 0x002cu, 0x0000u, 0x2000u, 0x2000u);
+    chk_exception_pc(0x00100810u, rd32(EXC_EXPECTED_ADDR));
 
     arm_exception_recovery(0x0010u);
     __asm__ volatile(
+        "lea 2f,%%a0\n\t"
+        "move.l %%a0,0x01ff92a0\n\t"
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
+        "2:\n\t"
         ".word 0xefc8\n\t" /* BFINS with invalid address-register direct EA. */
         ".word 0x0001\n"
         "1:"
@@ -5326,12 +5354,16 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "memory");
     chk_exception_frame(0x00100320u, 0x0010u, 0x0000u, 0x2000u, 0x2000u);
+    chk_exception_pc(0x00100338u, rd32(EXC_EXPECTED_ADDR));
 
     arm_exception_recovery(0x0010u);
     __asm__ volatile(
+        "lea 2f,%%a0\n\t"
+        "move.l %%a0,0x01ff92a0\n\t"
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
         "lea 0x01ff9100,%%a1\n\t"
+        "2:\n\t"
         ".word 0xeed9\n\t" /* BFSET with invalid postincrement EA. */
         ".word 0x0001\n"
         "1:"
@@ -5339,13 +5371,17 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "a1", "memory");
     chk_exception_frame(0x00100340u, 0x0010u, 0x0000u, 0x2000u, 0x2000u);
+    chk_exception_pc(0x00100358u, rd32(EXC_EXPECTED_ADDR));
 
 #define EXPECT_ILLEGAL_BF_OP(ID, OPWORD) \
     do { \
         arm_exception_recovery(0x0010u); \
         __asm__ volatile( \
+            "lea 2f,%%a0\n\t" \
+            "move.l %%a0,0x01ff92a0\n\t" \
             "lea 1f,%%a0\n\t" \
             "move.l %%a0,0x01ff9284\n\t" \
+            "2:\n\t" \
             ".word " #OPWORD "\n\t" \
             ".word 0x0001\n" \
             "1:" \
@@ -5353,6 +5389,7 @@ static void test_exception_recovery_directed(void)
             : \
             : "a0", "memory"); \
         chk_exception_frame((ID), 0x0010u, 0x0000u, 0x2000u, 0x2000u); \
+        chk_exception_pc((ID) + 0x18u, rd32(EXC_EXPECTED_ADDR)); \
     } while (0)
 
     EXPECT_ILLEGAL_BF_OP(0x00100360u, 0xeac8); /* BFCHG invalid address-register direct EA. */
