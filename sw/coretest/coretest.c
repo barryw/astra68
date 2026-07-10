@@ -752,6 +752,55 @@ static void test_stack_frame_control_directed(void)
         : "a2", "memory");
     chk32(0x00091030u, got0, STACK_TEST_BASE + 0x40u);
     chk32(0x00091034u, got1, STACK_TEST_BASE + 0x38u);
+
+    __asm__ volatile(
+        "move.l #0x11112222,%%d0\n\t"
+        "move.l #0x33334444,%%d1\n\t"
+        "exg %%d0,%%d1\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1");
+    chk32(0x00091040u, got0, 0x33334444u);
+    chk32(0x00091044u, got1, 0x11112222u);
+
+    __asm__ volatile(
+        "lea 0x01ff9760,%%a0\n\t"
+        "lea 0x01ff9780,%%a1\n\t"
+        "exg %%a0,%%a1\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1");
+    chk32(0x00091048u, got0, STACK_TEST_BASE + 0x80u);
+    chk32(0x0009104cu, got1, STACK_TEST_BASE + 0x60u);
+
+    __asm__ volatile(
+        "move.l #0x01ff97a0,%%d0\n\t"
+        "lea 0x01ff97c0,%%a0\n\t"
+        "exg %%d0,%%a0\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%a0,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "d0");
+    chk32(0x00091050u, got0, STACK_TEST_BASE + 0xc0u);
+    chk32(0x00091054u, got1, STACK_TEST_BASE + 0xa0u);
+
+    __asm__ volatile(
+        "move.l %%sp,%0\n\t"
+        "lea 0x01ff9760,%%a0\n\t"
+        "exg %%a0,%%sp\n\t"
+        "move.l %%sp,%1\n\t"
+        "move.l %%a0,%2\n\t"
+        "move.l %%a0,%%sp"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "memory");
+    chk32(0x00091058u, got1, STACK_TEST_BASE + 0x60u);
+    chk32(0x0009105cu, got2, got0);
 }
 
 static void test_system_control_directed(void)
