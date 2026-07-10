@@ -2147,6 +2147,34 @@ static void test_immediate_alu_directed(void)
     chk32(0x00095060u, got0, IMM_TEST_BASE + 0x54u);
     chk32(0x00095064u, rd32(IMM_TEST_BASE + 0x50u), 0x00000008u);
     chk32(0x00095068u, got1 & 0x1fu, 0x00u);
+
+    for (uint32_t off = 0x60u; off <= 0x70u; off += 4u) {
+        wr32(IMM_TEST_BASE + off, 0u);
+    }
+    __asm__ volatile(
+        "move.l #0x11111111,%%d0\n\t"
+        "addi.l #0x22222222,%%d0\n\t"
+        "move.l %%d0,0x01ffa660\n\t"
+        "move.l #0x12340000,%%d1\n\t"
+        "subi.w #1,%%d1\n\t"
+        "move.l %%d1,0x01ffa664\n\t"
+        "move.l #0xaaaa12f5,%%d2\n\t"
+        "andi.b #0x0f,%%d2\n\t"
+        "move.l %%d2,0x01ffa668\n\t"
+        "move.l #0x5555500f,%%d3\n\t"
+        "ori.w #0x0f00,%%d3\n\t"
+        "move.l %%d3,0x01ffa66c\n\t"
+        "move.l #0x0f0f0f0f,%%d4\n\t"
+        "eori.l #0xffffffff,%%d4\n\t"
+        "move.l %%d4,0x01ffa670"
+        :
+        :
+        : "d0", "d1", "d2", "d3", "d4", "cc", "memory");
+    chk32(0x0009506cu, rd32(IMM_TEST_BASE + 0x60u), 0x33333333u);
+    chk32(0x00095070u, rd32(IMM_TEST_BASE + 0x64u), 0x1234ffffu);
+    chk32(0x00095074u, rd32(IMM_TEST_BASE + 0x68u), 0xaaaa1205u);
+    chk32(0x00095078u, rd32(IMM_TEST_BASE + 0x6cu), 0x55555f0fu);
+    chk32(0x0009507cu, rd32(IMM_TEST_BASE + 0x70u), 0xf0f0f0f0u);
 }
 
 static void test_addx_subx_cmpm_memory_directed(void)
