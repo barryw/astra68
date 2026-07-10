@@ -405,6 +405,30 @@ static void test_absolute_indexed_stores(void)
     chk32(0x0004008cu, rd32(SCRATCH_BASE + 0x10c), 0x10203040u);
     chk32(0x00040090u, rd32(SCRATCH_BASE + 0x110), 0xb0b1b2b3u);
     chk32(0x00040094u, rd32(SCRATCH_BASE + 0x114), 0x90a0b0c0u);
+
+    wr32(SCRATCH_BASE + 0x120, 0x01020304u);
+    wr32(SCRATCH_BASE + 0x128, 0x00000000u);
+    __asm__ volatile(
+        "move.l #0x7fff0002,%%d4\n\t"
+        "move.b #0xb4,0x01ff9220(%%d4:w:4)"
+        :
+        :
+        : "d4", "memory");
+    chk32(0x00040098u, rd32(SCRATCH_BASE + 0x120), 0x01020304u);
+    chk32(0x0004009cu, rd32(SCRATCH_BASE + 0x128), 0xb4000000u);
+
+    wr32(SCRATCH_BASE + 0x130, 0x00000000u);
+    wr32(SCRATCH_BASE + 0x134, 0x00000000u);
+    wr32(SCRATCH_BASE + 0x138, 0x00000000u);
+    __asm__ volatile(
+        "move.l #0x0000ffff,%%d4\n\t"
+        "move.b #0xb5,0x01ff923c(%%d4:w:8)"
+        :
+        :
+        : "d4", "memory");
+    chk32(0x000400a0u, rd32(SCRATCH_BASE + 0x130), 0u);
+    chk32(0x000400a4u, rd32(SCRATCH_BASE + 0x134), 0xb5000000u);
+    chk32(0x000400a8u, rd32(SCRATCH_BASE + 0x138), 0u);
 }
 
 static void test_full_format_indexed_memory_ops(void)
