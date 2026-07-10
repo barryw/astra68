@@ -992,6 +992,7 @@ static void test_moves_directed(void)
 {
     uint32_t got0;
     uint32_t got1;
+    uint32_t got2;
 
     wr32(MOVES_TEST_BASE + 0x00u, 0u);
     wr32(MOVES_TEST_BASE + 0x04u, 0u);
@@ -1017,6 +1018,51 @@ static void test_moves_directed(void)
     chk32(0x000a0104u, got0, 0xa5a55a5au);
     chk32(0x000a0108u, rd32(MOVES_TEST_BASE + 0x04u), 0x01020304u);
     chk32(0x000a010cu, got1, 0x01020304u);
+
+    wr32(MOVES_TEST_BASE + 0x10u, 0u);
+    __asm__ volatile(
+        "moveq #1,%%d2\n\t"
+        "movec %%d2,%%sfc\n\t"
+        "movec %%d2,%%dfc\n\t"
+        "lea 0x01ff9811,%%a0\n\t"
+        "moveq #0,%%d0\n\t"
+        "move.b #0xa5,%%d0\n\t"
+        "moves.b %%d0,(%%a0)+\n\t"
+        "move.l %%a0,%0\n\t"
+        "subq.l #1,%%a0\n\t"
+        "moveq #0,%%d1\n\t"
+        "moves.b (%%a0)+,%%d1\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.l %%a0,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "d0", "d1", "d2", "memory");
+    chk32(0x000a0120u, rd32(MOVES_TEST_BASE + 0x10u), 0x00a50000u);
+    chk32(0x000a0124u, got0, MOVES_TEST_BASE + 0x12u);
+    chk32(0x000a0128u, got1, 0x000000a5u);
+    chk32(0x000a012cu, got2, MOVES_TEST_BASE + 0x12u);
+
+    wr32(MOVES_TEST_BASE + 0x20u, 0u);
+    __asm__ volatile(
+        "moveq #1,%%d2\n\t"
+        "movec %%d2,%%sfc\n\t"
+        "movec %%d2,%%dfc\n\t"
+        "lea 0x01ff9822,%%a0\n\t"
+        "move.w #0xb6c7,%%d0\n\t"
+        "moves.w %%d0,-(%%a0)\n\t"
+        "move.l %%a0,%0\n\t"
+        "lea 0x01ff9820,%%a1\n\t"
+        "moveq #0,%%d1\n\t"
+        "moves.w (%%a1)+,%%d1\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.l %%a1,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "a1", "d0", "d1", "d2", "memory");
+    chk32(0x000a0130u, rd32(MOVES_TEST_BASE + 0x20u), 0xb6c70000u);
+    chk32(0x000a0134u, got0, MOVES_TEST_BASE + 0x20u);
+    chk32(0x000a0138u, got1, 0x0000b6c7u);
+    chk32(0x000a013cu, got2, MOVES_TEST_BASE + 0x22u);
 }
 
 static void test_cmp2_chk2_directed(void)
