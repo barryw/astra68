@@ -3809,6 +3809,71 @@ static void test_alu_shift_bitfield_bcd_directed(void)
     chk16(0x000b0170u, rd16(SHIFT_TEST_BASE + 0x0eu), 0x8001u);
     chk32(0x000b0174u, got & 0x1fu, 0x09u);
 
+    for (uint32_t off = 0x20u; off < 0x60u; off += 4u) {
+        wr32(SHIFT_TEST_BASE + off, 0u);
+    }
+    __asm__ volatile(
+        "move.l #0x40000000,%%d0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "asl.l #1,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa020\n\t"
+        "move.l %%d1,0x01ffa024\n\t"
+        "move.l #0x12345681,%%d0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "lsl.b #1,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa028\n\t"
+        "move.l %%d1,0x01ffa02c\n\t"
+        "move.l #0x80000000,%%d0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "asr.l #4,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa030\n\t"
+        "move.l %%d1,0x01ffa034\n\t"
+        "move.l #0x12345678,%%d0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "rol.l #8,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa038\n\t"
+        "move.l %%d1,0x01ffa03c\n\t"
+        "move.l #0x80000000,%%d0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "roxl.l #1,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa040\n\t"
+        "move.l %%d1,0x01ffa044\n\t"
+        "move.l #0x00000001,%%d0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "roxr.l #1,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa048\n\t"
+        "move.l %%d1,0x01ffa04c\n\t"
+        "move.l #0x000000f0,%%d0\n\t"
+        "moveq #4,%%d2\n\t"
+        "move.w #0,%%ccr\n\t"
+        "lsr.w %%d2,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa050\n\t"
+        "move.l %%d1,0x01ffa054"
+        :
+        :
+        : "d0", "d1", "d2", "cc", "memory");
+    chk32(0x000b0180u, rd32(SHIFT_TEST_BASE + 0x20u), 0x80000000u);
+    chk32(0x000b0184u, rd32(SHIFT_TEST_BASE + 0x24u) & 0x1fu, 0x0au);
+    chk32(0x000b0188u, rd32(SHIFT_TEST_BASE + 0x28u), 0x12345602u);
+    chk32(0x000b018cu, rd32(SHIFT_TEST_BASE + 0x2cu) & 0x1fu, 0x11u);
+    chk32(0x000b0190u, rd32(SHIFT_TEST_BASE + 0x30u), 0xf8000000u);
+    chk32(0x000b0194u, rd32(SHIFT_TEST_BASE + 0x34u) & 0x1fu, 0x08u);
+    chk32(0x000b0198u, rd32(SHIFT_TEST_BASE + 0x38u), 0x34567812u);
+    chk32(0x000b019cu, rd32(SHIFT_TEST_BASE + 0x3cu) & 0x1fu, 0x10u);
+    chk32(0x000b01a0u, rd32(SHIFT_TEST_BASE + 0x40u), 0x00000001u);
+    chk32(0x000b01a4u, rd32(SHIFT_TEST_BASE + 0x44u) & 0x1fu, 0x11u);
+    chk32(0x000b01a8u, rd32(SHIFT_TEST_BASE + 0x48u), 0x80000000u);
+    chk32(0x000b01acu, rd32(SHIFT_TEST_BASE + 0x4cu) & 0x1fu, 0x19u);
+    chk32(0x000b01b0u, rd32(SHIFT_TEST_BASE + 0x50u), 0x0000000fu);
+    chk32(0x000b01b4u, rd32(SHIFT_TEST_BASE + 0x54u) & 0x1fu, 0x00u);
+
     wr32(SCRATCH_BASE + 0xe0, 0u);
     wr32(SCRATCH_BASE + 0xe4, 0u);
     __asm__ volatile(
