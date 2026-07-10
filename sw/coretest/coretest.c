@@ -888,6 +888,48 @@ static void test_stack_frame_control_directed(void)
     chk32(0x00091034u, got1, STACK_TEST_BASE + 0x38u);
 
     __asm__ volatile(
+        "move.l %%sp,%%a2\n\t"
+        "lea 0x01ff97e0,%%sp\n\t"
+        "movea.l #0x2468ace0,%%a4\n\t"
+        "link.l %%a4,#-32\n\t"
+        "move.l (%%a4),%0\n\t"
+        "move.l %%a4,%1\n\t"
+        "move.l %%sp,%2\n\t"
+        "unlk %%a4\n\t"
+        "move.l %%a4,%3\n\t"
+        "move.l %%sp,%4\n\t"
+        "move.l %%a2,%%sp"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2), "=&d"(got3), "=&d"(got4)
+        :
+        : "a2", "a4", "memory");
+    chk32(0x00091070u, got0, 0x2468ace0u);
+    chk32(0x00091074u, got1, STACK_TEST_BASE + 0xdcu);
+    chk32(0x00091078u, got2, STACK_TEST_BASE + 0xbcu);
+    chk32(0x0009107cu, got3, 0x2468ace0u);
+    chk32(0x00091080u, got4, STACK_TEST_BASE + 0xe0u);
+
+    __asm__ volatile(
+        "move.l %%sp,%%a2\n\t"
+        "lea 0x01ff97f0,%%sp\n\t"
+        "movea.l #0x01020304,%%a5\n\t"
+        "link.l %%a5,#0x1234\n\t"
+        "move.l (%%a5),%0\n\t"
+        "move.l %%a5,%1\n\t"
+        "move.l %%sp,%2\n\t"
+        "unlk %%a5\n\t"
+        "move.l %%a5,%3\n\t"
+        "move.l %%sp,%4\n\t"
+        "move.l %%a2,%%sp"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2), "=&d"(got3), "=&d"(got4)
+        :
+        : "a2", "a5", "memory");
+    chk32(0x00091090u, got0, 0x01020304u);
+    chk32(0x00091094u, got1, STACK_TEST_BASE + 0xecu);
+    chk32(0x00091098u, got2, STACK_TEST_BASE + 0x1320u);
+    chk32(0x0009109cu, got3, 0x01020304u);
+    chk32(0x000910a0u, got4, STACK_TEST_BASE + 0xf0u);
+
+    __asm__ volatile(
         "move.l #0x11112222,%%d0\n\t"
         "move.l #0x33334444,%%d1\n\t"
         "exg %%d0,%%d1\n\t"
