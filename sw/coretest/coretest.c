@@ -2858,6 +2858,7 @@ static void test_exception_recovery_directed(void)
         __asm__ volatile( \
             "lea 1f,%%a0\n\t" \
             "move.l %%a0,0x01ff9284\n\t" \
+            "moveq #0,%%d0\n\t" \
             "move.w #0x0015,%%sr\n\t" \
             OPASM \
             "1:" \
@@ -2869,6 +2870,10 @@ static void test_exception_recovery_directed(void)
 
     EXPECT_PRIV_OP(0x00100180u, "move.w %%sr,%%d0\n\t");
     EXPECT_PRIV_OP(0x001001a0u, "movec %%vbr,%%d0\n\t");
+    EXPECT_PRIV_OP(0x00100440u, "movec %%msp,%%d0\n\t");
+    EXPECT_PRIV_OP(0x00100460u, "movec %%isp,%%d0\n\t");
+    EXPECT_PRIV_OP(0x00100480u, "movec %%d0,%%msp\n\t");
+    EXPECT_PRIV_OP(0x001004a0u, "movec %%d0,%%isp\n\t");
     EXPECT_PRIV_OP(0x001001c0u, "lea 0x01ff9e40,%%a1\n\tmove.l %%a1,%%usp\n\t");
     EXPECT_PRIV_OP(0x001001e0u, "reset\n\t");
     EXPECT_PRIV_OP(0x00100200u, "stop #0x2000\n\t");
