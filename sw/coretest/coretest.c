@@ -2750,6 +2750,32 @@ static void test_exception_recovery_directed(void)
         : "a0", "d0", "cc", "memory");
     chk_exception_frame(0x00100040u, 0x0014u, 0x2000u, 0x2000u, 0x2000u);
 
+    arm_exception_recovery(0x0014u);
+    __asm__ volatile(
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.l #1234,%%d0\n\t"
+        "moveq #0,%%d1\n\t"
+        "divu.l %%d1,%%d0\n"
+        "1:"
+        :
+        :
+        : "a0", "d0", "d1", "cc", "memory");
+    chk_exception_frame(0x001004c0u, 0x0014u, 0x2000u, 0x2000u, 0x2000u);
+
+    arm_exception_recovery(0x0014u);
+    __asm__ volatile(
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.l #-1234,%%d0\n\t"
+        "moveq #0,%%d1\n\t"
+        "divs.l %%d1,%%d0\n"
+        "1:"
+        :
+        :
+        : "a0", "d0", "d1", "cc", "memory");
+    chk_exception_frame(0x001004e0u, 0x0014u, 0x2000u, 0x2000u, 0x2000u);
+
     *(volatile uint16_t *)(SCRATCH_BASE + 0x1a0u) = 4u;
     arm_exception_recovery(0x0018u);
     __asm__ volatile(
