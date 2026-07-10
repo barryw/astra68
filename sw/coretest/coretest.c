@@ -4214,6 +4214,28 @@ static void test_moves_directed(void)
         : "a0", "d0", "d2", "d3", "cc", "memory");
     chk32(0x00160000u, got0, 0x13579bdfu);
     chk32(0x00160004u, rd32(MOVES_FC_TEST_BASE + 0x04u), 0x13579bdfu);
+
+    wr32(MOVES_FC_TEST_BASE + 0x00u, 0x2468ace0u);
+    __asm__ volatile(
+        "moveq #2,%%d2\n\t"
+        "movec %%d2,%%sfc\n\t"
+        "moveq #1,%%d3\n\t"
+        "movec %%d3,%%dfc\n\t"
+        "lea 0x01ffacf0,%%a0\n\t"
+        "moveq #0x10,%%d4\n\t"
+        "moveq #0,%%d0\n\t"
+        "moves.l 0(%%a0,%%d4:l),%%d0\n\t"
+        "movea.l #0x14,%%a1\n\t"
+        "moves.l %%d0,0(%%a0,%%a1:l)\n\t"
+        "moveq #1,%%d2\n\t"
+        "movec %%d2,%%sfc\n\t"
+        "movec %%d2,%%dfc\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got0)
+        :
+        : "a0", "a1", "d0", "d2", "d3", "d4", "cc", "memory");
+    chk32(0x00160008u, got0, 0x2468ace0u);
+    chk32(0x0016000cu, rd32(MOVES_FC_TEST_BASE + 0x04u), 0x2468ace0u);
 }
 
 static void test_cmp2_chk2_directed(void)
