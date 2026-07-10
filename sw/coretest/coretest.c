@@ -4892,6 +4892,7 @@ static void test_memory_bitfield_extended_directed(void)
 static void test_movep_tas_cas_directed(void)
 {
     uint32_t got;
+    uint32_t got_addr;
 
     wr32(SCRATCH_BASE + 0x140, 0u);
     wr32(SCRATCH_BASE + 0x144, 0u);
@@ -4935,6 +4936,34 @@ static void test_movep_tas_cas_directed(void)
         : "d0", "cc", "memory");
     chk8(0x000f0012u, rd8(SCRATCH_BASE + 0x150), 0x80u);
     chk32(0x000f0013u, got & 0x1fu, 0x04u);
+
+    __asm__ volatile(
+        "move.l #0x12345600,%%d0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "tas %%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ff9254\n\t"
+        "move.l %%d1,%0"
+        : "=d"(got)
+        :
+        : "d0", "d1", "cc", "memory");
+    chk32(0x000f0014u, rd32(SCRATCH_BASE + 0x154), 0x12345680u);
+    chk32(0x000f0018u, got & 0x1fu, 0x04u);
+
+    wr32(SCRATCH_BASE + 0x154, 0u);
+    __asm__ volatile(
+        "lea 0x01ff9254,%%a0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "tas.b (%%a0)+\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%d0,%1"
+        : "=&d"(got_addr), "=&d"(got)
+        :
+        : "a0", "d0", "cc", "memory");
+    chk32(0x000f001au, rd32(SCRATCH_BASE + 0x154), 0x80000000u);
+    chk32(0x000f001cu, got_addr, SCRATCH_BASE + 0x155u);
+    chk32(0x000f001eu, got & 0x1fu, 0x04u);
 
     wr32(SCRATCH_BASE + 0x160, 0x11111111u);
     wr32(SCRATCH_BASE + 0x168, 0u);
