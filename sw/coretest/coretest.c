@@ -934,6 +934,24 @@ static void test_system_control_directed(void)
     chk32(0x000a0011u, got, 0u);
 
     __asm__ volatile(
+        "moveq #5,%%d0\n\t"
+        "movec %%d0,%%sfc\n\t"
+        "moveq #6,%%d1\n\t"
+        "movec %%d1,%%dfc\n\t"
+        "movec %%sfc,%%d2\n\t"
+        "movec %%dfc,%%d3\n\t"
+        "move.l %%d2,%0\n\t"
+        "move.l %%d3,%1\n\t"
+        "moveq #1,%%d0\n\t"
+        "movec %%d0,%%sfc\n\t"
+        "movec %%d0,%%dfc"
+        : "=&d"(got), "=&d"(got_sp0)
+        :
+        : "d0", "d1", "d2", "d3");
+    chk32(0x000a0014u, got, 5u);
+    chk32(0x000a0016u, got_sp0, 6u);
+
+    __asm__ volatile(
         "move.l %%sp,%0\n\t"
         "lea 0x01ff9e00,%%a0\n\t"
         "move.l %%a0,%%usp\n\t"
