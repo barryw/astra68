@@ -4472,6 +4472,7 @@ static void test_return_control_directed(void)
 {
     uint32_t got0;
     uint32_t got1;
+    uint32_t got2;
 
     __asm__ volatile(
         "move.l %%sp,%%a2\n\t"
@@ -4545,6 +4546,64 @@ static void test_return_control_directed(void)
         : "a0", "a1", "a2", "d0", "cc", "memory");
     chk32(0x000a0418u, got0 & 0x271fu, 0x2015u);
     chk32(0x000a041cu, got1, RETURN_TEST_BASE + 0x38u);
+
+    __asm__ volatile(
+        "move.l %%sp,%%a2\n\t"
+        "movec %%msp,%%d7\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff99e0\n\t"
+        "move.l #0x11112222,0x01ff99e4\n\t"
+        "move.l #0x33334444,0x01ff99e8\n\t"
+        "move.l #0x01ff99e0,%%d0\n\t"
+        "movec %%d0,%%msp\n\t"
+        "move.w #0x3700,%%sr\n\t"
+        "rtd #8\n"
+        "1:\n\t"
+        "move.l %%sp,%0\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%1\n\t"
+        "move.w #0x2700,%%sr\n\t"
+        "move.l %%a2,%%sp\n\t"
+        "movec %%d7,%%msp"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a2", "d0", "d7", "cc", "memory");
+    chk32(0x000a0420u, got0, RETURN_TEST_BASE + 0xecu);
+    chk32(0x000a0424u, got1 & 0x3700u, 0x3700u);
+
+    for (uint32_t off = 0; off < 0x100u; off += 4u) {
+        wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
+    }
+    wr32(EXC_ALT_VBR + 0x80u, (uint32_t)(uintptr_t)_h_recover);
+    arm_exception_recovery(0x0080u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d1\n\t"
+        "movec %%d1,%%vbr\n\t"
+        "move.l %%sp,%%a2\n\t"
+        "lea 2f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff99f0\n\t"
+        "move.l #0x55556666,0x01ff99f4\n\t"
+        "lea 0x01ff99f0,%%a0\n\t"
+        "move.l %%a0,%%usp\n\t"
+        "move.w #0x0000,%%sr\n\t"
+        "rtd #4\n"
+        "1:\n\t"
+        "move.l %%sp,0x01ff99d8\n\t"
+        "trap #0\n"
+        "2:\n\t"
+        "move.l 0x01ff99d8,%0\n\t"
+        "move.l %%sp,%1\n\t"
+        "moveq #0,%%d1\n\t"
+        "movec %%d1,%%vbr\n\t"
+        "move.l %%a2,%%sp"
+        : "=&d"(got0), "=&d"(got2)
+        :
+        : "a0", "a2", "d0", "d1", "cc", "memory");
+    chk_exception_frame(0x000a0440u, 0x0080u, 0x0000u, 0x2000u, 0x0000u);
+    chk32(0x000a0458u, got0, RETURN_TEST_BASE + 0xf8u);
+    chk32(0x000a045cu, got2 & 1u, 0u);
 }
 
 static void test_bcd_directed(void)
