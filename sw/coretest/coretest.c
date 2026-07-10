@@ -4072,6 +4072,129 @@ static void test_unary_arith_register_differential(void)
     mark(0x0022f000u, 0x0e600000u);
 }
 
+static uint32_t unary_logic_ccr_ref(uint32_t op, uint32_t bits, uint32_t value,
+                                    uint32_t initial_ccr, uint32_t *result)
+{
+    uint32_t mask = alu_size_mask(bits);
+    uint32_t sign = 1u << (bits - 1u);
+    uint32_t res;
+
+    if (op == 0u) {
+        res = 0u;
+    } else if (op == 1u) {
+        res = (~value) & mask;
+    } else {
+        res = value & mask;
+    }
+
+    if (op == 2u) {
+        *result = value;
+    } else {
+        *result = (value & ~mask) | res;
+    }
+
+    return (initial_ccr & 0x10u) | ((res & sign) ? 0x08u : 0u) |
+           (res == 0u ? 0x04u : 0u);
+}
+
+#define CPU_UNARY_LOGIC_REG(OP, SIZE)                                          \
+    do {                                                                       \
+        __asm__ volatile(                                                      \
+            "move.l %2,%%d0\n\t"                                               \
+            "move.l %3,%%d1\n\t"                                               \
+            "move.w %%d1,%%ccr\n\t"                                            \
+            #OP "." #SIZE " %%d0\n\t"                                          \
+            "move.w %%sr,%%d1\n\t"                                             \
+            "move.l %%d0,%0\n\t"                                               \
+            "move.l %%d1,%1"                                                   \
+            : "=m"(*result), "=m"(*ccr)                                        \
+            : "d"(value), "d"(initial_ccr)                                     \
+            : "d0", "d1", "cc", "memory");                                   \
+    } while (0)
+
+static void cpu_unary_logic_reg(uint32_t op, uint32_t bits, uint32_t value,
+                                uint32_t initial_ccr, uint32_t *result,
+                                uint32_t *ccr)
+{
+    if (op == 0u) {
+        switch (bits) {
+        case 8u:
+            CPU_UNARY_LOGIC_REG(clr, b);
+            break;
+        case 16u:
+            CPU_UNARY_LOGIC_REG(clr, w);
+            break;
+        default:
+            CPU_UNARY_LOGIC_REG(clr, l);
+            break;
+        }
+    } else if (op == 1u) {
+        switch (bits) {
+        case 8u:
+            CPU_UNARY_LOGIC_REG(not, b);
+            break;
+        case 16u:
+            CPU_UNARY_LOGIC_REG(not, w);
+            break;
+        default:
+            CPU_UNARY_LOGIC_REG(not, l);
+            break;
+        }
+    } else {
+        switch (bits) {
+        case 8u:
+            CPU_UNARY_LOGIC_REG(tst, b);
+            break;
+        case 16u:
+            CPU_UNARY_LOGIC_REG(tst, w);
+            break;
+        default:
+            CPU_UNARY_LOGIC_REG(tst, l);
+            break;
+        }
+    }
+}
+
+#undef CPU_UNARY_LOGIC_REG
+
+static void test_unary_logic_register_differential(void)
+{
+    static const uint32_t sizes[] = {8u, 16u, 32u};
+    static const uint32_t ccrs[] = {0x00u, 0x1fu};
+    static const uint32_t values[] = {
+        0x00000000u, 0x00000001u, 0x0000007fu, 0x00000080u,
+        0x000000ffu, 0x00007fffu, 0x00008000u, 0x0000ffffu,
+        0x7fffffffu, 0x80000000u, 0xffffffffu, 0x12345678u,
+        0x89abcdefu,
+    };
+
+    for (uint32_t op = 0; op < 3u; ++op) {
+        for (uint32_t s = 0; s < (sizeof(sizes) / sizeof(sizes[0])); ++s) {
+            uint32_t bits = sizes[s];
+
+            for (uint32_t ci = 0; ci < (sizeof(ccrs) / sizeof(ccrs[0])); ++ci) {
+                for (uint32_t vi = 0; vi < (sizeof(values) / sizeof(values[0])); ++vi) {
+                    uint32_t id = 0x00230000u + (op << 14) + (s << 11) +
+                                  (ci << 7) + (vi << 3);
+                    uint32_t got_result;
+                    uint32_t got_ccr;
+                    uint32_t exp_result;
+                    uint32_t exp_ccr;
+
+                    cpu_unary_logic_reg(op, bits, values[vi], ccrs[ci],
+                                        &got_result, &got_ccr);
+                    exp_ccr = unary_logic_ccr_ref(op, bits, values[vi],
+                                                  ccrs[ci], &exp_result);
+                    chk32(id + 0x00u, got_result, exp_result);
+                    chk32(id + 0x04u, got_ccr & 0x1fu, exp_ccr);
+                }
+            }
+        }
+    }
+
+    mark(0x0023f000u, 0xc1700000u);
+}
+
 static uint32_t shift_reg_ref(uint32_t op, uint32_t bits, uint32_t value,
                               uint32_t count, uint32_t *result)
 {
@@ -10403,6 +10526,7 @@ void kmain(void)
     test_data_alu_register_differential();
     test_xalu_register_differential();
     test_unary_arith_register_differential();
+    test_unary_logic_register_differential();
     test_shift_register_differential();
     test_rotate_register_differential();
     test_addx_subx_cmpm_memory_directed();
