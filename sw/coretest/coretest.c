@@ -2531,6 +2531,7 @@ static void test_return_control_directed(void)
         :
         : "a0", "a1", "a2", "d0", "cc", "memory");
     chk32(0x000a0410u, got0 & 0x1fu, 0x15u);
+    chk32(0x000a0411u, got0 & 0xff00u, 0x2700u);
     chk32(0x000a0414u, got1, RETURN_TEST_BASE + 0x26u);
 
     __asm__ volatile(
