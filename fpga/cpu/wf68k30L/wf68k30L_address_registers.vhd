@@ -425,7 +425,7 @@ begin
                             else
                                 ADR_EFF_VAR := MEM_ADR + INDEX_SCALED + OUTER_DISPL;
                             end if;
-                        when "1001" | "1010" | "1011" => -- Memory indirect.
+                        when "1001" | "1010" | "1011" | "1101" | "1110" | "1111" => -- Memory indirect, index suppressed.
                             if FETCH_MEM_ADR = '1' then
                                 ADR_EFF_VAR := ADR_MUX + BASE_DISPL;
                             else
@@ -461,7 +461,7 @@ begin
                                     else
                                         ADR_EFF_VAR := MEM_ADR + INDEX_SCALED + OUTER_DISPL;
                                     end if;
-                                when "1001" | "1010" | "1011" => -- Memory indirect.
+                                when "1001" | "1010" | "1011" | "1101" | "1110" | "1111" => -- Memory indirect, index suppressed.
                                     if FETCH_MEM_ADR = '1' then
                                         ADR_EFF_VAR := PC_BASE + BASE_DISPL;
                                     else
