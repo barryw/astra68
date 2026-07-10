@@ -27,6 +27,8 @@ module tb_coretest;
     localparam DATA_FC_SUP_READ_ADDR = 32'h01ffaf04;
     localparam DATA_FC_USER_WRITE_ADDR = 32'h01ffaf08;
     localparam DATA_FC_USER_READ_ADDR = 32'h01ffaf0c;
+    localparam PROG_FC_SUP_ADDR = 32'h01ffaf20;
+    localparam PROG_FC_USER_ADDR = 32'h01ffaf30;
     reg [2:0] sim_ipln = 3'b111;
     reg sim_avecn = 1'b1;
     reg sim_berrn = 1'b1;
@@ -109,6 +111,14 @@ module tb_coretest;
             if (dut.bus_read_stb && dut.cpu_adr == DATA_FC_USER_READ_ADDR
                 && dut.cpu_fc !== 3'b001) begin
                 $fatal(1, "user data read expected FC=001, got %b", dut.cpu_fc);
+            end
+            if (dut.bus_read_stb && dut.cpu_adr == PROG_FC_SUP_ADDR
+                && dut.cpu_fc !== 3'b110) begin
+                $fatal(1, "supervisor program fetch expected FC=110, got %b", dut.cpu_fc);
+            end
+            if (dut.bus_read_stb && dut.cpu_adr == PROG_FC_USER_ADDR
+                && dut.cpu_fc !== 3'b010) begin
+                $fatal(1, "user program fetch expected FC=010, got %b", dut.cpu_fc);
             end
         end
     end
