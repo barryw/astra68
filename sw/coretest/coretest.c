@@ -4522,6 +4522,17 @@ static void test_exception_recovery_directed(void)
         : "a0", "memory");
     chk_exception_frame(0x00100020u, 0x0010u, 0x0000u, 0x2000u, 0x2000u);
 
+    arm_exception_recovery(0x0010u);
+    __asm__ volatile(
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        ".word 0x4848\n"
+        "1:"
+        :
+        :
+        : "a0", "memory");
+    chk_exception_frame(0x00100030u, 0x0010u, 0x0000u, 0x2000u, 0x2000u);
+
     arm_exception_recovery(0x0014u);
     __asm__ volatile(
         "lea 1f,%%a0\n\t"

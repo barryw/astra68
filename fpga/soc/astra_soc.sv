@@ -73,10 +73,15 @@ module astra_soc #(
     // The other five stay inactive-high, and the whole reg is syn_preserve'd because
     // Synplify constant-folds the ENTIRE WF68K30L away (~0 LUT) if these core inputs
     // read as compile-time constants — a preserved FF output is not foldable.
-    // ponytail: no bus-error watchdog yet; add BERRn from a DSACK-timeout counter
-    // when SDRAM/stray-access handling lands (a stray access now hangs on no DSACK).
+    // BKPT acknowledge cycles use CPU space at low addresses. There is no
+    // external debugger/breakpoint ROM in this SoC, so respond with ILLEGAL as
+    // the replacement instruction instead of letting the unmapped read return 0.
+    localparam [31:0] BKPT_ILLEGAL_DIN = 32'h4afc0000; // word read at A[1:0]=00 samples [31:16]
     (* syn_preserve = 1 *) reg [5:0] cpu_ctl = 6'b111111;
     always @(posedge clk) cpu_ctl <= {4'b1111, ~rst, 1'b1};   // bit1 = HALT_INn = ~rst
+    wire bkpt_ack_read = !cpu_as_n && cpu_rw_n
+                       && (cpu_fc == 3'b111)
+                       && (cpu_adr[31:8] == 24'h000000);
 `ifdef ASTRA_SOC_SIM_IRQ
     wire [2:0]  cpu_ipln = sim_ipln;
     wire        cpu_avecn = sim_avecn;
@@ -337,7 +342,8 @@ module astra_soc #(
                             uart_cpu_data <= cpu_dout[7:0]; uart_cpu_start <= 1'b1;
                         end
                     end else if (cpu_rw_n) begin
-                        cpu_din <= sel_rom  ? rom_q :
+                        cpu_din <= bkpt_ack_read ? BKPT_ILLEGAL_DIN :
+                                   sel_rom  ? rom_q :
                                    sel_ram  ? ram_q :
                                    sel_uart ? uart_rdata : 32'd0;
                         bus_read_stb <= 1'b1;              // commit read this cycle
@@ -380,7 +386,8 @@ module astra_soc #(
             end
             BS_ACK: begin
                 // Read data was presented in BS_WAIT so it is stable before DSACK.
-                cpu_din <= sel_rom  ? rom_q :
+                cpu_din <= bkpt_ack_read ? BKPT_ILLEGAL_DIN :
+                           sel_rom  ? rom_q :
                            sel_ram  ? ram_q :
                            sel_uart ? uart_rdata : 32'd0;
                 dsack_n <= 2'b00;                 // 32-bit port ack
