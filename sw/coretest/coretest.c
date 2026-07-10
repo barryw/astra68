@@ -3527,6 +3527,240 @@ static void test_data_alu_indexed_directed(void)
     chk32(0x00095144u, rd32(DATA_ALU_TEST_BASE + 0xa0u) & 0x1fu, 0x14u);
 }
 
+static uint32_t alu_size_mask(uint32_t bits)
+{
+    return bits == 32u ? 0xffffffffu : ((1u << bits) - 1u);
+}
+
+static uint32_t add_ccr_ref(uint32_t bits, uint32_t src, uint32_t dst,
+                            uint32_t *result)
+{
+    uint32_t mask = alu_size_mask(bits);
+    uint32_t sign = 1u << (bits - 1u);
+    uint32_t srcm = src & mask;
+    uint32_t dstm = dst & mask;
+    uint32_t sum = srcm + dstm;
+    uint32_t res = sum & mask;
+    uint32_t c = bits == 32u ? (sum < srcm) : ((sum & ~mask) != 0u);
+    uint32_t v = ((~(srcm ^ dstm) & (res ^ dstm) & sign) != 0u);
+    uint32_t n = (res & sign) != 0u;
+    uint32_t z = res == 0u;
+
+    *result = (dst & ~mask) | res;
+    return (c ? 0x11u : 0u) | (n ? 0x08u : 0u) |
+           (z ? 0x04u : 0u) | (v ? 0x02u : 0u);
+}
+
+static uint32_t sub_ccr_ref(uint32_t bits, uint32_t src, uint32_t dst,
+                            uint32_t *result)
+{
+    uint32_t mask = alu_size_mask(bits);
+    uint32_t sign = 1u << (bits - 1u);
+    uint32_t srcm = src & mask;
+    uint32_t dstm = dst & mask;
+    uint32_t res = (dstm - srcm) & mask;
+    uint32_t c = srcm > dstm;
+    uint32_t v = (((dstm ^ srcm) & (res ^ dstm) & sign) != 0u);
+    uint32_t n = (res & sign) != 0u;
+    uint32_t z = res == 0u;
+
+    *result = (dst & ~mask) | res;
+    return (c ? 0x11u : 0u) | (n ? 0x08u : 0u) |
+           (z ? 0x04u : 0u) | (v ? 0x02u : 0u);
+}
+
+static uint32_t cmp_ccr_ref(uint32_t bits, uint32_t src, uint32_t dst)
+{
+    uint32_t unused;
+    return 0x10u | (sub_ccr_ref(bits, src, dst, &unused) & 0x0fu);
+}
+
+static void cpu_add_reg(uint32_t bits, uint32_t src, uint32_t dst,
+                        uint32_t *result, uint32_t *ccr)
+{
+    switch (bits) {
+    case 8u:
+        __asm__ volatile(
+            "move.l %2,%%d0\n\t"
+            "move.l %3,%%d1\n\t"
+            "move.w #0,%%ccr\n\t"
+            "add.b %%d0,%%d1\n\t"
+            "move.w %%sr,%%d2\n\t"
+            "move.l %%d1,%0\n\t"
+            "move.l %%d2,%1"
+            : "=m"(*result), "=m"(*ccr)
+            : "d"(src), "d"(dst)
+            : "d0", "d1", "d2", "cc", "memory");
+        break;
+    case 16u:
+        __asm__ volatile(
+            "move.l %2,%%d0\n\t"
+            "move.l %3,%%d1\n\t"
+            "move.w #0,%%ccr\n\t"
+            "add.w %%d0,%%d1\n\t"
+            "move.w %%sr,%%d2\n\t"
+            "move.l %%d1,%0\n\t"
+            "move.l %%d2,%1"
+            : "=m"(*result), "=m"(*ccr)
+            : "d"(src), "d"(dst)
+            : "d0", "d1", "d2", "cc", "memory");
+        break;
+    default:
+        __asm__ volatile(
+            "move.l %2,%%d0\n\t"
+            "move.l %3,%%d1\n\t"
+            "move.w #0,%%ccr\n\t"
+            "add.l %%d0,%%d1\n\t"
+            "move.w %%sr,%%d2\n\t"
+            "move.l %%d1,%0\n\t"
+            "move.l %%d2,%1"
+            : "=m"(*result), "=m"(*ccr)
+            : "d"(src), "d"(dst)
+            : "d0", "d1", "d2", "cc", "memory");
+        break;
+    }
+}
+
+static void cpu_sub_reg(uint32_t bits, uint32_t src, uint32_t dst,
+                        uint32_t *result, uint32_t *ccr)
+{
+    switch (bits) {
+    case 8u:
+        __asm__ volatile(
+            "move.l %2,%%d0\n\t"
+            "move.l %3,%%d1\n\t"
+            "move.w #0,%%ccr\n\t"
+            "sub.b %%d0,%%d1\n\t"
+            "move.w %%sr,%%d2\n\t"
+            "move.l %%d1,%0\n\t"
+            "move.l %%d2,%1"
+            : "=m"(*result), "=m"(*ccr)
+            : "d"(src), "d"(dst)
+            : "d0", "d1", "d2", "cc", "memory");
+        break;
+    case 16u:
+        __asm__ volatile(
+            "move.l %2,%%d0\n\t"
+            "move.l %3,%%d1\n\t"
+            "move.w #0,%%ccr\n\t"
+            "sub.w %%d0,%%d1\n\t"
+            "move.w %%sr,%%d2\n\t"
+            "move.l %%d1,%0\n\t"
+            "move.l %%d2,%1"
+            : "=m"(*result), "=m"(*ccr)
+            : "d"(src), "d"(dst)
+            : "d0", "d1", "d2", "cc", "memory");
+        break;
+    default:
+        __asm__ volatile(
+            "move.l %2,%%d0\n\t"
+            "move.l %3,%%d1\n\t"
+            "move.w #0,%%ccr\n\t"
+            "sub.l %%d0,%%d1\n\t"
+            "move.w %%sr,%%d2\n\t"
+            "move.l %%d1,%0\n\t"
+            "move.l %%d2,%1"
+            : "=m"(*result), "=m"(*ccr)
+            : "d"(src), "d"(dst)
+            : "d0", "d1", "d2", "cc", "memory");
+        break;
+    }
+}
+
+static void cpu_cmp_reg(uint32_t bits, uint32_t src, uint32_t dst,
+                        uint32_t *ccr)
+{
+    switch (bits) {
+    case 8u:
+        __asm__ volatile(
+            "move.l %1,%%d0\n\t"
+            "move.l %2,%%d1\n\t"
+            "move.w #0x10,%%ccr\n\t"
+            "cmp.b %%d0,%%d1\n\t"
+            "move.w %%sr,%%d2\n\t"
+            "move.l %%d2,%0"
+            : "=m"(*ccr)
+            : "d"(src), "d"(dst)
+            : "d0", "d1", "d2", "cc", "memory");
+        break;
+    case 16u:
+        __asm__ volatile(
+            "move.l %1,%%d0\n\t"
+            "move.l %2,%%d1\n\t"
+            "move.w #0x10,%%ccr\n\t"
+            "cmp.w %%d0,%%d1\n\t"
+            "move.w %%sr,%%d2\n\t"
+            "move.l %%d2,%0"
+            : "=m"(*ccr)
+            : "d"(src), "d"(dst)
+            : "d0", "d1", "d2", "cc", "memory");
+        break;
+    default:
+        __asm__ volatile(
+            "move.l %1,%%d0\n\t"
+            "move.l %2,%%d1\n\t"
+            "move.w #0x10,%%ccr\n\t"
+            "cmp.l %%d0,%%d1\n\t"
+            "move.w %%sr,%%d2\n\t"
+            "move.l %%d2,%0"
+            : "=m"(*ccr)
+            : "d"(src), "d"(dst)
+            : "d0", "d1", "d2", "cc", "memory");
+        break;
+    }
+}
+
+static void test_data_alu_register_differential(void)
+{
+    static const uint32_t sizes[] = {8u, 16u, 32u};
+    static const struct {
+        uint32_t src;
+        uint32_t dst;
+    } pairs[] = {
+        {0x00000000u, 0x00000000u},
+        {0x00000001u, 0x00000000u},
+        {0x00000001u, 0x0000007fu},
+        {0x00000001u, 0x000000ffu},
+        {0x000000ffu, 0x00000001u},
+        {0x00000080u, 0x00000080u},
+        {0x00007fffu, 0x00000001u},
+        {0x00008000u, 0x00008000u},
+        {0x0000ffffu, 0x00000001u},
+        {0xffffffffu, 0x00000001u},
+        {0x80000000u, 0x80000000u},
+        {0x7fffffffu, 0x00000001u},
+        {0x12345678u, 0x89abcdefu},
+        {0x89abcdefu, 0x76543210u},
+    };
+
+    for (uint32_t s = 0; s < (sizeof(sizes) / sizeof(sizes[0])); ++s) {
+        for (uint32_t i = 0; i < (sizeof(pairs) / sizeof(pairs[0])); ++i) {
+            uint32_t id = 0x00170000u + (s << 12) + (i << 5);
+            uint32_t bits = sizes[s];
+            uint32_t got_result;
+            uint32_t got_ccr;
+            uint32_t exp_result;
+            uint32_t exp_ccr;
+
+            cpu_add_reg(bits, pairs[i].src, pairs[i].dst, &got_result, &got_ccr);
+            exp_ccr = add_ccr_ref(bits, pairs[i].src, pairs[i].dst, &exp_result);
+            chk32(id + 0x00u, got_result, exp_result);
+            chk32(id + 0x04u, got_ccr & 0x1fu, exp_ccr);
+
+            cpu_sub_reg(bits, pairs[i].src, pairs[i].dst, &got_result, &got_ccr);
+            exp_ccr = sub_ccr_ref(bits, pairs[i].src, pairs[i].dst, &exp_result);
+            chk32(id + 0x08u, got_result, exp_result);
+            chk32(id + 0x0cu, got_ccr & 0x1fu, exp_ccr);
+
+            cpu_cmp_reg(bits, pairs[i].src, pairs[i].dst, &got_ccr);
+            chk32(id + 0x10u, got_ccr & 0x1fu,
+                  cmp_ccr_ref(bits, pairs[i].src, pairs[i].dst));
+        }
+    }
+
+    mark(0x0017f000u, 0xadd50000u);
+}
+
 static void test_addx_subx_cmpm_memory_directed(void)
 {
     uint32_t got0;
@@ -9110,6 +9344,7 @@ void kmain(void)
     test_unary_logic_directed();
     test_immediate_alu_directed();
     test_data_alu_indexed_directed();
+    test_data_alu_register_differential();
     test_addx_subx_cmpm_memory_directed();
     test_system_control_directed();
     test_moves_directed();
