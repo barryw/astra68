@@ -4445,7 +4445,7 @@ static void test_alu_shift_bitfield_bcd_directed(void)
     chk16(0x000b0170u, rd16(SHIFT_TEST_BASE + 0x0eu), 0x8001u);
     chk32(0x000b0174u, got & 0x1fu, 0x09u);
 
-    for (uint32_t off = 0x20u; off < 0x60u; off += 4u) {
+    for (uint32_t off = 0x20u; off < 0xa8u; off += 4u) {
         wr32(SHIFT_TEST_BASE + off, 0u);
     }
     __asm__ volatile(
@@ -4491,7 +4491,77 @@ static void test_alu_shift_bitfield_bcd_directed(void)
         "lsr.w %%d2,%%d0\n\t"
         "move.w %%sr,%%d1\n\t"
         "move.l %%d0,0x01ffa050\n\t"
-        "move.l %%d1,0x01ffa054"
+        "move.l %%d1,0x01ffa054\n\t"
+        "move.l #0x80000001,%%d0\n\t"
+        "moveq #0,%%d2\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "roxl.l %%d2,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa058\n\t"
+        "move.l %%d1,0x01ffa05c\n\t"
+        "move.l #0x80000001,%%d0\n\t"
+        "moveq #0,%%d2\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "roxr.l %%d2,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa060\n\t"
+        "move.l %%d1,0x01ffa064\n\t"
+        "move.l #0x80000001,%%d0\n\t"
+        "moveq #0,%%d2\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "asl.l %%d2,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa068\n\t"
+        "move.l %%d1,0x01ffa06c\n\t"
+        "move.l #0x80000001,%%d0\n\t"
+        "moveq #0,%%d2\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "asr.l %%d2,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa070\n\t"
+        "move.l %%d1,0x01ffa074\n\t"
+        "move.l #0x80000001,%%d0\n\t"
+        "moveq #0,%%d2\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "lsl.l %%d2,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa078\n\t"
+        "move.l %%d1,0x01ffa07c\n\t"
+        "move.l #0x80000001,%%d0\n\t"
+        "moveq #0,%%d2\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "lsr.l %%d2,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa080\n\t"
+        "move.l %%d1,0x01ffa084\n\t"
+        "move.l #0x80000001,%%d0\n\t"
+        "moveq #0,%%d2\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "rol.l %%d2,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa088\n\t"
+        "move.l %%d1,0x01ffa08c\n\t"
+        "move.l #0x80000001,%%d0\n\t"
+        "moveq #0,%%d2\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "ror.l %%d2,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa090\n\t"
+        "move.l %%d1,0x01ffa094\n\t"
+        "move.l #0x80000001,%%d0\n\t"
+        "moveq #0,%%d2\n\t"
+        "move.w #0x01,%%ccr\n\t"
+        "roxl.l %%d2,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa098\n\t"
+        "move.l %%d1,0x01ffa09c\n\t"
+        "move.l #0x80000001,%%d0\n\t"
+        "moveq #0,%%d2\n\t"
+        "move.w #0x01,%%ccr\n\t"
+        "roxr.l %%d2,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa0a0\n\t"
+        "move.l %%d1,0x01ffa0a4"
         :
         :
         : "d0", "d1", "d2", "cc", "memory");
@@ -4509,6 +4579,26 @@ static void test_alu_shift_bitfield_bcd_directed(void)
     chk32(0x000b01acu, rd32(SHIFT_TEST_BASE + 0x4cu) & 0x1fu, 0x19u);
     chk32(0x000b01b0u, rd32(SHIFT_TEST_BASE + 0x50u), 0x0000000fu);
     chk32(0x000b01b4u, rd32(SHIFT_TEST_BASE + 0x54u) & 0x1fu, 0x00u);
+    chk32(0x000b01b8u, rd32(SHIFT_TEST_BASE + 0x58u), 0x80000001u);
+    chk32(0x000b01bcu, rd32(SHIFT_TEST_BASE + 0x5cu) & 0x1fu, 0x19u);
+    chk32(0x000b01c0u, rd32(SHIFT_TEST_BASE + 0x60u), 0x80000001u);
+    chk32(0x000b01c4u, rd32(SHIFT_TEST_BASE + 0x64u) & 0x1fu, 0x19u);
+    chk32(0x000b01c8u, rd32(SHIFT_TEST_BASE + 0x68u), 0x80000001u);
+    chk32(0x000b01ccu, rd32(SHIFT_TEST_BASE + 0x6cu) & 0x1fu, 0x18u);
+    chk32(0x000b01d0u, rd32(SHIFT_TEST_BASE + 0x70u), 0x80000001u);
+    chk32(0x000b01d4u, rd32(SHIFT_TEST_BASE + 0x74u) & 0x1fu, 0x18u);
+    chk32(0x000b01d8u, rd32(SHIFT_TEST_BASE + 0x78u), 0x80000001u);
+    chk32(0x000b01dcu, rd32(SHIFT_TEST_BASE + 0x7cu) & 0x1fu, 0x18u);
+    chk32(0x000b01e0u, rd32(SHIFT_TEST_BASE + 0x80u), 0x80000001u);
+    chk32(0x000b01e4u, rd32(SHIFT_TEST_BASE + 0x84u) & 0x1fu, 0x18u);
+    chk32(0x000b01e8u, rd32(SHIFT_TEST_BASE + 0x88u), 0x80000001u);
+    chk32(0x000b01ecu, rd32(SHIFT_TEST_BASE + 0x8cu) & 0x1fu, 0x18u);
+    chk32(0x000b01f0u, rd32(SHIFT_TEST_BASE + 0x90u), 0x80000001u);
+    chk32(0x000b01f4u, rd32(SHIFT_TEST_BASE + 0x94u) & 0x1fu, 0x18u);
+    chk32(0x000b01f8u, rd32(SHIFT_TEST_BASE + 0x98u), 0x80000001u);
+    chk32(0x000b01fcu, rd32(SHIFT_TEST_BASE + 0x9cu) & 0x1fu, 0x08u);
+    chk32(0x000b0200u, rd32(SHIFT_TEST_BASE + 0xa0u), 0x80000001u);
+    chk32(0x000b0204u, rd32(SHIFT_TEST_BASE + 0xa4u) & 0x1fu, 0x08u);
 
     wr32(SCRATCH_BASE + 0xe0, 0u);
     wr32(SCRATCH_BASE + 0xe4, 0u);
