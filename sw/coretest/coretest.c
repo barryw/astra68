@@ -3332,6 +3332,190 @@ static void test_condition_codes_directed(void)
     chk32(0x000c012cu, rd32(COND_TEST_BASE + 0x2cu), 0xff0000ffu);
 }
 
+static void test_condition_consumers_directed(void)
+{
+    uint32_t got0;
+    uint32_t got1;
+
+    __asm__ volatile(
+        "moveq #0,%%d0\n\t"
+        "moveq #5,%%d1\n\t"
+        "cmp.l #5,%%d1\n\t"
+        "beq 1f\n\t"
+        "bset #0,%%d0\n"
+        "1:\n\t"
+        "bne 2f\n\t"
+        "bra 3f\n"
+        "2:\n\t"
+        "bset #1,%%d0\n"
+        "3:\n\t"
+        "bgt 4f\n\t"
+        "bra 5f\n"
+        "4:\n\t"
+        "bset #2,%%d0\n"
+        "5:\n\t"
+        "ble 6f\n\t"
+        "bset #3,%%d0\n"
+        "6:\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got0)
+        :
+        : "d0", "d1", "cc");
+    chk32(0x000c0200u, got0, 0u);
+
+    __asm__ volatile(
+        "moveq #0,%%d0\n\t"
+        "moveq #7,%%d1\n\t"
+        "cmp.l #5,%%d1\n\t"
+        "bhi 1f\n\t"
+        "bset #0,%%d0\n"
+        "1:\n\t"
+        "bls 2f\n\t"
+        "bra 3f\n"
+        "2:\n\t"
+        "bset #1,%%d0\n"
+        "3:\n\t"
+        "bgt 4f\n\t"
+        "bset #2,%%d0\n"
+        "4:\n\t"
+        "ble 5f\n\t"
+        "bra 6f\n"
+        "5:\n\t"
+        "bset #3,%%d0\n"
+        "6:\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got0)
+        :
+        : "d0", "d1", "cc");
+    chk32(0x000c0204u, got0, 0u);
+
+    __asm__ volatile(
+        "moveq #0,%%d0\n\t"
+        "moveq #3,%%d1\n\t"
+        "cmp.l #5,%%d1\n\t"
+        "bcs 1f\n\t"
+        "bset #0,%%d0\n"
+        "1:\n\t"
+        "bcc 2f\n\t"
+        "bra 3f\n"
+        "2:\n\t"
+        "bset #1,%%d0\n"
+        "3:\n\t"
+        "blt 4f\n\t"
+        "bset #2,%%d0\n"
+        "4:\n\t"
+        "bge 5f\n\t"
+        "bra 6f\n"
+        "5:\n\t"
+        "bset #3,%%d0\n"
+        "6:\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got0)
+        :
+        : "d0", "d1", "cc");
+    chk32(0x000c0208u, got0, 0u);
+
+    __asm__ volatile(
+        "moveq #0,%%d0\n\t"
+        "move.l #0x7fffffff,%%d1\n\t"
+        "cmp.l #-1,%%d1\n\t"
+        "bgt 1f\n\t"
+        "bset #0,%%d0\n"
+        "1:\n\t"
+        "blt 2f\n\t"
+        "bra 3f\n"
+        "2:\n\t"
+        "bset #1,%%d0\n"
+        "3:\n\t"
+        "bvs 4f\n\t"
+        "bset #2,%%d0\n"
+        "4:\n\t"
+        "bpl 5f\n\t"
+        "bra 6f\n"
+        "5:\n\t"
+        "bset #3,%%d0\n"
+        "6:\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got0)
+        :
+        : "d0", "d1", "cc");
+    chk32(0x000c020cu, got0, 0u);
+
+    __asm__ volatile(
+        "moveq #0,%%d0\n\t"
+        "moveq #2,%%d1\n\t"
+        "suba.l %%a0,%%a0\n\t"
+        "cmp.l %%d0,%%d0\n"
+        "1:\n\t"
+        "addq.l #1,%%a0\n\t"
+        "dbne %%d1,1b\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%d1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "d0", "d1", "cc");
+    chk32(0x000c0210u, got0, 3u);
+    chk32(0x000c0214u, got1 & 0xffffu, 0xffffu);
+
+    __asm__ volatile(
+        "move.l #0x12340001,%%d0\n"
+        "1:\n\t"
+        "dbra %%d0,1b\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got0)
+        :
+        : "d0", "cc");
+    chk32(0x000c0218u, got0, 0x1234ffffu);
+
+    __asm__ volatile(
+        "moveq #3,%%d0\n"
+        "1:\n\t"
+        "dbra %%d0,1b\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got0)
+        :
+        : "d0", "cc");
+    chk32(0x000c021cu, got0, 0x0000ffffu);
+
+    __asm__ volatile(
+        "moveq #3,%%d0\n\t"
+        "cmp.l %%d1,%%d1\n\t"
+        "dbeq %%d0,1f\n\t"
+        "move.l %%d0,%0\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "moveq #-1,%%d0\n\t"
+        "move.l %%d0,%0\n"
+        "2:"
+        : "=&d"(got0)
+        :
+        : "d0", "d1", "cc");
+    chk32(0x000c0220u, got0, 3u);
+
+    __asm__ volatile(
+        "moveq #0,%%d0\n\t"
+        "moveq #0,%%d1\n\t"
+        "moveq #0,%%d2\n\t"
+        "moveq #9,%%d4\n\t"
+        "cmp.l %%d0,%%d0\n\t"
+        "seq %%d0\n\t"
+        "sne %%d1\n\t"
+        "dbne %%d4,1f\n\t"
+        "moveq #0x33,%%d2\n"
+        "1:\n\t"
+        "move.l %%d0,0x01ffa140\n\t"
+        "move.l %%d1,0x01ffa144\n\t"
+        "move.l %%d2,0x01ffa148\n\t"
+        "move.l %%d4,0x01ffa14c"
+        :
+        :
+        : "d0", "d1", "d2", "d4", "cc", "memory");
+    chk32(0x000c0224u, rd32(COND_TEST_BASE + 0x40u) & 0xffu, 0xffu);
+    chk32(0x000c0228u, rd32(COND_TEST_BASE + 0x44u) & 0xffu, 0x00u);
+    chk32(0x000c022cu, rd32(COND_TEST_BASE + 0x48u), 0x00u);
+    chk32(0x000c0230u, rd32(COND_TEST_BASE + 0x4cu) & 0xffffu, 0x0008u);
+}
+
 static void test_bitops_directed(void)
 {
     wr32(BITOP_TEST_BASE + 0x00u, 0u);
@@ -4120,6 +4304,7 @@ void kmain(void)
 #endif
     test_alu_shift_bitfield_bcd_directed();
     test_condition_codes_directed();
+    test_condition_consumers_directed();
     test_bitops_directed();
     test_signed_mul_div_directed();
     test_mul_div_memory_directed();
