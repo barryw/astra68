@@ -547,7 +547,7 @@ begin
     LOAD_OP3 <= '1' when (OP = BFCHG or OP = BFCLR or OP = BFINS or OP = BFSET) and BIW_0(5 downto 3) = "000" and INIT_ENTRY = '1' else 
                 '1' when (OP = BFEXTS or OP = BFEXTU or OP = BFFFO or OP = BFTST) and BIW_0(5 downto 3) = "000" and INIT_ENTRY = '1' else 
                 '1' when (OP = BFCHG or OP = BFCLR) and FETCH_STATE = FETCH_OPERAND and RD_RDY = '1' and DATA_VALID = '1' and BF_HILOn = '1' else
-                '1' when (OP = BFINS or OP = BSET) and FETCH_STATE = FETCH_OPERAND and RD_RDY = '1' and DATA_VALID = '1' and BF_HILOn = '1' else
+                '1' when (OP = BFINS or OP = BFSET) and FETCH_STATE = FETCH_OPERAND and RD_RDY = '1' and DATA_VALID = '1' and BF_HILOn = '1' else
                 '1' when (OP = BFEXTS or OP = BFEXTU) and FETCH_STATE = FETCH_OPERAND and RD_RDY = '1' and DATA_VALID = '1' and BF_HILOn = '1' else
                 '1' when (OP = BFFFO or OP = BFTST) and FETCH_STATE = FETCH_OPERAND and RD_RDY = '1' and DATA_VALID = '1' and BF_HILOn = '1' else
                 '1' when OP = CAS2 and INIT_ENTRY = '1' and PHASE2 = false else -- Memory operand 2.

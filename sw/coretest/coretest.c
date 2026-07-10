@@ -7104,6 +7104,35 @@ static void test_memory_bitfield_extended_directed(void)
         :
         : "d0", "cc", "memory");
     chk32(0x000e00b0u, rd32(BITFIELD_TEST_BASE + 0x08), 0x89abcdefu);
+
+    wr32(BITFIELD_TEST_BASE + 0x20, 0x5a000000u);
+    wr32(BITFIELD_TEST_BASE + 0x24, 0xa5667788u);
+    __asm__ volatile(
+        "move.l #0xa1b2c3d4,%%d0\n\t"
+        "bfins %%d0,0x01ff9d20{#4:#0}"
+        :
+        :
+        : "d0", "cc", "memory");
+    chk32(0x00150000u, rd32(BITFIELD_TEST_BASE + 0x20), 0x5a1b2c3du);
+    chk32(0x00150004u, rd32(BITFIELD_TEST_BASE + 0x24), 0x45667788u);
+
+    wr32(BITFIELD_TEST_BASE + 0x20, 0xffffffffu);
+    wr32(BITFIELD_TEST_BASE + 0x24, 0xffaabbccu);
+    __asm__ volatile("bfclr 0x01ff9d20{#4:#0}" : : : "cc", "memory");
+    chk32(0x00150008u, rd32(BITFIELD_TEST_BASE + 0x20), 0xf0000000u);
+    chk32(0x0015000cu, rd32(BITFIELD_TEST_BASE + 0x24), 0x0faabbccu);
+
+    wr32(BITFIELD_TEST_BASE + 0x20, 0x50000000u);
+    wr32(BITFIELD_TEST_BASE + 0x24, 0x05000000u);
+    __asm__ volatile("bfset 0x01ff9d20{#4:#0}" : : : "cc", "memory");
+    chk32(0x00150010u, rd32(BITFIELD_TEST_BASE + 0x20), 0x5fffffffu);
+    chk32(0x00150014u, rd32(BITFIELD_TEST_BASE + 0x24), 0xf5000000u);
+
+    wr32(BITFIELD_TEST_BASE + 0x20, 0x5a1b2c3du);
+    wr32(BITFIELD_TEST_BASE + 0x24, 0x45667788u);
+    __asm__ volatile("bfchg 0x01ff9d20{#4:#0}" : : : "cc", "memory");
+    chk32(0x00150018u, rd32(BITFIELD_TEST_BASE + 0x20), 0x55e4d3c2u);
+    chk32(0x0015001cu, rd32(BITFIELD_TEST_BASE + 0x24), 0xb5667788u);
 }
 
 static void test_movep_tas_cas_directed(void)
