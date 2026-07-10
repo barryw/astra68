@@ -91,6 +91,9 @@ _h_recover:
 	move.w  6(%sp), %d0
 	move.l  %d0, 12(%a0)
 	move.l  %sp, 16(%a0)
+	move.l  8(%sp), 36(%a0)
+	move.l  12(%sp), 40(%a0)
+	move.l  16(%sp), 44(%a0)
 	move.w  6(%sp), %d0
 	andi.w  #0x0fff, %d0
 	cmp.l   24(%a0), %d0

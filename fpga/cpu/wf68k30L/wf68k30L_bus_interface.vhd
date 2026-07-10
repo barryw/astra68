@@ -178,6 +178,7 @@ signal RETRY                : bit;
 signal SIZE_D               : std_logic_vector(1 downto 0);
 signal SIZE_I               : std_logic_vector(1 downto 0);
 signal SIZE_N               : std_logic_vector(2 downto 0) := "000";
+signal SSW_LOCK             : bit := '0';
 -- SLICE_CNT_N / SLICE_CNT_P removed: the half-clock (dual-edge) slice counters were
 -- replaced by a single positive-edge T_SLICE state register (see SLICES below).
 signal STERM_In             : std_logic;
@@ -258,17 +259,24 @@ begin
     variable SIZEVAR : std_logic_vector(1 downto 0) := "00";
     begin
         wait until CLK = '1' and CLK' event;
-        if BUSY_EXH = '0' then -- Do not alter during exception processing.
+        if BUSY_EXH = '1' then -- Exception processing freezes SSW_80 until it is stacked.
+            SSW_LOCK <= '0';
+        else
             case OP_SIZE is
                 when LONG => SIZEVAR := "10";
                 when WORD => SIZEVAR := "01";
                 when BYTE => SIZEVAR := "00";
             end case;
             --
-            if BUS_CTRL_STATE = START_CYCLE and NEXT_BUS_CTRL_STATE = DATA_C1C4 then
+            if SSW_LOCK = '0' and BUS_CTRL_STATE = START_CYCLE and NEXT_BUS_CTRL_STATE = DATA_C1C4 then
                 SSW_80 <= To_StdLogicVector('0' & RMC & not WR_REQ) & SIZEVAR & '0' & FC_IN;
-            elsif BUS_CTRL_STATE = DATA_C1C4 and (READ_ACCESS = '1' or WRITE_ACCESS = '1') and BUS_FLT = '1' then
-                SSW_80(8) <= '1';
+            elsif BUS_CTRL_STATE = DATA_C1C4 and BUS_FLT = '1' and HALT_In = '1' then
+                if READ_ACCESS = '1' or WRITE_ACCESS = '1' then
+                    SSW_80(8) <= '1';
+                end if;
+                if READ_ACCESS = '1' or WRITE_ACCESS = '1' or OPCODE_ACCESS = '1' then
+                    SSW_LOCK <= '1';
+                end if;
             end if;
             
             OUTBUFFER <= WP_BUFFER; -- Used for exception stack frame type A and B.
