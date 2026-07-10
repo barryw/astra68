@@ -41,6 +41,7 @@
 #define CHK_TEST_BASE (SCRATCH_BASE + 0x1a00u)
 #define DATA_ALU_TEST_BASE (SCRATCH_BASE + 0x1f00u)
 #define RTE_USER_TEST_BASE (SCRATCH_BASE + 0x2100u)
+#define IRQ_USER_TEST_BASE (SCRATCH_BASE + 0x2200u)
 
 static volatile uint32_t g_sum;
 
@@ -6083,6 +6084,62 @@ static void test_interrupt_autovector_directed(void)
     mark(0x001100ccu, stacked_pc);
     if (stacked_pc < loop_start) stop_fail(0x001100ccu, stacked_pc, loop_start);
     if (stacked_pc > loop_end) stop_fail(0x001100d0u, stacked_pc, loop_end);
+
+    for (uint32_t off = 0; off < 0x100u; off += 4u) {
+        wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
+    }
+    wr32(EXC_ALT_VBR + 0x6cu, (uint32_t)(uintptr_t)_h_irq_return);
+    wr32(EXC_ALT_VBR + 0x80u, (uint32_t)(uintptr_t)_h_recover);
+    for (uint32_t off = 0; off < 0x90u; off += 4u) {
+        wr32(IRQ_USER_TEST_BASE + off, 0u);
+    }
+    arm_exception_recovery(0x0080u);
+    wr32(IRQ_SIM_REQ, 0u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "move.l %%sp,%%a2\n\t"
+        "movem.l %%a2,0x01ffb300\n\t"
+        "lea 0x01ffb380,%%a0\n\t"
+        "move.l %%a0,%%usp\n\t"
+        "lea 2f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.l #3,0x01ff9600\n\t"
+        "move.w #0x0000,%%sr\n"
+        "1:\n\t"
+        "tst.l 0x01ff9270\n\t"
+        "beq 1b\n\t"
+        "movem.l %%sp,0x01ffb304\n\t"
+        "move.l 0x01ff9270,0x01ffb320\n\t"
+        "move.l 0x01ff9274,0x01ffb324\n\t"
+        "move.l 0x01ff9278,0x01ffb328\n\t"
+        "move.l 0x01ff927c,0x01ffb32c\n\t"
+        "move.l 0x01ff9280,0x01ffb330\n\t"
+        "trap #0\n"
+        "2:\n\t"
+        "move.l %%usp,%%a0\n\t"
+        "movem.l %%a0,0x01ffb308\n\t"
+        "move.w #0x2700,%%sr\n\t"
+        "move.l #0,0x01ff9600\n\t"
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "move.l %%a2,%%sp"
+        :
+        :
+        : "a0", "a2", "d0", "cc", "memory");
+    chk32(0x001100e0u, rd32(EXC_REC_BASE + 0x00u), 2u);
+    chk32(0x001100e4u, rd32(EXC_REC_BASE + 0x0cu) & 0x0fffu, 0x0080u);
+    chk32(0x001100e8u, rd32(EXC_REC_BASE + 0x0cu) & 0xf000u, 0u);
+    chk32(0x001100ecu, rd32(EXC_REC_BASE + 0x04u) & 0x2700u, 0u);
+    chk32(0x001100f0u, rd32(EXC_REC_BASE + 0x10u) & 1u, 0u);
+    chk32(0x001100f4u, rd32(EXC_REC_BASE + 0x08u) & 1u, 0u);
+    chk32(0x001100f8u, rd32(IRQ_USER_TEST_BASE + 0x20u), 1u);
+    chk32(0x001100fcu, rd32(IRQ_USER_TEST_BASE + 0x2cu) & 0x0fffu, 0x006cu);
+    chk32(0x00110100u, rd32(IRQ_USER_TEST_BASE + 0x2cu) & 0xf000u, 0u);
+    chk32(0x00110104u, rd32(IRQ_USER_TEST_BASE + 0x24u) & 0x2700u, 0u);
+    chk32(0x00110108u, rd32(IRQ_USER_TEST_BASE + 0x30u), rd32(IRQ_USER_TEST_BASE) - 8u);
+    chk32(0x0011010cu, rd32(IRQ_USER_TEST_BASE + 0x04u), IRQ_USER_TEST_BASE + 0x80u);
+    chk32(0x00110110u, rd32(IRQ_USER_TEST_BASE + 0x08u), IRQ_USER_TEST_BASE + 0x80u);
 }
 #endif
 
