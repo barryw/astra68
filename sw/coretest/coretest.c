@@ -1722,6 +1722,14 @@ static void test_signed_mul_div_directed(void)
     wr32(SCRATCH_BASE + 0x134, 0u);
     wr32(SCRATCH_BASE + 0x138, 0u);
     wr32(SCRATCH_BASE + 0x13c, 0u);
+    wr32(SCRATCH_BASE + 0x140, 0u);
+    wr32(SCRATCH_BASE + 0x144, 0u);
+    wr32(SCRATCH_BASE + 0x148, 0u);
+    wr32(SCRATCH_BASE + 0x14c, 0u);
+    wr32(SCRATCH_BASE + 0x150, 0u);
+    wr32(SCRATCH_BASE + 0x154, 0u);
+    wr32(SCRATCH_BASE + 0x158, 0u);
+    wr32(SCRATCH_BASE + 0x15c, 0u);
     __asm__ volatile(
         "move.l #-1234,%%d0\n\t"
         "muls.w #45,%%d0\n\t"
@@ -1747,7 +1755,31 @@ static void test_signed_mul_div_directed(void)
         "moveq #7,%%d4\n\t"
         "divs.l %%d4,%%d1:%%d0\n\t"
         "move.l %%d0,0x01ff9238\n\t"
-        "move.l %%d1,0x01ff923c"
+        "move.l %%d1,0x01ff923c\n\t"
+        "move.l #0x00010000,%%d0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "divu.w #1,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ff9240\n\t"
+        "move.l %%d1,0x01ff9244\n\t"
+        "move.l #0x00008000,%%d0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "divs.w #1,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ff9248\n\t"
+        "move.l %%d1,0x01ff924c\n\t"
+        "move.l #-32768,%%d0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "divs.w #1,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ff9250\n\t"
+        "move.l %%d1,0x01ff9254\n\t"
+        "move.l #-32769,%%d0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "divs.w #1,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ff9258\n\t"
+        "move.l %%d1,0x01ff925c"
         :
         :
         : "d0", "d1", "d4", "cc", "memory");
@@ -1759,6 +1791,14 @@ static void test_signed_mul_div_directed(void)
     chk32(0x000d001cu, rd32(SCRATCH_BASE + 0x134), 0x00000001u);
     chk32(0x000d0020u, rd32(SCRATCH_BASE + 0x138), 0xffffff72u);
     chk32(0x000d0024u, rd32(SCRATCH_BASE + 0x13c), 0xfffffffau);
+    chk32(0x000d0030u, rd32(SCRATCH_BASE + 0x140), 0x00010000u);
+    chk32(0x000d0034u, rd32(SCRATCH_BASE + 0x144) & 0x02u, 0x02u);
+    chk32(0x000d0038u, rd32(SCRATCH_BASE + 0x148), 0x00008000u);
+    chk32(0x000d003cu, rd32(SCRATCH_BASE + 0x14c) & 0x02u, 0x02u);
+    chk32(0x000d0040u, rd32(SCRATCH_BASE + 0x150), 0x00008000u);
+    chk32(0x000d0044u, rd32(SCRATCH_BASE + 0x154) & 0x02u, 0x00u);
+    chk32(0x000d0048u, rd32(SCRATCH_BASE + 0x158), 0xffff7fffu);
+    chk32(0x000d004cu, rd32(SCRATCH_BASE + 0x15c) & 0x02u, 0x02u);
 }
 
 static void test_memory_bitfield_directed(void)

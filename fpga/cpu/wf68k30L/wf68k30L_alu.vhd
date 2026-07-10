@@ -558,21 +558,31 @@ begin
                 end if;
                 --
                 if BITCNT = 0 then
-                    -- Adjust signs:
-                    if OP = DIVS and OP_SIZE = LONG and BIW_1(10) = '1' and (OP3(31) xor OP1(31)) = '1' then
-                        QUOTIENT <= not QUOTIENT_VAR + 1; -- Negative, change sign.
-                    elsif OP = DIVS and OP_SIZE = LONG and BIW_1(10) = '0' and (OP2(31) xor OP1(31)) = '1' then
-                        QUOTIENT <= not QUOTIENT_VAR + 1; -- Negative, change sign.
-                    elsif OP = DIVS and OP_SIZE = WORD and (OP2(31) xor OP1(15)) = '1' then
-                        QUOTIENT <= not QUOTIENT_VAR + 1; -- Negative, change sign.
+                    if OP = DIVS and OP_SIZE = WORD and (OP2(31) xor OP1(15)) = '0' and QUOTIENT_VAR > x"00007FFF" then
+                        VFLAG_DIV <= '1';
+                        QUOTIENT <= QUOTIENT_REST;
+                        REMAINDER <= REMAINDER_REST;
+                    elsif OP = DIVS and OP_SIZE = WORD and (OP2(31) xor OP1(15)) = '1' and QUOTIENT_VAR > x"00008000" then
+                        VFLAG_DIV <= '1';
+                        QUOTIENT <= QUOTIENT_REST;
+                        REMAINDER <= REMAINDER_REST;
                     else
-                        QUOTIENT <= QUOTIENT_VAR;
-                    end if;
-                    -- Remainder takes the sign of the dividend (magnitude computed above).
-                    if OP = DIVS and DVD_SIGN = '1' then
-                        REMAINDER <= not REMAINDER_VAR + 1; -- negative dividend => negative remainder
-                    else
-                        REMAINDER <= REMAINDER_VAR;
+                        -- Adjust signs:
+                        if OP = DIVS and OP_SIZE = LONG and BIW_1(10) = '1' and (OP3(31) xor OP1(31)) = '1' then
+                            QUOTIENT <= not QUOTIENT_VAR + 1; -- Negative, change sign.
+                        elsif OP = DIVS and OP_SIZE = LONG and BIW_1(10) = '0' and (OP2(31) xor OP1(31)) = '1' then
+                            QUOTIENT <= not QUOTIENT_VAR + 1; -- Negative, change sign.
+                        elsif OP = DIVS and OP_SIZE = WORD and (OP2(31) xor OP1(15)) = '1' then
+                            QUOTIENT <= not QUOTIENT_VAR + 1; -- Negative, change sign.
+                        else
+                            QUOTIENT <= QUOTIENT_VAR;
+                        end if;
+                        -- Remainder takes the sign of the dividend (magnitude computed above).
+                        if OP = DIVS and DVD_SIGN = '1' then
+                            REMAINDER <= not REMAINDER_VAR + 1; -- negative dividend => negative remainder
+                        else
+                            REMAINDER <= REMAINDER_VAR;
+                        end if;
                     end if;
                     DIV_RDY <= '1';
                     DIV_STATE <= IDLE;
