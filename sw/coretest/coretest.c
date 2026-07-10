@@ -5955,6 +5955,67 @@ static void test_movep_tas_cas_directed(void)
     chk32(0x000f00a0u, rd32(CAS2_TEST_BASE + 0x30u), 0x11223344u);
     chk32(0x000f00a4u, rd32(CAS2_TEST_BASE + 0x34u), 0xaaaa1122u);
     chk32(0x000f00a8u, rd32(CAS2_TEST_BASE + 0x38u) & 0x04u, 0u);
+
+    wr32(CAS2_TEST_BASE + 0x80u, 0x10203040u);
+    wr32(CAS2_TEST_BASE + 0x84u, 0x55667788u);
+    wr32(CAS2_TEST_BASE + 0x88u, 0u);
+    __asm__ volatile(
+        "move.l #0xaaaa0010,%%d0\n\t"
+        "move.l #0xbbbb00a0,%%d1\n\t"
+        "cas.b %%d0,%%d1,0x01ff98c0\n\t"
+        "move.l #0xaaaa0020,%%d0\n\t"
+        "move.l #0xbbbb00a1,%%d1\n\t"
+        "cas.b %%d0,%%d1,0x01ff98c1\n\t"
+        "move.l #0xaaaa0030,%%d0\n\t"
+        "move.l #0xbbbb00a2,%%d1\n\t"
+        "cas.b %%d0,%%d1,0x01ff98c2\n\t"
+        "move.l #0xaaaa0040,%%d0\n\t"
+        "move.l #0xbbbb00a3,%%d1\n\t"
+        "cas.b %%d0,%%d1,0x01ff98c3\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d2,0x01ff98c8"
+        :
+        :
+        : "d0", "d1", "d2", "cc", "memory");
+    chk32(0x000f0100u, rd32(CAS2_TEST_BASE + 0x80u), 0xa0a1a2a3u);
+    chk32(0x000f0104u, rd32(CAS2_TEST_BASE + 0x84u), 0x55667788u);
+    chk32(0x000f0108u, rd32(CAS2_TEST_BASE + 0x88u) & 0x04u, 0x04u);
+
+    wr32(CAS2_TEST_BASE + 0x90u, 0x11223344u);
+    wr32(CAS2_TEST_BASE + 0x94u, 0u);
+    wr32(CAS2_TEST_BASE + 0x98u, 0u);
+    __asm__ volatile(
+        "move.l #0xeeee0055,%%d0\n\t"
+        "move.l #0xffff0077,%%d1\n\t"
+        "cas.b %%d0,%%d1,0x01ff98d1\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d0,0x01ff98d4\n\t"
+        "move.l %%d2,0x01ff98d8"
+        :
+        :
+        : "d0", "d1", "d2", "cc", "memory");
+    chk32(0x000f0110u, rd32(CAS2_TEST_BASE + 0x90u), 0x11223344u);
+    chk32(0x000f0114u, rd32(CAS2_TEST_BASE + 0x94u), 0xeeee0022u);
+    chk32(0x000f0118u, rd32(CAS2_TEST_BASE + 0x98u) & 0x04u, 0u);
+
+    wr32(CAS2_TEST_BASE + 0xa0u, 0x12345678u);
+    wr32(CAS2_TEST_BASE + 0xa4u, 0x90abcdefu);
+    wr32(CAS2_TEST_BASE + 0xa8u, 0u);
+    __asm__ volatile(
+        "move.l #0xaaaa1234,%%d0\n\t"
+        "move.l #0xbbbbcafe,%%d1\n\t"
+        "cas.w %%d0,%%d1,0x01ff98e0\n\t"
+        "move.l #0xaaaa5678,%%d0\n\t"
+        "move.l #0xbbbbbeef,%%d1\n\t"
+        "cas.w %%d0,%%d1,0x01ff98e2\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d2,0x01ff98e8"
+        :
+        :
+        : "d0", "d1", "d2", "cc", "memory");
+    chk32(0x000f0120u, rd32(CAS2_TEST_BASE + 0xa0u), 0xcafebeefu);
+    chk32(0x000f0124u, rd32(CAS2_TEST_BASE + 0xa4u), 0x90abcdefu);
+    chk32(0x000f0128u, rd32(CAS2_TEST_BASE + 0xa8u) & 0x04u, 0x04u);
 }
 
 static void test_movep_displacement_directed(void)
