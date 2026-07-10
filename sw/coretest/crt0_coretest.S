@@ -100,6 +100,34 @@ _h_recover:
 	rte
 1:	putc_imm 0x58      | 'X'
 	bra     .
+	.globl _h_irq_return
+_h_irq_return:
+	movem.l %d0/%a0, -(%sp)
+	move.l  #0x01ff9270, %a0
+	addq.l  #1, (%a0)
+	moveq   #0, %d0
+	move.w  8(%sp), %d0
+	move.l  %d0, 4(%a0)
+	moveq   #0, %d0
+	move.w  10(%sp), %d0
+	swap    %d0
+	move.w  12(%sp), %d0
+	move.l  %d0, 8(%a0)
+	moveq   #0, %d0
+	move.w  14(%sp), %d0
+	move.l  %d0, 12(%a0)
+	move.l  %sp, %d0
+	addq.l  #8, %d0
+	move.l  %d0, 16(%a0)
+	move.l  %d3, 28(%a0)
+	moveq   #0, %d0
+	move.w  %d2, %d0
+	move.l  %d0, 32(%a0)
+	move.l  #0x01ff9600, %a0
+	moveq   #0, %d0
+	move.l  %d0, (%a0)
+	movem.l (%sp)+, %d0/%a0
+	rte
 _h_trap0:
 	move.l  #0x01ff91f0, %a0
 	addq.l  #1, (%a0)

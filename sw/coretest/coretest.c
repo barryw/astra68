@@ -37,6 +37,7 @@ static volatile uint32_t g_sum;
 
 extern void _h_default(void);
 extern void _h_recover(void);
+extern void _h_irq_return(void);
 extern void coretest_movem_fullshape_asm(void);
 extern void coretest_movem_ramjsr_asm(void);
 extern void coretest_movem_ramadd_asm(void);
@@ -4589,6 +4590,13 @@ static void test_exception_recovery_directed(void)
 static void test_interrupt_autovector_directed(void)
 {
     uint32_t got;
+    uint32_t loop_start;
+    uint32_t loop_end;
+    uint32_t loop_count;
+    uint32_t loop_reg;
+    uint32_t stacked_pc;
+    uint32_t irq_loop_count;
+    uint32_t irq_loop_reg;
 
     for (uint32_t off = 0; off < 0x100u; off += 4u) {
         wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
@@ -4744,6 +4752,60 @@ static void test_interrupt_autovector_directed(void)
         :
         : "a0", "d0", "cc", "memory");
     chk_exception_frame(0x00110080u, 0x007cu, 0x0000u, 0x2700u, 0x2700u);
+
+    for (uint32_t off = 0; off < 0x100u; off += 4u) {
+        wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
+    }
+    wr32(EXC_ALT_VBR + 0x6cu, (uint32_t)(uintptr_t)_h_irq_return);
+
+    arm_exception_recovery(0x006cu);
+    wr32(EXC_REC_BASE + 0x1cu, 0u);
+    wr32(EXC_REC_BASE + 0x20u, 0u);
+    wr32(IRQ_SIM_REQ, 0u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,%0\n\t"
+        "lea 3f,%%a0\n\t"
+        "move.l %%a0,%1\n\t"
+        "moveq #0,%%d3\n\t"
+        "move.w #0x03ff,%%d2\n\t"
+        "move.w #0x2000,%%sr\n"
+        "1:\n\t"
+        "addq.l #1,%%d3\n\t"
+        "cmp.l #4,%%d3\n\t"
+        "bne 2f\n\t"
+        "move.l #3,0x01ff9600\n"
+        "2:\n\t"
+        "dbra %%d2,1b\n"
+        "3:\n\t"
+        "move.w #0x2700,%%sr\n\t"
+        "move.l #0,0x01ff9600\n\t"
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "move.l %%d3,%2\n\t"
+        "moveq #0,%%d0\n\t"
+        "move.w %%d2,%%d0\n\t"
+        "move.l %%d0,%3"
+        : "=&d"(loop_start), "=&d"(loop_end), "=&d"(loop_count), "=&d"(loop_reg)
+        :
+        : "a0", "d0", "d2", "d3", "cc", "memory");
+    chk_exception_frame(0x001100a0u, 0x006cu, 0x0000u, 0x2700u, 0x2000u);
+    chk32(0x001100b8u, loop_count, 0x400u);
+    chk32(0x001100bcu, loop_reg & 0xffffu, 0xffffu);
+    irq_loop_count = rd32(EXC_REC_BASE + 0x1cu);
+    mark(0x001100c0u, irq_loop_count);
+    if (irq_loop_count < 4u) stop_fail(0x001100c0u, irq_loop_count, 4u);
+    if (irq_loop_count >= 0x400u) stop_fail(0x001100c4u, irq_loop_count, 0x3ffu);
+    irq_loop_reg = rd32(EXC_REC_BASE + 0x20u);
+    mark(0x001100c8u, irq_loop_reg);
+    if (irq_loop_reg >= 0x400u) stop_fail(0x001100c8u, irq_loop_reg, 0x3ffu);
+    if (irq_loop_reg == 0xffffu) stop_fail(0x001100cau, irq_loop_reg, 0x03ffu);
+    stacked_pc = rd32(EXC_REC_BASE + 0x08u);
+    mark(0x001100ccu, stacked_pc);
+    if (stacked_pc < loop_start) stop_fail(0x001100ccu, stacked_pc, loop_start);
+    if (stacked_pc > loop_end) stop_fail(0x001100d0u, stacked_pc, loop_end);
 }
 #endif
 
