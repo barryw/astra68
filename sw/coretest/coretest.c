@@ -4983,6 +4983,102 @@ static void store_scc_matrix(uint32_t addr, uint32_t ccr)
         : "a0", "cc", "memory");
 }
 
+static void store_bcc_mask(uint32_t addr, uint32_t ccr)
+{
+    __asm__ volatile(
+        "move.l %0,%%a0\n\t"
+        "move.l %1,%%d1\n\t"
+        "moveq #0,%%d0\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "bhi 1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000004,%%d0\n"
+        "2:\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "bls 1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000008,%%d0\n"
+        "2:\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "bcc 1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000010,%%d0\n"
+        "2:\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "bcs 1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000020,%%d0\n"
+        "2:\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "bne 1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000040,%%d0\n"
+        "2:\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "beq 1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000080,%%d0\n"
+        "2:\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "bvc 1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000100,%%d0\n"
+        "2:\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "bvs 1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000200,%%d0\n"
+        "2:\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "bpl 1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000400,%%d0\n"
+        "2:\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "bmi 1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000800,%%d0\n"
+        "2:\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "bge 1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00001000,%%d0\n"
+        "2:\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "blt 1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00002000,%%d0\n"
+        "2:\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "bgt 1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00004000,%%d0\n"
+        "2:\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "ble 1f\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00008000,%%d0\n"
+        "2:\n\t"
+        "move.l %%d0,(%%a0)"
+        :
+        : "d"(addr), "d"(ccr & 0x1fu)
+        : "a0", "d0", "d1", "cc", "memory");
+}
+
 static void test_condition_codes_directed(void)
 {
     uint32_t got;
@@ -5148,6 +5244,21 @@ static void test_condition_codes_directed(void)
             uint32_t exp = condition_true_ref(cond, ccr) ? 0xffu : 0x00u;
             chk8(0x000c0400u + (ccr << 5) + cond, rd8(row + cond), exp);
         }
+    }
+
+    for (uint32_t ccr = 0; ccr < 0x20u; ++ccr) {
+        uint32_t exp = 0u;
+
+        wr32(COND_TEST_BASE + 0x110u, 0xaaaaaaaau);
+        store_bcc_mask(COND_TEST_BASE + 0x110u, ccr);
+
+        for (uint32_t cond = 2; cond < 0x10u; ++cond) {
+            if (condition_true_ref(cond, ccr)) {
+                exp |= 1u << cond;
+            }
+        }
+
+        chk32(0x000c0800u + (ccr << 2), rd32(COND_TEST_BASE + 0x110u), exp);
     }
 }
 
