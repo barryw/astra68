@@ -26,6 +26,7 @@
 #define COND_TEST_BASE (SCRATCH_BASE + 0x1000u)
 #define BITOP_TEST_BASE (SCRATCH_BASE + 0x1200u)
 #define UNARY_TEST_BASE (SCRATCH_BASE + 0x1400u)
+#define IMM_TEST_BASE (SCRATCH_BASE + 0x1500u)
 
 static volatile uint32_t g_sum;
 
@@ -1316,6 +1317,124 @@ static void test_unary_logic_directed(void)
     chk32(0x00094060u, got0 & 0x271fu, 0x2715u);
     chk32(0x00094064u, got1 & 0x271fu, 0x2710u);
     chk32(0x00094068u, got2 & 0x271fu, 0x271fu);
+}
+
+static void test_immediate_alu_directed(void)
+{
+    uint32_t got0;
+    uint32_t got1;
+
+    wr32(IMM_TEST_BASE + 0x00u, 0x12a03400u);
+    __asm__ volatile(
+        "move.w #0x10,%%ccr\n\t"
+        "ori.b #0x0f,0x01ffa601\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got0)
+        :
+        : "d0", "cc", "memory");
+    chk32(0x00095000u, rd32(IMM_TEST_BASE + 0x00u), 0x12af3400u);
+    chk32(0x00095004u, got0 & 0x1fu, 0x18u);
+
+    wr32(IMM_TEST_BASE + 0x04u, 0x1234f0f0u);
+    __asm__ volatile(
+        "move.w #0x10,%%ccr\n\t"
+        "andi.w #0x0ff0,0x01ffa606\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got0)
+        :
+        : "d0", "cc", "memory");
+    chk32(0x00095008u, rd32(IMM_TEST_BASE + 0x04u), 0x123400f0u);
+    chk32(0x0009500cu, got0 & 0x1fu, 0x10u);
+
+    __asm__ volatile(
+        "move.l #0xffff0000,%%d0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "eori.l #0x0ff00ff0,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1", "cc");
+    chk32(0x00095010u, got0, 0xf00f0ff0u);
+    chk32(0x00095014u, got1 & 0x1fu, 0x18u);
+
+    __asm__ volatile(
+        "move.l #0x1234567f,%%d0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "addi.b #1,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1", "cc");
+    chk32(0x00095018u, got0, 0x12345680u);
+    chk32(0x0009501cu, got1 & 0x1fu, 0x0au);
+
+    wr32(IMM_TEST_BASE + 0x10u, 0xaaaaffffu);
+    __asm__ volatile(
+        "move.w #0,%%ccr\n\t"
+        "addi.w #1,0x01ffa612\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got0)
+        :
+        : "d0", "cc", "memory");
+    chk32(0x00095020u, rd32(IMM_TEST_BASE + 0x10u), 0xaaaa0000u);
+    chk32(0x00095024u, got0 & 0x1fu, 0x15u);
+
+    __asm__ volatile(
+        "move.l #0x80000000,%%d0\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "subi.l #1,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1", "cc");
+    chk32(0x00095028u, got0, 0x7fffffffu);
+    chk32(0x0009502cu, got1 & 0x1fu, 0x02u);
+
+    wr32(IMM_TEST_BASE + 0x18u, 0x00000001u);
+    __asm__ volatile(
+        "move.w #0x1f,%%ccr\n\t"
+        "subi.b #1,0x01ffa61b\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got0)
+        :
+        : "d0", "cc", "memory");
+    chk32(0x00095030u, rd32(IMM_TEST_BASE + 0x18u), 0x00000000u);
+    chk32(0x00095034u, got0 & 0x1fu, 0x04u);
+
+    __asm__ volatile(
+        "move.l #0xaaaa1234,%%d0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmpi.w #0x1234,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1", "cc");
+    chk32(0x00095038u, got0, 0xaaaa1234u);
+    chk32(0x0009503cu, got1 & 0x1fu, 0x14u);
+
+    wr32(IMM_TEST_BASE + 0x20u, 0x00000010u);
+    __asm__ volatile(
+        "move.w #0x10,%%ccr\n\t"
+        "cmpi.l #0x00000020,0x01ffa620\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got0)
+        :
+        : "d0", "cc", "memory");
+    chk32(0x00095040u, rd32(IMM_TEST_BASE + 0x20u), 0x00000010u);
+    chk32(0x00095044u, got0 & 0x1fu, 0x19u);
 }
 
 static void test_system_control_directed(void)
@@ -3290,6 +3409,7 @@ void kmain(void)
     test_address_arithmetic_directed();
     test_register_transform_directed();
     test_unary_logic_directed();
+    test_immediate_alu_directed();
     test_system_control_directed();
     test_moves_directed();
     test_cmp2_chk2_directed();
