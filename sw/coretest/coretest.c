@@ -6978,6 +6978,48 @@ static void test_bitops_directed(void)
     chk32(0x000c031cu, rd32(BITOP_TEST_BASE + 0x6cu) & 0x04u, 0x00u);
     chk32(0x000c0320u, rd32(BITOP_TEST_BASE + 0x64u), 0x00000000u);
     chk32(0x000c0324u, rd32(BITOP_TEST_BASE + 0x70u) & 0x04u, 0x00u);
+
+    wr32(BITOP_TEST_BASE + 0x80u, 0x10203040u);
+    wr32(BITOP_TEST_BASE + 0x84u, 0u);
+    wr32(BITOP_TEST_BASE + 0x88u, 0xaabbccddu);
+    for (uint32_t off = 0x90u; off <= 0xa0u; off += 4u) {
+        wr32(BITOP_TEST_BASE + off, 0u);
+    }
+    __asm__ volatile(
+        "moveq #4,%%d4\n\t"
+        "move.w #0,%%ccr\n\t"
+        "bset #7,0x01ffa380(%%d4:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa390\n\t"
+        "moveq #13,%%d0\n\t"
+        "moveq #5,%%d4\n\t"
+        "bchg %%d0,0x01ffa380(%%d4:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa394\n\t"
+        "moveq #7,%%d0\n\t"
+        "moveq #4,%%d4\n\t"
+        "btst %%d0,0x01ffa380(%%d4:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa398\n\t"
+        "moveq #5,%%d4\n\t"
+        "bclr #5,0x01ffa380(%%d4:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa39c\n\t"
+        "moveq #-1,%%d4\n\t"
+        "bset #0,0x01ffa387(%%d4:w)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa3a0"
+        :
+        :
+        : "d0", "d1", "d4", "cc", "memory");
+    chk32(0x000c0330u, rd32(BITOP_TEST_BASE + 0x80u), 0x10203040u);
+    chk32(0x000c0334u, rd32(BITOP_TEST_BASE + 0x84u), 0x80000100u);
+    chk32(0x000c0338u, rd32(BITOP_TEST_BASE + 0x88u), 0xaabbccddu);
+    chk32(0x000c033cu, rd32(BITOP_TEST_BASE + 0x90u) & 0x04u, 0x04u);
+    chk32(0x000c0340u, rd32(BITOP_TEST_BASE + 0x94u) & 0x04u, 0x04u);
+    chk32(0x000c0344u, rd32(BITOP_TEST_BASE + 0x98u) & 0x04u, 0x00u);
+    chk32(0x000c0348u, rd32(BITOP_TEST_BASE + 0x9cu) & 0x04u, 0x00u);
+    chk32(0x000c034cu, rd32(BITOP_TEST_BASE + 0xa0u) & 0x04u, 0x04u);
 }
 
 static void test_signed_mul_div_directed(void)
