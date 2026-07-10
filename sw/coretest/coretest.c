@@ -2931,6 +2931,10 @@ static void test_exception_recovery_directed(void)
 
     EXPECT_PRIV_OP(0x00100180u, "move.w %%sr,%%d0\n\t");
     EXPECT_PRIV_OP(0x00100540u, "move.w %%d0,%%sr\n\t");
+    wr32(RETURN_TEST_BASE + 0xc0u, 0x13579bdfu);
+    EXPECT_PRIV_OP(0x001005c0u, "lea 0x01ff99c0,%%a1\n\tmove.w %%sr,(%%a1)\n\t");
+    chk32(0x00100600u, rd32(RETURN_TEST_BASE + 0xc0u), 0x13579bdfu);
+    EXPECT_PRIV_OP(0x001005e0u, "lea 0x01ff99c0,%%a1\n\tmove.w (%%a1),%%sr\n\t");
     EXPECT_PRIV_OP(0x00100560u, "andi.w #0x00ff,%%sr\n\t");
     EXPECT_PRIV_OP(0x00100580u, "eori.w #0x00ff,%%sr\n\t");
     EXPECT_PRIV_OP(0x001005a0u, "ori.w #0x0700,%%sr\n\t");
