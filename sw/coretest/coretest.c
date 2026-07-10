@@ -353,6 +353,15 @@ static void test_absolute_indexed_stores(void)
         :
         : "d4", "memory");
     chk32(0x00040078u, rd32(SCRATCH_BASE + 0x74), 0x95000000u);
+
+    wr32(SCRATCH_BASE + 0x78, 0x00000000u);
+    __asm__ volatile(
+        "move.l #1,%%d4\n\t"
+        "move.b #0x96,0x01ff9178(%%d4:l)"
+        :
+        :
+        : "d4", "memory");
+    chk32(0x00040079u, rd32(SCRATCH_BASE + 0x78), 0x00960000u);
 }
 
 static void test_full_format_indexed_memory_ops(void)
@@ -490,6 +499,53 @@ static void test_full_format_indexed_memory_ops(void)
         :
         : "d4", "memory");
     chk32(0x000701d4u, rd32(FULLFMT_TEST_BASE + 0xd4u), 0x00b80000u);
+
+    wr32(FULLFMT_TEST_BASE + 0x120u, 0u);
+    __asm__ volatile(
+        "lea 0x01ff9f00,%%a0\n\t"
+        "moveq #0,%%d4\n\t"
+        "move.b #0xc0,0x0120(%%a0,%%d4:l)\n\t"
+        "moveq #1,%%d4\n\t"
+        "move.b #0xc1,0x0120(%%a0,%%d4:l)\n\t"
+        "moveq #2,%%d4\n\t"
+        "move.b #0xc2,0x0120(%%a0,%%d4:l)\n\t"
+        "moveq #3,%%d4\n\t"
+        "move.b #0xc3,0x0120(%%a0,%%d4:l)"
+        :
+        :
+        : "a0", "d4", "memory");
+    chk32(0x000701e0u, rd32(FULLFMT_TEST_BASE + 0x120u), 0xc0c1c2c3u);
+
+    wr32(FULLFMT_TEST_BASE + 0x48u, FULLFMT_TEST_BASE + 0x150u);
+    wr32(FULLFMT_TEST_BASE + 0x150u, 0u);
+    __asm__ volatile(
+        "lea 0x01ff9f00,%%a0\n\t"
+        "moveq #4,%%d4\n\t"
+        "move.b #0xd0,([0x40,%%a0,%%d4:l:2],0x00)\n\t"
+        "move.b #0xd1,([0x40,%%a0,%%d4:l:2],0x01)\n\t"
+        "move.b #0xd2,([0x40,%%a0,%%d4:l:2],0x02)\n\t"
+        "move.b #0xd3,([0x40,%%a0,%%d4:l:2],0x03)"
+        :
+        :
+        : "a0", "d4", "memory");
+    chk32(0x000701e4u, rd32(FULLFMT_TEST_BASE + 0x150u), 0xd0d1d2d3u);
+
+    wr32(FULLFMT_TEST_BASE + 0x50u, FULLFMT_TEST_BASE + 0x160u);
+    wr32(FULLFMT_TEST_BASE + 0x160u, 0u);
+    __asm__ volatile(
+        "lea 0x01ff9f00,%%a0\n\t"
+        "moveq #0,%%d4\n\t"
+        "move.b #0xe0,([0x50,%%a0],%%d4:l,0x00)\n\t"
+        "moveq #1,%%d4\n\t"
+        "move.b #0xe1,([0x50,%%a0],%%d4:l,0x00)\n\t"
+        "moveq #2,%%d4\n\t"
+        "move.b #0xe2,([0x50,%%a0],%%d4:l,0x00)\n\t"
+        "moveq #3,%%d4\n\t"
+        "move.b #0xe3,([0x50,%%a0],%%d4:l,0x00)"
+        :
+        :
+        : "a0", "d4", "memory");
+    chk32(0x000701e8u, rd32(FULLFMT_TEST_BASE + 0x160u), 0xe0e1e2e3u);
 }
 
 static void test_indexed_ea_scale_directed(void)
