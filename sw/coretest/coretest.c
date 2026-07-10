@@ -1543,6 +1543,9 @@ static void test_unary_logic_directed(void)
     chk32(0x00094054u, got0 & 0x1fu, 0x15u);
     chk32(0x00094058u, got1 & 0x1fu, 0x05u);
     chk32(0x0009405cu, got2 & 0x1fu, 0x1au);
+    chk32(0x00094070u, got0 & 0xff00u, 0x2700u);
+    chk32(0x00094074u, got1 & 0xff00u, 0x2700u);
+    chk32(0x00094078u, got2 & 0xff00u, 0x2700u);
 
     __asm__ volatile(
         "move.w #0x2700,%%sr\n\t"
