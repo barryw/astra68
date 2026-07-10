@@ -17,6 +17,7 @@
 #define STACK_TEST_BASE (SCRATCH_BASE + 0x600u)
 #define MOVES_TEST_BASE (SCRATCH_BASE + 0x700u)
 #define MOVES_EXT_TEST_BASE (SCRATCH_BASE + 0x1b00u)
+#define MOVES_FC_TEST_BASE (MOVES_EXT_TEST_BASE + 0x100u)
 #define BOUNDS_TEST_BASE (SCRATCH_BASE + 0x720u)
 #define CAS2_TEST_BASE (SCRATCH_BASE + 0x740u)
 #define RETURN_TEST_BASE (SCRATCH_BASE + 0x800u)
@@ -3699,6 +3700,26 @@ static void test_moves_directed(void)
     chk32(0x000a0190u, rd32(MOVES_TEST_BASE + 0x40u), 0x226e7f55u);
     chk32(0x000a0194u, got0, MOVES_TEST_BASE + 0x41u);
     chk32(0x000a0198u, got1, 0x00006e7fu);
+
+    wr32(MOVES_FC_TEST_BASE + 0x00u, 0x13579bdfu);
+    __asm__ volatile(
+        "moveq #2,%%d2\n\t"
+        "movec %%d2,%%sfc\n\t"
+        "moveq #1,%%d3\n\t"
+        "movec %%d3,%%dfc\n\t"
+        "lea 0x01ffad00,%%a0\n\t"
+        "moveq #0,%%d0\n\t"
+        "moves.l (%%a0),%%d0\n\t"
+        "moves.l %%d0,4(%%a0)\n\t"
+        "moveq #1,%%d2\n\t"
+        "movec %%d2,%%sfc\n\t"
+        "movec %%d2,%%dfc\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got0)
+        :
+        : "a0", "d0", "d2", "d3", "cc", "memory");
+    chk32(0x00160000u, got0, 0x13579bdfu);
+    chk32(0x00160004u, rd32(MOVES_FC_TEST_BASE + 0x04u), 0x13579bdfu);
 }
 
 static void test_cmp2_chk2_directed(void)

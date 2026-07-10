@@ -735,7 +735,7 @@ begin
     TRAP_AERR <= AERR when BUSY_EXH = '0' else '0'; -- No address error from the system during exception processing.
 
     USE_DFC <= '1' when OP_WB = MOVES and DATA_WR_MAIN = '1' else '0';
-    USE_SFC <= '1' when OP_WB = MOVES and DATA_RD_MAIN = '1' else '0';
+    USE_SFC <= '1' when OP = MOVES and DATA_RD_MAIN = '1' else '0';
 
     PC_LOAD <= PC_LOAD_EXH or PC_LOAD_MAIN;
 

@@ -16,6 +16,8 @@ module tb_coretest;
     localparam IRQ_REQ_ADDR = 32'h01ff9600;
     localparam BERR_REQ_ADDR = 32'h01ff9604;
     localparam BERR_TARGET_ADDR = 32'h01ff9608;
+    localparam MOVES_FC_READ_ADDR = 32'h01ffad00;
+    localparam MOVES_FC_WRITE_ADDR = 32'h01ffad04;
     reg [2:0] sim_ipln = 3'b111;
     reg sim_avecn = 1'b1;
     reg sim_berrn = 1'b1;
@@ -66,6 +68,19 @@ module tb_coretest;
             if (sim_berr_arm && !dut.cpu_as_n && dut.cpu_adr == BERR_TARGET_ADDR) begin
                 sim_berrn <= 1'b0;
                 sim_berr_arm <= 1'b0;
+            end
+        end
+    end
+
+    always @(posedge dut.clk) begin
+        if (rstn && !dut.rst) begin
+            if (dut.bus_read_stb && dut.cpu_adr == MOVES_FC_READ_ADDR
+                && dut.cpu_fc !== 3'b010) begin
+                $fatal(1, "MOVES SFC probe expected FC=010, got %b", dut.cpu_fc);
+            end
+            if (dut.bus_write_stb && dut.cpu_adr == MOVES_FC_WRITE_ADDR
+                && dut.cpu_fc !== 3'b001) begin
+                $fatal(1, "MOVES DFC probe expected FC=001, got %b", dut.cpu_fc);
             end
         end
     end
