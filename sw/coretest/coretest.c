@@ -25,6 +25,7 @@
 #define SHIFT_TEST_BASE (SCRATCH_BASE + 0xf00u)
 #define COND_TEST_BASE (SCRATCH_BASE + 0x1000u)
 #define BITOP_TEST_BASE (SCRATCH_BASE + 0x1200u)
+#define ADDR_TEST_BASE (SCRATCH_BASE + 0x1300u)
 #define UNARY_TEST_BASE (SCRATCH_BASE + 0x1400u)
 #define IMM_TEST_BASE (SCRATCH_BASE + 0x1500u)
 #define XMEM_TEST_BASE (SCRATCH_BASE + 0x1600u)
@@ -1794,7 +1795,7 @@ static void test_address_arithmetic_directed(void)
         : "=&d"(got0)
         :
         : "a0");
-    chk32(0x00092000u, got0, 0x01ffa3feu);
+    chk32(0x00092000u, got0, ADDR_TEST_BASE - 2u);
 
     __asm__ volatile(
         "lea 0x01ffa400,%%a0\n\t"
@@ -1803,7 +1804,7 @@ static void test_address_arithmetic_directed(void)
         : "=&d"(got0)
         :
         : "a0");
-    chk32(0x00092004u, got0, 0x01ffa404u);
+    chk32(0x00092004u, got0, ADDR_TEST_BASE + 4u);
 
     __asm__ volatile(
         "lea 0x01ffa400,%%a0\n\t"
@@ -1815,7 +1816,7 @@ static void test_address_arithmetic_directed(void)
         : "=&d"(got0), "=&d"(got1)
         :
         : "a0", "d0", "cc");
-    chk32(0x00092008u, got0, 0x01ffa408u);
+    chk32(0x00092008u, got0, ADDR_TEST_BASE + 8u);
     chk32(0x0009200cu, got1 & 0x1fu, 0x1fu);
 
     __asm__ volatile(
@@ -1829,7 +1830,7 @@ static void test_address_arithmetic_directed(void)
         : "=&d"(got0), "=&d"(got1)
         :
         : "a0", "d0", "cc");
-    chk32(0x00092010u, got0, 0x01ffa3ffu);
+    chk32(0x00092010u, got0, ADDR_TEST_BASE - 1u);
     chk32(0x00092014u, got1 & 0x1fu, 0x1fu);
 
     __asm__ volatile(
@@ -1843,8 +1844,82 @@ static void test_address_arithmetic_directed(void)
         : "=&d"(got0), "=&d"(got1)
         :
         : "a0", "d0", "cc");
-    chk32(0x00092018u, got0, 0x01ffa400u);
+    chk32(0x00092018u, got0, ADDR_TEST_BASE);
     chk32(0x0009201cu, got1 & 0x1fu, 0x1fu);
+
+    __asm__ volatile(
+        "lea 0x01ffa400,%%a0\n\t"
+        "move.l #0x12348000,%%d0\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "adda.w %%d0,%%a0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%d1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "d0", "d1", "cc");
+    chk32(0x00092020u, got0, ADDR_TEST_BASE - 0x8000u);
+    chk32(0x00092024u, got1 & 0x1fu, 0x1fu);
+
+    __asm__ volatile(
+        "lea 0x01ffa400,%%a0\n\t"
+        "move.l #0x98768000,%%d0\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "suba.w %%d0,%%a0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%d1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "d0", "d1", "cc");
+    chk32(0x00092028u, got0, ADDR_TEST_BASE + 0x8000u);
+    chk32(0x0009202cu, got1 & 0x1fu, 0x1fu);
+
+    *(volatile uint16_t *)(ADDR_TEST_BASE + 0x20u) = 0xfffeu;
+    *(volatile uint16_t *)(ADDR_TEST_BASE + 0x22u) = 0x0002u;
+    wr32(ADDR_TEST_BASE + 0x24u, 0xfffffff0u);
+
+    __asm__ volatile(
+        "lea 0x01ffa400,%%a0\n\t"
+        "lea 0x01ffa420,%%a1\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "adda.w (%%a1),%%a0\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%d0,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "d0", "cc", "memory");
+    chk32(0x00092030u, got0, ADDR_TEST_BASE - 2u);
+    chk32(0x00092034u, got1 & 0x1fu, 0x1fu);
+
+    __asm__ volatile(
+        "lea 0x01ffa400,%%a0\n\t"
+        "lea 0x01ffa422,%%a1\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "suba.w (%%a1),%%a0\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%d0,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "d0", "cc", "memory");
+    chk32(0x00092038u, got0, ADDR_TEST_BASE - 2u);
+    chk32(0x0009203cu, got1 & 0x1fu, 0x1fu);
+
+    __asm__ volatile(
+        "lea 0x01ffa400,%%a0\n\t"
+        "lea 0x01ffa424,%%a1\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "suba.l (%%a1),%%a0\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%d0,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "d0", "cc", "memory");
+    chk32(0x00092040u, got0, ADDR_TEST_BASE + 0x10u);
+    chk32(0x00092044u, got1 & 0x1fu, 0x1fu);
 }
 
 static void test_register_transform_directed(void)
