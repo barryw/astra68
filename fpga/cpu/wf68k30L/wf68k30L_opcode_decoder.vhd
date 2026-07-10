@@ -828,10 +828,10 @@ begin
                     OP_I <= MOVEC;
                 --elsif IPIPE.D(11 downto 1) = "11100111101" and IPIPE.C(11 downto 0) = x"802" then -- No cache.
                 --    OP_I <= MOVEC;
-                --elsif IPIPE.D(11 downto 1) = "11100111101" and IPIPE.C(11 downto 0) = x"803" then -- No MMU.
-                --    OP_I <= MOVEC;
-                --elsif IPIPE.D(11 downto 1) = "11100111101" and IPIPE.C(11 downto 0) = x"804" then -- No MMU.
-                --    OP_I <= MOVEC;
+                elsif IPIPE.D(11 downto 1) = "11100111101" and IPIPE.C(11 downto 0) = x"803" then -- MSP.
+                    OP_I <= MOVEC;
+                elsif IPIPE.D(11 downto 1) = "11100111101" and IPIPE.C(11 downto 0) = x"804" then -- ISP.
+                    OP_I <= MOVEC;
                 elsif IPIPE.D(11 downto 1) = "11100111101" then
                     OP_I <= ILLEGAL; -- Not valid MOVEC patterns.
                 elsif IPIPE.D(11 downto 3) = "100001001" then -- 68K20, 68K30, 68K40
