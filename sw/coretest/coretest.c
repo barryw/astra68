@@ -4500,6 +4500,32 @@ static void test_condition_codes_directed(void)
         : "a0", "cc", "memory");
     chk32(0x000c0130u, got, COND_TEST_BASE + 0x5cu);
     chk32(0x000c0134u, rd32(COND_TEST_BASE + 0x5cu), 0xff0000ffu);
+
+    for (uint32_t off = 0x80u; off < 0x90u; off += 4u) {
+        wr32(COND_TEST_BASE + off, 0u);
+    }
+    __asm__ volatile(
+        "move.l #0x12345678,%%d0\n\t"
+        "move.l #0x89abcdef,%%d1\n\t"
+        "move.l #0x0badc0de,%%d2\n\t"
+        "move.l #0x55667788,%%d3\n\t"
+        "move.w #0,%%ccr\n\t"
+        "st %%d0\n\t"
+        "sf %%d1\n\t"
+        "seq %%d2\n\t"
+        "cmp.l %%d3,%%d3\n\t"
+        "seq %%d3\n\t"
+        "move.l %%d0,0x01ffa180\n\t"
+        "move.l %%d1,0x01ffa184\n\t"
+        "move.l %%d2,0x01ffa188\n\t"
+        "move.l %%d3,0x01ffa18c"
+        :
+        :
+        : "d0", "d1", "d2", "d3", "cc", "memory");
+    chk32(0x000c0140u, rd32(COND_TEST_BASE + 0x80u), 0x123456ffu);
+    chk32(0x000c0144u, rd32(COND_TEST_BASE + 0x84u), 0x89abcd00u);
+    chk32(0x000c0148u, rd32(COND_TEST_BASE + 0x88u), 0x0badc000u);
+    chk32(0x000c014cu, rd32(COND_TEST_BASE + 0x8cu), 0x556677ffu);
 }
 
 static void test_condition_consumers_directed(void)
