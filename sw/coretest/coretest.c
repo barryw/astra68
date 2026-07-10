@@ -3973,6 +3973,157 @@ static void test_shift_register_differential(void)
     mark(0x0018f000u, 0x51f70000u);
 }
 
+static uint32_t rotate_reg_ref(uint32_t op, uint32_t bits, uint32_t value,
+                               uint32_t count, uint32_t initial_x,
+                               uint32_t *result)
+{
+    uint32_t mask = alu_size_mask(bits);
+    uint32_t sign = 1u << (bits - 1u);
+    uint32_t res = value & mask;
+    uint32_t x = initial_x != 0u;
+    uint32_t c = 0u;
+
+    count &= 63u;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (op == 0u) {
+            c = (res & sign) != 0u;
+            res = ((res << 1) & mask) | c;
+        } else if (op == 1u) {
+            c = res & 1u;
+            res = (res >> 1) | (c ? sign : 0u);
+        } else if (op == 2u) {
+            c = (res & sign) != 0u;
+            res = ((res << 1) & mask) | x;
+            x = c;
+        } else {
+            c = res & 1u;
+            res = (res >> 1) | (x ? sign : 0u);
+            x = c;
+        }
+    }
+
+    *result = (value & ~mask) | res;
+    return (x ? 0x10u : 0u) | (c ? 0x01u : 0u) |
+           ((res & sign) ? 0x08u : 0u) | (res == 0u ? 0x04u : 0u);
+}
+
+#define CPU_ROTATE_REG(OP, SIZE)                                               \
+    do {                                                                       \
+        __asm__ volatile(                                                      \
+            "move.l %2,%%d0\n\t"                                               \
+            "move.l %3,%%d1\n\t"                                               \
+            "move.l %4,%%d2\n\t"                                               \
+            "move.w %%d2,%%ccr\n\t"                                            \
+            #OP "." #SIZE " %%d0,%%d1\n\t"                                     \
+            "move.w %%sr,%%d2\n\t"                                             \
+            "move.l %%d1,%0\n\t"                                               \
+            "move.l %%d2,%1"                                                   \
+            : "=m"(*result), "=m"(*ccr)                                        \
+            : "d"(count), "d"(value), "d"(initial_ccr)                         \
+            : "d0", "d1", "d2", "cc", "memory");                             \
+    } while (0)
+
+static void cpu_rotate_reg(uint32_t op, uint32_t bits, uint32_t count,
+                           uint32_t value, uint32_t initial_x,
+                           uint32_t *result, uint32_t *ccr)
+{
+    uint32_t initial_ccr = initial_x ? 0x10u : 0u;
+
+    if (op == 0u) {
+        switch (bits) {
+        case 8u:
+            CPU_ROTATE_REG(rol, b);
+            break;
+        case 16u:
+            CPU_ROTATE_REG(rol, w);
+            break;
+        default:
+            CPU_ROTATE_REG(rol, l);
+            break;
+        }
+    } else if (op == 1u) {
+        switch (bits) {
+        case 8u:
+            CPU_ROTATE_REG(ror, b);
+            break;
+        case 16u:
+            CPU_ROTATE_REG(ror, w);
+            break;
+        default:
+            CPU_ROTATE_REG(ror, l);
+            break;
+        }
+    } else if (op == 2u) {
+        switch (bits) {
+        case 8u:
+            CPU_ROTATE_REG(roxl, b);
+            break;
+        case 16u:
+            CPU_ROTATE_REG(roxl, w);
+            break;
+        default:
+            CPU_ROTATE_REG(roxl, l);
+            break;
+        }
+    } else {
+        switch (bits) {
+        case 8u:
+            CPU_ROTATE_REG(roxr, b);
+            break;
+        case 16u:
+            CPU_ROTATE_REG(roxr, w);
+            break;
+        default:
+            CPU_ROTATE_REG(roxr, l);
+            break;
+        }
+    }
+}
+
+#undef CPU_ROTATE_REG
+
+static void test_rotate_register_differential(void)
+{
+    static const uint32_t sizes[] = {8u, 16u, 32u};
+    static const uint32_t counts[] = {1u, 2u, 3u, 7u, 8u, 15u, 16u, 31u};
+    static const uint32_t values[] = {
+        0x00000000u, 0x00000001u, 0x0000007fu, 0x00000080u,
+        0x000000ffu, 0x00007fffu, 0x00008000u, 0x0000ffffu,
+        0x7fffffffu, 0x80000000u, 0xffffffffu, 0x12345678u,
+        0x89abcdefu,
+    };
+
+    for (uint32_t op = 0; op < 4u; ++op) {
+        for (uint32_t s = 0; s < (sizeof(sizes) / sizeof(sizes[0])); ++s) {
+            uint32_t bits = sizes[s];
+
+            for (uint32_t xi = 0; xi < 2u; ++xi) {
+                for (uint32_t ci = 0; ci < (sizeof(counts) / sizeof(counts[0])); ++ci) {
+                    uint32_t count = counts[ci];
+
+                    for (uint32_t vi = 0; vi < (sizeof(values) / sizeof(values[0])); ++vi) {
+                        uint32_t id = 0x001a0000u + (op << 16) + (s << 13) +
+                                      (xi << 12) + (ci << 7) + (vi << 3);
+                        uint32_t got_result;
+                        uint32_t got_ccr;
+                        uint32_t exp_result;
+                        uint32_t exp_ccr;
+
+                        cpu_rotate_reg(op, bits, count, values[vi], xi,
+                                       &got_result, &got_ccr);
+                        exp_ccr = rotate_reg_ref(op, bits, values[vi], count, xi,
+                                                 &exp_result);
+                        chk32(id + 0x00u, got_result, exp_result);
+                        chk32(id + 0x04u, got_ccr & 0x1fu, exp_ccr);
+                    }
+                }
+            }
+        }
+    }
+
+    mark(0x001df000u, 0x70780000u);
+}
+
 static void test_addx_subx_cmpm_memory_directed(void)
 {
     uint32_t got0;
@@ -9558,6 +9709,7 @@ void kmain(void)
     test_data_alu_indexed_directed();
     test_data_alu_register_differential();
     test_shift_register_differential();
+    test_rotate_register_differential();
     test_addx_subx_cmpm_memory_directed();
     test_system_control_directed();
     test_moves_directed();

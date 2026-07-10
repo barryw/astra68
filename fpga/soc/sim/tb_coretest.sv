@@ -531,7 +531,7 @@ module tb_coretest;
     end
 
     initial begin
-        #800_000_000;
+        #3_000_000_000;
         $display("\n*** TIMEOUT: no CORETEST PASS/FAIL seen ***");
         $fatal(1);
     end
