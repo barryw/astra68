@@ -27,6 +27,7 @@
 #define BITOP_TEST_BASE (SCRATCH_BASE + 0x1200u)
 #define UNARY_TEST_BASE (SCRATCH_BASE + 0x1400u)
 #define IMM_TEST_BASE (SCRATCH_BASE + 0x1500u)
+#define XMEM_TEST_BASE (SCRATCH_BASE + 0x1600u)
 
 static volatile uint32_t g_sum;
 
@@ -1435,6 +1436,181 @@ static void test_immediate_alu_directed(void)
         : "d0", "cc", "memory");
     chk32(0x00095040u, rd32(IMM_TEST_BASE + 0x20u), 0x00000010u);
     chk32(0x00095044u, got0 & 0x1fu, 0x19u);
+}
+
+static void test_addx_subx_cmpm_memory_directed(void)
+{
+    uint32_t got0;
+    uint32_t got1;
+    uint32_t got2;
+
+    *(volatile uint8_t *)(XMEM_TEST_BASE + 0x11u) = 0xffu;
+    *(volatile uint8_t *)(XMEM_TEST_BASE + 0x21u) = 0x00u;
+    __asm__ volatile(
+        "lea 0x01ffa712,%%a0\n\t"
+        "lea 0x01ffa722,%%a1\n\t"
+        "move.w #0x14,%%ccr\n\t"
+        "addx.b -(%%a0),-(%%a1)\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1\n\t"
+        "move.l %%d0,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "a1", "d0", "cc", "memory");
+    chk32(0x00096000u, got0, XMEM_TEST_BASE + 0x11u);
+    chk32(0x00096004u, got1, XMEM_TEST_BASE + 0x21u);
+    chk8(0x00096008u, rd8(XMEM_TEST_BASE + 0x21u), 0x00u);
+    chk32(0x0009600cu, got2 & 0x1fu, 0x15u);
+
+    *(volatile uint16_t *)(XMEM_TEST_BASE + 0x32u) = 0x7fffu;
+    *(volatile uint16_t *)(XMEM_TEST_BASE + 0x42u) = 0x0000u;
+    __asm__ volatile(
+        "lea 0x01ffa734,%%a0\n\t"
+        "lea 0x01ffa744,%%a1\n\t"
+        "move.w #0,%%ccr\n\t"
+        "addx.w -(%%a0),-(%%a1)\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1\n\t"
+        "move.l %%d0,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "a1", "d0", "cc", "memory");
+    chk32(0x00096010u, got0, XMEM_TEST_BASE + 0x32u);
+    chk32(0x00096014u, got1, XMEM_TEST_BASE + 0x42u);
+    chk16(0x00096018u, rd16(XMEM_TEST_BASE + 0x42u), 0x7fffu);
+    chk32(0x0009601cu, got2 & 0x1fu, 0x00u);
+
+    wr32(XMEM_TEST_BASE + 0x50u, 0x00000001u);
+    wr32(XMEM_TEST_BASE + 0x60u, 0x00000002u);
+    __asm__ volatile(
+        "lea 0x01ffa754,%%a0\n\t"
+        "lea 0x01ffa764,%%a1\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "addx.l -(%%a0),-(%%a1)\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1\n\t"
+        "move.l %%d0,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "a1", "d0", "cc", "memory");
+    chk32(0x00096020u, got0, XMEM_TEST_BASE + 0x50u);
+    chk32(0x00096024u, got1, XMEM_TEST_BASE + 0x60u);
+    chk32(0x00096028u, rd32(XMEM_TEST_BASE + 0x60u), 0x00000004u);
+    chk32(0x0009602cu, got2 & 0x1fu, 0x00u);
+
+    *(volatile uint8_t *)(XMEM_TEST_BASE + 0x71u) = 0x00u;
+    *(volatile uint8_t *)(XMEM_TEST_BASE + 0x81u) = 0x00u;
+    __asm__ volatile(
+        "lea 0x01ffa772,%%a0\n\t"
+        "lea 0x01ffa782,%%a1\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "subx.b -(%%a0),-(%%a1)\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1\n\t"
+        "move.l %%d0,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "a1", "d0", "cc", "memory");
+    chk32(0x00096030u, got0, XMEM_TEST_BASE + 0x71u);
+    chk32(0x00096034u, got1, XMEM_TEST_BASE + 0x81u);
+    chk8(0x00096038u, rd8(XMEM_TEST_BASE + 0x81u), 0xffu);
+    chk32(0x0009603cu, got2 & 0x1fu, 0x19u);
+
+    *(volatile uint16_t *)(XMEM_TEST_BASE + 0x92u) = 0x0001u;
+    *(volatile uint16_t *)(XMEM_TEST_BASE + 0xa2u) = 0x8000u;
+    __asm__ volatile(
+        "lea 0x01ffa794,%%a0\n\t"
+        "lea 0x01ffa7a4,%%a1\n\t"
+        "move.w #0,%%ccr\n\t"
+        "subx.w -(%%a0),-(%%a1)\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1\n\t"
+        "move.l %%d0,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "a1", "d0", "cc", "memory");
+    chk32(0x00096040u, got0, XMEM_TEST_BASE + 0x92u);
+    chk32(0x00096044u, got1, XMEM_TEST_BASE + 0xa2u);
+    chk16(0x00096048u, rd16(XMEM_TEST_BASE + 0xa2u), 0x7fffu);
+    chk32(0x0009604cu, got2 & 0x1fu, 0x02u);
+
+    wr32(XMEM_TEST_BASE + 0xb0u, 0x00000000u);
+    wr32(XMEM_TEST_BASE + 0xc0u, 0x00000001u);
+    __asm__ volatile(
+        "lea 0x01ffa7b4,%%a0\n\t"
+        "lea 0x01ffa7c4,%%a1\n\t"
+        "move.w #0x14,%%ccr\n\t"
+        "subx.l -(%%a0),-(%%a1)\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1\n\t"
+        "move.l %%d0,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "a1", "d0", "cc", "memory");
+    chk32(0x00096050u, got0, XMEM_TEST_BASE + 0xb0u);
+    chk32(0x00096054u, got1, XMEM_TEST_BASE + 0xc0u);
+    chk32(0x00096058u, rd32(XMEM_TEST_BASE + 0xc0u), 0x00000000u);
+    chk32(0x0009605cu, got2 & 0x1fu, 0x04u);
+
+    *(volatile uint8_t *)(XMEM_TEST_BASE + 0xd0u) = 0x10u;
+    *(volatile uint8_t *)(XMEM_TEST_BASE + 0xe0u) = 0x20u;
+    __asm__ volatile(
+        "lea 0x01ffa7d0,%%a0\n\t"
+        "lea 0x01ffa7e0,%%a1\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmpm.b (%%a0)+,(%%a1)+\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1\n\t"
+        "move.l %%d0,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "a1", "d0", "cc", "memory");
+    chk32(0x00096060u, got0, XMEM_TEST_BASE + 0xd1u);
+    chk32(0x00096064u, got1, XMEM_TEST_BASE + 0xe1u);
+    chk32(0x00096068u, got2 & 0x1fu, 0x10u);
+
+    *(volatile uint16_t *)(XMEM_TEST_BASE + 0xf0u) = 0x8000u;
+    *(volatile uint16_t *)(XMEM_TEST_BASE + 0x100u) = 0x7fffu;
+    __asm__ volatile(
+        "lea 0x01ffa7f0,%%a0\n\t"
+        "lea 0x01ffa800,%%a1\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmpm.w (%%a0)+,(%%a1)+\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1\n\t"
+        "move.l %%d0,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "a1", "d0", "cc", "memory");
+    chk32(0x00096070u, got0, XMEM_TEST_BASE + 0xf2u);
+    chk32(0x00096074u, got1, XMEM_TEST_BASE + 0x102u);
+    chk32(0x00096078u, got2 & 0x1fu, 0x1bu);
+
+    wr32(XMEM_TEST_BASE + 0x110u, 0x12345678u);
+    wr32(XMEM_TEST_BASE + 0x120u, 0x12345678u);
+    __asm__ volatile(
+        "lea 0x01ffa810,%%a0\n\t"
+        "lea 0x01ffa820,%%a1\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmpm.l (%%a0)+,(%%a1)+\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1\n\t"
+        "move.l %%d0,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "a1", "d0", "cc", "memory");
+    chk32(0x00096080u, got0, XMEM_TEST_BASE + 0x114u);
+    chk32(0x00096084u, got1, XMEM_TEST_BASE + 0x124u);
+    chk32(0x00096088u, got2 & 0x1fu, 0x14u);
 }
 
 static void test_system_control_directed(void)
@@ -3410,6 +3586,7 @@ void kmain(void)
     test_register_transform_directed();
     test_unary_logic_directed();
     test_immediate_alu_directed();
+    test_addx_subx_cmpm_memory_directed();
     test_system_control_directed();
     test_moves_directed();
     test_cmp2_chk2_directed();

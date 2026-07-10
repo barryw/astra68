@@ -1069,7 +1069,8 @@ begin
         end if;
     end process ADR_FORMAT;
 
-    UPDT_CC <= '0' when (OP_WB_I = ADDQ or OP_WB_I = SUBQ) and BIW_0_WB(5 downto 3) = "001" else -- No update for ADDQ and SUBQ when destination is an address register.
+    UPDT_CC <= '0' when EXEC_WB_STATE /= EXECUTE else
+               '0' when (OP_WB_I = ADDQ or OP_WB_I = SUBQ) and BIW_0_WB(5 downto 3) = "001" else -- No update for ADDQ and SUBQ when destination is an address register.
                '0' when OP = CAS2 and FETCH_STATE = INIT_EXEC_WB and EXEC_WB_STATE = WRITEBACK else -- First 'Z' flag was zero, do not update the second access.
                '0' when OP = CAS2 and FETCH_STATE = INIT_EXEC_WB and EXEC_WB_STATE = WRITE_DEST and PHASE2 = true else ALU_REQ; -- Suppress third update.
 
