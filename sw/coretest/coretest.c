@@ -197,6 +197,12 @@ static void chk_access_fault_status(uint32_t id, uint32_t status_exp)
     chk32(id, status, status_exp);
 }
 
+static void chk_access_fault_long(uint32_t id, uint32_t frame_offset,
+                                  uint32_t exp)
+{
+    chk32(id, rd32(EXC_REC_BASE + frame_offset), exp);
+}
+
 static void test_aligned_long(void)
 {
     wr32(SCRATCH_BASE + 0x00, 0x11223344u);
@@ -4716,6 +4722,8 @@ static void test_exception_recovery_directed(void)
         : "a0", "d0", "d1", "cc", "memory");
     chk_access_fault_frame(0x00100720u, 0x0008u, 0x2000u, 0x2000u, 0u);
     chk_access_fault_status(0x00100738u, 0x0165u);
+    chk_access_fault_long(0x001007a0u, 0x24u, 0x22390165u);
+    chk_access_fault_long(0x001007a8u, 0x2cu, BERR_SIM_TARGET);
 
     arm_exception_recovery(0x0008u);
     __asm__ volatile(
@@ -4735,6 +4743,8 @@ static void test_exception_recovery_directed(void)
         : "a0", "d0", "d1", "cc", "memory");
     chk_access_fault_frame(0x00100740u, 0x0008u, 0x2000u, 0x2000u, 0u);
     chk_access_fault_status(0x00100758u, 0x0125u);
+    chk_access_fault_long(0x001007b0u, 0x24u, 0x23c10125u);
+    chk_access_fault_long(0x001007b8u, 0x2cu, BERR_SIM_TARGET);
 
     wr32(BERR_SIM_TARGET, 0x4e754e71u);
     arm_exception_recovery(0x0008u);
@@ -4759,6 +4769,7 @@ static void test_exception_recovery_directed(void)
         : "a0", "a1", "d0", "d1", "d2", "cc", "memory");
     chk_access_fault_frame(0x00100760u, 0x0008u, 0x2000u, 0x2000u, 0u);
     chk_access_fault_status(0x00100778u, 0x0066u);
+    chk_access_fault_long(0x001007c4u, 0x2cu, BERR_SIM_TARGET);
 #endif
 
     for (uint32_t off = 0; off < 0x100u; off += 4u) {

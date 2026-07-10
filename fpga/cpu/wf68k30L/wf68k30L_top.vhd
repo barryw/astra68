@@ -320,6 +320,7 @@ signal EXEC_RDY                 : bit;
 signal EXH_REQ                  : bit;
 signal EXT_WORD                 : std_logic_vector(15 downto 0);
 signal FAULT_ADR                : std_logic_vector(31 downto 0);
+signal FAULT_ADR_VALID          : bit := '0';
 signal FB                       : std_logic;
 signal FC                       : std_logic;
 signal FETCH_MEM_ADR            : bit;
@@ -496,6 +497,7 @@ begin
                 BIW_0 & FC & FB & RC & RB & "000" & SSW_80 when STACK_POS = 6 else -- Format A and B.
                 BIW_1 & BIW_2 when STACK_POS = 8 else -- Format A and B.
                 FAULT_ADR when STACK_FORMAT = x"9" and STACK_POS = 10 else -- ADR_EFF_cp.
+                FAULT_ADR when (STACK_FORMAT = x"A" or STACK_FORMAT = x"B") and STACK_POS = 10 and FAULT_ADR_VALID = '1' else
                 ADR_CPY_EXH when STACK_POS = 10 else
                 OUTBUFFER when STACK_POS = 14 else
                 PC + "100" when STACK_POS = 20 else --STAGE B address.
@@ -774,11 +776,18 @@ begin
     -- bus cycle. 
     begin
         wait until CLK = '1' and CLK' event;
+        if RESET_CPU = '1' then
+            FAULT_ADR_VALID <= '0';
+        elsif BERRn = '0' and HALT_INn = '1' then
+            FAULT_ADR <= ADR_LATCH;
+            FAULT_ADR_VALID <= '1';
+        elsif TRAP_AERR = '1' then
+            FAULT_ADR_VALID <= '0';
+        end if;
+        --
         if BUS_BSY = '0' then
             ADR_LATCH <= ADR_P;
             FC_LATCH <= FC_I;
-        elsif BERRn = '0' then
-            FAULT_ADR <= ADR_LATCH;
         end if;
     end process P_ADR_LATCHES;
 
