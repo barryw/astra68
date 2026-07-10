@@ -2211,6 +2211,55 @@ static void test_unary_logic_directed(void)
     chk32(0x000940a4u, got1 & 0x1fu, 0x18u);
 
     __asm__ volatile(
+        "move.l #0x0000000f,%%d0\n\t"
+        "move.l #0x123456f0,%%d1\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "and.b %%d0,%%d1\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d1,%0\n\t"
+        "move.l %%d2,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1", "d2", "cc");
+    chk32(0x000940a8u, got0, 0x12345600u);
+    chk32(0x000940acu, got1 & 0x1fu, 0x14u);
+
+    __asm__ volatile(
+        "move.l #0x00000080,%%d0\n\t"
+        "move.l #0x12345600,%%d1\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "or.b %%d0,%%d1\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d1,%0\n\t"
+        "move.l %%d2,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1", "d2", "cc");
+    chk32(0x000940b0u, got0, 0x12345680u);
+    chk32(0x000940b4u, got1 & 0x1fu, 0x18u);
+
+    wr32(UNARY_TEST_BASE + 0x24u, 0xaa55cc33u);
+    wr32(UNARY_TEST_BASE + 0x28u, 0u);
+    wr32(UNARY_TEST_BASE + 0x2cu, 0u);
+    __asm__ volatile(
+        "lea 0x01ffa524,%%a0\n\t"
+        "moveq #0x0f,%%d0\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "and.b %%d0,1(%%a0)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l #0x80,%%d0\n\t"
+        "or.b %%d0,3(%%a0)\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d1,0x01ffa528\n\t"
+        "move.l %%d2,0x01ffa52c"
+        :
+        :
+        : "a0", "d0", "d1", "d2", "cc", "memory");
+    chk32(0x000940b8u, rd32(UNARY_TEST_BASE + 0x24u), 0xaa05ccb3u);
+    chk32(0x000940bcu, rd32(UNARY_TEST_BASE + 0x28u) & 0x1fu, 0x10u);
+    chk32(0x000940c0u, rd32(UNARY_TEST_BASE + 0x2cu) & 0x1fu, 0x18u);
+
+    __asm__ volatile(
         "move.w #0x2700,%%sr\n\t"
         "ori.w #0x0015,%%sr\n\t"
         "move.w %%sr,%%d0\n\t"
