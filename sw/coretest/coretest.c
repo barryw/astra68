@@ -175,6 +175,11 @@ static void chk_exception_frame(uint32_t id, uint32_t vector_offset,
     chk32(id + 0x14u, rd32(EXC_REC_BASE + 0x08) & 1u, 0u);
 }
 
+static void chk_exception_pc(uint32_t id, uint32_t pc_exp)
+{
+    chk32(id, rd32(EXC_REC_BASE + 0x08), pc_exp);
+}
+
 static void chk_access_fault_frame(uint32_t id, uint32_t vector_offset,
                                    uint32_t sr_mask, uint32_t sr_exp,
                                    uint32_t stacked_pc_low_bit)
@@ -4828,6 +4833,7 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "d0", "cc", "memory");
     chk_exception_frame(0x00100040u, 0x0014u, 0x2000u, 0x2000u, 0x2000u);
+    chk_exception_pc(0x001007d0u, rd32(EXC_RECOVERY_PC));
 
     arm_exception_recovery(0x0014u);
     __asm__ volatile(
@@ -4879,6 +4885,7 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "cc", "memory");
     chk_exception_frame(0x00100080u, 0x001cu, 0x2000u, 0x201fu, 0x2002u);
+    chk_exception_pc(0x001007d4u, rd32(EXC_RECOVERY_PC));
 
     arm_exception_recovery(0x001cu);
     __asm__ volatile(
@@ -4893,6 +4900,7 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "d0", "cc", "memory");
     chk_exception_frame(0x00100140u, 0x001cu, 0x2000u, 0x201fu, 0x2004u);
+    chk_exception_pc(0x001007d8u, rd32(EXC_RECOVERY_PC));
 
     wr32(SCRATCH_BASE + 0x168u, 0u);
     arm_exception_recovery(0x001cu);
@@ -4979,6 +4987,7 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "d0", "cc", "memory");
     chk_exception_frame(0x001002a0u, 0x009cu, 0x0000u, 0x271fu, 0x2715u);
+    chk_exception_pc(0x001007dcu, rd32(EXC_RECOVERY_PC));
 
     arm_exception_recovery(0x0020u);
     __asm__ volatile(
