@@ -727,6 +727,40 @@ static void test_pc_indexed_data_directed(void)
     chk32(0x00070254u, rd32(FULLFMT_TEST_BASE + 0x174u), 0x2468u);
     chk32(0x00070258u, rd32(FULLFMT_TEST_BASE + 0x178u), 0x13579bdfu);
     chk32(0x0007025cu, rd32(FULLFMT_TEST_BASE + 0x17cu), 0x13579bdfu);
+
+    wr32(FULLFMT_TEST_BASE + 0x190u, 0x5aa55aa5u);
+    wr32(FULLFMT_TEST_BASE + 0x194u, 0u);
+    wr32(FULLFMT_TEST_BASE + 0x1a8u, 0x1122cc44u);
+    wr32(FULLFMT_TEST_BASE + 0x1b0u, 0u);
+    wr32(FULLFMT_TEST_BASE + 0x1c0u, 0x55667788u);
+    wr32(FULLFMT_TEST_BASE + 0x1d0u, 0u);
+    __asm__ volatile(
+        "moveq #0,%%d0\n\t"
+        "move.l ([1f,%%pc],0x00),%%d0\n\t"
+        "move.l %%d0,0x01ffa094\n\t"
+        "moveq #2,%%d4\n\t"
+        "moveq #0,%%d0\n\t"
+        "move.b ([2f,%%pc],%%d4:l:4,0x02),%%d0\n\t"
+        "move.l %%d0,0x01ffa0b0\n\t"
+        "moveq #2,%%d4\n\t"
+        "moveq #0,%%d0\n\t"
+        "move.b ([3f-8,%%pc,%%d4:l:4],0x01),%%d0\n\t"
+        "move.l %%d0,0x01ffa0d0\n\t"
+        "bra 4f\n"
+        ".balign 2\n"
+        "1:\n\t"
+        ".long 0x01ffa090\n"
+        "2:\n\t"
+        ".long 0x01ffa0a0\n"
+        "3:\n\t"
+        ".long 0x01ffa0c0\n"
+        "4:"
+        :
+        :
+        : "d0", "d4", "cc", "memory");
+    chk32(0x00070260u, rd32(FULLFMT_TEST_BASE + 0x194u), 0x5aa55aa5u);
+    chk32(0x00070264u, rd32(FULLFMT_TEST_BASE + 0x1b0u), 0xccu);
+    chk32(0x00070268u, rd32(FULLFMT_TEST_BASE + 0x1d0u), 0x66u);
 }
 
 static void test_an_indexed_stores(void)
