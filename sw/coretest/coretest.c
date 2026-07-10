@@ -4432,6 +4432,38 @@ static void test_pack_unpk_directed(void)
     chk32(0x000a0650u, got0, PACK_TEST_BASE + 0x81u);
     chk32(0x000a0654u, got1, PACK_TEST_BASE + 0x90u);
     chk16(0x000a0658u, rd16(PACK_TEST_BASE + 0x90u), 0x0306u);
+
+    wr32(PACK_TEST_BASE + 0xa0u, 0x11040722u);
+    wr32(PACK_TEST_BASE + 0xb0u, 0u);
+    __asm__ volatile(
+        "lea 0x01ff9ba3,%%a0\n\t"
+        "lea 0x01ff9bb1,%%a1\n\t"
+        "pack -(%%a0),-(%%a1),#0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "cc", "memory");
+    chk32(0x000a0660u, got0, PACK_TEST_BASE + 0xa1u);
+    chk32(0x000a0664u, got1, PACK_TEST_BASE + 0xb0u);
+    chk32(0x000a0668u, rd32(PACK_TEST_BASE + 0xa0u), 0x11040722u);
+    chk32(0x000a066cu, rd32(PACK_TEST_BASE + 0xb0u), 0x47000000u);
+
+    wr32(PACK_TEST_BASE + 0xc0u, 0x48000000u);
+    wr32(PACK_TEST_BASE + 0xd0u, 0x11223344u);
+    __asm__ volatile(
+        "lea 0x01ff9bc1,%%a0\n\t"
+        "lea 0x01ff9bd3,%%a1\n\t"
+        "unpk -(%%a0),-(%%a1),#0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "cc", "memory");
+    chk32(0x000a0670u, got0, PACK_TEST_BASE + 0xc0u);
+    chk32(0x000a0674u, got1, PACK_TEST_BASE + 0xd1u);
+    chk32(0x000a0678u, rd32(PACK_TEST_BASE + 0xc0u), 0x48000000u);
+    chk32(0x000a067cu, rd32(PACK_TEST_BASE + 0xd0u), 0x11040844u);
 }
 
 static void test_exception_recovery_directed(void)
