@@ -932,6 +932,57 @@ static void test_stack_frame_control_directed(void)
     chk32(0x0009105cu, got2, got0);
 }
 
+static void test_address_arithmetic_directed(void)
+{
+    uint32_t got0;
+    uint32_t got1;
+
+    __asm__ volatile(
+        "lea 0x01ffa400,%%a0\n\t"
+        "adda.w #-2,%%a0\n\t"
+        "move.l %%a0,%0"
+        : "=&d"(got0)
+        :
+        : "a0");
+    chk32(0x00092000u, got0, 0x01ffa3feu);
+
+    __asm__ volatile(
+        "lea 0x01ffa400,%%a0\n\t"
+        "suba.w #-4,%%a0\n\t"
+        "move.l %%a0,%0"
+        : "=&d"(got0)
+        :
+        : "a0");
+    chk32(0x00092004u, got0, 0x01ffa404u);
+
+    __asm__ volatile(
+        "lea 0x01ffa400,%%a0\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "adda.l #8,%%a0\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%d0,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "d0", "cc");
+    chk32(0x00092008u, got0, 0x01ffa408u);
+    chk32(0x0009200cu, got1 & 0x1fu, 0x1fu);
+
+    __asm__ volatile(
+        "lea 0x01ffa400,%%a0\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "addq.l #1,%%a0\n\t"
+        "subq.l #2,%%a0\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%d0,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "d0", "cc");
+    chk32(0x00092010u, got0, 0x01ffa3ffu);
+    chk32(0x00092014u, got1 & 0x1fu, 0x1fu);
+}
+
 static void test_system_control_directed(void)
 {
     uint32_t got;
@@ -2901,6 +2952,7 @@ void kmain(void)
     test_movem_directed();
     test_control_flow_directed();
     test_stack_frame_control_directed();
+    test_address_arithmetic_directed();
     test_system_control_directed();
     test_moves_directed();
     test_cmp2_chk2_directed();
