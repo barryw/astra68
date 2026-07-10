@@ -589,6 +589,18 @@ static void test_full_format_indexed_memory_ops(void)
         :
         : "a0", "d4", "memory");
     chk32(0x000701e8u, rd32(FULLFMT_TEST_BASE + 0x160u), 0xe0e1e2e3u);
+
+    wr32(FULLFMT_TEST_BASE + 0x1e0u, 0u);
+    wr32(FULLFMT_TEST_BASE + 0x1ecu, 0u);
+    __asm__ volatile(
+        "lea 0x01ff9f00,%%a0\n\t"
+        "move.l #7,%%d4\n\t"
+        ".word 0x11bc,0x00e4,0x4b60,0x01e0"
+        :
+        :
+        : "a0", "d4", "memory");
+    chk32(0x000701ecu, rd32(FULLFMT_TEST_BASE + 0x1e0u), 0xe4000000u);
+    chk32(0x000701f0u, rd32(FULLFMT_TEST_BASE + 0x1ecu), 0u);
 }
 
 static void test_indexed_ea_scale_directed(void)

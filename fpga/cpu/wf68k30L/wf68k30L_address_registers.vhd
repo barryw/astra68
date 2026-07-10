@@ -241,6 +241,7 @@ begin
     variable INDEX              : std_logic_vector(31 downto 0) := x"00000000";    
     variable INDEX_SCALED       : std_logic_vector(31 downto 0);
     variable INDEX_SCALE        : std_logic_vector(1 downto 0);
+    variable INDEX_SUPPRESSED   : boolean;
     variable MEM_ADR            : std_logic_vector(31 downto 0);
     variable OUTER_DISPL        : std_logic_vector(31 downto 0);
     variable PCVAR              : std_logic_vector(31 downto 0);
@@ -297,15 +298,21 @@ begin
             --
             if STORE_ADR_FORMAT = '1' then
                 INDEX_SCALE := EXT_WORD(10 downto 9);
+                INDEX_SUPPRESSED := EXT_WORD(8) = '1' and EXT_WORD(6) = '1';
             else
                 INDEX_SCALE := SCALE;
+                INDEX_SUPPRESSED := F_E = '1' and I_S = '1';
             end if;
-            case INDEX_SCALE is
-                when "00" => INDEX_SCALED := INDEX; -- Multiple by 1.
-                when "01" => INDEX_SCALED := INDEX(30 downto 0) & '0'; -- Multiple by 2.
-                when "10" => INDEX_SCALED := INDEX(29 downto 0) & "00"; -- Multiple by 4.
-                when others => INDEX_SCALED := INDEX(28 downto 0) & "000"; -- Multiple by 8.
-            end case;
+            if INDEX_SUPPRESSED = true then
+                INDEX_SCALED := (others => '0');
+            else
+                case INDEX_SCALE is
+                    when "00" => INDEX_SCALED := INDEX; -- Multiple by 1.
+                    when "01" => INDEX_SCALED := INDEX(30 downto 0) & '0'; -- Multiple by 2.
+                    when "10" => INDEX_SCALED := INDEX(29 downto 0) & "00"; -- Multiple by 4.
+                    when others => INDEX_SCALED := INDEX(28 downto 0) & "000"; -- Multiple by 8.
+                end case;
+            end if;
             --
             -- Register for memory indirect addressing modes.
             if STORE_MEM_ADR = '1' then
