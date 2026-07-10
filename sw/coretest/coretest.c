@@ -2946,6 +2946,73 @@ static void test_unary_logic_directed(void)
     chk32(0x000940bcu, rd32(UNARY_TEST_BASE + 0x28u) & 0x1fu, 0x10u);
     chk32(0x000940c0u, rd32(UNARY_TEST_BASE + 0x2cu) & 0x1fu, 0x18u);
 
+    wr32(UNARY_TEST_BASE + 0x40u, 0x12345678u);
+    wr32(UNARY_TEST_BASE + 0x44u, 0x80000001u);
+    wr32(UNARY_TEST_BASE + 0x48u, 0x0f0f00f0u);
+    wr32(UNARY_TEST_BASE + 0x4cu, 0x00ff5500u);
+    wr32(UNARY_TEST_BASE + 0x50u, 0xf0f00ff0u);
+    wr32(UNARY_TEST_BASE + 0x54u, 0x00008000u);
+    wr32(UNARY_TEST_BASE + 0x58u, 0xaaaaaaaau);
+    for (uint32_t off = 0x60u; off <= 0x78u; off += 4u) {
+        wr32(UNARY_TEST_BASE + off, 0u);
+    }
+    __asm__ volatile(
+        "moveq #2,%%d4\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "not.w 0x01ffa540(%%d4:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa560\n\t"
+        "moveq #4,%%d4\n\t"
+        "move.w #0,%%ccr\n\t"
+        "neg.l 0x01ffa540(%%d4:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa564\n\t"
+        "movea.l #9,%%a1\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "clr.b 0x01ffa540(%%a1:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa568\n\t"
+        "moveq #6,%%d4\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "tst.w 0x01ffa540(%%d4:l:2)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa56c\n\t"
+        "moveq #0x0f,%%d0\n\t"
+        "moveq #3,%%d4\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "and.b %%d0,0x01ffa550(%%d4:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa570\n\t"
+        "move.l #0x00000f0f,%%d0\n\t"
+        "move.l #0x7fff0004,%%d4\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "or.w %%d0,0x01ffa550(%%d4:w)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa574\n\t"
+        "moveq #-1,%%d0\n\t"
+        "movea.l #0,%%a1\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "eor.l %%d0,0x01ffa558(%%a1:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa578"
+        :
+        :
+        : "a1", "d0", "d1", "d4", "cc", "memory");
+    chk32(0x000940c4u, rd32(UNARY_TEST_BASE + 0x40u), 0x1234a987u);
+    chk32(0x000940c8u, rd32(UNARY_TEST_BASE + 0x44u), 0x7fffffffu);
+    chk32(0x000940ccu, rd32(UNARY_TEST_BASE + 0x48u), 0x0f0000f0u);
+    chk32(0x000940d0u, rd32(UNARY_TEST_BASE + 0x4cu), 0x00ff5500u);
+    chk32(0x000940d4u, rd32(UNARY_TEST_BASE + 0x50u), 0xf0f00f00u);
+    chk32(0x000940d8u, rd32(UNARY_TEST_BASE + 0x54u), 0x0f0f8000u);
+    chk32(0x000940dcu, rd32(UNARY_TEST_BASE + 0x58u), 0x55555555u);
+    chk32(0x000940e0u, rd32(UNARY_TEST_BASE + 0x60u) & 0x1fu, 0x18u);
+    chk32(0x000940e4u, rd32(UNARY_TEST_BASE + 0x64u) & 0x1fu, 0x11u);
+    chk32(0x000940e8u, rd32(UNARY_TEST_BASE + 0x68u) & 0x1fu, 0x14u);
+    chk32(0x000940ecu, rd32(UNARY_TEST_BASE + 0x6cu) & 0x1fu, 0x10u);
+    chk32(0x000940f0u, rd32(UNARY_TEST_BASE + 0x70u) & 0x1fu, 0x14u);
+    chk32(0x000940f4u, rd32(UNARY_TEST_BASE + 0x74u) & 0x1fu, 0x10u);
+    chk32(0x000940f8u, rd32(UNARY_TEST_BASE + 0x78u) & 0x1fu, 0x10u);
+
     __asm__ volatile(
         "move.w #0x2700,%%sr\n\t"
         "ori.w #0x0015,%%sr\n\t"
