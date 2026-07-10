@@ -4712,6 +4712,38 @@ static void test_interrupt_autovector_directed(void)
         :
         : "a0", "d0", "cc", "memory");
     chk_exception_frame(0x00110060u, 0x0074u, 0x0000u, 0x2700u, 0x2300u);
+
+    for (uint32_t off = 0; off < 0x100u; off += 4u) {
+        wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
+    }
+    wr32(EXC_ALT_VBR + 0x7cu, (uint32_t)(uintptr_t)_h_recover);
+
+    arm_exception_recovery(0x007cu);
+    wr32(IRQ_SIM_REQ, 0u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.w #0x2700,%%sr\n\t"
+        "move.l #7,0x01ff9600\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n"
+        "1:\n\t"
+        "move.w #0x2700,%%sr\n\t"
+        "move.l #0,0x01ff9600\n\t"
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr"
+        :
+        :
+        : "a0", "d0", "cc", "memory");
+    chk_exception_frame(0x00110080u, 0x007cu, 0x0000u, 0x2700u, 0x2700u);
 }
 #endif
 
