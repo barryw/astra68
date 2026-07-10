@@ -2946,6 +2946,7 @@ static void test_exception_recovery_directed(void)
     EXPECT_PRIV_OP(0x00100500u, "lea 0x01ff9100,%%a1\n\tmoves.l %%d0,(%%a1)\n\t");
     EXPECT_PRIV_OP(0x00100520u, "lea 0x01ff9100,%%a1\n\tmoves.l (%%a1),%%d0\n\t");
     EXPECT_PRIV_OP(0x001001c0u, "lea 0x01ff9e40,%%a1\n\tmove.l %%a1,%%usp\n\t");
+    EXPECT_PRIV_OP(0x00100620u, "move.l %%usp,%%a1\n\t");
     EXPECT_PRIV_OP(0x001001e0u, "reset\n\t");
     EXPECT_PRIV_OP(0x00100200u, "stop #0x2000\n\t");
     EXPECT_PRIV_OP(0x00100220u, "rte\n\t");
