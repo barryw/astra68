@@ -1463,6 +1463,32 @@ static void test_stack_frame_control_directed(void)
         : "a0", "memory");
     chk32(0x00091058u, got1, STACK_TEST_BASE + 0x60u);
     chk32(0x0009105cu, got2, got0);
+
+    wr32(STACK_TEST_BASE + 0xf4u, 0xaaaaaaaau);
+    wr32(STACK_TEST_BASE + 0xf8u, 0xbbbbbbbbu);
+    __asm__ volatile(
+        "lea 0x01ff9764,%%a0\n\t"
+        "lea 0x01ff97fc,%%a1\n\t"
+        "move.l %%a0,-(%%a1)\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "memory");
+    chk32(0x000910a4u, got0, STACK_TEST_BASE + 0x64u);
+    chk32(0x000910a8u, got1, STACK_TEST_BASE + 0xf8u);
+    chk32(0x000910acu, rd32(STACK_TEST_BASE + 0xf8u), STACK_TEST_BASE + 0x64u);
+
+    __asm__ volatile(
+        "lea 0x01ff97f8,%%a0\n\t"
+        "move.l %%a0,-(%%a0)\n\t"
+        "move.l %%a0,%0"
+        : "=&d"(got0)
+        :
+        : "a0", "memory");
+    chk32(0x000910b0u, got0, STACK_TEST_BASE + 0xf4u);
+    chk32(0x000910b4u, rd32(STACK_TEST_BASE + 0xf4u), STACK_TEST_BASE + 0xf8u);
+    chk32(0x000910b8u, rd32(STACK_TEST_BASE + 0xf8u), STACK_TEST_BASE + 0x64u);
 }
 
 static void test_address_arithmetic_directed(void)
