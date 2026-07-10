@@ -3463,6 +3463,70 @@ static void test_system_control_directed(void)
         : "a0", "a1", "d0", "d1", "cc", "memory");
     chk_exception_frame(0x000a0090u, 0x0080u, 0x0000u, 0x2000u, 0x0000u);
     chk32(0x000a00a8u, got, RETURN_TEST_BASE + 0xe0u);
+
+    arm_exception_recovery(0x0020u);
+    __asm__ volatile(
+        "lea 0x01ff99e0,%%a1\n\t"
+        "move.l %%a1,%%usp\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.w #0x0000,%%sr\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l #0xbadbad,%%d0\n"
+        "1:"
+        :
+        :
+        : "a0", "a1", "d0", "cc", "memory");
+    chk_exception_frame(0x00130000u, 0x0020u, 0x0000u, 0x2700u, 0x0000u);
+
+    arm_exception_recovery(0x0020u);
+    __asm__ volatile(
+        "lea 0x01ff99e0,%%a1\n\t"
+        "move.l %%a1,%%usp\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.w #0x0000,%%sr\n\t"
+        "move.w #0x2700,%%sr\n\t"
+        "move.l #0xbadbad,%%d0\n"
+        "1:"
+        :
+        :
+        : "a0", "a1", "d0", "cc", "memory");
+    chk_exception_frame(0x00130020u, 0x0020u, 0x0000u, 0x2700u, 0x0000u);
+
+    arm_exception_recovery(0x0020u);
+    __asm__ volatile(
+        "lea 0x01ff99e0,%%a1\n\t"
+        "move.l %%a1,%%usp\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.w #0x0000,%%sr\n\t"
+        "movec %%vbr,%%d0\n\t"
+        "move.l #0xbadbad,%%d0\n"
+        "1:"
+        :
+        :
+        : "a0", "a1", "d0", "cc", "memory");
+    chk_exception_frame(0x00130040u, 0x0020u, 0x0000u, 0x2700u, 0x0000u);
+
+    arm_exception_recovery(0x0020u);
+    __asm__ volatile(
+        "moveq #1,%%d2\n\t"
+        "movec %%d2,%%sfc\n\t"
+        "movec %%d2,%%dfc\n\t"
+        "lea 0x01ff99e0,%%a1\n\t"
+        "move.l %%a1,%%usp\n\t"
+        "lea 0x01ff9800,%%a2\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.w #0x0000,%%sr\n\t"
+        "moves.l (%%a2),%%d0\n\t"
+        "move.l #0xbadbad,%%d0\n"
+        "1:"
+        :
+        :
+        : "a0", "a1", "a2", "d0", "d2", "cc", "memory");
+    chk_exception_frame(0x00130060u, 0x0020u, 0x0000u, 0x2700u, 0x0000u);
 }
 
 static void test_moves_directed(void)
