@@ -1693,6 +1693,20 @@ static void test_address_arithmetic_directed(void)
         : "a0", "d0", "cc");
     chk32(0x00092010u, got0, 0x01ffa3ffu);
     chk32(0x00092014u, got1 & 0x1fu, 0x1fu);
+
+    __asm__ volatile(
+        "lea 0x01ffa400,%%a0\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "addq.l #8,%%a0\n\t"
+        "subq.l #8,%%a0\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%d0,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "d0", "cc");
+    chk32(0x00092018u, got0, 0x01ffa400u);
+    chk32(0x0009201cu, got1 & 0x1fu, 0x1fu);
 }
 
 static void test_register_transform_directed(void)
