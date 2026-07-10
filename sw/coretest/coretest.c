@@ -9405,6 +9405,110 @@ static void test_mul_long_register_differential(void)
     mark(0x0026f000u, 0x6d750001u);
 }
 
+static void mul_long_one_ref(uint32_t op, uint32_t src, uint32_t dst,
+                             uint32_t initial_ccr, uint32_t *src_result,
+                             uint32_t *dst_result, uint32_t *ccr)
+{
+    uint32_t hi;
+    uint32_t lo;
+    uint32_t v;
+
+    if (op == 0u) {
+        mul_u32_u32_ref(src, dst, &hi, &lo);
+        v = hi != 0u;
+    } else {
+        uint32_t src_neg = (src & 0x80000000u) != 0u;
+        uint32_t dst_neg = (dst & 0x80000000u) != 0u;
+
+        mul_u32_u32_ref(signed32_magnitude(src), signed32_magnitude(dst),
+                        &hi, &lo);
+        if ((src_neg ^ dst_neg) && (hi != 0u || lo != 0u)) {
+            negate64_ref(&hi, &lo);
+        }
+        v = ((lo & 0x80000000u) == 0u && hi != 0u) ||
+            ((lo & 0x80000000u) != 0u && hi != 0xffffffffu);
+    }
+
+    *src_result = src;
+    *dst_result = lo;
+    *ccr = (initial_ccr & 0x10u) |
+           ((lo & 0x80000000u) ? 0x08u : 0u) |
+           (lo == 0u ? 0x04u : 0u) |
+           (v ? 0x02u : 0u);
+}
+
+#define CPU_MUL_LONG_ONE_REG(OP)                                               \
+    do {                                                                       \
+        __asm__ volatile(                                                      \
+            "move.l %3,%%d0\n\t"                                               \
+            "move.l %4,%%d1\n\t"                                               \
+            "move.l %5,%%d2\n\t"                                               \
+            "move.w %%d2,%%ccr\n\t"                                            \
+            #OP ".l %%d0,%%d1\n\t"                                             \
+            "move.w %%sr,%%d2\n\t"                                             \
+            "move.l %%d0,%0\n\t"                                               \
+            "move.l %%d1,%1\n\t"                                               \
+            "move.l %%d2,%2"                                                   \
+            : "=m"(*src_result), "=m"(*dst_result), "=m"(*ccr)                 \
+            : "d"(src), "d"(dst), "d"(initial_ccr)                             \
+            : "d0", "d1", "d2", "cc", "memory");                             \
+    } while (0)
+
+static void cpu_mul_long_one_reg(uint32_t op, uint32_t src, uint32_t dst,
+                                 uint32_t initial_ccr, uint32_t *src_result,
+                                 uint32_t *dst_result, uint32_t *ccr)
+{
+    if (op == 0u) {
+        CPU_MUL_LONG_ONE_REG(mulu);
+    } else {
+        CPU_MUL_LONG_ONE_REG(muls);
+    }
+}
+
+#undef CPU_MUL_LONG_ONE_REG
+
+static void test_mul_long_one_register_differential(void)
+{
+    static const uint32_t ccrs[] = {0x00u, 0x1fu};
+    static const struct {
+        uint32_t src;
+        uint32_t dst;
+    } pairs[] = {
+        {0x00000000u, 0x00000000u}, {0x00000001u, 0x00000001u},
+        {0x00000002u, 0x80000000u}, {0xffffffffu, 0x00000001u},
+        {0xffffffffu, 0x00000002u}, {0xffffffffu, 0xffffffffu},
+        {0x00010002u, 0x00030004u}, {0x80000000u, 0x00000001u},
+        {0x80000000u, 0x00000002u}, {0x7fffffffu, 0x00000002u},
+        {0x40000000u, 0x00000004u}, {0x12345678u, 0x9abcdef0u},
+    };
+
+    for (uint32_t op = 0; op < 2u; ++op) {
+        for (uint32_t ci = 0; ci < (sizeof(ccrs) / sizeof(ccrs[0])); ++ci) {
+            for (uint32_t i = 0; i < (sizeof(pairs) / sizeof(pairs[0])); ++i) {
+                uint32_t id = 0x00280000u + (op << 15) + (ci << 14) +
+                              (i << 4);
+                uint32_t got_src;
+                uint32_t got_dst;
+                uint32_t got_ccr;
+                uint32_t exp_src;
+                uint32_t exp_dst;
+                uint32_t exp_ccr;
+
+                cpu_mul_long_one_reg(op, pairs[i].src, pairs[i].dst, ccrs[ci],
+                                     &got_src, &got_dst, &got_ccr);
+                mul_long_one_ref(op, pairs[i].src, pairs[i].dst, ccrs[ci],
+                                 &exp_src, &exp_dst, &exp_ccr);
+
+                chk32(id + 0x00u, got_src, exp_src);
+                chk32(id + 0x04u, got_dst, exp_dst);
+                chk32(id + 0x08u, got_ccr & 0x1fu, exp_ccr);
+            }
+        }
+    }
+
+    mark(0x0028f000u, 0x6d750002u);
+}
+
 static void udiv64_by32_ref(uint32_t dividend_hi, uint32_t dividend_lo,
                             uint32_t divisor, uint32_t *quotient,
                             uint32_t *remainder, uint32_t *overflow)
@@ -11236,6 +11340,7 @@ void kmain(void)
     test_mul_word_register_differential();
     test_div_word_register_differential();
     test_mul_long_register_differential();
+    test_mul_long_one_register_differential();
     test_div_long_register_differential();
     test_signed_mul_div_directed();
     test_mul_div_memory_directed();
