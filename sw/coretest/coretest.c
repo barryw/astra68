@@ -1015,6 +1015,148 @@ static void test_an_post_pre_byte(void)
     chk32(0x00060012u, after, SCRATCH_BASE + 0x92);
 }
 
+static void test_memory_to_memory_move_directed(void)
+{
+    const uint32_t base = XMEM_TEST_BASE + 0x200u;
+    uint32_t got0;
+    uint32_t got1;
+
+    wr32(base + 0x00u, 0x005a0000u);
+    wr32(base + 0x80u, 0u);
+    __asm__ volatile(
+        "lea 0x01ffa901,%%a0\n\t"
+        "lea 0x01ffa981,%%a1\n\t"
+        "move.b (%%a0),(%%a1)\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "cc", "memory");
+    chk32(0x00097000u, got0, base + 0x01u);
+    chk32(0x00097004u, got1, base + 0x81u);
+    chk32(0x00097008u, rd32(base + 0x80u), 0x005a0000u);
+
+    wr32(base + 0x10u, 0x12340000u);
+    wr32(base + 0x90u, 0u);
+    __asm__ volatile(
+        "lea 0x01ffa910,%%a0\n\t"
+        "lea 0x01ffa990,%%a1\n\t"
+        "move.w (%%a0),(%%a1)+\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "cc", "memory");
+    chk32(0x00097010u, got0, base + 0x10u);
+    chk32(0x00097014u, got1, base + 0x92u);
+    chk32(0x00097018u, rd32(base + 0x90u), 0x12340000u);
+
+    wr32(base + 0x20u, 0x89abcdefu);
+    wr32(base + 0xa0u, 0u);
+    __asm__ volatile(
+        "lea 0x01ffa920,%%a0\n\t"
+        "lea 0x01ffa9a4,%%a1\n\t"
+        "move.l (%%a0),-(%%a1)\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "cc", "memory");
+    chk32(0x00097020u, got0, base + 0x20u);
+    chk32(0x00097024u, got1, base + 0xa0u);
+    chk32(0x00097028u, rd32(base + 0xa0u), 0x89abcdefu);
+
+    wr32(base + 0x30u, 0x00660000u);
+    wr32(base + 0xb0u, 0u);
+    __asm__ volatile(
+        "lea 0x01ffa931,%%a0\n\t"
+        "lea 0x01ffa9b1,%%a1\n\t"
+        "move.b (%%a0)+,(%%a1)\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "cc", "memory");
+    chk32(0x00097030u, got0, base + 0x32u);
+    chk32(0x00097034u, got1, base + 0xb1u);
+    chk32(0x00097038u, rd32(base + 0xb0u), 0x00660000u);
+
+    wr32(base + 0x40u, 0x56780000u);
+    wr32(base + 0xc0u, 0u);
+    __asm__ volatile(
+        "lea 0x01ffa940,%%a0\n\t"
+        "lea 0x01ffa9c0,%%a1\n\t"
+        "move.w (%%a0)+,(%%a1)+\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "cc", "memory");
+    chk32(0x00097040u, got0, base + 0x42u);
+    chk32(0x00097044u, got1, base + 0xc2u);
+    chk32(0x00097048u, rd32(base + 0xc0u), 0x56780000u);
+
+    wr32(base + 0x50u, 0x0badc0deu);
+    wr32(base + 0xd0u, 0u);
+    __asm__ volatile(
+        "lea 0x01ffa950,%%a0\n\t"
+        "lea 0x01ffa9d4,%%a1\n\t"
+        "move.l (%%a0)+,-(%%a1)\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "cc", "memory");
+    chk32(0x00097050u, got0, base + 0x54u);
+    chk32(0x00097054u, got1, base + 0xd0u);
+    chk32(0x00097058u, rd32(base + 0xd0u), 0x0badc0deu);
+
+    wr32(base + 0x60u, 0x7c000000u);
+    wr32(base + 0xe0u, 0u);
+    __asm__ volatile(
+        "lea 0x01ffa961,%%a0\n\t"
+        "lea 0x01ffa9e3,%%a1\n\t"
+        "move.b -(%%a0),(%%a1)\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "cc", "memory");
+    chk32(0x00097060u, got0, base + 0x60u);
+    chk32(0x00097064u, got1, base + 0xe3u);
+    chk32(0x00097068u, rd32(base + 0xe0u), 0x0000007cu);
+
+    wr32(base + 0x70u, 0x9abc0000u);
+    wr32(base + 0xf0u, 0u);
+    __asm__ volatile(
+        "lea 0x01ffa972,%%a0\n\t"
+        "lea 0x01ffa9f0,%%a1\n\t"
+        "move.w -(%%a0),(%%a1)+\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "cc", "memory");
+    chk32(0x00097070u, got0, base + 0x70u);
+    chk32(0x00097074u, got1, base + 0xf2u);
+    chk32(0x00097078u, rd32(base + 0xf0u), 0x9abc0000u);
+
+    wr32(base + 0x80u, 0x13579bdfu);
+    wr32(base + 0x100u, 0u);
+    __asm__ volatile(
+        "lea 0x01ffa984,%%a0\n\t"
+        "lea 0x01ffaa04,%%a1\n\t"
+        "move.l -(%%a0),-(%%a1)\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%a1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "cc", "memory");
+    chk32(0x00097080u, got0, base + 0x80u);
+    chk32(0x00097084u, got1, base + 0x100u);
+    chk32(0x00097088u, rd32(base + 0x100u), 0x13579bdfu);
+}
+
 static void test_movem_directed(void)
 {
     wr32(SCRATCH_BASE + 0xa0, 0u);
@@ -8001,6 +8143,7 @@ void kmain(void)
     test_pc_indexed_data_directed();
     test_an_indexed_stores();
     test_an_post_pre_byte();
+    test_memory_to_memory_move_directed();
     test_movem_directed();
     test_control_flow_directed();
     test_stack_frame_control_directed();
