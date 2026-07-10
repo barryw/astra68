@@ -815,6 +815,21 @@ static void test_pc_indexed_data_directed(void)
         :
         : "d0", "d4", "cc", "memory");
     chk32(0x00070270u, rd32(FULLFMT_TEST_BASE + 0x220u), 0xa7u);
+
+    wr32(FULLFMT_TEST_BASE + 0x240u, FULLFMT_TEST_BASE + 0x250u);
+    wr32(FULLFMT_TEST_BASE + 0x250u, 0x112233a8u);
+    wr32(FULLFMT_TEST_BASE + 0x260u, 0u);
+    __asm__ volatile(
+        "moveq #0,%%d0\n\t"
+        "move.l #2,%%d4\n\t"
+        ".word 0x103b,0x4db2\n\t"
+        ".long 0x01ffa138\n\t"
+        ".word 0x0003\n\t"
+        "move.l %%d0,0x01ffa160"
+        :
+        :
+        : "d0", "d4", "cc", "memory");
+    chk32(0x00070274u, rd32(FULLFMT_TEST_BASE + 0x260u), 0xa8u);
 }
 
 static void test_an_indexed_stores(void)
