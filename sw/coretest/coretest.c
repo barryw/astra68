@@ -5831,6 +5831,173 @@ static void test_return_control_directed(void)
     chk32(0x000a0490u, rd32(RTE_USER_TEST_BASE + 0x10u), RTE_USER_TEST_BASE + 0x7cu);
 }
 
+static uint32_t bcd_byte_to_dec(uint32_t v)
+{
+    return ((v >> 4) & 0x0fu) * 10u + (v & 0x0fu);
+}
+
+static uint32_t dec_to_bcd_byte(uint32_t v)
+{
+    return ((v / 10u) << 4) | (v % 10u);
+}
+
+static void abcd_ref(uint32_t src, uint32_t dst, uint32_t initial_ccr,
+                     uint32_t *src_result, uint32_t *dst_result,
+                     uint32_t *ccr)
+{
+    uint32_t total = bcd_byte_to_dec(src) + bcd_byte_to_dec(dst) +
+                     ((initial_ccr & 0x10u) ? 1u : 0u);
+    uint32_t carry = total >= 100u;
+    uint32_t res_dec = total % 100u;
+    uint32_t res = dec_to_bcd_byte(res_dec);
+    uint32_t z = res_dec == 0u ? (initial_ccr & 0x04u) : 0u;
+
+    *src_result = src;
+    *dst_result = (dst & ~0xffu) | res;
+    *ccr = (carry ? 0x11u : 0u) | z;
+}
+
+static void sbcd_ref(uint32_t src, uint32_t dst, uint32_t initial_ccr,
+                     uint32_t *src_result, uint32_t *dst_result,
+                     uint32_t *ccr)
+{
+    uint32_t sub = bcd_byte_to_dec(src) + ((initial_ccr & 0x10u) ? 1u : 0u);
+    uint32_t dst_dec = bcd_byte_to_dec(dst);
+    uint32_t borrow = sub > dst_dec;
+    uint32_t res_dec = borrow ? (dst_dec + 100u - sub) : (dst_dec - sub);
+    uint32_t res = dec_to_bcd_byte(res_dec);
+    uint32_t z = res_dec == 0u ? (initial_ccr & 0x04u) : 0u;
+
+    *src_result = src;
+    *dst_result = (dst & ~0xffu) | res;
+    *ccr = (borrow ? 0x11u : 0u) | z;
+}
+
+static void nbcd_ref(uint32_t value, uint32_t initial_ccr, uint32_t *result,
+                     uint32_t *ccr)
+{
+    uint32_t sub = bcd_byte_to_dec(value) + ((initial_ccr & 0x10u) ? 1u : 0u);
+    uint32_t carry = sub != 0u;
+    uint32_t res_dec = sub == 0u ? 0u : (100u - sub);
+    uint32_t res = dec_to_bcd_byte(res_dec);
+    uint32_t z = res_dec == 0u ? (initial_ccr & 0x04u) : 0u;
+
+    *result = (value & ~0xffu) | res;
+    *ccr = (carry ? 0x11u : 0u) | z;
+}
+
+#define CPU_BCD_REG(OP)                                                        \
+    do {                                                                       \
+        __asm__ volatile(                                                      \
+            "move.l %3,%%d0\n\t"                                               \
+            "move.l %4,%%d1\n\t"                                               \
+            "move.l %5,%%d2\n\t"                                               \
+            "move.w %%d2,%%ccr\n\t"                                            \
+            #OP " %%d0,%%d1\n\t"                                               \
+            "move.w %%sr,%%d2\n\t"                                             \
+            "move.l %%d0,%0\n\t"                                               \
+            "move.l %%d1,%1\n\t"                                               \
+            "move.l %%d2,%2"                                                   \
+            : "=m"(*src_result), "=m"(*dst_result), "=m"(*ccr)                 \
+            : "d"(src), "d"(dst), "d"(initial_ccr)                             \
+            : "d0", "d1", "d2", "cc", "memory");                             \
+    } while (0)
+
+static void cpu_abcd_reg(uint32_t src, uint32_t dst, uint32_t initial_ccr,
+                         uint32_t *src_result, uint32_t *dst_result,
+                         uint32_t *ccr)
+{
+    CPU_BCD_REG(abcd);
+}
+
+static void cpu_sbcd_reg(uint32_t src, uint32_t dst, uint32_t initial_ccr,
+                         uint32_t *src_result, uint32_t *dst_result,
+                         uint32_t *ccr)
+{
+    CPU_BCD_REG(sbcd);
+}
+
+#undef CPU_BCD_REG
+
+static void cpu_nbcd_reg(uint32_t value, uint32_t initial_ccr,
+                         uint32_t *result, uint32_t *ccr)
+{
+    __asm__ volatile(
+        "move.l %2,%%d0\n\t"
+        "move.l %3,%%d1\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "nbcd %%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1"
+        : "=m"(*result), "=m"(*ccr)
+        : "d"(value), "d"(initial_ccr)
+        : "d0", "d1", "cc", "memory");
+}
+
+static void test_bcd_register_differential(void)
+{
+    static const uint32_t ccrs[] = {0x00u, 0x04u, 0x10u, 0x14u};
+    static const struct {
+        uint8_t src;
+        uint8_t dst;
+    } pairs[] = {
+        {0x00u, 0x00u}, {0x00u, 0x99u}, {0x99u, 0x00u},
+        {0x99u, 0x99u}, {0x15u, 0x27u}, {0x15u, 0x42u},
+        {0x01u, 0x00u}, {0x00u, 0x01u}, {0x09u, 0x01u},
+        {0x50u, 0x50u}, {0x49u, 0x50u}, {0x90u, 0x09u},
+    };
+    static const uint8_t values[] = {
+        0x00u, 0x01u, 0x09u, 0x10u, 0x45u, 0x50u, 0x99u,
+    };
+
+    for (uint32_t op = 0; op < 2u; ++op) {
+        for (uint32_t ci = 0; ci < (sizeof(ccrs) / sizeof(ccrs[0])); ++ci) {
+            for (uint32_t i = 0; i < (sizeof(pairs) / sizeof(pairs[0])); ++i) {
+                uint32_t id = 0x00200000u + (op << 12) + (ci << 8) + (i << 4);
+                uint32_t src = 0xa5000000u | pairs[i].src;
+                uint32_t dst = 0x5a000000u | pairs[i].dst;
+                uint32_t got_src;
+                uint32_t got_dst;
+                uint32_t got_ccr;
+                uint32_t exp_src;
+                uint32_t exp_dst;
+                uint32_t exp_ccr;
+
+                if (op == 0u) {
+                    cpu_abcd_reg(src, dst, ccrs[ci], &got_src, &got_dst, &got_ccr);
+                    abcd_ref(src, dst, ccrs[ci], &exp_src, &exp_dst, &exp_ccr);
+                } else {
+                    cpu_sbcd_reg(src, dst, ccrs[ci], &got_src, &got_dst, &got_ccr);
+                    sbcd_ref(src, dst, ccrs[ci], &exp_src, &exp_dst, &exp_ccr);
+                }
+
+                chk32(id + 0x00u, got_src, exp_src);
+                chk32(id + 0x04u, got_dst, exp_dst);
+                chk32(id + 0x08u, got_ccr & 0x15u, exp_ccr);
+            }
+        }
+    }
+
+    for (uint32_t ci = 0; ci < (sizeof(ccrs) / sizeof(ccrs[0])); ++ci) {
+        for (uint32_t vi = 0; vi < (sizeof(values) / sizeof(values[0])); ++vi) {
+            uint32_t id = 0x00202000u + (ci << 8) + (vi << 4);
+            uint32_t value = 0xc3000000u | values[vi];
+            uint32_t got_result;
+            uint32_t got_ccr;
+            uint32_t exp_result;
+            uint32_t exp_ccr;
+
+            cpu_nbcd_reg(value, ccrs[ci], &got_result, &got_ccr);
+            nbcd_ref(value, ccrs[ci], &exp_result, &exp_ccr);
+            chk32(id + 0x00u, got_result, exp_result);
+            chk32(id + 0x04u, got_ccr & 0x15u, exp_ccr);
+        }
+    }
+
+    mark(0x0020f000u, 0xbcd00000u);
+}
+
 static void test_bcd_directed(void)
 {
     uint32_t got0;
@@ -9987,6 +10154,7 @@ void kmain(void)
     test_chk_directed();
     test_cas2_directed();
     test_return_control_directed();
+    test_bcd_register_differential();
     test_bcd_directed();
     test_pack_unpk_directed();
     test_exception_recovery_directed();
