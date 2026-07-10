@@ -15,4 +15,17 @@ coretest_movem_fullshape_asm:
     movem.l (%sp)+,%d2-%d7/%a2-%a6
     rts
 
+    .globl coretest_movem_ramjsr_asm
+    .type coretest_movem_ramjsr_asm, @function
+coretest_movem_ramjsr_asm:
+    movem.l %d2-%d7/%a2-%a6,-(%sp)
+    move.w  #0x001d,%ccr
+    movem.l 0x01ff9340,%d0-%d7/%a0-%a6
+    jsr     0x01ff93c0
+    movem.l %d0-%d7/%a0-%a6,0x01ff9380
+    move.w  %sr,%d0
+    move.l  %d0,0x01ff93bc
+    movem.l (%sp)+,%d2-%d7/%a2-%a6
+    rts
+
     .section .note.GNU-stack, "", @progbits

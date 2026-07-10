@@ -36,6 +36,7 @@ static volatile uint32_t g_sum;
 extern void _h_default(void);
 extern void _h_recover(void);
 extern void coretest_movem_fullshape_asm(void);
+extern void coretest_movem_ramjsr_asm(void);
 
 void *memcpy(void *d, const void *s, unsigned long n)
 {
@@ -997,6 +998,29 @@ static void test_movem_directed(void)
     chk32(0x00080164u, rd32(SCRATCH_BASE + 0x2b4), 0xd1d2d3d4u);
     chk32(0x00080168u, rd32(SCRATCH_BASE + 0x2b8), 0xe1e2e3e4u);
     chk32(0x0008016cu, rd32(SCRATCH_BASE + 0x2bc) & 0x1fu, 0x1bu);
+
+    for (uint32_t off = 0x280u; off < 0x2c0u; off += 4u) {
+        wr32(SCRATCH_BASE + off, 0u);
+    }
+    *(volatile uint16_t *)(SCRATCH_BASE + 0x2c0) = 0x4e75u;
+    *(volatile uint16_t *)(SCRATCH_BASE + 0x2c2) = 0x4e71u;
+    coretest_movem_ramjsr_asm();
+    chk32(0x00080170u, rd32(SCRATCH_BASE + 0x280), 0x01020304u);
+    chk32(0x00080174u, rd32(SCRATCH_BASE + 0x284), 0x11121314u);
+    chk32(0x00080178u, rd32(SCRATCH_BASE + 0x288), 0x21222324u);
+    chk32(0x0008017cu, rd32(SCRATCH_BASE + 0x28c), 0x31323334u);
+    chk32(0x00080180u, rd32(SCRATCH_BASE + 0x290), 0x41424344u);
+    chk32(0x00080184u, rd32(SCRATCH_BASE + 0x294), 0x51525354u);
+    chk32(0x00080188u, rd32(SCRATCH_BASE + 0x298), 0x61626364u);
+    chk32(0x0008018cu, rd32(SCRATCH_BASE + 0x29c), 0x71727374u);
+    chk32(0x00080190u, rd32(SCRATCH_BASE + 0x2a0), 0x81828384u);
+    chk32(0x00080194u, rd32(SCRATCH_BASE + 0x2a4), 0x91929394u);
+    chk32(0x00080198u, rd32(SCRATCH_BASE + 0x2a8), 0xa1a2a3a4u);
+    chk32(0x0008019cu, rd32(SCRATCH_BASE + 0x2ac), 0xb1b2b3b4u);
+    chk32(0x000801a0u, rd32(SCRATCH_BASE + 0x2b0), 0xc1c2c3c4u);
+    chk32(0x000801a4u, rd32(SCRATCH_BASE + 0x2b4), 0xd1d2d3d4u);
+    chk32(0x000801a8u, rd32(SCRATCH_BASE + 0x2b8), 0xe1e2e3e4u);
+    chk32(0x000801acu, rd32(SCRATCH_BASE + 0x2bc) & 0x1fu, 0x1du);
 }
 
 static void test_control_flow_directed(void)
