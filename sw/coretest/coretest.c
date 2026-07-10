@@ -22,6 +22,7 @@
 #define MOVEP_TEST_BASE (SCRATCH_BASE + 0xb00u)
 #define BITFIELD_TEST_BASE (SCRATCH_BASE + 0xc00u)
 #define FULLFMT_TEST_BASE (SCRATCH_BASE + 0xe00u)
+#define SHIFT_TEST_BASE (SCRATCH_BASE + 0xf00u)
 
 static volatile uint32_t g_sum;
 
@@ -1790,6 +1791,8 @@ static void test_interrupt_autovector_directed(void)
 
 static void test_alu_shift_bitfield_bcd_directed(void)
 {
+    uint32_t got;
+
     wr32(SCRATCH_BASE + 0xe0, 0u);
     wr32(SCRATCH_BASE + 0xe4, 0u);
     __asm__ volatile(
@@ -1844,6 +1847,102 @@ static void test_alu_shift_bitfield_bcd_directed(void)
     *(volatile uint16_t *)(SCRATCH_BASE + 0xf0) = 0x4001u;
     __asm__ volatile("lsl.w 0x01ff91f0" : : : "cc", "memory");
     chk16(0x000b0030u, rd16(SCRATCH_BASE + 0xf0), 0x8002u);
+
+    *(volatile uint16_t *)(SHIFT_TEST_BASE + 0x00u) = 0x8001u;
+    __asm__ volatile(
+        "move.w #0,%%ccr\n\t"
+        "lsl.w 0x01ffa000\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got)
+        :
+        : "d0", "cc", "memory");
+    chk16(0x000b0100u, rd16(SHIFT_TEST_BASE + 0x00u), 0x0002u);
+    chk32(0x000b0104u, got & 0x1fu, 0x11u);
+
+    *(volatile uint16_t *)(SHIFT_TEST_BASE + 0x02u) = 0x0001u;
+    __asm__ volatile(
+        "move.w #0,%%ccr\n\t"
+        "lsr.w 0x01ffa002\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got)
+        :
+        : "d0", "cc", "memory");
+    chk16(0x000b0110u, rd16(SHIFT_TEST_BASE + 0x02u), 0x0000u);
+    chk32(0x000b0114u, got & 0x1fu, 0x15u);
+
+    *(volatile uint16_t *)(SHIFT_TEST_BASE + 0x04u) = 0x8001u;
+    __asm__ volatile(
+        "move.w #0,%%ccr\n\t"
+        "asr.w 0x01ffa004\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got)
+        :
+        : "d0", "cc", "memory");
+    chk16(0x000b0120u, rd16(SHIFT_TEST_BASE + 0x04u), 0xc000u);
+    chk32(0x000b0124u, got & 0x1fu, 0x19u);
+
+    *(volatile uint16_t *)(SHIFT_TEST_BASE + 0x06u) = 0x4001u;
+    __asm__ volatile(
+        "move.w #0,%%ccr\n\t"
+        "asl.w 0x01ffa006\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got)
+        :
+        : "d0", "cc", "memory");
+    chk16(0x000b0130u, rd16(SHIFT_TEST_BASE + 0x06u), 0x8002u);
+    chk32(0x000b0134u, got & 0x1fu, 0x0au);
+
+    *(volatile uint16_t *)(SHIFT_TEST_BASE + 0x08u) = 0x8000u;
+    __asm__ volatile(
+        "move.w #0x10,%%ccr\n\t"
+        "roxl.w 0x01ffa008\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got)
+        :
+        : "d0", "cc", "memory");
+    chk16(0x000b0140u, rd16(SHIFT_TEST_BASE + 0x08u), 0x0001u);
+    chk32(0x000b0144u, got & 0x1fu, 0x11u);
+
+    *(volatile uint16_t *)(SHIFT_TEST_BASE + 0x0au) = 0x0001u;
+    __asm__ volatile(
+        "move.w #0x10,%%ccr\n\t"
+        "roxr.w 0x01ffa00a\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got)
+        :
+        : "d0", "cc", "memory");
+    chk16(0x000b0150u, rd16(SHIFT_TEST_BASE + 0x0au), 0x8000u);
+    chk32(0x000b0154u, got & 0x1fu, 0x19u);
+
+    *(volatile uint16_t *)(SHIFT_TEST_BASE + 0x0cu) = 0x8001u;
+    __asm__ volatile(
+        "move.w #0,%%ccr\n\t"
+        "rol.w 0x01ffa00c\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got)
+        :
+        : "d0", "cc", "memory");
+    chk16(0x000b0160u, rd16(SHIFT_TEST_BASE + 0x0cu), 0x0003u);
+    chk32(0x000b0164u, got & 0x1fu, 0x01u);
+
+    *(volatile uint16_t *)(SHIFT_TEST_BASE + 0x0eu) = 0x0003u;
+    __asm__ volatile(
+        "move.w #0,%%ccr\n\t"
+        "ror.w 0x01ffa00e\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got)
+        :
+        : "d0", "cc", "memory");
+    chk16(0x000b0170u, rd16(SHIFT_TEST_BASE + 0x0eu), 0x8001u);
+    chk32(0x000b0174u, got & 0x1fu, 0x09u);
 
     wr32(SCRATCH_BASE + 0xe0, 0u);
     wr32(SCRATCH_BASE + 0xe4, 0u);
