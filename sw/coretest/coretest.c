@@ -5109,6 +5109,32 @@ static void test_movep_displacement_directed(void)
     chk32(0x000f00c4u, rd32(MOVEP_TEST_BASE + 0x60), 0x91a2b3c4u);
     chk32(0x000f00c8u, rd32(MOVEP_TEST_BASE + 0x64), 0x11223344u);
     chk32(0x000f00ccu, rd32(MOVEP_TEST_BASE + 0x74), MOVEP_TEST_BASE + 0x50u);
+
+    for (uint32_t off = 0x80u; off < 0xc0u; off += 4u) {
+        wr32(MOVEP_TEST_BASE + off, 0u);
+    }
+    __asm__ volatile(
+        "lea 0x01ff9c80,%%a0\n\t"
+        "move.l #0x11223344,%%d0\n\t"
+        "move.l #0xa1b2c3d4,%%d1\n\t"
+        "moveq #0,%%d2\n\t"
+        "moveq #0,%%d3\n\t"
+        "movep.w %%d0,0(%%a0)\n\t"
+        "movep.l %%d1,4(%%a0)\n\t"
+        "movep.w 0(%%a0),%%d2\n\t"
+        "movep.l 4(%%a0),%%d3\n\t"
+        "move.l %%d2,0x01ff9cb0\n\t"
+        "move.l %%d3,0x01ff9cb4\n\t"
+        "move.l %%a0,0x01ff9cb8"
+        :
+        :
+        : "a0", "d0", "d1", "d2", "d3", "memory");
+    chk32(0x000f00d0u, rd32(MOVEP_TEST_BASE + 0x80), 0x33004400u);
+    chk32(0x000f00d4u, rd32(MOVEP_TEST_BASE + 0x84), 0xa100b200u);
+    chk32(0x000f00d8u, rd32(MOVEP_TEST_BASE + 0x88), 0xc300d400u);
+    chk32(0x000f00dcu, rd32(MOVEP_TEST_BASE + 0xb0), 0x00003344u);
+    chk32(0x000f00e0u, rd32(MOVEP_TEST_BASE + 0xb4), 0xa1b2c3d4u);
+    chk32(0x000f00e4u, rd32(MOVEP_TEST_BASE + 0xb8), MOVEP_TEST_BASE + 0x80u);
 }
 
 void kmain(void)
