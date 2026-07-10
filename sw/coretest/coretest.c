@@ -736,6 +736,8 @@ static void test_stack_frame_control_directed(void)
 static void test_system_control_directed(void)
 {
     uint32_t got;
+    uint32_t got_sp0;
+    uint32_t got_sp1;
     uint32_t pc_after_trap;
 
     __asm__ volatile(
@@ -774,6 +776,20 @@ static void test_system_control_directed(void)
         :
         : "d0");
     chk32(0x000a0011u, got, 0u);
+
+    __asm__ volatile(
+        "move.l %%sp,%0\n\t"
+        "lea 0x01ff9e00,%%a0\n\t"
+        "move.l %%a0,%%usp\n\t"
+        "suba.l %%a1,%%a1\n\t"
+        "move.l %%usp,%%a1\n\t"
+        "move.l %%a1,%1\n\t"
+        "move.l %%sp,%2"
+        : "=&d"(got_sp0), "=&d"(got), "=&d"(got_sp1)
+        :
+        : "a0", "a1", "memory");
+    chk32(0x000a0018u, got, 0x01ff9e00u);
+    chk32(0x000a001cu, got_sp1, got_sp0);
 
     wr32(SCRATCH_BASE + 0xf0, 0u);
     wr32(SCRATCH_BASE + 0xf4, 0u);
