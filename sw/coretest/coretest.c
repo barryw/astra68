@@ -161,6 +161,23 @@ static void chk_exception_frame(uint32_t id, uint32_t vector_offset,
     chk32(id + 0x14u, rd32(EXC_REC_BASE + 0x08) & 1u, 0u);
 }
 
+static void chk_access_fault_frame(uint32_t id, uint32_t vector_offset,
+                                   uint32_t sr_mask, uint32_t sr_exp,
+                                   uint32_t stacked_pc_low_bit)
+{
+    uint32_t format = rd32(EXC_REC_BASE + 0x0c) & 0xf000u;
+
+    chk32(id + 0x00u, rd32(EXC_REC_BASE + 0x00), 1u);
+    chk32(id + 0x04u, rd32(EXC_REC_BASE + 0x0c) & 0x0fffu, vector_offset);
+    mark(id + 0x08u, format);
+    if (format != 0xa000u && format != 0xb000u) {
+        stop_fail(id + 0x08u, format, 0xa000b000u);
+    }
+    chk32(id + 0x0cu, rd32(EXC_REC_BASE + 0x04) & sr_mask, sr_exp);
+    chk32(id + 0x10u, rd32(EXC_REC_BASE + 0x10) & 1u, 0u);
+    chk32(id + 0x14u, rd32(EXC_REC_BASE + 0x08) & 1u, stacked_pc_low_bit);
+}
+
 static void test_aligned_long(void)
 {
     wr32(SCRATCH_BASE + 0x00, 0x11223344u);
@@ -3214,6 +3231,21 @@ static void test_pack_unpk_directed(void)
 
 static void test_exception_recovery_directed(void)
 {
+    arm_exception_recovery(0x000cu);
+    __asm__ volatile(
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "lea 2f,%%a0\n\t"
+        "addq.l #1,%%a0\n\t"
+        "jmp (%%a0)\n"
+        "2:\n\t"
+        "nop\n"
+        "1:"
+        :
+        :
+        : "a0", "memory");
+    chk_access_fault_frame(0x00100700u, 0x000cu, 0x2000u, 0x2000u, 1u);
+
     for (uint32_t off = 0; off < 0x100u; off += 4u) {
         wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
     }

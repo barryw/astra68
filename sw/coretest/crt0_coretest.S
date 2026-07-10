@@ -7,7 +7,7 @@
 	.long   _stack_top
 	.long   _start
 	.long   _h_buserr
-	.long   _h_adrerr
+	.long   _h_recover     | address error
 	.long   _h_recover     | illegal instruction
 	.long   _h_recover     | zero divide
 	.long   _h_recover     | CHK/CHK2
