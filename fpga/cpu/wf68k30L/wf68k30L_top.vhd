@@ -618,8 +618,9 @@ begin
                   x"0000" & STATUS_REG when(OP = EORI_TO_CCR or OP = EORI_TO_SR) else
                   x"0000" & STATUS_REG when(OP = ORI_TO_CCR or OP = ORI_TO_SR) else 
                   DATA_TO_CORE when OP = CAS or OP = CAS2 else -- Destination operand.
+                  DR_OUT_2 when OP = CHK else
                   DR_OUT_2 when (OP = CHK2 or OP = CMP2) and USE_DREG = '1' else
-                  AR_OUT_2 when OP = CHK or OP = CHK2 or OP = CMP2 else
+                  AR_OUT_2 when OP = CHK2 or OP = CMP2 else
                   DATA_TO_CORE when OP = CMPM else
                   DR_OUT_2 when OP = DBcc or OP = SWAP else
                   DR_OUT_2 when OP = DIVS or OP = DIVU else

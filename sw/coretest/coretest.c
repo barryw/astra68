@@ -29,6 +29,7 @@
 #define IMM_TEST_BASE (SCRATCH_BASE + 0x1500u)
 #define XMEM_TEST_BASE (SCRATCH_BASE + 0x1600u)
 #define MUL_DIV_TEST_BASE (SCRATCH_BASE + 0x1800u)
+#define CHK_TEST_BASE (SCRATCH_BASE + 0x1a00u)
 
 static volatile uint32_t g_sum;
 
@@ -1927,6 +1928,97 @@ static void test_cmp2_chk2_directed(void)
     chk_exception_frame(0x00120000u, 0x0018u, 0x2000u, 0x2700u, 0x2700u);
 }
 
+static void test_chk_directed(void)
+{
+    uint32_t got;
+
+    *(volatile uint16_t *)(CHK_TEST_BASE + 0x00u) = 10u;
+    got = 0u;
+    __asm__ volatile(
+        "lea 0x01ffab00,%%a0\n\t"
+        "moveq #0,%%d0\n\t"
+        "chk.w (%%a0),%%d0\n\t"
+        "moveq #0x5c,%%d1\n\t"
+        "move.l %%d1,%0"
+        : "=&d"(got)
+        :
+        : "a0", "d0", "d1", "cc", "memory");
+    chk32(0x00120100u, got, 0x5cu);
+
+    got = 0u;
+    __asm__ volatile(
+        "lea 0x01ffab00,%%a0\n\t"
+        "moveq #10,%%d0\n\t"
+        "chk.w (%%a0),%%d0\n\t"
+        "moveq #0x5d,%%d1\n\t"
+        "move.l %%d1,%0"
+        : "=&d"(got)
+        :
+        : "a0", "d0", "d1", "cc", "memory");
+    chk32(0x00120104u, got, 0x5du);
+
+    arm_exception_recovery(0x0018u);
+    __asm__ volatile(
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "moveq #-1,%%d0\n\t"
+        "chk.w 0x01ffab00,%%d0\n"
+        "1:"
+        :
+        :
+        : "a0", "d0", "cc", "memory");
+    chk_exception_frame(0x00120120u, 0x0018u, 0x2000u, 0x2000u, 0x2000u);
+
+    arm_exception_recovery(0x0018u);
+    __asm__ volatile(
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "moveq #11,%%d0\n\t"
+        "chk.w 0x01ffab00,%%d0\n"
+        "1:"
+        :
+        :
+        : "a0", "d0", "cc", "memory");
+    chk_exception_frame(0x00120140u, 0x0018u, 0x2000u, 0x2000u, 0x2000u);
+
+    wr32(CHK_TEST_BASE + 0x10u, 0x00010000u);
+    got = 0u;
+    __asm__ volatile(
+        "lea 0x01ffab10,%%a0\n\t"
+        "move.l #0x00010000,%%d0\n\t"
+        "chk.l (%%a0),%%d0\n\t"
+        "moveq #0x5e,%%d1\n\t"
+        "move.l %%d1,%0"
+        : "=&d"(got)
+        :
+        : "a0", "d0", "d1", "cc", "memory");
+    chk32(0x00120160u, got, 0x5eu);
+
+    arm_exception_recovery(0x0018u);
+    __asm__ volatile(
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "moveq #-1,%%d0\n\t"
+        "chk.l 0x01ffab10,%%d0\n"
+        "1:"
+        :
+        :
+        : "a0", "d0", "cc", "memory");
+    chk_exception_frame(0x00120180u, 0x0018u, 0x2000u, 0x2000u, 0x2000u);
+
+    arm_exception_recovery(0x0018u);
+    __asm__ volatile(
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.l #0x00010001,%%d0\n\t"
+        "chk.l 0x01ffab10,%%d0\n"
+        "1:"
+        :
+        :
+        : "a0", "d0", "cc", "memory");
+    chk_exception_frame(0x001201a0u, 0x0018u, 0x2000u, 0x2000u, 0x2000u);
+}
+
 static void test_cas2_directed(void)
 {
     uint32_t got;
@@ -3733,6 +3825,7 @@ void kmain(void)
     test_system_control_directed();
     test_moves_directed();
     test_cmp2_chk2_directed();
+    test_chk_directed();
     test_cas2_directed();
     test_return_control_directed();
     test_bcd_directed();
