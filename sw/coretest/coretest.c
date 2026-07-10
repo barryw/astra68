@@ -1919,6 +1919,41 @@ static void test_system_control_directed(void)
     chk32(0x000a0014u, got, 5u);
     chk32(0x000a0016u, got_sp0, 6u);
 
+    for (uint32_t off = 0xb0u; off <= 0xbcu; off += 4u) {
+        wr32(RETURN_TEST_BASE + off, 0u);
+    }
+    __asm__ volatile(
+        "moveq #2,%%d6\n\t"
+        "movec %%d6,%%sfc\n\t"
+        "movec %%vbr,%%d7\n\t"
+        "movec %%sfc,%%d0\n\t"
+        "move.l %%d0,0x01ff99b0\n\t"
+        "moveq #3,%%d6\n\t"
+        "movec %%d6,%%sfc\n\t"
+        "movec %%dfc,%%d7\n\t"
+        "movec %%sfc,%%d0\n\t"
+        "move.l %%d0,0x01ff99b4\n\t"
+        "moveq #4,%%d6\n\t"
+        "movec %%d6,%%dfc\n\t"
+        "movec %%sfc,%%d7\n\t"
+        "movec %%dfc,%%d0\n\t"
+        "move.l %%d0,0x01ff99b8\n\t"
+        "moveq #5,%%d6\n\t"
+        "movec %%d6,%%dfc\n\t"
+        "movec %%vbr,%%d7\n\t"
+        "movec %%dfc,%%d0\n\t"
+        "move.l %%d0,0x01ff99bc\n\t"
+        "moveq #1,%%d6\n\t"
+        "movec %%d6,%%sfc\n\t"
+        "movec %%d6,%%dfc"
+        :
+        :
+        : "d0", "d6", "d7", "cc", "memory");
+    chk32(0x000a0060u, rd32(RETURN_TEST_BASE + 0xb0u), 2u);
+    chk32(0x000a0064u, rd32(RETURN_TEST_BASE + 0xb4u), 3u);
+    chk32(0x000a0068u, rd32(RETURN_TEST_BASE + 0xb8u), 4u);
+    chk32(0x000a006cu, rd32(RETURN_TEST_BASE + 0xbcu), 5u);
+
     __asm__ volatile(
         "move.l %%sp,%0\n\t"
         "lea 0x01ff9e00,%%a0\n\t"
