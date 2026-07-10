@@ -1062,6 +1062,25 @@ static void test_movem_directed(void)
     chk32(0x000801e4u, rd32(SCRATCH_BASE + 0x2b4), 0xd1d2d3d4u);
     chk32(0x000801e8u, rd32(SCRATCH_BASE + 0x2b8), 0xe1e2e3e4u);
     chk32(0x000801ecu, rd32(SCRATCH_BASE + 0x2bc) & 0x1fu, 0x00u);
+
+    wr32(SCRATCH_BASE + 0x2d0, 0x01020304u);
+    wr32(SCRATCH_BASE + 0x2d4, 0x11223344u);
+    wr32(SCRATCH_BASE + 0x2d8, 0x55667788u);
+    wr32(SCRATCH_BASE + 0x2e0, 0u);
+    wr32(SCRATCH_BASE + 0x2e4, 0u);
+    wr32(SCRATCH_BASE + 0x2e8, 0u);
+    __asm__ volatile(
+        "lea 0x01ff93d0,%%a4\n\t"
+        "movem.l (%%a4),%%d0/%%a4-%%a5\n\t"
+        "move.l %%d0,0x01ff93e0\n\t"
+        "move.l %%a4,0x01ff93e4\n\t"
+        "move.l %%a5,0x01ff93e8"
+        :
+        :
+        : "d0", "a4", "a5", "memory");
+    chk32(0x000801f0u, rd32(SCRATCH_BASE + 0x2e0), 0x01020304u);
+    chk32(0x000801f4u, rd32(SCRATCH_BASE + 0x2e4), 0x11223344u);
+    chk32(0x000801f8u, rd32(SCRATCH_BASE + 0x2e8), 0x55667788u);
 }
 
 static void test_control_flow_directed(void)
