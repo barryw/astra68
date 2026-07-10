@@ -6136,6 +6136,132 @@ static void test_bcd_directed(void)
     chk32(0x000a057cu, rd32(BCD_TEST_BASE + 0x6cu) & 0x15u, 0x04u);
 }
 
+static void pack_reg_ref(uint32_t src, uint32_t dst, uint32_t adjust,
+                         uint32_t initial_ccr, uint32_t *src_result,
+                         uint32_t *dst_result, uint32_t *ccr)
+{
+    uint32_t adjusted = ((src & 0xffffu) + (adjust & 0xffffu)) & 0xffffu;
+    uint32_t packed = ((adjusted >> 4) & 0xf0u) | (adjusted & 0x0fu);
+
+    *src_result = src;
+    *dst_result = (dst & ~0xffu) | packed;
+    *ccr = initial_ccr;
+}
+
+static void unpk_reg_ref(uint32_t src, uint32_t dst, uint32_t adjust,
+                         uint32_t initial_ccr, uint32_t *src_result,
+                         uint32_t *dst_result, uint32_t *ccr)
+{
+    uint32_t unpacked = (((src >> 4) & 0x0fu) << 8) | (src & 0x0fu);
+    uint32_t adjusted = (unpacked + (adjust & 0xffffu)) & 0xffffu;
+
+    *src_result = src;
+    *dst_result = (dst & ~0xffffu) | adjusted;
+    *ccr = initial_ccr;
+}
+
+#define CPU_PACK_REG(OP, ADJ)                                                  \
+    do {                                                                       \
+        __asm__ volatile(                                                      \
+            "move.l %3,%%d0\n\t"                                               \
+            "move.l %4,%%d1\n\t"                                               \
+            "move.l %5,%%d2\n\t"                                               \
+            "move.w %%d2,%%ccr\n\t"                                            \
+            #OP " %%d0,%%d1,#" #ADJ "\n\t"                                     \
+            "move.w %%sr,%%d2\n\t"                                             \
+            "move.l %%d0,%0\n\t"                                               \
+            "move.l %%d1,%1\n\t"                                               \
+            "move.l %%d2,%2"                                                   \
+            : "=m"(*src_result), "=m"(*dst_result), "=m"(*ccr)                 \
+            : "d"(src), "d"(dst), "d"(initial_ccr)                             \
+            : "d0", "d1", "d2", "cc", "memory");                             \
+    } while (0)
+
+static void cpu_pack_reg(uint32_t adjust_index, uint32_t src, uint32_t dst,
+                         uint32_t initial_ccr, uint32_t *src_result,
+                         uint32_t *dst_result, uint32_t *ccr)
+{
+    if (adjust_index == 0u) {
+        CPU_PACK_REG(pack, 0);
+    } else if (adjust_index == 1u) {
+        CPU_PACK_REG(pack, 0x0101);
+    } else {
+        CPU_PACK_REG(pack, 0xffff);
+    }
+}
+
+static void cpu_unpk_reg(uint32_t adjust_index, uint32_t src, uint32_t dst,
+                         uint32_t initial_ccr, uint32_t *src_result,
+                         uint32_t *dst_result, uint32_t *ccr)
+{
+    if (adjust_index == 0u) {
+        CPU_PACK_REG(unpk, 0);
+    } else if (adjust_index == 1u) {
+        CPU_PACK_REG(unpk, 0x0101);
+    } else {
+        CPU_PACK_REG(unpk, 0xffff);
+    }
+}
+
+#undef CPU_PACK_REG
+
+static void test_pack_unpk_register_differential(void)
+{
+    static const uint32_t adjusts[] = {0x0000u, 0x0101u, 0xffffu};
+    static const uint32_t ccrs[] = {0x00u, 0x1fu};
+    static const uint32_t pack_srcs[] = {
+        0x00000000u, 0x00000205u, 0x00000912u, 0x00009009u,
+        0x11220205u, 0x99887725u, 0xffff9999u,
+    };
+    static const uint32_t unpk_srcs[] = {
+        0x00000000u, 0x00000025u, 0x00000099u, 0x11223345u,
+        0x99887725u, 0xffff00a3u,
+    };
+    static const uint32_t dsts[] = {0x00000000u, 0x12345678u, 0x89abcdefu};
+
+    for (uint32_t op = 0; op < 2u; ++op) {
+        uint32_t value_count = op == 0u ?
+            (sizeof(pack_srcs) / sizeof(pack_srcs[0])) :
+            (sizeof(unpk_srcs) / sizeof(unpk_srcs[0]));
+
+        for (uint32_t ai = 0; ai < (sizeof(adjusts) / sizeof(adjusts[0])); ++ai) {
+            for (uint32_t ci = 0; ci < (sizeof(ccrs) / sizeof(ccrs[0])); ++ci) {
+                for (uint32_t vi = 0; vi < value_count; ++vi) {
+                    for (uint32_t di = 0; di < (sizeof(dsts) / sizeof(dsts[0])); ++di) {
+                        uint32_t id = 0x00210000u + (op << 15) + (ai << 12) +
+                                      (ci << 11) + (vi << 5) + (di << 3);
+                        uint32_t src = op == 0u ? pack_srcs[vi] : unpk_srcs[vi];
+                        uint32_t got_src;
+                        uint32_t got_dst;
+                        uint32_t got_ccr;
+                        uint32_t exp_src;
+                        uint32_t exp_dst;
+                        uint32_t exp_ccr;
+
+                        if (op == 0u) {
+                            cpu_pack_reg(ai, src, dsts[di], ccrs[ci],
+                                         &got_src, &got_dst, &got_ccr);
+                            pack_reg_ref(src, dsts[di], adjusts[ai], ccrs[ci],
+                                         &exp_src, &exp_dst, &exp_ccr);
+                        } else {
+                            cpu_unpk_reg(ai, src, dsts[di], ccrs[ci],
+                                         &got_src, &got_dst, &got_ccr);
+                            unpk_reg_ref(src, dsts[di], adjusts[ai], ccrs[ci],
+                                         &exp_src, &exp_dst, &exp_ccr);
+                        }
+
+                        chk32(id + 0x00u, got_src, exp_src);
+                        chk32(id + 0x04u, got_dst, exp_dst);
+                        chk32(id + 0x08u, got_ccr & 0x1fu, exp_ccr);
+                    }
+                }
+            }
+        }
+    }
+
+    mark(0x0021f000u, 0x0acc0000u);
+}
+
 static void test_pack_unpk_directed(void)
 {
     uint32_t got0;
@@ -10156,6 +10282,7 @@ void kmain(void)
     test_return_control_directed();
     test_bcd_register_differential();
     test_bcd_directed();
+    test_pack_unpk_register_differential();
     test_pack_unpk_directed();
     test_exception_recovery_directed();
 #ifdef CORETEST_SIM_IRQ
