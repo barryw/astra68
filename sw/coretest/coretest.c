@@ -9,6 +9,7 @@
 #define SCRATCH      ((volatile uint8_t *)SCRATCH_BASE)
 #define EXC_REC_BASE (SCRATCH_BASE + 0x170u)
 #define EXC_RECOVERY_PC (EXC_REC_BASE + 0x14u)
+#define EXC_EXPECTED_ADDR (EXC_REC_BASE + 0x30u)
 #define EXC_FAKE_STACK (SCRATCH_BASE + 0x300u)
 #define EXC_ALT_VBR (SCRATCH_BASE + 0x400u)
 #define IRQ_SIM_REQ (SCRATCH_BASE + 0x500u)
@@ -141,6 +142,7 @@ static void arm_exception_recovery(uint32_t vector_offset)
     wr32(EXC_REC_BASE + 0x24, 0u);
     wr32(EXC_REC_BASE + 0x28, 0u);
     wr32(EXC_REC_BASE + 0x2c, 0u);
+    wr32(EXC_EXPECTED_ADDR, 0u);
 }
 
 static void chk32(uint32_t id, uint32_t got, uint32_t exp)
@@ -4690,6 +4692,7 @@ static void test_exception_recovery_directed(void)
         "move.l %%a0,0x01ff9284\n\t"
         "lea 2f,%%a0\n\t"
         "addq.l #1,%%a0\n\t"
+        "move.l %%a0,0x01ff92a0\n\t"
         "jmp (%%a0)\n"
         "2:\n\t"
         "nop\n"
@@ -4698,6 +4701,7 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "memory");
     chk_access_fault_frame(0x00100700u, 0x000cu, 0x2000u, 0x2000u, 1u);
+    chk_access_fault_long(0x00100718u, 0x2cu, rd32(EXC_EXPECTED_ADDR));
 
 #ifdef CORETEST_SIM_IRQ
     for (uint32_t off = 0; off < 0x100u; off += 4u) {
