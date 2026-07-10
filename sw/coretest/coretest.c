@@ -5035,6 +5035,8 @@ static void test_return_control_directed(void)
         "move.l #0xbadbad,0x01ffb20c\n"
         "2:\n\t"
         "move.l %%sp,0x01ffb20c\n\t"
+        "move.l %%usp,%%a0\n\t"
+        "movem.l %%a0,0x01ffb210\n\t"
         "moveq #0,%%d1\n\t"
         "movec %%d1,%%vbr\n\t"
         "move.l %%a2,%%sp"
@@ -5047,6 +5049,8 @@ static void test_return_control_directed(void)
     chk32(0x000a0480u, rd32(RTE_USER_TEST_BASE + 0x04u), RTE_USER_TEST_BASE + 0x7cu);
     chk32(0x000a0484u, rd32(RTE_USER_TEST_BASE + 0x0cu), RTE_USER_TEST_BASE + 0x48u);
     chk32(0x000a0488u, rd32(RTE_USER_TEST_BASE + 0x7cu), 0x5a5aa55au);
+    chk32(0x000a048cu, rd32(EXC_REC_BASE + 0x10u), RTE_USER_TEST_BASE + 0x40u);
+    chk32(0x000a0490u, rd32(RTE_USER_TEST_BASE + 0x10u), RTE_USER_TEST_BASE + 0x7cu);
 }
 
 static void test_bcd_directed(void)
