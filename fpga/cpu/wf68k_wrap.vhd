@@ -30,6 +30,7 @@ entity wf68k_wrap is
         SIZE      : out std_logic_vector(1 downto 0);
         ASn       : out std_logic;
         RWn       : out std_logic;
+        RMCn      : out std_logic;
         DSn       : out std_logic;
         -- Inactive bus-control inputs, driven from a preserved reg in the SoC.
         BERRn     : in  std_logic;
@@ -55,7 +56,7 @@ begin
             BERRn => BERRn, RESET_INn => RESET_INn, RESET_OUT => open,
             HALT_INn => HALT_INn, HALT_OUTn => open, FC_OUT => FC_OUT,
             AVECn => AVECn, IPLn => IPLn, IPENDn => open, DSACKn => DSACKn,
-            SIZE => SIZE, ASn => ASn, RWn => RWn, RMCn => open, DSn => DSn,
+            SIZE => SIZE, ASn => ASn, RWn => RWn, RMCn => RMCn, DSn => DSn,
             ECSn => open, OCSn => open, DBENn => open, BUS_EN => open,
             STERMn => STERMn, STATUSn => open, REFILLn => open,
             BRn => BRn, BGn => open, BGACKn => BGACKn,

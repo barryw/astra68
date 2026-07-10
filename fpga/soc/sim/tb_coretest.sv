@@ -99,15 +99,15 @@ module tb_coretest;
             if (atomic_rmc_arm && dut.bus_read_stb
                 && dut.cpu_adr == ATOMIC_RMC_TARGET_ADDR) begin
                 atomic_rmc_seen_read <= 1'b1;
-                if (dut.cpu.u_cpu.rmc !== 1'b1) begin
-                    $fatal(1, "CAS RMC probe expected read RMC=1");
+                if (dut.cpu_rmc_n !== 1'b0) begin
+                    $fatal(1, "CAS RMC probe expected read RMCn=0");
                 end
             end
             if (atomic_rmc_arm && dut.bus_write_stb
                 && dut.cpu_adr == ATOMIC_RMC_TARGET_ADDR) begin
                 atomic_rmc_seen_write <= 1'b1;
-                if (dut.cpu.u_cpu.rmc !== 1'b1) begin
-                    $fatal(1, "CAS RMC probe expected write RMC=1");
+                if (dut.cpu_rmc_n !== 1'b0) begin
+                    $fatal(1, "CAS RMC probe expected write RMCn=0");
                 end
             end
             if (dut.bus_write_stb && dut.cpu_adr == ATOMIC_RMC_ARM_ADDR) begin

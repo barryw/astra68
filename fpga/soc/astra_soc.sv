@@ -59,6 +59,7 @@ module astra_soc #(
     reg  [31:0] cpu_din;       // data TO cpu (reads)
     wire        cpu_data_en;   // cpu driving data (write)
     wire        cpu_as_n, cpu_ds_n, cpu_rw_n;
+    wire        cpu_rmc_n;
     wire [1:0]  cpu_siz;
     wire [2:0]  cpu_fc;
     reg  [1:0]  dsack_n = 2'b11;
@@ -107,6 +108,7 @@ module astra_soc #(
         .SIZE       (cpu_siz),
         .ASn        (cpu_as_n),
         .RWn        (cpu_rw_n),
+        .RMCn       (cpu_rmc_n),
         .DSn        (cpu_ds_n),
         .BERRn      (cpu_berrn),
         .HALT_INn   (cpu_ctl[1]),
