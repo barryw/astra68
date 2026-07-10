@@ -7896,6 +7896,50 @@ static void test_movep_tas_cas_directed(void)
     chk32(0x000f001cu, got_addr, SCRATCH_BASE + 0x155u);
     chk32(0x000f001eu, got & 0x1fu, 0x04u);
 
+    wr32(ATOMIC_RMC_TEST_BASE + 0x30u, 0x55007f80u);
+    wr32(ATOMIC_RMC_TEST_BASE + 0x34u, 0x11223344u);
+    wr32(ATOMIC_RMC_TEST_BASE + 0x38u, 0xaabbccddu);
+    for (uint32_t off = 0x40u; off <= 0x50u; off += 4u) {
+        wr32(ATOMIC_RMC_TEST_BASE + off, 0u);
+    }
+    __asm__ volatile(
+        "moveq #1,%%d4\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "tas.b 0x01ffae30(%%d4:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffae40\n\t"
+        "moveq #2,%%d4\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "tas.b 0x01ffae30(%%d4:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffae44\n\t"
+        "moveq #3,%%d4\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "tas.b 0x01ffae30(%%d4:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffae48\n\t"
+        "move.l #0x7fff0004,%%d4\n\t"
+        "move.w #0,%%ccr\n\t"
+        "tas.b 0x01ffae30(%%d4:w)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffae4c\n\t"
+        "movea.l #5,%%a1\n\t"
+        "move.w #0,%%ccr\n\t"
+        "tas.b 0x01ffae30(%%a1:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffae50"
+        :
+        :
+        : "a1", "d1", "d4", "cc", "memory");
+    chk32(0x000f0130u, rd32(ATOMIC_RMC_TEST_BASE + 0x30u), 0x5580ff80u);
+    chk32(0x000f0134u, rd32(ATOMIC_RMC_TEST_BASE + 0x34u), 0x91a23344u);
+    chk32(0x000f0138u, rd32(ATOMIC_RMC_TEST_BASE + 0x38u), 0xaabbccddu);
+    chk32(0x000f013cu, rd32(ATOMIC_RMC_TEST_BASE + 0x40u) & 0x1fu, 0x14u);
+    chk32(0x000f0140u, rd32(ATOMIC_RMC_TEST_BASE + 0x44u) & 0x1fu, 0x10u);
+    chk32(0x000f0144u, rd32(ATOMIC_RMC_TEST_BASE + 0x48u) & 0x1fu, 0x18u);
+    chk32(0x000f0148u, rd32(ATOMIC_RMC_TEST_BASE + 0x4cu) & 0x1fu, 0x00u);
+    chk32(0x000f014cu, rd32(ATOMIC_RMC_TEST_BASE + 0x50u) & 0x1fu, 0x00u);
+
     wr32(SCRATCH_BASE + 0x160, 0x11111111u);
     wr32(SCRATCH_BASE + 0x168, 0u);
     __asm__ volatile(
