@@ -3761,6 +3761,186 @@ static void test_data_alu_register_differential(void)
     mark(0x0017f000u, 0xadd50000u);
 }
 
+static uint32_t addx_ccr_ref(uint32_t bits, uint32_t src, uint32_t dst,
+                             uint32_t initial_x, uint32_t initial_z,
+                             uint32_t *result)
+{
+    uint32_t mask = alu_size_mask(bits);
+    uint32_t sign = 1u << (bits - 1u);
+    uint32_t srcm = src & mask;
+    uint32_t dstm = dst & mask;
+    uint32_t x = initial_x != 0u;
+    uint32_t sum;
+    uint32_t res;
+    uint32_t c;
+    uint32_t v;
+    uint32_t n;
+    uint32_t z;
+
+    if (bits == 32u) {
+        uint32_t sum0 = srcm + dstm;
+        uint32_t sum1 = sum0 + x;
+
+        c = (sum0 < srcm) || (x && sum1 < sum0);
+        res = sum1;
+    } else {
+        sum = srcm + dstm + x;
+        c = (sum & ~mask) != 0u;
+        res = sum & mask;
+    }
+
+    v = (~(srcm ^ dstm) & (res ^ dstm) & sign) != 0u;
+    n = (res & sign) != 0u;
+    z = res == 0u ? (initial_z != 0u) : 0u;
+
+    *result = (dst & ~mask) | res;
+    return (c ? 0x11u : 0u) | (n ? 0x08u : 0u) |
+           (z ? 0x04u : 0u) | (v ? 0x02u : 0u);
+}
+
+static uint32_t subx_ccr_ref(uint32_t bits, uint32_t src, uint32_t dst,
+                             uint32_t initial_x, uint32_t initial_z,
+                             uint32_t *result)
+{
+    uint32_t mask = alu_size_mask(bits);
+    uint32_t sign = 1u << (bits - 1u);
+    uint32_t srcm = src & mask;
+    uint32_t dstm = dst & mask;
+    uint32_t x = initial_x != 0u;
+    uint32_t subtr;
+    uint32_t res;
+    uint32_t c;
+    uint32_t v;
+    uint32_t n;
+    uint32_t z;
+
+    if (bits == 32u) {
+        subtr = srcm + x;
+        c = (x && subtr == 0u) || (subtr > dstm);
+    } else {
+        subtr = srcm + x;
+        c = subtr > dstm;
+    }
+    res = (dstm - subtr) & mask;
+
+    v = ((dstm ^ srcm) & (res ^ dstm) & sign) != 0u;
+    n = (res & sign) != 0u;
+    z = res == 0u ? (initial_z != 0u) : 0u;
+
+    *result = (dst & ~mask) | res;
+    return (c ? 0x11u : 0u) | (n ? 0x08u : 0u) |
+           (z ? 0x04u : 0u) | (v ? 0x02u : 0u);
+}
+
+#define CPU_XALU_REG(OP, SIZE)                                                 \
+    do {                                                                       \
+        __asm__ volatile(                                                      \
+            "move.l %2,%%d0\n\t"                                               \
+            "move.l %3,%%d1\n\t"                                               \
+            "move.l %4,%%d2\n\t"                                               \
+            "move.w %%d2,%%ccr\n\t"                                            \
+            #OP "." #SIZE " %%d0,%%d1\n\t"                                     \
+            "move.w %%sr,%%d2\n\t"                                             \
+            "move.l %%d1,%0\n\t"                                               \
+            "move.l %%d2,%1"                                                   \
+            : "=m"(*result), "=m"(*ccr)                                        \
+            : "d"(src), "d"(dst), "d"(initial_ccr)                             \
+            : "d0", "d1", "d2", "cc", "memory");                             \
+    } while (0)
+
+static void cpu_xalu_reg(uint32_t op, uint32_t bits, uint32_t src,
+                         uint32_t dst, uint32_t initial_x,
+                         uint32_t initial_z, uint32_t *result,
+                         uint32_t *ccr)
+{
+    uint32_t initial_ccr = (initial_x ? 0x10u : 0u) |
+                           (initial_z ? 0x04u : 0u);
+
+    if (op == 0u) {
+        switch (bits) {
+        case 8u:
+            CPU_XALU_REG(addx, b);
+            break;
+        case 16u:
+            CPU_XALU_REG(addx, w);
+            break;
+        default:
+            CPU_XALU_REG(addx, l);
+            break;
+        }
+    } else {
+        switch (bits) {
+        case 8u:
+            CPU_XALU_REG(subx, b);
+            break;
+        case 16u:
+            CPU_XALU_REG(subx, w);
+            break;
+        default:
+            CPU_XALU_REG(subx, l);
+            break;
+        }
+    }
+}
+
+#undef CPU_XALU_REG
+
+static void test_xalu_register_differential(void)
+{
+    static const uint32_t sizes[] = {8u, 16u, 32u};
+    static const struct {
+        uint32_t src;
+        uint32_t dst;
+    } pairs[] = {
+        {0x00000000u, 0x00000000u},
+        {0x00000000u, 0x00000001u},
+        {0x00000001u, 0x00000000u},
+        {0x00000001u, 0x0000007fu},
+        {0x000000ffu, 0x00000001u},
+        {0x00000080u, 0x00000080u},
+        {0x0000ffffu, 0x00000001u},
+        {0x00007fffu, 0x00000001u},
+        {0x00008000u, 0x00008000u},
+        {0xffffffffu, 0x00000001u},
+        {0x7fffffffu, 0x00000001u},
+        {0x80000000u, 0x80000000u},
+        {0x12345678u, 0x89abcdefu},
+    };
+
+    for (uint32_t op = 0; op < 2u; ++op) {
+        for (uint32_t s = 0; s < (sizeof(sizes) / sizeof(sizes[0])); ++s) {
+            uint32_t bits = sizes[s];
+
+            for (uint32_t xi = 0; xi < 2u; ++xi) {
+                for (uint32_t zi = 0; zi < 2u; ++zi) {
+                    for (uint32_t i = 0; i < (sizeof(pairs) / sizeof(pairs[0])); ++i) {
+                        uint32_t id = 0x001e0000u + (op << 15) + (s << 12) +
+                                      (xi << 11) + (zi << 10) + (i << 4);
+                        uint32_t got_result;
+                        uint32_t got_ccr;
+                        uint32_t exp_result;
+                        uint32_t exp_ccr;
+
+                        cpu_xalu_reg(op, bits, pairs[i].src, pairs[i].dst, xi, zi,
+                                     &got_result, &got_ccr);
+                        if (op == 0u) {
+                            exp_ccr = addx_ccr_ref(bits, pairs[i].src, pairs[i].dst,
+                                                   xi, zi, &exp_result);
+                        } else {
+                            exp_ccr = subx_ccr_ref(bits, pairs[i].src, pairs[i].dst,
+                                                   xi, zi, &exp_result);
+                        }
+                        chk32(id + 0x00u, got_result, exp_result);
+                        chk32(id + 0x04u, got_ccr & 0x1fu, exp_ccr);
+                    }
+                }
+            }
+        }
+    }
+
+    mark(0x001ef000u, 0xad5b0000u);
+}
+
 static uint32_t shift_reg_ref(uint32_t op, uint32_t bits, uint32_t value,
                               uint32_t count, uint32_t *result)
 {
@@ -9708,6 +9888,7 @@ void kmain(void)
     test_immediate_alu_directed();
     test_data_alu_indexed_directed();
     test_data_alu_register_differential();
+    test_xalu_register_differential();
     test_shift_register_differential();
     test_rotate_register_differential();
     test_addx_subx_cmpm_memory_directed();
