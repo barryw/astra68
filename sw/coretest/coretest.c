@@ -5203,6 +5203,143 @@ static void store_dbcc_mask(uint32_t addr, uint32_t ccr)
         : "a0", "d0", "d1", "d2", "cc", "memory");
 }
 
+static void store_trapcc_mask(uint32_t ccr)
+{
+    __asm__ volatile(
+        "move.l %0,%%d1\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "trapt\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000001,0x01ffa218\n"
+        "2:\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "trapf\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000002,0x01ffa218\n"
+        "2:\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "traphi\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000004,0x01ffa218\n"
+        "2:\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "trapls\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000008,0x01ffa218\n"
+        "2:\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "trapcc\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000010,0x01ffa218\n"
+        "2:\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "trapcs\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000020,0x01ffa218\n"
+        "2:\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "trapne\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000040,0x01ffa218\n"
+        "2:\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "trapeq\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000080,0x01ffa218\n"
+        "2:\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "trapvc\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000100,0x01ffa218\n"
+        "2:\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "trapvs\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000200,0x01ffa218\n"
+        "2:\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "trappl\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000400,0x01ffa218\n"
+        "2:\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "trapmi\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00000800,0x01ffa218\n"
+        "2:\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "trapge\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00001000,0x01ffa218\n"
+        "2:\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "traplt\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00002000,0x01ffa218\n"
+        "2:\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "trapgt\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00004000,0x01ffa218\n"
+        "2:\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "move.w %%d1,%%ccr\n\t"
+        "traple\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "ori.l #0x00008000,0x01ffa218\n"
+        "2:"
+        :
+        : "d"(ccr & 0x1fu)
+        : "a0", "a1", "d0", "d1", "cc", "memory");
+}
+
 static void test_condition_codes_directed(void)
 {
     uint32_t got;
@@ -5398,6 +5535,27 @@ static void test_condition_codes_directed(void)
         }
 
         chk32(0x000c0c00u + (ccr << 2), rd32(COND_TEST_BASE + 0x114u), exp);
+    }
+
+    static const uint8_t trapcc_ccrs[] = {0x00u, 0x0fu, 0x02u, 0x10u};
+    for (uint32_t row = 0; row < 4u; ++row) {
+        uint32_t ccr = trapcc_ccrs[row];
+        uint32_t exp = 0u;
+        uint32_t trap_count = 0u;
+
+        wr32(COND_TEST_BASE + 0x118u, 0u);
+        arm_exception_recovery(0x001cu);
+        store_trapcc_mask(ccr);
+
+        for (uint32_t cond = 0; cond < 0x10u; ++cond) {
+            if (condition_true_ref(cond, ccr)) {
+                exp |= 1u << cond;
+                ++trap_count;
+            }
+        }
+
+        chk32(0x000c1000u + (row << 3), rd32(COND_TEST_BASE + 0x118u), exp);
+        chk32(0x000c1004u + (row << 3), rd32(EXC_REC_BASE + 0x00u), trap_count);
     }
 }
 
