@@ -983,6 +983,158 @@ static void test_address_arithmetic_directed(void)
     chk32(0x00092014u, got1 & 0x1fu, 0x1fu);
 }
 
+static void test_register_transform_directed(void)
+{
+    uint32_t got0;
+    uint32_t got1;
+
+    __asm__ volatile(
+        "move.l #0x12340080,%%d0\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "ext.w %%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1", "cc");
+    chk32(0x00093000u, got0, 0x1234ff80u);
+    chk32(0x00093004u, got1 & 0x1fu, 0x18u);
+
+    __asm__ volatile(
+        "move.l #0x12348000,%%d0\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "ext.l %%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1", "cc");
+    chk32(0x00093008u, got0, 0xffff8000u);
+    chk32(0x0009300cu, got1 & 0x1fu, 0x18u);
+
+    __asm__ volatile(
+        "move.l #0x1234007f,%%d0\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "extb.l %%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1", "cc");
+    chk32(0x00093010u, got0, 0x0000007fu);
+    chk32(0x00093014u, got1 & 0x1fu, 0x10u);
+
+    __asm__ volatile(
+        "move.l #0x12340000,%%d0\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "extb.l %%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1", "cc");
+    chk32(0x00093018u, got0, 0x00000000u);
+    chk32(0x0009301cu, got1 & 0x1fu, 0x14u);
+
+    __asm__ volatile(
+        "move.l #0x00008000,%%d0\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "swap %%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1", "cc");
+    chk32(0x00093020u, got0, 0x80000000u);
+    chk32(0x00093024u, got1 & 0x1fu, 0x18u);
+
+    __asm__ volatile(
+        "move.l #0,%%d0\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "swap %%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "d0", "d1", "cc");
+    chk32(0x00093028u, got0, 0x00000000u);
+    chk32(0x0009302cu, got1 & 0x1fu, 0x14u);
+
+    __asm__ volatile(
+        "move.w #0x1f,%%ccr\n\t"
+        "movea.w #0x8001,%%a0\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%d0,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "d0", "cc");
+    chk32(0x00093030u, got0, 0xffff8001u);
+    chk32(0x00093034u, got1 & 0x1fu, 0x1fu);
+
+    __asm__ volatile(
+        "move.w #0x1f,%%ccr\n\t"
+        "movea.l #0x80000001,%%a0\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a0,%0\n\t"
+        "move.l %%d0,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "d0", "cc");
+    chk32(0x00093038u, got0, 0x80000001u);
+    chk32(0x0009303cu, got1 & 0x1fu, 0x1fu);
+
+    __asm__ volatile(
+        "movea.l #0x00000010,%%a0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmpa.w #0x0010,%%a0\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got0)
+        :
+        : "a0", "d0", "cc");
+    chk32(0x00093040u, got0 & 0x1fu, 0x14u);
+
+    __asm__ volatile(
+        "movea.l #0x00000010,%%a0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmpa.w #0x0020,%%a0\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got0)
+        :
+        : "a0", "d0", "cc");
+    chk32(0x00093044u, got0 & 0x1fu, 0x19u);
+
+    __asm__ volatile(
+        "movea.l #0x80000000,%%a0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmpa.l #1,%%a0\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got0)
+        :
+        : "a0", "d0", "cc");
+    chk32(0x00093048u, got0 & 0x1fu, 0x12u);
+
+    __asm__ volatile(
+        "movea.l #0x7fffffff,%%a0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmpa.l #-1,%%a0\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got0)
+        :
+        : "a0", "d0", "cc");
+    chk32(0x0009304cu, got0 & 0x1fu, 0x1bu);
+}
+
 static void test_system_control_directed(void)
 {
     uint32_t got;
@@ -2953,6 +3105,7 @@ void kmain(void)
     test_control_flow_directed();
     test_stack_frame_control_directed();
     test_address_arithmetic_directed();
+    test_register_transform_directed();
     test_system_control_directed();
     test_moves_directed();
     test_cmp2_chk2_directed();
