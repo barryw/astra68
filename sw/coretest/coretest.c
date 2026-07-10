@@ -8221,6 +8221,95 @@ static void test_condition_consumers_directed(void)
     chk32(0x000c023cu, rd32(COND_TEST_BASE + 0x6cu), 3u);
 }
 
+static void bit_reg_ref(uint32_t op, uint32_t count, uint32_t value,
+                        uint32_t initial_ccr, uint32_t *result,
+                        uint32_t *ccr)
+{
+    uint32_t mask = 1u << (count & 31u);
+    uint32_t bit_was_set = (value & mask) != 0u;
+    uint32_t res = value;
+
+    if (op == 0u) {
+        res |= mask;
+    } else if (op == 1u) {
+        res &= ~mask;
+    } else if (op == 2u) {
+        res ^= mask;
+    }
+
+    *result = res;
+    *ccr = (initial_ccr & ~0x04u) | (bit_was_set ? 0u : 0x04u);
+}
+
+#define CPU_BIT_REG(OP)                                                        \
+    do {                                                                       \
+        __asm__ volatile(                                                      \
+            "move.l %2,%%d0\n\t"                                               \
+            "move.l %3,%%d1\n\t"                                               \
+            "move.l %4,%%d2\n\t"                                               \
+            "move.w %%d2,%%ccr\n\t"                                            \
+            #OP " %%d0,%%d1\n\t"                                               \
+            "move.w %%sr,%%d2\n\t"                                             \
+            "move.l %%d1,%0\n\t"                                               \
+            "move.l %%d2,%1"                                                   \
+            : "=m"(*result), "=m"(*ccr)                                        \
+            : "d"(count), "d"(value), "d"(initial_ccr)                         \
+            : "d0", "d1", "d2", "cc", "memory");                             \
+    } while (0)
+
+static void cpu_bit_reg(uint32_t op, uint32_t count, uint32_t value,
+                        uint32_t initial_ccr, uint32_t *result,
+                        uint32_t *ccr)
+{
+    if (op == 0u) {
+        CPU_BIT_REG(bset);
+    } else if (op == 1u) {
+        CPU_BIT_REG(bclr);
+    } else if (op == 2u) {
+        CPU_BIT_REG(bchg);
+    } else {
+        CPU_BIT_REG(btst);
+    }
+}
+
+#undef CPU_BIT_REG
+
+static void test_bitops_register_differential(void)
+{
+    static const uint32_t counts[] = {
+        0u, 1u, 7u, 8u, 15u, 16u, 31u, 32u, 33u, 63u,
+    };
+    static const uint32_t values[] = {
+        0x00000000u, 0x00000001u, 0x80000000u, 0xffffffffu,
+        0x55555555u, 0xaaaaaaaau, 0x12345678u, 0x89abcdefu,
+    };
+    static const uint32_t ccrs[] = {0x00u, 0x1fu};
+
+    for (uint32_t op = 0; op < 4u; ++op) {
+        for (uint32_t ci = 0; ci < (sizeof(counts) / sizeof(counts[0])); ++ci) {
+            for (uint32_t vi = 0; vi < (sizeof(values) / sizeof(values[0])); ++vi) {
+                for (uint32_t fi = 0; fi < (sizeof(ccrs) / sizeof(ccrs[0])); ++fi) {
+                    uint32_t id = 0x001f0000u + (op << 13) + (ci << 8) +
+                                  (vi << 4) + (fi << 3);
+                    uint32_t got_result;
+                    uint32_t got_ccr;
+                    uint32_t exp_result;
+                    uint32_t exp_ccr;
+
+                    cpu_bit_reg(op, counts[ci], values[vi], ccrs[fi],
+                                &got_result, &got_ccr);
+                    bit_reg_ref(op, counts[ci], values[vi], ccrs[fi],
+                                &exp_result, &exp_ccr);
+                    chk32(id + 0x00u, got_result, exp_result);
+                    chk32(id + 0x04u, got_ccr & 0x1fu, exp_ccr);
+                }
+            }
+        }
+    }
+
+    mark(0x001ff000u, 0xb1700000u);
+}
+
 static void test_bitops_directed(void)
 {
     wr32(BITOP_TEST_BASE + 0x00u, 0u);
@@ -9907,6 +9996,7 @@ void kmain(void)
     test_alu_shift_bitfield_bcd_directed();
     test_condition_codes_directed();
     test_condition_consumers_directed();
+    test_bitops_register_differential();
     test_bitops_directed();
     test_signed_mul_div_directed();
     test_mul_div_memory_directed();
