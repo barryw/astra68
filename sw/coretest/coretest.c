@@ -24,6 +24,7 @@
 #define FULLFMT_TEST_BASE (SCRATCH_BASE + 0xe00u)
 #define SHIFT_TEST_BASE (SCRATCH_BASE + 0xf00u)
 #define COND_TEST_BASE (SCRATCH_BASE + 0x1000u)
+#define BITOP_TEST_BASE (SCRATCH_BASE + 0x1200u)
 
 static volatile uint32_t g_sum;
 
@@ -2274,6 +2275,72 @@ static void test_condition_codes_directed(void)
     chk32(0x000c012cu, rd32(COND_TEST_BASE + 0x2cu), 0xff0000ffu);
 }
 
+static void test_bitops_directed(void)
+{
+    wr32(BITOP_TEST_BASE + 0x00u, 0u);
+    wr32(BITOP_TEST_BASE + 0x04u, 0u);
+    wr32(BITOP_TEST_BASE + 0x08u, 0u);
+    wr32(BITOP_TEST_BASE + 0x0cu, 0u);
+    wr32(BITOP_TEST_BASE + 0x10u, 0u);
+    __asm__ volatile(
+        "moveq #0,%%d0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "bset #31,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa300\n\t"
+        "move.l %%d1,0x01ffa304\n\t"
+        "bchg #31,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,0x01ffa308\n\t"
+        "move.l %%d1,0x01ffa30c\n\t"
+        "btst #5,%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa310"
+        :
+        :
+        : "d0", "d1", "cc", "memory");
+    chk32(0x000c0200u, rd32(BITOP_TEST_BASE + 0x00u), 0x80000000u);
+    chk32(0x000c0204u, rd32(BITOP_TEST_BASE + 0x04u) & 0x04u, 0x04u);
+    chk32(0x000c0208u, rd32(BITOP_TEST_BASE + 0x08u), 0x00000000u);
+    chk32(0x000c020cu, rd32(BITOP_TEST_BASE + 0x0cu) & 0x04u, 0x00u);
+    chk32(0x000c0210u, rd32(BITOP_TEST_BASE + 0x10u) & 0x04u, 0x04u);
+
+    wr32(BITOP_TEST_BASE + 0x20u, 0u);
+    wr32(BITOP_TEST_BASE + 0x30u, 0u);
+    wr32(BITOP_TEST_BASE + 0x34u, 0u);
+    wr32(BITOP_TEST_BASE + 0x38u, 0u);
+    wr32(BITOP_TEST_BASE + 0x3cu, 0u);
+    wr32(BITOP_TEST_BASE + 0x40u, 0u);
+    __asm__ volatile(
+        "moveq #7,%%d0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "bset %%d0,0x01ffa320\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa330\n\t"
+        "bclr %%d0,0x01ffa320\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa334\n\t"
+        "moveq #1,%%d0\n\t"
+        "bchg %%d0,0x01ffa323\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa338\n\t"
+        "btst #1,0x01ffa323\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa33c\n\t"
+        "bset #10,0x01ffa322\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa340"
+        :
+        :
+        : "d0", "d1", "cc", "memory");
+    chk32(0x000c0220u, rd32(BITOP_TEST_BASE + 0x20u), 0x00000402u);
+    chk32(0x000c0230u, rd32(BITOP_TEST_BASE + 0x30u) & 0x04u, 0x04u);
+    chk32(0x000c0234u, rd32(BITOP_TEST_BASE + 0x34u) & 0x04u, 0x00u);
+    chk32(0x000c0238u, rd32(BITOP_TEST_BASE + 0x38u) & 0x04u, 0x04u);
+    chk32(0x000c023cu, rd32(BITOP_TEST_BASE + 0x3cu) & 0x04u, 0x00u);
+    chk32(0x000c0240u, rd32(BITOP_TEST_BASE + 0x40u) & 0x04u, 0x04u);
+}
+
 static void test_signed_mul_div_directed(void)
 {
     wr32(SCRATCH_BASE + 0x120, 0u);
@@ -2847,6 +2914,7 @@ void kmain(void)
 #endif
     test_alu_shift_bitfield_bcd_directed();
     test_condition_codes_directed();
+    test_bitops_directed();
     test_signed_mul_div_directed();
     test_memory_bitfield_directed();
     test_memory_bitfield_extended_directed();
