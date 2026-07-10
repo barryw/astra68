@@ -2502,6 +2502,31 @@ static void test_system_control_directed(void)
     chk32(0x000a0030u, rd32(SCRATCH_BASE + 0x100) & 1u, 0u);
     __asm__ volatile("trap #0" : : : "a0", "memory");
     chk32(0x000a0034u, rd32(SCRATCH_BASE + 0xf0), 2u);
+
+    for (uint32_t off = 0; off < 0x100u; off += 4u) {
+        wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
+    }
+    wr32(EXC_ALT_VBR + 0x80u, (uint32_t)(uintptr_t)_h_recover);
+    arm_exception_recovery(0x0080u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d1\n\t"
+        "movec %%d1,%%vbr\n\t"
+        "lea 0x01ff99e0,%%a1\n\t"
+        "move.l %%a1,%%usp\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.w #0x0000,%%sr\n\t"
+        "trap #0\n"
+        "1:\n\t"
+        "move.l %%usp,%%a1\n\t"
+        "move.l %%a1,%0\n\t"
+        "moveq #0,%%d1\n\t"
+        "movec %%d1,%%vbr"
+        : "=&d"(got)
+        :
+        : "a0", "a1", "d0", "d1", "cc", "memory");
+    chk_exception_frame(0x000a0090u, 0x0080u, 0x0000u, 0x2000u, 0x0000u);
+    chk32(0x000a00a8u, got, RETURN_TEST_BASE + 0xe0u);
 }
 
 static void test_moves_directed(void)
