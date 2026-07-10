@@ -3155,6 +3155,62 @@ static void test_immediate_alu_directed(void)
     chk32(0x00095074u, rd32(IMM_TEST_BASE + 0x68u), 0xaaaa1205u);
     chk32(0x00095078u, rd32(IMM_TEST_BASE + 0x6cu), 0x55555f0fu);
     chk32(0x0009507cu, rd32(IMM_TEST_BASE + 0x70u), 0xf0f0f0f0u);
+
+    wr32(IMM_TEST_BASE + 0x80u, 0x127f8000u);
+    wr32(IMM_TEST_BASE + 0x84u, 0x00000001u);
+    wr32(IMM_TEST_BASE + 0x88u, 0xffff0f0fu);
+    wr32(IMM_TEST_BASE + 0x8cu, 0x12345678u);
+    wr32(IMM_TEST_BASE + 0x90u, 0x00000010u);
+    wr32(IMM_TEST_BASE + 0x94u, 0x12340000u);
+    for (uint32_t off = 0xa0u; off <= 0xb4u; off += 4u) {
+        wr32(IMM_TEST_BASE + off, 0u);
+    }
+    __asm__ volatile(
+        "moveq #1,%%d4\n\t"
+        "move.w #0,%%ccr\n\t"
+        "addi.b #1,0x01ffa680(%%d4:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa6a0\n\t"
+        "moveq #6,%%d4\n\t"
+        "move.w #0x1f,%%ccr\n\t"
+        "subi.w #1,0x01ffa680(%%d4:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa6a4\n\t"
+        "moveq #10,%%d4\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "andi.w #0x00f0,0x01ffa680(%%d4:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa6a8\n\t"
+        "move.l #0x7fff000c,%%d4\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "eori.l #0xffffffff,0x01ffa680(%%d4:w)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa6ac\n\t"
+        "movea.l #16,%%a1\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmpi.l #0x00000020,0x01ffa680(%%a1:l)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa6b0\n\t"
+        "move.l #0x7fff0016,%%d4\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "ori.w #0x0f0f,0x01ffa680(%%d4:w)\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,0x01ffa6b4"
+        :
+        :
+        : "a1", "d1", "d4", "cc", "memory");
+    chk32(0x00095080u, rd32(IMM_TEST_BASE + 0x80u), 0x12808000u);
+    chk32(0x00095084u, rd32(IMM_TEST_BASE + 0x84u), 0x00000000u);
+    chk32(0x00095088u, rd32(IMM_TEST_BASE + 0x88u), 0xffff0000u);
+    chk32(0x0009508cu, rd32(IMM_TEST_BASE + 0x8cu), 0xedcba987u);
+    chk32(0x00095090u, rd32(IMM_TEST_BASE + 0x90u), 0x00000010u);
+    chk32(0x00095094u, rd32(IMM_TEST_BASE + 0x94u), 0x12340f0fu);
+    chk32(0x00095098u, rd32(IMM_TEST_BASE + 0xa0u) & 0x1fu, 0x0au);
+    chk32(0x0009509cu, rd32(IMM_TEST_BASE + 0xa4u) & 0x1fu, 0x04u);
+    chk32(0x000950a0u, rd32(IMM_TEST_BASE + 0xa8u) & 0x1fu, 0x14u);
+    chk32(0x000950a4u, rd32(IMM_TEST_BASE + 0xacu) & 0x1fu, 0x18u);
+    chk32(0x000950a8u, rd32(IMM_TEST_BASE + 0xb0u) & 0x1fu, 0x19u);
+    chk32(0x000950acu, rd32(IMM_TEST_BASE + 0xb4u) & 0x1fu, 0x10u);
 }
 
 static void test_addx_subx_cmpm_memory_directed(void)
