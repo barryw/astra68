@@ -23,6 +23,7 @@
 #define BITFIELD_TEST_BASE (SCRATCH_BASE + 0xc00u)
 #define FULLFMT_TEST_BASE (SCRATCH_BASE + 0xe00u)
 #define SHIFT_TEST_BASE (SCRATCH_BASE + 0xf00u)
+#define COND_TEST_BASE (SCRATCH_BASE + 0x1000u)
 
 static volatile uint32_t g_sum;
 
@@ -2060,6 +2061,64 @@ static void test_condition_codes_directed(void)
         :
         : "d0", "d1", "d2", "cc");
     chk32(0x000c0003u, got & 0x1fu, 0x14u);
+
+    for (uint32_t off = 0; off < 0x40u; off += 4u) {
+        wr32(COND_TEST_BASE + off, 0xaaaaaaaau);
+    }
+
+    __asm__ volatile(
+        "lea 0x01ffa100,%%a0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "st (%%a0)+\n\t"
+        "sf (%%a0)+\n\t"
+        "shi (%%a0)+\n\t"
+        "sls (%%a0)+\n\t"
+        "scc (%%a0)+\n\t"
+        "scs (%%a0)+\n\t"
+        "sne (%%a0)+\n\t"
+        "seq (%%a0)+\n\t"
+        "svc (%%a0)+\n\t"
+        "svs (%%a0)+\n\t"
+        "spl (%%a0)+\n\t"
+        "smi (%%a0)+\n\t"
+        "sge (%%a0)+\n\t"
+        "slt (%%a0)+\n\t"
+        "sgt (%%a0)+\n\t"
+        "sle (%%a0)+"
+        :
+        :
+        : "a0", "cc", "memory");
+    chk32(0x000c0100u, rd32(COND_TEST_BASE + 0x00u), 0xff00ff00u);
+    chk32(0x000c0104u, rd32(COND_TEST_BASE + 0x04u), 0xff00ff00u);
+    chk32(0x000c0108u, rd32(COND_TEST_BASE + 0x08u), 0xff00ff00u);
+    chk32(0x000c010cu, rd32(COND_TEST_BASE + 0x0cu), 0xff00ff00u);
+
+    __asm__ volatile(
+        "lea 0x01ffa120,%%a0\n\t"
+        "move.w #0x0f,%%ccr\n\t"
+        "st (%%a0)+\n\t"
+        "sf (%%a0)+\n\t"
+        "shi (%%a0)+\n\t"
+        "sls (%%a0)+\n\t"
+        "scc (%%a0)+\n\t"
+        "scs (%%a0)+\n\t"
+        "sne (%%a0)+\n\t"
+        "seq (%%a0)+\n\t"
+        "svc (%%a0)+\n\t"
+        "svs (%%a0)+\n\t"
+        "spl (%%a0)+\n\t"
+        "smi (%%a0)+\n\t"
+        "sge (%%a0)+\n\t"
+        "slt (%%a0)+\n\t"
+        "sgt (%%a0)+\n\t"
+        "sle (%%a0)+"
+        :
+        :
+        : "a0", "cc", "memory");
+    chk32(0x000c0120u, rd32(COND_TEST_BASE + 0x20u), 0xff0000ffu);
+    chk32(0x000c0124u, rd32(COND_TEST_BASE + 0x24u), 0x00ff00ffu);
+    chk32(0x000c0128u, rd32(COND_TEST_BASE + 0x28u), 0x00ff00ffu);
+    chk32(0x000c012cu, rd32(COND_TEST_BASE + 0x2cu), 0xff0000ffu);
 }
 
 static void test_signed_mul_div_directed(void)
