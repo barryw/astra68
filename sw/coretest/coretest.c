@@ -1936,8 +1936,8 @@ static void test_register_transform_directed(void)
         : "=&d"(got0), "=&d"(got1)
         :
         : "d0", "d1", "cc");
-    chk32(0x00093050u, got0, 0xffffff80u);
-    chk32(0x00093054u, got1 & 0x1fu, 0x18u);
+    chk32(0x00093070u, got0, 0xffffff80u);
+    chk32(0x00093074u, got1 & 0x1fu, 0x18u);
 
     __asm__ volatile(
         "move.w #0x1f,%%ccr\n\t"
@@ -1948,8 +1948,8 @@ static void test_register_transform_directed(void)
         : "=&d"(got0), "=&d"(got1)
         :
         : "d0", "d1", "cc");
-    chk32(0x00093058u, got0, 0u);
-    chk32(0x0009305cu, got1 & 0x1fu, 0x14u);
+    chk32(0x00093078u, got0, 0u);
+    chk32(0x0009307cu, got1 & 0x1fu, 0x14u);
 
     __asm__ volatile(
         "move.w #0x1f,%%ccr\n\t"
@@ -1960,8 +1960,8 @@ static void test_register_transform_directed(void)
         : "=&d"(got0), "=&d"(got1)
         :
         : "d0", "d1", "cc");
-    chk32(0x00093060u, got0, 0x0000007fu);
-    chk32(0x00093064u, got1 & 0x1fu, 0x10u);
+    chk32(0x00093080u, got0, 0x0000007fu);
+    chk32(0x00093084u, got1 & 0x1fu, 0x10u);
 
     __asm__ volatile(
         "move.l #0x12340080,%%d0\n\t"
@@ -2108,6 +2108,98 @@ static void test_register_transform_directed(void)
         :
         : "a0", "d0", "cc");
     chk32(0x0009304cu, got0 & 0x1fu, 0x1bu);
+
+    __asm__ volatile(
+        "movea.l #0x00007fff,%%a0\n\t"
+        "move.l #0x12348000,%%d0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmpa.w %%d0,%%a0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,%0"
+        : "=&d"(got0)
+        :
+        : "a0", "d0", "d1", "cc");
+    chk32(0x00093090u, got0 & 0x1fu, 0x11u);
+
+    __asm__ volatile(
+        "movea.l #0xffff8000,%%a0\n\t"
+        "move.l #0x56788000,%%d0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmpa.w %%d0,%%a0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,%0"
+        : "=&d"(got0)
+        :
+        : "a0", "d0", "d1", "cc");
+    chk32(0x00093094u, got0 & 0x1fu, 0x14u);
+
+    __asm__ volatile(
+        "movea.l #0x7fffffff,%%a0\n\t"
+        "move.l #-1,%%d0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmpa.l %%d0,%%a0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,%0"
+        : "=&d"(got0)
+        :
+        : "a0", "d0", "d1", "cc");
+    chk32(0x00093098u, got0 & 0x1fu, 0x1bu);
+
+    __asm__ volatile(
+        "movea.l #0x00008000,%%a0\n\t"
+        "move.l #0x12347fff,%%d0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmpa.w %%d0,%%a0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d1,%0"
+        : "=&d"(got0)
+        :
+        : "a0", "d0", "d1", "cc");
+    chk32(0x000930b0u, got0 & 0x1fu, 0x10u);
+
+    *(volatile uint16_t *)(ADDR_TEST_BASE + 0x30u) = 0x8000u;
+    wr32(ADDR_TEST_BASE + 0x34u, 0xffffffffu);
+    wr32(ADDR_TEST_BASE + 0x38u, 0x00000001u);
+
+    __asm__ volatile(
+        "movea.l #0x7fffffff,%%a0\n\t"
+        "lea 0x01ffa430,%%a1\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmpa.w (%%a1)+,%%a0\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a1,%0\n\t"
+        "move.l %%d0,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "d0", "cc", "memory");
+    chk32(0x0009309cu, got0, ADDR_TEST_BASE + 0x32u);
+    chk32(0x000930a0u, got1 & 0x1fu, 0x1bu);
+
+    __asm__ volatile(
+        "movea.l #0x00000000,%%a0\n\t"
+        "lea 0x01ffa438,%%a1\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmpa.l -(%%a1),%%a0\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%a1,%0\n\t"
+        "move.l %%d0,%1"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "d0", "cc", "memory");
+    chk32(0x000930a4u, got0, ADDR_TEST_BASE + 0x34u);
+    chk32(0x000930a8u, got1 & 0x1fu, 0x11u);
+
+    __asm__ volatile(
+        "movea.l #0x80000000,%%a0\n\t"
+        "lea 0x01ffa438,%%a1\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cmpa.l (%%a1),%%a0\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=&d"(got0)
+        :
+        : "a0", "a1", "d0", "cc", "memory");
+    chk32(0x000930acu, got0 & 0x1fu, 0x12u);
 
     __asm__ volatile(
         "move.w #0x1f,%%ccr\n\t"

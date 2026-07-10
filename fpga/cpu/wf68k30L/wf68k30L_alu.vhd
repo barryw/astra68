@@ -928,7 +928,14 @@ begin
     variable NFLAG_MUL      : std_logic;
     variable VFLAG_MUL      : std_logic;
     variable RM_SM_DM       : bit_vector(2 downto 0);
+    variable INT_MSB        : integer range 0 to 31;
     begin
+        if OP = CMPA then
+            INT_MSB := 31;
+        else
+            INT_MSB := MSB;
+        end if;
+
         -- Shifter C, X and V flags:
         if CLK = '1' and CLK' event then
             if SHFT_LOAD = '1' or SHIFT_WIDTH = "000000" then
@@ -1003,10 +1010,14 @@ begin
 
         -- Integer operations:
         case OP is
-            when ADD | ADDI | ADDQ | ADDX | CMP | CMPA | CMPI | CMPM | NEG | NEGX | SUB | SUBI | SUBQ | SUBX  =>
-                RM := RESULT_INTOP(MSB);
-                SM := OP1_SIGNEXT(MSB);
-                DM := OP2_SIGNEXT(MSB);
+            when CMPA =>
+                RM := RESULT_INTOP(INT_MSB);
+                SM := OP1_SIGNEXT(INT_MSB);
+                DM := OP2(INT_MSB);
+            when ADD | ADDI | ADDQ | ADDX | CMP | CMPI | CMPM | NEG | NEGX | SUB | SUBI | SUBQ | SUBX  =>
+                RM := RESULT_INTOP(INT_MSB);
+                SM := OP1_SIGNEXT(INT_MSB);
+                DM := OP2_SIGNEXT(INT_MSB);
             when others =>
                 RM := '-'; SM := '-'; DM := '-';
         end case;
@@ -1037,7 +1048,7 @@ begin
         case OP is
             when ADD | ADDI | ADDQ | ADDX | CAS | CAS2 | CMP | CMPA | CMPI | CMPM | NEG | NEGX | SUB | SUBI | SUBQ | SUBX  =>
                 for i in RESULT_INTOP'range loop
-                    if i <= MSB then
+                    if i <= INT_MSB then
                         TMP:= TMP or RESULT_INTOP(i); -- Detect '1'.
                     end if;
                 end loop;
