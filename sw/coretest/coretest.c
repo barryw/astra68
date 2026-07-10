@@ -1883,6 +1883,25 @@ static void test_system_control_directed(void)
         : "d0", "cc");
     chk32(0x000a0001u, got & 0x1fu, 0x15u);
 
+    wr32(RETURN_TEST_BASE + 0xc4u, 0x55555555u);
+    wr32(RETURN_TEST_BASE + 0xc8u, 0x00140000u);
+    __asm__ volatile(
+        "lea 0x01ff99c4,%%a0\n\t"
+        "move.w #0x1b,%%ccr\n\t"
+        "move.w %%ccr,(%%a0)\n\t"
+        "lea 0x01ff99c8,%%a0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "move.w (%%a0),%%ccr\n\t"
+        "moveq #0,%%d0\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0"
+        : "=d"(got)
+        :
+        : "a0", "d0", "cc", "memory");
+    chk32(0x000a0004u, rd32(RETURN_TEST_BASE + 0xc4u), 0x001b5555u);
+    chk32(0x000a0008u, got & 0xff00u, 0x2700u);
+    chk32(0x000a000cu, got & 0x1fu, 0x14u);
+
     __asm__ volatile(
         "movec %%vbr,%%d0\n\t"
         "move.l %%d0,%0"
