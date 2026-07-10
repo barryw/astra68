@@ -18,6 +18,7 @@
 #define MOVES_TEST_BASE (SCRATCH_BASE + 0x700u)
 #define MOVES_EXT_TEST_BASE (SCRATCH_BASE + 0x1b00u)
 #define MOVES_FC_TEST_BASE (MOVES_EXT_TEST_BASE + 0x100u)
+#define ATOMIC_RMC_TEST_BASE (MOVES_FC_TEST_BASE + 0x100u)
 #define BOUNDS_TEST_BASE (SCRATCH_BASE + 0x720u)
 #define CAS2_TEST_BASE (SCRATCH_BASE + 0x740u)
 #define RETURN_TEST_BASE (SCRATCH_BASE + 0x800u)
@@ -7680,6 +7681,25 @@ static void test_movep_tas_cas_directed(void)
     chk32(0x00140024u, rd32(CAS2_TEST_BASE + 0xd4u), 0x50607080u);
     chk32(0x00140028u, rd32(CAS2_TEST_BASE + 0xd8u), 0x20304050u);
     chk32(0x0014002cu, rd32(CAS2_TEST_BASE + 0xdcu) & 0x04u, 0u);
+
+    wr32(ATOMIC_RMC_TEST_BASE + 0x00u, 0x31415926u);
+    wr32(ATOMIC_RMC_TEST_BASE + 0x04u, 1u);
+    __asm__ volatile(
+        "lea 0x01ffae00,%%a0\n\t"
+        "move.l #0x31415926,%%d0\n\t"
+        "move.l #0x27182818,%%d1\n\t"
+        "move.w #0,%%ccr\n\t"
+        "cas.l %%d0,%%d1,(%%a0)\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d2,%1"
+        : "=&d"(got), "=&d"(got_addr)
+        :
+        : "a0", "d0", "d1", "d2", "cc", "memory");
+    wr32(ATOMIC_RMC_TEST_BASE + 0x04u, 0u);
+    chk32(0x00160010u, rd32(ATOMIC_RMC_TEST_BASE + 0x00u), 0x27182818u);
+    chk32(0x00160014u, got, 0x31415926u);
+    chk32(0x00160018u, got_addr & 0x04u, 0x04u);
 }
 
 static void test_movep_displacement_directed(void)

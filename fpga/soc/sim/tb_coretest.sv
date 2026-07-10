@@ -18,10 +18,15 @@ module tb_coretest;
     localparam BERR_TARGET_ADDR = 32'h01ff9608;
     localparam MOVES_FC_READ_ADDR = 32'h01ffad00;
     localparam MOVES_FC_WRITE_ADDR = 32'h01ffad04;
+    localparam ATOMIC_RMC_TARGET_ADDR = 32'h01ffae00;
+    localparam ATOMIC_RMC_ARM_ADDR = 32'h01ffae04;
     reg [2:0] sim_ipln = 3'b111;
     reg sim_avecn = 1'b1;
     reg sim_berrn = 1'b1;
     reg sim_berr_arm = 1'b0;
+    reg atomic_rmc_arm = 1'b0;
+    reg atomic_rmc_seen_read = 1'b0;
+    reg atomic_rmc_seen_write = 1'b0;
 
     astra_soc #(.RST_MAX(16'd16)) dut (
         .clk25_mhz(clk25),
@@ -81,6 +86,44 @@ module tb_coretest;
             if (dut.bus_write_stb && dut.cpu_adr == MOVES_FC_WRITE_ADDR
                 && dut.cpu_fc !== 3'b001) begin
                 $fatal(1, "MOVES DFC probe expected FC=001, got %b", dut.cpu_fc);
+            end
+        end
+    end
+
+    always @(posedge dut.clk) begin
+        if (!rstn || dut.rst) begin
+            atomic_rmc_arm <= 1'b0;
+            atomic_rmc_seen_read <= 1'b0;
+            atomic_rmc_seen_write <= 1'b0;
+        end else begin
+            if (atomic_rmc_arm && dut.bus_read_stb
+                && dut.cpu_adr == ATOMIC_RMC_TARGET_ADDR) begin
+                atomic_rmc_seen_read <= 1'b1;
+                if (dut.cpu.u_cpu.rmc !== 1'b1) begin
+                    $fatal(1, "CAS RMC probe expected read RMC=1");
+                end
+            end
+            if (atomic_rmc_arm && dut.bus_write_stb
+                && dut.cpu_adr == ATOMIC_RMC_TARGET_ADDR) begin
+                atomic_rmc_seen_write <= 1'b1;
+                if (dut.cpu.u_cpu.rmc !== 1'b1) begin
+                    $fatal(1, "CAS RMC probe expected write RMC=1");
+                end
+            end
+            if (dut.bus_write_stb && dut.cpu_adr == ATOMIC_RMC_ARM_ADDR) begin
+                if (dut.cpu_dout[0]) begin
+                    atomic_rmc_arm <= 1'b1;
+                    atomic_rmc_seen_read <= 1'b0;
+                    atomic_rmc_seen_write <= 1'b0;
+                end else begin
+                    if (!atomic_rmc_seen_read) begin
+                        $fatal(1, "CAS RMC probe did not observe read cycle");
+                    end
+                    if (!atomic_rmc_seen_write) begin
+                        $fatal(1, "CAS RMC probe did not observe write cycle");
+                    end
+                    atomic_rmc_arm <= 1'b0;
+                end
             end
         end
     end
