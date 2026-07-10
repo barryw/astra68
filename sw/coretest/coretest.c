@@ -9102,6 +9102,161 @@ static void test_mul_word_register_differential(void)
     mark(0x0024f000u, 0x6d750000u);
 }
 
+static uint32_t udiv32_by16_ref(uint32_t dividend, uint32_t divisor,
+                                uint32_t *remainder)
+{
+    uint32_t quotient = 0u;
+    uint32_t rem = 0u;
+
+    for (int bit = 31; bit >= 0; --bit) {
+        rem = (rem << 1) | ((dividend >> (uint32_t)bit) & 1u);
+        if (rem >= divisor) {
+            rem -= divisor;
+            quotient |= 1u << (uint32_t)bit;
+        }
+    }
+
+    *remainder = rem;
+    return quotient;
+}
+
+static uint32_t signed32_magnitude(uint32_t value)
+{
+    return (value & 0x80000000u) ? (~value + 1u) : value;
+}
+
+static uint32_t signed16_magnitude(uint32_t value)
+{
+    uint32_t word = value & 0xffffu;
+
+    return (word & 0x8000u) ? ((~word + 1u) & 0xffffu) : word;
+}
+
+static void div_word_ref(uint32_t op, uint32_t src, uint32_t dst,
+                         uint32_t initial_ccr, uint32_t *src_result,
+                         uint32_t *dst_result, uint32_t *ccr)
+{
+    uint32_t divisor = src & 0xffffu;
+    uint32_t quotient;
+    uint32_t remainder;
+    uint32_t quotient_word;
+
+    if (op == 0u) {
+        quotient = udiv32_by16_ref(dst, divisor, &remainder);
+        quotient_word = quotient & 0xffffu;
+        *dst_result = ((remainder & 0xffffu) << 16) | quotient_word;
+    } else {
+        uint32_t dividend_neg = (dst & 0x80000000u) != 0u;
+        uint32_t divisor_neg = (divisor & 0x8000u) != 0u;
+        uint32_t quotient_neg = dividend_neg ^ divisor_neg;
+        uint32_t dividend_mag = signed32_magnitude(dst);
+        uint32_t divisor_mag = signed16_magnitude(divisor);
+        uint32_t remainder_word;
+
+        quotient = udiv32_by16_ref(dividend_mag, divisor_mag, &remainder);
+        quotient_word = quotient_neg ? ((~quotient + 1u) & 0xffffu) :
+                                       (quotient & 0xffffu);
+        remainder_word = (dividend_neg && remainder != 0u) ?
+                         ((~remainder + 1u) & 0xffffu) :
+                         (remainder & 0xffffu);
+        *dst_result = (remainder_word << 16) | quotient_word;
+    }
+
+    *src_result = src;
+    *ccr = (initial_ccr & 0x10u) |
+           ((quotient_word & 0x8000u) ? 0x08u : 0u) |
+           (quotient_word == 0u ? 0x04u : 0u);
+}
+
+#define CPU_DIV_WORD_REG(OP)                                                   \
+    do {                                                                       \
+        __asm__ volatile(                                                      \
+            "move.l %3,%%d0\n\t"                                               \
+            "move.l %4,%%d1\n\t"                                               \
+            "move.l %5,%%d2\n\t"                                               \
+            "move.w %%d2,%%ccr\n\t"                                            \
+            #OP ".w %%d0,%%d1\n\t"                                             \
+            "move.w %%sr,%%d2\n\t"                                             \
+            "move.l %%d0,%0\n\t"                                               \
+            "move.l %%d1,%1\n\t"                                               \
+            "move.l %%d2,%2"                                                   \
+            : "=m"(*src_result), "=m"(*dst_result), "=m"(*ccr)                 \
+            : "d"(src), "d"(dst), "d"(initial_ccr)                             \
+            : "d0", "d1", "d2", "cc", "memory");                             \
+    } while (0)
+
+static void cpu_div_word_reg(uint32_t op, uint32_t src, uint32_t dst,
+                             uint32_t initial_ccr, uint32_t *src_result,
+                             uint32_t *dst_result, uint32_t *ccr)
+{
+    if (op == 0u) {
+        CPU_DIV_WORD_REG(divu);
+    } else {
+        CPU_DIV_WORD_REG(divs);
+    }
+}
+
+#undef CPU_DIV_WORD_REG
+
+static void test_div_word_register_differential(void)
+{
+    static const uint32_t ccrs[] = {0x00u, 0x1fu};
+    static const struct {
+        uint32_t src;
+        uint32_t dst;
+    } divu_pairs[] = {
+        {0xaaaa0001u, 0x00000000u}, {0x12340001u, 0x00000001u},
+        {0xdead0007u, 0x000003e8u}, {0xbeef0002u, 0x0000ffffu},
+        {0xcafe0002u, 0x00010000u}, {0x11110003u, 0x00020000u},
+        {0x22228000u, 0x0000ffffu}, {0x3333ffffu, 0x0000fffeu},
+        {0x4444ffffu, 0xfffe0001u},
+    };
+    static const struct {
+        uint32_t src;
+        uint32_t dst;
+    } divs_pairs[] = {
+        {0xaaaa0001u, 0x00000000u}, {0x11110001u, 0x00000001u},
+        {0x2222ffffu, 0x00000001u}, {0x33330001u, 0xffffffffu},
+        {0x4444fff9u, 0xffff15a0u}, {0x55550007u, 0xffff15a0u},
+        {0x6666fff9u, 0x0000ea60u}, {0x77770002u, 0xffff8000u},
+        {0x88880001u, 0xffff8000u}, {0x99990002u, 0x0000ffffu},
+        {0xaaaafffeu, 0x0000ffffu}, {0xbbbb7fffu, 0x00007ffeu},
+        {0xcccc0003u, 0x00007ffeu},
+    };
+
+    for (uint32_t op = 0; op < 2u; ++op) {
+        uint32_t pair_count = op == 0u ?
+            (sizeof(divu_pairs) / sizeof(divu_pairs[0])) :
+            (sizeof(divs_pairs) / sizeof(divs_pairs[0]));
+
+        for (uint32_t ci = 0; ci < (sizeof(ccrs) / sizeof(ccrs[0])); ++ci) {
+            for (uint32_t i = 0; i < pair_count; ++i) {
+                uint32_t id = 0x00250000u + (op << 15) + (ci << 14) +
+                              (i << 4);
+                uint32_t src = op == 0u ? divu_pairs[i].src : divs_pairs[i].src;
+                uint32_t dst = op == 0u ? divu_pairs[i].dst : divs_pairs[i].dst;
+                uint32_t got_src;
+                uint32_t got_dst;
+                uint32_t got_ccr;
+                uint32_t exp_src;
+                uint32_t exp_dst;
+                uint32_t exp_ccr;
+
+                cpu_div_word_reg(op, src, dst, ccrs[ci], &got_src, &got_dst,
+                                 &got_ccr);
+                div_word_ref(op, src, dst, ccrs[ci], &exp_src, &exp_dst,
+                             &exp_ccr);
+
+                chk32(id + 0x00u, got_src, exp_src);
+                chk32(id + 0x04u, got_dst, exp_dst);
+                chk32(id + 0x08u, got_ccr & 0x1fu, exp_ccr);
+            }
+        }
+    }
+
+    mark(0x0025f000u, 0xd1750000u);
+}
+
 static void test_signed_mul_div_directed(void)
 {
     wr32(SCRATCH_BASE + 0x120, 0u);
@@ -10640,6 +10795,7 @@ void kmain(void)
     test_bitops_register_differential();
     test_bitops_directed();
     test_mul_word_register_differential();
+    test_div_word_register_differential();
     test_signed_mul_div_directed();
     test_mul_div_memory_directed();
     test_memory_bitfield_directed();
