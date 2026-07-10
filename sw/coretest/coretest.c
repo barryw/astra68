@@ -682,6 +682,11 @@ static void test_movem_directed(void)
 static void test_control_flow_directed(void)
 {
     uint32_t got;
+    uint32_t got0;
+    uint32_t got1;
+    uint32_t got2;
+    uint32_t got3;
+    uint32_t got4;
 
     __asm__ volatile(
         "moveq #0,%%d0\n\t"
@@ -773,6 +778,55 @@ static void test_control_flow_directed(void)
     chk32(0x00090021u, got, 0x2468ace0u);
 
     __asm__ volatile(
+        "move.l %%sp,%%a2\n\t"
+        "lea 2f,%%a1\n\t"
+        "move.l %%a1,%4\n\t"
+        "lea 1f-16,%%a0\n\t"
+        "jsr 16(%%a0)\n"
+        "2:\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.l %%sp,%2\n\t"
+        "move.l %%a2,%3\n\t"
+        "bra 3f\n"
+        "1:\n\t"
+        "move.l (%%sp),%%d1\n\t"
+        "move.l #0x55aa0101,%%d0\n\t"
+        "rts\n"
+        "3:"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2), "=&d"(got3), "=&d"(got4)
+        :
+        : "a0", "a1", "a2", "d0", "d1", "memory");
+    chk32(0x00090024u, got0, 0x55aa0101u);
+    chk32(0x00090028u, got1, got4);
+    chk32(0x0009002cu, got2, got3);
+
+    __asm__ volatile(
+        "move.l %%sp,%%a2\n\t"
+        "lea 2f,%%a1\n\t"
+        "move.l %%a1,%4\n\t"
+        "lea 1f-20,%%a0\n\t"
+        "moveq #20,%%d2\n\t"
+        "jsr 0(%%a0,%%d2:l)\n"
+        "2:\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.l %%sp,%2\n\t"
+        "move.l %%a2,%3\n\t"
+        "bra 3f\n"
+        "1:\n\t"
+        "move.l (%%sp),%%d1\n\t"
+        "move.l #0x55aa0202,%%d0\n\t"
+        "rts\n"
+        "3:"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2), "=&d"(got3), "=&d"(got4)
+        :
+        : "a0", "a1", "a2", "d0", "d1", "d2", "memory");
+    chk32(0x00090034u, got0, 0x55aa0202u);
+    chk32(0x00090038u, got1, got4);
+    chk32(0x0009003cu, got2, got3);
+
+    __asm__ volatile(
         "moveq #0,%%d0\n\t"
         "lea 1f,%%a0\n\t"
         "jmp (%%a0)\n\t"
@@ -786,6 +840,22 @@ static void test_control_flow_directed(void)
         :
         : "d0", "a0", "memory");
     chk32(0x00090030u, got, 0x2au);
+
+    __asm__ volatile(
+        "moveq #0,%%d0\n\t"
+        "lea 1f-12,%%a0\n\t"
+        "moveq #12,%%d2\n\t"
+        "jmp 0(%%a0,%%d2:l)\n\t"
+        "moveq #1,%%d0\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "moveq #0x3b,%%d0\n"
+        "2:\n\t"
+        "move.l %%d0,%0"
+        : "=d"(got)
+        :
+        : "a0", "d0", "d2", "memory");
+    chk32(0x0009004cu, got, 0x3bu);
 
     __asm__ volatile(
         "moveq #0,%%d0\n\t"
@@ -851,6 +921,37 @@ static void test_stack_frame_control_directed(void)
         : "a2", "memory");
     chk32(0x00091000u, got0, STACK_TEST_BASE);
     chk32(0x00091004u, got1, STACK_TEST_BASE - 4u);
+
+    __asm__ volatile(
+        "move.l %%sp,%%a2\n\t"
+        "lea 0x01ff97d0,%%sp\n\t"
+        "lea 0x01ff9800,%%a0\n\t"
+        "pea 0x34(%%a0)\n\t"
+        "move.l (%%sp),%0\n\t"
+        "move.l %%sp,%1\n\t"
+        "lea 4(%%sp),%%sp\n\t"
+        "move.l %%a2,%%sp"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a2", "memory");
+    chk32(0x00091060u, got0, 0x01ff9834u);
+    chk32(0x00091064u, got1, STACK_TEST_BASE + 0xccu);
+
+    __asm__ volatile(
+        "move.l %%sp,%%a2\n\t"
+        "lea 0x01ff97c0,%%sp\n\t"
+        "lea 0x01ff9800,%%a0\n\t"
+        "moveq #5,%%d4\n\t"
+        "pea 0x20(%%a0,%%d4:l:2)\n\t"
+        "move.l (%%sp),%0\n\t"
+        "move.l %%sp,%1\n\t"
+        "lea 4(%%sp),%%sp\n\t"
+        "move.l %%a2,%%sp"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a2", "d4", "memory");
+    chk32(0x00091068u, got0, 0x01ff982au);
+    chk32(0x0009106cu, got1, STACK_TEST_BASE + 0xbcu);
 
     __asm__ volatile(
         "move.l %%sp,%%a2\n\t"
