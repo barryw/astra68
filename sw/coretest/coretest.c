@@ -4126,6 +4126,23 @@ static void test_condition_codes_directed(void)
     chk32(0x000c0124u, rd32(COND_TEST_BASE + 0x24u), 0x00ff00ffu);
     chk32(0x000c0128u, rd32(COND_TEST_BASE + 0x28u), 0x00ff00ffu);
     chk32(0x000c012cu, rd32(COND_TEST_BASE + 0x2cu), 0xff0000ffu);
+
+    for (uint32_t off = 0x50u; off <= 0x60u; off += 4u) {
+        wr32(COND_TEST_BASE + off, 0xaaaaaaaau);
+    }
+    __asm__ volatile(
+        "lea 0x01ffa160,%%a0\n\t"
+        "move.w #0,%%ccr\n\t"
+        "st -(%%a0)\n\t"
+        "sf -(%%a0)\n\t"
+        "seq -(%%a0)\n\t"
+        "sne -(%%a0)\n\t"
+        "move.l %%a0,%0"
+        : "=d"(got)
+        :
+        : "a0", "cc", "memory");
+    chk32(0x000c0130u, got, COND_TEST_BASE + 0x5cu);
+    chk32(0x000c0134u, rd32(COND_TEST_BASE + 0x5cu), 0xff0000ffu);
 }
 
 static void test_condition_consumers_directed(void)
