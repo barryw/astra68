@@ -245,9 +245,15 @@ begin
     variable MEM_ADR            : std_logic_vector(31 downto 0);
     variable OUTER_DISPL        : std_logic_vector(31 downto 0);
     variable PCVAR              : std_logic_vector(31 downto 0);
+    variable PC_BASE            : std_logic_vector(31 downto 0);
     begin
         I_S_IS := I_S & I_IS;        
         PCVAR := PC_I + PC_EW_OFFSET; -- This is the address of the extension word.
+        if F_E = '1' and B_S = '1' then
+            PC_BASE := x"00000000"; -- Base suppress for full-format PC-relative modes.
+        else
+            PC_BASE := PCVAR;
+        end if;
 
         if CLK = '1' and CLK' event then
             -- This logic selects the INDEX from one of the data registers or from one of 
@@ -442,22 +448,22 @@ begin
                         else -- Full extension word.
                             case I_S_IS is
                                 when "0000" | "1000" => -- No memory indirect action.
-                                    ADR_EFF_VAR := PCVAR + BASE_DISPL + INDEX_SCALED; -- (bd, PC, Xn, SIZE*SCALE).
+                                    ADR_EFF_VAR := PC_BASE + BASE_DISPL + INDEX_SCALED; -- (bd, PC, Xn, SIZE*SCALE).
                                 when "0001" | "0010" | "0011" => -- Memory indirect preindexed.
                                     if FETCH_MEM_ADR = '1' then
-                                        ADR_EFF_VAR := PCVAR + BASE_DISPL + INDEX_SCALED;
+                                        ADR_EFF_VAR := PC_BASE + BASE_DISPL + INDEX_SCALED;
                                     else
                                         ADR_EFF_VAR := MEM_ADR + OUTER_DISPL;
                                     end if;
                                 when "0101" | "0110" | "0111" => -- Memory indirect postindexed.
                                     if FETCH_MEM_ADR = '1' then
-                                        ADR_EFF_VAR := PCVAR + BASE_DISPL;
+                                        ADR_EFF_VAR := PC_BASE + BASE_DISPL;
                                     else
                                         ADR_EFF_VAR := MEM_ADR + INDEX_SCALED + OUTER_DISPL;
                                     end if;
                                 when "1001" | "1010" | "1011" => -- Memory indirect.
                                     if FETCH_MEM_ADR = '1' then
-                                        ADR_EFF_VAR := PCVAR + BASE_DISPL;
+                                        ADR_EFF_VAR := PC_BASE + BASE_DISPL;
                                     else
                                         ADR_EFF_VAR := MEM_ADR + OUTER_DISPL;
                                     end if;
