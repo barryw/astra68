@@ -7940,6 +7940,60 @@ static void test_movep_tas_cas_directed(void)
     chk32(0x000f0148u, rd32(ATOMIC_RMC_TEST_BASE + 0x4cu) & 0x1fu, 0x00u);
     chk32(0x000f014cu, rd32(ATOMIC_RMC_TEST_BASE + 0x50u) & 0x1fu, 0x00u);
 
+    wr32(ATOMIC_RMC_TEST_BASE + 0x60u, 0x10203040u);
+    wr32(ATOMIC_RMC_TEST_BASE + 0x64u, 0x55667788u);
+    wr32(ATOMIC_RMC_TEST_BASE + 0x68u, 0x99aabbccu);
+    for (uint32_t off = 0x70u; off <= 0x8cu; off += 4u) {
+        wr32(ATOMIC_RMC_TEST_BASE + off, 0u);
+    }
+    __asm__ volatile(
+        "move.l #0xaaaa0020,%%d0\n\t"
+        "move.l #0xbbbb00e1,%%d1\n\t"
+        "moveq #1,%%d4\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cas.b %%d0,%%d1,0x01ffae60(%%d4:l)\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d0,0x01ffae74\n\t"
+        "move.l %%d2,0x01ffae70\n\t"
+        "move.l #0xaaaa0031,%%d0\n\t"
+        "move.l #0xbbbb00e2,%%d1\n\t"
+        "moveq #2,%%d4\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cas.b %%d0,%%d1,0x01ffae60(%%d4:l)\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d0,0x01ffae7c\n\t"
+        "move.l %%d2,0x01ffae78\n\t"
+        "move.l #0xffff5566,%%d0\n\t"
+        "move.l #0xccccaa55,%%d1\n\t"
+        "move.l #0x7fff0004,%%d4\n\t"
+        "move.w #0,%%ccr\n\t"
+        "cas.w %%d0,%%d1,0x01ffae60(%%d4:w)\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d0,0x01ffae84\n\t"
+        "move.l %%d2,0x01ffae80\n\t"
+        "move.l #0xccccaa56,%%d0\n\t"
+        "move.l #0xdeadbeef,%%d1\n\t"
+        "movea.l #4,%%a1\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "cas.l %%d0,%%d1,0x01ffae60(%%a1:l)\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d0,0x01ffae8c\n\t"
+        "move.l %%d2,0x01ffae88"
+        :
+        :
+        : "a1", "d0", "d1", "d2", "d4", "cc", "memory");
+    chk32(0x000f0150u, rd32(ATOMIC_RMC_TEST_BASE + 0x60u), 0x10e13040u);
+    chk32(0x000f0154u, rd32(ATOMIC_RMC_TEST_BASE + 0x64u), 0xaa557788u);
+    chk32(0x000f0158u, rd32(ATOMIC_RMC_TEST_BASE + 0x68u), 0x99aabbccu);
+    chk32(0x000f015cu, rd32(ATOMIC_RMC_TEST_BASE + 0x70u) & 0x1fu, 0x14u);
+    chk32(0x000f0160u, rd32(ATOMIC_RMC_TEST_BASE + 0x74u), 0xaaaa0020u);
+    chk32(0x000f0164u, rd32(ATOMIC_RMC_TEST_BASE + 0x78u) & 0x04u, 0x00u);
+    chk32(0x000f0168u, rd32(ATOMIC_RMC_TEST_BASE + 0x7cu), 0xaaaa0030u);
+    chk32(0x000f016cu, rd32(ATOMIC_RMC_TEST_BASE + 0x80u) & 0x1fu, 0x04u);
+    chk32(0x000f0170u, rd32(ATOMIC_RMC_TEST_BASE + 0x84u), 0xffff5566u);
+    chk32(0x000f0174u, rd32(ATOMIC_RMC_TEST_BASE + 0x88u) & 0x04u, 0x00u);
+    chk32(0x000f0178u, rd32(ATOMIC_RMC_TEST_BASE + 0x8cu), 0xaa557788u);
+
     wr32(SCRATCH_BASE + 0x160, 0x11111111u);
     wr32(SCRATCH_BASE + 0x168, 0u);
     __asm__ volatile(
