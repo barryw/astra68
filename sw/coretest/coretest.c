@@ -2459,6 +2459,27 @@ static void test_return_control_directed(void)
         : "a0", "a1", "a2", "d0", "cc", "memory");
     chk32(0x000a0410u, got0 & 0x1fu, 0x15u);
     chk32(0x000a0414u, got1, RETURN_TEST_BASE + 0x26u);
+
+    __asm__ volatile(
+        "move.l %%sp,%%a2\n\t"
+        "lea 0x01ff9930,%%a0\n\t"
+        "move.w #0x2015,(%%a0)\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,2(%%a0)\n\t"
+        "move.w #0,6(%%a0)\n\t"
+        "move.l %%a0,%%sp\n\t"
+        "rte\n"
+        "1:\n\t"
+        "move.w %%sr,%%d0\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%sp,%1\n\t"
+        "move.w #0x2700,%%sr\n\t"
+        "move.l %%a2,%%sp"
+        : "=&d"(got0), "=&d"(got1)
+        :
+        : "a0", "a1", "a2", "d0", "cc", "memory");
+    chk32(0x000a0418u, got0 & 0x271fu, 0x2015u);
+    chk32(0x000a041cu, got1, RETURN_TEST_BASE + 0x38u);
 }
 
 static void test_bcd_directed(void)
@@ -2760,6 +2781,26 @@ static void test_exception_recovery_directed(void)
         : "a0", "d0", "d1", "d2", "cc", "memory");
     chk32(0x00100280u, rd32(EXC_REC_BASE + 0x00u), 0u);
     chk32(0x00100284u, rd32(SCRATCH_BASE + 0x168u), 0x6du);
+
+    for (uint32_t off = 0; off < 0x100u; off += 4u) {
+        wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
+    }
+    wr32(EXC_ALT_VBR + 0x9cu, (uint32_t)(uintptr_t)_h_recover);
+    arm_exception_recovery(0x009cu);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.w #0x15,%%ccr\n\t"
+        "trap #7\n"
+        "1:\n\t"
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr"
+        :
+        :
+        : "a0", "d0", "cc", "memory");
+    chk_exception_frame(0x001002a0u, 0x009cu, 0x0000u, 0x271fu, 0x2715u);
 
     arm_exception_recovery(0x0020u);
     __asm__ volatile(
