@@ -362,6 +362,44 @@ static void test_absolute_indexed_stores(void)
         :
         : "d4", "memory");
     chk32(0x00040079u, rd32(SCRATCH_BASE + 0x78), 0x00960000u);
+
+    wr32(SCRATCH_BASE + 0x100, 0x11223344u);
+    wr32(SCRATCH_BASE + 0x104, 0x55667788u);
+    wr32(SCRATCH_BASE + 0x108, 0x99aabbccu);
+    __asm__ volatile(
+        "moveq #0,%%d4\n\t"
+        "move.b #0xa0,0x01ff9204(%%d4:l)\n\t"
+        "moveq #1,%%d4\n\t"
+        "move.b #0xa1,0x01ff9204(%%d4:l)\n\t"
+        "moveq #2,%%d4\n\t"
+        "move.b #0xa2,0x01ff9204(%%d4:l)\n\t"
+        "moveq #3,%%d4\n\t"
+        "move.b #0xa3,0x01ff9204(%%d4:l)"
+        :
+        :
+        : "d4", "memory");
+    chk32(0x00040080u, rd32(SCRATCH_BASE + 0x100), 0x11223344u);
+    chk32(0x00040084u, rd32(SCRATCH_BASE + 0x104), 0xa0a1a2a3u);
+    chk32(0x00040088u, rd32(SCRATCH_BASE + 0x108), 0x99aabbccu);
+
+    wr32(SCRATCH_BASE + 0x10c, 0x10203040u);
+    wr32(SCRATCH_BASE + 0x110, 0x50607080u);
+    wr32(SCRATCH_BASE + 0x114, 0x90a0b0c0u);
+    __asm__ volatile(
+        "move.l #0x7fff0000,%%d4\n\t"
+        "move.b #0xb0,0x01ff9210(%%d4:w)\n\t"
+        "move.l #0x7fff0001,%%d4\n\t"
+        "move.b #0xb1,0x01ff9210(%%d4:w)\n\t"
+        "move.l #0x7fff0002,%%d4\n\t"
+        "move.b #0xb2,0x01ff9210(%%d4:w)\n\t"
+        "move.l #0x7fff0003,%%d4\n\t"
+        "move.b #0xb3,0x01ff9210(%%d4:w)"
+        :
+        :
+        : "d4", "memory");
+    chk32(0x0004008cu, rd32(SCRATCH_BASE + 0x10c), 0x10203040u);
+    chk32(0x00040090u, rd32(SCRATCH_BASE + 0x110), 0xb0b1b2b3u);
+    chk32(0x00040094u, rd32(SCRATCH_BASE + 0x114), 0x90a0b0c0u);
 }
 
 static void test_full_format_indexed_memory_ops(void)
