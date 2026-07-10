@@ -7622,6 +7622,120 @@ static void test_mul_div_memory_directed(void)
     chk32(0x000d0194u, got1, 0x00000001u);
     chk32(0x000d0198u, got2 & 0x1fu, 0x10u);
     chk32(0x000d019cu, got3, MUL_DIV_TEST_BASE + 0x90u);
+
+    *(volatile uint16_t *)(MUL_DIV_TEST_BASE + 0xa2u) = 5u;
+    __asm__ volatile(
+        "lea 0x01ffa9a0,%%a0\n\t"
+        "moveq #2,%%d4\n\t"
+        "move.l #0x12340003,%%d0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "mulu.w 0(%%a0,%%d4:l),%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.l %%a0,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "d0", "d1", "d4", "cc", "memory");
+    chk32(0x000d01a0u, got0, 0x0000000fu);
+    chk32(0x000d01a4u, got1 & 0x1fu, 0x10u);
+    chk32(0x000d01a8u, got2, MUL_DIV_TEST_BASE + 0xa0u);
+
+    *(volatile uint16_t *)(MUL_DIV_TEST_BASE + 0xb2u) = 0xfff9u;
+    __asm__ volatile(
+        "lea 0x01ffa9b0,%%a0\n\t"
+        "move.l #0x7fff0002,%%d4\n\t"
+        "moveq #6,%%d0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "muls.w 0(%%a0,%%d4:w),%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.l %%a0,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "d0", "d1", "d4", "cc", "memory");
+    chk32(0x000d01b0u, got0, 0xffffffd6u);
+    chk32(0x000d01b4u, got1 & 0x1fu, 0x18u);
+    chk32(0x000d01b8u, got2, MUL_DIV_TEST_BASE + 0xb0u);
+
+    wr32(MUL_DIV_TEST_BASE + 0xc8u, 0x10000003u);
+    __asm__ volatile(
+        "lea 0x01ffa9c0,%%a0\n\t"
+        "moveq #2,%%d4\n\t"
+        "moveq #16,%%d0\n\t"
+        "move.l #0xdeadbeef,%%d1\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "mulu.l 0(%%a0,%%d4:l:4),%%d1:%%d0\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.l %%d2,%2\n\t"
+        "move.l %%a0,%3"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2), "=&d"(got3)
+        :
+        : "a0", "d0", "d1", "d2", "d4", "cc", "memory");
+    chk32(0x000d01c0u, got0, 0x00000030u);
+    chk32(0x000d01c4u, got1, 0x00000001u);
+    chk32(0x000d01c8u, got2 & 0x1fu, 0x10u);
+    chk32(0x000d01ccu, got3, MUL_DIV_TEST_BASE + 0xc0u);
+
+    wr32(MUL_DIV_TEST_BASE + 0xd0u, 0xfffffffeu);
+    __asm__ volatile(
+        "lea 0x01ffa9d0,%%a0\n\t"
+        "suba.l %%a1,%%a1\n\t"
+        "move.l #0x00010000,%%d2\n\t"
+        "move.l #0xdeadbeef,%%d3\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "muls.l 0(%%a0,%%a1:l),%%d3:%%d2\n\t"
+        "move.w %%sr,%%d4\n\t"
+        "move.l %%d2,%0\n\t"
+        "move.l %%d3,%1\n\t"
+        "move.l %%d4,%2\n\t"
+        "move.l %%a0,%3"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2), "=&d"(got3)
+        :
+        : "a0", "a1", "d2", "d3", "d4", "cc", "memory");
+    chk32(0x000d01d0u, got0, 0xfffe0000u);
+    chk32(0x000d01d4u, got1, 0xffffffffu);
+    chk32(0x000d01d8u, got2 & 0x1fu, 0x18u);
+    chk32(0x000d01dcu, got3, MUL_DIV_TEST_BASE + 0xd0u);
+
+    wr32(MUL_DIV_TEST_BASE + 0xe4u, 0xfffffff9u);
+    __asm__ volatile(
+        "lea 0x01ffa9e0,%%a0\n\t"
+        "moveq #1,%%d4\n\t"
+        "move.l #-60000,%%d0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "divs.l 0(%%a0,%%d4:l:4),%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.l %%a0,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "d0", "d1", "d4", "cc", "memory");
+    chk32(0x000d01e0u, got0, 0x0000217bu);
+    chk32(0x000d01e4u, got1 & 0x1fu, 0x10u);
+    chk32(0x000d01e8u, got2, MUL_DIV_TEST_BASE + 0xe0u);
+
+    *(volatile uint16_t *)(MUL_DIV_TEST_BASE + 0xf6u) = 7u;
+    __asm__ volatile(
+        "lea 0x01ffa9f0,%%a0\n\t"
+        "moveq #6,%%d4\n\t"
+        "move.l #1000,%%d0\n\t"
+        "move.w #0x10,%%ccr\n\t"
+        "divu.w 0(%%a0,%%d4:w),%%d0\n\t"
+        "move.w %%sr,%%d1\n\t"
+        "move.l %%d0,%0\n\t"
+        "move.l %%d1,%1\n\t"
+        "move.l %%a0,%2"
+        : "=&d"(got0), "=&d"(got1), "=&d"(got2)
+        :
+        : "a0", "d0", "d1", "d4", "cc", "memory");
+    chk32(0x000d01f0u, got0, 0x0006008eu);
+    chk32(0x000d01f4u, got1 & 0x1fu, 0x10u);
+    chk32(0x000d01f8u, got2, MUL_DIV_TEST_BASE + 0xf0u);
 }
 
 static void test_memory_bitfield_directed(void)
