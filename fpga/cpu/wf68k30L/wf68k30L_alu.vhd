@@ -1025,8 +1025,8 @@ begin
         RM_SM_DM := To_Bit(RM) & To_Bit(SM) & To_Bit(DM);
 
         -- Multiplication:
-        if OP_SIZE = LONG and BIW_1(10) = '1' and RESULT_MUL(63) = '1' then -- 64 bit result.
-            NFLAG_MUL := '1';
+        if OP_SIZE = LONG and BIW_1(10) = '1' then -- 64 bit result.
+            NFLAG_MUL := RESULT_MUL(63);
         elsif RESULT_MUL(31) = '1' then -- 32 bit result.
             NFLAG_MUL := '1';
         else
@@ -1110,8 +1110,12 @@ begin
                 end loop;
                 Z := not TMP; -- Invert for Z fLAG .
             when MULS | MULU =>
-                if OP_SIZE = LONG and BIW_1(10) = '1' and RESULT_MUL = x"0000000000000000" then -- 64 bit result.
-                    Z := '1';
+                if OP_SIZE = LONG and BIW_1(10) = '1' then -- 64 bit result.
+                    if RESULT_MUL = x"0000000000000000" then
+                        Z := '1';
+                    else
+                        Z := '0';
+                    end if;
                 elsif RESULT_MUL(31 downto 0) = x"00000000" then -- 32 bit result.
                     Z := '1';
                 else
