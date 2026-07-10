@@ -1407,6 +1407,45 @@ static void test_stack_frame_control_directed(void)
     uint32_t got3;
     uint32_t got4;
 
+    wr32(STACK_TEST_BASE + 0x00u, 0u);
+    wr32(STACK_TEST_BASE + 0x04u, 0x11223344u);
+    wr32(STACK_TEST_BASE + 0x08u, 0xaabbccddu);
+    wr32(STACK_TEST_BASE + 0xf0u, 0u);
+    wr32(STACK_TEST_BASE + 0xf4u, 0u);
+    wr32(STACK_TEST_BASE + 0xf8u, 0u);
+    wr32(STACK_TEST_BASE + 0xfcu, 0u);
+    wr32(STACK_TEST_BASE + 0xe8u, 0u);
+    wr32(STACK_TEST_BASE + 0xecu, 0u);
+    __asm__ volatile(
+        "move.l %%sp,%%a2\n\t"
+        "lea 0x01ff9700,%%sp\n\t"
+        "move.b #0x83,(%%sp)+\n\t"
+        "move.l %%sp,0x01ff97f0\n\t"
+        "lea 0x01ff9704,%%sp\n\t"
+        "move.b #0x84,-(%%sp)\n\t"
+        "move.l %%sp,0x01ff97f4\n\t"
+        "lea 0x01ff9704,%%sp\n\t"
+        "moveq #0,%%d0\n\t"
+        "move.b (%%sp)+,%%d0\n\t"
+        "move.l %%d0,0x01ff97f8\n\t"
+        "move.l %%sp,0x01ff97fc\n\t"
+        "lea 0x01ff970a,%%sp\n\t"
+        "moveq #0,%%d1\n\t"
+        "move.b -(%%sp),%%d1\n\t"
+        "move.l %%d1,0x01ff97e8\n\t"
+        "move.l %%sp,0x01ff97ec\n\t"
+        "move.l %%a2,%%sp"
+        :
+        :
+        : "a2", "d0", "d1", "cc", "memory");
+    chk32(0x000910c0u, rd32(STACK_TEST_BASE + 0x00u), 0x83008400u);
+    chk32(0x000910c4u, rd32(STACK_TEST_BASE + 0xf0u), STACK_TEST_BASE + 0x02u);
+    chk32(0x000910c8u, rd32(STACK_TEST_BASE + 0xf4u), STACK_TEST_BASE + 0x02u);
+    chk32(0x000910ccu, rd32(STACK_TEST_BASE + 0xf8u), 0x11u);
+    chk32(0x000910d0u, rd32(STACK_TEST_BASE + 0xfcu), STACK_TEST_BASE + 0x06u);
+    chk32(0x000910d4u, rd32(STACK_TEST_BASE + 0xe8u), 0xaau);
+    chk32(0x000910d8u, rd32(STACK_TEST_BASE + 0xecu), STACK_TEST_BASE + 0x08u);
+
     __asm__ volatile(
         "move.l %%sp,%%a2\n\t"
         "lea 0x01ff9700,%%sp\n\t"
