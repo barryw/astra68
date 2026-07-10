@@ -4930,6 +4930,59 @@ static void test_alu_shift_bitfield_bcd_directed(void)
     chk8(0x000b0064u, rd8(SCRATCH_BASE + 0xe4), 0x99u);
 }
 
+static uint32_t condition_true_ref(uint32_t cond, uint32_t ccr)
+{
+    uint32_t n = (ccr >> 3) & 1u;
+    uint32_t z = (ccr >> 2) & 1u;
+    uint32_t v = (ccr >> 1) & 1u;
+    uint32_t c = ccr & 1u;
+
+    switch (cond & 0xfu) {
+    case 0x0u: return 1u;
+    case 0x1u: return 0u;
+    case 0x2u: return !z && !c;
+    case 0x3u: return z || c;
+    case 0x4u: return !c;
+    case 0x5u: return c;
+    case 0x6u: return !z;
+    case 0x7u: return z;
+    case 0x8u: return !v;
+    case 0x9u: return v;
+    case 0xau: return !n;
+    case 0xbu: return n;
+    case 0xcu: return n == v;
+    case 0xdu: return n != v;
+    case 0xeu: return !z && (n == v);
+    default: return z || (n != v);
+    }
+}
+
+static void store_scc_matrix(uint32_t addr, uint32_t ccr)
+{
+    __asm__ volatile(
+        "move.l %0,%%a0\n\t"
+        "move.w %1,%%ccr\n\t"
+        "st (%%a0)+\n\t"
+        "sf (%%a0)+\n\t"
+        "shi (%%a0)+\n\t"
+        "sls (%%a0)+\n\t"
+        "scc (%%a0)+\n\t"
+        "scs (%%a0)+\n\t"
+        "sne (%%a0)+\n\t"
+        "seq (%%a0)+\n\t"
+        "svc (%%a0)+\n\t"
+        "svs (%%a0)+\n\t"
+        "spl (%%a0)+\n\t"
+        "smi (%%a0)+\n\t"
+        "sge (%%a0)+\n\t"
+        "slt (%%a0)+\n\t"
+        "sgt (%%a0)+\n\t"
+        "sle (%%a0)+"
+        :
+        : "d"(addr), "d"(ccr & 0x1fu)
+        : "a0", "cc", "memory");
+}
+
 static void test_condition_codes_directed(void)
 {
     uint32_t got;
@@ -5081,6 +5134,21 @@ static void test_condition_codes_directed(void)
     chk32(0x000c0144u, rd32(COND_TEST_BASE + 0x84u), 0x89abcd00u);
     chk32(0x000c0148u, rd32(COND_TEST_BASE + 0x88u), 0x0badc000u);
     chk32(0x000c014cu, rd32(COND_TEST_BASE + 0x8cu), 0x556677ffu);
+
+    for (uint32_t ccr = 0; ccr < 0x20u; ++ccr) {
+        uint32_t row = COND_TEST_BASE + 0x100u;
+
+        for (uint32_t off = 0; off < 0x10u; off += 4u) {
+            wr32(row + off, 0xaaaaaaaau);
+        }
+
+        store_scc_matrix(row, ccr);
+
+        for (uint32_t cond = 0; cond < 0x10u; ++cond) {
+            uint32_t exp = condition_true_ref(cond, ccr) ? 0xffu : 0x00u;
+            chk8(0x000c0400u + (ccr << 5) + cond, rd8(row + cond), exp);
+        }
+    }
 }
 
 static void test_condition_consumers_directed(void)
