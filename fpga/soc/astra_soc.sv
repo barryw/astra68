@@ -27,6 +27,7 @@ module astra_soc #(
 `ifdef ASTRA_SOC_SIM_IRQ
     , input wire [2:0] sim_ipln
     , input wire       sim_avecn
+    , input wire       sim_berrn
 `endif
 );
     // -------------------------------------------------------------------------
@@ -79,9 +80,11 @@ module astra_soc #(
 `ifdef ASTRA_SOC_SIM_IRQ
     wire [2:0]  cpu_ipln = sim_ipln;
     wire        cpu_avecn = sim_avecn;
+    wire        cpu_berrn = sim_berrn;
 `else
     wire [2:0]  cpu_ipln = 3'b111;
     wire        cpu_avecn = cpu_ctl[2];
+    wire        cpu_berrn = cpu_ctl[0];
 `endif
 
     // Generic-free VHDL wrapper (mixed-lang can't bind the core's std_logic_vector
@@ -100,7 +103,7 @@ module astra_soc #(
         .ASn        (cpu_as_n),
         .RWn        (cpu_rw_n),
         .DSn        (cpu_ds_n),
-        .BERRn      (cpu_ctl[0]),
+        .BERRn      (cpu_berrn),
         .HALT_INn   (cpu_ctl[1]),
         .AVECn      (cpu_avecn),
         .STERMn     (cpu_ctl[3]),

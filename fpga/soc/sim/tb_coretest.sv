@@ -14,8 +14,12 @@ module tb_coretest;
     wire tx;
     wire [7:0] leds;
     localparam IRQ_REQ_ADDR = 32'h01ff9600;
+    localparam BERR_REQ_ADDR = 32'h01ff9604;
+    localparam BERR_TARGET_ADDR = 32'h01ff9608;
     reg [2:0] sim_ipln = 3'b111;
     reg sim_avecn = 1'b1;
+    reg sim_berrn = 1'b1;
+    reg sim_berr_arm = 1'b0;
 
     astra_soc #(.RST_MAX(16'd16)) dut (
         .clk25_mhz(clk25),
@@ -26,6 +30,7 @@ module tb_coretest;
 `ifdef ASTRA_SOC_SIM_IRQ
         , .sim_ipln(sim_ipln)
         , .sim_avecn(sim_avecn)
+        , .sim_berrn(sim_berrn)
 `endif
     );
 
@@ -41,6 +46,8 @@ module tb_coretest;
         if (!rstn || dut.rst) begin
             sim_ipln <= 3'b111;
             sim_avecn <= 1'b1;
+            sim_berrn <= 1'b1;
+            sim_berr_arm <= 1'b0;
         end else if (dut.bus_write_stb && dut.cpu_adr == IRQ_REQ_ADDR) begin
             if (dut.cpu_dout[2:0] == 3'd0) begin
                 sim_ipln <= 3'b111;
@@ -48,6 +55,17 @@ module tb_coretest;
             end else begin
                 sim_ipln <= ~dut.cpu_dout[2:0];
                 sim_avecn <= 1'b0;
+            end
+        end else begin
+            if (dut.cpu_as_n) begin
+                sim_berrn <= 1'b1;
+            end
+            if (dut.bus_write_stb && dut.cpu_adr == BERR_REQ_ADDR) begin
+                sim_berr_arm <= dut.cpu_dout[0];
+            end
+            if (sim_berr_arm && !dut.cpu_as_n && dut.cpu_adr == BERR_TARGET_ADDR) begin
+                sim_berrn <= 1'b0;
+                sim_berr_arm <= 1'b0;
             end
         end
     end
