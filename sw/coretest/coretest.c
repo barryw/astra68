@@ -9012,6 +9012,96 @@ static void test_bitops_directed(void)
     chk32(0x000c034cu, rd32(BITOP_TEST_BASE + 0xa0u) & 0x04u, 0x04u);
 }
 
+static uint32_t mul_word_ccr_ref(uint32_t op, uint32_t src, uint32_t dst,
+                                 uint32_t initial_ccr, uint32_t *result)
+{
+    uint32_t product;
+
+    if (op == 0u) {
+        product = (src & 0xffffu) * (dst & 0xffffu);
+    } else {
+        int32_t srcs = (int16_t)(src & 0xffffu);
+        int32_t dsts = (int16_t)(dst & 0xffffu);
+
+        product = (uint32_t)(srcs * dsts);
+    }
+
+    *result = product;
+    return (initial_ccr & 0x10u) |
+           ((product & 0x80000000u) ? 0x08u : 0u) |
+           (product == 0u ? 0x04u : 0u);
+}
+
+#define CPU_MUL_WORD_REG(OP)                                                   \
+    do {                                                                       \
+        __asm__ volatile(                                                      \
+            "move.l %2,%%d0\n\t"                                               \
+            "move.l %3,%%d1\n\t"                                               \
+            "move.l %4,%%d2\n\t"                                               \
+            "move.w %%d2,%%ccr\n\t"                                            \
+            #OP ".w %%d0,%%d1\n\t"                                             \
+            "move.w %%sr,%%d2\n\t"                                             \
+            "move.l %%d1,%0\n\t"                                               \
+            "move.l %%d2,%1"                                                   \
+            : "=m"(*result), "=m"(*ccr)                                        \
+            : "d"(src), "d"(dst), "d"(initial_ccr)                             \
+            : "d0", "d1", "d2", "cc", "memory");                             \
+    } while (0)
+
+static void cpu_mul_word_reg(uint32_t op, uint32_t src, uint32_t dst,
+                             uint32_t initial_ccr, uint32_t *result,
+                             uint32_t *ccr)
+{
+    if (op == 0u) {
+        CPU_MUL_WORD_REG(mulu);
+    } else {
+        CPU_MUL_WORD_REG(muls);
+    }
+}
+
+#undef CPU_MUL_WORD_REG
+
+static void test_mul_word_register_differential(void)
+{
+    static const uint32_t ccrs[] = {0x00u, 0x1fu};
+    static const uint32_t srcs[] = {
+        0x00000000u, 0x00000001u, 0x00000002u, 0x0000007fu,
+        0x00000080u, 0x000000ffu, 0x00000100u, 0x00007fffu,
+        0x00008000u, 0x0000fffeu, 0x0000ffffu, 0x12345678u,
+        0x89abcdefu,
+    };
+    static const uint32_t dsts[] = {
+        0x00000000u, 0x00000001u, 0x00000002u, 0x00007fffu,
+        0x00008000u, 0x0000fffeu, 0x0000ffffu, 0x12345678u,
+        0x89abcdefu,
+    };
+
+    for (uint32_t op = 0; op < 2u; ++op) {
+        for (uint32_t ci = 0; ci < (sizeof(ccrs) / sizeof(ccrs[0])); ++ci) {
+            for (uint32_t si = 0; si < (sizeof(srcs) / sizeof(srcs[0])); ++si) {
+                for (uint32_t di = 0; di < (sizeof(dsts) / sizeof(dsts[0])); ++di) {
+                    uint32_t id = 0x00240000u + (op << 15) + (ci << 14) +
+                                  (si << 8) + (di << 3);
+                    uint32_t got_result;
+                    uint32_t got_ccr;
+                    uint32_t exp_result;
+                    uint32_t exp_ccr;
+
+                    cpu_mul_word_reg(op, srcs[si], dsts[di], ccrs[ci],
+                                     &got_result, &got_ccr);
+                    exp_ccr = mul_word_ccr_ref(op, srcs[si], dsts[di],
+                                               ccrs[ci], &exp_result);
+
+                    chk32(id + 0x00u, got_result, exp_result);
+                    chk32(id + 0x04u, got_ccr & 0x1fu, exp_ccr);
+                }
+            }
+        }
+    }
+
+    mark(0x0024f000u, 0x6d750000u);
+}
+
 static void test_signed_mul_div_directed(void)
 {
     wr32(SCRATCH_BASE + 0x120, 0u);
@@ -10549,6 +10639,7 @@ void kmain(void)
     test_condition_consumers_directed();
     test_bitops_register_differential();
     test_bitops_directed();
+    test_mul_word_register_differential();
     test_signed_mul_div_directed();
     test_mul_div_memory_directed();
     test_memory_bitfield_directed();
