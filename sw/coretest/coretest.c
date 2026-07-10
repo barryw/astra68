@@ -4531,6 +4531,41 @@ static void test_condition_consumers_directed(void)
     chk32(0x000c0228u, rd32(COND_TEST_BASE + 0x44u) & 0xffu, 0x00u);
     chk32(0x000c022cu, rd32(COND_TEST_BASE + 0x48u), 0x00u);
     chk32(0x000c0230u, rd32(COND_TEST_BASE + 0x4cu) & 0xffffu, 0x0008u);
+
+    __asm__ volatile(
+        "moveq #3,%%d0\n\t"
+        "moveq #1,%%d1\n\t"
+        "sub.l %%d1,%%d1\n\t"
+        "dbeq %%d0,1f\n\t"
+        "move.l %%d0,0x01ffa164\n\t"
+        "bra 2f\n"
+        "1:\n\t"
+        "move.l #0x11111111,0x01ffa164\n"
+        "2:\n\t"
+        "moveq #3,%%d0\n\t"
+        "moveq #1,%%d1\n\t"
+        "subq.l #1,%%d1\n\t"
+        "dbne %%d0,3f\n\t"
+        "move.l #0x22222222,0x01ffa168\n\t"
+        "bra 4f\n"
+        "3:\n\t"
+        "move.l %%d0,0x01ffa168\n"
+        "4:\n\t"
+        "moveq #3,%%d0\n\t"
+        "moveq #0,%%d1\n\t"
+        "subq.l #1,%%d1\n\t"
+        "dbmi %%d0,5f\n\t"
+        "move.l %%d0,0x01ffa16c\n\t"
+        "bra 6f\n"
+        "5:\n\t"
+        "move.l #0x33333333,0x01ffa16c\n"
+        "6:"
+        :
+        :
+        : "d0", "d1", "cc", "memory");
+    chk32(0x000c0234u, rd32(COND_TEST_BASE + 0x64u), 3u);
+    chk32(0x000c0238u, rd32(COND_TEST_BASE + 0x68u), 2u);
+    chk32(0x000c023cu, rd32(COND_TEST_BASE + 0x6cu), 3u);
 }
 
 static void test_bitops_directed(void)
