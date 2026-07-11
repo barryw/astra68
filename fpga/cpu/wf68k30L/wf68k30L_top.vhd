@@ -327,6 +327,7 @@ signal FC                       : std_logic;
 signal FETCH_MEM_ADR            : bit;
 signal FC_I                     : std_logic_vector(2 downto 0);
 signal FC_LATCH                 : std_logic_vector(2 downto 0);
+signal FORMAT2_INSTR_PC         : std_logic_vector(31 downto 0);
 signal HILOn                    : bit;
 signal IBUFFER                  : std_logic_vector(31 downto 0);
 signal INBUFFER                 : std_logic_vector(31 downto 0);
@@ -498,6 +499,7 @@ begin
                 TRACE_NEXT_PC(15 downto 0) & STACK_FORMAT & "00" & IVECT_OFFS when EX_TRACE_FRAME = '1' and STACK_POS = 4 else
                 PC(15 downto 0) & STACK_FORMAT & "00" & IVECT_OFFS when STACK_POS = 4 else
                 TRACE_INSTR_PC when EX_TRACE_FRAME = '1' and STACK_FORMAT = x"2" and STACK_POS = 6 else
+                FORMAT2_INSTR_PC when STACK_FORMAT = x"2" and STACK_POS = 6 else
                 PC when STACK_FORMAT = x"2" and STACK_POS = 6 else
                 PC when STACK_FORMAT = x"9" and STACK_POS = 6 else
                 BIW_0 & FC & FB & RC & RB & "000" & SSW_80 when STACK_POS = 6 else -- Format A and B.
@@ -658,6 +660,16 @@ begin
     PC_L <= PC + PC_ADR_OFFSET;
 
     PC_INC_EXH_I <= PC_INC_EXH when LOOP_SPLIT = false else '0'; -- Suppress for a split loop.
+
+    FORMAT2_FRAME_PC: process
+    begin
+        wait until CLK = '1' and CLK' event;
+        if RESET_CPU = '1' then
+            FORMAT2_INSTR_PC <= (others => '0');
+        elsif PC_INC_EXH_I = '1' then
+            FORMAT2_INSTR_PC <= PC;
+        end if;
+    end process FORMAT2_FRAME_PC;
 
     TRACE_FRAME_PC: process
     begin

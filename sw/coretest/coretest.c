@@ -6838,18 +6838,26 @@ static void test_exception_recovery_directed(void)
     chk_exception_frame(0x00100660u, 0x0010u, 0x0000u, 0x2000u, 0x2000u);
     chk_exception_pc(0x00100678u, rd32(EXC_EXPECTED_ADDR));
 
-    arm_exception_recovery(0x0014u);
-    __asm__ volatile(
-        "lea 1f,%%a0\n\t"
-        "move.l %%a0,0x01ff9284\n\t"
-        "move.l #1234,%%d0\n\t"
-        "divu.w #0,%%d0\n"
-        "1:"
-        :
-        :
-        : "a0", "d0", "cc", "memory");
-    chk_exception_frame(0x00100040u, 0x0014u, 0x2000u, 0x2000u, 0x2000u);
-    chk_exception_pc(0x001007d0u, rd32(EXC_RECOVERY_PC));
+    {
+        uint32_t divu_w_pc;
+
+        arm_exception_recovery(0x0014u);
+        __asm__ volatile(
+            "lea 2f,%%a0\n\t"
+            "move.l %%a0,%0\n\t"
+            "lea 1f,%%a0\n\t"
+            "move.l %%a0,0x01ff9284\n\t"
+            "move.l #1234,%%d0\n"
+            "2:\n\t"
+            "divu.w #0,%%d0\n"
+            "1:"
+            : "=&d"(divu_w_pc)
+            :
+            : "a0", "d0", "cc", "memory");
+        chk_exception_frame(0x00100040u, 0x0014u, 0x2000u, 0x2000u, 0x2000u);
+        chk_exception_pc(0x001007d0u, rd32(EXC_RECOVERY_PC));
+        chk32(0x00100a00u, rd32(EXC_REC_BASE + 0x24u), divu_w_pc);
+    }
 
     arm_exception_recovery(0x0014u);
     __asm__ volatile(
@@ -6879,47 +6887,71 @@ static void test_exception_recovery_directed(void)
     chk_exception_frame(0x001004e0u, 0x0014u, 0x2000u, 0x2000u, 0x2000u);
     chk_exception_pc(0x001007e4u, rd32(EXC_RECOVERY_PC));
 
-    *(volatile uint16_t *)(SCRATCH_BASE + 0x1a0u) = 4u;
-    arm_exception_recovery(0x0018u);
-    __asm__ volatile(
-        "lea 1f,%%a0\n\t"
-        "move.l %%a0,0x01ff9284\n\t"
-        "moveq #5,%%d0\n\t"
-        "chk.w 0x01ff92a0,%%d0\n"
-        "1:"
-        :
-        :
-        : "a0", "d0", "cc", "memory");
-    chk_exception_frame(0x00100060u, 0x0018u, 0x2000u, 0x2000u, 0x2000u);
-    chk_exception_pc(0x00100814u, rd32(EXC_RECOVERY_PC));
+    {
+        uint32_t chk_w_pc;
 
-    arm_exception_recovery(0x001cu);
-    __asm__ volatile(
-        "lea 1f,%%a0\n\t"
-        "move.l %%a0,0x01ff9284\n\t"
-        "move.w #0x02,%%ccr\n\t"
-        "trapv\n"
-        "1:"
-        :
-        :
-        : "a0", "cc", "memory");
-    chk_exception_frame(0x00100080u, 0x001cu, 0x2000u, 0x201fu, 0x2002u);
-    chk_exception_pc(0x001007d4u, rd32(EXC_RECOVERY_PC));
+        *(volatile uint16_t *)(SCRATCH_BASE + 0x1a0u) = 4u;
+        arm_exception_recovery(0x0018u);
+        __asm__ volatile(
+            "lea 2f,%%a0\n\t"
+            "move.l %%a0,%0\n\t"
+            "lea 1f,%%a0\n\t"
+            "move.l %%a0,0x01ff9284\n\t"
+            "moveq #5,%%d0\n"
+            "2:\n\t"
+            "chk.w 0x01ff92a0,%%d0\n"
+            "1:"
+            : "=&d"(chk_w_pc)
+            :
+            : "a0", "d0", "cc", "memory");
+        chk_exception_frame(0x00100060u, 0x0018u, 0x2000u, 0x2000u, 0x2000u);
+        chk_exception_pc(0x00100814u, rd32(EXC_RECOVERY_PC));
+        chk32(0x00100a04u, rd32(EXC_REC_BASE + 0x24u), chk_w_pc);
+    }
 
-    arm_exception_recovery(0x001cu);
-    __asm__ volatile(
-        "lea 1f,%%a0\n\t"
-        "move.l %%a0,0x01ff9284\n\t"
-        "moveq #0,%%d0\n\t"
-        "move.w #0,%%ccr\n\t"
-        "cmp.l %%d0,%%d0\n\t"
-        "trapeq\n"
-        "1:"
-        :
-        :
-        : "a0", "d0", "cc", "memory");
-    chk_exception_frame(0x00100140u, 0x001cu, 0x2000u, 0x201fu, 0x2004u);
-    chk_exception_pc(0x001007d8u, rd32(EXC_RECOVERY_PC));
+    {
+        uint32_t trapv_pc;
+
+        arm_exception_recovery(0x001cu);
+        __asm__ volatile(
+            "lea 2f,%%a0\n\t"
+            "move.l %%a0,%0\n\t"
+            "lea 1f,%%a0\n\t"
+            "move.l %%a0,0x01ff9284\n\t"
+            "move.w #0x02,%%ccr\n"
+            "2:\n\t"
+            "trapv\n"
+            "1:"
+            : "=&d"(trapv_pc)
+            :
+            : "a0", "cc", "memory");
+        chk_exception_frame(0x00100080u, 0x001cu, 0x2000u, 0x201fu, 0x2002u);
+        chk_exception_pc(0x001007d4u, rd32(EXC_RECOVERY_PC));
+        chk32(0x00100a08u, rd32(EXC_REC_BASE + 0x24u), trapv_pc);
+    }
+
+    {
+        uint32_t trapeq_pc;
+
+        arm_exception_recovery(0x001cu);
+        __asm__ volatile(
+            "lea 2f,%%a0\n\t"
+            "move.l %%a0,%0\n\t"
+            "lea 1f,%%a0\n\t"
+            "move.l %%a0,0x01ff9284\n\t"
+            "moveq #0,%%d0\n\t"
+            "move.w #0,%%ccr\n\t"
+            "cmp.l %%d0,%%d0\n"
+            "2:\n\t"
+            "trapeq\n"
+            "1:"
+            : "=&d"(trapeq_pc)
+            :
+            : "a0", "d0", "cc", "memory");
+        chk_exception_frame(0x00100140u, 0x001cu, 0x2000u, 0x201fu, 0x2004u);
+        chk_exception_pc(0x001007d8u, rd32(EXC_RECOVERY_PC));
+        chk32(0x00100a0cu, rd32(EXC_REC_BASE + 0x24u), trapeq_pc);
+    }
 
     wr32(SCRATCH_BASE + 0x168u, 0u);
     arm_exception_recovery(0x001cu);
