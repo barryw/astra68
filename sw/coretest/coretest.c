@@ -7062,21 +7062,56 @@ static void test_exception_recovery_directed(void)
 
 #undef EXPECT_PRIV_OP
 
-    arm_exception_recovery(0x0024u);
-    __asm__ volatile(
-        "lea 1f,%%a0\n\t"
-        "move.l %%a0,0x01ff9284\n\t"
-        "lea 2f,%%a0\n\t"
-        "move.l %%a0,0x01ff92a0\n\t"
-        "move.w #0xa700,%%sr\n\t"
-        "2:\n\t"
-        "nop\n"
-        "1:"
-        :
-        :
-        : "a0", "cc", "memory");
-    chk_exception_frame(0x001000c0u, 0x0024u, 0x2000u, 0xe700u, 0xa700u);
-    chk_exception_pc(0x001007f0u, rd32(EXC_EXPECTED_ADDR));
+    {
+        uint32_t trace_instr_pc;
+        uint32_t trace_next_pc;
+
+        arm_exception_recovery(0x0024u);
+        __asm__ volatile(
+            "lea 2f,%%a0\n\t"
+            "move.l %%a0,%0\n\t"
+            "lea 1f,%%a0\n\t"
+            "move.l %%a0,%1\n\t"
+            "move.l %%a0,0x01ff9284\n\t"
+            "move.w #0xa700,%%sr\n\t"
+            "2:\n\t"
+            "nop\n"
+            "1:"
+            : "=&d"(trace_instr_pc), "=&d"(trace_next_pc)
+            :
+            : "a0", "cc", "memory");
+        chk_exception_frame(0x001000c0u, 0x0024u, 0x2000u, 0xe700u, 0xa700u);
+        chk_exception_pc(0x001007f0u, trace_next_pc);
+        chk32(0x001007f4u, rd32(EXC_REC_BASE + 0x24u), trace_instr_pc);
+    }
+
+    {
+        uint32_t trace_branch_pc;
+        uint32_t trace_target_pc;
+
+        arm_exception_recovery(0x0024u);
+        __asm__ volatile(
+            "lea 3f,%%a0\n\t"
+            "move.l %%a0,%0\n\t"
+            "lea 2f,%%a0\n\t"
+            "move.l %%a0,%1\n\t"
+            "lea 1f,%%a0\n\t"
+            "move.l %%a0,0x01ff9284\n\t"
+            "move.w #0x6700,%%sr\n\t"
+            "nop\n"
+            "2:\n\t"
+            "bra.s 3f\n\t"
+            "nop\n"
+            "3:\n\t"
+            "nop\n"
+            "1:"
+            : "=&d"(trace_target_pc), "=&d"(trace_branch_pc)
+            :
+            : "a0", "cc", "memory");
+        chk_exception_frame(0x00100900u, 0x0024u, 0x2000u, 0xe700u, 0x6700u);
+        chk_exception_pc(0x00100920u, trace_target_pc);
+        chk32(0x00100924u, rd32(EXC_REC_BASE + 0x24u), trace_branch_pc);
+    }
 
     arm_exception_recovery(0x0028u);
     __asm__ volatile(

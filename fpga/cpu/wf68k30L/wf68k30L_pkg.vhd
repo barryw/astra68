@@ -385,6 +385,7 @@ component WF68K30L_EXCEPTION_HANDLER
         PC_RESTORE          : out bit;
         STACK_FORMAT        : out std_logic_vector(3 downto 0);
         STACK_POS           : out integer range 0 to 46;
+        TRACE_FRAME         : out bit;
         SP_ADD_DISPL        : out bit;
         DISPLACEMENT        : out std_logic_vector(7 downto 0);
         IPIPE_FILL          : out bit;

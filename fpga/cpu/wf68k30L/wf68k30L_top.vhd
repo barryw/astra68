@@ -316,6 +316,7 @@ signal DR_IN_USE                : bit;
 signal EW_ACK                   : bit;
 signal EW_REQ_MAIN              : bit;
 signal EX_TRACE                 : bit;
+signal EX_TRACE_FRAME           : bit;
 signal EXEC_RDY                 : bit;
 signal EXH_REQ                  : bit;
 signal EXT_WORD                 : std_logic_vector(15 downto 0);
@@ -424,6 +425,8 @@ signal STORE_OD_HI              : bit;
 signal STORE_OD_LO              : bit;
 signal STORE_IDATA_B1           : bit;
 signal STORE_IDATA_B2           : bit;
+signal TRACE_INSTR_PC           : std_logic_vector(31 downto 0);
+signal TRACE_NEXT_PC            : std_logic_vector(31 downto 0);
 signal TRAP_AERR                : bit;
 signal TRAP_ILLEGAL             : bit;
 signal TRAP_CODE_OPC            : TRAPTYPE_OPC;
@@ -490,8 +493,11 @@ begin
 
     -- Internal registers are place holders written as zeros.
     DATA_EXH <= -- Exception handler multiplexing:
+                SR_CPY & TRACE_NEXT_PC(31 downto 16) when EX_TRACE_FRAME = '1' and STACK_POS = 2 else
                 SR_CPY & PC(31 downto 16) when STACK_POS = 2 else
+                TRACE_NEXT_PC(15 downto 0) & STACK_FORMAT & "00" & IVECT_OFFS when EX_TRACE_FRAME = '1' and STACK_POS = 4 else
                 PC(15 downto 0) & STACK_FORMAT & "00" & IVECT_OFFS when STACK_POS = 4 else
+                TRACE_INSTR_PC when EX_TRACE_FRAME = '1' and STACK_FORMAT = x"2" and STACK_POS = 6 else
                 PC when STACK_FORMAT = x"2" and STACK_POS = 6 else
                 PC when STACK_FORMAT = x"9" and STACK_POS = 6 else
                 BIW_0 & FC & FB & RC & RB & "000" & SSW_80 when STACK_POS = 6 else -- Format A and B.
@@ -652,6 +658,24 @@ begin
     PC_L <= PC + PC_ADR_OFFSET;
 
     PC_INC_EXH_I <= PC_INC_EXH when LOOP_SPLIT = false else '0'; -- Suppress for a split loop.
+
+    TRACE_FRAME_PC: process
+    begin
+        wait until CLK = '1' and CLK' event;
+        if RESET_CPU = '1' then
+            TRACE_INSTR_PC <= (others => '0');
+            TRACE_NEXT_PC <= (others => '0');
+        elsif EX_TRACE = '1' then
+            TRACE_INSTR_PC <= PC;
+            if PC_ADD_DISPL = '1' then
+                TRACE_NEXT_PC <= PC + DISPLACEMENT;
+            elsif PC_LOAD_MAIN = '1' then
+                TRACE_NEXT_PC <= AR_IN_1;
+            else
+                TRACE_NEXT_PC <= PC + PC_OFFSET;
+            end if;
+        end if;
+    end process TRACE_FRAME_PC;
 
     ADR_MODE <= "010" when BUSY_EXH = '1' else ADR_MODE_MAIN; --(ISP)
 
@@ -1153,6 +1177,7 @@ begin
     
             STACK_FORMAT            => STACK_FORMAT,
             STACK_POS               => STACK_POS,
+            TRACE_FRAME             => EX_TRACE_FRAME,
                 
             SP_ADD_DISPL            => SP_ADD_DISPL_EXH,
             DISPLACEMENT            => DISPLACEMENT_EXH,

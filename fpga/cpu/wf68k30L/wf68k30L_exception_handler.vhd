@@ -126,6 +126,7 @@ entity WF68K30L_EXCEPTION_HANDLER is
 
         STACK_FORMAT        : out std_logic_vector(3 downto 0);
         STACK_POS           : out integer range 0 to 46;
+        TRACE_FRAME         : out bit;
 
         SP_ADD_DISPL        : out bit;
         DISPLACEMENT        : out std_logic_vector(7 downto 0);
@@ -613,6 +614,7 @@ begin
     REFILLn <= '0' when EX_STATE = REFILL_PIPE else '1';
     
     STACK_FORMAT <= STACK_FORMAT_I;
+    TRACE_FRAME <= '1' when EXCEPTION = EX_TRACE and EX_STATE /= IDLE else '0';
 
     IPIPE_FLUSH <= '1' when EXCEPTION = EX_RESET and EX_STATE /= REFILL_PIPE else
                    '1' when EXCEPTION /= EX_NONE and EX_STATE /= REFILL_PIPE and NEXT_EX_STATE = REFILL_PIPE else '0';
