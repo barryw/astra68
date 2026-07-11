@@ -777,6 +777,31 @@ static void test_full_format_indexed_memory_ops(void)
     chk32(0x000702bcu, rd32(FULLFMT_TEST_BASE + 0x3d8u), 0xf0f0ff0fu);
     chk32(0x000702c0u, rd32(FULLFMT_TEST_BASE + 0x3e0u) & 0x1fu, 0x0au);
     chk32(0x000702c4u, rd32(FULLFMT_TEST_BASE + 0x3e4u) & 0x1fu, 0x18u);
+
+    wr32(FULLFMT_TEST_BASE + 0x3e8u, 0u);
+    wr32(FULLFMT_TEST_BASE + 0x3f0u, 0u);
+    wr32(FULLFMT_TEST_BASE + 0x3f4u, FULLFMT_TEST_BASE + 0x3f8u);
+    wr32(FULLFMT_TEST_BASE + 0x3f8u, 0u);
+    wr32(FULLFMT_TEST_BASE + 0x3fcu, 0xee112233u);
+    __asm__ volatile(
+        "moveq #7,%%d4\n\t"
+        ".word 0x11bc,0x00ec,0x4bf0\n\t"
+        ".long 0x01ffa2f0\n\t"
+        ".word 0x11bc,0x00ed,0x4bf2\n\t"
+        ".long 0x01ffa2f4\n\t"
+        ".word 0x0003\n\t"
+        "moveq #0,%%d0\n\t"
+        ".word 0x103b,0x4bf0\n\t"
+        ".long 0x01ffa2fc\n\t"
+        "move.l %%d0,0x01ffa2e8"
+        :
+        :
+        : "d0", "d4", "cc", "memory");
+    chk32(0x000702c8u, rd32(FULLFMT_TEST_BASE + 0x3f0u), 0xec000000u);
+    chk32(0x000702ccu, rd32(FULLFMT_TEST_BASE + 0x3f4u), FULLFMT_TEST_BASE + 0x3f8u);
+    chk32(0x000702d0u, rd32(FULLFMT_TEST_BASE + 0x3f8u), 0x000000edu);
+    chk32(0x000702d4u, rd32(FULLFMT_TEST_BASE + 0x3e8u), 0xeeu);
+    chk32(0x000702d8u, rd32(FULLFMT_TEST_BASE + 0x3fcu), 0xee112233u);
 }
 
 static void test_indexed_ea_scale_directed(void)
