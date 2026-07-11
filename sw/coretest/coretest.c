@@ -23,6 +23,10 @@
 #define MOVES_EXT_TEST_BASE (SCRATCH_BASE + 0x1b00u)
 #define MOVES_FC_TEST_BASE (MOVES_EXT_TEST_BASE + 0x100u)
 #define ATOMIC_RMC_TEST_BASE (MOVES_FC_TEST_BASE + 0x100u)
+#define ATOMIC_RMC_EXPECT_CAS 1u
+#define ATOMIC_RMC_EXPECT_TAS 2u
+#define ATOMIC_RMC_EXPECT_CAS2 3u
+#define ATOMIC_RMC_READ_ONLY 4u
 #define DATA_FC_TEST_BASE (ATOMIC_RMC_TEST_BASE + 0x100u)
 #define PROG_FC_TEST_BASE (DATA_FC_TEST_BASE + 0x20u)
 #define BOUNDS_TEST_BASE (SCRATCH_BASE + 0x720u)
@@ -11462,7 +11466,7 @@ static void test_movep_tas_cas_directed(void)
     chk32(0x0014002cu, rd32(CAS2_TEST_BASE + 0xdcu) & 0x04u, 0u);
 
     wr32(ATOMIC_RMC_TEST_BASE + 0x00u, 0x31415926u);
-    wr32(ATOMIC_RMC_TEST_BASE + 0x04u, 1u);
+    wr32(ATOMIC_RMC_TEST_BASE + 0x04u, ATOMIC_RMC_EXPECT_CAS);
     __asm__ volatile(
         "lea 0x01ffae00,%%a0\n\t"
         "move.l #0x31415926,%%d0\n\t"
@@ -11480,8 +11484,30 @@ static void test_movep_tas_cas_directed(void)
     chk32(0x00160014u, got, 0x31415926u);
     chk32(0x00160018u, got_addr & 0x04u, 0x04u);
 
+    wr32(ATOMIC_RMC_TEST_BASE + 0x00u, 0x11223344u);
+    wr32(ATOMIC_RMC_TEST_BASE + 0x08u, 0u);
+    wr32(ATOMIC_RMC_TEST_BASE + 0x0cu, 0u);
+    wr32(ATOMIC_RMC_TEST_BASE + 0x04u,
+         ATOMIC_RMC_EXPECT_CAS | ATOMIC_RMC_READ_ONLY);
+    __asm__ volatile(
+        "lea 0x01ffae00,%%a0\n\t"
+        "move.l #0xaabbccdd,%%d0\n\t"
+        "move.l #0x55667788,%%d1\n\t"
+        "move.w #4,%%ccr\n\t"
+        "cas.l %%d0,%%d1,(%%a0)\n\t"
+        "move.w %%sr,%%d2\n\t"
+        "move.l %%d0,0x01ffae08\n\t"
+        "move.l %%d2,0x01ffae0c"
+        :
+        :
+        : "a0", "d0", "d1", "d2", "cc", "memory");
+    wr32(ATOMIC_RMC_TEST_BASE + 0x04u, 0u);
+    chk32(0x00160100u, rd32(ATOMIC_RMC_TEST_BASE + 0x00u), 0x11223344u);
+    chk32(0x00160104u, rd32(ATOMIC_RMC_TEST_BASE + 0x08u), 0x11223344u);
+    chk32(0x00160108u, rd32(ATOMIC_RMC_TEST_BASE + 0x0cu) & 0x04u, 0u);
+
     wr32(ATOMIC_RMC_TEST_BASE + 0x10u, 0x01020304u);
-    wr32(ATOMIC_RMC_TEST_BASE + 0x04u, 2u);
+    wr32(ATOMIC_RMC_TEST_BASE + 0x04u, ATOMIC_RMC_EXPECT_TAS);
     __asm__ volatile(
         "move.w #0,%%ccr\n\t"
         "tas.b 0x01ffae10\n\t"
@@ -11496,7 +11522,7 @@ static void test_movep_tas_cas_directed(void)
 
     wr32(ATOMIC_RMC_TEST_BASE + 0x20u, 0x11111111u);
     wr32(ATOMIC_RMC_TEST_BASE + 0x24u, 0x22222222u);
-    wr32(ATOMIC_RMC_TEST_BASE + 0x04u, 3u);
+    wr32(ATOMIC_RMC_TEST_BASE + 0x04u, ATOMIC_RMC_EXPECT_CAS2);
     __asm__ volatile(
         "lea 0x01ffae20,%%a0\n\t"
         "lea 0x01ffae24,%%a1\n\t"
@@ -11515,6 +11541,33 @@ static void test_movep_tas_cas_directed(void)
     chk32(0x00160030u, rd32(ATOMIC_RMC_TEST_BASE + 0x20u), 0xaaaaaaaau);
     chk32(0x00160034u, rd32(ATOMIC_RMC_TEST_BASE + 0x24u), 0xbbbbbbbbu);
     chk32(0x00160038u, got & 0x04u, 0x04u);
+
+    wr32(ATOMIC_RMC_TEST_BASE + 0x20u, 0x13579bdfu);
+    wr32(ATOMIC_RMC_TEST_BASE + 0x24u, 0x2468ace0u);
+    wr32(ATOMIC_RMC_TEST_BASE + 0x28u, 0u);
+    wr32(ATOMIC_RMC_TEST_BASE + 0x2cu, 0u);
+    wr32(ATOMIC_RMC_TEST_BASE + 0x04u,
+         ATOMIC_RMC_EXPECT_CAS2 | ATOMIC_RMC_READ_ONLY);
+    __asm__ volatile(
+        "lea 0x01ffae20,%%a0\n\t"
+        "lea 0x01ffae24,%%a1\n\t"
+        "move.l #0x13579bdf,%%d0\n\t"
+        "move.l #0xaaaaaaaa,%%d1\n\t"
+        "move.l #0x11111111,%%d2\n\t"
+        "move.l #0xbbbbbbbb,%%d3\n\t"
+        "move.w #4,%%ccr\n\t"
+        "cas2.l %%d0:%%d2,%%d1:%%d3,(%%a0):(%%a1)\n\t"
+        "move.w %%sr,%%d4\n\t"
+        "move.l %%d2,0x01ffae28\n\t"
+        "move.l %%d4,0x01ffae2c"
+        :
+        :
+        : "a0", "a1", "d0", "d1", "d2", "d3", "d4", "cc", "memory");
+    wr32(ATOMIC_RMC_TEST_BASE + 0x04u, 0u);
+    chk32(0x00160120u, rd32(ATOMIC_RMC_TEST_BASE + 0x20u), 0x13579bdfu);
+    chk32(0x00160124u, rd32(ATOMIC_RMC_TEST_BASE + 0x24u), 0x2468ace0u);
+    chk32(0x00160128u, rd32(ATOMIC_RMC_TEST_BASE + 0x28u), 0x2468ace0u);
+    chk32(0x0016012cu, rd32(ATOMIC_RMC_TEST_BASE + 0x2cu) & 0x04u, 0u);
 }
 
 static void test_movep_displacement_directed(void)

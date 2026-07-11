@@ -40,6 +40,7 @@ module tb_coretest;
         && dut.cpu_adr == BERR_TARGET_ADDR;
     wire sim_berrn = (sim_berr_active || sim_berr_match) ? 1'b0 : 1'b1;
     reg [1:0] atomic_rmc_mode = 2'd0;
+    reg atomic_rmc_read_only = 1'b0;
     reg [3:0] atomic_rmc_seen_read = 4'd0;
     reg [3:0] atomic_rmc_seen_write = 4'd0;
 
@@ -165,6 +166,7 @@ module tb_coretest;
     always @(posedge dut.clk) begin
         if (!rstn || dut.rst) begin
             atomic_rmc_mode <= 2'd0;
+            atomic_rmc_read_only <= 1'b0;
             atomic_rmc_seen_read <= 4'd0;
             atomic_rmc_seen_write <= 4'd0;
         end else begin
@@ -178,6 +180,10 @@ module tb_coretest;
             end
             if (atomic_rmc_mode != 2'd0 && dut.bus_write_stb
                 && atomic_rmc_addr_bit(dut.cpu_adr) != 4'd0) begin
+                if (atomic_rmc_read_only) begin
+                    $fatal(1, "atomic RMC probe unexpected write mode=%0d addr=0x%08x",
+                           atomic_rmc_mode, dut.cpu_adr);
+                end
                 atomic_rmc_seen_write <= atomic_rmc_seen_write
                     | atomic_rmc_addr_bit(dut.cpu_adr);
                 if (dut.cpu_rmc_n !== 1'b0) begin
@@ -187,6 +193,7 @@ module tb_coretest;
             if (dut.bus_write_stb && dut.cpu_adr == ATOMIC_RMC_ARM_ADDR) begin
                 if (dut.cpu_dout[1:0] != 2'd0) begin
                     atomic_rmc_mode <= dut.cpu_dout[1:0];
+                    atomic_rmc_read_only <= dut.cpu_dout[2];
                     atomic_rmc_seen_read <= 4'd0;
                     atomic_rmc_seen_write <= 4'd0;
                 end else begin
@@ -196,13 +203,20 @@ module tb_coretest;
                                atomic_rmc_mode, atomic_rmc_seen_read,
                                atomic_rmc_expected(atomic_rmc_mode));
                     end
-                    if ((atomic_rmc_seen_write & atomic_rmc_expected(atomic_rmc_mode))
+                    if (atomic_rmc_read_only) begin
+                        if ((atomic_rmc_seen_write & atomic_rmc_expected(atomic_rmc_mode))
+                            != 4'b0000) begin
+                            $fatal(1, "atomic RMC probe saw write in read-only mode=%0d seen=%b",
+                                   atomic_rmc_mode, atomic_rmc_seen_write);
+                        end
+                    end else if ((atomic_rmc_seen_write & atomic_rmc_expected(atomic_rmc_mode))
                         != atomic_rmc_expected(atomic_rmc_mode)) begin
                         $fatal(1, "atomic RMC probe missing write mode=%0d seen=%b exp=%b",
                                atomic_rmc_mode, atomic_rmc_seen_write,
                                atomic_rmc_expected(atomic_rmc_mode));
                     end
                     atomic_rmc_mode <= 2'd0;
+                    atomic_rmc_read_only <= 1'b0;
                 end
             end
         end
