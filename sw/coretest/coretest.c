@@ -15,6 +15,9 @@
 #define IRQ_SIM_REQ (SCRATCH_BASE + 0x500u)
 #define BERR_SIM_REQ (SCRATCH_BASE + 0x504u)
 #define BERR_SIM_TARGET (SCRATCH_BASE + 0x508u)
+#define BERR_ARM_SUP_DATA_READ "0x1b"
+#define BERR_ARM_SUP_DATA_WRITE "0x0b"
+#define BERR_ARM_SUP_PROG_READ "0x1d"
 #define STACK_TEST_BASE (SCRATCH_BASE + 0x600u)
 #define MOVES_TEST_BASE (SCRATCH_BASE + 0x700u)
 #define MOVES_EXT_TEST_BASE (SCRATCH_BASE + 0x1b00u)
@@ -6693,7 +6696,7 @@ static void test_exception_recovery_directed(void)
         "movec %%d0,%%vbr\n\t"
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
-        "move.l #1,0x01ff9604\n\t"
+        "move.l #" BERR_ARM_SUP_DATA_READ ",0x01ff9604\n\t"
         "move.l 0x01ff9608,%%d1\n\t"
         "move.l #0xbadbad,%%d1\n"
         "1:\n\t"
@@ -6714,7 +6717,7 @@ static void test_exception_recovery_directed(void)
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
         "move.l #0x13579bdf,%%d1\n\t"
-        "move.l #1,0x01ff9604\n\t"
+        "move.l #" BERR_ARM_SUP_DATA_WRITE ",0x01ff9604\n\t"
         "move.l %%d1,0x01ff9608\n\t"
         "move.l #0xbadbad,%%d1\n"
         "1:\n\t"
@@ -6735,7 +6738,7 @@ static void test_exception_recovery_directed(void)
         "movec %%d0,%%vbr\n\t"
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
-        "move.l #1,0x01ff9604\n\t"
+        "move.l #" BERR_ARM_SUP_PROG_READ ",0x01ff9604\n\t"
         "move.l #0x01ff9608,%%a1\n\t"
         "jsr (%%a1)\n\t"
         "move.l #0xbadbad,%%d1\n"
@@ -6752,6 +6755,88 @@ static void test_exception_recovery_directed(void)
     chk_access_fault_frame(0x00100760u, 0x0008u, 0x2000u, 0x2000u, 0u);
     chk_access_fault_status(0x00100778u, 0x0066u);
     chk_access_fault_long(0x001007c4u, 0x2cu, BERR_SIM_TARGET);
+
+    wr32(BERR_SIM_TARGET, 0xa55a5aa5u);
+    arm_exception_recovery(0x0008u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.l #" BERR_ARM_SUP_DATA_READ ",0x01ff9604\n\t"
+        "move.b 0x01ff9608,%%d1\n\t"
+        "move.l #0xbadbad,%%d1\n"
+        "1:\n\t"
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr"
+        :
+        :
+        : "a0", "d0", "d1", "cc", "memory");
+    chk_access_fault_frame(0x00100b00u, 0x0008u, 0x2000u, 0x2000u, 0u);
+    chk_access_fault_status(0x00100b18u, 0x0145u);
+    chk_access_fault_long(0x00100b1cu, 0x2cu, BERR_SIM_TARGET);
+
+    wr32(BERR_SIM_TARGET, 0x55aaa55au);
+    arm_exception_recovery(0x0008u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.l #" BERR_ARM_SUP_DATA_READ ",0x01ff9604\n\t"
+        "move.w 0x01ff9608,%%d1\n\t"
+        "move.l #0xbadbad,%%d1\n"
+        "1:\n\t"
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr"
+        :
+        :
+        : "a0", "d0", "d1", "cc", "memory");
+    chk_access_fault_frame(0x00100b20u, 0x0008u, 0x2000u, 0x2000u, 0u);
+    chk_access_fault_status(0x00100b38u, 0x0155u);
+    chk_access_fault_long(0x00100b3cu, 0x2cu, BERR_SIM_TARGET);
+
+    wr32(BERR_SIM_TARGET, 0x01020304u);
+    arm_exception_recovery(0x0008u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.l #0x13579bdf,%%d1\n\t"
+        "move.l #" BERR_ARM_SUP_DATA_WRITE ",0x01ff9604\n\t"
+        "move.b %%d1,0x01ff9608\n\t"
+        "move.l #0xbadbad,%%d1\n"
+        "1:\n\t"
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr"
+        :
+        :
+        : "a0", "d0", "d1", "cc", "memory");
+    chk_access_fault_frame(0x00100b40u, 0x0008u, 0x2000u, 0x2000u, 0u);
+    chk_access_fault_status(0x00100b58u, 0x0105u);
+    chk_access_fault_long(0x00100b5cu, 0x2cu, BERR_SIM_TARGET);
+
+    wr32(BERR_SIM_TARGET, 0x11223344u);
+    arm_exception_recovery(0x0008u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.l #0x2468ace0,%%d1\n\t"
+        "move.l #" BERR_ARM_SUP_DATA_WRITE ",0x01ff9604\n\t"
+        "move.w %%d1,0x01ff9608\n\t"
+        "move.l #0xbadbad,%%d1\n"
+        "1:\n\t"
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr"
+        :
+        :
+        : "a0", "d0", "d1", "cc", "memory");
+    chk_access_fault_frame(0x00100b60u, 0x0008u, 0x2000u, 0x2000u, 0u);
+    chk_access_fault_status(0x00100b78u, 0x0115u);
+    chk_access_fault_long(0x00100b7cu, 0x2cu, BERR_SIM_TARGET);
 #endif
 
     for (uint32_t off = 0; off < 0x100u; off += 4u) {

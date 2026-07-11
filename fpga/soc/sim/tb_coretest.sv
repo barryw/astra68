@@ -16,6 +16,7 @@ module tb_coretest;
     localparam IRQ_REQ_ADDR = 32'h01ff9600;
     localparam BERR_REQ_ADDR = 32'h01ff9604;
     localparam BERR_TARGET_ADDR = 32'h01ff9608;
+    // BERR_REQ write encoding: bit0=arm, bits3:1=expected FC, bit4=expected RWn.
     localparam MOVES_FC_READ_ADDR = 32'h01ffad00;
     localparam MOVES_FC_WRITE_ADDR = 32'h01ffad04;
     localparam ATOMIC_RMC_CAS_ADDR = 32'h01ffae00;
@@ -33,7 +34,8 @@ module tb_coretest;
     reg sim_avecn = 1'b1;
     reg sim_berr_arm = 1'b0;
     reg sim_berr_active = 1'b0;
-    reg [1:0] sim_berr_case = 2'd0;
+    reg [2:0] sim_berr_expect_fc = 3'b000;
+    reg sim_berr_expect_rw_n = 1'b0;
     wire sim_berr_match = sim_berr_arm && !dut.cpu_as_n
         && dut.cpu_adr == BERR_TARGET_ADDR;
     wire sim_berrn = (sim_berr_active || sim_berr_match) ? 1'b0 : 1'b1;
@@ -68,7 +70,8 @@ module tb_coretest;
             sim_avecn <= 1'b1;
             sim_berr_arm <= 1'b0;
             sim_berr_active <= 1'b0;
-            sim_berr_case <= 2'd0;
+            sim_berr_expect_fc <= 3'b000;
+            sim_berr_expect_rw_n <= 1'b0;
         end else if (dut.bus_write_stb && dut.cpu_adr == IRQ_REQ_ADDR) begin
             if (dut.cpu_dout[2:0] == 3'd0) begin
                 sim_ipln <= 3'b111;
@@ -83,24 +86,14 @@ module tb_coretest;
             end
             if (dut.bus_write_stb && dut.cpu_adr == BERR_REQ_ADDR) begin
                 sim_berr_arm <= dut.cpu_dout[0];
-                if (dut.cpu_dout[0]) begin
-                    sim_berr_case <= sim_berr_case + 2'd1;
-                end
+                sim_berr_expect_fc <= dut.cpu_dout[3:1];
+                sim_berr_expect_rw_n <= dut.cpu_dout[4];
             end
             if (sim_berr_match) begin
-                if (sim_berr_case == 2'd1
-                    && (dut.cpu_fc !== 3'b101 || dut.cpu_rw_n !== 1'b1)) begin
-                    $fatal(1, "BERR read probe expected FC=101 RWn=1, got FC=%b RWn=%b",
-                           dut.cpu_fc, dut.cpu_rw_n);
-                end
-                if (sim_berr_case == 2'd2
-                    && (dut.cpu_fc !== 3'b101 || dut.cpu_rw_n !== 1'b0)) begin
-                    $fatal(1, "BERR write probe expected FC=101 RWn=0, got FC=%b RWn=%b",
-                           dut.cpu_fc, dut.cpu_rw_n);
-                end
-                if (sim_berr_case == 2'd3
-                    && (dut.cpu_fc !== 3'b110 || dut.cpu_rw_n !== 1'b1)) begin
-                    $fatal(1, "BERR opcode probe expected FC=110 RWn=1, got FC=%b RWn=%b",
+                if (dut.cpu_fc !== sim_berr_expect_fc
+                    || dut.cpu_rw_n !== sim_berr_expect_rw_n) begin
+                    $fatal(1, "BERR probe expected FC=%b RWn=%b, got FC=%b RWn=%b",
+                           sim_berr_expect_fc, sim_berr_expect_rw_n,
                            dut.cpu_fc, dut.cpu_rw_n);
                 end
                 sim_berr_active <= 1'b1;
