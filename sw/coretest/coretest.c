@@ -7113,6 +7113,62 @@ static void test_exception_recovery_directed(void)
         chk32(0x00100924u, rd32(EXC_REC_BASE + 0x24u), trace_branch_pc);
     }
 
+    {
+        uint32_t trace_jmp_pc;
+        uint32_t trace_target_pc;
+
+        arm_exception_recovery(0x0024u);
+        __asm__ volatile(
+            "lea 2f,%%a0\n\t"
+            "move.l %%a0,%0\n\t"
+            "lea 3f,%%a1\n\t"
+            "move.l %%a1,%1\n\t"
+            "lea 1f,%%a0\n\t"
+            "move.l %%a0,0x01ff9284\n\t"
+            "move.w #0x6700,%%sr\n\t"
+            "nop\n"
+            "2:\n\t"
+            "jmp (%%a1)\n"
+            "3:\n\t"
+            "move.w #0x2700,%%sr\n\t"
+            "bra.w 1f\n"
+            "1:"
+            : "=&d"(trace_jmp_pc), "=&d"(trace_target_pc)
+            :
+            : "a0", "a1", "cc", "memory");
+        chk_exception_frame(0x00100940u, 0x0024u, 0x2000u, 0xe700u, 0x6700u);
+        chk_exception_pc(0x00100960u, trace_target_pc);
+        chk32(0x00100964u, rd32(EXC_REC_BASE + 0x24u), trace_jmp_pc);
+    }
+
+    {
+        uint32_t trace_rts_pc;
+        uint32_t trace_return_pc;
+
+        arm_exception_recovery(0x0024u);
+        __asm__ volatile(
+            "lea 4f,%%a0\n\t"
+            "move.l %%a0,%0\n\t"
+            "lea 2f,%%a0\n\t"
+            "move.l %%a0,%1\n\t"
+            "move.l %%a0,0x01ff9284\n\t"
+            "jsr 3f\n"
+            "2:\n\t"
+            "move.w #0x2700,%%sr\n\t"
+            "bra.w 5f\n"
+            "3:\n\t"
+            "move.w #0x6700,%%sr\n"
+            "4:\n\t"
+            "rts\n"
+            "5:"
+            : "=&d"(trace_rts_pc), "=&d"(trace_return_pc)
+            :
+            : "a0", "cc", "memory");
+        chk_exception_frame(0x00100980u, 0x0024u, 0x2000u, 0xe700u, 0x6700u);
+        chk_exception_pc(0x001009a0u, trace_return_pc);
+        chk32(0x001009a4u, rd32(EXC_REC_BASE + 0x24u), trace_rts_pc);
+    }
+
     arm_exception_recovery(0x0028u);
     __asm__ volatile(
         "lea 2f,%%a0\n\t"
