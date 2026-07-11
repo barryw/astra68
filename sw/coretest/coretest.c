@@ -6982,6 +6982,60 @@ static void test_exception_recovery_directed(void)
     chk_access_fault_frame(0x00100c00u, 0x0008u, 0x2000u, 0x0000u, 0u);
     chk_access_fault_status(0x00100c18u, 0x0062u);
     chk_access_fault_long(0x00100c1cu, 0x2cu, BERR_SIM_TARGET);
+
+    wr32(BERR_SIM_TARGET, 0x11111111u);
+    wr32(BERR_SIM_TARGET + 4u, 0x22222222u);
+    arm_exception_recovery(0x0008u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d4\n\t"
+        "movec %%d4,%%vbr\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "lea 0x01ff9608,%%a0\n\t"
+        "lea 0x01ff960c,%%a1\n\t"
+        "move.l #0x11111111,%%d0\n\t"
+        "move.l #0xaaaaaaaa,%%d1\n\t"
+        "move.l #0x22222222,%%d2\n\t"
+        "move.l #0xbbbbbbbb,%%d3\n\t"
+        "move.l #" BERR_ARM_SUP_RMC_DATA_READ ",0x01ff9604\n\t"
+        "cas2.l %%d0:%%d2,%%d1:%%d3,(%%a0):(%%a1)\n\t"
+        "move.l #0xbadbad,%%d3\n"
+        "1:\n\t"
+        "moveq #0,%%d4\n\t"
+        "movec %%d4,%%vbr"
+        :
+        :
+        : "a0", "a1", "d0", "d1", "d2", "d3", "d4", "cc", "memory");
+    chk_access_fault_frame(0x00100c20u, 0x0008u, 0x2000u, 0x2000u, 0u);
+    chk_access_fault_status(0x00100c38u, 0x01e5u);
+    chk_access_fault_long(0x00100c3cu, 0x2cu, BERR_SIM_TARGET);
+
+    wr32(BERR_SIM_TARGET, 0x33333333u);
+    wr32(BERR_SIM_TARGET + 4u, 0x44444444u);
+    arm_exception_recovery(0x0008u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d4\n\t"
+        "movec %%d4,%%vbr\n\t"
+        "lea 1f,%%a1\n\t"
+        "move.l %%a1,0x01ff9284\n\t"
+        "lea 0x01ff960c,%%a0\n\t"
+        "lea 0x01ff9608,%%a1\n\t"
+        "move.l #0x44444444,%%d0\n\t"
+        "move.l #0xaaaaaaaa,%%d1\n\t"
+        "move.l #0x33333333,%%d2\n\t"
+        "move.l #0xbbbbbbbb,%%d3\n\t"
+        "move.l #" BERR_ARM_SUP_RMC_DATA_READ ",0x01ff9604\n\t"
+        "cas2.l %%d0:%%d2,%%d1:%%d3,(%%a0):(%%a1)\n\t"
+        "move.l #0xbadbad,%%d3\n"
+        "1:\n\t"
+        "moveq #0,%%d4\n\t"
+        "movec %%d4,%%vbr"
+        :
+        :
+        : "a0", "a1", "d0", "d1", "d2", "d3", "d4", "cc", "memory");
+    chk_access_fault_frame(0x00100c40u, 0x0008u, 0x2000u, 0x2000u, 0u);
+    chk_access_fault_status(0x00100c58u, 0x01e5u);
+    chk_access_fault_long(0x00100c5cu, 0x2cu, BERR_SIM_TARGET);
 #endif
 
     for (uint32_t off = 0; off < 0x100u; off += 4u) {
