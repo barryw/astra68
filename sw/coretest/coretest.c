@@ -7169,6 +7169,30 @@ static void test_exception_recovery_directed(void)
         chk32(0x001009a4u, rd32(EXC_REC_BASE + 0x24u), trace_rts_pc);
     }
 
+    {
+        uint32_t trace_sr_pc;
+        uint32_t trace_next_pc;
+
+        arm_exception_recovery(0x0024u);
+        __asm__ volatile(
+            "lea 2f,%%a0\n\t"
+            "move.l %%a0,%0\n\t"
+            "lea 1f,%%a0\n\t"
+            "move.l %%a0,%1\n\t"
+            "move.l %%a0,0x01ff9284\n\t"
+            "move.w #0x6700,%%sr\n\t"
+            "nop\n"
+            "2:\n\t"
+            "ori.w #0x0001,%%sr\n"
+            "1:"
+            : "=&d"(trace_sr_pc), "=&d"(trace_next_pc)
+            :
+            : "a0", "cc", "memory");
+        chk_exception_frame(0x001009c0u, 0x0024u, 0x2000u, 0xe71fu, 0x6701u);
+        chk_exception_pc(0x001009e0u, trace_next_pc);
+        chk32(0x001009e4u, rd32(EXC_REC_BASE + 0x24u), trace_sr_pc);
+    }
+
     arm_exception_recovery(0x0028u);
     __asm__ volatile(
         "lea 2f,%%a0\n\t"
