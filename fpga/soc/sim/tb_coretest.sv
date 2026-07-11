@@ -16,7 +16,8 @@ module tb_coretest;
     localparam IRQ_REQ_ADDR = 32'h01ff9600;
     localparam BERR_REQ_ADDR = 32'h01ff9604;
     localparam BERR_TARGET_ADDR = 32'h01ff9608;
-    // BERR_REQ write encoding: bit0=arm, bits3:1=expected FC, bit4=expected RWn.
+    // BERR_REQ write encoding:
+    //   bit0=arm, bits3:1=expected FC, bit4=expected RWn, bit5=expected RMCn low.
     localparam MOVES_FC_READ_ADDR = 32'h01ffad00;
     localparam MOVES_FC_WRITE_ADDR = 32'h01ffad04;
     localparam ATOMIC_RMC_CAS_ADDR = 32'h01ffae00;
@@ -36,6 +37,7 @@ module tb_coretest;
     reg sim_berr_active = 1'b0;
     reg [2:0] sim_berr_expect_fc = 3'b000;
     reg sim_berr_expect_rw_n = 1'b0;
+    reg sim_berr_expect_rmc = 1'b0;
     wire sim_berr_match = sim_berr_arm && !dut.cpu_as_n
         && dut.cpu_adr == BERR_TARGET_ADDR;
     wire sim_berrn = (sim_berr_active || sim_berr_match) ? 1'b0 : 1'b1;
@@ -73,6 +75,7 @@ module tb_coretest;
             sim_berr_active <= 1'b0;
             sim_berr_expect_fc <= 3'b000;
             sim_berr_expect_rw_n <= 1'b0;
+            sim_berr_expect_rmc <= 1'b0;
         end else if (dut.bus_write_stb && dut.cpu_adr == IRQ_REQ_ADDR) begin
             if (dut.cpu_dout[2:0] == 3'd0) begin
                 sim_ipln <= 3'b111;
@@ -89,6 +92,7 @@ module tb_coretest;
                 sim_berr_arm <= dut.cpu_dout[0];
                 sim_berr_expect_fc <= dut.cpu_dout[3:1];
                 sim_berr_expect_rw_n <= dut.cpu_dout[4];
+                sim_berr_expect_rmc <= dut.cpu_dout[5];
             end
             if (sim_berr_match) begin
                 if (dut.cpu_fc !== sim_berr_expect_fc
@@ -96,6 +100,10 @@ module tb_coretest;
                     $fatal(1, "BERR probe expected FC=%b RWn=%b, got FC=%b RWn=%b",
                            sim_berr_expect_fc, sim_berr_expect_rw_n,
                            dut.cpu_fc, dut.cpu_rw_n);
+                end
+                if (dut.cpu_rmc_n !== ~sim_berr_expect_rmc) begin
+                    $fatal(1, "BERR probe expected RMCn=%b, got RMCn=%b",
+                           ~sim_berr_expect_rmc, dut.cpu_rmc_n);
                 end
                 sim_berr_active <= 1'b1;
                 sim_berr_arm <= 1'b0;
