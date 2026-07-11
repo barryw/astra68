@@ -5,6 +5,9 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$script_dir/../.."
 source ~/oss-cad-suite/environment 2>/dev/null || true
 
+python3 fpga/cpu/wf68k30L/check_exception_reset.py
+python3 fpga/cpu/wf68k30L/check_opcode_pipe_reset.py
+
 make -C sw/coretest clean all EXTRA_CFLAGS=-DCORETEST_SIM_IRQ
 make -C sw/coretest check-disasm EXTRA_CFLAGS=-DCORETEST_SIM_IRQ
 
