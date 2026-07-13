@@ -23,6 +23,13 @@ typedef volatile struct {   // timer (0x10 bytes)
     uint32_t STATUS;
 } VestaTimer;
 
+typedef volatile struct {   // discoverable hardware personality (0x10 bytes)
+    uint32_t ID;             // four-character identifier
+    uint32_t VERSION;        // major.minor in 16.16 form
+    uint32_t BASE;           // physical MMIO base
+    uint32_t SIZE;           // MMIO aperture size in bytes
+} VestaPersonality;
+
 typedef volatile struct {
     // system control 0x000
     uint32_t ID;             // 0x000
@@ -32,13 +39,45 @@ typedef volatile struct {
     uint32_t SYS_STATUS;     // 0x010
     uint32_t RESET_REASON;   // 0x014
     uint32_t SCRATCH;        // 0x018
-    uint32_t _r0[(0x100 - 0x01C) / 4];
+    uint32_t CPU_MODEL;      // 0x01C
+    uint32_t CPU_IMPL;       // 0x020
+    uint32_t CPU_FEATURES;   // 0x024
+    uint32_t CPU_HZ;         // 0x028
+    uint32_t RAM_BASE;       // 0x02C
+    uint32_t RAM_SIZE;       // 0x030
+    uint32_t ROM_BASE;       // 0x034
+    uint32_t ROM_SIZE;       // 0x038
+    uint32_t BUILD_ID;       // 0x03C
+    uint32_t PERSONALITY_COUNT;  // 0x040
+    uint32_t PERSONALITY_STRIDE; // 0x044
+    uint32_t NVRAM_CAPS;     // 0x048
+    uint32_t _identity_r0;   // 0x04C
+    VestaPersonality PERSONALITY[8]; // 0x050..0x0CF
+    uint32_t MEMTEST_CTRL;       // 0x0D0
+    uint32_t MEMTEST_STATUS;     // 0x0D4
+    uint32_t MEMTEST_PROGRESS;   // 0x0D8 byte offset
+    uint32_t MEMTEST_ERRORS;     // 0x0DC
+    uint32_t MEMTEST_FIRST_FAIL; // 0x0E0 byte offset
+    uint32_t MEMTEST_EXPECTED;   // 0x0E4 low byte
+    uint32_t MEMTEST_ACTUAL;     // 0x0E8 low byte
+    uint32_t CPU_CYCLES_LO;      // 0x0EC free-running CPU/bus clocks
+    uint32_t CPU_CYCLES_HI;      // 0x0F0
+    uint32_t ICACHE_HITS;         // 0x0F4 TG wrapper instruction-cache hits
+    uint32_t ICACHE_MISSES;       // 0x0F8 TG wrapper instruction-cache misses
+    uint32_t DCACHE_HITS;         // 0x0FC TG wrapper data-cache hits
     // MMU control 0x100
     uint32_t MMU_CTRL;       // 0x100
     uint32_t MMU_FAULT_ADDR; // 0x104
     uint32_t MMU_FAULT_STAT; // 0x108
     uint32_t MMU_FAULT_ACK;  // 0x10C
-    uint32_t _r1[(0x200 - 0x110) / 4];
+    uint32_t DCACHE_MISSES;       // 0x110 TG wrapper data-cache misses
+    uint32_t CPU_SDRAM_READS;     // 0x114 completed CPU SDRAM read requests
+    uint32_t CPU_SDRAM_WRITES;    // 0x118 completed CPU SDRAM write requests
+    uint32_t CPU_SDRAM_WAIT;      // 0x11C clocks spent waiting for CPU SDRAM
+    uint32_t SDRAM_LINE_HITS;      // 0x120 external 16-byte line-buffer hits
+    uint32_t SDRAM_LINE_MISSES;    // 0x124 external 16-byte line fills
+    uint32_t SDRAM_POSTED_WRITES;  // 0x128 writes acknowledged before SDRAM completion
+    uint32_t _r1[(0x200 - 0x12C) / 4];
     // region table 0x200
     VestaRegion REGION[16];  // 0x200..0x2FF
     // interrupt controller 0x300
@@ -74,6 +113,35 @@ typedef volatile struct {
 #define VESTA ((VestaRegs *)VESTA_BASE)
 
 #define VESTA_ID_MAGIC 0x56535441u   // "VSTA"
+#define VESTA_VERSION_1_0 0x00010000u
+
+// ---- CPU_MODEL / CPU_IMPL / CPU_FEATURES ----
+#define CPU_MODEL_68020 0x00068020u
+#define CPU_MODEL_68030 0x00068030u
+#define CPU_IMPL_WF30   0x57463330u   // "WF30"
+#define CPU_IMPL_TG20   0x54473230u   // "TG20"
+#define CPU_IMPL_TG30   0x54473330u   // "TG30"
+#define CPU_FEAT_PMMU   (1u << 0)
+#define CPU_FEAT_FPU    (1u << 1)
+#define CPU_FEAT_DATA32 (1u << 2)
+#define CPU_FEAT_ADDR32 (1u << 3)
+
+// ---- SYS_STATUS ----
+#define SYS_SDRAM_PRESENT (1u << 0)
+#define SYS_SDRAM_READY   (1u << 1)
+#define SYS_BOOT_OVERLAY  (1u << 2)
+#define SYS_VIDEO_READY   (1u << 3)
+
+// ---- SDRAM power-on self-test ----
+#define MEMTEST_START       (1u << 0)
+#define MEMTEST_BUSY        (1u << 0)
+#define MEMTEST_DONE        (1u << 1)
+#define MEMTEST_FAILED      (1u << 2)
+#define MEMTEST_PHASE_SHIFT 8
+#define MEMTEST_PHASE(stat) (((stat) >> MEMTEST_PHASE_SHIFT) & 7u)
+#define MEMTEST_PHASE_WRITE 1u
+#define MEMTEST_PHASE_READ  2u
+#define MEMTEST_PHASE_DONE  3u
 
 // ---- SYS_CTRL / RESET_REASON ----
 #define SYS_SOFT_RESET  (1u << 0)

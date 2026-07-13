@@ -14,7 +14,7 @@ def find_port():                       # NUC=/dev/ttyUSB*, macOS=/dev/cu.usbseri
             return m[0]
     return "/dev/ttyUSB0"
 
-PORT, BAUD = find_port(), 115740
+PORT, BAUD = find_port(), 115200
 
 # CCR bits (low byte of SR): X N Z V C
 X, N, Z, V, C = 0x10, 0x08, 0x04, 0x02, 0x01
@@ -28,9 +28,12 @@ def run(p, d, a, ccr, instr, tries=6):
     fr = frame(CMD_RUN, pl)
     for _ in range(tries):
         p.reset_input_buffer()
-        p.write(fr); p.flush()
+        # The current SoC RX path has a one-byte holding register, not a FIFO.
+        # Pace long frames until the hardware FIFO milestone is complete.
+        for byte in fr:
+            p.write(bytes([byte])); p.flush(); time.sleep(0.001)
         time.sleep(0.08)
-        parsed = parse(p.read(64))
+        parsed = parse(p.read(65))
         if parsed is not None and parsed[0] == 0x81 and len(parsed[1]) >= 61:
             body = parsed[1]
             regs = [struct.unpack(">I", body[i*4:i*4+4])[0] for i in range(15)]

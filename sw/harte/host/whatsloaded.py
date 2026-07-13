@@ -18,7 +18,7 @@ def find_port():
     return "/dev/ttyUSB0"
 
 def query_build_id(tries=20):
-    p = serial.Serial(find_port(), 115740, timeout=1.0)
+    p = serial.Serial(find_port(), 115200, timeout=1.0)
     time.sleep(0.4)
     bid = None
     for _ in range(tries):

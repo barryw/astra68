@@ -38,7 +38,7 @@ typedef volatile struct {
     uint32_t IRQ_EN;        // 0x010
     uint32_t IRQ_STAT;      // 0x014
     uint32_t MODE;          // 0x018
-    uint32_t _r0;           // 0x01C
+    uint32_t CAPS;          // 0x01C
     uint32_t BEAM;          // 0x020
     uint32_t RASTER_CMP;    // 0x024
     uint32_t ACTIVE;        // 0x028
@@ -64,6 +64,14 @@ typedef volatile struct {
 
 #define VEGA_ID_MAGIC 0x56454741u   // "VEGA"
 
+// Boot-only text aperture. One ASCII/CP437 byte per cell, row-major, 90x30.
+// The OS may ignore/disable this plane and render its own bitmap fonts.
+#define VEGA_POST_TEXT_BASE (VEGA_BASE + 0x2000u)
+#define VEGA_POST_TEXT ((volatile uint8_t *)VEGA_POST_TEXT_BASE)
+#define VEGA_POST_COLS 90u
+#define VEGA_POST_ROWS 30u
+#define VEGA_CAP_POST_TEXT (1u << 0)
+
 // ---- VEGA_CTRL ----
 #define VEGA_CTRL_DISPLAY_EN  (1u << 0)
 #define VEGA_CTRL_FB_EN       (1u << 1)
@@ -76,6 +84,7 @@ typedef volatile struct {
 #define VEGA_STAT_HBLANK       (1u << 1)
 #define VEGA_STAT_FLIP_PENDING (1u << 2)
 #define VEGA_STAT_SPR_OVERFLOW (1u << 3)
+#define VEGA_STAT_PLL_LOCK     (1u << 4)
 
 // ---- VEGA_IRQ_EN / VEGA_IRQ_STAT ----
 #define VEGA_IRQ_VBLANK    (1u << 0)

@@ -13,7 +13,7 @@ $C/wf68k30L_exception_handler.vhd $C/wf68k30L_control.vhd $C/wf68k30L_top.vhd $W
 
 yosys -m ghdl -q -p "
 ghdl --std=08 -fsynopsys $CORES -e wf68k_wrap;
-read_verilog -sv uart_tx.sv astra_soc.sv;
+read_verilog -sv uart_tx.sv tg68k_cache_store.sv astra_soc.sv;
 hierarchy -top astra_soc;
 proc;
 check;

@@ -77,6 +77,9 @@ _h_default:
 	bra     .
 	.globl _h_recover
 _h_recover:
+#ifdef CORETEST_SIM_PROGRESS
+	putc_imm 0x68      | 'h': recovery handler entered
+#endif
 	move.l  #0x01ff9270, %a0
 	addq.l  #1, (%a0)
 	moveq   #0, %d0
@@ -94,12 +97,23 @@ _h_recover:
 	move.l  8(%sp), 36(%a0)
 	move.l  12(%sp), 40(%a0)
 	move.l  16(%sp), 44(%a0)
+	move.l  24(%sp), 52(%a0)    | format A/B data output buffer
 	move.w  6(%sp), %d0
 	andi.w  #0x0fff, %d0
 	cmp.l   24(%a0), %d0
 	bne     1f
 	move.l  20(%a0), 2(%sp)
 	move.w  #0x2700, (%sp)
+	| Some directed tests service a data fault by skipping the failed
+	| instruction. Clear DF in the format A/B SSW so RTE does not rerun it.
+	tst.l   56(%a0)
+	beq     2f
+	clr.l   56(%a0)
+	andi.w  #0xfeff, 10(%sp)
+2:
+#ifdef CORETEST_SIM_PROGRESS
+	putc_imm 0x72      | 'r': recovery handler is returning
+#endif
 	rte
 1:	putc_imm 0x58      | 'X'
 	bra     .
@@ -126,7 +140,7 @@ _h_irq_return:
 	moveq   #0, %d0
 	move.w  %d2, %d0
 	move.l  %d0, 32(%a0)
-	move.l  #0x01ff9600, %a0
+	move.l  #0xfff00600, %a0
 	moveq   #0, %d0
 	move.l  %d0, (%a0)
 	movem.l (%sp)+, %d0/%a0

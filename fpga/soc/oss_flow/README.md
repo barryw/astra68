@@ -12,8 +12,31 @@ problems, nextpnr rc=0 fully routed — no `--ignore-loops`.
 ## Build
 - `run.sh`          — full build + loop report (yosys check + nextpnr).
 - `mkbit.sh <hex> <tag>` — swap ROM (rom_init.hex), synth+pnr+ecppack -> astra.bit.
+- `PNR_SEED=<n>` selects and records the deterministic nextpnr route seed. Include
+  it in firmware build-ID arguments whenever it is overridden.
 - ROM hexes come from beast: ~/astra_st (selftest -> rom_init.hex ; banner -> rom_banner.hex).
 - Needs GHDL_PREFIX=/opt/homebrew/oss-cad-suite/lib/ghdl (set in scripts).
+
+For an SRAM-only load followed by a timed UART POST gate:
+
+```sh
+python3 ../../../sw/boot/check_hardware.py --bit astra.bit
+```
+
+The command exits nonzero on a POST failure or timeout. It does not write SPI
+flash.
+
+For fast controller-only ULX3S read-sampling and byte-enable validation, use:
+
+```sh
+cd ../../../fpga/memtest32
+bash build.sh 3
+python3 capture.py build/latency3/astra_sdram32_hwtest.bit
+```
+
+At 75 MHz, latency 3 is the accepted ECP5 sample point. Latencies 1 and 2 fail
+with deterministic halfword signatures; changing the SDRAM clock or output
+phase requires repeating this hardware sweep.
 
 ## Flash + UART (macOS FT231X gotcha)
 ULX3S has ONE FT231X shared by JTAG (openFPGALoader, libusb bitbang) and UART (VCP).

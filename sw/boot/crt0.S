@@ -13,7 +13,15 @@
 	.globl  _start
 	.type   _start, @function
 _start:
-	move.l  #_stack_top, %sp        | set stack (SDRAM assumed up)
+	move.l  #_stack_top, %sp        | stack stays in BRAM while POST tests SDRAM
+
+#ifdef ASTRA_CPU_TG68K030
+#ifndef ASTRA_BOOT_CACR
+#define ASTRA_BOOT_CACR 0x1111
+#endif
+	move.l  #ASTRA_BOOT_CACR, %d0     | CACR.IBE|DBE|IE|DE; override for diagnostics
+	movec   %d0, %cacr
+#endif
 
 	| copy .data from ROM (LMA) to RAM (VMA)
 	lea     _data_load, %a0

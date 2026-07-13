@@ -12,7 +12,7 @@ a0 = int(sys.argv[2], 16) if len(sys.argv) > 2 else 0
 d = [1, 2, 0, 0, 0, 0, 0, 0]
 a = [a0, 0, 0, 0, 0, 0, 0]
 
-p = serial.Serial("/dev/ttyUSB0", 115740, timeout=1.5)
+p = serial.Serial("/dev/ttyUSB0", 115200, timeout=1.5)
 alive = False
 for _ in range(8):
     p.reset_input_buffer(); p.write(frame(CMD_PING, bytes([0x5A]))); time.sleep(0.15)

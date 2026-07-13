@@ -8,16 +8,36 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 DESC="${1:-(no description)}"
+CPU_CORE="${CPU_CORE:-wf68k}"
+CPU_CLK_DIV_BIT="${CPU_CLK_DIV_BIT:-2}"
+SDRAM_ENABLE="${SDRAM_ENABLE:-1}"
+HDMI_ENABLE="${HDMI_ENABLE:-1}"
+TARGET_FREQ_MHZ="${TARGET_FREQ_MHZ:-12}"
+PNR_SEED="${PNR_SEED:-1}"
+BUILD_ARGS=(
+  "CPU_CORE=$CPU_CORE"
+  "CPU_CLK_DIV_BIT=$CPU_CLK_DIV_BIT"
+  "SDRAM_ENABLE=$SDRAM_ENABLE"
+  "HDMI_ENABLE=$HDMI_ENABLE"
+  "TARGET_FREQ_MHZ=$TARGET_FREQ_MHZ"
+  "PNR_SEED=$PNR_SEED"
+)
 source ~/oss-cad-suite/environment 2>/dev/null || true
 
 echo "== [1/5] build firmware (regenerates build_id.h from RTL+fw hash) =="
 make -s -C sw/harte clean
-make -C sw/harte
-EXPECT=$(make -s -C sw/harte id | grep -oE '[0-9a-f]{8}')
+make -C sw/harte "${BUILD_ARGS[@]}"
+EXPECT=$(make -s -C sw/harte id "${BUILD_ARGS[@]}" | grep -oE '[0-9a-f]{8}')
 echo "    expected BUILD_ID = 0x$EXPECT"
+echo "    CPU_CORE=$CPU_CORE CPU_CLK_DIV_BIT=$CPU_CLK_DIV_BIT SDRAM_ENABLE=$SDRAM_ENABLE HDMI_ENABLE=$HDMI_ENABLE TARGET_FREQ_MHZ=$TARGET_FREQ_MHZ PNR_SEED=$PNR_SEED"
 
 echo "== [2/5] build bitstream =="
-( cd fpga/soc/oss_flow && bash mkbit.sh ../../../sw/harte/rom_harness.hex harte >/dev/null )
+( cd fpga/soc/oss_flow && \
+  CPU_CLK_DIV_BIT="$CPU_CLK_DIV_BIT" SDRAM_ENABLE="$SDRAM_ENABLE" \
+  HDMI_ENABLE="$HDMI_ENABLE" \
+  TARGET_FREQ_MHZ="$TARGET_FREQ_MHZ" \
+  PNR_SEED="$PNR_SEED" \
+  bash mkbit.sh ../../../sw/harte/rom_harness.hex harte "$CPU_CORE" >/dev/null )
 BITSHA=$(sha1sum fpga/soc/oss_flow/astra.bit | cut -c1-12)
 echo "    astra.bit sha=$BITSHA"
 
@@ -36,7 +56,10 @@ fi
 echo "== [5/5] log =="
 GIT="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
 [ -n "$(git status --porcelain 2>/dev/null)" ] && GIT="$GIT+dirty"
-printf '`0x%s` | %s | bit:%s | %s | %s\n' "$EXPECT" "$GIT" "$BITSHA" "$(date -u +%Y-%m-%dT%H:%MZ)" "$DESC" >> sw/harte/BUILD_LOG.md
+printf '`0x%s` | %s | bit:%s | %s | %s [%s]\n' \
+  "$EXPECT" "$GIT" "$BITSHA" "$(date -u +%Y-%m-%dT%H:%MZ)" "$DESC" \
+  "CPU_CORE=$CPU_CORE CPU_CLK_DIV_BIT=$CPU_CLK_DIV_BIT SDRAM_ENABLE=$SDRAM_ENABLE HDMI_ENABLE=$HDMI_ENABLE TARGET_FREQ_MHZ=$TARGET_FREQ_MHZ PNR_SEED=$PNR_SEED" \
+  >> sw/harte/BUILD_LOG.md
 echo "OK — loaded & verified BUILD_ID 0x$EXPECT"
 echo "----"
 tail -1 sw/harte/BUILD_LOG.md

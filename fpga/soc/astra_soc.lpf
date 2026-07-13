@@ -1,5 +1,5 @@
 ## Astra 68 SoC skeleton — ULX3S 85F pin constraints
-## Only the pins this bitstream uses (clk, reset button, LEDs, UART TX).
+## CPU, SDRAM, UART, and GPDI/HDMI pins used by the complete bring-up SoC.
 ## Same sites as fpga/memtest/astra_memtest.lpf.
 
 # NOTE: BLOCK RESETPATHS / BLOCK ASYNCPATHS were removed. They told TRACE to skip
@@ -12,17 +12,17 @@ LOCATE COMP "clk25_mhz" SITE "G2";
 IOBUF  PORT "clk25_mhz" PULLMODE=NONE IO_TYPE=LVCMOS33;
 FREQUENCY PORT "clk25_mhz" 25 MHZ;
 
-# CPU/bus clock = clk25_mhz/8 = 3.125 MHz (fabric divider bit clkdiv[2]).
-# WITHOUT this the derived clock is only "covered under" the 25 MHz port, so TRACE
+# CPU/bus clock. Production TG030 images currently select 12.5 MHz.
+# Without this the derived clock is only "covered under" the 25 MHz port, so TRACE
 # times the whole CPU at 40 ns (4096 false setup errors) AND — the real bug — never
 # analyzes the core's NEGATIVE-edge bus FFs (DSACK sample / read-data latch): 0
-# falling-edge paths scored. Declaring clkdiv[2] a clock pulls BOTH edges into timing
+# falling-edge paths scored. Declaring clk a clock pulls BOTH edges into timing
 # so PAR actually fixes the negedge cross-edge paths that fail in SDF sim / on silicon.
-FREQUENCY NET "clkdiv[2]" 3.125 MHZ;
+FREQUENCY NET "clk" 12.5 MHZ;
 # Bound clock skew on the CPU/bus net. The residual failures are skew-induced HOLD
 # violations (~150-300 ps) on the WF68K30L's dual-edge bus interface that TRACE scores
 # as met (0 hold) but the SDF sim/silicon see. Force PAR to place the clock loads tight.
-MAXSKEW NET "clkdiv[2]" 0.3 ns;
+MAXSKEW NET "clk" 0.3 ns;
 
 # Power button as manual reset (active low)
 LOCATE COMP "reset_n" SITE "D6";
@@ -53,3 +53,94 @@ IOBUF  PORT "ftdi_rxd" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
 # UART RX from host via FTDI
 LOCATE COMP "ftdi_txd" SITE "M1";
 IOBUF  PORT "ftdi_txd" PULLMODE=UP IO_TYPE=LVCMOS33;
+
+# GPDI (HDMI). LVCMOS33D on each positive pin drives its paired negative pin.
+LOCATE COMP "gpdi_dp[0]" SITE "A16"; # Blue
+LOCATE COMP "gpdi_dp[1]" SITE "A14"; # Green
+LOCATE COMP "gpdi_dp[2]" SITE "A12"; # Red
+LOCATE COMP "gpdi_dp[3]" SITE "A17"; # Clock
+IOBUF PORT "gpdi_dp[0]" IO_TYPE=LVCMOS33D DRIVE=4;
+IOBUF PORT "gpdi_dp[1]" IO_TYPE=LVCMOS33D DRIVE=4;
+IOBUF PORT "gpdi_dp[2]" IO_TYPE=LVCMOS33D DRIVE=4;
+IOBUF PORT "gpdi_dp[3]" IO_TYPE=LVCMOS33D DRIVE=4;
+
+# 32 MB MT48LC16M16 SDRAM
+LOCATE COMP "sdram_clk" SITE "F19";
+LOCATE COMP "sdram_cke" SITE "F20";
+LOCATE COMP "sdram_csn" SITE "P20";
+LOCATE COMP "sdram_wen" SITE "T20";
+LOCATE COMP "sdram_rasn" SITE "R20";
+LOCATE COMP "sdram_casn" SITE "T19";
+LOCATE COMP "sdram_ba[0]" SITE "P19";
+LOCATE COMP "sdram_ba[1]" SITE "N20";
+LOCATE COMP "sdram_dqm[0]" SITE "U19";
+LOCATE COMP "sdram_dqm[1]" SITE "E20";
+LOCATE COMP "sdram_a[0]" SITE "M20";
+LOCATE COMP "sdram_a[1]" SITE "M19";
+LOCATE COMP "sdram_a[2]" SITE "L20";
+LOCATE COMP "sdram_a[3]" SITE "L19";
+LOCATE COMP "sdram_a[4]" SITE "K20";
+LOCATE COMP "sdram_a[5]" SITE "K19";
+LOCATE COMP "sdram_a[6]" SITE "K18";
+LOCATE COMP "sdram_a[7]" SITE "J20";
+LOCATE COMP "sdram_a[8]" SITE "J19";
+LOCATE COMP "sdram_a[9]" SITE "H20";
+LOCATE COMP "sdram_a[10]" SITE "N19";
+LOCATE COMP "sdram_a[11]" SITE "G20";
+LOCATE COMP "sdram_a[12]" SITE "G19";
+LOCATE COMP "sdram_d[0]" SITE "J16";
+LOCATE COMP "sdram_d[1]" SITE "L18";
+LOCATE COMP "sdram_d[2]" SITE "M18";
+LOCATE COMP "sdram_d[3]" SITE "N18";
+LOCATE COMP "sdram_d[4]" SITE "P18";
+LOCATE COMP "sdram_d[5]" SITE "T18";
+LOCATE COMP "sdram_d[6]" SITE "T17";
+LOCATE COMP "sdram_d[7]" SITE "U20";
+LOCATE COMP "sdram_d[8]" SITE "E19";
+LOCATE COMP "sdram_d[9]" SITE "D20";
+LOCATE COMP "sdram_d[10]" SITE "D19";
+LOCATE COMP "sdram_d[11]" SITE "C20";
+LOCATE COMP "sdram_d[12]" SITE "E18";
+LOCATE COMP "sdram_d[13]" SITE "F18";
+LOCATE COMP "sdram_d[14]" SITE "J18";
+LOCATE COMP "sdram_d[15]" SITE "J17";
+
+IOBUF PORT "sdram_clk" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_cke" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_csn" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_wen" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_rasn" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_casn" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_ba[0]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_ba[1]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_dqm[0]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_dqm[1]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_a[0]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_a[1]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_a[2]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_a[3]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_a[4]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_a[5]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_a[6]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_a[7]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_a[8]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_a[9]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_a[10]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_a[11]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_a[12]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_d[0]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_d[1]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_d[2]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_d[3]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_d[4]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_d[5]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_d[6]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_d[7]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_d[8]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_d[9]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_d[10]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_d[11]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_d[12]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_d[13]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_d[14]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sdram_d[15]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;

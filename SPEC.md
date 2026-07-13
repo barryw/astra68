@@ -16,9 +16,9 @@ baggage.
 |---|---|---|
 | ✅ FPGA | **LFE5U-85F** (84,480 LUT4, 3744 Kbit EBR, 156 DSP, 4 PLL) | JTAG IDCODE `0x41113043` |
 | ✅ SDRAM | **32 MB**, MT48LC16M16, 16-bit — full-chip march clean, **zero errors**, no aliasing | on-board memtest (`fpga/memtest/`) |
-| ✅ SDRAM speed | clean at **50 MHz** (rock-solid) and **75 MHz** (~150 MB/s); command path caps ~80 MHz un-floorplanned | memtest sweep |
+| ✅ SDRAM speed | **75 MHz**, 145.06 MB/s write / 143.52 MB/s read in pin-level regression; 32 MiB four-sweep hardware POST completes with the full SoC in ~1.1 s | controller regression + build `0x7FB5A559` |
 | ✅ Toolchain | yosys + **ghdl (VHDL)** + nextpnr-ecp5 + trellis + openFPGALoader — full open flow | probed |
-| ✅ HDMI 720×480 | proven on the predecessor e6502 machine (same board) | prior project |
+| ✅ HDMI 720×480 | POST console proven with TG030+PMMU+SDRAM on this board | build `0x7FB5A559` |
 
 Predecessor project **e6502** (`~/Git/e6502/e6502.FPGA`) is Astra's direct
 ancestor: 720×480 HDMI, chunky framebuffer, copper, blitter, sprites, SDRAM
@@ -245,12 +245,24 @@ Two engines into a common stereo mixer, **48 kHz** stereo out.
 
 1. Reset → CPU fetches SP/PC from `$0`/`$4` — **ROM boot overlay** maps ROM to
    `$0` initially.
-2. Boot ROM: SDRAM init, exception vectors, device reset, UART, disable overlay
-   (RAM low), video init, optional logo.
-3. **ROM monitor:** examine/modify memory, registers, load binary/S-record over
+2. Boot ROM starts UART and the SDRAM-independent **720x480 HDMI POST console**,
+   then reads Vesta's machine identity and instantiated-personality table.
+3. POST verifies SDRAM data lines, byte/word/long access paths, address lines,
+   and every declared RAM location with a position-dependent full-range pattern.
+   The stack and POST state remain in BRAM so all 32 MB can be tested destructively.
+4. Load versioned, CRC-protected persistent configuration; invalid or absent
+   NVRAM selects documented defaults without preventing diagnostics.
+5. Disable the reset overlay, establish the low RAM map, initialize devices,
+   verify/load the selected OS image, and transfer control.
+6. **ROM monitor:** examine/modify memory, registers, load binary/S-record over
    UART, load from SD, run, reset, diagnostics. First real environment.
 
 ROM: 128–256 KB BRAM.
+
+The 90x30 POST text plane uses a fixed ASCII-compatible bitmap font in BRAM.
+It is not an OS font service; the graphical OS uses its own bitmap fonts in
+the Vega framebuffer, in the style of classic Amiga, Atari ST, and Macintosh
+systems.
 
 ---
 
@@ -312,7 +324,8 @@ control block" step in the context switch + bus-error / privilege trap handlers.
 
 ## 15. Memory bandwidth — the binding constraint 🔧
 
-One 16-bit SDRAM: ~130–180 MB/s realistic sustained (150 MB/s proven at 75 MHz).
+One 16-bit SDRAM: ~130–180 MB/s realistic sustained (143-145 MB/s measured at
+75 MHz with refresh active).
 Everything shares it. Budget (approx, deterministic masters first):
 
 ```
@@ -349,9 +362,9 @@ there's headroom for bigger caches, more wave RAM, tilemap layers, etc.
 
 ## 17. MVP + open items
 
-**Hardware MVP:** ✅ 85F + 32 MB SDRAM verified · WF68K30L core bring-up · boot
-ROM · UART · timer · IRQ controller · basic RGB565 framebuffer · MMU
-identity/off.
+**Hardware MVP:** ✅ 85F + 32 MB SDRAM verified · TG68K.C 68030+PMMU at 12.5
+MHz · boot ROM POST · UART · 720x480 HDMI text console. Basic RGB565
+framebuffer, timer, and IRQ controller remain open.
 
 **Software MVP:** ✅ linker script + crt0 + hello-over-UART (`sw/boot/`, builds
 with gcc-m68k-linux-gnu — vectors/SP/PC verified) · UART monitor · SDRAM init ·

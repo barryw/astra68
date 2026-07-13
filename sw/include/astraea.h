@@ -83,6 +83,8 @@ typedef volatile struct {
 #define BLIT_IRQ_EN  (1u << 1)
 #define BLIT_BUSY    (1u << 0)
 #define BLIT_DONE    (1u << 1)
+#define BLIT_ERROR   (0xffu << 8)
+#define BLIT_ERROR_CODE(stat) (((stat) >> 8) & 0xffu)
 
 #define BLIT_DIM_(w, h) (((uint32_t)(h) << 16) | ((w) & 0xFFFF))
 

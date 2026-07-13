@@ -8,7 +8,7 @@ from proto import frame, parse, CMD_PING, CMD_RUN
 arg = sys.argv[1] if len(sys.argv) > 1 else "-"
 afill = int(sys.argv[2], 16) if len(sys.argv) > 2 else 0   # value to load into a0..a6
 instr = b"" if arg == "-" else bytes.fromhex(arg)
-p = serial.Serial("/dev/ttyUSB0", 115740, timeout=1.0)
+p = serial.Serial("/dev/ttyUSB0", 115200, timeout=1.0)
 time.sleep(0.5)
 good = 0
 for _ in range(25):

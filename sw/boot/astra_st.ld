@@ -1,12 +1,13 @@
-/* Astra 68 — self-test / bring-up linker script (matches the current SoC block RAM).
+/* Astra 68 — boot / self-test linker script (matches the current SoC block RAM).
  *
  * Physical decode AS IMPLEMENTED (astra_soc.sv / tb_soc.sv):
  *   RAM   0x01FF8000..0x01FFFFFF (32 KB block RAM)  — sel_ram = cpu_adr[31:15] == 0x3FF
  *   ROM   0xFFE00000..0xFFE3FFFF (256 KB)           — boot ROM
- *   MMIO  0xFFF00500..                              — Vesta UART
+ *   SDRAM 0x02000000..0x03FFFFFF (32 MB high alias) — destructive POST target
+ *   MMIO  0xFFF00000..                              — Vesta identity + UART
  * NOTE: RAM base is 0x01FF8000, NOT 0x03FF8000 — the sel_ram field value 0x3FF is
- *   cpu_adr[31:15], so the byte address is 0x3FF<<15 = 0x01FF8000. (SDRAM at 0x0 is
- *   a future SPEC item; until it exists, RAM/stack must live in this 32 KB window.)
+ *   cpu_adr[31:15], so the byte address is 0x3FF<<15 = 0x01FF8000. Runtime data
+ *   and the boot stack stay here so POST can destructively test every SDRAM byte.
  *
  * At reset the ROM overlay maps this ROM to $0 so the CPU fetches the initial
  * SP ($0) and reset PC ($4) from the vector table below; the reset PC points at

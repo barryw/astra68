@@ -4,14 +4,21 @@
 // current failure keeps changing address, so this bench also traces vector fetches
 // and CPU-space cycles after the frame has been consumed.
 `timescale 1ns/1ps
-module tb_soc;
+module tb_soc #(
+    parameter CPU_TG68K = 1'b0
+);
     reg  clk25 = 0;
     reg  rstn  = 0;
     reg  host_rx = 1'b1;
     wire tx;
     wire [7:0] leds;
 
-    astra_soc #(.RST_MAX(16'd16)) dut (   // short reset for sim
+    astra_soc #(
+        .RST_MAX(16'd16),
+        .CPU_TG68K(CPU_TG68K),
+        .SDRAM_ENABLE(1'b0),
+        .HDMI_ENABLE(1'b0)
+    ) dut (   // short reset for sim
         .clk25_mhz(clk25), .reset_n(rstn),
         .ftdi_rxd(tx), .ftdi_txd(host_rx),
         .leds(leds)

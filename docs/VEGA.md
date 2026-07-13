@@ -62,6 +62,7 @@ MMIO block map (within Vega, VEGA_BASE +):
   0x0400  palette (256 x RGB888)
   0x0800  sprite global (enable/budget/collision)
   0x1000  sprite table (32 x 32 bytes)
+  0x2000  bootstrap POST text plane (2700 byte cells)
 
 Chipset map (provisional):
   0xFFF00000 Vesta   0xFFF10000 Astraea   0xFFF20000 Vega   0xFFF30000 Lyra
@@ -80,6 +81,7 @@ Chipset map (provisional):
 | 0x0010 | `VEGA_IRQ_EN` | RW | 0 | IRQ enable mask |
 | 0x0014 | `VEGA_IRQ_STAT` | RW1C | 0 | IRQ pending; write 1 to clear |
 | 0x0018 | `VEGA_MODE` | RW | 0 | display mode select |
+| 0x001C | `VEGA_CAPS` | RO | — | implemented capability bits |
 
 **`VEGA_CTRL`** `[0]DISPLAY_EN [1]FB_EN [2]SPR_EN [3]FB_COLORKEY_EN
 [4]BACKDROP_EN` (tile layers enable per-layer in `TILE_CTRL`).
@@ -88,8 +90,23 @@ Chipset map (provisional):
 
 **`VEGA_IRQ_EN`/`STAT`** `[0]VBLANK [1]RASTER [2]COLLISION`.
 
+**`VEGA_CAPS`** `[0]POST_TEXT`. Early bring-up images may expose only this
+bootstrap capability; software must not assume the framebuffer, tiles, or
+sprites exist until their capability bits are implemented and reported.
+
 **`VEGA_MODE`** `0=720x480@60 (primary) 1=640x480 2=320x240 3=320x200
 4=400x300 5=640x400`.
+
+### Bootstrap POST text plane
+
+`VEGA_BASE + 0x2000` exposes 2700 byte-addressed cells arranged as 90 columns
+by 30 rows. Each byte is an ASCII/CP437 character. Hardware renders the first
+CP437 bank as 8x8 glyphs doubled vertically to 8x16, exactly filling the
+720x480 active area. Character RAM and font ROM are BRAM-backed and do not
+depend on SDRAM, so memory-test failures remain visible.
+
+This plane is a ROM/POST facility, not the OS text API. The OS disables or
+ignores it and renders its own bitmap fonts through the normal Vega framebuffer.
 
 ---
 

@@ -80,7 +80,7 @@ blanking and idle bus time. Completion raises `IRQ_STAT.BLIT_DONE`.
 | 0x0060 | `BLIT_COLOR` | RW | fill / constant value (element-sized) |
 | 0x0064 | `BLIT_KEY` | RW | color-key transparent value (COPY_KEY) |
 | 0x0068 | `BLIT_CTRL` | RW | `[0]START (write 1) [1]IRQ_EN` |
-| 0x006C | `BLIT_STATUS` | RO | `[0]BUSY [1]DONE` |
+| 0x006C | `BLIT_STATUS` | RO | `[0]BUSY [1]DONE [15:8]ERROR` |
 
 **`BLIT_OP`**
 ```
@@ -105,7 +105,33 @@ blanking and idle bus time. Completion raises `IRQ_STAT.BLIT_DONE`.
 **LINE** is deferred (§10); the reserved mode keeps the encoding stable.
 
 Start a blit: program registers, then write `BLIT_CTRL = BLIT_START`. Poll
-`BLIT_STATUS.BUSY` or take the done IRQ.
+for `BLIT_STATUS.DONE && !BLIT_STATUS.BUSY` or take the done IRQ. `DONE` is
+sticky and START clears it; software must not require observing `BUSY`, because
+short operations can complete between two CPU reads.
+
+### Current RTL status
+
+The first hardware implementation supports `COPY` and `FILL` for 8-, 16-,
+and 32-bit elements, two-dimensional pitches, arbitrary byte alignment, and
+both reverse directions. Aligned rows transfer 16 native 32-bit words per
+chunk. Unaligned rows use exact byte-enable writes, preserving bytes outside
+the destination rectangle. Reverse traversal has directed overlap coverage and
+provides `memmove` semantics.
+
+`COPY_KEY`, `COPY_MASK`, and `LINE` are reserved but not implemented yet.
+Starting one of those operations completes with `BLIT_STATUS.ERROR=1`; it does
+not modify SDRAM. Error 2 reports an internal state-machine fault. `DONE` and
+the error field are cleared by the next accepted `START`.
+
+The engine holds the native DMA grant through every chunk. CPU SDRAM requests
+stall while it owns memory, MMIO and ROM remain available for polling, and the
+TG wrapper caches remain invalid for the operation and completion boundary.
+The shared BIST/blitter port registers one owner for the complete operation, so
+request and response routing cannot change while transactions are outstanding.
+Pin-level simulation at 75 MHz measures 51.65 MB/s for aligned copy and
+119.25 MB/s for aligned fill. Build `0x7E17F8DC` passed three cold ULX3S boots
+at 51.40 MB/s copy and 118.36 MB/s fill, including MMIO launch, completion
+polling, and cache-maintenance boundaries.
 
 ---
 

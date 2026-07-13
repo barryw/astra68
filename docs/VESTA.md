@@ -17,6 +17,7 @@ Authoritative contract; `sw/include/vesta.h` is the hand-maintained C mirror.
 ```
 Block map (VESTA_BASE +):
   0x0000  system control (id / machine / reset / scratch)
+  0x00D0  SDRAM power-on self-test
   0x0100  MMU control + fault reporting
   0x0200  MMU region table (16 regions x 16 bytes)
   0x0300  interrupt controller
@@ -40,6 +41,64 @@ Block map (VESTA_BASE +):
 | 0x0010 | `SYS_STATUS` | RO | — | general status |
 | 0x0014 | `RESET_REASON` | RO | — | `0=power-on 1=soft 2=watchdog` |
 | 0x0018 | `SCRATCH` | RW | 0 | persists across soft reset (boot handoff) |
+| 0x001C | `CPU_MODEL` | RO | — | `0x00068020` or `0x00068030` |
+| 0x0020 | `CPU_IMPL` | RO | — | implementation FourCC (`WF30`, `TG20`, `TG30`) |
+| 0x0024 | `CPU_FEATURES` | RO | — | `[0]PMMU [1]FPU [2]DATA32 [3]ADDR32` |
+| 0x0028 | `CPU_HZ` | RO | — | configured CPU/bus clock in Hz |
+| 0x002C | `RAM_BASE` | RO | — | physical SDRAM base advertised to boot software |
+| 0x0030 | `RAM_SIZE` | RO | — | usable SDRAM bytes |
+| 0x0034 | `ROM_BASE` | RO | — | physical boot ROM base |
+| 0x0038 | `ROM_SIZE` | RO | — | boot ROM aperture bytes |
+| 0x003C | `BUILD_ID` | RO | — | reproducible hardware build identifier |
+| 0x0040 | `PERSONALITY_COUNT` | RO | — | valid hardware descriptors at `0x0050` |
+| 0x0044 | `PERSONALITY_STRIDE` | RO | 16 | bytes per descriptor |
+| 0x0048 | `NVRAM_CAPS` | RO | 0 | persistent-settings backend capabilities |
+
+`SYS_STATUS` currently reports `[0]SDRAM_PRESENT [1]SDRAM_READY
+[2]BOOT_OVERLAY [3]VIDEO_PLL_LOCKED`.
+
+Each personality descriptor is four read-only words: `ID` FourCC, `VERSION`
+(16.16 major/minor), physical `BASE`, and MMIO aperture `SIZE`. The boot ROM
+prints this table rather than claiming chips that are not instantiated in the
+current bitstream.
+
+### SDRAM power-on self-test (0x00D0)
+
+The destructive full-range test runs from the 75 MHz SDRAM clock domain over
+the controller's pipelined 32-bit DMA port. It keeps up to 16 requests in
+flight, avoiding both the CPU clock-domain round trip and the former per-byte
+request path. Boot software must keep its code, stack, and live data outside
+SDRAM until the test completes.
+
+| Offset | Name | Acc | Description |
+|---|---|---|---|
+| 0x00D0 | `MEMTEST_CTRL` | WO | write `[0]START=1` to start or restart |
+| 0x00D4 | `MEMTEST_STATUS` | RO | `[0]BUSY [1]DONE [2]FAILED [10:8]PHASE` |
+| 0x00D8 | `MEMTEST_PROGRESS` | RO | current byte offset |
+| 0x00DC | `MEMTEST_ERRORS` | RO | saturating mismatch count |
+| 0x00E0 | `MEMTEST_FIRST_FAIL` | RO | first failing byte offset |
+| 0x00E4 | `MEMTEST_EXPECTED` | RO | expected byte for first failure |
+| 0x00E8 | `MEMTEST_ACTUAL` | RO | actual byte for first failure |
+| 0x00EC | `CPU_CYCLES_LO` | RO | low word of free-running CPU/bus clock count |
+| 0x00F0 | `CPU_CYCLES_HI` | RO | high word of free-running CPU/bus clock count |
+| 0x00F4 | `ICACHE_HITS` | RO | TG wrapper instruction-cache hit count |
+| 0x00F8 | `ICACHE_MISSES` | RO | TG wrapper instruction-cache miss count |
+| 0x00FC | `DCACHE_HITS` | RO | TG wrapper data-cache hit count |
+
+CPU memory diagnostics continue in the MMU-control aperture so the identity
+block remains ABI-compatible:
+
+| Offset | Name | Acc | Description |
+|---|---|---|---|
+| 0x0110 | `DCACHE_MISSES` | RO | TG wrapper data-cache miss count |
+| 0x0114 | `CPU_SDRAM_READS` | RO | CPU SDRAM read requests launched |
+| 0x0118 | `CPU_SDRAM_WRITES` | RO | CPU SDRAM write requests launched |
+| 0x011C | `CPU_SDRAM_WAIT` | RO | CPU clocks spent in the SDRAM wait state |
+
+Phases are `0=idle`, `1=write`, `2=read/verify`, and `3=done`. Starting the
+test clears the prior result. POST writes and verifies an address-derived
+pattern, then repeats with its complement. Every address line contributes to
+stored data, and every bit in every byte must store both zero and one.
 
 ---
 

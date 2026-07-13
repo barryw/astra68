@@ -10,11 +10,16 @@
 #define EXC_REC_BASE (SCRATCH_BASE + 0x170u)
 #define EXC_RECOVERY_PC (EXC_REC_BASE + 0x14u)
 #define EXC_EXPECTED_ADDR (EXC_REC_BASE + 0x30u)
+#define EXC_DATA_OUT (EXC_REC_BASE + 0x34u)
+#define EXC_SKIP_DATA_CYCLE (EXC_REC_BASE + 0x38u)
 #define EXC_FAKE_STACK (SCRATCH_BASE + 0x300u)
 #define EXC_ALT_VBR (SCRATCH_BASE + 0x400u)
-#define IRQ_SIM_REQ (SCRATCH_BASE + 0x500u)
-#define BERR_SIM_REQ (SCRATCH_BASE + 0x504u)
-#define BERR_SIM_TARGET (SCRATCH_BASE + 0x508u)
+#define IRQ_SIM_REQ 0xfff00600u
+#define BERR_SIM_REQ 0xfff00604u
+#define BERR_SIM_TARGET 0xfff00608u
+#define FC_PROBE_ARM 0xfff0060cu
+#define FC_PROBE_MOVES 1u
+#define FC_PROBE_DATA_PROG 2u
 #define BERR_ARM_SUP_DATA_READ "0x1b"
 #define BERR_ARM_SUP_DATA_WRITE "0x0b"
 #define BERR_ARM_SUP_PROG_READ "0x1d"
@@ -22,6 +27,8 @@
 #define BERR_ARM_USER_DATA_READ "0x13"
 #define BERR_ARM_USER_DATA_WRITE "0x03"
 #define BERR_ARM_USER_PROG_READ "0x15"
+#define BERR_ARM_SDRAM_SUP_DATA_WRITE "0x4b"
+#define BERR_SDRAM_TARGET 0x02000100u
 #define STACK_TEST_BASE (SCRATCH_BASE + 0x600u)
 #define MOVES_TEST_BASE (SCRATCH_BASE + 0x700u)
 #define MOVES_EXT_TEST_BASE (SCRATCH_BASE + 0x1b00u)
@@ -102,7 +109,21 @@ static void uart_hex32(uint32_t v)
 
 static void delay_poll_window(void)
 {
-    for (volatile uint32_t delay = 0; delay < 10000u; ++delay) {}
+#ifdef CORETEST_SIM_IRQ
+    const uint32_t limit = 32u;
+#else
+    const uint32_t limit = 10000u;
+#endif
+    for (volatile uint32_t delay = 0; delay < limit; ++delay) {}
+}
+
+static void progress_char(char c)
+{
+#ifdef CORETEST_SIM_PROGRESS
+    uart_putc(c);
+#else
+    (void)c;
+#endif
 }
 
 static void stop_fail(uint32_t id, uint32_t got, uint32_t exp)
@@ -157,6 +178,14 @@ static void arm_exception_recovery(uint32_t vector_offset)
     wr32(EXC_REC_BASE + 0x28, 0u);
     wr32(EXC_REC_BASE + 0x2c, 0u);
     wr32(EXC_EXPECTED_ADDR, 0u);
+    wr32(EXC_DATA_OUT, 0u);
+    wr32(EXC_SKIP_DATA_CYCLE, 0u);
+}
+
+static void arm_exception_recovery_skip_data_cycle(uint32_t vector_offset)
+{
+    arm_exception_recovery(vector_offset);
+    wr32(EXC_SKIP_DATA_CYCLE, 1u);
 }
 
 static void chk32(uint32_t id, uint32_t got, uint32_t exp)
@@ -4086,6 +4115,11 @@ static void test_unary_arith_register_differential(void)
                     uint32_t exp_result;
                     uint32_t exp_ccr;
 
+#ifdef CORETEST_SIM_TRACE_UNARY_ARITH
+                    uart_puts("UA ");
+                    uart_hex32(id);
+                    uart_putc('\n');
+#endif
                     if (op == 0u) {
                         cpu_neg_reg(bits, values[vi], ccrs[ci],
                                     &got_result, &got_ccr);
@@ -4579,6 +4613,11 @@ static void test_rotate_register_differential(void)
                         uint32_t exp_result;
                         uint32_t exp_ccr;
 
+#ifdef CORETEST_SIM_TRACE_ROTATE
+                        uart_puts("RT ");
+                        uart_hex32(id);
+                        uart_putc('\n');
+#endif
                         cpu_rotate_reg(op, bits, count, values[vi], xi,
                                        &got_result, &got_ccr);
                         exp_ccr = rotate_reg_ref(op, bits, values[vi], count, xi,
@@ -5070,6 +5109,7 @@ static void test_system_control_directed(void)
     chk_exception_frame(0x000a0090u, 0x0080u, 0x0000u, 0x2000u, 0x0000u);
     chk32(0x000a00a8u, got, RETURN_TEST_BASE + 0xe0u);
 
+    wr32(FC_PROBE_ARM, FC_PROBE_DATA_PROG);
     wr32(DATA_FC_TEST_BASE + 0x00u, 0x1234abcdu);
     wr32(DATA_FC_TEST_BASE + 0x04u, 0xfeedfaceu);
     chk32(0x00160040u, rd32(DATA_FC_TEST_BASE + 0x04u), 0xfeedfaceu);
@@ -5137,6 +5177,7 @@ static void test_system_control_directed(void)
         : "a0", "a1", "d0", "d1", "cc", "memory");
     chk_exception_frame(0x00160068u, 0x0080u, 0x0000u, 0x2000u, 0x0000u);
     chk32(0x00160080u, got, 0x6fu);
+    wr32(FC_PROBE_ARM, 0u);
 
     arm_exception_recovery(0x0020u);
     __asm__ volatile(
@@ -5203,6 +5244,194 @@ static void test_system_control_directed(void)
     chk_exception_frame(0x00130060u, 0x0020u, 0x0000u, 0x2700u, 0x0000u);
 }
 
+#ifdef CORETEST_CPU_TG68K030
+static void pmmu_write_tt0(uint32_t value)
+{
+    __asm__ volatile("pmove %0,%%tt0" : : "d"(value) : "memory");
+}
+
+static uint32_t pmmu_read_tt0(void)
+{
+    uint32_t value;
+
+    __asm__ volatile("pmove %%tt0,%0" : "=d"(value) : : "memory");
+    return value;
+}
+
+static void pmmu_write_tt1(uint32_t value)
+{
+    __asm__ volatile("pmove %0,%%tt1" : : "d"(value) : "memory");
+}
+
+static uint32_t pmmu_read_tt1(void)
+{
+    uint32_t value;
+
+    __asm__ volatile("pmove %%tt1,%0" : "=d"(value) : : "memory");
+    return value;
+}
+
+static void pmmu_write_tc(uint32_t value)
+{
+    __asm__ volatile("pmove %0,%%tc" : : "d"(value) : "memory");
+}
+
+static uint32_t pmmu_read_tc(void)
+{
+    uint32_t value;
+
+    __asm__ volatile("pmove %%tc,%0" : "=d"(value) : : "memory");
+    return value;
+}
+
+static void pmmu_load_crp(void)
+{
+    __asm__ volatile("pmove 0x01ffc000,%%crp" : : : "memory");
+}
+
+static void pmmu_store_crp(void)
+{
+    __asm__ volatile("pmove %%crp,0x01ffc008" : : : "memory");
+}
+
+static void test_pmmu_register_directed(void)
+{
+    const uint32_t root = 0x01ffb000u;
+    const uint32_t l2_ff = 0x01ffb400u;
+    const uint32_t l2_01 = 0x01ffb800u;
+    const uint32_t l3_test = 0x01ffbc00u;
+    const uint32_t l2_00 = 0x01ffc400u;
+    uint32_t translated_read;
+
+    pmmu_write_tt0(0x12347fffu);
+    chk32(0x002a0000u, pmmu_read_tt0(), 0x12340777u);
+    pmmu_write_tt0(0u);
+    chk32(0x002a0004u, pmmu_read_tt0(), 0u);
+
+    pmmu_write_tt1(0xabcd7555u);
+    chk32(0x002a0008u, pmmu_read_tt1(), 0xabcd0555u);
+    pmmu_write_tt1(0u);
+    chk32(0x002a000cu, pmmu_read_tt1(), 0u);
+
+    pmmu_write_tc(0u);
+    chk32(0x002a0010u, pmmu_read_tc(), 0u);
+    __asm__ volatile("pflusha" : : : "memory");
+
+    for (uint32_t i = 0; i < 256u; ++i) {
+        wr32(root + i * 4u, 0u);
+        wr32(l2_ff + i * 4u, 0u);
+        wr32(l2_01 + i * 4u, 0u);
+        wr32(l3_test + i * 4u, 0u);
+        wr32(l2_00 + i * 4u, 0u);
+    }
+
+    /* Short-format, used table pointers. Root limit admits all 256 entries. */
+    wr32(root + 0xffu * 4u, l2_ff | 0x0au);
+    wr32(root + 0x01u * 4u, l2_01 | 0x0au);
+    wr32(root + 0x00u * 4u, l2_00 | 0x0au);
+
+    /* Early-terminated identity regions keep ROM execution and RAM/stack live. */
+    for (uint32_t i = 0xe0u; i <= 0xe3u; ++i) {
+        wr32(l2_ff + i * 4u, 0xff000019u | (i << 16));
+    }
+    wr32(l2_ff + 0xf0u * 4u, 0xfff00019u);
+    for (uint32_t i = 0u; i <= 3u; ++i) {
+        wr32(l2_00 + i * 4u, 0x00000019u | (i << 16));
+    }
+    wr32(l2_01 + 0xffu * 4u, 0x01ff0019u);
+
+    /* One fully walked page proves that logical and physical addresses differ. */
+    wr32(l2_01 + 0x00u * 4u, l3_test | 0x0au);
+    wr32(l3_test + 0x20u * 4u, 0x01ff9019u);
+    wr32(l3_test + 0x30u * 4u, 0x01ffa01du);
+    wr32(0x01ff9000u, 0x4d4d5530u);
+    wr32(0x01ffa000u, 0x50524f54u);
+    progress_char('t');
+
+    wr32(0x01ffc000u, 0x00ff0002u);
+    wr32(0x01ffc004u, root);
+    pmmu_load_crp();
+    pmmu_store_crp();
+    chk32(0x002a0014u, rd32(0x01ffc008u), 0x00ff0002u);
+    chk32(0x002a0018u, rd32(0x01ffc00cu), root);
+    progress_char('c');
+
+    /* E=1, PS=8, IS=0, TIA/TIB/TIC=8: 8+8+8+8 = 32. */
+    progress_char('e');
+    pmmu_write_tc(0x80808880u);
+    translated_read = rd32(0x01002000u);
+    wr32(0x01002000u, 0x57414c4bu);
+    pmmu_write_tc(0u);
+    progress_char('x');
+
+    chk32(0x002a001cu, translated_read, 0x4d4d5530u);
+    chk32(0x002a0020u, rd32(0x01ff9000u), 0x57414c4bu);
+    chk32(0x002a0024u, pmmu_read_tc(), 0u);
+
+    /* An invalid root entry must raise a recoverable 68030 access fault. */
+    wr32(EXC_ALT_VBR + 0x08u, (uint32_t)(uintptr_t)_h_recover);
+    arm_exception_recovery_skip_data_cycle(0x0008u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284"
+        :
+        :
+        : "a0", "d0", "memory");
+    __asm__ volatile("pflusha" : : : "memory");
+    pmmu_write_tc(0x80808880u);
+    __asm__ volatile(
+        "move.l 0x02000000,%%d1\n\t"
+        "move.l #0x00badbad,%%d1\n"
+        "1:"
+        :
+        :
+        : "d1", "memory");
+    pmmu_write_tc(0u);
+    __asm__ volatile(
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr"
+        :
+        :
+        : "d0", "memory");
+    chk_access_fault_frame(0x002a0030u, 0x0008u, 0x2000u, 0x2000u, 0u);
+    progress_char('i');
+
+    /* WP must fault before the translated write reaches physical memory. */
+    arm_exception_recovery_skip_data_cycle(0x0008u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284"
+        :
+        :
+        : "a0", "d0", "memory");
+    __asm__ volatile("pflusha" : : : "memory");
+    pmmu_write_tc(0x80808880u);
+    __asm__ volatile(
+        "move.l #0x57504641,0x01003000\n\t"
+        "move.l #0x00badbad,%%d1\n"
+        "1:"
+        :
+        :
+        : "d1", "memory");
+    pmmu_write_tc(0u);
+    __asm__ volatile(
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr"
+        :
+        :
+        : "d0", "memory");
+    chk_access_fault_frame(0x002a0050u, 0x0008u, 0x2000u, 0x2000u, 0u);
+    chk32(0x002a0068u, rd32(0x01ffa000u), 0x50524f54u);
+    progress_char('w');
+
+    mark(0x002af000u, 0x706d6d75u);
+}
+#endif
+
 static void test_moves_directed(void)
 {
     uint32_t got0;
@@ -5210,6 +5439,7 @@ static void test_moves_directed(void)
     uint32_t got2;
     uint32_t got3;
 
+    progress_char('a');
     wr32(MOVES_TEST_BASE + 0x00u, 0u);
     wr32(MOVES_TEST_BASE + 0x04u, 0u);
     __asm__ volatile(
@@ -5235,6 +5465,8 @@ static void test_moves_directed(void)
     chk32(0x000a0108u, rd32(MOVES_TEST_BASE + 0x04u), 0x01020304u);
     chk32(0x000a010cu, got1, 0x01020304u);
 
+    progress_char('A');
+    progress_char('b');
     wr32(MOVES_TEST_BASE + 0x10u, 0u);
     __asm__ volatile(
         "moveq #1,%%d2\n\t"
@@ -5258,6 +5490,8 @@ static void test_moves_directed(void)
     chk32(0x000a0128u, got1, 0x000000a5u);
     chk32(0x000a012cu, got2, MOVES_TEST_BASE + 0x12u);
 
+    progress_char('B');
+    progress_char('c');
     wr32(MOVES_TEST_BASE + 0x20u, 0u);
     __asm__ volatile(
         "moveq #1,%%d2\n\t"
@@ -5280,6 +5514,8 @@ static void test_moves_directed(void)
     chk32(0x000a0138u, got1, 0x0000b6c7u);
     chk32(0x000a013cu, got2, MOVES_TEST_BASE + 0x22u);
 
+    progress_char('C');
+    progress_char('d');
     wr32(MOVES_EXT_TEST_BASE + 0x00u, 0xe55a9abcu);
     __asm__ volatile(
         "moveq #1,%%d2\n\t"
@@ -5303,6 +5539,8 @@ static void test_moves_directed(void)
     chk32(0x000a0148u, got2, 0x87659abcu);
     chk32(0x000a014cu, got3, MOVES_EXT_TEST_BASE + 0x04u);
 
+    progress_char('D');
+    progress_char('e');
     wr32(MOVES_EXT_TEST_BASE + 0x40u, 0u);
     __asm__ volatile(
         "moveq #1,%%d2\n\t"
@@ -5317,6 +5555,8 @@ static void test_moves_directed(void)
     chk32(0x000a0150u, rd32(MOVES_EXT_TEST_BASE + 0x40u), MOVES_EXT_TEST_BASE + 0x44u);
     chk32(0x000a0154u, got0, MOVES_EXT_TEST_BASE + 0x40u);
 
+    progress_char('v');
+    progress_char('f');
     wr32(MOVES_EXT_TEST_BASE + 0x50u, MOVES_EXT_TEST_BASE + 0x64u);
     __asm__ volatile(
         "moveq #1,%%d2\n\t"
@@ -5330,6 +5570,8 @@ static void test_moves_directed(void)
         : "a3", "d2", "memory");
     chk32(0x000a0160u, got0, MOVES_EXT_TEST_BASE + 0x64u);
 
+    progress_char('F');
+    progress_char('g');
     wr32(MOVES_TEST_BASE + 0x30u, 0x11223344u);
     wr32(MOVES_TEST_BASE + 0x34u, 0x55667788u);
     __asm__ volatile(
@@ -5354,6 +5596,8 @@ static void test_moves_directed(void)
     chk32(0x000a017cu, got1, 0xa1b2c3d4u);
     chk32(0x000a0180u, got2, MOVES_TEST_BASE + 0x35u);
 
+    progress_char('G');
+    progress_char('h');
     wr32(MOVES_TEST_BASE + 0x40u, 0x22334455u);
     __asm__ volatile(
         "moveq #1,%%d2\n\t"
@@ -5374,6 +5618,9 @@ static void test_moves_directed(void)
     chk32(0x000a0194u, got0, MOVES_TEST_BASE + 0x41u);
     chk32(0x000a0198u, got1, 0x00006e7fu);
 
+    progress_char('H');
+    wr32(FC_PROBE_ARM, FC_PROBE_MOVES);
+    progress_char('i');
     wr32(MOVES_FC_TEST_BASE + 0x00u, 0x13579bdfu);
     __asm__ volatile(
         "moveq #2,%%d2\n\t"
@@ -5394,6 +5641,8 @@ static void test_moves_directed(void)
     chk32(0x00160000u, got0, 0x13579bdfu);
     chk32(0x00160004u, rd32(MOVES_FC_TEST_BASE + 0x04u), 0x13579bdfu);
 
+    progress_char('I');
+    progress_char('j');
     wr32(MOVES_FC_TEST_BASE + 0x00u, 0x2468ace0u);
     __asm__ volatile(
         "moveq #2,%%d2\n\t"
@@ -5415,6 +5664,8 @@ static void test_moves_directed(void)
         : "a0", "a1", "d0", "d2", "d3", "d4", "cc", "memory");
     chk32(0x00160008u, got0, 0x2468ace0u);
     chk32(0x0016000cu, rd32(MOVES_FC_TEST_BASE + 0x04u), 0x2468ace0u);
+    wr32(FC_PROBE_ARM, 0u);
+    progress_char('J');
 }
 
 static void test_cmp2_chk2_directed(void)
@@ -5628,6 +5879,7 @@ static void test_cmp2_chk2_directed(void)
         :
         : "a0", "a1", "d0", "d1", "cc", "memory");
     chk_exception_frame(0x00120000u, 0x0018u, 0x2000u, 0x2700u, 0x2700u);
+    chk_exception_pc(0x00120018u, rd32(EXC_RECOVERY_PC));
 
     arm_exception_recovery(0x0018u);
     __asm__ volatile(
@@ -5645,6 +5897,7 @@ static void test_cmp2_chk2_directed(void)
         :
         : "a0", "a1", "d0", "d1", "cc", "memory");
     chk_exception_frame(0x00120020u, 0x0018u, 0x2000u, 0x2700u, 0x2700u);
+    chk_exception_pc(0x00120038u, rd32(EXC_RECOVERY_PC));
 }
 
 static void test_chk_directed(void)
@@ -6698,6 +6951,50 @@ static void test_pack_unpk_directed(void)
     chk32(0x000a067cu, rd32(PACK_TEST_BASE + 0xd0u), 0x11040844u);
 }
 
+#ifdef CORETEST_SIM_FOCUS_SDRAM_BERR
+static void test_sdram_combined_write_berr(void)
+{
+    uint32_t ready = 0u;
+
+    for (uint32_t i = 0; i < 1000000u; ++i) {
+        ready = VESTA->SYS_STATUS & SYS_SDRAM_READY;
+        if (ready != 0u) break;
+    }
+    chk32(0x00100600u, ready, SYS_SDRAM_READY);
+
+    wr32(BERR_SDRAM_TARGET, 0x0badcafeu);
+    chk32(0x00100604u, rd32(BERR_SDRAM_TARGET), 0x0badcafeu);
+
+    for (uint32_t off = 0; off < 0x100u; off += 4u) {
+        wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
+    }
+    wr32(EXC_ALT_VBR + 0x08u, (uint32_t)(uintptr_t)_h_recover);
+    arm_exception_recovery(0x0008u);
+
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.l #0x13579bdf,%%d1\n\t"
+        "move.l #" BERR_ARM_SDRAM_SUP_DATA_WRITE ",0xfff00604\n\t"
+        "move.l %%d1,0x02000100\n\t"
+        "move.l #0xbadbad,%%d1\n"
+        "1:\n\t"
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr"
+        :
+        :
+        : "a0", "d0", "d1", "cc", "memory");
+
+    chk_access_fault_frame(0x00100610u, 0x0008u, 0x2000u, 0x2000u, 0u);
+    chk_access_fault_status(0x00100628u, 0x0105u);
+    chk_access_fault_long(0x00100630u, 0x34u, 0x13579bdfu);
+    chk_access_fault_long(0x0010062cu, 0x2cu, BERR_SDRAM_TARGET);
+    chk32(0x00100634u, rd32(BERR_SDRAM_TARGET), 0x13579bdfu);
+}
+#endif
+
 static void test_exception_recovery_directed(void)
 {
     arm_exception_recovery(0x000cu);
@@ -6724,13 +7021,22 @@ static void test_exception_recovery_directed(void)
     wr32(EXC_ALT_VBR + 0x08u, (uint32_t)(uintptr_t)_h_recover);
     wr32(BERR_SIM_TARGET, 0x5a5aa55au);
     arm_exception_recovery(0x0008u);
+    progress_char('k');
+#ifdef CORETEST_SIM_PROGRESS
+    __asm__ volatile(
+        "move.l %%sp,0x01ff92b0\n\t"
+        "move.l %%a6,0x01ff92b4"
+        :
+        :
+        : "memory");
+#endif
     __asm__ volatile(
         "move.l #0x01ff9500,%%d0\n\t"
         "movec %%d0,%%vbr\n\t"
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
-        "move.l #" BERR_ARM_SUP_DATA_READ ",0x01ff9604\n\t"
-        "move.l 0x01ff9608,%%d1\n\t"
+        "move.l #" BERR_ARM_SUP_DATA_READ ",0xfff00604\n\t"
+        "move.l 0xfff00608,%%d1\n\t"
         "move.l #0xbadbad,%%d1\n"
         "1:\n\t"
         "moveq #0,%%d0\n\t"
@@ -6738,10 +7044,23 @@ static void test_exception_recovery_directed(void)
         :
         :
         : "a0", "d0", "d1", "cc", "memory");
+#ifdef CORETEST_SIM_PROGRESS
+    __asm__ volatile(
+        "move.l %%sp,0x01ff92b8\n\t"
+        "move.l %%a6,0x01ff92bc\n\t"
+        "move.l #0x6a,0xfff00500"
+        :
+        :
+        : "memory");
+#endif
+    progress_char('K');
     chk_access_fault_frame(0x00100720u, 0x0008u, 0x2000u, 0x2000u, 0u);
-    chk_access_fault_status(0x00100738u, 0x0165u);
-    chk_access_fault_long(0x001007a0u, 0x24u, 0x22390165u);
+    progress_char('l');
+    chk_access_fault_status(0x00100738u, 0x0145u);
+    progress_char('L');
+    chk_access_fault_long(0x001007a0u, 0x24u, 0x22390145u);
     chk_access_fault_long(0x001007a8u, 0x2cu, BERR_SIM_TARGET);
+    progress_char('m');
 
     arm_exception_recovery(0x0008u);
     __asm__ volatile(
@@ -6750,8 +7069,8 @@ static void test_exception_recovery_directed(void)
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
         "move.l #0x13579bdf,%%d1\n\t"
-        "move.l #" BERR_ARM_SUP_DATA_WRITE ",0x01ff9604\n\t"
-        "move.l %%d1,0x01ff9608\n\t"
+        "move.l #" BERR_ARM_SUP_DATA_WRITE ",0xfff00604\n\t"
+        "move.l %%d1,0xfff00608\n\t"
         "move.l #0xbadbad,%%d1\n"
         "1:\n\t"
         "moveq #0,%%d0\n\t"
@@ -6760,8 +7079,8 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "d0", "d1", "cc", "memory");
     chk_access_fault_frame(0x00100740u, 0x0008u, 0x2000u, 0x2000u, 0u);
-    chk_access_fault_status(0x00100758u, 0x0125u);
-    chk_access_fault_long(0x001007b0u, 0x24u, 0x23c10125u);
+    chk_access_fault_status(0x00100758u, 0x0105u);
+    chk_access_fault_long(0x001007b0u, 0x24u, 0x23c10105u);
     chk_access_fault_long(0x001007b8u, 0x2cu, BERR_SIM_TARGET);
 
     wr32(BERR_SIM_TARGET, 0x4e754e71u);
@@ -6771,8 +7090,8 @@ static void test_exception_recovery_directed(void)
         "movec %%d0,%%vbr\n\t"
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
-        "move.l #" BERR_ARM_SUP_PROG_READ ",0x01ff9604\n\t"
-        "move.l #0x01ff9608,%%a1\n\t"
+        "move.l #" BERR_ARM_SUP_PROG_READ ",0xfff00604\n\t"
+        "move.l #0xfff00608,%%a1\n\t"
         "jsr (%%a1)\n\t"
         "move.l #0xbadbad,%%d1\n"
         "1:\n\t"
@@ -6796,8 +7115,8 @@ static void test_exception_recovery_directed(void)
         "movec %%d0,%%vbr\n\t"
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
-        "move.l #" BERR_ARM_SUP_DATA_READ ",0x01ff9604\n\t"
-        "move.b 0x01ff9608,%%d1\n\t"
+        "move.l #" BERR_ARM_SUP_DATA_READ ",0xfff00604\n\t"
+        "move.b 0xfff00608,%%d1\n\t"
         "move.l #0xbadbad,%%d1\n"
         "1:\n\t"
         "moveq #0,%%d0\n\t"
@@ -6806,7 +7125,7 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "d0", "d1", "cc", "memory");
     chk_access_fault_frame(0x00100b00u, 0x0008u, 0x2000u, 0x2000u, 0u);
-    chk_access_fault_status(0x00100b18u, 0x0145u);
+    chk_access_fault_status(0x00100b18u, 0x0155u);
     chk_access_fault_long(0x00100b1cu, 0x2cu, BERR_SIM_TARGET);
 
     wr32(BERR_SIM_TARGET, 0x55aaa55au);
@@ -6816,8 +7135,8 @@ static void test_exception_recovery_directed(void)
         "movec %%d0,%%vbr\n\t"
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
-        "move.l #" BERR_ARM_SUP_DATA_READ ",0x01ff9604\n\t"
-        "move.w 0x01ff9608,%%d1\n\t"
+        "move.l #" BERR_ARM_SUP_DATA_READ ",0xfff00604\n\t"
+        "move.w 0xfff00608,%%d1\n\t"
         "move.l #0xbadbad,%%d1\n"
         "1:\n\t"
         "moveq #0,%%d0\n\t"
@@ -6826,7 +7145,7 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "d0", "d1", "cc", "memory");
     chk_access_fault_frame(0x00100b20u, 0x0008u, 0x2000u, 0x2000u, 0u);
-    chk_access_fault_status(0x00100b38u, 0x0155u);
+    chk_access_fault_status(0x00100b38u, 0x0165u);
     chk_access_fault_long(0x00100b3cu, 0x2cu, BERR_SIM_TARGET);
 
     wr32(BERR_SIM_TARGET, 0x01020304u);
@@ -6837,8 +7156,8 @@ static void test_exception_recovery_directed(void)
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
         "move.l #0x13579bdf,%%d1\n\t"
-        "move.l #" BERR_ARM_SUP_DATA_WRITE ",0x01ff9604\n\t"
-        "move.b %%d1,0x01ff9608\n\t"
+        "move.l #" BERR_ARM_SUP_DATA_WRITE ",0xfff00604\n\t"
+        "move.b %%d1,0xfff00608\n\t"
         "move.l #0xbadbad,%%d1\n"
         "1:\n\t"
         "moveq #0,%%d0\n\t"
@@ -6847,7 +7166,7 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "d0", "d1", "cc", "memory");
     chk_access_fault_frame(0x00100b40u, 0x0008u, 0x2000u, 0x2000u, 0u);
-    chk_access_fault_status(0x00100b58u, 0x0105u);
+    chk_access_fault_status(0x00100b58u, 0x0115u);
     chk_access_fault_long(0x00100b5cu, 0x2cu, BERR_SIM_TARGET);
 
     wr32(BERR_SIM_TARGET, 0x11223344u);
@@ -6858,8 +7177,8 @@ static void test_exception_recovery_directed(void)
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
         "move.l #0x2468ace0,%%d1\n\t"
-        "move.l #" BERR_ARM_SUP_DATA_WRITE ",0x01ff9604\n\t"
-        "move.w %%d1,0x01ff9608\n\t"
+        "move.l #" BERR_ARM_SUP_DATA_WRITE ",0xfff00604\n\t"
+        "move.w %%d1,0xfff00608\n\t"
         "move.l #0xbadbad,%%d1\n"
         "1:\n\t"
         "moveq #0,%%d0\n\t"
@@ -6868,7 +7187,7 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "d0", "d1", "cc", "memory");
     chk_access_fault_frame(0x00100b60u, 0x0008u, 0x2000u, 0x2000u, 0u);
-    chk_access_fault_status(0x00100b78u, 0x0115u);
+    chk_access_fault_status(0x00100b78u, 0x0125u);
     chk_access_fault_long(0x00100b7cu, 0x2cu, BERR_SIM_TARGET);
 
     wr32(BERR_SIM_TARGET, 0x00000000u);
@@ -6878,8 +7197,8 @@ static void test_exception_recovery_directed(void)
         "movec %%d0,%%vbr\n\t"
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
-        "move.l #" BERR_ARM_SUP_RMC_DATA_READ ",0x01ff9604\n\t"
-        "tas.b 0x01ff9608\n\t"
+        "move.l #" BERR_ARM_SUP_RMC_DATA_READ ",0xfff00604\n\t"
+        "tas.b 0xfff00608\n\t"
         "move.l #0xbadbad,%%d1\n"
         "1:\n\t"
         "moveq #0,%%d0\n\t"
@@ -6888,7 +7207,7 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "d0", "d1", "cc", "memory");
     chk_access_fault_frame(0x00100b80u, 0x0008u, 0x2000u, 0x2000u, 0u);
-    chk_access_fault_status(0x00100b98u, 0x01c5u);
+    chk_access_fault_status(0x00100b98u, 0x01d5u);
     chk_access_fault_long(0x00100b9cu, 0x2cu, BERR_SIM_TARGET);
 
     wr32(BERR_SIM_TARGET, 0x01020304u);
@@ -6900,8 +7219,8 @@ static void test_exception_recovery_directed(void)
         "move.l %%a0,0x01ff9284\n\t"
         "move.l #0x01020304,%%d1\n\t"
         "move.l #0x11223344,%%d2\n\t"
-        "move.l #" BERR_ARM_SUP_RMC_DATA_READ ",0x01ff9604\n\t"
-        "cas.l %%d1,%%d2,0x01ff9608\n\t"
+        "move.l #" BERR_ARM_SUP_RMC_DATA_READ ",0xfff00604\n\t"
+        "cas.l %%d1,%%d2,0xfff00608\n\t"
         "move.l #0xbadbad,%%d2\n"
         "1:\n\t"
         "moveq #0,%%d0\n\t"
@@ -6910,7 +7229,7 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "d0", "d1", "d2", "cc", "memory");
     chk_access_fault_frame(0x00100ba0u, 0x0008u, 0x2000u, 0x2000u, 0u);
-    chk_access_fault_status(0x00100bb8u, 0x01e5u);
+    chk_access_fault_status(0x00100bb8u, 0x01c5u);
     chk_access_fault_long(0x00100bbcu, 0x2cu, BERR_SIM_TARGET);
 
     wr32(BERR_SIM_TARGET, 0x5aa55aa5u);
@@ -6923,8 +7242,8 @@ static void test_exception_recovery_directed(void)
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
         "move.w #0x0000,%%sr\n\t"
-        "move.l #" BERR_ARM_USER_DATA_READ ",0x01ff9604\n\t"
-        "move.l 0x01ff9608,%%d1\n\t"
+        "move.l #" BERR_ARM_USER_DATA_READ ",0xfff00604\n\t"
+        "move.l 0xfff00608,%%d1\n\t"
         "move.l #0xbadbad,%%d1\n"
         "1:\n\t"
         "moveq #0,%%d0\n\t"
@@ -6933,7 +7252,7 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "a1", "d0", "d1", "cc", "memory");
     chk_access_fault_frame(0x00100bc0u, 0x0008u, 0x2000u, 0x0000u, 0u);
-    chk_access_fault_status(0x00100bd8u, 0x0161u);
+    chk_access_fault_status(0x00100bd8u, 0x0141u);
     chk_access_fault_long(0x00100bdcu, 0x2cu, BERR_SIM_TARGET);
 
     wr32(BERR_SIM_TARGET, 0x01020304u);
@@ -6947,8 +7266,8 @@ static void test_exception_recovery_directed(void)
         "move.l %%a0,0x01ff9284\n\t"
         "move.l #0x11223344,%%d1\n\t"
         "move.w #0x0000,%%sr\n\t"
-        "move.l #" BERR_ARM_USER_DATA_WRITE ",0x01ff9604\n\t"
-        "move.l %%d1,0x01ff9608\n\t"
+        "move.l #" BERR_ARM_USER_DATA_WRITE ",0xfff00604\n\t"
+        "move.l %%d1,0xfff00608\n\t"
         "move.l #0xbadbad,%%d1\n"
         "1:\n\t"
         "moveq #0,%%d0\n\t"
@@ -6957,7 +7276,7 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "a1", "d0", "d1", "cc", "memory");
     chk_access_fault_frame(0x00100be0u, 0x0008u, 0x2000u, 0x0000u, 0u);
-    chk_access_fault_status(0x00100bf8u, 0x0121u);
+    chk_access_fault_status(0x00100bf8u, 0x0101u);
     chk_access_fault_long(0x00100bfcu, 0x2cu, BERR_SIM_TARGET);
 
     wr32(BERR_SIM_TARGET, 0x4e754e71u);
@@ -6970,8 +7289,8 @@ static void test_exception_recovery_directed(void)
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
         "move.w #0x0000,%%sr\n\t"
-        "move.l #" BERR_ARM_USER_PROG_READ ",0x01ff9604\n\t"
-        "jsr 0x01ff9608\n\t"
+        "move.l #" BERR_ARM_USER_PROG_READ ",0xfff00604\n\t"
+        "jsr 0xfff00608\n\t"
         "move.l #0xbadbad,%%d1\n"
         "1:\n\t"
         "moveq #0,%%d0\n\t"
@@ -6991,13 +7310,13 @@ static void test_exception_recovery_directed(void)
         "movec %%d4,%%vbr\n\t"
         "lea 1f,%%a1\n\t"
         "move.l %%a1,0x01ff9284\n\t"
-        "lea 0x01ff9608,%%a0\n\t"
-        "lea 0x01ff960c,%%a1\n\t"
+        "lea 0xfff00608,%%a0\n\t"
+        "lea 0xfff0060c,%%a1\n\t"
         "move.l #0x11111111,%%d0\n\t"
         "move.l #0xaaaaaaaa,%%d1\n\t"
         "move.l #0x22222222,%%d2\n\t"
         "move.l #0xbbbbbbbb,%%d3\n\t"
-        "move.l #" BERR_ARM_SUP_RMC_DATA_READ ",0x01ff9604\n\t"
+        "move.l #" BERR_ARM_SUP_RMC_DATA_READ ",0xfff00604\n\t"
         "cas2.l %%d0:%%d2,%%d1:%%d3,(%%a0):(%%a1)\n\t"
         "move.l #0xbadbad,%%d3\n"
         "1:\n\t"
@@ -7007,7 +7326,7 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "a1", "d0", "d1", "d2", "d3", "d4", "cc", "memory");
     chk_access_fault_frame(0x00100c20u, 0x0008u, 0x2000u, 0x2000u, 0u);
-    chk_access_fault_status(0x00100c38u, 0x01e5u);
+    chk_access_fault_status(0x00100c38u, 0x01c5u);
     chk_access_fault_long(0x00100c3cu, 0x2cu, BERR_SIM_TARGET);
 
     wr32(BERR_SIM_TARGET, 0x33333333u);
@@ -7018,13 +7337,13 @@ static void test_exception_recovery_directed(void)
         "movec %%d4,%%vbr\n\t"
         "lea 1f,%%a1\n\t"
         "move.l %%a1,0x01ff9284\n\t"
-        "lea 0x01ff960c,%%a0\n\t"
-        "lea 0x01ff9608,%%a1\n\t"
+        "lea 0xfff0060c,%%a0\n\t"
+        "lea 0xfff00608,%%a1\n\t"
         "move.l #0x44444444,%%d0\n\t"
         "move.l #0xaaaaaaaa,%%d1\n\t"
         "move.l #0x33333333,%%d2\n\t"
         "move.l #0xbbbbbbbb,%%d3\n\t"
-        "move.l #" BERR_ARM_SUP_RMC_DATA_READ ",0x01ff9604\n\t"
+        "move.l #" BERR_ARM_SUP_RMC_DATA_READ ",0xfff00604\n\t"
         "cas2.l %%d0:%%d2,%%d1:%%d3,(%%a0):(%%a1)\n\t"
         "move.l #0xbadbad,%%d3\n"
         "1:\n\t"
@@ -7034,7 +7353,7 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "a1", "d0", "d1", "d2", "d3", "d4", "cc", "memory");
     chk_access_fault_frame(0x00100c40u, 0x0008u, 0x2000u, 0x2000u, 0u);
-    chk_access_fault_status(0x00100c58u, 0x01e5u);
+    chk_access_fault_status(0x00100c58u, 0x01c5u);
     chk_access_fault_long(0x00100c5cu, 0x2cu, BERR_SIM_TARGET);
 #endif
 
@@ -7091,6 +7410,23 @@ static void test_exception_recovery_directed(void)
     chk_exception_frame(0x00100030u, 0x0010u, 0x0000u, 0x2000u, 0x2000u);
     chk_exception_pc(0x00100808u, rd32(EXC_EXPECTED_ADDR));
 
+#ifdef CORETEST_CPU_TG68K030
+    {
+        uint32_t cacr_readback;
+
+        __asm__ volatile(
+            "moveq #0,%%d0\n\t"
+            ".word 0x4e7b,0x0002\n\t"   /* movec d0,cacr */
+            "moveq #1,%%d0\n\t"
+            ".word 0x4e7a,0x0002\n\t"   /* movec cacr,d0 */
+            "move.l %%d0,%0"
+            : "=d"(cacr_readback)
+            :
+            : "d0", "memory");
+        chk32(0x00100640u, cacr_readback, 0u);
+        chk32(0x00100660u, 1u, 1u);
+    }
+#else
     arm_exception_recovery(0x0010u);
     __asm__ volatile(
         "lea 2f,%%a0\n\t"
@@ -7121,6 +7457,7 @@ static void test_exception_recovery_directed(void)
         : "a0", "d0", "memory");
     chk_exception_frame(0x00100660u, 0x0010u, 0x0000u, 0x2000u, 0x2000u);
     chk_exception_pc(0x00100678u, rd32(EXC_EXPECTED_ADDR));
+#endif
 
     {
         uint32_t divu_w_pc;
@@ -7531,7 +7868,11 @@ static void test_exception_recovery_directed(void)
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
         "2:\n\t"
+#ifdef CORETEST_CPU_TG68K030
+        ".word 0xf200\n"
+#else
         ".word 0xf000\n"
+#endif
         "1:"
         :
         :
@@ -7643,7 +7984,7 @@ static void test_interrupt_autovector_directed(void)
         "movec %%d0,%%vbr\n\t"
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
-        "move.l #3,0x01ff9600\n\t"
+        "move.l #3,0xfff00600\n\t"
         "move.w #0x2000,%%sr\n\t"
         "nop\n\t"
         "nop\n\t"
@@ -7657,7 +7998,7 @@ static void test_interrupt_autovector_directed(void)
         "move.w #0x2700,%%sr\n\t"
         "moveq #0,%%d0\n\t"
         "movec %%d0,%%vbr\n\t"
-        "move.l #0,0x01ff9600"
+        "move.l #0,0xfff00600"
         :
         :
         : "a0", "d0", "cc", "memory");
@@ -7675,13 +8016,13 @@ static void test_interrupt_autovector_directed(void)
         "movec %%d0,%%vbr\n\t"
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
-        "move.l #3,0x01ff9600\n\t"
+        "move.l #3,0xfff00600\n\t"
         "stop #0x2000\n"
         "1:\n\t"
         "move.w #0x2700,%%sr\n\t"
         "moveq #0,%%d0\n\t"
         "movec %%d0,%%vbr\n\t"
-        "move.l #0,0x01ff9600"
+        "move.l #0,0xfff00600"
         :
         :
         : "a0", "d0", "cc", "memory");
@@ -7699,7 +8040,7 @@ static void test_interrupt_autovector_directed(void)
         "movec %%d0,%%vbr\n\t"
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
-        "move.l #3,0x01ff9600\n\t"
+        "move.l #3,0xfff00600\n\t"
         "move.w #0x2300,%%sr\n\t"
         "nop\n\t"
         "nop\n\t"
@@ -7712,7 +8053,7 @@ static void test_interrupt_autovector_directed(void)
         "1:\n\t"
         "move.w %%sr,%%d1\n\t"
         "move.w #0x2700,%%sr\n\t"
-        "move.l #0,0x01ff9600\n\t"
+        "move.l #0,0xfff00600\n\t"
         "moveq #0,%%d0\n\t"
         "movec %%d0,%%vbr\n\t"
         "move.l %%d1,%0"
@@ -7734,7 +8075,7 @@ static void test_interrupt_autovector_directed(void)
         "movec %%d0,%%vbr\n\t"
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
-        "move.l #5,0x01ff9600\n\t"
+        "move.l #5,0xfff00600\n\t"
         "move.w #0x2300,%%sr\n\t"
         "nop\n\t"
         "nop\n\t"
@@ -7746,7 +8087,7 @@ static void test_interrupt_autovector_directed(void)
         "nop\n"
         "1:\n\t"
         "move.w #0x2700,%%sr\n\t"
-        "move.l #0,0x01ff9600\n\t"
+        "move.l #0,0xfff00600\n\t"
         "moveq #0,%%d0\n\t"
         "movec %%d0,%%vbr"
         :
@@ -7767,7 +8108,7 @@ static void test_interrupt_autovector_directed(void)
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
         "move.w #0x2700,%%sr\n\t"
-        "move.l #7,0x01ff9600\n\t"
+        "move.l #7,0xfff00600\n\t"
         "nop\n\t"
         "nop\n\t"
         "nop\n\t"
@@ -7778,7 +8119,7 @@ static void test_interrupt_autovector_directed(void)
         "nop\n"
         "1:\n\t"
         "move.w #0x2700,%%sr\n\t"
-        "move.l #0,0x01ff9600\n\t"
+        "move.l #0,0xfff00600\n\t"
         "moveq #0,%%d0\n\t"
         "movec %%d0,%%vbr"
         :
@@ -7809,12 +8150,12 @@ static void test_interrupt_autovector_directed(void)
         "addq.l #1,%%d3\n\t"
         "cmp.l #4,%%d3\n\t"
         "bne 2f\n\t"
-        "move.l #3,0x01ff9600\n"
+        "move.l #3,0xfff00600\n"
         "2:\n\t"
         "dbra %%d2,1b\n"
         "3:\n\t"
         "move.w #0x2700,%%sr\n\t"
-        "move.l #0,0x01ff9600\n\t"
+        "move.l #0,0xfff00600\n\t"
         "moveq #0,%%d0\n\t"
         "movec %%d0,%%vbr\n\t"
         "move.l %%d3,%2\n\t"
@@ -7859,7 +8200,7 @@ static void test_interrupt_autovector_directed(void)
         "move.l %%a0,%%usp\n\t"
         "lea 2f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
-        "move.l #3,0x01ff9600\n\t"
+        "move.l #3,0xfff00600\n\t"
         "move.w #0x0000,%%sr\n"
         "1:\n\t"
         "tst.l 0x01ff9270\n\t"
@@ -7875,7 +8216,7 @@ static void test_interrupt_autovector_directed(void)
         "move.l %%usp,%%a0\n\t"
         "movem.l %%a0,0x01ffb308\n\t"
         "move.w #0x2700,%%sr\n\t"
-        "move.l #0,0x01ff9600\n\t"
+        "move.l #0,0xfff00600\n\t"
         "moveq #0,%%d0\n\t"
         "movec %%d0,%%vbr\n\t"
         "move.l %%a2,%%sp"
@@ -10252,7 +10593,7 @@ static void test_div_overflow_register_directed(void)
         : "d0", "d1", "d2", "cc");
     chk32(0x00290000u, got0, 0x00010000u);
     chk32(0x00290004u, got1, 0x00000001u);
-    chk32(0x00290008u, got2 & 0x12u, 0x12u);
+    chk32(0x00290008u, got2 & 0x1fu, 0x12u);
 
     __asm__ volatile(
         "move.l #0x00008000,%%d0\n\t"
@@ -10268,7 +10609,7 @@ static void test_div_overflow_register_directed(void)
         : "d0", "d1", "d2", "cc");
     chk32(0x00290010u, got0, 0x00008000u);
     chk32(0x00290014u, got1, 0x00000001u);
-    chk32(0x00290018u, got2 & 0x12u, 0x12u);
+    chk32(0x00290018u, got2 & 0x1fu, 0x16u);
 
     __asm__ volatile(
         "move.l #0xffff7fff,%%d0\n\t"
@@ -10284,7 +10625,7 @@ static void test_div_overflow_register_directed(void)
         : "d0", "d1", "d2", "cc");
     chk32(0x00290020u, got0, 0xffff7fffu);
     chk32(0x00290024u, got1, 0x00000001u);
-    chk32(0x00290028u, got2 & 0x12u, 0x12u);
+    chk32(0x00290028u, got2 & 0x1fu, 0x12u);
 
     __asm__ volatile(
         "move.l #0x80000000,%%d0\n\t"
@@ -11902,7 +12243,132 @@ void kmain(void)
 {
     delay_poll_window();
     uart_puts("CORETEST START\n");
+    progress_char('0');
 
+#ifdef CORETEST_SIM_FOCUS_STACK
+    test_stack_frame_control_directed();
+#elif defined(CORETEST_SIM_FOCUS_SDRAM_BERR)
+    test_sdram_combined_write_berr();
+#elif defined(CORETEST_SIM_FOCUS_UNARY_ARITH)
+    test_unary_arith_register_differential();
+#elif defined(CORETEST_SIM_FOCUS_ROTATE)
+    test_rotate_register_differential();
+#elif defined(CORETEST_SIM_FOCUS_DIV)
+    test_div_word_register_differential();
+    progress_char('D');
+    test_div_overflow_register_directed();
+    progress_char('V');
+#elif defined(CORETEST_SIM_FOCUS_MOVEP_TAS_CAS)
+    test_movep_tas_cas_directed();
+#elif defined(CORETEST_SIM_FOCUS_MOVES)
+    test_moves_directed();
+#elif defined(CORETEST_SIM_FOCUS_PMMU)
+#ifdef CORETEST_CPU_TG68K030
+    test_pmmu_register_directed();
+    progress_char('P');
+#endif
+#elif defined(CORETEST_SIM_FOCUS_SYNTH_CLEANUP)
+    test_aligned_long();
+    test_unaligned_lanes_asm();
+    test_address_arithmetic_directed();
+    progress_char('a');
+    test_shift_register_differential();
+    progress_char('s');
+    test_rotate_register_differential();
+    progress_char('r');
+    test_system_control_directed();
+    progress_char('c');
+#ifdef CORETEST_CPU_TG68K030
+    test_pmmu_register_directed();
+    progress_char('P');
+#endif
+#ifdef CORETEST_SIM_IRQ
+    test_interrupt_autovector_directed();
+    progress_char('I');
+#endif
+#elif defined(CORETEST_SIM_FOCUS_IRQ)
+#ifdef CORETEST_SIM_IRQ
+    test_interrupt_autovector_directed();
+    progress_char('I');
+#endif
+#elif defined(CORETEST_SIM_FOCUS_EXCEPTION_RECOVERY)
+    test_exception_recovery_directed();
+    progress_char('e');
+#elif defined(CORETEST_SIM_FOCUS_POST3)
+    progress_char('x');
+    test_addx_subx_cmpm_memory_directed();
+    progress_char('z');
+    progress_char('y');
+    test_system_control_directed();
+    progress_char('Y');
+#ifndef CORETEST_SIM_SKIP_MOVES
+    progress_char('u');
+    test_moves_directed();
+    progress_char('U');
+#endif
+    progress_char('q');
+    test_cmp2_chk2_directed();
+    progress_char('Q');
+    progress_char('k');
+    test_chk_directed();
+    progress_char('K');
+    progress_char('c');
+    test_cas2_directed();
+    progress_char('C');
+    progress_char('r');
+    test_return_control_directed();
+    progress_char('R');
+#elif defined(CORETEST_SIM_FOCUS_POST4)
+    test_bcd_register_differential();
+    progress_char('B');
+    test_bcd_directed();
+    progress_char('C');
+    test_pack_unpk_register_differential();
+    progress_char('P');
+    test_pack_unpk_directed();
+    progress_char('p');
+#ifndef CORETEST_SIM_SKIP_EXCEPTION_RECOVERY
+    test_exception_recovery_directed();
+    progress_char('e');
+#endif
+#if defined(CORETEST_SIM_IRQ) && !defined(CORETEST_SIM_SKIP_IRQ)
+    test_interrupt_autovector_directed();
+    progress_char('I');
+#endif
+    test_alu_shift_bitfield_bcd_directed();
+    progress_char('A');
+    test_condition_codes_directed();
+    progress_char('N');
+    test_condition_consumers_directed();
+    progress_char('n');
+    test_bitops_register_differential();
+    progress_char('O');
+    test_bitops_directed();
+    progress_char('o');
+    test_mul_word_register_differential();
+    progress_char('M');
+    test_div_word_register_differential();
+    progress_char('D');
+    test_mul_long_register_differential();
+    progress_char('m');
+    test_mul_long_one_register_differential();
+    progress_char('1');
+    test_div_long_register_differential();
+    progress_char('d');
+    test_div_overflow_register_directed();
+    progress_char('V');
+    test_signed_mul_div_directed();
+    progress_char('S');
+    test_mul_div_memory_directed();
+    progress_char('s');
+    test_memory_bitfield_directed();
+    progress_char('F');
+    test_memory_bitfield_extended_directed();
+    progress_char('f');
+    test_movep_tas_cas_directed();
+    progress_char('T');
+    test_movep_displacement_directed();
+#else
     test_aligned_long();
     test_byte_lanes_c();
     test_word_lanes_c();
@@ -11911,55 +12377,101 @@ void kmain(void)
     test_full_format_indexed_memory_ops();
     test_indexed_ea_scale_directed();
     test_pc_indexed_data_directed();
+    progress_char('1');
     test_an_indexed_stores();
     test_an_post_pre_byte();
     test_memory_to_memory_move_directed();
     test_movem_directed();
     test_control_flow_directed();
     test_stack_frame_control_directed();
+    progress_char('2');
     test_address_arithmetic_directed();
+    progress_char('a');
     test_register_transform_directed();
+    progress_char('b');
     test_unary_logic_directed();
+    progress_char('c');
     test_immediate_alu_directed();
+    progress_char('d');
     test_data_alu_indexed_directed();
+    progress_char('e');
     test_data_alu_register_differential();
+    progress_char('f');
     test_xalu_register_differential();
+    progress_char('g');
     test_unary_arith_register_differential();
+    progress_char('h');
     test_unary_logic_register_differential();
+    progress_char('i');
     test_shift_register_differential();
+    progress_char('j');
     test_rotate_register_differential();
+    progress_char('3');
     test_addx_subx_cmpm_memory_directed();
     test_system_control_directed();
+#ifdef CORETEST_CPU_TG68K030
+    test_pmmu_register_directed();
+    progress_char('W');
+#endif
+#ifndef CORETEST_SIM_SKIP_MOVES
     test_moves_directed();
+#endif
     test_cmp2_chk2_directed();
     test_chk_directed();
     test_cas2_directed();
     test_return_control_directed();
+    progress_char('4');
     test_bcd_register_differential();
+    progress_char('B');
     test_bcd_directed();
+    progress_char('C');
     test_pack_unpk_register_differential();
+    progress_char('P');
     test_pack_unpk_directed();
+    progress_char('p');
+#ifndef CORETEST_SIM_SKIP_EXCEPTION_RECOVERY
     test_exception_recovery_directed();
-#ifdef CORETEST_SIM_IRQ
+    progress_char('e');
+#endif
+#if defined(CORETEST_SIM_IRQ) && !defined(CORETEST_SIM_SKIP_IRQ)
     test_interrupt_autovector_directed();
+    progress_char('I');
 #endif
     test_alu_shift_bitfield_bcd_directed();
+    progress_char('A');
     test_condition_codes_directed();
+    progress_char('N');
     test_condition_consumers_directed();
+    progress_char('n');
     test_bitops_register_differential();
+    progress_char('O');
     test_bitops_directed();
+    progress_char('o');
     test_mul_word_register_differential();
+    progress_char('M');
     test_div_word_register_differential();
+    progress_char('D');
     test_mul_long_register_differential();
+    progress_char('m');
     test_mul_long_one_register_differential();
+    progress_char('1');
     test_div_long_register_differential();
+    progress_char('d');
     test_div_overflow_register_directed();
+    progress_char('V');
     test_signed_mul_div_directed();
+    progress_char('S');
     test_mul_div_memory_directed();
+    progress_char('s');
     test_memory_bitfield_directed();
+    progress_char('F');
     test_memory_bitfield_extended_directed();
+    progress_char('f');
     test_movep_tas_cas_directed();
+    progress_char('T');
     test_movep_displacement_directed();
+#endif
+    progress_char('!');
 
     for (;;) {
         uart_puts("CORETEST PASS sum=");
