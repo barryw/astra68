@@ -2,6 +2,7 @@
 
 | Build ID | Bitstream SHA-256 | Date | Configuration | Result |
 |---|---|---|---|---|
+| `0xC6FECBC8` | `82d0ac4837752e8af946d7b93291ee22ac7fd0b01d6327a23bbe933403f7b403` | 2026-07-13 | TG68K.C 68030+PMMU, compact margined HDMI POST summary with verbose UART diagnostics, CPU 12.5 MHz, SDRAM 75 MHz/32 MiB, Astraea DMA, 720x480 HDMI, nextpnr seed 2 | SRAM hardware PASS followed by persistent SPI-flash write and reset-only flash boot PASS; complete CPU/cache/Astraea/full-range POST in 1.36-1.40 s |
 | `0xA0086302` | `a2ff4bd888ab130c00c94822c9b2618489c965a6155a2c7ed4ae2d46a403d8ea` | 2026-07-12 | TG68K.C 68030+PMMU, full-cycle I/D cache hits, one ordered posted write, CPU 12.5 MHz, SDRAM 75 MHz/32 MiB, Astraea DMA, 720x480 HDMI, nextpnr seed 2 | SRAM hardware PASS on 3/3 reconfiguration boots: complete CPU/cache/Astraea/full-range POST in 1.127-1.128 s; 16 KiB pointer loops reached 1.388/1.183 MB/s at 8-bit, 2.777/2.247 MB/s at 16-bit, and 4.542/4.935 MB/s at 32-bit write/read |
 | `0x7E17F8DC` | `ef2638b4670ba8b1b6005aa255087ec843cf624ee9f76fe1343a5e8bc414f30b` | 2026-07-12 | TG68K.C 68030+PMMU, CPU 12.5 MHz, SDRAM 75 MHz/32 MiB with read latency 3, Astraea DMA, 720x480 HDMI, nextpnr seed 1 | SRAM hardware PASS on 3/3 cold reconfiguration boots: all CPU width/alignment/address/cache checks, Astraea fill/copy, and four-sweep full-range BIST; 1.122 s per POST; DMA fill 118.36 MB/s, copy 51.40 MB/s |
 | `0x7FB5A559` | `f1c5d22955797e4a98e58401627823d59fdc3bd3b16f4bf48e1a104633928075` | 2026-07-12 | TG68K.C 68030+PMMU, CPU 12.5 MHz, SDRAM 75 MHz/32 MiB with read latency 3, 720x480 HDMI, nextpnr seed 1 | SRAM hardware PASS on 5/5 reconfiguration boots: all CPU width/alignment/address/cache checks and four-sweep full-range BIST; 1.098-1.100 s per POST |
@@ -19,5 +20,9 @@ Yosys reported zero SCCs; nextpnr reported no combinational loops and completed
 normally. The complete final-source TG030 core regression passed after 953 ms
 of simulated CPU time.
 
-The images were loaded into ULX3S SRAM only. Persistent SPI flash was not
-changed.
+For `0xC6FECBC8`, post-route utilization is 36,856 `TRELLIS_COMB`, 9,147
+`TRELLIS_FF`, 136 `DP16KD`, and 13 `MULT18X18D`. Final maximum frequencies are
+13.21 MHz CPU, 81.42 MHz SDRAM, 83.07 MHz pixel, and 252.84 MHz TMDS serializer.
+Yosys reported zero final SCCs and nextpnr completed normally. This is the
+first image in this table written to persistent ULX3S SPI flash; the earlier
+images were loaded into SRAM only.
