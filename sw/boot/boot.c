@@ -21,6 +21,10 @@
 #define DMA_BENCH_BYTES (64u * 1024u)
 #endif
 #define DMA_TIMEOUT_POLLS 10000000u
+#define SCREEN_TOP_MARGIN 2u
+#define SCREEN_LEFT_MARGIN 2u
+#define SCREEN_RIGHT_MARGIN 2u
+#define SCREEN_BOTTOM_MARGIN 2u
 
 static uint32_t screen_row;
 static uint32_t screen_col;
@@ -38,24 +42,49 @@ static void screen_clear(void)
     if (!screen_enabled) return;
     for (uint32_t i = 0; i < VEGA_POST_COLS * VEGA_POST_ROWS; ++i)
         VEGA_POST_TEXT[i] = ' ';
-    screen_row = 0;
-    screen_col = 0;
+    screen_row = SCREEN_TOP_MARGIN;
+    screen_col = SCREEN_LEFT_MARGIN;
+}
+
+static void screen_scroll(void)
+{
+    const uint32_t last_row = VEGA_POST_ROWS - SCREEN_BOTTOM_MARGIN - 1u;
+    const uint32_t last_col = VEGA_POST_COLS - SCREEN_RIGHT_MARGIN;
+
+    for (uint32_t row = SCREEN_TOP_MARGIN; row < last_row; ++row) {
+        for (uint32_t col = SCREEN_LEFT_MARGIN; col < last_col; ++col) {
+            VEGA_POST_TEXT[row * VEGA_POST_COLS + col] =
+                VEGA_POST_TEXT[(row + 1u) * VEGA_POST_COLS + col];
+        }
+    }
+    for (uint32_t col = SCREEN_LEFT_MARGIN; col < last_col; ++col)
+        VEGA_POST_TEXT[last_row * VEGA_POST_COLS + col] = ' ';
+    screen_row = last_row;
+    screen_col = SCREEN_LEFT_MARGIN;
 }
 
 static void screen_putc(char c)
 {
+    const uint32_t last_col = VEGA_POST_COLS - SCREEN_RIGHT_MARGIN;
+    const uint32_t last_row = VEGA_POST_ROWS - SCREEN_BOTTOM_MARGIN;
+
     if (!screen_enabled || c == '\r') return;
     if (c == '\n') {
-        screen_col = 0;
+        screen_col = SCREEN_LEFT_MARGIN;
         ++screen_row;
     } else {
         VEGA_POST_TEXT[screen_row * VEGA_POST_COLS + screen_col] = (uint8_t)c;
-        if (++screen_col == VEGA_POST_COLS) {
-            screen_col = 0;
+        if (++screen_col == last_col) {
+            screen_col = SCREEN_LEFT_MARGIN;
             ++screen_row;
         }
     }
-    if (screen_row == VEGA_POST_ROWS) screen_clear();
+    if (screen_row == last_row) screen_scroll();
+}
+
+static void screen_puts(const char *s)
+{
+    while (*s) screen_putc(*s++);
 }
 
 static void screen_init(void)
@@ -395,20 +424,20 @@ static int test_address_bus(volatile uint32_t *base, uint32_t words)
 static void print_cycle_pair(const char *width, uint32_t write_cycles,
                              uint32_t read_cycles)
 {
-    uart_puts("    ");
-    uart_puts(width);
-    uart_puts(" write=");
-    uart_dec32(write_cycles);
-    uart_puts(" read=");
-    uart_dec32(read_cycles);
-    uart_putc('\n');
+    serial_puts("    ");
+    serial_puts(width);
+    serial_puts(" write=");
+    serial_dec32(write_cycles);
+    serial_puts(" read=");
+    serial_dec32(read_cycles);
+    serial_putc('\n');
 }
 
 static void print_hot_read(uint32_t cycles)
 {
-    uart_puts("      hot read=");
-    uart_dec32(cycles);
-    uart_putc('\n');
+    serial_puts("      hot read=");
+    serial_dec32(cycles);
+    serial_putc('\n');
 }
 
 typedef struct {
@@ -464,7 +493,7 @@ static int benchmark_local_access_widths(void)
     volatile uint16_t *words = (volatile uint16_t *)local_bench;
     volatile uint32_t *longs = local_bench;
 
-    uart_puts("  CPU BRAM cycles (256 bytes payload)\n");
+    serial_puts("  CPU BRAM cycles (256 bytes payload)\n");
 
     start = VESTA->CPU_CYCLES_LO;
     for (uint32_t i = 0; i < LOCAL_BENCH_BYTES; ++i) bytes[i] = 0xa5u;
@@ -520,9 +549,9 @@ static int benchmark_access_widths(uint32_t ram_base)
     volatile uint16_t *words = (volatile uint16_t *)bytes;
     volatile uint32_t *longs = (volatile uint32_t *)bytes;
 
-    uart_puts("  CPU memory cycles (");
-    uart_dec32(MEM_BENCH_BYTES);
-    uart_puts(" bytes payload)\n");
+    serial_puts("  CPU memory cycles (");
+    serial_dec32(MEM_BENCH_BYTES);
+    serial_puts(" bytes payload)\n");
 
     memory_perf_read(&before);
     start = VESTA->CPU_CYCLES_LO;
@@ -629,9 +658,9 @@ static int benchmark_astraea(uint32_t ram_base)
     uint32_t copy_cycles;
     uint32_t start;
 
-    uart_puts("  Astraea DMA (");
-    uart_dec32(DMA_BENCH_BYTES / 1024u);
-    uart_puts(" KiB)\n");
+    serial_puts("  Astraea DMA (");
+    serial_dec32(DMA_BENCH_BYTES / 1024u);
+    serial_puts(" KiB)\n");
     if (ASTRAEA->ID != ASTRAEA_ID_MAGIC)
         return post_failure("Astraea identity", ASTRAEA_BASE,
                             ASTRAEA_ID_MAGIC, ASTRAEA->ID);
@@ -675,11 +704,11 @@ static int benchmark_astraea(uint32_t ram_base)
                             (uint32_t)&dst[DMA_BENCH_BYTES / 4u - 1u],
                             color, dst[DMA_BENCH_BYTES / 4u - 1u]);
 
-    uart_puts("    fill=");
-    uart_dec32(fill_cycles);
-    uart_puts(" copy=");
-    uart_dec32(copy_cycles);
-    uart_putc('\n');
+    serial_puts("    fill=");
+    serial_dec32(fill_cycles);
+    serial_puts(" copy=");
+    serial_dec32(copy_cycles);
+    serial_putc('\n');
     return 1;
 }
 
@@ -687,7 +716,7 @@ static int test_full_range(uint32_t ram_base, uint32_t ram_size)
 {
     uint32_t total_mib = ram_size >> 20;
 
-    uart_puts("  Full-range BIST ... [");
+    serial_puts("  Full-range BIST ... [");
     VESTA->MEMTEST_CTRL = MEMTEST_START;
 
     uint32_t seen_busy = 0u;
@@ -701,12 +730,12 @@ static int test_full_range(uint32_t ram_base, uint32_t ram_size)
         if (phase != last_phase) {
             if (last_phase == MEMTEST_PHASE_WRITE || last_phase == MEMTEST_PHASE_READ) {
                 while (displayed_mib < total_mib) {
-                    uart_putc('.');
+                    serial_putc('.');
                     ++displayed_mib;
                 }
             }
             if (phase == MEMTEST_PHASE_WRITE || phase == MEMTEST_PHASE_READ) {
-                uart_putc(phase == MEMTEST_PHASE_WRITE ? 'W' : 'R');
+                serial_putc(phase == MEMTEST_PHASE_WRITE ? 'W' : 'R');
                 displayed_mib = 0u;
             }
             last_phase = phase;
@@ -714,27 +743,27 @@ static int test_full_range(uint32_t ram_base, uint32_t ram_size)
 
         uint32_t progress_mib = VESTA->MEMTEST_PROGRESS >> 20;
         while (displayed_mib < progress_mib && displayed_mib < total_mib) {
-            uart_putc('.');
+            serial_putc('.');
             ++displayed_mib;
         }
 
         if (seen_busy && (status & MEMTEST_DONE) && !(status & MEMTEST_BUSY)) {
             while (displayed_mib < total_mib) {
-                uart_putc('.');
+                serial_putc('.');
                 ++displayed_mib;
             }
-            uart_puts("] ");
+            serial_puts("] ");
             if (VESTA->MEMTEST_ERRORS != 0u) {
                 return post_failure("SDRAM full range",
                                     ram_base + VESTA->MEMTEST_FIRST_FAIL,
                                     VESTA->MEMTEST_EXPECTED,
                                     VESTA->MEMTEST_ACTUAL);
             }
-            uart_puts("OK\n");
+            serial_puts("OK\n");
             return 1;
         }
     }
-    uart_puts("]\n");
+    serial_puts("]\n");
     return post_failure_text("SDRAM BIST timeout");
 }
 
@@ -767,12 +796,22 @@ static int run_post(void)
     if (!test_cache_coherence(ram_base)) return 0;
     uart_puts("OK\n");
 
+    screen_puts("  CPU BRAM access .... ");
     if (!benchmark_local_access_widths()) return 0;
+    screen_puts("OK\n");
+
+    screen_puts("  CPU SDRAM access ... ");
     if (!benchmark_access_widths(ram_base)) return 0;
+    screen_puts("OK\n");
 
+    screen_puts("  Astraea DMA ........ ");
     if (!benchmark_astraea(ram_base)) return 0;
+    screen_puts("OK\n");
 
-    return test_full_range(ram_base, ram_size);
+    screen_puts("  Full-range BIST .... ");
+    if (!test_full_range(ram_base, ram_size)) return 0;
+    screen_puts("OK\n");
+    return 1;
 }
 
 static void idle_forever(const char *screen_message, const char *serial_message)
@@ -791,7 +830,7 @@ static void idle_forever(const char *screen_message, const char *serial_message)
 void kmain(void)
 {
     screen_init();
-    uart_puts("\nASTRA 68 SYSTEM ROM v0.2\n\n");
+    uart_puts("ASTRA 68 SYSTEM ROM v0.2\n\n");
     if (VESTA->ID != VESTA_ID_MAGIC) {
         post_failure_text("Vesta identity block unavailable");
         idle_forever("HALTED: POST FAILURE\n",
