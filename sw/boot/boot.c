@@ -2,6 +2,9 @@
 #include "vesta.h"
 #include "vega.h"
 #include "astraea.h"
+#include "rom_build_info.h"
+
+#define ROM_BANNER "ASTRA 68 SYSTEM ROM v" ASTRA_ROM_VERSION
 
 #define MIB (1024u * 1024u)
 #define SDRAM_READY_POLLS 5000000u
@@ -196,6 +199,7 @@ static void uart_version(uint32_t version)
 
 static const char *cpu_name(uint32_t model, uint32_t implementation)
 {
+    if (implementation == CPU_IMPL_TGM2) return "TG68K.C 68030 MMU2";
     if (implementation == CPU_IMPL_TG30) return "TG68K.C 68030";
     if (implementation == CPU_IMPL_TG20) return "TG68K.C 68020";
     if (implementation == CPU_IMPL_WF30) return "WF68K30L 68030";
@@ -819,6 +823,8 @@ static void idle_forever(const char *screen_message, const char *serial_message)
     uart_puts(screen_message);
     for (;;) {
         serial_puts(serial_message);
+        serial_puts("ROM: v" ASTRA_ROM_VERSION "  Built: " ASTRA_ROM_BUILD_UTC
+                    "  Git: " ASTRA_ROM_GIT_REVISION "\n");
         serial_puts("BUILD: 0x");
         serial_hex32(VESTA->BUILD_ID);
         serial_putc('\n');
@@ -830,19 +836,21 @@ static void idle_forever(const char *screen_message, const char *serial_message)
 void kmain(void)
 {
     screen_init();
-    uart_puts("ASTRA 68 SYSTEM ROM v0.2\n\n");
+    uart_puts(ROM_BANNER "\n");
+    uart_puts("Built: " ASTRA_ROM_BUILD_UTC
+              "  Git: " ASTRA_ROM_GIT_REVISION "\n\n");
     if (VESTA->ID != VESTA_ID_MAGIC) {
         post_failure_text("Vesta identity block unavailable");
         idle_forever("HALTED: POST FAILURE\n",
-                     "\nASTRA 68 SYSTEM ROM v0.2 - POST FAILURE\n");
+                     "\n" ROM_BANNER " - POST FAILURE\n");
     }
 
     print_inventory();
     if (!run_post())
         idle_forever("HALTED: POST FAILURE\n",
-                     "\nASTRA 68 SYSTEM ROM v0.2 - POST FAILURE\n");
+                     "\n" ROM_BANNER " - POST FAILURE\n");
 
     uart_puts("\nPOST PASS\n");
     idle_forever("READY FOR OS LOADER\n",
-                 "\nASTRA 68 SYSTEM ROM v0.2 - POST PASS - READY FOR OS LOADER\n");
+                 "\n" ROM_BANNER " - POST PASS - READY FOR OS LOADER\n");
 }

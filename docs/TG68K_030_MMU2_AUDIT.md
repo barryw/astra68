@@ -47,13 +47,13 @@ It also suppresses compilation failures with `|| true`, references missing
 bench files, and includes a target that leaves an orphaned GUI simulator. A
 headline target completing therefore cannot be used as a pass result.
 
-After the format-B compliance patch, the pinned Astra strict runner produced
-137 bounded VHDL runs, including all five exact BASIC variants and six
-Motorola-corrected derivatives:
+After the restart and combinational-loop repairs, the pinned Astra strict
+runner produced 137 bounded VHDL runs, including all five exact BASIC variants
+and six Motorola-corrected derivatives:
 
-- 105 ran clean;
+- 107 ran clean;
 - 3 failed to compile against the current RTL interface;
-- 24 emitted raw simulation failures;
+- 22 emitted raw simulation failures;
 - 5 ran but had no usable pass/fail oracle.
 
 The raw simulation count intentionally includes contradictory upstream tests.
@@ -119,33 +119,51 @@ expects `$40079B18` and passes all other dispatch checks.
 
 ## RTL deviations
 
-The July RTL contains platform behavior that is not part of an MC68030:
-
-- `TG68KdotC_Kernel.vhd` bypasses PMMU translation for
-  `$00DD4000-$00DD5FFF` to expose a MiSTer filesystem trapdoor.
-- `TG68K_PMMU_030.vhd` documents that descriptor walks are not made atomic
-  against Amiga chip-bus DMA; it relies on page tables normally residing in
-  fast RAM.
-
-A generic Astra candidate must remove the address exception. Astra arbitration
-must also provide the descriptor-search/update indivisibility required by the
-MC68030, without weakening display or DMA behavior inside the CPU contract.
+The imported July RTL contained a MiSTer filesystem trapdoor that bypassed PMMU
+translation for `$00DD4000-$00DD5FFF`. The Astra candidate removes that address
+exception. `TG68K_PMMU_030.vhd` also documents that descriptor walks were not
+made atomic against Amiga chip-bus DMA because page tables normally resided in
+fast RAM. Astra arbitration must provide the descriptor-search/update
+indivisibility required by the MC68030 without weakening display or DMA
+behavior inside the CPU contract.
 
 ## Candidate core defects
 
-These results are consistent with Motorola requirements and remain candidate
-RTL defects pending focused minimal reproducers:
+The restart-qualified candidate now passes focused Motorola-cited reproducers
+for unmodified format-B RTE recovery, including postincrement reads,
+predecrement writes, arithmetic/CCR state, MOVEM store, mid-transfer MOVEM
+load, user-mode faults, and a translated supervisor stack. The following
+results remain candidate RTL defects pending focused minimal reproducers or
+final classification:
 
-- user data faults do not reliably resume after an unchanged format A/B frame
-  is returned with RTE;
-- NetBSD-style read, write, MOVES, and MOVEM page-fault restart sequences fail;
+- the older BADFEED software-fix diagnostic and MOVES/DFC restart diagnostic
+  still fail even though the maintained plain-RTE user-data recovery benches
+  pass;
 - a valid supervisor stack page that needs a table walk during exception entry
   can cascade into a double fault and halt;
 - WinUAE-derived exact JMP/CHK2 cases still report unresolved low-memory side
   effects and exception-state differences.
 
-The restart failures block acceptance for a protected-memory operating system.
-They are not timing or Amiga-compatibility issues.
+The five primary demand-paging restart failures no longer block acceptance.
+The remaining fault-on-stacking and MOVES/DFC diagnostics are still relevant to
+a protected-memory operating system and cannot be waived as Amiga behavior.
+
+## Open-flow qualification
+
+Finite ALU shift/rotate chains, complete combinational defaults, and explicit
+kernel operand/address/PC calculations eliminate all 11 inherited TG68K
+combinational SCCs. Standalone gates for the ALU, PMMU, cache, kernel, and
+TG68K top report zero SCCs. The fail-closed full-SoC gates also report zero both
+before and after ECP5 synthesis.
+
+The canonical ULX3S seed-3 build routes successfully at 38,705 of 83,640
+TRELLIS_COMB (46%), 9,396 flip-flops (11%), 136 of 208 DP16KD blocks (65%), and
+13 multipliers (8%). Post-route timing reaches 12.92 MHz for the constrained
+12.5 MHz CPU clock and 76.55 MHz for the 75 MHz SDRAM clock; the worst endpoint
+retains +0.269 ns slack. Focused arithmetic, system-control, PMMU, restart,
+exception, RMC, IRQ, and SDRAM-replay tests pass, full Astra coretest passes,
+and the strict 137-variant result is unchanged from the accepted
+restart-qualified baseline.
 
 ## Acceptance status
 
@@ -155,7 +173,7 @@ complete, generic MC68030 implementation, and the supplied harness cannot prove
 that claim as written.
 
 Keep the known Astra hardware bit as the integration baseline. Treat the July
-RTL as a pinned repair candidate, remove platform behavior, correct invalid
-tests, reduce each valid failure to a Motorola-cited reproducer, and require the
-full fail-closed suite plus Astra coretest, Harte, synthesis, and hardware before
-promoting it.
+RTL as a pinned repair candidate, correct invalid tests, reduce each remaining
+valid failure to a Motorola-cited reproducer, and require full Harte and
+hardware qualification before promoting it. SCC elimination, fail-closed
+synthesis, full-SoC routing, and Astra coretest are no longer blockers.

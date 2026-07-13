@@ -26,6 +26,10 @@ disasm: coretest.elf
 
 check-disasm: coretest.elf
 	$(OBJDUMP) -dr $< | grep -E '@\(1ff91[0-9a-f]{2},%d4:l\)'
+	@if $(OBJDUMP) -dr $< | grep -Eq 'pmove.*%d[0-7]'; then \
+		echo "invalid MC68030 PMOVE data-register EA in coretest" >&2; \
+		exit 1; \
+	fi
 
 clean:
 	rm -f coretest.elf coretest.bin rom_coretest.hex

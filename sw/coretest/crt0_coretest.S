@@ -98,6 +98,7 @@ _h_recover:
 	move.l  12(%sp), 40(%a0)
 	move.l  16(%sp), 44(%a0)
 	move.l  24(%sp), 52(%a0)    | format A/B data output buffer
+	move.l  36(%sp), 60(%a0)    | format B instruction pipe stage-B address
 	move.w  6(%sp), %d0
 	andi.w  #0x0fff, %d0
 	cmp.l   24(%a0), %d0

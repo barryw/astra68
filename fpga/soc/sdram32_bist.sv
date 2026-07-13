@@ -232,10 +232,11 @@ module sdram32_bist #(
                                 actual_mem <= mem_rdata[7:0];
                             end
                         end
-                        if (error_count_mem > 32'hffffffff - mismatches)
-                            error_count_mem <= 32'hffffffff;
-                        else
-                            error_count_mem <= error_count_mem + mismatches;
+                        // Two read passes can report at most 2 * MEM_BYTES
+                        // byte errors. The 25-bit port caps that below 2^32,
+                        // so saturation is unreachable and only lengthens the
+                        // 75 MHz response-to-counter path.
+                        error_count_mem <= error_count_mem + {29'd0, mismatches};
                     end
 
                     if (retire_addr_mem == LAST_WORD) begin
@@ -264,8 +265,8 @@ module sdram32_bist #(
 
 `ifndef SYNTHESIS
     initial begin
-        if ((MEM_BYTES % 4) != 0 || MEM_BYTES < 4)
-            $fatal(1, "sdram32_bist MEM_BYTES must be a positive multiple of four");
+        if ((MEM_BYTES % 4) != 0 || MEM_BYTES < 4 || MEM_BYTES > 33554432)
+            $fatal(1, "sdram32_bist MEM_BYTES must be a positive multiple of four up to 32 MiB");
         if (MAX_OUTSTANDING < 1 || MAX_OUTSTANDING > 63)
             $fatal(1, "sdram32_bist MAX_OUTSTANDING must be 1..63");
         if (pattern_word(25'h00000fc, 1'b0) !=

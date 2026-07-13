@@ -92,6 +92,8 @@ COMPONENT TG68KdotC_Kernel
       IPL                              : in std_logic_vector(2 downto 0):="111";
       IPL_autovector                   : in std_logic:='0';
       berr                             : in std_logic:='0';       -- only 68000 Stackpointer dummy
+      berr_addr_override               : in std_logic:='0';
+      berr_addr_in                     : in std_logic_vector(31 downto 0):=(others => '0');
       CPU                              : in std_logic_vector(1 downto 0);
       addr_out                         : out std_logic_vector(31 downto 0);
       data_write                       : out std_logic_vector(15 downto 0);
@@ -103,6 +105,7 @@ COMPONENT TG68KdotC_Kernel
       nResetOut                        : out std_logic;
       FC                               : out std_logic_vector(2 downto 0);
       clr_berr                         : out std_logic;
+      RMCn_out                         : out std_logic;
       skipFetch                        : out std_logic;
       regin_out                        : out std_logic_vector(31 downto 0);
       CACR_out                         : out std_logic_vector(31 downto 0);
@@ -463,6 +466,8 @@ cpu1: TG68KdotC_Kernel
       IPL_autovector => autovector, -- : in std_logic:='0';
       addr_out => ADDR,          -- : buffer std_logic_vector(31 downto 0);
       berr => BERR,              -- : in std_logic:='0';     -- only 68000 Stackpointer dummy for Atari ST core
+      berr_addr_override => '0',
+      berr_addr_in => (others => '0'),
       FC => FC_int,              -- : out std_logic_vector(2 downto 0);
       data_write => data_write,  -- : out std_logic_vector(15 downto 0);
       busstate => state,         -- : buffer std_logic_vector(1 downto 0);	
@@ -476,6 +481,7 @@ cpu1: TG68KdotC_Kernel
       CACR_out => open,
       VBR_out => open,
       clr_berr => open,
+      RMCn_out => open,
       -- Cache control interface (68030)
       cache_inv_req => cache_inv_req,   -- : out std_logic;
       cache_op_scope => cache_op_scope,   -- : out std_logic_vector(1 downto 0);

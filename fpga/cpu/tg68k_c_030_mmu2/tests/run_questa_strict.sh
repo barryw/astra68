@@ -15,6 +15,7 @@ out_dir=$2
 script_dir=$(cd "$(dirname "$0")" && pwd)
 core_dir=$(cd "$script_dir/.." && pwd)
 test_dir="$script_dir/upstream"
+bench_filter=${BENCH_FILTER:-}
 
 vlib="$modelsim_root/linuxaloem/vlib"
 vcom="$modelsim_root/linuxaloem/vcom"
@@ -67,6 +68,7 @@ compile_failures=0
 simulation_failures=0
 unscored=0
 clean=0
+matched=0
 
 bench_sources=(
   "$test_dir"/tb_*.vhd
@@ -75,6 +77,10 @@ bench_sources=(
 )
 for source in "${bench_sources[@]}"; do
   bench=$(basename "$source" .vhd)
+  if [[ -n "$bench_filter" && ! "$bench" =~ $bench_filter ]]; then
+    continue
+  fi
+  matched=$((matched + 1))
   compile_log="$out_dir/logs/$bench.compile.log"
 
   if ! "$vcom" -2008 "$source" >"$compile_log" 2>&1; then
@@ -117,6 +123,9 @@ for source in "${bench_sources[@]}"; do
     if [[ $sim_rc -eq 124 ]]; then
       echo "TIMEOUT $bench_label" | tee -a "$summary"
       simulation_failures=$((simulation_failures + 1))
+    elif [[ $sim_rc -ne 0 ]]; then
+      echo "SIM_EXIT_FAIL $bench_label rc=$sim_rc" | tee -a "$summary"
+      simulation_failures=$((simulation_failures + 1))
     elif grep -Eq '^# \*\* (Error|Fatal):|FAIL:|TEST FAILED|SOME TESTS FAILED|OVERALL: SOME|RESULT: [1-9][0-9]* failed' "$sim_log"; then
       echo "SIM_FAIL $bench_label rc=$sim_rc" | tee -a "$summary"
       simulation_failures=$((simulation_failures + 1))
@@ -132,6 +141,11 @@ for source in "${bench_sources[@]}"; do
     fi
   done
 done
+
+if [[ $matched -eq 0 ]]; then
+  echo "NO_BENCH_MATCH BENCH_FILTER=$bench_filter" | tee -a "$summary"
+  exit 2
+fi
 
 total=$((compile_failures + simulation_failures + unscored + clean))
 result="STRICT_RESULT total=$total clean=$clean compile_failures=$compile_failures simulation_failures=$simulation_failures unscored=$unscored"

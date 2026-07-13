@@ -549,6 +549,25 @@ architecture logic of TG68K_ALU is
 
 
 BEGIN
+	-- Complete size decodes keep the shifter combinational.  The original
+	-- case statements left these signals unchanged for meta-valued size bits,
+	-- which GHDL synthesized as self-feedback SCCs.
+	rot_rot <= OP1out(7) when exe_opcode(7 downto 6) = "00" else
+	           OP1out(15) when exe_opcode(7 downto 6) = "01" or
+	                          exe_opcode(7 downto 6) = "11" else
+	           OP1out(31);
+	msb <= OP1out(7) when exe_opcode(7 downto 6) = "00" else
+	       OP1out(15) when exe_opcode(7 downto 6) = "01" or
+	                      exe_opcode(7 downto 6) = "11" else
+	       OP1out(31);
+
+	-- Prefix-fill the arithmetic-right-shift sign mask from low to high bits.
+	-- Each generated bit depends only on the preceding bit, so this is a
+	-- finite combinational chain rather than the former vector self-feedback.
+	asr_sign(0) <= '0';
+	gen_asr_sign: for i in 0 to 31 generate
+		asr_sign(i + 1) <= asr_sign(i) or hot_msb(i);
+	end generate;
 -----------------------------------------------------------------------------
 -- set OP1in
 -----------------------------------------------------------------------------
@@ -1024,16 +1043,6 @@ PROCESS (clk, mux, mask, bitnr, bf_ins, bf_bchg, bf_bset, bf_exts, bf_shift, inm
 -----------------------------------------------------------------------------
 PROCESS (exe_opcode, OP1out, Flags, rot_bits, rot_msb, rot_lsb, rot_rot, exec, BSout)
 	BEGIN
-		CASE exe_opcode(7 downto 6) IS
-			WHEN "00" =>					--Byte
-						rot_rot <= OP1out(7);
-			WHEN "01"|"11" =>				--Word
-						rot_rot <= OP1out(15);
-			WHEN "10" =>					--Long
-						rot_rot <= OP1out(31);
-			WHEN OTHERS => NULL;
-		END CASE;
-	
 		CASE rot_bits IS
 			WHEN "00" =>					--ASL, ASR
 						rot_lsb <= '0';
@@ -1088,6 +1097,7 @@ process (OP1out, OP2out, opcode, bit_nr, bit_msb, bs_shift, bs_shift_mod, ring, 
          rot_bits, Flags, bs_C, msb, hot_msb, asl_over, asl_over_xor, ALU, asr_sign, exec)
 	begin
 		ring <= "100000";
+		bs_C <= '0';
 		IF rot_bits="10" THEN --ROX L/R
 			CASE exe_opcode(7 downto 6) IS
 				WHEN "00" =>					--Byte
@@ -1279,8 +1289,6 @@ process (OP1out, OP2out, opcode, bit_nr, bit_msb, bs_shift, bs_shift_mod, ring, 
 		
 -- calc ASR sign		
 		BSout <= ALU;
-		asr_sign <= (OTHERS =>'0');	
-		asr_sign(32 downto 1) <= asr_sign(31 downto 0) OR hot_msb(31 downto 0);	
 		IF rot_bits="00" AND exe_opcode(8)='0' AND msb='1' THEN --ASR
 			BSout <= ALU or asr_sign(32 downto 1);
 			IF bs_shift > ring THEN
@@ -1291,21 +1299,18 @@ process (OP1out, OP2out, opcode, bit_nr, bit_msb, bs_shift, bs_shift_mod, ring, 
 		vector(32 downto 0) <= '0'&OP1out;
 		CASE exe_opcode(7 downto 6) IS
 			WHEN "00" =>					--Byte
-				msb <= OP1out(7);
 				vector(31 downto 8) <= X"000000";
 				BSout(31 downto 8) <= X"000000";
 				IF rot_bits="10" THEN --ROX L/R
 					vector(8) <= Flags(4);
 				END IF;
 			WHEN "01"|"11" =>				--Word
-				msb <= OP1out(15);
 				vector(31 downto 16) <= X"0000";
 				BSout(31 downto 16) <= X"0000";
 				IF rot_bits="10" THEN --ROX L/R
 					vector(16) <= Flags(4);
 				END IF;
 			WHEN "10" =>					--Long
-				msb <= OP1out(31);
 				IF rot_bits="10" THEN --ROX L/R
 					vector(32) <= Flags(4);
 				END IF;

@@ -9,10 +9,12 @@ SDRAM_ENABLE ?= 1
 HDMI_ENABLE ?= 1
 TARGET_FREQ_MHZ ?= 12
 PNR_SEED ?= 1
+ROM_VERSION ?= 0.3
+BUILD_INFO = build/rom_build_info.h
 
 CFLAGS  = -m68020 -msoft-float -Os -ffreestanding -fno-builtin -nostdlib \
-          -Wall -Wextra -I../include $(EXTRA_CFLAGS)
-ifeq ($(CPU_CORE),tg68k030)
+          -Wall -Wextra -I../include -Ibuild $(EXTRA_CFLAGS)
+ifneq ($(filter tg68k030 tg68k030_mmu2,$(CPU_CORE)),)
 CFLAGS += -DASTRA_CPU_TG68K030=1
 endif
 LD      = astra_st.ld
@@ -29,7 +31,10 @@ SOC_ID_SRCS = ../../fpga/soc/astra_soc.sv ../../fpga/soc/astra_soc.lpf \
               ../../fpga/soc/post_fonts.hex ../../fpga/soc/oss_flow/mkbit.sh \
               $(sort $(wildcard ../../fpga/soc/hdmi/*.sv))
 
-ifeq ($(CPU_CORE),tg68k030)
+ifeq ($(CPU_CORE),tg68k030_mmu2)
+CPU_ID_SRCS = $(sort $(wildcard ../../fpga/cpu/tg68k_c_030_mmu2/*.vhd)) \
+              ../../fpga/cpu/tg68k030_mmu2_wrap.vhd
+else ifeq ($(CPU_CORE),tg68k030)
 CPU_ID_SRCS = $(sort $(wildcard ../../fpga/cpu/tg68k_c_030_mmu/*.vhd)) \
               ../../fpga/cpu/tg68k030_wrap.vhd
 else ifeq ($(CPU_CORE),tg68k)
@@ -44,14 +49,20 @@ endif
 
 BUILD_CONFIG = CPU_CORE=$(CPU_CORE) CPU_CLK_DIV_BIT=$(CPU_CLK_DIV_BIT) \
                SDRAM_ENABLE=$(SDRAM_ENABLE) HDMI_ENABLE=$(HDMI_ENABLE) \
-               TARGET_FREQ_MHZ=$(TARGET_FREQ_MHZ) PNR_SEED=$(PNR_SEED)
-ID_SRCS = Makefile boot.c crt0.S $(LD) ../include/vesta.h ../include/vega.h \
+               TARGET_FREQ_MHZ=$(TARGET_FREQ_MHZ) PNR_SEED=$(PNR_SEED) \
+               ROM_VERSION=$(ROM_VERSION)
+ID_SRCS = Makefile gen_build_info.py boot.c crt0.S $(LD) \
+          ../include/vesta.h ../include/vega.h \
           ../include/astraea.h \
           $(SOC_ID_SRCS) $(CPU_ID_SRCS)
 
 all: astra_boot.bin
 
-astra_boot.elf: crt0.S boot.c $(LD)
+$(BUILD_INFO): FORCE gen_build_info.py
+	@mkdir -p $(dir $@)
+	@python3 gen_build_info.py --version "$(ROM_VERSION)" --output "$@"
+
+astra_boot.elf: crt0.S boot.c $(LD) $(BUILD_INFO)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ crt0.S boot.c
 
 astra_boot.bin: astra_boot.elf
@@ -71,5 +82,8 @@ config:
 
 clean:
 	rm -f *.elf *.bin *.map
+	rm -rf build
 
-.PHONY: all verify id config clean
+FORCE:
+
+.PHONY: all verify id config clean FORCE

@@ -1,5 +1,12 @@
 # Astra 68 — Session Handover
 
+> **Historical handover:** this file records the retired WF68K30L/no-PMMU
+> bring-up path and is not the current CPU/MMU or OS direction. Astra is now
+> locked to the 68030-class core with built-in paged PMMU and caches. Use
+> `docs/MC68030_COMPLIANCE.md`, `docs/SDRAM.md`, and `docs/OS_VISION.md` for the
+> current contracts. Preserve this file only as bring-up history until useful
+> details are migrated.
+
 Resume point for a fresh session. Authoritative design lives in `SPEC.md`; the
 four chip contracts in `docs/*.md`; this file is the "where we are / how to
 resume" map.

@@ -19,6 +19,7 @@ H=$SOC/hdmi                         # NovaVM-proven hdl-util HDMI pipeline
 C=../../cpu/wf68k30L               # fpga/cpu/wf68k30L/
 T=../../cpu/tg68k_c                # fpga/cpu/tg68k_c/
 T030=../../cpu/tg68k_c_030_mmu    # fpga/cpu/tg68k_c_030_mmu/
+T030M2=../../cpu/tg68k_c_030_mmu2 # fpga/cpu/tg68k_c_030_mmu2/
 W=../../cpu                        # fpga/cpu/ wrappers
 TAG="${2:-build}"
 CPU_CORE="${CPU_CORE:-${3:-wf68k}}"
@@ -49,8 +50,13 @@ case "$CPU_CORE" in
     YOSYS_CPU_PARAM="chparam -set CPU_TG68K 1 -set CPU_MODEL 32'h00068030 -set CPU_IMPLEMENTATION 32'h54473330 -set CPU_FEATURES 32'h0000000d astra_soc;"
     TG_GHDL="ghdl --std=08 -fsynopsys --latches $T030/TG68K_Pack.vhd $T030/TG68K_ALU.vhd $T030/TG68K_PMMU_030.vhd $T030/TG68K_Cache_030.vhd $T030/TG68KdotC_Kernel.vhd $T030/TG68K.vhd $W/tg68k030_wrap.vhd -e tg68k_wrap;"
     ;;
+  tg68k030_mmu2|tg68k_mmu2|tg68k_c_030_mmu2)
+    CPU_CORE="tg68k030_mmu2"
+    YOSYS_CPU_PARAM="chparam -set CPU_TG68K 1 -set CPU_MODEL 32'h00068030 -set CPU_IMPLEMENTATION 32'h54474d32 -set CPU_FEATURES 32'h0000000d astra_soc;"
+    TG_GHDL="ghdl --std=08 -fsynopsys --latches $T030M2/TG68K_Pack.vhd $T030M2/TG68K_ALU.vhd $T030M2/TG68K_PMMU_030.vhd $T030M2/TG68K_Cache_030.vhd $T030M2/TG68KdotC_Kernel.vhd $T030M2/TG68K.vhd $W/tg68k030_mmu2_wrap.vhd -e tg68k_wrap;"
+    ;;
   *)
-    echo "unknown CPU_CORE='$CPU_CORE' (expected wf68k, tg68k, or tg68k030)" >&2
+    echo "unknown CPU_CORE='$CPU_CORE' (expected wf68k, tg68k, tg68k030, or tg68k030_mmu2)" >&2
     exit 2
     ;;
 esac

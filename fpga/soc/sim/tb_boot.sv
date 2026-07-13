@@ -3,7 +3,8 @@
 
 module tb_boot #(
     parameter CPU_TG68K = 1'b0,
-    parameter CPU_TG68K030 = 1'b0
+    parameter CPU_TG68K030 = 1'b0,
+    parameter CPU_TG68K030_MMU2 = 1'b0
 );
     reg clk25 = 1'b0;
     reg rstn = 1'b0;
@@ -17,7 +18,8 @@ module tb_boot #(
         .HDMI_ENABLE(1'b0),
         .CPU_CLK_DIV_BIT(0),
         .CPU_MODEL(CPU_TG68K && !CPU_TG68K030 ? 32'h00068020 : 32'h00068030),
-        .CPU_IMPLEMENTATION(CPU_TG68K030 ? 32'h54473330 :
+        .CPU_IMPLEMENTATION(CPU_TG68K030_MMU2 ? 32'h54474d32 :
+                            CPU_TG68K030 ? 32'h54473330 :
                             CPU_TG68K ? 32'h54473230 : 32'h57463330),
         .CPU_FEATURES(CPU_TG68K030 ? 32'h0000000d : 32'h0000000c)
     ) dut (
@@ -37,6 +39,7 @@ module tb_boot #(
 
     string uart_line = "";
     reg banner_seen = 1'b0;
+    reg build_seen = 1'b0;
     reg cpu_seen = 1'b0;
     reg vesta_seen = 1'b0;
 
@@ -46,15 +49,24 @@ module tb_boot #(
                 // CR is part of the wire protocol but not the line comparison.
             end else if (dut.uart_data == 8'h0a) begin
                 $display("UART: %s", uart_line);
-                if (uart_line == "ASTRA 68 SYSTEM ROM v0.2")
+                if (uart_line.len() > 21 &&
+                    uart_line.substr(0, 20) == "ASTRA 68 SYSTEM ROM v")
                     banner_seen <= 1'b1;
-                if (uart_line == "CPU:    TG68K.C 68030 @ 12500000 Hz")
+                if (uart_line.len() >= 74 &&
+                    uart_line.substr(0, 6) == "Built: ")
+                    build_seen <= 1'b1;
+                if ((!CPU_TG68K030_MMU2 &&
+                     uart_line == "CPU:    TG68K.C 68030 @ 12500000 Hz") ||
+                    (CPU_TG68K030_MMU2 &&
+                     uart_line == "CPU:    TG68K.C 68030 MMU2 @ 12500000 Hz"))
                     cpu_seen <= 1'b1;
                 if (uart_line == "Vesta:  v1.0")
                     vesta_seen <= 1'b1;
                 if (uart_line == "HALTED: POST FAILURE") begin
                     if (!banner_seen)
                         $fatal(1, "POST halt received without the Astra boot banner");
+                    if (!build_seen)
+                        $fatal(1, "POST halt received without ROM build provenance");
                     if (!cpu_seen)
                         $fatal(1, "POST halt received without the TG68K030 CPU line");
                     if (!vesta_seen)

@@ -12,6 +12,7 @@
 #define EXC_EXPECTED_ADDR (EXC_REC_BASE + 0x30u)
 #define EXC_DATA_OUT (EXC_REC_BASE + 0x34u)
 #define EXC_SKIP_DATA_CYCLE (EXC_REC_BASE + 0x38u)
+#define EXC_STAGE_B_ADDR (EXC_REC_BASE + 0x3cu)
 #define EXC_FAKE_STACK (SCRATCH_BASE + 0x300u)
 #define EXC_ALT_VBR (SCRATCH_BASE + 0x400u)
 #define IRQ_SIM_REQ 0xfff00600u
@@ -180,6 +181,7 @@ static void arm_exception_recovery(uint32_t vector_offset)
     wr32(EXC_EXPECTED_ADDR, 0u);
     wr32(EXC_DATA_OUT, 0u);
     wr32(EXC_SKIP_DATA_CYCLE, 0u);
+    wr32(EXC_STAGE_B_ADDR, 0u);
 }
 
 static void arm_exception_recovery_skip_data_cycle(uint32_t vector_offset)
@@ -5245,43 +5247,42 @@ static void test_system_control_directed(void)
 }
 
 #ifdef CORETEST_CPU_TG68K030
+#define PMMU_REG_SCRATCH 0x01ffc010u
+
 static void pmmu_write_tt0(uint32_t value)
 {
-    __asm__ volatile("pmove %0,%%tt0" : : "d"(value) : "memory");
+    wr32(PMMU_REG_SCRATCH, value);
+    __asm__ volatile("pmove 0x01ffc010,%%tt0" : : : "memory");
 }
 
 static uint32_t pmmu_read_tt0(void)
 {
-    uint32_t value;
-
-    __asm__ volatile("pmove %%tt0,%0" : "=d"(value) : : "memory");
-    return value;
+    __asm__ volatile("pmove %%tt0,0x01ffc010" : : : "memory");
+    return rd32(PMMU_REG_SCRATCH);
 }
 
 static void pmmu_write_tt1(uint32_t value)
 {
-    __asm__ volatile("pmove %0,%%tt1" : : "d"(value) : "memory");
+    wr32(PMMU_REG_SCRATCH, value);
+    __asm__ volatile("pmove 0x01ffc010,%%tt1" : : : "memory");
 }
 
 static uint32_t pmmu_read_tt1(void)
 {
-    uint32_t value;
-
-    __asm__ volatile("pmove %%tt1,%0" : "=d"(value) : : "memory");
-    return value;
+    __asm__ volatile("pmove %%tt1,0x01ffc010" : : : "memory");
+    return rd32(PMMU_REG_SCRATCH);
 }
 
 static void pmmu_write_tc(uint32_t value)
 {
-    __asm__ volatile("pmove %0,%%tc" : : "d"(value) : "memory");
+    wr32(PMMU_REG_SCRATCH, value);
+    __asm__ volatile("pmove 0x01ffc010,%%tc" : : : "memory");
 }
 
 static uint32_t pmmu_read_tc(void)
 {
-    uint32_t value;
-
-    __asm__ volatile("pmove %%tc,%0" : "=d"(value) : : "memory");
-    return value;
+    __asm__ volatile("pmove %%tc,0x01ffc010" : : : "memory");
+    return rd32(PMMU_REG_SCRATCH);
 }
 
 static void pmmu_load_crp(void)
@@ -5303,12 +5304,12 @@ static void test_pmmu_register_directed(void)
     const uint32_t l2_00 = 0x01ffc400u;
     uint32_t translated_read;
 
-    pmmu_write_tt0(0x12347fffu);
+    pmmu_write_tt0(0x12340777u);
     chk32(0x002a0000u, pmmu_read_tt0(), 0x12340777u);
     pmmu_write_tt0(0u);
     chk32(0x002a0004u, pmmu_read_tt0(), 0u);
 
-    pmmu_write_tt1(0xabcd7555u);
+    pmmu_write_tt1(0xabcd0555u);
     chk32(0x002a0008u, pmmu_read_tt1(), 0xabcd0555u);
     pmmu_write_tt1(0u);
     chk32(0x002a000cu, pmmu_read_tt1(), 0u);
@@ -5552,7 +5553,8 @@ static void test_moves_directed(void)
         : "=&d"(got0)
         :
         : "a3", "d2", "memory");
-    chk32(0x000a0150u, rd32(MOVES_EXT_TEST_BASE + 0x40u), MOVES_EXT_TEST_BASE + 0x44u);
+    /* M68000 PRM 6-26: MC68030 stores decremented An for MOVES.x An,-(An). */
+    chk32(0x000a0150u, rd32(MOVES_EXT_TEST_BASE + 0x40u), MOVES_EXT_TEST_BASE + 0x40u);
     chk32(0x000a0154u, got0, MOVES_EXT_TEST_BASE + 0x40u);
 
     progress_char('v');
@@ -5670,6 +5672,8 @@ static void test_moves_directed(void)
 
 static void test_cmp2_chk2_directed(void)
 {
+    /* M68000 PRM Table 3-18: X is unchanged, Z/C are defined, N/V are undefined. */
+    const uint32_t cmp2_ccr_mask = 0x15u;
     uint32_t got0;
     uint32_t got1;
     uint32_t got2;
@@ -5697,9 +5701,9 @@ static void test_cmp2_chk2_directed(void)
         : "=&d"(got0), "=&d"(got1), "=&d"(got2)
         :
         : "a0", "d0", "d1", "cc", "memory");
-    chk32(0x000a0200u, got0 & 0x1fu, 0x04u);
-    chk32(0x000a0204u, got1 & 0x1fu, 0x00u);
-    chk32(0x000a0208u, got2 & 0x1fu, 0x01u);
+    chk32(0x000a0200u, got0 & cmp2_ccr_mask, 0x04u);
+    chk32(0x000a0204u, got1 & cmp2_ccr_mask, 0x00u);
+    chk32(0x000a0208u, got2 & cmp2_ccr_mask, 0x01u);
 
     wr32(BOUNDS_TEST_BASE + 0x10u, 0x00000020u);
     wr32(BOUNDS_TEST_BASE + 0x14u, 0x00000010u);
@@ -5728,10 +5732,10 @@ static void test_cmp2_chk2_directed(void)
         : "=&d"(got0), "=&d"(got1), "=&d"(got2), "=&d"(got3)
         :
         : "a0", "d0", "d1", "cc", "memory");
-    chk32(0x000a0220u, got0 & 0x1fu, 0x00u);
-    chk32(0x000a0224u, got1 & 0x1fu, 0x01u);
-    chk32(0x000a0228u, got2 & 0x1fu, 0x00u);
-    chk32(0x000a022cu, got3 & 0x1fu, 0x04u);
+    chk32(0x000a0220u, got0 & cmp2_ccr_mask, 0x00u);
+    chk32(0x000a0224u, got1 & cmp2_ccr_mask, 0x01u);
+    chk32(0x000a0228u, got2 & cmp2_ccr_mask, 0x00u);
+    chk32(0x000a022cu, got3 & cmp2_ccr_mask, 0x04u);
 
     wr32(BOUNDS_TEST_BASE + 0x18u, 0x01ff9900u);
     wr32(BOUNDS_TEST_BASE + 0x1cu, 0x01ff9910u);
@@ -5755,9 +5759,9 @@ static void test_cmp2_chk2_directed(void)
         : "=&d"(got0), "=&d"(got1), "=&d"(got2)
         :
         : "a0", "a1", "d1", "cc", "memory");
-    chk32(0x000a0230u, got0 & 0x1fu, 0x04u);
-    chk32(0x000a0234u, got1 & 0x1fu, 0x00u);
-    chk32(0x000a0238u, got2 & 0x1fu, 0x01u);
+    chk32(0x000a0230u, got0 & cmp2_ccr_mask, 0x04u);
+    chk32(0x000a0234u, got1 & cmp2_ccr_mask, 0x00u);
+    chk32(0x000a0238u, got2 & cmp2_ccr_mask, 0x01u);
 
     *(volatile uint16_t *)(BOUNDS_TEST_BASE + 0x40u) = 0x0010u;
     *(volatile uint16_t *)(BOUNDS_TEST_BASE + 0x42u) = 0x0020u;
@@ -5781,9 +5785,9 @@ static void test_cmp2_chk2_directed(void)
         : "=&d"(got0), "=&d"(got1), "=&d"(got2)
         :
         : "a0", "d0", "d1", "cc", "memory");
-    chk32(0x000a0250u, got0 & 0x1fu, 0x04u);
-    chk32(0x000a0254u, got1 & 0x1fu, 0x00u);
-    chk32(0x000a0258u, got2 & 0x1fu, 0x01u);
+    chk32(0x000a0250u, got0 & cmp2_ccr_mask, 0x04u);
+    chk32(0x000a0254u, got1 & cmp2_ccr_mask, 0x00u);
+    chk32(0x000a0258u, got2 & cmp2_ccr_mask, 0x01u);
 
     *(volatile uint8_t *)(BOUNDS_TEST_BASE + 0x50u) = 0x10u;
     *(volatile uint8_t *)(BOUNDS_TEST_BASE + 0x51u) = 0x20u;
@@ -5807,9 +5811,9 @@ static void test_cmp2_chk2_directed(void)
         : "=&d"(got0), "=&d"(got1), "=&d"(got2)
         :
         : "a0", "d0", "d1", "cc", "memory");
-    chk32(0x000a0260u, got0 & 0x1fu, 0x04u);
-    chk32(0x000a0264u, got1 & 0x1fu, 0x00u);
-    chk32(0x000a0268u, got2 & 0x1fu, 0x01u);
+    chk32(0x000a0260u, got0 & cmp2_ccr_mask, 0x04u);
+    chk32(0x000a0264u, got1 & cmp2_ccr_mask, 0x00u);
+    chk32(0x000a0268u, got2 & cmp2_ccr_mask, 0x01u);
 
     got0 = 0u;
     __asm__ volatile(
@@ -7012,7 +7016,9 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "memory");
     chk_access_fault_frame(0x00100700u, 0x000cu, 0x2000u, 0x2000u, 1u);
-    chk_access_fault_long(0x00100718u, 0x2cu, rd32(EXC_EXPECTED_ADDR));
+    /* MC68030 UM 8.2: address errors use pipeline rerun state, not data fault address. */
+    chk32(0x00100718u, rd32(EXC_REC_BASE + 0x24u) & 0xf000u, 0x3000u);
+    chk32(0x0010071cu, rd32(EXC_STAGE_B_ADDR) - 2u, rd32(EXC_EXPECTED_ADDR));
 
 #ifdef CORETEST_SIM_IRQ
     for (uint32_t off = 0; off < 0x100u; off += 4u) {
@@ -7058,7 +7064,7 @@ static void test_exception_recovery_directed(void)
     progress_char('l');
     chk_access_fault_status(0x00100738u, 0x0145u);
     progress_char('L');
-    chk_access_fault_long(0x001007a0u, 0x24u, 0x22390145u);
+    /* Format A/B frame offset $08 is internal processor state and is not scored. */
     chk_access_fault_long(0x001007a8u, 0x2cu, BERR_SIM_TARGET);
     progress_char('m');
 
@@ -7080,7 +7086,6 @@ static void test_exception_recovery_directed(void)
         : "a0", "d0", "d1", "cc", "memory");
     chk_access_fault_frame(0x00100740u, 0x0008u, 0x2000u, 0x2000u, 0u);
     chk_access_fault_status(0x00100758u, 0x0105u);
-    chk_access_fault_long(0x001007b0u, 0x24u, 0x23c10105u);
     chk_access_fault_long(0x001007b8u, 0x2cu, BERR_SIM_TARGET);
 
     wr32(BERR_SIM_TARGET, 0x4e754e71u);
@@ -7105,8 +7110,8 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "a1", "d0", "d1", "d2", "cc", "memory");
     chk_access_fault_frame(0x00100760u, 0x0008u, 0x2000u, 0x2000u, 0u);
-    chk_access_fault_status(0x00100778u, 0x0066u);
-    chk_access_fault_long(0x001007c4u, 0x2cu, BERR_SIM_TARGET);
+    chk32(0x00100778u, rd32(EXC_REC_BASE + 0x24u) & 0xf100u, 0x5000u);
+    chk32(0x001007c4u, rd32(EXC_STAGE_B_ADDR), BERR_SIM_TARGET);
 
     wr32(BERR_SIM_TARGET, 0xa55a5aa5u);
     arm_exception_recovery(0x0008u);
@@ -7299,8 +7304,8 @@ static void test_exception_recovery_directed(void)
         :
         : "a0", "a1", "d0", "d1", "cc", "memory");
     chk_access_fault_frame(0x00100c00u, 0x0008u, 0x2000u, 0x0000u, 0u);
-    chk_access_fault_status(0x00100c18u, 0x0062u);
-    chk_access_fault_long(0x00100c1cu, 0x2cu, BERR_SIM_TARGET);
+    chk32(0x00100c18u, rd32(EXC_REC_BASE + 0x24u) & 0xf100u, 0x5000u);
+    chk32(0x00100c1cu, rd32(EXC_STAGE_B_ADDR), BERR_SIM_TARGET);
 
     wr32(BERR_SIM_TARGET, 0x11111111u);
     wr32(BERR_SIM_TARGET + 4u, 0x22222222u);
@@ -8126,6 +8131,30 @@ static void test_interrupt_autovector_directed(void)
         :
         : "a0", "d0", "cc", "memory");
     chk_exception_frame(0x00110080u, 0x007cu, 0x0000u, 0x2700u, 0x2700u);
+
+    /* MC68030 UM 8.1.1: dropping below level 7 rearms the next NMI edge. */
+    arm_exception_recovery(0x007cu);
+    wr32(IRQ_SIM_REQ, 0u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.w #0x2700,%%sr\n\t"
+        "move.l #7,0xfff00600\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n"
+        "1:\n\t"
+        "move.w #0x2700,%%sr\n\t"
+        "move.l #0,0xfff00600\n\t"
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr"
+        :
+        :
+        : "a0", "d0", "cc", "memory");
+    chk_exception_frame(0x00110200u, 0x007cu, 0x0000u, 0x2700u, 0x2700u);
 
     for (uint32_t off = 0; off < 0x100u; off += 4u) {
         wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);

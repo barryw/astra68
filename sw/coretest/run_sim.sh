@@ -26,8 +26,13 @@ case "$CPU_CORE" in
         verilator_cpu_args=(-GCPU_TG68K=1)
         coretest_cpu_cflags=(-m68030 -DCORETEST_CPU_TG68K030=1)
         ;;
+    tg68k030_mmu2|tg68k_mmu2|tg68k_c_030_mmu2)
+        CPU_CORE="tg68k030_mmu2"
+        verilator_cpu_args=(-GCPU_TG68K=1)
+        coretest_cpu_cflags=(-m68030 -DCORETEST_CPU_TG68K030=1)
+        ;;
     *)
-        echo "unknown CPU_CORE='$CPU_CORE' (expected wf68k, tg68k, or tg68k030)" >&2
+        echo "unknown CPU_CORE='$CPU_CORE' (expected wf68k, tg68k, tg68k030, or tg68k030_mmu2)" >&2
         exit 2
         ;;
 esac
@@ -50,8 +55,8 @@ if [[ -n "${CORETEST_SIM_TIMEOUT_PS:-}" ]]; then
     verilator_debug_args+=(-GSIM_TIMEOUT_PS_PARAM="$CORETEST_SIM_TIMEOUT_PS")
 fi
 if [[ "${CORETEST_SDRAM_BERR:-0}" == "1" ]]; then
-    if [[ "$CPU_CORE" != "tg68k030" ]]; then
-        echo "CORETEST_SDRAM_BERR requires CPU_CORE=tg68k030" >&2
+    if [[ "$CPU_CORE" != "tg68k030" && "$CPU_CORE" != "tg68k030_mmu2" ]]; then
+        echo "CORETEST_SDRAM_BERR requires an integrated TG68K 68030 core" >&2
         exit 2
     fi
     coretest_cpu_cflags+=(-DCORETEST_SIM_FOCUS_SDRAM_BERR=1)

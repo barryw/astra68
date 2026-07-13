@@ -23,9 +23,21 @@ This snapshot is a repair candidate, not an accepted Astra CPU:
 - the advertised small regression target passes 8 of 8;
 - the full repository harness is fail-open and does not run every checked-in
   bench;
-- strict execution exposes unresolved MMU restart, exception-stacking, and
-  WinUAE-derived integer-test failures;
+- Astra's fail-closed runner currently reports 107 clean of 137 variants, with
+  3 stale compile failures, 22 raw simulation failures, and 5 unscored benches;
+- all five NetBSD-style plain-RTE demand-paging restart cases and the translated
+  supervisor-stack restart case pass, including mid-transfer MOVEM recovery;
+- unresolved exception-stacking, MOVES/DFC, and WinUAE-derived integer-test
+  diagnostics still require Motorola-based classification or repair;
 - several supplied tests themselves contradict Motorola and must be corrected.
+
+The repaired ALU/kernel and the complete SoC now report zero combinational SCCs
+both before and after ECP5 synthesis. The canonical ULX3S build routes at 38,705
+TRELLIS_COMB and 9,396 flip-flops; seed 3 closes the 12.5 MHz CPU clock at
+12.92 MHz and the 75 MHz SDRAM clock at 76.55 MHz, with positive worst-case
+slack. This removes the open-flow blocker, but does not by itself promote the
+candidate: the unresolved diagnostics above, full Harte qualification, and
+hardware validation still remain.
 
 See [`../../../docs/TG68K_030_MMU2_AUDIT.md`](../../../docs/TG68K_030_MMU2_AUDIT.md)
 and [`../../../docs/MC68030_COMPLIANCE.md`](../../../docs/MC68030_COMPLIANCE.md).

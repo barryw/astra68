@@ -8,6 +8,12 @@ baggage.
 
 > **Status legend:** ✅ VERIFIED on hardware · 🔒 LOCKED decision · 🔧 open/iterating
 
+> **CPU/MMU transition (2026-07-13):** the architecture is now locked to the
+> 68030-class core with its built-in paged PMMU and caches. The older WF68K30L
+> plus Vesta region-MMU path is retired and remains only while useful tests and
+> integration work are migrated. CPU acceptance is governed by
+> `docs/MC68030_COMPLIANCE.md`; the OS vision is `docs/OS_VISION.md`.
+
 ---
 
 ## 0. Hardware-verified facts (this board)
@@ -38,7 +44,7 @@ version + status + control registers.
 | **Astraea** | DMA + blitter + copper + memory arbiter (the brain) | Agnus |
 | **Vega** | video: framebuffer scanout, sprites, palette, backdrop, HDMI | Denise |
 | **Lyra** | audio: 16 PCM + 16 wavetable + stereo mixer | Paula |
-| **Vesta** | system glue: region-MMU, interrupt controller, timers, UART, SD, input | Gary/Gayle |
+| **Vesta** | system glue: identity, interrupt controller, timers, UART, SD, input | Gary/Gayle |
 
 Star/goddess theme (Astra = star). **Lyra** = the lyre (music) and the
 constellation containing **Vega** — display + audio pair. (Named Lyra not "Nova"
@@ -48,21 +54,21 @@ because the e6502 already uses "Nova" internally.)
 
 ## 2. CPU 🔒
 
-- **Core:** WF68K30L (Wolfgang Förster) — a **complete** 68020/030 integer ISA
-  (bitfield ops, 32-bit MUL/DIV, all addressing modes), big-endian, 32-bit.
-  GPL VHDL → ingested via the ghdl→yosys path (verified available).
-- **No on-chip PMMU / no FPU** in the core — both are intentional:
-  - Protection is our own **Vesta region-MMU** (§6), bolted on the bus, driving
-    the core's bus-error/fault lines.
-  - Floating point is **soft-float** (§12).
-- **Compile target:** `m68k-elf`, `-m68020 -msoft-float`, big-endian. The
-  complete core runs stock gcc `-m68020` output (the old TG68-subset worry is
-  gone).
-- Fmax on ECP5 ~40–70 MHz — fine; the machine is SDRAM/arbiter-bound and the CPU
-  may take wait states.
+- **Architecture:** Motorola-compatible MC68030 integer core with built-in
+  paged PMMU and instruction/data caches, big-endian with 32-bit logical and
+  physical addressing.
+- **Current implementation:** the repaired TG030+PMMU line under
+  `fpga/cpu/tg68k_c_030_mmu2/`. It is promoted only when the complete
+  fail-closed acceptance policy in `docs/MC68030_COMPLIANCE.md` passes.
+- **No FPU:** floating point remains soft-float (§10).
+- Platform address maps, cacheability policy, and compatibility behavior live
+  in SoC glue, not in the CPU architectural contract.
+- The older WF68K30L/no-PMMU core and external Vesta region-MMU are retired
+  design paths pending deliberate source cleanup.
 
-Not required v0.1: 68851 PMMU compat, FPU hardware, 040/060 instructions,
-cache/cycle accuracy.
+Not required v0.1: FPU hardware, 040/060 instructions, or cycle-exact external
+bus timing. Architecturally correct exception restart, PMMU behavior, cache
+control, memory ordering, and bus-visible semantics remain required.
 
 ---
 
@@ -83,7 +89,7 @@ jump from 16→32 MB is spent on *resident capacity*, since bandwidth (§17) is
 unchanged by capacity:
 
 ```
-0x0000000  ~16 MB   Kernel + general RAM + user processes (region-MMU mapped)
+0x0000000  ~16 MB   Kernel + general RAM + protected user processes
 0x1000000  ~7  MB   Framebuffer / VRAM pool — multiple 720×480×16 buffers +
                     GUI compositor off-screen window buffers
 0x1700000  ~5  MB   Audio sample pool (Lyra PCM banks, resident instruments)
@@ -103,30 +109,28 @@ DMA streams.
 
 ---
 
-## 4. Vesta — region MMU / protection 🔒
+## 4. MC68030 PMMU / protection 🔒
 
-Not a Motorola paged MMU. A simple **region-based protection unit** — enough to
-isolate processes without page tables.
+Process isolation uses the CPU's built-in paged PMMU. The kernel maintains a
+per-process user address space plus permanently mapped supervisor kernel state,
+changes the user translation root during a process switch, and performs the
+required ATC/cache maintenance.
 
-- Per process: **8–16 regions**. Each region: `logical_base`, `logical_limit`,
-  `physical_base`, `permissions` (R/W/X/U/S), `flags`.
-- Every CPU access: logical addr → region match → permission check → physical
-  translate → bus cycle, or **fault** (bus error / protection fault) if no match
-  or permission fails.
-- Process switch: kernel saves CPU state, loads the target's region table.
-- Consequence (accepted for v0.1): physically-contiguous regions, no demand
-  paging / COW, external fragmentation as processes churn. Paging is a stretch
-  goal.
+Initial OS use is intentionally conservative:
 
-Suggested per-process logical layout:
-```
-00000000-0000FFFF  null guard
-00010000-003FFFFF  text/data
-00400000-007FFFFF  heap
-70000000-700FFFFF  shared / IPC / mapped resources
-7FFF0000-7FFFFFFF  user stack
-80000000-FFFFFFFF  kernel / supervisor / device (S-only)
-```
+- unmapped null region and guard pages;
+- supervisor-only kernel, ROM, and MMIO mappings;
+- explicit read-only code and shared-memory mappings;
+- wired exception vectors, page tables, interrupt stack, and active kernel
+  stacks;
+- no memory overcommit, demand paging, or swap in the first system;
+- an invalid user access terminates or debugs that process without harming the
+  kernel.
+
+Page size, table geometry, virtual layout, and any external execute-protection
+extension remain open in `docs/OS_VISION.md`. The CPU PMMU does not constrain
+chipset DMA, so DMA fencing and cache ownership are separate platform
+requirements.
 
 ---
 
@@ -272,53 +276,38 @@ systems.
 
 | Tool | Use | Why |
 |---|---|---|
-| **m68k-elf-gcc** | primary C compiler | best optimizer, newlib, C++, GDB, OS-grade; the complete 020 core runs its `-m68020` output |
+| **m68k-elf-gcc** | primary C compiler | optimizer, newlib, C++, GDB, and an established big-endian m68k ELF toolchain |
 | **vasm** (Motorola syntax) | assembler | the superior 68k assembler — macros, Motorola syntax, from the vbcc/vasm suite |
 | **vlink** | linker | flexible output formats, pairs with vasm |
 | vbcc | optional/secondary | fine for quick Amiga-style bare-metal, but gcc's optimizer + ecosystem win for an OS |
 
-So: **gcc for C, vasm/vlink for hand asm.** Not either/or. Flags: `-m68020
--msoft-float`, big-endian ELF. Define an Astra ABI (crt0, linker script, syscall
-via `trap`, hardware headers, newlib subset).
+So: **gcc for C, vasm/vlink for hand asm.** Not either/or. The native ABI is
+big-endian m68k ELF with soft-float; the final MC68030 user-code flags and ABI
+baseline must be locked with the toolchain. Define crt0, linker scripts, the
+native `trap` syscall convention, hardware/service headers, and a libc subset.
 
 ---
 
-## 14. OS direction 🔒 (kernel start-from decided)
+## 14. OS direction 🔒
 
-Phased: ROM monitor → single-task → cooperative → preemptive → **protected user
-processes (region-MMU)** → filesystem → GUI/windowing (compositing desktop, which
-32 MB now makes comfortable).
+The authoritative product and architecture direction is
+`docs/OS_VISION.md`.
 
-**Filter:** our region-MMU is custom → full paged-MMU Unix (Linux / NetBSD /
-OpenBSD m68k) is **OUT** — all mandate a real 68851 PMMU for 020/030. uClinux
-(no protection at all) and AROS (flat trusted memory baked into its ABI) **fight**
-our protection model. So **the region-MMU protection layer is ours to build no
-matter what** — nothing off-the-shelf targets it.
+Locked principles:
 
-**Start-from strategy:**
+- one local owner without a Unix multi-user administration model;
+- network connectivity as a first-class capability;
+- preemptive scheduling from the first native multitasking milestone;
+- protected processes using the built-in MC68030 PMMU;
+- application and service failure containment;
+- BeOS-like responsiveness and developer coherence without cloning BeOS;
+- chipset-native graphics, media, and DMA resources behind safe interfaces;
+- no cooperative or flat-address-space compatibility foundation.
 
-- **Foundation → crib `rosco_m68k`** (MIT, active — firmware 2.42 Jan 2025, has a
-  **68030 edition**, uses our exact `m68k-elf-gcc` + vasm/vlink toolchain): take
-  its ROM monitor, `crt0.S`, linker scripts, SD/IDE boot, serial — swap the MMIO
-  drivers for Astraea/Vega/Lyra/Vesta. (`tomstorey/m68k_bare_metal` = second
-  minimal crt0/linker reference.)
-- **Scheduler → build it** (small for a single 020: one timer IRQ + one
-  context-switch routine + ready queue), using **FreeRTOS** primitives (MIT) as
-  the template. This is the exact layer that reloads region-MMU descriptors on
-  every context switch, so we own it. FreeRTOS has no official 020 port
-  (ColdFire only) — but that's just one context-switch `.S` to write.
-- **Worked reference → study `Computie`/`Gloworm`** (transistorfet, 68010/020/030,
-  active): a readable Unix-like build of the exact cooperative→preemptive→syscall→
-  MINIX-VFS→FS→TCP arc we target. GPL-3 → **read, don't paste.**
-- **GUI → study EmuTOS's GEM** (VDI + AES + desktop; GPL-2, active — 1.4 Jun 2025,
-  builds with our toolchain) for windowing. Skim AROS Intuition for concepts.
-- **Optional → RTEMS** (permissive GPL-2+exception, explicit 020, explicitly
-  flat/MMU-free) *only* if we later want POSIX threads + filesystem for free and
-  accept writing a custom BSP — it's heavy for a fantasy console.
-
-**Protection bolt-on:** rosco / FreeRTOS / RTEMS / Computie all run **flat +
-supervisor**, so a region unit adds cleanly — a "load N regions from the process
-control block" step in the context switch + bus-error / privilege trap handlers.
+The immediate software milestone is a firmware-to-kernel handoff followed by a
+protected vertical slice: enable permanent PMMU mappings, enter user mode,
+perform a native trap syscall, preempt between user tasks, contain a deliberate
+user fault, and complete a cache-safe fenced DMA operation.
 
 ---
 
@@ -344,19 +333,19 @@ timing-closure task).
 
 ## 16. FPGA resource budget (85F: 84,480 LUT4, 3744 Kbit EBR, 156 DSP)
 
-| Block | ~LUT4 |
-|---|---|
-| WF68K30L 030 core | **16,772 (20%)** — measured (Synplify), 0 BRAM/DSP, ~12 MHz |
-| Astraea (DMA/blit/copper/arbiter) | ~5K (est) |
-| Vega (video/sprites/tilemaps/palette/HDMI) | ~6K (est) |
-| Lyra (audio 32-voice) | ~3K (est) + few DSP |
-| Vesta (MMU/IRQ/timers/UART/SD) | ~4K (est) |
-| SDRAM ctrl + TMDS + glue | ~3K (est) |
-| **Total** | CPU measured, chips estimated → realistically **~55–65K (~66–78%)** |
+The old WF68K30L component estimate is retired. Resource planning now starts
+from integrated TG030+PMMU builds and is remeasured as each chipset block lands.
 
-EBR: wave RAM 64 KB (14%) + line buffers + copper BRAM + FIFOs < 40%. Sprites
-stream from SDRAM and the core has no cache → both save EBR. "Use every bit" —
-there's headroom for bigger caches, more wave RAM, tilemap layers, etc.
+The retained 75 MHz SDRAM baseline in `docs/SDRAM.md` contains the TG030 with
+PMMU and caches, HDMI POST console, SDRAM subsystem, and Astraea paths. It uses
+36,935 packed LUTs, 9,147 FFs, 136 DP16KD blocks, and 13 multipliers. This is a
+measured integration baseline, not an estimate of the completed Vega/Lyra/
+storage/network system.
+
+Every major integration must report LUTs, FFs, EBRs, DSPs, CPU Fmax, SDRAM
+Fmax, and retained hardware-test identity. Optional features are admitted only
+after the protected OS, deterministic display/audio paths, and recovery
+facilities fit with timing margin.
 
 ---
 
@@ -374,35 +363,28 @@ framebuffer test — TODO.
 register map (`docs/*.md`) + C header (`sw/include/*.h`) + `astra.h` umbrella,
 all offsets and macros compile-verified. Hardware: 85F + 32 MB SDRAM verified.
 
-**Open (🔧) — RTL + boot phase:**
-1. Reset boot overlay (ROM@$0) — into boot sequence.
-2. Copper mid-scanline-safe vs racy set — drafted `docs/VEGA.md §10`; finalize.
-3. ✅ WF68K30L cost **measured** (Diamond hybrid, `fpga/cpu/`). **Synplify: 16,772
-   LUT4 (20%), 3192 FF, 0 BRAM/DSP, ~11.6 MHz.** LSE: 24,898 (30%), ~9.9 MHz →
-   use Synplify. ~12 MHz ceiling = deep opcode-decode→exception path (48 levels,
-   routing-bound), inherent to this area-optimized core. Fits (20%); ~12 MHz
-   workable (chipset-first; CPU takes wait states vs 50–75 MHz SDRAM ≈ Amiga-500
-   CPU class w/ full 030 ISA). Open ghdl flow crashes on the core; Diamond is it.
-   Faster needs core surgery (pipeline that path) or a faster FPGA — later call.
-4. 100 MHz SDRAM: floorplan Astraea controller + phase-tune.
-5. Audio out: sigma-delta jack (v0.1) vs HDMI audio.
-6. ✅ crt0 + linker script + boot hello (`sw/boot/`, gcc-m68k-linux-gnu on beast).
-   Next: ROM monitor (examine/modify/load-over-UART/run), SDRAM init, overlay.
-7. **SoC skeleton — IN PROGRESS** (`fpga/soc/astra_soc.sv` + `fpga/cpu/wf68k_wrap.vhd`):
-   WF68K30L + boot ROM + BRAM stack + Vesta UART, single 10 MHz clock, 68030
-   async bus FSM (AS/DS/DSACK), boots `astra_boot.bin` → banner over UART. RTL
-   written + parses clean in Diamond; `rom_init.hex` generated. **Blocker:**
-   Synplify auto-selects top=`wf68k_wrap` not `astra_soc` (trims to 118 LUT) —
-   need to force the Synplify top (`prj_impl option top` isn't reaching it; try
-   `prj_strgy`/`-top` or a dummy top constraint). Then: full fit → PAR + ULX3S
-   `.lpf` → flash → observe banner. Bus FSM still needs HW/sim validation.
-   Build reproducible on beast (`~/astra_soc/prj/build_soc.tcl`).
-8. Implement each chip (Astraea/Vega/Lyra/Vesta) against its register contract.
+**Open (🔧) — hardware and firmware foundation:**
+1. Promote one TG030+PMMU RTL revision only after the complete acceptance policy
+   in `docs/MC68030_COMPLIANCE.md` passes in simulation and retained hardware.
+2. Reconcile and remove the retired WF68K30L and Vesta region-MMU source,
+   wrappers, register definitions, build paths, and historical guidance after
+   useful tests have migrated.
+3. Complete the reset overlay, recovery monitor, versioned `BootInfo`, and
+   separate kernel-image loader described by `docs/OS_VISION.md`.
+4. Define and implement DMA fencing/fault reporting before protected services
+   can influence chipset DMA.
+5. Finish the interrupt/timer, framebuffer, input, storage, and audio hardware
+   needed by the first protected OS vertical slice.
+6. Finalize copper mid-scanline safety and every chipset capability/version
+   contract exposed to software.
+7. Keep 75 MHz SDRAM as the accepted baseline; treat 100 MHz as a stretch goal
+   requiring fresh timing, cache, DMA, PMMU, and full-memory stress acceptance.
 
 ---
 
 ## 18. Non-goals
 
-Not an Amiga / Atari ST / Mac / NeXT clone, not Linux-first, not cycle-accurate,
-not a 68030 PMMU, not a GPU-heavy 3D machine. Astra 68 is its own platform: a
-clean, understandable, powerful 68k machine with enough custom hardware to be fun.
+Not an Amiga / Atari ST / Mac / NeXT / BeOS clone, not Linux-first, not
+cycle-accurate, not FPU-dependent, and not a GPU-heavy 3D machine. Astra 68 is
+its own platform: a clean, understandable, protected 68k computer with enough
+custom hardware to be distinctive and fun.

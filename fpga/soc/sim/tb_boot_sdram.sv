@@ -4,7 +4,8 @@
 module tb_boot_sdram #(
     parameter [31:0] BUILD_ID = 32'h00000000,
     parameter integer TEST_BYTES = 262144,
-    parameter bit PROGRESS = 1'b0
+    parameter bit PROGRESS = 1'b0,
+    parameter bit CPU_MMU2 = 1'b0
 );
     reg clk25 = 1'b0;
     reg rstn = 1'b0;
@@ -34,7 +35,7 @@ module tb_boot_sdram #(
         .CPU_CLK_DIV_BIT(0),
         .UART_BAUD(12500000),
         .CPU_MODEL(32'h00068030),
-        .CPU_IMPLEMENTATION(32'h54473330),
+        .CPU_IMPLEMENTATION(CPU_MMU2 ? 32'h54474d32 : 32'h54473330),
         .CPU_FEATURES(32'h0000000d),
         .SOC_BUILD_ID(BUILD_ID)
     ) dut (
@@ -110,6 +111,7 @@ module tb_boot_sdram #(
 
     string uart_line = "";
     reg banner_seen = 1'b0;
+    reg build_seen = 1'b0;
     reg cpu_seen = 1'b0;
     reg lane_test_seen = 1'b0;
     reg address_test_seen = 1'b0;
@@ -131,9 +133,16 @@ module tb_boot_sdram #(
             end else if (dut.uart_data == 8'h0a) begin
                 $display("UART: %s", uart_line);
                 $fflush();
-                if (uart_line == "ASTRA 68 SYSTEM ROM v0.2")
+                if (uart_line.len() > 21 &&
+                    uart_line.substr(0, 20) == "ASTRA 68 SYSTEM ROM v")
                     banner_seen <= 1'b1;
-                if (uart_line == "CPU:    TG68K.C 68030 @ 12500000 Hz")
+                if (uart_line.len() >= 74 &&
+                    uart_line.substr(0, 6) == "Built: ")
+                    build_seen <= 1'b1;
+                if ((!CPU_MMU2 &&
+                     uart_line == "CPU:    TG68K.C 68030 @ 12500000 Hz") ||
+                    (CPU_MMU2 &&
+                     uart_line == "CPU:    TG68K.C 68030 MMU2 @ 12500000 Hz"))
                     cpu_seen <= 1'b1;
                 if (uart_line == "  Data/byte lanes .... OK")
                     lane_test_seen <= 1'b1;
@@ -150,7 +159,7 @@ module tb_boot_sdram #(
                     uart_line == "HALTED: POST FAILURE")
                     $fatal(1, "boot ROM reported POST failure");
                 if (uart_line == "POST PASS") begin
-                    if (!banner_seen || !cpu_seen || !lane_test_seen ||
+                    if (!banner_seen || !build_seen || !cpu_seen || !lane_test_seen ||
                         !address_test_seen || !cache_test_seen ||
                         !astraea_test_seen || !astraea_result_seen)
                         $fatal(1, "POST passed without all prerequisite checks");

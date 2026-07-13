@@ -1,9 +1,14 @@
-# Vesta — System / MMU / IRQ / Timers / I/O Register Map (v0.1)
+# Vesta — System / IRQ / Timers / I/O Register Map (v0.1 transition)
 
-Vesta is the Astra 68 system-glue chip (Gary/Gayle analog): the region-based
-protection MMU, the interrupt controller every other chip routes into, timers,
-UART console, SD/SPI storage, and input. It also holds machine identity and
-reset control.
+Vesta is the Astra 68 system-glue chip (Gary/Gayle analog): the interrupt
+controller every other chip routes into, timers, UART console, SD/SPI storage,
+input, machine identity, and reset control.
+
+> **Architecture transition:** process translation and protection now use the
+> CPU's built-in MC68030 PMMU. The former Vesta region-MMU aperture and contract
+> are retired and must not be implemented by new hardware or used by new
+> software. Legacy builds and headers may retain it temporarily while useful
+> tests and performance counters are migrated.
 
 Authoritative contract; `sw/include/vesta.h` is the hand-maintained C mirror.
 
@@ -18,8 +23,8 @@ Authoritative contract; `sw/include/vesta.h` is the hand-maintained C mirror.
 Block map (VESTA_BASE +):
   0x0000  system control (id / machine / reset / scratch)
   0x00D0  SDRAM power-on self-test
-  0x0100  MMU control + fault reporting
-  0x0200  MMU region table (16 regions x 16 bytes)
+  0x0100  retired region-MMU / legacy diagnostic aperture
+  0x0200  retired region-MMU table aperture
   0x0300  interrupt controller
   0x0380  per-source IRQ config (32 x 4 bytes)
   0x0400  timers (2 x 16 bytes)
@@ -102,7 +107,14 @@ stored data, and every bit in every byte must store both zero and one.
 
 ---
 
-## 3. Region MMU (0x0100 control, 0x0200 regions)
+## 3. Retired region-MMU aperture (0x0100-0x02FF)
+
+This section documents a retired interface for historical builds only. New
+hardware reserves these offsets until the performance counters currently mixed
+into this range are assigned a permanent home. New software uses the MC68030
+PMMU and must not probe or program the former region table.
+
+<!-- Historical interface retained temporarily for migration. -->
 
 A region-based protection unit — **not** a paged MMU. The *active* process's
 region table lives in these 16 hardware slots; the kernel reloads them on a
@@ -292,17 +304,15 @@ VESTA->UART_DATA = c;
 
 ## 10. Decisions & open
 
-**Decided:** 16 hardware region slots, kernel-reloaded on switch (no page walk) ·
-first-match overlap resolution · supervisor-bypass default · faults = 68k bus
-error with latched addr+reason · per-source IRQ level+vector config · aggregated
-chip IRQ lines (read the chip's `IRQ_STAT` for detail).
+**Decided:** process protection uses the CPU's built-in paged PMMU · the Vesta
+region unit is retired · per-source IRQ level+vector config · aggregated chip
+IRQ lines (read the chip's `IRQ_STAT` for detail).
 
 **Open:**
-1. Region **count** — 16 vs 8 (LUT / translation-latency tradeoff; confirm after
-   WF68K30L timing).
-2. Fast process switch — a **second region bank** to double-buffer (load next
-   process's table while current runs) vs plain 64-write reload.
-3. SD **block-DMA engine** (auto DMA a 512-byte block to SDRAM) vs software SPI.
-4. Watchdog timer (for `RESET_REASON=watchdog`).
-5. `SCRATCH` persistence across soft reset — how many words for boot handoff.
-6. Paging path (future) — regions could gain a "page table pointer" mode later.
+1. Permanent location and ABI for CPU/cache/PMMU performance counters currently
+   exposed in the retired aperture.
+2. SD **block-DMA engine** (auto DMA a 512-byte block to SDRAM) vs software SPI.
+3. Watchdog timer (for `RESET_REASON=watchdog`).
+4. `SCRATCH` persistence across soft reset — how many words for boot handoff.
+5. Whether central DMA-fence configuration and fault reporting belong in Vesta
+   or Astraea.

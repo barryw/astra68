@@ -14,6 +14,7 @@ cd "$(dirname "$0")"          # fpga/soc/sim/
 C=../../cpu/wf68k30L
 T=../../cpu/tg68k_c
 T030=../../cpu/tg68k_c_030_mmu
+T030M2=../../cpu/tg68k_c_030_mmu2
 W=../../cpu
 CPU_CORE="${CPU_CORE:-wf68k}"
 CORE_OUT="${CORE_OUT:-wf68k_core.v}"
@@ -25,8 +26,11 @@ case "$CPU_CORE" in
   tg68k030|tg68k_mmu|tg68k_c_030_mmu)
     TG_GHDL="ghdl --std=08 -fsynopsys --latches $T030/TG68K_Pack.vhd $T030/TG68K_ALU.vhd $T030/TG68K_PMMU_030.vhd $T030/TG68K_Cache_030.vhd $T030/TG68KdotC_Kernel.vhd $T030/TG68K.vhd $W/tg68k030_wrap.vhd -e tg68k_wrap;"
     ;;
+  tg68k030_mmu2|tg68k_mmu2|tg68k_c_030_mmu2)
+    TG_GHDL="ghdl --std=08 -fsynopsys --latches $T030M2/TG68K_Pack.vhd $T030M2/TG68K_ALU.vhd $T030M2/TG68K_PMMU_030.vhd $T030M2/TG68K_Cache_030.vhd $T030M2/TG68KdotC_Kernel.vhd $T030M2/TG68K.vhd $W/tg68k030_mmu2_wrap.vhd -e tg68k_wrap;"
+    ;;
   *)
-    echo "unknown CPU_CORE='$CPU_CORE' (expected wf68k, tg68k, or tg68k030)" >&2
+    echo "unknown CPU_CORE='$CPU_CORE' (expected wf68k, tg68k, tg68k030, or tg68k030_mmu2)" >&2
     exit 2
     ;;
 esac

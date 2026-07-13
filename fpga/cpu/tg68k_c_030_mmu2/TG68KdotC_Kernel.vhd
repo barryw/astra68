@@ -123,6 +123,8 @@ entity TG68KdotC_Kernel is
 		IPL						: in std_logic_vector(2 downto 0):="111";
 		IPL_autovector			: in std_logic:='0';
 		berr						: in std_logic:='0';					-- only 68000 Stackpointer dummy
+		berr_addr_override		: in std_logic:='0';
+		berr_addr_in				: in std_logic_vector(31 downto 0):=(others => '0');
 		CPU						: in std_logic_vector(1 downto 0);  -- 00->68000  01->68010  10->68030 (with PMMU)
 		addr_out					: out std_logic_vector(31 downto 0);
 		data_write				: out std_logic_vector(15 downto 0);
@@ -134,6 +136,7 @@ entity TG68KdotC_Kernel is
 		nResetOut				: out std_logic;
 		FC							: out std_logic_vector(2 downto 0);
 		clr_berr					: out std_logic;
+		RMCn_out					: out std_logic := '1';
 -- for debug
 		skipFetch				: out std_logic;
 		regin_out				: out std_logic_vector(31 downto 0);
@@ -343,6 +346,8 @@ architecture logic of TG68KdotC_Kernel is
 	signal syncReset			: std_logic_vector(3 downto 0);
 	signal Reset				: std_logic;
 	signal clkena_lw			: std_logic;
+	signal arch_commit_ena		: std_logic;
+	signal arch_abort_pending	: std_logic := '0';
 	signal TG68_PC				: std_logic_vector(31 downto 0);
 	signal tmp_TG68_PC		: std_logic_vector(31 downto 0);
 	signal TG68_PC_add		: std_logic_vector(31 downto 0);
@@ -445,11 +450,14 @@ architecture logic of TG68KdotC_Kernel is
 	signal SRin					: std_logic_vector(7 downto 0);
 	constant SR_trace_mask : std_logic_vector(7 downto 0) := "00111111";
 	constant RTE_030_FORMAT_B_VERSION : std_logic_vector(3 downto 0) := "0000";
+	constant MMU030_STATEFLAG1_MOVEM1 : std_logic_vector(15 downto 0) := x"4000";
 	signal exec_DIRECT		: bit;
 	signal exec_tas			: std_logic;
 	signal set_exec_tas		: std_logic;
 	signal exec_cas			: std_logic;
 	signal set_exec_cas		: std_logic;
+	signal atomic_rmc_active	: std_logic;
+	signal set_atomic_rmc		: std_logic;
 	signal pmmu_fault_effective_rw : std_logic;  -- WinUAE-parity Format $A/B: live-vs-latched RW for this fault
 	signal pmmu_fault_lastwrite_ok : std_logic;  -- WinUAE-parity Format $A/B: this write is LASTWRITE-eligible
 
@@ -502,6 +510,8 @@ architecture logic of TG68KdotC_Kernel is
 	signal movem_mux			: std_logic_vector(3 downto 0);
 	signal movem_presub		: bit;
 	signal movem_run			: bit;
+	signal movem_transfer_mask : std_logic_vector(15 downto 0) := (others => '0');
+	signal movem_transfer_reg : std_logic_vector(3 downto 0) := (others => '0');
 	signal ea_calc_b			: std_logic_vector(31 downto 0);
 	signal set_direct_data	: bit;
 	signal use_direct_data	: bit;
@@ -541,6 +551,9 @@ architecture logic of TG68KdotC_Kernel is
 	signal rte_mmu_fix_ccr_value : std_logic_vector(7 downto 0) := (others => '0');
 	signal rte_mmu_fix_dest : std_logic_vector(2 downto 0) := (others => '0');
 	signal rte_mmu_fix_size : std_logic_vector(1 downto 0) := (others => '0');
+	signal rte_movem_restart_pending : std_logic := '0';
+	signal rte_movem_restart_mask : std_logic_vector(15 downto 0) := (others => '0');
+	signal rte_movem_restart_addr : std_logic_vector(31 downto 0) := (others => '0');
 	signal rte_format_b_version_error : std_logic := '0';
 	signal rte_fmt_a_capture_active : std_logic := '0';
 	signal rte_fmt_a_long_index : integer range 0 to 7 := 0;
@@ -550,6 +563,14 @@ architecture logic of TG68KdotC_Kernel is
 	signal rte_fmt_a_data_out : std_logic_vector(31 downto 0) := (others => '0');
 	signal rte_fmt_a_replay_needed : std_logic := '0';
 	signal rte_fmt_a_replay_size : std_logic_vector(1 downto 0) := "10";
+	signal rte_fmt_b_data_out : std_logic_vector(31 downto 0) := (others => '0');
+	signal rte_fmt_b_replay_needed : std_logic := '0';
+	signal rte_fmt_b_replay_size : std_logic_vector(1 downto 0) := "10";
+	signal rte_data_replay_needed : std_logic := '0';
+	signal rte_data_replay_ssw : std_logic_vector(15 downto 0) := (others => '0');
+	signal rte_data_replay_fault_addr : std_logic_vector(31 downto 0) := (others => '0');
+	signal rte_data_replay_data_out : std_logic_vector(31 downto 0) := (others => '0');
+	signal rte_data_replay_size : std_logic_vector(1 downto 0) := "10";
 	signal restore_ccr_sig  : std_logic;  -- BUG #397: Pulse to restore CCR on format error
 	signal restore_ccr_value_mux : std_logic_vector(7 downto 0);
 	-- Note: Vectors 57 ($E4) and 58 ($E8) are 68851-only, not used on MC68030
@@ -579,6 +600,8 @@ architecture logic of TG68KdotC_Kernel is
 	signal berr_opcode_saved : std_logic_vector(15 downto 0);  -- Faulted instruction opcode for Format $B replay state
 	signal berr_ssw          : std_logic_vector(15 downto 0);  -- Special Status Word
 	signal berr_data_out_saved : std_logic_vector(31 downto 0);  -- Data output buffer saved at berr dispatch
+	signal berr_movem_restart_valid : std_logic;                 -- Format $B opaque MOVEM continuation state
+	signal berr_movem_mask_saved : std_logic_vector(15 downto 0);
 	signal berr_long_frame   : std_logic;  -- MC68030 bus fault frame choice: 0=Format $A, 1=Format $B
 	signal berr_external_rw       : std_logic;                       -- BUG #431 FIX: RW latched at external BERR first-fire (state="11")
 	signal berr_external_fc       : std_logic_vector(2 downto 0);   -- BUG #431 FIX: FC latched at external BERR first-fire
@@ -590,6 +613,12 @@ architecture logic of TG68KdotC_Kernel is
 	signal berr_pmmu_fault_is_insn : std_logic;                     -- PMMU fault type latched at first-fire
 	signal berr_pmmu_fault_valid  : std_logic;                      -- Latched PMMU fault metadata is pending frame construction
 	signal berr_external_addr    : std_logic_vector(31 downto 0);  -- BUG #434 FIX: fault addr latched at external BERR first-fire (addr at state="00" is PC-based)
+	signal berr_pending          : std_logic;                       -- External BERR captured before longword retirement is eligible
+	signal berr_pending_rw       : std_logic;
+	signal berr_pending_fc       : std_logic_vector(2 downto 0);
+	signal berr_pending_datatype : std_logic_vector(1 downto 0);
+	signal berr_pending_addr     : std_logic_vector(31 downto 0);
+	signal berr_capture_addr     : std_logic_vector(31 downto 0);
 	signal useStackframe2	: std_logic;
 	
 	signal set_stop			: bit;
@@ -612,6 +641,7 @@ architecture logic of TG68KdotC_Kernel is
 	signal IPL_nr				: std_logic_vector(2 downto 0);
 	signal rIPL_nr				: std_logic_vector(2 downto 0);
 	signal IPL_vec				: std_logic_vector(7 downto 0);
+	signal ipl7_edge_armed		: std_logic := '1';
 	signal interrupt			: bit;
 	signal setinterrupt		: bit;
 	signal SVmode				: std_logic;
@@ -676,7 +706,6 @@ architecture logic of TG68KdotC_Kernel is
 	signal pmove_dn_regnum  : std_logic_vector(2 downto 0);   -- PMOVE CPU register selector (0-7) captured in pmove_decode state
 	signal pmove_dn_areg    : std_logic;                      -- '1' when PMOVE CPU-register operand is An, '0' when Dn
 	signal pmove_dn_mode    : std_logic;                      -- Flag: '1' when PMOVE uses CPU-register mode (Dn/An)
-	signal pmove_mmu_read_active : std_logic;                 -- Flag: '1' when PMOVE MMU->memory is active
 	-- F-Line instruction context latch (captures at decode time for stable values)
 	signal fline_opcode_latch  : std_logic_vector(15 downto 0) := (others => '0');
 	signal fline_opcode_pc     : std_logic_vector(31 downto 0) := (others => '0');
@@ -997,12 +1026,6 @@ BEGIN
                                       micro_state = pmove_dn_lo)
                        else pmmu_reg_part_d;
 
-  -- PMOVE simplification: Route pmmu_reg_rdat through OP2out for MMU->memory writes
-  -- Active during pmove_mmu_to_mem_hi/lo states (same conditions as old data_write_tmp special case)
-  pmove_mmu_read_active <= '1' when (micro_state=pmove_mmu_to_mem_hi OR micro_state=pmove_mmu_to_mem_lo
-                                     OR next_micro_state=pmove_mmu_to_mem_hi OR next_micro_state=pmove_mmu_to_mem_lo)
-                           else '0';
-
   -- For PTEST/PFLUSH/PLOAD: use FC from brief word per MC68030 spec
   -- MC68030 PTEST/PLOAD/PFLUSH FC encoding (extension word bits 4-0):
   --   10XXX: Immediate FC value in bits 2-0 (XXX) - 3-bit FC value (0-7)
@@ -1123,8 +1146,8 @@ BEGIN
 	                             and not (state = "00" and TG68_PC(0) = '1')) else '0';
   pmmu_is_insn  <= '1' when state = "00" else '0';
   pmmu_rw       <= '0' when state = "11" else '1';
-  pmmu_rmw      <= exec_tas OR exec_cas;
-  pmmu_fc       <= rte_fmt_a_ssw(2 downto 0) when micro_state = rte_mmu_replay else fc_internal;
+  pmmu_rmw      <= exec_tas OR exec_cas OR atomic_rmc_active;
+	pmmu_fc       <= rte_data_replay_ssw(2 downto 0) when micro_state = rte_mmu_replay else fc_internal;
 
   -- FC from Dn for PTEST/PLOAD/PFLUSH: Read Dn register specified by brief(2:0), extract FC from bits [2:0]
   -- MC68030 spec: When brief(4:3) = "01", FC comes from Dn(2:0) where n = brief(2:0)
@@ -1166,7 +1189,7 @@ ALU: TG68K_ALU
 		clk => clk,								--: in std_logic;
 		Reset => Reset,						--: in std_logic;
 		CPU => CPU,								--: in std_logic_vector(1 downto 0):="00";  -- 00->68000  01->68010  10->68030
-		clkena_lw => clkena_lw,				--: in std_logic:='1';
+		clkena_lw => arch_commit_ena,			--: in std_logic:='1';
 		execOPC => execOPC_ALU,				--: in bit;
 		decodeOPC => decodeOPC,				--: in bit;
 		exe_condition => exe_condition,	--: in std_logic;
@@ -1227,10 +1250,10 @@ ALU: TG68K_ALU
 		-- BUG #318 FIX: Use latched moves_direction instead of brief(11).
 		-- For indexed/absolute EA modes, brief gets overwritten with the EA extension
 		-- word before moves1 executes, so brief(11) is no longer the MOVES direction bit.
-		process(fc_internal, moves_fc_override, moves_direction, SFC, DFC, micro_state, rte_fmt_a_ssw)
+		process(fc_internal, moves_fc_override, moves_direction, SFC, DFC, micro_state, rte_data_replay_ssw)
 		begin
 			if micro_state = rte_mmu_replay then
-				FC <= rte_fmt_a_ssw(2 downto 0);
+				FC <= rte_data_replay_ssw(2 downto 0);
 			elsif moves_fc_override = '1' then
 				-- MOVES instruction: override FC with SFC or DFC
 				-- moves_direction: 0=read (use SFC), 1=write (use DFC)
@@ -1466,7 +1489,38 @@ ALU: TG68K_ALU
 	nUDS <= memmaskmux(5) OR pmmu_busy OR pmmu_fault;
 	nLDS <= memmaskmux(4) OR pmmu_busy OR pmmu_fault;
 	clkena_lw <= '1' WHEN clkena_in='1' AND memmaskmux(3)='1' AND pmmu_busy='0' ELSE '0';
+	-- Keep exception dispatch running after a PMMU data fault, but do not
+	-- retire placeholder bus data from the aborted cycle.
+	arch_commit_ena <= '0' WHEN clkena_lw='1' AND
+	                              (arch_abort_pending='1' OR
+	                               (pmmu_tc_en='1' AND pmmu_fault='1' AND
+	                                pmmu_fault_is_insn_out='0' AND
+	                                pmmu_fault_lastwrite_ok='0' AND
+	                                berr_exception_active='0'))
+	                   ELSE clkena_lw;
+
+	-- A PMMU data fault can drop before delayed ALU/register writeback does.
+	-- Keep retirement blocked until exception dispatch has replaced the faulting
+	-- execution context; berr_fill itself must run with normal architectural writes.
+	PROCESS (clk)
+	BEGIN
+		IF rising_edge(clk) THEN
+			IF Reset='1' THEN
+				arch_abort_pending <= '0';
+			ELSIF micro_state=berr_fill THEN
+				arch_abort_pending <= '0';
+			ELSIF clkena_lw='1' THEN
+				IF pmmu_tc_en='1' AND pmmu_fault='1' AND
+				   pmmu_fault_is_insn_out='0' AND pmmu_fault_lastwrite_ok='0' AND
+				   berr_exception_active='0' THEN
+					arch_abort_pending <= '1';
+				END IF;
+			END IF;
+		END IF;
+	END PROCESS;
 	clr_berr <= '1' WHEN setopcode='1' AND trap_berr='1' ELSE '0';
+	berr_capture_addr <= berr_addr_in when berr_addr_override='1' else addr;
+	RMCn_out <= '0' WHEN atomic_rmc_active='1' AND state(1)='1' ELSE '1';
 
 	-- WinUAE-derived Format $A (LASTWRITE) eligibility for a PMMU data-write
 	-- fault. Per WinUAE (Exception_mmu030 / genastore_2 / gen_set_fault_pc):
@@ -1527,6 +1581,24 @@ ALU: TG68K_ALU
 	rte_fmt_a_replay_size <= "00" when rte_fmt_a_ssw(5 downto 4) = "01" else
 	                         "01" when rte_fmt_a_ssw(5 downto 4) = "10" else
 	                         "10";
+	rte_fmt_b_replay_needed <= '1' when
+		rte_format_word(15 downto 12) = "1011" AND
+		rte_mmu_fix_ssw(8) = '1' AND          -- DF: data cycle still needs replay
+		rte_mmu_fix_ssw(7) = '0' AND          -- not read-modify-write
+		rte_mmu_fix_ssw(6) = '0'              -- write cycle
+		else '0';
+	rte_fmt_b_replay_size <= "00" when rte_mmu_fix_ssw(5 downto 4) = "01" else
+	                         "01" when rte_mmu_fix_ssw(5 downto 4) = "10" else
+	                         "10";
+	rte_data_replay_needed <= rte_fmt_a_replay_needed OR rte_fmt_b_replay_needed;
+	rte_data_replay_ssw <= rte_fmt_a_ssw when rte_fmt_a_replay_needed='1' else
+	                       rte_mmu_fix_ssw;
+	rte_data_replay_fault_addr <= rte_fmt_a_fault_addr when rte_fmt_a_replay_needed='1' else
+	                              rte_movem_restart_addr;
+	rte_data_replay_data_out <= rte_fmt_a_data_out when rte_fmt_a_replay_needed='1' else
+	                            rte_fmt_b_data_out;
+	rte_data_replay_size <= rte_fmt_a_replay_size when rte_fmt_a_replay_needed='1' else
+	                        rte_fmt_b_replay_size;
 	rte_mmu_fix_write <= '1' when
 		rte_mmu_fix_armed = '1' AND
 		micro_state = rte5 AND
@@ -1703,6 +1775,10 @@ PROCESS (clk, long_done, last_data_in, data_in, addr, long_start, memmaskmux, me
 				rte_mmu_fix_ssw <= (others => '0');
 				rte_mmu_fix_opcode <= (others => '0');
 				rte_mmu_fix_input_buffer <= (others => '0');
+				rte_fmt_b_data_out <= (others => '0');
+				rte_movem_restart_pending <= '0';
+				rte_movem_restart_mask <= (others => '0');
+				rte_movem_restart_addr <= (others => '0');
 				rte_format_b_version_error <= '0';
 			ELSIF clkena_lw='1' THEN
 				IF trapmake='1' THEN
@@ -1732,18 +1808,32 @@ PROCESS (clk, long_done, last_data_in, data_in, addr, long_start, memmaskmux, me
 						rte_mmu_fix_ssw <= (others => '0');
 						rte_mmu_fix_opcode <= (others => '0');
 						rte_mmu_fix_input_buffer <= (others => '0');
+						rte_fmt_b_data_out <= (others => '0');
+						rte_movem_restart_pending <= '0';
+						rte_movem_restart_mask <= (others => '0');
+						rte_movem_restart_addr <= (others => '0');
 					ELSE
 						rte_mmu_fix_capture_active <= '0';
 						rte_mmu_fix_long_index <= 0;
+						rte_movem_restart_pending <= '0';
 					END IF;
 				ELSIF micro_state = rte5 AND rte_mmu_fix_capture_active = '1' THEN
 					CASE rte_mmu_fix_long_index IS
 						WHEN 0 =>
 							rte_mmu_fix_ssw <= data_read(15 downto 0);      -- SP+$0A after unwind starts at $08 longword
+						WHEN 2 =>
+							rte_movem_restart_addr <= data_read;             -- SP+$10 data fault address
 						WHEN 3 =>
 							rte_mmu_fix_opcode <= data_read(15 downto 0);   -- SP+$14 low word
+						WHEN 4 =>
+							rte_fmt_b_data_out <= data_read;                    -- SP+$18 data output buffer
 						WHEN 9 =>
 							rte_mmu_fix_input_buffer <= data_read;           -- SP+$2C data input buffer
+						WHEN 10 =>
+							rte_movem_restart_mask <= data_read(31 downto 16); -- SP+$30 internal state 0
+							IF data_read(14)='1' THEN                           -- state 1 MOVEM1
+								rte_movem_restart_pending <= '1';
+							END IF;
 						WHEN OTHERS =>
 							NULL;
 					END CASE;
@@ -1757,6 +1847,11 @@ PROCESS (clk, long_done, last_data_in, data_in, addr, long_start, memmaskmux, me
 					ELSE
 						rte_mmu_fix_long_index <= rte_mmu_fix_long_index + 1;
 					END IF;
+				END IF;
+				IF micro_state=movem2 AND set(movem_action)='1' AND
+				   rte_movem_restart_pending='1' AND
+				   opcode=rte_mmu_fix_opcode THEN
+					rte_movem_restart_pending <= '0';
 				END IF;
 			END IF;
 		END IF;
@@ -1889,7 +1984,11 @@ PROCESS (clk, regfile, RDindex_A, RDindex_B, exec, rte_mmu_fix_commit, rte_mmu_f
 					WR_AReg <= rf_dest_addr(3);
 					RDindex_A <= conv_integer(rf_dest_addr(3 downto 0));
 					RDindex_B <= conv_integer(rf_source_addr(3 downto 0));
-					IF Wwrena='1' THEN
+					IF Wwrena='1' AND
+					   (arch_commit_ena='1' OR
+					    ((pmmu_fault='1' OR arch_abort_pending='1') AND
+					     micro_state=movem2 AND opcode(10)='1' AND
+					     RDindex_A/=conv_integer(movem_transfer_reg))) THEN
 						regfile(RDindex_A) <= regin;
 					END IF;
 				-- BUG #323 FIX: Direct MOVES mem->CPU register write.
@@ -1904,7 +2003,8 @@ PROCESS (clk, regfile, RDindex_A, RDindex_B, exec, rte_mmu_fix_commit, rte_mmu_f
 				-- MC68030 spec: MOVES to An with byte/word size must sign-extend
 				-- to 32 bits, same as MOVEA.W/MOVEA.B behavior.
 				-- moves_reg(3)='1' means address register (A0-A7).
-				IF moves_writeback_pending = '1' AND state = "10" THEN
+				IF moves_writeback_pending = '1' AND state = "10" AND
+				   arch_commit_ena = '1' THEN
 					CASE exe_datatype IS
 						WHEN "00" =>  -- Byte
 							IF moves_reg(3) = '1' THEN  -- An: sign-extend byte to 32 bits
@@ -2265,50 +2365,44 @@ PROCESS (reg_QA, store_in_tmp, ea_data, long_start, addr, exec, memmaskmux, micr
 -----------------------------------------------------------------------------
 -- set OP2out
 -----------------------------------------------------------------------------
-PROCESS (OP2out, reg_QB, exe_opcode, exe_datatype, execOPC, exec, use_direct_data,
-	     store_in_tmp, data_write_tmp, ea_data, pmove_mmu_read_active, pmmu_reg_rdat, micro_state)
+PROCESS (reg_QB, exe_opcode, exe_datatype, execOPC, exec, use_direct_data,
+	     store_in_tmp, data_write_tmp, ea_data, micro_state)
+	VARIABLE op2out_v : std_logic_vector(31 downto 0);
 	BEGIN
-		OP2out(15 downto 0) <= reg_QB(15 downto 0);
-		OP2out(31 downto 16) <= (OTHERS => OP2out(15));
+		op2out_v(15 downto 0) := reg_QB(15 downto 0);
+		op2out_v(31 downto 16) := (OTHERS => reg_QB(15));
 		IF exec(OP2out_one)='1' THEN
-			OP2out(15 downto 0) <= "1111111111111111";
-		ELSIF pmove_mmu_read_active='1' AND exec(postadd)='0' AND exec(presub)='0' THEN
-			-- PMOVE simplification: Route PMMU register data through standard write path
-			-- This must be checked BEFORE use_direct_data/store_in_tmp which may interfere
-			-- Guard: exclude postadd/presub phases - during address register writeback
-			-- OP2out must carry the normal increment value, not the PMMU register data
-			OP2out <= pmmu_reg_rdat;
+			op2out_v := (OTHERS => '1');
 		ELSIF micro_state = chk22 AND exe_opcode(10 downto 9)="00" AND exec(opcEXTB)='1' THEN
 			-- CHK2.B A-reg compares keep the active bound byte in opcEXTB's low byte.
 			-- During chk22 the upper bound is already packed in ea_data, but the stale
 			-- direct-data path still points at the lower bound. Force ea_data here so
 			-- opcEXTB sign-extends the upper byte for the second compare.
-			OP2out <= ea_data;
+			op2out_v := ea_data;
 		ELSIF exec(opcCHK2)='1' AND exe_opcode(10 downto 9)="00" THEN
 			-- Final CHK2.B N/V evaluation needs the latched byte pair, not the direct
 			-- source-fetch path.
-			OP2out <= ea_data;
+			op2out_v := ea_data;
 		ELSIF use_direct_data='1' OR (exec(exg)='1' AND execOPC='1') OR exec(get_bfoffset)='1' THEN
-			OP2out <= data_write_tmp;
+			op2out_v := data_write_tmp;
 		ELSIF (exec(ea_data_OP1)='0' AND store_in_tmp='1') OR exec(ea_data_OP2)='1' THEN
-			OP2out <= ea_data;
+			op2out_v := ea_data;
 		ELSIF exec(opcMOVEQ)='1' THEN
-			OP2out(7 downto 0) <= exe_opcode(7 downto 0);
-			OP2out(15 downto 8) <= (OTHERS => exe_opcode(7));
+			op2out_v(7 downto 0) := exe_opcode(7 downto 0);
+			op2out_v(31 downto 8) := (OTHERS => exe_opcode(7));
 		ELSIF exec(opcADDQ)='1' THEN
-			OP2out(2 downto 0) <= exe_opcode(11 downto 9);
+			op2out_v := (OTHERS => '0');
+			op2out_v(2 downto 0) := exe_opcode(11 downto 9);
 			IF exe_opcode(11 downto 9)="000" THEN
-				OP2out(3) <='1';
-			ELSE
-				OP2out(3) <='0';
+				op2out_v(3) := '1';
 			END IF;
-			OP2out(15 downto 4) <= (OTHERS => '0');
 		ELSIF exe_datatype="10" AND exec(opcEXT)='0'  THEN 
-			OP2out(31 downto 16) <= reg_QB(31 downto 16);
+			op2out_v(31 downto 16) := reg_QB(31 downto 16);
 		END IF;
 		IF exec(opcEXTB)='1' THEN
-			OP2out(31 downto 8) <= (OTHERS => OP2out(7));		
+			op2out_v(31 downto 8) := (OTHERS => op2out_v(7));
 		END IF;
+		OP2out <= op2out_v;
 	END PROCESS;
 	
 
@@ -2461,6 +2555,12 @@ PROCESS (clk)
 						-- against the faulting access; WinUAE stores the logical
 						-- fault address there and in the data input buffer at $2C.
 						CASE rot_cnt IS
+							WHEN "000101" =>  -- $30: opaque MOVEM continuation state
+								IF berr_movem_restart_valid='1' THEN
+									data_write_tmp <= berr_movem_mask_saved & MMU030_STATEFLAG1_MOVEM1;
+								ELSE
+									data_write_tmp <= (others => '0');
+								END IF;
 							WHEN "000100" =>  -- $2C: data input buffer
 								data_write_tmp <= berr_fault_addr;
 							WHEN "000010" =>  -- $24: stage B address
@@ -2502,8 +2602,8 @@ PROCESS (clk)
 					END IF;
 				ELSIF micro_state = berr8 THEN
 					data_write_tmp <= (trap_SR & Flags) & berr_frame_pc(31 downto 16);  -- SR/PC_hi ($00)
-				ELSIF micro_state = rte5 AND rot_cnt = "000001" AND rte_fmt_a_replay_needed = '1' THEN
-					data_write_tmp <= rte_fmt_a_data_out;
+				ELSIF micro_state = rte5 AND rot_cnt = "000001" AND rte_data_replay_needed = '1' THEN
+					data_write_tmp <= rte_data_replay_data_out;
 				-- BUG #391 FIX: Bypass hold_dwr at the CRP/SRP HI/LO write boundary.
 				-- At clkena_lw with micro_state=pmove_mmu_to_mem_lo, the HI longword bus
 				-- write is completing and we need data_write_tmp to be refreshed with CRP_L
@@ -2539,7 +2639,6 @@ PROCESS (clk)
                 ELSIF writeSR='1'THEN
                     data_write_tmp(15 downto 0) <= trap_SR(7 downto 0)& Flags(7 downto 0);
                 ELSE
-                    -- Default path: includes PMOVE MMU->memory via pmove_mmu_read_active routing through OP2out
                     data_write_tmp <= OP2out;
                 END IF;
 			END IF;	
@@ -2575,7 +2674,8 @@ PROCESS (brief, OP1out, OP1outbrief, cpu)
 	         memaddr_reg, memaddr_delta_rega, memaddr_delta_regb, reg_QA, use_base, VBR, last_data_read, trap_vector, exec, set, cpu, use_VBR_Stackframe,
 	         pmove_disp_latched, micro_state, opcode, fline_opcode_latch, moves_ea_areg, moves_bus_pending, memmaskmux, rot_cnt,
 	         moves_ea_latched, moves_ea_use_base, pmove_ea_latched, pmmu_brief,
-	         rte_fmt_a_replay_needed, rte_fmt_a_fault_addr)
+	         rte_data_replay_needed, rte_data_replay_fault_addr)
+		VARIABLE memaddr_a_v : std_logic_vector(31 downto 0);
 	BEGIN
 		
 		IF rising_edge(clk) THEN
@@ -2669,32 +2769,33 @@ PROCESS (brief, OP1out, OP1outbrief, cpu)
 			trap_vector_vbr <= trap_vector;
 		END IF;		
 		
-		memaddr_a(4 downto 0) <= "00000";
-		memaddr_a(7 downto 5) <= (OTHERS=>memaddr_a(4));
-		memaddr_a(15 downto 8) <= (OTHERS=>memaddr_a(7));
-		memaddr_a(31 downto 16) <= (OTHERS=>memaddr_a(15));
+		memaddr_a_v := (OTHERS => '0');
 		IF setdisp='1' THEN
 			IF exec(briefext)='1' THEN
-				memaddr_a <= briefdata+memaddr_delta;
+				memaddr_a_v := briefdata+memaddr_delta;
 			ELSIF setdispbyte='1' THEN
-				memaddr_a(7 downto 0) <= last_data_read(7 downto 0);
+				memaddr_a_v(7 downto 0) := last_data_read(7 downto 0);
+				memaddr_a_v(31 downto 8) := (OTHERS => last_data_read(7));
 			ELSE
-				memaddr_a <= last_data_read;
+				memaddr_a_v := last_data_read;
 			END IF;	 
 			ELSIF set(presub)='1' THEN
 				-- PMOVE CRP/SRP are 64-bit (doubleword): -(An) must predecrement by 8 bytes
 				IF set(pmmu_dbl)='1' THEN
-					memaddr_a(4 downto 0) <= "11000";
+					memaddr_a_v(4 downto 0) := "11000";
 				ELSIF set(longaktion)='1' THEN	
-					memaddr_a(4 downto 0) <= "11100";
+					memaddr_a_v(4 downto 0) := "11100";
 				ELSIF datatype="00" AND set(use_SP)='0' THEN
-					memaddr_a(4 downto 0) <= "11111";
+					memaddr_a_v(4 downto 0) := "11111";
 				ELSE
-					memaddr_a(4 downto 0) <= "11110";
+					memaddr_a_v(4 downto 0) := "11110";
 				END IF;	
+				memaddr_a_v(31 downto 5) := (OTHERS => memaddr_a_v(4));
 		ELSIF interrupt='1' THEN
-			memaddr_a(4 downto 0) <= '1'&rIPL_nr&'0';	
-		END IF;	 
+			memaddr_a_v(4 downto 0) := '1'&rIPL_nr&'0';
+			memaddr_a_v(31 downto 5) := (OTHERS => memaddr_a_v(4));
+		END IF;
+		memaddr_a <= memaddr_a_v;
 		
 		IF rising_edge(clk) THEN
 			IF clkena_in='1' THEN
@@ -2707,9 +2808,34 @@ PROCESS (brief, OP1out, OP1outbrief, cpu)
 					   (state = "00" OR (state(1) = '1' AND memmaskmux(3) = '1' AND setstate = "00")) THEN
 						memaddr_delta_rega <= TG68_PC_add;
 						use_base <= '0';
-					ELSIF (micro_state = rte5 AND rot_cnt = "000001" AND rte_fmt_a_replay_needed = '1') OR
-					      micro_state = rte_mmu_replay THEN
-						memaddr_delta_rega <= rte_fmt_a_fault_addr;
+					ELSIF micro_state = rte5 AND rot_cnt = "000001" AND
+					      rte_data_replay_needed = '1' THEN
+						-- Seed the saved fault address once when RTE schedules the replay.
+						-- During rte_mmu_replay the normal longword address sequencer must
+						-- advance the second 16-bit transfer to fault_addr + 2.
+						memaddr_delta_rega <= rte_data_replay_fault_addr;
+						use_base <= '0';
+					ELSIF (micro_state=movem1 OR micro_state=movem2) AND
+					      rte_movem_restart_pending='1' AND
+					      opcode=rte_mmu_fix_opcode THEN
+						-- Resume at the faulted MOVEM transfer.  Predecrement mode
+						-- subtracts once more in movem1, so seed one element above it.
+						IF opcode(5 downto 3)="100" THEN
+							IF opcode(6)='1' THEN
+								memaddr_delta_rega <= rte_movem_restart_addr + 4;
+							ELSE
+								memaddr_delta_rega <= rte_movem_restart_addr + 2;
+							END IF;
+						ELSE
+							memaddr_delta_rega <= rte_movem_restart_addr;
+						END IF;
+						use_base <= '0';
+					ELSIF micro_state=movem2 AND memmaskmux(3)='1' AND
+					      (arch_abort_pending='1' OR
+					       (pmmu_tc_en='1' AND pmmu_fault='1' AND pmmu_fault_is_insn_out='0')) THEN
+						-- The abort retires the MOVEM bus sequencer.  Do not let its
+						-- lingering mem_addsub issue a translation for the next element.
+						memaddr_delta_rega <= TG68_PC_add;
 						use_base <= '0';
 					-- BUG #149 FIX: MOVES states AND bus access pending need use_base='1' for address register EA
 					-- CRITICAL: Do NOT set use_base during decode! That would corrupt the extension word fetch.
@@ -2982,25 +3108,23 @@ PROCESS (brief, OP1out, OP1outbrief, cpu)
 -----------------------------------------------------------------------------
 -- PC Calc + fetch opcode
 -----------------------------------------------------------------------------
-PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data, direct_data, next_micro_state, micro_state, stop, make_trace, make_trace_t0, make_berr, IPL_nr, FlagsSR, set_rot_cnt, opcode, writePCbig, set_exec, exec,
-        PC_dataa, PC_datab, setnextpass, last_data_read, TG68_PC_brw, TG68_PC_word, Z_error, trap_trap, trap_trapv, interrupt, tmp_TG68_PC, TG68_PC, use_VBR_Stackframe, writePCnext, pmove_dn_mode, cpu_halted, exe_condition, dbcc_t0_suppress, c_out)
+PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data, direct_data, next_micro_state, micro_state, stop, make_trace, make_trace_t0, make_berr, IPL_nr, ipl7_edge_armed, FlagsSR, set_rot_cnt, opcode, writePCbig, set_exec, exec,
+        setnextpass, last_data_read, TG68_PC_brw, TG68_PC_word, Z_error, trap_trap, trap_trapv, interrupt, tmp_TG68_PC, TG68_PC, use_VBR_Stackframe, writePCnext, pmove_dn_mode, cpu_halted, exe_condition, dbcc_t0_suppress, c_out)
 	variable v_is_cof : std_logic;  -- T0 trace: change-of-flow instruction
 	variable v_irq_pending : std_logic;
 	variable v_pmmu_datatype : std_logic_vector(1 downto 0);
+	variable v_pc_dataa : std_logic_vector(31 downto 0);
+	variable v_pc_datab : std_logic_vector(31 downto 0);
 	BEGIN
 	
-		PC_dataa <= TG68_PC;
+		v_pc_dataa := TG68_PC;
 		IF TG68_PC_brw = '1' THEN
-			PC_dataa <= tmp_TG68_PC;
+			v_pc_dataa := tmp_TG68_PC;
 		END IF;
 		
-		PC_datab(2 downto 0) <= (others => '0');
-		PC_datab(3) <= PC_datab(2);
-		PC_datab(7 downto 4) <= (others => PC_datab(3));
-		PC_datab(15 downto 8) <= (others => PC_datab(7));
-		PC_datab(31 downto 16) <= (others => PC_datab(15));
+		v_pc_datab := (OTHERS => '0');
 		IF interrupt='1' THEN
-			PC_datab(2 downto 1) <= "11";
+			v_pc_datab(2 downto 1) := "11";
 		END IF;
 		IF exec(writePC_add) ='1' THEN
 			-- BUG #54 FIX: Use pmove_dn_mode to trigger +2 increment (Command Word skip) for PMOVE Dn
@@ -3016,25 +3140,31 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 				-- Used by PMOVE (Dn/Mem) and MOVEC to skip the Command Word (4-byte instr total).
 				-- Previous logic (bit 3 + bit 1) added +10, causing massive PC jump!
 				-- +2 via bit 1 ensures proper skipping of the 2-byte extension word.
-				PC_datab(1) <= '1'; -- +2
+				v_pc_datab(1) := '1'; -- +2
 			ELSE	
-				PC_datab(2) <= '1'; -- +4 (Default)
+				v_pc_datab(2) := '1'; -- +4 (Default)
 			END IF;
 			IF (use_VBR_Stackframe='0' AND (trap_trap='1' OR trap_trapv='1' OR exec(trap_chk)='1' OR set(trap_chk)='1' OR Z_error='1')) OR writePCnext='1' THEN
-				PC_datab(1) <= '1';
+				v_pc_datab(1) := '1';
 			END IF;
 		ELSIF state="00" AND pmmu_busy='0' THEN
-			PC_datab(1) <= '1';
-		END IF;	
+			v_pc_datab(1) := '1';
+		END IF;
+		-- The non-branch pipeline adjustment is a signed three-bit value.
+		-- The former self-feedback chain propagated bit 2 through bits 31:3.
+		v_pc_datab(31 downto 3) := (OTHERS => v_pc_datab(2));
 		IF TG68_PC_brw = '1' THEN	
 			IF TG68_PC_word='1' THEN
-				PC_datab <= last_data_read;
+				v_pc_datab := last_data_read;
 			ELSE
-				PC_datab(7 downto 0) <= opcode(7 downto 0);
+				v_pc_datab(7 downto 0) := opcode(7 downto 0);
+				v_pc_datab(31 downto 8) := (OTHERS => opcode(7));
 			END IF;
 		END IF;
 
-		TG68_PC_add <= PC_dataa+PC_datab;
+		PC_dataa <= v_pc_dataa;
+		PC_datab <= v_pc_datab;
+		TG68_PC_add <= v_pc_dataa+v_pc_datab;
 		
 		setopcode <= '0';
 		setendOPC <= '0';
@@ -3114,7 +3244,10 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 			END IF;
 		END IF;
 		v_irq_pending := '0';
-		IF FlagsSR(2 downto 0)<IPL_nr OR IPL_nr="111" THEN
+		-- MC68030 UM 8.1.1: level 7 is nonmaskable but transition-sensitive.
+		-- Do not continuously retrigger while the request remains at level 7.
+		IF FlagsSR(2 downto 0)<IPL_nr OR
+		   (IPL_nr="111" AND ipl7_edge_armed='1') THEN
 			v_irq_pending := '1';
 		END IF;
 		-- BUG #340 FIX: PMOVE/FPU completes with next_micro_state=nop (not idle), must set setendOPC
@@ -3179,6 +3312,7 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 				opcode_pc <= (others => '0');
 				trap_interrupt <= '0';
 				interrupt <= '0';
+				ipl7_edge_armed <= '1';
 				last_opc_read  <= X"4EF9";			--jmp nn.l
 				TG68_PC <= X"00000004";
 				decodeOPC <= '0';
@@ -3207,6 +3341,8 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 					berr_opcode_saved <= (others => '0');
 					berr_ssw <= (others => '0');
 					berr_data_out_saved <= (others => '0');
+					berr_movem_restart_valid <= '0';
+					berr_movem_mask_saved <= (others => '0');
 					berr_long_frame <= '0';
 					berr_external_rw <= '1';
 					berr_external_fc <= (others => '0');
@@ -3218,6 +3354,12 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 					berr_pmmu_fault_is_insn <= '0';
 					berr_pmmu_fault_valid <= '0';
 					berr_external_addr <= (others => '0');
+					berr_pending <= '0';
+					berr_pending_rw <= '1';
+					berr_pending_fc <= (others => '0');
+					berr_pending_datatype <= "10";
+					berr_pending_addr <= (others => '0');
+					atomic_rmc_active <= '0';
 					memmask <= "111111";
 					exec_write_back <= '0';
 					-- BUG #70 SIMPLIFICATION: Simple 2-signal initialization
@@ -3235,6 +3377,10 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 						pmmu_ea_mode_latched <= (others => '0');  -- BUG #302: Initialize EA mode latch
 						trace_pending_group2 <= '0';
 			ELSE
+				-- A request below level 7 rearms recognition of the next NMI edge.
+				IF IPL_nr /= "111" THEN
+					ipl7_edge_armed <= '1';
+				END IF;
 --				IPL_nr <= NOT IPL;
 				IF clkena_in='1' THEN
 					IF NOT (state = "00" AND pmmu_busy = '1') THEN
@@ -3404,6 +3550,18 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 					   next_micro_state=idle AND setstate="00" THEN
 						exec_write_back <= '0';
 					END IF;
+
+					-- BERR can terminate the first 16-bit beat of a longword while
+					-- clkena_lw is false. Capture the live bus metadata before the
+					-- address sequencer advances to the second beat.
+					IF berr='1' AND berr_pending='0' AND make_berr='0' AND
+					   berr_exception_active='0' THEN
+						berr_pending <= '1';
+						berr_pending_rw <= pmmu_rw;
+						berr_pending_fc <= fc_internal;
+						berr_pending_datatype <= datatype;
+						berr_pending_addr <= berr_capture_addr;
+					END IF;
 				END IF;
 				IF clkena_lw='1' THEN
 					-- MC68030 double bus fault: Reset stall-monitor flag each active cycle
@@ -3413,6 +3571,11 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 					decodeOPC <= setopcode;
 					endOPC <= setendOPC;
 					execOPC <= setexecOPC;
+					IF setendOPC='1' OR setopcode='1' THEN
+						atomic_rmc_active <= '0';
+					ELSIF decodeOPC='1' THEN
+						atomic_rmc_active <= set_atomic_rmc;
+					END IF;
 					-- BUG #400 FIX: Clear dispatched flag when PMMU fault_reg is cleared
 					-- (happens when a new translation request is issued, e.g., berr stack push)
 					if pmmu_fault = '0' then
@@ -3438,7 +3601,7 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 								-- stale fault for one cycle and trips the double-fault guard.
 								pmmu_fault_dispatched <= '1';
 							else
-								make_berr <= (berr OR make_berr OR pmmu_walker_berr);
+								make_berr <= (berr OR berr_pending OR make_berr OR pmmu_walker_berr);
 							end if;
 							-- BUG #159 FIX: Track if PMMU fault is a bus error (B bit = pmmu_fault_stat(15))
 							-- Track whether the fault originated in the PMMU path or the external
@@ -3452,7 +3615,7 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 								make_mmu_berr <= make_mmu_berr;  -- Keep previous value
 							end if;
 						else
-							make_berr <= (berr OR make_berr);  -- No PMMU faults when MMU disabled
+							make_berr <= (berr OR berr_pending OR make_berr);  -- No PMMU faults when MMU disabled
 							make_mmu_berr <= '0';
 						end if;
 						-- BUG #431 FIX: Latch RW and FC at the first cycle external BERR fires.
@@ -3460,11 +3623,18 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 						-- where pmmu_rw='1' and fc_internal has updated to instruction-fetch FC,
 						-- losing the data-cycle values from state="11" (when BERR actually arrived).
 						-- Capture them here while state is still "11" and values are correct.
-						if berr='1' and make_berr='0' then
-							berr_external_rw <= pmmu_rw;
-							berr_external_fc <= fc_internal;
-							berr_external_datatype <= datatype;  -- BUG #433b FIX: latch at BERR first-fire
-							berr_external_addr <= addr;          -- BUG #434 FIX: latch fault addr at BERR first-fire (state="11")
+						if (berr='1' OR berr_pending='1') and make_berr='0' then
+							IF berr_pending='1' THEN
+								berr_external_rw <= berr_pending_rw;
+								berr_external_fc <= berr_pending_fc;
+								berr_external_datatype <= berr_pending_datatype;
+								berr_external_addr <= berr_pending_addr;
+							ELSE
+								berr_external_rw <= pmmu_rw;
+								berr_external_fc <= fc_internal;
+								berr_external_datatype <= datatype;
+								berr_external_addr <= berr_capture_addr;
+							END IF;
 						end if;
 					else
 						-- MC68030 Double bus fault detection: bus error/fault during bus error processing
@@ -3518,7 +3688,9 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 						trap_berr <= '0';
 						trap_mmu_berr <= '0';  -- BUG #159: Clear MMU BERR trap
 						trap_addr_error <= '0';  -- Clear by default
+						berr_pending <= '0';
 						berr_long_frame <= '0';
+						berr_movem_restart_valid <= '0';
 						-- BUG #393 FIX: MC68030 UM 8.1 exception priority:
 						-- Group 0 (highest): Reset, Address Error, Bus Error
 						-- Group 1: Trace, Interrupt, Illegal, Privilege
@@ -3616,12 +3788,30 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 									pmmu_fault_dispatched <= '1';
 								end if;
 								berr_exception_active <= '1';
-								-- MC68030/WinUAE stack the current PC in Format $A/$B
-								-- bus-fault frames.  For a Format $A LASTWRITE fault this
-								-- is the post-instruction PC; RTE replays only the saved
-								-- write and must not restart the instruction from exe_pc.
-								berr_frame_pc <= TG68_PC;
+								-- Format $A LASTWRITE replay completes the saved write and
+								-- resumes at the decoded next instruction.  TG68_PC already
+								-- includes an additional prefetch word here and would resume
+								-- in the middle of that instruction.  All other PMMU data
+								-- faults use Format $B and identify the executing instruction
+								-- so an unmodified frame can restart it after software repairs
+								-- the translation.
+								IF (pmmu_fault = '1' OR berr_pmmu_fault_valid = '1' OR
+								    make_mmu_berr = '1') THEN
+									IF pmmu_fault_lastwrite_ok = '1' THEN
+										berr_frame_pc <= last_opc_pc;
+									ELSE
+										berr_frame_pc <= exe_pc;
+									END IF;
+								ELSE
+									berr_frame_pc <= TG68_PC;
+								END IF;
 								berr_opcode_saved <= exe_opcode;
+								IF (micro_state=movem2 OR exec(movem_action)='1' OR movem_actiond='1') AND
+								   ((pmmu_fault='1' AND pmmu_fault_is_insn_out='0') OR
+								    (pmmu_fault='0' AND berr_pmmu_fault_valid='1' AND berr_pmmu_fault_is_insn='0')) THEN
+									berr_movem_restart_valid <= '1';
+									berr_movem_mask_saved <= movem_transfer_mask;
+								END IF;
 								-- Save data output buffer for berr2 (data being written at fault time)
 								berr_data_out_saved <= data_write_tmp;
 								berr_ssw <= (others => '0');
@@ -3668,7 +3858,7 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 										end case;
 									end if;
 										berr_ssw(11 downto 10) <= "00";  -- Reserved
-									berr_ssw(7) <= exec_tas OR exec_cas;  -- RM: read-modify-write (TAS/CAS/CAS2)
+					berr_ssw(7) <= exec_tas OR exec_cas OR atomic_rmc_active;  -- RM: read-modify-write
 									berr_ssw(3) <= '0';   -- Reserved
 									berr_pmmu_fault_valid <= '0';
 								else
@@ -3702,7 +3892,7 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 										when others => berr_ssw(5 downto 4) <= "00";
 									end case;
 									berr_ssw(11 downto 10) <= "00"; -- Reserved (bit 9 preserved for software-fix)
-									berr_ssw(7) <= exec_tas OR exec_cas;  -- RM: read-modify-write (TAS/CAS/CAS2)
+					berr_ssw(7) <= exec_tas OR exec_cas OR atomic_rmc_active;  -- RM: read-modify-write
 									berr_ssw(3) <= '0';
 								end if;
 							END IF;
@@ -3713,6 +3903,9 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 							rIPL_nr <= IPL_nr;
 							IPL_vec <= "00011"&IPL_nr;            --	TH
 							trap_interrupt <= '1';
+							IF IPL_nr = "111" THEN
+								ipl7_edge_armed <= '0';
+							END IF;
 							berr_exception_active <= '0';
 						END IF;
 					END IF;
@@ -4252,13 +4445,14 @@ PROCESS (clk, Reset, FlagsSR, last_data_read, OP2out, exec)
 -- decode opcode
 -----------------------------------------------------------------------------
 PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state, decodeOPC, state, setexecOPC, Flags, FlagsSR, direct_data, build_logical,
-		 build_bcd, set_Z_error, trapd, movem_run, last_data_read, set, set_V_Flag, z_error, trap_trace, trap_interrupt,
-		 SVmode, preSVmode, stop, long_done, ea_only, setstate, addrvalue, execOPC, exec_write_back, exe_datatype,
-		 datatype, interrupt, c_out, trapmake, rot_cnt, brief, addr, trap_trapv, last_data_in, use_VBR_Stackframe,
-		 long_start, set_datatype, sndOPC, set_exec, exec, ea_build_now, reg_QA, reg_QB, make_berr, trap_berr, last_opc_read,
+			 build_bcd, trapd, movem_run, last_data_read, set, set_V_Flag, z_error, trap_trace, trap_interrupt,
+			 SVmode, preSVmode, stop, long_done, ea_only, setstate, addrvalue, execOPC, exec_write_back, exe_datatype,
+			 datatype, interrupt, c_out, trapmake, rot_cnt, brief, addr, trap_trapv, last_data_in, use_VBR_Stackframe,
+			 long_start, set_datatype, sndOPC, set_exec, exec, ea_build_now, reg_QA, reg_QB, make_berr, trap_berr, last_opc_read,
 			 moves_writeback_pending, moves_active, pmmu_opcode, pmmu_brief, rte_format_word, rte_format_b_version_error,
-			 rte_fmt_a_replay_needed, rte_fmt_a_replay_size)
+			 rte_data_replay_needed, rte_data_replay_size, pmmu_tc_en, pmmu_fault, pmmu_fault_is_insn_out)
 	variable v_rte_format_valid : std_logic;
+	variable v_set_z_error : bit;
 	BEGIN
 		TG68_PC_brw <= '0';
 		setstate <= "00";
@@ -4296,6 +4490,7 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 			set_direct_data <= '0';
 			set_exec_tas <= '0';
 			set_exec_cas <= '0';
+			set_atomic_rmc <= '0';
 			interrupt_mode_set_req <= '0';
 			interrupt_mode_clr_req <= '0';
 			trap_illegal <='0';
@@ -4326,7 +4521,13 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 --		illegal_write_mode <= '0';
 --		illegal_read_mode <= '0';
 --		illegal_byteaddr <= '0';
-		set_Z_error <= '0';
+		v_set_z_error := '0';
+		IF micro_state=div2 AND
+		   (OP2out(31 downto 16)=x"0000" OR opcode(15)='1' OR DIV_Mode=0) AND
+		   OP2out(15 downto 0)=x"0000" THEN
+			v_set_z_error := '1';
+		END IF;
+		set_Z_error <= v_set_z_error;
 		check_aligned <='0';
 
 		-- MC68030 MMU Configuration Exception (vector 56)
@@ -4429,7 +4630,7 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 				END IF;
 				-- BUG #401 FIX: Set setstackaddr at dispatch (see interrupt path above)
 				setstackaddr <= '1';
-			ELSIF cpu(1)='1' AND (trap_trapv='1' OR set_Z_error='1' OR exec(trap_chk)='1' OR
+			ELSIF cpu(1)='1' AND (trap_trapv='1' OR v_set_z_error='1' OR exec(trap_chk)='1' OR
 			                       set(trap_chk)='1' OR trap_mmu_config='1') THEN
 				next_micro_state <= trap00;  -- Format $2 (6-word) per MC68030 reference
 				-- Note: trap_trap (TRAP #n) uses Format $0 per Table 8-4 - handled by else branch
@@ -4706,6 +4907,7 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 									WHEN OTHERS => datatype <= "10";	--Long
 								END CASE;
 								set_exec_cas <= '1';	-- CAS/CAS2 RMW: set RM bit in SSW on bus error
+								set_atomic_rmc <= '1';
 								IF opcode(10)='1' AND opcode(5 downto 0)="111100" THEN --CAS2
 									IF decodeOPC='1' THEN
 										set(get_2ndOPC) <= '1';
@@ -5432,6 +5634,7 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 									set_exec(opcMOVE) <= '1';
 									IF opcode(7 downto 6)="11" THEN		--tas
 										set_exec_tas <= '1';
+										set_atomic_rmc <= '1';
 										write_back <= '1';
 										datatype <= "00";				--Byte
 										IF opcode(5 downto 4)="00" THEN
@@ -6317,7 +6520,7 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 
 ------------------------------------------------------------------------------
 ------------------------------------------------------------------------------
-		IF set_Z_error='1'  THEN		-- divu by zero
+		IF v_set_z_error='1'  THEN		-- divu by zero
 			trapmake <= '1';			--wichtig for USP
 			IF trapd='0' THEN
 				writePC <= '1';
@@ -7084,7 +7287,13 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 						next_micro_state <= movem2;
 					END IF;
 				WHEN movem2 =>		--movem
-					IF movem_run='0' THEN
+					IF pmmu_tc_en='1' AND pmmu_fault='1' AND
+					   pmmu_fault_is_insn_out='0' THEN
+						-- A 68030 data fault is immediate.  Retire to the exception
+						-- boundary before another MOVEM transfer can be issued.
+						setstate <= "00";
+						next_micro_state <= idle;
+					ELSIF movem_run='0' THEN
 						setstate <="01";
 					ELSE	
 						set(movem_action) <= '1';
@@ -7559,13 +7768,13 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 				WHEN rte5 =>            -- RTE
 					-- Continue popping stack for formats that need multiple reads
 					IF rot_cnt = "000001" THEN
-						IF rte_fmt_a_replay_needed = '1' THEN
-							-- Format $A last-write fault: replay the saved data write
-							-- once, using the fault address and FC from the stacked SSW.
+						IF rte_data_replay_needed = '1' THEN
+							-- Format $A/$B write fault: replay the saved data write once,
+							-- using the fault address and FC from the stacked SSW.
 							setstate <= "11";
-							datatype <= rte_fmt_a_replay_size;
-							set_datatype <= rte_fmt_a_replay_size;
-							IF rte_fmt_a_replay_size = "10" THEN
+							datatype <= rte_data_replay_size;
+							set_datatype <= rte_data_replay_size;
+							IF rte_data_replay_size = "10" THEN
 								set(longaktion) <= '1';
 							END IF;
 							next_micro_state <= rte_mmu_replay;
@@ -7616,11 +7825,8 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 						-- The replay write cycle was scheduled by the final rte5 frame
 						-- read.  Keep the saved data size visible until the bus cycle
 						-- completes, then resume at the already-restored stacked PC.
-						datatype <= rte_fmt_a_replay_size;
-						set_datatype <= rte_fmt_a_replay_size;
-						IF rte_fmt_a_replay_size = "10" THEN
-							set(longaktion) <= '1';
-						END IF;
+						datatype <= rte_data_replay_size;
+						set_datatype <= rte_data_replay_size;
 						next_micro_state <= nop;
 
 					-- MC68030: RTE Format $1 chain - read SR from second stack frame
@@ -8539,10 +8745,9 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
                     -- Handle Dn register write-back for PMOVE <MMU>,Dn 32-bit read.
                     -- BUG #375 FIX: Also persist pmmu_rd to idle so regin=pmmu_reg_rdat
                     -- when exec(Regwrena) fires. Without this, regin falls through to ALUout.
-                    -- BUG #388 FIX: Check set_exec(pmmu_rd) because set_exec doesn't propagate
-                    -- to exec during micro-state transitions (setexecOPC='0'), and set(pmmu_rd)
-                    -- doesn't persist across cycles.
-	                    IF exec(pmmu_rd)='1' OR set(pmmu_rd)='1' OR set_exec(pmmu_rd)='1' THEN
+	                -- The registered exec/set request is the persistence source here.
+	                -- Reading set_exec while driving it creates a combinational latch.
+	                    IF exec(pmmu_rd)='1' OR set(pmmu_rd)='1' THEN
 	                        set_exec(pmmu_rd) <= '1';  -- Persist to idle
 	                        -- PMMU readback writeback is valid only for Dn-mode PMOVE.
 	                        -- Memory-EA PMOVE retires through this state too; writing Regwrena
@@ -8566,11 +8771,7 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
                     -- stage shifts the first post-PFLUSHA opcode fetch by half a cycle and
                     -- breaks immediate-long decode on the following instruction.
                     setstate <= "00";
-                    IF exec(pmmu_rd)='1' OR set(pmmu_rd)='1' OR set_exec(pmmu_rd)='1' THEN
-                        next_micro_state <= idle;
-                    ELSE
-                        next_micro_state <= idle;
-                    END IF;
+	                next_micro_state <= idle;
 
 				WHEN movep1 =>		-- MOVEP d(An)
 					setdisp <= '1';	
@@ -8663,9 +8864,7 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 					setstate <="01";
 					next_micro_state <= div2;
 				WHEN div2	=>		-- divu
-					IF (OP2out(31 downto 16)=x"0000" OR opcode(15)='1' OR DIV_Mode=0) AND OP2out(15 downto 0)=x"0000" THEN		--div zero
-						set_Z_error <= '1';
-					ELSE
+					IF v_set_z_error='0' THEN
 						next_micro_state <= div3;
 					END IF;
 					set(ld_rot_cnt) <= '1'; 
@@ -9041,6 +9240,7 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 -----------------------------------------------------------------------------
 PROCESS (exe_opcode, Flags)
 	BEGIN
+		exe_condition <= '0';
 		CASE exe_opcode(11 downto 8) IS
 			WHEN X"0" => exe_condition <= '1';
 			WHEN X"1" => exe_condition <= '0';
@@ -9068,10 +9268,24 @@ PROCESS (exe_opcode, Flags)
 PROCESS (clk)
 	BEGIN
 		IF rising_edge(clk) THEN
-			IF clkena_lw='1' THEN
+			IF Reset='1' THEN
+				movem_actiond <= '0';
+				sndOPC <= (others => '0');
+				movem_transfer_mask <= (others => '0');
+				movem_transfer_reg <= (others => '0');
+			ELSIF clkena_lw='1' THEN
 				movem_actiond <= exec(movem_action); 
+				IF set(movem_action)='1' THEN
+					-- sndOPC still includes the transfer being scheduled on this edge.
+					movem_transfer_mask <= sndOPC;
+					movem_transfer_reg <= movem_regaddr;
+				END IF;
 				IF decodeOPC='1' THEN
-					sndOPC <= data_read(15 downto 0);
+					IF rte_movem_restart_pending='1' AND opcode=rte_mmu_fix_opcode THEN
+						sndOPC <= rte_movem_restart_mask;
+					ELSE
+						sndOPC <= data_read(15 downto 0);
+					END IF;
 				ELSIF exec(movem_action)='1' OR set(movem_action) ='1' THEN
 					CASE movem_regaddr IS
 						WHEN "0000" => sndOPC(0)  <= '0';

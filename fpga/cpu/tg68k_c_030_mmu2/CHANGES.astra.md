@@ -43,3 +43,51 @@ strengthened unaligned-data test verifies the complete 92-byte format-B frame,
 only v4-to-v6 existing-status change is
 `tb_mmu_captured_badfeed_dispatch`, whose source explicitly expects the old
 88-byte frame; its Motorola-corrected derivative expects 92 bytes and passes.
+
+## 2026-07-13 restart and external-bus repairs
+
+- Prevented faulted data accesses from committing placeholder bus data or
+  address-register side effects before vector-2 dispatch.
+- Preserved the faulting opcode, logical address, function code, access size,
+  CCR state, and unfinished MOVEM mask needed to resume a format-B frame with
+  an unmodified RTE.
+- Added plain-RTE restart coverage for postincrement reads, predecrement writes,
+  arithmetic/CCR updates, MOVEM stores, mid-transfer MOVEM loads, user-mode
+  faults, and translated supervisor-stack exception entry.
+- Exported core-owned RMC state for TAS, CAS, and CAS2 instead of reconstructing
+  atomicity in SoC glue.
+- Captured external BERR metadata at first fire, including the original logical
+  address when a 32-bit SoC write is combined from two 16-bit core transfers.
+- Implemented Motorola format-A/format-B RTE write replay from the stacked data
+  output buffer at `SP+$18`, using the SSW size/function-code fields and data
+  fault address at `SP+$10`.
+- Made level-7 interrupt recognition transition-sensitive while retaining its
+  nonmaskable behavior.
+
+The final focused combined-SDRAM-write BERR test, focused exception/RMC/IRQ
+tests, all five NetBSD restart cases, and translated-stack restart test pass.
+Full Astra coretest also passes. The strict manifest is unchanged from the
+restart-qualified baseline: 137 total, 107 clean, 3 stale compile failures,
+22 raw simulation failures, and 5 unscored diagnostics.
+
+## 2026-07-13 combinational-loop and open-flow closure
+
+- Replaced the ALU's self-referential rotate/sign chains with finite,
+  size-complete combinational decodes and explicit defaults.
+- Reworked kernel operand, address, PC-delta, condition, divide-error, and PMMU
+  read combinational logic so every output is derived without self-feedback.
+- Retained the converged signed three-bit non-branch PC-delta behavior; focused
+  system-control and full coretest coverage guard this synthesis-sensitive
+  detail.
+- Removed an unreachable SDRAM BIST error-counter saturation cone. Two read
+  passes over the 25-bit, 32 MiB port cannot overflow the 32-bit byte-error
+  count; clean and injected-fault BIST tests retain exact behavior.
+
+Standalone ALU, PMMU, cache, kernel, and TG68K-top SCC gates all report zero.
+The complete SoC also reports zero SCCs both before and after ECP5 synthesis.
+The final seed-3 ULX3S route uses 38,705 of 83,640 TRELLIS_COMB (46%), 9,396
+flip-flops (11%), 136 of 208 DP16KD blocks (65%), and 13 multipliers (8%). It
+closes the 12.5 MHz CPU clock at 12.92 MHz and the 75 MHz SDRAM clock at
+76.55 MHz; the worst routed endpoint has +0.269 ns slack. The retained
+`fpga/soc/oss_flow/astra_scc-zero-bist-seed3.bit` SHA-256 is
+`3dd73d9becebd9250eca31c74c117ab5c99c82e898e98e4b5e64bd6c63ade278`.
