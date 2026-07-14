@@ -9,6 +9,12 @@
 *.dSYM/
 *.o
 *.map
+*.rom
+*.img
+esp32/astrahost/build/
+esp32/astrahost/build-provision/
+esp32/astrahost/sdkconfig
+/sw/stage0/test_fat_loader
 
 # HDL sim
 work/
@@ -37,6 +43,7 @@ fpga/soc/sim/wf68k_core.v
 fpga/soc/sim/harte_core.v
 fpga/soc/sim/obj_dir/
 fpga/soc/sim/obj_dir_harte/
+fpga/soc/sim/obj_dir_*/
 fpga/soc/sim/*.elf
 fpga/soc/sim/*.bin
 

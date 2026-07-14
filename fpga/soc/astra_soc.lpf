@@ -54,6 +54,28 @@ IOBUF  PORT "ftdi_rxd" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
 LOCATE COMP "ftdi_txd" SITE "M1";
 IOBUF  PORT "ftdi_txd" PULLMODE=UP IO_TYPE=LVCMOS33;
 
+# Shared ESP32 SPI bus. Production builds release these nets to AstraHost,
+# which owns the SD card and selects the FPGA on sd_d[1]. The direct FPGA SD
+# master is available only in an explicit recovery build.
+LOCATE COMP "sd_clk" SITE "H2";
+LOCATE COMP "sd_cmd" SITE "J1";
+LOCATE COMP "sd_d[0]" SITE "J3"; # MISO
+LOCATE COMP "sd_d[1]" SITE "H1";
+LOCATE COMP "sd_d[2]" SITE "K1";
+LOCATE COMP "sd_d[3]" SITE "K2"; # CSn
+IOBUF PORT "sd_clk" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sd_cmd" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sd_d[0]" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=8 SLEWRATE=FAST;
+IOBUF PORT "sd_d[1]" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sd_d[2]" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "sd_d[3]" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+FREQUENCY PORT "sd_clk" 20 MHZ;
+
+LOCATE COMP "wifi_en" SITE "J5";
+LOCATE COMP "wifi_gpio0" SITE "F1";
+IOBUF PORT "wifi_en" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "wifi_gpio0" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+
 # GPDI (HDMI). LVCMOS33D on each positive pin drives its paired negative pin.
 LOCATE COMP "gpdi_dp[0]" SITE "A16"; # Blue
 LOCATE COMP "gpdi_dp[1]" SITE "A14"; # Green

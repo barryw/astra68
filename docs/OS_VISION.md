@@ -180,7 +180,7 @@ The initial software baseline remains:
 - separate CPU instruction and data caches;
 - multiple chipset DMA masters sharing SDRAM;
 - an ESP32-class I/O coprocessor running ESP-IDF FreeRTOS and owning SD plus
-  Wi-Fi/TCP/UDP, with the exact part and FPGA transport selected by measurement;
+  Wi-Fi/TCP/UDP, connected to the FPGA exclusively through SPI;
 - ROM/BRAM sufficient for POST, recovery, and boot loading.
 
 ## 5. System structure
@@ -714,9 +714,14 @@ firmware uses Espressif's supported ESP-IDF FreeRTOS port from the first
 executable storage prototype; there is no bare-metal or cooperative ESP
 firmware phase that later becomes an accidental production foundation.
 
+**LOCKED:** Every ESP32-to-FPGA service uses the versioned SPI transport in
+`docs/ASTRAHOST.md`. UART is not a transport, fallback, control channel, or data
+path between them. Independent ESP and FPGA diagnostic consoles do not alter
+that boundary.
+
 The ESP exposes two versioned services to Astra:
 
-1. a deliberately small boot-file service backed by a FAT32 boot/recovery
+1. a deliberately small boot-file service backed by a FAT/exFAT boot/recovery
    partition, normally read-only while Astra is running; and
 2. a raw multi-sector block service for partitions the ESP never mounts.
 
@@ -1040,7 +1045,7 @@ containment in one observable result.
 - Safe DMA and cache-maintenance interfaces.
 - Kernel device transports and reset/recovery paths.
 - FreeRTOS ESP32 storage controller and versioned boot-file/raw-block transport.
-- FAT32 boot/recovery partition, SD block service, and initial filesystem.
+- FAT/exFAT boot/recovery partition, SD block service, and initial filesystem.
 - Settings and early package/bundle loading.
 
 ### Phase 4 — networked development machine

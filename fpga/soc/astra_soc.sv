@@ -25,6 +25,9 @@ module astra_soc #(
     parameter integer CPU_CLK_DIV_BIT = 2, // 0=12.5 MHz, 1=6.25 MHz, 2=3.125 MHz
     parameter integer UART_BAUD = 115200,
     parameter integer UART_RX_FIFO_DEPTH = 128,
+    parameter        SD_BOOT_ENABLE = 1'b0,
+    parameter        ASTRA_HOST_ENABLE = 1'b0,
+    parameter integer ROM_WORDS = 65536,
     parameter [31:0] CPU_MODEL = 32'h00068030,
     parameter [31:0] CPU_IMPLEMENTATION = 32'h57463330, // "WF30"
     parameter [31:0] CPU_FEATURES = 32'h0000000c,
@@ -36,6 +39,11 @@ module astra_soc #(
     input  wire       ftdi_txd,    // host -> FPGA RX
     output wire [7:0] leds,
     output wire [3:0] gpdi_dp,
+    inout  wire       sd_clk,
+    inout  wire       sd_cmd,
+    inout  wire [3:0] sd_d,
+    output wire       wifi_en,
+    output wire       wifi_gpio0,
     output wire       sdram_clk,
     output wire       sdram_cke,
     output wire       sdram_csn,
@@ -52,6 +60,11 @@ module astra_soc #(
     , input wire       sim_berrn
 `endif
 );
+    // Production hardware leaves the shared SD bus under AstraHost's exclusive
+    // control. The direct FPGA SPI path remains available as a recovery and
+    // simulation backend when ASTRA_HOST_ENABLE is clear.
+    assign wifi_en = ASTRA_HOST_ENABLE;
+    assign wifi_gpio0 = 1'b1;
     // -------------------------------------------------------------------------
     // CPU/bus clock from a fabric divider. Hardware defaults to 3.125 MHz while
     // timing and stress images can select 6.25 or 12.5 MHz at synthesis time.
@@ -122,6 +135,7 @@ module astra_soc #(
     // -------------------------------------------------------------------------
     reg         sdram_cpu_start;
     reg         sdram_bist_start;
+    wire [24:0] sdram_cpu_addr;
     wire        sdram_bridge_busy;
     wire        sdram_bridge_done;
     wire [31:0] sdram_bridge_rdata;
@@ -146,6 +160,22 @@ module astra_soc #(
     wire [24:0] sdram_fill_addr;
     wire [127:0] sdram_fill_data;
     wire        sdram_fill_instruction;
+    reg         host_boot_request_cpu = 1'b0;
+    wire        host_seen_mem;
+    wire        host_boot_busy_mem;
+    wire        host_boot_done_mem;
+    wire        host_boot_error_mem;
+    wire [7:0]  host_error_code_mem;
+    wire [31:0] host_payload_size_mem;
+    wire [31:0] host_payload_crc_mem;
+    wire [31:0] host_initial_sp_mem;
+    wire [31:0] host_initial_pc_mem;
+    wire [31:0] host_bytes_received_mem;
+    wire        host_spi_miso;
+    wire        host_spi_miso_oe;
+    wire        sd_clk_in;
+    wire        sd_cmd_in;
+    wire [3:0]  sd_d_in;
 
     generate
         if (SDRAM_ENABLE) begin : g_sdram_enabled
@@ -245,9 +275,91 @@ module astra_soc #(
             wire        blit_mem_rsp_valid;
             wire [31:0] blit_mem_rdata;
 
+            wire        host_mem_lock;
+            wire        host_mem_valid;
+            wire        host_mem_ready;
+            wire        host_mem_write;
+            wire [24:0] host_mem_addr;
+            wire [3:0]  host_mem_be;
+            wire [31:0] host_mem_wdata;
+            wire        host_mem_rsp_valid;
+
+            reg [1:0] host_request_sync_mem = 2'b00;
+            always @(posedge sd_domain_clk) begin
+                if (!sd_ready)
+                    host_request_sync_mem <= 2'b00;
+                else
+                    host_request_sync_mem <= {host_request_sync_mem[0],
+                                              host_boot_request_cpu};
+            end
+
+            if (ASTRA_HOST_ENABLE) begin : g_astra_host
+                    wire [7:0] host_rx_data;
+                    wire host_rx_valid;
+                    wire host_rx_ready;
+                    wire [7:0] host_tx_data;
+                    wire host_tx_start;
+                    wire host_tx_busy;
+
+                    astra_host_spi_slave host_spi_i (
+                        .clk(sd_domain_clk), .rst(!sd_ready),
+                        .spi_sck(sd_clk_in), .spi_cs_n(sd_d_in[1]),
+                        .spi_mosi(sd_cmd_in), .spi_miso(host_spi_miso),
+                        .spi_miso_oe(host_spi_miso_oe),
+                        .rx_data(host_rx_data), .rx_valid(host_rx_valid),
+                        .rx_ready(host_rx_ready), .tx_data(host_tx_data),
+                        .tx_start(host_tx_start), .tx_busy(host_tx_busy),
+                        .rx_overflow(), .tx_overflow(), .tx_underflow(),
+                        .selected_seen()
+                    );
+
+                    astra_host_boot host_boot_i (
+                        .clk(sd_domain_clk), .rst(!sd_ready),
+                        .rx_data(host_rx_data), .rx_valid(host_rx_valid),
+                        .rx_ready(host_rx_ready), .tx_data(host_tx_data),
+                        .tx_start(host_tx_start), .tx_busy(host_tx_busy),
+                        .boot_request(host_request_sync_mem[1]),
+                        .host_seen(host_seen_mem),
+                        .boot_busy(host_boot_busy_mem),
+                        .boot_done(host_boot_done_mem),
+                        .boot_error(host_boot_error_mem),
+                        .error_code(host_error_code_mem),
+                        .payload_size(host_payload_size_mem),
+                        .payload_crc32(host_payload_crc_mem),
+                        .initial_sp(host_initial_sp_mem),
+                        .initial_pc(host_initial_pc_mem),
+                        .bytes_received(host_bytes_received_mem),
+                        .mem_lock(host_mem_lock), .mem_valid(host_mem_valid),
+                        .mem_ready(host_mem_ready), .mem_write(host_mem_write),
+                        .mem_addr(host_mem_addr), .mem_be(host_mem_be),
+                        .mem_wdata(host_mem_wdata),
+                        .mem_rsp_valid(host_mem_rsp_valid)
+                    );
+            end else begin : g_astra_host_disabled
+                    assign host_seen_mem = 1'b0;
+                    assign host_boot_busy_mem = 1'b0;
+                    assign host_boot_done_mem = 1'b0;
+                    assign host_boot_error_mem = 1'b0;
+                    assign host_error_code_mem = 8'd0;
+                    assign host_payload_size_mem = 32'd0;
+                    assign host_payload_crc_mem = 32'd0;
+                    assign host_initial_sp_mem = 32'd0;
+                    assign host_initial_pc_mem = 32'd0;
+                    assign host_bytes_received_mem = 32'd0;
+                    assign host_spi_miso = 1'b1;
+                    assign host_spi_miso_oe = 1'b0;
+                    assign host_mem_lock = 1'b0;
+                    assign host_mem_valid = 1'b0;
+                    assign host_mem_write = 1'b0;
+                    assign host_mem_addr = 25'd0;
+                    assign host_mem_be = 4'd0;
+                    assign host_mem_wdata = 32'd0;
+            end
+
             localparam [1:0] DMA_OWNER_NONE = 2'd0;
             localparam [1:0] DMA_OWNER_BIST = 2'd1;
             localparam [1:0] DMA_OWNER_BLIT = 2'd2;
+            localparam [1:0] DMA_OWNER_HOST = 2'd3;
             reg [1:0] dma_owner = DMA_OWNER_NONE;
 
             // Hold one DMA owner for the complete transaction stream. Besides
@@ -261,6 +373,8 @@ module astra_soc #(
                         DMA_OWNER_NONE: begin
                             if (bist_mem_lock)
                                 dma_owner <= DMA_OWNER_BIST;
+                            else if (host_mem_lock)
+                                dma_owner <= DMA_OWNER_HOST;
                             else if (blit_mem_lock)
                                 dma_owner <= DMA_OWNER_BLIT;
                         end
@@ -272,6 +386,10 @@ module astra_soc #(
                             if (!blit_mem_lock)
                                 dma_owner <= DMA_OWNER_NONE;
                         end
+                        DMA_OWNER_HOST: begin
+                            if (!host_mem_lock)
+                                dma_owner <= DMA_OWNER_NONE;
+                        end
                         default: dma_owner <= DMA_OWNER_NONE;
                     endcase
                 end
@@ -279,17 +397,23 @@ module astra_soc #(
 
             wire        dma_use_bist = dma_owner == DMA_OWNER_BIST;
             wire        dma_use_blit = dma_owner == DMA_OWNER_BLIT;
+            wire        dma_use_host = dma_owner == DMA_OWNER_HOST;
             wire        dma_mem_lock = dma_owner != DMA_OWNER_NONE;
             wire        dma_mem_valid = dma_use_bist ? bist_mem_valid :
+                                        dma_use_host ? host_mem_valid :
                                             dma_use_blit ? blit_mem_valid : 1'b0;
             wire        dma_mem_ready;
             wire        dma_mem_write = dma_use_bist ? bist_mem_write :
+                                        dma_use_host ? host_mem_write :
                                             dma_use_blit ? blit_mem_write : 1'b0;
             wire [24:0] dma_mem_addr = dma_use_bist ? bist_mem_addr :
+                                       dma_use_host ? host_mem_addr :
                                            dma_use_blit ? blit_mem_addr : 25'd0;
             wire [3:0]  dma_mem_be = dma_use_bist ? bist_mem_be :
+                                      dma_use_host ? host_mem_be :
                                          dma_use_blit ? blit_mem_be : 4'd0;
             wire [31:0] dma_mem_wdata = dma_use_bist ? bist_mem_wdata :
+                                         dma_use_host ? host_mem_wdata :
                                             dma_use_blit ? blit_mem_wdata : 32'd0;
             wire        dma_mem_rsp_valid;
             wire [31:0] dma_mem_rdata;
@@ -300,6 +424,8 @@ module astra_soc #(
             assign blit_mem_ready = dma_use_blit && dma_mem_ready;
             assign blit_mem_rsp_valid = dma_use_blit && dma_mem_rsp_valid;
             assign blit_mem_rdata = dma_mem_rdata;
+            assign host_mem_ready = dma_use_host && dma_mem_ready;
+            assign host_mem_rsp_valid = dma_use_host && dma_mem_rsp_valid;
 
             assign sdram_cke = sd_cke;
             assign sdram_csn = sd_cs;
@@ -352,7 +478,7 @@ module astra_soc #(
                 .cpu_clk(clk),
                 .cpu_rst(rst || !sdram_ready_cpu),
                 .cpu_start(sdram_cpu_start),
-                .cpu_addr(cpu_adr[24:0]),
+                .cpu_addr(sdram_cpu_addr),
                 .cpu_write(!cpu_rw_n),
                 .cpu_be(be),
                 .cpu_wdata(cpu_dout),
@@ -470,8 +596,74 @@ module astra_soc #(
             assign sdram_fill_addr = 25'd0;
             assign sdram_fill_data = 128'd0;
             assign sdram_fill_instruction = 1'b0;
+            assign host_seen_mem = 1'b0;
+            assign host_boot_busy_mem = 1'b0;
+            assign host_boot_done_mem = 1'b0;
+            assign host_boot_error_mem = 1'b0;
+            assign host_error_code_mem = 8'd0;
+            assign host_payload_size_mem = 32'd0;
+            assign host_payload_crc_mem = 32'd0;
+            assign host_initial_sp_mem = 32'd0;
+            assign host_initial_pc_mem = 32'd0;
+            assign host_bytes_received_mem = 32'd0;
+            assign host_spi_miso = 1'b1;
+            assign host_spi_miso_oe = 1'b0;
         end
     endgenerate
+
+    reg [1:0] host_seen_sync_cpu = 2'b00;
+    reg [1:0] host_busy_sync_cpu = 2'b00;
+    reg [1:0] host_done_sync_cpu = 2'b00;
+    reg [1:0] host_error_sync_cpu = 2'b00;
+    reg [7:0] host_error_meta_cpu = 8'd0;
+    reg [7:0] host_error_cpu = 8'd0;
+    reg [31:0] host_size_meta_cpu = 32'd0;
+    reg [31:0] host_size_cpu = 32'd0;
+    reg [31:0] host_crc_meta_cpu = 32'd0;
+    reg [31:0] host_crc_cpu = 32'd0;
+    reg [31:0] host_sp_meta_cpu = 32'd0;
+    reg [31:0] host_sp_cpu = 32'd0;
+    reg [31:0] host_pc_meta_cpu = 32'd0;
+    reg [31:0] host_pc_cpu = 32'd0;
+    reg [31:0] host_bytes_meta_cpu = 32'd0;
+    reg [31:0] host_bytes_cpu = 32'd0;
+    always @(posedge clk) begin
+        if (rst) begin
+            host_seen_sync_cpu <= 2'b00;
+            host_busy_sync_cpu <= 2'b00;
+            host_done_sync_cpu <= 2'b00;
+            host_error_sync_cpu <= 2'b00;
+            host_error_meta_cpu <= 8'd0;
+            host_error_cpu <= 8'd0;
+            host_size_meta_cpu <= 32'd0;
+            host_size_cpu <= 32'd0;
+            host_crc_meta_cpu <= 32'd0;
+            host_crc_cpu <= 32'd0;
+            host_sp_meta_cpu <= 32'd0;
+            host_sp_cpu <= 32'd0;
+            host_pc_meta_cpu <= 32'd0;
+            host_pc_cpu <= 32'd0;
+            host_bytes_meta_cpu <= 32'd0;
+            host_bytes_cpu <= 32'd0;
+        end else begin
+            host_seen_sync_cpu <= {host_seen_sync_cpu[0], host_seen_mem};
+            host_busy_sync_cpu <= {host_busy_sync_cpu[0], host_boot_busy_mem};
+            host_done_sync_cpu <= {host_done_sync_cpu[0], host_boot_done_mem};
+            host_error_sync_cpu <= {host_error_sync_cpu[0], host_boot_error_mem};
+            host_error_meta_cpu <= host_error_code_mem;
+            host_error_cpu <= host_error_meta_cpu;
+            host_size_meta_cpu <= host_payload_size_mem;
+            host_size_cpu <= host_size_meta_cpu;
+            host_crc_meta_cpu <= host_payload_crc_mem;
+            host_crc_cpu <= host_crc_meta_cpu;
+            host_sp_meta_cpu <= host_initial_sp_mem;
+            host_sp_cpu <= host_sp_meta_cpu;
+            host_pc_meta_cpu <= host_initial_pc_mem;
+            host_pc_cpu <= host_pc_meta_cpu;
+            host_bytes_meta_cpu <= host_bytes_received_mem;
+            host_bytes_cpu <= host_bytes_meta_cpu;
+        end
+    end
 
     // -------------------------------------------------------------------------
     // CPU signals
@@ -712,21 +904,32 @@ module astra_soc #(
 
     // -------------------------------------------------------------------------
     // Address decode (bring-up map)
-    //   ROM  0x00000000 & 0xFFE00000 (256 KB, aliased so $0/$4 vectors fetch from ROM)
+    //   Stage 0 0xFFFC0000 (8 KB BRAM; reset vectors temporarily aliased at 0)
+    //   ROM     0xFFE00000 (256 KB virtual aperture backed by SDRAM after handoff)
     //   BRAM 0x01FF8000..0x01FFFFFF (32 KB, temporary boot stack/scratch)
     //   SDRAM alias 0x02000000..0x03FFFFFF (32 MB; low mapping follows overlay work)
     //   Vesta identity 0xFFF00000..0xFFF000FF
     //   UART 0xFFF00500..0xFFF0050F (Vesta UART)
     // -------------------------------------------------------------------------
-    localparam ROM_WORDS = 65536;             // 256 KB ROM, matching sw/boot/astra_st.ld.
     localparam RAM_WORDS = 8192;              // 32 KB system RAM (BRAM)
 
-    wire sel_rom  = (cpu_adr[31:18] == 14'h3ff8) || (cpu_adr[31:18] == 14'd0); // 0xFFE00000..0xFFE3FFFF or low 256KB
+    reg rom_overlay_sdram = 1'b0;
+    wire sel_rom;
+    wire sel_stage2_rom;
+    wire sel_sdram;
+    boot_memory_map #(
+        .SD_BOOT_ENABLE(SD_BOOT_ENABLE),
+        .SDRAM_ENABLE(SDRAM_ENABLE)
+    ) boot_memory_map_i (
+        .address(cpu_adr), .overlay_sdram(rom_overlay_sdram),
+        .boot_bram_select(sel_rom), .stage2_select(sel_stage2_rom),
+        .sdram_select(sel_sdram), .sdram_address(sdram_cpu_addr)
+    );
     wire sel_ram  = (cpu_adr[31:15] == 17'h03FF); // 0x01FF8000..0x01FFFFFF
-    wire sel_sdram = SDRAM_ENABLE && (cpu_adr[31:25] == 7'b0000001);
     wire sel_sys  = (cpu_adr[31:9]  == 23'h7FF800);
     wire sel_astraea = SDRAM_ENABLE && (cpu_adr[31:8] == 24'hFFF100);
     wire sel_uart = (cpu_adr[31:8]  == 24'hFFF005);
+    wire sel_spi = (cpu_adr[31:8] == 24'hFFF006);
     wire sel_vega_regs = HDMI_ENABLE && (cpu_adr[31:8] == 24'hFFF200);
     wire sel_vega_text = HDMI_ENABLE && (cpu_adr[31:12] == 20'hFFF22);
 
@@ -743,9 +946,10 @@ module astra_soc #(
             7'h00: sys_rdata = 32'h56535441; // ID: "VSTA"
             7'h01: sys_rdata = 32'h00010000; // Vesta v1.0
             7'h02: sys_rdata = 32'h41363801; // Astra 68, board ABI 1
-            7'h03: sys_rdata = 32'd0;        // SYS_CTRL (readback)
-            7'h04: sys_rdata = {28'd0, video_ready_cpu, 1'b1,
-                                sdram_ready_cpu,
+            7'h03: sys_rdata = {29'd0, host_boot_request_cpu,
+                                rom_overlay_sdram, 1'b0};
+            7'h04: sys_rdata = {26'd0, ASTRA_HOST_ENABLE, 1'b1, video_ready_cpu,
+                                !rom_overlay_sdram, sdram_ready_cpu,
                                 SDRAM_ENABLE ? 1'b1 : 1'b0};
             7'h05: sys_rdata = 32'd0;        // power-on reset
             7'h06: sys_rdata = 32'd0;        // SCRATCH (not writable yet)
@@ -795,6 +999,16 @@ module astra_soc #(
             7'h48: sys_rdata = sdram_line_hits;
             7'h49: sys_rdata = sdram_line_misses;
             7'h4a: sys_rdata = sdram_posted_writes;
+            7'h4c: sys_rdata = {31'd0, host_boot_request_cpu};
+            7'h4d: sys_rdata = {24'd0, host_seen_sync_cpu[1], 3'd0,
+                                 host_error_sync_cpu[1], host_done_sync_cpu[1],
+                                 host_busy_sync_cpu[1], host_boot_request_cpu};
+            7'h4e: sys_rdata = host_size_cpu;
+            7'h4f: sys_rdata = host_crc_cpu;
+            7'h50: sys_rdata = host_sp_cpu;
+            7'h51: sys_rdata = host_pc_cpu;
+            7'h52: sys_rdata = host_bytes_cpu;
+            7'h53: sys_rdata = {24'd0, host_error_cpu};
             default: sys_rdata = 32'd0;
         endcase
     end
@@ -927,6 +1141,74 @@ module astra_soc #(
         (uart_reg == 2'd2) ? {16'd0, rx_level, 6'd0, rx_overrun, ~rx_empty} :
         (uart_reg == 2'd3) ? {24'd0, rx_data}               :     // RX data
         32'd0;
+
+    // -------------------------------------------------------------------------
+    // Vesta SPI / SD. The card is wired in SPI mode: CMD=MOSI, D0=MISO,
+    // D3=CSn. D1/D2 remain released for compatibility with the shared ESP32
+    // wiring on ULX3S.
+    // -------------------------------------------------------------------------
+    wire [1:0] spi_reg = cpu_adr[3:2];
+    wire spi_ctrl_wr = sel_spi & (spi_reg == 2'd0) & be[0] &
+                       cpu_data_en & ~cpu_rw_n & bus_write_stb;
+    wire spi_data_wr = sel_spi & (spi_reg == 2'd2) & be[0] &
+                       cpu_data_en & ~cpu_rw_n & bus_write_stb;
+    wire [7:0] spi_rx_data;
+    wire spi_busy;
+    wire spi_cs_n;
+    wire [3:0] spi_clkdiv;
+    wire sd_spi_clk;
+    wire sd_spi_mosi;
+
+    spi_sd spi_sd_i (
+        .clk(clk), .rst(rst),
+        .ctrl_we(spi_ctrl_wr), .ctrl_wdata(uart_wdata),
+        .data_we(spi_data_wr), .data_wdata(uart_wdata),
+        .data_rdata(spi_rx_data), .busy(spi_busy),
+        .cs_n(spi_cs_n), .clkdiv(spi_clkdiv),
+        .sd_clk(sd_spi_clk), .sd_mosi(sd_spi_mosi), .sd_miso(sd_d_in[0])
+    );
+
+`ifdef SYNTHESIS
+    // Explicit pad cells are required here. With a parameter-selected top-level
+    // `Z` assignment, Yosys can demote the shared inout to an output and then
+    // constant-fold the ESP clock/select inputs. These BIDIR cells keep the
+    // physical input path and output-enable visible through synthesis.
+    TRELLIS_IO #(.DIR("BIDIR")) sd_clk_pad (
+        .B(sd_clk), .I(sd_spi_clk), .T(ASTRA_HOST_ENABLE), .O(sd_clk_in)
+    );
+    TRELLIS_IO #(.DIR("BIDIR")) sd_cmd_pad (
+        .B(sd_cmd), .I(sd_spi_mosi), .T(ASTRA_HOST_ENABLE), .O(sd_cmd_in)
+    );
+    TRELLIS_IO #(.DIR("BIDIR")) sd_d0_pad (
+        .B(sd_d[0]), .I(host_spi_miso),
+        .T(ASTRA_HOST_ENABLE ? !host_spi_miso_oe : 1'b1), .O(sd_d_in[0])
+    );
+    TRELLIS_IO #(.DIR("BIDIR")) sd_d1_pad (
+        .B(sd_d[1]), .I(1'b0), .T(1'b1), .O(sd_d_in[1])
+    );
+    TRELLIS_IO #(.DIR("BIDIR")) sd_d2_pad (
+        .B(sd_d[2]), .I(1'b0), .T(1'b1), .O(sd_d_in[2])
+    );
+    TRELLIS_IO #(.DIR("BIDIR")) sd_d3_pad (
+        .B(sd_d[3]), .I(spi_cs_n), .T(ASTRA_HOST_ENABLE), .O(sd_d_in[3])
+    );
+`else
+    assign sd_clk = ASTRA_HOST_ENABLE ? 1'bz : sd_spi_clk;
+    assign sd_cmd = ASTRA_HOST_ENABLE ? 1'bz : sd_spi_mosi;
+    assign sd_d[0] = ASTRA_HOST_ENABLE && host_spi_miso_oe ?
+                     host_spi_miso : 1'bz;
+    assign sd_d[1] = 1'bz;
+    assign sd_d[2] = 1'bz;
+    assign sd_d[3] = ASTRA_HOST_ENABLE ? 1'bz : spi_cs_n;
+    assign sd_clk_in = sd_clk;
+    assign sd_cmd_in = sd_cmd;
+    assign sd_d_in = sd_d;
+`endif
+
+    wire [31:0] spi_rdata =
+        (spi_reg == 2'd0) ? {24'd0, spi_clkdiv, 3'd0, spi_cs_n} :
+        (spi_reg == 2'd1) ? {31'd0, spi_busy} :
+        (spi_reg == 2'd2) ? {24'd0, spi_rx_data} : 32'd0;
 
     // -------------------------------------------------------------------------
     // Vega bootstrap display: a 90x30 ASCII plane feeding NovaVM's proven
@@ -1082,6 +1364,8 @@ module astra_soc #(
         bus_read_stb  <= 1'b0;
         if (rst) begin
             bs <= BS_IDLE; dsack_n <= 2'b11;
+            rom_overlay_sdram <= 1'b0;
+            host_boot_request_cpu <= 1'b0;
             sdram_cycle_started <= 1'b0;
             cpu_sdram_reads <= 32'd0;
             cpu_sdram_writes <= 32'd0;
@@ -1189,6 +1473,15 @@ module astra_soc #(
                             be[0] && cpu_dout[0]) begin
                             sdram_bist_start <= 1'b1;
                         end
+                        if (sel_sys && cpu_adr[8:2] == 7'h03 && SD_BOOT_ENABLE &&
+                            sdram_ready_cpu && be[0] && cpu_dout[1]) begin
+                            rom_overlay_sdram <= 1'b1;
+                        end
+                        if (sel_sys && cpu_adr[8:2] == 7'h03 &&
+                            ASTRA_HOST_ENABLE && sdram_ready_cpu && be[0] &&
+                            cpu_dout[2]) begin
+                            host_boot_request_cpu <= 1'b1;
+                        end
                     end else if (cpu_rw_n) begin
                         cpu_din <= bkpt_ack_read ? BKPT_ILLEGAL_DIN :
                                    sel_rom  ? rom_q :
@@ -1197,6 +1490,7 @@ module astra_soc #(
                                    sel_astraea ? astraea_rdata :
                                    sel_vega_regs ? vega_rdata :
                                    sel_vega_text ? {4{console_cpu_rdata}} :
+                                   sel_spi ? spi_rdata :
                                    sel_uart ? uart_rdata : 32'd0;
                         bus_read_stb <= 1'b1;              // commit read this cycle
                         if (!dbg_fault_valid && sel_rom && cpu_adr[31:20] == 12'hFFE && cpu_fc == 3'b110) begin
@@ -1270,6 +1564,7 @@ module astra_soc #(
                            sel_astraea ? astraea_rdata :
                            sel_vega_regs ? vega_rdata :
                            sel_vega_text ? {4{console_cpu_rdata}} :
+                           sel_spi ? spi_rdata :
                            sel_uart ? uart_rdata : 32'd0;
                 dsack_n <= 2'b00;                 // 32-bit port ack
                 bs <= BS_END;

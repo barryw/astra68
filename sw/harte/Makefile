@@ -22,7 +22,11 @@ LD       = ../boot/astra_st.ld
 # device can always be matched back to the exact core, clock, and RTL source.
 SOC_ID_SRCS = ../../fpga/soc/astra_soc.sv ../../fpga/soc/astra_soc.lpf \
               ../../fpga/soc/uart_tx.sv ../../fpga/soc/uart_rx.sv \
-              ../../fpga/soc/uart_rx_fifo.sv \
+              ../../fpga/soc/uart_rx_fifo.sv ../../fpga/soc/spi_sd.sv \
+              ../../fpga/soc/astra_host_async_byte_fifo.sv \
+              ../../fpga/soc/astra_host_spi_slave.sv \
+              ../../fpga/soc/astra_host_boot.sv \
+              ../../fpga/soc/boot_memory_map.sv \
               ../../fpga/soc/ecp5pll.sv ../../fpga/soc/sdram32_cpu_bridge.sv \
               ../../fpga/soc/tg68k_cache_store.sv \
               ../../fpga/soc/sdram32_bist.sv ../../fpga/soc/sdram32_controller.sv \

@@ -77,7 +77,16 @@ typedef volatile struct {
     uint32_t SDRAM_LINE_HITS;      // 0x120 external 16-byte line-buffer hits
     uint32_t SDRAM_LINE_MISSES;    // 0x124 external 16-byte line fills
     uint32_t SDRAM_POSTED_WRITES;  // 0x128 writes acknowledged before SDRAM completion
-    uint32_t _r1[(0x200 - 0x12C) / 4];
+    uint32_t _perf_r0;             // 0x12C
+    uint32_t HOST_CTRL;            // 0x130 AstraHost boot request
+    uint32_t HOST_STATUS;          // 0x134 HOST_* status bits
+    uint32_t HOST_ROM_SIZE;        // 0x138 validated payload bytes
+    uint32_t HOST_ROM_CRC32;       // 0x13C validated payload CRC32
+    uint32_t HOST_INITIAL_SP;      // 0x140 captured stage-2 vector
+    uint32_t HOST_INITIAL_PC;      // 0x144 captured stage-2 vector
+    uint32_t HOST_BYTES_RECEIVED;  // 0x148 streaming progress
+    uint32_t HOST_ERROR;           // 0x14C protocol status code
+    uint32_t _r1[(0x200 - 0x150) / 4];
     // region table 0x200
     VestaRegion REGION[16];  // 0x200..0x2FF
     // interrupt controller 0x300
@@ -132,6 +141,8 @@ typedef volatile struct {
 #define SYS_SDRAM_READY   (1u << 1)
 #define SYS_BOOT_OVERLAY  (1u << 2)
 #define SYS_VIDEO_READY   (1u << 3)
+#define SYS_SD_CONTROLLER (1u << 4)
+#define SYS_ASTRA_HOST    (1u << 5)
 
 // ---- SDRAM power-on self-test ----
 #define MEMTEST_START       (1u << 0)
@@ -146,9 +157,24 @@ typedef volatile struct {
 
 // ---- SYS_CTRL / RESET_REASON ----
 #define SYS_SOFT_RESET  (1u << 0)
+#define SYS_BOOT_SDRAM  (1u << 1)
+#define SYS_HOST_BOOT_REQUEST (1u << 2)
 #define RESET_POWERON   0u
 #define RESET_SOFT      1u
 #define RESET_WATCHDOG  2u
+
+// ---- SPI / SD ----
+#define SPI_CTRL_CS_N          (1u << 0)
+#define SPI_CTRL_CLKDIV_SHIFT  4
+#define SPI_CTRL_CLKDIV(value) (((value) & 0xfu) << SPI_CTRL_CLKDIV_SHIFT)
+#define SPI_STATUS_BUSY        (1u << 0)
+
+// ---- AstraHost ----
+#define HOST_BOOT_REQUESTED (1u << 0)
+#define HOST_BOOT_BUSY      (1u << 1)
+#define HOST_BOOT_DONE      (1u << 2)
+#define HOST_BOOT_ERROR     (1u << 3)
+#define HOST_LINK_SEEN      (1u << 7)
 
 // ---- MMU_CTRL ----
 #define MMU_ENABLE       (1u << 0)

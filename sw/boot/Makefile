@@ -22,7 +22,11 @@ LDFLAGS = -T $(LD) -nostdlib -Wl,-Map=astra_boot.map
 
 SOC_ID_SRCS = ../../fpga/soc/astra_soc.sv ../../fpga/soc/astra_soc.lpf \
               ../../fpga/soc/uart_tx.sv ../../fpga/soc/uart_rx.sv \
-              ../../fpga/soc/uart_rx_fifo.sv \
+              ../../fpga/soc/uart_rx_fifo.sv ../../fpga/soc/spi_sd.sv \
+              ../../fpga/soc/astra_host_async_byte_fifo.sv \
+              ../../fpga/soc/astra_host_spi_slave.sv \
+              ../../fpga/soc/astra_host_boot.sv \
+              ../../fpga/soc/boot_memory_map.sv \
               ../../fpga/soc/ecp5pll.sv ../../fpga/soc/sdram32_cpu_bridge.sv \
               ../../fpga/soc/tg68k_cache_store.sv \
               ../../fpga/soc/sdram32_bist.sv ../../fpga/soc/sdram32_controller.sv \
@@ -57,7 +61,7 @@ ID_SRCS = Makefile gen_build_info.py boot.c crt0.S $(LD) \
           ../include/astraea.h \
           $(SOC_ID_SRCS) $(CPU_ID_SRCS)
 
-all: astra_boot.bin
+all: astra_boot.bin astra68.rom
 
 $(BUILD_INFO): FORCE gen_build_info.py
 	@mkdir -p $(dir $@)
@@ -68,6 +72,9 @@ astra_boot.elf: crt0.S boot.c $(LD) $(BUILD_INFO)
 
 astra_boot.bin: astra_boot.elf
 	$(OBJCOPY) -O binary $< $@
+
+astra68.rom: astra_boot.bin package_rom.py
+	python3 package_rom.py $< $@
 
 verify: astra_boot.elf
 	@echo "== sections =="; $(OBJDUMP) -h $< | grep -E 'Idx|vectors|text|data|bss'
@@ -82,7 +89,7 @@ config:
 	@printf '%s\n' '$(BUILD_CONFIG)'
 
 clean:
-	rm -f *.elf *.bin *.map
+	rm -f *.elf *.bin *.map *.rom
 	rm -rf build
 
 FORCE:

@@ -719,6 +719,23 @@ static int benchmark_astraea(uint32_t ram_base)
 static int test_full_range(uint32_t ram_base, uint32_t ram_size)
 {
     uint32_t total_mib = ram_size >> 20;
+    uint32_t initial_status = VESTA->MEMTEST_STATUS;
+
+    // SD stage-0 runs the destructive sweep while all executable code is still
+    // in bootstrap BRAM. Re-running it after this ROM has moved into SDRAM
+    // would erase the code currently executing.
+    if ((initial_status & MEMTEST_DONE) != 0u &&
+        (initial_status & MEMTEST_BUSY) == 0u) {
+        serial_puts("  Full-range BIST ... [stage0] ");
+        if (VESTA->MEMTEST_ERRORS != 0u) {
+            return post_failure("SDRAM full range",
+                                ram_base + VESTA->MEMTEST_FIRST_FAIL,
+                                VESTA->MEMTEST_EXPECTED,
+                                VESTA->MEMTEST_ACTUAL);
+        }
+        serial_puts("OK\n");
+        return 1;
+    }
 
     serial_puts("  Full-range BIST ... [");
     VESTA->MEMTEST_CTRL = MEMTEST_START;

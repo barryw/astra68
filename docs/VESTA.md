@@ -1,8 +1,8 @@
 # Vesta — System / IRQ / Timers / I/O Register Map (v0.1 transition)
 
 Vesta is the Astra 68 system-glue chip (Gary/Gayle analog): the interrupt
-controller every other chip routes into, timers, UART console, SD/SPI storage,
-input, machine identity, and reset control.
+controller every other chip routes into, timers, FTDI diagnostic console,
+AstraHost boot state, input, machine identity, and reset control.
 
 > **Architecture transition:** process translation and protection now use the
 > CPU's built-in MC68030 PMMU. The former Vesta region-MMU aperture and contract
@@ -23,7 +23,7 @@ Authoritative contract; `sw/include/vesta.h` is the hand-maintained C mirror.
 Block map (VESTA_BASE +):
   0x0000  system control (id / machine / reset / scratch)
   0x00D0  SDRAM power-on self-test
-  0x0100  retired region-MMU / legacy diagnostic aperture
+  0x0100  retired region-MMU / diagnostics / AstraHost boot state
   0x0200  retired region-MMU table aperture
   0x0300  interrupt controller
   0x0380  per-source IRQ config (32 x 4 bytes)
@@ -60,7 +60,7 @@ Block map (VESTA_BASE +):
 | 0x0048 | `NVRAM_CAPS` | RO | 0 | persistent-settings backend capabilities |
 
 `SYS_STATUS` currently reports `[0]SDRAM_PRESENT [1]SDRAM_READY
-[2]BOOT_OVERLAY [3]VIDEO_PLL_LOCKED`.
+[2]BOOT_OVERLAY [3]VIDEO_PLL_LOCKED [4]SD_CONTROLLER [5]ASTRA_HOST`.
 
 Each personality descriptor is four read-only words: `ID` FourCC, `VERSION`
 (16.16 major/minor), physical `BASE`, and MMIO aperture `SIZE`. The boot ROM
@@ -99,6 +99,26 @@ block remains ABI-compatible:
 | 0x0114 | `CPU_SDRAM_READS` | RO | CPU SDRAM read requests launched |
 | 0x0118 | `CPU_SDRAM_WRITES` | RO | CPU SDRAM write requests launched |
 | 0x011C | `CPU_SDRAM_WAIT` | RO | CPU clocks spent in the SDRAM wait state |
+| 0x0120 | `SDRAM_LINE_HITS` | RO | external 16-byte line-buffer hits |
+| 0x0124 | `SDRAM_LINE_MISSES` | RO | external 16-byte line fills |
+| 0x0128 | `SDRAM_POSTED_WRITES` | RO | writes acknowledged before completion |
+
+### AstraHost boot state (0x0130)
+
+Production storage and ESP32 services use the SPI-only AstraHost transport
+specified in `docs/ASTRAHOST.md`. These registers expose boot-engine state to
+stage 0; they are not an alternate CPU-to-ESP byte transport.
+
+| Offset | Name | Acc | Description |
+|---|---|---|---|
+| 0x0130 | `HOST_CTRL` | RO | `[0]BOOT_REQUESTED` |
+| 0x0134 | `HOST_STATUS` | RO | `[0]REQUESTED [1]BUSY [2]DONE [3]ERROR [7]LINK_SEEN` |
+| 0x0138 | `HOST_ROM_SIZE` | RO | validated payload bytes |
+| 0x013C | `HOST_ROM_CRC32` | RO | validated payload CRC32 |
+| 0x0140 | `HOST_INITIAL_SP` | RO | captured stage-2 reset SP |
+| 0x0144 | `HOST_INITIAL_PC` | RO | captured stage-2 reset PC |
+| 0x0148 | `HOST_BYTES_RECEIVED` | RO | streaming progress in bytes |
+| 0x014C | `HOST_ERROR` | RO | AstraHost protocol status code |
 
 Phases are `0=idle`, `1=write`, `2=read/verify`, and `3=done`. Starting the
 test clears the prior result. POST writes and verifies an address-derived
@@ -216,6 +236,8 @@ at 0. Prescale is a power-of-two divide for µs…ms ranges.
 ## 6. UART (0x0500)
 
 8N1 serial console (the memtest already exercises this path at 115200).
+This port is wired to FTDI for diagnostics and hardware tests. It is not wired
+to the ESP32 and is never an AstraHost transport.
 
 | Offset | Name | Acc | Description |
 |---|---|---|---|
@@ -226,10 +248,13 @@ at 0. Prescale is a power-of-two divide for µs…ms ranges.
 
 ---
 
-## 7. SPI / SD (0x0600)
+## 7. Direct SPI / SD recovery aperture (0x0600)
 
-Low-level SPI master; software drives the SD card protocol (SPI mode). Block-DMA
-to SDRAM is a future enhancement (§10).
+This low-level FPGA SPI master is present only in direct-recovery and simulation
+builds with `ASTRA_HOST_ENABLE=0`. Software may drive the SD card protocol in
+that build. Production builds release the shared SD pins to the ESP32 and use
+the SPI-only AstraHost service; this aperture must not be used by production
+software.
 
 | Offset | Name | Acc | Description |
 |---|---|---|---|
@@ -311,7 +336,7 @@ IRQ lines (read the chip's `IRQ_STAT` for detail).
 **Open:**
 1. Permanent location and ABI for CPU/cache/PMMU performance counters currently
    exposed in the retired aperture.
-2. SD **block-DMA engine** (auto DMA a 512-byte block to SDRAM) vs software SPI.
+2. AstraHost raw multi-sector SPI service and FPGA DMA interface details.
 3. Watchdog timer (for `RESET_REASON=watchdog`).
 4. `SCRATCH` persistence across soft reset — how many words for boot handoff.
 5. Whether central DMA-fence configuration and fault reporting belong in Vesta

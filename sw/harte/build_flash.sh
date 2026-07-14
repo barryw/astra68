@@ -42,7 +42,7 @@ echo "== [2/5] build bitstream =="
   TARGET_FREQ_MHZ="$TARGET_FREQ_MHZ" \
   PNR_SEED="$PNR_SEED" \
   SOC_BUILD_ID="$EXPECT" \
-  bash mkbit.sh ../../../sw/harte/rom_harness.hex harte "$CPU_CORE" >/dev/null )
+  SD_BOOT_ENABLE=0 bash mkbit.sh ../../../sw/harte/rom_harness.hex harte "$CPU_CORE" >/dev/null )
 BITSHA=$(sha256sum fpga/soc/oss_flow/astra.bit | cut -d' ' -f1)
 echo "    astra.bit sha=$BITSHA"
 
