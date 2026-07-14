@@ -542,6 +542,16 @@ static void test_table_bus_errors(void)
                            PMMU030_ACCESS_READ, 7u);
     CHECK(name, (result.mmusr & (PMMU030_MMUSR_B | PMMU030_MMUSR_I)) ==
                 (PMMU030_MMUSR_B | PMMU030_MMUSR_I));
+
+    pmmu030_init(&state);
+    memory_init(&memory);
+    bus = make_bus(&memory);
+    configure_short_two_level(&state, &memory, logical,
+                              UINT32_C(0x70000001));
+    memory.fail_write = UINT32_C(0x1000) + a * 4u;
+    result = pmmu030_translate(&state, &bus, logical, 1u,
+                               PMMU030_ACCESS_READ);
+    CHECK(name, result.fault == PMMU030_FAULT_TABLE_BUS);
     ++tests_run;
 }
 

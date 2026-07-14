@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "id": "pmmu/table-bus-fault-status",
+  "description": "PTEST follows an indirect descriptor into an absent physical table page and reports MMUSR.B plus MMUSR.I instead of treating the bus read as a zero invalid descriptor.",
+  "authority": [
+    "MC68030 User's Manual, section 9: table-search bus errors and MMUSR status",
+    "M68000 Family Programmer's Reference Manual: PTEST"
+  ],
+  "requires": [
+    "mc68030",
+    "pmmu",
+    "table-bus-fault"
+  ],
+  "initial": {
+    "reset": true,
+    "cpu": {
+      "a0": "0x00002000",
+      "a1": "0x00002008",
+      "a2": "0x00005000",
+      "a4": "0x00006000"
+    },
+    "memory": [
+      {
+        "address": "0x00000000",
+        "data": "0000800000001000"
+      },
+      {
+        "address": "0x00001000",
+        "data": "f0104c00f0114000"
+      },
+      {
+        "address": "0x00002000",
+        "data": "7fff00020000400080cc8000"
+      },
+      {
+        "address": "0x00003008",
+        "data": "f0129f71f014620023fcc0de600d0000600460fe"
+      },
+      {
+        "address": "0x00004004",
+        "data": "00003001"
+      },
+      {
+        "address": "0x00004014",
+        "data": "0000700200006001"
+      },
+      {
+        "address": "0x00006000",
+        "data": "0000000000000000"
+      }
+    ]
+  },
+  "run": {
+    "mode": "memory",
+    "max_cycles": 10000,
+    "stop": {
+      "address": "0x00006004",
+      "mask": "0xffffffff",
+      "value": "0xc0de600d"
+    }
+  },
+  "observe": [
+    {
+      "address": "0x00006000",
+      "length": 8
+    }
+  ],
+  "expect": {
+    "terminal": "memory",
+    "memory": [
+      {
+        "address": "0x00006000",
+        "data": "84010000c0de600d"
+      }
+    ]
+  }
+}

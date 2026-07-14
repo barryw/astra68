@@ -334,7 +334,11 @@ entity TG68KdotC_Kernel is
 		debug_rte_mmu_fix_ssw    : out std_logic_vector(15 downto 0);
 		debug_rte_mmu_fix_opcode : out std_logic_vector(15 downto 0);
 		debug_rte_mmu_fix_write  : out std_logic;
-		debug_rte_format_b_version_error : out std_logic
+		debug_rte_format_b_version_error : out std_logic;
+		debug_Flags              : out std_logic_vector(7 downto 0) := (others => '0');
+		debug_SFC                : out std_logic_vector(2 downto 0) := (others => '0');
+		debug_DFC                : out std_logic_vector(2 downto 0) := (others => '0');
+		debug_CAAR               : out std_logic_vector(31 downto 0) := (others => '0')
 			);
 end TG68KdotC_Kernel;
 
@@ -9513,6 +9517,10 @@ debug_FlagsSR            <= FlagsSR;
 debug_USP                <= USP;
 debug_MSP                <= MSP;
 debug_ISP                <= ISP;
+debug_Flags              <= Flags;
+debug_SFC                <= SFC;
+debug_DFC                <= DFC;
+debug_CAAR               <= CAAR;
 debug_a7_is_msp          <= a7_is_msp;
 debug_interrupt_mode     <= interrupt_mode;
 debug_rte_saved_mbit     <= rte_saved_mbit;

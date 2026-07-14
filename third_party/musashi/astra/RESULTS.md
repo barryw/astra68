@@ -12,6 +12,8 @@ Verified on 2026-07-13 on `nuc` with GCC 13.3.0.
 | Complete focused suite with GCC `-fanalyzer` | Pass |
 | Vendored Musashi example build | Pass |
 | Existing Musashi instruction binaries | 79/79 pass (60 MC68000, 19 MC68040) |
+| Maintained Harte MC68030-compatible gate | 96,103/96,103 pass |
+| Maintained Harte ordinary full-state diagnostic | 256,894/256,894 pass |
 
 Focused command:
 

@@ -93,7 +93,7 @@ if [[ "${CORETEST_REUSE_SIM:-0}" != "1" || ! -x obj_dir/Vtb_coretest ]]; then
         "${verilator_sdram_args[@]}" \
         tb_coretest.sv tb_sdram32_controller.sv ../astra_soc.sv \
         ../tg68k_cache_store.sv \
-        ../uart_tx.sv ../uart_rx.sv "${verilator_sdram_sources[@]}" wf68k_core.v
+        ../uart_tx.sv ../uart_rx.sv ../uart_rx_fifo.sv "${verilator_sdram_sources[@]}" wf68k_core.v
 fi
 cp ../../../sw/coretest/rom_coretest.hex rom_init.hex
 ./obj_dir/Vtb_coretest

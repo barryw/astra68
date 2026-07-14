@@ -44,6 +44,17 @@ REGIONS = [
         ),
     },
 
+    # The TG68K execution path crosses the external cache and returns to the
+    # kernel in the same cycle. Keep the much smaller cache beside the PMMU and
+    # bus interface without restricting placement of the 30K-cell CPU core.
+    {
+        "name": "tg68k_cache",
+        "box": (72, 24, 116, 54),
+        "tier": "critical",
+        "enforce": True,
+        "match": ("tg_cache_store_i",),
+    },
+
     # Top-band HDMI encoder/packet logic. This stays report-only for now:
     # matching HDMI nets can also catch upstream audio/video mix logic, and
     # enforcing that broad cone over-constrains placement.

@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "id": "cpu/abcd-valid-packed-bcd",
+  "description": "ABCD adds valid packed-BCD operands and applies cumulative Z semantics.",
+  "authority": [
+    "M68000 Family Programmer's Reference Manual, ABCD"
+  ],
+  "requires": [
+    "mc68030"
+  ],
+  "initial": {
+    "reset": true,
+    "cpu": {
+      "d0": "0x12340045",
+      "d1": "0x87650055",
+      "pc": "0x00001000",
+      "sr": "0x00002004"
+    },
+    "memory": [
+      {
+        "address": "0x00001000",
+        "data": "c101"
+      }
+    ]
+  },
+  "run": {
+    "mode": "instruction",
+    "max_cycles": 100
+  },
+  "expect": {
+    "terminal": "instruction",
+    "cpu": {
+      "d0": "0x12340000",
+      "d1": "0x87650055",
+      "pc": "0x00001002",
+      "sr": {
+        "value": "0x00002015",
+        "mask": "0x00002015"
+      }
+    }
+  }
+}

@@ -222,6 +222,18 @@ void m68k_write_memory_32_pd(unsigned int address, unsigned int value);
  * callback or have assigned a callback of NULL.
  */
 
+/* Set the physical bus callbacks used only for MC68030 PMMU table walks.
+ * Returning zero reports a physical table-bus error.  These accesses bypass
+ * logical translation; the default callbacks preserve historical Musashi
+ * behavior by forwarding to m68k_read/write_memory_32 and always succeeding.
+ */
+typedef int (*m68k_pmmu_read32_callback)(unsigned int address,
+                                         unsigned int *value);
+typedef int (*m68k_pmmu_write32_callback)(unsigned int address,
+                                          unsigned int value);
+void m68k_set_pmmu_bus_callbacks(m68k_pmmu_read32_callback read32,
+                                  m68k_pmmu_write32_callback write32);
+
 /* Set the callback for an interrupt acknowledge.
  * You must enable M68K_EMULATE_INT_ACK in m68kconf.h.
  * The CPU will call the callback with the interrupt level being acknowledged.

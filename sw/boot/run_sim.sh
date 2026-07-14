@@ -45,5 +45,5 @@ CPU_CORE="$CPU_CORE" CORE_OUT=boot_core.v bash mkcore.sh
 verilator --binary -j 0 --Mdir obj_dir_boot --top-module tb_boot \
     -Wno-lint -Wno-UNOPTFLAT --timing \
     "${verilator_cpu_args[@]}" \
-    tb_boot.sv ../astra_soc.sv ../tg68k_cache_store.sv ../uart_tx.sv ../uart_rx.sv boot_core.v
+    tb_boot.sv ../astra_soc.sv ../tg68k_cache_store.sv ../uart_tx.sv ../uart_rx.sv ../uart_rx_fifo.sv boot_core.v
 ./obj_dir_boot/Vtb_boot

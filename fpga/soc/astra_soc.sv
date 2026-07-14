@@ -24,6 +24,7 @@ module astra_soc #(
     parameter        HDMI_ENABLE = 1'b1,  // 720x480 POST console on ULX3S GPDI
     parameter integer CPU_CLK_DIV_BIT = 2, // 0=12.5 MHz, 1=6.25 MHz, 2=3.125 MHz
     parameter integer UART_BAUD = 115200,
+    parameter integer UART_RX_FIFO_DEPTH = 128,
     parameter [31:0] CPU_MODEL = 32'h00068030,
     parameter [31:0] CPU_IMPLEMENTATION = 32'h57463330, // "WF30"
     parameter [31:0] CPU_FEATURES = 32'h0000000c,
@@ -883,29 +884,36 @@ module astra_soc #(
         .clk(clk), .rst(uart_rst), .data(uart_data), .start(uart_start),
         .tx(ftdi_rxd), .busy(uart_busy)
     );
-    // UART RX (host -> FPGA). rx_ready set on byte arrival, cleared on data read.
+    // UART RX (host -> FPGA). A complete Harte RUN frame fits in this FIFO, so
+    // back-to-back FTDI bytes cannot overwrite the single MMIO data register.
     wire [7:0] rx_byte; wire rx_valid;
     uart_rx #(.CLK_HZ(CPU_CLK_HZ), .BAUD(UART_BAUD)) urx (.clk(clk), .rst(rst), .rx(ftdi_txd),
         .data(rx_byte), .valid(rx_valid));
-    reg [7:0] rx_data; reg rx_ready;
     // Read-commit strobe, not bus_write_stb: cpu_data_en is WRITE_ACCESS-only (see
     // wf68k30L_bus_interface.vhd DATA_PORT_EN), so it (and bus_write_stb, which is
     // only ever set alongside it) is always 0 during a read — bus_read_stb below is
     // its read-side twin, set in the bus FSM when cpu_rw_n=1 (verified: 1 = read).
     wire [1:0] uart_reg = cpu_adr[3:2];
-    wire rx_data_rd = sel_uart & (uart_reg == 2'd3) & bus_read_stb;
-    always @(posedge clk) begin
-        if (rst) rx_ready <= 1'b0;
-        else begin
-            if (rx_data_rd) rx_ready <= 1'b0;         // read of 0x...C consumes the byte
-            if (rx_valid) begin rx_data <= rx_byte; rx_ready <= 1'b1; end
-        end
-    end
+    // TG's 16-bit bus reads a 32-bit MMIO register as high and low words. Pop
+    // only on the low-word beat; a native 32-bit CPU read pops on its one beat.
+    wire rx_data_rd = sel_uart & (uart_reg == 2'd3) & bus_read_stb &
+                      ((cpu_siz == 2'b00) | cpu_adr[1]);
+    wire rx_status_clear = sel_uart & (uart_reg == 2'd2) & cpu_data_en &
+                           ~cpu_rw_n & bus_write_stb & be[0] & cpu_dout[1];
+    wire [7:0] rx_data;
+    wire [7:0] rx_level;
+    wire rx_empty;
+    wire rx_overrun;
+    uart_rx_fifo #(.DEPTH(UART_RX_FIFO_DEPTH)) uart_rx_fifo_i (
+        .clk(clk), .rst(rst), .push_data(rx_byte), .push(rx_valid),
+        .pop(rx_data_rd), .clear_overrun(rx_status_clear), .data(rx_data),
+        .empty(rx_empty), .full(), .overrun(rx_overrun), .level(rx_level)
+    );
     // MMIO regs are accessed as 32-bit longs (volatile uint32_t), value natural
     // in [31:0]. UART_DATA @ 0xFFF00500 (write, char in [7:0]);
     // UART_STATUS @ 0xFFF00504 (read, [0]=TX_READY, [1]=BUSY).
-    // UART_RXSTATUS @ 0xFFF00508 (read, [0]=RX_READY); UART_RXDATA @ 0xFFF0050C
-    // (read, byte in [7:0]; reading clears RX_READY).
+    // UART_RXSTATUS @ 0xFFF00508: [0]=ready, [1]=sticky overrun, [15:8]=level.
+    // Writing bit 1 clears overrun. Reading UART_RXDATA pops one byte.
     wire uart_data_wr_req = sel_uart & (uart_reg == 2'd0) & be[0]
                            & cpu_data_en & ~cpu_rw_n;
     wire uart_data_wr = uart_data_wr_req & bus_write_stb;
@@ -916,7 +924,7 @@ module astra_soc #(
                 cpu_dout[31:24];
     wire [31:0] uart_rdata =
         (uart_reg == 2'd1) ? {30'd0, uart_busy, ~uart_busy} :     // TX status (existing)
-        (uart_reg == 2'd2) ? {31'd0, rx_ready}              :     // RX status
+        (uart_reg == 2'd2) ? {16'd0, rx_level, 6'd0, rx_overrun, ~rx_empty} :
         (uart_reg == 2'd3) ? {24'd0, rx_data}               :     // RX data
         32'd0;
 

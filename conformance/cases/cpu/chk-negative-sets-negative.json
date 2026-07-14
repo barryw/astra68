@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "id": "cpu/chk-negative-value-sets-negative",
+  "description": "CHK.W sets N when Dn is negative, even when N was clear before the instruction.",
+  "authority": [
+    "M68000 Family Programmer's Reference Manual, CHK: N is set when Dn is less than zero"
+  ],
+  "requires": [
+    "mc68030"
+  ],
+  "initial": {
+    "reset": true,
+    "cpu": {
+      "d0": "0x0000ffff",
+      "a7": "0x00003000",
+      "isp": "0x00003000",
+      "pc": "0x00001000",
+      "sr": "0x00002000"
+    },
+    "memory": [
+      {
+        "address": "0x00000018",
+        "data": "00002000"
+      },
+      {
+        "address": "0x00001000",
+        "data": "41bc000a"
+      },
+      {
+        "address": "0x00002000",
+        "data": "4e714e71"
+      }
+    ]
+  },
+  "run": {
+    "mode": "instruction",
+    "max_cycles": 200
+  },
+  "observe": [
+    {
+      "address": "0x00002ff4",
+      "length": 12
+    }
+  ],
+  "expect": {
+    "terminal": "instruction",
+    "cpu": {
+      "d0": "0x0000ffff",
+      "a7": "0x00002ff4",
+      "isp": "0x00002ff4",
+      "pc": "0x00002000",
+      "sr": {
+        "value": "0x00002008",
+        "mask": "0x00002008"
+      }
+    },
+    "memory": [
+      {
+        "address": "0x00002ff4",
+        "data": "200800001004201800001000",
+        "mask": "ff18ffffffffffffffffffff"
+      }
+    ]
+  }
+}

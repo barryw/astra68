@@ -4,14 +4,15 @@ CROSS   ?= m68k-linux-gnu-
 CC       = $(CROSS)gcc
 OBJCOPY  = $(CROSS)objcopy
 OBJDUMP  = $(CROSS)objdump
-CPU_CORE ?= wf68k
-CPU_CLK_DIV_BIT ?= 2
+CPU_CORE ?= tg68k030_mmu2
+CPU_CLK_DIV_BIT ?= 0
 SDRAM_ENABLE ?= 1
 HDMI_ENABLE ?= 1
-TARGET_FREQ_MHZ ?= 12
-PNR_SEED ?= 1
+UART_BAUD ?= 460800
+TARGET_FREQ_MHZ ?= 12.5
+PNR_SEED ?= 4
 CFLAGS   = -m68020 -msoft-float -Os -ffreestanding -fno-builtin -nostdlib \
-           -Wall -Wextra -I../include -I.
+           -Wall -Wextra -I../include -I. -DASTRA_HARTE_UART_BAUD=$(UART_BAUD)
 CRT0    ?= ../boot/crt0.S       # override with CRT0=crt0_diag.S for the exception-marker build
 LD       = ../boot/astra_st.ld
 
@@ -21,15 +22,20 @@ LD       = ../boot/astra_st.ld
 # device can always be matched back to the exact core, clock, and RTL source.
 SOC_ID_SRCS = ../../fpga/soc/astra_soc.sv ../../fpga/soc/astra_soc.lpf \
               ../../fpga/soc/uart_tx.sv ../../fpga/soc/uart_rx.sv \
+              ../../fpga/soc/uart_rx_fifo.sv \
               ../../fpga/soc/ecp5pll.sv ../../fpga/soc/sdram32_cpu_bridge.sv \
               ../../fpga/soc/tg68k_cache_store.sv \
               ../../fpga/soc/sdram32_bist.sv ../../fpga/soc/sdram32_controller.sv \
+              ../../fpga/soc/astraea_blitter.sv \
               ../../fpga/soc/thirdparty/core_sdram_axi4/sdram_axi_core.v \
               ../../fpga/soc/post_console.sv \
               ../../fpga/soc/post_fonts.hex ../../fpga/soc/oss_flow/mkbit.sh \
               $(sort $(wildcard ../../fpga/soc/hdmi/*.sv))
 
-ifeq ($(CPU_CORE),tg68k030)
+ifeq ($(CPU_CORE),tg68k030_mmu2)
+CPU_ID_SRCS = $(sort $(wildcard ../../fpga/cpu/tg68k_c_030_mmu2/*.vhd)) \
+              ../../fpga/cpu/tg68k030_mmu2_wrap.vhd
+else ifeq ($(CPU_CORE),tg68k030)
 CPU_ID_SRCS = $(sort $(wildcard ../../fpga/cpu/tg68k_c_030_mmu/*.vhd)) \
               ../../fpga/cpu/tg68k030_wrap.vhd
 else ifeq ($(CPU_CORE),tg68k)
@@ -44,6 +50,7 @@ endif
 
 BUILD_CONFIG = CPU_CORE=$(CPU_CORE) CPU_CLK_DIV_BIT=$(CPU_CLK_DIV_BIT) \
                SDRAM_ENABLE=$(SDRAM_ENABLE) HDMI_ENABLE=$(HDMI_ENABLE) \
+               UART_BAUD=$(UART_BAUD) \
                TARGET_FREQ_MHZ=$(TARGET_FREQ_MHZ) PNR_SEED=$(PNR_SEED)
 ID_SRCS = Makefile harness.c harness_exec.S $(CRT0) ../boot/astra_st.ld \
           ../include/vesta.h $(SOC_ID_SRCS) $(CPU_ID_SRCS)

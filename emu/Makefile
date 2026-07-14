@@ -1,0 +1,29 @@
+.PHONY: build check clean fmt post run test toolchain
+
+RUSTUP_TOOLCHAIN ?= 1.97.0
+CARGO := rustup run $(RUSTUP_TOOLCHAIN) cargo
+
+toolchain:
+	rustup toolchain install $(RUSTUP_TOOLCHAIN) --profile minimal --component rustfmt --component clippy
+
+build:
+	$(CARGO) build --release --workspace
+
+check:
+	$(CARGO) clippy --workspace --all-targets -- -D warnings
+
+clean:
+	$(CARGO) clean
+
+fmt:
+	$(CARGO) fmt --all -- --check
+
+post:
+	$(CARGO) run -p astravm-machine --example boot
+
+run:
+	$(CARGO) run --release -p astravm-app
+
+test:
+	$(CARGO) test --workspace
+	$(MAKE) -C ../conformance test

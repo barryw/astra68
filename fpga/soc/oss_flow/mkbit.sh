@@ -31,6 +31,7 @@ YOSYS_MONITOR_PARAM=""
 YOSYS_SDRAM_PARAM=""
 YOSYS_HDMI_PARAM=""
 YOSYS_CLOCK_PARAM=""
+YOSYS_UART_PARAM=""
 YOSYS_BUILD_PARAM=""
 PNR_HDMI_FLAGS=""
 TG_GHDL=""
@@ -74,6 +75,9 @@ fi
 if [ -n "${CPU_CLK_DIV_BIT:-}" ]; then
   YOSYS_CLOCK_PARAM="chparam -set CPU_CLK_DIV_BIT $CPU_CLK_DIV_BIT astra_soc;"
 fi
+if [ -n "${UART_BAUD:-}" ]; then
+  YOSYS_UART_PARAM="chparam -set UART_BAUD $UART_BAUD astra_soc;"
+fi
 if [ -n "${SOC_BUILD_ID:-}" ]; then
   YOSYS_BUILD_PARAM="chparam -set SOC_BUILD_ID 32'h${SOC_BUILD_ID#0x} astra_soc;"
 fi
@@ -90,7 +94,7 @@ read_verilog -sv -DSYNTHESIS -DLATTICE_ECP5 \
   $H/audio_sample_packet.sv $H/auxiliary_video_information_info_frame.sv \
   $H/source_product_description_info_frame.sv $H/packet_assembler.sv \
   $H/packet_picker.sv $H/tmds_channel.sv $H/serializer.sv $H/hdmi.sv \
-  $SOC/uart_tx.sv $SOC/uart_rx.sv $SOC/ecp5pll.sv \
+  $SOC/uart_tx.sv $SOC/uart_rx.sv $SOC/uart_rx_fifo.sv $SOC/ecp5pll.sv \
   $SOC/thirdparty/core_sdram_axi4/sdram_axi_core.v \
   $SOC/sdram32_controller.sv $SOC/sdram32_cpu_bridge.sv $SOC/astraea_blitter.sv \
   $SOC/tg68k_cache_store.sv \
@@ -101,6 +105,7 @@ $YOSYS_MONITOR_PARAM
 $YOSYS_SDRAM_PARAM
 $YOSYS_HDMI_PARAM
 $YOSYS_CLOCK_PARAM
+$YOSYS_UART_PARAM
 $YOSYS_BUILD_PARAM
 proc; opt; scc -select; select -list; select -clear; scc -expect 0;
 synth_ecp5 -top astra_soc $SYNTH_ECP5_FLAGS -json astra.json;
@@ -109,4 +114,4 @@ scc -expect 0;
 nextpnr-ecp5 --85k --package CABGA381 --freq "$TARGET_FREQ_MHZ" --seed "$PNR_SEED" $PNR_HDMI_FLAGS --json astra.json --lpf "$SOC/astra_soc.lpf" --textcfg astra.config > "pnr_${TAG}.log" 2>&1
 echo "nextpnr rc=$? (0=routed; check yosys_${TAG}.log for loop warnings)"
 ecppack astra.config astra.bit
-echo "built astra.bit from $1 (CPU_CORE=$CPU_CORE UART_MONITOR=${UART_MONITOR:-0} SDRAM_ENABLE=${SDRAM_ENABLE:-1} HDMI_ENABLE=${HDMI_ENABLE:-1} CPU_CLK_DIV_BIT=${CPU_CLK_DIV_BIT:-2} TARGET_FREQ_MHZ=$TARGET_FREQ_MHZ PNR_SEED=$PNR_SEED SYNTH_ECP5_FLAGS='${SYNTH_ECP5_FLAGS}')"
+echo "built astra.bit from $1 (CPU_CORE=$CPU_CORE UART_MONITOR=${UART_MONITOR:-0} SDRAM_ENABLE=${SDRAM_ENABLE:-1} HDMI_ENABLE=${HDMI_ENABLE:-1} CPU_CLK_DIV_BIT=${CPU_CLK_DIV_BIT:-2} UART_BAUD=${UART_BAUD:-115200} TARGET_FREQ_MHZ=$TARGET_FREQ_MHZ PNR_SEED=$PNR_SEED SYNTH_ECP5_FLAGS='${SYNTH_ECP5_FLAGS}')"

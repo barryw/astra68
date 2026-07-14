@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://astra68.dev/schema/conformance-case-v1.json",
+  "title": "Astra68 architectural conformance case",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "initial", "run", "expect"],
+  "properties": {
+    "schema": {"const": 1},
+    "id": {"type": "string", "minLength": 1},
+    "description": {"type": "string"},
+    "authority": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "derived_from": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "requires": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "initial": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reset": {"type": "boolean"},
+        "cpu": {"$ref": "#/$defs/cpuState"},
+        "memory": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/memorySegment"}
+        }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {"enum": ["instruction", "cycles", "memory"]},
+        "max_cycles": {"$ref": "#/$defs/u32"},
+        "stop": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "address": {"$ref": "#/$defs/u32"},
+            "mask": {"$ref": "#/$defs/u32"},
+            "value": {"$ref": "#/$defs/u32"}
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"mode": {"const": "memory"}}},
+          "then": {
+            "required": ["stop"],
+            "properties": {"stop": {"required": ["address"]}}
+          }
+        }
+      ]
+    },
+    "observe": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/memoryRange"}
+    },
+    "expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "terminal": {"enum": ["instruction", "cycle-limit", "memory"]},
+        "cpu": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "d0": {"$ref": "#/$defs/maskedValue"},
+            "d1": {"$ref": "#/$defs/maskedValue"},
+            "d2": {"$ref": "#/$defs/maskedValue"},
+            "d3": {"$ref": "#/$defs/maskedValue"},
+            "d4": {"$ref": "#/$defs/maskedValue"},
+            "d5": {"$ref": "#/$defs/maskedValue"},
+            "d6": {"$ref": "#/$defs/maskedValue"},
+            "d7": {"$ref": "#/$defs/maskedValue"},
+            "a0": {"$ref": "#/$defs/maskedValue"},
+            "a1": {"$ref": "#/$defs/maskedValue"},
+            "a2": {"$ref": "#/$defs/maskedValue"},
+            "a3": {"$ref": "#/$defs/maskedValue"},
+            "a4": {"$ref": "#/$defs/maskedValue"},
+            "a5": {"$ref": "#/$defs/maskedValue"},
+            "a6": {"$ref": "#/$defs/maskedValue"},
+            "a7": {"$ref": "#/$defs/maskedValue"},
+            "pc": {"$ref": "#/$defs/maskedValue"},
+            "sr": {"$ref": "#/$defs/maskedValue"},
+            "usp": {"$ref": "#/$defs/maskedValue"},
+            "isp": {"$ref": "#/$defs/maskedValue"},
+            "msp": {"$ref": "#/$defs/maskedValue"},
+            "sfc": {"$ref": "#/$defs/maskedValue"},
+            "dfc": {"$ref": "#/$defs/maskedValue"},
+            "vbr": {"$ref": "#/$defs/maskedValue"},
+            "cacr": {"$ref": "#/$defs/maskedValue"},
+            "caar": {"$ref": "#/$defs/maskedValue"}
+          }
+        },
+        "memory": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/memoryExpectation"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "u32": {
+      "oneOf": [
+        {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        {"type": "string", "pattern": "^(0[xX][0-9a-fA-F]+|[0-9]+)$"}
+      ]
+    },
+    "hexBytes": {
+      "type": "string",
+      "pattern": "^(0[xX])?([0-9a-fA-F_ ]{2})*$"
+    },
+    "cpuState": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "d0": {"$ref": "#/$defs/u32"},
+        "d1": {"$ref": "#/$defs/u32"},
+        "d2": {"$ref": "#/$defs/u32"},
+        "d3": {"$ref": "#/$defs/u32"},
+        "d4": {"$ref": "#/$defs/u32"},
+        "d5": {"$ref": "#/$defs/u32"},
+        "d6": {"$ref": "#/$defs/u32"},
+        "d7": {"$ref": "#/$defs/u32"},
+        "a0": {"$ref": "#/$defs/u32"},
+        "a1": {"$ref": "#/$defs/u32"},
+        "a2": {"$ref": "#/$defs/u32"},
+        "a3": {"$ref": "#/$defs/u32"},
+        "a4": {"$ref": "#/$defs/u32"},
+        "a5": {"$ref": "#/$defs/u32"},
+        "a6": {"$ref": "#/$defs/u32"},
+        "a7": {"$ref": "#/$defs/u32"},
+        "pc": {"$ref": "#/$defs/u32"},
+        "sr": {"$ref": "#/$defs/u32"},
+        "usp": {"$ref": "#/$defs/u32"},
+        "isp": {"$ref": "#/$defs/u32"},
+        "msp": {"$ref": "#/$defs/u32"},
+        "sfc": {"$ref": "#/$defs/u32"},
+        "dfc": {"$ref": "#/$defs/u32"},
+        "vbr": {"$ref": "#/$defs/u32"},
+        "cacr": {"$ref": "#/$defs/u32"},
+        "caar": {"$ref": "#/$defs/u32"}
+      }
+    },
+    "memorySegment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "data"],
+      "properties": {
+        "address": {"$ref": "#/$defs/u32"},
+        "data": {"$ref": "#/$defs/hexBytes"}
+      }
+    },
+    "memoryRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "length"],
+      "properties": {
+        "address": {"$ref": "#/$defs/u32"},
+        "length": {"$ref": "#/$defs/u32"}
+      }
+    },
+    "maskedValue": {
+      "oneOf": [
+        {"$ref": "#/$defs/u32"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["value"],
+          "properties": {
+            "value": {"$ref": "#/$defs/u32"},
+            "mask": {"$ref": "#/$defs/u32"}
+          }
+        }
+      ]
+    },
+    "memoryExpectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "data"],
+      "properties": {
+        "address": {"$ref": "#/$defs/u32"},
+        "data": {"$ref": "#/$defs/hexBytes"},
+        "mask": {"$ref": "#/$defs/hexBytes"}
+      }
+    }
+  }
+}

@@ -9,9 +9,13 @@ import json
 from pathlib import Path
 from typing import Iterator, Mapping, Sequence
 
+try:
+    from .m68000_bin import load_binary
+except ImportError:  # Direct script execution from sw/harte/host.
+    from m68000_bin import load_binary
+
 
 CCR_MASK = 0x1F
-TRACE_MASK = 0xC000
 MAX_INSTRUCTION_BYTES = 30
 
 
@@ -40,8 +44,11 @@ class Case:
 
 
 def load(path: str | Path) -> Iterator[dict]:
-    """Load an old-style ProcessorTests JSON array, compressed or plain."""
+    """Load a maintained m68000 binary or old-style JSON vector array."""
     vector_path = Path(path)
+    if vector_path.name.endswith(".json.bin"):
+        yield from load_binary(vector_path)
+        return
     opener = gzip.open if vector_path.suffix == ".gz" else open
     with opener(vector_path, "rt", encoding="utf-8") as stream:
         vectors = json.load(stream)
@@ -110,6 +117,11 @@ def opcode_scope(opcode: int) -> tuple[bool, str]:
     if opcode & 0xFFF8 in (0x4840, 0x4880, 0x48C0):
         return True, "SWAP/EXT"
 
+    # Dynamic and immediate bit operations with a Dn destination. MOVEP shares
+    # part of the dynamic encoding but uses address-register mode and is rejected.
+    if opcode & 0xF100 == 0x0100 or opcode & 0xFF00 == 0x0800:
+        return (True, "BIT") if ((opcode >> 3) & 7) == 0 else (False, "memory bit operation")
+
     # Register/immediate shifts and rotates. Memory forms have bits 7:6 == 11.
     if opcode & 0xF000 == 0xE000:
         if opcode & 0x00C0 != 0x00C0:
@@ -145,18 +157,44 @@ def opcode_scope(opcode: int) -> tuple[bool, str]:
             return (False, "A7 operand") if mode == 1 and reg == 7 else (True, "ADDQ/SUBQ")
         return False, "memory ADDQ/SUBQ"
 
-    # Unary data operations on Dn. This deliberately excludes NBCD and TAS.
+    # Unary data operations on Dn. Size 11 selects MOVE SR/CCR or TAS rather
+    # than the byte/word/long unary operation represented by the high byte.
     if opcode & 0xFF00 in (0x4000, 0x4200, 0x4400, 0x4600, 0x4A00):
+        if opcode & 0x00C0 == 0x00C0:
+            return False, "system-register or TAS operation"
         return (True, "UNARY") if ((opcode >> 3) & 7) == 0 else (False, "memory unary operation")
 
-    # Register forms in the OR/SUB/CMP/AND/ADD groups. Exclude DIV/MUL/ADDA/
-    # SUBA/CMPA for now, and exclude BCD because N/V are undefined on 68000.
+    # Register forms in the OR/SUB/CMP/AND/ADD groups. BCD is excluded because
+    # N/V are undefined on 68000; DIV overflow/exception cases need finer masks.
     line = opcode >> 12
     if line in (0x8, 0x9, 0xB, 0xC, 0xD):
         opmode = (opcode >> 6) & 7
         mode = (opcode >> 3) & 7
+        reg = opcode & 7
+        destination = (opcode >> 9) & 7
         if opcode & 0xF1F8 in (0x8100, 0xC100):
             return False, "BCD flags are architecture-specific"
+
+        exg_form = opcode & 0xF1F8
+        if exg_form in (0xC140, 0xC148, 0xC188):
+            uses_a7 = (
+                (exg_form == 0xC148 and destination == 7)
+                or (exg_form in (0xC148, 0xC188) and reg == 7)
+            )
+            return (False, "A7 operand") if uses_a7 else (True, "EXG")
+
+        if line in (0x9, 0xB, 0xD) and opmode in (3, 7):
+            if mode not in (0, 1):
+                return False, "memory address-register ALU form"
+            if destination == 7 or (mode == 1 and reg == 7):
+                return False, "A7 operand"
+            return True, "ADDA/SUBA/CMPA"
+
+        if line == 0xC and opmode in (3, 7):
+            return (True, "MUL") if mode == 0 else (False, "memory multiply")
+        if line == 0x8 and opmode in (3, 7):
+            return False, "DIV flags or exception not comparable"
+
         if mode == 0 and opmode in (0, 1, 2, 4, 5, 6):
             return True, "REGISTER ALU"
         return False, "memory or deferred ALU form"
@@ -173,9 +211,6 @@ def scope_reason(raw: Mapping[str, object]) -> str | None:
         opcode = int(prefetch[0]) & 0xFFFF
     except (KeyError, IndexError, TypeError, ValueError) as exc:
         return f"malformed vector: {exc}"
-
-    if sr & TRACE_MASK:
-        return "trace enabled"
 
     supported, reason = opcode_scope(opcode)
     if not supported:

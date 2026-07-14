@@ -450,6 +450,8 @@ typedef uint32 uint64;
 #define CALLBACK_PC_CHANGED  m68ki_cpu.pc_changed_callback
 #define CALLBACK_SET_FC      m68ki_cpu.set_fc_callback
 #define CALLBACK_INSTR_HOOK  m68ki_cpu.instr_hook_callback
+#define CALLBACK_PMMU_READ32 m68ki_cpu.pmmu_read32_callback
+#define CALLBACK_PMMU_WRITE32 m68ki_cpu.pmmu_write32_callback
 
 
 
@@ -1103,6 +1105,8 @@ typedef struct
 	void (*pc_changed_callback)(unsigned int new_pc); /* Called when the PC changes by a large amount */
 	void (*set_fc_callback)(unsigned int new_fc);     /* Called when the CPU function code changes */
 	void (*instr_hook_callback)(unsigned int pc);     /* Called every instruction cycle prior to execution */
+	m68k_pmmu_read32_callback pmmu_read32_callback;   /* Physical PMMU table read */
+	m68k_pmmu_write32_callback pmmu_write32_callback; /* Physical PMMU table write */
 
 } m68ki_cpu_core;
 

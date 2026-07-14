@@ -84,6 +84,12 @@
 #define M68K_EMULATE_040            M68K_OPT_ON
 #endif
 
+/* Astra68 has no floating-point coprocessor.  Keep F-line probing faithful to
+ * the board instead of silently exposing Musashi's integrated FPU helpers. */
+#ifndef M68K_EMULATE_FPU
+#define M68K_EMULATE_FPU            M68K_OPT_OFF
+#endif
+
 
 /* If ON, the CPU will call m68k_read_immediate_xx() for immediate addressing
  * and m68k_read_pcrelative_xx() for PC-relative addressing.
@@ -231,7 +237,7 @@
  * NOTE: This is only emulated properly for 68000 mode.
  */
 #ifndef M68K_EMULATE_ADDRESS_ERROR
-#define M68K_EMULATE_ADDRESS_ERROR  M68K_OPT_OFF
+#define M68K_EMULATE_ADDRESS_ERROR  M68K_OPT_ON
 #endif
 
 

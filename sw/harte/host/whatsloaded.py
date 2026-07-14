@@ -1,48 +1,74 @@
 #!/usr/bin/env python3
-# Ask the running harness what build it is (CMD_ID -> BUILD_ID). Cross-references BUILD_LOG.md
-# so you ALWAYS know exactly what bitstream is loaded and what fixes/features it carries.
-import serial, sys, time, glob, os, re
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from proto import frame, parse
+"""Query and identify the Harte harness currently loaded on the board."""
 
-CMD_ID, CMD_IDR = 0x03, 0x83
-LOG = os.path.join(os.path.dirname(__file__), "..", "BUILD_LOG.md")
+from __future__ import annotations
 
-def find_port():
-    if os.environ.get("ASTRA_PORT"):
-        return os.environ["ASTRA_PORT"]
-    for pat in ("/dev/ttyUSB*", "/dev/cu.usbserial*"):
-        m = sorted(glob.glob(pat))
-        if m:
-            return m[0]
-    return "/dev/ttyUSB0"
+import os
+from pathlib import Path
+import sys
+import time
 
-def query_build_id(tries=20):
-    p = serial.Serial(find_port(), 115200, timeout=1.0)
-    time.sleep(0.4)
-    bid = None
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from proto import CMD_ID, CMD_IDR, CMD_INFO, CMD_INFOR, parse_device_info
+    from transport import find_port, transact
+else:
+    from .proto import CMD_ID, CMD_IDR, CMD_INFO, CMD_INFOR, parse_device_info
+    from .transport import find_port, transact
+
+
+LOG = Path(__file__).resolve().parents[1] / "BUILD_LOG.md"
+DEFAULT_BAUD = int(os.environ.get("ASTRA_BAUD", "460800"))
+
+
+def query_build_id(serial_port, tries: int = 5) -> tuple[int, str] | None:
     for _ in range(tries):
-        p.reset_input_buffer(); p.write(frame(CMD_ID, b"\x00")); time.sleep(0.15)
-        r = parse(p.read(8))
-        if r and r[0] == CMD_IDR and len(r[1]) >= 4:
-            bid = int.from_bytes(r[1][:4], "big"); break
-    p.close()
-    return bid
+        response = transact(serial_port, CMD_INFO, b"", 0.5)
+        if response and response[0] == CMD_INFOR:
+            info = parse_device_info(response[1])
+            return info.build_id, f"protocol={info.protocol_major}.{info.protocol_minor} baud={info.baud}"
 
-def log_line(bid):
+        response = transact(serial_port, CMD_ID, b"", 0.5)
+        if response and response[0] == CMD_IDR and len(response[1]) == 4:
+            return int.from_bytes(response[1], "big"), "legacy ID response"
+    return None
+
+
+def log_line(build_id: int) -> str | None:
     try:
-        for ln in open(LOG):
-            if f"0x{bid:08x}" in ln.lower():
-                return ln.strip()
+        for line in LOG.read_text().splitlines():
+            if f"0x{build_id:08x}" in line.lower():
+                return line.strip()
     except FileNotFoundError:
         pass
     return None
 
+
+def main() -> int:
+    try:
+        import serial
+    except ImportError:
+        print("pyserial is required", file=sys.stderr)
+        return 2
+
+    try:
+        with serial.Serial(find_port(), DEFAULT_BAUD, timeout=0.1) as serial_port:
+            time.sleep(0.25)
+            result = query_build_id(serial_port)
+    except OSError as exc:
+        print(f"device: serial failure: {exc}", file=sys.stderr)
+        return 2
+
+    if result is None:
+        print("device: NO RESPONSE (wrong baud, non-harness image, or wedged)")
+        return 2
+
+    build_id, details = result
+    print(f"device BUILD_ID = 0x{build_id:08x} ({details})")
+    line = log_line(build_id)
+    print("  " + line if line else "  (not in BUILD_LOG.md - unlogged build)")
+    return 0
+
+
 if __name__ == "__main__":
-    bid = query_build_id()
-    if bid is None:
-        print("device: NO RESPONSE (not running a CMD_ID-capable harness, or wedged)")
-        sys.exit(2)
-    print(f"device BUILD_ID = 0x{bid:08x}")
-    ln = log_line(bid)
-    print("  " + ln if ln else "  (not in BUILD_LOG.md — unlogged build)")
+    sys.exit(main())

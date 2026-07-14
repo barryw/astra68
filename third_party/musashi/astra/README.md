@@ -34,6 +34,8 @@ verified hardware behavior remain authoritative.
 
 The Musashi adapter decodes only `PMOVE`, `PFLUSH`, `PLOAD`, and `PTEST`.
 MC68851-only commands deliberately raise the F-line unimplemented exception.
+The Astra build also disables Musashi's FPU opcode routing, so every FPU
+instruction takes the same vector-11 path as no-FPU hardware.
 
 ## Tests
 
@@ -59,6 +61,19 @@ Run the complete focused suite from the parent directory:
 make clean test-pmmu
 ```
 
+The backend-neutral architectural fixtures and Harte adapter live in the
+repository-level `conformance/` directory. They build a persistent target from
+this exact vendored source tree and return normalized observations suitable for
+later comparison with RTL and FPGA targets:
+
+```sh
+rtk make -C conformance test
+```
+
+Expected results remain in the common fixtures, not in the Musashi worker.
+The shared table-bus case proves that an absent physical descriptor page sets
+MMUSR `B|I` instead of being misread as a zero descriptor.
+
 ## Known conformance work
 
 These are explicit gaps, not behavior for Astra OS to depend upon:
@@ -80,9 +95,9 @@ These are explicit gaps, not behavior for Astra OS to depend upon:
   and double-fault phases cycle-for-cycle.
 - The generic PMMU reports cache-inhibit state, but the Musashi host API has no
   cache-inhibit callback yet.
-- Generic table callbacks can report physical bus failure and bracket an
-  indivisible walk. The current Musashi adapter relies on its host bus-error
-  mechanism and does not expose a separate external bus-lock signal.
+- Physical table reads and U/M writes now use fallible host callbacks. The
+  generic PMMU can also bracket an indivisible walk, but the Musashi host API
+  does not yet expose a separate external bus-lock signal.
 - Musashi does not currently label every memory read/write pair as an RMC
   operation. This only affects TT matching when RWM is clear; standalone tests
   cover the correct PMMU rule.

@@ -341,9 +341,9 @@ architecture logic of TG68K_ALU is
 		variable flags : std_logic_vector(3 downto 0) := current_flags;
 	begin
 		if is_word then
-			-- WinUAE/68020+: DIVU.W overflow forces V. Z/C are left unchanged. N is
-			-- forced only if the signed 32-bit dividend is negative, otherwise it is
-			-- left unchanged.
+			-- MC68030: DIVU.W overflow forces V and always clears C. N and Z are
+			-- undefined on overflow, so retain the existing implementation behavior.
+			flags(0) := '0';
 			flags(1) := '1';
 			if dividend(31) = '1' then
 				flags(3) := '1';

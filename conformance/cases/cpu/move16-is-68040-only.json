@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "id": "cpu/move16-is-68040-only-vector-11",
+  "description": "The MC68040-only MOVE16 encoding must not execute on an MC68030 and instead takes F-line vector 11 when no coprocessor responds.",
+  "authority": [
+    "M68000 Family Programmer's Reference Manual: MOVE16 is MC68040-only",
+    "MC68030 User's Manual section 8.1.5: unimplemented F-line instruction exception vector 11"
+  ],
+  "requires": [
+    "mc68030",
+    "no-fpu"
+  ],
+  "initial": {
+    "reset": true,
+    "cpu": {
+      "a0": "0x00004000",
+      "a1": "0x00005000",
+      "pc": "0x00001000",
+      "sr": "0x00002000",
+      "isp": "0x00008000"
+    },
+    "memory": [
+      {
+        "address": "0x0000002c",
+        "data": "00002000"
+      },
+      {
+        "address": "0x00001000",
+        "data": "f6201000"
+      },
+      {
+        "address": "0x00002000",
+        "data": "4e714e71"
+      }
+    ]
+  },
+  "run": {
+    "mode": "instruction",
+    "max_cycles": 100
+  },
+  "observe": [
+    {
+      "address": "0x00007ff8",
+      "length": 8
+    }
+  ],
+  "expect": {
+    "terminal": "instruction",
+    "cpu": {
+      "a0": "0x00004000",
+      "a1": "0x00005000",
+      "a7": "0x00007ff8",
+      "pc": "0x00002000",
+      "sr": {
+        "value": "0x00002000",
+        "mask": "0x0000f71f"
+      },
+      "isp": "0x00007ff8"
+    },
+    "memory": [
+      {
+        "address": "0x00007ff8",
+        "data": "200000001000002c"
+      }
+    ]
+  }
+}

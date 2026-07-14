@@ -606,6 +606,25 @@ static void default_instr_hook_callback(unsigned int pc)
 	(void)pc;
 }
 
+/* Physical MC68030 PMMU table traffic.  The compatibility defaults retain
+ * Musashi's traditional flat host-memory contract; systems with a fallible
+ * physical bus install explicit callbacks. */
+static int default_pmmu_read32_callback(unsigned int address,
+                                        unsigned int *value)
+{
+	if(value == NULL)
+		return 0;
+	*value = m68k_read_memory_32(address);
+	return 1;
+}
+
+static int default_pmmu_write32_callback(unsigned int address,
+                                         unsigned int value)
+{
+	m68k_write_memory_32(address, value);
+	return 1;
+}
+
 
 #if M68K_EMULATE_ADDRESS_ERROR
 	#include <setjmp.h>
@@ -786,6 +805,13 @@ void m68k_set_fc_callback(void  (*callback)(unsigned int new_fc))
 void m68k_set_instr_hook_callback(void  (*callback)(unsigned int pc))
 {
 	CALLBACK_INSTR_HOOK = callback ? callback : default_instr_hook_callback;
+}
+
+void m68k_set_pmmu_bus_callbacks(m68k_pmmu_read32_callback read32,
+                                 m68k_pmmu_write32_callback write32)
+{
+	CALLBACK_PMMU_READ32 = read32 ? read32 : default_pmmu_read32_callback;
+	CALLBACK_PMMU_WRITE32 = write32 ? write32 : default_pmmu_write32_callback;
 }
 
 /* Set the CPU type. */
@@ -1119,6 +1145,7 @@ void m68k_init(void)
 	m68k_set_pc_changed_callback(NULL);
 	m68k_set_fc_callback(NULL);
 	m68k_set_instr_hook_callback(NULL);
+	m68k_set_pmmu_bus_callbacks(NULL, NULL);
 	pmmu030_init(&PMMU_STATE);
 	PMMU_ENABLED = 0;
 }

@@ -11,14 +11,16 @@ EXEPATH = ./
 
 .CFILES   = $(MAINFILES) $(OSDFILES) $(MUSASHIFILES) $(MUSASHIGENCFILES)
 .OFILES   = $(.CFILES:%.c=%.o)
+DEPFILES  = $(.OFILES:.o=.d)
 
 CC        = gcc
 WARNINGS  = -Wall -Wextra -pedantic -g
 CFLAGS    = $(WARNINGS)
 LFLAGS    = $(WARNINGS)
 
-DELETEFILES = $(MUSASHIGENCFILES) $(MUSASHIGENHFILES) $(.OFILES) $(TARGET) $(MUSASHIGENERATOR)$(EXE) test_driver$(EXE)
+DELETEFILES = $(MUSASHIGENCFILES) $(MUSASHIGENHFILES) $(.OFILES) $(DEPFILES) $(TARGET) $(MUSASHIGENERATOR)$(EXE) test_driver$(EXE)
 PMMU_TEST = astra/build/test_musashi_pmmu$(EXE)
+CONFORMANCE_TARGET = astra/build/astra_conformance_target$(EXE)
 
 
 all: $(.OFILES)
@@ -31,8 +33,17 @@ clean:
 
 m68kcpu.o: $(MUSASHIGENHFILES) m68kfpu.c m68kmmu.h astra/pmmu030.h softfloat/softfloat.c softfloat/softfloat.h
 
-$(MUSASHIGENCFILES) $(MUSASHIGENHFILES): $(MUSASHIGENERATOR)$(EXE)
+# Generate compiler dependency files for every Musashi object.  The explicit
+# configuration prerequisite also repairs existing trees that predate .d files.
+$(.OFILES): m68kconf.h
+
+%.o: %.c
+	$(CC) $(CFLAGS) -MMD -MP -c -o $@ $<
+
+$(MUSASHIGENCFILES): $(MUSASHIGENERATOR)$(EXE) m68k_in.c
 	$(EXEPATH)$(MUSASHIGENERATOR)$(EXE)
+
+$(MUSASHIGENHFILES): $(MUSASHIGENCFILES)
 
 $(MUSASHIGENERATOR)$(EXE):  $(MUSASHIGENERATOR).c
 	$(CC) -o  $(MUSASHIGENERATOR)$(EXE)  $(MUSASHIGENERATOR).c
@@ -43,6 +54,13 @@ test_driver$(EXE): test/test_driver.c $(.OFILES)
 $(PMMU_TEST): astra/tests/test_musashi_pmmu.c $(.OFILES)
 	mkdir -p astra/build
 	$(CC) $(CFLAGS) -o $@ astra/tests/test_musashi_pmmu.c $(.OFILES) -I. -lm
+
+$(CONFORMANCE_TARGET): ../../conformance/targets/musashi_worker.c $(.OFILES)
+	mkdir -p astra/build
+	$(CC) $(CFLAGS) -std=c11 -o $@ $< $(.OFILES) -I. -lm
+
+.PHONY: conformance-target
+conformance-target: $(CONFORMANCE_TARGET)
 
 .PHONY: test-pmmu
 test-pmmu: $(PMMU_TEST)
@@ -71,4 +89,6 @@ $(TESTS_68040_RUN): test_driver$(EXE)
 
 build_tests:
 	@$(MAKE) -C test all
-test: $(TESTS_68000_RUN) $(TESTS_68040_RUN)
+test: build_tests $(TESTS_68000_RUN) $(TESTS_68040_RUN)
+
+-include $(DEPFILES)

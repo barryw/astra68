@@ -64,6 +64,44 @@ A core revision is accepted only when all of these are true:
 - Astra coretest, Harte vectors, PMMU/cache tests, synthesis, and hardware stress
   all pass against the same retained revision.
 
+## Shared architectural fixtures
+
+Portable CPU/PMMU expectations live under [`conformance/`](../conformance/),
+outside both the Musashi and RTL implementations. The versioned fixture owns
+the program bytes, sparse physical memory and page tables, initial
+architectural state, bounded completion condition, manual citations, masks for
+undefined fields, and expected architectural observations.
+
+Each target returns a normalized CPU/memory result. Musashi, RTL simulation,
+and FPGA adapters may have different loaders and transports, but may not embed
+a second expected result. Reports hash the common runner, fixture, target
+adapter, executable, and behavioral implementation sources. Missing target
+capabilities and unknown fixture fields fail closed.
+
+The shared matrix includes a fixture extracted directly from the
+Motorola-corrected RTL unaligned-PMMU-fault bench. It checks vector 2 rather
+than vector 3, the 46-word/92-byte format-B frame, format/vector word, defined
+SSW bits, and logical fault address. Separate fixtures cover DIV overflow C/V,
+`LINK A7`, CHK format-2/N behavior, valid packed-BCD arithmetic, rejection of
+the MC68040-only `MOVE16`, an F-line vector 11 when no FPU is present, and
+MMUSR `B|I` when a physical table read fails. Run the current shared gate with:
+
+```sh
+rtk make -C conformance test
+```
+
+Tom Harte vectors are converted to the same `ConformanceCase` model and use the
+same result comparator. The MC68030 gate
+retains the conservative architecture-invariant 68000 filter; a separate
+MC68000-mode diagnostic executes the full corpus and reports every mismatch.
+Neither mode is a PMMU or MC68030 exception-frame authority.
+
+The July 13, 2026 Musashi baseline passes all 96,103 vectors admitted by the
+MC68030-compatible gate. Its separate full-state diagnostic also passes all
+256,894 ordinary vectors. The only remaining full-corpus discrepancies are
+55,606 MC68000-specific address-error cases, whose microcoded frame and
+partial-side-effect behavior are outside Astra's MC68030 contract.
+
 ## Upstream audit
 
 The `TG68K.C/030_mmu` export at commit

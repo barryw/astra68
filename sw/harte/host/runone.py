@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 # Hand-built RUN smoke test — proves load -> single-step -> dump on silicon.
 # Sends a few register-only cases with known ALU results and checks regs + CCR.
-import serial, struct, sys, time, os, glob
-sys.path.insert(0, ".")
-from proto import frame, parse, CMD_RUN
+import os
+from pathlib import Path
+import serial
+import struct
+import sys
+import time
 
-def find_port():                       # NUC=/dev/ttyUSB*, macOS=/dev/cu.usbserial*
-    if os.environ.get("ASTRA_PORT"):
-        return os.environ["ASTRA_PORT"]
-    for pat in ("/dev/ttyUSB*", "/dev/cu.usbserial*"):
-        m = sorted(glob.glob(pat))
-        if m:
-            return m[0]
-    return "/dev/ttyUSB0"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from proto import CMD_RESULT, CMD_RUN
+from transport import find_port, transact
 
-PORT, BAUD = find_port(), 115200
+PORT = find_port()
+BAUD = int(os.environ.get("ASTRA_BAUD", "460800"))
 
 # CCR bits (low byte of SR): X N Z V C
 X, N, Z, V, C = 0x10, 0x08, 0x04, 0x02, 0x01
@@ -25,17 +24,10 @@ def run(p, d, a, ccr, instr, tries=6):
     executing them, so a lost/garbled frame just needs resending (spec §5)."""
     pl = b"".join(struct.pack(">I", x & 0xFFFFFFFF) for x in d + a)
     pl += bytes([ccr & 0xFF, len(instr)]) + instr
-    fr = frame(CMD_RUN, pl)
     for _ in range(tries):
-        p.reset_input_buffer()
-        # The current SoC RX path has a one-byte holding register, not a FIFO.
-        # Pace long frames until the hardware FIFO milestone is complete.
-        for byte in fr:
-            p.write(bytes([byte])); p.flush(); time.sleep(0.001)
-        time.sleep(0.08)
-        parsed = parse(p.read(65))
-        if parsed is not None and parsed[0] == 0x81 and len(parsed[1]) >= 61:
-            body = parsed[1]
+        response = transact(p, CMD_RUN, pl, 0.5)
+        if response is not None and response[0] == CMD_RESULT and len(response[1]) == 61:
+            body = response[1]
             regs = [struct.unpack(">I", body[i*4:i*4+4])[0] for i in range(15)]
             return regs, body[60]
     return None

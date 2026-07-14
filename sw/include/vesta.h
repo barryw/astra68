@@ -209,9 +209,11 @@ typedef volatile struct {
 // ---- UART RX path (host -> FPGA) ----
 // On the SoC these two addresses READ back RX status/data; they alias the
 // UART_CTRL/UART_BAUD WRITE-side registers above (dual-function). See astra_soc.sv.
-#define UART_RXSTATUS (*(volatile uint32_t *)(VESTA_BASE + 0x508u))  // [0] = RX_READY
+#define UART_RXSTATUS (*(volatile uint32_t *)(VESTA_BASE + 0x508u))
 #define UART_RXDATA   (*(volatile uint32_t *)(VESTA_BASE + 0x50Cu))  // read consumes the byte
 #define UART_RX_READY (1u << 0)
+#define UART_RX_FIFO_OVERRUN (1u << 1)
+#define UART_RX_FIFO_LEVEL(v) (((v) >> 8) & 0xFFu)
 
 // ---- SPI ----
 #define SPI_CS_N      (1u << 0)

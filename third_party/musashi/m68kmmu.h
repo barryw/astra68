@@ -14,16 +14,14 @@ static bool astra_pmmu_bus_read32(void *context, uint32_t address,
                                  uint32_t *value)
 {
     (void)context;
-    *value = m68k_read_memory_32(ADDRESS_68K(address));
-    return true;
+    return CALLBACK_PMMU_READ32(ADDRESS_68K(address), value) != 0;
 }
 
 static bool astra_pmmu_bus_write32(void *context, uint32_t address,
                                   uint32_t value)
 {
     (void)context;
-    m68k_write_memory_32(ADDRESS_68K(address), value);
-    return true;
+    return CALLBACK_PMMU_WRITE32(ADDRESS_68K(address), value) != 0;
 }
 
 static const pmmu030_bus astra_pmmu_bus = {
