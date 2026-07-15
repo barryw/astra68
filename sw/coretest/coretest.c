@@ -5246,7 +5246,6 @@ static void test_system_control_directed(void)
     chk_exception_frame(0x00130060u, 0x0020u, 0x0000u, 0x2700u, 0x0000u);
 }
 
-#ifdef CORETEST_CPU_TG68K030
 #define PMMU_REG_SCRATCH 0x01ffc010u
 
 static void pmmu_write_tt0(uint32_t value)
@@ -5431,8 +5430,6 @@ static void test_pmmu_register_directed(void)
 
     mark(0x002af000u, 0x706d6d75u);
 }
-#endif
-
 static void test_moves_directed(void)
 {
     uint32_t got0;
@@ -7415,7 +7412,6 @@ static void test_exception_recovery_directed(void)
     chk_exception_frame(0x00100030u, 0x0010u, 0x0000u, 0x2000u, 0x2000u);
     chk_exception_pc(0x00100808u, rd32(EXC_EXPECTED_ADDR));
 
-#ifdef CORETEST_CPU_TG68K030
     {
         uint32_t cacr_readback;
 
@@ -7431,38 +7427,6 @@ static void test_exception_recovery_directed(void)
         chk32(0x00100640u, cacr_readback, 0u);
         chk32(0x00100660u, 1u, 1u);
     }
-#else
-    arm_exception_recovery(0x0010u);
-    __asm__ volatile(
-        "lea 2f,%%a0\n\t"
-        "move.l %%a0,0x01ff92a0\n\t"
-        "lea 1f,%%a0\n\t"
-        "move.l %%a0,0x01ff9284\n\t"
-        "2:\n\t"
-        ".word 0x4e7a,0x0002\n"
-        "1:"
-        :
-        :
-        : "a0", "memory");
-    chk_exception_frame(0x00100640u, 0x0010u, 0x0000u, 0x2000u, 0x2000u);
-    chk_exception_pc(0x00100658u, rd32(EXC_EXPECTED_ADDR));
-
-    arm_exception_recovery(0x0010u);
-    __asm__ volatile(
-        "lea 2f,%%a0\n\t"
-        "move.l %%a0,0x01ff92a0\n\t"
-        "lea 1f,%%a0\n\t"
-        "move.l %%a0,0x01ff9284\n\t"
-        "moveq #0,%%d0\n\t"
-        "2:\n\t"
-        ".word 0x4e7b,0x0002\n"
-        "1:"
-        :
-        :
-        : "a0", "d0", "memory");
-    chk_exception_frame(0x00100660u, 0x0010u, 0x0000u, 0x2000u, 0x2000u);
-    chk_exception_pc(0x00100678u, rd32(EXC_EXPECTED_ADDR));
-#endif
 
     {
         uint32_t divu_w_pc;
@@ -7873,11 +7837,7 @@ static void test_exception_recovery_directed(void)
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
         "2:\n\t"
-#ifdef CORETEST_CPU_TG68K030
         ".word 0xf200\n"
-#else
-        ".word 0xf000\n"
-#endif
         "1:"
         :
         :
@@ -12292,10 +12252,8 @@ void kmain(void)
 #elif defined(CORETEST_SIM_FOCUS_MOVES)
     test_moves_directed();
 #elif defined(CORETEST_SIM_FOCUS_PMMU)
-#ifdef CORETEST_CPU_TG68K030
     test_pmmu_register_directed();
     progress_char('P');
-#endif
 #elif defined(CORETEST_SIM_FOCUS_SYNTH_CLEANUP)
     test_aligned_long();
     test_unaligned_lanes_asm();
@@ -12307,10 +12265,8 @@ void kmain(void)
     progress_char('r');
     test_system_control_directed();
     progress_char('c');
-#ifdef CORETEST_CPU_TG68K030
     test_pmmu_register_directed();
     progress_char('P');
-#endif
 #ifdef CORETEST_SIM_IRQ
     test_interrupt_autovector_directed();
     progress_char('I');
@@ -12438,10 +12394,8 @@ void kmain(void)
     progress_char('3');
     test_addx_subx_cmpm_memory_directed();
     test_system_control_directed();
-#ifdef CORETEST_CPU_TG68K030
     test_pmmu_register_directed();
     progress_char('W');
-#endif
 #ifndef CORETEST_SIM_SKIP_MOVES
     test_moves_directed();
 #endif

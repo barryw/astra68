@@ -4,14 +4,13 @@ CROSS   ?= m68k-linux-gnu-
 CC       = $(CROSS)gcc
 OBJCOPY  = $(CROSS)objcopy
 OBJDUMP  = $(CROSS)objdump
-CPU_CORE ?= tg68k030_mmu2
 CPU_CLK_DIV_BIT ?= 0
 SDRAM_ENABLE ?= 1
 HDMI_ENABLE ?= 1
 UART_BAUD ?= 460800
 TARGET_FREQ_MHZ ?= 12.5
 PNR_SEED ?= 4
-CFLAGS   = -m68020 -msoft-float -Os -ffreestanding -fno-builtin -nostdlib \
+CFLAGS   = -m68030 -msoft-float -Os -ffreestanding -fno-builtin -nostdlib \
            -Wall -Wextra -I../include -I. -DASTRA_HARTE_UART_BAUD=$(UART_BAUD)
 CRT0    ?= ../boot/crt0.S       # override with CRT0=crt0_diag.S for the exception-marker build
 LD       = ../boot/astra_st.ld
@@ -23,6 +22,7 @@ LD       = ../boot/astra_st.ld
 SOC_ID_SRCS = ../../fpga/soc/astra_soc.sv ../../fpga/soc/astra_soc.lpf \
               ../../fpga/soc/uart_tx.sv ../../fpga/soc/uart_rx.sv \
               ../../fpga/soc/uart_rx_fifo.sv ../../fpga/soc/spi_sd.sv \
+              ../../fpga/soc/astra_front_panel.sv \
               ../../fpga/soc/astra_host_async_byte_fifo.sv \
               ../../fpga/soc/astra_host_spi_slave.sv \
               ../../fpga/soc/astra_host_boot.sv \
@@ -36,23 +36,10 @@ SOC_ID_SRCS = ../../fpga/soc/astra_soc.sv ../../fpga/soc/astra_soc.lpf \
               ../../fpga/soc/post_fonts.hex ../../fpga/soc/oss_flow/mkbit.sh \
               $(sort $(wildcard ../../fpga/soc/hdmi/*.sv))
 
-ifeq ($(CPU_CORE),tg68k030_mmu2)
 CPU_ID_SRCS = $(sort $(wildcard ../../fpga/cpu/tg68k_c_030_mmu2/*.vhd)) \
               ../../fpga/cpu/tg68k030_mmu2_wrap.vhd
-else ifeq ($(CPU_CORE),tg68k030)
-CPU_ID_SRCS = $(sort $(wildcard ../../fpga/cpu/tg68k_c_030_mmu/*.vhd)) \
-              ../../fpga/cpu/tg68k030_wrap.vhd
-else ifeq ($(CPU_CORE),tg68k)
-CPU_ID_SRCS = $(sort $(wildcard ../../fpga/cpu/tg68k_c/*.vhd)) \
-              ../../fpga/cpu/tg68k_wrap.vhd
-else ifeq ($(CPU_CORE),wf68k)
-CPU_ID_SRCS = $(sort $(wildcard ../../fpga/cpu/wf68k30L/*.vhd)) \
-              ../../fpga/cpu/wf68k_wrap.vhd
-else
-$(error unsupported CPU_CORE '$(CPU_CORE)')
-endif
 
-BUILD_CONFIG = CPU_CORE=$(CPU_CORE) CPU_CLK_DIV_BIT=$(CPU_CLK_DIV_BIT) \
+BUILD_CONFIG = CPU=TG68K030_MMU2 CPU_CLK_DIV_BIT=$(CPU_CLK_DIV_BIT) \
                SDRAM_ENABLE=$(SDRAM_ENABLE) HDMI_ENABLE=$(HDMI_ENABLE) \
                UART_BAUD=$(UART_BAUD) \
                TARGET_FREQ_MHZ=$(TARGET_FREQ_MHZ) PNR_SEED=$(PNR_SEED)

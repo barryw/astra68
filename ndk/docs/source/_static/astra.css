@@ -1,0 +1,13 @@
+:root {
+    --color-brand-primary: #b63a2b;
+    --color-brand-content: #9f2f22;
+}
+
+body {
+    letter-spacing: 0;
+}
+
+code,
+pre {
+    letter-spacing: 0;
+}

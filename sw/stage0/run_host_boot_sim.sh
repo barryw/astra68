@@ -10,26 +10,16 @@ source ~/oss-cad-suite/environment 2>/dev/null || true
 test_bytes="${SDRAM_SIM_TEST_BYTES:-65536}"
 progress="${ASTRA_HOST_SIM_PROGRESS:-0}"
 reuse_sim="${ASTRA_HOST_SIM_REUSE:-0}"
-cpu_core="${CPU_CORE:-tg68k030_mmu2}"
-verilator_cpu_args=()
-
-case "$cpu_core" in
-    tg68k030|tg68k_mmu|tg68k_c_030_mmu)
-        cpu_core="tg68k030"
-        ;;
-    tg68k030_mmu2|tg68k_mmu2|tg68k_c_030_mmu2)
-        cpu_core="tg68k030_mmu2"
-        verilator_cpu_args=(-GCPU_MMU2=1)
-        ;;
-    *)
-        echo "unknown CPU_CORE='$cpu_core' (expected tg68k030 or tg68k030_mmu2)" >&2
-        exit 2
-        ;;
-esac
+kernel_panic_selftest="${KERNEL_PANIC_SELFTEST:-0}"
+sim_args=()
+if [[ "$kernel_panic_selftest" == "1" ]]; then
+    sim_args+=(+expect-kernel-panic)
+fi
 
 make -C sw/stage0 clean all BOOT_BACKEND=host
 make -C sw/boot clean all \
-    CPU_CORE="$cpu_core" CPU_CLK_DIV_BIT=0 SDRAM_ENABLE=1 HDMI_ENABLE=0 \
+    CPU_CLK_DIV_BIT=0 SDRAM_ENABLE=1 HDMI_ENABLE=0 \
+    KERNEL_PANIC_SELFTEST="$kernel_panic_selftest" \
     EXTRA_CFLAGS="-DMEM_BENCH_BYTES=256 -DDMA_BENCH_BYTES=1024"
 python3 sw/boot/package_rom.py sw/boot/astra_boot.bin sw/boot/astra68.rom \
     --hex-output fpga/soc/sim/astra68_rom.hex
@@ -39,13 +29,12 @@ python3 sw/boot/bin2hex.py \
 cd fpga/soc/sim
 if [[ "$reuse_sim" != "1" || ! -x obj_dir_host_boot/Vtb_astra_host_boot_soc ]]; then
     rm -rf obj_dir_host_boot host_boot_core.v
-    CPU_CORE="$cpu_core" CORE_OUT=host_boot_core.v bash mkcore.sh
+    CORE_OUT=host_boot_core.v bash mkcore.sh
     verilator --binary -j 0 --Mdir obj_dir_host_boot \
         --top-module tb_astra_host_boot_soc -Wno-lint -Wno-UNOPTFLAT --timing \
-        "${verilator_cpu_args[@]}" \
         -GTEST_BYTES="$test_bytes" -GPROGRESS="$progress" \
         tb_astra_host_boot_soc.sv tb_sdram32_controller.sv ecp5pll_sim.sv \
-        ../astra_soc.sv ../boot_memory_map.sv ../tg68k_cache_store.sv \
+        ../astra_soc.sv ../astra_front_panel.sv ../boot_memory_map.sv ../tg68k_cache_store.sv \
         ../astraea_blitter.sv ../uart_tx.sv ../uart_rx.sv \
         ../uart_rx_fifo.sv ../spi_sd.sv ../astra_host_async_byte_fifo.sv \
         ../astra_host_spi_slave.sv ../astra_host_boot.sv \
@@ -55,4 +44,4 @@ if [[ "$reuse_sim" != "1" || ! -x obj_dir_host_boot/Vtb_astra_host_boot_soc ]]; 
 else
     echo "reusing AstraHost simulation (caller guarantees matching RTL/generics)"
 fi
-./obj_dir_host_boot/Vtb_astra_host_boot_soc
+./obj_dir_host_boot/Vtb_astra_host_boot_soc "${sim_args[@]}"

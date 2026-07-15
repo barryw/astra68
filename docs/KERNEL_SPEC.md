@@ -128,28 +128,35 @@ The following are not software workarounds:
 
 ### 4.1 Entry state
 
-**DIRECTION:** Firmware transfers control once and provides facts, not runtime
-services. The final handoff ABI must define:
+**IMPLEMENTED (ABI 0.1):** Firmware transfers control once and provides facts,
+not runtime services. The canonical structure and constants are in
+`sw/include/astra/boot.h`; `docs/MEMORY_MAP.md` records its fixed reservations.
+The handoff contract is:
 
-- the register containing the physical `BootInfo` address;
-- an independent magic/version value;
-- initial SR, IPL, S/M state, VBR, ISP, MSP, and USP state;
-- whether the PMMU and each cache are enabled and their register values;
-- the initial stack range and whether it remains valid after overlay removal;
-- all live RAM, ROM, framebuffer, firmware-log, kernel, and module ranges;
-- ownership and mask state of every interrupt and DMA master.
+- `D0 = 0x4136384B` (`A68K`) and `A0 = 0x01FF8000`, the physical
+  `AstraBootInfo` address;
+- supervisor mode, master bit clear, IPL 7, PMMU disabled, and reset overlay
+  disabled;
+- instruction/data caches enabled with the bootstrap CACR policy; exact state
+  is represented by `BootInfo.flags` and must be normalized by the kernel;
+- all DMA idle and interrupts masked;
+- the firmware stack remains in the published bootstrap-BRAM range only until
+  the kernel installs its private stack;
+- sorted RAM, firmware, early-log, kernel, and ROM-backing ranges in the
+  checksummed 256-byte `BootInfo` structure.
 
-**PROPOSAL:** Enter in supervisor mode with interrupts masked, the PMMU off,
-the reset overlay already disabled, no device performing DMA, and `A0` pointing
-to `BootInfo`. The kernel must validate the handoff before trusting any length,
-range, or descriptor count. Exact register choices remain **OPEN** until a
-small assembly handoff probe is reviewed.
+The separately linked kernel is copied and verified at `0x02010000` before
+entry. The kernel validates the independent register magic, pointer, ABI
+version, size, checksum, required flags, platform identity, image bounds, log,
+and memory ranges before trusting the handoff. VBR and private stack ownership
+move to the kernel in the first assembly instructions. USP/MSP are not inputs
+to ABI 0.1 and must be initialized before use.
 
 ### 4.2 Initialization order
 
 The kernel brings up mechanisms in this order:
 
-1. establish a private early stack and UART panic output;
+1. establish a private early stack, HDMI panic output, and SDRAM early log;
 2. validate and copy the bounded `BootInfo` facts it needs;
 3. install a kernel-owned VBR and complete exception stubs;
 4. reserve firmware, image, page-table, stack, framebuffer, and DMA ranges;
@@ -266,7 +273,7 @@ Motorola-defined separation, with the corresponding table-memory cost.
 
 The proposal is not accepted until the TC value, root descriptors, table
 limits, descriptor bits, protection behavior, and exact table-walk traffic are
-checked against MC68030 manual sections 9.1-9.9 and the candidate core.
+checked against MC68030 manual sections 9.1-9.9 and the supported RTL core.
 
 ### 6.3 Root and kernel-mapping alternatives
 
@@ -730,7 +737,7 @@ and debugger register numbering before the native ABI is frozen.
 
 ## 18. Research work packages
 
-These packages can begin before the candidate CPU is fully accepted. Target
+These packages can begin before the RTL CPU is fully production-qualified. Target
 probes may expose CPU defects; host models can progress independently.
 
 ### 18.1 Immediate research sprint
@@ -771,7 +778,7 @@ without repeating their host-visible side effects. This closes the host-model
 portion of KR-01/KR-03; the target frame dumper and RTL comparison remain the
 architecture-authoritative rendezvous.
 
-The following questions require the candidate core or FPGA and therefore form
+The following questions require the RTL core or FPGA and therefore form
 the hardware rendezvous:
 
 - exception stacking with a cold ATC and translated supervisor stack;

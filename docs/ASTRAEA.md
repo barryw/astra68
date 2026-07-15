@@ -3,7 +3,8 @@
 Astraea is the Astra 68 "brain" chip (Agnus analog). Three subsystems:
 
 1. **Memory arbiter** — schedules the one 16-bit SDRAM among all masters.
-2. **Blitter** — 2D DMA engine (copy / fill / color-key / masked copy).
+2. **Blitter/draw backend** — 2D DMA plus planned geometry, patterns, and
+   hardware glyph expansion.
 3. **Copper** — raster coprocessor executing a BRAM instruction list, driving
    Vega/Lyra/Astraea registers synchronized to the beam.
 
@@ -84,7 +85,7 @@ blanking and idle bus time. Completion raises `IRQ_STAT.BLIT_DONE`.
 
 **`BLIT_OP`**
 ```
-[2:0]  MODE   0=COPY 1=FILL 2=COPY_KEY 3=COPY_MASK 4=LINE(deferred)
+[2:0]  MODE   0=COPY 1=FILL 2=COPY_KEY 3=COPY_MASK 4=LINE(planned)
 [5:4]  ELEMSZ 0=8-bit 1=16-bit 2=32-bit
 [8]    REV_X  blit right-to-left (overlapping copies)
 [9]    REV_Y  blit bottom-to-top (overlapping copies)
@@ -102,7 +103,8 @@ blanking and idle bus time. Completion raises `IRQ_STAT.BLIT_DONE`.
 - `REV_X`/`REV_Y` set the traversal direction so overlapping src/dst regions
   copy correctly (`memmove` semantics).
 
-**LINE** is deferred (§10); the reserved mode keeps the encoding stable.
+**LINE** is not implemented in v0.1; the reserved mode keeps the immediate-mode
+encoding stable while the queued draw frontend below is developed.
 
 Start a blit: program registers, then write `BLIT_CTRL = BLIT_START`. Poll
 for `BLIT_STATUS.DONE && !BLIT_STATUS.BUSY` or take the done IRQ. `DONE` is
@@ -132,6 +134,42 @@ Pin-level simulation at 75 MHz measures 51.65 MB/s for aligned copy and
 119.25 MB/s for aligned fill. Build `0x7E17F8DC` passed three cold ULX3S boots
 at 51.40 MB/s copy and 118.36 MB/s fill, including MMIO launch, completion
 polling, and cache-maintenance boundaries.
+
+### Planned geometry and glyph frontend
+
+The next Astraea revision adds one command frontend feeding the existing
+blitter writer. It does not add another SDRAM master or private framebuffer.
+
+Required commands:
+
+- Bresenham line, with horizontal/vertical fast paths;
+- rectangle outline as four lines and rectangle fill through existing `FILL`;
+- midpoint circle/ellipse outline and span-based filled circle/ellipse;
+- repeating 8x8 or 16x16 monochrome pattern fill with explicit pattern origin;
+- batched `MASK1`, `A4`, `INDEX4`, and `INDEX8` glyph runs.
+
+Every command names a destination surface, pixel format, mandatory clip
+rectangle, and bounded work array. A point/span emitter feeds a small 32-bit
+word coalescer; spans use normal burst fill and sparse pixels use exact byte
+enables. The frontend yields between bounded chunks so display and audio retain
+their deterministic service.
+
+Text layout is not an RTL function. The font service maps Unicode, kerns,
+shapes, and produces positioned glyph rectangles; Astraea performs mask
+expansion, palette lookup, coverage blend, clipping, and writes. The AFNT and
+resident-font contract is `docs/FONTS.md`.
+
+Arbitrary flood fill is excluded from the first implementation. It needs a
+potentially large work queue, performs data-dependent reads and writes, and can
+monopolize SDRAM. Software may run a scanline seed fill and submit discovered
+spans to Astraea. A later bounded hardware assist requires its own correctness
+and fairness design.
+
+The combined geometry plus monochrome/indexed glyph frontend targets no more
+than 3000 additional packed LUTs. The required `A4` coverage blender is measured
+separately and should use at most one DSP; total draw/glyph integration crossing
+4000 packed LUTs requires a scope review. Integrated routing, timing,
+shared-model pixel tests, and HDMI captures are the acceptance gates.
 
 ---
 
@@ -258,8 +296,8 @@ draws and don't block on `BLIT_BUSY` when you can take the IRQ.
 
 ## 10. Open
 
-1. Blitter **LINE** mode (Bresenham) — reinterpret SRC/DST/DIM as endpoints, or
-   add x0/y0/x1/y1 regs? Deferred.
+1. Freeze the queued geometry/glyph descriptor and MMIO doorbell only with its
+   validator, reference model, RTL adapter, and malformed-command tests.
 2. Blitter **A/B/C/D channel** minterm ROP (full Amiga-style) — COPY_KEY +
    COPY_MASK cover v0.1; add later if needed.
 3. Copper **target-range guard** (restrict `MOVE` away from Vesta) — hardening.

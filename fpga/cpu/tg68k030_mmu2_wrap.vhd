@@ -1,9 +1,7 @@
 -- Astra 68 - common-interface wrapper for the pinned TG68K.C 030_mmu2 core.
 --
--- This file intentionally declares entity tg68k_wrap, matching the no-MMU
--- wrapper's SoC-facing contract. Build scripts choose this file instead of
--- tg68k_wrap.vhd for CPU_CORE=tg68k030 because the TG branches reuse internal
--- entity/package names and cannot be compiled into the same VHDL work library.
+-- The entity keeps the concise tg68k_wrap name used at the SoC boundary. This
+-- is the sole supported CPU wrapper and is compiled directly by every build.
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;

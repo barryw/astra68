@@ -3,6 +3,8 @@
 #include "vega.h"
 #include "astraea.h"
 #include "rom_build_info.h"
+#include <astra/boot.h>
+#include <astra/front_panel.h>
 
 #define ROM_BANNER "ASTRA 68 SYSTEM ROM v" ASTRA_ROM_VERSION
 
@@ -39,6 +41,13 @@ static uint32_t last_failure_actual;
 static int last_failure_has_values;
 static volatile uint32_t local_bench[LOCAL_BENCH_BYTES / sizeof(uint32_t)]
     __attribute__((aligned(16)));
+static AstraBootInfo kernel_boot_info
+    __attribute__((section(".boot_info"), aligned(16)));
+
+extern const uint8_t _kernel_blob_start[];
+extern const uint8_t _kernel_blob_end[];
+extern void boot_kernel_handoff(uint32_t magic, const AstraBootInfo *boot_info,
+                                uint32_t entry) __attribute__((noreturn));
 
 static void screen_clear(void)
 {
@@ -200,11 +209,7 @@ static void uart_version(uint32_t version)
 static const char *cpu_name(uint32_t model, uint32_t implementation)
 {
     if (implementation == CPU_IMPL_TGM2) return "TG68K.C 68030 MMU2";
-    if (implementation == CPU_IMPL_TG30) return "TG68K.C 68030";
-    if (implementation == CPU_IMPL_TG20) return "TG68K.C 68020";
-    if (implementation == CPU_IMPL_WF30) return "WF68K30L 68030";
     if (model == CPU_MODEL_68030) return "68030-compatible";
-    if (model == CPU_MODEL_68020) return "68020-compatible";
     return "unknown";
 }
 
@@ -316,6 +321,48 @@ static int wait_for_sdram(void)
         if (VESTA->SYS_STATUS & SYS_SDRAM_READY) return 1;
     }
     return post_failure_text("SDRAM initialization timeout");
+}
+
+static int test_front_panel(void)
+{
+    AstraFrontPanelInfo info;
+    ASTRA_AUTO_FRONT_PANEL_LED_LEASE(lease);
+    uint8_t saved_leds;
+    uint8_t actual_leds;
+
+    if (astra_front_panel_get_info(&info) != ASTRA_OK)
+        return post_failure_text("front panel unavailable");
+    if (info.led_count != 8u || info.button_count != 6u ||
+        info.switch_count != 4u ||
+        (info.features & (ASTRA_PANEL_FEATURE_RAW_INPUT |
+                          ASTRA_PANEL_FEATURE_CHANGE_LATCH |
+                          ASTRA_PANEL_FEATURE_LED_OWNERSHIP |
+                          ASTRA_PANEL_FEATURE_ATOMIC_LEDS)) !=
+                         (ASTRA_PANEL_FEATURE_RAW_INPUT |
+                          ASTRA_PANEL_FEATURE_CHANGE_LATCH |
+                          ASTRA_PANEL_FEATURE_LED_OWNERSHIP |
+                          ASTRA_PANEL_FEATURE_ATOMIC_LEDS))
+        return post_failure_text("front panel capabilities");
+
+    if (astra_front_panel_get_leds(&saved_leds) != ASTRA_OK ||
+        astra_front_panel_acquire_leds(ASTRA_PANEL_LED_ALL, 0, &lease) !=
+            ASTRA_OK ||
+        astra_front_panel_set_leds(&lease, 0x55u) != ASTRA_OK ||
+        astra_front_panel_get_leds(&actual_leds) != ASTRA_OK ||
+        actual_leds != 0x55u) {
+        return post_failure_text("front panel LED data");
+    }
+
+    if (astra_front_panel_toggle_led_bits(&lease, ASTRA_PANEL_LED_ALL) !=
+            ASTRA_OK ||
+        astra_front_panel_get_leds(&actual_leds) != ASTRA_OK ||
+        actual_leds != 0xaau) {
+        return post_failure_text("front panel LED atomic operation");
+    }
+
+    if (astra_front_panel_set_leds(&lease, saved_leds) != ASTRA_OK)
+        return post_failure_text("front panel LED restore");
+    return 1;
 }
 
 static int test_data_bus(volatile uint32_t *base)
@@ -798,6 +845,10 @@ static int run_post(void)
     if (!wait_for_sdram()) return 0;
     uart_puts("OK\n");
 
+    uart_puts("  Front panel ....... ");
+    if (!test_front_panel()) return 0;
+    uart_puts("OK\n");
+
     if (ram_size < MIB || (ram_size & 3u) != 0u) {
         return post_failure_text("invalid hardware RAM map");
     }
@@ -835,6 +886,121 @@ static int run_post(void)
     return 1;
 }
 
+static void clear_bytes(void *destination, uint32_t size)
+{
+    uint8_t *bytes = destination;
+    while (size-- != 0u) *bytes++ = 0u;
+}
+
+static void add_boot_range(uint32_t base, uint32_t size, uint32_t type,
+                           uint32_t flags)
+{
+    AstraBootMemoryRange *range =
+        &kernel_boot_info.memory_ranges[kernel_boot_info.memory_range_count++];
+    range->base = base;
+    range->size = size;
+    range->type = type;
+    range->flags = flags;
+}
+
+static int load_kernel_image(uint32_t *image_size)
+{
+    uint32_t size = (uint32_t)_kernel_blob_end -
+                    (uint32_t)_kernel_blob_start;
+    volatile uint8_t *destination =
+        (volatile uint8_t *)ASTRA_KERNEL_LOAD_ADDRESS;
+
+    if (size == 0u || size > ASTRA_KERNEL_RESERVED_SIZE)
+        return post_failure_text("invalid kernel image size");
+    for (uint32_t index = 0; index < size; ++index)
+        destination[index] = _kernel_blob_start[index];
+    for (uint32_t index = 0; index < size; ++index) {
+        if (destination[index] != _kernel_blob_start[index])
+            return post_failure("kernel image copy",
+                                ASTRA_KERNEL_LOAD_ADDRESS + index,
+                                _kernel_blob_start[index], destination[index]);
+    }
+    *image_size = size;
+    return 1;
+}
+
+static int prepare_kernel_handoff(void)
+{
+    AstraEarlyLog *log = (AstraEarlyLog *)ASTRA_EARLY_LOG_ADDRESS;
+    uint32_t image_size = 0u;
+    uint32_t ram_end = VESTA->RAM_BASE + VESTA->RAM_SIZE;
+
+    if (VESTA->RAM_BASE != ASTRA_EARLY_LOG_ADDRESS ||
+        VESTA->RAM_SIZE != 0x02000000u ||
+        ram_end != 0x04000000u)
+        return post_failure_text("unsupported kernel RAM map");
+    if ((ASTRAEA->BLIT_STATUS & BLIT_BUSY) != 0u)
+        return post_failure_text("DMA active at kernel handoff");
+    if (!load_kernel_image(&image_size)) return 0;
+
+    astra_early_log_init(log, ASTRA_EARLY_LOG_SIZE);
+    astra_early_log_puts(log, "firmware: POST passed\n");
+    astra_early_log_puts(log, "firmware: kernel image copied and verified\n");
+
+    clear_bytes(&kernel_boot_info, sizeof(kernel_boot_info));
+    kernel_boot_info.magic = ASTRA_BOOT_INFO_MAGIC;
+    kernel_boot_info.abi_major = ASTRA_BOOT_ABI_MAJOR;
+    kernel_boot_info.abi_minor = ASTRA_BOOT_ABI_MINOR;
+    kernel_boot_info.total_size = sizeof(kernel_boot_info);
+    kernel_boot_info.flags = ASTRA_BOOT_REQUIRED_FLAGS;
+    kernel_boot_info.flags |= ASTRA_BOOT_FLAG_ICACHE_ENABLED |
+                              ASTRA_BOOT_FLAG_DCACHE_ENABLED;
+    kernel_boot_info.machine_id = VESTA->MACHINE_ID;
+    kernel_boot_info.hardware_build_id = VESTA->BUILD_ID;
+    kernel_boot_info.firmware_image_id = ASTRA_ROM_REVISION_ID;
+    kernel_boot_info.cpu_model = VESTA->CPU_MODEL;
+    kernel_boot_info.cpu_implementation = VESTA->CPU_IMPL;
+    kernel_boot_info.cpu_features = VESTA->CPU_FEATURES;
+    kernel_boot_info.cpu_hz = VESTA->CPU_HZ;
+    kernel_boot_info.ram_base = VESTA->RAM_BASE;
+    kernel_boot_info.ram_size = VESTA->RAM_SIZE;
+    kernel_boot_info.rom_base = VESTA->ROM_BASE;
+    kernel_boot_info.rom_size = VESTA->ROM_SIZE;
+    kernel_boot_info.kernel_base = ASTRA_KERNEL_LOAD_ADDRESS;
+    kernel_boot_info.kernel_image_size = image_size;
+    kernel_boot_info.kernel_memory_size = ASTRA_KERNEL_RESERVED_SIZE;
+    kernel_boot_info.kernel_entry = ASTRA_KERNEL_LOAD_ADDRESS;
+    kernel_boot_info.early_log_base = ASTRA_EARLY_LOG_ADDRESS;
+    kernel_boot_info.early_log_size = ASTRA_EARLY_LOG_SIZE;
+    kernel_boot_info.memory_range_entry_size = sizeof(AstraBootMemoryRange);
+
+    add_boot_range(ASTRA_BOOT_SCRATCH_ADDRESS, ASTRA_BOOT_SCRATCH_SIZE,
+                   ASTRA_MEMORY_RANGE_FIRMWARE,
+                   ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
+    add_boot_range(ASTRA_EARLY_LOG_ADDRESS, ASTRA_EARLY_LOG_SIZE,
+                   ASTRA_MEMORY_RANGE_EARLY_LOG,
+                   ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
+    add_boot_range(0x02004000u, 0x0000c000u,
+                   ASTRA_MEMORY_RANGE_USABLE,
+                   ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
+                   ASTRA_MEMORY_CACHEABLE);
+    add_boot_range(ASTRA_KERNEL_LOAD_ADDRESS, ASTRA_KERNEL_RESERVED_SIZE,
+                   ASTRA_MEMORY_RANGE_KERNEL,
+                   ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
+                   ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
+    add_boot_range(0x02090000u, 0x01d70000u,
+                   ASTRA_MEMORY_RANGE_USABLE,
+                   ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
+                   ASTRA_MEMORY_CACHEABLE);
+    add_boot_range(ASTRA_ROM_BACKING_ADDRESS, ASTRA_ROM_BACKING_SIZE,
+                   ASTRA_MEMORY_RANGE_ROM_BACKING,
+                   ASTRA_MEMORY_READ | ASTRA_MEMORY_EXECUTE |
+                   ASTRA_MEMORY_CACHEABLE);
+    add_boot_range(0x03e40000u, 0x001c0000u,
+                   ASTRA_MEMORY_RANGE_USABLE,
+                   ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
+                   ASTRA_MEMORY_CACHEABLE);
+    astra_boot_info_finalize(&kernel_boot_info);
+    if (astra_boot_info_validate(&kernel_boot_info) != ASTRA_BOOT_VALID)
+        return post_failure_text("firmware BootInfo validation");
+    return 1;
+}
+
 static void idle_forever(const char *screen_message, const char *serial_message)
 {
     uart_puts(screen_message);
@@ -868,6 +1034,12 @@ void kmain(void)
                      "\n" ROM_BANNER " - POST FAILURE\n");
 
     uart_puts("\nPOST PASS\n");
-    idle_forever("READY FOR OS LOADER\n",
-                 "\n" ROM_BANNER " - POST PASS - READY FOR OS LOADER\n");
+    uart_puts("  Kernel image ...... ");
+    if (!prepare_kernel_handoff())
+        idle_forever("HALTED: KERNEL LOAD FAILURE\n",
+                     "\n" ROM_BANNER " - KERNEL LOAD FAILURE\n");
+    uart_puts("OK\n");
+    uart_puts("Starting Astra kernel\n");
+    boot_kernel_handoff(ASTRA_BOOT_HANDOFF_MAGIC, &kernel_boot_info,
+                        ASTRA_KERNEL_LOAD_ADDRESS);
 }

@@ -1,14 +1,12 @@
-# Vesta — System / IRQ / Timers / I/O Register Map (v0.1 transition)
+# Vesta — System / IRQ / Timers / I/O Register Map (v0.1)
 
 Vesta is the Astra 68 system-glue chip (Gary/Gayle analog): the interrupt
 controller every other chip routes into, timers, FTDI diagnostic console,
 AstraHost boot state, input, machine identity, and reset control.
 
-> **Architecture transition:** process translation and protection now use the
-> CPU's built-in MC68030 PMMU. The former Vesta region-MMU aperture and contract
-> are retired and must not be implemented by new hardware or used by new
-> software. Legacy builds and headers may retain it temporarily while useful
-> tests and performance counters are migrated.
+> Process translation and protection use the CPU's built-in MC68030 PMMU. The
+> former Vesta region-MMU aperture and contract are retired. Their published
+> numeric identifiers remain reserved but no active build implements them.
 
 Authoritative contract; `sw/include/vesta.h` is the hand-maintained C mirror.
 
@@ -17,7 +15,9 @@ Authoritative contract; `sw/include/vesta.h` is the hand-maintained C mirror.
 ## 1. Addressing & conventions
 
 - **Base:** `VESTA_BASE = 0xFFF00000` (also the copper `MOVE` offset origin).
-- 32-bit registers, 4-byte stride, big-endian; RO / RW / RW1C. Supervisor-only.
+- 32-bit registers, 4-byte stride, big-endian; RO / RW / RW1C.
+- System registers are supervisor-only. The isolated front-panel page may be
+  mapped to user software by the operating system.
 
 ```
 Block map (VESTA_BASE +):
@@ -31,6 +31,7 @@ Block map (VESTA_BASE +):
   0x0500  UART
   0x0600  SPI / SD
   0x0700  input (gamepads + keyboard)
+  0x1000  front-panel GPIO (separate 4 KiB PMMU page)
 ```
 
 ---
@@ -46,9 +47,9 @@ Block map (VESTA_BASE +):
 | 0x0010 | `SYS_STATUS` | RO | — | general status |
 | 0x0014 | `RESET_REASON` | RO | — | `0=power-on 1=soft 2=watchdog` |
 | 0x0018 | `SCRATCH` | RW | 0 | persists across soft reset (boot handoff) |
-| 0x001C | `CPU_MODEL` | RO | — | `0x00068020` or `0x00068030` |
-| 0x0020 | `CPU_IMPL` | RO | — | implementation FourCC (`WF30`, `TG20`, `TG30`) |
-| 0x0024 | `CPU_FEATURES` | RO | — | `[0]PMMU [1]FPU [2]DATA32 [3]ADDR32` |
+| 0x001C | `CPU_MODEL` | RO | `0x00068030` | MC68030 architectural target |
+| 0x0020 | `CPU_IMPL` | RO | `TGM2` | repaired TG68K.C 68030/PMMU implementation |
+| 0x0024 | `CPU_FEATURES` | RO | `0x0000000D` | `[0]PMMU [1]FPU [2]DATA32 [3]ADDR32` |
 | 0x0028 | `CPU_HZ` | RO | — | configured CPU/bus clock in Hz |
 | 0x002C | `RAM_BASE` | RO | — | physical SDRAM base advertised to boot software |
 | 0x0030 | `RAM_SIZE` | RO | — | usable SDRAM bytes |
@@ -279,7 +280,47 @@ board-specific and feeds these registers.
 
 ---
 
-## 9. Programming sketches
+## 9. Front-panel GPIO (0x1000)
+
+The ULX3S front panel has six software-visible pushbuttons, four DIP switches,
+and eight LEDs. The seventh pushbutton remains the active-low hardware reset
+and is not software-visible. Inputs are active-high logical values regardless
+of board-level polarity.
+
+This block occupies `0xFFF01000..0xFFF01FFF`, a separate 4 KiB page. Bare-metal
+software accesses it through the Astra NDK. A protected OS normally brokers it
+through NDK resource leases, but can delegate only this page to an explicitly
+privileged client without exposing other Vesta controls.
+
+| Offset | Name | Acc | Reset | Description |
+|---|---|---|---|---|
+| 0x1000 | `PANEL_ID` | RO | `0x504E4C30` | "PNL0" |
+| 0x1004 | `PANEL_VERSION` | RO | `0x00010000` | major/minor |
+| 0x1008 | `PANEL_CAPS` | RO | `0x0F040608` | `[31:24]features [23:16]switches [15:8]buttons [7:0]LEDs` |
+| 0x100C | `PANEL_INPUT` | RO | 0 | debounced switches `[11:8]`, buttons `[5:0]` |
+| 0x1010 | `PANEL_RAW_INPUT` | RO | 0 | synchronized, non-debounced input levels |
+| 0x1014 | `PANEL_CHANGE` | RW1C | 0 | sticky debounced changes, same bit layout as input |
+| 0x1018 | `PANEL_LED_DATA` | RW | 0 | software LED values `[7:0]` |
+| 0x101C | `PANEL_LED_OWNERSHIP` | RW | 0 | 1 selects software value; 0 selects diagnostic value |
+| 0x1020 | `PANEL_LED_SET` | WO | - | atomically set `PANEL_LED_DATA` bits |
+| 0x1024 | `PANEL_LED_CLEAR` | WO | - | atomically clear `PANEL_LED_DATA` bits |
+| 0x1028 | `PANEL_LED_TOGGLE` | WO | - | atomically toggle `PANEL_LED_DATA` bits |
+
+Feature bits are `[0]RAW_INPUT`, `[1]CHANGE_LATCH`, `[2]LED_OWNERSHIP`, and
+`[3]ATOMIC_LEDS`.
+
+Button bits are `0=FIRE1`, `1=FIRE2`, `2=UP`, `3=DOWN`, `4=LEFT`, and
+`5=RIGHT`. Switch bits are `0=SW1` through `3=SW4`.
+
+`PANEL_LED_OWNERSHIP` resets to zero, preserving the hardware liveness and hang
+diagnostics. The NDK leases individual bits and masks writes to the caller's
+lease; disjoint applications can therefore use different LEDs. The supported
+application interface is `astra/front_panel.h`; these register addresses are a
+private firmware/hardware ABI.
+
+---
+
+## 10. Programming sketches
 
 **Set up a user process's regions + switch to it**
 ```c
@@ -327,7 +368,7 @@ VESTA->UART_DATA = c;
 
 ---
 
-## 10. Decisions & open
+## 11. Decisions & open
 
 **Decided:** process protection uses the CPU's built-in paged PMMU · the Vesta
 region unit is retired · per-source IRQ level+vector config · aggregated chip

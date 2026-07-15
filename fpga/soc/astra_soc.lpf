@@ -3,7 +3,7 @@
 ## Same sites as fpga/memtest/astra_memtest.lpf.
 
 # NOTE: BLOCK RESETPATHS / BLOCK ASYNCPATHS were removed. They told TRACE to skip
-# reset and cross-"domain" paths — which hid the WF68K30L's posedge<->negedge bus
+# reset and cross-"domain" paths, which hid processor posedge-to-negedge bus
 # paths from analysis, so PAR never timing-fixed them (STA showed 0 errors while real
 # HW stayed silent). Let TRACE see every path so the negedge bus interface gets fixed.
 
@@ -19,14 +19,37 @@ FREQUENCY PORT "clk25_mhz" 25 MHZ;
 # falling-edge paths scored. Declaring clk a clock pulls BOTH edges into timing
 # so PAR actually fixes the negedge cross-edge paths that fail in SDF sim / on silicon.
 FREQUENCY NET "clk" 12.5 MHZ;
-# Bound clock skew on the CPU/bus net. The residual failures are skew-induced HOLD
-# violations (~150-300 ps) on the WF68K30L's dual-edge bus interface that TRACE scores
-# as met (0 hold) but the SDF sim/silicon see. Force PAR to place the clock loads tight.
+# Bound clock skew on the CPU/bus net. The wrapper has dual-edge bus paths that
+# require deliberate placement even when nominal setup timing passes.
 MAXSKEW NET "clk" 0.3 ns;
 
 # Power button as manual reset (active low)
 LOCATE COMP "reset_n" SITE "D6";
 IOBUF  PORT "reset_n" PULLMODE=UP IO_TYPE=LVCMOS33;
+
+# User pushbuttons (active high)
+LOCATE COMP "buttons[0]" SITE "R1";  # FIRE1
+LOCATE COMP "buttons[1]" SITE "T1";  # FIRE2
+LOCATE COMP "buttons[2]" SITE "R18"; # UP
+LOCATE COMP "buttons[3]" SITE "V1";  # DOWN
+LOCATE COMP "buttons[4]" SITE "U1";  # LEFT
+LOCATE COMP "buttons[5]" SITE "H16"; # RIGHT
+IOBUF PORT "buttons[0]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
+IOBUF PORT "buttons[1]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
+IOBUF PORT "buttons[2]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
+IOBUF PORT "buttons[3]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
+IOBUF PORT "buttons[4]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
+IOBUF PORT "buttons[5]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
+
+# DIP switches (active high)
+LOCATE COMP "switches[0]" SITE "E8"; # SW1
+LOCATE COMP "switches[1]" SITE "D8"; # SW2
+LOCATE COMP "switches[2]" SITE "D7"; # SW3
+LOCATE COMP "switches[3]" SITE "E7"; # SW4
+IOBUF PORT "switches[0]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
+IOBUF PORT "switches[1]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
+IOBUF PORT "switches[2]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
+IOBUF PORT "switches[3]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
 
 # LEDs
 LOCATE COMP "leds[7]" SITE "H3";

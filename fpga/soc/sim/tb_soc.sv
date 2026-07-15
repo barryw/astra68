@@ -1,10 +1,6 @@
 `timescale 1ns/1ps
 
-module tb_soc #(
-    parameter CPU_TG68K = 1'b0,
-    parameter CPU_TG68K030 = 1'b0,
-    parameter CPU_TG68K030_MMU2 = 1'b0
-);
+module tb_soc;
     localparam integer UART_BAUD = 460800;
     localparam integer UART_BIT_CLKS = 12500000 / UART_BAUD;
 
@@ -16,13 +12,13 @@ module tb_soc #(
 
     astra_soc #(
         .RST_MAX(16'd16),
-        .CPU_TG68K(CPU_TG68K),
         .SDRAM_ENABLE(1'b0),
         .HDMI_ENABLE(1'b0),
         .CPU_CLK_DIV_BIT(0),
         .UART_BAUD(UART_BAUD)
     ) dut (
         .clk25_mhz(clk25), .reset_n(rstn),
+        .buttons(6'd0), .switches(4'd0),
         .ftdi_rxd(tx), .ftdi_txd(host_rx), .leds(leds)
     );
 

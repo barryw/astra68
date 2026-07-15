@@ -165,11 +165,10 @@ The exact RTL revision must still earn acceptance against the MC68030 integer,
 exception, cache, and PMMU contract in `docs/MC68030_COMPLIANCE.md`. Locking the
 architectural target does not waive defects in a candidate implementation.
 
-The older WF68K30L plus Vesta region-MMU path is retired. Its source and
-historical documents may remain temporarily while useful tests and integration
-work are migrated, but new hardware and OS design must not depend on it. The
-conflicting portions of `SPEC.md` and `docs/VESTA.md` require reconciliation,
-after which obsolete cores and interfaces can be removed deliberately.
+The older WF68K30L, 68020/no-PMMU TG68K, first TG030/PMMU import, and Vesta
+region-MMU path are retired. Their RTL, wrappers, and selectable build paths
+have been removed. Historical reports may retain their names as provenance,
+but no active hardware or OS design may depend on them.
 
 The initial software baseline remains:
 
@@ -607,6 +606,10 @@ Astraea policy.
 
 - Applications render to shared surfaces or submit validated scene commands.
 - Drawing submission is batched and asynchronous.
+- A font service validates native AFNT and imported fonts, owns immutable
+  strikes and caches, performs Unicode layout/shaping, and submits positioned
+  glyph runs for Astraea hardware expansion. Applications do not rasterize
+  glyph pixels or hand font-file pointers to hardware.
 - Damage and presentation are synchronized to display events.
 - The compositor never waits indefinitely for an application.
 - Moving, exposing, closing, or identifying a stalled window never requires
@@ -633,6 +636,8 @@ Astra should expose chipset-aware protected objects such as:
 - RGB565 drawing and presentation surfaces;
 - composited windows and fullscreen scenes;
 - tilemaps, tilesets, sprite sets, and palettes;
+- font faces, designed bitmap strikes, positioned glyph runs, and resident ROM
+  fallback faces;
 - validated copper programs;
 - blitter command buffers and fences;
 - vertical-blank, raster, and presentation events;
@@ -1057,7 +1062,8 @@ containment in one observable result.
 ### Phase 5 — native graphical and media system
 
 - Display/compositor service and application event model.
-- Surfaces, blitter, presentation, sprites, tiles, and copper resources.
+- Surfaces, blitter/draw commands, hardware glyph runs, native AFNT font
+  service, presentation, sprites, tiles, and copper resources.
 - Media service, Lyra streams/voices/instruments, and latency instrumentation.
 - Launcher/workspace and initial native application kits.
 

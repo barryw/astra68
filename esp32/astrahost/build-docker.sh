@@ -25,6 +25,7 @@ docker run --rm \
     -e HOST_GID="$(id -g)" \
     -e ASTRA_BUILD_DIR="$build_dir" \
     -e ASTRA_FPGA_SPI_HZ="${ASTRA_FPGA_SPI_HZ:-}" \
+    -e ASTRA_PROVISION_REPLACE="${ASTRA_PROVISION_REPLACE:-}" \
     -v "$script_dir:/project" \
     "${docker_extra[@]}" \
     -w /project \
@@ -45,8 +46,18 @@ docker run --rm \
         grep -Eq "^#define[[:space:]]+FF_USE_LABEL[[:space:]]+0$" "$ffconf"
 
         cmake_args=()
+        if [[ "$ASTRA_BUILD_DIR" == "build-provision" ]]; then
+            cmake_args+=("-D" "ASTRA_PROVISION_ROM_ENABLED=ON")
+        else
+            cmake_args+=("-D" "ASTRA_PROVISION_ROM_ENABLED=OFF")
+        fi
         if [[ -n "$ASTRA_FPGA_SPI_HZ" ]]; then
             cmake_args+=("-D" "ASTRA_FPGA_SPI_HZ=$ASTRA_FPGA_SPI_HZ")
+        fi
+        if [[ "$ASTRA_PROVISION_REPLACE" == "1" ]]; then
+            cmake_args+=("-D" "ASTRA_PROVISION_REPLACE=ON")
+        else
+            cmake_args+=("-D" "ASTRA_PROVISION_REPLACE=OFF")
         fi
         idf.py -B "$ASTRA_BUILD_DIR" "${cmake_args[@]}" build
         chown -R "$HOST_UID:$HOST_GID" "/project/$ASTRA_BUILD_DIR"

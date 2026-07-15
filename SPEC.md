@@ -1,6 +1,6 @@
 # Astra 68 — Design Specification (v0.2, living)
 
-A 68020/030-class fantasy computer for FPGA, targeting the **ULX3S ECP5-85F**.
+A 68030-class fantasy computer for FPGA, targeting the **ULX3S ECP5-85F**.
 Clean, modern 68k machine for games, demos, creative tools, and a small
 protected-mode graphical OS. Not binary-compatible with any existing platform —
 its own thing, in the spirit of Amiga / Atari ST / X68000 but without the legacy
@@ -8,10 +8,10 @@ baggage.
 
 > **Status legend:** ✅ VERIFIED on hardware · 🔒 LOCKED decision · 🔧 open/iterating
 
-> **CPU/MMU transition (2026-07-13):** the architecture is now locked to the
-> 68030-class core with its built-in paged PMMU and caches. The older WF68K30L
-> plus Vesta region-MMU path is retired and remains only while useful tests and
-> integration work are migrated. CPU acceptance is governed by
+> **CPU/MMU decision (2026-07-14):** the architecture and RTL tree are locked
+> to the TG68K.C 68030-class core with its built-in paged PMMU and caches. The
+> older WF68K30L, 68020/no-PMMU TG68K, and first TG030/PMMU imports have been
+> removed. CPU acceptance is governed by
 > `docs/MC68030_COMPLIANCE.md`; the OS vision is `docs/OS_VISION.md`.
 
 ---
@@ -57,14 +57,14 @@ because the e6502 already uses "Nova" internally.)
 - **Architecture:** Motorola-compatible MC68030 integer core with built-in
   paged PMMU and instruction/data caches, big-endian with 32-bit logical and
   physical addressing.
-- **Current implementation:** the repaired TG030+PMMU line under
-  `fpga/cpu/tg68k_c_030_mmu2/`. It is promoted only when the complete
-  fail-closed acceptance policy in `docs/MC68030_COMPLIANCE.md` passes.
+- **Sole implementation:** the repaired TG030+PMMU line under
+  `fpga/cpu/tg68k_c_030_mmu2/`. Production acceptance still requires the
+  fail-closed policy in `docs/MC68030_COMPLIANCE.md` to pass.
 - **No FPU:** floating point remains soft-float (§10).
 - Platform address maps, cacheability policy, and compatibility behavior live
   in SoC glue, not in the CPU architectural contract.
-- The older WF68K30L/no-PMMU core and external Vesta region-MMU are retired
-  design paths pending deliberate source cleanup.
+- Retired CPU implementations and the external Vesta region-MMU are not build
+  options and are not present in the active RTL tree.
 
 Not required v0.1: FPU hardware, 040/060 instructions, or cycle-exact external
 bus timing. Architecturally correct exception restart, PMMU behavior, cache
@@ -74,19 +74,28 @@ control, memory ordering, and bus-visible semantics remain required.
 
 ## 3. Memory map 🔒 (32 MB)
 
-The bus decodes three physical spaces. RAM is the 32 MB SDRAM; ROM and I/O are
-separate FPGA decodes (BRAM / register blocks), **not** carved out of SDRAM.
+The authoritative implemented CPU address registry is
+[`docs/MEMORY_MAP.md`](docs/MEMORY_MAP.md). Device specifications define
+registers only inside ranges allocated there.
+
+The bus currently decodes SDRAM, bootstrap BRAM, a ROM aperture, and MMIO. The
+ROM aperture aliases reserved SDRAM backing storage in the production
+AstraHost build; stage 0 remains in immutable FPGA BRAM.
 
 ```
 Physical decode
-  SDRAM   32 MB   general RAM (see software pools below)
-  ROM     128–256 KB BRAM   boot ROM / monitor
-  MMIO    register blocks    Astraea / Vega / Lyra / Vesta (supervisor-only)
+  SDRAM   32 MB    general RAM plus reserved ROM backing
+  BRAM    32 KB    bootstrap stack and scratch
+  stage0  8 KB     immutable reset loader
+  ROM     256 KB   aliased system-ROM aperture
+  MMIO    blocks   Astraea / Vega / Lyra / Vesta
 ```
 
 **Software pool convention for the 32 MB** (kernel-managed, adjustable). The
-jump from 16→32 MB is spent on *resident capacity*, since bandwidth (§17) is
-unchanged by capacity:
+values below are SDRAM-relative offsets, not current CPU bus addresses.
+The implemented CPU aperture begins at `0x02000000`; adding a low SDRAM mapping
+is a separate memory-map revision. The jump from 16→32 MB is spent on
+*resident capacity*, since bandwidth (§17) is unchanged by capacity:
 
 ```
 0x0000000  ~16 MB   Kernel + general RAM + protected user processes
@@ -173,11 +182,19 @@ Lightweight raster coprocessor, Amiga-style.
 
 ## 7. Astraea — blitter 🔒
 
-2D DMA bus master. V0.1 ops: copy rect, fill rect, masked copy, color-key
-(transparent) copy, optional line draw. Registers: SRC/DST addr+pitch, W, H, op,
-color, mask_color, control, status, IRQ. Yields to video/audio/sprite DMA; runs
-opportunistically in blanking/idle. Completion IRQ. Deferred: scaling, rotation,
-alpha, arbitrary ROPs.
+2D DMA bus master and shared drawing backend. V0.1 ops: copy rect, fill rect,
+masked copy, and color-key (transparent) copy. The required next frontend adds
+Bresenham lines, rectangle outline/fill, midpoint circle/ellipse outline/fill,
+repeating pattern fill, and batched hardware glyph expansion. Geometry emits
+points or spans into the existing clipped, word-coalescing DMA writer; it is not
+a second memory engine. Flood fill is software-assisted and deferred because an
+arbitrary region requires an unbounded work list and hostile SDRAM access.
+
+Native AFNT bitmap strikes support hardware `MASK1`, anti-aliased `A4`, and
+indexed color glyphs. Unicode mapping, shaping, fallback, and layout remain in
+the font service; Astraea receives positioned glyph runs and performs the pixel
+work. See `docs/ASTRAEA.md` and `docs/FONTS.md`. Deferred: scaling, rotation,
+general alpha compositing, arbitrary ROPs, and hardware flood fill.
 
 ---
 
@@ -263,10 +280,11 @@ Two engines into a common stereo mixer, **48 kHz** stereo out.
 
 ROM: 128–256 KB BRAM.
 
-The 90x30 POST text plane uses a fixed ASCII-compatible bitmap font in BRAM.
-It is not an OS font service; the graphical OS uses its own bitmap fonts in
-the Vega framebuffer, in the style of classic Amiga, Atari ST, and Macintosh
-systems.
+The 90x30 POST text plane uses the fixed 8x16 **Astra Rescue Mono** bitmap face
+in BRAM. It remains available when SDRAM, SD, or the font service has failed.
+The normal ROM image also carries proportional **Astra Sans** and monospaced
+**Astra Mono** AFNT strikes, rendered into Vega surfaces by Astraea's glyph
+frontend. They do not depend on the writable filesystem. See `docs/FONTS.md`.
 
 ---
 
@@ -366,18 +384,16 @@ all offsets and macros compile-verified. Hardware: 85F + 32 MB SDRAM verified.
 **Open (🔧) — hardware and firmware foundation:**
 1. Promote one TG030+PMMU RTL revision only after the complete acceptance policy
    in `docs/MC68030_COMPLIANCE.md` passes in simulation and retained hardware.
-2. Reconcile and remove the retired WF68K30L and Vesta region-MMU source,
-   wrappers, register definitions, build paths, and historical guidance after
-   useful tests have migrated.
-3. Complete the reset overlay, recovery monitor, versioned `BootInfo`, and
-   separate kernel-image loader described by `docs/OS_VISION.md`.
-4. Define and implement DMA fencing/fault reporting before protected services
+2. Complete the reset overlay and recovery monitor. Versioned `BootInfo`, the
+   separately linked kernel image, verified loader, and kernel handoff are
+   implemented at ABI 0.1.
+3. Define and implement DMA fencing/fault reporting before protected services
    can influence chipset DMA.
-5. Finish the interrupt/timer, framebuffer, input, storage, and audio hardware
+4. Finish the interrupt/timer, framebuffer, input, storage, and audio hardware
    needed by the first protected OS vertical slice.
-6. Finalize copper mid-scanline safety and every chipset capability/version
+5. Finalize copper mid-scanline safety and every chipset capability/version
    contract exposed to software.
-7. Keep 75 MHz SDRAM as the accepted baseline; treat 100 MHz as a stretch goal
+6. Keep 75 MHz SDRAM as the accepted baseline; treat 100 MHz as a stretch goal
    requiring fresh timing, cache, DMA, PMMU, and full-memory stress acceptance.
 
 ---

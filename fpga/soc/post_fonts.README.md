@@ -13,3 +13,10 @@ The 8192-byte layout is:
 Astra's POST console addresses only the first bank and doubles each 8x8 glyph
 row vertically to form an 8x16 cell. The additional banks remain inert; the OS
 is not required to use this image and supplies its own bitmap fonts.
+
+This is the current implementation, not the final font contract. The planned
+replacement is the true 8x16 Astra Rescue Mono bank described in
+`docs/FONTS.md`: 256 glyphs / 4096 bytes, derived from Spleen 8x16 and retained
+in FPGA BRAM for reset, POST, recovery, and kernel panic output. Replacing this
+image also removes vertical row doubling and requires visual plus hardware
+acceptance before it becomes the default.

@@ -82,6 +82,12 @@ SP and PC from the first eight payload bytes. Stage 0 independently checks the
 size, progress, SP, and PC before switching the ROM overlay and transferring
 control.
 
+AstraHost is a persistent service rather than a one-shot loader. After a
+successful commit it waits while the current FPGA generation reports
+`BOOT_DONE`. An FPGA-only reset or reconfiguration clears that state; AstraHost
+then re-identifies the SPI endpoint and serves the next boot request without an
+ESP32 reset.
+
 The v1 boot contract is:
 
 | Item | Value |
@@ -134,7 +140,9 @@ Changes to this boundary must preserve all of the following:
 - full pin-level MMU2 boot through stage 2 and POST;
 - zero combinational SCCs after synthesis;
 - successful ECP5 place and route at the selected clock targets;
-- hardware boot and repeated transfer tests at the configured SPI rate.
+- hardware boot and repeated transfer tests at the configured SPI rate;
+- FPGA-only reset followed by a second complete SPI boot without resetting the
+  ESP32.
 
 Future raw-block, Wi-Fi, input, update, and debug services extend the versioned
 SPI protocol with bounded queues, explicit backpressure, timeouts, and reset

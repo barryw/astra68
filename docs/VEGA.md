@@ -100,13 +100,17 @@ sprites exist until their capability bits are implemented and reported.
 ### Bootstrap POST text plane
 
 `VEGA_BASE + 0x2000` exposes 2700 byte-addressed cells arranged as 90 columns
-by 30 rows. Each byte is an ASCII/CP437 character. Hardware renders the first
-CP437 bank as 8x8 glyphs doubled vertically to 8x16, exactly filling the
-720x480 active area. Character RAM and font ROM are BRAM-backed and do not
-depend on SDRAM, so memory-test failures remain visible.
+by 30 rows. Each byte is an ASCII/CP437 character. The locked target renders a
+true 8x16 Astra Rescue Mono bank, exactly filling the 720x480 active area. The
+current bring-up image renders an older 8x8 bank with doubled rows until the
+replacement passes visual and hardware acceptance. Character RAM and font ROM
+are BRAM-backed and do not depend on SDRAM, so memory-test failures remain
+visible.
 
-This plane is a ROM/POST facility, not the OS text API. The OS disables or
-ignores it and renders its own bitmap fonts through the normal Vega framebuffer.
+This plane is a ROM/POST facility, not the OS text API. Its final BRAM bank is
+the 8x16 Astra Rescue Mono face and remains visible without SDRAM. The OS uses
+AFNT strikes and Astraea hardware glyph expansion into normal Vega surfaces;
+Vega does not parse fonts or render glyphs. See `docs/FONTS.md`.
 
 ---
 

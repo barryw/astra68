@@ -5,7 +5,7 @@ OBJDUMP = $(CROSS)objdump
 HOST_CC ?= cc
 BOOT_BACKEND ?= direct
 
-CFLAGS = -m68020 -msoft-float -Os -ffreestanding -fno-builtin -nostdlib \
+CFLAGS = -m68030 -msoft-float -Os -ffreestanding -fno-builtin -nostdlib \
          -fdata-sections -ffunction-sections -Wall -Wextra -I../include
 LDFLAGS = -T stage0.ld -nostdlib -Wl,--gc-sections,-Map=stage0.map
 

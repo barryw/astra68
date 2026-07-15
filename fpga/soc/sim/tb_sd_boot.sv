@@ -4,8 +4,7 @@
 module tb_sd_boot #(
     parameter [31:0] BUILD_ID = 32'h00000000,
     parameter integer TEST_BYTES = 65536,
-    parameter bit PROGRESS = 1'b0,
-    parameter bit CPU_MMU2 = 1'b0
+    parameter bit PROGRESS = 1'b0
 );
     reg clk25 = 1'b0;
     reg rstn = 1'b0;
@@ -35,7 +34,6 @@ module tb_sd_boot #(
 
     astra_soc #(
         .RST_MAX(16'd16),
-        .CPU_TG68K(1'b1),
         .SDRAM_ENABLE(1'b1),
         .SDRAM_BIST_BYTES(TEST_BYTES),
         .SDRAM_READY_DELAY(10000),
@@ -44,12 +42,10 @@ module tb_sd_boot #(
         .UART_BAUD(12500000),
         .SD_BOOT_ENABLE(1'b1),
         .ROM_WORDS(2048),
-        .CPU_MODEL(32'h00068030),
-        .CPU_IMPLEMENTATION(CPU_MMU2 ? 32'h54474d32 : 32'h54473330),
-        .CPU_FEATURES(32'h0000000d),
         .SOC_BUILD_ID(BUILD_ID)
     ) dut (
         .clk25_mhz(clk25), .reset_n(rstn),
+        .buttons(6'd0), .switches(4'd0),
         .ftdi_rxd(tx), .ftdi_txd(1'b1), .leds(leds), .gpdi_dp(gpdi),
         .sd_clk(sd_clk), .sd_cmd(sd_cmd), .sd_d(sd_d),
         .wifi_en(wifi_en), .wifi_gpio0(wifi_gpio0),

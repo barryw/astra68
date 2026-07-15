@@ -1,6 +1,6 @@
 // =============================================================================
-// Astra 68 SoC: selectable 68k core, boot ROM, BRAM scratch RAM, 32 MB SDRAM,
-// and the initial Vesta UART block.
+// Astra 68 SoC: TG68K.C 68030/PMMU, boot ROM, BRAM scratch RAM, 32 MB SDRAM,
+// and the initial Vesta machine-control blocks.
 //
 // Goal: boot astra_boot.bin from ROM and print the banner over the FTDI UART.
 // The stack remains in BRAM during SDRAM bring-up. SDRAM is initially exposed
@@ -16,7 +16,6 @@
 module astra_soc #(
     parameter [15:0] RST_MAX = 16'hFFFF,  // power-on reset length in CPU clocks (sim shortens it)
     parameter        UART_MONITOR = 1'b0, // diagnostic build: UART prints CPU bus state from hardware
-    parameter        CPU_TG68K = 1'b0,    // candidate core: TG68K.C wrapper
     parameter        SDRAM_ENABLE = 1'b1, // hardware default; functional CPU sims disable it
     parameter integer SDRAM_BIST_BYTES = 33554432,
     parameter integer SDRAM_READY_DELAY = 1048575,
@@ -28,13 +27,12 @@ module astra_soc #(
     parameter        SD_BOOT_ENABLE = 1'b0,
     parameter        ASTRA_HOST_ENABLE = 1'b0,
     parameter integer ROM_WORDS = 65536,
-    parameter [31:0] CPU_MODEL = 32'h00068030,
-    parameter [31:0] CPU_IMPLEMENTATION = 32'h57463330, // "WF30"
-    parameter [31:0] CPU_FEATURES = 32'h0000000c,
     parameter [31:0] SOC_BUILD_ID = 32'h00000000
 ) (
     input  wire       clk25_mhz,
     input  wire       reset_n,     // btn[0] / BTN_PWRn, active low
+    input  wire [5:0] buttons,     // FIRE1, FIRE2, UP, DOWN, LEFT, RIGHT
+    input  wire [3:0] switches,    // SW1..SW4, active high
     output wire       ftdi_rxd,    // FPGA TX -> host
     input  wire       ftdi_txd,    // host -> FPGA RX
     output wire [7:0] leds,
@@ -60,6 +58,10 @@ module astra_soc #(
     , input wire       sim_berrn
 `endif
 );
+    localparam [31:0] CPU_MODEL = 32'h00068030;
+    localparam [31:0] CPU_IMPLEMENTATION = 32'h54474d32; // "TGM2"
+    localparam [31:0] CPU_FEATURES = 32'h0000000d;       // PMMU, DATA32, ADDR32
+
     // Production hardware leaves the shared SD bus under AstraHost's exclusive
     // control. The direct FPGA SPI path remains available as a recovery and
     // simulation backend when ASTRA_HOST_ENABLE is clear.
@@ -483,9 +485,9 @@ module astra_soc #(
                 .cpu_be(be),
                 .cpu_wdata(cpu_dout),
                 .cpu_lock(!cpu_rmc_n),
-                .cpu_cacheable(CPU_TG68K && tg_cacheable_out),
+                .cpu_cacheable(tg_cacheable_out),
                 .cpu_instruction(cpu_fc[1] && cpu_fc != 3'b111),
-                .cpu_postable(CPU_TG68K && tg_postable_out),
+                .cpu_postable(tg_postable_out),
                 .cpu_cache_flush(sdram_bist_busy | astraea_cache_flush),
                 .cpu_busy(sdram_bridge_busy),
                 .cpu_done(sdram_bridge_done),
@@ -677,13 +679,6 @@ module astra_soc #(
     wire        cpu_rmc_n;
     wire [1:0]  cpu_siz;
     wire [2:0]  cpu_fc;
-    wire [31:0] wf_adr;
-    wire [31:0] wf_dout;
-    wire        wf_data_en;
-    wire        wf_as_n, wf_ds_n, wf_rw_n;
-    wire        wf_rmc_n;
-    wire [1:0]  wf_siz;
-    wire [2:0]  wf_fc;
     wire [31:0] tg_adr;
     wire [31:0] tg_dout;
     wire        tg_data_en;
@@ -725,13 +720,10 @@ module astra_soc #(
     reg         bus_read_stb;    // 1-cycle read-commit pulse for read-clears-flag regs
 
     // Bus-control inputs {BGACKn,BRn,STERMn,AVECn,HALT_INn,BERRn}.
-    // HALT_INn (bit 1) is asserted LOW during reset together with RESET_INn: the
-    // WF68K30L only sequences its internal reset while RESET and HALT are BOTH
-    // asserted for >10 clocks (real 68030 reset). Tying HALT_INn high left the core
-    // stuck in reset (verified in QuestaSim); driving it with ~rst boots it.
-    // The other five stay inactive-high, and the whole reg is syn_preserve'd because
-    // Synplify constant-folds the ENTIRE WF68K30L away (~0 LUT) if these core inputs
-    // read as compile-time constants — a preserved FF output is not foldable.
+    // HALT_INn (bit 1) is asserted low with RESET_INn, matching the MC68030
+    // reset contract. The remaining asynchronous bus-control inputs stay inactive.
+    // Keep them behind a preserved register so implementation tools retain the
+    // complete external-control interface used by simulation fault injection.
     // BKPT acknowledge cycles use CPU space at low addresses. There is no
     // external debugger/breakpoint ROM in this SoC, so respond with ILLEGAL as
     // the replacement instruction instead of letting the unmapped read return 0.
@@ -751,15 +743,15 @@ module astra_soc #(
     wire        cpu_berrn = cpu_ctl[0];
 `endif
 
-    assign cpu_adr     = CPU_TG68K ? tg_adr     : wf_adr;
-    assign cpu_dout    = CPU_TG68K ? tg_dout    : wf_dout;
-    assign cpu_data_en = CPU_TG68K ? tg_data_en : wf_data_en;
-    assign cpu_as_n    = CPU_TG68K ? tg_as_n    : wf_as_n;
-    assign cpu_ds_n    = CPU_TG68K ? tg_ds_n    : wf_ds_n;
-    assign cpu_rw_n    = CPU_TG68K ? tg_rw_n    : wf_rw_n;
-    assign cpu_rmc_n   = CPU_TG68K ? tg_rmc_n   : wf_rmc_n;
-    assign cpu_siz     = CPU_TG68K ? tg_siz     : wf_siz;
-    assign cpu_fc      = CPU_TG68K ? tg_fc      : wf_fc;
+    assign cpu_adr     = tg_adr;
+    assign cpu_dout    = tg_dout;
+    assign cpu_data_en = tg_data_en;
+    assign cpu_as_n    = tg_as_n;
+    assign cpu_ds_n    = tg_ds_n;
+    assign cpu_rw_n    = tg_rw_n;
+    assign cpu_rmc_n   = tg_rmc_n;
+    assign cpu_siz     = tg_siz;
+    assign cpu_fc      = tg_fc;
 
     tg68k_cache_store tg_cache_store_i (
         .clk(clk),
@@ -787,33 +779,8 @@ module astra_soc #(
         .fill_insn(sdram_fill_instruction)
     );
 
-    // Keep this instance named "cpu": several simulation probes intentionally
-    // reach into the WF68K hierarchy as dut.cpu.u_cpu...
-    wf68k_wrap cpu (
-        .CLK        (clk),
-        .ADR_OUT    (wf_adr),
-        .DATA_IN    (cpu_din_visible),
-        .DATA_OUT   (wf_dout),
-        .DATA_EN    (wf_data_en),
-        .RESET_INn  (~rst),
-        .FC_OUT     (wf_fc),
-        .IPLn       (cpu_ipln),
-        .DSACKn     (cpu_dsack_n),
-        .SIZE       (wf_siz),
-        .ASn        (wf_as_n),
-        .RWn        (wf_rw_n),
-        .RMCn       (wf_rmc_n),
-        .DSn        (wf_ds_n),
-        .BERRn      (cpu_berrn),
-        .HALT_INn   (cpu_ctl[1]),
-        .AVECn      (cpu_avecn),
-        .STERMn     (cpu_ctl[3]),
-        .BRn        (cpu_ctl[4]),
-        .BGACKn     (cpu_ctl[5])
-    );
-
     generate
-        if (CPU_TG68K) begin : g_tg68k_enabled
+        begin : g_tg68k_enabled
             tg68k_wrap tg_cpu (
                 .CLK        (clk),
                 .ADR_OUT    (tg_adr),
@@ -868,37 +835,6 @@ module astra_soc #(
                 .DBG_IMM    (tg_dbg_imm),
                 .DBG_ARIN   (tg_dbg_arin)
             );
-        end else begin : g_tg68k_disabled
-            assign tg_adr = 32'd0;
-            assign tg_dout = 32'd0;
-            assign tg_data_en = 1'b0;
-            assign tg_as_n = 1'b1;
-            assign tg_ds_n = 1'b1;
-            assign tg_rw_n = 1'b1;
-            assign tg_rmc_n = 1'b1;
-            assign tg_siz = 2'b00;
-            assign tg_fc = 3'b111;
-            assign tg_dbg_status = 32'd0;
-            assign tg_dbg_imm = 32'd0;
-            assign tg_dbg_arin = 32'd0;
-            assign tg_icache_hits = 32'd0;
-            assign tg_icache_misses = 32'd0;
-            assign tg_dcache_hits = 32'd0;
-            assign tg_dcache_misses = 32'd0;
-            assign tg_cacheable_out = 1'b0;
-            assign tg_postable_out = 1'b0;
-            assign tg_cache_lookup_addr = 32'd0;
-            assign tg_cache_lookup_insn = 1'b0;
-            assign tg_cache_lookup_data = 1'b0;
-            assign tg_cache_store_valid = 1'b0;
-            assign tg_cache_store_addr = 32'd0;
-            assign tg_cache_store_data = 32'd0;
-            assign tg_cache_store_insn = 1'b0;
-            assign tg_cache_invalidate_valid = 1'b0;
-            assign tg_cache_invalidate_addr = 32'd0;
-            assign tg_cache_invalidate_all = 1'b0;
-            assign tg_cache_ifreeze = 1'b0;
-            assign tg_cache_dfreeze = 1'b0;
         end
     endgenerate
 
@@ -930,8 +866,20 @@ module astra_soc #(
     wire sel_astraea = SDRAM_ENABLE && (cpu_adr[31:8] == 24'hFFF100);
     wire sel_uart = (cpu_adr[31:8]  == 24'hFFF005);
     wire sel_spi = (cpu_adr[31:8] == 24'hFFF006);
+    wire sel_panel = (cpu_adr[31:12] == 20'hFFF01);
     wire sel_vega_regs = HDMI_ENABLE && (cpu_adr[31:8] == 24'hFFF200);
     wire sel_vega_text = HDMI_ENABLE && (cpu_adr[31:12] == 20'hFFF22);
+    wire [31:0] panel_rdata;
+    reg [7:0] led_r;
+
+    astra_front_panel #(.CLK_HZ(CPU_CLK_HZ)) front_panel_i (
+        .clk(clk), .rst(rst),
+        .buttons(buttons), .switches(switches),
+        .select(sel_panel), .reg_index(cpu_adr[7:2]),
+        .write_strobe(bus_write_stb), .write_data(cpu_dout),
+        .byte_enable(be), .read_data(panel_rdata),
+        .diagnostic_leds(led_r), .leds(leds)
+    );
 
     // -------------------------------------------------------------------------
     // Read-only Vesta machine identity. Boot software consumes this instead of
@@ -940,6 +888,7 @@ module astra_soc #(
     // Only blocks actually present in this SoC are advertised.
     // -------------------------------------------------------------------------
     reg [31:0] sys_rdata;
+    reg [31:0] sys_scratch = 32'd0;
     always @* begin
         sys_rdata = 32'd0;
         case (cpu_adr[8:2])
@@ -952,7 +901,7 @@ module astra_soc #(
                                 !rom_overlay_sdram, sdram_ready_cpu,
                                 SDRAM_ENABLE ? 1'b1 : 1'b0};
             7'h05: sys_rdata = 32'd0;        // power-on reset
-            7'h06: sys_rdata = 32'd0;        // SCRATCH (not writable yet)
+            7'h06: sys_rdata = sys_scratch; // SCRATCH
             7'h07: sys_rdata = CPU_MODEL;
             7'h08: sys_rdata = CPU_IMPLEMENTATION;
             7'h09: sys_rdata = CPU_FEATURES;
@@ -1034,7 +983,7 @@ module astra_soc #(
     // 68030 32-bit-port byte enables from SIZE + A[1:0] (big-endian lanes).
     // SIZE is the current transfer portion from the CPU: 00=4 bytes, 11=3
     // bytes, 10=2 bytes, 01=1 byte. Unaligned word/long cycles are split by
-    // the WF68K30L bus interface, so each portion enables only the lanes
+    // the TG68K wrapper, so each portion enables only the lanes
     // reachable from the current address to the end of this 32-bit port word.
     // lane3=[31:24]=A..00, lane2=A..01, lane1=A..10, lane0=A..11.
     reg [3:0] be;
@@ -1104,8 +1053,8 @@ module astra_soc #(
     uart_rx #(.CLK_HZ(CPU_CLK_HZ), .BAUD(UART_BAUD)) urx (.clk(clk), .rst(rst), .rx(ftdi_txd),
         .data(rx_byte), .valid(rx_valid));
     // Read-commit strobe, not bus_write_stb: cpu_data_en is WRITE_ACCESS-only (see
-    // wf68k30L_bus_interface.vhd DATA_PORT_EN), so it (and bus_write_stb, which is
-    // only ever set alongside it) is always 0 during a read — bus_read_stb below is
+    // the processor's write qualifier), so it (and bus_write_stb, which is only
+    // ever set alongside it) is always 0 during a read. bus_read_stb below is
     // its read-side twin, set in the bus FSM when cpu_rw_n=1 (verified: 1 = read).
     wire [1:0] uart_reg = cpu_adr[3:2];
     // TG's 16-bit bus reads a 32-bit MMIO register as high and low words. Pop
@@ -1310,8 +1259,7 @@ module astra_soc #(
     reg [2:0] bs;
     reg [1:0] waitc;
     reg       sdram_cycle_started;
-    wire      sdram_post_cycle = sel_sdram && !cpu_rw_n && CPU_TG68K &&
-                                  tg_postable_out;
+    wire      sdram_post_cycle = sel_sdram && !cpu_rw_n && tg_postable_out;
     reg [31:0] cpu_sdram_reads = 32'd0;
     reg [31:0] cpu_sdram_writes = 32'd0;
     reg [31:0] cpu_sdram_wait_cycles = 32'd0;
@@ -1370,6 +1318,7 @@ module astra_soc #(
             cpu_sdram_reads <= 32'd0;
             cpu_sdram_writes <= 32'd0;
             cpu_sdram_wait_cycles <= 32'd0;
+            sys_scratch <= 32'd0;
             sdram_bist_start <= 1'b0;
             dbg_last_vec_adr <= 32'd0;
             dbg_last_wr_adr  <= 32'd0;
@@ -1430,7 +1379,7 @@ module astra_soc #(
                                 cpu_sdram_reads <= cpu_sdram_reads + 32'd1;
                             else
                                 cpu_sdram_writes <= cpu_sdram_writes + 32'd1;
-                            if (!cpu_rw_n && CPU_TG68K && tg_postable_out) begin
+                            if (!cpu_rw_n && tg_postable_out) begin
                                 // The bridge captures this stable request on
                                 // the next edge and retains external-bus
                                 // ownership until SDRAM responds. Terminate
@@ -1473,6 +1422,12 @@ module astra_soc #(
                             be[0] && cpu_dout[0]) begin
                             sdram_bist_start <= 1'b1;
                         end
+                        if (sel_sys && cpu_adr[8:2] == 7'h06) begin
+                            if (be[3]) sys_scratch[31:24] <= cpu_dout[31:24];
+                            if (be[2]) sys_scratch[23:16] <= cpu_dout[23:16];
+                            if (be[1]) sys_scratch[15:8] <= cpu_dout[15:8];
+                            if (be[0]) sys_scratch[7:0] <= cpu_dout[7:0];
+                        end
                         if (sel_sys && cpu_adr[8:2] == 7'h03 && SD_BOOT_ENABLE &&
                             sdram_ready_cpu && be[0] && cpu_dout[1]) begin
                             rom_overlay_sdram <= 1'b1;
@@ -1490,6 +1445,7 @@ module astra_soc #(
                                    sel_astraea ? astraea_rdata :
                                    sel_vega_regs ? vega_rdata :
                                    sel_vega_text ? {4{console_cpu_rdata}} :
+                                   sel_panel ? panel_rdata :
                                    sel_spi ? spi_rdata :
                                    sel_uart ? uart_rdata : 32'd0;
                         bus_read_stb <= 1'b1;              // commit read this cycle
@@ -1564,6 +1520,7 @@ module astra_soc #(
                            sel_astraea ? astraea_rdata :
                            sel_vega_regs ? vega_rdata :
                            sel_vega_text ? {4{console_cpu_rdata}} :
+                           sel_panel ? panel_rdata :
                            sel_spi ? spi_rdata :
                            sel_uart ? uart_rdata : 32'd0;
                 dsack_n <= 2'b00;                 // 32-bit port ack
@@ -1754,7 +1711,6 @@ module astra_soc #(
             if (&stallc) begin hang_adr <= cpu_adr; hang_aux <= {cpu_rw_n, cpu_siz}; hang_seen <= 1'b1; end
         end
     end
-    reg [7:0] led_r;
     always @* begin
         if (!hang_seen) led_r = {hb[23], ~cpu_as_n, ~cpu_rw_n, uart_busy, cpu_adr[3:0]}; // live
         else case (hb[22:20])
@@ -1767,7 +1723,5 @@ module astra_soc #(
             default: led_r = 8'h00;              // blank between repeats
         endcase
     end
-    assign leds = led_r;
-
 endmodule
 `default_nettype wire

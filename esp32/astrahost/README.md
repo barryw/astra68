@@ -24,6 +24,10 @@ formatting, opens only `/ASTRA68.ROM` with `rb`, validates both package CRCs and
 reset vectors, and streams the payload into FPGA-owned SDRAM. Existing files
 are never scanned, renamed, deleted, or modified.
 
+AstraHost remains active after handoff. It waits while the current FPGA
+generation reports boot complete, then re-identifies the link and serves the
+same validated ROM after an FPGA-only reset or reconfiguration.
+
 ESP-IDF 5.5.4 ships the upstream FatFs exFAT implementation but disables it in
 `ffconf.h`. The pinned Docker build enables that implementation before compiling
 and fails if the expected upstream configuration has changed. AstraHost never
@@ -61,6 +65,19 @@ That output is under `build-provision/`. It creates `/ASTRA68.ROM` only when the
 file is absent, using `/ASTRA68.NEW` as a validated staging file. It never
 overwrites the boot ROM or touches unrelated files. Normal builds contain no
 provisioning payload or write path.
+
+An explicit maintenance build may replace an existing, valid boot ROM:
+
+```sh
+ASTRA_PROVISION_ROM=/path/to/astra68.rom ASTRA_PROVISION_REPLACE=1 \
+    ./build-docker.sh
+```
+
+Replacement first validates `/ASTRA68.NEW`, renames the old image to
+`/ASTRA68.OLD`, installs the new image, and removes the backup only after the
+rename succeeds. A subsequent maintenance boot restores the backup if power
+was lost between those renames. No path outside these three root files is
+opened for writing. Normal production firmware remains read-only.
 
 The package parser also has a native corruption/reset-vector test:
 

@@ -5,8 +5,11 @@ module tb_boot_sdram #(
     parameter [31:0] BUILD_ID = 32'h00000000,
     parameter integer TEST_BYTES = 262144,
     parameter bit PROGRESS = 1'b0,
-    parameter bit CPU_MMU2 = 1'b0
+    parameter bit EXPECT_KERNEL_PANIC = 1'b0
 );
+    localparam [31:0] KERNEL_STATUS_READY = 32'h4b304f4b;
+    localparam [31:0] KERNEL_STATUS_PANIC = 32'h4b50414e;
+    localparam [31:0] EARLY_LOG_MAGIC = 32'h41364c47;
     reg clk25 = 1'b0;
     reg rstn = 1'b0;
     always #20 clk25 = ~clk25;
@@ -27,19 +30,16 @@ module tb_boot_sdram #(
 
     astra_soc #(
         .RST_MAX(16'd16),
-        .CPU_TG68K(1'b1),
         .SDRAM_ENABLE(1'b1),
         .SDRAM_BIST_BYTES(TEST_BYTES),
         .SDRAM_READY_DELAY(10000),
         .HDMI_ENABLE(1'b0),
         .CPU_CLK_DIV_BIT(0),
         .UART_BAUD(12500000),
-        .CPU_MODEL(32'h00068030),
-        .CPU_IMPLEMENTATION(CPU_MMU2 ? 32'h54474d32 : 32'h54473330),
-        .CPU_FEATURES(32'h0000000d),
         .SOC_BUILD_ID(BUILD_ID)
     ) dut (
         .clk25_mhz(clk25), .reset_n(rstn),
+        .buttons(6'd0), .switches(4'd0),
         .ftdi_rxd(tx), .ftdi_txd(1'b1), .leds(leds), .gpdi_dp(gpdi),
         .sdram_clk(sdram_clk), .sdram_cke(sdram_cke),
         .sdram_csn(sdram_csn), .sdram_wen(sdram_wen),
@@ -116,10 +116,18 @@ module tb_boot_sdram #(
     reg lane_test_seen = 1'b0;
     reg address_test_seen = 1'b0;
     reg cache_test_seen = 1'b0;
+    reg front_panel_test_seen = 1'b0;
     reg astraea_test_seen = 1'b0;
     reg astraea_result_seen = 1'b0;
+    reg post_seen = 1'b0;
+    reg expect_kernel_panic;
     integer bist_cycles = 0;
     real bist_mbps;
+
+    initial begin
+        expect_kernel_panic = EXPECT_KERNEL_PANIC;
+        if ($test$plusargs("expect-kernel-panic")) expect_kernel_panic = 1'b1;
+    end
 
     always @(posedge dut.g_sdram_enabled.sd_domain_clk) begin
         if (dut.g_sdram_enabled.bist_mem_lock)
@@ -136,13 +144,10 @@ module tb_boot_sdram #(
                 if (uart_line.len() > 21 &&
                     uart_line.substr(0, 20) == "ASTRA 68 SYSTEM ROM v")
                     banner_seen <= 1'b1;
-                if (uart_line.len() >= 74 &&
+                if (uart_line.len() >= 7 &&
                     uart_line.substr(0, 6) == "Built: ")
                     build_seen <= 1'b1;
-                if ((!CPU_MMU2 &&
-                     uart_line == "CPU:    TG68K.C 68030 @ 12500000 Hz") ||
-                    (CPU_MMU2 &&
-                     uart_line == "CPU:    TG68K.C 68030 MMU2 @ 12500000 Hz"))
+                if (uart_line == "CPU:    TG68K.C 68030 MMU2 @ 12500000 Hz")
                     cpu_seen <= 1'b1;
                 if (uart_line == "  Data/byte lanes .... OK")
                     lane_test_seen <= 1'b1;
@@ -150,6 +155,8 @@ module tb_boot_sdram #(
                     address_test_seen <= 1'b1;
                 if (uart_line == "  Cache coherence .... OK")
                     cache_test_seen <= 1'b1;
+                if (uart_line == "  Front panel ....... OK")
+                    front_panel_test_seen <= 1'b1;
                 if (uart_line.len() >= 15 &&
                     uart_line.substr(0, 14) == "  Astraea DMA (")
                     astraea_test_seen <= 1'b1;
@@ -160,7 +167,7 @@ module tb_boot_sdram #(
                     $fatal(1, "boot ROM reported POST failure");
                 if (uart_line == "POST PASS") begin
                     if (!banner_seen || !build_seen || !cpu_seen || !lane_test_seen ||
-                        !address_test_seen || !cache_test_seen ||
+                        !address_test_seen || !cache_test_seen || !front_panel_test_seen ||
                         !astraea_test_seen || !astraea_result_seen)
                         $fatal(1, "POST passed without all prerequisite checks");
                     if (dut.sdram_bist_errors != 0)
@@ -175,12 +182,56 @@ module tb_boot_sdram #(
                              dut.tg_icache_misses, dut.tg_dcache_hits);
                     if (bist_mbps < 120.0)
                         $fatal(1, "integrated BIST bandwidth target missed");
-                    $finish;
+                    post_seen <= 1'b1;
                 end
                 uart_line = "";
             end else begin
                 uart_line = {uart_line, dut.uart_data};
             end
+        end
+    end
+
+    function automatic [23:0] model_key(input [24:0] byte_offset);
+        model_key = {byte_offset[9], byte_offset[11:10],
+                     byte_offset[24:12], byte_offset[8:2], 1'b0};
+    endfunction
+
+    function automatic [31:0] sdram_be32(input [24:0] byte_offset);
+        reg [23:0] key;
+        begin
+            key = model_key(byte_offset);
+            sdram_be32 = {memory.memory[key][7:0],
+                          memory.memory[key][15:8],
+                          memory.memory[key + 1'b1][7:0],
+                          memory.memory[key + 1'b1][15:8]};
+        end
+    endfunction
+
+    always @(posedge dut.clk) begin
+        if (post_seen && dut.sys_scratch == KERNEL_STATUS_PANIC &&
+            !expect_kernel_panic)
+            $fatal(1, "kernel panicked during normal boot, log_flags=%08x",
+                   sdram_be32(25'h0000018));
+        if (post_seen &&
+            dut.sys_scratch == (expect_kernel_panic ? KERNEL_STATUS_PANIC :
+                                                       KERNEL_STATUS_READY)) begin
+            if (sdram_be32(25'h0000000) != EARLY_LOG_MAGIC)
+                $fatal(1, "early log header missing: %08x",
+                       sdram_be32(25'h0000000));
+            if (sdram_be32(25'h0000008) != 32'h00004000)
+                $fatal(1, "early log size mismatch: %08x",
+                       sdram_be32(25'h0000008));
+            if (expect_kernel_panic &&
+                (sdram_be32(25'h0000018) & 32'h1) == 0)
+                $fatal(1, "panic did not mark early log");
+            if (!expect_kernel_panic && sdram_be32(25'h0000018) != 0)
+                $fatal(1, "normal boot marked early log flags: %08x",
+                       sdram_be32(25'h0000018));
+            $display("KERNEL %s PASS status=%08x log_write=%0d wraps=%0d",
+                     expect_kernel_panic ? "PANIC" : "ENTRY",
+                     dut.sys_scratch, sdram_be32(25'h0000010),
+                     sdram_be32(25'h0000014));
+            $finish;
         end
     end
 

@@ -125,12 +125,13 @@ typedef volatile struct {
 #define VESTA_VERSION_1_0 0x00010000u
 
 // ---- CPU_MODEL / CPU_IMPL / CPU_FEATURES ----
-#define CPU_MODEL_68020 0x00068020u
 #define CPU_MODEL_68030 0x00068030u
-#define CPU_IMPL_WF30   0x57463330u   // "WF30"
-#define CPU_IMPL_TG20   0x54473230u   // "TG20"
-#define CPU_IMPL_TG30   0x54473330u   // "TG30"
 #define CPU_IMPL_TGM2   0x54474D32u   // "TGM2"
+// Retired published values remain reserved and must never be reused.
+#define CPU_MODEL_68020 0x00068020u
+#define CPU_IMPL_WF30   0x57463330u   // "WF30" (retired)
+#define CPU_IMPL_TG20   0x54473230u   // "TG20" (retired)
+#define CPU_IMPL_TG30   0x54473330u   // "TG30" (retired)
 #define CPU_FEAT_PMMU   (1u << 0)
 #define CPU_FEAT_FPU    (1u << 1)
 #define CPU_FEAT_DATA32 (1u << 2)

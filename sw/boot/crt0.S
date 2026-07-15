@@ -15,13 +15,11 @@
 _start:
 	move.l  #_stack_top, %sp        | stack stays in BRAM while POST tests SDRAM
 
-#ifdef ASTRA_CPU_TG68K030
 #ifndef ASTRA_BOOT_CACR
 #define ASTRA_BOOT_CACR 0x1111
 #endif
 	move.l  #ASTRA_BOOT_CACR, %d0     | CACR.IBE|DBE|IE|DE; override for diagnostics
 	movec   %d0, %cacr
-#endif
 
 	| copy .data from ROM (LMA) to RAM (VMA)
 	lea     _data_load, %a0
@@ -43,6 +41,15 @@ _start:
 4:	jsr     kmain                   | into C
 5:	stop    #0x2700                 | halt (supervisor, IPL7)
 	bra     5b
+
+	.globl  boot_kernel_handoff
+	.type   boot_kernel_handoff, @function
+boot_kernel_handoff:
+	move.w  #0x2700, %sr
+	move.l  4(%sp), %d0             | independent handoff magic
+	move.l  8(%sp), %a0             | physical BootInfo address
+	move.l  12(%sp), %a1            | separately linked kernel entry
+	jmp     (%a1)
 
 	.globl  _default_handler
 	.type   _default_handler, @function

@@ -1,11 +1,7 @@
 // Astra 68 boot-ROM UART gate.
 `timescale 1ns/1ps
 
-module tb_boot #(
-    parameter CPU_TG68K = 1'b0,
-    parameter CPU_TG68K030 = 1'b0,
-    parameter CPU_TG68K030_MMU2 = 1'b0
-);
+module tb_boot;
     reg clk25 = 1'b0;
     reg rstn = 1'b0;
     wire tx;
@@ -13,18 +9,14 @@ module tb_boot #(
 
     astra_soc #(
         .RST_MAX(16'd16),
-        .CPU_TG68K(CPU_TG68K),
         .SDRAM_ENABLE(1'b0),
         .HDMI_ENABLE(1'b0),
-        .CPU_CLK_DIV_BIT(0),
-        .CPU_MODEL(CPU_TG68K && !CPU_TG68K030 ? 32'h00068020 : 32'h00068030),
-        .CPU_IMPLEMENTATION(CPU_TG68K030_MMU2 ? 32'h54474d32 :
-                            CPU_TG68K030 ? 32'h54473330 :
-                            CPU_TG68K ? 32'h54473230 : 32'h57463330),
-        .CPU_FEATURES(CPU_TG68K030 ? 32'h0000000d : 32'h0000000c)
+        .CPU_CLK_DIV_BIT(0)
     ) dut (
         .clk25_mhz(clk25),
         .reset_n(rstn),
+        .buttons(6'd0),
+        .switches(4'd0),
         .ftdi_rxd(tx),
         .ftdi_txd(1'b1),
         .leds(leds)
@@ -55,10 +47,7 @@ module tb_boot #(
                 if (uart_line.len() >= 74 &&
                     uart_line.substr(0, 6) == "Built: ")
                     build_seen <= 1'b1;
-                if ((!CPU_TG68K030_MMU2 &&
-                     uart_line == "CPU:    TG68K.C 68030 @ 12500000 Hz") ||
-                    (CPU_TG68K030_MMU2 &&
-                     uart_line == "CPU:    TG68K.C 68030 MMU2 @ 12500000 Hz"))
+                if (uart_line == "CPU:    TG68K.C 68030 MMU2 @ 12500000 Hz")
                     cpu_seen <= 1'b1;
                 if (uart_line == "Vesta:  v1.0")
                     vesta_seen <= 1'b1;

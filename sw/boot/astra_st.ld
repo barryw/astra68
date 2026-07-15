@@ -35,8 +35,14 @@ SECTIONS {
     _etext = .;
   } > ROM
 
+  /* Fixed, independently validated firmware-to-kernel handoff record. */
+  .boot_info ORIGIN(RAM) (NOLOAD) : {
+    . = ALIGN(16);
+    KEEP(*(.boot_info))
+  } > RAM
+
   /* .data: resides in ROM (LMA), runs in RAM (VMA); crt0 copies it. */
-  .data : AT(_etext) {
+  .data ORIGIN(RAM) + 0x400 : AT(_etext) {
     . = ALIGN(4);
     _data_start = .;
     *(.data .data.*)
@@ -56,3 +62,7 @@ SECTIONS {
 
   /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) }
 }
+
+ASSERT(SIZEOF(.boot_info) <= 0x400, "BootInfo exceeds its 1 KiB reservation")
+ASSERT(_bss_end <= ORIGIN(RAM) + LENGTH(RAM),
+       "system ROM exceeds bootstrap scratch RAM")

@@ -23,6 +23,7 @@
 #define ASTRA_MOUNT_POINT "/sdcard"
 #define ASTRA_ROM_PATH ASTRA_MOUNT_POINT "/ASTRA68.ROM"
 #define ASTRA_ROM_STAGING_PATH ASTRA_MOUNT_POINT "/ASTRA68.NEW"
+#define ASTRA_ROM_BACKUP_PATH ASTRA_MOUNT_POINT "/ASTRA68.OLD"
 
 #define ASTRA_SPI_HOST SPI2_HOST
 #define ASTRA_PIN_SCK GPIO_NUM_14
@@ -305,11 +306,38 @@ static esp_err_t mount_boot_partition(void)
 }
 
 #ifdef ASTRA_PROVISION_ROM
-static esp_err_t provision_boot_rom_if_absent(void)
+static esp_err_t provision_boot_rom(void)
 {
     FILE *existing = fopen(ASTRA_ROM_PATH, "rb");
+    if (existing == NULL) {
+        FILE *backup = fopen(ASTRA_ROM_BACKUP_PATH, "rb");
+        if (backup != NULL) {
+            astra_rom_info_t backup_rom;
+            char backup_error[96];
+            bool backup_valid = astra_rom_validate(
+                backup, &backup_rom, backup_error, sizeof(backup_error));
+            fclose(backup);
+            if (!backup_valid) {
+                ESP_LOGE(TAG, "interrupted-update backup is invalid: %s",
+                         backup_error);
+                return ESP_ERR_INVALID_CRC;
+            }
+            remove(ASTRA_ROM_STAGING_PATH);
+            if (rename(ASTRA_ROM_BACKUP_PATH, ASTRA_ROM_PATH) != 0) {
+                ESP_LOGE(TAG, "cannot restore interrupted-update backup");
+                return ESP_FAIL;
+            }
+            ESP_LOGW(TAG, "restored %s after interrupted update",
+                     ASTRA_ROM_PATH);
+            existing = fopen(ASTRA_ROM_PATH, "rb");
+            if (existing == NULL)
+                return ESP_FAIL;
+        }
+    }
+
+    bool existing_present = existing != NULL;
+    astra_rom_info_t existing_rom = {0};
     if (existing != NULL) {
-        astra_rom_info_t existing_rom;
         char existing_error[96];
         bool existing_valid = astra_rom_validate(
             existing, &existing_rom, existing_error, sizeof(existing_error));
@@ -319,9 +347,11 @@ static esp_err_t provision_boot_rom_if_absent(void)
                      ASTRA_ROM_PATH, existing_error);
             return ESP_ERR_INVALID_CRC;
         }
+#ifndef ASTRA_PROVISION_REPLACE
         ESP_LOGI(TAG, "%s already exists; provisioning skipped",
                  ASTRA_ROM_PATH);
         return ESP_OK;
+#endif
     }
 
     size_t package_size = (size_t)(astra_provision_end -
@@ -359,11 +389,38 @@ static esp_err_t provision_boot_rom_if_absent(void)
         return ESP_ERR_INVALID_CRC;
     }
 
+    if (existing_present &&
+        existing_rom.payload_size == rom.payload_size &&
+        existing_rom.payload_crc32 == rom.payload_crc32) {
+        remove(ASTRA_ROM_STAGING_PATH);
+        remove(ASTRA_ROM_BACKUP_PATH);
+        ESP_LOGI(TAG, "%s already matches embedded ROM",
+                 ASTRA_ROM_PATH);
+        return ESP_OK;
+    }
+
+#ifdef ASTRA_PROVISION_REPLACE
+    if (existing_present) {
+        remove(ASTRA_ROM_BACKUP_PATH);
+        if (rename(ASTRA_ROM_PATH, ASTRA_ROM_BACKUP_PATH) != 0) {
+            remove(ASTRA_ROM_STAGING_PATH);
+            return ESP_FAIL;
+        }
+    }
+#endif
+
     if (rename(ASTRA_ROM_STAGING_PATH, ASTRA_ROM_PATH) != 0) {
+#ifdef ASTRA_PROVISION_REPLACE
+        if (existing_present &&
+            rename(ASTRA_ROM_BACKUP_PATH, ASTRA_ROM_PATH) != 0)
+            ESP_LOGE(TAG, "ROM update failed and backup restore failed");
+#endif
         remove(ASTRA_ROM_STAGING_PATH);
         return ESP_FAIL;
     }
-    ESP_LOGI(TAG, "provisioned %s: %lu payload bytes CRC32=%08lx",
+    remove(ASTRA_ROM_BACKUP_PATH);
+    ESP_LOGI(TAG, "%s %s: %lu payload bytes CRC32=%08lx",
+             existing_present ? "updated" : "provisioned",
              ASTRA_ROM_PATH, (unsigned long)rom.payload_size,
              (unsigned long)rom.payload_crc32);
     return ESP_OK;
@@ -428,8 +485,10 @@ static esp_err_t wait_for_boot_request(void)
                      error_code, (unsigned long)received);
             return ESP_FAIL;
         }
-        if ((flags & ASTRA_BOOT_DONE) != 0)
-            return ESP_ERR_INVALID_STATE;
+        if ((flags & ASTRA_BOOT_DONE) != 0) {
+            vTaskDelay(pdMS_TO_TICKS(ASTRA_LINK_RETRY_MS));
+            continue;
+        }
         if ((flags & ASTRA_BOOT_REQUESTED) != 0)
             return ESP_OK;
         vTaskDelay(pdMS_TO_TICKS(20));
@@ -454,13 +513,13 @@ void app_main(void)
     sdmmc_card_print_info(stdout, sd_card);
 
 #ifdef ASTRA_PROVISION_ROM
-    ESP_ERROR_CHECK(provision_boot_rom_if_absent());
+    ESP_ERROR_CHECK(provision_boot_rom());
 #endif
 
     ESP_ERROR_CHECK(add_fpga_device());
-    ESP_ERROR_CHECK(wait_for_fpga());
-
     for (;;) {
+        ESP_ERROR_CHECK(wait_for_fpga());
+
         astra_rom_info_t rom;
         FILE *file = open_valid_rom(&rom);
         if (file == NULL) {
@@ -475,7 +534,8 @@ void app_main(void)
 
         if (error == ESP_OK) {
             ESP_LOGI(TAG, "Astra boot handoff complete");
-            for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
+            vTaskDelay(pdMS_TO_TICKS(ASTRA_LINK_RETRY_MS));
+            continue;
         }
 
         ESP_LOGE(TAG, "boot attempt failed: %s", esp_err_to_name(error));

@@ -17,7 +17,7 @@ Rebuild on `beast` or `nuc` with deterministic provenance:
 ```sh
 rtk env SOURCE_DATE_EPOCH=1783980086 \
   ASTRA_ROM_GIT_REVISION=ad3f2a3ee7fbce87f5d10bc90910ed2e9c4135f8 \
-  make -C sw/boot CPU_CORE=tg68k030_mmu2 CPU_CLK_DIV_BIT=0 ROM_VERSION=0.3
+  make -C sw/boot CPU_CLK_DIV_BIT=0 ROM_VERSION=0.3
 ```
 
 Copy the resulting `sw/boot/astra_boot.bin` here after verifying its vectors

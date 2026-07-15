@@ -5,7 +5,7 @@ CC        = $(CROSS)gcc
 OBJCOPY   = $(CROSS)objcopy
 OBJDUMP   = $(CROSS)objdump
 
-CFLAGS = -m68020 -msoft-float -Os -ffreestanding -fno-builtin -nostdlib \
+CFLAGS = -m68030 -msoft-float -Os -ffreestanding -fno-builtin -nostdlib \
          -fno-pic -Wall -Wextra -I../include $(EXTRA_CFLAGS)
 LD     = ../boot/astra_st.ld
 CRT0   = crt0_coretest.S

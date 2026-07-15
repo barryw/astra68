@@ -1,4 +1,4 @@
-# TG68K 030 MMU2 repair candidate
+# TG68K 030 MMU2 Astra core
 
 This directory began as an unmodified RTL snapshot from the source revision
 used by the test repository linked from the TG68K.C `030_mmu` README. Original
@@ -11,37 +11,33 @@ listed in `CHANGES.astra.md`.
 - Imported path: `rtl/tg68k/*.vhd`
 - Test path: `tests/upstream/` from `tests/tg68k_030/` at the same commit
 
-It is intentionally separate from `../tg68k_c_030_mmu/`, which is the older
-TG68K.C export used by the current Astra wrapper and retained hardware bit.
-Do not silently mix files between these revisions.
+This is Astra's sole supported RTL CPU revision. Do not silently mix files from
+other TG68K branches into this pinned source set.
 
 ## Status
 
-This snapshot is a repair candidate, not an accepted Astra CPU:
+This snapshot is integrated as Astra's development CPU, but production
+acceptance remains fail-closed under `docs/MC68030_COMPLIANCE.md`:
 
 - it compiles under Questa Lattice OEM 2024.2;
-- the advertised small regression target passes 8 of 8;
-- the full repository harness is fail-open and does not run every checked-in
-  bench;
-- Astra's fail-closed runner currently reports 107 clean of 137 variants, with
-  3 stale compile failures, 22 raw simulation failures, and 5 unscored benches;
-- all five NetBSD-style plain-RTE demand-paging restart cases and the translated
-  supervisor-stack restart case pass, including mid-transfer MOVEM recovery;
-- unresolved exception-stacking, MOVES/DFC, and WinUAE-derived integer-test
-  diagnostics still require Motorola-based classification or repair;
-- several supplied tests themselves contradict Motorola and must be corrected.
+- upstream tests are enumerated independently by Astra's strict runner instead
+  of trusting the upstream fail-open aggregate;
+- Motorola-derived PMMU, exception-frame, trace, and restart checks are retained
+  under `tests/motorola/`;
+- the shared `conformance/` framework runs the same architecture cases against
+  RTL and the Musashi Astra model;
+- the maintained Harte hardware corpus and full SoC boot/SDRAM tests are release
+  gates, not substitutes for the Motorola contract.
 
-The repaired ALU/kernel and the complete SoC now report zero combinational SCCs
-both before and after ECP5 synthesis. The canonical ULX3S build routes at 38,705
-TRELLIS_COMB and 9,396 flip-flops; seed 3 closes the 12.5 MHz CPU clock at
-12.92 MHz and the 75 MHz SDRAM clock at 76.55 MHz, with positive worst-case
-slack. This removes the open-flow blocker, but does not by itself promote the
-candidate: the unresolved diagnostics above, full Harte qualification, and
-hardware validation still remain.
+The repaired ALU/kernel and complete SoC report zero combinational SCCs before
+and after ECP5 synthesis. Canonical ULX3S builds route at a 12.5 MHz CPU clock
+with the 75 MHz SDRAM domain; exact utilization, seed, timing, and retained
+hardware identity belong in build reports because the surrounding chipset is
+still changing.
 
 See [`../../../docs/TG68K_030_MMU2_AUDIT.md`](../../../docs/TG68K_030_MMU2_AUDIT.md)
 and [`../../../docs/MC68030_COMPLIANCE.md`](../../../docs/MC68030_COMPLIANCE.md).
-The raw strict-run classification is in [`tests/RESULTS.md`](tests/RESULTS.md).
+The historical strict-run classification is in [`tests/RESULTS.md`](tests/RESULTS.md).
 
 The upstream test files are also unmodified. Their Makefile is retained as
 evidence, not as Astra's pass/fail authority.
@@ -61,8 +57,7 @@ The imported snapshot contained:
 
 None of those behaviors may be used by the generic Astra integration. Required
 changes are recorded in `CHANGES.astra.md` or isolated in an Astra wrapper and
-must be tested against the Motorola contract before this candidate replaces the
-baseline.
+must be tested against the Motorola contract before production acceptance.
 
 ## License
 
