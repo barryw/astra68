@@ -12,6 +12,9 @@
   or `beast`; do not treat the local installation as a project blocker.
 - Preserve the required `rtk` command prefix, including remote access through
   `rtk proxy ssh`; transfer build artifacts with `rtk rsync`.
+- Closing a local tool/SSH session does not prove that its remote CAD process
+  exited. Before launching or accepting a remote build, check `pgrep -af
+  nextpnr`/`yosys` on that host and terminate only stale, identified jobs.
 
 ## FPGA Timing Closure
 

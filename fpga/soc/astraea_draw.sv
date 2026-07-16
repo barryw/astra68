@@ -41,6 +41,10 @@ module astraea_draw (
     localparam [7:0] OP_GLYPH_INDEX8 = 8'd11;
     localparam [7:0] OP_FLOOD_FILL   = 8'd12;
 
+    localparam [1:0] GLYPH_MODE_MASK1  = 2'd0;
+    localparam [1:0] GLYPH_MODE_A4     = 2'd1;
+    localparam [1:0] GLYPH_MODE_INDEX4 = 2'd2;
+
     localparam [4:0] REG_DST          = 5'd0;
     localparam [4:0] REG_DST_PITCH    = 5'd1;
     localparam [4:0] REG_FORMAT       = 5'd2;
@@ -448,7 +452,9 @@ module astraea_draw (
     wire [15:0] job_fg = cfg_fg_cpu;
     wire [15:0] job_bg = cfg_bg_cpu;
     wire [63:0] job_pattern = cfg_pattern_cpu;
-    wire [7:0] job_operation = cfg_op_cpu[7:0];
+    // Glyph opcodes are contiguous 8..11. Glyph-only states can use the low
+    // mode bits directly instead of rebuilding a full-byte opcode decoder.
+    wire [1:0] job_glyph_mode = cfg_op_cpu[1:0];
     wire [7:0] job_transparent_index = cfg_op_cpu[23:16];
     wire [24:0] job_src = cfg_src_cpu;
     wire [15:0] job_src_pitch = cfg_src_pitch_cpu;
@@ -803,10 +809,10 @@ module astraea_draw (
                                                 {1'b0, glyph_row};
     reg [16:0] glyph_source_byte_x;
     always @* begin
-        case (job_operation)
-            OP_GLYPH_MASK1: glyph_source_byte_x =
+        case (job_glyph_mode)
+            GLYPH_MODE_MASK1: glyph_source_byte_x =
                                 glyph_source_pixel_x >> 3;
-            OP_GLYPH_A4, OP_GLYPH_INDEX4: glyph_source_byte_x =
+            GLYPH_MODE_A4, GLYPH_MODE_INDEX4: glyph_source_byte_x =
                                 glyph_source_pixel_x >> 1;
             default: glyph_source_byte_x = glyph_source_pixel_x;
         endcase
@@ -2240,8 +2246,8 @@ module astraea_draw (
                         state <= ST_GLYPH_DECODE;
                     end
                     ST_GLYPH_DECODE: begin
-                        case (job_operation)
-                            OP_GLYPH_MASK1: begin
+                        case (job_glyph_mode)
+                            GLYPH_MODE_MASK1: begin
                                 if (glyph_source_cache_byte[
                                     3'd7 - glyph_source_pixel_x[2:0]]) begin
                                     emit_x <= glyph_pixel_x_q;
@@ -2259,7 +2265,7 @@ module astraea_draw (
                                     state <= ST_GLYPH_ADVANCE;
                                 end
                             end
-                            OP_GLYPH_A4: begin
+                            GLYPH_MODE_A4: begin
                                 glyph_coverage <= glyph_source_pixel_x[0] ?
                                     glyph_source_cache_byte[3:0] :
                                     glyph_source_cache_byte[7:4];
@@ -2281,7 +2287,7 @@ module astraea_draw (
                                     state <= ST_GLYPH_BLEND_SETUP;
                                 end
                             end
-                            OP_GLYPH_INDEX4: begin
+                            GLYPH_MODE_INDEX4: begin
                                 glyph_index <= glyph_source_pixel_x[0] ?
                                     {4'd0, glyph_source_cache_byte[3:0]} :
                                     {4'd0, glyph_source_cache_byte[7:4]};

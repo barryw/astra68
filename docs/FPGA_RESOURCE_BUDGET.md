@@ -40,13 +40,14 @@ canonical Yosys `-abc2` mapping currently bracket the timing work:
 | P41 | 54,439 | -73 | Registered 15-label blitter phase boundary; rejected on area and timing. |
 | P44 | 54,399 | -33 | Eleven-fact boundary; exact tests pass, but all routes and area fail. |
 | P45 | 54,345 | 21 | Registered row-offset multiplier operand; exact tests pass, first route reaches 71.74 MHz SDRAM and fails timing. |
-| P46 | 54,191 | 175 | Removes the redundant request-count comparator; exact tests pass and full routes are active. |
+| P46 | 54,191 | 175 | Removes the redundant request-count comparator; exact tests pass, but completed routes expose Draw glyph decode and the SDRAM row-hit path. |
+| P47 | 53,966 | 400 | Uses the contiguous glyph opcode's two mode bits in glyph-only states; exact tests pass and independent routes are active. |
 
-P46's packed resources are:
+P47's packed resources are:
 
 | Resource | Used | Physical free | Current-profile margin |
 |---|---:|---:|---:|
-| TRELLIS_COMB | 54,191 (64.79%) | 29,449 | 175 |
+| TRELLIS_COMB | 53,966 (64.52%) | 29,674 | 400 |
 | TRELLIS_FF | 18,282 (21.86%) | 65,358 | not limiting |
 | DP16KD | 80 (38.46%) | 128 | 24 |
 | MULT18X18D | 17 (10.90%) | 139 | 61 |
@@ -57,8 +58,8 @@ SDRAM and boot paths, HDMI, POST, front panel, complete Astraea drawing and
 copper engines, Vega framebuffer/tile/sprite scanout, and their integration
 logic. It does not include the complete Vesta services or Lyra audio.
 
-If P46 is retained, the complete-chipset envelope permits at most 8,539
-additional packed logic sites. Its 175-cell current-profile margin is a gate
+If P47 is retained, the complete-chipset envelope permits at most 8,764
+additional packed logic sites. Its 400-cell current-profile margin is a gate
 pass, not useful growth room. Even P39 leaves only 8,727 sites to the 75% target. The
 existing planning allocation therefore exposes a real capacity problem:
 
@@ -67,9 +68,9 @@ existing planning allocation therefore exposes a real capacity problem:
 | Complete Vesta IRQ, timers, input, and configuration service glue | 1,500 |
 | Lyra PCM/wavetable voices, time-multiplexed mixer, and output | 4,500 |
 | Shared DMA queues, CDC, arbitration, and integration | 1,500 |
-| Measured-growth contingency at P46 | 1,039 |
+| Measured-growth contingency at P47 | 1,264 |
 
-These are admission limits, not estimates to spend. A 1,039-cell contingency is
+These are admission limits, not estimates to spend. A 1,264-cell contingency is
 not healthy evidence that the remaining chipset fits. Recover core/graphics
 area and obtain a timing-clean route before admitting Lyra or the remaining
 Vesta work. Each later block needs isolated and integrated synthesis

@@ -115,13 +115,21 @@ and old resource tables are not current status.
   integrated normal/INDEX8/RGB565, boot, DMA, POST, and kernel-entry results
   remain cycle exact. The frozen Beast synthesis maps 43,435 LUT4s and 18,253
   FFs with zero SCCs, then packs to 54,191 `TRELLIS_COMB`: 154 fewer than P45
-  and 175 cells inside the profile. Corrected critical-floorplan placements
-  complete on Beast seed 23 at 11.49/60.24 MHz, Mac seed 33 at 10.87/56.28
-  MHz, and NUC seed 57 at 11.62/56.23 MHz. These are placement estimates only;
-  independent full routes are the active checkpoint.
+  and 175 cells inside the profile. The P45 comparator cone is absent from the
+  completed P46 routes, so that correction worked. Beast seed 23 reaches
+  14.0087/70.2001 MHz on Draw's full-byte glyph-opcode decode; Mac seed 33
+  reaches 13.2642/69.1419 MHz on the SDRAM core's dynamic open-row-hit read
+  path. P46 is rejected.
+  P47 exploits the contiguous glyph opcodes 8..11 inside glyph-only states and
+  decodes their two low mode bits rather than rebuilding an eight-bit opcode
+  comparison. All exact P46 functional and cycle references still pass. Beast
+  Yosys `0.64+159` maps 43,290 LUT4s and 18,253 FFs with zero SCCs, then packs
+  to 53,966 `TRELLIS_COMB`: 225 fewer than P46 and 400 cells inside the active
+  profile. Independent Beast seed-23, Mac seed-33, and NUC seed-57 physical
+  results are the active checkpoint. Placement estimates are diagnostic only.
   Continue from [TIMING_CLOSURE.md](../fpga/soc/oss_flow/TIMING_CLOSURE.md)
   instead of repeating old seeds or speculative floorplans.
-- No complete-graphics P46 bitstream has passed every production clock or been
+- No complete-graphics P47 bitstream has passed every production clock or been
   accepted on hardware yet. A board that currently reaches POST is evidence for
   the retained earlier hardware baseline, not evidence for this active netlist.
 - The checked-in build entry points still disagree on CPU divider, target
