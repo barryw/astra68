@@ -96,7 +96,11 @@ and old resource tables are not current status.
   registers the measured row-count multiplier operand using the existing row
   counter; all exact functional gates pass, mapping drops by 160 LUT4s, and
   packing reaches 54,345, only 21 cells inside the profile. Its route is the
-  active timing checkpoint.
+  active timing checkpoint. The first P45 placement matrix was stopped after
+  the floorplan report proved that its validation multiplier had been
+  constrained into a region with zero DSP sites. The control region now
+  includes the adjacent measured DSP row, and enforced region capacity is a
+  fail-fast invariant rather than a warning.
   Continue from [TIMING_CLOSURE.md](../fpga/soc/oss_flow/TIMING_CLOSURE.md)
   instead of repeating old seeds or speculative floorplans.
 - No complete-graphics P45 bitstream has passed the production route or been

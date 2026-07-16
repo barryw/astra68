@@ -175,7 +175,10 @@ REGIONS = [
         # Keep the captured operation, FSM decode, and row counters together.
         # These signals form the blitter's high-fanout control cone; allowing
         # the cone to span the complete datapath box creates long CE routes.
-        "box": (58, 60, 86, 88),
+        # Include the adjacent Y58 DSP row: the validation multiplier consumes
+        # the registered row counter directly and is therefore part of this
+        # region's control cone.
+        "box": (58, 56, 86, 88),
         "tier": "chip",
         "enforce": False,
         "prefer_nets": True,
@@ -412,3 +415,17 @@ for name in region_names:
     print("Astra floorplan region %s: enforced=%s; cells=%d; constrained=%d; buckets: %s; top cell types: %s" %
           (name, enforced, counts[name], constrained_counts[name],
            ", ".join(bucket_parts), ", ".join(type_parts)))
+
+    region = next(region for region in REGIONS if region["name"] == name)
+    if not should_enforce(region):
+        continue
+    enforce_buckets = region.get("enforce_buckets")
+    for bucket, demand in bucket_demand[name].items():
+        if enforce_buckets is not None and bucket not in enforce_buckets:
+            continue
+        available = capacity[name].get(bucket, 0)
+        if demand > available:
+            raise RuntimeError(
+                "floorplan region %s requires %d %s cells but contains %d sites"
+                % (name, demand, bucket, available)
+            )

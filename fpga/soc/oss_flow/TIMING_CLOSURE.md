@@ -212,20 +212,33 @@ It maps 160 fewer LUT4s than P44 and packs 54 fewer `TRELLIS_COMB`, enough for a
 21-cell profile pass. That margin remains too small for comfort and does not
 substitute for a timing-clean route.
 
-The active P45 physical matrix uses that one immutable JSON. Its canonical
-Beast copy is
+The P45 physical matrix uses that one immutable JSON. Its canonical Beast copy is
 `/tmp/astra68-p45-src1/fpga/soc/oss_flow/astra.json`; byte-identical copies are
 `/private/tmp/p45-astra.json` on the Mac and
 `/tmp/astra68-p45-route/p45-astra.json` on NUC. Every candidate uses timing
 weight 20, the `critical` floorplan, and explicit enforcement of only
 `host_io`, `astraea_blitter`, `astraea_blitter_cdc`, and
-`astraea_blitter_control`. The unrestricted heap references are seed 23 on
-Beast, seed 33 on the Mac, seed 57 on NUC, and seeds 4 and 7 on Beast. Beast
-also has controlled seed-23 heap timeouts of 80, 800, and 8000, plus `static`
-and `sa` placer diagnostics. The timeout, static, SA, threaded-pack, and
-parallel-refine variants are physical experiments, not release defaults. Their
-placed JSON, report, and log names all begin with `p45-` in the same directory
-as the host's immutable input. Route every completed candidate with
+`astraea_blitter_control`.
+
+The first P45 launch exposed an impossible physical constraint rather than a
+slow placer. The new registered row operand made the validation
+`MULT18X18D` match `astraea_blitter_control`, whose original Y60..Y88 rectangle
+contained zero multiplier sites. Every pre-place report said
+`MULT18X18D=1/0`, but heap, static, and SA placers continued trying to legalize
+it indefinitely. The Beast, Mac, and NUC runs were stopped without a placed
+artifact after this was confirmed. P44 did not expose the error because its
+subtract output separated the multiplier from the directly matched row-counter
+net; its multiplier legally landed at X62/Y58.
+
+The corrected control rectangle begins at Y56 and contains 12 multiplier
+sites, including the measured Y58 row. The pre-place script now rejects any
+enforced region whose constrained bucket demand exceeds its physical capacity,
+so this class of error fails before placement. Corrected artifact names begin
+with `p45f-`. The active unrestricted heap references are seed 23 and seed 4 on
+Beast and seed 57 on NUC. A Mac seed-33 and Beast seed-23 timeout-8000 placement
+provide bounded feedback; Beast also runs timeout 800 and `static` diagnostics.
+The timeout, static, threaded-pack, and parallel-refine variants are physical
+experiments, not release defaults. Route every completed candidate with
 `--no-pack --no-place`, reload the SDC, and record even failed cones here.
 Do not promote a faster placement merely because it completed; only a full
 all-clock route and release-identical rerun can select the production flow.
@@ -379,6 +392,11 @@ but it is not a canonical setting until a full route demonstrates a benefit.
   but improved SDRAM by only 0.20 MHz and reduced CPU by 0.42 MHz in the
   controlled Mac seed-33 comparison. Keep it experimental; do not broaden or
   promote it from placement estimates alone.
+- A floorplan capacity report is an invariant, not decoration. P45 initially
+  constrained one hard multiplier into a rectangle with zero multiplier BELs;
+  several placers consumed almost an hour while attempting an impossible
+  legalization. Enforced bucket demand must never exceed region capacity, and
+  the pre-place script now raises an error when it does.
 - Relaxed constraints, false paths, disabled features, and lower clocks can
   produce a bitstream but cannot produce the Astra68 bitstream.
 
