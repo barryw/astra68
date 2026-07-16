@@ -1,0 +1,34 @@
+{
+  "device": {
+    "name": "LFE5U-85F",
+    "resources": {
+      "TRELLIS_COMB": 83640,
+      "DP16KD": 208,
+      "MULT18X18D": 156
+    }
+  },
+  "default_profile": "core_graphics",
+  "absolute_max": {
+    "TRELLIS_COMB": 66912,
+    "DP16KD": 166,
+    "MULT18X18D": 124
+  },
+  "profiles": {
+    "core_graphics": {
+      "description": "68030/PMMU platform with the complete Astraea and Vega graphics chipset",
+      "max": {
+        "TRELLIS_COMB": 54366,
+        "DP16KD": 104,
+        "MULT18X18D": 78
+      }
+    },
+    "complete_chipset": {
+      "description": "All currently specified Vesta, Astraea, Vega, and Lyra hardware",
+      "max": {
+        "TRELLIS_COMB": 62730,
+        "DP16KD": 156,
+        "MULT18X18D": 117
+      }
+    }
+  }
+}

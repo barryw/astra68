@@ -31,6 +31,11 @@ SOC_ID_SRCS = ../../fpga/soc/astra_soc.sv ../../fpga/soc/astra_soc.lpf \
               ../../fpga/soc/tg68k_cache_store.sv \
               ../../fpga/soc/sdram32_bist.sv ../../fpga/soc/sdram32_controller.sv \
               ../../fpga/soc/astraea_blitter.sv \
+              ../../fpga/soc/astraea_pixel_port.sv \
+              ../../fpga/soc/astraea_draw.sv \
+              ../../fpga/soc/astraea_copper.sv ../../fpga/soc/astraea_chip.sv \
+              ../../fpga/soc/vega_tile_builder.sv ../../fpga/soc/vega_sprite_builder.sv \
+              ../../fpga/soc/vega_video.sv \
               ../../fpga/soc/thirdparty/core_sdram_axi4/sdram_axi_core.v \
               ../../fpga/soc/post_console.sv \
               ../../fpga/soc/post_fonts.hex ../../fpga/soc/oss_flow/mkbit.sh \

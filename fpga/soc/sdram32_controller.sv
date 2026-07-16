@@ -22,6 +22,19 @@ module sdram32_controller #(
     output wire        cpu_rsp_valid,
     output wire [31:0] cpu_rdata,
 
+    // Real-time display traffic has priority over ordinary CPU and DMA
+    // traffic. The client drops video_lock at bounded burst boundaries so the
+    // processor still receives service while a scanline is being prepared.
+    input  wire        video_lock,
+    input  wire        video_valid,
+    output wire        video_ready,
+    input  wire        video_write,
+    input  wire [24:0] video_addr,
+    input  wire [3:0]  video_be,
+    input  wire [31:0] video_wdata,
+    output wire        video_rsp_valid,
+    output wire [31:0] video_rdata,
+
     // A burst owner holds dma_lock from before its first request through its
     // final response. This allows pipelining without a response-tag FIFO.
     input  wire        dma_lock,
@@ -47,23 +60,35 @@ module sdram32_controller #(
     output wire [12:0] sdram_addr,
     output wire [1:0]  sdram_ba
 );
-    localparam [1:0] OWNER_NONE = 2'd0;
-    localparam [1:0] OWNER_CPU  = 2'd1;
-    localparam [1:0] OWNER_DMA  = 2'd2;
+    localparam [1:0] OWNER_NONE  = 2'd0;
+    localparam [1:0] OWNER_CPU   = 2'd1;
+    localparam [1:0] OWNER_DMA   = 2'd2;
+    localparam [1:0] OWNER_VIDEO = 2'd3;
 
     reg [1:0] owner;
     reg [5:0] outstanding;
 
+    // A locked CPU read-modify-write remains indivisible. Otherwise display
+    // fetch wins, followed by background DMA and then ordinary CPU traffic.
+    wire grant_video = (owner == OWNER_VIDEO) ||
+                       (owner == OWNER_NONE && video_lock && !cpu_lock);
     wire grant_dma = (owner == OWNER_DMA) ||
-                     (owner == OWNER_NONE && dma_lock && !cpu_lock);
+                     (owner == OWNER_NONE && dma_lock && !video_lock &&
+                      !cpu_lock);
     wire grant_cpu = (owner == OWNER_CPU) ||
-                     (owner == OWNER_NONE && (!dma_lock || cpu_lock));
+                     (owner == OWNER_NONE &&
+                      (cpu_lock || (!video_lock && !dma_lock)));
 
-    wire        selected_valid = grant_dma ? dma_valid : cpu_valid;
-    wire        selected_write = grant_dma ? dma_write : cpu_write;
-    wire [24:0] selected_addr  = grant_dma ? dma_addr : cpu_addr;
-    wire [3:0]  selected_be    = grant_dma ? dma_be : cpu_be;
-    wire [31:0] selected_wdata = grant_dma ? dma_wdata : cpu_wdata;
+    wire        selected_valid = grant_video ? video_valid :
+                                         grant_dma ? dma_valid : cpu_valid;
+    wire        selected_write = grant_video ? video_write :
+                                         grant_dma ? dma_write : cpu_write;
+    wire [24:0] selected_addr  = grant_video ? video_addr :
+                                         grant_dma ? dma_addr : cpu_addr;
+    wire [3:0]  selected_be    = grant_video ? video_be :
+                                         grant_dma ? dma_be : cpu_be;
+    wire [31:0] selected_wdata = grant_video ? video_wdata :
+                                         grant_dma ? dma_wdata : cpu_wdata;
 
     // Two-entry FIFO between arbitration and the physical command engine.
     // Client ready depends only on registered occupancy, keeping both owner
@@ -97,10 +122,13 @@ module sdram32_controller #(
 
     assign cpu_ready = grant_cpu && request_ready && cpu_valid;
     assign dma_ready = grant_dma && request_ready && dma_valid;
+    assign video_ready = grant_video && request_ready && video_valid;
     assign cpu_rsp_valid = core_ack && owner == OWNER_CPU;
     assign dma_rsp_valid = core_ack && owner == OWNER_DMA;
+    assign video_rsp_valid = core_ack && owner == OWNER_VIDEO;
     assign cpu_rdata = reverse_bytes(core_rdata);
     assign dma_rdata = reverse_bytes(core_rdata);
+    assign video_rdata = reverse_bytes(core_rdata);
 
     always @(posedge clk or posedge rst) begin
         if (rst) begin
@@ -157,8 +185,20 @@ module sdram32_controller #(
                 default: outstanding <= outstanding;
             endcase
 
-            if (owner == OWNER_NONE && accepted)
-                owner <= grant_dma ? OWNER_DMA : OWNER_CPU;
+            // Locked clients already reserve arbitration before their first
+            // request is valid. Acquire from those registered lock signals so
+            // request-valid/data selection is not on the owner state path.
+            // Ordinary unlocked CPU traffic still acquires when accepted.
+            if (owner == OWNER_NONE) begin
+                if (cpu_lock)
+                    owner <= OWNER_CPU;
+                else if (video_lock)
+                    owner <= OWNER_VIDEO;
+                else if (dma_lock)
+                    owner <= OWNER_DMA;
+                else if (accepted)
+                    owner <= OWNER_CPU;
+            end
             else if (owner == OWNER_CPU && outstanding == 6'd0 &&
                      !cpu_lock && !accepted)
                 owner <= OWNER_NONE;
@@ -169,6 +209,12 @@ module sdram32_controller #(
                 owner <= OWNER_NONE;
             else if (owner == OWNER_DMA && core_ack && outstanding == 6'd1 &&
                      !accepted && !dma_lock)
+                owner <= OWNER_NONE;
+            else if (owner == OWNER_VIDEO && outstanding == 6'd0 &&
+                     !video_lock)
+                owner <= OWNER_NONE;
+            else if (owner == OWNER_VIDEO && core_ack && outstanding == 6'd1 &&
+                     !accepted && !video_lock)
                 owner <= OWNER_NONE;
         end
     end

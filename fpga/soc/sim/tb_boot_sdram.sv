@@ -92,18 +92,18 @@ module tb_boot_sdram #(
                 $display("DMA owner=%0d busy=%b/%b state=%0d start=%b/%b/%b lock=%b native=%b/%b/%b count=%0d/%0d/%0d",
                          dut.g_sdram_enabled.dma_owner,
                          dut.astraea_busy,
-                         dut.g_sdram_enabled.astraea_i.busy_mem,
-                         dut.g_sdram_enabled.astraea_i.state_mem,
-                         dut.g_sdram_enabled.astraea_i.start_pending_cpu,
-                         dut.g_sdram_enabled.astraea_i.start_sync_mem,
-                         dut.g_sdram_enabled.astraea_i.start_seen_mem,
+                         dut.g_sdram_enabled.astraea_i.blitter_i.busy_mem,
+                         dut.g_sdram_enabled.astraea_i.blitter_i.state_mem,
+                         dut.g_sdram_enabled.astraea_i.blitter_i.start_pending_cpu,
+                         dut.g_sdram_enabled.astraea_i.blitter_i.start_sync_mem,
+                         dut.g_sdram_enabled.astraea_i.blitter_i.start_seen_mem,
                          dut.g_sdram_enabled.blit_mem_lock,
                          dut.g_sdram_enabled.blit_mem_valid,
                          dut.g_sdram_enabled.blit_mem_ready,
                          dut.g_sdram_enabled.blit_mem_rsp_valid,
-                         dut.g_sdram_enabled.astraea_i.issue_count_mem,
-                         dut.g_sdram_enabled.astraea_i.chunk_count_mem,
-                         dut.g_sdram_enabled.astraea_i.response_count_mem);
+                         dut.g_sdram_enabled.astraea_i.blitter_i.issue_count_mem,
+                         dut.g_sdram_enabled.astraea_i.blitter_i.chunk_count_mem,
+                         dut.g_sdram_enabled.astraea_i.blitter_i.response_count_mem);
                 $fflush();
             end
         end

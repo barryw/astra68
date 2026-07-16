@@ -7,4 +7,5 @@ core
 resources
 front-panel
 fonts
+graphics
 ```

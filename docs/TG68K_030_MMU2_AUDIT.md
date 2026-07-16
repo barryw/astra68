@@ -1,5 +1,12 @@
 # TG68K 030 MMU2 audit
 
+> **Historical snapshot:** This audit records the initial July 2026 core
+> qualification and pre-graphics SoC measurements. Its resource table is not
+> the current integrated-machine budget. See
+> [FPGA_RESOURCE_BUDGET.md](FPGA_RESOURCE_BUDGET.md) for enforced limits and
+> exact current utilization, and [the shared Harte gates](../sw/harte/README.md)
+> for the current two-adapter architectural result.
+
 ## Scope
 
 This audit covers the RTL and tests linked by the TG68K.C `030_mmu` README.

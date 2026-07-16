@@ -32,14 +32,18 @@ module tg68k_cache_store (
     input  wire [127:0] fill_data,
     input  wire         fill_insn
 );
-    localparam integer CACHE_ENTRIES = 64;
+    localparam integer CACHE_LINES = 16;
 
-    // Each entry is {physical tag[31:8], longword}. Valid bits remain in FFs
-    // so reset and CINVA do not require clearing the distributed RAM itself.
-    (* ram_style = "distributed" *) reg [55:0] icache [0:CACHE_ENTRIES-1];
-    (* ram_style = "distributed" *) reg [55:0] dcache [0:CACHE_ENTRIES-1];
-    reg [CACHE_ENTRIES-1:0] icache_valid = {CACHE_ENTRIES{1'b0}};
-    reg [CACHE_ENTRIES-1:0] dcache_valid = {CACHE_ENTRIES{1'b0}};
+    // The MC68030 caches have sixteen 16-byte lines. Keep one physical tag
+    // per line and one valid bit per longword instead of repeating the tag in
+    // all four data entries. Valid bits remain in FFs so reset and CINVA do
+    // not require clearing the distributed RAM itself.
+    (* ram_style = "distributed" *) reg [31:0] icache_data [0:63];
+    (* ram_style = "distributed" *) reg [31:0] dcache_data [0:63];
+    (* ram_style = "distributed" *) reg [23:0] icache_tag [0:CACHE_LINES-1];
+    (* ram_style = "distributed" *) reg [23:0] dcache_tag [0:CACHE_LINES-1];
+    reg [3:0] icache_valid [0:CACHE_LINES-1];
+    reg [3:0] dcache_valid [0:CACHE_LINES-1];
 
     reg [127:0] istream_data = 128'd0;
     reg [27:0]  istream_tag = 28'd0;
@@ -49,15 +53,22 @@ module tg68k_cache_store (
     reg         dstream_valid = 1'b0;
 
     wire [5:0] lookup_index = lookup_addr[7:2];
+    wire [3:0] lookup_line = lookup_addr[7:4];
+    wire [1:0] lookup_word = lookup_addr[3:2];
     wire [5:0] store_index = store_addr[7:2];
-    wire [5:0] invalidate_index = invalidate_addr[7:2];
-    wire [55:0] icache_entry = icache[lookup_index];
-    wire [55:0] dcache_entry = dcache[lookup_index];
+    wire [3:0] store_line = store_addr[7:4];
+    wire [1:0] store_word = store_addr[3:2];
+    wire [31:0] icache_lookup_data = icache_data[lookup_index];
+    wire [31:0] dcache_lookup_data = dcache_data[lookup_index];
+    wire [23:0] icache_lookup_tag = icache_tag[lookup_line];
+    wire [23:0] dcache_lookup_tag = dcache_tag[lookup_line];
+    wire [23:0] icache_store_tag = icache_tag[store_line];
+    wire [23:0] dcache_store_tag = dcache_tag[store_line];
 
-    wire icache_hit = lookup_insn && icache_valid[lookup_index] &&
-                      icache_entry[55:32] == lookup_addr[31:8];
-    wire dcache_hit = lookup_data && dcache_valid[lookup_index] &&
-                      dcache_entry[55:32] == lookup_addr[31:8];
+    wire icache_hit = lookup_insn && icache_valid[lookup_line][lookup_word] &&
+                      icache_lookup_tag == lookup_addr[31:8];
+    wire dcache_hit = lookup_data && dcache_valid[lookup_line][lookup_word] &&
+                      dcache_lookup_tag == lookup_addr[31:8];
     wire istream_hit = lookup_insn && istream_valid &&
                        istream_tag == lookup_addr[31:4];
     wire dstream_hit = lookup_data && dstream_valid &&
@@ -81,26 +92,28 @@ module tg68k_cache_store (
         dstream_data, lookup_addr[3:2]);
 
     assign lookup_ihit = icache_hit || istream_hit;
-    assign lookup_idata = icache_hit ? icache_entry[31:0] : istream_word;
+    assign lookup_idata = icache_hit ? icache_lookup_data : istream_word;
     assign lookup_dhit = dcache_hit || dstream_hit;
-    assign lookup_ddata = dcache_hit ? dcache_entry[31:0] : dstream_word;
+    assign lookup_ddata = dcache_hit ? dcache_lookup_data : dstream_word;
 
+    integer reset_line;
     always @(posedge clk) begin
         if (rst || flush || invalidate_all) begin
-            icache_valid <= {CACHE_ENTRIES{1'b0}};
-            dcache_valid <= {CACHE_ENTRIES{1'b0}};
+            for (reset_line = 0; reset_line < CACHE_LINES;
+                 reset_line = reset_line + 1) begin
+                icache_valid[reset_line] <= 4'b0000;
+                dcache_valid[reset_line] <= 4'b0000;
+            end
             istream_valid <= 1'b0;
             dstream_valid <= 1'b0;
         end else begin
             if (invalidate_valid) begin
                 // The wrapper presents the write address on lookup_addr, so
                 // these tag checks use the existing asynchronous RAM read.
-                if (icache_valid[invalidate_index] &&
-                    icache_entry[55:32] == invalidate_addr[31:8])
-                    icache_valid[invalidate_index] <= 1'b0;
-                if (dcache_valid[invalidate_index] &&
-                    dcache_entry[55:32] == invalidate_addr[31:8])
-                    dcache_valid[invalidate_index] <= 1'b0;
+                if (icache_lookup_tag == invalidate_addr[31:8])
+                    icache_valid[lookup_line] <= 4'b0000;
+                if (dcache_lookup_tag == invalidate_addr[31:8])
+                    dcache_valid[lookup_line] <= 4'b0000;
                 if (istream_valid &&
                     istream_tag == invalidate_addr[31:4])
                     istream_valid <= 1'b0;
@@ -120,19 +133,43 @@ module tg68k_cache_store (
             end
 
             if (store_valid && store_insn) begin
-                icache[store_index] <= {store_addr[31:8], store_data};
-                icache_valid[store_index] <= 1'b1;
+                icache_data[store_index] <= store_data;
+                if (icache_valid[store_line] == 4'b0000 ||
+                    icache_store_tag != store_addr[31:8]) begin
+                    icache_tag[store_line] <= store_addr[31:8];
+                    icache_valid[store_line] <= 4'b0001 << store_word;
+                end else begin
+                    icache_valid[store_line][store_word] <= 1'b1;
+                end
             end else if (istream_hit && !icache_hit && !ifreeze) begin
-                icache[lookup_index] <= {lookup_addr[31:8], istream_word};
-                icache_valid[lookup_index] <= 1'b1;
+                icache_data[lookup_index] <= istream_word;
+                if (icache_valid[lookup_line] == 4'b0000 ||
+                    icache_lookup_tag != lookup_addr[31:8]) begin
+                    icache_tag[lookup_line] <= lookup_addr[31:8];
+                    icache_valid[lookup_line] <= 4'b0001 << lookup_word;
+                end else begin
+                    icache_valid[lookup_line][lookup_word] <= 1'b1;
+                end
             end
 
             if (store_valid && !store_insn) begin
-                dcache[store_index] <= {store_addr[31:8], store_data};
-                dcache_valid[store_index] <= 1'b1;
+                dcache_data[store_index] <= store_data;
+                if (dcache_valid[store_line] == 4'b0000 ||
+                    dcache_store_tag != store_addr[31:8]) begin
+                    dcache_tag[store_line] <= store_addr[31:8];
+                    dcache_valid[store_line] <= 4'b0001 << store_word;
+                end else begin
+                    dcache_valid[store_line][store_word] <= 1'b1;
+                end
             end else if (dstream_hit && !dcache_hit && !dfreeze) begin
-                dcache[lookup_index] <= {lookup_addr[31:8], dstream_word};
-                dcache_valid[lookup_index] <= 1'b1;
+                dcache_data[lookup_index] <= dstream_word;
+                if (dcache_valid[lookup_line] == 4'b0000 ||
+                    dcache_lookup_tag != lookup_addr[31:8]) begin
+                    dcache_tag[lookup_line] <= lookup_addr[31:8];
+                    dcache_valid[lookup_line] <= 4'b0001 << lookup_word;
+                end else begin
+                    dcache_valid[lookup_line][lookup_word] <= 1'b1;
+                end
             end
         end
     end

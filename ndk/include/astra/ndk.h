@@ -15,5 +15,6 @@
 #include <astra/resource.h>
 #include <astra/front_panel.h>
 #include <astra/font.h>
+#include <astra/graphics.h>
 
 #endif

@@ -1,4 +1,4 @@
-# Astra Fonts and Hardware Glyph Rendering (draft v0.1)
+# Astra Fonts and Hardware Glyph Rendering (draft v0.2)
 
 This document defines the native font direction for Astra 68 and the boundary
 between font files, the font/display services, and Astraea. The graphical OS
@@ -14,8 +14,8 @@ must not draw bitmap glyphs with CPU pixel loops.
   kerning, shaping, and line layout.
 - Astraea expands already-positioned glyph runs into RGB565 or INDEX8 drawing
   surfaces. Hardware never parses a font file, Unicode, or filesystem data.
-- Glyph rendering shares Astraea's clipping, bounded-burst DMA writer, command
-  queue, and completion fences. It is not a second framebuffer writer.
+- Glyph rendering shares Astraea's clipping, exact pixel port, registered local
+  memory owner, and completion fences. It is not a second framebuffer writer.
 - Amiga bitmap fonts are supported through an importer. Their executable,
   pointer-bearing, planar disk representation is never a native or hardware
   input format.
@@ -152,8 +152,9 @@ desktop. A layered color glyph can also be represented as multiple positioned
 `MASK1` runs with different colors without CPU rasterization.
 
 Rows have explicit byte pitch. Packed bits/nibbles are most-significant first,
-and unused tail bits are zero. Runtime caches align rows and glyph sources for
-the Astraea word coalescer even if the on-disk chunk is more compact.
+and unused tail bits are zero. Astraea accepts arbitrary source, palette,
+destination, and pitch alignment while preserving neighboring bytes exactly;
+the font service may still align caches when that improves throughput.
 
 ## 5. Runtime glyph-run contract
 
@@ -175,6 +176,13 @@ A glyph job supplies one source strike and palette plus:
 - draw color and transparent/opaque background policy;
 - a bounded array of source rectangles and signed destination positions;
 - completion fence/event and optional damage rectangle.
+
+The implemented low-level batch is an array of 16-byte big-endian descriptors.
+Each descriptor carries a source offset relative to the strike bitmap base,
+unsigned source `(y,x)`, signed destination `(y,x)`, and unsigned
+`(height,width)`. Astraea validates every descriptor before using it and keeps
+the palette cached for the whole command. `ASTRAEA.md` is the normative MMIO
+and descriptor contract; applications only see the protected draw-list API.
 
 Layout is deliberately outside hardware. Complex-script shaping, fallback, and
 bidirectional text evolve in software without changing RTL. Raster expansion,
@@ -412,27 +420,34 @@ Host and native tooling should share the same AFNT writer and golden files.
 Amiga import is tested with monochrome, proportional, kerning, missing-glyph,
 and color-font fixtures.
 
-## 8. Hardware scope and resource gate
+## 8. Hardware status and resource gate
 
-The glyph path reuses the Astraea geometry/blitter writer documented in
-`ASTRAEA.md`. Required first implementation:
+The glyph path uses the Astraea draw engine and exact SDRAM pixel port documented
+in `ASTRAEA.md`. The first implementation now provides:
 
 1. `MASK1` expansion with clipping and transparent/opaque background.
 2. Batched glyph runs and completion fences.
 3. `A4` RGB565 coverage blend.
 4. `INDEX4`/`INDEX8` palette expansion with binary transparency.
 
-Geometry plus monochrome/indexed glyph expansion has a 3000 packed-LUT
-incremental target. `A4` is measured separately and should use at most one DSP;
-the complete draw/glyph addition has a 4000 packed-LUT hard review gate. Final
-acceptance is based on integrated place-and-route and retained HDMI tests, not
-standalone synthesis.
+The complete geometry, glyph, and bounded flood engine currently synthesizes
+standalone to 4,722 LUT4, 1,243 CCU2C, 3 MULT18X18D, 2 DP16KD, and 3,390
+flip-flops. Counting two LUT primitives per carry cell gives a 7,208-primitive
+draw budget, so it crosses the original 4,000-LUT review threshold; that is a
+measured scope decision, not a waiver. The second block RAM is an exact,
+registered A4 quotient table that replaces a timing-failing combinational
+divider in the 75 MHz domain. Final acceptance depends on integrated
+place-and-route, exact retained headroom for the remaining chipset, shared-model
+tests, and real HDMI output. The A4 datapath time-multiplexes channels; the
+additional multipliers also serve dynamic pitch/address arithmetic rather than
+three parallel coverage channels.
 
 ## 9. Acceptance
 
-- Shared software-model and RTL tests cover every source/destination format,
-  clipping edge, pitch/alignment combination, transparent mode, palette entry,
-  malformed run, and fence result.
+- Directed RTL tests cover every source/destination format, clipping edges,
+  pitch/alignment combinations, transparent modes, palette lookup, malformed
+  runs, exact A4 pixels, and fences. Shared software-model differential tests
+  remain a release gate.
 - Pixel output is compared exactly for `MASK1` and indexed formats and against
   the specified integer blend rule for `A4`.
 - ROM fonts render identically in the emulator and RTL at every bundled strike.

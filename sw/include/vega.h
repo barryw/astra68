@@ -1,5 +1,5 @@
 // Vega — video chip register interface for Astra 68.
-// Mirror of docs/VEGA.md (v0.1). Keep in sync with that spec.
+// Mirror of docs/VEGA.md (v0.3). Keep in sync with that spec.
 //
 // 32-bit registers, 4-byte stride, big-endian (m68k). Supervisor-only MMIO.
 #ifndef ASTRA_VEGA_H
@@ -71,6 +71,11 @@ typedef volatile struct {
 #define VEGA_POST_COLS 90u
 #define VEGA_POST_ROWS 30u
 #define VEGA_CAP_POST_TEXT (1u << 0)
+#define VEGA_CAP_FRAMEBUFFER (1u << 1)
+#define VEGA_CAP_PALETTE     (1u << 2)
+#define VEGA_CAP_TILEMAP     (1u << 3)
+#define VEGA_CAP_SPRITE      (1u << 4)
+#define VEGA_CAP_INDEX8      (1u << 5)
 
 // ---- VEGA_CTRL ----
 #define VEGA_CTRL_DISPLAY_EN  (1u << 0)
@@ -84,7 +89,10 @@ typedef volatile struct {
 #define VEGA_STAT_HBLANK       (1u << 1)
 #define VEGA_STAT_FLIP_PENDING (1u << 2)
 #define VEGA_STAT_SPR_OVERFLOW (1u << 3)
-#define VEGA_STAT_PLL_LOCK     (1u << 4)
+#define VEGA_STAT_DISPLAY_READY (1u << 4)
+#define VEGA_STAT_UNDERRUN      (1u << 5) // sticky; write 1 to clear
+#define VEGA_STAT_CONFIG_ERROR  (1u << 6)
+#define VEGA_STAT_FETCH_BUSY    (1u << 7)
 
 // ---- VEGA_IRQ_EN / VEGA_IRQ_STAT ----
 #define VEGA_IRQ_VBLANK    (1u << 0)
@@ -101,13 +109,16 @@ typedef volatile struct {
 
 // ---- VEGA_FB_FORMAT ----
 #define VEGA_FMT_RGB565 0
+#define VEGA_FMT_INDEX8 1
 
 // ---- TILE_CTRL bits ----
 #define TILE_ENABLE    (1u << 0)
 #define TILE_TRANSP_EN (1u << 1)
 #define TILE_16        (1u << 2)   // 16x16 tiles (else 8x8)
-#define TILE_WRAP      (1u << 3)
+#define TILE_WRAP_X    (1u << 3)
 #define TILE_ABOVE     (1u << 4)   // foreground (above sprites/FB)
+#define TILE_WRAP_Y    (1u << 5)
+#define TILE_WRAP      (TILE_WRAP_X | TILE_WRAP_Y)
 #define TILE_TRANSP_SHIFT 16
 #define TILE_TRANSP_MASK  (0xFu << 16)
 
@@ -134,6 +145,8 @@ typedef volatile struct {
 
 // ---- VEGA_SPR_CTRL (global) ----
 #define VEGA_SPR_CTRL_ENABLE (1u << 0)
+#define VEGA_SPR_BUDGET_INDEX8_MAX 1024u
+#define VEGA_SPR_BUDGET_RGB565_MAX  512u
 
 // ---- Packing helpers ----
 #define VEGA_POS(x, y)   (((uint32_t)(uint16_t)(y) << 16) | (uint16_t)(x))

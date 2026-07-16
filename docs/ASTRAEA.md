@@ -1,11 +1,12 @@
-# Astraea — DMA / Blitter / Copper / Arbiter Register Map (v0.1)
+# Astraea — DMA / Drawing / Copper Register Map (v0.3)
 
-Astraea is the Astra 68 "brain" chip (Agnus analog). Three subsystems:
+Astraea is the Astra 68 "brain" chip (Agnus analog). Four subsystems:
 
 1. **Memory arbiter** — schedules the one 16-bit SDRAM among all masters.
-2. **Blitter/draw backend** — 2D DMA plus planned geometry, patterns, and
-   hardware glyph expansion.
-3. **Copper** — raster coprocessor executing a BRAM instruction list, driving
+2. **Blitter** — bounded 2D copy, fill, keyed copy, and masked copy DMA.
+3. **Draw engine** — clipped geometry, patterns, glyph expansion, and bounded
+   scanline flood fill for INDEX8 and RGB565 surfaces.
+4. **Copper** — raster coprocessor executing a BRAM instruction list, driving
    Vega/Lyra/Astraea registers synchronized to the beam.
 
 Authoritative contract; `sw/include/astraea.h` is the hand-maintained C mirror.
@@ -20,9 +21,10 @@ Authoritative contract; `sw/include/astraea.h` is the hand-maintained C mirror.
 ```
 Block map (ASTRAEA_BASE +):
   0x0000  global (id/ver/ctrl/status/irq)
-  0x0020  arbiter (status / perf)
+  0x0020  reserved for future arbiter counters
   0x0040  blitter
   0x0080  copper control
+  0x0100  draw / glyph / flood frontend
   0x4000  copper instruction RAM (2048 x 8-byte instructions = 16 KB BRAM)
 
 Chipset map: 0xFFF00000 Vesta · 0xFFF10000 Astraea · 0xFFF20000 Vega · 0xFFF30000 Lyra
@@ -35,31 +37,32 @@ Chipset map: 0xFFF00000 Vesta · 0xFFF10000 Astraea · 0xFFF20000 Vega · 0xFFF3
 | Offset | Name | Acc | Reset | Description |
 |---|---|---|---|---|
 | 0x0000 | `ID` | RO | `0x41535452` | "ASTR" |
-| 0x0004 | `VERSION` | RO | `0x00010000` | major/minor |
+| 0x0004 | `VERSION` | RO | `0x00030000` | major/minor |
 | 0x0008 | `CTRL` | RW | 0 | global control |
 | 0x000C | `STATUS` | RO | — | global status |
-| 0x0010 | `IRQ_EN` | RW | 0 | `[0]BLIT_DONE [1]COPPER [2]ARB_UNDERRUN` |
+| 0x0010 | `IRQ_EN` | RW | 0 | `[0]BLIT_DONE [1]COPPER [2]reserved [3]DRAW_DONE` |
 | 0x0014 | `IRQ_STAT` | RW1C | 0 | pending; write 1 to clear |
+| 0x0018 | `CAPABILITIES` | RO | `0x000000FF` | copy, fill, key, mask, geometry, glyph, flood, copper |
 
 IRQs route to the Vesta interrupt controller.
 
 ---
 
-## 3. Memory arbiter (0x0020)
+## 3. Memory arbiter
 
-Mostly fixed-function. Priority (SPEC §15), highest first:
-`video scanout > audio FIFO > sprite/tile line fetch > CPU > blitter > storage/DMA`.
-Video and audio never underrun (line/FIFO buffers + guaranteed slots); the CPU
-and blitter stall first.
+The native controller prioritizes an already-locked CPU read/modify/write,
+then the real-time Vega line builder, then Astraea/storage DMA, then ordinary
+CPU traffic. A selected owner is held until every response in its transaction
+phase retires. Vega framebuffer, tile, and sprite fetches share the real-time
+video port and rotate after bounded 32-word bursts. Their independent local
+BRAM work overlaps other video clients instead of locking SDRAM for an entire
+scanline build. Future Lyra integration adds a separately bounded real-time
+port; it must not be hidden behind the opportunistic DMA owner.
 
-| Offset | Name | Acc | Description |
-|---|---|---|---|
-| 0x0020 | `ARB_CTRL` | RW | reserved (fixed priority in v0.1) |
-| 0x0024 | `ARB_STATUS` | RO | `[0]VIDEO_UNDERRUN [1]AUDIO_UNDERRUN` (sticky, debug) |
-| 0x0028 | `ARB_PERF` | RO | rolling SDRAM utilization counter (debug) |
-
-Underrun bits should never set in normal operation — they flag a
-mis-provisioned scene (too many layers/sprites for the bandwidth budget).
+Offsets `0x0020..0x003f` are reserved in v0.3. Video deadline state is reported
+by `VEGA_STATUS.UNDERRUN`; no undocumented Astraea arbitration/performance
+registers are exposed. Future audio integration may define counters here, but
+software must currently treat the entire range as reserved and read-zero.
 
 ---
 
@@ -85,7 +88,7 @@ blanking and idle bus time. Completion raises `IRQ_STAT.BLIT_DONE`.
 
 **`BLIT_OP`**
 ```
-[2:0]  MODE   0=COPY 1=FILL 2=COPY_KEY 3=COPY_MASK 4=LINE(planned)
+[2:0]  MODE   0=COPY 1=FILL 2=COPY_KEY 3=COPY_MASK
 [5:4]  ELEMSZ 0=8-bit 1=16-bit 2=32-bit
 [8]    REV_X  blit right-to-left (overlapping copies)
 [9]    REV_Y  blit bottom-to-top (overlapping copies)
@@ -103,73 +106,133 @@ blanking and idle bus time. Completion raises `IRQ_STAT.BLIT_DONE`.
 - `REV_X`/`REV_Y` set the traversal direction so overlapping src/dst regions
   copy correctly (`memmove` semantics).
 
-**LINE** is not implemented in v0.1; the reserved mode keeps the immediate-mode
-encoding stable while the queued draw frontend below is developed.
-
 Start a blit: program registers, then write `BLIT_CTRL = BLIT_START`. Poll
 for `BLIT_STATUS.DONE && !BLIT_STATUS.BUSY` or take the done IRQ. `DONE` is
 sticky and START clears it; software must not require observing `BUSY`, because
 short operations can complete between two CPU reads.
 
-### Current RTL status
+### RTL status
 
-The first hardware implementation supports `COPY` and `FILL` for 8-, 16-,
-and 32-bit elements, two-dimensional pitches, arbitrary byte alignment, and
-both reverse directions. Aligned rows transfer 16 native 32-bit words per
-chunk. Unaligned rows use exact byte-enable writes, preserving bytes outside
-the destination rectangle. Reverse traversal has directed overlap coverage and
-provides `memmove` semantics.
+All four modes support 8-, 16-, and 32-bit elements, two-dimensional pitches,
+arbitrary byte alignment, and exact destination byte preservation. COPY/FILL
+operate in bounded 16-element phases. COPY_KEY compares complete elements.
+COPY_MASK consumes most-significant-bit-first 1bpp rows with an independent
+mask pitch. Reverse Y is supported by every applicable mode; COPY reverse X/Y
+provides `memmove` overlap semantics. Invalid encodings report error 1 and an
+internal state-machine fault reports error 2. `DONE` and the error field clear
+on the next accepted `START`.
 
-`COPY_KEY`, `COPY_MASK`, and `LINE` are reserved but not implemented yet.
-Starting one of those operations completes with `BLIT_STATUS.ERROR=1`; it does
-not modify SDRAM. Error 2 reports an internal state-machine fault. `DONE` and
-the error field are cleared by the next accepted `START`.
+All address and pitch registers are retained at their full 32-bit MMIO width
+until START validation. Reserved high bits, a range crossing the 32 MiB SDRAM
+aperture, or a wrapped final row fail with error 1 before DMA ownership is
+taken. No source is narrowed silently to the native 25-bit memory port.
 
 The engine holds the native DMA grant through every chunk. CPU SDRAM requests
 stall while it owns memory, MMIO and ROM remain available for polling, and the
 TG wrapper caches remain invalid for the operation and completion boundary.
-The shared BIST/blitter port registers one owner for the complete operation, so
-request and response routing cannot change while transactions are outstanding.
-Pin-level simulation at 75 MHz measures 51.65 MB/s for aligned copy and
-119.25 MB/s for aligned fill. Build `0x7E17F8DC` passed three cold ULX3S boots
-at 51.40 MB/s copy and 118.36 MB/s fill, including MMIO launch, completion
-polling, and cache-maintenance boundaries.
+The Astraea-local arbiter registers either blitter or draw ownership for a
+complete transaction phase, so responses cannot cross-route when both engines
+request memory. Pin-level simulation at 75 MHz currently measures 51.44 MB/s
+for aligned copy and 119.81 MB/s for aligned fill.
 
-### Planned geometry and glyph frontend
+### Draw, glyph, and flood frontend (0x0100)
 
-The next Astraea revision adds one command frontend feeding the existing
-blitter writer. It does not add another SDRAM master or private framebuffer.
+The draw engine is an immediate-mode SDRAM master sharing Astraea's registered
+local memory owner with the blitter. It supports exact unaligned INDEX8 and
+big-endian RGB565 accesses. All commands are clipped before address generation;
+an invalid or overflowing SDRAM address terminates the command with an error.
 
-Required commands:
+| Offset | Name | Acc | Description |
+|---|---|---|---|
+| 0x0100 | `DRAW_DST` | RW | [24:0] destination SDRAM byte address |
+| 0x0104 | `DRAW_DST_PITCH` | RW | [15:0] destination bytes/row |
+| 0x0108 | `DRAW_FORMAT` | RW | 0=INDEX8, 1=RGB565 |
+| 0x010C | `DRAW_CLIP_MIN` | RW | signed `(y << 16) | x`, inclusive |
+| 0x0110 | `DRAW_CLIP_MAX` | RW | signed `(y << 16) | x`, exclusive |
+| 0x0114 | `DRAW_P0` | RW | first point, center, destination, or flood seed |
+| 0x0118 | `DRAW_P1` | RW | second point or unsigned glyph source `(y,x)` |
+| 0x011C | `DRAW_RADII` | RW | ellipse `[31:16] ry [15:0] rx`; circle uses `rx` |
+| 0x0120 | `DRAW_FG` | RW | foreground/fill pixel in destination format |
+| 0x0124 | `DRAW_BG` | RW | opaque pattern/mask background pixel |
+| 0x0128 | `DRAW_PATTERN_HI` | RW | upper half of 8x8 1bpp pattern |
+| 0x012C | `DRAW_PATTERN_LO` | RW | lower half of 8x8 1bpp pattern |
+| 0x0130 | `DRAW_ORIGIN` | RW | signed pattern origin `(y,x)` |
+| 0x0134 | `DRAW_SRC` | RW | [24:0] glyph bitmap base |
+| 0x0138 | `DRAW_SRC_PITCH` | RW | [15:0] glyph bitmap bytes/row |
+| 0x013C | `DRAW_SRC_SIZE` | RW | single glyph `[31:16] height [15:0] width` |
+| 0x0140 | `DRAW_PALETTE` | RW | [24:0] RGB565 palette base for indexed glyphs |
+| 0x0144 | `DRAW_WORK` | RW | descriptor array or flood LIFO base |
+| 0x0148 | `DRAW_WORK_ENTRIES` | RW | 16-bit descriptor count/LIFO capacity |
+| 0x014C | `DRAW_OP` | RW | operation and flags (below) |
+| 0x0150 | `DRAW_CTRL` | RW | `[0]START [1]IRQ_EN` |
+| 0x0154 | `DRAW_STATUS` | RO | `[0]BUSY [1]DONE [15:8]ERROR` |
+| 0x0158 | `DRAW_FENCE` | RW/RO | submitted value while busy; completed value when idle |
 
-- Bresenham line, with horizontal/vertical fast paths;
-- rectangle outline as four lines and rectangle fill through existing `FILL`;
-- midpoint circle/ellipse outline and span-based filled circle/ellipse;
-- repeating 8x8 or 16x16 monochrome pattern fill with explicit pattern origin;
-- batched `MASK1`, `A4`, `INDEX4`, and `INDEX8` glyph runs.
+`DRAW_OP[7:0]` selects the operation:
 
-Every command names a destination surface, pixel format, mandatory clip
-rectangle, and bounded work array. A point/span emitter feeds a small 32-bit
-word coalescer; spans use normal burst fill and sparse pixels use exact byte
-enables. The frontend yields between bounded chunks so display and audio retain
-their deterministic service.
+| Value | Operation | Parameters |
+|---:|---|---|
+| 0 | line | `P0` to `P1`, both endpoints included |
+| 1 | rectangle outline | opposite inclusive corners `P0`, `P1` |
+| 2 | filled rectangle | opposite inclusive corners `P0`, `P1` |
+| 3 | circle outline | center `P0`, radius `RADII.rx` |
+| 4 | filled circle | center `P0`, radius `RADII.rx` |
+| 5 | ellipse outline | center `P0`, radii `RADII` |
+| 6 | filled ellipse | center `P0`, radii `RADII` |
+| 7 | 8x8 pattern fill | inclusive rectangle `P0`, `P1`; origin `ORIGIN` |
+| 8 | MASK1 glyph run | `FG`; bit 7 is the leftmost pixel |
+| 9 | A4 glyph run | RGB565 only; high nibble is the leftmost coverage |
+| 10 | INDEX4 glyph run | 16-entry RGB565 palette |
+| 11 | INDEX8 glyph run | 256-entry RGB565 palette |
+| 12 | bounded flood fill | seed `P0`; replacement `FG`; caller LIFO in `WORK` |
 
-Text layout is not an RTL function. The font service maps Unicode, kerns,
-shapes, and produces positioned glyph rectangles; Astraea performs mask
-expansion, palette lookup, coverage blend, clipping, and writes. The AFNT and
+Bit 8 requests opaque `BG` writes for zero pattern/MASK1 bits; otherwise those
+pixels are transparent. For INDEX4/INDEX8, bits `[23:16]` select the transparent
+palette index. Other flag bits are reserved and must be zero.
+
+A single glyph uses `SRC`, `SRC_PITCH`, unsigned source origin `P1`, signed
+destination `P0`, and `SRC_SIZE`. For a batch, `WORK_ENTRIES` is nonzero and
+`WORK` points at 16-byte big-endian descriptors:
+
+```c
+struct AstraeaGlyphDesc {
+    uint32_t source_offset;  /* added to DRAW_SRC */
+    uint32_t source_yx;      /* unsigned y:16, x:16 */
+    uint32_t dest_yx;        /* signed y:16, x:16 */
+    uint32_t size_hw;        /* unsigned height:16, width:16 */
+};
+```
+
+INDEX4/INDEX8 palettes are loaded into a 256-entry on-chip RGB565 cache once per
+command. A4 blends native 5/6/5 channels as `(fg*a + dst*(15-a) + 7) / 15`.
+Text layout remains software's responsibility: the font service maps Unicode,
+kerns and shapes text, then submits positioned glyph rectangles. The AFNT and
 resident-font contract is `docs/FONTS.md`.
 
-Arbitrary flood fill is excluded from the first implementation. It needs a
-potentially large work queue, performs data-dependent reads and writes, and can
-monopolize SDRAM. Software may run a scanline seed fill and submit discovered
-spans to Astraea. A later bounded hardware assist requires its own correctness
-and fairness design.
+Flood fill uses a bounded scanline algorithm. `WORK` names a caller-owned array
+of packed signed `(y,x)` 32-bit seeds and `WORK_ENTRIES` gives its capacity.
+Exhausting that capacity stops cleanly with error 3; no write occurs outside the
+mandatory clip rectangle. Errors are 1=invalid configuration, 2=internal state,
+3=work overflow, and 4=address range. `DONE` is sticky until the next accepted
+START. The submitted fence is returned only after all writes complete and can
+be used to retire asynchronous draw-list resources.
 
-The combined geometry plus monochrome/indexed glyph frontend targets no more
-than 3000 additional packed LUTs. The required `A4` coverage blender is measured
-separately and should use at most one DSP; total draw/glyph integration crossing
-4000 packed LUTs requires a scope review. Integrated routing, timing,
-shared-model pixel tests, and HDMI captures are the acceptance gates.
+Directed simulation covers every primitive, line octants, clipping, degenerate
+ellipses, transparent/opaque patterns, all glyph formats, exact A4 blending,
+batched descriptors, both destination formats, arbitrary alignment, bounded
+flood overflow, malformed commands, fences, and concurrent blitter arbitration.
+Standalone ECP5 synthesis reports 4,722 LUT4, 1,243 CCU2C, 3 MULT18X18D,
+2 DP16KD, and 3,390 flip-flops for the draw engine. Counting two LUT primitives
+per carry cell gives a 7,208-primitive draw budget. The exact A4 divide-by-15
+step is a registered 1,024-entry quotient ROM; this adds one DP16KD and removes
+the former single-cycle combinational divider from the 75 MHz SDRAM domain.
+
+The complete Astraea chip, including blitter, draw engine, copper RAM, MMIO,
+and local arbitration, synthesizes standalone to 7,693 LUT4, 1,755 CCU2C,
+5,314 flip-flops, 18 DP16KD, and 6 MULT18X18D. That is 11,203 pre-pack LUT
+primitives. Integrated routed utilization and timing remain release gates and
+are tracked with the complete chipset rather than treated as fixed sums of
+standalone blocks.
 
 ---
 
@@ -189,8 +252,10 @@ scroll, framebuffer base, sprite regs, etc. per scanline without the CPU.
 | 0x0088 | `COP_STATUS` | RO | `[10:0] PC`, `[16]RUNNING`, `[17]WAITING` |
 | 0x008C | `COP_STROBE` | WO | write 1 = restart now (PC ← `COP_START`) |
 
-With `VBL_RESTART`, the copper restarts at `COP_START` every vblank (Amiga
-model) — swap `COP_START` between two lists for tear-free copper double-buffering.
+With `VBL_RESTART`, the copper arms at vertical blanking and restarts at
+`COP_START` as the beam enters the next active frame. Visible-line `WAIT`s
+therefore cannot collapse while the beam is at a vblank line. Swap `COP_START`
+between two lists for tear-free copper double-buffering.
 
 ### Instruction RAM (0x4000)
 
@@ -275,12 +340,16 @@ ASTRAEA->BLIT_CTRL = BLIT_START | BLIT_IRQ_EN;     // done via IRQ
 
 ## 8. Bandwidth / arbitration
 
-The blitter and copper are SDRAM masters (copper only for `MOVE`s that target
-SDRAM-backed things — normally it touches MMIO registers, not SDRAM, so it is
-cheap and deterministic). The blitter can saturate whatever bandwidth video/
-audio/sprites leave; it stalls first. A full-screen 720×480×16 fill ≈ 675 KB —
-at best-case leftover bandwidth a few ms; it runs in the background, so pipeline
-draws and don't block on `BLIT_BUSY` when you can take the IRQ.
+The copper executes entirely from BRAM and writes MMIO; it is not an SDRAM
+master. Display fetch has priority over Astraea DMA. The blitter and draw engine
+share one registered Astraea-local owner and can saturate the bandwidth display
+leaves; CPU SDRAM accesses stall behind an active DMA transaction while ROM and
+MMIO remain available. A full 720x480 RGB565 surface is 675 KiB. Submit
+independent work asynchronously and retire it through IRQs/fences rather than
+polling `BUSY` in a hot loop. The complete graphics regression verifies both
+tile layers plus 32 unrelated-row sprites at the 720-pixel scanline deadline;
+the format-dependent sprite ceilings and measured margins are in
+`docs/VEGA.md` section 12.
 
 ---
 
@@ -296,8 +365,8 @@ draws and don't block on `BLIT_BUSY` when you can take the IRQ.
 
 ## 10. Open
 
-1. Freeze the queued geometry/glyph descriptor and MMIO doorbell only with its
-   validator, reference model, RTL adapter, and malformed-command tests.
+1. Add the shared software reference-model adapter for draw-list pixel
+   comparisons; directed RTL coverage and malformed-command tests exist now.
 2. Blitter **A/B/C/D channel** minterm ROP (full Amiga-style) — COPY_KEY +
    COPY_MASK cover v0.1; add later if needed.
 3. Copper **target-range guard** (restrict `MOVE` away from Vesta) — hardening.

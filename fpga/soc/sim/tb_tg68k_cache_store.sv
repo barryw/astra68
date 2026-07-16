@@ -79,9 +79,22 @@ module tb_tg68k_cache_store;
         expect_lookup(32'h02000100, 1'b1, 1'b0, 32'd0);
         store_word(32'h02000100, 32'h11223344, 1'b1);
         expect_lookup(32'h02000100, 1'b1, 1'b1, 32'h11223344);
+        store_word(32'h02000104, 32'h55667788, 1'b1);
+        expect_lookup(32'h02000100, 1'b1, 1'b1, 32'h11223344);
+        expect_lookup(32'h02000104, 1'b1, 1'b1, 32'h55667788);
+
+        // A conflicting line replaces the shared tag and all word valids.
+        store_word(32'h02010108, 32'h99aabbcc, 1'b1);
+        expect_lookup(32'h02010108, 1'b1, 1'b1, 32'h99aabbcc);
+        expect_lookup(32'h02000100, 1'b1, 1'b0, 32'd0);
+        expect_lookup(32'h02000104, 1'b1, 1'b0, 32'd0);
+
         expect_lookup(32'h02000100, 1'b0, 1'b0, 32'd0);
         store_word(32'h02000100, 32'haabbccdd, 1'b0);
         expect_lookup(32'h02000100, 1'b0, 1'b1, 32'haabbccdd);
+        store_word(32'h02000104, 32'heeff0011, 1'b0);
+        expect_lookup(32'h02000100, 1'b0, 1'b1, 32'haabbccdd);
+        expect_lookup(32'h02000104, 1'b0, 1'b1, 32'heeff0011);
 
         // Fill a line, select each word, and promote a stream hit into RAM.
         @(negedge clk);
@@ -92,6 +105,7 @@ module tb_tg68k_cache_store;
         @(negedge clk);
         fill_valid = 1'b0;
         expect_lookup(32'h02000208, 1'b0, 1'b1, 32'h21222324);
+        expect_lookup(32'h02000204, 1'b0, 1'b1, 32'h11121314);
 
         // Replace the stream buffer; the promoted word must remain cached.
         @(negedge clk);
@@ -128,6 +142,7 @@ module tb_tg68k_cache_store;
         @(negedge clk);
         invalidate_valid = 1'b0;
         expect_lookup(32'h02000208, 1'b0, 1'b0, 32'd0);
+        expect_lookup(32'h02000204, 1'b0, 1'b0, 32'd0);
 
         flush = 1'b1;
         @(negedge clk);

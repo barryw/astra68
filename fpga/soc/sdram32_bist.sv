@@ -51,6 +51,10 @@ module sdram32_bist #(
     reg [7:0] expected_mem;
     reg [7:0] actual_mem;
     reg [31:0] expected_word_mem;
+    // Break the shared SDRAM read bus from the BIST compare/counter cone while
+    // retaining one response per mem_clk after the single-cycle pipeline fill.
+    reg response_valid_mem;
+    reg [31:0] response_rdata_mem;
 
     (* async_reg = "true" *) reg [1:0] busy_sync_cpu;
     (* async_reg = "true" *) reg [1:0] done_sync_cpu;
@@ -89,10 +93,10 @@ module sdram32_bist #(
 
     wire [31:0] expected_word = expected_word_mem;
     wire [3:0] mismatch = {
-        mem_rdata[31:24] != expected_word[31:24],
-        mem_rdata[23:16] != expected_word[23:16],
-        mem_rdata[15:8]  != expected_word[15:8],
-        mem_rdata[7:0]   != expected_word[7:0]
+        response_rdata_mem[31:24] != expected_word[31:24],
+        response_rdata_mem[23:16] != expected_word[23:16],
+        response_rdata_mem[15:8]  != expected_word[15:8],
+        response_rdata_mem[7:0]   != expected_word[7:0]
     };
     wire [2:0] mismatches = mismatch_count(mismatch);
     wire accepted = mem_valid && mem_ready;
@@ -166,7 +170,13 @@ module sdram32_bist #(
             expected_mem <= 8'd0;
             actual_mem <= 8'd0;
             expected_word_mem <= pattern_word(25'd0, 1'b0);
+            response_valid_mem <= 1'b0;
+            response_rdata_mem <= 32'd0;
         end else begin
+            response_valid_mem <= busy_mem && mem_rsp_valid;
+            if (busy_mem && mem_rsp_valid)
+                response_rdata_mem <= mem_rdata;
+
             start_sync_mem <= {start_sync_mem[1:0], start_toggle_cpu};
 
             if (!busy_mem && start_sync_mem[2] != start_seen_mem) begin
@@ -186,7 +196,7 @@ module sdram32_bist #(
                 actual_mem <= 8'd0;
                 expected_word_mem <= pattern_word(25'd0, 1'b0);
             end else if (busy_mem) begin
-                case ({accepted, mem_rsp_valid})
+                case ({accepted, response_valid_mem})
                     2'b10: outstanding_mem <= outstanding_mem + 6'd1;
                     2'b01: outstanding_mem <= outstanding_mem - 6'd1;
                     default: outstanding_mem <= outstanding_mem;
@@ -199,7 +209,7 @@ module sdram32_bist #(
                         issue_addr_mem <= issue_addr_mem + 25'd4;
                 end
 
-                if (mem_rsp_valid) begin
+                if (response_valid_mem) begin
                     if (retire_addr_mem == LAST_WORD) begin
                         expected_word_mem <= pattern_word(
                             25'd0,
@@ -217,19 +227,19 @@ module sdram32_bist #(
                             if (mismatch[3]) begin
                                 first_fail_mem <= retire_addr_mem;
                                 expected_mem <= expected_word[31:24];
-                                actual_mem <= mem_rdata[31:24];
+                                actual_mem <= response_rdata_mem[31:24];
                             end else if (mismatch[2]) begin
                                 first_fail_mem <= retire_addr_mem + 25'd1;
                                 expected_mem <= expected_word[23:16];
-                                actual_mem <= mem_rdata[23:16];
+                                actual_mem <= response_rdata_mem[23:16];
                             end else if (mismatch[1]) begin
                                 first_fail_mem <= retire_addr_mem + 25'd2;
                                 expected_mem <= expected_word[15:8];
-                                actual_mem <= mem_rdata[15:8];
+                                actual_mem <= response_rdata_mem[15:8];
                             end else begin
                                 first_fail_mem <= retire_addr_mem + 25'd3;
                                 expected_mem <= expected_word[7:0];
-                                actual_mem <= mem_rdata[7:0];
+                                actual_mem <= response_rdata_mem[7:0];
                             end
                         end
                         // Two read passes can report at most 2 * MEM_BYTES

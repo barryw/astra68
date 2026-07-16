@@ -93,6 +93,10 @@ module astra_host_boot #(
     reg       reset_writer;
     reg [7:0] packer_byte_data;
     reg       packer_byte_valid;
+    // ROM_MAX_BYTES fits in 19 bits. The registered terminal flag keeps a
+    // 32-bit count/size comparison out of the byte parser's control path.
+    reg [18:0] payload_bytes_remaining;
+    reg        payload_complete;
 
     reg [7:0] response [0:15];
     reg [4:0] response_length;
@@ -186,6 +190,8 @@ module astra_host_boot #(
             initial_sp <= 32'd0;
             initial_pc <= 32'd0;
             bytes_received <= 32'd0;
+            payload_bytes_remaining <= 19'd0;
+            payload_complete <= 1'b0;
             crc_state <= 32'hffffffff;
             reset_packer <= 1'b1;
             reset_writer <= 1'b1;
@@ -405,6 +411,8 @@ module astra_host_boot #(
                                 boot_busy <= 1'b1;
                                 payload_size <= begin_size;
                                 payload_crc32 <= begin_crc;
+                                payload_bytes_remaining <= begin_size[18:0];
+                                payload_complete <= 1'b0;
                                 queue_simple_response(STATUS_OK);
                             end
                         end else begin
@@ -423,7 +431,7 @@ module astra_host_boot #(
 
                 S_DATA: begin
                     if (rx_byte_valid) begin
-                        if (bytes_received >= payload_size) begin
+                        if (payload_complete) begin
                             boot_busy <= 1'b0;
                             boot_error <= 1'b1;
                             error_code <= STATUS_OVERFLOW;
@@ -438,6 +446,10 @@ module astra_host_boot #(
                                 initial_pc <= {initial_pc[23:0],
                                                rx_buffer_data};
                             bytes_received <= bytes_received + 1'b1;
+                            payload_bytes_remaining <=
+                                payload_bytes_remaining - 1'b1;
+                            if (payload_bytes_remaining == 19'd1)
+                                payload_complete <= 1'b1;
                             packer_byte_data <= rx_buffer_data;
                             packer_byte_valid <= 1'b1;
 
@@ -484,7 +496,7 @@ module astra_host_boot #(
                     if (writer_idle) begin
                         state <= S_IDLE;
                         boot_busy <= 1'b0;
-                        if (bytes_received != payload_size) begin
+                        if (!payload_complete) begin
                             boot_error <= 1'b1;
                             error_code <= STATUS_SIZE;
                             queue_simple_response(STATUS_SIZE);

@@ -10,6 +10,7 @@ register layouts, private kernel structures, or a particular hardware revision.
 
 getting-started
 resource-lifetime
+graphics
 fonts
 development
 ```

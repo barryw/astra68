@@ -33,6 +33,10 @@ if [[ "${CORETEST_SDRAM_BERR:-0}" == "1" ]]; then
     verilator_sdram_sources=(
         ecp5pll_sim.sv
         ../astraea_blitter.sv
+        ../astraea_pixel_port.sv
+        ../astraea_draw.sv
+        ../astraea_copper.sv
+        ../astraea_chip.sv
         ../sdram32_controller.sv
         ../sdram32_cpu_bridge.sv
         ../sdram32_bist.sv
@@ -55,7 +59,8 @@ if [[ "${CORETEST_REUSE_SIM:-0}" != "1" || ! -x obj_dir/Vtb_coretest ]]; then
         "${verilator_debug_args[@]}" \
         "${verilator_sdram_args[@]}" \
         tb_coretest.sv tb_sdram32_controller.sv ../astra_soc.sv ../astra_front_panel.sv \
-        ../tg68k_cache_store.sv \
+        ../tg68k_cache_store.sv ../vega_tile_builder.sv ../vega_sprite_builder.sv \
+        ../vega_video.sv \
         ../boot_memory_map.sv ../uart_tx.sv ../uart_rx.sv ../uart_rx_fifo.sv ../spi_sd.sv \
         ../astra_host_async_byte_fifo.sv ../astra_host_spi_slave.sv \
         ../astra_host_boot.sv "${verilator_sdram_sources[@]}" astra_cpu_core.v

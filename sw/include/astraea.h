@@ -1,5 +1,5 @@
 // Astraea — DMA / blitter / copper / arbiter register interface for Astra 68.
-// Mirror of docs/ASTRAEA.md (v0.1). Keep in sync with that spec.
+// Mirror of docs/ASTRAEA.md (v0.3). Keep in sync with that spec.
 //
 // 32-bit registers, 4-byte stride, big-endian (m68k). Supervisor-only MMIO.
 #ifndef ASTRA_ASTRAEA_H
@@ -25,11 +25,7 @@ typedef volatile struct {
     uint32_t IRQ_EN;         // 0x010
     uint32_t IRQ_STAT;       // 0x014
     uint32_t _r0[2];         // 0x018..0x01C
-    // arbiter
-    uint32_t ARB_CTRL;       // 0x020
-    uint32_t ARB_STATUS;     // 0x024
-    uint32_t ARB_PERF;       // 0x028
-    uint32_t _r1[5];         // 0x02C..0x03C
+    uint32_t _r1[8];         // 0x020..0x03C reserved in v0.3
     // blitter
     uint32_t BLIT_SRC;       // 0x040
     uint32_t BLIT_DST;       // 0x044
@@ -49,29 +45,61 @@ typedef volatile struct {
     uint32_t COP_START;      // 0x084
     uint32_t COP_STATUS;     // 0x088
     uint32_t COP_STROBE;     // 0x08C
-    uint32_t _r3[(0x4000 - 0x090) / 4];
+    uint32_t COP_IRQ_SRC;    // 0x090
+    uint32_t _r3[(0x0100 - 0x094) / 4];
+    // draw / glyph / bounded flood frontend
+    uint32_t DRAW_DST;          // 0x100
+    uint32_t DRAW_DST_PITCH;    // 0x104
+    uint32_t DRAW_FORMAT;       // 0x108
+    uint32_t DRAW_CLIP_MIN;     // 0x10C
+    uint32_t DRAW_CLIP_MAX;     // 0x110, exclusive
+    uint32_t DRAW_P0;           // 0x114
+    uint32_t DRAW_P1;           // 0x118
+    uint32_t DRAW_RADII;        // 0x11C
+    uint32_t DRAW_FG;           // 0x120
+    uint32_t DRAW_BG;           // 0x124
+    uint32_t DRAW_PATTERN_HI;   // 0x128
+    uint32_t DRAW_PATTERN_LO;   // 0x12C
+    uint32_t DRAW_ORIGIN;       // 0x130
+    uint32_t DRAW_SRC;          // 0x134
+    uint32_t DRAW_SRC_PITCH;    // 0x138
+    uint32_t DRAW_SRC_SIZE;     // 0x13C
+    uint32_t DRAW_PALETTE;      // 0x140
+    uint32_t DRAW_WORK;         // 0x144
+    uint32_t DRAW_WORK_ENTRIES; // 0x148
+    uint32_t DRAW_OP;           // 0x14C
+    uint32_t DRAW_CTRL;         // 0x150
+    uint32_t DRAW_STATUS;       // 0x154
+    uint32_t DRAW_FENCE;        // 0x158
+    uint32_t _r4[(0x4000 - 0x15C) / 4];
     CopInsn  COP[2048];      // 0x4000..0x7FFF
 } AstraeaRegs;
 
 #define ASTRAEA ((AstraeaRegs *)ASTRAEA_BASE)
 
 #define ASTRAEA_ID_MAGIC 0x41535452u   // "ASTR"
+#define ASTRAEA_VERSION_0_3 0x00030000u
+
+// ---- Capability bits (offset 0x018) ----
+#define ASTRAEA_CAP_COPY      (1u << 0)
+#define ASTRAEA_CAP_FILL      (1u << 1)
+#define ASTRAEA_CAP_COPY_KEY  (1u << 2)
+#define ASTRAEA_CAP_COPY_MASK (1u << 3)
+#define ASTRAEA_CAP_GEOMETRY  (1u << 4)
+#define ASTRAEA_CAP_GLYPH     (1u << 5)
+#define ASTRAEA_CAP_FLOOD     (1u << 6)
+#define ASTRAEA_CAP_COPPER    (1u << 7)
 
 // ---- IRQ bits (IRQ_EN / IRQ_STAT) ----
 #define ASTRAEA_IRQ_BLIT_DONE     (1u << 0)
 #define ASTRAEA_IRQ_COPPER        (1u << 1)
-#define ASTRAEA_IRQ_ARB_UNDERRUN  (1u << 2)
-
-// ---- ARB_STATUS ----
-#define ARB_VIDEO_UNDERRUN (1u << 0)
-#define ARB_AUDIO_UNDERRUN (1u << 1)
+#define ASTRAEA_IRQ_DRAW_DONE     (1u << 3)
 
 // ---- BLIT_OP ----
 #define BLIT_MODE_COPY      0u
 #define BLIT_MODE_FILL      1u
 #define BLIT_MODE_COPY_KEY  2u
 #define BLIT_MODE_COPY_MASK 3u
-#define BLIT_MODE_LINE      4u   // deferred
 #define BLIT_ELEM8   (0u << 4)
 #define BLIT_ELEM16  (1u << 4)
 #define BLIT_ELEM32  (2u << 4)
@@ -93,6 +121,54 @@ typedef volatile struct {
 #define COP_VBL_RESTART (1u << 1)
 #define COP_RUNNING     (1u << 16)   // COP_STATUS
 #define COP_WAITING     (1u << 17)   // COP_STATUS
+
+// ---- DRAW_FORMAT / DRAW_OP ----
+#define DRAW_FORMAT_INDEX8  0u
+#define DRAW_FORMAT_RGB565  1u
+
+#define DRAW_OP_LINE          0u
+#define DRAW_OP_RECT          1u
+#define DRAW_OP_RECT_FILL     2u
+#define DRAW_OP_CIRCLE        3u
+#define DRAW_OP_CIRCLE_FILL   4u
+#define DRAW_OP_ELLIPSE       5u
+#define DRAW_OP_ELLIPSE_FILL  6u
+#define DRAW_OP_PATTERN_FILL  7u
+#define DRAW_OP_GLYPH_MASK1   8u
+#define DRAW_OP_GLYPH_A4      9u
+#define DRAW_OP_GLYPH_INDEX4 10u
+#define DRAW_OP_GLYPH_INDEX8 11u
+#define DRAW_OP_FLOOD_FILL   12u
+#define DRAW_OP_OPAQUE_BACKGROUND (1u << 8)
+#define DRAW_OP_TRANSPARENT_INDEX(index) (((uint32_t)(index) & 0xffu) << 16)
+
+// ---- DRAW_CTRL / DRAW_STATUS ----
+#define DRAW_START   (1u << 0)
+#define DRAW_IRQ_EN  (1u << 1)
+#define DRAW_BUSY    (1u << 0)
+#define DRAW_DONE    (1u << 1)
+#define DRAW_ERROR   (0xffu << 8)
+#define DRAW_ERROR_CODE(stat) (((stat) >> 8) & 0xffu)
+#define DRAW_ERROR_INVALID_CONFIG 1u
+#define DRAW_ERROR_INTERNAL       2u
+#define DRAW_ERROR_WORK_OVERFLOW  3u
+#define DRAW_ERROR_ADDRESS_RANGE  4u
+
+#define DRAW_XY_(x, y) \
+    ((((uint32_t)(uint16_t)(y)) << 16) | (uint16_t)(x))
+#define DRAW_SIZE_(w, h) \
+    ((((uint32_t)(uint16_t)(h)) << 16) | (uint16_t)(w))
+#define DRAW_RADII_(rx, ry) DRAW_SIZE_((rx), (ry))
+
+// A glyph command with DRAW_WORK_ENTRIES != 0 reads this 16-byte array.
+// source_offset is added to DRAW_SRC; source/destination positions and size
+// use the same packed y:x and h:w representation as the MMIO registers.
+typedef struct AstraeaGlyphDescriptor {
+    uint32_t source_offset;
+    uint32_t source_position;
+    uint32_t destination_position;
+    uint32_t size;
+} AstraeaGlyphDescriptor;
 
 // ---- Copper opcodes (w0[31:29]) + operand helpers ----
 #define COP_OP_END   (0u << 29)

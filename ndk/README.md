@@ -48,10 +48,13 @@ make -C ndk example
 path-sensitive static analyzer and is intended for the Linux build hosts.
 
 Override `CROSS` or `CPU_FLAGS` for another compatible toolchain. Published
-components include managed front-panel access in `astra/front_panel.h` and the
-font/text-layout service contract in `astra/font.h`. The direct-MMIO backend
-reports the font service as unavailable until the operating-system service
-lands; the symbols and argument-validation behavior are linkable now.
+components include managed front-panel access in `astra/front_panel.h`, the
+font/text-layout service contract in `astra/font.h`, and the complete Vega and
+Astraea graphics contract in `astra/graphics.h`. Graphics applications work
+through owned surfaces, palettes, tile/sprite sets, raster programs, command
+lists, and fences rather than raw MMIO. The direct backend currently provides
+the contract and validation boundary; services which require the operating
+system return `ASTRA_ERR_UNAVAILABLE` until their resource manager lands.
 
 ## Documentation
 

@@ -13,13 +13,16 @@ HOST_CFLAGS := -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST \
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 
 LIB := build/m68k/libastra.a
-TARGET_OBJECTS := build/m68k/front_panel.o build/m68k/font.o
-HOST_TESTS := build/host/test_front_panel build/host/test_font
+TARGET_OBJECTS := build/m68k/front_panel.o build/m68k/font.o \
+	build/m68k/graphics.o
+HOST_TESTS := build/host/test_front_panel build/host/test_font \
+	build/host/test_graphics
 SANITIZER_TESTS := build/host/test_front_panel_sanitize \
-	build/host/test_font_sanitize
+	build/host/test_font_sanitize build/host/test_graphics_sanitize
 EXAMPLE_OBJECTS := build/m68k/front_panel_example.o \
-	build/m68k/font_layout_example.o
-ANALYZER_OBJECTS := build/analyzer/front_panel.o build/analyzer/font.o
+	build/m68k/font_layout_example.o build/m68k/graphics_frame_example.o
+ANALYZER_OBJECTS := build/analyzer/front_panel.o build/analyzer/font.o \
+	build/analyzer/graphics.o
 
 all: $(LIB)
 
@@ -39,9 +42,14 @@ build/host/test_font: src/font.c tests/test_font.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
 
+build/host/test_graphics: src/graphics.c tests/test_graphics.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
+
 test: $(HOST_TESTS)
 	./build/host/test_front_panel
 	./build/host/test_font
+	./build/host/test_graphics
 
 build/host/test_front_panel_sanitize: src/front_panel.c tests/test_front_panel.c
 	@mkdir -p $(@D)
@@ -51,9 +59,14 @@ build/host/test_font_sanitize: src/font.c tests/test_font.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
 
+build/host/test_graphics_sanitize: src/graphics.c tests/test_graphics.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
+
 sanitize: $(SANITIZER_TESTS)
 	./build/host/test_front_panel_sanitize
 	./build/host/test_font_sanitize
+	./build/host/test_graphics_sanitize
 
 check: test sanitize
 

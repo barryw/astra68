@@ -213,6 +213,16 @@ module tb_sdram32_controller;
     wire cpu_rsp_valid;
     wire [31:0] cpu_rdata;
 
+    reg video_lock = 1'b0;
+    reg video_valid = 1'b0;
+    wire video_ready;
+    reg video_write = 1'b0;
+    reg [24:0] video_addr = 25'd0;
+    reg [3:0] video_be = 4'd0;
+    reg [31:0] video_wdata = 32'd0;
+    wire video_rsp_valid;
+    wire [31:0] video_rdata;
+
     reg dma_lock = 1'b0;
     reg dma_valid = 1'b0;
     wire dma_ready;
@@ -229,6 +239,8 @@ module tb_sdram32_controller;
     wire sd_clk, sd_cke, sd_cs, sd_ras, sd_cas, sd_we;
     wire [1:0] sd_dqm, sd_ba;
     wire [12:0] sd_addr;
+    reg rmc_test_active = 1'b0;
+    reg [31:0] got;
 
     sdram32_controller dut (
         .clk(clk), .rst(rst),
@@ -237,6 +249,11 @@ module tb_sdram32_controller;
         .cpu_wdata(cpu_wdata), .cpu_lock(cpu_lock),
         .cpu_rsp_valid(cpu_rsp_valid),
         .cpu_rdata(cpu_rdata),
+        .video_lock(video_lock), .video_valid(video_valid),
+        .video_ready(video_ready), .video_write(video_write),
+        .video_addr(video_addr), .video_be(video_be),
+        .video_wdata(video_wdata), .video_rsp_valid(video_rsp_valid),
+        .video_rdata(video_rdata),
         .dma_lock(dma_lock), .dma_valid(dma_valid), .dma_ready(dma_ready),
         .dma_write(dma_write), .dma_addr(dma_addr), .dma_be(dma_be),
         .dma_wdata(dma_wdata), .dma_rsp_valid(dma_rsp_valid),
@@ -306,6 +323,160 @@ module tb_sdram32_controller;
         end
     endtask
 
+    task automatic test_realtime_priority;
+        begin
+            // With no current owner, video wins over DMA and ordinary CPU.
+            @(negedge clk);
+            cpu_addr = 25'h000a000;
+            cpu_be = 4'b1111;
+            cpu_wdata = 32'h11112222;
+            cpu_write = 1'b1;
+            cpu_valid = 1'b1;
+            dma_addr = 25'h000a004;
+            dma_be = 4'b1111;
+            dma_wdata = 32'h33334444;
+            dma_write = 1'b1;
+            dma_lock = 1'b1;
+            dma_valid = 1'b1;
+            video_addr = 25'h000a008;
+            video_be = 4'b1111;
+            video_wdata = 32'h55556666;
+            video_write = 1'b1;
+            video_lock = 1'b1;
+            video_valid = 1'b1;
+            @(posedge clk);
+            while (!video_ready) begin
+                if (dma_ready || cpu_ready)
+                    $fatal(1, "non-video client won initial priority");
+                @(posedge clk);
+            end
+            if (!video_ready || dma_ready || cpu_ready)
+                $fatal(1, "initial priority mismatch video=%b dma=%b cpu=%b",
+                       video_ready, dma_ready, cpu_ready);
+            @(negedge clk);
+            video_valid = 1'b0;
+            while (!video_rsp_valid) @(negedge clk);
+            video_lock = 1'b0;
+
+            // Once video drops ownership, DMA is next and CPU remains queued.
+            begin : wait_dma_grant
+                integer timeout;
+                timeout = 0;
+                @(posedge clk);
+                while (!dma_ready) begin
+                    if (cpu_ready)
+                        $fatal(1, "CPU bypassed queued DMA after video yield");
+                    timeout = timeout + 1;
+                    if (timeout > 100)
+                        $fatal(1, "DMA grant timeout after video yield");
+                    @(posedge clk);
+                end
+            end
+            @(negedge clk);
+            dma_valid = 1'b0;
+            while (!dma_rsp_valid) @(negedge clk);
+            dma_lock = 1'b0;
+
+            begin : wait_cpu_grant
+                integer timeout;
+                timeout = 0;
+                @(posedge clk);
+                while (!cpu_ready) begin
+                    timeout = timeout + 1;
+                    if (timeout > 100)
+                        $fatal(1, "CPU grant timeout after DMA yield");
+                    @(posedge clk);
+                end
+            end
+            @(negedge clk);
+            cpu_valid = 1'b0;
+            while (!cpu_rsp_valid) @(negedge clk);
+
+            cpu_read32(25'h000a000, got);
+            if (got != 32'h11112222)
+                $fatal(1, "priority CPU write mismatch %08x", got);
+            cpu_read32(25'h000a004, got);
+            if (got != 32'h33334444)
+                $fatal(1, "priority DMA write mismatch %08x", got);
+            cpu_read32(25'h000a008, got);
+            if (got != 32'h55556666)
+                $fatal(1, "priority video write mismatch %08x", got);
+
+            // A locked CPU sequence is indivisible even when video requests
+            // real-time service. Video runs immediately after the lock drops.
+            @(negedge clk);
+            cpu_lock = 1'b1;
+            rmc_test_active = 1'b1;
+            cpu_addr = 25'h000a010;
+            cpu_be = 4'b1111;
+            cpu_wdata = 32'h77778888;
+            cpu_write = 1'b1;
+            cpu_valid = 1'b1;
+            video_addr = 25'h000a018;
+            video_wdata = 32'hbbbbcccc;
+            video_lock = 1'b1;
+            video_valid = 1'b1;
+            @(posedge clk);
+            while (!cpu_ready) begin
+                if (video_ready)
+                    $fatal(1, "video bypassed locked CPU head");
+                @(posedge clk);
+            end
+            if (!cpu_ready || video_ready)
+                $fatal(1, "locked CPU priority mismatch cpu=%b video=%b",
+                       cpu_ready, video_ready);
+            @(negedge clk);
+            cpu_valid = 1'b0;
+            while (!cpu_rsp_valid) @(negedge clk);
+
+            cpu_addr = 25'h000a014;
+            cpu_wdata = 32'h9999aaaa;
+            cpu_valid = 1'b1;
+            begin : wait_locked_tail
+                integer timeout;
+                timeout = 0;
+                @(posedge clk);
+                while (!cpu_ready) begin
+                    timeout = timeout + 1;
+                    if (timeout > 100)
+                        $fatal(1, "locked CPU tail grant timeout");
+                    @(posedge clk);
+                end
+            end
+            @(negedge clk);
+            cpu_valid = 1'b0;
+            while (!cpu_rsp_valid) @(negedge clk);
+            cpu_lock = 1'b0;
+            rmc_test_active = 1'b0;
+
+            begin : wait_video_after_lock
+                integer timeout;
+                timeout = 0;
+                @(posedge clk);
+                while (!video_ready) begin
+                    timeout = timeout + 1;
+                    if (timeout > 100)
+                        $fatal(1, "video grant timeout after CPU unlock");
+                    @(posedge clk);
+                end
+            end
+            @(negedge clk);
+            video_valid = 1'b0;
+            while (!video_rsp_valid) @(negedge clk);
+            video_lock = 1'b0;
+
+            cpu_read32(25'h000a010, got);
+            if (got != 32'h77778888)
+                $fatal(1, "locked CPU head mismatch %08x", got);
+            cpu_read32(25'h000a014, got);
+            if (got != 32'h9999aaaa)
+                $fatal(1, "locked CPU tail mismatch %08x", got);
+            cpu_read32(25'h000a018, got);
+            if (got != 32'hbbbbcccc)
+                $fatal(1, "post-lock video mismatch %08x", got);
+        end
+    endtask
+
     function automatic [31:0] burst_pattern(input integer index);
         burst_pattern = 32'h13579bdf ^ (index * 32'h01020408);
     endfunction
@@ -332,13 +503,17 @@ module tb_sdram32_controller;
     integer burst_retired = 0;
     integer burst_cycles = 0;
     integer burst_errors = 0;
-    reg rmc_test_active = 1'b0;
 
     always @(posedge clk) begin
         if (dut.owner == 2'd2 && (cpu_ready || cpu_rsp_valid))
             $fatal(1, "CPU transaction leaked into an owned DMA burst");
+        if (dut.owner == 2'd3 &&
+            (cpu_ready || cpu_rsp_valid || dma_ready || dma_rsp_valid))
+            $fatal(1, "non-video transaction leaked into video ownership");
         if (rmc_test_active && dma_ready)
             $fatal(1, "DMA transaction leaked into a locked CPU sequence");
+        if (rmc_test_active && video_ready)
+            $fatal(1, "video transaction leaked into a locked CPU sequence");
         if (burst_active) begin
             burst_cycles <= burst_cycles + 1;
             if (dma_valid && dma_ready) begin
@@ -392,7 +567,6 @@ module tb_sdram32_controller;
     integer contention_cycles;
     real write_mbps;
     real read_mbps;
-    reg [31:0] got;
     reg [31:0] expected;
     integer mask_index;
 
@@ -434,6 +608,8 @@ module tb_sdram32_controller;
         cpu_read32(25'h1fffffc, got);
         if (got[15:0] != 16'hc3d4)
             $fatal(1, "top address mismatch: %08x", got);
+
+        test_realtime_priority();
 
         run_burst(1'b1, write_cycles);
         if (burst_errors != 0) $fatal(1, "write burst errors=%0d", burst_errors);

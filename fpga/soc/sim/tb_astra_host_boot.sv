@@ -215,7 +215,39 @@ module tb_astra_host_boot;
         if (!boot_error || error_code != 8'h05)
             $fatal(1, "CRC failure was not latched");
 
-        $display("PASS AstraHost validation, boot stream, SDRAM writes, vectors, and CRC");
+        send_byte(8'h13);
+        expect_status(8'h00);
+        send_byte(8'h10);
+        send_be32(8);
+        send_be32(32'd0);
+        send_be32(32'h01e00000);
+        expect_status(8'h00);
+        send_byte(8'h11);
+        send_byte(7);
+        for (index = 0; index < 7; index = index + 1)
+            send_byte(payload[index]);
+        expect_status(8'h00);
+        send_byte(8'h12);
+        expect_status(8'h06);
+        if (!boot_error || error_code != 8'h06 || bytes_received != 7)
+            $fatal(1, "short payload failure was not latched");
+
+        send_byte(8'h13);
+        expect_status(8'h00);
+        send_byte(8'h10);
+        send_be32(8);
+        send_be32(32'd0);
+        send_be32(32'h01e00000);
+        expect_status(8'h00);
+        send_byte(8'h11);
+        send_byte(9);
+        for (index = 0; index < 9; index = index + 1)
+            send_byte(payload[index]);
+        expect_status(8'h04);
+        if (!boot_error || error_code != 8'h04 || bytes_received != 8)
+            $fatal(1, "payload overflow failure was not latched");
+
+        $display("PASS AstraHost validation, boot stream, bounds, SDRAM writes, vectors, and CRC");
         $finish;
     end
 endmodule

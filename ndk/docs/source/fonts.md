@@ -51,6 +51,6 @@ positions are always UTF-8 byte offsets at valid scalar or grapheme boundaries,
 which keeps editing APIs stable without exposing internal glyph runs. Layouts
 support measurement, point hit testing, and caret lookup.
 
-Text rasterization will enter Astraea through the common graphics draw-list and
-fence model. The font API intentionally does not publish a direct rendering
-queue while that shared graphics contract is still being defined.
+Text rasterization enters Astraea through {c:func}`astra_draw_text_layout` on
+the common graphics draw-list and fence model. The font API intentionally does
+not publish glyph-atlas addresses or a direct hardware queue.

@@ -71,23 +71,28 @@ including all 15 nonzero byte-enable masks. The pin-level SDRAM model presents
 CAS-2 data on the second SDRAM edge and therefore enforces the same setting in
 simulation.
 
-Astra owns the request arbiter. Initial clients are:
+Astra owns the request arbiter. Implemented clients are:
 
 1. CPU/PMMU single transactions through a toggle-based CDC bridge.
 2. The destructive POST engine, which takes an exclusive maintenance grant
    while the ROM and stack remain in block RAM.
+3. Vega framebuffer, tile, and sprite scanline builders through the real-time
+   video port.
+4. Astraea blitter/draw engines through the opportunistic DMA port.
 
-Future chip ports use the same request contract. DMA grants are chunked; an
-engine must release its lock at the configured maximum burst boundary. Refresh
-is internal to the physical controller and always takes precedence. A CPU
-`RMC` lock has priority over a new DMA grant, retains CPU ownership between the
-locked read and write, and prevents DMA traffic from interleaving until the CPU
-releases the lock.
+An active CPU `RMC` lock has first priority, followed by Vega video, DMA, and
+ordinary CPU traffic. Video's three internal clients rotate after bounded
+32-word bursts and hold ownership only until their accepted responses retire.
+DMA grants are also chunked; an engine must release its lock at its configured
+maximum burst boundary. Refresh is internal to the physical controller and
+always takes precedence. A CPU `RMC` lock retains CPU ownership between the
+locked read and write and prevents DMA traffic from interleaving until the CPU
+releases it.
 
 The first non-POST DMA client is the Astraea blitter. It performs aligned
 COPY/FILL work in 16-word chunks and falls back to masked byte transactions for
-unaligned rectangles. Controller-level simulation sustains 51.65 MB/s copy
-(one read plus one write per payload byte) and 119.25 MB/s fill. Astraea and the
+unaligned rectangles. Controller-level simulation sustains 51.44 MB/s copy
+(one read plus one write per payload byte) and 119.81 MB/s fill. Astraea and the
 destructive POST engine share a registered DMA owner; POST has priority when
 both request ownership.
 
@@ -129,11 +134,17 @@ snooping before sharing memory with cached CPU traffic.
 
 ## Measured simulation baseline
 
-At 75 MHz, the corrected pin-level controller test sustains 145.06 MB/s writes
-and 143.52 MB/s reads while refresh is active. The integrated complementary
+At 75 MHz, the current pin-level controller test sustains 145.30 MB/s writes
+and 143.64 MB/s reads while refresh is active. The integrated complementary
 POST path sustains 144.46 MB/s, projecting 0.929 seconds for four complete
 sweeps of 32 MiB. Run `sw/boot/run_sdram_sim.sh` to rebuild the TG030 ROM and
 core netlist and execute this complete pin-level gate.
+
+The full graphics gate pipelines framebuffer requests and overlaps tile/sprite
+BRAM work. With both tile layers and unrelated-row sprites active, INDEX8 plus
+1024 admitted sprite pixels completes its worst scanline in 2274 memory clocks;
+RGB565 plus the hardware-limited 512 pixels completes in 2022. The 720x480 line
+deadline is 2383 clocks. `sw/graphics_demo/run_sim.sh all` locks these cases.
 
 ## Hardware acceptance
 

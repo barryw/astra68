@@ -31,6 +31,7 @@ nitpick_ignore = [
     ("c:identifier", "uint8_t"),
     ("c:identifier", "uint16_t"),
     ("c:identifier", "uint32_t"),
+    ("c:identifier", "uint64_t"),
     ("c:identifier", "int32_t"),
 ]
 

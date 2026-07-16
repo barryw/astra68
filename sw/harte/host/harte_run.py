@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timezone
 import hashlib
+from itertools import islice
 import json
 import os
 from pathlib import Path
@@ -297,10 +299,30 @@ class HardwareHarteTarget:
             return None, str(exc)
 
 
+def execute_parallel(records, target, retries: int, timeout: float,
+                     pace_seconds: float, jobs: int):
+    """Execute bounded RTL batches while preserving corpus result order."""
+    batch_size = jobs * 4
+    with ThreadPoolExecutor(max_workers=jobs) as executor:
+        while True:
+            batch = list(islice(records, batch_size))
+            if not batch:
+                return
+            futures = [
+                executor.submit(
+                    target.execute, case, retries, timeout, pace_seconds
+                )
+                for _admitted_index, _path, case in batch
+            ]
+            for record, future in zip(batch, futures):
+                actual, transport_error = future.result()
+                yield (*record, actual, transport_error)
+
+
 def run(paths: list[str], target, scope: dict, corpus: dict, start: int,
         limit: int | None, retries: int, timeout: float, pace_seconds: float,
         max_consecutive_timeouts: int, checkpoint_every: int,
-        report_path: Path) -> int:
+        report_path: Path, jobs: int = 1) -> int:
     target_manifest = target.manifest()
     implementation = target_manifest.get("implementation", "unknown")
     print(f"target={implementation} corpus={corpus['sha256'][:12]}")
@@ -354,6 +376,7 @@ def run(paths: list[str], target, scope: dict, corpus: dict, start: int,
                 "pace_seconds": pace_seconds,
                 "max_consecutive_timeouts": max_consecutive_timeouts,
                 "checkpoint_every": checkpoint_every,
+                "jobs": jobs,
                 "next_admitted_index": next_index,
                 "attempted": attempted,
                 "passed": passed,
@@ -373,15 +396,25 @@ def run(paths: list[str], target, scope: dict, corpus: dict, start: int,
             report["device"] = target_manifest["device"]
         write_report(report_path, report)
 
-    for admitted_index, path, case in iter_admitted(paths):
-        if admitted_index < start:
-            continue
-        if limit is not None and attempted >= limit:
-            break
-
-        actual, transport_error = target.execute(
-            case, retries, timeout, pace_seconds
+    records = (
+        record for record in iter_admitted(paths) if record[0] >= start
+    )
+    if limit is not None:
+        records = islice(records, limit)
+    if jobs == 1:
+        executed = (
+            (
+                *record,
+                *target.execute(record[2], retries, timeout, pace_seconds),
+            )
+            for record in records
         )
+    else:
+        executed = execute_parallel(
+            records, target, retries, timeout, pace_seconds, jobs
+        )
+
+    for admitted_index, path, case, actual, transport_error in executed:
         attempted += 1
         next_index = admitted_index + 1
 
@@ -444,6 +477,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--simulator", type=Path, help="RTL simulator executable")
     parser.add_argument("--start", type=int, default=0, help="first admitted corpus index")
     parser.add_argument("--limit", type=int, help="maximum cases to execute after --start")
+    parser.add_argument(
+        "--jobs", type=int, default=1,
+        help="parallel jobs for the stateless RTL target (default: 1)",
+    )
     parser.add_argument("--port", default=find_port())
     parser.add_argument("--baud", type=int, default=DEFAULT_BAUD)
     parser.add_argument("--timeout", type=float, default=0.5)
@@ -461,6 +498,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--start must be non-negative")
     if args.limit is not None and args.limit <= 0:
         parser.error("--limit must be positive")
+    if args.jobs <= 0:
+        parser.error("--jobs must be positive")
     if args.max_consecutive_timeouts <= 0:
         parser.error("--max-consecutive-timeouts must be positive")
     shared_target_id = (
@@ -472,6 +511,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--worker requires a Musashi target")
     if args.simulator and shared_target_id != "rtl-tg68k030-mmu2":
         parser.error("--simulator requires the TG68K RTL target")
+    if args.jobs != 1 and shared_target_id != "rtl-tg68k030-mmu2":
+        parser.error("--jobs greater than 1 requires the TG68K RTL target")
 
     paths = sorted(str(Path(path)) for path in args.vectors)
     scope = scan_scope(paths)
@@ -495,7 +536,7 @@ def main(argv: list[str] | None = None) -> int:
                     paths, target, scope, corpus, args.start, args.limit,
                     args.retries, args.timeout, args.pace_ms / 1000.0,
                     args.max_consecutive_timeouts, args.checkpoint_every,
-                    args.report,
+                    args.report, args.jobs,
                 )
 
         try:

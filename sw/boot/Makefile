@@ -33,9 +33,18 @@ SOC_ID_SRCS = ../../fpga/soc/astra_soc.sv ../../fpga/soc/astra_soc.lpf \
               ../../fpga/soc/tg68k_cache_store.sv \
               ../../fpga/soc/sdram32_bist.sv ../../fpga/soc/sdram32_controller.sv \
               ../../fpga/soc/astraea_blitter.sv \
+              ../../fpga/soc/astraea_pixel_port.sv \
+              ../../fpga/soc/astraea_draw.sv \
+              ../../fpga/soc/astraea_copper.sv ../../fpga/soc/astraea_chip.sv \
+              ../../fpga/soc/vega_tile_builder.sv ../../fpga/soc/vega_sprite_builder.sv \
+              ../../fpga/soc/vega_video.sv \
               ../../fpga/soc/thirdparty/core_sdram_axi4/sdram_axi_core.v \
               ../../fpga/soc/post_console.sv \
               ../../fpga/soc/post_fonts.hex ../../fpga/soc/oss_flow/mkbit.sh \
+              ../../fpga/soc/oss_flow/astra_clocks.sdc \
+              ../../fpga/soc/oss_flow/place_hdmi_serializer.py \
+              ../../fpga/soc/oss_flow/check_resource_budget.py \
+              ../../fpga/soc/oss_flow/resource_budgets.json \
               $(sort $(wildcard ../../fpga/soc/hdmi/*.sv))
 
 CPU_ID_SRCS = $(sort $(wildcard ../../fpga/cpu/tg68k_c_030_mmu2/*.vhd)) \

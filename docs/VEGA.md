@@ -1,4 +1,4 @@
-# Vega — Video Chip Register Map (v0.1)
+# Vega — Video Chip Register Map (v0.3)
 
 Vega is the Astra 68 display chip (Denise analog): framebuffer scanout, **2
 scrolling tilemap layers**, 32 hardware sprites, palette, backdrop, and the
@@ -17,7 +17,7 @@ Per output pixel, Vega composites bottom → top:
 1. BACKDROP        single color, copper-animatable per scanline (gradients)
 2. BG tile layers  TILE[*] with CTRL.ABOVE=0   (TILE1 under TILE0)
 3. BEHIND sprites  sprites with CTRL.BEHIND=1, by priority
-4. FRAMEBUFFER     chunky RGB565; opaque unless FB_COLORKEY_EN and px==colorkey
+4. FRAMEBUFFER     chunky RGB565 or INDEX8; optional color-key transparency
 5. FRONT sprites   sprites with CTRL.BEHIND=0, by priority (then index)
 6. FG tile layers  TILE[*] with CTRL.ABOVE=1   (foreground overlays)
 ```
@@ -31,16 +31,19 @@ per-scanline SDRAM budget (§12) under control by only enabling what's on screen
 - **Tile layers:** each is a scrolling tilemap (§7). `ABOVE=0` = background (below
   sprites/FB — parallax); `ABOVE=1` = foreground overlay (above sprites — e.g.
   grass the player walks behind). Within a group, TILE0 is nearer the top.
-- **Framebuffer:** chunky RGB565, opaque unless `FB_COLORKEY_EN` and the pixel
-  equals `FB_COLORKEY` (then transparent → lower layers show).
+- **Framebuffer:** chunky RGB565 or INDEX8, opaque unless `FB_COLORKEY_EN` and
+  the pixel equals `FB_COLORKEY` (then transparent → lower layers show).
 - **Sprites:** 4bpp indexed; `BEHIND` composites a sprite below the framebuffer.
   Order among sprites by `PRIORITY`, ties by index.
 - Tile & sprite pixels are transparent where their pattern index equals the
   layer's transparent index. Color = `PAL[bank*16 + index]`.
 
-Tiles and sprites are fetched into **per-scanline line buffers** one line ahead
-(never per-pixel SDRAM lookups). Sprite pixels/line are capped by `SPR_BUDGET`;
-overflow drops sprites on that line and sets `STATUS.SPR_OVERFLOW`.
+Tiles and sprites are fetched into **double-buffered per-scanline line buffers**
+one line ahead (never per-pixel SDRAM lookups). Framebuffer, tile, and sprite
+clients pipeline requests into the SDRAM controller's two-entry FIFO, drain
+responses, and yield at bounded 32-word boundaries. Sprite pixels/line are
+admitted in descending priority and then ascending descriptor index. A sprite
+is accepted in full or dropped in full; overflow sets `STATUS.SPR_OVERFLOW`.
 
 ---
 
@@ -48,8 +51,10 @@ overflow drops sprites on that line and sets `STATUS.SPR_OVERFLOW`.
 
 - **Base:** `VEGA_BASE = 0xFFF20000` (provisional chipset MMIO map below).
 - **Registers are 32-bit, 4-byte stride, big-endian.** Access with `move.l`.
-  Narrow values sit in the low bits; unused bits read 0. No 16-bit HI/LO address
-  splits — a full base is one atomic `move.l`, no mid-write tearing.
+  Narrow values sit in the low bits and reserved fields must be written zero.
+  Configuration registers retain malformed reserved/address bits for diagnostic
+  readback and assert `STATUS.CONFIG_ERROR`; they are never silently truncated
+  into an SDRAM request. No 16-bit HI/LO address splits are used.
 - **Access:** RO, RW, RW1C (write-1-to-clear). MMIO is **supervisor-only**.
 
 ```
@@ -75,7 +80,7 @@ Chipset map (provisional):
 | Offset | Name | Acc | Reset | Description |
 |---|---|---|---|---|
 | 0x0000 | `VEGA_ID` | RO | `0x56454741` | "VEGA" |
-| 0x0004 | `VEGA_VERSION` | RO | `0x00010000` | [31:16] major, [15:0] minor |
+| 0x0004 | `VEGA_VERSION` | RO | `0x00030000` | [31:16] major, [15:0] minor |
 | 0x0008 | `VEGA_CTRL` | RW | 0 | see below |
 | 0x000C | `VEGA_STATUS` | RO | — | see below |
 | 0x0010 | `VEGA_IRQ_EN` | RW | 0 | IRQ enable mask |
@@ -86,13 +91,22 @@ Chipset map (provisional):
 **`VEGA_CTRL`** `[0]DISPLAY_EN [1]FB_EN [2]SPR_EN [3]FB_COLORKEY_EN
 [4]BACKDROP_EN` (tile layers enable per-layer in `TILE_CTRL`).
 
-**`VEGA_STATUS`** `[0]VBLANK [1]HBLANK [2]FLIP_PENDING [3]SPR_OVERFLOW`.
+**`VEGA_STATUS`** `[0]VBLANK [1]HBLANK [2]FLIP_PENDING [3]SPR_OVERFLOW
+[4]DISPLAY_READY [5]UNDERRUN [6]CONFIG_ERROR [7]FETCH_BUSY`.
+
+- `DISPLAY_READY` is the synchronized display/HDMI-ready input.
+- `UNDERRUN` is sticky and means a requested scanline was not ready when the
+  compositor needed it. Write one to status bit 5 to clear it.
+- `CONFIG_ERROR` is asserted when an enabled framebuffer, tile layer, or sprite
+  descriptor is malformed. The invalid source is skipped rather than allowing
+  a wrapped SDRAM request.
+- `FETCH_BUSY` covers framebuffer, tile, and sprite scanline construction.
 
 **`VEGA_IRQ_EN`/`STAT`** `[0]VBLANK [1]RASTER [2]COLLISION`.
 
-**`VEGA_CAPS`** `[0]POST_TEXT`. Early bring-up images may expose only this
-bootstrap capability; software must not assume the framebuffer, tiles, or
-sprites exist until their capability bits are implemented and reported.
+**`VEGA_CAPS`** `[0]POST_TEXT [1]FRAMEBUFFER [2]PALETTE [3]TILEMAP
+[4]SPRITE [5]INDEX8`. Software must test capability bits rather than infer
+features from a version number.
 
 **`VEGA_MODE`** `0=720x480@60 (primary) 1=640x480 2=320x240 3=320x200
 4=400x300 5=640x400`.
@@ -138,11 +152,15 @@ Vega does not parse fonts or render glyphs. See `docs/FONTS.md`.
 |---|---|---|---|---|
 | 0x0040 | `VEGA_FB_BASE` | RW | 0 | [24:0] SDRAM byte address (latched at vblank) |
 | 0x0044 | `VEGA_FB_PITCH` | RW | 1440 | [15:0] bytes per scanline |
-| 0x0048 | `VEGA_FB_FORMAT` | RW | 0 | [2:0] format (0 = RGB565) |
-| 0x004C | `VEGA_FB_COLORKEY` | RW | 0 | [15:0] RGB565 transparent value (when `FB_COLORKEY_EN`) |
+| 0x0048 | `VEGA_FB_FORMAT` | RW | 0 | [2:0] format: 0 RGB565, 1 INDEX8 |
+| 0x004C | `VEGA_FB_COLORKEY` | RW | 0 | RGB565 [15:0] or INDEX8 [7:0] transparent value |
 
 **Page flip:** `FB_BASE` writes stage and latch at the next vblank (tear-free);
 `STATUS.FLIP_PENDING` high until latched; `VBLANK` IRQ signals done.
+
+Framebuffer base and pitch must be 32-bit aligned. Pitch must be at least
+`width*2` for RGB565 or `width` for INDEX8. Unsupported formats and malformed
+addresses set `STATUS.CONFIG_ERROR` and suppress framebuffer requests.
 
 ---
 
@@ -165,9 +183,10 @@ Two scrolling tile layers, `TILE[0]` @ `0x0080`, `TILE[1]` @ `0x00A0`, 32 bytes
 [0]      ENABLE
 [1]      TRANSP_EN   0 = opaque fill; 1 = index==TRANSP_IDX is transparent
 [2]      TILE16      0 = 8x8 tiles, 1 = 16x16
-[3]      WRAP        1 = torus wrap (infinite scroll); 0 = blank outside map
+[3]      WRAP_X      1 = wrap horizontally; 0 = blank outside map width
 [4]      ABOVE       0 = background (below sprites/FB); 1 = foreground (above)
-[7:5]    reserved
+[5]      WRAP_Y      1 = wrap vertically; 0 = blank outside map height
+[7:6]    reserved
 [19:16]  TRANSP_IDX  transparent 4bpp index when TRANSP_EN
 [31:20]  reserved
 ```
@@ -194,9 +213,9 @@ offsets give parallax bands / wobble effects without CPU.
 
 ## 8. Palette (0x0400)
 
-256 entries, `VEGA_PAL[i]` at `0x0400 + i*4`, `0x00RRGGBB` (RGB888 → output
-format). Used by tiles, sprites, backdrop — not the direct-color RGB565
-framebuffer. Color = `PAL[bank*16 + index]`. Copper-writable mid-frame.
+256 entries, `VEGA_PAL[i]` at `0x0400 + i*4`, `0x00RRGGBB`. Used by tiles,
+sprites, and INDEX8 framebuffer scanout; RGB565 framebuffer pixels bypass it.
+Tile/sprite color = `PAL[bank*16 + index]`. Copper-writable mid-frame.
 
 ---
 
@@ -205,8 +224,16 @@ framebuffer. Color = `PAL[bank*16 + index]`. Copper-writable mid-frame.
 | Offset | Name | Acc | Reset | Description |
 |---|---|---|---|---|
 | 0x0800 | `VEGA_SPR_CTRL` | RW | 0 | [0] global sprite enable |
-| 0x0804 | `VEGA_SPR_BUDGET` | RW | 1024 | [15:0] max sprite pixels fetched/scanline |
+| 0x0804 | `VEGA_SPR_BUDGET` | RW | 1024 | [15:0] requested sprite pixels/scanline |
 | 0x0808 | `VEGA_SPR_COLLISION` | RO | 0 | [31:0] per-sprite collision bitmap |
+
+The effective admission budget is `min(SPR_BUDGET, format limit)`. The
+hardware-enforced limits are 1024 pixels/line for INDEX8 or framebuffer-disabled
+composition and 512 pixels/line while an RGB565 framebuffer is active. Readback
+returns the requested value. If active sprites exceed the effective budget,
+lower-priority sprites are omitted for that line and `STATUS.SPR_OVERFLOW` is
+asserted. This is a deterministic bandwidth limit, not a descriptor-count
+limit: all 32 descriptors may be visible when their clipped widths fit.
 
 ---
 
@@ -241,13 +268,27 @@ framebuffer. Color = `PAL[bank*16 + index]`. Copper-writable mid-frame.
 
 ## 12. Bandwidth note
 
-Each **active** layer fetches per scanline from the one 16-bit SDRAM (~150 MB/s,
-≈4 KB per active scanline). Rough per-scanline cost at 720 wide:
-- framebuffer ≈ 1440 B · one 8×8 tile layer ≈ 400–550 B · sprites ≤ `SPR_BUDGET`.
+Each **active** layer fetches per scanline from the one 16-bit SDRAM (150 MB/s
+raw at 75 MHz). A 720x480 output line provides 2383 SDRAM clocks at the locked
+75 MHz memory and 27 MHz pixel clocks. Rough per-scanline payload at 720 wide:
+- RGB565 framebuffer = 1440 B; INDEX8 framebuffer = 720 B.
+- One 8×8 tile layer is approximately 400–550 B with map/pattern reuse.
+- Sprites are bounded by `SPR_BUDGET` source pixels per line.
 
-FB + 2 tile layers + full sprite budget ≈ near the ceiling — so enable only the
-layers a scene uses (console-style: tiles+sprites, no FB). The arbiter keeps
-video/audio deterministic; the blitter/CPU stall first.
+The full CPU/pin-level-SDRAM/HDMI regression measures the following simultaneous
+worst-case workloads. Its 32 sprites use unrelated SDRAM rows to prevent cache
+locality from hiding command overhead.
+
+| Composition | Effective sprite pixels | Accepted 32px sprites | Worst line | Margin |
+|---|---:|---:|---:|---:|
+| INDEX8 FB + both tile layers | 1024 | 32 | 2274 clocks | 109 clocks |
+| RGB565 FB + both tile layers | 512 | 16 | 2022 clocks | 361 clocks |
+
+Normal diagnostic composition completes in 1346 clocks. The testbench rejects
+any line at or beyond the 2383-clock deadline. Video has priority; draw,
+blitter, and CPU clients stall before scanout is allowed to miss its
+reservation. `STATUS.UNDERRUN` remains a sticky fault indicator, while
+`STATUS.SPR_OVERFLOW` reports deterministic sprite admission pressure.
 
 ---
 
@@ -279,17 +320,14 @@ Foreground overlay layer: set `TILE_ABOVE` in its `CTRL`.
 
 ---
 
-## 14. Decisions & open questions
+## 14. Baseline and extension points
 
 **Decided:** 32-bit regs (atomic) · FB color-key→backdrop (copper gradients) ·
 sprite `BEHIND` + tile `ABOVE` (layer ordering without a full priority sort) ·
 16-bit tilemap entries, 8×8|16×16 tiles, pow2 wrap, pixel scroll · 2 tile layers.
 
-**Open:**
-1. Per-tile priority bit (map entry [13]) — promote a tile above sprites without a
-   whole foreground layer? (reserved for now)
-2. Per-scanline **row-scroll table** (reserved `TILE` longs) — HW line-scroll for
-   water/heat-haze without copper? v0.1 skip?
-3. Affine/rotation on a tile layer (Mode-7 style) — later.
-4. Sprite hardware scaling — later.
-5. Collision: per-sprite bitmap (chosen) vs pair matrix.
+The v0.3 baseline implements framebuffer scanout, palette, two tile layers, 32
+sprites, page flipping, collision bitmap, raster state, and copper writes.
+Reserved extension points are per-tile priority (entry bit 13), row-scroll
+tables, affine tile transforms, and sprite scaling. They are not part of the
+v0.3 contract and software must not rely on them.

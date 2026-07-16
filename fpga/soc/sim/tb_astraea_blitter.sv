@@ -55,6 +55,9 @@ module tb_astraea_blitter;
         .cpu_write(cpu_mem_write), .cpu_addr(cpu_mem_addr),
         .cpu_be(cpu_mem_be), .cpu_wdata(cpu_mem_wdata), .cpu_lock(1'b0),
         .cpu_rsp_valid(cpu_mem_rsp_valid), .cpu_rdata(cpu_mem_rdata),
+        .video_lock(1'b0), .video_valid(1'b0), .video_ready(),
+        .video_write(1'b0), .video_addr(25'd0), .video_be(4'd0),
+        .video_wdata(32'd0), .video_rsp_valid(), .video_rdata(),
         .dma_lock(dma_lock), .dma_valid(dma_valid), .dma_ready(dma_ready),
         .dma_write(dma_write), .dma_addr(dma_addr), .dma_be(dma_be),
         .dma_wdata(dma_wdata), .dma_rsp_valid(dma_rsp_valid),
@@ -160,6 +163,54 @@ module tb_astraea_blitter;
         end
     endtask
 
+    task automatic write_element(
+        input [24:0] address,
+        input integer elem_size,
+        input [31:0] value
+    );
+        integer byte_index;
+        integer byte_count;
+        reg [7:0] element_byte;
+        begin
+            byte_count = 1 << elem_size;
+            for (byte_index = 0; byte_index < byte_count;
+                 byte_index = byte_index + 1) begin
+                case (elem_size)
+                    0: element_byte = value[7:0];
+                    1: element_byte = byte_index == 0 ?
+                                      value[15:8] : value[7:0];
+                    default: element_byte =
+                        value[31 - byte_index * 8 -: 8];
+                endcase
+                write_byte(address + byte_index, element_byte);
+            end
+        end
+    endtask
+
+    task automatic read_element(
+        input [24:0] address,
+        input integer elem_size,
+        output [31:0] value
+    );
+        integer byte_index;
+        integer byte_count;
+        reg [7:0] element_byte;
+        begin
+            value = 32'd0;
+            byte_count = 1 << elem_size;
+            for (byte_index = 0; byte_index < byte_count;
+                 byte_index = byte_index + 1) begin
+                read_byte(address + byte_index, element_byte);
+                case (elem_size)
+                    0: value[7:0] = element_byte;
+                    1: if (byte_index == 0) value[15:8] = element_byte;
+                       else value[7:0] = element_byte;
+                    default: value[31 - byte_index * 8 -: 8] = element_byte;
+                endcase
+            end
+        end
+    endtask
+
     task automatic start_blit(
         input [24:0] src,
         input [24:0] dst,
@@ -197,12 +248,37 @@ module tb_astraea_blitter;
         end
     endtask
 
+    task automatic expect_invalid(input [255:0] label);
+        begin
+            reg_write(5'h1a, 32'd1);
+            @(negedge cpu_clk);
+            cpu_reg = 5'h1b;
+            wait (!blit_rdata[1]);
+            wait (blit_rdata[1]);
+            if (blit_rdata[15:8] !== 8'd1 || blit_busy || dma_lock)
+                $fatal(1, "%0s status mismatch %08x", label, blit_rdata);
+        end
+    endtask
+
     integer i;
     integer elapsed_copy;
     integer elapsed_fill;
     integer elapsed_misc;
+    integer elem_size;
+    integer elem_bytes;
+    integer row;
+    integer column;
     reg [31:0] word;
+    reg [31:0] source_value;
+    reg [31:0] expected_value;
+    reg [31:0] key_value;
+    reg [31:0] preserved_value;
     reg [7:0] byte_value;
+    reg [7:0] mask_pattern;
+    reg mask_selected;
+    reg [24:0] test_src;
+    reg [24:0] test_dst;
+    reg [24:0] test_mask;
     real copy_mbps;
     real fill_mbps;
 
@@ -288,15 +364,162 @@ module tb_astraea_blitter;
             end
         end
 
+        // Color-key copy compares complete elements even when source and
+        // destination are unaligned.
+        for (elem_size = 0; elem_size < 3; elem_size = elem_size + 1) begin
+            elem_bytes = 1 << elem_size;
+            test_src = 25'h0008001 + elem_size * 25'h0000200;
+            test_dst = 25'h0008802 + elem_size * 25'h0000200;
+            case (elem_size)
+                0: begin key_value = 32'h0000005a;
+                         preserved_value = 32'h000000aa; end
+                1: begin key_value = 32'h0000beef;
+                         preserved_value = 32'h0000aaaa; end
+                default: begin key_value = 32'hdeadbeef;
+                               preserved_value = 32'haaaaaaaa; end
+            endcase
+            for (i = 0; i < 7; i = i + 1) begin
+                case (elem_size)
+                    0: source_value = 32'h00000010 + i;
+                    1: source_value = 32'h00001200 + i;
+                    default: source_value = 32'h12340000 + i;
+                endcase
+                if (i == 1 || i == 4)
+                    source_value = key_value;
+                write_element(test_src + i * elem_bytes, elem_size,
+                              source_value);
+                write_element(test_dst + i * elem_bytes, elem_size,
+                              preserved_value);
+            end
+            reg_write(5'h19, key_value);
+            start_blit(test_src, test_dst, 16'd64, 16'd64,
+                       16'd7, 16'd1,
+                       32'd2 | (elem_size << 4) |
+                       (elem_size == 1 ? 32'h00000100 : 32'd0),
+                       32'd0, elapsed_misc);
+            for (i = 0; i < 7; i = i + 1) begin
+                case (elem_size)
+                    0: source_value = 32'h00000010 + i;
+                    1: source_value = 32'h00001200 + i;
+                    default: source_value = 32'h12340000 + i;
+                endcase
+                expected_value = (i == 1 || i == 4) ?
+                                 preserved_value : source_value;
+                read_element(test_dst + i * elem_bytes, elem_size, word);
+                if (word !== expected_value)
+                    $fatal(1, "copy-key mismatch size=%0d i=%0d got=%08x expected=%08x",
+                           elem_size, i, word, expected_value);
+            end
+        end
+
+        // Mask bits are MSB-first and indexed by element, independent of
+        // element size. Reverse-Y verifies mask pitch follows row traversal.
+        for (elem_size = 0; elem_size < 3; elem_size = elem_size + 1) begin
+            elem_bytes = 1 << elem_size;
+            test_src = 25'h0010001 + elem_size * 25'h0004000;
+            test_dst = test_src + 25'h0001001;
+            test_mask = test_src + 25'h0002002;
+            case (elem_size)
+                0: preserved_value = 32'h000000a5;
+                1: preserved_value = 32'h0000a5a5;
+                default: preserved_value = 32'ha5a5a5a5;
+            endcase
+            for (row = 0; row < 2; row = row + 1) begin
+                for (column = 0; column < 10; column = column + 1) begin
+                    case (elem_size)
+                        0: source_value = 32'h00000040 + row * 16 + column;
+                        1: source_value = 32'h00004000 + row * 16 + column;
+                        default: source_value = 32'h40000000 + row * 16 + column;
+                    endcase
+                    write_element(test_src + row * (10 * elem_bytes + 3) +
+                                  column * elem_bytes, elem_size, source_value);
+                    write_element(test_dst + row * (10 * elem_bytes + 5) +
+                                  column * elem_bytes, elem_size,
+                                  preserved_value);
+                end
+                write_byte(test_mask + row * 3,
+                           row == 0 ? 8'hb2 : 8'h4d);
+                write_byte(test_mask + row * 3 + 1,
+                           row == 0 ? 8'h80 : 8'h40);
+            end
+            reg_write(5'h12, {7'd0, test_mask});
+            reg_write(5'h15, 32'd3);
+            start_blit(test_src, test_dst,
+                       10 * elem_bytes + 3, 10 * elem_bytes + 5,
+                       16'd10, 16'd2,
+                       32'd3 | (elem_size << 4) | 32'h00000200 |
+                       (elem_size == 2 ? 32'h00000100 : 32'd0),
+                       32'd0, elapsed_misc);
+            for (row = 0; row < 2; row = row + 1) begin
+                for (column = 0; column < 10; column = column + 1) begin
+                    mask_pattern = column < 8 ?
+                        (row == 0 ? 8'hb2 : 8'h4d) :
+                        (row == 0 ? 8'h80 : 8'h40);
+                    mask_selected = mask_pattern[7 - (column & 7)];
+                    case (elem_size)
+                        0: source_value = 32'h00000040 + row * 16 + column;
+                        1: source_value = 32'h00004000 + row * 16 + column;
+                        default: source_value = 32'h40000000 + row * 16 + column;
+                    endcase
+                    expected_value = mask_selected ? source_value :
+                                                        preserved_value;
+                    read_element(test_dst + row * (10 * elem_bytes + 5) +
+                                 column * elem_bytes, elem_size, word);
+                    if (word !== expected_value)
+                        $fatal(1, "copy-mask mismatch size=%0d row=%0d col=%0d got=%08x expected=%08x",
+                               elem_size, row, column, word, expected_value);
+                end
+            end
+        end
+
         // Reserved operations fail explicitly without taking DMA ownership.
         reg_write(5'h16, {16'd1, 16'd4});
-        reg_write(5'h17, 32'd2);
+        reg_write(5'h17, 32'd4);
         reg_write(5'h1a, 32'd1);
         @(negedge cpu_clk);
         cpu_reg = 5'h1b;
         wait (blit_rdata[1]);
         if (blit_rdata[15:8] !== 8'd1 || blit_busy || dma_lock)
             $fatal(1, "unsupported operation status mismatch %08x", blit_rdata);
+
+        // The last physical byte is legal. This is the equality boundary for
+        // the end-exclusive 32 MiB range check used by every blitter mode.
+        start_blit(25'd0, 25'h1ffffff, 16'd0, 16'd1,
+                   16'd1, 16'd1, 32'd1, 32'h000000a7, elapsed_misc);
+        read_byte(25'h1ffffff, byte_value);
+        if (byte_value !== 8'ha7)
+            $fatal(1, "last-byte boundary mismatch got=%02x", byte_value);
+
+        // Every source range is validated in the full 32-bit configuration
+        // space before fields are narrowed to the native 25-bit SDRAM bus.
+        reg_write(5'h16, {16'd1, 16'd4});
+        reg_write(5'h17, 32'd1); // 8-bit fill
+        reg_write(5'h11, 32'h80001000);
+        reg_write(5'h14, 32'd4);
+        expect_invalid("high destination address");
+
+        reg_write(5'h11, 32'h00001000);
+        reg_write(5'h14, 32'h00010004);
+        expect_invalid("high destination pitch");
+
+        reg_write(5'h11, 32'h01fffffc);
+        reg_write(5'h14, 32'd8);
+        reg_write(5'h16, {16'd1, 16'd8});
+        expect_invalid("destination range overflow");
+
+        reg_write(5'h17, 32'd0); // 8-bit copy
+        reg_write(5'h10, 32'h01fffffc);
+        reg_write(5'h11, 32'h00002000);
+        reg_write(5'h13, 32'd8);
+        reg_write(5'h14, 32'd8);
+        expect_invalid("source range overflow");
+
+        reg_write(5'h17, 32'd3); // 8-bit masked copy
+        reg_write(5'h10, 32'h00001000);
+        reg_write(5'h12, 32'h01ffffff);
+        reg_write(5'h15, 32'd2);
+        reg_write(5'h16, {16'd1, 16'd16});
+        expect_invalid("mask range overflow");
 
         copy_mbps = (1024.0 * 75.0) / elapsed_copy;
         fill_mbps = (2048.0 * 75.0) / elapsed_fill;

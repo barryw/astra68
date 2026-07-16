@@ -1,5 +1,6 @@
 import struct
 import json
+from threading import Barrier
 
 import pytest
 
@@ -131,3 +132,32 @@ def test_run_aggregates_failures_without_losing_per_file_examples(tmp_path, monk
     assert summary["by_opcode"] == {"e502": 1}
     assert summary["components"] == {"register": 1}
     assert summary["examples_by_file"]["ASL.b.json"][0]["name"] == case.name
+
+
+def test_parallel_rtl_run_is_bounded_and_preserves_results(tmp_path):
+    vector = tmp_path / "NOP.json"
+    vector.write_text(json.dumps([raw_case(), raw_case()]))
+    paths = [str(vector)]
+    scope = harte_run.scan_scope(paths)
+    rendezvous = Barrier(2)
+
+    class FakeTarget:
+        @staticmethod
+        def manifest():
+            return {"kind": "test", "implementation": "parallel fake"}
+
+        @staticmethod
+        def execute(case, *_args):
+            rendezvous.wait(timeout=2)
+            return result_payload(case), None
+
+    report_path = tmp_path / "parallel-report.json"
+    result = harte_run.run(
+        paths, FakeTarget(), scope, {"sha256": "corpus"},
+        0, None, 0, 0.1, 0.0, 1, 1, report_path, jobs=2,
+    )
+    report = json.loads(report_path.read_text())
+    assert result == 0
+    assert report["run"]["jobs"] == 2
+    assert report["run"]["attempted"] == 2
+    assert report["run"]["passed"] == 2

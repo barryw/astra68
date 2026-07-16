@@ -82,6 +82,13 @@ module astra_soc #(
     wire video_pll_locked;
     generate
         if (HDMI_ENABLE) begin : g_video_clocks
+`ifdef VERILATOR
+            reg video_pixel_clk_sim = 1'b0;
+            always #18.518 video_pixel_clk_sim = ~video_pixel_clk_sim;
+            assign video_pixel_clk = video_pixel_clk_sim;
+            assign video_shift_clk = 1'b0;
+            assign video_pll_locked = 1'b1;
+`else
             wire [3:0] video_pll_o;
             ecp5pll #(
                 .in_hz(25000000),
@@ -102,6 +109,7 @@ module astra_soc #(
             );
             assign video_shift_clk = video_pll_o[0];
             assign video_pixel_clk = video_pll_o[1];
+`endif
         end else begin : g_video_clocks_disabled
             assign video_shift_clk = 1'b0;
             assign video_pixel_clk = 1'b0;
@@ -117,6 +125,18 @@ module astra_soc #(
         else if (rst_cnt != RST_MAX)   rst_cnt <= rst_cnt + 1'b1;
         else                           rst <= 1'b0;
     end
+
+    // Keep large CPU-clock consumers on separate local reset trees. Reset is
+    // asserted immediately and released synchronously, so this also removes a
+    // long asynchronous deassertion path between otherwise unrelated blocks.
+    wire tg_cache_rst;
+    wire vega_cpu_rst;
+    astra_reset_release tg_cache_reset_i (
+        .clk(clk), .assert_reset(rst), .reset(tg_cache_rst)
+    );
+    astra_reset_release vega_cpu_reset_i (
+        .clk(clk), .assert_reset(rst), .reset(vega_cpu_rst)
+    );
 
     reg [63:0] cpu_cycle_count = 64'd0;
     always @(posedge clk) begin
@@ -155,6 +175,28 @@ module astra_soc #(
     wire        astraea_done;
     wire        astraea_irq;
     wire        astraea_cache_flush;
+    wire        astraea_cop_move_stb;
+    wire [17:0] astraea_cop_move_addr;
+    wire [31:0] astraea_cop_move_data;
+    wire [31:0] vega_rdata;
+    wire        vega_irq;
+    wire        vega_graphics_active;
+    wire [23:0] vega_rgb;
+    wire [23:0] post_console_rgb;
+    wire        video_reset;
+    wire        sdram_domain_clk;
+    wire        sdram_domain_rst;
+    wire        vega_mem_lock;
+    wire        vega_mem_valid;
+    wire        vega_mem_ready;
+    wire        vega_mem_write;
+    wire [24:0] vega_mem_addr;
+    wire [3:0]  vega_mem_be;
+    wire [31:0] vega_mem_wdata;
+    wire        vega_mem_rsp_valid;
+    wire [31:0] vega_mem_rdata;
+    wire [9:0]  vega_beam_x;
+    wire [9:0]  vega_beam_y;
     wire [31:0] sdram_line_hits;
     wire [31:0] sdram_line_misses;
     wire [31:0] sdram_posted_writes;
@@ -229,12 +271,58 @@ module astra_soc #(
                     else sd_boot_count <= sd_boot_count + 20'd1;
                 end
             end
+
+            // The raw SDRAM-ready reset used to fan out across every memory
+            // client. Preserve independent release bridges so each physical
+            // subsystem gets a short local reset tree.
+            wire host_mem_rst;
+            wire cpu_bridge_cpu_rst;
+            wire cpu_bridge_mem_rst;
+            wire bist_cpu_rst;
+            wire bist_mem_rst;
+            wire astraea_cpu_rst;
+            wire astraea_mem_rst;
+            wire vega_mem_rst;
+            astra_reset_release host_mem_reset_i (
+                .clk(sd_domain_clk), .assert_reset(!sd_ready),
+                .reset(host_mem_rst)
+            );
+            astra_reset_release cpu_bridge_cpu_reset_i (
+                .clk(clk), .assert_reset(rst || !sdram_ready_cpu),
+                .reset(cpu_bridge_cpu_rst)
+            );
+            astra_reset_release cpu_bridge_mem_reset_i (
+                .clk(sd_domain_clk), .assert_reset(!sd_ready),
+                .reset(cpu_bridge_mem_rst)
+            );
+            astra_reset_release bist_cpu_reset_i (
+                .clk(clk), .assert_reset(rst || !sdram_ready_cpu),
+                .reset(bist_cpu_rst)
+            );
+            astra_reset_release bist_mem_reset_i (
+                .clk(sd_domain_clk), .assert_reset(!sd_ready),
+                .reset(bist_mem_rst)
+            );
+            astra_reset_release astraea_cpu_reset_i (
+                .clk(clk), .assert_reset(rst || !sdram_ready_cpu),
+                .reset(astraea_cpu_rst)
+            );
+            astra_reset_release astraea_mem_reset_i (
+                .clk(sd_domain_clk), .assert_reset(!sd_ready),
+                .reset(astraea_mem_rst)
+            );
+            astra_reset_release vega_mem_reset_i (
+                .clk(sd_domain_clk), .assert_reset(!sd_ready),
+                .reset(vega_mem_rst)
+            );
             reg [1:0] sd_ready_sync_cpu = 2'b00;
             always @(posedge clk) begin
                 if (rst) sd_ready_sync_cpu <= 2'b00;
                 else sd_ready_sync_cpu <= {sd_ready_sync_cpu[0], sd_ready};
             end
             assign sdram_ready_cpu = sd_ready_sync_cpu[1];
+            assign sdram_domain_clk = sd_domain_clk;
+            assign sdram_domain_rst = vega_mem_rst;
 
             wire [15:0] sd_data_out;
             wire        sd_data_oe;
@@ -304,7 +392,7 @@ module astra_soc #(
                     wire host_tx_busy;
 
                     astra_host_spi_slave host_spi_i (
-                        .clk(sd_domain_clk), .rst(!sd_ready),
+                        .clk(sd_domain_clk), .rst(host_mem_rst),
                         .spi_sck(sd_clk_in), .spi_cs_n(sd_d_in[1]),
                         .spi_mosi(sd_cmd_in), .spi_miso(host_spi_miso),
                         .spi_miso_oe(host_spi_miso_oe),
@@ -316,7 +404,7 @@ module astra_soc #(
                     );
 
                     astra_host_boot host_boot_i (
-                        .clk(sd_domain_clk), .rst(!sd_ready),
+                        .clk(sd_domain_clk), .rst(host_mem_rst),
                         .rx_data(host_rx_data), .rx_valid(host_rx_valid),
                         .rx_ready(host_rx_ready), .tx_data(host_tx_data),
                         .tx_start(host_tx_start), .tx_busy(host_tx_busy),
@@ -362,61 +450,65 @@ module astra_soc #(
             localparam [1:0] DMA_OWNER_BIST = 2'd1;
             localparam [1:0] DMA_OWNER_BLIT = 2'd2;
             localparam [1:0] DMA_OWNER_HOST = 2'd3;
-            reg [1:0] dma_owner = DMA_OWNER_NONE;
+            reg dma_use_bist = 1'b0;
+            reg dma_use_blit = 1'b0;
+            reg dma_use_host = 1'b0;
+
+            // Retain the encoded view for simulation diagnostics. The datapath
+            // below consumes the registered one-hot grants directly.
+            wire [1:0] dma_owner = dma_use_bist ? DMA_OWNER_BIST :
+                                   dma_use_host ? DMA_OWNER_HOST :
+                                   dma_use_blit ? DMA_OWNER_BLIT :
+                                                  DMA_OWNER_NONE;
 
             // Hold one DMA owner for the complete transaction stream. Besides
             // making arbitration deterministic, this breaks the long path from
             // one engine's lock signal through the other engine's response mux.
             always @(posedge sd_domain_clk) begin
                 if (!sd_locked || sd_manual_reset) begin
-                    dma_owner <= DMA_OWNER_NONE;
+                    dma_use_bist <= 1'b0;
+                    dma_use_blit <= 1'b0;
+                    dma_use_host <= 1'b0;
+                end else if (dma_use_bist) begin
+                    if (!bist_mem_lock)
+                        dma_use_bist <= 1'b0;
+                end else if (dma_use_host) begin
+                    if (!host_mem_lock)
+                        dma_use_host <= 1'b0;
+                end else if (dma_use_blit) begin
+                    if (!blit_mem_lock)
+                        dma_use_blit <= 1'b0;
                 end else begin
-                    case (dma_owner)
-                        DMA_OWNER_NONE: begin
-                            if (bist_mem_lock)
-                                dma_owner <= DMA_OWNER_BIST;
-                            else if (host_mem_lock)
-                                dma_owner <= DMA_OWNER_HOST;
-                            else if (blit_mem_lock)
-                                dma_owner <= DMA_OWNER_BLIT;
-                        end
-                        DMA_OWNER_BIST: begin
-                            if (!bist_mem_lock)
-                                dma_owner <= DMA_OWNER_NONE;
-                        end
-                        DMA_OWNER_BLIT: begin
-                            if (!blit_mem_lock)
-                                dma_owner <= DMA_OWNER_NONE;
-                        end
-                        DMA_OWNER_HOST: begin
-                            if (!host_mem_lock)
-                                dma_owner <= DMA_OWNER_NONE;
-                        end
-                        default: dma_owner <= DMA_OWNER_NONE;
-                    endcase
+                    if (bist_mem_lock)
+                        dma_use_bist <= 1'b1;
+                    else if (host_mem_lock)
+                        dma_use_host <= 1'b1;
+                    else if (blit_mem_lock)
+                        dma_use_blit <= 1'b1;
                 end
             end
 
-            wire        dma_use_bist = dma_owner == DMA_OWNER_BIST;
-            wire        dma_use_blit = dma_owner == DMA_OWNER_BLIT;
-            wire        dma_use_host = dma_owner == DMA_OWNER_HOST;
-            wire        dma_mem_lock = dma_owner != DMA_OWNER_NONE;
-            wire        dma_mem_valid = dma_use_bist ? bist_mem_valid :
+            wire        dma_mem_lock = dma_use_bist || dma_use_host ||
+                                       dma_use_blit;
+            // Grants are registered one-hot. Put the latency-sensitive blitter
+            // first so its select reaches the SDRAM controller in one mux level
+            // without replicating a mask over every request-data bit.
+            wire        dma_mem_valid = dma_use_blit ? blit_mem_valid :
                                         dma_use_host ? host_mem_valid :
-                                            dma_use_blit ? blit_mem_valid : 1'b0;
+                                        dma_use_bist ? bist_mem_valid : 1'b0;
             wire        dma_mem_ready;
-            wire        dma_mem_write = dma_use_bist ? bist_mem_write :
+            wire        dma_mem_write = dma_use_blit ? blit_mem_write :
                                         dma_use_host ? host_mem_write :
-                                            dma_use_blit ? blit_mem_write : 1'b0;
-            wire [24:0] dma_mem_addr = dma_use_bist ? bist_mem_addr :
+                                        dma_use_bist ? bist_mem_write : 1'b0;
+            wire [24:0] dma_mem_addr = dma_use_blit ? blit_mem_addr :
                                        dma_use_host ? host_mem_addr :
-                                           dma_use_blit ? blit_mem_addr : 25'd0;
-            wire [3:0]  dma_mem_be = dma_use_bist ? bist_mem_be :
+                                       dma_use_bist ? bist_mem_addr : 25'd0;
+            wire [3:0]  dma_mem_be = dma_use_blit ? blit_mem_be :
                                       dma_use_host ? host_mem_be :
-                                         dma_use_blit ? blit_mem_be : 4'd0;
-            wire [31:0] dma_mem_wdata = dma_use_bist ? bist_mem_wdata :
+                                      dma_use_bist ? bist_mem_be : 4'd0;
+            wire [31:0] dma_mem_wdata = dma_use_blit ? blit_mem_wdata :
                                          dma_use_host ? host_mem_wdata :
-                                            dma_use_blit ? blit_mem_wdata : 32'd0;
+                                         dma_use_bist ? bist_mem_wdata : 32'd0;
             wire        dma_mem_rsp_valid;
             wire [31:0] dma_mem_rdata;
 
@@ -453,6 +545,15 @@ module astra_soc #(
                 .cpu_lock(cpu_mem_lock),
                 .cpu_rsp_valid(cpu_mem_rsp_valid),
                 .cpu_rdata(cpu_mem_rdata),
+                .video_lock(vega_mem_lock),
+                .video_valid(vega_mem_valid),
+                .video_ready(vega_mem_ready),
+                .video_write(vega_mem_write),
+                .video_addr(vega_mem_addr),
+                .video_be(vega_mem_be),
+                .video_wdata(vega_mem_wdata),
+                .video_rsp_valid(vega_mem_rsp_valid),
+                .video_rdata(vega_mem_rdata),
                 .dma_lock(dma_mem_lock),
                 .dma_valid(dma_mem_valid),
                 .dma_ready(dma_mem_ready),
@@ -478,7 +579,7 @@ module astra_soc #(
 
             sdram32_cpu_bridge cpu_sdram_bridge (
                 .cpu_clk(clk),
-                .cpu_rst(rst || !sdram_ready_cpu),
+                .cpu_rst(cpu_bridge_cpu_rst),
                 .cpu_start(sdram_cpu_start),
                 .cpu_addr(sdram_cpu_addr),
                 .cpu_write(!cpu_rw_n),
@@ -500,7 +601,7 @@ module astra_soc #(
                 .cpu_fill_data(sdram_fill_data),
                 .cpu_fill_instruction(sdram_fill_instruction),
                 .mem_clk(sd_domain_clk),
-                .mem_rst(!sd_ready),
+                .mem_rst(cpu_bridge_mem_rst),
                 .mem_valid(cpu_mem_valid),
                 .mem_ready(cpu_mem_ready),
                 .mem_write(cpu_mem_write),
@@ -516,7 +617,7 @@ module astra_soc #(
                 .MEM_BYTES(SDRAM_BIST_BYTES)
             ) sdram_bist_i (
                 .cpu_clk(clk),
-                .cpu_rst(rst || !sdram_ready_cpu),
+                .cpu_rst(bist_cpu_rst),
                 .cpu_start(sdram_bist_start),
                 .cpu_busy(sdram_bist_busy),
                 .cpu_done(sdram_bist_done),
@@ -527,7 +628,7 @@ module astra_soc #(
                 .cpu_expected(sdram_bist_expected),
                 .cpu_actual(sdram_bist_actual),
                 .mem_clk(sd_domain_clk),
-                .mem_rst(!sd_ready),
+                .mem_rst(bist_mem_rst),
                 .mem_lock(bist_mem_lock),
                 .mem_valid(bist_mem_valid),
                 .mem_ready(bist_mem_ready),
@@ -539,11 +640,11 @@ module astra_soc #(
                 .mem_rdata(bist_mem_rdata)
             );
 
-            astraea_blitter astraea_i (
+            astraea_chip astraea_i (
                 .cpu_clk(clk),
-                .cpu_rst(rst || !sdram_ready_cpu),
+                .cpu_rst(astraea_cpu_rst),
                 .cpu_write_stb(astraea_write_stb),
-                .cpu_reg(cpu_adr[6:2]),
+                .cpu_addr(cpu_adr[15:0]),
                 .cpu_be(be),
                 .cpu_wdata(cpu_dout),
                 .cpu_rdata(astraea_rdata),
@@ -551,8 +652,13 @@ module astra_soc #(
                 .cpu_done(astraea_done),
                 .cpu_irq(astraea_irq),
                 .cache_flush(astraea_cache_flush),
+                .beam_x(vega_beam_x),
+                .beam_y(vega_beam_y),
+                .cop_move_stb(astraea_cop_move_stb),
+                .cop_move_addr(astraea_cop_move_addr),
+                .cop_move_data(astraea_cop_move_data),
                 .mem_clk(sd_domain_clk),
-                .mem_rst(!sd_ready),
+                .mem_rst(astraea_mem_rst),
                 .mem_lock(blit_mem_lock),
                 .mem_valid(blit_mem_valid),
                 .mem_ready(blit_mem_ready),
@@ -564,6 +670,11 @@ module astra_soc #(
                 .mem_rdata(blit_mem_rdata)
             );
         end else begin : g_sdram_disabled
+            assign sdram_domain_clk = 1'b0;
+            assign sdram_domain_rst = 1'b1;
+            assign vega_mem_ready = 1'b0;
+            assign vega_mem_rsp_valid = 1'b0;
+            assign vega_mem_rdata = 32'd0;
             assign sdram_clk = 1'b0;
             assign sdram_cke = 1'b0;
             assign sdram_csn = 1'b1;
@@ -591,6 +702,9 @@ module astra_soc #(
             assign astraea_done = 1'b0;
             assign astraea_irq = 1'b0;
             assign astraea_cache_flush = 1'b0;
+            assign astraea_cop_move_stb = 1'b0;
+            assign astraea_cop_move_addr = 18'd0;
+            assign astraea_cop_move_data = 32'd0;
             assign sdram_line_hits = 32'd0;
             assign sdram_line_misses = 32'd0;
             assign sdram_posted_writes = 32'd0;
@@ -755,7 +869,7 @@ module astra_soc #(
 
     tg68k_cache_store tg_cache_store_i (
         .clk(clk),
-        .rst(rst),
+        .rst(tg_cache_rst),
         .flush(sdram_bist_busy | astraea_cache_flush),
         .lookup_addr(tg_cache_lookup_addr),
         .lookup_insn(tg_cache_lookup_insn),
@@ -863,12 +977,13 @@ module astra_soc #(
     );
     wire sel_ram  = (cpu_adr[31:15] == 17'h03FF); // 0x01FF8000..0x01FFFFFF
     wire sel_sys  = (cpu_adr[31:9]  == 23'h7FF800);
-    wire sel_astraea = SDRAM_ENABLE && (cpu_adr[31:8] == 24'hFFF100);
+    wire sel_astraea = SDRAM_ENABLE && (cpu_adr[31:16] == 16'hFFF1);
     wire sel_uart = (cpu_adr[31:8]  == 24'hFFF005);
     wire sel_spi = (cpu_adr[31:8] == 24'hFFF006);
     wire sel_panel = (cpu_adr[31:12] == 20'hFFF01);
-    wire sel_vega_regs = HDMI_ENABLE && (cpu_adr[31:8] == 24'hFFF200);
     wire sel_vega_text = HDMI_ENABLE && (cpu_adr[31:12] == 20'hFFF22);
+    wire sel_vega_regs = HDMI_ENABLE && (cpu_adr[31:16] == 16'hFFF2) &&
+                         !sel_vega_text;
     wire [31:0] panel_rdata;
     reg [7:0] led_r;
 
@@ -1020,6 +1135,8 @@ module astra_soc #(
     wire ram_we = sel_ram & cpu_data_en & ~cpu_rw_n & bus_write_stb;
     wire astraea_write_stb = sel_astraea & cpu_data_en & ~cpu_rw_n &
                              bus_write_stb;
+    wire vega_write_stb = sel_vega_regs & cpu_data_en & ~cpu_rw_n &
+                           bus_write_stb;
     always @(posedge clk) begin
         if (ram_we) begin
             if (be[3]) ram0[ram_a] <= cpu_dout[31:24];
@@ -1180,10 +1297,7 @@ module astra_soc #(
                     video_reset_pipe <= {video_reset_pipe[2:0], 1'b1};
             end
             wire video_rst = !video_reset_pipe[3];
-            wire [23:0] console_rgb;
-            wire [2:0] hdmi_tmds;
-            wire hdmi_tmds_clock;
-
+            assign video_reset = video_rst;
             post_console post_console_i (
                 .cpu_clk(clk),
                 .cpu_addr(cpu_adr[11:0]),
@@ -1194,9 +1308,30 @@ module astra_soc #(
                 .pixel_rst(video_rst),
                 .pixel_x(video_cx),
                 .pixel_y(video_cy),
-                .rgb(console_rgb)
+                .rgb(post_console_rgb)
             );
 
+`ifdef VERILATOR
+            reg [9:0] video_cx_sim = 10'd0;
+            reg [9:0] video_cy_sim = 10'd0;
+            always @(posedge video_pixel_clk) begin
+                if (video_rst) begin
+                    video_cx_sim <= 10'd0;
+                    video_cy_sim <= 10'd0;
+                end else if (video_cx_sim == 10'd857) begin
+                    video_cx_sim <= 10'd0;
+                    video_cy_sim <= video_cy_sim == 10'd524 ?
+                                    10'd0 : video_cy_sim + 10'd1;
+                end else begin
+                    video_cx_sim <= video_cx_sim + 10'd1;
+                end
+            end
+            assign video_cx = video_cx_sim;
+            assign video_cy = video_cy_sim;
+            assign gpdi_dp = 4'd0;
+`else
+            wire [2:0] hdmi_tmds;
+            wire hdmi_tmds_clock;
             hdmi #(
                 .VIDEO_ID_CODE(2),
                 .DVI_OUTPUT(1'b1),
@@ -1213,7 +1348,7 @@ module astra_soc #(
                 .clk_pixel(video_pixel_clk),
                 .clk_audio(1'b0),
                 .reset(video_rst),
-                .rgb(console_rgb),
+                .rgb(vega_rgb),
                 .audio_sample_word(32'd0),
                 .tmds(hdmi_tmds),
                 .tmds_clock(hdmi_tmds_clock),
@@ -1226,7 +1361,10 @@ module astra_soc #(
             );
 
             assign gpdi_dp = {hdmi_tmds_clock, hdmi_tmds};
+`endif
         end else begin : g_hdmi_disabled
+            assign video_reset = 1'b1;
+            assign post_console_rgb = 24'd0;
             assign video_cx = 10'd0;
             assign video_cy = 10'd0;
             assign console_cpu_rdata = 8'h20;
@@ -1234,22 +1372,42 @@ module astra_soc #(
         end
     endgenerate
 
-    reg [31:0] vega_rdata;
-    always @* begin
-        case (cpu_adr[7:2])
-            6'h00: vega_rdata = 32'h56454741; // "VEGA"
-            6'h01: vega_rdata = 32'h00010000;
-            6'h02: vega_rdata = 32'h00000001; // display enabled
-            6'h03: vega_rdata = {27'd0, video_ready_cpu, 2'd0,
-                                 video_cx >= 10'd720, video_cy >= 10'd480};
-            6'h06: vega_rdata = 32'd0;        // 720x480 mode
-            6'h07: vega_rdata = 32'h00000001; // bootstrap text capability
-            6'h08: vega_rdata = {6'd0, video_cy, 6'd0, video_cx};
-            6'h0a: vega_rdata = {16'd480, 16'd720};
-            6'h0c: vega_rdata = 32'h00101820; // backdrop RGB888
-            default: vega_rdata = 32'd0;
-        endcase
-    end
+    vega_video vega_i (
+        .cpu_clk(clk),
+        .cpu_rst(vega_cpu_rst),
+        .cpu_write_stb(vega_write_stb),
+        .cpu_read_stb(sel_vega_regs & bus_read_stb),
+        .cpu_addr(cpu_adr[15:0]),
+        .cpu_be(be),
+        .cpu_wdata(cpu_dout),
+        .cpu_rdata(vega_rdata),
+        .cpu_irq(vega_irq),
+        .display_ready(video_ready_cpu),
+        .cop_write_stb(astraea_cop_move_stb &&
+                       astraea_cop_move_addr[17:16] == 2'b10),
+        .cop_addr(astraea_cop_move_addr[15:0]),
+        .cop_wdata(astraea_cop_move_data),
+        .mem_clk(sdram_domain_clk),
+        .mem_rst(sdram_domain_rst),
+        .mem_lock(vega_mem_lock),
+        .mem_valid(vega_mem_valid),
+        .mem_ready(vega_mem_ready),
+        .mem_write(vega_mem_write),
+        .mem_addr(vega_mem_addr),
+        .mem_be(vega_mem_be),
+        .mem_wdata(vega_mem_wdata),
+        .mem_rsp_valid(vega_mem_rsp_valid),
+        .mem_rdata(vega_mem_rdata),
+        .pixel_clk(video_pixel_clk),
+        .pixel_rst(video_reset),
+        .pixel_x(video_cx),
+        .pixel_y(video_cy),
+        .post_rgb(post_console_rgb),
+        .rgb(vega_rgb),
+        .graphics_active(vega_graphics_active),
+        .beam_x(vega_beam_x),
+        .beam_y(vega_beam_y)
+    );
 
     // -------------------------------------------------------------------------
     // Bus interface FSM (async 68030 slave, registered, a few wait states)
@@ -1723,5 +1881,23 @@ module astra_soc #(
             default: led_r = 8'h00;              // blank between repeats
         endcase
     end
+endmodule
+
+(* keep_hierarchy = "yes" *)
+module astra_reset_release (
+    input  wire clk,
+    input  wire assert_reset,
+    output wire reset
+);
+    (* keep = "true" *) reg [1:0] release_pipe = 2'b11;
+
+    always @(posedge clk or posedge assert_reset) begin
+        if (assert_reset)
+            release_pipe <= 2'b11;
+        else
+            release_pipe <= {release_pipe[0], 1'b0};
+    end
+
+    assign reset = release_pipe[1];
 endmodule
 `default_nettype wire

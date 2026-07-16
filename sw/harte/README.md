@@ -70,6 +70,16 @@ FIFO capabilities, stops after a wedged case instead of timing out through the
 rest of the corpus, checkpoints every 1,000 cases, and exits nonzero for any
 test or infrastructure failure.
 
+RTL simulation may execute independent cases concurrently. The option is
+rejected for serial hardware and the persistent Musashi worker:
+
+```sh
+python3 sw/harte/host/harte_run.py \
+  --target rtl-tg68k030-mmu2 --jobs 16 \
+  --report /tmp/astra68-harte-rtl.json \
+  "$VECTORS"/*.json.bin
+```
+
 ## Shared Musashi run
 
 The same admitted vector IDs can run through the backend-neutral conformance
@@ -91,9 +101,14 @@ failure aggregation, and report format are shared; only execution transport is
 different. The Musashi target identity includes hashes of its executable and
 behavioral CPU/PMMU sources.
 
-The pinned July 13, 2026 baseline passes all 96,103 admitted vectors on the
-vendored Musashi MC68030 target. The remaining 221,397 vectors are reported by
-skip reason rather than silently dropped.
+The pinned July 15, 2026 baseline passes all 96,103 admitted vectors on both
+production adapters: vendored Musashi MC68030 completed in 19.5 seconds, and
+TG68K.C RTL completed in 255 seconds using 32 bounded jobs on beast. Both runs
+reported zero failures and zero aborts with the same corpus hash, case
+conversion, masks, comparator, and report schema. Parallelism changes only RTL
+execution scheduling; results and checkpoints remain in admitted-corpus order.
+The remaining 221,397 vectors are reported by skip reason rather than silently
+dropped.
 
 ## Full MC68000 emulator diagnostic
 

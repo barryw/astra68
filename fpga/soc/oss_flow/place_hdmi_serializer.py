@@ -11,10 +11,16 @@
 import os
 
 
-FLOORPLAN_MODE = os.environ.get("NOVA_FLOORPLAN_MODE", "critical").strip().lower()
+FLOORPLAN_MODE = os.environ.get(
+    "ASTRA_FLOORPLAN_MODE",
+    os.environ.get("NOVA_FLOORPLAN_MODE", "critical"),
+).strip().lower()
 EXPLICIT_ENFORCE = {
     item.strip()
-    for item in os.environ.get("NOVA_FLOORPLAN_ENFORCE", "").split(",")
+    for item in os.environ.get(
+        "ASTRA_FLOORPLAN_ENFORCE",
+        os.environ.get("NOVA_FLOORPLAN_ENFORCE", ""),
+    ).split(",")
     if item.strip()
 }
 
@@ -55,6 +61,27 @@ REGIONS = [
         "match": ("tg_cache_store_i",),
     },
 
+    # GHDL flattens the VHDL entity hierarchy into tg68k_wrap, but ABC keeps
+    # the originating PMMU and ALU net names. These report-only groups let us
+    # measure and, when explicitly requested, constrain those smaller CPU
+    # neighborhoods independently of the rest of the 68030.
+    {
+        "name": "tg68k_pmmu",
+        "box": (0, 12, 76, 84),
+        "tier": "report",
+        "enforce": False,
+        "prefer_nets": True,
+        "match": ("\\pmmu_030.", ".pmmu_030."),
+    },
+    {
+        "name": "tg68k_alu",
+        "box": (56, 16, 112, 60),
+        "tier": "report",
+        "enforce": False,
+        "prefer_nets": True,
+        "match": ("\\alu.", ".alu."),
+    },
+
     # Top-band HDMI encoder/packet logic. This stays report-only for now:
     # matching HDMI nets can also catch upstream audio/video mix logic, and
     # enforcing that broad cone over-constrains placement.
@@ -66,123 +93,178 @@ REGIONS = [
         "match": ("hdmi_inst", "\\hdmi_inst", "packet_picker", "packet_assembler"),
     },
 
-    # SDRAM lives on the east edge. Keep the controller, CDC shim, and XRAM/SID
-    # SDRAM clients near that edge so 100 MHz SDRAM paths do not cross the chip.
+    # SDRAM lives on the east edge. Keep the 75 MHz controller and bridge near
+    # that edge so physical SDRAM paths do not cross the chip.
     {
         "name": "sdram_edge",
-        "box": (94, 8, 126, 95),
+        "box": (96, 20, 126, 95),
         "tier": "edge",
-        "enforce": False,
-        "match": ("sdram_inst", "\\sdram_inst", "dbg_sdram_port_b_cdc", "xram_sdram_inst", "curve_reader_inst"),
+        "enforce": True,
+        "match": (
+            "sdram_i",
+            "\\sdram_i",
+            "sdram_inst",
+            "\\sdram_inst",
+            "g_sdram_enabled.sdram_i",
+            "sdram_bridge_i",
+            "sdram_bist_i",
+        ),
     },
 
     # ESP/FTDI pins are on the west edge. Keep the byte transports and host
     # bridge on that side, with enough vertical space for the FIFOs.
     {
         "name": "host_io",
-        "box": (1, 28, 48, 95),
+        "box": (0, 50, 50, 95),
         "tier": "edge",
         "enforce": False,
-        "match": ("dbg_spi", "\\dbg_spi", "uart_inst", "\\uart_inst", "dbg_bridge", "\\dbg_bridge", "debug_bridge", "fio_inst", "nic_inst"),
+        "match": (
+            "host_spi_i",
+            "host_boot_i",
+            "spi_sd_i",
+            "uart_i",
+            "uart_rx_fifo_i",
+        ),
     },
 
+    # Astraea and Vega analysis regions. They are report-only in the default
+    # mode; timing experiments can enforce individual regions explicitly.
     {
-        "name": "math_copro",
-        "box": (8, 44, 58, 92),
+        "name": "post_console",
+        "box": (52, 4, 96, 36),
+        "tier": "video",
+        "enforce": False,
+        "match": ("post_console_i", "char_mem", "font_mem"),
+    },
+    {
+        "name": "astraea_draw",
+        "box": (68, 44, 126, 95),
+        "tier": "video",
+        "enforce": False,
+        "match": ("astraea_i.\\draw_i", "astraea_i.draw_i", "\\draw_i."),
+    },
+    {
+        "name": "vega_sprites",
+        # Include four EBR columns across the upper video band. The narrower
+        # box consumed 17 of 22 EBRs and left too little routing freedom around
+        # the HDMI and cache islands even though LUT utilization was low. Only
+        # anchor the sparse EBR/DSP resources; connected LUT/FF logic follows
+        # them without turning the complete 4K-cell builder into a hard fence.
+        "box": (38, 2, 118, 54),
+        "tier": "video",
+        "enforce": False,
+        "enforce_buckets": ("DP16KD", "MULT18X18D"),
+        "match": ("sprite_builder_i",),
+    },
+    {
+        "name": "vega_tiles",
+        "box": (62, 10, 116, 48),
+        "tier": "video",
+        "enforce": False,
+        "match": ("tile_builder_i",),
+    },
+    {
+        "name": "astraea_copper",
+        "box": (58, 32, 110, 62),
+        "tier": "video",
+        "enforce": False,
+        "match": ("astraea_i.\\copper_i", "astraea_i.copper_i", "\\copper_i."),
+    },
+    {
+        "name": "astraea_blitter_control",
+        # Keep the captured operation, FSM decode, and row counters together.
+        # These signals form the blitter's high-fanout control cone; allowing
+        # the cone to span the complete datapath box creates long CE routes.
+        "box": (58, 60, 86, 88),
         "tier": "chip",
         "enforce": False,
-        "match": ("math_inst", "\\math_inst"),
+        "prefer_nets": True,
+        "match": (
+            "blitter_i.cfg_op_mem",
+            "blitter_i.cfg_mode_mem",
+            "blitter_i.cfg_dim_mem",
+            "blitter_i.cfg_element_bytes_mem",
+            "blitter_i.cfg_row_bytes_mem",
+            "blitter_i.word_mode_mem",
+            "blitter_i.total_units_mem",
+            "blitter_i.state_mem",
+            "blitter_i.rows_remaining_mem",
+            "blitter_i.units_done_mem",
+            "blitter_i.chunk_count_mem",
+            "blitter_i.chunk_last_mem",
+            "blitter_i.chunk_finishes_row_mem",
+            "blitter_i.chunk_start_index_mem",
+            "blitter_i.km_elements_remaining_mem",
+        ),
     },
-
-    # VGC analysis regions. These are not enforced yet; they show how the giant
-    # VGC block should be split before we tighten its placement.
     {
-        "name": "vgc_timing",
-        "box": (50, 16, 72, 30),
-        "tier": "video",
+        "name": "astraea_blitter_cdc",
+        # The launch payload is a bundled-data CDC: CPU-side holding registers
+        # feed a mem-domain snapshot while the synchronized start toggle is in
+        # flight. Keep both banks and their first-level decode in one compact
+        # neighborhood; the rest of the blitter retains the larger box below.
+        "box": (60, 54, 88, 86),
+        "tier": "chip",
         "enforce": False,
-        "match": ("timing_inst", "\\timing_inst"),
+        "match": (
+            "blitter_i.cfg_",
+            "blitter_i.start_sync_mem",
+            "blitter_i.start_seen_mem",
+            "blitter_i.start_toggle_cpu",
+        ),
     },
     {
-        "name": "vgc_text",
-        "box": (42, 26, 78, 58),
-        "tier": "video",
+        "name": "astraea_blitter",
+        "box": (54, 50, 108, 95),
+        "tier": "chip",
         "enforce": False,
-        "match": ("text_inst", "\\text_inst", "char_mem", "color_mem", "attr_mem", "font_mem"),
+        "match": ("astraea_i.\\blitter_i", "astraea_i.blitter_i", "\\blitter_i."),
     },
     {
-        "name": "vgc_gfx_artist",
-        "box": (62, 32, 106, 72),
-        "tier": "video",
-        "enforce": False,
-        "match": ("gfx_inst", "\\gfx_inst", "artist_inst", "\\artist_inst", "gfx_mem"),
-    },
-    {
-        "name": "vgc_sprites",
-        "box": (40, 54, 96, 86),
-        "tier": "video",
-        "enforce": False,
-        "match": ("sprite_inst", "\\sprite_inst", "spr_mem0", "spr_mem1", "slb_ram"),
-    },
-    {
-        "name": "vgc_copper",
-        "box": (74, 18, 104, 42),
-        "tier": "video",
-        "enforce": False,
-        "match": ("copper_inst", "\\copper_inst", "copper_list_mem"),
-    },
-    {
-        "name": "wts_audio",
+        "name": "lyra_audio",
         "box": (58, 4, 126, 76),
         "tier": "report",
         "enforce": False,
-        "match": ("wts_inst", "\\wts_inst"),
-    },
-    {
-        "name": "vgc_io_regs",
-        "box": (30, 28, 78, 82),
-        "tier": "video",
-        "enforce": False,
-        "match": ("core.vgc_inst", "core.\\vgc_inst", "\\vgc_inst", "vgc_inst", "key_fifo_inst", "key_data_xlat"),
+        "match": ("lyra_i",),
     },
 
-    # Whole-chip analysis regions. These are intentionally non-enforced while
-    # we collect sizing data.
+    # Remaining Vega cells after the specific builders above.
     {
-        "name": "vgc_video",
-        "box": (42, 14, 112, 82),
+        "name": "vega_video",
+        "box": (58, 2, 122, 50),
         "tier": "report",
         "enforce": False,
-        "match": (),
+        "match": ("g_sdram_enabled.vega_i", "\\vega_i."),
     },
 
-    # The 6502, main RAM, ROMs, and bus decode are central so they can reach
-    # VGC, DMA/blitter, NIC, and SDRAM clients without one long dominant route.
+    # Keep the 68030 and its bus-facing logic central. This remains report-only
+    # because the CPU is too large for a tight hard region.
     {
         "name": "cpu_mem",
-        "box": (12, 18, 76, 92),
+        "box": (2, 4, 86, 88),
         "tier": "chip",
         "enforce": False,
-        "match": ("core.cpu_inst", "core.\\cpu_inst", "\\cpu_inst", "cpu_inst", "main_ram", "basic_rom_inst", "ext_rom_inst", "xmc_regs"),
+        "match": ("g_tg68k_enabled.tg_cpu", "\\tg_cpu", "boot_memory_map_i"),
     },
 
-    # DMA and blitter sit between CPU/RAM, VGC, and XRAM.
+    # Host boot is the remaining unclassified SDRAM bus master. The BIST is
+    # classified with sdram_edge so its wide response path stays local to the
+    # controller instead of crossing the die.
     {
         "name": "bus_masters",
-        "box": (28, 40, 86, 92),
+        "box": (18, 54, 82, 95),
         "tier": "chip",
         "enforce": False,
-        "match": ("blt_inst", "\\blt_inst", "dma_inst", "\\dma_inst"),
+        "match": ("host_boot_i",),
     },
 
-    # SID is mostly audio-side compute. Keep it out of the SDRAM/HDMI pin lanes
-    # but still near the HDMI audio bridge.
+    # Remaining Astraea MMIO and arbitration cells after its engines above.
     {
-        "name": "sid_audio",
-        "box": (8, 1, 82, 44),
+        "name": "astraea_core",
+        "box": (50, 36, 126, 95),
         "tier": "chip",
         "enforce": False,
-        "match": ("sid_inst", "\\sid_inst", "sid2_inst", "\\sid2_inst", "sid_hdmi_audio_inst"),
+        "match": ("g_sdram_enabled.astraea_i", "\\astraea_i."),
     },
 ]
 
@@ -228,10 +310,25 @@ def matches_any(value, needles):
 
 
 def classify_cell(cell_name, net_names):
-    # Regions are ordered from tight timing islands to broad subsystem homes.
-    text = [cell_name] + net_names
+    # A retained wrapper name covers the complete CPU, while GHDL's internal
+    # entity names survive only on nets. Let explicitly marked sub-blocks claim
+    # their directly connected cells before the broad wrapper-name match.
     for region in REGIONS:
-        if any(matches_any(value, region["match"]) for value in text):
+        if region.get("prefer_nets", False) and any(
+            matches_any(value, region["match"]) for value in net_names
+        ):
+            return region["name"]
+    # Prefer retained hierarchy in the packed cell name. A shared top-level
+    # reset or bus net can inherit one module's alias after flattening; treating
+    # that alias as stronger than the cell's own name pulls unrelated logic into
+    # the wrong region and creates exactly the long routes this plan avoids.
+    for region in REGIONS:
+        if matches_any(cell_name, region["match"]):
+            return region["name"]
+    # ABC-generated cells do not always retain a useful hierarchical name, so
+    # use attached nets only as a fallback for those cells.
+    for region in REGIONS:
+        if any(matches_any(value, region["match"]) for value in net_names):
             return region["name"]
     return None
 
@@ -270,6 +367,7 @@ for region in REGIONS:
 
 region_names = [region["name"] for region in REGIONS]
 counts = {name: 0 for name in region_names}
+constrained_counts = {name: 0 for name in region_names}
 bucket_demand = {name: {} for name in region_names}
 type_demand = {name: {} for name in region_names}
 for cell_name, cell in ctx.cells:
@@ -284,15 +382,18 @@ for cell_name, cell in ctx.cells:
     type_demand[region_name][cell_type] = type_demand[region_name].get(cell_type, 0) + 1
     region = next(region for region in REGIONS if region["name"] == region_name)
     if should_enforce(region):
-        ctx.constrainCellToRegion(cell_name, region_name)
+        enforce_buckets = region.get("enforce_buckets")
+        if enforce_buckets is None or bucket in enforce_buckets:
+            ctx.constrainCellToRegion(cell_name, region_name)
+            constrained_counts[region_name] += 1
 
 enforced_regions = [region["name"] for region in REGIONS if should_enforce(region)]
-print("Nova floorplan mode: %s; explicit=%s; enforced=%s" % (
+print("Astra floorplan mode: %s; explicit=%s; enforced=%s" % (
     FLOORPLAN_MODE,
     ",".join(sorted(EXPLICIT_ENFORCE)) if EXPLICIT_ENFORCE else "-",
     ",".join(enforced_regions) if enforced_regions else "-",
 ))
-print("Nova floorplan constraints: " + ", ".join("%s=%d" % item for item in sorted(counts.items())))
+print("Astra floorplan constraints: " + ", ".join("%s=%d" % item for item in sorted(counts.items())))
 
 capacity = count_region_capacity(region_names)
 for name in region_names:
@@ -308,5 +409,6 @@ for name in region_names:
     top_types = sorted(type_demand[name].items(), key=lambda item: (-item[1], item[0]))[:4]
     type_parts = ["%s=%d" % item for item in top_types]
     enforced = "yes" if should_enforce(next(region for region in REGIONS if region["name"] == name)) else "no"
-    print("Nova floorplan region %s: enforced=%s; cells=%d; buckets: %s; top cell types: %s" %
-          (name, enforced, counts[name], ", ".join(bucket_parts), ", ".join(type_parts)))
+    print("Astra floorplan region %s: enforced=%s; cells=%d; constrained=%d; buckets: %s; top cell types: %s" %
+          (name, enforced, counts[name], constrained_counts[name],
+           ", ".join(bucket_parts), ", ".join(type_parts)))
