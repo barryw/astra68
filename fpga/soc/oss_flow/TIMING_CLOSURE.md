@@ -212,6 +212,24 @@ It maps 160 fewer LUT4s than P44 and packs 54 fewer `TRELLIS_COMB`, enough for a
 21-cell profile pass. That margin remains too small for comfort and does not
 substitute for a timing-clean route.
 
+The active P45 physical matrix uses that one immutable JSON. Its canonical
+Beast copy is
+`/tmp/astra68-p45-src1/fpga/soc/oss_flow/astra.json`; byte-identical copies are
+`/private/tmp/p45-astra.json` on the Mac and
+`/tmp/astra68-p45-route/p45-astra.json` on NUC. Every candidate uses timing
+weight 20, the `critical` floorplan, and explicit enforcement of only
+`host_io`, `astraea_blitter`, `astraea_blitter_cdc`, and
+`astraea_blitter_control`. The unrestricted heap references are seed 23 on
+Beast, seed 33 on the Mac, seed 57 on NUC, and seeds 4 and 7 on Beast. Beast
+also has controlled seed-23 heap timeouts of 80, 800, and 8000, plus `static`
+and `sa` placer diagnostics. The timeout, static, SA, threaded-pack, and
+parallel-refine variants are physical experiments, not release defaults. Their
+placed JSON, report, and log names all begin with `p45-` in the same directory
+as the host's immutable input. Route every completed candidate with
+`--no-pack --no-place`, reload the SDC, and record even failed cones here.
+Do not promote a faster placement merely because it completed; only a full
+all-clock route and release-identical rerun can select the production flow.
+
 ### Routed critical-path evidence
 
 | Checkpoint/seed | Source to destination | Routing | Logic | Interpretation |
