@@ -16,10 +16,27 @@ evidence that the current complete-graphics image meets timing; use the latest
 checkpoint in `TIMING_CLOSURE.md` for current integration status.
 
 ## Build
-- `run.sh`          — full build + loop report (yosys check + nextpnr).
-- `mkbit.sh <hex> <tag>` — swap ROM (rom_init.hex), synth+pnr+ecppack -> astra.bit.
-- `PNR_SEED=<n>` selects and records the deterministic nextpnr route seed. Include
-  it in firmware build-ID arguments whenever it is overridden.
+- `mkbit.sh <hex> <tag>` synthesizes, places, routes, checks, and packages the
+  production SoC as `astra.bit`.
+- Production defaults are CPU divider 0 (12.5 MHz), 75 MHz SDRAM, seed 23,
+  heap placer timing weight 20, router1 timing ripup, the `critical` floorplan,
+  and explicit `host_io` plus blitter regions. These values match
+  `sw/boot/Makefile` and are part of its build ID.
+- The canonical flow is split. Placement writes `placed_<tag>.json`; routing
+  reloads that immutable artifact with `--no-pack --no-place`, reapplies the
+  SDC, writes `routed_<tag>.json`, and only packages a timing-clean final route.
+- Placement uses `--timing-allow-fail` because its estimate is not acceptance
+  evidence. Final routing does not. `PNR_TIMING_ALLOW_FAIL=1` is an explicit
+  diagnostic mode that writes a complete report but suppresses `astra.bit`.
+- Successful builds write `build_<tag>.manifest` with source revision, host,
+  tool versions, complete configuration, and SHA-256 hashes for the stage-0
+  ROM, system ROM, synthesis, placement, route, reports, configuration, and
+  bitstream. A packageable SD-boot build therefore requires
+  `ASTRA_SYSTEM_ROM=/path/to/ASTRA68.ROM`; synthesis-only and diagnostic routes
+  do not. Each invocation removes stale `astra.bit`/manifest outputs, and the
+  bitstream appears only after an atomic successful package step.
+- `PNR_SEED=<n>` selects and records the deterministic nextpnr seed. Include it
+  in firmware build-ID arguments whenever it is overridden.
 - `SYNTH_ONLY=1` stops after checked `astra.json` generation for resource
   iteration. AstraHost and direct-SD stage-0 builds reserve 1024 and 2048 ROM
   words respectively; `ROM_WORDS=<n>` overrides that capacity. The build
@@ -31,8 +48,9 @@ checkpoint in `TIMING_CLOSURE.md` for current integration status.
 - `PNR_ROUTER=router1|router2` selects the nextpnr router and is recorded in the
   build banner. `PNR_ROUTER2_ALT_WEIGHTS=1` enables router2's high-density
   weighting mode and requires `PNR_ROUTER=router2`. `PNR_THREADS=<n>` passes an
-  explicit router thread count. Every route writes `pnr_<tag>.json` beside its
-  text log.
+  explicit thread count. `PNR_TIMING_RIPUP=1` and `PNR_TIMING_WEIGHT=20` are
+  the measured production defaults. Every route writes `pnr_<tag>.json` beside
+  its text log.
 - `astra_clocks.sdc` constrains every clock domain explicitly: CPU 12.5 MHz,
   SD input 20 MHz, SDRAM 75 MHz, pixel 27 MHz, HDMI shift 135 MHz, and the
   25 MHz board clock. Keep it on split placement/routing commands as well as
@@ -56,7 +74,9 @@ checkpoint in `TIMING_CLOSURE.md` for current integration status.
   in their board-facing regions.
   The old `NOVA_FLOORPLAN_*` names remain accepted for existing automation,
   but Astra-named variables take precedence.
-- ROM hexes come from beast: ~/astra_st (selftest -> rom_init.hex ; banner -> rom_banner.hex).
+- The FPGA image contains only the 509-word AstraHost stage 0 built from
+  `sw/stage0` with `BOOT_BACKEND=host`. The full system ROM remains
+  `/ASTRA68.ROM` on the existing FAT/exFAT volume and executes from SDRAM.
 - Needs GHDL_PREFIX=/opt/homebrew/oss-cad-suite/lib/ghdl (set in scripts).
 
 The ULX3S is attached to `nuc`, not the Mac or Beast. Transfer the immutable

@@ -3,11 +3,28 @@ CROSS   ?= m68k-linux-gnu-
 CC       = $(CROSS)gcc
 OBJCOPY  = $(CROSS)objcopy
 OBJDUMP  = $(CROSS)objdump
-CPU_CLK_DIV_BIT ?= 2
+CPU_CLK_DIV_BIT ?= 0
 SDRAM_ENABLE ?= 1
 HDMI_ENABLE ?= 1
-TARGET_FREQ_MHZ ?= 12
-PNR_SEED ?= 1
+SD_BOOT_ENABLE ?= 1
+ASTRA_HOST_ENABLE ?= 1
+ROM_WORDS ?= 1024
+UART_MONITOR ?= 0
+UART_BAUD ?= 115200
+TARGET_FREQ_MHZ ?= 12.5
+PNR_SEED ?= 23
+PNR_PLACER ?= heap
+PNR_ROUTER ?= router1
+PNR_TIMING_WEIGHT ?= 20
+PNR_TIMING_RIPUP ?= 1
+PNR_TIMING_ALLOW_FAIL ?= 0
+PNR_ROUTER2_ALT_WEIGHTS ?= 0
+PNR_THREADS ?=
+SYNTH_ECP5_FLAGS ?= -abc2
+SYNTH_KEEP_HIERARCHY ?=
+ASTRA_FLOORPLAN_MODE ?= critical
+ASTRA_FLOORPLAN_ENFORCE ?= host_io,astraea_blitter,astraea_blitter_cdc,astraea_blitter_control
+RESOURCE_PROFILE ?= core_graphics
 ROM_VERSION ?= 0.3
 BUILD_INFO = build/rom_build_info.h
 KERNEL_DIR = ../kernel
@@ -50,9 +67,27 @@ SOC_ID_SRCS = ../../fpga/soc/astra_soc.sv ../../fpga/soc/astra_soc.lpf \
 CPU_ID_SRCS = $(sort $(wildcard ../../fpga/cpu/tg68k_c_030_mmu2/*.vhd)) \
               ../../fpga/cpu/tg68k030_mmu2_wrap.vhd
 
+STAGE0_ID_SRCS = ../stage0/Makefile ../stage0/crt0.S ../stage0/stage0.c \
+                 ../stage0/stage0.ld ../stage0/fat_loader.c \
+                 ../stage0/fat_loader.h
+
 BUILD_CONFIG = CPU=TG68K030_MMU2 CPU_CLK_DIV_BIT=$(CPU_CLK_DIV_BIT) \
                SDRAM_ENABLE=$(SDRAM_ENABLE) HDMI_ENABLE=$(HDMI_ENABLE) \
+               SD_BOOT_ENABLE=$(SD_BOOT_ENABLE) \
+               ASTRA_HOST_ENABLE=$(ASTRA_HOST_ENABLE) ROM_WORDS=$(ROM_WORDS) \
+               UART_MONITOR=$(UART_MONITOR) UART_BAUD=$(UART_BAUD) \
                TARGET_FREQ_MHZ=$(TARGET_FREQ_MHZ) PNR_SEED=$(PNR_SEED) \
+               PNR_PLACER=$(PNR_PLACER) PNR_ROUTER=$(PNR_ROUTER) \
+               PNR_TIMING_WEIGHT=$(PNR_TIMING_WEIGHT) \
+               PNR_TIMING_RIPUP=$(PNR_TIMING_RIPUP) \
+               PNR_TIMING_ALLOW_FAIL=$(PNR_TIMING_ALLOW_FAIL) \
+               PNR_ROUTER2_ALT_WEIGHTS=$(PNR_ROUTER2_ALT_WEIGHTS) \
+               PNR_THREADS=$(if $(strip $(PNR_THREADS)),$(PNR_THREADS),default) \
+               PNR_FLOW=split SYNTH_ECP5_FLAGS=$(SYNTH_ECP5_FLAGS) \
+               SYNTH_KEEP_HIERARCHY=$(if $(strip $(SYNTH_KEEP_HIERARCHY)),$(SYNTH_KEEP_HIERARCHY),none) \
+               ASTRA_FLOORPLAN_MODE=$(ASTRA_FLOORPLAN_MODE) \
+               ASTRA_FLOORPLAN_ENFORCE=$(ASTRA_FLOORPLAN_ENFORCE) \
+               RESOURCE_PROFILE=$(RESOURCE_PROFILE) STAGE0_BOOT_BACKEND=host \
                ROM_VERSION=$(ROM_VERSION)
 ID_SRCS = Makefile gen_build_info.py boot.c crt0.S $(LD) \
           kernel_blob.S ../common/boot_contract.c ../include/astra/boot.h \
@@ -67,7 +102,7 @@ ID_SRCS = Makefile gen_build_info.py boot.c crt0.S $(LD) \
           ../../ndk/src/internal/mmio.h \
           $(sort $(wildcard $(KERNEL_DIR)/*.c $(KERNEL_DIR)/*.S \
                     $(KERNEL_DIR)/*.ld $(KERNEL_DIR)/*.py $(KERNEL_DIR)/Makefile)) \
-          $(SOC_ID_SRCS) $(CPU_ID_SRCS)
+          $(SOC_ID_SRCS) $(CPU_ID_SRCS) $(STAGE0_ID_SRCS)
 
 all: astra_boot.bin astra68.rom
 

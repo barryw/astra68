@@ -157,7 +157,11 @@ and old resource tables are not current status.
   A cycle-exact attempt to replace the ellipse ALU's six-bit state decode with
   its two-bit phase plus one registered X/Y selector passes every functional
   gate but maps 363 more LUT4s and 57 more carry cells than P48. It is rejected
-  before placement; P48 remains the release candidate.
+  before placement; P48 remains the release candidate. The independent Mac
+  seed-33 P48 route is also complete and rejected at 13.5285 MHz CPU and
+  65.3723 MHz SDRAM. Its 15.30 ns Draw path starts at `state[4]`, crosses the
+  deep next-state mux, and spends 11.212 ns in routing plus 4.085 ns in logic.
+  All P47/P48 diversity jobs are now complete.
   Placement estimates remain diagnostic only.
   Continue from [TIMING_CLOSURE.md](../fpga/soc/oss_flow/TIMING_CLOSURE.md)
   instead of repeating old seeds or speculative floorplans.
@@ -165,11 +169,13 @@ and old resource tables are not current status.
   production clock. No release-identical P48 bitstream has been packaged or
   accepted on hardware yet. A board that currently reaches POST is evidence for
   the retained earlier hardware baseline, not evidence for this active netlist.
-- The checked-in build entry points still disagree on CPU divider, target
-  frequency, and seed defaults, and the build identity does not encode every
-  synthesis/floorplan/router knob. Pass the diagnostic route first, then repair
-  and pin that flow before producing the release-identical netlist. The open
-  defects and required sequence are recorded in `TIMING_CLOSURE.md`.
+- The canonical entry points now agree on divider 0, 12.5 MHz CPU, seed 23,
+  heap timing weight 20, router1 timing ripup, and the measured critical
+  floorplan. The build ID covers all supported synthesis, placement,
+  floorplan, router, and resource-profile controls plus stage-0 sources. The
+  split flow packages only a timing-clean final route, and its manifest binds
+  both stage 0 and `/ASTRA68.ROM`. This flow still needs to be committed and
+  exercised by the nonzero-ID release rerun before it counts as evidence.
 
 ## Release boundary
 

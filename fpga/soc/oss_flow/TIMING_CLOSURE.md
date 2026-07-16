@@ -52,26 +52,28 @@ After the source commit exists, rebuild and reroute with the real ROM identity.
 generated-clock constraints are not preserved when a placed JSON is saved and
 loaded by a later nextpnr process.
 
-### Known reproducibility hazards
+### Reproducible release flow
 
-These are open release-flow defects at the P38 checkpoint:
+The P48 promotion resolves the earlier entry-point and identity hazards:
 
-- `sw/boot/Makefile` defaults `CPU_CLK_DIV_BIT` to 2 and `PNR_SEED` to 1,
-  while `mkbit.sh` defaults the seed to 2 and the SoC RTL also has reduced-speed
-  simulation defaults. A production build must pass the canonical values
-  explicitly until the defaults are unified.
-- `mkbit.sh` defaults `TARGET_FREQ_MHZ` to 12 even though the production CPU
-  target is 12.5 MHz. The SDC currently supplies the exact clock constraint,
-  but the command-line target and recorded banner must agree with it.
-- `BUILD_CONFIG` and the final build banner do not yet encode every synthesis,
-  floorplan, router, and alternate-weight knob. Two differently mapped images
-  can therefore claim the same identity.
-- The exploratory split place/route commands live outside the canonical script.
-  Once a route passes, promote its exact options into the checked-in flow before
-  calling the result reproducible.
+- `astra_soc.sv`, `sw/boot/Makefile`, and `mkbit.sh` now default to divider 0,
+  12.5 MHz CPU, seed 23, heap timing weight 20, router1 timing ripup, and the
+  measured critical floorplan.
+- `mkbit.sh` performs the proven split placement and routing sequence. Placement
+  may retain a timing estimate with a waiver; final routing has no waiver and
+  packages no bitstream when diagnostic `PNR_TIMING_ALLOW_FAIL=1` is selected.
+- `BUILD_CONFIG` includes every supported synthesis, placement, floorplan,
+  router, resource-profile, and timing-ripup control. Stage-0 sources are part
+  of the identity, and changing any retained control changes the build ID.
+- A successful build manifest records the source revision, host, exact tool
+  versions, complete configuration, and hashes of stage 0, the system ROM,
+  synthesis, placement, route, reports, packed configuration, and bitstream.
+  A packageable SD-boot build requires `ASTRA_SYSTEM_ROM` so `/ASTRA68.ROM`
+  cannot be omitted from that evidence.
 
-Resolve these before making the release-identical route. Do not silently change
-the exploration netlist while comparing P36 seeds.
+These flow changes make the release rerun reproducible; they do not make the
+zero-build-ID P48 route release evidence. Commit them first, then resynthesize,
+replace, and reroute the exact nonzero-ID image.
 
 ### Toolchain and host identity
 
@@ -433,6 +435,7 @@ can select the production flow.
 | P47/57 | Astraea `mem_owner[0]` at `(82,47)` to blitter `issue_dst_ptr_mem[1]` at `(69,89)` | 12.267 ns | 2.649 ns | Registered ownership crosses shared client ready/selection before returning to the blitter pointer enable. NUC passes CPU at 13.38 MHz but reaches only 67.04 MHz SDRAM. |
 | P48/23 | Draw `state[5]` at `(108,77)` to `ellipse_dx[47]` at `(103,78)` | 7.540 ns | 5.813 ns | Five operand-select LUTs feed the shared 48-bit ellipse add/sub carry chain. CPU passes at 13.21 MHz; SDRAM reaches 74.89 MHz and misses by 0.021 ns. The P47 internal SDRAM path is absent. |
 | P48/23 timing ripup | Draw `pixel_result_mem[10]` at `(86,63)` to a state/writeback register at `(108,80)` | 10.27 ns | 2.90 ns | Timing-driven ripup passes every clock at 13.22/75.93 MHz and moves the worst path away from the shared ellipse ALU. This is a zero-build-ID diagnostic pass, not the release-identical route. |
+| P48/33 | Draw `state[4]` at `(89,83)` to a Draw next-state register at `(89,84)` | 11.212 ns | 4.085 ns | Mac router1 crosses a deep state-dependent next-state mux and reaches 13.53 MHz CPU but only 65.37 MHz SDRAM. Routed JSON SHA-256 is `a36f606d...`; report SHA-256 is `72f5f526...`. The route is complete and rejected. |
 
 Coordinates vary by placement. RTL source and cone shape are the stable identity
 of a path; do not floorplan from coordinates copied from another seed.
@@ -521,7 +524,7 @@ Current P47/P48 route diversity is:
 - P48 router1 timing ripup, same seed and placement on Beast: complete and
   timing-clean at 13.22/75.93 MHz; diagnostic only until the canonical,
   release-identity rerun
-- P48 router1, seed 33 on the Mac: active
+- P48 router1, seed 33 on the Mac: complete and rejected at 13.53/65.37 MHz
 
 Keep `--timing-allow-fail` during diagnosis so a near miss still produces the
 complete report. Remove the waiver from the release acceptance criteria.
@@ -530,8 +533,8 @@ A controlled P37 placement experiment increased
 `--placer-heap-timingweight` from 10 to 20 without changing seed 57. The CPU
 estimate improved from 10.36 to 11.80 MHz while SDRAM held at 53.82 MHz. On
 seed 33, the same change improved CPU from 11.09 to 12.09 MHz and SDRAM from
-46.95 to 56.17 MHz. This makes timing weight 20 a useful P38 route candidate,
-but it is not a canonical setting until a full route demonstrates a benefit.
+46.95 to 56.17 MHz. P48's all-clock route now makes timing weight 20 part of
+the canonical release flow; the release-identical rerun must still prove it.
 
 ## What has not worked
 
@@ -671,28 +674,31 @@ gone, then exposes redundant internal SDRAM target-state decode. P48 replaces
 that decode with the already registered target without adding a state or
 changing a cycle; its exact source, functional references, and synthesis
 identity are frozen above. Its same-placement timing-ripup route is the first
-complete-graphics diagnostic result to pass every clock. Finish the active Mac
-P48 and NUC P47 diversity routes while promoting the proven split flow and
-evaluating only cycle-exact margin improvements.
+complete-graphics diagnostic result to pass every clock. Every P47/P48
+diversity route is now complete. Mac P48 fails on a deep Draw next-state mux;
+P49's cycle-exact attempt to simplify related state selection costs 363 LUT4s
+and 57 carry cells, so it remains rejected. Promote the proven split flow and
+run the release-identical image before considering another RTL change.
 Remaining legitimate levers, in order, are:
 
-1. Complete and compare the active Mac P48 route with the three complete P47
-   routes from their immutable 509-word-stage-0 netlists; record every repeated
-   critical cone.
-2. If the Mac P46 SDRAM open-row-hit path repeats, compute active-row equality
+1. Commit the canonical split flow, build the exact nonzero-ID stage 0 and
+   system ROM, then resynthesize and route Beast seed 23 with timing ripup.
+2. If the release rerun fails on the Mac/P49 Draw state-selection boundary,
+   optimize only after proving a smaller cycle-exact encoding than P48.
+3. If the Mac P46 SDRAM open-row-hit path repeats, compute active-row equality
    in parallel per bank before selecting the bank result. Preserve the exact
    zero-cycle row-hit fast path and measured controller throughput.
-3. If the Draw shared-ellipse-ALU path repeats, move its state-dependent operand
+4. If the Draw shared-ellipse-ALU path repeats, move its state-dependent operand
    selection into an existing predecessor cycle before changing the ALU width
    or adding a geometry cycle.
-4. If the sprite/Vega qualification path repeats, register or predecode that
+5. If the sprite/Vega qualification path repeats, register or predecode that
    exact client-to-owner boundary while preserving steady-state request rate.
-5. If the Vega-lock path repeats, change the zero-cycle lock-to-grant protocol
+6. If the Vega-lock path repeats, change the zero-cycle lock-to-grant protocol
    boundary; the eight-cell placement constraint already proved that moving
    only the lock net cannot close the machine.
-6. If another SDRAM core internal state path repeats, inspect that controller
+7. If another SDRAM core internal state path repeats, inspect that controller
    transition directly before changing another client or floorplan region.
-7. If several structurally different revisions plateau on the same boundary,
+8. If several structurally different revisions plateau on the same boundary,
    deliberately pipeline that boundary and update the protocol assertions and
    tests. That is the point to change the partition, not to keep seed hunting.
 

@@ -17,7 +17,7 @@ def load_json(path: Path) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("report", type=Path, help="nextpnr JSON report")
+    parser.add_argument("report", nargs="?", type=Path, help="nextpnr JSON report")
     parser.add_argument(
         "--budget-file",
         type=Path,
@@ -26,13 +26,23 @@ def main() -> int:
     parser.add_argument(
         "--profile", help="budget profile; defaults to the configured profile"
     )
+    parser.add_argument(
+        "--validate-profile",
+        action="store_true",
+        help="validate that the selected profile exists, then exit",
+    )
     args = parser.parse_args()
 
     try:
-        report = load_json(args.report)
         budgets = load_json(args.budget_file)
         profile_name = args.profile or budgets["default_profile"]
         profile = budgets["profiles"][profile_name]
+        if args.validate_profile:
+            print(f"Resource profile: {profile_name} - {profile['description']}")
+            return 0
+        if args.report is None:
+            parser.error("report is required unless --validate-profile is used")
+        report = load_json(args.report)
         expected = budgets["device"]["resources"]
         absolute_max = budgets["absolute_max"]
         utilization = report["utilization"]

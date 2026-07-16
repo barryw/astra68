@@ -21,7 +21,7 @@ module astra_soc #(
     parameter integer SDRAM_READY_DELAY = 1048575,
     parameter integer SDRAM_READ_LATENCY = 3,
     parameter        HDMI_ENABLE = 1'b1,  // 720x480 POST console on ULX3S GPDI
-    parameter integer CPU_CLK_DIV_BIT = 2, // 0=12.5 MHz, 1=6.25 MHz, 2=3.125 MHz
+    parameter integer CPU_CLK_DIV_BIT = 0, // 0=12.5 MHz, 1=6.25 MHz, 2=3.125 MHz
     parameter integer UART_BAUD = 115200,
     parameter integer UART_RX_FIFO_DEPTH = 128,
     parameter        SD_BOOT_ENABLE = 1'b0,
