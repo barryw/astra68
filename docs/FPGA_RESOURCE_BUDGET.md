@@ -40,7 +40,7 @@ canonical Yosys `-abc2` mapping currently bracket the timing work:
 | P41 | 54,439 | -73 | Registered 15-label blitter phase boundary; rejected on area and timing. |
 | P44 | 54,399 | -33 | Eleven-fact boundary; exact tests pass, but all routes and area fail. |
 | P45 | 54,345 | 21 | Registered row-offset multiplier operand; exact tests pass, first route reaches 71.74 MHz SDRAM and fails timing. |
-| P46 | 54,191 | 175 | Removes the redundant request-count comparator; exact tests pass, but completed routes expose Draw glyph decode and the SDRAM row-hit path. |
+| P46 | 54,191 | 175 | Removes the redundant request-count comparator; exact tests pass, but routes expose Draw glyph decode, SDRAM row-hit, and tile/Vega qualification paths. |
 | P47 | 53,966 | 400 | Uses the contiguous glyph opcode's two mode bits in glyph-only states; exact tests pass and independent routes are active. |
 
 P47's packed resources are:

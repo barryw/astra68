@@ -133,7 +133,7 @@ All frequencies below are post-route nextpnr results, not placement estimates.
 | P41 | 54,439 | 14.08 MHz | 62.47 MHz | Added a 15-bit registered one-hot bus-phase vector alongside the binary blitter control state. Yosys retained all 15 phase FFs and mapped 43,643 LUT4s/18,259 FFs with zero SCCs. Packing is 73 cells over the `core_graphics` limit. Beast seed 23 proved that the old live blitter-state cone was gone, but exposed a 16.01 ns registered Vega-lock-to-SDRAM-owner path. Mac seed 33 and NUC seed 57 were intentionally stopped after this area-and-timing rejection so those hosts could route P44. |
 | P44 | 54,399 | 14.23 MHz | 70.90 MHz | Replaced the 15 mutually exclusive phase labels with 11 registered interface facts that intentionally overlap when one state implies several facts. All directed graphics, integrated 68030 graphics, boot, SDRAM, DMA, and kernel-entry references remain exact. Beast seed 23 exposed `rows - 1` feeding the validation multiplier; Mac seed 33 repeated the Vega-lock path; NUC seed 57 repeated sprite qualification through Vega arbitration. Packing remains 33 cells over profile, so P44 is rejected. |
 | P45 | 54,345 | 13.85 MHz | 72.01 MHz | The existing row counter now holds rows after the current row and captures `height - 1` before validation. This removes the subtract from the multiplier cycle without adding state, registers, or transfer cycles. Exact directed, integrated, boot, DMA, POST, and kernel-entry references pass. Beast seeds 23 and 4 expose the chunk-count request comparator; timing ripup cannot repair it. NUC seed 57 exposes Draw's shared 48-bit ellipse ALU. Packing is 21 cells under profile, but all routes fail timing. |
-| P46 | 54,191 | 14.01 MHz | 70.20 MHz | Removes the redundant `issue_count_mem < chunk_count_mem` gate from request valid. Exact tests pass and the P45 comparator cone disappears. Beast seed 23 exposes Draw's full-byte glyph-opcode decode; Mac seed 33 exposes the SDRAM core's dynamic open-row-hit read path. P46 is rejected. |
+| P46 | 54,191 | 14.01 MHz | 70.20 MHz | Removes the redundant `issue_count_mem < chunk_count_mem` gate from request valid. Exact tests pass and the P45 comparator cone disappears. Beast seed 23 exposes Draw glyph decode, Mac seed 33 exposes the SDRAM row-hit path, and NUC seed 57 exposes tile/Vega request qualification. P46 is rejected. |
 | P47 | 53,966 | routing | routing | Glyph-only states decode the contiguous opcodes 8..11 from their two low mode bits. Exact tests pass, mapping drops by 145 LUT4s, packing drops by 225 cells, and independent routes are active. |
 
 P36 uses 64.76% of the ECP5 fabric, 80/208 block RAMs, and 17/156
@@ -242,8 +242,11 @@ and ends at Draw state selection. Mac seed 33 passes CPU at 13.2642 MHz and
 reaches 69.1419 MHz SDRAM. Its failed path starts at the outer controller's
 registered request, crosses the selected-bank/open-row equality and
 `STATE_READ_WAIT` fast-path logic, and ends at the SDRAM core's delayed-state
-clock enable. Both routes prove the comparator removal worked, but neither is
-a production route, so P46 is rejected.
+clock enable. NUC seed 57 passes CPU at 13.6567 MHz and reaches 68.8705 MHz
+SDRAM. Its failed path starts at tile-builder state, crosses Vega's selected
+owner and request qualification, and ends at a request-queue update enable.
+All three routes prove the comparator removal worked, but none is a production
+route, so P46 is rejected.
 
 P47 is the measured response to the Beast P46 route. Glyph opcodes are
 contiguous values 8..11, and the affected decode states are reachable only for
@@ -337,6 +340,7 @@ can select the production flow.
 | P45/57 | Draw `state[3]` at `(104,74)` to ellipse result register input at `(97,83)` | 8.789 ns | 6.356 ns | State decode selects operands for the shared 48-bit `ellipse_alu_result` add/sub carry chain. The independent NUC toolchain passes CPU at 13.97 MHz but reaches only 66.03 MHz SDRAM. |
 | P46/23 | Draw configuration opcode at `(86,79)` to Draw state input at `(99,83)` | 11.340 ns | 2.905 ns | Full-byte glyph operation decode crossed state selection. Beast passes CPU at 14.01 MHz and reaches 70.20 MHz SDRAM. The P45 request comparator is absent. |
 | P46/33 | outer SDRAM request register at `(96,49)` to SDRAM-core delayed-state enable at `(117,59)` | 10.594 ns | 3.869 ns | Dynamic bank selection, active-row equality, and the zero-cycle `STATE_READ_WAIT` row-hit fast path remain in one cycle. Mac passes CPU at 13.26 MHz and reaches 69.14 MHz SDRAM. |
+| P46/57 | tile-builder `state[3]` at `(30,12)` to Vega request-queue update enable at `(23,24)` | 10.887 ns | 3.633 ns | Tile request qualification crosses `mem_selected_owner` and queue-update logic. NUC passes CPU at 13.66 MHz and reaches 68.87 MHz SDRAM. |
 
 Coordinates vary by placement. RTL source and cone shape are the stable identity
 of a path; do not floorplan from coordinates copied from another seed.
@@ -556,13 +560,14 @@ and 118.70 MiB/s fill, with exact copy and fill completion counts of 1499 and
 
 ## Current structural experiment and next levers
 
-P46 is fully measured on Beast and Mac. Both routes remove the targeted P45
-comparator, proving that the protocol-state simplification synthesized as
-intended, but they expose two independent boundaries and fail 75 MHz. P47
-removes the measured Beast full-byte glyph decode with the exact two-bit mode
-encoded by opcodes 8..11. Its source, mapped netlist, packed resources, and all
-functional/cycle references are frozen above. Full Beast, Mac, and NUC routes
-decide whether P47 closes timing or exposes the next boundary.
+P46 is fully measured on Beast, Mac, and NUC. All three routes remove the
+targeted P45 comparator, proving that the protocol-state simplification
+synthesized as intended, but they expose three independent boundaries and fail
+75 MHz. P47 removes the measured Beast full-byte glyph decode with the exact
+two-bit mode encoded by opcodes 8..11. Its source, mapped netlist, packed
+resources, and all functional/cycle references are frozen above. Full Beast,
+Mac, and NUC routes decide whether P47 closes timing or exposes the next
+boundary.
 Remaining legitimate levers, in order, are:
 
 1. Complete and compare the active Beast, Mac, and NUC P47 routes from the
@@ -613,10 +618,11 @@ the existing row counter, preserves every exact cycle reference, maps 160
 fewer LUT4s, and packs to 54,345 cells. Its first route removes the intended
 P44 cone but tops out at 72.01 MHz SDRAM on the chunk-count request comparator.
 P46 removes only that redundant gate and has exact functional and cycle results;
-its Beast and Mac routes remove the intended cone but fail on Draw glyph decode
-and SDRAM row-hit logic. P47 removes the measured Draw decode, saves another
-225 packed cells, and is the active physical checkpoint. Do not add a blind
-broad Vega region or lower either production clock.
+its three routes remove the intended cone but fail on Draw glyph decode, SDRAM
+row-hit logic, and tile/Vega request qualification. P47 removes the measured
+Draw decode, saves another 225 packed cells, and is the active physical
+checkpoint. Do not add a blind broad Vega region or lower either production
+clock.
 
 One P36 router2-alt path already has a cycle-neutral candidate if it survives
 P38: register the next sprite `prep_count` in `ST_ROW_SETUP` and the preceding

@@ -119,7 +119,9 @@ and old resource tables are not current status.
   completed P46 routes, so that correction worked. Beast seed 23 reaches
   14.0087/70.2001 MHz on Draw's full-byte glyph-opcode decode; Mac seed 33
   reaches 13.2642/69.1419 MHz on the SDRAM core's dynamic open-row-hit read
-  path. P46 is rejected.
+  path; NUC seed 57 reaches 13.6567/68.8705 MHz on tile-builder state crossing
+  Vega owner selection and request-queue update. P46 is fully measured and
+  rejected.
   P47 exploits the contiguous glyph opcodes 8..11 inside glyph-only states and
   decodes their two low mode bits rather than rebuilding an eight-bit opcode
   comparison. All exact P46 functional and cycle references still pass. Beast
