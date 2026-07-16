@@ -100,10 +100,17 @@ and old resource tables are not current status.
   the floorplan report proved that its validation multiplier had been
   constrained into a region with zero DSP sites. The control region now
   includes the adjacent measured DSP row, and enforced region capacity is a
-  fail-fast invariant rather than a warning.
+  fail-fast invariant rather than a warning. The corrected Beast seed-23
+  router1 route passes CPU at 13.8165 MHz but reaches only 71.7360 MHz SDRAM,
+  missing the 75.0075 MHz constraint by 0.608 ns. The P44
+  subtract-to-multiplier path is gone. The replacement path begins at
+  `chunk_count_mem[4]`, crosses the blitter's
+  `issue_count_mem < chunk_count_mem` request-valid comparison, and ends in
+  the shared SDRAM owner/state input. P45 therefore remains a diagnostic
+  checkpoint, not a usable bitstream.
   Continue from [TIMING_CLOSURE.md](../fpga/soc/oss_flow/TIMING_CLOSURE.md)
   instead of repeating old seeds or speculative floorplans.
-- No complete-graphics P45 bitstream has passed the production route or been
+- No complete-graphics P45 bitstream has passed every production clock or been
   accepted on hardware yet. A board that currently reaches POST is evidence for
   the retained earlier hardware baseline, not evidence for this active netlist.
 - The checked-in build entry points still disagree on CPU divider, target

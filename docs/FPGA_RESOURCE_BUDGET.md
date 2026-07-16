@@ -39,7 +39,7 @@ canonical Yosys `-abc2` mapping currently bracket the timing work:
 | P39 | 54,003 | 363 | Last checkpoint inside the 65% profile; best SDRAM route is 68.65 MHz. |
 | P41 | 54,439 | -73 | Registered 15-label blitter phase boundary; rejected on area and timing. |
 | P44 | 54,399 | -33 | Eleven-fact boundary; exact tests pass, but all routes and area fail. |
-| P45 | 54,345 | 21 | Registered row-offset multiplier operand; exact tests pass, route pending. |
+| P45 | 54,345 | 21 | Registered row-offset multiplier operand; exact tests pass, first route reaches 71.74 MHz SDRAM and fails timing. |
 
 P45's packed resources are:
 
