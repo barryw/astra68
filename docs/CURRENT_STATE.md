@@ -51,6 +51,16 @@ and old resource tables are not current status.
 - Beast is the primary high-throughput synthesis/simulation host. The Mac and
   NUC are useful for independent placement/router coverage. Transfer immutable
   artifacts with `rsync`; access remotes through `ssh`.
+- Do not treat `/home/barry/astra68` on either remote as a clean canonical
+  checkout. On 2026-07-15 NUC's copy was a dirty historical `harte-harness`
+  branch, and Beast's path was not a Git worktree. Do not pull, reset, clean, or
+  release from either path. Build and test pushed `main` from a fresh immutable
+  `/tmp/astra68-<checkpoint>` bundle, and keep the older remote state intact.
+- Beast has the intended GCC, m68k cross compiler, GHDL/OSS CAD, and static
+  analyzer, but its system Python lacks `pytest` and it has no Docker. Run
+  shared architecture and Harte targets directly there when appropriate. The
+  Mac's pinned Docker/OrbStack path is the verified NDK documentation builder;
+  do not weaken the GCC analyzer or docs gate to fit the wrong host.
 - OSS CAD revisions differ between hosts. A route made with another nextpnr or
   Yosys revision is useful diversity, not a controlled same-seed comparison.
   Record the exact host and tool identities with every retained artifact.
