@@ -82,9 +82,10 @@ and old resource tables are not current status.
   physical device limit. The `complete_chipset` target is 75%, with an absolute
   80% stop. See [FPGA_RESOURCE_BUDGET.md](FPGA_RESOURCE_BUDGET.md); historical
   audit tables are not current capacity numbers.
-- The active blocker is physical timing closure of the complete graphics SoC,
-  not a known functional failure. P39 is the last checkpoint under the 65%
-  profile at 54,003 packed cells, but its best SDRAM route is 68.65 MHz. P41
+- The active blocker is promotion of the first timing-clean diagnostic route
+  into a reproducible nonzero-build-ID bitstream and board acceptance, not a
+  known functional failure. Earlier P39 packed under the 65% profile at 54,003
+  cells, but its best SDRAM route was only 68.65 MHz. P41
   removed the live blitter-state cone but is 73 cells over profile and its
   first route exposed a worse registered Vega-lock path. P44's 11 overlapping
   registered interface facts pass every exact functional reference and reduce
@@ -131,19 +132,37 @@ and old resource tables are not current status.
   The intended glyph-decode path is gone; the replacement path is internal to
   the SDRAM core, where ACTIVATE/PRECHARGE rebuild the already captured target
   through combinational `target_state_r` before updating row-open state. P47 is
-  rejected by that route, while its Mac seed-33 and NUC seed-57 routes remain
-  active as independent evidence. P48 consumes registered `target_state_q` in
+  rejected by that route. Mac seed 33 also fails at 14.088277/69.008347 MHz on
+  tile-builder state crossing Vega selected-owner arbitration into sprite
+  response state. NUC seed 57 also fails at 13.381866/67.042099 MHz; its path
+  runs from Astraea's registered `mem_owner[0]` through shared client
+  ready/selection logic into blitter `issue_dst_ptr_mem[1]`. P48 consumes
+  registered `target_state_q` in
   those exact decisions without adding a state or changing transaction timing.
   Directed graphics, integrated normal/INDEX8/RGB565, SDRAM, boot, DMA, POST,
   and kernel-entry results remain exact. Its frozen Beast synthesis maps 43,365
   LUT4s, 18,252 FFs, 3,826 carry cells, 80 BRAMs, and 17 multipliers with zero
   final SCCs. Beast seed-23 placement packs 53,957 `TRELLIS_COMB`, nine fewer
   than P47 and 409 inside the profile, with every enforced region physically
-  legal. P48 full routing is the active checkpoint; placement estimates remain
-  diagnostic only.
+  legal. Its first full route passes CPU at 13.206027 MHz and reaches 74.889542
+  MHz SDRAM against 75.007500 MHz, a real 0.021 ns miss. The targeted P47 SDRAM
+  path is gone; the remaining path runs from Draw `state[5]` through operand
+  selection and the shared 48-bit ellipse add/sub chain into `ellipse_dx[47]`.
+  Same-placement timing ripup then completes normally and passes every clock:
+  13.219120 MHz CPU and 75.930145 MHz SDRAM. The new 13.17 ns SDRAM path runs
+  from Draw `pixel_result_mem[10]` through pixel-value and state/writeback
+  selection, with 10.27 ns routing and 2.90 ns logic. This is the first
+  complete-graphics diagnostic timing pass, but its zero build ID, exploratory
+  command line, and roughly 0.16 ns SDRAM slack are not release evidence.
+  A cycle-exact attempt to replace the ellipse ALU's six-bit state decode with
+  its two-bit phase plus one registered X/Y selector passes every functional
+  gate but maps 363 more LUT4s and 57 more carry cells than P48. It is rejected
+  before placement; P48 remains the release candidate.
+  Placement estimates remain diagnostic only.
   Continue from [TIMING_CLOSURE.md](../fpga/soc/oss_flow/TIMING_CLOSURE.md)
   instead of repeating old seeds or speculative floorplans.
-- No complete-graphics P47/P48 bitstream has passed every production clock or been
+- P48 now has one complete-graphics diagnostic route that passes every
+  production clock. No release-identical P48 bitstream has been packaged or
   accepted on hardware yet. A board that currently reaches POST is evidence for
   the retained earlier hardware baseline, not evidence for this active netlist.
 - The checked-in build entry points still disagree on CPU divider, target
