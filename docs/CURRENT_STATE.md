@@ -127,11 +127,23 @@ and old resource tables are not current status.
   comparison. All exact P46 functional and cycle references still pass. Beast
   Yosys `0.64+159` maps 43,290 LUT4s and 18,253 FFs with zero SCCs, then packs
   to 53,966 `TRELLIS_COMB`: 225 fewer than P46 and 400 cells inside the active
-  profile. Independent Beast seed-23, Mac seed-33, and NUC seed-57 physical
-  results are the active checkpoint. Placement estimates are diagnostic only.
+  profile. Beast seed 23 routes at 13.893520 MHz CPU and 66.684448 MHz SDRAM.
+  The intended glyph-decode path is gone; the replacement path is internal to
+  the SDRAM core, where ACTIVATE/PRECHARGE rebuild the already captured target
+  through combinational `target_state_r` before updating row-open state. P47 is
+  rejected by that route, while its Mac seed-33 and NUC seed-57 routes remain
+  active as independent evidence. P48 consumes registered `target_state_q` in
+  those exact decisions without adding a state or changing transaction timing.
+  Directed graphics, integrated normal/INDEX8/RGB565, SDRAM, boot, DMA, POST,
+  and kernel-entry results remain exact. Its frozen Beast synthesis maps 43,365
+  LUT4s, 18,252 FFs, 3,826 carry cells, 80 BRAMs, and 17 multipliers with zero
+  final SCCs. Beast seed-23 placement packs 53,957 `TRELLIS_COMB`, nine fewer
+  than P47 and 409 inside the profile, with every enforced region physically
+  legal. P48 full routing is the active checkpoint; placement estimates remain
+  diagnostic only.
   Continue from [TIMING_CLOSURE.md](../fpga/soc/oss_flow/TIMING_CLOSURE.md)
   instead of repeating old seeds or speculative floorplans.
-- No complete-graphics P47 bitstream has passed every production clock or been
+- No complete-graphics P47/P48 bitstream has passed every production clock or been
   accepted on hardware yet. A board that currently reaches POST is evidence for
   the retained earlier hardware baseline, not evidence for this active netlist.
 - The checked-in build entry points still disagree on CPU divider, target

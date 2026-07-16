@@ -254,8 +254,8 @@ begin
     //-----------------------------------------
     STATE_ACTIVATE :
     begin
-        // Proceed to read or write state
-        next_state_r = target_state_r;
+        // IDLE captured the target before entering this command sequence.
+        next_state_r = target_state_q;
     end
     //-----------------------------------------
     // STATE_READ
@@ -307,7 +307,7 @@ begin
     STATE_PRECHARGE :
     begin
         // Closing row to perform refresh
-        if (target_state_r == STATE_REFRESH)
+        if (target_state_q == STATE_REFRESH)
             next_state_r = STATE_REFRESH;
         // Must be closing row to open another
         else
@@ -566,7 +566,7 @@ begin
     STATE_PRECHARGE :
     begin
         // Precharge due to refresh, close all banks
-        if (target_state_r == STATE_REFRESH)
+        if (target_state_q == STATE_REFRESH)
         begin
             // Precharge all banks
             command_q           <= CMD_PRECHARGE;

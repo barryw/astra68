@@ -15,6 +15,10 @@
 - Closing a local tool/SSH session does not prove that its remote CAD process
   exited. Before launching or accepting a remote build, check `pgrep -af
   nextpnr`/`yosys` on that host and terminate only stale, identified jobs.
+- When a command runner returns a live session ID, retain it and poll that exact
+  session through completion. A wrapper returning without visible output is not
+  proof that its remote child completed or failed; confirm both the session exit
+  status and the expected artifact/log before starting a replacement run.
 
 ## FPGA Timing Closure
 
