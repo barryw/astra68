@@ -615,10 +615,12 @@ module astraea_blitter #(
     // responses in flight. Dropping it between fully retired phases gives the
     // real-time display port a bounded preemption point every CHUNK_UNITS.
     assign mem_lock = request_facts_mem[RF_MEM_LOCK];
+    // The issue state retires on the same edge that accepts its final request,
+    // so its registered fact is the exact valid window. Rechecking the counters
+    // here only puts a carry chain on the shared SDRAM arbitration path.
     assign mem_valid = busy_mem &&
-                       ((issuing_read || issuing_copy_write || issuing_fill) ?
-                        issue_count_mem < chunk_count_mem :
-                        (km_issuing_read || km_issuing_write));
+                       (issuing_read || issuing_copy_write || issuing_fill ||
+                        km_issuing_read || km_issuing_write);
     assign mem_write = km_bus_active ? km_issuing_write :
                        issuing_copy_write || issuing_fill;
     assign mem_addr = km_bus_active ?
@@ -1113,6 +1115,10 @@ module astraea_blitter #(
             if (request_facts_mem !== request_facts_for_state(state_mem))
                 $fatal(1, "blitter request facts/state mismatch state=%0d facts=%h",
                        state_mem, request_facts_mem);
+            if ((issuing_read || issuing_copy_write || issuing_fill) &&
+                issue_count_mem >= chunk_count_mem)
+                $fatal(1, "blitter issue state has no request remaining count=%0d chunk=%0d",
+                       issue_count_mem, chunk_count_mem);
         end
     end
 

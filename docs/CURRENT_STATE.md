@@ -95,22 +95,33 @@ and old resource tables are not current status.
   sprite-qualification boundaries. P44 is fully measured and rejected. P45
   registers the measured row-count multiplier operand using the existing row
   counter; all exact functional gates pass, mapping drops by 160 LUT4s, and
-  packing reaches 54,345, only 21 cells inside the profile. Its route is the
-  active timing checkpoint. The first P45 placement matrix was stopped after
+  packing reaches 54,345, only 21 cells inside the profile. The first P45
+  placement matrix was stopped after
   the floorplan report proved that its validation multiplier had been
   constrained into a region with zero DSP sites. The control region now
   includes the adjacent measured DSP row, and enforced region capacity is a
   fail-fast invariant rather than a warning. The corrected Beast seed-23
-  router1 route passes CPU at 13.8165 MHz but reaches only 71.7360 MHz SDRAM,
-  missing the 75.0075 MHz constraint by 0.608 ns. The P44
-  subtract-to-multiplier path is gone. The replacement path begins at
+  router1 route passes CPU at 13.8165 MHz but reaches only 71.7360 MHz SDRAM.
+  Timing-driven ripup improves that placement only to 72.0098 MHz, while
+  independent Beast seed 4 repeats the same cone at 65.6125 MHz. The P44
+  subtract-to-multiplier path is gone; the replacement path begins at
   `chunk_count_mem[4]`, crosses the blitter's
   `issue_count_mem < chunk_count_mem` request-valid comparison, and ends in
-  the shared SDRAM owner/state input. P45 therefore remains a diagnostic
-  checkpoint, not a usable bitstream.
+  shared SDRAM arbitration. NUC seed 57 reaches 66.0284 MHz on an independent
+  Draw shared-ellipse-ALU path. P45 is fully measured and rejected.
+  P46 removes the redundant live issue-count comparison because the registered
+  issue-state fact retires on the same edge as the final accepted request; a
+  simulation assertion preserves that invariant. Directed graphics,
+  integrated normal/INDEX8/RGB565, boot, DMA, POST, and kernel-entry results
+  remain cycle exact. The frozen Beast synthesis maps 43,435 LUT4s and 18,253
+  FFs with zero SCCs, then packs to 54,191 `TRELLIS_COMB`: 154 fewer than P45
+  and 175 cells inside the profile. Corrected critical-floorplan placements
+  complete on Beast seed 23 at 11.49/60.24 MHz, Mac seed 33 at 10.87/56.28
+  MHz, and NUC seed 57 at 11.62/56.23 MHz. These are placement estimates only;
+  independent full routes are the active checkpoint.
   Continue from [TIMING_CLOSURE.md](../fpga/soc/oss_flow/TIMING_CLOSURE.md)
   instead of repeating old seeds or speculative floorplans.
-- No complete-graphics P45 bitstream has passed every production clock or been
+- No complete-graphics P46 bitstream has passed every production clock or been
   accepted on hardware yet. A board that currently reaches POST is evidence for
   the retained earlier hardware baseline, not evidence for this active netlist.
 - The checked-in build entry points still disagree on CPU divider, target

@@ -125,7 +125,8 @@ All frequencies below are post-route nextpnr results, not placement estimates.
 | P39 | 54,003 | 12.75 MHz | 68.65 MHz | The direct grant-selected DMA mux recovered most of P38's area, but did not close SDRAM. Beast seed 23 passed CPU at 12.75 MHz and reached 68.65 MHz SDRAM; its path ran from Draw's registered pixel result through the glyph-source address add and validation. Mac seed 33 reached 12.11/67.47 MHz and exposed sprite state through Vega enqueue and queue occupancy. |
 | P41 | 54,439 | 14.08 MHz | 62.47 MHz | Added a 15-bit registered one-hot bus-phase vector alongside the binary blitter control state. Yosys retained all 15 phase FFs and mapped 43,643 LUT4s/18,259 FFs with zero SCCs. Packing is 73 cells over the `core_graphics` limit. Beast seed 23 proved that the old live blitter-state cone was gone, but exposed a 16.01 ns registered Vega-lock-to-SDRAM-owner path. Mac seed 33 and NUC seed 57 were intentionally stopped after this area-and-timing rejection so those hosts could route P44. |
 | P44 | 54,399 | 14.23 MHz | 70.90 MHz | Replaced the 15 mutually exclusive phase labels with 11 registered interface facts that intentionally overlap when one state implies several facts. All directed graphics, integrated 68030 graphics, boot, SDRAM, DMA, and kernel-entry references remain exact. Beast seed 23 exposed `rows - 1` feeding the validation multiplier; Mac seed 33 repeated the Vega-lock path; NUC seed 57 repeated sprite qualification through Vega arbitration. Packing remains 33 cells over profile, so P44 is rejected. |
-| P45 | 54,345 | 13.82 MHz | 71.74 MHz | The existing row counter now holds rows after the current row and captures `height - 1` before validation. This removes the subtract from the multiplier cycle without adding state, registers, or transfer cycles. Exact directed, integrated, boot, DMA, POST, and kernel-entry references pass. Beast seed 23 removes the P44 arithmetic path but exposes the chunk-count request comparator feeding shared SDRAM ownership. Packing is 21 cells under profile; timing still fails. |
+| P45 | 54,345 | 13.85 MHz | 72.01 MHz | The existing row counter now holds rows after the current row and captures `height - 1` before validation. This removes the subtract from the multiplier cycle without adding state, registers, or transfer cycles. Exact directed, integrated, boot, DMA, POST, and kernel-entry references pass. Beast seeds 23 and 4 expose the chunk-count request comparator; timing ripup cannot repair it. NUC seed 57 exposes Draw's shared 48-bit ellipse ALU. Packing is 21 cells under profile, but all routes fail timing. |
+| P46 | 54,191 | routing | routing | Removes the redundant `issue_count_mem < chunk_count_mem` gate from request valid. The registered issue-state fact already retires on the final accepted request; a simulation assertion enforces that invariant. Directed, integrated, and boot results remain cycle exact. Independent Beast, Mac, and NUC routes are active. |
 
 P36 uses 64.76% of the ECP5 fabric, 80/208 block RAMs, and 17/156
 multipliers. It passes the `core_graphics` profile with only 204 packed logic
@@ -212,6 +213,22 @@ It maps 160 fewer LUT4s than P44 and packs 54 fewer `TRELLIS_COMB`, enough for a
 21-cell profile pass. That margin remains too small for comfort and does not
 substitute for a timing-clean route.
 
+P46 removes the comparator that dominates two independent P45 Beast routes.
+The exact `astraea_blitter.sv` hash is
+`54048a48899f5cd07366b2560ba1a1a98f6b38bf63bf6d00c85fbdeff51dc104`;
+the frozen Beast synthesis JSON hash is
+`ddf7d330bce70e7c00b5a7cffbb601e97b7f67b8ee215626facb18131a9bdae8`.
+The complete production-feature netlist uses the exact 509-word AstraHost
+stage 0 and zero diagnostic build ID. Beast Yosys `0.64+159` maps 43,435 LUT4s,
+18,253 FFs, 80 block RAMs, 17 multipliers, and zero SCCs. Packing uses 54,191
+`TRELLIS_COMB`, 154 fewer than P45 and 175 cells inside the `core_graphics`
+profile. The frozen source passes the 1506/2369/2060 integrated line-cycle
+maxima, 144.48 MiB/s boot BIST in 136,077 cycles, DMA fill/copy counts 210/327,
+POST, and kernel entry. Timing-weight-20 corrected-floorplan placement
+estimates are 11.49/60.24 MHz on Beast seed 23, 10.87/56.28 MHz on Mac seed 33,
+and 11.62/56.23 MHz on NUC seed 57. These are not acceptance results; all three
+placed artifacts are being routed independently.
+
 The P45 physical matrix uses that one immutable JSON. Its canonical Beast copy is
 `/tmp/astra68-p45-src1/fpga/soc/oss_flow/astra.json`; byte-identical copies are
 `/private/tmp/p45-astra.json` on the Mac and
@@ -247,8 +264,13 @@ The first corrected full route is Beast seed 23, router1, report
 It completes with no routing errors and passes CPU at 13.8165 MHz, but SDRAM
 reaches only 71.7360 MHz against the 75.0075 MHz production constraint. The
 0.608 ns miss proves that P45 removed its intended P44 path but does not close
-the machine. Timeout, static, threaded-pack, parallel-refine, timing-ripup, and
-router2 variants remain physical experiments, not release defaults. Route
+the machine. Timing-driven ripup on the same placement repeats the exact source
+and destination registers and improves only to 72.0098 MHz. Independent Beast
+seed 4 repeats the comparator cone at 65.6125 MHz. NUC seed 57 reaches
+66.0284 MHz on a different state-select-to-48-bit-ellipse-ALU path. P45 is
+therefore fully measured and rejected. Timeout, static, threaded-pack,
+parallel-refine, timing-ripup, and router2 variants remain physical
+experiments, not release defaults. Route
 every retained candidate with `--no-pack --no-place`, reload the SDC, and
 record even failed cones here. Do not promote a faster placement merely
 because it completed; only a full all-clock route and release-identical rerun
@@ -276,6 +298,9 @@ can select the production flow.
 | P44/33 lock bridge | SDRAM controller state logic at `(98,49)` to controller state input at `(116,71)` | 10.403 ns | 3.838 ns | Constraining only the eight matched Vega-lock bridge cells removed that path from the top of the report, but the replacement internal-controller path limited SDRAM to 70.22 MHz and CPU fell to 13.18 MHz. |
 | P44/57 | sprite-builder `state[3]` at `(14,16)` to tile tag-FIFO write input at `(43,6)` | 11.376 ns | 3.121 ns | Sprite request qualification crossed Vega owner selection and shared request assembly before reaching the tile client. NUC passed CPU at 13.26 MHz and reached 68.98 MHz SDRAM. |
 | P45/23 | blitter `chunk_count_mem[4]` at `(77,81)` to SDRAM owner/state input at `(96,40)` | 10.074 ns | 3.866 ns | The P44 subtract-to-multiplier cone is absent. The replacement 13.940 ns path crosses `issue_count_mem < chunk_count_mem` at `astraea_blitter.sv:620`, then shared request qualification and owner/state selection. Beast passes CPU at 13.82 MHz but reaches only 71.74 MHz SDRAM. |
+| P45/23 timing ripup | Same registers and coordinates as P45/23 | 10.021 ns | 3.866 ns | Timing-driven ripup saves only 0.053 ns from the same structural comparator path. Beast reaches 13.85/72.01 MHz and still fails SDRAM by 0.555 ns. |
+| P45/4 | blitter `chunk_count_mem[0]` at `(80,75)` to blitter/shared-request input at `(87,74)` | 11.347 ns | 3.894 ns | An independent Beast placement repeats the same line-620 comparator cone. CPU passes at 13.60 MHz, while SDRAM reaches only 65.61 MHz. |
+| P45/57 | Draw `state[3]` at `(104,74)` to ellipse result register input at `(97,83)` | 8.789 ns | 6.356 ns | State decode selects operands for the shared 48-bit `ellipse_alu_result` add/sub carry chain. The independent NUC toolchain passes CPU at 13.97 MHz but reaches only 66.03 MHz SDRAM. |
 
 Coordinates vary by placement. RTL source and cone shape are the stable identity
 of a path; do not floorplan from coordinates copied from another seed.
@@ -487,25 +512,32 @@ and 118.70 MiB/s fill, with exact copy and fill completion counts of 1499 and
 
 ## Current structural experiment and next levers
 
-The frozen P45 JSON has now completed one full route. It proves that the P44
-subtract-to-multiplier path is removed, but its replacement path starts at the
-registered chunk count and crosses the issue-count comparison into shared SDRAM
-ownership. Complete the already-launched independent routes before editing RTL;
-if that comparator boundary repeats, make it the next single-purpose structural
-checkpoint.
+P45 is fully measured. Two Beast placements repeat the registered
+`chunk_count_mem` through `issue_count_mem < chunk_count_mem`, and timing-driven
+ripup cannot repair it. P46 removes that synthesized comparison: the registered
+issue-state fact is already the exact valid window because the FSM retires it on
+the same edge that accepts the final request. A simulation-only assertion fails
+if an issue state ever exists with `issue_count_mem >= chunk_count_mem`.
+P46's exact `astraea_blitter.sv` source hash is
+`54048a48899f5cd07366b2560ba1a1a98f6b38bf63bf6d00c85fbdeff51dc104`.
+Directed graphics, integrated 68030 normal/INDEX8/RGB565, boot, DMA, POST, and
+kernel-entry references remain exact. Synthesis and routing decide whether this
+checkpoint closes timing or merely exposes the next boundary.
 Remaining legitimate levers, in order, are:
 
-1. Confirm the P45 chunk-count/request-valid cone on another completed route,
-   then replace the wide live comparison with a cycle-neutral registered or
-   decrementing request fact without reducing issue throughput.
-2. If the sprite/Vega qualification path repeats, register or predecode that
+1. Complete and compare the active Beast, Mac, and NUC P46 routes from the
+   immutable 509-word-stage-0 netlist; record every repeated critical cone.
+2. If the Draw shared-ellipse-ALU path repeats, move its state-dependent operand
+   selection into an existing predecessor cycle before changing the ALU width
+   or adding a geometry cycle.
+3. If the sprite/Vega qualification path repeats, register or predecode that
    exact client-to-owner boundary while preserving steady-state request rate.
-3. If the Vega-lock path repeats, change the zero-cycle lock-to-grant protocol
+4. If the Vega-lock path repeats, change the zero-cycle lock-to-grant protocol
    boundary; the eight-cell placement constraint already proved that moving
    only the lock net cannot close the machine.
-4. If the SDRAM core's internal state path repeats, inspect that controller
+5. If the SDRAM core's internal state path repeats, inspect that controller
    transition directly before changing another client or floorplan region.
-5. If several structurally different revisions plateau on the same boundary,
+6. If several structurally different revisions plateau on the same boundary,
    deliberately pipeline that boundary and update the protocol assertions and
    tests. That is the point to change the partition, not to keep seed hunting.
 
@@ -536,8 +568,10 @@ qualification. The eight-cell lock floorplan removed its target but did not
 materially improve timing. P45 registers the validation multiplier operand in
 the existing row counter, preserves every exact cycle reference, maps 160
 fewer LUT4s, and packs to 54,345 cells. Its first route removes the intended
-P44 cone but reaches only 71.74 MHz SDRAM on the chunk-count request comparator.
-Do not add a blind broad Vega region or lower either production clock.
+P44 cone but tops out at 72.01 MHz SDRAM on the chunk-count request comparator.
+P46 removes only that redundant gate and has exact functional and cycle results;
+its physical result is pending. Do not add a blind broad Vega region or lower
+either production clock.
 
 One P36 router2-alt path already has a cycle-neutral candidate if it survives
 P38: register the next sprite `prep_count` in `ST_ROW_SETUP` and the preceding
