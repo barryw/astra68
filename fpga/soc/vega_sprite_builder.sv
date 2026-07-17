@@ -68,6 +68,9 @@ module vega_sprite_builder (
     localparam [5:0] ST_FIND_CALC = 6'd21;
     localparam [5:0] ST_PATTERN_READ = 6'd22;
 
+    localparam integer RF_MEM_VALID = 0;
+    localparam integer RF_MEM_LOCK = 1;
+
     // The register table is exactly the ABI's 32 entries x 8 longs. Port A is
     // CPU/copper MMIO; port B evaluates one coherent descriptor per scanline.
     (* ram_style = "block" *) reg [31:0] descriptor_mem [0:255];
@@ -174,6 +177,7 @@ module vega_sprite_builder (
     reg [2:0] desc_pipe2_word;
     reg       desc_issue_done;
     reg [5:0] state;
+    reg [1:0] request_facts;
     reg job_bank;
     reg [9:0] job_y;
     reg [9:0] job_width;
@@ -659,14 +663,34 @@ module vega_sprite_builder (
         end
     end
 
+    function automatic [1:0] request_facts_for_state(input [5:0] next_state);
+        begin
+            request_facts_for_state = 2'b00;
+            case (next_state)
+                ST_ROW_ISSUE: begin
+                    request_facts_for_state[RF_MEM_VALID] = 1'b1;
+                    request_facts_for_state[RF_MEM_LOCK] = 1'b1;
+                end
+                ST_ROW_DRAIN:
+                    request_facts_for_state[RF_MEM_LOCK] = 1'b1;
+                default: begin end
+            endcase
+        end
+    endfunction
+
+    task automatic set_state(input [5:0] next_state);
+        begin
+            state <= next_state;
+            request_facts <= request_facts_for_state(next_state);
+        end
+    endtask
+
     // ST_ROW_SETUP rejects zero-length rows and ST_ROW_ISSUE transitions on
     // the same edge that accepts the final word, so the index comparison is
-    // redundant. Keeping the shared-arbiter request on the registered state
-    // removes a row-width-to-grant combinational path.
-    wire row_issue_state = state == ST_ROW_ISSUE;
-    wire row_drain_state = state == ST_ROW_DRAIN;
-    assign mem_lock = row_issue_state || row_drain_state;
-    assign mem_valid = row_issue_state;
+    // redundant. Registered interface facts isolate the shared arbiter from
+    // the sprite builder's 23-state control decode without adding a cycle.
+    assign mem_lock = request_facts[RF_MEM_LOCK];
+    assign mem_valid = request_facts[RF_MEM_VALID];
     assign mem_write = 1'b0;
     assign mem_addr = row_word_base + {15'd0, row_issue_index, 2'b00};
     assign mem_be = 4'b1111;
@@ -676,7 +700,7 @@ module vega_sprite_builder (
     always @(posedge mem_clk) begin
         done <= 1'b0;
         if (mem_rst) begin
-            state <= ST_IDLE;
+            set_state(ST_IDLE);
             busy <= 1'b0;
             done <= 1'b0;
             config_error <= 1'b0;
@@ -920,16 +944,16 @@ module vega_sprite_builder (
                             collision_bitmap_mem <= 32'd0;
                             overflow_frame_mem <= 1'b0;
                         end
-                        state <= ST_CLEAR;
+                        set_state(ST_CLEAR);
                     end
                 end
 
                 ST_CLEAR: begin
                     if (clear_chunk == 4'd15) begin
                         if (job_enable)
-                            state <= ST_DESC_SETUP;
+                            set_state(ST_DESC_SETUP);
                         else if (!line_clear_active)
-                            state <= ST_FINISH;
+                            set_state(ST_FINISH);
                     end else begin
                         clear_chunk <= clear_chunk + 4'd1;
                     end
@@ -941,7 +965,7 @@ module vega_sprite_builder (
                     desc_pipe1_valid <= 1'b0;
                     desc_pipe2_valid <= 1'b0;
                     desc_issue_done <= 1'b0;
-                    state <= ST_DESC_ISSUE;
+                    set_state(ST_DESC_ISSUE);
                 end
 
                 ST_DESC_ISSUE: begin
@@ -991,14 +1015,14 @@ module vega_sprite_builder (
                         endcase
                         if (desc_pipe2_index == 5'd31 &&
                             desc_pipe2_word == 3'd4)
-                            state <= ST_DESC_DRAIN;
+                            set_state(ST_DESC_DRAIN);
                     end
                 end
 
                 ST_DESC_DRAIN: begin
                     if (eval_final_valid && eval_final_index == 5'd31 &&
                         !line_clear_active)
-                        state <= ST_SELECT_SETUP;
+                        set_state(ST_SELECT_SETUP);
                 end
 
                 ST_SELECT_SETUP: begin
@@ -1006,7 +1030,7 @@ module vega_sprite_builder (
                     select_priority_mask <= priority_read_data;
                     budget_remaining <= job_budget;
                     render_count <= 6'd0;
-                    state <= ST_SELECT;
+                    set_state(ST_SELECT);
                 end
 
                 // Admission runs topmost first. A sprite is either admitted in
@@ -1016,8 +1040,8 @@ module vega_sprite_builder (
                     if (select_priority_mask == 32'd0) begin
                         if (select_priority == 4'd0) begin
                             render_position <= render_count;
-                            state <= render_count == 6'd0 ?
-                                     ST_FINISH : ST_FIND;
+                            set_state(render_count == 6'd0 ?
+                                      ST_FINISH : ST_FIND);
                         end else begin
                             select_priority <= select_priority - 4'd1;
                             select_priority_mask <= priority_read_data;
@@ -1026,14 +1050,14 @@ module vega_sprite_builder (
                         select_priority_mask <= select_priority_mask &
                                                 ~selected_onehot_q;
                         render_sprite_index <= selected_index;
-                        state <= ST_SELECT_META;
+                        set_state(ST_SELECT_META);
                     end
                 end
 
                 ST_SELECT_META: begin
                     render_order[render_count] <= render_sprite_index;
                     select_meta_width <= active_meta_width;
-                    state <= ST_SELECT_DECIDE;
+                    set_state(ST_SELECT_DECIDE);
                 end
 
                 ST_SELECT_DECIDE: begin
@@ -1046,20 +1070,20 @@ module vega_sprite_builder (
                         overflow_line_mem <= 1'b1;
                         overflow_frame_mem <= 1'b1;
                     end
-                    state <= ST_SELECT;
+                    set_state(ST_SELECT);
                 end
 
                 // Admission stored topmost-to-bottommost order. Walk it in
                 // reverse so rendering remains bottom-to-top.
                 ST_FIND: begin
                     if (render_position == 6'd0) begin
-                        state <= ST_FINISH;
+                        set_state(ST_FINISH);
                     end else begin
                         render_position <= render_position - 6'd1;
                         render_sprite_index <=
                             render_order[render_position - 6'd1];
                         render_end_after_sprite <= render_position == 6'd1;
-                        state <= ST_FIND_META;
+                        set_state(ST_FIND_META);
                     end
                 end
 
@@ -1069,14 +1093,14 @@ module vega_sprite_builder (
                     render_remaining <= active_meta_width;
                     render_row_base <= active_meta_row_base;
                     render_source_low <= active_meta_source_low;
-                    state <= ST_ROW_SETUP;
+                    set_state(ST_ROW_SETUP);
                 end
 
                 ST_ROW_SETUP: begin
                     if (row_word_count_calc == 8'd0 ||
                         row_word_count_calc > 8'd128) begin
                         config_error <= 1'b1;
-                        state <= ST_FINISH;
+                        set_state(ST_FINISH);
                     end else begin
                         row_word_base <= row_word_base_calc;
                         row_word_count <= row_word_count_calc;
@@ -1089,7 +1113,7 @@ module vega_sprite_builder (
                         row_rsp_index <= 8'd0;
                         row_outstanding <= 7'd0;
                         row_burst_count <= 5'd0;
-                        state <= ST_ROW_ISSUE;
+                        set_state(ST_ROW_ISSUE);
                     end
                 end
 
@@ -1099,7 +1123,7 @@ module vega_sprite_builder (
                         row_burst_count <= row_burst_count + 5'd1;
                         if (row_issue_index + 8'd1 >= row_word_count ||
                             row_burst_count == 5'd31)
-                            state <= ST_ROW_DRAIN;
+                            set_state(ST_ROW_DRAIN);
                     end
                 end
 
@@ -1107,15 +1131,15 @@ module vega_sprite_builder (
                     if (row_outstanding == 7'd0 ||
                         (mem_rsp_valid && row_outstanding == 7'd1)) begin
                         if (row_issue_index >= row_word_count)
-                            state <= ST_RENDER_PREP;
+                            set_state(ST_RENDER_PREP);
                         else
-                            state <= ST_ROW_YIELD;
+                            set_state(ST_ROW_YIELD);
                     end
                 end
 
                 ST_ROW_YIELD: begin
                     row_burst_count <= 5'd0;
-                    state <= ST_ROW_ISSUE;
+                    set_state(ST_ROW_ISSUE);
                 end
 
                 ST_RENDER_PREP: begin
@@ -1125,21 +1149,21 @@ module vega_sprite_builder (
                     prep_nibble_offset_q <= prep_nibble_offset;
                     prep_need_word1_q <= prep_need_word1;
                     prep_screen_lane_q <= render_screen_x[2:0];
-                    state <= ST_PATTERN_READ;
+                    set_state(ST_PATTERN_READ);
                 end
 
-                ST_PATTERN_READ: state <= ST_LINE_READ;
+                ST_PATTERN_READ: set_state(ST_LINE_READ);
 
                 ST_LINE_READ: begin
                     ascending_pattern_q <= ascending_pattern;
                     collision_compose_q <= collision_build_q;
-                    state <= ST_PATTERN_ALIGN;
+                    set_state(ST_PATTERN_ALIGN);
                 end
 
                 ST_PATTERN_ALIGN: begin
                     compose_nibbles_q <= aligned_lane_nibbles;
                     compose_lane_mask_q <= aligned_lane_mask;
-                    state <= ST_LINE_WRITE;
+                    set_state(ST_LINE_WRITE);
                 end
 
                 ST_LINE_WRITE: begin
@@ -1150,7 +1174,7 @@ module vega_sprite_builder (
 
                     if (render_remaining <= render_chunk_count) begin
                         if (render_end_after_sprite)
-                            state <= ST_FINISH;
+                            set_state(ST_FINISH);
                         else begin
                             // The next metadata word has been prefetched while
                             // the current sprite rendered. Retire and launch it
@@ -1165,7 +1189,7 @@ module vega_sprite_builder (
                             render_remaining <= active_meta_width;
                             render_row_base <= active_meta_row_base;
                             render_source_low <= active_meta_source_low;
-                            state <= ST_ROW_SETUP;
+                            set_state(ST_ROW_SETUP);
                         end
                     end else begin
                         render_screen_x <= render_screen_x +
@@ -1182,7 +1206,7 @@ module vega_sprite_builder (
                             render_nibble_cursor <=
                                 cursor_forward_next[2:0];
                         end
-                        state <= ST_RENDER_PREP;
+                        set_state(ST_RENDER_PREP);
                     end
                 end
 
@@ -1193,18 +1217,27 @@ module vega_sprite_builder (
                     overflow_published_mem <= overflow_frame_mem;
                     if (collision_line_event_mem)
                         collision_toggle_mem <= ~collision_toggle_mem;
-                    state <= ST_IDLE;
+                    set_state(ST_IDLE);
                 end
 
                 default: begin
                     busy <= 1'b0;
                     config_error <= 1'b1;
                     done <= 1'b1;
-                    state <= ST_IDLE;
+                    set_state(ST_IDLE);
                 end
             endcase
         end
     end
+
+`ifndef SYNTHESIS
+    always @(posedge mem_clk) begin
+        if (!mem_rst &&
+            request_facts !== request_facts_for_state(state))
+            $fatal(1, "sprite request facts/state mismatch state=%0d facts=%h",
+                   state, request_facts);
+    end
+`endif
 
     wire unused_overflow_line_mem = overflow_line_mem;
 endmodule

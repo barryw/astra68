@@ -111,9 +111,9 @@ and old resource tables are not current status.
   physical device limit. The `complete_chipset` target is 75%, with an absolute
   80% stop. See [FPGA_RESOURCE_BUDGET.md](FPGA_RESOURCE_BUDGET.md); historical
   audit tables are not current capacity numbers.
-- The active blocker is making the first timing-clean diagnostic route
-  reproducible with the nonzero release build ID, then completing board
-  acceptance. This is not a known functional failure. Earlier P39 packed under
+- The active blocker is reproducing P53's timing-clean seed-4 diagnostic route
+  with the exact committed nonzero build ID, then completing board acceptance.
+  This is not a known functional failure. Earlier P39 packed under
   the 65% profile at 54,003
   cells, but its best SDRAM route was only 68.65 MHz. P41
   removed the live blitter-state cone but is 73 cells over profile and its
@@ -214,8 +214,42 @@ and old resource tables are not current status.
   reports are byte-identical with SHA-256
   `b632784919297650cc9f15d3b123a41d1b435da566f913921fe53f61da891ced`,
   and every packed cell has the same BEL assignment. The identity-dependent
-  mapping problem is fixed; the exact committed nonzero release route remains.
-  Placement estimates remain diagnostic only.
+  mapping problem is fixed. The exact committed `19d7040`/`0xaade208e` release
+  passes every functional gate but fails timing at 14.332808 MHz CPU and
+  71.556351 MHz SDRAM. Its worst path runs from sprite-builder `state[3]`
+  through Vega owner selection into `request_count_next[1]`, with 11.070 ns
+  routing and 2.905 ns logic. It was incorrectly packaged because nextpnr
+  inherited placement's serialized timing waiver; the image was quarantined
+  and never loaded on hardware. The production flow now clears that saved
+  waiver and independently validates all six reported clocks before packaging.
+  P51 registers the two sprite request facts in lockstep with state and asserts
+  their equivalence. All exact functional gates pass; synthesis drops to
+  43,172 LUT4s with zero SCCs, and placement packs 53,834 `TRELLIS_COMB`,
+  leaving 532 cells under profile. Its completed strict seed-23 route fails at
+  13.306012 MHz CPU and 66.067657 MHz SDRAM. The sprite path is gone; the new
+  15.136 ns SDRAM path starts at tile-builder `state[3]`, crosses Vega owner
+  selection, and ends at request-control clock enable, spending 11.503 ns in
+  routing and 3.633 ns in logic. P52 registered separate tile map and pattern
+  facts and passed every exact functional gate, but increased synthesis to
+  43,693 LUT4s and placement to 54,327 `TRELLIS_COMB`, leaving only 39 cells.
+  Its non-ripup route was stopped after 759,000 iterations with 22,897
+  unresolved arcs; P52 is rejected for area and routability. P53 encodes the
+  equivalent tile request boundary as stream-active plus pattern-select. It
+  passes the complete directed graphics, integrated graphics, boot, shared
+  architecture, and Harte gates. Synthesis uses 43,324 LUT4s, 18,256 FFs,
+  3,881 carry cells, 80 BRAMs, and 17 multipliers with zero SCCs. Seed-23
+  placement packs 54,038 `TRELLIS_COMB`, leaving 328 cells under profile, and
+  places the registered tile fact beside Vega owner selection. Beast seed 23
+  completes at 13.656725 MHz CPU and 72.087662 MHz SDRAM; the old tile state
+  path is gone, and its replacement runs from Astraea memory ownership into a
+  blitter source-pointer update. A Mac route of the same placement reaches
+  13.544263/72.632195 MHz and exposes Draw clip validation. NUC router1 on the
+  independent seed-4 placement passes every clock at 12.827913 MHz CPU and
+  77.471336 MHz SDRAM. Its worst SDRAM path is 12.908 ns from tile
+  `tag_count[4]` to `vega_mem_addr[20]`, with 9.727 ns routing and 3.181 ns
+  logic. The resource gate passes at 54,038 `TRELLIS_COMB`. Seed 4 is now the
+  canonical release configuration; the zero-ID route remains diagnostic until
+  an exact committed nonzero-ID release reproduces it.
   Continue from [TIMING_CLOSURE.md](../fpga/soc/oss_flow/TIMING_CLOSURE.md)
   instead of repeating old seeds or speculative floorplans.
 - P48 has one complete-graphics zero-ID diagnostic route that passes every
@@ -223,17 +257,15 @@ and old resource tables are not current status.
   rejected, so no release-identical P48 bitstream has been packaged or accepted
   on hardware. A board that reaches POST on an older image is evidence only for
   that retained hardware baseline.
-- The canonical entry points now agree on divider 0, 12.5 MHz CPU, seed 23,
-  heap timing weight 20, router1 timing ripup, and the measured critical
+- The canonical entry points now agree on divider 0, 12.5 MHz CPU, seed 4,
+  heap timing weight 20, plain router1, and the measured critical
   floorplan. The build ID covers all supported synthesis, placement,
   floorplan, router, and resource-profile controls plus stage-0 sources. The
-  split flow packages only a timing-clean final route, and its manifest binds
-  both stage 0 and `/ASTRA68.ROM`. This flow is committed and its fail-closed
-  behavior is proven: the failed nonzero-ID route packaged nothing. P50 makes
-  build-ID storage and placement independent of the stored value and asserts
-  that all 32 physical cells survive synthesis. Commit P50, derive its new
-  build ID and ROM identity, then run one exact release route; blind seed
-  hunting remains unjustified.
+  corrected split flow clears the placement-only waiver before routing,
+  explicitly checks every final clock, and binds stage 0 plus
+  `/ASTRA68.ROM` in its manifest. P50 makes build-ID storage and placement
+  independent of the stored value and asserts that all 32 physical cells
+  survive synthesis. Blind seed hunting remains unjustified.
 
 ## Release boundary
 

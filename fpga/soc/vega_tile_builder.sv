@@ -52,6 +52,9 @@ module vega_tile_builder (
     localparam [3:0] ST_SETUP_COMMIT = 4'd8;
     localparam [3:0] ST_SETUP_VALIDATE = 4'd9;
 
+    localparam integer RF_STREAM_ACTIVE = 0;
+    localparam integer RF_PATTERN_SELECT = 1;
+
     localparam [4:0] TAG_DEPTH = 5'd16;
 
     function automatic [3:0] pattern_nibble(
@@ -106,6 +109,7 @@ module vega_tile_builder (
     reg [9:0]  job_width;
     reg [1:0]  config_wait;
     reg [3:0]  state;
+    reg [1:0]  request_facts;
     reg        setup_config_valid;
     reg signed [17:0] setup_first_raw_tx;
     reg signed [17:0] setup_world_y;
@@ -256,29 +260,48 @@ module vega_tile_builder (
     // retires one, so bit 4 is the exact full flag for this 16-entry FIFO.
     wire tag_full = tag_count[4];
 
-    wire map_request_valid = state == ST_MAP_STREAM &&
-        !stream_issue_done && !stream_pause && map_slot_valid && !tag_full;
-    wire pattern_request_valid = state == ST_PATTERN_STREAM &&
-        pattern_pair_loaded && !stream_issue_done && !stream_pause &&
-        pattern_issue_valid && !tag_full;
-    assign mem_valid = map_request_valid || pattern_request_valid;
+    function automatic [1:0] request_facts_for_state(input [3:0] next_state);
+        begin
+            request_facts_for_state = 2'b00;
+            case (next_state)
+                ST_MAP_STREAM:
+                    request_facts_for_state[RF_STREAM_ACTIVE] = 1'b1;
+                ST_PATTERN_STREAM: begin
+                    request_facts_for_state[RF_STREAM_ACTIVE] = 1'b1;
+                    request_facts_for_state[RF_PATTERN_SELECT] = 1'b1;
+                end
+                default: begin end
+            endcase
+        end
+    endfunction
+
+    task automatic set_state(input [3:0] next_state);
+        begin
+            state <= next_state;
+            request_facts <= request_facts_for_state(next_state);
+        end
+    endtask
+
+    wire stream_active = request_facts[RF_STREAM_ACTIVE];
+    wire pattern_stream_state = request_facts[RF_PATTERN_SELECT];
+    wire map_stream_state = stream_active && !pattern_stream_state;
+    wire stream_can_issue = !stream_issue_done && !stream_pause && !tag_full;
+    assign mem_valid = stream_active && stream_can_issue &&
+        (pattern_stream_state ?
+         (pattern_pair_loaded && pattern_issue_valid) : map_slot_valid);
     // Keep arbitration ownership independent of the current map comparator.
     // Feeding map_request_valid into mem_lock creates a request/grant/ready
     // combinational path through the shared Vega arbiter. Invalid clipped map
     // slots are consumed locally in one cycle, so retaining ownership while
     // the map stream is issuing does not add memory traffic. Pattern streams
     // still yield during their BRAM pair-load gaps.
-    assign mem_lock =
-        (state == ST_MAP_STREAM &&
-         (tag_outstanding ||
-          (!stream_issue_done && !stream_pause && !tag_full))) ||
-        (state == ST_PATTERN_STREAM &&
-         (tag_outstanding ||
-          (!stream_issue_done && !stream_pause &&
-           pattern_pair_loaded && !tag_full)));
+    assign mem_lock = stream_active &&
+        (tag_outstanding ||
+         (stream_can_issue &&
+          (!pattern_stream_state || pattern_pair_loaded)));
     assign mem_write = 1'b0;
-    assign mem_addr = state == ST_MAP_STREAM ? map_request_addr :
-                                               pattern_request_addr;
+    assign mem_addr = map_stream_state ? map_request_addr :
+                                         pattern_request_addr;
     assign mem_be = 4'b1111;
     assign mem_wdata = 32'd0;
     wire mem_accept = mem_valid && mem_ready;
@@ -609,7 +632,7 @@ module vega_tile_builder (
     always @(posedge mem_clk) begin
         done <= 1'b0;
         if (mem_rst) begin
-            state <= ST_IDLE;
+            set_state(ST_IDLE);
             busy <= 1'b0;
             done <= 1'b0;
             config_error <= 1'b0;
@@ -696,14 +719,14 @@ module vega_tile_builder (
                         line_valid[build_bank] <= 2'b00;
                         work_layer <= 1'b0;
                         config_wait <= 2'd0;
-                        state <= ST_CLEAR;
+                        set_state(ST_CLEAR);
                     end
                 end
 
                 ST_CLEAR: begin
                     if (config_wait == 2'd2) begin
                         work_layer <= 1'b0;
-                        state <= ST_LAYER;
+                        set_state(ST_LAYER);
                     end else begin
                         config_wait <= config_wait + 2'd1;
                     end
@@ -725,16 +748,16 @@ module vega_tile_builder (
                         work_scroll_x <= t1_scroll_m2[15:0];
                         work_scroll_y <= t1_scroll_m2[31:16];
                     end
-                    state <= ST_SETUP;
+                    set_state(ST_SETUP);
                 end
 
                 ST_SETUP: begin
                     if (!work_ctrl[0] || job_width == 10'd0) begin
                         if (!work_layer) begin
                             work_layer <= 1'b1;
-                            state <= ST_LAYER;
+                            set_state(ST_LAYER);
                         end else begin
-                            state <= ST_FINISH;
+                            set_state(ST_FINISH);
                         end
                     end else begin
                         setup_config_shape_valid <=
@@ -750,7 +773,7 @@ module vega_tile_builder (
                         setup_map_row_byte_base <= map_row_byte_base_calc;
                         setup_map_width <= work_map_width;
                         setup_map_x_mask <= work_map_x_mask;
-                        state <= ST_SETUP_VALIDATE;
+                        set_state(ST_SETUP_VALIDATE);
                     end
                 end
 
@@ -758,7 +781,7 @@ module vega_tile_builder (
                     setup_config_valid <= setup_config_shape_valid &&
                         setup_map_end <= 33'h02000000 &&
                         setup_set_end <= 33'h02000000;
-                    state <= ST_SETUP_COMMIT;
+                    set_state(ST_SETUP_COMMIT);
                 end
 
                 ST_SETUP_COMMIT: begin
@@ -767,9 +790,9 @@ module vega_tile_builder (
                         config_error <= 1'b1;
                         if (!work_layer) begin
                             work_layer <= 1'b1;
-                            state <= ST_LAYER;
+                            set_state(ST_LAYER);
                         end else begin
-                            state <= ST_FINISH;
+                            set_state(ST_FINISH);
                         end
                     end else begin
                         first_raw_tx <= setup_first_raw_tx;
@@ -793,7 +816,7 @@ module vega_tile_builder (
                         tag_read_ptr <= 4'd0;
                         tag_count <= 5'd0;
                         tag_outstanding <= 1'b0;
-                        state <= ST_MAP_STREAM;
+                        set_state(ST_MAP_STREAM);
                     end
                 end
 
@@ -931,7 +954,7 @@ module vega_tile_builder (
                         entry_read_a <= {1'b0, slot_phase} >> 1;
                         pattern_pair_wait <= 2'd1;
                         pattern_pair_loaded <= 1'b0;
-                        state <= ST_PATTERN_STREAM;
+                        set_state(ST_PATTERN_STREAM);
                     end
                 end
 
@@ -1033,7 +1056,7 @@ module vega_tile_builder (
                         tag_outstanding <= 1'b0;
                         stream_burst_count <= 5'd0;
                         stream_pause <= 1'b0;
-                        state <= ST_COMPOSE;
+                        set_state(ST_COMPOSE);
                     end
                 end
 
@@ -1043,9 +1066,9 @@ module vega_tile_builder (
                         line_valid[job_bank][work_layer] <= 1'b1;
                         if (!work_layer) begin
                             work_layer <= 1'b1;
-                            state <= ST_LAYER;
+                            set_state(ST_LAYER);
                         end else begin
-                            state <= ST_FINISH;
+                            set_state(ST_FINISH);
                         end
                     end else if (compose_active) begin
                         if (!compose_half) begin
@@ -1120,9 +1143,9 @@ module vega_tile_builder (
                     end else begin
                         if (!work_layer) begin
                             work_layer <= 1'b1;
-                            state <= ST_LAYER;
+                            set_state(ST_LAYER);
                         end else begin
-                            state <= ST_FINISH;
+                            set_state(ST_FINISH);
                         end
                     end
                 end
@@ -1130,18 +1153,27 @@ module vega_tile_builder (
                 ST_FINISH: begin
                     busy <= 1'b0;
                     done <= 1'b1;
-                    state <= ST_IDLE;
+                    set_state(ST_IDLE);
                 end
 
                 default: begin
                     busy <= 1'b0;
                     config_error <= 1'b1;
                     done <= 1'b1;
-                    state <= ST_IDLE;
+                    set_state(ST_IDLE);
                 end
             endcase
         end
     end
+
+`ifndef SYNTHESIS
+    always @(posedge mem_clk) begin
+        if (!mem_rst &&
+            request_facts !== request_facts_for_state(state))
+            $fatal(1, "tile request facts/state mismatch state=%0d facts=%h",
+                   state, request_facts);
+    end
+`endif
 endmodule
 
 `default_nettype wire

@@ -1,7 +1,7 @@
 #!/bin/bash
 # mkbit.sh <rom.hex> [tag] -> astra.bit
 # Builds the canonical TG68K.C 68030/PMMU SoC via yosys+nextpnr.
-# nextpnr rc=0 == routed. Check yosys_<tag>.log separately for loop warnings.
+# Packaging requires both a successful route and an explicit report timing gate.
 set -e
 [ "$#" -ge 1 ] || { echo "usage: $0 <rom.hex> [tag]" >&2; exit 2; }
 [ -f "$1" ] || { echo "ROM image not found: $1" >&2; exit 2; }
@@ -70,12 +70,12 @@ esac
 SYNTH_ECP5_FLAGS="${SYNTH_ECP5_FLAGS:--abc2}"
 SYNTH_KEEP_HIERARCHY="${SYNTH_KEEP_HIERARCHY:-}"
 TARGET_FREQ_MHZ="${TARGET_FREQ_MHZ:-12.5}"
-PNR_SEED="${PNR_SEED:-23}"
+PNR_SEED="${PNR_SEED:-4}"
 PNR_PLACER="${PNR_PLACER:-heap}"
 PNR_ROUTER="${PNR_ROUTER:-router1}"
 PNR_THREADS="${PNR_THREADS:-}"
 PNR_TIMING_WEIGHT="${PNR_TIMING_WEIGHT:-20}"
-PNR_TIMING_RIPUP="${PNR_TIMING_RIPUP:-1}"
+PNR_TIMING_RIPUP="${PNR_TIMING_RIPUP:-0}"
 PNR_TIMING_ALLOW_FAIL="${PNR_TIMING_ALLOW_FAIL:-0}"
 PNR_ROUTER2_ALT_WEIGHTS="${PNR_ROUTER2_ALT_WEIGHTS:-0}"
 ASTRA_FLOORPLAN_MODE="${ASTRA_FLOORPLAN_MODE:-critical}"
@@ -288,11 +288,14 @@ if [ "${SYNTH_ONLY:-0}" = "1" ]; then
   exit 0
 fi
 PLACED_JSON="placed_${TAG}.json"
+ROUTE_INPUT_JSON="route_input_${TAG}.json"
 ROUTED_JSON="routed_${TAG}.json"
 PLACE_REPORT="pnr_place_${TAG}.json"
 PLACE_LOG="pnr_place_${TAG}.log"
 ROUTE_REPORT="pnr_${TAG}.json"
 ROUTE_LOG="pnr_${TAG}.log"
+rm -f "$PLACED_JSON" "$ROUTE_INPUT_JSON" "$ROUTED_JSON" \
+  "$PLACE_REPORT" "$ROUTE_REPORT" astra.config
 
 # Placement estimates fail at this density even for timing-clean routes. The
 # placement-only waiver preserves the placed artifact; final routing below has
@@ -305,20 +308,33 @@ nextpnr-ecp5 --85k --package CABGA381 --freq "$TARGET_FREQ_MHZ" \
   --no-route --timing-allow-fail --write "$PLACED_JSON" \
   --report "$PLACE_REPORT" > "$PLACE_LOG" 2>&1
 
+# nextpnr serializes the placement-only waiver and default router into its JSON.
+# Remove the stale router so PNR_ROUTER is honored. Production also clears the
+# waiver; diagnostic mode retains it explicitly. The serialized seed is the
+# post-placement RNG state and is intentionally retained.
+ROUTE_PREP_FLAGS=()
+if [ "$PNR_TIMING_ALLOW_FAIL" = "1" ]; then
+  ROUTE_PREP_FLAGS=(--keep-timing-waiver)
+fi
+python3 prepare_route_input.py "${ROUTE_PREP_FLAGS[@]}" \
+  "$PLACED_JSON" "$ROUTE_INPUT_JSON"
+
 nextpnr-ecp5 --85k --package CABGA381 --freq "$TARGET_FREQ_MHZ" \
-  --seed "$PNR_SEED" --router "$PNR_ROUTER" \
+  --router "$PNR_ROUTER" \
   "${PNR_ROUTER_FLAGS[@]}" "${PNR_THREAD_FLAGS[@]}" \
   "${PNR_TIMING_FLAGS[@]}" "${PNR_TIMING_ALLOW_FLAGS[@]}" \
-  --no-pack --no-place --json "$PLACED_JSON" \
+  --no-pack --no-place --json "$ROUTE_INPUT_JSON" \
   --lpf "$SOC/astra_soc.lpf" --sdc astra_clocks.sdc \
   --write "$ROUTED_JSON" --textcfg astra.config --report "$ROUTE_REPORT" \
   > "$ROUTE_LOG" 2>&1
 echo "nextpnr split route complete; check yosys_${TAG}.log and $ROUTE_LOG"
-python3 check_resource_budget.py --profile "$RESOURCE_PROFILE" "pnr_${TAG}.json"
 if [ "$PNR_TIMING_ALLOW_FAIL" = "1" ]; then
+  python3 check_resource_budget.py --profile "$RESOURCE_PROFILE" "$ROUTE_REPORT"
   echo "diagnostic route complete; PNR_TIMING_ALLOW_FAIL=1 suppresses bitstream packaging"
   exit 0
 fi
+python3 check_timing.py "$ROUTE_REPORT"
+python3 check_resource_budget.py --profile "$RESOURCE_PROFILE" "$ROUTE_REPORT"
 ecppack astra.config "$BITSTREAM_TMP"
 mv "$BITSTREAM_TMP" astra.bit
 
@@ -343,7 +359,7 @@ SOURCE_REVISION="${ASTRA_SOURCE_REVISION:-$(git -C "$REPO_ROOT" rev-parse HEAD 2
     "${SYNTH_KEEP_HIERARCHY:-none}" "$ASTRA_FLOORPLAN_MODE" \
     "$ASTRA_FLOORPLAN_ENFORCE" "$RESOURCE_PROFILE"
   MANIFEST_FILES=("$ROM_INPUT" astra.json "$PLACED_JSON" "$ROUTED_JSON"
-    "$PLACE_REPORT" "$ROUTE_REPORT" astra.config astra.bit)
+    "$ROUTE_INPUT_JSON" "$PLACE_REPORT" "$ROUTE_REPORT" astra.config astra.bit)
   if [ -n "$SYSTEM_ROM_INPUT" ]; then
     MANIFEST_FILES+=("$SYSTEM_ROM_INPUT")
   fi

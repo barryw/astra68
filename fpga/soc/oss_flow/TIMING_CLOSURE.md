@@ -57,7 +57,7 @@ loaded by a later nextpnr process.
 The P48 promotion resolves the earlier entry-point and identity hazards:
 
 - `astra_soc.sv`, `sw/boot/Makefile`, and `mkbit.sh` now default to divider 0,
-  12.5 MHz CPU, seed 23, heap timing weight 20, router1 timing ripup, and the
+  12.5 MHz CPU, seed 4, heap timing weight 20, plain router1, and the
   measured critical floorplan.
 - `mkbit.sh` performs the proven split placement and routing sequence. Placement
   may retain a timing estimate with a waiver; final routing has no waiver and
@@ -398,6 +398,135 @@ placement reports are byte-identical with SHA-256
 `b632784919297650cc9f15d3b123a41d1b435da566f913921fe53f61da891ced`.
 P50 therefore passes the value-independent mapping and placement gate. Commit
 it and route the exact new nonzero-ID release; no seed search is warranted.
+
+The exact committed P50 release is
+`19d7040943546bda5ad63646707a2765aa50cbe4`, build ID `0xaade208e`.
+Its immutable source archive SHA-256 is
+`24212560c4b3b0a48dd28e0f5ac7b1c2b0bf0df09319ae46a83dbefade9cd4ae`;
+the exact 16,604-byte system ROM SHA-256 is
+`0d8540ca91a6bba32f48f353cf79edc497cc91e998cd9463e3f2a5661cafcf50`.
+All 90 conformance tests, the 28-case shared Musashi/RTL matrix, both Harte
+smokes, directed graphics, integrated 1506/2369/2060 workloads, and full boot
+gate pass. Exact synthesis maps the paired-proof resource counts above; its
+JSON SHA-256 is
+`82adcb3c9bae49f755563b1e20e4d83040496a86faecc77d57d20185026ff058`.
+Placement again packs 54,054 `TRELLIS_COMB`; its JSON SHA-256 is
+`2f418d5d51948bf368dfa8c400930d6df7f174ccf03a0ba09bfa605dec58f58c`
+and its report is the byte-identical `b6327849...` paired proof.
+
+The P50 route does **not** meet production timing. Timing ripup starts at 172
+negative-slack arcs, WNS -1.54 ns, and TNS -137.33 ns. It then oscillates for
+50 checkpoints between a better 85-91 arc band near WNS -0.63 ns/TNS -29 ns
+and a worse 100-108 arc band near WNS -0.85 ns/TNS -50 ns. The final report
+passes CPU at 14.332808 MHz but reaches only 71.556351 MHz SDRAM against
+75.007500 MHz. The 13.975 ns worst SDRAM path starts at sprite-builder
+`state[3]` at `(35,5)`, crosses request qualification and
+`vega_i.mem_selected_owner[0]`, and ends at
+`vega_i.request_count_next[1]` at `(71,24)`. It contains 11.070 ns routing and
+2.905 ns logic. The route log SHA-256 is
+`28dd5651a06b563c074257de8c062fb86c8e83406db0b05e34c12d729ae75a86`;
+the report SHA-256 is
+`70f7223fd1ff751276540ee427402c8523d3f0558f1d6c3664e85e0a3c6cdb15`.
+
+This run exposed a release-flow defect. Placement's
+`--timing-allow-fail` was serialized as `timing/allowFail=1` in the placed
+JSON, then inherited by the route-only process even though
+`PNR_TIMING_ALLOW_FAIL=0` supplied no command-line waiver. nextpnr therefore
+returned success with a warning, and the wrapper packaged an invalid
+`aa1cccb5...` bitstream without parsing the report. That image is quarantined
+and was never loaded on hardware. Production routing now writes a separate
+route-input JSON with the serialized waiver forced to zero, then
+`check_timing.py` independently requires all six reported clocks to meet both
+their reported constraints and Astra's architectural minimum frequencies
+before `ecppack`. Unit tests cover waiver clearing, an all-pass report, a
+missing clock, a weakened reported constraint, and the measured SDRAM miss.
+
+P51 targets only the measured P50 cone. The sprite builder now advances two
+registered request facts in lockstep with its existing 23-state controller;
+simulation asserts exact fact/state equivalence. This removes live controller
+decode from Vega arbitration without adding a request cycle. Directed sprite
+results remain 267 requests and 209 cycles; every directed graphics result,
+the integrated 1506/2369/2060 references, and full boot BIST/DMA/POST/kernel
+entry remain exact. Beast Yosys `0.64+159` maps 43,172 LUT4s, 18,254 FFs,
+3,852 CCU2Cs, 80 block RAMs, and 17 multipliers with zero SCCs. The registered
+facts survive in the final JSON. Seed-23 placement packs 53,834
+`TRELLIS_COMB`, leaving 532 cells under the active profile. Its strict timing
+ripup route improved from 600 negative-slack arcs at WNS -1.88 ns/TNS
+-402.40 ns to a 328-461 arc plateau near WNS -1.13..-1.16 ns and TNS
+-141..-198 ns, then was stopped at the declared bound. A complete non-ripup
+route passes CPU at 13.306012 MHz but reaches only 66.067657 MHz SDRAM. The
+P50 sprite path is absent. Its replacement 15.136 ns path starts at tile
+builder `state[3]` at `(48,6)`, crosses `vega_i.mem_selected_owner`, and ends
+at a request-control FF enable at `(46,13)`, with 11.503 ns routing and
+3.633 ns logic. P51 therefore fixes its target but is rejected.
+
+P52 applies the same cycle-neutral registered-boundary technique to the two
+tile stream states. All directed tests, the 12-frame video test, integrated
+1506/2369/2060 references, 144.48 MiB/s boot BIST in 136,077 cycles, DMA
+210/327, POST, and kernel entry remain exact. The one-hot map/pattern fact form
+perturbs global ABC mapping to 43,693 LUT4s, 18,256 FFs, and 3,846 CCU2Cs;
+placement packs 54,327 `TRELLIS_COMB`, leaving only 39 profile cells. Its
+non-ripup route still had 22,897 arcs unresolved after 886.96 seconds and was
+stopped once the smaller equivalent P53 netlist existed. P52 is rejected for
+area and routability, not function.
+
+P53 encodes the tile boundary as `stream-active + pattern-select`, factors the
+shared issue and lock qualification, and retains the same two transition-
+registered bits. The tile RTL SHA-256 is
+`441eaa7ee0c92942c060d78f394cd6b08475d08ed6af3728c1866f84d457fa00`;
+the zero-ID Beast synthesis JSON SHA-256 is
+`5f5a0eff40eedca22c3616514fbb002d09b7e0bf8e326b52d031caf9e341ddf9`.
+Every P52 functional and cycle reference remains exact. Beast Yosys
+`0.64+159` maps 43,324 LUT4s, 18,256 FFs, 3,881 CCU2Cs, 80 block RAMs, and 17
+multipliers with zero SCCs. Seed-23 placement packs 54,038 `TRELLIS_COMB`,
+leaving 328 profile cells. It places registered `stream_active` at `(78,12)`
+and owner-selection logic at roughly X74..78/Y14, replacing the old
+state-to-owner physical span.
+
+Beast seed-23 router1 completes after 758,686 iterations in 2588.08 seconds.
+It passes CPU at 13.656725 MHz but reaches only 72.087662 MHz SDRAM. Its
+13.87 ns path runs from Astraea `mem_owner[1]` into blitter
+`issue_src_ptr_mem[5]`, with 11.22 ns routing and 2.65 ns logic. The routed
+JSON/report/log SHA-256 values are
+`dcd90af366b85867263b081bcb3405ee2ece615f3b225cbbf37385909979734b`,
+`d1b133b1958ff25739c873aa9adbead332ca5330962b2526c80b7e086ac8e099`,
+and `1373e9b6741bca990dc8185c82ed9fb2e2cda87c91de2a06ed49ca56099e6cdc`.
+A Mac route of the same placement reaches 13.544263 MHz CPU and 72.632195 MHz
+SDRAM on a different Draw clip-validation path. Inspection of its routed
+settings proved that the placed JSON's serialized `router1` and RNG state
+overrode the attempted route-time router and seed arguments. It was tool-
+version diversity, not the intended router2 diversity.
+
+NUC nextpnr `0.10-33-ge6ecd8fa` routes the independent Beast seed-4 placement
+to completion after 857,631 iterations in 2754.47 seconds. All six clocks pass:
+CPU is 12.827913 MHz and SDRAM is 77.471336 MHz. The 12.908 ns SDRAM path runs
+from tile `tag_count[4]` at `(56,4)` to `vega_mem_addr[20]` at `(58,19)`, with
+9.727 ns routing and 3.181 ns logic. The route checksum is `0x3fb1716e`;
+route-input/routed/report/log SHA-256 values are
+`ba551c79b7afca5b16363ee09fbf9c2530cdf840f6b7cd7241aae23a93480cd6`,
+`2597d04961520513d69d1470f30a4698f4b4d9c5923a5046f005b2226f7873a4`,
+`aacea539c43c077d682c8458c8e540efb0ec2041c69ceed6b99cd0c7dec797ab`,
+and `376e5f1ec861d0ee09387c6721b28e44f6c587a12bc22f0cfae7636ba054a742`.
+The independent timing and resource gates pass at 54,038 `TRELLIS_COMB`, 80
+block RAMs, and 17 multipliers.
+
+The split flow now removes serialized router-mode controls before routing so
+the explicit router is honored. It deliberately preserves the post-placement
+RNG state and no longer supplies a misleading route-time seed. Production
+clears the serialized timing waiver; explicit diagnostic mode preserves it;
+both paths are unit tested. Seed 4 is the canonical release configuration. No
+P53 bitstream exists until the exact committed nonzero-ID release reproduces
+these gates.
+
+An isolated P54a experiment consumed the legal one-hot Astraea `mem_owner`
+bits directly to remove the equality comparator from the Beast critical path.
+All directed graphics references, including the 12-frame video test, remain
+exact. A controlled Mac Yosys `0.64+68` comparison maps P53 to 43,446 LUT4s,
+18,246 FFs, and 3,857 CCU2Cs, but P54a maps 43,750 LUT4s, 18,253 FFs, and
+3,850 CCU2Cs. The simpler source expression causes a 304-LUT global mapping
+regression and is rejected before placement. Its `astraea_chip.sv` SHA-256 is
+`b79a77e6d8fc8b03a353901b6cbe9b6656b68d91fcabc85f32ca164303204231`;
+do not repeat that decode-only change.
 
 P49 tests the next measured Draw lever without changing a cycle: replace the
 six-bit `state` selection feeding the shared 48-bit ellipse ALU with the
@@ -740,49 +869,33 @@ and 118.70 MiB/s fill, with exact copy and fill completion counts of 1499 and
 
 ## Current structural experiment and next levers
 
-P46 is fully measured on Beast, Mac, and NUC. All three routes remove the
-targeted P45 comparator, proving that the protocol-state simplification
-synthesized as intended, but they expose three independent boundaries and fail
-75 MHz. P47 removes the measured Beast full-byte glyph decode with the exact
-two-bit mode encoded by opcodes 8..11. Its first Beast route proves that target
-gone, then exposes redundant internal SDRAM target-state decode. P48 replaces
-that decode with the already registered target without adding a state or
-changing a cycle; its exact source, functional references, and synthesis
-identity are frozen above. Its same-placement timing-ripup route is the first
-complete-graphics diagnostic result to pass every clock. Every P47/P48
-diversity route is now complete. Mac P48 fails on a deep Draw next-state mux;
-P49's cycle-exact attempt to simplify related state selection costs 363 LUT4s
-and 57 carry cells, so it remains rejected. The canonical nonzero-ID `db60633`
-rerun is also complete as a rejected experiment: direct build-ID constant
-propagation changed mapping and the timing-ripup route oscillated without a
-packageable result. P50 now isolates the build ID behind 32 retained identity
-LUTs. Its paired zero/nonzero syntheses have identical names and normalized
-structure, and its paired seed-23 placements have identical BEL assignments
-and byte-identical reports. The metadata topology problem is resolved; the next
-measurement is the exact committed nonzero release route.
+P50's exact committed route proves the metadata topology fix but fails on the
+sprite-to-Vega request boundary. P51 removes that path with transition-
+registered request facts and preserves every exact reference; its completed
+route instead measures the tile-to-Vega request boundary. P52 proves that the
+same cycle-neutral technique works there, but its one-hot fact encoding leaves
+only 39 profile cells and does not route acceptably. P53 retains the registered
+boundary with a compact two-bit encoding, restores 328 profile cells, and
+places the fact beside owner selection. Its exact behavior, synthesis, and
+placement are frozen above. Beast and Mac seed-23 routes fail on distinct
+paths; the independent NUC seed-4 route passes every clock. The next
+measurement is the exact nonzero-ID release.
 Remaining legitimate levers, in order, are:
 
-1. Commit P50, derive that commit's build ID, stage 0, and system ROM, rerun the
-   exact release gates, then resynthesize and route Beast seed 23 with timing
-   ripup.
-2. If the release rerun fails on the Mac/P49 Draw state-selection boundary,
-   optimize only after proving a smaller cycle-exact encoding than P48.
-3. If the Mac P46 SDRAM open-row-hit path repeats, compute active-row equality
-   in parallel per bank before selecting the bank result. Preserve the exact
-   zero-cycle row-hit fast path and measured controller throughput.
-4. If the Draw shared-ellipse-ALU path repeats, move its state-dependent operand
-   selection into an existing predecessor cycle before changing the ALU width
-   or adding a geometry cycle.
-5. If the sprite/Vega qualification path repeats, register or predecode that
-   exact client-to-owner boundary while preserving steady-state request rate.
-6. If the Vega-lock path repeats, change the zero-cycle lock-to-grant protocol
-   boundary; the eight-cell placement constraint already proved that moving
-   only the lock net cannot close the machine.
-7. If another SDRAM core internal state path repeats, inspect that controller
-   transition directly before changing another client or floorplan region.
-8. If several structurally different revisions plateau on the same boundary,
-   deliberately pipeline that boundary and update the protocol assertions and
-   tests. That is the point to change the partition, not to keep seed hunting.
+1. Commit the proven seed-4 source and configuration, derive that commit's
+   build ID and ROMs, rerun every release gate, then route the exact nonzero-ID
+   release netlist with the measured tool boundary.
+2. Load hardware only after the exact release report and resource gate pass;
+   verify identity, POST, HDMI, and repeated complete boots before persistence.
+3. If the exact release misses timing, change only its newly measured
+   post-route boundary. Do not add speculative floorplans or search seeds
+   without a structural hypothesis.
+4. Preserve the existing CPU, SDRAM, graphics behavior, cycle references, and
+   resource profile in every timing change. A slower clock, removed feature,
+   or relaxed constraint is not a solution.
+5. If several structurally distinct revisions plateau on the same boundary,
+   deliberately pipeline that boundary and update its protocol assertions and
+   exact tests. That is the point to change the partition.
 
 The completed P38 routes satisfied the condition for the first lever. Yosys
 left the blitter's 27 active states in its five-bit source encoding, while both
@@ -834,14 +947,17 @@ revisions expose the same boundary with no measurable timing change.
 
 ## Release checkpoint
 
-The first execution of this checklist on `db60633` stopped correctly at step
-4: the exact release route did not converge, and no bitstream was packaged.
-P50 corrects the measured build-ID topology problem and passes paired synthesis
-and placement equivalence, but its committed exact nonzero release has not yet
-been routed. The ESP32 is back on production AstraHost, the existing card data
-is intact, and `/ASTRA68.ROM` still matches the `db60633` candidate. The FPGA
-remains on the volatile maintenance bridge until the P50 route passes every
-gate.
+The exact committed P50 release proved build-ID-independent topology and passed
+all functional gates, but failed SDRAM timing and exposed the inherited-waiver
+packaging defect. P51 removed its measured sprite path but failed on the tile
+boundary; P52 was rejected for area and routability. P53 preserves all exact
+functional and cycle references with the compact registered tile boundary.
+Its seed-4 diagnostic route passes every clock and the resource profile; seed 4
+is now canonical and the exact committed release rebuild is next. No P50-P53
+bitstream has been loaded on hardware. The ESP32 is back on production
+AstraHost, the existing card data is intact, and `/ASTRA68.ROM` still matches
+the `db60633` candidate. The FPGA remains on the volatile maintenance bridge
+until the exact release passes every gate.
 
 After a diagnostic route passes all clocks:
 

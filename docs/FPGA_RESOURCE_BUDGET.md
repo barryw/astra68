@@ -44,14 +44,17 @@ canonical Yosys `-abc2` mapping currently bracket the timing work:
 | P47 | 53,966 | 400 | Uses the contiguous glyph opcode's two mode bits in glyph-only states; exact tests pass and independent routes are active. |
 | P48 | 53,957 | 409 | Registered SDRAM target state; zero-ID seed-23 timing-ripup route passes every clock, but remains diagnostic. |
 | P48 `db60633` | 54,023 | 343 | Exact nonzero release ID changes mapping; timing ripup oscillates and produces no bitstream. |
-| P50 | 54,054 | 312 | Fixed-topology build-ID LUT bank; zero/nonzero seed-23 placement reports and BEL assignments are identical. Exact release route pending. |
+| P50 | 54,054 | 312 | Fixed-topology build-ID LUT bank; exact release reaches only 71.56 MHz SDRAM. |
+| P51 | 53,834 | 532 | Registers sprite request facts; removes the measured path but reaches only 66.07 MHz SDRAM. |
+| P52 | 54,327 | 39 | Registers one-hot tile facts; exact tests pass, but area and routability are rejected. |
+| P53 | 54,038 | 328 | Compact registered tile facts; exact tests pass and seed-4 routing closes at 12.83 MHz CPU and 77.47 MHz SDRAM. |
 
-P50's paired-placement resources are:
+P53's timing-clean diagnostic route uses:
 
 | Resource | Used | Physical free | Current-profile margin |
 |---|---:|---:|---:|
-| TRELLIS_COMB | 54,054 (64.63%) | 29,586 | 312 |
-| TRELLIS_FF | 18,283 (21.86%) | 65,357 | not limiting |
+| TRELLIS_COMB | 54,038 (64.61%) | 29,602 | 328 |
+| TRELLIS_FF | 18,285 (21.86%) | 65,355 | not limiting |
 | DP16KD | 80 (38.46%) | 128 | 24 |
 | MULT18X18D | 17 (10.90%) | 139 | 61 |
 | TRELLIS_RAMW | 168 (1.61%) | 10,287 | not limiting |
@@ -61,8 +64,8 @@ SDRAM and boot paths, HDMI, POST, front panel, complete Astraea drawing and
 copper engines, Vega framebuffer/tile/sprite scanout, and their integration
 logic. It does not include the complete Vesta services or Lyra audio.
 
-If P50 is retained, the complete-chipset envelope permits at most 8,676
-additional packed logic sites. Its 312-cell current-profile margin is a gate
+If P53 is retained, the complete-chipset envelope permits at most 8,692
+additional packed logic sites. Its 328-cell current-profile margin is a gate
 pass, not useful growth room. Even P39 leaves only 8,727 sites to the 75% target. The
 existing planning allocation therefore exposes a real capacity problem:
 
@@ -71,9 +74,9 @@ existing planning allocation therefore exposes a real capacity problem:
 | Complete Vesta IRQ, timers, input, and configuration service glue | 1,500 |
 | Lyra PCM/wavetable voices, time-multiplexed mixer, and output | 4,500 |
 | Shared DMA queues, CDC, arbitration, and integration | 1,500 |
-| Measured-growth contingency at P50 | 1,176 |
+| Measured-growth contingency at P53 | 1,192 |
 
-These are admission limits, not estimates to spend. A 1,176-cell contingency is
+These are admission limits, not estimates to spend. A 1,192-cell contingency is
 not healthy evidence that the remaining chipset fits. Recover core/graphics
 area and obtain a timing-clean route before admitting Lyra or the remaining
 Vesta work. Each later block needs isolated and integrated synthesis

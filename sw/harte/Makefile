@@ -39,6 +39,8 @@ SOC_ID_SRCS = ../../fpga/soc/astra_soc.sv ../../fpga/soc/astra_soc.lpf \
               ../../fpga/soc/thirdparty/core_sdram_axi4/sdram_axi_core.v \
               ../../fpga/soc/post_console.sv \
               ../../fpga/soc/post_fonts.hex ../../fpga/soc/oss_flow/mkbit.sh \
+              ../../fpga/soc/oss_flow/prepare_route_input.py \
+              ../../fpga/soc/oss_flow/check_timing.py \
               $(sort $(wildcard ../../fpga/soc/hdmi/*.sv))
 
 CPU_ID_SRCS = $(sort $(wildcard ../../fpga/cpu/tg68k_c_030_mmu2/*.vhd)) \

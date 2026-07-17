@@ -12,11 +12,11 @@ ROM_WORDS ?= 1024
 UART_MONITOR ?= 0
 UART_BAUD ?= 115200
 TARGET_FREQ_MHZ ?= 12.5
-PNR_SEED ?= 23
+PNR_SEED ?= 4
 PNR_PLACER ?= heap
 PNR_ROUTER ?= router1
 PNR_TIMING_WEIGHT ?= 20
-PNR_TIMING_RIPUP ?= 1
+PNR_TIMING_RIPUP ?= 0
 PNR_TIMING_ALLOW_FAIL ?= 0
 PNR_ROUTER2_ALT_WEIGHTS ?= 0
 PNR_THREADS ?=
@@ -60,6 +60,8 @@ SOC_ID_SRCS = ../../fpga/soc/astra_soc.sv ../../fpga/soc/astra_soc.lpf \
               ../../fpga/soc/post_fonts.hex ../../fpga/soc/oss_flow/mkbit.sh \
               ../../fpga/soc/oss_flow/astra_clocks.sdc \
               ../../fpga/soc/oss_flow/place_hdmi_serializer.py \
+              ../../fpga/soc/oss_flow/prepare_route_input.py \
+              ../../fpga/soc/oss_flow/check_timing.py \
               ../../fpga/soc/oss_flow/check_resource_budget.py \
               ../../fpga/soc/oss_flow/resource_budgets.json \
               $(sort $(wildcard ../../fpga/soc/hdmi/*.sv))

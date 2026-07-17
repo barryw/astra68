@@ -18,16 +18,25 @@ checkpoint in `TIMING_CLOSURE.md` for current integration status.
 ## Build
 - `mkbit.sh <hex> <tag>` synthesizes, places, routes, checks, and packages the
   production SoC as `astra.bit`.
-- Production defaults are CPU divider 0 (12.5 MHz), 75 MHz SDRAM, seed 23,
-  heap placer timing weight 20, router1 timing ripup, the `critical` floorplan,
+- Production defaults are CPU divider 0 (12.5 MHz), 75 MHz SDRAM, seed 4,
+  heap placer timing weight 20, plain router1, the `critical` floorplan,
   and explicit `host_io` plus blitter regions. These values match
   `sw/boot/Makefile` and are part of its build ID.
 - The canonical flow is split. Placement writes `placed_<tag>.json`; routing
-  reloads that immutable artifact with `--no-pack --no-place`, reapplies the
-  SDC, writes `routed_<tag>.json`, and only packages a timing-clean final route.
+  prepares `route_input_<tag>.json`, reloads that artifact with `--no-pack
+  --no-place`, reapplies the SDC, writes `routed_<tag>.json`, and only packages
+  a timing-clean final route.
 - Placement uses `--timing-allow-fail` because its estimate is not acceptance
-  evidence. Final routing does not. `PNR_TIMING_ALLOW_FAIL=1` is an explicit
-  diagnostic mode that writes a complete report but suppresses `astra.bit`.
+  evidence. nextpnr serializes that setting and its default router into the
+  saved JSON. `prepare_route_input.py` clears the waiver for production,
+  preserves it only for explicit diagnostics, and removes stale router controls
+  so `PNR_ROUTER` is honored. It intentionally retains the post-placement RNG
+  state rather than reseeding the split route.
+  `check_timing.py` independently verifies all six required clocks and their
+  architectural minimum constraints from the final report before packaging.
+  `PNR_TIMING_ALLOW_FAIL=1` is an explicit
+  diagnostic mode that preserves the waiver, writes a complete report, and
+  suppresses `astra.bit`.
 - Successful builds write `build_<tag>.manifest` with source revision, host,
   tool versions, complete configuration, and SHA-256 hashes for the stage-0
   ROM, system ROM, synthesis, placement, route, reports, configuration, and
@@ -35,8 +44,12 @@ checkpoint in `TIMING_CLOSURE.md` for current integration status.
   `ASTRA_SYSTEM_ROM=/path/to/ASTRA68.ROM`; synthesis-only and diagnostic routes
   do not. Each invocation removes stale `astra.bit`/manifest outputs, and the
   bitstream appears only after an atomic successful package step.
-- `PNR_SEED=<n>` selects and records the deterministic nextpnr seed. Include it
-  in firmware build-ID arguments whenever it is overridden.
+- `python3 -m unittest discover -s tests -v`, run from `fpga/soc/oss_flow`,
+  checks production and diagnostic route preparation plus pass, missing-clock,
+  weakened-constraint, and timing-miss behavior.
+- `PNR_SEED=<n>` selects and records the deterministic placement seed. The
+  placed JSON's resulting RNG state continues into split routing. Include the
+  seed in firmware build-ID arguments whenever it is overridden.
 - `SYNTH_ONLY=1` stops after checked `astra.json` generation for resource
   iteration. AstraHost and direct-SD stage-0 builds reserve 1024 and 2048 ROM
   words respectively; `ROM_WORDS=<n>` overrides that capacity. The build
@@ -48,7 +61,7 @@ checkpoint in `TIMING_CLOSURE.md` for current integration status.
 - `PNR_ROUTER=router1|router2` selects the nextpnr router and is recorded in the
   build banner. `PNR_ROUTER2_ALT_WEIGHTS=1` enables router2's high-density
   weighting mode and requires `PNR_ROUTER=router2`. `PNR_THREADS=<n>` passes an
-  explicit thread count. `PNR_TIMING_RIPUP=1` and `PNR_TIMING_WEIGHT=20` are
+  explicit thread count. `PNR_TIMING_RIPUP=0` and `PNR_TIMING_WEIGHT=20` are
   the measured production defaults. Every route writes `pnr_<tag>.json` beside
   its text log.
 - `astra_clocks.sdc` constrains every clock domain explicitly: CPU 12.5 MHz,
