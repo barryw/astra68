@@ -62,6 +62,25 @@ module astra_soc #(
     localparam [31:0] CPU_IMPLEMENTATION = 32'h54474d32; // "TGM2"
     localparam [31:0] CPU_FEATURES = 32'h0000000d;       // PMMU, DATA32, ADDR32
 
+    wire [31:0] soc_build_id_value;
+`ifdef SYNTHESIS
+    genvar build_id_bit;
+    generate
+        for (build_id_bit = 0; build_id_bit < 32; build_id_bit = build_id_bit + 1) begin : g_build_id_lut
+            // Keep release identity from changing the surrounding read-mux topology.
+            (* keep = 1 *) LUT4 #(
+                .INIT(16'haaaa)
+            ) build_id_lut_i (
+                .A(SOC_BUILD_ID[build_id_bit]),
+                .B(1'b0), .C(1'b0), .D(1'b0),
+                .Z(soc_build_id_value[build_id_bit])
+            );
+        end
+    endgenerate
+`else
+    assign soc_build_id_value = SOC_BUILD_ID;
+`endif
+
     // Production hardware leaves the shared SD bus under AstraHost's exclusive
     // control. The direct FPGA SPI path remains available as a recovery and
     // simulation backend when ASTRA_HOST_ENABLE is clear.
@@ -1025,7 +1044,7 @@ module astra_soc #(
             7'h0c: sys_rdata = SDRAM_ENABLE ? 32'h02000000 : 32'd0;
             7'h0d: sys_rdata = 32'hffe00000;
             7'h0e: sys_rdata = 32'h00040000;
-            7'h0f: sys_rdata = SOC_BUILD_ID;
+            7'h0f: sys_rdata = soc_build_id_value;
             7'h10: sys_rdata = 32'd1 + (SDRAM_ENABLE ? 32'd1 : 32'd0) +
                                            (HDMI_ENABLE ? 32'd1 : 32'd0);
             7'h11: sys_rdata = 32'd16;       // descriptor stride

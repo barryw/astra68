@@ -257,6 +257,7 @@ synth_ecp5 -top astra_soc $SYNTH_ECP5_FLAGS -run begin:check;
 hierarchy -check;
 stat;
 check -noinit;
+select -assert-count 32 astra_soc/c:g_build_id_lut*.build_id_lut_i;
 blackbox =A:whitebox;
 write_json astra.json;
 scc -expect 0;
