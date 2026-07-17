@@ -4,7 +4,12 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 image="${ESP_IDF_IMAGE:-espressif/idf:v5.5.4}"
 build_dir=build
-docker_extra=()
+docker_args=(
+    run --rm
+    -e HOME=/tmp
+    -e "HOST_UID=$(id -u)"
+    -e "HOST_GID=$(id -g)"
+)
 
 if [[ -n "${ASTRA_PROVISION_ROM:-}" ]]; then
     provision_dir="$(cd "$(dirname "$ASTRA_PROVISION_ROM")" && pwd)"
@@ -14,21 +19,19 @@ if [[ -n "${ASTRA_PROVISION_ROM:-}" ]]; then
         exit 1
     }
     build_dir=build-provision
-    docker_extra+=(
+    docker_args+=(
         -v "$provision_rom:/project/main/astra68_provision.rom:ro"
     )
 fi
 
-docker run --rm \
-    -e HOME=/tmp \
-    -e HOST_UID="$(id -u)" \
-    -e HOST_GID="$(id -g)" \
-    -e ASTRA_BUILD_DIR="$build_dir" \
-    -e ASTRA_FPGA_SPI_HZ="${ASTRA_FPGA_SPI_HZ:-}" \
-    -e ASTRA_PROVISION_REPLACE="${ASTRA_PROVISION_REPLACE:-}" \
-    -v "$script_dir:/project" \
-    "${docker_extra[@]}" \
-    -w /project \
+# The single-quoted command is evaluated inside the ESP-IDF container.
+# shellcheck disable=SC2016
+docker_args+=(
+    -e "ASTRA_BUILD_DIR=$build_dir"
+    -e "ASTRA_FPGA_SPI_HZ=${ASTRA_FPGA_SPI_HZ:-}"
+    -e "ASTRA_PROVISION_REPLACE=${ASTRA_PROVISION_REPLACE:-}"
+    -v "$script_dir:/project"
+    -w /project
     "$image" bash -lc '
         set -euo pipefail
         ffconf="$IDF_PATH/components/fatfs/src/ffconf.h"
@@ -65,3 +68,5 @@ docker run --rm \
             [ ! -e "$generated" ] || chown "$HOST_UID:$HOST_GID" "$generated"
         done
     '
+)
+docker "${docker_args[@]}"
