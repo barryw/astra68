@@ -53,3 +53,11 @@ Loading only to SRAM is deliberate: a maintenance image must not replace the
 persistent Astra68 FPGA image. Restore the normal AstraHost ESP32 firmware
 after one-shot SD provisioning, then load and validate the exact release FPGA
 image before writing it to persistent flash.
+
+## JTAG recovery
+
+The expected ECP5 JTAG ID is `0x41113043`. After one failed ESP flash attempt,
+`openFPGALoader --detect --board ulx3s --verbose-level 2` returned only raw
+`0xffffffff`. Resetting the FT231X with `usbreset` and unloading/reloading
+`ftdi_sio` did not recover the FPGA chain; a physical ULX3S power cycle did.
+Always recover and confirm the expected ID before another SRAM or flash write.

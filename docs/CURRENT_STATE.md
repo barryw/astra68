@@ -68,6 +68,12 @@ and old resource tables are not current status.
   Yosys and ROM staging overwrite generated files in place and can silently
   mutate an earlier checkpoint. Snapshot sources independently and keep routed
   JSON artifacts immutable.
+- The checked-in ESP32 maintenance bridge is SRAM-only infrastructure. Board
+  revision 3.0.8 uses the proven v3.1 ESP route. FPGA pin J3 is shared by ESP
+  GPIO2 and SD D0/MISO, so the bridge may drive it low only while FTDI DTR
+  requests download mode and must otherwise release it. A permanently driven
+  low J3 permits ESP programming but breaks SD; an always-high-Z J3 permits SD
+  but makes ESP flashing unreliable. See `fpga/maintenance/README.md`.
 
 ## Current integration state
 
@@ -78,13 +84,28 @@ and old resource tables are not current status.
   blitter, primitive drawing, and scanout paths. Directed tests and integrated
   normal/INDEX8/RGB565 workloads are exact. Lyra and remaining Vesta services
   still need fabric budget.
+- The exact `db606335e3a707dfd33eee9883306ca20bfab549` release source passes the
+  shared Musashi/RTL conformance matrix, Harte smoke tests, directed and
+  integrated graphics, full SDRAM boot simulation, POST, DMA, and kernel
+  entry. Its build ID is `0xe8a97ceb`; its 16,604-byte `/ASTRA68.ROM` has SHA-256
+  `0103284a741b2808be1b0264f3017b20220813eb7df412f013ed375169b9eb18`.
+- Production AstraHost is restored on the ESP32 and reports SPI-only FPGA
+  communication at 20 MHz. The 256 GB card mounts without disturbing its
+  existing data, and `/ASTRA68.ROM` byte-matches the exact `db60633` image.
+  Validation on this large exFAT card can pause for roughly 22 seconds after
+  card identification; allow at least 30 seconds before diagnosing a hang.
+- The ULX3S currently contains the ESP32 maintenance bridge in volatile SRAM,
+  not an Astra release image. After one failed ESP flash, JTAG returned only
+  `0xffffffff`; FT231X reset and `ftdi_sio` reload did not recover it. A physical
+  board power cycle restored the expected LFE5U-85 ID `0x41113043`.
 - The enforced `core_graphics` packing ceiling is 65% of the ECP5-85K, not the
   physical device limit. The `complete_chipset` target is 75%, with an absolute
   80% stop. See [FPGA_RESOURCE_BUDGET.md](FPGA_RESOURCE_BUDGET.md); historical
   audit tables are not current capacity numbers.
-- The active blocker is promotion of the first timing-clean diagnostic route
-  into a reproducible nonzero-build-ID bitstream and board acceptance, not a
-  known functional failure. Earlier P39 packed under the 65% profile at 54,003
+- The active blocker is making the first timing-clean diagnostic route
+  reproducible with the nonzero release build ID, then completing board
+  acceptance. This is not a known functional failure. Earlier P39 packed under
+  the 65% profile at 54,003
   cells, but its best SDRAM route was only 68.65 MHz. P41
   removed the live blitter-state cone but is 73 cells over profile and its
   first route exposed a worse registered Vega-lock path. P44's 11 overlapping
@@ -161,21 +182,35 @@ and old resource tables are not current status.
   seed-33 P48 route is also complete and rejected at 13.5285 MHz CPU and
   65.3723 MHz SDRAM. Its 15.30 ns Draw path starts at `state[4]`, crosses the
   deep next-state mux, and spends 11.212 ns in routing plus 4.085 ns in logic.
-  All P47/P48 diversity jobs are now complete.
+  All P47/P48 diversity jobs are now complete. The canonical `db60633` release
+  rerun proves why the zero-ID result could not be promoted directly. Beast
+  synthesis with build ID `0xe8a97ceb` maps 43,343 LUT4s, 18,254 FFs, 3,863
+  carry cells, 80 BRAMs, and 17 multipliers with zero SCCs. Placement is legal
+  at 54,023 `TRELLIS_COMB`, leaving 343 cells under the profile. Its first route
+  starts at WNS -1.81 ns, TNS -333.60 ns, and 323 negative-slack arcs. Timing
+  ripup then oscillates: it repeatedly reduces roughly 30,000 unresolved arcs
+  to 300-600 before tearing the route back above 30,000. It was stopped after
+  57 minutes and more than 1.76 million reroutes. No routed JSON, report,
+  configuration, or bitstream was produced. The retained route log SHA-256 is
+  `a83b9041d9637e41718df9c885c6564eba96ddf1d7737bc4c1e0c2bbd36d7ad7`.
   Placement estimates remain diagnostic only.
   Continue from [TIMING_CLOSURE.md](../fpga/soc/oss_flow/TIMING_CLOSURE.md)
   instead of repeating old seeds or speculative floorplans.
-- P48 now has one complete-graphics diagnostic route that passes every
-  production clock. No release-identical P48 bitstream has been packaged or
-  accepted on hardware yet. A board that currently reaches POST is evidence for
-  the retained earlier hardware baseline, not evidence for this active netlist.
+- P48 has one complete-graphics zero-ID diagnostic route that passes every
+  production clock. The exact nonzero-ID release attempt is measured and
+  rejected, so no release-identical P48 bitstream has been packaged or accepted
+  on hardware. A board that reaches POST on an older image is evidence only for
+  that retained hardware baseline.
 - The canonical entry points now agree on divider 0, 12.5 MHz CPU, seed 23,
   heap timing weight 20, router1 timing ripup, and the measured critical
   floorplan. The build ID covers all supported synthesis, placement,
   floorplan, router, and resource-profile controls plus stage-0 sources. The
   split flow packages only a timing-clean final route, and its manifest binds
-  both stage 0 and `/ASTRA68.ROM`. This flow still needs to be committed and
-  exercised by the nonzero-ID release rerun before it counts as evidence.
+  both stage 0 and `/ASTRA68.ROM`. This flow is committed and its fail-closed
+  behavior is proven: the failed nonzero-ID route packaged nothing. The next
+  structural experiment must make build-ID storage topology independent of the
+  stored value before another exact release rerun; blind seed hunting is not
+  justified by the measured mapping change.
 
 ## Release boundary
 

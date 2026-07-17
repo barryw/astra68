@@ -71,9 +71,10 @@ The P48 promotion resolves the earlier entry-point and identity hazards:
   A packageable SD-boot build requires `ASTRA_SYSTEM_ROM` so `/ASTRA68.ROM`
   cannot be omitted from that evidence.
 
-These flow changes make the release rerun reproducible; they do not make the
-zero-build-ID P48 route release evidence. Commit them first, then resynthesize,
-replace, and reroute the exact nonzero-ID image.
+These flow changes are committed in `db606335e3a707dfd33eee9883306ca20bfab549`
+and make the release rerun reproducible. They do not make the zero-build-ID P48
+route release evidence. The exact nonzero-ID attempt is recorded below and was
+rejected without packaging a bitstream.
 
 ### Toolchain and host identity
 
@@ -339,6 +340,41 @@ This is the first complete-graphics diagnostic timing pass. It is not a
 release result because the netlist has a zero build ID and the exploratory
 split command is not yet the canonical reproducible flow.
 
+The canonical release rerun uses immutable commit
+`db606335e3a707dfd33eee9883306ca20bfab549`, build ID `0xe8a97ceb`, and the
+exact 509-word stage 0. The source archive SHA-256 is
+`a9cb4aa83f34dd7a67d38df91c4583cdceaa94069d87fccd5e028991667af904`.
+The 16,604-byte system ROM SHA-256 is
+`0103284a741b2808be1b0264f3017b20220813eb7df412f013ed375169b9eb18`;
+its payload CRC32 is `2c62c09a`. Beast Yosys `0.64+159` maps 43,343 LUT4s,
+18,254 FFs, 3,863 CCU2Cs, 80 block RAMs, and 17 multipliers with zero SCCs and
+zero final check errors. The synthesis JSON SHA-256 is
+`82ae511eab918e034bd03665f73f0fee19173ce4bafb15d9eb5192d8f1696e6c`.
+
+Seed-23 placement is legal, enforces every floorplan region, and packs 54,023
+`TRELLIS_COMB`, leaving 343 cells under the `core_graphics` profile. Its
+checksum is `0x06699802`; the placed JSON SHA-256 is
+`4afa4fb8ce6c5dad95664b1da662ceb661a363f5d69ab01e035e44419c28ee9d`.
+This differs materially from the zero-ID diagnostic placement, which packed
+53,957 cells and had checksum `0xe94ebfca` only after routing. The nonzero-ID
+route begins timing ripup at WNS -1.81 ns, TNS -333.60 ns, and 323
+negative-slack arcs, versus 65 arcs and WNS -0.59 ns for the zero-ID route.
+The router then oscillates: it repeatedly reduces roughly 30,000 unresolved
+arcs to 300-600 and tears the route back above 30,000. It was stopped after 57
+minutes and more than 1.76 million reroutes. The 3,264-line route log SHA-256 is
+`a83b9041d9637e41718df9c885c6564eba96ddf1d7737bc4c1e0c2bbd36d7ad7`.
+No routed JSON, routed report, packed configuration, or bitstream exists. This
+is a measured release failure and confirms the flow packages fail closed.
+
+The direct `SOC_BUILD_ID` constant changes synthesis topology and global
+placement when its bits change. The next experiment is therefore a retained,
+fixed-topology 32-bit storage bank whose connectivity and cell count are
+identical for zero and nonzero values, with only primitive initialization data
+changing. Prove that with paired syntheses and placements before another long
+route. If the tool still folds or remaps the value, reject that approach and
+load a locked build-ID register from stage 0. Do not seed-hunt this non-equivalent
+netlist.
+
 P49 tests the next measured Draw lever without changing a cycle: replace the
 six-bit `state` selection feeding the shared 48-bit ellipse ALU with the
 existing two-bit ALU phase and one transition-registered X/Y step selector.
@@ -573,6 +609,16 @@ the canonical release flow; the release-identical rerun must still prove it.
   one registered X/Y selector is cycle exact but maps 363 more LUT4s and 57
   more carry cells. P49 is rejected before placement; fewer RTL branches do not
   guarantee a smaller ECP5 network.
+- A parameter constant exposed directly through a wide system-data mux is not
+  physically neutral. Changing `SOC_BUILD_ID` from zero to `0xe8a97ceb` changes
+  mapping, adds 66 packed cells, and destroys reproducibility of the otherwise
+  identical seed-23 placement. Release metadata needs fixed topology before a
+  diagnostic route can be promoted.
+- Timing ripup is not guaranteed to converge. On the exact `db60633` release
+  netlist it repeatedly destroyed near-complete routes and rebuilt tens of
+  thousands of arcs for 57 minutes. Stop and record a stable oscillation after
+  its structural cause is clear; a long-running router is not evidence of
+  progress.
 - A timing boundary can work and still make the complete route worse. P41
   removed both live blitter-state paths, then Beast seed 23 fell to 62.47 MHz
   on a registered Vega-lock path with 13.10 ns of routing. Record the new cone;
@@ -677,28 +723,34 @@ identity are frozen above. Its same-placement timing-ripup route is the first
 complete-graphics diagnostic result to pass every clock. Every P47/P48
 diversity route is now complete. Mac P48 fails on a deep Draw next-state mux;
 P49's cycle-exact attempt to simplify related state selection costs 363 LUT4s
-and 57 carry cells, so it remains rejected. Promote the proven split flow and
-run the release-identical image before considering another RTL change.
+and 57 carry cells, so it remains rejected. The canonical nonzero-ID `db60633`
+rerun is also complete as a rejected experiment: direct build-ID constant
+propagation changed mapping and the timing-ripup route oscillated without a
+packageable result.
 Remaining legitimate levers, in order, are:
 
-1. Commit the canonical split flow, build the exact nonzero-ID stage 0 and
-   system ROM, then resynthesize and route Beast seed 23 with timing ripup.
-2. If the release rerun fails on the Mac/P49 Draw state-selection boundary,
+1. Give the 32-bit build ID fixed retained topology, then compare zero and
+   nonzero-ID synthesis and placement to prove that only initialization data
+   changes. Rerun exact regressions before routing.
+2. Build the exact nonzero-ID stage 0 and system ROM, then resynthesize and
+   route Beast seed 23 with timing ripup only after topology equivalence is
+   demonstrated.
+3. If the release rerun fails on the Mac/P49 Draw state-selection boundary,
    optimize only after proving a smaller cycle-exact encoding than P48.
-3. If the Mac P46 SDRAM open-row-hit path repeats, compute active-row equality
+4. If the Mac P46 SDRAM open-row-hit path repeats, compute active-row equality
    in parallel per bank before selecting the bank result. Preserve the exact
    zero-cycle row-hit fast path and measured controller throughput.
-4. If the Draw shared-ellipse-ALU path repeats, move its state-dependent operand
+5. If the Draw shared-ellipse-ALU path repeats, move its state-dependent operand
    selection into an existing predecessor cycle before changing the ALU width
    or adding a geometry cycle.
-5. If the sprite/Vega qualification path repeats, register or predecode that
+6. If the sprite/Vega qualification path repeats, register or predecode that
    exact client-to-owner boundary while preserving steady-state request rate.
-6. If the Vega-lock path repeats, change the zero-cycle lock-to-grant protocol
+7. If the Vega-lock path repeats, change the zero-cycle lock-to-grant protocol
    boundary; the eight-cell placement constraint already proved that moving
    only the lock net cannot close the machine.
-7. If another SDRAM core internal state path repeats, inspect that controller
+8. If another SDRAM core internal state path repeats, inspect that controller
    transition directly before changing another client or floorplan region.
-8. If several structurally different revisions plateau on the same boundary,
+9. If several structurally different revisions plateau on the same boundary,
    deliberately pipeline that boundary and update the protocol assertions and
    tests. That is the point to change the partition, not to keep seed hunting.
 
@@ -751,6 +803,12 @@ targeted path and the post-route result moves. It is stuck when multiple such
 revisions expose the same boundary with no measurable timing change.
 
 ## Release checkpoint
+
+The first execution of this checklist on `db60633` stopped correctly at step
+4: the exact release route did not converge, and no bitstream was packaged.
+The ESP32 is back on production AstraHost, the existing card data is intact,
+and `/ASTRA68.ROM` matches the exact release candidate. The FPGA remains on the
+volatile maintenance bridge until a later exact route passes every gate.
 
 After a diagnostic route passes all clocks:
 
