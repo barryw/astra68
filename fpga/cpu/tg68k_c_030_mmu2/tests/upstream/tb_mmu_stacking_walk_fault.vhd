@@ -110,6 +110,7 @@ architecture behavioral of tb_mmu_stacking_walk_fault is
     signal walker_req_prev : std_logic := '0';
     signal mem_wait : std_logic := '0';
     signal ipl_n : std_logic_vector(2 downto 0) := "111";
+    signal target_write_count : natural := 0;
 
     type mem_type is array(0 to 16383) of std_logic_vector(15 downto 0);
 
@@ -478,6 +479,9 @@ begin
             if busstate = "11" and nWr = '0' and clkena_in = '1' then
                 if not is_x(pmmu_addr_phys) and unsigned(pmmu_addr_phys) < x"00008000" then
                     phys_word := to_integer(unsigned(pmmu_addr_phys(14 downto 1)));
+                    if pmmu_addr_phys = x"00005FF5" and (nUDS = '0' or nLDS = '0') then
+                        target_write_count <= target_write_count + 1;
+                    end if;
                     if nUDS = '0' and nLDS = '0' then
                         mem(phys_word) <= data_write;
                     elsif nUDS = '0' then
@@ -607,7 +611,8 @@ begin
 
         report "DIAG: done=$" & slv_to_hex(done_mark) & " faults=$" & slv_to_hex(fault_count) &
                " unexpected=$" & slv_to_hex(unexp_mark) & " halted=" & std_logic'image(debug_cpu_halted) severity note;
-        report "DIAG: handler A7=$" & slv_to_hex(h_a7) & " written byte=$" & slv_to_hex(wr_byte) severity note;
+        report "DIAG: handler A7=$" & slv_to_hex(h_a7) & " written byte=$" & slv_to_hex(wr_byte) &
+               " target writes=" & integer'image(target_write_count) severity note;
 
         if debug_cpu_halted = '1' then
             report "FAIL: CPU HALTED (double fault during stacking) - HARDWARE CASCADE REPRODUCED" severity error;
@@ -627,6 +632,11 @@ begin
         end if;
         if wr_byte /= x"5A" then
             report "FAIL: MOVES.B write not completed after restart, byte=$" & slv_to_hex(wr_byte) severity error;
+            fails := fails + 1;
+        end if;
+        if target_write_count /= 1 then
+            report "FAIL: restarted MOVES.B performed " & integer'image(target_write_count) &
+                   " successful target writes; expected exactly 1" severity error;
             fails := fails + 1;
         end if;
         -- SSP $3F00 - format $B frame $5C - MOVEM 16 = $3E94

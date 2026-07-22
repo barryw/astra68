@@ -15,8 +15,10 @@ and old resource tables are not current status.
   an Astra-specific CPU semantic. See [MC68030_COMPLIANCE.md](MC68030_COMPLIANCE.md).
 - The core is a strong development baseline, not an unconditional production
   claim. SCC elimination, shared conformance, boot, SDRAM, and retained hardware
-  tests pass substantial coverage. Remaining valid exception/restart and
-  fault-on-stacking cases stay fail-closed until resolved.
+  tests pass substantial coverage. The previously open PMMU restart and
+  fault-on-stacking cases now pass shared and focused RTL simulation; the new
+  RTL still requires exact synthesis, routing, and board promotion before it
+  supersedes the persistent hardware release.
 - Portable CPU/PMMU expectations live in `conformance/` and run through the
   canonical Musashi and RTL adapters. Do not create separate expected results
   in an adapter. White-box RTL tests remain complementary for implementation
@@ -77,8 +79,8 @@ and old resource tables are not current status.
   conformance attempt inherited current-looking Mach-O Musashi and GHDL
   executables from a Mac workspace and failed with `Exec format error`. Clean
   both targets or exclude build outputs before rebuilding natively; the clean
-  NUC run passes all 90 unit tests, the 28-case shared matrix, and both Harte
-  smoke targets.
+  historical NUC run passes all 90 unit tests, its 28-case shared matrix, and
+  both Harte smoke targets.
 - The checked-in ESP32 maintenance bridge is SRAM-only infrastructure. Board
   revision 3.0.8 uses the proven v3.1 ESP route. FPGA pin J3 is shared by ESP
   GPIO2 and SD D0/MISO, so the bridge may drive it low only while FTDI DTR
@@ -107,11 +109,22 @@ and old resource tables are not current status.
   retired. At 60 MHz, directed tests pass and the integrated normal, INDEX8,
   and RGB565 workloads remain below the 1906-clock scanline deadline at maxima
   of 505, 1103, and 1429 clocks.
-- The shared Musashi/RTL matrix passes all 28 cases from an exact clean source
+- The shared Musashi/RTL matrix passes all 30 executions from an exact source
   snapshot, and both adapters pass the retained Harte smoke targets. Focused
   Vesta, AstraHost runtime/service, SDRAM bridge, ESP host, boot, NDK, and OSS
   release tests pass. This is enough for supervisor-mode kernel development,
-  not a waiver for the documented protected-multitasking PMMU blockers.
+  not a waiver for the remaining protected-multitasking DMA/IRQ dependencies.
+- The 2026-07-22 K1 PMMU checkpoint closes the two exception/restart blockers
+  in simulation. Separate-SRP/CRP `MOVES.B` absolute, postincrement, and
+  predecrement writes plus a postincrement read each fault, enter vector 2,
+  repair translation, return through an unmodified format-B `RTE`, update
+  their address registers once, and perform one target transfer. A cold table
+  walk for the translated supervisor exception stack also completes without a
+  second fault or CPU halt. Beast passes 90 framework tests, all 30 shared
+  Musashi/RTL executions, both Harte smoke targets, and the 137-variant Questa
+  inventory at 111 clean, 18 classified failures, 3 stale compile failures,
+  and 5 unscored diagnostics. No synthesis or board result is yet attributed
+  to this uncommitted checkpoint; persistent hardware remains `6C0D0CA3`.
 - The exact committed `6C0D0CA3` release synthesizes to 52,728 LUT4s and packs
   66,144 of 83,640 TRELLIS_COMB cells, 25,525 FFs, 101 block RAMs, and 18
   multipliers. Its strict router1 result passes every exact constraint at

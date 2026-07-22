@@ -70,6 +70,44 @@ Full Astra coretest also passes. The strict manifest is unchanged from the
 restart-qualified baseline: 137 total, 107 clean, 3 stale compile failures,
 22 raw simulation failures, and 5 unscored diagnostics.
 
+## 2026-07-22 PMMU restart and stacking closure
+
+- Restricted the short format-A data-write frame to positively identified
+  final `MOVE.B/W/L` destination transfers. `MOVES`, CAS, MOVEM, MOVEP, and
+  every unclassified store retain the complete format-B restart state required
+  by MC68030 User's Manual section 8.1.2.
+- Captured the live PMMU data-output buffer and format eligibility at first
+  fault. Register-sourced `MOVES` writes bypass the older temporary write-data
+  register, so delayed vector dispatch must not reconstruct their payload.
+- Added an idle RTE replay-setup state. The final frame longword now retires
+  completely before the saved fault address, function code, size, and payload
+  launch a replay transfer; setup and wait cycles hold those values stable.
+- Restarted faulted `MOVES` instructions from the stacked PC instead of
+  synthesizing a separate write replay. This preserves SFC/DFC selection and
+  postincrement/predecrement updates while performing exactly one target
+  transfer.
+- Removed reserved SSW bit 9 from software-completed format-B read recovery.
+  Handler-cleared DF plus the repaired data-input buffer now completes the
+  supported no-extension read form through `RTE`.
+- Strengthened the translated-stack and `MOVES` benches with exact target-cycle
+  counts and four independent SFC/DFC addressing forms. Added the same
+  architecture-visible program and expectations to the shared Musashi/RTL
+  conformance matrix.
+
+Questa Lattice OEM 2024.2 on Beast now reports 137 total variants, 111 clean,
+3 stale compile failures, 18 classified simulation failures, and 5 unscored
+diagnostics. The four changed statuses are `tb_mmu_badfeed_fault_frame`,
+`tb_mmu_badfeed_softfix_recovery`, `tb_mmu_restart_moves_dfc`, and
+`tb_mmu_stacking_walk_fault`; all moved to clean and no existing case
+regressed. The first case had a stale `$0341` oracle that set reserved SSW bit
+9; its PC, frame, MMUSR, fault address, and corrected `$0141` SSW all pass.
+
+The shared matrix now passes all 15 fixtures on both production adapters (30
+executions), including the four-fault `MOVES.B` case. This is a simulation
+qualification checkpoint. Synthesis, strict routing, and repeated ULX3S boot
+promotion remain required before this source replaces the persistent hardware
+release.
+
 ## 2026-07-13 combinational-loop and open-flow closure
 
 - Replaced the ALU's self-referential rotate/sign chains with finite,

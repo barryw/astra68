@@ -43,9 +43,11 @@ DIVS/DIVU overflow flags, `LINK A7`, CHK format-2 frames and N semantics, valid
 packed-BCD arithmetic, rejection of the MC68040-only `MOVE16`, the F-line
 vector taken when no FPU is installed, and encoded MC68030 `PMOVE`, translated
 instruction fetch and data write, `PLOAD`, `PTEST`, MMUSR transfer, descriptor
-U/M history, `PFLUSHA`, ATC-backed execution, and physical table-search bus
-failure. Invalid packed-BCD digits remain excluded because Motorola does not
-define them as packed-BCD operands.
+U/M history, `PFLUSHA`, ATC-backed execution, physical table-search bus
+failure, and format-B restart of faulted `MOVES.B` SFC/DFC transfers with
+separate SRP/CRP roots and a translated supervisor stack. Invalid packed-BCD
+digits remain excluded because Motorola does not define them as packed-BCD
+operands.
 
 The Tom Harte register-only subset is converted into `ConformanceCase` objects
 by `sw/harte/host/musashi.py` and compared by `conformance.model.compare_result`.
@@ -78,6 +80,14 @@ from the RTL qualification suite. It preserves the bench's program, page-table
 layout, result marker, 92-byte frame size, format/vector word, masked SSW, and
 logical fault address. The RTL adapter should consume this fixture in place of
 maintaining a second architectural oracle in VHDL.
+
+`pmmu/moves-sfc-dfc-fault-restart` runs four independently faulted byte
+transfers: absolute and postincrement DFC writes, a predecrement DFC write,
+and a postincrement SFC read. It requires four vector-2 entries, an unmodified
+format-B `RTE` restart after each descriptor repair, exact address-register
+updates, copied data, and the final fault frame. The complementary RTL bench
+also counts accepted target bus cycles because duplicate physical transfers
+are not observable in the portable final-state model.
 
 `cpu/fpu-absent-line-f-vector-11` makes Astra's no-FPU contract executable.
 `pmmu/table-bus-fault-status` follows a valid indirect descriptor into an

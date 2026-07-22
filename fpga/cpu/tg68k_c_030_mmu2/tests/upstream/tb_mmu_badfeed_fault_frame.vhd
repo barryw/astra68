@@ -403,9 +403,9 @@ begin
                    & " SSW=$" & slv_to_hex(frame_ssw)
                    & " MMUSR=$" & slv_to_hex(debug_pmmu_fault_status)
             severity failure;
-        elsif frame_ssw /= x"0341" then
+        elsif frame_ssw /= x"0141" then
             report "FAIL: BADFEED data fault SSW=$" & slv_to_hex(frame_ssw)
-                   & " expected $0341"
+                   & " expected $0141"
                    & " MMUSR=$" & slv_to_hex(debug_pmmu_fault_status)
                    & " FA=$" & slv_to_hex(frame_fa)
                    & " DESC=$" & slv_to_hex(debug_pmmu_walk_desc_data)

@@ -54,13 +54,13 @@ It also suppresses compilation failures with `|| true`, references missing
 bench files, and includes a target that leaves an orphaned GUI simulator. A
 headline target completing therefore cannot be used as a pass result.
 
-After the restart and combinational-loop repairs, the pinned Astra strict
+After the restart, combinational-loop, and PMMU fault-frame repairs, the pinned Astra strict
 runner produced 137 bounded VHDL runs, including all five exact BASIC variants
 and six Motorola-corrected derivatives:
 
-- 107 ran clean;
+- 111 ran clean;
 - 3 failed to compile against the current RTL interface;
-- 22 emitted raw simulation failures;
+- 18 emitted raw simulation failures;
 - 5 ran but had no usable pass/fail oracle.
 
 The raw simulation count intentionally includes contradictory upstream tests.
@@ -82,7 +82,16 @@ into an architectural waiver. Corrected derivatives currently demonstrate:
   the sequencer stall;
 - user-mode format-B sizing: the stack-swap cycle no longer consumes a frame
   fill count without writing data. A corrected captured-BADFEED derivative
-  passes with the 92-byte frame required by Table 8-6.
+  passes with the 92-byte frame required by Table 8-6;
+- software-completed format-B reads commit the repaired data-input buffer when
+  DF is clear without requiring reserved SSW bit 9. The old `$0341` oracle was
+  corrected to the defined `$0141`, and both BADFEED recovery benches pass;
+- a cold table walk for a valid translated supervisor exception stack finishes
+  without a second fault or CPU halt;
+- separate-SRP/CRP `MOVES.B` absolute, predecrement, and postincrement writes
+  plus a postincrement read preserve SFC/DFC across a vector-2 fault and
+  unmodified format-B `RTE`, update address registers once, and issue exactly
+  one target transfer.
 
 ## Incorrect tests
 
@@ -124,6 +133,11 @@ format B as 46 words/92 bytes. The unchanged upstream bench now fails at
 `$40079B18` because it expects `$40079B1C`; the Motorola-corrected derivative
 expects `$40079B18` and passes all other dispatch checks.
 
+The older `tb_mmu_badfeed_fault_frame` oracle expected SSW `$0341`. Bit 9 is
+reserved in the MC68030 format-B SSW, so the defined value is `$0141`. Its PC,
+MMUSR, and fault-address checks were already correct; changing that reserved
+bit expectation makes the maintained bench clean.
+
 ## RTL deviations
 
 The imported July RTL contained a MiSTer filesystem trapdoor that bypassed PMMU
@@ -139,21 +153,16 @@ behavior inside the CPU contract.
 The restart-qualified candidate now passes focused Motorola-cited reproducers
 for unmodified format-B RTE recovery, including postincrement reads,
 predecrement writes, arithmetic/CCR state, MOVEM store, mid-transfer MOVEM
-load, user-mode faults, and a translated supervisor stack. The following
-results remain candidate RTL defects pending focused minimal reproducers or
-final classification:
+load, user-mode faults, a translated supervisor stack, and faulted SFC/DFC
+`MOVES` reads and writes. The BADFEED software-fix case also passes after the
+core stopped depending on reserved SSW bit 9 and its stale oracle was corrected.
 
-- the older BADFEED software-fix diagnostic and MOVES/DFC restart diagnostic
-  still fail even though the maintained plain-RTE user-data recovery benches
-  pass;
-- a valid supervisor stack page that needs a table walk during exception entry
-  can cascade into a double fault and halt;
-- WinUAE-derived exact JMP/CHK2 cases still report unresolved low-memory side
-  effects and exception-state differences.
-
-The five primary demand-paging restart failures no longer block acceptance.
-The remaining fault-on-stacking and MOVES/DFC diagnostics are still relevant to
-a protected-memory operating system and cannot be waived as Amiga behavior.
+No PMMU restart or fault-on-stacking candidate defect remains in the bounded
+simulation inventory. WinUAE-derived exact JMP/CHK2 cases still report
+unresolved low-memory side effects and exception-state differences; they remain
+candidate RTL defects pending focused minimal reproducers or final
+classification. PMMU descriptor-search/update atomicity against DMA remains an
+open SoC arbitration requirement rather than an instruction-core test result.
 
 ## Open-flow qualification
 

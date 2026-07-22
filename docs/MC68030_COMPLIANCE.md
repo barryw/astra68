@@ -84,7 +84,13 @@ than vector 3, the 46-word/92-byte format-B frame, format/vector word, defined
 SSW bits, and logical fault address. Separate fixtures cover DIV overflow C/V,
 `LINK A7`, CHK format-2/N behavior, valid packed-BCD arithmetic, rejection of
 the MC68040-only `MOVE16`, an F-line vector 11 when no FPU is present, and
-MMUSR `B|I` when a physical table read fails. Run the current shared gate with:
+MMUSR `B|I` when a physical table read fails. The PMMU restart fixture adds
+four independently faulted `MOVES.B` cases under separate SRP/CRP roots:
+absolute, postincrement, and predecrement DFC writes plus a postincrement SFC
+read. It checks four vector-2 entries, the final unmodified format-B frame,
+translation repair, final data, and exact address-register effects. A focused
+RTL bench additionally proves one physical target transfer per case. Run the
+current shared gate with:
 
 ```sh
 rtk make -C conformance test
@@ -95,6 +101,14 @@ same result comparator. The MC68030 gate
 retains the conservative architecture-invariant 68000 filter; a separate
 MC68000-mode diagnostic executes the full corpus and reports every mismatch.
 Neither mode is a PMMU or MC68030 exception-frame authority.
+
+The 2026-07-22 exact snapshot passes all 90 framework/adapter tests and all 30
+shared executions across Musashi and RTL. Both adapters pass the retained Harte
+smoke target. The strict Questa inventory improves to 111 clean, 18 classified
+simulation failures, 3 stale compile failures, and 5 unscored diagnostics out
+of 137 variants. Cold translated-supervisor-stack exception entry and faulted
+SFC/DFC `MOVES` restart are therefore closed in simulation; synthesis, routing,
+and board repetition of that exact RTL remain mandatory before release.
 
 The July 13, 2026 Musashi baseline passes all 96,103 vectors admitted by the
 MC68030-compatible gate. Its separate full-state diagnostic also passes all

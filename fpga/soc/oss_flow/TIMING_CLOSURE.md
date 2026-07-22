@@ -1969,3 +1969,57 @@ passed in 1.630 seconds with the same BIST and DMA results. The exact
 `61538d09ef255b94206500185b31008fc242004ac954356365e0b9053c88e2d1`
 image is therefore the current persistent FPGA release; no rebuild or repack
 occurred between SRAM acceptance and programming.
+
+## 2026-07-22: K1 PMMU restart and fault-stack simulation checkpoint
+
+The protected-multitasking prerequisite was repaired and requalified from base
+commit `6d702a33aec46e118bc70a5dc92d633d3babc937` in the immutable Beast snapshot
+`/tmp/astra68-k1-p16`. The checkpoint is an uncommitted source delta at the time
+of measurement; its behaviorally relevant source identities are:
+
+| Source | SHA-256 |
+| --- | --- |
+| `TG68K_Pack.vhd` | `89f2bd58d777ea02c7cac66395cea6422146dde33f7f52096f58436ae1c8422c` |
+| `TG68KdotC_Kernel.vhd` | `597dbd93ed578be3613dba6d5bc68888de53659273b74999f371de3ba10cff38` |
+| `tb_mmu_badfeed_fault_frame.vhd` | `507ef690eb946d97a114b493b2492bc53092c6776bed8849b635399acf9f4086` |
+| `tb_mmu_restart_moves_dfc.vhd` | `d74d766d6956d6ae85ceb2f363ea6f7596d07404e9aa1587ecda5d9615bf0b0f` |
+| `tb_mmu_stacking_walk_fault.vhd` | `8bb813f96a243d8898ae92e7679624126fbfb9c39f36baa643429ccf18c0eb22` |
+| `moves-fault-restart.json` | `2e6d2592046765eacb74a1846e82d1b217518efe26e22152f07261aaab309039` |
+
+The core now captures the live PMMU data-output buffer and format-A eligibility
+at first fault, restricts format A to positively identified final ordinary
+`MOVE` destinations, fully retires the last RTE frame longword before seeding a
+replay address, and inserts a setup state that holds the replay address and
+payload. Faulted `MOVES` instructions restart from the stacked PC rather than
+using synthetic partial-write replay, preserving SFC/DFC and auto-modification
+exactly once. Software-completed format-B reads use DF plus the repaired DIB
+without assigning meaning to reserved SSW bit 9.
+
+Beast used GHDL 7.0.0-dev
+`6.0.0.r122.g97d7d81a7.dirty` and Questa Lattice OEM 2024.2. Exact p16 results
+are:
+
+- 90 of 90 shared framework and adapter unit tests pass;
+- 15 fixtures pass on each of Musashi and RTL, 30 executions total;
+- both one-vector Harte smoke adapters pass;
+- eight focused PMMU restart/frame benches run clean with no compile failure,
+  simulation failure, or unscored result;
+- the complete 137-variant strict inventory is unchanged outside the intended
+  repairs at 111 clean, 18 classified simulation failures, 3 stale compile
+  failures, and 5 unscored diagnostics.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| shared Musashi/RTL matrix report | `8953dc4b7af0c0b1ac1468bc84431484e9b927f2f7b91cdcea5d1e0012c7fdcd` |
+| Harte Musashi smoke report | `38932210c9cae758c37e25b708b95441ff17335a71cf97d06225d7ccacff16ef` |
+| Harte RTL smoke report | `d8f3881042e2020a7e00a361a351829f9464e8a862ee40c04a4e758ffa046f90` |
+| focused Questa summary | `6222694ccd905cdda3da5112b90dedfb2358a6b34dde95a75631c23c359c04bf` |
+| full Questa summary | `457c3acb3c5d455657dff119f32797137d254e2463b86b3ee4e74a9aa5f1693f` |
+
+This is deliberately a simulation-only checkpoint. No synthesis, mapped
+resource count, placement, route, constrained-clock result, bitstream, or board
+result is attributed to it. It does not supersede persistent hardware release
+`6C0D0CA3`. Promotion requires the exact full production image to retain zero
+SCCs, meet 12.5 MHz CPU and 60 MHz SDRAM plus every other release constraint,
+then pass repeated PMMU, POST, SDRAM, kernel-entry, and HDMI checks on the ULX3S
+attached to NUC.

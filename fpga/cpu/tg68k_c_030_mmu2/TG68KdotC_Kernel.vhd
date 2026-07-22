@@ -462,8 +462,8 @@ architecture logic of TG68KdotC_Kernel is
 	signal set_exec_cas		: std_logic;
 	signal atomic_rmc_active	: std_logic;
 	signal set_atomic_rmc		: std_logic;
-	signal pmmu_fault_effective_rw : std_logic;  -- WinUAE-parity Format $A/B: live-vs-latched RW for this fault
-	signal pmmu_fault_lastwrite_ok : std_logic;  -- WinUAE-parity Format $A/B: this write is LASTWRITE-eligible
+	signal pmmu_fault_live_lastwrite_ok : std_logic;  -- Live fault is an unambiguously final MOVE-to-memory write
+	signal pmmu_fault_lastwrite_ok      : std_logic;  -- Live or first-fire-latched Format $A eligibility
 
 	signal exe_condition		: std_logic;
 	signal ea_only				: bit;
@@ -615,6 +615,8 @@ architecture logic of TG68KdotC_Kernel is
 	signal berr_pmmu_fault_fc     : std_logic_vector(2 downto 0);   -- PMMU fault FC latched at first-fire
 	signal berr_pmmu_fault_rw     : std_logic;                      -- PMMU fault R/W latched at first-fire
 	signal berr_pmmu_fault_is_insn : std_logic;                     -- PMMU fault type latched at first-fire
+	signal berr_pmmu_data_out     : std_logic_vector(31 downto 0);  -- PMMU data-output buffer latched at first-fire
+	signal berr_pmmu_lastwrite_ok : std_logic;                      -- PMMU Format $A eligibility latched at first-fire
 	signal berr_pmmu_fault_valid  : std_logic;                      -- Latched PMMU fault metadata is pending frame construction
 	signal berr_external_addr    : std_logic_vector(31 downto 0);  -- BUG #434 FIX: fault addr latched at external BERR first-fire (addr at state="00" is PC-based)
 	signal berr_pending          : std_logic;                       -- External BERR captured before longword retirement is eligible
@@ -1526,27 +1528,23 @@ ALU: TG68K_ALU
 	berr_capture_addr <= berr_addr_in when berr_addr_override='1' else addr;
 	RMCn_out <= '0' WHEN atomic_rmc_active='1' AND state(1)='1' ELSE '1';
 
-	-- WinUAE-derived Format $A (LASTWRITE) eligibility for a PMMU data-write
-	-- fault. Per WinUAE (Exception_mmu030 / genastore_2 / gen_set_fault_pc):
-	-- a write fault gets the short, single-write-replayable Format $A frame
-	-- when this write is the LAST (or only) bus cycle the instruction
-	-- performs; every other fault (any read - Table 8-6 - CAS's locked write,
-	-- a non-final MOVEM register, any MOVEP byte, or an instruction fetch)
-	-- gets the long Format $B frame. Effective RW follows the same
-	-- live-vs-latched precedence as the SSW(6)/RW construction below
-	-- (pmmu_fault live for same-edge dispatch, the first-fire latch for the
-	-- deferred make_mmu_berr path). Conservative by construction: MOVEM,
-	-- CAS, and MOVEP are excluded (matches WinUAE exactly - WinUAE never
-	-- calls gen_set_fault_pc for MOVEP, so every MOVEP byte-write fault is
-	-- unconditionally Format $B, unlike MOVEM which is excluded only while
-	-- more registers remain), so any case this doesn't positively recognize
-	-- falls back to the existing, already-correct long-frame path.
-	pmmu_fault_effective_rw <= pmmu_fault_rw_out WHEN pmmu_fault = '1' ELSE berr_pmmu_fault_rw;
-	pmmu_fault_lastwrite_ok <= '1' WHEN pmmu_fault_effective_rw = '0' AND exec_cas = '0' AND
-	                                    NOT ((exec(movem_action) = '1' OR movem_actiond = '1') AND movem_run = '1') AND
-	                                    NOT (micro_state = movep1 OR micro_state = movep2 OR micro_state = movep3 OR
-	                                         micro_state = movep4 OR micro_state = movep5)
-	                           ELSE '0';
+	-- MC68030 User's Manual 8.1.2 permits the short Format $A frame only at
+	-- an instruction boundary. Positively recognize MOVE.B/L/W destination
+	-- writes because their destination transfer is unambiguously final. Any
+	-- other store, including MOVES, CAS, MOVEM, and MOVEP, keeps the complete
+	-- internal state in restartable Format $B. MOVE encodes destination mode
+	-- in bits 8:6 and destination register in bits 11:9.
+	pmmu_fault_live_lastwrite_ok <= '1' WHEN pmmu_fault_rw_out = '0' AND
+	                                             (exe_opcode(15 downto 12) = "0001" OR
+	                                              exe_opcode(15 downto 12) = "0010" OR
+	                                              exe_opcode(15 downto 12) = "0011") AND
+	                                             exe_opcode(8 downto 7) /= "00" AND
+	                                             NOT (exe_opcode(8 downto 6) = "111" AND
+	                                                  exe_opcode(11 downto 9) /= "000" AND
+	                                                  exe_opcode(11 downto 9) /= "001")
+	                                    ELSE '0';
+	pmmu_fault_lastwrite_ok <= pmmu_fault_live_lastwrite_ok WHEN pmmu_fault = '1'
+	                           ELSE berr_pmmu_lastwrite_ok;
 	
 	PROCESS (clk, nReset)
 	BEGIN
@@ -1589,7 +1587,12 @@ ALU: TG68K_ALU
 		rte_format_word(15 downto 12) = "1011" AND
 		rte_mmu_fix_ssw(8) = '1' AND          -- DF: data cycle still needs replay
 		rte_mmu_fix_ssw(7) = '0' AND          -- not read-modify-write
-		rte_mmu_fix_ssw(6) = '0'              -- write cycle
+		rte_mmu_fix_ssw(6) = '0' AND           -- write cycle
+		-- MOVES has no partial multi-transfer continuation. Its aborted
+		-- architectural side effects are discarded, so restart the instruction
+		-- from the stacked PC and let it perform exactly one DFC/SFC access.
+		NOT (rte_mmu_fix_opcode(15 downto 8) = x"0E" AND
+		     rte_mmu_fix_opcode(7 downto 6) /= "11")
 		else '0';
 	rte_fmt_b_replay_size <= "00" when rte_mmu_fix_ssw(5 downto 4) = "01" else
 	                         "01" when rte_mmu_fix_ssw(5 downto 4) = "10" else
@@ -1608,7 +1611,7 @@ ALU: TG68K_ALU
 		micro_state = rte5 AND
 		rot_cnt = "000001" AND
 		rte_format_word(15 downto 12) = "1011" AND
-		rte_mmu_fix_ssw(9) = '1' AND
+		-- SSW bits 11:9 are reserved and must not qualify recovery.
 		rte_mmu_fix_ssw(8) = '0' AND
 		rte_mmu_fix_ssw(7) = '0' AND
 		rte_mmu_fix_ssw(6) = '1' AND
@@ -2613,6 +2616,10 @@ PROCESS (clk)
 					data_write_tmp <= (trap_SR & Flags) & berr_frame_pc(31 downto 16);  -- SR/PC_hi ($00)
 				ELSIF micro_state = rte5 AND rot_cnt = "000001" AND rte_data_replay_needed = '1' THEN
 					data_write_tmp <= rte_data_replay_data_out;
+				ELSIF micro_state = rte_mmu_replay_setup OR micro_state = rte_mmu_replay THEN
+					-- Hold the stacked data-output buffer from the final rte5 edge
+					-- through setup and every wait state of the replay transfer.
+					data_write_tmp <= data_write_tmp;
 				-- BUG #391 FIX: Bypass hold_dwr at the CRP/SRP HI/LO write boundary.
 				-- At clkena_lw with micro_state=pmove_mmu_to_mem_lo, the HI longword bus
 				-- write is completing and we need data_write_tmp to be refreshed with CRP_L
@@ -2818,11 +2825,18 @@ PROCESS (brief, OP1out, OP1outbrief, cpu)
 						memaddr_delta_rega <= TG68_PC_add;
 						use_base <= '0';
 					ELSIF micro_state = rte5 AND rot_cnt = "000001" AND
-					      rte_data_replay_needed = '1' THEN
-						-- Seed the saved fault address once when RTE schedules the replay.
+					      rte_data_replay_needed = '1' AND memmaskmux(3) = '1' THEN
+						-- Seed the saved fault address only after both halves of the
+						-- final frame longword have retired. Doing this on its high-word
+						-- acknowledge redirects the low-word read away from the stack.
 						-- During rte_mmu_replay the normal longword address sequencer must
 						-- advance the second 16-bit transfer to fault_addr + 2.
 						memaddr_delta_rega <= rte_data_replay_fault_addr;
+						use_base <= '0';
+					ELSIF micro_state = rte_mmu_replay_setup THEN
+						-- The generic address setup path would replace the saved
+						-- absolute fault address with memaddr_a before state="11".
+						memaddr_delta_rega <= memaddr_delta_rega;
 						use_base <= '0';
 					ELSIF (micro_state=movem1 OR micro_state=movem2) AND
 					      rte_movem_restart_pending='1' AND
@@ -3361,6 +3375,8 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 					berr_pmmu_fault_fc <= (others => '0');
 					berr_pmmu_fault_rw <= '1';
 					berr_pmmu_fault_is_insn <= '0';
+					berr_pmmu_data_out <= (others => '0');
+					berr_pmmu_lastwrite_ok <= '0';
 					berr_pmmu_fault_valid <= '0';
 					berr_external_addr <= (others => '0');
 					berr_pending <= '0';
@@ -3676,6 +3692,8 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 					-- cannot corrupt SSW.SIZE for the eventual bus/MMU frame.
 					if pmmu_fault='0' and make_berr='0' and trap_berr='0' and trap_mmu_berr='0' and berr_exception_active='0' then
 						berr_pmmu_datatype <= "10";
+						berr_pmmu_data_out <= (others => '0');
+						berr_pmmu_lastwrite_ok <= '0';
 						berr_pmmu_fault_valid <= '0';
 					elsif pmmu_fault='1' and make_berr='0' and trap_berr='0' and trap_mmu_berr='0' then
 						berr_pmmu_datatype <= datatype;
@@ -3683,6 +3701,11 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 						berr_pmmu_fault_fc <= pmmu_fault_fc_out;
 						berr_pmmu_fault_rw <= pmmu_fault_rw_out;
 						berr_pmmu_fault_is_insn <= pmmu_fault_is_insn_out;
+						-- MOVES and other register-sourced writes bypass data_write_tmp.
+						-- Preserve the actual 32-bit data-output buffer while the
+						-- faulting transfer still owns the write-data mux.
+						berr_pmmu_data_out <= data_write_muxin;
+						berr_pmmu_lastwrite_ok <= pmmu_fault_live_lastwrite_ok;
 						berr_pmmu_fault_valid <= '1';
 						v_pmmu_datatype := datatype;
 					end if;
@@ -3821,8 +3844,16 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 									berr_movem_restart_valid <= '1';
 									berr_movem_mask_saved <= movem_transfer_mask;
 								END IF;
-								-- Save data output buffer for berr2 (data being written at fault time)
-								berr_data_out_saved <= data_write_tmp;
+								-- Save the data-output buffer for berr2. A same-cycle PMMU
+								-- fault still has the live source on data_write_muxin; a
+								-- delayed dispatch uses the first-fire copy above.
+								IF pmmu_fault = '1' THEN
+									berr_data_out_saved <= data_write_muxin;
+								ELSIF berr_pmmu_fault_valid = '1' OR make_mmu_berr = '1' THEN
+									berr_data_out_saved <= berr_pmmu_data_out;
+								ELSE
+									berr_data_out_saved <= data_write_tmp;
+								END IF;
 								berr_ssw <= (others => '0');
 								-- BUG #414/#415: Latch fault address and construct SSW
 								-- SSW layout: FC(15) FB(14) RC(13) RB(12) [11:9] DF(8) RM(7) RW(6) SIZE(5:4) [3] FC(2:0)
@@ -3900,7 +3931,7 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 										when "01" => berr_ssw(5 downto 4) <= "10";
 										when others => berr_ssw(5 downto 4) <= "00";
 									end case;
-									berr_ssw(11 downto 10) <= "00"; -- Reserved (bit 9 preserved for software-fix)
+									berr_ssw(11 downto 10) <= "00"; -- Reserved; bit 9 is cleared above.
 					berr_ssw(7) <= exec_tas OR exec_cas OR atomic_rmc_active;  -- RM: read-modify-write
 									berr_ssw(3) <= '0';
 								end if;
@@ -4172,6 +4203,8 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 						berr_pmmu_fault_fc <= pmmu_fault_fc_out;
 						berr_pmmu_fault_rw <= pmmu_fault_rw_out;
 						berr_pmmu_fault_is_insn <= pmmu_fault_is_insn_out;
+						berr_pmmu_data_out <= data_write_muxin;
+						berr_pmmu_lastwrite_ok <= pmmu_fault_live_lastwrite_ok;
 						berr_pmmu_fault_valid <= '1';
 						IF pmmu_fault_stat(15) = '1' THEN
 							make_mmu_berr <= '1';
@@ -7783,15 +7816,12 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 					-- Continue popping stack for formats that need multiple reads
 					IF rot_cnt = "000001" THEN
 						IF rte_data_replay_needed = '1' THEN
-							-- Format $A/$B write fault: replay the saved data write once,
-							-- using the fault address and FC from the stacked SSW.
-							setstate <= "11";
-							datatype <= rte_data_replay_size;
-							set_datatype <= rte_data_replay_size;
-							IF rte_data_replay_size = "10" THEN
-								set(longaktion) <= '1';
-							END IF;
-							next_micro_state <= rte_mmu_replay;
+							-- The final frame read leaves the post-incremented stack
+							-- address on the bus-address path. Hold an idle setup cycle
+							-- while the saved fault address and payload are registered;
+							-- asserting the write here can translate A7 instead.
+							setstate <= "01";
+							next_micro_state <= rte_mmu_replay_setup;
 						ELSE
 							-- Last read completed - RTE is finishing
 							next_micro_state <= nop;
@@ -7835,9 +7865,21 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 							next_micro_state <= rte5;
 						END IF;
 
+					WHEN rte_mmu_replay_setup =>
+						-- Format $A/$B data-write replay setup. The saved address was
+						-- loaded on the preceding rte5 edge; launch only after it and
+						-- the stacked SSW function code are stable.
+						setstate <= "11";
+						datatype <= rte_data_replay_size;
+						set_datatype <= rte_data_replay_size;
+						IF rte_data_replay_size = "10" THEN
+							set(longaktion) <= '1';
+						END IF;
+						next_micro_state <= rte_mmu_replay;
+
 					WHEN rte_mmu_replay =>
-						-- The replay write cycle was scheduled by the final rte5 frame
-						-- read.  Keep the saved data size visible until the bus cycle
+						-- The replay write cycle was scheduled by the setup state.
+						-- Keep the saved data size visible until the bus cycle
 						-- completes, then resume at the already-restored stacked PC.
 						datatype <= rte_data_replay_size;
 						set_datatype <= rte_data_replay_size;

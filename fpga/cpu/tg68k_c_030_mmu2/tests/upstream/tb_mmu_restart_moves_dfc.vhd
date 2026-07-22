@@ -1,12 +1,10 @@
 -- tb_mmu_restart_moves_dfc.vhd
--- Regression for the live NetBSD-style failure shape: supervisor code uses
--- MOVES.B with DFC=1 to write user logical $1DFFFFF5. The target walks through
--- CRP=$4FAA6000, so the first root descriptor access must be $4FAA6074. The
--- bus-error frame stacks on an SRE=1 supervisor stack translated through
--- SRP=$4052C000, the handler repairs an indirect target descriptor, PFLUSHes,
--- and executes an unmodified RTE. The restarted MOVES.B must perform exactly
--- one byte write to the repaired physical page and must not corrupt the CRP
--- root descriptor address to the hardware-captured $4FFF6074 pattern.
+-- Regression for kernel copyin/copyout restart through separate SRP/CRP roots.
+-- Four MOVES.B forms fault independently on one user page: absolute DFC write,
+-- postincrement DFC write, predecrement DFC write, and postincrement SFC read.
+-- Each handler invocation repairs the descriptor, PFLUSHes, and executes an
+-- unmodified RTE. Every restarted instruction must perform exactly one target
+-- transfer, and auto-modified address registers must change exactly once.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -89,7 +87,6 @@ architecture behavioral of tb_mmu_restart_moves_dfc is
     signal debug_pmmu_ptr3_desc_data : std_logic_vector(31 downto 0);
     signal debug_regfile_d0 : std_logic_vector(31 downto 0);
     signal debug_regfile_d2 : std_logic_vector(31 downto 0);
-    signal debug_regfile_a0 : std_logic_vector(31 downto 0);
     signal debug_stop      : std_logic;
 
     signal stall_cooldown : integer range 0 to 3 := 0;
@@ -97,8 +94,13 @@ architecture behavioral of tb_mmu_restart_moves_dfc is
     signal mem_wait : std_logic := '0';
     signal saw_handler_pc  : boolean := false;
     signal saw_done_marker : boolean := false;
+    signal trace_fault_prev : std_logic := '0';
     signal saw_crp_root_desc : boolean := false;
     signal saw_corrupt_crp_root_desc : boolean := false;
+    signal abs_write_count  : natural := 0;
+    signal post_write_count : natural := 0;
+    signal pre_write_count  : natural := 0;
+    signal post_read_count  : natural := 0;
 
     signal crp_root_desc : std_logic_vector(31 downto 0) := x"4FAA7002";
     signal crp_ptr1_desc : std_logic_vector(31 downto 0) := x"4FAA8002";
@@ -110,6 +112,7 @@ architecture behavioral of tb_mmu_restart_moves_dfc is
 
     function init_mem return mem_type is
         variable m : mem_type := (others => x"4E71");
+        variable w : integer;
     begin
         -- Reset vectors
         m(0) := x"0000"; m(1) := x"2000";
@@ -120,14 +123,16 @@ architecture behavioral of tb_mmu_restart_moves_dfc is
             m(i*2+1) := x"00C0";
         end loop;
 
-        -- Vector 2 handler: mark entry, save frame base, repair the indirect
-        -- target descriptor for $1DFFFFF5, PFLUSH that page, RTE unmodified.
-        m(64) := x"23FC"; m(65) := x"0000"; m(66) := x"0002"; m(67) := x"0000"; m(68) := x"1F00";
-        m(69) := x"23CF"; m(70) := x"0000"; m(71) := x"1F24"; -- MOVE.L A7,$1F24.L
-        m(72) := x"23FC"; m(73) := x"0000"; m(74) := x"7C61"; -- MOVE.L #$00007C61,$7000.L
-        m(75) := x"0000"; m(76) := x"7000";
-        m(77) := x"227C"; m(78) := x"1DFF"; m(79) := x"FFF5"; -- MOVEA.L #$1DFFFFF5,A1
-        m(80) := x"F011"; m(81) := x"3810";                   -- PFLUSH #0,#0,(A1)
+        -- Vector 2 handler: count faults, save frame base, preserve A6, repair
+        -- the indirect descriptor, flush the user page, and RTE unmodified.
+        m(64) := x"52B9"; m(65) := x"0000"; m(66) := x"1F00"; -- ADDQ.L #1,$1F00.L
+        m(67) := x"23CF"; m(68) := x"0000"; m(69) := x"1F24"; -- MOVE.L A7,$1F24.L
+        m(70) := x"2F0E";                                     -- MOVE.L A6,-(A7)
+        m(71) := x"23FC"; m(72) := x"0000"; m(73) := x"7C61";
+        m(74) := x"0000"; m(75) := x"7000";                   -- MOVE.L #$00007C61,$7000.L
+        m(76) := x"2C7C"; m(77) := x"1DFF"; m(78) := x"FFF5"; -- MOVEA.L #$1DFFFFF5,A6
+        m(79) := x"F016"; m(80) := x"3810";                   -- PFLUSH #0,#0,(A6)
+        m(81) := x"2C5F";                                     -- MOVEA.L (A7)+,A6
         m(82) := x"4E73";                                     -- RTE
 
         -- Unexpected trap handler
@@ -135,26 +140,56 @@ architecture behavioral of tb_mmu_restart_moves_dfc is
         m(99) := x"0000"; m(100) := x"1F00";
         m(101) := x"4E72"; m(102) := x"2700";
 
-        -- Program: load live-trace CRP/SRP, enable MMU, set DFC=1, put SSP
-        -- on an SRP-translated supervisor stack, then fault a MOVES.B copyout
-        -- write through CRP. The post-RTE restart writes the byte and reaches
-        -- the done marker.
-        m(128) := x"2E7C"; m(129) := x"0000"; m(130) := x"1080";
-        m(131) := x"F017"; m(132) := x"4C00";
-        m(133) := x"2E7C"; m(134) := x"0000"; m(135) := x"1088";
-        m(136) := x"F017"; m(137) := x"4800";
-        m(138) := x"F000"; m(139) := x"2400";
-        m(140) := x"F038"; m(141) := x"4000"; m(142) := x"1090";
-        m(143) := x"4E71"; m(144) := x"4E71";
-        m(145) := x"7001";                                     -- MOVEQ #1,D0
-        m(146) := x"4E7B"; m(147) := x"0001";                   -- MOVEC D0,DFC
-        m(148) := x"243C"; m(149) := x"1234"; m(150) := x"56A5"; -- MOVE.L #$123456A5,D2
-        m(151) := x"2E7C"; m(152) := x"0BAF"; m(153) := x"A000"; -- MOVEA.L #$0BAFA000,A7
-        m(154) := x"0E39"; m(155) := x"2800";                   -- MOVES.B D2,($1DFFFFF5).L
-        m(156) := x"1DFF"; m(157) := x"FFF5";
-        m(158) := x"23FC"; m(159) := x"C0DE"; m(160) := x"700D"; -- MOVE.L #$C0DE700D,$1F2C.L
-        m(161) := x"0000"; m(162) := x"1F2C";
-        m(163) := x"60FE";                                     -- BRA.S *
+        -- Program: enable separate SRP/CRP translation, set SFC=DFC=1, move
+        -- the supervisor stack to an SRP-walked page, and exercise four
+        -- independently faulted MOVES forms. Between cases the indirect target
+        -- is invalidated and the user page is flushed so every case must fault.
+        w := 128;
+        m(w) := x"2E7C"; m(w+1) := x"0000"; m(w+2) := x"1080"; w := w+3;
+        m(w) := x"F017"; m(w+1) := x"4C00"; w := w+2;           -- PMOVE (A7),CRP
+        m(w) := x"2E7C"; m(w+1) := x"0000"; m(w+2) := x"1088"; w := w+3;
+        m(w) := x"F017"; m(w+1) := x"4800"; w := w+2;           -- PMOVE (A7),SRP
+        m(w) := x"F000"; m(w+1) := x"2400"; w := w+2;           -- PFLUSHA
+        m(w) := x"F038"; m(w+1) := x"4000"; m(w+2) := x"1090"; w := w+3; -- PMOVE TC
+        m(w) := x"4E71"; m(w+1) := x"4E71"; w := w+2;
+        m(w) := x"7001"; w := w+1;                               -- MOVEQ #1,D0
+        m(w) := x"4E7B"; m(w+1) := x"0000"; w := w+2;           -- MOVEC D0,SFC
+        m(w) := x"4E7B"; m(w+1) := x"0001"; w := w+2;           -- MOVEC D0,DFC
+        m(w) := x"243C"; m(w+1) := x"1234"; m(w+2) := x"56A5"; w := w+3;
+        m(w) := x"2E7C"; m(w+1) := x"0BAF"; m(w+2) := x"A000"; w := w+3;
+
+        m(w) := x"0E39"; m(w+1) := x"2800";                    -- MOVES.B D2,($1DFFFFF5).L
+        m(w+2) := x"1DFF"; m(w+3) := x"FFF5"; w := w+4;
+
+        m(w) := x"23FC"; m(w+1) := x"BADF"; m(w+2) := x"EED0";
+        m(w+3) := x"0000"; m(w+4) := x"7000"; w := w+5;        -- invalidate indirect target
+        m(w) := x"2C7C"; m(w+1) := x"1DFF"; m(w+2) := x"FFF5"; w := w+3;
+        m(w) := x"F016"; m(w+1) := x"3810"; w := w+2;           -- PFLUSH user page
+        m(w) := x"227C"; m(w+1) := x"1DFF"; m(w+2) := x"FFF6"; w := w+3;
+        m(w) := x"0E19"; m(w+1) := x"2800"; w := w+2;           -- MOVES.B D2,(A1)+
+        m(w) := x"23C9"; m(w+1) := x"0000"; m(w+2) := x"1F30"; w := w+3;
+
+        m(w) := x"23FC"; m(w+1) := x"BADF"; m(w+2) := x"EED0";
+        m(w+3) := x"0000"; m(w+4) := x"7000"; w := w+5;
+        m(w) := x"2C7C"; m(w+1) := x"1DFF"; m(w+2) := x"FFF5"; w := w+3;
+        m(w) := x"F016"; m(w+1) := x"3810"; w := w+2;
+        m(w) := x"765A"; w := w+1;                               -- MOVEQ #$5A,D3
+        m(w) := x"227C"; m(w+1) := x"1DFF"; m(w+2) := x"FFF8"; w := w+3;
+        m(w) := x"0E21"; m(w+1) := x"3800"; w := w+2;           -- MOVES.B D3,-(A1)
+        m(w) := x"23C9"; m(w+1) := x"0000"; m(w+2) := x"1F34"; w := w+3;
+
+        m(w) := x"23FC"; m(w+1) := x"BADF"; m(w+2) := x"EED0";
+        m(w+3) := x"0000"; m(w+4) := x"7000"; w := w+5;
+        m(w) := x"2C7C"; m(w+1) := x"1DFF"; m(w+2) := x"FFF5"; w := w+3;
+        m(w) := x"F016"; m(w+1) := x"3810"; w := w+2;
+        m(w) := x"247C"; m(w+1) := x"1DFF"; m(w+2) := x"FFF8"; w := w+3;
+        m(w) := x"7800"; w := w+1;                               -- MOVEQ #0,D4
+        m(w) := x"0E1A"; m(w+1) := x"4000"; w := w+2;           -- MOVES.B (A2)+,D4
+        m(w) := x"23CA"; m(w+1) := x"0000"; m(w+2) := x"1F38"; w := w+3;
+        m(w) := x"23C4"; m(w+1) := x"0000"; m(w+2) := x"1F3C"; w := w+3;
+        m(w) := x"23FC"; m(w+1) := x"C0DE"; m(w+2) := x"700D";
+        m(w+3) := x"0000"; m(w+4) := x"1F2C"; w := w+5;
+        m(w) := x"60FE";                                         -- BRA.S *
 
         -- CRP / SRP
         m(2112) := x"8000"; m(2113) := x"0002"; m(2114) := x"4FAA"; m(2115) := x"6000";
@@ -173,7 +208,10 @@ architecture behavioral of tb_mmu_restart_moves_dfc is
         -- CRP target final-level indirect target: BADFEED0 sentinel, not a
         -- page descriptor, until the handler repairs it to $00007C61.
         m(14336) := x"BADF"; m(14337) := x"EED0";
-        m(16#3FFA#) := x"0000"; -- physical $7FF4, odd target byte becomes low byte $A5
+        m(16#0F80#) := x"0000"; m(16#0F81#) := x"0000"; -- fault count at $1F00
+        m(16#3FFA#) := x"0000"; -- physical $7FF4: absolute write updates low byte
+        m(16#3FFB#) := x"0000"; -- physical $7FF6: post/pre writes update high/low
+        m(16#3FFC#) := x"C300"; -- physical $7FF8: SFC read returns high byte $C3
 
         -- SRP stack tree: high SRP root slot $0B is supplied by the walker
         -- model and points to table $6900. TIB slot $2B points to final table
@@ -229,7 +267,7 @@ begin
             debug_direct_data => open, debug_setnextpass => open, debug_TG68_PC => debug_TG68_PC,
             debug_memaddr_reg => open, debug_memaddr_delta => open, debug_oddout => open, debug_decodeOPC => open,
             debug_brief => open, debug_moves_bus_pending => open, debug_moves_writeback_pending => open,
-            debug_clkena_lw => open, debug_regfile_d0 => debug_regfile_d0, debug_regfile_a0 => debug_regfile_a0,
+            debug_clkena_lw => open, debug_regfile_d0 => debug_regfile_d0, debug_regfile_a0 => open,
             debug_fline_context_valid => open, debug_trap_1111 => open, debug_trapmake => open,
             debug_pmmu_brief => open, debug_use_base => open, debug_rf_source_addr => open,
             debug_pmove_ea_latched => open, debug_reg_QA => open, debug_last_data_read => open,
@@ -267,7 +305,8 @@ begin
             debug_pmmu_ptr2_desc_data => debug_pmmu_ptr2_desc_data,
             debug_pmmu_ptr3_desc_addr => debug_pmmu_ptr3_desc_addr,
             debug_pmmu_ptr3_desc_data => debug_pmmu_ptr3_desc_data,
-            debug_pmmu_saved_fc => open
+            debug_pmmu_saved_fc => open,
+            debug_data_write_tmp => open
         );
 
     mem_read: process(pmmu_addr_phys, mem)
@@ -289,6 +328,14 @@ begin
             if busstate = "11" and nWr = '0' and clkena_in = '1' then
                 if not is_x(pmmu_addr_phys) and unsigned(pmmu_addr_phys) < x"00008000" then
                     phys_word := to_integer(unsigned(pmmu_addr_phys(14 downto 1)));
+                    if nUDS = '0' or nLDS = '0' then
+                        case pmmu_addr_phys is
+                            when x"00007FF5" => abs_write_count <= abs_write_count + 1;
+                            when x"00007FF6" => post_write_count <= post_write_count + 1;
+                            when x"00007FF7" => pre_write_count <= pre_write_count + 1;
+                            when others => null;
+                        end case;
+                    end if;
                     if nUDS = '0' then
                         mem(phys_word)(15 downto 8) <= data_write(15 downto 8);
                     end if;
@@ -296,6 +343,12 @@ begin
                         mem(phys_word)(7 downto 0) <= data_write(7 downto 0);
                     end if;
                 end if;
+            end if;
+
+            if busstate = "10" and nWr = '1' and clkena_in = '1' and
+               not is_x(pmmu_addr_phys) and pmmu_addr_phys = x"00007FF8" and
+               (nUDS = '0' or nLDS = '0') then
+                post_read_count <= post_read_count + 1;
             end if;
 
             if pmmu_walker_req = '1' then
@@ -389,13 +442,19 @@ begin
     begin
         if rising_edge(clk) then
             if nReset = '1' then
+                if debug_pmmu_fault = '1' and trace_fault_prev = '0' then
+                    report "MOVES_DFC_TRACE: fault pc=$" & slv_to_hex(debug_TG68_PC) &
+                           " fc=$" & slv_to_hex('0' & FC) &
+                           " fault_addr=$" & slv_to_hex(debug_pmmu_saved_addr)
+                    severity note;
+                end if;
                 if debug_TG68_PC = x"00000080" and not saw_handler_pc then
                     saw_handler_pc <= true;
-                    report "MOVES_DFC_TRACE: entered vector2 handler" severity note;
                 elsif (mem(16#0F96#) & mem(16#0F97#)) = x"C0DE700D" and not saw_done_marker then
                     saw_done_marker <= true;
                     report "MOVES_DFC_TRACE: restarted MOVES.B completed" severity note;
                 end if;
+                trace_fault_prev <= debug_pmmu_fault;
             end if;
         end if;
     end process;
@@ -405,13 +464,20 @@ begin
         variable marker   : std_logic_vector(31 downto 0);
         variable done_mark : std_logic_vector(31 downto 0);
         variable pte_target : std_logic_vector(31 downto 0);
-        variable moved_word : std_logic_vector(15 downto 0);
+        variable abs_word : std_logic_vector(15 downto 0);
+        variable pair_word : std_logic_vector(15 downto 0);
+        variable read_word : std_logic_vector(15 downto 0);
+        variable post_a1 : std_logic_vector(31 downto 0);
+        variable pre_a1 : std_logic_vector(31 downto 0);
+        variable read_a2 : std_logic_vector(31 downto 0);
+        variable read_d4 : std_logic_vector(31 downto 0);
         variable frame_word : integer;
         variable frame_ssw : std_logic_vector(15 downto 0);
         variable frame_pc : std_logic_vector(31 downto 0);
         variable frame_fault_addr : std_logic_vector(31 downto 0);
+        variable frame_format : std_logic_vector(3 downto 0);
     begin
-        report "=== MMU RESTART MOVES.B DFC WRITE TEST ===" severity note;
+        report "=== MMU RESTART MOVES.B SFC/DFC AUTO-MODIFY TEST ===" severity note;
         wait for 100 ns;
         nReset <= '1';
 
@@ -427,12 +493,19 @@ begin
         marker   := mem(16#0F80#) & mem(16#0F81#); -- $1F00
         done_mark := mem(16#0F96#) & mem(16#0F97#); -- $1F2C
         pte_target := mem(16#3800#) & mem(16#3801#); -- physical $7000
-        moved_word := mem(16#3FFA#); -- physical $7FF4, low byte is logical $1DFFFFF5
+        abs_word := mem(16#3FFA#);
+        pair_word := mem(16#3FFB#);
+        read_word := mem(16#3FFC#);
+        post_a1 := mem(16#0F98#) & mem(16#0F99#); -- $1F30
+        pre_a1 := mem(16#0F9A#) & mem(16#0F9B#);  -- $1F34
+        read_a2 := mem(16#0F9C#) & mem(16#0F9D#); -- $1F38
+        read_d4 := mem(16#0F9E#) & mem(16#0F9F#); -- $1F3C
         -- The high logical stack page $0BAF9C00 maps to physical $6000.
         frame_word := 16#3000# + to_integer(unsigned(frame_a7(9 downto 1)));
         frame_ssw := mem(frame_word + 5);
         frame_pc := mem(frame_word + 1) & mem(frame_word + 2);
         frame_fault_addr := mem(frame_word + 8) & mem(frame_word + 9);
+        frame_format := mem(frame_word + 3)(15 downto 12);
 
         if debug_cpu_halted = '1' then
             report "FAIL: cpu_halted asserted"
@@ -461,8 +534,8 @@ begin
                    & " frame_pc=$" & slv_to_hex(frame_pc)
                    & " frame_fault=$" & slv_to_hex(frame_fault_addr)
                    severity failure;
-        elsif marker /= x"00000002" or not saw_handler_pc then
-            report "FAIL: vector 2 handler was not observed"
+        elsif marker /= x"00000004" or not saw_handler_pc then
+            report "FAIL: expected four vector 2 handler entries"
                    & " marker=$" & slv_to_hex(marker)
                    & " saw_handler=" & boolean'image(saw_handler_pc)
                    & " frame_a7=$" & slv_to_hex(frame_a7)
@@ -475,28 +548,38 @@ begin
         elsif saw_corrupt_crp_root_desc then
             report "FAIL: observed corrupted CRP root descriptor address $4FFF6074"
                    severity failure;
-        elsif moved_word /= x"00A5" then
-            report "FAIL: restarted MOVES.B did not write low byte $A5 at physical $7FF5"
-                   & " word=$" & slv_to_hex(moved_word)
-                   & " D2=$" & slv_to_hex(debug_regfile_d2)
-                   & " frame_a7=$" & slv_to_hex(frame_a7)
-                   & " marker=$" & slv_to_hex(marker)
-                   & " frame_ssw=$" & slv_to_hex(frame_ssw)
-                   & " frame_pc=$" & slv_to_hex(frame_pc)
-                   & " frame_fault=$" & slv_to_hex(frame_fault_addr)
-                   & " saw_handler=" & boolean'image(saw_handler_pc)
-                   & " saw_done=" & boolean'image(saw_done_marker)
-                   & " trapvec=$" & slv_to_hex(debug_trap_vector)
-                   & " trap_berr=" & std_logic'image(debug_trap_berr)
-                   & " trap_mmu_berr=" & std_logic'image(debug_trap_mmu_berr)
-                   & " trap_addr=" & std_logic'image(debug_trap_addr_error)
-                   & " MMUSR=$" & slv_to_hex(debug_pmmu_fault_status)
+        elsif abs_word /= x"00A5" or pair_word /= x"A55A" or read_word /= x"C300" then
+            report "FAIL: restarted MOVES.B target data mismatch"
+                   & " abs=$" & slv_to_hex(abs_word)
+                   & " post_pre=$" & slv_to_hex(pair_word)
+                   & " read_source=$" & slv_to_hex(read_word)
                    severity failure;
-        elsif frame_fault_addr /= x"1DFFFFF5" or frame_pc /= x"00000134" or
-              frame_ssw(8) /= '1' or frame_ssw(7) /= '0' or frame_ssw(6) /= '0' or
+        elsif abs_write_count /= 1 or post_write_count /= 1 or
+              pre_write_count /= 1 or post_read_count /= 1 then
+            report "FAIL: a restarted MOVES.B target transfer was not exactly once"
+                   & " abs_w=" & integer'image(abs_write_count)
+                   & " post_w=" & integer'image(post_write_count)
+                   & " pre_w=" & integer'image(pre_write_count)
+                   & " post_r=" & integer'image(post_read_count)
+            severity failure;
+        elsif post_a1 /= x"1DFFFFF7" or pre_a1 /= x"1DFFFFF7" then
+            report "FAIL: DFC auto-modified A1 more or less than once"
+                   & " post_a1=$" & slv_to_hex(post_a1)
+                   & " pre_a1=$" & slv_to_hex(pre_a1)
+            severity failure;
+        elsif read_a2 /= x"1DFFFFF9" or read_d4 /= x"000000C3" then
+            report "FAIL: SFC postincrement read restart mismatch"
+                   & " A2=$" & slv_to_hex(read_a2)
+                   & " D4=$" & slv_to_hex(read_d4)
+            severity failure;
+        -- SSP $0BAFA000 - format $B frame $5C = $0BAF9FA4.
+        elsif frame_a7 /= x"0BAF9FA4" or frame_format /= "1011" or
+              frame_fault_addr /= x"1DFFFFF8" or frame_pc /= x"000001A6" or
+              frame_ssw(8) /= '1' or frame_ssw(7) /= '0' or frame_ssw(6) /= '1' or
               frame_ssw(5 downto 4) /= "01" or frame_ssw(2 downto 0) /= "001" then
-            report "FAIL: stacked frame does not describe the original MOVES.B DFC write fault"
+            report "FAIL: final frame does not describe the MOVES.B SFC read fault"
                    & " frame_a7=$" & slv_to_hex(frame_a7)
+                   & " frame_format=$" & slv_to_hex(frame_format)
                    & " frame_ssw=$" & slv_to_hex(frame_ssw)
                    & " frame_pc=$" & slv_to_hex(frame_pc)
                    & " frame_fault=$" & slv_to_hex(frame_fault_addr)
@@ -506,9 +589,10 @@ begin
                    & " pte=$" & slv_to_hex(pte_target)
                    severity failure;
         else
-            report "PASS: MOVES.B DFC write fault restarted after live CRP/SRP walk"
+            report "PASS: four MOVES.B SFC/DFC faults restarted exactly once"
                    & " frame_a7=$" & slv_to_hex(frame_a7)
-                   & " word=$" & slv_to_hex(moved_word)
+                   & " writes=" & integer'image(abs_write_count + post_write_count + pre_write_count)
+                   & " reads=" & integer'image(post_read_count)
                    & " pte=$" & slv_to_hex(pte_target)
             severity note;
         end if;

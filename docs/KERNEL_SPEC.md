@@ -104,17 +104,21 @@ hardware build ID, and instantiated personality descriptors from the validated
 boot handoff. Fixed bootstrap addresses such as `VESTA_BASE` remain platform
 ABI only where firmware and hardware documents explicitly require them.
 
-### 3.1 Hardware dependencies
+### 3.1 Hardware dependencies and closed gates
 
 The following are not software workarounds:
 
-- **BLOCKER K-HW-1:** A cold-ATC table walk needed while the CPU stacks an
-  exception on a valid translated supervisor stack must complete correctly.
-  The current candidate's documented double-fault case must pass a focused
-  reproducer before protected multitasking is accepted.
-- **BLOCKER K-HW-2:** Any design using separate SRP/CRP roots plus `MOVES` for
-  user copies depends on correct SFC/DFC, `MOVES`, fault, and RTE restart
-  behavior. The unresolved diagnostic must be classified and, if valid, fixed.
+- **SIMULATION CLOSED, HARDWARE PENDING K-HW-1:** A cold-ATC table walk needed
+  while the CPU stacks an exception on a valid translated supervisor stack now
+  passes the focused RTL reproducer without a second fault or CPU halt. The
+  exact retained RTL still requires synthesis, routing, and board promotion
+  before protected multitasking relies on it.
+- **SIMULATION CLOSED, HARDWARE PENDING K-HW-2:** Separate SRP/CRP roots plus
+  faulting `MOVES.B` user-copy operations now preserve SFC/DFC, return through
+  an unmodified format-B frame, update predecrement/postincrement registers
+  once, and perform one target transfer. Absolute, predecrement, postincrement,
+  read, and write forms pass shared and focused RTL tests. Exact hardware
+  promotion remains required.
 - **BLOCKER K-HW-3:** PMMU descriptor search and hardware descriptor updates
   must be indivisible against DMA as required by the MC68030 contract.
 - **BLOCKER K-HW-4:** Vesta interrupt acknowledge, edge/level clearing, timer
@@ -282,7 +286,7 @@ Research must compare these rather than selecting by familiarity:
 
 | Alternative | Benefit | Cost or dependency |
 |---|---|---|
-| Permanent SRP for supervisor, per-process CRP for user | Kernel tables do not change on a process switch; clean separation | User copies likely require reliable SFC/DFC and `MOVES`; current diagnostic is unresolved |
+| Permanent SRP for supervisor, per-process CRP for user | Kernel tables do not change on a process switch; clean separation | User copies require reliable SFC/DFC and `MOVES`; focused and shared simulation now pass, but exact hardware promotion remains |
 | Per-process unified root with protected supervisor subtree | Ordinary kernel access to mapped user memory; familiar pmap model | Requires long-format supervisor protection or function-code separation; kernel mappings appear in every root |
 | Transparent-translation-assisted kernel aperture | Some supervisor mappings avoid table walks | Identity mapping only, minimum 16 MiB aperture, no descriptor protection, strict function-code matching, consumes TT0/TT1 |
 
@@ -782,14 +786,18 @@ The adapter now emits byte-checked 16-word format-A and 46-word format-B PMMU
 fault frames and exercises both unchanged-frame restart and handler-completed
 DIB/DOB cycles through `RTE`. It also replays prior multi-transfer cycles
 without repeating their host-visible side effects. This closes the host-model
-portion of KR-01/KR-03; the target frame dumper and RTL comparison remain the
-architecture-authoritative rendezvous.
+portion of KR-01/KR-03. Focused RTL tests now also pass cold translated-stack
+exception entry and four faulted SFC/DFC `MOVES.B` forms with exact-once side
+effects. The exact-source board run remains the architecture-authoritative
+promotion gate.
 
-The following questions require the RTL core or FPGA and therefore form
-the hardware rendezvous:
+The following questions require the RTL core or FPGA and therefore form the
+hardware rendezvous. The first two are closed in RTL simulation and await
+exact-source board promotion; the remaining items are still open:
 
-- exception stacking with a cold ATC and translated supervisor stack;
-- `MOVES`, SFC/DFC, fault restart, and `RTE` behavior;
+- hardware repetition of exception stacking with a cold ATC and translated
+  supervisor stack;
+- hardware repetition of `MOVES`, SFC/DFC, fault restart, and `RTE` behavior;
 - real descriptor-update ordering and DMA arbitration;
 - Vesta timer/interrupt races and measured interrupt latency;
 - actual context-switch, syscall, IPC, and cache-maintenance cycle costs.
@@ -802,7 +810,7 @@ an architectural question.
 |---|---:|---|---|
 | KR-01 | P0 | What exact exception and supervisor-stack strategy is safe? | Manual-cited frame notebook, assembly frame dumper, cold-ATC stack-walk tests, nested IRQ tests, selected ISP/MSP policy |
 | KR-02 | P0 | Which PMMU root and table geometry should Astra use? | Executable 4 KiB 10/10 prototype plus SRP/CRP, unified-root, and TT comparison; exact TC/descriptors/flush rules |
-| KR-03 | P0 | Can kernel user-copy recover safely? | Ordinary-access and `MOVES` variants, fault on every boundary, unresolved SFC/DFC diagnostic classified |
+| KR-03 | P0 | Can kernel user-copy recover safely? | Ordinary-access and `MOVES` variants, fault on every boundary, shared Musashi/RTL equivalence, exact-once side effects, and exact-source hardware promotion |
 | KR-04 | P0 | What is the native C, context, and trap ABI? | Compiler-generated ABI corpus, hand-written context round trip, proposed register/status convention, generated conformance tests |
 | KR-05 | P1 | What timer and scheduler substrate is actually bounded? | Timer race/latency measurements, fixed-priority bitmap prototype, starvation/process-fairness tests, initial quantum proposal |
 | KR-06 | P1 | What capability model is sufficient without seL4 complexity? | Host model for handle lookup/rights/generation/transfer/revoke, state-machine tests, memory-cost table |
