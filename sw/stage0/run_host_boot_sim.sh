@@ -11,6 +11,7 @@ test_bytes="${SDRAM_SIM_TEST_BYTES:-65536}"
 progress="${ASTRA_HOST_SIM_PROGRESS:-0}"
 reuse_sim="${ASTRA_HOST_SIM_REUSE:-0}"
 kernel_panic_selftest="${KERNEL_PANIC_SELFTEST:-0}"
+hdmi_enable="${ASTRA_HOST_SIM_HDMI:-0}"
 sim_args=()
 if [[ "$kernel_panic_selftest" == "1" ]]; then
     sim_args+=(+expect-kernel-panic)
@@ -18,13 +19,14 @@ fi
 
 make -C sw/stage0 clean all BOOT_BACKEND=host
 make -C sw/boot clean all \
-    CPU_CLK_DIV_BIT=0 SDRAM_ENABLE=1 HDMI_ENABLE=0 \
+    CPU_CLK_DIV_BIT=0 SDRAM_ENABLE=1 HDMI_ENABLE="$hdmi_enable" \
     KERNEL_PANIC_SELFTEST="$kernel_panic_selftest" \
     EXTRA_CFLAGS="-DMEM_BENCH_BYTES=256 -DDMA_BENCH_BYTES=1024"
 python3 sw/boot/package_rom.py sw/boot/astra_boot.bin sw/boot/astra68.rom \
     --hex-output fpga/soc/sim/astra68_rom.hex
 python3 sw/boot/bin2hex.py \
     sw/stage0/stage0.bin fpga/soc/sim/rom_init.hex
+cp fpga/soc/post_fonts.hex fpga/soc/sim/post_fonts.hex
 
 cd fpga/soc/sim
 if [[ "$reuse_sim" != "1" || ! -x obj_dir_host_boot/Vtb_astra_host_boot_soc ]]; then
@@ -36,8 +38,10 @@ if [[ "$reuse_sim" != "1" || ! -x obj_dir_host_boot/Vtb_astra_host_boot_soc ]]; 
     verilator --binary -O0 -j 0 --Mdir obj_dir_host_boot \
         --top-module tb_astra_host_boot_soc -Wno-lint -Wno-UNOPTFLAT --timing \
         -GTEST_BYTES="$test_bytes" -GPROGRESS="$progress" \
+        -GHDMI_ENABLE="$hdmi_enable" \
         tb_astra_host_boot_soc.sv tb_sdram32_controller.sv ecp5pll_sim.sv \
-        ../astra_soc.sv ../astra_front_panel.sv ../vesta_irq_timer.sv ../boot_memory_map.sv ../tg68k_cache_store.sv \
+        ../astra_soc.sv ../post_console.sv ../astra_front_panel.sv \
+        ../vesta_irq_timer.sv ../boot_memory_map.sv ../tg68k_cache_store.sv \
         ../astraea_blitter.sv ../astraea_pixel_port.sv ../astraea_draw.sv \
         ../astraea_copper.sv ../astraea_chip.sv \
         ../vega_sprite_builder.sv ../vega_video.sv \

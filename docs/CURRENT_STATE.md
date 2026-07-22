@@ -112,11 +112,10 @@ and old resource tables are not current status.
   Vesta, AstraHost runtime/service, SDRAM bridge, ESP host, boot, NDK, and OSS
   release tests pass. This is enough for supervisor-mode kernel development,
   not a waiver for the documented protected-multitasking PMMU blockers.
-- The hardware-proven guarded P54 route maps 53,190 LUT4s and packs 66,566 of
-  83,640 TRELLIS_COMB cells. The newer P55 source removes the exact worst
-  AstraHost ownership cone and maps 52,615 LUT4s, 25,421 total FFs, 104 block
-  RAMs, and 19 multipliers, but has not yet been routed or loaded on hardware.
-  Physical capacity, not an artificial utilization cap, is the release limit. See
+- The exact committed P55 route maps 52,615 LUT4s and packs 66,095 of 83,640
+  TRELLIS_COMB cells, 25,450 FFs, 104 block RAMs, and 19 multipliers. It passes
+  every exact clock at 14.09 MHz CPU and 64.02 MHz SDRAM or better. Physical
+  capacity, not an artificial utilization cap, is the release limit. See
   [FPGA_RESOURCE_BUDGET.md](FPGA_RESOURCE_BUDGET.md).
 - The 256 GB card and its existing GBA data remain untouched. AstraHost mounts
   the FAT/exFAT boot volume and now loads the tested `/ASTRA68.ROM` package
@@ -124,13 +123,14 @@ and old resource tables are not current status.
   exposes no runtime media until the card has exactly one CRC-valid,
   non-overlapping Astra GPT partition. The bounded AstraHost input queue and
   the independent OHCI USB host are both integrated.
-- The ULX3S currently contains the volatile legal P54 production image with
-  bitstream SHA-256
-  `ded87a3e3c5daef55d82e280f71d05d8a605be3e1e2135ec59a2a285072dc870`.
-  Its BRAM-only route probe passed first, then the matching production image
-  passed three complete boots. The last gate required FPGA build ID
-  `0x60000002`, ROM CRC32 `B645D379`, `POST PASS`, and `K0 ENTRY PASS` and
-  completed in 1.612 seconds. Persistent FPGA flash remains untouched.
+- The ULX3S currently contains a volatile diagnostic derivative of the exact
+  committed P55 production route. It changes only font BRAM initializer blocks
+  101 through 104 by copying CP437 bank 0 into the physically observed bank 3;
+  its bitstream SHA-256 is
+  `a9135f8a398806c1f0b52ad4fd9333240e35e216f1905c1a45bbf675f3384b21`.
+  It passed build `E9FB3E20`, ROM CRC32 `E2B97D4A`, full POST, and kernel entry
+  in 1.598 seconds. This is diagnostic recovery, not the source-level release
+  fix. Persistent FPGA flash remains untouched.
 - The legal full route and board-boot blocker is resolved. The corrected Beast
   router1 run refreshed all 66,566 placed combinational cells, completed after
   7,924.67 seconds, and passed the protected-LUT gate with zero violations. It
@@ -146,18 +146,25 @@ and old resource tables are not current status.
 - P55 removes the P54 route's 15.058 ns AstraHost boot/runtime ownership cone.
   A positive-control mapped-netlist check finds the old path and proves it is
   absent from P55. Focused AstraHost, complete boot, directed graphics, and all
-  integrated graphics regressions pass at the locked 60 MHz SDRAM clock. P55
-  saves 575 LUT4s and retains zero SCCs and complete POR coverage, but it is
-  still synthesis evidence only; P54 remains the hardware authority.
-- A timing pass is not hardware acceptance. This candidate now has both: the
-  retained placement was built with a stronger 14 MHz CPU implementation
-  target, exact release routing uses the architectural 12.5/60 MHz clocks, the
-  checked route probe ran on ULX3S, and repeated production boots passed. The
-  remaining promotion work is to commit and rebuild the exact source/ROM
-  identity, rerun the full functional release suite, confirm physical HDMI
-  output, and repeat board acceptance on that committed artifact. The current
-  test ROM reports an unknown embedded-kernel Git identity, so it is not the
-  persistent-flash release even though its hardware behavior passes.
+  integrated graphics regressions pass at the locked 60 MHz SDRAM clock. The
+  exact P55 route is timing-clean and repeatedly hardware-boots, but normal
+  font scanout is still blocked: its four Y46 font BRAM slices read effective
+  bank 3 while RTL selects bank 0. Config-only all-ones, bytecode, bank marker,
+  and CP437-copy experiments isolate that fault to font initialization/address
+  handling rather than HDMI, text RAM, CPU writes, or Vega control.
+- The source-level font correction is implemented and passes focused render,
+  route-probe, and complete HDMI-enabled AstraHost boot simulations. Beast
+  synthesis maps the exact 2 KiB CP437 image into one 2048x9 `DP16KD`, with all
+  11 logical address bits connected, and reduces the complete design from 104
+  to 101 block RAMs. The mapped checkpoint has zero SCCs, deterministic GSR on
+  all 25,420 FFs, 52,565 LUT4s, 5,099 CCU2Cs, and 19 multipliers. A mandatory
+  mapped-netlist gate rejects multiple font blocks, constant logical address
+  pins, or the wrong physical width.
+- A timing pass is not hardware acceptance. P55 has exact committed source and
+  ROM identities, strict 12.5/60 MHz routing, route-probe execution, and full
+  UART boot acceptance. Promotion still requires a fresh strict route of the
+  font fix, physical HDMI text confirmation, and repeated board acceptance of
+  that exact artifact.
 - The canonical entry points agree on divider 0, 12.5 MHz CPU, 60 MHz SDRAM,
   heap timing weight 20, plain router1, and the measured critical floorplan.
   The split flow clears the placement-only waiver before release routing,

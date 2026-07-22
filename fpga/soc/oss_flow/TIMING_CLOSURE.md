@@ -343,9 +343,75 @@ the mapped JSON SHA-256 is
 `75091050a11bb7b0250f5eadf0e045e96d369c9a2e16732354cdbc7272beaf41`;
 and the Yosys log SHA-256 is
 `4b3af1cac554646e64801d5563c41cd949235a64d42272b0838140a94c89dd62`.
-P55 has not yet been placed, routed, or loaded on hardware. P54 remains the
-only timing-clean, protected-LUT-clean, hardware-booted production checkpoint
-until an exact committed P55-derived release passes the complete gate.
+P55 was subsequently rebuilt from committed source
+`e9fb3e20a27100dd1ea9e4456365788db233e05d` with the exact release ROM and
+nonzero build identity. Beast Yosys `0.64+159` emitted mapped JSON SHA-256
+`4d87da24b192014ef1a0febcd8fbc1d0840f5733201e1042343ff7764496e97b`.
+The protected split router1 flow completed with checksum `0x7b2e5fbc`, zero
+protected-LUT violations, 66,095 `TRELLIS_COMB`, 25,450 `TRELLIS_FF`, 104
+`DP16KD`, and 19 `MULT18X18D` cells. Every exact release clock passes:
+14.09 MHz CPU, 64.02 MHz SDRAM, 78.73 MHz USB, 101.26 MHz SD, 45.17 MHz
+board, 54.60 MHz pixel, and 318.88 MHz HDMI shift. The routed JSON SHA-256 is
+`fd020246625875a4cbc5c59afe904eb5442cb64f1cfeadfa08373b7c1c3ee089`;
+the text configuration is
+`b0973f494c90c861bce06e989b93e0c6c02e29457332bc7b9c7394bb937c101d`;
+and the unmodified production bitstream is
+`2005a21db790491fbffa69a707e3607bd2f3c11050747c03b8d4df1588723fd4`.
+
+Repeated NUC SRAM loads of that route pass the complete UART gate with FPGA
+build `E9FB3E20`, ROM CRC32 `E2B97D4A`, full 32 MiB POST/BIST, Astraea DMA,
+`POST PASS`, and `K0 ENTRY PASS`. HDMI timing and the POST background were
+stable, but the normal sparse font produced no visible glyph pixels. This is
+therefore a hardware-booted and timing-clean route, but not yet an accepted
+release image.
+
+The HDMI failure was isolated without synthesis or routing. A direct stage-0
+video probe repeatedly wrote and read `ASTRA VIDEO PROBE` through the real
+Vega text aperture while reporting the expected Vega ID and capabilities over
+UART. Replacing only font BRAM initializer blocks 101 through 104 with all
+ones made the complete console white. An address-coded font populated across
+all four 2 KiB banks produced the expected 90x30 grid, and an all-`A` text RAM
+produced the expected `0x41` stripe pattern. Conversely, forcing only bank-0
+glyph `A` solid while every text cell contained `A` remained dark. Banks 1 and
+2 contain nonzero `A` bits in every two-bit slice; only bank 3 is all zero.
+The four P55 font BRAM slices therefore read the effective bank-3 initializer
+contents even though RTL selects bank 0. P54 placed the same initialized font
+BRAMs on the Y22 EBR row and displayed them correctly; P55 placed all four on
+the Y46 EBR row. The correct source fix is to remove this dependence on unused
+constant high font-address bits rather than compensate software or accept a
+route-specific data permutation.
+
+As a diagnostic recovery only, copying CP437 bank 0 into bank 3 of the exact
+P55 production configuration changes only BRAM blocks 101 through 104. Its
+configuration SHA-256 is
+`dc5676a51aeac7bc8d96fe0a4ea003a2ef5cb4b67a44f68fa38dadb51ea59d7f`
+and bitstream SHA-256 is
+`a9135f8a398806c1f0b52ad4fd9333240e35e216f1905c1a45bbf675f3384b21`.
+That image passed the complete hardware gate in 1.598 seconds and is currently
+loaded in volatile FPGA SRAM pending physical HDMI confirmation. It is not a
+source-level fix and persistent flash remains untouched.
+
+The source correction now bounds both `post_fonts.hex` and `font_rom` to the
+single 2048-byte CP437 bank that the console addresses. The lookup uses all 11
+logical address bits directly. A focused dual-clock renderer passes with an
+explicit 2048-byte depth assertion. The independent route-probe simulation
+passes CPU text-aperture readback, retained text RAM, and real foreground pixel
+observation. The complete HDMI-enabled AstraHost simulation passes full POST,
+SPI ROM handoff, kernel entry, and foreground pixel observation; it completed
+in 1602.393 seconds on Beast.
+
+Beast synthesis of the complete feature set with diagnostic build ID
+`0xF07F0001` reports zero SCCs, GSR enabled on all 25,420 mapped FFs, 52,565
+LUT4s, 5,099 CCU2Cs, 101 DP16KDs, and 19 multipliers. The font maps to exactly
+one `DP16KD` in 2048x9 mode, and its 11 logical address bits drive 11 unique
+physical address pins. `check_post_font_rom.py` now enforces that invariant
+before placement; all 29 OSS release-flow tests pass. The mapped JSON SHA-256
+is `78bc466da94233d2bc322da8268c1eb19b81ed985f613e2520b113ff626f26e7`
+and the Yosys log SHA-256 is
+`b7aca220d9a87fe1b401144c2f55f437ff9b0e16fad2112de58e36520899dc9d`.
+This retained checkpoint is synthesis-only from an uncommitted diagnostic
+snapshot. It proves the structural correction but is not route or release
+evidence.
 
 ## Canonical synthesis configuration
 

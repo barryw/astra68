@@ -55,16 +55,32 @@ later block will route. Every added block still needs isolated and integrated
 measurements. Congestion can become the practical limit before the device is
 numerically full.
 
-## Post-route mapped checkpoint
+## P55 routed checkpoint
 
 P55 removes the hardware-proven P54 route's worst AstraHost ownership cone.
-Canonical Beast synthesis for build ID `0x60000003` reports 52,615 LUT4s,
+Canonical Beast synthesis for committed build `E9FB3E20` reports 52,615 LUT4s,
 25,421 total mapped FFs, 5,075 CCU2Cs, 104 block RAMs, and 19 multipliers. That
-is 575 fewer LUT4s than P54 with the same production feature set. P55 has not
-yet been placed or routed, so no packed `TRELLIS_COMB` count or additional
-physical headroom is claimed from this mapping result. P54 remains the routed
-capacity and hardware baseline until P55-derived committed release artifacts
-pass the complete physical and board gates.
+is 575 fewer LUT4s than P54 with the same production feature set. The exact
+strict route packs:
+
+| Resource | Used | Physical free |
+|---|---:|---:|
+| TRELLIS_COMB | 66,095 (79.03%) | 17,545 |
+| TRELLIS_FF | 25,450 (30.43%) | 58,190 |
+| DP16KD | 104 (50.00%) | 104 |
+| MULT18X18D | 19 (12.18%) | 137 |
+
+It passes every production clock at 14.09 MHz CPU and 64.02 MHz SDRAM or
+better, passes the protected-LUT gate, and repeatedly reaches full POST and
+kernel entry on hardware. P55 is not yet the release baseline because the
+normal POST font reads effective bank 3 on its Y46 BRAM placement.
+
+The exact-depth source correction synthesizes the complete design to 52,565
+LUT4s, 25,420 mapped FFs, 5,099 CCU2Cs, 101 block RAMs, and 19 multipliers.
+The font is now one 2048x9 `DP16KD`, so the three unused font-bank blocks are
+physically absent rather than counted as prospective savings. This remains a
+synthesis-only checkpoint; routed combinational usage and final physical
+headroom are unchanged until the corrected exact route completes.
 
 ## Acceptance rules
 

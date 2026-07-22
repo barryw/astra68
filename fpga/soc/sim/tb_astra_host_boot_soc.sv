@@ -5,6 +5,7 @@ module tb_astra_host_boot_soc #(
     parameter [31:0] BUILD_ID = 32'h00000000,
     parameter integer TEST_BYTES = 65536,
     parameter bit PROGRESS = 1'b0,
+    parameter bit HDMI_ENABLE = 1'b0,
     parameter bit EXPECT_KERNEL_PANIC = 1'b0
 );
     localparam [7:0] SPI_WRITE_OP = 8'h57;
@@ -56,7 +57,7 @@ module tb_astra_host_boot_soc #(
         .SDRAM_ENABLE(1'b1),
         .SDRAM_BIST_BYTES(TEST_BYTES),
         .SDRAM_READY_DELAY(10000),
-        .HDMI_ENABLE(1'b0),
+        .HDMI_ENABLE(HDMI_ENABLE),
         .USB_ENABLE(1'b0),
         .CPU_CLK_DIV_BIT(0),
         .UART_BAUD(12500000),
@@ -76,6 +77,22 @@ module tb_astra_host_boot_soc #(
         .sdram_ba(sdram_ba), .sdram_dqm(sdram_dqm),
         .sdram_a(sdram_a), .sdram_d(sdram_d)
     );
+
+    wire video_console_ok;
+    generate
+        if (HDMI_ENABLE) begin : g_video_console_check
+            reg white_pixel_seen = 1'b0;
+            always @(posedge dut.video_pixel_clk) begin
+                if (dut.post_console_rgb == 24'he8edf2)
+                    white_pixel_seen <= 1'b1;
+            end
+            assign video_console_ok = white_pixel_seen &&
+                dut.g_hdmi.post_console_i.cell_mem[182] == 8'h41 &&
+                dut.g_hdmi.post_console_i.cell_mem[183] == 8'h53;
+        end else begin : g_no_video_console_check
+            assign video_console_ok = 1'b1;
+        end
+    endgenerate
 
     wire [15:0] model_dq;
     wire model_dq_oe;
@@ -383,6 +400,8 @@ module tb_astra_host_boot_soc #(
         if (post_seen &&
             dut.sys_scratch == (expect_kernel_panic ? KERNEL_STATUS_PANIC :
                                                        KERNEL_STATUS_READY)) begin
+            if (!video_console_ok)
+                $fatal(1, "kernel console did not reach HDMI text scanout");
             if (sdram_be32(25'h0000000) != EARLY_LOG_MAGIC)
                 $fatal(1, "early log header missing: %08x",
                        sdram_be32(25'h0000000));

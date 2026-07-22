@@ -58,6 +58,10 @@ checkpoint in `TIMING_CLOSURE.md` for current integration status.
 - Synthesis runs `check_por.py` before placement. Every `TRELLIS_FF` in every
   retained module must report `GSR=ENABLED`; a top-level-only result is not
   sufficient because the reset-release synchronizers retain hierarchy.
+- HDMI-enabled synthesis runs `check_post_font_rom.py` before placement. The
+  POST font must map to one 2048x9 `DP16KD`, with all 11 logical address bits
+  driving unique physical address pins. This rejects the oversized four-bank
+  inference that produced route-dependent blank glyphs on hardware.
 - `PNR_SEED=<n>` selects and records the deterministic placement seed. The
   placed JSON's resulting RNG state continues into split routing. Include the
   seed in firmware build-ID arguments whenever it is overridden.

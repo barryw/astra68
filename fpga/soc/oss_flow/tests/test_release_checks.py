@@ -22,6 +22,7 @@ check_timing = load_module("check_timing")
 prepare_route_input = load_module("prepare_route_input")
 make_route_probe_bitstream = load_module("make_route_probe_bitstream")
 check_por = load_module("check_por")
+check_post_font_rom = load_module("check_post_font_rom")
 check_ecp5_lut_permutation = load_module("check_ecp5_lut_permutation")
 refresh_ecp5_lutperm = load_module("refresh_ecp5_lutperm")
 
@@ -48,6 +49,63 @@ class SynthesisFlowTests(unittest.TestCase):
 
         self.assertLess(route, validate)
         self.assertLess(validate, package)
+
+    def test_synthesis_checks_exact_post_font_mapping(self):
+        flow = (FLOW_DIR / "mkbit.sh").read_text(encoding="utf-8")
+        mapped_json = flow.index("write_json astra.json")
+        font_gate = flow.index("python3 check_post_font_rom.py astra.json")
+        synth_only = flow.index('if [ "${SYNTH_ONLY:-0}" = "1" ]')
+
+        self.assertLess(mapped_json, font_gate)
+        self.assertLess(font_gate, synth_only)
+
+
+class PostFontRomGateTests(unittest.TestCase):
+    @staticmethod
+    def synthesis(*, width=9, constant_pin=None, duplicate_pin=None, count=1):
+        connections = {
+            "ADA0": ["0"],
+            "ADA1": ["0"],
+            "ADA2": ["0"],
+            **{f"ADA{bit}": [100 + bit] for bit in range(3, 14)},
+        }
+        if constant_pin is not None:
+            connections[constant_pin] = ["0"]
+        if duplicate_pin is not None:
+            connections[duplicate_pin] = connections["ADA3"]
+        cells = {
+            f"{check_post_font_rom.FONT_CELL_PREFIX}{index}.0": {
+                "type": "DP16KD",
+                "parameters": {"DATA_WIDTH_A": f"{width:032b}"},
+                "connections": connections,
+            }
+            for index in range(count)
+        }
+        return {"modules": {"astra_soc": {"cells": cells}}}
+
+    def test_accepts_one_exact_depth_font_block(self):
+        name = check_post_font_rom.check_post_font_rom(self.synthesis())
+        self.assertEqual(name, f"{check_post_font_rom.FONT_CELL_PREFIX}0.0")
+
+    def test_rejects_multiple_font_blocks(self):
+        with self.assertRaisesRegex(ValueError, "exactly one physical block RAM"):
+            check_post_font_rom.check_post_font_rom(self.synthesis(count=4))
+
+    def test_rejects_constant_logical_address_pin(self):
+        with self.assertRaisesRegex(ValueError, "constant logical address pin ADA13"):
+            check_post_font_rom.check_post_font_rom(
+                self.synthesis(constant_pin="ADA13")
+            )
+
+    def test_rejects_duplicate_logical_address_bits(self):
+        with self.assertRaisesRegex(ValueError, "11 unique address bits"):
+            check_post_font_rom.check_post_font_rom(
+                self.synthesis(duplicate_pin="ADA13")
+            )
+
+    def test_rejects_wrong_physical_width(self):
+        with self.assertRaisesRegex(ValueError, "DATA_WIDTH_A=18, not 9"):
+            check_post_font_rom.check_post_font_rom(self.synthesis(width=18))
 
 
 class LutPermutationRefreshTests(unittest.TestCase):

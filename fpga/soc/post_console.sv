@@ -21,15 +21,17 @@ module post_console #(
     localparam integer COLS = 90;
     localparam integer ROWS = 30;
     localparam integer CELLS = COLS * ROWS;
+    localparam integer FONT_BYTES = 256 * 8;
 
     (* ram_style = "block" *) reg [7:0] cell_mem [0:4095];
-    (* rom_style = "block" *) reg [7:0] font_rom [0:8191];
+    // Infer exactly one CP437 bank so no unused BRAM address pins exist.
+    (* rom_style = "block" *) reg [7:0] font_rom [0:FONT_BYTES-1];
 
     integer init_index;
     initial begin
         for (init_index = 0; init_index < 4096; init_index = init_index + 1)
             cell_mem[init_index] = 8'h20;
-        $readmemh(FONT_HEX, font_rom);
+        $readmemh(FONT_HEX, font_rom, 0, FONT_BYTES - 1);
     end
 
     // Port A: CPU writes/reads one character byte per address.
@@ -75,7 +77,7 @@ module post_console #(
             glyph_row_d1 <= scan_glyph_row;
             active_d1 <= scan_active;
 
-            font_q <= font_rom[{2'b00, cell_q, glyph_row_d1}];
+            font_q <= font_rom[{cell_q, glyph_row_d1}];
             glyph_col_d2 <= glyph_col_d1;
             active_d2 <= active_d1;
         end

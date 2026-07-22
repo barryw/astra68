@@ -297,6 +297,9 @@ scc -expect 0;
 write_json astra.json;
 " > "$YOSYS_LOG" 2>&1
 python3 check_por.py astra.json
+if [ "$HDMI_ENABLE" = "1" ]; then
+  python3 check_post_font_rom.py astra.json
+fi
 if [ "$ASTRA_HOST_ENABLE" = "1" ]; then
   # shellcheck disable=SC2016
   grep -Fq 'mapping memory astra_soc.g_sdram_enabled.g_astra_host.host_spi_i.rx_fifo.mem via $__DP16KD_' "$YOSYS_LOG" || {

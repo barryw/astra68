@@ -41,6 +41,31 @@ def test_route_probe_requires_complete_nonzero_cycle_line() -> None:
     assert acceptance_reached(prefix + b"0000455E\n", None, False, True)
 
 
+def test_video_probe_requires_identity_caps_and_text_readback() -> None:
+    line = (
+        b"ASTRA VIDEO PROBE id=56454741 caps=00000077 ctrl=00000000 "
+        b"before=00000020 first=00000041 last=00000045\r\n"
+    )
+
+    assert acceptance_reached(line, None, False, False, None, True)
+    assert acceptance_reached(
+        line.replace(b"before=00000020", b"before=00000041"),
+        None,
+        False,
+        False,
+        None,
+        True,
+    )
+    assert not acceptance_reached(
+        line.replace(b"first=00000041", b"first=00000020"),
+        None,
+        False,
+        False,
+        None,
+        True,
+    )
+
+
 def test_post_failure_and_kernel_panic_are_fatal() -> None:
     assert failure_reached(b"POST FAILURE: SDRAM\n")
     assert failure_reached(b"*** ASTRA KERNEL PANIC ***\n")

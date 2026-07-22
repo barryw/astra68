@@ -45,6 +45,9 @@ module tb_post_console;
     integer foreground = 0;
     integer background = 0;
     initial begin
+        if ($size(dut.font_rom) != 2048)
+            $fatal(1, "POST font ROM must contain exactly one 2 KiB bank");
+
         repeat (3) @(posedge pixel_clk);
         pixel_rst = 1'b0;
         write_char(12'd0, 8'h41); // 'A'

@@ -71,6 +71,7 @@ def acceptance_reached(
     expect_kernel_entry: bool,
     expect_route_probe: bool = False,
     expected_rom_crc: bytes | None = None,
+    expect_video_probe: bool = False,
 ) -> bool:
     if expect_route_probe:
         match = re.search(
@@ -81,6 +82,13 @@ def acceptance_reached(
             output,
         )
         return match is not None and int(match.group(1), 16) != 0
+    if expect_video_probe:
+        return re.search(
+            rb"ASTRA VIDEO PROBE id=56454741 caps=00000077 "
+            rb"ctrl=00000000 before=000000(?:20|41) "
+            rb"first=00000041 last=00000045\r?\n",
+            output,
+        ) is not None
     build_reached = expected_build is None
     if expected_build is not None:
         build_id = expected_build.rsplit(b"0x", 1)[-1]
@@ -159,14 +167,21 @@ def main() -> int:
         action="store_true",
         help="require one complete diagnostic route-probe line instead of POST",
     )
+    parser.add_argument(
+        "--expect-video-probe",
+        action="store_true",
+        help="require Vega identity and retained text-aperture probe values",
+    )
     args = parser.parse_args()
 
-    if args.expect_route_probe and (
+    if (args.expect_route_probe or args.expect_video_probe) and (
         args.expect_build or args.expect_rom_crc or args.expect_kernel_entry
     ):
         parser.error(
-            "--expect-route-probe cannot be combined with POST expectations"
+            "probe expectations cannot be combined with POST expectations"
         )
+    if args.expect_route_probe and args.expect_video_probe:
+        parser.error("select only one probe expectation")
 
     expected_build = None
     if args.expect_build:
@@ -236,6 +251,7 @@ def main() -> int:
                     args.expect_kernel_entry,
                     args.expect_route_probe,
                     expected_rom_crc,
+                    args.expect_video_probe,
                 ):
                     break
     finally:
@@ -247,7 +263,11 @@ def main() -> int:
     sys.stdout.write(decoded_output)
     if output and output[-1:] != b"\n":
         sys.stdout.write("\n")
-    capture_name = "route probe" if args.expect_route_probe else "POST"
+    capture_name = (
+        "route probe" if args.expect_route_probe else
+        "video probe" if args.expect_video_probe else
+        "POST"
+    )
     print(f"{capture_name} capture elapsed={elapsed:.3f}s events={events}")
     print_memory_rates(decoded_output)
 
@@ -257,6 +277,7 @@ def main() -> int:
         args.expect_kernel_entry,
         args.expect_route_probe,
         expected_rom_crc,
+        args.expect_video_probe,
     ):
         return 0
     if failure_reached(output):

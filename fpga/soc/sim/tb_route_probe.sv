@@ -24,7 +24,7 @@ module tb_route_probe;
         .RST_MAX(16'd16),
         .SDRAM_ENABLE(1'b0),
         .SD_BOOT_ENABLE(1'b1),
-        .HDMI_ENABLE(1'b0),
+        .HDMI_ENABLE(1'b1),
         .USB_ENABLE(1'b0),
         .CPU_CLK_DIV_BIT(0),
         .UART_BAUD(12500000),
@@ -53,8 +53,26 @@ module tb_route_probe;
     reg [31:0] probe_errors;
     reg [31:0] probe_host;
     reg [31:0] probe_cycles;
+    reg [31:0] video_id;
+    reg [31:0] video_caps;
+    reg [31:0] video_ctrl;
+    reg [31:0] video_before;
+    reg [31:0] video_first;
+    reg [31:0] video_last;
+    reg video_probe_seen = 1'b0;
+    reg route_probe_seen = 1'b0;
+    reg white_pixel_seen = 1'b0;
     reg previous_as_n = 1'b1;
     integer bus_cycles = 0;
+
+    always @(posedge dut.video_pixel_clk) begin
+        if (dut.post_console_rgb == 24'he8edf2)
+            white_pixel_seen <= 1'b1;
+        if (route_probe_seen && white_pixel_seen) begin
+            $display("ROUTE/VIDEO PROBE PASS cycles=%0d", probe_cycles);
+            $finish;
+        end
+    end
 
     always @(posedge dut.clk) begin
         previous_as_n <= dut.cpu_as_n;
@@ -74,6 +92,23 @@ module tb_route_probe;
             end else if (dut.uart_data == 8'h0a) begin
                 $display("UART: %s", uart_line);
                 if ($sscanf(uart_line,
+                            "ASTRA VIDEO PROBE id=%h caps=%h ctrl=%h before=%h first=%h last=%h",
+                            video_id, video_caps, video_ctrl, video_before,
+                            video_first, video_last) == 6) begin
+                    if (video_id != 32'h56454741)
+                        $fatal(1, "video probe read the wrong Vega ID: %08x",
+                               video_id);
+                    if (video_caps != 32'h00000077)
+                        $fatal(1, "video probe read the wrong capabilities: %08x",
+                               video_caps);
+                    if (video_ctrl != 0 || video_before != 32'h20 ||
+                        video_first != 32'h41 || video_last != 32'h45)
+                        $fatal(1, "video text aperture mismatch");
+                    if (dut.g_hdmi.post_console_i.cell_mem[182] != 8'h41 ||
+                        dut.g_hdmi.post_console_i.cell_mem[198] != 8'h45)
+                        $fatal(1, "video text RAM did not retain the banner");
+                    video_probe_seen = 1'b1;
+                end else if ($sscanf(uart_line,
                             "ASTRA ROUTE PROBE id=%h sys=%h mem=%h err=%h host=%h cycles=%h",
                             probe_id, probe_sys, probe_mem, probe_errors,
                             probe_host, probe_cycles) == 6) begin
@@ -87,8 +122,9 @@ module tb_route_probe;
                         $fatal(1, "disabled-service status was not zero");
                     if (probe_cycles == 0)
                         $fatal(1, "CPU cycle counter did not advance");
-                    $display("ROUTE PROBE PASS cycles=%0d", probe_cycles);
-                    $finish;
+                    if (!video_probe_seen)
+                        $fatal(1, "route probe completed before video probe");
+                    route_probe_seen = 1'b1;
                 end
                 uart_line = "";
             end else begin
