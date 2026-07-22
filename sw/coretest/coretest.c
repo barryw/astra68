@@ -3,6 +3,7 @@
 // Phase 1 focuses on memory destination effective-address writeback and
 // byte-lane behavior, because absolute indexed byte stores already escaped.
 #include <stdint.h>
+#include "vega.h"
 #include "vesta.h"
 
 #define SCRATCH_BASE 0x01ff9100u
@@ -30,6 +31,12 @@
 #define BERR_ARM_USER_PROG_READ "0x15"
 #define BERR_ARM_SDRAM_SUP_DATA_WRITE "0x4b"
 #define BERR_SDRAM_TARGET 0x02000100u
+#ifdef CORETEST_SIM_FB_GUARD
+#define BERR_SDRAM_ARM_ASM ""
+#else
+#define BERR_SDRAM_ARM_ASM \
+    "move.l #" BERR_ARM_SDRAM_SUP_DATA_WRITE ",0xfff00604\n\t"
+#endif
 #define STACK_TEST_BASE (SCRATCH_BASE + 0x600u)
 #define MOVES_TEST_BASE (SCRATCH_BASE + 0x700u)
 #define MOVES_EXT_TEST_BASE (SCRATCH_BASE + 0x1b00u)
@@ -67,6 +74,7 @@ static volatile uint32_t g_sum;
 extern void _h_default(void);
 extern void _h_recover(void);
 extern void _h_irq_return(void);
+extern void _h_vesta_timer(void);
 extern void coretest_movem_fullshape_asm(void);
 extern void coretest_movem_ramjsr_asm(void);
 extern void coretest_movem_ramadd_asm(void);
@@ -6966,11 +6974,39 @@ static void test_sdram_combined_write_berr(void)
     wr32(BERR_SDRAM_TARGET, 0x0badcafeu);
     chk32(0x00100604u, rd32(BERR_SDRAM_TARGET), 0x0badcafeu);
 
+#ifdef CORETEST_SIM_FB_GUARD
+    VEGA->MODE = VEGA_MODE_320x200;
+    VEGA->FB_BASE = BERR_SDRAM_TARGET - 0x02000000u;
+    VEGA->FB_PITCH = 320u;
+    VEGA->FB_FORMAT = VEGA_FMT_INDEX8;
+    VEGA->FB_VIEW = VEGA_FB_VIEW_(0u, 0u);
+    VEGA->FB_VIRTUAL = VEGA_FB_VIRTUAL_(320u, 200u);
+    VEGA->FB_WRAP = 0u;
+    VEGA->SCENE_GENERATION = 1u;
+    VEGA->CTRL = VEGA_CTRL_DISPLAY_EN | VEGA_CTRL_FB_EN;
+    VEGA->PRESENT_CTRL = VEGA_PRESENT_SUBMIT;
+
+    ready = 0u;
+    for (uint32_t i = 0; i < 1000000u; ++i) {
+        if (VEGA->PRESENT_COMPLETED_GENERATION == 1u) {
+            ready = 1u;
+            break;
+        }
+    }
+    chk32(0x00100608u, ready, 1u);
+    chk32(0x0010060cu,
+          VEGA->STATUS & VEGA_STAT_CONFIG_ERROR, 0u);
+#endif
+
     for (uint32_t off = 0; off < 0x100u; off += 4u) {
         wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
     }
     wr32(EXC_ALT_VBR + 0x08u, (uint32_t)(uintptr_t)_h_recover);
+#ifdef CORETEST_SIM_FB_GUARD
+    arm_exception_recovery_skip_data_cycle(0x0008u);
+#else
     arm_exception_recovery(0x0008u);
+#endif
 
     __asm__ volatile(
         "move.l #0x01ff9500,%%d0\n\t"
@@ -6978,7 +7014,7 @@ static void test_sdram_combined_write_berr(void)
         "lea 1f,%%a0\n\t"
         "move.l %%a0,0x01ff9284\n\t"
         "move.l #0x13579bdf,%%d1\n\t"
-        "move.l #" BERR_ARM_SDRAM_SUP_DATA_WRITE ",0xfff00604\n\t"
+        BERR_SDRAM_ARM_ASM
         "move.l %%d1,0x02000100\n\t"
         "move.l #0xbadbad,%%d1\n"
         "1:\n\t"
@@ -6992,7 +7028,11 @@ static void test_sdram_combined_write_berr(void)
     chk_access_fault_status(0x00100628u, 0x0105u);
     chk_access_fault_long(0x00100630u, 0x34u, 0x13579bdfu);
     chk_access_fault_long(0x0010062cu, 0x2cu, BERR_SDRAM_TARGET);
+#ifdef CORETEST_SIM_FB_GUARD
+    chk32(0x00100634u, rd32(BERR_SDRAM_TARGET), 0x0badcafeu);
+#else
     chk32(0x00100634u, rd32(BERR_SDRAM_TARGET), 0x13579bdfu);
+#endif
 }
 #endif
 
@@ -7926,6 +7966,45 @@ static void test_exception_recovery_directed(void)
 }
 
 #ifdef CORETEST_SIM_IRQ
+static void test_vesta_timer_vectored(void)
+{
+    for (uint32_t off = 0; off < 0x400u; off += 4u) {
+        wr32(EXC_ALT_VBR + off, (uint32_t)(uintptr_t)_h_default);
+    }
+    wr32(EXC_ALT_VBR + (80u * 4u),
+         (uint32_t)(uintptr_t)_h_vesta_timer);
+
+    arm_exception_recovery(80u * 4u);
+    VESTA->IRQ_ENABLE = 0u;
+    VESTA->IRQ_SOFT = 0u;
+    VESTA->IRQ_ACK = 0xffffffffu;
+    VESTA->TIMER[0].CTRL = 0u;
+    VESTA->TIMER[0].STATUS = TMR_EXPIRED;
+    VESTA->TIMER[0].LOAD = 128u;
+    VESTA->IRQ_CFG[IRQ_SRC_TIMER0] =
+        IRQ_CFG_LEVEL(4) | IRQ_CFG_VECTOR(80);
+    VESTA->IRQ_ENABLE = IRQ_BIT(IRQ_SRC_TIMER0);
+
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "move.l #5,0xfff00408\n\t"
+        "stop #0x2000\n\t"
+        "move.w #0x2700,%%sr\n\t"
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr"
+        :
+        :
+        : "d0", "cc", "memory");
+
+    chk_exception_frame(0x0010f000u, 80u * 4u, 0u,
+                        0x2700u, 0x2000u);
+    chk32(0x0010f018u, VESTA->IRQ_PENDING & IRQ_BIT(IRQ_SRC_TIMER0), 0u);
+    chk32(0x0010f01cu, VESTA->TIMER[0].STATUS, 0u);
+    chk32(0x0010f020u, VESTA->TIMER[0].CTRL & TMR_ENABLE, 0u);
+    chk32(0x0010f024u, VESTA->IRQ_ENABLE, 0u);
+}
+
 static void test_interrupt_autovector_directed(void)
 {
     uint32_t got;
@@ -12273,6 +12352,8 @@ void kmain(void)
 #endif
 #elif defined(CORETEST_SIM_FOCUS_IRQ)
 #ifdef CORETEST_SIM_IRQ
+    test_vesta_timer_vectored();
+    progress_char('V');
     test_interrupt_autovector_directed();
     progress_char('I');
 #endif
@@ -12317,6 +12398,8 @@ void kmain(void)
     progress_char('e');
 #endif
 #if defined(CORETEST_SIM_IRQ) && !defined(CORETEST_SIM_SKIP_IRQ)
+    test_vesta_timer_vectored();
+    progress_char('v');
     test_interrupt_autovector_directed();
     progress_char('I');
 #endif
@@ -12417,6 +12500,8 @@ void kmain(void)
     progress_char('e');
 #endif
 #if defined(CORETEST_SIM_IRQ) && !defined(CORETEST_SIM_SKIP_IRQ)
+    test_vesta_timer_vectored();
+    progress_char('v');
     test_interrupt_autovector_directed();
     progress_char('I');
 #endif

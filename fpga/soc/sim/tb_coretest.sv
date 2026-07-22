@@ -8,6 +8,7 @@ module tb_coretest #(
     parameter DEBUG_PMMU_PARAM = 1'b0,
     parameter DEBUG_CHK_PARAM = 1'b0,
     parameter SDRAM_ENABLE_PARAM = 1'b0,
+    parameter HDMI_ENABLE_PARAM = 1'b0,
     parameter TRAP_EXCEPTION_MARKERS_PARAM = 1'b0,
     parameter [63:0] SIM_TIMEOUT_PS_PARAM = 64'd0
 );
@@ -109,7 +110,8 @@ module tb_coretest #(
         .RST_MAX(16'd16),
         .SDRAM_ENABLE(SDRAM_ENABLE_PARAM),
         .SDRAM_READY_DELAY(10000),
-        .HDMI_ENABLE(1'b0)
+        .HDMI_ENABLE(HDMI_ENABLE_PARAM),
+        .USB_ENABLE(1'b0)
     ) dut (
         .clk25_mhz(clk25),
         .reset_n(rstn),
@@ -235,6 +237,15 @@ module tb_coretest #(
                      $time, dut.cpu_adr, dut.cpu_rw_n, dut.cpu_siz, dut.be,
                      dut.cpu_dout, dut.cpu_as_n, dut.cpu_dsack_n, sim_berrn,
                      dut.sdram_cpu_start, dut.bs, dut.tg_dbg_status);
+        end
+        if (DEBUG_IRQ && !dut.cpu_as_n && dut.cpu_fc == 3'b111 &&
+            dut.cpu_adr[31:8] == 24'hffffff) begin
+            $display("[%0t] CPU_SPACE adr=%08x rw=%b size=%b din=%08x visible=%08x dsack=%b iack=%b level=%0d vector=%02x valid=%b avecn=%b",
+                     $time, dut.cpu_adr, dut.cpu_rw_n, dut.cpu_siz,
+                     dut.cpu_din, dut.cpu_din_visible, dut.cpu_dsack_n,
+                     dut.cpu_iack_read, dut.cpu_adr[3:1],
+                     dut.vesta_iack_vector, dut.vesta_iack_valid,
+                     sim_avecn);
         end
     end
 
@@ -545,6 +556,25 @@ module tb_coretest #(
                      dut.tg_dbg_status);
         end
 
+        if (DEBUG_IRQ && dut.g_tg68k_enabled.tg_cpu.u_cpu.trap_interrupt) begin
+            $display("[%0t] IRQ_CORE micro=%02x next=%02x state=%x setstate=%x clkena=%b lw=%b intr=%b trap=%b upd_set=%b upd_exec=%b avec=%b data=%08x last=%08x vec=%02x",
+                     $time,
+                     dut.g_tg68k_enabled.tg_cpu.u_cpu.micro_state,
+                     dut.g_tg68k_enabled.tg_cpu.u_cpu.next_micro_state,
+                     dut.g_tg68k_enabled.tg_cpu.u_cpu.state,
+                     dut.g_tg68k_enabled.tg_cpu.u_cpu.setstate,
+                     dut.g_tg68k_enabled.tg_cpu.clkena,
+                     dut.g_tg68k_enabled.tg_cpu.u_cpu.clkena_lw,
+                     dut.g_tg68k_enabled.tg_cpu.u_cpu.interrupt,
+                     dut.g_tg68k_enabled.tg_cpu.u_cpu.trap_interrupt,
+                     dut.g_tg68k_enabled.tg_cpu.u_cpu.set[38],
+                     dut.g_tg68k_enabled.tg_cpu.u_cpu.exec[38],
+                     dut.g_tg68k_enabled.tg_cpu.autovector,
+                     dut.g_tg68k_enabled.tg_cpu.u_cpu.data_read,
+                     dut.g_tg68k_enabled.tg_cpu.u_cpu.last_data_read,
+                     dut.g_tg68k_enabled.tg_cpu.u_cpu.ipl_vec);
+        end
+
     end
 
     always @(posedge dut.clk) begin
@@ -582,6 +612,23 @@ module tb_coretest #(
     integer pmmu_wait_cycles = 0;
     integer pmmu_trace_count = 0;
     reg pmmu_trace_armed = 1'b0;
+`ifdef CORETEST_SIM_FB_GUARD
+    integer framebuffer_guard_faults = 0;
+    reg framebuffer_guard_fault_active = 1'b0;
+    always @(posedge dut.clk) begin
+        if (dut.rst || dut.cpu_as_n) begin
+            framebuffer_guard_fault_active <= 1'b0;
+        end else if (dut.cpu_framebuffer_write_fault &&
+                     !framebuffer_guard_fault_active) begin
+            framebuffer_guard_fault_active <= 1'b1;
+            framebuffer_guard_faults <= framebuffer_guard_faults + 1;
+            if (dut.cpu_adr !== BERR_SDRAM_TARGET_ADDR ||
+                dut.cpu_rw_n !== 1'b0 || dut.cpu_siz !== 2'b00 ||
+                dut.be !== 4'b1111 || dut.cpu_dout !== 32'h13579bdf)
+                $fatal(1, "framebuffer guard fault cycle mismatch");
+        end
+    end
+`endif
     localparam [14*8-1:0] START_SIG = "CORETEST START";
     localparam [13*8-1:0] PASS_SIG = "CORETEST PASS";
     localparam [13*8-1:0] FAIL_SIG = "CORETEST FAIL";
@@ -630,6 +677,11 @@ module tb_coretest #(
                        last_prog_adr3, last_prog_data3);
             end
             if (next_shift[13*8-1:0] == PASS_SIG) begin
+`ifdef CORETEST_SIM_FB_GUARD
+                if (framebuffer_guard_faults != 1)
+                    $fatal(1, "expected one framebuffer guard fault, got %0d",
+                           framebuffer_guard_faults);
+`endif
                 $display("\n*** CORETEST PASS detected ***");
                 $finish;
             end

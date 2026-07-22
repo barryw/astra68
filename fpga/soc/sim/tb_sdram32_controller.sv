@@ -201,7 +201,7 @@ endmodule
 module tb_sdram32_controller;
     reg clk = 1'b0;
     reg rst = 1'b1;
-    always #6.666 clk = ~clk; // 75 MHz
+    always #8.333 clk = ~clk; // 60 MHz
 
     reg cpu_valid = 1'b0;
     wire cpu_ready;
@@ -652,11 +652,11 @@ module tb_sdram32_controller;
         if (got != 32'h55667788)
             $fatal(1, "locked CPU tail readback mismatch: %08x", got);
 
-        write_mbps = (BURST_WORDS * 4.0 * 75.0) / write_cycles;
-        read_mbps = (BURST_WORDS * 4.0 * 75.0) / read_cycles;
+        write_mbps = (BURST_WORDS * 4.0 * 60.0) / write_cycles;
+        read_mbps = (BURST_WORDS * 4.0 * 60.0) / read_cycles;
         $display("SDRAM32 PASS write=%0.2f MB/s (%0d cycles) read=%0.2f MB/s (%0d cycles)",
                  write_mbps, write_cycles, read_mbps, read_cycles);
-        if (write_mbps < 120.0 || read_mbps < 120.0)
+        if (write_mbps < 110.0 || read_mbps < 110.0)
             $fatal(1, "bandwidth target missed");
         $finish;
     end

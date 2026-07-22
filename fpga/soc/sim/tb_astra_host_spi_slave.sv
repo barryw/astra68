@@ -40,6 +40,7 @@ module tb_astra_host_spi_slave;
     logic [7:0] got;
     logic       has_data;
     logic [7:0] value;
+    int         fill_index;
 
     astra_host_spi_slave #(
         .ADDR_WIDTH(3),
@@ -249,6 +250,19 @@ module tb_astra_host_spi_slave;
         check("third read has data", has_data);
         check_eq8("third queued payload", value, 8'h7E);
         check("read polling still did not enqueue dummy MOSI", !rx_valid);
+
+        $display("Test: TX FIFO exposes its full declared depth");
+        for (fill_index = 0; fill_index < 8; fill_index++)
+            queue_tx(8'h80 + fill_index[7:0]);
+        check("TX FIFO applies backpressure at depth eight", tx_busy);
+        for (fill_index = 0; fill_index < 8; fill_index++) begin
+            spi_poll_byte(has_data, value);
+            check("full-depth read has data", has_data);
+            check_eq8("full-depth payload remains ordered", value,
+                      8'h80 + fill_index[7:0]);
+        end
+        repeat (8) @(posedge clk);
+        check("TX FIFO releases backpressure after drain", !tx_busy);
 
         $display("Test: WRITE transaction can carry multiple bytes");
         spi_write_two(8'h12, 8'h34);

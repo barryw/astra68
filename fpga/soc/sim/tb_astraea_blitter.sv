@@ -6,7 +6,7 @@ module tb_astraea_blitter;
     reg mem_clk = 1'b0;
     reg rst = 1'b1;
     always #40 cpu_clk = ~cpu_clk;
-    always #6.666 mem_clk = ~mem_clk;
+    always #8.333 mem_clk = ~mem_clk;
 
     reg cpu_write_stb = 1'b0;
     reg [4:0] cpu_reg = 5'd0;
@@ -14,6 +14,13 @@ module tb_astraea_blitter;
     reg [31:0] cpu_wdata = 32'd0;
     wire [31:0] blit_rdata;
     wire blit_busy, blit_done, blit_irq, cache_flush;
+    wire [31:0] completed_fence;
+    reg front_guard_valid = 1'b0;
+    reg [24:0] front_guard_start = 25'd0;
+    reg [25:0] front_guard_end = 26'd0;
+    reg pending_guard_valid = 1'b0;
+    reg [24:0] pending_guard_start = 25'd0;
+    reg [25:0] pending_guard_end = 26'd0;
 
     wire dma_lock, dma_valid, dma_ready, dma_write;
     wire [24:0] dma_addr;
@@ -36,7 +43,14 @@ module tb_astraea_blitter;
         .cpu_write_stb(cpu_write_stb), .cpu_reg(cpu_reg),
         .cpu_be(cpu_be), .cpu_wdata(cpu_wdata), .cpu_rdata(blit_rdata),
         .cpu_busy(blit_busy), .cpu_done(blit_done), .cpu_irq(blit_irq),
+        .completed_fence(completed_fence),
         .cache_flush(cache_flush),
+        .front_guard_valid(front_guard_valid),
+        .front_guard_start(front_guard_start),
+        .front_guard_end(front_guard_end),
+        .pending_guard_valid(pending_guard_valid),
+        .pending_guard_start(pending_guard_start),
+        .pending_guard_end(pending_guard_end),
         .mem_clk(mem_clk), .mem_rst(rst), .mem_lock(dma_lock),
         .mem_valid(dma_valid), .mem_ready(dma_ready),
         .mem_write(dma_write), .mem_addr(dma_addr), .mem_be(dma_be),
@@ -256,6 +270,18 @@ module tb_astraea_blitter;
             wait (!blit_rdata[1]);
             wait (blit_rdata[1]);
             if (blit_rdata[15:8] !== 8'd1 || blit_busy || dma_lock)
+                $fatal(1, "%0s status mismatch %08x", label, blit_rdata);
+        end
+    endtask
+
+    task automatic expect_protected(input [255:0] label);
+        begin
+            reg_write(5'h1a, 32'd1);
+            @(negedge cpu_clk);
+            cpu_reg = 5'h1b;
+            wait (!blit_rdata[1]);
+            wait (blit_rdata[1]);
+            if (blit_rdata[15:8] !== 8'd5 || blit_busy || dma_lock)
                 $fatal(1, "%0s status mismatch %08x", label, blit_rdata);
         end
     endtask
@@ -484,11 +510,41 @@ module tb_astraea_blitter;
 
         // The last physical byte is legal. This is the equality boundary for
         // the end-exclusive 32 MiB range check used by every blitter mode.
+        reg_write(5'h1c, 32'h12345678);
         start_blit(25'd0, 25'h1ffffff, 16'd0, 16'd1,
                    16'd1, 16'd1, 32'd1, 32'h000000a7, elapsed_misc);
+        if (completed_fence !== 32'h12345678)
+            $fatal(1, "blitter completion fence mismatch got=%08x",
+                   completed_fence);
         read_byte(25'h1ffffff, byte_value);
         if (byte_value !== 8'ha7)
             $fatal(1, "last-byte boundary mismatch got=%02x", byte_value);
+
+        // A command that would cross into either protected presentation range
+        // is rejected before its first destination write.
+        write_byte(25'h0002ffc, 8'h3c);
+        front_guard_valid = 1'b1;
+        front_guard_start = 25'h0003000;
+        front_guard_end = 26'h0004000;
+        reg_write(5'h11, 32'h00002ffc);
+        reg_write(5'h14, 32'd8);
+        reg_write(5'h16, {16'd1, 16'd8});
+        reg_write(5'h17, 32'd1);
+        reg_write(5'h18, 32'h000000a5);
+        expect_protected("front framebuffer guard");
+        read_byte(25'h0002ffc, byte_value);
+        if (byte_value !== 8'h3c)
+            $fatal(1, "front guard allowed a partial write");
+        front_guard_valid = 1'b0;
+
+        pending_guard_valid = 1'b1;
+        pending_guard_start = 25'h0005000;
+        pending_guard_end = 26'h0005100;
+        reg_write(5'h11, 32'h00005000);
+        reg_write(5'h14, 32'd4);
+        reg_write(5'h16, {16'd1, 16'd4});
+        expect_protected("pending framebuffer guard");
+        pending_guard_valid = 1'b0;
 
         // Every source range is validated in the full 32-bit configuration
         // space before fields are narrowed to the native 25-bit SDRAM bus.
@@ -521,11 +577,11 @@ module tb_astraea_blitter;
         reg_write(5'h16, {16'd1, 16'd16});
         expect_invalid("mask range overflow");
 
-        copy_mbps = (1024.0 * 75.0) / elapsed_copy;
-        fill_mbps = (2048.0 * 75.0) / elapsed_fill;
+        copy_mbps = (1024.0 * 60.0) / elapsed_copy;
+        fill_mbps = (2048.0 * 60.0) / elapsed_fill;
         $display("ASTRAEA BLITTER PASS copy=%0.2f MB/s fill=%0.2f MB/s copy_cycles=%0d fill_cycles=%0d",
                  copy_mbps, fill_mbps, elapsed_copy, elapsed_fill);
-        if (copy_mbps < 45.0 || fill_mbps < 100.0)
+        if (copy_mbps < 38.0 || fill_mbps < 88.0)
             $fatal(1, "blitter bandwidth target missed");
         $finish;
     end

@@ -2,7 +2,7 @@
 `timescale 1ns/1ps
 
 module tb_graphics_demo;
-    localparam integer LINE_DEADLINE_MEM_CYCLES = 2383;
+    localparam integer LINE_DEADLINE_MEM_CYCLES = 1906;
 
     reg clk25 = 1'b0;
     reg rstn = 1'b0;
@@ -27,6 +27,7 @@ module tb_graphics_demo;
         .SDRAM_ENABLE(1'b1),
         .SDRAM_READY_DELAY(1000),
         .HDMI_ENABLE(1'b1),
+        .USB_ENABLE(1'b0),
         .CPU_CLK_DIV_BIT(0),
         .SD_BOOT_ENABLE(1'b0),
         .ASTRA_HOST_ENABLE(1'b0)
@@ -74,8 +75,6 @@ module tb_graphics_demo;
     integer line_start_cycle = 0;
     integer last_line_cycles = 0;
     integer max_line_cycles = 0;
-    integer tile_start_cycle = 0;
-    integer tile_done_cycles = 0;
     integer sprite_start_cycle = 0;
     integer sprite_done_cycles = 0;
     integer fetch_done_cycles = 0;
@@ -97,20 +96,15 @@ module tb_graphics_demo;
             if (mem_cycles - line_start_cycle > max_line_cycles) begin
                 max_line_cycles <= mem_cycles - line_start_cycle;
                 max_line_y <= dut.vega_i.ready_y_mem;
-                $display("GRAPHICS LINE MAX y=%0d total=%0d fetch=%0d tile=%0d sprite=%0d",
+                $display("GRAPHICS LINE MAX y=%0d total=%0d fetch=%0d sprite=%0d",
                          dut.vega_i.ready_y_mem,
                          mem_cycles - line_start_cycle,
-                         fetch_done_cycles, tile_done_cycles,
-                         sprite_done_cycles);
+                         fetch_done_cycles, sprite_done_cycles);
             end
         end
         if (previous_fetch_state != 4'd5 &&
             dut.vega_i.fetch_state_mem == 4'd5)
             fetch_done_cycles <= mem_cycles - line_start_cycle;
-        if (dut.vega_i.tile_start_mem)
-            tile_start_cycle <= mem_cycles;
-        if (dut.vega_i.tile_done_mem)
-            tile_done_cycles <= mem_cycles - tile_start_cycle;
         if (dut.vega_i.sprite_start_mem)
             sprite_start_cycle <= mem_cycles;
         if (dut.vega_i.sprite_done_mem)
@@ -138,19 +132,17 @@ module tb_graphics_demo;
             if (leds[7]) begin
                 $display("GRAPHICS FAIL stage=%0d LEDs=%02x pc=%08x",
                          leds[6:0], leds, dut.cpu_adr);
-                $display("status underrun=%b config=%b tile_err=%b sprite_err=%b",
+                $display("status underrun=%b config=%b sprite_err=%b",
                          dut.vega_i.underrun_sticky_cpu,
                          dut.vega_i.config_error_cpu,
-                         dut.vega_i.tile_config_error_mem,
                          dut.vega_i.sprite_config_error_mem);
-                $display("states fetch=%0d tile=%0d sprite=%0d current_line=%0d",
+                $display("states fetch=%0d sprite=%0d current_line=%0d",
                          dut.vega_i.fetch_state_mem,
-                         dut.vega_i.tile_builder_i.state,
                          dut.vega_i.sprite_builder_i.state,
                          mem_cycles - line_start_cycle);
-                $display("line_cycles last=%0d max=%0d tile=%0d sprite=%0d",
+                $display("line_cycles last=%0d max=%0d sprite=%0d",
                          last_line_cycles, max_line_cycles,
-                         tile_done_cycles, sprite_done_cycles);
+                         sprite_done_cycles);
                 $display("max_line_y=%0d fetch=%0d",
                          max_line_y, fetch_done_cycles);
                 $display("collision cpu=%08x published=%08x accumulated=%08x",
@@ -161,16 +153,16 @@ module tb_graphics_demo;
                          observed_sprite_active, observed_sprite_accepted,
                          observed_collision);
                 $display("sprite d0=%08x/%08x/%08x/%08x/%08x d1=%08x/%08x/%08x/%08x/%08x",
-                         dut.vega_i.sprite_builder_i.descriptor_mem[0],
-                         dut.vega_i.sprite_builder_i.descriptor_mem[1],
-                         dut.vega_i.sprite_builder_i.descriptor_mem[2],
-                         dut.vega_i.sprite_builder_i.descriptor_mem[3],
-                         dut.vega_i.sprite_builder_i.descriptor_mem[4],
-                         dut.vega_i.sprite_builder_i.descriptor_mem[8],
-                         dut.vega_i.sprite_builder_i.descriptor_mem[9],
-                         dut.vega_i.sprite_builder_i.descriptor_mem[10],
-                         dut.vega_i.sprite_builder_i.descriptor_mem[11],
-                         dut.vega_i.sprite_builder_i.descriptor_mem[12]);
+                         dut.vega_i.sprite_builder_i.descriptor_mem0[0],
+                         dut.vega_i.sprite_builder_i.descriptor_mem0[1],
+                         dut.vega_i.sprite_builder_i.descriptor_mem0[2],
+                         dut.vega_i.sprite_builder_i.descriptor_mem0[3],
+                         dut.vega_i.sprite_builder_i.descriptor_mem0[4],
+                         dut.vega_i.sprite_builder_i.descriptor_mem0[8],
+                         dut.vega_i.sprite_builder_i.descriptor_mem0[9],
+                         dut.vega_i.sprite_builder_i.descriptor_mem0[10],
+                         dut.vega_i.sprite_builder_i.descriptor_mem0[11],
+                         dut.vega_i.sprite_builder_i.descriptor_mem0[12]);
                 $display("sprite pattern words=%04x %04x %04x %04x",
                          memory.memory[24'h049008],
                          memory.memory[24'h049009],
@@ -195,12 +187,12 @@ module tb_graphics_demo;
                     $fatal(1,
                            "scanline deadline missed cycles=%0d deadline=%0d",
                            max_line_cycles, LINE_DEADLINE_MEM_CYCLES);
-                if (observed_sprite_active == 32'hffffffff) begin
+                if (observed_sprite_active == 32'h0000ffff) begin
                     if (dut.vega_i.fb_format_mem == 3'd0) begin
                         if (dut.vega_i.sprite_budget_effective_mem != 16'd512)
                             $fatal(1, "RGB565 sprite budget was not clamped");
                         if (observed_sprite_accepted != 32'h0000ffff ||
-                            !dut.vega_i.sprite_overflow_cpu)
+                            dut.vega_i.sprite_overflow_cpu)
                             $fatal(1,
                                    "RGB565 admission mismatch accepted=%08x overflow=%b",
                                    observed_sprite_accepted,
@@ -208,7 +200,7 @@ module tb_graphics_demo;
                     end else begin
                         if (dut.vega_i.sprite_budget_effective_mem != 16'd1024)
                             $fatal(1, "INDEX8 sprite budget was unexpectedly limited");
-                        if (observed_sprite_accepted != 32'hffffffff ||
+                        if (observed_sprite_accepted != 32'h0000ffff ||
                             dut.vega_i.sprite_overflow_cpu)
                             $fatal(1,
                                    "INDEX8 admission mismatch accepted=%08x overflow=%b",

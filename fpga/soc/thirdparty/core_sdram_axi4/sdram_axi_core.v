@@ -41,6 +41,10 @@ module sdram_axi_core
     ,input           inport_rd_i
     ,input  [  7:0]  inport_len_i
     ,input  [ 31:0]  inport_addr_i
+    ,input  [ 31:0]  inport_compare_head_addr_i
+    ,input  [ 31:0]  inport_compare_tail_addr_i
+    ,input  [  1:0]  inport_compare_select_i
+    ,input           inport_compare_valid_i
     ,input  [ 31:0]  inport_write_data_i
     ,input  [ 15:0]  sdram_data_input_i
 
@@ -124,7 +128,11 @@ localparam SDRAM_TRFC_CYCLES = (60 + (CYCLE_TIME_NS-1)) / CYCLE_TIME_NS;
 //-----------------------------------------------------------------
 // External Interface
 //-----------------------------------------------------------------
-wire [ 31:0]  ram_addr_w       = inport_addr_i;
+wire [ 31:0]  ram_addr_w         = inport_addr_i;
+wire [ 31:0]  ram_compare_head_addr_w = inport_compare_head_addr_i;
+wire [ 31:0]  ram_compare_tail_addr_w = inport_compare_tail_addr_i;
+wire [  1:0]  ram_compare_select_w = inport_compare_select_i;
+wire          ram_compare_valid_w = inport_compare_valid_i;
 wire [  3:0]  ram_wr_w         = inport_wr_i;
 wire          ram_rd_w         = inport_rd_i;
 wire          ram_accept_w;
@@ -181,6 +189,76 @@ wire [SDRAM_ROW_W-1:0]  addr_col_w  = {{(SDRAM_ROW_W-SDRAM_COL_W){1'b0}}, ram_ad
 wire [SDRAM_ROW_W-1:0]  addr_row_w  = ram_addr_w[SDRAM_ADDR_W:SDRAM_COL_W+2+1];
 wire [SDRAM_BANK_W-1:0] addr_bank_w = ram_addr_w[SDRAM_COL_W+2:SDRAM_COL_W+2-1];
 
+wire [SDRAM_ROW_W-1:0] compare_head_row_w =
+    ram_compare_head_addr_w[SDRAM_ADDR_W:SDRAM_COL_W+2+1];
+wire [SDRAM_BANK_W-1:0] compare_head_bank_w =
+    ram_compare_head_addr_w[SDRAM_COL_W+2:SDRAM_COL_W+2-1];
+wire [SDRAM_ROW_W-1:0] compare_tail_row_w =
+    ram_compare_tail_addr_w[SDRAM_ADDR_W:SDRAM_COL_W+2+1];
+wire [SDRAM_BANK_W-1:0] compare_tail_bank_w =
+    ram_compare_tail_addr_w[SDRAM_COL_W+2:SDRAM_COL_W+2-1];
+
+// Compare only registered FIFO entries. Raw client addresses never enter the
+// SDRAM command cone; this register boundary keeps the 60 MHz path
+// independent of client placement while retaining head/tail lookahead.
+(* keep = "true" *) wire lookup_head_open_w =
+    (compare_head_bank_w == 2'd0 && row_open_q[0]) ||
+    (compare_head_bank_w == 2'd1 && row_open_q[1]) ||
+    (compare_head_bank_w == 2'd2 && row_open_q[2]) ||
+    (compare_head_bank_w == 2'd3 && row_open_q[3]);
+(* keep = "true" *) wire lookup_tail_open_w =
+    (compare_tail_bank_w == 2'd0 && row_open_q[0]) ||
+    (compare_tail_bank_w == 2'd1 && row_open_q[1]) ||
+    (compare_tail_bank_w == 2'd2 && row_open_q[2]) ||
+    (compare_tail_bank_w == 2'd3 && row_open_q[3]);
+
+(* keep = "true" *) wire lookup_head_hit_w =
+    (compare_head_bank_w == 2'd0 && row_open_q[0] &&
+     compare_head_row_w == active_row_q[0]) ||
+    (compare_head_bank_w == 2'd1 && row_open_q[1] &&
+     compare_head_row_w == active_row_q[1]) ||
+    (compare_head_bank_w == 2'd2 && row_open_q[2] &&
+     compare_head_row_w == active_row_q[2]) ||
+    (compare_head_bank_w == 2'd3 && row_open_q[3] &&
+     compare_head_row_w == active_row_q[3]);
+(* keep = "true" *) wire lookup_tail_hit_w =
+    (compare_tail_bank_w == 2'd0 && row_open_q[0] &&
+     compare_tail_row_w == active_row_q[0]) ||
+    (compare_tail_bank_w == 2'd1 && row_open_q[1] &&
+     compare_tail_row_w == active_row_q[1]) ||
+    (compare_tail_bank_w == 2'd2 && row_open_q[2] &&
+     compare_tail_row_w == active_row_q[2]) ||
+    (compare_tail_bank_w == 2'd3 && row_open_q[3] &&
+     compare_tail_row_w == active_row_q[3]);
+
+wire lookup_row_open_w =
+    (ram_compare_select_w[0] && lookup_head_open_w) ||
+    (ram_compare_select_w[1] && lookup_tail_open_w);
+wire lookup_row_hit_w =
+    (ram_compare_select_w[0] && lookup_head_hit_w) ||
+    (ram_compare_select_w[1] && lookup_tail_hit_w);
+
+// Row lookup is prepared from the FIFO's next-head address. The wrapper
+// supplies that lookahead during READ/WRITE0 acceptance, so registering these
+// facts removes the address-to-state path without adding a sustained-transfer
+// bubble.
+reg row_lookup_valid_q;
+reg row_lookup_open_q;
+reg row_lookup_hit_q;
+always @ (posedge clk_i or posedge rst_i)
+if (rst_i)
+begin
+    row_lookup_valid_q <= 1'b0;
+    row_lookup_open_q  <= 1'b0;
+    row_lookup_hit_q   <= 1'b0;
+end
+else
+begin
+    row_lookup_valid_q <= ram_compare_valid_w;
+    row_lookup_open_q  <= lookup_row_open_w;
+    row_lookup_hit_q   <= lookup_row_hit_w;
+end
+
 //-----------------------------------------------------------------
 // SDRAM State Machine
 //-----------------------------------------------------------------
@@ -217,10 +295,10 @@ begin
             target_state_r = STATE_REFRESH;
         end
         // Access request
-        else if (ram_req_w)
+        else if (ram_req_w && row_lookup_valid_q)
         begin
             // Open row hit
-            if (row_open_q[addr_bank_w] && addr_row_w == active_row_q[addr_bank_w])
+            if (row_lookup_hit_q)
             begin
                 if (!ram_rd_w)
                     next_state_r = STATE_WRITE0;
@@ -228,7 +306,7 @@ begin
                     next_state_r = STATE_READ;
             end
             // Row miss, close row, open new row
-            else if (row_open_q[addr_bank_w])
+            else if (row_lookup_open_q)
             begin
                 next_state_r   = STATE_PRECHARGE;
 
@@ -272,10 +350,10 @@ begin
         next_state_r = STATE_IDLE;
 
         // Another pending read request (with no refresh pending)
-        if (!refresh_q && ram_req_w && ram_rd_w)
+        if (!refresh_q && ram_req_w && ram_rd_w && row_lookup_valid_q)
         begin
             // Open row hit
-            if (row_open_q[addr_bank_w] && addr_row_w == active_row_q[addr_bank_w])
+            if (row_lookup_hit_q)
                 next_state_r = STATE_READ;
         end
     end
@@ -294,10 +372,11 @@ begin
         next_state_r = STATE_IDLE;
 
         // Another pending write request (with no refresh pending)
-        if (!refresh_q && ram_req_w && (ram_wr_w != 4'b0))
+        if (!refresh_q && ram_req_w && (ram_wr_w != 4'b0) &&
+            row_lookup_valid_q)
         begin
             // Open row hit
-            if (row_open_q[addr_bank_w] && addr_row_w == active_row_q[addr_bank_w])
+            if (row_lookup_hit_q)
                 next_state_r = STATE_WRITE0;
         end
     end
@@ -361,10 +440,10 @@ begin
         delay_r = SDRAM_READ_LATENCY;
 
         // Another pending read request (with no refresh pending)
-        if (!refresh_q && ram_req_w && ram_rd_w)
+        if (!refresh_q && ram_req_w && ram_rd_w && row_lookup_valid_q)
         begin
             // Open row hit
-            if (row_open_q[addr_bank_w] && addr_row_w == active_row_q[addr_bank_w])
+            if (row_lookup_hit_q)
                 delay_r = 4'd0;
         end        
     end    
@@ -413,9 +492,26 @@ else
 always @ (posedge clk_i or posedge rst_i)
 if (rst_i)
     delay_state_q   <= STATE_IDLE;
-// On entering into delay state, record intended next state
-else if (state_q != STATE_DELAY && delay_r != {DELAY_W{1'b0}})
-    delay_state_q   <= next_state_r;
+else
+begin
+    // Capture only the destination associated with each command delay. In
+    // READ_WAIT, a same-row read bypasses the delay entirely, so the stored
+    // IDLE destination is unused. This keeps the live request address and row
+    // hit comparison out of this register's clock-enable path.
+    case (state_q)
+    STATE_ACTIVATE:
+        delay_state_q <= target_state_q;
+    STATE_READ_WAIT:
+        delay_state_q <= STATE_IDLE;
+    STATE_PRECHARGE:
+        delay_state_q <= target_state_q == STATE_REFRESH ?
+                         STATE_REFRESH : STATE_ACTIVATE;
+    STATE_REFRESH:
+        delay_state_q <= STATE_IDLE;
+    default:
+        ;
+    endcase
+end
 
 // Update actual state
 always @ (posedge clk_i or posedge rst_i)

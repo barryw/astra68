@@ -13,6 +13,7 @@ module tb_astra_host_boot_soc #(
     localparam [7:0] CMD_BOOT_BEGIN = 8'h10;
     localparam [7:0] CMD_BOOT_DATA = 8'h11;
     localparam [7:0] CMD_BOOT_COMMIT = 8'h12;
+    localparam [7:0] CMD_SERVICE_HELLO = 8'h20;
     localparam integer ROM_HEADER_BYTES = 32;
     localparam integer MAX_ROM_BYTES = 262176;
     localparam [31:0] KERNEL_STATUS_READY = 32'h4b304f4b;
@@ -56,6 +57,7 @@ module tb_astra_host_boot_soc #(
         .SDRAM_BIST_BYTES(TEST_BYTES),
         .SDRAM_READY_DELAY(10000),
         .HDMI_ENABLE(1'b0),
+        .USB_ENABLE(1'b0),
         .CPU_CLK_DIV_BIT(0),
         .UART_BAUD(12500000),
         .SD_BOOT_ENABLE(1'b1),
@@ -189,6 +191,20 @@ module tb_astra_host_boot_soc #(
         end
     endtask
 
+    task automatic send_u16(input [15:0] value);
+        begin
+            write_byte(value[15:8]);
+            write_byte(value[7:0]);
+        end
+    endtask
+
+    task automatic send_u64(input [63:0] value);
+        begin
+            send_u32(value[63:32]);
+            send_u32(value[31:0]);
+        end
+    endtask
+
     initial begin
         $readmemh("astra68_rom.hex", rom_image);
         if ({rom_image[0], rom_image[1], rom_image[2], rom_image[3]} !=
@@ -236,6 +252,21 @@ module tb_astra_host_boot_soc #(
         write_byte(CMD_BOOT_COMMIT);
         spi_deselect();
         require_ok("BOOT_COMMIT");
+
+        // The production host switches directly from the immutable boot
+        // protocol to the framed runtime service. Advertise a live host with
+        // no provisioned Astra partition so the kernel can validate the
+        // storage/input transport without depending on an SD image here.
+        begin_write();
+        write_byte(CMD_SERVICE_HELLO);
+        send_u16(16'd22);
+        send_u32(32'h11223344);
+        send_u32(32'd1);
+        send_u32(32'h00000001);
+        send_u64(64'd0);
+        send_u16(16'd16);
+        spi_deselect();
+        require_ok("SERVICE_HELLO");
     end
 
     initial begin
@@ -322,10 +353,33 @@ module tb_astra_host_boot_soc #(
         end
     endfunction
 
+    function automatic [7:0] sdram_byte(input [24:0] byte_offset);
+        reg [23:0] key;
+        begin
+            key = model_key(byte_offset);
+            case (byte_offset[1:0])
+                2'd0: sdram_byte = memory.memory[key][7:0];
+                2'd1: sdram_byte = memory.memory[key][15:8];
+                2'd2: sdram_byte = memory.memory[key + 1'b1][7:0];
+                default: sdram_byte = memory.memory[key + 1'b1][15:8];
+            endcase
+        end
+    endfunction
+
     always @(posedge dut.clk) begin
         if (post_seen && dut.sys_scratch == KERNEL_STATUS_PANIC &&
-            !expect_kernel_panic)
+            !expect_kernel_panic) begin : unexpected_panic
+            integer log_index;
+            integer log_bytes;
+            log_bytes = sdram_be32(25'h0000010);
+            $write("EARLY LOG:\n");
+            for (log_index = 0; log_index < log_bytes && log_index < 2048;
+                 log_index = log_index + 1)
+                $write("%c", sdram_byte(
+                    sdram_be32(25'h000000c) + log_index));
+            $write("\nEND EARLY LOG\n");
             $fatal(1, "kernel panicked during normal AstraHost boot");
+        end
         if (post_seen &&
             dut.sys_scratch == (expect_kernel_panic ? KERNEL_STATUS_PANIC :
                                                        KERNEL_STATUS_READY)) begin

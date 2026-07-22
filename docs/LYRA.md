@@ -1,11 +1,16 @@
 # Lyra — Audio Chip Register Map (v0.1)
 
-Lyra is the Astra 68 audio chip (Paula analog): 16 PCM sample-playback voices,
+> **Status:** dormant FPGA proposal. Kernel Platform v1 hosts audio on the
+> ESP32 and does not instantiate or advertise Lyra. `0xFFF30000` remains
+> reserved so this earlier contract is not reused accidentally.
+
+The proposed Lyra audio chip (Paula analog) has 16 PCM sample-playback voices,
 16 wavetable oscillator voices, and a time-multiplexed stereo mixer feeding a
 48 kHz output. PCM samples stream from the SDRAM audio pool; wavetables live in
 on-chip **wave RAM** (BRAM).
 
-Authoritative contract; `sw/include/lyra.h` is the hand-maintained C mirror.
+This document and `sw/include/lyra.h` are retained for reference, not exposed
+as a production capability.
 
 ---
 

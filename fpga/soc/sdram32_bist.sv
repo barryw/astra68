@@ -245,7 +245,7 @@ module sdram32_bist #(
                         // Two read passes can report at most 2 * MEM_BYTES
                         // byte errors. The 25-bit port caps that below 2^32,
                         // so saturation is unreachable and only lengthens the
-                        // 75 MHz response-to-counter path.
+                        // memory-domain response-to-counter path.
                         error_count_mem <= error_count_mem + {29'd0, mismatches};
                     end
 

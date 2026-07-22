@@ -14,6 +14,7 @@ module tb_soc;
         .RST_MAX(16'd16),
         .SDRAM_ENABLE(1'b0),
         .HDMI_ENABLE(1'b0),
+        .USB_ENABLE(1'b0),
         .CPU_CLK_DIV_BIT(0),
         .UART_BAUD(UART_BAUD)
     ) dut (

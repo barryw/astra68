@@ -17,6 +17,14 @@ module astraea_blitter #(
     output reg         cpu_done,
     output wire        cpu_irq,
     output wire        cache_flush,
+    output wire [31:0] completed_fence,
+
+    input  wire        front_guard_valid,
+    input  wire [24:0] front_guard_start,
+    input  wire [25:0] front_guard_end,
+    input  wire        pending_guard_valid,
+    input  wire [24:0] pending_guard_start,
+    input  wire [25:0] pending_guard_end,
 
     input  wire        mem_clk,
     input  wire        mem_rst,
@@ -51,6 +59,7 @@ module astraea_blitter #(
     localparam [4:0] ST_KM_PREP       = 5'd14;
     localparam [4:0] ST_KM_MASK_ISSUE = 5'd10;
     localparam [4:0] ST_KM_MASK_WAIT  = 5'd11;
+    localparam [4:0] ST_KM_MASK_DECIDE= 5'd16;
     localparam [4:0] ST_KM_SRC_ISSUE  = 5'd9;
     localparam [4:0] ST_KM_SRC_WAIT   = 5'd8;
     localparam [4:0] ST_KM_DECIDE     = 5'd24;
@@ -98,6 +107,7 @@ module astraea_blitter #(
     localparam [4:0] REG_BLIT_KEY       = 5'h19;
     localparam [4:0] REG_BLIT_CTRL      = 5'h1a;
     localparam [4:0] REG_BLIT_STATUS    = 5'h1b;
+    localparam [4:0] REG_BLIT_FENCE     = 5'h1c;
 
     function automatic [31:0] merge_be(
         input [31:0] old_value,
@@ -229,6 +239,7 @@ module astraea_blitter #(
     reg [31:0] reg_op;
     reg [31:0] reg_color;
     reg [31:0] reg_key;
+    reg [31:0] reg_fence;
     reg        reg_blit_irq_en;
     reg        done_sticky_cpu;
     reg [7:0]  error_cpu;
@@ -244,6 +255,13 @@ module astraea_blitter #(
     reg [3:0]  cfg_mode_cpu;
     reg [31:0] cfg_color_cpu;
     reg [31:0] cfg_key_cpu;
+    reg [31:0] cfg_fence_cpu;
+    reg        cfg_front_guard_valid_cpu;
+    reg [24:0] cfg_front_guard_start_cpu;
+    reg [25:0] cfg_front_guard_end_cpu;
+    reg        cfg_pending_guard_valid_cpu;
+    reg [24:0] cfg_pending_guard_start_cpu;
+    reg [25:0] cfg_pending_guard_end_cpu;
     reg        cfg_fields_valid_cpu;
     reg        cfg_op_valid_cpu;
     reg        cfg_noop_cpu;
@@ -255,6 +273,7 @@ module astraea_blitter #(
     reg       done_seen_cpu;
     reg [7:0] error_meta_cpu;
     reg [7:0] error_sync_cpu;
+    reg [31:0] completed_fence_cpu;
 
     reg [1:0] start_sync_mem;
     reg       start_seen_mem;
@@ -325,6 +344,7 @@ module astraea_blitter #(
     assign cpu_busy = busy_visible;
     assign cache_flush = busy_visible;
     assign cpu_irq = (reg_irq_en | reg_blit_irq_en) & reg_irq_stat;
+    assign completed_fence = completed_fence_cpu;
 
     always @* begin
         cpu_rdata = 32'd0;
@@ -348,6 +368,8 @@ module astraea_blitter #(
             REG_BLIT_CTRL:       cpu_rdata = {30'd0, reg_blit_irq_en, 1'b0};
             REG_BLIT_STATUS:     cpu_rdata = {16'd0, error_cpu, 6'd0,
                                               done_sticky_cpu, busy_visible};
+            REG_BLIT_FENCE:      cpu_rdata = busy_visible ? cfg_fence_cpu :
+                                                             completed_fence_cpu;
             default:             cpu_rdata = 32'd0;
         endcase
     end
@@ -368,6 +390,7 @@ module astraea_blitter #(
             reg_op <= 32'd0;
             reg_color <= 32'd0;
             reg_key <= 32'd0;
+            reg_fence <= 32'd0;
             reg_blit_irq_en <= 1'b0;
             done_sticky_cpu <= 1'b0;
             error_cpu <= 8'd0;
@@ -382,6 +405,13 @@ module astraea_blitter #(
             cfg_mode_cpu <= 4'b0001;
             cfg_color_cpu <= 32'd0;
             cfg_key_cpu <= 32'd0;
+            cfg_fence_cpu <= 32'd0;
+            cfg_front_guard_valid_cpu <= 1'b0;
+            cfg_front_guard_start_cpu <= 25'd0;
+            cfg_front_guard_end_cpu <= 26'd0;
+            cfg_pending_guard_valid_cpu <= 1'b0;
+            cfg_pending_guard_start_cpu <= 25'd0;
+            cfg_pending_guard_end_cpu <= 26'd0;
             cfg_fields_valid_cpu <= 1'b1;
             cfg_op_valid_cpu <= 1'b1;
             cfg_noop_cpu <= 1'b1;
@@ -392,6 +422,7 @@ module astraea_blitter #(
             done_seen_cpu <= 1'b0;
             error_meta_cpu <= 8'd0;
             error_sync_cpu <= 8'd0;
+            completed_fence_cpu <= 32'd0;
         end else begin
             busy_sync_cpu <= {busy_sync_cpu[0], busy_mem};
             done_sync_cpu <= {done_sync_cpu[0], done_toggle_mem};
@@ -406,6 +437,7 @@ module astraea_blitter #(
                 done_sticky_cpu <= 1'b1;
                 reg_irq_stat <= 1'b1;
                 error_cpu <= error_sync_cpu;
+                completed_fence_cpu <= cfg_fence_cpu;
                 cpu_done <= 1'b1;
             end
 
@@ -429,6 +461,8 @@ module astraea_blitter #(
                     REG_BLIT_OP: reg_op <= merge_be(reg_op, cpu_wdata, cpu_be);
                     REG_BLIT_COLOR: reg_color <= merge_be(reg_color, cpu_wdata, cpu_be);
                     REG_BLIT_KEY: reg_key <= merge_be(reg_key, cpu_wdata, cpu_be);
+                    REG_BLIT_FENCE:
+                        reg_fence <= merge_be(reg_fence, cpu_wdata, cpu_be);
                     REG_BLIT_CTRL: begin
                         if (cpu_be[0]) begin
                             reg_blit_irq_en <= cpu_wdata[1];
@@ -449,6 +483,17 @@ module astraea_blitter #(
                                 };
                                 cfg_color_cpu <= reg_color;
                                 cfg_key_cpu <= reg_key;
+                                cfg_fence_cpu <= reg_fence;
+                                cfg_front_guard_valid_cpu <=
+                                    front_guard_valid;
+                                cfg_front_guard_start_cpu <=
+                                    front_guard_start;
+                                cfg_front_guard_end_cpu <= front_guard_end;
+                                cfg_pending_guard_valid_cpu <=
+                                    pending_guard_valid;
+                                cfg_pending_guard_start_cpu <=
+                                    pending_guard_start;
+                                cfg_pending_guard_end_cpu <= pending_guard_end;
                                 cfg_fields_valid_cpu <=
                                     reg_dst[31:25] == 7'd0 &&
                                     reg_dst_pitch[31:16] == 16'd0 &&
@@ -501,6 +546,12 @@ module astraea_blitter #(
     reg        cfg_fields_valid_mem;
     reg        cfg_op_valid_mem;
     reg        cfg_noop_mem;
+    reg        cfg_front_guard_valid_mem;
+    reg [24:0] cfg_front_guard_start_mem;
+    reg [25:0] cfg_front_guard_end_mem;
+    reg        cfg_pending_guard_valid_mem;
+    reg [24:0] cfg_pending_guard_start_mem;
+    reg [25:0] cfg_pending_guard_end_mem;
     // Number of rows after the row currently being processed.
     reg [15:0] rows_remaining_mem;
     reg [17:0] units_done_mem;
@@ -524,7 +575,13 @@ module astraea_blitter #(
     reg [1:0] km_source_byte_mem;
     reg [1:0] km_dest_byte_mem;
     reg [31:0] km_source_element_mem;
+    reg [31:0] km_write_data_mem;
     reg [24:0] km_request_byte_addr_mem;
+    reg        km_mask_selected_mem;
+    reg [15:0] cfg_km_first_element_mem;
+    reg [17:0] cfg_km_first_byte_offset_mem;
+    reg [12:0] cfg_km_first_mask_byte_mem;
+    reg [12:0] cfg_mask_last_byte_mem;
     reg [15:0] validate_pitch_mem;
     reg [32:0] validate_add_a_mem;
     reg [32:0] validate_add_b_mem;
@@ -533,8 +590,9 @@ module astraea_blitter #(
     reg [24:0] mask_row_offset_mem;
 
     wire [1:0] cfg_elem_size = cfg_op_mem[5:4];
-    wire [13:0] cfg_mask_row_bytes =
-        ({1'b0, cfg_dim_mem[15:0]} + 17'd7) >> 3;
+    wire [15:0] cfg_last_element = cfg_dim_mem[15:0] - 16'd1;
+    wire [17:0] cfg_last_byte_offset =
+        {2'd0, cfg_last_element} << cfg_elem_size;
     wire mode_copy_mem = cfg_mode_mem[0];
     wire mode_fill_mem = cfg_mode_mem[1];
     wire mode_copy_key_mem = cfg_mode_mem[2];
@@ -552,8 +610,6 @@ module astraea_blitter #(
     wire [15:0] mask_pitch_mem = cfg_mask_pitch_mem;
     wire [31:0] color_mem = cfg_color_mem;
     wire [31:0] key_mem = cfg_key_mem;
-    wire [15:0] km_width_mem = cfg_dim_mem[15:0];
-
     wire [31:0] validate_product =
         rows_remaining_mem * validate_pitch_mem;
     wire [32:0] validate_sum = validate_add_a_mem + validate_add_b_mem;
@@ -561,6 +617,14 @@ module astraea_blitter #(
     // bits above bit 24, which maps directly onto the carry chain and avoids a
     // second wide magnitude comparator after the address addition.
     wire validate_sum_out_of_range = |validate_sum[32:25];
+    wire validate_dst_front_overlap = cfg_front_guard_valid_mem &&
+        {1'b0, cfg_dst_mem} < cfg_front_guard_end_mem &&
+        {1'b0, validate_sum[24:0]} >=
+            {1'b0, cfg_front_guard_start_mem};
+    wire validate_dst_pending_overlap = cfg_pending_guard_valid_mem &&
+        {1'b0, cfg_dst_mem} < cfg_pending_guard_end_mem &&
+        {1'b0, validate_sum[24:0]} >=
+            {1'b0, cfg_pending_guard_start_mem};
 
     wire [24:0] chunk_start_offset = word_mode_mem ?
         {5'd0, chunk_start_index_mem, 2'b00} :
@@ -572,10 +636,6 @@ module astraea_blitter #(
                             elem_size_mem == 2'd1 ? {2{color_mem[15:0]}} :
                             color_mem;
 
-    wire [15:0] km_first_element = reverse_x_mem ?
-                                         km_width_mem - 16'd1 : 16'd0;
-    wire [17:0] km_first_byte_offset =
-        {2'd0, km_first_element} << elem_size_mem;
     wire [15:0] km_next_element = reverse_x_mem ?
         km_element_index_mem - 16'd1 : km_element_index_mem + 16'd1;
     wire [2:0] km_element_bytes = cfg_element_bytes_mem;
@@ -633,13 +693,10 @@ module astraea_blitter #(
         (word_mode_mem ? 4'b1111 :
          byte_enable(issuing_read ? issue_src_ptr_mem[1:0] :
                                    issue_dst_ptr_mem[1:0]));
-    // The captured one-hot mode is stable for the complete command. Use it
-    // for write-data selection instead of decoding the live FSM; mem_wdata is
-    // sampled only in the corresponding valid issue states.
-    assign mem_wdata = (mode_copy_key_mem || mode_copy_mask_mem) ?
-        place_byte(km_request_byte_addr_mem[1:0],
-                   get_element_byte(km_source_element_mem, elem_size_mem,
-                                    km_dest_byte_mem)) :
+    // Key/mask byte assembly is completed in the predecessor state. This keeps
+    // the byte selector and lane placement local instead of carrying them
+    // through Astraea's owner mux and the shared SDRAM request mux.
+    assign mem_wdata = km_bus_active ? km_write_data_mem :
         (mode_fill_mem ?
          (word_mode_mem ? fill_word :
           place_byte(issue_dst_ptr_mem[1:0], issue_fill_byte)) :
@@ -678,6 +735,12 @@ module astraea_blitter #(
             cfg_fields_valid_mem <= 1'b1;
             cfg_op_valid_mem <= 1'b1;
             cfg_noop_mem <= 1'b1;
+            cfg_front_guard_valid_mem <= 1'b0;
+            cfg_front_guard_start_mem <= 25'd0;
+            cfg_front_guard_end_mem <= 26'd0;
+            cfg_pending_guard_valid_mem <= 1'b0;
+            cfg_pending_guard_start_mem <= 25'd0;
+            cfg_pending_guard_end_mem <= 26'd0;
             rows_remaining_mem <= 16'd0;
             units_done_mem <= 18'd0;
             chunk_count_mem <= 6'd0;
@@ -695,7 +758,13 @@ module astraea_blitter #(
             km_source_byte_mem <= 2'd0;
             km_dest_byte_mem <= 2'd0;
             km_source_element_mem <= 32'd0;
+            km_write_data_mem <= 32'd0;
             km_request_byte_addr_mem <= 25'd0;
+            km_mask_selected_mem <= 1'b0;
+            cfg_km_first_element_mem <= 16'd0;
+            cfg_km_first_byte_offset_mem <= 18'd0;
+            cfg_km_first_mask_byte_mem <= 13'd0;
+            cfg_mask_last_byte_mem <= 13'd0;
             validate_pitch_mem <= 16'd0;
             validate_add_a_mem <= 33'd0;
             validate_add_b_mem <= 33'd0;
@@ -716,7 +785,7 @@ module astraea_blitter #(
                     issue_src_ptr_mem + unit_step;
             else if (km_prep_phase)
                 issue_src_ptr_mem <= src_row_mem +
-                    {7'd0, km_first_byte_offset};
+                    {7'd0, cfg_km_first_byte_offset_mem};
             else if (km_next_phase)
                 issue_src_ptr_mem <= km_next_source_element_addr;
 
@@ -728,7 +797,7 @@ module astraea_blitter #(
                     issue_dst_ptr_mem + unit_step;
             else if (km_prep_phase)
                 issue_dst_ptr_mem <= dst_row_mem +
-                    {7'd0, km_first_byte_offset};
+                    {7'd0, cfg_km_first_byte_offset_mem};
             else if (km_next_phase)
                 issue_dst_ptr_mem <= km_next_dest_element_addr;
 
@@ -765,6 +834,12 @@ module astraea_blitter #(
                 cfg_fields_valid_mem <= cfg_fields_valid_cpu;
                 cfg_op_valid_mem <= cfg_op_valid_cpu;
                 cfg_noop_mem <= cfg_noop_cpu;
+                cfg_front_guard_valid_mem <= cfg_front_guard_valid_cpu;
+                cfg_front_guard_start_mem <= cfg_front_guard_start_cpu;
+                cfg_front_guard_end_mem <= cfg_front_guard_end_cpu;
+                cfg_pending_guard_valid_mem <= cfg_pending_guard_valid_cpu;
+                cfg_pending_guard_start_mem <= cfg_pending_guard_start_cpu;
+                cfg_pending_guard_end_mem <= cfg_pending_guard_end_cpu;
             end
 
             if (!busy_mem && start_sync_mem[1] != start_seen_mem) begin
@@ -785,6 +860,13 @@ module astraea_blitter #(
                     busy_mem <= 1'b1;
                     cfg_row_bytes_mem <=
                         {2'd0, cfg_dim_mem[15:0]} << cfg_op_mem[5:4];
+                    cfg_mask_last_byte_mem <= cfg_last_element[15:3];
+                    cfg_km_first_element_mem <= reverse_x_mem ?
+                        cfg_last_element : 16'd0;
+                    cfg_km_first_byte_offset_mem <= reverse_x_mem ?
+                        cfg_last_byte_offset : 18'd0;
+                    cfg_km_first_mask_byte_mem <= reverse_x_mem ?
+                        cfg_last_element[15:3] : 13'd0;
                     rows_remaining_mem <= cfg_dim_mem[31:16] - 16'd1;
                     validate_pitch_mem <= cfg_dst_pitch_mem;
                     set_state_mem(ST_VAL_DST_MUL);
@@ -810,6 +892,12 @@ module astraea_blitter #(
                         if (validate_sum_out_of_range) begin
                             busy_mem <= 1'b0;
                             error_mem <= 8'd1;
+                            done_toggle_mem <= ~done_toggle_mem;
+                            set_state_mem(ST_IDLE);
+                        end else if (validate_dst_front_overlap ||
+                                     validate_dst_pending_overlap) begin
+                            busy_mem <= 1'b0;
+                            error_mem <= 8'd5;
                             done_toggle_mem <= ~done_toggle_mem;
                             set_state_mem(ST_IDLE);
                         end else begin
@@ -853,7 +941,7 @@ module astraea_blitter #(
                     ST_VAL_MASK_BASE: begin
                         validate_add_a_mem <= validate_sum;
                         validate_add_b_mem <=
-                            {19'd0, cfg_mask_row_bytes - 14'd1};
+                            {20'd0, cfg_mask_last_byte_mem};
                         set_state_mem(ST_VAL_MASK_END);
                     end
                     ST_VAL_MASK_END: begin
@@ -973,18 +1061,18 @@ module astraea_blitter #(
                     end
 
                     ST_KM_PREP: begin
-                        km_element_index_mem <= km_first_element;
-                        km_elements_remaining_mem <= km_width_mem;
+                        km_element_index_mem <= cfg_km_first_element_mem;
+                        km_elements_remaining_mem <= cfg_dim_mem[15:0];
                         km_source_byte_mem <= 2'd0;
                         km_dest_byte_mem <= 2'd0;
                         km_source_element_mem <= 32'd0;
                         if (mode_copy_mask_mem) begin
                             km_request_byte_addr_mem <= mask_row_mem +
-                                {12'd0, km_first_element[15:3]};
+                                {12'd0, cfg_km_first_mask_byte_mem};
                             set_state_mem(ST_KM_MASK_ISSUE);
                         end else begin
                             km_request_byte_addr_mem <= src_row_mem +
-                                {7'd0, km_first_byte_offset};
+                                {7'd0, cfg_km_first_byte_offset_mem};
                             set_state_mem(ST_KM_SRC_ISSUE);
                         end
                     end
@@ -996,14 +1084,19 @@ module astraea_blitter #(
 
                     ST_KM_MASK_WAIT: begin
                         if (mem_rsp_valid) begin
-                            if (km_mask_selected) begin
-                                km_source_byte_mem <= 2'd0;
-                                km_source_element_mem <= 32'd0;
-                                km_request_byte_addr_mem <= km_src_byte_addr;
-                                set_state_mem(ST_KM_SRC_ISSUE);
-                            end else begin
-                                set_state_mem(ST_KM_NEXT);
-                            end
+                            km_mask_selected_mem <= km_mask_selected;
+                            set_state_mem(ST_KM_MASK_DECIDE);
+                        end
+                    end
+
+                    ST_KM_MASK_DECIDE: begin
+                        if (km_mask_selected_mem) begin
+                            // Both entry paths clear the source accumulator
+                            // before issuing the mask read.
+                            km_request_byte_addr_mem <= km_src_byte_addr;
+                            set_state_mem(ST_KM_SRC_ISSUE);
+                        end else begin
+                            set_state_mem(ST_KM_NEXT);
                         end
                     end
 
@@ -1036,6 +1129,10 @@ module astraea_blitter #(
                             km_dest_byte_mem <= 2'd0;
                             km_request_byte_addr_mem <=
                                 issue_dst_ptr_mem;
+                            km_write_data_mem <= place_byte(
+                                issue_dst_ptr_mem[1:0],
+                                get_element_byte(km_source_element_mem,
+                                                 elem_size_mem, 2'd0));
                             set_state_mem(ST_KM_DST_ISSUE);
                         end
                     end
@@ -1054,6 +1151,12 @@ module astraea_blitter #(
                                 km_dest_byte_mem <= km_dest_byte_mem + 2'd1;
                                 km_request_byte_addr_mem <=
                                     km_request_byte_addr_mem + 25'd1;
+                                km_write_data_mem <= place_byte(
+                                    km_request_byte_addr_mem[1:0] + 2'd1,
+                                    get_element_byte(
+                                        km_source_element_mem,
+                                        elem_size_mem,
+                                        km_dest_byte_mem + 2'd1));
                                 set_state_mem(ST_KM_DST_ISSUE);
                             end
                         end

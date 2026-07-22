@@ -99,6 +99,17 @@ LOCATE COMP "wifi_gpio0" SITE "F1";
 IOBUF PORT "wifi_en" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
 IOBUF PORT "wifi_gpio0" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
 
+# US2 low/full-speed USB host. LOW on both pull-control pins selects the
+# board's 15 kOhm host pulldowns; D+/D- are single-ended bidirectional pins.
+LOCATE COMP "usb_fpga_bd_dp" SITE "D15";
+LOCATE COMP "usb_fpga_bd_dn" SITE "E15";
+LOCATE COMP "usb_fpga_pu_dp" SITE "B12";
+LOCATE COMP "usb_fpga_pu_dn" SITE "C12";
+IOBUF PORT "usb_fpga_bd_dp" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "usb_fpga_bd_dn" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "usb_fpga_pu_dp" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=16;
+IOBUF PORT "usb_fpga_pu_dn" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=16;
+
 # GPDI (HDMI). LVCMOS33D on each positive pin drives its paired negative pin.
 LOCATE COMP "gpdi_dp[0]" SITE "A16"; # Blue
 LOCATE COMP "gpdi_dp[1]" SITE "A14"; # Green

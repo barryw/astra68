@@ -1,23 +1,14 @@
 // Vega — video chip register interface for Astra 68.
-// Mirror of docs/VEGA.md (v0.3). Keep in sync with that spec.
+// Mirror of docs/VEGA.md (v0.5). Keep in sync with that spec.
 //
 // 32-bit registers, 4-byte stride, big-endian (m68k). Supervisor-only MMIO.
 #ifndef ASTRA_VEGA_H
 #define ASTRA_VEGA_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define VEGA_BASE 0xFFF20000u
-
-// ---- Tilemap layer (0x20 bytes) ----
-typedef volatile struct {
-    uint32_t CTRL;    // +0x00  TILE_* bits
-    uint32_t MAP;     // +0x04  [24:0] SDRAM addr of tilemap (16-bit entries)
-    uint32_t SET;     // +0x08  [24:0] SDRAM addr of tileset (4bpp)
-    uint32_t SIZE;    // +0x0C  [3:0] mapW log2, [7:4] mapH log2
-    uint32_t SCROLL;  // +0x10  [31:16] scrollY, [15:0] scrollX (px)
-    uint32_t _rsv[3]; // +0x14  reserved (row-scroll/affine, future)
-} VegaTile;
 
 // ---- Sprite entry (0x20 bytes) ----
 typedef volatile struct {
@@ -44,25 +35,35 @@ typedef volatile struct {
     uint32_t ACTIVE;        // 0x028
     uint32_t _r1;           // 0x02C
     uint32_t BACKDROP;      // 0x030
-    uint32_t _r2[3];        // 0x034..0x03C
+    uint32_t SCENE_GENERATION; // 0x034
+    uint32_t DRAW_FENCE;       // 0x038
+    uint32_t BLIT_FENCE;       // 0x03C
     uint32_t FB_BASE;       // 0x040
     uint32_t FB_PITCH;      // 0x044
     uint32_t FB_FORMAT;     // 0x048
     uint32_t FB_COLORKEY;   // 0x04C
-    uint32_t _r3[(0x080 - 0x050) / 4];
-    VegaTile TILE[2];       // 0x080..0x0BF
-    uint32_t _r4[(0x400 - 0x0C0) / 4];
+    uint32_t PRESENT_CTRL;                 // 0x050
+    uint32_t PRESENT_STATUS;               // 0x054
+    uint32_t PRESENT_COMPLETED_GENERATION; // 0x058
+    uint32_t PRESENT_COMPLETED_FRAME;      // 0x05C
+    uint32_t PRESENT_RETIRED_FB;           // 0x060
+    uint32_t FRAME_COUNTER;                // 0x064
+    uint32_t FB_VIEW;       // 0x068 [31:16] Y, [15:0] X
+    uint32_t FB_VIRTUAL;    // 0x06C [31:16] height, [15:0] width
+    uint32_t FB_WRAP;       // 0x070 bit 0 X, bit 1 Y
+    uint32_t _r4[(0x400 - 0x074) / 4];
     uint32_t PAL[256];      // 0x400..0x7FC
     uint32_t SPR_CTRL;      // 0x800
     uint32_t SPR_BUDGET;    // 0x804
     uint32_t SPR_COLLISION; // 0x808
     uint32_t _r5[(0x1000 - 0x80C) / 4];
-    VegaSprite SPR[32];     // 0x1000..0x13FF
+    VegaSprite SPR[16];     // 0x1000..0x11FF
 } VegaRegs;
 
 #define VEGA ((VegaRegs *)VEGA_BASE)
 
 #define VEGA_ID_MAGIC 0x56454741u   // "VEGA"
+#define VEGA_VERSION_0_5 0x00050000u
 
 // Boot-only text aperture. One ASCII/CP437 byte per cell, row-major, 90x30.
 // The OS may ignore/disable this plane and render its own bitmap fonts.
@@ -76,6 +77,7 @@ typedef volatile struct {
 #define VEGA_CAP_TILEMAP     (1u << 3)
 #define VEGA_CAP_SPRITE      (1u << 4)
 #define VEGA_CAP_INDEX8      (1u << 5)
+#define VEGA_CAP_FB_SCROLL   (1u << 6)
 
 // ---- VEGA_CTRL ----
 #define VEGA_CTRL_DISPLAY_EN  (1u << 0)
@@ -87,12 +89,26 @@ typedef volatile struct {
 // ---- VEGA_STATUS ----
 #define VEGA_STAT_VBLANK       (1u << 0)
 #define VEGA_STAT_HBLANK       (1u << 1)
-#define VEGA_STAT_FLIP_PENDING (1u << 2)
+#define VEGA_STAT_SCENE_LOCKED  (1u << 2)
+#define VEGA_STAT_FLIP_PENDING  VEGA_STAT_SCENE_LOCKED
 #define VEGA_STAT_SPR_OVERFLOW (1u << 3)
 #define VEGA_STAT_DISPLAY_READY (1u << 4)
 #define VEGA_STAT_UNDERRUN      (1u << 5) // sticky; write 1 to clear
 #define VEGA_STAT_CONFIG_ERROR  (1u << 6)
 #define VEGA_STAT_FETCH_BUSY    (1u << 7)
+
+// ---- VEGA_PRESENT_CTRL / VEGA_PRESENT_STATUS ----
+#define VEGA_PRESENT_SUBMIT                (1u << 0)
+#define VEGA_PRESENT_PENDING               (1u << 0)
+#define VEGA_PRESENT_COPY_BUSY             (1u << 1)
+#define VEGA_PRESENT_DONE                  (1u << 2)
+#define VEGA_PRESENT_INVALID               (1u << 3)
+#define VEGA_PRESENT_SHADOW_WRITE_REJECTED (1u << 4)
+#define VEGA_PRESENT_COPY_DEADLINE         (1u << 5)
+#define VEGA_PRESENT_WAIT_WRITERS          (1u << 6)
+#define VEGA_PRESENT_STICKY_MASK \
+    (VEGA_PRESENT_DONE | VEGA_PRESENT_INVALID | \
+     VEGA_PRESENT_SHADOW_WRITE_REJECTED | VEGA_PRESENT_COPY_DEADLINE)
 
 // ---- VEGA_IRQ_EN / VEGA_IRQ_STAT ----
 #define VEGA_IRQ_VBLANK    (1u << 0)
@@ -111,23 +127,14 @@ typedef volatile struct {
 #define VEGA_FMT_RGB565 0
 #define VEGA_FMT_INDEX8 1
 
-// ---- TILE_CTRL bits ----
-#define TILE_ENABLE    (1u << 0)
-#define TILE_TRANSP_EN (1u << 1)
-#define TILE_16        (1u << 2)   // 16x16 tiles (else 8x8)
-#define TILE_WRAP_X    (1u << 3)
-#define TILE_ABOVE     (1u << 4)   // foreground (above sprites/FB)
-#define TILE_WRAP_Y    (1u << 5)
-#define TILE_WRAP      (TILE_WRAP_X | TILE_WRAP_Y)
-#define TILE_TRANSP_SHIFT 16
-#define TILE_TRANSP_MASK  (0xFu << 16)
-
-// TILE_SIZE / TILE_SCROLL packers, and a tilemap entry builder (16-bit, SDRAM).
-#define TILE_MAPSIZE(logw, logh) ((((logh) & 0xF) << 4) | ((logw) & 0xF))
-#define TILE_SCROLL(x, y)        (((uint32_t)(uint16_t)(y) << 16) | (uint16_t)(x))
-#define TILE_ENTRY(idx, bank, flipx, flipy)                 \
-    ((uint16_t)(((idx) & 0x3FF) | (((bank) & 7) << 10) |    \
-                ((flipx) ? 0x4000u : 0u) | ((flipy) ? 0x8000u : 0u)))
+// ---- Framebuffer viewport ----
+#define VEGA_FB_VIEW_(x, y) \
+    (((uint32_t)(uint16_t)(y) << 16) | (uint16_t)(x))
+#define VEGA_FB_VIRTUAL_(width, height) \
+    (((uint32_t)(uint16_t)(height) << 16) | (uint16_t)(width))
+#define VEGA_FB_WRAP_X (1u << 0)
+#define VEGA_FB_WRAP_Y (1u << 1)
+#define VEGA_FB_WRAP_XY (VEGA_FB_WRAP_X | VEGA_FB_WRAP_Y)
 
 // ---- Sprite CTRL bits / fields ----
 #define SPR_ENABLE     (1u << 0)
@@ -145,6 +152,7 @@ typedef volatile struct {
 
 // ---- VEGA_SPR_CTRL (global) ----
 #define VEGA_SPR_CTRL_ENABLE (1u << 0)
+#define VEGA_SPRITE_COUNT 16u
 #define VEGA_SPR_BUDGET_INDEX8_MAX 1024u
 #define VEGA_SPR_BUDGET_RGB565_MAX  512u
 
@@ -155,5 +163,14 @@ typedef volatile struct {
     (((uint32_t)(uint8_t)(r) << 16) | ((uint32_t)(uint8_t)(g) << 8) | (uint8_t)(b))
 #define VEGA_RGB565(r, g, b) \
     ((uint16_t)((((r) & 0x1F) << 11) | (((g) & 0x3F) << 5) | ((b) & 0x1F)))
+
+_Static_assert(offsetof(VegaRegs, FB_VIEW) == 0x068u,
+               "Vega viewport ABI offset");
+_Static_assert(offsetof(VegaRegs, PAL) == 0x400u,
+               "Vega palette ABI offset");
+_Static_assert(offsetof(VegaRegs, SPR_CTRL) == 0x800u,
+               "Vega sprite-control ABI offset");
+_Static_assert(offsetof(VegaRegs, SPR) == 0x1000u,
+               "Vega sprite descriptor ABI offset");
 
 #endif // ASTRA_VEGA_H

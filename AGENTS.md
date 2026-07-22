@@ -31,9 +31,10 @@
   RTL, placement constraints, or the production build flow. It records the
   measured checkpoints, exact failing cones, approaches that worked and failed,
   regression gates, reproducibility hazards, and hardware release procedure.
-- A usable production bitstream must pass the exact 12.5 MHz CPU and 75 MHz
-  SDRAM constraints with the complete production feature set. Do not trade
-  correctness, architecture, graphics features, or clock rates for routing.
+- A usable production bitstream must pass the exact 12.5 MHz CPU and 60 MHz
+  SDRAM constraints with the complete production feature set. The 60 MHz
+  memory clock is an accepted architecture decision, not a diagnostic waiver.
+  Do not trade correctness or the remaining production features for routing.
 - Placement estimates and reduced-feature builds are not acceptance evidence.
   Require a full route of the exact release ROM and nonzero build identity,
   followed by repeated POST, SDRAM, and HDMI checks on the board attached to

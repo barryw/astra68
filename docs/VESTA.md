@@ -23,14 +23,14 @@ Authoritative contract; `sw/include/vesta.h` is the hand-maintained C mirror.
 Block map (VESTA_BASE +):
   0x0000  system control (id / machine / reset / scratch)
   0x00D0  SDRAM power-on self-test
-  0x0100  retired region-MMU / diagnostics / AstraHost boot state
+  0x0100  diagnostics / AstraHost boot and runtime block service
   0x0200  retired region-MMU table aperture
   0x0300  interrupt controller
   0x0380  per-source IRQ config (32 x 4 bytes)
   0x0400  timers (2 x 16 bytes)
   0x0500  UART
   0x0600  SPI / SD
-  0x0700  input (gamepads + keyboard)
+  0x0700  ordered input event queue
   0x1000  front-panel GPIO (separate 4 KiB PMMU page)
 ```
 
@@ -70,7 +70,7 @@ current bitstream.
 
 ### SDRAM power-on self-test (0x00D0)
 
-The destructive full-range test runs from the 75 MHz SDRAM clock domain over
+The destructive full-range test runs from the 60 MHz SDRAM clock domain over
 the controller's pipelined 32-bit DMA port. It keeps up to 16 requests in
 flight, avoiding both the CPU clock-domain round trip and the former per-byte
 request path. Boot software must keep its code, stack, and live data outside
@@ -85,8 +85,8 @@ SDRAM until the test completes.
 | 0x00E0 | `MEMTEST_FIRST_FAIL` | RO | first failing byte offset |
 | 0x00E4 | `MEMTEST_EXPECTED` | RO | expected byte for first failure |
 | 0x00E8 | `MEMTEST_ACTUAL` | RO | actual byte for first failure |
-| 0x00EC | `CPU_CYCLES_LO` | RO | low word of free-running CPU/bus clock count |
-| 0x00F0 | `CPU_CYCLES_HI` | RO | high word of free-running CPU/bus clock count |
+| 0x00EC | `CPU_CYCLES_LO` | RO | low word of free-running CPU/bus clock count; latches all 64 bits |
+| 0x00F0 | `CPU_CYCLES_HI` | RO | high word of the most recent `CPU_CYCLES_LO` snapshot |
 | 0x00F4 | `ICACHE_HITS` | RO | TG wrapper instruction-cache hit count |
 | 0x00F8 | `ICACHE_MISSES` | RO | TG wrapper instruction-cache miss count |
 | 0x00FC | `DCACHE_HITS` | RO | TG wrapper data-cache hit count |
@@ -120,6 +120,52 @@ stage 0; they are not an alternate CPU-to-ESP byte transport.
 | 0x0144 | `HOST_INITIAL_PC` | RO | captured stage-2 reset PC |
 | 0x0148 | `HOST_BYTES_RECEIVED` | RO | streaming progress in bytes |
 | 0x014C | `HOST_ERROR` | RO | AstraHost protocol status code |
+
+Software reads `CPU_CYCLES_LO` before `CPU_CYCLES_HI`. The TG68K bus performs
+a 32-bit MMIO read as two 16-bit transfers, so Vesta holds one coherent
+snapshot across both transfers and the following high-word read.
+
+### AstraHost runtime block service (0x0150)
+
+This is a queued raw-block controller backed by the SPI AstraHost service. It
+addresses only the dedicated Astra GPT partition; the FAT/exFAT boot volume is
+never exposed as a raw device. All LBAs are partition-relative and all DMA
+buffers are physical addresses in the 32 MiB SDRAM aperture.
+
+| Offset | Name | Acc | Description |
+|---|---|---|---|
+| 0x0150 | `BLOCK_ID` | RO | `0x484F5354` (`HOST`) |
+| 0x0154 | `BLOCK_VERSION` | RO | `0x00010000` |
+| 0x0158 | `BLOCK_CAPS` | RO | `[0]READ [1]WRITE [2]FLUSH` |
+| 0x015C | `BLOCK_STATE` | RO | `[0]LINK_UP [1]MEDIA_PRESENT [2]WRITE_ENABLE` |
+| 0x0160 | `BLOCK_MEDIA_GEN` | RO | changes when media identity/availability changes |
+| 0x0164 | `BLOCK_MEDIA_SIZE_HI` | RO | partition size in 512-byte sectors, high word |
+| 0x0168 | `BLOCK_MEDIA_SIZE_LO` | RO | partition size in 512-byte sectors, low word |
+| 0x016C | `BLOCK_QUEUE` | RO | completion valid/level and request ready/level |
+| 0x0170 | `BLOCK_REQ_ID` | RW | nonzero caller-owned request identifier |
+| 0x0174 | `BLOCK_REQ_OP` | RW | flags `[15:8]` (zero in v1.0), operation `[7:0]` |
+| 0x0178 | `BLOCK_REQ_LBA_HI` | RW | partition-relative LBA, high word |
+| 0x017C | `BLOCK_REQ_LBA_LO` | RW | partition-relative LBA, low word |
+| 0x0180 | `BLOCK_REQ_SECTORS` | RW | low 16 bits; maximum is `BLOCK_MAX_SECTORS` |
+| 0x0184 | `BLOCK_REQ_BUFFER` | RW | aligned physical SDRAM address |
+| 0x0188 | `BLOCK_REQ_SUBMIT` | WO | write bit 0 to atomically validate and enqueue |
+| 0x018C | `BLOCK_CPL_ID` | RO | head completion request ID |
+| 0x0190 | `BLOCK_CPL_STATUS` | RO | status `[31:16]`, completed sectors `[15:0]` |
+| 0x0194 | `BLOCK_CPL_DETAIL` | RO | backend-specific diagnostic detail |
+| 0x0198 | `BLOCK_CPL_MEDIA_GEN` | RO | generation captured by the request |
+| 0x019C | `BLOCK_CPL_HOST_GEN` | RO | SPI service generation captured by the request |
+| 0x01A0 | `BLOCK_CPL_POP` | WO | write bit 0 after copying the complete record |
+| 0x01A4 | `BLOCK_ERROR` | RW1C | sticky submission validation errors |
+| 0x01A8 | `BLOCK_HOST_GEN` | RO | current SPI service generation |
+| 0x01AC | `BLOCK_STATE_ACK` | WO | write bit 0 to acknowledge state-change IRQ |
+| 0x01B0 | `BLOCK_MAX_SECTORS` | RO | negotiated maximum sectors per request |
+
+Operations are `1=READ`, `2=WRITE`, and `3=FLUSH`. Submission validates the
+operation, nonzero ID, reserved flags, count, 4-byte-aligned DMA range,
+media/write state, LBA range, arithmetic wrap, and queue capacity before any
+descriptor crosses into the SDRAM clock domain. A completion record remains
+stable until `BLOCK_CPL_POP`. Drivers must reject completions whose media or
+host generation no longer matches their live device instance.
 
 Phases are `0=idle`, `1=write`, `2=read/verify`, and `3=done`. Starting the
 test clears the prior result. POST writes and verifies an address-derived
@@ -203,24 +249,35 @@ errors, §3.)
 | 0x0304 | `IRQ_ENABLE` | RW | per-source mask |
 | 0x0308 | `IRQ_SOFT` | RW | software-set pending (softirq / IPC) |
 | 0x030C | `IRQ_ACK` | RW1C | clear edge-triggered pending |
-| 0x0310 | `IRQ_CURRENT` | RO | `[2:0]` active IPL, `[7:0]`... top source, `[15:8]` its vector |
+| 0x0310 | `IRQ_CURRENT` | RO | `[31]VALID [23:16]VECTOR [12:8]SOURCE [2:0]IPL` |
 | 0x0380 | `IRQ_CFG[32]` | RW | per-source config: `[2:0]` IPL level (1-7), `[15:8]` vector, `[16]` edge |
 
 **Sources** (bit index in the bitmaps / `IRQ_CFG` index):
 ```
-0 TIMER0   1 TIMER1   2 UART_RX  3 UART_TX  4 SD  5 KEYBOARD  6 GAMEPAD
-8 VEGA     9 ASTRAEA  10 LYRA
+0 TIMER0   1 TIMER1   2 UART_RX  3 UART_TX  4 STORAGE  5 INPUT
+6 RESERVED   7 USB_OHCI   8 VEGA   9 ASTRAEA   10 LYRA
 ```
 The chip lines (`VEGA`/`ASTRAEA`/`LYRA`) are the OR of that chip's own
 `IRQ_STAT & IRQ_EN`; the handler reads the chip's `IRQ_STAT` for the exact event
 (vblank vs raster, blit vs copper, …). The controller presents the highest-level
-pending+enabled source on the IPL lines; ties break by source index.
+pending+enabled source on the IPL lines; ties break by source index. The
+selected IPL is registered on the CPU clock, so a pending/mask/configuration
+change reaches the CPU no more than one CPU clock later and never places the
+priority encoder in the TG68K execution path.
+
+Level sources remain pending until the device condition clears. Edge sources
+latch rising edges and clear through `IRQ_ACK`; a simultaneous new edge wins
+over the clear. `IRQ_SOFT` bits are independently set/cleared by software. A
+CPU-space interrupt acknowledge returns the configured vector for the lowest
+source index at the acknowledged IPL, or Motorola spurious vector 24 if no
+source matches.
 
 ---
 
 ## 5. Timers (0x0400) — 2 timers
 
-Timer `n` at `0x0400 + n*0x10`. Down-counters from `LOAD` at `sysclk / prescale`.
+Timer `n` at `0x0400 + n*0x10`. Down-counters from `LOAD` at the CPU clock
+divided by `2^PRESCALE`.
 
 | +Off | Name | Acc | Description |
 |---|---|---|---|
@@ -230,7 +287,8 @@ Timer `n` at `0x0400 + n*0x10`. Down-counters from `LOAD` at `sysclk / prescale`
 | 0x0C | `TMR_STATUS` | RW1C | `[0]EXPIRED` |
 
 Expiry raises `TIMER0`/`TIMER1` IRQ and, if `PERIODIC`, reloads. One-shot stops
-at 0. Prescale is a power-of-two divide for µs…ms ranges.
+at 0. `EXPIRED` is sticky and must be cleared by the handler; a new expiration
+wins over a simultaneous RW1C clear.
 
 ---
 
@@ -242,10 +300,10 @@ to the ESP32 and is never an AstraHost transport.
 
 | Offset | Name | Acc | Description |
 |---|---|---|---|
-| 0x0500 | `UART_DATA` | RW | read = pop RX byte; write = push TX byte |
-| 0x0504 | `UART_STATUS` | RO | `[0]TX_READY [1]RX_VALID [2]TX_BUSY [3]RX_OVERRUN` |
-| 0x0508 | `UART_CTRL` | RW | `[0]TX_IRQ_EN [1]RX_IRQ_EN` |
-| 0x050C | `UART_BAUD` | RW | `[15:0]` divisor = sysclk / baud |
+| 0x0500 | `UART_DATA` | WO | Write a TX byte in `[7:0]` when `TX_READY` is set |
+| 0x0504 | `UART_STATUS` | RO | `[0]TX_READY [1]TX_BUSY` |
+| 0x0508 | `UART_RX_STATUS` | RW1C | `[0]RX_READY [1]RX_OVERRUN [15:8]RX_LEVEL`; write bit 1 to clear overrun |
+| 0x050C | `UART_RX_DATA` | RO/pop | Received byte in `[7:0]`; a completed read consumes one FIFO entry |
 
 ---
 
@@ -267,16 +325,26 @@ software.
 
 ## 8. Input (0x0700)
 
-Generic surface; the physical layer (PS/2, USB-HID via ESP32, GPIO pads) is
-board-specific and feeds these registers.
+One coherent FIFO carries normalized keyboard, pointer, and gamepad events
+from AstraHost. The physical producer is board/service-specific, but every
+event reaches the FPGA over SPI and crosses into the CPU clock domain through
+a handshake FIFO.
 
 | Offset | Name | Acc | Description |
 |---|---|---|---|
-| 0x0700 | `PAD0` | RO | gamepad 0 button bitmap |
-| 0x0704 | `PAD1` | RO | gamepad 1 button bitmap |
-| 0x0708 | `KEY_DATA` | RO | `[7:0]` scancode (read pops FIFO), `[8]` valid |
-| 0x070C | `KEY_STATUS` | RO | `[0]RX_VALID [7:1]` FIFO count |
-| 0x0710 | `INPUT_CTRL` | RW | IRQ enables etc. |
+| 0x0700 | `INPUT_ID` | RO | `0x494E5054` (`INPT`) |
+| 0x0704 | `INPUT_VERSION` | RO | `0x00010000` |
+| 0x0708 | `INPUT_CAPS` | RO | `[0]KEYBOARD [1]POINTER [2]GAMEPAD` |
+| 0x070C | `INPUT_STATUS` | RO | `[8]VALID [4:0]LEVEL` |
+| 0x0710 | `INPUT_HEADER` | RO | class `[31:24]`, kind `[23:16]`, flags `[15:0]` |
+| 0x0714 | `INPUT_VALUE` | RO | event payload |
+| 0x0718 | `INPUT_TIMESTAMP` | RO | ESP monotonic milliseconds, modulo 2^32 |
+| 0x071C | `INPUT_DEVICE_SEQ` | RO | device ID `[31:16]`, sequence `[15:0]` |
+| 0x0720 | `INPUT_HOST_GEN` | RO | source service generation |
+| 0x0724 | `INPUT_POP` | WO | write bit 0 after copying the complete event |
+
+The head record is stable until `INPUT_POP`; reads do not consume individual
+fields. Input IRQ source 5 remains asserted while any event is queued.
 
 ---
 
@@ -377,8 +445,7 @@ IRQ lines (read the chip's `IRQ_STAT` for detail).
 **Open:**
 1. Permanent location and ABI for CPU/cache/PMMU performance counters currently
    exposed in the retired aperture.
-2. AstraHost raw multi-sector SPI service and FPGA DMA interface details.
-3. Watchdog timer (for `RESET_REASON=watchdog`).
-4. `SCRATCH` persistence across soft reset — how many words for boot handoff.
-5. Whether central DMA-fence configuration and fault reporting belong in Vesta
+2. Watchdog timer (for `RESET_REASON=watchdog`).
+3. `SCRATCH` persistence across soft reset — how many words for boot handoff.
+4. Whether central DMA-fence configuration and fault reporting belong in Vesta
    or Astraea.

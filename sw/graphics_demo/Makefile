@@ -1,10 +1,11 @@
-CROSS ?= m68k-linux-gnu-
+include ../../mk/m68k-cross.mk
 CC = $(CROSS)gcc
 OBJCOPY = $(CROSS)objcopy
 OBJDUMP = $(CROSS)objdump
 
 CFLAGS = -m68030 -msoft-float -Os -ffreestanding -fno-builtin -nostdlib \
-         -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
+         -ffunction-sections -fdata-sections -Wa,--noexecstack \
+         -Wall -Wextra -Werror \
          -I../include $(EXTRA_CFLAGS)
 LDFLAGS = -T ../boot/astra_st.ld -nostdlib \
           -Wl,--build-id=none,--gc-sections,-Map=astra_graphics_demo.map

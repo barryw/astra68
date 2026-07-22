@@ -1,4 +1,4 @@
-// Thirty-two 4bpp sprites rendered into ping-pong scanline buffers. Descriptor
+// Sixteen 4bpp sprites rendered into ping-pong scanline buffers. Descriptor
 // evaluation and pattern fetch happen in the SDRAM clock domain; scanout only
 // touches deterministic BRAM.
 `default_nettype none
@@ -11,6 +11,13 @@ module vega_sprite_builder (
     input  wire [3:0]  cpu_be,
     input  wire [31:0] cpu_wdata,
     output reg  [31:0] cpu_rdata,
+    input  wire [1:0]  cpu_shadow_bank,
+    input  wire [1:0]  cpu_write_bank,
+    input  wire        scene_copy_read,
+    input  wire        scene_copy_write,
+    input  wire [1:0]  scene_copy_source_bank,
+    input  wire [1:0]  scene_copy_dest_bank,
+    input  wire [7:0]  scene_copy_index,
 
     input  wire        mem_clk,
     input  wire        mem_rst,
@@ -71,41 +78,122 @@ module vega_sprite_builder (
     localparam integer RF_MEM_VALID = 0;
     localparam integer RF_MEM_LOCK = 1;
 
-    // The register table is exactly the ABI's 32 entries x 8 longs. Port A is
+    // The register table is exactly the ABI's 16 entries x 8 longs. Port A is
     // CPU/copper MMIO; port B evaluates one coherent descriptor per scanline.
-    (* ram_style = "block" *) reg [31:0] descriptor_mem [0:255];
+    (* ram_style = "block" *) reg [31:0] descriptor_mem0 [0:127];
+    (* ram_style = "block" *) reg [31:0] descriptor_mem1 [0:127];
+    (* ram_style = "block" *) reg [31:0] descriptor_mem2 [0:127];
     reg [31:0] descriptor_mem_q;
-    reg [7:0] descriptor_read_addr;
+    reg [31:0] descriptor_cpu_q0;
+    reg [31:0] descriptor_cpu_q1;
+    reg [31:0] descriptor_cpu_q2;
+    reg [31:0] descriptor_copy_value;
+    reg [6:0] descriptor_read_addr;
+    wire [7:0] descriptor_cpu_read_addr =
+        (scene_copy_read || scene_copy_write) ?
+        scene_copy_index : cpu_word_addr;
+    wire descriptor_cpu_addr_valid = !descriptor_cpu_read_addr[7];
+    wire [6:0] descriptor_cpu_mem_addr = descriptor_cpu_read_addr[6:0];
+    wire descriptor_cpu_write = scene_copy_write || cpu_table_write;
+    wire [1:0] descriptor_cpu_write_bank = scene_copy_write ?
+        scene_copy_dest_bank : cpu_write_bank;
+    wire [3:0] descriptor_cpu_write_be = scene_copy_write ?
+        4'b1111 : cpu_be;
+    wire [31:0] descriptor_cpu_write_data = scene_copy_write ?
+        descriptor_copy_value : cpu_wdata;
     integer descriptor_init;
     initial begin
-        for (descriptor_init = 0; descriptor_init < 256;
-             descriptor_init = descriptor_init + 1)
-            descriptor_mem[descriptor_init] = 32'd0;
+        for (descriptor_init = 0; descriptor_init < 128;
+             descriptor_init = descriptor_init + 1) begin
+            descriptor_mem0[descriptor_init] = 32'd0;
+            descriptor_mem1[descriptor_init] = 32'd0;
+            descriptor_mem2[descriptor_init] = 32'd0;
+        end
+    end
+
+    always @* begin
+        case (cpu_shadow_bank)
+            2'd0: cpu_rdata = descriptor_cpu_q0;
+            2'd1: cpu_rdata = descriptor_cpu_q1;
+            default: cpu_rdata = descriptor_cpu_q2;
+        endcase
+        case (scene_copy_source_bank)
+            2'd0: descriptor_copy_value = descriptor_cpu_q0;
+            2'd1: descriptor_copy_value = descriptor_cpu_q1;
+            default: descriptor_copy_value = descriptor_cpu_q2;
+        endcase
     end
 
     always @(posedge cpu_clk) begin
-        cpu_rdata <= descriptor_mem[cpu_word_addr];
-        if (cpu_table_write) begin
-            if (cpu_be[3])
-                descriptor_mem[cpu_word_addr][31:24] <= cpu_wdata[31:24];
-            if (cpu_be[2])
-                descriptor_mem[cpu_word_addr][23:16] <= cpu_wdata[23:16];
-            if (cpu_be[1])
-                descriptor_mem[cpu_word_addr][15:8] <= cpu_wdata[15:8];
-            if (cpu_be[0])
-                descriptor_mem[cpu_word_addr][7:0] <= cpu_wdata[7:0];
+        // Each scene bank is one physical BRAM port. A copy-read cycle loads
+        // all three outputs; the following copy-write cycle selects the source
+        // bank and writes exactly one destination bank.
+        if (descriptor_cpu_addr_valid) begin
+            descriptor_cpu_q0 <= descriptor_mem0[descriptor_cpu_mem_addr];
+            descriptor_cpu_q1 <= descriptor_mem1[descriptor_cpu_mem_addr];
+            descriptor_cpu_q2 <= descriptor_mem2[descriptor_cpu_mem_addr];
+        end else begin
+            descriptor_cpu_q0 <= 32'd0;
+            descriptor_cpu_q1 <= 32'd0;
+            descriptor_cpu_q2 <= 32'd0;
+        end
+        if (descriptor_cpu_write && descriptor_cpu_addr_valid) begin
+            case (descriptor_cpu_write_bank)
+                2'd0: begin
+                    if (descriptor_cpu_write_be[3])
+                        descriptor_mem0[descriptor_cpu_mem_addr][31:24] <=
+                            descriptor_cpu_write_data[31:24];
+                    if (descriptor_cpu_write_be[2])
+                        descriptor_mem0[descriptor_cpu_mem_addr][23:16] <=
+                            descriptor_cpu_write_data[23:16];
+                    if (descriptor_cpu_write_be[1])
+                        descriptor_mem0[descriptor_cpu_mem_addr][15:8] <=
+                            descriptor_cpu_write_data[15:8];
+                    if (descriptor_cpu_write_be[0])
+                        descriptor_mem0[descriptor_cpu_mem_addr][7:0] <=
+                            descriptor_cpu_write_data[7:0];
+                end
+                2'd1: begin
+                    if (descriptor_cpu_write_be[3])
+                        descriptor_mem1[descriptor_cpu_mem_addr][31:24] <=
+                            descriptor_cpu_write_data[31:24];
+                    if (descriptor_cpu_write_be[2])
+                        descriptor_mem1[descriptor_cpu_mem_addr][23:16] <=
+                            descriptor_cpu_write_data[23:16];
+                    if (descriptor_cpu_write_be[1])
+                        descriptor_mem1[descriptor_cpu_mem_addr][15:8] <=
+                            descriptor_cpu_write_data[15:8];
+                    if (descriptor_cpu_write_be[0])
+                        descriptor_mem1[descriptor_cpu_mem_addr][7:0] <=
+                            descriptor_cpu_write_data[7:0];
+                end
+                default: begin
+                    if (descriptor_cpu_write_be[3])
+                        descriptor_mem2[descriptor_cpu_mem_addr][31:24] <=
+                            descriptor_cpu_write_data[31:24];
+                    if (descriptor_cpu_write_be[2])
+                        descriptor_mem2[descriptor_cpu_mem_addr][23:16] <=
+                            descriptor_cpu_write_data[23:16];
+                    if (descriptor_cpu_write_be[1])
+                        descriptor_mem2[descriptor_cpu_mem_addr][15:8] <=
+                            descriptor_cpu_write_data[15:8];
+                    if (descriptor_cpu_write_be[0])
+                        descriptor_mem2[descriptor_cpu_mem_addr][7:0] <=
+                            descriptor_cpu_write_data[7:0];
+                end
+            endcase
         end
     end
 
     always @(posedge mem_clk)
-        descriptor_mem_q <= descriptor_mem[descriptor_read_addr];
+        descriptor_mem_q <= descriptor_mem0[descriptor_read_addr];
 
     // Compose eight pixels in parallel so a saturated sprite line can meet
     // the scanline deadline. The inactive build bank is cleared while the
     // independent descriptor pipeline runs.
     (* ram_style = "block" *) reg [71:0] behind_line [0:255];
     (* ram_style = "block" *) reg [71:0] front_line [0:255];
-    (* ram_style = "block" *) reg [47:0] collision_line [0:255];
+    (* ram_style = "block" *) reg [39:0] collision_line [0:255];
 
     wire [7:0] pixel_line_addr = {display_bank, pixel_x[9:3]};
     reg [71:0] behind_word_q;
@@ -142,40 +230,40 @@ module vega_sprite_builder (
     end
 
     // Active metadata is consumed by index after descriptor evaluation. Keep
-    // it in three block RAMs instead of building seven 32-way register muxes.
+    // it in block RAM instead of building wide register muxes.
     // {ctrl, screen_x, visible_width, source_low, row_base}
-    (* ram_style = "block" *) reg [80:0] active_meta_mem [0:31];
+    (* ram_style = "block" *) reg [80:0] active_meta_mem [0:15];
     reg [80:0] active_meta_q;
-    reg [4:0] active_meta_read_addr;
+    reg [3:0] active_meta_read_addr;
 
     // One bitmap per priority implements the exact admission order: priority
-    // 15 down to 0, then descriptor index 0 up to 31. This replaces the
-    // repeated 32-entry comparison tournament with a small priority encoder.
-    (* ram_style = "distributed" *) reg [31:0] priority_masks [0:15];
-    (* ram_style = "distributed" *) reg [31:0] priority_eval_masks [0:15];
-    (* ram_style = "distributed" *) reg [31:0] priority_first_masks [0:15];
+    // 15 down to 0, then descriptor index 0 up to 15.
+    (* ram_style = "distributed" *) reg [15:0] priority_masks [0:15];
+    (* ram_style = "distributed" *) reg [15:0] priority_eval_masks [0:15];
+    (* ram_style = "distributed" *) reg [15:0] priority_first_masks [0:15];
     reg [3:0] priority_read_addr;
-    wire [31:0] priority_read_data = priority_masks[priority_read_addr];
-    wire [31:0] priority_read_onehot =
+    wire [15:0] priority_read_data = priority_masks[priority_read_addr];
+    wire [15:0] priority_read_onehot =
         priority_first_masks[priority_read_addr];
     reg priority_write_en;
     reg [3:0] priority_write_addr;
-    reg [31:0] priority_write_data;
+    reg [15:0] priority_write_data;
 
     reg [19:0] desc_ctrl;
     reg desc_ctrl_invalid;
     reg [31:0] desc_pos;
     reg [31:0] desc_size;
     reg [31:0] desc_base;
-    reg [4:0] desc_index;
+    reg [3:0] desc_index;
     reg [2:0] desc_word;
     reg       desc_pipe1_valid;
     reg       desc_pipe2_valid;
-    reg [4:0] desc_pipe1_index;
-    reg [4:0] desc_pipe2_index;
+    reg [3:0] desc_pipe1_index;
+    reg [3:0] desc_pipe2_index;
     reg [2:0] desc_pipe1_word;
     reg [2:0] desc_pipe2_word;
     reg       desc_issue_done;
+    reg       desc_eval_done;
     reg [5:0] state;
     reg [1:0] request_facts;
     reg job_bank;
@@ -194,7 +282,7 @@ module vega_sprite_builder (
     // multiply, base addition, and range checking so evaluation does not add
     // three dead clocks to every descriptor.
     reg eval_raw_valid;
-    reg [4:0] eval_raw_index;
+    reg [3:0] eval_raw_index;
     reg [19:0] eval_raw_ctrl;
     reg eval_raw_ctrl_invalid;
     reg [31:0] eval_raw_pos;
@@ -266,7 +354,7 @@ module vega_sprite_builder (
     end
 
     reg eval_geometry_valid;
-    reg [4:0] eval_geometry_index;
+    reg [3:0] eval_geometry_index;
     reg [19:0] eval_geometry_ctrl;
     reg eval_geometry_active;
     reg eval_geometry_invalid;
@@ -280,7 +368,7 @@ module vega_sprite_builder (
     reg [16:0] eval_geometry_row_bytes;
 
     reg eval_product_valid;
-    reg [4:0] eval_product_index;
+    reg [3:0] eval_product_index;
     reg [19:0] eval_product_ctrl;
     reg eval_product_active;
     reg eval_product_invalid;
@@ -293,7 +381,7 @@ module vega_sprite_builder (
     reg [31:0] eval_product_offset;
 
     reg eval_base_valid;
-    reg [4:0] eval_base_index;
+    reg [3:0] eval_base_index;
     reg [19:0] eval_base_ctrl;
     reg eval_base_active;
     reg eval_base_invalid;
@@ -303,11 +391,11 @@ module vega_sprite_builder (
     reg [15:0] eval_base_full_width;
     reg [16:0] eval_base_row_bytes;
     reg [31:0] eval_base_row_base_wide;
-    wire [31:0] priority_eval_read_data =
+    wire [15:0] priority_eval_read_data =
         priority_eval_masks[eval_base_ctrl[11:8]];
 
     reg eval_final_valid;
-    reg [4:0] eval_final_index;
+    reg [3:0] eval_final_index;
     reg [19:0] eval_final_ctrl;
     reg eval_final_active;
     reg eval_final_invalid;
@@ -318,7 +406,7 @@ module vega_sprite_builder (
     reg [15:0] eval_final_source_low;
     reg [31:0] eval_final_row_base_wide;
     reg eval_final_address_invalid;
-    reg [31:0] eval_final_priority_mask;
+    reg [15:0] eval_final_priority_mask;
 
     // Active sprites always have a nonzero row span. Validate the inclusive
     // final byte so a legal row ending at 0x01ffffff is a single carry test.
@@ -331,18 +419,18 @@ module vega_sprite_builder (
         !eval_final_address_invalid;
 
     reg [3:0] select_priority;
-    reg [31:0] select_priority_mask;
-    reg [31:0] selected_onehot_q;
+    reg [15:0] select_priority_mask;
+    reg [15:0] selected_onehot_q;
     reg [9:0] select_meta_width;
     reg [15:0] budget_remaining;
     reg overflow_frame_mem;
     reg overflow_line_mem;
 
     reg render_end_after_sprite;
-    reg [4:0] render_order [0:31];
-    reg [5:0] render_count;
-    reg [5:0] render_position;
-    reg [4:0] render_sprite_index;
+    reg [3:0] render_order [0:15];
+    reg [4:0] render_count;
+    reg [4:0] render_position;
+    reg [3:0] render_sprite_index;
     reg [19:0] render_ctrl;
     reg [9:0] render_screen_x;
     reg [9:0] render_remaining;
@@ -371,16 +459,15 @@ module vega_sprite_builder (
 
     // Admission has two cycles between selections while metadata is consumed.
     // The descriptor pass records each priority's first one-hot result, so a
-    // new priority does not put a 32-bit carry chain after the mask RAM.
+    // new priority does not put a carry chain after the mask RAM.
     // Subsequent selections use the already-registered working mask.
-    wire [31:0] selection_mask_onehot = select_priority_mask &
-        (~select_priority_mask + 32'd1);
-    wire [4:0] selected_index = {
-        |(selected_onehot_q & 32'hffff0000),
-        |(selected_onehot_q & 32'hff00ff00),
-        |(selected_onehot_q & 32'hf0f0f0f0),
-        |(selected_onehot_q & 32'hcccccccc),
-        |(selected_onehot_q & 32'haaaaaaaa)
+    wire [15:0] selection_mask_onehot = select_priority_mask &
+        (~select_priority_mask + 16'd1);
+    wire [3:0] selected_index = {
+        |(selected_onehot_q & 16'hff00),
+        |(selected_onehot_q & 16'hf0f0),
+        |(selected_onehot_q & 16'hcccc),
+        |(selected_onehot_q & 16'haaaa)
     };
     wire [19:0] active_meta_ctrl = active_meta_q[80:61];
     wire [9:0] active_meta_x = active_meta_q[60:51];
@@ -389,12 +476,12 @@ module vega_sprite_builder (
     wire [24:0] active_meta_row_base = active_meta_q[24:0];
 
     always @* begin
-        active_meta_read_addr = 5'd0;
-        if (state == ST_SELECT && select_priority_mask != 32'd0)
+        active_meta_read_addr = 4'd0;
+        if (state == ST_SELECT && select_priority_mask != 16'd0)
             active_meta_read_addr = selected_index;
-        else if (render_position != 6'd0)
+        else if (render_position != 5'd0)
             active_meta_read_addr =
-                render_order[render_position - 6'd1];
+                render_order[render_position - 5'd1];
     end
 
     always @* begin
@@ -408,7 +495,7 @@ module vega_sprite_builder (
 
         priority_write_en = 1'b0;
         priority_write_addr = 4'd0;
-        priority_write_data = 32'd0;
+        priority_write_data = 16'd0;
         if (state == ST_CLEAR) begin
             priority_write_en = 1'b1;
             priority_write_addr = clear_chunk[3:0];
@@ -416,7 +503,7 @@ module vega_sprite_builder (
             priority_write_en = 1'b1;
             priority_write_addr = eval_final_ctrl[11:8];
             priority_write_data = eval_final_priority_mask |
-                (32'd1 << eval_final_index);
+                (16'd1 << eval_final_index);
         end
     end
 
@@ -426,11 +513,11 @@ module vega_sprite_builder (
             priority_eval_masks[priority_write_addr] <= priority_write_data;
         end
         if (!mem_rst && state == ST_CLEAR)
-            priority_first_masks[clear_chunk[3:0]] <= 32'd0;
+            priority_first_masks[clear_chunk[3:0]] <= 16'd0;
         else if (!mem_rst && eval_final_valid && eval_final_accept &&
-                 eval_final_priority_mask == 32'd0)
+                 eval_final_priority_mask == 16'd0)
             priority_first_masks[eval_final_ctrl[11:8]] <=
-                32'd1 << eval_final_index;
+                16'd1 << eval_final_index;
     end
 
     always @(posedge mem_clk) begin
@@ -489,8 +576,8 @@ module vega_sprite_builder (
 
     reg [71:0] behind_build_q;
     reg [71:0] front_build_q;
-    reg [47:0] collision_build_q;
-    reg [47:0] collision_compose_q;
+    reg [39:0] collision_build_q;
+    reg [39:0] collision_compose_q;
     reg [2:0] prep_nibble_offset_q;
     reg prep_need_word1_q;
     reg [2:0] prep_screen_lane_q;
@@ -525,14 +612,14 @@ module vega_sprite_builder (
 
     reg [71:0] composed_behind;
     reg [71:0] composed_front;
-    reg [47:0] composed_collision;
+    reg [39:0] composed_collision;
     integer compose_lane;
 
     wire [3:0] compose_lane_nibble [0:7];
-    wire [5:0] compose_lane_owner [0:7];
+    wire [4:0] compose_lane_owner [0:7];
     wire [7:0] compose_lane_opaque;
     wire [7:0] compose_lane_collides;
-    wire [31:0] compose_owner_bit [0:7];
+    wire [15:0] compose_owner_bit [0:7];
     genvar collision_lane;
     generate
         for (collision_lane = 0; collision_lane < 8;
@@ -540,40 +627,40 @@ module vega_sprite_builder (
             assign compose_lane_nibble[collision_lane] =
                 compose_nibbles_q[(7 - collision_lane) * 4 +: 4];
             assign compose_lane_owner[collision_lane] =
-                collision_compose_q[(7 - collision_lane) * 6 +: 6];
+                collision_compose_q[(7 - collision_lane) * 5 +: 5];
             assign compose_lane_opaque[collision_lane] =
                 compose_lane_mask_q[collision_lane] &&
                 compose_lane_nibble[collision_lane] != render_ctrl[19:16];
             assign compose_lane_collides[collision_lane] =
                 compose_lane_opaque[collision_lane] && render_ctrl[5] &&
-                compose_lane_owner[collision_lane][5] &&
-                compose_lane_owner[collision_lane][4:0] !=
+                compose_lane_owner[collision_lane][4] &&
+                compose_lane_owner[collision_lane][3:0] !=
                     render_sprite_index;
             assign compose_owner_bit[collision_lane] =
                 compose_lane_collides[collision_lane] ?
-                (32'd1 << compose_lane_owner[collision_lane][4:0]) :
-                32'd0;
+                (16'd1 << compose_lane_owner[collision_lane][3:0]) :
+                16'd0;
         end
     endgenerate
 
-    wire [31:0] compose_owner_pair0 =
+    wire [15:0] compose_owner_pair0 =
         compose_owner_bit[0] | compose_owner_bit[1];
-    wire [31:0] compose_owner_pair1 =
+    wire [15:0] compose_owner_pair1 =
         compose_owner_bit[2] | compose_owner_bit[3];
-    wire [31:0] compose_owner_pair2 =
+    wire [15:0] compose_owner_pair2 =
         compose_owner_bit[4] | compose_owner_bit[5];
-    wire [31:0] compose_owner_pair3 =
+    wire [15:0] compose_owner_pair3 =
         compose_owner_bit[6] | compose_owner_bit[7];
-    wire [31:0] compose_owner_quad0 =
+    wire [15:0] compose_owner_quad0 =
         compose_owner_pair0 | compose_owner_pair1;
-    wire [31:0] compose_owner_quad1 =
+    wire [15:0] compose_owner_quad1 =
         compose_owner_pair2 | compose_owner_pair3;
-    wire [31:0] compose_owner_collision_bits =
+    wire [15:0] compose_owner_collision_bits =
         compose_owner_quad0 | compose_owner_quad1;
     wire compose_any_collision = |compose_lane_collides;
-    wire [31:0] compose_current_collision_bit = compose_any_collision ?
-        (32'd1 << render_sprite_index) : 32'd0;
-    wire [31:0] composed_collision_bits =
+    wire [15:0] compose_current_collision_bit = compose_any_collision ?
+        (16'd1 << render_sprite_index) : 16'd0;
+    wire [15:0] composed_collision_bits =
         compose_owner_collision_bits | compose_current_collision_bit;
 
     always @* begin
@@ -594,7 +681,7 @@ module vega_sprite_builder (
 
                 if (render_ctrl[5])
                     composed_collision[
-                        (7 - compose_lane) * 6 +: 6] =
+                        (7 - compose_lane) * 5 +: 5] =
                         {1'b1, render_sprite_index};
             end
         end
@@ -609,13 +696,13 @@ module vega_sprite_builder (
                                       72'd0 : composed_behind;
     wire [71:0] line_write_front = line_clear_active ?
                                      72'd0 : composed_front;
-    wire [47:0] line_write_collision = line_clear_active ?
-                                         48'd0 : composed_collision;
+    wire [39:0] line_write_collision = line_clear_active ?
+                                         40'd0 : composed_collision;
     always @(posedge mem_clk) begin
         if (mem_rst) begin
             behind_build_q <= 72'd0;
             front_build_q <= 72'd0;
-            collision_build_q <= 48'd0;
+            collision_build_q <= 40'd0;
         end else begin
             behind_build_q <= behind_line[build_line_addr];
             front_build_q <= front_line[build_line_addr];
@@ -628,8 +715,8 @@ module vega_sprite_builder (
         end
     end
 
-    reg [31:0] collision_bitmap_mem;
-    reg [31:0] collision_published_mem;
+    reg [15:0] collision_bitmap_mem;
+    reg [15:0] collision_published_mem;
     reg collision_line_event_mem;
     reg collision_toggle_mem;
     reg overflow_published_mem;
@@ -649,7 +736,7 @@ module vega_sprite_builder (
             collision_toggle_seen_cpu <= 1'b0;
             collision_event <= 1'b0;
         end else begin
-            collision_meta_cpu <= collision_published_mem;
+            collision_meta_cpu <= {16'd0, collision_published_mem};
             collision_bitmap <= collision_meta_cpu;
             overflow_meta_cpu <= overflow_published_mem;
             overflow <= overflow_meta_cpu;
@@ -718,18 +805,19 @@ module vega_sprite_builder (
             desc_pos <= 32'd0;
             desc_size <= 32'd0;
             desc_base <= 32'd0;
-            desc_index <= 5'd0;
+            desc_index <= 4'd0;
             desc_word <= 3'd0;
             desc_pipe1_valid <= 1'b0;
             desc_pipe2_valid <= 1'b0;
-            desc_pipe1_index <= 5'd0;
-            desc_pipe2_index <= 5'd0;
+            desc_pipe1_index <= 4'd0;
+            desc_pipe2_index <= 4'd0;
             desc_pipe1_word <= 3'd0;
             desc_pipe2_word <= 3'd0;
             desc_issue_done <= 1'b0;
-            descriptor_read_addr <= 8'd0;
+            desc_eval_done <= 1'b0;
+            descriptor_read_addr <= 7'd0;
             eval_raw_valid <= 1'b0;
-            eval_raw_index <= 5'd0;
+            eval_raw_index <= 4'd0;
             eval_raw_ctrl <= 20'd0;
             eval_raw_ctrl_invalid <= 1'b0;
             eval_raw_pos <= 32'd0;
@@ -737,7 +825,7 @@ module vega_sprite_builder (
             eval_raw_base <= 32'd0;
             eval_raw_pitch_word <= 32'd0;
             eval_geometry_valid <= 1'b0;
-            eval_geometry_index <= 5'd0;
+            eval_geometry_index <= 4'd0;
             eval_geometry_ctrl <= 20'd0;
             eval_geometry_active <= 1'b0;
             eval_geometry_invalid <= 1'b0;
@@ -750,7 +838,7 @@ module vega_sprite_builder (
             eval_geometry_base <= 32'd0;
             eval_geometry_row_bytes <= 17'd0;
             eval_product_valid <= 1'b0;
-            eval_product_index <= 5'd0;
+            eval_product_index <= 4'd0;
             eval_product_ctrl <= 20'd0;
             eval_product_active <= 1'b0;
             eval_product_invalid <= 1'b0;
@@ -762,7 +850,7 @@ module vega_sprite_builder (
             eval_product_row_bytes <= 17'd0;
             eval_product_offset <= 32'd0;
             eval_base_valid <= 1'b0;
-            eval_base_index <= 5'd0;
+            eval_base_index <= 4'd0;
             eval_base_ctrl <= 20'd0;
             eval_base_active <= 1'b0;
             eval_base_invalid <= 1'b0;
@@ -773,7 +861,7 @@ module vega_sprite_builder (
             eval_base_row_bytes <= 17'd0;
             eval_base_row_base_wide <= 32'd0;
             eval_final_valid <= 1'b0;
-            eval_final_index <= 5'd0;
+            eval_final_index <= 4'd0;
             eval_final_ctrl <= 20'd0;
             eval_final_active <= 1'b0;
             eval_final_invalid <= 1'b0;
@@ -784,18 +872,18 @@ module vega_sprite_builder (
             eval_final_source_low <= 16'd0;
             eval_final_row_base_wide <= 32'd0;
             eval_final_address_invalid <= 1'b0;
-            eval_final_priority_mask <= 32'd0;
+            eval_final_priority_mask <= 16'd0;
             select_priority <= 4'd0;
-            select_priority_mask <= 32'd0;
-            selected_onehot_q <= 32'd0;
+            select_priority_mask <= 16'd0;
+            selected_onehot_q <= 16'd0;
             select_meta_width <= 10'd0;
             budget_remaining <= 16'd0;
             overflow_frame_mem <= 1'b0;
             overflow_line_mem <= 1'b0;
             render_end_after_sprite <= 1'b0;
-            render_count <= 6'd0;
-            render_position <= 6'd0;
-            render_sprite_index <= 5'd0;
+            render_count <= 5'd0;
+            render_position <= 5'd0;
+            render_sprite_index <= 4'd0;
             render_ctrl <= 20'd0;
             render_screen_x <= 10'd0;
             render_remaining <= 10'd0;
@@ -818,9 +906,9 @@ module vega_sprite_builder (
             ascending_pattern_q <= 32'd0;
             compose_nibbles_q <= 32'd0;
             compose_lane_mask_q <= 8'd0;
-            collision_compose_q <= 48'd0;
-            collision_bitmap_mem <= 32'd0;
-            collision_published_mem <= 32'd0;
+            collision_compose_q <= 40'd0;
+            collision_bitmap_mem <= 16'd0;
+            collision_published_mem <= 16'd0;
             collision_line_event_mem <= 1'b0;
             collision_toggle_mem <= 1'b0;
             overflow_published_mem <= 1'b0;
@@ -830,6 +918,8 @@ module vega_sprite_builder (
             eval_product_valid <= eval_geometry_valid;
             eval_base_valid <= eval_product_valid;
             eval_final_valid <= eval_base_valid;
+            if (eval_final_valid && eval_final_index == 4'd15)
+                desc_eval_done <= 1'b1;
 
             if (eval_raw_valid) begin
                 eval_geometry_index <= eval_raw_index;
@@ -898,7 +988,7 @@ module vega_sprite_builder (
                 config_error <= 1'b1;
 
             if (state == ST_SELECT_SETUP ||
-                (state == ST_SELECT && select_priority_mask == 32'd0 &&
+                (state == ST_SELECT && select_priority_mask == 16'd0 &&
                  select_priority != 4'd0))
                 selected_onehot_q <= priority_read_onehot;
             else if (state == ST_SELECT_META)
@@ -936,12 +1026,12 @@ module vega_sprite_builder (
                         line_clear_active <= line_width != 10'd0;
                         line_clear_index <= 7'd0;
                         line_clear_count <= line_clear_count_calc[7:0];
-                        select_priority_mask <= 32'd0;
-                        render_count <= 6'd0;
+                        select_priority_mask <= 16'd0;
+                        render_count <= 5'd0;
                         overflow_line_mem <= 1'b0;
                         collision_line_event_mem <= 1'b0;
                         if (line_y == 10'd0) begin
-                            collision_bitmap_mem <= 32'd0;
+                            collision_bitmap_mem <= 16'd0;
                             overflow_frame_mem <= 1'b0;
                         end
                         set_state(ST_CLEAR);
@@ -960,11 +1050,12 @@ module vega_sprite_builder (
                 end
 
                 ST_DESC_SETUP: begin
-                    desc_index <= 5'd0;
+                    desc_index <= 4'd0;
                     desc_word <= 3'd0;
                     desc_pipe1_valid <= 1'b0;
                     desc_pipe2_valid <= 1'b0;
                     desc_issue_done <= 1'b0;
+                    desc_eval_done <= 1'b0;
                     set_state(ST_DESC_ISSUE);
                 end
 
@@ -980,10 +1071,10 @@ module vega_sprite_builder (
                         desc_pipe1_word <= desc_word;
                         if (desc_word == 3'd4) begin
                             desc_word <= 3'd0;
-                            if (desc_index == 5'd31)
+                            if (desc_index == 4'd15)
                                 desc_issue_done <= 1'b1;
                             else
-                                desc_index <= desc_index + 5'd1;
+                                desc_index <= desc_index + 4'd1;
                         end else begin
                             desc_word <= desc_word + 3'd1;
                         end
@@ -1013,14 +1104,15 @@ module vega_sprite_builder (
                                 eval_raw_pitch_word <= descriptor_mem_q;
                             end
                         endcase
-                        if (desc_pipe2_index == 5'd31 &&
+                        if (desc_pipe2_index == 4'd15 &&
                             desc_pipe2_word == 3'd4)
                             set_state(ST_DESC_DRAIN);
                     end
                 end
 
                 ST_DESC_DRAIN: begin
-                    if (eval_final_valid && eval_final_index == 5'd31 &&
+                    if ((desc_eval_done ||
+                         (eval_final_valid && eval_final_index == 4'd15)) &&
                         !line_clear_active)
                         set_state(ST_SELECT_SETUP);
                 end
@@ -1029,7 +1121,7 @@ module vega_sprite_builder (
                     select_priority <= 4'd15;
                     select_priority_mask <= priority_read_data;
                     budget_remaining <= job_budget;
-                    render_count <= 6'd0;
+                    render_count <= 5'd0;
                     set_state(ST_SELECT);
                 end
 
@@ -1037,10 +1129,10 @@ module vega_sprite_builder (
                 // full or dropped; lower-priority sprites cannot consume a
                 // higher-priority sprite's reserved scanline budget.
                 ST_SELECT: begin
-                    if (select_priority_mask == 32'd0) begin
+                    if (select_priority_mask == 16'd0) begin
                         if (select_priority == 4'd0) begin
                             render_position <= render_count;
-                            set_state(render_count == 6'd0 ?
+                            set_state(render_count == 5'd0 ?
                                       ST_FINISH : ST_FIND);
                         end else begin
                             select_priority <= select_priority - 4'd1;
@@ -1065,7 +1157,7 @@ module vega_sprite_builder (
                         select_meta_width <= budget_remaining[9:0]) begin
                         budget_remaining <= budget_remaining -
                                             {6'd0, select_meta_width};
-                        render_count <= render_count + 6'd1;
+                        render_count <= render_count + 5'd1;
                     end else begin
                         overflow_line_mem <= 1'b1;
                         overflow_frame_mem <= 1'b1;
@@ -1076,13 +1168,13 @@ module vega_sprite_builder (
                 // Admission stored topmost-to-bottommost order. Walk it in
                 // reverse so rendering remains bottom-to-top.
                 ST_FIND: begin
-                    if (render_position == 6'd0) begin
+                    if (render_position == 5'd0) begin
                         set_state(ST_FINISH);
                     end else begin
-                        render_position <= render_position - 6'd1;
+                        render_position <= render_position - 5'd1;
                         render_sprite_index <=
-                            render_order[render_position - 6'd1];
-                        render_end_after_sprite <= render_position == 6'd1;
+                            render_order[render_position - 5'd1];
+                        render_end_after_sprite <= render_position == 5'd1;
                         set_state(ST_FIND_META);
                     end
                 end
@@ -1169,7 +1261,7 @@ module vega_sprite_builder (
                 ST_LINE_WRITE: begin
                     collision_bitmap_mem <= collision_bitmap_mem |
                                             composed_collision_bits;
-                    if (composed_collision_bits != 32'd0)
+                    if (composed_collision_bits != 16'd0)
                         collision_line_event_mem <= 1'b1;
 
                     if (render_remaining <= render_chunk_count) begin
@@ -1179,11 +1271,11 @@ module vega_sprite_builder (
                             // The next metadata word has been prefetched while
                             // the current sprite rendered. Retire and launch it
                             // without returning through the BRAM-read states.
-                            render_position <= render_position - 6'd1;
+                            render_position <= render_position - 5'd1;
                             render_sprite_index <=
-                                render_order[render_position - 6'd1];
+                                render_order[render_position - 5'd1];
                             render_end_after_sprite <=
-                                render_position == 6'd1;
+                                render_position == 5'd1;
                             render_ctrl <= active_meta_ctrl;
                             render_screen_x <= active_meta_x;
                             render_remaining <= active_meta_width;

@@ -22,6 +22,13 @@ module tb_astraea_draw;
     wire cpu_irq;
     wire cache_flush;
 
+    reg front_guard_valid = 1'b0;
+    reg [24:0] front_guard_start = 25'd0;
+    reg [25:0] front_guard_end = 26'd0;
+    reg pending_guard_valid = 1'b0;
+    reg [24:0] pending_guard_start = 25'd0;
+    reg [25:0] pending_guard_end = 26'd0;
+
     wire mem_lock;
     wire mem_valid;
     wire mem_ready;
@@ -37,7 +44,14 @@ module tb_astraea_draw;
         .cpu_write_stb(cpu_write_stb), .cpu_reg(cpu_reg),
         .cpu_be(cpu_be), .cpu_wdata(cpu_wdata), .cpu_rdata(cpu_rdata),
         .cpu_busy(cpu_busy), .cpu_done(cpu_done), .cpu_irq(cpu_irq),
-        .cache_flush(cache_flush), .mem_clk(mem_clk), .mem_rst(mem_rst),
+        .cache_flush(cache_flush),
+        .front_guard_valid(front_guard_valid),
+        .front_guard_start(front_guard_start),
+        .front_guard_end(front_guard_end),
+        .pending_guard_valid(pending_guard_valid),
+        .pending_guard_start(pending_guard_start),
+        .pending_guard_end(pending_guard_end),
+        .mem_clk(mem_clk), .mem_rst(mem_rst),
         .mem_lock(mem_lock), .mem_valid(mem_valid), .mem_ready(mem_ready),
         .mem_write(mem_write), .mem_addr(mem_addr), .mem_be(mem_be),
         .mem_wdata(mem_wdata), .mem_rsp_valid(mem_rsp_valid),
@@ -952,6 +966,36 @@ module tb_astraea_draw;
         write_reg(5'd17, 32'd0);
         write_reg(5'd18, 32'd0);
         run_command(32'd8, 8'd1);
+
+        // Destination protection is checked against the complete clipped
+        // surface before an operation can issue its first memory request.
+        configure_surface(16'h5001, 32, 0, 1, 1, 12, 9,
+                          8'hde, 8'h00);
+        write_reg(5'd5, packed_xy(1, 1));
+        write_reg(5'd6, packed_xy(11, 8));
+        front_guard_start = 25'd20480;
+        front_guard_end = 26'd20992;
+        front_guard_valid = 1'b1;
+        run_command(32'd0, 8'd5);
+        front_guard_valid = 1'b0;
+
+        pending_guard_start = 25'd20544;
+        pending_guard_end = 26'd20608;
+        pending_guard_valid = 1'b1;
+        run_command(32'd2, 8'd5);
+        pending_guard_valid = 1'b0;
+
+        // Flood fill protects its SDRAM work queue as well as its target.
+        configure_surface(16'h5401, 32, 0, 1, 1, 12, 9,
+                          8'hde, 8'h00);
+        write_reg(5'd5, packed_xy(2, 2));
+        write_reg(5'd17, 32'h00006001);
+        write_reg(5'd18, 32'd8);
+        pending_guard_start = 25'd24576;
+        pending_guard_end = 26'd24832;
+        pending_guard_valid = 1'b1;
+        run_command(32'd12, 8'd5);
+        pending_guard_valid = 1'b0;
 
         compare_memory();
         if (cpu_irq)

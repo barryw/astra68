@@ -9,7 +9,7 @@ module tb_astraea_chip;
     reg clk = 1'b0;
     reg mem_clk = 1'b0;
     always #40 clk = ~clk;
-    always #6.666 mem_clk = ~mem_clk;
+    always #8.333 mem_clk = ~mem_clk;
     reg rst = 1'b1;
 
     reg cpu_write_stb = 1'b0;
@@ -43,6 +43,9 @@ module tb_astraea_chip;
         .beam_x(10'd0), .beam_y(10'd0),
         .cop_move_stb(cop_move_stb), .cop_move_addr(cop_move_addr),
         .cop_move_data(cop_move_data),
+        .front_guard_valid(1'b0), .front_guard_start(25'd0),
+        .front_guard_end(26'd0), .pending_guard_valid(1'b0),
+        .pending_guard_start(25'd0), .pending_guard_end(26'd0),
         .mem_clk(mem_clk), .mem_rst(rst), .mem_lock(mem_lock),
         .mem_valid(mem_valid), .mem_ready(mem_ready),
         .mem_write(mem_write), .mem_addr(mem_addr), .mem_be(mem_be),
@@ -142,7 +145,7 @@ module tb_astraea_chip;
         if (value !== 32'h41535452)
             $fatal(1, "Astraea ID mismatch %08x", value);
         read32(16'h0004, value);
-        if (value !== 32'h00030000)
+        if (value !== 32'h00040000)
             $fatal(1, "Astraea version mismatch %08x", value);
         read32(16'h0018, value);
         if (value !== 32'h000000ff)

@@ -7,7 +7,7 @@ module tb_sdram32_bist_fast;
     reg mem_clk = 1'b0;
     reg cpu_clk = 1'b0;
     reg rst = 1'b1;
-    always #6.666 mem_clk = ~mem_clk; // 75 MHz
+    always #8.333 mem_clk = ~mem_clk; // 60 MHz
     always #40 cpu_clk = ~cpu_clk;    // 12.5 MHz
 
     wire dma_lock, dma_valid, dma_ready, dma_write;
@@ -110,12 +110,12 @@ module tb_sdram32_bist_fast;
         if (phase_count != 4)
             $fatal(1, "expected W/R/W/R phase sequence, saw %0d phases", phase_count);
 
-        effective_mbps = (TEST_BYTES * 4.0 * 75.0) / active_cycles;
+        effective_mbps = (TEST_BYTES * 4.0 * 60.0) / active_cycles;
         projected_full_seconds = (33554432.0 * 4.0) /
                                  (effective_mbps * 1000000.0);
         $display("SDRAM32 BIST PASS effective=%0.2f MB/s projected-32MiB=%0.3f s cycles=%0d",
                  effective_mbps, projected_full_seconds, active_cycles);
-        if (effective_mbps < 120.0 || projected_full_seconds > 1.5)
+        if (effective_mbps < 110.0 || projected_full_seconds > 1.5)
             $fatal(1, "fast BIST bandwidth target missed");
         $finish;
     end

@@ -12,7 +12,8 @@ if(ASTRA_PROVISION_ROM_ENABLED)
 endif()
 
 idf_component_register(
-    SRCS "astra_host_main.c" "astra_rom.c"
+    SRCS "astra_host_main.c" "astra_rom.c" "astra_partition.c"
+         "astra_block_policy.c" "astra_input.c"
     INCLUDE_DIRS "."
     PRIV_REQUIRES esp_driver_gpio esp_driver_spi esp_driver_sdspi fatfs sdmmc
                   esp_timer

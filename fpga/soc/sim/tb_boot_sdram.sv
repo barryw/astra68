@@ -10,6 +10,8 @@ module tb_boot_sdram #(
     localparam [31:0] KERNEL_STATUS_READY = 32'h4b304f4b;
     localparam [31:0] KERNEL_STATUS_PANIC = 32'h4b50414e;
     localparam [31:0] EARLY_LOG_MAGIC = 32'h41364c47;
+    localparam longint unsigned BOOT_TIMEOUT_NS =
+        64'd500_000_000 + (TEST_BYTES * 64'd40_000);
     reg clk25 = 1'b0;
     reg rstn = 1'b0;
     always #20 clk25 = ~clk25;
@@ -34,6 +36,7 @@ module tb_boot_sdram #(
         .SDRAM_BIST_BYTES(TEST_BYTES),
         .SDRAM_READY_DELAY(10000),
         .HDMI_ENABLE(1'b0),
+        .USB_ENABLE(1'b0),
         .CPU_CLK_DIV_BIT(0),
         .UART_BAUD(12500000),
         .SOC_BUILD_ID(BUILD_ID)
@@ -176,11 +179,11 @@ module tb_boot_sdram #(
                     if (dut.tg_icache_hits < 100 || dut.tg_dcache_hits < 100)
                         $fatal(1, "cache path not exercised I=%0d D=%0d",
                                dut.tg_icache_hits, dut.tg_dcache_hits);
-                    bist_mbps = (TEST_BYTES * 4.0 * 75.0) / bist_cycles;
+                    bist_mbps = (TEST_BYTES * 4.0 * 60.0) / bist_cycles;
                     $display("BOOT SDRAM PASS BIST=%0.2f MB/s cycles=%0d I$=%0d/%0d D$=%0d",
                              bist_mbps, bist_cycles, dut.tg_icache_hits,
                              dut.tg_icache_misses, dut.tg_dcache_hits);
-                    if (bist_mbps < 120.0)
+                    if (bist_mbps < 110.0)
                         $fatal(1, "integrated BIST bandwidth target missed");
                     post_seen <= 1'b1;
                 end
@@ -236,8 +239,12 @@ module tb_boot_sdram #(
     end
 
     initial begin
-        #2_000_000_000;
-        $fatal(1, "boot SDRAM timeout adr=%08x phase=%0d progress=%08x",
-               dut.cpu_adr, dut.sdram_bist_phase, dut.sdram_bist_progress);
+        #(BOOT_TIMEOUT_NS);
+        $fatal(1, "boot SDRAM timeout pc=%08x adr=%08x dbg=%08x/%08x bus=%0d as=%b rw=%b dsack=%b ipl=%b BIST=%b/%b/%0d/%08x",
+               dut.tg_dbg_status, dut.cpu_adr, dut.tg_dbg_imm,
+               dut.tg_dbg_arin, dut.bs, dut.tg_as_n, dut.tg_rw_n,
+               dut.cpu_dsack_n, dut.cpu_ipln, dut.sdram_bist_busy,
+               dut.sdram_bist_done, dut.sdram_bist_phase,
+               dut.sdram_bist_progress);
     end
 endmodule

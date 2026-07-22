@@ -26,6 +26,7 @@ module astra_soc #(
     parameter integer UART_RX_FIFO_DEPTH = 128,
     parameter        SD_BOOT_ENABLE = 1'b0,
     parameter        ASTRA_HOST_ENABLE = 1'b0,
+    parameter        USB_ENABLE = 1'b1,
     parameter integer ROM_WORDS = 65536,
     parameter [31:0] SOC_BUILD_ID = 32'h00000000
 ) (
@@ -42,6 +43,10 @@ module astra_soc #(
     inout  wire [3:0] sd_d,
     output wire       wifi_en,
     output wire       wifi_gpio0,
+    inout  wire       usb_fpga_bd_dn,
+    inout  wire       usb_fpga_bd_dp,
+    output wire       usb_fpga_pu_dn,
+    output wire       usb_fpga_pu_dp,
     output wire       sdram_clk,
     output wire       sdram_cke,
     output wire       sdram_csn,
@@ -87,12 +92,19 @@ module astra_soc #(
     assign wifi_en = ASTRA_HOST_ENABLE;
     assign wifi_gpio0 = 1'b1;
     // -------------------------------------------------------------------------
-    // CPU/bus clock from a fabric divider. Hardware defaults to 3.125 MHz while
-    // timing and stress images can select 6.25 or 12.5 MHz at synthesis time.
+    // CPU/bus clock from a fabric divider. Production uses the default 12.5 MHz;
+    // lower rates remain available only for explicit diagnostic images.
     reg [2:0] clkdiv = 3'd0;
     always @(posedge clk25_mhz) clkdiv <= clkdiv + 1'b1;
     wire clk = clkdiv[CPU_CLK_DIV_BIT];
     localparam integer CPU_CLK_HZ = 25000000 >> (CPU_CLK_DIV_BIT + 1);
+
+    // Retain ECP5 configuration-time GSR so every packed flip-flop enters its
+    // declared initial state before the fabric reset trees take control. The
+    // active-low user input stays inactive during normal operation.
+`ifdef SYNTHESIS
+    GSR por_gsr_i (.GSR(1'b1));
+`endif
 
     // Dedicated 27/135 MHz video clocks. This is the same PLL relationship as
     // NovaVM's hardware-proven ULX3S 720x480 HDMI path.
@@ -158,6 +170,7 @@ module astra_soc #(
     );
 
     reg [63:0] cpu_cycle_count = 64'd0;
+    reg [63:0] cpu_cycle_snapshot = 64'd0;
     always @(posedge clk) begin
         if (rst) cpu_cycle_count <= 64'd0;
         else cpu_cycle_count <= cpu_cycle_count + 64'd1;
@@ -171,7 +184,7 @@ module astra_soc #(
     wire video_ready_cpu = video_lock_sync_cpu[1];
 
     // -------------------------------------------------------------------------
-    // 32 MB MT48LC16M16 SDRAM. A pipelined 32-bit controller runs at 75 MHz;
+    // 32 MB MT48LC16M16 SDRAM. A pipelined 32-bit controller runs at 60 MHz;
     // CPU transfers cross once per 68k bus cycle and POST uses the DMA port.
     // -------------------------------------------------------------------------
     reg         sdram_cpu_start;
@@ -194,12 +207,26 @@ module astra_soc #(
     wire        astraea_done;
     wire        astraea_irq;
     wire        astraea_cache_flush;
+    wire [31:0] astraea_blitter_completed_fence;
+    wire [31:0] astraea_draw_completed_fence;
     wire        astraea_cop_move_stb;
     wire [17:0] astraea_cop_move_addr;
     wire [31:0] astraea_cop_move_data;
     wire [31:0] vega_rdata;
     wire        vega_irq;
     wire        vega_graphics_active;
+    wire        vega_front_guard_valid;
+    wire [24:0] vega_front_guard_start;
+    wire [25:0] vega_front_guard_end;
+    wire        vega_pending_guard_valid;
+    wire [24:0] vega_pending_guard_start;
+    wire [25:0] vega_pending_guard_end;
+    reg         vega_front_guard_valid_cpu_q = 1'b0;
+    reg [24:0]  vega_front_guard_start_cpu_q = 25'd0;
+    reg [25:0]  vega_front_guard_end_cpu_q = 26'd0;
+    reg         vega_pending_guard_valid_cpu_q = 1'b0;
+    reg [24:0]  vega_pending_guard_start_cpu_q = 25'd0;
+    reg [25:0]  vega_pending_guard_end_cpu_q = 26'd0;
     wire [23:0] vega_rgb;
     wire [23:0] post_console_rgb;
     wire        video_reset;
@@ -234,19 +261,104 @@ module astra_soc #(
     wire [31:0] host_initial_sp_mem;
     wire [31:0] host_initial_pc_mem;
     wire [31:0] host_bytes_received_mem;
+    wire        host_cache_flush_mem;
+    wire [31:0] host_runtime_rdata;
+    wire        host_storage_irq;
+    wire        host_input_irq;
+    wire        host_dma_busy_mem;
+
+    wire        host_runtime_request_valid;
+    wire        host_runtime_request_ready;
+    wire [31:0] host_runtime_request_id;
+    wire [7:0]  host_runtime_request_op;
+    wire [7:0]  host_runtime_request_flags;
+    wire [63:0] host_runtime_request_lba;
+    wire [15:0] host_runtime_request_sectors;
+    wire [31:0] host_runtime_request_buffer;
+    wire [31:0] host_runtime_request_media_generation;
+    wire [31:0] host_runtime_request_host_generation;
+
+    wire        host_runtime_completion_valid;
+    wire        host_runtime_completion_ready;
+    wire [31:0] host_runtime_completion_id;
+    wire [15:0] host_runtime_completion_status;
+    wire [15:0] host_runtime_completion_sectors;
+    wire [31:0] host_runtime_completion_detail;
+    wire [31:0] host_runtime_completion_media_generation;
+    wire [31:0] host_runtime_completion_host_generation;
+
+    wire        host_runtime_state_valid;
+    wire        host_runtime_state_ready;
+    wire [31:0] host_runtime_state_host_generation;
+    wire [31:0] host_runtime_state_media_generation;
+    wire [31:0] host_runtime_state_flags;
+    wire [63:0] host_runtime_state_media_sectors;
+    wire [15:0] host_runtime_state_max_sectors;
+
+    wire        host_runtime_event_valid;
+    wire        host_runtime_event_ready;
+    wire [31:0] host_runtime_event_host_generation;
+    wire [31:0] host_runtime_event_header;
+    wire [31:0] host_runtime_event_value;
+    wire [31:0] host_runtime_event_timestamp;
+    wire [31:0] host_runtime_event_device_sequence;
     wire        host_spi_miso;
     wire        host_spi_miso_oe;
     wire        sd_clk_in;
     wire        sd_cmd_in;
     wire [3:0]  sd_d_in;
 
+    reg         usb_ctrl_start = 1'b0;
+    wire        usb_ctrl_busy;
+    wire        usb_ctrl_done;
+    wire [31:0] usb_ctrl_rdata;
+    wire        usb_irq;
+    wire        usb_ready_cpu;
+    wire        usb_dma_fault;
+    wire [31:0] usb_dma_fault_addr;
+    wire        usb_dp_write;
+    wire        usb_dp_write_enable;
+    wire        usb_dm_write;
+    wire        usb_dm_write_enable;
+    wire        usb_phy_domain_clk;
+
+    // ULX3S US2 pull controls are diode-steered: LOW selects the 15 kOhm host
+    // pulldowns. The data pair is driven only while the OHCI PHY enables it.
+    assign usb_fpga_pu_dp = 1'b0;
+    assign usb_fpga_pu_dn = 1'b0;
+    assign usb_fpga_bd_dp = usb_dp_write_enable ? usb_dp_write : 1'bz;
+    assign usb_fpga_bd_dn = usb_dm_write_enable ? usb_dm_write : 1'bz;
+
+    // The CPU and graphics engines consume the live guard range. Register a
+    // separate bundled copy before its SDRAM-domain synchronizers so endpoint
+    // arithmetic never becomes a CPU-to-memory combinational timing path.
+    always @(posedge clk) begin
+        if (rst) begin
+            vega_front_guard_valid_cpu_q <= 1'b0;
+            vega_front_guard_start_cpu_q <= 25'd0;
+            vega_front_guard_end_cpu_q <= 26'd0;
+            vega_pending_guard_valid_cpu_q <= 1'b0;
+            vega_pending_guard_start_cpu_q <= 25'd0;
+            vega_pending_guard_end_cpu_q <= 26'd0;
+        end else begin
+            vega_front_guard_valid_cpu_q <= vega_front_guard_valid;
+            vega_front_guard_start_cpu_q <= vega_front_guard_start;
+            vega_front_guard_end_cpu_q <= vega_front_guard_end;
+            vega_pending_guard_valid_cpu_q <= vega_pending_guard_valid;
+            vega_pending_guard_start_cpu_q <= vega_pending_guard_start;
+            vega_pending_guard_end_cpu_q <= vega_pending_guard_end;
+        end
+    end
+
     generate
         if (SDRAM_ENABLE) begin : g_sdram_enabled
             wire [3:0] sd_pll_o;
             wire       sd_pll_locked;
+            wire       usb_phy_clk_internal;
+            wire       usb_phy_pll_locked;
 `ifdef VERILATOR
             reg        sd_domain_clk = 1'b0;
-            always #6.666 sd_domain_clk = ~sd_domain_clk;
+            always #8.333 sd_domain_clk = ~sd_domain_clk;
 `else
             wire       sd_domain_clk;
             assign sd_domain_clk = sd_pll_o[0];
@@ -254,8 +366,8 @@ module astra_soc #(
 
             ecp5pll #(
                 .in_hz(25000000),
-                .out0_hz(75000000),
-                .out1_hz(0),
+                .out0_hz(60000000),
+                .out1_hz(USB_ENABLE ? 100000000 : 0),
                 .out2_hz(0),
                 .out3_hz(0)
             ) sdram_pll (
@@ -269,6 +381,38 @@ module astra_soc #(
                 .phasestep(1'b0),
                 .phaseloadreg(1'b0)
             );
+
+            if (USB_ENABLE) begin : g_usb_phy_clock
+`ifdef VERILATOR
+                reg usb_phy_clk_sim = 1'b0;
+                always #10.417 usb_phy_clk_sim = ~usb_phy_clk_sim;
+                assign usb_phy_clk_internal = usb_phy_clk_sim;
+                assign usb_phy_pll_locked = 1'b1;
+`else
+                wire [3:0] usb_pll_o;
+                ecp5pll #(
+                    .in_hz(100000000),
+                    .out0_hz(48000000),
+                    .out1_hz(0),
+                    .out2_hz(0),
+                    .out3_hz(0)
+                ) usb_pll (
+                    .clk_i(sd_pll_o[1]),
+                    .clk_o(usb_pll_o),
+                    .locked(usb_phy_pll_locked),
+                    .reset(1'b0),
+                    .standby(1'b0),
+                    .phasesel(2'b00),
+                    .phasedir(1'b0),
+                    .phasestep(1'b0),
+                    .phaseloadreg(1'b0)
+                );
+                assign usb_phy_clk_internal = usb_pll_o[0];
+`endif
+            end else begin : g_usb_phy_clock_disabled
+                assign usb_phy_clk_internal = 1'b0;
+                assign usb_phy_pll_locked = 1'b0;
+            end
 
             reg [1:0] sd_lock_sync = 2'b00;
             reg [1:0] sd_reset_sync = 2'b11;
@@ -302,6 +446,9 @@ module astra_soc #(
             wire astraea_cpu_rst;
             wire astraea_mem_rst;
             wire vega_mem_rst;
+            wire usb_ctrl_rst;
+            wire usb_mem_rst;
+            wire usb_phy_rst;
             astra_reset_release host_mem_reset_i (
                 .clk(sd_domain_clk), .assert_reset(!sd_ready),
                 .reset(host_mem_rst)
@@ -334,14 +481,44 @@ module astra_soc #(
                 .clk(sd_domain_clk), .assert_reset(!sd_ready),
                 .reset(vega_mem_rst)
             );
+            astra_reset_release usb_ctrl_reset_i (
+                .clk(clk25_mhz),
+                .assert_reset(!USB_ENABLE || !reset_n || !sd_ready ||
+                              !usb_phy_pll_locked),
+                .reset(usb_ctrl_rst)
+            );
+            astra_reset_release usb_mem_reset_i (
+                .clk(sd_domain_clk),
+                .assert_reset(!USB_ENABLE || !reset_n || !sd_ready ||
+                              !usb_phy_pll_locked),
+                .reset(usb_mem_rst)
+            );
+            astra_reset_release usb_phy_reset_i (
+                .clk(usb_phy_clk_internal),
+                .assert_reset(!USB_ENABLE || !reset_n ||
+                              !usb_phy_pll_locked || !sd_ready),
+                .reset(usb_phy_rst)
+            );
             reg [1:0] sd_ready_sync_cpu = 2'b00;
+            reg [1:0] usb_ready_sync_cpu = 2'b00;
             always @(posedge clk) begin
-                if (rst) sd_ready_sync_cpu <= 2'b00;
-                else sd_ready_sync_cpu <= {sd_ready_sync_cpu[0], sd_ready};
+                if (rst) begin
+                    sd_ready_sync_cpu <= 2'b00;
+                    usb_ready_sync_cpu <= 2'b00;
+                end else begin
+                    sd_ready_sync_cpu <= {sd_ready_sync_cpu[0], sd_ready};
+                    usb_ready_sync_cpu <= {
+                        usb_ready_sync_cpu[0],
+                        USB_ENABLE && sd_ready && usb_phy_pll_locked &&
+                        !usb_ctrl_rst && !usb_mem_rst && !usb_phy_rst
+                    };
+                end
             end
             assign sdram_ready_cpu = sd_ready_sync_cpu[1];
+            assign usb_ready_cpu = usb_ready_sync_cpu[1];
             assign sdram_domain_clk = sd_domain_clk;
             assign sdram_domain_rst = vega_mem_rst;
+            assign usb_phy_domain_clk = usb_phy_clk_internal;
 
             wire [15:0] sd_data_out;
             wire        sd_data_oe;
@@ -363,6 +540,7 @@ module astra_soc #(
             wire [31:0] cpu_mem_wdata;
             wire        cpu_mem_rsp_valid;
             wire [31:0] cpu_mem_rdata;
+            wire        cpu_mem_cache_quiescent;
 
             wire        bist_mem_lock;
             wire        bist_mem_valid;
@@ -392,6 +570,62 @@ module astra_soc #(
             wire [3:0]  host_mem_be;
             wire [31:0] host_mem_wdata;
             wire        host_mem_rsp_valid;
+            wire [31:0] host_mem_rdata;
+
+            wire        usb_mem_lock;
+            wire        usb_mem_valid;
+            wire        usb_mem_ready;
+            wire        usb_mem_write;
+            wire [24:0] usb_mem_addr;
+            wire [3:0]  usb_mem_be;
+            wire [31:0] usb_mem_wdata;
+            wire        usb_mem_rsp_valid;
+            wire [31:0] usb_mem_rdata;
+
+            if (USB_ENABLE) begin : g_usb_host
+                usb_ohci_host usb_host_i (
+                    .cpu_clk(clk), .cpu_rst(rst),
+                    .cpu_start(usb_ctrl_start),
+                    .cpu_write(!cpu_rw_n), .cpu_addr(cpu_adr[11:2]),
+                    .cpu_be(be), .cpu_wdata(cpu_dout),
+                    .cpu_busy(usb_ctrl_busy), .cpu_done(usb_ctrl_done),
+                    .cpu_rdata(usb_ctrl_rdata), .cpu_irq(usb_irq),
+                    .ctrl_clk(clk25_mhz), .ctrl_rst(usb_ctrl_rst),
+                    .mem_clk(sd_domain_clk), .mem_rst(usb_mem_rst),
+                    .mem_lock(usb_mem_lock), .mem_valid(usb_mem_valid),
+                    .mem_ready(usb_mem_ready), .mem_write(usb_mem_write),
+                    .mem_addr(usb_mem_addr), .mem_be(usb_mem_be),
+                    .mem_wdata(usb_mem_wdata),
+                    .mem_rsp_valid(usb_mem_rsp_valid),
+                    .mem_rdata(usb_mem_rdata),
+                    .dma_fault(usb_dma_fault),
+                    .dma_fault_addr(usb_dma_fault_addr),
+                    .phy_clk(usb_phy_clk_internal), .phy_rst(usb_phy_rst),
+                    .usb_dp_read(usb_fpga_bd_dp),
+                    .usb_dp_write(usb_dp_write),
+                    .usb_dp_write_enable(usb_dp_write_enable),
+                    .usb_dm_read(usb_fpga_bd_dn),
+                    .usb_dm_write(usb_dm_write),
+                    .usb_dm_write_enable(usb_dm_write_enable)
+                );
+            end else begin : g_usb_host_disabled
+                assign usb_ctrl_busy = 1'b0;
+                assign usb_ctrl_done = 1'b0;
+                assign usb_ctrl_rdata = 32'd0;
+                assign usb_irq = 1'b0;
+                assign usb_dma_fault = 1'b0;
+                assign usb_dma_fault_addr = 32'd0;
+                assign usb_dp_write = 1'b0;
+                assign usb_dp_write_enable = 1'b0;
+                assign usb_dm_write = 1'b0;
+                assign usb_dm_write_enable = 1'b0;
+                assign usb_mem_lock = 1'b0;
+                assign usb_mem_valid = 1'b0;
+                assign usb_mem_write = 1'b0;
+                assign usb_mem_addr = 25'd0;
+                assign usb_mem_be = 4'd0;
+                assign usb_mem_wdata = 32'd0;
+            end
 
             reg [1:0] host_request_sync_mem = 2'b00;
             always @(posedge sd_domain_clk) begin
@@ -400,6 +634,54 @@ module astra_soc #(
                 else
                     host_request_sync_mem <= {host_request_sync_mem[0],
                                               host_boot_request_cpu};
+            end
+
+            // Guard data is stable scene state. Delay valid by one additional
+            // synchronizer stage so its bundled range has settled before the
+            // 60 MHz host service can admit a write.
+            reg [2:0] front_guard_valid_sync_mem = 3'b000;
+            reg [2:0] pending_guard_valid_sync_mem = 3'b000;
+            reg [24:0] front_guard_start_meta_mem = 25'd0;
+            reg [24:0] front_guard_start_mem = 25'd0;
+            reg [25:0] front_guard_end_meta_mem = 26'd0;
+            reg [25:0] front_guard_end_mem = 26'd0;
+            reg [24:0] pending_guard_start_meta_mem = 25'd0;
+            reg [24:0] pending_guard_start_mem = 25'd0;
+            reg [25:0] pending_guard_end_meta_mem = 26'd0;
+            reg [25:0] pending_guard_end_mem = 26'd0;
+            always @(posedge sd_domain_clk) begin
+                if (!sd_ready) begin
+                    front_guard_valid_sync_mem <= 3'b000;
+                    pending_guard_valid_sync_mem <= 3'b000;
+                    front_guard_start_meta_mem <= 25'd0;
+                    front_guard_start_mem <= 25'd0;
+                    front_guard_end_meta_mem <= 26'd0;
+                    front_guard_end_mem <= 26'd0;
+                    pending_guard_start_meta_mem <= 25'd0;
+                    pending_guard_start_mem <= 25'd0;
+                    pending_guard_end_meta_mem <= 26'd0;
+                    pending_guard_end_mem <= 26'd0;
+                end else begin
+                    front_guard_valid_sync_mem <= {
+                        front_guard_valid_sync_mem[1:0],
+                        vega_front_guard_valid_cpu_q
+                    };
+                    pending_guard_valid_sync_mem <= {
+                        pending_guard_valid_sync_mem[1:0],
+                        vega_pending_guard_valid_cpu_q
+                    };
+                    front_guard_start_meta_mem <=
+                        vega_front_guard_start_cpu_q;
+                    front_guard_start_mem <= front_guard_start_meta_mem;
+                    front_guard_end_meta_mem <= vega_front_guard_end_cpu_q;
+                    front_guard_end_mem <= front_guard_end_meta_mem;
+                    pending_guard_start_meta_mem <=
+                        vega_pending_guard_start_cpu_q;
+                    pending_guard_start_mem <= pending_guard_start_meta_mem;
+                    pending_guard_end_meta_mem <=
+                        vega_pending_guard_end_cpu_q;
+                    pending_guard_end_mem <= pending_guard_end_meta_mem;
+                end
             end
 
             if (ASTRA_HOST_ENABLE) begin : g_astra_host
@@ -422,7 +704,7 @@ module astra_soc #(
                         .selected_seen()
                     );
 
-                    astra_host_boot host_boot_i (
+                    astra_host_service host_service_i (
                         .clk(sd_domain_clk), .rst(host_mem_rst),
                         .rx_data(host_rx_data), .rx_valid(host_rx_valid),
                         .rx_ready(host_rx_ready), .tx_data(host_tx_data),
@@ -442,8 +724,66 @@ module astra_soc #(
                         .mem_ready(host_mem_ready), .mem_write(host_mem_write),
                         .mem_addr(host_mem_addr), .mem_be(host_mem_be),
                         .mem_wdata(host_mem_wdata),
-                        .mem_rsp_valid(host_mem_rsp_valid)
+                        .mem_rsp_valid(host_mem_rsp_valid),
+                        .mem_rdata(host_mem_rdata),
+                        .cache_flush(host_cache_flush_mem),
+                        .front_guard_valid(front_guard_valid_sync_mem[2]),
+                        .front_guard_start(front_guard_start_mem),
+                        .front_guard_end(front_guard_end_mem),
+                        .pending_guard_valid(
+                            pending_guard_valid_sync_mem[2]),
+                        .pending_guard_start(pending_guard_start_mem),
+                        .pending_guard_end(pending_guard_end_mem),
+                        .runtime_request_valid(host_runtime_request_valid),
+                        .runtime_request_ready(host_runtime_request_ready),
+                        .runtime_request_id(host_runtime_request_id),
+                        .runtime_request_op(host_runtime_request_op),
+                        .runtime_request_flags(host_runtime_request_flags),
+                        .runtime_request_lba(host_runtime_request_lba),
+                        .runtime_request_sectors(host_runtime_request_sectors),
+                        .runtime_request_buffer(host_runtime_request_buffer),
+                        .runtime_request_media_generation(
+                            host_runtime_request_media_generation),
+                        .runtime_request_host_generation(
+                            host_runtime_request_host_generation),
+                        .runtime_completion_valid(
+                            host_runtime_completion_valid),
+                        .runtime_completion_ready(
+                            host_runtime_completion_ready),
+                        .runtime_completion_id(host_runtime_completion_id),
+                        .runtime_completion_status(
+                            host_runtime_completion_status),
+                        .runtime_completion_sectors(
+                            host_runtime_completion_sectors),
+                        .runtime_completion_detail(
+                            host_runtime_completion_detail),
+                        .runtime_completion_media_generation(
+                            host_runtime_completion_media_generation),
+                        .runtime_completion_host_generation(
+                            host_runtime_completion_host_generation),
+                        .runtime_state_valid(host_runtime_state_valid),
+                        .runtime_state_ready(host_runtime_state_ready),
+                        .runtime_state_host_generation(
+                            host_runtime_state_host_generation),
+                        .runtime_state_media_generation(
+                            host_runtime_state_media_generation),
+                        .runtime_state_flags(host_runtime_state_flags),
+                        .runtime_state_media_sectors(
+                            host_runtime_state_media_sectors),
+                        .runtime_state_max_sectors(
+                            host_runtime_state_max_sectors),
+                        .runtime_event_valid(host_runtime_event_valid),
+                        .runtime_event_ready(host_runtime_event_ready),
+                        .runtime_event_host_generation(
+                            host_runtime_event_host_generation),
+                        .runtime_event_header(host_runtime_event_header),
+                        .runtime_event_value(host_runtime_event_value),
+                        .runtime_event_timestamp(
+                            host_runtime_event_timestamp),
+                        .runtime_event_device_sequence(
+                            host_runtime_event_device_sequence)
                     );
+                    assign host_dma_busy_mem = host_mem_lock;
             end else begin : g_astra_host_disabled
                     assign host_seen_mem = 1'b0;
                     assign host_boot_busy_mem = 1'b0;
@@ -463,19 +803,45 @@ module astra_soc #(
                     assign host_mem_addr = 25'd0;
                     assign host_mem_be = 4'd0;
                     assign host_mem_wdata = 32'd0;
+                    assign host_cache_flush_mem = 1'b0;
+                    assign host_dma_busy_mem = 1'b0;
+                    assign host_runtime_request_ready = 1'b0;
+                    assign host_runtime_completion_valid = 1'b0;
+                    assign host_runtime_completion_id = 32'd0;
+                    assign host_runtime_completion_status = 16'd0;
+                    assign host_runtime_completion_sectors = 16'd0;
+                    assign host_runtime_completion_detail = 32'd0;
+                    assign host_runtime_completion_media_generation = 32'd0;
+                    assign host_runtime_completion_host_generation = 32'd0;
+                    assign host_runtime_state_valid = 1'b0;
+                    assign host_runtime_state_host_generation = 32'd0;
+                    assign host_runtime_state_media_generation = 32'd0;
+                    assign host_runtime_state_flags = 32'd0;
+                    assign host_runtime_state_media_sectors = 64'd0;
+                    assign host_runtime_state_max_sectors = 16'd0;
+                    assign host_runtime_event_valid = 1'b0;
+                    assign host_runtime_event_host_generation = 32'd0;
+                    assign host_runtime_event_header = 32'd0;
+                    assign host_runtime_event_value = 32'd0;
+                    assign host_runtime_event_timestamp = 32'd0;
+                    assign host_runtime_event_device_sequence = 32'd0;
             end
 
-            localparam [1:0] DMA_OWNER_NONE = 2'd0;
-            localparam [1:0] DMA_OWNER_BIST = 2'd1;
-            localparam [1:0] DMA_OWNER_BLIT = 2'd2;
-            localparam [1:0] DMA_OWNER_HOST = 2'd3;
+            localparam [2:0] DMA_OWNER_NONE = 3'd0;
+            localparam [2:0] DMA_OWNER_BIST = 3'd1;
+            localparam [2:0] DMA_OWNER_BLIT = 3'd2;
+            localparam [2:0] DMA_OWNER_HOST = 3'd3;
+            localparam [2:0] DMA_OWNER_USB = 3'd4;
             reg dma_use_bist = 1'b0;
             reg dma_use_blit = 1'b0;
             reg dma_use_host = 1'b0;
+            reg dma_use_usb = 1'b0;
+            reg host_mem_lock_arb = 1'b0;
 
             // Retain the encoded view for simulation diagnostics. The datapath
             // below consumes the registered one-hot grants directly.
-            wire [1:0] dma_owner = dma_use_bist ? DMA_OWNER_BIST :
+            wire [2:0] dma_owner = dma_use_bist ? DMA_OWNER_BIST :
+                                   dma_use_usb ? DMA_OWNER_USB :
                                    dma_use_host ? DMA_OWNER_HOST :
                                    dma_use_blit ? DMA_OWNER_BLIT :
                                                   DMA_OWNER_NONE;
@@ -485,47 +851,73 @@ module astra_soc #(
             // one engine's lock signal through the other engine's response mux.
             always @(posedge sd_domain_clk) begin
                 if (!sd_locked || sd_manual_reset) begin
+                    host_mem_lock_arb <= 1'b0;
                     dma_use_bist <= 1'b0;
                     dma_use_blit <= 1'b0;
                     dma_use_host <= 1'b0;
-                end else if (dma_use_bist) begin
-                    if (!bist_mem_lock)
-                        dma_use_bist <= 1'b0;
-                end else if (dma_use_host) begin
-                    if (!host_mem_lock)
-                        dma_use_host <= 1'b0;
-                end else if (dma_use_blit) begin
-                    if (!blit_mem_lock)
-                        dma_use_blit <= 1'b0;
+                    dma_use_usb <= 1'b0;
                 end else begin
-                    if (bist_mem_lock)
-                        dma_use_bist <= 1'b1;
-                    else if (host_mem_lock)
-                        dma_use_host <= 1'b1;
-                    else if (blit_mem_lock)
-                        dma_use_blit <= 1'b1;
+                    // Cache fencing begins from the raw service lock, while
+                    // arbitration consumes this registered boundary. The
+                    // delayed release safely holds ownership for one extra
+                    // memory clock after the final response.
+                    host_mem_lock_arb <= host_mem_lock;
+                    if (dma_use_bist) begin
+                        if (!bist_mem_lock)
+                            dma_use_bist <= 1'b0;
+                    end else if (dma_use_usb) begin
+                        if (!usb_mem_lock)
+                            dma_use_usb <= 1'b0;
+                    end else if (dma_use_host) begin
+                        if (!host_mem_lock_arb)
+                            dma_use_host <= 1'b0;
+                    end else if (dma_use_blit) begin
+                        if (!blit_mem_lock)
+                            dma_use_blit <= 1'b0;
+                    end else begin
+                        if (bist_mem_lock)
+                            dma_use_bist <= 1'b1;
+                        else if (usb_mem_lock)
+                            dma_use_usb <= 1'b1;
+                        else if (host_mem_lock_arb)
+                            dma_use_host <= 1'b1;
+                        else if (blit_mem_lock)
+                            dma_use_blit <= 1'b1;
+                    end
                 end
             end
 
-            wire        dma_mem_lock = dma_use_bist || dma_use_host ||
-                                       dma_use_blit;
+            // AstraHost is not presented to the SDRAM controller until the CPU
+            // has observed the cache fence and drained any posted write.
+            wire        host_mem_coherent = !dma_use_host ||
+                                              cpu_mem_cache_quiescent;
+            wire        dma_mem_lock = dma_use_bist || dma_use_blit ||
+                                       dma_use_usb ||
+                                       (dma_use_host && host_mem_coherent);
             // Grants are registered one-hot. Put the latency-sensitive blitter
             // first so its select reaches the SDRAM controller in one mux level
             // without replicating a mask over every request-data bit.
-            wire        dma_mem_valid = dma_use_blit ? blit_mem_valid :
-                                        dma_use_host ? host_mem_valid :
+            wire        dma_mem_valid = dma_use_usb ? usb_mem_valid :
+                                        dma_use_blit ? blit_mem_valid :
+                                        dma_use_host ?
+                                            (host_mem_coherent &&
+                                             host_mem_valid) :
                                         dma_use_bist ? bist_mem_valid : 1'b0;
             wire        dma_mem_ready;
-            wire        dma_mem_write = dma_use_blit ? blit_mem_write :
+            wire        dma_mem_write = dma_use_usb ? usb_mem_write :
+                                        dma_use_blit ? blit_mem_write :
                                         dma_use_host ? host_mem_write :
                                         dma_use_bist ? bist_mem_write : 1'b0;
-            wire [24:0] dma_mem_addr = dma_use_blit ? blit_mem_addr :
+            wire [24:0] dma_mem_addr = dma_use_usb ? usb_mem_addr :
+                                       dma_use_blit ? blit_mem_addr :
                                        dma_use_host ? host_mem_addr :
                                        dma_use_bist ? bist_mem_addr : 25'd0;
-            wire [3:0]  dma_mem_be = dma_use_blit ? blit_mem_be :
+            wire [3:0]  dma_mem_be = dma_use_usb ? usb_mem_be :
+                                      dma_use_blit ? blit_mem_be :
                                       dma_use_host ? host_mem_be :
                                       dma_use_bist ? bist_mem_be : 4'd0;
-            wire [31:0] dma_mem_wdata = dma_use_blit ? blit_mem_wdata :
+            wire [31:0] dma_mem_wdata = dma_use_usb ? usb_mem_wdata :
+                                         dma_use_blit ? blit_mem_wdata :
                                          dma_use_host ? host_mem_wdata :
                                          dma_use_bist ? bist_mem_wdata : 32'd0;
             wire        dma_mem_rsp_valid;
@@ -537,8 +929,13 @@ module astra_soc #(
             assign blit_mem_ready = dma_use_blit && dma_mem_ready;
             assign blit_mem_rsp_valid = dma_use_blit && dma_mem_rsp_valid;
             assign blit_mem_rdata = dma_mem_rdata;
-            assign host_mem_ready = dma_use_host && dma_mem_ready;
+            assign host_mem_ready = dma_use_host && host_mem_coherent &&
+                                    dma_mem_ready;
             assign host_mem_rsp_valid = dma_use_host && dma_mem_rsp_valid;
+            assign host_mem_rdata = dma_mem_rdata;
+            assign usb_mem_ready = dma_use_usb && dma_mem_ready;
+            assign usb_mem_rsp_valid = dma_use_usb && dma_mem_rsp_valid;
+            assign usb_mem_rdata = dma_mem_rdata;
 
             assign sdram_cke = sd_cke;
             assign sdram_csn = sd_cs;
@@ -608,7 +1005,8 @@ module astra_soc #(
                 .cpu_cacheable(tg_cacheable_out),
                 .cpu_instruction(cpu_fc[1] && cpu_fc != 3'b111),
                 .cpu_postable(tg_postable_out),
-                .cpu_cache_flush(sdram_bist_busy | astraea_cache_flush),
+                .cpu_cache_flush(sdram_bist_busy | astraea_cache_flush |
+                                 host_cache_flush_cpu),
                 .cpu_busy(sdram_bridge_busy),
                 .cpu_done(sdram_bridge_done),
                 .cpu_rdata(sdram_bridge_rdata),
@@ -628,6 +1026,7 @@ module astra_soc #(
                 .mem_be(cpu_mem_be),
                 .mem_wdata(cpu_mem_wdata),
                 .mem_lock(cpu_mem_lock),
+                .mem_cache_quiescent(cpu_mem_cache_quiescent),
                 .mem_rsp_valid(cpu_mem_rsp_valid),
                 .mem_rdata(cpu_mem_rdata)
             );
@@ -671,6 +1070,15 @@ module astra_soc #(
                 .cpu_done(astraea_done),
                 .cpu_irq(astraea_irq),
                 .cache_flush(astraea_cache_flush),
+                .blitter_completed_fence(
+                    astraea_blitter_completed_fence),
+                .draw_completed_fence(astraea_draw_completed_fence),
+                .front_guard_valid(vega_front_guard_valid),
+                .front_guard_start(vega_front_guard_start),
+                .front_guard_end(vega_front_guard_end),
+                .pending_guard_valid(vega_pending_guard_valid),
+                .pending_guard_start(vega_pending_guard_start),
+                .pending_guard_end(vega_pending_guard_end),
                 .beam_x(vega_beam_x),
                 .beam_y(vega_beam_y),
                 .cop_move_stb(astraea_cop_move_stb),
@@ -691,6 +1099,18 @@ module astra_soc #(
         end else begin : g_sdram_disabled
             assign sdram_domain_clk = 1'b0;
             assign sdram_domain_rst = 1'b1;
+            assign usb_ctrl_busy = 1'b0;
+            assign usb_ctrl_done = 1'b0;
+            assign usb_ctrl_rdata = 32'd0;
+            assign usb_irq = 1'b0;
+            assign usb_ready_cpu = 1'b0;
+            assign usb_dma_fault = 1'b0;
+            assign usb_dma_fault_addr = 32'd0;
+            assign usb_dp_write = 1'b0;
+            assign usb_dp_write_enable = 1'b0;
+            assign usb_dm_write = 1'b0;
+            assign usb_dm_write_enable = 1'b0;
+            assign usb_phy_domain_clk = 1'b0;
             assign vega_mem_ready = 1'b0;
             assign vega_mem_rsp_valid = 1'b0;
             assign vega_mem_rdata = 32'd0;
@@ -721,6 +1141,8 @@ module astra_soc #(
             assign astraea_done = 1'b0;
             assign astraea_irq = 1'b0;
             assign astraea_cache_flush = 1'b0;
+            assign astraea_blitter_completed_fence = 32'd0;
+            assign astraea_draw_completed_fence = 32'd0;
             assign astraea_cop_move_stb = 1'b0;
             assign astraea_cop_move_addr = 18'd0;
             assign astraea_cop_move_data = 32'd0;
@@ -743,6 +1165,28 @@ module astra_soc #(
             assign host_bytes_received_mem = 32'd0;
             assign host_spi_miso = 1'b1;
             assign host_spi_miso_oe = 1'b0;
+            assign host_cache_flush_mem = 1'b0;
+            assign host_dma_busy_mem = 1'b0;
+            assign host_runtime_request_ready = 1'b0;
+            assign host_runtime_completion_valid = 1'b0;
+            assign host_runtime_completion_id = 32'd0;
+            assign host_runtime_completion_status = 16'd0;
+            assign host_runtime_completion_sectors = 16'd0;
+            assign host_runtime_completion_detail = 32'd0;
+            assign host_runtime_completion_media_generation = 32'd0;
+            assign host_runtime_completion_host_generation = 32'd0;
+            assign host_runtime_state_valid = 1'b0;
+            assign host_runtime_state_host_generation = 32'd0;
+            assign host_runtime_state_media_generation = 32'd0;
+            assign host_runtime_state_flags = 32'd0;
+            assign host_runtime_state_media_sectors = 64'd0;
+            assign host_runtime_state_max_sectors = 16'd0;
+            assign host_runtime_event_valid = 1'b0;
+            assign host_runtime_event_host_generation = 32'd0;
+            assign host_runtime_event_header = 32'd0;
+            assign host_runtime_event_value = 32'd0;
+            assign host_runtime_event_timestamp = 32'd0;
+            assign host_runtime_event_device_sequence = 32'd0;
         end
     endgenerate
 
@@ -762,6 +1206,8 @@ module astra_soc #(
     reg [31:0] host_pc_cpu = 32'd0;
     reg [31:0] host_bytes_meta_cpu = 32'd0;
     reg [31:0] host_bytes_cpu = 32'd0;
+    reg [1:0] host_cache_flush_sync_cpu = 2'b00;
+    reg [1:0] host_dma_busy_sync_cpu = 2'b00;
     always @(posedge clk) begin
         if (rst) begin
             host_seen_sync_cpu <= 2'b00;
@@ -780,6 +1226,8 @@ module astra_soc #(
             host_pc_cpu <= 32'd0;
             host_bytes_meta_cpu <= 32'd0;
             host_bytes_cpu <= 32'd0;
+            host_cache_flush_sync_cpu <= 2'b00;
+            host_dma_busy_sync_cpu <= 2'b00;
         end else begin
             host_seen_sync_cpu <= {host_seen_sync_cpu[0], host_seen_mem};
             host_busy_sync_cpu <= {host_busy_sync_cpu[0], host_boot_busy_mem};
@@ -797,8 +1245,17 @@ module astra_soc #(
             host_pc_cpu <= host_pc_meta_cpu;
             host_bytes_meta_cpu <= host_bytes_received_mem;
             host_bytes_cpu <= host_bytes_meta_cpu;
+            host_cache_flush_sync_cpu <= {
+                host_cache_flush_sync_cpu[0], host_cache_flush_mem
+            };
+            host_dma_busy_sync_cpu <= {
+                host_dma_busy_sync_cpu[0], host_dma_busy_mem
+            };
         end
     end
+    wire host_cache_flush_cpu = host_cache_flush_sync_cpu[1];
+    wire present_writers_idle = !astraea_busy &&
+                                !host_dma_busy_sync_cpu[1];
 
     // -------------------------------------------------------------------------
     // CPU signals
@@ -846,11 +1303,19 @@ module astra_soc #(
     wire        tg_cache_dfreeze;
     wire tg_cacheable = (tg_adr[31:18] == 14'h3ff8) ||
                         (tg_adr[31:18] == 14'd0) ||
-                        (SDRAM_ENABLE && tg_adr[31:25] == 7'b0000001);
+                        (SDRAM_ENABLE && tg_adr[31:25] == 7'b0000001 &&
+                         !(USB_ENABLE && tg_adr[31:20] == 12'h03f));
     reg  [1:0]  dsack_n = 2'b11;
     wire [1:0]  cpu_dsack_n;
     reg         bus_write_stb;   // 1-cycle write pulse to memory/uart (driven by the bus FSM below)
     reg         bus_read_stb;    // 1-cycle read-commit pulse for read-clears-flag regs
+    wire [31:0] vesta_irq_sources;
+    wire [31:0] vesta_irq_rdata;
+    wire [2:0]  vesta_ipln_n;
+    wire [7:0]  vesta_iack_vector;
+    wire        vesta_iack_valid;
+    wire        uart_rx_irq;
+    wire        uart_tx_irq;
 
     // Bus-control inputs {BGACKn,BRn,STERMn,AVECn,HALT_INn,BERRn}.
     // HALT_INn (bit 1) is asserted low with RESET_INn, matching the MC68030
@@ -866,15 +1331,26 @@ module astra_soc #(
     wire bkpt_ack_read = !cpu_as_n && cpu_rw_n
                        && (cpu_fc == 3'b111)
                        && (cpu_adr[31:8] == 24'h000000);
+    // MC68030 interrupt acknowledge cycles use CPU space and the sign-extended
+    // address 0xfffffff0 | (level << 1). Vesta always terminates the cycle;
+    // when no source remains it returns Motorola's spurious vector 24.
+    wire cpu_iack_read = !cpu_as_n && cpu_rw_n
+                       && (cpu_fc == 3'b111)
+                       && (cpu_adr[31:5] == 27'h7ffffff)
+                       && cpu_adr[4] && !cpu_adr[0];
 `ifdef ASTRA_SOC_SIM_IRQ
-    wire [2:0]  cpu_ipln = sim_ipln;
+    // The simulation injector and real Vesta sources coexist. This lets the
+    // CPU regression exercise Vesta's production vectored-IACK path before it
+    // switches to directed external autovector injections.
+    wire [2:0]  cpu_ipln = sim_ipln & vesta_ipln_n;
     wire        cpu_avecn = sim_avecn;
-    wire        cpu_berrn = sim_berrn;
+    wire        cpu_external_berrn = sim_berrn;
 `else
-    wire [2:0]  cpu_ipln = 3'b111;
+    wire [2:0]  cpu_ipln = vesta_ipln_n;
     wire        cpu_avecn = cpu_ctl[2];
-    wire        cpu_berrn = cpu_ctl[0];
+    wire        cpu_external_berrn = cpu_ctl[0];
 `endif
+    wire        cpu_berrn;
 
     assign cpu_adr     = tg_adr;
     assign cpu_dout    = tg_dout;
@@ -889,7 +1365,8 @@ module astra_soc #(
     tg68k_cache_store tg_cache_store_i (
         .clk(clk),
         .rst(tg_cache_rst),
-        .flush(sdram_bist_busy | astraea_cache_flush),
+        .flush(sdram_bist_busy | astraea_cache_flush |
+               host_cache_flush_cpu),
         .lookup_addr(tg_cache_lookup_addr),
         .lookup_insn(tg_cache_lookup_insn),
         .lookup_data(tg_cache_lookup_data),
@@ -936,7 +1413,8 @@ module astra_soc #(
                 .BRn        (cpu_ctl[4]),
                 .BGACKn     (cpu_ctl[5]),
                 .CACHEABLE_IN(tg_cacheable),
-                .CACHE_FLUSH_IN(sdram_bist_busy | astraea_cache_flush),
+                .CACHE_FLUSH_IN(sdram_bist_busy | astraea_cache_flush |
+                                host_cache_flush_cpu),
                 .CACHE_FILL_VALID(sdram_fill_valid),
                 .CACHE_FILL_ADDR({7'b0000001, sdram_fill_addr}),
                 .CACHE_FILL_DATA(sdram_fill_data),
@@ -994,9 +1472,48 @@ module astra_soc #(
         .boot_bram_select(sel_rom), .stage2_select(sel_stage2_rom),
         .sdram_select(sel_sdram), .sdram_address(sdram_cpu_addr)
     );
+    wire [25:0] cpu_sdram_write_start =
+        {1'b0, sdram_cpu_addr[24:2], 2'b00};
+    wire [25:0] cpu_sdram_write_end = cpu_sdram_write_start + 26'd4;
+    wire cpu_front_guard_overlap = vega_front_guard_valid &&
+        cpu_sdram_write_start < vega_front_guard_end &&
+        cpu_sdram_write_end > {1'b0, vega_front_guard_start};
+    wire cpu_pending_guard_overlap = vega_pending_guard_valid &&
+        cpu_sdram_write_start < vega_pending_guard_end &&
+        cpu_sdram_write_end > {1'b0, vega_pending_guard_start};
+    wire cpu_framebuffer_write_fault_next = !cpu_rw_n && sel_sdram &&
+        (cpu_front_guard_overlap || cpu_pending_guard_overlap);
+    // Address and direction are stable during TG's setup phase. Capture the
+    // guard result there so active-cycle BERR cannot feed the range checks
+    // back through TG's same-cycle clock-enable path.
+    reg cpu_framebuffer_write_fault_q = 1'b0;
+    always @(posedge clk) begin
+        if (rst)
+            cpu_framebuffer_write_fault_q <= 1'b0;
+        else if (cpu_as_n)
+            cpu_framebuffer_write_fault_q <=
+                cpu_framebuffer_write_fault_next;
+    end
+    wire cpu_framebuffer_write_fault = !cpu_as_n &&
+        cpu_framebuffer_write_fault_q;
+    assign cpu_berrn = cpu_external_berrn &&
+                       !cpu_framebuffer_write_fault;
     wire sel_ram  = (cpu_adr[31:15] == 17'h03FF); // 0x01FF8000..0x01FFFFFF
     wire sel_sys  = (cpu_adr[31:9]  == 23'h7FF800);
+    wire sel_vesta_irq = (cpu_adr[31:8] == 24'hFFF003);
+    wire sel_vesta_timer = (cpu_adr[31:8] == 24'hFFF004) &&
+                           (cpu_adr[7:5] == 3'b000);
+    wire sel_vesta_irq_timer = sel_vesta_irq || sel_vesta_timer;
     wire sel_astraea = SDRAM_ENABLE && (cpu_adr[31:16] == 16'hFFF1);
+    wire sel_usb = USB_ENABLE && SDRAM_ENABLE &&
+                   (cpu_adr[31:12] == 20'hFFF40);
+    wire sel_host_runtime = ASTRA_HOST_ENABLE &&
+                            (cpu_adr[31:8] == 24'hFFF001) &&
+                            (cpu_adr[7:0] >= 8'h50) &&
+                            (cpu_adr[7:0] < 8'hb4);
+    wire sel_host_input = ASTRA_HOST_ENABLE &&
+                          (cpu_adr[31:8] == 24'hFFF007) &&
+                          (cpu_adr[7:0] < 8'h28);
     wire sel_uart = (cpu_adr[31:8]  == 24'hFFF005);
     wire sel_spi = (cpu_adr[31:8] == 24'hFFF006);
     wire sel_panel = (cpu_adr[31:12] == 20'hFFF01);
@@ -1005,6 +1522,28 @@ module astra_soc #(
                          !sel_vega_text;
     wire [31:0] panel_rdata;
     reg [7:0] led_r;
+
+    wire [7:0] vesta_irq_reg_index = sel_vesta_timer ?
+        (8'h40 + {5'd0, cpu_adr[4:2]}) : {2'd0, cpu_adr[7:2]};
+    wire [5:0] host_runtime_reg_index = sel_host_runtime ?
+        cpu_adr[7:2] - 6'h14 : cpu_adr[7:2];
+    assign vesta_irq_sources = {
+        21'd0, 1'b0, astraea_irq, vega_irq,
+        usb_irq || usb_dma_fault, 1'b0,
+        host_input_irq, host_storage_irq, uart_tx_irq, uart_rx_irq, 2'b00
+    };
+
+    vesta_irq_timer vesta_irq_timer_i (
+        .clk(clk), .rst(rst),
+        .select(sel_vesta_irq_timer),
+        .reg_index(vesta_irq_reg_index),
+        .write_strobe(bus_write_stb && cpu_data_en && !cpu_rw_n),
+        .write_data(cpu_dout), .byte_enable(be),
+        .read_data(vesta_irq_rdata),
+        .source_level(vesta_irq_sources), .cpu_ipln_n(vesta_ipln_n),
+        .iack_level(cpu_adr[3:1]), .iack_vector(vesta_iack_vector),
+        .iack_valid(vesta_iack_valid)
+    );
 
     astra_front_panel #(.CLK_HZ(CPU_CLK_HZ)) front_panel_i (
         .clk(clk), .rst(rst),
@@ -1031,7 +1570,9 @@ module astra_soc #(
             7'h02: sys_rdata = 32'h41363801; // Astra 68, board ABI 1
             7'h03: sys_rdata = {29'd0, host_boot_request_cpu,
                                 rom_overlay_sdram, 1'b0};
-            7'h04: sys_rdata = {26'd0, ASTRA_HOST_ENABLE, 1'b1, video_ready_cpu,
+            7'h04: sys_rdata = {24'd0, usb_dma_fault, usb_ready_cpu,
+                                ASTRA_HOST_ENABLE,
+                                1'b1, video_ready_cpu,
                                 !rom_overlay_sdram, sdram_ready_cpu,
                                 SDRAM_ENABLE ? 1'b1 : 1'b0};
             7'h05: sys_rdata = 32'd0;        // power-on reset
@@ -1046,21 +1587,45 @@ module astra_soc #(
             7'h0e: sys_rdata = 32'h00040000;
             7'h0f: sys_rdata = soc_build_id_value;
             7'h10: sys_rdata = 32'd1 + (SDRAM_ENABLE ? 32'd1 : 32'd0) +
-                                           (HDMI_ENABLE ? 32'd1 : 32'd0);
+                                           (HDMI_ENABLE ? 32'd1 : 32'd0) +
+                                           (USB_ENABLE && SDRAM_ENABLE ?
+                                                32'd1 : 32'd0);
             7'h11: sys_rdata = 32'd16;       // descriptor stride
             7'h12: sys_rdata = 32'd0;        // NVRAM capabilities: none yet
             7'h14: sys_rdata = 32'h56535441; // personality 0: "VSTA"
             7'h15: sys_rdata = 32'h00010000;
             7'h16: sys_rdata = 32'hfff00000;
             7'h17: sys_rdata = 32'h00010000;
-            7'h18: sys_rdata = SDRAM_ENABLE ? 32'h41535452 : 32'h56454741;
+            7'h18: sys_rdata = SDRAM_ENABLE ? 32'h41535452 :
+                                    HDMI_ENABLE ? 32'h56454741 : 32'd0;
             7'h19: sys_rdata = 32'h00010000;
-            7'h1a: sys_rdata = SDRAM_ENABLE ? 32'hfff10000 : 32'hfff20000;
-            7'h1b: sys_rdata = 32'h00010000;
-            7'h1c: sys_rdata = 32'h56454741; // personality 2: "VEGA"
-            7'h1d: sys_rdata = 32'h00010000;
-            7'h1e: sys_rdata = 32'hfff20000;
-            7'h1f: sys_rdata = 32'h00010000;
+            7'h1a: sys_rdata = SDRAM_ENABLE ? 32'hfff10000 :
+                                    HDMI_ENABLE ? 32'hfff20000 : 32'd0;
+            7'h1b: sys_rdata = SDRAM_ENABLE || HDMI_ENABLE ?
+                                    32'h00010000 : 32'd0;
+            7'h1c: sys_rdata = SDRAM_ENABLE && HDMI_ENABLE ?
+                                    32'h56454741 :
+                                SDRAM_ENABLE && USB_ENABLE ?
+                                    32'h4f484349 : 32'd0;
+            7'h1d: sys_rdata = (SDRAM_ENABLE && HDMI_ENABLE) ||
+                                (SDRAM_ENABLE && USB_ENABLE) ?
+                                    32'h00010000 : 32'd0;
+            7'h1e: sys_rdata = SDRAM_ENABLE && HDMI_ENABLE ?
+                                    32'hfff20000 :
+                                SDRAM_ENABLE && USB_ENABLE ?
+                                    32'hfff40000 : 32'd0;
+            7'h1f: sys_rdata = SDRAM_ENABLE && HDMI_ENABLE ?
+                                    32'h00010000 :
+                                SDRAM_ENABLE && USB_ENABLE ?
+                                    32'h00001000 : 32'd0;
+            7'h20: sys_rdata = SDRAM_ENABLE && HDMI_ENABLE && USB_ENABLE ?
+                                    32'h4f484349 : 32'd0;
+            7'h21: sys_rdata = SDRAM_ENABLE && HDMI_ENABLE && USB_ENABLE ?
+                                    32'h00010000 : 32'd0;
+            7'h22: sys_rdata = SDRAM_ENABLE && HDMI_ENABLE && USB_ENABLE ?
+                                    32'hfff40000 : 32'd0;
+            7'h23: sys_rdata = SDRAM_ENABLE && HDMI_ENABLE && USB_ENABLE ?
+                                    32'h00001000 : 32'd0;
             7'h34: sys_rdata = 32'd0; // SDRAM BIST control
             7'h35: sys_rdata = {21'd0, sdram_bist_phase, 5'd0,
                                  sdram_bist_errors != 0,
@@ -1070,8 +1635,13 @@ module astra_soc #(
             7'h38: sys_rdata = {7'd0, sdram_bist_first_fail};
             7'h39: sys_rdata = {24'd0, sdram_bist_expected};
             7'h3a: sys_rdata = {24'd0, sdram_bist_actual};
-            7'h3b: sys_rdata = cpu_cycle_count[31:0];
-            7'h3c: sys_rdata = cpu_cycle_count[63:32];
+            // A CPU_CYCLES_LO read latches all 64 bits. The TG core may issue
+            // a 32-bit MMIO read as two 16-bit beats, so the low beat and the
+            // following CPU_CYCLES_HI read use the same coherent snapshot.
+            7'h3b: sys_rdata = cpu_adr[1] ?
+                                  cpu_cycle_snapshot[31:0] :
+                                  cpu_cycle_count[31:0];
+            7'h3c: sys_rdata = cpu_cycle_snapshot[63:32];
             7'h3d: sys_rdata = tg_icache_hits;
             7'h3e: sys_rdata = tg_icache_misses;
             7'h3f: sys_rdata = tg_dcache_hits;
@@ -1151,6 +1721,76 @@ module astra_soc #(
         endcase
     end
 
+    generate
+        if (SDRAM_ENABLE && ASTRA_HOST_ENABLE) begin : g_host_runtime
+            astra_host_runtime host_runtime_i (
+                .cpu_clk(clk), .cpu_rst(rst),
+                .host_select(sel_host_runtime),
+                .input_select(sel_host_input),
+                .reg_index(host_runtime_reg_index),
+                .write_strobe(bus_write_stb && cpu_data_en && !cpu_rw_n),
+                .write_data(cpu_dout), .byte_enable(be),
+                .read_data(host_runtime_rdata),
+                .storage_irq(host_storage_irq),
+                .input_irq(host_input_irq),
+                .mem_clk(sdram_domain_clk), .mem_rst(sdram_domain_rst),
+                .request_valid(host_runtime_request_valid),
+                .request_ready(host_runtime_request_ready),
+                .request_id(host_runtime_request_id),
+                .request_op(host_runtime_request_op),
+                .request_flags(host_runtime_request_flags),
+                .request_lba(host_runtime_request_lba),
+                .request_sectors(host_runtime_request_sectors),
+                .request_buffer(host_runtime_request_buffer),
+                .request_media_generation(
+                    host_runtime_request_media_generation),
+                .request_host_generation(
+                    host_runtime_request_host_generation),
+                .completion_valid(host_runtime_completion_valid),
+                .completion_ready(host_runtime_completion_ready),
+                .completion_id(host_runtime_completion_id),
+                .completion_status(host_runtime_completion_status),
+                .completion_sectors(host_runtime_completion_sectors),
+                .completion_detail(host_runtime_completion_detail),
+                .completion_media_generation(
+                    host_runtime_completion_media_generation),
+                .completion_host_generation(
+                    host_runtime_completion_host_generation),
+                .state_valid(host_runtime_state_valid),
+                .state_ready(host_runtime_state_ready),
+                .state_host_generation(host_runtime_state_host_generation),
+                .state_media_generation(host_runtime_state_media_generation),
+                .state_flags(host_runtime_state_flags),
+                .state_media_sectors(host_runtime_state_media_sectors),
+                .state_max_sectors(host_runtime_state_max_sectors),
+                .event_valid(host_runtime_event_valid),
+                .event_ready(host_runtime_event_ready),
+                .event_host_generation(host_runtime_event_host_generation),
+                .event_header(host_runtime_event_header),
+                .event_value(host_runtime_event_value),
+                .event_timestamp(host_runtime_event_timestamp),
+                .event_device_sequence(
+                    host_runtime_event_device_sequence)
+            );
+        end else begin : g_host_runtime_disabled
+            assign host_runtime_rdata = 32'd0;
+            assign host_storage_irq = 1'b0;
+            assign host_input_irq = 1'b0;
+            assign host_runtime_request_valid = 1'b0;
+            assign host_runtime_request_id = 32'd0;
+            assign host_runtime_request_op = 8'd0;
+            assign host_runtime_request_flags = 8'd0;
+            assign host_runtime_request_lba = 64'd0;
+            assign host_runtime_request_sectors = 16'd0;
+            assign host_runtime_request_buffer = 32'd0;
+            assign host_runtime_request_media_generation = 32'd0;
+            assign host_runtime_request_host_generation = 32'd0;
+            assign host_runtime_completion_ready = 1'b0;
+            assign host_runtime_state_ready = 1'b0;
+            assign host_runtime_event_ready = 1'b0;
+        end
+    endgenerate
+
     wire ram_we = sel_ram & cpu_data_en & ~cpu_rw_n & bus_write_stb;
     wire astraea_write_stb = sel_astraea & cpu_data_en & ~cpu_rw_n &
                              bus_write_stb;
@@ -1203,6 +1843,8 @@ module astra_soc #(
     wire [7:0] rx_level;
     wire rx_empty;
     wire rx_overrun;
+    assign uart_rx_irq = !rx_empty;
+    assign uart_tx_irq = !uart_busy;
     uart_rx_fifo #(.DEPTH(UART_RX_FIFO_DEPTH)) uart_rx_fifo_i (
         .clk(clk), .rst(rst), .push_data(rx_byte), .push(rx_valid),
         .pop(rx_data_rd), .clear_overrun(rx_status_clear), .data(rx_data),
@@ -1402,6 +2044,15 @@ module astra_soc #(
         .cpu_rdata(vega_rdata),
         .cpu_irq(vega_irq),
         .display_ready(video_ready_cpu),
+        .present_writers_idle(present_writers_idle),
+        .blitter_completed_fence(astraea_blitter_completed_fence),
+        .draw_completed_fence(astraea_draw_completed_fence),
+        .front_guard_valid(vega_front_guard_valid),
+        .front_guard_start(vega_front_guard_start),
+        .front_guard_end(vega_front_guard_end),
+        .pending_guard_valid(vega_pending_guard_valid),
+        .pending_guard_start(vega_pending_guard_start),
+        .pending_guard_end(vega_pending_guard_end),
         .cop_write_stb(astraea_cop_move_stb &&
                        astraea_cop_move_addr[17:16] == 2'b10),
         .cop_addr(astraea_cop_move_addr[15:0]),
@@ -1432,7 +2083,7 @@ module astra_soc #(
     // Bus interface FSM (async 68030 slave, registered, a few wait states)
     // -------------------------------------------------------------------------
     localparam [2:0] BS_IDLE=3'd0, BS_WAIT=3'd1, BS_ACK=3'd2,
-                     BS_END=3'd3, BS_SDRAM=3'd4;
+                     BS_END=3'd3, BS_SDRAM=3'd4, BS_USB=3'd5;
     reg [2:0] bs;
     reg [1:0] waitc;
     reg       sdram_cycle_started;
@@ -1485,16 +2136,19 @@ module astra_soc #(
         uart_cpu_start <= 1'b0;
         sdram_cpu_start <= 1'b0;
         sdram_bist_start <= 1'b0;
+        usb_ctrl_start <= 1'b0;
         bus_write_stb <= 1'b0;
         bus_read_stb  <= 1'b0;
         if (rst) begin
             bs <= BS_IDLE; dsack_n <= 2'b11;
             rom_overlay_sdram <= 1'b0;
             host_boot_request_cpu <= 1'b0;
+            usb_ctrl_start <= 1'b0;
             sdram_cycle_started <= 1'b0;
             cpu_sdram_reads <= 32'd0;
             cpu_sdram_writes <= 32'd0;
             cpu_sdram_wait_cycles <= 32'd0;
+            cpu_cycle_snapshot <= 64'd0;
             sys_scratch <= 32'd0;
             sdram_bist_start <= 1'b0;
             dbg_last_vec_adr <= 32'd0;
@@ -1547,6 +2201,11 @@ module astra_soc #(
                     // MMIO, PMMU, or SDRAM cycle can pass it.
                     end else if (sdram_bridge_busy) begin
                         bs <= BS_IDLE;
+                    end else if (sel_usb && usb_ready_cpu) begin
+                        if (!usb_ctrl_busy) begin
+                            usb_ctrl_start <= 1'b1;
+                            bs <= BS_USB;
+                        end
                     end else if (sel_sdram) begin
                         sdram_cycle_started <= 1'b0;
                         if (sdram_ready_cpu) begin
@@ -1615,10 +2274,17 @@ module astra_soc #(
                             host_boot_request_cpu <= 1'b1;
                         end
                     end else if (cpu_rw_n) begin
-                        cpu_din <= bkpt_ack_read ? BKPT_ILLEGAL_DIN :
+                        if (sel_sys && cpu_adr[8:2] == 7'h3b &&
+                            !cpu_adr[1])
+                            cpu_cycle_snapshot <= cpu_cycle_count;
+                        cpu_din <= cpu_iack_read ? {4{vesta_iack_vector}} :
+                                   bkpt_ack_read ? BKPT_ILLEGAL_DIN :
                                    sel_rom  ? rom_q :
                                    sel_ram  ? ram_q :
+                                   (sel_host_runtime || sel_host_input) ?
+                                       host_runtime_rdata :
                                    sel_sys  ? sys_rdata :
+                                   sel_vesta_irq_timer ? vesta_irq_rdata :
                                    sel_astraea ? astraea_rdata :
                                    sel_vega_regs ? vega_rdata :
                                    sel_vega_text ? {4{console_cpu_rdata}} :
@@ -1687,13 +2353,29 @@ module astra_soc #(
                     bs <= BS_END;
                 end
             end
+            BS_USB: begin
+                if (usb_ctrl_done) begin
+                    if (cpu_rw_n) begin
+                        cpu_din <= usb_ctrl_rdata;
+                        bus_read_stb <= 1'b1;
+                    end else begin
+                        bus_write_stb <= 1'b1;
+                    end
+                    dsack_n <= 2'b00;
+                    bs <= BS_END;
+                end
+            end
             BS_ACK: begin
                 // Read data was presented in BS_WAIT so it is stable before DSACK.
-                cpu_din <= bkpt_ack_read ? BKPT_ILLEGAL_DIN :
+                cpu_din <= cpu_iack_read ? {4{vesta_iack_vector}} :
+                           bkpt_ack_read ? BKPT_ILLEGAL_DIN :
                            sel_rom  ? rom_q :
                            sel_ram  ? ram_q :
                            sel_sdram ? sdram_bridge_rdata :
+                           (sel_host_runtime || sel_host_input) ?
+                               host_runtime_rdata :
                            sel_sys  ? sys_rdata :
+                           sel_vesta_irq_timer ? vesta_irq_rdata :
                            sel_astraea ? astraea_rdata :
                            sel_vega_regs ? vega_rdata :
                            sel_vega_text ? {4{console_cpu_rdata}} :
@@ -1724,6 +2406,7 @@ module astra_soc #(
     reg        mon_start = 1'b0;
     reg  [7:0] mon_data = 8'h00;
     reg  [6:0] mon_idx = 7'd0;
+    localparam [20:0] UART_MONITOR_GAP_CYCLES = CPU_CLK_HZ / 10;
     reg [20:0] mon_gap = 21'd0;
     reg        mon_snap_rst = 1'b0;
     reg  [2:0] mon_snap_bs = 3'd0;
@@ -1858,7 +2541,7 @@ module astra_soc #(
             mon_start <= 1'b1;
             if (mon_idx == 7'd106) begin
                 mon_idx <= 7'd0;
-                mon_gap <= 21'd312500; // about 100 ms at 3.125 MHz
+                mon_gap <= UART_MONITOR_GAP_CYCLES;
             end else begin
                 mon_idx <= mon_idx + 1'b1;
             end

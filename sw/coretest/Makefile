@@ -1,6 +1,6 @@
 # Astra 68 core validation ROM.
 # Directed CPU/SoC tests that must pass before Harte or application ROM work.
-CROSS    ?= m68k-linux-gnu-
+include ../../mk/m68k-cross.mk
 CC        = $(CROSS)gcc
 OBJCOPY   = $(CROSS)objcopy
 OBJDUMP   = $(CROSS)objdump

@@ -28,6 +28,19 @@ AstraHost remains active after handoff. It waits while the current FPGA
 generation reports boot complete, then re-identifies the link and serves the
 same validated ROM after an FPGA-only reset or reconfiguration.
 
+Protocol 1.1 also provides queued raw-block and normalized input-event
+services. Raw storage is exposed only when the card has exactly one valid GPT
+partition with Astra type GUID `1A991104-9317-4CFD-B5EB-0402471570AC`.
+The parser verifies GPT header and entry-array CRCs and never falls back to the
+whole disk or the boot volume. A card without that partition still boots and
+reports the runtime link with media absent.
+
+Block transfers are limited to 16 512-byte sectors and use CRC-protected,
+idempotent 256-byte SPI chunks. Every runtime reconnect advances the host
+generation, allowing the FPGA to fail partial work explicitly before accepting
+new requests. Keyboard, pointer, and gamepad producers submit normalized
+records to a bounded FreeRTOS queue; their transport to Vesta is SPI-only.
+
 ESP-IDF 5.5.4 ships the upstream FatFs exFAT implementation but disables it in
 `ffconf.h`. The pinned Docker build enables that implementation before compiling
 and fails if the expected upstream configuration has changed. AstraHost never
@@ -79,7 +92,7 @@ rename succeeds. A subsequent maintenance boot restores the backup if power
 was lost between those renames. No path outside these three root files is
 opened for writing. Normal production firmware remains read-only.
 
-The package parser also has a native corruption/reset-vector test:
+The native tests cover package corruption/reset vectors and GPT validation:
 
 ```sh
 ./test-host.sh

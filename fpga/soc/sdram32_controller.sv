@@ -4,8 +4,8 @@
 `default_nettype none
 
 module sdram32_controller #(
-    parameter integer SDRAM_MHZ = 75,
-    // ECP5/ULX3S hardware needs three internal clocks at 75 MHz. A value of
+    parameter integer SDRAM_MHZ = 60,
+    // ECP5/ULX3S hardware needs three internal clocks at 60 MHz. A value of
     // two captures the second 16-bit burst beat as the low halfword.
     parameter integer SDRAM_READ_LATENCY = 3
 ) (
@@ -96,10 +96,17 @@ module sdram32_controller #(
     reg  [1:0]  request_count;
     reg         request_write;
     reg  [24:0] request_addr;
+    // Physical timing replica for the SDRAM row lookup. request_addr also
+    // drives the command/address output cone near the SDRAM pins; sharing that
+    // register bank with the open-row comparators creates a device-spanning
+    // path. Keep this copy architecturally identical and give the placer a
+    // local source for the comparator without adding a pipeline cycle.
+    (* keep = "true" *) reg [24:0] request_compare_addr;
     reg  [3:0]  request_be;
     reg  [31:0] request_wdata;
     reg         request_tail_write;
     reg  [24:0] request_tail_addr;
+    (* keep = "true" *) reg [24:0] request_tail_compare_addr;
     reg  [3:0]  request_tail_be;
     reg  [31:0] request_tail_wdata;
 
@@ -120,6 +127,27 @@ module sdram32_controller #(
     wire core_consumed = request_valid && core_accept;
     wire accepted = selected_valid && request_ready;
 
+    // The command engine registers its row-open/hit decision one cycle before
+    // consuming it. Only registered FIFO entries may enter that timing cone.
+    // A full FIFO presents its tail while READ/WRITE0 accepts the head, which
+    // preserves one 32-bit transfer every two clocks for continuous traffic.
+    // Empty and late-arriving requests wait for the normal FIFO register
+    // boundary instead of bypassing it with a device-spanning client path.
+    reg       core_compare_valid;
+    reg [1:0] core_compare_select;
+    always @* begin
+        core_compare_valid = 1'b0;
+        core_compare_select = 2'b01;
+        if (core_accept) begin
+            if (request_count == 2'd2) begin
+                core_compare_valid = 1'b1;
+                core_compare_select = 2'b10;
+            end
+        end else if (request_valid) begin
+            core_compare_valid = 1'b1;
+        end
+    end
+
     assign cpu_ready = grant_cpu && request_ready && cpu_valid;
     assign dma_ready = grant_dma && request_ready && dma_valid;
     assign video_ready = grant_video && request_ready && video_valid;
@@ -137,10 +165,17 @@ module sdram32_controller #(
             request_count <= 2'd0;
             request_write <= 1'b0;
             request_addr <= 25'd0;
+            // This value is intentionally different from request_addr's reset
+            // value. The comparator address is irrelevant while the FIFO is
+            // empty, and the first accepted request loads both banks with the
+            // same address. Distinct reset behavior prevents synthesis from
+            // merging the physical timing replica back into request_addr.
+            request_compare_addr <= 25'h1ffffff;
             request_be <= 4'd0;
             request_wdata <= 32'd0;
             request_tail_write <= 1'b0;
             request_tail_addr <= 25'd0;
+            request_tail_compare_addr <= 25'h1555555;
             request_tail_be <= 4'd0;
             request_tail_wdata <= 32'd0;
         end else begin
@@ -150,11 +185,13 @@ module sdram32_controller #(
                     if (request_count == 2'd0) begin
                         request_write <= selected_write;
                         request_addr <= selected_addr;
+                        request_compare_addr <= selected_addr;
                         request_be <= selected_be;
                         request_wdata <= selected_wdata;
                     end else begin
                         request_tail_write <= selected_write;
                         request_tail_addr <= selected_addr;
+                        request_tail_compare_addr <= selected_addr;
                         request_tail_be <= selected_be;
                         request_tail_wdata <= selected_wdata;
                     end
@@ -164,6 +201,7 @@ module sdram32_controller #(
                     if (request_count == 2'd2) begin
                         request_write <= request_tail_write;
                         request_addr <= request_tail_addr;
+                        request_compare_addr <= request_tail_compare_addr;
                         request_be <= request_tail_be;
                         request_wdata <= request_tail_wdata;
                     end
@@ -173,6 +211,7 @@ module sdram32_controller #(
                     // the same edge. A full FIFO does not assert ready.
                     request_write <= selected_write;
                     request_addr <= selected_addr;
+                    request_compare_addr <= selected_addr;
                     request_be <= selected_be;
                     request_wdata <= selected_wdata;
                 end
@@ -234,6 +273,10 @@ module sdram32_controller #(
         .inport_rd_i(core_rd),
         .inport_len_i(8'd0),
         .inport_addr_i({7'd0, request_addr}),
+        .inport_compare_head_addr_i({7'd0, request_compare_addr}),
+        .inport_compare_tail_addr_i({7'd0, request_tail_compare_addr}),
+        .inport_compare_select_i(core_compare_select),
+        .inport_compare_valid_i(core_compare_valid),
         .inport_write_data_i(reverse_bytes(request_wdata)),
         .inport_accept_o(core_accept),
         .inport_ack_o(core_ack),
@@ -252,6 +295,22 @@ module sdram32_controller #(
         .sdram_data_out_en_o(sdram_data_oe),
         .sdram_data_input_i(sdram_data_in)
     );
+
+`ifndef SYNTHESIS
+    always @(posedge clk) begin
+        if (!rst && request_valid && request_compare_addr !== request_addr)
+            $fatal(1, "SDRAM request timing replica diverged");
+        if (!rst && request_count == 2'd2 &&
+            request_tail_compare_addr !== request_tail_addr)
+            $fatal(1, "SDRAM tail timing replica diverged");
+        if (!rst && core_compare_valid) begin
+            case (core_compare_select)
+                2'b01, 2'b10: ;
+                default: $fatal(1, "SDRAM compare source is not one-hot");
+            endcase
+        end
+    end
+`endif
 endmodule
 
 `default_nettype wire

@@ -39,12 +39,9 @@ run_test tb_astraea_chip \
     "$SOC_DIR/astraea_draw.sv" \
     "$SOC_DIR/astraea_copper.sv" \
     "$SOC_DIR/astraea_chip.sv"
-run_test tb_vega_tile_builder \
-    "$SOC_DIR/vega_tile_builder.sv"
 run_test tb_vega_sprite_builder \
     "$SOC_DIR/vega_sprite_builder.sv"
 run_test tb_vega_video \
-    "$SOC_DIR/vega_tile_builder.sv" \
     "$SOC_DIR/vega_sprite_builder.sv" \
     "$SOC_DIR/vega_video.sv"
 

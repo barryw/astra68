@@ -14,6 +14,14 @@ module astraea_draw (
     output reg         cpu_done,
     output wire        cpu_irq,
     output wire        cache_flush,
+    output wire [31:0] completed_fence,
+
+    input  wire        front_guard_valid,
+    input  wire [24:0] front_guard_start,
+    input  wire [25:0] front_guard_end,
+    input  wire        pending_guard_valid,
+    input  wire [24:0] pending_guard_start,
+    input  wire [25:0] pending_guard_end,
 
     input  wire        mem_clk,
     input  wire        mem_rst,
@@ -144,6 +152,7 @@ module astraea_draw (
     localparam [2:0] GEOM_SPAN    = 3'd4;
     localparam [2:0] GEOM_PATTERN_SETUP = 3'd5;
     localparam [2:0] GEOM_RECT_SETUP = 3'd6;
+    localparam [2:0] GEOM_ELLIPSE_TIP = 3'd7;
 
     localparam [3:0] EMIT_RET_PATTERN_NEXT   = 4'd0;
     localparam [3:0] EMIT_RET_SPAN_ADVANCE  = 4'd1;
@@ -235,7 +244,7 @@ module astraea_draw (
     reg [4:0] config_read_index;
     reg [4:0] config_capture_index;
     reg config_capture_valid;
-    reg [2:0] config_phase;
+    reg [3:0] config_phase;
     reg config_valid_q;
     reg cfg_base_valid_q;
     reg cfg_clip_valid_q;
@@ -245,6 +254,28 @@ module astraea_draw (
     reg cfg_glyph_format_valid_q;
     reg cfg_glyph_palette_valid_q;
     reg cfg_flood_valid_q;
+    reg cfg_dst_range_start_valid_q;
+    reg [36:0] cfg_dst_range_start_q;
+    reg [35:0] cfg_dst_row_product_q;
+    reg [36:0] cfg_dst_row_addr_q;
+    reg [17:0] cfg_clip_x_bytes_q;
+    reg cfg_dst_range_end_valid_q;
+    reg [36:0] cfg_dst_range_end_q;
+    reg cfg_flood_command_q;
+    reg cfg_flood_fields_valid_q;
+    reg [25:0] cfg_flood_work_start_q;
+    reg [25:0] cfg_flood_work_end_q;
+    reg cfg_front_guard_valid_q;
+    reg [25:0] cfg_front_guard_start_q;
+    reg [25:0] cfg_front_guard_end_q;
+    reg cfg_pending_guard_valid_q;
+    reg [25:0] cfg_pending_guard_start_q;
+    reg [25:0] cfg_pending_guard_end_q;
+    reg cfg_dst_front_overlap_q;
+    reg cfg_dst_pending_overlap_q;
+    reg cfg_flood_front_overlap_q;
+    reg cfg_flood_pending_overlap_q;
+    reg config_protected_q;
 
     wire cpu_config_select = cpu_reg <= REG_OP || cpu_reg == REG_FENCE;
     wire [31:0] staging_owner_indexed = {9'd0, staging_owner_cpu};
@@ -304,6 +335,12 @@ module astraea_draw (
     reg [31:0] cfg_work_entries_cpu;
     reg [31:0] cfg_op_cpu;
     reg [31:0] cfg_fence_cpu;
+    reg command_front_guard_valid_cpu;
+    reg [24:0] command_front_guard_start_cpu;
+    reg [25:0] command_front_guard_end_cpu;
+    reg command_pending_guard_valid_cpu;
+    reg [24:0] command_pending_guard_start_cpu;
+    reg [25:0] command_pending_guard_end_cpu;
     reg cfg_dst_addr_valid_cpu;
     reg cfg_src_addr_valid_cpu;
     reg cfg_palette_addr_valid_cpu;
@@ -337,6 +374,7 @@ module astraea_draw (
     assign cpu_busy = busy_visible;
     assign cache_flush = busy_visible;
     assign cpu_irq = reg_irq_enable && done_sticky_cpu;
+    assign completed_fence = completed_fence_cpu;
 
     always @* begin
         case (cpu_reg)
@@ -372,6 +410,12 @@ module astraea_draw (
             completed_fence_cpu <= 32'd0;
             completed_fence_meta_cpu <= 32'd0;
             completed_fence_sync_cpu <= 32'd0;
+            command_front_guard_valid_cpu <= 1'b0;
+            command_front_guard_start_cpu <= 25'd0;
+            command_front_guard_end_cpu <= 26'd0;
+            command_pending_guard_valid_cpu <= 1'b0;
+            command_pending_guard_start_cpu <= 25'd0;
+            command_pending_guard_end_cpu <= 26'd0;
             cpu_done <= 1'b0;
         end else begin
             busy_sync_cpu <= {busy_sync_cpu[0], busy_mem};
@@ -420,6 +464,18 @@ module astraea_draw (
                                 command_valid_cpu <= staging_valid_cpu;
                                 command_range_valid_cpu <=
                                     staging_range_valid_cpu;
+                                command_front_guard_valid_cpu <=
+                                    front_guard_valid;
+                                command_front_guard_start_cpu <=
+                                    front_guard_start;
+                                command_front_guard_end_cpu <=
+                                    front_guard_end;
+                                command_pending_guard_valid_cpu <=
+                                    pending_guard_valid;
+                                command_pending_guard_start_cpu <=
+                                    pending_guard_start;
+                                command_pending_guard_end_cpu <=
+                                    pending_guard_end;
                                 start_toggle_cpu <= ~start_toggle_cpu;
                                 start_pending_cpu <= 1'b1;
                                 done_sticky_cpu <= 1'b0;
@@ -438,10 +494,9 @@ module astraea_draw (
     reg [1:0] span_return;
     reg       line_finish_rect;
     reg [2:0] port_return;
-    // The CPU-domain command snapshot is immutable from accepted START through
-    // completion. Use it directly as bundled data after the synchronized start
-    // toggle instead of spending a second register bank on identical fields.
-    wire job_rgb565 = cfg_format_cpu[0];
+    // Capture the immutable format fact beside the execution datapaths instead
+    // of driving them from the physically distant command snapshot.
+    (* keep = "true" *) reg job_rgb565;
     wire job_pattern_opaque = cfg_op_cpu[8];
     wire [24:0] job_dst = cfg_dst_cpu;
     wire [15:0] job_pitch = cfg_dst_pitch_cpu;
@@ -504,6 +559,7 @@ module astraea_draw (
     reg [1:0] rect_edge;
     reg signed [16:0] rect_fill_y;
     reg signed [16:0] rect_fill_end_y;
+    reg rect_fill_last_row;
 
     reg signed [16:0] circle_cx;
     reg signed [16:0] circle_cy;
@@ -526,6 +582,7 @@ module astraea_draw (
 
     reg [15:0] ellipse_rx;
     reg [15:0] ellipse_ry;
+    reg ellipse_tip_done_q;
     reg [31:0] ellipse_rx2;
     reg [31:0] ellipse_ry2;
     reg signed [16:0] ellipse_cx;
@@ -538,6 +595,7 @@ module astraea_draw (
     reg [1:0] ellipse_slot;
     reg ellipse_filled;
     reg ellipse_tipping;
+    reg ellipse_step_x;
     reg ellipse_step_y;
     reg [1:0] ellipse_alu_phase;
     reg [2:0] geometry_step_kind;
@@ -560,43 +618,11 @@ module astraea_draw (
 
     reg signed [47:0] ellipse_alu_a;
     reg signed [47:0] ellipse_alu_b;
-    reg ellipse_alu_sub;
-    wire signed [47:0] ellipse_alu_result = ellipse_alu_sub ?
-        ellipse_alu_a - ellipse_alu_b : ellipse_alu_a + ellipse_alu_b;
-
-    always @* begin
-        ellipse_alu_a = 48'sd0;
-        ellipse_alu_b = 48'sd0;
-        ellipse_alu_sub = 1'b0;
-        case (state)
-            ST_ELL_STEP: begin
-                ellipse_alu_a = ellipse_dx;
-                ellipse_alu_b = ellipse_dx_step;
-            end
-            ST_GEOM_ADJUST: begin
-                ellipse_alu_a = ellipse_dy;
-                ellipse_alu_b = ellipse_dy_step;
-            end
-            ST_ELL_MUL_RX: begin
-                case (ellipse_alu_phase)
-                    ELL_ALU_INIT: begin
-                        ellipse_alu_a = ellipse_dx;
-                        ellipse_alu_b = $signed({16'd0, ellipse_rx2});
-                    end
-                    ELL_ALU_STEP_X: begin
-                        ellipse_alu_a = ellipse_err;
-                        ellipse_alu_b = ellipse_dx;
-                    end
-                    ELL_ALU_STEP_Y: begin
-                        ellipse_alu_a = ellipse_err;
-                        ellipse_alu_b = ellipse_dy;
-                    end
-                    default: begin end
-                endcase
-            end
-            default: begin end
-        endcase
-    end
+    wire signed [47:0] ellipse_alu_result =
+        ellipse_alu_a + ellipse_alu_b;
+    wire signed [47:0] ellipse_initial_dx =
+        $signed({16'd0, ellipse_ry2}) -
+        $signed(ellipse_cross_product << 1);
 
     reg signed [16:0] geometry_alu0_a;
     reg signed [16:0] geometry_alu0_b;
@@ -780,7 +806,7 @@ module astraea_draw (
 
     // Exact floor(n / 15) for the rounded RGB565 blend numerator. The
     // arithmetic is split across registered states and the quotient lives in
-    // one synchronous ECP5 block RAM instead of a 75 MHz combinational divider.
+    // one synchronous ECP5 block RAM instead of a memory-domain divider.
     (* ram_style = "block" *) reg [5:0] blend_div15_lut [0:1023];
     reg [9:0] blend_div15_addr;
     reg [5:0] blend_div15_q;
@@ -848,15 +874,19 @@ module astraea_draw (
         {22'd0, glyph_desc_word, 2'd0};
     wire [25:0] glyph_palette_addr_wide = {1'b0, job_palette} +
                                           {17'd0, palette_index, 1'b0};
-    wire [25:0] glyph_desc_source_sum = {1'b0, job_src} +
-                                         {1'b0, pixel_result_mem[24:0]};
+    reg [25:0] glyph_desc_source_sum_q;
 
     reg signed [16:0] flood_x;
     reg signed [16:0] flood_y;
     reg signed [16:0] flood_scan_x;
     reg signed [16:0] flood_push_x;
     reg signed [16:0] flood_push_y;
+    reg signed [16:0] flood_clip_last_x;
+    reg signed [16:0] flood_clip_last_y;
     reg [15:0] flood_target;
+    reg [15:0] flood_fill_value;
+    reg flood_port_matches_target;
+    reg flood_port_matches_fill;
     reg [15:0] flood_queue_count;
     reg [1:0] queue_return;
     reg [2:0] flood_read_kind;
@@ -873,9 +903,8 @@ module astraea_draw (
     localparam [1:0] DISPATCH_FLOOD_PUSH_ADDR  = 2'd1;
     localparam [1:0] DISPATCH_FLOOD_POP_ADDR   = 2'd2;
     localparam [1:0] DISPATCH_GLYPH_SOURCE     = 2'd3;
-    wire [15:0] port_pixel_value = job_rgb565 ? pixel_result_mem[15:0] :
-                                                {8'd0, pixel_result_mem[7:0]};
-    wire [15:0] job_fill_value = job_rgb565 ? job_fg : {8'd0, job_fg[7:0]};
+    wire [15:0] flood_port_value = job_rgb565 ?
+        pixel_rdata[15:0] : {8'd0, pixel_rdata[7:0]};
     wire [25:0] flood_push_addr_next = {1'b0, job_work} +
                                        {8'd0, flood_queue_count, 2'b00};
     wire [25:0] flood_pop_addr_next = {1'b0, job_work} +
@@ -921,9 +950,13 @@ module astraea_draw (
                         cfg_op_cpu[7:0] <= OP_GLYPH_INDEX8;
     wire [25:0] cfg_palette_end = {1'b0, cfg_palette_cpu} +
         ((cfg_op_cpu[7:0] == OP_GLYPH_INDEX8 ? 26'd256 : 26'd16) << 1);
-    wire [25:0] cfg_work_end = {1'b0, cfg_work_cpu} +
-        ({10'd0, cfg_work_entries_cpu[15:0]} <<
-         (cfg_is_glyph ? 4 : 2));
+    // This range is consumed only by glyph validation, where every table
+    // entry is 16 bytes. Keeping the shift fixed removes opcode selection
+    // from the address carry chain without changing the accepted range.
+    wire [25:0] cfg_glyph_work_end = {1'b0, cfg_work_cpu} +
+        ({10'd0, cfg_work_entries_cpu[15:0]} << 4);
+    wire [25:0] cfg_flood_work_end = {1'b0, cfg_work_cpu} +
+        {8'd0, cfg_work_entries_cpu[15:0], 2'b00};
     wire cfg_single_glyph_valid = cfg_work_entries_cpu[15:0] != 16'd0 ||
         (cfg_src_size_cpu[15:0] != 16'd0 &&
          cfg_src_size_cpu[31:16] != 16'd0 &&
@@ -947,17 +980,17 @@ module astraea_draw (
          cfg_single_glyph_valid);
     wire cfg_glyph_work_valid = !cfg_is_glyph ||
         cfg_work_entries_cpu[15:0] == 16'd0 ||
-        (cfg_work_addr_valid_cpu && cfg_work_end <= 26'h2000000);
+        (cfg_work_addr_valid_cpu &&
+         cfg_glyph_work_end <= 26'h2000000);
     wire cfg_glyph_format_valid = !cfg_is_glyph ||
         cfg_op_cpu[7:0] != OP_GLYPH_A4 || cfg_format_cpu[0];
     wire cfg_glyph_palette_valid = !cfg_is_glyph ||
         (cfg_op_cpu[7:0] != OP_GLYPH_INDEX4 &&
          cfg_op_cpu[7:0] != OP_GLYPH_INDEX8) ||
         (cfg_palette_addr_valid_cpu && cfg_palette_end <= 26'h2000000);
-    wire cfg_flood_valid = cfg_op_cpu[7:0] != OP_FLOOD_FILL ||
-        (cfg_work_addr_valid_cpu && cfg_work_entries_cpu[31:16] == 16'd0 &&
-         cfg_work_entries_cpu[15:0] != 16'd0 &&
-         cfg_work_end <= 26'h2000000);
+    wire cfg_flood_fields_valid = cfg_work_addr_valid_cpu &&
+        cfg_work_entries_cpu[31:16] == 16'd0 &&
+        cfg_work_entries_cpu[15:0] != 16'd0;
     wire cfg_base_valid = cfg_op_cpu[7:0] <= OP_FLOOD_FILL &&
                           cfg_op_cpu[31:24] == 8'd0 &&
                           cfg_op_cpu[15:9] == 7'd0 &&
@@ -983,6 +1016,30 @@ module astraea_draw (
         cfg_glyph_source_valid_q && cfg_glyph_work_valid_q &&
         cfg_glyph_format_valid_q && cfg_glyph_palette_valid_q &&
         cfg_flood_valid_q;
+    wire [17:0] cfg_clip_min_x_bytes =
+        {2'd0, cfg_clip_min_cpu[15:0]} << cfg_format_cpu[0];
+    wire [17:0] cfg_clip_max_x_bytes =
+        {2'd0, cfg_clip_max_cpu[15:0]} << cfg_format_cpu[0];
+    // Command setup is off the pixel-throughput path. Register the shared DSP,
+    // row-base add, clip operand, and clip add before range validation.
+    wire [36:0] cfg_dst_row_addr_calc = {12'd0, cfg_dst_cpu} +
+        {1'b0, cfg_dst_row_product_q};
+    wire [36:0] cfg_dst_clip_addr_calc = cfg_dst_row_addr_q +
+        {19'd0, cfg_clip_x_bytes_q};
+    wire cfg_dst_front_overlap = cfg_front_guard_valid_q &&
+        cfg_dst_range_start_q < {11'd0, cfg_front_guard_end_q} &&
+        cfg_dst_range_end_q > {11'd0, cfg_front_guard_start_q};
+    wire cfg_dst_pending_overlap = cfg_pending_guard_valid_q &&
+        cfg_dst_range_start_q < {11'd0, cfg_pending_guard_end_q} &&
+        cfg_dst_range_end_q > {11'd0, cfg_pending_guard_start_q};
+    wire cfg_flood_front_overlap = cfg_flood_command_q &&
+        cfg_front_guard_valid_q &&
+        cfg_flood_work_start_q < cfg_front_guard_end_q &&
+        cfg_flood_work_end_q > cfg_front_guard_start_q;
+    wire cfg_flood_pending_overlap = cfg_flood_command_q &&
+        cfg_pending_guard_valid_q &&
+        cfg_flood_work_start_q < cfg_pending_guard_end_q &&
+        cfg_flood_work_end_q > cfg_pending_guard_start_q;
 
     task automatic dispatch_command;
         begin
@@ -1096,6 +1153,8 @@ module astraea_draw (
                 OP_FLOOD_FILL: begin
                     flood_x <= coord_x(cfg_p0_cpu);
                     flood_y <= coord_y(cfg_p0_cpu);
+                    flood_clip_last_x <= coord_x(cfg_clip_max_cpu) - 17'sd1;
+                    flood_clip_last_y <= coord_y(cfg_clip_max_cpu) - 17'sd1;
                     flood_queue_count <= 16'd0;
                     flood_span_above <= 1'b0;
                     flood_span_below <= 1'b0;
@@ -1119,7 +1178,7 @@ module astraea_draw (
             config_read_index <= 5'd0;
             config_capture_index <= 5'd0;
             config_capture_valid <= 1'b0;
-            config_phase <= 3'd0;
+            config_phase <= 4'd0;
             config_valid_q <= 1'b0;
             cfg_base_valid_q <= 1'b0;
             cfg_clip_valid_q <= 1'b0;
@@ -1129,6 +1188,28 @@ module astraea_draw (
             cfg_glyph_format_valid_q <= 1'b0;
             cfg_glyph_palette_valid_q <= 1'b0;
             cfg_flood_valid_q <= 1'b0;
+            cfg_dst_range_start_valid_q <= 1'b0;
+            cfg_dst_range_start_q <= 37'd0;
+            cfg_dst_row_product_q <= 36'd0;
+            cfg_dst_row_addr_q <= 37'd0;
+            cfg_clip_x_bytes_q <= 18'd0;
+            cfg_dst_range_end_valid_q <= 1'b0;
+            cfg_dst_range_end_q <= 37'd0;
+            cfg_flood_command_q <= 1'b0;
+            cfg_flood_fields_valid_q <= 1'b0;
+            cfg_flood_work_start_q <= 26'd0;
+            cfg_flood_work_end_q <= 26'd0;
+            cfg_front_guard_valid_q <= 1'b0;
+            cfg_front_guard_start_q <= 26'd0;
+            cfg_front_guard_end_q <= 26'd0;
+            cfg_pending_guard_valid_q <= 1'b0;
+            cfg_pending_guard_start_q <= 26'd0;
+            cfg_pending_guard_end_q <= 26'd0;
+            cfg_dst_front_overlap_q <= 1'b0;
+            cfg_dst_pending_overlap_q <= 1'b0;
+            cfg_flood_front_overlap_q <= 1'b0;
+            cfg_flood_pending_overlap_q <= 1'b0;
+            config_protected_q <= 1'b0;
             cfg_dst_cpu <= 25'd0;
             cfg_dst_pitch_cpu <= 16'd0;
             cfg_format_cpu <= 32'd0;
@@ -1160,6 +1241,7 @@ module astraea_draw (
             span_return <= SPAN_RET_RECT_NEXT;
             line_finish_rect <= 1'b0;
             port_return <= PORT_RET_EMIT;
+            job_rgb565 <= 1'b0;
             emit_x <= 17'sd0;
             emit_y <= 17'sd0;
             emit_color <= 16'd0;
@@ -1195,6 +1277,7 @@ module astraea_draw (
             rect_edge <= 2'd0;
             rect_fill_y <= 17'sd0;
             rect_fill_end_y <= 17'sd0;
+            rect_fill_last_row <= 1'b0;
             circle_cx <= 17'sd0;
             circle_cy <= 17'sd0;
             circle_x <= 17'sd0;
@@ -1204,6 +1287,7 @@ module astraea_draw (
             circle_filled <= 1'b0;
             ellipse_rx <= 16'd0;
             ellipse_ry <= 16'd0;
+            ellipse_tip_done_q <= 1'b0;
             ellipse_rx2 <= 32'd0;
             ellipse_ry2 <= 32'd0;
             ellipse_cx <= 17'sd0;
@@ -1216,8 +1300,11 @@ module astraea_draw (
             ellipse_slot <= 2'd0;
             ellipse_filled <= 1'b0;
             ellipse_tipping <= 1'b0;
+            ellipse_step_x <= 1'b0;
             ellipse_step_y <= 1'b0;
             ellipse_alu_phase <= ELL_ALU_IDLE;
+            ellipse_alu_a <= 48'sd0;
+            ellipse_alu_b <= 48'sd0;
             geometry_step_kind <= GEOM_CIRCLE;
             geometry_alu0_a <= 17'sd0;
             geometry_alu0_b <= 17'sd0;
@@ -1284,7 +1371,12 @@ module astraea_draw (
             flood_scan_x <= 17'sd0;
             flood_push_x <= 17'sd0;
             flood_push_y <= 17'sd0;
+            flood_clip_last_x <= 17'sd0;
+            flood_clip_last_y <= 17'sd0;
             flood_target <= 16'd0;
+            flood_fill_value <= 16'd0;
+            flood_port_matches_target <= 1'b0;
+            flood_port_matches_fill <= 1'b0;
             flood_queue_count <= 16'd0;
             queue_return <= QUEUE_RET_POP;
             flood_read_kind <= FLOOD_READ_SEED;
@@ -1305,6 +1397,7 @@ module astraea_draw (
             pixel_addr <= 25'd0;
             pixel_wdata <= 32'd0;
             pixel_result_mem <= 32'd0;
+            glyph_desc_source_sum_q <= 26'd0;
         end else begin
             start_sync_mem <= {start_sync_mem[0], start_toggle_cpu};
 
@@ -1321,11 +1414,18 @@ module astraea_draw (
                 config_read_index <= 5'd0;
                 config_capture_index <= 5'd0;
                 config_capture_valid <= 1'b0;
-                config_phase <= 3'd1;
+                config_phase <= 4'd1;
+                cfg_dst_range_start_valid_q <= 1'b0;
+                cfg_dst_range_end_valid_q <= 1'b0;
+                cfg_dst_front_overlap_q <= 1'b0;
+                cfg_dst_pending_overlap_q <= 1'b0;
+                cfg_flood_front_overlap_q <= 1'b0;
+                cfg_flood_pending_overlap_q <= 1'b0;
+                config_protected_q <= 1'b0;
                 shared_mul_pending <= 1'b0;
                 state <= ST_IDLE;
             end else if (busy_mem) begin
-                if (config_phase == 3'd1) begin
+                if (config_phase == 4'd1) begin
                     if (!config_capture_valid) begin
                         config_capture_valid <= 1'b1;
                         config_capture_index <= config_read_index;
@@ -1385,7 +1485,7 @@ module astraea_draw (
 
                         if (config_capture_index == REG_FENCE) begin
                             config_capture_valid <= 1'b0;
-                            config_phase <= 3'd2;
+                            config_phase <= 4'd2;
                         end else begin
                             config_capture_index <= config_read_index;
                             if (config_read_index == REG_OP)
@@ -1394,7 +1494,10 @@ module astraea_draw (
                                 config_read_index <= config_read_index + 5'd1;
                         end
                     end
-                end else if (config_phase == 3'd2) begin
+                end else if (config_phase == 4'd2) begin
+                    job_rgb565 <= cfg_format_cpu[0];
+                    flood_fill_value <= cfg_format_cpu[0] ?
+                        cfg_fg_cpu : {8'd0, cfg_fg_cpu[7:0]};
                     cfg_base_valid_q <= cfg_base_valid;
                     cfg_clip_valid_q <= cfg_clip_valid;
                     cfg_radius_valid_q <= cfg_radius_valid;
@@ -1402,15 +1505,78 @@ module astraea_draw (
                     cfg_glyph_work_valid_q <= cfg_glyph_work_valid;
                     cfg_glyph_format_valid_q <= cfg_glyph_format_valid;
                     cfg_glyph_palette_valid_q <= cfg_glyph_palette_valid;
-                    cfg_flood_valid_q <= cfg_flood_valid;
-                    config_phase <= 3'd3;
-                end else if (config_phase == 3'd3) begin
-                    config_valid_q <= config_valid_next;
-                    config_phase <= 3'd4;
-                end else if (config_phase == 3'd4) begin
-                    config_phase <= 3'd0;
+                    cfg_flood_command_q <=
+                        cfg_op_cpu[7:0] == OP_FLOOD_FILL;
+                    cfg_flood_fields_valid_q <= cfg_flood_fields_valid;
+                    cfg_flood_work_start_q <= {1'b0, cfg_work_cpu};
+                    cfg_flood_work_end_q <= cfg_flood_work_end;
+                    cfg_front_guard_valid_q <=
+                        command_front_guard_valid_cpu;
+                    cfg_front_guard_start_q <=
+                        {1'b0, command_front_guard_start_cpu};
+                    cfg_front_guard_end_q <= command_front_guard_end_cpu;
+                    cfg_pending_guard_valid_q <=
+                        command_pending_guard_valid_cpu;
+                    cfg_pending_guard_start_q <=
+                        {1'b0, command_pending_guard_start_cpu};
+                    cfg_pending_guard_end_q <= command_pending_guard_end_cpu;
+                    shared_mul_a <= {2'd0, cfg_clip_min_cpu[31:16]};
+                    shared_mul_b <= {2'd0, cfg_dst_pitch_cpu};
+                    config_phase <= 4'd3;
+                end else if (config_phase == 4'd3) begin
+                    cfg_dst_row_product_q <= shared_mul_product;
+                    cfg_flood_valid_q <= !cfg_flood_command_q ||
+                        (cfg_flood_fields_valid_q &&
+                         cfg_flood_work_end_q <= 26'h2000000);
+                    config_phase <= 4'd6;
+                end else if (config_phase == 4'd6) begin
+                    cfg_dst_row_addr_q <= cfg_dst_row_addr_calc;
+                    cfg_clip_x_bytes_q <= cfg_clip_min_x_bytes;
+                    shared_mul_a <=
+                        {2'd0, cfg_clip_max_cpu[31:16]} - 18'd1;
+                    shared_mul_b <= {2'd0, cfg_dst_pitch_cpu};
+                    config_phase <= 4'd7;
+                end else if (config_phase == 4'd7) begin
+                    cfg_dst_range_start_q <= cfg_dst_clip_addr_calc;
+                    cfg_dst_range_start_valid_q <=
+                        cfg_dst_clip_addr_calc < 37'h02000000;
+                    cfg_dst_row_product_q <= shared_mul_product;
+                    config_phase <= 4'd8;
+                end else if (config_phase == 4'd8) begin
+                    cfg_dst_row_addr_q <= cfg_dst_row_addr_calc;
+                    cfg_clip_x_bytes_q <= cfg_clip_max_x_bytes;
+                    config_phase <= 4'd9;
+                end else if (config_phase == 4'd9) begin
+                    cfg_dst_range_end_q <= cfg_dst_clip_addr_calc;
+                    cfg_dst_range_end_valid_q <=
+                        cfg_dst_clip_addr_calc <= 37'h02000000;
+                    config_phase <= 4'd4;
+                end else if (config_phase == 4'd4) begin
+                    config_valid_q <= config_valid_next &&
+                        cfg_dst_range_start_valid_q &&
+                        cfg_dst_range_end_valid_q;
+                    cfg_dst_front_overlap_q <= cfg_dst_front_overlap;
+                    cfg_dst_pending_overlap_q <= cfg_dst_pending_overlap;
+                    cfg_flood_front_overlap_q <= cfg_flood_front_overlap;
+                    cfg_flood_pending_overlap_q <= cfg_flood_pending_overlap;
+                    config_phase <= 4'd10;
+                end else if (config_phase == 4'd10) begin
+                    config_protected_q <= cfg_dst_front_overlap_q ||
+                        cfg_dst_pending_overlap_q ||
+                        cfg_flood_front_overlap_q ||
+                        cfg_flood_pending_overlap_q;
+                    config_phase <= 4'd5;
+                end else if (config_phase == 4'd5) begin
+                    config_phase <= 4'd0;
                     if (!config_valid_q) begin
                         error_mem <= 8'd1;
+                        completed_fence_mem <= cfg_fence_cpu;
+                        busy_mem <= 1'b0;
+                        done_toggle_mem <= ~done_toggle_mem;
+                        shared_mul_pending <= 1'b0;
+                        state <= ST_IDLE;
+                    end else if (config_protected_q) begin
+                        error_mem <= 8'd5;
                         completed_fence_mem <= cfg_fence_cpu;
                         busy_mem <= 1'b0;
                         done_toggle_mem <= ~done_toggle_mem;
@@ -1492,7 +1658,8 @@ module astraea_draw (
                                 emit_row_offset <= shared_mul_product[31:0];
                                 shared_mul_pending <= 1'b0;
                                 pixel_access_write <= 1'b1;
-                                pixel_access_size <= job_rgb565 ? 2'd1 : 2'd0;
+                                pixel_access_size <= job_rgb565 ?
+                                                     2'd1 : 2'd0;
                                 pixel_access_wdata <= {16'd0, emit_color};
                                 port_return <= PORT_RET_EMIT;
                                 state <= ST_PIXEL_ADDR;
@@ -1528,6 +1695,8 @@ module astraea_draw (
                                 if (ellipse_step_y) begin
                                     ellipse_y <= ellipse_y + 17'sd1;
                                     ellipse_dy <= ellipse_alu_result;
+                                    ellipse_alu_a <= ellipse_err;
+                                    ellipse_alu_b <= ellipse_alu_result;
                                     ellipse_alu_phase <= ELL_ALU_STEP_Y;
                                     state <= ST_ELL_MUL_RX;
                                 end else begin
@@ -1553,6 +1722,23 @@ module astraea_draw (
                     end
                     ST_GEOM_DECIDE: begin
                         case (geometry_step_kind)
+                            GEOM_ELLIPSE_TIP: begin
+                                if (ellipse_tip_done_q) begin
+                                    state <= ST_FINISH;
+                                end else begin
+                                    ellipse_y <= ellipse_y + 17'sd1;
+                                    prepare_ellipse_geometry(
+                                        2'd0,
+                                        ellipse_filled,
+                                        ellipse_cx,
+                                        ellipse_cy,
+                                        ellipse_x,
+                                        ellipse_y + 17'sd1
+                                    );
+                                    state <= ellipse_filled ? ST_ELL_SPAN :
+                                                                ST_ELL_POINT;
+                                end
+                            end
                             GEOM_ELLIPSE: begin
                                 ellipse_slot <= 2'd0;
                                 if (ellipse_x > 17'sd0) begin
@@ -1795,10 +1981,12 @@ module astraea_draw (
                         span_y <= rect_fill_y;
                         span_color <= job_fg;
                         span_return <= SPAN_RET_RECT_NEXT;
+                        rect_fill_last_row <=
+                            rect_fill_y == rect_fill_end_y;
                         state <= ST_SPAN_SETUP;
                     end
                     ST_RECT_FILL_NEXT: begin
-                        if (rect_fill_y == rect_fill_end_y)
+                        if (rect_fill_last_row)
                             state <= ST_FINISH;
                         else begin
                             rect_fill_y <= rect_fill_y + 17'sd1;
@@ -1868,6 +2056,8 @@ module astraea_draw (
                                 ellipse_alu_phase <= ELL_ALU_IDLE;
                                 shared_mul_pending <= 1'b0;
                                 geometry_step_kind <= GEOM_ELLIPSE;
+                                ellipse_alu_a <= ellipse_dy;
+                                ellipse_alu_b <= ellipse_dy_step;
                                 state <= ST_GEOM_ADJUST;
                             end
                             ELL_ALU_STEP_Y: begin
@@ -1937,10 +2127,11 @@ module astraea_draw (
                             default: begin
                                 ellipse_x <= -$signed({1'b0, ellipse_rx});
                                 ellipse_y <= 17'sd0;
-                                ellipse_dx <=
-                                    $signed({16'd0, ellipse_ry2}) -
-                                    $signed(ellipse_cross_product << 1);
+                                ellipse_dx <= ellipse_initial_dx;
                                 ellipse_dy <=
+                                    $signed({16'd0, ellipse_rx2});
+                                ellipse_alu_a <= ellipse_initial_dx;
+                                ellipse_alu_b <=
                                     $signed({16'd0, ellipse_rx2});
                                 ellipse_alu_phase <= ELL_ALU_INIT;
                                 state <= ST_ELL_MUL_RX;
@@ -1966,22 +2157,19 @@ module astraea_draw (
                         if (ellipse_slot == (ellipse_filled ? 2'd1 : 2'd3)) begin
                             ellipse_slot <= 2'd0;
                             if (ellipse_tipping) begin
-                                if (ellipse_y >= $signed({1'b0, ellipse_ry}))
-                                    state <= ST_FINISH;
-                                else begin
-                                    ellipse_y <= ellipse_y + 17'sd1;
-                                    prepare_ellipse_geometry(
-                                        2'd0,
-                                        ellipse_filled,
-                                        ellipse_cx,
-                                        ellipse_cy,
-                                        ellipse_x,
-                                        ellipse_y + 17'sd1
-                                    );
-                                    state <= ellipse_filled ? ST_ELL_SPAN :
-                                                                ST_ELL_POINT;
-                                end
+                                ellipse_tip_done_q <=
+                                    ellipse_y >= $signed({1'b0, ellipse_ry});
+                                geometry_step_kind <= GEOM_ELLIPSE_TIP;
+                                state <= ST_GEOM_DECIDE;
                             end else begin
+                                ellipse_step_x <=
+                                    ellipse_e2 >=
+                                    $signed({ellipse_dx[47], ellipse_dx});
+                                ellipse_step_y <=
+                                    ellipse_e2 <=
+                                    $signed({ellipse_dy[47], ellipse_dy});
+                                ellipse_alu_a <= ellipse_dx;
+                                ellipse_alu_b <= ellipse_dx_step;
                                 state <= ST_ELL_STEP;
                             end
                         end else begin
@@ -1999,17 +2187,17 @@ module astraea_draw (
                         end
                     end
                     ST_ELL_STEP: begin
-                        ellipse_step_y <=
-                            ellipse_e2 <= $signed({ellipse_dy[47],
-                                                   ellipse_dy});
-                        if (ellipse_e2 >= $signed({ellipse_dx[47],
-                                                  ellipse_dx})) begin
+                        if (ellipse_step_x) begin
                             ellipse_x <= ellipse_x + 17'sd1;
                             ellipse_dx <= ellipse_alu_result;
+                            ellipse_alu_a <= ellipse_err;
+                            ellipse_alu_b <= ellipse_alu_result;
                             ellipse_alu_phase <= ELL_ALU_STEP_X;
                             state <= ST_ELL_MUL_RX;
                         end else begin
                             geometry_step_kind <= GEOM_ELLIPSE;
+                            ellipse_alu_a <= ellipse_dy;
+                            ellipse_alu_b <= ellipse_dy_step;
                             state <= ST_GEOM_ADJUST;
                         end
                     end
@@ -2054,6 +2242,19 @@ module astraea_draw (
                     ST_PORT_WAIT: begin
                         if (pixel_done) begin
                             pixel_result_mem <= pixel_rdata;
+                            if (port_return == PORT_RET_FLOOD_PROCESS) begin
+                                flood_port_matches_target <=
+                                    flood_port_value == flood_target;
+                                flood_port_matches_fill <=
+                                    flood_port_value == flood_fill_value;
+                                if (flood_read_kind == FLOOD_READ_SEED)
+                                    flood_target <= flood_port_value;
+                            end
+                            if (port_return == PORT_RET_GLYPH_DESC_STORE &&
+                                glyph_desc_word == 2'd0)
+                                glyph_desc_source_sum_q <=
+                                    {1'b0, job_src} +
+                                    {1'b0, pixel_rdata[24:0]};
                             case (port_return)
                                 PORT_RET_EMIT: begin
                                     case (emit_return)
@@ -2148,12 +2349,12 @@ module astraea_draw (
                             case (glyph_desc_word)
                                 2'd0: begin
                                     if (pixel_result_mem[31:25] != 7'd0 ||
-                                        glyph_desc_source_sum[25]) begin
+                                        glyph_desc_source_sum_q[25]) begin
                                         error_mem <= 8'd1;
                                         state <= ST_FINISH;
                                     end else begin
                                         glyph_source_base <=
-                                            glyph_desc_source_sum[24:0];
+                                            glyph_desc_source_sum_q[24:0];
                                         glyph_desc_word <= 2'd1;
                                         state <= ST_GLYPH_DESC_ISSUE;
                                     end
@@ -2427,7 +2628,8 @@ module astraea_draw (
                             emit_row_offset <= shared_mul_product[31:0];
                             shared_mul_pending <= 1'b0;
                             pixel_access_write <= 1'b0;
-                            pixel_access_size <= job_rgb565 ? 2'd1 : 2'd0;
+                            pixel_access_size <= job_rgb565 ?
+                                                 2'd1 : 2'd0;
                             pixel_access_wdata <= 32'd0;
                             port_return <= PORT_RET_FLOOD_PROCESS;
                             state <= ST_PIXEL_ADDR;
@@ -2436,8 +2638,7 @@ module astraea_draw (
                     ST_FLOOD_PROCESS: begin
                         case (flood_read_kind)
                             FLOOD_READ_SEED: begin
-                                flood_target <= port_pixel_value;
-                                if (port_pixel_value == job_fill_value) begin
+                                if (flood_port_matches_fill) begin
                                     state <= ST_FINISH;
                                 end else begin
                                     flood_push_x <= flood_x;
@@ -2447,11 +2648,11 @@ module astraea_draw (
                                 end
                             end
                             FLOOD_READ_POP: begin
-                                state <= port_pixel_value == flood_target ?
+                                state <= flood_port_matches_target ?
                                          ST_FLOOD_SEEK : ST_FLOOD_POP;
                             end
                             FLOOD_READ_SEEK: begin
-                                if (port_pixel_value == flood_target) begin
+                                if (flood_port_matches_target) begin
                                     flood_x <= flood_x - 17'sd1;
                                     state <= ST_FLOOD_SEEK;
                                 end else begin
@@ -2462,7 +2663,7 @@ module astraea_draw (
                                 end
                             end
                             FLOOD_READ_SCAN: begin
-                                if (port_pixel_value == flood_target) begin
+                                if (flood_port_matches_target) begin
                                     emit_color <= job_fg;
                                     emit_return <= EMIT_RET_FLOOD_NEIGHBOR;
                                     flood_neighbor_below <= 1'b0;
@@ -2472,7 +2673,7 @@ module astraea_draw (
                                 end
                             end
                             default: begin
-                                if (port_pixel_value == flood_target) begin
+                                if (flood_port_matches_target) begin
                                     if ((!flood_neighbor_below &&
                                          !flood_span_above) ||
                                         (flood_neighbor_below &&
@@ -2580,7 +2781,7 @@ module astraea_draw (
                                 flood_read_kind <= FLOOD_READ_NEIGHBOR;
                                 state <= ST_FLOOD_READ;
                             end
-                        end else if (flood_y + 17'sd1 >= clip_max_y) begin
+                        end else if (flood_y >= flood_clip_last_y) begin
                             flood_span_below <= 1'b0;
                             state <= ST_FLOOD_ADVANCE;
                         end else begin
@@ -2591,7 +2792,7 @@ module astraea_draw (
                         end
                     end
                     ST_FLOOD_ADVANCE: begin
-                        if (flood_scan_x + 17'sd1 >= clip_max_x) begin
+                        if (flood_scan_x >= flood_clip_last_x) begin
                             state <= ST_FLOOD_POP;
                         end else begin
                             flood_scan_x <= flood_scan_x + 17'sd1;

@@ -38,6 +38,7 @@ module tb_sd_boot #(
         .SDRAM_BIST_BYTES(TEST_BYTES),
         .SDRAM_READY_DELAY(10000),
         .HDMI_ENABLE(1'b0),
+        .USB_ENABLE(1'b0),
         .CPU_CLK_DIV_BIT(0),
         .UART_BAUD(12500000),
         .SD_BOOT_ENABLE(1'b1),

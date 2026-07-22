@@ -37,6 +37,7 @@ module sdram32_cpu_bridge (
     output wire [3:0]  mem_be,
     output wire [31:0] mem_wdata,
     output wire        mem_lock,
+    output wire        mem_cache_quiescent,
     input  wire        mem_rsp_valid,
     input  wire [31:0] mem_rdata
 );
@@ -89,6 +90,7 @@ module sdram32_cpu_bridge (
 
     (* async_reg = "true" *) reg [1:0] req_sync_mem;
     (* async_reg = "true" *) reg [1:0] lock_sync_mem;
+    (* async_reg = "true" *) reg [1:0] flush_ack_sync_mem;
     reg req_seen_mem;
     reg rsp_toggle_mem;
     reg [31:0] rdata_mem;
@@ -98,13 +100,19 @@ module sdram32_cpu_bridge (
     reg [2:0] line_rsp_mem;
     reg [1:0] mem_state;
 
-    assign cpu_busy = request_busy_cpu;
+    // A DMA flush is also a bus fence. New CPU SDRAM accesses remain stalled
+    // until DMA releases the fence, while an already-posted request drains.
+    assign cpu_busy = request_busy_cpu || cpu_cache_flush;
+    wire flush_ack_cpu = cpu_cache_flush && !cpu_rst && !request_busy_cpu;
     assign mem_write = write_cpu;
     assign mem_addr = line_mem ?
                       addr_cpu + {20'd0, line_issue_mem, 2'b00} : addr_cpu;
     assign mem_be = be_cpu;
     assign mem_wdata = wdata_cpu;
     assign mem_lock = lock_sync_mem[1];
+    // This round-trip acknowledgement proves the CPU clock domain has seen
+    // the fence and that every request accepted before it has completed.
+    assign mem_cache_quiescent = flush_ack_sync_mem[1];
 
     always @(posedge cpu_clk) begin
         cpu_done <= 1'b0;
@@ -143,7 +151,7 @@ module sdram32_cpu_bridge (
                     cache_epoch <= cache_epoch + 2'd1;
             end
             rsp_sync_cpu <= {rsp_sync_cpu[0], rsp_toggle_mem};
-            if (cpu_start && !request_busy_cpu) begin
+            if (cpu_start && !request_busy_cpu && !cpu_cache_flush) begin
                 if (cpu_line_hit) begin
                     cpu_rdata <= select_line_word(
                         line_data[cpu_line_index], cpu_addr[3:2]);
@@ -204,6 +212,7 @@ module sdram32_cpu_bridge (
         if (mem_rst) begin
             req_sync_mem <= 2'b00;
             lock_sync_mem <= 2'b00;
+            flush_ack_sync_mem <= 2'b00;
             req_seen_mem <= 1'b0;
             rsp_toggle_mem <= 1'b0;
             rdata_mem <= 32'd0;
@@ -216,6 +225,9 @@ module sdram32_cpu_bridge (
         end else begin
             req_sync_mem <= {req_sync_mem[0], req_toggle_cpu};
             lock_sync_mem <= {lock_sync_mem[0], cpu_lock};
+            flush_ack_sync_mem <= {
+                flush_ack_sync_mem[0], flush_ack_cpu
+            };
             case (mem_state)
                 MEM_IDLE: begin
                     mem_valid <= 1'b0;

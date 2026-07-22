@@ -436,7 +436,7 @@ flip-flops. Counting two LUT primitives per carry cell gives a 7,208-primitive
 draw budget, so it crosses the original 4,000-LUT review threshold; that is a
 measured scope decision, not a waiver. The second block RAM is an exact,
 registered A4 quotient table that replaces a timing-failing combinational
-divider in the 75 MHz domain. Final acceptance depends on integrated
+divider in the 60 MHz domain. Final acceptance depends on integrated
 place-and-route, exact retained headroom for the remaining chipset, shared-model
 tests, and real HDMI output. The A4 datapath time-multiplexes channels; the
 additional multipliers also serve dynamic pitch/address arithmetic rather than

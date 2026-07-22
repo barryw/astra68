@@ -1,5 +1,5 @@
 # Astra 68 kernel bootstrap. Freestanding MC68030 image loaded by the system ROM.
-CROSS ?= m68k-linux-gnu-
+include ../../mk/m68k-cross.mk
 CC = $(CROSS)gcc
 OBJCOPY = $(CROSS)objcopy
 OBJDUMP = $(CROSS)objdump
@@ -14,12 +14,13 @@ CPPFLAGS = -I../include -I$(BUILD_DIR) \
            -DASTRA_KERNEL_PANIC_SELFTEST=$(PANIC_SELFTEST)
 CFLAGS = -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin \
          -fno-common -fno-pic -fno-pie -fno-stack-protector \
-         -Wall -Wextra -Werror
+         -Wa,--noexecstack -Wall -Wextra -Werror
 LDFLAGS = -T kernel.ld -nostdlib -no-pie \
           -Wl,--build-id=none,-Map=astra_kernel.map
 
 OBJECTS = $(BUILD_DIR)/entry.o $(BUILD_DIR)/vectors.o \
-          $(BUILD_DIR)/kernel.o $(BUILD_DIR)/boot_contract.o
+          $(BUILD_DIR)/kernel.o $(BUILD_DIR)/platform.o \
+          $(BUILD_DIR)/boot_contract.o
 
 all: astra_kernel.elf astra_kernel.bin
 
@@ -36,6 +37,9 @@ $(BUILD_DIR)/vectors.o: vectors.S kernel.ld | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/kernel.o: kernel.c $(BUILD_INFO) ../include/astra/boot.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/platform.o: platform.c platform.h ../include/vesta.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/boot_contract.o: ../common/boot_contract.c ../include/astra/boot.h | $(BUILD_DIR)

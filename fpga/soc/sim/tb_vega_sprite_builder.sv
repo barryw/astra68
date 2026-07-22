@@ -11,7 +11,7 @@ module tb_vega_sprite_builder;
     reg mem_clk = 1'b0;
     reg pixel_clk = 1'b0;
     always #40 cpu_clk = ~cpu_clk;
-    always #6.666 mem_clk = ~mem_clk;
+    always #8.333 mem_clk = ~mem_clk;
     always #18.5 pixel_clk = ~pixel_clk;
     reg cpu_rst = 1'b1;
     reg mem_rst = 1'b1;
@@ -57,6 +57,10 @@ module tb_vega_sprite_builder;
         .cpu_table_write(cpu_table_write),
         .cpu_word_addr(cpu_word_addr), .cpu_be(cpu_be),
         .cpu_wdata(cpu_wdata), .cpu_rdata(cpu_rdata),
+        .cpu_shadow_bank(2'd0), .cpu_write_bank(2'd0),
+        .scene_copy_read(1'b0), .scene_copy_write(1'b0),
+        .scene_copy_source_bank(2'd0), .scene_copy_dest_bank(2'd0),
+        .scene_copy_index(8'd0),
         .mem_clk(mem_clk), .mem_rst(mem_rst), .start(start),
         .build_bank(build_bank), .line_y(line_y), .line_width(line_width),
         .enable(enable), .pixel_budget(pixel_budget),
@@ -304,19 +308,26 @@ module tb_vega_sprite_builder;
             $fatal(1, "out-of-range sprite was not rejected requests=%0d",
                    request_count - request_before);
 
-        // Saturate the documented scanline budget: 32 sprites x 32 pixels.
+        // The descriptor aperture above sprite 15 is reserved and reads zero.
+        // Saturate the documented scanline budget: 16 sprites x 64 pixels.
         // The builder must still publish before the next 720-pixel line.
-        for (sprite_index = 0; sprite_index < 32;
+        set_sprite(16, 32'h0000f003, 0, 0, 64, 1, S0_BASE, 32);
+        cpu_word_addr = 8'd128;
+        repeat (2) @(posedge cpu_clk);
+        #1;
+        if (cpu_rdata !== 32'd0)
+            $fatal(1, "reserved sprite descriptor read %08x", cpu_rdata);
+        for (sprite_index = 0; sprite_index < 16;
              sprite_index = sprite_index + 1)
             set_sprite(sprite_index,
                        32'h00001003 | ((sprite_index & 15) << 8),
-                       0, 0, 32, 1, S0_BASE, 16);
+                       0, 0, 64, 1, S0_BASE, 32);
         line_y = 10'd0;
         pixel_budget = 16'd1024;
         start_line(1'b0, cycles);
-        // Preserve arbitration headroom for simultaneous framebuffer and
-        // tile fetches; the whole-system deadline alone is not a sufficient
-        // guard against serializing line-buffer composition.
+        // Preserve arbitration headroom for simultaneous framebuffer fetches;
+        // the whole-system deadline alone is not a sufficient guard against
+        // serializing line-buffer composition.
         if (config_error || cycles >= 1400)
             $fatal(1, "saturated sprite line failed error=%b cycles=%0d",
                    config_error, cycles);
@@ -326,7 +337,7 @@ module tb_vega_sprite_builder;
         // A 1,023-pixel aligned row occupies exactly all 128 pattern words.
         // Shifting the same row by one byte requires 129 and must be rejected
         // before issuing any memory traffic.
-        for (sprite_index = 1; sprite_index < 32;
+        for (sprite_index = 1; sprite_index < 16;
              sprite_index = sprite_index + 1)
             write_word(sprite_index, 0, 32'd0);
         set_sprite(0, 32'h00001003, 0, 0, 1023, 1,

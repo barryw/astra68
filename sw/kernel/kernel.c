@@ -1,6 +1,7 @@
 #include <astra/boot.h>
 
 #include "kernel_build_info.h"
+#include "platform.h"
 #include "vega.h"
 #include "vesta.h"
 
@@ -79,10 +80,24 @@ static void screen_putc(char value)
     if (screen_row == last_row) screen_scroll();
 }
 
+static void diagnostic_uart_putc(char value)
+{
+    uint32_t start = VESTA->CPU_CYCLES_LO;
+    uint32_t timeout = VESTA->CPU_HZ / 1000u;
+
+    if (timeout == 0u) timeout = 1u;
+    while ((VESTA->UART_STATUS & UART_TX_READY) == 0u) {
+        if ((uint32_t)(VESTA->CPU_CYCLES_LO - start) >= timeout)
+            return;
+    }
+    VESTA->UART_DATA = (uint8_t)value;
+}
+
 static void console_putc(char value)
 {
     screen_putc(value);
     astra_early_log_putc(early_log, value);
+    diagnostic_uart_putc(value);
 }
 
 static void console_puts(const char *text)
@@ -140,6 +155,12 @@ static void halt_forever(void) __attribute__((noreturn));
 static void halt_forever(void)
 {
     for (;;) __asm__ volatile ("stop #0x2700");
+}
+
+static void idle_forever(void) __attribute__((noreturn));
+static void idle_forever(void)
+{
+    for (;;) __asm__ volatile ("stop #0x2000");
 }
 
 static void panic_begin(const char *reason)
@@ -268,12 +289,42 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     console_puts(" Hz\n");
     console_puts("PMMU ............... present, disabled\n");
 
+    kernel_platform_interrupt_init(boot_info.cpu_hz);
+    kernel_enable_interrupts();
+    uint32_t timer_start = VESTA->CPU_CYCLES_LO;
+    while (kernel_platform_ticks() < 2u) {
+        if ((uint32_t)(VESTA->CPU_CYCLES_LO - timer_start) >
+            boot_info.cpu_hz)
+            kernel_panic("Vesta timer interrupt timeout");
+    }
+    console_puts("Vesta timer ........ OK @ 100 Hz\n");
+
+    if ((VESTA->SYS_STATUS & SYS_ASTRA_HOST) != 0u) {
+        if (!kernel_block_present())
+            kernel_panic("AstraHost block controller missing");
+        uint32_t host_start = VESTA->CPU_CYCLES_LO;
+        while ((VESTA->BLOCK_STATE & BLOCK_STATE_LINK_UP) == 0u) {
+            if ((uint32_t)(VESTA->CPU_CYCLES_LO - host_start) >
+                boot_info.cpu_hz)
+                kernel_panic("AstraHost runtime handshake timeout");
+        }
+        console_puts("AstraHost runtime ... OK, media ");
+        console_puts((VESTA->BLOCK_STATE & BLOCK_STATE_MEDIA_PRESENT) != 0u ?
+                     "present\n" : "not provisioned\n");
+        kernel_block_ack_state();
+        if (VESTA->INPUT_ID != INPUT_ID_MAGIC)
+            kernel_panic("AstraHost input controller missing");
+        console_puts("Input queue ......... OK\n");
+    } else {
+        console_puts("AstraHost runtime ... not present\n");
+    }
+
 #if ASTRA_KERNEL_PANIC_SELFTEST
     kernel_panic("deliberate panic self-test");
 #endif
 
     console_puts("\nK0 ENTRY PASS\n");
-    console_puts("HALTED: NEXT STEP IS ARCHITECTURAL PROBES\n");
+    console_puts("KERNEL IDLE\n");
     VESTA->SCRATCH = ASTRA_KERNEL_STATUS_READY;
-    halt_forever();
+    idle_forever();
 }

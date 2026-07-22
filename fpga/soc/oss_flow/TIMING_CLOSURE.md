@@ -9,15 +9,15 @@ design or physical constraints change.
 
 The production bitstream must satisfy all of these at the same time:
 
-- TG68K.C 68030 plus PMMU, AstraHost SPI boot, SD stage 0, Astraea, Vega, and
-  the 32 MiB SDRAM system are enabled.
-- CPU is constrained to 12.5 MHz and the SDRAM controller to 75 MHz.
+- TG68K.C 68030 plus PMMU, AstraHost SPI boot, SD stage 0, OHCI USB host,
+  Astraea, tile-free Vega, and the 32 MiB SDRAM system are enabled.
+- CPU is constrained to 12.5 MHz and the SDRAM controller to 60 MHz.
 - Every other generated and external clock is explicitly constrained by
   `astra_clocks.sdc`.
 - Yosys reports no combinational SCCs or other `check -assert` failures.
 - nextpnr completes routing with no timing waiver in the release result.
-- The `core_graphics` resource profile passes. Passing the physical device
-  capacity alone is not enough because more chipset logic remains to be built.
+- The `kernel_platform_v1` resource profile passes. Physical device capacity
+  is the production limit; there is no artificial utilization ceiling.
 - Directed graphics, integrated 68030 graphics, SDRAM, boot, and CPU regression
   tests remain exact.
 - The exact release ROM, feature parameters, build ID, router, seed, and
@@ -26,10 +26,326 @@ The production bitstream must satisfy all of these at the same time:
   attached to `nuc`.
 
 Do not close timing by weakening the architecture. In particular, do not lower
-the 75 MHz SDRAM clock, lower the 12.5 MHz CPU clock, disable a production
+the 60 MHz SDRAM clock, lower the 12.5 MHz CPU clock, disable a production
 feature, add a false path to a synchronous path, or accept `--timing-allow-fail`
 as a release result. `--timing-allow-fail` is useful only to obtain a routed
 diagnostic report.
+
+## 2026-07-20: 60 MHz Kernel Platform v1
+
+The production target is now 12.5 MHz CPU and 60 MHz SDRAM with no artificial
+utilization cap. Tile layers are retired and the sprite count is 16. The
+retained machine still includes the MC68030/PMMU, 32 MiB SDRAM, AstraHost,
+Vesta, OHCI USB, HDMI, framebuffer X/Y scroll and wrap, shadow/fenced
+presentation, sprites, copper, blitter, line/rectangle/ellipse/flood/pattern
+drawing, and active-surface protection. HDMI remains 60 Hz, USB remains
+48 MHz, and SD remains 20 MHz.
+
+The corrected 60 MHz simulation baseline passes the directed USB, graphics,
+SDRAM, AstraHost, Vesta, POST, and kernel-entry suites. Aligned SDRAM measures
+115.71 MB/s write and 114.24 MB/s read; BIST measures 115.05 MB/s; blitter copy
+and fill measure 39.54 and 92.88 MB/s. Integrated normal, 16-sprite INDEX8,
+and 16-sprite RGB565 scanlines peak at 505, 1103, and 1429 memory clocks against
+a 1906-clock deadline. The full SPI pin-level boot reaches `POST PASS`,
+`K0 ENTRY PASS`, and `KERNEL IDLE`.
+
+The first complete tile-free 60 MHz route packed 67,211 of 83,640
+`TRELLIS_COMB` cells and reached 12.580 MHz CPU, 69.691 MHz SDRAM, and
+78.16 MHz USB while passing both HDMI clocks. It did not start the CPU on the
+board. Post-route inspection found `GSR=DISABLED` on every packed FF, so HDL
+initial values were not guaranteed at configuration completion. The retained
+control image still passed through the same NUC loader and UART path; the
+candidate was rejected and persistent flash was not touched.
+
+The root cause was synthesis ordering: an early `proc; opt` ran before the
+ECP5 primitive library was loaded and removed the input-only top-level `GSR`
+instance. Removing that redundant pre-pass lets `lattice_gsr` resolve the
+flattened top. Two reset-release modules intentionally retain hierarchy, so
+the flow then uses Yosys `setparam`, not `chparam`, to enable their mapped FFs
+while retaining exactly one physical GSR primitive. `check_por.py` now rejects
+zero or multiple physical GSRs and scans every retained module; the release
+tests cover both failure modes. The controller's `SDRAM_MHZ` default was also
+corrected from 75 to 60 so initialization, command timing, and refresh are
+computed from the real clock rather than stretching the refresh interval.
+
+The corrected Beast mapping artifact
+`astra_release60-gsr-setparam-synth.json` has SHA-256
+`3bd53384ef0cb812458e9e2431d033d6324c5a7290186c5b7633e1bed3672cab`.
+Yosys 0.64+159 reports zero SCCs, 53,295 LUT4s, 25,409 synthesized FFs,
+5,069 CCU2Cs, 104 DP16KDs, and 19 multipliers. nextpnr packs 66,765
+`TRELLIS_COMB` cells before placement. Its strict Beast seed-4 route passes all
+seven clocks at 13.454604 MHz CPU, 68.526001 MHz SDRAM, 82.925613 MHz USB,
+128.452148 MHz SD, 38.880249 MHz board, 58.910160 MHz pixel, and
+231.803421 MHz HDMI shift. The routed JSON SHA-256 is
+`2ad4029d14bc98b85def0662dd01956e6729dc923b50cf66cad164058cd352d3`;
+the report SHA-256 is
+`56b72faf3358846e39fbf98a5c83f3be564bec0ba22745eb76041671570437a3`;
+and the production bitstream SHA-256 is
+`993a526bff26d0955d50896dd050ba4fb0916ed74de5f909c8962b80746a6af3`.
+
+That timing pass is not a hardware pass. The checked route-probe transplant
+changed exactly `rom.0.0` and `rom.0.1`, corresponding to physical BRAM blocks
+32 and 33, and produced bitstream SHA-256
+`66ce82887c34655bb455a776641ba2a53a942fb1c994a12cca31ce4b0d4406be`.
+It emitted zero UART bytes after an SRAM load on NUC. The retained known-good
+`astra_post-v0_3-12m5-seed4.bit` control then passed complete POST in 1.064 s
+through the same loader, board, and UART path. The board path is therefore
+healthy and the corrected route is rejected for production use. Persistent
+flash was not touched and the known-good control was restored to SRAM.
+
+Post-route inspection identifies the weak boundary. The 74.32 ns CPU path
+starts at TG register index `rdindex_a[3]`, crosses architectural register
+data, logical-address carry logic, the external data-cache lookup/return, and
+TG commit/next-state control. Its 13.4546 MHz result leaves only 7.1% physical
+margin over the real 12.5 MHz CPU clock. P54 removes that full-cycle
+asynchronous data-cache return: data-cache hits are captured while TG remains
+stalled and acknowledged one CPU clock later; instruction-cache hits retain
+their existing immediate response. This changes no Motorola-visible behavior
+or production clock. Historical isolated measurements showed about 6% on a
+mixed cache workload; actual software cost depends on data-cache hit density.
+
+The complete P54 platform passes the full CPU coretest, full SDRAM boot through
+`POST PASS`, `K0 ENTRY PASS`, and `KERNEL IDLE`, every directed graphics test,
+and all integrated normal/INDEX8/RGB565 workloads. BIST remains 115.03 MB/s at
+136,733 clocks and the graphics maxima remain exactly 505, 1103, and 1429
+SDRAM clocks per scanline. The independent route-probe simulation also passes
+with an advancing CPU-cycle record.
+
+The P54 wrapper SHA-256 is
+`ec8f1e5b9a09f38a3ea102fe3e01c20abb1079e38c904ffa97d140cea89447f9`.
+Canonical Beast synthesis for build ID `0x60000002` has zero SCCs, enables GSR
+on all 25,419 mapped FFs, and reports 52,728 LUT4s, 5,080 CCU2Cs, 104 DP16KDs,
+and 19 multipliers. The mapped JSON SHA-256 is
+`57607fc2de060ef0495b318759c8edff3741a4e5c2ecea413340c6ad7d4f3166`.
+cells. The first Beast seed-4 route passes every production clock at
+12.833676 MHz CPU, 62.169727 MHz SDRAM, 82.406258 MHz USB, 113.378685 MHz SD,
+40.278728 MHz board, 61.481712 MHz pixel, and 266.880157 MHz HDMI shift. It
+fails the intended 14 MHz CPU guardband and is not a hardware candidate.
+
+This result exposed a build-control error in the guardband experiment. The
+diagnostic SDC SHA-256
+`e0885788663b4ab5b633f84d94d6bbe0ed182fc7e1a6c43f6710c1b3b4fa49fc`
+constrained the final report to 14 MHz, but `mkbit.sh` still passed its default
+`--freq 12.5` to heap placement. The placer therefore optimized the CPU for
+12.5 MHz, not 14 MHz. NUC seed 57 continues as independent placement diversity,
+but it inherited the same placement target and is diagnostic only unless its
+measured route independently clears 14 MHz. The corrected Beast build sets
+`TARGET_FREQ_MHZ=14` for both placement and routing. Its first placement startup
+then exposed a second override: `astra_soc.lpf` explicitly declared the CPU net
+at 12.5 MHz, so nextpnr still reported `constraining clock net 'clk' to 12.50
+MHz`. That placement was stopped immediately. The true guardband LPF changes
+only the implementation constraint to 14 MHz, has SHA-256
+`500ad2af71863f8cc7d8d1406414c859dba720fb840506b91eb7113cad7df2bf`,
+and nextpnr now reports the CPU placement constraint as 14.00 MHz. The generated
+CPU clock remains 12.5 MHz and SDRAM remains 60 MHz.
+
+Re-running placement on the unchanged P54 netlist with the corrected 14 MHz
+LPF and SDC produced the same placement checksum, `0x8e180abb`, as the earlier
+12.5 MHz-started run. A diagnostic CPU box at `(62,8)..(112,52)` matched 5,057
+cells and changed the checksum to `0x38b77de8`, but that route was stopped after
+the actual structural path was isolated. The 77.92 ns P54 CPU path spent 57.47
+ns in routing and ran from the active-framebuffer address/range comparisons
+through BERR, acknowledge, and clock-enable control back into TG state. That
+same-cycle protection return, rather than the 60 MHz SDRAM domain, was the
+measured blocker.
+
+The guarded candidate captures the prospective active-framebuffer CPU write
+fault during TG's address-setup phase and holds it through the active bus
+cycle. BERR still arrives before any SDRAM side effect, but the range compare
+can no longer return through TG's same-cycle clock-enable cone. The focused
+integrated test configures a real INDEX8 front surface, verifies exactly one
+guard-generated BERR, skips the faulted data cycle, and proves the protected
+word remains unchanged. Full CPU coretest, full boot through `KERNEL IDLE`, all
+directed graphics, normal/INDEX8/RGB565 integrated graphics, USB OHCI, Vesta,
+AstraHost runtime/service, both SDRAM bridge implementations, and route-probe
+simulation also pass. Graphics maxima remain 505, 1103, and 1429 clocks and
+BIST remains 115.03 MB/s.
+
+The `astra_soc.sv` SHA-256 for this boundary is
+`163bc884231158db84fea65df19537bfef26233ee65d3b38e0ee223574c44563`.
+Canonical Beast synthesis for build ID `0x60000002` has zero SCCs, enables GSR
+on all 25,424 mapped FFs, and reports 53,190 LUT4s, 25,420 synthesized FFs,
+5,034 CCU2Cs, 104 DP16KDs, and 19 multipliers. The mapped JSON SHA-256 is
+`d2f9db04157ecacab6d1f3b451e3f263556cdca2e6d51662a9c9364896e4df4c`.
+The exact full-feature Beast seed-4 placement uses 14 MHz in both LPF and SDC,
+packs 66,566 TRELLIS_COMB and 25,453 TRELLIS_FF cells, and completes with
+checksum `0x88a327e1`. The placed JSON SHA-256 is
+`21aa6b5d06d5941cf1fb2ee28e395637ba1a344a812e8b94192228966772a89e`;
+the placement report SHA-256 is
+`b9ed1a46c08e8171e177de9321bece79bb9ade8fb0e73b7fd673fd620e4a9e8d`.
+Unrouted estimates are 12.58 MHz CPU and 43.35 MHz SDRAM and are not acceptance
+results. The strict route input has SHA-256
+`491a63bd67cd03433e9cb2ce41b0dcc74b68d10a29e288573800c90899c9ce79`;
+The corrected Beast route reuses that immutable placement without a timing
+waiver. The superseded pre-guard NUC diagnostic route was stopped once the
+guarded placement existed.
+
+The independently synthesized route-probe mapped JSON has SHA-256
+`b1b38443c8c9daca9c73a42295cda7c0463341758a31f8b5fb059fd36fba6d9f`
+and exactly matches production resources and SCC/POR results. Its route-probe
+hex SHA-256 is
+`62a4e4b9ec2a27ceb58f412b87a0ef4e1bb4fc3d25ec6e681cfc5de68e246aa9`.
+Only a strict route and repeated NUC hardware checks can promote the candidate.
+
+## 2026-07-21: split-route ECP5 LUT-permutation defect
+
+The guarded P54 route was statically clean but did not begin its first CPU bus
+cycle on hardware. Controlled text-configuration edits, without resynthesis or
+rerouting, isolated the failure to carry cell
+`$nextpnr_CCU2C_651$CCU2_COMB0` at `X29/Y52/SLICEA.K0`. That cell has logical
+INIT `0x000A` and its A input is tied high. The route connected physical D0 to
+logical A0, and the emitted configuration contained:
+
+```text
+SLICEA.K0.INIT 0000111100000000
+```
+
+Changing that one word to `0000111100001111` made the TG68K core reach its
+first bus transaction. The current diagnostic bitstream SHA-256 is
+`deb4ef9de5c3eb9ee5a3387b3c99519e74fe77ed860bf20f432261d5759ada33`.
+On the ULX3S attached to NUC, the original route showed the two-LED pre-bus
+state; the corrected image repeatedly shows the intentional all-eight-LED
+flashing BUS_ASSERT marker. This is proof of the failed carry feed, not a POST
+or production-boot result. Persistent flash remains untouched.
+
+The defect is in the split nextpnr flow, not TG68K reset or bus sequencing.
+With Beast nextpnr `0.10-45-g98c18d7f`, JSON import calls `bindBel()` before
+ECP5 `assignArchInfo()` reconstructs `combInfo.flags`. `bindBel()` consequently
+caches `LutPermRule::ALL` for every reloaded slice. Router1 can then use input
+permutations that ECP5 normally forbids: CCU2 permits only swaps within the
+A/B and C/D pairs, while distributed RAM permits no LUT input permutation.
+Generic bitstream LUT permutation does not preserve those mode-specific
+semantics.
+
+The rejected routed JSON SHA-256 is
+`3c1705552894a64d55e875e0f57916efc47701a0f0dbfc15b3688779d190101d`.
+The new `check_ecp5_lut_permutation.py` release gate rejects it with 12,184
+CCU2 and distributed-RAM violations, proving that the one observed TG failure
+was one instance of a route-wide correctness problem. Every occupied physical
+slice in this placement contains one mode only: 6,228 CCU2 slices, 300 DPRAM
+slices, 150 RAMW_BLOCK slices, and 29,366 ordinary logic slices.
+
+`refresh_ecp5_lutperm.py` is now a mandatory `--pre-route` hook. It rebinds all
+placed `TRELLIS_COMB` cells after architecture metadata has been reconstructed,
+restoring the intended per-slice rules. `mkbit.sh` runs the independent routed-
+JSON gate before timing checks or `ecppack`, and the release manifest records
+that the refresh was active. The OSS release suite covers a legal CCU2 A/B
+swap, an illegal cross-pair CCU2 route, and any distributed-RAM permutation.
+
+The first corrected Beast router1 experiment reused the exact 66,566-cell P54
+placement and refreshed all 66,566 combinational cells. It began with 280,492
+unrouted arcs, fell to about 70,300, then oscillated around 72,000 to 73,000
+after roughly 900 seconds. It was deliberately stopped after the high-density
+route appeared to stop converging; the remote CAD PID was terminated and
+verified gone. No routed artifact was retained. Subsequent line-by-line
+comparison proved that stop was premature: at 899.87 seconds the earlier
+completed router1 route still had 73,969 arcs remaining, then eventually
+finished after 4,820.49 seconds. The matching 900-second trajectories neither
+prove nor disprove routability with restored rules. Do not repeat the short
+cutoff on this placement.
+
+A corrected router2-alt experiment then used all seven exact release clock
+constraints and refreshed the same 66,566 cells. It reduced overused resources
+from 70,547 at iteration 1 to 26,070 at iteration 29 with zero architecture
+failures. It was stopped without an output artifact after the historical
+router1 comparison established a proven completion strategy and earlier
+same-density router2 runs showed long nonconvergent plateaus.
+
+The exact corrected router1 run then reused route-input SHA-256
+`491a63bd67cd03433e9cb2ce41b0dcc74b68d10a29e288573800c90899c9ce79`,
+refreshed all 66,566 combinational cells, and completed normally on Beast with
+nextpnr `0.10-45-g98c18d7f`. The route required 7,924.67 seconds and finished
+with checksum `0x1c45ca62`. Its original 100-minute watchdog was suspended at
+79 minutes while only the watchdog process was stopped; the nextpnr child
+continued unchanged through `Routing complete` and `Program finished
+normally`. This is operational evidence that a fixed 100-minute cutoff is too
+short for the protected high-density route, not a router waiver.
+
+The protected-LUT gate passes 13,356 checked cells and 17,583 routed inputs
+with zero violations. The route passes every exact clock at 14.544609 MHz CPU,
+66.409882 MHz SDRAM, 74.755180 MHz USB, 112.069931 MHz SD, 44.397087 MHz board,
+55.803570 MHz pixel, and 315.059845 MHz HDMI shift. It packs 66,566
+`TRELLIS_COMB`, 25,453 `TRELLIS_FF`, 104 `DP16KD`, and 19 `MULT18X18D` cells.
+The retained artifact hashes are:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| routed JSON | `596da5766b792bb54cad03175043afe0d91a1d56504a9ad96211fee630a9f54e` |
+| text configuration | `4cd3c2c8101b2c0a4cd0b8dd3ca3226a6a0f7060b505c710e0bf2f05f7be30fb` |
+| route report | `73c210043596d6bd68a506f38273aff05545da3b808db92860d1005df43e50e6` |
+| route log | `e1b0c89b44079b051ab7df5416ba85c75f5e9abbb6806529af341ebe0fbe8ca7` |
+| production bitstream | `ded87a3e3c5daef55d82e280f71d05d8a605be3e1e2135ec59a2a285072dc870` |
+
+The BRAM-only route probe changed exactly production ROM cells `rom.0.0` and
+`rom.0.1`, physical BRAM blocks 32 and 33. Its bitstream SHA-256 is
+`a77b6fe66cb9fc4ef64d185986afa967d1588fa69e89707385c9a69d61d1c4fc`.
+On the NUC-attached ULX3S it emitted the complete record
+`ASTRA ROUTE PROBE id=56535441 sys=0000003F mem=00000000 err=00000000
+host=00000080 cycles=013840DE`, proving reset, TG68K execution, the first and
+subsequent bus cycles, Vesta MMIO, and diagnostic UART on the legal route.
+
+The first production-ROM load then exposed a firmware POST error rather than
+an RTL or route error. The one-row 64 KiB Astraea benchmark programmed
+`BLIT_DST_PITCH=65536`, but pitch is a 16-bit hardware field. Astraea correctly
+returned `DONE | INVALID_CONFIG`, status `0x00000102`. The ROM now programs
+zero pitch for those one-row fill/copy commands, where pitch is unused. The
+replacement `/ASTRA68.ROM` has package CRC32 `b645d379` and SHA-256
+`28966f4c0a311382662ff3dc573952f74d8986b563eb5ebb263234afa780017e`.
+The one-shot maintenance path validated and atomically replaced only that file
+on the existing 256 GB card, then normal read-only AstraHost firmware SHA-256
+`8d4cda1f0289f1fea1da46a028aa2dbbc60c7467f42e1b017fcfdd033cb73d52`
+was restored.
+
+The unchanged production bitstream subsequently passed three complete SRAM
+boots. Two independent automated reloads completed in 1.614 and 1.595 seconds;
+a final strengthened gate completed in 1.612 seconds while requiring FPGA
+build ID `0x60000002`, ROM CRC32 `B645D379`, `POST PASS`, and `K0 ENTRY PASS`.
+Every run passed SDRAM initialization, front-panel, byte/address, cache,
+Astraea fill/copy, stage-0 full-range BIST, kernel image, VBR, 100 Hz timer,
+AstraHost runtime, and input queue checks. Persistent FPGA flash is still
+untouched: the test ROM was built from a dirty source snapshot and reports an
+unknown embedded-kernel Git identity, and no HDMI capture device is currently
+enumerated on NUC. Commit/rebuild provenance and physical HDMI confirmation
+remain release gates even though the legal route and board boot are proven.
+
+## 2026-07-22: P55 AstraHost ownership cone cleanup
+
+The legal P54 route's worst SDRAM path is 15.058 ns. It starts at
+`host_boot_busy_mem` near `(30,73)`, crosses the AstraHost boot/runtime memory
+arbitration, and reaches `runtime_dma_position[4]` near `(32,85)`. Only 1.47 ns
+is logic; 13.59 ns is routing. Boot DMA and runtime DMA are protocol-mutually
+exclusive, but the runtime ownership expression redundantly depended on the
+high-fanout boot lock and carried that signal into the runtime request and
+response progress cones.
+
+P55 makes runtime ownership depend only on the registered runtime lock and
+adds a simulation-time fatal assertion if boot and runtime locks ever overlap.
+This preserves every legal transaction while removing `boot_busy` from the
+runtime DMA datapath. A mapped-netlist graph check detects the four-cell path
+in the P54 routed JSON and finds no combinational path in P55, providing a
+positive-control-backed structural check rather than relying only on RTL
+inspection.
+
+The focused AstraHost service test passes under both Icarus and Verilator. The
+complete pin-level AstraHost boot reaches `POST PASS`, `K0 ENTRY PASS`, and
+`KERNEL IDLE`. Directed controller, blitter, copper, draw, chip, sprite, and
+25-frame Vega tests pass, as do the integrated normal, INDEX8, and RGB565
+graphics workloads. P55 remains a 60 MHz checkpoint; no production clock was
+changed.
+
+Canonical Beast synthesis for build ID `0x60000003` reports zero SCCs and GSR
+enabled on all 25,421 mapped FFs. It uses 52,615 LUT4s, 25,417 top-level
+`TRELLIS_FF` cells plus four retained reset FFs, 5,075 CCU2Cs, 104 DP16KDs,
+and 19 multipliers. This is 575 fewer LUT4s than P54. The AstraHost service
+source SHA-256 is
+`25521b83818e4bb6b577418f5309f6867155c72559acfc81a1c16a7158c287da`;
+the mapped JSON SHA-256 is
+`75091050a11bb7b0250f5eadf0e045e96d369c9a2e16732354cdbc7272beaf41`;
+and the Yosys log SHA-256 is
+`4b3af1cac554646e64801d5563c41cd949235a64d42272b0838140a94c89dd62`.
+P55 has not yet been placed, routed, or loaded on hardware. P54 remains the
+only timing-clean, protected-LUT-clean, hardware-booted production checkpoint
+until an exact committed P55-derived release passes the complete gate.
 
 ## Canonical synthesis configuration
 
@@ -514,9 +830,74 @@ The split flow now removes serialized router-mode controls before routing so
 the explicit router is honored. It deliberately preserves the post-placement
 RNG state and no longer supplies a misleading route-time seed. Production
 clears the serialized timing waiver; explicit diagnostic mode preserves it;
-both paths are unit tested. Seed 4 is the canonical release configuration. No
-P53 bitstream exists until the exact committed nonzero-ID release reproduces
-these gates.
+both paths are unit tested. Seed 4 is the canonical release configuration.
+
+The exact committed P53 release is
+`ca26765a6d4d198d3b37b5457a70d732f9311a72`, build ID `0x25b55c0a`.
+NUC passes all 90 architecture unit tests, all 28 shared Musashi/RTL matrix
+cases, and both Harte smoke gates. Directed graphics, the 12-frame Vega video
+test, integrated normal/INDEX8/RGB565 workloads, and full SDRAM boot simulation
+all pass. The integrated maxima remain 1506/2369/2060 cycles. Boot reports BIST
+at 144.46 MiB/s in 136,097 cycles, DMA 210/327, complete POST, and kernel entry.
+The exact 16,604-byte system ROM SHA-256 is
+`c44c5736fa4ffdc7a0c9e1e3f20571f35eca7f9a4a6faf0fd151c79f00013659`;
+its payload CRC32 is `d0dc84a4`. The 509-word stage-0 hex SHA-256 is
+`7de247f66f2840b26692962118778cddf074f818f08dc61966a0e153439a1820`.
+
+Beast synthesis maps 43,324 LUT4s, 18,256 FFs, 3,881 CCU2Cs, 80 block RAMs,
+and 17 multipliers with zero final SCCs. Seed-4 placement packs 54,038
+`TRELLIS_COMB`, leaving 328 cells under the `core_graphics` profile. NUC
+nextpnr `0.10-33-ge6ecd8fa` completes the strict exact route and passes all six
+architectural clocks at 12.703252 MHz CPU and 76.569679 MHz SDRAM. The routed
+JSON/report/configuration/bitstream SHA-256 values are
+`780e712f9efb87f50318f12f19ea47053e33ae95dc126647960ee694cddd0c64`,
+`f57bf822b7c91dcbfb8361e5e097fd36293e5ca0def51f15ece997e3c9e0a3c1`,
+`26532993367b5f3816c71919ab992512fbc649235c5582a60f4acaba7fc6abac`,
+and `2b7efafe0db45f89a1d314d8f1e92ec0391b5e3433f528fffd920cbce87dc7e5`.
+
+Static acceptance was not sufficient. Two independent SRAM loads of that exact
+image produced zero FTDI UART bytes and no POST events. The retained hardware
+control image `astra_post-v0_3-12m5-seed4.bit`, SHA-256
+`8dd57df392cde918a7a5f8859d2dbc0fd17a41b5fa9c6528cb7e231c4a16eff8`,
+passed complete POST through the same board, cable, loader, and UART checker in
+1.142 seconds.
+
+The first diagnostic repack had the intended route-probe bytes in physical
+BRAM blocks 35 and 36, but comparison against the production text
+configuration later showed that its `ecpbram` path also duplicated tile names
+through hundreds of EBR and DSP `.tile_group` records. It was therefore not a
+valid BRAM-only control. `make_route_probe_bitstream.py` now compares the
+production and diagnostic `rom.*` DP16KD cell sets, widths, modes, and
+non-INIT parameters, requires the production initializers to match the routed
+JSON, re-emits the diagnostic initializer, and copies only the changed
+`.bram_init` sections into the original text configuration. Unrelated
+synthesis modules are deliberately ignored because their data is not copied
+and their inventory varies between Yosys revisions. Unit gates cover
+mismatched ROM mapping, malformed sections, unexpected block counts, and
+preservation of original non-BRAM text.
+
+The corrected P53 diagnostic changes exactly BRAM blocks 35 and 36. Its
+configuration SHA-256 is
+`e11acb5a1ef7cf1e18d8ca7968c367fadc4f70b06f298aa014a08972acec8` and
+its bitstream SHA-256 is
+`bb6043d2d498065579d9fd07dfd962a8b2ed107842d55e123f4185a074543426`.
+It still produced zero bytes in a 15.037-second SRAM-only capture. The probe
+independently passes RTL simulation with Vesta ID `0x56535441`, the reset
+overlay present, quiescent disabled-service status, and an advancing CPU cycle
+counter. Reloading the retained control immediately passed complete SDRAM POST
+in 1.125 seconds through the same hardware path. The exact route is therefore
+rejected for hardware use; it was never written to persistent FPGA flash.
+
+The exact CPU path is 78.720 ns: register-file index `rdindex_a[3]` at `(93,23)`
+crosses register data, logical address, the external cache lookup/return, and
+`clkena_lw` before reaching next-microstate control at `(112,67)`. It contains
+82 routed nets, 61.986 ns routing, and 16.734 ns logic, leaving only 1.280 ns
+of static period margin. The exact SDRAM path is 13.060 ns from tile-builder
+`stream_issue_done` at `(53,4)` through Vega owner selection to tag-FIFO write
+data at `(47,5)`, with 9.879 ns routing and 3.181 ns logic. Independent Beast
+and NUC reroutes reproduce the CPU path and approximately the same 12.67/76.46
+MHz margin. Hardware acceptance now requires deliberate implementation margin,
+not merely a report at or just above the architectural clocks.
 
 An isolated P54a experiment consumed the legal one-hot Astraea `mem_owner`
 bits directly to remove the equality comparator from the Beast critical path.
@@ -625,6 +1006,8 @@ can select the production flow.
 | P48/23 | Draw `state[5]` at `(108,77)` to `ellipse_dx[47]` at `(103,78)` | 7.540 ns | 5.813 ns | Five operand-select LUTs feed the shared 48-bit ellipse add/sub carry chain. CPU passes at 13.21 MHz; SDRAM reaches 74.89 MHz and misses by 0.021 ns. The P47 internal SDRAM path is absent. |
 | P48/23 timing ripup | Draw `pixel_result_mem[10]` at `(86,63)` to a state/writeback register at `(108,80)` | 10.27 ns | 2.90 ns | Timing-driven ripup passes every clock at 13.22/75.93 MHz and moves the worst path away from the shared ellipse ALU. This is a zero-build-ID diagnostic pass, not the release-identical route. |
 | P48/33 | Draw `state[4]` at `(89,83)` to a Draw next-state register at `(89,84)` | 11.212 ns | 4.085 ns | Mac router1 crosses a deep state-dependent next-state mux and reaches 13.53 MHz CPU but only 65.37 MHz SDRAM. Routed JSON SHA-256 is `a36f606d...`; report SHA-256 is `72f5f526...`. The route is complete and rejected. |
+| P53 exact/4 CPU | TG register-file `rdindex_a[3]` at `(93,23)` through logical address, external cache return, and `clkena_lw` to next-microstate control at `(112,67)` | 61.986 ns | 16.734 ns | The 82-net path reaches only 12.703 MHz. Static timing passes by 1.280 ns, but both the exact release and a BRAM-only route probe are silent on hardware. |
+| P53 exact/4 SDRAM | Tile `stream_issue_done` at `(53,4)` through Vega owner selection to tag-FIFO write data at `(47,5)` | 9.879 ns | 3.181 ns | The exact route reaches 76.570 MHz SDRAM. Together with the CPU path this is insufficient physical margin for board acceptance. |
 
 Coordinates vary by placement. RTL source and cone shape are the stable identity
 of a path; do not floorplan from coordinates copied from another seed.
@@ -730,6 +1113,19 @@ the canonical release flow; the release-identical rerun must still prove it.
 - Placement timing is not predictive at this density. P36 placement estimated
   the SDRAM domain at roughly 49-54 MHz while previous full routes reached more
   than 70 MHz. Only a completed route is an acceptance measurement.
+- Post-pack `$glbnet$...` clock names do not exist when nextpnr first reads SDC
+  constraints from synthesis JSON. Adding 13/80 MHz constraints only for those
+  names therefore leaves placement unchanged. Adding both raw and global names
+  still does not work in the one-pass placer because generated divider/PLL
+  constraints subsequently restore 12.5/75 MHz. The weight-40 diagnostic
+  placement was physically identical to P53 seed 4; its report retained SHA-256
+  `dc4b7daef708111d81ecad68f3127b8a9f31b114dfa02dbd04ca8d83567c39f5`.
+- Packing without placement and then reloading the packed JSON under 13/80 MHz
+  constraints is conceptually correct, but Beast nextpnr
+  `0.10-45-g98c18d7f` throws `std::out_of_range: dict::at()` as the heap placer
+  starts. It fails both with floorplan constraints serialized during packing
+  and with the pre-place hook deferred to the placement pass. Do not repeat the
+  two-stage placement experiment on that tool revision without fixing nextpnr.
 - Seed hunting is not a substitute for RTL work. Seeds provide useful spread
   after the repeating critical cone has been removed.
 - Broad or aggressive floorplanning consumes placer freedom and can make timing
@@ -947,34 +1343,385 @@ revisions expose the same boundary with no measurable timing change.
 
 ## Release checkpoint
 
-The exact committed P50 release proved build-ID-independent topology and passed
-all functional gates, but failed SDRAM timing and exposed the inherited-waiver
-packaging defect. P51 removed its measured sprite path but failed on the tile
-boundary; P52 was rejected for area and routability. P53 preserves all exact
-functional and cycle references with the compact registered tile boundary.
-Its seed-4 diagnostic route passes every clock and the resource profile; seed 4
-is now canonical and the exact committed release rebuild is next. No P50-P53
-bitstream has been loaded on hardware. The ESP32 is back on production
-AstraHost, the existing card data is intact, and `/ASTRA68.ROM` still matches
-the `db60633` candidate. The FPGA remains on the volatile maintenance bridge
-until the exact release passes every gate.
+P53 preserves all exact functional and cycle references with the compact
+registered tile boundary. Exact commit `ca26765` passes conformance, Harte,
+graphics, boot, synthesis, resource, and strict static timing gates. Its
+12.70/76.57 MHz route is nevertheless rejected because both the production
+image and a simulation-proven BRAM-only route probe produce zero UART bytes on
+the ULX3S. The known-good control image passes on the same hardware path.
+Persistent FPGA flash remains untouched.
 
-After a diagnostic route passes all clocks:
+Production AstraHost is restored on the ESP32. The existing SD-card data is
+intact and `/ASTRA68.ROM` contains the exact `ca26765` payload with CRC32
+`d0dc84a4`. Volatile FPGA SRAM currently contains the retained passing control
+image after the corrected P53 route-probe test; persistent flash is untouched.
+Independent NUC and Beast routes are running against diagnostic 13 MHz CPU and
+80 MHz SDRAM implementation constraints; runtime PLL/divider clocks remain
+exactly 12.5/75 MHz.
 
-1. Make the proven floorplan, router, seed, and synthesis parameters the
-   canonical checked-in defaults and include them in `BUILD_CONFIG`.
-2. Commit the source so the ROM version, date, and git hash are final.
-3. Build the exact 509-word stage 0 and nonzero `SOC_BUILD_ID` from that commit.
-4. Resynthesize, replace, and reroute that exact release netlist. Do not reuse
-   timing from the zero-ID diagnostic netlist.
-5. Run `ecppack` only on a route that passes every clock and the resource check.
-6. Provision only `/ASTRA68.ROM` on the existing FAT filesystem. Preserve the
-   owner's unrelated SD-card data and restore production AstraHost firmware
-   after maintenance provisioning.
-7. Flash the ULX3S through `nuc`, run `sw/boot/check_hardware.py` with the exact
-   expected build ID, and capture HDMI.
-8. Verify POST build version/date/hash, all SDRAM tests, and the OS-loader-ready
-   state across at least two complete power/reconfiguration cycles.
+The next candidate must clear this sequence:
+
+1. Complete routing with meaningful CPU and SDRAM margin and no timing waiver.
+2. Replace only stage-0 BRAM with the proven route probe and require repeated
+   UART output after an SRAM-only load.
+3. Restore the exact stage-0 contents in the same route and require expected
+   build ID, full POST, kernel entry, and correct HDMI output.
+4. Repeat complete boot after at least two SRAM reload or power cycles.
+5. Canonicalize every proven constraint/router control, commit, derive the new
+   build ID and ROM, and rerun all functional and physical gates.
+6. Write persistent FPGA flash only after that exact committed image repeats
+   the complete board acceptance result.
 
 The board is attached to `nuc`. Do not waste time probing for it on Beast or the
 Mac.
+
+## P53-P58 margin investigation (2026-07-17)
+
+The exact P53 source was rerouted on the Mac against diagnostic 13 MHz CPU and
+80 MHz SDRAM constraints. It completed at 12.58/77.07 MHz. That route meets
+the actual 12.5/75 MHz runtime clocks, but it does not provide the required
+implementation margin and does not change P53's failed hardware evidence.
+
+P54 registers only data-cache hit responses in the TG68K wrapper. Instruction
+hits retain their zero-wait path. The full 68030/PMMU core test, directed and
+integrated graphics, and SDRAM boot all pass; simulation is roughly six
+percent slower overall because data-cache hits consume one additional CPU
+cycle. P54 synthesizes to 43,522 LUT4s, 18,275 FFs, 3,872 CCU2Cs, 80 BRAMs,
+and 17 multipliers, and packs to 54,228 cells with 138 profile cells free. Its
+CPU route improves to 14.43 MHz on Beast and 14.25 MHz on NUC, but SDRAM falls
+to 72.21 and 70.68 MHz. Both hosts identify the same long SDRAM request/control
+boundary, so P54 is evidence for the cache pipeline but not a release.
+
+P55 constrained 93 request-queue cells near the SDRAM controller. Placement
+estimates degraded from 11.84/61.54 MHz to 10.36/56.63 MHz, so it was rejected
+before routing. Do not repeat that local floorplan: the queue participates in
+global arbitration and the constraint displaces more valuable logic.
+
+P56 keeps P54's cache pipeline and replaces the SDRAM controller's dynamic
+`active_row_q[addr_bank_w]` read with four parallel bank comparisons and a
+one-hot bank select. Every direct controller count, graphics result, CPU memory
+cycle, cache count, DMA count, BIST count, POST result, and kernel-entry result
+is unchanged. The complete 68030/PMMU core test also passes. P56 synthesizes to
+43,335 LUT4s, 18,273 FFs, 3,880 CCU2Cs, 80 BRAMs, and 17 multipliers, then
+packs to 54,053 cells with 313 profile cells free. Its Beast route reaches
+14.61 MHz CPU but only 71.54 MHz SDRAM. The old row-hit mux is gone from the
+critical path; the new 13.98 ns path runs from Vega tile `stream_pause`, through
+live owner selection and `ready`, into the tile tag FIFO write port. This is a
+successful structural isolation even though the complete route still fails.
+The independent NUC route reaches 14.50/70.12 MHz and instead ends in Astraea
+Draw result muxing. P56 therefore exposes placement-dependent graphics cones,
+not one remaining SDRAM-controller defect.
+
+P57 registers Vega's selected owner before allowing a client to observe
+`ready`. It removes the measured combinational path, and directed graphics plus
+the normal integrated workload pass. The handoff bubble raises normal maximum
+line work from 1506 to 1521 clocks and stress INDEX8 to 2438 clocks, causing a
+real scanline underrun. P57 was rejected and its in-progress synthesis was
+cancelled. Registered ownership is not an acceptable timing trade because it
+reduces required graphics throughput.
+
+P58 returns to P56's zero-bubble arbitration and stages only accepted tile-tag
+metadata for one clock before writing distributed RAM. A same-address bypass
+preserves a legal one-cycle response. Directed graphics, all 12 Vega frames,
+and integrated normal/INDEX8/RGB565 workloads pass with the exact retained
+1506/2369/2060 maxima. Full SDRAM boot also retains 144.46 MiB/s, 136,094 BIST
+cycles, all CPU memory/cache/DMA counts, POST, and kernel entry. P58 has zero
+SCCs and synthesizes to 43,398 LUT4s, 18,289 FFs, 3,871 CCU2Cs, 80 BRAMs, and
+17 multipliers. Seed-4 placement packs 54,102 cells, leaving 264 under the
+`core_graphics` ceiling. The first Beast route reaches 14.08 MHz CPU and
+74.39 MHz SDRAM. An independent NUC route reaches 14.08/76.20 MHz. The NUC
+result clears the real 12.5/75 MHz clocks, but neither route clears the required
+13/80 MHz diagnostic margin, so neither is a hardware candidate. A Beast
+timing-ripup route remains in progress.
+
+P59 tests a direct ten-state one-hot encoding of the SDRAM command FSM. It
+preserves the exact direct-controller throughput, 12-frame video result,
+integrated 1506/2369/2060 graphics maxima, complete POST counts, BIST count,
+and kernel entry. It also has zero SCCs. However, widening the active, target,
+and delayed state registers together synthesizes to 43,921 LUT4s and packs
+54,705 cells, 339 above the active profile. P59 was rejected before routing;
+duplicating every stored destination is not an acceptable area trade.
+
+P60 keeps only the active ten-state command register one-hot. Its target state
+uses two bits and its delayed destination uses three bits, with explicit
+lossless conversions at the two boundaries. It passes the same exact direct,
+video, integrated graphics, full POST, BIST, and kernel-entry gates as P58.
+P60 has zero SCCs and synthesizes to 43,424 LUT4s, 18,294 FFs, 3,886 CCU2Cs,
+80 BRAMs, and 17 multipliers. Seed-4 placement packs 54,162 cells, only 60
+more than P58 and 204 below the `core_graphics` ceiling. Strict routes from the
+same immutable placement are in progress on Beast, NUC, and the Mac against
+the 13/80 MHz diagnostic constraints.
+
+The durable lesson from this sequence is to pipeline the measured endpoint,
+not a broad subsystem boundary. Each accepted change must preserve the exact
+graphics line maxima and boot-cycle references. A path moving after a targeted
+change is progress; a local floorplan that worsens both placement domains or a
+pipeline that causes underrun is a measured rejection, not a reason to search
+blind seeds. When state encoding is the measured lever, encode only the active
+decision register broadly; compact stored destinations avoid paying the same
+area cost several times.
+
+## Runtime platform integration (2026-07-18)
+
+The runtime platform adds a 32-source vectored Vesta interrupt controller, two
+CPU-clock timers, AstraHost request/completion/state/input CDC queues, coherent
+host SDRAM DMA, SPI raw-block service, and all CPU IRQ/IACK wiring. The same
+image retains the complete MC68030/PMMU, SDRAM, Astraea, Vega, and HDMI feature
+set. Focused Icarus and Verilator tests, the full CPU coretest, and the complete
+pin-level AstraHost boot all pass. The integrated boot reaches full SDRAM BIST,
+POST, a vectored 100 Hz timer interrupt, runtime storage negotiation, input
+queue discovery, and `K0 ENTRY PASS`.
+
+Runtime-10 replaced Vesta's serial 32-source priority loop with per-IPL masks
+and a logarithmic lowest-source tree, and pipelined AstraHost packet capture.
+It synthesized with zero SCCs to 49,371 LUT4s and packed 61,015 combinational
+cells. Its strict route reached 13.397 MHz CPU but only 63.408 MHz SDRAM. The
+15.771 ns SDRAM path crossed a 32-bit active-request identity comparison before
+entering the broad AstraHost service-state mux.
+
+Runtime-11 registered packet identity, generation, CRC, retry, ordering, and
+completion-validation facts before dispatch. It synthesized to 49,320 LUT4s
+and packed 60,976 combinational cells. The intended wide comparison path was
+removed, but independent strict routes still reached only 64.863 MHz on Beast
+and 64.51 MHz on the Mac. The new 15.417 ns boundary ran from the one-cycle ROM
+writer `issue_request` pulse through `writer_idle` into the service-state mux.
+That dependency was real: the independent writer does not consume the pulse
+until the following clock edge, so the command engine had been using the pulse
+itself to prevent a premature drain decision.
+
+Runtime-12 adds explicit one-cycle data-drain and commit-wait arm states. After
+the arm cycle, command control depends only on registered `request_valid` and
+`wait_response`; `issue_request` no longer enters the state mux. This preserves
+every boot and SPI protocol result and adds only one 75 MHz cycle per host ROM
+chunk. Canonical synthesis has zero SCCs and zero structural problems at
+49,522 LUT4s, 21,815 FFs, 4,247 CCU2Cs, 103 BRAMs, and 17 multipliers. Seed-4
+placement packs 61,146 combinational cells, leaving 1,584 under the active
+`complete_chipset` planning ceiling. Its routes did not close SDRAM timing, so
+the sequence continued with one measured structural change at a time. No
+retained experiment uses a reduced clock or reduced feature set. A timing
+waiver is used only to preserve a failing route report and never to package a
+bitstream.
+
+### Runtime-13 through runtime-28 route record
+
+The following table is the compact experiment ledger. Frequency pairs are
+CPU/SDRAM MHz. Multiple pairs are independent hosts or placements; an omitted
+resource value means the experiment was rejected before a useful complete
+report rather than silently accepted.
+
+| Revision | Structural experiment | Mapping / packing | Routed result |
+|---|---|---|---|
+| runtime-13 | Add a one-byte response skid boundary. | retained | 13.387 / 63.496, fail |
+| runtime-14 | Capture the SDRAM delayed destination. | retained | 13.893 / 59.256, fail |
+| runtime-15 | Split SPI stream handling into header, data, and CRC phases. | retained | 13.734 / 57.504, fail |
+| runtime-16 | Register the Draw glyph source sum at its response boundary. | retained | 12.879 / 63.187, fail |
+| runtime-17 | Register the asynchronous FIFO full fact. | retained | 13.507 / 63.211, fail |
+| runtime-18 | Make writer availability local to its consumer. | rejected before complete report | no retained route |
+| runtime-19 | One-hot encode the complete AstraHost service state. | area/control regression | no retained route |
+| runtime-20 | Replace serial one-hot state decisions with parallel cases. | retained | 12.864 / 61.222, fail |
+| runtime-21 | Consolidate the accepted protocol boundaries. | 49,787 LUT4, 22,069 FF, 4,251 CCU2C; 61,419 packed | 13.29 / 69.79 and 13.56 / 71.42, fail |
+| runtime-22 | Remove the shared ellipse operand mux from its old cone. | 50,040 LUT4, 22,070 FF, 4,258 CCU2C; 61,696 packed | 14.02 / 67.86 and 14.03 / 68.86, fail |
+| runtime-23 | Register SPI decode facts at transfer dispatch. | 49,880 LUT4, 22,168 FF, 4,254 CCU2C; 61,524 packed | 13.654 / 64.152, fail |
+| runtime-24 | Retain the cycle-exact SPI boundary and remap. | 50,066 LUT4, 22,168 FF, 4,237 CCU2C; 61,650 packed | 13.3316 / 69.4879, fail |
+| runtime-25 | Separate SDRAM read return from AstraHost CRC accumulation. | 49,514 LUT4, 22,202 FF, 4,230 CCU2C; 61,088 packed | 14.344 / 70.842, fail |
+| runtime-26 | Register AstraHost response bytes before CRC consumption. | 49,733 LUT4, 22,234 FF; 61,325 packed | 14.95 / 67.98, fail |
+| runtime-27 | Duplicate the Draw format fact near its consumers. | 49,394 LUT4, 22,205 FF, 4,267 CCU2C; 61,068 packed | 12.9729 / 66.6978 and 14.0430 / 70.2741, fail |
+| runtime-28 | Capture Draw format once per command and register flood-fill match facts when pixel data returns. | 49,865 LUT4, 22,223 FF, 4,241 CCU2C; 61,481 packed | strict routes active on Beast, Mac, and NUC |
+
+Runtime-21 was the first substantial recovery after the service-control work,
+but independent routes proved that congestion, not one unlucky seed, remained.
+Runtime-22 removed its targeted ellipse selection cone; the replacement was a
+shared 48-bit ellipse add/sub path. Runtime-23 removed that path, after which
+the critical boundary moved through SPI decode and transfer dispatch.
+Runtime-25 removed the SPI control cone and exposed the SDRAM-read-to-CRC path.
+Runtime-26 removed that CRC path by making a response byte a registered
+producer/consumer boundary. The replacement path began at Draw
+`pixel_result_mem`, crossed format normalization and the flood comparison, and
+entered the broad Draw state mux.
+
+Runtime-27 attempted to place local format copies near those consumers, but
+Yosys legally merged the equivalent registers despite `keep`; Beast and Mac
+then reported the same path. Runtime-28 changes the actual dependency instead:
+one accepted-command format register feeds execution, the fill value is
+captured at configuration time, and target/fill comparisons are registered in
+`ST_PORT_WAIT` from the normalized return data. `ST_FLOOD_PROCESS` consumes
+only those registered facts. Directed graphics, integrated normal/INDEX8/
+RGB565 maxima of 1506/2369/2060, full boot, and the route-probe simulation are
+cycle exact. The complete image still has zero SCCs and remains 1,249 packed
+cells under the 75% planning ceiling.
+
+The reusable lesson is that a registered producer/consumer boundary must be
+represented in control sequencing, not reconstructed by feeding a launch pulse
+back into a large next-state cone. Capture wide protocol facts before dispatch,
+and spend an explicit local control cycle when a separate sequential writer
+consumes an issue pulse one edge later. When a datapath return already has a
+registered response boundary, derive and register the narrow decision facts
+there instead of carrying a wide value through normalization, comparison, and
+a subsystem-wide state mux. Equivalent register copies are not a structural
+fix unless synthesis is required to keep them distinct.
+
+### Runtime-29 through runtime-34 physical implementation
+
+Runtime-29 was the first complete runtime-platform image to produce a routed
+candidate. The Mac seed-23 timing-ripup route packed 61,629 combinational cells
+and reported 13.6739 MHz CPU and 75.6773 MHz SDRAM. Those numbers clear the
+architectural clocks but do not provide useful SDRAM margin. More importantly,
+the checked BRAM-only route-probe image produced zero diagnostic UART bytes after
+an SRAM load. The retained control image passed complete POST immediately over
+the same board path. Runtime-29 was rejected for hardware use and persistent
+FPGA flash was not touched.
+
+Runtime-31 retained every functional result and isolated the next repeatable
+SDRAM cone. Its Mac plain route reached 13.41 MHz CPU but only 64.56 MHz SDRAM.
+The 15.49 ns critical path began at `request_addr[18]` near `(99,52)`, crossed
+the open-row comparison and command-state decision logic, and ended at
+`state_q[0]` near `(122,89)`; 3.59 ns was logic and 11.90 ns was routing.
+Timing-ripup routes from the same design oscillated around a 1.2 ns negative
+slack and were stopped. This was a physical fanout/locality problem around the
+captured request address, not evidence for reducing the 75 MHz clock.
+
+Runtime-32 added a kept request-address copy for row-hit decisions, but post-
+synthesis inspection proved that Yosys merged every bit back into the
+architectural request register. A retained name was not a retained physical
+boundary, so Runtime-32 was rejected before placement.
+
+Runtime-33 gives the comparison copy a distinct reset-only value while loading
+both registers identically on every valid request. Assertions require equality
+whenever `request_valid` is true, so active behavior, latency, bandwidth, and
+the command address are unchanged. Synthesis preserves 25 distinct comparison
+bits and adds 23 FFs after constant folding. Beast maps 49,636 LUT4s, 22,319
+FFs, 4,184 CCU2Cs, 105 block RAMs, and 17 multipliers with zero SCCs; seed 4
+packs 61,100 combinational cells. The independent Mac mapping packs 60,973.
+
+The Mac seed-23 plain route completes at 13.4436 MHz CPU and 70.7714 MHz SDRAM.
+The old device-spanning request-address cone is absent. The replacement 14.13 ns
+path starts at Draw `ellipse_dx[3]`, traverses the 48-bit
+`ellipse_e2 >= ellipse_dx` comparison, then crosses the broad Draw state mux
+into `state[2]`. It contains 6.447 ns logic and 7.683 ns routing. The independent
+Beast seed-4 route reaches 12.9425 MHz CPU and 73.1689 MHz SDRAM. Its 13.667 ns
+path starts at AstraHost `rx_buffer_data[4]`, crosses response decode and the
+service state mux, and ends in the service register bank; 3.593 ns is logic and
+10.074 ns is routing. Runtime-34
+captures both ellipse step decisions in dedicated registers during the existing
+final-slot cycle and consumes them in the already-existing `ST_ELL_STEP` cycle.
+Directed graphics, integrated normal/INDEX8/RGB565 maxima of 1506/2369/2060,
+and full pin-level boot remain exact. Beast maps 49,662 LUT4s and seed 4 packs
+61,178 combinational cells. The Beast route passes CPU at 13.5718 MHz but
+reaches only 65.206 MHz SDRAM; the 15.336 ns path starts at
+`vega_mem_rdata[7]` and ends on a blitter accumulator clock enable. The Mac
+route reaches 13.81/69.76 MHz on a separate host-boot-to-blitter-control path.
+NUC seed 57 reaches 13.46/66.52 MHz and repeats the Beast
+SDRAM-read-to-blitter-enable cone at 15.032 ns. Runtime-34 is rejected.
+
+### Runtime-35 through runtime-38 physical implementation
+
+Runtime-35 removes two redundant masked-copy accumulator clears from
+`ST_KM_MASK_WAIT`. Both legal entry paths already clear the same registers, so
+this changes neither cycles nor behavior; all 8/16/32-bit masked-copy tests,
+the complete directed graphics suite, the three integrated graphics modes, and
+full host boot remain exact. Beast maps 49,550 LUT4s, 22,322 FFs, 4,230 CCU2Cs,
+105 block RAMs, and 17 multipliers, with zero SCCs. Seed 4 packs 61,132 cells.
+The route passes CPU at 13.38 MHz but reaches only 67.56 MHz SDRAM. The old
+video-data-to-blitter-enable cone is absent. Its replacement 14.801 ns path
+starts at `request_compare_addr[15]`, crosses the open-row comparison and state
+decision, and ends at the command-state register. Runtime-35 is rejected.
+
+Runtime-36 registers the AstraHost lock at the internal DMA-owner boundary.
+The raw service request still begins cache maintenance before ownership; the
+registered acquisition/release adds at most one 75 MHz clock per ownership
+interval and does not change burst throughput. Full pin-level boot reaches
+`KERNEL IDLE`. Canonical Beast synthesis improves to 49,113 LUT4s, 22,321 FFs,
+4,231 CCU2Cs, 105 block RAMs, and 17 multipliers with zero SCCs. Seed 4 packs
+60,697 cells, 2,033 below the 75% planning ceiling.
+
+The independent Mac route passes CPU at 14.21 MHz but reaches 67.63 MHz SDRAM;
+12.37 ns of its 14.79 ns path is routing across a placement-specific
+device-spanning cone. The controlled Beast seed-4 route passes CPU at
+13.31 MHz but reaches 68.51 MHz SDRAM. Its repeatable 14.60 ns path starts at
+`request_compare_addr[20]` at `(98,54)`, reaches the row comparator at
+`(112,74)`, and ends at the state register near `(121,83)`; 3.59 ns is logic
+and 11.00 ns is routing. Runtime-36 is retained as the functional and mapping
+baseline but is not packageable.
+
+Runtime-37 adds one measured physical constraint, not a logic change. The
+77-cell `sdram_compare` region contains exactly 25 comparison-address FFs and
+52 directly connected comparator LUTs in `(108,68)..(126,95)`, beside the
+existing SDRAM command island. The Mac seed-23 route passes CPU timing at
+13.05 MHz and improves SDRAM to 69.85 MHz. The constrained comparison cone is
+absent from the failing paths. The replacement 14.32 ns path starts at
+AstraHost `active_host_generation[6]`, crosses the generation-valid decision,
+and controls a completion-generation register clock enable; 3.05 ns is logic
+and 11.27 ns is routing. The broad region therefore fixes its intended cone
+but exposes a separate service boundary on that placement. NUC seed 57 passes
+CPU timing at 13.77 MHz and reaches 70.71 MHz SDRAM. Neither the comparison nor
+host-generation path remains; its 14.14 ns path runs from sprite-builder
+`render_ctrl[17]` into `collision_bitmap_mem[13]`, with 2.88 ns logic and
+11.26 ns routing. The duplicate Beast route was stopped after more than an hour
+in a high-conflict basin because it exercised the same unchanged netlist and
+the NUC control was progressing materially better.
+
+Runtime-38 is the controlled routing-freedom comparison. It uses the same box
+and netlist but constrains only the 25 FFs, leaving the comparator LUTs under
+the broader existing `sdram_edge` region. Mac seed 23 passes CPU timing at
+13.61 MHz but reaches only 66.91 MHz SDRAM. The source FF moves into the target
+box while its comparator falls back to `(102,50)` and the state destination
+remains near `(121,84)`, recreating the 14.94 ns open-row comparison path.
+The narrow constraint is insufficient and is rejected. Its duplicate Beast
+route was stopped once the Mac result proved the physical mechanism.
+
+Runtime-39 addresses the service boundary exposed by Runtime-37. State 17 now
+registers the host-generation and combined media/host-generation predicates;
+state 18 consumes those one-bit facts instead of allowing the 64-bit equality
+cone to control the wide completion register bank directly. A successful
+request already traversed states 17 and 18, so its response latency and all
+burst throughput are unchanged. Only a stale or reset-generation rejection is
+deferred by one 75 MHz clock. The focused AstraHost service test and complete
+pin-level boot pass through full SDRAM BIST, POST, system-ROM load, Vesta at
+100 Hz, `K0 ENTRY PASS`, and `KERNEL IDLE`.
+
+Canonical Beast Runtime-39 synthesis has zero SCCs and maps 49,529 LUT4s,
+22,325 FFs, 4,214 CCU2Cs, 105 block RAMs, and 17 multipliers. Both predicate
+registers remain distinct in the mapped JSON. Placement packs 61,061
+combinational cells, leaving 1,669 under the 75% planning ceiling. Beast seed
+4 and Mac seed 23 route the same synthesis JSON with the proven broad 73-cell
+comparison region (25 FFs and 48 comparator LUTs after the remap).
+
+The Mac seed-23 plain route passes CPU timing at 13.39 MHz and reaches
+70.71 MHz SDRAM. Its 14.14 ns path begins at a tile-pair block-RAM output,
+crosses tile composition, and ends at a line-buffer write register; 6.81 ns is
+logic and 7.33 ns is routing. The Beast seed-4 plain route passes CPU timing at
+13.15 MHz and improves SDRAM to 71.92 MHz. Its 13.90 ns path begins at Astraea
+masked-copy destination block RAM, crosses the byte merge and shared write-data
+mux, and ends in the SDRAM controller request registers; 2.67 ns is logic and
+11.24 ns is routing. Neither completed route contains the constrained row
+comparison or the Runtime-37 host-generation path. Both still fail the strict
+75 MHz requirement, so neither is packageable. Independent NUC and alternate
+Mac routing strategies remain active against the identical mapped design.
+
+The independent NUC seed-57 route also fails, passing CPU timing but reaching
+only 67.78 MHz SDRAM. Its 14.75 ns path begins at Draw
+`glyph_source_x[0]`, crosses glyph byte addressing and the broad Draw control
+mux, and ends at a Draw register; 3.38 ns is logic and 11.38 ns is routing.
+This is a third placement-specific replacement cone rather than a recurrence
+of either Runtime-39 target. The old-nextpnr NUC route and Mac timing-ripup
+route remain active.
+
+Runtime-40 tested whether two unkept, separately captured host and media
+generation predicates would map more economically. Focused Icarus and
+Verilator service tests pass, but canonical synthesis grows to 49,901 LUT4s
+while retaining 22,325 FFs, 4,186 CCU2Cs, 105 block RAMs, and 17 multipliers.
+The 372-LUT regression provides no functional or timing-boundary advantage over
+Runtime-39, so Runtime-40 is rejected before placement.
+
+Runtime-42 registers masked-copy/key destination write data at the existing
+destination-response boundary. All directed graphics tests and the integrated
+normal, INDEX8-stress, and RGB565-stress workloads pass with unchanged maxima
+of 1506, 2369, and 2060 SDRAM clocks per line. Canonical Beast synthesis maps
+49,832 LUT4s, 22,355 FFs, 4,218 CCU2Cs, 103 block RAMs, and 17 multipliers;
+seed 4 packs 61,376 combinational cells. The route passes CPU timing at
+14.40 MHz but regresses SDRAM to 66.50 MHz. Its 15.04 ns critical path begins
+at Astraea Draw `state[2]`, crosses a placement-stretched Draw state/output
+mux, and ends at a Draw register; 3.59 ns is logic and 11.44 ns is routing.
+The targeted masked-copy path is absent, but the 303-LUT mapping increase and
+additional congestion expose a substantially worse independent cone.
+Runtime-42 is rejected.

@@ -466,21 +466,18 @@ module vega_tile_builder (
         compose_source_sum_c[3:0] : {1'b0, compose_source_sum_c[2:0]};
     wire [3:0] compose_source_x_unflipped_d = work_tile16 ?
         compose_source_sum_d[3:0] : {1'b0, compose_source_sum_d[2:0]};
+    wire [3:0] compose_flip_mask = work_tile16 ? 4'hf : 4'h7;
     wire [3:0] compose_stage_source_x_a = compose_stage_entry_a[14] ?
-        (work_tile16 ? 4'd15 - compose_source_x_unflipped_a :
-                       {1'b0, 3'd7 - compose_source_x_unflipped_a[2:0]}) :
+        (compose_source_x_unflipped_a ^ compose_flip_mask) :
         compose_source_x_unflipped_a;
     wire [3:0] compose_stage_source_x_b = compose_stage_entry_b[14] ?
-        (work_tile16 ? 4'd15 - compose_source_x_unflipped_b :
-                       {1'b0, 3'd7 - compose_source_x_unflipped_b[2:0]}) :
+        (compose_source_x_unflipped_b ^ compose_flip_mask) :
         compose_source_x_unflipped_b;
     wire [3:0] compose_stage_source_x_c = compose_stage_entry_c[14] ?
-        (work_tile16 ? 4'd15 - compose_source_x_unflipped_c :
-                       {1'b0, 3'd7 - compose_source_x_unflipped_c[2:0]}) :
+        (compose_source_x_unflipped_c ^ compose_flip_mask) :
         compose_source_x_unflipped_c;
     wire [3:0] compose_stage_source_x_d = compose_stage_entry_d[14] ?
-        (work_tile16 ? 4'd15 - compose_source_x_unflipped_d :
-                       {1'b0, 3'd7 - compose_source_x_unflipped_d[2:0]}) :
+        (compose_source_x_unflipped_d ^ compose_flip_mask) :
         compose_source_x_unflipped_d;
     wire compose_stage_screen_valid_a =
         compose_screen_base + {7'd0, compose_lane_a} < job_width;

@@ -604,6 +604,10 @@ pages come after the native ABI is stable enough to deserve sharing.
 **DIRECTION:** A protected display service owns desktop composition and Vega/
 Astraea policy.
 
+`docs/PRESENTATION.md` defines the required hardware-backed shadow scene,
+fenced back-surface rendering, active-surface write guard, vblank promotion,
+and copper exception.
+
 - Applications render to shared surfaces or submit validated scene commands.
 - Drawing submission is batched and asynchronous.
 - A font service validates native AFNT and imported fonts, owns immutable

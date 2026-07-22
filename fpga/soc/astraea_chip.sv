@@ -14,6 +14,15 @@ module astraea_chip (
     output wire        cpu_done,
     output wire        cpu_irq,
     output wire        cache_flush,
+    output wire [31:0] blitter_completed_fence,
+    output wire [31:0] draw_completed_fence,
+
+    input  wire        front_guard_valid,
+    input  wire [24:0] front_guard_start,
+    input  wire [25:0] front_guard_end,
+    input  wire        pending_guard_valid,
+    input  wire [24:0] pending_guard_start,
+    input  wire [25:0] pending_guard_end,
 
     input  wire [9:0]  beam_x,
     input  wire [9:0]  beam_y,
@@ -33,7 +42,7 @@ module astraea_chip (
     input  wire        mem_rsp_valid,
     input  wire [31:0] mem_rdata
 );
-    localparam [31:0] ASTRAEA_VERSION = 32'h00030000;
+    localparam [31:0] ASTRAEA_VERSION = 32'h00040000;
     localparam [31:0] CAP_COPY      = 32'h00000001;
     localparam [31:0] CAP_FILL      = 32'h00000002;
     localparam [31:0] CAP_COPY_KEY  = 32'h00000004;
@@ -96,6 +105,7 @@ module astraea_chip (
     wire blitter_done;
     wire blitter_irq;
     wire blitter_cache_flush;
+    wire [31:0] blitter_completed_fence_i;
     wire blitter_mem_lock;
     wire blitter_mem_valid;
     wire blitter_mem_ready;
@@ -112,6 +122,13 @@ module astraea_chip (
         .cpu_rdata(blitter_rdata), .cpu_busy(blitter_busy),
         .cpu_done(blitter_done), .cpu_irq(blitter_irq),
         .cache_flush(blitter_cache_flush),
+        .completed_fence(blitter_completed_fence_i),
+        .front_guard_valid(front_guard_valid),
+        .front_guard_start(front_guard_start),
+        .front_guard_end(front_guard_end),
+        .pending_guard_valid(pending_guard_valid),
+        .pending_guard_start(pending_guard_start),
+        .pending_guard_end(pending_guard_end),
         .mem_clk(mem_clk), .mem_rst(mem_rst), .mem_lock(blitter_mem_lock),
         .mem_valid(blitter_mem_valid), .mem_ready(blitter_mem_ready),
         .mem_write(blitter_mem_write), .mem_addr(blitter_mem_addr),
@@ -133,6 +150,7 @@ module astraea_chip (
     wire draw_done;
     wire draw_irq;
     wire draw_cache_flush;
+    wire [31:0] draw_completed_fence_i;
     wire draw_mem_lock;
     wire draw_mem_valid;
     wire draw_mem_ready;
@@ -148,6 +166,13 @@ module astraea_chip (
         .cpu_be(draw_be), .cpu_wdata(draw_wdata), .cpu_rdata(draw_rdata),
         .cpu_busy(draw_busy), .cpu_done(draw_done), .cpu_irq(draw_irq),
         .cache_flush(draw_cache_flush),
+        .completed_fence(draw_completed_fence_i),
+        .front_guard_valid(front_guard_valid),
+        .front_guard_start(front_guard_start),
+        .front_guard_end(front_guard_end),
+        .pending_guard_valid(pending_guard_valid),
+        .pending_guard_start(pending_guard_start),
+        .pending_guard_end(pending_guard_end),
         .mem_clk(mem_clk), .mem_rst(mem_rst), .mem_lock(draw_mem_lock),
         .mem_valid(draw_mem_valid), .mem_ready(draw_mem_ready),
         .mem_write(draw_mem_write), .mem_addr(draw_mem_addr),
@@ -218,6 +243,8 @@ module astraea_chip (
     assign cpu_busy = blitter_busy || draw_busy;
     assign cpu_done = blitter_done || draw_done;
     assign cache_flush = blitter_cache_flush || draw_cache_flush;
+    assign blitter_completed_fence = blitter_completed_fence_i;
+    assign draw_completed_fence = draw_completed_fence_i;
 
     assign cop_move_stb = copper_move_raw &&
                           copper_move_addr_raw[17:16] != 2'b01;

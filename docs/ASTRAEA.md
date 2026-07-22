@@ -1,4 +1,4 @@
-# Astraea — DMA / Drawing / Copper Register Map (v0.3)
+# Astraea — DMA / Drawing / Copper Register Map (v0.4)
 
 Astraea is the Astra 68 "brain" chip (Agnus analog). Four subsystems:
 
@@ -37,7 +37,7 @@ Chipset map: 0xFFF00000 Vesta · 0xFFF10000 Astraea · 0xFFF20000 Vega · 0xFFF3
 | Offset | Name | Acc | Reset | Description |
 |---|---|---|---|---|
 | 0x0000 | `ID` | RO | `0x41535452` | "ASTR" |
-| 0x0004 | `VERSION` | RO | `0x00030000` | major/minor |
+| 0x0004 | `VERSION` | RO | `0x00040000` | major/minor |
 | 0x0008 | `CTRL` | RW | 0 | global control |
 | 0x000C | `STATUS` | RO | — | global status |
 | 0x0010 | `IRQ_EN` | RW | 0 | `[0]BLIT_DONE [1]COPPER [2]reserved [3]DRAW_DONE` |
@@ -59,7 +59,7 @@ BRAM work overlaps other video clients instead of locking SDRAM for an entire
 scanline build. Future Lyra integration adds a separately bounded real-time
 port; it must not be hidden behind the opportunistic DMA owner.
 
-Offsets `0x0020..0x003f` are reserved in v0.3. Video deadline state is reported
+Offsets `0x0020..0x003f` are reserved in v0.4. Video deadline state is reported
 by `VEGA_STATUS.UNDERRUN`; no undocumented Astraea arbitration/performance
 registers are exposed. Future audio integration may define counters here, but
 software must currently treat the entire range as reserved and read-zero.
@@ -85,6 +85,7 @@ blanking and idle bus time. Completion raises `IRQ_STAT.BLIT_DONE`.
 | 0x0064 | `BLIT_KEY` | RW | color-key transparent value (COPY_KEY) |
 | 0x0068 | `BLIT_CTRL` | RW | `[0]START (write 1) [1]IRQ_EN` |
 | 0x006C | `BLIT_STATUS` | RO | `[0]BUSY [1]DONE [15:8]ERROR` |
+| 0x0070 | `BLIT_FENCE` | RW/RO | submitted value while busy; completed value when idle |
 
 **`BLIT_OP`**
 ```
@@ -119,21 +120,28 @@ operate in bounded 16-element phases. COPY_KEY compares complete elements.
 COPY_MASK consumes most-significant-bit-first 1bpp rows with an independent
 mask pitch. Reverse Y is supported by every applicable mode; COPY reverse X/Y
 provides `memmove` overlap semantics. Invalid encodings report error 1 and an
-internal state-machine fault reports error 2. `DONE` and the error field clear
-on the next accepted `START`.
+internal state-machine fault reports error 2. A destination overlapping Vega's
+active or submitted framebuffer reports error 5. `DONE` and the error field
+clear on the next accepted `START`.
 
 All address and pitch registers are retained at their full 32-bit MMIO width
 until START validation. Reserved high bits, a range crossing the 32 MiB SDRAM
 aperture, or a wrapped final row fail with error 1 before DMA ownership is
 taken. No source is narrowed silently to the native 25-bit memory port.
+Protection validates the complete two-dimensional destination range before
+the first DMA request, so a rejected command performs no partial write.
+
+`BLIT_FENCE` is captured with an accepted START and becomes the completed value
+only after every destination write retires. Vega presentation can depend on
+that value without polling transient BUSY state.
 
 The engine holds the native DMA grant through every chunk. CPU SDRAM requests
 stall while it owns memory, MMIO and ROM remain available for polling, and the
 TG wrapper caches remain invalid for the operation and completion boundary.
 The Astraea-local arbiter registers either blitter or draw ownership for a
 complete transaction phase, so responses cannot cross-route when both engines
-request memory. Pin-level simulation at 75 MHz currently measures 51.44 MB/s
-for aligned copy and 119.81 MB/s for aligned fill.
+request memory. Pin-level simulation at 60 MHz currently measures 39.54 MB/s
+for aligned copy and 92.88 MB/s for aligned fill.
 
 ### Draw, glyph, and flood frontend (0x0100)
 
@@ -213,9 +221,12 @@ Flood fill uses a bounded scanline algorithm. `WORK` names a caller-owned array
 of packed signed `(y,x)` 32-bit seeds and `WORK_ENTRIES` gives its capacity.
 Exhausting that capacity stops cleanly with error 3; no write occurs outside the
 mandatory clip rectangle. Errors are 1=invalid configuration, 2=internal state,
-3=work overflow, and 4=address range. `DONE` is sticky until the next accepted
-START. The submitted fence is returned only after all writes complete and can
-be used to retire asynchronous draw-list resources.
+3=work overflow, 4=address range, and 5=protected range. Every command validates
+its complete clipped destination before its first write. Flood fill also
+validates the complete caller LIFO range, so neither pixels nor workspace are
+partially modified when protection fails. `DONE` is sticky until the next
+accepted START. The submitted fence is returned only after all writes complete
+and can be used to retire asynchronous draw-list resources.
 
 Directed simulation covers every primitive, line octants, clipping, degenerate
 ellipses, transparent/opaque patterns, all glyph formats, exact A4 blending,
@@ -225,7 +236,7 @@ Standalone ECP5 synthesis reports 4,722 LUT4, 1,243 CCU2C, 3 MULT18X18D,
 2 DP16KD, and 3,390 flip-flops for the draw engine. Counting two LUT primitives
 per carry cell gives a 7,208-primitive draw budget. The exact A4 divide-by-15
 step is a registered 1,024-entry quotient ROM; this adds one DP16KD and removes
-the former single-cycle combinational divider from the 75 MHz SDRAM domain.
+the former single-cycle combinational divider from the SDRAM domain.
 
 The complete Astraea chip, including blitter, draw engine, copper RAM, MMIO,
 and local arbitration, synthesizes standalone to 7,693 LUT4, 1,755 CCU2C,

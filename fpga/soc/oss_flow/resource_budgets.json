@@ -7,11 +7,11 @@
       "MULT18X18D": 156
     }
   },
-  "default_profile": "core_graphics",
+  "default_profile": "kernel_platform_v1",
   "absolute_max": {
-    "TRELLIS_COMB": 66912,
-    "DP16KD": 166,
-    "MULT18X18D": 124
+    "TRELLIS_COMB": 83640,
+    "DP16KD": 208,
+    "MULT18X18D": 156
   },
   "profiles": {
     "core_graphics": {
@@ -23,11 +23,19 @@
       }
     },
     "complete_chipset": {
-      "description": "All currently specified Vesta, Astraea, Vega, and Lyra hardware",
+      "description": "Integrated CPU, Vesta, AstraHost, Astraea, and Vega platform with a 75% planning ceiling",
       "max": {
         "TRELLIS_COMB": 62730,
         "DP16KD": 156,
         "MULT18X18D": 117
+      }
+    },
+    "kernel_platform_v1": {
+      "description": "Kernel Platform v1; physical ECP5 capacity is the only utilization limit",
+      "max": {
+        "TRELLIS_COMB": 83640,
+        "DP16KD": 208,
+        "MULT18X18D": 156
       }
     }
   }

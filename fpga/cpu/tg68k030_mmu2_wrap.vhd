@@ -150,7 +150,12 @@ architecture rtl of tg68k_wrap is
     signal dcache_hits : unsigned(31 downto 0) := (others => '0');
     signal dcache_misses : unsigned(31 downto 0) := (others => '0');
     signal cache_hit_int : std_logic;
-    signal cache_data_now : std_logic_vector(15 downto 0);
+    signal icache_data_now : std_logic_vector(15 downto 0);
+    signal dcache_data_now : std_logic_vector(15 downto 0);
+    signal dcache_response_valid : std_logic := '0';
+    signal dcache_response_data : std_logic_vector(15 downto 0) := (others => '0');
+    signal icache_hit_start : std_logic;
+    signal dcache_hit_start : std_logic;
     signal cache_hit_start : std_logic;
     signal cache_miss_start : std_logic;
     signal dcache_miss_start : std_logic;
@@ -280,14 +285,12 @@ begin
 
     -- TG68K.C emits one 16-bit external bus cycle at a time. Feed it the
     -- 16-bit halfword that contains the addressed byte lane.
-    cache_data_now <= CACHE_IDATA_IN(31 downto 16)
-                      when icache_hit_int = '1' and bus_addr(1) = '0' else
-                      CACHE_IDATA_IN(15 downto 0)
-                      when icache_hit_int = '1' else
-                      CACHE_DDATA_IN(31 downto 16)
-                      when bus_addr(1) = '0' else
-                      CACHE_DDATA_IN(15 downto 0);
-    tg_data_in <= cache_data_now when cache_ack = '1' else
+    icache_data_now <= CACHE_IDATA_IN(31 downto 16)
+                       when bus_addr(1) = '0' else CACHE_IDATA_IN(15 downto 0);
+    dcache_data_now <= CACHE_DDATA_IN(31 downto 16)
+                       when bus_addr(1) = '0' else CACHE_DDATA_IN(15 downto 0);
+    tg_data_in <= icache_data_now when icache_hit_start = '1' else
+                  dcache_response_data when dcache_response_valid = '1' else
                   DATA_IN(31 downto 16) when bus_addr(1) = '0' else
                   DATA_IN(15 downto 0);
 
@@ -299,20 +302,26 @@ begin
                     '0';
     req_cycle <= pmmu_walker_req or tg_req_cycle;
     bus_active <= '1' when bus_fsm = BUS_ASSERT else '0';
-    -- Cache hits use a full rising-edge-to-rising-edge path. This lets TG68K
-    -- consume a hit on its next edge without the extra registered-response
-    -- state, while avoiding the non-closing half-cycle path used previously.
-    cache_ack <= cache_hit_start;
+    -- The measured load-to-register path crosses the asynchronous data cache.
+    -- Register only data-cache responses while TG is stalled; instruction hits
+    -- retain their existing zero-wait response and do not pay the extra cycle.
+    cache_ack <= icache_hit_start or dcache_response_valid;
     combine_ack <= '1' when
         (bus_fsm = BUS_IDLE or bus_fsm = BUS_GAP) and combine_first = '1'
         else '0';
     external_ack <= '1' when bus_active = '1' and
                              (DSACKn /= "11" or BERRn = '0') else '0';
     ack_now <= external_ack or cache_ack or combine_ack;
-    cache_hit_start <= '1' when
+    icache_hit_start <= '1' when
         (bus_fsm = BUS_IDLE or bus_fsm = BUS_GAP) and
         pmmu_walker_req = '0' and tg_req_cycle = '1' and
-        cache_hit_int = '1' else '0';
+        icache_hit_int = '1' else '0';
+    dcache_hit_start <= '1' when
+        (bus_fsm = BUS_IDLE or bus_fsm = BUS_GAP) and
+        dcache_response_valid = '0' and
+        pmmu_walker_req = '0' and tg_req_cycle = '1' and
+        dcache_hit_int = '1' else '0';
+    cache_hit_start <= icache_hit_start or dcache_hit_start;
     cache_miss_start <= '1' when
         (bus_fsm = BUS_IDLE or bus_fsm = BUS_GAP) and
         pmmu_walker_req = '0' and tg_req_cycle = '1' and
@@ -338,6 +347,8 @@ begin
         if rising_edge(CLK) then
             if RESET_INn = '0' or HALT_INn = '0' then
                 bus_fsm <= BUS_IDLE;
+                dcache_response_valid <= '0';
+                dcache_response_data <= (others => '0');
                 berr_latched <= '0';
                 walker_cycle <= '0';
                 walker_we_latched <= '0';
@@ -349,6 +360,12 @@ begin
                 combine_hi <= (others => '0');
                 long_write_partial <= '0';
             else
+                if dcache_response_valid = '1' then
+                    dcache_response_valid <= '0';
+                elsif dcache_hit_start = '1' then
+                    dcache_response_valid <= '1';
+                    dcache_response_data <= dcache_data_now;
+                end if;
                 if tg_longword = '0' then
                     long_write_partial <= '0';
                 elsif tg_req_cycle = '1' and tg_nwr = '0' and

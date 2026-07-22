@@ -23,6 +23,7 @@ baggage.
 | ✅ FPGA | **LFE5U-85F** (84,480 LUT4, 3744 Kbit EBR, 156 DSP, 4 PLL) | JTAG IDCODE `0x41113043` |
 | ✅ SDRAM | **32 MB**, MT48LC16M16, 16-bit — full-chip march clean, **zero errors**, no aliasing | on-board memtest (`fpga/memtest/`) |
 | ✅ SDRAM speed | **75 MHz**, 145.06 MB/s write / 143.52 MB/s read in pin-level regression; 32 MiB four-sweep hardware POST completes with the full SoC in ~1.1 s | controller regression + build `0x7FB5A559` |
+| 🔧 Production platform | **12.5 MHz CPU / 60 MHz SDRAM**, complete tile-free chipset routed simulation target; hardware acceptance active | `docs/CURRENT_STATE.md` |
 | ✅ Toolchain | yosys + **ghdl (VHDL)** + nextpnr-ecp5 + trellis + openFPGALoader — full open flow | probed |
 | ✅ HDMI 720×480 | POST console proven with TG030+PMMU+SDRAM on this board | build `0x7FB5A559` |
 
@@ -331,21 +332,21 @@ user fault, and complete a cache-safe fenced DMA operation.
 
 ## 15. Memory bandwidth — the binding constraint 🔧
 
-One 16-bit SDRAM: ~130–180 MB/s realistic sustained (143-145 MB/s measured at
-75 MHz with refresh active).
+One 16-bit SDRAM: 120 MB/s raw at the production 60 MHz clock, with
+114-116 MB/s measured in the pin-level regressions.
 Everything shares it. Budget (approx, deterministic masters first):
 
 ```
-priority:  video scanout > audio FIFO > sprite line fetch > CPU > blitter > storage
+priority:  video scanout > sprite line fetch > CPU > blitter > USB/storage
 video 720×480×16@60   ~54 MB/s during active lines
-sprites 32×64@4bpp    ~1 KB/line, per-line-budget capped
-audio 32 voices       ~1-2 MB/s (trivial)
+sprites 16×64@4bpp    bounded by the per-line budget
 CPU + blitter         leftover (may stall)
 ```
-Video and audio must never underrun (line/FIFO buffers + guaranteed slots). CPU
-and blitter may stall. 100 MHz SDRAM (→200 MB/s) needs the floorplanned Astraea
-controller + `sdram_clk` phase tuning (memtest proved the chip fine; it's an FPGA
-timing-closure task).
+Video must never underrun; line buffers and bounded arbitration provide its
+guaranteed service. CPU and opportunistic DMA may stall. Audio is hosted by the
+ESP32 rather than consuming FPGA fabric. Higher SDRAM clocks remain an optional
+optimization and require fresh timing, refresh, cache, DMA, PMMU, graphics, and
+full-memory stress acceptance.
 
 ---
 
@@ -354,11 +355,12 @@ timing-closure task).
 The old WF68K30L component estimate is retired. Resource planning now starts
 from integrated TG030+PMMU builds and is remeasured as each chipset block lands.
 
-The retained 75 MHz SDRAM baseline in `docs/SDRAM.md` contains the TG030 with
-PMMU and caches, HDMI POST console, SDRAM subsystem, and Astraea paths. It uses
-36,935 packed LUTs, 9,147 FFs, 136 DP16KD blocks, and 13 multipliers. This is a
-measured integration baseline, not an estimate of the completed Vega/Lyra/
-storage/network system.
+The current 60 MHz Kernel Platform v1 contains TG030 with PMMU and caches,
+Vesta, AstraHost, OHCI USB, HDMI, complete Astraea, and tile-free Vega with
+16 sprites and native framebuffer scrolling. It packs 66,765 TRELLIS_COMB
+cells, 25,438 FFs, 104 DP16KD blocks, and 19 multipliers. Physical device
+capacity is the only utilization limit; a timing-clean route and hardware
+acceptance are still mandatory.
 
 Every major integration must report LUTs, FFs, EBRs, DSPs, CPU Fmax, SDRAM
 Fmax, and retained hardware-test identity. Optional features are admitted only
@@ -369,9 +371,11 @@ facilities fit with timing margin.
 
 ## 17. MVP + open items
 
-**Hardware MVP:** ✅ 85F + 32 MB SDRAM verified · TG68K.C 68030+PMMU at 12.5
-MHz · boot ROM POST · UART · 720x480 HDMI text console. Basic RGB565
-framebuffer, timer, and IRQ controller remain open.
+**Hardware MVP:** 85F + 32 MB SDRAM · TG68K.C 68030+PMMU at 12.5 MHz · Vesta
+IRQ/timers · AstraHost storage/input · OHCI USB · boot ROM POST · UART ·
+720x480 HDMI · framebuffer/scrolling/sprites/copper/blitter/drawing. Focused
+and full-system simulation pass; deterministic-POR route and board acceptance
+are active.
 
 **Software MVP:** ✅ linker script + crt0 + hello-over-UART (`sw/boot/`, builds
 with gcc-m68k-linux-gnu — vectors/SP/PC verified) · UART monitor · SDRAM init ·
@@ -382,19 +386,15 @@ register map (`docs/*.md`) + C header (`sw/include/*.h`) + `astra.h` umbrella,
 all offsets and macros compile-verified. Hardware: 85F + 32 MB SDRAM verified.
 
 **Open (🔧) — hardware and firmware foundation:**
-1. Promote one TG030+PMMU RTL revision only after the complete acceptance policy
-   in `docs/MC68030_COMPLIANCE.md` passes in simulation and retained hardware.
-2. Complete the reset overlay and recovery monitor. Versioned `BootInfo`, the
-   separately linked kernel image, verified loader, and kernel handoff are
-   implemented at ABI 0.1.
-3. Define and implement DMA fencing/fault reporting before protected services
-   can influence chipset DMA.
-4. Finish the interrupt/timer, framebuffer, input, storage, and audio hardware
-   needed by the first protected OS vertical slice.
-5. Finalize copper mid-scanline safety and every chipset capability/version
-   contract exposed to software.
-6. Keep 75 MHz SDRAM as the accepted baseline; treat 100 MHz as a stretch goal
-   requiring fresh timing, cache, DMA, PMMU, and full-memory stress acceptance.
+1. Complete the remaining valid exception/restart and PMMU fault-on-stacking
+   cases in `docs/MC68030_COMPLIANCE.md` before protected multitasking relies on
+   them.
+2. Route and repeat deterministic-POR POST, SDRAM, HDMI, SPI, USB, and kernel
+   entry acceptance on the ULX3S attached to NUC.
+3. Build the first protected kernel vertical slice on the implemented BootInfo,
+   interrupt, timer, storage, input, display, fencing, and fault contracts.
+4. Keep 60 MHz SDRAM as the production baseline. Treat higher clocks as an
+   optional optimization requiring fresh timing and hardware acceptance.
 
 ---
 

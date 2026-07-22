@@ -7,7 +7,7 @@ module tb_sdram32_cpu_bridge;
     reg cpu_rst = 1'b1;
     reg mem_rst = 1'b1;
     always #40 cpu_clk = ~cpu_clk;
-    always #6.666 mem_clk = ~mem_clk;
+    always #8.333 mem_clk = ~mem_clk;
 
     reg cpu_start = 1'b0;
     reg [24:0] cpu_addr = 25'd0;
@@ -35,6 +35,7 @@ module tb_sdram32_cpu_bridge;
     wire [3:0] mem_be;
     wire [31:0] mem_wdata;
     wire mem_lock;
+    wire mem_cache_quiescent;
     reg mem_rsp_valid = 1'b0;
     reg [31:0] mem_rdata = 32'd0;
 
@@ -56,12 +57,14 @@ module tb_sdram32_cpu_bridge;
         .mem_ready(mem_ready), .mem_write(mem_write), .mem_addr(mem_addr),
         .mem_be(mem_be), .mem_wdata(mem_wdata),
         .mem_lock(mem_lock),
+        .mem_cache_quiescent(mem_cache_quiescent),
         .mem_rsp_valid(mem_rsp_valid), .mem_rdata(mem_rdata)
     );
 
     integer request_count = 0;
     reg [24:0] request_addr_log [0:31];
     integer response_delay = -1;
+    integer response_cycles = 3;
     reg [31:0] next_read_data = 32'd0;
     integer fill_count = 0;
     always @(posedge cpu_clk) begin
@@ -81,7 +84,7 @@ module tb_sdram32_cpu_bridge;
         mem_rsp_valid <= 1'b0;
         if (!mem_rst && mem_valid && response_delay < 0) begin
             mem_ready <= 1'b1;
-            response_delay <= 3;
+            response_delay <= response_cycles;
             request_addr_log[request_count] <= mem_addr;
             request_count <= request_count + 1;
             next_read_data <= 32'ha5000000 | request_count;
@@ -211,10 +214,50 @@ module tb_sdram32_cpu_bridge;
 
         issue_posted_write(25'h0000200, 4'b1111, 32'h89abcdef, 20);
 
+        // A DMA fence may arrive while a posted write is still outstanding.
+        // Quiescent must stay low until that write completes, and the CPU must
+        // not launch another SDRAM cycle while the fence is asserted.
+        response_cycles = 20;
+        @(negedge cpu_clk);
+        cpu_addr = 25'h0000204;
+        cpu_write = 1'b1;
+        cpu_be = 4'b1111;
+        cpu_wdata = 32'h76543210;
+        cpu_cacheable = 1'b0;
+        cpu_postable = 1'b1;
+        cpu_start = 1'b1;
+        @(negedge cpu_clk);
+        cpu_start = 1'b0;
+        wait (cpu_done);
+        if (!cpu_busy || mem_cache_quiescent)
+            $fatal(1, "posted write was not pending before DMA fence");
+        cpu_cache_flush = 1'b1;
+        wait (mem_cache_quiescent);
+        if (!cpu_busy || request_count != 21)
+            $fatal(1, "DMA fence acknowledged before posted write drained");
+
+        @(negedge cpu_clk);
+        cpu_addr = 25'h0000208;
+        cpu_write = 1'b0;
+        cpu_be = 4'b1111;
+        cpu_postable = 1'b0;
+        cpu_start = 1'b1;
+        repeat (3) @(negedge cpu_clk);
+        if (request_count != 21)
+            $fatal(1, "CPU request crossed active DMA fence count=%0d",
+                   request_count);
+        cpu_cache_flush = 1'b0;
+        @(negedge cpu_clk);
+        cpu_start = 1'b0;
+        wait (cpu_done);
+        if (request_count != 22)
+            $fatal(1, "fenced CPU request did not resume after release");
+        response_cycles = 3;
+
         if (cpu_line_hits != 2 || cpu_line_misses != 3)
             $fatal(1, "line counters mismatch hits=%0d misses=%0d",
                    cpu_line_hits, cpu_line_misses);
-        if (cpu_posted_writes != 1)
+        if (cpu_posted_writes != 2)
             $fatal(1, "posted write counter mismatch %0d", cpu_posted_writes);
         if (fill_count != 3)
             $fatal(1, "cache fill sideband count mismatch %0d", fill_count);

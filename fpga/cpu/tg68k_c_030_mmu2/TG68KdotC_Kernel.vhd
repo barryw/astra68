@@ -2533,7 +2533,12 @@ PROCESS (clk)
 				ELSIF micro_state = trap0 THEN
 					-- Priorities 5 & 6: Format $0/$2 format-and-vector word (16 bits only).
 					-- Only active for 010+; on 68000, writePC is asserted in trap0 instead.
-					IF useStackframe2='1' THEN
+					-- Interrupts always start with a Format $0 frame. Use IPL_vec directly:
+					-- trap_vector is registered in parallel and therefore still contains
+					-- the default autovector on the first trap0 edge after a vectored IACK.
+					IF trap_interrupt='1' THEN
+						data_write_tmp(15 downto 0) <= "000000" & IPL_vec & "00";
+					ELSIF useStackframe2='1' THEN
 						-- Format $2 (6-word frame)
 						data_write_tmp(15 downto 0) <= "0010" & trap_vector(11 downto 0); --TH
 					ELSE
@@ -3913,9 +3918,14 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 							berr_exception_active <= '0';
 						END IF;
 					END IF;
-					IF micro_state=trap0 AND IPL_autovector='0' THEN 			
-						IPL_vec <= last_data_read(7 downto 0);    --	TH
-					END IF;	
+					-- A vectored IACK is a normal CPU-space read. Capture its byte on the
+					-- accepted int1 read cycle, before trap0 builds the format/vector word.
+					-- The outer clkena_lw gate keeps this assignment stalled until the
+					-- peripheral actually acknowledges the bus cycle.
+					IF micro_state=int1 AND exec(update_ld)='1' AND
+					   IPL_autovector='0' THEN
+						IPL_vec <= data_read(7 downto 0);
+					END IF;
 
 					IF state="00" THEN
 						last_opc_read <= data_read(15 downto 0);

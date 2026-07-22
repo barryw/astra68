@@ -22,10 +22,12 @@ LD       = ../boot/astra_st.ld
 SOC_ID_SRCS = ../../fpga/soc/astra_soc.sv ../../fpga/soc/astra_soc.lpf \
               ../../fpga/soc/uart_tx.sv ../../fpga/soc/uart_rx.sv \
               ../../fpga/soc/uart_rx_fifo.sv ../../fpga/soc/spi_sd.sv \
-              ../../fpga/soc/astra_front_panel.sv \
+              ../../fpga/soc/astra_front_panel.sv ../../fpga/soc/vesta_irq_timer.sv \
               ../../fpga/soc/astra_host_async_byte_fifo.sv \
               ../../fpga/soc/astra_host_spi_slave.sv \
-              ../../fpga/soc/astra_host_boot.sv \
+              ../../fpga/soc/astra_async_fifo.sv \
+              ../../fpga/soc/astra_host_runtime.sv \
+              ../../fpga/soc/astra_host_service.sv \
               ../../fpga/soc/boot_memory_map.sv \
               ../../fpga/soc/ecp5pll.sv ../../fpga/soc/sdram32_cpu_bridge.sv \
               ../../fpga/soc/tg68k_cache_store.sv \
@@ -34,7 +36,7 @@ SOC_ID_SRCS = ../../fpga/soc/astra_soc.sv ../../fpga/soc/astra_soc.lpf \
               ../../fpga/soc/astraea_pixel_port.sv \
               ../../fpga/soc/astraea_draw.sv \
               ../../fpga/soc/astraea_copper.sv ../../fpga/soc/astraea_chip.sv \
-              ../../fpga/soc/vega_tile_builder.sv ../../fpga/soc/vega_sprite_builder.sv \
+              ../../fpga/soc/vega_sprite_builder.sv \
               ../../fpga/soc/vega_video.sv \
               ../../fpga/soc/thirdparty/core_sdram_axi4/sdram_axi_core.v \
               ../../fpga/soc/post_console.sv \

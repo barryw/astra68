@@ -93,7 +93,30 @@ REGIONS = [
         "match": ("hdmi_inst", "\\hdmi_inst", "packet_picker", "packet_assembler"),
     },
 
-    # SDRAM lives on the east edge. Keep the 75 MHz controller and bridge near
+    # The request-address replicas exist solely to feed the row-hit decision.
+    # Keep both FIFO lookahead sources and their comparator LUTs beside the
+    # command FSM so neither admission case creates an east-west timing path.
+    {
+        "name": "sdram_compare",
+        "box": (108, 68, 126, 95),
+        "tier": "critical",
+        "enforce": True,
+        "prefer_nets": True,
+        "match": (
+            "request_compare_addr",
+            "request_tail_compare_addr",
+            "inport_compare_head_addr_i",
+            "inport_compare_tail_addr_i",
+            "compare_head_row_w",
+            "compare_head_bank_w",
+            "compare_tail_row_w",
+            "compare_tail_bank_w",
+            "lookup_head_",
+            "lookup_tail_",
+        ),
+    },
+
+    # SDRAM lives on the east edge. Keep the 60 MHz controller and bridge near
     # that edge so physical SDRAM paths do not cross the chip.
     {
         "name": "sdram_edge",

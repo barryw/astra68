@@ -146,6 +146,30 @@ _h_irq_return:
 	move.l  %d0, (%a0)
 	movem.l (%sp)+, %d0/%a0
 	rte
+	.globl _h_vesta_timer
+_h_vesta_timer:
+	movem.l %d0/%a0, -(%sp)
+	move.l  #0x01ff9270, %a0
+	addq.l  #1, (%a0)
+	moveq   #0, %d0
+	move.w  8(%sp), %d0
+	move.l  %d0, 4(%a0)
+	moveq   #0, %d0
+	move.w  10(%sp), %d0
+	swap    %d0
+	move.w  12(%sp), %d0
+	move.l  %d0, 8(%a0)
+	moveq   #0, %d0
+	move.w  14(%sp), %d0
+	move.l  %d0, 12(%a0)
+	move.l  %sp, %d0
+	addq.l  #8, %d0
+	move.l  %d0, 16(%a0)
+	move.l  #0, 0xfff00408       | stop timer before clearing its source
+	move.l  #1, 0xfff0040c       | TIMER0.STATUS RW1C
+	move.l  #0, 0xfff00304       | mask controller source
+	movem.l (%sp)+, %d0/%a0
+	rte
 _h_trap0:
 	move.l  #0x01ff91f0, %a0
 	addq.l  #1, (%a0)

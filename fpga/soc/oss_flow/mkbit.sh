@@ -75,15 +75,20 @@ PNR_PLACER="${PNR_PLACER:-heap}"
 PNR_ROUTER="${PNR_ROUTER:-router1}"
 PNR_THREADS="${PNR_THREADS:-}"
 PNR_TIMING_WEIGHT="${PNR_TIMING_WEIGHT:-20}"
+# This design is dense enough that nextpnr's 10,000-attempt heap legalizer
+# cutoff can reject a legal placement. Zero disables that internal cutoff;
+# build orchestration remains responsible for a wall-clock timeout.
+PNR_HEAP_CELL_PLACEMENT_TIMEOUT="${PNR_HEAP_CELL_PLACEMENT_TIMEOUT:-0}"
 PNR_TIMING_RIPUP="${PNR_TIMING_RIPUP:-0}"
 PNR_TIMING_ALLOW_FAIL="${PNR_TIMING_ALLOW_FAIL:-0}"
 PNR_ROUTER2_ALT_WEIGHTS="${PNR_ROUTER2_ALT_WEIGHTS:-0}"
 ASTRA_FLOORPLAN_MODE="${ASTRA_FLOORPLAN_MODE:-critical}"
 ASTRA_FLOORPLAN_ENFORCE="${ASTRA_FLOORPLAN_ENFORCE:-host_io,astraea_blitter,astraea_blitter_cdc,astraea_blitter_control}"
-RESOURCE_PROFILE="${RESOURCE_PROFILE:-core_graphics}"
+RESOURCE_PROFILE="${RESOURCE_PROFILE:-kernel_platform_v1}"
 UART_MONITOR="${UART_MONITOR:-0}"
 SDRAM_ENABLE="${SDRAM_ENABLE:-1}"
 HDMI_ENABLE="${HDMI_ENABLE:-1}"
+USB_ENABLE="${USB_ENABLE:-1}"
 CPU_CLK_DIV_BIT="${CPU_CLK_DIV_BIT:-0}"
 UART_BAUD="${UART_BAUD:-115200}"
 SOC_BUILD_ID="${SOC_BUILD_ID:-00000000}"
@@ -91,6 +96,7 @@ export ASTRA_FLOORPLAN_MODE ASTRA_FLOORPLAN_ENFORCE
 YOSYS_MONITOR_PARAM=""
 YOSYS_SDRAM_PARAM=""
 YOSYS_HDMI_PARAM=""
+YOSYS_USB_PARAM=""
 YOSYS_CLOCK_PARAM=""
 YOSYS_UART_PARAM=""
 YOSYS_BUILD_PARAM=""
@@ -100,6 +106,7 @@ YOSYS_ROM_PARAM="chparam -set ROM_WORDS $EFFECTIVE_ROM_WORDS astra_soc;"
 YOSYS_HIERARCHY_ATTR=""
 PNR_HDMI_FLAGS=()
 PNR_THREAD_FLAGS=()
+PNR_PLACER_EFFORT_FLAGS=()
 PNR_ROUTER_FLAGS=()
 PNR_TIMING_FLAGS=()
 PNR_TIMING_ALLOW_FLAGS=()
@@ -114,6 +121,12 @@ case "$PNR_ROUTER" in
 esac
 case "$PNR_TIMING_WEIGHT" in
   ''|*[!0-9]*) echo "PNR_TIMING_WEIGHT must be a nonnegative integer" >&2; exit 2 ;;
+esac
+case "$PNR_HEAP_CELL_PLACEMENT_TIMEOUT" in
+  ''|*[!0-9]*)
+    echo "PNR_HEAP_CELL_PLACEMENT_TIMEOUT must be a nonnegative integer" >&2
+    exit 2
+    ;;
 esac
 case "$PNR_SEED" in
   ''|*[!0-9]*) echo "PNR_SEED must be a nonnegative integer" >&2; exit 2 ;;
@@ -141,7 +154,7 @@ if [[ ! "$SOC_BUILD_ID_HEX" =~ ^[0-9A-Fa-f]{1,8}$ ]]; then
   exit 2
 fi
 SOC_BUILD_ID="$SOC_BUILD_ID_HEX"
-for toggle in "$UART_MONITOR" "$SDRAM_ENABLE" "$HDMI_ENABLE" \
+for toggle in "$UART_MONITOR" "$SDRAM_ENABLE" "$HDMI_ENABLE" "$USB_ENABLE" \
   "$SD_BOOT_ENABLE" "$ASTRA_HOST_ENABLE" "$PNR_TIMING_RIPUP" \
   "$PNR_TIMING_ALLOW_FAIL" "$PNR_ROUTER2_ALT_WEIGHTS"; do
   case "$toggle" in
@@ -176,8 +189,16 @@ if [ "$HDMI_ENABLE" = "0" ]; then
 else
   PNR_HDMI_FLAGS=(--pre-place place_hdmi_serializer.py)
 fi
+if [ "$USB_ENABLE" = "0" ]; then
+  YOSYS_USB_PARAM="chparam -set USB_ENABLE 0 astra_soc;"
+fi
 if [ -n "$PNR_THREADS" ]; then
   PNR_THREAD_FLAGS=(--threads "$PNR_THREADS")
+fi
+if [ "$PNR_PLACER" = "heap" ]; then
+  PNR_PLACER_EFFORT_FLAGS=(
+    --placer-heap-cell-placement-timeout "$PNR_HEAP_CELL_PLACEMENT_TIMEOUT"
+  )
 fi
 if [ "$PNR_ROUTER2_ALT_WEIGHTS" = "1" ]; then
   [ "$PNR_ROUTER" = "router2" ] || {
@@ -227,21 +248,26 @@ read_verilog -sv -DSYNTHESIS -DLATTICE_ECP5 \
   $H/source_product_description_info_frame.sv $H/packet_assembler.sv \
   $H/packet_picker.sv $H/tmds_channel.sv $H/serializer.sv $H/hdmi.sv \
   $SOC/uart_tx.sv $SOC/uart_rx.sv $SOC/uart_rx_fifo.sv $SOC/spi_sd.sv \
-  $SOC/astra_front_panel.sv \
+  $SOC/astra_front_panel.sv $SOC/vesta_irq_timer.sv \
   $SOC/astra_host_async_byte_fifo.sv $SOC/astra_host_spi_slave.sv \
-  $SOC/astra_host_boot.sv \
+  $SOC/astra_async_fifo.sv $SOC/astra_host_runtime.sv \
+  $SOC/astra_host_service.sv \
+  $SOC/usb_ohci_ctrl_cdc.sv $SOC/usb_ohci_dma_bridge.sv \
+  $SOC/thirdparty/usb_ohci/UsbOhciWishbone_Dw32_Pc1_Pf48000000.v \
+  $SOC/usb_ohci_host.sv \
   $SOC/boot_memory_map.sv $SOC/ecp5pll.sv \
   $SOC/thirdparty/core_sdram_axi4/sdram_axi_core.v \
   $SOC/sdram32_controller.sv $SOC/sdram32_cpu_bridge.sv \
   $SOC/astraea_blitter.sv $SOC/astraea_pixel_port.sv $SOC/astraea_draw.sv \
   $SOC/astraea_copper.sv $SOC/astraea_chip.sv \
-  $SOC/vega_tile_builder.sv $SOC/vega_sprite_builder.sv $SOC/vega_video.sv \
+  $SOC/vega_sprite_builder.sv $SOC/vega_video.sv \
   $SOC/tg68k_cache_store.sv \
   $SOC/sdram32_bist.sv \
   $SOC/post_console.sv $SOC/astra_soc.sv;
 $YOSYS_MONITOR_PARAM
 $YOSYS_SDRAM_PARAM
 $YOSYS_HDMI_PARAM
+$YOSYS_USB_PARAM
 $YOSYS_CLOCK_PARAM
 $YOSYS_UART_PARAM
 $YOSYS_BUILD_PARAM
@@ -249,19 +275,28 @@ $YOSYS_SD_BOOT_PARAM
 $YOSYS_ASTRA_HOST_PARAM
 $YOSYS_ROM_PARAM
 $YOSYS_HIERARCHY_ATTR
-proc; opt; scc -select; select -list; select -clear; scc -expect 0;
 # The stock check stage runs autoname over the entire mapped netlist. That is
 # cosmetic for JSON/nextpnr and becomes prohibitively expensive at this SoC's
-# size, so run the substantive checks explicitly and keep internal names.
+# size, so run the substantive checks explicitly and keep internal names. Do
+# not run proc/opt before synth_ecp5: its begin stage loads the ECP5 primitive
+# library, and an earlier opt pass would otherwise discard the input-only GSR
+# instance before lattice_gsr can enable configuration-time reset on the FFs.
 synth_ecp5 -top astra_soc $SYNTH_ECP5_FLAGS -run begin:check;
+# lattice_gsr resolves AUTO per RTL module. The reset-release synchronizers
+# intentionally retain hierarchy, but the ECP5 GSR itself is device-global.
+# Enable those mapped FFs explicitly while retaining the one legal top-level
+# GSR primitive; setparam mutates cells, unlike chparam's module re-elaboration.
+setparam -set GSR \"ENABLED\" t:TRELLIS_FF;
 hierarchy -check;
 stat;
 check -noinit;
 select -assert-count 32 astra_soc/c:g_build_id_lut*.build_id_lut_i;
 blackbox =A:whitebox;
-write_json astra.json;
+scc -select; select -list; select -clear;
 scc -expect 0;
+write_json astra.json;
 " > "$YOSYS_LOG" 2>&1
+python3 check_por.py astra.json
 if [ "$ASTRA_HOST_ENABLE" = "1" ]; then
   # shellcheck disable=SC2016
   grep -Fq 'mapping memory astra_soc.g_sdram_enabled.g_astra_host.host_spi_i.rx_fifo.mem via $__DP16KD_' "$YOSYS_LOG" || {
@@ -303,6 +338,7 @@ rm -f "$PLACED_JSON" "$ROUTE_INPUT_JSON" "$ROUTED_JSON" \
 nextpnr-ecp5 --85k --package CABGA381 --freq "$TARGET_FREQ_MHZ" \
   --seed "$PNR_SEED" --placer "$PNR_PLACER" \
   --placer-heap-timingweight "$PNR_TIMING_WEIGHT" \
+  "${PNR_PLACER_EFFORT_FLAGS[@]}" \
   "${PNR_THREAD_FLAGS[@]}" "${PNR_HDMI_FLAGS[@]}" \
   --json astra.json --lpf "$SOC/astra_soc.lpf" --sdc astra_clocks.sdc \
   --no-route --timing-allow-fail --write "$PLACED_JSON" \
@@ -325,9 +361,11 @@ nextpnr-ecp5 --85k --package CABGA381 --freq "$TARGET_FREQ_MHZ" \
   "${PNR_TIMING_FLAGS[@]}" "${PNR_TIMING_ALLOW_FLAGS[@]}" \
   --no-pack --no-place --json "$ROUTE_INPUT_JSON" \
   --lpf "$SOC/astra_soc.lpf" --sdc astra_clocks.sdc \
+  --pre-route refresh_ecp5_lutperm.py \
   --write "$ROUTED_JSON" --textcfg astra.config --report "$ROUTE_REPORT" \
   > "$ROUTE_LOG" 2>&1
 echo "nextpnr split route complete; check yosys_${TAG}.log and $ROUTE_LOG"
+python3 check_ecp5_lut_permutation.py "$ROUTED_JSON"
 if [ "$PNR_TIMING_ALLOW_FAIL" = "1" ]; then
   python3 check_resource_budget.py --profile "$RESOURCE_PROFILE" "$ROUTE_REPORT"
   echo "diagnostic route complete; PNR_TIMING_ALLOW_FAIL=1 suppresses bitstream packaging"
@@ -347,12 +385,14 @@ SOURCE_REVISION="${ASTRA_SOURCE_REVISION:-$(git -C "$REPO_ROOT" rev-parse HEAD 2
   printf 'nextpnr=%s\n' "$(nextpnr-ecp5 --version)"
   printf 'm68k_gcc=%s\n' "$(m68k-linux-gnu-gcc --version | sed -n '1p')"
   printf 'ghdl=%s\n' "$(ghdl --version | sed -n '1p')"
+  printf 'ecp5_split_route_lutperm_refresh=enabled\n'
   printf 'system_rom=%s\n' "${SYSTEM_ROM_INPUT:-none}"
-  printf 'CPU=TG68K030_MMU2 CPU_CLK_DIV_BIT=%s SDRAM_ENABLE=%s HDMI_ENABLE=%s SD_BOOT_ENABLE=%s ASTRA_HOST_ENABLE=%s ROM_WORDS=%s UART_MONITOR=%s UART_BAUD=%s SOC_BUILD_ID=%s TARGET_FREQ_MHZ=%s PNR_SEED=%s PNR_PLACER=%s PNR_ROUTER=%s PNR_TIMING_WEIGHT=%s PNR_TIMING_RIPUP=%s PNR_TIMING_ALLOW_FAIL=%s PNR_ROUTER2_ALT_WEIGHTS=%s PNR_THREADS=%s SYNTH_ECP5_FLAGS=%s SYNTH_KEEP_HIERARCHY=%s ASTRA_FLOORPLAN_MODE=%s ASTRA_FLOORPLAN_ENFORCE=%s RESOURCE_PROFILE=%s\n' \
-    "$CPU_CLK_DIV_BIT" "$SDRAM_ENABLE" "$HDMI_ENABLE" "$SD_BOOT_ENABLE" \
-    "$ASTRA_HOST_ENABLE" "$EFFECTIVE_ROM_WORDS" "$UART_MONITOR" \
+  printf 'CPU=TG68K030_MMU2 CPU_CLK_DIV_BIT=%s SDRAM_ENABLE=%s HDMI_ENABLE=%s USB_ENABLE=%s SD_BOOT_ENABLE=%s ASTRA_HOST_ENABLE=%s ROM_WORDS=%s UART_MONITOR=%s UART_BAUD=%s SOC_BUILD_ID=%s TARGET_FREQ_MHZ=%s PNR_SEED=%s PNR_PLACER=%s PNR_ROUTER=%s PNR_TIMING_WEIGHT=%s PNR_HEAP_CELL_PLACEMENT_TIMEOUT=%s PNR_TIMING_RIPUP=%s PNR_TIMING_ALLOW_FAIL=%s PNR_ROUTER2_ALT_WEIGHTS=%s PNR_THREADS=%s SYNTH_ECP5_FLAGS=%s SYNTH_KEEP_HIERARCHY=%s ASTRA_FLOORPLAN_MODE=%s ASTRA_FLOORPLAN_ENFORCE=%s RESOURCE_PROFILE=%s\n' \
+    "$CPU_CLK_DIV_BIT" "$SDRAM_ENABLE" "$HDMI_ENABLE" "$USB_ENABLE" \
+    "$SD_BOOT_ENABLE" "$ASTRA_HOST_ENABLE" "$EFFECTIVE_ROM_WORDS" "$UART_MONITOR" \
     "$UART_BAUD" "$SOC_BUILD_ID" "$TARGET_FREQ_MHZ" "$PNR_SEED" \
     "$PNR_PLACER" "$PNR_ROUTER" "$PNR_TIMING_WEIGHT" \
+    "$PNR_HEAP_CELL_PLACEMENT_TIMEOUT" \
     "$PNR_TIMING_RIPUP" "$PNR_TIMING_ALLOW_FAIL" \
     "$PNR_ROUTER2_ALT_WEIGHTS" \
     "${PNR_THREADS:-default}" "$SYNTH_ECP5_FLAGS" \

@@ -5,14 +5,18 @@ module tb_vega_video;
     localparam [24:0] PAGE0 = 25'h0100000;
     localparam [24:0] PAGE1 = 25'h0200000;
     localparam [24:0] INDEX_PAGE = 25'h0300000;
-    localparam [24:0] TILE_MAP = 25'h0001000;
-    localparam [24:0] TILE_SET = 25'h0002000;
+    localparam [24:0] SCROLL_PAGE = 25'h0400000;
+    localparam [24:0] INDEX_SCROLL_PAGE = 25'h0500000;
+    localparam integer SCROLL_WIDTH = 724;
+    localparam integer SCROLL_HEIGHT = 484;
+    localparam integer SCROLL_PITCH = 1448;
     localparam [24:0] SPR_BASE = 25'h0003000;
     localparam [23:0] POST_RGB = 24'hdeadc0;
     localparam [23:0] BACKDROP = 24'h123456;
-    localparam [23:0] TILE_RGB = 24'hc04080;
     localparam [23:0] SPR_RGB = 24'h20a0e0;
     localparam [23:0] INDEX_RGB = 24'hd08020;
+    localparam [23:0] INDEX_SCROLL_BOTTOM_RGB = 24'h35b8f0;
+    localparam [23:0] INDEX_SCROLL_TOP_RGB = 24'hf05098;
     localparam [15:0] COLORKEY = 16'h07e0;
     localparam [7:0] INDEX_COLORKEY = 8'h7e;
 
@@ -20,7 +24,7 @@ module tb_vega_video;
     reg mem_clk = 1'b0;
     reg pixel_clk = 1'b0;
     always #40 cpu_clk = ~cpu_clk;
-    always #6.666 mem_clk = ~mem_clk;
+    always #8.333 mem_clk = ~mem_clk;
     always #18.5 pixel_clk = ~pixel_clk;
 
     reg cpu_rst = 1'b1;
@@ -34,6 +38,18 @@ module tb_vega_video;
     reg [31:0] cpu_wdata = 32'd0;
     wire [31:0] cpu_rdata;
     wire cpu_irq;
+    reg present_writers_idle = 1'b1;
+    reg [31:0] blitter_completed_fence = 32'd0;
+    reg [31:0] draw_completed_fence = 32'd0;
+    wire front_guard_valid;
+    wire [24:0] front_guard_start;
+    wire [25:0] front_guard_end;
+    wire pending_guard_valid;
+    wire [24:0] pending_guard_start;
+    wire [25:0] pending_guard_end;
+    reg cop_write_stb = 1'b0;
+    reg [15:0] cop_addr = 16'd0;
+    reg [31:0] cop_wdata = 32'd0;
 
     wire mem_lock;
     wire mem_valid;
@@ -51,6 +67,7 @@ module tb_vega_video;
     reg [9:0] pixel_x = 10'd0;
     reg [9:0] pixel_y = 10'd0;
     integer frame_count = 0;
+    integer scene_generation = 0;
     wire [23:0] rgb;
     wire graphics_active;
     wire [9:0] beam_x;
@@ -61,7 +78,17 @@ module tb_vega_video;
         .cpu_write_stb(cpu_write_stb), .cpu_read_stb(cpu_read_stb),
         .cpu_addr(cpu_addr), .cpu_be(cpu_be), .cpu_wdata(cpu_wdata),
         .cpu_rdata(cpu_rdata), .cpu_irq(cpu_irq), .display_ready(1'b1),
-        .cop_write_stb(1'b0), .cop_addr(16'd0), .cop_wdata(32'd0),
+        .present_writers_idle(present_writers_idle),
+        .blitter_completed_fence(blitter_completed_fence),
+        .draw_completed_fence(draw_completed_fence),
+        .front_guard_valid(front_guard_valid),
+        .front_guard_start(front_guard_start),
+        .front_guard_end(front_guard_end),
+        .pending_guard_valid(pending_guard_valid),
+        .pending_guard_start(pending_guard_start),
+        .pending_guard_end(pending_guard_end),
+        .cop_write_stb(cop_write_stb), .cop_addr(cop_addr),
+        .cop_wdata(cop_wdata),
         .mem_clk(mem_clk), .mem_rst(mem_rst), .mem_lock(mem_lock),
         .mem_valid(mem_valid), .mem_ready(mem_ready), .mem_write(mem_write),
         .mem_addr(mem_addr), .mem_be(mem_be), .mem_wdata(mem_wdata),
@@ -122,6 +149,21 @@ module tb_vega_video;
         end
     endfunction
 
+    function automatic [15:0] scroll_pixel(
+        input integer row,
+        input integer column
+    );
+        reg [4:0] red;
+        reg [5:0] green;
+        reg [4:0] blue;
+        begin
+            red = column[8:4];
+            green = row[5:0];
+            blue = column[4:0];
+            scroll_pixel = {red, green, blue};
+        end
+    endfunction
+
     function automatic [7:0] indexed_pixel(
         input integer row,
         input integer column
@@ -131,20 +173,42 @@ module tb_vega_video;
         end
     endfunction
 
+    function automatic [7:0] indexed_scroll_pixel(
+        input integer row,
+        input integer column
+    );
+        begin
+            indexed_scroll_pixel = (row * 3 + column) & 8'hff;
+        end
+    endfunction
+
     function automatic [31:0] memory_word(input [24:0] address);
         integer page;
         integer offset;
         integer row;
         integer word_index;
         begin
-            if (address >= TILE_MAP && address < TILE_MAP + 25'h100) begin
-                memory_word = 32'h04000400; // tile 0, palette bank 1
-            end else if (address >= TILE_SET &&
-                         address < TILE_SET + 25'h100) begin
-                memory_word = 32'h33333333;
+            if (address >= INDEX_SCROLL_PAGE) begin
+                offset = address - INDEX_SCROLL_PAGE;
+                row = offset / 724;
+                word_index = (offset % 724) / 4;
+                memory_word = {
+                    indexed_scroll_pixel(row, word_index * 4),
+                    indexed_scroll_pixel(row, word_index * 4 + 1),
+                    indexed_scroll_pixel(row, word_index * 4 + 2),
+                    indexed_scroll_pixel(row, word_index * 4 + 3)
+                };
             end else if (address >= SPR_BASE &&
                          address < SPR_BASE + 25'h100) begin
                 memory_word = 32'h55555555;
+            end else if (address >= SCROLL_PAGE) begin
+                offset = address - SCROLL_PAGE;
+                row = offset / SCROLL_PITCH;
+                word_index = (offset % SCROLL_PITCH) / 4;
+                memory_word = {
+                    scroll_pixel(row, word_index * 2),
+                    scroll_pixel(row, word_index * 2 + 1)
+                };
             end else if (address >= INDEX_PAGE) begin
                 offset = address - INDEX_PAGE;
                 row = offset / 720;
@@ -226,6 +290,52 @@ module tb_vega_video;
         end
     endtask
 
+    task automatic cop_write(input [15:0] address, input [31:0] value);
+        begin
+            @(negedge cpu_clk);
+            cop_addr = address;
+            cop_wdata = value;
+            cop_write_stb = 1'b1;
+            @(negedge cpu_clk);
+            cop_write_stb = 1'b0;
+            cop_addr = 16'd0;
+            cop_wdata = 32'd0;
+        end
+    endtask
+
+    task automatic wait_scene_editable;
+        integer timeout;
+        begin
+            timeout = 0;
+            while (dut.scene_locked) begin
+                @(posedge cpu_clk);
+                timeout = timeout + 1;
+                if (timeout > 4096)
+                    $fatal(1, "scene edit lock timeout state=%0d pending=%b",
+                           dut.scene_copy_state, dut.present_pending_cpu);
+            end
+        end
+    endtask
+
+    task automatic present_scene;
+        begin
+            scene_generation = scene_generation + 1;
+            reg_write(16'h0034, scene_generation);
+            reg_write(16'h0050, 32'd1);
+        end
+    endtask
+
+    task automatic expect_present_rejected(input [255:0] label);
+        reg [31:0] status;
+        begin
+            present_scene();
+            reg_read(16'h0054, status);
+            if (!status[3] || status[0])
+                $fatal(1, "%0s was not rejected status=%08x", label, status);
+            reg_write(16'h0054, 32'h00000008);
+        end
+    endtask
+
     task automatic wait_pixel(input integer y, input integer x);
         integer timeout;
         begin : wait_loop
@@ -286,10 +396,10 @@ module tb_vega_video;
         if (value !== 32'h56454741)
             $fatal(1, "Vega ID mismatch %08x", value);
         reg_read(16'h0004, value);
-        if (value !== 32'h00030000)
+        if (value !== 32'h00050000)
             $fatal(1, "Vega version mismatch %08x", value);
         reg_read(16'h001c, value);
-        if (value !== 32'h0000003f)
+        if (value !== 32'h00000077)
             $fatal(1, "Vega capabilities mismatch %08x", value);
         reg_read(16'h0028, value);
         if (value !== {16'd480, 16'd720})
@@ -308,22 +418,88 @@ module tb_vega_video;
         reg_write(16'h0048, 32'd0);
         reg_write(16'h004c, {16'd0, COLORKEY});
         reg_write(16'h0008, 32'h0000001b);
-        repeat (6) @(posedge mem_clk);
-        if (dut.sprite_budget_effective_mem !== 16'd512)
-            $fatal(1, "RGB565 sprite budget limit mismatch %0d",
-                   dut.sprite_budget_effective_mem);
+        present_scene();
+
+        if (front_guard_valid || !pending_guard_valid ||
+            pending_guard_start != PAGE0 ||
+            pending_guard_end != {1'b0, PAGE0} + 26'd691200)
+            $fatal(1, "pending framebuffer guard mismatch");
 
         reg_read(16'h000c, value);
         if (!value[2] || !value[4])
             $fatal(1, "pending/ready status mismatch %08x", value);
 
         wait_frame(1);
+        if (!front_guard_valid || front_guard_start != PAGE0 ||
+            front_guard_end != {1'b0, PAGE0} + 26'd691200 ||
+            pending_guard_valid)
+            $fatal(1, "active framebuffer guard mismatch");
         active_frame = frame_count;
+        repeat (6) @(posedge mem_clk);
+        if (dut.sprite_budget_effective_mem !== 16'd512)
+            $fatal(1, "RGB565 sprite budget limit mismatch %0d",
+                   dut.sprite_budget_effective_mem);
         expect_rgb(0, 20, expand_rgb565(test_pixel(0, 0, 18)),
                    "framebuffer");
         expect_rgb(0, 32, BACKDROP, "colorkey");
         expect_rgb(1, 20, expand_rgb565(test_pixel(0, 1, 18)),
                    "next scanline");
+
+        // Copper changes active raster state only. CPU readback remains the
+        // canonical shadow, and vblank restores the committed baseline.
+        cop_write(16'h0030, 32'h00654321);
+        expect_rgb(1, 32, 24'h654321, "copper active backdrop");
+        reg_read(16'h0030, value);
+        if (value !== {8'd0, BACKDROP})
+            $fatal(1, "copper mutated shadow backdrop %08x", value);
+        active_frame = frame_count + 1;
+        wait_frame(active_frame);
+        expect_rgb(0, 32, BACKDROP, "vblank restored backdrop");
+
+        // A present remains queued until both independent render fences have
+        // reached their submitted values. Locked shadow writes are rejected.
+        wait_scene_editable();
+        reg_write(16'h0038, 32'd5);
+        reg_write(16'h003c, 32'd7);
+        present_scene();
+        reg_write(16'h0030, 32'h00fedcba);
+        reg_read(16'h0054, value);
+        if (!value[0] || !value[4])
+            $fatal(1, "pending scene did not lock shadow %08x", value);
+        reg_write(16'h0054, 32'h00000010);
+        active_frame = frame_count + 1;
+        wait_frame(active_frame);
+        reg_read(16'h0054, value);
+        if (!value[0] || value[2])
+            $fatal(1, "unreached fences promoted scene %08x", value);
+        @(negedge cpu_clk);
+        draw_completed_fence = 32'd5;
+        active_frame = frame_count + 1;
+        wait_frame(active_frame);
+        reg_read(16'h0054, value);
+        if (!value[0] || value[2])
+            $fatal(1, "draw-only fence promoted scene %08x", value);
+        @(negedge cpu_clk);
+        blitter_completed_fence = 32'd7;
+        present_writers_idle = 1'b0;
+        active_frame = frame_count + 1;
+        wait_frame(active_frame);
+        reg_read(16'h0054, value);
+        if (!value[0] || !value[6] || value[2])
+            $fatal(1, "active writer did not hold present %08x", value);
+        present_writers_idle = 1'b1;
+        active_frame = frame_count + 1;
+        wait_frame(active_frame);
+        wait_scene_editable();
+        reg_read(16'h0054, value);
+        if (value[0] || !value[2])
+            $fatal(1, "completed fences did not promote scene %08x", value);
+        reg_read(16'h0058, value);
+        if (value !== scene_generation)
+            $fatal(1, "completed generation mismatch %08x", value);
+        reg_write(16'h0038, 32'd0);
+        reg_write(16'h003c, 32'd0);
+        active_frame = frame_count;
 
         reg_read(16'h000c, value);
         if (value[2] || value[6] || !value[4])
@@ -338,6 +514,7 @@ module tb_vega_video;
         reg_write(16'h0014, 32'hffffffff);
         reg_write(16'h0010, 32'h00000003);
         reg_write(16'h0040, {7'd0, PAGE1});
+        present_scene();
         reg_read(16'h000c, value);
         if (!value[2])
             $fatal(1, "page flip did not become pending %08x", value);
@@ -354,8 +531,11 @@ module tb_vega_video;
 
         // Change modes during vblank, then verify centering and 2x mapping.
         wait_pixel(480, 100);
+        wait_scene_editable();
         reg_write(16'h0018, 32'd2);
-        wait_frame(active_frame + 2);
+        present_scene();
+        active_frame = frame_count + 2;
+        wait_frame(active_frame);
         expect_rgb(0, 30, BACKDROP, "320 mode left border");
         expect_rgb(0, 42, expand_rgb565(test_pixel(1, 0, 0)),
                    "320 mode first pixel");
@@ -376,44 +556,65 @@ module tb_vega_video;
         if (!value[5])
             $fatal(1, "forced scanline underrun was not reported %08x", value);
 
-        // Exercise the complete tile path: MMIO configuration, SDRAM map and
-        // pattern reads, palette lookup, and ordering around the framebuffer.
+        // A virtual framebuffer wraps both axes at pixel granularity. X=723
+        // starts in the low half of the final RGB565 word, then continues at
+        // column zero without exposing row padding.
         wait_pixel(480, 100);
+        wait_scene_editable();
         reg_write(16'h0018, 32'd0);
-        reg_write(16'h044c, {8'd0, TILE_RGB});
-        reg_write(16'h0080, 32'h00000009); // tile0 enable, wrap, below FB
-        reg_write(16'h0084, {7'd0, TILE_MAP});
-        reg_write(16'h0088, {7'd0, TILE_SET});
-        reg_write(16'h008c, 32'd0);        // one 8x8 tile, repeated
-        reg_write(16'h0090, 32'd0);
+        reg_write(16'h0040, {7'd0, SCROLL_PAGE});
+        reg_write(16'h0044, SCROLL_PITCH);
+        reg_write(16'h0048, 32'd0);
+        reg_write(16'h0068, {16'd483, 16'd723});
+        reg_write(16'h006c, {16'd484, 16'd724});
+        reg_write(16'h0070, 32'd3);
         reg_write(16'h0008, 32'h0000001b);
+        present_scene();
+        active_frame = frame_count + 2;
+        wait_frame(active_frame);
+        expect_rgb(0, 20, expand_rgb565(scroll_pixel(483, 17)),
+                   "horizontal framebuffer wrap");
+        expect_rgb(1, 20, expand_rgb565(scroll_pixel(0, 17)),
+                   "vertical framebuffer wrap");
+        if (front_guard_start != SCROLL_PAGE ||
+            front_guard_end != {1'b0, SCROLL_PAGE} + 26'd700832)
+            $fatal(1, "virtual framebuffer guard mismatch");
+        reg_read(16'h0068, value);
+        if (value !== {16'd483, 16'd723})
+            $fatal(1, "framebuffer view readback mismatch %08x", value);
+
+        // Copper changes only the active viewport. It affects later scanlines
+        // whose builds have not started and vblank restores the baseline.
+        cop_write(16'h0068, {16'd10, 16'd8});
+        reg_read(16'h0068, value);
+        if (value !== {16'd483, 16'd723})
+            $fatal(1, "copper mutated shadow framebuffer view %08x", value);
+        expect_rgb(12, 20, expand_rgb565(scroll_pixel(22, 26)),
+                   "copper framebuffer scroll");
         active_frame = frame_count + 1;
+        wait_frame(active_frame);
+        expect_rgb(0, 20, expand_rgb565(scroll_pixel(483, 17)),
+                   "vblank restored framebuffer scroll");
+
+        // Restore a conventional page before exercising sprite composition.
+        wait_pixel(480, 100);
+        wait_scene_editable();
+        reg_write(16'h0040, {7'd0, PAGE1});
+        reg_write(16'h0044, 32'd1440);
+        reg_write(16'h0068, 32'd0);
+        reg_write(16'h006c, 32'd0);
+        reg_write(16'h0070, 32'd0);
+        reg_write(16'h0008, 32'h0000001b);
+        present_scene();
+        active_frame = frame_count + 2;
         wait_frame(active_frame);
         expect_rgb(0, 20, expand_rgb565(test_pixel(1, 0, 18)),
-                   "tile below opaque framebuffer");
-        expect_rgb(0, 32, TILE_RGB, "tile below framebuffer colorkey");
-
-        wait_pixel(480, 100);
-        reg_write(16'h0080, 32'h00000019); // move tile0 above FB
-        active_frame = frame_count + 1;
-        wait_frame(active_frame);
-        expect_rgb(0, 20, TILE_RGB, "tile above opaque framebuffer");
-
-        wait_pixel(480, 100);
-        reg_write(16'h0008, 32'h00000011); // display + backdrop, no FB fetch
-        reg_write(16'h0804, 32'd2048);
-        repeat (6) @(posedge mem_clk);
-        if (dut.sprite_budget_effective_mem !== 16'd1024)
-            $fatal(1, "framebuffer-disabled sprite budget mismatch %0d",
-                   dut.sprite_budget_effective_mem);
-        active_frame = frame_count + 1;
-        wait_frame(active_frame);
-        expect_rgb(0, 20, TILE_RGB, "tile-only scanout");
+                   "restored conventional framebuffer");
 
         // Two overlapping behind sprites exercise table MMIO, priority,
         // collision reporting, and visibility through the framebuffer key.
         wait_pixel(480, 100);
-        reg_write(16'h0080, 32'd0);
+        wait_scene_editable();
         reg_write(16'h0494, {8'd0, SPR_RGB});
         reg_write(16'h0800, 32'd1);
         reg_write(16'h0804, 32'd64);
@@ -429,7 +630,8 @@ module tb_vega_video;
         reg_write(16'h1030, 32'd8);
         reg_write(16'h0014, 32'hffffffff);
         reg_write(16'h0008, 32'h0000001f);
-        active_frame = frame_count + 1;
+        present_scene();
+        active_frame = frame_count + 2;
         wait_frame(active_frame);
         expect_rgb(0, 20, expand_rgb565(test_pixel(1, 0, 18)),
                    "behind sprite hidden by framebuffer");
@@ -444,15 +646,18 @@ module tb_vega_video;
 
         // A front sprite overrides an opaque framebuffer pixel.
         wait_pixel(480, 100);
+        wait_scene_editable();
         reg_write(16'h1000, 32'h00002323);
         reg_write(16'h1020, 32'd0);
-        active_frame = frame_count + 1;
+        present_scene();
+        active_frame = frame_count + 2;
         wait_frame(active_frame);
         expect_rgb(0, 20, SPR_RGB, "front sprite over framebuffer");
 
         // INDEX8 scanout uses the same global palette and byte-exact
         // colorkey path while halving framebuffer bandwidth.
         wait_pixel(480, 100);
+        wait_scene_editable();
         reg_write(16'h04a8, {8'd0, INDEX_RGB});
         reg_write(16'h0800, 32'd0);
         reg_write(16'h0040, {7'd0, INDEX_PAGE});
@@ -461,19 +666,50 @@ module tb_vega_video;
         reg_write(16'h004c, {24'd0, INDEX_COLORKEY});
         reg_write(16'h0008, 32'h0000001b);
         reg_write(16'h0804, 32'd2048);
-        repeat (6) @(posedge mem_clk);
-        if (dut.sprite_budget_effective_mem !== 16'd1024)
-            $fatal(1, "INDEX8 sprite budget limit mismatch %0d",
-                   dut.sprite_budget_effective_mem);
         reg_write(16'h0804, 32'd64);
+        present_scene();
         // This base write occurs after the current vblank edge, so it retires
         // at the following edge and becomes visible one frame later.
         active_frame = frame_count + 2;
         wait_frame(active_frame);
+        repeat (6) @(posedge mem_clk);
+        if (dut.sprite_budget_effective_mem !== 16'd64)
+            $fatal(1, "INDEX8 sprite budget mismatch %0d",
+                   dut.sprite_budget_effective_mem);
         expect_rgb(0, 20, INDEX_RGB, "INDEX8 framebuffer");
         expect_rgb(0, 32, BACKDROP, "INDEX8 colorkey");
 
+        // INDEX8 starts at byte phase three and wraps both axes. At displayed
+        // x=20 the two-stage compositor is presenting source x=18, which wraps
+        // (723 + 18) from virtual width 724 to source column 17.
+        wait_pixel(480, 100);
+        wait_scene_editable();
+        reg_write(16'h06e8, {8'd0, INDEX_SCROLL_BOTTOM_RGB}); // index BA
+        reg_write(16'h0444, {8'd0, INDEX_SCROLL_TOP_RGB});    // index 11
+        reg_write(16'h0040, {7'd0, INDEX_SCROLL_PAGE});
+        reg_write(16'h0044, 32'd724);
+        reg_write(16'h0068, {16'd483, 16'd723});
+        reg_write(16'h006c, {16'd484, 16'd724});
+        reg_write(16'h0070, 32'd3);
+        present_scene();
+        active_frame = frame_count + 2;
+        wait_frame(active_frame);
+        expect_rgb(0, 20, INDEX_SCROLL_BOTTOM_RGB,
+                   "INDEX8 unaligned horizontal wrap");
+        expect_rgb(1, 20, INDEX_SCROLL_TOP_RGB,
+                   "INDEX8 vertical wrap");
+
+        wait_pixel(480, 100);
+        wait_scene_editable();
+        reg_write(16'h0040, {7'd0, INDEX_PAGE});
+        reg_write(16'h0044, 32'd720);
+        reg_write(16'h0068, 32'd0);
+        reg_write(16'h006c, 32'd0);
+        reg_write(16'h0070, 32'd0);
         reg_write(16'h0008, 32'd0);
+        present_scene();
+        active_frame = frame_count + 2;
+        wait_frame(active_frame);
         repeat (6) @(posedge pixel_clk);
         #1;
         if (graphics_active || rgb !== POST_RGB)
@@ -482,47 +718,40 @@ module tb_vega_video;
         if (beam_x !== pixel_x || beam_y !== pixel_y)
             $fatal(1, "beam output mismatch");
 
-        // Malformed wide addresses and pitches must fail closed. Silently
-        // truncating these values would turn a software bug into unrelated
-        // SDRAM reads after the next page flip.
+        // Malformed shadows fail before promotion. The active disabled scene
+        // remains untouched instead of briefly exposing an invalid frame.
         reg_write(16'h0040, 32'h80001000);
         reg_write(16'h0044, 32'd720);
         reg_write(16'h0048, 32'd1);
         reg_write(16'h0008, 32'h00000003);
-        active_frame = frame_count + 1;
-        wait_frame(active_frame);
-        repeat (4) @(posedge cpu_clk);
-        reg_read(16'h000c, value);
-        if (!value[6])
-            $fatal(1, "high framebuffer base was not rejected %08x", value);
+        expect_present_rejected("high framebuffer base");
+        if (dut.reg_ctrl != 5'd0 || dut.reg_fb_base_active != INDEX_PAGE)
+            $fatal(1, "rejected framebuffer scene changed active state");
 
         reg_write(16'h0040, {7'd0, INDEX_PAGE});
+        reg_write(16'h0044, 32'h00010000);
+        expect_present_rejected("high framebuffer pitch");
+        reg_write(16'h0044, 32'd716);
+        expect_present_rejected("short framebuffer pitch");
+        reg_write(16'h0044, 32'd720);
+        present_scene();
+        reg_read(16'h0054, value);
+        if (!value[0] || value[3])
+            $fatal(1, "valid framebuffer scene was rejected %08x", value);
         active_frame = frame_count + 1;
         wait_frame(active_frame);
-        reg_write(16'h0044, 32'h00010000);
-        reg_read(16'h000c, value);
-        if (!value[6])
-            $fatal(1, "high framebuffer pitch was not rejected %08x", value);
-        reg_write(16'h0044, 32'd716);
-        reg_read(16'h000c, value);
-        if (!value[6])
-            $fatal(1, "short framebuffer pitch was not rejected %08x", value);
-        reg_write(16'h0044, 32'd720);
-        reg_read(16'h000c, value);
-        if (value[6])
-            $fatal(1, "valid framebuffer configuration stayed rejected %08x",
-                   value);
+        wait_scene_editable();
 
-        reg_write(16'h0008, 32'h00000001);
-        reg_write(16'h0084, 32'h80001000);
-        reg_write(16'h0088, {7'd0, TILE_SET});
-        reg_write(16'h008c, 32'd0);
-        reg_write(16'h0080, 32'h00000009);
-        reg_read(16'h000c, value);
-        if (!value[6])
-            $fatal(1, "high tile address was not rejected %08x", value);
-        reg_write(16'h0080, 32'd0);
+        reg_write(16'h006c, {16'd480, 16'd723});
+        expect_present_rejected("unaligned RGB565 virtual width");
+        reg_write(16'h006c, {16'd480, 16'd724});
+        reg_write(16'h0068, {16'd0, 16'd5});
+        reg_write(16'h0070, 32'd0);
+        expect_present_rejected("non-wrapping viewport overflow");
+        reg_write(16'h0068, 32'd0);
+        reg_write(16'h006c, 32'd0);
         reg_write(16'h0008, 32'd0);
+        present_scene();
 
         $display("VEGA VIDEO PASS frames=%0d", frame_count);
         $finish;

@@ -1,4 +1,4 @@
-CROSS ?= m68k-linux-gnu-
+include ../mk/m68k-cross.mk
 CC := $(CROSS)gcc
 AR := $(CROSS)ar
 HOST_CC ?= cc

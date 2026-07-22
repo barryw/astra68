@@ -1,7 +1,7 @@
 // 68k CPU-domain transfer adapter for the byte-wide MiST SDRAM port.
 //
 // One CPU transfer is captured while AS is held active. Active big-endian
-// byte lanes are issued sequentially to the 75 MHz SDRAM domain through a
+// byte lanes are issued sequentially to the 60 MHz SDRAM domain through a
 // request/acknowledge toggle crossing. The source bundle remains stable until
 // its acknowledge returns, so only the toggles themselves need synchronizers.
 `default_nettype none

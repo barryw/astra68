@@ -5,7 +5,7 @@
 // byte streams; this block validates the command sequence and writes the ROM
 // payload into SDRAM through the native DMA port.
 module astra_host_boot #(
-    parameter integer RX_STALL_CYCLES = 1500000
+    parameter integer RX_STALL_CYCLES = 1200000
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -216,7 +216,7 @@ module astra_host_boot #(
 
     // Keep the ROM word packer independent of command validation. In
     // particular, BOOT_BEGIN's 32-bit size check must not become part of the
-    // packer's clock-enable path in the 75 MHz SDRAM domain.
+    // packer's clock-enable path in the 60 MHz SDRAM domain.
     always @(posedge clk) begin
         if (rst || reset_packer) begin
             word_bytes <= 2'd0;

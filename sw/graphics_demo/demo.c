@@ -5,10 +5,6 @@
 
 #define SDRAM_CPU_BASE 0x02000000u
 #define FB_OFFSET       0x00000000u
-#define TILE0_MAP       0x00080000u
-#define TILE1_MAP       0x00081000u
-#define TILE0_SET       0x00090000u
-#define TILE1_SET       0x00091000u
 #define SPRITE_SET      0x00092000u
 #define SPRITE_STRESS_SET 0x00100000u
 #define GLYPH_MASK      0x00093000u
@@ -25,12 +21,6 @@
 
 #define TIMEOUT 20000000u
 
-#ifndef DEMO_TILE1_ENABLE
-#define DEMO_TILE1_ENABLE 1
-#endif
-#ifndef DEMO_TILE0_ENABLE
-#define DEMO_TILE0_ENABLE 1
-#endif
 #ifndef DEMO_STRESS_SPRITES
 #define DEMO_STRESS_SPRITES 0
 #endif
@@ -42,6 +32,8 @@
 #endif
 
 static uint32_t draw_fence = 1u;
+static uint32_t blit_fence = 1u;
+static uint32_t scene_generation = 1u;
 
 static volatile uint8_t *ram8(uint32_t offset)
 {
@@ -61,8 +53,6 @@ static void set_leds(uint8_t value)
 
 static void fail(uint8_t stage)
 {
-    VEGA->TILE[0].CTRL = 0u;
-    VEGA->TILE[1].CTRL = 0u;
     VEGA->SPR_CTRL = 0u;
     VEGA->BACKDROP = VEGA_RGB(255, 0, 0);
     VEGA->CTRL = VEGA_CTRL_DISPLAY_EN | VEGA_CTRL_BACKDROP_EN;
@@ -84,6 +74,7 @@ static int blit(uint32_t src, uint32_t dst, uint32_t mask,
                 uint32_t color, uint32_t key)
 {
     uint32_t timeout = TIMEOUT;
+    uint32_t fence = blit_fence++;
     ASTRAEA->BLIT_SRC = src;
     ASTRAEA->BLIT_DST = dst;
     ASTRAEA->BLIT_MASK = mask;
@@ -94,11 +85,13 @@ static int blit(uint32_t src, uint32_t dst, uint32_t mask,
     ASTRAEA->BLIT_OP = operation;
     ASTRAEA->BLIT_COLOR = color;
     ASTRAEA->BLIT_KEY = key;
+    ASTRAEA->BLIT_FENCE = fence;
     ASTRAEA->BLIT_CTRL = BLIT_START;
     while (!(ASTRAEA->BLIT_STATUS & BLIT_DONE) && timeout != 0u)
         --timeout;
     return timeout != 0u &&
-           BLIT_ERROR_CODE(ASTRAEA->BLIT_STATUS) == 0u;
+           BLIT_ERROR_CODE(ASTRAEA->BLIT_STATUS) == 0u &&
+           ASTRAEA->BLIT_FENCE == fence;
 }
 
 static int draw(uint32_t operation)
@@ -263,57 +256,13 @@ static int draw_scene(void)
     return 1;
 }
 
-static void build_tiles(void)
-{
-    volatile uint16_t *map0 = ram16(TILE0_MAP);
-    volatile uint16_t *map1 = ram16(TILE1_MAP);
-    volatile uint8_t *set0 = ram8(TILE0_SET);
-    volatile uint8_t *set1 = ram8(TILE1_SET);
-    uint32_t x;
-    uint32_t y;
-
-    for (y = 0; y < 32u; ++y) {
-        for (x = 0; x < 32u; ++x) {
-            map0[y * 32u + x] = TILE_ENTRY((x + y) & 1u, 1u, 0u, 0u);
-            map1[y * 32u + x] = TILE_ENTRY((x ^ y) & 1u, 2u, 0u, 0u);
-        }
-    }
-    for (y = 0; y < 8u; ++y) {
-        for (x = 0; x < 8u; x += 2u) {
-            uint8_t p0 = ((x + y) & 7u) == 0u ? 1u : 0u;
-            uint8_t p1 = ((x + 1u + y) & 7u) == 0u ? 1u : 0u;
-            set0[y * 4u + x / 2u] = (uint8_t)((p0 << 4) | p1);
-            set0[32u + y * 4u + x / 2u] =
-                (uint8_t)((p1 << 4) | p0);
-            p0 = (x == y || x + y == 7u) ? 1u : 0u;
-            p1 = (x + 1u == y || x + 1u + y == 7u) ? 1u : 0u;
-            set1[y * 4u + x / 2u] = (uint8_t)((p0 << 4) | p1);
-            set1[32u + y * 4u + x / 2u] =
-                (uint8_t)((p1 << 4) | p0);
-        }
-    }
-
-    VEGA->TILE[0].MAP = TILE0_MAP;
-    VEGA->TILE[0].SET = TILE0_SET;
-    VEGA->TILE[0].SIZE = TILE_MAPSIZE(5, 5);
-    VEGA->TILE[0].SCROLL = TILE_SCROLL(3, 5);
-    VEGA->TILE[0].CTRL = DEMO_TILE0_ENABLE ?
-        TILE_ENABLE | TILE_TRANSP_EN | TILE_WRAP : 0u;
-    VEGA->TILE[1].MAP = TILE1_MAP;
-    VEGA->TILE[1].SET = TILE1_SET;
-    VEGA->TILE[1].SIZE = TILE_MAPSIZE(5, 5);
-    VEGA->TILE[1].SCROLL = TILE_SCROLL(-2, 1);
-    VEGA->TILE[1].CTRL = DEMO_TILE1_ENABLE ?
-        TILE_ENABLE | TILE_TRANSP_EN | TILE_WRAP | TILE_ABOVE : 0u;
-}
-
 static void build_sprites(void)
 {
 #if DEMO_STRESS_SPRITES
     uint32_t sprite;
     uint32_t x;
 
-    for (sprite = 0u; sprite < 32u; ++sprite) {
+    for (sprite = 0u; sprite < VEGA_SPRITE_COUNT; ++sprite) {
         volatile uint8_t *pattern =
             ram8(SPRITE_STRESS_SET + sprite * 0x1000u);
         for (x = 0u; x < 16u; ++x)
@@ -417,14 +366,43 @@ static int wait_frame(void)
     return timeout != 0u;
 }
 
+static int present_scene(void)
+{
+    uint32_t timeout = TIMEOUT;
+    uint32_t generation = scene_generation++;
+
+    while ((VEGA->PRESENT_STATUS &
+            (VEGA_PRESENT_PENDING | VEGA_PRESENT_COPY_BUSY)) != 0u &&
+           timeout != 0u)
+        --timeout;
+    if (timeout == 0u)
+        return 0;
+
+    VEGA->SCENE_GENERATION = generation;
+    VEGA->DRAW_FENCE = draw_fence - 1u;
+    VEGA->BLIT_FENCE = blit_fence - 1u;
+    VEGA->PRESENT_CTRL = VEGA_PRESENT_SUBMIT;
+
+    timeout = TIMEOUT;
+    while (VEGA->PRESENT_COMPLETED_GENERATION != generation &&
+           timeout != 0u) {
+        if ((VEGA->PRESENT_STATUS & VEGA_PRESENT_INVALID) != 0u)
+            return 0;
+        --timeout;
+    }
+    return timeout != 0u &&
+           (VEGA->PRESENT_STATUS &
+            (VEGA_PRESENT_INVALID | VEGA_PRESENT_COPY_DEADLINE)) == 0u;
+}
+
 void kmain(void)
 {
     if (VESTA->ID != VESTA_ID_MAGIC || VEGA->ID != VEGA_ID_MAGIC ||
         ASTRAEA->ID != ASTRAEA_ID_MAGIC || !wait_sdram())
         fail(1u);
-    if (VEGA->VERSION != 0x00030000u ||
-        (VEGA->CAPS & 0x3fu) != 0x3fu ||
-        ASTRAEA->VERSION != ASTRAEA_VERSION_0_3)
+    if (VEGA->VERSION != VEGA_VERSION_0_5 ||
+        (VEGA->CAPS & 0x7fu) != 0x77u ||
+        ASTRAEA->VERSION != ASTRAEA_VERSION_0_4)
         fail(2u);
 
     set_leds(0x01u);
@@ -435,7 +413,6 @@ void kmain(void)
     if (!draw_scene()) fail(5u);
 
     build_palette();
-    build_tiles();
     build_sprites();
     build_copper();
 
@@ -449,23 +426,27 @@ void kmain(void)
     VEGA->FB_FORMAT = VEGA_FMT_INDEX8;
 #endif
     VEGA->FB_COLORKEY = 0u;
+    VEGA->FB_VIEW = VEGA_FB_VIEW_(0u, 0u);
+    VEGA->FB_VIRTUAL = VEGA_FB_VIRTUAL_(720u, 480u);
+    VEGA->FB_WRAP = VEGA_FB_WRAP_XY;
     VEGA->BACKDROP = 0x000b1720u;
     VEGA->IRQ_STAT = 0xffffffffu;
     VEGA->CTRL = VEGA_CTRL_DISPLAY_EN | VEGA_CTRL_FB_EN |
                  VEGA_CTRL_SPR_EN | VEGA_CTRL_COLORKEY_EN |
                  VEGA_CTRL_BACKDROP_EN;
 
-    if (!wait_frame() || !wait_frame()) fail(6u);
+    if (!present_scene()) fail(6u);
+    if (!wait_frame() || !wait_frame()) fail(7u);
     VEGA->STATUS = VEGA_STAT_UNDERRUN;
-    if (!wait_frame()) fail(7u);
+    if (!wait_frame()) fail(8u);
     if (VEGA->STATUS & (VEGA_STAT_UNDERRUN | VEGA_STAT_CONFIG_ERROR))
-        fail(8u);
-    if ((VEGA->SPR_COLLISION & 3u) != 3u) fail(9u);
-    if (ASTRAEA->COP_STATUS & (1u << 18)) fail(10u);
+        fail(9u);
+    if ((VEGA->SPR_COLLISION & 3u) != 3u) fail(10u);
+    if (ASTRAEA->COP_STATUS & (1u << 18)) fail(11u);
 
     set_leds(0x5au);
     for (;;) {
         if (VEGA->STATUS & (VEGA_STAT_UNDERRUN | VEGA_STAT_CONFIG_ERROR))
-            fail(11u);
+            fail(12u);
     }
 }

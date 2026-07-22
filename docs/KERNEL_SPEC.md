@@ -156,7 +156,8 @@ to ABI 0.1 and must be initialized before use.
 
 The kernel brings up mechanisms in this order:
 
-1. establish a private early stack, HDMI panic output, and SDRAM early log;
+1. establish a private early stack, HDMI panic output, SDRAM early log, and
+   bounded diagnostic-UART mirror;
 2. validate and copy the bounded `BootInfo` facts it needs;
 3. install a kernel-owned VBR and complete exception stubs;
 4. reserve firmware, image, page-table, stack, framebuffer, and DMA ranges;
@@ -657,6 +658,12 @@ makes continuation unsafe. The panic path masks DMA/interrupts where safe,
 captures CPU registers, exception frame, PMMU roots/status, current
 process/thread, recent trace, and hardware build identity, then resets into
 recovery. It does not attempt ordinary filesystem writes.
+
+K0 mirrors its early console to HDMI, the retained SDRAM log, and the FPGA's
+FTDI diagnostic UART. UART readiness is bounded by the CPU cycle counter so a
+failed diagnostic sink cannot deadlock boot or panic handling. The UART is not
+an ESP32 transport; all ESP32-to-FPGA application traffic remains AstraHost
+SPI.
 
 ## 16. Implementation discipline
 

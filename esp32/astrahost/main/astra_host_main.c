@@ -11,13 +11,17 @@
 #include "esp_attr.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 #include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdmmc_cmd.h"
 
+#include "astra_block_policy.h"
 #include "astra_host_protocol.h"
+#include "astra_input.h"
+#include "astra_partition.h"
 #include "astra_rom.h"
 
 #define ASTRA_MOUNT_POINT "/sdcard"
@@ -36,15 +40,29 @@
 #endif
 #define ASTRA_RESPONSE_TIMEOUT_US 250000
 #define ASTRA_DRAIN_QUIET_PASSES 2
+#define ASTRA_RUNTIME_RETRIES 3u
 #define ASTRA_LINK_RETRY_MS 100
 #define ASTRA_SD_RETRY_MS 1000
+#define ASTRA_SERVICE_IDLE_MS 1
 
-#define ASTRA_SPI_FRAME_MAX (3u + ASTRA_BOOT_CHUNK_BYTES)
+#define ASTRA_SPI_FRAME_MAX 512u
+#define ASTRA_POLL_RESPONSE_BYTES 30u
+#define ASTRA_FETCH_RESPONSE_BYTES (15u + ASTRA_BLOCK_CHUNK_BYTES)
 
 static const char *TAG = "AstraHost";
 static spi_device_handle_t fpga_device;
 static sdmmc_card_t *sd_card;
 static DMA_ATTR uint8_t spi_tx[ASTRA_SPI_FRAME_MAX];
+static DMA_ATTR uint8_t spi_rx[ASTRA_SPI_FRAME_MAX];
+static DMA_ATTR uint8_t runtime_payload[ASTRA_RUNTIME_MAX_PAYLOAD];
+static DMA_ATTR uint8_t block_buffer[
+    ASTRA_BLOCK_MAX_SECTORS * ASTRA_BLOCK_SECTOR_BYTES];
+static DMA_ATTR uint8_t partition_sector[ASTRA_SECTOR_BYTES];
+static astra_partition_t astra_partition;
+static uint32_t host_generation;
+static uint32_t media_generation = 1;
+static uint32_t media_flags = ASTRA_STATE_LINK_UP;
+static uint8_t fpga_capabilities;
 
 #ifdef ASTRA_PROVISION_ROM
 extern const uint8_t astra_provision_start[]
@@ -59,6 +77,47 @@ static void write_be32(uint8_t *bytes, uint32_t value)
     bytes[1] = (uint8_t)(value >> 16);
     bytes[2] = (uint8_t)(value >> 8);
     bytes[3] = (uint8_t)value;
+}
+
+static void write_be16(uint8_t *bytes, uint16_t value)
+{
+    bytes[0] = (uint8_t)(value >> 8);
+    bytes[1] = (uint8_t)value;
+}
+
+static void write_be64(uint8_t *bytes, uint64_t value)
+{
+    write_be32(bytes, (uint32_t)(value >> 32));
+    write_be32(bytes + 4, (uint32_t)value);
+}
+
+static uint16_t read_be16(const uint8_t *bytes)
+{
+    return ((uint16_t)bytes[0] << 8) | bytes[1];
+}
+
+static uint32_t read_be32(const uint8_t *bytes)
+{
+    return ((uint32_t)bytes[0] << 24) |
+           ((uint32_t)bytes[1] << 16) |
+           ((uint32_t)bytes[2] << 8) |
+           bytes[3];
+}
+
+static uint64_t read_be64(const uint8_t *bytes)
+{
+    return ((uint64_t)read_be32(bytes) << 32) | read_be32(bytes + 4);
+}
+
+static uint32_t crc32_bytes(const uint8_t *data, size_t size)
+{
+    uint32_t crc = 0xffffffffu;
+    for (size_t index = 0; index < size; ++index) {
+        crc ^= data[index];
+        for (unsigned bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+    }
+    return ~crc;
 }
 
 static esp_err_t fpga_transfer(const uint8_t *data, size_t size)
@@ -82,22 +141,54 @@ static esp_err_t fpga_send_command(uint8_t command, const uint8_t *payload,
     return fpga_transfer(spi_tx, payload_size + 2);
 }
 
-static esp_err_t fpga_try_read_byte(uint8_t *value)
+static esp_err_t fpga_send_runtime_command(uint8_t command,
+                                           const uint8_t *payload,
+                                           size_t payload_size)
 {
-    spi_transaction_t transaction = {
-        .flags = SPI_TRANS_USE_TXDATA | SPI_TRANS_USE_RXDATA,
-        .length = 24,
-    };
-    transaction.tx_data[0] = ASTRA_SPI_READ_OP;
-    transaction.tx_data[1] = 0;
-    transaction.tx_data[2] = 0;
+    if (payload_size > ASTRA_RUNTIME_MAX_PAYLOAD ||
+        payload_size + 4 > sizeof(spi_tx))
+        return ESP_ERR_INVALID_SIZE;
+    spi_tx[0] = ASTRA_SPI_WRITE_OP;
+    spi_tx[1] = command;
+    write_be16(spi_tx + 2, (uint16_t)payload_size);
+    if (payload_size != 0)
+        memcpy(spi_tx + 4, payload, payload_size);
+    return fpga_transfer(spi_tx, payload_size + 4);
+}
 
+static esp_err_t fpga_read_available(uint8_t *data, size_t capacity,
+                                     size_t *received)
+{
+    memset(spi_tx, 0, sizeof(spi_tx));
+    memset(spi_rx, 0, sizeof(spi_rx));
+    spi_tx[0] = ASTRA_SPI_READ_OP;
+    spi_transaction_t transaction = {
+        .length = sizeof(spi_tx) * 8,
+        .tx_buffer = spi_tx,
+        .rx_buffer = spi_rx,
+    };
     esp_err_t error = spi_device_polling_transmit(fpga_device, &transaction);
     if (error != ESP_OK)
         return error;
-    if (transaction.rx_data[1] != ASTRA_SPI_TOKEN_DATA)
-        return ESP_ERR_NOT_FOUND;
-    *value = transaction.rx_data[2];
+
+    *received = 0;
+    size_t index = 1;
+    while (index < sizeof(spi_rx)) {
+        uint8_t token = spi_rx[index++];
+        if (token == ASTRA_SPI_TOKEN_EMPTY)
+            continue;
+        if (token != ASTRA_SPI_TOKEN_DATA)
+            return ESP_ERR_INVALID_RESPONSE;
+        if (index == sizeof(spi_rx))
+            break;
+        if (data != NULL) {
+            if (*received == capacity)
+                return ESP_ERR_INVALID_SIZE;
+            data[*received] = spi_rx[index];
+        }
+        ++*received;
+        ++index;
+    }
     return ESP_OK;
 }
 
@@ -106,16 +197,16 @@ static esp_err_t fpga_read_bytes(uint8_t *data, size_t size)
     int64_t deadline = esp_timer_get_time() + ASTRA_RESPONSE_TIMEOUT_US;
     size_t received = 0;
     while (received != size) {
-        esp_err_t error = fpga_try_read_byte(data + received);
-        if (error == ESP_OK) {
-            ++received;
-            continue;
-        }
-        if (error != ESP_ERR_NOT_FOUND)
+        size_t batch = 0;
+        esp_err_t error = fpga_read_available(
+            data + received, size - received, &batch);
+        if (error != ESP_OK)
             return error;
+        received += batch;
         if (esp_timer_get_time() >= deadline)
             return ESP_ERR_TIMEOUT;
-        taskYIELD();
+        if (batch == 0)
+            taskYIELD();
     }
     return ESP_OK;
 }
@@ -126,14 +217,14 @@ static esp_err_t fpga_drain_responses(void)
     unsigned quiet_passes = 0;
 
     while (esp_timer_get_time() < deadline) {
-        uint8_t ignored;
-        esp_err_t error = fpga_try_read_byte(&ignored);
-        if (error == ESP_OK) {
+        size_t received = 0;
+        esp_err_t error = fpga_read_available(NULL, 0, &received);
+        if (error != ESP_OK)
+            return error;
+        if (received != 0) {
             quiet_passes = 0;
             continue;
         }
-        if (error != ESP_ERR_NOT_FOUND)
-            return error;
         if (++quiet_passes == ASTRA_DRAIN_QUIET_PASSES)
             return ESP_OK;
 
@@ -178,6 +269,8 @@ static esp_err_t fpga_identify(void)
         response[5] != ASTRA_HOST_PROTOCOL_MAJOR ||
         (response[8] & ASTRA_CAP_BOOT_STREAM) == 0)
         return ESP_ERR_INVALID_RESPONSE;
+
+    fpga_capabilities = response[8];
 
     ESP_LOGI(TAG, "FPGA link: AstraHost protocol %u.%u flags=0x%02x",
              response[5], response[6], response[9]);
@@ -303,6 +396,54 @@ static esp_err_t mount_boot_partition(void)
     };
     return esp_vfs_fat_sdspi_mount(ASTRA_MOUNT_POINT, &host, &slot,
                                    &mount, &sd_card);
+}
+
+static bool read_partition_sector(void *context, uint64_t lba,
+                                  uint8_t sector[ASTRA_SECTOR_BYTES])
+{
+    (void)context;
+    if (lba > UINT32_MAX)
+        return false;
+    esp_err_t error = sdmmc_read_sectors(
+        sd_card, partition_sector, (uint32_t)lba, 1);
+    if (error != ESP_OK)
+        return false;
+    memcpy(sector, partition_sector, ASTRA_SECTOR_BYTES);
+    return true;
+}
+
+static void discover_astra_partition(void)
+{
+    media_flags = ASTRA_STATE_LINK_UP;
+    astra_partition.first_lba = 0;
+    astra_partition.sector_count = 0;
+    if (sd_card->csd.sector_size != ASTRA_BLOCK_SECTOR_BYTES) {
+        ESP_LOGE(TAG, "unsupported SD sector size: %lu",
+                 (unsigned long)sd_card->csd.sector_size);
+        return;
+    }
+
+    astra_partition_result_t result = astra_partition_find(
+        read_partition_sector, NULL, sd_card->csd.capacity,
+        &astra_partition);
+    if (result != ASTRA_PARTITION_OK) {
+        ESP_LOGW(TAG, "native Astra volume unavailable: %s",
+                 astra_partition_result_string(result));
+        return;
+    }
+    if (!astra_partition_u32_addressable(&astra_partition)) {
+        ESP_LOGE(TAG, "native Astra partition exceeds SD backend LBA range");
+        astra_partition.first_lba = 0;
+        astra_partition.sector_count = 0;
+        return;
+    }
+
+    media_flags |= ASTRA_STATE_MEDIA_PRESENT | ASTRA_STATE_WRITE_ENABLE;
+    ESP_LOGI(TAG,
+             "native Astra partition: LBA %llu, %llu sectors (%llu MiB)",
+             (unsigned long long)astra_partition.first_lba,
+             (unsigned long long)astra_partition.sector_count,
+             (unsigned long long)(astra_partition.sector_count / 2048));
 }
 
 #ifdef ASTRA_PROVISION_ROM
@@ -460,6 +601,264 @@ static FILE *open_valid_rom(astra_rom_info_t *rom)
     return file;
 }
 
+static esp_err_t fpga_runtime_status(uint8_t command,
+                                     const uint8_t *payload,
+                                     size_t payload_size,
+                                     const char *operation)
+{
+    esp_err_t error = fpga_send_runtime_command(
+        command, payload, payload_size);
+    if (error != ESP_OK)
+        return error;
+    return fpga_expect_status(operation);
+}
+
+static esp_err_t fpga_runtime_status_retry(uint8_t command,
+                                           const uint8_t *payload,
+                                           size_t payload_size,
+                                           const char *operation)
+{
+    esp_err_t last_error = ESP_ERR_TIMEOUT;
+
+    for (unsigned attempt = 0; attempt < ASTRA_RUNTIME_RETRIES; ++attempt) {
+        if (attempt != 0) {
+            last_error = fpga_drain_responses();
+            if (last_error != ESP_OK)
+                return last_error;
+        }
+
+        last_error = fpga_runtime_status(command, payload, payload_size,
+                                         operation);
+        if (last_error == ESP_OK)
+            return ESP_OK;
+        ESP_LOGW(TAG, "%s retry %u/%u: %s", operation, attempt + 1,
+                 ASTRA_RUNTIME_RETRIES, esp_err_to_name(last_error));
+    }
+
+    return last_error;
+}
+
+static esp_err_t fpga_service_hello(void)
+{
+    write_be32(runtime_payload, host_generation);
+    write_be32(runtime_payload + 4, media_generation);
+    write_be32(runtime_payload + 8, media_flags);
+    write_be64(runtime_payload + 12, astra_partition.sector_count);
+    write_be16(runtime_payload + 20, ASTRA_BLOCK_MAX_SECTORS);
+    return fpga_runtime_status(ASTRA_CMD_SERVICE_HELLO,
+                               runtime_payload, 22, "SERVICE_HELLO");
+}
+
+static esp_err_t fpga_poll_request(astra_block_request_t *request)
+{
+    uint8_t response[ASTRA_POLL_RESPONSE_BYTES];
+    esp_err_t error = fpga_send_runtime_command(
+        ASTRA_CMD_BLOCK_POLL, NULL, 0);
+    if (error != ESP_OK)
+        return error;
+    error = fpga_read_bytes(response, sizeof(response));
+    if (error != ESP_OK)
+        return error;
+    if (response[0] != ASTRA_STATUS_OK)
+        return ESP_ERR_INVALID_RESPONSE;
+
+    request->valid = (response[1] & 1u) != 0;
+    request->id = read_be32(response + 2);
+    request->operation = response[6];
+    request->flags = response[7];
+    request->sectors = read_be16(response + 8);
+    request->lba = read_be64(response + 10);
+    request->buffer = read_be32(response + 18);
+    request->media_generation = read_be32(response + 22);
+    request->host_generation = read_be32(response + 26);
+    return ESP_OK;
+}
+
+static esp_err_t fpga_push_chunk(const astra_block_request_t *request,
+                                 uint32_t offset, const uint8_t *data)
+{
+    write_be32(runtime_payload, request->id);
+    write_be32(runtime_payload + 4, offset);
+    write_be16(runtime_payload + 8, ASTRA_BLOCK_CHUNK_BYTES);
+    write_be32(runtime_payload + 10,
+               crc32_bytes(data, ASTRA_BLOCK_CHUNK_BYTES));
+    memcpy(runtime_payload + 14, data, ASTRA_BLOCK_CHUNK_BYTES);
+
+    for (unsigned attempt = 0; attempt < ASTRA_RUNTIME_RETRIES; ++attempt) {
+        if (attempt != 0) {
+            esp_err_t drain_error = fpga_drain_responses();
+            if (drain_error != ESP_OK)
+                return drain_error;
+        }
+        esp_err_t error = fpga_runtime_status(
+            ASTRA_CMD_BLOCK_PUSH, runtime_payload,
+            14 + ASTRA_BLOCK_CHUNK_BYTES, "BLOCK_PUSH");
+        if (error == ESP_OK)
+            return ESP_OK;
+        ESP_LOGW(TAG, "BLOCK_PUSH retry %u: %s", attempt + 1,
+                 esp_err_to_name(error));
+    }
+    return ESP_ERR_TIMEOUT;
+}
+
+static esp_err_t fpga_fetch_chunk(const astra_block_request_t *request,
+                                  uint32_t offset, uint8_t *data)
+{
+    write_be32(runtime_payload, request->id);
+    write_be32(runtime_payload + 4, offset);
+    write_be16(runtime_payload + 8, ASTRA_BLOCK_CHUNK_BYTES);
+
+    uint8_t response[ASTRA_FETCH_RESPONSE_BYTES];
+    for (unsigned attempt = 0; attempt < ASTRA_RUNTIME_RETRIES; ++attempt) {
+        if (attempt != 0) {
+            esp_err_t drain_error = fpga_drain_responses();
+            if (drain_error != ESP_OK)
+                return drain_error;
+        }
+        esp_err_t error = fpga_send_runtime_command(
+            ASTRA_CMD_BLOCK_FETCH, runtime_payload, 10);
+        if (error == ESP_OK)
+            error = fpga_read_bytes(response, sizeof(response));
+        if (error == ESP_OK && response[0] == ASTRA_STATUS_OK &&
+            read_be32(response + 1) == request->id &&
+            read_be32(response + 5) == offset &&
+            read_be16(response + 9) == ASTRA_BLOCK_CHUNK_BYTES &&
+            read_be32(response + 11 + ASTRA_BLOCK_CHUNK_BYTES) ==
+                crc32_bytes(response + 11, ASTRA_BLOCK_CHUNK_BYTES)) {
+            memcpy(data, response + 11, ASTRA_BLOCK_CHUNK_BYTES);
+            return ESP_OK;
+        }
+        ESP_LOGW(TAG, "BLOCK_FETCH retry %u: %s", attempt + 1,
+                 error == ESP_OK ? "invalid response" :
+                                   esp_err_to_name(error));
+    }
+    return ESP_ERR_INVALID_CRC;
+}
+
+static esp_err_t fpga_complete_request(
+    const astra_block_request_t *request, uint16_t status,
+    uint16_t sectors, uint32_t detail)
+{
+    write_be32(runtime_payload, request->id);
+    write_be16(runtime_payload + 4, status);
+    write_be16(runtime_payload + 6, sectors);
+    write_be32(runtime_payload + 8, detail);
+    return fpga_runtime_status_retry(ASTRA_CMD_BLOCK_COMPLETE,
+                                     runtime_payload, 12,
+                                     "BLOCK_COMPLETE");
+}
+
+static esp_err_t service_block_request(
+    const astra_block_request_t *request)
+{
+    uint32_t absolute_lba = 0;
+    astra_block_policy_result_t policy = astra_block_policy_classify(
+        request, host_generation, media_generation, media_flags,
+        &astra_partition, &absolute_lba);
+
+    if (policy == ASTRA_BLOCK_POLICY_INVALID)
+        return fpga_complete_request(
+            request, ASTRA_COMPLETION_BAD_REQUEST, 0, 0);
+    if (policy == ASTRA_BLOCK_POLICY_FLUSH)
+        return fpga_complete_request(request, ASTRA_COMPLETION_OK, 0, 0);
+
+    size_t bytes = request->sectors * ASTRA_BLOCK_SECTOR_BYTES;
+    esp_err_t error;
+    if (request->operation == ASTRA_BLOCK_READ) {
+        error = sdmmc_read_sectors(sd_card, block_buffer, absolute_lba,
+                                   request->sectors);
+        if (error == ESP_OK) {
+            for (size_t offset = 0; offset < bytes;
+                 offset += ASTRA_BLOCK_CHUNK_BYTES) {
+                error = fpga_push_chunk(
+                    request, (uint32_t)offset, block_buffer + offset);
+                if (error != ESP_OK)
+                    return error;
+            }
+        }
+    } else {
+        error = ESP_OK;
+        for (size_t offset = 0; offset < bytes;
+             offset += ASTRA_BLOCK_CHUNK_BYTES) {
+            error = fpga_fetch_chunk(
+                request, (uint32_t)offset, block_buffer + offset);
+            if (error != ESP_OK)
+                return error;
+        }
+        error = sdmmc_write_sectors(sd_card, block_buffer, absolute_lba,
+                                    request->sectors);
+    }
+
+    if (error != ESP_OK) {
+        ESP_LOGE(TAG, "SD request %08lx failed: %s",
+                 (unsigned long)request->id, esp_err_to_name(error));
+        esp_err_t completion_error = fpga_complete_request(
+            request, ASTRA_COMPLETION_IO_ERROR, 0, (uint32_t)error);
+        if (completion_error != ESP_OK)
+            return completion_error;
+        ++media_generation;
+        if (media_generation == 0)
+            ++media_generation;
+        media_flags = ASTRA_STATE_LINK_UP;
+        astra_partition.first_lba = 0;
+        astra_partition.sector_count = 0;
+        return fpga_service_hello();
+    }
+
+    return fpga_complete_request(request, ASTRA_COMPLETION_OK,
+                                 request->sectors, 0);
+}
+
+static esp_err_t service_input_event(const astra_input_event_t *event)
+{
+    write_be32(runtime_payload, host_generation);
+    write_be32(runtime_payload + 4, event->header);
+    write_be32(runtime_payload + 8, event->value);
+    write_be32(runtime_payload + 12, event->timestamp_ms);
+    write_be32(runtime_payload + 16, event->device_sequence);
+    return fpga_runtime_status_retry(ASTRA_CMD_INPUT_EVENT,
+                                     runtime_payload, 20,
+                                     "INPUT_EVENT");
+}
+
+static esp_err_t run_runtime_service(void)
+{
+    const uint8_t required = ASTRA_CAP_RAW_BLOCK | ASTRA_CAP_INPUT_EVENTS;
+    if ((fpga_capabilities & required) != required)
+        return ESP_ERR_NOT_SUPPORTED;
+
+    // A new link session gets a new generation. If a prior session died after
+    // partially transferring a request, HELLO completes that request as stale
+    // instead of trying to restart it without a resumable byte offset.
+    if (++host_generation == 0)
+        ++host_generation;
+    esp_err_t error = fpga_service_hello();
+    if (error != ESP_OK)
+        return error;
+
+    for (;;) {
+        astra_input_event_t event;
+        if (astra_input_receive(&event, 0)) {
+            error = service_input_event(&event);
+            if (error != ESP_OK)
+                return error;
+        }
+
+        astra_block_request_t request;
+        error = fpga_poll_request(&request);
+        if (error != ESP_OK)
+            return error;
+        if (request.valid) {
+            error = service_block_request(&request);
+            if (error != ESP_OK)
+                return error;
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(ASTRA_SERVICE_IDLE_MS));
+        }
+
+    }
+}
+
 static esp_err_t wait_for_fpga(void)
 {
     for (;;) {
@@ -471,7 +870,7 @@ static esp_err_t wait_for_fpga(void)
     }
 }
 
-static esp_err_t wait_for_boot_request(void)
+static esp_err_t wait_for_boot_state(bool *boot_requested)
 {
     for (;;) {
         uint8_t flags;
@@ -486,11 +885,13 @@ static esp_err_t wait_for_boot_request(void)
             return ESP_FAIL;
         }
         if ((flags & ASTRA_BOOT_DONE) != 0) {
-            vTaskDelay(pdMS_TO_TICKS(ASTRA_LINK_RETRY_MS));
-            continue;
-        }
-        if ((flags & ASTRA_BOOT_REQUESTED) != 0)
+            *boot_requested = false;
             return ESP_OK;
+        }
+        if ((flags & ASTRA_BOOT_REQUESTED) != 0) {
+            *boot_requested = true;
+            return ESP_OK;
+        }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
@@ -500,6 +901,11 @@ void app_main(void)
     ESP_LOGI(TAG, "AstraHost 0.1 starting");
     ESP_LOGI(TAG, "FPGA communication: SPI only, mode 0 at %d Hz",
              ASTRA_FPGA_SPI_HZ);
+
+    host_generation = esp_random();
+    if (host_generation == 0)
+        host_generation = 1;
+    ESP_ERROR_CHECK(astra_input_initialize() ? ESP_OK : ESP_ERR_NO_MEM);
 
     ESP_ERROR_CHECK(initialize_shared_spi());
 
@@ -511,6 +917,7 @@ void app_main(void)
     }
     ESP_LOGI(TAG, "SD boot partition mounted");
     sdmmc_card_print_info(stdout, sd_card);
+    discover_astra_partition();
 
 #ifdef ASTRA_PROVISION_ROM
     ESP_ERROR_CHECK(provision_boot_rom());
@@ -520,29 +927,35 @@ void app_main(void)
     for (;;) {
         ESP_ERROR_CHECK(wait_for_fpga());
 
-        astra_rom_info_t rom;
-        FILE *file = open_valid_rom(&rom);
-        if (file == NULL) {
-            vTaskDelay(pdMS_TO_TICKS(ASTRA_SD_RETRY_MS));
-            continue;
+        bool boot_requested = false;
+        error = wait_for_boot_state(&boot_requested);
+        if (error == ESP_OK && boot_requested) {
+            astra_rom_info_t rom;
+            FILE *file = open_valid_rom(&rom);
+            if (file == NULL) {
+                vTaskDelay(pdMS_TO_TICKS(ASTRA_SD_RETRY_MS));
+                continue;
+            }
+            error = fpga_stream_rom(file, &rom);
+            fclose(file);
+            if (error == ESP_OK)
+                ESP_LOGI(TAG, "Astra boot handoff complete");
         }
 
-        error = wait_for_boot_request();
-        if (error == ESP_OK)
-            error = fpga_stream_rom(file, &rom);
-        fclose(file);
-
-        if (error == ESP_OK) {
-            ESP_LOGI(TAG, "Astra boot handoff complete");
+        if (error != ESP_OK) {
+            ESP_LOGE(TAG, "boot attempt failed: %s", esp_err_to_name(error));
+            esp_err_t abort_error = fpga_abort_boot();
+            if (abort_error != ESP_OK)
+                ESP_LOGW(TAG, "BOOT_ABORT failed: %s",
+                         esp_err_to_name(abort_error));
             vTaskDelay(pdMS_TO_TICKS(ASTRA_LINK_RETRY_MS));
             continue;
         }
 
-        ESP_LOGE(TAG, "boot attempt failed: %s", esp_err_to_name(error));
-        esp_err_t abort_error = fpga_abort_boot();
-        if (abort_error != ESP_OK)
-            ESP_LOGW(TAG, "BOOT_ABORT failed: %s",
-                     esp_err_to_name(abort_error));
+        ESP_LOGI(TAG, "entering Astra runtime storage/input service");
+        error = run_runtime_service();
+        ESP_LOGW(TAG, "runtime service link reset: %s",
+                 esp_err_to_name(error));
         vTaskDelay(pdMS_TO_TICKS(ASTRA_LINK_RETRY_MS));
     }
 }

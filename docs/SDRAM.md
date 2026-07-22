@@ -2,14 +2,14 @@
 
 ## Goals
 
-The ULX3S MT48LC16M16A2 is a 32 MiB, 16-bit SDR SDRAM. At the initial
-75 MHz controller clock its raw transfer rate is 150 MB/s. The memory system
+The ULX3S MT48LC16M16A2 is a 32 MiB, 16-bit SDR SDRAM. At the production
+60 MHz controller clock its raw transfer rate is 120 MB/s. The memory system
 must preserve CPU-visible 68030 ordering and byte semantics while leaving most
 of that bandwidth available to future chip DMA.
 
-Acceptance targets at 75 MHz:
+Acceptance targets at 60 MHz:
 
-- sustained aligned read and write streams: at least 120 MB/s each;
+- sustained aligned read and write streams: at least 110 MB/s each;
 - complementary four-sweep POST over 32 MiB: less than 1.5 seconds;
 - one memory-controller request for an 8-bit or 16-bit TG68K bus cycle;
 - two native 16-bit CPU cycles for a 32-bit TG68K operation, without any
@@ -18,9 +18,21 @@ Acceptance targets at 75 MHz:
   operations;
 - bounded DMA bursts so the CPU and refresh engine cannot be starved.
 
-After the 75 MHz implementation is stable on hardware, 100 MHz is the stretch
-clock. That raises raw bandwidth to 200 MB/s; it is not accepted unless timing,
-long memory stress, and all CPU regressions remain clean.
+Higher memory clocks remain an optional future optimization, not a release
+blocker. Any increase must retain timing closure, long memory stress, refresh
+correctness, and every CPU/graphics regression.
+
+The 68030 remains at 12.5 MHz, HDMI remains 60 Hz, and USB remains 48 MHz.
+Only peak memory-service bandwidth changes. A fully memory-bound operation can
+take up to 25% longer than at 75 MHz; normal mixed workloads and page-flipped
+presentation are affected substantially less.
+
+At the measured rates, copying an entire 720x480 RGB565 surface takes about
+17.5 ms at 60 MHz instead of roughly 14.0 ms at 75 MHz; filling it takes about
+7.4 ms instead of 5.9 ms. Vega presentation swaps a framebuffer descriptor at
+vblank and therefore pays neither cost. Software that insists on copying a
+complete frame may miss one 60 Hz refresh, while ordinary compositing into a
+back surface followed by present remains tear-free and frame-paced.
 
 ## Native request contract
 
@@ -63,25 +75,28 @@ core, used without its AXI adapter. It is verified upstream against the exact
 MT48LC16M16A2, keeps one row open in each of four banks, and pipelines masked
 32-bit transfers as two SDRAM halfwords.
 
-The ULX3S ECP5 implementation uses `SDRAM_READ_LATENCY=3` at 75 MHz. A
+The ULX3S ECP5 implementation uses `SDRAM_READ_LATENCY=3` at 60 MHz. A
 controller-only hardware sweep established the sampling point independently of
 the CPU and caches: latency 2 returned `0x00010000` after writing `0x00000001`,
 latency 1 returned `0x00010001`, and latency 3 passed 38 directed operations,
-including all 15 nonzero byte-enable masks. The pin-level SDRAM model presents
-CAS-2 data on the second SDRAM edge and therefore enforces the same setting in
-simulation.
+including all 15 nonzero byte-enable masks. The same latency passed the 60 MHz
+standalone hardware diagnostic across repeated SRAM loads. The pin-level SDRAM
+model presents CAS-2 data on the second SDRAM edge and therefore enforces the
+same setting in simulation.
 
 Astra owns the request arbiter. Implemented clients are:
 
 1. CPU/PMMU single transactions through a toggle-based CDC bridge.
 2. The destructive POST engine, which takes an exclusive maintenance grant
    while the ROM and stack remain in block RAM.
-3. Vega framebuffer, tile, and sprite scanline builders through the real-time
-   video port.
+3. Vega framebuffer and sprite scanline builders through the real-time video
+   port.
 4. Astraea blitter/draw engines through the opportunistic DMA port.
+5. AstraHost storage/boot transfers and OHCI USB DMA through registered DMA
+   ownership boundaries.
 
 An active CPU `RMC` lock has first priority, followed by Vega video, DMA, and
-ordinary CPU traffic. Video's three internal clients rotate after bounded
+ordinary CPU traffic. Video's internal clients rotate after bounded
 32-word bursts and hold ownership only until their accepted responses retire.
 DMA grants are also chunked; an engine must release its lock at its configured
 maximum burst boundary. Refresh is internal to the physical controller and
@@ -91,8 +106,8 @@ releases it.
 
 The first non-POST DMA client is the Astraea blitter. It performs aligned
 COPY/FILL work in 16-word chunks and falls back to masked byte transactions for
-unaligned rectangles. Controller-level simulation sustains 51.44 MB/s copy
-(one read plus one write per payload byte) and 119.81 MB/s fill. Astraea and the
+unaligned rectangles. Controller-level simulation sustains 39.54 MB/s copy
+(one read plus one write per payload byte) and 92.88 MB/s fill. Astraea and the
 destructive POST engine share a registered DMA owner; POST has priority when
 both request ownership.
 
@@ -134,19 +149,18 @@ snooping before sharing memory with cached CPU traffic.
 
 ## Measured simulation baseline
 
-At 75 MHz, the current pin-level controller test sustains 145.30 MB/s writes
-and 143.64 MB/s reads while refresh is active. The integrated complementary
-POST path sustains 144.46 MB/s, projecting 0.929 seconds for four complete
+At 60 MHz, the current pin-level controller test sustains 115.71 MB/s writes
+and 114.24 MB/s reads while refresh is active. The integrated complementary
+POST path sustains 115.05 MB/s, projecting about 1.17 seconds for four complete
 sweeps of 32 MiB. Run `sw/boot/run_sdram_sim.sh` to rebuild the TG030 ROM and
 core netlist and execute this complete pin-level gate.
 
-The full graphics gate pipelines framebuffer requests and overlaps tile/sprite
-BRAM work. With both tile layers and unrelated-row sprites active, INDEX8 plus
-1024 admitted sprite pixels completes its worst scanline in 2274 memory clocks;
-RGB565 plus the hardware-limited 512 pixels completes in 2022. The 720x480 line
-deadline is 2383 clocks. `sw/graphics_demo/run_sim.sh all` locks these cases.
+The full graphics gate pipelines framebuffer requests and sprite BRAM work.
+Normal, 16-sprite INDEX8 stress, and 16-sprite RGB565 stress complete their
+worst scanlines in 505, 1103, and 1429 memory clocks. The 60 MHz 720x480 line
+deadline is 1906 clocks. `sw/graphics_demo/run_sim.sh all` locks these cases.
 
-## Hardware acceptance
+## Historical 75 MHz hardware acceptance
 
 Build `0xA0086302` passed three consecutive SRAM reconfiguration boots on the
 ULX3S attached to `nuc`. Every run completed the CPU data/byte-lane, unaligned

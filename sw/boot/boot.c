@@ -716,8 +716,9 @@ static int benchmark_astraea(uint32_t ram_base)
         return post_failure("Astraea identity", ASTRAEA_BASE,
                             ASTRAEA_ID_MAGIC, ASTRAEA->ID);
 
+    // Pitch is unused for these one-row commands and is a 16-bit field.
     ASTRAEA->BLIT_DST = src_offset;
-    ASTRAEA->BLIT_DST_PITCH = DMA_BENCH_BYTES;
+    ASTRAEA->BLIT_DST_PITCH = 0u;
     ASTRAEA->BLIT_DIM = BLIT_DIM_(DMA_BENCH_BYTES / 4u, 1u);
     ASTRAEA->BLIT_OP = BLIT_MODE_FILL | BLIT_ELEM32;
     ASTRAEA->BLIT_COLOR = color;
@@ -737,8 +738,8 @@ static int benchmark_astraea(uint32_t ram_base)
 
     ASTRAEA->BLIT_SRC = src_offset;
     ASTRAEA->BLIT_DST = dst_offset;
-    ASTRAEA->BLIT_SRC_PITCH = DMA_BENCH_BYTES;
-    ASTRAEA->BLIT_DST_PITCH = DMA_BENCH_BYTES;
+    ASTRAEA->BLIT_SRC_PITCH = 0u;
+    ASTRAEA->BLIT_DST_PITCH = 0u;
     ASTRAEA->BLIT_DIM = BLIT_DIM_(DMA_BENCH_BYTES / 4u, 1u);
     ASTRAEA->BLIT_OP = BLIT_MODE_COPY | BLIT_ELEM32;
     start = VESTA->CPU_CYCLES_LO;
@@ -787,13 +788,11 @@ static int test_full_range(uint32_t ram_base, uint32_t ram_size)
     serial_puts("  Full-range BIST ... [");
     VESTA->MEMTEST_CTRL = MEMTEST_START;
 
-    uint32_t seen_busy = 0u;
     uint32_t last_phase = 0u;
     uint32_t displayed_mib = 0u;
     for (uint32_t polls = 0; polls < MEMTEST_TIMEOUT_POLLS; ++polls) {
         uint32_t status = VESTA->MEMTEST_STATUS;
         uint32_t phase = MEMTEST_PHASE(status);
-        if (status & MEMTEST_BUSY) seen_busy = 1u;
 
         if (phase != last_phase) {
             if (last_phase == MEMTEST_PHASE_WRITE || last_phase == MEMTEST_PHASE_READ) {
@@ -815,7 +814,11 @@ static int test_full_range(uint32_t ram_base, uint32_t ram_size)
             ++displayed_mib;
         }
 
-        if (seen_busy && (status & MEMTEST_DONE) && !(status & MEMTEST_BUSY)) {
+        // DONE is sticky and was clear before this command. Requiring the CPU
+        // to sample the transient BUSY level is invalid across the BIST clock
+        // boundary: a cache fence or an unusually short diagnostic sweep may
+        // keep software from observing it even though the command completed.
+        if ((status & MEMTEST_DONE) && !(status & MEMTEST_BUSY)) {
             while (displayed_mib < total_mib) {
                 serial_putc('.');
                 ++displayed_mib;

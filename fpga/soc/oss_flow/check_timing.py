@@ -11,10 +11,11 @@ import sys
 REQUIRED_CLOCKS = {
     "$glbnet$clk": 12.5,
     "$glbnet$sd_clk_in": 20.0,
-    "$glbnet$sdram_domain_clk": 75.0,
+    "$glbnet$sdram_domain_clk": 60.0,
+    "$glbnet$usb_phy_domain_clk": 48.0,
     "$glbnet$video_pixel_clk": 27.0,
     "$glbnet$video_shift_clk": 135.0,
-    "clk25_mhz$TRELLIS_IO_IN": 25.0,
+    "$glbnet$clk25_mhz$TRELLIS_IO_IN": 25.0,
 }
 
 

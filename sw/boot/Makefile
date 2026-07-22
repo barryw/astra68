@@ -1,5 +1,5 @@
-# Astra 68 — boot ROM build. Bare-metal m68k via gcc-m68k-linux-gnu (freestanding).
-CROSS   ?= m68k-linux-gnu-
+# Astra 68 — boot ROM build. Bare-metal m68k via freestanding GCC.
+include ../../mk/m68k-cross.mk
 CC       = $(CROSS)gcc
 OBJCOPY  = $(CROSS)objcopy
 OBJDUMP  = $(CROSS)objdump
@@ -16,6 +16,7 @@ PNR_SEED ?= 4
 PNR_PLACER ?= heap
 PNR_ROUTER ?= router1
 PNR_TIMING_WEIGHT ?= 20
+PNR_HEAP_CELL_PLACEMENT_TIMEOUT ?= 0
 PNR_TIMING_RIPUP ?= 0
 PNR_TIMING_ALLOW_FAIL ?= 0
 PNR_ROUTER2_ALT_WEIGHTS ?= 0
@@ -24,7 +25,7 @@ SYNTH_ECP5_FLAGS ?= -abc2
 SYNTH_KEEP_HIERARCHY ?=
 ASTRA_FLOORPLAN_MODE ?= critical
 ASTRA_FLOORPLAN_ENFORCE ?= host_io,astraea_blitter,astraea_blitter_cdc,astraea_blitter_control
-RESOURCE_PROFILE ?= core_graphics
+RESOURCE_PROFILE ?= complete_chipset
 ROM_VERSION ?= 0.3
 BUILD_INFO = build/rom_build_info.h
 KERNEL_DIR = ../kernel
@@ -33,7 +34,7 @@ KERNEL_VERSION ?= 0.1.0-dev
 KERNEL_PANIC_SELFTEST ?= 0
 
 CFLAGS  = -m68030 -msoft-float -Os -ffreestanding -fno-builtin -nostdlib \
-          -Wall -Wextra \
+          -Wa,--noexecstack -Wall -Wextra \
           -I../include -I../../ndk/include -Ibuild $(EXTRA_CFLAGS)
 LD      = astra_st.ld
 LDFLAGS = -T $(LD) -nostdlib -Wl,--build-id=none,-Map=astra_boot.map
@@ -41,10 +42,12 @@ LDFLAGS = -T $(LD) -nostdlib -Wl,--build-id=none,-Map=astra_boot.map
 SOC_ID_SRCS = ../../fpga/soc/astra_soc.sv ../../fpga/soc/astra_soc.lpf \
               ../../fpga/soc/uart_tx.sv ../../fpga/soc/uart_rx.sv \
               ../../fpga/soc/uart_rx_fifo.sv ../../fpga/soc/spi_sd.sv \
-              ../../fpga/soc/astra_front_panel.sv \
+              ../../fpga/soc/astra_front_panel.sv ../../fpga/soc/vesta_irq_timer.sv \
               ../../fpga/soc/astra_host_async_byte_fifo.sv \
               ../../fpga/soc/astra_host_spi_slave.sv \
-              ../../fpga/soc/astra_host_boot.sv \
+              ../../fpga/soc/astra_async_fifo.sv \
+              ../../fpga/soc/astra_host_runtime.sv \
+              ../../fpga/soc/astra_host_service.sv \
               ../../fpga/soc/boot_memory_map.sv \
               ../../fpga/soc/ecp5pll.sv ../../fpga/soc/sdram32_cpu_bridge.sv \
               ../../fpga/soc/tg68k_cache_store.sv \
@@ -53,7 +56,7 @@ SOC_ID_SRCS = ../../fpga/soc/astra_soc.sv ../../fpga/soc/astra_soc.lpf \
               ../../fpga/soc/astraea_pixel_port.sv \
               ../../fpga/soc/astraea_draw.sv \
               ../../fpga/soc/astraea_copper.sv ../../fpga/soc/astraea_chip.sv \
-              ../../fpga/soc/vega_tile_builder.sv ../../fpga/soc/vega_sprite_builder.sv \
+              ../../fpga/soc/vega_sprite_builder.sv \
               ../../fpga/soc/vega_video.sv \
               ../../fpga/soc/thirdparty/core_sdram_axi4/sdram_axi_core.v \
               ../../fpga/soc/post_console.sv \
@@ -81,6 +84,7 @@ BUILD_CONFIG = CPU=TG68K030_MMU2 CPU_CLK_DIV_BIT=$(CPU_CLK_DIV_BIT) \
                TARGET_FREQ_MHZ=$(TARGET_FREQ_MHZ) PNR_SEED=$(PNR_SEED) \
                PNR_PLACER=$(PNR_PLACER) PNR_ROUTER=$(PNR_ROUTER) \
                PNR_TIMING_WEIGHT=$(PNR_TIMING_WEIGHT) \
+               PNR_HEAP_CELL_PLACEMENT_TIMEOUT=$(PNR_HEAP_CELL_PLACEMENT_TIMEOUT) \
                PNR_TIMING_RIPUP=$(PNR_TIMING_RIPUP) \
                PNR_TIMING_ALLOW_FAIL=$(PNR_TIMING_ALLOW_FAIL) \
                PNR_ROUTER2_ALT_WEIGHTS=$(PNR_ROUTER2_ALT_WEIGHTS) \
@@ -91,7 +95,7 @@ BUILD_CONFIG = CPU=TG68K030_MMU2 CPU_CLK_DIV_BIT=$(CPU_CLK_DIV_BIT) \
                ASTRA_FLOORPLAN_ENFORCE=$(ASTRA_FLOORPLAN_ENFORCE) \
                RESOURCE_PROFILE=$(RESOURCE_PROFILE) STAGE0_BOOT_BACKEND=host \
                ROM_VERSION=$(ROM_VERSION)
-ID_SRCS = Makefile gen_build_info.py boot.c crt0.S $(LD) \
+ID_SRCS = Makefile ../../mk/m68k-cross.mk gen_build_info.py boot.c crt0.S $(LD) \
           kernel_blob.S ../common/boot_contract.c ../include/astra/boot.h \
           ../include/vesta.h ../include/vega.h \
           ../include/astraea.h \

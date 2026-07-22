@@ -39,6 +39,7 @@ module astra_host_async_byte_fifo #(
     logic [ADDR_WIDTH:0] rd_gray_wr_2;
     logic [ADDR_WIDTH:0] wr_gray_rd_1;
     logic [ADDR_WIDTH:0] wr_gray_rd_2;
+    logic                  wr_full;
 
     function automatic logic [ADDR_WIDTH:0] bin_to_gray;
         input logic [ADDR_WIDTH:0] value;
@@ -47,17 +48,17 @@ module astra_host_async_byte_fifo #(
         end
     endfunction
 
-    wire [ADDR_WIDTH:0] wr_bin_next = wr_bin + 1'b1;
+    wire push = wr_valid && !wr_full;
+    wire [ADDR_WIDTH:0] wr_bin_next = wr_bin + push;
     wire [ADDR_WIDTH:0] wr_gray_next = bin_to_gray(wr_bin_next);
-    wire full = (wr_gray_next == {
+    wire wr_full_next = (wr_gray_next == {
         ~rd_gray_wr_2[ADDR_WIDTH:ADDR_WIDTH-1],
          rd_gray_wr_2[ADDR_WIDTH-2:0]
     });
 
     wire fifo_empty = (rd_gray == wr_gray_rd_2);
-    wire push = wr_valid && !full;
 
-    assign wr_ready = !full;
+    assign wr_ready = !wr_full;
 
     logic [7:0] rd_data_reg;
     logic       rd_valid_reg;
@@ -79,18 +80,17 @@ module astra_host_async_byte_fifo #(
             wr_gray     <= '0;
             rd_gray_wr_1 <= '0;
             rd_gray_wr_2 <= '0;
+            wr_full      <= 1'b0;
             overflow    <= 1'b0;
         end else begin
             rd_gray_wr_1 <= rd_gray;
             rd_gray_wr_2 <= rd_gray_wr_1;
+            wr_bin       <= wr_bin_next;
+            wr_gray      <= wr_gray_next;
+            wr_full      <= wr_full_next;
 
-            if (wr_valid && full)
+            if (wr_valid && wr_full)
                 overflow <= 1'b1;
-
-            if (push) begin
-                wr_bin  <= wr_bin_next;
-                wr_gray <= wr_gray_next;
-            end
         end
     end
 

@@ -20,6 +20,117 @@ def load_module(name: str):
 
 check_timing = load_module("check_timing")
 prepare_route_input = load_module("prepare_route_input")
+make_route_probe_bitstream = load_module("make_route_probe_bitstream")
+check_por = load_module("check_por")
+check_ecp5_lut_permutation = load_module("check_ecp5_lut_permutation")
+refresh_ecp5_lutperm = load_module("refresh_ecp5_lutperm")
+
+
+class SynthesisFlowTests(unittest.TestCase):
+    def test_device_primitives_are_loaded_before_optimization(self):
+        flow = (FLOW_DIR / "mkbit.sh").read_text(encoding="utf-8")
+        synth = flow.index("synth_ecp5 -top astra_soc")
+        retained_gsr = flow.index(
+            'setparam -set GSR \\"ENABLED\\" t:TRELLIS_FF', synth
+        )
+        mapped_scc = flow.index("scc -select", synth)
+
+        self.assertNotIn("proc; opt", flow[:synth])
+        self.assertGreater(retained_gsr, synth)
+        self.assertLess(retained_gsr, mapped_scc)
+        self.assertGreater(mapped_scc, synth)
+
+    def test_split_route_refreshes_and_validates_lut_permutations(self):
+        flow = (FLOW_DIR / "mkbit.sh").read_text(encoding="utf-8")
+        route = flow.index("--pre-route refresh_ecp5_lutperm.py")
+        validate = flow.index('python3 check_ecp5_lut_permutation.py "$ROUTED_JSON"')
+        package = flow.index('ecppack astra.config "$BITSTREAM_TMP"')
+
+        self.assertLess(route, validate)
+        self.assertLess(validate, package)
+
+
+class LutPermutationRefreshTests(unittest.TestCase):
+    class Cell:
+        def __init__(self, cell_type, bel, strength):
+            self.type = cell_type
+            self.bel = bel
+            self.belStrength = strength
+
+    class Context:
+        def __init__(self, cells):
+            self.cells = list(cells.items())
+            self.calls = []
+
+        def unbindBel(self, bel):
+            self.calls.append(("unbind", bel))
+
+        def bindBel(self, bel, cell, strength):
+            self.calls.append(("bind", bel, cell, strength))
+
+    def test_rebinds_only_placed_comb_cells(self):
+        carry = self.Cell("TRELLIS_COMB", "X1/Y2/SLICEA.K0", 1)
+        ff = self.Cell("TRELLIS_FF", "X1/Y2/SLICEA.FF0", 2)
+        unplaced = self.Cell("TRELLIS_COMB", "", 3)
+        context = self.Context({"carry": carry, "ff": ff, "unplaced": unplaced})
+
+        count = refresh_ecp5_lutperm.refresh_lut_permutation_policy(context)
+
+        self.assertEqual(count, 1)
+        self.assertEqual(
+            context.calls,
+            [
+                ("unbind", "X1/Y2/SLICEA.K0"),
+                ("bind", "X1/Y2/SLICEA.K0", carry, 1),
+            ],
+        )
+
+
+class Ecp5LutPermutationGateTests(unittest.TestCase):
+    @staticmethod
+    def design(mode="CCU2", source="B", destination="A"):
+        route = (
+            f"X1/Y2/{source}0;"
+            f"X1/Y2/0_0_{source}0->0_0_{destination}0_SLICE;1"
+        )
+        return {
+            "modules": {
+                "top": {
+                    "cells": {
+                        "protected": {
+                            "type": "TRELLIS_COMB",
+                            "parameters": {"MODE": mode},
+                            "attributes": {"NEXTPNR_BEL": "X1/Y2/SLICEA.K0"},
+                            "connections": {destination: [7]},
+                        }
+                    },
+                    "netnames": {
+                        "signal": {"bits": [7], "attributes": {"ROUTING": route}}
+                    },
+                }
+            }
+        }
+
+    def test_accepts_ccu2_permutation_within_input_pair(self):
+        cells, inputs, failures = check_ecp5_lut_permutation.check_lut_permutations(
+            self.design(source="B", destination="A")
+        )
+        self.assertEqual((cells, inputs), (1, 1))
+        self.assertEqual(failures, [])
+
+    def test_rejects_ccu2_permutation_across_input_pairs(self):
+        _, _, failures = check_ecp5_lut_permutation.check_lut_permutations(
+            self.design(source="D", destination="A")
+        )
+        self.assertEqual(len(failures), 1)
+        self.assertIn("invalid CCU2 permutation D0->A0", failures[0])
+
+    def test_rejects_any_distributed_ram_permutation(self):
+        _, _, failures = check_ecp5_lut_permutation.check_lut_permutations(
+            self.design(mode="DPRAM", source="B", destination="A")
+        )
+        self.assertEqual(len(failures), 1)
+        self.assertIn("invalid DPRAM permutation B0->A0", failures[0])
 
 
 class PrepareRouteInputTests(unittest.TestCase):
@@ -115,11 +226,25 @@ class TimingGateTests(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertEqual(len(measurements), len(check_timing.REQUIRED_CLOCKS))
 
+    def test_uses_canonical_nextpnr_clock_names(self):
+        self.assertEqual(
+            check_timing.REQUIRED_CLOCKS,
+            {
+                "$glbnet$clk": 12.5,
+                "$glbnet$clk25_mhz$TRELLIS_IO_IN": 25.0,
+                "$glbnet$sd_clk_in": 20.0,
+                "$glbnet$sdram_domain_clk": 60.0,
+                "$glbnet$usb_phy_domain_clk": 48.0,
+                "$glbnet$video_pixel_clk": 27.0,
+                "$glbnet$video_shift_clk": 135.0,
+            },
+        )
+
     def test_rejects_a_timing_miss(self):
         report = self.passing_report()
         report["fmax"]["$glbnet$sdram_domain_clk"] = {
-            "achieved": 71.56,
-            "constraint": 75.01,
+            "achieved": 59.56,
+            "constraint": 60.01,
         }
         failures, _ = check_timing.check_fmax(report)
         self.assertEqual(len(failures), 1)
@@ -135,12 +260,143 @@ class TimingGateTests(unittest.TestCase):
     def test_rejects_a_weakened_report_constraint(self):
         report = self.passing_report()
         report["fmax"]["$glbnet$sdram_domain_clk"] = {
-            "achieved": 74.0,
+            "achieved": 59.0,
             "constraint": 50.0,
         }
         failures, _ = check_timing.check_fmax(report)
         self.assertEqual(len(failures), 2)
         self.assertTrue(all("sdram_domain_clk" in failure for failure in failures))
+
+
+class PowerOnResetGateTests(unittest.TestCase):
+    @staticmethod
+    def synthesis(*gsr_values: str):
+        return {
+            "modules": {
+                "astra_soc": {
+                    "cells": {
+                        "global_gsr": {"type": "GSR"},
+                        **{
+                            f"ff{index}": {
+                                "type": "TRELLIS_FF",
+                                "parameters": {"GSR": value},
+                            }
+                            for index, value in enumerate(gsr_values)
+                        },
+                    }
+                }
+            }
+        }
+
+    def test_accepts_configuration_reset_on_every_flip_flop(self):
+        design = self.synthesis("ENABLED", "ENABLED")
+        self.assertEqual(check_por.check_por(design), 2)
+
+    def test_rejects_any_flip_flop_without_configuration_reset(self):
+        design = self.synthesis("ENABLED", "DISABLED")
+        with self.assertRaisesRegex(ValueError, "1 of 2 flip-flops"):
+            check_por.check_por(design)
+
+    def test_rejects_unsafe_flip_flop_in_preserved_submodule(self):
+        design = self.synthesis("ENABLED")
+        design["modules"]["reset_release"] = {
+            "cells": {
+                "release_ff": {
+                    "type": "TRELLIS_FF",
+                    "parameters": {"GSR": "DISABLED"},
+                }
+            }
+        }
+        with self.assertRaisesRegex(
+            ValueError, "reset_release.release_ff"
+        ):
+            check_por.check_por(design)
+
+    def test_rejects_multiple_physical_gsr_primitives(self):
+        design = self.synthesis("ENABLED")
+        design["modules"]["reset_release"] = {
+            "cells": {"local_gsr": {"type": "GSR"}}
+        }
+        with self.assertRaisesRegex(ValueError, "exactly one physical GSR"):
+            check_por.check_por(design)
+
+    def test_rejects_only_gsr_inside_repeated_submodule(self):
+        design = self.synthesis("ENABLED")
+        del design["modules"]["astra_soc"]["cells"]["global_gsr"]
+        design["modules"]["reset_release"] = {
+            "cells": {"local_gsr": {"type": "GSR"}}
+        }
+        with self.assertRaisesRegex(ValueError, "top module 'astra_soc'"):
+            check_por.check_por(design)
+
+    def test_rejects_design_without_packed_flip_flops(self):
+        with self.assertRaisesRegex(ValueError, "no TRELLIS_FF"):
+            check_por.check_por(self.synthesis())
+
+
+class RouteProbeBitstreamTests(unittest.TestCase):
+    @staticmethod
+    def synthesis(init: str, *, width: str = "18"):
+        return {
+            "modules": {
+                "astra_soc": {
+                    "ports": {"clock": {"bits": [1]}},
+                    "cells": {
+                        "rom.0.0": {
+                            "type": "DP16KD",
+                            "connections": {"CLKA": [1]},
+                            "parameters": {
+                                "DATA_WIDTH_A": width,
+                                "INITVAL_00": init,
+                            },
+                        }
+                    },
+                }
+            }
+        }
+
+    @staticmethod
+    def config(blocks: dict[int, str], route: str) -> str:
+        sections = ""
+        for block_id, value in blocks.items():
+            row = f"{value} {value} {value} {value} {value} {value} {value} {value}\n"
+            sections += f".bram_init {block_id}\n" + row * make_route_probe_bitstream.BRAM_ROWS + "\n"
+        return route + sections
+
+    def test_accepts_initializer_only_synthesis_change(self):
+        changes = make_route_probe_bitstream.find_init_changes(
+            self.synthesis("0" * 320), self.synthesis("1" * 320), "rom."
+        )
+        self.assertEqual(set(changes), {"rom.0.0"})
+
+    def test_rejects_topology_change(self):
+        with self.assertRaisesRegex(ValueError, "non-INIT parameters"):
+            make_route_probe_bitstream.find_init_changes(
+                self.synthesis("0" * 320),
+                self.synthesis("1" * 320, width="9"),
+                "rom.",
+            )
+
+    def test_patches_only_changed_bram_section(self):
+        original = self.config({3: "000", 4: "111"}, "arc: KEEP ORIGINAL\n")
+        replacement = self.config({3: "aaa", 4: "111"}, "arc: REEMITTED\n")
+        patched, changed = make_route_probe_bitstream.patch_bram_blocks(
+            original, replacement, expected_changes=1
+        )
+
+        self.assertEqual(changed, [3])
+        self.assertIn("arc: KEEP ORIGINAL", patched)
+        self.assertNotIn("arc: REEMITTED", patched)
+        self.assertIn("aaa aaa aaa aaa aaa aaa aaa aaa", patched)
+        self.assertIn("111 111 111 111 111 111 111 111", patched)
+
+    def test_rejects_unexpected_bram_change_count(self):
+        original = self.config({3: "000", 4: "111"}, "")
+        replacement = self.config({3: "aaa", 4: "bbb"}, "")
+        with self.assertRaisesRegex(ValueError, "expected 1"):
+            make_route_probe_bitstream.patch_bram_blocks(
+                original, replacement, expected_changes=1
+            )
 
 
 if __name__ == "__main__":

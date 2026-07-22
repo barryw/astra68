@@ -50,14 +50,15 @@ CORE_OUT=graphics_demo_core.v bash mkcore.sh
 verilator --binary -j 0 --Mdir obj_dir_graphics_demo \
     --top-module tb_graphics_demo -Wno-lint -Wno-UNOPTFLAT --timing \
     tb_graphics_demo.sv tb_sdram32_controller.sv ecp5pll_sim.sv \
-    ../astra_soc.sv ../astra_front_panel.sv ../boot_memory_map.sv \
+    ../astra_soc.sv ../astra_front_panel.sv ../vesta_irq_timer.sv ../boot_memory_map.sv \
     ../tg68k_cache_store.sv ../post_console.sv \
     ../astraea_blitter.sv ../astraea_pixel_port.sv ../astraea_draw.sv \
     ../astraea_copper.sv ../astraea_chip.sv \
-    ../vega_tile_builder.sv ../vega_sprite_builder.sv ../vega_video.sv \
+    ../vega_sprite_builder.sv ../vega_video.sv \
     ../uart_tx.sv ../uart_rx.sv ../uart_rx_fifo.sv ../spi_sd.sv \
     ../astra_host_async_byte_fifo.sv ../astra_host_spi_slave.sv \
-    ../astra_host_boot.sv ../sdram32_controller.sv \
+    ../astra_async_fifo.sv ../astra_host_runtime.sv \
+    ../astra_host_service.sv ../sdram32_controller.sv \
     ../sdram32_cpu_bridge.sv ../sdram32_bist.sv \
     ../thirdparty/core_sdram_axi4/sdram_axi_core.v graphics_demo_core.v
 

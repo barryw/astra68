@@ -1,5 +1,5 @@
 // Astraea — DMA / blitter / copper / arbiter register interface for Astra 68.
-// Mirror of docs/ASTRAEA.md (v0.3). Keep in sync with that spec.
+// Mirror of docs/ASTRAEA.md (v0.4). Keep in sync with that spec.
 //
 // 32-bit registers, 4-byte stride, big-endian (m68k). Supervisor-only MMIO.
 #ifndef ASTRA_ASTRAEA_H
@@ -25,7 +25,7 @@ typedef volatile struct {
     uint32_t IRQ_EN;         // 0x010
     uint32_t IRQ_STAT;       // 0x014
     uint32_t _r0[2];         // 0x018..0x01C
-    uint32_t _r1[8];         // 0x020..0x03C reserved in v0.3
+    uint32_t _r1[8];         // 0x020..0x03C reserved in v0.4
     // blitter
     uint32_t BLIT_SRC;       // 0x040
     uint32_t BLIT_DST;       // 0x044
@@ -39,7 +39,8 @@ typedef volatile struct {
     uint32_t BLIT_KEY;       // 0x064
     uint32_t BLIT_CTRL;      // 0x068
     uint32_t BLIT_STATUS;    // 0x06C
-    uint32_t _r2[4];         // 0x070..0x07C
+    uint32_t BLIT_FENCE;     // 0x070
+    uint32_t _r2[3];         // 0x074..0x07C
     // copper control
     uint32_t COP_CTRL;       // 0x080
     uint32_t COP_START;      // 0x084
@@ -78,7 +79,7 @@ typedef volatile struct {
 #define ASTRAEA ((AstraeaRegs *)ASTRAEA_BASE)
 
 #define ASTRAEA_ID_MAGIC 0x41535452u   // "ASTR"
-#define ASTRAEA_VERSION_0_3 0x00030000u
+#define ASTRAEA_VERSION_0_4 0x00040000u
 
 // ---- Capability bits (offset 0x018) ----
 #define ASTRAEA_CAP_COPY      (1u << 0)
@@ -113,6 +114,9 @@ typedef volatile struct {
 #define BLIT_DONE    (1u << 1)
 #define BLIT_ERROR   (0xffu << 8)
 #define BLIT_ERROR_CODE(stat) (((stat) >> 8) & 0xffu)
+#define BLIT_ERROR_INVALID_CONFIG 1u
+#define BLIT_ERROR_INTERNAL       2u
+#define BLIT_ERROR_PROTECTED      5u
 
 #define BLIT_DIM_(w, h) (((uint32_t)(h) << 16) | ((w) & 0xFFFF))
 
@@ -153,6 +157,7 @@ typedef volatile struct {
 #define DRAW_ERROR_INTERNAL       2u
 #define DRAW_ERROR_WORK_OVERFLOW  3u
 #define DRAW_ERROR_ADDRESS_RANGE  4u
+#define DRAW_ERROR_PROTECTED      5u
 
 #define DRAW_XY_(x, y) \
     ((((uint32_t)(uint16_t)(y)) << 16) | (uint16_t)(x))
