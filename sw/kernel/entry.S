@@ -13,7 +13,13 @@ _kernel_entry:
 	lea     _bss_end, %a1
 1:	cmpa.l  %a1, %a0
 	beq     2f
-	clr.b   (%a0)+
+	| The linker aligns both bounds to 16 bytes. Clear one aligned burst per
+	| loop so fixed kernel tables do not turn simulation or boot into a byte
+	| store/branch benchmark.
+	clr.l   (%a0)+
+	clr.l   (%a0)+
+	clr.l   (%a0)+
+	clr.l   (%a0)+
 	bra     1b
 
 2:	lea     _kernel_stack_top, %sp

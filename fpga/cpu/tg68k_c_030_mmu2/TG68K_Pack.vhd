@@ -145,7 +145,13 @@ package TG68K_Pack is
     constant pmmu_addr_inc        : integer := 102; -- PMMU: +4 address increment for 64-bit CRP/SRP second transfer (no reg write-back)
     constant pmmu_dbl             : integer := 103; -- PMMU: CRP/SRP doubleword size for (An)+/-(An) (updates An by 8)
 
-    constant lastOpcBit			: integer := 103;
+	constant lastOpcBit			: integer := 103;
+
+	subtype cache_op_code is std_logic_vector(1 downto 0);
+	function cacr_cache_op_scope(cacr : std_logic_vector(31 downto 0))
+		return cache_op_code;
+	function cacr_cache_op_cache(cacr : std_logic_vector(31 downto 0))
+		return cache_op_code;
 
 	component TG68K_ALU
 	generic(
@@ -203,4 +209,38 @@ package TG68K_Pack is
 	);
 	end component;
 
-end;
+end package;
+
+package body TG68K_Pack is
+
+	function cacr_cache_op_scope(cacr : std_logic_vector(31 downto 0))
+		return cache_op_code is
+	begin
+		if cacr(3) = '1' or cacr(11) = '1' then
+			return "10"; -- A full-cache command dominates an entry command.
+		elsif cacr(2) = '1' or cacr(10) = '1' then
+			return "00";
+		else
+			return "10";
+		end if;
+	end function;
+
+	function cacr_cache_op_cache(cacr : std_logic_vector(31 downto 0))
+		return cache_op_code is
+		variable instruction_target : boolean;
+		variable data_target : boolean;
+	begin
+		instruction_target := cacr(2) = '1' or cacr(3) = '1';
+		data_target := cacr(10) = '1' or cacr(11) = '1';
+		if instruction_target and data_target then
+			return "11";
+		elsif instruction_target then
+			return "10";
+		elsif data_target then
+			return "01";
+		else
+			return "00";
+		end if;
+	end function;
+
+end package body;

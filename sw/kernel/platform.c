@@ -32,7 +32,7 @@ uint32_t kernel_platform_ticks(void)
     return tick_count;
 }
 
-void kernel_interrupt_dispatch(void)
+bool kernel_interrupt_dispatch(void)
 {
     uint32_t current = VESTA->IRQ_CURRENT;
     uint32_t source = (current >> 8) & 0x1fu;
@@ -42,7 +42,7 @@ void kernel_interrupt_dispatch(void)
         source == IRQ_SRC_TIMER0 && vector == KERNEL_TIMER_VECTOR) {
         VESTA->TIMER[0].STATUS = TMR_EXPIRED;
         ++tick_count;
-        return;
+        return true;
     }
 
     // Quarantine an unexpected source before returning. The bootstrap kernel
@@ -52,20 +52,75 @@ void kernel_interrupt_dispatch(void)
         VESTA->IRQ_ENABLE &= ~IRQ_BIT(source);
         VESTA->IRQ_ACK = IRQ_BIT(source);
     }
+    return false;
 }
 
-bool kernel_block_present(void)
+bool kernel_platform_block_present(void)
 {
     return VESTA->BLOCK_ID == BLOCK_ID_MAGIC &&
            (VESTA->BLOCK_VERSION >> 16) ==
                (BLOCK_VERSION_1_0 >> 16);
 }
 
-uint32_t kernel_block_submit(uint32_t id, uint8_t operation,
-                             uint8_t flags, uint64_t lba,
-                             uint16_t sectors, uint32_t physical_buffer)
+bool kernel_platform_block_state(KernelPlatformBlockState *state)
 {
-    if (!kernel_block_present())
+    uint32_t capabilities_before;
+    uint32_t flags_before;
+    uint32_t media_before;
+    uint32_t host_before;
+    uint32_t size_hi_before;
+    uint32_t size_lo_before;
+    uint32_t max_before;
+    uint32_t capabilities_after;
+    uint32_t flags_after;
+    uint32_t media_after;
+    uint32_t host_after;
+    uint32_t size_hi_after;
+    uint32_t size_lo_after;
+    uint32_t max_after;
+
+    if (state == 0 || !kernel_platform_block_present())
+        return false;
+    for (uint32_t attempt = 0u; attempt < 4u; ++attempt) {
+        capabilities_before = VESTA->BLOCK_CAPS;
+        flags_before = VESTA->BLOCK_STATE;
+        host_before = VESTA->BLOCK_HOST_GEN;
+        media_before = VESTA->BLOCK_MEDIA_GEN;
+        size_hi_before = VESTA->BLOCK_MEDIA_SIZE_HI;
+        size_lo_before = VESTA->BLOCK_MEDIA_SIZE_LO;
+        max_before = VESTA->BLOCK_MAX_SECTORS;
+
+        capabilities_after = VESTA->BLOCK_CAPS;
+        flags_after = VESTA->BLOCK_STATE;
+        host_after = VESTA->BLOCK_HOST_GEN;
+        media_after = VESTA->BLOCK_MEDIA_GEN;
+        size_hi_after = VESTA->BLOCK_MEDIA_SIZE_HI;
+        size_lo_after = VESTA->BLOCK_MEDIA_SIZE_LO;
+        max_after = VESTA->BLOCK_MAX_SECTORS;
+        if (capabilities_before == capabilities_after &&
+            flags_before == flags_after && host_before == host_after &&
+            media_before == media_after && size_hi_before == size_hi_after &&
+            size_lo_before == size_lo_after && max_before == max_after) {
+            state->capabilities = capabilities_after;
+            state->state_flags = flags_after;
+            state->media_generation = media_after;
+            state->host_generation = host_after;
+            state->media_sectors = ((uint64_t)size_hi_after << 32) |
+                                   size_lo_after;
+            state->max_sectors = (uint16_t)max_after;
+            state->reserved = 0u;
+            return true;
+        }
+    }
+    return false;
+}
+
+uint32_t kernel_platform_block_submit(uint32_t id, uint8_t operation,
+                                      uint8_t flags, uint64_t lba,
+                                      uint16_t sectors,
+                                      uint32_t physical_buffer)
+{
+    if (!kernel_platform_block_present())
         return BLOCK_ERROR_NO_MEDIA;
     if ((VESTA->BLOCK_QUEUE & BLOCK_QUEUE_REQUEST_READY) == 0u)
         return BLOCK_ERROR_QUEUE_FULL;
@@ -81,7 +136,8 @@ uint32_t kernel_block_submit(uint32_t id, uint8_t operation,
     return VESTA->BLOCK_ERROR;
 }
 
-bool kernel_block_pop_completion(KernelBlockCompletion *completion)
+bool kernel_platform_block_pop_completion(
+    KernelPlatformBlockCompletion *completion)
 {
     uint32_t queue;
     uint32_t status;
@@ -102,7 +158,7 @@ bool kernel_block_pop_completion(KernelBlockCompletion *completion)
     return true;
 }
 
-void kernel_block_ack_state(void)
+void kernel_platform_block_ack_state(void)
 {
     VESTA->BLOCK_STATE_ACK = BLOCK_STATE_ACK_BIT;
 }

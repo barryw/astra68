@@ -1,7 +1,8 @@
-.PHONY: build check clean fmt post run test toolchain
+.PHONY: build check clean fmt kernel post run test toolchain
 
 RUSTUP_TOOLCHAIN ?= 1.97.0
 CARGO := rustup run $(RUSTUP_TOOLCHAIN) cargo
+ROM ?= ../sw/boot/astra_boot.bin
 
 toolchain:
 	rustup toolchain install $(RUSTUP_TOOLCHAIN) --profile minimal --component rustfmt --component clippy
@@ -20,6 +21,9 @@ fmt:
 
 post:
 	$(CARGO) run -p astravm-machine --example boot
+
+kernel:
+	$(CARGO) run -p astravm-machine --example kernel -- $(ROM)
 
 run:
 	$(CARGO) run --release -p astravm-app

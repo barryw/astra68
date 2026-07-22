@@ -54,11 +54,12 @@ It also suppresses compilation failures with `|| true`, references missing
 bench files, and includes a target that leaves an orphaned GUI simulator. A
 headline target completing therefore cannot be used as a pass result.
 
-After the restart, combinational-loop, and PMMU fault-frame repairs, the pinned Astra strict
-runner produced 137 bounded VHDL runs, including all five exact BASIC variants
-and six Motorola-corrected derivatives:
+After the restart, combinational-loop, and PMMU fault-frame repairs, the pinned
+Astra strict runner produced 139 bounded VHDL runs, including all five exact
+BASIC variants, seven Motorola-corrected derivatives, and the focused
+trap/interrupt/user-fault regression:
 
-- 111 ran clean;
+- 113 ran clean;
 - 3 failed to compile against the current RTL interface;
 - 18 emitted raw simulation failures;
 - 5 ran but had no usable pass/fail oracle.
@@ -67,6 +68,8 @@ The raw simulation count intentionally includes contradictory upstream tests.
 Manual classification is required, but a classified failure is never converted
 into an architectural waiver. Corrected derivatives currently demonstrate:
 
+- independent CACR instruction/data entry/full clear commands, including every
+  mixed CI/CD and CEI/CED combination;
 - MMUSR register coverage: 48 of 48 pass with the Figure 9-38 mask;
 - T1 trace coverage: 11 of 11 pass when undefined SR bits are required to zero;
 - system-register/RTR frame coverage: all checks pass with undefined CCR bits

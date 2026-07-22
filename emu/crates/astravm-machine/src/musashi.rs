@@ -17,6 +17,8 @@ thread_local! {
 unsafe extern "C" {
     fn m68k_init();
     fn m68k_set_cpu_type(cpu_type: c_uint);
+    fn m68k_set_irq(level: c_uint);
+    fn m68k_set_int_ack_callback(callback: Option<extern "C" fn(c_int) -> c_int>);
     fn m68k_pulse_reset();
     fn m68k_execute(cycles: c_int) -> c_int;
     fn m68k_cycles_run() -> c_int;
@@ -52,6 +54,7 @@ impl MusashiCpu {
         with_active_bus(bus, false, || unsafe {
             m68k_set_cpu_type(M68K_CPU_TYPE_68030);
             m68k_set_pmmu_bus_callbacks(Some(pmmu_read32), Some(pmmu_write32));
+            m68k_set_int_ack_callback(Some(interrupt_acknowledge));
             m68k_pulse_reset();
             m68k_get_context(self.context.as_mut_ptr().cast());
         });
@@ -62,10 +65,12 @@ impl MusashiCpu {
             return 0;
         }
 
-        let requested = cycles.min(c_int::MAX as u64) as c_int;
+        let (budget, irq_level) = bus.prepare_execution(cycles);
+        let requested = budget.min(c_int::MAX as u64) as c_int;
         let _lock = lock_cpu();
         let ran = with_active_bus(bus, true, || unsafe {
             m68k_set_context(self.context.as_mut_ptr().cast());
+            m68k_set_irq(irq_level);
             let ran = m68k_execute(requested).max(0) as u64;
             m68k_get_context(self.context.as_mut_ptr().cast());
             ran
@@ -152,6 +157,17 @@ extern "C" fn pmmu_write32(address: c_uint, value: c_uint) -> c_int {
     with_bus(false, |bus| bus.pmmu_write32(address, value)).into()
 }
 
+extern "C" fn interrupt_acknowledge(level: c_int) -> c_int {
+    with_bus(24, |bus| {
+        bus.interrupt_acknowledge(level.max(0) as u32) as c_int
+    })
+}
+
+fn update_interrupt_level(bus: &mut MachineBus) {
+    let level = bus.interrupt_level();
+    unsafe { m68k_set_irq(level) };
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn m68k_read_memory_8(address: c_uint) -> c_uint {
     with_bus(0, |bus| bus.read8(address).into())
@@ -171,6 +187,7 @@ pub extern "C" fn m68k_read_memory_32(address: c_uint) -> c_uint {
 pub extern "C" fn m68k_write_memory_8(address: c_uint, value: c_uint) {
     with_bus((), |bus| {
         bus.write8(address, value as u8);
+        update_interrupt_level(bus);
         finish_if_terminal(bus);
     });
 }
@@ -179,6 +196,7 @@ pub extern "C" fn m68k_write_memory_8(address: c_uint, value: c_uint) {
 pub extern "C" fn m68k_write_memory_16(address: c_uint, value: c_uint) {
     with_bus((), |bus| {
         bus.write16(address, value as u16);
+        update_interrupt_level(bus);
         finish_if_terminal(bus);
     });
 }
@@ -187,6 +205,7 @@ pub extern "C" fn m68k_write_memory_16(address: c_uint, value: c_uint) {
 pub extern "C" fn m68k_write_memory_32(address: c_uint, value: c_uint) {
     with_bus((), |bus| {
         bus.write32(address, value);
+        update_interrupt_level(bus);
         finish_if_terminal(bus);
     });
 }

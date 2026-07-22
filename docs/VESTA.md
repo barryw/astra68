@@ -270,7 +270,11 @@ latch rising edges and clear through `IRQ_ACK`; a simultaneous new edge wins
 over the clear. `IRQ_SOFT` bits are independently set/cleared by software. A
 CPU-space interrupt acknowledge returns the configured vector for the lowest
 source index at the acknowledged IPL, or Motorola spurious vector 24 if no
-source matches.
+source matches. Vesta snapshots both the valid result and vector when the IACK
+cycle begins and holds that result until the cycle ends. A source clearing, a
+replacement source arriving at the same IPL, or a new source arriving after a
+spurious acknowledge belongs to the next IACK transaction and cannot change
+the vector already presented to the CPU.
 
 ---
 
@@ -288,7 +292,14 @@ divided by `2^PRESCALE`.
 
 Expiry raises `TIMER0`/`TIMER1` IRQ and, if `PERIODIC`, reloads. One-shot stops
 at 0. `EXPIRED` is sticky and must be cleared by the handler; a new expiration
-wins over a simultaneous RW1C clear.
+wins over a simultaneous RW1C clear. A low-byte `TMR_CTRL` write with `ENABLE`
+set atomically resets the prescaler and restarts the timer from the current
+`TMR_LOAD`, even when it was already running. If the prior interval expires on
+that same edge, its `EXPIRED` event remains set while the new interval starts.
+A low-byte write with `ENABLE` clear stops the timer without changing its
+current value. Writes to undefined upper bytes do not perturb the timer or its
+prescaler. `TMR_LOAD` values 0 and 1 both expire on the first prescaled tick;
+zero never creates an underflow-length interval.
 
 ---
 

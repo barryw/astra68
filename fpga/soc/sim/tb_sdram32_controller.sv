@@ -402,8 +402,9 @@ module tb_sdram32_controller;
             if (got != 32'h55556666)
                 $fatal(1, "priority video write mismatch %08x", got);
 
-            // A locked CPU sequence is indivisible even when video requests
-            // real-time service. Video runs immediately after the lock drops.
+            // A PMMU-style locked CPU sequence is indivisible across three
+            // descriptor requests and idle request gaps. Both real-time video
+            // and DMA remain queued until the complete table walk unlocks.
             @(negedge clk);
             cpu_lock = 1'b1;
             rmc_test_active = 1'b1;
@@ -412,10 +413,15 @@ module tb_sdram32_controller;
             cpu_wdata = 32'h77778888;
             cpu_write = 1'b1;
             cpu_valid = 1'b1;
-            video_addr = 25'h000a018;
+            video_addr = 25'h000a020;
             video_wdata = 32'hbbbbcccc;
             video_lock = 1'b1;
             video_valid = 1'b1;
+            dma_addr = 25'h000a024;
+            dma_wdata = 32'hddddeeee;
+            dma_write = 1'b1;
+            dma_lock = 1'b1;
+            dma_valid = 1'b1;
             @(posedge clk);
             while (!cpu_ready) begin
                 if (video_ready)
@@ -429,6 +435,12 @@ module tb_sdram32_controller;
             cpu_valid = 1'b0;
             while (!cpu_rsp_valid) @(negedge clk);
 
+            repeat (5) begin
+                @(posedge clk);
+                if (dut.owner != 2'd1 || video_ready || dma_ready)
+                    $fatal(1, "PMMU owner escaped in descriptor gap");
+            end
+
             cpu_addr = 25'h000a014;
             cpu_wdata = 32'h9999aaaa;
             cpu_valid = 1'b1;
@@ -440,6 +452,30 @@ module tb_sdram32_controller;
                     timeout = timeout + 1;
                     if (timeout > 100)
                         $fatal(1, "locked CPU tail grant timeout");
+                    @(posedge clk);
+                end
+            end
+            @(negedge clk);
+            cpu_valid = 1'b0;
+            while (!cpu_rsp_valid) @(negedge clk);
+
+            repeat (3) begin
+                @(posedge clk);
+                if (dut.owner != 2'd1 || video_ready || dma_ready)
+                    $fatal(1, "PMMU owner escaped in final descriptor gap");
+            end
+
+            cpu_addr = 25'h000a018;
+            cpu_wdata = 32'ha5a55a5a;
+            cpu_valid = 1'b1;
+            begin : wait_locked_final
+                integer timeout;
+                timeout = 0;
+                @(posedge clk);
+                while (!cpu_ready) begin
+                    timeout = timeout + 1;
+                    if (timeout > 100)
+                        $fatal(1, "locked CPU final descriptor timeout");
                     @(posedge clk);
                 end
             end
@@ -465,6 +501,22 @@ module tb_sdram32_controller;
             while (!video_rsp_valid) @(negedge clk);
             video_lock = 1'b0;
 
+            begin : wait_dma_after_lock
+                integer timeout;
+                timeout = 0;
+                @(posedge clk);
+                while (!dma_ready) begin
+                    timeout = timeout + 1;
+                    if (timeout > 100)
+                        $fatal(1, "DMA grant timeout after PMMU unlock");
+                    @(posedge clk);
+                end
+            end
+            @(negedge clk);
+            dma_valid = 1'b0;
+            while (!dma_rsp_valid) @(negedge clk);
+            dma_lock = 1'b0;
+
             cpu_read32(25'h000a010, got);
             if (got != 32'h77778888)
                 $fatal(1, "locked CPU head mismatch %08x", got);
@@ -472,8 +524,14 @@ module tb_sdram32_controller;
             if (got != 32'h9999aaaa)
                 $fatal(1, "locked CPU tail mismatch %08x", got);
             cpu_read32(25'h000a018, got);
+            if (got != 32'ha5a55a5a)
+                $fatal(1, "locked CPU final mismatch %08x", got);
+            cpu_read32(25'h000a020, got);
             if (got != 32'hbbbbcccc)
                 $fatal(1, "post-lock video mismatch %08x", got);
+            cpu_read32(25'h000a024, got);
+            if (got != 32'hddddeeee)
+                $fatal(1, "post-lock DMA mismatch %08x", got);
         end
     endtask
 

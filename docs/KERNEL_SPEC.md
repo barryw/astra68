@@ -13,8 +13,12 @@ Authority, from highest to lowest:
 1. `docs/OS_VISION.md` defines the product and operating-system principles.
 2. `SPEC.md`, `docs/MC68030_COMPLIANCE.md`, `docs/VESTA.md`, and
    `docs/SDRAM.md` define accepted platform behavior.
-3. This document defines the evolving kernel contract.
-4. Source code must conform to the documents or update them deliberately.
+3. `KERNEL_ARCHITECTURE.md`, `MEMORY_MAP_AND_PMMU.md`, `ABI.md`,
+   `LOCKING_AND_PREEMPTION.md`, `RESOURCE_OWNERSHIP_AND_FAILURES.md`,
+   `MEMORY_BUDGET.md`, and `TEST_AND_FAULT_INJECTION_PLAN.md` define the
+   normative implementation contracts; `STATUS.md` says what is real now.
+4. This document preserves research rationale and milestone history.
+5. Source code must conform to the documents or update them deliberately.
 
 Status markers have the same meaning as in `docs/OS_VISION.md`:
 
@@ -119,11 +123,20 @@ The following are not software workarounds:
   once, and perform one target transfer. Absolute, predecrement, postincrement,
   read, and write forms pass shared and focused RTL tests. Exact hardware
   promotion remains required.
-- **BLOCKER K-HW-3:** PMMU descriptor search and hardware descriptor updates
-  must be indivisible against DMA as required by the MC68030 contract.
-- **BLOCKER K-HW-4:** Vesta interrupt acknowledge, edge/level clearing, timer
-  expiry, and one-shot reprogramming races require simulation and hardware
-  tests before the scheduler relies on them.
+- **SIMULATION CLOSED, HARDWARE PENDING K-HW-3:** The Astra wrapper now asserts
+  RMC from the first PMMU walker request through every non-idle walker state.
+  Focused and full coretest verify lock coverage through descriptor gaps and
+  release after successful and faulted searches; CDC and SDRAM-controller
+  tests keep simultaneous video and DMA requests queued until unlock. This
+  exact delta still requires synthesis, routing, and board promotion.
+- **SIMULATION CLOSED, HARDWARE PENDING K-HW-4:** Vesta now snapshots a
+  vector/spurious result for the complete CPU IACK transaction. A low-byte
+  timer-control write with `ENABLE` atomically restarts from `LOAD`; an old
+  expiration racing that restart remains sticky. Icarus and Verilator cover
+  source replacement during IACK, spurious-to-valid races, edge/level clear
+  ordering, partial writes, zero load, running reprogram, and terminal-edge
+  restart. Focused TG68K coretest passes the production vectored-IACK path.
+  Exact-source route, board timer races, and measured interrupt latency remain.
 - **BLOCKER K-HW-5:** Untrusted service-directed DMA requires either hardware
   fences or a kernel submission path with complete address, length, wrap, and
   device-state validation.
@@ -260,15 +273,19 @@ automatic stack growth, memory compression, or overcommit.
 
 ### 6.2 Page-table proposal
 
-**PROPOSAL:** Start experiments with 4 KiB pages and a 10/10/12
-logical-address split. For the SRP/CRP-separated design, first use two levels
-of short-format descriptors. This gives:
+**DECISION:** The stable default targets 8 KiB pages with a `9/10/13`
+logical-address split and two levels of short-format descriptors. It gives
+4,096 physical frames, 32 KiB of 8-byte frame metadata, 2 KiB roots, 4 KiB
+sparse leaves covering 8 MiB each, and up to 176 KiB of reach in the 22-entry
+ATC. Roots come from a bounded table slab rather than consuming whole 8 KiB
+frames.
 
-- 8,192 physical frames in 32 MiB;
-- a 1 KiB physical-allocation bitmap;
-- one 4 KiB user root table per address space in that candidate;
-- 4 KiB second-level tables allocated only for populated regions;
-- straightforward page alignment for ELF, guards, sharing, and DMA buffers.
+The 4 KiB `10/10/12` implementation remains a supported build and the current
+K1 qualification oracle. It gives 8,192 frames, 64 KiB of frame metadata, 4 KiB
+roots/leaves, and up to 88 KiB of ATC reach. The stable default changes only
+after the 8 KiB build passes the same fault, workload, route, and board tests
+and reports table memory, fragmentation, ATC misses, mapping cycles, and
+working-set behavior.
 
 MC68030 short descriptors do not contain the supervisor-only protection field.
 Consequently, this exact short-table design is safe only when supervisor and
@@ -276,9 +293,9 @@ user translations are separated at the SRP/CRP or function-code level. A
 unified tree must compare long-format protected descriptors or another
 Motorola-defined separation, with the corresponding table-memory cost.
 
-The proposal is not accepted until the TC value, root descriptors, table
-limits, descriptor bits, protection behavior, and exact table-walk traffic are
-checked against MC68030 manual sections 9.1-9.9 and the supported RTL core.
+The 8 KiB implementation is not accepted until its TC value, root descriptors,
+table limits, descriptor bits, protection behavior, and exact table-walk
+traffic are checked against MC68030 manual sections 9.1-9.9 and the RTL core.
 
 ### 6.3 Root and kernel-mapping alternatives
 
@@ -312,10 +329,10 @@ force ATC misses rather than accidentally passing with warm translations.
 
 ### 7.1 Physical pages
 
-**PROPOSAL:** Use a boot-time range allocator followed by a 4 KiB frame bitmap
-with bounded contiguous-run allocation. With only 8,192 frames, a complete
-bitmap scan has a small known upper bound and is easier to audit than a large
-general-purpose VM allocator. Revisit a buddy allocator only if measured
+**DECISION:** Use a boot-time range allocator followed by a page-size-parameterized
+frame bitmap with bounded contiguous-run allocation. A complete scan of 4,096
+or 8,192 frames has a small known upper bound and is easier to audit than a
+large general-purpose VM allocator. Revisit a buddy allocator only if measured
 fragmentation or DMA allocation requires it.
 
 Every frame has kernel metadata sufficient to represent:

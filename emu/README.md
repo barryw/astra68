@@ -37,6 +37,13 @@ Run the unchanged ROM to completion without a window:
 rtk make post
 ```
 
+Run a freshly built production ROM through PMMU enable, user-copy fault
+recovery, vectored timer interrupts, and kernel entry:
+
+```sh
+rtk make -C emu kernel ROM=../sw/boot/astra_boot.bin
+```
+
 Run natively on a desktop with a GPU/windowing session:
 
 ```sh
@@ -62,10 +69,11 @@ rtk env ASTRA68_BOOT_ROM=../sw/boot/astra_boot.bin make run
 ```
 
 The current emulated hardware slice covers reset aliasing, ROM, BRAM, SDRAM,
-Vesta identity/UART/BIST, Vega bootstrap text, and Astraea POST fill/copy. New
-devices should be added behind the same headless bus boundary with focused unit
-tests before their UI tooling is introduced. The cross-host test matrix and
-explicit model boundaries are recorded in [`RESULTS.md`](RESULTS.md).
+Vesta identity/UART/BIST/timers/vectored IRQs, front-panel MMIO, Vega bootstrap
+text, Astraea POST fill/copy, PMMU-enabled kernel entry, and kernel completion
+status. New devices should be added behind the same headless bus boundary with
+focused unit tests before their UI tooling is introduced. The cross-host test
+matrix and explicit model boundaries are recorded in [`RESULTS.md`](RESULTS.md).
 
 MC68030 PMMU descriptor traffic uses a separate fallible physical-bus path.
 Mapped Astra apertures return data; an unmapped table address reports a

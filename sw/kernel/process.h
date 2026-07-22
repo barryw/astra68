@@ -1,0 +1,118 @@
+#ifndef ASTRA_KERNEL_PROCESS_H
+#define ASTRA_KERNEL_PROCESS_H
+
+#include "context.h"
+#include "handle.h"
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#define KERNEL_PROCESS_MAX 4u
+#define KERNEL_PROCESS_CODE_BASE 0x00100000u
+#define KERNEL_PROCESS_STACK_BASE 0x70000000u
+#define KERNEL_PROCESS_STACK_TOP \
+    (KERNEL_PROCESS_STACK_BASE + 0x00001000u)
+#define KERNEL_PROCESS_PROGRESS_GOAL 64u
+
+#define KERNEL_PROCESS_RIGHT_QUERY     (1u << 0)
+#define KERNEL_PROCESS_RIGHT_TERMINATE (1u << 1)
+
+typedef enum KernelProcessState {
+    KERNEL_PROCESS_UNUSED = 0,
+    KERNEL_PROCESS_CREATED,
+    KERNEL_PROCESS_RUNNING,
+    KERNEL_PROCESS_EXITING,
+    KERNEL_PROCESS_DEAD
+} KernelProcessState;
+
+typedef enum KernelThreadState {
+    KERNEL_THREAD_UNUSED = 0,
+    KERNEL_THREAD_CREATED,
+    KERNEL_THREAD_READY,
+    KERNEL_THREAD_RUNNING,
+    KERNEL_THREAD_BLOCKED,
+    KERNEL_THREAD_DEAD
+} KernelThreadState;
+
+typedef enum KernelProcessExitReason {
+    KERNEL_PROCESS_EXIT_NONE = 0,
+    KERNEL_PROCESS_EXIT_SYSCALL,
+    KERNEL_PROCESS_EXIT_USER_FAULT
+} KernelProcessExitReason;
+
+typedef enum KernelProcessStatus {
+    KERNEL_PROCESS_OK = 0,
+    KERNEL_PROCESS_INVALID_ARGUMENT,
+    KERNEL_PROCESS_NO_SLOT,
+    KERNEL_PROCESS_OUT_OF_MEMORY,
+    KERNEL_PROCESS_INVALID_STATE,
+    KERNEL_PROCESS_INVALID_CONTEXT,
+    KERNEL_PROCESS_NO_RUNNABLE,
+    KERNEL_PROCESS_DEFERRED,
+    KERNEL_PROCESS_CORRUPT
+} KernelProcessStatus;
+
+typedef struct KernelProcessSnapshot {
+    uint32_t id;
+    uint32_t owner;
+    uint32_t progress;
+    uint32_t timer_ticks;
+    uint32_t run_count;
+    uint32_t syscall_count;
+    uint32_t fault_address;
+    KernelHandle self_handle;
+    uint16_t fault_vector;
+    uint8_t process_state;
+    uint8_t thread_state;
+    uint8_t exit_reason;
+    uint8_t reserved;
+} KernelProcessSnapshot;
+
+typedef struct KernelSchedulerStats {
+    uint32_t created_processes;
+    uint32_t live_processes;
+    uint32_t dead_processes;
+    uint32_t context_switches;
+    uint32_t timer_preemptions;
+    uint32_t voluntary_switches;
+    uint32_t user_faults;
+    uint32_t completed_teardowns;
+    uint32_t forced_frame_releases;
+    uint32_t current_process_id;
+    uint8_t milestone_complete;
+    uint8_t reserved[3];
+} KernelSchedulerStats;
+
+void kernel_process_init(void);
+KernelProcessStatus kernel_process_create(const void *image,
+                                          uint32_t image_size,
+                                          uint32_t entry_offset,
+                                          uint32_t initial_argument,
+                                          uint32_t *process_id);
+KernelProcessStatus kernel_process_start(KernelCpuContext **next_context);
+bool kernel_process_active(void);
+KernelProcessStatus kernel_process_on_timer(const uint32_t *registers,
+                                            uint32_t user_stack,
+                                            const void *raw_frame,
+                                            KernelCpuContext **next_context);
+KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
+                                              uint32_t user_stack,
+                                              const void *raw_frame,
+                                              KernelCpuContext **next_context);
+KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
+                                            uint32_t user_stack,
+                                            const void *raw_frame,
+                                            KernelCpuContext **next_context);
+KernelProcessStatus kernel_process_maintenance(void);
+KernelProcessStatus kernel_process_reap_deferred(void);
+bool kernel_process_snapshot(uint32_t slot, KernelProcessSnapshot *snapshot);
+bool kernel_process_stats(KernelSchedulerStats *stats);
+
+void kernel_process_milestone_reached(void);
+
+#if defined(KERNEL_PROCESS_HOST_TEST)
+void kernel_process_test_bind_physical_memory(uint8_t *memory, uint32_t base,
+                                              uint32_t size);
+#endif
+
+#endif

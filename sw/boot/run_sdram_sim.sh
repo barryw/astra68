@@ -13,16 +13,27 @@ test_bytes="${SDRAM_SIM_TEST_BYTES:-65536}"
 progress="${SDRAM_SIM_PROGRESS:-0}"
 reuse_sim="${SDRAM_SIM_REUSE:-0}"
 kernel_panic_selftest="${KERNEL_PANIC_SELFTEST:-0}"
+kernel_sched_trace="${KERNEL_SCHED_TRACE:-0}"
 sim_args=()
-if [[ "$kernel_panic_selftest" == "1" ]]; then
+if [[ "$kernel_panic_selftest" != "0" ]]; then
     sim_args+=(+expect-kernel-panic)
 fi
 
 make -C sw/boot clean all \
     CPU_CLK_DIV_BIT=0 SDRAM_ENABLE=1 HDMI_ENABLE=0 \
     KERNEL_PANIC_SELFTEST="$kernel_panic_selftest" \
+    KERNEL_SCHED_TRACE="$kernel_sched_trace" \
     EXTRA_CFLAGS="-DMEM_BENCH_BYTES=$mem_bench_bytes -DDMA_BENCH_BYTES=$dma_bench_bytes"
 python3 sw/boot/bin2hex.py sw/boot/astra_boot.bin fpga/soc/sim/rom_init.hex
+if [[ "$kernel_panic_selftest" == "2" ]]; then
+    guard_address=$(m68k-linux-gnu-nm -n sw/kernel/astra_kernel.elf |
+        awk '$3 == "_kernel_stack_guard" { print $1 }')
+    if [[ ! "$guard_address" =~ ^[0-9a-fA-F]{8}$ ]]; then
+        echo "unable to resolve supervisor stack guard address" >&2
+        exit 1
+    fi
+    sim_args+=("+expect-kernel-guard=$guard_address")
+fi
 
 cd fpga/soc/sim
 if [[ "$reuse_sim" != "1" || ! -x obj_dir_boot_sdram/Vtb_boot_sdram ]]; then

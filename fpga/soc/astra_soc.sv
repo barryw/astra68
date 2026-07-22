@@ -1541,7 +1541,8 @@ module astra_soc #(
         .write_data(cpu_dout), .byte_enable(be),
         .read_data(vesta_irq_rdata),
         .source_level(vesta_irq_sources), .cpu_ipln_n(vesta_ipln_n),
-        .iack_level(cpu_adr[3:1]), .iack_vector(vesta_iack_vector),
+        .iack_strobe(cpu_iack_read), .iack_level(cpu_adr[3:1]),
+        .iack_vector(vesta_iack_vector),
         .iack_valid(vesta_iack_valid)
     );
 

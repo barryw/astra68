@@ -1,7 +1,15 @@
 #include <astra/boot.h>
 
 #include "kernel_build_info.h"
+#include "block.h"
+#include "dma.h"
+#include "exception.h"
+#include "memory.h"
+#include "panic.h"
 #include "platform.h"
+#include "process.h"
+#include "user_copy.h"
+#include "vm.h"
 #include "vega.h"
 #include "vesta.h"
 
@@ -9,22 +17,31 @@
 #define SCREEN_LEFT_MARGIN 2u
 #define SCREEN_RIGHT_MARGIN 2u
 #define SCREEN_BOTTOM_MARGIN 2u
+#define KERNEL_SELFTEST_OWNER 0xfffffff0u
+#define KERNEL_SELFTEST_USER_ADDRESS 0x10000000u
 
 extern uint8_t _kernel_entry[];
 extern uint8_t _kernel_image_start[];
 extern uint8_t _kernel_file_end[];
 extern uint8_t _kernel_memory_end[];
+extern uint8_t _kernel_stack_guard[];
 extern uint8_t _kernel_vectors[];
+extern uint8_t _k1_survivor_image_start[];
+extern uint8_t _k1_survivor_image_entry[];
+extern uint8_t _k1_survivor_image_end[];
+extern uint8_t _k1_offender_image_start[];
+extern uint8_t _k1_offender_image_entry[];
+extern uint8_t _k1_offender_image_end[];
 
 uint32_t kernel_read_vbr(void);
-void kernel_panic(const char *reason) __attribute__((noreturn));
-void kernel_exception_panic(const void *frame) __attribute__((noreturn));
+void kernel_enter_user(KernelCpuContext *context) __attribute__((noreturn));
 
 static AstraBootInfo boot_info;
 static AstraEarlyLog *early_log;
 static uint32_t screen_row;
 static uint32_t screen_col;
 static int screen_enabled;
+static KernelAddressSpace user_copy_selftest_space;
 
 static void copy_bytes(void *destination, const void *source, uint32_t size)
 {
@@ -157,12 +174,6 @@ static void halt_forever(void)
     for (;;) __asm__ volatile ("stop #0x2700");
 }
 
-static void idle_forever(void) __attribute__((noreturn));
-static void idle_forever(void)
-{
-    for (;;) __asm__ volatile ("stop #0x2000");
-}
-
 static void panic_begin(const char *reason)
 {
     screen_clear();
@@ -194,35 +205,104 @@ void kernel_panic(const char *reason)
     panic_finish();
 }
 
-static uint16_t frame_u16(const uint8_t *frame, uint32_t offset)
-{
-    return (uint16_t)((uint16_t)frame[offset] << 8) | frame[offset + 1u];
-}
-
-static uint32_t frame_u32(const uint8_t *frame, uint32_t offset)
-{
-    return (uint32_t)frame[offset] << 24 |
-           (uint32_t)frame[offset + 1u] << 16 |
-           (uint32_t)frame[offset + 2u] << 8 |
-           frame[offset + 3u];
-}
-
 void kernel_exception_panic(const void *raw_frame)
 {
-    const uint8_t *frame = raw_frame;
-    uint16_t format_vector = frame_u16(frame, 6u);
+    KernelExceptionFrame frame;
+    KernelExceptionStatus status = kernel_exception_decode(
+        raw_frame, KERNEL_EXCEPTION_FRAME_MAX_SIZE, &frame);
 
     panic_begin("unhandled processor exception");
+    if (status != KERNEL_EXCEPTION_OK) {
+        console_puts("Invalid exception frame: ");
+        console_dec32((uint32_t)status);
+        console_putc('\n');
+        panic_finish();
+    }
     console_puts("Vector: ");
-    console_dec32((format_vector & 0x0fffu) >> 2);
+    console_dec32(frame.vector_offset >> 2);
     console_puts("  Format: 0x");
-    console_putc(console_hex_digit(format_vector >> 12));
+    console_putc(console_hex_digit(frame.format));
     console_puts("\nSR:     0x");
-    console_hex32(frame_u16(frame, 0u));
+    console_hex32(frame.status_register);
     console_puts("\nPC:     0x");
-    console_hex32(frame_u32(frame, 2u));
+    console_hex32(frame.program_counter);
+    if (frame.access_fault != 0u) {
+        console_puts("\nSSW:    0x");
+        console_hex32(frame.special_status);
+        console_puts("\nFault:  0x");
+        console_hex32(frame.fault_address);
+    }
     console_putc('\n');
     panic_finish();
+}
+
+static bool bytes_equal(const uint8_t *left, const uint8_t *right,
+                        uint32_t size)
+{
+    while (size-- != 0u) {
+        if (*left++ != *right++)
+            return false;
+    }
+    return true;
+}
+
+static void kernel_user_copy_selftest(void)
+{
+    KernelAddressSpace *space = &user_copy_selftest_space;
+    KernelMemoryStats before;
+    KernelMemoryStats after;
+    uint8_t expected[32];
+    uint8_t observed[32];
+    uint32_t physical;
+
+    if (!kernel_memory_stats(&before) ||
+        kernel_vm_create_address_space(KERNEL_SELFTEST_OWNER, space) !=
+            KERNEL_VM_OK ||
+        kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS,
+                            KERNEL_SELFTEST_OWNER, &physical) !=
+            KERNEL_MEMORY_OK)
+        kernel_panic("user-copy self-test setup failed");
+
+    for (uint32_t index = 0u; index < sizeof(expected); ++index) {
+        expected[index] = (uint8_t)(0x31u + index * 7u);
+        ((volatile uint8_t *)(uintptr_t)physical)[index] = expected[index];
+    }
+    if (kernel_vm_map_page(space, KERNEL_SELFTEST_USER_ADDRESS, physical,
+                           KERNEL_VM_READ | KERNEL_VM_WRITE) != KERNEL_VM_OK ||
+        kernel_memory_release(physical, 1u, KERNEL_SELFTEST_OWNER) !=
+            KERNEL_MEMORY_OK ||
+        kernel_vm_switch(space) != KERNEL_VM_OK)
+        kernel_panic("user-copy self-test mapping failed");
+
+    if (kernel_copy_from_user(observed, KERNEL_SELFTEST_USER_ADDRESS,
+                              sizeof(observed)) != KERNEL_USER_COPY_OK ||
+        !bytes_equal(observed, expected, sizeof(observed)))
+        kernel_panic("copy-from-user self-test failed");
+
+    for (uint32_t index = 0u; index < sizeof(expected); ++index)
+        expected[index] = (uint8_t)(0xe3u - index * 5u);
+    if (kernel_copy_to_user(KERNEL_SELFTEST_USER_ADDRESS + 64u, expected,
+                            sizeof(expected)) != KERNEL_USER_COPY_OK ||
+        kernel_copy_from_user(observed,
+                              KERNEL_SELFTEST_USER_ADDRESS + 64u,
+                              sizeof(observed)) != KERNEL_USER_COPY_OK ||
+        !bytes_equal(observed, expected, sizeof(observed)))
+        kernel_panic("copy-to-user self-test failed");
+
+    if (kernel_copy_from_user(observed,
+                              KERNEL_SELFTEST_USER_ADDRESS + KERNEL_PAGE_SIZE,
+                              1u) != KERNEL_USER_COPY_BAD_ADDRESS ||
+        kernel_copy_to_user(KERNEL_SELFTEST_USER_ADDRESS + KERNEL_PAGE_SIZE,
+                            expected, 1u) != KERNEL_USER_COPY_BAD_ADDRESS ||
+        kernel_copy_from_user(observed, KERNEL_SELFTEST_USER_ADDRESS, 1u) !=
+            KERNEL_USER_COPY_OK)
+        kernel_panic("user-copy fault recovery failed");
+
+    if (kernel_vm_switch_to_empty() != KERNEL_VM_OK ||
+        kernel_vm_destroy_address_space(space) != KERNEL_VM_OK ||
+        !kernel_memory_stats(&after) ||
+        after.free_frames != before.free_frames)
+        kernel_panic("user-copy self-test teardown failed");
 }
 
 static void validate_image_contract(void)
@@ -245,9 +325,33 @@ static void validate_image_contract(void)
         kernel_panic("early log contract mismatch");
 }
 
+void kernel_process_milestone_reached(void)
+{
+    KernelSchedulerStats stats;
+
+    if (!kernel_process_stats(&stats))
+        kernel_panic("scheduler statistics unavailable");
+    console_puts("\nUser tasks .......... OK, 100 Hz preemption\n");
+    console_puts("Fault containment ... OK, offender reaped\n");
+    console_puts("Context switches .... ");
+    console_dec32(stats.context_switches);
+    console_putc('\n');
+    console_puts("\nK1 PROTECTED ENTRY PASS\n");
+    console_puts("KERNEL MULTITASKING\n");
+    VESTA->SCRATCH = ASTRA_KERNEL_STATUS_K1_READY;
+}
+
 void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
 {
     AstraBootValidation validation;
+    KernelMemoryStats memory_stats;
+    KernelVmStats vm_stats;
+    KernelCpuContext *first_context;
+    uint32_t process_id;
+    uint32_t offender_image_size;
+    uint32_t offender_entry_offset;
+    uint32_t survivor_image_size;
+    uint32_t survivor_entry_offset;
 
     VESTA->SCRATCH = ASTRA_KERNEL_STATUS_BOOTING;
     console_init();
@@ -269,8 +373,21 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     }
     copy_bytes(&boot_info, firmware_info, sizeof(boot_info));
     validate_image_contract();
+    if (kernel_memory_init(&boot_info) != KERNEL_MEMORY_OK)
+        kernel_panic("physical memory map rejected");
+    if (kernel_vm_init() != KERNEL_VM_OK)
+        kernel_panic("kernel page-table construction failed");
+    if (kernel_vm_enable() != KERNEL_VM_OK || !kernel_vm_enabled())
+        kernel_panic("PMMU enable failed");
+    if (!kernel_memory_stats(&memory_stats))
+        kernel_panic("physical memory stats unavailable");
+    if (!kernel_vm_stats(&vm_stats))
+        kernel_panic("virtual memory stats unavailable");
+    kernel_dma_init();
+    kernel_block_init();
     if (kernel_read_vbr() != (uint32_t)_kernel_vectors)
         kernel_panic("kernel VBR installation failed");
+    kernel_user_copy_selftest();
 
     console_puts("BootInfo ........... OK\n");
     console_puts("Early log .......... OK @ 0x");
@@ -287,7 +404,15 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     console_puts("CPU ................ MC68030 @ ");
     console_dec32(boot_info.cpu_hz);
     console_puts(" Hz\n");
-    console_puts("PMMU ............... present, disabled\n");
+    console_puts("PMMU ............... enabled, SRP 0x");
+    console_hex32(vm_stats.kernel_root_physical);
+    console_putc('\n');
+    console_puts("Physical pages ..... ");
+    console_dec32(memory_stats.free_frames);
+    console_puts(" free / ");
+    console_dec32(memory_stats.total_frames);
+    console_puts(" total\n");
+    console_puts("User copy .......... OK, fault recovery verified\n");
 
     kernel_platform_interrupt_init(boot_info.cpu_hz);
     kernel_enable_interrupts();
@@ -300,7 +425,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     console_puts("Vesta timer ........ OK @ 100 Hz\n");
 
     if ((VESTA->SYS_STATUS & SYS_ASTRA_HOST) != 0u) {
-        if (!kernel_block_present())
+        if (!kernel_platform_block_present())
             kernel_panic("AstraHost block controller missing");
         uint32_t host_start = VESTA->CPU_CYCLES_LO;
         while ((VESTA->BLOCK_STATE & BLOCK_STATE_LINK_UP) == 0u) {
@@ -311,7 +436,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         console_puts("AstraHost runtime ... OK, media ");
         console_puts((VESTA->BLOCK_STATE & BLOCK_STATE_MEDIA_PRESENT) != 0u ?
                      "present\n" : "not provisioned\n");
-        kernel_block_ack_state();
+        kernel_platform_block_ack_state();
         if (VESTA->INPUT_ID != INPUT_ID_MAGIC)
             kernel_panic("AstraHost input controller missing");
         console_puts("Input queue ......... OK\n");
@@ -319,12 +444,37 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         console_puts("AstraHost runtime ... not present\n");
     }
 
-#if ASTRA_KERNEL_PANIC_SELFTEST
+#if ASTRA_KERNEL_PANIC_SELFTEST == 2
+    console_puts("Supervisor guard .... fault injection\n");
+    *(volatile uint32_t *)(uintptr_t)_kernel_stack_guard = 0x47554152u;
+    kernel_panic("supervisor stack guard write returned");
+#elif ASTRA_KERNEL_PANIC_SELFTEST == 1
     kernel_panic("deliberate panic self-test");
+#elif ASTRA_KERNEL_PANIC_SELFTEST != 0
+#error "ASTRA_KERNEL_PANIC_SELFTEST must be 0, 1, or 2"
 #endif
 
-    console_puts("\nK0 ENTRY PASS\n");
-    console_puts("KERNEL IDLE\n");
-    VESTA->SCRATCH = ASTRA_KERNEL_STATUS_READY;
-    idle_forever();
+    survivor_image_size =
+        (uint32_t)(_k1_survivor_image_end - _k1_survivor_image_start);
+    survivor_entry_offset =
+        (uint32_t)(_k1_survivor_image_entry - _k1_survivor_image_start);
+    offender_image_size =
+        (uint32_t)(_k1_offender_image_end - _k1_offender_image_start);
+    offender_entry_offset =
+        (uint32_t)(_k1_offender_image_entry - _k1_offender_image_start);
+    kernel_disable_interrupts();
+    kernel_process_init();
+    if (kernel_process_create(_k1_survivor_image_start, survivor_image_size,
+                              survivor_entry_offset, 0u,
+                              &process_id) != KERNEL_PROCESS_OK)
+        kernel_panic("survivor process creation failed");
+    if (kernel_process_create(_k1_offender_image_start, offender_image_size,
+                              offender_entry_offset, 1u,
+                              &process_id) != KERNEL_PROCESS_OK)
+        kernel_panic("fault process creation failed");
+    if (kernel_process_start(&first_context) != KERNEL_PROCESS_OK ||
+        first_context == NULL)
+        kernel_panic("initial process scheduling failed");
+    console_puts("User processes ...... 2 ready, cache isolation armed\n");
+    kernel_enter_user(first_context);
 }

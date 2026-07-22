@@ -121,6 +121,7 @@ architecture rtl of tg68k_wrap is
     signal dbg_pmmu_wstate     : std_logic_vector(4 downto 0);
     signal dbg_pmmu_saved_addr : std_logic_vector(31 downto 0);
     signal dbg_pmmu_desc_data  : std_logic_vector(31 downto 0);
+    signal pmmu_table_search   : std_logic;
     type bus_fsm_t is (BUS_IDLE, BUS_ASSERT, BUS_GAP);
     signal bus_fsm       : bus_fsm_t := BUS_IDLE;
     signal tg_req_cycle  : std_logic;
@@ -481,7 +482,14 @@ begin
     DSn <= not bus_active;
     RWn <= not walker_we_latched when bus_active = '1' and walker_cycle = '1' else
            tg_nwr;
-    RMCn <= tg_rmcn;
+    -- MC68030 UM 9.5.2 requires RMC asserted for the complete table search,
+    -- not only while an individual descriptor transfer is active. W_IDLE is
+    -- encoding zero; include walker_req so lock assertion covers the first
+    -- descriptor even on the state-transition cycle. Do not use PMMU busy
+    -- here because it also pulses for ordinary ATC-hit result registration.
+    pmmu_table_search <= '1' when pmmu_walker_req = '1' or
+                                 dbg_pmmu_wstate /= "00000" else '0';
+    RMCn <= '0' when pmmu_table_search = '1' else tg_rmcn;
     SIZE <= "00" when bus_active = '1' and walker_cycle = '1' else
             "00" when bus_active = '1' and combine_second = '1' else
             "10" when bus_active = '1' and tg_nuds = '0' and tg_nlds = '0' else
@@ -511,7 +519,6 @@ begin
                 dbg_pmmu_saved_addr when dbg_pmmu_busy = '1' else
                 dbg_regfile_wdata when dbg_regfile_we = '1' else
                 dbg_regfile_a7;
-
     u_cpu : entity work.TG68KdotC_Kernel
         generic map(
             SR_Read => 1,

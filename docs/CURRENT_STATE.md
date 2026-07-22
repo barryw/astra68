@@ -5,6 +5,12 @@ and validated boundaries that are easy to lose across long sessions. Detailed
 contracts remain authoritative in the linked documents; historical handovers
 and old resource tables are not current status.
 
+The kernel's normative implementation contracts are
+`KERNEL_ARCHITECTURE.md`, `MEMORY_MAP_AND_PMMU.md`, `ABI.md`,
+`LOCKING_AND_PREEMPTION.md`, `RESOURCE_OWNERSHIP_AND_FAILURES.md`,
+`MEMORY_BUDGET.md`, and `TEST_AND_FAULT_INJECTION_PLAN.md`; `STATUS.md`
+separates implemented evidence from planned work.
+
 ## Locked architecture
 
 - The sole RTL CPU is the repaired TG68K.C MC68030 integer core with integrated
@@ -16,9 +22,17 @@ and old resource tables are not current status.
 - The core is a strong development baseline, not an unconditional production
   claim. SCC elimination, shared conformance, boot, SDRAM, and retained hardware
   tests pass substantial coverage. The previously open PMMU restart and
-  fault-on-stacking cases now pass shared and focused RTL simulation; the new
-  RTL still requires exact synthesis, routing, and board promotion before it
-  supersedes the persistent hardware release.
+  fault-on-stacking cases now pass shared and focused RTL simulation. Exact
+  candidate `F4DC1E18` is committed, fully simulated, timing-clean, and passes
+  repeated SRAM-loaded board boots. Its hardware-profile coretest also passes
+  translated reads/writes, invalid-descriptor fault recovery, and write
+  protection on the ULX3S. A subsequent K-HW3 source delta now asserts RMC for
+  the exact non-idle walker lifetime and passes wrapper, CDC, and adversarial
+  SDRAM-arbiter simulation. A grouped K-HW4 delta also snapshots Vesta's IACK
+  result for the full CPU transaction and gives timer restart/expiry races a
+  deterministic contract with directed dual-simulator coverage. Neither delta
+  is part of routed `F4DC1E18`, so a new full route and board qualification
+  remain mandatory.
 - Portable CPU/PMMU expectations live in `conformance/` and run through the
   canonical Musashi and RTL adapters. Do not create separate expected results
   in an adapter. White-box RTL tests remain complementary for implementation
@@ -123,8 +137,86 @@ and old resource tables are not current status.
   second fault or CPU halt. Beast passes 90 framework tests, all 30 shared
   Musashi/RTL executions, both Harte smoke targets, and the 137-variant Questa
   inventory at 111 clean, 18 classified failures, 3 stale compile failures,
-  and 5 unscored diagnostics. No synthesis or board result is yet attributed
-  to this uncommitted checkpoint; persistent hardware remains `6C0D0CA3`.
+  and 5 unscored diagnostics. The repaired source is committed as
+  `5798c5575a5bf6d5ca37eae2fbe63cb0528ad6e8`. Exact production candidate
+  `F4DC1E18` routes every constrained clock, and three independent SRAM reloads
+  match its build and ROM identities while passing complete POST, 32 MiB BIST,
+  DMA, runtime/input initialization, and `K0 ENTRY PASS`. This proves that the
+  repaired netlist did not regress the nontranslated platform. A subsequent
+  hardware-profile coretest passes with sum `74A6EC6D`, including PMMU register
+  access, cold table walks, translated read/write, invalid-root access-fault
+  recovery, and write-protection/no-write checks. Persistent hardware remains
+  `6C0D0CA3`. The follow-on table-walk arbitration fix passes component and full
+  coretest simulation but has not yet been synthesized, routed, or exercised
+  on the board; HDMI and persistent-programming gates also remain.
+- The follow-on K1 software checkpoint in independent Beast snapshot
+  `/tmp/astra68-k1-p27` boots with the PMMU enabled and exercises production
+  user-copy recovery rather than a synthetic handler. The kernel now has a
+  bounded physical-frame allocator, owned DMA/block submission models, 4 KiB
+  10/10/12 SRP/CRP tables, per-owner address spaces, guarded user-range checks,
+  exact format-0/1/2/9/A/B exception decoding, and SFC/DFC `MOVES` user copies.
+  Its startup check creates a real CRP, maps a process-owned page, verifies
+  copy-in/copy-out, deliberately faults both read and write access to an
+  unmapped page, returns through the vector-2 format-B fixup, and proves every
+  temporary frame was reclaimed. The exact 29,140-byte boot binary
+  (`382eddc628a7e2bebf416d31b9441f0ba2e7fc863e5a360dc96d12da6415fc4a`)
+  and 17,860-byte kernel
+  (`979347f21105a865243b5076b4ef9b04a9a3212fa386a2aebaf43f4177dae0ab`)
+  reach `K0 ENTRY PASS` on both the full pin-level RTL/SDRAM model and AstraVM's
+  vendored Musashi 68030/PMMU backend. Host unit tests, GCC `-fanalyzer`,
+  ASan/UBSan, Rust unit tests, formatting, and Clippy `-D warnings` pass.
+  This is simulation evidence only. Process/handle tables, trap ABI, saved
+  contexts, user-mode entry, 100 Hz preemption, process-local fault death,
+  teardown/soak, exact full routing, and board promotion remain K1 work.
+- Independent Beast snapshot `/tmp/astra68-k1-p28` completes the K1 process
+  path in simulation. It adds typed process handles, saved MC68030 contexts,
+  the trap-based syscall ABI, two isolated ROM-packaged user programs, 100 Hz
+  timer preemption, process-local fault death, and owner teardown. Bounded
+  process-context maintenance now completes teardown that was deferred while
+  device DMA was pinned without doing that work in the hard timer path, and the
+  last process may exit or fault into an interruptible supervisor idle loop
+  instead of causing a kernel panic. A fault
+  found only after repeated trap/RTE and timer traffic exposed an RTL
+  exception-entry defect: `arch_abort_pending` suppressed the A7 bank switch,
+  so a user data-fault format-B frame was stacked on USP. The retained kernel
+  fix permits only the exception-entry mode-switch write while an access fault
+  is active and prevents a zero-wait fault response from being mistaken for a
+  second stacking fault. Focused Questa runs pass with both inserted memory
+  wait states and zero-wait responses. The supervisor tree now contains an
+  exact unmapped stack guard; a deliberate access reaches the retained panic
+  oracle with a format-A fault at `0x02028000`. Whole-space teardown invalidates
+  caches before frame reuse, a fixed one-bit-per-frame ledger rejects duplicate
+  cached user aliases, and two processes execute different code/data at the
+  same logical addresses. The CACR command decoder now preserves independent
+  instruction/data commands when both are written together. The production-form
+  35,120-byte boot image
+  (`6f78f788b6b9f6b7bdadd991552a2de622735adc674a167903f74e348eb5e940`)
+  runs unchanged on AstraVM/Musashi and the complete pin-level RTL/SDRAM model.
+  Both enable the PMMU, start two user processes, preempt at 100 Hz, reap only
+  the deliberate offender, reclaim its owned state, and reach
+  `K1 PROTECTED ENTRY PASS` with scratch status `K1OK`. Host tests,
+  `-fanalyzer`, ASan/UBSan, Rust tests, rustfmt, Clippy, all 90 shared framework
+  tests, all 30 shared Musashi/RTL executions, both Harte smoke adapters, all
+  directed graphics tests, and the 139-variant CPU inventory at 113 clean with
+  the unchanged 3/18/5 classified buckets pass. A deliberate panic also reaches
+  the console and retained early log in the full SoC model; both direct panic
+  and exact supervisor-guard panic have independent full-SoC checks. The final
+  dirty normal image is 23,840 kernel bytes, runs unchanged on both models, and
+  reports three context switches on each before `K1OK`. This remains a
+  simulation checkpoint based on committed
+  `5798c5575a5bf6d5ca37eae2fbe63cb0528ad6e8` plus a dirty K1 delta. The delta
+  still needs a committed nonzero build identity, exact full synthesis/route,
+  repeated ULX3S qualification and long allocation, syscall, fault, and
+  context-switch soaks before K1 release.
+- Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
+  synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
+  strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,
+  101 block RAMs, and 18 multipliers. It passes at 14.015417 MHz CPU,
+  66.423111 MHz SDRAM, 72.432274 MHz USB, 55.673088 MHz pixel, and
+  307.125305 MHz HDMI shift. Bitstream SHA-256 is
+  `bf6b86079227e042676ef495903162212a19092ab28fa83a7a09fbd261381d35`;
+  routed-JSON SHA-256 is
+  `cac12300397576b12ce9a386762d2d06c2f805ff6ebb98d1b36aa963f03a84e3`.
 - The exact committed `6C0D0CA3` release synthesizes to 52,728 LUT4s and packs
   66,144 of 83,640 TRELLIS_COMB cells, 25,525 FFs, 101 block RAMs, and 18
   multipliers. Its strict router1 result passes every exact constraint at
@@ -157,6 +249,28 @@ and old resource tables are not current status.
   exposes no runtime media until the card has exactly one CRC-valid,
   non-overlapping Astra GPT partition. The bounded AstraHost input queue and
   the independent OHCI USB host are both integrated.
+- Candidate promotion repeated that controlled procedure for `F4DC1E18`. The
+  one-shot firmware mounted the existing 244,016 MB card without formatting
+  and atomically replaced only `/ASTRA68.ROM` with the 17,652-byte payload,
+  CRC32 `c7162f5a`, package SHA-256
+  `58c29486d387fa8d8087252a1a238c4af766fe3144643e56c7b81a6b9299ccc6`.
+  Exact normal read-only AstraHost firmware was restored and remounted the
+  card. Three independent FPGA SRAM reloads then reached build `F4DC1E18`, ROM
+  CRC32 `C7162F5A`, complete POST, full-range BIST, Astraea DMA, the 100 Hz
+  timer, runtime/input initialization, and `K0 ENTRY PASS` in 1.615-1.627
+  seconds. The card was then temporarily provisioned with the clean hardware
+  coretest package (64,372 payload bytes, CRC32 `2FA3100C`); exact candidate
+  `F4DC1E18` reported `CORETEST PASS sum=74A6EC6D` in 3.864 seconds. The
+  production package and normal read-only AstraHost were restored immediately,
+  and a final candidate reload again passed exact identity, complete POST,
+  full-range BIST, DMA, and `K0 ENTRY PASS` in 1.616 seconds. Persistent FPGA
+  flash is intentionally still `6C0D0CA3`. K-HW3 table-walk locking is now
+  repaired and tested in source, but requires a new route and board pass along
+  with physical HDMI confirmation. K-HW4 IACK/timer races are likewise closed
+  in controller and focused CPU simulation: the selected vector cannot change
+  in flight, spurious results remain spurious for that transaction, edge/level
+  clearing is ordered, and one-shot restart cannot lose a simultaneous expiry.
+  Hardware timer-race and interrupt-latency qualification remain open.
 - Before the focused diagnostics, the ULX3S contained the exact `B1F9E60D`
   rollback release in volatile SRAM. Its bitstream SHA-256 is
   `05b9e84d2413c9390163a38f77c4d8ad08600a6adb619e69ebb25c56ae0e4eae`;

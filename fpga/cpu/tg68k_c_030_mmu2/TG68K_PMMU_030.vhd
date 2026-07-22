@@ -5,18 +5,13 @@
 --           real page table walking via memory arbiter in cpu_wrapper.v
 -- The walker now reads actual descriptors from memory for non-identity address translation.
 --
--- RMC / atomic table-search deviation from MC68030 UM 9.5.2:
---   The spec requires RMC asserted for the entire duration of a table search so
---   that no other bus master can interleave. This implementation does not drive
---   a bus-wide RMC lock. The CPU side is handled: while 'walker_active' is high
---   in cpu_wrapper.v, CPU memory access is suppressed (ramsel gated by
---   ~walker_active, line 106). Other Amiga chip-bus masters (Agnus/Paula/
---   Blitter) can still use their normal DMA slots against chip RAM between
---   consecutive walker descriptor reads. In practice, AmigaOS places page
---   tables in fast RAM, which the chipset masters do not access, so the walker
---   has de-facto exclusive access to page-table memory across the walk. This
---   deviation is known and latent; fixing it would require stalling chipset
---   DMA during any table walk, which would corrupt display/audio output.
+-- RMC / atomic table-search integration per MC68030 UM 9.5.2:
+--   This PMMU block exposes walker request/state but has no independent RMC
+--   port. Astra's tg68k030_mmu2_wrap asserts external RMC for that full walker
+--   interval, including gaps between descriptor transfers; the SoC arbiter
+--   then reserves memory ownership for the CPU. Integrators that instantiate
+--   the kernel without Astra's wrapper must provide the same exclusion at
+--   their memory arbiter.
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;

@@ -104,11 +104,15 @@ Neither mode is a PMMU or MC68030 exception-frame authority.
 
 The 2026-07-22 exact snapshot passes all 90 framework/adapter tests and all 30
 shared executions across Musashi and RTL. Both adapters pass the retained Harte
-smoke target. The strict Questa inventory improves to 111 clean, 18 classified
-simulation failures, 3 stale compile failures, and 5 unscored diagnostics out
-of 137 variants. Cold translated-supervisor-stack exception entry and faulted
-SFC/DFC `MOVES` restart are therefore closed in simulation; synthesis, routing,
-and board repetition of that exact RTL remain mandatory before release.
+smoke target. With the trap/interrupt/user-fault regression included, the
+strict Questa inventory is 113 clean, 18 classified simulation failures, 3
+stale compile failures, and 5 unscored diagnostics out of 139 variants. The
+new Motorola-directed case proves that simultaneous CACR instruction/data
+clear commands reach both caches rather than being lost in a priority decode.
+Cold
+translated-supervisor-stack exception entry and faulted SFC/DFC `MOVES` restart
+are therefore closed in simulation; synthesis, routing, and board repetition
+of that exact RTL remain mandatory before release.
 
 The July 13, 2026 Musashi baseline passes all 96,103 vectors admitted by the
 MC68030-compatible gate. Its separate full-state diagnostic also passes all

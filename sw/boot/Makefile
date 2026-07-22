@@ -32,6 +32,7 @@ KERNEL_DIR = ../kernel
 KERNEL_BIN = $(KERNEL_DIR)/astra_kernel.bin
 KERNEL_VERSION ?= 0.1.0-dev
 KERNEL_PANIC_SELFTEST ?= 0
+KERNEL_SCHED_TRACE ?= 0
 
 CFLAGS  = -m68030 -msoft-float -Os -ffreestanding -fno-builtin -nostdlib \
           -Wa,--noexecstack -Wall -Wextra \
@@ -76,6 +77,11 @@ STAGE0_ID_SRCS = ../stage0/Makefile ../stage0/crt0.S ../stage0/stage0.c \
                  ../stage0/stage0.ld ../stage0/fat_loader.c \
                  ../stage0/fat_loader.h
 
+KERNEL_ID_SRCS = $(KERNEL_DIR)/Makefile \
+                 $(sort $(wildcard $(KERNEL_DIR)/*.c $(KERNEL_DIR)/*.h \
+                         $(KERNEL_DIR)/*.S $(KERNEL_DIR)/*.ld \
+                         $(KERNEL_DIR)/*.py))
+
 BUILD_CONFIG = CPU=TG68K030_MMU2 CPU_CLK_DIV_BIT=$(CPU_CLK_DIV_BIT) \
                SDRAM_ENABLE=$(SDRAM_ENABLE) HDMI_ENABLE=$(HDMI_ENABLE) \
                SD_BOOT_ENABLE=$(SD_BOOT_ENABLE) \
@@ -97,7 +103,7 @@ BUILD_CONFIG = CPU=TG68K030_MMU2 CPU_CLK_DIV_BIT=$(CPU_CLK_DIV_BIT) \
                ROM_VERSION=$(ROM_VERSION)
 ID_SRCS = Makefile ../../mk/m68k-cross.mk gen_build_info.py boot.c crt0.S $(LD) \
           kernel_blob.S ../common/boot_contract.c ../include/astra/boot.h \
-          ../include/vesta.h ../include/vega.h \
+          ../include/astra/syscall.h ../include/vesta.h ../include/vega.h \
           ../include/astraea.h \
           ../../ndk/include/astra/attributes.h \
           ../../ndk/include/astra/types.h \
@@ -106,8 +112,7 @@ ID_SRCS = Makefile ../../mk/m68k-cross.mk gen_build_info.py boot.c crt0.S $(LD) 
           ../../ndk/src/front_panel.c \
           ../../ndk/src/internal/memory_map.h \
           ../../ndk/src/internal/mmio.h \
-          $(sort $(wildcard $(KERNEL_DIR)/*.c $(KERNEL_DIR)/*.S \
-                    $(KERNEL_DIR)/*.ld $(KERNEL_DIR)/*.py $(KERNEL_DIR)/Makefile)) \
+          $(KERNEL_ID_SRCS) \
           $(SOC_ID_SRCS) $(CPU_ID_SRCS) $(STAGE0_ID_SRCS)
 
 all: astra_boot.bin astra68.rom
@@ -116,12 +121,11 @@ $(BUILD_INFO): FORCE gen_build_info.py
 	@mkdir -p $(dir $@)
 	@python3 gen_build_info.py --version "$(ROM_VERSION)" --output "$@"
 
-$(KERNEL_BIN): $(KERNEL_DIR)/Makefile $(KERNEL_DIR)/kernel.ld \
-               $(KERNEL_DIR)/entry.S $(KERNEL_DIR)/vectors.S \
-               $(KERNEL_DIR)/kernel.c $(KERNEL_DIR)/gen_build_info.py \
-               ../common/boot_contract.c ../include/astra/boot.h
+$(KERNEL_BIN): $(KERNEL_ID_SRCS) ../common/boot_contract.c \
+               ../include/astra/boot.h ../include/astra/syscall.h
 	$(MAKE) -C $(KERNEL_DIR) all CROSS=$(CROSS) \
-		KERNEL_VERSION=$(KERNEL_VERSION) PANIC_SELFTEST=$(KERNEL_PANIC_SELFTEST)
+		KERNEL_VERSION=$(KERNEL_VERSION) PANIC_SELFTEST=$(KERNEL_PANIC_SELFTEST) \
+		SCHED_TRACE=$(KERNEL_SCHED_TRACE)
 
 astra_boot.elf: crt0.S kernel_blob.S boot.c ../common/boot_contract.c \
                 ../../ndk/src/front_panel.c $(LD) $(BUILD_INFO) $(KERNEL_BIN)

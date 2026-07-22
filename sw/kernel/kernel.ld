@@ -44,8 +44,16 @@ SECTIONS {
     _bss_end = .;
   } > KERNEL :data
 
+  .noinit (NOLOAD) : {
+    . = ALIGN(16);
+    *(.noinit .noinit.*)
+    . = ALIGN(16);
+  } > KERNEL :data
+
   .kernel_stack (NOLOAD) : {
     . = ALIGN(4096);
+    _kernel_stack_guard = .;
+    . += 4096;
     _kernel_stack_bottom = .;
     . += 8192;
     _kernel_stack_top = .;
@@ -58,5 +66,9 @@ SECTIONS {
 }
 
 ASSERT(_kernel_entry == ORIGIN(KERNEL), "kernel entry must begin the image")
+ASSERT((_bss_start & 15) == 0 && (_bss_end & 15) == 0,
+       "kernel BSS bounds must remain 16-byte aligned")
+ASSERT((_kernel_stack_guard & 4095) == 0,
+       "kernel stack guard must remain page aligned")
 ASSERT(_kernel_memory_end <= ORIGIN(KERNEL) + LENGTH(KERNEL),
        "kernel exceeds its reserved bootstrap region")

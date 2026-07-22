@@ -779,7 +779,7 @@ architecture logic of TG68KdotC_Kernel is
 	
 	-- Cache control signals (declared as output ports, no need for internal signals)
 
-	-- PMMU walker memory interface (internal stub - will be connected to real memory in future)
+	-- Internal PMMU walker memory interface, exported through the kernel ports.
 	signal pmmu_mem_req   : std_logic;
 	signal pmmu_mem_we    : std_logic;  -- MC68030 U/M bit: write enable for descriptor updates
 	signal pmmu_mem_addr  : std_logic_vector(31 downto 0);
@@ -828,7 +828,7 @@ BEGIN
   -- reset/autoconfig flow while ROM executes RESET; JMP (A0).
   pmmu_cpu_reset <= '0';
 
-  -- PMMU (68030) instance (identity translation for now)
+  -- MC68030 PMMU instance.
   PMMU_030: entity work.TG68K_PMMU_030
     port map(
       clk           => clk,
@@ -1072,31 +1072,11 @@ BEGIN
   --   Bit 11: CD - Clear Data Cache
   cache_inv_req  <= '1' when (CACR(2) = '1' or CACR(3) = '1' or CACR(10) = '1' or CACR(11) = '1') else '0';
 
-  -- Cache operation scope and cache selection for 68030 CACR bits
-  -- MC68030: CI/CD clear entire cache; CEI/CED clear specific entry addressed by CAAR
-  process(CACR)
-  begin
-    if CACR(3) = '1' then
-      -- CI: Clear entire Instruction Cache
-      cache_op_scope_int <= "10";
-      cache_op_cache_int <= "10";
-    elsif CACR(11) = '1' then
-      -- CD: Clear entire Data Cache
-      cache_op_scope_int <= "10";
-      cache_op_cache_int <= "01";
-    elsif CACR(2) = '1' then
-      -- CEI: Clear Entry in I-Cache addressed by CAAR
-      cache_op_scope_int <= "00";
-      cache_op_cache_int <= "10";
-    elsif CACR(10) = '1' then
-      -- CED: Clear Entry in D-Cache addressed by CAAR
-      cache_op_scope_int <= "00";
-      cache_op_cache_int <= "01";
-    else
-      cache_op_scope_int <= "10";
-      cache_op_cache_int <= "00";
-    end if;
-  end process;
+  -- CI/CD and CEI/CED are independent command bits. Mixed I/D commands
+  -- target both caches; a full-cache command conservatively dominates an
+  -- entry command for the other cache.
+  cache_op_scope_int <= cacr_cache_op_scope(CACR);
+  cache_op_cache_int <= cacr_cache_op_cache(CACR);
 
   -- Connect internal signals to outputs
   cache_op_scope <= cache_op_scope_int;
@@ -1111,13 +1091,13 @@ BEGIN
   -- CACR (Cache Control Register) bit definitions for MC68030:
   -- Bit 0 (IE): Instruction Cache Enable (sticky)
   -- Bit 1 (FI): Instruction Cache Freeze - inhibit replacement (sticky)
-  -- Bit 2 (CEI): Clear Entry in Instruction Cache (self-clearing, 68040)
+  -- Bit 2 (CEI): Clear Entry in Instruction Cache (self-clearing)
   -- Bit 3 (CI): Clear Instruction Cache (self-clearing)
   -- Bit 4 (IBE): Instruction Burst Enable (sticky)
   -- Bits 7-5: Reserved (should read as 0, writes ignored)
   -- Bit 8 (DE): Data Cache Enable (sticky)
   -- Bit 9 (FD): Data Cache Freeze (sticky, used by AmigaOS for 68030 detection)
-  -- Bit 10 (CED): Clear Entry in Data Cache (self-clearing, 68040)
+  -- Bit 10 (CED): Clear Entry in Data Cache (self-clearing)
   -- Bit 11 (CD): Clear Data Cache (self-clearing)
   -- Bit 12 (DBE): Data Burst Enable (sticky)
   -- Bit 13 (WA): Write Allocate (sticky)
@@ -1991,8 +1971,11 @@ PROCESS (clk, regfile, RDindex_A, RDindex_B, exec, rte_mmu_fix_commit, rte_mmu_f
 					WR_AReg <= rf_dest_addr(3);
 					RDindex_A <= conv_integer(rf_dest_addr(3 downto 0));
 					RDindex_B <= conv_integer(rf_source_addr(3 downto 0));
+					-- Abort ordinary instruction retirement, but not the exception-entry
+					-- A7 load that switches a user fault onto the supervisor stack.
 					IF Wwrena='1' AND
 					   (arch_commit_ena='1' OR
+					    (exec(changeMode)='1' AND berr_exception_active='1') OR
 					    ((pmmu_fault='1' OR arch_abort_pending='1') AND
 					     micro_state=movem2 AND opcode(10)='1' AND
 					     RDindex_A/=conv_integer(movem_transfer_reg))) THEN
@@ -4217,7 +4200,8 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 					-- When clkena_lw fires next with pmmu_fault='1', this proves it's
 					-- a NEW fault, enabling the double bus fault check to fire even when
 					-- pmmu_fault_dispatched='1' (which couldn't clear during the stall).
-					IF pmmu_fault = '0' THEN
+					IF berr_exception_active = '1' AND
+					   pmmu_fault_dispatched = '1' AND pmmu_fault = '0' THEN
 						pmmu_fault_was_cleared <= '1';
 					END IF;
 				END IF;
@@ -7555,7 +7539,9 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
                 -- Order: Internal($1E/1C) -> DataOut($1A/18) -> Internal($16/14) -> FaultAddr($12/10)
                 --        -> InstrPipe($0E/0C) -> SSW($0A/08) -> Format/PC_Lo($06/04) -> SR/PC_Hi($02/00)
                 -- MC68030 Format $B extra fields
-                -- Pushes 15 zero longwords for offsets $58-$20 (internal state stubs).
+                -- Pushes zero for the implementation-private internal-state
+                -- fields at offsets $58-$20. Astra recovery never restarts
+                -- from those fields; it supplies/collapses the fault frame.
                 -- After loop completes (rot_cnt=1), falls through to berr1-berr8
                 -- for the standard bus fault frame fields (offsets $1C-$00).
                 WHEN berr_fill =>

@@ -2023,3 +2023,335 @@ result is attributed to it. It does not supersede persistent hardware release
 SCCs, meet 12.5 MHz CPU and 60 MHz SDRAM plus every other release constraint,
 then pass repeated PMMU, POST, SDRAM, kernel-entry, and HDMI checks on the ULX3S
 attached to NUC.
+
+## 2026-07-22: F4DC1E18 PMMU candidate route and SRAM promotion
+
+The PMMU repair above is committed as exact source
+`5798c5575a5bf6d5ca37eae2fbe63cb0528ad6e8`. Immutable Beast snapshot
+`/tmp/astra68-k1-p18` produced the full production image with divider 0,
+12.5 MHz CPU, 60 MHz SDRAM, SDRAM/HDMI/USB/SD/AstraHost enabled, 1024 stage-0
+ROM words, seed 4, heap placer, router1, timing weight 20, the measured critical
+floorplan, and resource profile `kernel_platform_v1`. Yosys was
+0.64+159 (`5197b9c8c`), GHDL was 7.0.0-dev
+(`6.0.0.r122.g97d7d81a7.dirty`), and the target compiler was
+`m68k-linux-gnu-gcc` 13.3.0.
+
+All exact pre-route regressions pass:
+
+- 90 shared framework/adapter unit tests, all 30 shared Musashi/RTL matrix
+  executions, both retained Harte smoke targets, and eight focused PMMU Questa
+  benches;
+- full 137-variant strict Questa inventory at 111 clean, 18 classified
+  simulation failures, 3 stale compile failures, and 5 unscored diagnostics,
+  with every changed PMMU case clean;
+- full integrated CPU coretest (`CORETEST PASS`), all directed graphics
+  engines plus `VEGA VIDEO PASS frames=25`, and integrated normal, INDEX8, and
+  RGB565 graphics at maxima 505, 1103, and 1429 clocks against the 1906-clock
+  scanline deadline.
+
+Canonical synthesis has zero combinational SCCs and maps 52,943 LUT4s, 25,522
+synthesized FFs, 101 `DP16KD`s, and 18 multipliers. The exact full route packs
+66,377 of 83,640 TRELLIS_COMB cells, 25,555 FFs, 101 block RAMs, and 18
+multipliers, leaving 17,263 combinational sites. Every constrained clock passes:
+
+| Domain | Required | Achieved |
+|---|---:|---:|
+| CPU | 12.500000 MHz | 14.015417 MHz |
+| SDRAM | 60.002399 MHz | 66.423111 MHz |
+| USB | 48.000767 MHz | 72.432274 MHz |
+| pixel | 27.000029 MHz | 55.673088 MHz |
+| HDMI shift | 135.025650 MHz | 307.125305 MHz |
+
+The limiting 15.055 ns SDRAM-domain cone starts at AstraHost
+`active_timeout_count[0]`, traverses its timeout increment and service-control
+logic, and ends in a service FSM register. It contains approximately 5.29 ns
+logic and 9.77 ns routing and still has 1.61 ns margin against the exact
+16.666 ns requirement. No production clock has a failed cone.
+
+| Artifact | SHA-256 |
+|---|---|
+| stage-0 hex | `7de247f66f2840b26692962118778cddf074f818f08dc61966a0e153439a1820` |
+| system-ROM package | `58c29486d387fa8d8087252a1a238c4af766fe3144643e56c7b81a6b9299ccc6` |
+| routed JSON | `cac12300397576b12ce9a386762d2d06c2f805ff6ebb98d1b36aa963f03a84e3` |
+| production bitstream | `bf6b86079227e042676ef495903162212a19092ab28fa83a7a09fbd261381d35` |
+| release manifest | `f6f8afebc9a78e98aa0e7c6163e9ffc1228b6a69d1c4698b6945b76e1c522038` |
+
+The NUC one-shot AstraHost image mounted the existing 244,016 MB card without
+formatting and atomically replaced only `/ASTRA68.ROM`. It reported 17,652
+payload bytes and CRC32 `c7162f5a`; exact normal read-only AstraHost firmware
+was then restored and remounted the same card. Three independent SRAM loads of
+the already-hashed bitstream each matched build `F4DC1E18`, full source
+identity, and ROM CRC32 `C7162F5A`, then passed complete POST, full 32 MiB BIST,
+Astraea DMA, the 100 Hz Vesta timer, AstraHost runtime/input initialization,
+and `K0 ENTRY PASS` in 1.615-1.627 seconds. The retained 32-bit CPU SDRAM result
+is approximately 178.6-179.0 MB/s write and 190.7 MB/s read; Astraea is
+approximately 87.8 MB/s fill and 37.85 MB/s copy.
+
+This promotes the repaired design to the exact SRAM candidate and disproves a
+nontranslated hardware regression. The current K0 kernel still prints `PMMU
+present, disabled`. NUC also has no HDMI capture device enumerated. Persistent
+FPGA flash therefore remains exact `6C0D0CA3` until PMMU hardware qualification,
+physical HDMI confirmation, and the other release gates pass. No rebuild or
+repack is permitted between those gates and persistent programming.
+
+### Hardware-profile PMMU coretest
+
+The first temporary SD coretest package was rejected as hardware evidence. It
+had been left by `run_sim.sh` with `CORETEST_SIM_IRQ`, reached deterministic
+failure ID `00100720`, and expected the simulation-only synthetic bus-error
+MMIO trigger at `0xfff00604`. That trigger is intentionally absent from the
+physical SoC; the result did not identify a CPU or PMMU defect.
+
+NUC then rebuilt `sw/coretest` clean with the normal hardware profile and the
+canonical `m68k-linux-gnu-gcc` 13.3.0 toolchain. The resulting 64,372-byte
+binary has SHA-256
+`5e365916f72b785a9f904b98f5d47af1ed943040dca85254bd0dfaef2bd6f012`.
+Its Astra package has payload CRC32 `2fa3100c` and SHA-256
+`a18b8fe11c3a311ceabb77f4c11d1f32eeb1bbf65cec13bce49df2d04249dd64`.
+One-shot maintenance firmware mounted the existing 244,016 MB card without
+formatting and atomically replaced only `/ASTRA68.ROM`; unrelated card contents
+were preserved.
+
+The already-hashed `F4DC1E18` production bitstream loaded into FPGA SRAM and
+reported `CORETEST PASS sum=74A6EC6D` in 3.864 seconds. This physical execution
+includes PMMU register read/write, CRP setup, cold three-level table walks,
+logical-to-physical translated reads and writes, an invalid-root access fault
+with format-B recovery, and a write-protected page fault that leaves physical
+memory unchanged. It therefore closes the basic translated-access and
+protection board probe for this exact route.
+
+The test does not create adversarial Astraea or Vega traffic during descriptor
+walks, so it does not prove that every walk remains indivisible at the SDRAM
+arbiter. That K1 table-walk lock remains open. After capture, the exact 17,652-
+byte production package (CRC32 `c7162f5a`) and normal read-only AstraHost were
+restored. A final reload of the same `F4DC1E18` bitstream matched build and ROM
+identity and repeated complete POST, 32 MiB BIST, DMA, runtime/input startup,
+and `K0 ENTRY PASS` in 1.616 seconds. Persistent FPGA flash was not changed.
+
+### K-HW3 PMMU table-walk RMC checkpoint
+
+The physical coretest above proves translation and protection but the routed
+`F4DC1E18` wrapper still forwarded only the CPU kernel's ordinary atomic-cycle
+RMC output. It did not reserve the shared SDRAM owner across gaps between PMMU
+descriptor transfers, contrary to MC68030 UM 9.5.2. The retained source delta
+in independent Beast snapshot `/tmp/astra68-k1-p20` derives a table-search
+interval from the first walker request through every non-idle walker state and
+forces external RMC low for that complete interval. The existing CPU bridge
+synchronizes that level into the 60 MHz domain, and the existing SDRAM owner
+FSM reserves CPU ownership before accepting a request.
+
+An initial experiment forced RMC from general `debug_pmmu_busy`. It passed the
+focused PMMU test but produced 776 lock intervals over only three directed
+translations because PMMU busy also covers ordinary ATC-hit result
+registration. That version was rejected: it would unnecessarily reserve SDRAM
+on routine translated accesses and reduce DMA/scanout availability. The
+retained expression uses walker request/state only. Its exact source identities
+are:
+
+| Source | SHA-256 |
+|---|---|
+| `tg68k030_mmu2_wrap.vhd` | `b5ff0ea4fd36186a272a86048f963756c0227db5f7a6d3893111d34eb7f116eb` |
+| `TG68K_PMMU_030.vhd` | `cd7de9e1cc714acee98263f3d28ea05cfd195c9fe9fcb76257c3fecdd276b22b` |
+| `tb_coretest.sv` | `5b79ee759722c65e632b8a092310e3a910ebfa03eea08d44e9336b217d7c681a` |
+| `tb_sdram32_cpu_bridge.sv` | `cd1aa433ab4ff598e3c381b55b6ea0ff3c1834ec14ebab82e6da1f2b6b90d21a` |
+| `tb_sdram32_controller.sv` | `ea0afcd596c37e1d3b3ee74d5ae500ba593e45f62504305a34584aec2ff66553` |
+
+Beast results on the exact snapshot are:
+
+- the CDC bridge passes three uncached descriptor requests with deliberate
+  idle CPU gaps, keeps the synchronized memory-domain lock continuously high,
+  and reports `SDRAM32 CPU BRIDGE PASS ... native=25`;
+- the SDRAM controller gives a three-request PMMU-style sequence uninterrupted
+  ownership while simultaneous video and DMA requests remain queued through
+  both idle gaps, then services video and DMA after unlock;
+- every directed graphics test remains clean, including controller throughput
+  of 115.71 MB/s write and 114.15 MB/s read, Astraea copy/fill, Draw, Copper,
+  Chip, sprite, and `VEGA VIDEO PASS frames=25`;
+- focused PMMU coretest passes with 22 actual table-search intervals, 289
+  locked cycles, and 151 locked idle-bus cycles;
+- complete CPU coretest passes with 19 actual table-search intervals, 250
+  locked cycles, and 130 locked idle-bus cycles. Every successful and faulted
+  walk releases RMC before `CORETEST PASS`.
+
+This checkpoint is simulation-only. No synthesis, SCC count, mapped resource
+count, placement, route, constrained-clock result, bitstream, or board result
+is attributed to the K-HW3 delta. Group it with the remaining K1 hardware
+contract fixes, then remap and route the exact complete production image rather
+than spending a full route on each small prerequisite independently.
+
+### K-HW4 Vesta IACK and timer-race checkpoint
+
+Independent Beast snapshot `/tmp/astra68-k1-p21` groups K-HW3 with the Vesta
+changes needed before timer-driven preemption. Vesta now samples the selected
+vector/valid pair when the CPU-space IACK transaction starts and holds it until
+the transaction ends. The SoC drives that transaction strobe directly from the
+MC68030 CPU-space acknowledge decode, so the registered result is stable before
+the bus FSM presents data and asserts DSACK. A disappearing source, a same-IPL
+replacement, and a source arriving after a spurious acknowledge cannot alter
+the in-flight vector.
+
+Timer low-byte control writes now have an explicit restart command semantic:
+`ENABLE=1` resets the prescaler and reloads the current `LOAD` whether the timer
+was stopped or running. An expiration on the same edge remains sticky while the
+new interval starts. Undefined upper-byte writes no longer reset the prescaler,
+and zero load expires on the first prescaled tick rather than underflowing.
+
+| Source | SHA-256 |
+|---|---|
+| `vesta_irq_timer.sv` | `5cfdcf88d19dbd71f29689bfa22975f4b646ff027a8bb16cd238f4eecd506362` |
+| `astra_soc.sv` | `2019e0579ea463e62cafc9a86761883fd3a68d0361a835759d9cad1700e6e2e6` |
+| `tb_vesta_irq_timer.sv` | `0dc9b00bceb5f414ccc9fe08e13ab82f43207b97c3ac45370928bdc9ac36d8cd` |
+
+The expanded controller test passes under both Icarus and Verilator. It covers
+level-source ACK behavior, edge ACK while the line remains high, simultaneous
+edge/ACK capture, source replacement while IACK is held, stable spurious IACK,
+all 32 priority-encoder leaves, periodic and one-shot expiry, running restart,
+restart on the exact terminal edge, set-dominant status, prescaler preservation
+across undefined byte writes, and load zero. The focused TG68K IRQ coretest also
+passes through the production SoC bus and vectored CPU-space acknowledge path.
+
+This remains a simulation-only grouped checkpoint. It has no new synthesis,
+resource, SCC, placement, route, timing, bitstream, or board claim. Hardware
+promotion must exercise repeated timer interrupts, reprogramming races, and
+measured interrupt latency using the exact routed production image.
+
+### K1 translated-kernel and user-copy checkpoint
+
+Independent Beast snapshot `/tmp/astra68-k1-p27`, based on committed source
+`5798c5575a5bf6d5ca37eae2fbe63cb0528ad6e8` plus the recorded K-HW3/K-HW4 and
+K1 software deltas, built with canonical `m68k-linux-gnu-gcc` 13.3.0. The
+kernel installs a dedicated vector-2 entry, decodes Motorola format-A/B frames,
+accepts recovery only for an active bounded user-copy range and a registered
+SFC/DFC `MOVES` instruction, rewrites only the stacked PC, collapses the long
+frame to format 0, and restores the prior function-code register before
+returning `BAD_ADDRESS`.
+
+The exact full pin-level SDRAM run used Verilator 5.047 and the complete p27
+SoC source, rebuilt its generated TG68K core and simulator, and passed:
+
+- complete POST and 32 MiB four-sweep BIST at 115.04 MB/s;
+- PMMU enable with SRP `0x02004000` and a separate temporary CRP;
+- valid user read/write translation plus deliberate unmapped SFC and DFC
+  faults through the production vector-2 entry;
+- exact address-space teardown back to 7,993 free of 8,192 physical frames;
+- two vectored 100 Hz timer interrupts; and
+- `K0 ENTRY PASS`, `KERNEL IDLE`, and scratch status `0x4b304f4b`.
+
+The same boot binary then ran unchanged through AstraVM's vendored Musashi
+68030/PMMU backend. AstraVM now models the current front-panel aperture,
+Vesta's periodic timer, programmable vectored interrupt controller, immediate
+level-line deassertion, and kernel scratch status. It reached the same user-copy
+and timer milestones followed by `K0 ENTRY PASS`.
+
+| Artifact | SHA-256 |
+|---|---|
+| boot binary, 29,140 bytes | `382eddc628a7e2bebf416d31b9441f0ba2e7fc863e5a360dc96d12da6415fc4a` |
+| packaged ROM, CRC32 `7b7934ec` | `7404c35e73f953ee309dbf8309f9f70d31cf3d53ab5f0ecaeebc4fd945b4c801` |
+| kernel binary, 17,860 bytes | `979347f21105a865243b5076b4ef9b04a9a3212fa386a2aebaf43f4177dae0ab` |
+| Verilated pin-level executable | `8eb55e8a7b9d8fc76d01b5da24b75c9353536b895687926320ab54eb2b623150` |
+
+This checkpoint adds no synthesis, mapped resource, SCC, placement, route,
+constrained-clock, bitstream, or board claim. The active hardware blocker
+remains an exact full route and NUC promotion of grouped K-HW3/K-HW4 plus this
+ROM. The active software blocker is the first real process/context/syscall path;
+the current startup address space is a bounded mechanism check, not a process
+scheduler.
+
+## 2026-07-22: K1 protected-multitasking simulation checkpoint
+
+Independent Beast snapshot `/tmp/astra68-k1-p28` is based on committed source
+`5798c5575a5bf6d5ca37eae2fbe63cb0528ad6e8` plus the recorded K-HW3/K-HW4,
+kernel, emulator, test, and documentation deltas. The snapshot is intentionally
+not assigned a release build ID because those deltas are not yet committed.
+This section records simulation evidence only.
+
+The first complete two-process run reached timer preemption and syscalls but
+failed when the deliberate user access fault arrived after repeated trap/RTE
+and interrupt traffic. Waveform and architectural-state tracing showed USP
+`0x70001000`, ISP `0x0202a000`, and post-fault A7 `0x70000fa4`: the format-B
+frame had been stacked on the user stack. During the exception mode-switch
+cycle the register datapath correctly selected ISP, but `arch_abort_pending`
+suppressed the A7 register-file commit. A second independent zero-wait issue
+allowed the original fault's deassertion to arm the second-fault detector.
+
+The retained MC68030-kernel correction is deliberately narrow:
+
+- an active access-fault exception may commit the `changeMode` A7 bank switch,
+  while ordinary writes from the aborted instruction remain blocked; and
+- `pmmu_fault_was_cleared` may arm only after the original PMMU fault has been
+  dispatched during active bus-error exception entry.
+
+The new `tb_mmu_user_fault_after_traps.vhd` regression executes eight user
+TRAP/RTE cycles with two interrupt collisions and then faults a user data
+access. Questa Lattice OEM 2024.2 passes the test both with inserted memory
+wait states and with `INSERT_MEMORY_WAIT=false`. In both modes the frame is on
+ISP at `0x02003fa4`, has format B with the expected user SR, PC, SSW, and fault
+address, and returns to live user execution. Both runs finish with zero errors
+and zero warnings.
+
+The exact p28 broad gates are:
+
+- all 11 kernel host suites pass normally, under GCC `-fanalyzer`, and under
+  ASan/UBSan with leak detection;
+- all 15 AstraVM Rust tests, rustfmt, and Clippy `-D warnings` pass;
+- all 90 shared framework tests, all 30 executions of the 15-case
+  Musashi/RTL matrix, and both retained Harte smoke adapters pass; and
+- the strict Questa inventory is 139 variants and 113 clean after adding the
+  focused trap/fault and Motorola CACR mixed-command tests; its 3 compile
+  failures, 18 classified simulation
+  failures, and 5 unscored diagnostics are unchanged from the locked baseline;
+- all directed graphics tests and all three integrated graphics profiles pass
+  with worst-case line costs of 505, 1,103, and 1,429 cycles; and
+- the production-form ROM, rebuilt with `SCHED_TRACE=0`, passes unchanged on
+  AstraVM's vendored Musashi MC68030/PMMU backend and the complete pin-level
+  Verilated SoC/SDRAM model.
+
+The process lifecycle services deferred device cleanup only from bounded
+process-context safe points and the interruptible supervisor idle loop, not
+from the hard 100 Hz timer path. Host coverage proves that pinned DMA keeps a
+dying process in `EXITING`, completion releases it on maintenance, and the
+final process may exit or fault into idle instead of panicking.
+
+The final dirty full RTL run uses Verilator 5.047, performs complete POST and
+the 32 MiB four-sweep BIST at 115.04 MB/s, enables the PMMU with SRP
+`0x02004000`, verifies
+bounded SFC/DFC user-copy recovery, starts two isolated user processes, takes
+100 Hz timer preemption, and terminates only the deliberate offender. It
+reports three context switches and exits at simulated 546 ms with
+`K1 PROTECTED ENTRY PASS`, `KERNEL MULTITASKING`, and scratch status
+`0x4b314f4b`. Musashi reports the same milestones and three context switches
+from the unchanged image.
+
+A separate full-SoC diagnostic image deliberately calls `kernel_panic` after
+PMMU and timer initialization. It prints the panic reason and build metadata,
+sets retained early-log panic state, and reaches scratch status `0x4b50414e`;
+the testbench reports `KERNEL PANIC PASS`. A second diagnostic writes the exact
+unmapped supervisor stack guard at `0x02028000`; vector 2 supplies a format-A
+frame and exact fault address to the same retained panic oracle. Both
+diagnostics pass.
+
+The final VM delta independently invalidates both caches before whole-address-
+space descriptor removal and frame reuse. Host tests inspect the exact guard,
+reject a duplicate cached user alias, prove remap after unmap, and count the
+destruction invalidation. The normal full-RTL workload then proves distinct
+same-logical-address code and stack data across CRPs with both caches enabled.
+The CACR RTL no longer priority-decodes simultaneous CI/CD or CEI/CED commands;
+a Motorola-directed test covers every single and mixed command combination.
+
+| Artifact | Size | SHA-256 |
+|---|---:|---|
+| boot binary | 35,120 bytes | `6f78f788b6b9f6b7bdadd991552a2de622735adc674a167903f74e348eb5e940` |
+| packaged ROM, payload CRC32 `bada6c8e` | 35,152 bytes | `0f89f48accec95bf530575c46044a1e6ad42f2d2a8080d0a0ad471d333a283a9` |
+| kernel binary | 23,840 bytes | `d6ab7a47d5bed2794ff99a0d1c3cb92487787073833b47b48a147941ebe26bd7` |
+| Verilated pin-level executable | - | `846a13104f4d2a92ee9a8b6f6d2fbe366cb307167764a79944c9b2272bb4b9ea` |
+| shared matrix report | - | `1b59ec8f81826128a0b2a5de1c02ce8c2ebccd2f958b3ce74db17739032ac760` |
+| Harte Musashi smoke report | - | `feaa379b2be027c23d764b2fe7a69f3fb03eb460490b5bb700828de0ae4ee417` |
+| Harte RTL smoke report | - | `673a24232a62d4818a9717784af722a8a64b824d5e094fa3a3b633362a518459` |
+
+No synthesis, SCC count, mapped resource count, placement, route, constrained
+clock, bitstream, or board result is attributed to p28. Promotion requires the
+K1 delta to be committed, then the exact complete production image with a
+nonzero build identity must meet the 12.5 MHz CPU, 60 MHz SDRAM, and every
+other release constraint. The already-routed bitstream must then pass repeated
+PMMU, POST, SDRAM, timer, fault-containment, kernel-entry, and physical HDMI
+checks on the ULX3S attached to NUC, followed by the K1 long-soak gate.

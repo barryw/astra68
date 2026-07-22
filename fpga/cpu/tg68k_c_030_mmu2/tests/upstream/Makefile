@@ -438,6 +438,16 @@ test-mmu-user-data-fault-recovery: setup
 	@cd $(TEST_DIR) && $(VCOM) -93 $(TEST_DIR)/tb_mmu_user_data_fault_recovery.vhd
 	@cd $(TEST_DIR) && $(VSIM) -c -do "run 600us; quit -f" tb_mmu_user_data_fault_recovery
 
+test-mmu-user-fault-after-traps: setup
+	@echo "Running user PMMU fault-after-syscalls regressions..."
+	@cd $(TEST_DIR) && $(VCOM) -93 $(RTL_DIR)/TG68K_Pack.vhd
+	@cd $(TEST_DIR) && $(VCOM) -93 $(RTL_DIR)/TG68K_ALU.vhd
+	@cd $(TEST_DIR) && $(VCOM) -93 $(RTL_DIR)/TG68K_PMMU_030.vhd
+	@cd $(TEST_DIR) && $(VCOM) -93 $(RTL_DIR)/TG68KdotC_Kernel.vhd
+	@cd $(TEST_DIR) && $(VCOM) -93 $(TEST_DIR)/tb_mmu_user_fault_after_traps.vhd
+	@cd $(TEST_DIR) && $(VSIM) -c -do "onbreak {quit -code 1}; set BreakOnAssertion 2; set StdArithNoWarnings 1; set NumericStdNoWarnings 1; run 600us; quit -code 0" tb_mmu_user_fault_after_traps
+	@cd $(TEST_DIR) && $(VSIM) -c -gINSERT_MEMORY_WAIT=false -do "onbreak {quit -code 1}; set BreakOnAssertion 2; set StdArithNoWarnings 1; set NumericStdNoWarnings 1; run 600us; quit -code 0" tb_mmu_user_fault_after_traps
+
 test-fault: test-fault-recovery test-mmu-fetch-fault-frame test-berr-frame test-addr-error-pmmu
 	@echo "Fault handling suite complete."
 
@@ -1375,4 +1385,3 @@ test-jmp-record37-ori-tail: setup
 	@cd $(TEST_DIR) && $(VCOM) -93 $(RTL_DIR)/TG68KdotC_Kernel.vhd
 	@cd $(TEST_DIR) && $(VCOM) -93 $(TEST_DIR)/tb_jmp_record37_ori_tail.vhd
 	@cd $(TEST_DIR) && $(VSIM) -c -do "set StdArithNoWarnings 1; set NumericStdNoWarnings 1; run 40us; quit -f" tb_jmp_record37_ori_tail
-

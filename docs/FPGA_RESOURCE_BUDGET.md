@@ -55,6 +55,39 @@ later block will route. Every added block still needs isolated and integrated
 measurements. Congestion can become the practical limit before the device is
 numerically full.
 
+## F4DC1E18 K1 candidate
+
+Committed source `5798c5575a5bf6d5ca37eae2fbe63cb0528ad6e8` adds the retained
+PMMU restart and translated exception-stack repairs without changing the
+production feature set. Canonical Beast Yosys `-abc2` mapping reports 52,943
+LUT4s, 25,522 synthesized FFs, 101 block RAMs, and 18 multipliers. The exact
+strict seed-4 heap/router1 route packs:
+
+| Resource | Used | Physical free |
+|---|---:|---:|
+| TRELLIS_COMB | 66,377 (79.36%) | 17,263 |
+| TRELLIS_FF | 25,555 (30.55%) | 58,085 |
+| DP16KD | 101 (48.56%) | 107 |
+| MULT18X18D | 18 (11.54%) | 138 |
+
+It passes every exact constraint at 14.015417 MHz CPU, 66.423111 MHz SDRAM,
+72.432274 MHz USB, 55.673088 MHz pixel, and 307.125305 MHz HDMI shift. The
+bitstream SHA-256 is
+`bf6b86079227e042676ef495903162212a19092ab28fa83a7a09fbd261381d35`.
+Three independent SRAM loads pass exact identity, full POST, 32 MiB BIST, DMA,
+runtime/input initialization, and K0 kernel entry. A separate hardware-profile
+coretest passes PMMU translation, invalid-descriptor recovery, and write
+protection on the same exact routed image without changing these resource
+counts. This remains a candidate rather than the routed release baseline until
+the complete PMMU table-walk arbitration lock, physical HDMI check, and
+reset-from-flash acceptance pass.
+
+The follow-on K-HW3 source delta derives RMC from actual walker request/state
+and closes the table-walk arbitration contract in simulation. It is not part of
+the `F4DC1E18` mapped or routed counts above. Do not assign it a resource delta
+until the complete production design is remapped; its route must still meet all
+locked clocks and the unrestricted physical-capacity policy.
+
 ## B1F9E60D rollback comparison
 
 The prior `B1F9E60D` route packed 66,093 TRELLIS_COMB cells, 25,449 FFs,

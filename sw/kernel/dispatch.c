@@ -1,0 +1,138 @@
+#include "dispatch.h"
+
+#include "exception.h"
+#include "panic.h"
+#include "platform.h"
+#include "process.h"
+#include "user_copy.h"
+#if ASTRA_KERNEL_SCHED_TRACE
+#include "vesta.h"
+#endif
+
+#include <stddef.h>
+
+#if ASTRA_KERNEL_SCHED_TRACE
+static void scheduler_trace(uint32_t value)
+{
+    VESTA->SCRATCH = value;
+}
+#else
+static void scheduler_trace(uint32_t value)
+{
+    (void)value;
+}
+#endif
+
+static void run_deferred_work(void)
+{
+    KernelProcessStatus status = kernel_process_maintenance();
+
+    if (status != KERNEL_PROCESS_OK && status != KERNEL_PROCESS_DEFERRED)
+        kernel_panic("kernel maintenance failed");
+}
+
+void kernel_idle_maintenance(void)
+{
+    run_deferred_work();
+}
+
+static KernelCpuContext *dispatch_user_fault(const uint32_t *registers,
+                                             const void *raw_frame,
+                                             uint32_t user_stack)
+{
+    KernelCpuContext *next = NULL;
+    KernelProcessStatus status;
+
+    if (!kernel_process_active())
+        kernel_exception_panic(raw_frame);
+    scheduler_trace(0x4b46494eu); /* KFIN */
+    status = kernel_process_on_fault(registers, user_stack, raw_frame, &next);
+    if (status == KERNEL_PROCESS_NO_RUNNABLE && next == NULL &&
+        !kernel_process_active())
+        return NULL;
+    if (status != KERNEL_PROCESS_OK || next == NULL)
+        kernel_panic("user-fault process teardown failed");
+    scheduler_trace(0x4b464f55u); /* KFOU */
+    return next;
+}
+
+KernelCpuContext *kernel_exception_entry_dispatch(const uint32_t *registers,
+                                                  const void *raw_frame,
+                                                  uint32_t user_stack)
+{
+    KernelExceptionFrame frame;
+
+    if (kernel_exception_decode(raw_frame, KERNEL_EXCEPTION_FRAME_MAX_SIZE,
+                                &frame) != KERNEL_EXCEPTION_OK ||
+        frame.from_user == 0u)
+        kernel_exception_panic(raw_frame);
+    return dispatch_user_fault(registers, raw_frame, user_stack);
+}
+
+KernelCpuContext *kernel_access_entry_dispatch(const uint32_t *registers,
+                                               void *raw_frame,
+                                               uint32_t user_stack)
+{
+    KernelExceptionFrame frame;
+
+    if (kernel_user_copy_handle_fault(raw_frame))
+        return NULL;
+    if (kernel_exception_decode(raw_frame, KERNEL_EXCEPTION_FRAME_MAX_SIZE,
+                                &frame) != KERNEL_EXCEPTION_OK ||
+        frame.from_user == 0u)
+        kernel_exception_panic(raw_frame);
+    return dispatch_user_fault(registers, raw_frame, user_stack);
+}
+
+KernelCpuContext *kernel_syscall_entry_dispatch(const uint32_t *registers,
+                                                const void *raw_frame,
+                                                uint32_t user_stack)
+{
+    KernelCpuContext *next = NULL;
+    KernelProcessStatus status;
+
+    if (!kernel_process_active())
+        kernel_exception_panic(raw_frame);
+    kernel_enable_interrupts();
+    run_deferred_work();
+    kernel_disable_interrupts();
+    scheduler_trace(0x4b53494eu); /* KSIN */
+    status = kernel_process_on_syscall(registers, user_stack, raw_frame,
+                                       &next);
+    if (status == KERNEL_PROCESS_NO_RUNNABLE && next == NULL &&
+        !kernel_process_active())
+        return NULL;
+    if (status != KERNEL_PROCESS_OK || next == NULL)
+        kernel_panic("syscall left no runnable process");
+    scheduler_trace(0x4b534f55u); /* KSOU */
+    return next;
+}
+
+KernelCpuContext *kernel_timer_entry_dispatch(const uint32_t *registers,
+                                              const void *raw_frame,
+                                              uint32_t user_stack)
+{
+    KernelExceptionFrame frame;
+    KernelCpuContext *next = NULL;
+    KernelProcessStatus status;
+
+    if (!kernel_interrupt_dispatch())
+        return NULL;
+    if (kernel_exception_decode(raw_frame, KERNEL_EXCEPTION_FRAME_MAX_SIZE,
+                                &frame) != KERNEL_EXCEPTION_OK)
+        kernel_exception_panic(raw_frame);
+
+    /*
+     * An IRQ can be accepted after an exception vectors but before its entry
+     * stub masks interrupts.  Preserve that supervisor frame and let RTE
+     * resume the interrupted handler; only user frames are schedulable.
+     */
+    if (frame.from_user == 0u || !kernel_process_active())
+        return NULL;
+    scheduler_trace(0x4b54494eu); /* KTIN */
+    status = kernel_process_on_timer(registers, user_stack, raw_frame, &next);
+    if (status != KERNEL_PROCESS_OK || next == NULL)
+        kernel_panic("timer scheduler dispatch failed");
+    scheduler_trace(0x4b544f55u); /* KTOU */
+    return next;
+}

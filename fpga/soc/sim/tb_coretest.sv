@@ -612,6 +612,12 @@ module tb_coretest #(
     integer pmmu_wait_cycles = 0;
     integer pmmu_trace_count = 0;
     reg pmmu_trace_armed = 1'b0;
+    wire pmmu_table_search =
+        dut.g_tg68k_enabled.tg_cpu.pmmu_table_search;
+    reg pmmu_table_search_d = 1'b0;
+    integer pmmu_rmc_busy_cycles = 0;
+    integer pmmu_rmc_gap_cycles = 0;
+    integer pmmu_rmc_walks = 0;
 `ifdef CORETEST_SIM_FB_GUARD
     integer framebuffer_guard_faults = 0;
     reg framebuffer_guard_fault_active = 1'b0;
@@ -682,6 +688,18 @@ module tb_coretest #(
                     $fatal(1, "expected one framebuffer guard fault, got %0d",
                            framebuffer_guard_faults);
 `endif
+                if (pmmu_rmc_walks != 0) begin
+                    if (pmmu_rmc_walks < 3)
+                        $fatal(1, "expected at least three PMMU walks, got %0d",
+                               pmmu_rmc_walks);
+                    if (pmmu_rmc_gap_cycles == 0)
+                        $fatal(1, "PMMU RMC never covered an idle bus gap");
+                    if (pmmu_table_search || dut.cpu_rmc_n !== 1'b1)
+                        $fatal(1, "PMMU RMC remained asserted after all walks");
+                    $display("PMMU RMC PASS walks=%0d busy=%0d gaps=%0d",
+                             pmmu_rmc_walks, pmmu_rmc_busy_cycles,
+                             pmmu_rmc_gap_cycles);
+                end
                 $display("\n*** CORETEST PASS detected ***");
                 $finish;
             end
@@ -701,6 +719,29 @@ module tb_coretest #(
                        ram_word(EXC_REC_BASE + 32'h0c),
                        ram_word(EXC_REC_BASE + 32'h10));
             end
+        end
+    end
+
+    // The wrapper must expose one indivisible external RMC interval for each
+    // complete table walk. In particular, RMC stays asserted while AS is idle
+    // between descriptor reads and releases after successful or faulted walks.
+    always @(posedge dut.clk) begin
+        if (!rstn || dut.rst) begin
+            pmmu_table_search_d <= 1'b0;
+            pmmu_rmc_busy_cycles <= 0;
+            pmmu_rmc_gap_cycles <= 0;
+            pmmu_rmc_walks <= 0;
+        end else begin
+            pmmu_table_search_d <= pmmu_table_search;
+            if (pmmu_table_search) begin
+                if (dut.cpu_rmc_n !== 1'b0)
+                    $fatal(1, "PMMU table search without external RMC assertion");
+                pmmu_rmc_busy_cycles <= pmmu_rmc_busy_cycles + 1;
+                if (dut.cpu_as_n)
+                    pmmu_rmc_gap_cycles <= pmmu_rmc_gap_cycles + 1;
+            end
+            if (pmmu_table_search_d && !pmmu_table_search)
+                pmmu_rmc_walks <= pmmu_rmc_walks + 1;
         end
     end
 

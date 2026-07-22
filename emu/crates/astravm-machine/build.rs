@@ -42,6 +42,7 @@ fn main() {
     build
         .include(&musashi)
         .include(&out_dir)
+        .define("M68K_EMULATE_INT_ACK", "M68K_OPT_ON")
         .flag_if_supported("-fno-common")
         .warnings(false)
         .files(&sources)

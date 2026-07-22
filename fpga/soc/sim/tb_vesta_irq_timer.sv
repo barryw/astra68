@@ -12,6 +12,7 @@ module tb_vesta_irq_timer;
     wire [31:0] read_data;
     reg [31:0] source_level = 32'd0;
     wire [2:0] cpu_ipln_n;
+    reg iack_strobe = 1'b0;
     reg [2:0] iack_level = 3'd0;
     wire [7:0] iack_vector;
     wire iack_valid;
@@ -35,7 +36,8 @@ module tb_vesta_irq_timer;
         .write_strobe(write_strobe), .write_data(write_data),
         .byte_enable(byte_enable), .read_data(read_data),
         .source_level(source_level), .cpu_ipln_n(cpu_ipln_n),
-        .iack_level(iack_level), .iack_vector(iack_vector),
+        .iack_strobe(iack_strobe), .iack_level(iack_level),
+        .iack_vector(iack_vector),
         .iack_valid(iack_valid)
     );
 
@@ -80,6 +82,49 @@ module tb_vesta_irq_timer;
         end
     endtask
 
+    task automatic begin_iack(
+        input [2:0] level,
+        input expected_valid,
+        input [7:0] expected_vector
+    );
+        begin
+            @(negedge clk);
+            iack_level = level;
+            iack_strobe = 1'b1;
+            @(posedge clk);
+            #1;
+            if (iack_valid !== expected_valid ||
+                iack_vector !== expected_vector)
+                $fatal(1, "IACK level %0d expected valid=%0d vector=%02x got valid=%0d vector=%02x",
+                       level, expected_valid, expected_vector,
+                       iack_valid, iack_vector);
+        end
+    endtask
+
+    task automatic expect_iack_held(
+        input expected_valid,
+        input [7:0] expected_vector
+    );
+        begin
+            #1;
+            if (iack_valid !== expected_valid ||
+                iack_vector !== expected_vector)
+                $fatal(1, "held IACK expected valid=%0d vector=%02x got valid=%0d vector=%02x",
+                       expected_valid, expected_vector,
+                       iack_valid, iack_vector);
+        end
+    endtask
+
+    task automatic end_iack;
+        begin
+            @(negedge clk);
+            iack_strobe = 1'b0;
+            iack_level = 3'd0;
+            @(posedge clk);
+            #1;
+        end
+    endtask
+
     initial begin
         repeat (3) @(posedge clk);
         rst = 1'b0;
@@ -88,9 +133,11 @@ module tb_vesta_irq_timer;
         expect_reg(IRQ_PENDING, 32'd0);
         expect_ipl(3'b111);
 
-        // Level interrupt, vector delivery, and spurious-vector fallback.
+        // Level interrupt, vector delivery, level-source ACK behavior, and
+        // transaction-stable IACK selection.
         write_reg(IRQ_CFG + 3, 32'h00005503, 4'b1111);
-        write_reg(IRQ_ENABLE, 32'h00000008, 4'b1111);
+        write_reg(IRQ_CFG + 6, 32'h00005603, 4'b1111);
+        write_reg(IRQ_ENABLE, 32'h00000048, 4'b1111);
         source_level[3] = 1'b1;
         #1;
         expect_ipl(3'b111);
@@ -98,14 +145,33 @@ module tb_vesta_irq_timer;
         #1;
         expect_ipl(3'b100);
         expect_reg(IRQ_CURRENT, 32'h80550303);
-        iack_level = 3'd3;
+        write_reg(IRQ_ACK, 32'h00000008, 4'b1111);
+        expect_reg(IRQ_PENDING, 32'h00000008);
+
+        begin_iack(3'd3, 1'b1, 8'h55);
+        source_level[3] = 1'b0;
+        source_level[6] = 1'b1;
+        repeat (2) @(posedge clk);
+        expect_iack_held(1'b1, 8'h55);
+        end_iack();
+        begin_iack(3'd3, 1'b1, 8'h56);
+        end_iack();
+
+        // A source appearing after a spurious acknowledge starts belongs to
+        // the next transaction; it cannot replace vector 24 in flight.
+        source_level = 32'd0;
+        @(posedge clk);
+        begin_iack(3'd3, 1'b0, 8'd24);
+        source_level[3] = 1'b1;
+        repeat (2) @(posedge clk);
+        expect_iack_held(1'b0, 8'd24);
+        end_iack();
+        begin_iack(3'd3, 1'b1, 8'h55);
+        end_iack();
+        source_level = 32'd0;
+        @(posedge clk);
         #1;
-        if (!iack_valid || iack_vector != 8'h55)
-            $fatal(1, "level-3 IACK expected vector 55");
-        iack_level = 3'd2;
-        #1;
-        if (iack_valid || iack_vector != 8'd24)
-            $fatal(1, "missing IACK source did not return spurious vector");
+        expect_ipl(3'b111);
 
         // A higher level wins; equal levels choose the lowest source number.
         write_reg(IRQ_CFG + 7, 32'h00008006, 4'b1111);
@@ -116,27 +182,38 @@ module tb_vesta_irq_timer;
         @(posedge clk);
         #1;
         expect_reg(IRQ_CURRENT, 32'h80660206);
-        iack_level = 3'd6;
-        #1;
-        if (!iack_valid || iack_vector != 8'h66)
-            $fatal(1, "same-level IACK did not choose lowest source");
+        begin_iack(3'd6, 1'b1, 8'h66);
+        end_iack();
         source_level = 32'd0;
         write_reg(IRQ_ENABLE, 32'd0, 4'b1111);
 
-        // Edge pending survives deassertion and ACK; a simultaneous rise wins
-        // over ACK so an event cannot be lost.
+        // Edge pending survives deassertion. ACK while the input remains high
+        // clears the latched event without inventing another edge; only a new
+        // low-to-high transition may relatch it. A simultaneous rise still
+        // wins over ACK so an event cannot be lost.
         write_reg(IRQ_CFG + 4, 32'h00016002, 4'b1111);
         write_reg(IRQ_ENABLE, 32'h00000010, 4'b1111);
         source_level[4] = 1'b1;
         @(posedge clk);
         #1;
+        expect_reg(IRQ_PENDING, 32'h00000010);
+        write_reg(IRQ_ACK, 32'h00000010, 4'b1111);
+        expect_reg(IRQ_PENDING, 32'd0);
+        repeat (2) @(posedge clk);
+        #1;
+        expect_reg(IRQ_PENDING, 32'd0);
+
         @(negedge clk);
         source_level[4] = 1'b0;
+        @(posedge clk);
+        @(negedge clk);
+        source_level[4] = 1'b1;
         @(posedge clk);
         #1;
         expect_reg(IRQ_PENDING, 32'h00000010);
         write_reg(IRQ_ACK, 32'h00000010, 4'b1111);
-        expect_reg(IRQ_PENDING, 32'd0);
+        @(negedge clk);
+        source_level[4] = 1'b0;
 
         @(negedge clk);
         source_level[4] = 1'b1;
@@ -206,6 +283,60 @@ module tb_vesta_irq_timer;
         #1;
         expect_ipl(3'b010);
 
+        // Restarting an already-running timer is atomic: a low-byte CTRL
+        // write with ENABLE set reloads VALUE from the current LOAD and resets
+        // the prescaler. This is the scheduler's deadline-reprogramming path.
+        write_reg(TIMER1 + 3, 32'd1, 4'b1111);
+        write_reg(TIMER1 + 0, 32'd8, 4'b1111);
+        write_reg(TIMER1 + 2, 32'h00000005, 4'b1111);
+        repeat (2) @(posedge clk);
+        #1;
+        expect_reg(TIMER1 + 1, 32'd6);
+        write_reg(TIMER1 + 0, 32'd7, 4'b1111);
+        write_reg(TIMER1 + 2, 32'h00000005, 4'b1111);
+        expect_reg(TIMER1 + 1, 32'd7);
+
+        // If the old deadline expires on the exact restart edge, the old
+        // event remains sticky while the new interval starts from LOAD.
+        write_reg(TIMER1 + 2, 32'd0, 4'b1111);
+        write_reg(TIMER1 + 3, 32'd1, 4'b1111);
+        write_reg(TIMER1 + 0, 32'd3, 4'b1111);
+        write_reg(TIMER1 + 2, 32'h00000005, 4'b1111);
+        repeat (2) @(posedge clk);
+        #1;
+        expect_reg(TIMER1 + 1, 32'd1);
+        write_reg(TIMER1 + 2, 32'h00000005, 4'b1111);
+        expect_reg(TIMER1 + 3, 32'd1);
+        expect_reg(TIMER1 + 2, 32'h00000005);
+        expect_reg(TIMER1 + 1, 32'd3);
+        write_reg(TIMER1 + 3, 32'd1, 4'b1111);
+
+        // CTRL has no defined bits outside the low byte. Such writes must not
+        // reset an active prescaler or perturb the deadline.
+        write_reg(TIMER1 + 2, 32'd0, 4'b1111);
+        write_reg(TIMER1 + 0, 32'd2, 4'b1111);
+        write_reg(TIMER1 + 2, 32'h00000025, 4'b1111);
+        repeat (2) @(posedge clk);
+        #1;
+        expect_reg(TIMER1 + 1, 32'd2);
+        write_reg(TIMER1 + 2, 32'hff000000, 4'b1000);
+        expect_reg(TIMER1 + 1, 32'd2);
+        @(posedge clk);
+        #1;
+        expect_reg(TIMER1 + 1, 32'd1);
+
+        // LOAD=0 has the same bounded behavior as LOAD=1: expiration on the
+        // first prescaled tick, never an underflow-length interval.
+        write_reg(TIMER1 + 2, 32'd0, 4'b1111);
+        write_reg(TIMER1 + 3, 32'd1, 4'b1111);
+        write_reg(TIMER1 + 0, 32'd0, 4'b1111);
+        write_reg(TIMER1 + 2, 32'h00000005, 4'b1111);
+        @(posedge clk);
+        #1;
+        expect_reg(TIMER1 + 3, 32'd1);
+        expect_reg(TIMER1 + 2, 32'h00000004);
+        expect_reg(TIMER1 + 1, 32'd0);
+
         // Expiration is set-dominant over a simultaneous status clear.
         write_reg(IRQ_ENABLE, 32'd0, 4'b1111);
         write_reg(TIMER0 + 2, 32'd0, 4'b1111);
@@ -224,7 +355,7 @@ module tb_vesta_irq_timer;
         for (test_source = 0; test_source < 32;
              test_source = test_source + 1) begin
             write_reg(IRQ_CFG + test_source[7:0],
-                      {16'd0, 8'(8'h90 + test_source), 5'd0, 3'd4},
+                      {16'd0, 8'(32'h90 + test_source), 5'd0, 3'd4},
                       4'b1111);
         end
         write_reg(IRQ_ENABLE, 32'hffffffff, 4'b1111);
@@ -235,13 +366,10 @@ module tb_vesta_irq_timer;
             #1;
             expect_ipl(3'b011);
             expect_reg(IRQ_CURRENT,
-                {1'b1, 7'd0, 8'(8'h90 + test_source), 3'd0,
+                {1'b1, 7'd0, 8'(32'h90 + test_source), 3'd0,
                  test_source[4:0], 5'd0, 3'd4});
-            iack_level = 3'd4;
-            #1;
-            if (!iack_valid || iack_vector != 8'(8'h90 + test_source))
-                $fatal(1, "source %0d vector selection failed", test_source);
-            iack_level = 3'd0;
+            begin_iack(3'd4, 1'b1, 8'(32'h90 + test_source));
+            end_iack();
         end
         source_level = 32'h81010010;
         @(posedge clk);

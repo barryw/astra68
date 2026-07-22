@@ -254,6 +254,26 @@ module tb_sdram32_cpu_bridge;
             $fatal(1, "fenced CPU request did not resume after release");
         response_cycles = 3;
 
+        // A PMMU walk holds RMC across several uncached descriptor requests
+        // and the idle CPU-clock gaps between them. The synchronized memory-
+        // domain lock must neither arrive late nor pulse low between requests.
+        cpu_lock = 1'b1;
+        wait (mem_lock);
+        issue(25'h0000300, 1'b0, 4'b1111, 32'd0,
+              1'b0, 1'b0, 23, 32'ha5000016);
+        repeat (4) @(posedge cpu_clk);
+        if (!mem_lock)
+            $fatal(1, "PMMU lock dropped in first descriptor gap");
+        issue(25'h0000304, 1'b0, 4'b1111, 32'd0,
+              1'b0, 1'b0, 24, 32'ha5000017);
+        repeat (3) @(posedge cpu_clk);
+        if (!mem_lock)
+            $fatal(1, "PMMU lock dropped in second descriptor gap");
+        issue(25'h0000308, 1'b0, 4'b1111, 32'd0,
+              1'b0, 1'b0, 25, 32'ha5000018);
+        cpu_lock = 1'b0;
+        wait (!mem_lock);
+
         if (cpu_line_hits != 2 || cpu_line_misses != 3)
             $fatal(1, "line counters mismatch hits=%0d misses=%0d",
                    cpu_line_hits, cpu_line_misses);

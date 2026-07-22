@@ -7,7 +7,7 @@ module tb_boot_sdram #(
     parameter bit PROGRESS = 1'b0,
     parameter bit EXPECT_KERNEL_PANIC = 1'b0
 );
-    localparam [31:0] KERNEL_STATUS_READY = 32'h4b304f4b;
+    localparam [31:0] KERNEL_STATUS_READY = 32'h4b314f4b;
     localparam [31:0] KERNEL_STATUS_PANIC = 32'h4b50414e;
     localparam [31:0] EARLY_LOG_MAGIC = 32'h41364c47;
     localparam longint unsigned BOOT_TIMEOUT_NS =
@@ -124,12 +124,21 @@ module tb_boot_sdram #(
     reg astraea_result_seen = 1'b0;
     reg post_seen = 1'b0;
     reg expect_kernel_panic;
+    reg expect_kernel_guard = 1'b0;
+    reg guard_reason_seen = 1'b0;
+    reg guard_fault_seen = 1'b0;
+    reg [31:0] expected_guard_address = 32'd0;
+    reg [31:0] parsed_fault_address = 32'd0;
     integer bist_cycles = 0;
     real bist_mbps;
 
     initial begin
         expect_kernel_panic = EXPECT_KERNEL_PANIC;
         if ($test$plusargs("expect-kernel-panic")) expect_kernel_panic = 1'b1;
+        if ($value$plusargs("expect-kernel-guard=%h", expected_guard_address)) begin
+            expect_kernel_guard = 1'b1;
+            expect_kernel_panic = 1'b1;
+        end
     end
 
     always @(posedge dut.g_sdram_enabled.sd_domain_clk) begin
@@ -187,6 +196,11 @@ module tb_boot_sdram #(
                         $fatal(1, "integrated BIST bandwidth target missed");
                     post_seen <= 1'b1;
                 end
+                if (uart_line == "Reason: unhandled processor exception")
+                    guard_reason_seen <= 1'b1;
+                if ($sscanf(uart_line, "Fault:  0x%h", parsed_fault_address) == 1 &&
+                    parsed_fault_address == expected_guard_address)
+                    guard_fault_seen <= 1'b1;
                 uart_line = "";
             end else begin
                 uart_line = {uart_line, dut.uart_data};
@@ -227,6 +241,11 @@ module tb_boot_sdram #(
             if (expect_kernel_panic &&
                 (sdram_be32(25'h0000018) & 32'h1) == 0)
                 $fatal(1, "panic did not mark early log");
+            if (expect_kernel_guard &&
+                (!guard_reason_seen || !guard_fault_seen))
+                $fatal(1, "guard panic mismatch reason=%b fault=%b expected=%08x",
+                       guard_reason_seen, guard_fault_seen,
+                       expected_guard_address);
             if (!expect_kernel_panic && sdram_be32(25'h0000018) != 0)
                 $fatal(1, "normal boot marked early log flags: %08x",
                        sdram_be32(25'h0000018));

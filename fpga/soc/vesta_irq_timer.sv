@@ -18,6 +18,7 @@ module vesta_irq_timer (
     input  wire [31:0] source_level,
     output wire [2:0]  cpu_ipln_n,
 
+    input  wire        iack_strobe,
     input  wire [2:0]  iack_level,
     output reg  [7:0]  iack_vector,
     output reg          iack_valid
@@ -72,6 +73,11 @@ module vesta_irq_timer (
     reg [7:0] active_vector;
     reg active_valid;
     reg [4:0] iack_source;
+    reg [7:0] iack_vector_comb;
+    reg iack_valid_comb;
+    reg iack_active;
+    reg [7:0] iack_vector_latched;
+    reg iack_valid_latched;
     reg [2:0] cpu_ipl_level;
     integer scan_index;
 
@@ -252,7 +258,7 @@ module vesta_irq_timer (
             active_vector = irq_cfg[active_source][15:8];
         end
 
-        iack_vector = SPURIOUS_VECTOR;
+        iack_vector_comb = SPURIOUS_VECTOR;
         case (iack_level)
             3'd1: iack_pending = pending_level_1;
             3'd2: iack_pending = pending_level_2;
@@ -263,10 +269,18 @@ module vesta_irq_timer (
             3'd7: iack_pending = pending_level_7;
             default: iack_pending = 32'd0;
         endcase
-        iack_valid = |iack_pending;
+        iack_valid_comb = |iack_pending;
         iack_source = lowest_set32(iack_pending);
-        if (iack_valid) begin
-            iack_vector = irq_cfg[iack_source][15:8];
+        if (iack_valid_comb) begin
+            iack_vector_comb = irq_cfg[iack_source][15:8];
+        end
+
+        if (iack_strobe && iack_active) begin
+            iack_vector = iack_vector_latched;
+            iack_valid = iack_valid_latched;
+        end else begin
+            iack_vector = iack_vector_comb;
+            iack_valid = iack_valid_comb;
         end
     end
 
@@ -313,6 +327,9 @@ module vesta_irq_timer (
             edge_pending <= 32'd0;
             source_previous <= 32'd0;
             cpu_ipl_level <= 3'd0;
+            iack_active <= 1'b0;
+            iack_vector_latched <= SPURIOUS_VECTOR;
+            iack_valid_latched <= 1'b0;
             for (reset_index = 0; reset_index < 32;
                  reset_index = reset_index + 1)
                 irq_cfg[reset_index] <= 32'd0;
@@ -327,6 +344,14 @@ module vesta_irq_timer (
         end else begin
             cpu_ipl_level <= active_level;
             source_previous <= combined_source;
+
+            if (!iack_strobe) begin
+                iack_active <= 1'b0;
+            end else if (!iack_active) begin
+                iack_active <= 1'b1;
+                iack_vector_latched <= iack_vector_comb;
+                iack_valid_latched <= iack_valid_comb;
+            end
 
             if (select && write_strobe && reg_index == REG_IRQ_ACK) begin
                 edge_pending <= (edge_pending &
@@ -398,11 +423,11 @@ module vesta_irq_timer (
                         timer_ctrl[0] <= merge_bytes(timer_ctrl[0], write_data,
                                                      byte_enable) &
                                          TIMER_CTRL_MASK;
-                        timer_divider[0] <= 16'd0;
-                        if (!timer_ctrl[0][0] &&
-                            (byte_enable[0] ? write_data[0] :
-                                              timer_ctrl[0][0]))
-                            timer_value[0] <= timer_load[0];
+                        if (byte_enable[0]) begin
+                            timer_divider[0] <= 16'd0;
+                            if (write_data[0])
+                                timer_value[0] <= timer_load[0];
+                        end
                     end
                     REG_TIMER0 + 3:
                         timer_status[0] <= timer_status[0] &
@@ -414,11 +439,11 @@ module vesta_irq_timer (
                         timer_ctrl[1] <= merge_bytes(timer_ctrl[1], write_data,
                                                      byte_enable) &
                                          TIMER_CTRL_MASK;
-                        timer_divider[1] <= 16'd0;
-                        if (!timer_ctrl[1][0] &&
-                            (byte_enable[0] ? write_data[0] :
-                                              timer_ctrl[1][0]))
-                            timer_value[1] <= timer_load[1];
+                        if (byte_enable[0]) begin
+                            timer_divider[1] <= 16'd0;
+                            if (write_data[0])
+                                timer_value[1] <= timer_load[1];
+                        end
                     end
                     REG_TIMER1 + 3:
                         timer_status[1] <= timer_status[1] &
