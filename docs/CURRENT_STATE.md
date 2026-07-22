@@ -112,10 +112,10 @@ and old resource tables are not current status.
   Vesta, AstraHost runtime/service, SDRAM bridge, ESP host, boot, NDK, and OSS
   release tests pass. This is enough for supervisor-mode kernel development,
   not a waiver for the documented protected-multitasking PMMU blockers.
-- The exact committed `B1F9E60D` release synthesizes to 52,565 LUT4s and packs
-  66,093 of 83,640 TRELLIS_COMB cells, 25,449 FFs, 101 block RAMs, and 19
+- The exact committed `6C0D0CA3` release synthesizes to 52,728 LUT4s and packs
+  66,144 of 83,640 TRELLIS_COMB cells, 25,525 FFs, 101 block RAMs, and 18
   multipliers. Its strict router1 result passes every exact constraint at
-  13.646847 MHz CPU and 65.789474 MHz SDRAM or better. Physical capacity, not
+  13.972139 MHz CPU and 63.403500 MHz SDRAM or better. Physical capacity, not
   an artificial utilization cap, is the release limit. See
   [FPGA_RESOURCE_BUDGET.md](FPGA_RESOURCE_BUDGET.md).
 - A focused board diagnostic found one remaining hardware-only Astraea defect
@@ -134,8 +134,9 @@ and old resource tables are not current status.
   route-preserving focused board image repeatedly passes all four one-row,
   multi-row, zero-pitch, and 720-byte-pitch commands; the complete graphics
   board image also reports `GFX PASS`. Four exact production reloads pass,
-  including one after an independent AstraHost restart; normal-text HDMI
-  acceptance remains pending.
+  including one after an independent AstraHost restart. Physical HDMI shows
+  the exact kernel provenance, initialization results, `K0 ENTRY PASS`, and
+  `KERNEL IDLE` with the corrected CP437 font.
 - The 256 GB card and its existing GBA data are preserved. The one-shot
   maintenance firmware atomically replaced only `/ASTRA68.ROM` and reported
   the exact `6C0D0CA3` payload CRC32 `0fd82996`; normal AstraHost firmware is
@@ -150,17 +151,18 @@ and old resource tables are not current status.
   `2693a912e98a0fc1211b54b62dd80f8bed0544a3ac904d5b24d320c2be986423`.
   Three consecutive FPGA-only reloads reached exact build and ROM identity,
   complete POST, 32 MiB full-range BIST, and `K0 ENTRY PASS`. The board now
-  contains exact production build `6C0D0CA3` in volatile SRAM. Its bitstream
-  SHA-256 is
+  contains exact production build `6C0D0CA3` in persistent FPGA flash. Its
+  bitstream SHA-256 is
   `61538d09ef255b94206500185b31008fc242004ac954356365e0b9053c88e2d1`;
   `/ASTRA68.ROM` SHA-256 is
   `9daede67d0e4aa233018425a64060f09d2b045897c0d46fcf417831712dc7c6a`.
   Four reloads match both identities and pass complete POST, full-range BIST,
   Astraea DMA, timer/runtime/input initialization, and `K0 ENTRY PASS` in
   1.570-1.603 seconds. The fourth followed an independent AstraHost restart
-  and proves normal SD remount plus FPGA SPI-link recovery. Persistent FPGA
-  flash remains untouched pending physical confirmation of normal CP437 HDMI
-  text.
+  and proves normal SD remount plus FPGA SPI-link recovery. The identical
+  bitstream was then programmed with `-f -r`; its reset-from-flash boot matched
+  both identities and repeated complete POST, BIST, DMA, and kernel entry in
+  1.630 seconds.
 - The legal full route and board-boot blocker is resolved. The corrected Beast
   router1 run refreshed all 66,566 placed combinational cells, completed after
   7,924.67 seconds, and passed the protected-LUT gate with zero violations. It
@@ -191,11 +193,11 @@ and old resource tables are not current status.
   `B1F9E60D` route and three board reloads now pass; a mandatory mapped-netlist
   gate rejects multiple font blocks, constant logical address pins, or the
   wrong physical width.
-- The active promotion gate is physical confirmation of normal CP437 POST and
-  kernel text over HDMI from exact bitstream `6C0D0CA3`. Its strict route,
-  focused and complete graphics diagnostics, SD ROM installation, and four
-  production POST/kernel reloads all pass. Persistent FPGA flash remains
-  untouched; no rebuild or repacking is permitted between SRAM acceptance and
+- Release promotion is complete for exact bitstream `6C0D0CA3`: strict route,
+  focused and complete graphics diagnostics, SD ROM installation, four SRAM
+  production boots, physical CP437 HDMI confirmation, persistent programming,
+  and reset-from-flash boot all pass. Future releases must preserve the rule
+  that no rebuild or repacking is permitted between SRAM acceptance and
   persistent programming.
 - The canonical entry points agree on divider 0, 12.5 MHz CPU, 60 MHz SDRAM,
   heap timing weight 20, plain router1, and the measured critical floorplan.

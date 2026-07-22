@@ -123,9 +123,20 @@ rtk proxy ssh nuc "python3 /tmp/astra68-check-hardware.py \
 The command exits nonzero on a POST failure, kernel panic, or timeout. With the
 gates shown above it requires the expected FPGA build identity, SD system-ROM
 identity, complete POST, and `K0 ENTRY PASS` in one capture. It does not write
-SPI flash. Use
-`openFPGALoader --board ulx3s -f -r` on NUC only after the exact SRAM-loaded
-image passes those checks.
+SPI flash. After the exact SRAM-loaded image and physical HDMI output pass,
+program and validate the identical image in one capture on NUC with:
+
+```sh
+rtk proxy ssh nuc "python3 /tmp/astra68-check-hardware.py \
+  --bit /tmp/astra68-release.bit --program-flash \
+  --expect-build <8-hex-build-id> --expect-rom-crc <8-hex-rom-crc32> \
+  --expect-kernel-entry"
+```
+
+`--program-flash` adds the hardware-proven openFPGALoader `-f -r` operation;
+it is rejected without `--bit`. The capture therefore proves the reset boot
+from the just-programmed persistent image rather than following it with a
+separate volatile SRAM load.
 
 For a route that produces no POST bytes, build the diagnostic stage-0 image:
 

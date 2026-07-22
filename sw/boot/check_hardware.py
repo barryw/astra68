@@ -119,6 +119,14 @@ def failure_reached(output: bytes | bytearray) -> bool:
     )
 
 
+def loader_command(loader: str, bit: str, program_flash: bool) -> list[str]:
+    command = [loader, "--board", "ulx3s"]
+    if program_flash:
+        command.extend(("-f", "-r"))
+    command.append(bit)
+    return command
+
+
 def capture_serial(
     port: str,
     baud: int,
@@ -157,8 +165,13 @@ def capture_serial(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--bit", help="load this bitstream into SRAM before capture")
+    parser.add_argument("--bit", help="configure this bitstream before capture")
     parser.add_argument("--loader", default="openFPGALoader")
+    parser.add_argument(
+        "--program-flash",
+        action="store_true",
+        help="write --bit to persistent FPGA flash and reset before capture",
+    )
     parser.add_argument("--port")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--timeout", type=float, default=180.0)
@@ -185,6 +198,9 @@ def main() -> int:
         help="require the complete graphics diagnostic to report GFX PASS",
     )
     args = parser.parse_args()
+
+    if args.program_flash and not args.bit:
+        parser.error("--program-flash requires --bit")
 
     diagnostic_modes = sum(
         (args.expect_route_probe, args.expect_video_probe, args.expect_graphics)
@@ -232,7 +248,7 @@ def main() -> int:
     try:
         if args.bit:
             subprocess.run(
-                [args.loader, "--board", "ulx3s", args.bit],
+                loader_command(args.loader, args.bit, args.program_flash),
                 check=True,
                 stdout=subprocess.DEVNULL,
             )

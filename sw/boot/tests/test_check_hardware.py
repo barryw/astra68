@@ -1,3 +1,5 @@
+import pytest
+
 from sw.boot import check_hardware
 from sw.boot.check_hardware import acceptance_reached, failure_reached
 
@@ -21,6 +23,39 @@ def test_kernel_entry_can_be_required() -> None:
     assert not acceptance_reached(output, None, True)
     output.extend(b"K0 ENTRY PASS\n")
     assert acceptance_reached(output, None, True)
+
+
+def test_loader_command_defaults_to_volatile_sram() -> None:
+    assert check_hardware.loader_command("loader", "astra.bit", False) == [
+        "loader",
+        "--board",
+        "ulx3s",
+        "astra.bit",
+    ]
+
+
+def test_loader_command_can_program_persistent_flash() -> None:
+    assert check_hardware.loader_command("loader", "astra.bit", True) == [
+        "loader",
+        "--board",
+        "ulx3s",
+        "-f",
+        "-r",
+        "astra.bit",
+    ]
+
+
+def test_program_flash_requires_a_bitstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        check_hardware.sys,
+        "argv",
+        ["check_hardware.py", "--program-flash"],
+    )
+
+    with pytest.raises(SystemExit) as error:
+        check_hardware.main()
+
+    assert error.value.code == 2
 
 
 def test_expected_rom_crc_must_match() -> None:

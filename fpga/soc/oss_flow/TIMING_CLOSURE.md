@@ -1945,9 +1945,7 @@ lanes, cache coherence, full 32 MiB BIST, Astraea DMA, kernel image loading,
 100 Hz Vesta timer, AstraHost runtime, input queue, `POST PASS`, and
 `K0 ENTRY PASS` in 1.570-1.603 seconds. Measured 32-bit CPU SDRAM throughput
 was approximately 179 MB/s write and 191 MB/s read; Astraea measured about
-87.8 MB/s fill and 37.85 MB/s copy. The exact production image remains in
-volatile SRAM. Physical normal-text HDMI confirmation is the only remaining
-promotion gate; persistent FPGA flash is untouched.
+87.8 MB/s fill and 37.85 MB/s copy.
 
 Normal AstraHost was then restarted independently while the production FPGA
 and kernel remained loaded. A fourth FPGA reload subsequently remounted the
@@ -1955,3 +1953,19 @@ same SD volume, transferred the exact ROM over the restored 20 MHz SPI link,
 and repeated every identity, POST, BIST, DMA, runtime, input, and kernel-entry
 gate in 1.571 seconds. This is the retained SPI-recovery and repeated-boot soak
 checkpoint.
+
+Physical HDMI then showed the exact `ASTRA 68 KERNEL v0.1.0-dev` screen with
+the 2026-07-22T10:39:29Z timestamp, full
+`6c0d0ca3c8f0f63141fe8216c023ff302f57d770` Git identity, CPU at 12.5 MHz,
+PMMU presence, Vesta timer, AstraHost runtime, input queue, `K0 ENTRY PASS`,
+and `KERNEL IDLE`. CP437 glyphs render correctly across the screen with no
+grid, blank output, clipping, or visible corruption.
+
+After that visual gate, the already-hashed production bitstream was programmed
+through NUC with openFPGALoader `-f -r`. The hardware checker held the FTDI
+capture across programming and required exact build `6C0D0CA3`, ROM CRC32
+`0FD82996`, complete POST, and kernel entry from the automatic reset boot. It
+passed in 1.630 seconds with the same BIST and DMA results. The exact
+`61538d09ef255b94206500185b31008fc242004ac954356365e0b9053c88e2d1`
+image is therefore the current persistent FPGA release; no rebuild or repack
+occurred between SRAM acceptance and programming.

@@ -23,49 +23,11 @@ checks. The older 65% and 75% profiles remain useful for historical comparison.
 
 ## Routed release baseline
 
-The current committed `B1F9E60D` 60 MHz release uses the MC68030/PMMU,
+The current committed `6C0D0CA3` 60 MHz release uses the MC68030/PMMU,
 AstraHost boot and runtime storage/input service, OHCI USB, Vesta IRQ/timers,
 SDRAM, HDMI, Astraea, and tile-free Vega feature set. Canonical Beast Yosys
-`-abc2` mapping reports 52,565 LUT4s, 25,420 synthesized FF cells, 101 block
-RAMs, and 19 multipliers. The strict router1 result packs:
-
-| Resource | Used | Physical free |
-|---|---:|---:|
-| TRELLIS_COMB | 66,093 (79.02%) | 17,547 |
-| TRELLIS_FF | 25,449 (30.43%) | 58,191 |
-| DP16KD | 101 (48.56%) | 107 |
-| MULT18X18D | 19 (12.18%) | 137 |
-
-This baseline includes the integrated MC68030 PMMU, external line caches,
-SDRAM and boot paths, HDMI, POST, front panel, Vesta IRQ/timers, AstraHost
-runtime block/input transport, complete Astraea drawing and copper engines,
-Vega framebuffer/scroll/sprite scanout, OHCI USB, and their integration logic.
-It does not include Lyra audio or future math hardware.
-
-The exact route passes all resource, font-ROM, protected-LUT, SCC, and clock
-gates. It meets the locked constraints at 13.646847 MHz CPU and 65.789474 MHz
-SDRAM or better, and three consecutive FPGA-only reloads pass exact identity,
-complete POST, full-range SDRAM BIST, and kernel entry on ULX3S. Bitstream
-SHA-256 is
-`05b9e84d2413c9390163a38f77c4d8ad08600a6adb619e69ebb25c56ae0e4eae`.
-
-The 17,547 free combinational sites are nominal capacity, not a promise that a
-later block will route. Every added block still needs isolated and integrated
-measurements. Congestion can become the practical limit before the device is
-numerically full.
-
-## Multi-row blitter correction route
-
-The 2026-07-22 correction replaces Astraea's hardware-failing combinational
-16x16 range-validation multiplier with a deterministic 16-step unsigned
-shift/add path. Canonical Beast synthesis of the complete production feature
-set reports 52,728 LUT4s, 25,492 FFs, 101 block RAMs, and 18 multipliers, with
-zero SCCs and GSR enabled on all FFs. Relative to `B1F9E60D`, this is +163
-LUT4s, +72 mapped FFs, unchanged block RAM, and -1 multiplier. The accepted
-routed baseline contains 25,449 packed FFs, so synthesized and packed FF deltas
-must not be compared directly.
-
-The exact committed `6C0D0CA3` strict Beast route packs:
+`-abc2` mapping reports 52,728 LUT4s, 25,492 synthesized FF cells, 101 block
+RAMs, and 18 multipliers. The strict router1 result packs:
 
 | Resource | Used | Physical free |
 |---|---:|---:|
@@ -74,16 +36,34 @@ The exact committed `6C0D0CA3` strict Beast route packs:
 | DP16KD | 101 (48.56%) | 107 |
 | MULT18X18D | 18 (11.54%) | 138 |
 
-It passes every production constraint at 13.972139 MHz CPU and 63.403500 MHz
-SDRAM or better. Relative to the `B1F9E60D` route, it uses 51 more
-TRELLIS_COMB sites and 76 more packed FFs, with unchanged block RAM and one
-fewer multiplier. The bitstream SHA-256 is
+This baseline includes the integrated MC68030 PMMU, external line caches,
+SDRAM and boot paths, HDMI, POST, front panel, Vesta IRQ/timers, AstraHost
+runtime block/input transport, complete Astraea drawing and copper engines,
+Vega framebuffer/scroll/sprite scanout, OHCI USB, and their integration logic.
+It does not include Lyra audio or future math hardware.
+
+The exact route passes all resource, font-ROM, protected-LUT, SCC, and clock
+gates. It meets the locked constraints at 13.972139 MHz CPU and 63.403500 MHz
+SDRAM or better. Route-preserving focused and complete graphics diagnostics,
+four SRAM production boots, AstraHost restart/SPI recovery, physical HDMI,
+persistent programming, and reset-from-flash POST/kernel entry all pass.
+Bitstream SHA-256 is
 `61538d09ef255b94206500185b31008fc242004ac954356365e0b9053c88e2d1`.
-Route-preserving focused and complete graphics ROM variants pass on ULX3S;
-four exact production reloads also pass complete POST, 32 MiB BIST, Astraea
-DMA, and kernel entry, including one reload after an independent AstraHost
-restart. Physical normal-text HDMI confirmation remains the only release gate
-before persistent programming.
+
+The 17,496 free combinational sites are nominal capacity, not a promise that a
+later block will route. Every added block still needs isolated and integrated
+measurements. Congestion can become the practical limit before the device is
+numerically full.
+
+## B1F9E60D rollback comparison
+
+The prior `B1F9E60D` route packed 66,093 TRELLIS_COMB cells, 25,449 FFs,
+101 block RAMs, and 19 multipliers and reached 13.646847 MHz CPU and
+65.789474 MHz SDRAM. It remains a known bootable rollback image but rejects
+multi-row blits in hardware. The promoted shift/add correction uses 51 more
+TRELLIS_COMB sites and 76 more packed FFs while removing one multiplier; block
+RAM is unchanged. Synthesized and packed FF deltas must not be compared
+directly.
 
 ## P55 routed checkpoint
 
