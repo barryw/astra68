@@ -1903,5 +1903,48 @@ Canonical Beast synthesis (`-abc2`, full production feature set, 12.5 MHz CPU,
 and 18 multipliers. It has zero SCCs, GSR enabled on all 25,496 physical FF
 cells including reset-release synchronizers, and the font-ROM structural gate
 passes. The blitter multiplier is absent from the mapped JSON. This checkpoint
-is retained for diagnosis and mapping only; exact strict routing and fixed-RTL
-hardware acceptance remain pending.
+is retained as committed source `6c0d0ca3c8f0f63141fe8216c023ff302f57d770`.
+
+The exact full-feature Beast seed-4 heap/router1 route completed in 3,370.96
+seconds after 1,343,465 router iterations. It refreshed all 66,144 placed
+TRELLIS_COMB cells and passed the protected LUT-permutation gate for 13,396
+cells and 17,635 routed inputs. The strict report passes every production
+constraint at 13.972139 MHz CPU, 63.403500 MHz SDRAM, 79.289566 MHz USB,
+56.268288 MHz pixel, and 228.728256 MHz HDMI shift or better. The limiting
+15.772 ns SDRAM-domain path starts at Draw `glyph_source_x[0]`, crosses glyph
+address/control selection, and ends at a Draw register; 2.798 ns is logic,
+12.449 ns routing, and 0.525 ns clock-to-Q. The route packs 66,144
+TRELLIS_COMB cells, 25,525 FFs, 101 block RAMs, and 18 multipliers, leaving
+17,496 combinational sites physically free. The packaged bitstream SHA-256 is
+`61538d09ef255b94206500185b31008fc242004ac954356365e0b9053c88e2d1`;
+the routed JSON SHA-256 is
+`e6d5c86c5d99a5bca15ce876a683509729745cd86b59d3d491f76c39afc0a6d4`.
+
+Two hardware diagnostics retained that exact placement and route while
+changing only logical ROM cells `rom.0.0` and `rom.0.1`, corresponding exactly
+to physical BRAM blocks 32 and 33. The focused image SHA-256 is
+`cf3b6ac35031dd708aa41cca652c691ee344d028d8c324a3cf8bd2a970a86274`.
+On ULX3S, commands A through D all repeatedly return error code zero and their
+submitted fences: 720x1 at zero pitch, 720x480 at zero pitch with and without
+a readback barrier, and 720x480 at 720-byte pitch. It reports `GFX PASS`.
+The complete graphics image SHA-256 is
+`2dc72330488315f296f7a43c217752e25fcd55b6cc99f2014230510aa612e6cb`
+and also reports `GFX PASS` after blitter, draw, flood/pattern fill, sprite,
+copper, scene-presentation, collision, and scanout-underrun checks. Both were
+loaded into volatile SRAM only.
+
+The one-shot AstraHost maintenance image then mounted the existing 244,016 MB
+card without formatting it and atomically replaced only `/ASTRA68.ROM`. It
+reported 17,652 payload bytes and CRC32 `0fd82996`; normal read-only AstraHost
+firmware was restored immediately and mounted the same card. The exact
+production bitstream was then loaded into volatile FPGA SRAM three independent
+times. Every capture matched build `6C0D0CA3`, full source revision
+`6c0d0ca3c8f0f63141fe8216c023ff302f57d770`, ROM CRC32 `0FD82996`, and the
+2026-07-22T10:39:29Z ROM/kernel build timestamp. All three passed data/address
+lanes, cache coherence, full 32 MiB BIST, Astraea DMA, kernel image loading,
+100 Hz Vesta timer, AstraHost runtime, input queue, `POST PASS`, and
+`K0 ENTRY PASS` in 1.570-1.603 seconds. Measured 32-bit CPU SDRAM throughput
+was approximately 179 MB/s write and 191 MB/s read; Astraea measured about
+87.8 MB/s fill and 37.85 MB/s copy. The exact production image remains in
+volatile SRAM. Physical normal-text HDMI confirmation is the only remaining
+promotion gate; persistent FPGA flash is untouched.

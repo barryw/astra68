@@ -54,9 +54,9 @@ later block will route. Every added block still needs isolated and integrated
 measurements. Congestion can become the practical limit before the device is
 numerically full.
 
-## Multi-row blitter correction candidate
+## Multi-row blitter correction route
 
-The 2026-07-22 candidate replaces Astraea's hardware-failing combinational
+The 2026-07-22 correction replaces Astraea's hardware-failing combinational
 16x16 range-validation multiplier with a deterministic 16-step unsigned
 shift/add path. Canonical Beast synthesis of the complete production feature
 set reports 52,728 LUT4s, 25,492 FFs, 101 block RAMs, and 18 multipliers, with
@@ -65,9 +65,24 @@ LUT4s, +72 mapped FFs, unchanged block RAM, and -1 multiplier. The accepted
 routed baseline contains 25,449 packed FFs, so synthesized and packed FF deltas
 must not be compared directly.
 
-This is a synthesis checkpoint, not capacity or release evidence. Packed
-TRELLIS_COMB usage and physical headroom remain unknown until the exact
-full-feature route completes and passes every constrained clock.
+The exact committed `6C0D0CA3` strict Beast route packs:
+
+| Resource | Used | Physical free |
+|---|---:|---:|
+| TRELLIS_COMB | 66,144 (79.08%) | 17,496 |
+| TRELLIS_FF | 25,525 (30.52%) | 58,115 |
+| DP16KD | 101 (48.56%) | 107 |
+| MULT18X18D | 18 (11.54%) | 138 |
+
+It passes every production constraint at 13.972139 MHz CPU and 63.403500 MHz
+SDRAM or better. Relative to the `B1F9E60D` route, it uses 51 more
+TRELLIS_COMB sites and 76 more packed FFs, with unchanged block RAM and one
+fewer multiplier. The bitstream SHA-256 is
+`61538d09ef255b94206500185b31008fc242004ac954356365e0b9053c88e2d1`.
+Route-preserving focused and complete graphics ROM variants pass on ULX3S;
+three exact production reloads also pass complete POST, 32 MiB BIST, Astraea
+DMA, and kernel entry. Physical normal-text HDMI confirmation remains the only
+release gate before persistent programming.
 
 ## P55 routed checkpoint
 

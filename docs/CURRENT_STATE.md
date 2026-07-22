@@ -123,28 +123,41 @@ and old resource tables are not current status.
   a one-row command passed. Zero-pitch and nonzero-pitch commands failed
   identically, and the CPU-visible command fields plus completion fences were
   correct. The failure is isolated to the unregistered DSP-backed
-  `(height - 1) * pitch` range-validation path. The candidate replacement uses
+  `(height - 1) * pitch` range-validation path. The retained replacement uses
   a deterministic 16-step unsigned shift/add validator; directed graphics,
   integrated normal/INDEX8/RGB565 graphics, full CPU coretest, and complete
   HDMI-enabled AstraHost boot through `K0 ENTRY PASS` all pass. Canonical Beast
   synthesis has zero SCCs and maps 52,728 LUT4s, 25,492 FFs, 101 block RAMs,
-  and 18 multipliers. It is not a release until an exact strict route and board
-  validation pass.
+  and 18 multipliers. Exact committed build `6C0D0CA3` routes the complete
+  feature set at 13.972139 MHz CPU and 63.403500 MHz SDRAM, packing 66,144
+  TRELLIS_COMB cells, 25,525 FFs, 101 block RAMs, and 18 multipliers. A
+  route-preserving focused board image repeatedly passes all four one-row,
+  multi-row, zero-pitch, and 720-byte-pitch commands; the complete graphics
+  board image also reports `GFX PASS`. Three exact production reloads pass;
+  normal-text HDMI acceptance remains pending.
 - The 256 GB card and its existing GBA data are preserved. The one-shot
   maintenance firmware atomically replaced only `/ASTRA68.ROM` and reported
-  the exact release payload CRC32 `ceafeee9`; normal AstraHost firmware is
+  the exact `6C0D0CA3` payload CRC32 `0fd82996`; normal AstraHost firmware is
   restored and mounts the FAT/exFAT boot volume read-only. It intentionally
   exposes no runtime media until the card has exactly one CRC-valid,
   non-overlapping Astra GPT partition. The bounded AstraHost input queue and
   the independent OHCI USB host are both integrated.
-- The ULX3S currently contains the exact `B1F9E60D` release in volatile SRAM.
-  Bitstream SHA-256 is
+- Before the focused diagnostics, the ULX3S contained the exact `B1F9E60D`
+  rollback release in volatile SRAM. Its bitstream SHA-256 is
   `05b9e84d2413c9390163a38f77c4d8ad08600a6adb619e69ebb25c56ae0e4eae`;
-  `/ASTRA68.ROM` SHA-256 is
+  its `/ASTRA68.ROM` SHA-256 was
   `2693a912e98a0fc1211b54b62dd80f8bed0544a3ac904d5b24d320c2be986423`.
   Three consecutive FPGA-only reloads reached exact build and ROM identity,
-  complete POST, 32 MiB full-range BIST, and `K0 ENTRY PASS`. Persistent FPGA
-  flash remains untouched pending physical confirmation of normal HDMI text.
+  complete POST, 32 MiB full-range BIST, and `K0 ENTRY PASS`. The board now
+  contains exact production build `6C0D0CA3` in volatile SRAM. Its bitstream
+  SHA-256 is
+  `61538d09ef255b94206500185b31008fc242004ac954356365e0b9053c88e2d1`;
+  `/ASTRA68.ROM` SHA-256 is
+  `9daede67d0e4aa233018425a64060f09d2b045897c0d46fcf417831712dc7c6a`.
+  Three consecutive reloads match both identities and pass complete POST,
+  full-range BIST, Astraea DMA, timer/runtime/input initialization, and
+  `K0 ENTRY PASS` in 1.570-1.603 seconds. Persistent FPGA flash remains
+  untouched pending physical confirmation of normal CP437 HDMI text.
 - The legal full route and board-boot blocker is resolved. The corrected Beast
   router1 run refreshed all 66,566 placed combinational cells, completed after
   7,924.67 seconds, and passed the protected-LUT gate with zero violations. It
@@ -175,11 +188,12 @@ and old resource tables are not current status.
   `B1F9E60D` route and three board reloads now pass; a mandatory mapped-netlist
   gate rejects multiple font blocks, constant logical address pins, or the
   wrong physical width.
-- The active promotion gate is a strict full-feature route of the multi-row
-  blitter correction, followed by a route-preserving focused diagnostic and
-  repeated full POST, SDRAM, kernel-entry, graphics, and normal CP437 HDMI
-  checks on ULX3S. Persistent FPGA flash remains untouched; no rebuild or
-  repacking is permitted between SRAM acceptance and persistent programming.
+- The active promotion gate is physical confirmation of normal CP437 POST and
+  kernel text over HDMI from exact bitstream `6C0D0CA3`. Its strict route,
+  focused and complete graphics diagnostics, SD ROM installation, and three
+  production POST/kernel reloads all pass. Persistent FPGA flash remains
+  untouched; no rebuild or repacking is permitted between SRAM acceptance and
+  persistent programming.
 - The canonical entry points agree on divider 0, 12.5 MHz CPU, 60 MHz SDRAM,
   heap timing weight 20, plain router1, and the measured critical floorplan.
   The split flow clears the placement-only waiver before release routing,
