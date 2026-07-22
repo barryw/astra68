@@ -133,8 +133,9 @@ and old resource tables are not current status.
   TRELLIS_COMB cells, 25,525 FFs, 101 block RAMs, and 18 multipliers. A
   route-preserving focused board image repeatedly passes all four one-row,
   multi-row, zero-pitch, and 720-byte-pitch commands; the complete graphics
-  board image also reports `GFX PASS`. Three exact production reloads pass;
-  normal-text HDMI acceptance remains pending.
+  board image also reports `GFX PASS`. Four exact production reloads pass,
+  including one after an independent AstraHost restart; normal-text HDMI
+  acceptance remains pending.
 - The 256 GB card and its existing GBA data are preserved. The one-shot
   maintenance firmware atomically replaced only `/ASTRA68.ROM` and reported
   the exact `6C0D0CA3` payload CRC32 `0fd82996`; normal AstraHost firmware is
@@ -154,10 +155,12 @@ and old resource tables are not current status.
   `61538d09ef255b94206500185b31008fc242004ac954356365e0b9053c88e2d1`;
   `/ASTRA68.ROM` SHA-256 is
   `9daede67d0e4aa233018425a64060f09d2b045897c0d46fcf417831712dc7c6a`.
-  Three consecutive reloads match both identities and pass complete POST,
-  full-range BIST, Astraea DMA, timer/runtime/input initialization, and
-  `K0 ENTRY PASS` in 1.570-1.603 seconds. Persistent FPGA flash remains
-  untouched pending physical confirmation of normal CP437 HDMI text.
+  Four reloads match both identities and pass complete POST, full-range BIST,
+  Astraea DMA, timer/runtime/input initialization, and `K0 ENTRY PASS` in
+  1.570-1.603 seconds. The fourth followed an independent AstraHost restart
+  and proves normal SD remount plus FPGA SPI-link recovery. Persistent FPGA
+  flash remains untouched pending physical confirmation of normal CP437 HDMI
+  text.
 - The legal full route and board-boot blocker is resolved. The corrected Beast
   router1 run refreshed all 66,566 placed combinational cells, completed after
   7,924.67 seconds, and passed the protected-LUT gate with zero violations. It
@@ -190,7 +193,7 @@ and old resource tables are not current status.
   wrong physical width.
 - The active promotion gate is physical confirmation of normal CP437 POST and
   kernel text over HDMI from exact bitstream `6C0D0CA3`. Its strict route,
-  focused and complete graphics diagnostics, SD ROM installation, and three
+  focused and complete graphics diagnostics, SD ROM installation, and four
   production POST/kernel reloads all pass. Persistent FPGA flash remains
   untouched; no rebuild or repacking is permitted between SRAM acceptance and
   persistent programming.

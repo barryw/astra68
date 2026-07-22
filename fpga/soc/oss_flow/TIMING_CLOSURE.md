@@ -1948,3 +1948,10 @@ was approximately 179 MB/s write and 191 MB/s read; Astraea measured about
 87.8 MB/s fill and 37.85 MB/s copy. The exact production image remains in
 volatile SRAM. Physical normal-text HDMI confirmation is the only remaining
 promotion gate; persistent FPGA flash is untouched.
+
+Normal AstraHost was then restarted independently while the production FPGA
+and kernel remained loaded. A fourth FPGA reload subsequently remounted the
+same SD volume, transferred the exact ROM over the restored 20 MHz SPI link,
+and repeated every identity, POST, BIST, DMA, runtime, input, and kernel-entry
+gate in 1.571 seconds. This is the retained SPI-recovery and repeated-boot soak
+checkpoint.

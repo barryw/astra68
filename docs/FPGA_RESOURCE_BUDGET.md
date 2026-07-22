@@ -80,9 +80,10 @@ TRELLIS_COMB sites and 76 more packed FFs, with unchanged block RAM and one
 fewer multiplier. The bitstream SHA-256 is
 `61538d09ef255b94206500185b31008fc242004ac954356365e0b9053c88e2d1`.
 Route-preserving focused and complete graphics ROM variants pass on ULX3S;
-three exact production reloads also pass complete POST, 32 MiB BIST, Astraea
-DMA, and kernel entry. Physical normal-text HDMI confirmation remains the only
-release gate before persistent programming.
+four exact production reloads also pass complete POST, 32 MiB BIST, Astraea
+DMA, and kernel entry, including one reload after an independent AstraHost
+restart. Physical normal-text HDMI confirmation remains the only release gate
+before persistent programming.
 
 ## P55 routed checkpoint
 
