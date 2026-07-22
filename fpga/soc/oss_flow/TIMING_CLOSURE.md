@@ -387,9 +387,9 @@ configuration SHA-256 is
 `dc5676a51aeac7bc8d96fe0a4ea003a2ef5cb4b67a44f68fa38dadb51ea59d7f`
 and bitstream SHA-256 is
 `a9135f8a398806c1f0b52ad4fd9333240e35e216f1905c1a45bbf675f3384b21`.
-That image passed the complete hardware gate in 1.598 seconds and is currently
-loaded in volatile FPGA SRAM pending physical HDMI confirmation. It is not a
-source-level fix and persistent flash remains untouched.
+That image passed the complete hardware gate in 1.598 seconds and was
+temporarily loaded in volatile FPGA SRAM to confirm the diagnosis. It is not a
+source-level fix and has been superseded by the exact `B1F9E60D` image.
 
 The source correction now bounds both `post_fonts.hex` and `font_rom` to the
 single 2048-byte CP437 bank that the console addresses. The lookup uses all 11
@@ -412,6 +412,71 @@ and the Yosys log SHA-256 is
 This retained checkpoint is synthesis-only from an uncommitted diagnostic
 snapshot. It proves the structural correction but is not route or release
 evidence.
+
+## 2026-07-22: B1F9E60D exact font-corrected release
+
+Beast built a fresh immutable clone of committed source
+`b1f9e60d388082a5f10e044ef3f7f94e8eee4d70` with the exact release ROM,
+nonzero build identity `B1F9E60D`, CPU divider 0, 60 MHz SDRAM, seed 4, heap
+placer, timing weight 20, plain router1, and the complete production feature
+set. Yosys `0.64+159` maps 52,565 LUT4s, 25,420 FFs, 5,099 CCU2Cs, 101
+DP16KDs, and 19 multipliers with zero SCCs and deterministic GSR coverage.
+The font gate finds exactly one 2048x9 `DP16KD`, all three unused physical low
+address pins constant, and all 11 logical address bits live and unique.
+
+The strict split route completed normally without a timing waiver and passed
+the protected-LUT gate over 13,508 protected cells and 17,715 protected
+inputs. Route checksum is `0xd6904812`. Final packed use is 66,093 of 83,640
+`TRELLIS_COMB`, 25,449 `TRELLIS_FF`, 101 of 208 `DP16KD`, and 19 of 156
+`MULT18X18D`. Every exact clock passes:
+
+| Clock | Constraint | Achieved |
+| --- | ---: | ---: |
+| CPU | 12.500000 MHz | 13.646847 MHz |
+| SDRAM | 60.002399 MHz | 65.789474 MHz |
+| USB PHY | 48.000767 MHz | 72.072075 MHz |
+| SD | 20.000000 MHz | 120.816711 MHz |
+| board | 25.000000 MHz | 40.154194 MHz |
+| pixel | 27.000029 MHz | 56.271454 MHz |
+| HDMI shift | 135.025650 MHz | 337.381927 MHz |
+
+The limiting 15.200 ns SDRAM path begins at AstraHost service state bit 14
+near `(2,77)`, crosses the service-state output mux, and ends in its register
+bank near `(6,78)`. It has 1.466 ns margin to the exact SDRAM period. The
+limiting 73.277 ns CPU path remains inside TG68K, from `rdindex_a[0]` through
+logical-address/index logic to imported core state, with 6.723 ns margin to
+the 80 ns CPU period. Neither is a failed cone; both are retained as the next
+measured optimization boundaries.
+
+Release identities are:
+
+- synthesis JSON SHA-256
+  `1b0c523ddda514404344f709b61b32938cb012c507ed467d1aadb39bdfd7a29f`;
+- routed JSON SHA-256
+  `a4e3b80a98127ded53e8c55fccfc139238f9d7b680d342daa42e0841f21a23ef`;
+- configuration SHA-256
+  `ac600c7c8fb4dfca5fea899827603ab3184c7d8b2a6dee082422f969e162868c`;
+- bitstream SHA-256
+  `05b9e84d2413c9390163a38f77c4d8ad08600a6adb619e69ebb25c56ae0e4eae`;
+- `/ASTRA68.ROM` SHA-256
+  `2693a912e98a0fc1211b54b62dd80f8bed0544a3ac904d5b24d320c2be986423`,
+  payload CRC32 `CEAFEEE9`.
+
+On NUC, a one-shot AstraHost maintenance build atomically replaced only the
+managed `/ASTRA68.ROM` file on the existing 256 GB card and reported the exact
+`CEAFEEE9` payload CRC. Normal read-only AstraHost firmware was then restored.
+The normal and provisioning application binaries have SHA-256 identities
+`9e471a9b12963c3bcb8d51bd03f8b0eb339eef5eb1ec1c88028c96539bc1db3d`
+and `dc1e79c1eb248c4baa7f090ec25fdc13ee02efa4b4e747338eaea048bc2dc76c`
+respectively.
+
+Three consecutive FPGA-only SRAM reloads of the exact bitstream completed in
+1.604, 1.582, and 1.593 seconds after loader exit. Every run required build
+`B1F9E60D`, ROM CRC32 `CEAFEEE9`, full 32 MiB POST/BIST, Astraea DMA,
+`POST PASS`, and `K0 ENTRY PASS`; all passed. This also proves that normal
+AstraHost re-identifies and re-serves the ROM after FPGA reconfiguration.
+Persistent FPGA flash remains untouched until the exact SRAM image receives
+physical confirmation of normal CP437 POST text over HDMI.
 
 ## Canonical synthesis configuration
 
@@ -1407,7 +1472,7 @@ The work is not considered stuck while each structural revision eliminates its
 targeted path and the post-route result moves. It is stuck when multiple such
 revisions expose the same boundary with no measurable timing change.
 
-## Release checkpoint
+## Historical P53 release checkpoint (superseded)
 
 P53 preserves all exact functional and cycle references with the compact
 registered tile boundary. Exact commit `ca26765` passes conformance, Harte,
@@ -1417,15 +1482,15 @@ image and a simulation-proven BRAM-only route probe produce zero UART bytes on
 the ULX3S. The known-good control image passes on the same hardware path.
 Persistent FPGA flash remains untouched.
 
-Production AstraHost is restored on the ESP32. The existing SD-card data is
-intact and `/ASTRA68.ROM` contains the exact `ca26765` payload with CRC32
-`d0dc84a4`. Volatile FPGA SRAM currently contains the retained passing control
-image after the corrected P53 route-probe test; persistent flash is untouched.
-Independent NUC and Beast routes are running against diagnostic 13 MHz CPU and
-80 MHz SDRAM implementation constraints; runtime PLL/divider clocks remain
-exactly 12.5/75 MHz.
+At this checkpoint, production AstraHost was restored on the ESP32. The
+existing SD-card data was intact and `/ASTRA68.ROM` contained the exact
+`ca26765` payload with CRC32 `d0dc84a4`. Volatile FPGA SRAM then contained the
+retained passing control image after the corrected P53 route-probe test;
+persistent flash was untouched. Independent NUC and Beast routes were running
+against diagnostic 13 MHz CPU and 80 MHz SDRAM implementation constraints;
+runtime PLL/divider clocks remained exactly 12.5/75 MHz.
 
-The next candidate must clear this sequence:
+The next candidate at that checkpoint had to clear this sequence:
 
 1. Complete routing with meaningful CPU and SDRAM margin and no timing waiver.
 2. Replace only stage-0 BRAM with the proven route probe and require repeated

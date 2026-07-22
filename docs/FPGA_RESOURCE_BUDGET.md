@@ -21,19 +21,19 @@ bitstream.
 device but does not waive timing, SCC, clock-domain, or hardware acceptance
 checks. The older 65% and 75% profiles remain useful for historical comparison.
 
-## Routed baseline
+## Routed release baseline
 
-The current guarded P54 deterministic-POR 60 MHz design uses the MC68030/PMMU,
+The current committed `B1F9E60D` 60 MHz release uses the MC68030/PMMU,
 AstraHost boot and runtime storage/input service, OHCI USB, Vesta IRQ/timers,
 SDRAM, HDMI, Astraea, and tile-free Vega feature set. Canonical Beast Yosys
-`-abc2` mapping for build ID `0x60000002` reports 53,190 LUT4s, 25,420
-synthesized FF cells, 104 block RAMs, and 19 multipliers. nextpnr packs:
+`-abc2` mapping reports 52,565 LUT4s, 25,420 synthesized FF cells, 101 block
+RAMs, and 19 multipliers. The strict router1 result packs:
 
 | Resource | Used | Physical free |
 |---|---:|---:|
-| TRELLIS_COMB | 66,566 (79.59%) | 17,074 |
-| TRELLIS_FF | 25,453 (30.43%) | 58,187 |
-| DP16KD | 104 (50.00%) | 104 |
+| TRELLIS_COMB | 66,093 (79.02%) | 17,547 |
+| TRELLIS_FF | 25,449 (30.43%) | 58,191 |
+| DP16KD | 101 (48.56%) | 107 |
 | MULT18X18D | 19 (12.18%) | 137 |
 
 This baseline includes the integrated MC68030 PMMU, external line caches,
@@ -42,15 +42,14 @@ runtime block/input transport, complete Astraea drawing and copper engines,
 Vega framebuffer/scroll/sprite scanout, OHCI USB, and their integration logic.
 It does not include Lyra audio or future math hardware.
 
-The legal P54 router1 checkpoint passes all resource and protected-LUT gates,
-routes every production clock at 14.544609 MHz CPU and 66.409882 MHz SDRAM or
-better, passes its BRAM-only route probe, and boots through complete POST and
-kernel entry repeatedly on ULX3S. The previous corrected-GSR mapping packed
-66,765 combinational sites but its route probe was silent and it remains
-rejected. Resource improvement alone is not an acceptance result; the current
-baseline is retained because physical and board behavior also pass.
+The exact route passes all resource, font-ROM, protected-LUT, SCC, and clock
+gates. It meets the locked constraints at 13.646847 MHz CPU and 65.789474 MHz
+SDRAM or better, and three consecutive FPGA-only reloads pass exact identity,
+complete POST, full-range SDRAM BIST, and kernel entry on ULX3S. Bitstream
+SHA-256 is
+`05b9e84d2413c9390163a38f77c4d8ad08600a6adb619e69ebb25c56ae0e4eae`.
 
-The 17,074 free combinational sites are nominal capacity, not a promise that a
+The 17,547 free combinational sites are nominal capacity, not a promise that a
 later block will route. Every added block still needs isolated and integrated
 measurements. Congestion can become the practical limit before the device is
 numerically full.
@@ -78,9 +77,9 @@ normal POST font reads effective bank 3 on its Y46 BRAM placement.
 The exact-depth source correction synthesizes the complete design to 52,565
 LUT4s, 25,420 mapped FFs, 5,099 CCU2Cs, 101 block RAMs, and 19 multipliers.
 The font is now one 2048x9 `DP16KD`, so the three unused font-bank blocks are
-physically absent rather than counted as prospective savings. This remains a
-synthesis-only checkpoint; routed combinational usage and final physical
-headroom are unchanged until the corrected exact route completes.
+physically absent rather than counted as prospective savings. The corrected
+`B1F9E60D` route is the release baseline above; P55 remains only the historical
+checkpoint that isolated the font-bank problem.
 
 ## Acceptance rules
 

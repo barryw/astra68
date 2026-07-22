@@ -112,25 +112,27 @@ and old resource tables are not current status.
   Vesta, AstraHost runtime/service, SDRAM bridge, ESP host, boot, NDK, and OSS
   release tests pass. This is enough for supervisor-mode kernel development,
   not a waiver for the documented protected-multitasking PMMU blockers.
-- The exact committed P55 route maps 52,615 LUT4s and packs 66,095 of 83,640
-  TRELLIS_COMB cells, 25,450 FFs, 104 block RAMs, and 19 multipliers. It passes
-  every exact clock at 14.09 MHz CPU and 64.02 MHz SDRAM or better. Physical
-  capacity, not an artificial utilization cap, is the release limit. See
+- The exact committed `B1F9E60D` release synthesizes to 52,565 LUT4s and packs
+  66,093 of 83,640 TRELLIS_COMB cells, 25,449 FFs, 101 block RAMs, and 19
+  multipliers. Its strict router1 result passes every exact constraint at
+  13.646847 MHz CPU and 65.789474 MHz SDRAM or better. Physical capacity, not
+  an artificial utilization cap, is the release limit. See
   [FPGA_RESOURCE_BUDGET.md](FPGA_RESOURCE_BUDGET.md).
-- The 256 GB card and its existing GBA data remain untouched. AstraHost mounts
-  the FAT/exFAT boot volume and now loads the tested `/ASTRA68.ROM` package
-  with CRC32 `b645d379`; it intentionally
+- The 256 GB card and its existing GBA data are preserved. The one-shot
+  maintenance firmware atomically replaced only `/ASTRA68.ROM` and reported
+  the exact release payload CRC32 `ceafeee9`; normal AstraHost firmware is
+  restored and mounts the FAT/exFAT boot volume read-only. It intentionally
   exposes no runtime media until the card has exactly one CRC-valid,
   non-overlapping Astra GPT partition. The bounded AstraHost input queue and
   the independent OHCI USB host are both integrated.
-- The ULX3S currently contains a volatile diagnostic derivative of the exact
-  committed P55 production route. It changes only font BRAM initializer blocks
-  101 through 104 by copying CP437 bank 0 into the physically observed bank 3;
-  its bitstream SHA-256 is
-  `a9135f8a398806c1f0b52ad4fd9333240e35e216f1905c1a45bbf675f3384b21`.
-  It passed build `E9FB3E20`, ROM CRC32 `E2B97D4A`, full POST, and kernel entry
-  in 1.598 seconds. This is diagnostic recovery, not the source-level release
-  fix. Persistent FPGA flash remains untouched.
+- The ULX3S currently contains the exact `B1F9E60D` release in volatile SRAM.
+  Bitstream SHA-256 is
+  `05b9e84d2413c9390163a38f77c4d8ad08600a6adb619e69ebb25c56ae0e4eae`;
+  `/ASTRA68.ROM` SHA-256 is
+  `2693a912e98a0fc1211b54b62dd80f8bed0544a3ac904d5b24d320c2be986423`.
+  Three consecutive FPGA-only reloads reached exact build and ROM identity,
+  complete POST, 32 MiB full-range BIST, and `K0 ENTRY PASS`. Persistent FPGA
+  flash remains untouched pending physical confirmation of normal HDMI text.
 - The legal full route and board-boot blocker is resolved. The corrected Beast
   router1 run refreshed all 66,566 placed combinational cells, completed after
   7,924.67 seconds, and passed the protected-LUT gate with zero violations. It
@@ -143,28 +145,28 @@ and old resource tables are not current status.
   graphics modes with unchanged scanline maxima. Its mapped design has zero
   SCCs and GSR enabled on all 25,424 FFs. Those functional results remain
   necessary but do not waive the corrected physical-route gate.
-- P55 removes the P54 route's 15.058 ns AstraHost boot/runtime ownership cone.
+- P55 removed the P54 route's 15.058 ns AstraHost boot/runtime ownership cone.
   A positive-control mapped-netlist check finds the old path and proves it is
   absent from P55. Focused AstraHost, complete boot, directed graphics, and all
   integrated graphics regressions pass at the locked 60 MHz SDRAM clock. The
-  exact P55 route is timing-clean and repeatedly hardware-boots, but normal
-  font scanout is still blocked: its four Y46 font BRAM slices read effective
-  bank 3 while RTL selects bank 0. Config-only all-ones, bytecode, bank marker,
-  and CP437-copy experiments isolate that fault to font initialization/address
-  handling rather than HDMI, text RAM, CPU writes, or Vega control.
+  exact P55 route is timing-clean and repeatedly hardware-boots. Its four Y46
+  font BRAM slices nevertheless read effective bank 3 while RTL selected bank
+  0. Config-only all-ones, bytecode, bank marker, and CP437-copy experiments
+  isolated that historical fault to font initialization/address handling
+  rather than HDMI, text RAM, CPU writes, or Vega control.
 - The source-level font correction is implemented and passes focused render,
   route-probe, and complete HDMI-enabled AstraHost boot simulations. Beast
   synthesis maps the exact 2 KiB CP437 image into one 2048x9 `DP16KD`, with all
   11 logical address bits connected, and reduces the complete design from 104
   to 101 block RAMs. The mapped checkpoint has zero SCCs, deterministic GSR on
-  all 25,420 FFs, 52,565 LUT4s, 5,099 CCU2Cs, and 19 multipliers. A mandatory
-  mapped-netlist gate rejects multiple font blocks, constant logical address
-  pins, or the wrong physical width.
-- A timing pass is not hardware acceptance. P55 has exact committed source and
-  ROM identities, strict 12.5/60 MHz routing, route-probe execution, and full
-  UART boot acceptance. Promotion still requires a fresh strict route of the
-  font fix, physical HDMI text confirmation, and repeated board acceptance of
-  that exact artifact.
+  all 25,420 FFs, 52,565 LUT4s, 5,099 CCU2Cs, and 19 multipliers. The exact
+  `B1F9E60D` route and three board reloads now pass; a mandatory mapped-netlist
+  gate rejects multiple font blocks, constant logical address pins, or the
+  wrong physical width.
+- The remaining promotion gate is physical confirmation that normal CP437 POST
+  text is visible over HDMI from the exact SRAM image. Once that passes, the
+  same bitstream may be written to persistent FPGA flash; no rebuild or
+  repacking is permitted between SRAM acceptance and persistent programming.
 - The canonical entry points agree on divider 0, 12.5 MHz CPU, 60 MHz SDRAM,
   heap timing weight 20, plain router1, and the measured critical floorplan.
   The split flow clears the placement-only waiver before release routing,
