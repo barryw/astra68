@@ -582,7 +582,10 @@ module astraea_blitter #(
     reg [17:0] cfg_km_first_byte_offset_mem;
     reg [12:0] cfg_km_first_mask_byte_mem;
     reg [12:0] cfg_mask_last_byte_mem;
-    reg [15:0] validate_pitch_mem;
+    reg [31:0] validate_product_mem;
+    reg [31:0] validate_multiplicand_mem;
+    reg [15:0] validate_multiplier_mem;
+    reg [3:0]  validate_mul_step_mem;
     reg [32:0] validate_add_a_mem;
     reg [32:0] validate_add_b_mem;
     reg [24:0] src_row_offset_mem;
@@ -610,8 +613,8 @@ module astraea_blitter #(
     wire [15:0] mask_pitch_mem = cfg_mask_pitch_mem;
     wire [31:0] color_mem = cfg_color_mem;
     wire [31:0] key_mem = cfg_key_mem;
-    wire [31:0] validate_product =
-        rows_remaining_mem * validate_pitch_mem;
+    wire [31:0] validate_product_next = validate_product_mem +
+        (validate_multiplier_mem[0] ? validate_multiplicand_mem : 32'd0);
     wire [32:0] validate_sum = validate_add_a_mem + validate_add_b_mem;
     // Validation uses the inclusive final byte. A legal SDRAM address has no
     // bits above bit 24, which maps directly onto the carry chain and avoids a
@@ -765,7 +768,10 @@ module astraea_blitter #(
             cfg_km_first_byte_offset_mem <= 18'd0;
             cfg_km_first_mask_byte_mem <= 13'd0;
             cfg_mask_last_byte_mem <= 13'd0;
-            validate_pitch_mem <= 16'd0;
+            validate_product_mem <= 32'd0;
+            validate_multiplicand_mem <= 32'd0;
+            validate_multiplier_mem <= 16'd0;
+            validate_mul_step_mem <= 4'd0;
             validate_add_a_mem <= 33'd0;
             validate_add_b_mem <= 33'd0;
             src_row_offset_mem <= 25'd0;
@@ -868,19 +874,35 @@ module astraea_blitter #(
                     cfg_km_first_mask_byte_mem <= reverse_x_mem ?
                         cfg_last_element[15:3] : 13'd0;
                     rows_remaining_mem <= cfg_dim_mem[31:16] - 16'd1;
-                    validate_pitch_mem <= cfg_dst_pitch_mem;
+                    validate_product_mem <= 32'd0;
+                    validate_multiplicand_mem <=
+                        {16'd0, cfg_dst_pitch_mem};
+                    validate_multiplier_mem <=
+                        cfg_dim_mem[31:16] - 16'd1;
+                    validate_mul_step_mem <= 4'd0;
                     set_state_mem(ST_VAL_DST_MUL);
                 end
             end else if (busy_mem) begin
                 case (state_mem)
                     ST_VAL_DST_MUL: begin
-                        word_mode_mem <= cfg_word_mode;
-                        total_units_mem <= cfg_word_mode ?
-                            (cfg_row_bytes_mem >> 2) : cfg_row_bytes_mem;
-                        dst_row_offset_mem <= validate_product[24:0];
-                        validate_add_a_mem <= {8'd0, cfg_dst_mem};
-                        validate_add_b_mem <= {1'b0, validate_product};
-                        set_state_mem(ST_VAL_DST_BASE);
+                        validate_product_mem <= validate_product_next;
+                        validate_multiplicand_mem <=
+                            validate_multiplicand_mem << 1;
+                        validate_multiplier_mem <=
+                            {1'b0, validate_multiplier_mem[15:1]};
+                        if (validate_mul_step_mem == 4'd15) begin
+                            word_mode_mem <= cfg_word_mode;
+                            total_units_mem <= cfg_word_mode ?
+                                (cfg_row_bytes_mem >> 2) : cfg_row_bytes_mem;
+                            dst_row_offset_mem <= validate_product_next[24:0];
+                            validate_add_a_mem <= {8'd0, cfg_dst_mem};
+                            validate_add_b_mem <=
+                                {1'b0, validate_product_next};
+                            set_state_mem(ST_VAL_DST_BASE);
+                        end else begin
+                            validate_mul_step_mem <=
+                                validate_mul_step_mem + 4'd1;
+                        end
                     end
                     ST_VAL_DST_BASE: begin
                         validate_add_a_mem <= validate_sum;
@@ -901,17 +923,33 @@ module astraea_blitter #(
                             done_toggle_mem <= ~done_toggle_mem;
                             set_state_mem(ST_IDLE);
                         end else begin
-                            if (cfg_uses_src)
-                                validate_pitch_mem <= cfg_src_pitch_mem;
+                            if (cfg_uses_src) begin
+                                validate_product_mem <= 32'd0;
+                                validate_multiplicand_mem <=
+                                    {16'd0, cfg_src_pitch_mem};
+                                validate_multiplier_mem <= rows_remaining_mem;
+                                validate_mul_step_mem <= 4'd0;
+                            end
                             set_state_mem(cfg_uses_src ? ST_VAL_SRC_MUL :
                                                          ST_VAL_DONE);
                         end
                     end
                     ST_VAL_SRC_MUL: begin
-                        src_row_offset_mem <= validate_product[24:0];
-                        validate_add_a_mem <= {8'd0, cfg_src_mem};
-                        validate_add_b_mem <= {1'b0, validate_product};
-                        set_state_mem(ST_VAL_SRC_BASE);
+                        validate_product_mem <= validate_product_next;
+                        validate_multiplicand_mem <=
+                            validate_multiplicand_mem << 1;
+                        validate_multiplier_mem <=
+                            {1'b0, validate_multiplier_mem[15:1]};
+                        if (validate_mul_step_mem == 4'd15) begin
+                            src_row_offset_mem <= validate_product_next[24:0];
+                            validate_add_a_mem <= {8'd0, cfg_src_mem};
+                            validate_add_b_mem <=
+                                {1'b0, validate_product_next};
+                            set_state_mem(ST_VAL_SRC_BASE);
+                        end else begin
+                            validate_mul_step_mem <=
+                                validate_mul_step_mem + 4'd1;
+                        end
                     end
                     ST_VAL_SRC_BASE: begin
                         validate_add_a_mem <= validate_sum;
@@ -926,17 +964,34 @@ module astraea_blitter #(
                             done_toggle_mem <= ~done_toggle_mem;
                             set_state_mem(ST_IDLE);
                         end else begin
-                            if (cfg_uses_mask)
-                                validate_pitch_mem <= cfg_mask_pitch_mem;
+                            if (cfg_uses_mask) begin
+                                validate_product_mem <= 32'd0;
+                                validate_multiplicand_mem <=
+                                    {16'd0, cfg_mask_pitch_mem};
+                                validate_multiplier_mem <= rows_remaining_mem;
+                                validate_mul_step_mem <= 4'd0;
+                            end
                             set_state_mem(cfg_uses_mask ? ST_VAL_MASK_MUL :
                                                           ST_VAL_DONE);
                         end
                     end
                     ST_VAL_MASK_MUL: begin
-                        mask_row_offset_mem <= validate_product[24:0];
-                        validate_add_a_mem <= {8'd0, cfg_mask_mem};
-                        validate_add_b_mem <= {1'b0, validate_product};
-                        set_state_mem(ST_VAL_MASK_BASE);
+                        validate_product_mem <= validate_product_next;
+                        validate_multiplicand_mem <=
+                            validate_multiplicand_mem << 1;
+                        validate_multiplier_mem <=
+                            {1'b0, validate_multiplier_mem[15:1]};
+                        if (validate_mul_step_mem == 4'd15) begin
+                            mask_row_offset_mem <=
+                                validate_product_next[24:0];
+                            validate_add_a_mem <= {8'd0, cfg_mask_mem};
+                            validate_add_b_mem <=
+                                {1'b0, validate_product_next};
+                            set_state_mem(ST_VAL_MASK_BASE);
+                        end else begin
+                            validate_mul_step_mem <=
+                                validate_mul_step_mem + 4'd1;
+                        end
                     end
                     ST_VAL_MASK_BASE: begin
                         validate_add_a_mem <= validate_sum;

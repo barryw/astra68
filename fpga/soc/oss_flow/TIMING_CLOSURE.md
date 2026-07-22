@@ -1856,3 +1856,52 @@ mux, and ends at a Draw register; 3.59 ns is logic and 11.44 ns is routing.
 The targeted masked-copy path is absent, but the 303-LUT mapping increase and
 additional congestion expose a substantially worse independent cone.
 Runtime-42 is rejected.
+
+## 2026-07-22 Astraea multi-row hardware diagnosis
+
+The exact `B1F9E60D` release remained timing-clean and repeatedly passed POST,
+full SDRAM BIST, Astraea's 1 KiB POST DMA check, and kernel entry, but the full
+graphics ROM stopped on its first 720x480 clear with `GFX F41`: blitter error
+1, invalid configuration/range. A focused production-map ROM tested four
+commands against the same accepted route:
+
+| Tag | Width x height | Destination pitch | Readback barrier | Hardware result |
+|---|---:|---:|---|---|
+| A | 720 x 1 | 0 | no | pass, fence 1 |
+| B | 720 x 480 | 0 | no | error 1, fence 2 |
+| C | 720 x 480 | 0 | yes | error 1, fence 3 |
+| D | 720 x 480 | 720 | yes | error 1, fence 4 |
+
+The diagnostic records showed stable CPU-visible destination, pitch,
+dimensions, operation, status, and submitted completion fence for every
+command. Requiring both sticky `DONE` and the submitted fence eliminated a
+false completion from the prior command. The identical zero-pitch failure
+eliminated command ordering, barriers, nonzero-pitch arithmetic, and SDRAM
+traffic: rejection occurs before the first memory request. The only
+height-dependent range-validation datapath was the unregistered unsigned
+16x16 product at `astraea_blitter.sv`, mapped to one `MULT18X18D`. The accepted
+route's diagnostic transplant changed only logical `rom.0.0`/`rom.0.1` and
+physical BRAMs 32/33. Its bitstream SHA-256 was
+`91ad5c47ece7bd1ab3f973a5ebe8f9536260253bc12cfc6130c2ed6e6d7e0871`, so
+placement, routing, and every non-ROM configuration bit remained controlled.
+The exact production image was restored after capture and again passed POST,
+32 MiB BIST, DMA, ROM identity, and `K0 ENTRY PASS`; persistent flash was not
+touched.
+
+The retained candidate replaces that product with a 16-cycle unsigned
+shift/add validator. It adds at most 16 memory clocks per validated surface,
+or 48 clocks for a masked copy, without changing transfer throughput. Beast
+directed graphics pass at 38.59 MB/s copy and 91.84 MB/s fill; integrated
+normal, INDEX8-stress, and RGB565-stress modes pass at maxima of 505, 1103,
+and 1429 clocks against the 1906-clock scanline deadline; the focused
+production-map diagnostic passes; full CPU
+coretest passes; and complete HDMI-enabled AstraHost boot reaches `POST PASS`,
+`K0 ENTRY PASS`, and `KERNEL IDLE`.
+
+Canonical Beast synthesis (`-abc2`, full production feature set, 12.5 MHz CPU,
+60 MHz SDRAM) reports 52,728 LUT4s, 25,492 FFs, 5,055 CCU2Cs, 101 block RAMs,
+and 18 multipliers. It has zero SCCs, GSR enabled on all 25,496 physical FF
+cells including reset-release synchronizers, and the font-ROM structural gate
+passes. The blitter multiplier is absent from the mapped JSON. This checkpoint
+is retained for diagnosis and mapping only; exact strict routing and fixed-RTL
+hardware acceptance remain pending.

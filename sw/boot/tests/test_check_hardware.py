@@ -66,9 +66,23 @@ def test_video_probe_requires_identity_caps_and_text_readback() -> None:
     )
 
 
+def test_graphics_diagnostic_requires_complete_pass_line() -> None:
+    assert not acceptance_reached(
+        b"GFX PAS", None, False, expect_graphics=True
+    )
+    assert acceptance_reached(
+        b"GFX PASS\r\n", None, False, expect_graphics=True
+    )
+    assert not acceptance_reached(
+        b"GFX FAIL 0A\r\n", None, False, expect_graphics=True
+    )
+
+
 def test_post_failure_and_kernel_panic_are_fatal() -> None:
     assert failure_reached(b"POST FAILURE: SDRAM\n")
     assert failure_reached(b"*** ASTRA KERNEL PANIC ***\n")
+    assert failure_reached(b"GFX FAIL 0A\r\n")
+    assert failure_reached(b"GFX F41\n")
     assert not failure_reached(b"POST PASS\nK0 ENTRY PASS\n")
 
 

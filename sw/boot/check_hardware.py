@@ -72,6 +72,7 @@ def acceptance_reached(
     expect_route_probe: bool = False,
     expected_rom_crc: bytes | None = None,
     expect_video_probe: bool = False,
+    expect_graphics: bool = False,
 ) -> bool:
     if expect_route_probe:
         match = re.search(
@@ -89,6 +90,8 @@ def acceptance_reached(
             rb"first=00000041 last=00000045\r?\n",
             output,
         ) is not None
+    if expect_graphics:
+        return re.search(rb"(?m)^GFX PASS\r?$", output) is not None
     build_reached = expected_build is None
     if expected_build is not None:
         build_id = expected_build.rsplit(b"0x", 1)[-1]
@@ -109,7 +112,11 @@ def acceptance_reached(
 
 
 def failure_reached(output: bytes | bytearray) -> bool:
-    return b"POST FAILURE" in output or b"*** ASTRA KERNEL PANIC ***" in output
+    return (
+        b"POST FAILURE" in output
+        or b"*** ASTRA KERNEL PANIC ***" in output
+        or re.search(rb"(?m)^GFX (?:FAIL |F)[0-9A-F]{2}\r?$", output) is not None
+    )
 
 
 def capture_serial(
@@ -172,16 +179,24 @@ def main() -> int:
         action="store_true",
         help="require Vega identity and retained text-aperture probe values",
     )
+    parser.add_argument(
+        "--expect-graphics",
+        action="store_true",
+        help="require the complete graphics diagnostic to report GFX PASS",
+    )
     args = parser.parse_args()
 
-    if (args.expect_route_probe or args.expect_video_probe) and (
+    diagnostic_modes = sum(
+        (args.expect_route_probe, args.expect_video_probe, args.expect_graphics)
+    )
+    if diagnostic_modes and (
         args.expect_build or args.expect_rom_crc or args.expect_kernel_entry
     ):
         parser.error(
-            "probe expectations cannot be combined with POST expectations"
+            "diagnostic expectations cannot be combined with POST expectations"
         )
-    if args.expect_route_probe and args.expect_video_probe:
-        parser.error("select only one probe expectation")
+    if diagnostic_modes > 1:
+        parser.error("select only one diagnostic expectation")
 
     expected_build = None
     if args.expect_build:
@@ -252,6 +267,7 @@ def main() -> int:
                     args.expect_route_probe,
                     expected_rom_crc,
                     args.expect_video_probe,
+                    args.expect_graphics,
                 ):
                     break
     finally:
@@ -266,6 +282,7 @@ def main() -> int:
     capture_name = (
         "route probe" if args.expect_route_probe else
         "video probe" if args.expect_video_probe else
+        "graphics" if args.expect_graphics else
         "POST"
     )
     print(f"{capture_name} capture elapsed={elapsed:.3f}s events={events}")
@@ -278,6 +295,7 @@ def main() -> int:
         args.expect_route_probe,
         expected_rom_crc,
         args.expect_video_probe,
+        args.expect_graphics,
     ):
         return 0
     if failure_reached(output):

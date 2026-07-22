@@ -30,10 +30,33 @@
 #ifndef DEMO_STRESS_BUDGET
 #define DEMO_STRESS_BUDGET VEGA_SPR_BUDGET_INDEX8_MAX
 #endif
+#ifndef DEMO_CLEAR_PITCH
+#define DEMO_CLEAR_PITCH 720u
+#endif
 
 static uint32_t draw_fence = 1u;
 static uint32_t blit_fence = 1u;
 static uint32_t scene_generation = 1u;
+
+static void serial_putc(char value)
+{
+    while ((VESTA->UART_STATUS & UART_TX_READY) == 0u) {}
+    VESTA->UART_DATA = (uint8_t)value;
+}
+
+static void report_result(uint8_t stage)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    const char *text = stage == 0u ? "GFX PASS" : "GFX F";
+
+    while (*text != '\0')
+        serial_putc(*text++);
+    if (stage != 0u) {
+        serial_putc(hex[stage >> 4]);
+        serial_putc(hex[stage & 0x0fu]);
+    }
+    serial_putc('\n');
+}
 
 static volatile uint8_t *ram8(uint32_t offset)
 {
@@ -53,11 +76,11 @@ static void set_leds(uint8_t value)
 
 static void fail(uint8_t stage)
 {
-    VEGA->SPR_CTRL = 0u;
     VEGA->BACKDROP = VEGA_RGB(255, 0, 0);
     VEGA->CTRL = VEGA_CTRL_DISPLAY_EN | VEGA_CTRL_BACKDROP_EN;
     set_leds((uint8_t)(0x80u | (stage & 0x7fu)));
-    for (;;) {}
+    for (;;)
+        report_result(stage);
 }
 
 static int wait_sdram(void)
@@ -407,9 +430,9 @@ void kmain(void)
 
     set_leds(0x01u);
     if (!test_blitter()) fail(3u);
-    if (!blit(0u, FB_OFFSET, 0u, 0u, 720u, 0u, 720u, 480u,
+    if (!blit(0u, FB_OFFSET, 0u, 0u, DEMO_CLEAR_PITCH, 0u, 720u, 480u,
               BLIT_MODE_FILL | BLIT_ELEM8, 0u, 0u))
-        fail(4u);
+        fail((uint8_t)(0x40u | BLIT_ERROR_CODE(ASTRAEA->BLIT_STATUS)));
     if (!draw_scene()) fail(5u);
 
     build_palette();
@@ -448,5 +471,6 @@ void kmain(void)
     for (;;) {
         if (VEGA->STATUS & (VEGA_STAT_UNDERRUN | VEGA_STAT_CONFIG_ERROR))
             fail(12u);
+        report_result(0u);
     }
 }

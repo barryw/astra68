@@ -54,6 +54,21 @@ later block will route. Every added block still needs isolated and integrated
 measurements. Congestion can become the practical limit before the device is
 numerically full.
 
+## Multi-row blitter correction candidate
+
+The 2026-07-22 candidate replaces Astraea's hardware-failing combinational
+16x16 range-validation multiplier with a deterministic 16-step unsigned
+shift/add path. Canonical Beast synthesis of the complete production feature
+set reports 52,728 LUT4s, 25,492 FFs, 101 block RAMs, and 18 multipliers, with
+zero SCCs and GSR enabled on all FFs. Relative to `B1F9E60D`, this is +163
+LUT4s, +72 mapped FFs, unchanged block RAM, and -1 multiplier. The accepted
+routed baseline contains 25,449 packed FFs, so synthesized and packed FF deltas
+must not be compared directly.
+
+This is a synthesis checkpoint, not capacity or release evidence. Packed
+TRELLIS_COMB usage and physical headroom remain unknown until the exact
+full-feature route completes and passes every constrained clock.
+
 ## P55 routed checkpoint
 
 P55 removes the hardware-proven P54 route's worst AstraHost ownership cone.

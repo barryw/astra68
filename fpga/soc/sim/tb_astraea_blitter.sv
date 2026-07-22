@@ -390,6 +390,26 @@ module tb_astraea_blitter;
             end
         end
 
+        // Zero pitch repeats the same row. This specifically exercises a
+        // nonzero row count with a mathematically zero validation product.
+        for (i = 0; i < 6; i = i + 1)
+            write_byte(25'h0007200 + i, 8'hee);
+        start_blit(25'd0, 25'h0007201, 16'd0, 16'd0,
+                   16'd4, 16'd3, 32'h00000001, 32'h000000a6,
+                   elapsed_misc);
+        read_byte(25'h0007200, byte_value);
+        if (byte_value !== 8'hee)
+            $fatal(1, "zero-pitch low guard overwritten");
+        for (i = 1; i < 5; i = i + 1) begin
+            read_byte(25'h0007200 + i, byte_value);
+            if (byte_value !== 8'ha6)
+                $fatal(1, "zero-pitch fill mismatch i=%0d got=%02x",
+                       i, byte_value);
+        end
+        read_byte(25'h0007205, byte_value);
+        if (byte_value !== 8'hee)
+            $fatal(1, "zero-pitch high guard overwritten");
+
         // Color-key copy compares complete elements even when source and
         // destination are unaligned.
         for (elem_size = 0; elem_size < 3; elem_size = elem_size + 1) begin
@@ -562,6 +582,11 @@ module tb_astraea_blitter;
         reg_write(5'h14, 32'd8);
         reg_write(5'h16, {16'd1, 16'd8});
         expect_invalid("destination range overflow");
+
+        reg_write(5'h11, 32'h01ffff00);
+        reg_write(5'h14, 32'h00000100);
+        reg_write(5'h16, {16'd2, 16'd1});
+        expect_invalid("multi-row destination range overflow");
 
         reg_write(5'h17, 32'd0); // 8-bit copy
         reg_write(5'h10, 32'h01fffffc);

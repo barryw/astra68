@@ -118,6 +118,18 @@ and old resource tables are not current status.
   13.646847 MHz CPU and 65.789474 MHz SDRAM or better. Physical capacity, not
   an artificial utilization cap, is the release limit. See
   [FPGA_RESOURCE_BUDGET.md](FPGA_RESOURCE_BUDGET.md).
+- A focused board diagnostic found one remaining hardware-only Astraea defect
+  in that release: every multi-row blit was rejected with range error 1 while
+  a one-row command passed. Zero-pitch and nonzero-pitch commands failed
+  identically, and the CPU-visible command fields plus completion fences were
+  correct. The failure is isolated to the unregistered DSP-backed
+  `(height - 1) * pitch` range-validation path. The candidate replacement uses
+  a deterministic 16-step unsigned shift/add validator; directed graphics,
+  integrated normal/INDEX8/RGB565 graphics, full CPU coretest, and complete
+  HDMI-enabled AstraHost boot through `K0 ENTRY PASS` all pass. Canonical Beast
+  synthesis has zero SCCs and maps 52,728 LUT4s, 25,492 FFs, 101 block RAMs,
+  and 18 multipliers. It is not a release until an exact strict route and board
+  validation pass.
 - The 256 GB card and its existing GBA data are preserved. The one-shot
   maintenance firmware atomically replaced only `/ASTRA68.ROM` and reported
   the exact release payload CRC32 `ceafeee9`; normal AstraHost firmware is
@@ -163,9 +175,10 @@ and old resource tables are not current status.
   `B1F9E60D` route and three board reloads now pass; a mandatory mapped-netlist
   gate rejects multiple font blocks, constant logical address pins, or the
   wrong physical width.
-- The remaining promotion gate is physical confirmation that normal CP437 POST
-  text is visible over HDMI from the exact SRAM image. Once that passes, the
-  same bitstream may be written to persistent FPGA flash; no rebuild or
+- The active promotion gate is a strict full-feature route of the multi-row
+  blitter correction, followed by a route-preserving focused diagnostic and
+  repeated full POST, SDRAM, kernel-entry, graphics, and normal CP437 HDMI
+  checks on ULX3S. Persistent FPGA flash remains untouched; no rebuild or
   repacking is permitted between SRAM acceptance and persistent programming.
 - The canonical entry points agree on divider 0, 12.5 MHz CPU, 60 MHz SDRAM,
   heap timing weight 20, plain router1, and the measured critical floorplan.

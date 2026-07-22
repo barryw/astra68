@@ -1,7 +1,10 @@
 // Full TG030 + pin-level SDRAM execution gate for the visual diagnostic ROM.
 `timescale 1ns/1ps
 
-module tb_graphics_demo;
+module tb_graphics_demo #(
+    parameter bit PRODUCTION_MAP = 1'b0,
+    parameter bit DIAGNOSTIC_ONLY = 1'b0
+);
     localparam integer LINE_DEADLINE_MEM_CYCLES = 1906;
 
     reg clk25 = 1'b0;
@@ -29,7 +32,7 @@ module tb_graphics_demo;
         .HDMI_ENABLE(1'b1),
         .USB_ENABLE(1'b0),
         .CPU_CLK_DIV_BIT(0),
-        .SD_BOOT_ENABLE(1'b0),
+        .SD_BOOT_ENABLE(PRODUCTION_MAP),
         .ASTRA_HOST_ENABLE(1'b0)
     ) dut (
         .clk25_mhz(clk25), .reset_n(rstn),
@@ -171,53 +174,87 @@ module tb_graphics_demo;
                 $fatal(1, "graphics ROM failed");
             end
             if (leds == 8'h5a) begin
-                if (dut.vega_i.config_error_cpu ||
+                if (DIAGNOSTIC_ONLY) begin
+                    $display("BLITTER CONFIG DIAGNOSTIC PASS");
+                    $finish;
+                end else begin
+                    if (dut.vega_i.config_error_cpu ||
                     dut.vega_i.underrun_sticky_cpu)
-                    $fatal(1, "Vega completed with error status=%08x",
-                           dut.vega_rdata);
-                if ((dut.vega_i.sprite_collision_cpu & 32'h3) != 32'h3)
-                    $fatal(1, "sprite collision path was not exercised");
-                if (copper_moves < 8)
-                    $fatal(1, "copper raster list was not exercised moves=%0d",
-                           copper_moves);
-                if (color_changes < 32)
-                    $fatal(1, "compositor produced too little variation=%0d",
-                           color_changes);
-                if (max_line_cycles >= LINE_DEADLINE_MEM_CYCLES)
-                    $fatal(1,
-                           "scanline deadline missed cycles=%0d deadline=%0d",
-                           max_line_cycles, LINE_DEADLINE_MEM_CYCLES);
-                if (observed_sprite_active == 32'h0000ffff) begin
-                    if (dut.vega_i.fb_format_mem == 3'd0) begin
-                        if (dut.vega_i.sprite_budget_effective_mem != 16'd512)
-                            $fatal(1, "RGB565 sprite budget was not clamped");
-                        if (observed_sprite_accepted != 32'h0000ffff ||
-                            dut.vega_i.sprite_overflow_cpu)
-                            $fatal(1,
-                                   "RGB565 admission mismatch accepted=%08x overflow=%b",
-                                   observed_sprite_accepted,
-                                   dut.vega_i.sprite_overflow_cpu);
-                    end else begin
-                        if (dut.vega_i.sprite_budget_effective_mem != 16'd1024)
-                            $fatal(1, "INDEX8 sprite budget was unexpectedly limited");
-                        if (observed_sprite_accepted != 32'h0000ffff ||
-                            dut.vega_i.sprite_overflow_cpu)
-                            $fatal(1,
-                                   "INDEX8 admission mismatch accepted=%08x overflow=%b",
-                                   observed_sprite_accepted,
-                                   dut.vega_i.sprite_overflow_cpu);
+                        $fatal(1, "Vega completed with error status=%08x",
+                               dut.vega_rdata);
+                    if ((dut.vega_i.sprite_collision_cpu & 32'h3) != 32'h3)
+                        $fatal(1, "sprite collision path was not exercised");
+                    if (copper_moves < 8)
+                        $fatal(1, "copper raster list was not exercised moves=%0d",
+                               copper_moves);
+                    if (color_changes < 32)
+                        $fatal(1, "compositor produced too little variation=%0d",
+                               color_changes);
+                    if (max_line_cycles >= LINE_DEADLINE_MEM_CYCLES)
+                        $fatal(1,
+                               "scanline deadline missed cycles=%0d deadline=%0d",
+                               max_line_cycles, LINE_DEADLINE_MEM_CYCLES);
+                    if (observed_sprite_active == 32'h0000ffff) begin
+                        if (dut.vega_i.fb_format_mem == 3'd0) begin
+                            if (dut.vega_i.sprite_budget_effective_mem != 16'd512)
+                                $fatal(1, "RGB565 sprite budget was not clamped");
+                            if (observed_sprite_accepted != 32'h0000ffff ||
+                                dut.vega_i.sprite_overflow_cpu)
+                                $fatal(1,
+                                       "RGB565 admission mismatch accepted=%08x overflow=%b",
+                                       observed_sprite_accepted,
+                                       dut.vega_i.sprite_overflow_cpu);
+                        end else begin
+                            if (dut.vega_i.sprite_budget_effective_mem != 16'd1024)
+                                $fatal(1, "INDEX8 sprite budget was unexpectedly limited");
+                            if (observed_sprite_accepted != 32'h0000ffff ||
+                                dut.vega_i.sprite_overflow_cpu)
+                                $fatal(1,
+                                       "INDEX8 admission mismatch accepted=%08x overflow=%b",
+                                       observed_sprite_accepted,
+                                       dut.vega_i.sprite_overflow_cpu);
+                        end
                     end
+                    $display("GRAPHICS DEMO PASS copper_moves=%0d colors=%0d fence=%0d max_line_cycles=%0d",
+                             copper_moves, color_changes,
+                             dut.g_sdram_enabled.astraea_i.draw_i.completed_fence_mem,
+                             max_line_cycles);
+                    $finish;
                 end
-                $display("GRAPHICS DEMO PASS copper_moves=%0d colors=%0d fence=%0d max_line_cycles=%0d",
-                         copper_moves, color_changes,
-                         dut.g_sdram_enabled.astraea_i.draw_i.completed_fence_mem,
-                         max_line_cycles);
-                $finish;
             end
-            if (timeout > 32'd3000000)
+            if (timeout > 32'd3000000) begin
+                if (DIAGNOSTIC_ONLY) begin
+                    $display("BLIT CPU pending=%b busy_sync=%b done=%b start=%b done_sync=%b seen=%b",
+                             dut.g_sdram_enabled.astraea_i.blitter_i.start_pending_cpu,
+                             dut.g_sdram_enabled.astraea_i.blitter_i.busy_sync_cpu,
+                             dut.g_sdram_enabled.astraea_i.blitter_i.done_sticky_cpu,
+                             dut.g_sdram_enabled.astraea_i.blitter_i.start_toggle_cpu,
+                             dut.g_sdram_enabled.astraea_i.blitter_i.done_sync_cpu,
+                             dut.g_sdram_enabled.astraea_i.blitter_i.done_seen_cpu);
+                    $display("BLIT MEM busy=%b state=%0d start_sync=%b seen=%b done=%b error=%0d",
+                             dut.g_sdram_enabled.astraea_i.blitter_i.busy_mem,
+                             dut.g_sdram_enabled.astraea_i.blitter_i.state_mem,
+                             dut.g_sdram_enabled.astraea_i.blitter_i.start_sync_mem,
+                             dut.g_sdram_enabled.astraea_i.blitter_i.start_seen_mem,
+                             dut.g_sdram_enabled.astraea_i.blitter_i.done_toggle_mem,
+                             dut.g_sdram_enabled.astraea_i.blitter_i.error_mem);
+                    $display("BLIT CFG cpu dim=%08x op=%08x valid=%b/%b fence=%08x",
+                             dut.g_sdram_enabled.astraea_i.blitter_i.cfg_dim_cpu,
+                             dut.g_sdram_enabled.astraea_i.blitter_i.cfg_op_cpu,
+                             dut.g_sdram_enabled.astraea_i.blitter_i.cfg_fields_valid_cpu,
+                             dut.g_sdram_enabled.astraea_i.blitter_i.cfg_op_valid_cpu,
+                             dut.g_sdram_enabled.astraea_i.blitter_i.cfg_fence_cpu);
+                    $display("BLIT CFG mem dim=%08x op=%08x valid=%b/%b pitch=%04x",
+                             dut.g_sdram_enabled.astraea_i.blitter_i.cfg_dim_mem,
+                             dut.g_sdram_enabled.astraea_i.blitter_i.cfg_op_mem,
+                             dut.g_sdram_enabled.astraea_i.blitter_i.cfg_fields_valid_mem,
+                             dut.g_sdram_enabled.astraea_i.blitter_i.cfg_op_valid_mem,
+                             dut.g_sdram_enabled.astraea_i.blitter_i.cfg_dst_pitch_mem);
+                end
                 $fatal(1, "graphics ROM timeout pc=%08x leds=%02x state=%0d",
                        dut.cpu_adr, leds,
                        dut.g_sdram_enabled.astraea_i.draw_i.state);
+            end
         end
     end
 endmodule
