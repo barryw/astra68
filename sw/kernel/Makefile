@@ -8,12 +8,11 @@ HOST_CC ?= cc
 KERNEL_VERSION ?= 0.1.0-dev
 PANIC_SELFTEST ?= 0
 SCHED_TRACE ?= 0
+SOAK_SELFTEST ?= 0
 BUILD_DIR = build
 BUILD_INFO = $(BUILD_DIR)/kernel_build_info.h
 
-CPPFLAGS = -I../include -I$(BUILD_DIR) \
-           -DASTRA_KERNEL_PANIC_SELFTEST=$(PANIC_SELFTEST) \
-           -DASTRA_KERNEL_SCHED_TRACE=$(SCHED_TRACE)
+CPPFLAGS = -I../include -I$(BUILD_DIR) -include $(BUILD_INFO)
 CFLAGS = -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin \
          -fno-common -fno-pic -fno-pie -fno-stack-protector \
          -Wa,--noexecstack -Wall -Wextra -Werror
@@ -37,7 +36,12 @@ $(BUILD_DIR):
 	mkdir -p $@
 
 $(BUILD_INFO): FORCE gen_build_info.py | $(BUILD_DIR)
-	python3 gen_build_info.py --version "$(KERNEL_VERSION)" --output "$@"
+	python3 gen_build_info.py --version "$(KERNEL_VERSION)" \
+		--panic-selftest "$(PANIC_SELFTEST)" \
+		--sched-trace "$(SCHED_TRACE)" \
+		--soak-selftest "$(SOAK_SELFTEST)" --output "$@"
+
+$(OBJECTS): $(BUILD_INFO)
 
 $(BUILD_DIR)/entry.o: entry.S kernel.ld | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
@@ -192,7 +196,8 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
                             ../include/astra/syscall.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror \
 		-DKERNEL_MEMORY_NO_POISON=1 -DKERNEL_VM_HOST_TEST=1 \
-		-DKERNEL_PROCESS_HOST_TEST=1 -I. -I../include \
+		-DKERNEL_PROCESS_HOST_TEST=1 -DASTRA_KERNEL_SOAK_SELFTEST=1 \
+		-I. -I../include \
 		../common/boot_contract.c memory.c dma.c block.c vm.c exception.c \
 		context.c handle.c process.c tests/test_process.c -o $@
 

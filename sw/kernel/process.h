@@ -7,6 +7,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#ifndef ASTRA_KERNEL_SOAK_SELFTEST
+#define ASTRA_KERNEL_SOAK_SELFTEST 0
+#endif
+
 #define KERNEL_PROCESS_MAX 4u
 #define KERNEL_PROCESS_CODE_BASE 0x00100000u
 #define KERNEL_PROCESS_STACK_BASE 0x70000000u
@@ -75,9 +79,13 @@ typedef struct KernelSchedulerStats {
     uint32_t context_switches;
     uint32_t timer_preemptions;
     uint32_t voluntary_switches;
+    uint32_t total_syscalls_low;
+    uint32_t total_syscalls_high;
     uint32_t user_faults;
+    uint32_t completed_user_fault_teardowns;
     uint32_t completed_teardowns;
     uint32_t forced_frame_releases;
+    uint32_t soak_cycles;
     uint32_t current_process_id;
     uint8_t milestone_complete;
     uint8_t reserved[3];
@@ -109,6 +117,14 @@ bool kernel_process_snapshot(uint32_t slot, KernelProcessSnapshot *snapshot);
 bool kernel_process_stats(KernelSchedulerStats *stats);
 
 void kernel_process_milestone_reached(void);
+
+#if ASTRA_KERNEL_SOAK_SELFTEST
+KernelProcessStatus kernel_process_soak_configure(
+    const void *image, uint32_t image_size, uint32_t entry_offset,
+    uint32_t baseline_free_frames, uint32_t report_interval);
+void kernel_process_soak_checkpoint(uint32_t cycles,
+                                    uint32_t baseline_free_frames);
+#endif
 
 #if defined(KERNEL_PROCESS_HOST_TEST)
 void kernel_process_test_bind_physical_memory(uint8_t *memory, uint32_t base,

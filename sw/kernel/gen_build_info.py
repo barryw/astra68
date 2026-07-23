@@ -33,6 +33,9 @@ def build_timestamp() -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", required=True)
+    parser.add_argument("--panic-selftest", required=True, type=int)
+    parser.add_argument("--sched-trace", required=True, type=int)
+    parser.add_argument("--soak-selftest", required=True, type=int)
     parser.add_argument("--output", required=True, type=pathlib.Path)
     args = parser.parse_args()
 
@@ -59,6 +62,9 @@ def main() -> None:
 #define ASTRA_KERNEL_BUILD_UTC \"{build_timestamp()}\"
 #define ASTRA_KERNEL_GIT_REVISION \"{revision}\"
 #define ASTRA_KERNEL_REVISION_ID 0x{revision_id:08x}u
+#define ASTRA_KERNEL_PANIC_SELFTEST {args.panic_selftest}
+#define ASTRA_KERNEL_SCHED_TRACE {args.sched_trace}
+#define ASTRA_KERNEL_SOAK_SELFTEST {args.soak_selftest}
 
 #endif
 """

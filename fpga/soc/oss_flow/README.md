@@ -117,26 +117,40 @@ rtk rsync -a astra.bit nuc:/tmp/astra68-release.bit
 rtk rsync -a sw/boot/check_hardware.py nuc:/tmp/astra68-check-hardware.py
 rtk proxy ssh nuc "python3 /tmp/astra68-check-hardware.py \
   --bit /tmp/astra68-release.bit --expect-build <8-hex-build-id> \
-  --expect-rom-crc <8-hex-rom-crc32> --expect-kernel-entry"
+  --expect-rom-crc <8-hex-rom-crc32> --expect-k1-entry"
 ```
 
 The command exits nonzero on a POST failure, kernel panic, or timeout. With the
 gates shown above it requires the expected FPGA build identity, SD system-ROM
-identity, complete POST, and `K0 ENTRY PASS` in one capture. It does not write
-SPI flash. After the exact SRAM-loaded image and physical HDMI output pass,
-program and validate the identical image in one capture on NUC with:
+identity, complete POST, and `K1 PROTECTED ENTRY PASS` in one capture. The
+legacy `--expect-kernel-entry` gate remains available only for retained K0
+images. The SRAM command does not write SPI flash. After the exact SRAM-loaded
+image and physical HDMI output pass, program and validate the identical image
+in one capture on NUC with:
 
 ```sh
 rtk proxy ssh nuc "python3 /tmp/astra68-check-hardware.py \
   --bit /tmp/astra68-release.bit --program-flash \
   --expect-build <8-hex-build-id> --expect-rom-crc <8-hex-rom-crc32> \
-  --expect-kernel-entry"
+  --expect-k1-entry"
 ```
 
 `--program-flash` adds the hardware-proven openFPGALoader `-f -r` operation;
 it is rejected without `--bit`. The capture therefore proves the reset boot
 from the just-programmed persistent image rather than following it with a
 separate volatile SRAM load.
+
+For a K1 soak ROM, require a complete resource-baseline checkpoint rather than
+merely observing initial kernel entry:
+
+```sh
+rtk proxy ssh nuc "python3 /tmp/astra68-check-hardware.py \
+  --timeout 90000 --expect-build <8-hex-build-id> \
+  --expect-rom-crc <8-hex-rom-crc32> --expect-k1-soak-cycles 8640000"
+```
+
+The soak counter advances only after an offender was preempted, faulted,
+reaped, returned all pages to the captured baseline, and was relaunched.
 
 For a route that produces no POST bytes, build the diagnostic stage-0 image:
 

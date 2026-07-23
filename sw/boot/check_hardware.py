@@ -73,6 +73,8 @@ def acceptance_reached(
     expected_rom_crc: bytes | None = None,
     expect_video_probe: bool = False,
     expect_graphics: bool = False,
+    expect_k1_entry: bool = False,
+    expect_k1_soak_cycles: int | None = None,
 ) -> bool:
     if expect_route_probe:
         match = re.search(
@@ -103,11 +105,37 @@ def acceptance_reached(
         rb"(?m)^ROM CRC32[ .\t]+0x" + re.escape(expected_rom_crc) + rb"\r?$",
         output,
     ) is not None
+    if expect_k1_soak_cycles is not None:
+        protected_entry_offset = output.find(b"K1 PROTECTED ENTRY PASS")
+        soak_reached = False
+        for match in re.finditer(
+            rb"(?m)^K1 SOAK cycles=(\d+) switches=(\d+) "
+            rb"ticks=(\d+) syscalls=0x([0-9A-Fa-f]{16}) free=(\d+)\r?$",
+            output,
+        ):
+            if (
+                protected_entry_offset >= 0
+                and match.start() > protected_entry_offset
+                and int(match.group(1)) >= expect_k1_soak_cycles
+                and int(match.group(2)) != 0
+                and int(match.group(3)) >= expect_k1_soak_cycles
+                and int(match.group(4), 16) != 0
+                and int(match.group(5)) != 0
+            ):
+                soak_reached = True
+                break
+        kernel_entry_reached = soak_reached
+    elif expect_k1_entry:
+        kernel_entry_reached = b"K1 PROTECTED ENTRY PASS" in output
+    elif expect_kernel_entry:
+        kernel_entry_reached = b"K0 ENTRY PASS" in output
+    else:
+        kernel_entry_reached = True
     return (
         b"POST PASS" in output
         and build_reached
         and rom_crc_reached
-        and (not expect_kernel_entry or b"K0 ENTRY PASS" in output)
+        and kernel_entry_reached
     )
 
 
@@ -177,10 +205,22 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--expect-build", help="required eight-digit hardware build ID")
     parser.add_argument("--expect-rom-crc", help="required eight-digit system ROM CRC32")
-    parser.add_argument(
+    kernel_entry_group = parser.add_mutually_exclusive_group()
+    kernel_entry_group.add_argument(
         "--expect-kernel-entry",
         action="store_true",
-        help="also require the kernel to report K0 ENTRY PASS",
+        help="require the legacy kernel to report K0 ENTRY PASS",
+    )
+    kernel_entry_group.add_argument(
+        "--expect-k1-entry",
+        action="store_true",
+        help="require the protected kernel to report K1 PROTECTED ENTRY PASS",
+    )
+    kernel_entry_group.add_argument(
+        "--expect-k1-soak-cycles",
+        type=int,
+        metavar="COUNT",
+        help="require a validated K1 soak checkpoint at or beyond COUNT cycles",
     )
     parser.add_argument(
         "--expect-route-probe",
@@ -201,12 +241,18 @@ def main() -> int:
 
     if args.program_flash and not args.bit:
         parser.error("--program-flash requires --bit")
+    if args.expect_k1_soak_cycles is not None and args.expect_k1_soak_cycles <= 0:
+        parser.error("--expect-k1-soak-cycles must be positive")
 
     diagnostic_modes = sum(
         (args.expect_route_probe, args.expect_video_probe, args.expect_graphics)
     )
     if diagnostic_modes and (
-        args.expect_build or args.expect_rom_crc or args.expect_kernel_entry
+        args.expect_build
+        or args.expect_rom_crc
+        or args.expect_kernel_entry
+        or args.expect_k1_entry
+        or args.expect_k1_soak_cycles is not None
     ):
         parser.error(
             "diagnostic expectations cannot be combined with POST expectations"
@@ -284,6 +330,8 @@ def main() -> int:
                     expected_rom_crc,
                     args.expect_video_probe,
                     args.expect_graphics,
+                    args.expect_k1_entry,
+                    args.expect_k1_soak_cycles,
                 ):
                     break
     finally:
@@ -299,6 +347,7 @@ def main() -> int:
         "route probe" if args.expect_route_probe else
         "video probe" if args.expect_video_probe else
         "graphics" if args.expect_graphics else
+        "K1 soak" if args.expect_k1_soak_cycles is not None else
         "POST"
     )
     print(f"{capture_name} capture elapsed={elapsed:.3f}s events={events}")
@@ -312,6 +361,8 @@ def main() -> int:
         expected_rom_crc,
         args.expect_video_probe,
         args.expect_graphics,
+        args.expect_k1_entry,
+        args.expect_k1_soak_cycles,
     ):
         return 0
     if failure_reached(output):

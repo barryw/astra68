@@ -19,6 +19,7 @@ const FRONT_PANEL_APERTURE: u32 = 0x0100;
 
 const BUILD_ID: u32 = 0x18eb_e2e1;
 const KERNEL_STATUS_READY: u32 = 0x4b31_4f4b;
+const KERNEL_STATUS_SOAK: u32 = 0x4b31_534b;
 const KERNEL_STATUS_PANIC: u32 = 0x4b50_414e;
 const BIST_SWEEP_CYCLES: u64 = 1_437_500;
 const BIST_TOTAL_CYCLES: u64 = BIST_SWEEP_CYCLES * 4;
@@ -189,7 +190,11 @@ impl MachineBus {
     }
 
     pub(crate) fn kernel_ready(&self) -> bool {
-        self.scratch == KERNEL_STATUS_READY
+        self.scratch == KERNEL_STATUS_READY || self.scratch == KERNEL_STATUS_SOAK
+    }
+
+    pub(crate) fn kernel_soaking(&self) -> bool {
+        self.scratch == KERNEL_STATUS_SOAK
     }
 
     pub(crate) fn kernel_panicked(&self) -> bool {
@@ -937,6 +942,12 @@ mod tests {
 
         bus.write32(VESTA_BASE + 0x018, KERNEL_STATUS_READY);
         assert!(bus.kernel_ready());
+        assert!(!bus.kernel_soaking());
+        assert!(!bus.terminal());
+
+        bus.write32(VESTA_BASE + 0x018, KERNEL_STATUS_SOAK);
+        assert!(bus.kernel_ready());
+        assert!(bus.kernel_soaking());
         assert!(!bus.terminal());
 
         bus.write32(VESTA_BASE + 0x018, KERNEL_STATUS_PANIC);

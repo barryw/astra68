@@ -16,6 +16,9 @@
 
 static uint8_t physical_memory[32u * 1024u * 1024u];
 static uint32_t milestone_calls;
+static uint32_t soak_checkpoint_calls;
+static uint32_t last_soak_checkpoint;
+static uint32_t last_soak_free_frames;
 
 void kernel_pmmu_load_tc(const uint32_t *value)
 {
@@ -93,6 +96,14 @@ void kernel_platform_block_ack_state(void)
 void kernel_process_milestone_reached(void)
 {
     ++milestone_calls;
+}
+
+void kernel_process_soak_checkpoint(uint32_t cycles,
+                                    uint32_t baseline_free_frames)
+{
+    ++soak_checkpoint_calls;
+    last_soak_checkpoint = cycles;
+    last_soak_free_frames = baseline_free_frames;
 }
 
 static void put_be16(uint8_t *bytes, uint32_t offset, uint16_t value)
@@ -199,6 +210,9 @@ static void initialize_test(void)
     kernel_block_init();
     kernel_process_init();
     milestone_calls = 0u;
+    soak_checkpoint_calls = 0u;
+    last_soak_checkpoint = 0u;
+    last_soak_free_frames = 0u;
 }
 
 static void test_preemption_fault_containment_and_teardown(void)
@@ -289,7 +303,10 @@ static void test_preemption_fault_containment_and_teardown(void)
     assert(stats.live_processes == 1u);
     assert(stats.dead_processes == 1u);
     assert(stats.timer_preemptions == 1u);
+    assert(stats.total_syscalls_low == 1u);
+    assert(stats.total_syscalls_high == 0u);
     assert(stats.user_faults == 1u);
+    assert(stats.completed_user_fault_teardowns == 1u);
     assert(stats.completed_teardowns == 1u);
     assert(stats.forced_frame_releases == 1u);
     assert(stats.milestone_complete == 1u);
@@ -310,6 +327,77 @@ static void test_preemption_fault_containment_and_teardown(void)
     assert(stats.dead_processes == 2u);
     assert(stats.completed_teardowns == 2u);
     assert(milestone_calls == 1u);
+}
+
+static void test_soak_relaunches_only_after_exact_teardown(void)
+{
+    static const uint8_t image[] = {0x70u, 0x01u, 0x4eu, 0x4fu,
+                                    0x60u, 0xfau, 0x4eu, 0x71u};
+    KernelMemoryStats survivor_baseline;
+    KernelMemoryStats between_cycles;
+    KernelSchedulerStats stats;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_memory_stats(&survivor_baseline));
+    assert(kernel_process_create(image, sizeof(image), 0u, 1u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_soak_configure(
+               image, sizeof(image), 0u, survivor_baseline.free_frames, 3u) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+
+    for (uint32_t cycle = 1u; cycle <= 3u; ++cycle) {
+        make_frame(frame, 0u, 80u, KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+        assert(kernel_process_on_timer(registers,
+                                       KERNEL_PROCESS_STACK_TOP - 16u, frame,
+                                       &next) == KERNEL_PROCESS_OK);
+
+        make_frame(frame, 0xau, 2u, KERNEL_PROCESS_CODE_BASE + 6u,
+                   0x60000000u);
+        assert(kernel_process_on_fault(registers,
+                                       KERNEL_PROCESS_STACK_TOP - 32u, frame,
+                                       &next) == KERNEL_PROCESS_OK);
+        assert(kernel_memory_stats(&between_cycles));
+        assert(between_cycles.free_frames == survivor_baseline.free_frames);
+
+        if (cycle == 1u) {
+            assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+            assert(soak_checkpoint_calls == 0u);
+            memset(registers, 0, sizeof(registers));
+            registers[0] = ASTRA_SYSCALL_PROGRESS;
+            registers[1] = KERNEL_PROCESS_PROGRESS_GOAL;
+            make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+                       KERNEL_PROCESS_CODE_BASE + 4u, 0u);
+            assert(kernel_process_on_syscall(
+                       registers, KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                       &next) == KERNEL_PROCESS_OK);
+            assert(kernel_process_stats(&stats));
+            assert(stats.milestone_complete == 1u);
+            assert(milestone_calls == 1u);
+        } else {
+            assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+        }
+        assert(kernel_process_stats(&stats));
+        assert(stats.live_processes == 2u);
+        assert(stats.user_faults == cycle);
+        assert(stats.completed_user_fault_teardowns == cycle);
+        assert(stats.completed_teardowns == cycle);
+        assert(stats.soak_cycles == cycle);
+        if (cycle == 1u)
+            assert(soak_checkpoint_calls == 0u);
+        else
+            assert(soak_checkpoint_calls == cycle - 1u);
+    }
+
+    assert(soak_checkpoint_calls == 2u);
+    assert(last_soak_checkpoint == 3u);
+    assert(last_soak_free_frames == survivor_baseline.free_frames);
 }
 
 static void test_invalid_creation_does_not_allocate(void)
@@ -337,6 +425,7 @@ static void test_invalid_creation_does_not_allocate(void)
 int main(void)
 {
     test_preemption_fault_containment_and_teardown();
+    test_soak_relaunches_only_after_exact_teardown();
     test_invalid_creation_does_not_allocate();
     puts("process tests passed");
     return 0;

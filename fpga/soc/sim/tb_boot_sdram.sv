@@ -8,6 +8,7 @@ module tb_boot_sdram #(
     parameter bit EXPECT_KERNEL_PANIC = 1'b0
 );
     localparam [31:0] KERNEL_STATUS_READY = 32'h4b314f4b;
+    localparam [31:0] KERNEL_STATUS_SOAK = 32'h4b31534b;
     localparam [31:0] KERNEL_STATUS_PANIC = 32'h4b50414e;
     localparam [31:0] EARLY_LOG_MAGIC = 32'h41364c47;
     localparam longint unsigned BOOT_TIMEOUT_NS =
@@ -124,6 +125,7 @@ module tb_boot_sdram #(
     reg astraea_result_seen = 1'b0;
     reg post_seen = 1'b0;
     reg expect_kernel_panic;
+    reg expect_kernel_soak = 1'b0;
     reg expect_kernel_guard = 1'b0;
     reg guard_reason_seen = 1'b0;
     reg guard_fault_seen = 1'b0;
@@ -135,10 +137,13 @@ module tb_boot_sdram #(
     initial begin
         expect_kernel_panic = EXPECT_KERNEL_PANIC;
         if ($test$plusargs("expect-kernel-panic")) expect_kernel_panic = 1'b1;
+        if ($test$plusargs("expect-kernel-soak")) expect_kernel_soak = 1'b1;
         if ($value$plusargs("expect-kernel-guard=%h", expected_guard_address)) begin
             expect_kernel_guard = 1'b1;
             expect_kernel_panic = 1'b1;
         end
+        if (expect_kernel_panic && expect_kernel_soak)
+            $fatal(1, "panic and soak expectations are mutually exclusive");
     end
 
     always @(posedge dut.g_sdram_enabled.sd_domain_clk) begin
@@ -231,7 +236,8 @@ module tb_boot_sdram #(
                    sdram_be32(25'h0000018));
         if (post_seen &&
             dut.sys_scratch == (expect_kernel_panic ? KERNEL_STATUS_PANIC :
-                                                       KERNEL_STATUS_READY)) begin
+                                expect_kernel_soak ? KERNEL_STATUS_SOAK :
+                                                     KERNEL_STATUS_READY)) begin
             if (sdram_be32(25'h0000000) != EARLY_LOG_MAGIC)
                 $fatal(1, "early log header missing: %08x",
                        sdram_be32(25'h0000000));
@@ -250,7 +256,8 @@ module tb_boot_sdram #(
                 $fatal(1, "normal boot marked early log flags: %08x",
                        sdram_be32(25'h0000018));
             $display("KERNEL %s PASS status=%08x log_write=%0d wraps=%0d",
-                     expect_kernel_panic ? "PANIC" : "ENTRY",
+                     expect_kernel_panic ? "PANIC" :
+                     expect_kernel_soak ? "SOAK" : "ENTRY",
                      dut.sys_scratch, sdram_be32(25'h0000010),
                      sdram_be32(25'h0000014));
             $finish;

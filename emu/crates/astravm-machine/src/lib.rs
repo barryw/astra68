@@ -50,6 +50,7 @@ pub struct MachineSnapshot {
     pub ready_for_loader: bool,
     pub post_failed: bool,
     pub kernel_ready: bool,
+    pub kernel_soaking: bool,
     pub kernel_panicked: bool,
     pub stages: Vec<PostStageSnapshot>,
     pub console_rows: Vec<String>,
@@ -196,6 +197,7 @@ impl AstraMachine {
             ready_for_loader: self.bus.ready_for_loader(),
             post_failed: self.bus.post_failed(),
             kernel_ready: self.bus.kernel_ready(),
+            kernel_soaking: self.bus.kernel_soaking(),
             kernel_panicked: self.bus.kernel_panicked(),
             stages: stage_snapshots(
                 &transcript,

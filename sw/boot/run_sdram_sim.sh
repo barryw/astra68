@@ -14,15 +14,26 @@ progress="${SDRAM_SIM_PROGRESS:-0}"
 reuse_sim="${SDRAM_SIM_REUSE:-0}"
 kernel_panic_selftest="${KERNEL_PANIC_SELFTEST:-0}"
 kernel_sched_trace="${KERNEL_SCHED_TRACE:-0}"
+kernel_soak_selftest="${KERNEL_SOAK_SELFTEST:-0}"
+kernel_version="${KERNEL_VERSION:-0.1.0-dev}"
 sim_args=()
 if [[ "$kernel_panic_selftest" != "0" ]]; then
     sim_args+=(+expect-kernel-panic)
+fi
+if [[ "$kernel_soak_selftest" != "0" ]]; then
+    sim_args+=(+expect-kernel-soak)
+fi
+if [[ "$kernel_panic_selftest" != "0" && "$kernel_soak_selftest" != "0" ]]; then
+    echo "panic and soak self-tests are mutually exclusive" >&2
+    exit 1
 fi
 
 make -C sw/boot clean all \
     CPU_CLK_DIV_BIT=0 SDRAM_ENABLE=1 HDMI_ENABLE=0 \
     KERNEL_PANIC_SELFTEST="$kernel_panic_selftest" \
     KERNEL_SCHED_TRACE="$kernel_sched_trace" \
+    KERNEL_SOAK_SELFTEST="$kernel_soak_selftest" \
+    KERNEL_VERSION="$kernel_version" \
     EXTRA_CFLAGS="-DMEM_BENCH_BYTES=$mem_bench_bytes -DDMA_BENCH_BYTES=$dma_bench_bytes"
 python3 sw/boot/bin2hex.py sw/boot/astra_boot.bin fpga/soc/sim/rom_init.hex
 if [[ "$kernel_panic_selftest" == "2" ]]; then

@@ -19,6 +19,7 @@
 #define SCREEN_BOTTOM_MARGIN 2u
 #define KERNEL_SELFTEST_OWNER 0xfffffff0u
 #define KERNEL_SELFTEST_USER_ADDRESS 0x10000000u
+#define KERNEL_SOAK_REPORT_INTERVAL 10000u
 
 extern uint8_t _kernel_entry[];
 extern uint8_t _kernel_image_start[];
@@ -341,6 +342,38 @@ void kernel_process_milestone_reached(void)
     VESTA->SCRATCH = ASTRA_KERNEL_STATUS_K1_READY;
 }
 
+#if ASTRA_KERNEL_SOAK_SELFTEST
+void kernel_process_soak_checkpoint(uint32_t cycles,
+                                    uint32_t baseline_free_frames)
+{
+    KernelMemoryStats memory_stats;
+    KernelSchedulerStats scheduler_stats;
+
+    if (!kernel_memory_stats(&memory_stats) ||
+        !kernel_process_stats(&scheduler_stats) ||
+        memory_stats.free_frames != baseline_free_frames ||
+        scheduler_stats.soak_cycles != cycles ||
+        scheduler_stats.user_faults != cycles ||
+        scheduler_stats.completed_user_fault_teardowns != cycles ||
+        scheduler_stats.completed_teardowns != cycles)
+        kernel_panic("K1 soak resource baseline drift");
+
+    console_puts("K1 SOAK cycles=");
+    console_dec32(cycles);
+    console_puts(" switches=");
+    console_dec32(scheduler_stats.context_switches);
+    console_puts(" ticks=");
+    console_dec32(kernel_platform_ticks());
+    console_puts(" syscalls=0x");
+    console_hex32(scheduler_stats.total_syscalls_high);
+    console_hex32(scheduler_stats.total_syscalls_low);
+    console_puts(" free=");
+    console_dec32(memory_stats.free_frames);
+    console_putc('\n');
+    VESTA->SCRATCH = ASTRA_KERNEL_STATUS_K1_SOAK;
+}
+#endif
+
 void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
 {
     AstraBootValidation validation;
@@ -352,6 +385,9 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     uint32_t offender_entry_offset;
     uint32_t survivor_image_size;
     uint32_t survivor_entry_offset;
+#if ASTRA_KERNEL_SOAK_SELFTEST
+    KernelMemoryStats soak_baseline;
+#endif
 
     VESTA->SCRATCH = ASTRA_KERNEL_STATUS_BOOTING;
     console_init();
@@ -468,10 +504,24 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
                               survivor_entry_offset, 0u,
                               &process_id) != KERNEL_PROCESS_OK)
         kernel_panic("survivor process creation failed");
+#if ASTRA_KERNEL_SOAK_SELFTEST
+    if (!kernel_memory_stats(&soak_baseline))
+        kernel_panic("K1 soak baseline unavailable");
+#endif
     if (kernel_process_create(_k1_offender_image_start, offender_image_size,
                               offender_entry_offset, 1u,
                               &process_id) != KERNEL_PROCESS_OK)
         kernel_panic("fault process creation failed");
+#if ASTRA_KERNEL_SOAK_SELFTEST
+    if (kernel_process_soak_configure(
+            _k1_offender_image_start, offender_image_size,
+            offender_entry_offset, soak_baseline.free_frames,
+            KERNEL_SOAK_REPORT_INTERVAL) != KERNEL_PROCESS_OK)
+        kernel_panic("K1 soak configuration failed");
+    console_puts("K1 soak ............. armed, baseline ");
+    console_dec32(soak_baseline.free_frames);
+    console_puts(" pages\n");
+#endif
     if (kernel_process_start(&first_context) != KERNEL_PROCESS_OK ||
         first_context == NULL)
         kernel_panic("initial process scheduling failed");

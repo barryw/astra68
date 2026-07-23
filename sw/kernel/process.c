@@ -43,6 +43,22 @@ static KernelProcess processes[KERNEL_PROCESS_MAX];
 static KernelSchedulerStats scheduler_stats;
 static int32_t current_slot = -1;
 
+#if ASTRA_KERNEL_SOAK_SELFTEST
+typedef struct KernelProcessSoakState {
+    const void *image;
+    uint32_t image_size;
+    uint32_t entry_offset;
+    uint32_t baseline_free_frames;
+    uint32_t report_interval;
+    uint32_t last_completed_teardowns;
+    uint8_t enabled;
+    uint8_t milestone_reported;
+    uint8_t reserved[2];
+} KernelProcessSoakState;
+
+static KernelProcessSoakState soak_state;
+#endif
+
 #if defined(KERNEL_PROCESS_HOST_TEST)
 static uint8_t *host_physical_memory;
 static uint32_t host_physical_base;
@@ -199,6 +215,8 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
     scheduler_stats.forced_frame_releases += released_frames;
     process->process_state = KERNEL_PROCESS_DEAD;
     process->thread_state = KERNEL_THREAD_DEAD;
+    if (process->exit_reason == KERNEL_PROCESS_EXIT_USER_FAULT)
+        ++scheduler_stats.completed_user_fault_teardowns;
     ++scheduler_stats.dead_processes;
     ++scheduler_stats.completed_teardowns;
     return KERNEL_PROCESS_OK;
@@ -207,12 +225,12 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
 static void check_milestone(void)
 {
     bool survivor_ready = false;
-    bool offender_reaped = false;
 
     if (scheduler_stats.milestone_complete != 0u ||
         scheduler_stats.created_processes < 2u ||
         scheduler_stats.timer_preemptions == 0u ||
-        scheduler_stats.user_faults == 0u)
+        scheduler_stats.user_faults == 0u ||
+        scheduler_stats.completed_user_fault_teardowns == 0u)
         return;
     for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
         const KernelProcess *process = &processes[index];
@@ -224,12 +242,8 @@ static void check_milestone(void)
             process->progress >= KERNEL_PROCESS_PROGRESS_GOAL &&
             process->run_count != 0u)
             survivor_ready = true;
-        if (process->process_state == KERNEL_PROCESS_DEAD &&
-            process->exit_reason == KERNEL_PROCESS_EXIT_USER_FAULT &&
-            process->run_count != 0u)
-            offender_reaped = true;
     }
-    if (!survivor_ready || !offender_reaped)
+    if (!survivor_ready)
         return;
     scheduler_stats.milestone_complete = 1u;
     kernel_process_milestone_reached();
@@ -275,6 +289,9 @@ void kernel_process_init(void)
     for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index)
         clear_bytes(&processes[index], sizeof(processes[index]));
     clear_bytes(&scheduler_stats, sizeof(scheduler_stats));
+#if ASTRA_KERNEL_SOAK_SELFTEST
+    clear_bytes(&soak_state, sizeof(soak_state));
+#endif
     current_slot = -1;
 }
 
@@ -449,6 +466,8 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         current->context.frame_format != 0u)
         return KERNEL_PROCESS_INVALID_CONTEXT;
     ++current->syscall_count;
+    if (++scheduler_stats.total_syscalls_low == 0u)
+        ++scheduler_stats.total_syscalls_high;
     syscall = current->context.data[0];
     switch (syscall) {
     case ASTRA_SYSCALL_QUERY_ABI:
@@ -530,6 +549,7 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
 KernelProcessStatus kernel_process_maintenance(void)
 {
     bool reap_pending = false;
+    KernelProcessStatus status = KERNEL_PROCESS_OK;
 
     for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
         if (processes[index].process_state == KERNEL_PROCESS_EXITING) {
@@ -537,11 +557,55 @@ KernelProcessStatus kernel_process_maintenance(void)
             break;
         }
     }
-    if (!reap_pending)
-        return KERNEL_PROCESS_OK;
-    if (kernel_block_service(NULL) != KERNEL_BLOCK_OK)
-        return KERNEL_PROCESS_CORRUPT;
-    return kernel_process_reap_deferred();
+    if (reap_pending) {
+        if (kernel_block_service(NULL) != KERNEL_BLOCK_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        status = kernel_process_reap_deferred();
+        if (status != KERNEL_PROCESS_OK)
+            return status;
+    }
+#if ASTRA_KERNEL_SOAK_SELFTEST
+    if (soak_state.enabled != 0u &&
+        scheduler_stats.completed_teardowns !=
+            soak_state.last_completed_teardowns) {
+        KernelMemoryStats memory_stats;
+        uint32_t process_id;
+        uint32_t cycles;
+
+        if (scheduler_stats.completed_teardowns !=
+                soak_state.last_completed_teardowns + 1u ||
+            scheduler_stats.live_processes != 1u ||
+            scheduler_stats.completed_user_fault_teardowns !=
+                scheduler_stats.user_faults ||
+            scheduler_stats.completed_teardowns !=
+                scheduler_stats.user_faults ||
+            !kernel_memory_stats(&memory_stats) ||
+            memory_stats.free_frames != soak_state.baseline_free_frames)
+            return KERNEL_PROCESS_CORRUPT;
+
+        cycles = scheduler_stats.soak_cycles + 1u;
+        if (cycles == 0u)
+            return KERNEL_PROCESS_CORRUPT;
+        scheduler_stats.soak_cycles = cycles;
+        soak_state.last_completed_teardowns =
+            scheduler_stats.completed_teardowns;
+        if (scheduler_stats.milestone_complete != 0u &&
+            (soak_state.milestone_reported == 0u || cycles == 1u ||
+             cycles == 10u || cycles == 100u || cycles == 1000u ||
+             cycles % soak_state.report_interval == 0u)) {
+            kernel_process_soak_checkpoint(cycles,
+                                           soak_state.baseline_free_frames);
+            soak_state.milestone_reported = 1u;
+        }
+        status = kernel_process_create(
+            soak_state.image, soak_state.image_size, soak_state.entry_offset,
+            cycles, &process_id);
+        if (status != KERNEL_PROCESS_OK || process_id == 0u)
+            return status == KERNEL_PROCESS_OK ? KERNEL_PROCESS_CORRUPT :
+                                                status;
+    }
+#endif
+    return KERNEL_PROCESS_OK;
 }
 
 KernelProcessStatus kernel_process_reap_deferred(void)
@@ -595,9 +659,14 @@ bool kernel_process_stats(KernelSchedulerStats *stats)
     stats->context_switches = scheduler_stats.context_switches;
     stats->timer_preemptions = scheduler_stats.timer_preemptions;
     stats->voluntary_switches = scheduler_stats.voluntary_switches;
+    stats->total_syscalls_low = scheduler_stats.total_syscalls_low;
+    stats->total_syscalls_high = scheduler_stats.total_syscalls_high;
     stats->user_faults = scheduler_stats.user_faults;
+    stats->completed_user_fault_teardowns =
+        scheduler_stats.completed_user_fault_teardowns;
     stats->completed_teardowns = scheduler_stats.completed_teardowns;
     stats->forced_frame_releases = scheduler_stats.forced_frame_releases;
+    stats->soak_cycles = scheduler_stats.soak_cycles;
     stats->current_process_id = scheduler_stats.current_process_id;
     stats->milestone_complete = scheduler_stats.milestone_complete;
     stats->reserved[0] = 0u;
@@ -605,3 +674,28 @@ bool kernel_process_stats(KernelSchedulerStats *stats)
     stats->reserved[2] = 0u;
     return true;
 }
+
+#if ASTRA_KERNEL_SOAK_SELFTEST
+KernelProcessStatus kernel_process_soak_configure(
+    const void *image, uint32_t image_size, uint32_t entry_offset,
+    uint32_t baseline_free_frames, uint32_t report_interval)
+{
+    if (image == NULL || image_size == 0u || image_size > KERNEL_PAGE_SIZE ||
+        entry_offset >= image_size || baseline_free_frames == 0u ||
+        report_interval == 0u)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    if (soak_state.enabled != 0u || scheduler_stats.live_processes != 2u ||
+        scheduler_stats.completed_teardowns != 0u)
+        return KERNEL_PROCESS_INVALID_STATE;
+
+    soak_state.image = image;
+    soak_state.image_size = image_size;
+    soak_state.entry_offset = entry_offset;
+    soak_state.baseline_free_frames = baseline_free_frames;
+    soak_state.report_interval = report_interval;
+    soak_state.last_completed_teardowns = 0u;
+    soak_state.milestone_reported = 0u;
+    soak_state.enabled = 1u;
+    return KERNEL_PROCESS_OK;
+}
+#endif

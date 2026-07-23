@@ -25,6 +25,44 @@ def test_kernel_entry_can_be_required() -> None:
     assert acceptance_reached(output, None, True)
 
 
+def test_k1_entry_is_required_exactly() -> None:
+    output = b"POST PASS\nK0 ENTRY PASS\n"
+
+    assert not acceptance_reached(output, None, False, expect_k1_entry=True)
+    output += b"K1 PROTECTED ENTRY PASS\n"
+    assert acceptance_reached(output, None, False, expect_k1_entry=True)
+
+
+def test_k1_soak_requires_complete_bounded_checkpoint() -> None:
+    prefix = b"POST PASS\nK1 PROTECTED ENTRY PASS\n"
+    checkpoint = (
+        b"K1 SOAK cycles=100 switches=203 ticks=205 "
+        b"syscalls=0x0000000000012345 free=7997\n"
+    )
+
+    assert not acceptance_reached(
+        prefix, None, False, expect_k1_soak_cycles=100
+    )
+    assert not acceptance_reached(
+        prefix + checkpoint, None, False, expect_k1_soak_cycles=101
+    )
+    assert acceptance_reached(
+        prefix + checkpoint, None, False, expect_k1_soak_cycles=100
+    )
+    assert not acceptance_reached(
+        checkpoint, None, False, expect_k1_soak_cycles=100
+    )
+    assert not acceptance_reached(
+        checkpoint + prefix, None, False, expect_k1_soak_cycles=100
+    )
+    assert not acceptance_reached(
+        prefix + checkpoint.replace(b"switches=203", b"switches=0"),
+        None,
+        False,
+        expect_k1_soak_cycles=100,
+    )
+
+
 def test_loader_command_defaults_to_volatile_sram() -> None:
     assert check_hardware.loader_command("loader", "astra.bit", False) == [
         "loader",
@@ -50,6 +88,21 @@ def test_program_flash_requires_a_bitstream(monkeypatch: pytest.MonkeyPatch) -> 
         check_hardware.sys,
         "argv",
         ["check_hardware.py", "--program-flash"],
+    )
+
+    with pytest.raises(SystemExit) as error:
+        check_hardware.main()
+
+    assert error.value.code == 2
+
+
+def test_k0_and_k1_expectations_are_mutually_exclusive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        check_hardware.sys,
+        "argv",
+        ["check_hardware.py", "--expect-kernel-entry", "--expect-k1-entry"],
     )
 
     with pytest.raises(SystemExit) as error:
