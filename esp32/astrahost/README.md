@@ -79,6 +79,11 @@ file is absent, using `/ASTRA68.NEW` as a validated staging file. It never
 overwrites the boot ROM or touches unrelated files. Normal builds contain no
 provisioning payload or write path.
 
+Each provisioning invocation regenerates the embedded ROM object even when
+`build-provision/` already exists. Every bind-mounted payload appears at the
+same container path, so relying only on Ninja's incremental timestamp check can
+otherwise retain bytes from the previous payload.
+
 An explicit maintenance build may replace an existing, valid boot ROM:
 
 ```sh

@@ -51,6 +51,12 @@ docker_args+=(
         cmake_args=()
         if [[ "$ASTRA_BUILD_DIR" == "build-provision" ]]; then
             cmake_args+=("-D" "ASTRA_PROVISION_ROM_ENABLED=ON")
+
+            # Every bind-mounted ROM has the same container path. Regenerate
+            # its byte array so an incremental build cannot retain old bytes.
+            rm -f \
+                "$ASTRA_BUILD_DIR/astra68_provision.rom.S" \
+                "$ASTRA_BUILD_DIR/esp-idf/main/CMakeFiles/__idf_main.dir/__/__/astra68_provision.rom.S.obj"
         else
             cmake_args+=("-D" "ASTRA_PROVISION_ROM_ENABLED=OFF")
         fi
