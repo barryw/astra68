@@ -2425,9 +2425,15 @@ with leak detection. Rust's 15 tests, rustfmt, Clippy `-D warnings`, all 90
 shared framework tests, all 30 Musashi/RTL matrix executions, and both Harte
 smoke adapters pass. An exact optimized Musashi run completes 100 lifecycle
 cycles at virtual cycle 262,502,952 with 201 context switches, 411 timer ticks,
-1,377 syscalls, and 7,987 free pages. The exact 500,000-cycle Musashi run has
-passed checkpoint 50,000 at virtual cycle 125,291,837,865 after 4,363.506 seconds
-without baseline drift and continues.
+1,377 syscalls, and 7,987 free pages. The exact NUC 500,000-cycle Musashi run
+has passed checkpoint 100,000 at virtual cycle 250,571,172,685 after 8,633.971
+seconds without baseline drift and continues. An independent Beast run uses
+the identical emulator binary
+(`6ca0ef17e77193ae4c0b248a44e65966e9cb0cecf0fa69a9cf0b7f3f53f6ab89`)
+and boot image
+(`a0b7dead20dce6e7e3c284a330f90f9c4010538098adfae078d6dcdbda260471`),
+runs below nextpnr's scheduling priority on a separate core, and has passed
+40,000 at virtual cycle 100,234,320,774 after 982.891 seconds without drift.
 
 The exact full pin-level RTL/SDRAM run uses Verilator 5.047 and the unchanged
 24,876-byte kernel. It passes complete POST and BIST at 115.03 MB/s, PMMU and

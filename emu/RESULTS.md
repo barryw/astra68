@@ -63,11 +63,16 @@ changing the CPU/PMMU model. The exact 24,876-byte kernel has SHA-256
 
 An optimized Musashi run completed 100 lifecycle cycles at virtual cycle
 262,502,952 with 201 context switches, 411 timer ticks, 1,377 syscalls, and
-7,987 free pages. The release-duration 500,000-cycle run passed its 50,000
-checkpoint at virtual cycle 125,291,837,865 after 4,363.506 seconds and continues
-from the same immutable NUC snapshot. A progress checkpoint is evidence that
-all counters returned to baseline through that point, not a completed long-soak
-claim.
+7,987 free pages. The NUC release-duration 500,000-cycle run passed its 100,000
+checkpoint at virtual cycle 250,571,172,685 after 8,633.971 seconds and
+continues from the same immutable snapshot. An independent Beast run uses the
+identical emulator binary
+(`6ca0ef17e77193ae4c0b248a44e65966e9cb0cecf0fa69a9cf0b7f3f53f6ab89`)
+and boot image
+(`a0b7dead20dce6e7e3c284a330f90f9c4010538098adfae078d6dcdbda260471`);
+it passed 40,000 at virtual cycle 100,234,320,774 after 982.891 seconds. A
+progress checkpoint is evidence that all counters returned to baseline through
+that point, not a completed long-soak claim.
 
 The same committed kernel also passes the complete pin-level RTL/SDRAM model.
 After `K1 PROTECTED ENTRY PASS`, RTL completes four lifecycle cycles with 11
