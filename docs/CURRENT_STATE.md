@@ -222,6 +222,14 @@ separates implemented evidence from planned work.
   identical binary and ROM has crossed 100,000 at virtual cycle
   250,569,926,764 after 2,456.381 seconds. Routed-hardware completion remains
   open and must not be inferred from simulation.
+- A Motorola-directed reset audit found one retained PMMU conformance gap.
+  MC68030 processor reset must clear only TC/TT enable bits and preserve roots
+  and valid ATC entries until an explicit flush. The integrated core ties its
+  conforming `cpu_reset` input low and instead clears all PMMU state through
+  the cold `nreset` branch. K1 boot already executes `PFLUSHA` before enabling
+  translation, so functional boot evidence remains valid, but the RTL is too
+  forgiving. A production core needs separate power-on initialization and
+  processor-reset behavior plus a stale-ATC/reset/boot-flush regression.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,

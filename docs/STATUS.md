@@ -49,6 +49,7 @@ must not be presented as working software.
 | deterministic lifecycle-soak harness | CURRENT SIM PARTIAL | exact four-cycle full RTL and 100-cycle Musashi pass; independent 500,000-cycle runs beyond 110,000 and 100,000 |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
 | CACR independent I/D commands | CURRENT RTL | Motorola-directed mixed CI/CD decoder test; strict inventory 139/113 clean |
+| RESET preserves roots and ATC until explicit flush | MISSING RTL | kernel boot flush is current; integrated PMMU incorrectly uses its cold `nreset` path |
 
 ## Hardware status
 
@@ -72,6 +73,7 @@ must not be presented as working software.
 | exact cache synchronization/alias test for loaded user code | CURRENT SIM, hardware remains |
 | committed nonzero ROM/Git identity | CURRENT SIM |
 | full normal/direct-panic/guard-panic RTL rerun | CURRENT from `66d6094f` |
+| Motorola RESET/ATC preservation and boot-flush regression | MISSING; conformance fix and full requalification required |
 | exact 12.5 MHz CPU / 60 MHz SDRAM complete route | MISSING; exact job active |
 | repeated ULX3S POST, SDRAM, PMMU, timer, fault, HDMI | MISSING |
 | long context/syscall/fault/allocation soak | CURRENT SIM PARTIAL; release-duration jobs remain |

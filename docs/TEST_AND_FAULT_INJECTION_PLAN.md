@@ -37,6 +37,9 @@ The candidate must retain all of these before routing:
 - Motorola CACR mixed-command decode, including simultaneous CI/CD;
 - full SoC normal K1, deliberate direct-panic, and exact stack-guard-panic images;
 - PMMU boot with explicit pre-enable ATC flush and separate I/D cache clears;
+- MC68030 processor reset with populated ATC and roots: clear only TC/TT enable
+  bits, observe the retained stale translation, then prove boot `PFLUSHA`
+  forces a walk to the updated descriptor before translation is enabled;
 - all directed and integrated graphics coexistence tests.
 
 Known upstream failures are tracked evidence, not waivers. A new mismatch is a

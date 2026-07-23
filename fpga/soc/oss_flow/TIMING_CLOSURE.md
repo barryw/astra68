@@ -2393,6 +2393,15 @@ iteration 661,000. No constrained-clock, routed-JSON, bitstream, or hardware
 claim exists until that process completes normally and every release gate
 passes.
 
+An architectural audit performed while this immutable route was running found
+that the integrated PMMU clears roots and ATC entries through its cold
+`nreset` branch. MC68030 UM section 9.2.2 requires processor reset to preserve
+that state while clearing only TC/TT enable bits. The K1 ROM already executes
+the required pre-enable `PFLUSHA`, so the current route remains useful physical
+integration evidence and must finish uninterrupted. It is not the final
+conformance image: the reset-path correction and stale-ATC boot regression must
+pass the same full synthesis, route, and board gates before persistent release.
+
 A route-progress comparison against the exact successful `F4DC1E18` seed-4
 placement isolates the present difficulty to global placement topology, not
 the raw 613-cell increase. At router iteration 568,000, `F4DC1E18` had 79,442

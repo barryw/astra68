@@ -41,6 +41,17 @@ instruction and data caches through CACR, and only then loads enabled TC. A
 Motorola-directed RTL test covers simultaneous CACR I/D command decode even
 though the kernel deliberately emits the two invalidations separately.
 
+**CURRENT RTL GAP:** MC68030 UM section 9.2.2 requires processor `RESET` to
+clear only the enable bits in TC and TT0/TT1; roots and valid ATC entries remain
+intact until software flushes them. The PMMU contains a conforming
+`cpu_reset` branch, but the integrated core ties that input low and drives
+processor reset through `nreset`, whose cold-reset branch clears the complete
+register file and ATC. The kernel sequence above remains safe, but the RTL is
+too forgiving and cannot prove the reset contract. Production qualification
+requires distinct configuration-time initialization and processor-reset
+semantics, followed by a test that preserves a deliberately stale ATC entry
+across reset and proves boot's `PFLUSHA` removes it before TC is enabled.
+
 ### User (one CRP per process)
 
 - Valid user range is `0x00010000..0x7FFFFFFF`; null and the first 64 KiB are
