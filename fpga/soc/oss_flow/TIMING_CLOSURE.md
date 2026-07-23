@@ -2541,18 +2541,32 @@ checkpoint.
 |---|---|
 | mapped JSON | `135f54a5c40b2b824c4fb7a5b50f89c120072fc1562c88c48b14c5f546dca241` |
 | Yosys log | `5927996ec6e124e8a0d7f746b1b0695fcf38eead2d738101aad01f726ceeed8e` |
+| placed JSON | `73b1db24de910882ba90a74e9abe6f5eef89ae6f59669c3d5389e44ab67c8a3e` |
+| route input JSON | `32ee1dfef27b2d0bb2104225bb1ed09eb88519001ce31b0104478a4ad6001d83` |
+| placement report | `fe1697a69698576fc0759c78102f9e448938d753fd87b04257a817e09aa0bbfb` |
+| placement log | `3f3138a391d484675b2e767d409d3106ef786240b58e357e15cf4729409ebe62` |
 | stage-0 hex | `7de247f66f2840b26692962118778cddf074f818f08dc61966a0e153439a1820` |
 | kernel binary, 23,948 bytes | `ca1edd3106298c32c7563459991a6cb1d899414a258d6d9029d26259fb107c3b` |
 | kernel ELF | `9f86583f44f4b4f1bec145bb751f2119591f349ec41d04117513803e3e2c256f` |
 | boot binary, 35,360 bytes | `b8cef34ca07c32c831d5d92d9fbc0fb38901b298dcbc9585e2877b1c55ac1ca0` |
 | packaged ROM, 35,392 bytes | `fea76d8553d7b4f6a042b399e669e480d26061e6bb633646829989d187599b51` |
 
-The exact seed-4, heap, timing-weight-20 critical-floorplan placement is one
-retained NUC process and is still running. Its placement timing waiver is
-diagnostic only and will be removed from the serialized JSON before the strict
-router1 run. No constrained-clock, routed-JSON, bitstream, or board claim
-exists yet. The uninterrupted Beast `66D6094F` route predates the reset
-correction and remains useful only as a placement/routing diagnostic.
+NUC uses Yosys 0.64+68 (`413169663`) and nextpnr
+`0.10-33-ge6ecd8fa`. Exact seed-4, heap, timing-weight-20
+critical-floorplan placement finishes normally with checksum `0x7c9a8594`, SA
+wire length 542,333, timing cost 11,648, 66,513 TRELLIS_COMB, and 25,561
+TRELLIS_FF cells. Its placement-only estimates are 12.10 MHz CPU and 46.54 MHz
+SDRAM. Those estimates use the mandatory placement waiver and are not a routed
+timing result.
+
+`prepare_route_input.py` removed the serialized router and cleared the timing
+waiver. The exact plain-router1 route is active on NUC with no
+`--timing-allow-fail`; it constrains CPU to 12.5 MHz, SDRAM to 60 MHz, and all
+other production clocks and refreshed LUT-permutation policy for all 66,513
+placed combinational cells. No constrained-clock, routed-JSON, bitstream, or
+board claim exists until it finishes normally. The uninterrupted Beast
+`66D6094F` route predates the reset correction and remains useful only as a
+placement/routing diagnostic.
 
 The independent Beast lifecycle soak completed all 500,000 requested cycles
 after 12,416.334 seconds, reaching virtual cycle 1,252,807,889,504 with the

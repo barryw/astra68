@@ -250,11 +250,13 @@ separates implemented evidence from planned work.
   ROM identity and is not exact release-image evidence. All 90 framework tests,
   all 30 shared adapter executions, and both Harte smoke adapters pass. NUC
   full-chip synthesis reports zero SCCs, 53,073 LUT4s, 25,532 GSR-enabled FFs,
-  101 block RAMs, and 18 multipliers. Exact seed-4 placement is active and
-  strict routing remains open. Beast completed all 500,000 lifecycle-soak
+  101 block RAMs, and 18 multipliers. Exact seed-4 placement finishes normally,
+  packing 66,513 TRELLIS_COMB and 25,561 TRELLIS_FF cells with checksum
+  `0x7c9a8594`; its no-waiver strict router1 job is active on NUC. Beast
+  completed all 500,000 lifecycle-soak
   cycles without frame-count drift; the independent NUC run has passed
   200,000/500,000 and continues. Neither simulation nor synthesis waives the
-  remaining exact full-RTL, route, and board gates.
+  remaining exact full-RTL, routed-timing, and board gates.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,

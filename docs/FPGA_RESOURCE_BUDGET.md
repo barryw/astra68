@@ -94,12 +94,13 @@ Exact corrected qualification snapshot
 `77b3cdc8fddb984850073a2c2cb5998bbbe1d857` includes K-HW3, K-HW4, the K1
 kernel, and the Motorola-directed processor-reset/ATC correction. NUC Yosys
 maps the complete production feature set to 53,073 LUT4s, 25,532 GSR-enabled
-FFs, 101 block RAMs, and 18 multipliers with zero SCCs. The packed placement
-front end reports 66,513 TRELLIS_COMB and 25,561 TRELLIS_FF cells.
+FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Exact seed-4
+critical-floorplan placement finishes normally with checksum `0x7c9a8594` and
+packs 66,513 TRELLIS_COMB and 25,561 TRELLIS_FF cells.
 
 This is 471 fewer mapped LUT4s and 477 fewer packed combinational cells than
 the pre-fix `66D6094F` checkpoint; block RAM and multiplier use are unchanged.
-The exact strict route is still required. These counts prove that reset
+The exact no-waiver strict route is active. These counts prove that reset
 conformance did not consume the remaining fabric, but they are not a timing or
 bitstream claim.
 

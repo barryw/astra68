@@ -70,10 +70,12 @@ must not be presented as working software.
   physical evidence, but predates the PMMU reset correction and cannot be the
   release image. Neither placement estimates nor an active route are
   acceptance evidence.
-- Exact corrected build `77B3CDC8` passes full-chip synthesis on NUC with
-  zero SCCs, 53,073 LUT4s, 25,532 GSR-enabled FFs, 101 DP16KDs, and 18
-  multipliers. Its exact seed-4 critical-floorplan placement is running; it has
-  not yet passed strict route or board reset qualification.
+- Exact corrected build `77B3CDC8` passes full-chip synthesis and seed-4
+  critical-floorplan placement on NUC with zero SCCs, 53,073 LUT4s, 25,532
+  GSR-enabled FFs, 101 DP16KDs, and 18 multipliers. Placement packs 66,513
+  TRELLIS_COMB and 25,561 TRELLIS_FF cells and finishes normally with checksum
+  `0x7c9a8594`. Its no-waiver strict router1 job is active; route timing and
+  board reset qualification remain open.
 - Therefore K1 is not a hardware-qualified kernel and is not production-ready.
 
 ## Required before K1 release
@@ -86,7 +88,7 @@ must not be presented as working software.
 | committed nonzero ROM/Git identity | CURRENT SIM |
 | full normal/direct-panic/guard-panic RTL rerun | CURRENT from `66d6094f` |
 | Motorola RESET/ATC preservation and boot-flush regression | CURRENT RTL SIM; synthesis, route, and board reset remain |
-| exact 12.5 MHz CPU / 60 MHz SDRAM complete route | MISSING; corrected synthesis passed and exact placement is active; pre-fix route remains diagnostic only |
+| exact 12.5 MHz CPU / 60 MHz SDRAM complete route | ACTIVE; corrected synthesis/placement passed and no-waiver router1 is running on NUC; pre-fix route remains diagnostic only |
 | repeated ULX3S POST, SDRAM, PMMU, timer, fault, HDMI | MISSING |
 | long context/syscall/fault/allocation soak | CURRENT SIM PARTIAL; Beast passed 500,000 cycles, independent NUC run passed 200,000/500,000 and continues; hardware soak remains |
 | panic HDMI and retained-log check on physical board | MISSING |
@@ -146,8 +148,8 @@ must not be presented as working software.
 
 ## Next actions
 
-1. finish the exact corrected placement and strict route while retaining the
-   uninterrupted pre-fix route only as diagnostic physical evidence;
+1. finish the exact corrected strict route while retaining the uninterrupted
+   pre-fix route only as diagnostic physical evidence;
 2. finish the independent NUC 500,000-cycle lifecycle run;
 3. package, flash, and qualify exact `77B3CDC8` through NUC, then run the
    hardware soak;
