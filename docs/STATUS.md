@@ -36,7 +36,7 @@ must not be presented as working software.
 | SRP/CRP 4 KiB two-level translation | CURRENT | host, focused RTL, Musashi, full RTL |
 | PMMU enable and CRP switching | CURRENT HW | Musashi, full RTL, and three exact SRAM K1 boots |
 | user null/code/stack guards | CURRENT | host mapping tests and target fault |
-| supervisor stack guard | CURRENT SIM/ROUTED | exact descriptor host test, deliberate exact full-RTL format-A guard panic, and routed descriptor implementation; hardware fault remains |
+| supervisor stack guard | CURRENT HW | exact descriptor host test plus deliberate format-A vector-2 guard panic at `0x02028000` in full RTL and physical hardware |
 | cross-CRP cache isolation | CURRENT SIM | distinct same-address code and stack markers on Musashi/full RTL |
 | duplicate cached user-alias rejection | CURRENT HOST | one-bit/frame VM ledger and remap test |
 | whole-address-space cache invalidation | CURRENT HOST | destruction invalidates before descriptor removal/frame reuse |
@@ -50,7 +50,7 @@ must not be presented as working software.
 | trap ABI query/progress/yield/exit/close | CURRENT PROVISIONAL | host and target K1 |
 | offender-only user fault death | CURRENT HW | format-B fault reaps only the offender on Musashi, full RTL, and three exact SRAM boots |
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
-| panic to console and retained early log | CURRENT HW/SIM | exact direct panic passes full RTL and physical HDMI/log; supervisor guard passes full RTL and remains a physical gate |
+| panic to console and retained early log | CURRENT HW | exact direct and supervisor-guard panic paths pass full RTL plus physical HDMI/log qualification |
 | K1 host analyzer/sanitizer gates | CURRENT | 11 suites, analyzer, ASan/UBSan |
 | deterministic lifecycle-soak harness | CURRENT SIM | exact four-cycle full RTL and 100-cycle Musashi pass; independent Beast and NUC runs each completed 500,000 cycles without drift |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
@@ -109,16 +109,22 @@ must not be presented as working software.
   `639785017f2691b7e4cebc493289f0e0f15d89762aed34c4994c869bce17a8de`.
   The checker transcript SHA-256 is
   `e6297e0b7adb8e2cc0352fc1c6575d6c02dbc09312059ee66ca1206ad5b8114a`.
+- The exact supervisor-guard image passes on physical hardware in 1.821
+  seconds after complete POST. HDMI reports vector 2, format A, SSW `0x0105`,
+  exact guard address `0x02028000`, provenance, and `SYSTEM HALTED`; screenshot
+  SHA-256 is
+  `d7289448fb1453fee1e6be617eaad00d458d267f68183416f83ebfa1a827dce1`.
+  The checker transcript SHA-256 is
+  `01aa5fd5d578ad94291a82f9f771df89395274c0ac7a9a42cf702784d9abc0d0`.
 - Therefore K1 is not yet a fully hardware-qualified kernel or production-ready.
-  Physical supervisor-guard qualification and the hardware lifecycle soak
-  remain.
+  The hardware lifecycle soak remains.
 
 ## Required before K1 release
 
 | Requirement | State |
 |---|---|
 | move resource destruction out of hard IRQ | CURRENT, host revalidated |
-| supervisor stack guard in SRP | CURRENT SIM/ROUTED, hardware remains |
+| supervisor stack guard in SRP | CURRENT HW; exact format-A vector-2 fault at `0x02028000` passes full RTL and physical HDMI/log |
 | exact cache synchronization/alias test for loaded user code | CURRENT SIM, hardware remains |
 | committed nonzero ROM/Git identity | CURRENT SIM |
 | full normal/direct-panic/guard-panic RTL rerun | CURRENT from exact `77B3CDC8`; direct panic and exact `0x02028000` guard panic both preserve retained logs |
@@ -126,7 +132,7 @@ must not be presented as working software.
 | exact 12.5 MHz CPU / 60 MHz SDRAM complete route | CURRENT; all clocks, LUT permutation, POR, font ROM, and `kernel_platform_v1` gates pass without waiver |
 | repeated ULX3S POST, SDRAM, PMMU, timer, fault, HDMI | CURRENT; three exact SRAM boots, physical HDMI, and automatic reset-from-flash boot pass |
 | long context/syscall/fault/allocation soak | CURRENT SIM; independent Beast and NUC runs each passed 500,000 cycles with the 7,987-page baseline unchanged; hardware soak remains |
-| panic HDMI and retained-log check on physical board | PARTIAL; exact direct-panic path passes, supervisor guard remains |
+| panic HDMI and retained-log check on physical board | CURRENT; exact direct-panic and supervisor-guard paths pass |
 
 ## Partial or transitional K1 code
 
@@ -175,7 +181,7 @@ must not be presented as working software.
 | fault after repeated traps stacks on ISP | focused Questa wait/zero-wait |
 | hard timer path performs no maintenance/destruction | host dispatch test |
 | kernel stack guard descriptor is invalid and adjacent pages remain mapped | host VM test |
-| kernel stack guard access reaches retained panic path | full-RTL exact-address diagnostic; hardware missing |
+| kernel stack guard access reaches retained panic path | full RTL and physical hardware at exact address `0x02028000` |
 | duplicate user cached alias is rejected and reusable after unmap | host VM test |
 | cross-CRP same-address code/data cannot expose stale bytes | Musashi and full RTL K1 |
 | malformed syscall corpus never panics | MISSING |
@@ -183,11 +189,8 @@ must not be presented as working software.
 
 ## Next actions
 
-1. run the prepared exact supervisor-guard ROM on the physical board, confirm
-   its format-A vector-2 fault at `0x02028000`, HDMI, and retained-log output,
-   then restore the normal ROM and read-only AstraHost;
-2. run the exact hardware lifecycle soak, retain its bounded-resource result,
+1. run the exact hardware lifecycle soak, retain its bounded-resource result,
    then restore normal ROM CRC32 `EB1B381F` and persistent K1 boot;
-3. audit every K1 acceptance requirement and update the release records;
-4. implement and benchmark 8 KiB against the retained 4 KiB oracle before
+2. audit every K1 acceptance requirement and update the release records;
+3. implement and benchmark 8 KiB against the retained 4 KiB oracle before
    freezing the stable VM ABI.

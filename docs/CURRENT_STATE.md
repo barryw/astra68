@@ -285,10 +285,9 @@ separates implemented evidence from planned work.
   `docs/evidence/k1-77b3cdc8-flash-reset.log`, SHA-256
   `deeaba2d4acdb5fbc5115085b4f751796ce11079cc68ded319c43117d17b0e97`.
   Persistent FPGA flash now contains exact K1 candidate `77B3CDC8`. The
-  physical direct-panic diagnostic now also passes; the remaining release gates
-  are the physical supervisor-guard diagnostic and hardware lifecycle soak.
-  Routing, normal boot, persistent promotion, and one panic path do not waive
-  them.
+  physical direct-panic and supervisor-guard diagnostics now also pass; the
+  remaining release gate is the hardware lifecycle soak. Routing, normal boot,
+  persistent promotion, and panic qualification do not waive it.
 - The one-shot physical diagnostic identities are pinned before use.
   Their AstraHost application SHA-256 values are
   `1c579fa99a2041e82342839ac7f6372e11ccc896ed10e7dcb5ce2a5b07fc35fe`
@@ -318,8 +317,18 @@ separates implemented evidence from planned work.
   Physical HDMI shows the same panic, exact Git and build identities, and halt;
   `docs/evidence/k1-77b3cdc8-direct-panic-hdmi.png` has SHA-256
   `639785017f2691b7e4cebc493289f0e0f15d89762aed34c4994c869bce17a8de`.
+  NUC next provisioned the exact 35,112-byte supervisor-guard payload at CRC32
+  `6AAAEE00`; provisioner-log SHA-256 is
+  `1584d6dbee2fcf0c4c903f0d7dd3cc0ccdaed66d34dc3e1e4110a2b81dfc78be`.
+  With normal AstraHost restored, the same bitstream passes complete POST and
+  reports a format-A vector-2 exception, SSW `0x0105`, and exact guard address
+  `0x02028000` before `SYSTEM HALTED` in 1.821 seconds. Checker-log SHA-256 is
+  `01aa5fd5d578ad94291a82f9f771df89395274c0ac7a9a42cf702784d9abc0d0`.
+  Physical HDMI independently shows every field;
+  `docs/evidence/k1-77b3cdc8-guard-hdmi.png` has SHA-256
+  `d7289448fb1453fee1e6be617eaad00d458d267f68183416f83ebfa1a827dce1`.
   The board is currently SRAM-loaded with the unchanged production bitstream,
-  halted on the direct-panic ROM; persistent FPGA flash remains `77B3CDC8` and
+  halted on the guard diagnostic; persistent FPGA flash remains `77B3CDC8` and
   normal AstraHost firmware is installed.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its

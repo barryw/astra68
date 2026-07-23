@@ -2794,3 +2794,34 @@ deliberately halted with the direct-panic ROM while normal AstraHost remains
 installed. Physical supervisor-guard and lifecycle-soak gates remain open. No
 RTL, mapped resource, placement, route, bitstream, or constrained-clock result
 changed.
+
+### Physical supervisor-guard qualification
+
+NUC repeated the same maintenance-only provisioning path with pinned guard
+AstraHost app SHA-256
+`6217a1b56163cbe78ab74d4c4e60da33725e2f585a929f5df6b86d654bb53067`.
+The ESP preserved the existing card and atomically installed only the exact
+35,112-byte `/ASTRA68.ROM` payload at CRC32 `6AAAEE00`. Retained provisioning
+log `docs/evidence/k1-77b3cdc8-guard-provision.log` has SHA-256
+`1584d6dbee2fcf0c4c903f0d7dd3cc0ccdaed66d34dc3e1e4110a2b81dfc78be`.
+Normal read-only AstraHost app SHA-256
+`b4ec0fe43ffc7012758024576757df11892be0005e8e68fc282879448de962c2`
+was restored before loading the production FPGA image.
+
+The unchanged bitstream passes exact build `77B3CDC8`, ROM CRC32 `6AAAEE00`,
+complete POST and 32 MiB BIST, PMMU enable, and the exact guard-panic contract
+in 1.821 seconds. It reports an unhandled processor exception with vector 2,
+format A, SR `0x2000`, PC `0x02011328`, SSW `0x0105`, exact fault address
+`0x02028000`, and `SYSTEM HALTED`. Retained checker transcript
+`docs/evidence/k1-77b3cdc8-guard-hw.log` has SHA-256
+`01aa5fd5d578ad94291a82f9f771df89395274c0ac7a9a42cf702784d9abc0d0`.
+Physical HDMI independently shows every expected field; retained 2420x1458
+image `docs/evidence/k1-77b3cdc8-guard-hdmi.png` has SHA-256
+`d7289448fb1453fee1e6be617eaad00d458d267f68183416f83ebfa1a827dce1`.
+
+Disposition: exact physical supervisor-stack-guard HDMI/log gate PASS. Both
+physical panic paths are now qualified. Persistent FPGA flash remains the
+normal `77B3CDC8` candidate; the current SRAM-loaded system is deliberately
+halted on the guard ROM with normal AstraHost installed. Only the physical
+lifecycle-soak gate remains. No RTL, mapped resource, placement, route,
+bitstream, or constrained-clock result changed.
