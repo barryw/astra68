@@ -2387,20 +2387,34 @@ these retained identities:
 
 The placement-only SDRAM estimate is 53.27 MHz and is not a timing result.
 The exact strict route refreshed all 66,990 LUT-permutation policies and is
-still running as one uninterrupted Beast process. At iteration 675,000 it had
-174,402 arcs remaining after 16,686.13 seconds; its retained best is 172,529 at
-iteration 661,000. No constrained-clock, routed-JSON, bitstream, or hardware
+still running as one uninterrupted Beast process. At iteration 709,000 it had
+170,763 arcs remaining after 19,709.41 seconds; its retained best is 169,755 at
+iteration 703,000. No constrained-clock, routed-JSON, bitstream, or hardware
 claim exists until that process completes normally and every release gate
 passes.
 
 An architectural audit performed while this immutable route was running found
-that the integrated PMMU clears roots and ATC entries through its cold
+that the integrated PMMU cleared roots and ATC entries through its cold
 `nreset` branch. MC68030 UM section 9.2.2 requires processor reset to preserve
 that state while clearing only TC/TT enable bits. The K1 ROM already executes
 the required pre-enable `PFLUSHA`, so the current route remains useful physical
 integration evidence and must finish uninterrupted. It is not the final
-conformance image: the reset-path correction and stale-ATC boot regression must
-pass the same full synthesis, route, and board gates before persistent release.
+conformance image.
+
+Corrected source `6dd83d4a2eb4128e2108b73d09cbe9d2ba0fa3c3`
+uses declaration initialization for deterministic FPGA configuration and
+removes architectural reset from the PMMU register and ATC storage elements.
+The `nreset` branch preserves CRP, SRP, MMUSR, TC/TT fields, and all 22 ATC
+entries while clearing only TC.E, TT0.E, and TT1.E. The Motorola-directed
+bench first fills the ATC, changes the backing descriptor, resets the
+processor, and observes the stale entry with level-zero `PTEST`. It then
+executes `PFLUSHA` while TC.E is clear and proves the next translated access
+walks to the changed descriptor. Questa Lattice OEM 2024.2 reports that bench
+clean in isolation and a complete inventory of 140 total, 114 clean, 3 stale
+compile failures, 18 classified simulation failures, and 5 unscored
+diagnostics. The only inventory change is the new clean test. This corrected
+source has no synthesis, SCC, mapped-resource, placement, route, bitstream, or
+board claim yet.
 
 A route-progress comparison against the exact successful `F4DC1E18` seed-4
 placement isolates the present difficulty to global placement topology, not
@@ -2437,14 +2451,14 @@ shared framework tests, all 30 Musashi/RTL matrix executions, and both Harte
 smoke adapters pass. An exact optimized Musashi run completes 100 lifecycle
 cycles at virtual cycle 262,502,952 with 201 context switches, 411 timer ticks,
 1,377 syscalls, and 7,987 free pages. The exact NUC 500,000-cycle Musashi run
-has passed checkpoint 110,000 at virtual cycle 275,627,439,227 after 9,462.983
+has passed checkpoint 140,000 at virtual cycle 350,795,239,823 after 12,206.520
 seconds without baseline drift and continues. An independent Beast run uses
 the identical emulator binary
 (`6ca0ef17e77193ae4c0b248a44e65966e9cb0cecf0fa69a9cf0b7f3f53f6ab89`)
 and boot image
 (`a0b7dead20dce6e7e3c284a330f90f9c4010538098adfae078d6dcdbda260471`),
 runs below nextpnr's scheduling priority on a separate core, and has passed
-100,000 at virtual cycle 250,569,926,764 after 2,456.381 seconds without drift.
+220,000 at virtual cycle 551,240,387,754 after 5,448.870 seconds without drift.
 
 The exact full pin-level RTL/SDRAM run uses Verilator 5.047 and the unchanged
 24,876-byte kernel. It passes complete POST and BIST at 115.03 MB/s, PMMU and

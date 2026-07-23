@@ -41,16 +41,16 @@ instruction and data caches through CACR, and only then loads enabled TC. A
 Motorola-directed RTL test covers simultaneous CACR I/D command decode even
 though the kernel deliberately emits the two invalidations separately.
 
-**CURRENT RTL GAP:** MC68030 UM section 9.2.2 requires processor `RESET` to
-clear only the enable bits in TC and TT0/TT1; roots and valid ATC entries remain
-intact until software flushes them. The PMMU contains a conforming
-`cpu_reset` branch, but the integrated core ties that input low and drives
-processor reset through `nreset`, whose cold-reset branch clears the complete
-register file and ATC. The kernel sequence above remains safe, but the RTL is
-too forgiving and cannot prove the reset contract. Production qualification
-requires distinct configuration-time initialization and processor-reset
-semantics, followed by a test that preserves a deliberately stale ATC entry
-across reset and proves boot's `PFLUSHA` removes it before TC is enabled.
+**CURRENT RTL:** source `6dd83d4a2eb4128e2108b73d09cbe9d2ba0fa3c3`
+separates deterministic ECP5 configuration initialization from architectural
+processor reset. MC68030 `RESET` clears only TC.E, TT0.E, and TT1.E; it
+preserves CRP, SRP, the other control fields, and valid ATC entries. A focused
+Motorola-directed test retains a deliberately stale translation across reset,
+observes it with level-zero `PTEST`, executes `PFLUSHA` while TC.E is clear,
+then proves that re-enabling translation walks to the changed descriptor. The
+complete strict Questa inventory is 140 total and 114 clean with the prior
+3 compile, 18 simulation, and 5 unscored buckets unchanged. Exact synthesis,
+route, and board reset/boot qualification remain open.
 
 ### User (one CRP per process)
 

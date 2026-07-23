@@ -217,19 +217,24 @@ separates implemented evidence from planned work.
   full pin-level RTL workload pass. RTL completes four post-milestone teardown
   cycles with 11 context switches, 23 timer ticks, 96 syscalls, and the exact
   7,987-free-page baseline. The release-duration NUC Musashi run has crossed
-  110,000 of 500,000 cycles at virtual cycle 275,627,439,227 after 9,462.983
+  140,000 of 500,000 cycles at virtual cycle 350,795,239,823 after 12,206.520
   seconds without drift. An independent lower-priority Beast run of the
-  identical binary and ROM has crossed 100,000 at virtual cycle
-  250,569,926,764 after 2,456.381 seconds. Routed-hardware completion remains
+  identical binary and ROM has crossed 220,000 at virtual cycle
+  551,240,387,754 after 5,448.870 seconds. Routed-hardware completion remains
   open and must not be inferred from simulation.
-- A Motorola-directed reset audit found one retained PMMU conformance gap.
-  MC68030 processor reset must clear only TC/TT enable bits and preserve roots
-  and valid ATC entries until an explicit flush. The integrated core ties its
-  conforming `cpu_reset` input low and instead clears all PMMU state through
-  the cold `nreset` branch. K1 boot already executes `PFLUSHA` before enabling
-  translation, so functional boot evidence remains valid, but the RTL is too
-  forgiving. A production core needs separate power-on initialization and
-  processor-reset behavior plus a stale-ATC/reset/boot-flush regression.
+- Motorola-directed reset correction
+  `6dd83d4a2eb4128e2108b73d09cbe9d2ba0fa3c3` separates ECP5 configuration
+  initialization from MC68030 processor reset. `RESET` now clears only TC/TT
+  enable bits and preserves roots and valid ATC entries until software flushes
+  them. The new focused regression retains a deliberately stale ATC entry,
+  checks CRP/SRP/control-field preservation, executes the same pre-enable
+  `PFLUSHA` invariant used by K1 boot, and proves the next access walks to the
+  changed descriptor. Beast's strict Questa inventory is 140 total and 114
+  clean; its prior 3 compile, 18 simulation, and 5 unscored classifications
+  are unchanged. This is RTL simulation evidence only. The already-running
+  `66D6094F` route predates the correction and cannot be the release image;
+  corrected synthesis, strict routing, and board reset/boot qualification are
+  mandatory.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,

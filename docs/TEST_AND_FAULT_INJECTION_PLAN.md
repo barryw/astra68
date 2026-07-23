@@ -30,7 +30,7 @@ The candidate must retain all of these before routing:
 - 90 shared framework tests and all 30 executions of the 15-case Musashi/RTL
   matrix;
 - both maintained Harte MC68030 smoke adapters;
-- strict Questa inventory: 139 total, 113 clean, with no increase or
+- strict Questa inventory: 140 total, 114 clean, with no increase or
   reclassification of the recorded 3 compile, 18 simulation, and 5 unscored
   upstream buckets;
 - focused PMMU user fault after traps in wait-state and zero-wait modes;

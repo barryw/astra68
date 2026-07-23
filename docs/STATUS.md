@@ -12,6 +12,8 @@ must not be presented as working software.
 - K1 functional source commit: `66d6094f9339469313fefb70b259d07a7c2272ce`.
 - K1 lifecycle-soak source commit:
   `470bf123cf24bbadf3525f91307e3d9aebe92006`.
+- PMMU processor-reset conformance source commit:
+  `6dd83d4a2eb4128e2108b73d09cbe9d2ba0fa3c3`.
 - Immutable build snapshot: Beast `/tmp/astra68-k1-66d6094` from Git archive
   SHA-256 `ba4d91999cf829c33a345d895b7966a438b28b93871d8d34843d658a1d0c0039`.
 - Immutable soak snapshot: NUC `/tmp/astra68-k1-soak-470bf12` and independent
@@ -46,10 +48,10 @@ must not be presented as working software.
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
 | panic to console and retained early log | CURRENT SIM | full-SoC deliberate panic test |
 | K1 host analyzer/sanitizer gates | CURRENT | 11 suites, analyzer, ASan/UBSan |
-| deterministic lifecycle-soak harness | CURRENT SIM PARTIAL | exact four-cycle full RTL and 100-cycle Musashi pass; independent 500,000-cycle runs beyond 110,000 and 100,000 |
+| deterministic lifecycle-soak harness | CURRENT SIM PARTIAL | exact four-cycle full RTL and 100-cycle Musashi pass; independent 500,000-cycle runs beyond 140,000 and 220,000 |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
-| CACR independent I/D commands | CURRENT RTL | Motorola-directed mixed CI/CD decoder test; strict inventory 139/113 clean |
-| RESET preserves roots and ATC until explicit flush | MISSING RTL | kernel boot flush is current; integrated PMMU incorrectly uses its cold `nreset` path |
+| CACR independent I/D commands | CURRENT RTL | Motorola-directed mixed CI/CD decoder test; strict inventory 140/114 clean |
+| RESET preserves roots and ATC until explicit flush | CURRENT RTL SIM | stale-ATC/reset/`PFLUSHA` regression; strict inventory 140/114 clean |
 
 ## Hardware status
 
@@ -60,8 +62,10 @@ must not be presented as working software.
   synthesized and placed together, but not fully routed, flashed, or soaked on
   hardware.
 - Exact build `66D6094F` has a zero-SCC complete synthesis and finished
-  placement on Beast. Its strict seed-4 router1 job is still running; neither
-  placement estimates nor an active route are acceptance evidence.
+  placement on Beast. Its strict seed-4 router1 job is still running as useful
+  physical evidence, but predates the PMMU reset correction and cannot be the
+  release image. Neither placement estimates nor an active route are
+  acceptance evidence.
 - Therefore K1 is not a hardware-qualified kernel and is not production-ready.
 
 ## Required before K1 release
@@ -73,8 +77,8 @@ must not be presented as working software.
 | exact cache synchronization/alias test for loaded user code | CURRENT SIM, hardware remains |
 | committed nonzero ROM/Git identity | CURRENT SIM |
 | full normal/direct-panic/guard-panic RTL rerun | CURRENT from `66d6094f` |
-| Motorola RESET/ATC preservation and boot-flush regression | MISSING; conformance fix and full requalification required |
-| exact 12.5 MHz CPU / 60 MHz SDRAM complete route | MISSING; exact job active |
+| Motorola RESET/ATC preservation and boot-flush regression | CURRENT RTL SIM; synthesis, route, and board reset remain |
+| exact 12.5 MHz CPU / 60 MHz SDRAM complete route | MISSING; pre-fix diagnostic job active, corrected route required |
 | repeated ULX3S POST, SDRAM, PMMU, timer, fault, HDMI | MISSING |
 | long context/syscall/fault/allocation soak | CURRENT SIM PARTIAL; release-duration jobs remain |
 | panic HDMI and retained-log check on physical board | MISSING |
@@ -134,7 +138,8 @@ must not be presented as working software.
 
 ## Next actions
 
-1. complete and validate the exact production route on Beast;
+1. let the retained pre-fix route finish, then synthesize and route the exact
+   corrected PMMU source;
 2. finish the exact RTL/Musashi lifecycle runs;
 3. flash and qualify through NUC, then run the hardware soak;
 4. implement and benchmark 8 KiB against the retained 4 KiB oracle before
