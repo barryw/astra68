@@ -2654,3 +2654,39 @@ continues. The next release gate is exact SD-ROM provisioning followed by
 repeated SRAM-loaded POST, SDRAM, PMMU, timer, process-fault, retained-log, and
 physical-HDMI checks on the ULX3S attached to NUC. Persistent FPGA programming
 is forbidden until those checks pass on the already-hashed bitstream.
+
+### SRAM hardware promotion
+
+NUC loaded the maintenance passthrough only into FPGA SRAM, then programmed a
+one-shot AstraHost image embedding exact 35,392-byte package SHA-256
+`fea76d8553d7b4f6a042b399e669e480d26061e6bb633646829989d187599b51`.
+The ESP mounted the existing 244,016 MB card without formatting or modifying its
+non-Astra files. After recovering one update interrupted by a deliberately
+short diagnostic capture, a complete 90-second run reported
+`/sdcard/ASTRA68.ROM already matches embedded ROM`. Provisioning log SHA-256 is
+`073ea990b497ccdf6ba57b3fab7145701f501a9662ac41676e82a1e2dee25680`.
+Normal read-only AstraHost app SHA-256
+`b4ec0fe43ffc7012758024576757df11892be0005e8e68fc282879448de962c2`
+was restored; its boot log SHA-256 is
+`241e624b5ced7f3576bcc95cce68622ca74995b6903bb35fd2dfca90b9041e87`
+and shows the card mounted while the maintenance FPGA correctly lacks the
+normal SPI endpoint.
+
+Three independent volatile reloads of production bitstream SHA-256
+`56f768b2d78801f6cc93a7c518643f1012e30f48241e0d77be8250f97c1c2755`
+then pass exact build `77B3CDC8`, ROM CRC32 `EB1B381F`, complete POST, 32 MiB
+BIST, cache and Astraea DMA checks, PMMU enable, user-copy fault recovery, the
+100 Hz timer, two isolated processes, offender-only fault death, three context
+switches, and `K1 PROTECTED ENTRY PASS`. Capture durations and log identities
+are:
+
+| Reload | Elapsed | Log SHA-256 |
+|---|---:|---|
+| 1 | 2.147 s | `16aea78404e22061b7f495c4d1c36b12cc606f2ca2f52b0113f19fd8af6e9a65` |
+| 2 | 2.127 s | `866869437e66cf7e5f00a49d6fe90b16b618ce0a01586fb0e4f66526d5a42491` |
+| 3 | 2.145 s | `e59450ed2a5b8843562d2b2b7cc362b5a532d557b68763007452d9d99f81e65c` |
+
+The first retained boot measures 32-bit CPU SDRAM at 179.021 MB/s write and
+190.689 MB/s read, Astraea fill at 87.840 MB/s, and Astraea copy at
+37.845 MB/s. FPGA flash remains exact older release `6C0D0CA3`; physical HDMI
+confirmation is the gate before programming this same candidate persistently.

@@ -265,9 +265,16 @@ separates implemented evidence from planned work.
   Exact direct-panic and supervisor-guard diagnostics also pass the full SoC
   model, with the latter faulting at `0x02028000`. Beast completed all 500,000
   lifecycle-soak cycles without frame-count drift; the independent NUC run has
-  passed 450,000/500,000 and continues. The remaining release gates are board
-  reset/boot, PMMU/fault/HDMI qualification, and hardware soak; routing alone
-  does not waive them.
+  passed 460,000/500,000 and continues. NUC atomically provisions only the exact
+  ROM payload (`EB1B381F`) on the existing 244,016 MB card, restores normal
+  read-only AstraHost firmware, and performs three independent SRAM reloads of
+  the already-hashed bitstream. All three match build and ROM identities, pass
+  complete POST and 32 MiB BIST, enable the PMMU, recover user-copy faults,
+  preempt two isolated processes at 100 Hz, reap only the offender, and reach
+  `K1 PROTECTED ENTRY PASS` in 2.127-2.147 seconds. Persistent FPGA flash still
+  contains `6C0D0CA3`. The remaining release gates are physical HDMI
+  confirmation, persistent reset/boot, physical panic diagnostics, and hardware
+  soak; routing and SRAM success do not waive them.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,

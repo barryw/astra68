@@ -128,7 +128,10 @@ routed-JSON SHA-256 is
 `a9f7c0c45ec5643d13db12bf08b03caef6434a006f02536f127d54887a4050eb`;
 manifest SHA-256 is
 `0593ba251da7b467e413126539d1e863ca19ef00f63843ed5f0cc6d32913b74e`.
-This is the exact routed K1 candidate; board qualification remains mandatory.
+Three independent SRAM loads of that exact bitstream pass build/ROM identity,
+complete POST and 32 MiB BIST, PMMU enable, 100 Hz preemption, offender-only
+fault containment, and K1 entry in 2.127-2.147 seconds. Physical HDMI,
+reset-from-flash, panic, and hardware-soak qualification remain mandatory.
 
 ## B1F9E60D rollback comparison
 

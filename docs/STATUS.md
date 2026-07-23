@@ -52,11 +52,12 @@ must not be presented as working software.
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
 | panic to console and retained early log | CURRENT SIM | exact direct and supervisor-guard full-SoC panic tests; physical HDMI/log remains |
 | K1 host analyzer/sanitizer gates | CURRENT | 11 suites, analyzer, ASan/UBSan |
-| deterministic lifecycle-soak harness | CURRENT SIM PARTIAL | exact four-cycle full RTL and 100-cycle Musashi pass; Beast completed 500,000 cycles without drift, NUC passed 450,000/500,000 and continues |
+| deterministic lifecycle-soak harness | CURRENT SIM PARTIAL | exact four-cycle full RTL and 100-cycle Musashi pass; Beast completed 500,000 cycles without drift, NUC passed 460,000/500,000 and continues |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
 | CACR independent I/D commands | CURRENT RTL | Motorola-directed mixed CI/CD decoder test; strict inventory 140/114 clean |
 | RESET preserves roots and ATC until explicit flush | CURRENT RTL/ROUTED | stale-ATC/reset/`PFLUSHA` regression; strict inventory 140/114 clean; exact full mapping has zero SCCs and exact route passes all clocks |
 | exact corrected K1 release ROM | CURRENT SIM/ROUTED | build `77B3CDC8` passes Musashi and full pin-level RTL with 32 MiB BIST, PMMU, preemption, and fault containment; exact bitstream is timing-clean |
+| exact corrected K1 SRAM boot | CURRENT HW | three independent reloads pass exact identity, full POST/BIST, PMMU, 100 Hz preemption, offender-only fault containment, and K1 entry |
 
 ## Hardware status
 
@@ -86,6 +87,13 @@ must not be presented as working software.
   model with full 32 MiB BIST at 115.06 MB/s, PMMU enable, two isolated
   processes, 100 Hz preemption, offender-only fault death, three context
   switches, and `K1 PROTECTED ENTRY PASS`. The same image passes Musashi.
+- NUC mounted the existing 244,016 MB SD volume without formatting, atomically
+  validated/replaced only `/ASTRA68.ROM`, and reported exact payload CRC32
+  `EB1B381F`. Normal read-only AstraHost firmware was restored and remounted the
+  card. Three independent SRAM reloads of exact bitstream
+  `56f768b2d78801f6cc93a7c518643f1012e30f48241e0d77be8250f97c1c2755`
+  pass the complete hardware gate in 2.127, 2.145, and 2.147 seconds. FPGA flash
+  remains the older `6C0D0CA3` release until HDMI is physically confirmed.
 - Therefore K1 is not a hardware-qualified kernel and is not production-ready.
 
 ## Required before K1 release
@@ -99,8 +107,8 @@ must not be presented as working software.
 | full normal/direct-panic/guard-panic RTL rerun | CURRENT from exact `77B3CDC8`; direct panic and exact `0x02028000` guard panic both preserve retained logs |
 | Motorola RESET/ATC preservation and boot-flush regression | CURRENT RTL/ROUTED; board reset remains |
 | exact 12.5 MHz CPU / 60 MHz SDRAM complete route | CURRENT; all clocks, LUT permutation, POR, font ROM, and `kernel_platform_v1` gates pass without waiver |
-| repeated ULX3S POST, SDRAM, PMMU, timer, fault, HDMI | MISSING |
-| long context/syscall/fault/allocation soak | CURRENT SIM PARTIAL; Beast passed 500,000 cycles, independent NUC run passed 450,000/500,000 and continues; hardware soak remains |
+| repeated ULX3S POST, SDRAM, PMMU, timer, fault, HDMI | CURRENT except physical HDMI confirmation; three exact SRAM boots pass |
+| long context/syscall/fault/allocation soak | CURRENT SIM PARTIAL; Beast passed 500,000 cycles, independent NUC run passed 460,000/500,000 and continues; hardware soak remains |
 | panic HDMI and retained-log check on physical board | MISSING |
 
 ## Partial or transitional K1 code
