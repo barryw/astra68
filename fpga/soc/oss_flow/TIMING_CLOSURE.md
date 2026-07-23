@@ -2517,14 +2517,17 @@ NUC and Beast extracted independent copies at
 on all three hosts.
 
 The exact normal image uses build ID `77B3CDC8`, reproducible timestamp
-`2026-07-23T06:08:32Z`, and the full Git identity. It passes unchanged on
-AstraVM/Musashi and the complete pin-level RTL/SDRAM model: PMMU enable,
-user-copy recovery, two isolated processes, 100 Hz preemption, offender-only
-fault death, owner teardown, and `K1 PROTECTED ENTRY PASS`. All 90 shared
-framework tests, all 30 Musashi/RTL adapter executions, both Harte smoke
-adapters, and the strict 140-variant Questa inventory retain their expected
-results. The strict inventory is 114 clean with the prior 3 compile, 18
-simulation, and 5 unscored classifications unchanged.
+`2026-07-23T06:08:32Z`, and the full Git identity. It passes AstraVM/Musashi:
+PMMU enable, user-copy recovery, two isolated processes, 100 Hz preemption,
+offender-only fault death, owner teardown, and `K1 PROTECTED ENTRY PASS`. A
+pre-commit reduced-BIST complete pin-level RTL/SDRAM run uses byte-identical
+PMMU RTL and the same functional kernel and passes those boundaries plus four
+lifecycle cycles. That run carries a WIP ROM identity and is not evidence that
+the exact release ROM passed full RTL. All 90 shared framework tests, all 30
+Musashi/RTL adapter executions, both Harte smoke adapters, and the strict
+140-variant Questa inventory retain their expected results. The strict
+inventory is 114 clean with the prior 3 compile, 18 simulation, and 5 unscored
+classifications unchanged.
 
 NUC's exact full-chip production synthesis has complete graphics, OHCI USB,
 AstraHost, HDMI, SDRAM, Vesta, and TG68K/PMMU enabled. It reports zero Yosys
