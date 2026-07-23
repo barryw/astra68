@@ -166,12 +166,84 @@ def test_graphics_diagnostic_requires_complete_pass_line() -> None:
     )
 
 
+def test_expected_kernel_panic_requires_halt_and_optional_fault() -> None:
+    prefix = b"POST PASS\n*** ASTRA KERNEL PANIC ***\n"
+    complete = prefix + b"Fault:  0x02028000\nSYSTEM HALTED\n"
+
+    assert not acceptance_reached(
+        prefix, None, False, expect_kernel_panic=True
+    )
+    assert acceptance_reached(
+        complete, None, False, expect_kernel_panic=True
+    )
+    assert acceptance_reached(
+        complete,
+        None,
+        False,
+        expect_kernel_panic=True,
+        expected_panic_fault=b"02028000",
+    )
+    assert not acceptance_reached(
+        complete,
+        None,
+        False,
+        expect_kernel_panic=True,
+        expected_panic_fault=b"DEADBEEF",
+    )
+    assert not acceptance_reached(
+        complete + b"POST PASS\n",
+        None,
+        False,
+        expect_kernel_panic=True,
+        expected_panic_fault=b"DEADBEEF",
+    )
+
+
+def test_expected_kernel_panic_must_follow_post() -> None:
+    stale_panic = (
+        b"*** ASTRA KERNEL PANIC ***\n"
+        b"Fault:  0x02028000\n"
+        b"SYSTEM HALTED\n"
+        b"POST PASS\n"
+    )
+
+    assert not acceptance_reached(
+        stale_panic,
+        None,
+        False,
+        expect_kernel_panic=True,
+        expected_panic_fault=b"02028000",
+    )
+
+
+def test_panic_fault_requires_expected_panic_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        check_hardware.sys,
+        "argv",
+        ["check_hardware.py", "--expect-panic-fault", "02028000"],
+    )
+
+    with pytest.raises(SystemExit) as error:
+        check_hardware.main()
+
+    assert error.value.code == 2
+
+
 def test_post_failure_and_kernel_panic_are_fatal() -> None:
     assert failure_reached(b"POST FAILURE: SDRAM\n")
     assert failure_reached(b"*** ASTRA KERNEL PANIC ***\n")
     assert failure_reached(b"GFX FAIL 0A\r\n")
     assert failure_reached(b"GFX F41\n")
     assert not failure_reached(b"POST PASS\nK0 ENTRY PASS\n")
+    assert not failure_reached(
+        b"*** ASTRA KERNEL PANIC ***\n", expected_kernel_panic=True
+    )
+    assert failure_reached(
+        b"POST FAILURE\n*** ASTRA KERNEL PANIC ***\n",
+        expected_kernel_panic=True,
+    )
 
 
 def test_serial_capture_flushes_then_reconnects() -> None:

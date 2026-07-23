@@ -75,6 +75,8 @@ def acceptance_reached(
     expect_graphics: bool = False,
     expect_k1_entry: bool = False,
     expect_k1_soak_cycles: int | None = None,
+    expect_kernel_panic: bool = False,
+    expected_panic_fault: bytes | None = None,
 ) -> bool:
     if expect_route_probe:
         match = re.search(
@@ -105,7 +107,22 @@ def acceptance_reached(
         rb"(?m)^ROM CRC32[ .\t]+0x" + re.escape(expected_rom_crc) + rb"\r?$",
         output,
     ) is not None
-    if expect_k1_soak_cycles is not None:
+    if expect_kernel_panic:
+        post_offset = output.find(b"POST PASS")
+        panic_offset = output.find(
+            b"*** ASTRA KERNEL PANIC ***", post_offset + 1
+        )
+        halt_offset = output.find(b"SYSTEM HALTED", panic_offset + 1)
+        panic_reached = post_offset >= 0 and panic_offset >= 0 and halt_offset >= 0
+        if panic_reached and expected_panic_fault is not None:
+            panic_reached = re.search(
+                rb"(?m)^Fault:[ \t]+0x"
+                + re.escape(expected_panic_fault)
+                + rb"\r?$",
+                output[panic_offset:halt_offset],
+            ) is not None
+        kernel_entry_reached = panic_reached
+    elif expect_k1_soak_cycles is not None:
         protected_entry_offset = output.find(b"K1 PROTECTED ENTRY PASS")
         soak_reached = False
         for match in re.finditer(
@@ -139,10 +156,15 @@ def acceptance_reached(
     )
 
 
-def failure_reached(output: bytes | bytearray) -> bool:
+def failure_reached(
+    output: bytes | bytearray, expected_kernel_panic: bool = False
+) -> bool:
     return (
         b"POST FAILURE" in output
-        or b"*** ASTRA KERNEL PANIC ***" in output
+        or (
+            not expected_kernel_panic
+            and b"*** ASTRA KERNEL PANIC ***" in output
+        )
         or re.search(rb"(?m)^GFX (?:FAIL |F)[0-9A-F]{2}\r?$", output) is not None
     )
 
@@ -222,6 +244,16 @@ def main() -> int:
         metavar="COUNT",
         help="require a validated K1 soak checkpoint at or beyond COUNT cycles",
     )
+    kernel_entry_group.add_argument(
+        "--expect-kernel-panic",
+        action="store_true",
+        help="require a complete kernel panic and halt after POST",
+    )
+    parser.add_argument(
+        "--expect-panic-fault",
+        metavar="ADDRESS",
+        help="require an eight-digit fault address in the expected panic",
+    )
     parser.add_argument(
         "--expect-route-probe",
         action="store_true",
@@ -243,6 +275,8 @@ def main() -> int:
         parser.error("--program-flash requires --bit")
     if args.expect_k1_soak_cycles is not None and args.expect_k1_soak_cycles <= 0:
         parser.error("--expect-k1-soak-cycles must be positive")
+    if args.expect_panic_fault and not args.expect_kernel_panic:
+        parser.error("--expect-panic-fault requires --expect-kernel-panic")
 
     diagnostic_modes = sum(
         (args.expect_route_probe, args.expect_video_probe, args.expect_graphics)
@@ -253,6 +287,8 @@ def main() -> int:
         or args.expect_kernel_entry
         or args.expect_k1_entry
         or args.expect_k1_soak_cycles is not None
+        or args.expect_kernel_panic
+        or args.expect_panic_fault
     ):
         parser.error(
             "diagnostic expectations cannot be combined with POST expectations"
@@ -273,6 +309,19 @@ def main() -> int:
         if len(rom_crc) != 8 or any(c not in "0123456789abcdefABCDEF" for c in rom_crc):
             parser.error("--expect-rom-crc must be an eight-digit hexadecimal value")
         expected_rom_crc = rom_crc.upper().encode("ascii")
+
+    expected_panic_fault = None
+    if args.expect_panic_fault:
+        panic_fault = (
+            args.expect_panic_fault.removeprefix("0x").removeprefix("0X")
+        )
+        if len(panic_fault) != 8 or any(
+            c not in "0123456789abcdefABCDEF" for c in panic_fault
+        ):
+            parser.error(
+                "--expect-panic-fault must be an eight-digit hexadecimal value"
+            )
+        expected_panic_fault = panic_fault.upper().encode("ascii")
 
     port = find_port(args.port)
     received: queue.Queue[bytes] = queue.Queue()
@@ -320,8 +369,6 @@ def main() -> int:
                 output.extend(byte)
                 if byte in b"WR].":
                     events.append((time.monotonic() - started, byte.decode("ascii")))
-                if failure_reached(output):
-                    break
                 if acceptance_reached(
                     output,
                     expected_build,
@@ -332,7 +379,11 @@ def main() -> int:
                     args.expect_graphics,
                     args.expect_k1_entry,
                     args.expect_k1_soak_cycles,
+                    args.expect_kernel_panic,
+                    expected_panic_fault,
                 ):
+                    break
+                if failure_reached(output, args.expect_kernel_panic):
                     break
     finally:
         if serial_port.is_open:
@@ -347,6 +398,7 @@ def main() -> int:
         "route probe" if args.expect_route_probe else
         "video probe" if args.expect_video_probe else
         "graphics" if args.expect_graphics else
+        "kernel panic" if args.expect_kernel_panic else
         "K1 soak" if args.expect_k1_soak_cycles is not None else
         "POST"
     )
@@ -363,9 +415,11 @@ def main() -> int:
         args.expect_graphics,
         args.expect_k1_entry,
         args.expect_k1_soak_cycles,
+        args.expect_kernel_panic,
+        expected_panic_fault,
     ):
         return 0
-    if failure_reached(output):
+    if failure_reached(output, args.expect_kernel_panic):
         return 1
     print(f"{capture_name} capture timeout", file=sys.stderr)
     return 2
