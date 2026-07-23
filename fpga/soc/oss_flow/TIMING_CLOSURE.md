@@ -2504,3 +2504,56 @@ Musashi or 24-hour hardware soak.
 | RTL boot binary | 36,224 bytes | `a0b7dead20dce6e7e3c284a330f90f9c4010538098adfae078d6dcdbda260471` |
 | RTL packaged ROM, CRC32 `571d81e9` | 36,256 bytes | `8940a6ab9acf3f0efea1b8f1243ebce525829d9acd6a6fc97d91db263c4d5a26` |
 | Verilated pin-level executable | - | `b7a3efe0071c48114f964b2bde258da4eb06d66098d04a16f7ccacaa86d77aa4` |
+
+## 2026-07-22: exact reset-corrected K1 synthesis and soak
+
+The release candidate is immutable snapshot
+`77b3cdc8fddb984850073a2c2cb5998bbbe1d857`, archived as
+`/tmp/astra68-k1-reset-77b3cdc.tar` with SHA-256
+`678f4bb31a8c652615675b871274c992fde08d648a0e6f0a2e135361d168dbb5`.
+NUC and Beast extracted independent copies at
+`/tmp/astra68-k1-reset-77b3cdc`; the PMMU RTL SHA-256 is
+`a62c552efa069265911adda84d9a983041c61bd109bc841d3e65caa12c25aa51`
+on all three hosts.
+
+The exact normal image uses build ID `77B3CDC8`, reproducible timestamp
+`2026-07-23T06:08:32Z`, and the full Git identity. It passes unchanged on
+AstraVM/Musashi and the complete pin-level RTL/SDRAM model: PMMU enable,
+user-copy recovery, two isolated processes, 100 Hz preemption, offender-only
+fault death, owner teardown, and `K1 PROTECTED ENTRY PASS`. All 90 shared
+framework tests, all 30 Musashi/RTL adapter executions, both Harte smoke
+adapters, and the strict 140-variant Questa inventory retain their expected
+results. The strict inventory is 114 clean with the prior 3 compile, 18
+simulation, and 5 unscored classifications unchanged.
+
+NUC's exact full-chip production synthesis has complete graphics, OHCI USB,
+AstraHost, HDMI, SDRAM, Vesta, and TG68K/PMMU enabled. It reports zero Yosys
+check problems, zero combinational SCCs, deterministic GSR on all 25,532 FFs,
+53,073 LUT4s, 101 DP16KDs, and 18 multipliers. The packed placement front end
+reports 66,513 TRELLIS_COMB and 25,561 TRELLIS_FF cells. This is 471 fewer
+mapped LUT4s and 477 fewer packed combinational cells than the pre-fix K1
+checkpoint.
+
+| Corrected artifact | SHA-256 |
+|---|---|
+| mapped JSON | `135f54a5c40b2b824c4fb7a5b50f89c120072fc1562c88c48b14c5f546dca241` |
+| Yosys log | `5927996ec6e124e8a0d7f746b1b0695fcf38eead2d738101aad01f726ceeed8e` |
+| stage-0 hex | `7de247f66f2840b26692962118778cddf074f818f08dc61966a0e153439a1820` |
+| kernel binary, 23,948 bytes | `ca1edd3106298c32c7563459991a6cb1d899414a258d6d9029d26259fb107c3b` |
+| kernel ELF | `9f86583f44f4b4f1bec145bb751f2119591f349ec41d04117513803e3e2c256f` |
+| boot binary, 35,360 bytes | `b8cef34ca07c32c831d5d92d9fbc0fb38901b298dcbc9585e2877b1c55ac1ca0` |
+| packaged ROM, 35,392 bytes | `fea76d8553d7b4f6a042b399e669e480d26061e6bb633646829989d187599b51` |
+
+The exact seed-4, heap, timing-weight-20 critical-floorplan placement is one
+retained NUC process and is still running. Its placement timing waiver is
+diagnostic only and will be removed from the serialized JSON before the strict
+router1 run. No constrained-clock, routed-JSON, bitstream, or board claim
+exists yet. The uninterrupted Beast `66D6094F` route predates the reset
+correction and remains useful only as a placement/routing diagnostic.
+
+The independent Beast lifecycle soak completed all 500,000 requested cycles
+after 12,416.334 seconds, reaching virtual cycle 1,252,807,889,504 with the
+7,987-free-page baseline unchanged. The independent NUC run has passed
+200,000/500,000 at virtual cycle 501,130,094,922 after 19,337.849 seconds and
+continues. Hardware soak remains mandatory after strict route and board
+promotion.

@@ -14,6 +14,10 @@ must not be presented as working software.
   `470bf123cf24bbadf3525f91307e3d9aebe92006`.
 - PMMU processor-reset conformance source commit:
   `c599f921cb35dcc7e8d2988ba253769341311516`.
+- Exact corrected qualification snapshot: commit
+  `77b3cdc8fddb984850073a2c2cb5998bbbe1d857`, archive SHA-256
+  `678f4bb31a8c652615675b871274c992fde08d648a0e6f0a2e135361d168dbb5`,
+  extracted as `/tmp/astra68-k1-reset-77b3cdc` on NUC and Beast.
 - Immutable build snapshot: Beast `/tmp/astra68-k1-66d6094` from Git archive
   SHA-256 `ba4d91999cf829c33a345d895b7966a438b28b93871d8d34843d658a1d0c0039`.
 - Immutable soak snapshot: NUC `/tmp/astra68-k1-soak-470bf12` and independent
@@ -48,10 +52,10 @@ must not be presented as working software.
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
 | panic to console and retained early log | CURRENT SIM | full-SoC deliberate panic test |
 | K1 host analyzer/sanitizer gates | CURRENT | 11 suites, analyzer, ASan/UBSan |
-| deterministic lifecycle-soak harness | CURRENT SIM PARTIAL | exact four-cycle full RTL and 100-cycle Musashi pass; independent 500,000-cycle runs beyond 180,000 and 360,000 |
+| deterministic lifecycle-soak harness | CURRENT SIM PARTIAL | exact four-cycle full RTL and 100-cycle Musashi pass; Beast completed 500,000 cycles without drift, NUC passed 200,000/500,000 and continues |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
 | CACR independent I/D commands | CURRENT RTL | Motorola-directed mixed CI/CD decoder test; strict inventory 140/114 clean |
-| RESET preserves roots and ATC until explicit flush | CURRENT RTL SIM | stale-ATC/reset/`PFLUSHA` regression; strict inventory 140/114 clean |
+| RESET preserves roots and ATC until explicit flush | CURRENT RTL/SYNTH | stale-ATC/reset/`PFLUSHA` regression; strict inventory 140/114 clean; exact full mapping has zero SCCs |
 
 ## Hardware status
 
@@ -66,9 +70,10 @@ must not be presented as working software.
   physical evidence, but predates the PMMU reset correction and cannot be the
   release image. Neither placement estimates nor an active route are
   acceptance evidence.
-- Reset-conformance source `c599f921` passes GHDL core generation, the complete
-  strict Questa inventory, and a full pin-level SoC lifecycle run. It has not
-  yet passed exact full-chip synthesis, placement, route, or board reset.
+- Exact corrected build `77B3CDC8` passes full-chip synthesis on NUC with
+  zero SCCs, 53,073 LUT4s, 25,532 GSR-enabled FFs, 101 DP16KDs, and 18
+  multipliers. Its exact seed-4 critical-floorplan placement is running; it has
+  not yet passed strict route or board reset qualification.
 - Therefore K1 is not a hardware-qualified kernel and is not production-ready.
 
 ## Required before K1 release
@@ -81,9 +86,9 @@ must not be presented as working software.
 | committed nonzero ROM/Git identity | CURRENT SIM |
 | full normal/direct-panic/guard-panic RTL rerun | CURRENT from `66d6094f` |
 | Motorola RESET/ATC preservation and boot-flush regression | CURRENT RTL SIM; synthesis, route, and board reset remain |
-| exact 12.5 MHz CPU / 60 MHz SDRAM complete route | MISSING; pre-fix diagnostic job active, corrected route required |
+| exact 12.5 MHz CPU / 60 MHz SDRAM complete route | MISSING; corrected synthesis passed and exact placement is active; pre-fix route remains diagnostic only |
 | repeated ULX3S POST, SDRAM, PMMU, timer, fault, HDMI | MISSING |
-| long context/syscall/fault/allocation soak | CURRENT SIM PARTIAL; release-duration jobs remain |
+| long context/syscall/fault/allocation soak | CURRENT SIM PARTIAL; Beast passed 500,000 cycles, independent NUC run passed 200,000/500,000 and continues; hardware soak remains |
 | panic HDMI and retained-log check on physical board | MISSING |
 
 ## Partial or transitional K1 code
@@ -141,9 +146,10 @@ must not be presented as working software.
 
 ## Next actions
 
-1. let the retained pre-fix route finish, then synthesize and route the exact
-   corrected PMMU source;
-2. finish the exact RTL/Musashi lifecycle runs;
-3. flash and qualify through NUC, then run the hardware soak;
+1. finish the exact corrected placement and strict route while retaining the
+   uninterrupted pre-fix route only as diagnostic physical evidence;
+2. finish the independent NUC 500,000-cycle lifecycle run;
+3. package, flash, and qualify exact `77B3CDC8` through NUC, then run the
+   hardware soak;
 4. implement and benchmark 8 KiB against the retained 4 KiB oracle before
    freezing the stable VM ABI.
