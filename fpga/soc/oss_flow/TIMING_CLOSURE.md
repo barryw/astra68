@@ -2710,3 +2710,25 @@ placement, route, or constrained-clock result changed at this checkpoint.
 Disposition: the release-duration simulation lifecycle-soak gate passes on two
 independent hosts. It does not waive the exact `77B3CDC8` physical HDMI, panic,
 persistent-reset, or hardware-soak gates.
+
+### Prepared physical diagnostic identities
+
+No board state changed at this checkpoint. Fresh one-shot AstraHost firmware
+sets on NUC were audited by extracting their embedded `A68R` packages from the
+application binaries and reconstructing each package through the exact
+`package_rom.py` formatter. This validates the header CRC, payload CRC, reset
+vectors, addresses, length, and all package bytes rather than relying on an app
+hash alone.
+
+| Diagnostic | AstraHost app SHA-256 | Embedded package SHA-256 | Payload CRC32 |
+|---|---|---|---|
+| direct panic | `1c579fa99a2041e82342839ac7f6372e11ccc896ed10e7dcb5ce2a5b07fc35fe` | `2de9f718b8db67bbc5b015aae23f67bdf53cd65dc65f597bc76ac7314aca6635` | `FD4FC2AB` |
+| supervisor guard | `6217a1b56163cbe78ab74d4c4e60da33725e2f585a929f5df6b86d654bb53067` | `bb0089aaf7f1248a74d3491e400bd8a383df548892fbc322add18a43cb309733` | `6AAAEE00` |
+| lifecycle soak | `5e3fc8691da085da408fa8baeb2548143a02b4c7de2c3c10986fb7bd4f13c7c9` | `cb55d88f5d16a9c2ec8e6548c051bb6ba96551b939643225574c56c969ad9c83` | `B138EB36` |
+
+The normal read-only AstraHost application remains SHA-256
+`b4ec0fe43ffc7012758024576757df11892be0005e8e68fc282879448de962c2`
+and contains no embedded provisioning package. The committed hardware checker
+also accepts the complete exact direct-panic and guard-panic RTL transcripts;
+the guard expectation is bound to fault address `0x02028000`. These checks
+prepare the physical tests but do not count as physical panic evidence.

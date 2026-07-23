@@ -277,6 +277,23 @@ separates implemented evidence from planned work.
   contains `6C0D0CA3`. The remaining release gates are physical HDMI
   confirmation, persistent reset/boot, physical panic diagnostics, and hardware
   soak; routing and SRAM success do not waive them.
+- The one-shot physical diagnostics are prepared but have not been loaded.
+  Their AstraHost application SHA-256 values are
+  `1c579fa99a2041e82342839ac7f6372e11ccc896ed10e7dcb5ce2a5b07fc35fe`
+  for direct panic,
+  `6217a1b56163cbe78ab74d4c4e60da33725e2f585a929f5df6b86d654bb53067`
+  for supervisor guard, and
+  `5e3fc8691da085da408fa8baeb2548143a02b4c7de2c3c10986fb7bd4f13c7c9`
+  for lifecycle soak. Independently extracted embedded packages have SHA-256
+  values `2de9f718b8db67bbc5b015aae23f67bdf53cd65dc65f597bc76ac7314aca6635`,
+  `bb0089aaf7f1248a74d3491e400bd8a383df548892fbc322add18a43cb309733`,
+  and `cb55d88f5d16a9c2ec8e6548c051bb6ba96551b939643225574c56c969ad9c83`,
+  with payload CRC32 values `FD4FC2AB`, `6AAAEE00`, and `B138EB36`,
+  respectively. Reconstructing every package through `package_rom.py` proves
+  its header CRC, payload CRC, size, load address, and reset vectors. The normal
+  read-only AstraHost application remains
+  `b4ec0fe43ffc7012758024576757df11892be0005e8e68fc282879448de962c2`
+  and contains no provisioning package.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,
