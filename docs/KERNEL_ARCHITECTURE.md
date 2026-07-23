@@ -25,6 +25,14 @@ Status words are precise:
   build option for measurement and compatibility. The current 4 KiB K1 image
   remains the reference oracle until the 8 KiB build passes the same gates.
 
+The primary architectural authority is Motorola's
+[MC68030 User's Manual, revision 3](https://www.nxp.com/docs/en/reference-manual/MC68030UM.pdf).
+In particular, section 9.2.2 defines reset/ATC behavior, sections 9.7.2 and
+9.7.3 define page geometry and transparent translation, sections 3.5.4 and
+7.6 define `NOP` pipeline/bus synchronization, and section 7.5.4 defines the
+double-bus-fault halt condition. Tests and implementation notes should cite
+those sections instead of relying on behavior inferred from another system.
+
 ## Privileged boundary
 
 Only these mechanisms belong in supervisor mode:

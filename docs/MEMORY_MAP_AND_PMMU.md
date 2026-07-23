@@ -43,6 +43,8 @@ the initial CRP, sets SFC/DFC, executes `PFLUSHA`, independently invalidates the
 instruction and data caches through CACR, and only then loads enabled TC. A
 Motorola-directed RTL test covers simultaneous CACR I/D command decode even
 though the kernel deliberately emits the two invalidations separately.
+This follows MC68030 User's Manual section 9.2.2, which explicitly requires an
+ATC-flushing MMU instruction after reset and before translation is enabled.
 
 **CURRENT RTL:** source `c599f921cb35dcc7e8d2988ba253769341311516`
 separates deterministic ECP5 configuration initialization from architectural
