@@ -37,6 +37,16 @@ uint32_t kernel_platform_cpu_cycles_low(void)
     return VESTA->CPU_CYCLES_LO;
 }
 
+void kernel_platform_cpu_cycles(KernelPlatformCycleCount *cycles)
+{
+    // Reading LO latches the coherent HI value for the following MMIO read.
+    uint32_t low = VESTA->CPU_CYCLES_LO;
+    uint32_t high = VESTA->CPU_CYCLES_HI;
+
+    cycles->high = high;
+    cycles->low = low;
+}
+
 bool kernel_interrupt_dispatch(void)
 {
     uint32_t current = VESTA->IRQ_CURRENT;

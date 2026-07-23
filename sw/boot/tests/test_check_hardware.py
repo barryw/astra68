@@ -41,7 +41,8 @@ def test_k1_soak_requires_complete_bounded_checkpoint() -> None:
     )
     checkpoint = (
         b"K1 SOAK cycles=100 switches=203 ticks=205 "
-        b"syscalls=0x0000000000012345 free=7997\n"
+        b"syscalls=0x0000000000012345 free=7997 "
+        b"elapsed_cycles=0x00000000DF847580\n"
     )
     latency = b"K1 LATENCY user_fault_irqoff_max=1249 cycles\n"
 
@@ -108,6 +109,54 @@ def test_k1_soak_requires_complete_bounded_checkpoint() -> None:
         False,
         expect_k1_soak_cycles=100,
     )
+    assert acceptance_reached(
+        prefix + checkpoint,
+        None,
+        False,
+        expect_k1_soak_cycles=100,
+        expect_k1_min_elapsed_cycles=3_750_000_000,
+    )
+    assert not acceptance_reached(
+        prefix + checkpoint,
+        None,
+        False,
+        expect_k1_soak_cycles=100,
+        expect_k1_min_elapsed_cycles=3_750_000_001,
+    )
+    assert not acceptance_reached(
+        prefix + checkpoint.replace(
+            b" elapsed_cycles=0x00000000DF847580", b""
+        ),
+        None,
+        False,
+        expect_k1_soak_cycles=100,
+        expect_k1_min_elapsed_cycles=3_750_000_000,
+    )
+    assert acceptance_reached(
+        prefix + checkpoint.replace(
+            b" elapsed_cycles=0x00000000DF847580", b""
+        ),
+        None,
+        False,
+        expect_k1_soak_cycles=100,
+    )
+    release_checkpoint = checkpoint.replace(
+        b"00000000DF847580", b"000000053D1AC100"
+    )
+    assert acceptance_reached(
+        prefix + release_checkpoint,
+        None,
+        False,
+        expect_k1_soak_cycles=100,
+        expect_k1_min_elapsed_cycles=22_500_000_000,
+    )
+    assert not acceptance_reached(
+        prefix + release_checkpoint,
+        None,
+        False,
+        expect_k1_soak_cycles=100,
+        expect_k1_min_elapsed_cycles=22_500_000_001,
+    )
     assert not acceptance_reached(
         prefix.replace(
             b"K1 soak ............. armed, baseline 7997 pages\n", b""
@@ -159,6 +208,21 @@ def test_k0_and_k1_expectations_are_mutually_exclusive(
         check_hardware.sys,
         "argv",
         ["check_hardware.py", "--expect-kernel-entry", "--expect-k1-entry"],
+    )
+
+    with pytest.raises(SystemExit) as error:
+        check_hardware.main()
+
+    assert error.value.code == 2
+
+
+def test_k1_elapsed_cycles_requires_soak_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        check_hardware.sys,
+        "argv",
+        ["check_hardware.py", "--expect-k1-min-elapsed-cycles", "1"],
     )
 
     with pytest.raises(SystemExit) as error:

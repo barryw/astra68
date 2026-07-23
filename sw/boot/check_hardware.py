@@ -78,6 +78,7 @@ def acceptance_reached(
     expect_kernel_panic: bool = False,
     expected_panic_fault: bytes | None = None,
     expect_k1_fault_max_cycles: int | None = None,
+    expect_k1_min_elapsed_cycles: int | None = None,
 ) -> bool:
     if expect_route_probe:
         match = re.search(
@@ -135,7 +136,8 @@ def acceptance_reached(
         soak_reached = False
         for match in re.finditer(
             rb"(?m)^K1 SOAK cycles=(\d+) switches=(\d+) "
-            rb"ticks=(\d+) syscalls=0x([0-9A-Fa-f]{16}) free=(\d+)\r?\n",
+            rb"ticks=(\d+) syscalls=0x([0-9A-Fa-f]{16}) free=(\d+)"
+            rb"(?: elapsed_cycles=0x([0-9A-Fa-f]{16}))?\r?\n",
             output,
         ):
             latency_matches = list(
@@ -149,6 +151,10 @@ def acceptance_reached(
                 latency_match is not None
                 and 0 < int(latency_match.group(1)) <= expect_k1_fault_max_cycles
             )
+            elapsed_reached = expect_k1_min_elapsed_cycles is None or (
+                match.group(6) is not None
+                and int(match.group(6), 16) >= expect_k1_min_elapsed_cycles
+            )
             if (
                 protected_entry_offset >= 0
                 and match.start() > protected_entry_offset
@@ -159,6 +165,7 @@ def acceptance_reached(
                 and int(match.group(4), 16) != 0
                 and int(match.group(5)) == baseline_free
                 and latency_reached
+                and elapsed_reached
             ):
                 soak_reached = True
                 break
@@ -274,6 +281,15 @@ def main() -> int:
             "most COUNT CPU cycles"
         ),
     )
+    parser.add_argument(
+        "--expect-k1-min-elapsed-cycles",
+        type=int,
+        metavar="COUNT",
+        help=(
+            "require the qualifying K1 checkpoint to report at least COUNT "
+            "coherent 64-bit CPU cycles since the soak was armed"
+        ),
+    )
     kernel_entry_group.add_argument(
         "--expect-kernel-panic",
         action="store_true",
@@ -312,6 +328,14 @@ def main() -> int:
             parser.error(
                 "--expect-k1-fault-max-cycles requires --expect-k1-soak-cycles"
             )
+    if args.expect_k1_min_elapsed_cycles is not None:
+        if args.expect_k1_min_elapsed_cycles <= 0:
+            parser.error("--expect-k1-min-elapsed-cycles must be positive")
+        if args.expect_k1_soak_cycles is None:
+            parser.error(
+                "--expect-k1-min-elapsed-cycles requires "
+                "--expect-k1-soak-cycles"
+            )
     if args.expect_panic_fault and not args.expect_kernel_panic:
         parser.error("--expect-panic-fault requires --expect-kernel-panic")
 
@@ -325,6 +349,7 @@ def main() -> int:
         or args.expect_k1_entry
         or args.expect_k1_soak_cycles is not None
         or args.expect_k1_fault_max_cycles is not None
+        or args.expect_k1_min_elapsed_cycles is not None
         or args.expect_kernel_panic
         or args.expect_panic_fault
     ):
@@ -423,6 +448,7 @@ def main() -> int:
                     args.expect_kernel_panic,
                     expected_panic_fault,
                     args.expect_k1_fault_max_cycles,
+                    args.expect_k1_min_elapsed_cycles,
                 ):
                     break
                 if failure_reached(output, args.expect_kernel_panic):
@@ -460,6 +486,7 @@ def main() -> int:
         args.expect_kernel_panic,
         expected_panic_fault,
         args.expect_k1_fault_max_cycles,
+        args.expect_k1_min_elapsed_cycles,
     ):
         return 0
     if failure_reached(output, args.expect_kernel_panic):

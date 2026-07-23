@@ -31,9 +31,15 @@ typedef struct KernelInputEvent {
     uint32_t host_generation;
 } KernelInputEvent;
 
+typedef struct KernelPlatformCycleCount {
+    uint32_t high;
+    uint32_t low;
+} KernelPlatformCycleCount;
+
 void kernel_platform_interrupt_init(uint32_t cpu_hz);
 uint32_t kernel_platform_ticks(void);
 uint32_t kernel_platform_cpu_cycles_low(void);
+void kernel_platform_cpu_cycles(KernelPlatformCycleCount *cycles);
 bool kernel_interrupt_dispatch(void);
 void kernel_enable_interrupts(void);
 void kernel_disable_interrupts(void);

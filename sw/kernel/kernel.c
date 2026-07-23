@@ -20,7 +20,7 @@
 #define SCREEN_BOTTOM_MARGIN 2u
 #define KERNEL_SELFTEST_OWNER 0xfffffff0u
 #define KERNEL_SELFTEST_USER_ADDRESS 0x10000000u
-#define KERNEL_SOAK_REPORT_INTERVAL 10000u
+#define KERNEL_SOAK_REPORT_INTERVAL 1000u
 
 extern uint8_t _kernel_entry[];
 extern uint8_t _kernel_image_start[];
@@ -44,6 +44,9 @@ static uint32_t screen_row;
 static uint32_t screen_col;
 static int screen_enabled;
 static KernelAddressSpace user_copy_selftest_space;
+#if ASTRA_KERNEL_SOAK_SELFTEST
+static KernelPlatformCycleCount soak_started;
+#endif
 
 static void copy_bytes(void *destination, const void *source, uint32_t size)
 {
@@ -349,6 +352,8 @@ void kernel_process_soak_checkpoint(uint32_t cycles,
 {
     KernelMemoryStats memory_stats;
     KernelSchedulerStats scheduler_stats;
+    KernelPlatformCycleCount now;
+    KernelPlatformCycleCount elapsed;
 
     if (!kernel_memory_stats(&memory_stats) ||
         !kernel_process_stats(&scheduler_stats) ||
@@ -358,6 +363,11 @@ void kernel_process_soak_checkpoint(uint32_t cycles,
         scheduler_stats.completed_user_fault_teardowns != cycles ||
         scheduler_stats.completed_teardowns != cycles)
         kernel_panic("K1 soak resource baseline drift");
+
+    kernel_platform_cpu_cycles(&now);
+    elapsed.low = now.low - soak_started.low;
+    elapsed.high = now.high - soak_started.high -
+                   (now.low < soak_started.low ? 1u : 0u);
 
     console_puts("K1 LATENCY user_fault_irqoff_max=");
     console_dec32(kernel_dispatch_user_fault_irqoff_max_cycles());
@@ -373,6 +383,9 @@ void kernel_process_soak_checkpoint(uint32_t cycles,
     console_hex32(scheduler_stats.total_syscalls_low);
     console_puts(" free=");
     console_dec32(memory_stats.free_frames);
+    console_puts(" elapsed_cycles=0x");
+    console_hex32(elapsed.high);
+    console_hex32(elapsed.low);
     console_putc('\n');
     VESTA->SCRATCH = ASTRA_KERNEL_STATUS_K1_SOAK;
 }
@@ -522,6 +535,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
             offender_entry_offset, soak_baseline.free_frames,
             KERNEL_SOAK_REPORT_INTERVAL) != KERNEL_PROCESS_OK)
         kernel_panic("K1 soak configuration failed");
+    kernel_platform_cpu_cycles(&soak_started);
     console_puts("K1 soak ............. armed, baseline ");
     console_dec32(soak_baseline.free_frames);
     console_puts(" pages\n");
