@@ -2426,7 +2426,7 @@ shared framework tests, all 30 Musashi/RTL matrix executions, and both Harte
 smoke adapters pass. An exact optimized Musashi run completes 100 lifecycle
 cycles at virtual cycle 262,502,952 with 201 context switches, 411 timer ticks,
 1,377 syscalls, and 7,987 free pages. The exact 500,000-cycle Musashi run has
-passed checkpoint 10,000 at virtual cycle 25,068,017,690 after 893.985 seconds
+passed checkpoint 50,000 at virtual cycle 125,291,837,865 after 4,363.506 seconds
 without baseline drift and continues.
 
 The exact full pin-level RTL/SDRAM run uses Verilator 5.047 and the unchanged

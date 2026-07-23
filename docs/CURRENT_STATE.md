@@ -216,7 +216,7 @@ separates implemented evidence from planned work.
   Host analyzer/sanitizer gates, an exact 100-cycle Musashi run, and the exact
   full pin-level RTL workload pass. RTL completes four post-milestone teardown
   cycles with 11 context switches, 23 timer ticks, 96 syscalls, and the exact
-  7,987-free-page baseline. The release-duration Musashi run has crossed 10,000
+  7,987-free-page baseline. The release-duration Musashi run has crossed 50,000
   of 500,000 cycles without drift. Routed-hardware completion remains open and
   must not be inferred from simulation.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522

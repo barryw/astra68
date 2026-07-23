@@ -63,8 +63,8 @@ changing the CPU/PMMU model. The exact 24,876-byte kernel has SHA-256
 
 An optimized Musashi run completed 100 lifecycle cycles at virtual cycle
 262,502,952 with 201 context switches, 411 timer ticks, 1,377 syscalls, and
-7,987 free pages. The release-duration 500,000-cycle run passed its 10,000
-checkpoint at virtual cycle 25,068,017,690 after 893.985 seconds and continues
+7,987 free pages. The release-duration 500,000-cycle run passed its 50,000
+checkpoint at virtual cycle 125,291,837,865 after 4,363.506 seconds and continues
 from the same immutable NUC snapshot. A progress checkpoint is evidence that
 all counters returned to baseline through that point, not a completed long-soak
 claim.
