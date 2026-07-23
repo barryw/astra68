@@ -286,9 +286,10 @@ separates implemented evidence from planned work.
   `deeaba2d4acdb5fbc5115085b4f751796ce11079cc68ded319c43117d17b0e97`.
   Persistent FPGA flash now contains exact K1 candidate `77B3CDC8`. The
   physical direct-panic and supervisor-guard diagnostics now also pass.
-  Hardware lifecycle qualification is partial: 1,000 physical teardown cycles
-  retain the exact resource baseline, while bounded interrupt latency and the
-  time-boxed mixed release burn-in remain open. Routing, normal boot,
+  At that checkpoint hardware lifecycle qualification was partial: 1,000
+  physical teardown cycles retained the exact resource baseline, while bounded
+  interrupt latency and the time-boxed mixed release burn-in remained open.
+  Routing, normal boot,
   persistent promotion, and panic qualification do not waive those gates.
 - The one-shot physical diagnostic identities are pinned before use.
   Their AstraHost application SHA-256 values are
@@ -407,9 +408,64 @@ separates implemented evidence from planned work.
   `K1 PROTECTED ENTRY PASS` complete in 1.931 seconds. Retained log
   `docs/evidence/k1-77b3cdc8-bbb1616-normal-hw.log` has SHA-256
   `6197aeeeb3a55ea1d8366025a6c64f9d2a424b17791bb60d3ab72d8ec6916b86`.
-  The board is left in that normal state. No synthesis, placement, route,
-  resource, or constrained-clock result changed. The 30-minute mixed hardware
-  burn-in remains the next K1 release gate.
+  The board was left in that normal state. No synthesis, placement, route,
+  resource, or constrained-clock result changed. At this checkpoint the
+  30-minute mixed hardware burn-in was the next K1 release gate.
+- Exact hardware-qualification follow-on
+  `853ae66e300232dcbdf5f69903747faa42521114`, archive SHA-256
+  `c416c1bfb0720ac2bf9fb94898a99e66e1e7b6040f215706a661462ea493f7ad`,
+  adds a coherent 64-bit FPGA cycle-counter snapshot and binds elapsed-time
+  acceptance to complete K1 checkpoints. The kernel reads the low word first
+  to latch the counter, then the high word; the soak computes wrap-safe elapsed
+  cycles without a compiler runtime helper. The checker rejects partial lines,
+  counter regressions, baseline drift, zero activity, excessive latency, and
+  checkpoints below the requested elapsed-cycle threshold. All 11 kernel
+  suites pass normally, under GCC `-fanalyzer`, and with ASan/UBSan/leak
+  checks; all 22 boot-tool tests, 15 Rust tests, rustfmt, Clippy, the exact
+  m68k builds, and a 1,000-cycle Musashi run pass.
+
+  NUC mounted the existing 244,016 MB card without formatting and atomically
+  replaced only `/ASTRA68.ROM` with soak package SHA-256
+  `9f6953911f10d726d51b861eeb5d42a4a54c15841e385125ecbd7f1257b8ab53`,
+  37,384-byte payload CRC32 `91E30139`. A second provisioner boot verified the
+  file already matched; retained log
+  `docs/evidence/k1-77b3cdc8-853ae66-soak-provision.log` has SHA-256
+  `28815aa647d9aacb15f8c93bde6df97e1ef169ce3e0874f0c2cf8d5e8189ad75`.
+  With normal read-only AstraHost restored and unchanged production bitstream
+  SHA-256
+  `56f768b2d78801f6cc93a7c518643f1012e30f48241e0d77be8250f97c1c2755`,
+  the routed candidate gate passes at cycle 5,000 after 317.246 host seconds
+  and `0x00000000EAE8411F` FPGA CPU cycles. It reports 10,005 switches, 31,533
+  delivered ticks, syscall count `0x15288`, exactly 7,987 free pages, and an
+  8,809-cycle masked-fault maximum. Retained log
+  `docs/evidence/k1-77b3cdc8-853ae66-candidate-5m-hw.log` has SHA-256
+  `db9ad4900951e3cc61ae20d8078bd714a20089bcd1880f0f77dc58d34f64dbf6`.
+
+  A separate reset then passes the release burn-in at cycle 29,000 after
+  1,830.658 host seconds and `0x000000055263857F` coherent FPGA CPU cycles,
+  exceeding both the 30-minute `0x000000053D1AC100` threshold and 5,000-cycle
+  minimum. It reports 58,005 switches, 182,861 delivered ticks, syscall count
+  `0x7AD6B`, exactly 7,987 free pages, and the unchanged 8,809-cycle maximum.
+  Retained log `docs/evidence/k1-77b3cdc8-853ae66-release-30m-hw.log` has
+  SHA-256
+  `71d2c3a766bc1cd25a58f6e81ca9c904517b0df74322d2d3130279a0e1ffa489`.
+
+  NUC finally restored normal package SHA-256
+  `696afc6ecf9d5df31acc76966aeea0fe190b44479c4af61a2fbf16f8866f7d05`,
+  36,292-byte payload CRC32 `BBAB0AA1`, and verified an exact second-boot match.
+  Provisioning-log SHA-256 is
+  `5be77adb8627fbd0ca4a6ede6601c92d362d44bf0394dce3f31fad8f0c398929`.
+  Read-only AstraHost application SHA-256
+  `b4ec0fe43ffc7012758024576757df11892be0005e8e68fc282879448de962c2`
+  was restored before the same production bitstream was loaded. The final boot
+  reports exact build `77B3CDC8`, ROM CRC32 `BBAB0AA1`, full Git identity
+  `853ae66e300232dcbdf5f69903747faa42521114`, complete POST/BIST, PMMU and
+  fault containment, and `K1 PROTECTED ENTRY PASS` in 1.955 seconds. Retained
+  log `docs/evidence/k1-77b3cdc8-853ae66-normal-hw.log` has SHA-256
+  `14b69338b1c429def6fa0a13067bff6e00f087dae0dc7a05a3a463e7a107f09c`.
+  The board is left in that normal state; persistent FPGA flash remains the
+  same exact `77B3CDC8` image. No RTL, synthesis, placement, route, resource,
+  or constrained-clock result changed during this qualification.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,

@@ -1,0 +1,142 @@
+OK
+AstraHost ROM ..... OK
+ROM CRC32 ........ 0x91E30139
+Starting system ROM
+ASTRA 68 SYSTEM ROM v0.3
+Built: 2026-07-23T22:05:42Z  Git: 853ae66e300232dcbdf5f69903747faa42521114
+
+Vesta:  v1.0
+CPU:    TG68K.C 68030 MMU2 @ 12500000 Hz
+MMU:    integrated 68030 PMMU
+RAM:    32 MiB @ 0x02000000
+ROM:    256 KiB @ 0xFFE00000
+BUILD:  0x77B3CDC8
+Chips:  VSTA v1.0, ASTR v1.0, VEGA v1.0, OHCI v1.0
+NVRAM:  not present; defaults active
+
+POST
+  SDRAM init ........ OK
+  Front panel ....... OK
+  Data/byte lanes .... OK
+  Address lines ...... OK
+  Cache coherence .... OK
+  CPU BRAM cycles (256 bytes payload)
+    8-bit  write=3897 read=4659
+    16-bit write=1719 read=2104
+    32-bit write=1143 read=1074
+  CPU memory cycles (16384 bytes payload)
+    8-bit  write=147512 read=189735
+      write dmiss=0 rdreq=29 wrreq=16384 wait=89 lhit=16 lmiss=5 post=16384
+      read  dmiss=1024 rdreq=1040 wrreq=0 wait=9561 lhit=15 lmiss=1033 post=0
+      hot read=189736
+    16-bit write=73765 read=99878
+      write dmiss=0 rdreq=20 wrreq=8192 wait=81 lhit=14 lmiss=5 post=8192
+      read  dmiss=1024 rdreq=1041 wrreq=0 wait=9807 lhit=18 lmiss=1030 post=0
+      hot read=99868
+    32-bit write=45092 read=49948
+      write dmiss=0 rdreq=20 wrreq=4096 wait=62 lhit=12 lmiss=3 post=4096
+      read  dmiss=1024 rdreq=1039 wrreq=0 wait=9024 lhit=15 lmiss=1031 post=0
+      hot read=49943
+  Astraea DMA (64 KiB)
+    fill=9327 copy=21642
+  Full-range BIST ... [stage0] OK
+
+POST PASS
+  Kernel image ...... OK
+Starting Astra kernel
+ASTRA 68 KERNEL v0.1.0-dev
+Built: 2026-07-23T22:05:42Z
+Git:   853ae66e300232dcbdf5f69903747faa42521114
+
+BootInfo ........... OK
+Early log .......... OK @ 0x02000000
+VBR ................ OK @ 0x02010400
+Kernel image ....... 25972 bytes @ 0x02010000
+CPU ................ MC68030 @ 12500000 Hz
+PMMU ............... enabled, SRP 0x02004000
+Physical pages ..... 7992 free / 8192 total
+User copy .......... OK, fault recovery verified
+Vesta timer ........ OK @ 100 Hz
+AstraHost runtime ... OK, media not provisioned
+Input queue ......... OK
+K1 soak ............. armed, baseline 7987 pages
+User processes ...... 2 ready, cache isolation armed
+
+User tasks .......... OK, 100 Hz preemption
+Fault containment ... OK, offender reaped
+Context switches .... 15
+
+K1 PROTECTED ENTRY PASS
+KERNEL MULTITASKING
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=7 switches=19 ticks=48 syscalls=0x00000000000000AA free=7987 elapsed_cycles=0x000000000056AD87
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=10 switches=25 ticks=70 syscalls=0x00000000000000CD free=7987 elapsed_cycles=0x00000000007F3A4A
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=100 switches=205 ticks=640 syscalls=0x00000000000006CF free=7987 elapsed_cycles=0x0000000004BE6A7A
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=1000 switches=2005 ticks=6313 syscalls=0x0000000000004382 free=7987 elapsed_cycles=0x000000002F00F1CB
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=2000 switches=4005 ticks=12617 syscalls=0x000000000000872A free=7987 elapsed_cycles=0x000000005DF8D904
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=3000 switches=6005 ticks=18923 syscalls=0x000000000000CB05 free=7987 elapsed_cycles=0x000000008CF496D0
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=4000 switches=8005 ticks=25229 syscalls=0x0000000000010EE0 free=7987 elapsed_cycles=0x00000000BBF054C6
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=5000 switches=10005 ticks=31533 syscalls=0x0000000000015288 free=7987 elapsed_cycles=0x00000000EAE8411F
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=6000 switches=12005 ticks=37838 syscalls=0x0000000000019649 free=7987 elapsed_cycles=0x0000000119E21090
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=7000 switches=14005 ticks=44141 syscalls=0x000000000001D9D8 free=7987 elapsed_cycles=0x0000000148D82286
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=8000 switches=16005 ticks=50448 syscalls=0x0000000000021DCC free=7987 elapsed_cycles=0x0000000177D5C4E1
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=9000 switches=18005 ticks=56755 syscalls=0x00000000000261C0 free=7987 elapsed_cycles=0x00000001A6D36730
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=10000 switches=20005 ticks=63063 syscalls=0x000000000002A5CE free=7987 elapsed_cycles=0x00000001D5D2FC4E
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=11000 switches=22005 ticks=69368 syscalls=0x000000000002E98F free=7987 elapsed_cycles=0x0000000204CCD051
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=12000 switches=24005 ticks=75675 syscalls=0x0000000000032D83 free=7987 elapsed_cycles=0x0000000233CA76AB
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=13000 switches=26005 ticks=81982 syscalls=0x0000000000037177 free=7987 elapsed_cycles=0x0000000262C81CE8
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=14000 switches=28005 ticks=88289 syscalls=0x000000000003B56B free=7987 elapsed_cycles=0x0000000291C5C326
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=15000 switches=30005 ticks=94592 syscalls=0x000000000003F8F9 free=7987 elapsed_cycles=0x00000002C0BBC71F
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=16000 switches=32005 ticks=100897 syscalls=0x0000000000043CBA free=7987 elapsed_cycles=0x00000002EFB59CC0
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=17000 switches=34005 ticks=107201 syscalls=0x0000000000048061 free=7987 elapsed_cycles=0x000000031EAD83D6
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=18000 switches=36005 ticks=113508 syscalls=0x000000000004C455 free=7987 elapsed_cycles=0x000000034DAB2F52
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=19000 switches=38005 ticks=119812 syscalls=0x00000000000507FC free=7987 elapsed_cycles=0x000000037CA3161E
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=20000 switches=40005 ticks=126115 syscalls=0x0000000000054B8A free=7987 elapsed_cycles=0x00000003AB991DB4
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=21000 switches=42005 ticks=132418 syscalls=0x0000000000058F18 free=7987 elapsed_cycles=0x00000003DA8F25A5
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=22000 switches=44005 ticks=138724 syscalls=0x000000000005D2F2 free=7987 elapsed_cycles=0x00000004098ADD8F
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=23000 switches=46005 ticks=145026 syscalls=0x0000000000061666 free=7987 elapsed_cycles=0x00000004387EF2FB
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=24000 switches=48005 ticks=151332 syscalls=0x0000000000065A41 free=7987 elapsed_cycles=0x00000004677ABD3A
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=25000 switches=50005 ticks=157640 syscalls=0x0000000000069E4E free=7987 elapsed_cycles=0x00000004967A45AA
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=26000 switches=52005 ticks=163945 syscalls=0x000000000006E20F free=7987 elapsed_cycles=0x00000004C5741D64
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=27000 switches=54005 ticks=170250 syscalls=0x00000000000725D0 free=7987 elapsed_cycles=0x00000004F46DF5E3
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=28000 switches=56005 ticks=176556 syscalls=0x00000000000769AA free=7987 elapsed_cycles=0x000000052369AD5B
+K1 LATENCY user_fault_irqoff_max=8809 cycles
+K1 SOAK cycles=29000 switches=58005 ticks=182861 syscalls=0x000000000007AD6B free=7987 elapsed_cycles=0x000000055263857F
+K1 soak capture elapsed=1830.658s events=[(1.1427714256569743, 'R'), (1.143410268239677, '.'), (1.143450241535902, '.'), (1.1434891279786825, '.'), (1.1435268772765994, '.'), (1.143564861267805, '.'), (1.3657312635332346, 'R'), (1.3664627140387893, 'R'), (1.3667350942268968, '.'), (1.3668112456798553, '.'), (1.3668629210442305, '.'), (1.36691053211689, '.'), (1.3669394413009286, '.'), (1.367530052550137, '.'), (1.3675814038142562, '.'), (1.3676151121035218, '.'), (1.369842984713614, 'R'), (1.373621430248022, 'R'), (1.3748322194442153, 'R'), (1.3756270175799727, '.'), (1.3836957989260554, '.'), (1.384866977110505, '.'), (1.390626029111445, 'R'), (1.392808553762734, 'R'), (1.3987131537869573, '.'), (1.3994234884157777, 'R'), (1.399719936773181, '.'), (1.4006464388221502, '.'), (1.4015901098027825, '.'), (1.4018005300313234, 'R'), (1.4058859162032604, 'R'), (1.4068232560530305, '.'), (1.40686472132802, '.'), (1.406906451098621, '.'), (1.4069473631680012, '.'), (1.4069880694150925, '.'), (1.4075346402823925, '.'), (1.4076012000441551, '.'), (1.4076501782983541, '.'), (1.4090550690889359, '.'), (1.409531494602561, '.'), (1.4095996832475066, '.'), (1.4096492007374763, '.'), (1.4096940755844116, '.'), (1.4097370151430368, '.'), (1.4097788073122501, '.'), (1.4119656905531883, '.'), (1.4120081374421716, '.'), (1.4126283787190914, '.'), (1.4126963075250387, '.'), (1.4150041528046131, '.'), (1.41504842415452, '.'), (1.4150921441614628, '.'), (1.4151640832424164, '.'), (1.4152117725461721, '.'), (1.4152555046603084, '.'), (1.4188112542033195, '.'), (1.4188559232279658, '.'), (1.4189003026112914, '.'), (1.4189442293718457, '.'), (1.4206284927204251, 'R'), (1.5777180809527636, '.'), (1.577819180674851, '.'), (1.5779356202110648, '.'), (1.5787178007885814, ']'), (1.5817151814699173, '.'), (1.581813858821988, '.'), (1.58195420820266, '.'), (1.5821798583492637, '.'), (1.5822547152638435, '.'), (1.5823244275525212, '.'), (1.6800659941509366, 'R'), (1.6810609754174948, 'R'), (1.6815611524507403, '.'), (1.6818502563983202, '.'), (1.7551082139834762, '.'), (1.7552083693444729, '.'), (1.755286361090839, '.'), (1.7553588282316923, '.'), (1.755430388264358, '.'), (1.7555011995136738, '.'), (1.7555716512724757, '.'), (1.7556417854502797, '.'), (1.7557117817923427, '.'), (1.7559300940483809, '.'), (1.756027183495462, '.'), (1.7573607033118606, '.'), (1.7574332989752293, '.'), (1.7575044287368655, '.'), (1.7575752921402454, '.'), (1.7576457606628537, '.'), (1.757716616615653, '.'), (1.7579298857599497, '.'), (1.7580281859263778, '.'), (1.7581440024077892, '.'), (1.7582266731187701, '.'), (1.7600007522851229, 'R'), (1.7601902429014444, '.'), (1.7602681843563914, '.'), (1.7603420186787844, '.'), (1.760414938442409, '.'), (1.7604876039549708, '.'), (1.7605603523552418, '.'), (1.7606327394023538, '.'), (1.7607053183019161, '.'), (1.7608923763036728, '.'), (1.7609695056453347, '.'), (1.7610424431040883, '.'), (1.7611149102449417, '.'), (1.7612102115526795, '.'), (1.7612846354022622, '.'), (1.7613570904359221, '.'), (1.7614339115098119, '.'), (1.7643454913049936, '.'), (1.7644195593893528, '.'), (1.7644943669438362, '.'), (1.7645683363080025, '.'), (1.7646410632878542, '.'), (1.7647135397419333, '.'), (1.764932013116777, '.'), (1.7676677154377103, '.'), (1.7679283823817968, '.'), (1.768029011785984, '.'), (1.7681124210357666, '.'), (1.768212920986116, '.'), (1.7682914081960917, '.'), (1.7683662679046392, '.'), (1.7684661857783794, '.'), (1.768543398939073, '.'), (1.768619286827743, '.'), (1.7687007989734411, '.'), (1.7687766198068857, '.'), (1.7689522905275226, '.'), (1.7690533390268683, '.'), (1.7691599931567907, '.'), (1.7692423211410642, '.'), (1.7718097399920225, '.'), (1.7719025053083897, '.'), (1.7719802279025316, '.'), (1.772055583074689, '.'), (1.7721527311950922, '.'), (1.7722328985109925, '.'), (1.772308574989438, '.'), (1.7723835799843073, '.'), (1.7724583456292748, '.'), (1.7725413087755442, '.'), (1.7726534754037857, '.'), (1.7727310163900256, '.'), (1.7729025771841407, '.'), (1.7729822872206569, '.'), (1.7730575865134597, '.'), (1.7744231969118118, 'R'), (1.776961475610733, '.'), (1.777037682943046, '.'), (1.7771574994549155, '.'), (1.7773312591016293, '.'), (1.7774302596226335, '.'), (1.7805575504899025, '.'), (1.780634669587016, '.'), (1.7807113900780678, '.'), (1.7807881757616997, '.'), (1.7808648683130741, '.'), (1.7809412721544504, '.'), (1.7810169495642185, '.'), (1.7810938134789467, '.'), (1.781181711703539, '.'), (1.7812602343037724, '.'), (1.8056230954825878, '.'), (1.8057057429105043, '.'), (1.8057856792584062, '.'), (1.8058647820726037, '.'), (1.8059432841837406, '.'), (1.8060257704928517, '.'), (1.8061078265309334, '.'), (1.8062171433120966, '.'), (1.8098423285409808, '.'), (1.8099865047261119, '.'), (1.8101473804563284, '.'), (1.814301049336791, '.'), (1.8143813470378518, '.'), (1.8144611846655607, '.'), (1.81454105861485, '.'), (1.8146208049729466, '.'), (1.8147000186145306, '.'), (1.8147799260914326, '.'), (1.814859988167882, '.'), (1.8149391431361437, '.'), (1.882020897231996, '.'), (1.8821562062948942, '.'), (1.8822597926482558, '.'), (1.882401080802083, '.'), (1.8824929594993591, '.'), (1.8825766639783978, '.'), (1.8826589100062847, '.'), (1.882756027393043, '.'), (1.8828394571319222, '.'), (1.8829214116558433, '.'), (1.8830030290409923, '.'), (1.8830842319875956, '.'), (1.8831939352676272, '.'), (1.8873968282714486, '.'), (1.8874836079776287, '.'), (1.8875680696219206, '.'), (1.8876515114679933, '.'), (1.8877351060509682, '.'), (1.887818731367588, '.'), (2.27756389696151, '.'), (2.277649624273181, '.'), (2.277734648436308, '.'), (2.2778190886601806, '.'), (2.2779037673026323, '.'), (2.277988244779408, '.'), (2.2780725955963135, '.'), (2.278212944045663, '.'), (2.278306850232184, '.'), (2.278404964134097, '.'), (2.281856380403042, '.'), (2.281920477747917, '.'), (2.281983844935894, '.'), (2.2862545354291797, '.'), (2.286321193911135, '.'), (2.286387089639902, '.'), (2.286451986990869, '.'), (2.2870906591415405, 'R'), (2.2880386114120483, 'R'), (2.289031093940139, 'R')]
+CPU memory 8-bit: write=52.553 MB/s read=43.958 MB/s
+CPU memory 16-bit: write=119.139 MB/s read=97.338 MB/s
+CPU memory 32-bit: write=179.178 MB/s read=190.689 MB/s
+CPU memory 8-bit: write=1.388 MB/s read=1.079 MB/s
+CPU memory 16-bit: write=2.776 MB/s read=2.051 MB/s
+CPU memory 32-bit: write=4.542 MB/s read=4.100 MB/s
+Astraea DMA: fill=87.831 MB/s copy=37.852 MB/s

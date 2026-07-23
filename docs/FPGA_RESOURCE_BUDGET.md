@@ -139,9 +139,15 @@ Physical supervisor-guard HDMI/log qualification passes at exact fault address
 the exact 7,987-page baseline. The impractical 500,000-cycle board run was
 stopped intentionally; normal ROM CRC32 `EB1B381F`, read-only AstraHost, and
 the unchanged production bitstream were restored and revalidated in 2.111
-seconds. Bounded hardware burn-in remains open. No resource, route, or timing
-result changed during hardware promotion, either panic test, the soak, or
-normal restoration.
+seconds. Follow-on source `853ae66e300232dcbdf5f69903747faa42521114`
+subsequently passes the routed five-minute candidate gate at 5,000 teardown
+cycles and an independent 30-minute release gate at 29,000 cycles, both at the
+exact 7,987-page baseline with coherent FPGA elapsed-time proof and an
+8,809-cycle maximum masked-fault interval. Normal ROM CRC32 `BBAB0AA1`,
+read-only AstraHost, and the same production bitstream are restored and
+revalidated. The bounded hardware burn-in is closed. No resource, route, or
+timing result changed during hardware promotion, either panic test, either
+soak, or normal restoration.
 
 ## B1F9E60D rollback comparison
 

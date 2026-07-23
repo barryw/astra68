@@ -152,6 +152,31 @@ and the unchanged 7,987-page baseline. The maximum masked user-fault dispatch
 is 8,834 cycles. This is the fast per-change hardware gate; it does not replace
 the 1,000-cycle/five-minute candidate run or 30-minute release burn-in above.
 
+Exact source `853ae66e300232dcbdf5f69903747faa42521114` closes both routed
+hardware gates with the unchanged production bitstream. The target reads the
+cycle-counter low word first to latch a coherent 64-bit snapshot, reads the high
+word second, and reports wrap-safe elapsed cycles on every complete checkpoint.
+The checker requires the announced free-page baseline, nonzero switches,
+syscalls and delivered ticks, bounded masked-fault latency, monotonic counters,
+and a newline-terminated checkpoint at or above every requested threshold.
+
+- Candidate: cycle 5,000 after 317.246 host seconds and
+  `0x00000000EAE8411F` FPGA CPU cycles; 10,005 switches, 31,533 delivered
+  ticks, syscall count `0x15288`, 7,987 free pages, and 8,809-cycle maximum
+  masked-fault latency. This exceeds the exact five-minute threshold
+  `0x00000000DF847580`.
+- Independent release reset: cycle 29,000 after 1,830.658 host seconds and
+  `0x000000055263857F` FPGA CPU cycles; 58,005 switches, 182,861 delivered
+  ticks, syscall count `0x7AD6B`, 7,987 free pages, and the same 8,809-cycle
+  latency maximum. This exceeds the exact 30-minute threshold
+  `0x000000053D1AC100` and the 5,000-cycle minimum.
+
+Retained evidence is
+`docs/evidence/k1-77b3cdc8-853ae66-candidate-5m-hw.log`, SHA-256
+`db9ad4900951e3cc61ae20d8078bd714a20089bcd1880f0f77dc58d34f64dbf6`,
+and `docs/evidence/k1-77b3cdc8-853ae66-release-30m-hw.log`, SHA-256
+`71d2c3a766bc1cd25a58f6e81ca9c904517b0df74322d2d3130279a0e1ffa489`.
+
 The scheduler's delivered-interrupt count is not an elapsed-time oracle. Vesta
 uses one pending expiration bit, so periods coalesce while interrupts are
 masked. Hardware soak timing must use the 64-bit CPU cycle counter or an

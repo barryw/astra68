@@ -24,6 +24,12 @@ must not be presented as working software.
   extracted as `/tmp/astra68-k1-bbb1616` on NUC. It changes ROM/kernel
   software and acceptance tooling only; production bitstream `77B3CDC8` is
   unchanged.
+- Hardware-burn-in source commit:
+  `853ae66e300232dcbdf5f69903747faa42521114`, archive SHA-256
+  `c416c1bfb0720ac2bf9fb94898a99e66e1e7b6040f215706a661462ea493f7ad`,
+  extracted as `/tmp/astra68-k1-853ae66` on NUC and Beast. It adds coherent
+  64-bit elapsed-cycle reporting and acceptance checks only; production
+  bitstream `77B3CDC8` remains unchanged.
 - Immutable build snapshot: Beast `/tmp/astra68-k1-66d6094` from Git archive
   SHA-256 `ba4d91999cf829c33a345d895b7966a438b28b93871d8d34843d658a1d0c0039`.
 - Immutable soak snapshot: NUC `/tmp/astra68-k1-soak-470bf12` and independent
@@ -58,7 +64,7 @@ must not be presented as working software.
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
 | panic to console and retained early log | CURRENT HW | exact direct and supervisor-guard panic paths pass full RTL plus physical HDMI/log qualification |
 | K1 host analyzer/sanitizer gates | CURRENT | 11 suites, analyzer, ASan/UBSan |
-| deterministic lifecycle-soak harness | CURRENT SIM/PARTIAL HW | dual-host 500,000-cycle legacy Musashi, optimized 100-cycle Musashi, 13-cycle full RTL, legacy 1,000-cycle physical, and optimized 100-cycle physical runs pass without drift |
+| deterministic lifecycle-soak harness | CURRENT HW | dual-host 500,000-cycle legacy Musashi, optimized Musashi, 13-cycle full RTL, routed five-minute candidate, and independent 30-minute release runs pass without drift |
 | deferred user-fault reclamation | CURRENT HW | host proves no maintenance/owner release in fault dispatch; Musashi, full RTL, and ULX3S report bounded masked-fault cycles |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
 | CACR independent I/D commands | CURRENT RTL | Motorola-directed mixed CI/CD decoder test; strict inventory 140/114 clean |
@@ -76,7 +82,7 @@ must not be presented as working software.
 - K-HW3 table-walk arbitration, K-HW4 timer/IACK changes, and K1 are integrated
   in exact build `77B3CDC8`, fully routed together, and exercised by three
   passing volatile SRAM boots plus an automatic reset-from-flash boot. Both
-  physical panic paths pass; bounded hardware burn-in remains open.
+  physical panic paths and the bounded hardware burn-in pass.
 - Exact build `66D6094F` completed a timing-clean strict route on Beast as
   useful diagnostic physical evidence. It predates the PMMU reset correction
   and cannot be a release image or be loaded onto the board.
@@ -146,8 +152,32 @@ must not be presented as working software.
   1.931 seconds. Retained transcript
   `docs/evidence/k1-77b3cdc8-bbb1616-normal-hw.log` has SHA-256
   `6197aeeeb3a55ea1d8366025a6c64f9d2a424b17791bb60d3ab72d8ec6916b86`.
-  K1 is not yet a fully qualified production kernel: the 30-minute mixed
-  hardware burn-in and remaining stable-kernel mechanisms below are open.
+  That checkpoint preceded the elapsed-counter release qualification below.
+- Exact source `853ae66e300232dcbdf5f69903747faa42521114` passes both
+  routed-hardware release gates under the unchanged production bitstream. The
+  candidate run reaches cycle 5,000 after 317.246 host seconds and
+  `0x00000000EAE8411F` FPGA CPU cycles, with 10,005 switches, 31,533 delivered
+  ticks, syscall count `0x15288`, 7,987 free pages, and an 8,809-cycle maximum
+  masked-fault interval. The independent release run reaches cycle 29,000
+  after 1,830.658 host seconds and `0x000000055263857F` FPGA CPU cycles, with
+  58,005 switches, 182,861 delivered ticks, syscall count `0x7AD6B`, the same
+  7,987-page baseline, and the same latency maximum. Evidence SHA-256 values
+  are `db9ad4900951e3cc61ae20d8078bd714a20089bcd1880f0f77dc58d34f64dbf6`
+  for the five-minute candidate and
+  `71d2c3a766bc1cd25a58f6e81ca9c904517b0df74322d2d3130279a0e1ffa489`
+  for the 30-minute release run.
+- Normal ROM package SHA-256
+  `696afc6ecf9d5df31acc76966aeea0fe190b44479c4af61a2fbf16f8866f7d05`
+  is restored at payload CRC32 `BBAB0AA1`; a second one-shot boot verifies the
+  exact file match. Normal read-only AstraHost and the production bitstream are
+  restored unchanged. The final boot reports full Git identity
+  `853ae66e300232dcbdf5f69903747faa42521114`, completes POST/BIST, and reaches
+  `K1 PROTECTED ENTRY PASS` in 1.955 seconds. Retained provisioning and boot
+  transcript SHA-256 values are
+  `5be77adb8627fbd0ca4a6ede6601c92d362d44bf0394dce3f31fad8f0c398929`
+  and `14b69338b1c429def6fa0a13067bff6e00f087dae0dc7a05a3a463e7a107f09c`.
+  The hardware burn-in gate is closed; the stable-kernel mechanisms below
+  remain open.
 
 ## Required before K1 release
 
@@ -162,7 +192,7 @@ must not be presented as working software.
 | exact 12.5 MHz CPU / 60 MHz SDRAM complete route | CURRENT; all clocks, LUT permutation, POR, font ROM, and `kernel_platform_v1` gates pass without waiver |
 | repeated ULX3S POST, SDRAM, PMMU, timer, fault, HDMI | CURRENT; three exact SRAM boots, physical HDMI, and automatic reset-from-flash boot pass |
 | masked user-fault latency | CURRENT HW; 8,834 cycles against 125,000-cycle gate |
-| long context/syscall/fault/allocation soak | PARTIAL HW; dual-host 500,000-cycle simulation, legacy physical 1,000-cycle proof, and optimized physical 100-cycle proof pass at baseline 7,987; 30-minute mixed burn-in remains |
+| long context/syscall/fault/allocation soak | CURRENT HW; dual-host 500,000-cycle simulation, routed five-minute/5,000-cycle candidate, and independent 30-minute/29,000-cycle release run pass at baseline 7,987 with coherent FPGA elapsed-time proof |
 | panic HDMI and retained-log check on physical board | CURRENT; exact direct-panic and supervisor-guard paths pass |
 
 ## Partial or transitional K1 code
@@ -199,7 +229,7 @@ must not be presented as working software.
 - fixed allocation-free trace ring and interactive SPI/FTDI monitor commands;
 - graphics-service command ring/mapping revocation and dedicated graphics RAM
   arena;
-- full deterministic allocation failure injection and release soak thresholds.
+- full deterministic allocation failure injection.
 
 ## Known invariants and tests
 
@@ -226,10 +256,8 @@ must not be presented as working software.
 
 ## Next actions
 
-1. run the 1,000-cycle/five-minute candidate check and 30-minute mixed hardware
-   burn-in without blocking unrelated host, Musashi, RTL, or kernel work;
-2. audit every K1 acceptance requirement and update the release records;
-3. add the kernel deferred worker needed for waits, IPC, and multi-threaded
+1. audit every K1 acceptance requirement and update the release records;
+2. add the kernel deferred worker needed for waits, IPC, and multi-threaded
    process teardown;
-4. implement and benchmark 8 KiB against the retained 4 KiB oracle before
+3. implement and benchmark 8 KiB against the retained 4 KiB oracle before
    freezing the stable VM ABI.
