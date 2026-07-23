@@ -32,7 +32,10 @@ frames has an 8-byte owner/reference/pin/state record.
   cache-inhibited in `0xFFF00000..0xFFF40FFF`.
 - Vectors, exception code, active supervisor stack, page tables, frame
   metadata, panic console, and early log are permanently resident.
-- TT0 and TT1 remain disabled. They are not a user-mapping shortcut.
+- TT0 and TT1 remain disabled. Transparent translation bypasses ordinary
+  descriptor protection, has a minimum 16 MiB aperture, and is not a shortcut
+  for user-visible MMIO, framebuffer, or shared-memory mappings. Those ranges
+  use normal supervisor descriptors with explicit permissions and cache policy.
 
 Reset is not treated as an ATC invalidation guarantee. Before enabling
 translation, boot explicitly writes disabled TC and TT0/TT1, installs SRP and
@@ -41,16 +44,21 @@ instruction and data caches through CACR, and only then loads enabled TC. A
 Motorola-directed RTL test covers simultaneous CACR I/D command decode even
 though the kernel deliberately emits the two invalidations separately.
 
-**CURRENT RTL:** source `6dd83d4a2eb4128e2108b73d09cbe9d2ba0fa3c3`
+**CURRENT RTL:** source `c599f921cb35dcc7e8d2988ba253769341311516`
 separates deterministic ECP5 configuration initialization from architectural
+processor reset. One configuration-initialized bit clears scalar PMMU state and
+invalidates the ATC on the first released clock but is never re-armed by
 processor reset. MC68030 `RESET` clears only TC.E, TT0.E, and TT1.E; it
 preserves CRP, SRP, the other control fields, and valid ATC entries. A focused
 Motorola-directed test retains a deliberately stale translation across reset,
 observes it with level-zero `PTEST`, executes `PFLUSHA` while TC.E is clear,
 then proves that re-enabling translation walks to the changed descriptor. The
 complete strict Questa inventory is 140 total and 114 clean with the prior
-3 compile, 18 simulation, and 5 unscored buckets unchanged. Exact synthesis,
-route, and board reset/boot qualification remain open.
+3 compile, 18 simulation, and 5 unscored buckets unchanged. GHDL 7.0 generates
+the complete core and a byte-identical pre-commit reduced-BIST full-SoC run
+passes POST, protected multitasking, offender-only fault containment, and four
+lifecycle soak cycles. Exact full-chip synthesis, route, and board reset/boot
+qualification remain open.
 
 ### User (one CRP per process)
 

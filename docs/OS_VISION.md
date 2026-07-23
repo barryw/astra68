@@ -425,10 +425,12 @@ The first implementation needs:
 - reliable user-pointer copy/validation helpers;
 - deterministic process destruction on an unrecoverable user fault.
 
-A 4 KiB page is the current proposal. It divides 32 MiB into 8,192 physical
-frames and keeps the first allocator and accounting structures small. Page
-size, page-table geometry, and virtual layout remain **OPEN** until they are
-checked against the accepted PMMU implementation.
+The K1 qualification image uses 4 KiB pages and remains the comparison oracle.
+The stable default targets 8 KiB pages with 4,096 physical frames, half the
+frame-metadata cost, and twice the 22-entry ATC reach. A 4 KiB build remains
+supported. The 8 KiB target becomes the default only after its table geometry,
+fault behavior, internal fragmentation, ATC misses, mapping costs, workload,
+route, and board results pass the same gates as the retained 4 KiB image.
 
 Demand paging, swap, copy-on-write, and memory-mapped files are deferred. They
 may be added after basic mapping, faults, scheduling, and I/O are demonstrably

@@ -80,13 +80,13 @@ uint32_t kernel_mmio_fence32(uint32_t fence_address);
 ```
 
 They perform aligned, volatile, native-big-endian accesses with compiler memory
-ordering; debug builds reject width/alignment violations. `kernel_mmio_cpu_sync`
-issues the Motorola-required CPU synchronization operation. It proves only that
-the CPU-side bus operation completed. A posted FPGA bridge or asynchronous
-engine is complete only after `kernel_mmio_fence32` reads a device-documented
-fence/status register or a sequence fence retires. Device wrappers own that
-choice. Raw volatile register-structure dereferences are transitional K1 code
-and cannot become the stable driver interface.
+ordering; debug builds reject width/alignment violations. On MC68030,
+`kernel_mmio_cpu_sync` emits the documented post-write `NOP` that waits for the
+CPU-side external write to complete. It does not prove that a posted FPGA bridge
+or asynchronous engine completed; that requires `kernel_mmio_fence32` to read a
+device-documented fence/status register or a sequence fence to retire. Device
+wrappers own that choice. Raw volatile register-structure dereferences are
+transitional K1 code and cannot become the stable driver interface.
 
 ## Hardware reliability contract
 

@@ -13,7 +13,7 @@ must not be presented as working software.
 - K1 lifecycle-soak source commit:
   `470bf123cf24bbadf3525f91307e3d9aebe92006`.
 - PMMU processor-reset conformance source commit:
-  `6dd83d4a2eb4128e2108b73d09cbe9d2ba0fa3c3`.
+  `c599f921cb35dcc7e8d2988ba253769341311516`.
 - Immutable build snapshot: Beast `/tmp/astra68-k1-66d6094` from Git archive
   SHA-256 `ba4d91999cf829c33a345d895b7966a438b28b93871d8d34843d658a1d0c0039`.
 - Immutable soak snapshot: NUC `/tmp/astra68-k1-soak-470bf12` and independent
@@ -48,7 +48,7 @@ must not be presented as working software.
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
 | panic to console and retained early log | CURRENT SIM | full-SoC deliberate panic test |
 | K1 host analyzer/sanitizer gates | CURRENT | 11 suites, analyzer, ASan/UBSan |
-| deterministic lifecycle-soak harness | CURRENT SIM PARTIAL | exact four-cycle full RTL and 100-cycle Musashi pass; independent 500,000-cycle runs beyond 140,000 and 220,000 |
+| deterministic lifecycle-soak harness | CURRENT SIM PARTIAL | exact four-cycle full RTL and 100-cycle Musashi pass; independent 500,000-cycle runs beyond 180,000 and 360,000 |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
 | CACR independent I/D commands | CURRENT RTL | Motorola-directed mixed CI/CD decoder test; strict inventory 140/114 clean |
 | RESET preserves roots and ATC until explicit flush | CURRENT RTL SIM | stale-ATC/reset/`PFLUSHA` regression; strict inventory 140/114 clean |
@@ -66,6 +66,9 @@ must not be presented as working software.
   physical evidence, but predates the PMMU reset correction and cannot be the
   release image. Neither placement estimates nor an active route are
   acceptance evidence.
+- Reset-conformance source `c599f921` passes GHDL core generation, the complete
+  strict Questa inventory, and a full pin-level SoC lifecycle run. It has not
+  yet passed exact full-chip synthesis, placement, route, or board reset.
 - Therefore K1 is not a hardware-qualified kernel and is not production-ready.
 
 ## Required before K1 release

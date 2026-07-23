@@ -2387,9 +2387,9 @@ these retained identities:
 
 The placement-only SDRAM estimate is 53.27 MHz and is not a timing result.
 The exact strict route refreshed all 66,990 LUT-permutation policies and is
-still running as one uninterrupted Beast process. At iteration 709,000 it had
-170,763 arcs remaining after 19,709.41 seconds; its retained best is 169,755 at
-iteration 703,000. No constrained-clock, routed-JSON, bitstream, or hardware
+still running as one uninterrupted Beast process. At iteration 876,000 it had
+132,950 arcs remaining after 23,357.20 seconds; its retained best is 130,958 at
+iteration 871,000. No constrained-clock, routed-JSON, bitstream, or hardware
 claim exists until that process completes normally and every release gate
 passes.
 
@@ -2401,20 +2401,47 @@ the required pre-enable `PFLUSHA`, so the current route remains useful physical
 integration evidence and must finish uninterrupted. It is not the final
 conformance image.
 
-Corrected source `6dd83d4a2eb4128e2108b73d09cbe9d2ba0fa3c3`
-uses declaration initialization for deterministic FPGA configuration and
-removes architectural reset from the PMMU register and ATC storage elements.
+The first corrected source, `6dd83d4a2eb4128e2108b73d09cbe9d2ba0fa3c3`,
+used declaration aggregate initialization for deterministic FPGA configuration
+and removed architectural reset from PMMU register and ATC storage. Its focused
+and complete Questa runs passed, but the retained GHDL synthesis frontend
+asserted at `netlists-builders.adb:1700` while importing the core. Replacing
+only the ATC aggregates with a configuration pulse still put startup-only data
+muxes across the large ATC payload. Retaining scalar declaration initializers
+also reproduced the GHDL assertion. Both representations were rejected before
+full-chip synthesis.
+
+Retained source `c599f921cb35dcc7e8d2988ba253769341311516` uses one
+configuration-initialized bit. It remains armed while processor reset is held,
+then clears scalar PMMU state plus ATC valid/MRU bits on the first released
+clock and can never be re-armed by processor reset. Invalid ATC payload is
+architecturally unobservable, and every payload field is assigned before its
+valid bit is set. This avoids both the GHDL aggregate-initializer defect and a
+payload-wide startup mux while preserving deterministic cold validity state.
 The `nreset` branch preserves CRP, SRP, MMUSR, TC/TT fields, and all 22 ATC
-entries while clearing only TC.E, TT0.E, and TT1.E. The Motorola-directed
-bench first fills the ATC, changes the backing descriptor, resets the
-processor, and observes the stale entry with level-zero `PTEST`. It then
-executes `PFLUSHA` while TC.E is clear and proves the next translated access
-walks to the changed descriptor. Questa Lattice OEM 2024.2 reports that bench
-clean in isolation and a complete inventory of 140 total, 114 clean, 3 stale
-compile failures, 18 classified simulation failures, and 5 unscored
-diagnostics. The only inventory change is the new clean test. This corrected
-source has no synthesis, SCC, mapped-resource, placement, route, bitstream, or
-board claim yet.
+entries while clearing only TC.E, TT0.E, and TT1.E.
+
+The Motorola-directed bench first verifies cold-zero roots, controls, and ATC
+validity, then fills the ATC, changes the backing descriptor, resets the
+processor, and observes the stale entry with level-zero `PTEST`. It executes
+`PFLUSHA` while TC.E is clear and proves the next translated access walks to the
+changed descriptor. Questa Lattice OEM 2024.2 reports that bench clean in
+isolation and a complete inventory of 140 total, 114 clean, 3 stale compile
+failures, 18 classified simulation failures, and 5 unscored diagnostics. The
+only inventory change is the new clean test.
+
+NUC's GHDL 7.0.0-dev (`6.0.0.r106.g3dcaf42a5`) generates a 4,284,098-byte core
+netlist with 26 initial blocks and only 10 configuration-pulse mux expressions.
+The PMMU RTL in that diagnostic tree has SHA-256
+`a62c552efa069265911adda84d9a983041c61bd109bc841d3e65caa12c25aa51`,
+identical to committed `c599f921`. A reduced-BIST full pin-level SoC run then
+passes POST at 115.04 MB/s, PMMU/user-copy initialization, two-process 100 Hz
+preemption, offender-only fault containment, and four lifecycle cycles. It
+finishes at one simulated second after 1,588.584 seconds wall time with 11
+context switches, 23 timer ticks, 96 syscalls, 7,987 free pages, and
+`KERNEL SOAK PASS`. Its diagnostic ROM carries a WIP identity and is not a
+release artifact. Exact full-chip synthesis, SCC/resource checks, placement,
+route, bitstream, and board claims remain open.
 
 A route-progress comparison against the exact successful `F4DC1E18` seed-4
 placement isolates the present difficulty to global placement topology, not
@@ -2451,14 +2478,14 @@ shared framework tests, all 30 Musashi/RTL matrix executions, and both Harte
 smoke adapters pass. An exact optimized Musashi run completes 100 lifecycle
 cycles at virtual cycle 262,502,952 with 201 context switches, 411 timer ticks,
 1,377 syscalls, and 7,987 free pages. The exact NUC 500,000-cycle Musashi run
-has passed checkpoint 140,000 at virtual cycle 350,795,239,823 after 12,206.520
+has passed checkpoint 180,000 at virtual cycle 451,018,559,752 after 15,997.172
 seconds without baseline drift and continues. An independent Beast run uses
 the identical emulator binary
 (`6ca0ef17e77193ae4c0b248a44e65966e9cb0cecf0fa69a9cf0b7f3f53f6ab89`)
 and boot image
 (`a0b7dead20dce6e7e3c284a330f90f9c4010538098adfae078d6dcdbda260471`),
 runs below nextpnr's scheduling priority on a separate core, and has passed
-220,000 at virtual cycle 551,240,387,754 after 5,448.870 seconds without drift.
+360,000 at virtual cycle 902,024,886,383 after 8,898.589 seconds without drift.
 
 The exact full pin-level RTL/SDRAM run uses Verilator 5.047 and the unchanged
 24,876-byte kernel. It passes complete POST and BIST at 115.03 MB/s, PMMU and

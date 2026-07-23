@@ -217,24 +217,30 @@ separates implemented evidence from planned work.
   full pin-level RTL workload pass. RTL completes four post-milestone teardown
   cycles with 11 context switches, 23 timer ticks, 96 syscalls, and the exact
   7,987-free-page baseline. The release-duration NUC Musashi run has crossed
-  140,000 of 500,000 cycles at virtual cycle 350,795,239,823 after 12,206.520
+  180,000 of 500,000 cycles at virtual cycle 451,018,559,752 after 15,997.172
   seconds without drift. An independent lower-priority Beast run of the
-  identical binary and ROM has crossed 220,000 at virtual cycle
-  551,240,387,754 after 5,448.870 seconds. Routed-hardware completion remains
+  identical binary and ROM has crossed 360,000 at virtual cycle
+  902,024,886,383 after 8,898.589 seconds. Routed-hardware completion remains
   open and must not be inferred from simulation.
 - Motorola-directed reset correction
-  `6dd83d4a2eb4128e2108b73d09cbe9d2ba0fa3c3` separates ECP5 configuration
-  initialization from MC68030 processor reset. `RESET` now clears only TC/TT
-  enable bits and preserves roots and valid ATC entries until software flushes
-  them. The new focused regression retains a deliberately stale ATC entry,
-  checks CRP/SRP/control-field preservation, executes the same pre-enable
-  `PFLUSHA` invariant used by K1 boot, and proves the next access walks to the
-  changed descriptor. Beast's strict Questa inventory is 140 total and 114
-  clean; its prior 3 compile, 18 simulation, and 5 unscored classifications
-  are unchanged. This is RTL simulation evidence only. The already-running
-  `66D6094F` route predates the correction and cannot be the release image;
-  corrected synthesis, strict routing, and board reset/boot qualification are
-  mandatory.
+  `c599f921cb35dcc7e8d2988ba253769341311516` separates ECP5 configuration
+  initialization from MC68030 processor reset with one configuration-initialized
+  bit. Its first released clock clears scalar PMMU state and invalidates the
+  ATC; processor reset cannot re-arm it. `RESET` clears only TC/TT enable bits
+  and preserves roots and valid ATC entries until software flushes them. The
+  focused regression retains a deliberately stale ATC entry, checks
+  CRP/SRP/control-field preservation, executes the same pre-enable `PFLUSHA`
+  invariant used by K1 boot, and proves the next access walks to the changed
+  descriptor. Beast's strict Questa inventory is 140 total and 114 clean; its
+  prior 3 compile, 18 simulation, and 5 unscored classifications are unchanged.
+  GHDL 7.0 generates the core without the aggregate-initializer crash or an ATC
+  payload-wide startup mux. A byte-identical pre-commit reduced-BIST full
+  pin-level SoC run passes POST, two-process 100 Hz preemption, offender-only
+  fault containment, and four lifecycle cycles at the exact 7,987-page
+  baseline. The already-
+  running `66D6094F` route predates the correction and cannot be the release
+  image; corrected exact synthesis, strict routing, and board reset/boot
+  qualification are mandatory.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,
