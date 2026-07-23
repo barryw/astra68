@@ -2391,6 +2391,25 @@ still running as one uninterrupted Beast process. No constrained-clock,
 routed-JSON, bitstream, or hardware claim exists until that process completes
 normally and every release gate passes.
 
+A route-progress comparison against the exact successful `F4DC1E18` seed-4
+placement isolates the present difficulty to global placement topology, not
+the raw 613-cell increase. At router iteration 568,000, `F4DC1E18` had 79,442
+arcs remaining after 377.48 seconds; `66D6094F` had 183,583 remaining after
+10,258.19 seconds. A placement-JSON lower-bound analysis reports less total
+half-perimeter wire length for K1 (531,689 versus 544,822), but much greater
+aggregate cut demand through the middle of the device: weighted demand at
+`X=51` rises from 6,205.1 to 9,099.5 and at `Y=68` from 8,480.9 to 11,344.3.
+The deterministic heap placement moved the CPU-memory centroid from
+`(97.8,39.7)` to `(66.5,55.7)`, the ALU from `(91.9,13.8)` to `(61.4,31.8)`,
+the draw engine from `(59.2,26.5)` to `(100.5,20.9)`, and the bus-master group
+from `(115.7,77.6)` to `(101.4,45.3)`. High-fanout reset, CPU control, and
+address nets consequently compete across the same central channels. The
+active route remains authoritative and will run to a normal result. If it
+fails, the next measured experiment is a coarse floorplan that restores the
+proven CPU/draw/bus-master quadrants while retaining the exact netlist and
+feature set; feature removal or LUT-count optimization is not justified by
+this evidence.
+
 Commit `470bf123cf24bbadf3525f91307e3d9aebe92006` adds only the deterministic
 K1 lifecycle workload, adapters, and qualification controls. Its Git archive
 is `/tmp/astra68-k1-soak-470bf12.tar`, SHA-256
