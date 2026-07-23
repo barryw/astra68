@@ -121,10 +121,11 @@ must not be presented as working software.
 - NUC user service `astra-k1-soak-500k`, invocation
   `e03e0b123fd548eca5d5892cc5c74aef`, started at 2026-07-23 15:35:12 EDT with
   exact soak ROM CRC32 `B138EB36` and checker commit `254d0f6`. The hardened
-  live log already records cycles 4, 10, and 100 at the exact 7,987-page
-  baseline. Completion requires a terminated 500,000-cycle checkpoint with
-  nonzero switches/ticks/syscalls and the same baseline; do not disturb the
-  board or FTDI port while the service is active.
+  live log already records cycles 4, 10, 100, and 1,000 at the exact 7,987-page
+  baseline; cycle 1,000 has 2,003 switches, 5,536 ticks, and syscall count
+  `0x5717`. Completion requires a terminated 500,000-cycle checkpoint with the
+  same baseline; do not disturb the board or FTDI port while the service is
+  active.
 
 ## Required before K1 release
 

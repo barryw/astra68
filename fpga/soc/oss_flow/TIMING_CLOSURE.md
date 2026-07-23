@@ -2861,10 +2861,14 @@ service `astra-k1-soak-500k`, invocation
 `e03e0b123fd548eca5d5892cc5c74aef`, main PID 1916480. Its command binds the
 same production bitstream, expected build `77B3CDC8`, ROM CRC32 `B138EB36`,
 500,000 cycles, and a 172,800-second checker timeout. Live log
-`/tmp/k1-soak-500000-hw.log` already contains complete cycles 4, 10, and 100
-at the exact 7,987-page baseline. The 100-cycle cadence projects roughly 39
-hours. Do not reconfigure the FPGA, reset the board, open the FTDI port, or
-launch a competing hardware checker while the service is active.
+`/tmp/k1-soak-500000-hw.log` already contains complete cycles 4, 10, 100, and
+1,000 at the exact 7,987-page baseline. Cycle 1,000 reports 2,003 switches,
+5,536 ticks, and syscall count `0x0000000000005717`. Retained live-log snapshot
+`docs/evidence/k1-77b3cdc8-soak-1000-hw.log` has SHA-256
+`4229a2e698707d4892d5e13797a496596f426ae8bd5457586135ae77a667893b`.
+The 100-cycle cadence projects roughly 39 hours. Do not reconfigure the FPGA,
+reset the board, open the FTDI port, or launch a competing hardware checker
+while the service is active.
 
 Disposition: physical 100-cycle soak checkpoint PASS; final physical
 500,000-cycle gate ACTIVE. No RTL, mapped resource, placement, route,

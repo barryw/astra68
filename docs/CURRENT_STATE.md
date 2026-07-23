@@ -344,9 +344,12 @@ separates implemented evidence from planned work.
   `e03e0b123fd548eca5d5892cc5c74aef`, using checker SHA-256
   `7ab14afacde4cb80fe90d35045d3966b15779b18c9fec1953ad139658fae0784`.
   Its live log `/tmp/k1-soak-500000-hw.log` already preserves complete cycles
-  4, 10, and 100 at exactly 7,987 free pages. Do not reconfigure the FPGA,
-  reset the board, open the FTDI port, or start a competing checker while this
-  service is active.
+  4, 10, 100, and 1,000 at exactly 7,987 free pages. Cycle 1,000 reports 2,003
+  switches, 5,536 ticks, and syscall count `0x5717`; retained snapshot
+  `docs/evidence/k1-77b3cdc8-soak-1000-hw.log` has SHA-256
+  `4229a2e698707d4892d5e13797a496596f426ae8bd5457586135ae77a667893b`.
+  Do not reconfigure the FPGA, reset the board, open the FTDI port, or start a
+  competing checker while this service is active.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,
