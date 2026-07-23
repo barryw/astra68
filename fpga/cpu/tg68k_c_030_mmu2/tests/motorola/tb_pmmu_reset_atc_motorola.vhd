@@ -217,6 +217,15 @@ begin
     nreset <= '1';
     wait for 5 * CLK_PERIOD;
 
+    assert debug_tc = x"00000000" and debug_tt0 = x"00000000" and
+           debug_tt1 = x"00000000"
+      report "FAIL: configuration did not initialize TC/TT state" severity error;
+    assert debug_crp_hi = x"00000000" and debug_crp_lo = x"00000000" and
+           debug_srp_hi = x"00000000" and debug_srp_lo = x"00000000"
+      report "FAIL: configuration did not initialize root pointers" severity error;
+    assert debug_atc_valid = "0000000000000000000000"
+      report "FAIL: configuration did not initialize the ATC" severity error;
+
     -- PS=15, TIA=10, TIB=7. CRP points to a short-descriptor root at 0x400.
     write_register("10000", x"80F0A700", '0');
     write_register("10011", x"00000002", '1');

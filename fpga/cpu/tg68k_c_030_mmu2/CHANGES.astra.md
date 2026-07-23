@@ -10,10 +10,13 @@ Amiga, MiSTer, and WinUAE behavior alone is not sufficient justification.
 ## 2026-07-22 processor-reset conformance
 
 - Separated ECP5 configuration initialization from architectural processor
-  reset. FPGA configuration initializes the PMMU register file and 22-entry
-  ATC deterministically; subsequent processor `RESET` preserves those values
+  reset. One configuration-initialized bit clears the scalar PMMU register set
+  and invalidates the ATC on the first released clock; processor `RESET` never
+  re-arms it. Subsequent resets preserve the register file and 22-entry ATC
   while clearing only TC.E, TT0.E, and TT1.E, as required by MC68030 User's
-  Manual section 9.2.2.
+  Manual section 9.2.2. This avoids aggregate initializers that crash the
+  retained GHDL synthesis frontend and avoids a startup-only mux on the large
+  ATC payload flops.
 - Added a Motorola-directed regression that populates the ATC, changes the
   backing page descriptor to make the cached translation stale, and asserts
   processor reset. It verifies that CRP, SRP, TC/TT fields, and the stale ATC

@@ -127,14 +127,18 @@ architecture rtl of TG68K_PMMU_030 is
   -- PMOVE encodings for them take the F-line unimplemented-instruction path
   -- (MC68030 UM 9.6). Their absence is architectural, not an Amiga shortcut.
   
-  signal TC     : std_logic_vector(31 downto 0) := (others => '0'); -- Translation Control (EN, PS, IS, TIA-TID)
-  signal CRP_H  : std_logic_vector(31 downto 0) := (others => '0'); -- CPU Root Pointer high 32 bits
-  signal CRP_L  : std_logic_vector(31 downto 0) := (others => '0'); -- CPU Root Pointer low 32 bits (64-bit total)
-  signal SRP_H  : std_logic_vector(31 downto 0) := (others => '0'); -- Supervisor Root Pointer high 32 bits
-  signal SRP_L  : std_logic_vector(31 downto 0) := (others => '0'); -- Supervisor Root Pointer low 32 bits (64-bit total)
-  signal TT0    : std_logic_vector(31 downto 0) := (others => '0'); -- Transparent Translation Register 0
-  signal TT1    : std_logic_vector(31 downto 0) := (others => '0'); -- Transparent Translation Register 1
-  signal MMUSR  : std_logic_vector(15 downto 0) := (others => '0'); -- MMU Status Register (MC68030 UM 9.7.4: architecturally 16 bits)
+  signal TC     : std_logic_vector(31 downto 0); -- Translation Control (EN, PS, IS, TIA-TID)
+  signal CRP_H  : std_logic_vector(31 downto 0); -- CPU Root Pointer high 32 bits
+  signal CRP_L  : std_logic_vector(31 downto 0); -- CPU Root Pointer low 32 bits (64-bit total)
+  signal SRP_H  : std_logic_vector(31 downto 0); -- Supervisor Root Pointer high 32 bits
+  signal SRP_L  : std_logic_vector(31 downto 0); -- Supervisor Root Pointer low 32 bits (64-bit total)
+  signal TT0    : std_logic_vector(31 downto 0); -- Transparent Translation Register 0
+  signal TT1    : std_logic_vector(31 downto 0); -- Transparent Translation Register 1
+  signal MMUSR  : std_logic_vector(15 downto 0); -- MMU Status Register (MC68030 UM 9.7.4: architecturally 16 bits)
+  -- ECP5 configuration initializes this one bit. It is deliberately not reset
+  -- by processor nreset, so only the first post-configuration clock initializes
+  -- the PMMU register file and invalidates the ATC.
+  signal configuration_init_pending : std_logic := '1';
   -- MC68851-only control registers are deliberately absent from this register
   -- file and rejected by the kernel PMOVE decoder before reaching this entity.
   -- Internal
@@ -240,18 +244,18 @@ architecture rtl of TG68K_PMMU_030 is
   type atc_page_size_t is array(0 to ATC_ENTRIES-1) of integer range 0 to 15; -- MC68030 PS field value (8-15)
   type atc_level_t is array(0 to ATC_ENTRIES-1) of std_logic_vector(2 downto 0); -- BUG #412: walk level for MMUSR N field
   type atc_fault_status_t is array(0 to ATC_ENTRIES-1) of std_logic_vector(15 downto 0); -- Cached MMUSR fault class for ATC fault entries
-  signal atc_log_base : atc_base_t := (others => (others => '0'));
-  signal atc_phys_base: atc_base_t := (others => (others => '0'));
-  signal atc_attr  : atc_attr_t := (others => (others => '0'));
-  signal atc_valid : atc_val_t := (others => '0');
-  signal atc_fc    : atc_fc_t := (others => (others => '0'));
+  signal atc_log_base : atc_base_t;
+  signal atc_phys_base: atc_base_t;
+  signal atc_attr  : atc_attr_t;
+  signal atc_valid : atc_val_t;
+  signal atc_fc    : atc_fc_t;
   -- atc_is_insn removed: FC already encodes instruction vs data (FC=2/6 vs FC=1/5)
-  signal atc_shift : atc_shift_t := (others => 12);
-  signal atc_page_size : atc_page_size_t := (others => 12);
-  signal atc_level : atc_level_t := (others => (others => '0'));  -- BUG #412: walk level count for MMUSR N field
-  signal atc_mru   : atc_val_t := (others => '0');  -- Pseudo-LRU: MRU bit per entry (1=recently used)
-  signal atc_buserr : atc_val_t := (others => '0');  -- Cached fault entry present in ATC; fault class comes from atc_fault_status
-  signal atc_fault_status : atc_fault_status_t := (others => (others => '0'));
+  signal atc_shift : atc_shift_t;
+  signal atc_page_size : atc_page_size_t;
+  signal atc_level : atc_level_t;  -- BUG #412: walk level count for MMUSR N field
+  signal atc_mru   : atc_val_t;  -- Pseudo-LRU: MRU bit per entry (1=recently used)
+  signal atc_buserr : atc_val_t;  -- Cached fault entry present in ATC; fault class comes from atc_fault_status
+  signal atc_fault_status : atc_fault_status_t;
   signal atc_mru_update_req : std_logic := '0';  -- Request MRU update from translation process
   signal atc_mru_update_idx : integer range 0 to ATC_ENTRIES-1 := 0;  -- Index to update
   signal atc_mbit_inval_req : std_logic := '0';  -- Request ATC invalidation for M-bit miss (per WinUAE)
@@ -1107,6 +1111,17 @@ architecture rtl of TG68K_PMMU_030 is
     return result;
   end function;
 begin
+  -- Configuration-only power-on pulse. Processor reset must not re-arm it:
+  -- MC68030 RESET preserves PMMU registers and valid ATC entries.
+  process(clk)
+  begin
+    if rising_edge(clk) then
+      if nreset = '1' then
+        configuration_init_pending <= '0';
+      end if;
+    end if;
+  end process;
+
   -- Connect internal register to output port
   ptest_desc_addr <= ptest_desc_addr_reg;
   -- BUG #371 FIX: Combinational TTR match for zero-latency addr_phys bypass
@@ -1183,9 +1198,8 @@ begin
   begin
     if nreset = '0' then
       -- MC68030 UM 9.2.2: processor RESET preserves PMMU registers and ATC
-      -- entries while clearing only the translation-enable bits. FPGA GSR and
-      -- the declaration initializers above provide deterministic cold-start
-      -- values; this branch models the architectural processor reset.
+      -- entries while clearing only the translation-enable bits. The separate
+      -- configuration-only pulse provides deterministic cold start.
       TC(31)  <= '0';
       TT0(15) <= '0';
       TT1(15) <= '0';
@@ -1431,6 +1445,18 @@ begin
           when others =>
             pmmu_illegal_reg_sel_seen <= '1';
         end case;
+      end if;
+      -- Configuration-time initialization has priority over ordinary writes,
+      -- but processor reset never re-arms this pulse.
+      if configuration_init_pending = '1' then
+        TC    <= (others => '0');
+        CRP_H <= (others => '0');
+        CRP_L <= (others => '0');
+        SRP_H <= (others => '0');
+        SRP_L <= (others => '0');
+        TT0   <= (others => '0');
+        TT1   <= (others => '0');
+        MMUSR <= (others => '0');
       end if;
     end if;
   end process;
@@ -2634,6 +2660,7 @@ begin
     if nreset = '0' then
       -- Do not clear the ATC here. MC68030 processor RESET leaves all valid
       -- translations intact; only PFLUSH/PMOVE flushing may invalidate them.
+      -- The first post-configuration clock performs the cold initialization.
       wstate      <= W_IDLE;
       walk_level  <= 0;
       walk_desc   <= (others => '0');
@@ -4750,6 +4777,16 @@ begin
       -- Clear walker completion when acknowledged by main process
       if walker_completed = '1' and walker_completed_ack = '1' then
         walker_completed <= '0';
+      end if;
+      -- Only the valid/MRU state requires explicit ATC cold initialization.
+      -- Invalid entries' payload fields are architecturally unobservable and
+      -- are written in full before an entry becomes valid. Keeping this pulse
+      -- off the payload flops avoids a high-fanout startup-only data mux.
+      if configuration_init_pending = '1' then
+        for i in 0 to ATC_ENTRIES-1 loop
+          atc_valid(i) <= '0';
+          atc_mru(i) <= '0';
+        end loop;
       end if;
     end if;
   end process;
