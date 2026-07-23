@@ -2690,3 +2690,23 @@ The first retained boot measures 32-bit CPU SDRAM at 179.021 MB/s write and
 190.689 MB/s read, Astraea fill at 87.840 MB/s, and Astraea copy at
 37.845 MB/s. FPGA flash remains exact older release `6C0D0CA3`; physical HDMI
 confirmation is the gate before programming this same candidate persistently.
+
+## 2026-07-23: independent NUC lifecycle soak completes
+
+The retained NUC Musashi process for immutable lifecycle snapshot
+`470bf123cf24bbadf3525f91307e3d9aebe92006` exited normally after all
+500,000 requested cycles. The snapshot archive SHA-256 remains
+`b5db0e133ee04605fc1e18e4a159e1893893ca5c90c54df1c2ad8bcfc0c64fa5`;
+its `sw/kernel` and `sw/boot` source trees are identical to routed candidate
+`77b3cdc8fddb984850073a2c2cb5998bbbe1d857`.
+
+The final NUC checkpoint is virtual cycle 1,252,809,374,217 after 46,333.788
+seconds wall time. It reports 1,000,001 context switches, 2,022,386 timer
+ticks, a nonzero syscall total, and the unchanged 7,987-free-page baseline.
+This independently agrees with Beast's completed 500,000-cycle run at virtual
+cycle 1,252,807,889,504 after 12,416.334 seconds. No CAD input, mapped resource,
+placement, route, or constrained-clock result changed at this checkpoint.
+
+Disposition: the release-duration simulation lifecycle-soak gate passes on two
+independent hosts. It does not waive the exact `77B3CDC8` physical HDMI, panic,
+persistent-reset, or hardware-soak gates.

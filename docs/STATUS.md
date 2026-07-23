@@ -52,7 +52,7 @@ must not be presented as working software.
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
 | panic to console and retained early log | CURRENT SIM | exact direct and supervisor-guard full-SoC panic tests; physical HDMI/log remains |
 | K1 host analyzer/sanitizer gates | CURRENT | 11 suites, analyzer, ASan/UBSan |
-| deterministic lifecycle-soak harness | CURRENT SIM PARTIAL | exact four-cycle full RTL and 100-cycle Musashi pass; Beast completed 500,000 cycles without drift, NUC passed 460,000/500,000 and continues |
+| deterministic lifecycle-soak harness | CURRENT SIM | exact four-cycle full RTL and 100-cycle Musashi pass; independent Beast and NUC runs each completed 500,000 cycles without drift |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
 | CACR independent I/D commands | CURRENT RTL | Motorola-directed mixed CI/CD decoder test; strict inventory 140/114 clean |
 | RESET preserves roots and ATC until explicit flush | CURRENT RTL/ROUTED | stale-ATC/reset/`PFLUSHA` regression; strict inventory 140/114 clean; exact full mapping has zero SCCs and exact route passes all clocks |
@@ -108,7 +108,7 @@ must not be presented as working software.
 | Motorola RESET/ATC preservation and boot-flush regression | CURRENT RTL/ROUTED; board reset remains |
 | exact 12.5 MHz CPU / 60 MHz SDRAM complete route | CURRENT; all clocks, LUT permutation, POR, font ROM, and `kernel_platform_v1` gates pass without waiver |
 | repeated ULX3S POST, SDRAM, PMMU, timer, fault, HDMI | CURRENT except physical HDMI confirmation; three exact SRAM boots pass |
-| long context/syscall/fault/allocation soak | CURRENT SIM PARTIAL; Beast passed 500,000 cycles, independent NUC run passed 460,000/500,000 and continues; hardware soak remains |
+| long context/syscall/fault/allocation soak | CURRENT SIM; independent Beast and NUC runs each passed 500,000 cycles with the 7,987-page baseline unchanged; hardware soak remains |
 | panic HDMI and retained-log check on physical board | MISSING |
 
 ## Partial or transitional K1 code
@@ -169,8 +169,7 @@ must not be presented as working software.
 1. atomically provision exact ROM CRC32 `EB1B381F`, SRAM-load the already-hashed
    `77B3CDC8` bitstream through NUC, and qualify repeated POST, SDRAM, PMMU,
    timer, offender-fault, retained-log, and physical-HDMI behavior;
-2. finish the independent NUC 500,000-cycle lifecycle run;
-3. persist the identical bitstream only after SRAM qualification, verify
+2. persist the identical bitstream only after SRAM qualification, verify
    reset-from-flash, then run the hardware soak;
-4. implement and benchmark 8 KiB against the retained 4 KiB oracle before
+3. implement and benchmark 8 KiB against the retained 4 KiB oracle before
    freezing the stable VM ABI.

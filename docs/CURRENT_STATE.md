@@ -216,12 +216,13 @@ separates implemented evidence from planned work.
   Host analyzer/sanitizer gates, an exact 100-cycle Musashi run, and the exact
   full pin-level RTL workload pass. RTL completes four post-milestone teardown
   cycles with 11 context switches, 23 timer ticks, 96 syscalls, and the exact
-  7,987-free-page baseline. The release-duration NUC Musashi run has crossed
-  180,000 of 500,000 cycles at virtual cycle 451,018,559,752 after 15,997.172
-  seconds without drift. An independent lower-priority Beast run of the
-  identical binary and ROM has crossed 360,000 at virtual cycle
-  902,024,886,383 after 8,898.589 seconds. Routed-hardware completion remains
-  open and must not be inferred from simulation.
+  7,987-free-page baseline. Independent release-duration Musashi runs on Beast
+  and NUC both complete all 500,000 lifecycle cycles without drift. Beast
+  reaches virtual cycle 1,252,807,889,504 after 12,416.334 seconds; NUC reaches
+  virtual cycle 1,252,809,374,217 after 46,333.788 seconds with 1,000,001
+  context switches, 2,022,386 timer ticks, a nonzero syscall total, and the
+  exact 7,987-free-page baseline. Routed-hardware completion remains open and
+  must not be inferred from simulation.
 - Motorola-directed reset correction
   `c599f921cb35dcc7e8d2988ba253769341311516` separates ECP5 configuration
   initialization from MC68030 processor reset with one configuration-initialized
@@ -263,9 +264,10 @@ separates implemented evidence from planned work.
   manifest SHA-256 is
   `0593ba251da7b467e413126539d1e863ca19ef00f63843ed5f0cc6d32913b74e`.
   Exact direct-panic and supervisor-guard diagnostics also pass the full SoC
-  model, with the latter faulting at `0x02028000`. Beast completed all 500,000
-  lifecycle-soak cycles without frame-count drift; the independent NUC run has
-  passed 460,000/500,000 and continues. NUC atomically provisions only the exact
+  model, with the latter faulting at `0x02028000`. Beast and NUC independently
+  completed all 500,000 lifecycle-soak cycles without frame-count drift. The
+  soak snapshot and routed candidate have identical `sw/kernel` and `sw/boot`
+  sources. NUC atomically provisions only the exact
   ROM payload (`EB1B381F`) on the existing 244,016 MB card, restores normal
   read-only AstraHost firmware, and performs three independent SRAM reloads of
   the already-hashed bitstream. All three match build and ROM identities, pass
