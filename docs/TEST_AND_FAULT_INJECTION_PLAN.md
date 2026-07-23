@@ -1,6 +1,6 @@
 # Astra 68 kernel test and fault-injection plan
 
-Status: normative qualification plan, revision 0.1 (2026-07-22)
+Status: normative qualification plan, revision 0.1 (2026-07-23)
 
 No subsystem is complete because its happy path boots. Every state transition,
 capacity limit, cancellation race, and recovery path has a deterministic test.
@@ -40,6 +40,11 @@ The candidate must retain all of these before routing:
 - MC68030 processor reset with populated ATC and roots: clear only TC/TT enable
   bits, observe the retained stale translation, then prove boot `PFLUSHA`
   forces a walk to the updated descriptor before translation is enabled;
+- fault dispatch must perform no synchronous process maintenance or owner-frame
+  release, and the next qualifying soak checkpoint must be preceded by a
+  positive `user_fault_irqoff_max` report no greater than 125,000 CPU cycles;
+- owner-ledger exhaustion, reuse, pinned-release atomicity, corrupt-link
+  rejection, and release visits proportional only to the owner's frame count;
 - all directed and integrated graphics coexistence tests.
 
 Known upstream failures are tracked evidence, not waivers. A new mismatch is a
@@ -139,6 +144,13 @@ concentrates on failure modes simulation cannot establish: the routed image,
 real SDRAM, clocks, CDC paths, reset behavior, HDMI, SPI, and thermal stability.
 An optional longer burn-in may run when the board is otherwise idle, but it is
 not a prerequisite for unrelated kernel development.
+
+Exact source `bbb1616a1e65ef56619bffb11cb21e9ea1bc5202` passes the bounded
+candidate checkpoint on the routed ULX3S: 100 complete teardown/relaunch cycles
+in 8.219 seconds, 205 switches, 636 delivered ticks, a nonzero syscall count,
+and the unchanged 7,987-page baseline. The maximum masked user-fault dispatch
+is 8,834 cycles. This is the fast per-change hardware gate; it does not replace
+the 1,000-cycle/five-minute candidate run or 30-minute release burn-in above.
 
 The scheduler's delivered-interrupt count is not an elapsed-time oracle. Vesta
 uses one pending expiration bit, so periods coalesce while interrupts are

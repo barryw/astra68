@@ -1,6 +1,6 @@
 # Astra 68 locking and preemption contract
 
-Status: normative single-core concurrency contract, revision 0.1 (2026-07-22)
+Status: normative single-core concurrency contract, revision 0.1 (2026-07-23)
 
 This design is for one MC68030. It does not emulate SMP. Correct interrupt,
 DMA, and MMIO ordering still applies even though only one CPU executes C code.
@@ -22,13 +22,21 @@ interrupts around maintenance and remasks them before reading or replacing the
 saved user context. The 100 Hz hard timer path only acknowledges, records the
 tick, and requests scheduling.
 
-**CURRENT K1 violation:** user-fault retirement calls synchronous address-space
-destruction and owner-frame release before leaving the IPL-7 exception entry.
-The physical lifecycle run demonstrated that this spans multiple 10 ms timer
-periods. Vesta coalesces those expirations into one pending bit. K1 release
-therefore requires fault entry to mark the process dead, select a runnable
-context, and queue reclamation only; page-table walks, poisoning, handle close,
-and frame release run later with interrupts enabled in bounded deferred work.
+User-fault dispatch now performs only fault classification, atomic transition
+to `EXITING`, withdrawal from scheduling, selection of a runnable or empty CRP,
+context replacement, and enqueueing for teardown. It does not destroy page
+tables, close handles, poison pages, or release owner frames while IPL 7 is
+held. Those operations run later from the interruptible syscall/idle
+maintenance path. Host tests assert that neither process maintenance nor an
+owner release occurs during fault dispatch.
+
+The exact `bbb1616a1e65ef56619bffb11cb21e9ea1bc5202` hardware soak measured a
+maximum user-fault dispatch interval of 8,834 CPU cycles, or 706.72 us at
+12.5 MHz, well below one nominal timer period. The candidate gate rejects any
+value above 125,000 cycles (10 ms). Musashi measured 4,482 cycles and the full
+pin-level RTL model measured 8,866 cycles. This closes the prior unbounded,
+multi-period IPL-7 teardown path; it does not turn ordinary teardown into hard
+IRQ work.
 
 ## Preemption model
 
@@ -81,6 +89,7 @@ Initial release budgets at 12.5 MHz are:
 | interrupts disabled outside entry/exit | 200 us | 2,500 cycles |
 | scheduler lock/preemption disabled | 200 us | 2,500 cycles |
 | IRQ-safe raw lock | 25 us | 312 cycles |
+| user-fault entry through replacement context | 10 ms | 125,000 cycles |
 
 Debug builds timestamp every enter/leave and panic on nesting underflow or lock
 order violation. Release builds count budget overruns and expose the maximum;

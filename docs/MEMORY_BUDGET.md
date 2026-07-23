@@ -1,6 +1,6 @@
 # Astra 68 kernel memory budget
 
-Status: measured K1 baseline plus bounded revision-0.1 targets (2026-07-22)
+Status: measured K1 baseline plus bounded revision-0.1 targets (2026-07-23)
 
 The machine has exactly 32 MiB of SDRAM. Every static pool, frame, mapping,
 queue, pin, and graphics reservation is reported separately. A budget is not
@@ -46,11 +46,35 @@ The exact lifecycle-soak build from
 instrumentation, periodic accounting, and relaunch control; they do not change
 the 512 KiB reservation or the stable object-pool budget.
 
+Exact deferred-reclamation source
+`bbb1616a1e65ef56619bffb11cb21e9ea1bc5202` adds bounded per-owner frame
+tracking and fault-latency instrumentation. Its normal kernel is 24,856 bytes;
+the soak kernel is 25,856 bytes. The normal ELF reports:
+
+| ELF section | Bytes |
+|---|---:|
+| `.text.entry` | 80 |
+| `.vectors` | 1,024 |
+| `.text` plus read-only data | 22,804 |
+| `.data` | 4 |
+| `.bss` | 5,160 |
+| `.noinit` | 102,016 |
+| `.kernel_stack`, including alignment and guard | 15,424 |
+| total loaded/NOLOAD content including alignment | 146,512 |
+| flat kernel binary | 24,856 |
+
+The `.noinit` increase is exactly 33,280 bytes: two 16-bit links for each of
+8,192 frames plus 64 eight-byte owner ledgers. The external eight-byte
+`KernelFrameInfo` layout is unchanged. `_kernel_memory_end` is `0x02034000`,
+well inside the fixed 512 KiB kernel reservation.
+
 Major K1 static objects are:
 
 | Object | Count x size | Bytes |
 |---|---:|---:|
 | frame metadata | 8,192 x 8 | 65,536 |
+| per-frame owner links | 2 x 8,192 x 2 | 32,768 |
+| owner ledgers | 64 x 8 | 512 |
 | allocator bitmaps | 3 x 1,024 | 3,072 |
 | process slots | 4 x 528 | 2,112 |
 | DMA slots | 32 x 36 | 1,152 |

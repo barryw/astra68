@@ -18,6 +18,12 @@ must not be presented as working software.
   `77b3cdc8fddb984850073a2c2cb5998bbbe1d857`, archive SHA-256
   `678f4bb31a8c652615675b871274c992fde08d648a0e6f0a2e135361d168dbb5`,
   extracted as `/tmp/astra68-k1-reset-77b3cdc` on NUC and Beast.
+- Deferred-reclamation source commit:
+  `bbb1616a1e65ef56619bffb11cb21e9ea1bc5202`, archive SHA-256
+  `0e2a64c37871bfc70601e363da72437e821437e6efad3915ef180fe5cf1e9d50`,
+  extracted as `/tmp/astra68-k1-bbb1616` on NUC. It changes ROM/kernel
+  software and acceptance tooling only; production bitstream `77B3CDC8` is
+  unchanged.
 - Immutable build snapshot: Beast `/tmp/astra68-k1-66d6094` from Git archive
   SHA-256 `ba4d91999cf829c33a345d895b7966a438b28b93871d8d34843d658a1d0c0039`.
 - Immutable soak snapshot: NUC `/tmp/astra68-k1-soak-470bf12` and independent
@@ -32,7 +38,7 @@ must not be presented as working software.
 |---|---|---|
 | BootInfo validation and separate kernel image | CURRENT | host, Musashi, full RTL |
 | kernel VBR and 8 KiB supervisor stack | CURRENT | Musashi, full RTL |
-| frame allocator for all 8,192 4 KiB frames | CURRENT | host tests, target startup |
+| frame allocator for all 8,192 4 KiB frames | CURRENT HW | host tests, target startup, 64-owner bounded ledger, exact release-visit accounting |
 | SRP/CRP 4 KiB two-level translation | CURRENT | host, focused RTL, Musashi, full RTL |
 | PMMU enable and CRP switching | CURRENT HW | Musashi, full RTL, and three exact SRAM K1 boots |
 | user null/code/stack guards | CURRENT | host mapping tests and target fault |
@@ -43,7 +49,7 @@ must not be presented as working software.
 | format 0/1/2/9/A/B frame decode | CURRENT | byte-exact host tests |
 | SFC/DFC copyin/copyout fault recovery | CURRENT | focused RTL, Musashi, full RTL |
 | typed generation handle table | CURRENT | host tests; 16 entries/process in K1 |
-| process creation and owner teardown | CURRENT HW | host, Musashi, full RTL, and exact SRAM K1 fault/reap path |
+| process creation and owner teardown | CURRENT HW | host, Musashi, full RTL, and exact 100-cycle ULX3S fault/reap path |
 | deferred pinned-DMA reap | CURRENT HOST | bounded safe-point/idle path tested on host |
 | two isolated user processes | CURRENT HW | same ROM on Musashi, full RTL, and three exact SRAM boots |
 | 100 Hz preemptive round-robin | CURRENT HW | three switches before K1 marker on Musashi, full RTL, and each exact SRAM boot |
@@ -52,7 +58,8 @@ must not be presented as working software.
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
 | panic to console and retained early log | CURRENT HW | exact direct and supervisor-guard panic paths pass full RTL plus physical HDMI/log qualification |
 | K1 host analyzer/sanitizer gates | CURRENT | 11 suites, analyzer, ASan/UBSan |
-| deterministic lifecycle-soak harness | CURRENT SIM/PARTIAL HW | exact four-cycle full RTL, dual-host 500,000-cycle Musashi, and physical 1,000-cycle run pass without drift; the impractical 500,000-cycle board run was stopped intentionally |
+| deterministic lifecycle-soak harness | CURRENT SIM/PARTIAL HW | dual-host 500,000-cycle legacy Musashi, optimized 100-cycle Musashi, 13-cycle full RTL, legacy 1,000-cycle physical, and optimized 100-cycle physical runs pass without drift |
+| deferred user-fault reclamation | CURRENT HW | host proves no maintenance/owner release in fault dispatch; Musashi, full RTL, and ULX3S report bounded masked-fault cycles |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
 | CACR independent I/D commands | CURRENT RTL | Motorola-directed mixed CI/CD decoder test; strict inventory 140/114 clean |
 | RESET preserves roots and ATC until explicit flush | CURRENT RTL/ROUTED | stale-ATC/reset/`PFLUSHA` regression; strict inventory 140/114 clean; exact full mapping has zero SCCs and exact route passes all clocks |
@@ -116,37 +123,46 @@ must not be presented as working software.
   `d7289448fb1453fee1e6be617eaad00d458d267f68183416f83ebfa1a827dce1`.
   The checker transcript SHA-256 is
   `01aa5fd5d578ad94291a82f9f771df89395274c0ac7a9a42cf702784d9abc0d0`.
-- Therefore K1 is not yet a fully hardware-qualified kernel or production-ready.
-  Bounded interrupt latency, production teardown, and a time-boxed mixed
-  hardware burn-in remain open.
-- NUC user service `astra-k1-soak-500k`, invocation
-  `e03e0b123fd548eca5d5892cc5c74aef`, was stopped intentionally after its exact
-  cycle-1,000 checkpoint. Cycles 4, 10, 100, and 1,000 all retain the exact
-  7,987-page baseline; cycle 1,000 has 2,003 switches, 5,536 delivered timer
-  interrupts, and syscall count `0x5717`. The run exposed an unsuitable test
-  shape: each fault teardown executes at IPL 7, scans page tables, poisons
-  pages, and makes two complete 8,192-frame owner scans. Vesta's single pending
-  expiration bit also coalesces periods while interrupts are masked, so the
-  tick count is not elapsed time. Normal ROM CRC32 `EB1B381F`, normal read-only
-  AstraHost, and production bitstream `77B3CDC8` are restored. Retained
-  restoration log
-  `docs/evidence/k1-77b3cdc8-normal-restored-after-soak.log` has SHA-256
-  `4505cb1b81c6b030df02d7ddf1997c16b532ecdb44c43f35403142da8413a150`
-  and passes the complete gate in 2.111 seconds.
+- Exact source `bbb1616a1e65ef56619bffb11cb21e9ea1bc5202` removes synchronous
+  address-space destruction and owner release from IPL-7 fault dispatch. Its
+  64-owner ledger makes release O(frames owned) and preserves all-or-nothing
+  behavior when any frame remains pinned. Eleven host suites, GCC
+  `-fanalyzer`, ASan/UBSan/leak checks, 15 Rust tests, rustfmt, Clippy, all 90
+  framework tests, all 30 shared Musashi/RTL executions, and both Harte smoke
+  adapters pass. Exact 100-cycle Musashi completes at virtual cycle 77,501,092
+  in 0.814 seconds with a 4,482-cycle masked-fault maximum. The complete
+  pin-level RTL/SDRAM run completes 13 teardown cycles in 355.123 seconds with
+  an 8,866-cycle maximum and no baseline drift.
+- On the routed ULX3S, the same software running under unchanged production
+  bitstream `77B3CDC8` completes 100 cycles in 8.219 seconds. Cycle 100 reports
+  205 switches, 636 delivered ticks, syscall count `0x689`, exactly 7,987 free
+  pages, and a maximum masked user-fault dispatch of 8,834 cycles (706.72 us),
+  well below the 125,000-cycle gate. Retained soak transcript
+  `docs/evidence/k1-77b3cdc8-bbb1616-soak-100-hw.log` has SHA-256
+  `928fdd5414aacb237c5818293a464c3860ffcd0c7cf6d0a48f2fbcf200f0fb5e`.
+- The normal ROM is restored at payload CRC32 `C030B951`; the read-only
+  AstraHost application and production bitstream are restored unchanged. A
+  fresh normal boot passes complete POST and `K1 PROTECTED ENTRY PASS` in
+  1.931 seconds. Retained transcript
+  `docs/evidence/k1-77b3cdc8-bbb1616-normal-hw.log` has SHA-256
+  `6197aeeeb3a55ea1d8366025a6c64f9d2a424b17791bb60d3ab72d8ec6916b86`.
+  K1 is not yet a fully qualified production kernel: the 30-minute mixed
+  hardware burn-in and remaining stable-kernel mechanisms below are open.
 
 ## Required before K1 release
 
 | Requirement | State |
 |---|---|
-| move resource destruction out of hard IRQ | CURRENT, host revalidated |
+| move resource destruction out of hard IRQ and IPL-7 user fault | CURRENT HW; host asserts exclusion and ULX3S reports 8,834-cycle maximum |
 | supervisor stack guard in SRP | CURRENT HW; exact format-A vector-2 fault at `0x02028000` passes full RTL and physical HDMI/log |
 | exact cache synchronization/alias test for loaded user code | CURRENT SIM, hardware remains |
-| committed nonzero ROM/Git identity | CURRENT SIM |
+| committed nonzero ROM/Git identity | CURRENT HW; exact `bbb1616a...` normal and soak ROMs boot on ULX3S |
 | full normal/direct-panic/guard-panic RTL rerun | CURRENT from exact `77B3CDC8`; direct panic and exact `0x02028000` guard panic both preserve retained logs |
 | Motorola RESET/ATC preservation and boot-flush regression | CURRENT RTL/ROUTED/HW; automatic reset-from-flash K1 boot passes |
 | exact 12.5 MHz CPU / 60 MHz SDRAM complete route | CURRENT; all clocks, LUT permutation, POR, font ROM, and `kernel_platform_v1` gates pass without waiver |
 | repeated ULX3S POST, SDRAM, PMMU, timer, fault, HDMI | CURRENT; three exact SRAM boots, physical HDMI, and automatic reset-from-flash boot pass |
-| long context/syscall/fault/allocation soak | PARTIAL HW; dual-host 500,000-cycle simulation and physical 1,000-cycle proof pass at baseline 7,987; a 30-minute mixed hardware burn-in remains after teardown latency is bounded |
+| masked user-fault latency | CURRENT HW; 8,834 cycles against 125,000-cycle gate |
+| long context/syscall/fault/allocation soak | PARTIAL HW; dual-host 500,000-cycle simulation, legacy physical 1,000-cycle proof, and optimized physical 100-cycle proof pass at baseline 7,987; 30-minute mixed burn-in remains |
 | panic HDMI and retained-log check on physical board | CURRENT; exact direct-panic and supervisor-guard paths pass |
 
 ## Partial or transitional K1 code
@@ -161,10 +177,9 @@ must not be presented as working software.
   revocation. Filesystem/block policy still belongs in a user service.
 - Teardown drains at syscall safe points and supervisor idle because no kernel
   worker thread exists yet. Hard IRQ does not perform teardown.
-- User-fault retirement still destroys the address space and releases its owner
-  synchronously from the IPL-7 exception path. This is bounded by neither owned
-  objects nor time and must be replaced with minimal fault retirement plus
-  deferred reclamation before K1 release.
+- User-fault retirement is now minimal and queues reclamation. Safe-point/idle
+  draining is sufficient for bounded K1 qualification, but a dedicated kernel
+  worker remains required before blocking waits and multi-threaded processes.
 - The diagnostic UART mirror is emergency FTDI output only. ESP runtime
   communication is SPI.
 
@@ -199,6 +214,9 @@ must not be presented as working software.
 | nested timer on supervisor exception resumes handler | host dispatch and focused RTL |
 | fault after repeated traps stacks on ISP | focused Questa wait/zero-wait |
 | hard timer path performs no maintenance/destruction | host dispatch test |
+| user-fault path performs no maintenance/owner release | host dispatch/process tests; bounded Musashi, full RTL, and ULX3S reports |
+| owner release visits only that owner's frames | host memory test, visit counter |
+| pinned owner release is atomic and owner slots are bounded/reusable | host memory tests |
 | kernel stack guard descriptor is invalid and adjacent pages remain mapped | host VM test |
 | kernel stack guard access reaches retained panic path | full RTL and physical hardware at exact address `0x02028000` |
 | duplicate user cached alias is rejected and reusable after unmap | host VM test |
@@ -208,11 +226,10 @@ must not be presented as working software.
 
 ## Next actions
 
-1. move user-fault destruction out of the IPL-7 exception path, track frames by
-   owner instead of scanning all 8,192 records, and measure maximum
-   interrupts-disabled time with the 64-bit cycle counter;
-2. run the bounded candidate and 30-minute mixed hardware burn-in gates without
-   blocking unrelated host, Musashi, RTL, or kernel work;
-3. audit every K1 acceptance requirement and update the release records;
+1. run the 1,000-cycle/five-minute candidate check and 30-minute mixed hardware
+   burn-in without blocking unrelated host, Musashi, RTL, or kernel work;
+2. audit every K1 acceptance requirement and update the release records;
+3. add the kernel deferred worker needed for waits, IPC, and multi-threaded
+   process teardown;
 4. implement and benchmark 8 KiB against the retained 4 KiB oracle before
    freezing the stable VM ABI.

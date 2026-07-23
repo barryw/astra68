@@ -1,6 +1,6 @@
 # Astra 68 resource ownership and failures
 
-Status: normative lifetime contract, revision 0.1 (2026-07-22)
+Status: normative lifetime contract, revision 0.1 (2026-07-23)
 
 Every resource has one accountable owner, finite capacity, explicit rights,
 and a terminal failure path. C cleanup helpers improve normal code but kernel
@@ -71,6 +71,17 @@ Exact order:
 The process may remain `EXITING` while a device owns pinned memory. This is not
 a leak: the request has a finite deadline/reset path and an inspectable owner.
 K1 proves this state with DMA completion and deferred reap host tests.
+
+K1's physical allocator has 64 fixed owner ledgers. Every dynamically allocated
+frame is linked into exactly one owner's intrusive list using 16-bit previous
+and next indexes; no teardown metadata is allocated dynamically. Owner release
+first walks only that owner's frames to validate that none are pinned, then
+walks the same list to poison and release them. A pinned frame returns `BUSY`
+without releasing any frame. Corrupt links return `INVALID_MAP`; exhausting all
+64 ledgers fails allocation before publication. An empty ledger is immediately
+reusable. Release work is therefore O(frames owned), never O(all 8,192 physical
+frames), and diagnostics expose owner slots, release operations, and exact
+frame visits.
 
 ## Rights
 

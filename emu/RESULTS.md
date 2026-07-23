@@ -79,6 +79,21 @@ After `K1 PROTECTED ENTRY PASS`, RTL completes four lifecycle cycles with 11
 context switches, 23 timer ticks, 96 syscalls, and the identical 7,987-free-page
 baseline before reporting retained status `K1SK`.
 
+### Deferred-reclamation checkpoint
+
+Exact source `bbb1616a1e65ef56619bffb11cb21e9ea1bc5202` keeps the same workload
+but removes synchronous VM/frame reclamation from user-fault IPL 7 and replaces
+whole-RAM owner scans with fixed per-owner frame lists. The exact soak kernel is
+25,856 bytes with SHA-256
+`5afa4363f62ed74f4ee6c71d6f912c92c3a442bfa26e364dbaa70afcb05ea637`.
+
+Optimized Musashi completes 100 lifecycle cycles at virtual cycle 77,501,092
+in 0.814 seconds, retains 7,987 free pages, and reports a maximum masked
+user-fault dispatch of 4,482 cycles. The complete pin-level RTL/SDRAM model
+completes 13 cycles with the same baseline and an 8,866-cycle maximum before
+`KERNEL SOAK PASS`. The RTL wall time is 355.123 seconds; this is simulator
+throughput, not guest or physical elapsed time.
+
 ## Deliberate model boundaries
 
 - Musashi instruction timing is not a cycle-accurate TG68K.C bus model.

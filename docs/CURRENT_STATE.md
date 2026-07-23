@@ -367,6 +367,49 @@ separates implemented evidence from planned work.
   `4505cb1b81c6b030df02d7ddf1997c16b532ecdb44c43f35403142da8413a150`.
   The board and FTDI port are available; persistent FPGA flash remains exact
   `77B3CDC8`.
+- Exact software follow-on `bbb1616a1e65ef56619bffb11cb21e9ea1bc5202`
+  closes the diagnosed lifecycle latency path without changing RTL or the
+  production bitstream. User-fault dispatch now marks the offender `EXITING`,
+  switches to a runnable or empty CRP, and queues teardown; address-space
+  destruction, handle close, page poisoning, and frame release run later with
+  interrupts enabled. The allocator uses 64 fixed owner ledgers and two 16-bit
+  links per physical frame, making owner release O(frames owned) instead of two
+  scans over all 8,192 frames. Pinned release is atomic, ledger exhaustion is a
+  pre-publication allocation failure, and empty ledgers are reusable. The
+  33,280-byte static cost moves normal `.noinit` to 102,016 bytes while keeping
+  `_kernel_memory_end` at `0x02034000` inside the 512 KiB reservation.
+
+  Beast passes all 11 kernel suites, GCC `-fanalyzer`, ASan/UBSan/leak checks,
+  the canonical m68k compiler gate, all 90 shared framework tests, the complete
+  30-execution Musashi/RTL matrix, and both Harte smoke adapters. The optimized
+  100-cycle Musashi run reaches virtual cycle 77,501,092 in 0.814 seconds with
+  a 4,482-cycle masked-fault maximum. The full pin-level SoC/SDRAM model
+  completes 13 teardown cycles in 355.123 seconds with an 8,866-cycle maximum
+  and the exact 7,987-page baseline.
+
+  NUC atomically installed exact soak package SHA-256
+  `a8acc504ac7b58e19896b3811533e6c31ea795843d5f6ad272f3786887b6ebf4`
+  (payload CRC32 `18776505`) while preserving the 244,016 MB card, restored the
+  known read-only AstraHost application, and loaded unchanged production
+  bitstream SHA-256
+  `56f768b2d78801f6cc93a7c518643f1012e30f48241e0d77be8250f97c1c2755`.
+  Hardware reaches cycle 100 in 8.219 seconds with 205 switches, 636 delivered
+  ticks, syscall count `0x689`, exactly 7,987 free pages, and an 8,834-cycle
+  (706.72 us) masked-fault maximum against the 125,000-cycle gate. Retained log
+  `docs/evidence/k1-77b3cdc8-bbb1616-soak-100-hw.log` has SHA-256
+  `928fdd5414aacb237c5818293a464c3860ffcd0c7cf6d0a48f2fbcf200f0fb5e`.
+
+  NUC then atomically restored exact normal package SHA-256
+  `262130dcb7880f8f72ae2da96a9ad3dd2806a6b51b129c78df3991757eb0c23d`
+  (payload CRC32 `C030B951`), restored the same read-only AstraHost application,
+  and reloaded the same production bitstream. Complete POST, PMMU/user-copy,
+  process isolation, offender-only fault containment, and
+  `K1 PROTECTED ENTRY PASS` complete in 1.931 seconds. Retained log
+  `docs/evidence/k1-77b3cdc8-bbb1616-normal-hw.log` has SHA-256
+  `6197aeeeb3a55ea1d8366025a6c64f9d2a424b17791bb60d3ab72d8ec6916b86`.
+  The board is left in that normal state. No synthesis, placement, route,
+  resource, or constrained-clock result changed. The 30-minute mixed hardware
+  burn-in remains the next K1 release gate.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,

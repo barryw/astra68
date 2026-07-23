@@ -2944,3 +2944,86 @@ other production domains passing. Hardware acceptance now uses the bounded
 candidate and 30-minute mixed burn-in gates in
 `docs/TEST_AND_FAULT_INJECTION_PLAN.md`; exhaustive 500,000-cycle repetition
 remains dual-host Musashi evidence rather than a board-monopolizing gate.
+
+### Deferred fault reclamation and bounded physical checkpoint
+
+Exact source `bbb1616a1e65ef56619bffb11cb21e9ea1bc5202` was exported as archive
+SHA-256
+`0e2a64c37871bfc70601e363da72437e821437e6efad3915ef180fe5cf1e9d50`
+and extracted independently as `/tmp/astra68-k1-bbb1616`. This checkpoint is a
+kernel, ROM, and acceptance-tool change only. No RTL, synthesis, mapping,
+placement, route, packing, or bitstream command ran. Production bitstream
+`77B3CDC8` remains SHA-256
+`56f768b2d78801f6cc93a7c518643f1012e30f48241e0d77be8250f97c1c2755`;
+its 66,513/83,640 TRELLIS_COMB, 101/208 DP16KD, 18/156 multiplier, 14.179972 MHz
+CPU, and 61.270760 MHz SDRAM results are unchanged.
+
+The software change removes address-space destruction, handle close, page
+poisoning, and frame release from the IPL-7 user-fault path. Fault dispatch now
+marks the offender `EXITING`, switches to a runnable or empty CRP, and queues
+reclamation for interruptible syscall/idle maintenance. Two 16-bit intrusive
+links per physical frame plus 64 fixed eight-byte owner ledgers replace both
+full 8,192-frame owner scans. Release validates all owned frames before making
+changes, so a pin returns `BUSY` atomically. The added `.noinit` cost is 33,280
+bytes; the normal kernel remains inside its reservation at
+`_kernel_memory_end=0x02034000`.
+
+Regression disposition:
+
+- all 11 Beast kernel suites, GCC `-fanalyzer`, ASan/UBSan/leak checks, and the
+  canonical m68k compiler gate pass;
+- NUC's 21 boot-tool tests and all 90 shared framework tests pass;
+- 15 Rust tests, rustfmt, and Clippy `-D warnings` pass;
+- all 30 shared Musashi/RTL executions and both Harte smoke adapters pass;
+- exact 100-cycle Musashi completes at virtual cycle 77,501,092 in 0.814
+  seconds with 7,987 free pages and a 4,482-cycle masked-fault maximum; and
+- the complete pin-level RTL/SDRAM model completes 13 post-entry lifecycle
+  cycles in 355.123 seconds with 7,987 free pages, an 8,866-cycle maximum, and
+  `KERNEL SOAK PASS`.
+
+The exact soak build uses 25,856 kernel bytes, boot-image SHA-256
+`af38b6bad6080d583934b16baff36f3f4c355b1b406ffc41e54e3ec2926674ce`,
+ROM SHA-256
+`a8acc504ac7b58e19896b3811533e6c31ea795843d5f6ad272f3786887b6ebf4`,
+and payload CRC32 `18776505`. NUC loaded only maintenance bitstream SHA-256
+`2b423314c35ef00fc16929aaf72f536906abba4b602bfd79ab537e4b78185471`
+to volatile SRAM. One-shot AstraHost application SHA-256
+`bb67350d80990da8529a5fe14d1caab8b02705e719028577a865e3ed0f97e681`
+mounted the existing 244,016 MB card without formatting it and validated
+`/ASTRA68.ROM` as an exact match for the embedded package. Provisioning evidence
+`docs/evidence/k1-77b3cdc8-bbb1616-soak-provision.log` has SHA-256
+`6ecbc6b1052c94ffaa825a7021254f14c2eaedd3c9d0d2f6a9372d23c72bca90`.
+Normal read-only AstraHost application SHA-256
+`b4ec0fe43ffc7012758024576757df11892be0005e8e68fc282879448de962c2`
+was restored before loading the production image.
+
+The routed board then passes exact build `77B3CDC8`, ROM CRC32 `18776505`,
+complete POST and 32 MiB BIST, PMMU enable, user-copy recovery, process
+isolation, and lifecycle checkpoints 4, 10, and 100. Cycle 100 reports 205
+switches, 636 delivered ticks, syscall count `0x689`, and exactly 7,987 free
+pages. Maximum masked user-fault dispatch is 8,834 cycles (706.72 us at
+12.5 MHz), passing the 125,000-cycle gate. Total capture time is 8.219 seconds.
+Retained transcript
+`docs/evidence/k1-77b3cdc8-bbb1616-soak-100-hw.log` has SHA-256
+`928fdd5414aacb237c5818293a464c3860ffcd0c7cf6d0a48f2fbcf200f0fb5e`.
+
+NUC next atomically restored only the exact 36,268-byte normal payload at
+CRC32 `C030B951` using one-shot application SHA-256
+`9df1db08c6d5fee761cac2b7d253c7bcb17e187338fa70c514bbe86e9da4a336`.
+Its ROM SHA-256 is
+`262130dcb7880f8f72ae2da96a9ad3dd2806a6b51b129c78df3991757eb0c23d`;
+provisioning transcript
+`docs/evidence/k1-77b3cdc8-bbb1616-normal-provision.log` has SHA-256
+`88f07e49569731592abf0ec1e854b487a27a043909a40b65fa715f4d7063fd72`.
+The normal read-only AstraHost application was restored again before the same
+production bitstream was reloaded. The final boot passes exact build/ROM
+identity, complete POST, PMMU/user-copy/process checks, offender-only fault
+containment, and `K1 PROTECTED ENTRY PASS` in 1.931 seconds. Retained transcript
+`docs/evidence/k1-77b3cdc8-bbb1616-normal-hw.log` has SHA-256
+`6197aeeeb3a55ea1d8366025a6c64f9d2a424b17791bb60d3ab72d8ec6916b86`.
+
+Disposition: the unbounded fault-time reclamation blocker is closed in host,
+Musashi, full RTL, and routed hardware. The board is left on normal ROM
+`C030B951`, normal read-only AstraHost, and exact production build `77B3CDC8`.
+The 1,000-cycle/five-minute candidate check and 30-minute mixed hardware
+burn-in remain release gates; they do not block unrelated kernel work.
