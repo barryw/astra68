@@ -124,20 +124,28 @@ def acceptance_reached(
         kernel_entry_reached = panic_reached
     elif expect_k1_soak_cycles is not None:
         protected_entry_offset = output.find(b"K1 PROTECTED ENTRY PASS")
+        baseline_match = re.search(
+            rb"(?m)^K1 soak[ .]+armed, baseline (\d+) pages\r?\n",
+            output,
+        )
+        baseline_free = (
+            int(baseline_match.group(1)) if baseline_match is not None else None
+        )
         soak_reached = False
         for match in re.finditer(
             rb"(?m)^K1 SOAK cycles=(\d+) switches=(\d+) "
-            rb"ticks=(\d+) syscalls=0x([0-9A-Fa-f]{16}) free=(\d+)\r?$",
+            rb"ticks=(\d+) syscalls=0x([0-9A-Fa-f]{16}) free=(\d+)\r?\n",
             output,
         ):
             if (
                 protected_entry_offset >= 0
                 and match.start() > protected_entry_offset
+                and baseline_free is not None
                 and int(match.group(1)) >= expect_k1_soak_cycles
                 and int(match.group(2)) != 0
                 and int(match.group(3)) >= expect_k1_soak_cycles
                 and int(match.group(4), 16) != 0
-                and int(match.group(5)) != 0
+                and int(match.group(5)) == baseline_free
             ):
                 soak_reached = True
                 break

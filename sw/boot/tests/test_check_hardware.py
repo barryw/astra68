@@ -34,7 +34,11 @@ def test_k1_entry_is_required_exactly() -> None:
 
 
 def test_k1_soak_requires_complete_bounded_checkpoint() -> None:
-    prefix = b"POST PASS\nK1 PROTECTED ENTRY PASS\n"
+    prefix = (
+        b"POST PASS\n"
+        b"K1 soak ............. armed, baseline 7997 pages\n"
+        b"K1 PROTECTED ENTRY PASS\n"
+    )
     checkpoint = (
         b"K1 SOAK cycles=100 switches=203 ticks=205 "
         b"syscalls=0x0000000000012345 free=7997\n"
@@ -57,6 +61,27 @@ def test_k1_soak_requires_complete_bounded_checkpoint() -> None:
     )
     assert not acceptance_reached(
         prefix + checkpoint.replace(b"switches=203", b"switches=0"),
+        None,
+        False,
+        expect_k1_soak_cycles=100,
+    )
+    assert not acceptance_reached(
+        prefix + checkpoint.rstrip(b"\n"),
+        None,
+        False,
+        expect_k1_soak_cycles=100,
+    )
+    assert not acceptance_reached(
+        prefix + checkpoint.replace(b"free=7997", b"free=7996"),
+        None,
+        False,
+        expect_k1_soak_cycles=100,
+    )
+    assert not acceptance_reached(
+        prefix.replace(
+            b"K1 soak ............. armed, baseline 7997 pages\n", b""
+        )
+        + checkpoint,
         None,
         False,
         expect_k1_soak_cycles=100,
