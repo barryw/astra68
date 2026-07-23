@@ -57,17 +57,19 @@ must not be presented as working software.
 | CACR independent I/D commands | CURRENT RTL | Motorola-directed mixed CI/CD decoder test; strict inventory 140/114 clean |
 | RESET preserves roots and ATC until explicit flush | CURRENT RTL/ROUTED | stale-ATC/reset/`PFLUSHA` regression; strict inventory 140/114 clean; exact full mapping has zero SCCs and exact route passes all clocks |
 | exact corrected K1 release ROM | CURRENT SIM/ROUTED | build `77B3CDC8` passes Musashi and full pin-level RTL with 32 MiB BIST, PMMU, preemption, and fault containment; exact bitstream is timing-clean |
-| exact corrected K1 SRAM boot | CURRENT HW | three independent reloads pass exact identity, full POST/BIST, PMMU, 100 Hz preemption, offender-only fault containment, and K1 entry |
+| exact corrected K1 hardware boot | CURRENT HW | three independent SRAM reloads and one automatic reset-from-flash boot pass exact identity, full POST/BIST, PMMU, 100 Hz preemption, offender-only fault containment, K1 entry, and physical HDMI |
 
 ## Hardware status
 
-- The ULX3S attached to NUC runs the older persistent `6C0D0CA3` K0 release.
+- The ULX3S attached to NUC now runs exact persistent K1 candidate `77B3CDC8`.
+  The prior `6C0D0CA3` K0 image remains the last fully qualified release and a
+  rollback artifact, not the board's current flash contents.
 - Routed SRAM candidate `F4DC1E18` proves the repaired PMMU core and K0 platform,
   not the staged K1 kernel.
 - K-HW3 table-walk arbitration, K-HW4 timer/IACK changes, and K1 are integrated
   in exact build `77B3CDC8`, fully routed together, and exercised by three
-  passing volatile SRAM boots. Persistent reset, physical panic, and hardware
-  soak qualification remain open.
+  passing volatile SRAM boots plus an automatic reset-from-flash boot. Physical
+  panic and hardware-soak qualification remain open.
 - Exact build `66D6094F` completed a timing-clean strict route on Beast as
   useful diagnostic physical evidence. It predates the PMMU reset correction
   and cannot be a release image or be loaded onto the board.
@@ -93,9 +95,16 @@ must not be presented as working software.
   `EB1B381F`. Normal read-only AstraHost firmware was restored and remounted the
   card. Three independent SRAM reloads of exact bitstream
   `56f768b2d78801f6cc93a7c518643f1012e30f48241e0d77be8250f97c1c2755`
-  pass the complete hardware gate in 2.127, 2.145, and 2.147 seconds. FPGA flash
-  remains the older `6C0D0CA3` release until HDMI is physically confirmed.
-- Therefore K1 is not a hardware-qualified kernel and is not production-ready.
+  pass the complete hardware gate in 2.127, 2.145, and 2.147 seconds. Physical
+  HDMI shows the exact K1 identity and complete protected-entry result; retained
+  screenshot SHA-256 is
+  `8b6d0d57bf7f029aa63506c348976830079ccabcdeb6a3cf38cad51d3365b051`.
+  NUC then programmed the identical bitstream persistently and reset it. The
+  automatic flash boot passes the same gate in 2.132 seconds; retained log
+  SHA-256 is
+  `deeaba2d4acdb5fbc5115085b4f751796ce11079cc68ded319c43117d17b0e97`.
+- Therefore K1 is not yet a fully hardware-qualified kernel or production-ready.
+  Physical panic-path qualification and the hardware lifecycle soak remain.
 
 ## Required before K1 release
 
@@ -106,9 +115,9 @@ must not be presented as working software.
 | exact cache synchronization/alias test for loaded user code | CURRENT SIM, hardware remains |
 | committed nonzero ROM/Git identity | CURRENT SIM |
 | full normal/direct-panic/guard-panic RTL rerun | CURRENT from exact `77B3CDC8`; direct panic and exact `0x02028000` guard panic both preserve retained logs |
-| Motorola RESET/ATC preservation and boot-flush regression | CURRENT RTL/ROUTED; board reset remains |
+| Motorola RESET/ATC preservation and boot-flush regression | CURRENT RTL/ROUTED/HW; automatic reset-from-flash K1 boot passes |
 | exact 12.5 MHz CPU / 60 MHz SDRAM complete route | CURRENT; all clocks, LUT permutation, POR, font ROM, and `kernel_platform_v1` gates pass without waiver |
-| repeated ULX3S POST, SDRAM, PMMU, timer, fault, HDMI | CURRENT except physical HDMI confirmation; three exact SRAM boots pass |
+| repeated ULX3S POST, SDRAM, PMMU, timer, fault, HDMI | CURRENT; three exact SRAM boots, physical HDMI, and automatic reset-from-flash boot pass |
 | long context/syscall/fault/allocation soak | CURRENT SIM; independent Beast and NUC runs each passed 500,000 cycles with the 7,987-page baseline unchanged; hardware soak remains |
 | panic HDMI and retained-log check on physical board | MISSING |
 
@@ -167,10 +176,11 @@ must not be presented as working software.
 
 ## Next actions
 
-1. atomically provision exact ROM CRC32 `EB1B381F`, SRAM-load the already-hashed
-   `77B3CDC8` bitstream through NUC, and qualify repeated POST, SDRAM, PMMU,
-   timer, offender-fault, retained-log, and physical-HDMI behavior;
-2. persist the identical bitstream only after SRAM qualification, verify
-   reset-from-flash, then run the hardware soak;
-3. implement and benchmark 8 KiB against the retained 4 KiB oracle before
+1. run the prepared exact direct-panic and supervisor-guard ROMs on the
+   physical board, confirm HDMI and retained-log output for each, and restore
+   the normal ROM and read-only AstraHost after each diagnostic;
+2. run the exact hardware lifecycle soak, retain its bounded-resource result,
+   then restore normal ROM CRC32 `EB1B381F` and persistent K1 boot;
+3. audit every K1 acceptance requirement and update the release records;
+4. implement and benchmark 8 KiB against the retained 4 KiB oracle before
    freezing the stable VM ABI.

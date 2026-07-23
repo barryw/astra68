@@ -273,10 +273,21 @@ separates implemented evidence from planned work.
   the already-hashed bitstream. All three match build and ROM identities, pass
   complete POST and 32 MiB BIST, enable the PMMU, recover user-copy faults,
   preempt two isolated processes at 100 Hz, reap only the offender, and reach
-  `K1 PROTECTED ENTRY PASS` in 2.127-2.147 seconds. Persistent FPGA flash still
-  contains `6C0D0CA3`. The remaining release gates are physical HDMI
-  confirmation, persistent reset/boot, physical panic diagnostics, and hardware
-  soak; routing and SRAM success do not waive them.
+  `K1 PROTECTED ENTRY PASS` in 2.127-2.147 seconds. Physical HDMI then shows
+  exact build `77B3CDC8`, the complete PMMU/process/fault result, and
+  `K1 PROTECTED ENTRY PASS`; the retained screenshot is
+  `docs/evidence/k1-77b3cdc8-sram-hdmi.png`, SHA-256
+  `8b6d0d57bf7f029aa63506c348976830079ccabcdeb6a3cf38cad51d3365b051`.
+  NUC programmed that already-hashed bitstream into FPGA flash and reset the
+  board in the same operation. The automatic flash boot again matches build
+  `77B3CDC8` and ROM CRC32 `EB1B381F`, passes the complete hardware gate, and
+  reaches K1 entry in 2.132 seconds. Its retained log is
+  `docs/evidence/k1-77b3cdc8-flash-reset.log`, SHA-256
+  `deeaba2d4acdb5fbc5115085b4f751796ce11079cc68ded319c43117d17b0e97`.
+  Persistent FPGA flash now contains exact K1 candidate `77B3CDC8`. The
+  remaining release gates are physical direct-panic and supervisor-guard
+  diagnostics plus the hardware lifecycle soak; routing, normal boot, and
+  persistent promotion do not waive them.
 - The one-shot physical diagnostics are prepared but have not been loaded.
   Their AstraHost application SHA-256 values are
   `1c579fa99a2041e82342839ac7f6372e11ccc896ed10e7dcb5ce2a5b07fc35fe`

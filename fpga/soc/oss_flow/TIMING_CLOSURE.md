@@ -2735,3 +2735,31 @@ the guard expectation is bound to fault address `0x02028000`. Beast's retained
 hashes as the bytes extracted from the NUC firmware, so no diagnostic rebuild
 exists between simulation and hardware provisioning. These checks prepare the
 physical tests but do not count as physical panic evidence.
+
+### Physical HDMI and persistent promotion
+
+The physical ULX3S display now confirms the exact normal K1 candidate. Retained
+evidence `docs/evidence/k1-77b3cdc8-sram-hdmi.png`, SHA-256
+`8b6d0d57bf7f029aa63506c348976830079ccabcdeb6a3cf38cad51d3365b051`,
+visibly reports build `77B3CDC8`, full Git identity
+`77b3cdc8fddb984850073a2c2cb5998bbbe1d857`, PMMU enable, 7,992 of
+8,192 free physical pages, verified user-copy fault recovery, two isolated
+processes, 100 Hz preemption, offender-only fault containment, three context
+switches, and `K1 PROTECTED ENTRY PASS`.
+
+NUC then programmed production bitstream SHA-256
+`56f768b2d78801f6cc93a7c518643f1012e30f48241e0d77be8250f97c1c2755`
+with openFPGALoader's persistent-program-and-reset operation. The resulting
+automatic boot from FPGA flash reports exact build `77B3CDC8` and ROM CRC32
+`EB1B381F`, passes complete POST and 32 MiB BIST, enables the PMMU, verifies
+user-copy recovery, preempts two processes at 100 Hz, reaps only the offender,
+reports three context switches, and reaches K1 entry in 2.132 seconds. The
+retained capture is `docs/evidence/k1-77b3cdc8-flash-reset.log`, SHA-256
+`deeaba2d4acdb5fbc5115085b4f751796ce11079cc68ded319c43117d17b0e97`.
+
+No ROM, RTL, netlist, placement, route, or bitstream was rebuilt or repacked
+between volatile acceptance and persistent programming. FPGA flash now
+contains exact candidate `77B3CDC8`. Disposition: physical normal-HDMI and
+persistent-reset gates PASS. Exact physical direct-panic, supervisor-guard,
+and lifecycle-soak gates remain open; this checkpoint does not alter the
+66,513-TRELLIS_COMB capacity or any constrained-clock result.

@@ -130,8 +130,11 @@ manifest SHA-256 is
 `0593ba251da7b467e413126539d1e863ca19ef00f63843ed5f0cc6d32913b74e`.
 Three independent SRAM loads of that exact bitstream pass build/ROM identity,
 complete POST and 32 MiB BIST, PMMU enable, 100 Hz preemption, offender-only
-fault containment, and K1 entry in 2.127-2.147 seconds. Physical HDMI,
-reset-from-flash, panic, and hardware-soak qualification remain mandatory.
+fault containment, and K1 entry in 2.127-2.147 seconds. Physical HDMI displays
+the exact K1 result, and the identical bitstream is now persistent; its
+automatic reset-from-flash boot passes the same gate in 2.132 seconds. Physical
+panic and hardware-soak qualification remain mandatory. No resource, route, or
+timing result changed during hardware promotion.
 
 ## B1F9E60D rollback comparison
 
