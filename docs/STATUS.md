@@ -56,6 +56,7 @@ must not be presented as working software.
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
 | CACR independent I/D commands | CURRENT RTL | Motorola-directed mixed CI/CD decoder test; strict inventory 140/114 clean |
 | RESET preserves roots and ATC until explicit flush | CURRENT RTL/SYNTH | stale-ATC/reset/`PFLUSHA` regression; strict inventory 140/114 clean; exact full mapping has zero SCCs |
+| exact corrected K1 release ROM | CURRENT SIM | build `77B3CDC8` passes Musashi and full pin-level RTL with 32 MiB BIST, PMMU, preemption, and fault containment |
 
 ## Hardware status
 
@@ -76,6 +77,10 @@ must not be presented as working software.
   TRELLIS_COMB and 25,561 TRELLIS_FF cells and finishes normally with checksum
   `0x7c9a8594`. Its no-waiver strict router1 job is active; route timing and
   board reset qualification remain open.
+- The exact normal `77B3CDC8` ROM now passes the complete pin-level RTL/SDRAM
+  model with full 32 MiB BIST at 115.06 MB/s, PMMU enable, two isolated
+  processes, 100 Hz preemption, offender-only fault death, three context
+  switches, and `K1 PROTECTED ENTRY PASS`. The same image passes Musashi.
 - Therefore K1 is not a hardware-qualified kernel and is not production-ready.
 
 ## Required before K1 release
@@ -86,7 +91,7 @@ must not be presented as working software.
 | supervisor stack guard in SRP | CURRENT SIM, hardware remains |
 | exact cache synchronization/alias test for loaded user code | CURRENT SIM, hardware remains |
 | committed nonzero ROM/Git identity | CURRENT SIM |
-| full normal/direct-panic/guard-panic RTL rerun | CURRENT from `66d6094f` |
+| full normal/direct-panic/guard-panic RTL rerun | normal CURRENT from exact `77B3CDC8`; panic/guard CURRENT from `66d6094f` with unchanged functional kernel |
 | Motorola RESET/ATC preservation and boot-flush regression | CURRENT RTL SIM; synthesis, route, and board reset remain |
 | exact 12.5 MHz CPU / 60 MHz SDRAM complete route | ACTIVE; corrected synthesis/placement passed and no-waiver router1 is running on NUC; pre-fix route remains diagnostic only |
 | repeated ULX3S POST, SDRAM, PMMU, timer, fault, HDMI | MISSING |

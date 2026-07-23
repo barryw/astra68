@@ -2517,17 +2517,22 @@ NUC and Beast extracted independent copies at
 on all three hosts.
 
 The exact normal image uses build ID `77B3CDC8`, reproducible timestamp
-`2026-07-23T06:08:32Z`, and the full Git identity. It passes AstraVM/Musashi:
-PMMU enable, user-copy recovery, two isolated processes, 100 Hz preemption,
-offender-only fault death, owner teardown, and `K1 PROTECTED ENTRY PASS`. A
-pre-commit reduced-BIST complete pin-level RTL/SDRAM run uses byte-identical
-PMMU RTL and the same functional kernel and passes those boundaries plus four
-lifecycle cycles. That run carries a WIP ROM identity and is not evidence that
-the exact release ROM passed full RTL. All 90 shared framework tests, all 30
-Musashi/RTL adapter executions, both Harte smoke adapters, and the strict
-140-variant Questa inventory retain their expected results. The strict
-inventory is 114 clean with the prior 3 compile, 18 simulation, and 5 unscored
-classifications unchanged.
+`2026-07-23T06:08:32Z`, and the full Git identity. It passes unchanged on
+AstraVM/Musashi and the complete pin-level RTL/SDRAM model: PMMU enable,
+user-copy recovery, two isolated processes, 100 Hz preemption, offender-only
+fault death, owner teardown, and `K1 PROTECTED ENTRY PASS`. All 90 shared
+framework tests, all 30 Musashi/RTL adapter executions, both Harte smoke
+adapters, and the strict 140-variant Questa inventory retain their expected
+results. The strict inventory is 114 clean with the prior 3 compile, 18
+simulation, and 5 unscored classifications unchanged.
+
+The exact full-RTL run compiles build ID `77B3CDC8` into the model and reads
+the exact 35,360-byte release boot binary at runtime. It completes all four
+32 MiB BIST sweeps at 115.06 MB/s, POST, cache and Astraea DMA checks, the
+protected kernel startup, two-process preemption, and deliberate user fault.
+It reports three context switches, retained log write offset 770 with zero
+wraps, and `KERNEL ENTRY PASS` at simulated 1.792 seconds. Verilator 5.047
+finishes normally after 582.919 seconds wall time using 44 MB.
 
 NUC's exact full-chip production synthesis has complete graphics, OHCI USB,
 AstraHost, HDMI, SDRAM, Vesta, and TG68K/PMMU enabled. It reports zero Yosys
@@ -2550,6 +2555,9 @@ checkpoint.
 | kernel ELF | `9f86583f44f4b4f1bec145bb751f2119591f349ec41d04117513803e3e2c256f` |
 | boot binary, 35,360 bytes | `b8cef34ca07c32c831d5d92d9fbc0fb38901b298dcbc9585e2877b1c55ac1ca0` |
 | packaged ROM, 35,392 bytes | `fea76d8553d7b4f6a042b399e669e480d26061e6bb633646829989d187599b51` |
+| exact full-RTL simulator | `635aed243a9f5db6747b4418b8b001e7dff551f047356fd85f1024f6ffbd102a` |
+| exact full-RTL ROM-init hex | `36ea27de143128b108dc9e4a5e0e49d20deda0a7c035407b2e25c1dec28f1156` |
+| exact full-RTL log | `b3f3476c65271bc6b0ae5c25f55588ef2450ae2e45b49b900d878dd7e64fd77c` |
 
 NUC uses Yosys 0.64+68 (`413169663`) and nextpnr
 `0.10-33-ge6ecd8fa`. Exact seed-4, heap, timing-weight-20

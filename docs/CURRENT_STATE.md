@@ -244,11 +244,12 @@ separates implemented evidence from planned work.
 - Immutable corrected snapshot `77b3cdc8fddb984850073a2c2cb5998bbbe1d857`
   has archive SHA-256
   `678f4bb31a8c652615675b871274c992fde08d648a0e6f0a2e135361d168dbb5`.
-  The exact normal image passes on Musashi. A pre-commit reduced-BIST full
-  pin-level run using byte-identical PMMU RTL and the same functional kernel
-  passes protected multitasking and four lifecycle cycles, but carries a WIP
-  ROM identity and is not exact release-image evidence. All 90 framework tests,
-  all 30 shared adapter executions, and both Harte smoke adapters pass. NUC
+  The exact normal image passes unchanged on Musashi and the complete
+  pin-level RTL/SDRAM model. The latter runs full 32 MiB BIST at 115.06 MB/s,
+  enables the PMMU, starts two isolated processes, preempts at 100 Hz, reaps
+  only the deliberate offender, reports three context switches, and reaches
+  `K1 PROTECTED ENTRY PASS`. All 90 framework tests, all 30 shared adapter
+  executions, and both Harte smoke adapters pass. NUC
   full-chip synthesis reports zero SCCs, 53,073 LUT4s, 25,532 GSR-enabled FFs,
   101 block RAMs, and 18 multipliers. Exact seed-4 placement finishes normally,
   packing 66,513 TRELLIS_COMB and 25,561 TRELLIS_FF cells with checksum
@@ -256,7 +257,7 @@ separates implemented evidence from planned work.
   completed all 500,000 lifecycle-soak
   cycles without frame-count drift; the independent NUC run has passed
   200,000/500,000 and continues. Neither simulation nor synthesis waives the
-  remaining exact full-RTL, routed-timing, and board gates.
+  remaining routed-timing and board gates.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,
