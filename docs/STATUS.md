@@ -9,11 +9,15 @@ must not be presented as working software.
 ## Current source identity
 
 - Branch: `main`.
-- Committed base: `5798c5575a5bf6d5ca37eae2fbe63cb0528ad6e8`.
-- K1 process/kernel/emulator/RTL work: staged but not yet committed.
-- Independent build snapshot: Beast `/tmp/astra68-k1-p28`.
-- Latest simulation ROM is dirty and reports Git/build identity `unknown`;
-  release routing must use the clean committed rebuild.
+- K1 functional source commit: `66d6094f9339469313fefb70b259d07a7c2272ce`.
+- K1 lifecycle-soak source commit:
+  `470bf123cf24bbadf3525f91307e3d9aebe92006`.
+- Immutable build snapshot: Beast `/tmp/astra68-k1-66d6094` from Git archive
+  SHA-256 `ba4d91999cf829c33a345d895b7966a438b28b93871d8d34843d658a1d0c0039`.
+- Immutable soak snapshot: NUC `/tmp/astra68-k1-soak-470bf12` from Git archive
+  SHA-256 `b5db0e133ee04605fc1e18e4a159e1893893ca5c90c54df1c2ad8bcfc0c64fa5`.
+- The qualified normal, direct-panic, and guard-panic ROMs report that complete
+  Git identity and reproducible commit timestamp.
 
 ## Works now
 
@@ -41,6 +45,7 @@ must not be presented as working software.
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
 | panic to console and retained early log | CURRENT SIM | full-SoC deliberate panic test |
 | K1 host analyzer/sanitizer gates | CURRENT | 11 suites, analyzer, ASan/UBSan |
+| deterministic lifecycle-soak harness | CURRENT SIM PARTIAL | exact four-cycle full RTL and 100-cycle Musashi pass; 500,000-cycle run beyond 10,000 |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
 | CACR independent I/D commands | CURRENT RTL | Motorola-directed mixed CI/CD decoder test; strict inventory 139/113 clean |
 
@@ -49,8 +54,12 @@ must not be presented as working software.
 - The ULX3S attached to NUC runs the older persistent `6C0D0CA3` K0 release.
 - Routed SRAM candidate `F4DC1E18` proves the repaired PMMU core and K0 platform,
   not the staged K1 kernel.
-- K-HW3 table-walk arbitration, K-HW4 timer/IACK changes, and K1 have not been
-  synthesized, routed, flashed, or soaked together.
+- K-HW3 table-walk arbitration, K-HW4 timer/IACK changes, and K1 have now been
+  synthesized and placed together, but not fully routed, flashed, or soaked on
+  hardware.
+- Exact build `66D6094F` has a zero-SCC complete synthesis and finished
+  placement on Beast. Its strict seed-4 router1 job is still running; neither
+  placement estimates nor an active route are acceptance evidence.
 - Therefore K1 is not a hardware-qualified kernel and is not production-ready.
 
 ## Required before K1 release
@@ -60,11 +69,11 @@ must not be presented as working software.
 | move resource destruction out of hard IRQ | CURRENT, host revalidated |
 | supervisor stack guard in SRP | CURRENT SIM, hardware remains |
 | exact cache synchronization/alias test for loaded user code | CURRENT SIM, hardware remains |
-| committed nonzero ROM/Git identity | MISSING |
-| full normal/direct-panic/guard-panic RTL rerun | CURRENT DIRTY; repeat exact normal/panic gates from commit |
-| exact 12.5 MHz CPU / 60 MHz SDRAM complete route | MISSING |
+| committed nonzero ROM/Git identity | CURRENT SIM |
+| full normal/direct-panic/guard-panic RTL rerun | CURRENT from `66d6094f` |
+| exact 12.5 MHz CPU / 60 MHz SDRAM complete route | MISSING; exact job active |
 | repeated ULX3S POST, SDRAM, PMMU, timer, fault, HDMI | MISSING |
-| long context/syscall/fault/allocation soak | MISSING |
+| long context/syscall/fault/allocation soak | CURRENT SIM PARTIAL; release-duration jobs remain |
 | panic HDMI and retained-log check on physical board | MISSING |
 
 ## Partial or transitional K1 code
@@ -122,9 +131,8 @@ must not be presented as working software.
 
 ## Next actions
 
-1. commit the exact candidate and rebuild with nonzero identity;
-2. rerun normal, direct-panic, and guard-panic gates from that commit;
-3. route the complete production configuration on Beast;
-4. flash and qualify through NUC, then run the defined soak;
-5. implement and benchmark 8 KiB against the retained 4 KiB oracle before
+1. complete and validate the exact production route on Beast;
+2. finish the exact RTL/Musashi lifecycle runs;
+3. flash and qualify through NUC, then run the hardware soak;
+4. implement and benchmark 8 KiB against the retained 4 KiB oracle before
    freezing the stable VM ABI.

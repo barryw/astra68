@@ -39,20 +39,40 @@ therefore guest output, not a host-authored imitation.
 
 ## K1 translated-kernel boot
 
-Verified 2026-07-22 on `beast` with Rust 1.97.0. The exact 35,120-byte boot
+Verified 2026-07-22 on `beast` with Rust 1.97.0. The exact 35,260-byte boot
 binary used by the full pin-level RTL run has SHA-256
-`6f78f788b6b9f6b7bdadd991552a2de622735adc674a167903f74e348eb5e940`.
+`7fa58266c26a3b3d679254235c3be2ad079f5f8710174940e6246e52e820022b`.
 AstraVM ran it unchanged through complete POST, PMMU enable, separate SRP/CRP
 user-copy recovery, two isolated user processes, 100 Hz timer preemption,
 trap-based syscalls, and a deliberate format-B user fault. The offender alone
 was reaped and its owned address space, handles, and frames were released. The
-final snapshot was cycle 12,500,149 with PC `0x020108A0`, three context
+final snapshot was cycle 12,500,134 with PC `0x02013DB2`, three context
 switches, and kernel scratch status `K1OK`.
 
 The same gate models the current front-panel aperture and Vesta periodic
 timer/IRQ contract. A level interrupt is recomputed immediately after MMIO
 writes so clearing `TMR_EXPIRED` deasserts IPL before `RTE`, matching the
 physical controller rather than waiting for a host timeslice boundary.
+
+## K1 lifecycle soak
+
+Exact source `470bf123cf24bbadf3525f91307e3d9aebe92006` adds a deterministic
+offender-fault, teardown, baseline-accounting, and relaunch loop without
+changing the CPU/PMMU model. The exact 24,876-byte kernel has SHA-256
+`5c540492ca7aaf8bf3d2270f17e2bf0a4f6f65e2a8bb4aec5c3ee019338c56c5`.
+
+An optimized Musashi run completed 100 lifecycle cycles at virtual cycle
+262,502,952 with 201 context switches, 411 timer ticks, 1,377 syscalls, and
+7,987 free pages. The release-duration 500,000-cycle run passed its 10,000
+checkpoint at virtual cycle 25,068,017,690 after 893.985 seconds and continues
+from the same immutable NUC snapshot. A progress checkpoint is evidence that
+all counters returned to baseline through that point, not a completed long-soak
+claim.
+
+The same committed kernel also passes the complete pin-level RTL/SDRAM model.
+After `K1 PROTECTED ENTRY PASS`, RTL completes four lifecycle cycles with 11
+context switches, 23 timer ticks, 96 syscalls, and the identical 7,987-free-page
+baseline before reporting retained status `K1SK`.
 
 ## Deliberate model boundaries
 

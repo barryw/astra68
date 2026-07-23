@@ -20,24 +20,31 @@ from BootInfo ranges, not the arithmetic above.
 
 ## Measured K1 image
 
-The 2026-07-22 Beast build of the dirty K1 candidate reports:
+The 2026-07-22 exact Beast build from
+`66d6094f9339469313fefb70b259d07a7c2272ce` reports:
 
 | ELF section | Bytes |
 |---|---:|
 | `.text.entry` | 80 |
 | `.vectors` | 1,024 |
-| `.text` plus read-only data | 21,788 |
+| `.text` plus read-only data | 21,860 |
 | `.data` | 4 |
-| `.bss` | 5,120 |
+| `.bss` | 5,128 |
 | `.noinit` | 68,736 |
 | supervisor stack payload | 8,192 |
-| guard plus stack section including alignment | 12,896 |
+| guard plus stack section including alignment | 12,816 |
 | total loaded/NOLOAD content including alignment | 109,648 |
-| flat kernel binary | 23,840 |
+| flat kernel binary | 23,912 |
 
 The 512 KiB kernel reservation therefore has more than 400 KiB headroom, but
 unused reservation is not general free memory until the boot ABI deliberately
 changes.
+
+The exact lifecycle-soak build from
+`470bf123cf24bbadf3525f91307e3d9aebe92006` is 24,876 kernel bytes and
+42,008 ELF bytes. The additional 964 flat-binary bytes are qualification
+instrumentation, periodic accounting, and relaunch control; they do not change
+the 512 KiB reservation or the stable object-pool budget.
 
 Major K1 static objects are:
 

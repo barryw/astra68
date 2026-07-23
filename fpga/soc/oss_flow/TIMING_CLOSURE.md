@@ -2259,11 +2259,12 @@ scheduler.
 
 ## 2026-07-22: K1 protected-multitasking simulation checkpoint
 
-Independent Beast snapshot `/tmp/astra68-k1-p28` is based on committed source
+Independent Beast snapshot `/tmp/astra68-k1-p28` began from committed source
 `5798c5575a5bf6d5ca37eae2fbe63cb0528ad6e8` plus the recorded K-HW3/K-HW4,
-kernel, emulator, test, and documentation deltas. The snapshot is intentionally
-not assigned a release build ID because those deltas are not yet committed.
-This section records simulation evidence only.
+kernel, emulator, test, and documentation deltas. The completed source is
+commit `66d6094f9339469313fefb70b259d07a7c2272ce`; its immutable Beast snapshot
+is `/tmp/astra68-k1-66d6094`, produced from Git-archive SHA-256
+`ba4d91999cf829c33a345d895b7966a438b28b93871d8d34843d658a1d0c0039`.
 
 The first complete two-process run reached timer preemption and syscalls but
 failed when the deliberate user access fault arrived after repeated trap/RTE
@@ -2340,18 +2341,89 @@ a Motorola-directed test covers every single and mixed command combination.
 
 | Artifact | Size | SHA-256 |
 |---|---:|---|
-| boot binary | 35,120 bytes | `6f78f788b6b9f6b7bdadd991552a2de622735adc674a167903f74e348eb5e940` |
-| packaged ROM, payload CRC32 `bada6c8e` | 35,152 bytes | `0f89f48accec95bf530575c46044a1e6ad42f2d2a8080d0a0ad471d333a283a9` |
-| kernel binary | 23,840 bytes | `d6ab7a47d5bed2794ff99a0d1c3cb92487787073833b47b48a147941ebe26bd7` |
+| boot binary | 35,260 bytes | `7fa58266c26a3b3d679254235c3be2ad079f5f8710174940e6246e52e820022b` |
+| packaged ROM, payload CRC32 `644b482a` | 35,292 bytes | `410d373eb879d876c18b52089c5cdac96f195f3c5de69340d3b6b52b0e2e70bc` |
+| kernel binary | 23,912 bytes | `2bd9dc9cbcaa8fcb178af8deaae20bc28bb20112c20eac6f04ac9d1794db1ff8` |
+| kernel ELF | 40,924 bytes | `64eafdc42ae11b89b50d16874d589ad93af69bfb0665547ed1674857120d2d6b` |
 | Verilated pin-level executable | - | `846a13104f4d2a92ee9a8b6f6d2fbe366cb307167764a79944c9b2272bb4b9ea` |
 | shared matrix report | - | `1b59ec8f81826128a0b2a5de1c02ce8c2ebccd2f958b3ce74db17739032ac760` |
 | Harte Musashi smoke report | - | `feaa379b2be027c23d764b2fe7a69f3fb03eb460490b5bb700828de0ae4ee417` |
 | Harte RTL smoke report | - | `673a24232a62d4818a9717784af722a8a64b824d5e094fa3a3b633362a518459` |
 
-No synthesis, SCC count, mapped resource count, placement, route, constrained
-clock, bitstream, or board result is attributed to p28. Promotion requires the
-K1 delta to be committed, then the exact complete production image with a
-nonzero build identity must meet the 12.5 MHz CPU, 60 MHz SDRAM, and every
-other release constraint. The already-routed bitstream must then pass repeated
+The committed normal run reports the full Git identity, passes at simulated
+550 ms with three context switches, and the direct/guard diagnostics pass from
+the same commit. The earlier dirty p28 snapshot carries no synthesis, mapped
+resource, placement, route, bitstream, or board claim; the next section records
+the exact committed source checkpoint. Build ID `66D6094F` must meet the
+12.5 MHz CPU, 60 MHz SDRAM, and every other release constraint. The resulting
+bitstream must then pass repeated
 PMMU, POST, SDRAM, timer, fault-containment, kernel-entry, and physical HDMI
 checks on the ULX3S attached to NUC, followed by the K1 long-soak gate.
+
+## 2026-07-22: exact K1 route and lifecycle-soak qualification
+
+The exact functional candidate remains commit
+`66d6094f9339469313fefb70b259d07a7c2272ce`, archived as
+`/tmp/astra68-k1-66d6094.tar` with SHA-256
+`ba4d91999cf829c33a345d895b7966a438b28b93871d8d34843d658a1d0c0039`.
+Beast builds immutable snapshot `/tmp/astra68-k1-66d6094` with Yosys
+0.64+159 (`5197b9c8c`) and nextpnr
+`0.10-45-g98c18d7f`, exact build ID `66D6094F`, seed 4, heap placement,
+router1, 12.5 MHz CPU, and 60 MHz SDRAM.
+
+Synthesis reports 53,544 LUT4s, 25,532 FFs, 101 DP16KDs, 18 multipliers,
+zero check problems, and zero SCCs. Placement packs 66,990 TRELLIS_COMB and
+25,565 TRELLIS_FF cells, finishes with checksum `0x29cf7998`, and produces
+these retained identities:
+
+| Artifact | SHA-256 |
+|---|---|
+| mapped JSON | `5e133f4d7a57b43c46bd344a365eb8b41461c0559a1aef5615dcdd41ca09db04` |
+| placed JSON | `5de8bb7ecc205a4f29dc1ff75491f9b8d6039100c0b8b4f9c0de68d60025a85d` |
+| route input JSON | `458374e903b7c49e7ca97bf2f677646554cafcbee889088059deb1068c596e51` |
+| placement report | `2800705c4903c0193a2abd3d8ae42493b7bfd93e93aa48850f71e35c0e413b54` |
+| placement log | `b313b4b0e9c5d238520d66aa9245650ba618bc22f919a1795675dd2ff21f9f20` |
+| synthesis log | `1f11ac9e25755573e43c3b43bb987b2fbc2712a80e95a0491d76d787722896ef` |
+
+The placement-only SDRAM estimate is 53.27 MHz and is not a timing result.
+The exact strict route refreshed all 66,990 LUT-permutation policies and is
+still running as one uninterrupted Beast process. No constrained-clock,
+routed-JSON, bitstream, or hardware claim exists until that process completes
+normally and every release gate passes.
+
+Commit `470bf123cf24bbadf3525f91307e3d9aebe92006` adds only the deterministic
+K1 lifecycle workload, adapters, and qualification controls. Its Git archive
+is `/tmp/astra68-k1-soak-470bf12.tar`, SHA-256
+`b5db0e133ee04605fc1e18e4a159e1893893ca5c90c54df1c2ad8bcfc0c64fa5`.
+Two timing-dependent WIP checks were rejected before commit: one inspected a
+reusable dead-process slot instead of cumulative completed fault teardowns;
+the other required an exact checkpoint number that RTL could legitimately
+pass before the milestone observer ran. The retained harness uses a cumulative
+teardown invariant and always emits the first post-milestone checkpoint.
+
+All 11 host suites pass normally, under GCC `-fanalyzer`, and under ASan/UBSan
+with leak detection. Rust's 15 tests, rustfmt, Clippy `-D warnings`, all 90
+shared framework tests, all 30 Musashi/RTL matrix executions, and both Harte
+smoke adapters pass. An exact optimized Musashi run completes 100 lifecycle
+cycles at virtual cycle 262,502,952 with 201 context switches, 411 timer ticks,
+1,377 syscalls, and 7,987 free pages. The exact 500,000-cycle Musashi run has
+passed checkpoint 10,000 at virtual cycle 25,068,017,690 after 893.985 seconds
+without baseline drift and continues.
+
+The exact full pin-level RTL/SDRAM run uses Verilator 5.047 and the unchanged
+24,876-byte kernel. It passes complete POST and BIST at 115.03 MB/s, PMMU and
+user-copy recovery, two isolated processes, 100 Hz preemption, offender-only
+fault death, and `K1 PROTECTED ENTRY PASS`. It then completes four lifecycle
+cycles with 11 context switches, 23 timer ticks, 96 syscalls, and exactly 7,987
+free pages before reporting `KERNEL SOAK PASS` and retained status `K1SK`.
+The test finishes at one simulated second in 1,624.045 seconds wall time. This
+is the required deterministic full-RTL lifecycle checkpoint, not the long
+Musashi or 24-hour hardware soak.
+
+| Soak artifact | Size | SHA-256 |
+|---|---:|---|
+| kernel binary | 24,876 bytes | `5c540492ca7aaf8bf3d2270f17e2bf0a4f6f65e2a8bb4aec5c3ee019338c56c5` |
+| kernel ELF | 42,008 bytes | `e4adfd8f7e41b158666419aff13245a4370498746c1f9ad5a52abda28c241038` |
+| RTL boot binary | 36,224 bytes | `a0b7dead20dce6e7e3c284a330f90f9c4010538098adfae078d6dcdbda260471` |
+| RTL packaged ROM, CRC32 `571d81e9` | 36,256 bytes | `8940a6ab9acf3f0efea1b8f1243ebce525829d9acd6a6fc97d91db263c4d5a26` |
+| Verilated pin-level executable | - | `b7a3efe0071c48114f964b2bde258da4eb06d66098d04a16f7ccacaa86d77aa4` |

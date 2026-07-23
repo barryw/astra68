@@ -189,8 +189,8 @@ separates implemented evidence from planned work.
   cached user aliases, and two processes execute different code/data at the
   same logical addresses. The CACR command decoder now preserves independent
   instruction/data commands when both are written together. The production-form
-  35,120-byte boot image
-  (`6f78f788b6b9f6b7bdadd991552a2de622735adc674a167903f74e348eb5e940`)
+  35,260-byte boot image
+  (`7fa58266c26a3b3d679254235c3be2ad079f5f8710174940e6246e52e820022b`)
   runs unchanged on AstraVM/Musashi and the complete pin-level RTL/SDRAM model.
   Both enable the PMMU, start two user processes, preempt at 100 Hz, reap only
   the deliberate offender, reclaim its owned state, and reach
@@ -201,13 +201,24 @@ separates implemented evidence from planned work.
   the unchanged 3/18/5 classified buckets pass. A deliberate panic also reaches
   the console and retained early log in the full SoC model; both direct panic
   and exact supervisor-guard panic have independent full-SoC checks. The final
-  dirty normal image is 23,840 kernel bytes, runs unchanged on both models, and
-  reports three context switches on each before `K1OK`. This remains a
-  simulation checkpoint based on committed
-  `5798c5575a5bf6d5ca37eae2fbe63cb0528ad6e8` plus a dirty K1 delta. The delta
-  still needs a committed nonzero build identity, exact full synthesis/route,
+  committed normal image is 23,912 kernel bytes, runs unchanged on both models,
+  and reports three context switches on each before `K1OK`. Source commit
+  `66d6094f9339469313fefb70b259d07a7c2272ce` supplies the full ROM and kernel
+  identity. Its exact full synthesis and placement now pass, but it still needs
+  a completed strict route,
   repeated ULX3S qualification and long allocation, syscall, fault, and
   context-switch soaks before K1 release.
+- Exact follow-on commit `470bf123cf24bbadf3525f91307e3d9aebe92006`
+  adds the shared K1 lifecycle soak: each cycle faults and reaps one offender,
+  verifies resource baselines, and relaunches it while the survivor remains
+  schedulable. The immutable NUC snapshot has Git-archive SHA-256
+  `b5db0e133ee04605fc1e18e4a159e1893893ca5c90c54df1c2ad8bcfc0c64fa5`.
+  Host analyzer/sanitizer gates, an exact 100-cycle Musashi run, and the exact
+  full pin-level RTL workload pass. RTL completes four post-milestone teardown
+  cycles with 11 context switches, 23 timer ticks, 96 syscalls, and the exact
+  7,987-free-page baseline. The release-duration Musashi run has crossed 10,000
+  of 500,000 cycles without drift. Routed-hardware completion remains open and
+  must not be inferred from simulation.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,
