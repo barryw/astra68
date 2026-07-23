@@ -2763,3 +2763,34 @@ contains exact candidate `77B3CDC8`. Disposition: physical normal-HDMI and
 persistent-reset gates PASS. Exact physical direct-panic, supervisor-guard,
 and lifecycle-soak gates remain open; this checkpoint does not alter the
 66,513-TRELLIS_COMB capacity or any constrained-clock result.
+
+### Physical direct-panic qualification
+
+NUC volatile-loaded only the maintenance passthrough, then ran the pinned
+direct-panic AstraHost image with app SHA-256
+`1c579fa99a2041e82342839ac7f6372e11ccc896ed10e7dcb5ce2a5b07fc35fe`.
+The ESP mounted the existing 244,016 MB card without formatting it and
+atomically replaced only `/ASTRA68.ROM`, reporting the exact 35,040-byte
+payload and CRC32 `FD4FC2AB`. Retained provisioning log
+`docs/evidence/k1-77b3cdc8-direct-panic-provision.log` has SHA-256
+`0945eadf79a820ed5fbfa87075877a648dd9c4a465721bf4c5b15748ed66020f`.
+Normal read-only AstraHost app SHA-256
+`b4ec0fe43ffc7012758024576757df11892be0005e8e68fc282879448de962c2`
+was restored before the production FPGA image was loaded.
+
+The unchanged production bitstream then passes exact build `77B3CDC8`, ROM
+CRC32 `FD4FC2AB`, complete POST and 32 MiB BIST, PMMU enable, and the ordered
+direct-panic contract. It reports `Reason: deliberate panic self-test`, exact
+Git/build identities, and `SYSTEM HALTED` in 1.816 seconds. Retained checker
+transcript `docs/evidence/k1-77b3cdc8-direct-panic-hw.log` has SHA-256
+`e6297e0b7adb8e2cc0352fc1c6575d6c02dbc09312059ee66ca1206ad5b8114a`.
+Physical HDMI independently shows those exact fields; retained 2420x1458 image
+`docs/evidence/k1-77b3cdc8-direct-panic-hdmi.png` has SHA-256
+`639785017f2691b7e4cebc493289f0e0f15d89762aed34c4994c869bce17a8de`.
+
+Disposition: exact physical direct-panic HDMI/log gate PASS. Persistent FPGA
+flash remains the same `77B3CDC8` candidate. The current SRAM-loaded system is
+deliberately halted with the direct-panic ROM while normal AstraHost remains
+installed. Physical supervisor-guard and lifecycle-soak gates remain open. No
+RTL, mapped resource, placement, route, bitstream, or constrained-clock result
+changed.

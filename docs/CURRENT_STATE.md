@@ -285,10 +285,11 @@ separates implemented evidence from planned work.
   `docs/evidence/k1-77b3cdc8-flash-reset.log`, SHA-256
   `deeaba2d4acdb5fbc5115085b4f751796ce11079cc68ded319c43117d17b0e97`.
   Persistent FPGA flash now contains exact K1 candidate `77B3CDC8`. The
-  remaining release gates are physical direct-panic and supervisor-guard
-  diagnostics plus the hardware lifecycle soak; routing, normal boot, and
-  persistent promotion do not waive them.
-- The one-shot physical diagnostics are prepared but have not been loaded.
+  physical direct-panic diagnostic now also passes; the remaining release gates
+  are the physical supervisor-guard diagnostic and hardware lifecycle soak.
+  Routing, normal boot, persistent promotion, and one panic path do not waive
+  them.
+- The one-shot physical diagnostic identities are pinned before use.
   Their AstraHost application SHA-256 values are
   `1c579fa99a2041e82342839ac7f6372e11ccc896ed10e7dcb5ce2a5b07fc35fe`
   for direct panic,
@@ -306,7 +307,20 @@ separates implemented evidence from planned work.
   `b4ec0fe43ffc7012758024576757df11892be0005e8e68fc282879448de962c2`
   and contains no provisioning package. The extracted direct-panic and guard
   packages are byte-identical to Beast's `k1_panic.rom` and `k1_guard.rom`
-  artifacts used by the passing exact full-RTL diagnostics.
+  artifacts used by the passing exact full-RTL diagnostics. NUC provisioned the
+  direct-panic package without formatting the existing card, reporting exact
+  35,040-byte payload CRC32 `FD4FC2AB`; provisioner-log SHA-256 is
+  `0945eadf79a820ed5fbfa87075877a648dd9c4a465721bf4c5b15748ed66020f`.
+  After normal read-only AstraHost was restored, the unchanged production
+  bitstream passed complete POST and reached the ordered deliberate panic plus
+  `SYSTEM HALTED` in 1.816 seconds; checker-log SHA-256 is
+  `e6297e0b7adb8e2cc0352fc1c6575d6c02dbc09312059ee66ca1206ad5b8114a`.
+  Physical HDMI shows the same panic, exact Git and build identities, and halt;
+  `docs/evidence/k1-77b3cdc8-direct-panic-hdmi.png` has SHA-256
+  `639785017f2691b7e4cebc493289f0e0f15d89762aed34c4994c869bce17a8de`.
+  The board is currently SRAM-loaded with the unchanged production bitstream,
+  halted on the direct-panic ROM; persistent FPGA flash remains `77B3CDC8` and
+  normal AstraHost firmware is installed.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,

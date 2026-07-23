@@ -50,7 +50,7 @@ must not be presented as working software.
 | trap ABI query/progress/yield/exit/close | CURRENT PROVISIONAL | host and target K1 |
 | offender-only user fault death | CURRENT HW | format-B fault reaps only the offender on Musashi, full RTL, and three exact SRAM boots |
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
-| panic to console and retained early log | CURRENT SIM | exact direct and supervisor-guard full-SoC panic tests; physical HDMI/log remains |
+| panic to console and retained early log | CURRENT HW/SIM | exact direct panic passes full RTL and physical HDMI/log; supervisor guard passes full RTL and remains a physical gate |
 | K1 host analyzer/sanitizer gates | CURRENT | 11 suites, analyzer, ASan/UBSan |
 | deterministic lifecycle-soak harness | CURRENT SIM | exact four-cycle full RTL and 100-cycle Musashi pass; independent Beast and NUC runs each completed 500,000 cycles without drift |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
@@ -103,8 +103,15 @@ must not be presented as working software.
   automatic flash boot passes the same gate in 2.132 seconds; retained log
   SHA-256 is
   `deeaba2d4acdb5fbc5115085b4f751796ce11079cc68ded319c43117d17b0e97`.
+- The exact direct-panic image passes on physical hardware in 1.816 seconds
+  after complete POST. HDMI displays the deliberate panic, exact provenance,
+  and `SYSTEM HALTED`; physical screenshot SHA-256 is
+  `639785017f2691b7e4cebc493289f0e0f15d89762aed34c4994c869bce17a8de`.
+  The checker transcript SHA-256 is
+  `e6297e0b7adb8e2cc0352fc1c6575d6c02dbc09312059ee66ca1206ad5b8114a`.
 - Therefore K1 is not yet a fully hardware-qualified kernel or production-ready.
-  Physical panic-path qualification and the hardware lifecycle soak remain.
+  Physical supervisor-guard qualification and the hardware lifecycle soak
+  remain.
 
 ## Required before K1 release
 
@@ -119,7 +126,7 @@ must not be presented as working software.
 | exact 12.5 MHz CPU / 60 MHz SDRAM complete route | CURRENT; all clocks, LUT permutation, POR, font ROM, and `kernel_platform_v1` gates pass without waiver |
 | repeated ULX3S POST, SDRAM, PMMU, timer, fault, HDMI | CURRENT; three exact SRAM boots, physical HDMI, and automatic reset-from-flash boot pass |
 | long context/syscall/fault/allocation soak | CURRENT SIM; independent Beast and NUC runs each passed 500,000 cycles with the 7,987-page baseline unchanged; hardware soak remains |
-| panic HDMI and retained-log check on physical board | MISSING |
+| panic HDMI and retained-log check on physical board | PARTIAL; exact direct-panic path passes, supervisor guard remains |
 
 ## Partial or transitional K1 code
 
@@ -176,9 +183,9 @@ must not be presented as working software.
 
 ## Next actions
 
-1. run the prepared exact direct-panic and supervisor-guard ROMs on the
-   physical board, confirm HDMI and retained-log output for each, and restore
-   the normal ROM and read-only AstraHost after each diagnostic;
+1. run the prepared exact supervisor-guard ROM on the physical board, confirm
+   its format-A vector-2 fault at `0x02028000`, HDMI, and retained-log output,
+   then restore the normal ROM and read-only AstraHost;
 2. run the exact hardware lifecycle soak, retain its bounded-resource result,
    then restore normal ROM CRC32 `EB1B381F` and persistent K1 boot;
 3. audit every K1 acceptance requirement and update the release records;
