@@ -88,7 +88,7 @@ the `F4DC1E18` mapped or routed counts above. Do not assign it a resource delta
 until the complete production design is remapped; its route must still meet all
 locked clocks and the unrestricted physical-capacity policy.
 
-## 77B3CDC8 corrected K1 mapping
+## 77B3CDC8 corrected K1 route
 
 Exact corrected qualification snapshot
 `77b3cdc8fddb984850073a2c2cb5998bbbe1d857` includes K-HW3, K-HW4, the K1
@@ -100,9 +100,35 @@ packs 66,513 TRELLIS_COMB and 25,561 TRELLIS_FF cells.
 
 This is 471 fewer mapped LUT4s and 477 fewer packed combinational cells than
 the pre-fix `66D6094F` checkpoint; block RAM and multiplier use are unchanged.
-The exact no-waiver strict route is active. These counts prove that reset
-conformance did not consume the remaining fabric, but they are not a timing or
-bitstream claim.
+The uninterrupted exact no-waiver seed-4 router1 route finishes normally with
+checksum `0x09264110` and passes every constrained clock:
+
+| Domain | Required | Achieved |
+|---|---:|---:|
+| CPU | 12.500000 MHz | 14.179972 MHz |
+| SDRAM | 60.002399 MHz | 61.270760 MHz |
+| USB | 48.000767 MHz | 77.760498 MHz |
+| pixel | 27.000029 MHz | 58.227554 MHz |
+| HDMI shift | 135.025650 MHz | 294.290771 MHz |
+
+The production `kernel_platform_v1` physical-capacity gate passes:
+
+| Resource | Used | Physical free |
+|---|---:|---:|
+| TRELLIS_COMB | 66,513 (79.52%) | 17,127 |
+| TRELLIS_FF | 25,561 (30.56%) | 58,079 |
+| DP16KD | 101 (48.56%) | 107 |
+| MULT18X18D | 18 (11.54%) | 138 |
+
+The ECP5 LUT-permutation gate checks 13,420 cells and 17,656 routed inputs;
+POR checks all 25,532 mapped FFs use GSR, and the POST font remains one DP16KD
+with 11 address bits. Bitstream SHA-256 is
+`56f768b2d78801f6cc93a7c518643f1012e30f48241e0d77be8250f97c1c2755`;
+routed-JSON SHA-256 is
+`a9f7c0c45ec5643d13db12bf08b03caef6434a006f02536f127d54887a4050eb`;
+manifest SHA-256 is
+`0593ba251da7b467e413126539d1e863ca19ef00f63843ed5f0cc6d32913b74e`.
+This is the exact routed K1 candidate; board qualification remains mandatory.
 
 ## B1F9E60D rollback comparison
 

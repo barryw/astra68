@@ -57,8 +57,8 @@ complete strict Questa inventory is 140 total and 114 clean with the prior
 3 compile, 18 simulation, and 5 unscored buckets unchanged. GHDL 7.0 generates
 the complete core and a byte-identical pre-commit reduced-BIST full-SoC run
 passes POST, protected multitasking, offender-only fault containment, and four
-lifecycle soak cycles. Exact full-chip synthesis, route, and board reset/boot
-qualification remain open.
+lifecycle soak cycles. Exact full-chip synthesis and no-waiver routing now pass
+all production clocks; board reset/boot qualification remains open.
 
 ### User (one CRP per process)
 

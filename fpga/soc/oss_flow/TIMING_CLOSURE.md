@@ -2582,3 +2582,75 @@ after 12,416.334 seconds, reaching virtual cycle 1,252,807,889,504 with the
 200,000/500,000 at virtual cycle 501,130,094,922 after 19,337.849 seconds and
 continues. Hardware soak remains mandatory after strict route and board
 promotion.
+
+## 2026-07-23: exact reset-corrected K1 route candidate
+
+NUC's uninterrupted exact strict route of snapshot
+`77b3cdc8fddb984850073a2c2cb5998bbbe1d857` completed normally with no timing
+waiver. Router1 retired 1,257,311 iterations with zero arcs remaining after
+7,092.50 seconds and produced route checksum `0x09264110`. The already-recorded
+source archive, mapped netlist, seed-4 placement, critical floorplan, and exact
+release ROM were not rebuilt or changed between placement and routing.
+
+Every production clock passes its exact constraint:
+
+| Domain | Required | Achieved |
+|---|---:|---:|
+| CPU | 12.500000 MHz | 14.179972 MHz |
+| board input | 25.000000 MHz | 40.330711 MHz |
+| SD | 20.000000 MHz | 119.161102 MHz |
+| SDRAM | 60.002399 MHz | 61.270760 MHz |
+| USB | 48.000767 MHz | 77.760498 MHz |
+| pixel | 27.000029 MHz | 58.227554 MHz |
+| HDMI shift | 135.025650 MHz | 294.290771 MHz |
+
+The production `kernel_platform_v1` gate uses physical LFE5U-85F capacity as
+the only utilization limit and passes at 66,513/83,640 TRELLIS_COMB (79.52%),
+101/208 DP16KD, and 18/156 MULT18X18D. It leaves 17,127 combinational sites,
+107 block RAMs, and 138 multipliers. The ECP5 LUT-permutation gate passes all
+13,420 protected cells and 17,656 routed LUT inputs. POR verifies GSR on all
+25,532 mapped FFs, and the POST font remains one DP16KD with 11 address bits.
+
+The source snapshot's `sw/boot/Makefile` supplied the retired
+`complete_chipset` planning-profile string to synthesis metadata, while the
+production route and physical-capacity qualification explicitly use
+`kernel_platform_v1`, matching `mkbit.sh`, `resource_budgets.json`, and the
+locked no-utilization-cap policy. This metadata mismatch does not alter RTL,
+placement, routing, or the bitstream. The immutable manifest records both
+values rather than concealing the discrepancy; the Makefile default is a
+future build-flow cleanup, not grounds to rebuild this candidate.
+
+| Exact route artifact | SHA-256 |
+|---|---|
+| routed JSON | `a9f7c0c45ec5643d13db12bf08b03caef6434a006f02536f127d54887a4050eb` |
+| route report | `7fb60c33314d8da57ef479eec077bb4a538c2fd21ad747fd238c67dc5471bd5f` |
+| route log | `13f5d6ee0bba991a01353b63b541e9b0ada0339d090e8401790af860fafec9a5` |
+| packed configuration | `654b678e1481866f90f53fe97eeed1df4080e6075a2f09fa6a9fbf4fbf1a0667` |
+| production bitstream | `56f768b2d78801f6cc93a7c518643f1012e30f48241e0d77be8250f97c1c2755` |
+| build manifest | `0593ba251da7b467e413126539d1e863ca19ef00f63843ed5f0cc6d32913b74e` |
+
+The older Beast `66D6094F` route also completed normally and passed every
+clock, packing 66,990 TRELLIS_COMB with checksum `0x169ec66e`; its bitstream
+SHA-256 is
+`38d6129c6d9da767cfdecce72a7acdbbbd2a2e4d4c7f82beafe943abd12549de`.
+That source predates the Motorola reset correction. It remains diagnostic
+evidence only and must never be promoted to hardware.
+
+Exact full-SoC diagnostics now cover both panic paths from the corrected
+snapshot. The direct panic reports build `77B3CDC8`, status `0x4b50414e`,
+retained-log write offset 755, and zero wraps; its RTL log SHA-256 is
+`07a6db6410b4b6a339fb89746b04476c49adb65d08b7b992a1ca9ccc7741b0da`.
+The supervisor-guard image confirms symbol `_kernel_stack_guard` at
+`0x02028000`, receives a format-A vector-2 fault at that exact address, emits
+the complete panic, and halts with the same status. Its retained log reaches
+offset 895 with zero wraps; RTL log SHA-256 is
+`3fd8effe0c78ae52a9a5c96a4e4832e8d03aa98c940bb02bb5902a1edf13f2c3`.
+The normal exact image remains the only board candidate.
+
+Beast's independent lifecycle run has completed all 500,000 cycles without
+frame-count drift. NUC's independently executing copy has passed
+450,000/500,000 at virtual cycle 1,127,529,784,791 after 42,167.356 seconds and
+continues. The next release gate is exact SD-ROM provisioning followed by
+repeated SRAM-loaded POST, SDRAM, PMMU, timer, process-fault, retained-log, and
+physical-HDMI checks on the ULX3S attached to NUC. Persistent FPGA programming
+is forbidden until those checks pass on the already-hashed bitstream.

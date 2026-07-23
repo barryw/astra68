@@ -253,11 +253,21 @@ separates implemented evidence from planned work.
   full-chip synthesis reports zero SCCs, 53,073 LUT4s, 25,532 GSR-enabled FFs,
   101 block RAMs, and 18 multipliers. Exact seed-4 placement finishes normally,
   packing 66,513 TRELLIS_COMB and 25,561 TRELLIS_FF cells with checksum
-  `0x7c9a8594`; its no-waiver strict router1 job is active on NUC. Beast
-  completed all 500,000 lifecycle-soak
-  cycles without frame-count drift; the independent NUC run has passed
-  200,000/500,000 and continues. Neither simulation nor synthesis waives the
-  remaining routed-timing and board gates.
+  `0x7c9a8594`. Its uninterrupted no-waiver strict router1 route finishes
+  normally with checksum `0x09264110`; every production clock passes, including
+  14.179972 MHz CPU against 12.5 MHz and 61.270760 MHz SDRAM against
+  60.002399 MHz. The `kernel_platform_v1` physical-capacity gate passes at
+  66,513/83,640 TRELLIS_COMB, 101/208 block RAMs, and 18/156 multipliers. The
+  production bitstream SHA-256 is
+  `56f768b2d78801f6cc93a7c518643f1012e30f48241e0d77be8250f97c1c2755`;
+  manifest SHA-256 is
+  `0593ba251da7b467e413126539d1e863ca19ef00f63843ed5f0cc6d32913b74e`.
+  Exact direct-panic and supervisor-guard diagnostics also pass the full SoC
+  model, with the latter faulting at `0x02028000`. Beast completed all 500,000
+  lifecycle-soak cycles without frame-count drift; the independent NUC run has
+  passed 450,000/500,000 and continues. The remaining release gates are board
+  reset/boot, PMMU/fault/HDMI qualification, and hardware soak; routing alone
+  does not waive them.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,
