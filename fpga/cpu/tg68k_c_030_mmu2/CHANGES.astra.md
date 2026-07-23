@@ -7,6 +7,28 @@ The initial source checksums from upstream commit
 Local changes must cite a Motorola requirement or isolate platform integration;
 Amiga, MiSTer, and WinUAE behavior alone is not sufficient justification.
 
+## 2026-07-22 processor-reset conformance
+
+- Separated ECP5 configuration initialization from architectural processor
+  reset. FPGA configuration initializes the PMMU register file and 22-entry
+  ATC deterministically; subsequent processor `RESET` preserves those values
+  while clearing only TC.E, TT0.E, and TT1.E, as required by MC68030 User's
+  Manual section 9.2.2.
+- Added a Motorola-directed regression that populates the ATC, changes the
+  backing page descriptor to make the cached translation stale, and asserts
+  processor reset. It verifies that CRP, SRP, TC/TT fields, and the stale ATC
+  entry survive; an explicit `PFLUSHA` while translation is disabled removes
+  the entry, and the next translation walks to the changed descriptor.
+- Corrected the PMMU register-file comments: CAL, VAL, SCC, BAD/BACx, DRP, and
+  AC are MC68851-only registers rejected by the MC68030 PMOVE decoder, not
+  omitted Amiga features.
+
+Questa Lattice OEM 2024.2 on Beast reports 140 total variants and 114 clean.
+The new reset/ATC case is the only inventory addition; the locked 3 compile
+failures, 18 classified simulation failures, and 5 unscored diagnostics are
+unchanged. Full synthesis, strict routing, and ULX3S reset/boot qualification
+remain required.
+
 ## 2026-07-12 generic compliance repairs
 
 - Removed the MiSTer `$00DD4000-$00DD5FFF` PMMU translation bypass. Platform

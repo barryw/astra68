@@ -122,19 +122,21 @@ architecture rtl of TG68K_PMMU_030 is
   -- and 9.8). MOVEC access to these registers is NOT defined on MC68030; the
   -- kernel MOVEC whitelist correctly excludes them, and MOVEC to TC/TT0/TT1/
   -- MMUSR traps as privilege violation.
-  -- Implemented: TC, TT0, TT1, CRP (64-bit), SRP (64-bit), MMUSR
-  -- Not implemented: CAL, VAL, SCC, AC (removed — unused by Amiga software)
+  -- Implemented MC68030 set: TC, TT0, TT1, CRP (64-bit), SRP (64-bit), MMUSR.
+  -- CAL, VAL, SCC, BAD/BACx, DRP, and AC are MC68851-only registers; MC68030
+  -- PMOVE encodings for them take the F-line unimplemented-instruction path
+  -- (MC68030 UM 9.6). Their absence is architectural, not an Amiga shortcut.
   
-  signal TC     : std_logic_vector(31 downto 0); -- Translation Control (EN, PS, IS, TIA-TID)
-  signal CRP_H  : std_logic_vector(31 downto 0); -- CPU Root Pointer high 32 bits
-  signal CRP_L  : std_logic_vector(31 downto 0); -- CPU Root Pointer low 32 bits (64-bit total)
-  signal SRP_H  : std_logic_vector(31 downto 0); -- Supervisor Root Pointer high 32 bits
-  signal SRP_L  : std_logic_vector(31 downto 0); -- Supervisor Root Pointer low 32 bits (64-bit total)
-  signal TT0    : std_logic_vector(31 downto 0); -- Transparent Translation Register 0
-  signal TT1    : std_logic_vector(31 downto 0); -- Transparent Translation Register 1
-  signal MMUSR  : std_logic_vector(15 downto 0); -- MMU Status Register (MC68030 UM 9.7.4: architecturally 16 bits)
-  -- NOTE: CAL, VAL, SCC, AC registers are defined in MC68030 but not implemented
-  -- They were removed as unused signals to avoid synthesis warnings
+  signal TC     : std_logic_vector(31 downto 0) := (others => '0'); -- Translation Control (EN, PS, IS, TIA-TID)
+  signal CRP_H  : std_logic_vector(31 downto 0) := (others => '0'); -- CPU Root Pointer high 32 bits
+  signal CRP_L  : std_logic_vector(31 downto 0) := (others => '0'); -- CPU Root Pointer low 32 bits (64-bit total)
+  signal SRP_H  : std_logic_vector(31 downto 0) := (others => '0'); -- Supervisor Root Pointer high 32 bits
+  signal SRP_L  : std_logic_vector(31 downto 0) := (others => '0'); -- Supervisor Root Pointer low 32 bits (64-bit total)
+  signal TT0    : std_logic_vector(31 downto 0) := (others => '0'); -- Transparent Translation Register 0
+  signal TT1    : std_logic_vector(31 downto 0) := (others => '0'); -- Transparent Translation Register 1
+  signal MMUSR  : std_logic_vector(15 downto 0) := (others => '0'); -- MMU Status Register (MC68030 UM 9.7.4: architecturally 16 bits)
+  -- MC68851-only control registers are deliberately absent from this register
+  -- file and rejected by the kernel PMOVE decoder before reaching this entity.
   -- Internal
   signal tc_en  : std_logic; -- translation enable bit (TC[31] in some docs; keep flexible here)
   signal tc_table_config_valid : std_logic; -- Valid TC fields for PMMU table-search instructions, independent of TC.E
@@ -238,18 +240,18 @@ architecture rtl of TG68K_PMMU_030 is
   type atc_page_size_t is array(0 to ATC_ENTRIES-1) of integer range 0 to 15; -- MC68030 PS field value (8-15)
   type atc_level_t is array(0 to ATC_ENTRIES-1) of std_logic_vector(2 downto 0); -- BUG #412: walk level for MMUSR N field
   type atc_fault_status_t is array(0 to ATC_ENTRIES-1) of std_logic_vector(15 downto 0); -- Cached MMUSR fault class for ATC fault entries
-  signal atc_log_base : atc_base_t;
-  signal atc_phys_base: atc_base_t;
-  signal atc_attr  : atc_attr_t;
-  signal atc_valid : atc_val_t;
-  signal atc_fc    : atc_fc_t;
+  signal atc_log_base : atc_base_t := (others => (others => '0'));
+  signal atc_phys_base: atc_base_t := (others => (others => '0'));
+  signal atc_attr  : atc_attr_t := (others => (others => '0'));
+  signal atc_valid : atc_val_t := (others => '0');
+  signal atc_fc    : atc_fc_t := (others => (others => '0'));
   -- atc_is_insn removed: FC already encodes instruction vs data (FC=2/6 vs FC=1/5)
-  signal atc_shift : atc_shift_t;
-  signal atc_page_size : atc_page_size_t;
-  signal atc_level : atc_level_t;  -- BUG #412: walk level count for MMUSR N field
-  signal atc_mru   : atc_val_t;  -- Pseudo-LRU: MRU bit per entry (1=recently used)
-  signal atc_buserr : atc_val_t;  -- Cached fault entry present in ATC; fault class comes from atc_fault_status
-  signal atc_fault_status : atc_fault_status_t;
+  signal atc_shift : atc_shift_t := (others => 12);
+  signal atc_page_size : atc_page_size_t := (others => 12);
+  signal atc_level : atc_level_t := (others => (others => '0'));  -- BUG #412: walk level count for MMUSR N field
+  signal atc_mru   : atc_val_t := (others => '0');  -- Pseudo-LRU: MRU bit per entry (1=recently used)
+  signal atc_buserr : atc_val_t := (others => '0');  -- Cached fault entry present in ATC; fault class comes from atc_fault_status
+  signal atc_fault_status : atc_fault_status_t := (others => (others => '0'));
   signal atc_mru_update_req : std_logic := '0';  -- Request MRU update from translation process
   signal atc_mru_update_idx : integer range 0 to ATC_ENTRIES-1 := 0;  -- Index to update
   signal atc_mbit_inval_req : std_logic := '0';  -- Request ATC invalidation for M-bit miss (per WinUAE)
@@ -1180,16 +1182,13 @@ begin
     variable page_offset_bits : integer;
   begin
     if nreset = '0' then
-      -- MC68030 hard reset clears TC. Disabled TC images are not configuration
-      -- checked, so PS=0 is legal while E=0 and must read back as zero.
-      TC    <= (others => '0');
-      CRP_H <= (others => '0');
-      CRP_L <= (others => '0');
-      SRP_H <= (others => '0');
-      SRP_L <= (others => '0');
-      TT0   <= (others => '0');
-      TT1   <= (others => '0');
-      MMUSR <= (others => '0');
+      -- MC68030 UM 9.2.2: processor RESET preserves PMMU registers and ATC
+      -- entries while clearing only the translation-enable bits. FPGA GSR and
+      -- the declaration initializers above provide deterministic cold-start
+      -- values; this branch models the architectural processor reset.
+      TC(31)  <= '0';
+      TT0(15) <= '0';
+      TT1(15) <= '0';
       atc_flush_req <= '0';
       mmusr_update_ack <= '0';
       ptest_active <= '0';
@@ -1247,13 +1246,8 @@ begin
       -- Handle MMUSR updates with MC68030-compliant priority (MMUSR register only)
       -- IMPORTANT: These only affect MMUSR, not other registers!
       if cpu_reset = '1' then
-        -- MC68030 RESET (soft reset / RESET instruction) clears the translation
-        -- enable bit in TC and the enable bits in both TTRs. Preserve the rest
-        -- of the register contents. Per MC68030 UM 9.2.2 (PDF 14324-14326)
-        -- and WinUAE cpummu30.cpp L2690-2700, soft reset does NOT invalidate
-        -- ATC entries; only a hard reset (nreset='0') flushes the ATC.
-        -- Software that re-enables translation after RESET is expected to
-        -- issue PFLUSHA explicitly if it cannot reuse the existing ATC entries.
+        -- Legacy synchronous reset request. Keep it architecturally identical
+        -- to nreset: preserve registers and ATC entries, clear only E bits.
         TC(31) <= '0';
         tc_config_valid <= '1';
         TT0(15) <= '0';
@@ -2638,21 +2632,8 @@ begin
     variable page_write_protect   : std_logic;
   begin
     if nreset = '0' then
-      for i in 0 to ATC_ENTRIES-1 loop
-        atc_valid(i)     <= '0';
-        atc_log_base(i)  <= (others => '0');
-        atc_phys_base(i) <= (others => '0');
-        atc_fc(i)        <= (others => '0');
-        atc_shift(i)     <= 12;
-        atc_page_size(i) <= 12;  -- MC68030: PS=12 (4KB pages)
-        atc_attr(i)      <= (others => '0');
-        atc_level(i)     <= (others => '0');  -- BUG #412: walk level for MMUSR
-        atc_buserr(i)    <= '0';  -- BUG #436: Initialize bus error flag
-        atc_fault_status(i) <= (others => '0');
-      end loop;
-      for i in 0 to ATC_ENTRIES-1 loop
-        atc_mru(i)   <= '0';
-      end loop;
+      -- Do not clear the ATC here. MC68030 processor RESET leaves all valid
+      -- translations intact; only PFLUSH/PMOVE flushing may invalidate them.
       wstate      <= W_IDLE;
       walk_level  <= 0;
       walk_desc   <= (others => '0');

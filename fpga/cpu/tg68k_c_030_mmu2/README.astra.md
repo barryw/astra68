@@ -30,10 +30,10 @@ acceptance remains fail-closed under `docs/MC68030_COMPLIANCE.md`:
   gates, not substitutes for the Motorola contract.
 
 The repaired ALU/kernel and complete SoC report zero combinational SCCs before
-and after ECP5 synthesis. Canonical ULX3S builds route at a 12.5 MHz CPU clock
-with the 75 MHz SDRAM domain; exact utilization, seed, timing, and retained
-hardware identity belong in build reports because the surrounding chipset is
-still changing.
+and after ECP5 synthesis. Canonical ULX3S builds constrain a 12.5 MHz CPU clock
+and the accepted 60 MHz SDRAM domain; exact utilization, seed, timing, and
+retained hardware identity belong in build reports because the surrounding
+chipset is still changing.
 
 See [`../../../docs/TG68K_030_MMU2_AUDIT.md`](../../../docs/TG68K_030_MMU2_AUDIT.md)
 and [`../../../docs/MC68030_COMPLIANCE.md`](../../../docs/MC68030_COMPLIANCE.md).
