@@ -34,7 +34,7 @@ must not be presented as working software.
 | kernel VBR and 8 KiB supervisor stack | CURRENT | Musashi, full RTL |
 | frame allocator for all 8,192 4 KiB frames | CURRENT | host tests, target startup |
 | SRP/CRP 4 KiB two-level translation | CURRENT | host, focused RTL, Musashi, full RTL |
-| PMMU enable and CRP switching | CURRENT | Musashi and full RTL K1 |
+| PMMU enable and CRP switching | CURRENT HW | Musashi, full RTL, and three exact SRAM K1 boots |
 | user null/code/stack guards | CURRENT | host mapping tests and target fault |
 | supervisor stack guard | CURRENT SIM/ROUTED | exact descriptor host test, deliberate exact full-RTL format-A guard panic, and routed descriptor implementation; hardware fault remains |
 | cross-CRP cache isolation | CURRENT SIM | distinct same-address code and stack markers on Musashi/full RTL |
@@ -43,12 +43,12 @@ must not be presented as working software.
 | format 0/1/2/9/A/B frame decode | CURRENT | byte-exact host tests |
 | SFC/DFC copyin/copyout fault recovery | CURRENT | focused RTL, Musashi, full RTL |
 | typed generation handle table | CURRENT | host tests; 16 entries/process in K1 |
-| process creation and owner teardown | CURRENT | host, Musashi, full RTL |
+| process creation and owner teardown | CURRENT HW | host, Musashi, full RTL, and exact SRAM K1 fault/reap path |
 | deferred pinned-DMA reap | CURRENT HOST | bounded safe-point/idle path tested on host |
-| two isolated user processes | CURRENT SIM | same ROM on Musashi and full RTL |
-| 100 Hz preemptive round-robin | CURRENT SIM | 3 RTL and 3 Musashi switches before K1 marker |
+| two isolated user processes | CURRENT HW | same ROM on Musashi, full RTL, and three exact SRAM boots |
+| 100 Hz preemptive round-robin | CURRENT HW | three switches before K1 marker on Musashi, full RTL, and each exact SRAM boot |
 | trap ABI query/progress/yield/exit/close | CURRENT PROVISIONAL | host and target K1 |
-| offender-only user fault death | CURRENT SIM | format-B fault reaches `K1OK` |
+| offender-only user fault death | CURRENT HW | format-B fault reaps only the offender on Musashi, full RTL, and three exact SRAM boots |
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
 | panic to console and retained early log | CURRENT SIM | exact direct and supervisor-guard full-SoC panic tests; physical HDMI/log remains |
 | K1 host analyzer/sanitizer gates | CURRENT | 11 suites, analyzer, ASan/UBSan |
@@ -64,9 +64,10 @@ must not be presented as working software.
 - The ULX3S attached to NUC runs the older persistent `6C0D0CA3` K0 release.
 - Routed SRAM candidate `F4DC1E18` proves the repaired PMMU core and K0 platform,
   not the staged K1 kernel.
-- K-HW3 table-walk arbitration, K-HW4 timer/IACK changes, and K1 are now
-  synthesized, placed, and fully routed together, but have not yet been loaded
-  or soaked on hardware.
+- K-HW3 table-walk arbitration, K-HW4 timer/IACK changes, and K1 are integrated
+  in exact build `77B3CDC8`, fully routed together, and exercised by three
+  passing volatile SRAM boots. Persistent reset, physical panic, and hardware
+  soak qualification remain open.
 - Exact build `66D6094F` completed a timing-clean strict route on Beast as
   useful diagnostic physical evidence. It predates the PMMU reset correction
   and cannot be a release image or be loaded onto the board.
