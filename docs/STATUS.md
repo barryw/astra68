@@ -14,8 +14,9 @@ must not be presented as working software.
   `470bf123cf24bbadf3525f91307e3d9aebe92006`.
 - Immutable build snapshot: Beast `/tmp/astra68-k1-66d6094` from Git archive
   SHA-256 `ba4d91999cf829c33a345d895b7966a438b28b93871d8d34843d658a1d0c0039`.
-- Immutable soak snapshot: NUC `/tmp/astra68-k1-soak-470bf12` from Git archive
-  SHA-256 `b5db0e133ee04605fc1e18e4a159e1893893ca5c90c54df1c2ad8bcfc0c64fa5`.
+- Immutable soak snapshot: NUC `/tmp/astra68-k1-soak-470bf12` and independent
+  Beast `/tmp/astra68-k1-soak-beast` from Git archive SHA-256
+  `b5db0e133ee04605fc1e18e4a159e1893893ca5c90c54df1c2ad8bcfc0c64fa5`.
 - The qualified normal, direct-panic, and guard-panic ROMs report that complete
   Git identity and reproducible commit timestamp.
 
@@ -45,7 +46,7 @@ must not be presented as working software.
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
 | panic to console and retained early log | CURRENT SIM | full-SoC deliberate panic test |
 | K1 host analyzer/sanitizer gates | CURRENT | 11 suites, analyzer, ASan/UBSan |
-| deterministic lifecycle-soak harness | CURRENT SIM PARTIAL | exact four-cycle full RTL and 100-cycle Musashi pass; independent 500,000-cycle runs beyond 100,000 and 40,000 |
+| deterministic lifecycle-soak harness | CURRENT SIM PARTIAL | exact four-cycle full RTL and 100-cycle Musashi pass; independent 500,000-cycle runs beyond 110,000 and 100,000 |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
 | CACR independent I/D commands | CURRENT RTL | Motorola-directed mixed CI/CD decoder test; strict inventory 139/113 clean |
 
