@@ -375,6 +375,9 @@ def main() -> int:
                     if not byte:
                         continue
                 output.extend(byte)
+                sys.stdout.buffer.write(byte)
+                if byte == b"\n":
+                    sys.stdout.buffer.flush()
                 if byte in b"WR].":
                     events.append((time.monotonic() - started, byte.decode("ascii")))
                 if acceptance_reached(
@@ -399,7 +402,7 @@ def main() -> int:
 
     elapsed = time.monotonic() - started
     decoded_output = output.decode("ascii", errors="replace")
-    sys.stdout.write(decoded_output)
+    sys.stdout.buffer.flush()
     if output and output[-1:] != b"\n":
         sys.stdout.write("\n")
     capture_name = (
