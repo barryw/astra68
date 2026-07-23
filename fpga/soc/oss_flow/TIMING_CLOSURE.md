@@ -2825,3 +2825,50 @@ normal `77B3CDC8` candidate; the current SRAM-loaded system is deliberately
 halted on the guard ROM with normal AstraHost installed. Only the physical
 lifecycle-soak gate remains. No RTL, mapped resource, placement, route,
 bitstream, or constrained-clock result changed.
+
+### Physical lifecycle-soak launch
+
+NUC provisioned pinned lifecycle-soak AstraHost app SHA-256
+`5e3fc8691da085da408fa8baeb2548143a02b4c7de2c3c10986fb7bd4f13c7c9`.
+The ESP preserved the existing 244,016 MB card and atomically replaced only
+`/ASTRA68.ROM`, reporting the exact 36,288-byte payload at CRC32 `B138EB36`.
+Retained provisioning log `docs/evidence/k1-77b3cdc8-soak-provision.log` has
+SHA-256
+`483f77b140d083cf5658fc076240d88fa99aaad9764c08e6d2477f454f5e3cde`.
+Normal read-only AstraHost app SHA-256
+`b4ec0fe43ffc7012758024576757df11892be0005e8e68fc282879448de962c2`
+was restored before any production FPGA load.
+
+The initial 10-cycle hardware run exposed an acceptance-tool flaw: the old
+regular expression could match `free=7` at the temporary end of the byte buffer
+before `987` and the line terminator arrived. Kernel-side baseline validation
+had passed, but that truncated host transcript was rejected as release evidence.
+Commit `a363c7c` requires a terminated checkpoint and exact equality with the
+ROM-announced baseline; commit `254d0f6` streams and flushes each UART line so
+long-run evidence survives interruption. All 21 boot-tool tests pass. The exact
+checker copied to NUC has SHA-256
+`7ab14afacde4cb80fe90d35045d3966b15779b18c9fec1953ad139658fae0784`.
+
+A fresh physical 100-cycle run with that checker passes exact build
+`77B3CDC8`, ROM CRC32 `B138EB36`, complete POST, K1 protected entry, and
+checkpoints 4, 10, and 100. Cycle 100 reports 203 switches, 558 ticks, syscall
+count `0x00000000000008EC`, and exactly 7,987 free pages after 29.440 seconds.
+Retained log `docs/evidence/k1-77b3cdc8-soak-100-hw.log` has SHA-256
+`59cb09b9a8a0b4b253d9ae8cd661718c82bead9d7bcbdf7568f6f8ced9cfeb27`.
+
+The final 500,000-cycle run started at 2026-07-23 15:35:12 EDT under NUC user
+service `astra-k1-soak-500k`, invocation
+`e03e0b123fd548eca5d5892cc5c74aef`, main PID 1916480. Its command binds the
+same production bitstream, expected build `77B3CDC8`, ROM CRC32 `B138EB36`,
+500,000 cycles, and a 172,800-second checker timeout. Live log
+`/tmp/k1-soak-500000-hw.log` already contains complete cycles 4, 10, and 100
+at the exact 7,987-page baseline. The 100-cycle cadence projects roughly 39
+hours. Do not reconfigure the FPGA, reset the board, open the FTDI port, or
+launch a competing hardware checker while the service is active.
+
+Disposition: physical 100-cycle soak checkpoint PASS; final physical
+500,000-cycle gate ACTIVE. No RTL, mapped resource, placement, route,
+bitstream, or constrained-clock result changed. Promotion remains incomplete
+until the service exits zero after a complete cycle-500000 line at the same
+baseline, the final log is retained, and the normal ROM is restored and
+revalidated from persistent flash.

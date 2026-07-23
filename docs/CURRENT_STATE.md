@@ -328,8 +328,25 @@ separates implemented evidence from planned work.
   `docs/evidence/k1-77b3cdc8-guard-hdmi.png` has SHA-256
   `d7289448fb1453fee1e6be617eaad00d458d267f68183416f83ebfa1a827dce1`.
   The board is currently SRAM-loaded with the unchanged production bitstream,
-  halted on the guard diagnostic; persistent FPGA flash remains `77B3CDC8` and
-  normal AstraHost firmware is installed.
+  running the exact lifecycle-soak ROM; persistent FPGA flash remains
+  `77B3CDC8` and normal AstraHost firmware is installed. NUC provisioned the
+  exact 36,288-byte soak payload at CRC32 `B138EB36`; provisioning-log SHA-256
+  is `483f77b140d083cf5658fc076240d88fa99aaad9764c08e6d2477f454f5e3cde`.
+  A 100-cycle hardware qualification reaches K1 entry and reports cycles 4,
+  10, and 100 at the unchanged 7,987-page baseline in 29.440 seconds; its log
+  SHA-256 is
+  `59cb09b9a8a0b4b253d9ae8cd661718c82bead9d7bcbdf7568f6f8ced9cfeb27`.
+  That run exposed a host-checker partial-line match, not a kernel failure:
+  commit `a363c7c` requires a terminated checkpoint and exact equality with the
+  announced baseline, while `254d0f6` streams each complete UART line durably.
+  All 21 boot-tool tests pass. The final 500,000-cycle run started on NUC at
+  2026-07-23 15:35:12 EDT as user service `astra-k1-soak-500k`, invocation
+  `e03e0b123fd548eca5d5892cc5c74aef`, using checker SHA-256
+  `7ab14afacde4cb80fe90d35045d3966b15779b18c9fec1953ad139658fae0784`.
+  Its live log `/tmp/k1-soak-500000-hw.log` already preserves complete cycles
+  4, 10, and 100 at exactly 7,987 free pages. Do not reconfigure the FPGA,
+  reset the board, open the FTDI port, or start a competing checker while this
+  service is active.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,

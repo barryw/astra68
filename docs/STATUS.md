@@ -52,7 +52,7 @@ must not be presented as working software.
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
 | panic to console and retained early log | CURRENT HW | exact direct and supervisor-guard panic paths pass full RTL plus physical HDMI/log qualification |
 | K1 host analyzer/sanitizer gates | CURRENT | 11 suites, analyzer, ASan/UBSan |
-| deterministic lifecycle-soak harness | CURRENT SIM | exact four-cycle full RTL and 100-cycle Musashi pass; independent Beast and NUC runs each completed 500,000 cycles without drift |
+| deterministic lifecycle-soak harness | CURRENT SIM/ACTIVE HW | exact four-cycle full RTL, dual-host 500,000-cycle Musashi, and physical 100-cycle run pass without drift; physical 500,000-cycle service is active |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
 | CACR independent I/D commands | CURRENT RTL | Motorola-directed mixed CI/CD decoder test; strict inventory 140/114 clean |
 | RESET preserves roots and ATC until explicit flush | CURRENT RTL/ROUTED | stale-ATC/reset/`PFLUSHA` regression; strict inventory 140/114 clean; exact full mapping has zero SCCs and exact route passes all clocks |
@@ -117,7 +117,14 @@ must not be presented as working software.
   The checker transcript SHA-256 is
   `01aa5fd5d578ad94291a82f9f771df89395274c0ac7a9a42cf702784d9abc0d0`.
 - Therefore K1 is not yet a fully hardware-qualified kernel or production-ready.
-  The hardware lifecycle soak remains.
+  The final hardware lifecycle soak is running.
+- NUC user service `astra-k1-soak-500k`, invocation
+  `e03e0b123fd548eca5d5892cc5c74aef`, started at 2026-07-23 15:35:12 EDT with
+  exact soak ROM CRC32 `B138EB36` and checker commit `254d0f6`. The hardened
+  live log already records cycles 4, 10, and 100 at the exact 7,987-page
+  baseline. Completion requires a terminated 500,000-cycle checkpoint with
+  nonzero switches/ticks/syscalls and the same baseline; do not disturb the
+  board or FTDI port while the service is active.
 
 ## Required before K1 release
 
@@ -131,7 +138,7 @@ must not be presented as working software.
 | Motorola RESET/ATC preservation and boot-flush regression | CURRENT RTL/ROUTED/HW; automatic reset-from-flash K1 boot passes |
 | exact 12.5 MHz CPU / 60 MHz SDRAM complete route | CURRENT; all clocks, LUT permutation, POR, font ROM, and `kernel_platform_v1` gates pass without waiver |
 | repeated ULX3S POST, SDRAM, PMMU, timer, fault, HDMI | CURRENT; three exact SRAM boots, physical HDMI, and automatic reset-from-flash boot pass |
-| long context/syscall/fault/allocation soak | CURRENT SIM; independent Beast and NUC runs each passed 500,000 cycles with the 7,987-page baseline unchanged; hardware soak remains |
+| long context/syscall/fault/allocation soak | ACTIVE HW; dual-host 500,000-cycle simulation and physical 100-cycle proof pass at baseline 7,987, final 500,000-cycle NUC service is running |
 | panic HDMI and retained-log check on physical board | CURRENT; exact direct-panic and supervisor-guard paths pass |
 
 ## Partial or transitional K1 code
@@ -189,8 +196,9 @@ must not be presented as working software.
 
 ## Next actions
 
-1. run the exact hardware lifecycle soak, retain its bounded-resource result,
-   then restore normal ROM CRC32 `EB1B381F` and persistent K1 boot;
+1. monitor existing NUC service `astra-k1-soak-500k` through its exact
+   500,000-cycle checkpoint without touching the FPGA or FTDI port, retain the
+   final log, then restore normal ROM CRC32 `EB1B381F` and persistent K1 boot;
 2. audit every K1 acceptance requirement and update the release records;
 3. implement and benchmark 8 KiB against the retained 4 KiB oracle before
    freezing the stable VM ABI.
