@@ -2730,5 +2730,8 @@ The normal read-only AstraHost application remains SHA-256
 `b4ec0fe43ffc7012758024576757df11892be0005e8e68fc282879448de962c2`
 and contains no embedded provisioning package. The committed hardware checker
 also accepts the complete exact direct-panic and guard-panic RTL transcripts;
-the guard expectation is bound to fault address `0x02028000`. These checks
-prepare the physical tests but do not count as physical panic evidence.
+the guard expectation is bound to fault address `0x02028000`. Beast's retained
+`k1_panic.rom` and `k1_guard.rom` full-RTL inputs have the exact same package
+hashes as the bytes extracted from the NUC firmware, so no diagnostic rebuild
+exists between simulation and hardware provisioning. These checks prepare the
+physical tests but do not count as physical panic evidence.

@@ -293,7 +293,9 @@ separates implemented evidence from planned work.
   its header CRC, payload CRC, size, load address, and reset vectors. The normal
   read-only AstraHost application remains
   `b4ec0fe43ffc7012758024576757df11892be0005e8e68fc282879448de962c2`
-  and contains no provisioning package.
+  and contains no provisioning package. The extracted direct-panic and guard
+  packages are byte-identical to Beast's `k1_panic.rom` and `k1_guard.rom`
+  artifacts used by the passing exact full-RTL diagnostics.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,
