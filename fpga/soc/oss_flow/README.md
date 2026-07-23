@@ -152,6 +152,28 @@ rtk proxy ssh nuc "python3 /tmp/astra68-check-hardware.py \
 The soak counter advances only after an offender was preempted, faulted,
 reaped, returned all pages to the captured baseline, and was relaunched.
 
+For an intentional panic ROM, require the complete panic and halt rather than
+treating the panic banner as an ordinary hardware failure:
+
+```sh
+rtk proxy ssh nuc "python3 /tmp/astra68-check-hardware.py \
+  --expect-build <8-hex-build-id> --expect-rom-crc <8-hex-rom-crc32> \
+  --expect-kernel-panic"
+```
+
+A directed guard-page diagnostic also binds acceptance to the exact reported
+fault address:
+
+```sh
+rtk proxy ssh nuc "python3 /tmp/astra68-check-hardware.py \
+  --expect-build <8-hex-build-id> --expect-rom-crc <8-hex-rom-crc32> \
+  --expect-kernel-panic --expect-panic-fault <8-hex-address>"
+```
+
+Both modes still require `POST PASS`. The panic banner must follow POST and
+`SYSTEM HALTED` must follow the banner in the same capture. Without the
+explicit panic option, any kernel panic remains an immediate failure.
+
 For a route that produces no POST bytes, build the diagnostic stage-0 image:
 
 ```sh
