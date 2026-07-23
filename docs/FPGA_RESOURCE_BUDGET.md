@@ -135,10 +135,13 @@ the exact K1 result, and the identical bitstream is now persistent; its
 automatic reset-from-flash boot passes the same gate in 2.132 seconds. Physical
 direct-panic HDMI/log qualification also passes with the unchanged image.
 Physical supervisor-guard HDMI/log qualification passes at exact fault address
-`0x02028000` as well. A physical 100-cycle lifecycle run passes at the exact
-7,987-page baseline; the final 500,000-cycle NUC service is active, so
-hardware-soak qualification remains open. No resource, route, or timing result
-changed during hardware promotion, either panic test, or soak launch.
+`0x02028000` as well. A physical lifecycle run passes through cycle 1,000 at
+the exact 7,987-page baseline. The impractical 500,000-cycle board run was
+stopped intentionally; normal ROM CRC32 `EB1B381F`, read-only AstraHost, and
+the unchanged production bitstream were restored and revalidated in 2.111
+seconds. Bounded hardware burn-in remains open. No resource, route, or timing
+result changed during hardware promotion, either panic test, the soak, or
+normal restoration.
 
 ## B1F9E60D rollback comparison
 

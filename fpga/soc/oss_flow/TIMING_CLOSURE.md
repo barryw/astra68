@@ -2876,3 +2876,71 @@ bitstream, or constrained-clock result changed. Promotion remains incomplete
 until the service exits zero after a complete cycle-500000 line at the same
 baseline, the final log is retained, and the normal ROM is restored and
 revalidated from persistent flash.
+
+### Physical soak stop, latency diagnosis, and normal restoration
+
+The prior launch record is retained as measured history, but its 500,000-cycle
+physical acceptance target is superseded. At the user's direction, NUC stopped
+`astra-k1-soak-500k` intentionally after the complete cycle-1,000 checkpoint.
+The service exited cleanly with no checker, loader, or ESP flashing process
+left behind. The final partial log is byte-identical to retained evidence
+`docs/evidence/k1-77b3cdc8-soak-1000-hw.log`, SHA-256
+`4229a2e698707d4892d5e13797a496596f426ae8bd5457586135ae77a667893b`.
+It reports 1,000 fault/reap cycles, 2,003 context switches, 5,536 delivered
+timer interrupts, syscall count `0x0000000000005717`, and the unchanged
+7,987-free-page baseline. No panic, failed checkpoint, or resource drift
+occurred.
+
+The measured 100-cycle run took 29.440 seconds, projecting about 41 hours for
+500,000 cycles. Source inspection identifies a software latency path rather
+than a CPU-clock or routed-clock failure:
+
+- `kernel_vm_destroy_address_space()` scans a 1,024-entry root and each
+  populated 1,024-entry page table;
+- allocation and release poison complete 4 KiB pages word by word;
+- `kernel_memory_release_owner()` makes two complete passes over all 8,192
+  frame records for every offender; and
+- the format-A user-fault entry keeps IPL 7 through synchronous retirement and
+  reclamation.
+
+The owner scans alone imply 8.192 billion frame-record examinations at 500,000
+iterations. Vesta itself runs from the exact 12.5 MHz CPU clock with a
+125,000-cycle period. Its expiration state is one pending bit, so repeated
+10 ms periods coalesce while IPL 7 is held. The kernel's tick counter records
+delivered interrupts, not elapsed timer periods; 558 delivered ticks during
+the 100-cycle wall-time capture therefore do not establish a 20 Hz timer.
+Disposition: no RTL clock defect is demonstrated. The active kernel blocker is
+unbounded process reclamation in the exception-disabled interval.
+
+NUC then volatile-loaded maintenance bitstream SHA-256
+`2b423314c35ef00fc16929aaf72f536906abba4b602bfd79ab537e4b78185471`,
+used the exact normal one-shot AstraHost application SHA-256
+`b6485d0e1737b18d1c4faece75efe9a21a5ed01c109d05b44d2ff7e81bd61fe4`
+with packaged ROM SHA-256
+`fea76d8553d7b4f6a042b399e669e480d26061e6bb633646829989d187599b51`,
+and atomically restored only `/ASTRA68.ROM`. The ESP reported exact 35,360-byte
+payload CRC32 `EB1B381F`; the existing 244,016 MB card was mounted without
+formatting. Normal read-only AstraHost application SHA-256
+`b4ec0fe43ffc7012758024576757df11892be0005e8e68fc282879448de962c2`
+was restored before the unchanged production FPGA image was reloaded.
+
+The final bounded NUC check uses source snapshot
+`77b3cdc8fddb984850073a2c2cb5998bbbe1d857`, production bitstream SHA-256
+`56f768b2d78801f6cc93a7c518643f1012e30f48241e0d77be8250f97c1c2755`,
+build `77B3CDC8`, and ROM CRC32 `EB1B381F`. It passes complete POST, 32 MiB
+BIST, PMMU enable, user-copy recovery, timer startup, process isolation,
+offender-only fault containment, and `K1 PROTECTED ENTRY PASS` in 2.111
+seconds. Retained transcript
+`docs/evidence/k1-77b3cdc8-normal-restored-after-soak.log` has SHA-256
+`4505cb1b81c6b030df02d7ddf1997c16b532ecdb44c43f35403142da8413a150`.
+Persistent FPGA flash remains the same exact K1 candidate, and the board is
+available for development.
+
+No RTL, ROM source, synthesis, placement, route, or packing run occurred in
+this checkpoint. Resources remain 66,513/83,640 TRELLIS_COMB, 101/208 DP16KD,
+and 18/156 multipliers. Routed clocks remain 14.179972 MHz CPU against the
+12.5 MHz requirement and 61.270760 MHz SDRAM against 60.002399 MHz, with all
+other production domains passing. Hardware acceptance now uses the bounded
+candidate and 30-minute mixed burn-in gates in
+`docs/TEST_AND_FAULT_INJECTION_PLAN.md`; exhaustive 500,000-cycle repetition
+remains dual-host Musashi evidence rather than a board-monopolizing gate.

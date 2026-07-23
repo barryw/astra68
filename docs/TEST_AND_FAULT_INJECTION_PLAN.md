@@ -129,8 +129,23 @@ closes handles, and returns every counter to baseline.
 | host state machines | 1,000,000 operations/seed, 100 seeds |
 | full RTL nightly | 1,000 context switches and 100 complete teardown cycles |
 | Musashi | 1,000,000 context switches and 100,000 teardown cycles |
-| routed ULX3S | 24 continuous hours and at least 8,640,000 timer ticks |
-| routed ULX3S reboot | 100 warm resets and 25 cold power cycles |
+| routed ULX3S candidate | 1,000 teardown cycles and at least 5 continuous minutes |
+| routed ULX3S release burn-in | 30 continuous minutes, at least 5,000 teardown cycles, and cycle-counter proof of elapsed time |
+| routed ULX3S reboot | 10 warm resets and 3 cold power cycles |
+
+Long exhaustive repetition belongs on host and Musashi, where it can run in
+parallel without monopolizing the only development board. Physical testing
+concentrates on failure modes simulation cannot establish: the routed image,
+real SDRAM, clocks, CDC paths, reset behavior, HDMI, SPI, and thermal stability.
+An optional longer burn-in may run when the board is otherwise idle, but it is
+not a prerequisite for unrelated kernel development.
+
+The scheduler's delivered-interrupt count is not an elapsed-time oracle. Vesta
+uses one pending expiration bit, so periods coalesce while interrupts are
+masked. Hardware soak timing must use the 64-bit CPU cycle counter or an
+independent host clock, and must report both elapsed periods and delivered
+interrupts. A large discrepancy is a latency failure to investigate, not a
+reason to extend the soak.
 
 Pass requires zero panic, hang, unexpected fault, stale completion, monotonic
 memory growth, reference/pin drift, queue growth, or output mismatch. First and

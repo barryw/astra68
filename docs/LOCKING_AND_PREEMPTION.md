@@ -22,6 +22,14 @@ interrupts around maintenance and remasks them before reading or replacing the
 saved user context. The 100 Hz hard timer path only acknowledges, records the
 tick, and requests scheduling.
 
+**CURRENT K1 violation:** user-fault retirement calls synchronous address-space
+destruction and owner-frame release before leaving the IPL-7 exception entry.
+The physical lifecycle run demonstrated that this spans multiple 10 ms timer
+periods. Vesta coalesces those expirations into one pending bit. K1 release
+therefore requires fault entry to mark the process dead, select a runnable
+context, and queue reclamation only; page-table walks, poisoning, handle close,
+and frame release run later with interrupts enabled in bounded deferred work.
+
 ## Preemption model
 
 **CURRENT K1:** four process slots, one thread each, 100 Hz periodic timer,

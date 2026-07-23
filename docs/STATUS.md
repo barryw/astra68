@@ -52,7 +52,7 @@ must not be presented as working software.
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
 | panic to console and retained early log | CURRENT HW | exact direct and supervisor-guard panic paths pass full RTL plus physical HDMI/log qualification |
 | K1 host analyzer/sanitizer gates | CURRENT | 11 suites, analyzer, ASan/UBSan |
-| deterministic lifecycle-soak harness | CURRENT SIM/ACTIVE HW | exact four-cycle full RTL, dual-host 500,000-cycle Musashi, and physical 100-cycle run pass without drift; physical 500,000-cycle service is active |
+| deterministic lifecycle-soak harness | CURRENT SIM/PARTIAL HW | exact four-cycle full RTL, dual-host 500,000-cycle Musashi, and physical 1,000-cycle run pass without drift; the impractical 500,000-cycle board run was stopped intentionally |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
 | CACR independent I/D commands | CURRENT RTL | Motorola-directed mixed CI/CD decoder test; strict inventory 140/114 clean |
 | RESET preserves roots and ATC until explicit flush | CURRENT RTL/ROUTED | stale-ATC/reset/`PFLUSHA` regression; strict inventory 140/114 clean; exact full mapping has zero SCCs and exact route passes all clocks |
@@ -68,8 +68,8 @@ must not be presented as working software.
   not the staged K1 kernel.
 - K-HW3 table-walk arbitration, K-HW4 timer/IACK changes, and K1 are integrated
   in exact build `77B3CDC8`, fully routed together, and exercised by three
-  passing volatile SRAM boots plus an automatic reset-from-flash boot. Physical
-  panic and hardware-soak qualification remain open.
+  passing volatile SRAM boots plus an automatic reset-from-flash boot. Both
+  physical panic paths pass; bounded hardware burn-in remains open.
 - Exact build `66D6094F` completed a timing-clean strict route on Beast as
   useful diagnostic physical evidence. It predates the PMMU reset correction
   and cannot be a release image or be loaded onto the board.
@@ -117,15 +117,22 @@ must not be presented as working software.
   The checker transcript SHA-256 is
   `01aa5fd5d578ad94291a82f9f771df89395274c0ac7a9a42cf702784d9abc0d0`.
 - Therefore K1 is not yet a fully hardware-qualified kernel or production-ready.
-  The final hardware lifecycle soak is running.
+  Bounded interrupt latency, production teardown, and a time-boxed mixed
+  hardware burn-in remain open.
 - NUC user service `astra-k1-soak-500k`, invocation
-  `e03e0b123fd548eca5d5892cc5c74aef`, started at 2026-07-23 15:35:12 EDT with
-  exact soak ROM CRC32 `B138EB36` and checker commit `254d0f6`. The hardened
-  live log already records cycles 4, 10, 100, and 1,000 at the exact 7,987-page
-  baseline; cycle 1,000 has 2,003 switches, 5,536 ticks, and syscall count
-  `0x5717`. Completion requires a terminated 500,000-cycle checkpoint with the
-  same baseline; do not disturb the board or FTDI port while the service is
-  active.
+  `e03e0b123fd548eca5d5892cc5c74aef`, was stopped intentionally after its exact
+  cycle-1,000 checkpoint. Cycles 4, 10, 100, and 1,000 all retain the exact
+  7,987-page baseline; cycle 1,000 has 2,003 switches, 5,536 delivered timer
+  interrupts, and syscall count `0x5717`. The run exposed an unsuitable test
+  shape: each fault teardown executes at IPL 7, scans page tables, poisons
+  pages, and makes two complete 8,192-frame owner scans. Vesta's single pending
+  expiration bit also coalesces periods while interrupts are masked, so the
+  tick count is not elapsed time. Normal ROM CRC32 `EB1B381F`, normal read-only
+  AstraHost, and production bitstream `77B3CDC8` are restored. Retained
+  restoration log
+  `docs/evidence/k1-77b3cdc8-normal-restored-after-soak.log` has SHA-256
+  `4505cb1b81c6b030df02d7ddf1997c16b532ecdb44c43f35403142da8413a150`
+  and passes the complete gate in 2.111 seconds.
 
 ## Required before K1 release
 
@@ -139,7 +146,7 @@ must not be presented as working software.
 | Motorola RESET/ATC preservation and boot-flush regression | CURRENT RTL/ROUTED/HW; automatic reset-from-flash K1 boot passes |
 | exact 12.5 MHz CPU / 60 MHz SDRAM complete route | CURRENT; all clocks, LUT permutation, POR, font ROM, and `kernel_platform_v1` gates pass without waiver |
 | repeated ULX3S POST, SDRAM, PMMU, timer, fault, HDMI | CURRENT; three exact SRAM boots, physical HDMI, and automatic reset-from-flash boot pass |
-| long context/syscall/fault/allocation soak | ACTIVE HW; dual-host 500,000-cycle simulation and physical 100-cycle proof pass at baseline 7,987, final 500,000-cycle NUC service is running |
+| long context/syscall/fault/allocation soak | PARTIAL HW; dual-host 500,000-cycle simulation and physical 1,000-cycle proof pass at baseline 7,987; a 30-minute mixed hardware burn-in remains after teardown latency is bounded |
 | panic HDMI and retained-log check on physical board | CURRENT; exact direct-panic and supervisor-guard paths pass |
 
 ## Partial or transitional K1 code
@@ -154,6 +161,10 @@ must not be presented as working software.
   revocation. Filesystem/block policy still belongs in a user service.
 - Teardown drains at syscall safe points and supervisor idle because no kernel
   worker thread exists yet. Hard IRQ does not perform teardown.
+- User-fault retirement still destroys the address space and releases its owner
+  synchronously from the IPL-7 exception path. This is bounded by neither owned
+  objects nor time and must be replaced with minimal fault retirement plus
+  deferred reclamation before K1 release.
 - The diagnostic UART mirror is emergency FTDI output only. ESP runtime
   communication is SPI.
 
@@ -197,9 +208,11 @@ must not be presented as working software.
 
 ## Next actions
 
-1. monitor existing NUC service `astra-k1-soak-500k` through its exact
-   500,000-cycle checkpoint without touching the FPGA or FTDI port, retain the
-   final log, then restore normal ROM CRC32 `EB1B381F` and persistent K1 boot;
-2. audit every K1 acceptance requirement and update the release records;
-3. implement and benchmark 8 KiB against the retained 4 KiB oracle before
+1. move user-fault destruction out of the IPL-7 exception path, track frames by
+   owner instead of scanning all 8,192 records, and measure maximum
+   interrupts-disabled time with the 64-bit cycle counter;
+2. run the bounded candidate and 30-minute mixed hardware burn-in gates without
+   blocking unrelated host, Musashi, RTL, or kernel work;
+3. audit every K1 acceptance requirement and update the release records;
+4. implement and benchmark 8 KiB against the retained 4 KiB oracle before
    freezing the stable VM ABI.

@@ -285,9 +285,11 @@ separates implemented evidence from planned work.
   `docs/evidence/k1-77b3cdc8-flash-reset.log`, SHA-256
   `deeaba2d4acdb5fbc5115085b4f751796ce11079cc68ded319c43117d17b0e97`.
   Persistent FPGA flash now contains exact K1 candidate `77B3CDC8`. The
-  physical direct-panic and supervisor-guard diagnostics now also pass; the
-  remaining release gate is the hardware lifecycle soak. Routing, normal boot,
-  persistent promotion, and panic qualification do not waive it.
+  physical direct-panic and supervisor-guard diagnostics now also pass.
+  Hardware lifecycle qualification is partial: 1,000 physical teardown cycles
+  retain the exact resource baseline, while bounded interrupt latency and the
+  time-boxed mixed release burn-in remain open. Routing, normal boot,
+  persistent promotion, and panic qualification do not waive those gates.
 - The one-shot physical diagnostic identities are pinned before use.
   Their AstraHost application SHA-256 values are
   `1c579fa99a2041e82342839ac7f6372e11ccc896ed10e7dcb5ce2a5b07fc35fe`
@@ -327,9 +329,7 @@ separates implemented evidence from planned work.
   Physical HDMI independently shows every field;
   `docs/evidence/k1-77b3cdc8-guard-hdmi.png` has SHA-256
   `d7289448fb1453fee1e6be617eaad00d458d267f68183416f83ebfa1a827dce1`.
-  The board is currently SRAM-loaded with the unchanged production bitstream,
-  running the exact lifecycle-soak ROM; persistent FPGA flash remains
-  `77B3CDC8` and normal AstraHost firmware is installed. NUC provisioned the
+  NUC provisioned the
   exact 36,288-byte soak payload at CRC32 `B138EB36`; provisioning-log SHA-256
   is `483f77b140d083cf5658fc076240d88fa99aaad9764c08e6d2477f454f5e3cde`.
   A 100-cycle hardware qualification reaches K1 entry and reports cycles 4,
@@ -339,17 +339,34 @@ separates implemented evidence from planned work.
   That run exposed a host-checker partial-line match, not a kernel failure:
   commit `a363c7c` requires a terminated checkpoint and exact equality with the
   announced baseline, while `254d0f6` streams each complete UART line durably.
-  All 21 boot-tool tests pass. The final 500,000-cycle run started on NUC at
+  All 21 boot-tool tests pass. A planned 500,000-cycle run started on NUC at
   2026-07-23 15:35:12 EDT as user service `astra-k1-soak-500k`, invocation
   `e03e0b123fd548eca5d5892cc5c74aef`, using checker SHA-256
   `7ab14afacde4cb80fe90d35045d3966b15779b18c9fec1953ad139658fae0784`.
-  Its live log `/tmp/k1-soak-500000-hw.log` already preserves complete cycles
+  It was stopped intentionally after preserving complete cycles
   4, 10, 100, and 1,000 at exactly 7,987 free pages. Cycle 1,000 reports 2,003
   switches, 5,536 ticks, and syscall count `0x5717`; retained snapshot
   `docs/evidence/k1-77b3cdc8-soak-1000-hw.log` has SHA-256
   `4229a2e698707d4892d5e13797a496596f426ae8bd5457586135ae77a667893b`.
-  Do not reconfigure the FPGA, reset the board, open the FTDI port, or start a
-  competing checker while this service is active.
+  Source inspection explains the roughly 0.29-second lifecycle: the user-fault
+  path runs at IPL 7, scans a 1,024-entry root plus populated 1,024-entry page
+  tables, poisons whole 4 KiB pages, and makes two full 8,192-frame owner scans.
+  Vesta has one pending expiration bit, so masked 10 ms periods coalesce and
+  the 5,536 count measures delivered interrupts rather than elapsed 100 Hz
+  periods. Exhaustive 500,000-cycle coverage remains on independent Musashi
+  hosts; physical qualification uses bounded candidate and 30-minute mixed
+  burn-in gates.
+
+  NUC then atomically restored only the exact normal payload CRC32 `EB1B381F`,
+  normal read-only AstraHost application SHA-256
+  `b4ec0fe43ffc7012758024576757df11892be0005e8e68fc282879448de962c2`,
+  and production bitstream SHA-256
+  `56f768b2d78801f6cc93a7c518643f1012e30f48241e0d77be8250f97c1c2755`.
+  The complete normal gate passes again in 2.111 seconds. Retained log
+  `docs/evidence/k1-77b3cdc8-normal-restored-after-soak.log` has SHA-256
+  `4505cb1b81c6b030df02d7ddf1997c16b532ecdb44c43f35403142da8413a150`.
+  The board and FTDI port are available; persistent FPGA flash remains exact
+  `77B3CDC8`.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,
