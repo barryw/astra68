@@ -277,9 +277,6 @@ static KernelProcessStatus retire_current(KernelProcessExitReason reason,
         if (status != KERNEL_PROCESS_OK)
             return status;
     }
-    status = finish_reap(retiring);
-    if (status != KERNEL_PROCESS_OK && status != KERNEL_PROCESS_DEFERRED)
-        return status;
     check_milestone();
     return next_slot < 0 ? KERNEL_PROCESS_NO_RUNNABLE : KERNEL_PROCESS_OK;
 }

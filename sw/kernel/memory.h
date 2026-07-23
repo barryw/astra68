@@ -9,6 +9,7 @@
 #define KERNEL_PAGE_SHIFT 12u
 #define KERNEL_PAGE_SIZE  (1u << KERNEL_PAGE_SHIFT)
 #define KERNEL_MAX_FRAMES (32u * 1024u * 1024u / KERNEL_PAGE_SIZE)
+#define KERNEL_MAX_FRAME_OWNERS 64u
 #define KERNEL_OWNER_NONE 0u
 
 typedef enum KernelFrameState {
@@ -48,6 +49,9 @@ typedef struct KernelMemoryStats {
     uint32_t free_frames;
     uint32_t high_water_frames;
     uint32_t allocation_failures;
+    uint32_t owner_slots_used;
+    uint32_t owner_release_operations;
+    uint32_t owner_release_frame_visits;
 } KernelMemoryStats;
 
 KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info);

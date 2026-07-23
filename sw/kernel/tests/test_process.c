@@ -220,6 +220,8 @@ static void test_preemption_fault_containment_and_teardown(void)
     static const uint8_t image[] = {0x70u, 0x01u, 0x4eu, 0x4fu,
                                     0x60u, 0xfau, 0x4eu, 0x71u};
     KernelMemoryStats baseline;
+    KernelMemoryStats before_fault;
+    KernelMemoryStats after_fault;
     KernelMemoryStats final;
     KernelProcessSnapshot survivor;
     KernelProcessSnapshot offender;
@@ -269,9 +271,14 @@ static void test_preemption_fault_containment_and_teardown(void)
     make_frame(frame, 0xau, 2u, KERNEL_PROCESS_CODE_BASE + 6u,
                0x60000000u);
     registers[2] = 1u;
+    assert(kernel_memory_stats(&before_fault));
     assert(kernel_process_on_fault(registers,
                                    KERNEL_PROCESS_STACK_TOP - 32u, frame,
                                    &next) == KERNEL_PROCESS_OK);
+    assert(kernel_memory_stats(&after_fault));
+    assert(after_fault.free_frames == before_fault.free_frames);
+    assert(after_fault.owner_release_operations ==
+           before_fault.owner_release_operations);
     assert(next != NULL);
     assert(kernel_process_snapshot(1u, &offender));
     assert(offender.process_state == KERNEL_PROCESS_EXITING);
@@ -279,6 +286,9 @@ static void test_preemption_fault_containment_and_teardown(void)
     assert(offender.exit_reason == KERNEL_PROCESS_EXIT_USER_FAULT);
     assert(offender.fault_vector == 2u);
     assert(offender.fault_address == 0x60000000u);
+    assert(kernel_process_stats(&stats));
+    assert(stats.completed_teardowns == 0u);
+    assert(stats.completed_user_fault_teardowns == 0u);
 
     assert(kernel_process_maintenance() == KERNEL_PROCESS_DEFERRED);
     assert(kernel_process_snapshot(1u, &offender));
@@ -321,6 +331,9 @@ static void test_preemption_fault_containment_and_teardown(void)
     assert(next == NULL);
     assert(!kernel_process_active());
     assert(kernel_memory_stats(&final));
+    assert(final.free_frames < baseline.free_frames);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(kernel_memory_stats(&final));
     assert(final.free_frames == baseline.free_frames);
     assert(kernel_process_stats(&stats));
     assert(stats.live_processes == 0u);
@@ -334,6 +347,7 @@ static void test_soak_relaunches_only_after_exact_teardown(void)
     static const uint8_t image[] = {0x70u, 0x01u, 0x4eu, 0x4fu,
                                     0x60u, 0xfau, 0x4eu, 0x71u};
     KernelMemoryStats survivor_baseline;
+    KernelMemoryStats before_fault;
     KernelMemoryStats between_cycles;
     KernelSchedulerStats stats;
     KernelCpuContext *next;
@@ -360,11 +374,15 @@ static void test_soak_relaunches_only_after_exact_teardown(void)
 
         make_frame(frame, 0xau, 2u, KERNEL_PROCESS_CODE_BASE + 6u,
                    0x60000000u);
+        assert(kernel_memory_stats(&before_fault));
         assert(kernel_process_on_fault(registers,
                                        KERNEL_PROCESS_STACK_TOP - 32u, frame,
                                        &next) == KERNEL_PROCESS_OK);
         assert(kernel_memory_stats(&between_cycles));
-        assert(between_cycles.free_frames == survivor_baseline.free_frames);
+        assert(between_cycles.free_frames == before_fault.free_frames);
+        assert(between_cycles.owner_release_operations ==
+               before_fault.owner_release_operations);
+        assert(between_cycles.free_frames < survivor_baseline.free_frames);
 
         if (cycle == 1u) {
             assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);

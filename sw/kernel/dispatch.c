@@ -11,6 +11,8 @@
 
 #include <stddef.h>
 
+static uint32_t user_fault_irqoff_max_cycles;
+
 #if ASTRA_KERNEL_SCHED_TRACE
 static void scheduler_trace(uint32_t value)
 {
@@ -36,23 +38,40 @@ void kernel_idle_maintenance(void)
     run_deferred_work();
 }
 
+uint32_t kernel_dispatch_user_fault_irqoff_max_cycles(void)
+{
+    return user_fault_irqoff_max_cycles;
+}
+
+static void record_user_fault_irqoff(uint32_t started)
+{
+    uint32_t elapsed = kernel_platform_cpu_cycles_low() - started;
+
+    if (elapsed > user_fault_irqoff_max_cycles)
+        user_fault_irqoff_max_cycles = elapsed;
+}
+
 static KernelCpuContext *dispatch_user_fault(const uint32_t *registers,
                                              const void *raw_frame,
                                              uint32_t user_stack)
 {
     KernelCpuContext *next = NULL;
     KernelProcessStatus status;
+    uint32_t started = kernel_platform_cpu_cycles_low();
 
     if (!kernel_process_active())
         kernel_exception_panic(raw_frame);
     scheduler_trace(0x4b46494eu); /* KFIN */
     status = kernel_process_on_fault(registers, user_stack, raw_frame, &next);
     if (status == KERNEL_PROCESS_NO_RUNNABLE && next == NULL &&
-        !kernel_process_active())
+        !kernel_process_active()) {
+        record_user_fault_irqoff(started);
         return NULL;
+    }
     if (status != KERNEL_PROCESS_OK || next == NULL)
         kernel_panic("user-fault process teardown failed");
     scheduler_trace(0x4b464f55u); /* KFOU */
+    record_user_fault_irqoff(started);
     return next;
 }
 

@@ -49,7 +49,8 @@ $(BUILD_DIR)/entry.o: entry.S kernel.ld | $(BUILD_DIR)
 $(BUILD_DIR)/vectors.o: vectors.S kernel.ld | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/kernel.o: kernel.c $(BUILD_INFO) ../include/astra/boot.h | $(BUILD_DIR)
+$(BUILD_DIR)/kernel.o: kernel.c $(BUILD_INFO) dispatch.h \
+                       ../include/astra/boot.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/platform.o: platform.c platform.h ../include/vesta.h | $(BUILD_DIR)

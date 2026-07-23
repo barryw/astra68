@@ -18,5 +18,6 @@ KernelCpuContext *kernel_timer_entry_dispatch(const uint32_t *registers,
                                               const void *raw_frame,
                                               uint32_t user_stack);
 void kernel_idle_maintenance(void);
+uint32_t kernel_dispatch_user_fault_irqoff_max_cycles(void);
 
 #endif

@@ -32,6 +32,11 @@ uint32_t kernel_platform_ticks(void)
     return tick_count;
 }
 
+uint32_t kernel_platform_cpu_cycles_low(void)
+{
+    return VESTA->CPU_CYCLES_LO;
+}
+
 bool kernel_interrupt_dispatch(void)
 {
     uint32_t current = VESTA->IRQ_CURRENT;

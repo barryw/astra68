@@ -43,6 +43,7 @@ def test_k1_soak_requires_complete_bounded_checkpoint() -> None:
         b"K1 SOAK cycles=100 switches=203 ticks=205 "
         b"syscalls=0x0000000000012345 free=7997\n"
     )
+    latency = b"K1 LATENCY user_fault_irqoff_max=1249 cycles\n"
 
     assert not acceptance_reached(
         prefix, None, False, expect_k1_soak_cycles=100
@@ -52,6 +53,36 @@ def test_k1_soak_requires_complete_bounded_checkpoint() -> None:
     )
     assert acceptance_reached(
         prefix + checkpoint, None, False, expect_k1_soak_cycles=100
+    )
+    assert acceptance_reached(
+        prefix + latency + checkpoint,
+        None,
+        False,
+        expect_k1_soak_cycles=100,
+        expect_k1_fault_max_cycles=1250,
+    )
+    assert not acceptance_reached(
+        prefix + latency + checkpoint,
+        None,
+        False,
+        expect_k1_soak_cycles=100,
+        expect_k1_fault_max_cycles=1248,
+    )
+    assert not acceptance_reached(
+        prefix + checkpoint,
+        None,
+        False,
+        expect_k1_soak_cycles=100,
+        expect_k1_fault_max_cycles=1250,
+    )
+    earlier_checkpoint = checkpoint.replace(b"cycles=100", b"cycles=10")
+    later_latency = b"K1 LATENCY user_fault_irqoff_max=1251 cycles\n"
+    assert not acceptance_reached(
+        prefix + latency + earlier_checkpoint + later_latency + checkpoint,
+        None,
+        False,
+        expect_k1_soak_cycles=100,
+        expect_k1_fault_max_cycles=1250,
     )
     assert not acceptance_reached(
         checkpoint, None, False, expect_k1_soak_cycles=100

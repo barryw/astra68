@@ -84,6 +84,9 @@ static void test_initial_map(void)
     assert(stats.total_frames == 8192u);
     assert(stats.free_frames == 7996u);
     assert(stats.high_water_frames == 196u);
+    assert(stats.owner_slots_used == 0u);
+    assert(stats.owner_release_operations == 0u);
+    assert(stats.owner_release_frame_visits == 0u);
 
     assert(kernel_memory_frame_info(ASTRA_EARLY_LOG_ADDRESS, &frame));
     assert(frame.state == KERNEL_FRAME_EARLY_LOG);
@@ -130,6 +133,7 @@ static void test_allocation_references_and_pins(void)
     assert(kernel_memory_stats(&stats));
     assert(stats.free_frames == before.free_frames - 3u);
     assert(stats.high_water_frames == before.high_water_frames + 3u);
+    assert(stats.owner_slots_used == 1u);
     assert(kernel_memory_range_owned(base + 17u,
                                      2u * KERNEL_PAGE_SIZE,
                                      42u, KERNEL_FRAME_PROCESS, false));
@@ -148,6 +152,7 @@ static void test_allocation_references_and_pins(void)
     assert(kernel_memory_release(base, 3u, 42u) == KERNEL_MEMORY_OK);
     assert(kernel_memory_stats(&stats));
     assert(stats.free_frames == before.free_frames);
+    assert(stats.owner_slots_used == 0u);
     assert(kernel_memory_frame_info(base, &frame));
     assert(frame.state == KERNEL_FRAME_FREE && frame.owner == 0u);
 }
@@ -156,9 +161,11 @@ static void test_owner_teardown_is_atomic_while_dma_is_pinned(void)
 {
     AstraBootInfo info;
     KernelFrameInfo frame;
+    KernelMemoryStats after_busy;
+    KernelMemoryStats after_release;
     uint32_t first;
     uint32_t second;
-    uint32_t released = 0u;
+    uint32_t released = 99u;
 
     make_valid_info(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
@@ -168,23 +175,97 @@ static void test_owner_teardown_is_atomic_while_dma_is_pinned(void)
            KERNEL_MEMORY_OK);
     assert(kernel_memory_pin(second, 1u, 9u) == KERNEL_MEMORY_OK);
     assert(kernel_memory_release_owner(9u, &released) == KERNEL_MEMORY_BUSY);
-    assert(released == 0u);
+    assert(released == 99u);
+    assert(kernel_memory_stats(&after_busy));
+    assert(after_busy.owner_slots_used == 1u);
+    assert(after_busy.owner_release_operations == 1u);
+    assert(after_busy.owner_release_frame_visits == 1u);
     assert(kernel_memory_frame_info(first, &frame));
     assert(frame.owner == 9u);
 
     assert(kernel_memory_unpin(second, 1u, 9u) == KERNEL_MEMORY_OK);
     assert(kernel_memory_release_owner(9u, &released) == KERNEL_MEMORY_OK);
     assert(released == 3u);
+    assert(kernel_memory_stats(&after_release));
+    assert(after_release.owner_slots_used == 0u);
+    assert(after_release.owner_release_operations == 2u);
+    assert(after_release.owner_release_frame_visits == 7u);
     assert(kernel_memory_frame_info(first, &frame));
     assert(frame.state == KERNEL_FRAME_FREE);
     assert(kernel_memory_frame_info(second, &frame));
     assert(frame.state == KERNEL_FRAME_FREE);
 }
 
+static void test_owner_release_work_scales_with_owned_frames(void)
+{
+    AstraBootInfo info;
+    KernelMemoryStats before;
+    KernelMemoryStats after;
+    uint32_t large_base;
+    uint32_t small_base;
+    uint32_t released = 0u;
+
+    make_valid_info(&info);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc(1000u, 1u, KERNEL_FRAME_PROCESS, 7u,
+                               &large_base) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc(3u, 1u, KERNEL_FRAME_PROCESS, 9u,
+                               &small_base) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&before));
+
+    assert(kernel_memory_release_owner(9u, &released) == KERNEL_MEMORY_OK);
+    assert(released == 3u);
+    assert(kernel_memory_stats(&after));
+    assert(after.owner_release_frame_visits -
+               before.owner_release_frame_visits == 6u);
+    assert(after.free_frames == before.free_frames + 3u);
+    assert(kernel_memory_range_owned(large_base, 1000u * KERNEL_PAGE_SIZE,
+                                     7u, KERNEL_FRAME_PROCESS, false));
+    assert(!kernel_memory_range_owned(small_base, 3u * KERNEL_PAGE_SIZE,
+                                      9u, KERNEL_FRAME_PROCESS, false));
+
+    assert(kernel_memory_release_owner(7u, &released) == KERNEL_MEMORY_OK);
+    assert(released == 1000u);
+}
+
+static void test_owner_ledger_capacity_is_bounded_and_reusable(void)
+{
+    AstraBootInfo info;
+    KernelMemoryStats stats;
+    uint32_t bases[KERNEL_MAX_FRAME_OWNERS];
+    uint32_t replacement;
+    uint32_t released;
+
+    make_valid_info(&info);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    for (uint32_t index = 0u; index < KERNEL_MAX_FRAME_OWNERS; ++index) {
+        assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS,
+                                   100u + index, &bases[index]) ==
+               KERNEL_MEMORY_OK);
+    }
+    assert(kernel_memory_stats(&stats));
+    assert(stats.owner_slots_used == KERNEL_MAX_FRAME_OWNERS);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 1000u,
+                               &replacement) == KERNEL_MEMORY_OUT_OF_MEMORY);
+
+    assert(kernel_memory_release_owner(100u, &released) == KERNEL_MEMORY_OK);
+    assert(released == 1u);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 1000u,
+                               &replacement) == KERNEL_MEMORY_OK);
+    for (uint32_t index = 1u; index < KERNEL_MAX_FRAME_OWNERS; ++index) {
+        assert(kernel_memory_release(bases[index], 1u, 100u + index) ==
+               KERNEL_MEMORY_OK);
+    }
+    assert(kernel_memory_release(replacement, 1u, 1000u) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&stats));
+    assert(stats.owner_slots_used == 0u);
+}
+
 static void test_reinit_discards_stale_dynamic_metadata(void)
 {
     AstraBootInfo info;
     KernelFrameInfo frame;
+    KernelMemoryStats stats;
     uint32_t base;
 
     make_valid_info(&info);
@@ -198,6 +279,8 @@ static void test_reinit_discards_stale_dynamic_metadata(void)
     assert(frame.state == KERNEL_FRAME_FREE);
     assert(frame.owner == KERNEL_OWNER_NONE);
     assert(frame.references == 0u && frame.pins == 0u);
+    assert(kernel_memory_stats(&stats));
+    assert(stats.owner_slots_used == 0u);
 }
 
 static void test_exhaustion_and_checked_ranges(void)
@@ -237,6 +320,8 @@ int main(void)
     test_rejects_unclassified_and_unaligned_ram();
     test_allocation_references_and_pins();
     test_owner_teardown_is_atomic_while_dma_is_pinned();
+    test_owner_release_work_scales_with_owned_frames();
+    test_owner_ledger_capacity_is_bounded_and_reusable();
     test_reinit_discards_stale_dynamic_metadata();
     test_exhaustion_and_checked_ranges();
     puts("KERNEL MEMORY PASS");

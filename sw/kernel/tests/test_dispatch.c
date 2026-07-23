@@ -26,6 +26,8 @@ static uint32_t enable_interrupt_calls;
 static uint32_t disable_interrupt_calls;
 static bool interrupts_enabled;
 static bool maintenance_saw_interrupts_enabled;
+static uint32_t cpu_cycle_count;
+static uint32_t cpu_cycle_step;
 static KernelProcessStatus maintenance_result;
 static KernelProcessStatus syscall_result;
 static KernelProcessStatus fault_result;
@@ -68,6 +70,8 @@ static void reset_fakes(void)
     disable_interrupt_calls = 0u;
     interrupts_enabled = false;
     maintenance_saw_interrupts_enabled = false;
+    cpu_cycle_count = 100u;
+    cpu_cycle_step = 37u;
     maintenance_result = KERNEL_PROCESS_OK;
     syscall_result = KERNEL_PROCESS_OK;
     fault_result = KERNEL_PROCESS_OK;
@@ -92,6 +96,14 @@ void kernel_disable_interrupts(void)
 {
     ++disable_interrupt_calls;
     interrupts_enabled = false;
+}
+
+uint32_t kernel_platform_cpu_cycles_low(void)
+{
+    uint32_t current = cpu_cycle_count;
+
+    cpu_cycle_count += cpu_cycle_step;
+    return current;
 }
 
 bool kernel_process_active(void)
@@ -263,7 +275,12 @@ static void test_last_process_fault_enters_idle(void)
     assert(kernel_exception_entry_dispatch(registers, frame, 0x70000f80u) ==
            NULL);
     assert(fault_calls == 1u);
+    assert(maintenance_calls == 0u);
+    assert(enable_interrupt_calls == 0u);
+    assert(disable_interrupt_calls == 0u);
+    assert(!interrupts_enabled);
     assert(!process_is_active);
+    assert(kernel_dispatch_user_fault_irqoff_max_cycles() == 37u);
 }
 
 static void test_idle_runs_deferred_work(void)

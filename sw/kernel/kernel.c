@@ -3,6 +3,7 @@
 #include "kernel_build_info.h"
 #include "block.h"
 #include "dma.h"
+#include "dispatch.h"
 #include "exception.h"
 #include "memory.h"
 #include "panic.h"
@@ -358,6 +359,9 @@ void kernel_process_soak_checkpoint(uint32_t cycles,
         scheduler_stats.completed_teardowns != cycles)
         kernel_panic("K1 soak resource baseline drift");
 
+    console_puts("K1 LATENCY user_fault_irqoff_max=");
+    console_dec32(kernel_dispatch_user_fault_irqoff_max_cycles());
+    console_puts(" cycles\n");
     console_puts("K1 SOAK cycles=");
     console_dec32(cycles);
     console_puts(" switches=");
