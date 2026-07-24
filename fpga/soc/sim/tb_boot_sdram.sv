@@ -127,6 +127,8 @@ module tb_boot_sdram #(
     reg k3_quantum_seen = 1'b0;
     reg k3_deadline_seen = 1'b0;
     reg k3_performance_seen = 1'b0;
+    reg k4_sync_seen = 1'b0;
+    reg k4_marker_seen = 1'b0;
     reg expect_kernel_panic;
     reg expect_kernel_soak = 1'b0;
     reg expect_kernel_guard = 1'b0;
@@ -137,6 +139,11 @@ module tb_boot_sdram #(
     integer parsed_deadline_cycles = 0;
     integer parsed_deadline_budget = 0;
     integer parsed_deadline_overruns = 0;
+    integer parsed_sync_events = 0;
+    integer parsed_sync_semaphores = 0;
+    integer parsed_sync_cancellations = 0;
+    integer parsed_sync_close_wakeups = 0;
+    integer parsed_sync_owner_deaths = 0;
     integer bist_cycles = 0;
     real bist_mbps;
 
@@ -228,6 +235,36 @@ module tb_boot_sdram #(
                     k3_quantum_seen <= 1'b1;
                 if (uart_line == "K3 DEADLINE QUEUE PASS")
                     k3_deadline_seen <= 1'b1;
+                if ($sscanf(uart_line,
+                            "Sync objects ........ %d event, %d sem; cancel/close/death %d/%d/%d",
+                            parsed_sync_events,
+                            parsed_sync_semaphores,
+                            parsed_sync_cancellations,
+                            parsed_sync_close_wakeups,
+                            parsed_sync_owner_deaths) == 5) begin
+                    if (parsed_sync_events < 4 ||
+                        parsed_sync_semaphores != 1 ||
+                        parsed_sync_cancellations != 1 ||
+                        parsed_sync_close_wakeups != 1 ||
+                        parsed_sync_owner_deaths < 1)
+                        $fatal(1,
+                               "K4 synchronization evidence invalid: event=%0d sem=%0d cancel/close/death=%0d/%0d/%0d",
+                               parsed_sync_events,
+                               parsed_sync_semaphores,
+                               parsed_sync_cancellations,
+                               parsed_sync_close_wakeups,
+                               parsed_sync_owner_deaths);
+                    if (!expect_kernel_soak &&
+                        (parsed_sync_events != 4 ||
+                         parsed_sync_owner_deaths != 1))
+                        $fatal(1,
+                               "K4 normal synchronization counts invalid: event=%0d death=%0d",
+                               parsed_sync_events,
+                               parsed_sync_owner_deaths);
+                    k4_sync_seen <= 1'b1;
+                end
+                if (uart_line == "K4 HANDLE SYNCHRONIZATION PASS")
+                    k4_marker_seen <= 1'b1;
                 if (uart_line == "Reason: unhandled processor exception")
                     guard_reason_seen <= 1'b1;
                 if ($sscanf(uart_line, "Fault:  0x%h", parsed_fault_address) == 1 &&
@@ -297,11 +334,13 @@ module tb_boot_sdram #(
                        sdram_be32(25'h0000018));
             if (!expect_kernel_panic &&
                 (!k3_quantum_seen || !k3_deadline_seen ||
-                 !k3_performance_seen))
+                 !k3_performance_seen || !k4_sync_seen ||
+                 !k4_marker_seen))
                 $fatal(1,
-                       "kernel ready without K3 evidence quantum=%b deadline=%b performance=%b",
+                       "kernel ready without K3/K4 evidence quantum=%b deadline=%b performance=%b sync=%b marker=%b",
                        k3_quantum_seen, k3_deadline_seen,
-                       k3_performance_seen);
+                       k3_performance_seen, k4_sync_seen,
+                       k4_marker_seen);
             $display("KERNEL %s PASS status=%08x log_write=%0d wraps=%0d",
                      expect_kernel_panic ? "PANIC" :
                      expect_kernel_soak ? "SOAK" : "ENTRY",
