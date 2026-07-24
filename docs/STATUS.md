@@ -9,10 +9,24 @@ must not be presented as working software.
 ## Current source identity
 
 - Branch: `main`.
-- K3 one-shot/deadline work is an uncommitted development snapshot based on
-  `8929c063cdd24c8f4f526be330549e2eb5038fc8`; target identity is reported as
-  `8929c063cdd24c8f4f526be330549e2eb5038fc8-dirty`. It is not a release
-  source identity and does not replace the qualified K1 rollback below.
+- K4 handle-synchronization source commit:
+  `4a878c9095213d9009e3ad6eeca85ebac3d7c936`. The immutable source archive has
+  SHA-256
+  `a5f27a5d7ad522d4e0e93c0b5302baa201f4bd9ced608f730cc4342eb2d84421`
+  and is extracted as `/tmp/astra68-k4-4a878c9` on Beast.
+- K4 kernel: 44,740 bytes, SHA-256
+  `bb3d87b65b29de0816bc1be67b0c9477879623cecc2cd72275e971d457e56684`.
+- K4 normal boot payload: 56,084 bytes, CRC32 `061D7682`, SHA-256
+  `5c1954a7b27e44ac918c530d7a63ae3bf001b42abfd2326af5ffd5142482210a`.
+  The 56,116-byte packaged ROM SHA-256 is
+  `729ec89bd29552065a81b022c287f5a9f60ee3cbd8fc20a7cbf592d8777bda98`.
+  K4 is software-qualified only; its unchanged FPGA target is routed build
+  `25D9CB8E`.
+- K3 one-shot/deadline baseline commit:
+  `3787d820e1140f49ba31623ccc578bb274a631cc`. Its retained target artifacts
+  report the exact development identity
+  `8929c063cdd24c8f4f526be330549e2eb5038fc8-dirty` and remain the latest
+  pin-level RTL and ULX3S-qualified kernel checkpoint.
 - K3 kernel: 41,020 bytes, SHA-256
   `6ab38364d2ef5e67b6f5e8c7fb691cbf45291624562d7a0203f812c2e648e61d`.
 - K3 normal boot payload: 52,444 bytes, CRC32 `BAEF4D0B`, SHA-256
@@ -85,14 +99,15 @@ must not be presented as working software.
 | two isolated user processes | CURRENT HW | same ROM on Musashi, full RTL, and three exact SRAM boots |
 | 5 ms one-shot fixed-priority scheduling | CURRENT HW | exact 62,500-cycle quantum, 32 queues and ready bitmap; highest priority first, FIFO round-robin among equals; K3 target boots pass |
 | same-address-space thread switch | CURRENT HW | host, Musashi, full RTL, and ULX3S count this path separately without a CRP/ATC/cache switch |
-| atomic block/wake/deadline and event substrate | CURRENT HW | sequence-checked wait queues, 16-entry deadline heap, priority/FIFO wake, timeout, close wake-all, and immediate higher-priority handoff pass host, Musashi, full RTL, and ULX3S |
-| trap ABI query/progress/yield/exit/close | CURRENT PROVISIONAL | host and target K1 |
+| K3 atomic block/wake/deadline substrate | CURRENT HW | sequence-checked wait queues, 16-entry deadline heap, priority/FIFO wake, timeout, close wake-all, and immediate higher-priority handoff pass host, Musashi, full RTL, and ULX3S |
+| handle-backed events and semaphores | CURRENT SIM | generation-safe handles, explicit rights, absolute-nanosecond deadlines, cancellation, close, owner death, quotas, and exact-once arbitration pass host and exact Musashi; RTL and ULX3S remain |
+| trap ABI query/progress/yield/exit/close/clock/sync | CURRENT SIM | retained K1 calls pass hardware; K4 clock, create, wait, signal, reset, and cancel calls pass host and Musashi |
 | offender-only user fault death | CURRENT HW | format-B fault reaps only the offender on Musashi, full RTL, and three exact SRAM boots |
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
 | panic to console and retained early log | CURRENT HW | exact direct and supervisor-guard panic paths pass full RTL plus physical HDMI/log qualification |
 | kernel host analyzer/sanitizer gates | CURRENT | 17 suites, analyzer, ASan/UBSan/leak checks |
 | kernel cycle-budget gate | CURRENT HW | nine measured syscall/timer/fault/scheduler/wait/deadline paths enforce fixed limits in Musashi, full RTL, and ULX3S; zero overruns |
-| end-to-end Musashi performance gate | CURRENT | exact 1,000-cycle K3 workload is 596,507,297 virtual cycles against a 675,000,000-cycle cap |
+| end-to-end Musashi performance gate | CURRENT | exact 1,000-cycle K4 workload is 622,507,501 virtual cycles against a 675,000,000-cycle cap |
 | deterministic lifecycle-soak harness | CURRENT HW | dual-host 500,000-cycle legacy Musashi, optimized Musashi, 13-cycle full RTL, routed five-minute candidate, and independent 30-minute release runs pass without drift |
 | deferred user-fault reclamation | CURRENT HW | host proves no maintenance/owner release in fault dispatch; Musashi, full RTL, and ULX3S report bounded masked-fault cycles |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
@@ -372,6 +387,39 @@ and
 Read-only AstraHost is restored. This is a software-only checkpoint: FPGA
 flash, routed resources, and every constrained-clock result remain unchanged.
 
+## K4 handle-synchronization checkpoint
+
+K4 publishes auto-reset/manual-reset events and counting semaphores through
+per-process generation-safe handles. Handles require explicit wait or signal
+rights. Waits accept signed absolute monotonic nanosecond deadlines, with zero
+as poll and `INT64_MAX` as no deadline. Signal, timeout, explicit cancellation,
+last-handle close, and owner death remove and complete a waiter exactly once.
+Wake-one is priority ordered and FIFO among equals; waking a higher-priority
+thread requests an immediate handoff.
+
+The implementation allocates 32 fixed 36-byte objects, limits each owner to
+eight objects, and inherits the global 16-waiter ceiling from the thread pool.
+It reuses each thread's existing wait/deadline linkage and allocates nothing in
+the signal, wait, timeout, cancellation, or teardown paths. The syscall ABI now
+provides monotonic time, event/semaphore creation, wait-one, signal, event
+reset, and cancellation. Public NDK rights use the same canonical bit values as
+the kernel ABI.
+
+All 17 host suites pass normally, under GCC `-fanalyzer`, and under
+ASan/UBSan/leak checks. NDK `check`, sanitizer, analyzer, m68k library/example,
+and canonical m68k kernel/ROM verification pass. Exact committed normal Musashi
+reaches all K1-K4 markers in 19,000,216 cycles, with 19 context switches, six
+blocks, two wakes, three priority handoffs, one expiry, and
+cancel/close/death counts of 1/1/1. The exact 1,000-cycle workload completes in
+622,507,501 cycles under the 675,000,000 cap, retains exactly 7,986 free pages,
+reports 2,055 switches, 3,204 timer ticks, syscall count `0x2377`, and has zero
+performance overruns. Maximum masked user-fault time is 34,580 cycles.
+
+K4 has not yet passed the complete pin-level RTL/SDRAM model or physical ULX3S
+qualification. The board, SD ROM, production FPGA build `25D9CB8E`, resource
+use, and constrained-clock evidence remain at K3. No K4 row is marked CURRENT
+HW until those two gates pass.
+
 ## Required before K1 release
 
 | Requirement | State |
@@ -396,23 +444,23 @@ flash, routed resources, and every constrained-clock result remain unchanged.
   limits in `KERNEL_ARCHITECTURE.md`.
 - The fixed-priority queue/bitmap scheduler, 5 ms one-shot quantum, and bounded
   absolute-cycle deadline heap are current. Runtime high-priority signal and
-  timeout handoff are proven by the internal event path. Address-space affinity
-  among equal priorities, inheritance, donation, wakeup boost, and real-time
-  budgets are not built.
+  timeout handoff are proven through the public K4 handle path on host and
+  Musashi. Address-space affinity among equal priorities, inheritance,
+  donation, wakeup boost, and real-time budgets are not built.
 - Thread creation is an internal boot API. No stable create/join/exit-thread
   syscall exists, and provisional `EXIT` still terminates the whole process.
-- Ordinary user threads have guarded user and supervisor stacks. The three
-  blocking/event syscall numbers are qualification-only and are not part of the
-  stable ABI; public absolute-nanosecond deadlines, explicit cancellation,
-  peer death, and general object handles still need one coherent contract.
+- Ordinary user threads have guarded user and supervisor stacks. K4 events and
+  semaphores have a documented revision-0.1 handle/syscall contract, but thread
+  death, process death, timers, ports, and wait-multiple are not yet exposed as
+  general waitable handles.
 - `block.c` and `dma.c` qualify ownership, generation, pin, completion, and
   revocation. Filesystem/block policy still belongs in a user service.
 - The fixed K1 worker services process reap only. It is not yet a general
   scheduler-owned kernel-thread class and has no general wait object, priority
-  inheritance, cancellation, or per-device work queues.
+  inheritance, or per-device work queues.
 - User-fault retirement is minimal and schedules the interruptible worker.
-  The first wait queue, event, and timeout arbitration are current; explicit
-  cancellation, wait-multiple, and service/object death semantics remain.
+  K4 synchronization cancellation and owner-death arbitration are current;
+  wait-multiple and service/port peer-death semantics remain.
 - The diagnostic UART mirror is emergency FTDI output only. ESP runtime
   communication is SPI.
 
@@ -422,9 +470,8 @@ flash, routed resources, and every constrained-clock result remain unchanged.
   emergency page reserve, per-subsystem allocation tags, and low-memory policy;
 - shared areas, demand-zero pages, stable-default 8 KiB page option, commit accounts, and
   cache-safe executable/file-page reclamation;
-- ports, messages, handle transfer, wait-multiple, handle-backed semaphores,
-  public deadline operations, cancellation, priority inheritance, and priority
-  donation;
+- ports, messages, handle transfer, wait-multiple, priority inheritance, and
+  priority donation;
 - IRQ endpoint allocation, general deferred device workers, service restart, and
   privileged device-mapping objects;
 - centralized typed MMIO accessors and complete bus-timeout classification;
@@ -443,9 +490,9 @@ flash, routed resources, and every constrained-clock result remain unchanged.
 | stale thread IDs cannot reach reused slot, including slot 15 | host thread tests |
 | higher priority wins and equal priorities remain FIFO round-robin | host thread/process tests plus K3 target boot |
 | same-process switch preserves CRP and bypasses VM switch accounting | host process test, Musashi, full RTL, and ULX3S K3 boots |
-| stale wait sequence cannot block after a condition change | host thread/event tests |
+| stale wait sequence cannot block after a condition change | host thread/sync tests |
 | wake-one is priority ordered and FIFO among equals | host thread test plus target priority-handoff path |
-| event close wakes each waiter exactly once | host event test |
+| event close wakes each waiter exactly once | host sync/process tests plus exact K4 Musashi |
 | process death withdraws every sibling from ready/wait queues before deferred record reuse | host process test, Musashi soak, full RTL, and ULX3S K3 boots |
 | each thread supervisor stack has an unmapped guard, valid canary, and bounded high-water | host VM/thread tests, Musashi, full RTL, and ULX3S K3 boots |
 | every measured K3 hot path stays within its fixed cycle budget | host profiler tests, Musashi, full RTL, and two ULX3S boots |
@@ -453,7 +500,7 @@ flash, routed resources, and every constrained-clock result remain unchanged.
 | ordinary syscalls do not renew the running thread's quantum | host process test, Musashi, full RTL, and two K3 ULX3S boots |
 | timer always targets the earlier active quantum or wait deadline | host platform/process tests plus K3 target timeout handoff |
 | equal deadlines are deterministic and deadline capacity equals thread capacity | host thread tests |
-| timeout, signal, close, and process death remove one deadline/waiter exactly once | host thread/event/process tests plus K3 target path |
+| timeout, signal, cancellation, close, and process death remove one deadline/waiter exactly once | host thread/sync/process tests plus exact K4 Musashi |
 | higher-priority timeout wake preempts immediately | host process test, Musashi, full RTL, and two K3 ULX3S boots |
 | killed owner releases mappings/handles/frames | host process test, target K1 |
 | pinned DMA delays but does not lose teardown | host process/DMA/block tests |
@@ -476,9 +523,9 @@ flash, routed resources, and every constrained-clock result remain unchanged.
 
 ## Next actions
 
-1. turn the internal event path into handle-backed event/semaphore operations
-   with timeout, cancellation, close, and process-death semantics before ports
-   or IPC;
+1. run exact K4 through the complete pin-level RTL/SDRAM model, then provision
+   and repeat the gate on the NUC-attached ULX3S without changing the FPGA
+   bitstream;
 2. add stable create/join/exit-thread operations and account every stack/object
    against process quotas;
 3. add one bounded wait-multiple operation over events, process/thread death,

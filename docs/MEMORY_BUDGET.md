@@ -147,17 +147,17 @@ The 2026-07-24 K4 handle-synchronization build reports:
 |---|---:|
 | `.text.entry` | 80 |
 | `.vectors` | 1,024 |
-| `.text` plus read-only data | 42,628 |
+| `.text` plus read-only data | 42,692 |
 | `.data` | 0 |
 | `.bss` | 9,592 |
 | `.noinit` | 102,016 |
-| interrupt-stack section including alignment and guard | 15,744 |
+| interrupt-stack section including alignment and guard | 15,680 |
 | worker MSP section including guard | 12,288 |
 | 16 guarded thread supervisor-stack slots | 196,608 |
 | total through `_kernel_memory_end` | 380,928 |
-| flat kernel binary | 44,676 |
+| flat kernel binary | 44,740 |
 
-K4 adds 3,656 flat-binary bytes and 1,256 BSS bytes over K3. The image leaves
+K4 adds 3,720 flat-binary bytes and 1,256 BSS bytes over K3. The image leaves
 143,360 bytes in the fixed 512 KiB reservation. The fixed synchronization pool
 accounts for 32 x 36-byte objects (1,152 bytes); the remaining BSS delta is
 bounded pool state and diagnostics. Waiting reuses each thread's existing wait

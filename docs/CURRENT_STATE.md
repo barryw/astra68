@@ -104,8 +104,36 @@ separates implemented evidence from planned work.
 
 ## Current integration state
 
-- The active K3 development snapshot, based on
-  `8929c063cdd24c8f4f526be330549e2eb5038fc8-dirty`, retains the K2
+- The active K4 synchronization checkpoint is
+  `4a878c9095213d9009e3ad6eeca85ebac3d7c936`. It replaces the private event
+  qualifier with public generation-safe event and semaphore handles carrying
+  explicit wait/signal rights. Waits use absolute monotonic nanosecond
+  deadlines and arbitrate signal, timeout, cancellation, close, and owner death
+  exactly once through the existing per-thread wait link and 16-entry deadline
+  heap. The implementation has 32 fixed 36-byte objects, an eight-object owner
+  quota, at most 16 global waiters, no wait-path allocation, priority/FIFO wake
+  ordering, and immediate higher-priority handoff.
+
+  All 17 host suites pass normally, under GCC `-fanalyzer`, and under
+  ASan/UBSan/leak checks. NDK host, sanitizer, analyzer, m68k library/example,
+  and canonical kernel/ROM verification gates pass. The exact normal Musashi
+  boot reaches every K1-K4 marker in 19,000,216 virtual cycles. The exact
+  1,000-cycle workload finishes in 622,507,501 cycles under the unchanged
+  675,000,000 cap, retains the 7,986-page baseline, and reports zero hot-path
+  overruns. Exact committed-source artifacts are a 44,740-byte kernel with
+  SHA-256
+  `bb3d87b65b29de0816bc1be67b0c9477879623cecc2cd72275e971d457e56684`
+  and a 56,084-byte boot payload with CRC32 `061D7682`; the 56,116-byte ROM
+  package SHA-256 is
+  `729ec89bd29552065a81b022c287f5a9f60ee3cbd8fc20a7cbf592d8777bda98`.
+
+  K4 has not yet run through the complete pin-level RTL model or on the ULX3S.
+  Production FPGA build `25D9CB8E`, routed resources, clocks, and the K3 ROM on
+  the board are unchanged. K4 is therefore the software candidate, while K3
+  remains the hardware-qualified rollback point.
+- The hardware-qualified K3 predecessor is represented on `main` by
+  `3787d820e1140f49ba31623ccc578bb274a631cc`. Its retained target artifact was
+  developed from `8929c063cdd24c8f4f526be330549e2eb5038fc8-dirty`, retains the K2
   process/thread split and adds exact 5 ms one-shot quanta plus one fixed
   16-entry deadline heap. Vesta is programmed to the earlier of the running
   thread's 62,500-cycle quantum and earliest absolute wait deadline. Ordinary
