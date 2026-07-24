@@ -1,6 +1,6 @@
 # Astra 68 kernel architecture
 
-Status: normative design contract, revision 0.1 (2026-07-22)
+Status: normative design contract, revision 0.1 (2026-07-24)
 
 This document defines the kernel shape. Exact memory, ABI, locking, ownership,
 budget, testing, and implementation status live in the companion documents
@@ -136,11 +136,12 @@ comes from a process-private generation handle carrying explicit rights.
 
 ### Boot
 
-1. Assembly installs the private stack and VBR.
+1. Assembly installs the 8 KiB interrupt stack (ISP) and VBR.
 2. C validates and copies the fixed 256-byte `AstraBootInfo`.
 3. The frame allocator classifies every physical page.
 4. VM constructs wired SRP and empty CRP trees, then enables translation.
-5. Interrupts, scheduler, and object pools initialize with devices masked.
+5. The guarded 8 KiB master stack (MSP), deferred worker, interrupts,
+   scheduler, and object pools initialize with devices masked.
 6. The immutable initial image receives a minimal initial handle set.
 7. The first user thread enters through one validated context restore.
 
@@ -153,16 +154,21 @@ No firmware service is called after handoff.
 2. Central frame decoding validates format, vector, origin, and length.
 3. User-copy recovery handles only an armed matching access fault.
 4. Other user faults mark the process `EXITING`; kernel faults panic.
-5. The scheduler selects a validated context or enters supervisor idle.
+5. The scheduler returns one of three tagged results: resume the interrupted
+   frame, enter the fixed deferred worker, or restore an aligned user context.
 6. Assembly rebuilds an architecturally valid frame and executes `RTE`.
 
 ### Hard interrupt
 
 The hard top half may acknowledge fixed device state, append one preallocated
 record, wake deferred work, and request rescheduling. It never allocates,
-blocks, destroys an address space, polls a protocol, or performs IPC. Deferred
-work runs in thread context; K1 additionally drains bounded teardown at syscall
-safe points and in supervisor idle, with interrupts enabled in both cases.
+blocks, destroys an address space, polls a protocol, or performs IPC. K1's
+fixed deferred worker runs in supervisor master mode on a dedicated guarded
+MSP. It snapshots a bounded work bitmap with interrupts masked, enables
+interrupts around process reclamation, and either returns to a validated user
+context or atomically sleeps in master mode. A deferred pinned-DMA reap is
+retried on a later timer interrupt; syscall and idle paths no longer perform
+resource destruction.
 
 ## Current K1 structures
 
@@ -179,6 +185,17 @@ These are implementation facts, not the final object layout:
 | block request slots | 4 |
 | timer frequency | 100 Hz |
 | scheduling policy | preemptive round-robin, one thread/process |
+| interrupt stack | 8 KiB ISP plus 4 KiB unmapped guard |
+| deferred-worker stack | 8 KiB MSP plus 4 KiB unmapped guard |
+| deferred work | one-bit process-reap bitmap; bounded timer retry |
+
+The K1 worker state machine is exact: `UNINITIALIZED -> BLOCKED` at boot;
+signal changes `BLOCKED -> READY`; selection changes `READY -> RUNNING`;
+successful service changes `RUNNING -> BLOCKED` before user return or `STOP`.
+`DEFERRED` records one retry bit and the next timer changes
+`BLOCKED -> READY`. A signal arriving while service runs sets the pending bit,
+so the worker performs another pass before it may block. No transition
+allocates metadata or grows a queue.
 
 K1 combines process and thread state only to qualify CPU/PMMU containment.
 The stable implementation splits those objects before IPC and wait APIs freeze.

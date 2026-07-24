@@ -1,6 +1,6 @@
 # Astra 68 kernel test and fault-injection plan
 
-Status: normative qualification plan, revision 0.1 (2026-07-23)
+Status: normative qualification plan, revision 0.1 (2026-07-24)
 
 No subsystem is complete because its happy path boots. Every state transition,
 capacity limit, cancellation race, and recovery path has a deterministic test.
@@ -25,12 +25,12 @@ transport, but expected initial/final state and pass criteria remain identical.
 
 The candidate must retain all of these before routing:
 
-- 11 kernel host suites, GCC `-fanalyzer`, ASan/UBSan, and leak detection;
+- 12 kernel host suites, GCC `-fanalyzer`, ASan/UBSan, and leak detection;
 - 15 AstraVM Rust tests, rustfmt, and Clippy `-D warnings`;
 - 90 shared framework tests and all 30 executions of the 15-case Musashi/RTL
   matrix;
 - both maintained Harte MC68030 smoke adapters;
-- strict Questa inventory: 140 total, 114 clean, with no increase or
+- strict Questa inventory: 141 total, 115 clean, with no increase or
   reclassification of the recorded 3 compile, 18 simulation, and 5 unscored
   upstream buckets;
 - focused PMMU user fault after traps in wait-state and zero-wait modes;
@@ -43,6 +43,12 @@ The candidate must retain all of these before routing:
 - fault dispatch must perform no synchronous process maintenance or owner-frame
   release, and the next qualifying soak checkpoint must be preceded by a
   positive `user_fault_irqoff_max` report no greater than 125,000 CPU cycles;
+- the guarded worker must cover signal coalescing, signal-during-service,
+  deferred pinned-DMA retry, timer wake, atomic idle, user return, canary, and
+  high-water accounting without allocation or unbounded queues;
+- a real M=1 interrupt must build exact format-0 MSP and format-1 ISP frames,
+  preserve saved M, chain `RTE` through MSP, and restart a multiword
+  instruction after clock-enable stalls;
 - owner-ledger exhaustion, reuse, pinned-release atomicity, corrupt-link
   rejection, and release visits proportional only to the owner's frame count;
 - all directed and integrated graphics coexistence tests.
@@ -106,6 +112,8 @@ replayable. Random malformed syscalls and messages must never panic the kernel.
 - patterned values in every saved register, USP, PC, SR, CRP, and stack;
 - same-CRP and cross-CRP switches, every priority, quantum expiry, and wakeup;
 - nested interrupt during syscall/fault entry and supervisor-frame resume;
+- every deferred-worker state transition, retry wake, service-time signal, and
+  return between guarded MSP, guarded ISP, and user mode;
 - Motorola formats 0, 1, 2, 9, A, and B with exact byte fixtures;
 - copyin/copyout user fault versus physical bus failure;
 - final-process exit/fault into supervisor idle and later interrupt wakeup;

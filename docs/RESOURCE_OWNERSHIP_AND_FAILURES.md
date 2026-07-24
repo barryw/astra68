@@ -70,7 +70,10 @@ Exact order:
 
 The process may remain `EXITING` while a device owns pinned memory. This is not
 a leak: the request has a finite deadline/reset path and an inspectable owner.
-K1 proves this state with DMA completion and deferred reap host tests.
+K1's fixed deferred worker records one retry bit, blocks without allocating,
+and retries after the next timer interrupt. DMA completion and worker
+state-machine host tests prove that the process remains inspectable and is
+reaped exactly once after the final pin retires.
 
 K1's physical allocator has 64 fixed owner ledgers. Every dynamically allocated
 frame is linked into exactly one owner's intrusive list using 16-bit previous

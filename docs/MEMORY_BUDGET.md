@@ -1,6 +1,6 @@
 # Astra 68 kernel memory budget
 
-Status: measured K1 baseline plus bounded revision-0.1 targets (2026-07-23)
+Status: measured K1 baseline plus bounded revision-0.1 targets (2026-07-24)
 
 The machine has exactly 32 MiB of SDRAM. Every static pool, frame, mapping,
 queue, pin, and graphics reservation is reported separately. A budget is not
@@ -68,6 +68,28 @@ The `.noinit` increase is exactly 33,280 bytes: two 16-bit links for each of
 `KernelFrameInfo` layout is unchanged. `_kernel_memory_end` is `0x02034000`,
 well inside the fixed 512 KiB kernel reservation.
 
+Exact guarded-worker source
+`42f4bb55ebd5ac47d057162322e293e4999a2661` adds a dedicated MSP stack,
+guard descriptor, bounded work/retry state, and panic diagnostics. Its normal
+Beast build reports:
+
+| ELF section | Bytes |
+|---|---:|
+| `.text.entry` | 80 |
+| `.vectors` | 1,024 |
+| `.text` plus read-only data | 24,932 |
+| `.data` | 4 |
+| `.bss` | 5,240 |
+| `.noinit` | 102,016 |
+| interrupt-stack section including alignment and guard | 13,216 |
+| worker MSP section including guard | 12,288 |
+| total through `_kernel_memory_end` | 159,744 |
+| flat kernel binary | 26,984 |
+
+The worker adds one fixed 8 KiB mapped stack and one 4 KiB unmapped guard;
+`_kernel_memory_end` advances to `0x02037000`, still inside the 512 KiB kernel
+reservation. No queue or retry path allocates memory dynamically.
+
 Major K1 static objects are:
 
 | Object | Count x size | Bytes |
@@ -127,13 +149,14 @@ build report before merge.
 
 ## Stack budget
 
-- K1 bootstrap supervisor stack: 8 KiB plus one unmapped 4 KiB guard.
+- K1 interrupt stack (ISP): 8 KiB plus one unmapped 4 KiB guard.
+- K1 deferred-worker master stack (MSP): 8 KiB plus one unmapped 4 KiB guard.
 - Stable per-thread kernel stack target: 8 KiB committed only for a live thread
   plus an unmapped virtual guard.
 - 128 simultaneous thread stacks would consume 1 MiB; ordinary process quotas
   prevent every process from reaching the global thread limit independently.
-- IRQ/deferred stack strategy (ISP/MSP versus per-thread M=0) remains a release
-  blocker. Whichever is selected gets a fixed 16 KiB maximum and guard.
+- K1's ISP/MSP strategy is selected and tested. Stable per-thread kernel stacks
+  still require an explicit budget before multi-threaded processes are enabled.
 
 Every build must emit static stack-usage data. Hardware qualification records
 canary and high-water values under nested format-B faults and interrupt storms.

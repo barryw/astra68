@@ -1,6 +1,6 @@
 # Astra 68 kernel status
 
-Status date: 2026-07-23
+Status date: 2026-07-24
 
 This is the kernel-specific truth table. `CURRENT_STATE.md` remains the whole
 machine continuation map. A row marked CURRENT has evidence; PLANNED or MISSING
@@ -30,6 +30,14 @@ must not be presented as working software.
   extracted as `/tmp/astra68-k1-853ae66` on NUC and Beast. It adds coherent
   64-bit elapsed-cycle reporting and acceptance checks only; production
   bitstream `77B3CDC8` remains unchanged.
+- Master-mode interrupt correction commit:
+  `9a977e13f560b4c85eafc7835d88aad437314491`. It fixes the exact
+  format-1/format-0 chained `RTE` path and adds the Motorola-directed M=1
+  dual-frame regression.
+- Guarded deferred-worker commit:
+  `42f4bb55ebd5ac47d057162322e293e4999a2661`. It is fully qualified on host,
+  Musashi, focused RTL, and the complete pin-level RTL/SDRAM model; exact full
+  routing and ULX3S promotion remain open.
 - Immutable build snapshot: Beast `/tmp/astra68-k1-66d6094` from Git archive
   SHA-256 `ba4d91999cf829c33a345d895b7966a438b28b93871d8d34843d658a1d0c0039`.
 - Immutable soak snapshot: NUC `/tmp/astra68-k1-soak-470bf12` and independent
@@ -43,7 +51,7 @@ must not be presented as working software.
 | Mechanism | State | Evidence |
 |---|---|---|
 | BootInfo validation and separate kernel image | CURRENT | host, Musashi, full RTL |
-| kernel VBR and 8 KiB supervisor stack | CURRENT | Musashi, full RTL |
+| kernel VBR, guarded 8 KiB ISP, guarded 8 KiB worker MSP | CURRENT SIM | host descriptors, Musashi, focused RTL, full pin-level RTL |
 | frame allocator for all 8,192 4 KiB frames | CURRENT HW | host tests, target startup, 64-owner bounded ledger, exact release-visit accounting |
 | SRP/CRP 4 KiB two-level translation | CURRENT | host, focused RTL, Musashi, full RTL |
 | PMMU enable and CRP switching | CURRENT HW | Musashi, full RTL, and three exact SRAM K1 boots |
@@ -56,19 +64,21 @@ must not be presented as working software.
 | SFC/DFC copyin/copyout fault recovery | CURRENT | focused RTL, Musashi, full RTL |
 | typed generation handle table | CURRENT | host tests; 16 entries/process in K1 |
 | process creation and owner teardown | CURRENT HW | host, Musashi, full RTL, and exact 100-cycle ULX3S fault/reap path |
-| deferred pinned-DMA reap | CURRENT HOST | bounded safe-point/idle path tested on host |
+| deferred pinned-DMA reap | CURRENT SIM | guarded worker state machine on host; Musashi and full RTL lifecycle soaks |
 | two isolated user processes | CURRENT HW | same ROM on Musashi, full RTL, and three exact SRAM boots |
 | 100 Hz preemptive round-robin | CURRENT HW | three switches before K1 marker on Musashi, full RTL, and each exact SRAM boot |
 | trap ABI query/progress/yield/exit/close | CURRENT PROVISIONAL | host and target K1 |
 | offender-only user fault death | CURRENT HW | format-B fault reaps only the offender on Musashi, full RTL, and three exact SRAM boots |
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
 | panic to console and retained early log | CURRENT HW | exact direct and supervisor-guard panic paths pass full RTL plus physical HDMI/log qualification |
-| K1 host analyzer/sanitizer gates | CURRENT | 11 suites, analyzer, ASan/UBSan |
+| K1 host analyzer/sanitizer gates | CURRENT | 12 suites, analyzer, ASan/UBSan |
 | deterministic lifecycle-soak harness | CURRENT HW | dual-host 500,000-cycle legacy Musashi, optimized Musashi, 13-cycle full RTL, routed five-minute candidate, and independent 30-minute release runs pass without drift |
 | deferred user-fault reclamation | CURRENT HW | host proves no maintenance/owner release in fault dispatch; Musashi, full RTL, and ULX3S report bounded masked-fault cycles |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
-| CACR independent I/D commands | CURRENT RTL | Motorola-directed mixed CI/CD decoder test; strict inventory 140/114 clean |
-| RESET preserves roots and ATC until explicit flush | CURRENT RTL/ROUTED | stale-ATC/reset/`PFLUSHA` regression; strict inventory 140/114 clean; exact full mapping has zero SCCs and exact route passes all clocks |
+| master-mode interrupt dual-frame return | CURRENT RTL | exact Motorola format-0/1 frames, MSP chain, multiword restart, complete strict inventory |
+| fixed interruptible process-reap worker | CURRENT SIM | guarded MSP/ISP, coalesced work bit, bounded retry, normal and soak target images |
+| CACR independent I/D commands | CURRENT RTL | Motorola-directed mixed CI/CD decoder test; strict inventory 141/115 clean |
+| RESET preserves roots and ATC until explicit flush | CURRENT RTL/ROUTED | stale-ATC/reset/`PFLUSHA` regression; strict inventory 141/115 clean; prior exact full mapping has zero SCCs and passes all clocks |
 | exact corrected K1 release ROM | CURRENT SIM/ROUTED | build `77B3CDC8` passes Musashi and full pin-level RTL with 32 MiB BIST, PMMU, preemption, and fault containment; exact bitstream is timing-clean |
 | exact corrected K1 hardware boot | CURRENT HW | three independent SRAM reloads and one automatic reset-from-flash boot pass exact identity, full POST/BIST, PMMU, 100 Hz preemption, offender-only fault containment, K1 entry, and physical HDMI |
 
@@ -179,6 +189,27 @@ must not be presented as working software.
   The hardware burn-in gate is closed; the stable-kernel mechanisms below
   remain open.
 
+## Guarded-worker candidate
+
+Exact source `42f4bb55ebd5ac47d057162322e293e4999a2661` moves process
+reclamation off syscall and idle paths into a fixed stackful worker. The worker
+runs S=1/M=1 on an 8 KiB MSP with a 4 KiB unmapped guard; exception and IRQ
+entry use the independent guarded ISP. Pending work is a one-bit process-reap
+mask, retries are one bounded bit, and all maintenance executes with interrupts
+enabled. Panic output includes worker state, counters, stack use, last
+supervisor IRQ, and exact maintenance failure data.
+
+Beast passes all 12 host suites normally, under GCC `-fanalyzer`, and under
+ASan/UBSan/leak checks; canonical m68k build verification, 15 Rust tests,
+rustfmt, Clippy, all 90 framework tests, all 30 shared executions, and both
+Harte smoke adapters pass. The complete Questa inventory is 141 total and 115
+clean with the unchanged 3/18/5 classified buckets. Musashi normal boot reaches
+K1, and its 1,000-cycle lifecycle soak ends at virtual cycle 640,260,129 with
+2,001 switches and the exact 7,987-page baseline. The complete pin-level
+RTL/SDRAM model passes normal K1 in 130.017 seconds and the worker soak
+checkpoint in 191.959 seconds at 115.03 MB/s BIST with no baseline drift. This
+is complete pre-route evidence, not routed-hardware qualification.
+
 ## Required before K1 release
 
 | Requirement | State |
@@ -194,6 +225,7 @@ must not be presented as working software.
 | masked user-fault latency | CURRENT HW; 8,834 cycles against 125,000-cycle gate |
 | long context/syscall/fault/allocation soak | CURRENT HW; dual-host 500,000-cycle simulation, routed five-minute/5,000-cycle candidate, and independent 30-minute/29,000-cycle release run pass at baseline 7,987 with coherent FPGA elapsed-time proof |
 | panic HDMI and retained-log check on physical board | CURRENT; exact direct-panic and supervisor-guard paths pass |
+| guarded-worker source exact route and ULX3S promotion | MISSING; pre-route host, Musashi, strict/focused RTL, and full pin-level gates pass |
 
 ## Partial or transitional K1 code
 
@@ -205,11 +237,12 @@ must not be presented as working software.
   inheritance, donation, wakeup boost, and real-time budgets are not built.
 - `block.c` and `dma.c` qualify ownership, generation, pin, completion, and
   revocation. Filesystem/block policy still belongs in a user service.
-- Teardown drains at syscall safe points and supervisor idle because no kernel
-  worker thread exists yet. Hard IRQ does not perform teardown.
-- User-fault retirement is now minimal and queues reclamation. Safe-point/idle
-  draining is sufficient for bounded K1 qualification, but a dedicated kernel
-  worker remains required before blocking waits and multi-threaded processes.
+- The fixed K1 worker services process reap only. It is not yet a general
+  scheduler-owned kernel-thread class and has no wait object, priority
+  inheritance, cancellation, or per-device work queues.
+- User-fault retirement is minimal and schedules the interruptible worker.
+  General blocking waits and multi-threaded processes still require separate
+  thread objects and the stable priority scheduler.
 - The diagnostic UART mirror is emergency FTDI output only. ESP runtime
   communication is SPI.
 
@@ -217,13 +250,14 @@ must not be presented as working software.
 
 - boot allocator retirement, typed slabs/object caches, bounded general heap,
   emergency page reserve, per-subsystem allocation tags, and low-memory policy;
-- separate thread objects and kernel stacks, stack canaries/high-water, and
-  final ISP/MSP strategy;
+- separate thread objects and per-thread kernel stacks; the fixed worker has a
+  canary/high-water counter and selected ISP/MSP strategy, but ordinary thread
+  stacks do not yet;
 - shared areas, demand-zero pages, stable-default 8 KiB page option, commit accounts, and
   cache-safe executable/file-page reclamation;
 - ports, messages, handle transfer, wait-multiple, semaphores/events, deadlines,
   cancellation, priority inheritance, and priority donation;
-- IRQ endpoint allocation, deferred worker threads, service restart, and
+- IRQ endpoint allocation, general deferred device workers, service restart, and
   privileged device-mapping objects;
 - centralized typed MMIO accessors and complete bus-timeout classification;
 - fixed allocation-free trace ring and interactive SPI/FTDI monitor commands;
@@ -242,6 +276,9 @@ must not be presented as working software.
 | pinned DMA delays but does not lose teardown | host process/DMA/block tests |
 | user-copy fault returns error, unrelated kernel fault panics | host and full target |
 | nested timer on supervisor exception resumes handler | host dispatch and focused RTL |
+| M=1 IRQ returns through format-1 ISP then format-0 MSP frame | Motorola-directed Questa plus full pin-level normal/soak |
+| worker cannot lose signal at service or block boundary | host worker state machine plus target lifecycle soak |
+| worker stack guard is invalid; canary/high-water remain readable | host VM/worker tests plus Musashi/full RTL boot |
 | fault after repeated traps stacks on ISP | focused Questa wait/zero-wait |
 | hard timer path performs no maintenance/destruction | host dispatch test |
 | user-fault path performs no maintenance/owner release | host dispatch/process tests; bounded Musashi, full RTL, and ULX3S reports |
@@ -256,8 +293,9 @@ must not be presented as working software.
 
 ## Next actions
 
-1. audit every K1 acceptance requirement and update the release records;
-2. add the kernel deferred worker needed for waits, IPC, and multi-threaded
-   process teardown;
+1. route exact guarded-worker source at 12.5 MHz CPU and 60 MHz SDRAM, then
+   repeat POST, PMMU, worker lifecycle, reset, and HDMI gates on NUC;
+2. split process and thread objects before adding waits, IPC, and
+   multi-threaded scheduling;
 3. implement and benchmark 8 KiB against the retained 4 KiB oracle before
    freezing the stable VM ABI.

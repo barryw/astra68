@@ -466,6 +466,26 @@ separates implemented evidence from planned work.
   The board is left in that normal state; persistent FPGA flash remains the
   same exact `77B3CDC8` image. No RTL, synthesis, placement, route, resource,
   or constrained-clock result changed during this qualification.
+- CPU correction `9a977e13f560b4c85eafc7835d88aad437314491` and guarded
+  worker `42f4bb55ebd5ac47d057162322e293e4999a2661` form the next exact
+  candidate. The CPU now preserves M in the MC68030 section 8.1.9 format-1
+  throwaway frame, avoids a second MSP postadd, and settles restored-PC fetch
+  before chained `RTE` retirement. The kernel runs process reclamation with
+  interrupts enabled on a dedicated guarded 8 KiB MSP; exception and IRQ entry
+  retain the separate guarded 8 KiB ISP. Work and retry queues are each one
+  bounded bit, and panic output includes exact worker/maintenance state.
+
+  Beast passes 12 kernel suites normally, with GCC `-fanalyzer`, and with
+  ASan/UBSan/leak checks; canonical m68k verification, 15 Rust tests, rustfmt,
+  Clippy, all 90 framework tests, all 30 shared executions, and both Harte
+  smoke adapters pass. The complete strict Questa inventory is 141 total, 115
+  clean, and the existing 3 compile, 18 simulation, and 5 unscored buckets are
+  unchanged. Musashi reaches normal K1 and completes 1,000 lifecycle cycles at
+  virtual cycle 640,260,129 with 2,001 switches and 7,987 free pages. The
+  complete pin-level RTL/SDRAM model reaches normal K1 in 130.017 seconds and a
+  stable worker soak checkpoint in 191.959 seconds, both with 115.03 MB/s BIST.
+  Exact full synthesis/route and NUC hardware promotion remain open; persistent
+  hardware is still the qualified `77B3CDC8` image.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,

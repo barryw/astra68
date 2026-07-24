@@ -1,6 +1,6 @@
 # Astra 68 locking and preemption contract
 
-Status: normative single-core concurrency contract, revision 0.1 (2026-07-23)
+Status: normative single-core concurrency contract, revision 0.1 (2026-07-24)
 
 This design is for one MC68030. It does not emulate SMP. Correct interrupt,
 DMA, and MMIO ordering still applies even though only one CPU executes C code.
@@ -16,19 +16,27 @@ DMA, and MMIO ordering still applies even though only one CPU executes C code.
 | ordinary user thread syscall | yes, fallible | yes | yes | yes, before blocking/pin |
 | panic path | no | no | no | no |
 
-K1 has no sleepable kernel worker yet. It drains bounded process teardown at a
-syscall safe point or from supervisor idle. Syscall entry temporarily enables
-interrupts around maintenance and remasks them before reading or replacing the
-saved user context. The 100 Hz hard timer path only acknowledges, records the
-tick, and requests scheduling.
+K1 has one fixed stackful deferred worker. It runs with S=1/M=1 on a dedicated
+8 KiB MSP behind an unmapped 4 KiB guard; exception, syscall, and hard-IRQ
+entry use the separate guarded ISP. The worker enters at IPL 7, removes a
+bounded work bitmap, enables interrupts around process reclamation, remasks
+before changing state, and returns to a validated user context or executes an
+atomic master-mode `STOP`. The 100 Hz hard timer only acknowledges, records
+the tick, moves a bounded retry bit to ready work, and requests scheduling.
 
-User-fault dispatch now performs only fault classification, atomic transition
-to `EXITING`, withdrawal from scheduling, selection of a runnable or empty CRP,
-context replacement, and enqueueing for teardown. It does not destroy page
-tables, close handles, poison pages, or release owner frames while IPL 7 is
-held. Those operations run later from the interruptible syscall/idle
-maintenance path. Host tests assert that neither process maintenance nor an
-owner release occurs during fault dispatch.
+User-fault dispatch performs only fault classification, atomic transition to
+`EXITING`, withdrawal from scheduling, selection of a runnable or empty CRP,
+context replacement, and worker scheduling. It does not destroy page tables,
+close handles, poison pages, or release owner frames while IPL 7 is held.
+Those operations run later from the interruptible worker. Host tests assert
+that neither process maintenance nor an owner release occurs during fault
+dispatch. There is no lost-wakeup window: worker state changes to `BLOCKED`
+with interrupts masked and `STOP #$3000` enables interrupts atomically.
+
+An interrupt accepted while the worker runs in master mode uses the MC68030
+format-0 MSP frame plus format-1 ISP throwaway frame. Entry masks IPL without
+clearing M, and `RTE` returns through the already post-incremented MSP. Exact
+Motorola-directed and full-system regressions cover this path.
 
 The exact `bbb1616a1e65ef56619bffb11cb21e9ea1bc5202` hardware soak measured a
 maximum user-fault dispatch interval of 8,834 CPU cycles, or 706.72 us at

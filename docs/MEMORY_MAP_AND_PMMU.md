@@ -1,6 +1,6 @@
 # Astra 68 memory map and PMMU contract
 
-Status: normative VM contract, revision 0.1 (2026-07-22)
+Status: normative VM contract, revision 0.1 (2026-07-24)
 
 `MEMORY_MAP.md` remains the authoritative physical aperture registry. This
 document defines how the kernel translates, owns, and changes those ranges.
@@ -27,10 +27,10 @@ frames has an 8-byte owner/reference/pin/state record.
 ### Supervisor (SRP)
 
 - Kernel SDRAM is identity mapped at `0x02000000..0x03FFFFFF` except for the
-  supervisor-stack guard page selected by the linker.
+  ISP and deferred-worker MSP guard pages selected by the linker.
 - Required Vesta, Astraea, Vega, and OHCI pages are identity mapped
   cache-inhibited in `0xFFF00000..0xFFF40FFF`.
-- Vectors, exception code, active supervisor stack, page tables, frame
+- Vectors, exception code, active ISP/MSP stacks, page tables, frame
   metadata, panic console, and early log are permanently resident.
 - TT0 and TT1 remain disabled. Transparent translation bypasses ordinary
   descriptor protection, has a minimum 16 MiB aperture, and is not a shortcut
@@ -55,12 +55,13 @@ preserves CRP, SRP, the other control fields, and valid ATC entries. A focused
 Motorola-directed test retains a deliberately stale translation across reset,
 observes it with level-zero `PTEST`, executes `PFLUSHA` while TC.E is clear,
 then proves that re-enabling translation walks to the changed descriptor. The
-complete strict Questa inventory is 140 total and 114 clean with the prior
+complete strict Questa inventory is 141 total and 115 clean with the prior
 3 compile, 18 simulation, and 5 unscored buckets unchanged. GHDL 7.0 generates
 the complete core and a byte-identical pre-commit reduced-BIST full-SoC run
 passes POST, protected multitasking, offender-only fault containment, and four
-lifecycle soak cycles. Exact full-chip synthesis and no-waiver routing now pass
-all production clocks; board reset/boot qualification remains open.
+lifecycle soak cycles. The prior exact full-chip route and board reset/boot
+qualification pass; guarded-worker source `42f4bb55...` requires a new exact
+route and board promotion.
 
 ### User (one CRP per process)
 
@@ -187,16 +188,18 @@ The unchanged image passes on Musashi and the complete RTL cache/PMMU path.
 
 - **CURRENT:** null, user code edges, and both sides of each fixed user stack
   are unmapped.
-- **CURRENT:** the 8 KiB bootstrap supervisor stack is fixed and bounded. Its
-  linker-selected 4 KiB page immediately below the stack is invalid in the low
-  SRP leaf; adjacent identity pages remain valid. Host tests inspect the exact
-  descriptors, and the full target runs with this tree enabled.
+- **CURRENT:** the 8 KiB interrupt stack and 8 KiB deferred-worker master stack
+  are fixed and bounded. Each has a linker-selected 4 KiB page immediately
+  below it that is invalid in the low SRP leaf; adjacent identity pages remain
+  valid. Host tests inspect both exact descriptors, and normal plus soak target
+  images run with this tree enabled.
 - A kernel guard fault during stacking is fatal; recovery is not attempted.
 - **CURRENT SIM:** a deliberate access to `0x02028000` enters vector 2 with a
   format-A supervisor fault, prints the exact address, sets retained panic
   state, and reaches the full-SoC panic oracle. Hardware repetition remains.
-- Exception-frame maximum is 92 bytes. Stack high-water and canary reporting
-  remain stable-kernel work in `STATUS.md`.
+- Exception-frame maximum is 92 bytes. The worker stack has a bottom canary,
+  debug poison, and exact high-water reporting. Equivalent per-user-thread
+  kernel-stack accounting remains stable-kernel work in `STATUS.md`.
 
 ## No swapping or overcommit
 
