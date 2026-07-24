@@ -11,6 +11,7 @@
 #include "process.h"
 #include "user_copy.h"
 #include "vm.h"
+#include "worker.h"
 #include "vega.h"
 #include "vesta.h"
 
@@ -179,6 +180,46 @@ static void halt_forever(void)
     for (;;) __asm__ volatile ("stop #0x2700");
 }
 
+static void panic_worker_state(void)
+{
+    KernelProcessMaintenanceDiagnostics maintenance;
+    KernelWorkerStats stats;
+
+    if (!kernel_worker_stats(&stats))
+        return;
+    console_puts("Worker: state=");
+    console_dec32(stats.state);
+    console_puts(" pending=0x");
+    console_hex32(stats.pending_work);
+    console_puts(" retry=0x");
+    console_hex32(stats.retry_work);
+    console_puts(" signals=");
+    console_dec32(stats.signals);
+    console_puts(" dispatches=");
+    console_dec32(stats.dispatches);
+    console_puts(" passes=");
+    console_dec32(stats.service_passes);
+    console_puts(" yields=");
+    console_dec32(stats.user_yields);
+    console_puts(" restores=");
+    console_dec32(stats.restore_entries);
+    console_puts(" entries=");
+    console_dec32(stats.main_entries);
+    console_putc('\n');
+    if (!kernel_process_maintenance_diagnostics(&maintenance) ||
+        maintenance.failure == KERNEL_PROCESS_MAINTENANCE_NONE)
+        return;
+    console_puts("Maint: failure=");
+    console_dec32(maintenance.failure);
+    console_puts(" status=");
+    console_dec32(maintenance.status);
+    console_puts(" observed=");
+    console_dec32(maintenance.observed);
+    console_puts(" expected=");
+    console_dec32(maintenance.expected);
+    console_putc('\n');
+}
+
 static void panic_begin(const char *reason)
 {
     screen_clear();
@@ -194,6 +235,14 @@ static void panic_begin(const char *reason)
     console_puts("HW:     0x");
     console_hex32(VESTA->BUILD_ID);
     console_putc('\n');
+    if (kernel_dispatch_last_supervisor_irq_pc() != 0u) {
+        console_puts("Last supervisor IRQ: SR=0x");
+        console_hex32(kernel_dispatch_last_supervisor_irq_sr());
+        console_puts(" PC=0x");
+        console_hex32(kernel_dispatch_last_supervisor_irq_pc());
+        console_putc('\n');
+    }
+    panic_worker_state();
 }
 
 static void panic_finish(void) __attribute__((noreturn));
@@ -432,6 +481,8 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         kernel_panic("kernel page-table construction failed");
     if (kernel_vm_enable() != KERNEL_VM_OK || !kernel_vm_enabled())
         kernel_panic("PMMU enable failed");
+    if (kernel_worker_init() != KERNEL_WORKER_OK)
+        kernel_panic("kernel worker initialization failed");
     if (!kernel_memory_stats(&memory_stats))
         kernel_panic("physical memory stats unavailable");
     if (!kernel_vm_stats(&vm_stats))
@@ -466,6 +517,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     console_dec32(memory_stats.total_frames);
     console_puts(" total\n");
     console_puts("User copy .......... OK, fault recovery verified\n");
+    console_puts("Kernel worker ...... OK, guarded MSP\n");
 
     kernel_platform_interrupt_init(boot_info.cpu_hz);
     kernel_enable_interrupts();

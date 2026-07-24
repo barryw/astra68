@@ -24,7 +24,8 @@ OBJECTS = $(BUILD_DIR)/entry.o $(BUILD_DIR)/vectors.o \
           $(BUILD_DIR)/memory.o $(BUILD_DIR)/dma.o $(BUILD_DIR)/block.o \
           $(BUILD_DIR)/handle.o $(BUILD_DIR)/context.o \
           $(BUILD_DIR)/process.o $(BUILD_DIR)/user_test.o \
-          $(BUILD_DIR)/dispatch.o \
+          $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/worker.o \
+          $(BUILD_DIR)/worker_asm.o \
           $(BUILD_DIR)/pmmu.o $(BUILD_DIR)/vm.o \
           $(BUILD_DIR)/exception.o $(BUILD_DIR)/user_copy.o \
           $(BUILD_DIR)/user_copy_asm.o \
@@ -46,7 +47,7 @@ $(OBJECTS): $(BUILD_INFO)
 $(BUILD_DIR)/entry.o: entry.S kernel.ld | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/vectors.o: vectors.S kernel.ld | $(BUILD_DIR)
+$(BUILD_DIR)/vectors.o: vectors.S context.h dispatch.h user_copy.h kernel.ld | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/kernel.o: kernel.c $(BUILD_INFO) dispatch.h \
@@ -77,7 +78,15 @@ $(BUILD_DIR)/process.o: process.c process.h context.h handle.h block.h \
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/dispatch.o: dispatch.c dispatch.h process.h context.h \
-                         exception.h panic.h platform.h user_copy.h | $(BUILD_DIR)
+                         exception.h panic.h platform.h user_copy.h \
+                         worker.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/worker.o: worker.c worker.h process.h context.h panic.h \
+                       platform.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/worker_asm.o: worker.S worker.h context.h kernel.ld | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/user_test.o: user_test.S ../include/astra/syscall.h | $(BUILD_DIR)
@@ -111,7 +120,7 @@ verify: astra_kernel.elf astra_kernel.bin
 	@echo "== kernel sections =="
 	@$(OBJDUMP) -h astra_kernel.elf
 	@echo "== kernel entry and bounds =="
-	@$(OBJDUMP) -t astra_kernel.elf | grep -E '_kernel_(entry|image_start|file_end|memory_end|stack_top|vectors)'
+	@$(OBJDUMP) -t astra_kernel.elf | grep -E '_kernel_(entry|image_start|file_end|memory_end|stack_top|worker_stack_(guard|top)|vectors)'
 	@bytes=$$(wc -c < astra_kernel.bin); \
 	  test $$bytes -le $$((0x80000)); \
 	  printf 'kernel payload: %s bytes\n' "$$bytes"
@@ -120,7 +129,8 @@ test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_memory \
       $(BUILD_DIR)/test_dma $(BUILD_DIR)/test_block $(BUILD_DIR)/test_vm \
       $(BUILD_DIR)/test_exception $(BUILD_DIR)/test_user_copy \
       $(BUILD_DIR)/test_handle $(BUILD_DIR)/test_context \
-      $(BUILD_DIR)/test_process $(BUILD_DIR)/test_dispatch
+      $(BUILD_DIR)/test_process $(BUILD_DIR)/test_worker \
+      $(BUILD_DIR)/test_dispatch
 	./$(BUILD_DIR)/test_boot_contract
 	./$(BUILD_DIR)/test_memory
 	./$(BUILD_DIR)/test_dma
@@ -131,6 +141,7 @@ test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_memory \
 	./$(BUILD_DIR)/test_handle
 	./$(BUILD_DIR)/test_context
 	./$(BUILD_DIR)/test_process
+	./$(BUILD_DIR)/test_worker
 	./$(BUILD_DIR)/test_dispatch
 
 $(BUILD_DIR)/test_boot_contract: tests/test_boot_contract.c \
@@ -204,9 +215,15 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
 
 $(BUILD_DIR)/test_dispatch: tests/test_dispatch.c dispatch.c dispatch.h \
                              exception.c exception.h process.h context.h \
-                             panic.h platform.h user_copy.h | $(BUILD_DIR)
+                             panic.h platform.h user_copy.h worker.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -I. -I../include \
 		exception.c dispatch.c tests/test_dispatch.c -o $@
+
+$(BUILD_DIR)/test_worker: tests/test_worker.c worker.c worker.h process.h \
+                           context.h panic.h platform.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror \
+		-DKERNEL_WORKER_HOST_TEST=1 -I. -I../include \
+		worker.c tests/test_worker.c -o $@
 
 clean:
 	rm -rf $(BUILD_DIR) astra_kernel.elf astra_kernel.bin astra_kernel.map

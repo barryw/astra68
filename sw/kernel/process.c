@@ -41,6 +41,7 @@ _Static_assert(sizeof(KernelProcess) % KERNEL_CONTEXT_ALIGNMENT == 0u,
 
 static KernelProcess processes[KERNEL_PROCESS_MAX];
 static KernelSchedulerStats scheduler_stats;
+static KernelProcessMaintenanceDiagnostics maintenance_diagnostics;
 static int32_t current_slot = -1;
 
 #if ASTRA_KERNEL_SOAK_SELFTEST
@@ -88,6 +89,17 @@ static void copy_bytes(void *destination, const void *source, uint32_t size)
 
     while (size-- != 0u)
         *out++ = *in++;
+}
+
+static KernelProcessStatus maintenance_failed(
+    KernelProcessMaintenanceFailure failure, KernelProcessStatus status,
+    uint32_t observed, uint32_t expected)
+{
+    maintenance_diagnostics.failure = (uint32_t)failure;
+    maintenance_diagnostics.status = (uint32_t)status;
+    maintenance_diagnostics.observed = observed;
+    maintenance_diagnostics.expected = expected;
+    return status;
 }
 
 static uint8_t *physical_bytes(uint32_t physical, uint32_t size)
@@ -286,6 +298,7 @@ void kernel_process_init(void)
     for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index)
         clear_bytes(&processes[index], sizeof(processes[index]));
     clear_bytes(&scheduler_stats, sizeof(scheduler_stats));
+    clear_bytes(&maintenance_diagnostics, sizeof(maintenance_diagnostics));
 #if ASTRA_KERNEL_SOAK_SELFTEST
     clear_bytes(&soak_state, sizeof(soak_state));
 #endif
@@ -414,6 +427,20 @@ KernelProcessStatus kernel_process_start(KernelCpuContext **next_context)
 bool kernel_process_active(void)
 {
     return current_slot >= 0;
+}
+
+KernelCpuContext *kernel_process_current_context(void)
+{
+    KernelProcess *current;
+
+    if (current_slot < 0 || current_slot >= (int32_t)KERNEL_PROCESS_MAX)
+        return NULL;
+    current = &processes[current_slot];
+    if (current->process_state != KERNEL_PROCESS_RUNNING ||
+        current->thread_state != KERNEL_THREAD_RUNNING ||
+        !kernel_context_valid(&current->context))
+        return NULL;
+    return &current->context;
 }
 
 KernelProcessStatus kernel_process_on_timer(const uint32_t *registers,
@@ -545,21 +572,23 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
 
 KernelProcessStatus kernel_process_maintenance(void)
 {
-    bool reap_pending = false;
     KernelProcessStatus status = KERNEL_PROCESS_OK;
 
-    for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
-        if (processes[index].process_state == KERNEL_PROCESS_EXITING) {
-            reap_pending = true;
-            break;
-        }
-    }
-    if (reap_pending) {
-        if (kernel_block_service(NULL) != KERNEL_BLOCK_OK)
-            return KERNEL_PROCESS_CORRUPT;
+    clear_bytes(&maintenance_diagnostics, sizeof(maintenance_diagnostics));
+
+    if (kernel_process_maintenance_pending()) {
+        KernelBlockStatus block_status = kernel_block_service(NULL);
+
+        if (block_status != KERNEL_BLOCK_OK)
+            return maintenance_failed(
+                KERNEL_PROCESS_MAINTENANCE_BLOCK_SERVICE,
+                KERNEL_PROCESS_CORRUPT, (uint32_t)block_status,
+                (uint32_t)KERNEL_BLOCK_OK);
         status = kernel_process_reap_deferred();
         if (status != KERNEL_PROCESS_OK)
-            return status;
+            return maintenance_failed(KERNEL_PROCESS_MAINTENANCE_REAP,
+                                      status, (uint32_t)status,
+                                      (uint32_t)KERNEL_PROCESS_OK);
     }
 #if ASTRA_KERNEL_SOAK_SELFTEST
     if (soak_state.enabled != 0u &&
@@ -570,19 +599,45 @@ KernelProcessStatus kernel_process_maintenance(void)
         uint32_t cycles;
 
         if (scheduler_stats.completed_teardowns !=
-                soak_state.last_completed_teardowns + 1u ||
-            scheduler_stats.live_processes != 1u ||
-            scheduler_stats.completed_user_fault_teardowns !=
-                scheduler_stats.user_faults ||
-            scheduler_stats.completed_teardowns !=
-                scheduler_stats.user_faults ||
-            !kernel_memory_stats(&memory_stats) ||
-            memory_stats.free_frames != soak_state.baseline_free_frames)
-            return KERNEL_PROCESS_CORRUPT;
+            soak_state.last_completed_teardowns + 1u)
+            return maintenance_failed(
+                KERNEL_PROCESS_MAINTENANCE_TEARDOWN_SEQUENCE,
+                KERNEL_PROCESS_CORRUPT,
+                scheduler_stats.completed_teardowns,
+                soak_state.last_completed_teardowns + 1u);
+        if (scheduler_stats.live_processes != 1u)
+            return maintenance_failed(KERNEL_PROCESS_MAINTENANCE_LIVE_COUNT,
+                                      KERNEL_PROCESS_CORRUPT,
+                                      scheduler_stats.live_processes, 1u);
+        if (scheduler_stats.completed_user_fault_teardowns !=
+            scheduler_stats.user_faults)
+            return maintenance_failed(
+                KERNEL_PROCESS_MAINTENANCE_FAULT_TEARDOWN_COUNT,
+                KERNEL_PROCESS_CORRUPT,
+                scheduler_stats.completed_user_fault_teardowns,
+                scheduler_stats.user_faults);
+        if (scheduler_stats.completed_teardowns !=
+            scheduler_stats.user_faults)
+            return maintenance_failed(
+                KERNEL_PROCESS_MAINTENANCE_TOTAL_TEARDOWN_COUNT,
+                KERNEL_PROCESS_CORRUPT,
+                scheduler_stats.completed_teardowns,
+                scheduler_stats.user_faults);
+        if (!kernel_memory_stats(&memory_stats))
+            return maintenance_failed(KERNEL_PROCESS_MAINTENANCE_MEMORY_STATS,
+                                      KERNEL_PROCESS_CORRUPT, 0u, 1u);
+        if (memory_stats.free_frames != soak_state.baseline_free_frames)
+            return maintenance_failed(KERNEL_PROCESS_MAINTENANCE_FREE_FRAMES,
+                                      KERNEL_PROCESS_CORRUPT,
+                                      memory_stats.free_frames,
+                                      soak_state.baseline_free_frames);
 
         cycles = scheduler_stats.soak_cycles + 1u;
         if (cycles == 0u)
-            return KERNEL_PROCESS_CORRUPT;
+            return maintenance_failed(
+                KERNEL_PROCESS_MAINTENANCE_CYCLE_OVERFLOW,
+                KERNEL_PROCESS_CORRUPT, scheduler_stats.soak_cycles,
+                UINT32_MAX);
         scheduler_stats.soak_cycles = cycles;
         soak_state.last_completed_teardowns =
             scheduler_stats.completed_teardowns;
@@ -598,11 +653,36 @@ KernelProcessStatus kernel_process_maintenance(void)
             soak_state.image, soak_state.image_size, soak_state.entry_offset,
             cycles, &process_id);
         if (status != KERNEL_PROCESS_OK || process_id == 0u)
-            return status == KERNEL_PROCESS_OK ? KERNEL_PROCESS_CORRUPT :
-                                                status;
+            return maintenance_failed(
+                KERNEL_PROCESS_MAINTENANCE_CREATE,
+                status == KERNEL_PROCESS_OK ? KERNEL_PROCESS_CORRUPT : status,
+                status == KERNEL_PROCESS_OK ? process_id : (uint32_t)status,
+                status == KERNEL_PROCESS_OK ? 1u :
+                                              (uint32_t)KERNEL_PROCESS_OK);
     }
 #endif
     return KERNEL_PROCESS_OK;
+}
+
+bool kernel_process_maintenance_diagnostics(
+    KernelProcessMaintenanceDiagnostics *diagnostics)
+{
+    if (diagnostics == NULL)
+        return false;
+    diagnostics->failure = maintenance_diagnostics.failure;
+    diagnostics->status = maintenance_diagnostics.status;
+    diagnostics->observed = maintenance_diagnostics.observed;
+    diagnostics->expected = maintenance_diagnostics.expected;
+    return true;
+}
+
+bool kernel_process_maintenance_pending(void)
+{
+    for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
+        if (processes[index].process_state == KERNEL_PROCESS_EXITING)
+            return true;
+    }
+    return false;
 }
 
 KernelProcessStatus kernel_process_reap_deferred(void)

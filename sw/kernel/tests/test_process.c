@@ -254,6 +254,8 @@ static void test_preemption_fault_containment_and_teardown(void)
 
     assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
     assert(next != NULL);
+    assert(kernel_process_current_context() == next);
+    assert(!kernel_process_maintenance_pending());
     assert(kernel_process_snapshot(0u, &survivor));
     assert(survivor.process_state == KERNEL_PROCESS_RUNNING);
     assert(survivor.thread_state == KERNEL_THREAD_RUNNING);
@@ -264,6 +266,8 @@ static void test_preemption_fault_containment_and_teardown(void)
                                    KERNEL_PROCESS_STACK_TOP - 16u, frame,
                                    &next) == KERNEL_PROCESS_OK);
     assert(next != NULL);
+    assert(kernel_process_current_context() == next);
+    assert(!kernel_process_maintenance_pending());
     assert(kernel_process_snapshot(1u, &offender));
     assert(offender.process_state == KERNEL_PROCESS_RUNNING);
     assert(offender.thread_state == KERNEL_THREAD_RUNNING);
@@ -280,6 +284,8 @@ static void test_preemption_fault_containment_and_teardown(void)
     assert(after_fault.owner_release_operations ==
            before_fault.owner_release_operations);
     assert(next != NULL);
+    assert(kernel_process_current_context() == next);
+    assert(kernel_process_maintenance_pending());
     assert(kernel_process_snapshot(1u, &offender));
     assert(offender.process_state == KERNEL_PROCESS_EXITING);
     assert(offender.thread_state == KERNEL_THREAD_DEAD);
@@ -291,10 +297,12 @@ static void test_preemption_fault_containment_and_teardown(void)
     assert(stats.completed_user_fault_teardowns == 0u);
 
     assert(kernel_process_maintenance() == KERNEL_PROCESS_DEFERRED);
+    assert(kernel_process_maintenance_pending());
     assert(kernel_process_snapshot(1u, &offender));
     assert(offender.process_state == KERNEL_PROCESS_EXITING);
     assert(kernel_dma_complete(&dma_token) == KERNEL_DMA_OK);
     assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(!kernel_process_maintenance_pending());
     assert(kernel_process_snapshot(1u, &offender));
     assert(offender.process_state == KERNEL_PROCESS_DEAD);
 
@@ -330,9 +338,12 @@ static void test_preemption_fault_containment_and_teardown(void)
                                      &next) == KERNEL_PROCESS_NO_RUNNABLE);
     assert(next == NULL);
     assert(!kernel_process_active());
+    assert(kernel_process_current_context() == NULL);
+    assert(kernel_process_maintenance_pending());
     assert(kernel_memory_stats(&final));
     assert(final.free_frames < baseline.free_frames);
     assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(!kernel_process_maintenance_pending());
     assert(kernel_memory_stats(&final));
     assert(final.free_frames == baseline.free_frames);
     assert(kernel_process_stats(&stats));
@@ -378,6 +389,7 @@ static void test_soak_relaunches_only_after_exact_teardown(void)
         assert(kernel_process_on_fault(registers,
                                        KERNEL_PROCESS_STACK_TOP - 32u, frame,
                                        &next) == KERNEL_PROCESS_OK);
+        assert(kernel_process_maintenance_pending());
         assert(kernel_memory_stats(&between_cycles));
         assert(between_cycles.free_frames == before_fault.free_frames);
         assert(between_cycles.owner_release_operations ==
@@ -401,6 +413,7 @@ static void test_soak_relaunches_only_after_exact_teardown(void)
         } else {
             assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
         }
+        assert(!kernel_process_maintenance_pending());
         assert(kernel_process_stats(&stats));
         assert(stats.live_processes == 2u);
         assert(stats.user_faults == cycle);

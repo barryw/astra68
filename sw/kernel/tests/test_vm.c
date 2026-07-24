@@ -163,10 +163,12 @@ static void test_kernel_root_and_enable_sequence(void)
     low = physical_words(low_physical);
     assert(low[0] == 0x02000001u);
     assert(low[(0x02080000u - 0x02000000u) >> 12] == 0u);
+    assert(low[(0x02083000u - 0x02000000u) >> 12] == 0u);
     assert(low[0x3ffu] == 0x023ff001u);
     for (uint32_t index = 9u; index <= 15u; ++index)
         assert(root[index] == ((index << 22) | 1u));
     assert(stats.kernel_stack_guard == 0x02080000u);
+    assert(stats.kernel_worker_stack_guard == 0x02083000u);
     assert(stats.supervisor_table_pages == 3u);
     assert((root[1023] & 3u) == 2u);
     high_physical = root[1023] & 0xfffffff0u;

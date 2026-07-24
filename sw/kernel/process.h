@@ -56,6 +56,27 @@ typedef enum KernelProcessStatus {
     KERNEL_PROCESS_CORRUPT
 } KernelProcessStatus;
 
+typedef enum KernelProcessMaintenanceFailure {
+    KERNEL_PROCESS_MAINTENANCE_NONE = 0,
+    KERNEL_PROCESS_MAINTENANCE_BLOCK_SERVICE,
+    KERNEL_PROCESS_MAINTENANCE_REAP,
+    KERNEL_PROCESS_MAINTENANCE_TEARDOWN_SEQUENCE,
+    KERNEL_PROCESS_MAINTENANCE_LIVE_COUNT,
+    KERNEL_PROCESS_MAINTENANCE_FAULT_TEARDOWN_COUNT,
+    KERNEL_PROCESS_MAINTENANCE_TOTAL_TEARDOWN_COUNT,
+    KERNEL_PROCESS_MAINTENANCE_MEMORY_STATS,
+    KERNEL_PROCESS_MAINTENANCE_FREE_FRAMES,
+    KERNEL_PROCESS_MAINTENANCE_CYCLE_OVERFLOW,
+    KERNEL_PROCESS_MAINTENANCE_CREATE
+} KernelProcessMaintenanceFailure;
+
+typedef struct KernelProcessMaintenanceDiagnostics {
+    uint32_t failure;
+    uint32_t status;
+    uint32_t observed;
+    uint32_t expected;
+} KernelProcessMaintenanceDiagnostics;
+
 typedef struct KernelProcessSnapshot {
     uint32_t id;
     uint32_t owner;
@@ -99,6 +120,7 @@ KernelProcessStatus kernel_process_create(const void *image,
                                           uint32_t *process_id);
 KernelProcessStatus kernel_process_start(KernelCpuContext **next_context);
 bool kernel_process_active(void);
+KernelCpuContext *kernel_process_current_context(void);
 KernelProcessStatus kernel_process_on_timer(const uint32_t *registers,
                                             uint32_t user_stack,
                                             const void *raw_frame,
@@ -112,7 +134,10 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
                                             const void *raw_frame,
                                             KernelCpuContext **next_context);
 KernelProcessStatus kernel_process_maintenance(void);
+bool kernel_process_maintenance_diagnostics(
+    KernelProcessMaintenanceDiagnostics *diagnostics);
 KernelProcessStatus kernel_process_reap_deferred(void);
+bool kernel_process_maintenance_pending(void);
 bool kernel_process_snapshot(uint32_t slot, KernelProcessSnapshot *snapshot);
 bool kernel_process_stats(KernelSchedulerStats *stats);
 

@@ -1,23 +1,35 @@
 #ifndef ASTRA_KERNEL_DISPATCH_H
 #define ASTRA_KERNEL_DISPATCH_H
 
+#define KERNEL_DISPATCH_RESUME 0
+#define KERNEL_DISPATCH_WORKER 1
+
+#ifndef __ASSEMBLER__
+
 #include "context.h"
 
 #include <stdint.h>
 
-KernelCpuContext *kernel_exception_entry_dispatch(const uint32_t *registers,
-                                                  const void *raw_frame,
-                                                  uint32_t user_stack);
-KernelCpuContext *kernel_access_entry_dispatch(const uint32_t *registers,
-                                               void *raw_frame,
-                                               uint32_t user_stack);
-KernelCpuContext *kernel_syscall_entry_dispatch(const uint32_t *registers,
-                                                const void *raw_frame,
-                                                uint32_t user_stack);
-KernelCpuContext *kernel_timer_entry_dispatch(const uint32_t *registers,
-                                              const void *raw_frame,
-                                              uint32_t user_stack);
-void kernel_idle_maintenance(void);
+typedef uintptr_t KernelDispatchTarget;
+
+static inline KernelDispatchTarget
+kernel_dispatch_user_target(KernelCpuContext *context)
+{
+    return (KernelDispatchTarget)(uintptr_t)context;
+}
+
+KernelDispatchTarget kernel_exception_entry_dispatch(
+    const uint32_t *registers, const void *raw_frame, uint32_t user_stack);
+KernelDispatchTarget kernel_access_entry_dispatch(
+    const uint32_t *registers, void *raw_frame, uint32_t user_stack);
+KernelDispatchTarget kernel_syscall_entry_dispatch(
+    const uint32_t *registers, const void *raw_frame, uint32_t user_stack);
+KernelDispatchTarget kernel_timer_entry_dispatch(
+    const uint32_t *registers, const void *raw_frame, uint32_t user_stack);
 uint32_t kernel_dispatch_user_fault_irqoff_max_cycles(void);
+uint32_t kernel_dispatch_last_supervisor_irq_pc(void);
+uint16_t kernel_dispatch_last_supervisor_irq_sr(void);
+
+#endif
 
 #endif

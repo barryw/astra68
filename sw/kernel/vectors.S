@@ -2,6 +2,7 @@
 
 #include "user_copy.h"
 #include "context.h"
+#include "dispatch.h"
 
 	.section .vectors, "a", @progbits
 	.balign 1024
@@ -29,7 +30,7 @@ _kernel_vectors:
 	.globl  _kernel_exception_entry
 	.type   _kernel_exception_entry, @function
 _kernel_exception_entry:
-	move.w  #0x2700, %sr
+	ori.w   #0x0700, %sr
 	movem.l %d0-%d7/%a0-%a6, -(%sp)
 	lea     60(%sp), %a1
 	move.l  %usp, %a0
@@ -39,14 +40,16 @@ _kernel_exception_entry:
 	move.l  %a0, -(%sp)
 	jsr     kernel_exception_entry_dispatch
 	lea     12(%sp), %sp
+	cmpi.l  #KERNEL_DISPATCH_WORKER, %d0
+	beq     _kernel_restore_worker_context
 	tst.l   %d0
-	beq     .Lkernel_idle
-	bra     _kernel_restore_user_context
+	bne     _kernel_restore_user_context
+	bra     .Lkernel_idle
 
 	.globl  _kernel_access_fault_entry
 	.type   _kernel_access_fault_entry, @function
 _kernel_access_fault_entry:
-	move.w  #0x2700, %sr
+	ori.w   #0x0700, %sr
 	movem.l %d0-%d7/%a0-%a6, -(%sp)
 	lea     60(%sp), %a1
 	move.l  %usp, %a0
@@ -56,6 +59,8 @@ _kernel_access_fault_entry:
 	move.l  %a0, -(%sp)
 	jsr     kernel_access_entry_dispatch
 	lea     12(%sp), %sp
+	cmpi.l  #KERNEL_DISPATCH_WORKER, %d0
+	beq     _kernel_restore_worker_context
 	tst.l   %d0
 	bne     _kernel_restore_user_context
 	movem.l (%sp)+, %d0-%d7/%a0-%a6
@@ -88,7 +93,7 @@ _kernel_access_fault_entry:
 	.globl  _kernel_syscall_entry
 	.type   _kernel_syscall_entry, @function
 _kernel_syscall_entry:
-	move.w  #0x2700, %sr
+	ori.w   #0x0700, %sr
 	movem.l %d0-%d7/%a0-%a6, -(%sp)
 	lea     60(%sp), %a1
 	move.l  %usp, %a0
@@ -98,14 +103,16 @@ _kernel_syscall_entry:
 	move.l  %a0, -(%sp)
 	jsr     kernel_syscall_entry_dispatch
 	lea     12(%sp), %sp
+	cmpi.l  #KERNEL_DISPATCH_WORKER, %d0
+	beq     _kernel_restore_worker_context
 	tst.l   %d0
-	beq     .Lkernel_idle
-	bra     _kernel_restore_user_context
+	bne     _kernel_restore_user_context
+	bra     .Lkernel_idle
 
 	.globl  _kernel_interrupt_entry
 	.type   _kernel_interrupt_entry, @function
 _kernel_interrupt_entry:
-	move.w  #0x2700, %sr
+	ori.w   #0x0700, %sr
 	movem.l %d0-%d7/%a0-%a6, -(%sp)
 	lea     60(%sp), %a1
 	move.l  %usp, %a0
@@ -115,6 +122,8 @@ _kernel_interrupt_entry:
 	move.l  %a0, -(%sp)
 	jsr     kernel_timer_entry_dispatch
 	lea     12(%sp), %sp
+	cmpi.l  #KERNEL_DISPATCH_WORKER, %d0
+	beq     _kernel_restore_worker_context
 	tst.l   %d0
 	bne     _kernel_restore_user_context
 	movem.l (%sp)+, %d0-%d7/%a0-%a6
@@ -143,20 +152,19 @@ _kernel_restore_user_context:
 	move.l  %d0, %a0
 	move.l  %a0, %usp
 	move.w  #0x2000, %sr
-1:	jsr     kernel_idle_maintenance
-	stop    #0x2000
+1:	stop    #0x2000
 	bra     1b
 
 	.globl  kernel_enable_interrupts
 	.type   kernel_enable_interrupts, @function
 kernel_enable_interrupts:
-	move.w  #0x2000, %sr
+	andi.w  #0xf8ff, %sr
 	rts
 
 	.globl  kernel_disable_interrupts
 	.type   kernel_disable_interrupts, @function
 kernel_disable_interrupts:
-	move.w  #0x2700, %sr
+	ori.w   #0x0700, %sr
 	rts
 
 	.section .note.GNU-stack, "", @progbits

@@ -59,6 +59,15 @@ SECTIONS {
     _kernel_stack_top = .;
   } > KERNEL :data
 
+  .kernel_worker_stack (NOLOAD) : {
+    . = ALIGN(4096);
+    _kernel_worker_stack_guard = .;
+    . += 4096;
+    _kernel_worker_stack_bottom = .;
+    . += 8192;
+    _kernel_worker_stack_top = .;
+  } > KERNEL :data
+
   . = ALIGN(4096);
   _kernel_memory_end = .;
 
@@ -70,5 +79,9 @@ ASSERT((_bss_start & 15) == 0 && (_bss_end & 15) == 0,
        "kernel BSS bounds must remain 16-byte aligned")
 ASSERT((_kernel_stack_guard & 4095) == 0,
        "kernel stack guard must remain page aligned")
+ASSERT((_kernel_worker_stack_guard & 4095) == 0,
+       "kernel worker stack guard must remain page aligned")
+ASSERT(_kernel_worker_stack_top - _kernel_worker_stack_bottom == 8192,
+       "kernel worker stack size changed")
 ASSERT(_kernel_memory_end <= ORIGIN(KERNEL) + LENGTH(KERNEL),
        "kernel exceeds its reserved bootstrap region")
