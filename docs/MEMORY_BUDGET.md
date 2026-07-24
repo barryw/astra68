@@ -157,6 +157,8 @@ The 2026-07-24 K4 handle-synchronization build reports:
 | total through `_kernel_memory_end` | 380,928 |
 | flat kernel binary | 44,740 |
 
+The exact hardware-qualified K4 binary SHA-256 is
+`11c2ed31ca5caf07dcfbd87cf354f6ce7be3eb1873cef412b65a6821940fb91c`.
 K4 adds 3,720 flat-binary bytes and 1,256 BSS bytes over K3. The image leaves
 143,360 bytes in the fixed 512 KiB reservation. The fixed synchronization pool
 accounts for 32 x 36-byte objects (1,152 bytes); the remaining BSS delta is

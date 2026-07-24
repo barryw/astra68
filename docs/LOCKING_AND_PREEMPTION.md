@@ -62,12 +62,13 @@ inheritance and donation are not implemented. Each thread has an 8 KiB
 supervisor stack behind its own 4 KiB unmapped guard.
 
 All registers, USP, PC, and SR are thread state. CRP is process state. A switch
-  between threads in one process does not reload CRP or flush caches/ATC; host,
-  Musashi, full pin-level, and ULX3S tests count that path separately from a
-  cross-CRP switch. Timer and voluntary-yield paths apply priority selection.
-  The internal K3 event path proves immediate handoff when a higher-priority
-  waiter wakes or its deadline expires. Thread creation and event syscalls
-  remain qualification-only; no stable user synchronization ABI is exposed.
+between threads in one process does not reload CRP or flush caches/ATC; host,
+Musashi, full pin-level, and ULX3S tests count that path separately from a
+cross-CRP switch. Timer and voluntary-yield paths apply priority selection.
+The public K4 event/semaphore path proves immediate handoff when a
+higher-priority waiter wakes or its deadline expires. Thread creation remains
+qualification-only; synchronization syscalls have a documented provisional
+ABI 0.1 contract.
 
 The running thread owns one absolute quantum deadline. Vesta is always
 reprogrammed to the earlier of that deadline and the root of the wait-deadline
@@ -179,9 +180,10 @@ To prevent lost wakeups:
 Timeout, cancellation, signal, and peer death compete through one atomic waiter
 state; exactly one wins and supplies the result.
 
-The current single-CPU qualification event runs inside serialized supervisor
-dispatch. It snapshots the wait-queue sequence while testing the condition;
-`kernel_thread_block_until` succeeds only if that sequence is still current.
+The current single-CPU K4 synchronization path runs inside serialized
+supervisor dispatch. It snapshots the wait-queue sequence while testing the
+condition; `kernel_thread_block_until` succeeds only if that sequence is still
+current.
 Every wake, expiry, close, or process retirement advances the sequence. A
 successful timed block links the thread to the object wait queue first and
 then to the deadline heap; failure unwinds both links before restoring
@@ -189,9 +191,9 @@ then to the deadline heap; failure unwinds both links before restoring
 Expiry removes the heap entry and wait link before making it `READY`. Process
 death performs the same withdrawal for every sibling before deferred
 destruction. These paths are idempotence-checked so one race winner supplies
-one result and one cancellation count. Explicit user cancellation and peer
-death remain stable-ABI work; they must reuse this owner rather than introduce
-a second timeout queue.
+one result and one cancellation count. Explicit user cancellation and creator
+death use this same owner; wait-multiple and port/service peer-death semantics
+must also reuse it rather than introduce a second timeout queue.
 
 ## Interrupt and deferred work
 

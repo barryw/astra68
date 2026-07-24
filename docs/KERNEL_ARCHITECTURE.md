@@ -216,13 +216,13 @@ state. Process death removes all of its threads from ready and wait queues
 before deferred handle/address-space/frame destruction; thread records are not
 reusable until that destruction completes.
 
-The current internal qualification path has sequence-checked atomic block,
-priority/FIFO wake-one and wake-all, a signaled/closed event, bounded absolute
-deadlines, and immediate higher-priority handoff on signal or timeout. Timeout,
-signal, close, and process death remove a waiter from the object queue and
-deadline heap exactly once. It does not yet expose runtime thread creation,
-handle-backed user events/semaphores, public deadline operations, explicit
-cancellation, priority inheritance/donation, or the stable pool sizes below.
+The current K4 path has sequence-checked atomic block, priority/FIFO wake-one
+and wake-all, handle-backed auto/manual events and semaphores, signed absolute
+monotonic-nanosecond deadlines, explicit cancellation, and immediate
+higher-priority handoff on signal or timeout. Timeout, signal, cancellation,
+close, and process death remove a waiter from the object queue and deadline
+heap exactly once. Runtime thread creation, wait-multiple, priority
+inheritance/donation, and stable post-0.1 pool sizes are not yet exposed.
 
 ## K4 synchronization-object contract
 

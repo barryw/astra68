@@ -277,17 +277,17 @@ interrupt-disabled time, scheduler lock, wake-to-run latency, same/cross-CRP
 switch, syscall, copy, map/unmap, ATC miss, and device reset. The limits in
 `LOCKING_AND_PREEMPTION.md` are release failures, not informational warnings.
 
-The current K3 limits are 50,000 cycles for syscall and timer dispatch, 125,000
+The current K4 limits are 50,000 cycles for syscall and timer dispatch, 125,000
 for user-fault containment, 10,000 for scheduler selection, 15,000 for same-CRP
 switch, 50,000 for cross-CRP switch, and 15,000 each for block and wake. The
-Deadline expiry has a separate 20,000-cycle limit. The exact coherent K3
-pin-level maxima are 23,897, 25,051, 24,732, 1,475, 2,876, 4,131, 2,260,
-3,391, and 6,163 cycles respectively. That run intentionally uses a 64 KiB
+deadline expiry has a separate 20,000-cycle limit. The exact coherent K4
+pin-level maxima are 39,729, 25,059, 44,036, 1,490, 2,852, 4,061, 2,302,
+3,432, and 6,164 cycles respectively. That run intentionally uses a 64 KiB
 simulated BIST; both routed-hardware runs execute the real full-range 32 MiB
-BIST. They report 23,873-cycle syscall, 25,099-cycle timer, at most 24,793-cycle
-fault, 1,482-cycle pick, at most 2,874-cycle same-CRP, 4,133-cycle cross-CRP,
-2,256-cycle block, 3,410-cycle wake, and 6,177-cycle deadline maxima. Every
-metric has zero overruns.
+BIST. Both hardware runs report 39,683-cycle syscall, 25,038-cycle timer,
+44,037-cycle fault, 1,480-cycle pick, 2,839-cycle same-CRP, 4,063-cycle
+cross-CRP, 2,294-cycle block, 3,435-cycle wake, and 6,164-cycle deadline
+maxima. Every metric has zero overruns.
 
 Retained K3 evidence and SHA-256 values are:
 
@@ -302,6 +302,16 @@ Retained K3 evidence and SHA-256 values are:
   and
 - `docs/evidence/k3-25d9cb8e-8929c063-hw-2.log`:
   `f5f46ccd4230aca44a360a402dc57747e42aef2a8f56461f55960a3bd8ceaa55`.
+
+Retained K4 pin-level and hardware evidence and SHA-256 values are:
+
+- `docs/evidence/k4-662aa04-rtl.log`:
+  `fa89ee4c9188866a20aed4ced11d90d7391a8455f0ef4fc1fd6614619ed661da`;
+- `docs/evidence/k4-25d9cb8e-662aa04-hw-1.log`:
+  `4dd8583781bca253229240e25f4169d70aaa1a5a224b22be24d4aef23d2c3135`;
+  and
+- `docs/evidence/k4-25d9cb8e-662aa04-hw-2.log`:
+  `b614522dd02fd9f110b56196297dd7afb221165c60e5383424abd3a7e1139de6`.
 
 ## Panic and retained diagnostics
 

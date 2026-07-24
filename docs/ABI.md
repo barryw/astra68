@@ -46,13 +46,13 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `EXIT` | CURRENT | terminates the calling process in K1 |
 | 4 | `CLOSE` | CURRENT | closes `D1` in the caller's handle table |
-| 5 | `CLOCK_MONOTONIC` | K4 CONTRACT | returns signed monotonic nanoseconds in `D1:D2` (high:low) |
-| 6 | `EVENT_CREATE` | K4 CONTRACT | `D1=flags`, `D2=rights`; returns handle in `D1` |
-| 7 | `SEMAPHORE_CREATE` | K4 CONTRACT | `D1=initial`, `D2=maximum`, `D3=rights`; returns handle in `D1` |
-| 8 | `WAIT_ONE` | K4 CONTRACT | `D1=handle`, `D2:D3=absolute deadline` (high:low) |
-| 9 | `SIGNAL` | K4 CONTRACT | `D1=handle`, `D2=release count`; returns woken count in `D1` |
-| 10 | `EVENT_RESET` | K4 CONTRACT | `D1=event handle`; requires administer right |
-| 11 | `CANCEL_WAIT` | K4 CONTRACT | `D1=thread handle`; requires cancel-wait right |
+| 5 | `CLOCK_MONOTONIC` | CURRENT K4 | returns signed monotonic nanoseconds in `D1:D2` (high:low) |
+| 6 | `EVENT_CREATE` | CURRENT K4 | `D1=flags`, `D2=rights`; returns handle in `D1` |
+| 7 | `SEMAPHORE_CREATE` | CURRENT K4 | `D1=initial`, `D2=maximum`, `D3=rights`; returns handle in `D1` |
+| 8 | `WAIT_ONE` | CURRENT K4 | `D1=handle`, `D2:D3=absolute deadline` (high:low) |
+| 9 | `SIGNAL` | CURRENT K4 | `D1=handle`, `D2=release count`; returns woken count in `D1` |
+| 10 | `EVENT_RESET` | CURRENT K4 | `D1=event handle`; requires administer right |
+| 11 | `CANCEL_WAIT` | CURRENT K4 | `D1=thread handle`; requires cancel-wait right |
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
 not panic. A future ABI query returns supported major/minor versions and feature

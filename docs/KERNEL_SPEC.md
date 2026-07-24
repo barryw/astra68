@@ -713,6 +713,11 @@ and debugger register numbering before the native ABI is frozen.
 
 ## 17. Acceptance gates
 
+These labels are the original whole-kernel roadmap and are not the same as the
+incremental K1-K4 implementation-checkpoint names in `STATUS.md`. In
+particular, the current K4 handle-synchronization checkpoint does not claim
+that roadmap K3 bounded IPC or roadmap K4 device recovery is complete.
+
 ### K0 — architectural probes
 
 - Byte-exact exception frames for trap, privilege, address, bus/MMU, and timer

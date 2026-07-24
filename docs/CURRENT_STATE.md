@@ -104,8 +104,13 @@ separates implemented evidence from planned work.
 
 ## Current integration state
 
-- The active K4 synchronization checkpoint is
-  `4a878c9095213d9009e3ad6eeca85ebac3d7c936`. It replaces the private event
+- The active K4 synchronization checkpoint is qualified from exact source
+  `662aa04ef807d6c74ea1a8d0c3a95b8eb78931e7`; the implementation landed in
+  `4a878c9095213d9009e3ad6eeca85ebac3d7c936` and the later source delta adds
+  exact K4 RTL and hardware acceptance only. The immutable qualification
+  archive SHA-256 is
+  `ee06971a5239d890ea9e157ae46638bdefa94d3eb86c13656e1aaeedf00d6fe3`.
+  K4 replaces the private event
   qualifier with public generation-safe event and semaphore handles carrying
   explicit wait/signal rights. Waits use absolute monotonic nanosecond
   deadlines and arbitrate signal, timeout, cancellation, close, and owner death
@@ -120,17 +125,27 @@ separates implemented evidence from planned work.
   boot reaches every K1-K4 marker in 19,000,216 virtual cycles. The exact
   1,000-cycle workload finishes in 622,507,501 cycles under the unchanged
   675,000,000 cap, retains the 7,986-page baseline, and reports zero hot-path
-  overruns. Exact committed-source artifacts are a 44,740-byte kernel with
+  overruns. Exact hardware-profile artifacts are a 44,740-byte kernel with
   SHA-256
-  `bb3d87b65b29de0816bc1be67b0c9477879623cecc2cd72275e971d457e56684`
-  and a 56,084-byte boot payload with CRC32 `061D7682`; the 56,116-byte ROM
+  `11c2ed31ca5caf07dcfbd87cf354f6ce7be3eb1873cef412b65a6821940fb91c`
+  and a 56,152-byte boot payload with CRC32 `2F9B149C` and SHA-256
+  `15f713f45e5e8b1eec1bf9820759e915186b70339d3704c0e0771d35df47e588`;
+  the 56,184-byte ROM
   package SHA-256 is
-  `729ec89bd29552065a81b022c287f5a9f60ee3cbd8fc20a7cbf592d8777bda98`.
+  `14f4f980ebeb3fed099ac44d3035e6a1d6f1b2aa354b87bd208c468eb1b66c28`.
 
-  K4 has not yet run through the complete pin-level RTL model or on the ULX3S.
-  Production FPGA build `25D9CB8E`, routed resources, clocks, and the K3 ROM on
-  the board are unchanged. K4 is therefore the software candidate, while K3
-  remains the hardware-qualified rollback point.
+  The exact pin-level RTL/SDRAM model passes the intentional 64 KiB simulated
+  BIST and every K1-K4 marker in 266.959 seconds. It reports the exact K4
+  lifecycle counts, a 6,164/20,000-cycle deadline maximum, and zero overruns.
+  NUC preserved the existing 244,016 MB card, replaced only `/ASTRA68.ROM`,
+  independently verified the installed file, and restored read-only
+  AstraHost. Two independent volatile loads of production FPGA build
+  `25D9CB8E` pass exact ROM CRC32 `2F9B149C`, real 32 MiB BIST, PMMU/user-copy
+  isolation, all K4 lifecycle and handoff checks, every K1-K4 marker, and every
+  performance gate with zero overruns. K4 is now the hardware-qualified kernel
+  checkpoint; K3 remains its rollback point. This software-only promotion did
+  not synthesize, place, route, pack, or rewrite FPGA flash, so resources,
+  clocks, and persistent FPGA build `25D9CB8E` are unchanged.
 - The hardware-qualified K3 predecessor is represented on `main` by
   `3787d820e1140f49ba31623ccc578bb274a631cc`. Its retained target artifact was
   developed from `8929c063cdd24c8f4f526be330549e2eb5038fc8-dirty`, retains the K2

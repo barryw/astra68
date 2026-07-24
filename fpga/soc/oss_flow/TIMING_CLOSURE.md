@@ -3295,3 +3295,70 @@ multipliers; packed resources and every constrained-clock result remain the
 exact `25D9CB8E` values above. NUC has no HDMI capture device, so the unchanged
 HDMI path retains its exact physical K1 screenshot; a K3 photograph is pending
 visual evidence rather than a timing or functional blocker.
+
+### K4 handle-synchronization qualification (2026-07-24)
+
+Exact source `662aa04ef807d6c74ea1a8d0c3a95b8eb78931e7`, archived with
+SHA-256
+`ee06971a5239d890ea9e157ae46638bdefa94d3eb86c13656e1aaeedf00d6fe3`,
+adds hardware acceptance for the K4 synchronization implementation introduced
+by `4a878c9095213d9009e3ad6eeca85ebac3d7c936`. CPU, PMMU, SoC RTL,
+constraints, production feature set, and routed bitstream are unchanged. The
+retained testbench delta requires exact K4 event, semaphore, cancellation,
+close, owner-death, wait/wake, deadline, and priority-handoff counts in addition
+to every retained K1-K3 marker and performance budget.
+
+Beast's Verilator 5.047 pin-level SoC/SDRAM run uses an intentional 64 KiB
+simulated BIST. It passes full POST, PMMU/user-copy isolation, six blocks, two
+wakes, three priority handoffs, one deadline expiry, cancel/close/death counts
+of 1/1/1, all K1-K4 markers, and zero performance overruns in 266.959 seconds.
+The deadline-expiry maximum is 6,164/20,000 cycles. Retained transcript
+`docs/evidence/k4-662aa04-rtl.log` has SHA-256
+`fa89ee4c9188866a20aed4ced11d90d7391a8455f0ef4fc1fd6614619ed661da`;
+the compiled simulator SHA-256 is
+`a4f99854c7780ae28d1f8ead6bd1bd4976b8c492320c69d30fc5868605fe3638`.
+
+The exact hardware-profile artifacts are:
+
+- kernel: 44,740 bytes, SHA-256
+  `11c2ed31ca5caf07dcfbd87cf354f6ce7be3eb1873cef412b65a6821940fb91c`;
+- boot payload: 56,152 bytes, CRC32 `2F9B149C`, SHA-256
+  `15f713f45e5e8b1eec1bf9820759e915186b70339d3704c0e0771d35df47e588`;
+  and
+- packaged ROM: 56,184 bytes, SHA-256
+  `14f4f980ebeb3fed099ac44d3035e6a1d6f1b2aa354b87bd208c468eb1b66c28`.
+
+NUC loaded the maintenance passthrough only into volatile SRAM. One-shot
+replacement provisioner application SHA-256
+`ef435e495df1ddcbe23564b985fdd79ab5516964bda9b2ba36cf86f224cb1fa0`
+mounted the existing 244,016 MB card without formatting, updated only
+`/sdcard/ASTRA68.ROM` to 56,152 payload bytes with CRC32 `2F9B149C`, and on a
+second boot independently reported that the installed file already matched.
+Provisioning transcript SHA-256 values are
+`e3d0d21efbfae8d4a84efe5318ee495329d8d4fe8655da35799c16e8524c0be0`
+and
+`3d7aae0c20165175fdffdf51655c5ebd4fafae82fd9f2fa6371bb8952bb33e78`.
+Known read-only AstraHost application SHA-256
+`9f5aae5e57ee4a7ae91c54c041e27767e9dbdec8c9093a359fba43a4c13b0e9c`
+was restored.
+
+Bitstream SHA-256
+`78cd218f12feb72ccbdcb6bb141d19908c961f3438b6b559bf99b60d1c9d6940`
+was verified before two independent volatile loads. Both boots report exact
+build `25D9CB8E`, ROM CRC32 `2F9B149C`, Git identity
+`662aa04ef807d6c74ea1a8d0c3a95b8eb78931e7`, complete physical 32 MiB
+BIST, PMMU/user-copy isolation, 27 context switches, six same-CRP switches,
+all K4 lifecycle and handoff counts, every K1-K4 marker, a 6,164/20,000-cycle
+deadline maximum, and zero overruns. Transcript SHA-256 values are
+`4dd8583781bca253229240e25f4169d70aaa1a5a224b22be24d4aef23d2c3135`
+and
+`b614522dd02fd9f110b56196297dd7afb221165c60e5383424abd3a7e1139de6`.
+
+Disposition: K4 software, exact pin-level RTL, and exact production-hardware
+qualification PASS. There was no synthesis, placement, route, pack, or
+FPGA-flash operation. Mapped resources remain 53,079 LUT4s, 25,536 FFs, 101
+DP16KDs, and 18 multipliers; packed resources and every constrained-clock
+result remain the exact `25D9CB8E` values above. The board is left running K4
+ROM `2F9B149C` with read-only AstraHost and production FPGA build `25D9CB8E`.
+NUC has no HDMI capture device, so the unchanged HDMI path retains its exact
+physical K1 screenshot; a K4 photograph is visual follow-up evidence only.

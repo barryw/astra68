@@ -10,23 +10,26 @@ must not be presented as working software.
 
 - Branch: `main`.
 - K4 handle-synchronization source commit:
-  `4a878c9095213d9009e3ad6eeca85ebac3d7c936`. The immutable source archive has
+  `662aa04ef807d6c74ea1a8d0c3a95b8eb78931e7`. The synchronization
+  implementation landed in `4a878c9095213d9009e3ad6eeca85ebac3d7c936`; the
+  later source delta adds exact K4 RTL and hardware acceptance only. The
+  immutable qualification source archive has
   SHA-256
-  `a5f27a5d7ad522d4e0e93c0b5302baa201f4bd9ced608f730cc4342eb2d84421`
-  and is extracted as `/tmp/astra68-k4-4a878c9` on Beast.
+  `ee06971a5239d890ea9e157ae46638bdefa94d3eb86c13656e1aaeedf00d6fe3`
+  and is extracted as `/tmp/astra68-k4-662aa04` on Beast and NUC.
 - K4 kernel: 44,740 bytes, SHA-256
-  `bb3d87b65b29de0816bc1be67b0c9477879623cecc2cd72275e971d457e56684`.
-- K4 normal boot payload: 56,084 bytes, CRC32 `061D7682`, SHA-256
-  `5c1954a7b27e44ac918c530d7a63ae3bf001b42abfd2326af5ffd5142482210a`.
-  The 56,116-byte packaged ROM SHA-256 is
-  `729ec89bd29552065a81b022c287f5a9f60ee3cbd8fc20a7cbf592d8777bda98`.
-  K4 is software-qualified only; its unchanged FPGA target is routed build
-  `25D9CB8E`.
+  `11c2ed31ca5caf07dcfbd87cf354f6ce7be3eb1873cef412b65a6821940fb91c`.
+- K4 normal boot payload: 56,152 bytes, CRC32 `2F9B149C`, SHA-256
+  `15f713f45e5e8b1eec1bf9820759e915186b70339d3704c0e0771d35df47e588`.
+  The 56,184-byte packaged ROM SHA-256 is
+  `14f4f980ebeb3fed099ac44d3035e6a1d6f1b2aa354b87bd208c468eb1b66c28`.
+  K4 is qualified through exact pin-level RTL and two ULX3S boots on unchanged
+  routed FPGA build `25D9CB8E`.
 - K3 one-shot/deadline baseline commit:
   `3787d820e1140f49ba31623ccc578bb274a631cc`. Its retained target artifacts
   report the exact development identity
-  `8929c063cdd24c8f4f526be330549e2eb5038fc8-dirty` and remain the latest
-  pin-level RTL and ULX3S-qualified kernel checkpoint.
+  `8929c063cdd24c8f4f526be330549e2eb5038fc8-dirty` and remain the qualified K4
+  rollback checkpoint.
 - K3 kernel: 41,020 bytes, SHA-256
   `6ab38364d2ef5e67b6f5e8c7fb691cbf45291624562d7a0203f812c2e648e61d`.
 - K3 normal boot payload: 52,444 bytes, CRC32 `BAEF4D0B`, SHA-256
@@ -100,8 +103,8 @@ must not be presented as working software.
 | 5 ms one-shot fixed-priority scheduling | CURRENT HW | exact 62,500-cycle quantum, 32 queues and ready bitmap; highest priority first, FIFO round-robin among equals; K3 target boots pass |
 | same-address-space thread switch | CURRENT HW | host, Musashi, full RTL, and ULX3S count this path separately without a CRP/ATC/cache switch |
 | K3 atomic block/wake/deadline substrate | CURRENT HW | sequence-checked wait queues, 16-entry deadline heap, priority/FIFO wake, timeout, close wake-all, and immediate higher-priority handoff pass host, Musashi, full RTL, and ULX3S |
-| handle-backed events and semaphores | CURRENT SIM | generation-safe handles, explicit rights, absolute-nanosecond deadlines, cancellation, close, owner death, quotas, and exact-once arbitration pass host and exact Musashi; RTL and ULX3S remain |
-| trap ABI query/progress/yield/exit/close/clock/sync | CURRENT SIM | retained K1 calls pass hardware; K4 clock, create, wait, signal, reset, and cancel calls pass host and Musashi |
+| handle-backed events and semaphores | CURRENT HW | generation-safe handles, explicit rights, absolute-nanosecond deadlines, cancellation, close, owner death, quotas, and exact-once arbitration pass host, exact Musashi, pin-level RTL, and two ULX3S boots |
+| trap ABI query/progress/yield/exit/close/clock/sync | CURRENT HW | retained K1 calls and K4 clock, create, wait, signal, reset, and cancel calls pass host, Musashi, pin-level RTL, and ULX3S |
 | offender-only user fault death | CURRENT HW | format-B fault reaps only the offender on Musashi, full RTL, and three exact SRAM boots |
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
 | panic to console and retained early log | CURRENT HW | exact direct and supervisor-guard panic paths pass full RTL plus physical HDMI/log qualification |
@@ -119,20 +122,21 @@ must not be presented as working software.
 | guarded-worker K1 release ROM | CURRENT HW | build `25D9CB8E` passes exact route, repeated SRAM boots, five-minute worker soak, and reset-from-flash |
 | guarded-worker K1 hardware boot | CURRENT HW | exact identity, full POST/BIST, PMMU, guarded worker, 100 Hz preemption, offender-only fault containment, K1 entry, and physical HDMI pass |
 | K3 one-shot/deadline hardware boot | CURRENT HW | two exact `25D9CB8E` reloads pass ROM `BAEF4D0B`, full 32 MiB POST/BIST, 5 ms quantum, timeout handoff, all K1/K2/K3 markers, and zero overruns |
+| K4 handle-synchronization hardware boot | CURRENT HW | two exact `25D9CB8E` reloads pass ROM `2F9B149C`, full 32 MiB POST/BIST, all event/semaphore lifecycle counts, priority handoffs, K1-K4 markers, and zero overruns |
 
 ## Hardware status
 
 - The ULX3S attached to NUC now runs exact persistent guarded-worker release
   `25D9CB8E`. Prior `77B3CDC8` K1 and `6C0D0CA3` K0 images remain qualified
   rollback artifacts, not the board's current flash contents.
-- The same `25D9CB8E` bitstream now boots K3 ROM CRC32 `BAEF4D0B` from SD after
+- The same `25D9CB8E` bitstream now boots K4 ROM CRC32 `2F9B149C` from SD after
   two independent volatile reloads. FPGA flash was not rewritten. Normal
   read-only AstraHost firmware is restored, and `/ASTRA68.ROM` is the only FAT
   file changed by the provisioning run.
-- NUC currently enumerates no HDMI capture device. Both K3 hardware transcripts
-  prove that the console generated every K3 line and marker; the unchanged
+- NUC currently enumerates no HDMI capture device. Both K4 hardware transcripts
+  prove that the console generated every K4 line and marker; the unchanged
   routed HDMI pipeline retains its exact K1 physical screenshot qualification.
-  A new physical K3 screenshot is a visual evidence follow-up, not an RTL,
+  A new physical K4 screenshot is a visual evidence follow-up, not an RTL,
   scheduler, SDRAM, or ROM-identity failure.
 - Exact `25D9CB8E` maps 53,079 LUT4s, 25,536 GSR-enabled FFs, 101 DP16KDs,
   and 18 multipliers with zero SCCs. The no-waiver route packs 66,523
@@ -415,10 +419,32 @@ cancel/close/death counts of 1/1/1. The exact 1,000-cycle workload completes in
 reports 2,055 switches, 3,204 timer ticks, syscall count `0x2377`, and has zero
 performance overruns. Maximum masked user-fault time is 34,580 cycles.
 
-K4 has not yet passed the complete pin-level RTL/SDRAM model or physical ULX3S
-qualification. The board, SD ROM, production FPGA build `25D9CB8E`, resource
-use, and constrained-clock evidence remain at K3. No K4 row is marked CURRENT
-HW until those two gates pass.
+The exact pin-level RTL/SDRAM model passes its intentional 64 KiB BIST, all
+lifecycle counts, every K1-K4 marker, and all performance gates in 266.959
+seconds. It reports 27 context switches, six same-CRP switches, a
+6,164/20,000-cycle deadline maximum, and zero overruns. Retained transcript
+SHA-256 is
+`fa89ee4c9188866a20aed4ced11d90d7391a8455f0ef4fc1fd6614619ed661da`.
+
+NUC mounted the existing 244,016 MB card without formatting, replaced only
+`/ASTRA68.ROM`, and independently reported that the installed file already
+matched. Provisioning transcript SHA-256 values are
+`e3d0d21efbfae8d4a84efe5318ee495329d8d4fe8655da35799c16e8524c0be0`
+and
+`3d7aae0c20165175fdffdf51655c5ebd4fafae82fd9f2fa6371bb8952bb33e78`.
+Known read-only AstraHost was then restored.
+
+Two independent volatile loads of exact production bitstream `25D9CB8E` pass
+ROM CRC32 `2F9B149C`, complete POST and physical 32 MiB BIST, PMMU/user-copy
+isolation, 27 context switches, six blocks, two wakes, three priority
+handoffs, one deadline expiry, cancel/close/death counts of 1/1/1, all K1-K4
+markers, and zero overruns. Both report a 6,164/20,000-cycle deadline maximum.
+Hardware transcript SHA-256 values are
+`4dd8583781bca253229240e25f4169d70aaa1a5a224b22be24d4aef23d2c3135`
+and
+`b614522dd02fd9f110b56196297dd7afb221165c60e5383424abd3a7e1139de6`.
+This is a software-only promotion: FPGA flash, routed resources, and every
+constrained-clock result remain unchanged.
 
 ## Required before K1 release
 

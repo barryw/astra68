@@ -87,6 +87,39 @@ def k3_scheduler_reached(output: bytes | bytearray) -> bool:
     )
 
 
+def k4_synchronization_reached(output: bytes | bytearray) -> bool:
+    sync = re.search(
+        rb"(?m)^Sync objects[ .]+(\d+) event, (\d+) sem; "
+        rb"cancel/close/death (\d+)/(\d+)/(\d+)\r?$",
+        output,
+    )
+    if sync is None:
+        return False
+    events, semaphores, cancellations, close_wakeups, owner_deaths = (
+        int(value) for value in sync.groups()
+    )
+    return (
+        k3_scheduler_reached(output)
+        and events == 4
+        and semaphores == 1
+        and cancellations == 1
+        and close_wakeups == 1
+        and owner_deaths == 1
+        and re.search(
+            rb"(?m)^Wait/wake[ .]+6 blocks, 2 wake, "
+            rb"3 priority handoff\r?$",
+            output,
+        )
+        is not None
+        and re.search(
+            rb"(?m)^Deadlines[ .]+1 expired, 1 priority handoff\r?$",
+            output,
+        )
+        is not None
+        and b"K4 HANDLE SYNCHRONIZATION PASS" in output
+    )
+
+
 def find_port(explicit: str | None) -> str:
     if explicit:
         return explicit
@@ -156,6 +189,7 @@ def acceptance_reached(
     expect_k1_fault_max_cycles: int | None = None,
     expect_k1_min_elapsed_cycles: int | None = None,
     expect_k3_scheduler: bool = False,
+    expect_k4_synchronization: bool = False,
 ) -> bool:
     if expect_route_probe:
         match = re.search(
@@ -247,6 +281,8 @@ def acceptance_reached(
                 soak_reached = True
                 break
         kernel_entry_reached = soak_reached
+    elif expect_k4_synchronization:
+        kernel_entry_reached = k4_synchronization_reached(output)
     elif expect_k3_scheduler:
         kernel_entry_reached = k3_scheduler_reached(output)
     elif expect_k2_blocking:
@@ -373,6 +409,14 @@ def main() -> int:
         ),
     )
     kernel_entry_group.add_argument(
+        "--expect-k4-synchronization",
+        action="store_true",
+        help=(
+            "require K4 handle synchronization, exact lifecycle counts, "
+            "priority handoffs, and all retained K3/K2/K1 markers"
+        ),
+    )
+    kernel_entry_group.add_argument(
         "--expect-k2-blocking",
         action="store_true",
         help=(
@@ -463,6 +507,7 @@ def main() -> int:
         or args.expect_k2_entry
         or args.expect_k2_blocking
         or args.expect_k3_scheduler
+        or args.expect_k4_synchronization
         or args.expect_k1_soak_cycles is not None
         or args.expect_k1_fault_max_cycles is not None
         or args.expect_k1_min_elapsed_cycles is not None
@@ -568,6 +613,7 @@ def main() -> int:
                     args.expect_k1_fault_max_cycles,
                     args.expect_k1_min_elapsed_cycles,
                     args.expect_k3_scheduler,
+                    args.expect_k4_synchronization,
                 ):
                     break
                 if failure_reached(output, args.expect_kernel_panic):
@@ -587,6 +633,7 @@ def main() -> int:
         "graphics" if args.expect_graphics else
         "kernel panic" if args.expect_kernel_panic else
         "K1 soak" if args.expect_k1_soak_cycles is not None else
+        "K4 synchronization" if args.expect_k4_synchronization else
         "K3 scheduler" if args.expect_k3_scheduler else
         "K2 blocking" if args.expect_k2_blocking else
         "K2 entry" if args.expect_k2_entry else
@@ -612,6 +659,7 @@ def main() -> int:
         args.expect_k1_fault_max_cycles,
         args.expect_k1_min_elapsed_cycles,
         args.expect_k3_scheduler,
+        args.expect_k4_synchronization,
     ):
         return 0
     if failure_reached(output, args.expect_kernel_panic):

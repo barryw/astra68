@@ -103,6 +103,56 @@ def test_k3_scheduler_requires_new_retained_and_bounded_markers() -> None:
     )
 
 
+def test_k4_synchronization_requires_exact_lifecycle_and_handoffs() -> None:
+    output = (
+        b"POST PASS\n"
+        b"K2 PERF irq syscall=1200/50000 timer=1300/50000 "
+        b"fault=9000/125000\n"
+        b"K2 PERF sched pick=400/10000 same=500/15000 "
+        b"cross=1800/50000\n"
+        b"K2 PERF wait block=600/15000 wake=700/15000 overruns=0\n"
+        b"K3 PERF deadline expire=800/20000 overruns=0\n"
+        b"K2 PERFORMANCE PASS\n"
+        b"Wait/wake ........... 6 blocks, 2 wake, 3 priority handoff\n"
+        b"Deadlines ........... 1 expired, 1 priority handoff\n"
+        b"Sync objects ........ 4 event, 1 sem; cancel/close/death 1/1/1\n"
+        b"K4 HANDLE SYNCHRONIZATION PASS\n"
+        b"K3 ONE-SHOT SCHEDULER PASS\n"
+        b"K3 DEADLINE QUEUE PASS\n"
+        b"K2 BLOCKING SUBSTRATE PASS\n"
+        b"K2 THREAD SUBSTRATE PASS\n"
+        b"K1 PROTECTED ENTRY PASS\n"
+    )
+
+    assert acceptance_reached(
+        output, None, False, expect_k4_synchronization=True
+    )
+    for missing in (
+        b"K4 HANDLE SYNCHRONIZATION PASS\n",
+        b"Wait/wake ........... 6 blocks, 2 wake, 3 priority handoff\n",
+        b"Deadlines ........... 1 expired, 1 priority handoff\n",
+        b"Sync objects ........ 4 event, 1 sem; cancel/close/death 1/1/1\n",
+    ):
+        assert not acceptance_reached(
+            output.replace(missing, b""),
+            None,
+            False,
+            expect_k4_synchronization=True,
+        )
+    for old, new in (
+        (b"4 event", b"5 event"),
+        (b"1 sem", b"2 sem"),
+        (b"cancel/close/death 1/1/1", b"cancel/close/death 0/1/1"),
+        (b"3 priority handoff", b"2 priority handoff"),
+    ):
+        assert not acceptance_reached(
+            output.replace(old, new, 1),
+            None,
+            False,
+            expect_k4_synchronization=True,
+        )
+
+
 def test_k2_performance_requires_exact_budgets_and_bounded_measurements() -> None:
     report = (
         b"K2 PERF irq syscall=1200/50000 timer=1300/50000 "
