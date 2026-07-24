@@ -69,22 +69,23 @@ The `.noinit` increase is exactly 33,280 bytes: two 16-bit links for each of
 well inside the fixed 512 KiB kernel reservation.
 
 Exact guarded-worker source
-`42f4bb55ebd5ac47d057162322e293e4999a2661` adds a dedicated MSP stack,
-guard descriptor, bounded work/retry state, and panic diagnostics. Its normal
-Beast build reports:
+`42f4bb55ebd5ac47d057162322e293e4999a2661`, built with committed source
+identity `e108a3711befa08a309f068939dff226a21c869c`, adds a dedicated MSP
+stack, guard descriptor, bounded work/retry state, and panic diagnostics. Its
+normal Beast build reports:
 
 | ELF section | Bytes |
 |---|---:|
 | `.text.entry` | 80 |
 | `.vectors` | 1,024 |
-| `.text` plus read-only data | 24,932 |
+| `.text` plus read-only data | 24,996 |
 | `.data` | 4 |
 | `.bss` | 5,240 |
 | `.noinit` | 102,016 |
-| interrupt-stack section including alignment and guard | 13,216 |
+| interrupt-stack section including alignment and guard | 13,152 |
 | worker MSP section including guard | 12,288 |
 | total through `_kernel_memory_end` | 159,744 |
-| flat kernel binary | 26,984 |
+| flat kernel binary | 27,048 |
 
 The worker adds one fixed 8 KiB mapped stack and one 4 KiB unmapped guard;
 `_kernel_memory_end` advances to `0x02037000`, still inside the 512 KiB kernel

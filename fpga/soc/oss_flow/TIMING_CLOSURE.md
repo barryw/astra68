@@ -3105,3 +3105,117 @@ Resources remain 66,513/83,640 TRELLIS_COMB, 25,561/83,640 TRELLIS_FF,
 101/208 DP16KD, and 18/156 multipliers. Routed clocks remain 14.179972 MHz CPU
 against 12.5 MHz and 61.270760 MHz SDRAM against 60.002399 MHz, with USB at
 77.760498 MHz, pixel at 58.227554 MHz, and HDMI shift at 294.290771 MHz.
+
+### Guarded-worker exact production route (2026-07-24)
+
+Exact source `e108a3711befa08a309f068939dff226a21c869c` was exported as
+archive SHA-256
+`52420b817dd77be3632640b34ea7a5e2136ededec5c59970c93f883c559ef395`
+and extracted independently on Beast and NUC. It contains CPU correction
+`9a977e13f560b4c85eafc7835d88aad437314491` and guarded worker
+`42f4bb55ebd5ac47d057162322e293e4999a2661`. Exact normal software rebuilds
+byte-identically on both hosts: kernel SHA-256
+`413ce89e7ef8050a20c2a3dd496921ee963c28cbf2a94b9189326be95f2a1eb0`,
+27,048 bytes; packaged ROM SHA-256
+`4a40d4e70401342d0ea404c48aa0064c831f485f9c5bd56367fc0e3e9309abdd`,
+38,460-byte payload CRC32 `D21EF603`. The exact soak ROM has SHA-256
+`5eef095bcd826a333b5ced81d11aabfdd0f79522aaf5f7062f8c25a241b1298a`
+and 39,648-byte payload CRC32 `9E1DA32A`.
+
+Beast mapped the complete production feature set with Yosys `-abc2` to 53,079
+LUT4s, 25,536 GSR-enabled FFs, 101 DP16KDs, and 18 multipliers with zero
+combinational SCCs. Exact seed-4 heap placement and plain router1 retained the
+critical floorplan. The no-waiver route completed normally in 2,213.79 seconds,
+and the protected LUT-permutation gate passed 13,424 cells and 17,654 routed
+inputs. Final packed resources are:
+
+| Resource | Used | Physical free |
+|---|---:|---:|
+| TRELLIS_COMB | 66,523 (79.53%) | 17,117 |
+| TRELLIS_FF | 25,565 (30.57%) | 58,075 |
+| DP16KD | 101 (48.56%) | 107 |
+| MULT18X18D | 18 (11.54%) | 138 |
+
+Every exact constrained clock passes:
+
+| Domain | Required | Achieved |
+|---|---:|---:|
+| CPU | 12.500000 MHz | 15.058201 MHz |
+| SDRAM | 60.002399 MHz | 66.907532 MHz |
+| USB | 48.000767 MHz | 79.693970 MHz |
+| pixel | 27.000029 MHz | 53.267990 MHz |
+| HDMI shift | 135.025650 MHz | 289.771088 MHz |
+
+The release manifest records build `25D9CB8E`, divider 0, every production
+feature enabled, ROM depth 1,024, seed 4, router1, and
+`PNR_TIMING_ALLOW_FAIL=0`. Bitstream SHA-256 is
+`78cd218f12feb72ccbdcb6bb141d19908c961f3438b6b559bf99b60d1c9d6940`;
+routed-JSON SHA-256 is
+`ef50ac0b06ea39c1ea0c09b1b7fc1d78990831557d334338bfdf33db007bee7d`;
+manifest SHA-256 is
+`5fb91c49f8fb41abb27178fbb85e9c7ed63e4d46cfa7570678d62994c24ae56c`.
+Yosys, placement, and route log SHA-256 values are respectively
+`7567e23d1ed929d1dbd40c120297a450ebdc3cb961f2bf5ae3e3ba131ec41620`,
+`997602d7f2d56a3952c25ad6bbf470c389855c2aac268d3f9578b329759c9427`,
+and `17c47a4118dc76ed7910b6020e54405c3f11f7fcae828277b6b61daba8a4d104`.
+The exact already-packed artifact and manifest were hash-verified after transfer
+to NUC.
+
+### Guarded-worker ULX3S promotion (2026-07-24)
+
+NUC JTAG detection returned the expected ECP5 ID `0x41113043`. The maintenance
+passthrough was loaded only into volatile SRAM. The one-shot provisioner
+mounted the existing 244,016 MB FAT card without formatting and atomically
+changed only `/ASTRA68.ROM`; existing card contents were preserved. Exact soak
+payload 39,648 bytes/CRC32 `9E1DA32A` was installed, and exact normal payload
+38,460 bytes/CRC32 `D21EF603` was restored after the soak. Known read-only
+AstraHost application SHA-256
+`b4ec0fe43ffc7012758024576757df11892be0005e8e68fc282879448de962c2`
+was restored before every FPGA boot test.
+
+The exact routed bitstream passes three independent normal SRAM loads. Every
+load reports build `25D9CB8E`, ROM CRC32 `D21EF603`, full Git identity
+`e108a3711befa08a309f068939dff226a21c869c`, complete POST and 32 MiB BIST,
+PMMU/user-copy checks, the guarded MSP worker, 100 Hz preemption,
+offender-only fault containment, and `K1 PROTECTED ENTRY PASS`. Retained
+transcripts and SHA-256 values are:
+
+- `docs/evidence/k1-25d9cb8e-e108a37-normal-sram-1.log`:
+  `c3c2a724067156a9495c57886bcf08a304765ef74678c6e81d7f695a78ab5345`;
+- `docs/evidence/k1-25d9cb8e-e108a37-normal-sram-2.log`:
+  `62e62103cc3c9974d9a75898f7827edd28eb5fb711546aaf4eded12c5bf9174b`;
+  and
+- `docs/evidence/k1-25d9cb8e-e108a37-normal-sram-3.log`:
+  `a2cdb47efc012b63b373b8f7643bd7dff708eae3f042b13b9ccf80074e9b2eca`.
+
+The exact worker soak reaches lifecycle cycle 5,000 after 302.531 host seconds
+and `0x00000000DFEAD7D7` coherent CPU cycles, above the 3,750,000,000-cycle
+five-minute gate. It reports 10,003 switches, 30,057 delivered ticks, syscall
+count `0xBE45`, exactly 7,987 free pages, and a 9,376-cycle maximum masked
+user-fault interval against the 125,000-cycle limit. Soak provisioning evidence
+`docs/evidence/k1-25d9cb8e-e108a37-soak-provision.log` has SHA-256
+`8455fbef8784ff8ee2c8d4522f1b686d738f109e3c360c945c07ed9e1e9c47b1`;
+hardware transcript `docs/evidence/k1-25d9cb8e-e108a37-candidate-5m-hw.log`
+has SHA-256
+`781cd79f35e0b82c0c4e782864f3a7bfe7cfed405c8fe7fd974542b49c2cc3b5`.
+
+NUC then restored the exact normal ROM. Provisioning transcript
+`docs/evidence/k1-25d9cb8e-e108a37-normal-provision.log` has SHA-256
+`4e91fc298f279b5137070b2010b09f5ea6e7f9a051616d0671232dcc4fbf4a1a`.
+The fourth normal SRAM boot passes in 1.998 seconds; retained transcript
+`docs/evidence/k1-25d9cb8e-e108a37-normal-after-soak-hw.log` has SHA-256
+`5eafb5efd6c2ba55d9bc4e17a0bef33d126b29aae71fed18d251f49456ee4376`.
+
+The already-hashed bitstream was written to FPGA configuration flash without
+rebuild or repack. `openFPGALoader -f -r` reset the FPGA from flash, and the
+checker independently recovered exact build/ROM/Git identity, complete POST,
+BIST, PMMU, guarded worker, timer/preemption, fault containment, and K1 entry
+in 2.008 seconds. Retained transcript
+`docs/evidence/k1-25d9cb8e-e108a37-flash-reset.log` has SHA-256
+`8aed5e7845e2d8b1ca28344fd273a34a09fe96309663e3b20e85ca015ebe84a6`.
+
+Disposition: route, repeated normal hardware boot, SDRAM, PMMU, bounded worker
+soak, normal restoration, and automatic reset-from-flash all PASS. Persistent
+FPGA flash now contains exact build `25D9CB8E`; the board is left on normal ROM
+`D21EF603` and read-only AstraHost. NUC has no HDMI capture device, so exact
+physical-screen confirmation remains the final manual evidence item.

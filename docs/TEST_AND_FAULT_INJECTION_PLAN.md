@@ -185,6 +185,18 @@ Retained evidence is
 and `docs/evidence/k1-77b3cdc8-853ae66-release-30m-hw.log`, SHA-256
 `71d2c3a766bc1cd25a58f6e81ca9c904517b0df74322d2d3130279a0e1ffa489`.
 
+Exact guarded-worker source `e108a3711befa08a309f068939dff226a21c869c`
+repeats the bounded candidate gate on production build `25D9CB8E`. It reaches
+cycle 5,000 after 302.531 host seconds and `0x00000000DFEAD7D7` coherent CPU
+cycles, above the exact five-minute threshold. It reports 10,003 switches,
+30,057 delivered ticks, syscall count `0xBE45`, exactly 7,987 free pages, and a
+9,376-cycle maximum masked user-fault interval. Retained evidence is
+`docs/evidence/k1-25d9cb8e-e108a37-candidate-5m-hw.log`, SHA-256
+`781cd79f35e0b82c0c4e782864f3a7bfe7cfed405c8fe7fd974542b49c2cc3b5`.
+The prior exact 30-minute routed-platform burn-in remains valid platform
+history; it was not repeated for this source because the accepted per-change
+gate is the bounded five-minute run.
+
 The scheduler's delivered-interrupt count is not an elapsed-time oracle. Vesta
 uses one pending expiration bit, so periods coalesce while interrupts are
 masked. Hardware soak timing must use the 64-bit CPU cycle counter or an

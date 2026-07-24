@@ -21,9 +21,9 @@ bitstream.
 device but does not waive timing, SCC, clock-domain, or hardware acceptance
 checks. The older 65% and 75% profiles remain useful for historical comparison.
 
-## Routed release baseline
+## 6C0D0CA3 K0 historical baseline
 
-The current committed `6C0D0CA3` 60 MHz release uses the MC68030/PMMU,
+The prior committed `6C0D0CA3` 60 MHz release uses the MC68030/PMMU,
 AstraHost boot and runtime storage/input service, OHCI USB, Vesta IRQ/timers,
 SDRAM, HDMI, Astraea, and tile-free Vega feature set. Canonical Beast Yosys
 `-abc2` mapping reports 52,728 LUT4s, 25,492 synthesized FF cells, 101 block
@@ -148,6 +148,35 @@ read-only AstraHost, and the same production bitstream are restored and
 revalidated. The bounded hardware burn-in is closed. No resource, route, or
 timing result changed during hardware promotion, either panic test, either
 soak, or normal restoration.
+
+## 25D9CB8E guarded-worker release
+
+Exact source `e108a3711befa08a309f068939dff226a21c869c` retains the complete
+production feature set and adds the Motorola-correct master-mode interrupt
+return plus the guarded deferred kernel worker. Beast Yosys `-abc2` mapping
+reports 53,079 LUT4s, 25,536 GSR-enabled FFs, 101 block RAMs, and 18
+multipliers with zero SCCs. The exact strict seed-4 heap/router1 route packs:
+
+| Resource | Used | Physical free |
+|---|---:|---:|
+| TRELLIS_COMB | 66,523 (79.53%) | 17,117 |
+| TRELLIS_FF | 25,565 (30.57%) | 58,075 |
+| DP16KD | 101 (48.56%) | 107 |
+| MULT18X18D | 18 (11.54%) | 138 |
+
+It passes every exact constraint at 15.058201 MHz CPU, 66.907532 MHz SDRAM,
+79.693970 MHz USB, 53.267990 MHz pixel, and 289.771088 MHz HDMI shift. The
+protected LUT-permutation gate passes 13,424 cells and 17,654 routed inputs.
+Bitstream SHA-256 is
+`78cd218f12feb72ccbdcb6bb141d19908c961f3438b6b559bf99b60d1c9d6940`;
+routed-JSON SHA-256 is
+`ef50ac0b06ea39c1ea0c09b1b7fc1d78990831557d334338bfdf33db007bee7d`.
+NUC passes three independent SRAM boots, the exact five-minute/5,000-cycle
+worker soak, normal-ROM restoration, a fourth SRAM boot, and automatic
+reset-from-flash validation. FPGA flash now contains this exact bitstream.
+Physical HDMI requires manual visual confirmation because NUC has no capture
+device; every machine-readable hardware gate passes. This section replaces
+`77B3CDC8` as the routed and persistent release baseline.
 
 ## B1F9E60D rollback comparison
 

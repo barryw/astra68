@@ -35,9 +35,12 @@ must not be presented as working software.
   format-1/format-0 chained `RTE` path and adds the Motorola-directed M=1
   dual-frame regression.
 - Guarded deferred-worker commit:
-  `42f4bb55ebd5ac47d057162322e293e4999a2661`. It is fully qualified on host,
-  Musashi, focused RTL, and the complete pin-level RTL/SDRAM model; exact full
-  routing and ULX3S promotion remain open.
+  `42f4bb55ebd5ac47d057162322e293e4999a2661`. Exact committed release source
+  `e108a3711befa08a309f068939dff226a21c869c` has archive SHA-256
+  `52420b817dd77be3632640b34ea7a5e2136ededec5c59970c93f883c559ef395`
+  and was extracted independently on NUC and Beast. Host, Musashi, focused and
+  complete RTL, exact route, repeated ULX3S boot, bounded soak, and
+  reset-from-flash gates pass.
 - Immutable build snapshot: Beast `/tmp/astra68-k1-66d6094` from Git archive
   SHA-256 `ba4d91999cf829c33a345d895b7966a438b28b93871d8d34843d658a1d0c0039`.
 - Immutable soak snapshot: NUC `/tmp/astra68-k1-soak-470bf12` and independent
@@ -51,7 +54,7 @@ must not be presented as working software.
 | Mechanism | State | Evidence |
 |---|---|---|
 | BootInfo validation and separate kernel image | CURRENT | host, Musashi, full RTL |
-| kernel VBR, guarded 8 KiB ISP, guarded 8 KiB worker MSP | CURRENT SIM | host descriptors, Musashi, focused RTL, full pin-level RTL |
+| kernel VBR, guarded 8 KiB ISP, guarded 8 KiB worker MSP | CURRENT HW | host descriptors, Musashi, focused/full RTL, exact ULX3S boot and soak |
 | frame allocator for all 8,192 4 KiB frames | CURRENT HW | host tests, target startup, 64-owner bounded ledger, exact release-visit accounting |
 | SRP/CRP 4 KiB two-level translation | CURRENT | host, focused RTL, Musashi, full RTL |
 | PMMU enable and CRP switching | CURRENT HW | Musashi, full RTL, and three exact SRAM K1 boots |
@@ -76,17 +79,24 @@ must not be presented as working software.
 | deferred user-fault reclamation | CURRENT HW | host proves no maintenance/owner release in fault dispatch; Musashi, full RTL, and ULX3S report bounded masked-fault cycles |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
 | master-mode interrupt dual-frame return | CURRENT RTL | exact Motorola format-0/1 frames, MSP chain, multiword restart, complete strict inventory |
-| fixed interruptible process-reap worker | CURRENT SIM | guarded MSP/ISP, coalesced work bit, bounded retry, normal and soak target images |
+| fixed interruptible process-reap worker | CURRENT HW | guarded MSP/ISP, coalesced work bit, bounded retry, normal and soak target images, exact five-minute ULX3S run |
 | CACR independent I/D commands | CURRENT RTL | Motorola-directed mixed CI/CD decoder test; strict inventory 141/115 clean |
 | RESET preserves roots and ATC until explicit flush | CURRENT RTL/ROUTED | stale-ATC/reset/`PFLUSHA` regression; strict inventory 141/115 clean; prior exact full mapping has zero SCCs and passes all clocks |
-| exact corrected K1 release ROM | CURRENT SIM/ROUTED | build `77B3CDC8` passes Musashi and full pin-level RTL with 32 MiB BIST, PMMU, preemption, and fault containment; exact bitstream is timing-clean |
-| exact corrected K1 hardware boot | CURRENT HW | three independent SRAM reloads and one automatic reset-from-flash boot pass exact identity, full POST/BIST, PMMU, 100 Hz preemption, offender-only fault containment, K1 entry, and physical HDMI |
+| prior corrected K1 release ROM | CURRENT | build `77B3CDC8` remains a qualified rollback artifact with Musashi/full RTL and routed-hardware evidence |
+| guarded-worker K1 release ROM | CURRENT HW | build `25D9CB8E` passes exact route, repeated SRAM boots, five-minute worker soak, and reset-from-flash |
+| guarded-worker K1 hardware boot | CURRENT HW | exact identity, full POST/BIST, PMMU, guarded worker, 100 Hz preemption, offender-only fault containment, and K1 entry pass; physical HDMI awaits manual confirmation |
 
 ## Hardware status
 
-- The ULX3S attached to NUC now runs exact persistent K1 candidate `77B3CDC8`.
-  The prior `6C0D0CA3` K0 image remains the last fully qualified release and a
-  rollback artifact, not the board's current flash contents.
+- The ULX3S attached to NUC now runs exact persistent guarded-worker release
+  `25D9CB8E`. Prior `77B3CDC8` K1 and `6C0D0CA3` K0 images remain qualified
+  rollback artifacts, not the board's current flash contents.
+- Exact `25D9CB8E` maps 53,079 LUT4s, 25,536 GSR-enabled FFs, 101 DP16KDs,
+  and 18 multipliers with zero SCCs. The no-waiver route packs 66,523
+  TRELLIS_COMB and 25,565 FFs and passes at 15.058201 MHz CPU, 66.907532 MHz
+  SDRAM, 79.693970 MHz USB, 53.267990 MHz pixel, and 289.771088 MHz HDMI shift.
+  Bitstream SHA-256 is
+  `78cd218f12feb72ccbdcb6bb141d19908c961f3438b6b559bf99b60d1c9d6940`.
 - Routed SRAM candidate `F4DC1E18` proves the repaired PMMU core and K0 platform,
   not the staged K1 kernel.
 - K-HW3 table-walk arbitration, K-HW4 timer/IACK changes, and K1 are integrated
@@ -189,7 +199,7 @@ must not be presented as working software.
   The hardware burn-in gate is closed; the stable-kernel mechanisms below
   remain open.
 
-## Guarded-worker candidate
+## Guarded-worker release
 
 Exact source `42f4bb55ebd5ac47d057162322e293e4999a2661` moves process
 reclamation off syscall and idle paths into a fixed stackful worker. The worker
@@ -207,8 +217,16 @@ clean with the unchanged 3/18/5 classified buckets. Musashi normal boot reaches
 K1, and its 1,000-cycle lifecycle soak ends at virtual cycle 640,260,129 with
 2,001 switches and the exact 7,987-page baseline. The complete pin-level
 RTL/SDRAM model passes normal K1 in 130.017 seconds and the worker soak
-checkpoint in 191.959 seconds at 115.03 MB/s BIST with no baseline drift. This
-is complete pre-route evidence, not routed-hardware qualification.
+checkpoint in 191.959 seconds at 115.03 MB/s BIST with no baseline drift.
+
+Exact production build `25D9CB8E` routes without a timing waiver and passes
+three independent normal SRAM boots on ULX3S. Its five-minute hardware soak
+reaches 5,000 cycles, 10,003 switches, 30,057 delivered ticks, 48,709 syscalls,
+and `0x00000000DFEAD7D7` elapsed CPU cycles while retaining exactly 7,987 free
+pages and a 9,376-cycle masked-fault maximum. After normal ROM and read-only
+AstraHost restoration, a fourth SRAM boot passes. FPGA flash now contains the
+same exact bitstream, and reset-from-flash reaches K1 in 2.008 seconds. NUC has
+no HDMI capture device; physical-screen confirmation remains manual.
 
 ## Required before K1 release
 
@@ -225,7 +243,7 @@ is complete pre-route evidence, not routed-hardware qualification.
 | masked user-fault latency | CURRENT HW; 8,834 cycles against 125,000-cycle gate |
 | long context/syscall/fault/allocation soak | CURRENT HW; dual-host 500,000-cycle simulation, routed five-minute/5,000-cycle candidate, and independent 30-minute/29,000-cycle release run pass at baseline 7,987 with coherent FPGA elapsed-time proof |
 | panic HDMI and retained-log check on physical board | CURRENT; exact direct-panic and supervisor-guard paths pass |
-| guarded-worker source exact route and ULX3S promotion | MISSING; pre-route host, Musashi, strict/focused RTL, and full pin-level gates pass |
+| guarded-worker source exact route and ULX3S promotion | CURRENT HW; no-waiver route, repeated SRAM boots, five-minute soak, restoration, and reset-from-flash pass; physical HDMI awaits manual confirmation |
 
 ## Partial or transitional K1 code
 

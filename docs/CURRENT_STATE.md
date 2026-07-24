@@ -284,7 +284,8 @@ separates implemented evidence from planned work.
   reaches K1 entry in 2.132 seconds. Its retained log is
   `docs/evidence/k1-77b3cdc8-flash-reset.log`, SHA-256
   `deeaba2d4acdb5fbc5115085b4f751796ce11079cc68ded319c43117d17b0e97`.
-  Persistent FPGA flash now contains exact K1 candidate `77B3CDC8`. The
+  At that checkpoint, persistent FPGA flash contained exact K1 candidate
+  `77B3CDC8`. The
   physical direct-panic and supervisor-guard diagnostics now also pass.
   At that checkpoint hardware lifecycle qualification was partial: 1,000
   physical teardown cycles retained the exact resource baseline, while bounded
@@ -366,8 +367,8 @@ separates implemented evidence from planned work.
   The complete normal gate passes again in 2.111 seconds. Retained log
   `docs/evidence/k1-77b3cdc8-normal-restored-after-soak.log` has SHA-256
   `4505cb1b81c6b030df02d7ddf1997c16b532ecdb44c43f35403142da8413a150`.
-  The board and FTDI port are available; persistent FPGA flash remains exact
-  `77B3CDC8`.
+  At that checkpoint the board and FTDI port were available, and persistent
+  FPGA flash remained exact `77B3CDC8`.
 - Exact software follow-on `bbb1616a1e65ef56619bffb11cb21e9ea1bc5202`
   closes the diagnosed lifecycle latency path without changing RTL or the
   production bitstream. User-fault dispatch now marks the offender `EXITING`,
@@ -463,15 +464,17 @@ separates implemented evidence from planned work.
   fault containment, and `K1 PROTECTED ENTRY PASS` in 1.955 seconds. Retained
   log `docs/evidence/k1-77b3cdc8-853ae66-normal-hw.log` has SHA-256
   `14b69338b1c429def6fa0a13067bff6e00f087dae0dc7a05a3a463e7a107f09c`.
-  The board is left in that normal state; persistent FPGA flash remains the
-  same exact `77B3CDC8` image. No RTL, synthesis, placement, route, resource,
-  or constrained-clock result changed during this qualification.
+  At that checkpoint the board was left in that normal state; persistent FPGA
+  flash remained the same exact `77B3CDC8` image. No RTL, synthesis,
+  placement, route, resource, or constrained-clock result changed during this
+  qualification.
 - CPU correction `9a977e13f560b4c85eafc7835d88aad437314491` and guarded
-  worker `42f4bb55ebd5ac47d057162322e293e4999a2661` form the next exact
-  candidate. The CPU now preserves M in the MC68030 section 8.1.9 format-1
-  throwaway frame, avoids a second MSP postadd, and settles restored-PC fetch
-  before chained `RTE` retirement. The kernel runs process reclamation with
-  interrupts enabled on a dedicated guarded 8 KiB MSP; exception and IRQ entry
+  worker `42f4bb55ebd5ac47d057162322e293e4999a2661` form the current exact
+  guarded-worker release. The CPU now preserves M in the MC68030 section 8.1.9
+  format-1 throwaway frame, avoids a second MSP postadd, and settles
+  restored-PC fetch before chained `RTE` retirement. The kernel runs process
+  reclamation with interrupts enabled on a dedicated guarded 8 KiB MSP;
+  exception and IRQ entry
   retain the separate guarded 8 KiB ISP. Work and retry queues are each one
   bounded bit, and panic output includes exact worker/maintenance state.
 
@@ -484,8 +487,28 @@ separates implemented evidence from planned work.
   virtual cycle 640,260,129 with 2,001 switches and 7,987 free pages. The
   complete pin-level RTL/SDRAM model reaches normal K1 in 130.017 seconds and a
   stable worker soak checkpoint in 191.959 seconds, both with 115.03 MB/s BIST.
-  Exact full synthesis/route and NUC hardware promotion remain open; persistent
-  hardware is still the qualified `77B3CDC8` image.
+  Exact full Beast synthesis has zero SCCs and maps 53,079 LUT4s, 25,536
+  GSR-enabled FFs, 101 block RAMs, and 18 multipliers. The exact no-waiver
+  seed-4 heap/router1 route packs 66,523 TRELLIS_COMB and 25,565 FFs and passes
+  at 15.058201 MHz CPU, 66.907532 MHz SDRAM, 79.693970 MHz USB, 53.267990 MHz
+  pixel, and 289.771088 MHz HDMI shift. Exact build `25D9CB8E` bitstream
+  SHA-256 is
+  `78cd218f12feb72ccbdcb6bb141d19908c961f3438b6b559bf99b60d1c9d6940`;
+  normal ROM CRC32 is `D21EF603`.
+
+  NUC mounted the existing 244,016 MB card without formatting and changed only
+  `/ASTRA68.ROM`. Three independent SRAM loads pass exact build/ROM identity,
+  complete POST and 32 MiB BIST, PMMU/user-copy checks, the guarded MSP worker,
+  100 Hz preemption, offender-only fault containment, and K1 protected entry.
+  The exact soak ROM then passes 5,000 worker/fault cycles over 302.531 host
+  seconds and `0x00000000DFEAD7D7` CPU cycles with 10,003 switches, 30,057
+  delivered ticks, 48,709 syscalls, an unchanged 7,987-page baseline, and a
+  9,376-cycle maximum masked-fault interval. Normal ROM and read-only AstraHost
+  were restored before a fourth SRAM boot passed. Exact release
+  `25D9CB8E` was then written to FPGA flash; automatic reset-from-flash passed
+  the same normal gate in 2.008 seconds. Persistent hardware now contains
+  `25D9CB8E`. NUC has no HDMI capture device, so exact physical-HDMI visual
+  confirmation remains the final manual evidence item.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,
@@ -541,22 +564,24 @@ separates implemented evidence from planned work.
   `F4DC1E18` reported `CORETEST PASS sum=74A6EC6D` in 3.864 seconds. The
   production package and normal read-only AstraHost were restored immediately,
   and a final candidate reload again passed exact identity, complete POST,
-  full-range BIST, DMA, and `K0 ENTRY PASS` in 1.616 seconds. Persistent FPGA
-  flash is intentionally still `6C0D0CA3`. K-HW3 table-walk locking is now
-  repaired and tested in source, but requires a new route and board pass along
-  with physical HDMI confirmation. K-HW4 IACK/timer races are likewise closed
-  in controller and focused CPU simulation: the selected vector cannot change
+  full-range BIST, DMA, and `K0 ENTRY PASS` in 1.616 seconds. At that
+  checkpoint persistent FPGA flash was intentionally still `6C0D0CA3`.
+  K-HW3 table-walk locking was repaired and tested in source, but required a
+  new route and board pass along with physical HDMI confirmation. K-HW4
+  IACK/timer races were likewise closed in controller and focused CPU
+  simulation: the selected vector could not change
   in flight, spurious results remain spurious for that transaction, edge/level
   clearing is ordered, and one-shot restart cannot lose a simultaneous expiry.
-  Hardware timer-race and interrupt-latency qualification remain open.
+  Hardware timer-race and interrupt-latency qualification remained open.
 - Before the focused diagnostics, the ULX3S contained the exact `B1F9E60D`
   rollback release in volatile SRAM. Its bitstream SHA-256 is
   `05b9e84d2413c9390163a38f77c4d8ad08600a6adb619e69ebb25c56ae0e4eae`;
   its `/ASTRA68.ROM` SHA-256 was
   `2693a912e98a0fc1211b54b62dd80f8bed0544a3ac904d5b24d320c2be986423`.
   Three consecutive FPGA-only reloads reached exact build and ROM identity,
-  complete POST, 32 MiB full-range BIST, and `K0 ENTRY PASS`. The board now
-  contains exact production build `6C0D0CA3` in persistent FPGA flash. Its
+  complete POST, 32 MiB full-range BIST, and `K0 ENTRY PASS`. At that
+  checkpoint the board contained exact production build `6C0D0CA3` in
+  persistent FPGA flash. Its
   bitstream SHA-256 is
   `61538d09ef255b94206500185b31008fc242004ac954356365e0b9053c88e2d1`;
   `/ASTRA68.ROM` SHA-256 is
