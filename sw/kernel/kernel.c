@@ -482,7 +482,7 @@ void kernel_process_milestone_reached(void)
     console_puts("Wait/wake ........... ");
     console_dec32(stats.wait_blocks);
     console_puts(" blocks, ");
-    console_dec32(stats.event_wakeups);
+    console_dec32(stats.sync_wakeups);
     console_puts(" wake, ");
     console_dec32(stats.wake_preemptions);
     console_puts(" priority handoff\n");
@@ -491,6 +491,17 @@ void kernel_process_milestone_reached(void)
     console_puts(" expired, ");
     console_dec32(stats.deadline_preemptions);
     console_puts(" priority handoff\n");
+    console_puts("Sync objects ........ ");
+    console_dec32(stats.sync_created_events);
+    console_puts(" event, ");
+    console_dec32(stats.sync_created_semaphores);
+    console_puts(" sem; cancel/close/death ");
+    console_dec32(stats.sync_cancellations);
+    console_putc('/');
+    console_dec32(stats.sync_close_wakeups);
+    console_putc('/');
+    console_dec32(stats.sync_owner_deaths);
+    console_putc('\n');
     console_puts("Thread ISP max ...... ");
     console_dec32(stats.kernel_stack_max_used);
     console_puts(" / ");
@@ -498,6 +509,7 @@ void kernel_process_milestone_reached(void)
     console_puts(" bytes\n");
     report_kernel_performance(&performance);
     console_puts("K2 PERFORMANCE PASS\n");
+    console_puts("\nK4 HANDLE SYNCHRONIZATION PASS\n");
     console_puts("\nK3 ONE-SHOT SCHEDULER PASS\n");
     console_puts("\nK3 DEADLINE QUEUE PASS\n");
     console_puts("\nK2 BLOCKING SUBSTRATE PASS\n");

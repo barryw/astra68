@@ -75,12 +75,12 @@ static void test_capacity_and_close_all(void)
     kernel_handle_table_init(&table);
     for (uint32_t index = 0u; index < KERNEL_HANDLE_MAX_ENTRIES; ++index) {
         assert(kernel_handle_install(
-                   &table, KERNEL_OBJECT_EVENT, RIGHT_QUERY,
+                   &table, KERNEL_OBJECT_SYNC, RIGHT_QUERY,
                    (void *)(uintptr_t)(index + 1u), release_object, &released,
                    &handles[index]) == KERNEL_HANDLE_OK);
     }
     assert(kernel_handle_count(&table) == KERNEL_HANDLE_MAX_ENTRIES);
-    assert(kernel_handle_install(&table, KERNEL_OBJECT_EVENT, RIGHT_QUERY,
+    assert(kernel_handle_install(&table, KERNEL_OBJECT_SYNC, RIGHT_QUERY,
                                  (void *)(uintptr_t)99u, NULL, NULL,
                                  &extra) == KERNEL_HANDLE_TABLE_FULL);
     assert(extra == KERNEL_HANDLE_INVALID);
@@ -91,7 +91,7 @@ static void test_capacity_and_close_all(void)
            KERNEL_HANDLE_MAX_ENTRIES * (KERNEL_HANDLE_MAX_ENTRIES + 1u) / 2u);
     for (uint32_t index = 0u; index < KERNEL_HANDLE_MAX_ENTRIES; ++index) {
         assert(kernel_handle_lookup(&table, handles[index],
-                                    KERNEL_OBJECT_EVENT, RIGHT_QUERY,
+                                    KERNEL_OBJECT_SYNC, RIGHT_QUERY,
                                     &object) == KERNEL_HANDLE_INVALID_HANDLE);
     }
     assert(kernel_handle_close_all(&table) == 0u);

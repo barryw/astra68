@@ -42,7 +42,9 @@ _kernel_exception_entry:
 	jsr     kernel_exception_entry_dispatch
 	lea     12(%sp), %sp
 	cmpi.l  #KERNEL_DISPATCH_WORKER, %d0
-	beq     _kernel_restore_worker_context
+	bne     .Lexception_not_worker
+	jmp     _kernel_restore_worker_context
+.Lexception_not_worker:
 	tst.l   %d0
 	bne     _kernel_restore_user_context
 	bra     .Lkernel_idle
@@ -61,7 +63,9 @@ _kernel_access_fault_entry:
 	jsr     kernel_access_entry_dispatch
 	lea     12(%sp), %sp
 	cmpi.l  #KERNEL_DISPATCH_WORKER, %d0
-	beq     _kernel_restore_worker_context
+	bne     .Laccess_not_worker
+	jmp     _kernel_restore_worker_context
+.Laccess_not_worker:
 	tst.l   %d0
 	bne     _kernel_restore_user_context
 	movem.l (%sp)+, %d0-%d7/%a0-%a6
@@ -105,7 +109,9 @@ _kernel_syscall_entry:
 	jsr     kernel_syscall_entry_dispatch
 	lea     12(%sp), %sp
 	cmpi.l  #KERNEL_DISPATCH_WORKER, %d0
-	beq     _kernel_restore_worker_context
+	bne     .Lsyscall_not_worker
+	jmp     _kernel_restore_worker_context
+.Lsyscall_not_worker:
 	tst.l   %d0
 	bne     _kernel_restore_user_context
 	bra     .Lkernel_idle
@@ -124,7 +130,9 @@ _kernel_interrupt_entry:
 	jsr     kernel_timer_entry_dispatch
 	lea     12(%sp), %sp
 	cmpi.l  #KERNEL_DISPATCH_WORKER, %d0
-	beq     _kernel_restore_worker_context
+	bne     .Linterrupt_not_worker
+	jmp     _kernel_restore_worker_context
+.Linterrupt_not_worker:
 	tst.l   %d0
 	bne     _kernel_restore_user_context
 	movem.l (%sp)+, %d0-%d7/%a0-%a6

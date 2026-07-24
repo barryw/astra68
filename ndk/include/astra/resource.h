@@ -31,18 +31,27 @@ typedef uint32_t AstraHandle;
 #define ASTRA_INVALID_HANDLE ((AstraHandle)0)
 
 /** Rights that may be granted by a resource handle. */
+#ifndef ASTRA_RIGHTS_DEFINED
+#define ASTRA_RIGHTS_DEFINED 1
 enum {
     /** Observe resource state or read data. */
     ASTRA_RIGHT_READ = 1u << 0,
     /** Modify resource state or write data. */
     ASTRA_RIGHT_WRITE = 1u << 1,
-    /** Submit asynchronous work to the resource. */
-    ASTRA_RIGHT_SUBMIT = 1u << 2,
-    /** Change resource configuration or lifecycle state. */
-    ASTRA_RIGHT_CONTROL = 1u << 3,
+    /** Map the resource into the process address space. */
+    ASTRA_RIGHT_MAP = 1u << 2,
+    /** Signal an event, semaphore, or other waitable object. */
+    ASTRA_RIGHT_SIGNAL = 1u << 3,
+    /** Wait for the resource to become signaled or ready. */
+    ASTRA_RIGHT_WAIT = 1u << 4,
     /** Transfer the capability to another process or subsystem. */
-    ASTRA_RIGHT_TRANSFER = 1u << 4
+    ASTRA_RIGHT_TRANSFER = 1u << 5,
+    /** Change resource configuration or lifecycle state. */
+    ASTRA_RIGHT_ADMINISTER = 1u << 6,
+    /** Use privileged diagnostics associated with the resource. */
+    ASTRA_RIGHT_DEBUG = 1u << 7
 };
+#endif
 
 /** Flags controlling resource acquisition. */
 enum {

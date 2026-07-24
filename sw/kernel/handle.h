@@ -12,7 +12,7 @@ typedef enum KernelObjectType {
     KERNEL_OBJECT_NONE = 0,
     KERNEL_OBJECT_PROCESS = 1,
     KERNEL_OBJECT_THREAD = 2,
-    KERNEL_OBJECT_EVENT = 3,
+    KERNEL_OBJECT_SYNC = 3,
     KERNEL_OBJECT_DEVICE = 4
 } KernelObjectType;
 

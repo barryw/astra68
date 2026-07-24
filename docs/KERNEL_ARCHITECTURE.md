@@ -224,6 +224,39 @@ deadline heap exactly once. It does not yet expose runtime thread creation,
 handle-backed user events/semaphores, public deadline operations, explicit
 cancellation, priority inheritance/donation, or the stable pool sizes below.
 
+## K4 synchronization-object contract
+
+K4 replaces the singleton qualification event with one fixed pool shared by
+events and semaphores. The implementation limits are deliberately explicit:
+
+| Resource | K4 limit |
+|---|---:|
+| sync objects | 32 system-wide |
+| objects created by one process | 8 |
+| waiters on one object | 16 |
+| references on one object | 65,535 (also bounded by handle capacity) |
+| event retained signals | 0 or 1 |
+| semaphore count | 0 through 2,147,483,647, bounded by its creation maximum |
+
+Each 36-byte slot owns a wait queue, nonzero generation, creator process ID,
+reference count, object subtype, state, current/maximum count, and terminal
+close result. Its state machine is `FREE -> LIVE -> CLOSING -> FREE`; generation
+advances before reuse. Creation reserves a slot and quota before publishing a
+handle. Failed handle publication closes and returns the unpublished slot.
+
+The existing per-process handle table remains the only public lookup path.
+Events and semaphores install as typed synchronization handles with explicit
+query, signal, wait, and administer rights. The existing scheduler wait queue
+and deadline heap remain the sole owners of blocking and timeout linkage. K4
+adds cancellation to that owner; it does not add a second timeout or wake queue.
+
+The final handle release closes a live object and wakes all remaining waiters
+with `CLOSED`. Creator-process death first retires that process's own waits,
+then transitions every object it created to `CLOSING` and wakes foreign waiters
+with `PEER_DEAD`; deferred handle release only drops references afterward.
+Single-core supervisor dispatch serializes signal, timeout, cancellation,
+close, and death, and each path removes both queue links before readiness.
+
 ## Stable-kernel target limits
 
 These limits are the initial sizing contract and must be charged in
@@ -240,6 +273,7 @@ These limits are the initial sizing contract and must be charged in
 | copied bytes in one message | 256 | 256 |
 | queued bytes | 512 KiB | 256 KiB |
 | timers | 256 | 64 |
+| events and semaphores | 256 | 64 |
 | wait-multiple members | 64/call | 64/call |
 | handle transfers | 8/message | 8/message |
 | pinned pages | 2,048 total | 256 without elevated right |

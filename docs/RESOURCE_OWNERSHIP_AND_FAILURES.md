@@ -107,6 +107,33 @@ administer, and debug. Operations request the exact subset they require.
 Duplicate may only reduce rights. Transfer requires `transfer` and cannot add
 rights. Administer and direct device mapping are never inherited implicitly.
 
+## Event and semaphore ownership
+
+The initial production synchronization pool has 32 fixed slots, an eight-object
+creator quota, and at most 16 waiters on one object. Events and semaphores share
+this pool, one lifecycle implementation, and the scheduler's existing intrusive
+wait/deadline links. No wait, signal, cancel, close, timeout, or owner-death path
+allocates memory.
+
+A live handle contributes one object reference. The final handle close changes
+`LIVE -> CLOSING`, records `CLOSED`, withdraws future operations, removes every
+waiter from both scheduler queues, and wakes each once. Creator death performs
+the same transition with `PEER_DEAD` after its own threads have been retired.
+The slot returns to `FREE` only when references and waiters are both zero. A
+new allocation advances the slot generation before publishing its first
+handle.
+
+Cancellation is addressed through a process-local thread handle carrying the
+cancel-wait right. It succeeds only while that thread is blocked. Signal,
+deadline, cancel, close, and owner death are serialized terminal contenders:
+the first one removes both links and writes the result; every later contender
+observes a nonblocked thread or closing object and cannot overwrite it.
+
+Semaphore release validates the entire operation before waking anyone. It
+computes direct handoffs first, rejects a release whose remainder would exceed
+the configured maximum, then commits all wakeups and the residual count. A
+failed release therefore has no partial effect.
+
 ## IPC ownership
 
 Ports have limits in both messages and bytes. The initial defaults are 64

@@ -46,6 +46,13 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `EXIT` | CURRENT | terminates the calling process in K1 |
 | 4 | `CLOSE` | CURRENT | closes `D1` in the caller's handle table |
+| 5 | `CLOCK_MONOTONIC` | K4 CONTRACT | returns signed monotonic nanoseconds in `D1:D2` (high:low) |
+| 6 | `EVENT_CREATE` | K4 CONTRACT | `D1=flags`, `D2=rights`; returns handle in `D1` |
+| 7 | `SEMAPHORE_CREATE` | K4 CONTRACT | `D1=initial`, `D2=maximum`, `D3=rights`; returns handle in `D1` |
+| 8 | `WAIT_ONE` | K4 CONTRACT | `D1=handle`, `D2:D3=absolute deadline` (high:low) |
+| 9 | `SIGNAL` | K4 CONTRACT | `D1=handle`, `D2=release count`; returns woken count in `D1` |
+| 10 | `EVENT_RESET` | K4 CONTRACT | `D1=event handle`; requires administer right |
+| 11 | `CANCEL_WAIT` | K4 CONTRACT | `D1=thread handle`; requires cancel-wait right |
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
 not panic. A future ABI query returns supported major/minor versions and feature
@@ -56,11 +63,17 @@ The provisional thread-entry register contract is `D2=initial argument`,
 registers begin at zero. This contract is covered by the K3 target image but is
 not frozen until public thread-creation calls enter the NDK.
 
-K3's timed-event syscall is an internal qualification number, not an ABI 0.1
-operation. It currently accepts a relative CPU-cycle delay solely to exercise
-the one-shot scheduler and returns common result 7 on expiry. A public wait
-uses an absolute monotonic nanosecond deadline and a handle-backed object; the
-relative-cycle form will not be exported through the NDK.
+K3's relative-cycle timed event remains a historical qualification call and is
+not ABI 0.1. K4 removes that path after the handle-backed calls above cover the
+same target behavior. Public waits use absolute monotonic nanoseconds only.
+
+Event-create flags are `MANUAL_RESET` bit 0 and `INITIALLY_SIGNALED` bit 1;
+every other bit is rejected. An auto-reset event wakes one priority/FIFO waiter
+or retains one signal. A manual-reset event wakes every waiter and remains
+signaled until `EVENT_RESET`. `SIGNAL` requires release count 1 for either
+event type. A semaphore requires `0 <= initial <= maximum <= 0x7fffffff` and
+`SIGNAL` atomically releases a nonzero count without exceeding `maximum` after
+direct waiter handoff.
 
 ## Result model
 
@@ -81,6 +94,7 @@ values. The initial common set is:
 | 10 | operation cancelled or device reset |
 | 11 | committed memory unavailable |
 | 12 | I/O or physical bus failure |
+| 13 | object closed while an operation was pending |
 
 Subsystem detail is returned in an output record, not encoded into ad hoc
 negative values.
@@ -110,6 +124,12 @@ Object protocols may narrow these rights but cannot reinterpret a bit.
 Transfer is atomic: all receiver slots and message storage are reserved first;
 either every transferred handle is committed once or ownership remains with
 the sender.
+
+Event and semaphore creation accepts only `read`, `signal`, `wait`, and
+`administer`. Waiting requires `wait`; signaling requires `signal`; event reset
+requires `administer`. Closing one's own handle never requires an additional
+right. Thread wait cancellation requires the thread-specific cancel-wait right
+and cannot target a thread for which the caller has no process-local handle.
 
 ## Versioned structures
 
@@ -148,11 +168,28 @@ message. Larger payloads use an area plus a bounded producer/consumer ring.
 
 - Deadlines are signed 64-bit monotonic nanoseconds and are absolute.
 - `INT64_MAX` means no deadline; zero means poll without blocking.
+- Other negative deadline values are invalid.
+- The 12.5 MHz clock advances in exact 80 ns units. Conversion to a timer
+  deadline rounds upward, so a wait never expires before the requested time.
 - Every blocking call documents cancellation and peer-death results.
 - Wait-multiple accepts 1 through 64 handle/event descriptors and returns the
   lowest input index among simultaneously ready objects.
 - Port sends support blocking, nonblocking, and absolute-deadline modes. Full
   queues provide backpressure or `WOULD_BLOCK`; they never grow.
+
+For one synchronization wait, exactly one serialized terminal transition wins:
+
+| Winner | Waiting call result |
+|---|---:|
+| event signal or semaphore release | 0 (`OK`) |
+| absolute deadline | 7 (`TIMED_OUT`) |
+| `CANCEL_WAIT` | 10 (`CANCELLED`) |
+| final handle close | 13 (`CLOSED`) |
+| creator-process death observed through another process's handle | 8 (`PEER_DEAD`) |
+
+The winner removes the thread from the object queue and deadline heap before
+making it ready. A later contender observes that no wait remains and never
+changes the first result.
 
 ## Service protocol rules
 

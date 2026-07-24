@@ -20,7 +20,7 @@ kernel_worker_switch_to_user:
 	| Switch from MSP to the dedicated ISP before constructing the user RTE
 	| frame. The saved MSP remains untouched until the next worker handoff.
 	move.w  #0x2700, %sr
-	bra     _kernel_restore_user_context
+	jmp     _kernel_restore_user_context
 
 	.globl  _kernel_restore_worker_context
 	.type   _kernel_restore_worker_context, @function

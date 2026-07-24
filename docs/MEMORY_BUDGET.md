@@ -1,6 +1,6 @@
 # Astra 68 kernel memory budget
 
-Status: measured K3 one-shot/deadline baseline plus bounded revision-0.1 targets (2026-07-24)
+Status: measured K4 handle-synchronization baseline plus bounded revision-0.1 targets (2026-07-24)
 
 The machine has exactly 32 MiB of SDRAM. Every static pool, frame, mapping,
 queue, pin, and graphics reservation is reported separately. A budget is not
@@ -141,6 +141,28 @@ store plus 20 bytes of deadline accounting. Including two alignment bytes,
 the complete thread scheduler span is 2,952 bytes, 280 bytes above K2. No
 deadline or timer path allocates memory.
 
+The 2026-07-24 K4 handle-synchronization build reports:
+
+| ELF section | Bytes |
+|---|---:|
+| `.text.entry` | 80 |
+| `.vectors` | 1,024 |
+| `.text` plus read-only data | 42,628 |
+| `.data` | 0 |
+| `.bss` | 9,592 |
+| `.noinit` | 102,016 |
+| interrupt-stack section including alignment and guard | 15,744 |
+| worker MSP section including guard | 12,288 |
+| 16 guarded thread supervisor-stack slots | 196,608 |
+| total through `_kernel_memory_end` | 380,928 |
+| flat kernel binary | 44,676 |
+
+K4 adds 3,656 flat-binary bytes and 1,256 BSS bytes over K3. The image leaves
+143,360 bytes in the fixed 512 KiB reservation. The fixed synchronization pool
+accounts for 32 x 36-byte objects (1,152 bytes); the remaining BSS delta is
+bounded pool state and diagnostics. Waiting reuses each thread's existing wait
+link and deadline slot, so no synchronization or timeout path allocates memory.
+
 Major current static objects are:
 
 | Object | Count x size | Bytes |
@@ -152,6 +174,7 @@ Major current static objects are:
 | process slots | 4 x 446 | 1,784 |
 | thread scheduler state | 16 x 156 plus ready/deadline queues and accounting | 2,952 |
 | guarded thread supervisor-stack arena | 16 x 12 KiB | 196,608 |
+| synchronization objects | 32 x 36 | 1,152 |
 | performance metrics/control | 9 x 36 plus control | 332 |
 | DMA slots | 32 x 36 | 1,152 |
 | block slots | 4 x 64 | 256 |

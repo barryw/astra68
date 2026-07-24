@@ -61,6 +61,24 @@ The candidate must retain all of these before routing:
 - the 16-entry deadline heap must cover equal-deadline deterministic ordering,
   full capacity, already-expired rejection, signal/timeout ordering, close,
   and process-death removal with one result and no stale heap entry;
+- the 32-entry synchronization pool must cover full-system and per-process
+  quota exhaustion, handle-table publication rollback, generation-safe reuse,
+  invalid type and rights, 16-waiter capacity, and a return to its exact
+  baseline after final close and process death;
+- auto-reset events must cover retained signal, priority/FIFO wake-one, and no
+  duplicate wake; manual-reset events must cover wake-all, retained signaled
+  state, reset, and post-reset blocking;
+- semaphores must cover immediate decrement, direct waiter handoff, FIFO among
+  equal priorities, count remainder, maximum overflow rejection with no partial
+  wake, and close with queued waiters;
+- signal/timeout/cancel/final-close/creator-death permutations must prove one
+  terminal result, one queue withdrawal, one deadline removal, and no object or
+  reference leak;
+- public waits must cover absolute nanosecond poll, finite, infinite, invalid
+  negative, rounding, and high-word deadlines plus monotonic-clock rollover;
+- production target scheduling must exercise handle creation, rights-checked
+  wait/signal, event signal handoff, semaphore handoff, timeout, cancellation,
+  close wakeup, and stale-handle rejection before the K4 marker;
 - aligned byte copy/clear primitives must cover every source/destination
   alignment and length through the longword fast path, with guard bytes proving
   no underrun or overrun;

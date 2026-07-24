@@ -4,13 +4,12 @@
 
 #include "block.h"
 #include "bytes.h"
-#include "event.h"
 #include "exception.h"
 #include "generation.h"
 #include "memory.h"
 #include "performance.h"
 #include "platform.h"
-#include "qualification.h"
+#include "sync.h"
 #include "vm.h"
 
 #include <stddef.h>
@@ -44,8 +43,6 @@ static KernelProcess processes[KERNEL_PROCESS_MAX];
 static KernelSchedulerStats scheduler_stats;
 static KernelProcessMaintenanceDiagnostics maintenance_diagnostics;
 static KernelThread *current_thread;
-static KernelEvent qualification_event;
-static uint32_t qualification_event_owner;
 static uint64_t quantum_deadline;
 static uint32_t scheduler_quantum_cycles;
 static uint8_t scheduler_initialized;
@@ -57,6 +54,18 @@ _Static_assert(KERNEL_THREAD_STACK_SIZE == KERNEL_PAGE_SIZE,
                "one user-stack slot must map exactly one VM page");
 _Static_assert(KERNEL_PROCESS_THREAD_MAX <= 16u,
                "stack slot bitmap exceeds its storage");
+_Static_assert(ASTRA_EVENT_MANUAL_RESET ==
+                   KERNEL_SYNC_EVENT_MANUAL_RESET,
+               "event flag ABI mismatch");
+_Static_assert(ASTRA_EVENT_INITIALLY_SIGNALED ==
+                   KERNEL_SYNC_EVENT_INITIALLY_SIGNALED,
+               "event flag ABI mismatch");
+_Static_assert(ASTRA_RIGHT_READ == KERNEL_SYNC_RIGHT_QUERY &&
+                   ASTRA_RIGHT_SIGNAL == KERNEL_SYNC_RIGHT_SIGNAL &&
+                   ASTRA_RIGHT_WAIT == KERNEL_SYNC_RIGHT_WAIT &&
+                   ASTRA_RIGHT_ADMINISTER ==
+                       KERNEL_SYNC_RIGHT_ADMINISTER,
+               "synchronization-right ABI mismatch");
 
 #if ASTRA_KERNEL_SOAK_SELFTEST
 typedef struct KernelProcessSoakState {
@@ -388,6 +397,8 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
 
     if (process->handles_closed == 0u) {
         (void)kernel_handle_close_all(&process->handles);
+        if (!kernel_sync_pool_valid())
+            return KERNEL_PROCESS_CORRUPT;
         process->handles_closed = 1u;
     }
     if (kernel_block_revoke_owner(process->owner, &released_buffers,
@@ -411,12 +422,6 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
         return KERNEL_PROCESS_CORRUPT;
     }
     scheduler_stats.forced_frame_releases += released_frames;
-    if (qualification_event_owner == process->id) {
-        if (kernel_event_waiter_count(&qualification_event) != 0u)
-            return KERNEL_PROCESS_CORRUPT;
-        kernel_event_init(&qualification_event, false);
-        qualification_event_owner = 0u;
-    }
     if (kernel_thread_release_process(
             (uint16_t)(process - processes)) != KERNEL_THREAD_OK)
         return KERNEL_PROCESS_CORRUPT;
@@ -432,6 +437,7 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
 
 static void check_milestone(void)
 {
+    KernelSyncPoolStats sync_stats;
     KernelThreadPoolStats thread_stats;
     uint32_t measured_stack_use;
     bool survivor_ready = false;
@@ -439,19 +445,27 @@ static void check_milestone(void)
     if (scheduler_stats.milestone_complete != 0u)
         return;
     if (!kernel_thread_pool_stats(&thread_stats) ||
+        !kernel_sync_pool_stats(&sync_stats) ||
         scheduler_stats.created_processes < 2u ||
         scheduler_stats.created_threads < 3u ||
         scheduler_stats.timer_preemptions == 0u ||
         scheduler_stats.same_address_space_switches == 0u ||
         scheduler_stats.cross_address_space_switches == 0u ||
         scheduler_stats.wait_blocks < 2u ||
-        scheduler_stats.event_wakeups == 0u ||
+        scheduler_stats.sync_wakeups == 0u ||
         scheduler_stats.wake_preemptions == 0u ||
         scheduler_stats.quantum_expirations == 0u ||
         scheduler_stats.deadline_expirations == 0u ||
         scheduler_stats.deadline_preemptions == 0u ||
         thread_stats.blocked_threads == 0u ||
         thread_stats.deadline_max_depth == 0u ||
+        thread_stats.wait_cancellations == 0u ||
+        sync_stats.created_events < 3u ||
+        sync_stats.created_semaphores == 0u ||
+        sync_stats.blocked_waits < 5u ||
+        sync_stats.signal_calls < 2u ||
+        sync_stats.close_wakeups == 0u ||
+        sync_stats.owner_deaths == 0u ||
         thread_stats.kernel_stack_entries == 0u ||
         thread_stats.kernel_stack_max_used == 0u ||
         !kernel_thread_stacks_valid() ||
@@ -497,7 +511,9 @@ static KernelProcessStatus retire_current(KernelProcessExitReason reason,
     KernelProcess *retiring;
     KernelProcessStatus status;
     uint16_t retiring_slot;
+    uint32_t closed_sync_objects;
     uint32_t retired_threads;
+    uint32_t woken_sync_waiters;
 
     if (next_context == NULL || current_thread == NULL)
         return KERNEL_PROCESS_INVALID_STATE;
@@ -515,6 +531,12 @@ static KernelProcessStatus retire_current(KernelProcessExitReason reason,
         return KERNEL_PROCESS_CORRUPT;
     scheduler_stats.live_threads -= retired_threads;
     scheduler_stats.dead_threads += retired_threads;
+    if (kernel_sync_owner_died(retiring->id, ASTRA_SYSCALL_PEER_DEAD,
+                               &closed_sync_objects,
+                               &woken_sync_waiters) != KERNEL_SYNC_OK)
+        return KERNEL_PROCESS_CORRUPT;
+    (void)closed_sync_objects;
+    (void)woken_sync_waiters;
     --scheduler_stats.live_processes;
     status = schedule_next(next_context);
     if (status != KERNEL_PROCESS_OK &&
@@ -534,8 +556,7 @@ void kernel_process_init(void)
     kernel_bytes_clear(&maintenance_diagnostics,
                        sizeof(maintenance_diagnostics));
     kernel_thread_pool_init();
-    kernel_event_init(&qualification_event, false);
-    qualification_event_owner = 0u;
+    kernel_sync_pool_init();
 #if ASTRA_KERNEL_SOAK_SELFTEST
     kernel_bytes_clear(&soak_state, sizeof(soak_state));
 #endif
@@ -643,7 +664,8 @@ static KernelProcessStatus create_thread(KernelProcess *process,
 
     if (kernel_handle_install(&process->handles, KERNEL_OBJECT_THREAD,
                               KERNEL_THREAD_RIGHT_QUERY |
-                                  KERNEL_THREAD_RIGHT_TERMINATE,
+                                  KERNEL_THREAD_RIGHT_TERMINATE |
+                                  KERNEL_THREAD_RIGHT_CANCEL_WAIT,
                               thread, NULL, NULL, &thread_handle) !=
         KERNEL_HANDLE_OK) {
         result = KERNEL_PROCESS_RESOURCE_LIMIT;
@@ -958,6 +980,9 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         switch (kernel_handle_close(&current->handles,
                                     thread->context.data[1])) {
         case KERNEL_HANDLE_OK:
+            if (!kernel_sync_pool_valid())
+                return KERNEL_PROCESS_CORRUPT;
+            scheduler_timer_rearm();
             break;
         case KERNEL_HANDLE_INVALID_HANDLE:
             result = ASTRA_SYSCALL_INVALID_HANDLE;
@@ -969,36 +994,117 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             return KERNEL_PROCESS_CORRUPT;
         }
         break;
-    case KERNEL_QUALIFICATION_EVENT_WAIT:
-    case KERNEL_QUALIFICATION_EVENT_WAIT_TIMEOUT: {
-        KernelEventStatus event_status;
+    case ASTRA_SYSCALL_CLOCK_MONOTONIC: {
+        uint64_t nanoseconds = kernel_platform_monotonic_ns();
 
-        if (qualification_event_owner == 0u)
-            qualification_event_owner = current->id;
-        if (qualification_event_owner != current->id) {
+        thread->context.data[1] = (uint32_t)(nanoseconds >> 32);
+        thread->context.data[2] = (uint32_t)nanoseconds;
+        break;
+    }
+    case ASTRA_SYSCALL_EVENT_CREATE:
+    case ASTRA_SYSCALL_SEMAPHORE_CREATE: {
+        KernelSyncObject *object = NULL;
+        KernelSyncStatus sync_status;
+        KernelHandle handle;
+        uint32_t rights = syscall == ASTRA_SYSCALL_EVENT_CREATE ?
+            thread->context.data[2] : thread->context.data[3];
+
+        if (rights == 0u || (rights & ~KERNEL_SYNC_RIGHTS) != 0u) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (syscall == ASTRA_SYSCALL_EVENT_CREATE) {
+            sync_status = kernel_sync_create_event(
+                current->id, thread->context.data[1], &object);
+        } else {
+            sync_status = kernel_sync_create_semaphore(
+                current->id, thread->context.data[1],
+                thread->context.data[2], &object);
+        }
+        if (sync_status == KERNEL_SYNC_INVALID_ARGUMENT) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (sync_status == KERNEL_SYNC_NO_SLOT ||
+            sync_status == KERNEL_SYNC_QUOTA_EXCEEDED) {
+            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        }
+        if (sync_status != KERNEL_SYNC_OK || object == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        switch (kernel_handle_install(
+            &current->handles, KERNEL_OBJECT_SYNC, rights, object,
+            kernel_sync_handle_release, NULL, &handle)) {
+        case KERNEL_HANDLE_OK:
+            thread->context.data[1] = handle;
+            break;
+        case KERNEL_HANDLE_TABLE_FULL:
+            kernel_sync_abandon_unpublished(object);
+            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        default:
+            kernel_sync_abandon_unpublished(object);
+            return KERNEL_PROCESS_CORRUPT;
+        }
+        if (!kernel_sync_pool_valid())
+            return KERNEL_PROCESS_CORRUPT;
+        break;
+    }
+    case ASTRA_SYSCALL_WAIT_ONE: {
+        KernelSyncObject *object = NULL;
+        KernelSyncStatus sync_status;
+        KernelHandleStatus handle_status;
+        uint64_t deadline_bits;
+        uint64_t deadline_cycles;
+        uint64_t now;
+
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1], KERNEL_OBJECT_SYNC,
+            KERNEL_SYNC_RIGHT_WAIT, (void **)&object);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
             result = ASTRA_SYSCALL_ACCESS_DENIED;
             break;
         }
-        if (syscall == KERNEL_QUALIFICATION_EVENT_WAIT_TIMEOUT) {
-            uint64_t now = scheduler_cycles();
-            uint64_t delay = thread->context.data[1];
-            uint64_t deadline = UINT64_MAX - now <= delay ?
-                UINT64_MAX - 1u : now + delay;
-
-            event_status = kernel_event_wait_until(
-                &qualification_event, thread, now, deadline,
-                ASTRA_SYSCALL_TIMED_OUT);
-        } else {
-            event_status = kernel_event_wait(&qualification_event, thread);
-        }
-        if (event_status == KERNEL_EVENT_OK)
+        if (handle_status != KERNEL_HANDLE_OK || object == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        if ((thread->context.data[2] & 0x80000000u) != 0u) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
             break;
-        if (event_status == KERNEL_EVENT_TIMED_OUT) {
+        }
+        deadline_bits = ((uint64_t)thread->context.data[2] << 32) |
+                        thread->context.data[3];
+        if (!kernel_platform_deadline_to_cycles((int64_t)deadline_bits,
+                                                &deadline_cycles)) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        now = scheduler_cycles();
+        sync_status = kernel_sync_wait(object, thread, now, deadline_cycles,
+                                       ASTRA_SYSCALL_TIMED_OUT);
+        if (sync_status == KERNEL_SYNC_OK)
+            break;
+        if (sync_status == KERNEL_SYNC_TIMED_OUT) {
             result = ASTRA_SYSCALL_TIMED_OUT;
             break;
         }
-        if (event_status != KERNEL_EVENT_BLOCKED)
-            return event_status == KERNEL_EVENT_CLOSED ?
+        if (sync_status == KERNEL_SYNC_CLOSED) {
+            result = kernel_sync_terminal_result(object);
+            if (result == ASTRA_SYSCALL_OK)
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        if (sync_status == KERNEL_SYNC_WAITER_LIMIT) {
+            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        }
+        if (sync_status != KERNEL_SYNC_BLOCKED)
+            return sync_status == KERNEL_SYNC_INVALID_ARGUMENT ||
+                           sync_status == KERNEL_SYNC_INVALID_STATE ?
                 KERNEL_PROCESS_INVALID_STATE : KERNEL_PROCESS_CORRUPT;
         ++scheduler_stats.wait_blocks;
         status = schedule_next(next_context);
@@ -1008,38 +1114,115 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         check_milestone();
         return status;
     }
-    case KERNEL_QUALIFICATION_EVENT_SIGNAL: {
-        KernelThread *woken = NULL;
+    case ASTRA_SYSCALL_SIGNAL: {
+        KernelSyncObject *object = NULL;
+        KernelSyncStatus sync_status;
+        KernelHandleStatus handle_status;
+        uint32_t woken = 0u;
 
-        if (qualification_event_owner != current->id) {
-            result = qualification_event_owner == 0u ?
-                ASTRA_SYSCALL_INVALID_ARGUMENT :
-                ASTRA_SYSCALL_ACCESS_DENIED;
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1], KERNEL_OBJECT_SYNC,
+            KERNEL_SYNC_RIGHT_SIGNAL, (void **)&object);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
             break;
         }
-        if (kernel_event_signal(&qualification_event, ASTRA_SYSCALL_OK,
-                                &woken) != KERNEL_EVENT_OK)
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || object == NULL)
             return KERNEL_PROCESS_CORRUPT;
-        if (woken == NULL) {
+        sync_status = kernel_sync_signal(
+            object, thread->context.data[2], ASTRA_SYSCALL_OK, &woken);
+        if (sync_status == KERNEL_SYNC_COUNT_LIMIT) {
+            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        }
+        if (sync_status == KERNEL_SYNC_INVALID_ARGUMENT ||
+            sync_status == KERNEL_SYNC_INVALID_STATE) {
             result = ASTRA_SYSCALL_INVALID_ARGUMENT;
             break;
         }
-        ++scheduler_stats.event_wakeups;
-        thread->context.data[0] = ASTRA_SYSCALL_OK;
-        if (woken->effective_priority > thread->effective_priority) {
-            KernelThread *next = NULL;
-
-            if (kernel_thread_make_ready(thread) != KERNEL_THREAD_OK ||
-                kernel_thread_take_next(&next) != KERNEL_THREAD_OK ||
-                next != woken)
+        if (sync_status == KERNEL_SYNC_CLOSED) {
+            result = kernel_sync_terminal_result(object);
+            if (result == ASTRA_SYSCALL_OK)
                 return KERNEL_PROCESS_CORRUPT;
-            ++scheduler_stats.wake_preemptions;
-            status = activate(next, next_context);
-            if (status != KERNEL_PROCESS_OK)
-                return status;
-            check_milestone();
-            return KERNEL_PROCESS_OK;
+            break;
         }
+        if (sync_status != KERNEL_SYNC_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        thread->context.data[1] = woken;
+        scheduler_stats.sync_wakeups += woken;
+        if (woken != 0u && ready_thread_outranks(thread))
+            ++scheduler_stats.wake_preemptions;
+        scheduler_timer_rearm();
+        break;
+    }
+    case ASTRA_SYSCALL_EVENT_RESET: {
+        KernelSyncObject *object = NULL;
+        KernelSyncStatus sync_status;
+        KernelHandleStatus handle_status;
+
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1], KERNEL_OBJECT_SYNC,
+            KERNEL_SYNC_RIGHT_ADMINISTER, (void **)&object);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || object == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        sync_status = kernel_sync_reset(object);
+        if (sync_status == KERNEL_SYNC_INVALID_STATE) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (sync_status == KERNEL_SYNC_CLOSED) {
+            result = kernel_sync_terminal_result(object);
+            if (result == ASTRA_SYSCALL_OK)
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        if (sync_status != KERNEL_SYNC_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        break;
+    }
+    case ASTRA_SYSCALL_CANCEL_WAIT: {
+        KernelThread *target = NULL;
+        KernelThreadStatus thread_status;
+        KernelHandleStatus handle_status;
+
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1], KERNEL_OBJECT_THREAD,
+            KERNEL_THREAD_RIGHT_CANCEL_WAIT, (void **)&target);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || target == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        thread_status = kernel_thread_cancel_wait(
+            target, ASTRA_SYSCALL_CANCELLED);
+        if (thread_status == KERNEL_THREAD_INVALID_STATE) {
+            result = ASTRA_SYSCALL_WOULD_BLOCK;
+            break;
+        }
+        if (thread_status != KERNEL_THREAD_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        if (ready_thread_outranks(thread))
+            ++scheduler_stats.wake_preemptions;
         scheduler_timer_rearm();
         break;
     }
@@ -1257,9 +1440,11 @@ bool kernel_process_snapshot(uint32_t slot, KernelProcessSnapshot *snapshot)
 
 bool kernel_process_stats(KernelSchedulerStats *stats)
 {
+    KernelSyncPoolStats sync_stats;
     KernelThreadPoolStats thread_stats;
 
-    if (stats == NULL || !kernel_thread_pool_stats(&thread_stats))
+    if (stats == NULL || !kernel_thread_pool_stats(&thread_stats) ||
+        !kernel_sync_pool_stats(&sync_stats))
         return false;
     if (thread_stats.created_threads != scheduler_stats.created_threads ||
         thread_stats.live_threads != scheduler_stats.live_threads ||
@@ -1290,7 +1475,7 @@ bool kernel_process_stats(KernelSchedulerStats *stats)
         scheduler_stats.cross_address_space_switches;
     stats->priority_preemptions = scheduler_stats.priority_preemptions;
     stats->wait_blocks = scheduler_stats.wait_blocks;
-    stats->event_wakeups = scheduler_stats.event_wakeups;
+    stats->sync_wakeups = scheduler_stats.sync_wakeups;
     stats->wake_preemptions = scheduler_stats.wake_preemptions;
     stats->quantum_cycles = scheduler_stats.quantum_cycles;
     stats->quantum_expirations = scheduler_stats.quantum_expirations;
@@ -1301,6 +1486,15 @@ bool kernel_process_stats(KernelSchedulerStats *stats)
         scheduler_stats.supervisor_timer_deferrals;
     stats->deadline_depth = thread_stats.deadline_depth;
     stats->deadline_max_depth = thread_stats.deadline_max_depth;
+    stats->sync_created_events = sync_stats.created_events;
+    stats->sync_created_semaphores = sync_stats.created_semaphores;
+    stats->sync_live_objects = sync_stats.live_objects;
+    stats->sync_max_live_objects = sync_stats.max_live_objects;
+    stats->sync_wait_calls = sync_stats.wait_calls;
+    stats->sync_signal_calls = sync_stats.signal_calls;
+    stats->sync_cancellations = thread_stats.wait_cancellations;
+    stats->sync_close_wakeups = sync_stats.close_wakeups;
+    stats->sync_owner_deaths = sync_stats.owner_deaths;
     stats->ready_bitmap = thread_stats.ready_bitmap;
     stats->blocked_threads = thread_stats.blocked_threads;
     stats->kernel_stack_entries = thread_stats.kernel_stack_entries;

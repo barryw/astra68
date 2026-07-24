@@ -32,6 +32,7 @@
 
 #define KERNEL_THREAD_RIGHT_QUERY     (1u << 0)
 #define KERNEL_THREAD_RIGHT_TERMINATE (1u << 1)
+#define KERNEL_THREAD_RIGHT_CANCEL_WAIT (1u << 2)
 
 #define KERNEL_THREAD_DEADLINE_NEVER UINT64_MAX
 
@@ -132,6 +133,7 @@ typedef struct KernelThreadPoolStats {
     uint32_t deadline_waits;
     uint32_t deadline_expirations;
     uint32_t deadline_cancellations;
+    uint32_t wait_cancellations;
     uint32_t deadline_depth;
     uint32_t deadline_max_depth;
 } KernelThreadPoolStats;
@@ -166,6 +168,8 @@ KernelThreadStatus kernel_thread_wake_one(KernelThreadWaitQueue *queue,
 KernelThreadStatus kernel_thread_wake_all(KernelThreadWaitQueue *queue,
                                           uint32_t result,
                                           uint32_t *woken_threads);
+KernelThreadStatus kernel_thread_cancel_wait(KernelThread *thread,
+                                             uint32_t result);
 KernelThreadStatus kernel_thread_expire_deadlines(
     uint64_t now, uint32_t *expired_threads, uint8_t *highest_priority);
 bool kernel_thread_next_deadline(uint64_t *deadline);

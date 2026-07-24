@@ -7,6 +7,8 @@
 #define KERNEL_PLATFORM_QUANTUM_MS 5u
 #define KERNEL_PLATFORM_QUANTUM_HZ \
     (1000u / KERNEL_PLATFORM_QUANTUM_MS)
+#define KERNEL_PLATFORM_CPU_HZ 12500000u
+#define KERNEL_PLATFORM_NS_PER_CPU_CYCLE 80u
 
 typedef struct KernelPlatformBlockState {
     uint32_t capabilities;
@@ -47,6 +49,10 @@ void kernel_platform_timer_disarm(void);
 uint32_t kernel_platform_ticks(void);
 uint32_t kernel_platform_cpu_cycles_low(void);
 void kernel_platform_cpu_cycles(KernelPlatformCycleCount *cycles);
+uint64_t kernel_platform_monotonic_ns(void);
+uint64_t kernel_platform_cycles_to_ns(uint64_t cycles);
+bool kernel_platform_deadline_to_cycles(int64_t deadline_ns,
+                                        uint64_t *deadline_cycles);
 bool kernel_interrupt_dispatch(void);
 void kernel_enable_interrupts(void);
 void kernel_disable_interrupts(void);

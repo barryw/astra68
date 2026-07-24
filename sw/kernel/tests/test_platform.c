@@ -62,10 +62,43 @@ static void test_cycle_snapshot_and_unexpected_irq_quarantine(void)
     assert(registers->IRQ_ACK == IRQ_BIT(7u));
 }
 
+static void test_monotonic_nanosecond_deadline_conversion(void)
+{
+    VestaRegs *registers = kernel_platform_test_registers();
+    uint64_t deadline;
+
+    clear_registers(registers);
+    registers->CPU_CYCLES_LO = 0x00000002u;
+    registers->CPU_CYCLES_HI = 0u;
+    assert(kernel_platform_monotonic_ns() == 160u);
+    assert(kernel_platform_cycles_to_ns(0u) == 0u);
+    assert(kernel_platform_cycles_to_ns(1u) == 80u);
+    assert(kernel_platform_deadline_to_cycles(0, &deadline));
+    assert(deadline == 0u);
+    assert(kernel_platform_deadline_to_cycles(1, &deadline));
+    assert(deadline == 1u);
+    assert(kernel_platform_deadline_to_cycles(80, &deadline));
+    assert(deadline == 1u);
+    assert(kernel_platform_deadline_to_cycles(81, &deadline));
+    assert(deadline == 2u);
+    assert(kernel_platform_deadline_to_cycles(
+        INT64_C(0x0123456789abcdef), &deadline));
+    assert(deadline == UINT64_C(0x0003a4114b5225c7));
+    assert(kernel_platform_deadline_to_cycles(INT64_MAX - 1, &deadline));
+    assert(deadline == UINT64_C(0x019999999999999a));
+    assert(kernel_platform_deadline_to_cycles(INT64_MAX, &deadline));
+    assert(deadline == UINT64_MAX);
+    assert(!kernel_platform_deadline_to_cycles(-1, &deadline));
+    assert(!kernel_platform_deadline_to_cycles(1, NULL));
+    assert(kernel_platform_cycles_to_ns(UINT64_MAX) ==
+           (uint64_t)INT64_MAX - 1u);
+}
+
 int main(void)
 {
     test_one_shot_configuration_and_restart();
     test_cycle_snapshot_and_unexpected_irq_quarantine();
+    test_monotonic_nanosecond_deadline_conversion();
     puts("platform tests passed");
     return 0;
 }

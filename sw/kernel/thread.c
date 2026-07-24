@@ -878,6 +878,21 @@ KernelThreadStatus kernel_thread_wake_all(KernelThreadWaitQueue *queue,
     return wake_all_profiled(queue, result, woken_threads);
 }
 
+KernelThreadStatus kernel_thread_cancel_wait(KernelThread *thread,
+                                             uint32_t result)
+{
+    KernelThreadStatus status;
+
+    if (!valid_thread(thread) || result == 0u)
+        return KERNEL_THREAD_INVALID_ARGUMENT;
+    if (thread->state != KERNEL_THREAD_BLOCKED || thread->wait_queue == NULL)
+        return KERNEL_THREAD_INVALID_STATE;
+    status = wake_waiter(thread, result);
+    if (status == KERNEL_THREAD_OK)
+        ++pool_stats.wait_cancellations;
+    return status;
+}
+
 static __attribute__((noinline))
 KernelThreadStatus expire_deadlines_fast(uint64_t now,
                                          uint32_t *expired_threads,
@@ -1123,6 +1138,7 @@ bool kernel_thread_pool_stats(KernelThreadPoolStats *stats)
     stats->deadline_waits = pool_stats.deadline_waits;
     stats->deadline_expirations = pool_stats.deadline_expirations;
     stats->deadline_cancellations = pool_stats.deadline_cancellations;
+    stats->wait_cancellations = pool_stats.wait_cancellations;
     stats->deadline_depth = deadline_count;
     stats->deadline_max_depth = pool_stats.deadline_max_depth;
     return true;

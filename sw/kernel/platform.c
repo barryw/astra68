@@ -19,6 +19,34 @@ VestaRegs *kernel_platform_test_registers(void)
 static volatile uint32_t tick_count;
 static uint32_t quantum_cycles;
 
+static uint32_t divide_ns_limb(uint32_t remainder, uint32_t limb,
+                               uint32_t *next_remainder)
+{
+    uint32_t dividend = (remainder << 16) | (limb & 0xffffu);
+    uint32_t quotient = dividend / KERNEL_PLATFORM_NS_PER_CPU_CYCLE;
+
+    *next_remainder = dividend -
+        quotient * KERNEL_PLATFORM_NS_PER_CPU_CYCLE;
+    return quotient;
+}
+
+static uint64_t ceil_nanoseconds_to_cycles(uint64_t nanoseconds)
+{
+    uint32_t high = (uint32_t)(nanoseconds >> 32);
+    uint32_t low = (uint32_t)nanoseconds;
+    uint32_t quotient_high;
+    uint32_t quotient_low;
+    uint32_t remainder = 0u;
+
+    quotient_high = divide_ns_limb(remainder, high >> 16, &remainder) << 16;
+    quotient_high |= divide_ns_limb(remainder, high, &remainder);
+    quotient_low = divide_ns_limb(remainder, low >> 16, &remainder) << 16;
+    quotient_low |= divide_ns_limb(remainder, low, &remainder);
+    if (remainder != 0u && ++quotient_low == 0u)
+        ++quotient_high;
+    return ((uint64_t)quotient_high << 32) | quotient_low;
+}
+
 uint32_t kernel_platform_quantum_cycles(void)
 {
     return quantum_cycles;
@@ -73,6 +101,38 @@ void kernel_platform_cpu_cycles(KernelPlatformCycleCount *cycles)
 
     cycles->high = high;
     cycles->low = low;
+}
+
+uint64_t kernel_platform_cycles_to_ns(uint64_t cycles)
+{
+    const uint64_t maximum = (uint64_t)INT64_MAX - 1u;
+
+    if (cycles > maximum / KERNEL_PLATFORM_NS_PER_CPU_CYCLE)
+        return maximum;
+    return cycles * KERNEL_PLATFORM_NS_PER_CPU_CYCLE;
+}
+
+uint64_t kernel_platform_monotonic_ns(void)
+{
+    KernelPlatformCycleCount snapshot;
+    uint64_t cycles;
+
+    kernel_platform_cpu_cycles(&snapshot);
+    cycles = ((uint64_t)snapshot.high << 32) | snapshot.low;
+    return kernel_platform_cycles_to_ns(cycles);
+}
+
+bool kernel_platform_deadline_to_cycles(int64_t deadline_ns,
+                                        uint64_t *deadline_cycles)
+{
+    if (deadline_cycles == NULL || deadline_ns < 0)
+        return false;
+    if (deadline_ns == INT64_MAX) {
+        *deadline_cycles = UINT64_MAX;
+        return true;
+    }
+    *deadline_cycles = ceil_nanoseconds_to_cycles((uint64_t)deadline_ns);
+    return true;
 }
 
 bool kernel_interrupt_dispatch(void)

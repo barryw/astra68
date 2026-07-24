@@ -114,7 +114,7 @@ typedef struct KernelSchedulerStats {
     uint32_t cross_address_space_switches;
     uint32_t priority_preemptions;
     uint32_t wait_blocks;
-    uint32_t event_wakeups;
+    uint32_t sync_wakeups;
     uint32_t wake_preemptions;
     uint32_t quantum_cycles;
     uint32_t quantum_expirations;
@@ -124,6 +124,15 @@ typedef struct KernelSchedulerStats {
     uint32_t supervisor_timer_deferrals;
     uint32_t deadline_depth;
     uint32_t deadline_max_depth;
+    uint32_t sync_created_events;
+    uint32_t sync_created_semaphores;
+    uint32_t sync_live_objects;
+    uint32_t sync_max_live_objects;
+    uint32_t sync_wait_calls;
+    uint32_t sync_signal_calls;
+    uint32_t sync_cancellations;
+    uint32_t sync_close_wakeups;
+    uint32_t sync_owner_deaths;
     uint32_t ready_bitmap;
     uint32_t blocked_threads;
     uint32_t kernel_stack_entries;
