@@ -1,0 +1,36 @@
+make: Entering directory '/tmp/astra68-k3-oneshot-dev/emu'
+rustup run 1.97.0 cargo run -p astravm-machine --example kernel -- ../sw/boot/astra_boot.bin
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running `target/debug/examples/kernel ../sw/boot/astra_boot.bin`
+
+
+
+  User tasks .......... OK, 5 ms one-shot quantum
+  Fault containment ... OK, offender reaped
+  Context switches .... 12
+  Thread scheduler .... 2 live, priority queues OK
+  Same-CRP switches ... 3
+  Wait/wake ........... 3 blocks, 1 wake, 1 priority handoff
+  Deadlines ........... 1 expired, 1 priority handoff
+  Thread ISP max ...... 428 / 8192 bytes
+  K2 PERF irq syscall=14566/50000 timer=12588/50000 fault=13054/125000
+  K2 PERF sched pick=768/10000 same=1268/15000 cross=1573/50000
+  K2 PERF wait block=1131/15000 wake=1712/15000 overruns=0
+  K3 PERF deadline expire=3644/20000 overruns=0
+  K2 PERFORMANCE PASS
+
+  K3 ONE-SHOT SCHEDULER PASS
+
+  K3 DEADLINE QUEUE PASS
+
+  K2 BLOCKING SUBSTRATE PASS
+
+  K2 THREAD SUBSTRATE PASS
+
+  K1 PROTECTED ENTRY PASS
+  KERNEL MULTITASKING
+
+
+
+backend=MUSASHI 68030 / REAL ROM cycles=17250229 pc=0x02017766 build=0x18EBE2E1 scratch=0x4B314F4B
+make: Leaving directory '/tmp/astra68-k3-oneshot-dev/emu'

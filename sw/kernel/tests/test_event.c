@@ -79,10 +79,45 @@ static void test_close_wakes_waiters_once(void)
     assert(kernel_event_close(&event, 0u, NULL) == KERNEL_EVENT_CLOSED);
 }
 
+static void test_timed_wait_condition_timeout_and_signal_arbitration(void)
+{
+    KernelEvent event;
+    KernelThreadPoolStats stats;
+    KernelThread *thread;
+    KernelThread *woken;
+    uint32_t expired;
+    uint8_t highest;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    kernel_event_init(&event, true);
+    thread = make_running_thread(KERNEL_THREAD_PRIORITY_NORMAL);
+
+    assert(kernel_event_wait_until(&event, thread, 100u, 100u,
+                                   0x1000u) == KERNEL_EVENT_OK);
+    assert(kernel_event_wait_until(&event, thread, 100u, 100u,
+                                   0x2000u) ==
+           KERNEL_EVENT_TIMED_OUT);
+    assert(thread->state == KERNEL_THREAD_RUNNING);
+    assert(kernel_event_wait_until(&event, thread, 100u, 200u,
+                                   0x3000u) == KERNEL_EVENT_BLOCKED);
+    assert(kernel_event_signal(&event, 0x4000u, &woken) == KERNEL_EVENT_OK);
+    assert(woken == thread);
+    assert(kernel_thread_expire_deadlines(300u, &expired, &highest) ==
+           KERNEL_THREAD_OK);
+    assert(expired == 0u);
+    assert(thread->context.data[0] == 0x4000u);
+    assert(kernel_thread_pool_stats(&stats));
+    assert(stats.deadline_waits == 1u);
+    assert(stats.deadline_expirations == 0u);
+    assert(stats.deadline_cancellations == 1u);
+}
+
 int main(void)
 {
     test_auto_reset_signal_and_wait();
     test_close_wakes_waiters_once();
+    test_timed_wait_condition_timeout_and_signal_arbitration();
     puts("event tests passed");
     return 0;
 }

@@ -16,13 +16,15 @@ DMA, and MMIO ordering still applies even though only one CPU executes C code.
 | ordinary user thread syscall | yes, fallible | yes | yes | yes, before blocking/pin |
 | panic path | no | no | no | no |
 
-K1 has one fixed stackful deferred worker. It runs with S=1/M=1 on a dedicated
+K3 has one fixed stackful deferred worker. It runs with S=1/M=1 on a dedicated
 8 KiB MSP behind an unmapped 4 KiB guard; exception, syscall, and hard-IRQ
 entry use the separate guarded ISP. The worker enters at IPL 7, removes a
 bounded work bitmap, enables interrupts around process reclamation, remasks
 before changing state, and returns to a validated user context or executes an
-atomic master-mode `STOP`. The 100 Hz hard timer only acknowledges, records
-the tick, moves a bounded retry bit to ready work, and requests scheduling.
+atomic master-mode `STOP`. Vesta TIMER0 is one-shot: the hard timer
+acknowledges, samples the monotonic cycle counter, expires bounded scheduler
+deadlines, records quantum expiry, moves a bounded worker retry bit to ready
+work, and requests scheduling. It never allocates or destroys an object.
 
 User-fault dispatch performs only fault classification, atomic transition to
 `EXITING`, withdrawal from scheduling, selection of a runnable or empty CRP,
@@ -48,28 +50,44 @@ IRQ work.
 
 ## Preemption model
 
-**CURRENT K2 substrate:** four process slots, 16 global thread slots, a
-transitional limit of 15 threads/process, and a 100 Hz periodic timer with a
-10 ms nominal quantum. The scheduler has 32 intrusive FIFO ready queues and a
-32-bit bitmap, selects the highest effective priority in bounded constant
-steps, and rotates equal-priority threads round-robin. A process is not a
-schedulable entity: it supplies a default priority and policy ceiling, while
-each thread owns base and effective priorities. Effective priority currently
-equals base priority because inheritance and donation are not implemented. Each
-thread has an 8 KiB supervisor stack behind its own 4 KiB unmapped guard.
+**CURRENT K3 substrate:** four process slots, 16 global thread slots, a
+transitional limit of 15 threads/process, and a 5 ms one-shot quantum. At
+12.5 MHz the quantum is exactly 62,500 CPU cycles. The scheduler has 32
+intrusive FIFO ready queues and a 32-bit bitmap, selects the highest effective
+priority in bounded constant steps, and rotates equal-priority threads
+round-robin. A process is not a schedulable entity: it supplies a default
+priority and policy ceiling, while each thread owns base and effective
+priorities. Effective priority currently equals base priority because
+inheritance and donation are not implemented. Each thread has an 8 KiB
+supervisor stack behind its own 4 KiB unmapped guard.
 
 All registers, USP, PC, and SR are thread state. CRP is process state. A switch
   between threads in one process does not reload CRP or flush caches/ATC; host,
   Musashi, full pin-level, and ULX3S tests count that path separately from a
   cross-CRP switch. Timer and voluntary-yield paths apply priority selection.
-  The internal K2 event path proves immediate handoff when a higher-priority
-  waiter wakes. Thread creation and event syscalls remain qualification-only;
-  no stable user synchronization ABI is exposed.
+  The internal K3 event path proves immediate handoff when a higher-priority
+  waiter wakes or its deadline expires. Thread creation and event syscalls
+  remain qualification-only; no stable user synchronization ABI is exposed.
+
+The running thread owns one absolute quantum deadline. Vesta is always
+reprogrammed to the earlier of that deadline and the root of the wait-deadline
+heap. A context activation starts a fresh quantum; an ordinary syscall does
+not. Yield, blocking, exit, fault, and preemption select or enter another
+context and therefore start that selected context's quantum. When every user
+thread is blocked, the scheduler installs the empty CRP, clears the active
+quantum, retains the one-shot deadline, and lets the guarded supervisor worker
+idle. Expiry can make a thread ready from that state.
+
+The wait-deadline queue is one fixed 16-entry binary min-heap, exactly one
+entry per global thread slot. Deadlines are unsigned 64-bit absolute CPU-cycle
+values. Equal deadlines are ordered by thread slot for deterministic behavior.
+Four parallel arrays plus one count consume 258 bytes; insertion and removal
+are `O(log 16)`, expiration is `O(expired * log 16)`, and no path allocates.
+The implementation rejects an already-expired deadline before blocking and
+cannot exceed the global thread limit.
 
 **PLANNED stable scheduler work:**
 
-- initial ordinary quantum 5 ms using a one-shot timer;
-- immediate reschedule when a higher-priority thread becomes ready;
 - equal-priority/current-address-space affinity as the final tie-breaker;
 - bounded interactive boost of at most two levels, decaying one level per full
   quantum and never entering real-time ranges;
@@ -163,10 +181,17 @@ state; exactly one wins and supplies the result.
 
 The current single-CPU qualification event runs inside serialized supervisor
 dispatch. It snapshots the wait-queue sequence while testing the condition;
-`kernel_thread_block` succeeds only if that sequence is still current. Every
-wake or removal advances the sequence. This proves the condition-change/block
-boundary without introducing a second queue implementation; object locks and
-the four-way timeout/cancel/signal/death arbitration remain stable-ABI work.
+`kernel_thread_block_until` succeeds only if that sequence is still current.
+Every wake, expiry, close, or process retirement advances the sequence. A
+successful timed block links the thread to the object wait queue first and
+then to the deadline heap; failure unwinds both links before restoring
+`RUNNING`. Signal/close removes the deadline before making the thread `READY`.
+Expiry removes the heap entry and wait link before making it `READY`. Process
+death performs the same withdrawal for every sibling before deferred
+destruction. These paths are idempotence-checked so one race winner supplies
+one result and one cancellation count. Explicit user cancellation and peer
+death remain stable-ABI work; they must reuse this owner rather than introduce
+a second timeout queue.
 
 ## Interrupt and deferred work
 
@@ -187,5 +212,8 @@ with an overflow/error event.
 
 The trace ring records interrupt-disabled time, scheduler-lock time, raw-lock
 time, wake-to-run latency, same-CRP switch cycles, cross-CRP switch cycles,
-ATC flushes, and real-time budget exhaustion. `STATUS.md` must label each as
-unmeasured until hardware data exists.
+deadline-expiry cycles, ATC flushes, and real-time budget exhaustion.
+Production build `25D9CB8E` measured deadline expiry at 6,177 cycles against a
+20,000-cycle gate on two independent K3 boots, with zero performance
+overruns. `STATUS.md` labels every other metric unmeasured until hardware data
+exists.

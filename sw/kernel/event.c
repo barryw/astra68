@@ -23,6 +23,14 @@ void kernel_event_init(KernelEvent *event, bool initially_signaled)
 
 KernelEventStatus kernel_event_wait(KernelEvent *event, KernelThread *thread)
 {
+    return kernel_event_wait_until(event, thread, 0u,
+                                   KERNEL_THREAD_DEADLINE_NEVER, 0u);
+}
+
+KernelEventStatus kernel_event_wait_until(
+    KernelEvent *event, KernelThread *thread, uint64_t now,
+    uint64_t deadline, uint32_t timeout_result)
+{
     KernelThreadStatus status;
     uint32_t sequence;
 
@@ -38,9 +46,12 @@ KernelEventStatus kernel_event_wait(KernelEvent *event, KernelThread *thread)
     sequence = kernel_thread_wait_queue_sequence(&event->waiters);
     if (sequence == 0u)
         return KERNEL_EVENT_CORRUPT;
-    status = kernel_thread_block(thread, &event->waiters, sequence);
+    status = kernel_thread_block_until(thread, &event->waiters, sequence,
+                                       now, deadline, timeout_result);
     if (status == KERNEL_THREAD_OK)
         return KERNEL_EVENT_BLOCKED;
+    if (status == KERNEL_THREAD_DEADLINE_EXPIRED)
+        return KERNEL_EVENT_TIMED_OUT;
     if (status == KERNEL_THREAD_CONDITION_CHANGED)
         return KERNEL_EVENT_INVALID_STATE;
     return status == KERNEL_THREAD_INVALID_ARGUMENT ||

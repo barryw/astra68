@@ -3224,3 +3224,74 @@ PMMU, 100 Hz preemption, offender-only fault containment, and
 `docs/evidence/k1-25d9cb8e-e108a37-flash-hdmi.png` has SHA-256
 `e6e654d6ad0c9f5dead16f9116ab622d7a5ba731fc2fafc1ff7ba324c08128a4`.
 All release gates PASS.
+
+### K3 one-shot scheduler software qualification (2026-07-24)
+
+Development source `8929c063cdd24c8f4f526be330549e2eb5038fc8-dirty`
+replaces the periodic kernel quantum with an exact 62,500-cycle one-shot
+quantum and adds one fixed 16-entry absolute deadline heap. The retained RTL
+change is acceptance-only: `tb_boot_sdram.sv` now requires the K3 performance
+sample and both K3 completion markers. CPU, PMMU, SoC, placement constraints,
+and the production feature set are unchanged.
+
+Beast passes 17 host suites normally, under GCC `-fanalyzer`, and with
+ASan/UBSan/leak checks; canonical m68k verification, Rust format/Clippy/tests,
+the 90-test framework, all 30 shared adapter executions, both Harte smoke
+adapters, and the directed Vesta timer/IACK race test pass. Exact normal
+Musashi reaches K3 at 17,250,229 cycles. Its 1,000-cycle performance run ends
+at 596,507,297 cycles, below the fixed 675,000,000 ceiling, with 2,036 context
+switches, 3,103 delivered timer interrupts, syscall count `0x1F85`, 7,986 free
+pages, and zero overruns. Retained normal and performance transcript SHA-256
+values are
+`33103a11ae413abfd4ce5ccb39b8e490621342a5ceacf334e779e9cb5362bd22`
+and
+`ece6fb827dff5d25527857922e94ec95935f68aed83b2a4a2fa7029bdb640076`.
+
+The exact pin-level Verilator/SDRAM model reuses the matching compiled SoC and
+executes an intentional 64 KiB BIST so software qualification does not spend
+hours emulating the physical 32 MiB sweep. It reaches all K1/K2/K3 markers in
+222.222 seconds, with a 6,163/20,000-cycle deadline-expiry maximum and zero
+overruns. Retained transcript SHA-256 is
+`b2a24285eb4ec7fff3abdeaf1bef839ac98cf4bc35486de29f58d4667a203511`.
+
+The exact normal artifacts are:
+
+- kernel: 41,020 bytes, SHA-256
+  `6ab38364d2ef5e67b6f5e8c7fb691cbf45291624562d7a0203f812c2e648e61d`;
+- boot payload: 52,444 bytes, CRC32 `BAEF4D0B`, SHA-256
+  `33009b3eb09ae51d3ebcdbeac57ec7aff9d3aadee6ee34ab4ea550bc1e76e2c7`;
+  and
+- packaged ROM: 52,476 bytes, SHA-256
+  `b73964d87904994a570c3b5e2b931602f8eb7878f0b531c0ac7e775050919ab1`.
+
+NUC loaded the maintenance passthrough only into volatile SRAM. One-shot
+provisioner application SHA-256
+`10dfac39c4ba6ba32c3ade56428a9767122c8057891a9a691285038308c769b3`
+mounted the existing 244,016 MB card without formatting, atomically replaced
+only `/ASTRA68.ROM`, and then independently reported that the installed file
+already matched. Provisioning transcript SHA-256 values are
+`e541070f0a086e3a2c29177c52611709d27040f0302719bc80df8fc28004f0a9`
+and
+`58c58ac2f1c55990b17690b19fa921fa9c2c710061aea065c56836a260adca4e`.
+Known read-only AstraHost application SHA-256
+`9f5aae5e57ee4a7ae91c54c041e27767e9dbdec8c9093a359fba43a4c13b0e9c`
+was restored.
+
+Bitstream SHA-256
+`78cd218f12feb72ccbdcb6bb141d19908c961f3438b6b559bf99b60d1c9d6940`
+was verified before two independent volatile loads. Both boots report exact
+build `25D9CB8E`, ROM CRC32 `BAEF4D0B`, full-range physical 32 MiB BIST,
+PMMU/user-copy isolation, 20 context switches, one deadline expiry and
+higher-priority handoff, all K1/K2/K3 markers, and a 6,177/20,000-cycle maximum
+with zero overruns. Transcript SHA-256 values are
+`f05c5f0a6b88ab38fb3557d6f412dfbd708011b5078112eaa905b515a0856709`
+and
+`f5f46ccd4230aca44a360a402dc57747e42aef2a8f56461f55960a3bd8ceaa55`.
+
+Disposition: K3 software and exact production-hardware qualification PASS.
+There was no synthesis, placement, route, pack, or FPGA-flash operation.
+Mapped resources remain 53,079 LUT4s, 25,536 FFs, 101 DP16KDs, and 18
+multipliers; packed resources and every constrained-clock result remain the
+exact `25D9CB8E` values above. NUC has no HDMI capture device, so the unchanged
+HDMI path retains its exact physical K1 screenshot; a K3 photograph is pending
+visual evidence rather than a timing or functional blocker.

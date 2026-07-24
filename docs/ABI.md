@@ -53,8 +53,14 @@ bits before additional calls freeze.
 
 The provisional thread-entry register contract is `D2=initial argument`,
 `D4=process self handle`, and `D5=thread self handle`; all other general
-registers begin at zero. This contract is covered by the K2 target image but is
+registers begin at zero. This contract is covered by the K3 target image but is
 not frozen until public thread-creation calls enter the NDK.
+
+K3's timed-event syscall is an internal qualification number, not an ABI 0.1
+operation. It currently accepts a relative CPU-cycle delay solely to exercise
+the one-shot scheduler and returns common result 7 on expiry. A public wait
+uses an absolute monotonic nanosecond deadline and a handle-backed object; the
+relative-cycle form will not be exported through the NDK.
 
 ## Result model
 

@@ -124,6 +124,9 @@ module tb_boot_sdram #(
     reg astraea_test_seen = 1'b0;
     reg astraea_result_seen = 1'b0;
     reg post_seen = 1'b0;
+    reg k3_quantum_seen = 1'b0;
+    reg k3_deadline_seen = 1'b0;
+    reg k3_performance_seen = 1'b0;
     reg expect_kernel_panic;
     reg expect_kernel_soak = 1'b0;
     reg expect_kernel_guard = 1'b0;
@@ -131,6 +134,9 @@ module tb_boot_sdram #(
     reg guard_fault_seen = 1'b0;
     reg [31:0] expected_guard_address = 32'd0;
     reg [31:0] parsed_fault_address = 32'd0;
+    integer parsed_deadline_cycles = 0;
+    integer parsed_deadline_budget = 0;
+    integer parsed_deadline_overruns = 0;
     integer bist_cycles = 0;
     real bist_mbps;
 
@@ -202,6 +208,26 @@ module tb_boot_sdram #(
                         $fatal(1, "integrated BIST bandwidth target missed");
                     post_seen <= 1'b1;
                 end
+                if ($sscanf(uart_line,
+                            "K3 PERF deadline expire=%d/%d overruns=%d",
+                            parsed_deadline_cycles,
+                            parsed_deadline_budget,
+                            parsed_deadline_overruns) == 3) begin
+                    if (parsed_deadline_cycles <= 0 ||
+                        parsed_deadline_cycles > 20000 ||
+                        parsed_deadline_budget != 20000 ||
+                        parsed_deadline_overruns != 0)
+                        $fatal(1,
+                               "K3 deadline performance invalid: %0d/%0d overruns=%0d",
+                               parsed_deadline_cycles,
+                               parsed_deadline_budget,
+                               parsed_deadline_overruns);
+                    k3_performance_seen <= 1'b1;
+                end
+                if (uart_line == "K3 ONE-SHOT SCHEDULER PASS")
+                    k3_quantum_seen <= 1'b1;
+                if (uart_line == "K3 DEADLINE QUEUE PASS")
+                    k3_deadline_seen <= 1'b1;
                 if (uart_line == "Reason: unhandled processor exception")
                     guard_reason_seen <= 1'b1;
                 if ($sscanf(uart_line, "Fault:  0x%h", parsed_fault_address) == 1 &&
@@ -269,6 +295,13 @@ module tb_boot_sdram #(
             if (!expect_kernel_panic && sdram_be32(25'h0000018) != 0)
                 $fatal(1, "normal boot marked early log flags: %08x",
                        sdram_be32(25'h0000018));
+            if (!expect_kernel_panic &&
+                (!k3_quantum_seen || !k3_deadline_seen ||
+                 !k3_performance_seen))
+                $fatal(1,
+                       "kernel ready without K3 evidence quantum=%b deadline=%b performance=%b",
+                       k3_quantum_seen, k3_deadline_seen,
+                       k3_performance_seen);
             $display("KERNEL %s PASS status=%08x log_write=%0d wraps=%0d",
                      expect_kernel_panic ? "PANIC" :
                      expect_kernel_soak ? "SOAK" : "ENTRY",

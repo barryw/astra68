@@ -23,6 +23,7 @@ K2_PERFORMANCE_BUDGETS = {
     "block": 15_000,
     "wake": 15_000,
 }
+K3_DEADLINE_EXPIRE_BUDGET = 20_000
 
 
 def k2_performance_reached(output: bytes | bytearray) -> bool:
@@ -64,6 +65,26 @@ def k2_performance_reached(output: bytes | bytearray) -> bool:
             ):
                 return False
     return b"K2 PERFORMANCE PASS" in output
+
+
+def k3_scheduler_reached(output: bytes | bytearray) -> bool:
+    deadline = re.search(
+        rb"(?m)^K3 PERF deadline expire=(\d+)/(\d+) overruns=0\r?$",
+        output,
+    )
+    if deadline is None:
+        return False
+    measured, reported_budget = (int(value) for value in deadline.groups())
+    return (
+        k2_performance_reached(output)
+        and 0 < measured <= K3_DEADLINE_EXPIRE_BUDGET
+        and reported_budget == K3_DEADLINE_EXPIRE_BUDGET
+        and b"K3 ONE-SHOT SCHEDULER PASS" in output
+        and b"K3 DEADLINE QUEUE PASS" in output
+        and b"K2 BLOCKING SUBSTRATE PASS" in output
+        and b"K2 THREAD SUBSTRATE PASS" in output
+        and b"K1 PROTECTED ENTRY PASS" in output
+    )
 
 
 def find_port(explicit: str | None) -> str:
@@ -134,6 +155,7 @@ def acceptance_reached(
     expected_panic_fault: bytes | None = None,
     expect_k1_fault_max_cycles: int | None = None,
     expect_k1_min_elapsed_cycles: int | None = None,
+    expect_k3_scheduler: bool = False,
 ) -> bool:
     if expect_route_probe:
         match = re.search(
@@ -225,6 +247,8 @@ def acceptance_reached(
                 soak_reached = True
                 break
         kernel_entry_reached = soak_reached
+    elif expect_k3_scheduler:
+        kernel_entry_reached = k3_scheduler_reached(output)
     elif expect_k2_blocking:
         kernel_entry_reached = (
             k2_performance_reached(output)
@@ -341,6 +365,14 @@ def main() -> int:
         ),
     )
     kernel_entry_group.add_argument(
+        "--expect-k3-scheduler",
+        action="store_true",
+        help=(
+            "require K3 one-shot/deadline, retained K2/K1, and performance "
+            "markers"
+        ),
+    )
+    kernel_entry_group.add_argument(
         "--expect-k2-blocking",
         action="store_true",
         help=(
@@ -430,6 +462,7 @@ def main() -> int:
         or args.expect_k1_entry
         or args.expect_k2_entry
         or args.expect_k2_blocking
+        or args.expect_k3_scheduler
         or args.expect_k1_soak_cycles is not None
         or args.expect_k1_fault_max_cycles is not None
         or args.expect_k1_min_elapsed_cycles is not None
@@ -534,6 +567,7 @@ def main() -> int:
                     expected_panic_fault,
                     args.expect_k1_fault_max_cycles,
                     args.expect_k1_min_elapsed_cycles,
+                    args.expect_k3_scheduler,
                 ):
                     break
                 if failure_reached(output, args.expect_kernel_panic):
@@ -553,6 +587,7 @@ def main() -> int:
         "graphics" if args.expect_graphics else
         "kernel panic" if args.expect_kernel_panic else
         "K1 soak" if args.expect_k1_soak_cycles is not None else
+        "K3 scheduler" if args.expect_k3_scheduler else
         "K2 blocking" if args.expect_k2_blocking else
         "K2 entry" if args.expect_k2_entry else
         "POST"
@@ -576,6 +611,7 @@ def main() -> int:
         expected_panic_fault,
         args.expect_k1_fault_max_cycles,
         args.expect_k1_min_elapsed_cycles,
+        args.expect_k3_scheduler,
     ):
         return 0
     if failure_reached(output, args.expect_kernel_panic):

@@ -420,6 +420,12 @@ static void report_kernel_performance(
     console_putc('/');
     console_dec32(KERNEL_PERFORMANCE_BUDGET_WAKE);
     console_puts(" overruns=0\n");
+    console_puts("K3 PERF deadline expire=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_DEADLINE_EXPIRE].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_DEADLINE_EXPIRE);
+    console_puts(" overruns=0\n");
 }
 
 static void report_kernel_performance_failure(
@@ -463,7 +469,7 @@ void kernel_process_milestone_reached(void)
         report_kernel_performance_failure(&performance, failed_metric);
         kernel_panic("kernel performance budget exceeded");
     }
-    console_puts("\nUser tasks .......... OK, 100 Hz preemption\n");
+    console_puts("\nUser tasks .......... OK, 5 ms one-shot quantum\n");
     console_puts("Fault containment ... OK, offender reaped\n");
     console_puts("Context switches .... ");
     console_dec32(stats.context_switches);
@@ -480,6 +486,11 @@ void kernel_process_milestone_reached(void)
     console_puts(" wake, ");
     console_dec32(stats.wake_preemptions);
     console_puts(" priority handoff\n");
+    console_puts("Deadlines ........... ");
+    console_dec32(stats.deadline_expirations);
+    console_puts(" expired, ");
+    console_dec32(stats.deadline_preemptions);
+    console_puts(" priority handoff\n");
     console_puts("Thread ISP max ...... ");
     console_dec32(stats.kernel_stack_max_used);
     console_puts(" / ");
@@ -487,6 +498,8 @@ void kernel_process_milestone_reached(void)
     console_puts(" bytes\n");
     report_kernel_performance(&performance);
     console_puts("K2 PERFORMANCE PASS\n");
+    console_puts("\nK3 ONE-SHOT SCHEDULER PASS\n");
+    console_puts("\nK3 DEADLINE QUEUE PASS\n");
     console_puts("\nK2 BLOCKING SUBSTRATE PASS\n");
     console_puts("\nK2 THREAD SUBSTRATE PASS\n");
     console_puts("\nK1 PROTECTED ENTRY PASS\n");
@@ -652,7 +665,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
             boot_info.cpu_hz)
             kernel_panic("Vesta timer interrupt timeout");
     }
-    console_puts("Vesta timer ........ OK @ 100 Hz\n");
+    console_puts("Vesta timer ........ OK, one-shot 5 ms\n");
 
     if ((VESTA->SYS_STATUS & SYS_ASTRA_HOST) != 0u) {
         if (!kernel_platform_block_present())
@@ -710,7 +723,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         kernel_panic("K1 soak baseline unavailable");
 #endif
     if (kernel_process_create(_k1_offender_image_start, offender_image_size,
-                              offender_entry_offset, 1u,
+                              offender_entry_offset, 0u,
                               &process_id) != KERNEL_PROCESS_OK)
         kernel_panic("fault process creation failed");
 #if ASTRA_KERNEL_SOAK_SELFTEST

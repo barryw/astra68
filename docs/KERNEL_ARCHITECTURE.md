@@ -102,7 +102,7 @@ The OS-facing machine must provide the following bounded facilities:
 
 | Facility | Current state | Stable requirement |
 |---|---|---|
-| timebase | 64-bit Vesta cycle snapshot plus two 32-bit timers | retain monotonic counter; add/qualify one-shot deadline programming without drift |
+| timebase | CURRENT HW: 64-bit Vesta cycle snapshot plus two 32-bit one-shot timers | retain monotonic counter and qualify rollover/late-programming behavior |
 | watchdog | MISSING | independent timeout, reset reason, bounded service/reboot policy |
 | bus timeout | PARTIAL | every target times out to BERR and latches target/address/cycle class |
 | interrupt controller | CURRENT | 32 pending/mask/config sources with stable vectored IACK |
@@ -170,7 +170,7 @@ context or atomically sleeps in master mode. A deferred pinned-DMA reap is
 retried on a later timer interrupt; syscall and idle paths no longer perform
 resource destruction.
 
-## Current K2 thread substrate
+## Current K3 thread substrate
 
 These are measured MC68030 implementation facts, not the final object limits:
 
@@ -192,7 +192,9 @@ These are measured MC68030 implementation facts, not the final object limits:
 | supervisor stack arena | 16 slots, 192 KiB total; 128 KiB usable stacks |
 | DMA slots | 32 |
 | block request slots | 4 |
-| timer frequency | 100 Hz |
+| ordinary quantum | 5 ms / 62,500 cycles at 12.5 MHz |
+| timer programming | one-shot minimum of active quantum and earliest wait deadline |
+| deadline queue | 16-entry absolute-cycle min-heap, one entry/thread, deterministic slot tie-break |
 | scheduling policy | highest effective priority; FIFO round-robin among equals |
 | interrupt stack | 8 KiB ISP plus 4 KiB unmapped guard |
 | deferred-worker stack | 8 KiB MSP plus 4 KiB unmapped guard |
@@ -215,10 +217,12 @@ before deferred handle/address-space/frame destruction; thread records are not
 reusable until that destruction completes.
 
 The current internal qualification path has sequence-checked atomic block,
-priority/FIFO wake-one and wake-all, a signaled/closed event, and immediate
-higher-priority handoff. It does not yet expose runtime thread creation,
-handle-backed user events/semaphores, deadlines, cancellation, priority
-inheritance/donation, or the stable pool sizes below.
+priority/FIFO wake-one and wake-all, a signaled/closed event, bounded absolute
+deadlines, and immediate higher-priority handoff on signal or timeout. Timeout,
+signal, close, and process death remove a waiter from the object queue and
+deadline heap exactly once. It does not yet expose runtime thread creation,
+handle-backed user events/semaphores, public deadline operations, explicit
+cancellation, priority inheritance/donation, or the stable pool sizes below.
 
 ## Stable-kernel target limits
 

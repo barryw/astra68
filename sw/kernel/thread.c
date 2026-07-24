@@ -23,6 +23,11 @@ static uint16_t ready_head[KERNEL_THREAD_PRIORITY_LEVELS];
 static uint16_t ready_tail[KERNEL_THREAD_PRIORITY_LEVELS];
 static uint32_t ready_bitmap;
 static uint32_t ready_count;
+static uint64_t deadline_cycles[KERNEL_THREAD_MAX];
+static uint32_t deadline_results[KERNEL_THREAD_MAX];
+static uint16_t deadline_heap[KERNEL_THREAD_MAX];
+static uint16_t deadline_positions[KERNEL_THREAD_MAX];
+static uint16_t deadline_count;
 static KernelThreadPoolStats pool_stats;
 
 static bool valid_thread(const KernelThread *thread);
@@ -129,6 +134,151 @@ static bool valid_thread(const KernelThread *thread)
 {
     return thread != NULL && thread->slot < KERNEL_THREAD_MAX &&
            thread == &threads[thread->slot] && thread->occupied != 0u;
+}
+
+static bool deadline_precedes(uint16_t left, uint16_t right)
+{
+    if (deadline_cycles[left] != deadline_cycles[right])
+        return deadline_cycles[left] < deadline_cycles[right];
+    return left < right;
+}
+
+static void deadline_swap(uint16_t left, uint16_t right)
+{
+    uint16_t left_slot = deadline_heap[left];
+    uint16_t right_slot = deadline_heap[right];
+
+    deadline_heap[left] = right_slot;
+    deadline_heap[right] = left_slot;
+    deadline_positions[left_slot] = right;
+    deadline_positions[right_slot] = left;
+}
+
+static void deadline_sift_up(uint16_t position)
+{
+    while (position != 0u) {
+        uint16_t parent = (uint16_t)((position - 1u) >> 1);
+
+        if (!deadline_precedes(deadline_heap[position],
+                               deadline_heap[parent]))
+            break;
+        deadline_swap(position, parent);
+        position = parent;
+    }
+}
+
+static void deadline_sift_down(uint16_t position)
+{
+    for (;;) {
+        uint16_t left = (uint16_t)(position * 2u + 1u);
+        uint16_t right = (uint16_t)(left + 1u);
+        uint16_t first = position;
+
+        if (left < deadline_count &&
+            deadline_precedes(deadline_heap[left], deadline_heap[first]))
+            first = left;
+        if (right < deadline_count &&
+            deadline_precedes(deadline_heap[right], deadline_heap[first]))
+            first = right;
+        if (first == position)
+            return;
+        deadline_swap(position, first);
+        position = first;
+    }
+}
+
+static KernelThreadStatus deadline_insert(KernelThread *thread,
+                                          uint64_t deadline,
+                                          uint32_t timeout_result)
+{
+    uint16_t position;
+
+    if (!valid_thread(thread) || thread->state != KERNEL_THREAD_BLOCKED ||
+        deadline == KERNEL_THREAD_DEADLINE_NEVER ||
+        deadline_positions[thread->slot] != KERNEL_THREAD_SLOT_NONE)
+        return KERNEL_THREAD_INVALID_STATE;
+    if (deadline_count >= KERNEL_THREAD_MAX)
+        return KERNEL_THREAD_NO_SLOT;
+
+    position = deadline_count++;
+    deadline_cycles[thread->slot] = deadline;
+    deadline_results[thread->slot] = timeout_result;
+    deadline_heap[position] = thread->slot;
+    deadline_positions[thread->slot] = position;
+    deadline_sift_up(position);
+    ++pool_stats.deadline_waits;
+    if (deadline_count > pool_stats.deadline_max_depth)
+        pool_stats.deadline_max_depth = deadline_count;
+    return KERNEL_THREAD_OK;
+}
+
+static KernelThreadStatus deadline_remove(KernelThread *thread)
+{
+    uint16_t position;
+    uint16_t replacement;
+
+    if (!valid_thread(thread))
+        return KERNEL_THREAD_INVALID_ARGUMENT;
+    position = deadline_positions[thread->slot];
+    if (position == KERNEL_THREAD_SLOT_NONE)
+        return KERNEL_THREAD_OK;
+    if (position >= deadline_count ||
+        deadline_heap[position] != thread->slot)
+        return KERNEL_THREAD_CORRUPT;
+
+    --deadline_count;
+    replacement = deadline_heap[deadline_count];
+    deadline_heap[deadline_count] = KERNEL_THREAD_SLOT_NONE;
+    deadline_positions[thread->slot] = KERNEL_THREAD_SLOT_NONE;
+    deadline_cycles[thread->slot] = 0u;
+    deadline_results[thread->slot] = 0u;
+    if (position == deadline_count)
+        return KERNEL_THREAD_OK;
+
+    deadline_heap[position] = replacement;
+    deadline_positions[replacement] = position;
+    if (position != 0u &&
+        deadline_precedes(replacement,
+                          deadline_heap[(position - 1u) >> 1]))
+        deadline_sift_up(position);
+    else
+        deadline_sift_down(position);
+    return KERNEL_THREAD_OK;
+}
+
+static bool deadline_heap_valid(void)
+{
+    uint32_t seen = 0u;
+
+    if (deadline_count > KERNEL_THREAD_MAX)
+        return false;
+    for (uint16_t position = 0u; position < deadline_count; ++position) {
+        uint16_t slot = deadline_heap[position];
+        uint16_t left = (uint16_t)(position * 2u + 1u);
+        uint16_t right = (uint16_t)(left + 1u);
+
+        if (slot >= KERNEL_THREAD_MAX ||
+            (seen & (1u << slot)) != 0u ||
+            deadline_positions[slot] != position ||
+            !valid_thread(&threads[slot]) ||
+            threads[slot].state != KERNEL_THREAD_BLOCKED ||
+            threads[slot].wait_queue == NULL ||
+            deadline_cycles[slot] == KERNEL_THREAD_DEADLINE_NEVER)
+            return false;
+        if (left < deadline_count &&
+            deadline_precedes(deadline_heap[left], slot))
+            return false;
+        if (right < deadline_count &&
+            deadline_precedes(deadline_heap[right], slot))
+            return false;
+        seen |= 1u << slot;
+    }
+    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+        if ((deadline_positions[slot] != KERNEL_THREAD_SLOT_NONE) !=
+            ((seen & (1u << slot)) != 0u))
+            return false;
+    }
+    return true;
 }
 
 static uint8_t highest_ready_priority(uint32_t bitmap)
@@ -351,10 +501,22 @@ static KernelThreadStatus remove_wait(KernelThread *thread)
 
 static KernelThreadStatus wake_waiter(KernelThread *thread, uint32_t result)
 {
-    KernelThreadStatus status = remove_wait(thread);
+    bool cancelled_deadline;
+    KernelThreadStatus status;
+
+    if (!valid_thread(thread))
+        return KERNEL_THREAD_INVALID_ARGUMENT;
+    cancelled_deadline =
+        deadline_positions[thread->slot] != KERNEL_THREAD_SLOT_NONE;
+    status = deadline_remove(thread);
+    if (status != KERNEL_THREAD_OK)
+        return status;
+    status = remove_wait(thread);
 
     if (status != KERNEL_THREAD_OK)
         return status;
+    if (cancelled_deadline)
+        ++pool_stats.deadline_cancellations;
     thread->context.data[0] = result;
     thread->state = KERNEL_THREAD_READY;
     status = enqueue_ready(thread);
@@ -364,8 +526,13 @@ static KernelThreadStatus wake_waiter(KernelThread *thread, uint32_t result)
 
 void kernel_thread_pool_init(void)
 {
-    for (uint32_t index = 0u; index < KERNEL_THREAD_MAX; ++index)
+    for (uint32_t index = 0u; index < KERNEL_THREAD_MAX; ++index) {
         kernel_bytes_clear(&threads[index], sizeof(threads[index]));
+        deadline_cycles[index] = 0u;
+        deadline_results[index] = 0u;
+        deadline_heap[index] = KERNEL_THREAD_SLOT_NONE;
+        deadline_positions[index] = KERNEL_THREAD_SLOT_NONE;
+    }
     for (uint32_t priority = 0u;
          priority < KERNEL_THREAD_PRIORITY_LEVELS; ++priority) {
         ready_head[priority] = KERNEL_THREAD_SLOT_NONE;
@@ -374,6 +541,7 @@ void kernel_thread_pool_init(void)
     kernel_bytes_clear(&pool_stats, sizeof(pool_stats));
     ready_bitmap = 0u;
     ready_count = 0u;
+    deadline_count = 0u;
 }
 
 KernelThreadStatus kernel_thread_allocate(uint16_t process_slot,
@@ -550,7 +718,10 @@ uint32_t kernel_thread_wait_queue_count(const KernelThreadWaitQueue *queue)
 static __attribute__((noinline))
 KernelThreadStatus block_fast(KernelThread *thread,
                               KernelThreadWaitQueue *queue,
-                              uint32_t expected_sequence)
+                              uint32_t expected_sequence,
+                              uint64_t now,
+                              uint64_t deadline,
+                              uint32_t timeout_result)
 {
     KernelThreadStatus status;
 
@@ -559,10 +730,18 @@ KernelThreadStatus block_fast(KernelThread *thread,
         return KERNEL_THREAD_INVALID_STATE;
     if (queue->sequence != expected_sequence)
         return KERNEL_THREAD_CONDITION_CHANGED;
+    if (deadline != KERNEL_THREAD_DEADLINE_NEVER && deadline <= now)
+        return KERNEL_THREAD_DEADLINE_EXPIRED;
     thread->state = KERNEL_THREAD_BLOCKED;
     thread->wait_sequence = expected_sequence;
     status = enqueue_wait(thread, queue);
+    if (status == KERNEL_THREAD_OK &&
+        deadline != KERNEL_THREAD_DEADLINE_NEVER)
+        status = deadline_insert(thread, deadline, timeout_result);
     if (status != KERNEL_THREAD_OK) {
+        if (thread->wait_queue != NULL &&
+            remove_wait(thread) != KERNEL_THREAD_OK)
+            return KERNEL_THREAD_CORRUPT;
         thread->state = KERNEL_THREAD_RUNNING;
         thread->wait_sequence = 0u;
     }
@@ -572,14 +751,18 @@ KernelThreadStatus block_fast(KernelThread *thread,
 static __attribute__((noinline))
 KernelThreadStatus block_profiled(KernelThread *thread,
                                   KernelThreadWaitQueue *queue,
-                                  uint32_t expected_sequence)
+                                  uint32_t expected_sequence,
+                                  uint64_t now,
+                                  uint64_t deadline,
+                                  uint32_t timeout_result)
 {
     KernelPerformanceToken performance;
     KernelThreadStatus status;
 
     performance = kernel_performance_begin_sampled(
         KERNEL_PERFORMANCE_WAIT_BLOCK);
-    status = block_fast(thread, queue, expected_sequence);
+    status = block_fast(thread, queue, expected_sequence, now, deadline,
+                        timeout_result);
     kernel_performance_end(performance);
     return status;
 }
@@ -588,9 +771,21 @@ KernelThreadStatus kernel_thread_block(KernelThread *thread,
                                        KernelThreadWaitQueue *queue,
                                        uint32_t expected_sequence)
 {
+    return kernel_thread_block_until(
+        thread, queue, expected_sequence, 0u,
+        KERNEL_THREAD_DEADLINE_NEVER, 0u);
+}
+
+KernelThreadStatus kernel_thread_block_until(
+    KernelThread *thread, KernelThreadWaitQueue *queue,
+    uint32_t expected_sequence, uint64_t now, uint64_t deadline,
+    uint32_t timeout_result)
+{
     if (kernel_performance_sampling_enabled == 0u)
-        return block_fast(thread, queue, expected_sequence);
-    return block_profiled(thread, queue, expected_sequence);
+        return block_fast(thread, queue, expected_sequence, now, deadline,
+                          timeout_result);
+    return block_profiled(thread, queue, expected_sequence, now, deadline,
+                          timeout_result);
 }
 
 static __attribute__((noinline))
@@ -683,6 +878,96 @@ KernelThreadStatus kernel_thread_wake_all(KernelThreadWaitQueue *queue,
     return wake_all_profiled(queue, result, woken_threads);
 }
 
+static __attribute__((noinline))
+KernelThreadStatus expire_deadlines_fast(uint64_t now,
+                                         uint32_t *expired_threads,
+                                         uint8_t *highest_priority)
+{
+    uint32_t expired = 0u;
+    uint8_t highest = 0u;
+
+    if (!deadline_heap_valid())
+        return KERNEL_THREAD_CORRUPT;
+    while (deadline_count != 0u) {
+        uint16_t slot = deadline_heap[0];
+        KernelThread *thread = &threads[slot];
+        KernelThreadWaitQueue *queue;
+        uint32_t result;
+
+        if (deadline_cycles[slot] > now)
+            break;
+        if (!valid_thread(thread) ||
+            thread->state != KERNEL_THREAD_BLOCKED ||
+            thread->wait_queue == NULL)
+            return KERNEL_THREAD_CORRUPT;
+        queue = thread->wait_queue;
+        result = deadline_results[slot];
+        queue->sequence = kernel_generation_next(queue->sequence);
+        if (deadline_remove(thread) != KERNEL_THREAD_OK ||
+            wake_waiter(thread, result) != KERNEL_THREAD_OK)
+            return KERNEL_THREAD_CORRUPT;
+        if (expired == 0u || thread->effective_priority > highest)
+            highest = thread->effective_priority;
+        ++expired;
+        ++pool_stats.deadline_expirations;
+    }
+    if (expired_threads != NULL)
+        *expired_threads = expired;
+    if (highest_priority != NULL)
+        *highest_priority = highest;
+    return KERNEL_THREAD_OK;
+}
+
+static __attribute__((noinline))
+KernelThreadStatus expire_deadlines_profiled(uint64_t now,
+                                             uint32_t *expired_threads,
+                                             uint8_t *highest_priority)
+{
+    KernelPerformanceToken performance;
+    KernelThreadStatus status;
+
+    performance = kernel_performance_begin_sampled(
+        KERNEL_PERFORMANCE_DEADLINE_EXPIRE);
+    status = expire_deadlines_fast(now, expired_threads, highest_priority);
+    kernel_performance_end(performance);
+    return status;
+}
+
+KernelThreadStatus kernel_thread_expire_deadlines(
+    uint64_t now, uint32_t *expired_threads, uint8_t *highest_priority)
+{
+    if (expired_threads != NULL)
+        *expired_threads = 0u;
+    if (highest_priority != NULL)
+        *highest_priority = 0u;
+    if (kernel_performance_sampling_enabled == 0u)
+        return expire_deadlines_fast(now, expired_threads,
+                                     highest_priority);
+    return expire_deadlines_profiled(now, expired_threads,
+                                     highest_priority);
+}
+
+bool kernel_thread_next_deadline(uint64_t *deadline)
+{
+    uint16_t slot;
+
+    if (deadline == NULL || deadline_count == 0u)
+        return false;
+    slot = deadline_heap[0];
+    if (slot >= KERNEL_THREAD_MAX || deadline_positions[slot] != 0u)
+        return false;
+    *deadline = deadline_cycles[slot];
+    return true;
+}
+
+bool kernel_thread_highest_ready_priority(uint8_t *priority)
+{
+    if (priority == NULL || ready_bitmap == 0u)
+        return false;
+    *priority = highest_ready_priority(ready_bitmap);
+    return true;
+}
+
 KernelThreadStatus kernel_thread_retire_process(uint16_t process_slot,
                                                 uint32_t *retired_threads)
 {
@@ -701,8 +986,19 @@ KernelThreadStatus kernel_thread_retire_process(uint16_t process_slot,
             if (status != KERNEL_THREAD_OK)
                 return status;
         } else if (thread->state == KERNEL_THREAD_BLOCKED) {
-            if (remove_wait(thread) != KERNEL_THREAD_OK)
+            KernelThreadWaitQueue *queue = thread->wait_queue;
+            bool cancelled_deadline =
+                deadline_positions[thread->slot] !=
+                    KERNEL_THREAD_SLOT_NONE;
+
+            if (queue == NULL)
                 return KERNEL_THREAD_CORRUPT;
+            queue->sequence = kernel_generation_next(queue->sequence);
+            if (deadline_remove(thread) != KERNEL_THREAD_OK ||
+                remove_wait(thread) != KERNEL_THREAD_OK)
+                return KERNEL_THREAD_CORRUPT;
+            if (cancelled_deadline)
+                ++pool_stats.deadline_cancellations;
         } else if (thread->state != KERNEL_THREAD_CREATED &&
                    thread->state != KERNEL_THREAD_RUNNING) {
             return KERNEL_THREAD_CORRUPT;
@@ -731,7 +1027,9 @@ KernelThreadStatus kernel_thread_release_process(uint16_t process_slot)
             continue;
         if (thread->state != KERNEL_THREAD_DEAD)
             return KERNEL_THREAD_INVALID_STATE;
-        if (thread->wait_queue != NULL || !kernel_stack_valid(thread))
+        if (thread->wait_queue != NULL ||
+            deadline_positions[thread->slot] != KERNEL_THREAD_SLOT_NONE ||
+            !kernel_stack_valid(thread))
             return KERNEL_THREAD_CORRUPT;
         initialize_kernel_stack(thread);
         thread->occupied = 0u;
@@ -779,9 +1077,12 @@ bool kernel_thread_snapshot(uint32_t slot, KernelThreadSnapshot *snapshot)
     snapshot->effective_priority = thread->effective_priority;
     snapshot->occupied = thread->occupied;
     snapshot->waiting = thread->wait_queue != NULL ? 1u : 0u;
+    snapshot->deadline_waiting =
+        thread->occupied != 0u &&
+        deadline_positions[thread->slot] != KERNEL_THREAD_SLOT_NONE ?
+            1u : 0u;
     snapshot->reserved[0] = 0u;
     snapshot->reserved[1] = 0u;
-    snapshot->reserved[2] = 0u;
     return true;
 }
 
@@ -791,7 +1092,7 @@ bool kernel_thread_pool_stats(KernelThreadPoolStats *stats)
     uint32_t entries = 0u;
     uint32_t max_used = 0u;
 
-    if (stats == NULL)
+    if (stats == NULL || !deadline_heap_valid())
         return false;
     for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
         const KernelThread *thread = &threads[slot];
@@ -819,6 +1120,11 @@ bool kernel_thread_pool_stats(KernelThreadPoolStats *stats)
     stats->kernel_stack_measurements =
         pool_stats.kernel_stack_measurements;
     stats->kernel_stack_scan_words = pool_stats.kernel_stack_scan_words;
+    stats->deadline_waits = pool_stats.deadline_waits;
+    stats->deadline_expirations = pool_stats.deadline_expirations;
+    stats->deadline_cancellations = pool_stats.deadline_cancellations;
+    stats->deadline_depth = deadline_count;
+    stats->deadline_max_depth = pool_stats.deadline_max_depth;
     return true;
 }
 

@@ -9,6 +9,7 @@
 typedef enum KernelEventStatus {
     KERNEL_EVENT_OK = 0,
     KERNEL_EVENT_BLOCKED,
+    KERNEL_EVENT_TIMED_OUT,
     KERNEL_EVENT_CLOSED,
     KERNEL_EVENT_INVALID_ARGUMENT,
     KERNEL_EVENT_INVALID_STATE,
@@ -24,6 +25,9 @@ typedef struct KernelEvent {
 
 void kernel_event_init(KernelEvent *event, bool initially_signaled);
 KernelEventStatus kernel_event_wait(KernelEvent *event, KernelThread *thread);
+KernelEventStatus kernel_event_wait_until(
+    KernelEvent *event, KernelThread *thread, uint64_t now,
+    uint64_t deadline, uint32_t timeout_result);
 KernelEventStatus kernel_event_signal(KernelEvent *event,
                                       uint32_t wake_result,
                                       KernelThread **woken_thread);

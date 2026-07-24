@@ -92,11 +92,13 @@ static void test_required_metrics_and_budget_failure(void)
 
     kernel_performance_init();
     kernel_performance_test_set_cycles(0u, 1u);
-    token = kernel_performance_begin(KERNEL_PERFORMANCE_WAKE);
+    token = kernel_performance_begin(KERNEL_PERFORMANCE_DEADLINE_EXPIRE);
     kernel_performance_end(token);
     assert(kernel_performance_stats(&stats));
+    assert(stats.metric[KERNEL_PERFORMANCE_DEADLINE_EXPIRE].budget_cycles ==
+           KERNEL_PERFORMANCE_BUDGET_DEADLINE_EXPIRE);
     assert(kernel_performance_pass(
-        &stats, 1u << KERNEL_PERFORMANCE_WAKE, &failed));
+        &stats, 1u << KERNEL_PERFORMANCE_DEADLINE_EXPIRE, &failed));
 }
 
 int main(void)

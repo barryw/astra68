@@ -9,6 +9,7 @@
 #include "generation.h"
 #include "memory.h"
 #include "performance.h"
+#include "platform.h"
 #include "qualification.h"
 #include "vm.h"
 
@@ -45,6 +46,12 @@ static KernelProcessMaintenanceDiagnostics maintenance_diagnostics;
 static KernelThread *current_thread;
 static KernelEvent qualification_event;
 static uint32_t qualification_event_owner;
+static uint64_t quantum_deadline;
+static uint32_t scheduler_quantum_cycles;
+static uint8_t scheduler_initialized;
+static uint8_t quantum_active;
+static uint8_t quantum_preempt_pending;
+static uint8_t deadline_preempt_pending;
 
 _Static_assert(KERNEL_THREAD_STACK_SIZE == KERNEL_PAGE_SIZE,
                "one user-stack slot must map exactly one VM page");
@@ -130,6 +137,86 @@ static KernelProcess *process_for_thread(const KernelThread *thread)
     return process;
 }
 
+static uint64_t scheduler_cycles(void)
+{
+    KernelPlatformCycleCount cycles;
+
+    kernel_platform_cpu_cycles(&cycles);
+    return ((uint64_t)cycles.high << 32) | cycles.low;
+}
+
+static void scheduler_timer_rearm_at(uint64_t now)
+{
+    uint64_t target = KERNEL_THREAD_DEADLINE_NEVER;
+    uint64_t deadline;
+    uint64_t delta;
+
+    if (scheduler_initialized == 0u)
+        return;
+    if (quantum_active != 0u)
+        target = quantum_deadline;
+    if (kernel_thread_next_deadline(&deadline) && deadline < target)
+        target = deadline;
+    if (target == KERNEL_THREAD_DEADLINE_NEVER) {
+        delta = scheduler_quantum_cycles;
+    } else if (target <= now) {
+        delta = 1u;
+    } else {
+        delta = target - now;
+    }
+    if (delta > UINT32_MAX)
+        delta = UINT32_MAX;
+    kernel_platform_timer_arm((uint32_t)delta);
+    ++scheduler_stats.timer_rearms;
+}
+
+static void scheduler_timer_rearm(void)
+{
+    scheduler_timer_rearm_at(scheduler_cycles());
+}
+
+static void scheduler_start_quantum(void)
+{
+    uint64_t now = scheduler_cycles();
+
+    quantum_deadline = UINT64_MAX - now < scheduler_quantum_cycles ?
+        UINT64_MAX : now + scheduler_quantum_cycles;
+    quantum_active = 1u;
+    quantum_preempt_pending = 0u;
+    deadline_preempt_pending = 0u;
+    scheduler_timer_rearm_at(now);
+}
+
+static void scheduler_mark_quantum_expired(KernelThread *thread)
+{
+    if (quantum_preempt_pending != 0u)
+        return;
+    quantum_active = 0u;
+    quantum_preempt_pending = 1u;
+    ++thread->timer_ticks;
+    ++scheduler_stats.quantum_expirations;
+}
+
+static KernelProcessStatus scheduler_expire_due(
+    uint64_t now, uint32_t *expired_threads, uint8_t *highest_priority)
+{
+    uint64_t deadline;
+    uint32_t expired = 0u;
+    uint8_t highest = 0u;
+
+    if (kernel_thread_next_deadline(&deadline) && deadline <= now) {
+        if (kernel_thread_expire_deadlines(now, &expired, &highest) !=
+            KERNEL_THREAD_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        scheduler_stats.deadline_expirations += expired;
+    }
+    if (expired_threads != NULL)
+        *expired_threads = expired;
+    if (highest_priority != NULL)
+        *highest_priority = highest;
+    return KERNEL_PROCESS_OK;
+}
+
 static __attribute__((noinline))
 KernelProcessStatus activate_fast(KernelThread *next,
                                   KernelCpuContext **next_context)
@@ -160,6 +247,7 @@ KernelProcessStatus activate_fast(KernelThread *next,
     scheduler_stats.current_process_id = next_process->id;
     scheduler_stats.current_thread_id = next->id;
     *next_context = &next->context;
+    scheduler_start_quantum();
     return KERNEL_PROCESS_OK;
 }
 
@@ -238,13 +326,58 @@ static KernelProcessStatus schedule_next(KernelCpuContext **next_context)
         if (kernel_vm_switch_to_empty() != KERNEL_VM_OK)
             return KERNEL_PROCESS_CORRUPT;
         current_thread = NULL;
+        quantum_active = 0u;
+        quantum_preempt_pending = 0u;
+        deadline_preempt_pending = 0u;
         scheduler_stats.current_process_id = 0u;
         scheduler_stats.current_thread_id = 0u;
         *next_context = NULL;
+        scheduler_timer_rearm();
         return KERNEL_PROCESS_NO_RUNNABLE;
     default:
         return KERNEL_PROCESS_CORRUPT;
     }
+}
+
+static bool ready_thread_outranks(const KernelThread *thread)
+{
+    uint8_t priority;
+
+    return thread != NULL &&
+           kernel_thread_highest_ready_priority(&priority) &&
+           priority > thread->effective_priority;
+}
+
+static KernelProcessStatus schedule_pending(KernelCpuContext **next_context)
+{
+    KernelThread *previous = current_thread;
+    KernelThread *next = NULL;
+    bool quantum_preemption;
+    bool deadline_preemption;
+
+    if (next_context == NULL || process_for_thread(previous) == NULL ||
+        previous->state != KERNEL_THREAD_RUNNING)
+        return KERNEL_PROCESS_INVALID_STATE;
+    *next_context = &previous->context;
+    if (quantum_preempt_pending == 0u &&
+        deadline_preempt_pending == 0u &&
+        !ready_thread_outranks(previous))
+        return KERNEL_PROCESS_OK;
+
+    quantum_preemption = quantum_preempt_pending != 0u;
+    deadline_preemption = deadline_preempt_pending != 0u;
+    if (kernel_thread_make_ready(previous) != KERNEL_THREAD_OK ||
+        kernel_thread_take_next(&next) != KERNEL_THREAD_OK || next == NULL)
+        return KERNEL_PROCESS_CORRUPT;
+    if (next != previous) {
+        if (quantum_preemption)
+            ++scheduler_stats.timer_preemptions;
+        if (deadline_preemption)
+            ++scheduler_stats.deadline_preemptions;
+        if (next->effective_priority > previous->effective_priority)
+            ++scheduler_stats.priority_preemptions;
+    }
+    return activate(next, next_context);
 }
 
 static KernelProcessStatus finish_reap(KernelProcess *process)
@@ -314,7 +447,11 @@ static void check_milestone(void)
         scheduler_stats.wait_blocks < 2u ||
         scheduler_stats.event_wakeups == 0u ||
         scheduler_stats.wake_preemptions == 0u ||
+        scheduler_stats.quantum_expirations == 0u ||
+        scheduler_stats.deadline_expirations == 0u ||
+        scheduler_stats.deadline_preemptions == 0u ||
         thread_stats.blocked_threads == 0u ||
+        thread_stats.deadline_max_depth == 0u ||
         thread_stats.kernel_stack_entries == 0u ||
         thread_stats.kernel_stack_max_used == 0u ||
         !kernel_thread_stacks_valid() ||
@@ -389,6 +526,7 @@ static KernelProcessStatus retire_current(KernelProcessExitReason reason,
 
 void kernel_process_init(void)
 {
+    scheduler_initialized = 0u;
     kernel_performance_init();
     for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index)
         kernel_bytes_clear(&processes[index], sizeof(processes[index]));
@@ -402,6 +540,16 @@ void kernel_process_init(void)
     kernel_bytes_clear(&soak_state, sizeof(soak_state));
 #endif
     current_thread = NULL;
+    quantum_deadline = 0u;
+    scheduler_quantum_cycles = kernel_platform_quantum_cycles();
+    if (scheduler_quantum_cycles == 0u)
+        scheduler_quantum_cycles = 1u;
+    scheduler_stats.quantum_cycles = scheduler_quantum_cycles;
+    quantum_active = 0u;
+    quantum_preempt_pending = 0u;
+    deadline_preempt_pending = 0u;
+    scheduler_initialized = 1u;
+    scheduler_timer_rearm();
 }
 
 static KernelProcess *find_process_by_id(uint32_t process_id)
@@ -657,9 +805,16 @@ bool kernel_process_active(void)
 
 KernelCpuContext *kernel_process_current_context(void)
 {
+    KernelCpuContext *next;
+
     if (process_for_thread(current_thread) == NULL ||
         current_thread->state != KERNEL_THREAD_RUNNING ||
         !kernel_context_valid(&current_thread->context))
+        return NULL;
+    if ((quantum_preempt_pending != 0u ||
+         deadline_preempt_pending != 0u ||
+         ready_thread_outranks(current_thread)) &&
+        schedule_pending(&next) != KERNEL_PROCESS_OK)
         return NULL;
     return &current_thread->context;
 }
@@ -671,8 +826,10 @@ KernelProcessStatus kernel_process_on_timer(const uint32_t *registers,
 {
     KernelProcess *current;
     KernelThread *previous;
-    KernelThread *next = NULL;
     KernelProcessStatus status;
+    uint64_t now;
+    uint32_t expired;
+    uint8_t highest;
 
     if (next_context == NULL)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
@@ -682,16 +839,67 @@ KernelProcessStatus kernel_process_on_timer(const uint32_t *registers,
     if (status != KERNEL_PROCESS_OK)
         return status;
     (void)current;
-    ++previous->timer_ticks;
-    if (kernel_thread_make_ready(previous) != KERNEL_THREAD_OK ||
-        kernel_thread_take_next(&next) != KERNEL_THREAD_OK || next == NULL)
-        return KERNEL_PROCESS_CORRUPT;
-    if (next != previous) {
-        ++scheduler_stats.timer_preemptions;
-        if (next->effective_priority > previous->effective_priority)
-            ++scheduler_stats.priority_preemptions;
+    now = scheduler_cycles();
+    status = scheduler_expire_due(now, &expired, &highest);
+    if (status != KERNEL_PROCESS_OK)
+        return status;
+    if (quantum_active != 0u && now >= quantum_deadline)
+        scheduler_mark_quantum_expired(previous);
+    if (expired != 0u && highest > previous->effective_priority)
+        deadline_preempt_pending = 1u;
+    if (quantum_preempt_pending != 0u ||
+        deadline_preempt_pending != 0u ||
+        ready_thread_outranks(previous))
+        return schedule_pending(next_context);
+
+    *next_context = &previous->context;
+    scheduler_timer_rearm();
+    return KERNEL_PROCESS_OK;
+}
+
+KernelProcessStatus kernel_process_on_supervisor_timer(void)
+{
+    KernelCpuContext *next = NULL;
+    KernelProcessStatus status;
+    uint64_t now;
+    uint32_t expired;
+    uint8_t highest;
+    bool deferred = false;
+
+    if (scheduler_initialized == 0u)
+        return KERNEL_PROCESS_OK;
+    now = scheduler_cycles();
+    status = scheduler_expire_due(now, &expired, &highest);
+    if (status != KERNEL_PROCESS_OK)
+        return status;
+
+    if (current_thread == NULL) {
+        uint8_t ready_priority;
+
+        if (kernel_thread_highest_ready_priority(&ready_priority)) {
+            (void)ready_priority;
+            status = schedule_next(&next);
+            return status == KERNEL_PROCESS_OK ? KERNEL_PROCESS_OK : status;
+        }
+        scheduler_timer_rearm_at(now);
+        return KERNEL_PROCESS_OK;
     }
-    return activate(next, next_context);
+    if (process_for_thread(current_thread) == NULL ||
+        current_thread->state != KERNEL_THREAD_RUNNING)
+        return KERNEL_PROCESS_CORRUPT;
+    if (quantum_active != 0u && now >= quantum_deadline) {
+        scheduler_mark_quantum_expired(current_thread);
+        deferred = true;
+    }
+    if (expired != 0u && highest > current_thread->effective_priority) {
+        if (deadline_preempt_pending == 0u)
+            deferred = true;
+        deadline_preempt_pending = 1u;
+    }
+    if (deferred)
+        ++scheduler_stats.supervisor_timer_deferrals;
+    scheduler_timer_rearm_at(now);
+    return KERNEL_PROCESS_OK;
 }
 
 KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
@@ -761,7 +969,8 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             return KERNEL_PROCESS_CORRUPT;
         }
         break;
-    case KERNEL_QUALIFICATION_EVENT_WAIT: {
+    case KERNEL_QUALIFICATION_EVENT_WAIT:
+    case KERNEL_QUALIFICATION_EVENT_WAIT_TIMEOUT: {
         KernelEventStatus event_status;
 
         if (qualification_event_owner == 0u)
@@ -770,9 +979,24 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             result = ASTRA_SYSCALL_ACCESS_DENIED;
             break;
         }
-        event_status = kernel_event_wait(&qualification_event, thread);
+        if (syscall == KERNEL_QUALIFICATION_EVENT_WAIT_TIMEOUT) {
+            uint64_t now = scheduler_cycles();
+            uint64_t delay = thread->context.data[1];
+            uint64_t deadline = UINT64_MAX - now <= delay ?
+                UINT64_MAX - 1u : now + delay;
+
+            event_status = kernel_event_wait_until(
+                &qualification_event, thread, now, deadline,
+                ASTRA_SYSCALL_TIMED_OUT);
+        } else {
+            event_status = kernel_event_wait(&qualification_event, thread);
+        }
         if (event_status == KERNEL_EVENT_OK)
             break;
+        if (event_status == KERNEL_EVENT_TIMED_OUT) {
+            result = ASTRA_SYSCALL_TIMED_OUT;
+            break;
+        }
         if (event_status != KERNEL_EVENT_BLOCKED)
             return event_status == KERNEL_EVENT_CLOSED ?
                 KERNEL_PROCESS_INVALID_STATE : KERNEL_PROCESS_CORRUPT;
@@ -816,6 +1040,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             check_milestone();
             return KERNEL_PROCESS_OK;
         }
+        scheduler_timer_rearm();
         break;
     }
     default:
@@ -823,7 +1048,15 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         break;
     }
     thread->context.data[0] = result;
-    *next_context = &thread->context;
+    if (quantum_preempt_pending != 0u ||
+        deadline_preempt_pending != 0u ||
+        ready_thread_outranks(thread)) {
+        status = schedule_pending(next_context);
+        if (status != KERNEL_PROCESS_OK)
+            return status;
+    } else {
+        *next_context = &thread->context;
+    }
     if (syscall == ASTRA_SYSCALL_PROGRESS)
         check_milestone();
     return KERNEL_PROCESS_OK;
@@ -1059,6 +1292,15 @@ bool kernel_process_stats(KernelSchedulerStats *stats)
     stats->wait_blocks = scheduler_stats.wait_blocks;
     stats->event_wakeups = scheduler_stats.event_wakeups;
     stats->wake_preemptions = scheduler_stats.wake_preemptions;
+    stats->quantum_cycles = scheduler_stats.quantum_cycles;
+    stats->quantum_expirations = scheduler_stats.quantum_expirations;
+    stats->deadline_expirations = scheduler_stats.deadline_expirations;
+    stats->deadline_preemptions = scheduler_stats.deadline_preemptions;
+    stats->timer_rearms = scheduler_stats.timer_rearms;
+    stats->supervisor_timer_deferrals =
+        scheduler_stats.supervisor_timer_deferrals;
+    stats->deadline_depth = thread_stats.deadline_depth;
+    stats->deadline_max_depth = thread_stats.deadline_max_depth;
     stats->ready_bitmap = thread_stats.ready_bitmap;
     stats->blocked_threads = thread_stats.blocked_threads;
     stats->kernel_stack_entries = thread_stats.kernel_stack_entries;

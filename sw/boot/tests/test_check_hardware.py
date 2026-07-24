@@ -60,6 +60,49 @@ def test_k2_blocking_requires_all_retained_markers() -> None:
     assert acceptance_reached(output, None, False, expect_k2_blocking=True)
 
 
+def test_k3_scheduler_requires_new_retained_and_bounded_markers() -> None:
+    output = (
+        b"POST PASS\n"
+        b"K2 PERF irq syscall=1200/50000 timer=1300/50000 "
+        b"fault=9000/125000\n"
+        b"K2 PERF sched pick=400/10000 same=500/15000 "
+        b"cross=1800/50000\n"
+        b"K2 PERF wait block=600/15000 wake=700/15000 overruns=0\n"
+        b"K2 PERFORMANCE PASS\n"
+        b"K2 BLOCKING SUBSTRATE PASS\n"
+        b"K2 THREAD SUBSTRATE PASS\n"
+        b"K1 PROTECTED ENTRY PASS\n"
+    )
+
+    assert not acceptance_reached(
+        output, None, False, expect_k3_scheduler=True
+    )
+    output += (
+        b"K3 PERF deadline expire=800/20000 overruns=0\n"
+        b"K3 ONE-SHOT SCHEDULER PASS\n"
+        b"K3 DEADLINE QUEUE PASS\n"
+    )
+    assert acceptance_reached(output, None, False, expect_k3_scheduler=True)
+    assert not acceptance_reached(
+        output.replace(b"expire=800", b"expire=0"),
+        None,
+        False,
+        expect_k3_scheduler=True,
+    )
+    assert not acceptance_reached(
+        output.replace(b"800/20000", b"800/20001"),
+        None,
+        False,
+        expect_k3_scheduler=True,
+    )
+    assert not acceptance_reached(
+        output.replace(b"K3 DEADLINE QUEUE PASS\n", b""),
+        None,
+        False,
+        expect_k3_scheduler=True,
+    )
+
+
 def test_k2_performance_requires_exact_budgets_and_bounded_measurements() -> None:
     report = (
         b"K2 PERF irq syscall=1200/50000 timer=1300/50000 "

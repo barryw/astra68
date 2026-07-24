@@ -2,29 +2,57 @@
 
 #include "vesta.h"
 
+#if defined(KERNEL_PLATFORM_HOST_TEST)
+static VestaRegs platform_test_registers;
+#undef VESTA
+#define VESTA (&platform_test_registers)
+
+VestaRegs *kernel_platform_test_registers(void)
+{
+    return (VestaRegs *)&platform_test_registers;
+}
+#endif
+
 #define KERNEL_TIMER_VECTOR 80u
 #define KERNEL_TIMER_IPL 4u
-#define KERNEL_TICK_HZ 100u
 
 static volatile uint32_t tick_count;
+static uint32_t quantum_cycles;
+
+uint32_t kernel_platform_quantum_cycles(void)
+{
+    return quantum_cycles;
+}
+
+void kernel_platform_timer_arm(uint32_t cycles)
+{
+    if (cycles == 0u)
+        cycles = 1u;
+    VESTA->TIMER[0].LOAD = cycles;
+    VESTA->TIMER[0].CTRL = TMR_ENABLE | TMR_IRQ_EN;
+}
+
+void kernel_platform_timer_disarm(void)
+{
+    VESTA->TIMER[0].CTRL = 0u;
+}
 
 void kernel_platform_interrupt_init(uint32_t cpu_hz)
 {
-    uint32_t period = cpu_hz / KERNEL_TICK_HZ;
-    if (period == 0u)
-        period = 1u;
+    quantum_cycles = cpu_hz / KERNEL_PLATFORM_QUANTUM_HZ;
+    if (quantum_cycles == 0u)
+        quantum_cycles = 1u;
 
     tick_count = 0u;
     VESTA->IRQ_ENABLE = 0u;
-    VESTA->TIMER[0].CTRL = 0u;
+    kernel_platform_timer_disarm();
     VESTA->TIMER[0].STATUS = TMR_EXPIRED;
     VESTA->IRQ_ACK = IRQ_BIT(IRQ_SRC_TIMER0);
     VESTA->IRQ_CFG[IRQ_SRC_TIMER0] =
         IRQ_CFG_LEVEL(KERNEL_TIMER_IPL) |
         IRQ_CFG_VECTOR(KERNEL_TIMER_VECTOR);
-    VESTA->TIMER[0].LOAD = period;
     VESTA->IRQ_ENABLE = IRQ_BIT(IRQ_SRC_TIMER0);
-    VESTA->TIMER[0].CTRL = TMR_ENABLE | TMR_PERIODIC | TMR_IRQ_EN;
+    kernel_platform_timer_arm(quantum_cycles);
 }
 
 uint32_t kernel_platform_ticks(void)
@@ -57,6 +85,7 @@ bool kernel_interrupt_dispatch(void)
         source == IRQ_SRC_TIMER0 && vector == KERNEL_TIMER_VECTOR) {
         VESTA->TIMER[0].STATUS = TMR_EXPIRED;
         ++tick_count;
+        kernel_platform_timer_arm(quantum_cycles);
         return true;
     }
 

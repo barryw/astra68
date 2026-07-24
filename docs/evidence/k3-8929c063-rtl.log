@@ -1,0 +1,142 @@
+make: Entering directory '/tmp/astra68-k3-oneshot-dev/sw/boot'
+rm -f *.elf *.bin *.map *.rom
+rm -rf build
+make -C ../kernel clean
+make[1]: Entering directory '/tmp/astra68-k3-oneshot-dev/sw/kernel'
+rm -rf build astra_kernel.elf astra_kernel.bin astra_kernel.map
+make[1]: Leaving directory '/tmp/astra68-k3-oneshot-dev/sw/kernel'
+make -C ../kernel all CROSS=m68k-linux-gnu- \
+	KERNEL_VERSION=0.1.0-dev PANIC_SELFTEST=0 \
+	SCHED_TRACE=0 SOAK_SELFTEST=0
+make[1]: Entering directory '/tmp/astra68-k3-oneshot-dev/sw/kernel'
+mkdir -p build
+python3 gen_build_info.py --version "0.1.0-dev" \
+	--panic-selftest "0" \
+	--sched-trace "0" \
+	--soak-selftest "0" --output "build/kernel_build_info.h"
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/entry.o entry.S
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/vectors.o vectors.S
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/kernel.o kernel.c
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/platform.o platform.c
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/memory.o memory.c
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/dma.o dma.c
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/block.o block.c
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/handle.o handle.c
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/bytes.o bytes.c
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/context.o context.c
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/performance.o performance.c
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/thread.o thread.c
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/event.o event.c
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/process.o process.c
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/user_test.o user_test.S
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/dispatch.o dispatch.c
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/worker.o worker.c
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/worker_asm.o worker.S
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/pmmu.o pmmu.S
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/vm.o vm.c
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/exception.o exception.c
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/user_copy.o user_copy.c
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/user_copy_asm.o user_copy.S
+m68k-linux-gnu-gcc -I../include -Ibuild -include build/kernel_build_info.h -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -c -o build/boot_contract.o ../common/boot_contract.c
+m68k-linux-gnu-gcc -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin -fno-common -fno-pic -fno-pie -fno-stack-protector -Wa,--noexecstack -Wall -Wextra -Werror -T kernel.ld -nostdlib -no-pie -Wl,--build-id=none,-Map=astra_kernel.map -o astra_kernel.elf build/entry.o build/vectors.o build/kernel.o build/platform.o build/memory.o build/dma.o build/block.o build/handle.o build/bytes.o build/context.o build/performance.o build/thread.o build/event.o build/process.o build/user_test.o build/dispatch.o build/worker.o build/worker_asm.o build/pmmu.o build/vm.o build/exception.o build/user_copy.o build/user_copy_asm.o build/boot_contract.o
+m68k-linux-gnu-objcopy -O binary astra_kernel.elf astra_kernel.bin
+make[1]: Leaving directory '/tmp/astra68-k3-oneshot-dev/sw/kernel'
+m68k-linux-gnu-gcc -m68030 -msoft-float -Os -ffreestanding -fno-builtin -nostdlib -Wa,--noexecstack -Wall -Wextra -I../include -I../../ndk/include -Ibuild -DMEM_BENCH_BYTES=256 -DDMA_BENCH_BYTES=1024  -T astra_st.ld -nostdlib -Wl,--build-id=none,-Map=astra_boot.map -o astra_boot.elf crt0.S kernel_blob.S boot.c \
+	../common/boot_contract.c ../../ndk/src/front_panel.c
+m68k-linux-gnu-objcopy -O binary astra_boot.elf astra_boot.bin
+python3 package_rom.py astra_boot.bin astra68.rom
+astra68.rom: 52380 payload bytes, crc32=98c33b01
+make: Leaving directory '/tmp/astra68-k3-oneshot-dev/sw/boot'
+fpga/soc/sim/rom_init.hex: 13095 words from sw/boot/astra_boot.bin
+reusing obj_dir_boot_sdram/Vtb_boot_sdram (caller guarantees matching RTL/generics)
+UART: ASTRA 68 SYSTEM ROM v0.3
+UART: Built: 2026-07-24T15:26:12Z  Git: 8929c063cdd24c8f4f526be330549e2eb5038fc8-dirty
+UART: 
+UART: Vesta:  v1.0
+UART: CPU:    TG68K.C 68030 MMU2 @ 12500000 Hz
+UART: MMU:    integrated 68030 PMMU
+UART: RAM:    32 MiB @ 0x02000000
+UART: ROM:    256 KiB @ 0xFFE00000
+UART: BUILD:  0x00000000
+UART: Chips:  VSTA v1.0, ASTR v1.0
+UART: NVRAM:  not present; defaults active
+UART: 
+UART: POST
+UART:   SDRAM init ........ OK
+UART:   Front panel ....... OK
+UART:   Data/byte lanes .... OK
+UART:   Address lines ...... OK
+UART:   Cache coherence .... OK
+UART:   CPU BRAM cycles (256 bytes payload)
+UART:     8-bit  write=3884 read=4647
+UART:     16-bit write=1706 read=2091
+UART:     32-bit write=1130 read=1061
+UART:   CPU memory cycles (256 bytes payload)
+UART:     8-bit  write=2347 read=2994
+UART:       write dmiss=0 rdreq=0 wrreq=256 wait=0 lhit=0 lmiss=0 post=256
+UART:       read  dmiss=16 rdreq=16 wrreq=0 wait=147 lhit=0 lmiss=16 post=0
+UART:       hot read=2924
+UART:     16-bit write=1183 read=1583
+UART:       write dmiss=0 rdreq=0 wrreq=128 wait=0 lhit=0 lmiss=0 post=128
+UART:       read  dmiss=16 rdreq=16 wrreq=0 wait=144 lhit=0 lmiss=16 post=0
+UART:       hot read=1516
+UART:     32-bit write=734 read=814
+UART:       write dmiss=0 rdreq=0 wrreq=64 wait=0 lhit=0 lmiss=0 post=64
+UART:       read  dmiss=16 rdreq=16 wrreq=0 wait=137 lhit=0 lmiss=16 post=0
+UART:       hot read=745
+UART:   Astraea DMA (1 KiB)
+UART:     fill=341 copy=538
+UART:   Full-range BIST ... [................................] OK
+UART: 
+UART: POST PASS
+BOOT SDRAM PASS BIST=115.03 MB/s cycles=136730 I$=99056/8205 D$=5062
+UART:   Kernel image ...... OK
+UART: Starting Astra kernel
+UART: ASTRA 68 KERNEL v0.1.0-dev
+UART: Built: 2026-07-24T15:26:12Z
+UART: Git:   8929c063cdd24c8f4f526be330549e2eb5038fc8-dirty
+UART: 
+UART: BootInfo ........... OK
+UART: Early log .......... OK @ 0x02000000
+UART: VBR ................ OK @ 0x02010400
+UART: Kernel image ....... 41020 bytes @ 0x02010000
+UART: CPU ................ MC68030 @ 12500000 Hz
+UART: PMMU ............... enabled, SRP 0x02004000
+UART: Physical pages ..... 7992 free / 8192 total
+UART: User copy .......... OK, fault recovery verified
+UART: Kernel worker ...... OK, guarded MSP
+UART: Thread ISPs ........ 16 guarded, 8 KiB each
+UART: Vesta timer ........ OK, one-shot 5 ms
+UART: AstraHost runtime ... not present
+UART: User processes ...... 2 ready, cache isolation armed
+UART: User threads ........ 3 ready, priority scheduler armed
+UART: 
+UART: User tasks .......... OK, 5 ms one-shot quantum
+UART: Fault containment ... OK, offender reaped
+UART: Context switches .... 20
+UART: Thread scheduler .... 2 live, priority queues OK
+UART: Same-CRP switches ... 3
+UART: Wait/wake ........... 3 blocks, 1 wake, 1 priority handoff
+UART: Deadlines ........... 1 expired, 1 priority handoff
+UART: Thread ISP max ...... 428 / 8192 bytes
+UART: K2 PERF irq syscall=23897/50000 timer=25051/50000 fault=24732/125000
+UART: K2 PERF sched pick=1475/10000 same=2876/15000 cross=4131/50000
+UART: K2 PERF wait block=2260/15000 wake=3391/15000 overruns=0
+UART: K3 PERF deadline expire=6163/20000 overruns=0
+UART: K2 PERFORMANCE PASS
+UART: 
+UART: K3 ONE-SHOT SCHEDULER PASS
+UART: 
+UART: K3 DEADLINE QUEUE PASS
+UART: 
+UART: K2 BLOCKING SUBSTRATE PASS
+UART: 
+UART: K2 THREAD SUBSTRATE PASS
+UART: 
+UART: K1 PROTECTED ENTRY PASS
+UART: KERNEL MULTITASKING
+KERNEL ENTRY PASS status=4b314f4b log_write=1508 wraps=0
+- tb_boot_sdram.sv:310: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.047 devel
+- Verilator: $finish at 656ms; walltime 222.222 s; speed 2.951 ms/s
+- Verilator: cpu 222.195 s on 1 threads; allocated 44 MB

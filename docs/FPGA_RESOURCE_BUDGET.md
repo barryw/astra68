@@ -180,6 +180,18 @@ preemption, fault containment, and K1 entry. Screenshot SHA-256 is
 Every hardware gate passes. This section replaces `77B3CDC8` as the routed and
 persistent release baseline.
 
+### K3 software-only qualification
+
+The 2026-07-24 K3 one-shot scheduler/deadline checkpoint based on
+`8929c063cdd24c8f4f526be330549e2eb5038fc8-dirty` changes kernel, ROM,
+emulator diagnostics, simulation acceptance, and hardware acceptance tooling
+only. It adds no RTL and does not change the FPGA build identity. Exact
+bitstream `25D9CB8E` was hash-verified, reused without repacking, and passed two
+independent K3 board boots with full 32 MiB BIST and every performance gate.
+Consequently the authoritative mapped, packed, free-capacity, and constrained
+clock values remain exactly those in the `25D9CB8E` section above. No synthetic
+resource delta is assigned to software.
+
 ## B1F9E60D rollback comparison
 
 The prior `B1F9E60D` route packed 66,093 TRELLIS_COMB cells, 25,449 FFs,

@@ -33,6 +33,8 @@
 #define KERNEL_THREAD_RIGHT_QUERY     (1u << 0)
 #define KERNEL_THREAD_RIGHT_TERMINATE (1u << 1)
 
+#define KERNEL_THREAD_DEADLINE_NEVER UINT64_MAX
+
 typedef enum KernelThreadState {
     KERNEL_THREAD_UNUSED = 0,
     KERNEL_THREAD_CREATED,
@@ -49,6 +51,7 @@ typedef enum KernelThreadStatus {
     KERNEL_THREAD_NO_SLOT,
     KERNEL_THREAD_NO_RUNNABLE,
     KERNEL_THREAD_CONDITION_CHANGED,
+    KERNEL_THREAD_DEADLINE_EXPIRED,
     KERNEL_THREAD_CORRUPT
 } KernelThreadStatus;
 
@@ -111,7 +114,8 @@ typedef struct KernelThreadSnapshot {
     uint8_t effective_priority;
     uint8_t occupied;
     uint8_t waiting;
-    uint8_t reserved[3];
+    uint8_t deadline_waiting;
+    uint8_t reserved[2];
 } KernelThreadSnapshot;
 
 typedef struct KernelThreadPoolStats {
@@ -125,6 +129,11 @@ typedef struct KernelThreadPoolStats {
     uint32_t kernel_stack_max_used;
     uint32_t kernel_stack_measurements;
     uint32_t kernel_stack_scan_words;
+    uint32_t deadline_waits;
+    uint32_t deadline_expirations;
+    uint32_t deadline_cancellations;
+    uint32_t deadline_depth;
+    uint32_t deadline_max_depth;
 } KernelThreadPoolStats;
 
 void kernel_thread_pool_init(void);
@@ -147,12 +156,20 @@ uint32_t kernel_thread_wait_queue_count(const KernelThreadWaitQueue *queue);
 KernelThreadStatus kernel_thread_block(KernelThread *thread,
                                        KernelThreadWaitQueue *queue,
                                        uint32_t expected_sequence);
+KernelThreadStatus kernel_thread_block_until(
+    KernelThread *thread, KernelThreadWaitQueue *queue,
+    uint32_t expected_sequence, uint64_t now, uint64_t deadline,
+    uint32_t timeout_result);
 KernelThreadStatus kernel_thread_wake_one(KernelThreadWaitQueue *queue,
                                           uint32_t result,
                                           KernelThread **thread);
 KernelThreadStatus kernel_thread_wake_all(KernelThreadWaitQueue *queue,
                                           uint32_t result,
                                           uint32_t *woken_threads);
+KernelThreadStatus kernel_thread_expire_deadlines(
+    uint64_t now, uint32_t *expired_threads, uint8_t *highest_priority);
+bool kernel_thread_next_deadline(uint64_t *deadline);
+bool kernel_thread_highest_ready_priority(uint8_t *priority);
 KernelThreadStatus kernel_thread_retire_process(uint16_t process_slot,
                                                 uint32_t *retired_threads);
 KernelThreadStatus kernel_thread_release_process(uint16_t process_slot);

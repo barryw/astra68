@@ -20,6 +20,33 @@ static uint32_t milestone_calls;
 static uint32_t soak_checkpoint_calls;
 static uint32_t last_soak_checkpoint;
 static uint32_t last_soak_free_frames;
+static uint64_t scheduler_test_cycles;
+static uint32_t timer_arm_count;
+static uint32_t timer_last_load;
+
+uint32_t kernel_platform_quantum_cycles(void)
+{
+    return 62500u;
+}
+
+void kernel_platform_timer_arm(uint32_t cycles)
+{
+    assert(cycles != 0u);
+    timer_last_load = cycles;
+    ++timer_arm_count;
+}
+
+void kernel_platform_cpu_cycles(KernelPlatformCycleCount *cycles)
+{
+    assert(cycles != NULL);
+    cycles->high = (uint32_t)(scheduler_test_cycles >> 32);
+    cycles->low = (uint32_t)scheduler_test_cycles;
+}
+
+static void advance_quantum(void)
+{
+    scheduler_test_cycles += kernel_platform_quantum_cycles();
+}
 
 void kernel_pmmu_load_tc(const uint32_t *value)
 {
@@ -209,6 +236,9 @@ static void initialize_test(void)
     assert(kernel_vm_enable() == KERNEL_VM_OK);
     kernel_dma_init();
     kernel_block_init();
+    scheduler_test_cycles = 0u;
+    timer_arm_count = 0u;
+    timer_last_load = 0u;
     kernel_process_init();
     milestone_calls = 0u;
     soak_checkpoint_calls = 0u;
@@ -301,6 +331,7 @@ static void test_preemption_fault_containment_and_teardown(void)
     assert(sibling_thread.state == KERNEL_THREAD_BLOCKED);
 
     make_frame(frame, 0u, 80u, KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    advance_quantum();
     assert(kernel_process_on_timer(registers,
                                    KERNEL_PROCESS_STACK_TOP - 16u,
                                    frame, &next) == KERNEL_PROCESS_OK);
@@ -312,6 +343,7 @@ static void test_preemption_fault_containment_and_teardown(void)
     assert(offender.process_state == KERNEL_PROCESS_RUNNING);
     assert(offender.thread_state == KERNEL_THREAD_RUNNING);
 
+    advance_quantum();
     assert(kernel_process_on_timer(registers,
                                    KERNEL_PROCESS_STACK_TOP - 16u,
                                    frame, &next) == KERNEL_PROCESS_OK);
@@ -327,13 +359,41 @@ static void test_preemption_fault_containment_and_teardown(void)
     assert(kernel_thread_snapshot(1u, &sibling_thread));
     assert(sibling_thread.state == KERNEL_THREAD_RUNNING);
     memset(registers, 0, sizeof(registers));
-    registers[0] = KERNEL_QUALIFICATION_EVENT_WAIT;
+    registers[0] = KERNEL_QUALIFICATION_EVENT_WAIT_TIMEOUT;
+    registers[1] = 1000u;
     assert(kernel_process_on_syscall(
                registers, sibling_thread.user_stack_top - 8u, frame,
                &next) == KERNEL_PROCESS_OK);
     assert(next != NULL);
     assert(kernel_thread_snapshot(1u, &sibling_thread));
     assert(sibling_thread.state == KERNEL_THREAD_BLOCKED);
+    assert(timer_last_load == 1000u);
+
+    scheduler_test_cycles += 1000u;
+    make_frame(frame, 0u, 80u, KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    assert(kernel_process_on_timer(registers,
+                                   KERNEL_PROCESS_STACK_TOP - 16u,
+                                   frame, &next) == KERNEL_PROCESS_OK);
+    assert(next != NULL);
+    assert(kernel_thread_snapshot(1u, &sibling_thread));
+    assert(sibling_thread.state == KERNEL_THREAD_RUNNING);
+    assert(next->data[0] == ASTRA_SYSCALL_TIMED_OUT);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = KERNEL_QUALIFICATION_EVENT_WAIT;
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE + 4u, 0u);
+    assert(kernel_process_on_syscall(
+               registers, sibling_thread.user_stack_top - 8u, frame,
+               &next) == KERNEL_PROCESS_OK);
+    assert(kernel_thread_snapshot(1u, &sibling_thread));
+    assert(sibling_thread.state == KERNEL_THREAD_BLOCKED);
+
+    advance_quantum();
+    make_frame(frame, 0u, 80u, KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    assert(kernel_process_on_timer(registers,
+                                   KERNEL_PROCESS_STACK_TOP - 16u,
+                                   frame, &next) == KERNEL_PROCESS_OK);
     assert(kernel_process_snapshot(1u, &offender));
     assert(offender.process_state == KERNEL_PROCESS_RUNNING);
 
@@ -388,16 +448,22 @@ static void test_preemption_fault_containment_and_teardown(void)
     assert(stats.created_threads == 3u);
     assert(stats.live_threads == 2u);
     assert(stats.dead_threads == 1u);
-    assert(stats.timer_preemptions == 2u);
+    assert(stats.timer_preemptions == 3u);
+    assert(stats.quantum_cycles == 62500u);
+    assert(stats.quantum_expirations == 3u);
+    assert(stats.deadline_expirations == 1u);
+    assert(stats.deadline_preemptions == 1u);
+    assert(stats.deadline_depth == 0u);
+    assert(stats.deadline_max_depth == 1u);
     assert(stats.same_address_space_switches >= 1u);
     assert(stats.cross_address_space_switches >= 2u);
-    assert(stats.total_syscalls_low == 4u);
+    assert(stats.total_syscalls_low == 5u);
     assert(stats.total_syscalls_high == 0u);
     assert(stats.user_faults == 1u);
     assert(stats.completed_user_fault_teardowns == 1u);
     assert(stats.completed_teardowns == 1u);
     assert(stats.forced_frame_releases == 1u);
-    assert(stats.wait_blocks == 2u);
+    assert(stats.wait_blocks == 3u);
     assert(stats.event_wakeups == 1u);
     assert(stats.wake_preemptions == 1u);
     assert(stats.blocked_threads == 1u);
@@ -474,7 +540,22 @@ static void test_soak_relaunches_only_after_exact_teardown(void)
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);
     memset(registers, 0, sizeof(registers));
+    registers[0] = KERNEL_QUALIFICATION_EVENT_WAIT_TIMEOUT;
+    registers[1] = 1000u;
+    assert(kernel_process_on_syscall(
+               registers,
+               KERNEL_PROCESS_STACK_TOP + KERNEL_THREAD_STACK_STRIDE - 8u,
+               frame, &next) == KERNEL_PROCESS_OK);
+    scheduler_test_cycles += 1000u;
+    make_frame(frame, 0u, 80u, KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    assert(kernel_process_on_timer(registers,
+                                   KERNEL_PROCESS_STACK_TOP - 16u,
+                                   frame, &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_TIMED_OUT);
+    memset(registers, 0, sizeof(registers));
     registers[0] = KERNEL_QUALIFICATION_EVENT_WAIT;
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE + 4u, 0u);
     assert(kernel_process_on_syscall(
                registers,
                KERNEL_PROCESS_STACK_TOP + KERNEL_THREAD_STACK_STRIDE - 8u,
@@ -482,11 +563,7 @@ static void test_soak_relaunches_only_after_exact_teardown(void)
 
     for (uint32_t cycle = 1u; cycle <= 3u; ++cycle) {
         make_frame(frame, 0u, 80u, KERNEL_PROCESS_CODE_BASE + 2u, 0u);
-        if (cycle == 1u) {
-            assert(kernel_process_on_timer(
-                       registers, KERNEL_PROCESS_STACK_TOP - 16u, frame,
-                       &next) == KERNEL_PROCESS_OK);
-        }
+        advance_quantum();
         assert(kernel_process_on_timer(registers,
                                        KERNEL_PROCESS_STACK_TOP - 16u,
                                        frame, &next) == KERNEL_PROCESS_OK);
@@ -584,6 +661,7 @@ static void test_priority_selection_and_equal_priority_rotation(void)
                                         &thread_id) == KERNEL_PROCESS_OK);
 
     make_frame(frame, 0u, 80u, KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    advance_quantum();
     assert(kernel_process_on_timer(registers,
                                    KERNEL_PROCESS_STACK_TOP - 16u, frame,
                                    &next) == KERNEL_PROCESS_OK);
@@ -593,6 +671,7 @@ static void test_priority_selection_and_equal_priority_rotation(void)
     assert(kernel_process_stats(&stats));
     assert(stats.priority_preemptions == 1u);
 
+    advance_quantum();
     assert(kernel_process_on_timer(registers,
                                    high_first.user_stack_top - 16u, frame,
                                    &next) == KERNEL_PROCESS_OK);
@@ -653,6 +732,81 @@ static void test_per_process_thread_limit_is_bounded_and_reclaimable(void)
     assert(final.free_frames == baseline.free_frames);
 }
 
+static void test_last_runnable_timed_wait_wakes_from_supervisor_idle(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    KernelCpuContext *next;
+    KernelSchedulerStats stats;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    registers[0] = KERNEL_QUALIFICATION_EVENT_WAIT_TIMEOUT;
+    registers[1] = 2500u;
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(next == NULL);
+    assert(!kernel_process_active());
+    assert(timer_last_load == 2500u);
+
+    scheduler_test_cycles += 2500u;
+    assert(kernel_process_on_supervisor_timer() == KERNEL_PROCESS_OK);
+    assert(kernel_process_active());
+    next = kernel_process_current_context();
+    assert(next != NULL);
+    assert(next->data[0] == ASTRA_SYSCALL_TIMED_OUT);
+    assert(kernel_process_stats(&stats));
+    assert(stats.deadline_expirations == 1u);
+    assert(stats.deadline_preemptions == 0u);
+    assert(stats.deadline_depth == 0u);
+}
+
+static void test_normal_syscalls_do_not_renew_quantum(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    KernelCpuContext *next;
+    KernelSchedulerStats stats;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t arms_before_syscall;
+    uint32_t process_id;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(timer_last_load == 62500u);
+    arms_before_syscall = timer_arm_count;
+
+    scheduler_test_cycles = 1000u;
+    registers[0] = ASTRA_SYSCALL_QUERY_ABI;
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next != NULL);
+    assert(timer_arm_count == arms_before_syscall);
+
+    scheduler_test_cycles = 62500u;
+    make_frame(frame, 0u, 80u, KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(kernel_process_on_timer(registers,
+                                   KERNEL_PROCESS_STACK_TOP - 16u, frame,
+                                   &next) == KERNEL_PROCESS_OK);
+    assert(next != NULL);
+    assert(timer_last_load == 62500u);
+    assert(kernel_process_stats(&stats));
+    assert(stats.quantum_expirations == 1u);
+    assert(stats.timer_preemptions == 0u);
+}
+
 int main(void)
 {
     test_preemption_fault_containment_and_teardown();
@@ -660,6 +814,8 @@ int main(void)
     test_invalid_creation_does_not_allocate();
     test_priority_selection_and_equal_priority_rotation();
     test_per_process_thread_limit_is_bounded_and_reclaimable();
+    test_last_runnable_timed_wait_wakes_from_supervisor_idle();
+    test_normal_syscalls_do_not_renew_quantum();
     puts("process tests passed");
     return 0;
 }

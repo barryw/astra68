@@ -170,6 +170,15 @@ bool kernel_worker_try_select(void)
     return true;
 }
 
+bool kernel_worker_select_idle(void)
+{
+    if (worker_state != KERNEL_WORKER_BLOCKED || pending_work != 0u)
+        return false;
+    worker_state = KERNEL_WORKER_RUNNING;
+    ++dispatch_count;
+    return true;
+}
+
 static KernelWorkerStatus service_once(void)
 {
     KernelProcessStatus process_status = KERNEL_PROCESS_OK;
@@ -234,7 +243,7 @@ void kernel_worker_main(void)
     for (;;) {
         KernelCpuContext *next;
 
-        if (service_once() != KERNEL_WORKER_OK)
+        if (pending_work != 0u && service_once() != KERNEL_WORKER_OK)
             kernel_panic("deferred worker service failed");
         if (pending_work != 0u)
             continue;
@@ -255,6 +264,14 @@ void kernel_worker_main(void)
             kernel_worker_arch_wait();
             if (worker_state == KERNEL_WORKER_READY && pending_work != 0u) {
                 worker_state = KERNEL_WORKER_RUNNING;
+                break;
+            }
+            next = kernel_process_current_context();
+            if (next != NULL) {
+                ++user_yield_count;
+                kernel_worker_switch_to_user(next);
+                if (worker_state != KERNEL_WORKER_RUNNING)
+                    kernel_panic("deferred worker resume corrupt");
                 break;
             }
             if (worker_state != KERNEL_WORKER_BLOCKED)

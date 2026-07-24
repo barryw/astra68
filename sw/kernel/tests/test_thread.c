@@ -270,6 +270,130 @@ static void test_wait_queue_priority_fifo_and_stale_sequence(void)
     assert(selected->state == KERNEL_THREAD_RUNNING);
 }
 
+static void test_bounded_deadline_order_expiry_and_signal_race(void)
+{
+    KernelThreadWaitQueue queue;
+    KernelThreadPoolStats stats;
+    KernelThread *first;
+    KernelThread *second;
+    KernelThread *third;
+    KernelThread *selected;
+    uint64_t next_deadline;
+    uint32_t expired;
+    uint32_t sequence;
+    uint8_t highest;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    kernel_thread_wait_queue_init(&queue);
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u, 20u,
+                                  &first) == KERNEL_THREAD_OK);
+    assert(kernel_thread_allocate(1u, 0x10000001u, 1u, 0x00100010u,
+                                  0x70003000u, 0u, 20u,
+                                  &second) == KERNEL_THREAD_OK);
+    assert(kernel_thread_allocate(1u, 0x10000001u, 2u, 0x00100020u,
+                                  0x70005000u, 0u, 20u,
+                                  &third) == KERNEL_THREAD_OK);
+    assert(kernel_thread_publish(first) == KERNEL_THREAD_OK);
+    assert(kernel_thread_publish(second) == KERNEL_THREAD_OK);
+    assert(kernel_thread_publish(third) == KERNEL_THREAD_OK);
+    sequence = kernel_thread_wait_queue_sequence(&queue);
+
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == first);
+    assert(kernel_thread_block_until(selected, &queue, sequence, 10u, 10u,
+                                     0xdead0000u) ==
+           KERNEL_THREAD_DEADLINE_EXPIRED);
+    assert(selected->state == KERNEL_THREAD_RUNNING);
+    assert(kernel_thread_block_until(selected, &queue, sequence, 10u, 300u,
+                                     0xdead0001u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == second);
+    assert(kernel_thread_block_until(selected, &queue, sequence, 10u, 100u,
+                                     0xdead0002u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == third);
+    assert(kernel_thread_block_until(selected, &queue, sequence, 10u, 100u,
+                                     0xdead0003u) == KERNEL_THREAD_OK);
+
+    assert(kernel_thread_next_deadline(&next_deadline));
+    assert(next_deadline == 100u);
+    assert(kernel_thread_expire_deadlines(99u, &expired, &highest) ==
+           KERNEL_THREAD_OK);
+    assert(expired == 0u);
+    assert(kernel_thread_expire_deadlines(100u, &expired, &highest) ==
+           KERNEL_THREAD_OK);
+    assert(expired == 2u);
+    assert(highest == 20u);
+    assert(kernel_thread_wait_queue_sequence(&queue) != sequence);
+    assert(kernel_thread_wait_queue_count(&queue) == 1u);
+    assert(kernel_thread_next_deadline(&next_deadline));
+    assert(next_deadline == 300u);
+
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == second);
+    assert(selected->context.data[0] == 0xdead0002u);
+    assert(kernel_thread_make_ready(selected) == KERNEL_THREAD_OK);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == third);
+    assert(selected->context.data[0] == 0xdead0003u);
+
+    assert(kernel_thread_wake_one(&queue, 0x12345678u, &selected) ==
+           KERNEL_THREAD_OK);
+    assert(selected == first);
+    assert(selected->context.data[0] == 0x12345678u);
+    assert(!kernel_thread_next_deadline(&next_deadline));
+    assert(kernel_thread_pool_stats(&stats));
+    assert(stats.deadline_waits == 3u);
+    assert(stats.deadline_expirations == 2u);
+    assert(stats.deadline_cancellations == 1u);
+    assert(stats.deadline_depth == 0u);
+    assert(stats.deadline_max_depth == 3u);
+}
+
+static void test_deadline_capacity_matches_thread_capacity(void)
+{
+    KernelThreadWaitQueue queue;
+    KernelThreadPoolStats stats;
+    KernelThread *thread;
+    KernelThread *selected;
+    uint32_t expired;
+    uint32_t sequence;
+    uint8_t highest;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    kernel_thread_wait_queue_init(&queue);
+    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+        assert(kernel_thread_allocate(
+                   1u, 0x10000001u, slot,
+                   0x00100000u + (uint32_t)slot * 2u,
+                   0x70001000u +
+                       (uint32_t)slot * KERNEL_THREAD_STACK_STRIDE,
+                   0u, KERNEL_THREAD_PRIORITY_NORMAL, &thread) ==
+               KERNEL_THREAD_OK);
+        assert(kernel_thread_publish(thread) == KERNEL_THREAD_OK);
+    }
+    sequence = kernel_thread_wait_queue_sequence(&queue);
+    for (uint32_t count = 0u; count < KERNEL_THREAD_MAX; ++count) {
+        assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+        assert(kernel_thread_block_until(
+                   selected, &queue, sequence, 0u, 1000u + selected->slot,
+                   selected->slot) == KERNEL_THREAD_OK);
+    }
+    assert(kernel_thread_pool_stats(&stats));
+    assert(stats.deadline_depth == KERNEL_THREAD_MAX);
+    assert(stats.deadline_max_depth == KERNEL_THREAD_MAX);
+    assert(kernel_thread_expire_deadlines(2000u, &expired, &highest) ==
+           KERNEL_THREAD_OK);
+    assert(expired == KERNEL_THREAD_MAX);
+    assert(highest == KERNEL_THREAD_PRIORITY_NORMAL);
+    assert(kernel_thread_pool_stats(&stats));
+    assert(stats.deadline_depth == 0u);
+    assert(stats.ready_threads == KERNEL_THREAD_MAX);
+}
+
 int main(void)
 {
     test_priority_fifo_and_process_retirement();
@@ -278,6 +402,8 @@ int main(void)
     test_all_priority_levels_select_highest_first();
     test_guarded_kernel_stack_accounting();
     test_wait_queue_priority_fifo_and_stale_sequence();
+    test_bounded_deadline_order_expiry_and_signal_race();
+    test_deadline_capacity_matches_thread_capacity();
     puts("thread tests passed");
     return 0;
 }

@@ -104,51 +104,46 @@ separates implemented evidence from planned work.
 
 ## Current integration state
 
-- The active K2 development snapshot, based on
-  `be27074ff67005095c5ec4e6b516a5c0708df049-dirty`, splits schedulable threads
-  from process/address-space ownership. It has four process records, 16
-  generation-safe thread records, guarded user and 8 KiB supervisor stacks per
-  thread, 32 fixed-priority FIFO queues, a 32-bit ready bitmap, and
-  highest-priority selection with round-robin fairness among equals. A process
-  supplies default priority 16 and user ceiling 23; the scheduler runs threads,
-  not processes. Same-process switches retain CRP and bypass cache/ATC
-  maintenance. Sequence-checked wait queues provide atomic block, priority/FIFO
-  wake-one and wake-all; the first event object proves signal, close, and
-  immediate higher-priority handoff. Process death withdraws every sibling from
-  ready and wait queues before deferred resource destruction, and records are
-  reused only after the guarded worker finishes teardown.
-  Sixteen host suites, GCC `-fanalyzer`, ASan/UBSan, canonical m68k build, all
-  Rust gates, Musashi normal boot, and the 1,000-cycle create/fault/reap workload
-  pass. Shared aligned byte primitives reduced that exact Musashi workload from
-  895,512,627 to 645,759,523 virtual cycles. Reusing the common nonzero
-  generation helpers in DMA and block ownership then removed 12 image bytes and
-  another 436 cycles, yielding 645,759,087 virtual cycles; an automated
-  675,000,000-cycle cap now prevents recurrence. The kernel is 36,960 bytes
+- The active K3 development snapshot, based on
+  `8929c063cdd24c8f4f526be330549e2eb5038fc8-dirty`, retains the K2
+  process/thread split and adds exact 5 ms one-shot quanta plus one fixed
+  16-entry deadline heap. Vesta is programmed to the earlier of the running
+  thread's 62,500-cycle quantum and earliest absolute wait deadline. Ordinary
+  syscalls do not renew the quantum. Timeout, signal, close, and process death
+  withdraw a waiter exactly once; a higher-priority signal or timeout preempts
+  immediately. All-blocked operation retains the deadline while the guarded
+  supervisor worker idles. No timer or deadline path allocates.
+
+  Seventeen host suites, GCC `-fanalyzer`, ASan/UBSan/leak checks, canonical
+  m68k verification, every Rust gate, all 90 framework tests, all 30 shared
+  executions, both Harte smoke adapters, and the directed Vesta timer/IACK race
+  test pass. Exact normal Musashi reaches K3 in 17,250,229 cycles. The exact
+  1,000-cycle workload completes in 596,507,297 cycles against the unchanged
+  675,000,000 cap, 49,251,790 cycles faster than K2. The kernel is 41,020 bytes
   with SHA-256
-  `1ee4232e1cc7c637f4c0ea06787191193fb23c64a19b603fc51d89539b425a29`.
-  The HDMI-enabled 48,384-byte boot payload has CRC32 `E28408B4` and SHA-256
-  `e607ce7de18da62d99b1e6fd15e5d4f990af1d615dab51b8fb2d68a136c85b93`;
-  the 48,416-byte packaged ROM SHA-256 is
-  `735703697b73abbf3369dcba03801f7c8d6f8e77082630c3ee09442703fb569c`.
-  The coherent full pin-level RTL/SDRAM run measures 115.04 MB/s BIST, records
-  zero performance overruns, and reaches K2 blocking/thread plus retained K1.
-  Two independent SRAM reloads of exact routed build `25D9CB8E` on the
-  NUC-attached ULX3S pass the same path in 2.333 and 2.338 seconds, with a
-  388-byte maximum
-  supervisor-stack high-water mark. This is a software-only source change: the
-  existing production bitstream was reused, FPGA flash remains `25D9CB8E`, and
-  no synthesis, placement, timing, or utilization result changes. Normal
-  read-only AstraHost firmware was restored after updating only
-  `/ASTRA68.ROM`; unrelated SD-card data was not modified. A mixed-source RTL
-  scratch run and an accidental rollback-bitstream load were rejected by source
-  and build-identity gates and are not acceptance evidence.
+  `6ab38364d2ef5e67b6f5e8c7fb691cbf45291624562d7a0203f812c2e648e61d`.
+  The 52,444-byte HDMI payload has CRC32 `BAEF4D0B`; the 52,476-byte package
+  SHA-256 is
+  `b73964d87904994a570c3b5e2b931602f8eb7878f0b531c0ac7e775050919ab1`.
+
+  The complete pin-level model passes with an intentional 64 KiB simulated
+  BIST and a 6,163/20,000-cycle deadline maximum. NUC preserved the existing
+  card, changed only `/ASTRA68.ROM`, independently verified the installed file,
+  and restored read-only AstraHost. Two independent loads of exact production
+  bitstream `25D9CB8E` pass the real 32 MiB BIST, PMMU isolation, one-shot
+  preemption, timeout handoff, all K1/K2/K3 markers, and every performance gate;
+  each measures 6,177/20,000 deadline cycles with zero overruns. This is a
+  software-only checkpoint: persistent FPGA flash remains `25D9CB8E`, and no
+  synthesis, placement, route, timing, or utilization result changes. NUC has
+  no HDMI capture device; the unchanged HDMI pipeline retains exact physical
+  K1 qualification, while a K3 screen photograph remains visual evidence only.
 - The minimum kernel-boot hardware is now implemented rather than stubbed:
   Vesta provides a 32-source programmable vectored interrupt controller and
   two timers; AstraHost provides queued runtime block I/O and normalized input
   events over SPI; an integrated OHCI controller provides one low/full-speed
   USB host port for keyboard and mouse; every platform IRQ is wired through
-  Vesta to TG68K; and the kernel starts a checked 100 Hz timer before entering
-  its idle loop.
+  Vesta to TG68K; and the kernel starts a checked 5 ms one-shot scheduler timer
+  before entering user mode.
 - POST, front-panel MMIO, cache coherence, byte/address lanes, 32 MiB SDRAM
   BIST, Astraea DMA, SDRAM-backed ROM handoff, Vesta interrupt acknowledge,
   runtime block/input transport, and kernel entry pass focused and full

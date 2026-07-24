@@ -116,6 +116,14 @@ typedef struct KernelSchedulerStats {
     uint32_t wait_blocks;
     uint32_t event_wakeups;
     uint32_t wake_preemptions;
+    uint32_t quantum_cycles;
+    uint32_t quantum_expirations;
+    uint32_t deadline_expirations;
+    uint32_t deadline_preemptions;
+    uint32_t timer_rearms;
+    uint32_t supervisor_timer_deferrals;
+    uint32_t deadline_depth;
+    uint32_t deadline_max_depth;
     uint32_t ready_bitmap;
     uint32_t blocked_threads;
     uint32_t kernel_stack_entries;
@@ -142,6 +150,7 @@ KernelProcessStatus kernel_process_on_timer(const uint32_t *registers,
                                             uint32_t user_stack,
                                             const void *raw_frame,
                                             KernelCpuContext **next_context);
+KernelProcessStatus kernel_process_on_supervisor_timer(void);
 KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                                               uint32_t user_stack,
                                               const void *raw_frame,

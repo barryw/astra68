@@ -103,6 +103,9 @@ pub(crate) struct MachineBus {
     bist: BistState,
     astraea: Astraea,
     scratch: u32,
+    scratch_trace: [u32; 32],
+    scratch_trace_next: usize,
+    scratch_trace_count: usize,
     irq_enable: u32,
     irq_soft: u32,
     irq_config: [u32; 32],
@@ -131,6 +134,9 @@ impl MachineBus {
             bist: BistState::Idle,
             astraea: Astraea::default(),
             scratch: 0,
+            scratch_trace: [0; 32],
+            scratch_trace_next: 0,
+            scratch_trace_count: 0,
             irq_enable: 0,
             irq_soft: 0,
             irq_config: [0; 32],
@@ -153,6 +159,9 @@ impl MachineBus {
         self.bist = BistState::Idle;
         self.astraea = Astraea::default();
         self.scratch = 0;
+        self.scratch_trace = [0; 32];
+        self.scratch_trace_next = 0;
+        self.scratch_trace_count = 0;
         self.irq_enable = 0;
         self.irq_soft = 0;
         self.irq_config = [0; 32];
@@ -239,6 +248,19 @@ impl MachineBus {
 
     pub(crate) fn build_id(&self) -> u32 {
         BUILD_ID
+    }
+
+    pub(crate) fn scratch(&self) -> u32 {
+        self.scratch
+    }
+
+    pub(crate) fn scratch_trace(&self) -> Vec<u32> {
+        let start = (self.scratch_trace_next + self.scratch_trace.len() - self.scratch_trace_count)
+            % self.scratch_trace.len();
+
+        (0..self.scratch_trace_count)
+            .map(|offset| self.scratch_trace[(start + offset) % self.scratch_trace.len()])
+            .collect()
     }
 
     pub(crate) fn console_rows(&self) -> Vec<String> {
@@ -508,7 +530,13 @@ impl MachineBus {
 
     fn write_vesta(&mut self, offset: u32, value: u32) {
         match offset {
-            0x018 => self.scratch = value,
+            0x018 => {
+                self.scratch = value;
+                self.scratch_trace[self.scratch_trace_next] = value;
+                self.scratch_trace_next = (self.scratch_trace_next + 1) % self.scratch_trace.len();
+                self.scratch_trace_count =
+                    (self.scratch_trace_count + 1).min(self.scratch_trace.len());
+            }
             0x0d0 if value & 1 != 0 => self.start_bist(),
             0x304 => self.irq_enable = value,
             0x308 => self.irq_soft = value,
@@ -953,5 +981,18 @@ mod tests {
         bus.write32(VESTA_BASE + 0x018, KERNEL_STATUS_PANIC);
         assert!(bus.kernel_panicked());
         assert!(bus.terminal());
+        assert_eq!(
+            bus.scratch_trace(),
+            vec![KERNEL_STATUS_READY, KERNEL_STATUS_SOAK, KERNEL_STATUS_PANIC]
+        );
+
+        for value in 0..40 {
+            bus.write32(VESTA_BASE + 0x018, value);
+        }
+        assert_eq!(bus.scratch_trace(), (8..40).collect::<Vec<_>>());
+
+        bus.reset();
+        assert_eq!(bus.scratch(), 0);
+        assert!(bus.scratch_trace().is_empty());
     }
 }

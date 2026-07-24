@@ -147,6 +147,8 @@ KernelDispatchTarget syscall_entry_dispatch_fast(
     if (!kernel_process_active())
         kernel_exception_panic(raw_frame);
     scheduler_trace(0x4b53494eu); /* KSIN */
+    if (registers != NULL)
+        scheduler_trace(registers[0]);
     process_exited = registers != NULL &&
                      registers[0] == ASTRA_SYSCALL_EXIT;
     status = kernel_process_on_syscall(registers, user_stack, raw_frame,
@@ -161,6 +163,11 @@ KernelDispatchTarget syscall_entry_dispatch_fast(
     }
     if (kernel_worker_try_select())
         return KERNEL_DISPATCH_WORKER;
+    if (next == NULL) {
+        if (kernel_worker_select_idle())
+            return KERNEL_DISPATCH_WORKER;
+        kernel_panic("blocked syscall could not select idle worker");
+    }
     scheduler_trace(0x4b534f55u); /* KSOU */
     return kernel_dispatch_user_target(next);
 }
@@ -211,6 +218,8 @@ KernelDispatchTarget timer_entry_dispatch_fast(
     if (frame.from_user == 0u) {
         last_supervisor_irq_pc = frame.program_counter;
         last_supervisor_irq_sr = frame.status_register;
+        if (kernel_process_on_supervisor_timer() != KERNEL_PROCESS_OK)
+            kernel_panic("supervisor timer scheduling failed");
         return KERNEL_DISPATCH_RESUME;
     }
     if (!kernel_process_active())

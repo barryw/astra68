@@ -4,6 +4,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#define KERNEL_PLATFORM_QUANTUM_MS 5u
+#define KERNEL_PLATFORM_QUANTUM_HZ \
+    (1000u / KERNEL_PLATFORM_QUANTUM_MS)
+
 typedef struct KernelPlatformBlockState {
     uint32_t capabilities;
     uint32_t state_flags;
@@ -37,6 +41,9 @@ typedef struct KernelPlatformCycleCount {
 } KernelPlatformCycleCount;
 
 void kernel_platform_interrupt_init(uint32_t cpu_hz);
+uint32_t kernel_platform_quantum_cycles(void);
+void kernel_platform_timer_arm(uint32_t cycles);
+void kernel_platform_timer_disarm(void);
 uint32_t kernel_platform_ticks(void);
 uint32_t kernel_platform_cpu_cycles_low(void);
 void kernel_platform_cpu_cycles(KernelPlatformCycleCount *cycles);
@@ -54,5 +61,10 @@ bool kernel_platform_block_pop_completion(
     KernelPlatformBlockCompletion *completion);
 void kernel_platform_block_ack_state(void);
 bool kernel_input_pop(KernelInputEvent *event);
+
+#if defined(KERNEL_PLATFORM_HOST_TEST)
+#include "vesta.h"
+VestaRegs *kernel_platform_test_registers(void);
+#endif
 
 #endif

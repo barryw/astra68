@@ -25,7 +25,7 @@ transport, but expected initial/final state and pass criteria remain identical.
 
 The candidate must retain all of these before routing:
 
-- 16 kernel host suites, GCC `-fanalyzer`, ASan/UBSan, and leak detection;
+- 17 kernel host suites, GCC `-fanalyzer`, ASan/UBSan, and leak detection;
 - 15 AstraVM Rust tests, rustfmt, and Clippy `-D warnings`;
 - 90 shared framework tests and all 30 executions of the 15-case Musashi/RTL
   matrix;
@@ -54,18 +54,25 @@ The candidate must retain all of these before routing:
 - wait queues must cover stale-sequence rejection, duplicate block rejection,
   priority/FIFO wake-one, bounded wake-all, close, and process retirement with
   no lost wakeup;
+- the one-shot scheduler must cover an exact 62,500-cycle quantum, earliest-of
+  quantum/deadline programming, zero-delay clamping, long-delay clamping,
+  ordinary syscalls that do not renew a quantum, supervisor idle wakeup, and
+  immediate higher-priority timeout handoff;
+- the 16-entry deadline heap must cover equal-deadline deterministic ordering,
+  full capacity, already-expired rejection, signal/timeout ordering, close,
+  and process-death removal with one result and no stale heap entry;
 - aligned byte copy/clear primitives must cover every source/destination
   alignment and length through the longword fast path, with guard bytes proving
   no underrun or overrun;
 - target scheduling must run two threads in one CRP and one thread in another,
   prove same-address-space switches do not increment VM/CRP switches, then
   fault and reap only the second process;
-- the K2 release-development image must pass the complete pin-level SDRAM model
+- the K3 release-development image must pass the complete pin-level SDRAM model
   and two independent ULX3S SRAM reloads of the exact qualified bitstream while
   matching the expected FPGA build ID and SD ROM CRC32;
-- K2 must sample syscall, timer, user-fault, scheduler-pick, same/cross-CRP,
-  block, and wake paths against the fixed budgets in `performance.h`, with at
-  least one sample and zero overruns for every metric;
+- K3 must sample syscall, timer, user-fault, scheduler-pick, same/cross-CRP,
+  block, wake, and deadline-expiry paths against the fixed budgets in
+  `performance.h`, with at least one sample and zero overruns for every metric;
 - the exact 1,000-cycle Musashi lifecycle workload must complete at or below
   675,000,000 virtual machine cycles;
 - a real M=1 interrupt must build exact format-0 MSP and format-1 ISP frames,
@@ -252,16 +259,31 @@ interrupt-disabled time, scheduler lock, wake-to-run latency, same/cross-CRP
 switch, syscall, copy, map/unmap, ATC miss, and device reset. The limits in
 `LOCKING_AND_PREEMPTION.md` are release failures, not informational warnings.
 
-The current K2 limits are 50,000 cycles for syscall and timer dispatch, 125,000
+The current K3 limits are 50,000 cycles for syscall and timer dispatch, 125,000
 for user-fault containment, 10,000 for scheduler selection, 15,000 for same-CRP
 switch, 50,000 for cross-CRP switch, and 15,000 each for block and wake. The
-exact coherent full RTL maxima are 20,806, 14,344, 21,896, 1,449, 1,567, 2,540,
-1,265, and 2,437 cycles respectively. Two routed-hardware runs also pass with
-zero overruns; their largest observed value is 29,705 cycles for syscall
-dispatch. Retained evidence is
-`docs/evidence/k2-be27074-refactor-perf-rtl.log`,
-`docs/evidence/k2-25d9cb8e-be27074-refactor-perf-hw-1.log`, and
-`docs/evidence/k2-25d9cb8e-be27074-refactor-perf-hw-2.log`.
+Deadline expiry has a separate 20,000-cycle limit. The exact coherent K3
+pin-level maxima are 23,897, 25,051, 24,732, 1,475, 2,876, 4,131, 2,260,
+3,391, and 6,163 cycles respectively. That run intentionally uses a 64 KiB
+simulated BIST; both routed-hardware runs execute the real full-range 32 MiB
+BIST. They report 23,873-cycle syscall, 25,099-cycle timer, at most 24,793-cycle
+fault, 1,482-cycle pick, at most 2,874-cycle same-CRP, 4,133-cycle cross-CRP,
+2,256-cycle block, 3,410-cycle wake, and 6,177-cycle deadline maxima. Every
+metric has zero overruns.
+
+Retained K3 evidence and SHA-256 values are:
+
+- `docs/evidence/k3-8929c063-musashi-normal.log`:
+  `33103a11ae413abfd4ce5ccb39b8e490621342a5ceacf334e779e9cb5362bd22`;
+- `docs/evidence/k3-8929c063-musashi-performance.log`:
+  `ece6fb827dff5d25527857922e94ec95935f68aed83b2a4a2fa7029bdb640076`;
+- `docs/evidence/k3-8929c063-rtl.log`:
+  `b2a24285eb4ec7fff3abdeaf1bef839ac98cf4bc35486de29f58d4667a203511`;
+- `docs/evidence/k3-25d9cb8e-8929c063-hw-1.log`:
+  `f05c5f0a6b88ab38fb3557d6f412dfbd708011b5078112eaa905b515a0856709`;
+  and
+- `docs/evidence/k3-25d9cb8e-8929c063-hw-2.log`:
+  `f5f46ccd4230aca44a360a402dc57747e42aef2a8f56461f55960a3bd8ceaa55`.
 
 ## Panic and retained diagnostics
 

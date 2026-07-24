@@ -75,14 +75,17 @@ and retries after the next timer interrupt. DMA completion and worker
 state-machine host tests prove that the process remains inspectable and is
 reaped exactly once after the final pin retires.
 
-The current K2 split implements the first and last parts of this order with
+The current K3 split implements the first and last parts of this order with
 separate bounded objects. Marking a process `EXITING` removes every one of its
-`CREATED`, `READY`, `RUNNING`, or `BLOCKED` threads from scheduling and marks
-them `DEAD` in one bounded 16-slot pass. Their generation records remain
-occupied while handles, mappings, and owner frames are reaped by the guarded
-worker; only successful final reap releases those slots for generation-safe
-reuse. A fault in one process therefore cannot leave a runnable sibling thread
-or recycle a thread record while a stale process-private handle still exists.
+`CREATED`, `READY`, `RUNNING`, or `BLOCKED` threads from scheduling, removes
+each timed waiter from the fixed deadline heap, and marks them `DEAD` in one
+bounded 16-slot pass. Every affected wait-queue sequence advances, so a stale
+condition snapshot cannot relink the retiring thread. Their generation records
+remain occupied while handles, mappings, and owner frames are reaped by the
+guarded worker; only successful final reap releases those slots for
+generation-safe reuse. A fault in one process therefore cannot leave a runnable
+sibling thread or recycle a thread record while a stale process-private handle
+still exists.
 
 K1's physical allocator has 64 fixed owner ledgers. Every dynamically allocated
 frame is linked into exactly one owner's intrusive list using 16-bit previous

@@ -46,6 +46,12 @@ _k2_sibling_image_entry:
 	tst.l   %d0
 	bne     8f
 	move.l  #0x5349424c, 4(%a0)
+	move.l  #KERNEL_QUALIFICATION_TIMEOUT_CYCLES, %d1
+	move.l  #KERNEL_QUALIFICATION_EVENT_WAIT_TIMEOUT, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	cmpi.l  #ASTRA_SYSCALL_TIMED_OUT, %d0
+	bne     8f
+	move.l  #0x54494d45, 8(%a0)
 	move.l  #KERNEL_QUALIFICATION_EVENT_WAIT, %d0
 	trap    #ASTRA_SYSCALL_TRAP
 8:	moveq   #ASTRA_SYSCALL_EXIT, %d0
@@ -59,6 +65,13 @@ _k1_offender_image_entry:
 	movea.l #0x70000000, %a0
 	move.l  #0x4f464644, (%a0)
 	moveq   #0, %d3
+	| The internal thread bootstrap argument is passed in D2.
+	tst.l   %d2
+	bne     7f
+	move.l  #KERNEL_QUALIFICATION_QUANTUM_SPIN_ITERATIONS, %d5
+9:	subq.l  #1, %d5
+	bne     9b
+7:
 4:	cmpi.l  #0x4f464644, (%a0)
 	bne     5f
 	addq.l  #1, %d3

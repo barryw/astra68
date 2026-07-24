@@ -95,7 +95,7 @@ $(BUILD_DIR)/event.o: event.c event.h thread.h | $(BUILD_DIR)
 $(BUILD_DIR)/process.o: process.c process.h thread.h event.h context.h handle.h block.h \
                         bytes.h \
                         generation.h \
-                        performance.h \
+                        performance.h platform.h \
                         memory.h vm.h exception.h \
                         qualification.h ../include/astra/syscall.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
@@ -151,6 +151,7 @@ verify: astra_kernel.elf astra_kernel.bin
 	  printf 'kernel payload: %s bytes\n' "$$bytes"
 
 test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_memory \
+      $(BUILD_DIR)/test_platform \
       $(BUILD_DIR)/test_dma $(BUILD_DIR)/test_block $(BUILD_DIR)/test_vm \
       $(BUILD_DIR)/test_exception $(BUILD_DIR)/test_user_copy \
       $(BUILD_DIR)/test_handle $(BUILD_DIR)/test_bytes \
@@ -161,6 +162,7 @@ test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_memory \
       $(BUILD_DIR)/test_dispatch
 	./$(BUILD_DIR)/test_boot_contract
 	./$(BUILD_DIR)/test_memory
+	./$(BUILD_DIR)/test_platform
 	./$(BUILD_DIR)/test_dma
 	./$(BUILD_DIR)/test_block
 	./$(BUILD_DIR)/test_vm
@@ -188,6 +190,12 @@ $(BUILD_DIR)/test_memory: tests/test_memory.c memory.c memory.h \
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_MEMORY_NO_POISON=1 -I. -I../include \
 		../common/boot_contract.c memory.c tests/test_memory.c -o $@
+
+$(BUILD_DIR)/test_platform: tests/test_platform.c platform.c platform.h \
+                              ../include/vesta.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
+		-DKERNEL_PLATFORM_HOST_TEST=1 -I. -I../include \
+		platform.c tests/test_platform.c -o $@
 
 $(BUILD_DIR)/test_dma: tests/test_dma.c dma.c dma.h generation.h \
                        memory.c memory.h \
