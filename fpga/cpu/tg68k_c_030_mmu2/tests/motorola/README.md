@@ -28,3 +28,11 @@ defined SSW bits, and logical data-fault address.
 explicit dependence on an 88-byte format-B frame. MC68030 User's Manual Table
 8-6 defines that frame as 46 words (92 bytes), so SSP `$40079B74` must become
 handler A7 `$40079B18`, not `$40079B1C`.
+
+`tb_interrupt_master_dual_frame_motorola.vhd` verifies the section 8.1.9
+master-mode interrupt contract. A real level-7 interrupt accepted with M=1
+must create a format-0 frame on MSP and a format-1 throwaway frame on ISP. The
+throwaway saved SR retains M=1 while forcing S=1, so its `RTE` continues on the
+already post-incremented MSP. The bench interrupts a multiword instruction,
+runs a multiword handler, inserts clock-enable stalls, and proves that the
+restored PC fetches its opcode rather than decoding an extension word.

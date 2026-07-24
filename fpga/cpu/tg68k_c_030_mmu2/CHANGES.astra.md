@@ -133,6 +133,30 @@ qualification checkpoint. Synthesis, strict routing, and repeated ULX3S boot
 promotion remain required before this source replaces the persistent hardware
 release.
 
+## 2026-07-24 master-mode interrupt and chained-RTE correction
+
+- Corrected the MC68030 User's Manual section 8.1.9 format-1 throwaway frame.
+  Its saved SR now retains the interrupted M bit while forcing S=1; clearing M
+  prevented `RTE` from continuing through the master-stack frame.
+- Removed the unconditional A7 write at format-1 chain completion. When the
+  restored frame remains in master mode, MSP is already post-incremented and
+  the stale postadd must not advance it a second time. The ISP-to-A7 write is
+  now performed only when the restored SR selects interrupt mode.
+- Added one established `nopnop` fetch-settle state before retiring a chained
+  format-0 or extended frame. Without it, the restored PC could still be in a
+  non-fetch bus state and `setendOPC` could latch the first instruction's
+  extension word as the next opcode.
+- Added a Motorola-directed real level-7 M=1 interrupt regression with exact
+  MSP/ISP frames, multiword interrupted and handler instructions, resumed
+  branch execution, and external clock-enable stalls.
+
+The six focused exception/stack regressions all run clean. The complete Questa
+Lattice OEM 2024.2 inventory on Beast reports 141 variants, 115 clean, 3 stale
+compile failures, 18 classified simulation failures, and 5 unscored
+diagnostics. This is the prior 140-variant classification plus the new clean
+Motorola test; no existing status changed. The 15-case shared Musashi/RTL
+matrix also remains 30/30.
+
 ## 2026-07-13 combinational-loop and open-flow closure
 
 - Replaced the ALU's self-referential rotate/sign chains with finite,

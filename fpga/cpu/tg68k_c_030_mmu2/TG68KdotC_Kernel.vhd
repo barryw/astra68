@@ -2632,9 +2632,11 @@ PROCESS (clk)
                 ELSIF direct_data='1' THEN
                     data_write_tmp <= last_data_read;
                 ELSIF micro_state=int5 THEN
-                    -- MC68030 M=1 interrupt dual-frame: WinUAE/68030 clear M
-                    -- before stacking the Format $1 throwaway frame SR.
-                    data_write_tmp(15 downto 0) <= (trap_SR(7 downto 5) & '0' & trap_SR(3 downto 0)) & Flags(7 downto 0);
+                    -- MC68030 UM 8.1.9: the Format $1 throwaway frame contains
+                    -- the same saved SR as the master-stack frame, except S is
+                    -- forced set. The live SR has M cleared for interrupt mode,
+                    -- but the saved M=1 directs RTE to the master stack.
+                    data_write_tmp(15 downto 0) <= (trap_SR(7 downto 6) & '1' & trap_SR(4 downto 0)) & Flags(7 downto 0);
                 ELSIF writeSR='1'THEN
                     data_write_tmp(15 downto 0) <= trap_SR(7 downto 0)& Flags(7 downto 0);
                 ELSE
@@ -7724,16 +7726,22 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 							datatype <= "01";
 							next_micro_state <= nop;
 							IF format1_chain_active='1' THEN
-								-- Swap back after dual-frame: save A7 to MSP
+								-- Finish the dual-frame chain with A7 on MSP. If the
+								-- restored frame selects M=1, A7 is already the
+								-- post-incremented MSP; writing A7 again would apply a
+								-- stale postadd and advance it by another word.
+								-- The stack-settle cycle leaves state="01". Retire via
+								-- nopnop so the restored PC is fetched before setendOPC;
+								-- a direct transition through nop can decode the first
+								-- instruction's extension word as a new opcode.
+								next_micro_state <= nopnop;
 								set(to_MSP) <= '1';
-								-- BUG #388 FIX: Only load ISP if restored SR has M=0.
-								-- When M=1 (FlagsSR(4)='1'), A7 should stay as MSP.
-								IF FlagsSR(4)='0' THEN
-									set(from_ISP) <= '1';
-								END IF;
-								set(Regwrena) <= '1';
 								setstackaddr <= '1';
 								setstate <= "01";
+								IF FlagsSR(4)='0' THEN
+									set(from_ISP) <= '1';
+									set(Regwrena) <= '1';
+								END IF;
 								-- format1_chain_active cleared by registered process
 							ELSIF cpu(1)='1' AND FlagsSR(5)='1' AND FlagsSR(4) /= rte_saved_mbit THEN
 								-- MC68030: Deferred M-bit swap for RTE.
@@ -7814,15 +7822,18 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 						END IF;
 						-- MC68030: Swap back after dual-frame if needed
 						IF format1_chain_active='1' THEN
+							-- As in the Format $0 completion above, leave the
+							-- already post-incremented MSP active when M remains 1.
+							-- Hold one additional fetch-settle state before opcode
+							-- retirement for the same restored-PC requirement.
+							next_micro_state <= nopnop;
 							set(to_MSP) <= '1';
-							-- BUG #388 FIX: Only load ISP if restored SR has M=0.
-							-- When M=1 (FlagsSR(4)='1'), A7 should stay as MSP.
-							IF FlagsSR(4)='0' THEN
-								set(from_ISP) <= '1';
-							END IF;
-							set(Regwrena) <= '1';
 							setstackaddr <= '1';
 							setstate <= "01";
+							IF FlagsSR(4)='0' THEN
+								set(from_ISP) <= '1';
+								set(Regwrena) <= '1';
+							END IF;
 							-- format1_chain_active cleared by registered process
 						ELSIF cpu(1)='1' AND FlagsSR(5)='1' AND FlagsSR(4) /= rte_saved_mbit THEN
 							-- MC68030: Deferred M-bit swap for RTE (formats 2/9/A/B).

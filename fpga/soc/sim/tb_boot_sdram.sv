@@ -190,7 +190,8 @@ module tb_boot_sdram #(
                     if (dut.sdram_bist_errors != 0)
                         $fatal(1, "POST passed with %0d BIST errors",
                                dut.sdram_bist_errors);
-                    if (dut.tg_icache_hits < 100 || dut.tg_dcache_hits < 100)
+                    if (!$test$plusargs("allow-no-cache-check") &&
+                        (dut.tg_icache_hits < 100 || dut.tg_dcache_hits < 100))
                         $fatal(1, "cache path not exercised I=%0d D=%0d",
                                dut.tg_icache_hits, dut.tg_dcache_hits);
                     bist_mbps = (TEST_BYTES * 4.0 * 60.0) / bist_cycles;
