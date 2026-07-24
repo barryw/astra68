@@ -174,9 +174,11 @@ routed-JSON SHA-256 is
 NUC passes three independent SRAM boots, the exact five-minute/5,000-cycle
 worker soak, normal-ROM restoration, a fourth SRAM boot, and automatic
 reset-from-flash validation. FPGA flash now contains this exact bitstream.
-Physical HDMI requires manual visual confirmation because NUC has no capture
-device; every machine-readable hardware gate passes. This section replaces
-`77B3CDC8` as the routed and persistent release baseline.
+Physical HDMI confirms the exact Git identity, guarded worker, PMMU,
+preemption, fault containment, and K1 entry. Screenshot SHA-256 is
+`e6e654d6ad0c9f5dead16f9116ab622d7a5ba731fc2fafc1ff7ba324c08128a4`.
+Every hardware gate passes. This section replaces `77B3CDC8` as the routed and
+persistent release baseline.
 
 ## B1F9E60D rollback comparison
 

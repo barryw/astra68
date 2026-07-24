@@ -84,7 +84,7 @@ must not be presented as working software.
 | RESET preserves roots and ATC until explicit flush | CURRENT RTL/ROUTED | stale-ATC/reset/`PFLUSHA` regression; strict inventory 141/115 clean; prior exact full mapping has zero SCCs and passes all clocks |
 | prior corrected K1 release ROM | CURRENT | build `77B3CDC8` remains a qualified rollback artifact with Musashi/full RTL and routed-hardware evidence |
 | guarded-worker K1 release ROM | CURRENT HW | build `25D9CB8E` passes exact route, repeated SRAM boots, five-minute worker soak, and reset-from-flash |
-| guarded-worker K1 hardware boot | CURRENT HW | exact identity, full POST/BIST, PMMU, guarded worker, 100 Hz preemption, offender-only fault containment, and K1 entry pass; physical HDMI awaits manual confirmation |
+| guarded-worker K1 hardware boot | CURRENT HW | exact identity, full POST/BIST, PMMU, guarded worker, 100 Hz preemption, offender-only fault containment, K1 entry, and physical HDMI pass |
 
 ## Hardware status
 
@@ -226,7 +226,10 @@ and `0x00000000DFEAD7D7` elapsed CPU cycles while retaining exactly 7,987 free
 pages and a 9,376-cycle masked-fault maximum. After normal ROM and read-only
 AstraHost restoration, a fourth SRAM boot passes. FPGA flash now contains the
 same exact bitstream, and reset-from-flash reaches K1 in 2.008 seconds. NUC has
-no HDMI capture device; physical-screen confirmation remains manual.
+no capture device, but the retained physical-HDMI image visibly confirms the
+exact Git identity, guarded worker, PMMU, preemption, fault containment, and K1
+entry. Screenshot SHA-256 is
+`e6e654d6ad0c9f5dead16f9116ab622d7a5ba731fc2fafc1ff7ba324c08128a4`.
 
 ## Required before K1 release
 
@@ -243,7 +246,7 @@ no HDMI capture device; physical-screen confirmation remains manual.
 | masked user-fault latency | CURRENT HW; 8,834 cycles against 125,000-cycle gate |
 | long context/syscall/fault/allocation soak | CURRENT HW; dual-host 500,000-cycle simulation, routed five-minute/5,000-cycle candidate, and independent 30-minute/29,000-cycle release run pass at baseline 7,987 with coherent FPGA elapsed-time proof |
 | panic HDMI and retained-log check on physical board | CURRENT; exact direct-panic and supervisor-guard paths pass |
-| guarded-worker source exact route and ULX3S promotion | CURRENT HW; no-waiver route, repeated SRAM boots, five-minute soak, restoration, and reset-from-flash pass; physical HDMI awaits manual confirmation |
+| guarded-worker source exact route and ULX3S promotion | CURRENT HW; no-waiver route, repeated SRAM boots, five-minute soak, restoration, reset-from-flash, and physical HDMI pass |
 
 ## Partial or transitional K1 code
 

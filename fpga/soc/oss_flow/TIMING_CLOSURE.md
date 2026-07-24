@@ -3217,5 +3217,10 @@ in 2.008 seconds. Retained transcript
 Disposition: route, repeated normal hardware boot, SDRAM, PMMU, bounded worker
 soak, normal restoration, and automatic reset-from-flash all PASS. Persistent
 FPGA flash now contains exact build `25D9CB8E`; the board is left on normal ROM
-`D21EF603` and read-only AstraHost. NUC has no HDMI capture device, so exact
-physical-screen confirmation remains the final manual evidence item.
+`D21EF603` and read-only AstraHost. Physical HDMI visibly reports full Git
+identity `e108a3711befa08a309f068939dff226a21c869c`, the guarded MSP worker,
+PMMU, 100 Hz preemption, offender-only fault containment, and
+`K1 PROTECTED ENTRY PASS`. Retained image
+`docs/evidence/k1-25d9cb8e-e108a37-flash-hdmi.png` has SHA-256
+`e6e654d6ad0c9f5dead16f9116ab622d7a5ba731fc2fafc1ff7ba324c08128a4`.
+All release gates PASS.

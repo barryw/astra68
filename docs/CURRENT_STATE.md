@@ -507,8 +507,11 @@ separates implemented evidence from planned work.
   were restored before a fourth SRAM boot passed. Exact release
   `25D9CB8E` was then written to FPGA flash; automatic reset-from-flash passed
   the same normal gate in 2.008 seconds. Persistent hardware now contains
-  `25D9CB8E`. NUC has no HDMI capture device, so exact physical-HDMI visual
-  confirmation remains the final manual evidence item.
+  `25D9CB8E`. Physical HDMI visibly reports the full `e108a371...` Git
+  identity, guarded MSP worker, PMMU, preemption, fault containment, and
+  `K1 PROTECTED ENTRY PASS`. Retained screenshot
+  `docs/evidence/k1-25d9cb8e-e108a37-flash-hdmi.png` has SHA-256
+  `e6e654d6ad0c9f5dead16f9116ab622d7a5ba731fc2fafc1ff7ba324c08128a4`.
 - Exact `F4DC1E18` canonical Beast mapping reports 52,943 LUT4s, 25,522
   synthesized FFs, 101 block RAMs, and 18 multipliers with zero SCCs. Its
   strict seed-4 heap/router1 route packs 66,377 TRELLIS_COMB cells, 25,555 FFs,
