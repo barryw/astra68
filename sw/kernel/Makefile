@@ -4,6 +4,7 @@ CC = $(CROSS)gcc
 OBJCOPY = $(CROSS)objcopy
 OBJDUMP = $(CROSS)objdump
 HOST_CC ?= cc
+HOST_EXTRA_FLAGS ?=
 
 KERNEL_VERSION ?= 0.1.0-dev
 PANIC_SELFTEST ?= 0
@@ -22,8 +23,12 @@ LDFLAGS = -T kernel.ld -nostdlib -no-pie \
 OBJECTS = $(BUILD_DIR)/entry.o $(BUILD_DIR)/vectors.o \
           $(BUILD_DIR)/kernel.o $(BUILD_DIR)/platform.o \
           $(BUILD_DIR)/memory.o $(BUILD_DIR)/dma.o $(BUILD_DIR)/block.o \
-          $(BUILD_DIR)/handle.o $(BUILD_DIR)/context.o \
-          $(BUILD_DIR)/process.o $(BUILD_DIR)/user_test.o \
+          $(BUILD_DIR)/handle.o $(BUILD_DIR)/bytes.o \
+          $(BUILD_DIR)/context.o \
+          $(BUILD_DIR)/performance.o \
+          $(BUILD_DIR)/thread.o $(BUILD_DIR)/event.o \
+          $(BUILD_DIR)/process.o \
+          $(BUILD_DIR)/user_test.o \
           $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/worker.o \
           $(BUILD_DIR)/worker_asm.o \
           $(BUILD_DIR)/pmmu.o $(BUILD_DIR)/vm.o \
@@ -47,10 +52,10 @@ $(OBJECTS): $(BUILD_INFO)
 $(BUILD_DIR)/entry.o: entry.S kernel.ld | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/vectors.o: vectors.S context.h dispatch.h user_copy.h kernel.ld | $(BUILD_DIR)
+$(BUILD_DIR)/vectors.o: vectors.S context.h dispatch.h thread.h user_copy.h kernel.ld | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/kernel.o: kernel.c $(BUILD_INFO) dispatch.h \
+$(BUILD_DIR)/kernel.o: kernel.c $(BUILD_INFO) bytes.h dispatch.h process.h thread.h \
                        ../include/astra/boot.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
@@ -60,24 +65,43 @@ $(BUILD_DIR)/platform.o: platform.c platform.h ../include/vesta.h | $(BUILD_DIR)
 $(BUILD_DIR)/memory.o: memory.c memory.h ../include/astra/boot.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/dma.o: dma.c dma.h memory.h | $(BUILD_DIR)
+$(BUILD_DIR)/dma.o: dma.c dma.h generation.h memory.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/block.o: block.c block.h dma.h platform.h ../include/vesta.h | $(BUILD_DIR)
+$(BUILD_DIR)/block.o: block.c block.h dma.h generation.h platform.h \
+                      ../include/vesta.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/handle.o: handle.c handle.h | $(BUILD_DIR)
+$(BUILD_DIR)/handle.o: handle.c handle.h generation.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/context.o: context.c context.h exception.h | $(BUILD_DIR)
+$(BUILD_DIR)/bytes.o: bytes.c bytes.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/process.o: process.c process.h context.h handle.h block.h \
+$(BUILD_DIR)/context.o: context.c context.h bytes.h exception.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/performance.o: performance.c performance.h bytes.h generation.h \
+                            platform.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/thread.o: thread.c thread.h bytes.h generation.h context.h handle.h \
+                       performance.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/event.o: event.c event.h thread.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/process.o: process.c process.h thread.h event.h context.h handle.h block.h \
+                        bytes.h \
+                        generation.h \
+                        performance.h \
                         memory.h vm.h exception.h \
-                        ../include/astra/syscall.h | $(BUILD_DIR)
+                        qualification.h ../include/astra/syscall.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/dispatch.o: dispatch.c dispatch.h process.h context.h \
+$(BUILD_DIR)/dispatch.o: dispatch.c dispatch.h process.h thread.h context.h \
+                         performance.h \
                          exception.h panic.h platform.h user_copy.h \
                          worker.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
@@ -89,13 +113,14 @@ $(BUILD_DIR)/worker.o: worker.c worker.h process.h context.h panic.h \
 $(BUILD_DIR)/worker_asm.o: worker.S worker.h context.h kernel.ld | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/user_test.o: user_test.S ../include/astra/syscall.h | $(BUILD_DIR)
+$(BUILD_DIR)/user_test.o: user_test.S qualification.h \
+                          ../include/astra/syscall.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/pmmu.o: pmmu.S pmmu.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/vm.o: vm.c vm.h pmmu.h memory.h | $(BUILD_DIR)
+$(BUILD_DIR)/vm.o: vm.c vm.h pmmu.h memory.h thread.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/exception.o: exception.c exception.h | $(BUILD_DIR)
@@ -128,7 +153,10 @@ verify: astra_kernel.elf astra_kernel.bin
 test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_memory \
       $(BUILD_DIR)/test_dma $(BUILD_DIR)/test_block $(BUILD_DIR)/test_vm \
       $(BUILD_DIR)/test_exception $(BUILD_DIR)/test_user_copy \
-      $(BUILD_DIR)/test_handle $(BUILD_DIR)/test_context \
+      $(BUILD_DIR)/test_handle $(BUILD_DIR)/test_bytes \
+      $(BUILD_DIR)/test_context \
+      $(BUILD_DIR)/test_performance \
+      $(BUILD_DIR)/test_thread $(BUILD_DIR)/test_event \
       $(BUILD_DIR)/test_process $(BUILD_DIR)/test_worker \
       $(BUILD_DIR)/test_dispatch
 	./$(BUILD_DIR)/test_boot_contract
@@ -139,7 +167,11 @@ test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_memory \
 	./$(BUILD_DIR)/test_exception
 	./$(BUILD_DIR)/test_user_copy
 	./$(BUILD_DIR)/test_handle
+	./$(BUILD_DIR)/test_bytes
 	./$(BUILD_DIR)/test_context
+	./$(BUILD_DIR)/test_performance
+	./$(BUILD_DIR)/test_thread
+	./$(BUILD_DIR)/test_event
 	./$(BUILD_DIR)/test_process
 	./$(BUILD_DIR)/test_worker
 	./$(BUILD_DIR)/test_dispatch
@@ -147,81 +179,123 @@ test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_memory \
 $(BUILD_DIR)/test_boot_contract: tests/test_boot_contract.c \
                                   ../common/boot_contract.c \
                                   ../include/astra/boot.h | $(BUILD_DIR)
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -I../include \
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I../include \
 		../common/boot_contract.c tests/test_boot_contract.c -o $@
 
 $(BUILD_DIR)/test_memory: tests/test_memory.c memory.c memory.h \
                           ../common/boot_contract.c \
                           ../include/astra/boot.h | $(BUILD_DIR)
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror \
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_MEMORY_NO_POISON=1 -I. -I../include \
 		../common/boot_contract.c memory.c tests/test_memory.c -o $@
 
-$(BUILD_DIR)/test_dma: tests/test_dma.c dma.c dma.h memory.c memory.h \
+$(BUILD_DIR)/test_dma: tests/test_dma.c dma.c dma.h generation.h \
+                       memory.c memory.h \
                        ../common/boot_contract.c \
                        ../include/astra/boot.h | $(BUILD_DIR)
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror \
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_MEMORY_NO_POISON=1 -I. -I../include \
 		../common/boot_contract.c memory.c dma.c tests/test_dma.c -o $@
 
 $(BUILD_DIR)/test_block: tests/test_block.c block.c block.h dma.c dma.h \
-                         memory.c memory.h platform.h ../common/boot_contract.c \
+                         generation.h memory.c memory.h platform.h \
+                         ../common/boot_contract.c \
                          ../include/astra/boot.h ../include/vesta.h | $(BUILD_DIR)
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror \
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_MEMORY_NO_POISON=1 -I. -I../include \
 		../common/boot_contract.c memory.c dma.c block.c \
 		tests/test_block.c -o $@
 
 $(BUILD_DIR)/test_vm: tests/test_vm.c vm.c vm.h pmmu.h memory.c memory.h \
                       ../common/boot_contract.c ../include/astra/boot.h | $(BUILD_DIR)
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror \
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_MEMORY_NO_POISON=1 -DKERNEL_VM_HOST_TEST=1 \
 		-I. -I../include ../common/boot_contract.c memory.c vm.c \
 		tests/test_vm.c -o $@
 
 $(BUILD_DIR)/test_exception: tests/test_exception.c exception.c \
                                 exception.h | $(BUILD_DIR)
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -I. \
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I. \
 		exception.c tests/test_exception.c -o $@
 
 $(BUILD_DIR)/test_user_copy: tests/test_user_copy.c user_copy.c user_copy.h \
                              exception.c exception.h vm.h | $(BUILD_DIR)
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror \
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_USER_COPY_HOST_TEST=1 -I. \
 		exception.c user_copy.c tests/test_user_copy.c -o $@
 
-$(BUILD_DIR)/test_handle: tests/test_handle.c handle.c handle.h | $(BUILD_DIR)
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -I. \
+$(BUILD_DIR)/test_handle: tests/test_handle.c handle.c handle.h generation.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I. \
 		handle.c tests/test_handle.c -o $@
 
+$(BUILD_DIR)/test_bytes: tests/test_bytes.c bytes.c bytes.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I. \
+		bytes.c tests/test_bytes.c -o $@
+
 $(BUILD_DIR)/test_context: tests/test_context.c context.c context.h \
+                             bytes.c bytes.h \
                              exception.c exception.h | $(BUILD_DIR)
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -I. \
-		exception.c context.c tests/test_context.c -o $@
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I. \
+		bytes.c exception.c context.c tests/test_context.c -o $@
+
+$(BUILD_DIR)/test_performance: tests/test_performance.c performance.c \
+                                performance.h bytes.c bytes.h generation.h \
+                                platform.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
+		-DKERNEL_PERFORMANCE_HOST_TEST=1 -I. \
+		bytes.c performance.c tests/test_performance.c -o $@
+
+$(BUILD_DIR)/test_thread: tests/test_thread.c thread.c thread.h \
+			    bytes.c bytes.h generation.h \
+                            performance.c performance.h platform.h \
+                            context.c context.h exception.c exception.h \
+                            handle.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
+		-DKERNEL_PERFORMANCE_HOST_TEST=1 -I. \
+		bytes.c exception.c context.c performance.c thread.c \
+		tests/test_thread.c -o $@
+
+$(BUILD_DIR)/test_event: tests/test_event.c event.c event.h thread.c thread.h \
+			   bytes.c bytes.h generation.h \
+                           performance.c performance.h platform.h \
+                           context.c context.h exception.c exception.h \
+                           handle.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
+		-DKERNEL_PERFORMANCE_HOST_TEST=1 -I. \
+		bytes.c exception.c context.c performance.c thread.c event.c \
+		tests/test_event.c -o $@
 
 $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
-                            context.c context.h handle.c handle.h \
+			    performance.c performance.h bytes.c bytes.h generation.h \
+                            thread.c thread.h event.c event.h \
+                            context.c context.h \
+                            handle.c handle.h \
                             exception.c exception.h vm.c vm.h pmmu.h \
                             block.c block.h dma.c dma.h memory.c memory.h \
                             platform.h ../common/boot_contract.c \
                             ../include/astra/boot.h \
                             ../include/astra/syscall.h | $(BUILD_DIR)
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror \
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_MEMORY_NO_POISON=1 -DKERNEL_VM_HOST_TEST=1 \
-		-DKERNEL_PROCESS_HOST_TEST=1 -DASTRA_KERNEL_SOAK_SELFTEST=1 \
+		-DKERNEL_PROCESS_HOST_TEST=1 -DKERNEL_PERFORMANCE_HOST_TEST=1 \
+		-DASTRA_KERNEL_SOAK_SELFTEST=1 \
 		-I. -I../include \
 		../common/boot_contract.c memory.c dma.c block.c vm.c exception.c \
-		context.c handle.c process.c tests/test_process.c -o $@
+		bytes.c context.c handle.c performance.c thread.c event.c process.c \
+		tests/test_process.c -o $@
 
 $(BUILD_DIR)/test_dispatch: tests/test_dispatch.c dispatch.c dispatch.h \
+			     performance.c performance.h bytes.c bytes.h generation.h \
                              exception.c exception.h process.h context.h \
                              panic.h platform.h user_copy.h worker.h | $(BUILD_DIR)
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -I. -I../include \
-		exception.c dispatch.c tests/test_dispatch.c -o $@
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
+		-DKERNEL_PERFORMANCE_HOST_TEST=1 -I. -I../include \
+		bytes.c exception.c performance.c dispatch.c \
+		tests/test_dispatch.c -o $@
 
 $(BUILD_DIR)/test_worker: tests/test_worker.c worker.c worker.h process.h \
                            context.h panic.h platform.h | $(BUILD_DIR)
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror \
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_WORKER_HOST_TEST=1 -I. -I../include \
 		worker.c tests/test_worker.c -o $@
 

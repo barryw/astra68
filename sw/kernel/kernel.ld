@@ -68,6 +68,14 @@ SECTIONS {
     _kernel_worker_stack_top = .;
   } > KERNEL :data
 
+  /* 16 fixed slots: one unmapped 4 KiB guard and one 8 KiB ISP each. */
+  .kernel_thread_stacks (NOLOAD) : {
+    . = ALIGN(4096);
+    _kernel_thread_stacks_start = .;
+    . += 196608;
+    _kernel_thread_stacks_end = .;
+  } > KERNEL :data
+
   . = ALIGN(4096);
   _kernel_memory_end = .;
 
@@ -83,5 +91,9 @@ ASSERT((_kernel_worker_stack_guard & 4095) == 0,
        "kernel worker stack guard must remain page aligned")
 ASSERT(_kernel_worker_stack_top - _kernel_worker_stack_bottom == 8192,
        "kernel worker stack size changed")
+ASSERT((_kernel_thread_stacks_start & 4095) == 0,
+       "kernel thread stack arena must remain page aligned")
+ASSERT(_kernel_thread_stacks_end - _kernel_thread_stacks_start == 196608,
+       "kernel thread stack arena size changed")
 ASSERT(_kernel_memory_end <= ORIGIN(KERNEL) + LENGTH(KERNEL),
        "kernel exceeds its reserved bootstrap region")

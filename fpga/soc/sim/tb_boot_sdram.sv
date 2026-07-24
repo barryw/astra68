@@ -5,14 +5,14 @@ module tb_boot_sdram #(
     parameter [31:0] BUILD_ID = 32'h00000000,
     parameter integer TEST_BYTES = 262144,
     parameter bit PROGRESS = 1'b0,
-    parameter bit EXPECT_KERNEL_PANIC = 1'b0
+    parameter bit EXPECT_KERNEL_PANIC = 1'b0,
+    parameter longint unsigned BOOT_TIMEOUT_NS =
+        64'd500_000_000 + (TEST_BYTES * 64'd40_000)
 );
     localparam [31:0] KERNEL_STATUS_READY = 32'h4b314f4b;
     localparam [31:0] KERNEL_STATUS_SOAK = 32'h4b31534b;
     localparam [31:0] KERNEL_STATUS_PANIC = 32'h4b50414e;
     localparam [31:0] EARLY_LOG_MAGIC = 32'h41364c47;
-    localparam longint unsigned BOOT_TIMEOUT_NS =
-        64'd500_000_000 + (TEST_BYTES * 64'd40_000);
     reg clk25 = 1'b0;
     reg rstn = 1'b0;
     always #20 clk25 = ~clk25;
@@ -232,9 +232,22 @@ module tb_boot_sdram #(
 
     always @(posedge dut.clk) begin
         if (post_seen && dut.sys_scratch == KERNEL_STATUS_PANIC &&
-            !expect_kernel_panic)
+            !expect_kernel_panic) begin
+            $display("VESTA TIMER0 load=%08x value=%08x ctrl=%08x status=%08x enable=%08x cfg=%08x pending=%08x active=%0d ipl_n=%b iack=%b/%b",
+                     dut.vesta_irq_timer_i.timer_load[0],
+                     dut.vesta_irq_timer_i.timer_value[0],
+                     dut.vesta_irq_timer_i.timer_ctrl[0],
+                     dut.vesta_irq_timer_i.timer_status[0],
+                     dut.vesta_irq_timer_i.irq_enable,
+                     dut.vesta_irq_timer_i.irq_cfg[0],
+                     dut.vesta_irq_timer_i.pending_raw,
+                     dut.vesta_irq_timer_i.active_level,
+                     dut.vesta_irq_timer_i.cpu_ipln_n,
+                     dut.vesta_irq_timer_i.iack_strobe,
+                     dut.vesta_irq_timer_i.iack_valid);
             $fatal(1, "kernel panicked during normal boot, log_flags=%08x",
                    sdram_be32(25'h0000018));
+        end
         if (post_seen &&
             dut.sys_scratch == (expect_kernel_panic ? KERNEL_STATUS_PANIC :
                                 expect_kernel_soak ? KERNEL_STATUS_SOAK :

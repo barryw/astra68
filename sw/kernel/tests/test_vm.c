@@ -1,5 +1,6 @@
 #include "memory.h"
 #include "pmmu.h"
+#include "thread.h"
 #include "vm.h"
 
 #include <assert.h>
@@ -164,11 +165,29 @@ static void test_kernel_root_and_enable_sequence(void)
     assert(low[0] == 0x02000001u);
     assert(low[(0x02080000u - 0x02000000u) >> 12] == 0u);
     assert(low[(0x02083000u - 0x02000000u) >> 12] == 0u);
+    for (uint32_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+        uint32_t guard = KERNEL_THREAD_SUPERVISOR_HOST_ARENA_BASE +
+                         slot * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE;
+        uint32_t index = (guard - 0x02000000u) >> 12;
+
+        assert(low[index] == 0u);
+        assert(low[index + 1u] ==
+               ((guard + KERNEL_THREAD_SUPERVISOR_GUARD_SIZE) | 1u));
+        assert(low[index + 2u] ==
+               ((guard + KERNEL_THREAD_SUPERVISOR_GUARD_SIZE +
+                  KERNEL_PAGE_SIZE) | 1u));
+    }
     assert(low[0x3ffu] == 0x023ff001u);
     for (uint32_t index = 9u; index <= 15u; ++index)
         assert(root[index] == ((index << 22) | 1u));
     assert(stats.kernel_stack_guard == 0x02080000u);
     assert(stats.kernel_worker_stack_guard == 0x02083000u);
+    assert(stats.kernel_thread_stack_arena ==
+           KERNEL_THREAD_SUPERVISOR_HOST_ARENA_BASE);
+    assert(stats.kernel_thread_stack_arena_end ==
+           KERNEL_THREAD_SUPERVISOR_HOST_ARENA_BASE +
+               KERNEL_THREAD_MAX * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE);
+    assert(stats.kernel_thread_stack_guards == KERNEL_THREAD_MAX);
     assert(stats.supervisor_table_pages == 3u);
     assert((root[1023] & 3u) == 2u);
     high_physical = root[1023] & 0xfffffff0u;

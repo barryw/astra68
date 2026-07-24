@@ -2,6 +2,7 @@
 
 #include "memory.h"
 #include "pmmu.h"
+#include "thread.h"
 
 #include <stddef.h>
 
@@ -27,12 +28,23 @@
 #if defined(KERNEL_VM_HOST_TEST)
 #define VM_KERNEL_STACK_GUARD 0x02080000u
 #define VM_KERNEL_WORKER_STACK_GUARD 0x02083000u
+#define VM_KERNEL_THREAD_STACKS_START \
+    KERNEL_THREAD_SUPERVISOR_HOST_ARENA_BASE
+#define VM_KERNEL_THREAD_STACKS_END \
+    (VM_KERNEL_THREAD_STACKS_START + \
+     KERNEL_THREAD_MAX * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE)
 #else
 extern uint8_t _kernel_stack_guard[];
 extern uint8_t _kernel_worker_stack_guard[];
+extern uint8_t _kernel_thread_stacks_start[];
+extern uint8_t _kernel_thread_stacks_end[];
 #define VM_KERNEL_STACK_GUARD ((uint32_t)(uintptr_t)_kernel_stack_guard)
 #define VM_KERNEL_WORKER_STACK_GUARD \
     ((uint32_t)(uintptr_t)_kernel_worker_stack_guard)
+#define VM_KERNEL_THREAD_STACKS_START \
+    ((uint32_t)(uintptr_t)_kernel_thread_stacks_start)
+#define VM_KERNEL_THREAD_STACKS_END \
+    ((uint32_t)(uintptr_t)_kernel_thread_stacks_end)
 #endif
 
 static uint32_t kernel_root_physical;
@@ -88,6 +100,9 @@ static void reset_stats(void)
     vm_stats.empty_root_physical = 0u;
     vm_stats.kernel_stack_guard = 0u;
     vm_stats.kernel_worker_stack_guard = 0u;
+    vm_stats.kernel_thread_stack_arena = 0u;
+    vm_stats.kernel_thread_stack_arena_end = 0u;
+    vm_stats.kernel_thread_stack_guards = 0u;
     vm_stats.supervisor_table_pages = 0u;
     vm_stats.address_spaces = 0u;
     vm_stats.user_mappings = 0u;
@@ -189,6 +204,22 @@ static void set_mmio_range(volatile uint32_t *table, uint32_t base,
         set_mmio_page(table, base + page * KERNEL_PAGE_SIZE);
 }
 
+static bool is_thread_stack_guard(uint32_t address)
+{
+    if (address < VM_KERNEL_THREAD_STACKS_START ||
+        address >= VM_KERNEL_THREAD_STACKS_END)
+        return false;
+    return (address - VM_KERNEL_THREAD_STACKS_START) %
+               KERNEL_THREAD_SUPERVISOR_SLOT_SIZE == 0u;
+}
+
+static bool is_supervisor_guard(uint32_t address)
+{
+    return address == VM_KERNEL_STACK_GUARD ||
+           address == VM_KERNEL_WORKER_STACK_GUARD ||
+           is_thread_stack_guard(address);
+}
+
 static KernelVmStatus build_supervisor_root(void)
 {
     volatile uint32_t *root;
@@ -198,9 +229,19 @@ static KernelVmStatus build_supervisor_root(void)
 
     if ((VM_KERNEL_STACK_GUARD & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
         (VM_KERNEL_WORKER_STACK_GUARD & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
+        (VM_KERNEL_THREAD_STACKS_START & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
+        (VM_KERNEL_THREAD_STACKS_END & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
+        VM_KERNEL_THREAD_STACKS_END - VM_KERNEL_THREAD_STACKS_START !=
+            KERNEL_THREAD_MAX * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE ||
         VM_KERNEL_STACK_GUARD == VM_KERNEL_WORKER_STACK_GUARD ||
+        is_thread_stack_guard(VM_KERNEL_STACK_GUARD) ||
+        is_thread_stack_guard(VM_KERNEL_WORKER_STACK_GUARD) ||
         VM_ROOT_INDEX(VM_KERNEL_STACK_GUARD) != VM_SDRAM_ROOT_INDEX ||
         VM_ROOT_INDEX(VM_KERNEL_WORKER_STACK_GUARD) !=
+            VM_SDRAM_ROOT_INDEX ||
+        VM_ROOT_INDEX(VM_KERNEL_THREAD_STACKS_START) !=
+            VM_SDRAM_ROOT_INDEX ||
+        VM_ROOT_INDEX(VM_KERNEL_THREAD_STACKS_END - 1u) !=
             VM_SDRAM_ROOT_INDEX)
         return KERNEL_VM_CORRUPT;
     status = allocate_table(VM_KERNEL_OWNER, &kernel_root_physical);
@@ -242,8 +283,7 @@ static KernelVmStatus build_supervisor_root(void)
     for (uint32_t index = 0u; index < VM_TABLE_ENTRIES; ++index) {
         uint32_t address = VM_SDRAM_BASE + index * KERNEL_PAGE_SIZE;
 
-        if (address != VM_KERNEL_STACK_GUARD &&
-            address != VM_KERNEL_WORKER_STACK_GUARD)
+        if (!is_supervisor_guard(address))
             low_table[index] = address | VM_DESC_PAGE;
     }
     root[VM_SDRAM_ROOT_INDEX] =
@@ -319,6 +359,9 @@ KernelVmStatus kernel_vm_init(void)
     vm_stats.empty_root_physical = empty_root_physical;
     vm_stats.kernel_stack_guard = VM_KERNEL_STACK_GUARD;
     vm_stats.kernel_worker_stack_guard = VM_KERNEL_WORKER_STACK_GUARD;
+    vm_stats.kernel_thread_stack_arena = VM_KERNEL_THREAD_STACKS_START;
+    vm_stats.kernel_thread_stack_arena_end = VM_KERNEL_THREAD_STACKS_END;
+    vm_stats.kernel_thread_stack_guards = KERNEL_THREAD_MAX;
     vm_stats.supervisor_table_pages = 3u;
     initialized = true;
     return KERNEL_VM_OK;
@@ -630,6 +673,12 @@ bool kernel_vm_stats(KernelVmStats *result)
     result->kernel_stack_guard = vm_stats.kernel_stack_guard;
     result->kernel_worker_stack_guard =
         vm_stats.kernel_worker_stack_guard;
+    result->kernel_thread_stack_arena =
+        vm_stats.kernel_thread_stack_arena;
+    result->kernel_thread_stack_arena_end =
+        vm_stats.kernel_thread_stack_arena_end;
+    result->kernel_thread_stack_guards =
+        vm_stats.kernel_thread_stack_guards;
     result->supervisor_table_pages = vm_stats.supervisor_table_pages;
     result->address_spaces = vm_stats.address_spaces;
     result->user_mappings = vm_stats.user_mappings;

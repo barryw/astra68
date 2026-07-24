@@ -1,6 +1,6 @@
 # Astra 68 kernel memory budget
 
-Status: measured K1 baseline plus bounded revision-0.1 targets (2026-07-24)
+Status: measured K2 blocking/thread baseline plus bounded revision-0.1 targets (2026-07-24)
 
 The machine has exactly 32 MiB of SDRAM. Every static pool, frame, mapping,
 queue, pin, and graphics reservation is reported separately. A budget is not
@@ -91,7 +91,32 @@ The worker adds one fixed 8 KiB mapped stack and one 4 KiB unmapped guard;
 `_kernel_memory_end` advances to `0x02037000`, still inside the 512 KiB kernel
 reservation. No queue or retry path allocates memory dynamically.
 
-Major K1 static objects are:
+The 2026-07-24 K2 blocking/thread development build, based on
+`be27074ff67005095c5ec4e6b516a5c0708df049-dirty`, reports:
+
+| ELF section | Bytes |
+|---|---:|
+| `.text.entry` | 80 |
+| `.vectors` | 1,024 |
+| `.text` plus read-only data | 34,912 |
+| `.data` | 0 |
+| `.bss` | 7,968 |
+| `.noinit` | 102,016 |
+| interrupt-stack section including alignment and guard | 12,800 |
+| worker MSP section including guard | 12,288 |
+| 16 guarded thread supervisor-stack slots | 196,608 |
+| total through `_kernel_memory_end` | 364,544 |
+| flat kernel binary | 36,960 |
+
+The image occupies 364,544 bytes of the fixed 512 KiB kernel reservation and
+leaves 159,744 bytes of headroom. Its measured scheduler state is 16 x
+156-byte thread records, 128 bytes of ready-queue heads/tails, an 8-byte
+bitmap/count pair, and 40 bytes of pool accounting: 2,672 bytes total. The four
+process records occupy 1,784 bytes. The per-thread stack arena is 16 fixed
+12 KiB slots: one unmapped 4 KiB guard followed by one mapped 8 KiB supervisor
+stack. Wait queues are 12 bytes and the current event object is 16 bytes.
+
+Major current static objects are:
 
 | Object | Count x size | Bytes |
 |---|---:|---:|
@@ -99,7 +124,10 @@ Major K1 static objects are:
 | per-frame owner links | 2 x 8,192 x 2 | 32,768 |
 | owner ledgers | 64 x 8 | 512 |
 | allocator bitmaps | 3 x 1,024 | 3,072 |
-| process slots | 4 x 528 | 2,112 |
+| process slots | 4 x 446 | 1,784 |
+| thread scheduler state | 16 x 156 plus queues/accounting | 2,672 |
+| guarded thread supervisor-stack arena | 16 x 12 KiB | 196,608 |
+| performance metrics/control | 8 x 36 plus control | 296 |
 | DMA slots | 32 x 36 | 1,152 |
 | block slots | 4 x 64 | 256 |
 | cached-user-frame alias ledger | 8,192 bits | 1,024 |
@@ -152,12 +180,22 @@ build report before merge.
 
 - K1 interrupt stack (ISP): 8 KiB plus one unmapped 4 KiB guard.
 - K1 deferred-worker master stack (MSP): 8 KiB plus one unmapped 4 KiB guard.
+- K2 user stack: one mapped 4 KiB page per live thread, with adjacent stack
+  bases spaced by 8 KiB so every stack has an unmapped 4 KiB guard interval.
+  The 1,000-cycle K2 soak holds two survivor stacks and repeatedly allocates a
+  third, retaining an exact 7,986-free-page baseline after every teardown.
+- Current K2 supervisor stack: one guarded 8 KiB stack for each of 16 thread
+  slots. The static arena reserves 192 KiB, of which 128 KiB is mapped stack
+  payload and 64 KiB is unmapped guard space. Full RTL and both routed-hardware
+  boots report a maximum observed use of 388 bytes.
 - Stable per-thread kernel stack target: 8 KiB committed only for a live thread
-  plus an unmapped virtual guard.
+  plus an unmapped virtual guard; replacing the fixed development arena must
+  preserve the same fault and high-water tests.
 - 128 simultaneous thread stacks would consume 1 MiB; ordinary process quotas
   prevent every process from reaching the global thread limit independently.
-- K1's ISP/MSP strategy is selected and tested. Stable per-thread kernel stacks
-  still require an explicit budget before multi-threaded processes are enabled.
+- K2 user threads enter on their own guarded supervisor stacks. The internal
+  qualification event blocks and wakes across syscalls; no stable blocking
+  user ABI is exposed yet.
 
 Every build must emit static stack-usage data. Hardware qualification records
 canary and high-water values under nested format-B faults and interrupt storms.

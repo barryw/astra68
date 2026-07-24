@@ -1,5 +1,6 @@
 #include "block.h"
 
+#include "generation.h"
 #include "platform.h"
 #include "vesta.h"
 
@@ -133,9 +134,7 @@ static bool refresh_device_state(void)
     device_state.reserved = 0u;
     device_state_valid = true;
     if (changed) {
-        ++device_generation;
-        if (device_generation == 0u)
-            ++device_generation;
+        device_generation = kernel_generation_next(device_generation);
     }
     return true;
 }
@@ -234,9 +233,8 @@ KernelBlockStatus kernel_block_submit(uint32_t owner, uint8_t operation,
     if (slot == NULL)
         return KERNEL_BLOCK_QUEUE_FULL;
 
-    ++slot->generation;
-    if (slot->generation == 0u)
-        ++slot->generation;
+    slot->generation = (uint16_t)kernel_generation_next_masked(
+        slot->generation, UINT16_MAX);
     handle = make_handle((uint32_t)(slot - slots), slot->generation);
     clear_token(&token);
     if (has_dma) {

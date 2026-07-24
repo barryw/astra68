@@ -3,6 +3,7 @@
 #include "user_copy.h"
 #include "context.h"
 #include "dispatch.h"
+#include "thread.h"
 
 	.section .vectors, "a", @progbits
 	.balign 1024
@@ -140,7 +141,7 @@ _kernel_restore_user_context:
 	move.l  %d0, %a0
 	move.l  KERNEL_CONTEXT_USP_OFFSET(%a0), %a1
 	move.l  %a1, %usp
-	lea     _kernel_stack_top, %sp
+	move.l  KERNEL_THREAD_KERNEL_STACK_TOP_OFFSET(%a0), %sp
 	clr.w   -(%sp)
 	move.l  KERNEL_CONTEXT_PC_OFFSET(%a0), -(%sp)
 	move.w  KERNEL_CONTEXT_SR_OFFSET(%a0), -(%sp)

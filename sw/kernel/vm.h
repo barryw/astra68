@@ -37,6 +37,9 @@ typedef struct KernelVmStats {
     uint32_t empty_root_physical;
     uint32_t kernel_stack_guard;
     uint32_t kernel_worker_stack_guard;
+    uint32_t kernel_thread_stack_arena;
+    uint32_t kernel_thread_stack_arena_end;
+    uint32_t kernel_thread_stack_guards;
     uint32_t supervisor_table_pages;
     uint32_t address_spaces;
     uint32_t user_mappings;

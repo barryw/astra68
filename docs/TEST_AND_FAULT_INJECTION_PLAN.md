@@ -21,11 +21,11 @@ soak duration may scale by backend speed.
 The shared conformance framework owns CPU/PMMU cases. An adapter may translate
 transport, but expected initial/final state and pass criteria remain identical.
 
-## Current K1 gate
+## Current kernel gate
 
 The candidate must retain all of these before routing:
 
-- 12 kernel host suites, GCC `-fanalyzer`, ASan/UBSan, and leak detection;
+- 16 kernel host suites, GCC `-fanalyzer`, ASan/UBSan, and leak detection;
 - 15 AstraVM Rust tests, rustfmt, and Clippy `-D warnings`;
 - 90 shared framework tests and all 30 executions of the 15-case Musashi/RTL
   matrix;
@@ -46,6 +46,28 @@ The candidate must retain all of these before routing:
 - the guarded worker must cover signal coalescing, signal-during-service,
   deferred pinned-DMA retry, timer wake, atomic idle, user return, canary, and
   high-water accounting without allocation or unbounded queues;
+- the thread pool must cover every priority 0-31, FIFO order among equals,
+  highest-priority selection, generation reuse, invalid-input rollback, global
+  and per-process exhaustion, and exact frame reclamation;
+- guarded per-thread supervisor stacks must cover descriptor protection,
+  canary corruption, bounded high-water scanning, and entry accounting;
+- wait queues must cover stale-sequence rejection, duplicate block rejection,
+  priority/FIFO wake-one, bounded wake-all, close, and process retirement with
+  no lost wakeup;
+- aligned byte copy/clear primitives must cover every source/destination
+  alignment and length through the longword fast path, with guard bytes proving
+  no underrun or overrun;
+- target scheduling must run two threads in one CRP and one thread in another,
+  prove same-address-space switches do not increment VM/CRP switches, then
+  fault and reap only the second process;
+- the K2 release-development image must pass the complete pin-level SDRAM model
+  and two independent ULX3S SRAM reloads of the exact qualified bitstream while
+  matching the expected FPGA build ID and SD ROM CRC32;
+- K2 must sample syscall, timer, user-fault, scheduler-pick, same/cross-CRP,
+  block, and wake paths against the fixed budgets in `performance.h`, with at
+  least one sample and zero overruns for every metric;
+- the exact 1,000-cycle Musashi lifecycle workload must complete at or below
+  675,000,000 virtual machine cycles;
 - a real M=1 interrupt must build exact format-0 MSP and format-1 ISP frames,
   preserve saved M, chain `RTE` through MSP, and restart a multiword
   instruction after clock-enable stalls;
@@ -56,6 +78,20 @@ The candidate must retain all of these before routing:
 Known upstream failures are tracked evidence, not waivers. A new mismatch is a
 regression until classified against Motorola behavior and fixed or given a new
 Motorola-corrected oracle.
+
+## Change preflight
+
+Before creating kernel code, search implementation, tests, and contracts for an
+existing owner of the required behavior. The change review records which code
+was reused or consolidated and why any new mechanism is necessary. New helpers
+that merely duplicate generation handling, byte operations, queue state, or
+accounting fail review.
+
+For a hot path, capture target-representative cycles and kernel/image size before
+editing, repeat the same workload afterward, and add an automated ceiling before
+higher layers depend on it. Inspect generated MC68030 assembly as part of that
+review. Hand assembly is accepted when it materially improves the measured path
+without weakening the C-level contract or its tests.
 
 ## Deterministic failure injection
 
@@ -215,6 +251,17 @@ Hardware tests record maximum and percentile values for IRQ top-half duration,
 interrupt-disabled time, scheduler lock, wake-to-run latency, same/cross-CRP
 switch, syscall, copy, map/unmap, ATC miss, and device reset. The limits in
 `LOCKING_AND_PREEMPTION.md` are release failures, not informational warnings.
+
+The current K2 limits are 50,000 cycles for syscall and timer dispatch, 125,000
+for user-fault containment, 10,000 for scheduler selection, 15,000 for same-CRP
+switch, 50,000 for cross-CRP switch, and 15,000 each for block and wake. The
+exact coherent full RTL maxima are 20,806, 14,344, 21,896, 1,449, 1,567, 2,540,
+1,265, and 2,437 cycles respectively. Two routed-hardware runs also pass with
+zero overruns; their largest observed value is 29,705 cycles for syscall
+dispatch. Retained evidence is
+`docs/evidence/k2-be27074-refactor-perf-rtl.log`,
+`docs/evidence/k2-25d9cb8e-be27074-refactor-perf-hw-1.log`, and
+`docs/evidence/k2-25d9cb8e-be27074-refactor-perf-hw-2.log`.
 
 ## Panic and retained diagnostics
 

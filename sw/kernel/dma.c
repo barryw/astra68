@@ -1,5 +1,6 @@
 #include "dma.h"
 
+#include "generation.h"
 #include "memory.h"
 
 #include <stddef.h>
@@ -187,9 +188,8 @@ KernelDmaStatus kernel_dma_create(uint32_t owner, uint32_t byte_size,
             KERNEL_DMA_OUT_OF_MEMORY : KERNEL_DMA_INVALID_ARGUMENT;
     }
 
-    ++slot->generation;
-    if (slot->generation == 0u)
-        ++slot->generation;
+    slot->generation = (uint16_t)kernel_generation_next_masked(
+        slot->generation, UINT16_MAX);
     slot->owner = owner;
     slot->physical_base = physical_base;
     slot->byte_size = byte_size;
@@ -269,9 +269,8 @@ KernelDmaStatus kernel_dma_begin(KernelDmaHandle handle, uint32_t owner,
     if (kernel_memory_pin(pin_base, pin_frames, owner) != KERNEL_MEMORY_OK)
         return KERNEL_DMA_CORRUPT;
 
-    ++slot->transfer_generation;
-    if (slot->transfer_generation == 0u)
-        ++slot->transfer_generation;
+    slot->transfer_generation = kernel_generation_next(
+        slot->transfer_generation);
     slot->device_generation = device_generation;
     slot->transfer_physical = physical;
     slot->transfer_bytes = byte_count;

@@ -1,23 +1,16 @@
 #include "context.h"
 
+#include "bytes.h"
 #include "exception.h"
 
 #include <stddef.h>
-
-static void clear_context(KernelCpuContext *context)
-{
-    uint8_t *bytes = (uint8_t *)context;
-
-    for (uint32_t index = 0u; index < sizeof(*context); ++index)
-        bytes[index] = 0u;
-}
 
 void kernel_context_initialize(KernelCpuContext *context,
                                uint32_t program_counter, uint32_t user_stack)
 {
     if (context == NULL)
         return;
-    clear_context(context);
+    kernel_bytes_clear(context, sizeof(*context));
     context->usp = user_stack;
     context->program_counter = program_counter;
     context->status_register = 0u;

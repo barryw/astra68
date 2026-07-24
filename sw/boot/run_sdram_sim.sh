@@ -10,6 +10,7 @@ source ~/oss-cad-suite/environment 2>/dev/null || true
 mem_bench_bytes="${MEM_BENCH_BYTES:-256}"
 dma_bench_bytes="${DMA_BENCH_BYTES:-1024}"
 test_bytes="${SDRAM_SIM_TEST_BYTES:-65536}"
+timeout_ns="${SDRAM_SIM_TIMEOUT_NS:-$((500000000 + test_bytes * 40000))}"
 progress="${SDRAM_SIM_PROGRESS:-0}"
 reuse_sim="${SDRAM_SIM_REUSE:-0}"
 kernel_panic_selftest="${KERNEL_PANIC_SELFTEST:-0}"
@@ -58,6 +59,7 @@ if [[ "$reuse_sim" != "1" || ! -x obj_dir_boot_sdram/Vtb_boot_sdram ]]; then
     verilator --binary -j 0 --Mdir obj_dir_boot_sdram \
         --top-module tb_boot_sdram -Wno-lint -Wno-UNOPTFLAT --timing \
         -GTEST_BYTES="$test_bytes" -GPROGRESS="$progress" \
+        -GBOOT_TIMEOUT_NS="$timeout_ns" \
         tb_boot_sdram.sv tb_sdram32_controller.sv ecp5pll_sim.sv \
         ../astra_soc.sv ../astra_front_panel.sv ../vesta_irq_timer.sv ../boot_memory_map.sv ../tg68k_cache_store.sv \
         ../astraea_blitter.sv ../astraea_pixel_port.sv ../astraea_draw.sv \

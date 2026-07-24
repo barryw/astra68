@@ -1,6 +1,6 @@
 # Astra 68 kernel and service ABI
 
-Status: provisional ABI contract, revision 0.1 (2026-07-22)
+Status: provisional ABI contract, revision 0.1 (2026-07-24)
 
 The ABI is big-endian, 32-bit, naturally aligned, and independent of kernel C
 layouts. Only the user/kernel ABI and versioned service protocols are stable.
@@ -41,15 +41,20 @@ Current syscall numbers are provisional until the first NDK ABI release:
 
 | Number | Name | State | Contract |
 |---:|---|---|---|
-| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010000`, `D2=self handle` |
+| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010000`, `D2=process handle`, `D3=calling-thread handle` |
 | 1 | `PROGRESS` | K1 TEST ONLY | monotonic test progress, not a product ABI |
-| 2 | `YIELD` | CURRENT | voluntary ready-queue rotation |
+| 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `EXIT` | CURRENT | terminates the calling process in K1 |
 | 4 | `CLOSE` | CURRENT | closes `D1` in the caller's handle table |
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
 not panic. A future ABI query returns supported major/minor versions and feature
 bits before additional calls freeze.
+
+The provisional thread-entry register contract is `D2=initial argument`,
+`D4=process self handle`, and `D5=thread self handle`; all other general
+registers begin at zero. This contract is covered by the K2 target image but is
+not frozen until public thread-creation calls enter the NDK.
 
 ## Result model
 

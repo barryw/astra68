@@ -2,6 +2,7 @@
 
 #include "exception.h"
 #include "panic.h"
+#include "performance.h"
 #include "platform.h"
 #include "process.h"
 #include "user_copy.h"
@@ -62,9 +63,10 @@ static void record_user_fault_irqoff(uint32_t started)
         user_fault_irqoff_max_cycles = elapsed;
 }
 
-static KernelDispatchTarget dispatch_user_fault(const uint32_t *registers,
-                                                const void *raw_frame,
-                                                uint32_t user_stack)
+static __attribute__((noinline))
+KernelDispatchTarget dispatch_user_fault_fast(const uint32_t *registers,
+                                              const void *raw_frame,
+                                              uint32_t user_stack)
 {
     KernelCpuContext *next = NULL;
     KernelProcessStatus status;
@@ -82,6 +84,29 @@ static KernelDispatchTarget dispatch_user_fault(const uint32_t *registers,
     scheduler_trace(0x4b464f55u); /* KFOU */
     record_user_fault_irqoff(started);
     return KERNEL_DISPATCH_WORKER;
+}
+
+static __attribute__((noinline))
+KernelDispatchTarget dispatch_user_fault_profiled(
+    const uint32_t *registers, const void *raw_frame, uint32_t user_stack)
+{
+    KernelPerformanceToken performance;
+    KernelDispatchTarget target;
+
+    performance = kernel_performance_begin_sampled(
+        KERNEL_PERFORMANCE_USER_FAULT);
+    target = dispatch_user_fault_fast(registers, raw_frame, user_stack);
+    kernel_performance_end(performance);
+    return target;
+}
+
+static KernelDispatchTarget dispatch_user_fault(const uint32_t *registers,
+                                                const void *raw_frame,
+                                                uint32_t user_stack)
+{
+    if (kernel_performance_sampling_enabled == 0u)
+        return dispatch_user_fault_fast(registers, raw_frame, user_stack);
+    return dispatch_user_fault_profiled(registers, raw_frame, user_stack);
 }
 
 KernelDispatchTarget kernel_exception_entry_dispatch(
@@ -111,7 +136,8 @@ KernelDispatchTarget kernel_access_entry_dispatch(const uint32_t *registers,
     return dispatch_user_fault(registers, raw_frame, user_stack);
 }
 
-KernelDispatchTarget kernel_syscall_entry_dispatch(
+static __attribute__((noinline))
+KernelDispatchTarget syscall_entry_dispatch_fast(
     const uint32_t *registers, const void *raw_frame, uint32_t user_stack)
 {
     KernelCpuContext *next = NULL;
@@ -139,7 +165,30 @@ KernelDispatchTarget kernel_syscall_entry_dispatch(
     return kernel_dispatch_user_target(next);
 }
 
-KernelDispatchTarget kernel_timer_entry_dispatch(
+static __attribute__((noinline))
+KernelDispatchTarget syscall_entry_dispatch_profiled(
+    const uint32_t *registers, const void *raw_frame, uint32_t user_stack)
+{
+    KernelPerformanceToken performance;
+    KernelDispatchTarget target;
+
+    performance = kernel_performance_begin_sampled(
+        KERNEL_PERFORMANCE_SYSCALL_DISPATCH);
+    target = syscall_entry_dispatch_fast(registers, raw_frame, user_stack);
+    kernel_performance_end(performance);
+    return target;
+}
+
+KernelDispatchTarget kernel_syscall_entry_dispatch(
+    const uint32_t *registers, const void *raw_frame, uint32_t user_stack)
+{
+    if (kernel_performance_sampling_enabled == 0u)
+        return syscall_entry_dispatch_fast(registers, raw_frame, user_stack);
+    return syscall_entry_dispatch_profiled(registers, raw_frame, user_stack);
+}
+
+static __attribute__((noinline))
+KernelDispatchTarget timer_entry_dispatch_fast(
     const uint32_t *registers, const void *raw_frame, uint32_t user_stack)
 {
     KernelExceptionFrame frame;
@@ -174,4 +223,26 @@ KernelDispatchTarget kernel_timer_entry_dispatch(
         return KERNEL_DISPATCH_WORKER;
     scheduler_trace(0x4b544f55u); /* KTOU */
     return kernel_dispatch_user_target(next);
+}
+
+static __attribute__((noinline))
+KernelDispatchTarget timer_entry_dispatch_profiled(
+    const uint32_t *registers, const void *raw_frame, uint32_t user_stack)
+{
+    KernelPerformanceToken performance;
+    KernelDispatchTarget target;
+
+    performance = kernel_performance_begin_sampled(
+        KERNEL_PERFORMANCE_TIMER_DISPATCH);
+    target = timer_entry_dispatch_fast(registers, raw_frame, user_stack);
+    kernel_performance_end(performance);
+    return target;
+}
+
+KernelDispatchTarget kernel_timer_entry_dispatch(
+    const uint32_t *registers, const void *raw_frame, uint32_t user_stack)
+{
+    if (kernel_performance_sampling_enabled == 0u)
+        return timer_entry_dispatch_fast(registers, raw_frame, user_stack);
+    return timer_entry_dispatch_profiled(registers, raw_frame, user_stack);
 }

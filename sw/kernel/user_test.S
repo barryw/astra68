@@ -1,9 +1,11 @@
 #include <astra/syscall.h>
+#include "qualification.h"
 
 	.section .rodata.user_test, "a", @progbits
 	.balign 4
 	.globl  _k1_survivor_image_start
 	.globl  _k1_survivor_image_entry
+	.globl  _k2_sibling_image_entry
 	.globl  _k1_survivor_image_end
 	.globl  _k1_offender_image_start
 	.globl  _k1_offender_image_entry
@@ -13,6 +15,14 @@ _k1_survivor_image_start:
 _k1_survivor_image_entry:
 	movea.l #0x70000000, %a0
 	move.l  #0x53555256, (%a0)
+	moveq   #ASTRA_SYSCALL_YIELD, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     3f
+	move.l  #KERNEL_QUALIFICATION_EVENT_SIGNAL, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     3f
 	moveq   #0, %d3
 1:	cmpi.l  #0x53555256, (%a0)
 	bne     2f
@@ -28,6 +38,19 @@ _k1_survivor_image_entry:
 3:	moveq   #ASTRA_SYSCALL_EXIT, %d0
 	trap    #ASTRA_SYSCALL_TRAP
 	bra     3b
+
+_k2_sibling_image_entry:
+	movea.l #0x70002000, %a0
+	move.l  #KERNEL_QUALIFICATION_EVENT_WAIT, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     8f
+	move.l  #0x5349424c, 4(%a0)
+	move.l  #KERNEL_QUALIFICATION_EVENT_WAIT, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+8:	moveq   #ASTRA_SYSCALL_EXIT, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	bra     8b
 _k1_survivor_image_end:
 
 	.balign 4

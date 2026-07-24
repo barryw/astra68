@@ -2,11 +2,13 @@
 
 #include "kernel_build_info.h"
 #include "block.h"
+#include "bytes.h"
 #include "dma.h"
 #include "dispatch.h"
 #include "exception.h"
 #include "memory.h"
 #include "panic.h"
+#include "performance.h"
 #include "platform.h"
 #include "process.h"
 #include "user_copy.h"
@@ -31,6 +33,7 @@ extern uint8_t _kernel_stack_guard[];
 extern uint8_t _kernel_vectors[];
 extern uint8_t _k1_survivor_image_start[];
 extern uint8_t _k1_survivor_image_entry[];
+extern uint8_t _k2_sibling_image_entry[];
 extern uint8_t _k1_survivor_image_end[];
 extern uint8_t _k1_offender_image_start[];
 extern uint8_t _k1_offender_image_entry[];
@@ -48,14 +51,6 @@ static KernelAddressSpace user_copy_selftest_space;
 #if ASTRA_KERNEL_SOAK_SELFTEST
 static KernelPlatformCycleCount soak_started;
 #endif
-
-static void copy_bytes(void *destination, const void *source, uint32_t size)
-{
-    uint8_t *out = destination;
-    const uint8_t *in = source;
-
-    while (size-- != 0u) *out++ = *in++;
-}
 
 static void screen_clear(void)
 {
@@ -379,17 +374,121 @@ static void validate_image_contract(void)
         kernel_panic("early log contract mismatch");
 }
 
+static void report_kernel_performance(
+    const KernelPerformanceStats *performance)
+{
+    console_puts("K2 PERF irq syscall=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_SYSCALL_DISPATCH].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_SYSCALL_DISPATCH);
+    console_puts(" timer=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_TIMER_DISPATCH].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_TIMER_DISPATCH);
+    console_puts(" fault=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_USER_FAULT].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_USER_FAULT);
+    console_putc('\n');
+    console_puts("K2 PERF sched pick=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_SCHEDULER_PICK].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_SCHEDULER_PICK);
+    console_puts(" same=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_SAME_CRP_SWITCH].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_SAME_CRP_SWITCH);
+    console_puts(" cross=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_CROSS_CRP_SWITCH].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_CROSS_CRP_SWITCH);
+    console_putc('\n');
+    console_puts("K2 PERF wait block=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_WAIT_BLOCK].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_WAIT_BLOCK);
+    console_puts(" wake=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_WAKE].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_WAKE);
+    console_puts(" overruns=0\n");
+}
+
+static void report_kernel_performance_failure(
+    const KernelPerformanceStats *performance,
+    KernelPerformanceMetric failed_metric)
+{
+    const KernelPerformanceMetricStats *metric;
+
+    report_kernel_performance(performance);
+    console_puts("K2 PERF FAIL metric=");
+    console_dec32((uint32_t)failed_metric);
+    if ((uint32_t)failed_metric >= KERNEL_PERFORMANCE_METRIC_COUNT) {
+        console_putc('\n');
+        return;
+    }
+    metric = &performance->metric[failed_metric];
+    console_puts(" samples=");
+    console_dec32(metric->samples);
+    console_puts(" max=");
+    console_dec32(metric->maximum_cycles);
+    console_puts(" budget=");
+    console_dec32(metric->budget_cycles);
+    console_puts(" overruns=");
+    console_dec32(metric->overruns);
+    console_putc('\n');
+}
+
 void kernel_process_milestone_reached(void)
 {
+    KernelPerformanceMetric failed_metric;
+    KernelPerformanceStats performance;
     KernelSchedulerStats stats;
 
-    if (!kernel_process_stats(&stats))
+    kernel_performance_freeze();
+    if (!kernel_process_stats(&stats) ||
+        !kernel_performance_stats(&performance))
         kernel_panic("scheduler statistics unavailable");
+    if (!kernel_performance_pass(&performance,
+                                 KERNEL_PERFORMANCE_REQUIRED_MASK,
+                                 &failed_metric)) {
+        report_kernel_performance_failure(&performance, failed_metric);
+        kernel_panic("kernel performance budget exceeded");
+    }
     console_puts("\nUser tasks .......... OK, 100 Hz preemption\n");
     console_puts("Fault containment ... OK, offender reaped\n");
     console_puts("Context switches .... ");
     console_dec32(stats.context_switches);
+    console_puts("\nThread scheduler .... ");
+    console_dec32(stats.live_threads);
+    console_puts(" live, priority queues OK\n");
+    console_puts("Same-CRP switches ... ");
+    console_dec32(stats.same_address_space_switches);
     console_putc('\n');
+    console_puts("Wait/wake ........... ");
+    console_dec32(stats.wait_blocks);
+    console_puts(" blocks, ");
+    console_dec32(stats.event_wakeups);
+    console_puts(" wake, ");
+    console_dec32(stats.wake_preemptions);
+    console_puts(" priority handoff\n");
+    console_puts("Thread ISP max ...... ");
+    console_dec32(stats.kernel_stack_max_used);
+    console_puts(" / ");
+    console_dec32(KERNEL_THREAD_SUPERVISOR_STACK_SIZE);
+    console_puts(" bytes\n");
+    report_kernel_performance(&performance);
+    console_puts("K2 PERFORMANCE PASS\n");
+    console_puts("\nK2 BLOCKING SUBSTRATE PASS\n");
+    console_puts("\nK2 THREAD SUBSTRATE PASS\n");
     console_puts("\nK1 PROTECTED ENTRY PASS\n");
     console_puts("KERNEL MULTITASKING\n");
     VESTA->SCRATCH = ASTRA_KERNEL_STATUS_K1_READY;
@@ -400,11 +499,14 @@ void kernel_process_soak_checkpoint(uint32_t cycles,
                                     uint32_t baseline_free_frames)
 {
     KernelMemoryStats memory_stats;
+    KernelPerformanceMetric failed_metric;
+    KernelPerformanceStats performance;
     KernelSchedulerStats scheduler_stats;
     KernelPlatformCycleCount now;
     KernelPlatformCycleCount elapsed;
 
     if (!kernel_memory_stats(&memory_stats) ||
+        !kernel_performance_stats(&performance) ||
         !kernel_process_stats(&scheduler_stats) ||
         memory_stats.free_frames != baseline_free_frames ||
         scheduler_stats.soak_cycles != cycles ||
@@ -412,6 +514,12 @@ void kernel_process_soak_checkpoint(uint32_t cycles,
         scheduler_stats.completed_user_fault_teardowns != cycles ||
         scheduler_stats.completed_teardowns != cycles)
         kernel_panic("K1 soak resource baseline drift");
+    if (!kernel_performance_pass(&performance,
+                                 KERNEL_PERFORMANCE_REQUIRED_MASK,
+                                 &failed_metric)) {
+        report_kernel_performance_failure(&performance, failed_metric);
+        kernel_panic("K2 soak performance budget exceeded");
+    }
 
     kernel_platform_cpu_cycles(&now);
     elapsed.low = now.low - soak_started.low;
@@ -436,6 +544,12 @@ void kernel_process_soak_checkpoint(uint32_t cycles,
     console_hex32(elapsed.high);
     console_hex32(elapsed.low);
     console_putc('\n');
+    report_kernel_performance(&performance);
+    if (!kernel_performance_start_window(KERNEL_PERFORMANCE_SOAK_MASK))
+        kernel_panic("K2 soak sampling window incomplete");
+    console_puts("K2 PERFORMANCE SOAK PASS cycle=");
+    console_dec32(cycles);
+    console_putc('\n');
     VESTA->SCRATCH = ASTRA_KERNEL_STATUS_K1_SOAK;
 }
 #endif
@@ -447,10 +561,13 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     KernelVmStats vm_stats;
     KernelCpuContext *first_context;
     uint32_t process_id;
+    uint32_t survivor_process_id;
+    uint32_t sibling_thread_id;
     uint32_t offender_image_size;
     uint32_t offender_entry_offset;
     uint32_t survivor_image_size;
     uint32_t survivor_entry_offset;
+    uint32_t sibling_entry_offset;
 #if ASTRA_KERNEL_SOAK_SELFTEST
     KernelMemoryStats soak_baseline;
 #endif
@@ -473,7 +590,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         console_putc('\n');
         kernel_panic("invalid BootInfo");
     }
-    copy_bytes(&boot_info, firmware_info, sizeof(boot_info));
+    kernel_bytes_copy(&boot_info, firmware_info, sizeof(boot_info));
     validate_image_contract();
     if (kernel_memory_init(&boot_info) != KERNEL_MEMORY_OK)
         kernel_panic("physical memory map rejected");
@@ -487,6 +604,11 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         kernel_panic("physical memory stats unavailable");
     if (!kernel_vm_stats(&vm_stats))
         kernel_panic("virtual memory stats unavailable");
+    if (vm_stats.kernel_thread_stack_guards != KERNEL_THREAD_MAX ||
+        vm_stats.kernel_thread_stack_arena_end -
+                vm_stats.kernel_thread_stack_arena !=
+            KERNEL_THREAD_MAX * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE)
+        kernel_panic("thread ISP arena contract mismatch");
     kernel_dma_init();
     kernel_block_init();
     if (kernel_read_vbr() != (uint32_t)_kernel_vectors)
@@ -518,6 +640,9 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     console_puts(" total\n");
     console_puts("User copy .......... OK, fault recovery verified\n");
     console_puts("Kernel worker ...... OK, guarded MSP\n");
+    console_puts("Thread ISPs ........ ");
+    console_dec32(vm_stats.kernel_thread_stack_guards);
+    console_puts(" guarded, 8 KiB each\n");
 
     kernel_platform_interrupt_init(boot_info.cpu_hz);
     kernel_enable_interrupts();
@@ -563,6 +688,8 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         (uint32_t)(_k1_survivor_image_end - _k1_survivor_image_start);
     survivor_entry_offset =
         (uint32_t)(_k1_survivor_image_entry - _k1_survivor_image_start);
+    sibling_entry_offset =
+        (uint32_t)(_k2_sibling_image_entry - _k1_survivor_image_start);
     offender_image_size =
         (uint32_t)(_k1_offender_image_end - _k1_offender_image_start);
     offender_entry_offset =
@@ -571,8 +698,13 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     kernel_process_init();
     if (kernel_process_create(_k1_survivor_image_start, survivor_image_size,
                               survivor_entry_offset, 0u,
-                              &process_id) != KERNEL_PROCESS_OK)
+                              &survivor_process_id) != KERNEL_PROCESS_OK)
         kernel_panic("survivor process creation failed");
+    if (kernel_process_create_thread(
+            survivor_process_id, sibling_entry_offset, 0u,
+            KERNEL_THREAD_PRIORITY_NORMAL + 1u, &sibling_thread_id) !=
+            KERNEL_PROCESS_OK || sibling_thread_id == 0u)
+        kernel_panic("sibling thread creation failed");
 #if ASTRA_KERNEL_SOAK_SELFTEST
     if (!kernel_memory_stats(&soak_baseline))
         kernel_panic("K1 soak baseline unavailable");
@@ -596,5 +728,6 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         first_context == NULL)
         kernel_panic("initial process scheduling failed");
     console_puts("User processes ...... 2 ready, cache isolation armed\n");
+    console_puts("User threads ........ 3 ready, priority scheduler armed\n");
     kernel_enter_user(first_context);
 }

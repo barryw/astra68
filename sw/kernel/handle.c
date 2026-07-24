@@ -1,5 +1,7 @@
 #include "handle.h"
 
+#include "generation.h"
+
 #include <stddef.h>
 
 #define KERNEL_HANDLE_SLOT_BITS 8u
@@ -11,12 +13,6 @@ typedef struct KernelHandleReleaseRecord {
     KernelHandleRelease release;
     void *context;
 } KernelHandleReleaseRecord;
-
-static uint32_t next_generation(uint32_t generation)
-{
-    generation = (generation + 1u) & KERNEL_HANDLE_GENERATION_MASK;
-    return generation == 0u ? 1u : generation;
-}
 
 static KernelHandle make_handle(uint32_t index, uint32_t generation)
 {
@@ -59,7 +55,8 @@ static void invalidate_entry(KernelHandleEntry *entry,
     entry->type = KERNEL_OBJECT_NONE;
     entry->occupied = 0u;
     entry->reserved = 0u;
-    entry->generation = next_generation(entry->generation);
+    entry->generation = kernel_generation_next_masked(
+        entry->generation, KERNEL_HANDLE_GENERATION_MASK);
 }
 
 void kernel_handle_table_init(KernelHandleTable *table)

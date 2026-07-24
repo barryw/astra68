@@ -104,6 +104,44 @@ separates implemented evidence from planned work.
 
 ## Current integration state
 
+- The active K2 development snapshot, based on
+  `be27074ff67005095c5ec4e6b516a5c0708df049-dirty`, splits schedulable threads
+  from process/address-space ownership. It has four process records, 16
+  generation-safe thread records, guarded user and 8 KiB supervisor stacks per
+  thread, 32 fixed-priority FIFO queues, a 32-bit ready bitmap, and
+  highest-priority selection with round-robin fairness among equals. A process
+  supplies default priority 16 and user ceiling 23; the scheduler runs threads,
+  not processes. Same-process switches retain CRP and bypass cache/ATC
+  maintenance. Sequence-checked wait queues provide atomic block, priority/FIFO
+  wake-one and wake-all; the first event object proves signal, close, and
+  immediate higher-priority handoff. Process death withdraws every sibling from
+  ready and wait queues before deferred resource destruction, and records are
+  reused only after the guarded worker finishes teardown.
+  Sixteen host suites, GCC `-fanalyzer`, ASan/UBSan, canonical m68k build, all
+  Rust gates, Musashi normal boot, and the 1,000-cycle create/fault/reap workload
+  pass. Shared aligned byte primitives reduced that exact Musashi workload from
+  895,512,627 to 645,759,523 virtual cycles. Reusing the common nonzero
+  generation helpers in DMA and block ownership then removed 12 image bytes and
+  another 436 cycles, yielding 645,759,087 virtual cycles; an automated
+  675,000,000-cycle cap now prevents recurrence. The kernel is 36,960 bytes
+  with SHA-256
+  `1ee4232e1cc7c637f4c0ea06787191193fb23c64a19b603fc51d89539b425a29`.
+  The HDMI-enabled 48,384-byte boot payload has CRC32 `E28408B4` and SHA-256
+  `e607ce7de18da62d99b1e6fd15e5d4f990af1d615dab51b8fb2d68a136c85b93`;
+  the 48,416-byte packaged ROM SHA-256 is
+  `735703697b73abbf3369dcba03801f7c8d6f8e77082630c3ee09442703fb569c`.
+  The coherent full pin-level RTL/SDRAM run measures 115.04 MB/s BIST, records
+  zero performance overruns, and reaches K2 blocking/thread plus retained K1.
+  Two independent SRAM reloads of exact routed build `25D9CB8E` on the
+  NUC-attached ULX3S pass the same path in 2.333 and 2.338 seconds, with a
+  388-byte maximum
+  supervisor-stack high-water mark. This is a software-only source change: the
+  existing production bitstream was reused, FPGA flash remains `25D9CB8E`, and
+  no synthesis, placement, timing, or utilization result changes. Normal
+  read-only AstraHost firmware was restored after updating only
+  `/ASTRA68.ROM`; unrelated SD-card data was not modified. A mixed-source RTL
+  scratch run and an accidental rollback-bitstream load were rejected by source
+  and build-identity gates and are not acceptance evidence.
 - The minimum kernel-boot hardware is now implemented rather than stubbed:
   Vesta provides a 32-source programmable vectored interrupt controller and
   two timers; AstraHost provides queued runtime block I/O and normalized input

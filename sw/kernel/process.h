@@ -3,6 +3,7 @@
 
 #include "context.h"
 #include "handle.h"
+#include "thread.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -13,10 +14,11 @@
 
 #define KERNEL_PROCESS_MAX 4u
 #define KERNEL_PROCESS_CODE_BASE 0x00100000u
-#define KERNEL_PROCESS_STACK_BASE 0x70000000u
+#define KERNEL_PROCESS_STACK_BASE KERNEL_THREAD_STACK_BASE
 #define KERNEL_PROCESS_STACK_TOP \
-    (KERNEL_PROCESS_STACK_BASE + 0x00001000u)
+    (KERNEL_PROCESS_STACK_BASE + KERNEL_THREAD_STACK_SIZE)
 #define KERNEL_PROCESS_PROGRESS_GOAL 64u
+#define KERNEL_PROCESS_THREAD_MAX 15u
 
 #define KERNEL_PROCESS_RIGHT_QUERY     (1u << 0)
 #define KERNEL_PROCESS_RIGHT_TERMINATE (1u << 1)
@@ -28,15 +30,6 @@ typedef enum KernelProcessState {
     KERNEL_PROCESS_EXITING,
     KERNEL_PROCESS_DEAD
 } KernelProcessState;
-
-typedef enum KernelThreadState {
-    KERNEL_THREAD_UNUSED = 0,
-    KERNEL_THREAD_CREATED,
-    KERNEL_THREAD_READY,
-    KERNEL_THREAD_RUNNING,
-    KERNEL_THREAD_BLOCKED,
-    KERNEL_THREAD_DEAD
-} KernelThreadState;
 
 typedef enum KernelProcessExitReason {
     KERNEL_PROCESS_EXIT_NONE = 0,
@@ -53,6 +46,7 @@ typedef enum KernelProcessStatus {
     KERNEL_PROCESS_INVALID_CONTEXT,
     KERNEL_PROCESS_NO_RUNNABLE,
     KERNEL_PROCESS_DEFERRED,
+    KERNEL_PROCESS_RESOURCE_LIMIT,
     KERNEL_PROCESS_CORRUPT
 } KernelProcessStatus;
 
@@ -90,6 +84,10 @@ typedef struct KernelProcessSnapshot {
     uint8_t process_state;
     uint8_t thread_state;
     uint8_t exit_reason;
+    uint8_t default_priority;
+    uint8_t priority_ceiling;
+    uint8_t thread_count;
+    uint8_t live_threads;
     uint8_t reserved;
 } KernelProcessSnapshot;
 
@@ -108,6 +106,20 @@ typedef struct KernelSchedulerStats {
     uint32_t forced_frame_releases;
     uint32_t soak_cycles;
     uint32_t current_process_id;
+    uint32_t created_threads;
+    uint32_t live_threads;
+    uint32_t dead_threads;
+    uint32_t current_thread_id;
+    uint32_t same_address_space_switches;
+    uint32_t cross_address_space_switches;
+    uint32_t priority_preemptions;
+    uint32_t wait_blocks;
+    uint32_t event_wakeups;
+    uint32_t wake_preemptions;
+    uint32_t ready_bitmap;
+    uint32_t blocked_threads;
+    uint32_t kernel_stack_entries;
+    uint32_t kernel_stack_max_used;
     uint8_t milestone_complete;
     uint8_t reserved[3];
 } KernelSchedulerStats;
@@ -118,6 +130,11 @@ KernelProcessStatus kernel_process_create(const void *image,
                                           uint32_t entry_offset,
                                           uint32_t initial_argument,
                                           uint32_t *process_id);
+KernelProcessStatus kernel_process_create_thread(uint32_t process_id,
+                                                 uint32_t entry_offset,
+                                                 uint32_t initial_argument,
+                                                 uint8_t priority,
+                                                 uint32_t *thread_id);
 KernelProcessStatus kernel_process_start(KernelCpuContext **next_context);
 bool kernel_process_active(void);
 KernelCpuContext *kernel_process_current_context(void);

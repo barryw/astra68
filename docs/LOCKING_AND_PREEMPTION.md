@@ -48,16 +48,26 @@ IRQ work.
 
 ## Preemption model
 
-**CURRENT K1:** four process slots, one thread each, 100 Hz periodic timer,
-round-robin ready selection, and a 10 ms nominal quantum. All registers, USP,
-PC, SR, and CRP are switched. A same-address-space optimization is not yet
-needed because K1 has one thread per address space.
+**CURRENT K2 substrate:** four process slots, 16 global thread slots, a
+transitional limit of 15 threads/process, and a 100 Hz periodic timer with a
+10 ms nominal quantum. The scheduler has 32 intrusive FIFO ready queues and a
+32-bit bitmap, selects the highest effective priority in bounded constant
+steps, and rotates equal-priority threads round-robin. A process is not a
+schedulable entity: it supplies a default priority and policy ceiling, while
+each thread owns base and effective priorities. Effective priority currently
+equals base priority because inheritance and donation are not implemented. Each
+thread has an 8 KiB supervisor stack behind its own 4 KiB unmapped guard.
 
-**PLANNED stable scheduler:**
+All registers, USP, PC, and SR are thread state. CRP is process state. A switch
+  between threads in one process does not reload CRP or flush caches/ATC; host,
+  Musashi, full pin-level, and ULX3S tests count that path separately from a
+  cross-CRP switch. Timer and voluntary-yield paths apply priority selection.
+  The internal K2 event path proves immediate handoff when a higher-priority
+  waiter wakes. Thread creation and event syscalls remain qualification-only;
+  no stable user synchronization ABI is exposed.
 
-- 32 fixed priorities and one 32-bit ready bitmap;
-- O(1) highest-priority selection and intrusive FIFO queues;
-- round-robin within one priority;
+**PLANNED stable scheduler work:**
+
 - initial ordinary quantum 5 ms using a one-shot timer;
 - immediate reschedule when a higher-priority thread becomes ready;
 - equal-priority/current-address-space affinity as the final tie-breaker;
@@ -109,9 +119,12 @@ repeated overruns fail qualification.
 - `PreemptGuard`: prevents scheduler replacement on this CPU only.
 - `RawLock`: nonblocking, IRQ-safe ownership assertion; it never spins waiting
   for a peer because no peer CPU exists.
-- `Mutex`: sleepable, priority-inheriting thread lock.
-- `Event/Semaphore`: waitable count or level object with atomic test-and-block.
-- `WaitQueue`: intrusive, priority-ordered blocked-thread list.
+- `Mutex`: PLANNED sleepable, priority-inheriting thread lock.
+- `Event`: CURRENT INTERNAL level object with consume-on-wait and close/wake-all.
+- `Semaphore`: PLANNED counted wait object.
+- `WaitQueue`: CURRENT INTERNAL intrusive priority/FIFO blocked-thread queue
+  with a nonzero sequence counter preventing a stale condition check from
+  blocking.
 
 There is no recursive mutex. Interrupt handlers never acquire `Mutex`.
 
@@ -147,6 +160,13 @@ To prevent lost wakeups:
 
 Timeout, cancellation, signal, and peer death compete through one atomic waiter
 state; exactly one wins and supplies the result.
+
+The current single-CPU qualification event runs inside serialized supervisor
+dispatch. It snapshots the wait-queue sequence while testing the condition;
+`kernel_thread_block` succeeds only if that sequence is still current. Every
+wake or removal advances the sequence. This proves the condition-change/block
+boundary without introducing a second queue implementation; object locks and
+the four-way timeout/cancel/signal/death arbitration remain stable-ABI work.
 
 ## Interrupt and deferred work
 

@@ -33,6 +33,61 @@ def test_k1_entry_is_required_exactly() -> None:
     assert acceptance_reached(output, None, False, expect_k1_entry=True)
 
 
+def test_k2_entry_requires_new_and_retained_markers() -> None:
+    output = b"POST PASS\nK1 PROTECTED ENTRY PASS\n"
+
+    assert not acceptance_reached(output, None, False, expect_k2_entry=True)
+    output += b"K2 THREAD SUBSTRATE PASS\n"
+    assert acceptance_reached(output, None, False, expect_k2_entry=True)
+
+
+def test_k2_blocking_requires_all_retained_markers() -> None:
+    output = b"POST PASS\nK1 PROTECTED ENTRY PASS\n"
+
+    assert not acceptance_reached(output, None, False, expect_k2_blocking=True)
+    output += b"K2 THREAD SUBSTRATE PASS\n"
+    assert not acceptance_reached(output, None, False, expect_k2_blocking=True)
+    output += b"K2 BLOCKING SUBSTRATE PASS\n"
+    assert not acceptance_reached(output, None, False, expect_k2_blocking=True)
+    output += (
+        b"K2 PERF irq syscall=1200/50000 timer=1300/50000 "
+        b"fault=9000/125000\n"
+        b"K2 PERF sched pick=400/10000 same=500/15000 "
+        b"cross=1800/50000\n"
+        b"K2 PERF wait block=600/15000 wake=700/15000 overruns=0\n"
+        b"K2 PERFORMANCE PASS\n"
+    )
+    assert acceptance_reached(output, None, False, expect_k2_blocking=True)
+
+
+def test_k2_performance_requires_exact_budgets_and_bounded_measurements() -> None:
+    report = (
+        b"K2 PERF irq syscall=1200/50000 timer=1300/50000 "
+        b"fault=9000/125000\n"
+        b"K2 PERF sched pick=400/10000 same=500/15000 "
+        b"cross=1800/50000\n"
+        b"K2 PERF wait block=600/15000 wake=700/15000 overruns=0\n"
+        b"K2 PERFORMANCE PASS\n"
+    )
+
+    assert check_hardware.k2_performance_reached(report)
+    assert not check_hardware.k2_performance_reached(
+        report.replace(b"syscall=1200", b"syscall=0")
+    )
+    assert not check_hardware.k2_performance_reached(
+        report.replace(b"syscall=1200", b"syscall=50001")
+    )
+    assert not check_hardware.k2_performance_reached(
+        report.replace(b"syscall=1200/50000", b"syscall=1200/50001")
+    )
+    assert not check_hardware.k2_performance_reached(
+        report.replace(b"overruns=0", b"overruns=1")
+    )
+    assert not check_hardware.k2_performance_reached(
+        report.replace(b"K2 PERFORMANCE PASS\n", b"")
+    )
+
+
 def test_k1_soak_requires_complete_bounded_checkpoint() -> None:
     prefix = (
         b"POST PASS\n"

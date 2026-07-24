@@ -9,6 +9,17 @@ must not be presented as working software.
 ## Current source identity
 
 - Branch: `main`.
+- K2 blocking/thread work is an uncommitted development snapshot based on
+  `be27074ff67005095c5ec4e6b516a5c0708df049`; target identity is reported as
+  `be27074ff67005095c5ec4e6b516a5c0708df049-dirty`. It is not a release
+  source identity and does not replace the qualified K1 rollback below.
+- K2 kernel: 36,960 bytes, SHA-256
+  `1ee4232e1cc7c637f4c0ea06787191193fb23c64a19b603fc51d89539b425a29`.
+- K2 normal boot payload: 48,384 bytes, CRC32 `E28408B4`, SHA-256
+  `e607ce7de18da62d99b1e6fd15e5d4f990af1d615dab51b8fb2d68a136c85b93`.
+  The 48,416-byte packaged ROM SHA-256 is
+  `735703697b73abbf3369dcba03801f7c8d6f8e77082630c3ee09442703fb569c`.
+  This software image reuses exact routed FPGA build `25D9CB8E`.
 - K1 functional source commit: `66d6094f9339469313fefb70b259d07a7c2272ce`.
 - K1 lifecycle-soak source commit:
   `470bf123cf24bbadf3525f91307e3d9aebe92006`.
@@ -65,16 +76,23 @@ must not be presented as working software.
 | whole-address-space cache invalidation | CURRENT HOST | destruction invalidates before descriptor removal/frame reuse |
 | format 0/1/2/9/A/B frame decode | CURRENT | byte-exact host tests |
 | SFC/DFC copyin/copyout fault recovery | CURRENT | focused RTL, Musashi, full RTL |
-| typed generation handle table | CURRENT | host tests; 16 entries/process in K1 |
+| typed generation handle table | CURRENT | host tests; current 16 entries/process |
 | process creation and owner teardown | CURRENT HW | host, Musashi, full RTL, and exact 100-cycle ULX3S fault/reap path |
+| separate generation-safe process/thread objects | CURRENT HW | host, Musashi, full RTL, and two exact K2 ULX3S boots; 4 process and 16 thread slots |
+| guarded per-thread supervisor stacks | CURRENT HW | 16 8 KiB stacks with 4 KiB guards; host mapping/canary tests, Musashi, full RTL, and two ULX3S boots report 388-byte maximum use |
+| multi-thread process teardown | CURRENT HW | all siblings leave ready/wait queues atomically; deferred owner reap passes host, Musashi, full RTL, and ULX3S |
 | deferred pinned-DMA reap | CURRENT SIM | guarded worker state machine on host; Musashi and full RTL lifecycle soaks |
 | two isolated user processes | CURRENT HW | same ROM on Musashi, full RTL, and three exact SRAM boots |
-| 100 Hz preemptive round-robin | CURRENT HW | three switches before K1 marker on Musashi, full RTL, and each exact SRAM boot |
+| 100 Hz fixed-priority scheduling | CURRENT HW | 32 queues and ready bitmap; highest priority first, FIFO round-robin among equals; K2 target boots pass |
+| same-address-space thread switch | CURRENT HW | host, Musashi, full RTL, and ULX3S count this path separately without a CRP/ATC/cache switch |
+| atomic block/wake and event substrate | CURRENT HW | sequence-checked wait queues, priority/FIFO wake, close wake-all, and immediate higher-priority handoff pass host, Musashi, full RTL, and ULX3S |
 | trap ABI query/progress/yield/exit/close | CURRENT PROVISIONAL | host and target K1 |
 | offender-only user fault death | CURRENT HW | format-B fault reaps only the offender on Musashi, full RTL, and three exact SRAM boots |
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
 | panic to console and retained early log | CURRENT HW | exact direct and supervisor-guard panic paths pass full RTL plus physical HDMI/log qualification |
-| K1 host analyzer/sanitizer gates | CURRENT | 12 suites, analyzer, ASan/UBSan |
+| kernel host analyzer/sanitizer gates | CURRENT | 16 suites, analyzer, ASan/UBSan |
+| kernel cycle-budget gate | CURRENT HW | eight measured syscall/timer/fault/scheduler/wait paths enforce fixed limits in Musashi, full RTL, and ULX3S; zero overruns |
+| end-to-end Musashi performance gate | CURRENT | exact 1,000-cycle workload is 645,759,087 virtual cycles against a 675,000,000-cycle cap |
 | deterministic lifecycle-soak harness | CURRENT HW | dual-host 500,000-cycle legacy Musashi, optimized Musashi, 13-cycle full RTL, routed five-minute candidate, and independent 30-minute release runs pass without drift |
 | deferred user-fault reclamation | CURRENT HW | host proves no maintenance/owner release in fault dispatch; Musashi, full RTL, and ULX3S report bounded masked-fault cycles |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
@@ -91,6 +109,10 @@ must not be presented as working software.
 - The ULX3S attached to NUC now runs exact persistent guarded-worker release
   `25D9CB8E`. Prior `77B3CDC8` K1 and `6C0D0CA3` K0 images remain qualified
   rollback artifacts, not the board's current flash contents.
+- The same `25D9CB8E` bitstream now boots K2 ROM CRC32 `E28408B4` from SD after
+  two independent volatile reloads. FPGA flash was not rewritten. Normal
+  read-only AstraHost firmware is restored, and `/ASTRA68.ROM` is the only FAT
+  file changed by the provisioning run.
 - Exact `25D9CB8E` maps 53,079 LUT4s, 25,536 GSR-enabled FFs, 101 DP16KDs,
   and 18 multipliers with zero SCCs. The no-waiver route packs 66,523
   TRELLIS_COMB and 25,565 FFs and passes at 15.058201 MHz CPU, 66.907532 MHz
@@ -231,6 +253,73 @@ exact Git identity, guarded worker, PMMU, preemption, fault containment, and K1
 entry. Screenshot SHA-256 is
 `e6e654d6ad0c9f5dead16f9116ab622d7a5ba731fc2fafc1ff7ba324c08128a4`.
 
+## K2 blocking/thread development checkpoint
+
+The scheduler dispatches independent `KernelThread` objects rather than a
+combined process/context record. Sixteen fixed 156-byte records carry
+generation IDs, process-private handles, CPU contexts, guarded user and 8 KiB
+supervisor stacks, base/effective priority, accounting, and intrusive ready and
+wait links. Processes own the CRP/address space, resource account, handle table,
+default priority 16, user ceiling 23, and aggregate death. Current handle-table
+capacity makes the development per-process cap 15 threads; the stable target
+remains 16 after the handle pool grows.
+
+Thirty-two FIFO queues plus one bitmap select the highest effective priority in
+bounded constant steps and rotate equal priorities round-robin. Same-process
+switches retain CRP and avoid the VM switch/cache/ATC path. A 12-byte wait queue
+uses a monotonic nonzero sequence to make condition-check plus block atomic;
+wake-one selects the highest-priority waiter and preserves FIFO order among
+equals, while wake-all is bounded by the 16-thread pool. The first 16-byte event
+implements signaled, consumed, and closed states on that queue. Process death
+withdraws every sibling from ready and wait queues before deferred destruction
+and generation-safe record reuse.
+
+All 16 host suites pass normally, under GCC `-fanalyzer`, and under
+ASan/UBSan/leak checks. Canonical MC68030 build verification, 15 Rust tests,
+rustfmt, and Clippy `-D warnings` pass. Shared out-of-line byte copy/clear
+primitives replaced repeated force-inlined loops; exhaustive alignment/length
+tests cover them and target disassembly uses aligned longword operations. The
+exact 1,000-cycle Musashi workload fell from 895,512,627 to 645,759,523 virtual
+cycles. Replacing duplicate DMA/block generation rollover with the existing
+shared helpers removed 12 image bytes and another 436 cycles, leaving
+645,759,087 cycles. A 675,000,000-cycle automated ceiling now makes that
+end-to-end result a regression gate. The normal kernel is 36,960 bytes with
+SHA-256
+`1ee4232e1cc7c637f4c0ea06787191193fb23c64a19b603fc51d89539b425a29`.
+
+The coherent full pin-level Verilator/SDRAM run uses the same ROM payload and
+exact dirty source identity. Full 32 MiB BIST passes at 115.04 MB/s. It executes
+seven context switches, two same-CRP switches, two blocks, one wake, one
+higher-priority handoff, and reports a 388/8192-byte maximum supervisor-stack
+use. Maximum measured cycles are 20,806 syscall dispatch, 14,344 timer dispatch,
+21,896 user fault, 1,449 scheduler pick, 1,567 same-CRP switch, 2,540 cross-CRP
+switch, 1,265 block, and 2,437 wake. Every fixed budget passes with zero
+overruns, followed by K2 blocking/thread and retained K1 markers.
+
+The HDMI-enabled boot payload is 48,384 bytes with CRC32 `E28408B4`; the
+packaged ROM is 48,416 bytes. Two independent volatile reloads of exact routed
+build `25D9CB8E` on the NUC-attached ULX3S complete the same gate in 2.333 and
+2.338 seconds. Both report the same 388-byte stack high-water mark and zero
+cycle budget overruns. Run-to-run maxima vary only slightly: syscall
+29,705/29,685, timer 14,310/14,335, user fault 19,632/19,635, scheduler pick
+1,444/1,444, same-CRP 1,575/1,569, cross-CRP 2,546/2,527, block 1,264/1,264,
+and wake 2,436/2,428. FPGA flash was not rewritten; normal read-only AstraHost
+firmware and the exact K2 ROM were restored while unrelated SD contents were
+preserved.
+
+Retained final evidence is
+`evidence/k2-be27074-refactor-perf-rtl.log` (SHA-256
+`7eb2ffa99c6d9d270acbb51de05ebe7807a16afc5f3a7696b0624c68b80d9047`),
+`evidence/k2-25d9cb8e-be27074-refactor-perf-provision.log`
+(`36383d6e3d1e421ca77718d05473136f5fda66bd284e79d610904ef36859f0ee`),
+`evidence/k2-25d9cb8e-be27074-refactor-perf-hw-1.log`
+(`09a76d063c7743e386f66100d53eeda75707dc5087b5364e3436ad1d03441cbf`),
+and `evidence/k2-25d9cb8e-be27074-refactor-perf-hw-2.log`
+(`2e75d86ee06d0efcc219e0cbd258bfb693f902842823dfdbd99798981fdd74bf`).
+A mixed-source scratch simulation and an accidental `77B3CDC8` rollback load
+were rejected before acceptance; neither is a kernel failure or evidence for
+this checkpoint.
+
 ## Required before K1 release
 
 | Requirement | State |
@@ -248,22 +337,29 @@ entry. Screenshot SHA-256 is
 | panic HDMI and retained-log check on physical board | CURRENT; exact direct-panic and supervisor-guard paths pass |
 | guarded-worker source exact route and ULX3S promotion | CURRENT HW; no-waiver route, repeated SRAM boots, five-minute soak, restoration, reset-from-flash, and physical HDMI pass |
 
-## Partial or transitional K1 code
+## Partial or transitional current code
 
-- `KernelProcess` combines one process and one thread; stable code must split
-  them before waits, IPC, or multi-threaded processes.
-- Four process slots and 16 handles/process are qualification limits, not the
-  stable limits in `KERNEL_ARCHITECTURE.md`.
-- The scheduler is round-robin only. Priority queues, bitmap selection,
-  inheritance, donation, wakeup boost, and real-time budgets are not built.
+- Four process slots, 16 global thread slots, 16 handles/process, and the
+  resulting 15-thread/process cap are qualification limits, not the stable
+  limits in `KERNEL_ARCHITECTURE.md`.
+- The fixed-priority queue/bitmap scheduler is current. Runtime high-priority
+  wakeup handoff is proven by the internal event path. One-shot quanta,
+  address-space affinity among equal priorities, inheritance, donation, wakeup
+  boost, and real-time budgets are not built.
+- Thread creation is an internal boot API. No stable create/join/exit-thread
+  syscall exists, and provisional `EXIT` still terminates the whole process.
+- Ordinary user threads have guarded user and supervisor stacks. The two
+  blocking/event syscall numbers are qualification-only and are not part of the
+  stable ABI; deadlines, cancellation, peer death, and general object handles
+  still need one coherent contract.
 - `block.c` and `dma.c` qualify ownership, generation, pin, completion, and
   revocation. Filesystem/block policy still belongs in a user service.
 - The fixed K1 worker services process reap only. It is not yet a general
-  scheduler-owned kernel-thread class and has no wait object, priority
+  scheduler-owned kernel-thread class and has no general wait object, priority
   inheritance, cancellation, or per-device work queues.
 - User-fault retirement is minimal and schedules the interruptible worker.
-  General blocking waits and multi-threaded processes still require separate
-  thread objects and the stable priority scheduler.
+  The first wait queue and event are current; deadline/cancellation arbitration,
+  wait-multiple, and service/object death semantics remain.
 - The diagnostic UART mirror is emergency FTDI output only. ESP runtime
   communication is SPI.
 
@@ -271,13 +367,10 @@ entry. Screenshot SHA-256 is
 
 - boot allocator retirement, typed slabs/object caches, bounded general heap,
   emergency page reserve, per-subsystem allocation tags, and low-memory policy;
-- separate thread objects and per-thread kernel stacks; the fixed worker has a
-  canary/high-water counter and selected ISP/MSP strategy, but ordinary thread
-  stacks do not yet;
 - shared areas, demand-zero pages, stable-default 8 KiB page option, commit accounts, and
   cache-safe executable/file-page reclamation;
-- ports, messages, handle transfer, wait-multiple, semaphores/events, deadlines,
-  cancellation, priority inheritance, and priority donation;
+- ports, messages, handle transfer, wait-multiple, handle-backed semaphores,
+  deadlines, cancellation, priority inheritance, and priority donation;
 - IRQ endpoint allocation, general deferred device workers, service restart, and
   privileged device-mapping objects;
 - centralized typed MMIO accessors and complete bus-timeout classification;
@@ -293,6 +386,16 @@ entry. Screenshot SHA-256 is
 | user cannot map kernel/page-table frames | host VM tests |
 | null and W+X mappings rejected | host VM tests |
 | stale handles cannot reach reused slot | host handle tests |
+| stale thread IDs cannot reach reused slot, including slot 15 | host thread tests |
+| higher priority wins and equal priorities remain FIFO round-robin | host thread/process tests plus K2 target boot |
+| same-process switch preserves CRP and bypasses VM switch accounting | host process test, Musashi, full RTL, and ULX3S K2 boots |
+| stale wait sequence cannot block after a condition change | host thread/event tests |
+| wake-one is priority ordered and FIFO among equals | host thread test plus target priority-handoff path |
+| event close wakes each waiter exactly once | host event test |
+| process death withdraws every sibling from ready/wait queues before deferred record reuse | host process test, Musashi soak, full RTL, and ULX3S K2 boots |
+| each thread supervisor stack has an unmapped guard, valid canary, and bounded high-water | host VM/thread tests, Musashi, full RTL, and ULX3S K2 boots |
+| every measured K2 hot path stays within its fixed cycle budget | host profiler tests, Musashi, full RTL, and two ULX3S boots |
+| 1,000-cycle Musashi workload remains at or below 675,000,000 virtual cycles | automated emulator performance gate |
 | killed owner releases mappings/handles/frames | host process test, target K1 |
 | pinned DMA delays but does not lose teardown | host process/DMA/block tests |
 | user-copy fault returns error, unrelated kernel fault panics | host and full target |
@@ -314,9 +417,12 @@ entry. Screenshot SHA-256 is
 
 ## Next actions
 
-1. route exact guarded-worker source at 12.5 MHz CPU and 60 MHz SDRAM, then
-   repeat POST, PMMU, worker lifecycle, reset, and HDMI gates on NUC;
-2. split process and thread objects before adding waits, IPC, and
-   multi-threaded scheduling;
-3. implement and benchmark 8 KiB against the retained 4 KiB oracle before
+1. add one-shot 4-8 ms quanta and a bounded deadline queue, preserving the
+   measured scheduler/interrupt budgets;
+2. turn the internal event path into handle-backed event/semaphore operations
+   with timeout, cancellation, close, and process-death semantics before ports
+   or IPC;
+3. add stable create/join/exit-thread operations and account every stack/object
+   against process quotas;
+4. implement and benchmark 8 KiB against the retained 4 KiB oracle before
    freezing the stable VM ABI.

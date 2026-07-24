@@ -1,6 +1,7 @@
 #include "dispatch.h"
 
 #include "panic.h"
+#include "performance.h"
 #include "platform.h"
 #include "process.h"
 #include "user_copy.h"
@@ -61,6 +62,8 @@ static void make_frame(uint8_t frame[8], uint16_t status_register,
 
 static void reset_fakes(void)
 {
+    kernel_performance_init();
+    kernel_performance_test_set_cycles(100u, 37u);
     interrupt_result = true;
     process_is_active = true;
     maintenance_pending = false;

@@ -20,6 +20,25 @@
   proof that its remote child completed or failed; confirm both the session exit
   status and the expected artifact/log before starting a replacement run.
 
+## Kernel Development Discipline
+
+- Before adding a kernel function, type, module, state machine, or test helper,
+  search the existing implementation and tests for the same responsibility.
+  Extend or consolidate the existing mechanism when it can preserve the
+  required contract; record why a new mechanism is necessary when it cannot.
+- Treat duplicated policy, state transitions, generation handling, byte
+  primitives, queueing, and accounting as defects to remove while the affected
+  subsystem is being built. Keep refactors scoped and retain behavior tests.
+- Keep the kernel MC68030-specific, compact, and direct. Do not add speculative
+  portability layers or abstractions that do not remove measured complexity.
+- Establish a target-representative performance baseline before changing a hot
+  path and compare it afterward. New scheduler, exception, syscall, VM, IPC,
+  and user-copy paths require explicit cycle budgets and automated regression
+  gates before they become dependencies of higher layers.
+- Inspect generated MC68030 code before replacing C with assembly. Use assembly
+  when measurement proves a material improvement, while retaining a clear C
+  contract and tests as the behavioral oracle.
+
 ## FPGA Timing Closure
 
 - Read `docs/CURRENT_STATE.md` before project work. It is the current

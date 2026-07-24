@@ -170,21 +170,30 @@ context or atomically sleeps in master mode. A deferred pinned-DMA reap is
 retried on a later timer interrupt; syscall and idle paths no longer perform
 resource destruction.
 
-## Current K1 structures
+## Current K2 thread substrate
 
-These are implementation facts, not the final object layout:
+These are measured MC68030 implementation facts, not the final object limits:
 
-| Structure/pool | Exact K1 value |
+| Structure/pool | Exact current value |
 |---|---:|
 | `KernelCpuContext` | 76 bytes, 4-byte aligned |
-| `KernelProcess` | 528 bytes, 4-byte aligned |
-| process slots | 4 (2,112 bytes static) |
+| `KernelProcess` | 446 bytes under the m68k ABI |
+| `KernelThread` | 156 bytes under the m68k ABI |
+| `KernelThreadWaitQueue` | 12 bytes under the m68k ABI |
+| `KernelEvent` | 16 bytes under the m68k ABI |
+| process slots | 4 (1,784 bytes static) |
+| thread slots | 16 (2,496 bytes static) |
 | handle slots/process | 16 |
 | handle value | 24-bit generation, 8-bit one-based slot |
+| ready queues | 32 FIFO queues, two 16-bit links/thread, 32-bit bitmap |
+| thread priority | process default 16, user ceiling 23, effective priority/thread |
+| user stack/thread | one mapped 4 KiB page plus one unmapped 4 KiB guard interval |
+| supervisor stack/thread | guarded 8 KiB stack in one 12 KiB static slot |
+| supervisor stack arena | 16 slots, 192 KiB total; 128 KiB usable stacks |
 | DMA slots | 32 |
 | block request slots | 4 |
 | timer frequency | 100 Hz |
-| scheduling policy | preemptive round-robin, one thread/process |
+| scheduling policy | highest effective priority; FIFO round-robin among equals |
 | interrupt stack | 8 KiB ISP plus 4 KiB unmapped guard |
 | deferred-worker stack | 8 KiB MSP plus 4 KiB unmapped guard |
 | deferred work | one-bit process-reap bitmap; bounded timer retry |
@@ -197,8 +206,19 @@ successful service changes `RUNNING -> BLOCKED` before user return or `STOP`.
 so the worker performs another pass before it may block. No transition
 allocates metadata or grows a queue.
 
-K1 combines process and thread state only to qualify CPU/PMMU containment.
-The stable implementation splits those objects before IPC and wait APIs freeze.
+The process owns its address space, resource owner, handle table, default and
+ceiling policy, and aggregate lifecycle. Each thread independently owns its
+saved CPU context, generation ID, process-private handle, stack mapping,
+guarded supervisor stack, priority, counters, ready/wait-queue links, and
+state. Process death removes all of its threads from ready and wait queues
+before deferred handle/address-space/frame destruction; thread records are not
+reusable until that destruction completes.
+
+The current internal qualification path has sequence-checked atomic block,
+priority/FIFO wake-one and wake-all, a signaled/closed event, and immediate
+higher-priority handoff. It does not yet expose runtime thread creation,
+handle-backed user events/semaphores, deadlines, cancellation, priority
+inheritance/donation, or the stable pool sizes below.
 
 ## Stable-kernel target limits
 
@@ -222,6 +242,24 @@ These limits are the initial sizing contract and must be charged in
 
 Exhaustion returns an explicit bounded error. System services may receive a
 different quota through a resource-account handle; they do not bypass limits.
+
+## Development discipline
+
+Before adding a function, type, module, state machine, or test helper, search
+the kernel and its tests for an existing owner of that responsibility. Extend
+or consolidate that owner when its contract can support the requirement. A new
+mechanism must have a concrete reason the existing one cannot be adapted.
+Duplicated policy, state transitions, generation rollover, byte primitives,
+queueing, and accounting are defects and are removed while the affected
+subsystem is in development.
+
+Every scheduler, exception, syscall, VM, IPC, synchronization, and user-copy
+change starts from a target-representative cycle and image-size baseline. The
+change must retain an automated budget and report the before/after result.
+Generated MC68030 code is inspected before replacing C with assembly. Assembly
+is preferred when measurement proves a material hot-path improvement, while a
+tested C-level contract remains the behavioral oracle. Astra does not carry
+speculative portability layers for another ISA.
 
 ## Required companions
 

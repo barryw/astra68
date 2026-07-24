@@ -13,6 +13,59 @@ import threading
 import time
 
 
+K2_PERFORMANCE_BUDGETS = {
+    "syscall": 50_000,
+    "timer": 50_000,
+    "fault": 125_000,
+    "pick": 10_000,
+    "same": 15_000,
+    "cross": 50_000,
+    "block": 15_000,
+    "wake": 15_000,
+}
+
+
+def k2_performance_reached(output: bytes | bytearray) -> bool:
+    patterns = (
+        re.search(
+            rb"(?m)^K2 PERF irq syscall=(\d+)/(\d+) "
+            rb"timer=(\d+)/(\d+) fault=(\d+)/(\d+)\r?$",
+            output,
+        ),
+        re.search(
+            rb"(?m)^K2 PERF sched pick=(\d+)/(\d+) "
+            rb"same=(\d+)/(\d+) cross=(\d+)/(\d+)\r?$",
+            output,
+        ),
+        re.search(
+            rb"(?m)^K2 PERF wait block=(\d+)/(\d+) "
+            rb"wake=(\d+)/(\d+) overruns=0\r?$",
+            output,
+        ),
+    )
+    if any(match is None for match in patterns):
+        return False
+    names = (
+        ("syscall", "timer", "fault"),
+        ("pick", "same", "cross"),
+        ("block", "wake"),
+    )
+    for match, line_names in zip(patterns, names, strict=True):
+        assert match is not None
+        values = [int(value) for value in match.groups()]
+        for index, name in enumerate(line_names):
+            measured = values[index * 2]
+            reported_budget = values[index * 2 + 1]
+            expected_budget = K2_PERFORMANCE_BUDGETS[name]
+            if (
+                measured <= 0
+                or measured > expected_budget
+                or reported_budget != expected_budget
+            ):
+                return False
+    return b"K2 PERFORMANCE PASS" in output
+
+
 def find_port(explicit: str | None) -> str:
     if explicit:
         return explicit
@@ -74,6 +127,8 @@ def acceptance_reached(
     expect_video_probe: bool = False,
     expect_graphics: bool = False,
     expect_k1_entry: bool = False,
+    expect_k2_entry: bool = False,
+    expect_k2_blocking: bool = False,
     expect_k1_soak_cycles: int | None = None,
     expect_kernel_panic: bool = False,
     expected_panic_fault: bytes | None = None,
@@ -170,6 +225,18 @@ def acceptance_reached(
                 soak_reached = True
                 break
         kernel_entry_reached = soak_reached
+    elif expect_k2_blocking:
+        kernel_entry_reached = (
+            k2_performance_reached(output)
+            and b"K2 BLOCKING SUBSTRATE PASS" in output
+            and b"K2 THREAD SUBSTRATE PASS" in output
+            and b"K1 PROTECTED ENTRY PASS" in output
+        )
+    elif expect_k2_entry:
+        kernel_entry_reached = (
+            b"K2 THREAD SUBSTRATE PASS" in output
+            and b"K1 PROTECTED ENTRY PASS" in output
+        )
     elif expect_k1_entry:
         kernel_entry_reached = b"K1 PROTECTED ENTRY PASS" in output
     elif expect_kernel_entry:
@@ -267,6 +334,20 @@ def main() -> int:
         help="require the protected kernel to report K1 PROTECTED ENTRY PASS",
     )
     kernel_entry_group.add_argument(
+        "--expect-k2-entry",
+        action="store_true",
+        help=(
+            "require K2 THREAD SUBSTRATE PASS and the retained K1 entry marker"
+        ),
+    )
+    kernel_entry_group.add_argument(
+        "--expect-k2-blocking",
+        action="store_true",
+        help=(
+            "require K2 blocking, thread-substrate, and retained K1 markers"
+        ),
+    )
+    kernel_entry_group.add_argument(
         "--expect-k1-soak-cycles",
         type=int,
         metavar="COUNT",
@@ -347,6 +428,8 @@ def main() -> int:
         or args.expect_rom_crc
         or args.expect_kernel_entry
         or args.expect_k1_entry
+        or args.expect_k2_entry
+        or args.expect_k2_blocking
         or args.expect_k1_soak_cycles is not None
         or args.expect_k1_fault_max_cycles is not None
         or args.expect_k1_min_elapsed_cycles is not None
@@ -444,6 +527,8 @@ def main() -> int:
                     args.expect_video_probe,
                     args.expect_graphics,
                     args.expect_k1_entry,
+                    args.expect_k2_entry,
+                    args.expect_k2_blocking,
                     args.expect_k1_soak_cycles,
                     args.expect_kernel_panic,
                     expected_panic_fault,
@@ -468,6 +553,8 @@ def main() -> int:
         "graphics" if args.expect_graphics else
         "kernel panic" if args.expect_kernel_panic else
         "K1 soak" if args.expect_k1_soak_cycles is not None else
+        "K2 blocking" if args.expect_k2_blocking else
+        "K2 entry" if args.expect_k2_entry else
         "POST"
     )
     print(f"{capture_name} capture elapsed={elapsed:.3f}s events={events}")
@@ -482,6 +569,8 @@ def main() -> int:
         args.expect_video_probe,
         args.expect_graphics,
         args.expect_k1_entry,
+        args.expect_k2_entry,
+        args.expect_k2_blocking,
         args.expect_k1_soak_cycles,
         args.expect_kernel_panic,
         expected_panic_fault,
