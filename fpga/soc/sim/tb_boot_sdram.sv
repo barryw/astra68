@@ -129,6 +129,17 @@ module tb_boot_sdram #(
     reg k3_performance_seen = 1'b0;
     reg k4_sync_seen = 1'b0;
     reg k4_marker_seen = 1'b0;
+    reg k5_lifecycle_seen = 1'b0;
+    reg k5_performance_seen = 1'b0;
+    reg k5_marker_seen = 1'b0;
+    reg k6_wait_wake_seen = 1'b0;
+    reg k6_deadline_counts_seen = 1'b0;
+    reg k6_wait_set_seen = 1'b0;
+    reg k6_registration_seen = 1'b0;
+    reg k6_timer_seen = 1'b0;
+    reg k6_process_death_seen = 1'b0;
+    reg k6_performance_seen = 1'b0;
+    reg k6_marker_seen = 1'b0;
     reg expect_kernel_panic;
     reg expect_kernel_soak = 1'b0;
     reg expect_kernel_guard = 1'b0;
@@ -144,6 +155,37 @@ module tb_boot_sdram #(
     integer parsed_sync_cancellations = 0;
     integer parsed_sync_close_wakeups = 0;
     integer parsed_sync_owner_deaths = 0;
+    integer parsed_thread_exits = 0;
+    integer parsed_thread_waits = 0;
+    integer parsed_thread_reaps = 0;
+    integer parsed_thread_create_cycles = 0;
+    integer parsed_thread_create_budget = 0;
+    integer parsed_thread_exit_cycles = 0;
+    integer parsed_thread_exit_budget = 0;
+    integer parsed_thread_reap_cycles = 0;
+    integer parsed_thread_reap_budget = 0;
+    integer parsed_thread_overruns = 0;
+    integer parsed_wait_blocks = 0;
+    integer parsed_sync_wakeups = 0;
+    integer parsed_priority_handoffs = 0;
+    integer parsed_deadline_expirations = 0;
+    integer parsed_deadline_handoffs = 0;
+    integer parsed_wait_set_calls = 0;
+    integer parsed_wait_set_blocks = 0;
+    integer parsed_wait_set_wakeups = 0;
+    integer parsed_wait_set_members = 0;
+    integer parsed_wait_registrations = 0;
+    integer parsed_wait_registration_max = 0;
+    integer parsed_timers_created = 0;
+    integer parsed_timer_arms = 0;
+    integer parsed_timer_expirations = 0;
+    integer parsed_process_death_waits = 0;
+    integer parsed_process_death_wakeups = 0;
+    integer parsed_wait_set_block_cycles = 0;
+    integer parsed_wait_set_block_budget = 0;
+    integer parsed_wait_set_wake_cycles = 0;
+    integer parsed_wait_set_wake_budget = 0;
+    integer parsed_wait_set_overruns = 0;
     integer bist_cycles = 0;
     real bist_mbps;
 
@@ -265,6 +307,169 @@ module tb_boot_sdram #(
                 end
                 if (uart_line == "K4 HANDLE SYNCHRONIZATION PASS")
                     k4_marker_seen <= 1'b1;
+                if ($sscanf(uart_line,
+                            "Thread lifecycle .... %d exit, %d waits, %d reaped",
+                            parsed_thread_exits,
+                            parsed_thread_waits,
+                            parsed_thread_reaps) == 3) begin
+                    if (parsed_thread_exits < 1 ||
+                        parsed_thread_waits < 2 ||
+                        parsed_thread_reaps < 1)
+                        $fatal(1,
+                               "K5 thread lifecycle invalid: exit=%0d waits=%0d reaped=%0d",
+                               parsed_thread_exits,
+                               parsed_thread_waits,
+                               parsed_thread_reaps);
+                    if (!expect_kernel_soak &&
+                        (parsed_thread_exits != 2 ||
+                         parsed_thread_waits != 3 ||
+                         parsed_thread_reaps != 2))
+                        $fatal(1,
+                               "K5 normal lifecycle counts invalid: exit=%0d waits=%0d reaped=%0d",
+                               parsed_thread_exits,
+                               parsed_thread_waits,
+                               parsed_thread_reaps);
+                    k5_lifecycle_seen <= 1'b1;
+                end
+                if ($sscanf(uart_line,
+                            "K5 PERF thread create=%d/%d exit=%d/%d reap=%d/%d overruns=%d",
+                            parsed_thread_create_cycles,
+                            parsed_thread_create_budget,
+                            parsed_thread_exit_cycles,
+                            parsed_thread_exit_budget,
+                            parsed_thread_reap_cycles,
+                            parsed_thread_reap_budget,
+                            parsed_thread_overruns) == 7) begin
+                    if (parsed_thread_create_cycles <= 0 ||
+                        parsed_thread_create_cycles > 150000 ||
+                        parsed_thread_create_budget != 150000 ||
+                        parsed_thread_exit_cycles <= 0 ||
+                        parsed_thread_exit_cycles > 50000 ||
+                        parsed_thread_exit_budget != 50000 ||
+                        parsed_thread_reap_cycles <= 0 ||
+                        parsed_thread_reap_cycles > 125000 ||
+                        parsed_thread_reap_budget != 125000 ||
+                        parsed_thread_overruns != 0)
+                        $fatal(1,
+                               "K5 thread performance invalid: create=%0d/%0d exit=%0d/%0d reap=%0d/%0d overruns=%0d",
+                               parsed_thread_create_cycles,
+                               parsed_thread_create_budget,
+                               parsed_thread_exit_cycles,
+                               parsed_thread_exit_budget,
+                               parsed_thread_reap_cycles,
+                               parsed_thread_reap_budget,
+                               parsed_thread_overruns);
+                    k5_performance_seen <= 1'b1;
+                end
+                if (uart_line == "K5 THREAD LIFECYCLE PASS")
+                    k5_marker_seen <= 1'b1;
+                if ($sscanf(uart_line,
+                            "Wait/wake ........... %d blocks, %d wake, %d priority handoff",
+                            parsed_wait_blocks,
+                            parsed_sync_wakeups,
+                            parsed_priority_handoffs) == 3) begin
+                    if (parsed_wait_blocks != 11 ||
+                        parsed_sync_wakeups != 5 ||
+                        parsed_priority_handoffs != 5)
+                        $fatal(1,
+                               "K6 wait/wake counts invalid: blocks=%0d wake=%0d handoff=%0d",
+                               parsed_wait_blocks, parsed_sync_wakeups,
+                               parsed_priority_handoffs);
+                    k6_wait_wake_seen <= 1'b1;
+                end
+                if ($sscanf(uart_line,
+                            "Deadlines ........... %d expired, %d priority handoff",
+                            parsed_deadline_expirations,
+                            parsed_deadline_handoffs) == 2) begin
+                    if (parsed_deadline_expirations != 2 ||
+                        parsed_deadline_handoffs != 1)
+                        $fatal(1,
+                               "K6 deadline counts invalid: expired=%0d handoff=%0d",
+                               parsed_deadline_expirations,
+                               parsed_deadline_handoffs);
+                    k6_deadline_counts_seen <= 1'b1;
+                end
+                if ($sscanf(uart_line,
+                            "Wait multiple ....... %d calls, %d block, %d wake; max %d members",
+                            parsed_wait_set_calls,
+                            parsed_wait_set_blocks,
+                            parsed_wait_set_wakeups,
+                            parsed_wait_set_members) == 4) begin
+                    if (parsed_wait_set_calls != 7 ||
+                        parsed_wait_set_blocks != 4 ||
+                        parsed_wait_set_wakeups != 4 ||
+                        parsed_wait_set_members != 2)
+                        $fatal(1,
+                               "K6 wait-set counts invalid: calls=%0d block=%0d wake=%0d members=%0d",
+                               parsed_wait_set_calls,
+                               parsed_wait_set_blocks,
+                               parsed_wait_set_wakeups,
+                               parsed_wait_set_members);
+                    k6_wait_set_seen <= 1'b1;
+                end
+                if ($sscanf(uart_line,
+                            "Wait registrations .. %d live, %d max",
+                            parsed_wait_registrations,
+                            parsed_wait_registration_max) == 2) begin
+                    if (parsed_wait_registrations != 1 ||
+                        parsed_wait_registration_max != 3)
+                        $fatal(1,
+                               "K6 registration counts invalid: live=%0d max=%0d",
+                               parsed_wait_registrations,
+                               parsed_wait_registration_max);
+                    k6_registration_seen <= 1'b1;
+                end
+                if ($sscanf(uart_line,
+                            "Waitable timers ..... %d created, %d armed, %d expired",
+                            parsed_timers_created,
+                            parsed_timer_arms,
+                            parsed_timer_expirations) == 3) begin
+                    if (parsed_timers_created != 1 ||
+                        parsed_timer_arms != 1 ||
+                        parsed_timer_expirations != 1)
+                        $fatal(1,
+                               "K6 timer counts invalid: created=%0d armed=%0d expired=%0d",
+                               parsed_timers_created, parsed_timer_arms,
+                               parsed_timer_expirations);
+                    k6_timer_seen <= 1'b1;
+                end
+                if ($sscanf(uart_line,
+                            "Process death ....... %d waits, %d blocked wakes",
+                            parsed_process_death_waits,
+                            parsed_process_death_wakeups) == 2) begin
+                    if (parsed_process_death_waits != 1 ||
+                        parsed_process_death_wakeups != 0)
+                        $fatal(1,
+                               "K6 process-death counts invalid: waits=%0d wake=%0d",
+                               parsed_process_death_waits,
+                               parsed_process_death_wakeups);
+                    k6_process_death_seen <= 1'b1;
+                end
+                if ($sscanf(uart_line,
+                            "K6 PERF wait-set block=%d/%d wake=%d/%d overruns=%d",
+                            parsed_wait_set_block_cycles,
+                            parsed_wait_set_block_budget,
+                            parsed_wait_set_wake_cycles,
+                            parsed_wait_set_wake_budget,
+                            parsed_wait_set_overruns) == 5) begin
+                    if (parsed_wait_set_block_cycles <= 0 ||
+                        parsed_wait_set_block_cycles > 50000 ||
+                        parsed_wait_set_block_budget != 50000 ||
+                        parsed_wait_set_wake_cycles <= 0 ||
+                        parsed_wait_set_wake_cycles > 50000 ||
+                        parsed_wait_set_wake_budget != 50000 ||
+                        parsed_wait_set_overruns != 0)
+                        $fatal(1,
+                               "K6 wait-set performance invalid: block=%0d/%0d wake=%0d/%0d overruns=%0d",
+                               parsed_wait_set_block_cycles,
+                               parsed_wait_set_block_budget,
+                               parsed_wait_set_wake_cycles,
+                               parsed_wait_set_wake_budget,
+                               parsed_wait_set_overruns);
+                    k6_performance_seen <= 1'b1;
+                end
+                if (uart_line == "K6 BOUNDED WAIT-MULTIPLE PASS")
+                    k6_marker_seen <= 1'b1;
                 if (uart_line == "Reason: unhandled processor exception")
                     guard_reason_seen <= 1'b1;
                 if ($sscanf(uart_line, "Fault:  0x%h", parsed_fault_address) == 1 &&
@@ -335,12 +540,22 @@ module tb_boot_sdram #(
             if (!expect_kernel_panic &&
                 (!k3_quantum_seen || !k3_deadline_seen ||
                  !k3_performance_seen || !k4_sync_seen ||
-                 !k4_marker_seen))
+                 !k4_marker_seen || !k5_lifecycle_seen ||
+                 !k5_performance_seen || !k5_marker_seen ||
+                 !k6_wait_wake_seen || !k6_deadline_counts_seen ||
+                 !k6_wait_set_seen || !k6_registration_seen ||
+                 !k6_timer_seen || !k6_process_death_seen ||
+                 !k6_performance_seen || !k6_marker_seen))
                 $fatal(1,
-                       "kernel ready without K3/K4 evidence quantum=%b deadline=%b performance=%b sync=%b marker=%b",
+                       "kernel ready without K3-K6 evidence quantum=%b deadline=%b performance=%b sync=%b k4=%b lifecycle=%b k5perf=%b k5=%b wait=%b dl=%b set=%b reg=%b timer=%b process=%b k6perf=%b k6=%b",
                        k3_quantum_seen, k3_deadline_seen,
                        k3_performance_seen, k4_sync_seen,
-                       k4_marker_seen);
+                       k4_marker_seen, k5_lifecycle_seen,
+                       k5_performance_seen, k5_marker_seen,
+                       k6_wait_wake_seen, k6_deadline_counts_seen,
+                       k6_wait_set_seen, k6_registration_seen,
+                       k6_timer_seen, k6_process_death_seen,
+                       k6_performance_seen, k6_marker_seen);
             $display("KERNEL %s PASS status=%08x log_write=%0d wraps=%0d",
                      expect_kernel_panic ? "PANIC" :
                      expect_kernel_soak ? "SOAK" : "ENTRY",

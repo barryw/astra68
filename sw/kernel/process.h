@@ -22,6 +22,10 @@
 
 #define KERNEL_PROCESS_RIGHT_QUERY     (1u << 0)
 #define KERNEL_PROCESS_RIGHT_TERMINATE (1u << 1)
+#define KERNEL_PROCESS_RIGHT_WAIT      (1u << 4)
+#define KERNEL_PROCESS_RIGHTS \
+    (KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_TERMINATE | \
+     KERNEL_PROCESS_RIGHT_WAIT)
 
 typedef enum KernelProcessState {
     KERNEL_PROCESS_UNUSED = 0,
@@ -34,6 +38,7 @@ typedef enum KernelProcessState {
 typedef enum KernelProcessExitReason {
     KERNEL_PROCESS_EXIT_NONE = 0,
     KERNEL_PROCESS_EXIT_SYSCALL,
+    KERNEL_PROCESS_EXIT_LAST_THREAD,
     KERNEL_PROCESS_EXIT_USER_FAULT
 } KernelProcessExitReason;
 
@@ -61,7 +66,10 @@ typedef enum KernelProcessMaintenanceFailure {
     KERNEL_PROCESS_MAINTENANCE_MEMORY_STATS,
     KERNEL_PROCESS_MAINTENANCE_FREE_FRAMES,
     KERNEL_PROCESS_MAINTENANCE_CYCLE_OVERFLOW,
-    KERNEL_PROCESS_MAINTENANCE_CREATE
+    KERNEL_PROCESS_MAINTENANCE_CREATE,
+    KERNEL_PROCESS_MAINTENANCE_THREAD_REAP,
+    KERNEL_PROCESS_MAINTENANCE_OWNER_FRAMES,
+    KERNEL_PROCESS_MAINTENANCE_OWNER_FRAME_UNDERFLOW
 } KernelProcessMaintenanceFailure;
 
 typedef struct KernelProcessMaintenanceDiagnostics {
@@ -74,11 +82,14 @@ typedef struct KernelProcessMaintenanceDiagnostics {
 typedef struct KernelProcessSnapshot {
     uint32_t id;
     uint32_t owner;
+    uint32_t generation;
     uint32_t progress;
     uint32_t timer_ticks;
     uint32_t run_count;
     uint32_t syscall_count;
     uint32_t fault_address;
+    uint32_t exit_status;
+    uint32_t terminal_result;
     KernelHandle self_handle;
     uint16_t fault_vector;
     uint8_t process_state;
@@ -88,7 +99,13 @@ typedef struct KernelProcessSnapshot {
     uint8_t priority_ceiling;
     uint8_t thread_count;
     uint8_t live_threads;
-    uint8_t reserved;
+    uint8_t user_stack_pages;
+    uint8_t user_guard_pages;
+    uint8_t supervisor_stack_pages;
+    uint8_t supervisor_guard_pages;
+    uint16_t handle_references;
+    uint16_t death_waiters;
+    uint8_t reserved[2];
 } KernelProcessSnapshot;
 
 typedef struct KernelSchedulerStats {
@@ -137,6 +154,23 @@ typedef struct KernelSchedulerStats {
     uint32_t blocked_threads;
     uint32_t kernel_stack_entries;
     uint32_t kernel_stack_max_used;
+    uint32_t thread_exits;
+    uint32_t thread_death_waits;
+    uint32_t thread_death_wakeups;
+    uint32_t process_death_waits;
+    uint32_t process_death_wakeups;
+    uint32_t completed_thread_reaps;
+    uint32_t thread_creation_failures;
+    uint32_t wait_set_calls;
+    uint32_t wait_set_blocks;
+    uint32_t wait_set_wakeups;
+    uint32_t wait_set_registrations;
+    uint32_t wait_set_registration_max;
+    uint32_t wait_set_max_members;
+    uint32_t timer_created;
+    uint32_t timer_arms;
+    uint32_t timer_cancellations;
+    uint32_t timer_expirations;
     uint8_t milestone_complete;
     uint8_t reserved[3];
 } KernelSchedulerStats;
@@ -152,9 +186,16 @@ KernelProcessStatus kernel_process_create_thread(uint32_t process_id,
                                                  uint32_t initial_argument,
                                                  uint8_t priority,
                                                  uint32_t *thread_id);
+KernelProcessStatus kernel_process_set_thread_bootstrap_argument(
+    uint32_t process_id, uint32_t thread_id, uint32_t argument);
+KernelProcessStatus kernel_process_grant_handle(
+    uint32_t recipient_process_id, uint32_t target_process_id,
+    uint32_t rights, KernelHandle *handle);
 KernelProcessStatus kernel_process_start(KernelCpuContext **next_context);
 bool kernel_process_active(void);
 KernelCpuContext *kernel_process_current_context(void);
+bool kernel_process_worker_enter(void);
+KernelCpuContext *kernel_process_worker_resume(void);
 KernelProcessStatus kernel_process_on_timer(const uint32_t *registers,
                                             uint32_t user_stack,
                                             const void *raw_frame,
@@ -187,8 +228,20 @@ void kernel_process_soak_checkpoint(uint32_t cycles,
 #endif
 
 #if defined(KERNEL_PROCESS_HOST_TEST)
+typedef enum KernelProcessThreadCreateFault {
+    KERNEL_PROCESS_THREAD_CREATE_FAULT_NONE = 0,
+    KERNEL_PROCESS_THREAD_CREATE_FAULT_STACK_ALLOC,
+    KERNEL_PROCESS_THREAD_CREATE_FAULT_STACK_MAP,
+    KERNEL_PROCESS_THREAD_CREATE_FAULT_HANDLE_INSTALL,
+    KERNEL_PROCESS_THREAD_CREATE_FAULT_PUBLISH,
+    KERNEL_PROCESS_THREAD_CREATE_FAULT_COUNT
+} KernelProcessThreadCreateFault;
+
 void kernel_process_test_bind_physical_memory(uint8_t *memory, uint32_t base,
                                               uint32_t size);
+void kernel_process_test_fail_next_thread_create(
+    KernelProcessThreadCreateFault fault);
+uint32_t kernel_process_test_handle_count(uint32_t process_id);
 #endif
 
 #endif

@@ -135,6 +135,8 @@ KernelWorkerStatus kernel_worker_schedule(uint32_t work)
         return KERNEL_WORKER_INVALID_STATE;
     if (work == 0u || (work & ~KERNEL_WORKER_WORK_MASK) != 0u)
         return KERNEL_WORKER_INVALID_ARGUMENT;
+    if (!kernel_process_worker_enter())
+        return KERNEL_WORKER_CORRUPT;
 
     pending_work |= work;
     ++signal_count;
@@ -165,6 +167,8 @@ bool kernel_worker_try_select(void)
 {
     if (worker_state != KERNEL_WORKER_READY || pending_work == 0u)
         return false;
+    if (!kernel_process_worker_enter())
+        return false;
     worker_state = KERNEL_WORKER_RUNNING;
     ++dispatch_count;
     return true;
@@ -173,6 +177,8 @@ bool kernel_worker_try_select(void)
 bool kernel_worker_select_idle(void)
 {
     if (worker_state != KERNEL_WORKER_BLOCKED || pending_work != 0u)
+        return false;
+    if (!kernel_process_worker_enter())
         return false;
     worker_state = KERNEL_WORKER_RUNNING;
     ++dispatch_count;
@@ -250,7 +256,7 @@ void kernel_worker_main(void)
         if (!block_if_idle())
             kernel_panic("deferred worker state corrupt");
 
-        next = kernel_process_current_context();
+        next = kernel_process_worker_resume();
         if (next != NULL) {
             ++user_yield_count;
             kernel_worker_switch_to_user(next);
@@ -266,7 +272,7 @@ void kernel_worker_main(void)
                 worker_state = KERNEL_WORKER_RUNNING;
                 break;
             }
-            next = kernel_process_current_context();
+            next = kernel_process_worker_resume();
             if (next != NULL) {
                 ++user_yield_count;
                 kernel_worker_switch_to_user(next);

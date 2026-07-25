@@ -133,6 +133,31 @@ KernelHandleStatus kernel_handle_lookup(const KernelHandleTable *table,
     return KERNEL_HANDLE_OK;
 }
 
+KernelHandleStatus kernel_handle_lookup_any(const KernelHandleTable *table,
+                                            KernelHandle handle,
+                                            uint32_t required_rights,
+                                            KernelObjectType *type,
+                                            void **object)
+{
+    const KernelHandleEntry *entry;
+    KernelHandleStatus status;
+
+    if (type == NULL || object == NULL)
+        return KERNEL_HANDLE_INVALID_ARGUMENT;
+    *type = KERNEL_OBJECT_NONE;
+    *object = NULL;
+    status = find_entry(table, handle, &entry);
+    if (status != KERNEL_HANDLE_OK)
+        return status;
+    if ((entry->rights & required_rights) != required_rights)
+        return KERNEL_HANDLE_ACCESS_DENIED;
+    if (entry->type == KERNEL_OBJECT_NONE || entry->object == NULL)
+        return KERNEL_HANDLE_INVALID_HANDLE;
+    *type = (KernelObjectType)entry->type;
+    *object = entry->object;
+    return KERNEL_HANDLE_OK;
+}
+
 KernelHandleStatus kernel_handle_close(KernelHandleTable *table,
                                        KernelHandle handle)
 {

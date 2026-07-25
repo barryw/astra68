@@ -1,0 +1,3224 @@
+make: Entering directory '/tmp/astra68-k6-04524898-final/ndk'
+sh docs/build.sh all
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 450B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/sphinxdoc/sphinx-latexpdf:8.2.3@sha256:8fc7894c1961018ceaedf79d5dc3c4d74c1b0ea9c6a267ed65efa9596d3d17d0
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/5] FROM docker.io/sphinxdoc/sphinx-latexpdf:8.2.3@sha256:8fc7894c1961018ceaedf79d5dc3c4d74c1b0ea9c6a267ed65efa9596d3d17d0
+#4 resolve docker.io/sphinxdoc/sphinx-latexpdf:8.2.3@sha256:8fc7894c1961018ceaedf79d5dc3c4d74c1b0ea9c6a267ed65efa9596d3d17d0 0.0s done
+#4 DONE 0.0s
+
+#5 [internal] load build context
+#5 transferring context: 93B done
+#5 DONE 0.0s
+
+#6 [2/5] RUN apt-get update     && apt-get install -y --no-install-recommends doxygen graphviz     && rm -rf /var/lib/apt/lists/*
+#6 CACHED
+
+#7 [3/5] COPY requirements.txt /tmp/astra-ndk-doc-requirements.txt
+#7 CACHED
+
+#8 [4/5] RUN python -m pip install --no-cache-dir     -r /tmp/astra-ndk-doc-requirements.txt
+#8 CACHED
+
+#9 [5/5] WORKDIR /workspace
+#9 CACHED
+
+#10 exporting to image
+#10 exporting layers done
+#10 exporting manifest sha256:bd4fb78e9c84b0e6895264d69b4d4087b440181097dee4b0bed8fb6777f8a2f7 done
+#10 exporting config sha256:6b76d4ba3740c8695483a4e3a66060593843adea9d3b3f33c20611c728f4afd8 done
+#10 exporting attestation manifest sha256:e791e75a1c5e80fe1f70794e290c9d56b34db502d7ce2158d2a38e9af54fa730 0.0s done
+#10 exporting manifest list sha256:bba70d408099843f71943b4f27d58cf777a30631b1aa638b3cfddab59f0c032a 0.0s done
+#10 naming to docker.io/library/astra68-ndk-docs:8.2.3-1 done
+#10 unpacking to docker.io/library/astra68-ndk-docs:8.2.3-1 done
+#10 DONE 0.1s
+Running Sphinx v8.2.3
+loading translations [en]... done
+making output directory... done
+myst v4.0.1: MdParserConfig(commonmark_only=False, gfm_only=False, enable_extensions={'deflist', 'fieldlist', 'colon_fence'}, disable_syntax=[], all_links_external=False, links_external_new_tab=False, url_schemes=('http', 'https', 'mailto', 'ftp'), ref_domains=None, fence_as_directive=set(), number_code_blocks=[], title_to_header=False, heading_anchors=0, heading_slug_func=None, html_meta={}, footnote_sort=True, footnote_transition=True, words_per_minute=200, substitutions={}, linkify_fuzzy_links=True, dmath_allow_labels=True, dmath_allow_space=True, dmath_allow_digits=True, dmath_double_inline=False, update_mathjax=True, mathjax_classes='tex2jax_process|mathjax_process|math|output_area', enable_checkboxes=False, suppress_warnings=[], highlight_code_blocks=True)
+building [mo]: all of 0 po files
+writing output... 
+building [html]: all source files
+updating environment: [new config] 12 added, 0 changed, 0 removed
+reading sources... [  8%] api/core
+reading sources... [ 17%] api/fonts
+reading sources... [ 25%] api/front-panel
+reading sources... [ 33%] api/graphics
+reading sources... [ 42%] api/index
+reading sources... [ 50%] api/resources
+reading sources... [ 58%] development
+reading sources... [ 67%] fonts
+reading sources... [ 75%] getting-started
+reading sources... [ 83%] graphics
+reading sources... [ 92%] index
+reading sources... [100%] resource-lifetime
+
+looking for now-outdated files... none found
+pickling environment... done
+checking consistency... done
+preparing documents... done
+copying assets... 
+copying static files... 
+Writing evaluated template result to /workspace/build/docs/html/_static/documentation_options.js
+Writing evaluated template result to /workspace/build/docs/html/_static/basic.css
+Writing evaluated template result to /workspace/build/docs/html/_static/language_data.js
+copying static files: done
+copying extra files... 
+copying extra files: done
+copying assets: done
+writing output... [  8%] api/core
+writing output... [ 17%] api/fonts
+writing output... [ 25%] api/front-panel
+writing output... [ 33%] api/graphics
+writing output... [ 42%] api/index
+writing output... [ 50%] api/resources
+writing output... [ 58%] development
+writing output... [ 67%] fonts
+writing output... [ 75%] getting-started
+writing output... [ 83%] graphics
+writing output... [ 92%] index
+writing output... [100%] resource-lifetime
+
+generating indices... genindex done
+writing additional pages... search done
+dumping search index in English (code: en)... done
+dumping object inventory... done
+build succeeded.
+
+The HTML pages are in build/docs/html.
+Running Sphinx v8.2.3
+loading translations [en]... done
+making output directory... done
+myst v4.0.1: MdParserConfig(commonmark_only=False, gfm_only=False, enable_extensions={'colon_fence', 'fieldlist', 'deflist'}, disable_syntax=[], all_links_external=False, links_external_new_tab=False, url_schemes=('http', 'https', 'mailto', 'ftp'), ref_domains=None, fence_as_directive=set(), number_code_blocks=[], title_to_header=False, heading_anchors=0, heading_slug_func=None, html_meta={}, footnote_sort=True, footnote_transition=True, words_per_minute=200, substitutions={}, linkify_fuzzy_links=True, dmath_allow_labels=True, dmath_allow_space=True, dmath_allow_digits=True, dmath_double_inline=False, update_mathjax=True, mathjax_classes='tex2jax_process|mathjax_process|math|output_area', enable_checkboxes=False, suppress_warnings=[], highlight_code_blocks=True)
+building [mo]: all of 0 po files
+writing output... 
+building [latex]: all source files
+updating environment: [new config] 12 added, 0 changed, 0 removed
+reading sources... [  8%] api/core
+reading sources... [ 17%] api/fonts
+reading sources... [ 25%] api/front-panel
+reading sources... [ 33%] api/graphics
+reading sources... [ 42%] api/index
+reading sources... [ 50%] api/resources
+reading sources... [ 58%] development
+reading sources... [ 67%] fonts
+reading sources... [ 75%] getting-started
+reading sources... [ 83%] graphics
+reading sources... [ 92%] index
+reading sources... [100%] resource-lifetime
+
+looking for now-outdated files... none found
+pickling environment... done
+checking consistency... done
+preparing documents... done
+copying assets... 
+copying TeX support files... Writing evaluated template result to /workspace/build/docs/sphinx/latex/latexmkjarc
+Writing evaluated template result to /workspace/build/docs/sphinx/latex/latexmkrc
+Writing evaluated template result to /workspace/build/docs/sphinx/latex/make.bat
+Writing evaluated template result to /workspace/build/docs/sphinx/latex/Makefile
+done
+copying assets: done
+processing astra68-ndk.tex... 
+index
+ getting-started
+ resource-lifetime
+ graphics
+ fonts
+ development
+  api/index
+   api/core
+   api/resources
+   api/front-panel
+   api/fonts
+   api/graphics
+
+resolving references...
+processing astra68-ndk.tex: done
+writing... done
+Writing evaluated template result to /workspace/build/docs/sphinx/latex/sphinxmessages.sty
+build succeeded.
+
+The LaTeX files are in build/docs/sphinx/latex.
+Run 'make' in that directory to run these through (pdf)latex
+(use `make latexpdf' here to do that automatically).
+latexmk -pdf -dvi- -ps-  'astra68-ndk.tex'
+Rc files read:
+  /etc/LatexMk
+  latexmkrc
+Latexmk: This is Latexmk, John Collins, 7 Jan. 2023. Version 4.79.
+No existing .aux file, so I'll make a simple one, and require run of *latex.
+Latexmk: applying rule 'pdflatex'...
+Rule 'pdflatex':  Reasons for rerun
+Category 'other':
+  Rerun of 'pdflatex' forced or previously required
+
+------------
+Run number 1 of rule 'pdflatex'
+------------
+------------
+Running 'pdflatex   -recorder  "astra68-ndk.tex"'
+------------
+This is pdfTeX, Version 3.141592653-2.6-1.40.24 (TeX Live 2022/Debian) (preloaded format=pdflatex)
+ restricted \write18 enabled.
+entering extended mode
+(./astra68-ndk.tex
+LaTeX2e <2022-11-01> patch level 1
+L3 programming layer <2023-01-16> (./sphinxmanual.cls
+Document Class: sphinxmanual 2019/12/01 v2.3.0 Document class (Sphinx manual)
+(/usr/share/texlive/texmf-dist/tex/latex/base/report.cls
+Document Class: report 2022/07/02 v1.4n Standard LaTeX document class
+(/usr/share/texlive/texmf-dist/tex/latex/base/size10.clo)))
+(/usr/share/texlive/texmf-dist/tex/latex/base/inputenc.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/cmap/cmap.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/base/fontenc.sty<<t1.cmap>>)
+(/usr/share/texlive/texmf-dist/tex/latex/amsmath/amsmath.sty
+For additional information on amsmath, use the `?' option.
+(/usr/share/texlive/texmf-dist/tex/latex/amsmath/amstext.sty
+(/usr/share/texlive/texmf-dist/tex/latex/amsmath/amsgen.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/amsmath/amsbsy.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/amsmath/amsopn.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/amsfonts/amssymb.sty
+(/usr/share/texlive/texmf-dist/tex/latex/amsfonts/amsfonts.sty))
+(/usr/share/texlive/texmf-dist/tex/generic/babel/babel.sty
+(/usr/share/texlive/texmf-dist/tex/generic/babel/txtbabel.def)
+(/usr/share/texlive/texmf-dist/tex/generic/babel-english/english.ldf))
+(/usr/share/texlive/texmf-dist/tex/generic/babel/locale/en/babel-english.tex)
+(/usr/share/texmf/tex/latex/tex-gyre/tgtermes.sty
+(/usr/share/texlive/texmf-dist/tex/latex/kvoptions/kvoptions.sty
+(/usr/share/texlive/texmf-dist/tex/latex/graphics/keyval.sty)
+(/usr/share/texlive/texmf-dist/tex/generic/ltxcmds/ltxcmds.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/kvsetkeys/kvsetkeys.sty)))
+(/usr/share/texmf/tex/latex/tex-gyre/tgheros.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/fncychap/fncychap.sty) (./sphinx.sty
+(/usr/share/texlive/texmf-dist/tex/latex/xcolor/xcolor.sty
+(/usr/share/texlive/texmf-dist/tex/latex/graphics-cfg/color.cfg)
+(/usr/share/texlive/texmf-dist/tex/latex/graphics-def/pdftex.def)
+(/usr/share/texlive/texmf-dist/tex/latex/graphics/mathcolor.ltx))
+(./sphinxoptionshyperref.sty) (./sphinxoptionsgeometry.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/base/textcomp.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/float/float.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/wrapfig/wrapfig.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/capt-of/capt-of.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/tools/multicol.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/graphics/graphicx.sty
+(/usr/share/texlive/texmf-dist/tex/latex/graphics/graphics.sty
+(/usr/share/texlive/texmf-dist/tex/latex/graphics/trig.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/graphics-cfg/graphics.cfg)))
+(./sphinxlatexgraphics.sty) (./sphinxpackageboxes.sty
+(/usr/share/texlive/texmf-dist/tex/latex/pict2e/pict2e.sty
+(/usr/share/texlive/texmf-dist/tex/latex/pict2e/pict2e.cfg)
+(/usr/share/texlive/texmf-dist/tex/latex/pict2e/p2e-pdftex.def))
+(/usr/share/texlive/texmf-dist/tex/latex/ellipse/ellipse.sty))
+(./sphinxlatexadmonitions.sty
+(/usr/share/texlive/texmf-dist/tex/latex/framed/framed.sty)
+(./sphinxpackagefootnote.sty)) (./sphinxlatexliterals.sty
+(/usr/share/texlive/texmf-dist/tex/latex/fancyvrb/fancyvrb.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/base/alltt.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/upquote/upquote.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/needspace/needspace.sty))
+(./sphinxlatexshadowbox.sty) (./sphinxlatexcontainers.sty)
+(./sphinxhighlight.sty) (./sphinxlatextables.sty
+(/usr/share/texlive/texmf-dist/tex/latex/tabulary/tabulary.sty
+(/usr/share/texlive/texmf-dist/tex/latex/tools/array.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/tools/longtable.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/varwidth/varwidth.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/colortbl/colortbl.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/booktabs/booktabs.sty))
+(./sphinxlatexnumfig.sty) (./sphinxlatexlists.sty) (./sphinxlatexindbibtoc.sty
+(/usr/share/texlive/texmf-dist/tex/latex/base/makeidx.sty))
+(./sphinxlatexstylepage.sty
+(/usr/share/texlive/texmf-dist/tex/latex/parskip/parskip.sty
+(/usr/share/texlive/texmf-dist/tex/latex/etoolbox/etoolbox.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/fancyhdr/fancyhdr.sty))
+(./sphinxlatexstyleheadings.sty
+(/usr/share/texlive/texmf-dist/tex/latex/titlesec/titlesec.sty))
+(./sphinxlatexstyletext.sty) (./sphinxlatexobjects.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/geometry/geometry.sty
+(/usr/share/texlive/texmf-dist/tex/generic/iftex/ifvtex.sty
+(/usr/share/texlive/texmf-dist/tex/generic/iftex/iftex.sty)))
+(/usr/share/texlive/texmf-dist/tex/latex/hyperref/hyperref.sty
+(/usr/share/texlive/texmf-dist/tex/generic/pdftexcmds/pdftexcmds.sty
+(/usr/share/texlive/texmf-dist/tex/generic/infwarerr/infwarerr.sty))
+(/usr/share/texlive/texmf-dist/tex/generic/kvdefinekeys/kvdefinekeys.sty)
+(/usr/share/texlive/texmf-dist/tex/generic/pdfescape/pdfescape.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/hycolor/hycolor.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/letltxmacro/letltxmacro.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/auxhook/auxhook.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/hyperref/nameref.sty
+(/usr/share/texlive/texmf-dist/tex/latex/refcount/refcount.sty)
+(/usr/share/texlive/texmf-dist/tex/generic/gettitlestring/gettitlestring.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/hyperref/pd1enc.def)
+(/usr/share/texlive/texmf-dist/tex/generic/intcalc/intcalc.sty)
+(/usr/share/texlive/texmf-dist/tex/generic/etexcmds/etexcmds.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/hyperref/puenc.def)
+(/usr/share/texlive/texmf-dist/tex/latex/url/url.sty)
+(/usr/share/texlive/texmf-dist/tex/generic/bitset/bitset.sty
+(/usr/share/texlive/texmf-dist/tex/generic/bigintcalc/bigintcalc.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/base/atbegshi-ltx.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/hyperref/hpdftex.def
+(/usr/share/texlive/texmf-dist/tex/latex/base/atveryend-ltx.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/rerunfilecheck/rerunfilecheck.sty
+(/usr/share/texlive/texmf-dist/tex/generic/uniquecounter/uniquecounter.sty)))
+(/usr/share/texlive/texmf-dist/tex/latex/oberdiek/hypcap.sty)
+(./sphinxmessages.sty)
+Writing index file astra68-ndk.idx
+(/usr/share/texmf/tex/latex/tex-gyre/t1qtm.fd)
+(/usr/share/texlive/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def)
+(./astra68-ndk.aux)
+(/usr/share/texlive/texmf-dist/tex/context/base/mkii/supp-pdf.mkii
+[Loading MPS to PDF converter (version 2006.09.02).]
+) (/usr/share/texlive/texmf-dist/tex/latex/epstopdf-pkg/epstopdf-base.sty
+(/usr/share/texlive/texmf-dist/tex/latex/latexconfig/epstopdf-sys.cfg))
+(/usr/share/texlive/texmf-dist/tex/latex/fontawesome5/fontawesome5.sty
+(/usr/share/texlive/texmf-dist/tex/latex/l3kernel/expl3.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/l3packages/l3keys2e/l3keys2e.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/l3packages/xparse/xparse.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/fontawesome5/fontawesome5-generic-help
+er.sty
+(/usr/share/texlive/texmf-dist/tex/latex/fontawesome5/fontawesome5-mapping.def)
+))
+*geometry* driver: auto-detecting
+*geometry* detected driver: pdftex
+(/usr/share/texmf/tex/latex/tex-gyre/t1qhv.fd)<<ot1.cmap>><<oml.cmap>><<oms.cma
+p>><<omx.cmap>> (/usr/share/texlive/texmf-dist/tex/latex/amsfonts/umsa.fd)
+(/usr/share/texlive/texmf-dist/tex/latex/amsfonts/umsb.fd) [1{/var/lib/texmf/fo
+nts/map/pdftex/updmap/pdftex.map}] [2]
+No file astra68-ndk.toc.
+[1] [2] [1] [2]
+Chapter 1.
+(/usr/share/texlive/texmf-dist/tex/latex/txfonts/t1txtt.fd)
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 3 undefined on 
+input line 115.
+
+
+LaTeX Warning: Hyper reference `api/core:c.@28.ASTRA_OK' on page 3 undefined on
+ input line 116.
+
+
+LaTeX Warning: Hyper reference `api/core:c.ASTRA_NODISCARD' on page 3 undefined
+ on input line 117.
+
+[3] [4] [5] [6]
+Chapter 2.
+
+LaTeX Warning: Hyper reference `api/resources:c.AstraHandle' on page 7 undefine
+d on input line 230.
+
+
+LaTeX Warning: Hyper reference `api/front-panel:c.AstraFrontPanelLedLease' on p
+age 7 undefined on input line 231.
+
+[7] [8]
+Chapter 3.
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDisplay' on page 9 undefine
+d on input line 280.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.astra_graphics_get_info' on page
+ 9 undefined on input line 281.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSurface' on page 9 undefine
+d on input line 285.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawList' on page 9 undefin
+ed on input line 290.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.astra_draw_submit' on page 9 und
+efined on input line 295.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraFence' on page 9 undefined 
+on input line 296.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.astra_display_present_surface' o
+n page 9 undefined on input line 301.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.astra_surface_get_info' on page 
+9 undefined on input line 317.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraPalette' on page 9 undefine
+d on input line 326.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraTileLayers' on page 9 undef
+ined on input line 336.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSpriteSet' on page 9 undefi
+ned on input line 344.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraGraphicsInfo' on page 9 und
+efined on input line 351.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.@23.ASTRA_DISPLAY_STATUS_SPRITE_
+OVERFLOW' on page 9 undefined on input line 353.
+
+[9]
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraRasterProgram' on page 10 u
+ndefined on input line 357.
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 365--370
+\T1/qtm/m/n/10 Use \T1/txtt/m/n/10 ASTRA_AUTO_DISPLAY\T1/qtm/m/n/10 , \T1/txtt/
+m/n/10 ASTRA_AUTO_SURFACE\T1/qtm/m/n/10 , \T1/txtt/m/n/10 ASTRA_AUTO_DRAW_LIST\
+T1/qtm/m/n/10 , \T1/txtt/m/n/10 ASTRA_AUTO_SPRITE_SET\T1/qtm/m/n/10 ,
+[10]
+Chapter 4.
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFontFace' on page 11 undefined
+ on input line 384.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFont' on page 11 undefined on 
+input line 385.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraTextLayout' on page 11 undefin
+ed on input line 386.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.astra_fonts_present' on page 11 und
+efined on input line 404.
+
+
+LaTeX Warning: Hyper reference `api/core:c.@28.ASTRA_ERROR_NOT_PRESENT' on page
+ 11 undefined on input line 405.
+
+(/usr/share/texmf/tex/latex/tex-gyre/ts1qtm.fd)
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFontInfo' on page 11 undefined
+ on input line 445.
+
+[11]
+
+LaTeX Warning: Hyper reference `api/graphics:c.astra_draw_text_layout' on page 
+12 undefined on input line 458.
+
+[12]
+Chapter 5.
+[13] [14]
+Chapter 6.
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1ga59e25c49e8786490
+c97a7fe22fa9e104' on page 15 undefined on input line 585.
+
+[15] [16] [17] [18]
+
+LaTeX Warning: Hyper reference `api/resources:group__astra__resources_1gafdefd6
+e1728484dcc9d4a76ce2d89ad1' on page 19 undefined on input line 1322.
+
+
+LaTeX Warning: Hyper reference `api/front-panel:structAstraFrontPanelLedLease' 
+on page 19 undefined on input line 1421.
+
+
+LaTeX Warning: Hyper reference `api/front-panel:structAstraFrontPanelLedLease' 
+on page 19 undefined on input line 1435.
+
+[19]
+
+LaTeX Warning: Hyper reference `api/front-panel:group__astra__front__panel_1ga4
+7c1233714ceab5a24afdcaf58417a97' on page 20 undefined on input line 1455.
+
+
+Underfull \hbox (badness 6542) in paragraph at lines 1454--1456
+[]\T1/qtm/m/n/10 This ex-ten-sion is avail-able with GCC and Clang. Cleanup fai
+l-ures are ig-nored; use \T1/qtm/m/it/10 as-
+
+LaTeX Warning: Hyper reference `api/front-panel:structAstraFrontPanelState' on 
+page 20 undefined on input line 1473.
+
+
+LaTeX Warning: Hyper reference `api/front-panel:structAstraFrontPanelState' on 
+page 20 undefined on input line 1596.
+
+[20]
+
+LaTeX Warning: Hyper reference `api/front-panel:structAstraFrontPanelInfo' on p
+age 21 undefined on input line 1689.
+
+[21]
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 22 undefined on
+ input line 1886.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 22 undefined on
+ input line 1886.
+
+
+LaTeX Warning: Hyper reference `api/front-panel:c.AstraFrontPanelInfo' on page 
+22 undefined on input line 1886.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 22 undefined on
+ input line 1948.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 22 undefined on
+ input line 1948.
+
+
+LaTeX Warning: Hyper reference `api/front-panel:c.AstraFrontPanelState' on page
+ 22 undefined on input line 1948.
+
+[22]
+
+LaTeX Warning: Hyper reference `api/front-panel:group__astra__front__panel_1gaf
+97e0b7a3db3919f9cb5c55db69f5789' on page 23 undefined on input line 1995.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 23 undefined on
+ input line 2010.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 23 undefined on
+ input line 2010.
+
+
+LaTeX Warning: Hyper reference `api/front-panel:group__astra__front__panel_1gaf
+97e0b7a3db3919f9cb5c55db69f5789' on page 23 undefined on input line 2053.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 23 undefined on
+ input line 2068.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 23 undefined on
+ input line 2068.
+
+
+LaTeX Warning: Hyper reference `api/front-panel:group__astra__front__panel_1gaf
+97e0b7a3db3919f9cb5c55db69f5789' on page 23 undefined on input line 2107.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 23 undefined on
+ input line 2122.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 23 undefined on
+ input line 2122.
+
+[23]
+
+LaTeX Warning: Hyper reference `api/front-panel:group__astra__front__panel_1gaf
+97e0b7a3db3919f9cb5c55db69f5789' on page 24 undefined on input line 2169.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 24 undefined on
+ input line 2184.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 24 undefined on
+ input line 2184.
+
+
+LaTeX Warning: Hyper reference `api/resources:c.AstraAcquireOptions' on page 24
+ undefined on input line 2184.
+
+
+LaTeX Warning: Hyper reference `api/front-panel:c.AstraFrontPanelLedLease' on p
+age 24 undefined on input line 2184.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa0d070aebeef6180114b330e364dc43a7' on page 24 undefined on inp
+ut line 2198.
+
+[24]
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 25 undefined on
+ input line 2266.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 25 undefined on
+ input line 2266.
+
+
+LaTeX Warning: Hyper reference `api/front-panel:c.AstraFrontPanelLedLease' on p
+age 25 undefined on input line 2266.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 25 undefined on
+ input line 2328.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 25 undefined on
+ input line 2328.
+
+
+LaTeX Warning: Hyper reference `api/front-panel:c.AstraFrontPanelLedLease' on p
+age 25 undefined on input line 2328.
+
+[25]
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 26 undefined on
+ input line 2397.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 26 undefined on
+ input line 2397.
+
+
+LaTeX Warning: Hyper reference `api/front-panel:c.AstraFrontPanelLedLease' on p
+age 26 undefined on input line 2397.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 26 undefined on
+ input line 2466.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 26 undefined on
+ input line 2466.
+
+
+LaTeX Warning: Hyper reference `api/front-panel:c.AstraFrontPanelLedLease' on p
+age 26 undefined on input line 2466.
+
+[26]
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 27 undefined on
+ input line 2535.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 27 undefined on
+ input line 2535.
+
+
+LaTeX Warning: Hyper reference `api/front-panel:c.AstraFrontPanelLedLease' on p
+age 27 undefined on input line 2535.
+
+
+LaTeX Warning: Hyper reference `api/front-panel:c.AstraFrontPanelLedLease' on p
+age 27 undefined on input line 2604.
+
+
+LaTeX Warning: Hyper reference `api/front-panel:group__astra__front__panel_1ga4
+9b744c9907c0d28415f7fe53eb04c6f' on page 27 undefined on input line 2608.
+
+[27] [28]
+
+LaTeX Warning: Hyper reference `api/front-panel:group__astra__front__panel_1ga7
+3823270391a5bc576aec008ecd5dfd8' on page 29 undefined on input line 2860.
+
+
+LaTeX Warning: Hyper reference `api/front-panel:group__astra__front__panel_1ga4
+9b744c9907c0d28415f7fe53eb04c6f' on page 29 undefined on input line 2860.
+
+
+Overfull \hbox (19.59416pt too wide) in paragraph at lines 2859--2861
+[]\T1/qtm/m/n/10 Ini-tial-ize with \T1/qtm/m/it/10 AS-TRA_FRONT_PANEL_LED_LEASE
+_INIT \T1/qtm/m/n/10 or \T1/qtm/m/it/10 AS-TRA_AUTO_FRONT_PANEL_LED_LEASE\T1/qt
+m/m/n/10 .
+
+LaTeX Warning: Hyper reference `api/resources:c.AstraHandle' on page 29 undefin
+ed on input line 2879.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa5ef18dca78a222c395420793baacc3eb' on page 29 undefined on inp
+ut line 2914.
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 2913--2915
+[]\T1/qtm/m/n/10 The direct-MMIO back-end pub-lishes these sym-bols but has no 
+font ser-vice and re-ports \T1/qtm/m/it/10 AS-
+
+LaTeX Warning: Hyper reference `api/fonts:structAstraFontFace' on page 29 undef
+ined on input line 2931.
+
+
+LaTeX Warning: Hyper reference `api/fonts:structAstraFont' on page 29 undefined
+ on input line 2946.
+
+
+LaTeX Warning: Hyper reference `api/fonts:structAstraTextLayout' on page 29 und
+efined on input line 2961.
+
+
+LaTeX Warning: Hyper reference `api/fonts:structAstraFontInfo' on page 29 undef
+ined on input line 2991.
+
+
+LaTeX Warning: Hyper reference `api/fonts:structAstraFontMetrics' on page 29 un
+defined on input line 3006.
+
+[29]
+
+LaTeX Warning: Hyper reference `api/fonts:structAstraTextMetrics' on page 30 un
+defined on input line 3036.
+
+
+LaTeX Warning: Hyper reference `api/fonts:structAstraTextHit' on page 30 undefi
+ned on input line 3051.
+
+
+LaTeX Warning: Hyper reference `api/fonts:group__astra__fonts_1ga11d60c8e5c2c4c
+7d8b0c913c705123cf' on page 30 undefined on input line 3086.
+
+
+LaTeX Warning: Hyper reference `api/fonts:group__astra__fonts_1gaebd3a01d7458d2
+73c0a4529d74510681' on page 30 undefined on input line 3106.
+
+
+LaTeX Warning: Hyper reference `api/fonts:group__astra__fonts_1ga1eec178243e0f0
+ea5cfb5567e3486a4a' on page 30 undefined on input line 3126.
+
+[30]
+
+LaTeX Warning: Hyper reference `api/fonts:structAstraFontRequest' on page 31 un
+defined on input line 3363.
+
+
+LaTeX Warning: Hyper reference `api/fonts:structAstraFontInfo' on page 31 undef
+ined on input line 3441.
+
+[31] [32] [33]
+
+LaTeX Warning: Hyper reference `api/fonts:structAstraTextHit' on page 34 undefi
+ned on input line 3924.
+
+[34]
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 35 undefined on
+ input line 4109.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 35 undefined on
+ input line 4109.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFontFace' on page 35 undefined
+ on input line 4109.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 35 undefined on input line 4168.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 35 undefined on
+ input line 4183.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 35 undefined on
+ input line 4183.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFontFace' on page 35 undefined
+ on input line 4183.
+
+[35]
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 36 undefined on input line 4257.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 36 undefined on
+ input line 4272.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 36 undefined on
+ input line 4272.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFontFace' on page 36 undefined
+ on input line 4272.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 36 undefined on input line 4326.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 36 undefined on
+ input line 4341.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 36 undefined on
+ input line 4341.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFontFace' on page 36 undefined
+ on input line 4341.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFontInfo' on page 36 undefined
+ on input line 4341.
+
+[36]
+
+LaTeX Warning: Hyper reference `api/fonts:group__astra__fonts_1ga8b1027209e55aa
+a8963efaf4ac46a285' on page 37 undefined on input line 4348.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 37 undefined on input line 4399.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 37 undefined on
+ input line 4414.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 37 undefined on
+ input line 4414.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFontFace' on page 37 undefined
+ on input line 4414.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa790d1e3f6fbd153673d69047bf6f0544' on page 37 undefined on inp
+ut line 4421.
+
+[37]
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 38 undefined on input line 4488.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 38 undefined on
+ input line 4503.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 38 undefined on
+ input line 4503.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFontFace' on page 38 undefined
+ on input line 4503.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFontRequest' on page 38 undefi
+ned on input line 4503.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFont' on page 38 undefined on 
+input line 4503.
+
+
+LaTeX Warning: Hyper reference `api/fonts:group__astra__fonts_1ggabc6126af1d458
+47bc59afa0aa3216b04ac2e23cccc606cf2117278876f154ee8c' on page 38 undefined on i
+nput line 4510.
+
+
+LaTeX Warning: Hyper reference `api/fonts:group__astra__fonts_1ga8f2e1710ba8fd1
+5d45a35ad3859f3830' on page 38 undefined on input line 4510.
+
+[38]
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 39 undefined on input line 4585.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 39 undefined on
+ input line 4600.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 39 undefined on
+ input line 4600.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFont' on page 39 undefined on 
+input line 4600.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 39 undefined on input line 4654.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 39 undefined on
+ input line 4669.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 39 undefined on
+ input line 4669.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFont' on page 39 undefined on 
+input line 4669.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFontInfo' on page 39 undefined
+ on input line 4669.
+
+
+LaTeX Warning: Hyper reference `api/fonts:group__astra__fonts_1ga8b1027209e55aa
+a8963efaf4ac46a285' on page 39 undefined on input line 4703.
+
+[39]
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 40 undefined on input line 4724.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 40 undefined on
+ input line 4739.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 40 undefined on
+ input line 4739.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFont' on page 40 undefined on 
+input line 4739.
+
+
+LaTeX Warning: Hyper reference `api/fonts:group__astra__fonts_1gad8630e61253a79
+9c93c8b7ce743af0a0' on page 40 undefined on input line 4746.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 40 undefined on input line 4813.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 40 undefined on
+ input line 4828.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 40 undefined on
+ input line 4828.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFont' on page 40 undefined on 
+input line 4828.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFontMetrics' on page 40 undefi
+ned on input line 4828.
+
+[40]
+
+LaTeX Warning: Hyper reference `api/fonts:group__astra__fonts_1gac8f713b7f41dbb
+be8facbd31204a90df' on page 41 undefined on input line 4862.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 41 undefined on input line 4883.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 41 undefined on
+ input line 4898.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 41 undefined on
+ input line 4898.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFont' on page 41 undefined on 
+input line 4898.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraTextLayoutOptions' on page 41 
+undefined on input line 4898.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraTextLayout' on page 41 undefin
+ed on input line 4898.
+
+
+LaTeX Warning: Hyper reference `api/fonts:group__astra__fonts_1ga9d6db558d541b8
+dfe989501cfb2157bf' on page 41 undefined on input line 4905.
+
+[41]
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 42 undefined on input line 4976.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 42 undefined on
+ input line 4991.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 42 undefined on
+ input line 4991.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraTextLayout' on page 42 undefin
+ed on input line 4991.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 42 undefined on input line 5045.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 42 undefined on
+ input line 5060.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 42 undefined on
+ input line 5060.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraTextLayout' on page 42 undefin
+ed on input line 5060.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraTextMetrics' on page 42 undefi
+ned on input line 5060.
+
+[42]
+
+LaTeX Warning: Hyper reference `api/fonts:group__astra__fonts_1ga93874d925eca0c
+ace2d683098de75837' on page 43 undefined on input line 5094.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 43 undefined on input line 5115.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 43 undefined on
+ input line 5130.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 43 undefined on
+ input line 5130.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraTextLayout' on page 43 undefin
+ed on input line 5130.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 43 undefined
+ on input line 5130.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 43 undefined
+ on input line 5130.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraTextHit' on page 43 undefined 
+on input line 5130.
+
+
+LaTeX Warning: Hyper reference `api/fonts:group__astra__fonts_1gaebe03e3869a615
+7035cecb2fb31fdd3b' on page 43 undefined on input line 5175.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 43 undefined on input line 5196.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 43 undefined on
+ input line 5211.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 43 undefined on
+ input line 5211.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraTextLayout' on page 43 undefin
+ed on input line 5211.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraTextHit' on page 43 undefined 
+on input line 5211.
+
+[43]
+
+LaTeX Warning: Hyper reference `api/fonts:group__astra__fonts_1gaebe03e3869a615
+7035cecb2fb31fdd3b' on page 44 undefined on input line 5253.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 44 undefined on input line 5274.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFontFace' on page 44 undefined
+ on input line 5289.
+
+
+LaTeX Warning: Hyper reference `api/fonts:group__astra__fonts_1ga9c80feb3d10eed
+ee5e681c11de077170' on page 44 undefined on input line 5293.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraFont' on page 44 undefined on 
+input line 5332.
+
+
+LaTeX Warning: Hyper reference `api/fonts:group__astra__fonts_1ga27e7bf22d810fe
+6d98668ba17c129627' on page 44 undefined on input line 5336.
+
+[44]
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraTextLayout' on page 45 undefin
+ed on input line 5375.
+
+
+LaTeX Warning: Hyper reference `api/fonts:group__astra__fonts_1gaf087f0ba1b4f5d
+dee3042372255d5a71' on page 45 undefined on input line 5379.
+
+
+LaTeX Warning: Hyper reference `api/resources:c.AstraHandle' on page 45 undefin
+ed on input line 5440.
+
+
+LaTeX Warning: Hyper reference `api/resources:c.AstraHandle' on page 45 undefin
+ed on input line 5482.
+
+[45]
+
+LaTeX Warning: Hyper reference `api/resources:c.AstraHandle' on page 46 undefin
+ed on input line 5524.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 46 undefined
+ on input line 5587.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 46 undefined
+ on input line 5602.
+
+
+LaTeX Warning: Hyper reference `api/fonts:structAstraFont' on page 46 undefined
+ on input line 5685.
+
+[46]
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 47 undefined
+ on input line 5755.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 47 undefined
+ on input line 5770.
+
+[47]
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 48 undefined
+ on input line 5953.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 48 undefined
+ on input line 5968.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 48 undefined
+ on input line 5983.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 48 undefined
+ on input line 5998.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 48 undefined
+ on input line 6013.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 48 undefined
+ on input line 6028.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 48 undefined
+ on input line 6043.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 48 undefined
+ on input line 6058.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 48 undefined
+ on input line 6136.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 48 undefined
+ on input line 6151.
+
+[48]
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 49 undefined
+ on input line 6166.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 49 undefined
+ on input line 6274.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 49 undefined
+ on input line 6289.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 49 undefined
+ on input line 6304.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 49 undefined
+ on input line 6319.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraTextRect' on page 49 undefined
+ on input line 6367.
+
+[49]
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraTextRect' on page 50 undefined
+ on input line 6382.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 50 undefined
+ on input line 6397.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 50 undefined
+ on input line 6412.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 50 undefined
+ on input line 6427.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 50 undefined
+ on input line 6442.
+
+[50]
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 51 undefined
+ on input line 6610.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 51 undefined
+ on input line 6625.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraFixed26_6' on page 51 undefined
+ on input line 6640.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraColorRGBA8' on page 51 undefine
+d on input line 6718.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraColorRGBA8' on page 51 undefine
+d on input line 6733.
+
+[51]
+
+LaTeX Warning: Hyper reference `api/graphics:structAstraDisplay' on page 52 und
+efined on input line 6824.
+
+
+LaTeX Warning: Hyper reference `api/graphics:structAstraSurface' on page 52 und
+efined on input line 6839.
+
+
+LaTeX Warning: Hyper reference `api/graphics:structAstraDrawList' on page 52 un
+defined on input line 6854.
+
+
+LaTeX Warning: Hyper reference `api/graphics:structAstraPalette' on page 52 und
+efined on input line 6869.
+
+
+LaTeX Warning: Hyper reference `api/graphics:structAstraTileLayers' on page 52 
+undefined on input line 6884.
+
+
+LaTeX Warning: Hyper reference `api/graphics:structAstraSpriteSet' on page 52 u
+ndefined on input line 6899.
+
+
+LaTeX Warning: Hyper reference `api/graphics:structAstraRasterProgram' on page 
+52 undefined on input line 6914.
+
+
+LaTeX Warning: Hyper reference `api/graphics:structAstraFence' on page 52 undef
+ined on input line 6929.
+
+
+LaTeX Warning: Hyper reference `api/graphics:structAstraGraphicsInfo' on page 5
+2 undefined on input line 6944.
+
+
+LaTeX Warning: Hyper reference `api/graphics:structAstraSurfaceCreateInfo' on p
+age 52 undefined on input line 6959.
+
+
+LaTeX Warning: Hyper reference `api/graphics:structAstraSurfaceInfo' on page 52
+ undefined on input line 6974.
+
+
+LaTeX Warning: Hyper reference `api/graphics:structAstraDrawPaint' on page 52 u
+ndefined on input line 6989.
+
+
+LaTeX Warning: Hyper reference `api/graphics:structAstraTileLayerUpdate' on pag
+e 52 undefined on input line 7004.
+
+[52]
+
+LaTeX Warning: Hyper reference `api/graphics:structAstraDisplayStatus' on page 
+53 undefined on input line 7019.
+
+
+LaTeX Warning: Hyper reference `api/graphics:structAstraPresentOptions' on page
+ 53 undefined on input line 7034.
+
+
+LaTeX Warning: Hyper reference `api/graphics:structAstraGraphicsInfo' on page 5
+3 undefined on input line 7188.
+
+[53] [54]
+
+LaTeX Warning: Hyper reference `api/graphics:structAstraDrawPaint' on page 55 u
+ndefined on input line 7572.
+
+[55]
+
+LaTeX Warning: Hyper reference `api/graphics:structAstraDisplayStatus' on page 
+56 undefined on input line 7776.
+
+[56]
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 57 undefined on
+ input line 8019.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 57 undefined on
+ input line 8019.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraGraphicsInfo' on page 57 un
+defined on input line 8019.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 57 undefined on inp
+ut line 8034.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 57 undefined on input line 8034.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 57 undefined on
+ input line 8049.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 57 undefined on
+ input line 8049.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDisplay' on page 57 undefin
+ed on input line 8049.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 57 undefined on inp
+ut line 8064.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 57 undefined on input line 8064.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 57 undefined on
+ input line 8079.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 57 undefined on
+ input line 8079.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDisplay' on page 57 undefin
+ed on input line 8079.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 57 undefined on inp
+ut line 8094.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 57 undefined on input line 8094.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 57 undefined on
+ input line 8109.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 57 undefined on
+ input line 8109.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDisplay' on page 57 undefin
+ed on input line 8109.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSurfaceCreateInfo' on page 
+57 undefined on input line 8109.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSurface' on page 57 undefin
+ed on input line 8109.
+
+[57]
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 58 undefined on inp
+ut line 8132.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 58 undefined on input line 8132.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 58 undefined on
+ input line 8147.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 58 undefined on
+ input line 8147.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSurface' on page 58 undefin
+ed on input line 8147.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSurfaceInfo' on page 58 und
+efined on input line 8147.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 58 undefined on inp
+ut line 8166.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 58 undefined on input line 8166.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 58 undefined on
+ input line 8181.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 58 undefined on
+ input line 8181.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSurface' on page 58 undefin
+ed on input line 8181.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 58 undefined on inp
+ut line 8196.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 58 undefined on input line 8196.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 58 undefined on
+ input line 8211.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 58 undefined on
+ input line 8211.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSurface' on page 58 undefin
+ed on input line 8211.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraRectI32' on page 58 undefin
+ed on input line 8211.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawList' on page 58 undefi
+ned on input line 8211.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 58 undefined on inp
+ut line 8234.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 58 undefined on input line 8234.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 58 undefined on
+ input line 8249.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 58 undefined on
+ input line 8249.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawList' on page 58 undefi
+ned on input line 8249.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 58 undefined on inp
+ut line 8264.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 58 undefined on input line 8264.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 58 undefined on
+ input line 8279.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 58 undefined on
+ input line 8279.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawList' on page 58 undefi
+ned on input line 8279.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 58 undefined on inp
+ut line 8294.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 58 undefined on input line 8294.
+
+[58]
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 59 undefined on
+ input line 8309.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 59 undefined on
+ input line 8309.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawList' on page 59 undefi
+ned on input line 8309.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraPointI32' on page 59 undefi
+ned on input line 8309.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraPointI32' on page 59 undefi
+ned on input line 8309.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawPaint' on page 59 undef
+ined on input line 8309.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 59 undefined on inp
+ut line 8336.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 59 undefined on input line 8336.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 59 undefined on
+ input line 8351.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 59 undefined on
+ input line 8351.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawList' on page 59 undefi
+ned on input line 8351.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraRectI32' on page 59 undefin
+ed on input line 8351.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawPaint' on page 59 undef
+ined on input line 8351.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 59 undefined on inp
+ut line 8378.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 59 undefined on input line 8378.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 59 undefined on
+ input line 8393.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 59 undefined on
+ input line 8393.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawList' on page 59 undefi
+ned on input line 8393.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraPointI32' on page 59 undefi
+ned on input line 8393.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawPaint' on page 59 undef
+ined on input line 8393.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 59 undefined on inp
+ut line 8424.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 59 undefined on input line 8424.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 59 undefined on
+ input line 8439.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 59 undefined on
+ input line 8439.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawList' on page 59 undefi
+ned on input line 8439.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraPointI32' on page 59 undefi
+ned on input line 8439.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawPaint' on page 59 undef
+ined on input line 8439.
+
+[59]
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 60 undefined on inp
+ut line 8474.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 60 undefined on input line 8474.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 60 undefined on
+ input line 8489.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 60 undefined on
+ input line 8489.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawList' on page 60 undefi
+ned on input line 8489.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraRectI32' on page 60 undefin
+ed on input line 8489.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraPattern8' on page 60 undefi
+ned on input line 8489.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawPaint' on page 60 undef
+ined on input line 8489.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 60 undefined on inp
+ut line 8516.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 60 undefined on input line 8516.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 60 undefined on
+ input line 8531.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 60 undefined on
+ input line 8531.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawList' on page 60 undefi
+ned on input line 8531.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraPointI32' on page 60 undefi
+ned on input line 8531.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawPaint' on page 60 undef
+ined on input line 8531.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 60 undefined on inp
+ut line 8554.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 60 undefined on input line 8554.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 60 undefined on
+ input line 8569.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 60 undefined on
+ input line 8569.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawList' on page 60 undefi
+ned on input line 8569.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraTextLayout' on page 60 undefin
+ed on input line 8569.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraPointI32' on page 60 undefi
+ned on input line 8569.
+
+
+LaTeX Warning: Hyper reference `api/fonts:c.AstraTextPaint' on page 60 undefine
+d on input line 8569.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 60 undefined on inp
+ut line 8596.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 60 undefined on input line 8596.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 60 undefined on
+ input line 8611.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 60 undefined on
+ input line 8611.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawList' on page 60 undefi
+ned on input line 8611.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraFence' on page 60 undefined
+ on input line 8611.
+
+[60]
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 61 undefined on inp
+ut line 8630.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 61 undefined on input line 8630.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 61 undefined on
+ input line 8645.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 61 undefined on
+ input line 8645.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDisplay' on page 61 undefin
+ed on input line 8645.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraColorRGBA8' on page 61 undefine
+d on input line 8645.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraPalette' on page 61 undefin
+ed on input line 8645.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 61 undefined on inp
+ut line 8672.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 61 undefined on input line 8672.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 61 undefined on
+ input line 8687.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 61 undefined on
+ input line 8687.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraPalette' on page 61 undefin
+ed on input line 8687.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraColorRGBA8' on page 61 undefine
+d on input line 8687.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 61 undefined on inp
+ut line 8714.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 61 undefined on input line 8714.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 61 undefined on
+ input line 8729.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 61 undefined on
+ input line 8729.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraPalette' on page 61 undefin
+ed on input line 8729.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 61 undefined on inp
+ut line 8744.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 61 undefined on input line 8744.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 61 undefined on
+ input line 8759.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 61 undefined on
+ input line 8759.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDisplay' on page 61 undefin
+ed on input line 8759.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraTileLayers' on page 61 unde
+fined on input line 8759.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 61 undefined on inp
+ut line 8778.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 61 undefined on input line 8778.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 61 undefined on
+ input line 8793.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 61 undefined on
+ input line 8793.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraTileLayers' on page 61 unde
+fined on input line 8793.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraTileLayerUpdate' on page 61
+ undefined on input line 8793.
+
+[61]
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 62 undefined on inp
+ut line 8816.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 62 undefined on input line 8816.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 62 undefined on
+ input line 8831.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 62 undefined on
+ input line 8831.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraTileLayers' on page 62 unde
+fined on input line 8831.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 62 undefined on inp
+ut line 8846.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 62 undefined on input line 8846.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 62 undefined on
+ input line 8861.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 62 undefined on
+ input line 8861.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDisplay' on page 62 undefin
+ed on input line 8861.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSpriteSet' on page 62 undef
+ined on input line 8861.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 62 undefined on inp
+ut line 8880.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 62 undefined on input line 8880.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 62 undefined on
+ input line 8895.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 62 undefined on
+ input line 8895.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSpriteSet' on page 62 undef
+ined on input line 8895.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSpriteUpdate' on page 62 un
+defined on input line 8895.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 62 undefined on inp
+ut line 8918.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 62 undefined on input line 8918.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 62 undefined on
+ input line 8933.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 62 undefined on
+ input line 8933.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSpriteSet' on page 62 undef
+ined on input line 8933.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 62 undefined on inp
+ut line 8948.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 62 undefined on input line 8948.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 62 undefined on
+ input line 8963.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 62 undefined on
+ input line 8963.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDisplay' on page 62 undefin
+ed on input line 8963.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraRasterChange' on page 62 un
+defined on input line 8963.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraRasterProgram' on page 62 u
+ndefined on input line 8963.
+
+[62]
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 63 undefined on inp
+ut line 8990.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 63 undefined on input line 8990.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 63 undefined on
+ input line 9005.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 63 undefined on
+ input line 9005.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraRasterProgram' on page 63 u
+ndefined on input line 9005.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 63 undefined on inp
+ut line 9020.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 63 undefined on input line 9020.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 63 undefined on
+ input line 9035.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 63 undefined on
+ input line 9035.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDisplay' on page 63 undefin
+ed on input line 9035.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSurface' on page 63 undefin
+ed on input line 9035.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraPresentOptions' on page 63 
+undefined on input line 9035.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraFence' on page 63 undefined
+ on input line 9035.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 63 undefined on inp
+ut line 9062.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 63 undefined on input line 9062.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 63 undefined on
+ input line 9077.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 63 undefined on
+ input line 9077.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDisplay' on page 63 undefin
+ed on input line 9077.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDisplayStatus' on page 63 u
+ndefined on input line 9077.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 63 undefined on inp
+ut line 9096.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 63 undefined on input line 9096.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 63 undefined on
+ input line 9111.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 63 undefined on
+ input line 9111.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraFence' on page 63 undefined
+ on input line 9111.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 63 undefined on
+ input line 9111.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 63 undefined on inp
+ut line 9134.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 63 undefined on input line 9134.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 63 undefined on
+ input line 9149.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 63 undefined on
+ input line 9149.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraFence' on page 63 undefined
+ on input line 9149.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 63 undefined on
+ input line 9149.
+
+[63]
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 64 undefined on inp
+ut line 9172.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa82b88f61bcc153ef7c412d7ec86975b7' on page 64 undefined on inp
+ut line 9172.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 64 undefined on
+ input line 9187.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraResult' on page 64 undefined on
+ input line 9187.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraFence' on page 64 undefined
+ on input line 9187.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gga5d76b81b0ad4c19
+007a781d4edb8181fa68485374f481ca7cda4fb68f269a277e' on page 64 undefined on inp
+ut line 9202.
+
+
+LaTeX Warning: Hyper reference `api/core:group__astra__core_1gad7e28cff094dcb15
+a1f43aa3136a8383' on page 64 undefined on input line 9202.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDisplay' on page 64 undefin
+ed on input line 9217.
+
+
+LaTeX Warning: Hyper reference `api/graphics:group__astra__graphics_1ga7283ec41
+e043cd99442548628e6951f5' on page 64 undefined on input line 9221.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSurface' on page 64 undefin
+ed on input line 9243.
+
+
+LaTeX Warning: Hyper reference `api/graphics:group__astra__graphics_1ga3f9d2d0f
+7f950291c50fc1bd4fb21708' on page 64 undefined on input line 9247.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraDrawList' on page 64 undefi
+ned on input line 9269.
+
+
+LaTeX Warning: Hyper reference `api/graphics:group__astra__graphics_1ga3238b498
+c7f7476cef77af576d5e9f3d' on page 64 undefined on input line 9273.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraPalette' on page 64 undefin
+ed on input line 9295.
+
+
+LaTeX Warning: Hyper reference `api/graphics:group__astra__graphics_1ga9dae6bbe
+4a0f1570b88e255de222478b' on page 64 undefined on input line 9299.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraTileLayers' on page 64 unde
+fined on input line 9321.
+
+
+LaTeX Warning: Hyper reference `api/graphics:group__astra__graphics_1ga360f6794
+b5ea63de2b7907db887d2100' on page 64 undefined on input line 9325.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSpriteSet' on page 64 undef
+ined on input line 9347.
+
+
+LaTeX Warning: Hyper reference `api/graphics:group__astra__graphics_1gadc71f3f5
+ba43bfb56e13c52dd9bc14f8' on page 64 undefined on input line 9351.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraRasterProgram' on page 64 u
+ndefined on input line 9373.
+
+
+LaTeX Warning: Hyper reference `api/graphics:group__astra__graphics_1ga398ff29a
+c2f8d30df636c98d5b6e9e05' on page 64 undefined on input line 9377.
+
+[64]
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraFence' on page 65 undefined
+ on input line 9399.
+
+
+LaTeX Warning: Hyper reference `api/graphics:group__astra__graphics_1gabd145bb2
+f2122ff3456418b2b1cf9282' on page 65 undefined on input line 9403.
+
+
+LaTeX Warning: Hyper reference `api/resources:c.AstraHandle' on page 65 undefin
+ed on input line 9438.
+
+
+LaTeX Warning: Hyper reference `api/resources:c.AstraHandle' on page 65 undefin
+ed on input line 9471.
+
+
+LaTeX Warning: Hyper reference `api/resources:c.AstraHandle' on page 65 undefin
+ed on input line 9504.
+
+
+LaTeX Warning: Hyper reference `api/resources:c.AstraHandle' on page 65 undefin
+ed on input line 9537.
+
+
+LaTeX Warning: Hyper reference `api/resources:c.AstraHandle' on page 65 undefin
+ed on input line 9570.
+
+[65]
+
+LaTeX Warning: Hyper reference `api/resources:c.AstraHandle' on page 66 undefin
+ed on input line 9603.
+
+
+LaTeX Warning: Hyper reference `api/resources:c.AstraHandle' on page 66 undefin
+ed on input line 9636.
+
+
+LaTeX Warning: Hyper reference `api/resources:c.AstraHandle' on page 66 undefin
+ed on input line 9669.
+
+[66] [67] [68]
+
+LaTeX Warning: Hyper reference `api/core:c.AstraColorRGBA8' on page 69 undefine
+d on input line 10317.
+
+
+LaTeX Warning: Hyper reference `api/core:c.AstraColorRGBA8' on page 69 undefine
+d on input line 10332.
+
+[69]
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSurface' on page 70 undefin
+ed on input line 10458.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSurface' on page 70 undefin
+ed on input line 10473.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSurface' on page 70 undefin
+ed on input line 10626.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraRectI32' on page 70 undefin
+ed on input line 10641.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraPointI32' on page 70 undefi
+ned on input line 10656.
+
+[70] [71]
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraPalette' on page 72 undefin
+ed on input line 10980.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraTileLayers' on page 72 unde
+fined on input line 10995.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraSpriteSet' on page 72 undef
+ined on input line 11010.
+
+
+LaTeX Warning: Hyper reference `api/graphics:c.AstraRasterProgram' on page 72 u
+ndefined on input line 11025.
+
+No file astra68-ndk.ind.
+[72] (./astra68-ndk.aux)
+
+LaTeX Warning: There were undefined references.
+
+
+LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.
+
+
+Package rerunfilecheck Warning: File `astra68-ndk.out' has changed.
+(rerunfilecheck)                Rerun to get outlines right
+(rerunfilecheck)                or use package `bookmark'.
+
+ )
+(see the transcript file for additional information){/usr/share/texmf/fonts/enc
+/dvips/tex-gyre/q-ec.enc}{/usr/share/texmf/fonts/enc/dvips/tex-gyre/q-ts1.enc}<
+/usr/share/texmf/fonts/type1/public/tex-gyre/qhvb.pfb></usr/share/texmf/fonts/t
+ype1/public/tex-gyre/qhvbi.pfb></usr/share/texmf/fonts/type1/public/tex-gyre/qt
+mb.pfb></usr/share/texmf/fonts/type1/public/tex-gyre/qtmr.pfb></usr/share/texmf
+/fonts/type1/public/tex-gyre/qtmri.pfb></usr/share/texlive/texmf-dist/fonts/typ
+e1/public/txfonts/t1xbtt.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/
+txfonts/t1xtt.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/txfonts/t1x
+tt.pfb>
+Output written on astra68-ndk.pdf (76 pages, 287025 bytes).
+Transcript written on astra68-ndk.log.
+Latexmk: Missing input file 'astra68-ndk.toc' (or dependence on it) from following:
+  No file astra68-ndk.toc.
+Latexmk: Missing input file 'astra68-ndk.ind' (or dependence on it) from following:
+  No file astra68-ndk.ind.
+Latexmk: Getting log file 'astra68-ndk.log'
+Latexmk: Examining 'astra68-ndk.fls'
+Latexmk: Examining 'astra68-ndk.log'
+Latexmk: Index file 'astra68-ndk.idx' was written
+Latexmk: References changed.
+Latexmk: References changed.
+Latexmk: Log file says output to 'astra68-ndk.pdf'
+Latexmk: applying rule 'makeindex astra68-ndk.idx'...
+Rule 'makeindex astra68-ndk.idx':  Reasons for rerun
+Category 'other':
+  Rerun of 'makeindex astra68-ndk.idx' forced or previously required
+
+------------
+Run number 1 of rule 'makeindex astra68-ndk.idx'
+------------
+------------
+Running 'makeindex -s python.ist  -o "astra68-ndk.ind" "astra68-ndk.idx"'
+------------
+This is makeindex, version 2.16 [TeX Live 2022] (kpathsea + Thai support).
+Scanning style file ./python.ist.......done (7 attributes redefined, 0 ignored).
+Scanning input file astra68-ndk.idx....done (503 entries accepted, 0 rejected).
+Sorting entries.......done (4807 comparisons).
+Generating output file astra68-ndk.ind....done (573 lines written, 0 warnings).
+Output written in astra68-ndk.ind.
+Transcript written in astra68-ndk.ilg.
+Latexmk: applying rule 'pdflatex'...
+Rule 'pdflatex':  Reasons for rerun
+Changed files or newly in use/created:
+  astra68-ndk.aux
+  astra68-ndk.ind
+  astra68-ndk.out
+  astra68-ndk.toc
+
+------------
+Run number 2 of rule 'pdflatex'
+------------
+------------
+Running 'pdflatex   -recorder  "astra68-ndk.tex"'
+------------
+This is pdfTeX, Version 3.141592653-2.6-1.40.24 (TeX Live 2022/Debian) (preloaded format=pdflatex)
+ restricted \write18 enabled.
+entering extended mode
+(./astra68-ndk.tex
+LaTeX2e <2022-11-01> patch level 1
+L3 programming layer <2023-01-16> (./sphinxmanual.cls
+Document Class: sphinxmanual 2019/12/01 v2.3.0 Document class (Sphinx manual)
+(/usr/share/texlive/texmf-dist/tex/latex/base/report.cls
+Document Class: report 2022/07/02 v1.4n Standard LaTeX document class
+(/usr/share/texlive/texmf-dist/tex/latex/base/size10.clo)))
+(/usr/share/texlive/texmf-dist/tex/latex/base/inputenc.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/cmap/cmap.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/base/fontenc.sty<<t1.cmap>>)
+(/usr/share/texlive/texmf-dist/tex/latex/amsmath/amsmath.sty
+For additional information on amsmath, use the `?' option.
+(/usr/share/texlive/texmf-dist/tex/latex/amsmath/amstext.sty
+(/usr/share/texlive/texmf-dist/tex/latex/amsmath/amsgen.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/amsmath/amsbsy.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/amsmath/amsopn.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/amsfonts/amssymb.sty
+(/usr/share/texlive/texmf-dist/tex/latex/amsfonts/amsfonts.sty))
+(/usr/share/texlive/texmf-dist/tex/generic/babel/babel.sty
+(/usr/share/texlive/texmf-dist/tex/generic/babel/txtbabel.def)
+(/usr/share/texlive/texmf-dist/tex/generic/babel-english/english.ldf))
+(/usr/share/texlive/texmf-dist/tex/generic/babel/locale/en/babel-english.tex)
+(/usr/share/texmf/tex/latex/tex-gyre/tgtermes.sty
+(/usr/share/texlive/texmf-dist/tex/latex/kvoptions/kvoptions.sty
+(/usr/share/texlive/texmf-dist/tex/latex/graphics/keyval.sty)
+(/usr/share/texlive/texmf-dist/tex/generic/ltxcmds/ltxcmds.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/kvsetkeys/kvsetkeys.sty)))
+(/usr/share/texmf/tex/latex/tex-gyre/tgheros.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/fncychap/fncychap.sty) (./sphinx.sty
+(/usr/share/texlive/texmf-dist/tex/latex/xcolor/xcolor.sty
+(/usr/share/texlive/texmf-dist/tex/latex/graphics-cfg/color.cfg)
+(/usr/share/texlive/texmf-dist/tex/latex/graphics-def/pdftex.def)
+(/usr/share/texlive/texmf-dist/tex/latex/graphics/mathcolor.ltx))
+(./sphinxoptionshyperref.sty) (./sphinxoptionsgeometry.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/base/textcomp.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/float/float.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/wrapfig/wrapfig.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/capt-of/capt-of.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/tools/multicol.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/graphics/graphicx.sty
+(/usr/share/texlive/texmf-dist/tex/latex/graphics/graphics.sty
+(/usr/share/texlive/texmf-dist/tex/latex/graphics/trig.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/graphics-cfg/graphics.cfg)))
+(./sphinxlatexgraphics.sty) (./sphinxpackageboxes.sty
+(/usr/share/texlive/texmf-dist/tex/latex/pict2e/pict2e.sty
+(/usr/share/texlive/texmf-dist/tex/latex/pict2e/pict2e.cfg)
+(/usr/share/texlive/texmf-dist/tex/latex/pict2e/p2e-pdftex.def))
+(/usr/share/texlive/texmf-dist/tex/latex/ellipse/ellipse.sty))
+(./sphinxlatexadmonitions.sty
+(/usr/share/texlive/texmf-dist/tex/latex/framed/framed.sty)
+(./sphinxpackagefootnote.sty)) (./sphinxlatexliterals.sty
+(/usr/share/texlive/texmf-dist/tex/latex/fancyvrb/fancyvrb.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/base/alltt.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/upquote/upquote.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/needspace/needspace.sty))
+(./sphinxlatexshadowbox.sty) (./sphinxlatexcontainers.sty)
+(./sphinxhighlight.sty) (./sphinxlatextables.sty
+(/usr/share/texlive/texmf-dist/tex/latex/tabulary/tabulary.sty
+(/usr/share/texlive/texmf-dist/tex/latex/tools/array.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/tools/longtable.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/varwidth/varwidth.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/colortbl/colortbl.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/booktabs/booktabs.sty))
+(./sphinxlatexnumfig.sty) (./sphinxlatexlists.sty) (./sphinxlatexindbibtoc.sty
+(/usr/share/texlive/texmf-dist/tex/latex/base/makeidx.sty))
+(./sphinxlatexstylepage.sty
+(/usr/share/texlive/texmf-dist/tex/latex/parskip/parskip.sty
+(/usr/share/texlive/texmf-dist/tex/latex/etoolbox/etoolbox.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/fancyhdr/fancyhdr.sty))
+(./sphinxlatexstyleheadings.sty
+(/usr/share/texlive/texmf-dist/tex/latex/titlesec/titlesec.sty))
+(./sphinxlatexstyletext.sty) (./sphinxlatexobjects.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/geometry/geometry.sty
+(/usr/share/texlive/texmf-dist/tex/generic/iftex/ifvtex.sty
+(/usr/share/texlive/texmf-dist/tex/generic/iftex/iftex.sty)))
+(/usr/share/texlive/texmf-dist/tex/latex/hyperref/hyperref.sty
+(/usr/share/texlive/texmf-dist/tex/generic/pdftexcmds/pdftexcmds.sty
+(/usr/share/texlive/texmf-dist/tex/generic/infwarerr/infwarerr.sty))
+(/usr/share/texlive/texmf-dist/tex/generic/kvdefinekeys/kvdefinekeys.sty)
+(/usr/share/texlive/texmf-dist/tex/generic/pdfescape/pdfescape.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/hycolor/hycolor.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/letltxmacro/letltxmacro.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/auxhook/auxhook.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/hyperref/nameref.sty
+(/usr/share/texlive/texmf-dist/tex/latex/refcount/refcount.sty)
+(/usr/share/texlive/texmf-dist/tex/generic/gettitlestring/gettitlestring.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/hyperref/pd1enc.def)
+(/usr/share/texlive/texmf-dist/tex/generic/intcalc/intcalc.sty)
+(/usr/share/texlive/texmf-dist/tex/generic/etexcmds/etexcmds.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/hyperref/puenc.def)
+(/usr/share/texlive/texmf-dist/tex/latex/url/url.sty)
+(/usr/share/texlive/texmf-dist/tex/generic/bitset/bitset.sty
+(/usr/share/texlive/texmf-dist/tex/generic/bigintcalc/bigintcalc.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/base/atbegshi-ltx.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/hyperref/hpdftex.def
+(/usr/share/texlive/texmf-dist/tex/latex/base/atveryend-ltx.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/rerunfilecheck/rerunfilecheck.sty
+(/usr/share/texlive/texmf-dist/tex/generic/uniquecounter/uniquecounter.sty)))
+(/usr/share/texlive/texmf-dist/tex/latex/oberdiek/hypcap.sty)
+(./sphinxmessages.sty)
+Writing index file astra68-ndk.idx
+(/usr/share/texmf/tex/latex/tex-gyre/t1qtm.fd)
+(/usr/share/texlive/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def)
+(./astra68-ndk.aux)
+(/usr/share/texlive/texmf-dist/tex/context/base/mkii/supp-pdf.mkii
+[Loading MPS to PDF converter (version 2006.09.02).]
+) (/usr/share/texlive/texmf-dist/tex/latex/epstopdf-pkg/epstopdf-base.sty
+(/usr/share/texlive/texmf-dist/tex/latex/latexconfig/epstopdf-sys.cfg))
+(/usr/share/texlive/texmf-dist/tex/latex/fontawesome5/fontawesome5.sty
+(/usr/share/texlive/texmf-dist/tex/latex/l3kernel/expl3.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/l3packages/l3keys2e/l3keys2e.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/l3packages/xparse/xparse.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/fontawesome5/fontawesome5-generic-help
+er.sty
+(/usr/share/texlive/texmf-dist/tex/latex/fontawesome5/fontawesome5-mapping.def)
+))
+*geometry* driver: auto-detecting
+*geometry* detected driver: pdftex
+(./astra68-ndk.out) (./astra68-ndk.out)
+(/usr/share/texmf/tex/latex/tex-gyre/t1qhv.fd)<<ot1.cmap>><<oml.cmap>><<oms.cma
+p>><<omx.cmap>> (/usr/share/texlive/texmf-dist/tex/latex/amsfonts/umsa.fd)
+(/usr/share/texlive/texmf-dist/tex/latex/amsfonts/umsb.fd) [1{/var/lib/texmf/fo
+nts/map/pdftex/updmap/pdftex.map}] [2] (./astra68-ndk.toc) [1] [2] [1] [2]
+Chapter 1.
+(/usr/share/texlive/texmf-dist/tex/latex/txfonts/t1txtt.fd) [3] [4] [5]
+[6]
+Chapter 2.
+[7] [8]
+Chapter 3.
+[9]
+Underfull \hbox (badness 10000) in paragraph at lines 365--370
+\T1/qtm/m/n/10 Use \T1/txtt/m/n/10 ASTRA_AUTO_DISPLAY\T1/qtm/m/n/10 , \T1/txtt/
+m/n/10 ASTRA_AUTO_SURFACE\T1/qtm/m/n/10 , \T1/txtt/m/n/10 ASTRA_AUTO_DRAW_LIST\
+T1/qtm/m/n/10 , \T1/txtt/m/n/10 ASTRA_AUTO_SPRITE_SET\T1/qtm/m/n/10 ,
+[10]
+Chapter 4.
+(/usr/share/texmf/tex/latex/tex-gyre/ts1qtm.fd) [11] [12]
+Chapter 5.
+[13] [14]
+Chapter 6.
+[15] [16] [17] [18] [19]
+Underfull \hbox (badness 6542) in paragraph at lines 1454--1456
+[]\T1/qtm/m/n/10 This ex-ten-sion is avail-able with GCC and Clang. Cleanup fai
+l-ures are ig-nored; use [][]\T1/qtm/m/it/10 as-
+[20] [21] [22] [23] [24] [25] [26] [27] [28]
+Overfull \hbox (19.59416pt too wide) in paragraph at lines 2859--2861
+[]\T1/qtm/m/n/10 Ini-tial-ize with [][]\T1/qtm/m/it/10 AS-TRA_FRONT_PANEL_LED_L
+EASE_INIT[][] \T1/qtm/m/n/10 or [][]\T1/qtm/m/it/10 AS-TRA_AUTO_FRONT_PANEL_LED
+_LEASE[][]\T1/qtm/m/n/10 .
+
+Underfull \hbox (badness 10000) in paragraph at lines 2913--2915
+[]\T1/qtm/m/n/10 The direct-MMIO back-end pub-lishes these sym-bols but has no 
+font ser-vice and re-ports [][]\T1/qtm/m/it/10 AS-
+[29] [30] [31] [32] [33] [34] [35] [36] [37] [38] [39] [40] [41] [42] [43]
+[44] [45] [46] [47] [48] [49] [50] [51] [52] [53] [54] [55] [56] [57] [58]
+[59] [60] [61] [62] [63] [64] [65] [66] [67] [68] [69] [70] [71]
+(./astra68-ndk.ind [72]
+Underfull \hbox (badness 10000) in paragraph at lines 10--11
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_ACQUIRE_EXCLUSIVE \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Overfull \hbox (6.37181pt too wide) in paragraph at lines 13--15
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_DISPLAY_STATUS_CONFIG_ERROR
+
+Overfull \hbox (22.12177pt too wide) in paragraph at lines 15--17
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_DISPLAY_STATUS_SPRITE_OVERFLOW
+
+Overfull \hbox (16.87178pt too wide) in paragraph at lines 17--19
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_DISPLAY_STATUS_VIDEO_UNDERRUN
+
+Underfull \hbox (badness 10000) in paragraph at lines 19--21
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_DRAW_OPAQUE_BACKGROUND \T1/qtm/m/n/10 (\T1/
+qtm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 21--23
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_ERROR_BUFFER_TOO_SMALL \T1/qtm/m/n/10 (\T1/
+qtm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 24--26
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_ERROR_INVALID_ARGUMENT \T1/qtm/m/n/10 (\T1/
+qtm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 26--28
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_ERROR_INVALID_HANDLE \T1/qtm/m/n/10 (\T1/qt
+m/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 29--31
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_ERROR_NOT_PRESENT \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Underfull \hbox (badness 10000) in paragraph at lines 35--36
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_ERROR_UNSUPPORTED \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Underfull \hbox (badness 10000) in paragraph at lines 41--43
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_FONT_BITMAP_MASK1 \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Underfull \hbox (badness 6348) in paragraph at lines 44--45
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_FONT_CAP_A4 \T1/qtm/m/n/10 (\T1/qtm/m/it/10
+ C enu-mer-a-tor\T1/qtm/m/n/10 ),
+
+Underfull \hbox (badness 10000) in paragraph at lines 46--48
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_FONT_CAP_FIXED_PITCH \T1/qtm/m/n/10 (\T1/qt
+m/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 52--54
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_FONT_MATCH_ALLOW_FALLBACK
+
+Underfull \hbox (badness 10000) in paragraph at lines 58--60
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_FONT_MATCH_REQUIRE_COLOR
+
+Underfull \hbox (badness 10000) in paragraph at lines 63--65
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_FONT_ROLE_UI_EMPHASIS \T1/qtm/m/n/10 (\T1/q
+tm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 71--73
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_FONT_STRING_PROVENANCE \T1/qtm/m/n/10 (\T1/
+qtm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 73--75
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_FONT_STRING_STYLE \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Underfull \hbox (badness 10000) in paragraph at lines 75--77
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_FONT_STYLE_ITALIC \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+[73]
+Underfull \hbox (badness 10000) in paragraph at lines 79--81
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_GRAPHICS_CAP_BLITTER \T1/qtm/m/n/10 (\T1/qt
+m/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 83--85
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_GRAPHICS_CAP_FRAMEBUFFER
+
+Underfull \hbox (badness 10000) in paragraph at lines 85--87
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_GRAPHICS_CAP_GEOMETRY \T1/qtm/m/n/10 (\T1/q
+tm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 89--91
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_GRAPHICS_CAP_PAGE_FLIP \T1/qtm/m/n/10 (\T1/
+qtm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 91--93
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_GRAPHICS_CAP_PALETTE \T1/qtm/m/n/10 (\T1/qt
+m/m/it/10 C
+
+Overfull \hbox (6.37181pt too wide) in paragraph at lines 93--95
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_GRAPHICS_CAP_RASTER_PROGRAM
+
+Underfull \hbox (badness 10000) in paragraph at lines 95--97
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_GRAPHICS_CAP_SPRITES \T1/qtm/m/n/10 (\T1/qt
+m/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 97--99
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_GRAPHICS_CAP_TILE_LAYERS
+
+Underfull \hbox (badness 10000) in paragraph at lines 99--101
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_GRAPHICS_SPRITE_COUNT \T1/qtm/m/n/10 (\T1/q
+tm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 103--105
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_PANEL_BUTTON_DOWN \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Underfull \hbox (badness 10000) in paragraph at lines 109--111
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_PANEL_BUTTON_LEFT \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Underfull \hbox (badness 10000) in paragraph at lines 115--117
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_PANEL_CHANGE_BUTTON_MASK
+
+Underfull \hbox (badness 10000) in paragraph at lines 117--119
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_PANEL_CHANGE_SWITCH_MASK
+
+Underfull \hbox (badness 10000) in paragraph at lines 119--121
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_PANEL_FEATURE_ATOMIC_LEDS
+
+Overfull \hbox (1.12183pt too wide) in paragraph at lines 121--123
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_PANEL_FEATURE_CHANGE_LATCH
+
+Overfull \hbox (6.37181pt too wide) in paragraph at lines 123--125
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_PANEL_FEATURE_LED_OWNERSHIP
+
+Underfull \hbox (badness 10000) in paragraph at lines 142--144
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_RASTER_TARGET_BACKDROP \T1/qtm/m/n/10 (\T1/
+qtm/m/it/10 C
+
+Overfull \hbox (22.12177pt too wide) in paragraph at lines 144--146
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_RASTER_TARGET_FRAMEBUFFER_BASE
+
+Underfull \hbox (badness 10000) in paragraph at lines 146--148
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_RASTER_TARGET_PALETTE \T1/qtm/m/n/10 (\T1/q
+tm/m/it/10 C
+
+Overfull \hbox (1.12183pt too wide) in paragraph at lines 148--150
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_RASTER_TARGET_TILE0_SCROLL
+
+Overfull \hbox (1.12183pt too wide) in paragraph at lines 150--152
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_RASTER_TARGET_TILE1_SCROLL
+
+Underfull \hbox (badness 6364) in paragraph at lines 153--154
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_RIGHT_DEBUG \T1/qtm/m/n/10 (\T1/qtm/m/it/10
+ C enu-mer-a-tor\T1/qtm/m/n/10 ),
+
+Underfull \hbox (badness 6364) in paragraph at lines 159--160
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_RIGHT_WRITE \T1/qtm/m/n/10 (\T1/qtm/m/it/10
+ C enu-mer-a-tor\T1/qtm/m/n/10 ),
+
+Underfull \hbox (badness 10000) in paragraph at lines 160--162
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_SPRITE_BEHIND_FRAMEBUFFER
+
+Overfull \hbox (16.87178pt too wide) in paragraph at lines 166--168
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_SPRITE_PIXELS_PER_LINE_INDEX8
+[74]
+Overfull \hbox (16.87178pt too wide) in paragraph at lines 168--170
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_SPRITE_PIXELS_PER_LINE_RGB565
+
+Underfull \hbox (badness 10000) in paragraph at lines 172--174
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_SURFACE_CPU_WRITE \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Underfull \hbox (badness 10000) in paragraph at lines 178--180
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_SURFACE_FORMAT_TILE16 \T1/qtm/m/n/10 (\T1/q
+tm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 182--184
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_ALIGNMENT_CENTER \T1/qtm/m/n/10 (\T1/q
+tm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 186--188
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_ALIGNMENT_JUSTIFY \T1/qtm/m/n/10 (\T1/
+qtm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 188--190
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_ALIGNMENT_START \T1/qtm/m/n/10 (\T1/qt
+m/m/it/10 C
+
+Overfull \hbox (11.6218pt too wide) in paragraph at lines 192--194
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_DIRECTION_LEFT_TO_RIGHT
+
+Overfull \hbox (11.6218pt too wide) in paragraph at lines 194--196
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_DIRECTION_RIGHT_TO_LEFT
+
+Underfull \hbox (badness 10000) in paragraph at lines 196--198
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_EDGE_LEADING \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Overfull \hbox (22.12177pt too wide) in paragraph at lines 200--202
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_EMBEDDED_COLOR_FOREGROUND
+
+Overfull \hbox (1.12183pt too wide) in paragraph at lines 202--204
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_EMBEDDED_COLOR_REJECT
+
+Underfull \hbox (badness 10000) in paragraph at lines 208--210
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_LAYOUT_ELLIPSIZE_END
+
+Overfull \hbox (69.37163pt too wide) in paragraph at lines 210--212
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_LAYOUT_INCLUDE_TRAILING_WHITESPACE
+
+Underfull \hbox (badness 10000) in paragraph at lines 212--214
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_LAYOUT_WRAP_GRAPHEME
+
+Underfull \hbox (badness 10000) in paragraph at lines 214--216
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_LAYOUT_WRAP_WORD \T1/qtm/m/n/10 (\T1/q
+tm/m/it/10 C
+
+Overfull \hbox (11.6218pt too wide) in paragraph at lines 216--218
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_PAINT_OPAQUE_BACKGROUND
+
+Overfull \hbox (11.6218pt too wide) in paragraph at lines 218--220
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TILE_LAYER_ABOVE_FRAMEBUFFER
+
+Underfull \hbox (badness 10000) in paragraph at lines 222--224
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TILE_LAYER_WRAP_X \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Underfull \hbox (badness 10000) in paragraph at lines 224--226
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TILE_LAYER_WRAP_Y \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+[75]
+Underfull \hbox (badness 7576) in paragraph at lines 294--295
+[]\T1/txtt/m/n/10 astra_front_panel_led_lease_cleanup \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C func-
+[76]
+Underfull \hbox (badness 10000) in paragraph at lines 428--429
+[]\T1/txtt/m/n/10 AstraFrontPanelLedLease._private_handle \T1/qtm/m/n/10 (\T1/q
+tm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 436--437
+[]\T1/txtt/m/n/10 AstraGraphicsInfo.max_sprite_pixels_index8
+
+Underfull \hbox (badness 10000) in paragraph at lines 437--438
+[]\T1/txtt/m/n/10 AstraGraphicsInfo.max_sprite_pixels_rgb565
+[77]
+Underfull \hbox (badness 10000) in paragraph at lines 497--498
+[]\T1/txtt/m/n/10 AstraSurfaceCreateInfo.preferred_pitch \T1/qtm/m/n/10 (\T1/qt
+m/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 571--572
+[]\T1/txtt/m/n/10 AstraTileLayerUpdate.transparent_index \T1/qtm/m/n/10 (\T1/qt
+m/m/it/10 C
+[78]) (./astra68-ndk.aux)
+
+Package rerunfilecheck Warning: File `astra68-ndk.out' has changed.
+(rerunfilecheck)                Rerun to get outlines right
+(rerunfilecheck)                or use package `bookmark'.
+
+ )
+(see the transcript file for additional information){/usr/share/texmf/fonts/enc
+/dvips/tex-gyre/q-ec.enc}{/usr/share/texmf/fonts/enc/dvips/tex-gyre/q-ts1.enc}<
+/usr/share/texmf/fonts/type1/public/tex-gyre/qhvb.pfb></usr/share/texmf/fonts/t
+ype1/public/tex-gyre/qhvbi.pfb></usr/share/texmf/fonts/type1/public/tex-gyre/qh
+vr.pfb></usr/share/texmf/fonts/type1/public/tex-gyre/qtmb.pfb></usr/share/texmf
+/fonts/type1/public/tex-gyre/qtmr.pfb></usr/share/texmf/fonts/type1/public/tex-
+gyre/qtmri.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/txfonts/t1xbtt
+.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/txfonts/t1xtt.pfb></usr/
+share/texlive/texmf-dist/fonts/type1/public/txfonts/t1xtt.pfb>
+Output written on astra68-ndk.pdf (82 pages, 353854 bytes).
+Transcript written on astra68-ndk.log.
+Latexmk: Getting log file 'astra68-ndk.log'
+Latexmk: Examining 'astra68-ndk.fls'
+Latexmk: Examining 'astra68-ndk.log'
+Latexmk: Index file 'astra68-ndk.idx' was written
+Latexmk: References changed.
+Latexmk: Log file says output to 'astra68-ndk.pdf'
+Latexmk: applying rule 'pdflatex'...
+Rule 'pdflatex':  Reasons for rerun
+Changed files or newly in use/created:
+  astra68-ndk.aux
+  astra68-ndk.out
+  astra68-ndk.toc
+
+------------
+Run number 3 of rule 'pdflatex'
+------------
+------------
+Running 'pdflatex   -recorder  "astra68-ndk.tex"'
+------------
+This is pdfTeX, Version 3.141592653-2.6-1.40.24 (TeX Live 2022/Debian) (preloaded format=pdflatex)
+ restricted \write18 enabled.
+entering extended mode
+(./astra68-ndk.tex
+LaTeX2e <2022-11-01> patch level 1
+L3 programming layer <2023-01-16> (./sphinxmanual.cls
+Document Class: sphinxmanual 2019/12/01 v2.3.0 Document class (Sphinx manual)
+(/usr/share/texlive/texmf-dist/tex/latex/base/report.cls
+Document Class: report 2022/07/02 v1.4n Standard LaTeX document class
+(/usr/share/texlive/texmf-dist/tex/latex/base/size10.clo)))
+(/usr/share/texlive/texmf-dist/tex/latex/base/inputenc.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/cmap/cmap.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/base/fontenc.sty<<t1.cmap>>)
+(/usr/share/texlive/texmf-dist/tex/latex/amsmath/amsmath.sty
+For additional information on amsmath, use the `?' option.
+(/usr/share/texlive/texmf-dist/tex/latex/amsmath/amstext.sty
+(/usr/share/texlive/texmf-dist/tex/latex/amsmath/amsgen.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/amsmath/amsbsy.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/amsmath/amsopn.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/amsfonts/amssymb.sty
+(/usr/share/texlive/texmf-dist/tex/latex/amsfonts/amsfonts.sty))
+(/usr/share/texlive/texmf-dist/tex/generic/babel/babel.sty
+(/usr/share/texlive/texmf-dist/tex/generic/babel/txtbabel.def)
+(/usr/share/texlive/texmf-dist/tex/generic/babel-english/english.ldf))
+(/usr/share/texlive/texmf-dist/tex/generic/babel/locale/en/babel-english.tex)
+(/usr/share/texmf/tex/latex/tex-gyre/tgtermes.sty
+(/usr/share/texlive/texmf-dist/tex/latex/kvoptions/kvoptions.sty
+(/usr/share/texlive/texmf-dist/tex/latex/graphics/keyval.sty)
+(/usr/share/texlive/texmf-dist/tex/generic/ltxcmds/ltxcmds.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/kvsetkeys/kvsetkeys.sty)))
+(/usr/share/texmf/tex/latex/tex-gyre/tgheros.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/fncychap/fncychap.sty) (./sphinx.sty
+(/usr/share/texlive/texmf-dist/tex/latex/xcolor/xcolor.sty
+(/usr/share/texlive/texmf-dist/tex/latex/graphics-cfg/color.cfg)
+(/usr/share/texlive/texmf-dist/tex/latex/graphics-def/pdftex.def)
+(/usr/share/texlive/texmf-dist/tex/latex/graphics/mathcolor.ltx))
+(./sphinxoptionshyperref.sty) (./sphinxoptionsgeometry.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/base/textcomp.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/float/float.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/wrapfig/wrapfig.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/capt-of/capt-of.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/tools/multicol.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/graphics/graphicx.sty
+(/usr/share/texlive/texmf-dist/tex/latex/graphics/graphics.sty
+(/usr/share/texlive/texmf-dist/tex/latex/graphics/trig.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/graphics-cfg/graphics.cfg)))
+(./sphinxlatexgraphics.sty) (./sphinxpackageboxes.sty
+(/usr/share/texlive/texmf-dist/tex/latex/pict2e/pict2e.sty
+(/usr/share/texlive/texmf-dist/tex/latex/pict2e/pict2e.cfg)
+(/usr/share/texlive/texmf-dist/tex/latex/pict2e/p2e-pdftex.def))
+(/usr/share/texlive/texmf-dist/tex/latex/ellipse/ellipse.sty))
+(./sphinxlatexadmonitions.sty
+(/usr/share/texlive/texmf-dist/tex/latex/framed/framed.sty)
+(./sphinxpackagefootnote.sty)) (./sphinxlatexliterals.sty
+(/usr/share/texlive/texmf-dist/tex/latex/fancyvrb/fancyvrb.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/base/alltt.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/upquote/upquote.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/needspace/needspace.sty))
+(./sphinxlatexshadowbox.sty) (./sphinxlatexcontainers.sty)
+(./sphinxhighlight.sty) (./sphinxlatextables.sty
+(/usr/share/texlive/texmf-dist/tex/latex/tabulary/tabulary.sty
+(/usr/share/texlive/texmf-dist/tex/latex/tools/array.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/tools/longtable.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/varwidth/varwidth.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/colortbl/colortbl.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/booktabs/booktabs.sty))
+(./sphinxlatexnumfig.sty) (./sphinxlatexlists.sty) (./sphinxlatexindbibtoc.sty
+(/usr/share/texlive/texmf-dist/tex/latex/base/makeidx.sty))
+(./sphinxlatexstylepage.sty
+(/usr/share/texlive/texmf-dist/tex/latex/parskip/parskip.sty
+(/usr/share/texlive/texmf-dist/tex/latex/etoolbox/etoolbox.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/fancyhdr/fancyhdr.sty))
+(./sphinxlatexstyleheadings.sty
+(/usr/share/texlive/texmf-dist/tex/latex/titlesec/titlesec.sty))
+(./sphinxlatexstyletext.sty) (./sphinxlatexobjects.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/geometry/geometry.sty
+(/usr/share/texlive/texmf-dist/tex/generic/iftex/ifvtex.sty
+(/usr/share/texlive/texmf-dist/tex/generic/iftex/iftex.sty)))
+(/usr/share/texlive/texmf-dist/tex/latex/hyperref/hyperref.sty
+(/usr/share/texlive/texmf-dist/tex/generic/pdftexcmds/pdftexcmds.sty
+(/usr/share/texlive/texmf-dist/tex/generic/infwarerr/infwarerr.sty))
+(/usr/share/texlive/texmf-dist/tex/generic/kvdefinekeys/kvdefinekeys.sty)
+(/usr/share/texlive/texmf-dist/tex/generic/pdfescape/pdfescape.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/hycolor/hycolor.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/letltxmacro/letltxmacro.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/auxhook/auxhook.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/hyperref/nameref.sty
+(/usr/share/texlive/texmf-dist/tex/latex/refcount/refcount.sty)
+(/usr/share/texlive/texmf-dist/tex/generic/gettitlestring/gettitlestring.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/hyperref/pd1enc.def)
+(/usr/share/texlive/texmf-dist/tex/generic/intcalc/intcalc.sty)
+(/usr/share/texlive/texmf-dist/tex/generic/etexcmds/etexcmds.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/hyperref/puenc.def)
+(/usr/share/texlive/texmf-dist/tex/latex/url/url.sty)
+(/usr/share/texlive/texmf-dist/tex/generic/bitset/bitset.sty
+(/usr/share/texlive/texmf-dist/tex/generic/bigintcalc/bigintcalc.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/base/atbegshi-ltx.sty))
+(/usr/share/texlive/texmf-dist/tex/latex/hyperref/hpdftex.def
+(/usr/share/texlive/texmf-dist/tex/latex/base/atveryend-ltx.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/rerunfilecheck/rerunfilecheck.sty
+(/usr/share/texlive/texmf-dist/tex/generic/uniquecounter/uniquecounter.sty)))
+(/usr/share/texlive/texmf-dist/tex/latex/oberdiek/hypcap.sty)
+(./sphinxmessages.sty)
+Writing index file astra68-ndk.idx
+(/usr/share/texmf/tex/latex/tex-gyre/t1qtm.fd)
+(/usr/share/texlive/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def)
+(./astra68-ndk.aux)
+(/usr/share/texlive/texmf-dist/tex/context/base/mkii/supp-pdf.mkii
+[Loading MPS to PDF converter (version 2006.09.02).]
+) (/usr/share/texlive/texmf-dist/tex/latex/epstopdf-pkg/epstopdf-base.sty
+(/usr/share/texlive/texmf-dist/tex/latex/latexconfig/epstopdf-sys.cfg))
+(/usr/share/texlive/texmf-dist/tex/latex/fontawesome5/fontawesome5.sty
+(/usr/share/texlive/texmf-dist/tex/latex/l3kernel/expl3.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/l3packages/l3keys2e/l3keys2e.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/l3packages/xparse/xparse.sty)
+(/usr/share/texlive/texmf-dist/tex/latex/fontawesome5/fontawesome5-generic-help
+er.sty
+(/usr/share/texlive/texmf-dist/tex/latex/fontawesome5/fontawesome5-mapping.def)
+))
+*geometry* driver: auto-detecting
+*geometry* detected driver: pdftex
+(./astra68-ndk.out) (./astra68-ndk.out)
+(/usr/share/texmf/tex/latex/tex-gyre/t1qhv.fd)<<ot1.cmap>><<oml.cmap>><<oms.cma
+p>><<omx.cmap>> (/usr/share/texlive/texmf-dist/tex/latex/amsfonts/umsa.fd)
+(/usr/share/texlive/texmf-dist/tex/latex/amsfonts/umsb.fd) [1{/var/lib/texmf/fo
+nts/map/pdftex/updmap/pdftex.map}] [2] (./astra68-ndk.toc) [1] [2] [1] [2]
+Chapter 1.
+(/usr/share/texlive/texmf-dist/tex/latex/txfonts/t1txtt.fd) [3] [4] [5]
+[6]
+Chapter 2.
+[7] [8]
+Chapter 3.
+[9]
+Underfull \hbox (badness 10000) in paragraph at lines 365--370
+\T1/qtm/m/n/10 Use \T1/txtt/m/n/10 ASTRA_AUTO_DISPLAY\T1/qtm/m/n/10 , \T1/txtt/
+m/n/10 ASTRA_AUTO_SURFACE\T1/qtm/m/n/10 , \T1/txtt/m/n/10 ASTRA_AUTO_DRAW_LIST\
+T1/qtm/m/n/10 , \T1/txtt/m/n/10 ASTRA_AUTO_SPRITE_SET\T1/qtm/m/n/10 ,
+[10]
+Chapter 4.
+(/usr/share/texmf/tex/latex/tex-gyre/ts1qtm.fd) [11] [12]
+Chapter 5.
+[13] [14]
+Chapter 6.
+[15] [16] [17] [18] [19]
+Underfull \hbox (badness 6542) in paragraph at lines 1454--1456
+[]\T1/qtm/m/n/10 This ex-ten-sion is avail-able with GCC and Clang. Cleanup fai
+l-ures are ig-nored; use [][]\T1/qtm/m/it/10 as-
+[20] [21] [22] [23] [24] [25] [26] [27] [28]
+Overfull \hbox (19.59416pt too wide) in paragraph at lines 2859--2861
+[]\T1/qtm/m/n/10 Ini-tial-ize with [][]\T1/qtm/m/it/10 AS-TRA_FRONT_PANEL_LED_L
+EASE_INIT[][] \T1/qtm/m/n/10 or [][]\T1/qtm/m/it/10 AS-TRA_AUTO_FRONT_PANEL_LED
+_LEASE[][]\T1/qtm/m/n/10 .
+
+Underfull \hbox (badness 10000) in paragraph at lines 2913--2915
+[]\T1/qtm/m/n/10 The direct-MMIO back-end pub-lishes these sym-bols but has no 
+font ser-vice and re-ports [][]\T1/qtm/m/it/10 AS-
+[29] [30] [31] [32] [33] [34] [35] [36] [37] [38] [39] [40] [41] [42] [43]
+[44] [45] [46] [47] [48] [49] [50] [51] [52] [53] [54] [55] [56] [57] [58]
+[59] [60] [61] [62] [63] [64] [65] [66] [67] [68] [69] [70] [71]
+(./astra68-ndk.ind [72]
+Underfull \hbox (badness 10000) in paragraph at lines 10--11
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_ACQUIRE_EXCLUSIVE \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Overfull \hbox (6.37181pt too wide) in paragraph at lines 13--15
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_DISPLAY_STATUS_CONFIG_ERROR
+
+Overfull \hbox (22.12177pt too wide) in paragraph at lines 15--17
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_DISPLAY_STATUS_SPRITE_OVERFLOW
+
+Overfull \hbox (16.87178pt too wide) in paragraph at lines 17--19
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_DISPLAY_STATUS_VIDEO_UNDERRUN
+
+Underfull \hbox (badness 10000) in paragraph at lines 19--21
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_DRAW_OPAQUE_BACKGROUND \T1/qtm/m/n/10 (\T1/
+qtm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 21--23
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_ERROR_BUFFER_TOO_SMALL \T1/qtm/m/n/10 (\T1/
+qtm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 24--26
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_ERROR_INVALID_ARGUMENT \T1/qtm/m/n/10 (\T1/
+qtm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 26--28
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_ERROR_INVALID_HANDLE \T1/qtm/m/n/10 (\T1/qt
+m/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 29--31
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_ERROR_NOT_PRESENT \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Underfull \hbox (badness 10000) in paragraph at lines 35--36
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_ERROR_UNSUPPORTED \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Underfull \hbox (badness 10000) in paragraph at lines 41--43
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_FONT_BITMAP_MASK1 \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Underfull \hbox (badness 6348) in paragraph at lines 44--45
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_FONT_CAP_A4 \T1/qtm/m/n/10 (\T1/qtm/m/it/10
+ C enu-mer-a-tor\T1/qtm/m/n/10 ),
+
+Underfull \hbox (badness 10000) in paragraph at lines 46--48
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_FONT_CAP_FIXED_PITCH \T1/qtm/m/n/10 (\T1/qt
+m/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 52--54
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_FONT_MATCH_ALLOW_FALLBACK
+
+Underfull \hbox (badness 10000) in paragraph at lines 58--60
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_FONT_MATCH_REQUIRE_COLOR
+
+Underfull \hbox (badness 10000) in paragraph at lines 63--65
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_FONT_ROLE_UI_EMPHASIS \T1/qtm/m/n/10 (\T1/q
+tm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 71--73
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_FONT_STRING_PROVENANCE \T1/qtm/m/n/10 (\T1/
+qtm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 73--75
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_FONT_STRING_STYLE \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Underfull \hbox (badness 10000) in paragraph at lines 75--77
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_FONT_STYLE_ITALIC \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+[73]
+Underfull \hbox (badness 10000) in paragraph at lines 79--81
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_GRAPHICS_CAP_BLITTER \T1/qtm/m/n/10 (\T1/qt
+m/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 83--85
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_GRAPHICS_CAP_FRAMEBUFFER
+
+Underfull \hbox (badness 10000) in paragraph at lines 85--87
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_GRAPHICS_CAP_GEOMETRY \T1/qtm/m/n/10 (\T1/q
+tm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 89--91
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_GRAPHICS_CAP_PAGE_FLIP \T1/qtm/m/n/10 (\T1/
+qtm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 91--93
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_GRAPHICS_CAP_PALETTE \T1/qtm/m/n/10 (\T1/qt
+m/m/it/10 C
+
+Overfull \hbox (6.37181pt too wide) in paragraph at lines 93--95
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_GRAPHICS_CAP_RASTER_PROGRAM
+
+Underfull \hbox (badness 10000) in paragraph at lines 95--97
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_GRAPHICS_CAP_SPRITES \T1/qtm/m/n/10 (\T1/qt
+m/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 97--99
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_GRAPHICS_CAP_TILE_LAYERS
+
+Underfull \hbox (badness 10000) in paragraph at lines 99--101
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_GRAPHICS_SPRITE_COUNT \T1/qtm/m/n/10 (\T1/q
+tm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 103--105
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_PANEL_BUTTON_DOWN \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Underfull \hbox (badness 10000) in paragraph at lines 109--111
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_PANEL_BUTTON_LEFT \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Underfull \hbox (badness 10000) in paragraph at lines 115--117
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_PANEL_CHANGE_BUTTON_MASK
+
+Underfull \hbox (badness 10000) in paragraph at lines 117--119
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_PANEL_CHANGE_SWITCH_MASK
+
+Underfull \hbox (badness 10000) in paragraph at lines 119--121
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_PANEL_FEATURE_ATOMIC_LEDS
+
+Overfull \hbox (1.12183pt too wide) in paragraph at lines 121--123
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_PANEL_FEATURE_CHANGE_LATCH
+
+Overfull \hbox (6.37181pt too wide) in paragraph at lines 123--125
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_PANEL_FEATURE_LED_OWNERSHIP
+
+Underfull \hbox (badness 10000) in paragraph at lines 142--144
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_RASTER_TARGET_BACKDROP \T1/qtm/m/n/10 (\T1/
+qtm/m/it/10 C
+
+Overfull \hbox (22.12177pt too wide) in paragraph at lines 144--146
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_RASTER_TARGET_FRAMEBUFFER_BASE
+
+Underfull \hbox (badness 10000) in paragraph at lines 146--148
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_RASTER_TARGET_PALETTE \T1/qtm/m/n/10 (\T1/q
+tm/m/it/10 C
+
+Overfull \hbox (1.12183pt too wide) in paragraph at lines 148--150
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_RASTER_TARGET_TILE0_SCROLL
+
+Overfull \hbox (1.12183pt too wide) in paragraph at lines 150--152
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_RASTER_TARGET_TILE1_SCROLL
+
+Underfull \hbox (badness 6364) in paragraph at lines 153--154
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_RIGHT_DEBUG \T1/qtm/m/n/10 (\T1/qtm/m/it/10
+ C enu-mer-a-tor\T1/qtm/m/n/10 ),
+
+Underfull \hbox (badness 6364) in paragraph at lines 159--160
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_RIGHT_WRITE \T1/qtm/m/n/10 (\T1/qtm/m/it/10
+ C enu-mer-a-tor\T1/qtm/m/n/10 ),
+
+Underfull \hbox (badness 10000) in paragraph at lines 160--162
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_SPRITE_BEHIND_FRAMEBUFFER
+
+Overfull \hbox (16.87178pt too wide) in paragraph at lines 166--168
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_SPRITE_PIXELS_PER_LINE_INDEX8
+[74]
+Overfull \hbox (16.87178pt too wide) in paragraph at lines 168--170
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_SPRITE_PIXELS_PER_LINE_RGB565
+
+Underfull \hbox (badness 10000) in paragraph at lines 172--174
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_SURFACE_CPU_WRITE \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Underfull \hbox (badness 10000) in paragraph at lines 178--180
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_SURFACE_FORMAT_TILE16 \T1/qtm/m/n/10 (\T1/q
+tm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 182--184
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_ALIGNMENT_CENTER \T1/qtm/m/n/10 (\T1/q
+tm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 186--188
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_ALIGNMENT_JUSTIFY \T1/qtm/m/n/10 (\T1/
+qtm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 188--190
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_ALIGNMENT_START \T1/qtm/m/n/10 (\T1/qt
+m/m/it/10 C
+
+Overfull \hbox (11.6218pt too wide) in paragraph at lines 192--194
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_DIRECTION_LEFT_TO_RIGHT
+
+Overfull \hbox (11.6218pt too wide) in paragraph at lines 194--196
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_DIRECTION_RIGHT_TO_LEFT
+
+Underfull \hbox (badness 10000) in paragraph at lines 196--198
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_EDGE_LEADING \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Overfull \hbox (22.12177pt too wide) in paragraph at lines 200--202
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_EMBEDDED_COLOR_FOREGROUND
+
+Overfull \hbox (1.12183pt too wide) in paragraph at lines 202--204
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_EMBEDDED_COLOR_REJECT
+
+Underfull \hbox (badness 10000) in paragraph at lines 208--210
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_LAYOUT_ELLIPSIZE_END
+
+Overfull \hbox (69.37163pt too wide) in paragraph at lines 210--212
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_LAYOUT_INCLUDE_TRAILING_WHITESPACE
+
+Underfull \hbox (badness 10000) in paragraph at lines 212--214
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_LAYOUT_WRAP_GRAPHEME
+
+Underfull \hbox (badness 10000) in paragraph at lines 214--216
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_LAYOUT_WRAP_WORD \T1/qtm/m/n/10 (\T1/q
+tm/m/it/10 C
+
+Overfull \hbox (11.6218pt too wide) in paragraph at lines 216--218
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TEXT_PAINT_OPAQUE_BACKGROUND
+
+Overfull \hbox (11.6218pt too wide) in paragraph at lines 218--220
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TILE_LAYER_ABOVE_FRAMEBUFFER
+
+Underfull \hbox (badness 10000) in paragraph at lines 222--224
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TILE_LAYER_WRAP_X \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+
+Underfull \hbox (badness 10000) in paragraph at lines 224--226
+[]\T1/txtt/m/n/10 [anonymous].ASTRA_TILE_LAYER_WRAP_Y \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C enu-
+[75]
+Underfull \hbox (badness 7576) in paragraph at lines 294--295
+[]\T1/txtt/m/n/10 astra_front_panel_led_lease_cleanup \T1/qtm/m/n/10 (\T1/qtm/m
+/it/10 C func-
+[76]
+Underfull \hbox (badness 10000) in paragraph at lines 428--429
+[]\T1/txtt/m/n/10 AstraFrontPanelLedLease._private_handle \T1/qtm/m/n/10 (\T1/q
+tm/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 436--437
+[]\T1/txtt/m/n/10 AstraGraphicsInfo.max_sprite_pixels_index8
+
+Underfull \hbox (badness 10000) in paragraph at lines 437--438
+[]\T1/txtt/m/n/10 AstraGraphicsInfo.max_sprite_pixels_rgb565
+[77]
+Underfull \hbox (badness 10000) in paragraph at lines 497--498
+[]\T1/txtt/m/n/10 AstraSurfaceCreateInfo.preferred_pitch \T1/qtm/m/n/10 (\T1/qt
+m/m/it/10 C
+
+Underfull \hbox (badness 10000) in paragraph at lines 571--572
+[]\T1/txtt/m/n/10 AstraTileLayerUpdate.transparent_index \T1/qtm/m/n/10 (\T1/qt
+m/m/it/10 C
+[78]) (./astra68-ndk.aux) )
+(see the transcript file for additional information){/usr/share/texmf/fonts/enc
+/dvips/tex-gyre/q-ec.enc}{/usr/share/texmf/fonts/enc/dvips/tex-gyre/q-ts1.enc}<
+/usr/share/texmf/fonts/type1/public/tex-gyre/qhvb.pfb></usr/share/texmf/fonts/t
+ype1/public/tex-gyre/qhvbi.pfb></usr/share/texmf/fonts/type1/public/tex-gyre/qh
+vr.pfb></usr/share/texmf/fonts/type1/public/tex-gyre/qtmb.pfb></usr/share/texmf
+/fonts/type1/public/tex-gyre/qtmr.pfb></usr/share/texmf/fonts/type1/public/tex-
+gyre/qtmri.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/txfonts/t1xbtt
+.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/txfonts/t1xtt.pfb></usr/
+share/texlive/texmf-dist/fonts/type1/public/txfonts/t1xtt.pfb>
+Output written on astra68-ndk.pdf (82 pages, 354074 bytes).
+Transcript written on astra68-ndk.log.
+Latexmk: Getting log file 'astra68-ndk.log'
+Latexmk: Examining 'astra68-ndk.fls'
+Latexmk: Examining 'astra68-ndk.log'
+Latexmk: Index file 'astra68-ndk.idx' was written
+Latexmk: Log file says output to 'astra68-ndk.pdf'
+Latexmk: All targets () are up-to-date
+
+HTML: build/docs/html/index.html
+PDF:  build/docs/astra68-ndk.pdf
+make: Leaving directory '/tmp/astra68-k6-04524898-final/ndk'

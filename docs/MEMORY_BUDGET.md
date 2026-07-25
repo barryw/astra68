@@ -1,6 +1,6 @@
-# Astra 68 kernel memory budget
+# Axiom kernel memory budget
 
-Status: measured K4 handle-synchronization baseline plus bounded revision-0.1 targets (2026-07-24)
+Status: measured K6 wait-multiple baseline plus bounded revision-0.2 targets (2026-07-25)
 
 The machine has exactly 32 MiB of SDRAM. Every static pool, frame, mapping,
 queue, pin, and graphics reservation is reported separately. A budget is not
@@ -165,6 +165,63 @@ accounts for 32 x 36-byte objects (1,152 bytes); the remaining BSS delta is
 bounded pool state and diagnostics. Waiting reuses each thread's existing wait
 link and deadline slot, so no synchronization or timeout path allocates memory.
 
+The 2026-07-24 K5 thread-lifecycle qualification build reports:
+
+| ELF section | Bytes |
+|---|---:|
+| `.text.entry` | 80 |
+| `.vectors` | 1,024 |
+| `.text` plus read-only data | 46,372 |
+| `.data` | 0 |
+| `.bss` | 10,152 |
+| `.noinit` | 102,016 |
+| interrupt-stack section including alignment and guard | 15,888 |
+| worker MSP section including guard | 12,288 |
+| 16 guarded thread supervisor-stack slots | 196,608 |
+| total through `_kernel_memory_end` | 385,024 |
+| flat kernel binary | 48,420 |
+
+The exact hardware-qualified K5 binary SHA-256 is
+`260bbcf82fbf955cee42d5798054e6d6549daa8921462d7216a241a685095e03`.
+K5 adds 3,680 flat-binary bytes and 560 BSS bytes over K4. The image ends at
+`0x0206e000` and leaves 139,264 bytes in the fixed 512 KiB kernel reservation.
+The measured MC68030 layouts are 180 bytes per `KernelThread` and 450 bytes per
+`KernelProcess`; compile-time assertions require both documents to change if
+either layout moves. The 16 records therefore consume 2,880 thread bytes and
+the four process records consume 1,800 bytes. Three new 36-byte lifecycle
+performance records account for 108 BSS bytes. The remaining increase is
+bounded reap state, accounting, and alignment; no lifecycle wait or exit path
+allocates memory.
+
+The exact hardware-qualified 2026-07-25 K6 build reports:
+
+| ELF section | Bytes |
+|---|---:|
+| `.text.entry` | 80 |
+| `.vectors` | 1,024 |
+| `.text` plus read-only data | 55,364 |
+| `.data` | 0 |
+| `.bss` | 12,648 |
+| `.noinit` | 102,016 |
+| interrupt-stack section including alignment and guard | 16,336 |
+| worker MSP section including guard | 12,288 |
+| 16 guarded thread supervisor-stack slots | 196,608 |
+| total through `_kernel_memory_end` | 397,312 |
+| flat kernel binary | 57,412 |
+
+The image ends at `0x02071000` and leaves exactly 126,976 bytes in the fixed
+512 KiB kernel reservation. Its flat-binary SHA-256 is
+`17476aa268db37dde0e066f4cc0799848bc0024ae12bba809ec8cffedf84f425`.
+K6 reserves 2,048 BSS bytes for `16 x 16`
+intrusive wait registrations at eight bytes each. Registrations are partitioned
+by thread slot and require no allocator metadata. The measured MC68030 layouts
+are 172 bytes per `KernelThread` and 472 bytes per `KernelProcess`; compile-time
+assertions reject silent movement. The 16 thread records consume 2,752 bytes
+and four process records consume 1,888 bytes. The shared synchronization pool
+remains 32 x 36 bytes; timers add fixed deadline, heap, and position arrays
+rather than a second object pool. No wait, timer, death, cancellation, close,
+or expiry path allocates memory. The structural sizes are compile-time asserted.
+
 Major current static objects are:
 
 | Object | Count x size | Bytes |
@@ -173,11 +230,15 @@ Major current static objects are:
 | per-frame owner links | 2 x 8,192 x 2 | 32,768 |
 | owner ledgers | 64 x 8 | 512 |
 | allocator bitmaps | 3 x 1,024 | 3,072 |
-| process slots | 4 x 446 | 1,784 |
-| thread scheduler state | 16 x 156 plus ready/deadline queues and accounting | 2,952 |
+| process slots | 4 x 472 | 1,888 |
+| thread records | 16 x 172 | 2,752 |
+| ready queues | 32 x two 16-bit heads/tails plus bitmap/count | 136 |
+| deadline arrays | positions 32 + heap 32 + results 64 + cycles 128 + count 2 | 258 |
+| wait registrations | 256 x 8 | 2,048 |
+| waitable-timer ordering | deadlines 256 + heap 32 + positions 32 + count | 321 |
 | guarded thread supervisor-stack arena | 16 x 12 KiB | 196,608 |
 | synchronization objects | 32 x 36 | 1,152 |
-| performance metrics/control | 9 x 36 plus control | 332 |
+| performance metric records | 14 x 36 | 504 |
 | DMA slots | 32 x 36 | 1,152 |
 | block slots | 4 x 64 | 256 |
 | cached-user-frame alias ledger | 8,192 bits | 1,024 |
@@ -209,7 +270,7 @@ objects are allocated from typed pools only when live.
 | Pool | Limit | Budget |
 |---|---:|---:|
 | process records, excluding handles | 32 x 192 B | 6 KiB |
-| thread records | 128 x 160 B | 20 KiB |
+| thread records | 128 x 192 B maximum | 24 KiB |
 | handle entries | 8,192 x 16 B | 128 KiB |
 | areas | 512 x 64 B | 32 KiB |
 | ports | 256 x 64 B | 16 KiB |
@@ -222,7 +283,7 @@ objects are allocated from typed pools only when live.
 | bounded general kernel heap | hard cap | 256 KiB |
 | emergency reserve | 32 x 4 KiB | 128 KiB |
 
-Target pool backing totals 1,218 KiB including the heap and emergency reserve.
+Target pool backing totals 1,222 KiB including the heap and emergency reserve.
 Changing a structure size or count requires updating this table and a generated
 build report before merge.
 
@@ -230,22 +291,39 @@ build report before merge.
 
 - K1 interrupt stack (ISP): 8 KiB plus one unmapped 4 KiB guard.
 - K1 deferred-worker master stack (MSP): 8 KiB plus one unmapped 4 KiB guard.
-- K3 user stack: one mapped 4 KiB page per live thread, with adjacent stack
+- K6 user stack: one mapped 4 KiB page per live thread, with adjacent stack
   bases spaced by 8 KiB so every stack has an unmapped 4 KiB guard interval.
-  The 1,000-cycle K3 soak holds two survivor stacks and repeatedly allocates a
+  The 1,000-cycle K5 soak holds two survivor stacks and repeatedly allocates a
   third, retaining an exact 7,986-free-page baseline after every teardown.
-- Current K3 supervisor stack: one guarded 8 KiB stack for each of 16 thread
+- Current K6 supervisor stack: one guarded 8 KiB stack for each of 16 thread
   slots. The static arena reserves 192 KiB, of which 128 KiB is mapped stack
   payload and 64 KiB is unmapped guard space. Full RTL and both routed-hardware
-  boots report a maximum observed use of 428 bytes.
+  boots report a maximum observed use of 680 bytes.
 - Stable per-thread kernel stack target: 8 KiB committed only for a live thread
   plus an unmapped virtual guard; replacing the fixed development arena must
   preserve the same fault and high-water tests.
 - 128 simultaneous thread stacks would consume 1 MiB; ordinary process quotas
   prevent every process from reaching the global thread limit independently.
-- K3 user threads enter on their own guarded supervisor stacks. The internal
-  qualification event blocks, times out, and wakes across syscalls; no stable
-  blocking user ABI is exposed yet.
+- K6 user threads enter on their own guarded supervisor stacks. Public
+  `WAIT_ONE` and `WAIT_MULTIPLE` block on events, semaphores, timers, thread
+  death, or process death with an absolute deadline and fixed registrations.
+
+K6 charges thread resources in distinct units rather than hiding them in a
+single count:
+
+| Charge | Per retained/live thread | Release point |
+|---|---:|---|
+| thread object | one 172-byte global slot | death plus final handle close |
+| user stack | one 4 KiB physical frame while live | deferred worker after death |
+| user guard | one unmapped 4 KiB logical page while live | deferred worker after death |
+| supervisor stack | two 4 KiB pages from the fixed arena | death plus final handle close |
+| supervisor guard | one unmapped 4 KiB page from the fixed arena | death plus final handle close |
+| handle | one 24-byte development entry in the owning process | `CLOSE` or process teardown |
+
+The K6 qualification cap is 16 global thread objects and 15 per process. A
+dead thread with an open handle intentionally retains 12 KiB of the fixed
+supervisor arena and its record, but no user physical page. These retained
+charges are bounded and visible; they are not classified as leaks.
 
 Every build must emit static stack-usage data. Hardware qualification records
 canary and high-water values under nested format-B faults and interrupt storms.

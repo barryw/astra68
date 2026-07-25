@@ -26,6 +26,7 @@ static void test_lookup_rights_type_and_stale_reuse(void)
     ReleaseState released = {0};
     KernelHandle first;
     KernelHandle second;
+    KernelObjectType type;
     void *object;
 
     kernel_handle_table_init(&table);
@@ -39,6 +40,13 @@ static void test_lookup_rights_type_and_stale_reuse(void)
     assert(kernel_handle_lookup(&table, first, KERNEL_OBJECT_PROCESS,
                                 RIGHT_QUERY, &object) == KERNEL_HANDLE_OK);
     assert((uintptr_t)object == 0x1234u);
+    assert(kernel_handle_lookup_any(&table, first, RIGHT_QUERY, &type,
+                                    &object) == KERNEL_HANDLE_OK);
+    assert(type == KERNEL_OBJECT_PROCESS);
+    assert((uintptr_t)object == 0x1234u);
+    assert(kernel_handle_lookup_any(&table, first, 1u << 7, &type,
+                                    &object) ==
+           KERNEL_HANDLE_ACCESS_DENIED);
     assert(kernel_handle_lookup(&table, first, KERNEL_OBJECT_THREAD,
                                 RIGHT_QUERY, &object) ==
            KERNEL_HANDLE_TYPE_MISMATCH);
@@ -101,6 +109,7 @@ static void test_invalid_arguments(void)
 {
     KernelHandleTable table;
     KernelHandle handle;
+    KernelObjectType type;
     void *object;
 
     kernel_handle_table_init(&table);
@@ -122,6 +131,12 @@ static void test_invalid_arguments(void)
     assert(kernel_handle_lookup(&table, KERNEL_HANDLE_INVALID,
                                 KERNEL_OBJECT_NONE, 0u,
                                 NULL) == KERNEL_HANDLE_INVALID_ARGUMENT);
+    assert(kernel_handle_lookup_any(&table, KERNEL_HANDLE_INVALID, 0u,
+                                    &type, &object) ==
+           KERNEL_HANDLE_INVALID_HANDLE);
+    assert(kernel_handle_lookup_any(&table, KERNEL_HANDLE_INVALID, 0u,
+                                    NULL, &object) ==
+           KERNEL_HANDLE_INVALID_ARGUMENT);
     assert(kernel_handle_close(NULL, 1u) == KERNEL_HANDLE_INVALID_ARGUMENT);
 }
 

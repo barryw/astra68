@@ -18,6 +18,13 @@
 static uint32_t user_fault_irqoff_max_cycles;
 static uint32_t last_supervisor_irq_pc;
 static uint16_t last_supervisor_irq_sr;
+#if ASTRA_KERNEL_SCHED_TRACE
+#define KERNEL_DISPATCH_WAIT_SET_TRACE_MAX 8u
+static uint32_t syscall_max_number;
+static uint32_t syscall_max_body_cycles;
+static uint32_t wait_set_trace_cycles[KERNEL_DISPATCH_WAIT_SET_TRACE_MAX];
+static uint32_t wait_set_trace_count;
+#endif
 
 #if ASTRA_KERNEL_SCHED_TRACE
 static void scheduler_trace(uint32_t value)
@@ -43,6 +50,43 @@ static void schedule_process_worker(void)
 uint32_t kernel_dispatch_user_fault_irqoff_max_cycles(void)
 {
     return user_fault_irqoff_max_cycles;
+}
+
+uint32_t kernel_dispatch_syscall_max_number(void)
+{
+#if ASTRA_KERNEL_SCHED_TRACE
+    return syscall_max_number;
+#else
+    return UINT32_MAX;
+#endif
+}
+
+uint32_t kernel_dispatch_syscall_max_body_cycles(void)
+{
+#if ASTRA_KERNEL_SCHED_TRACE
+    return syscall_max_body_cycles;
+#else
+    return 0u;
+#endif
+}
+
+uint32_t kernel_dispatch_wait_set_trace_count(void)
+{
+#if ASTRA_KERNEL_SCHED_TRACE
+    return wait_set_trace_count;
+#else
+    return 0u;
+#endif
+}
+
+uint32_t kernel_dispatch_wait_set_trace_cycles(uint32_t index)
+{
+#if ASTRA_KERNEL_SCHED_TRACE
+    return index < wait_set_trace_count ? wait_set_trace_cycles[index] : 0u;
+#else
+    (void)index;
+    return 0u;
+#endif
 }
 
 uint32_t kernel_dispatch_last_supervisor_irq_pc(void)
@@ -142,22 +186,19 @@ KernelDispatchTarget syscall_entry_dispatch_fast(
 {
     KernelCpuContext *next = NULL;
     KernelProcessStatus status;
-    bool process_exited;
 
     if (!kernel_process_active())
         kernel_exception_panic(raw_frame);
     scheduler_trace(0x4b53494eu); /* KSIN */
     if (registers != NULL)
         scheduler_trace(registers[0]);
-    process_exited = registers != NULL &&
-                     registers[0] == ASTRA_SYSCALL_EXIT;
     status = kernel_process_on_syscall(registers, user_stack, raw_frame,
                                        &next);
     if (!((status == KERNEL_PROCESS_OK && next != NULL) ||
           (status == KERNEL_PROCESS_NO_RUNNABLE && next == NULL &&
            !kernel_process_active())))
         kernel_panic("syscall left no runnable process");
-    if (process_exited) {
+    if (kernel_process_maintenance_pending()) {
         schedule_process_worker();
         return KERNEL_DISPATCH_WORKER;
     }
@@ -177,11 +218,36 @@ KernelDispatchTarget syscall_entry_dispatch_profiled(
     const uint32_t *registers, const void *raw_frame, uint32_t user_stack)
 {
     KernelPerformanceToken performance;
+    KernelPerformanceMetric metric = KERNEL_PERFORMANCE_SYSCALL_DISPATCH;
     KernelDispatchTarget target;
+#if ASTRA_KERNEL_SCHED_TRACE
+    uint32_t started;
+    uint32_t elapsed;
+#endif
 
-    performance = kernel_performance_begin_sampled(
-        KERNEL_PERFORMANCE_SYSCALL_DISPATCH);
+    if (registers != NULL) {
+        if (registers[0] == ASTRA_SYSCALL_THREAD_CREATE)
+            metric = KERNEL_PERFORMANCE_THREAD_CREATE;
+        else if (registers[0] == ASTRA_SYSCALL_THREAD_EXIT)
+            metric = KERNEL_PERFORMANCE_THREAD_EXIT;
+    }
+    performance = kernel_performance_begin_sampled(metric);
+#if ASTRA_KERNEL_SCHED_TRACE
+    started = kernel_platform_cpu_cycles_low();
+#endif
     target = syscall_entry_dispatch_fast(registers, raw_frame, user_stack);
+#if ASTRA_KERNEL_SCHED_TRACE
+    elapsed = kernel_platform_cpu_cycles_low() - started;
+    if (registers != NULL &&
+        registers[0] == ASTRA_SYSCALL_WAIT_MULTIPLE &&
+        wait_set_trace_count < KERNEL_DISPATCH_WAIT_SET_TRACE_MAX)
+        wait_set_trace_cycles[wait_set_trace_count++] = elapsed;
+    if (metric == KERNEL_PERFORMANCE_SYSCALL_DISPATCH &&
+        elapsed > syscall_max_body_cycles) {
+        syscall_max_body_cycles = elapsed;
+        syscall_max_number = registers != NULL ? registers[0] : UINT32_MAX;
+    }
+#endif
     kernel_performance_end(performance);
     return target;
 }

@@ -1,9 +1,9 @@
-# Astra kernel specification
+# Axiom kernel specification
 
 Version 0.1 — research baseline
 
-This document turns `docs/OS_VISION.md` into an implementable contract for the
-small privileged core of Astra OS. It is intentionally incomplete. Version 0.1
+This document turns `docs/OS_VISION.md` into an implementable contract for
+Axiom, the small privileged core of Astra OS. It is intentionally incomplete. Version 0.1
 defines the kernel boundary, invariants, research questions, and acceptance
 gates before it freezes syscall numbers, structure layouts, or implementation
 details.
@@ -34,8 +34,8 @@ only after their named experiment and review.
 
 ## 1. Mission and boundary
 
-**LOCKED:** Astra uses a purpose-built, fully preemptive, protected kernel for
-one MC68030-class CPU with its built-in PMMU. The kernel supplies privileged
+**LOCKED:** Astra OS uses the purpose-built Axiom kernel: a fully preemptive,
+protected kernel for one MC68030-class CPU with its built-in PMMU. Axiom supplies privileged
 mechanisms; protected user processes supply restartable policy.
 
 The kernel exists to provide:
@@ -112,31 +112,22 @@ ABI only where firmware and hardware documents explicitly require them.
 
 The following are not software workarounds:
 
-- **SIMULATION CLOSED, HARDWARE PENDING K-HW-1:** A cold-ATC table walk needed
-  while the CPU stacks an exception on a valid translated supervisor stack now
-  passes the focused RTL reproducer without a second fault or CPU halt. The
-  exact retained RTL still requires synthesis, routing, and board promotion
-  before protected multitasking relies on it.
-- **SIMULATION CLOSED, HARDWARE PENDING K-HW-2:** Separate SRP/CRP roots plus
-  faulting `MOVES.B` user-copy operations now preserve SFC/DFC, return through
-  an unmodified format-B frame, update predecrement/postincrement registers
-  once, and perform one target transfer. Absolute, predecrement, postincrement,
-  read, and write forms pass shared and focused RTL tests. Exact hardware
-  promotion remains required.
-- **SIMULATION CLOSED, HARDWARE PENDING K-HW-3:** The Astra wrapper now asserts
-  RMC from the first PMMU walker request through every non-idle walker state.
-  Focused and full coretest verify lock coverage through descriptor gaps and
-  release after successful and faulted searches; CDC and SDRAM-controller
-  tests keep simultaneous video and DMA requests queued until unlock. This
-  exact delta still requires synthesis, routing, and board promotion.
-- **SIMULATION CLOSED, HARDWARE PENDING K-HW-4:** Vesta now snapshots a
-  vector/spurious result for the complete CPU IACK transaction. A low-byte
-  timer-control write with `ENABLE` atomically restarts from `LOAD`; an old
-  expiration racing that restart remains sticky. Icarus and Verilator cover
-  source replacement during IACK, spurious-to-valid races, edge/level clear
-  ordering, partial writes, zero load, running reprogram, and terminal-edge
-  restart. Focused TG68K coretest passes the production vectored-IACK path.
-  Exact-source route, board timer races, and measured interrupt latency remain.
+- **CLOSED K-HW-1:** Cold-ATC table walking while stacking an exception on a
+  translated supervisor stack passes focused RTL, the complete pin-level
+  model, the no-waiver `25D9CB8E` route, and repeated protected-kernel boots.
+- **CLOSED K-HW-2:** Separate SRP/CRP roots plus faulting `MOVES.B` user-copy
+  operations preserve SFC/DFC, return through an unmodified format-B frame,
+  update predecrement/postincrement registers once, and perform one target
+  transfer. Absolute, predecrement, postincrement, read, and write forms pass
+  shared/focused RTL and production-hardware qualification.
+- **CLOSED K-HW-3:** The Astra wrapper asserts RMC from the first PMMU walker
+  request through every non-idle walker state. Focused/full coretest, CDC and
+  SDRAM arbitration tests, exact routing, and physical protected-entry boots
+  pass successful and faulted walks without losing queued masters.
+- **CLOSED K-HW-4:** Vesta snapshots vector/spurious state for a complete IACK
+  and has deterministic one-shot restart/expiry ordering. Icarus, Verilator,
+  complete pin-level boot, no-waiver routing, and repeated ULX3S scheduler
+  qualification pass the retained behavior and latency budgets.
 - **BLOCKER K-HW-5:** Untrusted service-directed DMA requires either hardware
   fences or a kernel submission path with complete address, length, wrap, and
   device-state validation.
@@ -222,10 +213,12 @@ must never be treated as a format-0 C structure. Frame decoding is centralized
 and tested with byte-exact fixtures derived from the Motorola manual and real
 probe output.
 
-**OPEN:** Whether Astra uses one per-thread supervisor stack with `M=0`, or
-separates master and interrupt stacks using MSP/ISP. The simplest design is not
-chosen until nested interrupt, preemption, cold-ATC stacking, and context-switch
-probes demonstrate the actual core behavior.
+**IMPLEMENTED:** Every user thread owns a fixed guarded supervisor stack. A
+separate guarded ISP handles interrupt/exception stacking and the deferred
+worker owns a separate guarded MSP. The Motorola M=1 dual-frame return path,
+nested supervisor interrupts, preemption, cold-ATC stacking, canaries, guards,
+and high-water accounting pass host, directed RTL, complete pin-level, and
+physical-hardware qualification.
 
 ### 5.3 Fault policy
 
@@ -383,6 +376,14 @@ Native creation is explicit. The kernel creates an empty process and thread;
 a protected loader/supervisor service parses ordinary ELF, maps segments,
 constructs arguments, and supplies the initial capabilities. There is no
 native `fork` or implicit inheritance of all parent authority.
+
+`docs/TERMINAL_AND_POSIX.md` identifies copy-on-write process cloning as an
+**OPEN** mechanism that may eventually be needed by a userspace POSIX
+personality for a correct zsh port. That design note does not authorize a
+kernel call. Before implementation, this specification must define and test
+the clone boundary, commit accounting, inherited-handle set, rollback, cache/
+ATC maintenance, and interaction with waits and device ownership. Native Astra
+creation remains explicit spawn regardless of that compatibility decision.
 
 Bootstrapping is the narrow exception: firmware supplies one immutable initial
 user image and a bounded load description in `BootInfo`. The kernel validates
@@ -714,9 +715,9 @@ and debugger register numbering before the native ABI is frozen.
 ## 17. Acceptance gates
 
 These labels are the original whole-kernel roadmap and are not the same as the
-incremental K1-K4 implementation-checkpoint names in `STATUS.md`. In
-particular, the current K4 handle-synchronization checkpoint does not claim
-that roadmap K3 bounded IPC or roadmap K4 device recovery is complete.
+incremental K1-K6 implementation-checkpoint names in `STATUS.md`. In
+particular, the current K6 wait-multiple checkpoint does not claim that roadmap
+K3 bounded IPC or roadmap K4 device recovery is complete.
 
 ### K0 — architectural probes
 

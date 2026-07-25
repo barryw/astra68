@@ -1,0 +1,65 @@
+make: Entering directory '/tmp/astra68-k6-04524898-final/conformance'
+make -C ../third_party/musashi conformance-target
+make[1]: Entering directory '/tmp/astra68-k6-04524898-final/third_party/musashi'
+make[1]: Nothing to be done for 'conformance-target'.
+make[1]: Leaving directory '/tmp/astra68-k6-04524898-final/third_party/musashi'
+make -C rtl
+make[1]: Entering directory '/tmp/astra68-k6-04524898-final/conformance/rtl'
+make[1]: Nothing to be done for 'all'.
+make[1]: Leaving directory '/tmp/astra68-k6-04524898-final/conformance/rtl'
+PYTHONPATH=.. python3 -m pytest tests ../sw/harte/host/tests -q
+........................................................................ [ 80%]
+..................                                                       [100%]
+90 passed in 0.84s
+PYTHONPATH=.. python3 -m conformance.runner cases \
+	--report /tmp/astra68-conformance-matrix.json
+TARGET musashi-68030
+PASS  cpu/abcd-valid-packed-bcd (4 cycles)
+PASS  cpu/add-long-register-carry-zero (2 cycles)
+PASS  cpu/chk-negative-value-sets-negative (40 cycles)
+PASS  cpu/chk-upper-bound-clears-negative (40 cycles)
+PASS  cpu/divs-word-overflow-clears-carry (56 cycles)
+PASS  cpu/divu-word-overflow-clears-carry (44 cycles)
+PASS  cpu/fpu-absent-line-f-vector-11 (20 cycles)
+PASS  cpu/link-a7-stacks-predecrement-value (5 cycles)
+PASS  cpu/move16-is-68040-only-vector-11 (20 cycles)
+PASS  cpu/nbcd-valid-packed-bcd (6 cycles)
+PASS  cpu/sbcd-valid-packed-bcd (4 cycles)
+PASS  pmmu/moves-sfc-dfc-fault-restart (690 cycles)
+PASS  pmmu/table-bus-fault-status (42 cycles)
+PASS  pmmu/translation-and-control-instructions (68 cycles)
+PASS  pmmu/unaligned-data-fault-format-b (92 cycles)
+TARGET_RESULT musashi-68030 total=15 passed=15 failed=0
+TARGET rtl-tg68k030-mmu2
+PASS  cpu/abcd-valid-packed-bcd (2 cycles)
+PASS  cpu/add-long-register-carry-zero (2 cycles)
+PASS  cpu/chk-negative-value-sets-negative (24 cycles)
+PASS  cpu/chk-upper-bound-clears-negative (24 cycles)
+PASS  cpu/divs-word-overflow-clears-carry (34 cycles)
+PASS  cpu/divu-word-overflow-clears-carry (34 cycles)
+PASS  cpu/fpu-absent-line-f-vector-11 (16 cycles)
+PASS  cpu/link-a7-stacks-predecrement-value (6 cycles)
+PASS  cpu/move16-is-68040-only-vector-11 (16 cycles)
+PASS  cpu/nbcd-valid-packed-bcd (2 cycles)
+PASS  cpu/sbcd-valid-packed-bcd (2 cycles)
+PASS  pmmu/moves-sfc-dfc-fault-restart (1676 cycles)
+PASS  pmmu/table-bus-fault-status (95 cycles)
+PASS  pmmu/translation-and-control-instructions (147 cycles)
+PASS  pmmu/unaligned-data-fault-format-b (231 cycles)
+TARGET_RESULT rtl-tg68k030-mmu2 total=15 passed=15 failed=0
+MATRIX_RESULT targets=2 cases=15 passed=30 failed=0 report=/tmp/astra68-conformance-matrix.json
+PYTHONPATH=.. python3 ../sw/harte/host/harte_run.py \
+	--target musashi-68030 --allow-unpinned-corpus \
+	--report /tmp/astra68-harte-musashi-smoke.json \
+	../sw/harte/testdata/register-smoke.json
+vectors=1 in_scope=1 skipped=0
+target=vendored-musashi-68030-pmmu-no-fpu corpus=d1e6cf9732fb
+PASS=1 FAIL=0 ATTEMPTED=1 NEXT_INDEX=1 ABORTED=no REPORT=/tmp/astra68-harte-musashi-smoke.json
+PYTHONPATH=.. python3 ../sw/harte/host/harte_run.py \
+	--target rtl-tg68k030-mmu2 --allow-unpinned-corpus \
+	--report /tmp/astra68-harte-rtl-smoke.json \
+	../sw/harte/testdata/register-smoke.json
+vectors=1 in_scope=1 skipped=0
+target=TG68K.C 68030/PMMU (GHDL) corpus=d1e6cf9732fb
+PASS=1 FAIL=0 ATTEMPTED=1 NEXT_INDEX=1 ABORTED=no REPORT=/tmp/astra68-harte-rtl-smoke.json
+make: Leaving directory '/tmp/astra68-k6-04524898-final/conformance'

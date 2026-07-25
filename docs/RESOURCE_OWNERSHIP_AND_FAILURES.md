@@ -1,6 +1,6 @@
-# Astra 68 resource ownership and failures
+# Axiom resource ownership and failures
 
-Status: normative lifetime contract, revision 0.1 (2026-07-23)
+Status: normative lifetime contract, revision 0.2 (2026-07-25)
 
 Every resource has one accountable owner, finite capacity, explicit rights,
 and a terminal failure path. C cleanup helpers improve normal code but kernel
@@ -75,7 +75,7 @@ and retries after the next timer interrupt. DMA completion and worker
 state-machine host tests prove that the process remains inspectable and is
 reaped exactly once after the final pin retires.
 
-The current K3 split implements the first and last parts of this order with
+The current K6 split implements the first and last parts of this order with
 separate bounded objects. Marking a process `EXITING` removes every one of its
 `CREATED`, `READY`, `RUNNING`, or `BLOCKED` threads from scheduling, removes
 each timed waiter from the fixed deadline heap, and marks them `DEAD` in one
@@ -98,6 +98,53 @@ reusable. Release work is therefore O(frames owned), never O(all 8,192 physical
 frames), and diagnostics expose owner slots, release operations, and exact
 frame visits.
 
+## Thread creation and death
+
+K5 thread creation is one transaction with this reservation order:
+
+1. reserve an unpublished global thread record and guarded supervisor-stack
+   slot;
+2. reserve one free process stack slot and one physical user-stack frame;
+3. clear the frame and map it read/write above an unmapped lower guard;
+4. install one generation-safe process-local thread handle with the requested
+   subset of `read`, `wait`, and `administer`;
+5. initialize the saved context and publish the ready thread;
+6. commit the thread-object, user-stack, user-guard, supervisor-stack, and
+   supervisor-guard charges.
+
+Steps 1 through 4 and context initialization are an interruptible preparation
+phase. The handle slot is reserved in the caller's table but cannot be observed
+by user code because the creating syscall has not returned. Steps 5 and 6 are a
+no-allocation commit with interrupts masked, including ready-queue insertion and
+all process/scheduler accounting. Failure before commit unwinds 4 through 1.
+Rollback is an invariant, not best effort: a failed rollback is kernel
+corruption. No failed creation changes any committed quota counter,
+live-thread count, ready queue, mapping count, handle count, or physical-frame
+baseline. Once commit begins, a failed publication invariant is kernel
+corruption rather than a recoverable partial transaction.
+
+The mask is required even on one CPU: a supervisor timer can expire a waiter
+and enqueue it while ordinary user code is in `THREAD_CREATE`. A deterministic
+test injects that timer immediately before the commit mask and proves the
+expired waiter and newly published thread are both linked exactly once.
+
+A published thread has one execution reference and zero or more handle
+references. ABI 0.2 creates one handle and has no duplicate/transfer operation,
+so K5 normally has zero or one handle reference. Closing the final handle wakes
+death waiters with `CLOSED` but leaves a live execution reference untouched.
+Normal `THREAD_EXIT` records the status once and releases the execution
+reference. The deferred worker releases the user-stack mapping; the thread
+record and supervisor stack become reusable only after both death and final
+handle close. Generation advances before either handle-table or thread-record
+reuse, so stale handles cannot name a replacement thread.
+
+The single-core transition ordering is exact: syscall entry has interrupts
+masked; it records terminal state and removes/wakes wait links before making a
+replacement thread current. The worker performs mapping destruction only
+after execution has moved to its dedicated MSP and enables interrupts around
+that bounded maintenance pass. Signal, deadline, cancellation, handle close,
+thread exit, and process death therefore cannot each complete the same wait.
+
 ## Rights
 
 Every handle entry records object pointer, generation, type, rights, and one
@@ -107,13 +154,14 @@ administer, and debug. Operations request the exact subset they require.
 Duplicate may only reduce rights. Transfer requires `transfer` and cannot add
 rights. Administer and direct device mapping are never inherited implicitly.
 
-## Event and semaphore ownership
+## Event, semaphore, and timer ownership
 
 The initial production synchronization pool has 32 fixed slots, an eight-object
-creator quota, and at most 16 waiters on one object. Events and semaphores share
-this pool, one lifecycle implementation, and the scheduler's existing intrusive
-wait/deadline links. No wait, signal, cancel, close, timeout, or owner-death path
-allocates memory.
+creator quota, and at most 16 waiters on one object. Events, semaphores, and
+timers share this pool, one lifecycle implementation, and the scheduler's
+existing intrusive wait/deadline links. Armed timers use parallel fixed
+32-entry heap/position/deadline arrays. No wait, signal, set, cancel, close,
+timeout, expiry, or owner-death path allocates memory.
 
 A live handle contributes one object reference. The final handle close changes
 `LIVE -> CLOSING`, records `CLOSED`, withdraws future operations, removes every
@@ -128,6 +176,31 @@ cancel-wait right. It succeeds only while that thread is blocked. Signal,
 deadline, cancel, close, and owner death are serialized terminal contenders:
 the first one removes both links and writes the result; every later contender
 observes a nonblocked thread or closing object and cannot overwrite it.
+
+K6 wait sets do not own object references or user memory. A blocked thread owns
+one fixed registration for each copied descriptor and at most one deadline
+entry. The current pool contains 256 registrations, statically partitioned as
+16 members for each of 16 thread slots, so one process cannot consume another
+thread's registration reserve. Completion withdraws the complete row before
+publishing the thread as ready. A final handle close remains safe because it
+first closes the object and completes all registrations that still name its
+queue; no blocked wait retains an unchecked handle-table entry or user pointer.
+
+Process and thread death queues are embedded in their generation-stable object
+records. A published process or thread owns one execution reference plus zero
+or more handle references. Death drops the execution reference, records one
+terminal result/detail, wakes the embedded queue, and leaves a bounded zombie
+only while a handle still owns observation rights. Final handle close wakes any
+remaining foreign waiter with `CLOSED`; it never terminates live execution.
+Object reuse is forbidden until execution, handle references, and death waiters
+are all zero. A process-private numeric ID is never authority.
+
+Timer set replaces any existing arm only after handle/type/right validation.
+Expiry removes the timer heap entry before setting level readiness and
+withdrawing all wait registrations. Cancel removes the heap entry, clears
+readiness, and completes current waiters with `CANCELLED`. Final close and
+creator death use the common closing transition and cannot leave an armed heap
+slot.
 
 Semaphore release validates the entire operation before waking anyone. It
 computes direct handoffs first, rejects a release whose remainder would exceed

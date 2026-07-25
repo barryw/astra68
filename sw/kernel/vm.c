@@ -94,6 +94,39 @@ static volatile uint32_t *physical_words(uint32_t physical_address)
 #endif
 }
 
+#if defined(KERNEL_VM_HOST_TEST)
+bool kernel_vm_test_translate_current(uint32_t virtual_address, bool write,
+                                      uint32_t *physical_address)
+{
+    volatile uint32_t *root;
+    volatile uint32_t *table;
+    uint32_t root_descriptor;
+    uint32_t page_descriptor;
+
+    if (physical_address == NULL || current_user_root == 0u ||
+        virtual_address < KERNEL_VM_USER_MIN ||
+        virtual_address > KERNEL_VM_USER_MAX)
+        return false;
+    root = physical_words(current_user_root);
+    if (root == NULL)
+        return false;
+    root_descriptor = root[VM_ROOT_INDEX(virtual_address)];
+    if ((root_descriptor & VM_DESC_TYPE_MASK) != VM_DESC_TABLE)
+        return false;
+    table = physical_words(root_descriptor & VM_DESC_TABLE_ADDRESS);
+    if (table == NULL)
+        return false;
+    page_descriptor = table[VM_TABLE_INDEX(virtual_address)];
+    if ((page_descriptor & VM_DESC_TYPE_MASK) != VM_DESC_PAGE ||
+        (write && (page_descriptor & VM_DESC_WRITE_PROTECT) != 0u))
+        return false;
+    *physical_address = (page_descriptor & VM_DESC_PAGE_ADDRESS) |
+                        (virtual_address & (KERNEL_PAGE_SIZE - 1u));
+    return *physical_address >= host_memory_base &&
+           *physical_address - host_memory_base < host_memory_size;
+}
+#endif
+
 static void reset_stats(void)
 {
     vm_stats.kernel_root_physical = 0u;

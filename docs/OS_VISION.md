@@ -1,6 +1,6 @@
 # Astra OS vision and architecture principles
 
-Version 0.1 — living design document
+Version 0.2 — living design document
 
 Astra OS is the working name for the native operating system of Astra 68; the
 final product name remains open. This document defines what the operating
@@ -11,6 +11,18 @@ implementation plan.
 The evolving privileged-core contract and its research gates are maintained in
 `docs/KERNEL_SPEC.md`. That specification must implement this vision rather
 than silently redefining it.
+
+Focused userspace direction is maintained in:
+
+- `docs/USERSPACE_ARCHITECTURE.md`;
+- `docs/DESKTOP_AND_UI.md`;
+- `docs/TERMINAL_AND_POSIX.md`;
+- `docs/APPLICATION_AND_KIT_MODEL.md`;
+- `docs/USERSPACE_BUDGET.md`;
+- `docs/RESOURCE_MODEL.md`.
+
+Those documents refine this vision. They do not claim that the current kernel
+can yet start the described services or that their protocols are stable.
 
 Status markers used here:
 
@@ -88,8 +100,9 @@ beginning.
 ### 2.4 Hardware and software fit together
 
 **LOCKED:** Astra OS targets Astra 68 rather than an open-ended universe of
-generic computers. It should exploit the actual chipset instead of hiding Vega,
-Astraea, Lyra, and Vesta behind abstractions designed for unrelated hardware.
+generic computers. It should exploit the actual chipset and coprocessor instead
+of hiding Vega, Astraea, Vesta, and AstraHost behind abstractions designed for
+unrelated hardware.
 
 This does not authorize ordinary applications to manipulate unrestricted MMIO.
 The OS exposes meaningful native resources—surfaces, scenes, sprites, copper
@@ -133,6 +146,27 @@ The input path, compositor, service supervisor, cancellation path, and system
 inspector retain independent forward progress under CPU saturation, full
 queues, storage errors, network loss, and an unresponsive application or
 service. Responsiveness budgets are acceptance criteria, not optional tuning.
+
+### 2.8 One coherent personal environment
+
+**LOCKED:** Astra is GUI-first and has a first-class terminal, shell, and
+development environment. The desktop and command line are peers over the same
+native resources and services; neither is a privileged alternate system.
+
+The environment should preserve the immediacy, compactness, hardware/software
+fit, visible resources, and conceptual consistency that made the Amiga feel
+coherent without copying Workbench or inheriting AmigaOS's flat address space,
+cooperative dependencies, raw pointers, or unrestricted chipset access.
+
+Applications, menus, keyboard bindings, the command palette, shell tools, drag
+and drop, and automation should share commands and object identity where they
+represent the same action. A user should learn one ownership, completion,
+error, and cancellation model and recognize it across the machine.
+
+**LOCKED:** Program size, resident memory, launch time, and hot-path latency are
+measured continuously. Small programs should obtain capability from shared
+system Kits and hardware-backed services rather than embedding private copies
+of the operating system.
 
 ## 3. Explicit non-goals
 
@@ -178,6 +212,13 @@ The initial software baseline remains:
 - no hardware FPU, with soft-float where needed;
 - separate CPU instruction and data caches;
 - multiple chipset DMA masters sharing SDRAM;
+- Vega v0.5 framebuffer scanout with pixel-granular X/Y viewport scrolling,
+  exactly 16 hardware sprites, and no tile layers. The earlier 32-sprite/tile
+  draft was reduced to fit and route the complete ULX3S production system; it
+  is not an application-visible fallback configuration;
+- audio hosted by an AstraHost/ESP service rather than an instantiated FPGA
+  Lyra block. The Lyra aperture remains reserved and its old proposal is not a
+  production capability;
 - an ESP32-class I/O coprocessor running ESP-IDF FreeRTOS and owning SD plus
   Wi-Fi/TCP/UDP, connected to the FPGA exclusively through SPI;
 - ROM/BRAM sufficient for POST, recovery, and boot loading.
@@ -253,7 +294,7 @@ state or a violated invariant that makes safe continuation impossible.
 
 ### 5.3 Kernel sourcing decision
 
-**DIRECTION:** Build a purpose-designed Astra kernel instead of adapting a
+**DIRECTION:** Build the purpose-designed Axiom kernel instead of adapting a
 general-purpose Unix kernel, a legacy 68k operating system, or a
 single-address-space RTOS.
 
@@ -466,8 +507,8 @@ architectural behavior merely to invent a private PMMU descriptor bit.
 ### 9.1 The PMMU is not an IOMMU
 
 **DIRECTION:** Treat every DMA master as a separate protection concern. Vega,
-Lyra, Astraea, storage, and future network hardware can access physical memory
-without passing through the CPU PMMU.
+Astraea, AstraHost transport DMA, OHCI, and any future master can access
+physical memory without passing through the CPU PMMU.
 
 Before untrusted services can influence DMA, the platform needs one of:
 
@@ -583,6 +624,10 @@ Candidate areas include:
 - Network;
 - Devices and system inspection.
 
+The detailed application, bundle, and shared-code direction is
+`docs/APPLICATION_AND_KIT_MODEL.md`. Shared immutable Kit text is a later size
+and launch optimization, not a prerequisite for the first protected service.
+
 The stable binary boundary is C-like syscalls and serialized service messages.
 C and C++ SDKs may provide ergonomic source-level wrappers. C++ object layout,
 name mangling, exception ABI, and virtual tables do not cross process or kernel
@@ -630,8 +675,10 @@ Main-thread or object-owner affinity may be useful, but hidden reentrancy and
 nested event loops are not. The SDK should make message ownership and blocking
 behavior obvious.
 
-The final workspace metaphor, visual language, document model, and first screen
-after boot are **OPEN**.
+`docs/DESKTOP_AND_UI.md` defines the Amiga-inspired but non-clone workspace,
+window, scene, command, and responsiveness direction. Exact chrome, palette,
+icons, menu activation, and the final workspace name remain **OPEN** and must be
+selected from measured prototypes on the physical 720x480 output.
 
 ## 12. Graphics and media as native services
 
@@ -641,7 +688,8 @@ Astra should expose chipset-aware protected objects such as:
 
 - RGB565 drawing and presentation surfaces;
 - composited windows and fullscreen scenes;
-- tilemaps, tilesets, sprite sets, and palettes;
+- pixel-scrolled and wrapped framebuffer surfaces;
+- validated sets for the production Vega limit of 16 sprites, plus palettes;
 - font faces, designed bitmap strikes, positioned glyph runs, and resident ROM
   fallback faces;
 - validated copper programs;
@@ -654,10 +702,13 @@ without exposing register addresses as the application ABI.
 
 ### 12.2 Audio and media
 
-**DIRECTION:** A protected media service owns Lyra, media timing, voice
-allocation, buffer scheduling, and mixing policy.
+**DIRECTION:** A protected Astra media service owns application-facing media
+timing, stream/voice allocation, buffer scheduling, and mixing policy. A
+versioned AstraHost audio service on the ESP performs the production audio
+backend work over SPI; no application talks directly to ESP firmware or a
+dormant Lyra proposal.
 
-It should expose both conventional streams and native hardware concepts such as
+It should expose both conventional streams and native Astra concepts such as
 PCM voices, wavetable instruments, synchronized triggers, and media clocks.
 Real-time paths use preallocated buffers, bounded queues, and no filesystem I/O,
 unbounded allocation, or ordinary-priority blocking.
@@ -746,7 +797,7 @@ negotiation, bounded queues, explicit backpressure, multi-sector transfers,
 completion status, media generation/removal state, write protection, timeout
 and reset behavior, and a precisely defined flush/barrier operation. An ESP
 reset fails outstanding requests and changes the device generation; it must not
-hang or crash the Astra kernel.
+hang or crash Axiom.
 
 Because the same ESP owns Wi-Fi and SD, they share a hardware and firmware
 failure domain. Wi-Fi/lwIP faults, watchdog resets, malformed network traffic,
@@ -851,6 +902,14 @@ POSIX calls, Unix signals, BSD sockets, a shell environment, or emulation may
 be useful to port software. They should translate into native processes,
 handles, messages, and services. They do not gain privileged shortcuts that
 weaken the native safety model.
+
+**DIRECTION:** Upstream zsh is the primary modern interactive-shell port target
+and Vim is an early full-screen terminal target. Their Unix process, file-
+descriptor, PTY, signal, and job-control requirements are supplied by a
+userspace POSIX personality over native Astra mechanisms. They do not redefine
+the native spawn, capability, messaging, or resource model. The required
+process-clone/fork mechanism remains an explicit design gate in
+`docs/TERMINAL_AND_POSIX.md`, not an implied kernel feature.
 
 ### 15.3 Developer-facing quality
 
@@ -1049,7 +1108,8 @@ containment in one observable result.
 - Processes, threads, handles, ports/channels, events, shared areas.
 - Resource accounting, bounded queues, monotonic timers.
 - Explicit spawn and initial ELF loader.
-- Service supervisor and a text shell/debug environment.
+- Service supervisor, registrar, and a bounded bootstrap command/debug
+  environment.
 
 ### Phase 3 — device and storage substrate
 
@@ -1069,9 +1129,11 @@ containment in one observable result.
 
 - Display/compositor service and application event model.
 - Surfaces, blitter/draw commands, hardware glyph runs, native AFNT font
-  service, presentation, sprites, tiles, and copper resources.
-- Media service, Lyra streams/voices/instruments, and latency instrumentation.
-- Launcher/workspace and initial native application kits.
+  service, presentation, 16-sprite sets, framebuffer viewport scrolling, and
+  copper resources.
+- Media service, ESP audio streams/voices/instruments, and latency
+  instrumentation.
+- Launcher/workspace, terminal window, and initial native application Kits.
 
 ### Phase 6 — durable personal environment
 
@@ -1097,12 +1159,14 @@ The following require focused design documents or prototypes:
 9. Scheduler priority classes, quanta, and media deadline policy.
 10. Kernel and SDK implementation languages.
 11. Application capability manifests and owner-consent experience.
-12. Workspace, document, and command-line relationship.
+12. Exact workspace chrome, icon language, menu behavior, and Scene behavior.
 13. Native filesystem, case rules, Unicode normalization, and durability API.
 14. Shared-library and package-version policy.
 15. Network hardware and kernel/user network-stack boundary.
 16. Crash-record persistence backend and service reconnection protocols.
 17. Bitstream/ROM/OS update bundle and rollback mechanism.
+18. POSIX process clone, signal delivery, PTY, and job-control mechanisms needed
+    for a correct zsh port.
 
 Each decision should preserve the locked principles in this document. A
 familiar implementation mechanism is acceptable; a familiar mechanism that

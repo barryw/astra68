@@ -67,9 +67,27 @@ static void test_copy(void)
     }
 }
 
+static void test_word_fill(void)
+{
+    uint32_t storage[24];
+
+    for (uint32_t count = 0u; count <= 16u; ++count) {
+        for (uint32_t index = 0u; index < 24u; ++index)
+            storage[index] = 0x11223344u;
+        kernel_words_fill(&storage[4], count, 0xa5a55a5au);
+        for (uint32_t index = 0u; index < 4u; ++index)
+            assert(storage[index] == 0x11223344u);
+        for (uint32_t index = 4u; index < 4u + count; ++index)
+            assert(storage[index] == 0xa5a55a5au);
+        for (uint32_t index = 4u + count; index < 24u; ++index)
+            assert(storage[index] == 0x11223344u);
+    }
+}
+
 int main(void)
 {
     test_clear();
+    test_word_fill();
     test_copy();
     puts("byte primitive tests passed");
     return 0;

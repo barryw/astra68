@@ -1,5 +1,7 @@
 #include "memory.h"
 
+#include "bytes.h"
+
 #include <stddef.h>
 
 #define KERNEL_ALLOC_POISON 0xa110ca7eu
@@ -337,10 +339,9 @@ static void poison(uint32_t first, uint32_t count, uint32_t value)
     for (uint32_t frame = 0u; frame < count; ++frame) {
         uintptr_t address = (uintptr_t)stats.ram_base +
             (uintptr_t)(first + frame) * KERNEL_PAGE_SIZE;
-        volatile uint32_t *word = (volatile uint32_t *)address;
-        for (uint32_t index = 0u;
-             index < KERNEL_PAGE_SIZE / sizeof(*word); ++index)
-            word[index] = value;
+
+        kernel_words_fill((volatile uint32_t *)address,
+                          KERNEL_PAGE_SIZE / sizeof(uint32_t), value);
     }
 #else
     (void)first;
@@ -465,11 +466,12 @@ KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info)
     return KERNEL_MEMORY_OK;
 }
 
-KernelMemoryStatus kernel_memory_alloc(uint32_t frame_count,
-                                       uint32_t alignment_frames,
-                                       KernelFrameState state,
-                                       uint32_t owner,
-                                       uint32_t *physical_base)
+static KernelMemoryStatus allocate_frames(uint32_t frame_count,
+                                          uint32_t alignment_frames,
+                                          KernelFrameState state,
+                                          uint32_t owner,
+                                          uint32_t initial_value,
+                                          uint32_t *physical_base)
 {
     uint32_t allocated;
     uint32_t owner_slot;
@@ -494,7 +496,7 @@ KernelMemoryStatus kernel_memory_alloc(uint32_t frame_count,
         if (!available)
             continue;
 
-        poison(first, frame_count, KERNEL_ALLOC_POISON);
+        poison(first, frame_count, initial_value);
         bitmap_assign_range(blocked_bitmap, first, frame_count, true);
         bitmap_assign_range(dynamic_bitmap, first, frame_count, true);
         for (uint32_t index = 0u; index < frame_count; ++index) {
@@ -515,6 +517,26 @@ KernelMemoryStatus kernel_memory_alloc(uint32_t frame_count,
 
     ++stats.allocation_failures;
     return KERNEL_MEMORY_OUT_OF_MEMORY;
+}
+
+KernelMemoryStatus kernel_memory_alloc(uint32_t frame_count,
+                                       uint32_t alignment_frames,
+                                       KernelFrameState state,
+                                       uint32_t owner,
+                                       uint32_t *physical_base)
+{
+    return allocate_frames(frame_count, alignment_frames, state, owner,
+                           KERNEL_ALLOC_POISON, physical_base);
+}
+
+KernelMemoryStatus kernel_memory_alloc_zeroed(uint32_t frame_count,
+                                              uint32_t alignment_frames,
+                                              KernelFrameState state,
+                                              uint32_t owner,
+                                              uint32_t *physical_base)
+{
+    return allocate_frames(frame_count, alignment_frames, state, owner, 0u,
+                           physical_base);
 }
 
 KernelMemoryStatus kernel_memory_retain(uint32_t physical_base,
@@ -710,6 +732,20 @@ bool kernel_memory_frame_info(uint32_t physical_address,
     info->references = frames[index].references;
     info->pins = frames[index].pins;
     info->state = frames[index].state;
+    return true;
+}
+
+bool kernel_memory_owner_frames(uint32_t owner, uint32_t *frame_count)
+{
+    uint32_t owner_slot;
+
+    if (!initialized || owner == KERNEL_OWNER_NONE || frame_count == NULL)
+        return false;
+    if (!find_owner_slot(owner, &owner_slot)) {
+        *frame_count = 0u;
+        return true;
+    }
+    *frame_count = owner_ledgers[owner_slot].frame_count;
     return true;
 }
 

@@ -92,6 +92,229 @@ _k1_survivor_image_entry:
 	bra     .Lmain_wait_final
 
 .Lmain_progress:
+	move.l  #KERNEL_QUALIFICATION_CODE_BASE + \
+		(.Lk5_exit_thread - _k1_survivor_image_start), %d1
+	move.l  #KERNEL_QUALIFICATION_K5_ARGUMENT, %d2
+	moveq   #KERNEL_QUALIFICATION_THREAD_PRIORITY, %d3
+	moveq   #KERNEL_QUALIFICATION_THREAD_RIGHTS, %d4
+	moveq   #ASTRA_SYSCALL_THREAD_CREATE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %d1, KERNEL_QUALIFICATION_K5_THREAD_HANDLE_OFFSET(%a0)
+
+	move.l  #0x7fffffff, %d2
+	moveq   #-1, %d3
+	moveq   #ASTRA_SYSCALL_WAIT_ONE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	cmpi.l  #KERNEL_QUALIFICATION_K5_EXIT_STATUS, %d1
+	bne     .Lmain_fail
+
+	move.l  KERNEL_QUALIFICATION_K5_THREAD_HANDLE_OFFSET(%a0), %d1
+	moveq   #0, %d2
+	moveq   #0, %d3
+	moveq   #ASTRA_SYSCALL_WAIT_ONE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	cmpi.l  #KERNEL_QUALIFICATION_K5_EXIT_STATUS, %d1
+	bne     .Lmain_fail
+
+	move.l  KERNEL_QUALIFICATION_K5_THREAD_HANDLE_OFFSET(%a0), %d1
+	moveq   #ASTRA_SYSCALL_CLOSE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+
+	move.l  KERNEL_QUALIFICATION_K5_THREAD_HANDLE_OFFSET(%a0), %d1
+	moveq   #0, %d2
+	moveq   #0, %d3
+	moveq   #ASTRA_SYSCALL_WAIT_ONE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	cmpi.l  #ASTRA_SYSCALL_INVALID_HANDLE, %d0
+	bne     .Lmain_fail
+	move.l  #KERNEL_QUALIFICATION_K5_RESULT, \
+		KERNEL_QUALIFICATION_K5_RESULT_OFFSET(%a0)
+
+	move.l  #KERNEL_QUALIFICATION_CODE_BASE + \
+		(.Lk6_signal_thread - _k1_survivor_image_start), %d1
+	move.l  #KERNEL_QUALIFICATION_K6_ARGUMENT, %d2
+	moveq   #KERNEL_QUALIFICATION_K6_THREAD_PRIORITY, %d3
+	moveq   #KERNEL_QUALIFICATION_THREAD_RIGHTS, %d4
+	moveq   #ASTRA_SYSCALL_THREAD_CREATE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %d1, KERNEL_QUALIFICATION_K6_THREAD_HANDLE_OFFSET(%a0)
+
+	| Block on event + semaphore; the helper signals member 1 and exits.
+	subq.l  #8, %sp
+	move.l  KERNEL_QUALIFICATION_EVENT_HANDLE_OFFSET(%a0), (%sp)
+	move.l  KERNEL_QUALIFICATION_SEMAPHORE_HANDLE_OFFSET(%a0), 4(%sp)
+	move.l  %sp, %d1
+	moveq   #2, %d2
+	move.l  #ASTRA_DEADLINE_NONE_HI, %d3
+	moveq   #-1, %d4
+	moveq   #ASTRA_SYSCALL_WAIT_MULTIPLE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	cmpi.l  #1, %d1
+	bne     .Lmain_fail
+	tst.l   %d2
+	bne     .Lmain_fail
+
+	| Make both members ready. Lowest index wins; the semaphore stays ready.
+	move.l  KERNEL_QUALIFICATION_EVENT_HANDLE_OFFSET(%a0), %d1
+	moveq   #1, %d2
+	moveq   #ASTRA_SYSCALL_SIGNAL, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_SEMAPHORE_HANDLE_OFFSET(%a0), %d1
+	moveq   #1, %d2
+	moveq   #ASTRA_SYSCALL_SIGNAL, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %sp, %d1
+	moveq   #2, %d2
+	move.l  #ASTRA_DEADLINE_NONE_HI, %d3
+	moveq   #-1, %d4
+	moveq   #ASTRA_SYSCALL_WAIT_MULTIPLE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	tst.l   %d1
+	bne     .Lmain_fail
+	tst.l   %d2
+	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_SEMAPHORE_HANDLE_OFFSET(%a0), %d1
+	move.l  #ASTRA_DEADLINE_NONE_HI, %d2
+	moveq   #-1, %d3
+	moveq   #ASTRA_SYSCALL_WAIT_ONE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+
+	| A dead thread is immediately ready and returns its status as detail.
+	move.l  KERNEL_QUALIFICATION_EVENT_HANDLE_OFFSET(%a0), (%sp)
+	move.l  KERNEL_QUALIFICATION_K6_THREAD_HANDLE_OFFSET(%a0), 4(%sp)
+	move.l  %sp, %d1
+	moveq   #2, %d2
+	move.l  #ASTRA_DEADLINE_NONE_HI, %d3
+	moveq   #-1, %d4
+	moveq   #ASTRA_SYSCALL_WAIT_MULTIPLE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	cmpi.l  #1, %d1
+	bne     .Lmain_fail
+	cmpi.l  #KERNEL_QUALIFICATION_K6_EXIT_STATUS, %d2
+	bne     .Lmain_fail
+
+	| With no runnable peer, the supervisor timer expires the whole set.
+	move.l  KERNEL_QUALIFICATION_SEMAPHORE_HANDLE_OFFSET(%a0), 4(%sp)
+	moveq   #ASTRA_SYSCALL_CLOCK_MONOTONIC, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	add.l   #KERNEL_QUALIFICATION_K6_TIMEOUT_NS, %d2
+	moveq   #0, %d3
+	addx.l  %d3, %d1
+	move.l  %d2, %d4
+	move.l  %d1, %d3
+	move.l  %sp, %d1
+	moveq   #2, %d2
+	moveq   #ASTRA_SYSCALL_WAIT_MULTIPLE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	cmpi.l  #ASTRA_SYSCALL_TIMED_OUT, %d0
+	bne     .Lmain_fail
+	cmpi.l  #ASTRA_WAIT_INDEX_NONE, %d1
+	bne     .Lmain_fail
+	tst.l   %d2
+	bne     .Lmain_fail
+
+	move.l  KERNEL_QUALIFICATION_K6_THREAD_HANDLE_OFFSET(%a0), %d1
+	moveq   #ASTRA_SYSCALL_CLOSE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	addq.l  #8, %sp
+
+	| A first-class timer participates in the same bounded wait set.
+	moveq   #KERNEL_QUALIFICATION_THREAD_RIGHTS, %d1
+	moveq   #ASTRA_SYSCALL_TIMER_CREATE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %d1, %d7
+	moveq   #ASTRA_SYSCALL_CLOCK_MONOTONIC, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	moveq   #0, %d3
+	add.l   #KERNEL_QUALIFICATION_K6_TIMER_NS, %d2
+	addx.l  %d3, %d1
+	move.l  %d2, %d3
+	move.l  %d1, %d2
+	move.l  %d7, %d1
+	moveq   #ASTRA_SYSCALL_TIMER_SET, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	tst.l   %d1
+	bne     .Lmain_fail
+	subq.l  #8, %sp
+	move.l  KERNEL_QUALIFICATION_EVENT_HANDLE_OFFSET(%a0), (%sp)
+	move.l  %d7, 4(%sp)
+	move.l  %sp, %d1
+	moveq   #2, %d2
+	move.l  #ASTRA_DEADLINE_NONE_HI, %d3
+	moveq   #-1, %d4
+	moveq   #ASTRA_SYSCALL_WAIT_MULTIPLE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	cmpi.l  #1, %d1
+	bne     .Lmain_fail
+	tst.l   %d2
+	bne     .Lmain_fail
+	| Expiration remains ready until a rearm or cancellation.
+	move.l  %sp, %d1
+	moveq   #2, %d2
+	moveq   #0, %d3
+	moveq   #0, %d4
+	moveq   #ASTRA_SYSCALL_WAIT_MULTIPLE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	cmpi.l  #1, %d1
+	bne     .Lmain_fail
+	move.l  %d7, %d1
+	moveq   #ASTRA_SYSCALL_CLOSE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	addq.l  #8, %sp
+	move.l  #KERNEL_QUALIFICATION_K6_TIMER_RESULT, \
+		KERNEL_QUALIFICATION_K6_TIMER_RESULT_OFFSET(%a0)
+
+	| Release the sibling to observe and close the offender process handle.
+	move.l  KERNEL_QUALIFICATION_FINAL_EVENT_HANDLE_OFFSET(%a0), %d1
+	moveq   #1, %d2
+	moveq   #ASTRA_SYSCALL_SIGNAL, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	cmpi.l  #KERNEL_QUALIFICATION_K6_PROCESS_RESULT, \
+		KERNEL_QUALIFICATION_K6_PROCESS_RESULT_OFFSET(%a0)
+	bne     .Lmain_fail
+	move.l  #KERNEL_QUALIFICATION_K6_RESULT, \
+		KERNEL_QUALIFICATION_K6_RESULT_OFFSET(%a0)
+
 	moveq   #0, %d3
 .Lmain_progress_loop:
 	cmpi.l  #0x53555256, (%a0)
@@ -114,8 +337,44 @@ _k1_survivor_image_entry:
 	trap    #ASTRA_SYSCALL_TRAP
 	bra     .Lmain_fail
 
+.Lk5_exit_thread:
+	cmpi.l  #KERNEL_QUALIFICATION_K5_ARGUMENT, %d2
+	bne     .Lk5_fail
+	move.l  #KERNEL_QUALIFICATION_K5_EXIT_STATUS, %d1
+	moveq   #ASTRA_SYSCALL_THREAD_EXIT, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+.Lk5_fail:
+	movea.l #KERNEL_QUALIFICATION_SHARED_BASE, %a0
+	move.l  #KERNEL_QUALIFICATION_PHASE_ERROR, \
+		KERNEL_QUALIFICATION_PHASE_OFFSET(%a0)
+	moveq   #ASTRA_SYSCALL_PROCESS_EXIT, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	bra     .Lk5_fail
+
+.Lk6_signal_thread:
+	cmpi.l  #KERNEL_QUALIFICATION_K6_ARGUMENT, %d2
+	bne     .Lk6_fail
+	movea.l #KERNEL_QUALIFICATION_SHARED_BASE, %a0
+	move.l  KERNEL_QUALIFICATION_SEMAPHORE_HANDLE_OFFSET(%a0), %d1
+	moveq   #1, %d2
+	moveq   #ASTRA_SYSCALL_SIGNAL, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lk6_fail
+	move.l  #KERNEL_QUALIFICATION_K6_EXIT_STATUS, %d1
+	moveq   #ASTRA_SYSCALL_THREAD_EXIT, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+.Lk6_fail:
+	movea.l #KERNEL_QUALIFICATION_SHARED_BASE, %a0
+	move.l  #KERNEL_QUALIFICATION_PHASE_ERROR, \
+		KERNEL_QUALIFICATION_PHASE_OFFSET(%a0)
+	moveq   #ASTRA_SYSCALL_PROCESS_EXIT, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	bra     .Lk6_fail
+
 _k2_sibling_image_entry:
 	movea.l #KERNEL_QUALIFICATION_SHARED_BASE, %a0
+	move.l  %d2, %d6
 	move.l  %d5, KERNEL_QUALIFICATION_THREAD_HANDLE_OFFSET(%a0)
 
 	moveq   #0, %d1
@@ -205,6 +464,39 @@ _k2_sibling_image_entry:
 	move.l  #KERNEL_QUALIFICATION_PHASE_FINAL, KERNEL_QUALIFICATION_PHASE_OFFSET(%a0)
 	move.l  KERNEL_QUALIFICATION_FINAL_EVENT_HANDLE_OFFSET(%a0), %d1
 	move.l  #0x7fffffff, %d2
+	moveq   #-1, %d3
+	moveq   #ASTRA_SYSCALL_WAIT_ONE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lsibling_fail
+
+	| The injected process handle remains valid after fault teardown.
+	subq.l  #4, %sp
+	move.l  %d6, (%sp)
+	move.l  %sp, %d1
+	moveq   #1, %d2
+	move.l  #ASTRA_DEADLINE_NONE_HI, %d3
+	moveq   #-1, %d4
+	moveq   #ASTRA_SYSCALL_WAIT_MULTIPLE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	cmpi.l  #ASTRA_SYSCALL_PEER_DEAD, %d0
+	bne     .Lsibling_fail
+	tst.l   %d1
+	bne     .Lsibling_fail
+	tst.l   %d2
+	bne     .Lsibling_fail
+	move.l  %d6, %d1
+	moveq   #ASTRA_SYSCALL_CLOSE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lsibling_fail
+	addq.l  #4, %sp
+	move.l  #KERNEL_QUALIFICATION_K6_PROCESS_RESULT, \
+		KERNEL_QUALIFICATION_K6_PROCESS_RESULT_OFFSET(%a0)
+
+	| Preserve the permanent blocked-thread qualification invariant.
+	move.l  KERNEL_QUALIFICATION_FINAL_EVENT_HANDLE_OFFSET(%a0), %d1
+	move.l  #ASTRA_DEADLINE_NONE_HI, %d2
 	moveq   #-1, %d3
 	moveq   #ASTRA_SYSCALL_WAIT_ONE, %d0
 	trap    #ASTRA_SYSCALL_TRAP

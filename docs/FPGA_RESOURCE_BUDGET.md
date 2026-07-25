@@ -192,6 +192,19 @@ Consequently the authoritative mapped, packed, free-capacity, and constrained
 clock values remain exactly those in the `25D9CB8E` section above. No synthetic
 resource delta is assigned to software.
 
+### K6 software-only qualification
+
+The hardware-qualified 2026-07-25 K6 wait-multiple checkpoint has exact source
+identity
+`0208cb516801fe452bf59ef053d6daa0a118ee7e-dirty-04524898314d` and changes
+kernel/ROM software, emulator support, tests, and acceptance tooling only. It
+adds no RTL. Exact bitstream `25D9CB8E` was hash-verified and reused without
+repacking for two independent ULX3S boots. Both pass full 32 MiB BIST, PMMU
+isolation, every K1-K6 marker, and all fourteen performance gates. Therefore
+the mapped, packed, physical-free, bitstream-hash, and constrained-clock values
+remain exactly those in the `25D9CB8E` section above. No synthetic FPGA
+resource delta is assigned to K6 software.
+
 ## B1F9E60D rollback comparison
 
 The prior `B1F9E60D` route packed 66,093 TRELLIS_COMB cells, 25,449 FFs,

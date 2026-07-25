@@ -153,6 +153,133 @@ def test_k4_synchronization_requires_exact_lifecycle_and_handoffs() -> None:
         )
 
 
+def test_k5_thread_lifecycle_requires_exact_counts_budgets_and_history() -> None:
+    output = (
+        b"POST PASS\n"
+        b"K2 PERF irq syscall=1200/50000 timer=1300/50000 "
+        b"fault=9000/125000\n"
+        b"K2 PERF sched pick=400/10000 same=500/15000 "
+        b"cross=1800/50000\n"
+        b"K2 PERF wait block=600/15000 wake=700/15000 overruns=0\n"
+        b"K3 PERF deadline expire=800/20000 overruns=0\n"
+        b"K5 PERF thread create=102670/150000 exit=7427/50000 "
+        b"reap=33657/125000 overruns=0\n"
+        b"K2 PERFORMANCE PASS\n"
+        b"Wait/wake ........... 6 blocks, 2 wake, 3 priority handoff\n"
+        b"Deadlines ........... 1 expired, 1 priority handoff\n"
+        b"Sync objects ........ 4 event, 1 sem; cancel/close/death 1/1/1\n"
+        b"Thread lifecycle .... 1 exit, 2 waits, 1 reaped\n"
+        b"K5 THREAD LIFECYCLE PASS\n"
+        b"K4 HANDLE SYNCHRONIZATION PASS\n"
+        b"K3 ONE-SHOT SCHEDULER PASS\n"
+        b"K3 DEADLINE QUEUE PASS\n"
+        b"K2 BLOCKING SUBSTRATE PASS\n"
+        b"K2 THREAD SUBSTRATE PASS\n"
+        b"K1 PROTECTED ENTRY PASS\n"
+    )
+
+    assert acceptance_reached(
+        output, None, False, expect_k5_thread_lifecycle=True
+    )
+    for missing in (
+        b"Thread lifecycle .... 1 exit, 2 waits, 1 reaped\n",
+        b"K5 PERF thread create=102670/150000 exit=7427/50000 "
+        b"reap=33657/125000 overruns=0\n",
+        b"K5 THREAD LIFECYCLE PASS\n",
+        b"K4 HANDLE SYNCHRONIZATION PASS\n",
+    ):
+        assert not acceptance_reached(
+            output.replace(missing, b""),
+            None,
+            False,
+            expect_k5_thread_lifecycle=True,
+        )
+    for old, new in (
+        (b"1 exit, 2 waits, 1 reaped", b"2 exit, 2 waits, 1 reaped"),
+        (b"create=102670", b"create=150001"),
+        (b"102670/150000", b"102670/150001"),
+        (b"exit=7427", b"exit=0"),
+        (b"reap=33657/125000", b"reap=33657/124999"),
+        (b"overruns=0", b"overruns=1"),
+    ):
+        assert not acceptance_reached(
+            output.replace(old, new, 1),
+            None,
+            False,
+            expect_k5_thread_lifecycle=True,
+        )
+
+
+def test_k6_wait_multiple_requires_exact_counts_budgets_and_history() -> None:
+    output = (
+        b"POST PASS\n"
+        b"K2 PERF irq syscall=23349/50000 timer=13742/50000 "
+        b"fault=13283/125000\n"
+        b"K2 PERF sched pick=776/10000 same=1268/15000 "
+        b"cross=1555/50000\n"
+        b"K2 PERF wait block=2837/15000 wake=4355/15000 overruns=0\n"
+        b"K3 PERF deadline expire=6041/20000 overruns=0\n"
+        b"K5 PERF thread create=71837/150000 exit=12424/50000 "
+        b"reap=34719/125000 overruns=0\n"
+        b"K6 PERF wait-set block=3690/50000 wake=5545/50000 overruns=0\n"
+        b"K2 PERFORMANCE PASS\n"
+        b"Wait/wake ........... 11 blocks, 5 wake, 5 priority handoff\n"
+        b"Deadlines ........... 2 expired, 1 priority handoff\n"
+        b"Sync objects ........ 4 event, 1 sem; cancel/close/death 1/1/1\n"
+        b"Thread lifecycle .... 2 exit, 3 waits, 2 reaped\n"
+        b"Wait multiple ....... 7 calls, 4 block, 4 wake; max 2 members\n"
+        b"Wait registrations .. 1 live, 3 max\n"
+        b"Waitable timers ..... 1 created, 1 armed, 1 expired\n"
+        b"Process death ....... 1 waits, 0 blocked wakes\n"
+        b"K6 BOUNDED WAIT-MULTIPLE PASS\n"
+        b"K5 THREAD LIFECYCLE PASS\n"
+        b"K4 HANDLE SYNCHRONIZATION PASS\n"
+        b"K3 ONE-SHOT SCHEDULER PASS\n"
+        b"K3 DEADLINE QUEUE PASS\n"
+        b"K2 BLOCKING SUBSTRATE PASS\n"
+        b"K2 THREAD SUBSTRATE PASS\n"
+        b"K1 PROTECTED ENTRY PASS\n"
+    )
+
+    assert acceptance_reached(
+        output, None, False, expect_k6_wait_multiple=True
+    )
+    for missing in (
+        b"Wait multiple ....... 7 calls, 4 block, 4 wake; max 2 members\n",
+        b"Wait registrations .. 1 live, 3 max\n",
+        b"Waitable timers ..... 1 created, 1 armed, 1 expired\n",
+        b"Process death ....... 1 waits, 0 blocked wakes\n",
+        b"K6 PERF wait-set block=3690/50000 wake=5545/50000 overruns=0\n",
+        b"K6 BOUNDED WAIT-MULTIPLE PASS\n",
+        b"K5 THREAD LIFECYCLE PASS\n",
+    ):
+        assert not acceptance_reached(
+            output.replace(missing, b""),
+            None,
+            False,
+            expect_k6_wait_multiple=True,
+        )
+    for old, new in (
+        (b"11 blocks, 5 wake, 5 priority handoff", b"10 blocks, 5 wake, 5 priority handoff"),
+        (b"2 expired, 1 priority handoff", b"1 expired, 1 priority handoff"),
+        (b"2 exit, 3 waits, 2 reaped", b"2 exit, 2 waits, 2 reaped"),
+        (b"7 calls, 4 block, 4 wake", b"7 calls, 3 block, 4 wake"),
+        (b"max 2 members", b"max 3 members"),
+        (b"1 live, 3 max", b"0 live, 3 max"),
+        (b"1 created, 1 armed, 1 expired", b"1 created, 1 armed, 0 expired"),
+        (b"1 waits, 0 blocked wakes", b"1 waits, 1 blocked wakes"),
+        (b"block=3690", b"block=50001"),
+        (b"3690/50000", b"3690/50001"),
+        (b"wake=5545", b"wake=0"),
+    ):
+        assert not acceptance_reached(
+            output.replace(old, new, 1),
+            None,
+            False,
+            expect_k6_wait_multiple=True,
+        )
+
+
 def test_k2_performance_requires_exact_budgets_and_bounded_measurements() -> None:
     report = (
         b"K2 PERF irq syscall=1200/50000 timer=1300/50000 "
@@ -435,7 +562,7 @@ def test_graphics_diagnostic_requires_complete_pass_line() -> None:
 
 
 def test_expected_kernel_panic_requires_halt_and_optional_fault() -> None:
-    prefix = b"POST PASS\n*** ASTRA KERNEL PANIC ***\n"
+    prefix = b"POST PASS\n*** AXIOM KERNEL PANIC ***\n"
     complete = prefix + b"Fault:  0x02028000\nSYSTEM HALTED\n"
 
     assert not acceptance_reached(
@@ -469,7 +596,7 @@ def test_expected_kernel_panic_requires_halt_and_optional_fault() -> None:
 
 def test_expected_kernel_panic_must_follow_post() -> None:
     stale_panic = (
-        b"*** ASTRA KERNEL PANIC ***\n"
+        b"*** AXIOM KERNEL PANIC ***\n"
         b"Fault:  0x02028000\n"
         b"SYSTEM HALTED\n"
         b"POST PASS\n"
@@ -501,15 +628,15 @@ def test_panic_fault_requires_expected_panic_mode(
 
 def test_post_failure_and_kernel_panic_are_fatal() -> None:
     assert failure_reached(b"POST FAILURE: SDRAM\n")
-    assert failure_reached(b"*** ASTRA KERNEL PANIC ***\n")
+    assert failure_reached(b"*** AXIOM KERNEL PANIC ***\n")
     assert failure_reached(b"GFX FAIL 0A\r\n")
     assert failure_reached(b"GFX F41\n")
     assert not failure_reached(b"POST PASS\nK0 ENTRY PASS\n")
     assert not failure_reached(
-        b"*** ASTRA KERNEL PANIC ***\n", expected_kernel_panic=True
+        b"*** AXIOM KERNEL PANIC ***\n", expected_kernel_panic=True
     )
     assert failure_reached(
-        b"POST FAILURE\n*** ASTRA KERNEL PANIC ***\n",
+        b"POST FAILURE\n*** AXIOM KERNEL PANIC ***\n",
         expected_kernel_panic=True,
     )
 

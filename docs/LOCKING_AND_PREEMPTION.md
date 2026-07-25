@@ -1,6 +1,6 @@
-# Astra 68 locking and preemption contract
+# Axiom locking and preemption contract
 
-Status: normative single-core concurrency contract, revision 0.1 (2026-07-24)
+Status: normative single-core concurrency contract, revision 0.2 (2026-07-25)
 
 This design is for one MC68030. It does not emulate SMP. Correct interrupt,
 DMA, and MMIO ordering still applies even though only one CPU executes C code.
@@ -16,7 +16,7 @@ DMA, and MMIO ordering still applies even though only one CPU executes C code.
 | ordinary user thread syscall | yes, fallible | yes | yes | yes, before blocking/pin |
 | panic path | no | no | no | no |
 
-K3 has one fixed stackful deferred worker. It runs with S=1/M=1 on a dedicated
+K6 retains one fixed stackful deferred worker. It runs with S=1/M=1 on a dedicated
 8 KiB MSP behind an unmapped 4 KiB guard; exception, syscall, and hard-IRQ
 entry use the separate guarded ISP. The worker enters at IPL 7, removes a
 bounded work bitmap, enables interrupts around process reclamation, remasks
@@ -50,7 +50,7 @@ IRQ work.
 
 ## Preemption model
 
-**CURRENT K3 substrate:** four process slots, 16 global thread slots, a
+**CURRENT K6 substrate:** four process slots, 16 global thread slots, a
 transitional limit of 15 threads/process, and a 5 ms one-shot quantum. At
 12.5 MHz the quantum is exactly 62,500 CPU cycles. The scheduler has 32
 intrusive FIFO ready queues and a 32-bit bitmap, selects the highest effective
@@ -65,10 +65,10 @@ All registers, USP, PC, and SR are thread state. CRP is process state. A switch
 between threads in one process does not reload CRP or flush caches/ATC; host,
 Musashi, full pin-level, and ULX3S tests count that path separately from a
 cross-CRP switch. Timer and voluntary-yield paths apply priority selection.
-The public K4 event/semaphore path proves immediate handoff when a
-higher-priority waiter wakes or its deadline expires. Thread creation remains
-qualification-only; synchronization syscalls have a documented provisional
-ABI 0.1 contract.
+The public event/semaphore/timer and death-wait paths prove immediate handoff
+when a higher-priority waiter wakes or its deadline expires. K6 includes
+transactional runtime thread creation, caller-only thread exit, waitable
+thread/process death, and bounded wait-multiple under provisional ABI 0.2.
 
 The running thread owns one absolute quantum deadline. Vesta is always
 reprogrammed to the earlier of that deadline and the root of the wait-deadline
@@ -118,6 +118,14 @@ Preemption disable is a nest-counted per-CPU scalar. IPL raising and preemption
 disable are separate operations. Neither may span a wait, user copy, object
 destructor, allocator slow path, device poll, or synchronous IPC.
 
+`THREAD_CREATE` performs fallible allocation, clearing, mapping, and handle
+reservation with interrupts enabled. It masks interrupts only for its bounded,
+no-allocation commit: ready-queue publication plus process and scheduler
+accounting. The mask closes the only single-CPU race with timer expiry. A host
+hook injects a supervisor timer at the final enable-to-disable boundary and
+requires both the expired waiter and created thread to remain linked exactly
+once. Rollback runs interruptibly and is complete before returning an error.
+
 Initial release budgets at 12.5 MHz are:
 
 | Region | Hard maximum | Cycle equivalent |
@@ -139,8 +147,14 @@ repeated overruns fail qualification.
 - `RawLock`: nonblocking, IRQ-safe ownership assertion; it never spins waiting
   for a peer because no peer CPU exists.
 - `Mutex`: PLANNED sleepable, priority-inheriting thread lock.
-- `Event`: CURRENT INTERNAL level object with consume-on-wait and close/wake-all.
-- `Semaphore`: PLANNED counted wait object.
+- `Event`: CURRENT K4 handle-backed auto/manual-reset object with bounded
+  priority/FIFO wait and close/wake-all.
+- `Semaphore`: CURRENT K4 handle-backed counted object with bounded direct
+  waiter handoff and overflow rejection.
+- `Timer`: CURRENT K6 handle-backed one-shot, level-triggered object with a
+  fixed 32-entry deadline heap and deterministic slot tie-break.
+- `WaitMultiple`: CURRENT K6 fixed 1-16 member registration set covering
+  events, semaphores, timers, thread death, and process death.
 - `WaitQueue`: CURRENT INTERNAL intrusive priority/FIFO blocked-thread queue
   with a nonzero sequence counter preventing a stale condition check from
   blocking.
@@ -180,9 +194,9 @@ To prevent lost wakeups:
 Timeout, cancellation, signal, and peer death compete through one atomic waiter
 state; exactly one wins and supplies the result.
 
-The current single-CPU K4 synchronization path runs inside serialized
-supervisor dispatch. It snapshots the wait-queue sequence while testing the
-condition; `kernel_thread_block_until` succeeds only if that sequence is still
+The current single-CPU K6 synchronization and thread-lifecycle paths run inside
+serialized supervisor dispatch. They snapshot the wait-queue sequence while
+testing the condition; blocking succeeds only if that sequence is still
 current.
 Every wake, expiry, close, or process retirement advances the sequence. A
 successful timed block links the thread to the object wait queue first and
@@ -192,8 +206,13 @@ Expiry removes the heap entry and wait link before making it `READY`. Process
 death performs the same withdrawal for every sibling before deferred
 destruction. These paths are idempotence-checked so one race winner supplies
 one result and one cancellation count. Explicit user cancellation and creator
-death use this same owner; wait-multiple and port/service peer-death semantics
-must also reuse it rather than introduce a second timeout queue.
+death use this same owner. Wait-multiple validates every member before linking
+a fixed registration row and installs at most one thread deadline. The winning
+signal, timer expiry/cancel, target death, timeout, cancellation, close, owner
+death, or caller retirement removes every nonwinning registration before
+readiness. No path allocates or performs synchronous IPC. Future port/service
+peer-death semantics must reuse this owner rather than introduce a second
+timeout queue.
 
 ## Interrupt and deferred work
 
@@ -212,10 +231,19 @@ with an overflow/error event.
 
 ## Required measurements
 
-The trace ring records interrupt-disabled time, scheduler-lock time, raw-lock
-time, wake-to-run latency, same-CRP switch cycles, cross-CRP switch cycles,
-deadline-expiry cycles, ATC flushes, and real-time budget exhaustion.
-Production build `25D9CB8E` measured deadline expiry at 6,177 cycles against a
-20,000-cycle gate on two independent K3 boots, with zero performance
-overruns. `STATUS.md` labels every other metric unmeasured until hardware data
-exists.
+The trace ring target records interrupt-disabled time, scheduler-lock time,
+raw-lock time, wake-to-run latency, same-CRP switch cycles, cross-CRP switch
+cycles, deadline-expiry cycles, ATC flushes, and real-time budget exhaustion.
+Current K6 qualification enforces fourteen bounded path measurements. The
+final full pin-level run measured 38,986 syscall, 27,656 timer, 31,966 user
+fault, 1,506 scheduler pick, 3,092 same-CRP, 4,327 cross-CRP, 4,782 block,
+7,888 wake, 10,234 deadline, 124,512 create, 25,681 exit, 28,879 reap, 6,259
+wait-set block, and 10,049 wait-set wake cycles. Two independent production
+build `25D9CB8E` boots measured the same ordered paths as
+38,983/27,644/32,005/1,508/3,095/4,314/4,781/7,865/10,240/124,516/25,664/
+28,873/6,267/10,045 and
+38,975/27,666/31,972/1,508/3,095/4,318/4,786/7,881/10,239/124,464/25,654/
+28,879/6,254/10,041 cycles. Every value remains below its fixed limit and
+every sampled overrun counter is zero. Generic maximum
+interrupt-disabled, scheduler-lock, raw-lock, and wake-to-run instrumentation
+is still MISSING and must not be inferred from these path measurements.

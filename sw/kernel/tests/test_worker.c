@@ -42,7 +42,12 @@ KernelProcessStatus kernel_process_maintenance(void)
     return maintenance_result;
 }
 
-KernelCpuContext *kernel_process_current_context(void)
+bool kernel_process_worker_enter(void)
+{
+    return true;
+}
+
+KernelCpuContext *kernel_process_worker_resume(void)
 {
     return NULL;
 }

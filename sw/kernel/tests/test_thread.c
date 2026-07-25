@@ -1,10 +1,33 @@
 #include "thread.h"
 
+#include <astra/syscall.h>
+
 #include "performance.h"
 
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+
+static KernelHandle next_test_handle = 0x00000101u;
+
+static void publish_thread(KernelThread *thread)
+{
+    assert(kernel_thread_attach_handle(thread, next_test_handle) ==
+           KERNEL_THREAD_OK);
+    next_test_handle += 0x00000100u;
+    assert(kernel_thread_publish(thread) == KERNEL_THREAD_OK);
+}
+
+static void release_process_handles(uint16_t process_slot)
+{
+    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+        KernelThread *thread = kernel_thread_at(slot);
+
+        if (thread != NULL && thread->process_slot == process_slot &&
+            thread->handle_references != 0u)
+            kernel_thread_handle_release(thread, NULL);
+    }
+}
 
 static void test_priority_fifo_and_process_retirement(void)
 {
@@ -29,9 +52,9 @@ static void test_priority_fifo_and_process_retirement(void)
     assert(kernel_thread_allocate(1u, 0x10000001u, 2u, 0x00100020u,
                                   0x70005000u, 33u, 20u,
                                   &high_second) == KERNEL_THREAD_OK);
-    assert(kernel_thread_publish(low) == KERNEL_THREAD_OK);
-    assert(kernel_thread_publish(high_first) == KERNEL_THREAD_OK);
-    assert(kernel_thread_publish(high_second) == KERNEL_THREAD_OK);
+    publish_thread(low);
+    publish_thread(high_first);
+    publish_thread(high_second);
     assert(kernel_thread_pool_stats(&stats));
     assert(stats.created_threads == 3u);
     assert(stats.live_threads == 3u);
@@ -53,7 +76,8 @@ static void test_priority_fifo_and_process_retirement(void)
     assert(snapshot.effective_priority == 20u);
 
     old_id = low->id;
-    assert(kernel_thread_retire_process(1u, &retired) == KERNEL_THREAD_OK);
+    assert(kernel_thread_retire_process(1u, 8u, &retired) ==
+           KERNEL_THREAD_OK);
     assert(retired == 3u);
     assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_NO_RUNNABLE);
     assert(kernel_thread_pool_stats(&stats));
@@ -61,6 +85,7 @@ static void test_priority_fifo_and_process_retirement(void)
     assert(stats.dead_threads == 3u);
     assert(stats.ready_threads == 0u);
     assert(stats.ready_bitmap == 0u);
+    release_process_handles(1u);
     assert(kernel_thread_release_process(1u) == KERNEL_THREAD_OK);
 
     assert(kernel_thread_allocate(2u, 0x10000002u, 0u, 0x00100000u,
@@ -69,7 +94,7 @@ static void test_priority_fifo_and_process_retirement(void)
                                   &selected) == KERNEL_THREAD_OK);
     assert(selected->id != old_id);
     assert(selected->slot == 0u);
-    assert(kernel_thread_publish(selected) == KERNEL_THREAD_OK);
+    publish_thread(selected);
     assert(kernel_thread_process_runnable(2u));
     assert(kernel_thread_process_count(2u, true) == 1u);
 }
@@ -91,7 +116,7 @@ static void test_slot_fifteen_generation_ids_do_not_repeat(void)
                            (uint32_t)slot * KERNEL_THREAD_STACK_STRIDE,
                        0u, KERNEL_THREAD_PRIORITY_NORMAL, &thread) ==
                    KERNEL_THREAD_OK);
-            assert(kernel_thread_publish(thread) == KERNEL_THREAD_OK);
+            publish_thread(thread);
         }
         assert(kernel_thread_at(KERNEL_THREAD_MAX - 1u) != NULL);
         if (generation == 2u)
@@ -103,9 +128,10 @@ static void test_slot_fifteen_generation_ids_do_not_repeat(void)
                    generation_two_id);
         }
         for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
-            assert(kernel_thread_retire_process(slot, &retired) ==
+            assert(kernel_thread_retire_process(slot, 8u, &retired) ==
                    KERNEL_THREAD_OK);
             assert(retired == 1u);
+            release_process_handles(slot);
             assert(kernel_thread_release_process(slot) == KERNEL_THREAD_OK);
         }
     }
@@ -148,7 +174,7 @@ static void test_all_priority_levels_select_highest_first(void)
                        0x00100000u + slot * 2u,
                        0x70001000u + slot * KERNEL_THREAD_STACK_STRIDE,
                        priority, priority, &thread) == KERNEL_THREAD_OK);
-            assert(kernel_thread_publish(thread) == KERNEL_THREAD_OK);
+            publish_thread(thread);
         }
         for (uint32_t expected = KERNEL_THREAD_MAX; expected-- != 0u;) {
             assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
@@ -233,9 +259,9 @@ static void test_wait_queue_priority_fifo_and_stale_sequence(void)
     assert(kernel_thread_allocate(1u, 0x10000001u, 2u, 0x00100020u,
                                   0x70005000u, 0u, 20u,
                                   &high_second) == KERNEL_THREAD_OK);
-    assert(kernel_thread_publish(low) == KERNEL_THREAD_OK);
-    assert(kernel_thread_publish(high_first) == KERNEL_THREAD_OK);
-    assert(kernel_thread_publish(high_second) == KERNEL_THREAD_OK);
+    publish_thread(low);
+    publish_thread(high_first);
+    publish_thread(high_second);
     sequence = kernel_thread_wait_queue_sequence(&queue);
 
     assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
@@ -295,9 +321,9 @@ static void test_bounded_deadline_order_expiry_and_signal_race(void)
     assert(kernel_thread_allocate(1u, 0x10000001u, 2u, 0x00100020u,
                                   0x70005000u, 0u, 20u,
                                   &third) == KERNEL_THREAD_OK);
-    assert(kernel_thread_publish(first) == KERNEL_THREAD_OK);
-    assert(kernel_thread_publish(second) == KERNEL_THREAD_OK);
-    assert(kernel_thread_publish(third) == KERNEL_THREAD_OK);
+    publish_thread(first);
+    publish_thread(second);
+    publish_thread(third);
     sequence = kernel_thread_wait_queue_sequence(&queue);
 
     assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
@@ -373,7 +399,7 @@ static void test_deadline_capacity_matches_thread_capacity(void)
                        (uint32_t)slot * KERNEL_THREAD_STACK_STRIDE,
                    0u, KERNEL_THREAD_PRIORITY_NORMAL, &thread) ==
                KERNEL_THREAD_OK);
-        assert(kernel_thread_publish(thread) == KERNEL_THREAD_OK);
+        publish_thread(thread);
     }
     sequence = kernel_thread_wait_queue_sequence(&queue);
     for (uint32_t count = 0u; count < KERNEL_THREAD_MAX; ++count) {
@@ -394,6 +420,452 @@ static void test_deadline_capacity_matches_thread_capacity(void)
     assert(stats.ready_threads == KERNEL_THREAD_MAX);
 }
 
+static void test_waitable_death_status_and_deferred_reap(void)
+{
+    KernelThread *target;
+    KernelThread *waiter;
+    KernelThread *selected;
+    KernelThreadPoolStats stats;
+    bool blocked;
+    bool released;
+    uint32_t exit_status;
+    uint32_t wait_result;
+    uint32_t woken;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u, 16u,
+                                  &target) == KERNEL_THREAD_OK);
+    assert(kernel_thread_allocate(1u, 0x10000001u, 1u, 0x00100010u,
+                                  0x70003000u, 0u, 20u,
+                                  &waiter) == KERNEL_THREAD_OK);
+    publish_thread(target);
+    publish_thread(waiter);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == waiter);
+    assert(kernel_thread_wait_for_death(
+               target, waiter, 10u, KERNEL_THREAD_DEADLINE_NEVER,
+               ASTRA_SYSCALL_TIMED_OUT, &blocked, &wait_result,
+               &exit_status) == KERNEL_THREAD_OK);
+    assert(blocked);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == target);
+    assert(kernel_thread_complete(target, 0x89abcdefu, ASTRA_SYSCALL_OK,
+                                  &woken) == KERNEL_THREAD_OK);
+    assert(woken == 1u);
+    assert(kernel_thread_reap_pending());
+    assert(kernel_thread_reap_slots() ==
+           (uint16_t)(1u << target->slot));
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == waiter);
+    assert(waiter->context.data[0] == ASTRA_SYSCALL_OK);
+    assert(waiter->context.data[1] == 0x89abcdefu);
+
+    assert(kernel_thread_wait_for_death(
+               target, waiter, 20u, 20u, ASTRA_SYSCALL_TIMED_OUT,
+               &blocked, &wait_result, &exit_status) == KERNEL_THREAD_OK);
+    assert(!blocked);
+    assert(wait_result == ASTRA_SYSCALL_OK);
+    assert(exit_status == 0x89abcdefu);
+    assert(kernel_thread_finish_reap(target, &released) ==
+           KERNEL_THREAD_OK);
+    assert(!released);
+    assert(target->stack_released == 1u);
+    assert(target->reap_pending == 0u);
+    assert(!kernel_thread_reap_pending());
+    assert(kernel_thread_reap_slots() == 0u);
+    kernel_thread_handle_release(target, NULL);
+    assert(target->reap_pending == 1u);
+    assert(kernel_thread_reap_slots() ==
+           (uint16_t)(1u << target->slot));
+    assert(kernel_thread_finish_reap(target, &released) ==
+           KERNEL_THREAD_OK);
+    assert(released);
+    assert(kernel_thread_at(target->slot) == NULL);
+    assert(!kernel_thread_reap_pending());
+    assert(kernel_thread_reap_slots() == 0u);
+    assert(kernel_thread_pool_stats(&stats));
+    assert(stats.thread_exits == 1u);
+    assert(stats.death_waits == 2u);
+    assert(stats.death_wakeups == 1u);
+    assert(stats.reaped_threads == 1u);
+}
+
+static void test_final_handle_close_wins_without_killing_target(void)
+{
+    KernelThread *target;
+    KernelThread *waiter;
+    KernelThread *selected;
+    bool blocked;
+    bool released;
+    uint32_t exit_status;
+    uint32_t wait_result;
+    uint32_t woken;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u, 16u,
+                                  &target) == KERNEL_THREAD_OK);
+    assert(kernel_thread_allocate(1u, 0x10000001u, 1u, 0x00100010u,
+                                  0x70003000u, 0u, 16u,
+                                  &waiter) == KERNEL_THREAD_OK);
+    publish_thread(waiter);
+    publish_thread(target);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == waiter);
+    assert(kernel_thread_wait_for_death(
+               target, waiter, 0u, KERNEL_THREAD_DEADLINE_NEVER,
+               ASTRA_SYSCALL_TIMED_OUT, &blocked, &wait_result,
+               &exit_status) == KERNEL_THREAD_OK);
+    assert(blocked);
+    kernel_thread_handle_release(target, NULL);
+    assert(target->state == KERNEL_THREAD_READY);
+    assert(target->handle_references == 0u);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == target);
+    assert(kernel_thread_complete(target, 7u, ASTRA_SYSCALL_OK, &woken) ==
+           KERNEL_THREAD_OK);
+    assert(woken == 0u);
+    assert(kernel_thread_finish_reap(target, &released) ==
+           KERNEL_THREAD_OK);
+    assert(released);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == waiter);
+    assert(waiter->context.data[0] == ASTRA_SYSCALL_CLOSED);
+    assert(waiter->context.data[1] == 0u);
+}
+
+static void allocate_death_race_pair(KernelThread **waiter,
+                                     KernelThread **target)
+{
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100010u,
+                                  0x70001000u, 0u, 16u,
+                                  waiter) == KERNEL_THREAD_OK);
+    assert(kernel_thread_allocate(1u, 0x10000001u, 1u, 0x00100000u,
+                                  0x70003000u, 0u, 16u,
+                                  target) == KERNEL_THREAD_OK);
+    publish_thread(*waiter);
+    publish_thread(*target);
+}
+
+static void test_death_wait_timeout_close_and_teardown_races(void)
+{
+    KernelThread *target;
+    KernelThread *waiter;
+    KernelThread *selected;
+    bool blocked;
+    uint32_t exit_status;
+    uint32_t expired;
+    uint32_t retired;
+    uint32_t wait_result;
+    uint32_t woken;
+    uint8_t highest;
+    uint64_t next_deadline;
+
+    /* Timeout commits first; later exit cannot wake the waiter again. */
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    allocate_death_race_pair(&waiter, &target);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == waiter);
+    assert(kernel_thread_wait_for_death(
+               target, waiter, 0u, 10u, ASTRA_SYSCALL_TIMED_OUT,
+               &blocked, &wait_result, &exit_status) == KERNEL_THREAD_OK);
+    assert(blocked);
+    assert(kernel_thread_expire_deadlines(10u, &expired, &highest) ==
+           KERNEL_THREAD_OK);
+    assert(expired == 1u);
+    assert(highest == 16u);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == target);
+    assert(kernel_thread_complete(target, 7u, ASTRA_SYSCALL_OK, &woken) ==
+           KERNEL_THREAD_OK);
+    assert(woken == 0u);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == waiter);
+    assert(waiter->context.data[0] == ASTRA_SYSCALL_TIMED_OUT);
+    assert(waiter->context.data[1] == 0u);
+
+    /* Exit commits first and withdraws the deadline exactly once. */
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    allocate_death_race_pair(&waiter, &target);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == waiter);
+    assert(kernel_thread_wait_for_death(
+               target, waiter, 0u, 10u, ASTRA_SYSCALL_TIMED_OUT,
+               &blocked, &wait_result, &exit_status) == KERNEL_THREAD_OK);
+    assert(blocked);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == target);
+    assert(kernel_thread_complete(target, 0x12345678u, ASTRA_SYSCALL_OK,
+                                  &woken) == KERNEL_THREAD_OK);
+    assert(woken == 1u);
+    assert(kernel_thread_expire_deadlines(10u, &expired, &highest) ==
+           KERNEL_THREAD_OK);
+    assert(expired == 0u);
+    assert(!kernel_thread_next_deadline(&next_deadline));
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == waiter);
+    assert(waiter->context.data[0] == ASTRA_SYSCALL_OK);
+    assert(waiter->context.data[1] == 0x12345678u);
+
+    /* Final handle close wins against the same pending deadline. */
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    allocate_death_race_pair(&waiter, &target);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == waiter);
+    assert(kernel_thread_wait_for_death(
+               target, waiter, 0u, 10u, ASTRA_SYSCALL_TIMED_OUT,
+               &blocked, &wait_result, &exit_status) == KERNEL_THREAD_OK);
+    assert(blocked);
+    kernel_thread_handle_release(target, NULL);
+    assert(target->state == KERNEL_THREAD_READY);
+    assert(waiter->state == KERNEL_THREAD_READY);
+    assert(waiter->context.data[0] == ASTRA_SYSCALL_CLOSED);
+    assert(waiter->context.data[1] == 0u);
+    assert(kernel_thread_expire_deadlines(10u, &expired, &highest) ==
+           KERNEL_THREAD_OK);
+    assert(expired == 0u);
+
+    /* Whole-process teardown removes both sides regardless of queue order. */
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    allocate_death_race_pair(&waiter, &target);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == waiter);
+    assert(kernel_thread_wait_for_death(
+               target, waiter, 0u, 10u, ASTRA_SYSCALL_TIMED_OUT,
+               &blocked, &wait_result, &exit_status) == KERNEL_THREAD_OK);
+    assert(blocked);
+    assert(kernel_thread_retire_process(1u, ASTRA_SYSCALL_PEER_DEAD,
+                                        &retired) == KERNEL_THREAD_OK);
+    assert(retired == 2u);
+    assert(waiter->state == KERNEL_THREAD_DEAD);
+    assert(target->state == KERNEL_THREAD_DEAD);
+    assert(kernel_thread_wait_queue_count(&target->death_waiters) == 0u);
+    assert(kernel_thread_expire_deadlines(10u, &expired, &highest) ==
+           KERNEL_THREAD_OK);
+    assert(expired == 0u);
+    release_process_handles(1u);
+    assert(kernel_thread_release_process(1u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_pool_valid());
+}
+
+static void test_wait_set_boundary_winner_and_exact_withdrawal(void)
+{
+    KernelThreadWaitQueue queues[KERNEL_THREAD_WAIT_MEMBER_MAX];
+    KernelThreadWaitSpec specs[KERNEL_THREAD_WAIT_MEMBER_MAX];
+    KernelThreadPoolStats stats;
+    KernelThread *thread;
+    KernelThread *selected;
+    uint32_t sequences[KERNEL_THREAD_WAIT_MEMBER_MAX];
+    uint64_t next_deadline;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    for (uint32_t member = 0u;
+         member < KERNEL_THREAD_WAIT_MEMBER_MAX; ++member) {
+        kernel_thread_wait_queue_init(&queues[member]);
+        sequences[member] =
+            kernel_thread_wait_queue_sequence(&queues[member]);
+        specs[member].queue = &queues[member];
+        specs[member].sequence = sequences[member];
+    }
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u,
+                                  KERNEL_THREAD_PRIORITY_NORMAL,
+                                  &thread) == KERNEL_THREAD_OK);
+    publish_thread(thread);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == thread);
+    assert(kernel_thread_block_wait_set(
+               thread, specs, KERNEL_THREAD_WAIT_MEMBER_MAX, 0u, 100u,
+               ASTRA_SYSCALL_TIMED_OUT) == KERNEL_THREAD_OK);
+    for (uint32_t member = 0u;
+         member < KERNEL_THREAD_WAIT_MEMBER_MAX; ++member)
+        assert(kernel_thread_wait_queue_count(&queues[member]) == 1u);
+    assert(kernel_thread_next_deadline(&next_deadline));
+    assert(next_deadline == 100u);
+    assert(kernel_thread_pool_stats(&stats));
+    assert(stats.blocked_threads == 1u);
+    assert(stats.wait_set_blocks == 1u);
+    assert(stats.wait_registrations == KERNEL_THREAD_WAIT_MEMBER_MAX);
+    assert(stats.wait_registration_max == KERNEL_THREAD_WAIT_MEMBER_MAX);
+    assert(stats.max_wait_members == KERNEL_THREAD_WAIT_MEMBER_MAX);
+
+    assert(kernel_thread_wake_one(
+               &queues[KERNEL_THREAD_WAIT_MEMBER_MAX - 1u],
+               ASTRA_SYSCALL_OK, &selected) == KERNEL_THREAD_OK);
+    assert(selected == thread);
+    assert(thread->context.data[0] == ASTRA_SYSCALL_OK);
+    assert(thread->context.data[1] ==
+           KERNEL_THREAD_WAIT_MEMBER_MAX - 1u);
+    assert(thread->context.data[2] == 0u);
+    for (uint32_t member = 0u;
+         member < KERNEL_THREAD_WAIT_MEMBER_MAX; ++member) {
+        assert(kernel_thread_wait_queue_count(&queues[member]) == 0u);
+        assert(kernel_thread_wait_queue_sequence(&queues[member]) !=
+               sequences[member]);
+    }
+    assert(!kernel_thread_next_deadline(&next_deadline));
+    assert(kernel_thread_pool_stats(&stats));
+    assert(stats.blocked_threads == 0u);
+    assert(stats.wait_set_wakeups == 1u);
+    assert(stats.wait_registrations == 0u);
+    assert(stats.deadline_cancellations == 1u);
+    assert(kernel_thread_pool_valid());
+}
+
+static void test_wait_set_duplicate_member_is_deterministic(void)
+{
+    KernelThreadWaitQueue duplicate;
+    KernelThreadWaitQueue other;
+    KernelThreadWaitSpec specs[3];
+    KernelThreadPoolStats stats;
+    KernelThread *thread;
+    KernelThread *selected;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    kernel_thread_wait_queue_init(&duplicate);
+    kernel_thread_wait_queue_init(&other);
+    specs[0].queue = &duplicate;
+    specs[0].sequence = kernel_thread_wait_queue_sequence(&duplicate);
+    specs[1].queue = &other;
+    specs[1].sequence = kernel_thread_wait_queue_sequence(&other);
+    specs[2] = specs[0];
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u,
+                                  KERNEL_THREAD_PRIORITY_NORMAL,
+                                  &thread) == KERNEL_THREAD_OK);
+    publish_thread(thread);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == thread);
+    assert(kernel_thread_block_wait_set(
+               thread, specs, 3u, 0u, KERNEL_THREAD_DEADLINE_NEVER,
+               ASTRA_SYSCALL_TIMED_OUT) == KERNEL_THREAD_OK);
+    assert(kernel_thread_wait_queue_count(&duplicate) == 2u);
+    assert(kernel_thread_wait_queue_waiter_count(&duplicate) == 1u);
+    assert(kernel_thread_wait_queue_count(&other) == 1u);
+
+    assert(kernel_thread_wake_one(&duplicate, ASTRA_SYSCALL_OK,
+                                  &selected) == KERNEL_THREAD_OK);
+    assert(selected == thread);
+    assert(thread->context.data[0] == ASTRA_SYSCALL_OK);
+    assert(thread->context.data[1] == 0u);
+    assert(thread->context.data[2] == 0u);
+    assert(kernel_thread_wait_queue_count(&duplicate) == 0u);
+    assert(kernel_thread_wait_queue_count(&other) == 0u);
+    assert(kernel_thread_pool_stats(&stats));
+    assert(stats.wait_registrations == 0u);
+    assert(stats.wait_registration_max == 3u);
+    assert(kernel_thread_pool_valid());
+}
+
+static void test_wait_set_timeout_cancel_and_atomic_admission(void)
+{
+    KernelThreadWaitQueue first;
+    KernelThreadWaitQueue second;
+    KernelThreadWaitSpec specs[2];
+    KernelThreadPoolStats stats;
+    KernelThread *threads[KERNEL_THREAD_MAX];
+    KernelThread *selected;
+    uint32_t expired;
+    uint32_t sequence;
+    uint8_t highest;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    kernel_thread_wait_queue_init(&first);
+    kernel_thread_wait_queue_init(&second);
+    specs[0].queue = &first;
+    specs[0].sequence = kernel_thread_wait_queue_sequence(&first);
+    specs[1].queue = &second;
+    specs[1].sequence = kernel_thread_wait_queue_sequence(&second);
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u,
+                                  KERNEL_THREAD_PRIORITY_NORMAL,
+                                  &threads[0]) == KERNEL_THREAD_OK);
+    publish_thread(threads[0]);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == threads[0]);
+    assert(kernel_thread_block_wait_set(
+               selected, specs, 2u, 0u, 10u,
+               ASTRA_SYSCALL_TIMED_OUT) == KERNEL_THREAD_OK);
+    assert(kernel_thread_expire_deadlines(10u, &expired, &highest) ==
+           KERNEL_THREAD_OK);
+    assert(expired == 1u);
+    assert(highest == KERNEL_THREAD_PRIORITY_NORMAL);
+    assert(threads[0]->context.data[0] == ASTRA_SYSCALL_TIMED_OUT);
+    assert(threads[0]->context.data[1] == ASTRA_WAIT_INDEX_NONE);
+    assert(threads[0]->context.data[2] == 0u);
+    assert(kernel_thread_wait_queue_count(&first) == 0u);
+    assert(kernel_thread_wait_queue_count(&second) == 0u);
+
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == threads[0]);
+    specs[0].sequence = kernel_thread_wait_queue_sequence(&first);
+    specs[1].sequence = kernel_thread_wait_queue_sequence(&second);
+    assert(kernel_thread_block_wait_set(
+               selected, specs, 2u, 10u,
+               KERNEL_THREAD_DEADLINE_NEVER,
+               ASTRA_SYSCALL_TIMED_OUT) == KERNEL_THREAD_OK);
+    assert(kernel_thread_cancel_wait(selected, ASTRA_SYSCALL_CANCELLED) ==
+           KERNEL_THREAD_OK);
+    assert(selected->context.data[0] == ASTRA_SYSCALL_CANCELLED);
+    assert(selected->context.data[1] == ASTRA_WAIT_INDEX_NONE);
+    assert(selected->context.data[2] == 0u);
+    assert(kernel_thread_wait_queue_count(&first) == 0u);
+    assert(kernel_thread_wait_queue_count(&second) == 0u);
+    assert(kernel_thread_pool_stats(&stats));
+    assert(stats.wait_registrations == 0u);
+    assert(stats.deadline_expirations == 1u);
+    assert(stats.wait_cancellations == 1u);
+
+    /* Admission checks every duplicate before linking any member. */
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    kernel_thread_wait_queue_init(&first);
+    sequence = kernel_thread_wait_queue_sequence(&first);
+    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+        assert(kernel_thread_allocate(
+                   1u, 0x10000001u, slot,
+                   0x00100000u + (uint32_t)slot * 2u,
+                   0x70001000u +
+                       (uint32_t)slot * KERNEL_THREAD_STACK_STRIDE,
+                   0u, KERNEL_THREAD_PRIORITY_NORMAL,
+                   &threads[slot]) == KERNEL_THREAD_OK);
+        publish_thread(threads[slot]);
+    }
+    for (uint32_t slot = 0u; slot < KERNEL_THREAD_MAX - 1u; ++slot) {
+        assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+        assert(selected == threads[slot]);
+        assert(kernel_thread_block(selected, &first, sequence) ==
+               KERNEL_THREAD_OK);
+    }
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == threads[KERNEL_THREAD_MAX - 1u]);
+    specs[0].queue = &first;
+    specs[0].sequence = sequence;
+    specs[1] = specs[0];
+    assert(kernel_thread_block_wait_set(
+               selected, specs, 2u, 0u,
+               KERNEL_THREAD_DEADLINE_NEVER,
+               ASTRA_SYSCALL_TIMED_OUT) == KERNEL_THREAD_NO_SLOT);
+    assert(selected->state == KERNEL_THREAD_RUNNING);
+    assert(selected->wait_member_count == 0u);
+    assert(kernel_thread_wait_queue_count(&first) ==
+           KERNEL_THREAD_MAX - 1u);
+    assert(kernel_thread_pool_stats(&stats));
+    assert(stats.blocked_threads == KERNEL_THREAD_MAX - 1u);
+    assert(stats.wait_registrations == KERNEL_THREAD_MAX - 1u);
+    assert(kernel_thread_pool_valid());
+}
+
 int main(void)
 {
     test_priority_fifo_and_process_retirement();
@@ -404,6 +876,12 @@ int main(void)
     test_wait_queue_priority_fifo_and_stale_sequence();
     test_bounded_deadline_order_expiry_and_signal_race();
     test_deadline_capacity_matches_thread_capacity();
+    test_waitable_death_status_and_deferred_reap();
+    test_final_handle_close_wins_without_killing_target();
+    test_death_wait_timeout_close_and_teardown_races();
+    test_wait_set_boundary_winner_and_exact_withdrawal();
+    test_wait_set_duplicate_member_is_deterministic();
+    test_wait_set_timeout_cancel_and_atomic_admission();
     puts("thread tests passed");
     return 0;
 }

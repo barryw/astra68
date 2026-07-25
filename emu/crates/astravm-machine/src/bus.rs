@@ -106,6 +106,9 @@ pub(crate) struct MachineBus {
     scratch_trace: [u32; 32],
     scratch_trace_next: usize,
     scratch_trace_count: usize,
+    kernel_ready_seen: bool,
+    kernel_soak_seen: bool,
+    kernel_panic_seen: bool,
     irq_enable: u32,
     irq_soft: u32,
     irq_config: [u32; 32],
@@ -137,6 +140,9 @@ impl MachineBus {
             scratch_trace: [0; 32],
             scratch_trace_next: 0,
             scratch_trace_count: 0,
+            kernel_ready_seen: false,
+            kernel_soak_seen: false,
+            kernel_panic_seen: false,
             irq_enable: 0,
             irq_soft: 0,
             irq_config: [0; 32],
@@ -162,6 +168,9 @@ impl MachineBus {
         self.scratch_trace = [0; 32];
         self.scratch_trace_next = 0;
         self.scratch_trace_count = 0;
+        self.kernel_ready_seen = false;
+        self.kernel_soak_seen = false;
+        self.kernel_panic_seen = false;
         self.irq_enable = 0;
         self.irq_soft = 0;
         self.irq_config = [0; 32];
@@ -199,15 +208,15 @@ impl MachineBus {
     }
 
     pub(crate) fn kernel_ready(&self) -> bool {
-        self.scratch == KERNEL_STATUS_READY || self.scratch == KERNEL_STATUS_SOAK
+        self.kernel_ready_seen
     }
 
     pub(crate) fn kernel_soaking(&self) -> bool {
-        self.scratch == KERNEL_STATUS_SOAK
+        self.kernel_soak_seen
     }
 
     pub(crate) fn kernel_panicked(&self) -> bool {
-        self.scratch == KERNEL_STATUS_PANIC
+        self.kernel_panic_seen
     }
 
     pub(crate) fn terminal(&self) -> bool {
@@ -532,6 +541,10 @@ impl MachineBus {
         match offset {
             0x018 => {
                 self.scratch = value;
+                self.kernel_ready_seen |=
+                    value == KERNEL_STATUS_READY || value == KERNEL_STATUS_SOAK;
+                self.kernel_soak_seen |= value == KERNEL_STATUS_SOAK;
+                self.kernel_panic_seen |= value == KERNEL_STATUS_PANIC;
                 self.scratch_trace[self.scratch_trace_next] = value;
                 self.scratch_trace_next = (self.scratch_trace_next + 1) % self.scratch_trace.len();
                 self.scratch_trace_count =
@@ -972,18 +985,31 @@ mod tests {
         assert!(bus.kernel_ready());
         assert!(!bus.kernel_soaking());
         assert!(!bus.terminal());
+        bus.write32(VESTA_BASE + 0x018, 1);
+        assert!(bus.kernel_ready());
 
         bus.write32(VESTA_BASE + 0x018, KERNEL_STATUS_SOAK);
         assert!(bus.kernel_ready());
         assert!(bus.kernel_soaking());
         assert!(!bus.terminal());
+        bus.write32(VESTA_BASE + 0x018, 2);
+        assert!(bus.kernel_soaking());
 
         bus.write32(VESTA_BASE + 0x018, KERNEL_STATUS_PANIC);
         assert!(bus.kernel_panicked());
         assert!(bus.terminal());
+        bus.write32(VESTA_BASE + 0x018, 3);
+        assert!(bus.kernel_panicked());
         assert_eq!(
             bus.scratch_trace(),
-            vec![KERNEL_STATUS_READY, KERNEL_STATUS_SOAK, KERNEL_STATUS_PANIC]
+            vec![
+                KERNEL_STATUS_READY,
+                1,
+                KERNEL_STATUS_SOAK,
+                2,
+                KERNEL_STATUS_PANIC,
+                3,
+            ]
         );
 
         for value in 0..40 {
@@ -994,5 +1020,8 @@ mod tests {
         bus.reset();
         assert_eq!(bus.scratch(), 0);
         assert!(bus.scratch_trace().is_empty());
+        assert!(!bus.kernel_ready());
+        assert!(!bus.kernel_soaking());
+        assert!(!bus.kernel_panicked());
     }
 }

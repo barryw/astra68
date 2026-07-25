@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the Astra kernel build-identity header."""
+"""Generate the Axiom kernel build-identity header."""
 
 import argparse
 import datetime

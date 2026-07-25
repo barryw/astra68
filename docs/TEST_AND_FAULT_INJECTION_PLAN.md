@@ -1,6 +1,6 @@
-# Astra 68 kernel test and fault-injection plan
+# Axiom test and fault-injection plan
 
-Status: normative qualification plan, revision 0.1 (2026-07-24)
+Status: normative qualification plan, revision 0.2 (2026-07-25)
 
 No subsystem is complete because its happy path boots. Every state transition,
 capacity limit, cancellation race, and recovery path has a deterministic test.
@@ -79,19 +79,67 @@ The candidate must retain all of these before routing:
 - production target scheduling must exercise handle creation, rights-checked
   wait/signal, event signal handoff, semaphore handoff, timeout, cancellation,
   close wakeup, and stale-handle rejection before the K4 marker;
+- K5 thread creation must cover every invalid entry/priority/right input,
+  global thread exhaustion, process quota exhaustion, handle-table exhaustion,
+  physical-frame failure, page-table allocation failure, and publication
+  rollback; every failure must preserve exact handle, mapping, frame, ready,
+  stack-slot, and quota baselines;
+- a deterministic publication race must inject a supervisor timer at the final
+  interrupt-enable to commit-mask boundary, expire and enqueue an existing
+  waiter, publish the prepared thread, and prove both ready links, counts, and
+  queue invariants remain exact;
+- thread exit must cover a blocked waiter, immediate repeated wait, 32-bit exit
+  status, timeout, cancellation, final-handle close, stale-handle reuse,
+  close-before-exit, last-thread process promotion, and process death while
+  sibling threads are ready and blocked;
+- K5 maintenance must prove that an exited thread's user stack is reclaimed on
+  the guarded worker rather than its own supervisor stack, that a zombie keeps
+  only its documented record/supervisor charge, and that join/close/create
+  loops return every resource counter to baseline across generation reuse;
+- K6 wait-multiple must cover 1- and 16-member sets, invalid count/alignment/
+  user ranges, complete prevalidation of stale handles and rights, duplicate
+  handles, deterministic lowest-ready index, event and semaphore consumption,
+  thread-death detail, aggregate object-queue exhaustion, and publication
+  rollback with no linked registration or deadline leak;
+- every ordering of signal, thread death, timeout, cancellation, final close,
+  creator death, and caller-process death must select one wait-set result,
+  withdraw all nonwinning registrations exactly once, preserve readiness on
+  nonwinning objects, and return all queue/deadline/registration counts to the
+  baseline;
+- target K6 scheduling must block one thread on at least two distinct handles,
+  wake it through a nonzero member index, verify an immediate lowest-index
+  winner and a thread-death detail, then pass fixed wait-set block/wake cycle
+  budgets before publishing the K6 marker;
+- K6 timers must cover rights/type failures, pool and owner-quota exhaustion,
+  immediate expiry, equal-deadline slot ordering, rearm, cancel-before-expiry,
+  cancel with waiters, retained fired state, final close, owner death, and exact
+  return to heap/object/registration baselines;
+- process-death waits must cover self rejection, live block, normal 32-bit exit
+  detail, fault terminal result, immediate repeated observation, close before
+  death, caller death, final reference release, generation reuse, and stale
+  process-handle rejection;
+- target scheduling must execute `THREAD_CREATE`, block in `WAIT_ONE` on the
+  created thread, receive its exact exit status from `THREAD_EXIT`, repeat the
+  wait as an immediate level-triggered result, close the handle, reject the
+  stale handle, and reach a distinct K5 marker before kernel qualification;
+- performance qualification must measure thread creation, thread-exit wakeup,
+  and deferred thread reclamation separately, inspect generated MC68030 code,
+  retain automated ceilings, and compare the exact Musashi workload and kernel
+  image against the K4 baseline;
 - aligned byte copy/clear primitives must cover every source/destination
   alignment and length through the longword fast path, with guard bytes proving
   no underrun or overrun;
 - target scheduling must run two threads in one CRP and one thread in another,
   prove same-address-space switches do not increment VM/CRP switches, then
   fault and reap only the second process;
-- the K3 release-development image must pass the complete pin-level SDRAM model
+- the K6 release-development image must pass the complete pin-level SDRAM model
   and two independent ULX3S SRAM reloads of the exact qualified bitstream while
   matching the expected FPGA build ID and SD ROM CRC32;
-- K3 must sample syscall, timer, user-fault, scheduler-pick, same/cross-CRP,
-  block, wake, and deadline-expiry paths against the fixed budgets in
+- K6 must sample syscall, timer, user-fault, scheduler-pick, same/cross-CRP,
+  block, wake, deadline expiry, thread create, thread exit, and deferred thread
+  reap, wait-set block, and wait-set wake against the fixed budgets in
   `performance.h`, with at least one sample and zero overruns for every metric;
-- the exact 1,000-cycle Musashi lifecycle workload must complete at or below
+- the exact 1,000-cycle Musashi K6 lifecycle workload must complete at or below
   675,000,000 virtual machine cycles;
 - a real M=1 interrupt must build exact format-0 MSP and format-1 ISP frames,
   preserve saved M, chain `RTE` through MSP, and restart a multiword
@@ -277,17 +325,18 @@ interrupt-disabled time, scheduler lock, wake-to-run latency, same/cross-CRP
 switch, syscall, copy, map/unmap, ATC miss, and device reset. The limits in
 `LOCKING_AND_PREEMPTION.md` are release failures, not informational warnings.
 
-The current K4 limits are 50,000 cycles for syscall and timer dispatch, 125,000
+The current K6 limits are 50,000 cycles for syscall and timer dispatch, 125,000
 for user-fault containment, 10,000 for scheduler selection, 15,000 for same-CRP
 switch, 50,000 for cross-CRP switch, and 15,000 each for block and wake. The
-deadline expiry has a separate 20,000-cycle limit. The exact coherent K4
-pin-level maxima are 39,729, 25,059, 44,036, 1,490, 2,852, 4,061, 2,302,
-3,432, and 6,164 cycles respectively. That run intentionally uses a 64 KiB
-simulated BIST; both routed-hardware runs execute the real full-range 32 MiB
-BIST. Both hardware runs report 39,683-cycle syscall, 25,038-cycle timer,
-44,037-cycle fault, 1,480-cycle pick, 2,839-cycle same-CRP, 4,063-cycle
-cross-CRP, 2,294-cycle block, 3,435-cycle wake, and 6,164-cycle deadline
-maxima. Every metric has zero overruns.
+deadline expiry has a separate 20,000-cycle limit. Thread create, caller exit,
+and deferred reap are limited to 150,000, 50,000, and 125,000 cycles. Wait-set
+block and wake are each limited to 50,000 cycles. The exact K6 pin-level maxima
+are 38,986, 27,656, 31,966, 1,506, 3,092, 4,327, 4,782, 7,888, 10,234,
+124,512, 25,681, 28,879, 6,259, and 10,049 cycles respectively. That run
+intentionally uses a 64 KiB simulated BIST; both routed-hardware runs execute
+the real full-range 32 MiB BIST. Hardware run 1 reports wait-set block/wake
+maxima of 6,267/10,045 cycles; run 2 reports 6,254/10,041. Every one of the
+fourteen metrics has at least one sample and zero overruns in both runs.
 
 Retained K3 evidence and SHA-256 values are:
 
@@ -312,6 +361,68 @@ Retained K4 pin-level and hardware evidence and SHA-256 values are:
   and
 - `docs/evidence/k4-25d9cb8e-662aa04-hw-2.log`:
   `b614522dd02fd9f110b56196297dd7afb221165c60e5383424abd3a7e1139de6`.
+
+Superseded/rejected K5 evidence and SHA-256 values are:
+
+- `docs/evidence/k5-020f9460-musashi-normal.log`:
+  `3e86cd1410b2846a1aa479db481def1d2c1b8fdfe25898fe076851f1079319d0`;
+- `docs/evidence/k5-020f9460-musashi-performance.log`:
+  `d8f8e71907b1c4442fb6ca28eadaa8e5fc46259740f290e900d4f6feba48c9f4`;
+- `docs/evidence/k5-020f9460-rtl-create-budget-rejected.log`:
+  `6d7ecd4e853c2865b1dad472cb6cf138b239f5924944d4dd7baf4469640a8972`;
+- `docs/evidence/k5-020f9460-rtl.log`:
+  `f609162ec62b0de53a1fe02e53f623e3cbd07195841c317cde98fcf2f5e9cf10`;
+- `docs/evidence/k5-25d9cb8e-020f9460-provision.log`:
+  `21d68093ecf4e77b420b3cc128ca01a1bf2ca6baae1b718dfe172a6776f1043e`;
+- `docs/evidence/k5-25d9cb8e-020f9460-hw-1.log`:
+  `c4ce877436276f4af55dfa983b789759b022b9fffbd3e26c43f4fb9cba68759f`;
+  and
+- `docs/evidence/k5-25d9cb8e-020f9460-hw-2.log`:
+  `472589e0cdb827a5d8ec3d40db22af123024b5764c0727d4fe1fff53cff9d24d`.
+
+Accepted K5 evidence and SHA-256 values are:
+
+- `docs/evidence/k5-1a234d1e-musashi-normal.log`:
+  `a8ca8dd640c4d10ca45d11b1957e798c193ff0a0a550af36a21f2bd0a9d20dc0`;
+- `docs/evidence/k5-1a234d1e-musashi-performance.log`:
+  `6f09f9175f8ec39a7f825bac7e701ed8c22cc517162f001c1ec01f90cbe726b7`;
+- `docs/evidence/k5-1a234d1e-rtl.log`:
+  `b26f7075305b23b1f445aeb2639d7d20bf22a7dfab8f5a5c8fa305a8253d66c1`;
+- `docs/evidence/k5-25d9cb8e-1a234d1e-provision.log`:
+  `8a380195cf4cab6a912f09a7a358b5a5a825006c3967b5c6bd9e5128303a0aca`;
+- `docs/evidence/k5-25d9cb8e-1a234d1e-esp-production-flash.log`:
+  `33f747b22720e471030cb568b09c7f66887a0c1a3301f91ae0ff2ca926e963b1`;
+- `docs/evidence/k5-25d9cb8e-1a234d1e-hw-1.log`:
+  `d915b9629ab0c77d3c8750e2b593eca7032329b0278a2d4cff87a9872e316d38`;
+  and
+- `docs/evidence/k5-25d9cb8e-1a234d1e-hw-2.log`:
+  `c4a069f6cc2abccc09a86e815060ee66c314b518eaa91daf0420137e9914d753`.
+
+Accepted K6 evidence and SHA-256 values are:
+
+- `docs/evidence/astra68-k6-04524898-host.log`:
+  `6d342c67418859ab8526852a5d76cb8fdc6bcf8171fa6104b91ce7814b194535`;
+- `docs/evidence/astra68-k6-04524898-conformance.log`:
+  `1e200cc385e29378041b5af4ff0352f2d5bab8c0a88cef7a99289a31ac5e699f`;
+- `docs/evidence/astra68-k6-04524898-rust.log`:
+  `5fc77ff33c7440a15171b1105572beefda4aa80ebed45e84facb40d2a9341b0b`;
+- `docs/evidence/astra68-k6-04524898-vesta.log`:
+  `bf9bfe75e7e2b8260dda2608d2d54148beec7e3047af88b427215e090cce416a`;
+- `docs/evidence/astra68-k6-04524898-musashi-normal.log`:
+  `bdd9700424646c59ab143f87a16c7901c0139d12117b587a8ce876e4261a2af5`;
+- `docs/evidence/astra68-k6-04524898-musashi-performance.log`:
+  `5f550a791b28b69bb98bd2defaa31ee211b4cec255ec221fdb9f7d1742af3c8d`;
+- `docs/evidence/astra68-k6-04524898-rtl.log`:
+  `73355c2eb5075df985a5aa4ec9b34ffbf5fb1d6e6fcb06f9a25d2f88bd080adc`;
+- `docs/evidence/astra68-k6-04524898-provision.log`:
+  `cf4937dc014b943c2f9e59a25920f9763b374784a5530216f51c8c78e998df37`;
+- `docs/evidence/astra68-k6-04524898-esp-production-flash.log`:
+  `dd92746edf357f7df851ecfa879f57955b76d0f3bb5609678f5313fcdf2b02d0`;
+- `docs/evidence/astra68-k6-04524898-hw-1.log`:
+  `1fb84795ee08f96735ed2625aacfd81f1afe58d5a56c0d46706e888d05a5ac96`;
+  and
+- `docs/evidence/astra68-k6-04524898-hw-2.log`:
+  `77ce8067efabaf42c0541309eaa1fcf67264c1ee6dc1edb7ad10cf402e21f141`.
 
 ## Panic and retained diagnostics
 

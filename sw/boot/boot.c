@@ -1042,7 +1042,7 @@ void kmain(void)
         idle_forever("HALTED: KERNEL LOAD FAILURE\n",
                      "\n" ROM_BANNER " - KERNEL LOAD FAILURE\n");
     uart_puts("OK\n");
-    uart_puts("Starting Astra kernel\n");
+    uart_puts("Starting Axiom kernel\n");
     boot_kernel_handoff(ASTRA_BOOT_HANDOFF_MAGIC, &kernel_boot_info,
                         ASTRA_KERNEL_LOAD_ADDRESS);
 }

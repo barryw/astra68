@@ -1,6 +1,6 @@
-# Astra 68 kernel architecture
+# Axiom kernel architecture for Astra 68
 
-Status: normative design contract, revision 0.1 (2026-07-24)
+Status: normative design contract, revision 0.2 (2026-07-25)
 
 This document defines the kernel shape. Exact memory, ABI, locking, ownership,
 budget, testing, and implementation status live in the companion documents
@@ -170,19 +170,19 @@ context or atomically sleeps in master mode. A deferred pinned-DMA reap is
 retried on a later timer interrupt; syscall and idle paths no longer perform
 resource destruction.
 
-## Current K3 thread substrate
+## Current K6 thread substrate
 
 These are measured MC68030 implementation facts, not the final object limits:
 
 | Structure/pool | Exact current value |
 |---|---:|
 | `KernelCpuContext` | 76 bytes, 4-byte aligned |
-| `KernelProcess` | 446 bytes under the m68k ABI |
-| `KernelThread` | 156 bytes under the m68k ABI |
+| `KernelProcess` | 472 bytes under the m68k ABI |
+| `KernelThread` | 172 bytes under the m68k ABI |
 | `KernelThreadWaitQueue` | 12 bytes under the m68k ABI |
-| `KernelEvent` | 16 bytes under the m68k ABI |
-| process slots | 4 (1,784 bytes static) |
-| thread slots | 16 (2,496 bytes static) |
+| synchronization object | 36 bytes under the m68k ABI |
+| process slots | 4 (1,888 bytes static) |
+| thread slots | 16 (2,752 bytes static) |
 | handle slots/process | 16 |
 | handle value | 24-bit generation, 8-bit one-based slot |
 | ready queues | 32 FIFO queues, two 16-bit links/thread, 32-bit bitmap |
@@ -195,6 +195,8 @@ These are measured MC68030 implementation facts, not the final object limits:
 | ordinary quantum | 5 ms / 62,500 cycles at 12.5 MHz |
 | timer programming | one-shot minimum of active quantum and earliest wait deadline |
 | deadline queue | 16-entry absolute-cycle min-heap, one entry/thread, deterministic slot tie-break |
+| wait registrations | 256 fixed eight-byte records, 16 reserved per thread slot |
+| waitable timers | share the 32-slot synchronization pool; fixed 32-entry deadline min-heap |
 | scheduling policy | highest effective priority; FIFO round-robin among equals |
 | interrupt stack | 8 KiB ISP plus 4 KiB unmapped guard |
 | deferred-worker stack | 8 KiB MSP plus 4 KiB unmapped guard |
@@ -216,13 +218,110 @@ state. Process death removes all of its threads from ready and wait queues
 before deferred handle/address-space/frame destruction; thread records are not
 reusable until that destruction completes.
 
-The current K4 path has sequence-checked atomic block, priority/FIFO wake-one
+The current K6 path has sequence-checked atomic block, priority/FIFO wake-one
 and wake-all, handle-backed auto/manual events and semaphores, signed absolute
 monotonic-nanosecond deadlines, explicit cancellation, and immediate
 higher-priority handoff on signal or timeout. Timeout, signal, cancellation,
 close, and process death remove a waiter from the object queue and deadline
-heap exactly once. Runtime thread creation, wait-multiple, priority
-inheritance/donation, and stable post-0.1 pool sizes are not yet exposed.
+heap exactly once. Runtime thread creation, caller-only exit, and level-
+triggered thread/process-death waits, one-shot waitable timers, and bounded
+wait-multiple are exposed through provisional ABI 0.2. Priority inheritance,
+RPC donation, and stable post-0.2 pool sizes are not yet exposed.
+
+## K5 thread-lifecycle contract
+
+K5 promotes the existing internal thread constructor and retirement machinery
+without creating a second scheduler object. The exact per-thread state is:
+
+```text
+FREE -> CREATED -> READY <-> RUNNING <-> BLOCKED -> DEAD -> FREE
+```
+
+`CREATED` is private and cannot be found through a handle until every resource
+has been reserved. Creation has an interruptible preparation phase for slot,
+stack, frame, mapping, handle, and context setup, followed by a no-allocation
+commit with interrupts masked. That commit publishes the generation-safe
+handle, enqueues the thread, and applies process/scheduler counts and quota
+charges as one transition. Failure before commit unwinds in reverse order and
+leaves no handle, mapping, frame, stack bit, ready entry, or quota charge. A
+supervisor timer may expire another waiter immediately before commit; the
+boundary regression proves its ready-queue insertion and the new thread's
+insertion both remain reachable and queue-valid.
+
+`THREAD_EXIT` records one 32-bit status, removes only the calling thread from
+scheduling, advances its death-queue sequence, and wakes all death waiters in
+priority/FIFO order. The fixed deferred worker then unmaps the 4 KiB user stack
+with interrupts enabled. A dead thread with an open handle remains a bounded
+zombie: it retains its thread record and guarded 8 KiB supervisor stack so its
+terminal status remains observable, but it retains no user stack frame. Final
+handle close releases the record and supervisor-stack slot through the same
+worker. A handle closed before death releases only its reference; it never
+kills the execution reference.
+
+The current qualification limits are exact: 16 thread records globally, 15
+thread objects per process, one handle entry per published thread, one 4 KiB
+user stack and one virtual guard per live thread, and one fixed 8 KiB
+supervisor stack plus 4 KiB guard per retained thread object. Dead objects count
+against the thread-object and supervisor-stack quotas until their final handle
+is closed. These limits are intentionally smaller than the eventual stable
+pool targets and are reported as implementation limits by `STATUS.md`.
+
+There is no asynchronous thread kill in K5. Process exit and user fault remain
+the only operations that forcibly retire another thread. If the calling thread
+is the last live thread, `THREAD_EXIT` promotes the process to `EXITING` and
+uses the existing whole-process teardown rather than a special last-thread
+path.
+
+## K6 bounded wait-set contract
+
+K6 adds `WAIT_MULTIPLE` without adding another scheduler, timeout queue, helper
+thread, or allocation path. ABI 0.2 accepts 1 through 16 handles, matching the
+current process handle-table capacity. This is the exact enforced limit. Any
+future increase requires an ABI revision, a measured memory charge, and the
+same all-backend qualification; callers cannot assume 64 today.
+
+The syscall copies one naturally aligned array of 32-bit process-local handles
+before blocking and never retains the user pointer. It resolves and rights-
+checks the complete array before consuming readiness or linking anything. An
+invalid handle, unsupported object type, missing wait right, self-thread wait,
+bad pointer, or oversized set therefore leaves every object unchanged.
+
+Immediate readiness is tested in input order. The first ready or terminal
+object wins, so simultaneously observable readiness returns the lowest input
+index. Auto-reset events and semaphores consume exactly one unit only for the
+winner; later ready members remain untouched. A dead thread also returns its
+32-bit exit status as the member detail.
+
+If no member is ready, the calling thread uses one row in a fixed
+`16 threads x 16 members` registration array. Every member contributes one
+eight-byte intrusive registration to its object's existing priority/FIFO wait
+queue. The entire set shares one thread state and, when finite, one existing
+deadline-heap entry. Publication validates all queue sequences and aggregate
+queue capacities before changing `RUNNING -> BLOCKED`; a failed publication
+withdraws every linked registration before restoring `RUNNING`.
+
+Signal, target death, object close, owner death, deadline expiry, explicit
+cancellation, and process retirement compete through one completion path. The
+winner removes the deadline and every registration before making the thread
+ready. Object-originated completion returns that member's index; timeout,
+cancellation, and caller retirement return the reserved no-member value.
+Duplicate handles are valid and consume distinct bounded registrations; input
+order makes the lowest duplicate deterministic. `WAIT_ONE` is implemented by
+the same machinery with one member and preserves its existing result layout.
+
+The waitable types are auto/manual events, semaphores, one-shot timers, thread
+death, and process death. A process handle is generation-safe authority; a PID
+is diagnostic only. Waiting on self is rejected. Thread and normal process
+death preserve the complete 32-bit exit detail and remain ready while a handle
+is open. Abnormal process death reports its terminal result with zero detail.
+
+Timers share the existing 32-object pool and creator quota. A parallel fixed
+32-entry binary min-heap stores absolute timer deadlines with slot-number
+tie-breaking. Set replaces an existing arm and clears fired state; expiry is
+level-triggered and wakes every registered waiter; cancel withdraws the heap
+entry, clears readiness, and wakes waiters with `CANCELLED`. Set, cancel,
+expiry, close, and owner death allocate nothing and compete through the same
+wait-set completion owner.
 
 ## K4 synchronization-object contract
 

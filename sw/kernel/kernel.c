@@ -220,7 +220,7 @@ static void panic_begin(const char *reason)
     screen_clear();
     early_log->flags |= ASTRA_EARLY_LOG_FLAG_PANIC;
     ++early_log->sequence;
-    console_puts("*** ASTRA KERNEL PANIC ***\n\n");
+    console_puts("*** AXIOM KERNEL PANIC ***\n\n");
     console_puts("Reason: ");
     console_puts(reason);
     console_putc('\n');
@@ -374,9 +374,26 @@ static void validate_image_contract(void)
         kernel_panic("early log contract mismatch");
 }
 
+static uint32_t add_saturating_u32(uint32_t left, uint32_t right)
+{
+    return right > UINT32_MAX - left ? UINT32_MAX : left + right;
+}
+
 static void report_kernel_performance(
     const KernelPerformanceStats *performance)
 {
+    uint32_t wait_overruns = add_saturating_u32(
+        performance->metric[KERNEL_PERFORMANCE_WAIT_BLOCK].overruns,
+        performance->metric[KERNEL_PERFORMANCE_WAKE].overruns);
+    uint32_t thread_overruns = add_saturating_u32(
+        add_saturating_u32(
+            performance->metric[KERNEL_PERFORMANCE_THREAD_CREATE].overruns,
+            performance->metric[KERNEL_PERFORMANCE_THREAD_EXIT].overruns),
+        performance->metric[KERNEL_PERFORMANCE_THREAD_REAP].overruns);
+    uint32_t wait_set_overruns = add_saturating_u32(
+        performance->metric[KERNEL_PERFORMANCE_WAIT_SET_BLOCK].overruns,
+        performance->metric[KERNEL_PERFORMANCE_WAIT_SET_WAKE].overruns);
+
     console_puts("K2 PERF irq syscall=");
     console_dec32(performance->metric[
         KERNEL_PERFORMANCE_SYSCALL_DISPATCH].maximum_cycles);
@@ -419,13 +436,64 @@ static void report_kernel_performance(
         KERNEL_PERFORMANCE_WAKE].maximum_cycles);
     console_putc('/');
     console_dec32(KERNEL_PERFORMANCE_BUDGET_WAKE);
-    console_puts(" overruns=0\n");
+    console_puts(" overruns=");
+    console_dec32(wait_overruns);
+    console_putc('\n');
     console_puts("K3 PERF deadline expire=");
     console_dec32(performance->metric[
         KERNEL_PERFORMANCE_DEADLINE_EXPIRE].maximum_cycles);
     console_putc('/');
     console_dec32(KERNEL_PERFORMANCE_BUDGET_DEADLINE_EXPIRE);
-    console_puts(" overruns=0\n");
+    console_puts(" overruns=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_DEADLINE_EXPIRE].overruns);
+    console_putc('\n');
+    console_puts("K5 PERF thread create=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_THREAD_CREATE].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_THREAD_CREATE);
+    console_puts(" exit=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_THREAD_EXIT].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_THREAD_EXIT);
+    console_puts(" reap=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_THREAD_REAP].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_THREAD_REAP);
+    console_puts(" overruns=");
+    console_dec32(thread_overruns);
+    console_putc('\n');
+    console_puts("K6 PERF wait-set block=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_WAIT_SET_BLOCK].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_WAIT_SET_BLOCK);
+    console_puts(" wake=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_WAIT_SET_WAKE].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_WAIT_SET_WAKE);
+    console_puts(" overruns=");
+    console_dec32(wait_set_overruns);
+    console_putc('\n');
+#if ASTRA_KERNEL_SCHED_TRACE
+    console_puts("K2 TRACE syscall max id=");
+    console_dec32(kernel_dispatch_syscall_max_number());
+    console_puts(" body=");
+    console_dec32(kernel_dispatch_syscall_max_body_cycles());
+    console_putc('\n');
+    console_puts("K6 TRACE wait-set body=");
+    for (uint32_t index = 0u;
+         index < kernel_dispatch_wait_set_trace_count(); ++index) {
+        if (index != 0u)
+            console_putc(',');
+        console_dec32(kernel_dispatch_wait_set_trace_cycles(index));
+    }
+    console_putc('\n');
+#endif
 }
 
 static void report_kernel_performance_failure(
@@ -507,8 +575,43 @@ void kernel_process_milestone_reached(void)
     console_puts(" / ");
     console_dec32(KERNEL_THREAD_SUPERVISOR_STACK_SIZE);
     console_puts(" bytes\n");
+    console_puts("Thread lifecycle .... ");
+    console_dec32(stats.thread_exits);
+    console_puts(" exit, ");
+    console_dec32(stats.thread_death_waits);
+    console_puts(" waits, ");
+    console_dec32(stats.completed_thread_reaps);
+    console_puts(" reaped\n");
+    console_puts("Wait multiple ....... ");
+    console_dec32(stats.wait_set_calls);
+    console_puts(" calls, ");
+    console_dec32(stats.wait_set_blocks);
+    console_puts(" block, ");
+    console_dec32(stats.wait_set_wakeups);
+    console_puts(" wake; max ");
+    console_dec32(stats.wait_set_max_members);
+    console_puts(" members\n");
+    console_puts("Wait registrations .. ");
+    console_dec32(stats.wait_set_registrations);
+    console_puts(" live, ");
+    console_dec32(stats.wait_set_registration_max);
+    console_puts(" max\n");
+    console_puts("Waitable timers ..... ");
+    console_dec32(stats.timer_created);
+    console_puts(" created, ");
+    console_dec32(stats.timer_arms);
+    console_puts(" armed, ");
+    console_dec32(stats.timer_expirations);
+    console_puts(" expired\n");
+    console_puts("Process death ....... ");
+    console_dec32(stats.process_death_waits);
+    console_puts(" waits, ");
+    console_dec32(stats.process_death_wakeups);
+    console_puts(" blocked wakes\n");
     report_kernel_performance(&performance);
     console_puts("K2 PERFORMANCE PASS\n");
+    console_puts("\nK6 BOUNDED WAIT-MULTIPLE PASS\n");
+    console_puts("\nK5 THREAD LIFECYCLE PASS\n");
     console_puts("\nK4 HANDLE SYNCHRONIZATION PASS\n");
     console_puts("\nK3 ONE-SHOT SCHEDULER PASS\n");
     console_puts("\nK3 DEADLINE QUEUE PASS\n");
@@ -588,6 +691,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     uint32_t process_id;
     uint32_t survivor_process_id;
     uint32_t sibling_thread_id;
+    KernelHandle offender_process_handle;
     uint32_t offender_image_size;
     uint32_t offender_entry_offset;
     uint32_t survivor_image_size;
@@ -599,7 +703,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
 
     VESTA->SCRATCH = ASTRA_KERNEL_STATUS_BOOTING;
     console_init();
-    console_puts("ASTRA 68 KERNEL v" ASTRA_KERNEL_VERSION "\n");
+    console_puts("AXIOM KERNEL v" ASTRA_KERNEL_VERSION "\n");
     console_puts("Built: " ASTRA_KERNEL_BUILD_UTC "\n");
     console_puts("Git:   " ASTRA_KERNEL_GIT_REVISION "\n\n");
 
@@ -738,6 +842,16 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
                               offender_entry_offset, 0u,
                               &process_id) != KERNEL_PROCESS_OK)
         kernel_panic("fault process creation failed");
+    if (kernel_process_grant_handle(
+            survivor_process_id, process_id,
+            KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_WAIT,
+            &offender_process_handle) != KERNEL_PROCESS_OK ||
+        offender_process_handle == KERNEL_HANDLE_INVALID)
+        kernel_panic("process wait handle grant failed");
+    if (kernel_process_set_thread_bootstrap_argument(
+            survivor_process_id, sibling_thread_id,
+            offender_process_handle) != KERNEL_PROCESS_OK)
+        kernel_panic("process wait handle injection failed");
 #if ASTRA_KERNEL_SOAK_SELFTEST
     if (kernel_process_soak_configure(
             _k1_offender_image_start, offender_image_size,

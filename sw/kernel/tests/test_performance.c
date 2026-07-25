@@ -97,6 +97,12 @@ static void test_required_metrics_and_budget_failure(void)
     assert(kernel_performance_stats(&stats));
     assert(stats.metric[KERNEL_PERFORMANCE_DEADLINE_EXPIRE].budget_cycles ==
            KERNEL_PERFORMANCE_BUDGET_DEADLINE_EXPIRE);
+    assert(stats.metric[KERNEL_PERFORMANCE_THREAD_CREATE].budget_cycles ==
+           KERNEL_PERFORMANCE_BUDGET_THREAD_CREATE);
+    assert(stats.metric[KERNEL_PERFORMANCE_THREAD_EXIT].budget_cycles ==
+           KERNEL_PERFORMANCE_BUDGET_THREAD_EXIT);
+    assert(stats.metric[KERNEL_PERFORMANCE_THREAD_REAP].budget_cycles ==
+           KERNEL_PERFORMANCE_BUDGET_THREAD_REAP);
     assert(kernel_performance_pass(
         &stats, 1u << KERNEL_PERFORMANCE_DEADLINE_EXPIRE, &failed));
 }

@@ -3362,3 +3362,186 @@ result remain the exact `25D9CB8E` values above. The board is left running K4
 ROM `2F9B149C` with read-only AstraHost and production FPGA build `25D9CB8E`.
 NUC has no HDMI capture device, so the unchanged HDMI path retains its exact
 physical K1 screenshot; a K4 photograph is visual follow-up evidence only.
+
+### K5 thread-lifecycle software qualification (2026-07-24)
+
+K5 is based on commit `0208cb516801fe452bf59ef053d6daa0a118ee7e`
+plus exact qualified implementation patch SHA-256
+`1a234d1e5099e31f11e0288bc3e0e40e499fc31de1d6c1333a2138a25aa79e41`.
+The ROM reports
+`0208cb516801fe452bf59ef053d6daa0a118ee7e-dirty-1a234d1e5099`. This
+checkpoint changes kernel software, the boot checker, and pin-level acceptance
+only. CPU, PMMU, SoC datapaths, constraints, production features, and the routed
+bitstream are unchanged.
+
+One fresh Beast Verilator 5.047 run was measured and rejected: it reached all
+functional K5 behavior but reported thread creation at 162,250 cycles against
+the fixed 150,000-cycle gate. The measured cone was software page
+initialization, not RTL timing: the generic allocator poisoned the new 4 KiB
+frame and thread creation then cleared all 4 KiB again. Retained transcript
+`docs/evidence/k5-020f9460-rtl-create-budget-rejected.log` has SHA-256
+`6d7ecd4e853c2865b1dad472cb6cf138b239f5924944d4dd7baf4469640a8972`.
+The retained correction consolidates allocation through one shared
+zero-filled-frame path and removes the redundant target clear while preserving
+host-model initialization.
+
+That correction produced patch `020f9460a270...` and passed host, Musashi,
+pin-level, and hardware checks, but final code audit rejected it. Its syscall
+enabled interrupts while `kernel_thread_publish()` modified the intrusive ready
+queue. A nested supervisor timer could expire a waiter and enqueue it through
+the same non-atomic read/modify/write sequence. The accepted implementation
+separates interruptible preparation from a no-allocation commit and masks
+interrupts around publication plus process/scheduler accounting. A
+deterministic host test injects the timer at the final enable-to-disable
+boundary and proves both enqueues remain linked exactly once. All
+`020f9460...` transcripts remain retained as superseded evidence, not release
+evidence.
+
+Exact normal Musashi reaches every K1-K5 marker in 20,000,212 cycles; retained
+log SHA-256 is
+`a8ca8dd640c4d10ca45d11b1957e798c193ff0a0a550af36a21f2bd0a9d20dc0`.
+The 1,000-cycle workload finishes in 600,506,981 cycles under the unchanged
+675,000,000 ceiling with 7,986 free pages and zero overruns; retained log
+SHA-256 is
+`6f09f9175f8ec39a7f825bac7e701ed8c22cc517162f001c1ec01f90cbe726b7`.
+
+The clean accepted pin-level build, without simulator reuse, passes the
+intentional 64 KiB BIST at 115.04 MB/s, PMMU/user-copy isolation, one thread
+exit, two death waits, one deferred reap, every K1-K5 marker, and all twelve
+cycle gates in 296.331 seconds. Thread create/exit/reap measure
+137,193/14,804/47,560 cycles against 150,000/50,000/125,000 limits; every
+overrun counter is zero. Retained transcript
+`docs/evidence/k5-1a234d1e-rtl.log` has SHA-256
+`b26f7075305b23b1f445aeb2639d7d20bf22a7dfab8f5a5c8fa305a8253d66c1`.
+
+The exact hardware-profile artifacts are:
+
+- kernel: 48,420 bytes, SHA-256
+  `260bbcf82fbf955cee42d5798054e6d6549daa8921462d7216a241a685095e03`;
+- boot payload: 59,804 bytes, CRC32 `11BE3620`, SHA-256
+  `8dec0a9ae9ce03f19d5be8c5e8f016dc52684d53828e5acf849a4e76f992527c`;
+  and
+- packaged ROM: 59,836 bytes, SHA-256
+  `6f4c3376597884ac1ff1d544a62b3af97b2e8502731b751eae964fc598d6bdb9`.
+
+The packaged ROM hash was verified after transfer from Beast to Mac and NUC.
+NUC loaded the maintenance passthrough only into volatile SRAM, mounted the
+existing 244,016 MB card without formatting, and atomically updated only
+`/sdcard/ASTRA68.ROM`. Provisioning reported the exact 59,804-byte payload and
+CRC32 `11BE3620`; retained transcript
+`docs/evidence/k5-25d9cb8e-1a234d1e-provision.log` has SHA-256
+`8a380195cf4cab6a912f09a7a358b5a5a825006c3967b5c6bd9e5128303a0aca`.
+A fresh 268,320-byte production AstraHost with both provisioning options off
+has SHA-256
+`22740476f66e1394f0a6363a4c24d7ce9aa5a5980c656d2edd52711ac1c1d381`
+and was restored before qualification. Its flash transcript has SHA-256
+`33f747b22720e471030cb568b09c7f66887a0c1a3301f91ae0ff2ca926e963b1`.
+
+Production bitstream SHA-256
+`78cd218f12feb72ccbdcb6bb141d19908c961f3438b6b559bf99b60d1c9d6940`
+was verified before two independent volatile loads. Both boots report build
+`25D9CB8E`, exact ROM CRC32 `11BE3620`, full physical 32 MiB POST/BIST,
+PMMU/user-copy isolation, exact K5 lifecycle counts, all K1-K5 markers, and
+zero overruns. Run 1 measures create/exit/reap at
+137,107/14,816/47,534 cycles; run 2 measures 137,101/14,812/47,534. Retained
+transcript SHA-256 values are
+`d915b9629ab0c77d3c8750e2b593eca7032329b0278a2d4cff87a9872e316d38`
+and
+`c4a069f6cc2abccc09a86e815060ee66c314b518eaa91daf0420137e9914d753`.
+
+Disposition: K5 software, exact pin-level RTL, and exact production-hardware
+qualification PASS. The maintenance passthrough was rebuilt and loaded only to
+volatile SRAM; no production SoC synthesis, placement, route, pack, or
+persistent FPGA-flash operation was performed. Mapped resources remain 53,079
+LUT4s, 25,536 FFs, 101 DP16KDs, and 18 multipliers. Packed resources and every
+constrained-clock result remain the exact `25D9CB8E` values; the board is left
+running K5 ROM `11BE3620`, read-only AstraHost, and production FPGA build
+`25D9CB8E`.
+
+### K6 wait-multiple hardware promotion (2026-07-25)
+
+K6 is based on commit `0208cb516801fe452bf59ef053d6daa0a118ee7e` plus
+bounded wait-multiple implementation patch SHA-256
+`04524898314df4adebfe5091a183f2130e7c8bf98a3dd7a7d97e01b5b1fe1505`.
+The frozen source identity is
+`0208cb516801fe452bf59ef053d6daa0a118ee7e-dirty-04524898314d`, built with
+`SOURCE_DATE_EPOCH=1784924577`; source archive SHA-256 is
+`bb8da75c784cfd5f5f696abb6d4eb5057c75c9c30593c8e277c7b897d8be30d6`.
+This checkpoint changes kernel/boot software, host tests, public NDK
+declarations, emulator support, and acceptance tooling only. CPU, PMMU, SoC
+RTL datapaths, constraints, production features, routed resources, and the
+production bitstream are unchanged.
+
+K6 adds fixed-capacity wait registration over events, semaphores, one-shot
+timers, thread death, and process death. The operation admits 1-16 members,
+allocates nothing, completely prevalidates before publication, chooses the
+lowest ready input index, and removes every losing registration exactly once.
+Timers use the shared 32-object pool and a fixed deterministic heap. Process
+and timer handles retain generation and rights checks. This is kernel software
+latency work, not an FPGA timing-closure change.
+
+One intermediate full-RTL run reached the complete K6 functional result but
+measured final-handle close at 62,069 cycles. The failing software cone was an
+exhaustive scan of every process and handle from the production close path.
+That checkpoint is rejected. The retained implementation records O(1)
+corruption latches in production and keeps exhaustive object-graph validation
+in host, maintenance, and milestone checks. The cycle budget was not relaxed.
+
+A fresh Beast Verilator 5.047 full-SoC build completed cleanly in 25.568
+seconds; the pin-level RTL/SDRAM run completed in 266.550 seconds. It passes
+the intentional
+64 KiB BIST at 115.04 MB/s, PMMU/user-copy and cross-address-space isolation,
+exact K6 wait/wake/timeout counts of 11/5/5, 7 wait-multiple calls, 4 blocks,
+4 wakes, a maximum two-member set, one live and three maximum registrations,
+one timer create/arm/expiry, one nonblocking process-death wait, every K1-K6
+marker, and zero performance overruns.
+
+Measured pin-level maxima and limits are:
+
+| Path | Maximum cycles | Limit |
+|---|---:|---:|
+| syscall | 38,986 | 50,000 |
+| timer IRQ | 27,656 | 50,000 |
+| user-fault dispatch | 31,966 | 125,000 |
+| scheduler selection | 1,506 | 10,000 |
+| same-address-space switch | 3,092 | 15,000 |
+| cross-address-space switch | 4,327 | 50,000 |
+| wait block | 4,782 | 15,000 |
+| wake | 7,888 | 15,000 |
+| deadline expiry | 10,234 | 20,000 |
+| thread create | 124,512 | 150,000 |
+| thread exit | 25,681 | 50,000 |
+| deferred reap | 28,879 | 125,000 |
+| wait-set block | 6,259 | 50,000 |
+| wait-set wake | 10,049 | 50,000 |
+
+Normal Musashi also reaches every K1-K6 marker with zero overruns. Its
+1,000-iteration K6 workload completes in 579,507,730 virtual cycles against
+the unchanged 675,000,000-cycle cap, retains exactly 7,986 free pages, performs
+2,024 context switches and 3,730 timer ticks, and issues `0x6DA0` syscalls.
+
+The exact normal kernel is 57,412 bytes with SHA-256
+`17476aa268db37dde0e066f4cc0799848bc0024ae12bba809ec8cffedf84f425`.
+The boot payload is 68,860 bytes with CRC32 `80B0364C`; the 68,892-byte
+packaged ROM SHA-256 is
+`7073b6f5501f9821d32f2d317fd0adb709e03959b4091bc07ae38a14fc82a8d8`.
+NUC mounted the existing 244,016 MB card without formatting, updated only
+`/ASTRA68.ROM`, verified its payload size and CRC, and restored the exact
+read-only production AstraHost image.
+
+Two independent volatile loads of unchanged production bitstream `25D9CB8E`
+pass the real full-range 32 MiB POST/BIST, PMMU/user-copy isolation, exact K6
+counts, every K1-K6 marker, and every cycle gate with zero overruns. Run 1
+measures wait-set block/wake at 6,267/10,045 cycles; run 2 measures
+6,254/10,041. Both report the frozen source identity and ROM CRC32 `80B0364C`.
+
+Disposition: K6 implementation, immutable-source reproduction, software,
+pin-level RTL, SD provisioning, AstraHost restoration, and physical hardware
+promotion PASS. No production SoC synthesis, placement, route, pack, or
+persistent FPGA-flash operation was performed. Mapped resources remain 53,079
+LUT4s, 25,536 FFs, 101 DP16KDs, and 18 multipliers; packed resources remain
+66,523 TRELLIS_COMB and 25,565 FFs. The unchanged route passes at 15.058201 MHz
+CPU, 66.907532 MHz SDRAM, 79.693970 MHz USB, 53.267990 MHz pixel, and
+289.771088 MHz HDMI shift. Persistent FPGA flash remains exact build
+`25D9CB8E`; bitstream SHA-256 remains
+`78cd218f12feb72ccbdcb6bb141d19908c961f3438b6b559bf99b60d1c9d6940`.

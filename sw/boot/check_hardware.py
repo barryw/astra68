@@ -24,6 +24,13 @@ K2_PERFORMANCE_BUDGETS = {
     "wake": 15_000,
 }
 K3_DEADLINE_EXPIRE_BUDGET = 20_000
+K5_THREAD_BUDGETS = {
+    "create": 150_000,
+    "exit": 50_000,
+    "reap": 125_000,
+}
+K6_WAIT_SET_BUDGETS = {"block": 50_000, "wake": 50_000}
+AXIOM_PANIC_BANNER = b"*** AXIOM KERNEL PANIC ***"
 
 
 def k2_performance_reached(output: bytes | bytearray) -> bool:
@@ -120,6 +127,152 @@ def k4_synchronization_reached(output: bytes | bytearray) -> bool:
     )
 
 
+def k5_thread_lifecycle_reached(output: bytes | bytearray) -> bool:
+    lifecycle = re.search(
+        rb"(?m)^Thread lifecycle[ .]+(\d+) exit, (\d+) waits, "
+        rb"(\d+) reaped\r?$",
+        output,
+    )
+    performance = re.search(
+        rb"(?m)^K5 PERF thread create=(\d+)/(\d+) "
+        rb"exit=(\d+)/(\d+) reap=(\d+)/(\d+) overruns=0\r?$",
+        output,
+    )
+    if lifecycle is None or performance is None:
+        return False
+    if tuple(int(value) for value in lifecycle.groups()) != (1, 2, 1):
+        return False
+    values = [int(value) for value in performance.groups()]
+    for index, name in enumerate(("create", "exit", "reap")):
+        measured = values[index * 2]
+        reported_budget = values[index * 2 + 1]
+        expected_budget = K5_THREAD_BUDGETS[name]
+        if (
+            measured <= 0
+            or measured > expected_budget
+            or reported_budget != expected_budget
+        ):
+            return False
+    return (
+        k4_synchronization_reached(output)
+        and b"K5 THREAD LIFECYCLE PASS" in output
+    )
+
+
+def k6_wait_multiple_reached(output: bytes | bytearray) -> bool:
+    sync = re.search(
+        rb"(?m)^Sync objects[ .]+(\d+) event, (\d+) sem; "
+        rb"cancel/close/death (\d+)/(\d+)/(\d+)\r?$",
+        output,
+    )
+    lifecycle = re.search(
+        rb"(?m)^Thread lifecycle[ .]+(\d+) exit, (\d+) waits, "
+        rb"(\d+) reaped\r?$",
+        output,
+    )
+    thread_performance = re.search(
+        rb"(?m)^K5 PERF thread create=(\d+)/(\d+) "
+        rb"exit=(\d+)/(\d+) reap=(\d+)/(\d+) overruns=0\r?$",
+        output,
+    )
+    wait_set = re.search(
+        rb"(?m)^Wait multiple[ .]+(\d+) calls, (\d+) block, "
+        rb"(\d+) wake; max (\d+) members\r?$",
+        output,
+    )
+    registrations = re.search(
+        rb"(?m)^Wait registrations[ .]+(\d+) live, (\d+) max\r?$",
+        output,
+    )
+    timers = re.search(
+        rb"(?m)^Waitable timers[ .]+(\d+) created, (\d+) armed, "
+        rb"(\d+) expired\r?$",
+        output,
+    )
+    process_death = re.search(
+        rb"(?m)^Process death[ .]+(\d+) waits, (\d+) blocked wakes\r?$",
+        output,
+    )
+    wait_performance = re.search(
+        rb"(?m)^K6 PERF wait-set block=(\d+)/(\d+) "
+        rb"wake=(\d+)/(\d+) overruns=0\r?$",
+        output,
+    )
+    if any(
+        match is None
+        for match in (
+            sync,
+            lifecycle,
+            thread_performance,
+            wait_set,
+            registrations,
+            timers,
+            process_death,
+            wait_performance,
+        )
+    ):
+        return False
+    assert sync is not None
+    assert lifecycle is not None
+    assert thread_performance is not None
+    assert wait_set is not None
+    assert registrations is not None
+    assert timers is not None
+    assert process_death is not None
+    assert wait_performance is not None
+    if tuple(int(value) for value in sync.groups()) != (4, 1, 1, 1, 1):
+        return False
+    if tuple(int(value) for value in lifecycle.groups()) != (2, 3, 2):
+        return False
+    if tuple(int(value) for value in wait_set.groups()) != (7, 4, 4, 2):
+        return False
+    if tuple(int(value) for value in registrations.groups()) != (1, 3):
+        return False
+    if tuple(int(value) for value in timers.groups()) != (1, 1, 1):
+        return False
+    if tuple(int(value) for value in process_death.groups()) != (1, 0):
+        return False
+    thread_values = [int(value) for value in thread_performance.groups()]
+    for index, name in enumerate(("create", "exit", "reap")):
+        measured = thread_values[index * 2]
+        reported_budget = thread_values[index * 2 + 1]
+        expected_budget = K5_THREAD_BUDGETS[name]
+        if (
+            measured <= 0
+            or measured > expected_budget
+            or reported_budget != expected_budget
+        ):
+            return False
+    wait_values = [int(value) for value in wait_performance.groups()]
+    for index, name in enumerate(("block", "wake")):
+        measured = wait_values[index * 2]
+        reported_budget = wait_values[index * 2 + 1]
+        expected_budget = K6_WAIT_SET_BUDGETS[name]
+        if (
+            measured <= 0
+            or measured > expected_budget
+            or reported_budget != expected_budget
+        ):
+            return False
+    return (
+        k3_scheduler_reached(output)
+        and re.search(
+            rb"(?m)^Wait/wake[ .]+11 blocks, 5 wake, "
+            rb"5 priority handoff\r?$",
+            output,
+        )
+        is not None
+        and re.search(
+            rb"(?m)^Deadlines[ .]+2 expired, 1 priority handoff\r?$",
+            output,
+        )
+        is not None
+        and b"K6 BOUNDED WAIT-MULTIPLE PASS" in output
+        and b"K5 THREAD LIFECYCLE PASS" in output
+        and b"K4 HANDLE SYNCHRONIZATION PASS" in output
+    )
+
+
 def find_port(explicit: str | None) -> str:
     if explicit:
         return explicit
@@ -190,6 +343,8 @@ def acceptance_reached(
     expect_k1_min_elapsed_cycles: int | None = None,
     expect_k3_scheduler: bool = False,
     expect_k4_synchronization: bool = False,
+    expect_k5_thread_lifecycle: bool = False,
+    expect_k6_wait_multiple: bool = False,
 ) -> bool:
     if expect_route_probe:
         match = re.search(
@@ -223,7 +378,7 @@ def acceptance_reached(
     if expect_kernel_panic:
         post_offset = output.find(b"POST PASS")
         panic_offset = output.find(
-            b"*** ASTRA KERNEL PANIC ***", post_offset + 1
+            AXIOM_PANIC_BANNER, post_offset + 1
         )
         halt_offset = output.find(b"SYSTEM HALTED", panic_offset + 1)
         panic_reached = post_offset >= 0 and panic_offset >= 0 and halt_offset >= 0
@@ -281,6 +436,10 @@ def acceptance_reached(
                 soak_reached = True
                 break
         kernel_entry_reached = soak_reached
+    elif expect_k6_wait_multiple:
+        kernel_entry_reached = k6_wait_multiple_reached(output)
+    elif expect_k5_thread_lifecycle:
+        kernel_entry_reached = k5_thread_lifecycle_reached(output)
     elif expect_k4_synchronization:
         kernel_entry_reached = k4_synchronization_reached(output)
     elif expect_k3_scheduler:
@@ -318,7 +477,7 @@ def failure_reached(
         b"POST FAILURE" in output
         or (
             not expected_kernel_panic
-            and b"*** ASTRA KERNEL PANIC ***" in output
+            and AXIOM_PANIC_BANNER in output
         )
         or re.search(rb"(?m)^GFX (?:FAIL |F)[0-9A-F]{2}\r?$", output) is not None
     )
@@ -417,6 +576,22 @@ def main() -> int:
         ),
     )
     kernel_entry_group.add_argument(
+        "--expect-k6-wait-multiple",
+        action="store_true",
+        help=(
+            "require bounded K6 wait-multiple counts and budgets plus all "
+            "retained K5/K4/K3/K2/K1 markers"
+        ),
+    )
+    kernel_entry_group.add_argument(
+        "--expect-k5-thread-lifecycle",
+        action="store_true",
+        help=(
+            "require K5 thread lifecycle counts and budgets plus all retained "
+            "K4/K3/K2/K1 markers"
+        ),
+    )
+    kernel_entry_group.add_argument(
         "--expect-k2-blocking",
         action="store_true",
         help=(
@@ -508,6 +683,8 @@ def main() -> int:
         or args.expect_k2_blocking
         or args.expect_k3_scheduler
         or args.expect_k4_synchronization
+        or args.expect_k5_thread_lifecycle
+        or args.expect_k6_wait_multiple
         or args.expect_k1_soak_cycles is not None
         or args.expect_k1_fault_max_cycles is not None
         or args.expect_k1_min_elapsed_cycles is not None
@@ -614,6 +791,8 @@ def main() -> int:
                     args.expect_k1_min_elapsed_cycles,
                     args.expect_k3_scheduler,
                     args.expect_k4_synchronization,
+                    args.expect_k5_thread_lifecycle,
+                    args.expect_k6_wait_multiple,
                 ):
                     break
                 if failure_reached(output, args.expect_kernel_panic):
@@ -633,6 +812,8 @@ def main() -> int:
         "graphics" if args.expect_graphics else
         "kernel panic" if args.expect_kernel_panic else
         "K1 soak" if args.expect_k1_soak_cycles is not None else
+        "K6 wait-multiple" if args.expect_k6_wait_multiple else
+        "K5 thread lifecycle" if args.expect_k5_thread_lifecycle else
         "K4 synchronization" if args.expect_k4_synchronization else
         "K3 scheduler" if args.expect_k3_scheduler else
         "K2 blocking" if args.expect_k2_blocking else
@@ -660,6 +841,8 @@ def main() -> int:
         args.expect_k1_min_elapsed_cycles,
         args.expect_k3_scheduler,
         args.expect_k4_synchronization,
+        args.expect_k5_thread_lifecycle,
+        args.expect_k6_wait_multiple,
     ):
         return 0
     if failure_reached(output, args.expect_kernel_panic):

@@ -20,9 +20,15 @@ struct KernelSyncObject {
     uint8_t state;
 };
 
+#define KERNEL_SYNC_TIMER_SLOT_NONE UINT8_MAX
+
 static KernelSyncObject objects[KERNEL_SYNC_OBJECT_MAX];
+static uint64_t timer_deadlines[KERNEL_SYNC_OBJECT_MAX];
+static uint8_t timer_heap[KERNEL_SYNC_OBJECT_MAX];
+static uint8_t timer_positions[KERNEL_SYNC_OBJECT_MAX];
 static KernelSyncPoolStats pool_stats;
 static uint8_t pool_corrupt;
+static uint8_t timer_count;
 
 _Static_assert(sizeof(KernelSyncObject) == 36u,
                "synchronization object memory budget changed");
@@ -31,7 +37,114 @@ static bool valid_type(uint8_t type)
 {
     return type == KERNEL_SYNC_EVENT_AUTO ||
            type == KERNEL_SYNC_EVENT_MANUAL ||
-           type == KERNEL_SYNC_SEMAPHORE;
+           type == KERNEL_SYNC_SEMAPHORE ||
+           type == KERNEL_SYNC_TIMER;
+}
+
+static uint8_t timer_slot(const KernelSyncObject *object)
+{
+    return (uint8_t)(object - &objects[0]);
+}
+
+static bool timer_less(uint8_t left, uint8_t right)
+{
+    return timer_deadlines[left] < timer_deadlines[right] ||
+           (timer_deadlines[left] == timer_deadlines[right] && left < right);
+}
+
+static void timer_heap_swap(uint8_t left, uint8_t right)
+{
+    uint8_t left_slot = timer_heap[left];
+    uint8_t right_slot = timer_heap[right];
+
+    timer_heap[left] = right_slot;
+    timer_heap[right] = left_slot;
+    timer_positions[left_slot] = right;
+    timer_positions[right_slot] = left;
+}
+
+static void timer_sift_up(uint8_t position)
+{
+    while (position != 0u) {
+        uint8_t parent = (uint8_t)((position - 1u) / 2u);
+
+        if (!timer_less(timer_heap[position], timer_heap[parent]))
+            break;
+        timer_heap_swap(position, parent);
+        position = parent;
+    }
+}
+
+static void timer_sift_down(uint8_t position)
+{
+    for (;;) {
+        uint8_t left = (uint8_t)(position * 2u + 1u);
+        uint8_t right = (uint8_t)(left + 1u);
+        uint8_t smallest = position;
+
+        if (left < timer_count &&
+            timer_less(timer_heap[left], timer_heap[smallest]))
+            smallest = left;
+        if (right < timer_count &&
+            timer_less(timer_heap[right], timer_heap[smallest]))
+            smallest = right;
+        if (smallest == position)
+            break;
+        timer_heap_swap(position, smallest);
+        position = smallest;
+    }
+}
+
+static bool timer_remove(uint8_t slot)
+{
+    uint8_t position;
+    uint8_t last;
+    uint8_t moved;
+
+    if (slot >= KERNEL_SYNC_OBJECT_MAX)
+        return false;
+    position = timer_positions[slot];
+    if (position == KERNEL_SYNC_TIMER_SLOT_NONE)
+        return true;
+    if (position >= timer_count || timer_heap[position] != slot ||
+        timer_count == 0u)
+        return false;
+    last = (uint8_t)(timer_count - 1u);
+    if (position != last)
+        timer_heap_swap(position, last);
+    moved = timer_heap[position];
+    --timer_count;
+    timer_heap[timer_count] = KERNEL_SYNC_TIMER_SLOT_NONE;
+    timer_positions[slot] = KERNEL_SYNC_TIMER_SLOT_NONE;
+    timer_deadlines[slot] = 0u;
+    if (position < timer_count) {
+        uint8_t parent = position == 0u ? 0u :
+            (uint8_t)((position - 1u) / 2u);
+
+        if (position != 0u && timer_less(moved, timer_heap[parent]))
+            timer_sift_up(position);
+        else
+            timer_sift_down(position);
+    }
+    return true;
+}
+
+static bool timer_insert(uint8_t slot, uint64_t deadline)
+{
+    uint8_t position;
+
+    if (slot >= KERNEL_SYNC_OBJECT_MAX ||
+        timer_positions[slot] != KERNEL_SYNC_TIMER_SLOT_NONE ||
+        timer_count >= KERNEL_SYNC_OBJECT_MAX)
+        return false;
+    position = timer_count++;
+    timer_heap[position] = slot;
+    timer_positions[slot] = position;
+    timer_deadlines[slot] = deadline;
+    timer_sift_up(position);
+    if (timer_count > pool_stats.max_armed_timers)
+        pool_stats.max_armed_timers = timer_count;
+    return true;
 }
 
 static bool valid_object_pointer(const KernelSyncObject *object)
@@ -101,6 +214,8 @@ static KernelSyncStatus allocate_object(uint32_t owner, uint8_t type,
 
         if (candidate->state != KERNEL_SYNC_FREE)
             continue;
+        if (timer_positions[slot] != KERNEL_SYNC_TIMER_SLOT_NONE)
+            return KERNEL_SYNC_CORRUPT;
         generation = kernel_generation_next(candidate->generation);
         kernel_bytes_clear(candidate, sizeof(*candidate));
         kernel_thread_wait_queue_init(&candidate->waiters);
@@ -122,6 +237,8 @@ static void free_object(KernelSyncObject *object)
     uint32_t generation;
 
     if (!valid_object_pointer(object) || object->references != 0u ||
+        timer_positions[timer_slot(object)] !=
+            KERNEL_SYNC_TIMER_SLOT_NONE ||
         kernel_thread_wait_queue_count(&object->waiters) != 0u) {
         pool_corrupt = 1u;
         return;
@@ -148,6 +265,10 @@ static KernelSyncStatus close_object(KernelSyncObject *object,
     if (!valid_live_object(object))
         return KERNEL_SYNC_CORRUPT;
 
+    if (object->type == KERNEL_SYNC_TIMER &&
+        !timer_remove(timer_slot(object)))
+        return KERNEL_SYNC_CORRUPT;
+
     object->state = KERNEL_SYNC_CLOSING;
     object->close_result = wake_result;
     if (kernel_thread_wake_all(&object->waiters, wake_result, &woken) !=
@@ -170,9 +291,13 @@ void kernel_sync_pool_init(void)
         kernel_bytes_clear(&objects[slot], sizeof(objects[slot]));
         objects[slot].generation = generation;
         objects[slot].state = KERNEL_SYNC_FREE;
+        timer_deadlines[slot] = 0u;
+        timer_heap[slot] = KERNEL_SYNC_TIMER_SLOT_NONE;
+        timer_positions[slot] = KERNEL_SYNC_TIMER_SLOT_NONE;
     }
     kernel_bytes_clear(&pool_stats, sizeof(pool_stats));
     pool_corrupt = 0u;
+    timer_count = 0u;
 }
 
 KernelSyncStatus kernel_sync_create_event(uint32_t owner, uint32_t flags,
@@ -212,6 +337,19 @@ KernelSyncStatus kernel_sync_create_semaphore(uint32_t owner,
     (*object)->count = initial_count;
     (*object)->maximum = maximum_count;
     ++pool_stats.created_semaphores;
+    return KERNEL_SYNC_OK;
+}
+
+KernelSyncStatus kernel_sync_create_timer(uint32_t owner,
+                                          KernelSyncObject **object)
+{
+    KernelSyncStatus status = allocate_object(
+        owner, KERNEL_SYNC_TIMER, object);
+
+    if (status != KERNEL_SYNC_OK)
+        return status;
+    (*object)->maximum = 1u;
+    ++pool_stats.created_timers;
     return KERNEL_SYNC_OK;
 }
 
@@ -269,18 +407,15 @@ void kernel_sync_abandon_unpublished(KernelSyncObject *object)
     kernel_sync_handle_release(object, NULL);
 }
 
-KernelSyncStatus kernel_sync_wait(KernelSyncObject *object,
-                                  KernelThread *thread, uint64_t now,
-                                  uint64_t deadline,
-                                  uint32_t timeout_result)
+KernelSyncStatus kernel_sync_prepare_wait(KernelSyncObject *object,
+                                          KernelThreadWaitSpec *spec)
 {
-    KernelThreadStatus status;
-    uint32_t sequence;
     uint32_t waiters;
 
-    if (!valid_object_pointer(object) || thread == NULL ||
-        timeout_result == ASTRA_SYSCALL_OK)
+    if (!valid_object_pointer(object) || spec == NULL)
         return KERNEL_SYNC_INVALID_ARGUMENT;
+    spec->queue = NULL;
+    spec->sequence = 0u;
     if (object->state == KERNEL_SYNC_CLOSING)
         return KERNEL_SYNC_CLOSED;
     if (!valid_live_object(object))
@@ -288,7 +423,8 @@ KernelSyncStatus kernel_sync_wait(KernelSyncObject *object,
     ++pool_stats.wait_calls;
 
     if (object->count != 0u) {
-        if (object->type != KERNEL_SYNC_EVENT_MANUAL)
+        if (object->type != KERNEL_SYNC_EVENT_MANUAL &&
+            object->type != KERNEL_SYNC_TIMER)
             --object->count;
         ++pool_stats.immediate_waits;
         return KERNEL_SYNC_OK;
@@ -298,10 +434,44 @@ KernelSyncStatus kernel_sync_wait(KernelSyncObject *object,
         return KERNEL_SYNC_CORRUPT;
     if (waiters >= KERNEL_SYNC_WAITER_MAX)
         return KERNEL_SYNC_WAITER_LIMIT;
-    sequence = kernel_thread_wait_queue_sequence(&object->waiters);
-    if (sequence == 0u)
+    spec->queue = &object->waiters;
+    spec->sequence = kernel_thread_wait_queue_sequence(spec->queue);
+    if (spec->sequence == 0u)
         return KERNEL_SYNC_CORRUPT;
-    status = kernel_thread_block_until(thread, &object->waiters, sequence,
+    return KERNEL_SYNC_BLOCKED;
+}
+
+KernelSyncStatus kernel_sync_commit_wait(KernelSyncObject *object)
+{
+    uint32_t waiters;
+
+    if (!valid_live_object(object))
+        return KERNEL_SYNC_INVALID_ARGUMENT;
+    waiters = kernel_thread_wait_queue_count(&object->waiters);
+    if (waiters == UINT32_MAX || waiters == 0u ||
+        waiters > KERNEL_SYNC_WAITER_MAX)
+        return KERNEL_SYNC_INVALID_STATE;
+    ++pool_stats.blocked_waits;
+    if (waiters > pool_stats.max_waiters)
+        pool_stats.max_waiters = waiters;
+    return KERNEL_SYNC_OK;
+}
+
+KernelSyncStatus kernel_sync_wait(KernelSyncObject *object,
+                                  KernelThread *thread, uint64_t now,
+                                  uint64_t deadline,
+                                  uint32_t timeout_result)
+{
+    KernelThreadWaitSpec spec;
+    KernelThreadStatus status;
+    KernelSyncStatus prepare;
+
+    if (thread == NULL || timeout_result == ASTRA_SYSCALL_OK)
+        return KERNEL_SYNC_INVALID_ARGUMENT;
+    prepare = kernel_sync_prepare_wait(object, &spec);
+    if (prepare != KERNEL_SYNC_BLOCKED)
+        return prepare;
+    status = kernel_thread_block_until(thread, spec.queue, spec.sequence,
                                        now, deadline, timeout_result);
     if (status == KERNEL_THREAD_DEADLINE_EXPIRED)
         return KERNEL_SYNC_TIMED_OUT;
@@ -310,10 +480,8 @@ KernelSyncStatus kernel_sync_wait(KernelSyncObject *object,
                        status == KERNEL_THREAD_INVALID_STATE ||
                        status == KERNEL_THREAD_CONDITION_CHANGED ?
             KERNEL_SYNC_INVALID_STATE : KERNEL_SYNC_CORRUPT;
-    ++pool_stats.blocked_waits;
-    ++waiters;
-    if (waiters > pool_stats.max_waiters)
-        pool_stats.max_waiters = waiters;
+    if (kernel_sync_commit_wait(object) != KERNEL_SYNC_OK)
+        return KERNEL_SYNC_CORRUPT;
     return KERNEL_SYNC_BLOCKED;
 }
 
@@ -323,6 +491,7 @@ KernelSyncStatus kernel_sync_signal(KernelSyncObject *object,
                                     uint32_t *woken_threads)
 {
     uint32_t waiters;
+    uint32_t waiter_threads;
     uint32_t to_wake;
     uint32_t remainder;
     uint32_t woken = 0u;
@@ -338,7 +507,8 @@ KernelSyncStatus kernel_sync_signal(KernelSyncObject *object,
         return KERNEL_SYNC_CORRUPT;
     ++pool_stats.signal_calls;
     waiters = kernel_thread_wait_queue_count(&object->waiters);
-    if (waiters == UINT32_MAX)
+    waiter_threads = kernel_thread_wait_queue_waiter_count(&object->waiters);
+    if (waiters == UINT32_MAX || waiter_threads == UINT32_MAX)
         return KERNEL_SYNC_CORRUPT;
 
     if (object->type == KERNEL_SYNC_EVENT_MANUAL) {
@@ -366,8 +536,9 @@ KernelSyncStatus kernel_sync_signal(KernelSyncObject *object,
         } else {
             return KERNEL_SYNC_CORRUPT;
         }
-    } else {
-        to_wake = release_count < waiters ? release_count : waiters;
+    } else if (object->type == KERNEL_SYNC_SEMAPHORE) {
+        to_wake = release_count < waiter_threads ?
+            release_count : waiter_threads;
         remainder = release_count - to_wake;
         if (remainder > object->maximum - object->count)
             return KERNEL_SYNC_COUNT_LIMIT;
@@ -381,6 +552,8 @@ KernelSyncStatus kernel_sync_signal(KernelSyncObject *object,
             ++woken;
         }
         object->count += remainder;
+    } else {
+        return KERNEL_SYNC_INVALID_STATE;
     }
     pool_stats.signal_wakeups += woken;
     *woken_threads = woken;
@@ -401,6 +574,109 @@ KernelSyncStatus kernel_sync_reset(KernelSyncObject *object)
     object->count = 0u;
     ++pool_stats.reset_calls;
     return KERNEL_SYNC_OK;
+}
+
+KernelSyncStatus kernel_sync_timer_set(KernelSyncObject *object,
+                                       uint64_t now, uint64_t deadline,
+                                       uint32_t *woken_threads)
+{
+    uint32_t woken = 0u;
+    uint8_t slot;
+
+    if (woken_threads == NULL || !valid_object_pointer(object))
+        return KERNEL_SYNC_INVALID_ARGUMENT;
+    *woken_threads = 0u;
+    if (object->state == KERNEL_SYNC_CLOSING)
+        return KERNEL_SYNC_CLOSED;
+    if (!valid_live_object(object))
+        return KERNEL_SYNC_CORRUPT;
+    if (object->type != KERNEL_SYNC_TIMER)
+        return KERNEL_SYNC_INVALID_STATE;
+    slot = timer_slot(object);
+    if (!timer_remove(slot))
+        return KERNEL_SYNC_CORRUPT;
+    object->count = 0u;
+    ++pool_stats.timer_arms;
+    if (deadline <= now) {
+        object->count = 1u;
+        if (kernel_thread_wake_all(&object->waiters, ASTRA_SYSCALL_OK,
+                                   &woken) != KERNEL_THREAD_OK)
+            return KERNEL_SYNC_CORRUPT;
+        ++pool_stats.timer_expirations;
+        pool_stats.timer_wakeups += woken;
+    } else if (!timer_insert(slot, deadline)) {
+        return KERNEL_SYNC_CORRUPT;
+    }
+    *woken_threads = woken;
+    return KERNEL_SYNC_OK;
+}
+
+KernelSyncStatus kernel_sync_timer_cancel(KernelSyncObject *object,
+                                          uint32_t wake_result,
+                                          uint32_t *woken_threads)
+{
+    uint32_t woken = 0u;
+
+    if (woken_threads == NULL || wake_result == ASTRA_SYSCALL_OK ||
+        !valid_object_pointer(object))
+        return KERNEL_SYNC_INVALID_ARGUMENT;
+    *woken_threads = 0u;
+    if (object->state == KERNEL_SYNC_CLOSING)
+        return KERNEL_SYNC_CLOSED;
+    if (!valid_live_object(object))
+        return KERNEL_SYNC_CORRUPT;
+    if (object->type != KERNEL_SYNC_TIMER)
+        return KERNEL_SYNC_INVALID_STATE;
+    if (!timer_remove(timer_slot(object)))
+        return KERNEL_SYNC_CORRUPT;
+    object->count = 0u;
+    if (kernel_thread_wake_all(&object->waiters, wake_result, &woken) !=
+        KERNEL_THREAD_OK)
+        return KERNEL_SYNC_CORRUPT;
+    ++pool_stats.timer_cancellations;
+    *woken_threads = woken;
+    return KERNEL_SYNC_OK;
+}
+
+KernelSyncStatus kernel_sync_expire_timers(uint64_t now,
+                                           uint32_t *expired_timers,
+                                           uint32_t *woken_threads)
+{
+    uint32_t expired = 0u;
+    uint32_t woken = 0u;
+
+    if (expired_timers == NULL || woken_threads == NULL)
+        return KERNEL_SYNC_INVALID_ARGUMENT;
+    while (timer_count != 0u &&
+           timer_deadlines[timer_heap[0]] <= now) {
+        uint8_t slot = timer_heap[0];
+        KernelSyncObject *object = &objects[slot];
+        uint32_t object_woken = 0u;
+
+        if (!valid_live_object(object) ||
+            object->type != KERNEL_SYNC_TIMER || object->count != 0u ||
+            !timer_remove(slot))
+            return KERNEL_SYNC_CORRUPT;
+        object->count = 1u;
+        if (kernel_thread_wake_all(&object->waiters, ASTRA_SYSCALL_OK,
+                                   &object_woken) != KERNEL_THREAD_OK)
+            return KERNEL_SYNC_CORRUPT;
+        ++expired;
+        woken += object_woken;
+    }
+    pool_stats.timer_expirations += expired;
+    pool_stats.timer_wakeups += woken;
+    *expired_timers = expired;
+    *woken_threads = woken;
+    return KERNEL_SYNC_OK;
+}
+
+bool kernel_sync_next_timer_deadline(uint64_t *deadline)
+{
+    if (deadline == NULL || timer_count == 0u)
+        return false;
+    *deadline = timer_deadlines[timer_heap[0]];
+    return true;
 }
 
 KernelSyncStatus kernel_sync_owner_died(uint32_t owner,
@@ -460,6 +736,13 @@ bool kernel_sync_snapshot(uint32_t slot, KernelSyncSnapshot *snapshot)
     snapshot->count = object->count;
     snapshot->maximum = object->maximum;
     snapshot->close_result = object->close_result;
+    if (timer_positions[slot] != KERNEL_SYNC_TIMER_SLOT_NONE) {
+        snapshot->deadline_high = (uint32_t)(timer_deadlines[slot] >> 32);
+        snapshot->deadline_low = (uint32_t)timer_deadlines[slot];
+    } else {
+        snapshot->deadline_high = 0u;
+        snapshot->deadline_low = 0u;
+    }
     snapshot->references = object->references;
     snapshot->waiters = (uint16_t)waiters;
     snapshot->type = object->type;
@@ -469,19 +752,51 @@ bool kernel_sync_snapshot(uint32_t slot, KernelSyncSnapshot *snapshot)
     return true;
 }
 
+bool kernel_sync_pool_healthy(void)
+{
+    return pool_corrupt == 0u;
+}
+
 bool kernel_sync_pool_valid(void)
 {
-    if (pool_corrupt != 0u)
+    if (!kernel_sync_pool_healthy() || timer_count > KERNEL_SYNC_OBJECT_MAX)
         return false;
+    for (uint32_t position = 0u; position < timer_count; ++position) {
+        uint8_t slot = timer_heap[position];
+
+        if (slot >= KERNEL_SYNC_OBJECT_MAX ||
+            timer_positions[slot] != position ||
+            timer_deadlines[slot] == 0u ||
+            objects[slot].state != KERNEL_SYNC_LIVE ||
+            objects[slot].type != KERNEL_SYNC_TIMER ||
+            objects[slot].count != 0u)
+            return false;
+        if (position != 0u &&
+            timer_less(slot, timer_heap[(position - 1u) / 2u]))
+            return false;
+    }
+    for (uint32_t position = timer_count;
+         position < KERNEL_SYNC_OBJECT_MAX; ++position) {
+        if (timer_heap[position] != KERNEL_SYNC_TIMER_SLOT_NONE)
+            return false;
+    }
     for (uint32_t slot = 0u; slot < KERNEL_SYNC_OBJECT_MAX; ++slot) {
         const KernelSyncObject *object = &objects[slot];
         uint32_t waiters = object->state == KERNEL_SYNC_FREE ? 0u :
             kernel_thread_wait_queue_count(&object->waiters);
+        bool armed =
+            timer_positions[slot] != KERNEL_SYNC_TIMER_SLOT_NONE;
+
+        if (armed &&
+            (timer_positions[slot] >= timer_count ||
+             timer_heap[timer_positions[slot]] != slot))
+            return false;
 
         if (object->state == KERNEL_SYNC_FREE) {
             if (object->owner != 0u || object->count != 0u ||
                 object->maximum != 0u || object->close_result != 0u ||
-                object->references != 0u || object->type != KERNEL_SYNC_NONE)
+                object->references != 0u || object->type != KERNEL_SYNC_NONE ||
+                armed || timer_deadlines[slot] != 0u)
                 return false;
             continue;
         }
@@ -490,10 +805,15 @@ bool kernel_sync_pool_valid(void)
             object->generation == 0u || object->references == 0u)
             return false;
         if (object->state == KERNEL_SYNC_LIVE) {
-            if (!valid_live_object(object))
+            if (!valid_live_object(object) ||
+                (object->type == KERNEL_SYNC_TIMER && armed &&
+                 object->count != 0u) ||
+                (object->type != KERNEL_SYNC_TIMER &&
+                 (armed || timer_deadlines[slot] != 0u)))
                 return false;
         } else if (object->state == KERNEL_SYNC_CLOSING) {
-            if (object->close_result == 0u || waiters != 0u)
+            if (object->close_result == 0u || waiters != 0u || armed ||
+                timer_deadlines[slot] != 0u)
                 return false;
         } else {
             return false;
@@ -509,6 +829,7 @@ bool kernel_sync_pool_stats(KernelSyncPoolStats *stats)
     kernel_bytes_copy(stats, &pool_stats, sizeof(*stats));
     stats->live_objects = 0u;
     stats->closing_objects = 0u;
+    stats->armed_timers = timer_count;
     for (uint32_t slot = 0u; slot < KERNEL_SYNC_OBJECT_MAX; ++slot) {
         if (objects[slot].state == KERNEL_SYNC_LIVE)
             ++stats->live_objects;

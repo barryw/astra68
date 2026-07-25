@@ -97,7 +97,7 @@ $(BUILD_DIR)/process.o: process.c process.h thread.h sync.h context.h handle.h b
                         bytes.h \
                         generation.h \
                         performance.h platform.h \
-                        memory.h vm.h exception.h \
+                        memory.h vm.h exception.h user_copy.h \
                         qualification.h ../include/astra/syscall.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
@@ -258,9 +258,9 @@ $(BUILD_DIR)/test_thread: tests/test_thread.c thread.c thread.h \
 			    bytes.c bytes.h generation.h \
                             performance.c performance.h platform.h \
                             context.c context.h exception.c exception.h \
-                            handle.h | $(BUILD_DIR)
+                            handle.h ../include/astra/syscall.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
-		-DKERNEL_PERFORMANCE_HOST_TEST=1 -I. \
+		-DKERNEL_PERFORMANCE_HOST_TEST=1 -I. -I../include \
 		bytes.c exception.c context.c performance.c thread.c \
 		tests/test_thread.c -o $@
 
@@ -280,16 +280,19 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
                             context.c context.h \
                             handle.c handle.h \
                             exception.c exception.h vm.c vm.h pmmu.h \
+                            user_copy.c user_copy.h \
                             block.c block.h dma.c dma.h memory.c memory.h \
                             platform.h ../common/boot_contract.c \
                             ../include/astra/boot.h \
                             ../include/astra/syscall.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_MEMORY_NO_POISON=1 -DKERNEL_VM_HOST_TEST=1 \
+		-DKERNEL_USER_COPY_HOST_TEST=1 \
 		-DKERNEL_PROCESS_HOST_TEST=1 -DKERNEL_PERFORMANCE_HOST_TEST=1 \
 		-DASTRA_KERNEL_SOAK_SELFTEST=1 \
 		-I. -I../include \
 		../common/boot_contract.c memory.c dma.c block.c vm.c exception.c \
+		user_copy.c \
 		bytes.c context.c handle.c performance.c thread.c sync.c process.c \
 		tests/test_process.c -o $@
 

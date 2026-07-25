@@ -32,7 +32,7 @@ fn main() -> ExitCode {
     }
 
     let snapshot = machine.snapshot();
-    print!("{}", machine.console_transcript());
+    print!("{}", machine.serial_transcript());
     eprintln!(
         "backend={} cycles={} pc=0x{:08X} build=0x{:08X} scratch=0x{:08X}",
         snapshot.backend, snapshot.cycles, snapshot.cpu_pc, snapshot.build_id, snapshot.scratch
@@ -41,7 +41,6 @@ fn main() -> ExitCode {
         ExitCode::SUCCESS
     } else {
         eprintln!("scratch trace: {:08X?}", snapshot.scratch_trace);
-        eprintln!("\nUART transcript:\n{}", machine.serial_transcript());
         ExitCode::FAILURE
     }
 }

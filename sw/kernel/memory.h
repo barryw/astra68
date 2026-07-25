@@ -60,6 +60,11 @@ KernelMemoryStatus kernel_memory_alloc(uint32_t frame_count,
                                        KernelFrameState state,
                                        uint32_t owner,
                                        uint32_t *physical_base);
+KernelMemoryStatus kernel_memory_alloc_zeroed(uint32_t frame_count,
+                                              uint32_t alignment_frames,
+                                              KernelFrameState state,
+                                              uint32_t owner,
+                                              uint32_t *physical_base);
 KernelMemoryStatus kernel_memory_retain(uint32_t physical_base,
                                         uint32_t frame_count,
                                         uint32_t owner);
@@ -79,6 +84,7 @@ bool kernel_memory_range_owned(uint32_t physical_base, uint32_t byte_count,
                                bool require_pinned);
 bool kernel_memory_frame_info(uint32_t physical_address,
                               KernelFrameInfo *info);
+bool kernel_memory_owner_frames(uint32_t owner, uint32_t *frame_count);
 bool kernel_memory_stats(KernelMemoryStats *stats);
 
 #endif

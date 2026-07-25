@@ -7,6 +7,10 @@ MMIO registers or by agreeing informally on channel numbers.
 This is an architectural contract. Individual subsystem APIs may add stronger
 rules, but they use the same lifecycle and terminology.
 
+Design status markers, where used, have the meanings defined in
+`OS_VISION.md`. A **DIRECTION** is not a published ABI or claim of current
+implementation.
+
 ## Lifecycle
 
 1. Discover or open a service.
@@ -56,6 +60,7 @@ report handles that survived until process teardown.
 | Partitioned lease | LED bits, audio voices, timer channels | Disjoint units can have different exclusive owners |
 | Scheduled engine | blitter, DMA, storage queues | Many clients submit jobs; kernel/driver schedules fairly |
 | Memory object | surfaces, audio buffers, DMA buffers | Handles carry mapping and access rights |
+| Stream endpoint | file, pipe, PTY, socket | Bounded byte flow with readable/writable wait state |
 | Service-owned global | display mode, scanout, mixer policy | One service owns hardware; clients request logical objects |
 | Exclusive device | diagnostic UART, recovery SPI | One owner unless a device-specific multiplexer exists |
 
@@ -81,6 +86,36 @@ physical channels over time.
 - Resource state is inspectable for diagnostics: owner, rights, queue depth,
   progress, and last error.
 
+## Namespace and naming
+
+Names discover resources; they do not grant authority. The registrar resolves a
+service name to a generation-tagged endpoint, and the storage service resolves
+a location or path to a handle. Subsequent operations use the handle and its
+rights rather than repeatedly trusting a mutable string.
+
+**DIRECTION:** Native logical locations may include `SYS:`, `WORK:`, `HOME:`,
+`RAM:`, and `APP:`. These are aliases into one object namespace, in the useful
+spirit of Amiga volumes and assigns:
+
+- `SYS:` identifies the selected immutable or system installation;
+- `WORK:` identifies the owner's primary writable workspace;
+- `HOME:` identifies owner-specific documents and settings;
+- `RAM:` identifies an explicitly volatile memory-backed volume;
+- `APP:` identifies the launched application's bundle/resources.
+
+The final names and assignment rules remain open. Aliases are resolved
+transactionally by the storage/namespace service, are inspectable, and cannot
+silently change an already-open handle.
+
+The POSIX personality presents a slash-path view of these same objects. It does
+not mount duplicate filesystems or create a second authority model. Native
+devices and services remain typed resources; a compatibility `/dev` entry maps
+to an adapter handle rather than exposing MMIO or an untyped kernel object.
+
+Application menus, desktop icons, shell paths, drag and drop, and automation
+carry the same underlying object identities. A path may be included as useful
+metadata, but transferred handles carry access and lifetime.
+
 ## Front-panel application
 
 Buttons and switches are shared observations. LED bits are partitioned leases:
@@ -98,3 +133,8 @@ The kernel ABI must still lock down the generic wait set, event record, handle
 transfer, cancellation, deadlines, and priority inheritance. Those details
 will be defined before asynchronous graphics, audio, DMA, or storage APIs are
 published. Subsystem APIs must not invent private alternatives in the meantime.
+
+Service discovery, logical-location aliases, stream endpoints, command
+discovery, drag-and-drop handle transfer, and the POSIX namespace view remain
+userspace protocol work. See `USERSPACE_ARCHITECTURE.md` and
+`TERMINAL_AND_POSIX.md`.

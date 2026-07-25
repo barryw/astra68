@@ -68,6 +68,8 @@ bool kernel_vm_stats(KernelVmStats *stats);
 #if defined(KERNEL_VM_HOST_TEST)
 void kernel_vm_test_bind_physical_memory(uint8_t *memory, uint32_t base,
                                          uint32_t size);
+bool kernel_vm_test_translate_current(uint32_t virtual_address, bool write,
+                                      uint32_t *physical_address);
 #endif
 
 #endif

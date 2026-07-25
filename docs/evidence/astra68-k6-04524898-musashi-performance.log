@@ -1,0 +1,151 @@
+make: Entering directory '/tmp/astra68-k6-04524898-final/emu'
+rustup run 1.97.0 cargo run --release -p astravm-machine --example soak -- \
+	/tmp/astra68-k6-04524898-soak/astra_boot.bin 1000 675000000
+   Compiling find-msvc-tools v0.1.9
+   Compiling shlex v2.0.1
+   Compiling cc v1.2.67
+   Compiling astravm-machine v0.1.0 (/tmp/astra68-k6-04524898-final/emu/crates/astravm-machine)
+    Finished `release` profile [optimized] target(s) in 9.82s
+     Running `target/release/examples/soak /tmp/astra68-k6-04524898-soak/astra_boot.bin 1000 675000000`
+soak progress=1/1000 cycles=21750263 wall=0.171s
+soak progress=10/1000 cycles=28000333 wall=0.240s
+soak progress=100/1000 cycles=79251046 wall=0.815s
+soak progress=1000/1000 cycles=579507730 wall=6.440s
+ASTRA 68 SYSTEM ROM v0.3
+Built: 2026-07-24T20:22:57Z  Git: 0208cb516801fe452bf59ef053d6daa0a118ee7e-dirty-04524898314d
+
+Vesta:  v1.0
+CPU:    TG68K.C 68030 MMU2 @ 12500000 Hz
+MMU:    integrated 68030 PMMU
+RAM:    32 MiB @ 0x02000000
+ROM:    256 KiB @ 0xFFE00000
+BUILD:  0x18EBE2E1
+Chips:  VSTA v1.0, ASTR v1.0, VEGA v1.0
+NVRAM:  not present; defaults active
+
+POST
+  SDRAM init ........ OK
+  Front panel ....... OK
+  Data/byte lanes .... OK
+  Address lines ...... OK
+  Cache coherence .... OK
+  CPU BRAM cycles (256 bytes payload)
+    8-bit  write=5139 read=7688
+    16-bit write=2067 read=2574
+    32-bit write=1299 read=1294
+  CPU memory cycles (16384 bytes payload)
+    8-bit  write=229393 read=294922
+      write dmiss=0 rdreq=0 wrreq=0 wait=0 lhit=0 lmiss=0 post=0
+      read  dmiss=0 rdreq=0 wrreq=0 wait=0 lhit=0 lmiss=0 post=0
+      hot read=294927
+    16-bit write=114696 read=147466
+      write dmiss=0 rdreq=0 wrreq=0 wait=0 lhit=0 lmiss=0 post=0
+      read  dmiss=0 rdreq=0 wrreq=0 wait=0 lhit=0 lmiss=0 post=0
+      hot read=147471
+    32-bit write=65544 read=65549
+      write dmiss=0 rdreq=0 wrreq=0 wait=0 lhit=0 lmiss=0 post=0
+      read  dmiss=0 rdreq=0 wrreq=0 wait=0 lhit=0 lmiss=0 post=0
+      hot read=65551
+  Astraea DMA (64 KiB)
+    fill=102 copy=102
+  Full-range BIST ... [W................................R................................W................................R................................] OK
+
+POST PASS
+  Kernel image ...... OK
+Starting Axiom kernel
+AXIOM KERNEL v0.1.0-dev
+Built: 2026-07-24T20:22:57Z
+Git:   0208cb516801fe452bf59ef053d6daa0a118ee7e-dirty-04524898314d
+
+BootInfo ........... OK
+Early log .......... OK @ 0x02000000
+VBR ................ OK @ 0x02010400
+Kernel image ....... 59236 bytes @ 0x02010000
+CPU ................ MC68030 @ 12500000 Hz
+PMMU ............... enabled, SRP 0x02004000
+Physical pages ..... 7992 free / 8192 total
+User copy .......... OK, fault recovery verified
+Kernel worker ...... OK, guarded MSP
+Thread ISPs ........ 16 guarded, 8 KiB each
+Vesta timer ........ OK, one-shot 5 ms
+AstraHost runtime ... not present
+K1 soak ............. armed, baseline 7986 pages
+User processes ...... 2 ready, cache isolation armed
+User threads ........ 3 ready, priority scheduler armed
+
+User tasks .......... OK, 5 ms one-shot quantum
+Fault containment ... OK, offender reaped
+Context switches .... 26
+Thread scheduler .... 2 live, priority queues OK
+Same-CRP switches ... 13
+Wait/wake ........... 11 blocks, 5 wake, 5 priority handoff
+Deadlines ........... 2 expired, 1 priority handoff
+Sync objects ........ 4 event, 1 sem; cancel/close/death 1/1/1
+Thread ISP max ...... 944 / 8192 bytes
+Thread lifecycle .... 2 exit, 3 waits, 2 reaped
+Wait multiple ....... 7 calls, 4 block, 4 wake; max 2 members
+Wait registrations .. 1 live, 3 max
+Waitable timers ..... 1 created, 1 armed, 1 expired
+Process death ....... 1 waits, 0 blocked wakes
+K2 PERF irq syscall=19847/50000 timer=13948/50000 fault=16358/125000
+K2 PERF sched pick=776/10000 same=1379/15000 cross=1666/50000
+K2 PERF wait block=2837/15000 wake=4355/15000 overruns=0
+K3 PERF deadline expire=6041/20000 overruns=0
+K5 PERF thread create=73210/150000 exit=13040/50000 reap=19526/125000 overruns=0
+K6 PERF wait-set block=3690/50000 wake=5545/50000 overruns=0
+K2 PERFORMANCE PASS
+
+K6 BOUNDED WAIT-MULTIPLE PASS
+
+K5 THREAD LIFECYCLE PASS
+
+K4 HANDLE SYNCHRONIZATION PASS
+
+K3 ONE-SHOT SCHEDULER PASS
+
+K3 DEADLINE QUEUE PASS
+
+K2 BLOCKING SUBSTRATE PASS
+
+K2 THREAD SUBSTRATE PASS
+
+K1 PROTECTED ENTRY PASS
+KERNEL MULTITASKING
+K1 LATENCY user_fault_irqoff_max=16016 cycles
+K1 SOAK cycles=1 switches=26 ticks=19 syscalls=0x0000000000000074 free=7986 elapsed_cycles=0x00000000005DC015
+K2 PERF irq syscall=19847/50000 timer=13948/50000 fault=16358/125000
+K2 PERF sched pick=776/10000 same=1379/15000 cross=1666/50000
+K2 PERF wait block=2837/15000 wake=4355/15000 overruns=0
+K3 PERF deadline expire=6041/20000 overruns=0
+K5 PERF thread create=73210/150000 exit=13040/50000 reap=19526/125000 overruns=0
+K6 PERF wait-set block=3690/50000 wake=5545/50000 overruns=0
+K2 PERFORMANCE SOAK PASS cycle=1
+K1 LATENCY user_fault_irqoff_max=16016 cycles
+K1 SOAK cycles=10 switches=44 ticks=58 syscalls=0x000000000000016E free=7986 elapsed_cycles=0x0000000000BDF12B
+K2 PERF irq syscall=19847/50000 timer=13948/50000 fault=16358/125000
+K2 PERF sched pick=776/10000 same=1379/15000 cross=1666/50000
+K2 PERF wait block=2837/15000 wake=4355/15000 overruns=0
+K3 PERF deadline expire=6041/20000 overruns=0
+K5 PERF thread create=73210/150000 exit=13040/50000 reap=19526/125000 overruns=0
+K6 PERF wait-set block=3690/50000 wake=5545/50000 overruns=0
+K2 PERFORMANCE SOAK PASS cycle=10
+K1 LATENCY user_fault_irqoff_max=16016 cycles
+K1 SOAK cycles=100 switches=224 ticks=396 syscalls=0x0000000000000B44 free=7986 elapsed_cycles=0x0000000003CB3801
+K2 PERF irq syscall=19847/50000 timer=13948/50000 fault=16358/125000
+K2 PERF sched pick=776/10000 same=1379/15000 cross=1666/50000
+K2 PERF wait block=2837/15000 wake=4355/15000 overruns=0
+K3 PERF deadline expire=6041/20000 overruns=0
+K5 PERF thread create=73210/150000 exit=13040/50000 reap=19526/125000 overruns=0
+K6 PERF wait-set block=3690/50000 wake=5545/50000 overruns=0
+K2 PERFORMANCE SOAK PASS cycle=100
+K1 LATENCY user_fault_irqoff_max=16016 cycles
+K1 SOAK cycles=1000 switches=2024 ticks=3730 syscalls=0x0000000000006DA0 free=7986 elapsed_cycles=0x00000000219AD546
+K2 PERF irq syscall=19847/50000 timer=13948/50000 fault=16358/125000
+K2 PERF sched pick=776/10000 same=1379/15000 cross=1666/50000
+K2 PERF wait block=2837/15000 wake=4355/15000 overruns=0
+K3 PERF deadline expire=6041/20000 overruns=0
+K5 PERF thread create=73210/150000 exit=13040/50000 reap=19526/125000 overruns=0
+K6 PERF wait-set block=3690/50000 wake=5545/50000 overruns=0
+K2 PERFORMANCE SOAK PASS cycle=1000
+backend=MUSASHI 68030 / REAL ROM cycles=579507730 pc=0x02012782 build=0x18EBE2E1 soak=1000/1000
+make: Leaving directory '/tmp/astra68-k6-04524898-final/emu'

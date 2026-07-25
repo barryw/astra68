@@ -25,12 +25,16 @@
 #define KERNEL_SYNC_RIGHTS \
     (KERNEL_SYNC_RIGHT_QUERY | KERNEL_SYNC_RIGHT_SIGNAL | \
      KERNEL_SYNC_RIGHT_WAIT | KERNEL_SYNC_RIGHT_ADMINISTER)
+#define KERNEL_TIMER_RIGHTS \
+    (KERNEL_SYNC_RIGHT_QUERY | KERNEL_SYNC_RIGHT_WAIT | \
+     KERNEL_SYNC_RIGHT_ADMINISTER)
 
 typedef enum KernelSyncType {
     KERNEL_SYNC_NONE = 0,
     KERNEL_SYNC_EVENT_AUTO,
     KERNEL_SYNC_EVENT_MANUAL,
-    KERNEL_SYNC_SEMAPHORE
+    KERNEL_SYNC_SEMAPHORE,
+    KERNEL_SYNC_TIMER
 } KernelSyncType;
 
 typedef enum KernelSyncState {
@@ -61,6 +65,8 @@ typedef struct KernelSyncSnapshot {
     uint32_t count;
     uint32_t maximum;
     uint32_t close_result;
+    uint32_t deadline_high;
+    uint32_t deadline_low;
     uint16_t references;
     uint16_t waiters;
     uint8_t type;
@@ -71,6 +77,7 @@ typedef struct KernelSyncSnapshot {
 typedef struct KernelSyncPoolStats {
     uint32_t created_events;
     uint32_t created_semaphores;
+    uint32_t created_timers;
     uint32_t live_objects;
     uint32_t closing_objects;
     uint32_t max_live_objects;
@@ -87,6 +94,12 @@ typedef struct KernelSyncPoolStats {
     uint32_t signal_wakeups;
     uint32_t close_wakeups;
     uint32_t max_waiters;
+    uint32_t timer_arms;
+    uint32_t timer_cancellations;
+    uint32_t timer_expirations;
+    uint32_t timer_wakeups;
+    uint32_t armed_timers;
+    uint32_t max_armed_timers;
 } KernelSyncPoolStats;
 
 void kernel_sync_pool_init(void);
@@ -96,9 +109,14 @@ KernelSyncStatus kernel_sync_create_semaphore(uint32_t owner,
                                               uint32_t initial_count,
                                               uint32_t maximum_count,
                                               KernelSyncObject **object);
+KernelSyncStatus kernel_sync_create_timer(uint32_t owner,
+                                          KernelSyncObject **object);
 KernelSyncStatus kernel_sync_retain(KernelSyncObject *object);
 void kernel_sync_handle_release(void *object, void *context);
 void kernel_sync_abandon_unpublished(KernelSyncObject *object);
+KernelSyncStatus kernel_sync_prepare_wait(KernelSyncObject *object,
+                                          KernelThreadWaitSpec *spec);
+KernelSyncStatus kernel_sync_commit_wait(KernelSyncObject *object);
 KernelSyncStatus kernel_sync_wait(KernelSyncObject *object,
                                   KernelThread *thread, uint64_t now,
                                   uint64_t deadline,
@@ -108,6 +126,16 @@ KernelSyncStatus kernel_sync_signal(KernelSyncObject *object,
                                     uint32_t wake_result,
                                     uint32_t *woken_threads);
 KernelSyncStatus kernel_sync_reset(KernelSyncObject *object);
+KernelSyncStatus kernel_sync_timer_set(KernelSyncObject *object,
+                                       uint64_t now, uint64_t deadline,
+                                       uint32_t *woken_threads);
+KernelSyncStatus kernel_sync_timer_cancel(KernelSyncObject *object,
+                                          uint32_t wake_result,
+                                          uint32_t *woken_threads);
+KernelSyncStatus kernel_sync_expire_timers(uint64_t now,
+                                           uint32_t *expired_timers,
+                                           uint32_t *woken_threads);
+bool kernel_sync_next_timer_deadline(uint64_t *deadline);
 KernelSyncStatus kernel_sync_owner_died(uint32_t owner,
                                        uint32_t wake_result,
                                        uint32_t *closed_objects,
@@ -115,6 +143,7 @@ KernelSyncStatus kernel_sync_owner_died(uint32_t owner,
 uint32_t kernel_sync_terminal_result(const KernelSyncObject *object);
 bool kernel_sync_snapshot(uint32_t slot, KernelSyncSnapshot *snapshot);
 bool kernel_sync_pool_stats(KernelSyncPoolStats *stats);
+bool kernel_sync_pool_healthy(void);
 bool kernel_sync_pool_valid(void);
 
 #endif

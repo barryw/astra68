@@ -27,6 +27,10 @@ KernelDispatchTarget kernel_syscall_entry_dispatch(
 KernelDispatchTarget kernel_timer_entry_dispatch(
     const uint32_t *registers, const void *raw_frame, uint32_t user_stack);
 uint32_t kernel_dispatch_user_fault_irqoff_max_cycles(void);
+uint32_t kernel_dispatch_syscall_max_number(void);
+uint32_t kernel_dispatch_syscall_max_body_cycles(void);
+uint32_t kernel_dispatch_wait_set_trace_count(void);
+uint32_t kernel_dispatch_wait_set_trace_cycles(uint32_t index);
 uint32_t kernel_dispatch_last_supervisor_irq_pc(void);
 uint16_t kernel_dispatch_last_supervisor_irq_sr(void);
 

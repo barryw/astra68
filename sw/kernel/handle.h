@@ -13,7 +13,8 @@ typedef enum KernelObjectType {
     KERNEL_OBJECT_PROCESS = 1,
     KERNEL_OBJECT_THREAD = 2,
     KERNEL_OBJECT_SYNC = 3,
-    KERNEL_OBJECT_DEVICE = 4
+    KERNEL_OBJECT_DEVICE = 4,
+    KERNEL_OBJECT_TIMER = 5
 } KernelObjectType;
 
 typedef enum KernelHandleStatus {
@@ -54,6 +55,11 @@ KernelHandleStatus kernel_handle_lookup(const KernelHandleTable *table,
                                         KernelObjectType required_type,
                                         uint32_t required_rights,
                                         void **object);
+KernelHandleStatus kernel_handle_lookup_any(const KernelHandleTable *table,
+                                            KernelHandle handle,
+                                            uint32_t required_rights,
+                                            KernelObjectType *type,
+                                            void **object);
 KernelHandleStatus kernel_handle_close(KernelHandleTable *table,
                                        KernelHandle handle);
 uint32_t kernel_handle_close_all(KernelHandleTable *table);

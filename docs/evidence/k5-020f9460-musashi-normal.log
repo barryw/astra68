@@ -1,0 +1,39 @@
+Script started on 2026-07-24 21:56:26+00:00 [COMMAND="make -C /tmp/astra68-k5-c481c115-p1/emu kernel ROM=/tmp/astra68-k5-c481c115-p1/sw/boot/astra_boot.bin" <not executed on terminal>]
+make: Entering directory '/tmp/astra68-k5-c481c115-p1/emu'
+rustup run 1.97.0 cargo run -p astravm-machine --example kernel -- /tmp/astra68-k5-c481c115-p1/sw/boot/astra_boot.bin
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running `target/debug/examples/kernel /tmp/astra68-k5-c481c115-p1/sw/boot/astra_boot.bin`
+
+
+  Deadlines ........... 1 expired, 1 priority handoff
+  Sync objects ........ 4 event, 1 sem; cancel/close/death 1/1/1
+  Thread ISP max ...... 556 / 8192 bytes
+  Thread lifecycle .... 1 exit, 2 waits, 1 reaped
+  K2 PERF irq syscall=25095/50000 timer=12509/50000 fault=27968/125000
+  K2 PERF sched pick=768/10000 same=1268/15000 cross=1573/50000
+  K2 PERF wait block=1215/15000 wake=1770/15000 overruns=0
+  K3 PERF deadline expire=3624/20000 overruns=0
+  K5 PERF thread create=88997/150000 exit=7038/50000 reap=33748/125000 overruns=0
+  K2 PERFORMANCE PASS
+
+  K5 THREAD LIFECYCLE PASS
+
+  K4 HANDLE SYNCHRONIZATION PASS
+
+  K3 ONE-SHOT SCHEDULER PASS
+
+  K3 DEADLINE QUEUE PASS
+
+  K2 BLOCKING SUBSTRATE PASS
+
+  K2 THREAD SUBSTRATE PASS
+
+  K1 PROTECTED ENTRY PASS
+  KERNEL MULTITASKING
+
+
+
+backend=MUSASHI 68030 / REAL ROM cycles=20000294 pc=0x0201713E build=0x18EBE2E1 scratch=0x4B314F4B
+make: Leaving directory '/tmp/astra68-k5-c481c115-p1/emu'
+
+Script done on 2026-07-24 21:56:28+00:00 [COMMAND_EXIT_CODE="0"]

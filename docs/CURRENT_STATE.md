@@ -5,11 +5,22 @@ and validated boundaries that are easy to lose across long sessions. Detailed
 contracts remain authoritative in the linked documents; historical handovers
 and old resource tables are not current status.
 
+The platform is **Astra 68**, its kernel is **Axiom**, and the complete
+user-facing system is **Astra OS**. The Astra NDK is the stable developer
+surface; Axiom's internal interfaces are not a module ABI.
+
 The kernel's normative implementation contracts are
 `KERNEL_ARCHITECTURE.md`, `MEMORY_MAP_AND_PMMU.md`, `ABI.md`,
 `LOCKING_AND_PREEMPTION.md`, `RESOURCE_OWNERSHIP_AND_FAILURES.md`,
 `MEMORY_BUDGET.md`, and `TEST_AND_FAULT_INJECTION_PLAN.md`; `STATUS.md`
 separates implemented evidence from planned work.
+
+The product-level operating-system direction is `OS_VISION.md`. Focused but
+unimplemented userspace design lives in `USERSPACE_ARCHITECTURE.md`,
+`DESKTOP_AND_UI.md`, `TERMINAL_AND_POSIX.md`,
+`APPLICATION_AND_KIT_MODEL.md`, `USERSPACE_BUDGET.md`, and
+`RESOURCE_MODEL.md`. These are not evidence that services, a desktop, a POSIX
+personality, zsh, or Vim currently run.
 
 ## Locked architecture
 
@@ -23,16 +34,14 @@ separates implemented evidence from planned work.
   claim. SCC elimination, shared conformance, boot, SDRAM, and retained hardware
   tests pass substantial coverage. The previously open PMMU restart and
   fault-on-stacking cases now pass shared and focused RTL simulation. Exact
-  candidate `F4DC1E18` is committed, fully simulated, timing-clean, and passes
-  repeated SRAM-loaded board boots. Its hardware-profile coretest also passes
+  candidate `F4DC1E18` remains historical evidence. K-HW3 now asserts RMC for
+  the exact non-idle walker lifetime; K-HW4 snapshots Vesta's IACK result for
+  the full CPU transaction and gives timer restart/expiry races a deterministic
+  contract. Both deltas pass directed simulation and are integrated into exact
+  production build `25D9CB8E`, which is fully routed without timing waivers and
+  repeatedly qualified on ULX3S. Its hardware-profile coretest also passes
   translated reads/writes, invalid-descriptor fault recovery, and write
-  protection on the ULX3S. A subsequent K-HW3 source delta now asserts RMC for
-  the exact non-idle walker lifetime and passes wrapper, CDC, and adversarial
-  SDRAM-arbiter simulation. A grouped K-HW4 delta also snapshots Vesta's IACK
-  result for the full CPU transaction and gives timer restart/expiry races a
-  deterministic contract with directed dual-simulator coverage. Neither delta
-  is part of routed `F4DC1E18`, so a new full route and board qualification
-  remain mandatory.
+  protection.
 - Portable CPU/PMMU expectations live in `conformance/` and run through the
   canonical Musashi and RTL adapters. Do not create separate expected results
   in an adapter. White-box RTL tests remain complementary for implementation
@@ -56,9 +65,42 @@ separates implemented evidence from planned work.
   transaction uses AstraHost SPI. UART is not a fallback transport. The FPGA
   FTDI diagnostic UART and ESP32's own logging console are independent and may
   be used for POST and bring-up.
+- Production audio is assigned to the ESP/AstraHost side and will use the same
+  versioned SPI transport. No audio service is implemented yet. Lyra is not
+  instantiated or advertised; `0xFFF30000` remains reserved, and `LYRA.md` plus
+  `sw/include/lyra.h` are dormant proposal/reference material only.
 - CPU-visible MMIO assignments are centralized in
   [MEMORY_MAP.md](MEMORY_MAP.md). Software uses NDK interfaces and resource
   ownership rather than baking register addresses into applications.
+
+## Userspace design direction
+
+- Astra OS is GUI-first with a first-class terminal and development
+  environment. It takes the Amiga's immediacy, compactness, visible resources,
+  message-oriented consistency, and hardware/software fit as inspiration while
+  retaining protected address spaces, preemption, bounded services, typed
+  handles, and process-level fault containment.
+- The native application model remains explicit-spawn, capability-based, and
+  service-oriented. A userspace POSIX personality is the planned compatibility
+  route for upstream zsh and Vim; Unix file descriptors, signals, process
+  groups, and `fork()` do not become the native kernel identity. The exact
+  process-clone mechanism is still open and requires a `KERNEL_SPEC.md`
+  decision before implementation.
+- The planned desktop uses a protected display/compositor service, off-screen
+  application surfaces, hardware blits/glyphs, fenced vblank presentation,
+  one pointer sprite while the workspace is active, and protected fullscreen
+  Scenes. The first userspace acceptance slice is a responsive workspace and
+  terminal that survive an unrelated process hang/crash.
+- Vega's production contract is exactly 16 sprites with framebuffer X/Y
+  scrolling and no tile layers. This reduction from the earlier 32-sprite/tile
+  draft was required to fit and route the complete ULX3S design. The draft NDK
+  graphics API in `ndk/include/astra/graphics.h` still advertises 32 sprites and
+  tile objects; it is stale and must be reconciled with Vega v0.5 before any OS
+  graphics ABI is published.
+- Small binaries, shared immutable Kits after ABI stabilization, bounded
+  service count, and continuous size/launch/resident-memory measurement are
+  product requirements. `USERSPACE_BUDGET.md` records provisional first
+  envelopes; no userspace measurement has yet validated them.
 
 ## Hardware and build topology
 
@@ -67,15 +109,18 @@ separates implemented evidence from planned work.
   there. Do not probe Beast or the Mac for the board.
 - Beast is the primary high-throughput synthesis/simulation host. The Mac and
   NUC are useful for independent placement/router coverage. Transfer immutable
-  artifacts with `rsync`; access remotes through `ssh`.
+  artifacts with `rtk proxy rsync`; access remotes through `rtk proxy ssh`.
 - Do not treat `/home/barry/astra68` on either remote as a clean canonical
   checkout. On 2026-07-15 NUC's copy was a dirty historical `harte-harness`
   branch, and Beast's path was not a Git worktree. Do not pull, reset, clean, or
   release from either path. Build and test pushed `main` from a fresh immutable
   `/tmp/astra68-<checkpoint>` bundle, and keep the older remote state intact.
-- Beast has the intended GCC, m68k cross compiler, GHDL/OSS CAD, and static
-  analyzer, but its system Python lacks `pytest` and it has no Docker. Run
-  shared architecture and Harte targets directly there when appropriate. The
+- Beast has the intended GCC, m68k cross compiler, OSS CAD, and static
+  analyzer, but its GHDL binary is not on the non-login SSH path. Prefix that
+  path with `/home/barry/oss-cad-suite-install/oss-cad-suite/bin`; its system
+  Python still lacks `pytest` and it has no Docker. NUC provides both GHDL at
+  `/home/barry/oss-cad-suite/bin` and `pytest`, and is the verified host for the
+  complete shared architecture/Harte target. The
   Mac has Homebrew `m68k-elf-gcc` 16.1.0. Shared Makefile detection selects
   `m68k-elf-` there and `m68k-linux-gnu-` on Linux while preserving explicit
   `CROSS=...` overrides. Beast's Linux cross compiler remains the canonical
@@ -104,48 +149,124 @@ separates implemented evidence from planned work.
 
 ## Current integration state
 
-- The active K4 synchronization checkpoint is qualified from exact source
-  `662aa04ef807d6c74ea1a8d0c3a95b8eb78931e7`; the implementation landed in
-  `4a878c9095213d9009e3ad6eeca85ebac3d7c936` and the later source delta adds
-  exact K4 RTL and hardware acceptance only. The immutable qualification
+- The hardware-qualified K6 bounded wait-multiple release is based on commit
+  `0208cb516801fe452bf59ef053d6daa0a118ee7e` plus implementation patch
+  SHA-256
+  `04524898314df4adebfe5091a183f2130e7c8bf98a3dd7a7d97e01b5b1fe1505`.
+  The exact source identity is
+  `0208cb516801fe452bf59ef053d6daa0a118ee7e-dirty-04524898314d`; its source
   archive SHA-256 is
-  `ee06971a5239d890ea9e157ae46638bdefa94d3eb86c13656e1aaeedf00d6fe3`.
-  K4 replaces the private event
-  qualifier with public generation-safe event and semaphore handles carrying
-  explicit wait/signal rights. Waits use absolute monotonic nanosecond
-  deadlines and arbitrate signal, timeout, cancellation, close, and owner death
-  exactly once through the existing per-thread wait link and 16-entry deadline
-  heap. The implementation has 32 fixed 36-byte objects, an eight-object owner
-  quota, at most 16 global waiters, no wait-path allocation, priority/FIFO wake
-  ordering, and immediate higher-priority handoff.
+  `bb8da75c784cfd5f5f696abb6d4eb5057c75c9c30593c8e277c7b897d8be30d6`.
+  K6 adds one allocation-free `WAIT_MULTIPLE` over
+  1-16 events, semaphores, timers, thread-death objects, and process-death
+  objects. It completely prevalidates the set, uses fixed per-thread
+  registrations and one existing deadline, selects the lowest ready input
+  index deterministically, permits duplicate descriptors, and removes every
+  losing registration exactly once. Signal, expiry, timeout, cancellation,
+  final close, thread/process death, and owner teardown share one completion
+  owner. There are no helper threads or wait-path allocations.
+
+  One-shot timers occupy the existing fixed 32-object pool and a fixed
+  deterministic timer heap. Set/rearm, immediate expiry, cancellation, close,
+  and owner death are bounded. Process objects now have generation-safe
+  handles, explicit rights, retained 32-bit exit detail, level-triggered death
+  readiness, self-wait rejection, and prestart-only bootstrap grants. Current
+  m68k structure sizes are 472 bytes/process, 172 bytes/thread, and 36
+  bytes/synchronization object. The hard limits remain 4 processes, 16 global
+  threads, 16 handles/process, 16 wait-set members, 32 shared synchronization
+  objects, and 32 timer-heap entries.
+
+  All 17 host suites, GCC `-fanalyzer`, ASan/UBSan/leak checks, NDK host and
+  MC68030 gates, generated HTML/PDF documentation, Rustfmt, Clippy
+  `-D warnings`, all 15 Rust tests, all 90 shared tests, all 30 adapter
+  executions, both Harte smoke adapters, and directed Vesta IRQ/timer tests
+  pass. Normal Musashi reaches every K1-K6 marker and the exact 1,000-iteration
+  workload completes in 579,507,730 virtual cycles against the fixed
+  675,000,000 cap with 7,986 free pages and zero overruns. A fresh full-SoC
+  Verilator/pin-level SDRAM run passes 64 KiB BIST at 115.04 MB/s, PMMU
+  isolation, exact K6 counters, all K1-K6 markers, and all fourteen cycle
+  budgets. Wait-set block/wake maxima are 6,259/50,000 and 10,049/50,000
+  cycles.
+
+  An intermediate RTL checkpoint exposed a 62,069-cycle final-handle close.
+  The cause was an exhaustive all-process/all-handle validator accidentally
+  left in the production hot path. The retained implementation uses O(1)
+  corruption latches in production while keeping exhaustive validation in
+  host, maintenance, and milestone checks. The final 57,412-byte kernel has
+  SHA-256
+  `17476aa268db37dde0e066f4cc0799848bc0024ae12bba809ec8cffedf84f425`.
+  The 68,860-byte boot payload has CRC32 `80B0364C`; the 68,892-byte package
+  SHA-256 is
+  `7073b6f5501f9821d32f2d317fd0adb709e03959b4091bc07ae38a14fc82a8d8`.
+
+  NUC mounted the existing 244,016 MB card without formatting, changed only
+  `/ASTRA68.ROM`, and restored normal read-only AstraHost. Two independent
+  loads of unchanged production bitstream `25D9CB8E` pass full 32 MiB
+  POST/BIST, PMMU/user-copy isolation, exact K6 counts, every K1-K6 marker,
+  all fourteen cycle gates, and zero overruns. Run 1 measures wait-set
+  block/wake at 6,267/10,045 cycles; run 2 measures 6,254/10,041. FPGA RTL,
+  resources, route, clocks, persistent flash, and bitstream SHA-256 remain
+  unchanged. K6 is the current release checkpoint; K5 is its rollback.
+
+  The next kernel milestone is Axiom K7: bounded small-message ports and
+  atomic generation-safe handle transfer on top of wait-multiple. Queue count
+  and byte caps, backpressure, absolute deadlines, cancellation, peer death,
+  exact ownership charging, and transfer commit/rollback must be specified and
+  host-tested before target implementation. Bulk payloads remain deferred to
+  shared areas rather than being copied through ports.
+- The hardware-qualified K5 thread-lifecycle predecessor is based on commit
+  `0208cb516801fe452bf59ef053d6daa0a118ee7e` plus qualified implementation
+  patch SHA-256
+  `1a234d1e5099e31f11e0288bc3e0e40e499fc31de1d6c1333a2138a25aa79e41`.
+  The exact ROM identity is
+  `0208cb516801fe452bf59ef053d6daa0a118ee7e-dirty-1a234d1e5099`. K5 adds
+  bounded transactional `THREAD_CREATE`, caller-only `THREAD_EXIT`, and
+  level-triggered thread-death `WAIT_ONE` to the K4 synchronization base. A
+  live thread owns one zeroed 4 KiB user-stack frame, one unmapped logical
+  guard, one fixed guarded 8 KiB supervisor stack, one 180-byte thread record,
+  and one process-local generation-safe handle. A dead thread's user mapping is
+  reclaimed by the guarded worker; its record and supervisor slot remain only
+  while an open handle makes the exit status observable. Exit, timeout,
+  cancellation, final close, and process death complete a death wait exactly
+  once. There is no asynchronous thread kill.
+
+  Thread creation is split into interruptible preparation and a no-allocation
+  commit. Publication, ready-queue insertion, and process/scheduler accounting
+  occur together with interrupts masked. Final audit superseded patch
+  `020f9460a270...`: its syscall enabled interrupts while publishing, allowing
+  a nested supervisor timer to enqueue another thread into the same intrusive
+  queue. A deterministic host test injects that timer at the last possible
+  enable-to-disable boundary and proves both enqueue operations survive.
 
   All 17 host suites pass normally, under GCC `-fanalyzer`, and under
-  ASan/UBSan/leak checks. NDK host, sanitizer, analyzer, m68k library/example,
-  and canonical kernel/ROM verification gates pass. The exact normal Musashi
-  boot reaches every K1-K4 marker in 19,000,216 virtual cycles. The exact
-  1,000-cycle workload finishes in 622,507,501 cycles under the unchanged
-  675,000,000 cap, retains the 7,986-page baseline, and reports zero hot-path
-  overruns. Exact hardware-profile artifacts are a 44,740-byte kernel with
-  SHA-256
-  `11c2ed31ca5caf07dcfbd87cf354f6ce7be3eb1873cef412b65a6821940fb91c`
-  and a 56,152-byte boot payload with CRC32 `2F9B149C` and SHA-256
-  `15f713f45e5e8b1eec1bf9820759e915186b70339d3704c0e0771d35df47e588`;
-  the 56,184-byte ROM
-  package SHA-256 is
-  `14f4f980ebeb3fed099ac44d3035e6a1d6f1b2aa354b87bd208c468eb1b66c28`.
+  ASan/UBSan/leak checks. NDK checks, all 15 Rust tests, rustfmt, Clippy, all 90
+  shared tests, all 30 Musashi/RTL executions, and both Harte smoke adapters
+  pass. A forced clean MC68030 build produces and verifies the qualified
+  artifacts. Exact
+  normal Musashi reaches all K1-K5 markers in 20,000,212 cycles. Its
+  1,000-cycle workload completes in 600,506,981 cycles under the fixed
+  675,000,000 cap, retains exactly 7,986 free pages, and has zero overruns.
+  Exact artifacts are a 48,420-byte kernel with SHA-256
+  `260bbcf82fbf955cee42d5798054e6d6549daa8921462d7216a241a685095e03`,
+  a 59,804-byte payload with CRC32 `11BE3620` and SHA-256
+  `8dec0a9ae9ce03f19d5be8c5e8f016dc52684d53828e5acf849a4e76f992527c`,
+  and a 59,836-byte package with SHA-256
+  `6f4c3376597884ac1ff1d544a62b3af97b2e8502731b751eae964fc598d6bdb9`.
+  The package hash was verified after transfer to both Mac and NUC.
 
-  The exact pin-level RTL/SDRAM model passes the intentional 64 KiB simulated
-  BIST and every K1-K4 marker in 266.959 seconds. It reports the exact K4
-  lifecycle counts, a 6,164/20,000-cycle deadline maximum, and zero overruns.
-  NUC preserved the existing 244,016 MB card, replaced only `/ASTRA68.ROM`,
-  independently verified the installed file, and restored read-only
-  AstraHost. Two independent volatile loads of production FPGA build
-  `25D9CB8E` pass exact ROM CRC32 `2F9B149C`, real 32 MiB BIST, PMMU/user-copy
-  isolation, all K4 lifecycle and handoff checks, every K1-K4 marker, and every
-  performance gate with zero overruns. K4 is now the hardware-qualified kernel
-  checkpoint; K3 remains its rollback point. This software-only promotion did
-  not synthesize, place, route, pack, or rewrite FPGA flash, so resources,
-  clocks, and persistent FPGA build `25D9CB8E` are unchanged.
+  The fresh pin-level Verilator 5.047 run passes 64 KiB BIST at 115.04 MB/s,
+  every K1-K5 marker, and all cycle gates in 296.331 seconds;
+  create/exit/reap measure 137,193/14,804/47,560 cycles. NUC preserved the
+  existing SD contents, changed only `/ASTRA68.ROM`, and restored a freshly
+  built read-only AstraHost. Two independent volatile loads of exact build
+  `25D9CB8E` pass CRC32 `11BE3620`, full physical 32 MiB POST/BIST,
+  PMMU/user-copy isolation, exact K5 lifecycle counts, every K1-K5 marker, and
+  all twelve performance gates with zero overruns. Run 1 measures
+  137,107/14,816/47,534 lifecycle cycles; run 2 measures
+  137,101/14,812/47,534. K4 is the rollback checkpoint. K5 changes production
+  software and acceptance only: SoC synthesis, placement, routing, resources,
+  constrained clocks, persistent FPGA flash, and bitstream SHA-256 remain
+  unchanged. It is the K6 rollback checkpoint.
 - The hardware-qualified K3 predecessor is represented on `main` by
   `3787d820e1140f49ba31623ccc578bb274a631cc`. Its retained target artifact was
   developed from `8929c063cdd24c8f4f526be330549e2eb5038fc8-dirty`, retains the K2

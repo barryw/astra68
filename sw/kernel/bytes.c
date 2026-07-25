@@ -48,6 +48,25 @@ void kernel_bytes_clear(void *destination, uint32_t size)
         *bytes++ = 0u;
 }
 
+void kernel_words_fill(volatile uint32_t *destination,
+                       uint32_t word_count, uint32_t value)
+{
+    while (word_count >= 8u) {
+        destination[0] = value;
+        destination[1] = value;
+        destination[2] = value;
+        destination[3] = value;
+        destination[4] = value;
+        destination[5] = value;
+        destination[6] = value;
+        destination[7] = value;
+        destination += 8;
+        word_count -= 8u;
+    }
+    while (word_count-- != 0u)
+        *destination++ = value;
+}
+
 static void copy_words(KernelBytesWord **destination,
                        const KernelBytesWord **source, uint32_t *size)
 {

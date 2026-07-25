@@ -127,8 +127,8 @@ static void test_allocation_references_and_pins(void)
     make_valid_info(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
     assert(kernel_memory_stats(&before));
-    assert(kernel_memory_alloc(3u, 4u, KERNEL_FRAME_PROCESS, 42u, &base) ==
-           KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc_zeroed(3u, 4u, KERNEL_FRAME_PROCESS, 42u,
+                                      &base) == KERNEL_MEMORY_OK);
     assert((base & (4u * KERNEL_PAGE_SIZE - 1u)) == 0u);
     assert(kernel_memory_stats(&stats));
     assert(stats.free_frames == before.free_frames - 3u);
@@ -194,6 +194,32 @@ static void test_owner_teardown_is_atomic_while_dma_is_pinned(void)
     assert(frame.state == KERNEL_FRAME_FREE);
     assert(kernel_memory_frame_info(second, &frame));
     assert(frame.state == KERNEL_FRAME_FREE);
+}
+
+static void test_owner_frame_count_tracks_unique_frames(void)
+{
+    AstraBootInfo info;
+    uint32_t base;
+    uint32_t frame_count = UINT32_MAX;
+
+    make_valid_info(&info);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(!kernel_memory_owner_frames(KERNEL_OWNER_NONE, &frame_count));
+    assert(!kernel_memory_owner_frames(41u, NULL));
+    assert(kernel_memory_owner_frames(41u, &frame_count));
+    assert(frame_count == 0u);
+
+    assert(kernel_memory_alloc(3u, 1u, KERNEL_FRAME_SHARED, 41u, &base) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_memory_owner_frames(41u, &frame_count));
+    assert(frame_count == 3u);
+    assert(kernel_memory_retain(base, 3u, 41u) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_release(base, 3u, 41u) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_owner_frames(41u, &frame_count));
+    assert(frame_count == 3u);
+    assert(kernel_memory_release(base, 3u, 41u) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_owner_frames(41u, &frame_count));
+    assert(frame_count == 0u);
 }
 
 static void test_owner_release_work_scales_with_owned_frames(void)
@@ -320,6 +346,7 @@ int main(void)
     test_rejects_unclassified_and_unaligned_ram();
     test_allocation_references_and_pins();
     test_owner_teardown_is_atomic_while_dma_is_pinned();
+    test_owner_frame_count_tracks_unique_frames();
     test_owner_release_work_scales_with_owned_frames();
     test_owner_ledger_capacity_is_bounded_and_reusable();
     test_reinit_discards_stale_dynamic_metadata();

@@ -142,7 +142,9 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
     (void)user_stack;
     (void)raw_frame;
     ++syscall_calls;
-    if (registers != NULL && registers[0] == ASTRA_SYSCALL_EXIT)
+    if (registers != NULL &&
+        (registers[0] == ASTRA_SYSCALL_EXIT ||
+         registers[0] == ASTRA_SYSCALL_THREAD_EXIT))
         maintenance_pending = true;
     *next_context = syscall_result == KERNEL_PROCESS_OK ? &timer_context : NULL;
     if (syscall_result == KERNEL_PROCESS_NO_RUNNABLE)
@@ -357,6 +359,30 @@ static void test_nonexit_syscall_resumes_user(void)
     assert(worker_idle_select_calls == 0u);
 }
 
+static void test_thread_lifecycle_uses_dedicated_metrics(void)
+{
+    KernelPerformanceStats stats;
+    uint32_t registers[15] = {0u};
+    uint8_t frame[8];
+
+    reset_fakes();
+    registers[0] = ASTRA_SYSCALL_THREAD_CREATE;
+    make_frame(frame, 0x0000u, ASTRA_SYSCALL_VECTOR * 4u);
+
+    assert(kernel_syscall_entry_dispatch(registers, frame, 0x70000f80u) ==
+           kernel_dispatch_user_target(&timer_context));
+    assert(kernel_performance_stats(&stats));
+    assert(stats.metric[KERNEL_PERFORMANCE_THREAD_CREATE].samples == 1u);
+    assert(stats.metric[KERNEL_PERFORMANCE_SYSCALL_DISPATCH].samples == 0u);
+
+    registers[0] = ASTRA_SYSCALL_THREAD_EXIT;
+    assert(kernel_syscall_entry_dispatch(registers, frame, 0x70000f80u) ==
+           KERNEL_DISPATCH_WORKER);
+    assert(kernel_performance_stats(&stats));
+    assert(stats.metric[KERNEL_PERFORMANCE_THREAD_EXIT].samples == 1u);
+    assert(stats.metric[KERNEL_PERFORMANCE_SYSCALL_DISPATCH].samples == 0u);
+}
+
 static void test_last_runnable_block_selects_idle_worker(void)
 {
     uint32_t registers[15] = {0u};
@@ -387,6 +413,7 @@ int main(void)
     test_last_process_exit_selects_worker();
     test_last_process_fault_selects_worker();
     test_nonexit_syscall_resumes_user();
+    test_thread_lifecycle_uses_dedicated_metrics();
     test_last_runnable_block_selects_idle_worker();
     puts("dispatch tests passed");
     return 0;
