@@ -13,6 +13,9 @@
 #include <astra/attributes.h>
 #include <astra/types.h>
 #include <astra/resource.h>
+#include <astra/area.h>
+#include <astra/port.h>
+#include <astra/bulk_ring.h>
 #include <astra/front_panel.h>
 #include <astra/font.h>
 #include <astra/graphics.h>

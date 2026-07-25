@@ -33,6 +33,7 @@ nitpick_ignore = [
     ("c:identifier", "uint32_t"),
     ("c:identifier", "uint64_t"),
     ("c:identifier", "int32_t"),
+    ("c:identifier", "int64_t"),
 ]
 
 myst_enable_extensions = [

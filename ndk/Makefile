@@ -5,23 +5,30 @@ HOST_CC ?= cc
 ANALYZER_CC ?= gcc
 CPU_FLAGS ?= -m68030 -msoft-float
 
-CPPFLAGS := -Iinclude
+CPPFLAGS := -Iinclude -I../sw/include
 TARGET_CFLAGS := $(CPU_FLAGS) -Os -ffreestanding -fno-builtin -std=c11 \
 	-Wall -Wextra -Werror
 HOST_CFLAGS := -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST \
-	-Iinclude -Isrc/internal
+	$(CPPFLAGS) -Isrc/internal
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 
 LIB := build/m68k/libastra.a
-TARGET_OBJECTS := build/m68k/front_panel.o build/m68k/font.o \
-	build/m68k/graphics.o
+TARGET_OBJECTS := build/m68k/resource.o build/m68k/area.o \
+	build/m68k/port.o build/m68k/bulk_ring.o \
+	build/m68k/front_panel.o build/m68k/font.o build/m68k/graphics.o
 HOST_TESTS := build/host/test_front_panel build/host/test_font \
-	build/host/test_graphics
+	build/host/test_graphics build/host/test_port \
+	build/host/test_area build/host/test_bulk_ring
 SANITIZER_TESTS := build/host/test_front_panel_sanitize \
-	build/host/test_font_sanitize build/host/test_graphics_sanitize
+	build/host/test_font_sanitize build/host/test_graphics_sanitize \
+	build/host/test_port_sanitize build/host/test_area_sanitize \
+	build/host/test_bulk_ring_sanitize
 EXAMPLE_OBJECTS := build/m68k/front_panel_example.o \
-	build/m68k/font_layout_example.o build/m68k/graphics_frame_example.o
-ANALYZER_OBJECTS := build/analyzer/front_panel.o build/analyzer/font.o \
+	build/m68k/font_layout_example.o build/m68k/graphics_frame_example.o \
+	build/m68k/port_message_example.o build/m68k/bulk_ring_example.o
+ANALYZER_OBJECTS := build/analyzer/resource.o build/analyzer/area.o \
+	build/analyzer/port.o build/analyzer/bulk_ring.o \
+	build/analyzer/front_panel.o build/analyzer/font.o \
 	build/analyzer/graphics.o
 
 all: $(LIB)
@@ -46,10 +53,26 @@ build/host/test_graphics: src/graphics.c tests/test_graphics.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
 
+build/host/test_port: src/resource.c src/port.c tests/test_port.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
+
+build/host/test_area: src/resource.c src/area.c tests/test_area.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
+
+build/host/test_bulk_ring: src/resource.c src/bulk_ring.c \
+		tests/test_bulk_ring.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
+
 test: $(HOST_TESTS)
 	./build/host/test_front_panel
 	./build/host/test_font
 	./build/host/test_graphics
+	./build/host/test_port
+	./build/host/test_area
+	./build/host/test_bulk_ring
 
 build/host/test_front_panel_sanitize: src/front_panel.c tests/test_front_panel.c
 	@mkdir -p $(@D)
@@ -63,10 +86,26 @@ build/host/test_graphics_sanitize: src/graphics.c tests/test_graphics.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
 
+build/host/test_port_sanitize: src/resource.c src/port.c tests/test_port.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
+
+build/host/test_area_sanitize: src/resource.c src/area.c tests/test_area.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
+
+build/host/test_bulk_ring_sanitize: src/resource.c src/bulk_ring.c \
+		tests/test_bulk_ring.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
+
 sanitize: $(SANITIZER_TESTS)
 	./build/host/test_front_panel_sanitize
 	./build/host/test_font_sanitize
 	./build/host/test_graphics_sanitize
+	./build/host/test_port_sanitize
+	./build/host/test_area_sanitize
+	./build/host/test_bulk_ring_sanitize
 
 check: test sanitize
 

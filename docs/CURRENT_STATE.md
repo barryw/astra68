@@ -72,6 +72,13 @@ personality, zsh, or Vim currently run.
 - CPU-visible MMIO assignments are centralized in
   [MEMORY_MAP.md](MEMORY_MAP.md). Software uses NDK interfaces and resource
   ownership rather than baking register addresses into applications.
+- The locked extension policy is versioned protected user-space driver services
+  with explicit IRQ, MMIO, and bounded DMA capabilities; that service boundary
+  is not implemented yet. There is no public binary kext ABI. The rare code
+  that cannot be isolated is source-integrated, rebuilt, and qualified with
+  Axiom. Because the MC68030 PMMU cannot constrain FPGA bus masters, raw
+  user-programmed DMA remains forbidden until FPGA-enforced bounds or
+  kernel-submitted descriptors are qualified. See `KERNEL_ARCHITECTURE.md`.
 
 ## Userspace design direction
 
@@ -149,71 +156,83 @@ personality, zsh, or Vim currently run.
 
 ## Current integration state
 
-- The hardware-qualified K6 bounded wait-multiple release is based on commit
-  `0208cb516801fe452bf59ef053d6daa0a118ee7e` plus implementation patch
+- The hardware-qualified K7 bounded message-port release is based on commit
+  `1529496c168975cee0fc46c7955f98ab4a1b8d2b` plus implementation patch
   SHA-256
-  `04524898314df4adebfe5091a183f2130e7c8bf98a3dd7a7d97e01b5b1fe1505`.
+  `815347c8d094a1507b94ac5f8acb7636903d8eaf6fe8457e2f7a0d641763906e`.
   The exact source identity is
-  `0208cb516801fe452bf59ef053d6daa0a118ee7e-dirty-04524898314d`; its source
+  `1529496c168975cee0fc46c7955f98ab4a1b8d2b-dirty-815347c8d094`; its source
   archive SHA-256 is
-  `bb8da75c784cfd5f5f696abb6d4eb5057c75c9c30593c8e277c7b897d8be30d6`.
-  K6 adds one allocation-free `WAIT_MULTIPLE` over
-  1-16 events, semaphores, timers, thread-death objects, and process-death
-  objects. It completely prevalidates the set, uses fixed per-thread
-  registrations and one existing deadline, selects the lowest ready input
-  index deterministically, permits duplicate descriptors, and removes every
-  losing registration exactly once. Signal, expiry, timeout, cancellation,
-  final close, thread/process death, and owner teardown share one completion
-  owner. There are no helper threads or wait-path allocations.
+  `79965cebb6da2aefb435d655ee279cd37f8f98bb1fb1dc4ef7c5efa53ebe6e09`.
+  K7 adds 16 receiver-owned ports, 32 fixed copied-message records, and a
+  256-entry detached-authority pool. Messages are 24-280 bytes and may move up
+  to eight handles. Per-port limits are 1-8 messages and 24-2,240 bytes;
+  per-owner limits are four ports, 16 queued messages, 4,480 queued bytes, and
+  128 detached authorities. All capacity is fixed and receiver-charged.
 
-  One-shot timers occupy the existing fixed 32-object pool and a fixed
-  deterministic timer heap. Set/rearm, immediate expiry, cancellation, close,
-  and owner death are bounded. Process objects now have generation-safe
-  handles, explicit rights, retained 32-bit exit detail, level-triggered death
-  readiness, self-wait rejection, and prestart-only bootstrap grants. Current
-  m68k structure sizes are 472 bytes/process, 172 bytes/thread, and 36
-  bytes/synchronization object. The hard limits remain 4 processes, 16 global
-  threads, 16 handles/process, 16 wait-set members, 32 shared synchronization
-  objects, and 32 timer-heap entries.
+  Send and receive are transactional. Export reserves and validates every
+  source handle before one commit; failed sends preserve source authority.
+  Receive reserves hidden destination slots, completes user copyout, then
+  publishes handles and dequeues. A copy fault consumes neither the message nor
+  authority. Final receive close and owner death wake peers and release queued
+  messages exactly once. Raw syscalls are nonblocking; the NDK composes
+  blocking and absolute-deadline operations through K6 wait-multiple. The
+  failed-send sequence covers both count and byte capacity, preventing a lost
+  wake between observing backpressure and blocking.
 
-  All 17 host suites, GCC `-fanalyzer`, ASan/UBSan/leak checks, NDK host and
-  MC68030 gates, generated HTML/PDF documentation, Rustfmt, Clippy
-  `-D warnings`, all 15 Rust tests, all 90 shared tests, all 30 adapter
-  executions, both Harte smoke adapters, and directed Vesta IRQ/timer tests
-  pass. Normal Musashi reaches every K1-K6 marker and the exact 1,000-iteration
-  workload completes in 579,507,730 virtual cycles against the fixed
-  675,000,000 cap with 7,986 free pages and zero overruns. A fresh full-SoC
-  Verilator/pin-level SDRAM run passes 64 KiB BIST at 115.04 MB/s, PMMU
-  isolation, exact K6 counters, all K1-K6 markers, and all fourteen cycle
-  budgets. Wait-set block/wake maxima are 6,259/50,000 and 10,049/50,000
-  cycles.
+  Current MC68030 sizes are 472 bytes/process, 180 bytes/thread, 36
+  bytes/synchronization object, 64 bytes/port, 324 bytes/message, and 24 bytes
+  per detached authority. The incremental K7 fixed state is 17,872 bytes under
+  a 20 KiB ceiling. The hard development limits remain 4 processes, 16 global
+  threads, 16 handles/process, 16 wait-set members, 32 synchronization objects,
+  32 timer-heap entries, 16 ports, 32 queued messages, and 256 detached
+  authorities.
 
-  An intermediate RTL checkpoint exposed a 62,069-cycle final-handle close.
-  The cause was an exhaustive all-process/all-handle validator accidentally
-  left in the production hot path. The retained implementation uses O(1)
-  corruption latches in production while keeping exhaustive validation in
-  host, maintenance, and milestone checks. The final 57,412-byte kernel has
-  SHA-256
-  `17476aa268db37dde0e066f4cc0799848bc0024ae12bba809ec8cffedf84f425`.
-  The 68,860-byte boot payload has CRC32 `80B0364C`; the 68,892-byte package
+  All 18 exact host suites pass. The same implementation passes analyzers,
+  sanitizers, NDK and MC68030 builds, generated HTML/PDF documentation,
+  Rustfmt, Clippy `-D warnings`, all 15 Rust tests, all 90 shared tests, all 30
+  adapter executions, and both Harte smoke adapters. Normal Musashi reaches
+  every K1-K7 marker. The exact 1,000-iteration workload completes in
+  563,507,415 cycles against the 675,000,000 cap with 7,986 free pages and zero
+  overruns. A fresh full-SoC Verilator/pin-level SDRAM run passes 64 KiB BIST at
+  115.04 MB/s, exact K7 counters, all K1-K7 markers, and all sixteen cycle
+  budgets. Port send/receive maxima are 12,256/25,000 and 17,817/30,000 cycles.
+
+  Two rejected profiling checkpoints found exhaustive detached-pool/object
+  validation in production maintenance and a 256-entry high-water scan on
+  successful export. The retained implementation uses transition-maintained
+  O(1) live/high-water counters and corruption latches in production while
+  preserving exhaustive validators in host, maintenance-diagnostic, and
+  milestone checks. No performance budget was raised. The final 69,496-byte
+  kernel SHA-256 is
+  `4c9d3807c95a701d8e2f16f52b1321fd97c0393798656ea589e6197c9dfccd4e`.
+  The 80,944-byte boot payload has CRC32 `B124CB22`; the 80,976-byte package
   SHA-256 is
-  `7073b6f5501f9821d32f2d317fd0adb709e03959b4091bc07ae38a14fc82a8d8`.
+  `4abbc4471f8a84eaec770cab3758f27cb98e1a0768c6ef85295033834b70fd81`.
 
   NUC mounted the existing 244,016 MB card without formatting, changed only
-  `/ASTRA68.ROM`, and restored normal read-only AstraHost. Two independent
-  loads of unchanged production bitstream `25D9CB8E` pass full 32 MiB
-  POST/BIST, PMMU/user-copy isolation, exact K6 counts, every K1-K6 marker,
-  all fourteen cycle gates, and zero overruns. Run 1 measures wait-set
-  block/wake at 6,267/10,045 cycles; run 2 measures 6,254/10,041. FPGA RTL,
-  resources, route, clocks, persistent flash, and bitstream SHA-256 remain
-  unchanged. K6 is the current release checkpoint; K5 is its rollback.
+  `/ASTRA68.ROM`, verified the installed payload independently, and restored
+  exact read-only AstraHost. Two independent loads of unchanged production
+  bitstream `25D9CB8E` pass full 32 MiB POST/BIST, PMMU/user-copy isolation,
+  exact K7 counts, every K1-K7 marker, all sixteen cycle gates, and zero
+  overruns. Run 1 measures port send/receive at 12,256/17,883 cycles; run 2
+  measures 12,257/17,880. FPGA RTL, resources, route, clocks, persistent flash,
+  and bitstream SHA-256 remain unchanged. K7 is the current release checkpoint;
+  K6 is its rollback.
 
-  The next kernel milestone is Axiom K7: bounded small-message ports and
-  atomic generation-safe handle transfer on top of wait-multiple. Queue count
-  and byte caps, backpressure, absolute deadlines, cancellation, peer death,
-  exact ownership charging, and transfer commit/rollback must be specified and
-  host-tested before target implementation. Bulk payloads remain deferred to
-  shared areas rather than being copied through ports.
+  The K8 shared-area and bounded bulk-ring release candidate is implemented on
+  this qualified K7 control plane. Its 8 fixed areas, 32 mappings, 16 SPSC
+  rings, real page commit, reduced-right handle duplication, transactional map
+  rollback, same-logical-address cache policy, batched notifications,
+  wait-multiple integration, and peer-death cleanup pass all 20 host suites,
+  GCC analyzer and sanitizer gates, NDK tests/docs, normal Musashi, the
+  1,000-iteration performance soak, and a fresh full-SoC pin-level RTL run.
+  The soak completes in 576,508,511 cycles against the unchanged 675,000,000
+  cap with 7,986 pages free. Pin-level area create/map/unmap/notify maxima are
+  37,787/56,267/71,295/29,337 cycles with zero overruns. Exact source freeze,
+  SD provisioning, and two physical ULX3S boots remain before K8 supersedes K7.
+  Typed object caches, the emergency reserve, allocation tags, and system-wide
+  failure injection follow without weakening fixed queue limits.
 - The hardware-qualified K5 thread-lifecycle predecessor is based on commit
   `0208cb516801fe452bf59ef053d6daa0a118ee7e` plus qualified implementation
   patch SHA-256

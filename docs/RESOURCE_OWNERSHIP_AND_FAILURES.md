@@ -75,7 +75,7 @@ and retries after the next timer interrupt. DMA completion and worker
 state-machine host tests prove that the process remains inspectable and is
 reaped exactly once after the final pin retires.
 
-The current K6 split implements the first and last parts of this order with
+The current K7 split implements the first and last parts of this order with
 separate bounded objects. Marking a process `EXITING` removes every one of its
 `CREATED`, `READY`, `RUNNING`, or `BLOCKED` threads from scheduling, removes
 each timed waiter from the fixed deadline heap, and marks them `DEAD` in one
@@ -209,18 +209,46 @@ failed release therefore has no partial effect.
 
 ## IPC ownership
 
-Ports have limits in both messages and bytes. The initial defaults are 64
-messages/port, 64 KiB/port, and 256 KiB charged to one process. A send reserves
-message bytes, receiver queue position, and all handle destinations before
-commit. Failure before commit changes no ownership.
+K7 ports have limits in messages, bytes, and attached handles. The development
+pool contains 16 ports, 32 message slots, 8,960 copied bytes, and 256 detached
+handle records. One owner may create four ports and may be charged at most 16
+messages, 4,480 bytes, and 128 detached handles across them. One port may
+configure 1-8 messages and 24-2,240 bytes; one message is 24-280 bytes and
+contains at most eight handles.
+
+The receive-endpoint creator owns every queue charge. A send reserves an
+unpublished message slot and detached records, validates the entire source
+set, copies all bytes, then atomically invalidates the source generations and
+publishes the FIFO entry. Failure before publication frees only unpublished
+reservations and changes no authority or charge.
+
+A queued detached handle owns exactly the reference formerly owned by the
+sender entry. It is neither a kernel pointer exposed to user space nor a
+guessable destination handle. Receive reserves hidden slots in the caller's
+table and computes their generation-safe values before copyout. Copyout failure
+cancels those slots without advancing their unpublished generations. The final
+commit publishes every destination and removes every detached record; partial
+transfer is impossible.
+
+A `PORT_SEND_TRY` byte/count-capacity failure owns one transient retry token in
+the calling thread: the exact send-handle value and writable-queue sequence.
+The next matching wait consumes it and either links against that sequence or
+returns immediately because the queue changed. Any intervening syscall also
+consumes it. The token owns no object reference, pointer, allocation, queue
+slot, or deadline and cannot outlive the thread record.
 
 Terminal endpoint behavior:
 
-- blocked senders and receivers wake `PEER_DEAD`;
+- send and receive readiness waiters wake exactly once with `PEER_DEAD` when
+  the creator dies; explicit final receive close reports `CLOSED` locally and
+  `PEER_DEAD` through send endpoints;
 - queued copied messages are freed and their byte charges returned;
+- final send-endpoint close lets existing FIFO entries drain, then the receiver
+  observes `PEER_DEAD`;
 - synchronous transactions complete once with `PEER_DEAD`;
 - uncommitted handle transfers remain with the sender;
-- committed handles close through receiver teardown;
+- queued detached handles release through port teardown, while received
+  handles close through receiver teardown;
 - shared rings remain valid only while their area handles remain live.
 
 ## Device and DMA ownership

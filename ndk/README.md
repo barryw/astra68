@@ -3,6 +3,9 @@
 The Astra NDK is the supported C interface to Astra 68 hardware and operating
 system services. Applications include public headers from `include/astra` and
 link `libastra.a`; they do not include raw chipset register structures.
+Bounded message ports, absolute-deadline waits, atomic handle movement,
+explicit shared areas, and bounded bulk rings are the native protected-process
+communication plane.
 
 This boundary provides source compatibility as the machine evolves. A hardware
 register may move or be replaced without changing application source as long
@@ -48,7 +51,9 @@ make -C ndk example
 path-sensitive static analyzer and is intended for the Linux build hosts.
 
 Override `CROSS` or `CPU_FLAGS` for another compatible toolchain. Published
-components include managed front-panel access in `astra/front_panel.h`, the
+components include message ports in `astra/port.h`, shared areas in
+`astra/area.h`, batched bulk IPC in `astra/bulk_ring.h`, managed front-panel
+access in `astra/front_panel.h`, the
 font/text-layout service contract in `astra/font.h`, and the complete Vega and
 Astraea graphics contract in `astra/graphics.h`. Graphics applications work
 through owned surfaces, palettes, tile/sprite sets, raster programs, command

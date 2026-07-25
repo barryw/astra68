@@ -66,12 +66,12 @@ _Static_assert(offsetof(KernelThread, kernel_stack_top) ==
                    KERNEL_THREAD_KERNEL_STACK_TOP_OFFSET,
                "assembly thread stack offset changed");
 #if defined(__m68k__)
-_Static_assert(sizeof(KernelThread) == 172u,
+_Static_assert(sizeof(KernelThread) == 180u,
                "thread record size changed; update the memory budget");
 _Static_assert(sizeof(KernelThreadWaitRegistration) == 8u,
                "wait registration memory budget changed");
 #else
-_Static_assert(sizeof(KernelThread) <= 192u,
+_Static_assert(sizeof(KernelThread) <= 200u,
                "host thread record exceeds the test memory budget");
 #endif
 _Static_assert(KERNEL_THREAD_MAX <= 16u,

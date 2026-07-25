@@ -15,6 +15,11 @@ A live typed wrapper is **move-only by convention in C**: initialize it once,
 do not copy it, and release or transfer it exactly once. Copying a live wrapper
 can create two apparent owners for one underlying resource.
 
+Use {c:func}`astra_handle_close` for a raw capability that has no narrower
+typed close operation. A successful close invalidates the caller's variable.
+Copying the numeric value does not create another kernel reference; every copy
+becomes stale when the capability is closed or moved through a message.
+
 ## Deterministic cleanup
 
 GCC and Clang builds may use a typed `ASTRA_AUTO_*` declaration to release a
@@ -25,6 +30,11 @@ early.
 Automatic cleanup is not the crash-recovery mechanism. The operating system
 owns the process handle table and revokes every remaining capability when a
 process exits, crashes, or is terminated.
+
+{c:struct}`AstraPort` supports {c:macro}`ASTRA_AUTO_PORT` for a locally owned
+receive/send pair. Successful message transfer invalidates each moved handle in
+the supplied array, so later scope cleanup cannot accidentally close authority
+that now belongs to the receiver.
 
 ## Blocking and asynchronous work
 

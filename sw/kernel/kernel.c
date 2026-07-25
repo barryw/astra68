@@ -393,6 +393,16 @@ static void report_kernel_performance(
     uint32_t wait_set_overruns = add_saturating_u32(
         performance->metric[KERNEL_PERFORMANCE_WAIT_SET_BLOCK].overruns,
         performance->metric[KERNEL_PERFORMANCE_WAIT_SET_WAKE].overruns);
+    uint32_t port_overruns = add_saturating_u32(
+        performance->metric[KERNEL_PERFORMANCE_PORT_SEND].overruns,
+        performance->metric[KERNEL_PERFORMANCE_PORT_RECEIVE].overruns);
+    uint32_t shared_ipc_overruns = add_saturating_u32(
+        add_saturating_u32(
+            performance->metric[KERNEL_PERFORMANCE_AREA_CREATE].overruns,
+            performance->metric[KERNEL_PERFORMANCE_AREA_MAP].overruns),
+        add_saturating_u32(
+            performance->metric[KERNEL_PERFORMANCE_AREA_UNMAP].overruns,
+            performance->metric[KERNEL_PERFORMANCE_RING_NOTIFY].overruns));
 
     console_puts("K2 PERF irq syscall=");
     console_dec32(performance->metric[
@@ -478,6 +488,42 @@ static void report_kernel_performance(
     console_dec32(KERNEL_PERFORMANCE_BUDGET_WAIT_SET_WAKE);
     console_puts(" overruns=");
     console_dec32(wait_set_overruns);
+    console_putc('\n');
+    console_puts("K7 PERF port send=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_PORT_SEND].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_PORT_SEND);
+    console_puts(" receive=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_PORT_RECEIVE].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_PORT_RECEIVE);
+    console_puts(" overruns=");
+    console_dec32(port_overruns);
+    console_putc('\n');
+    console_puts("K8 PERF area create=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_AREA_CREATE].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_AREA_CREATE);
+    console_puts(" map=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_AREA_MAP].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_AREA_MAP);
+    console_puts(" unmap=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_AREA_UNMAP].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_AREA_UNMAP);
+    console_puts(" notify=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_RING_NOTIFY].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_RING_NOTIFY);
+    console_puts(" overruns=");
+    console_dec32(shared_ipc_overruns);
     console_putc('\n');
 #if ASTRA_KERNEL_SCHED_TRACE
     console_puts("K2 TRACE syscall max id=");
@@ -608,8 +654,42 @@ void kernel_process_milestone_reached(void)
     console_puts(" waits, ");
     console_dec32(stats.process_death_wakeups);
     console_puts(" blocked wakes\n");
+    console_puts("Message ports ....... ");
+    console_dec32(stats.port_sends);
+    console_puts(" send, ");
+    console_dec32(stats.port_receives);
+    console_puts(" receive, ");
+    console_dec32(stats.port_send_would_block);
+    console_puts(" backpressure\n");
+    console_puts("Handle transfer ..... ");
+    console_dec32(stats.handle_transfers);
+    console_puts(" committed, max detached ");
+    console_dec32(stats.handle_transfer_max_detached);
+    console_putc('\n');
+    console_puts("Shared areas ........ ");
+    console_dec32(stats.area_created);
+    console_puts(" create, ");
+    console_dec32(stats.area_map_operations);
+    console_putc('/');
+    console_dec32(stats.area_unmap_operations);
+    console_puts(" map/unmap, ");
+    console_dec32(stats.area_active);
+    console_puts(" active\n");
+    console_puts("Bulk rings .......... ");
+    console_dec32(stats.ring_created);
+    console_puts(" create, ");
+    console_dec32(stats.ring_producer_notifications);
+    console_putc('/');
+    console_dec32(stats.ring_consumer_notifications);
+    console_puts(" notify, ");
+    console_dec32(stats.ring_wait_wakeups);
+    console_puts(" blocked wake, ");
+    console_dec32(stats.ring_active);
+    console_puts(" active\n");
     report_kernel_performance(&performance);
     console_puts("K2 PERFORMANCE PASS\n");
+    console_puts("\nK8 SHARED BULK IPC PASS\n");
+    console_puts("\nK7 MESSAGE PORTS PASS\n");
     console_puts("\nK6 BOUNDED WAIT-MULTIPLE PASS\n");
     console_puts("\nK5 THREAD LIFECYCLE PASS\n");
     console_puts("\nK4 HANDLE SYNCHRONIZATION PASS\n");

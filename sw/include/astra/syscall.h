@@ -3,7 +3,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010002
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010004
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -23,6 +23,15 @@
 #define ASTRA_SYSCALL_TIMER_CREATE     15
 #define ASTRA_SYSCALL_TIMER_SET        16
 #define ASTRA_SYSCALL_TIMER_CANCEL     17
+#define ASTRA_SYSCALL_PORT_CREATE      18
+#define ASTRA_SYSCALL_PORT_SEND_TRY    19
+#define ASTRA_SYSCALL_PORT_RECEIVE_TRY 20
+#define ASTRA_SYSCALL_HANDLE_DUPLICATE 21
+#define ASTRA_SYSCALL_AREA_CREATE      22
+#define ASTRA_SYSCALL_AREA_MAP         23
+#define ASTRA_SYSCALL_AREA_UNMAP       24
+#define ASTRA_SYSCALL_RING_CREATE      25
+#define ASTRA_SYSCALL_RING_NOTIFY      26
 
 #define ASTRA_SYSCALL_PROCESS_EXIT ASTRA_SYSCALL_EXIT
 
@@ -40,6 +49,7 @@
 #define ASTRA_SYSCALL_OUT_OF_MEMORY    11
 #define ASTRA_SYSCALL_IO_ERROR         12
 #define ASTRA_SYSCALL_CLOSED           13
+#define ASTRA_SYSCALL_BUFFER_TOO_SMALL 14
 
 #ifndef ASTRA_RIGHTS_DEFINED
 #define ASTRA_RIGHTS_DEFINED 1
@@ -61,5 +71,83 @@
 
 #define ASTRA_WAIT_MULTIPLE_MAX 16
 #define ASTRA_WAIT_INDEX_NONE 0xffffffff
+
+#ifndef ASTRA_AREA_ABI_CONSTANTS_DEFINED
+#define ASTRA_AREA_ABI_CONSTANTS_DEFINED 1
+#define ASTRA_AREA_SIZE_MAX 0x00010000u
+#define ASTRA_AREA_MAP_READ  (1u << 0)
+#define ASTRA_AREA_MAP_WRITE (1u << 1)
+#endif
+
+#ifndef ASTRA_BULK_RING_ABI_CONSTANTS_DEFINED
+#define ASTRA_BULK_RING_ABI_CONSTANTS_DEFINED 1
+#define ASTRA_BULK_RING_MAGIC 0x4152494eu
+#define ASTRA_BULK_RING_ABI_VERSION 1u
+#define ASTRA_BULK_RING_HEADER_SIZE 64u
+#define ASTRA_BULK_RING_OFFSET_ALIGNMENT 64u
+#define ASTRA_BULK_RING_ELEMENT_SIZE_MIN 4u
+#define ASTRA_BULK_RING_ELEMENT_SIZE_MAX 4096u
+#define ASTRA_BULK_RING_CAPACITY_MIN 2u
+#define ASTRA_BULK_RING_CAPACITY_MAX 1024u
+#define ASTRA_BULK_RING_NOTIFY_CORRUPT (1u << 0)
+#define ASTRA_BULK_RING_PRODUCER 1u
+#define ASTRA_BULK_RING_CONSUMER 2u
+#endif
+
+#ifndef ASTRA_MESSAGE_ABI_CONSTANTS_DEFINED
+#define ASTRA_MESSAGE_ABI_CONSTANTS_DEFINED 1
+#define ASTRA_PORT_MESSAGES_MAX 8u
+#define ASTRA_PORT_BYTES_MAX 2240u
+#define ASTRA_MESSAGE_HEADER_SIZE 24u
+#define ASTRA_MESSAGE_INLINE_MAX 256u
+#define ASTRA_MESSAGE_SIZE_MAX \
+    (ASTRA_MESSAGE_HEADER_SIZE + ASTRA_MESSAGE_INLINE_MAX)
+#define ASTRA_MESSAGE_HANDLES_MAX 8u
+#endif
+
+#ifndef __ASSEMBLER__
+
+#include <stdint.h>
+
+#ifndef ASTRA_MESSAGE_HEADER_DEFINED
+#define ASTRA_MESSAGE_HEADER_DEFINED 1
+typedef struct AstraMessageHeader {
+    uint32_t total_size;
+    uint16_t header_size;
+    uint16_t flags;
+    uint32_t protocol;
+    uint16_t protocol_version;
+    uint16_t reserved;
+    uint32_t operation;
+    uint32_t transaction_id;
+} AstraMessageHeader;
+#endif
+
+_Static_assert(sizeof(AstraMessageHeader) == ASTRA_MESSAGE_HEADER_SIZE,
+               "message ABI header size changed");
+
+#ifndef ASTRA_BULK_RING_HEADER_DEFINED
+#define ASTRA_BULK_RING_HEADER_DEFINED 1
+typedef struct AstraBulkRingHeader {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t header_size;
+    uint32_t flags;
+    uint32_t element_size;
+    uint32_t capacity;
+    uint32_t data_offset;
+    uint32_t total_size;
+    uint32_t generation;
+    uint32_t producer_position;
+    uint32_t producer_reserved[3];
+    uint32_t consumer_position;
+    uint32_t consumer_reserved[3];
+} AstraBulkRingHeader;
+#endif
+
+_Static_assert(sizeof(AstraBulkRingHeader) == ASTRA_BULK_RING_HEADER_SIZE,
+               "bulk-ring ABI header size changed");
+
+#endif
 
 #endif

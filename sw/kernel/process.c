@@ -2,6 +2,7 @@
 
 #include <astra/syscall.h>
 
+#include "area.h"
 #include "block.h"
 #include "bytes.h"
 #include "exception.h"
@@ -9,6 +10,8 @@
 #include "memory.h"
 #include "performance.h"
 #include "platform.h"
+#include "port.h"
+#include "ring.h"
 #include "sync.h"
 #include "user_copy.h"
 #include "vm.h"
@@ -49,7 +52,7 @@ typedef struct KernelProcess {
 } KernelProcess;
 
 #if defined(__m68k__)
-_Static_assert(sizeof(KernelProcess) == 472u,
+_Static_assert(sizeof(KernelProcess) == 536u,
                "process record size changed; update the memory budget");
 #endif
 
@@ -71,6 +74,8 @@ _Static_assert(KERNEL_THREAD_STACK_SIZE == KERNEL_PAGE_SIZE,
                "one user-stack slot must map exactly one VM page");
 _Static_assert(KERNEL_PROCESS_THREAD_MAX <= 16u,
                "stack slot bitmap exceeds its storage");
+_Static_assert(KERNEL_PROCESS_MAX == KERNEL_VM_SHARED_ALIAS_MAX,
+               "shared-area VM alias accounting must cover every process");
 _Static_assert(ASTRA_EVENT_MANUAL_RESET ==
                    KERNEL_SYNC_EVENT_MANUAL_RESET,
                "event flag ABI mismatch");
@@ -80,9 +85,26 @@ _Static_assert(ASTRA_EVENT_INITIALLY_SIGNALED ==
 _Static_assert(ASTRA_RIGHT_READ == KERNEL_SYNC_RIGHT_QUERY &&
                    ASTRA_RIGHT_SIGNAL == KERNEL_SYNC_RIGHT_SIGNAL &&
                    ASTRA_RIGHT_WAIT == KERNEL_SYNC_RIGHT_WAIT &&
+                   ASTRA_RIGHT_TRANSFER == KERNEL_SYNC_RIGHT_TRANSFER &&
                    ASTRA_RIGHT_ADMINISTER ==
                        KERNEL_SYNC_RIGHT_ADMINISTER,
                "synchronization-right ABI mismatch");
+_Static_assert(ASTRA_MESSAGE_HEADER_SIZE == KERNEL_PORT_MESSAGE_SIZE_MIN &&
+                   ASTRA_MESSAGE_SIZE_MAX ==
+                       KERNEL_PORT_MESSAGE_SIZE_MAX &&
+                   ASTRA_MESSAGE_HANDLES_MAX ==
+                       KERNEL_PORT_MESSAGE_HANDLE_MAX &&
+                   ASTRA_PORT_MESSAGES_MAX ==
+                       KERNEL_PORT_QUEUE_MESSAGES_MAX &&
+                   ASTRA_PORT_BYTES_MAX == KERNEL_PORT_QUEUE_BYTES_MAX,
+               "message-port ABI limits mismatch");
+_Static_assert(KERNEL_PORT_SEND_RIGHTS ==
+                   (ASTRA_RIGHT_READ | ASTRA_RIGHT_SIGNAL |
+                    ASTRA_RIGHT_WAIT | ASTRA_RIGHT_TRANSFER) &&
+                   KERNEL_PORT_RECEIVE_RIGHTS ==
+                       (ASTRA_RIGHT_READ | ASTRA_RIGHT_WAIT |
+                        ASTRA_RIGHT_ADMINISTER),
+               "message-port rights ABI mismatch");
 _Static_assert(ASTRA_RIGHT_READ == KERNEL_THREAD_RIGHT_QUERY &&
                    ASTRA_RIGHT_WAIT == KERNEL_THREAD_RIGHT_WAIT &&
                    ASTRA_RIGHT_ADMINISTER ==
@@ -91,6 +113,17 @@ _Static_assert(ASTRA_RIGHT_READ == KERNEL_THREAD_RIGHT_QUERY &&
 _Static_assert(ASTRA_RIGHT_READ == KERNEL_PROCESS_RIGHT_QUERY &&
                    ASTRA_RIGHT_WAIT == KERNEL_PROCESS_RIGHT_WAIT,
                "process-right ABI mismatch");
+_Static_assert(KERNEL_AREA_RIGHTS ==
+                   (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+                    ASTRA_RIGHT_TRANSFER | ASTRA_RIGHT_ADMINISTER),
+               "shared-area rights ABI mismatch");
+_Static_assert(KERNEL_RING_PRODUCER_RIGHTS ==
+                   (ASTRA_RIGHT_WRITE | ASTRA_RIGHT_SIGNAL |
+                    ASTRA_RIGHT_WAIT | ASTRA_RIGHT_TRANSFER) &&
+                   KERNEL_RING_CONSUMER_RIGHTS ==
+                       (ASTRA_RIGHT_READ | ASTRA_RIGHT_SIGNAL |
+                        ASTRA_RIGHT_WAIT | ASTRA_RIGHT_TRANSFER),
+               "bulk-ring rights ABI mismatch");
 
 #if ASTRA_KERNEL_SOAK_SELFTEST
 typedef struct KernelProcessSoakState {
@@ -256,7 +289,9 @@ static bool process_pool_healthy(void)
 
 static bool process_pool_valid(void)
 {
-    if (!process_pool_healthy())
+    if (!process_pool_healthy() || !kernel_handle_transfer_pool_valid() ||
+        !kernel_port_pool_valid() || !kernel_area_pool_valid() ||
+        !kernel_ring_pool_valid())
         return false;
     for (uint32_t slot = 0u; slot < KERNEL_PROCESS_MAX; ++slot) {
         const KernelProcess *process = &processes[slot];
@@ -569,7 +604,16 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
     if (process->handles_closed == 0u) {
         (void)kernel_handle_close_all(&process->handles);
         process->self_handle = KERNEL_HANDLE_INVALID;
-        if (!kernel_sync_pool_valid() || process_pool_corrupt != 0u)
+#if defined(KERNEL_PROCESS_HOST_TEST)
+        if (!kernel_sync_pool_valid() || !kernel_port_pool_valid() ||
+            !kernel_area_pool_valid() || !kernel_ring_pool_valid() ||
+            !kernel_handle_transfer_pool_valid() || !process_pool_valid())
+#else
+        if (!kernel_sync_pool_healthy() || !kernel_port_pool_healthy() ||
+            !kernel_area_pool_healthy() || !kernel_ring_pool_healthy() ||
+            !kernel_handle_transfer_pool_healthy() ||
+            !process_pool_healthy())
+#endif
             return KERNEL_PROCESS_CORRUPT;
         process->handles_closed = 1u;
     }
@@ -690,6 +734,12 @@ static KernelProcessStatus finish_thread_reaps(void)
 
 static void check_milestone(void)
 {
+#if !defined(KERNEL_PROCESS_HOST_TEST)
+    KernelAreaPoolStats area_stats;
+    KernelHandleTransferStats handle_stats;
+    KernelPortPoolStats port_stats;
+    KernelRingPoolStats ring_stats;
+#endif
     KernelSyncPoolStats sync_stats;
     KernelThreadPoolStats thread_stats;
     uint32_t measured_stack_use;
@@ -716,6 +766,10 @@ static void check_milestone(void)
         thread_stats.deadline_max_depth == 0u ||
         thread_stats.wait_cancellations == 0u ||
 #if !defined(KERNEL_PROCESS_HOST_TEST)
+        !kernel_area_pool_stats(&area_stats) ||
+        !kernel_port_pool_stats(&port_stats) ||
+        !kernel_ring_pool_stats(&ring_stats) ||
+        !kernel_handle_transfer_stats(&handle_stats) ||
         scheduler_stats.wait_set_calls < 4u ||
         thread_stats.wait_set_blocks < 2u ||
         thread_stats.wait_set_wakeups < 2u ||
@@ -725,6 +779,31 @@ static void check_milestone(void)
         sync_stats.timer_arms == 0u ||
         sync_stats.timer_expirations == 0u ||
         scheduler_stats.process_death_waits == 0u ||
+        port_stats.created_ports == 0u ||
+        port_stats.sends < 3u ||
+        port_stats.receives < 3u ||
+        port_stats.send_would_block == 0u ||
+        port_stats.receive_buffer_too_small == 0u ||
+        port_stats.active_ports != 0u ||
+        port_stats.queued_messages != 0u ||
+        port_stats.queued_bytes != 0u ||
+        port_stats.queued_handles != 0u ||
+        handle_stats.committed_exports < 2u ||
+        handle_stats.committed_imports < 2u ||
+        handle_stats.import_rollbacks == 0u ||
+        handle_stats.live_detached != 0u ||
+        area_stats.created_areas == 0u ||
+        area_stats.active_areas != 0u ||
+        area_stats.committed_pages != 0u ||
+        area_stats.active_mappings != 0u ||
+        area_stats.map_operations == 0u ||
+        area_stats.unmap_operations == 0u ||
+        ring_stats.created_rings == 0u ||
+        ring_stats.active_rings != 0u ||
+        ring_stats.producer_notifications == 0u ||
+        ring_stats.consumer_notifications == 0u ||
+        ring_stats.wait_wakeups == 0u ||
+        ring_stats.peer_closures == 0u ||
 #endif
         sync_stats.created_events < 3u ||
         sync_stats.created_semaphores == 0u ||
@@ -797,7 +876,13 @@ static KernelProcessStatus retire_current(KernelProcessExitReason reason,
     KernelProcessStatus status;
     uint16_t retiring_slot;
     uint32_t closed_sync_objects;
+    uint32_t closed_ports;
+    uint32_t closed_rings;
+    uint32_t closed_areas;
+    uint32_t revoked_area_mappings;
     uint32_t retired_threads;
+    uint32_t woken_ring_waiters;
+    uint32_t woken_port_waiters;
     uint32_t woken_sync_waiters;
 
     if (next_context == NULL || current_thread == NULL)
@@ -824,7 +909,22 @@ static KernelProcessStatus retire_current(KernelProcessExitReason reason,
                                &closed_sync_objects,
                                &woken_sync_waiters) != KERNEL_SYNC_OK)
         return KERNEL_PROCESS_CORRUPT;
+    if (kernel_port_owner_died(retiring->id, &closed_ports,
+                               &woken_port_waiters) != KERNEL_PORT_OK)
+        return KERNEL_PROCESS_CORRUPT;
+    if (kernel_ring_process_died(retiring->id, &closed_rings,
+                                 &woken_ring_waiters) != KERNEL_RING_OK)
+        return KERNEL_PROCESS_CORRUPT;
+    if (kernel_area_process_died(retiring->id, &closed_areas,
+                                 &revoked_area_mappings) != KERNEL_AREA_OK)
+        return KERNEL_PROCESS_CORRUPT;
     (void)closed_sync_objects;
+    (void)closed_ports;
+    (void)closed_rings;
+    (void)closed_areas;
+    (void)revoked_area_mappings;
+    (void)woken_port_waiters;
+    (void)woken_ring_waiters;
     (void)woken_sync_waiters;
     if (wake_process_death(retiring) != KERNEL_PROCESS_OK)
         return KERNEL_PROCESS_CORRUPT;
@@ -884,6 +984,14 @@ void kernel_process_init(void)
                        sizeof(maintenance_diagnostics));
     kernel_thread_pool_init();
     kernel_sync_pool_init();
+    kernel_handle_transfer_pool_init();
+    kernel_port_pool_init();
+    kernel_area_pool_init();
+#if defined(KERNEL_PROCESS_HOST_TEST)
+    kernel_area_test_bind_physical_memory(
+        host_physical_memory, host_physical_base, host_physical_size);
+#endif
+    kernel_ring_pool_init();
 #if ASTRA_KERNEL_SOAK_SELFTEST
     kernel_bytes_clear(&soak_state, sizeof(soak_state));
 #endif
@@ -1569,10 +1677,87 @@ static KernelProcessStatus commit_process_death_wait(KernelProcess *target)
         KERNEL_PROCESS_OK : KERNEL_PROCESS_INVALID_STATE;
 }
 
+static bool ring_status_to_syscall(KernelRingStatus status,
+                                   uint32_t *result)
+{
+    if (result == NULL)
+        return false;
+    switch (status) {
+    case KERNEL_RING_OK:
+        *result = ASTRA_SYSCALL_OK;
+        return true;
+    case KERNEL_RING_WOULD_BLOCK:
+        *result = ASTRA_SYSCALL_WOULD_BLOCK;
+        return true;
+    case KERNEL_RING_PEER_DEAD:
+        *result = ASTRA_SYSCALL_PEER_DEAD;
+        return true;
+    case KERNEL_RING_CLOSED:
+        *result = ASTRA_SYSCALL_CLOSED;
+        return true;
+    case KERNEL_RING_IO_ERROR:
+        *result = ASTRA_SYSCALL_IO_ERROR;
+        return true;
+    case KERNEL_RING_INVALID_ARGUMENT:
+    case KERNEL_RING_INVALID_STATE:
+    case KERNEL_RING_OVERLAP:
+        *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+        return true;
+    case KERNEL_RING_NO_SLOT:
+    case KERNEL_RING_QUOTA_EXCEEDED:
+        *result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+        return true;
+    case KERNEL_RING_CORRUPT:
+    default:
+        return false;
+    }
+}
+
+static bool area_status_to_syscall(KernelAreaStatus status,
+                                   uint32_t *result)
+{
+    if (result == NULL)
+        return false;
+    switch (status) {
+    case KERNEL_AREA_OK:
+        *result = ASTRA_SYSCALL_OK;
+        return true;
+    case KERNEL_AREA_INVALID_ARGUMENT:
+    case KERNEL_AREA_INVALID_STATE:
+    case KERNEL_AREA_ALREADY_MAPPED:
+    case KERNEL_AREA_NOT_MAPPED:
+        *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+        return true;
+    case KERNEL_AREA_NO_SLOT:
+    case KERNEL_AREA_QUOTA_EXCEEDED:
+        *result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+        return true;
+    case KERNEL_AREA_OUT_OF_MEMORY:
+        *result = ASTRA_SYSCALL_OUT_OF_MEMORY;
+        return true;
+    case KERNEL_AREA_ACCESS_DENIED:
+        *result = ASTRA_SYSCALL_ACCESS_DENIED;
+        return true;
+    case KERNEL_AREA_PEER_DEAD:
+        *result = ASTRA_SYSCALL_PEER_DEAD;
+        return true;
+    case KERNEL_AREA_CORRUPT:
+    default:
+        return false;
+    }
+}
+
+static KernelRingEndpoint ring_endpoint_for_type(KernelObjectType type)
+{
+    return type == KERNEL_OBJECT_RING_PRODUCER ?
+        KERNEL_RING_ENDPOINT_PRODUCER : KERNEL_RING_ENDPOINT_CONSUMER;
+}
+
 static KernelProcessStatus wait_handle_set(
     KernelProcess *process, KernelThread *thread,
     const KernelHandle *handles, uint32_t count, uint64_t now,
-    uint64_t deadline, bool multiple, bool *blocked,
+    uint64_t deadline, bool multiple, KernelHandle port_probe_handle,
+    uint32_t port_probe_sequence, bool *blocked,
     uint32_t *syscall_result)
 {
     void *objects[ASTRA_WAIT_MULTIPLE_MAX];
@@ -1606,7 +1791,11 @@ static KernelProcessStatus wait_handle_set(
         if (types[index] != KERNEL_OBJECT_SYNC &&
             types[index] != KERNEL_OBJECT_TIMER &&
             types[index] != KERNEL_OBJECT_THREAD &&
-            types[index] != KERNEL_OBJECT_PROCESS) {
+            types[index] != KERNEL_OBJECT_PROCESS &&
+            types[index] != KERNEL_OBJECT_PORT_SEND &&
+            types[index] != KERNEL_OBJECT_PORT_RECEIVE &&
+            types[index] != KERNEL_OBJECT_RING_PRODUCER &&
+            types[index] != KERNEL_OBJECT_RING_CONSUMER) {
             *syscall_result = ASTRA_SYSCALL_INVALID_HANDLE;
             return KERNEL_PROCESS_OK;
         }
@@ -1654,6 +1843,62 @@ static KernelProcessStatus wait_handle_set(
                 return sync_status == KERNEL_SYNC_INVALID_ARGUMENT ||
                                sync_status == KERNEL_SYNC_INVALID_STATE ?
                     KERNEL_PROCESS_INVALID_STATE : KERNEL_PROCESS_CORRUPT;
+        } else if (types[index] == KERNEL_OBJECT_PORT_SEND ||
+                   types[index] == KERNEL_OBJECT_PORT_RECEIVE) {
+            KernelPortEndpoint endpoint =
+                types[index] == KERNEL_OBJECT_PORT_SEND ?
+                    KERNEL_PORT_ENDPOINT_SEND :
+                    KERNEL_PORT_ENDPOINT_RECEIVE;
+            bool after_failed_send =
+                types[index] == KERNEL_OBJECT_PORT_SEND &&
+                handles[index] == port_probe_handle &&
+                port_probe_sequence != 0u;
+            KernelPortStatus port_status = after_failed_send ?
+                kernel_port_prepare_wait_after(
+                    objects[index], endpoint, port_probe_sequence,
+                    &specs[index]) :
+                kernel_port_prepare_wait(
+                    objects[index], endpoint, &specs[index]);
+
+            if (port_status == KERNEL_PORT_OK) {
+                if (multiple)
+                    set_wait_outputs(thread, true, index, 0u);
+                return KERNEL_PROCESS_OK;
+            }
+            if (port_status == KERNEL_PORT_PEER_DEAD ||
+                port_status == KERNEL_PORT_CLOSED) {
+                *syscall_result = port_status == KERNEL_PORT_PEER_DEAD ?
+                    ASTRA_SYSCALL_PEER_DEAD : ASTRA_SYSCALL_CLOSED;
+                if (multiple)
+                    set_wait_outputs(thread, true, index, 0u);
+                return KERNEL_PROCESS_OK;
+            }
+            if (port_status == KERNEL_PORT_QUOTA_EXCEEDED) {
+                *syscall_result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+                return KERNEL_PROCESS_OK;
+            }
+            if (port_status != KERNEL_PORT_WOULD_BLOCK)
+                return port_status == KERNEL_PORT_INVALID_ARGUMENT ||
+                               port_status == KERNEL_PORT_INVALID_STATE ?
+                    KERNEL_PROCESS_INVALID_STATE : KERNEL_PROCESS_CORRUPT;
+        } else if (types[index] == KERNEL_OBJECT_RING_PRODUCER ||
+                   types[index] == KERNEL_OBJECT_RING_CONSUMER) {
+            KernelRingStatus ring_status = kernel_ring_prepare_wait(
+                objects[index], ring_endpoint_for_type(types[index]),
+                &specs[index]);
+
+            if (ring_status == KERNEL_RING_OK) {
+                if (multiple)
+                    set_wait_outputs(thread, true, index, 0u);
+                return KERNEL_PROCESS_OK;
+            }
+            if (ring_status != KERNEL_RING_WOULD_BLOCK) {
+                if (!ring_status_to_syscall(ring_status, syscall_result))
+                    return KERNEL_PROCESS_CORRUPT;
+                if (multiple)
+                    set_wait_outputs(thread, true, index, 0u);
+                return KERNEL_PROCESS_OK;
+            }
         } else if (types[index] == KERNEL_OBJECT_THREAD) {
             bool ready;
             KernelThreadStatus thread_status =
@@ -1728,6 +1973,22 @@ static KernelProcessStatus wait_handle_set(
             types[index] == KERNEL_OBJECT_TIMER) {
             if (kernel_sync_commit_wait(objects[index]) != KERNEL_SYNC_OK)
                 return KERNEL_PROCESS_CORRUPT;
+        } else if (types[index] == KERNEL_OBJECT_PORT_SEND ||
+                   types[index] == KERNEL_OBJECT_PORT_RECEIVE) {
+            KernelPortEndpoint endpoint =
+                types[index] == KERNEL_OBJECT_PORT_SEND ?
+                    KERNEL_PORT_ENDPOINT_SEND :
+                    KERNEL_PORT_ENDPOINT_RECEIVE;
+
+            if (kernel_port_commit_wait(objects[index], endpoint) !=
+                KERNEL_PORT_OK)
+                return KERNEL_PROCESS_CORRUPT;
+        } else if (types[index] == KERNEL_OBJECT_RING_PRODUCER ||
+                   types[index] == KERNEL_OBJECT_RING_CONSUMER) {
+            if (kernel_ring_commit_wait(
+                    objects[index], ring_endpoint_for_type(types[index])) !=
+                KERNEL_RING_OK)
+                return KERNEL_PROCESS_CORRUPT;
         } else if (types[index] == KERNEL_OBJECT_THREAD) {
             if (kernel_thread_commit_death_wait(objects[index]) !=
                 KERNEL_THREAD_OK)
@@ -1743,6 +2004,63 @@ static KernelProcessStatus wait_handle_set(
     return KERNEL_PROCESS_OK;
 }
 
+static bool port_status_to_syscall(KernelPortStatus status,
+                                   uint32_t *result)
+{
+    if (result == NULL)
+        return false;
+    switch (status) {
+    case KERNEL_PORT_OK:
+        *result = ASTRA_SYSCALL_OK;
+        return true;
+    case KERNEL_PORT_WOULD_BLOCK:
+        *result = ASTRA_SYSCALL_WOULD_BLOCK;
+        return true;
+    case KERNEL_PORT_PEER_DEAD:
+        *result = ASTRA_SYSCALL_PEER_DEAD;
+        return true;
+    case KERNEL_PORT_CLOSED:
+        *result = ASTRA_SYSCALL_CLOSED;
+        return true;
+    case KERNEL_PORT_BUFFER_TOO_SMALL:
+        *result = ASTRA_SYSCALL_BUFFER_TOO_SMALL;
+        return true;
+    case KERNEL_PORT_INVALID_ARGUMENT:
+    case KERNEL_PORT_INVALID_STATE:
+    case KERNEL_PORT_DUPLICATE_HANDLE:
+        *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+        return true;
+    case KERNEL_PORT_INVALID_HANDLE:
+        *result = ASTRA_SYSCALL_INVALID_HANDLE;
+        return true;
+    case KERNEL_PORT_ACCESS_DENIED:
+        *result = ASTRA_SYSCALL_ACCESS_DENIED;
+        return true;
+    case KERNEL_PORT_NO_SLOT:
+    case KERNEL_PORT_QUOTA_EXCEEDED:
+    case KERNEL_PORT_TRANSFER_POOL_FULL:
+    case KERNEL_PORT_HANDLE_TABLE_FULL:
+        *result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+        return true;
+    case KERNEL_PORT_CORRUPT:
+    default:
+        return false;
+    }
+}
+
+static bool valid_message_header(const uint8_t *message,
+                                 uint32_t message_size)
+{
+    AstraMessageHeader header;
+
+    if (message == NULL || message_size < sizeof(header))
+        return false;
+    kernel_bytes_copy(&header, message, sizeof(header));
+    return header.total_size == message_size &&
+           header.header_size == ASTRA_MESSAGE_HEADER_SIZE &&
+           header.flags == 0u && header.reserved == 0u;
+}
+
 KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                                               uint32_t user_stack,
                                               const void *raw_frame,
@@ -1751,8 +2069,11 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
     KernelProcess *current;
     KernelThread *thread;
     KernelProcessStatus status;
+    KernelHandle port_probe_handle;
+    uint32_t port_probe_sequence;
     uint32_t syscall;
     uint32_t result = ASTRA_SYSCALL_OK;
+    bool wake_preemption_pending = false;
 
     if (next_context == NULL)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
@@ -1768,6 +2089,10 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
     if (++scheduler_stats.total_syscalls_low == 0u)
         ++scheduler_stats.total_syscalls_high;
     syscall = thread->context.data[0];
+    port_probe_handle = thread->port_probe_handle;
+    port_probe_sequence = thread->port_probe_sequence;
+    thread->port_probe_handle = KERNEL_HANDLE_INVALID;
+    thread->port_probe_sequence = 0u;
     switch (syscall) {
     case ASTRA_SYSCALL_QUERY_ABI:
         thread->context.data[1] = ASTRA_SYSCALL_ABI_VERSION;
@@ -1866,9 +2191,15 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         case KERNEL_HANDLE_OK:
 #if defined(KERNEL_PROCESS_HOST_TEST)
             if (!kernel_sync_pool_valid() || !kernel_thread_pool_valid() ||
+                !kernel_port_pool_valid() ||
+                !kernel_area_pool_valid() || !kernel_ring_pool_valid() ||
+                !kernel_handle_transfer_pool_valid() ||
                 !process_pool_valid())
 #else
             if (!kernel_sync_pool_healthy() || !kernel_thread_pool_valid() ||
+                !kernel_port_pool_healthy() ||
+                !kernel_area_pool_healthy() || !kernel_ring_pool_healthy() ||
+                !kernel_handle_transfer_pool_healthy() ||
                 !process_pool_healthy())
 #endif
                 return KERNEL_PROCESS_CORRUPT;
@@ -1884,6 +2215,38 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             return KERNEL_PROCESS_CORRUPT;
         }
         break;
+    case ASTRA_SYSCALL_HANDLE_DUPLICATE: {
+        KernelHandle duplicate = KERNEL_HANDLE_INVALID;
+        KernelHandleStatus handle_status = kernel_handle_duplicate(
+            &current->handles, thread->context.data[1],
+            thread->context.data[2], &duplicate);
+
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_TABLE_FULL) {
+            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_INVALID_ARGUMENT) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_INVALID_STATE) {
+            result = ASTRA_SYSCALL_PEER_DEAD;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK ||
+            duplicate == KERNEL_HANDLE_INVALID)
+            return KERNEL_PROCESS_CORRUPT;
+        thread->context.data[1] = duplicate;
+        break;
+    }
     case ASTRA_SYSCALL_CLOCK_MONOTONIC: {
         uint64_t nanoseconds = kernel_platform_monotonic_ns();
 
@@ -1977,6 +2340,460 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             return KERNEL_PROCESS_CORRUPT;
         break;
     }
+    case ASTRA_SYSCALL_AREA_CREATE: {
+        KernelArea *area = NULL;
+        KernelAreaStatus area_status;
+        KernelHandle handle = KERNEL_HANDLE_INVALID;
+        KernelHandleStatus handle_status;
+        uint32_t rights = thread->context.data[2];
+
+        if (rights == 0u || (rights & ~KERNEL_AREA_RIGHTS) != 0u) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        kernel_enable_interrupts();
+        area_status = kernel_area_create(
+            current->id, thread->context.data[1], &area);
+        kernel_disable_interrupts();
+        if (area_status != KERNEL_AREA_OK) {
+            if (!area_status_to_syscall(area_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        if (area == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        handle_status = kernel_handle_install_cloneable(
+            &current->handles, KERNEL_OBJECT_AREA, rights, area,
+            kernel_area_handle_retain, kernel_area_handle_release, NULL,
+            &handle);
+        if (handle_status != KERNEL_HANDLE_OK) {
+            kernel_enable_interrupts();
+            kernel_area_abandon_unpublished(area);
+            kernel_disable_interrupts();
+            if (handle_status == KERNEL_HANDLE_TABLE_FULL) {
+                result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+                break;
+            }
+            return KERNEL_PROCESS_CORRUPT;
+        }
+        thread->context.data[1] = handle;
+        if (!kernel_area_pool_valid())
+            return KERNEL_PROCESS_CORRUPT;
+        break;
+    }
+    case ASTRA_SYSCALL_AREA_MAP: {
+        KernelArea *area = NULL;
+        KernelAreaStatus area_status;
+        KernelHandleStatus handle_status;
+        uint32_t permissions = thread->context.data[2];
+        uint32_t virtual_base;
+        uint32_t byte_size;
+        uint32_t required_rights;
+
+        if ((permissions & ASTRA_AREA_MAP_READ) == 0u ||
+            (permissions & ~(ASTRA_AREA_MAP_READ |
+                             ASTRA_AREA_MAP_WRITE)) != 0u) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        required_rights = ASTRA_RIGHT_MAP | permissions;
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1], KERNEL_OBJECT_AREA,
+            required_rights, (void **)&area);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || area == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        kernel_enable_interrupts();
+        area_status = kernel_area_map(
+            area, current->id, &current->address_space, permissions,
+            &virtual_base, &byte_size);
+        kernel_disable_interrupts();
+        if (area_status != KERNEL_AREA_OK) {
+            if (!area_status_to_syscall(area_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        thread->context.data[1] = virtual_base;
+        thread->context.data[2] = byte_size;
+        break;
+    }
+    case ASTRA_SYSCALL_AREA_UNMAP: {
+        KernelAreaStatus area_status;
+
+        kernel_enable_interrupts();
+        area_status = kernel_area_unmap(
+            current->id, &current->address_space, thread->context.data[1]);
+        kernel_disable_interrupts();
+        if (area_status != KERNEL_AREA_OK &&
+            !area_status_to_syscall(area_status, &result))
+            return KERNEL_PROCESS_CORRUPT;
+        break;
+    }
+    case ASTRA_SYSCALL_RING_CREATE: {
+        KernelArea *area = NULL;
+        KernelRing *ring = NULL;
+        KernelHandle producer = KERNEL_HANDLE_INVALID;
+        KernelHandle consumer = KERNEL_HANDLE_INVALID;
+        KernelHandleStatus handle_status;
+        KernelRingStatus ring_status;
+
+        if (kernel_handle_available(&current->handles) < 2u) {
+            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        }
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1], KERNEL_OBJECT_AREA,
+            ASTRA_RIGHT_ADMINISTER, (void **)&area);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || area == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        ring_status = kernel_ring_create(
+            current->id, area, thread->context.data[2],
+            thread->context.data[3], thread->context.data[4], &ring);
+        if (ring_status != KERNEL_RING_OK) {
+            if (!ring_status_to_syscall(ring_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        if (ring == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        handle_status = kernel_handle_install(
+            &current->handles, KERNEL_OBJECT_RING_PRODUCER,
+            KERNEL_RING_PRODUCER_RIGHTS, ring, kernel_ring_handle_release,
+            (void *)(uintptr_t)KERNEL_RING_ENDPOINT_PRODUCER, &producer);
+        if (handle_status != KERNEL_HANDLE_OK) {
+            kernel_ring_abandon_unpublished(ring);
+            if (handle_status == KERNEL_HANDLE_TABLE_FULL) {
+                result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+                break;
+            }
+            return KERNEL_PROCESS_CORRUPT;
+        }
+        handle_status = kernel_handle_install(
+            &current->handles, KERNEL_OBJECT_RING_CONSUMER,
+            KERNEL_RING_CONSUMER_RIGHTS, ring, kernel_ring_handle_release,
+            (void *)(uintptr_t)KERNEL_RING_ENDPOINT_CONSUMER, &consumer);
+        if (handle_status != KERNEL_HANDLE_OK) {
+            if (kernel_handle_close(&current->handles, producer) !=
+                KERNEL_HANDLE_OK)
+                return KERNEL_PROCESS_CORRUPT;
+            kernel_ring_handle_release(
+                ring, (void *)(uintptr_t)KERNEL_RING_ENDPOINT_CONSUMER);
+            if (handle_status == KERNEL_HANDLE_TABLE_FULL) {
+                result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+                break;
+            }
+            return KERNEL_PROCESS_CORRUPT;
+        }
+        thread->context.data[1] = producer;
+        thread->context.data[2] = consumer;
+        if (!kernel_ring_pool_valid() || !kernel_area_pool_valid())
+            return KERNEL_PROCESS_CORRUPT;
+        break;
+    }
+    case ASTRA_SYSCALL_RING_NOTIFY: {
+        KernelObjectType type;
+        KernelRing *ring = NULL;
+        KernelHandleStatus handle_status;
+        KernelRingStatus ring_status;
+        uint32_t producer_position;
+        uint32_t consumer_position;
+        uint32_t woken = 0u;
+
+        handle_status = kernel_handle_lookup_any(
+            &current->handles, thread->context.data[1], ASTRA_RIGHT_SIGNAL,
+            &type, (void **)&ring);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || ring == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        if (type != KERNEL_OBJECT_RING_PRODUCER &&
+            type != KERNEL_OBJECT_RING_CONSUMER) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (thread->context.data[4] !=
+            (uint32_t)ring_endpoint_for_type(type)) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        ring_status = kernel_ring_notify(
+            ring, ring_endpoint_for_type(type), thread->context.data[2],
+            thread->context.data[3], &producer_position,
+            &consumer_position, &woken);
+        if (ring_status != KERNEL_RING_OK) {
+            if (!ring_status_to_syscall(ring_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        thread->context.data[1] = producer_position;
+        thread->context.data[2] = consumer_position;
+        if (woken != 0u) {
+            wake_preemption_pending = ready_thread_outranks(thread);
+            if (wake_preemption_pending)
+                ++scheduler_stats.wake_preemptions;
+            else
+                scheduler_timer_rearm();
+        }
+#if defined(KERNEL_PROCESS_HOST_TEST)
+        if (!kernel_ring_pool_valid() || !kernel_area_pool_valid())
+#else
+        if (!kernel_ring_pool_healthy() || !kernel_area_pool_healthy())
+#endif
+            return KERNEL_PROCESS_CORRUPT;
+        break;
+    }
+    case ASTRA_SYSCALL_PORT_CREATE: {
+        KernelPort *port = NULL;
+        KernelHandle receive_handle = KERNEL_HANDLE_INVALID;
+        KernelHandle send_handle = KERNEL_HANDLE_INVALID;
+        KernelPortStatus port_status;
+        KernelHandleStatus handle_status;
+
+        if (kernel_handle_available(&current->handles) < 2u) {
+            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        }
+        port_status = kernel_port_create(
+            current->id, thread->context.data[1],
+            thread->context.data[2], &port);
+        if (port_status != KERNEL_PORT_OK) {
+            if (!port_status_to_syscall(port_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        handle_status = kernel_handle_install(
+            &current->handles, KERNEL_OBJECT_PORT_RECEIVE,
+            KERNEL_PORT_RECEIVE_RIGHTS, port,
+            kernel_port_handle_release,
+            (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_RECEIVE,
+            &receive_handle);
+        if (handle_status != KERNEL_HANDLE_OK) {
+            kernel_port_abandon_unpublished(port);
+            if (handle_status == KERNEL_HANDLE_TABLE_FULL) {
+                result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+                break;
+            }
+            return KERNEL_PROCESS_CORRUPT;
+        }
+        handle_status = kernel_handle_install(
+            &current->handles, KERNEL_OBJECT_PORT_SEND,
+            KERNEL_PORT_SEND_RIGHTS, port,
+            kernel_port_handle_release,
+            (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND,
+            &send_handle);
+        if (handle_status != KERNEL_HANDLE_OK) {
+            if (kernel_handle_close(&current->handles, receive_handle) !=
+                KERNEL_HANDLE_OK)
+                return KERNEL_PROCESS_CORRUPT;
+            kernel_port_handle_release(
+                port, (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND);
+            if (handle_status == KERNEL_HANDLE_TABLE_FULL) {
+                result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+                break;
+            }
+            return KERNEL_PROCESS_CORRUPT;
+        }
+        thread->context.data[1] = receive_handle;
+        thread->context.data[2] = send_handle;
+        if (!kernel_port_pool_healthy() ||
+            !kernel_handle_transfer_pool_healthy())
+            return KERNEL_PROCESS_CORRUPT;
+        break;
+    }
+    case ASTRA_SYSCALL_PORT_SEND_TRY: {
+        KernelPort *port = NULL;
+        KernelHandle attached[ASTRA_MESSAGE_HANDLES_MAX];
+        uint8_t message[ASTRA_MESSAGE_SIZE_MAX];
+        KernelHandleStatus handle_status;
+        KernelPortStatus port_status;
+        KernelPerformanceToken performance;
+        uint32_t user_message = thread->context.data[2];
+        uint32_t message_size = thread->context.data[3];
+        uint32_t user_handles = thread->context.data[4];
+        uint32_t handle_count = thread->context.data[5];
+        uint32_t woken = 0u;
+        int copy_status;
+
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1],
+            KERNEL_OBJECT_PORT_SEND, ASTRA_RIGHT_SIGNAL,
+            (void **)&port);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || port == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        if (message_size < ASTRA_MESSAGE_HEADER_SIZE ||
+            message_size > ASTRA_MESSAGE_SIZE_MAX ||
+            handle_count > ASTRA_MESSAGE_HANDLES_MAX ||
+            (handle_count != 0u &&
+             (user_handles & (sizeof(KernelHandle) - 1u)) != 0u)) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        copy_status = kernel_copy_from_user(
+            message, user_message, message_size);
+        if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+            copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
+            result = ASTRA_SYSCALL_BAD_ADDRESS;
+            break;
+        }
+        if (copy_status != KERNEL_USER_COPY_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        if (!valid_message_header(message, message_size)) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (handle_count != 0u) {
+            copy_status = kernel_copy_from_user(
+                attached, user_handles,
+                handle_count * sizeof(attached[0]));
+            if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+                copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
+                result = ASTRA_SYSCALL_BAD_ADDRESS;
+                break;
+            }
+            if (copy_status != KERNEL_USER_COPY_OK)
+                return KERNEL_PROCESS_CORRUPT;
+        }
+        performance = kernel_performance_begin(
+            KERNEL_PERFORMANCE_PORT_SEND);
+        port_status = kernel_port_send(
+            port, &current->handles, message, message_size,
+            handle_count != 0u ? attached : NULL, handle_count, &woken);
+        kernel_performance_end(performance);
+        if (!port_status_to_syscall(port_status, &result))
+            return KERNEL_PROCESS_CORRUPT;
+        if (port_status == KERNEL_PORT_WOULD_BLOCK) {
+            uint32_t sequence;
+
+            if (kernel_port_wait_sequence(
+                    port, KERNEL_PORT_ENDPOINT_SEND, &sequence) !=
+                KERNEL_PORT_OK)
+                return KERNEL_PROCESS_CORRUPT;
+            thread->port_probe_handle = thread->context.data[1];
+            thread->port_probe_sequence = sequence;
+        }
+        if (port_status == KERNEL_PORT_OK && woken != 0u &&
+            ready_thread_outranks(thread))
+            ++scheduler_stats.wake_preemptions;
+        if (!kernel_port_pool_healthy() ||
+            !kernel_handle_transfer_pool_healthy())
+            return KERNEL_PROCESS_CORRUPT;
+        break;
+    }
+    case ASTRA_SYSCALL_PORT_RECEIVE_TRY: {
+        KernelPort *port = NULL;
+        KernelPortReceipt receipt;
+        KernelHandleStatus handle_status;
+        KernelPortStatus port_status;
+        KernelPerformanceToken performance;
+        uint32_t user_message = thread->context.data[2];
+        uint32_t message_capacity = thread->context.data[3];
+        uint32_t user_handles = thread->context.data[4];
+        uint32_t handle_capacity = thread->context.data[5];
+        uint32_t required_size = 0u;
+        uint32_t required_handles = 0u;
+        uint32_t woken = 0u;
+        int copy_status;
+
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1],
+            KERNEL_OBJECT_PORT_RECEIVE, ASTRA_RIGHT_READ,
+            (void **)&port);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || port == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        if (message_capacity > ASTRA_MESSAGE_SIZE_MAX ||
+            handle_capacity > ASTRA_MESSAGE_HANDLES_MAX ||
+            (handle_capacity != 0u &&
+             (user_handles & (sizeof(KernelHandle) - 1u)) != 0u)) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        performance = kernel_performance_begin(
+            KERNEL_PERFORMANCE_PORT_RECEIVE);
+        port_status = kernel_port_receive_prepare(
+            port, &current->handles, message_capacity, handle_capacity,
+            &receipt, &required_size, &required_handles);
+        thread->context.data[1] = required_size;
+        thread->context.data[2] = required_handles;
+        if (port_status != KERNEL_PORT_OK) {
+            kernel_performance_end(performance);
+            if (!port_status_to_syscall(port_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        copy_status = kernel_copy_to_user(
+            user_message, receipt.message, receipt.message_size);
+        if (copy_status == KERNEL_USER_COPY_OK &&
+            receipt.handle_count != 0u) {
+            copy_status = kernel_copy_to_user(
+                user_handles, receipt.import.handles,
+                receipt.handle_count * sizeof(receipt.import.handles[0]));
+        }
+        if (copy_status != KERNEL_USER_COPY_OK) {
+            if (kernel_port_receive_cancel(&receipt, &woken) !=
+                KERNEL_PORT_OK) {
+                kernel_performance_end(performance);
+                return KERNEL_PROCESS_CORRUPT;
+            }
+            kernel_performance_end(performance);
+            if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+                copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
+                result = ASTRA_SYSCALL_BAD_ADDRESS;
+                break;
+            }
+            return KERNEL_PROCESS_CORRUPT;
+        }
+        port_status = kernel_port_receive_commit(&receipt, &woken);
+        kernel_performance_end(performance);
+        if (port_status != KERNEL_PORT_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        if (woken != 0u && ready_thread_outranks(thread))
+            ++scheduler_stats.wake_preemptions;
+        if (!kernel_port_pool_healthy() ||
+            !kernel_handle_transfer_pool_healthy())
+            return KERNEL_PROCESS_CORRUPT;
+        break;
+    }
     case ASTRA_SYSCALL_WAIT_ONE: {
         KernelHandle handle = thread->context.data[1];
         uint64_t deadline_cycles;
@@ -1991,7 +2808,8 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         }
         now = scheduler_cycles();
         status = wait_handle_set(current, thread, &handle, 1u, now,
-                                 deadline_cycles, false, &blocked, &result);
+                                 deadline_cycles, false, port_probe_handle,
+                                 port_probe_sequence, &blocked, &result);
         if (status != KERNEL_PROCESS_OK)
             return status;
         if (!blocked)
@@ -2035,7 +2853,8 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             return KERNEL_PROCESS_CORRUPT;
         now = scheduler_cycles();
         status = wait_handle_set(current, thread, handles, count, now,
-                                 deadline_cycles, true, &blocked, &result);
+                                 deadline_cycles, true, port_probe_handle,
+                                 port_probe_sequence, &blocked, &result);
         if (status != KERNEL_PROCESS_OK)
             return status;
         if (!blocked)
@@ -2256,6 +3075,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
     thread->context.data[0] = result;
     if (quantum_preempt_pending != 0u ||
         deadline_preempt_pending != 0u ||
+        wake_preemption_pending ||
         ready_thread_outranks(thread)) {
         status = schedule_pending(next_context);
         if (status != KERNEL_PROCESS_OK)
@@ -2333,7 +3153,13 @@ KernelProcessStatus kernel_process_maintenance(void)
 {
     KernelProcessStatus status = KERNEL_PROCESS_OK;
 
+#if defined(KERNEL_PROCESS_HOST_TEST)
     if (!process_pool_valid())
+#else
+    if (!process_pool_healthy() || !kernel_port_pool_healthy() ||
+        !kernel_area_pool_healthy() || !kernel_ring_pool_healthy() ||
+        !kernel_handle_transfer_pool_healthy())
+#endif
         return KERNEL_PROCESS_CORRUPT;
     kernel_bytes_clear(&maintenance_diagnostics,
                        sizeof(maintenance_diagnostics));
@@ -2532,12 +3358,20 @@ bool kernel_process_snapshot(uint32_t slot, KernelProcessSnapshot *snapshot)
 
 bool kernel_process_stats(KernelSchedulerStats *stats)
 {
+    KernelAreaPoolStats area_stats;
+    KernelHandleTransferStats handle_stats;
+    KernelPortPoolStats port_stats;
+    KernelRingPoolStats ring_stats;
     KernelSyncPoolStats sync_stats;
     KernelThreadPoolStats thread_stats;
 
     if (stats == NULL || !process_pool_valid() ||
         !kernel_thread_pool_stats(&thread_stats) ||
-        !kernel_sync_pool_stats(&sync_stats))
+        !kernel_sync_pool_stats(&sync_stats) ||
+        !kernel_port_pool_stats(&port_stats) ||
+        !kernel_area_pool_stats(&area_stats) ||
+        !kernel_ring_pool_stats(&ring_stats) ||
+        !kernel_handle_transfer_stats(&handle_stats))
         return false;
     if (thread_stats.created_threads != scheduler_stats.created_threads ||
         thread_stats.live_threads != scheduler_stats.live_threads ||
@@ -2612,6 +3446,35 @@ bool kernel_process_stats(KernelSchedulerStats *stats)
     stats->timer_arms = sync_stats.timer_arms;
     stats->timer_cancellations = sync_stats.timer_cancellations;
     stats->timer_expirations = sync_stats.timer_expirations;
+    stats->port_created = port_stats.created_ports;
+    stats->port_active = port_stats.active_ports;
+    stats->port_max_active = port_stats.max_active_ports;
+    stats->port_sends = port_stats.sends;
+    stats->port_receives = port_stats.receives;
+    stats->port_send_would_block = port_stats.send_would_block;
+    stats->port_receive_would_block = port_stats.receive_would_block;
+    stats->port_wait_wakeups = port_stats.wait_wakeups;
+    stats->port_owner_deaths = port_stats.owner_deaths;
+    stats->port_queued_messages = port_stats.queued_messages;
+    stats->port_queued_bytes = port_stats.queued_bytes;
+    stats->port_queued_handles = port_stats.queued_handles;
+    stats->handle_transfers = handle_stats.committed_exports;
+    stats->handle_transfer_pool_exhaustions =
+        handle_stats.pool_exhaustions;
+    stats->handle_transfer_max_detached = handle_stats.max_live_detached;
+    stats->area_created = area_stats.created_areas;
+    stats->area_active = area_stats.active_areas;
+    stats->area_mappings = area_stats.active_mappings;
+    stats->area_map_operations = area_stats.map_operations;
+    stats->area_unmap_operations = area_stats.unmap_operations;
+    stats->area_committed_pages = area_stats.committed_pages;
+    stats->ring_created = ring_stats.created_rings;
+    stats->ring_active = ring_stats.active_rings;
+    stats->ring_notifications = ring_stats.producer_notifications +
+                                ring_stats.consumer_notifications;
+    stats->ring_producer_notifications = ring_stats.producer_notifications;
+    stats->ring_consumer_notifications = ring_stats.consumer_notifications;
+    stats->ring_wait_wakeups = ring_stats.wait_wakeups;
     stats->milestone_complete = scheduler_stats.milestone_complete;
     stats->reserved[0] = 0u;
     stats->reserved[1] = 0u;

@@ -16,7 +16,7 @@ DMA, and MMIO ordering still applies even though only one CPU executes C code.
 | ordinary user thread syscall | yes, fallible | yes | yes | yes, before blocking/pin |
 | panic path | no | no | no | no |
 
-K6 retains one fixed stackful deferred worker. It runs with S=1/M=1 on a dedicated
+K7 retains one fixed stackful deferred worker. It runs with S=1/M=1 on a dedicated
 8 KiB MSP behind an unmapped 4 KiB guard; exception, syscall, and hard-IRQ
 entry use the separate guarded ISP. The worker enters at IPL 7, removes a
 bounded work bitmap, enables interrupts around process reclamation, remasks
@@ -50,7 +50,7 @@ IRQ work.
 
 ## Preemption model
 
-**CURRENT K6 substrate:** four process slots, 16 global thread slots, a
+**CURRENT K7 substrate:** four process slots, 16 global thread slots, a
 transitional limit of 15 threads/process, and a 5 ms one-shot quantum. At
 12.5 MHz the quantum is exactly 62,500 CPU cycles. The scheduler has 32
 intrusive FIFO ready queues and a 32-bit bitmap, selects the highest effective
@@ -66,9 +66,10 @@ between threads in one process does not reload CRP or flush caches/ATC; host,
 Musashi, full pin-level, and ULX3S tests count that path separately from a
 cross-CRP switch. Timer and voluntary-yield paths apply priority selection.
 The public event/semaphore/timer and death-wait paths prove immediate handoff
-when a higher-priority waiter wakes or its deadline expires. K6 includes
+when a higher-priority waiter wakes or its deadline expires. K7 retains
 transactional runtime thread creation, caller-only thread exit, waitable
-thread/process death, and bounded wait-multiple under provisional ABI 0.2.
+thread/process death, and bounded wait-multiple, and adds bounded message ports
+under provisional ABI 0.2.
 
 The running thread owns one absolute quantum deadline. Vesta is always
 reprogrammed to the earlier of that deadline and the root of the wait-deadline
@@ -151,10 +152,12 @@ repeated overruns fail qualification.
   priority/FIFO wait and close/wake-all.
 - `Semaphore`: CURRENT K4 handle-backed counted object with bounded direct
   waiter handoff and overflow rejection.
-- `Timer`: CURRENT K6 handle-backed one-shot, level-triggered object with a
+- `Timer`: CURRENT K7 handle-backed one-shot, level-triggered object with a
   fixed 32-entry deadline heap and deterministic slot tie-break.
-- `WaitMultiple`: CURRENT K6 fixed 1-16 member registration set covering
+- `WaitMultiple`: CURRENT K7 fixed 1-16 member registration set covering
   events, semaphores, timers, thread death, and process death.
+- `Port`: CURRENT K7 bounded datagram endpoint with readable/writable queues,
+  exact message/byte backpressure, peer-death wakeup, and atomic handle move.
 - `WaitQueue`: CURRENT INTERNAL intrusive priority/FIFO blocked-thread queue
   with a nonzero sequence counter preventing a stale condition check from
   blocking.
@@ -194,9 +197,9 @@ To prevent lost wakeups:
 Timeout, cancellation, signal, and peer death compete through one atomic waiter
 state; exactly one wins and supplies the result.
 
-The current single-CPU K6 synchronization and thread-lifecycle paths run inside
-serialized supervisor dispatch. They snapshot the wait-queue sequence while
-testing the condition; blocking succeeds only if that sequence is still
+The current single-CPU K7 synchronization, port, and thread-lifecycle paths run
+inside serialized supervisor dispatch. They snapshot the wait-queue sequence
+while testing the condition; blocking succeeds only if that sequence is still
 current.
 Every wake, expiry, close, or process retirement advances the sequence. A
 successful timed block links the thread to the object wait queue first and
@@ -210,9 +213,23 @@ death use this same owner. Wait-multiple validates every member before linking
 a fixed registration row and installs at most one thread deadline. The winning
 signal, timer expiry/cancel, target death, timeout, cancellation, close, owner
 death, or caller retirement removes every nonwinning registration before
-readiness. No path allocates or performs synchronous IPC. Future port/service
-peer-death semantics must reuse this owner rather than introduce a second
-timeout queue.
+readiness. No path allocates or performs synchronous IPC.
+
+K7 port endpoints reuse this exact owner. A receive handle samples the port's
+readable queue sequence; a send handle samples its writable queue sequence.
+Enqueue advances readable readiness, dequeue advances writable readiness, and
+close/owner death advances and drains both. The raw send/receive syscalls do not
+sleep. NDK deadline operations retry the raw call around K6 wait-one or
+wait-multiple with one absolute deadline, so ports add neither timeout links nor
+unchecked user pointers. A failed send captures the writable sequence in one
+per-thread retry token. Its immediately following matching wait ignores generic
+minimum-size readiness and blocks only if that exact sequence still holds;
+otherwise it retries immediately. This is the lost-wakeup contract for a send
+whose exact byte requirement exceeds currently free capacity. On the single
+core, source-handle invalidation plus
+FIFO publication and destination-handle publication plus FIFO removal are
+short interrupt-masked, allocation-free commits after every fallible check and
+user copy has completed.
 
 ## Interrupt and deferred work
 

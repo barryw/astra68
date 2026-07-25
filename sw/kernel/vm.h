@@ -6,6 +6,10 @@
 
 #define KERNEL_VM_USER_MIN 0x00010000u
 #define KERNEL_VM_USER_MAX 0x7fffffffu
+#define KERNEL_VM_AREA_BASE 0x40000000u
+#define KERNEL_VM_AREA_SLOT_SIZE 0x00010000u
+#define KERNEL_VM_AREA_SLOT_COUNT 8u
+#define KERNEL_VM_SHARED_ALIAS_MAX 4u
 
 #define KERNEL_VM_READ  (1u << 0)
 #define KERNEL_VM_WRITE (1u << 1)
@@ -61,15 +65,35 @@ KernelVmStatus kernel_vm_map_page(KernelAddressSpace *space,
                                   uint32_t permissions);
 KernelVmStatus kernel_vm_unmap_page(KernelAddressSpace *space,
                                     uint32_t virtual_address);
+KernelVmStatus kernel_vm_map_shared_range(
+    KernelAddressSpace *space, uint32_t virtual_address,
+    const uint32_t *physical_pages, uint32_t page_count,
+    uint32_t frame_owner, uint32_t permissions);
+KernelVmStatus kernel_vm_unmap_shared_range(
+    KernelAddressSpace *space, uint32_t virtual_address,
+    const uint32_t *physical_pages, uint32_t page_count,
+    uint32_t frame_owner);
 KernelVmStatus kernel_vm_switch(const KernelAddressSpace *space);
 KernelVmStatus kernel_vm_switch_to_empty(void);
+KernelVmStatus kernel_vm_sync_shared_aliases(void);
 bool kernel_vm_stats(KernelVmStats *stats);
 
 #if defined(KERNEL_VM_HOST_TEST)
+typedef enum KernelVmSharedMapFault {
+    KERNEL_VM_SHARED_MAP_FAULT_NONE = 0,
+    KERNEL_VM_SHARED_MAP_FAULT_AFTER_TABLE_ALLOCATE,
+    KERNEL_VM_SHARED_MAP_FAULT_AFTER_FRAME_RETAIN,
+    KERNEL_VM_SHARED_MAP_FAULT_AFTER_MAPPING_METADATA,
+    KERNEL_VM_SHARED_MAP_FAULT_AFTER_DESCRIPTOR_PUBLISH,
+    KERNEL_VM_SHARED_MAP_FAULT_AFTER_ROOT_PUBLISH,
+    KERNEL_VM_SHARED_MAP_FAULT_COUNT
+} KernelVmSharedMapFault;
+
 void kernel_vm_test_bind_physical_memory(uint8_t *memory, uint32_t base,
                                          uint32_t size);
 bool kernel_vm_test_translate_current(uint32_t virtual_address, bool write,
                                       uint32_t *physical_address);
+void kernel_vm_test_fail_next_shared_map(KernelVmSharedMapFault fault);
 #endif
 
 #endif

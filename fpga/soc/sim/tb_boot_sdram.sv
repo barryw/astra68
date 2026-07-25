@@ -140,6 +140,14 @@ module tb_boot_sdram #(
     reg k6_process_death_seen = 1'b0;
     reg k6_performance_seen = 1'b0;
     reg k6_marker_seen = 1'b0;
+    reg k7_port_seen = 1'b0;
+    reg k7_transfer_seen = 1'b0;
+    reg k7_performance_seen = 1'b0;
+    reg k7_marker_seen = 1'b0;
+    reg k8_area_seen = 1'b0;
+    reg k8_ring_seen = 1'b0;
+    reg k8_performance_seen = 1'b0;
+    reg k8_marker_seen = 1'b0;
     reg expect_kernel_panic;
     reg expect_kernel_soak = 1'b0;
     reg expect_kernel_guard = 1'b0;
@@ -186,6 +194,34 @@ module tb_boot_sdram #(
     integer parsed_wait_set_wake_cycles = 0;
     integer parsed_wait_set_wake_budget = 0;
     integer parsed_wait_set_overruns = 0;
+    integer parsed_port_sends = 0;
+    integer parsed_port_receives = 0;
+    integer parsed_port_backpressure = 0;
+    integer parsed_handle_transfers = 0;
+    integer parsed_max_detached = 0;
+    integer parsed_port_send_cycles = 0;
+    integer parsed_port_send_budget = 0;
+    integer parsed_port_receive_cycles = 0;
+    integer parsed_port_receive_budget = 0;
+    integer parsed_port_overruns = 0;
+    integer parsed_area_created = 0;
+    integer parsed_area_maps = 0;
+    integer parsed_area_unmaps = 0;
+    integer parsed_area_active = 0;
+    integer parsed_ring_created = 0;
+    integer parsed_ring_producer_notifications = 0;
+    integer parsed_ring_consumer_notifications = 0;
+    integer parsed_ring_wait_wakeups = 0;
+    integer parsed_ring_active = 0;
+    integer parsed_area_create_cycles = 0;
+    integer parsed_area_create_budget = 0;
+    integer parsed_area_map_cycles = 0;
+    integer parsed_area_map_budget = 0;
+    integer parsed_area_unmap_cycles = 0;
+    integer parsed_area_unmap_budget = 0;
+    integer parsed_ring_notify_cycles = 0;
+    integer parsed_ring_notify_budget = 0;
+    integer parsed_shared_ipc_overruns = 0;
     integer bist_cycles = 0;
     real bist_mbps;
 
@@ -297,7 +333,7 @@ module tb_boot_sdram #(
                                parsed_sync_close_wakeups,
                                parsed_sync_owner_deaths);
                     if (!expect_kernel_soak &&
-                        (parsed_sync_events != 4 ||
+                        (parsed_sync_events != 6 ||
                          parsed_sync_owner_deaths != 1))
                         $fatal(1,
                                "K4 normal synchronization counts invalid: event=%0d death=%0d",
@@ -321,9 +357,9 @@ module tb_boot_sdram #(
                                parsed_thread_waits,
                                parsed_thread_reaps);
                     if (!expect_kernel_soak &&
-                        (parsed_thread_exits != 2 ||
-                         parsed_thread_waits != 3 ||
-                         parsed_thread_reaps != 2))
+                        (parsed_thread_exits != 3 ||
+                         parsed_thread_waits != 4 ||
+                         parsed_thread_reaps != 3))
                         $fatal(1,
                                "K5 normal lifecycle counts invalid: exit=%0d waits=%0d reaped=%0d",
                                parsed_thread_exits,
@@ -368,9 +404,10 @@ module tb_boot_sdram #(
                             parsed_wait_blocks,
                             parsed_sync_wakeups,
                             parsed_priority_handoffs) == 3) begin
-                    if (parsed_wait_blocks != 11 ||
+                    if (parsed_wait_blocks < 12 ||
                         parsed_sync_wakeups != 5 ||
-                        parsed_priority_handoffs != 5)
+                        parsed_priority_handoffs != 6 ||
+                        (!expect_kernel_soak && parsed_wait_blocks != 12))
                         $fatal(1,
                                "K6 wait/wake counts invalid: blocks=%0d wake=%0d handoff=%0d",
                                parsed_wait_blocks, parsed_sync_wakeups,
@@ -470,6 +507,132 @@ module tb_boot_sdram #(
                 end
                 if (uart_line == "K6 BOUNDED WAIT-MULTIPLE PASS")
                     k6_marker_seen <= 1'b1;
+                if ($sscanf(uart_line,
+                            "Message ports ....... %d send, %d receive, %d backpressure",
+                            parsed_port_sends,
+                            parsed_port_receives,
+                            parsed_port_backpressure) == 3) begin
+                    if (parsed_port_sends != 3 ||
+                        parsed_port_receives != 3 ||
+                        parsed_port_backpressure != 1)
+                        $fatal(1,
+                               "K7 message-port counts invalid: send=%0d receive=%0d backpressure=%0d",
+                               parsed_port_sends, parsed_port_receives,
+                               parsed_port_backpressure);
+                    k7_port_seen <= 1'b1;
+                end
+                if ($sscanf(uart_line,
+                            "Handle transfer ..... %d committed, max detached %d",
+                            parsed_handle_transfers,
+                            parsed_max_detached) == 2) begin
+                    if (parsed_handle_transfers != 2 ||
+                        parsed_max_detached != 1)
+                        $fatal(1,
+                               "K7 handle-transfer counts invalid: committed=%0d max=%0d",
+                               parsed_handle_transfers,
+                               parsed_max_detached);
+                    k7_transfer_seen <= 1'b1;
+                end
+                if ($sscanf(uart_line,
+                            "K7 PERF port send=%d/%d receive=%d/%d overruns=%d",
+                            parsed_port_send_cycles,
+                            parsed_port_send_budget,
+                            parsed_port_receive_cycles,
+                            parsed_port_receive_budget,
+                            parsed_port_overruns) == 5) begin
+                    if (parsed_port_send_cycles <= 0 ||
+                        parsed_port_send_cycles > 25000 ||
+                        parsed_port_send_budget != 25000 ||
+                        parsed_port_receive_cycles <= 0 ||
+                        parsed_port_receive_cycles > 30000 ||
+                        parsed_port_receive_budget != 30000 ||
+                        parsed_port_overruns != 0)
+                        $fatal(1,
+                               "K7 port performance invalid: send=%0d/%0d receive=%0d/%0d overruns=%0d",
+                               parsed_port_send_cycles,
+                               parsed_port_send_budget,
+                               parsed_port_receive_cycles,
+                               parsed_port_receive_budget,
+                               parsed_port_overruns);
+                    k7_performance_seen <= 1'b1;
+                end
+                if (uart_line == "K7 MESSAGE PORTS PASS")
+                    k7_marker_seen <= 1'b1;
+                if ($sscanf(uart_line,
+                            "Shared areas ........ %d create, %d/%d map/unmap, %d active",
+                            parsed_area_created,
+                            parsed_area_maps,
+                            parsed_area_unmaps,
+                            parsed_area_active) == 4) begin
+                    if (parsed_area_created != 1 ||
+                        parsed_area_maps != 1 ||
+                        parsed_area_unmaps != 1 ||
+                        parsed_area_active != 0)
+                        $fatal(1,
+                               "K8 shared-area counts invalid: create=%0d map/unmap=%0d/%0d active=%0d",
+                               parsed_area_created, parsed_area_maps,
+                               parsed_area_unmaps, parsed_area_active);
+                    k8_area_seen <= 1'b1;
+                end
+                if ($sscanf(uart_line,
+                            "Bulk rings .......... %d create, %d/%d notify, %d blocked wake, %d active",
+                            parsed_ring_created,
+                            parsed_ring_producer_notifications,
+                            parsed_ring_consumer_notifications,
+                            parsed_ring_wait_wakeups,
+                            parsed_ring_active) == 5) begin
+                    if (parsed_ring_created != 1 ||
+                        parsed_ring_producer_notifications != 1 ||
+                        parsed_ring_consumer_notifications != 1 ||
+                        parsed_ring_wait_wakeups != 1 ||
+                        parsed_ring_active != 0)
+                        $fatal(1,
+                               "K8 bulk-ring counts invalid: create=%0d notify=%0d/%0d wake=%0d active=%0d",
+                               parsed_ring_created,
+                               parsed_ring_producer_notifications,
+                               parsed_ring_consumer_notifications,
+                               parsed_ring_wait_wakeups, parsed_ring_active);
+                    k8_ring_seen <= 1'b1;
+                end
+                if ($sscanf(uart_line,
+                            "K8 PERF area create=%d/%d map=%d/%d unmap=%d/%d notify=%d/%d overruns=%d",
+                            parsed_area_create_cycles,
+                            parsed_area_create_budget,
+                            parsed_area_map_cycles,
+                            parsed_area_map_budget,
+                            parsed_area_unmap_cycles,
+                            parsed_area_unmap_budget,
+                            parsed_ring_notify_cycles,
+                            parsed_ring_notify_budget,
+                            parsed_shared_ipc_overruns) == 9) begin
+                    if (parsed_area_create_cycles <= 0 ||
+                        parsed_area_create_cycles > 250000 ||
+                        parsed_area_create_budget != 250000 ||
+                        parsed_area_map_cycles <= 0 ||
+                        parsed_area_map_cycles > 125000 ||
+                        parsed_area_map_budget != 125000 ||
+                        parsed_area_unmap_cycles <= 0 ||
+                        parsed_area_unmap_cycles > 100000 ||
+                        parsed_area_unmap_budget != 100000 ||
+                        parsed_ring_notify_cycles <= 0 ||
+                        parsed_ring_notify_cycles > 30000 ||
+                        parsed_ring_notify_budget != 30000 ||
+                        parsed_shared_ipc_overruns != 0)
+                        $fatal(1,
+                               "K8 shared IPC performance invalid: create=%0d/%0d map=%0d/%0d unmap=%0d/%0d notify=%0d/%0d overruns=%0d",
+                               parsed_area_create_cycles,
+                               parsed_area_create_budget,
+                               parsed_area_map_cycles,
+                               parsed_area_map_budget,
+                               parsed_area_unmap_cycles,
+                               parsed_area_unmap_budget,
+                               parsed_ring_notify_cycles,
+                               parsed_ring_notify_budget,
+                               parsed_shared_ipc_overruns);
+                    k8_performance_seen <= 1'b1;
+                end
+                if (uart_line == "K8 SHARED BULK IPC PASS")
+                    k8_marker_seen <= 1'b1;
                 if (uart_line == "Reason: unhandled processor exception")
                     guard_reason_seen <= 1'b1;
                 if ($sscanf(uart_line, "Fault:  0x%h", parsed_fault_address) == 1 &&
@@ -545,9 +708,13 @@ module tb_boot_sdram #(
                  !k6_wait_wake_seen || !k6_deadline_counts_seen ||
                  !k6_wait_set_seen || !k6_registration_seen ||
                  !k6_timer_seen || !k6_process_death_seen ||
-                 !k6_performance_seen || !k6_marker_seen))
+                 !k6_performance_seen || !k6_marker_seen ||
+                 !k7_port_seen || !k7_transfer_seen ||
+                 !k7_performance_seen || !k7_marker_seen ||
+                 !k8_area_seen || !k8_ring_seen ||
+                 !k8_performance_seen || !k8_marker_seen))
                 $fatal(1,
-                       "kernel ready without K3-K6 evidence quantum=%b deadline=%b performance=%b sync=%b k4=%b lifecycle=%b k5perf=%b k5=%b wait=%b dl=%b set=%b reg=%b timer=%b process=%b k6perf=%b k6=%b",
+                       "kernel ready without K3-K8 evidence quantum=%b deadline=%b performance=%b sync=%b k4=%b lifecycle=%b k5perf=%b k5=%b wait=%b dl=%b set=%b reg=%b timer=%b process=%b k6perf=%b k6=%b port=%b transfer=%b k7perf=%b k7=%b area=%b ring=%b k8perf=%b k8=%b",
                        k3_quantum_seen, k3_deadline_seen,
                        k3_performance_seen, k4_sync_seen,
                        k4_marker_seen, k5_lifecycle_seen,
@@ -555,7 +722,11 @@ module tb_boot_sdram #(
                        k6_wait_wake_seen, k6_deadline_counts_seen,
                        k6_wait_set_seen, k6_registration_seen,
                        k6_timer_seen, k6_process_death_seen,
-                       k6_performance_seen, k6_marker_seen);
+                       k6_performance_seen, k6_marker_seen,
+                       k7_port_seen, k7_transfer_seen,
+                       k7_performance_seen, k7_marker_seen,
+                       k8_area_seen, k8_ring_seen,
+                       k8_performance_seen, k8_marker_seen);
             $display("KERNEL %s PASS status=%08x log_write=%0d wraps=%0d",
                      expect_kernel_panic ? "PANIC" :
                      expect_kernel_soak ? "SOAK" : "ENTRY",

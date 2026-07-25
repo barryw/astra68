@@ -280,6 +280,156 @@ def test_k6_wait_multiple_requires_exact_counts_budgets_and_history() -> None:
         )
 
 
+def test_k7_message_ports_requires_exact_counts_budgets_and_history() -> None:
+    output = (
+        b"POST PASS\n"
+        b"K2 PERF irq syscall=23349/50000 timer=13742/50000 "
+        b"fault=13283/125000\n"
+        b"K2 PERF sched pick=776/10000 same=1268/15000 "
+        b"cross=1555/50000\n"
+        b"K2 PERF wait block=2837/15000 wake=4355/15000 overruns=0\n"
+        b"K3 PERF deadline expire=6041/20000 overruns=0\n"
+        b"K5 PERF thread create=71837/150000 exit=12424/50000 "
+        b"reap=34719/125000 overruns=0\n"
+        b"K6 PERF wait-set block=3690/50000 wake=5545/50000 overruns=0\n"
+        b"K7 PERF port send=7119/25000 receive=9869/30000 overruns=0\n"
+        b"K2 PERFORMANCE PASS\n"
+        b"Wait/wake ........... 11 blocks, 5 wake, 5 priority handoff\n"
+        b"Deadlines ........... 2 expired, 1 priority handoff\n"
+        b"Sync objects ........ 6 event, 1 sem; cancel/close/death 1/1/1\n"
+        b"Thread lifecycle .... 2 exit, 3 waits, 2 reaped\n"
+        b"Wait multiple ....... 7 calls, 4 block, 4 wake; max 2 members\n"
+        b"Wait registrations .. 1 live, 3 max\n"
+        b"Waitable timers ..... 1 created, 1 armed, 1 expired\n"
+        b"Process death ....... 1 waits, 0 blocked wakes\n"
+        b"Message ports ....... 3 send, 3 receive, 1 backpressure\n"
+        b"Handle transfer ..... 2 committed, max detached 1\n"
+        b"K7 MESSAGE PORTS PASS\n"
+        b"K6 BOUNDED WAIT-MULTIPLE PASS\n"
+        b"K5 THREAD LIFECYCLE PASS\n"
+        b"K4 HANDLE SYNCHRONIZATION PASS\n"
+        b"K3 ONE-SHOT SCHEDULER PASS\n"
+        b"K3 DEADLINE QUEUE PASS\n"
+        b"K2 BLOCKING SUBSTRATE PASS\n"
+        b"K2 THREAD SUBSTRATE PASS\n"
+        b"K1 PROTECTED ENTRY PASS\n"
+    )
+
+    assert acceptance_reached(
+        output, None, False, expect_k7_message_ports=True
+    )
+    for missing in (
+        b"Message ports ....... 3 send, 3 receive, 1 backpressure\n",
+        b"Handle transfer ..... 2 committed, max detached 1\n",
+        b"K7 PERF port send=7119/25000 receive=9869/30000 overruns=0\n",
+        b"K7 MESSAGE PORTS PASS\n",
+    ):
+        assert not acceptance_reached(
+            output.replace(missing, b""),
+            None,
+            False,
+            expect_k7_message_ports=True,
+        )
+    for old, new in (
+        (b"3 send, 3 receive, 1 backpressure", b"2 send, 3 receive, 1 backpressure"),
+        (b"2 committed, max detached 1", b"1 committed, max detached 1"),
+        (b"2 committed, max detached 1", b"2 committed, max detached 2"),
+        (b"send=7119", b"send=0"),
+        (b"send=7119", b"send=25001"),
+        (b"7119/25000", b"7119/25001"),
+        (b"receive=9869", b"receive=30001"),
+        (b"9869/30000", b"9869/30001"),
+        (
+            b"K7 PERF port send=7119/25000 receive=9869/30000 overruns=0",
+            b"K7 PERF port send=7119/25000 receive=9869/30000 overruns=1",
+        ),
+        (b"Sync objects ........ 6 event", b"Sync objects ........ 4 event"),
+    ):
+        assert not acceptance_reached(
+            output.replace(old, new, 1),
+            None,
+            False,
+            expect_k7_message_ports=True,
+        )
+
+
+def test_k8_shared_bulk_requires_exact_cleanup_wake_budgets_and_history() -> None:
+    output = (
+        b"POST PASS\n"
+        b"K2 PERF irq syscall=28837/50000 timer=13850/50000 "
+        b"fault=19688/125000\n"
+        b"K2 PERF sched pick=768/10000 same=1379/15000 "
+        b"cross=1666/50000\n"
+        b"K2 PERF wait block=2825/15000 wake=4303/15000 overruns=0\n"
+        b"K3 PERF deadline expire=5963/20000 overruns=0\n"
+        b"K5 PERF thread create=70824/150000 exit=12908/50000 "
+        b"reap=19522/125000 overruns=0\n"
+        b"K6 PERF wait-set block=3674/50000 wake=5485/50000 overruns=0\n"
+        b"K7 PERF port send=7174/25000 receive=9914/30000 overruns=0\n"
+        b"K8 PERF area create=25288/250000 map=37472/125000 "
+        b"unmap=43238/100000 notify=15409/30000 overruns=0\n"
+        b"K2 PERFORMANCE PASS\n"
+        b"Wait/wake ........... 12 blocks, 5 wake, 6 priority handoff\n"
+        b"Deadlines ........... 2 expired, 1 priority handoff\n"
+        b"Sync objects ........ 6 event, 1 sem; cancel/close/death 1/1/1\n"
+        b"Thread lifecycle .... 3 exit, 4 waits, 3 reaped\n"
+        b"Wait multiple ....... 7 calls, 4 block, 4 wake; max 2 members\n"
+        b"Wait registrations .. 1 live, 3 max\n"
+        b"Waitable timers ..... 1 created, 1 armed, 1 expired\n"
+        b"Process death ....... 1 waits, 0 blocked wakes\n"
+        b"Message ports ....... 3 send, 3 receive, 1 backpressure\n"
+        b"Handle transfer ..... 2 committed, max detached 1\n"
+        b"Shared areas ........ 1 create, 1/1 map/unmap, 0 active\n"
+        b"Bulk rings .......... 1 create, 1/1 notify, 1 blocked wake, 0 active\n"
+        b"K8 SHARED BULK IPC PASS\n"
+        b"K7 MESSAGE PORTS PASS\n"
+        b"K6 BOUNDED WAIT-MULTIPLE PASS\n"
+        b"K5 THREAD LIFECYCLE PASS\n"
+        b"K4 HANDLE SYNCHRONIZATION PASS\n"
+        b"K3 ONE-SHOT SCHEDULER PASS\n"
+        b"K3 DEADLINE QUEUE PASS\n"
+        b"K2 BLOCKING SUBSTRATE PASS\n"
+        b"K2 THREAD SUBSTRATE PASS\n"
+        b"K1 PROTECTED ENTRY PASS\n"
+    )
+
+    assert acceptance_reached(
+        output, None, False, expect_k8_shared_bulk=True
+    )
+    for missing in (
+        b"Shared areas ........ 1 create, 1/1 map/unmap, 0 active\n",
+        b"Bulk rings .......... 1 create, 1/1 notify, 1 blocked wake, 0 active\n",
+        b"K8 PERF area create=25288/250000 map=37472/125000 "
+        b"unmap=43238/100000 notify=15409/30000 overruns=0\n",
+        b"K8 SHARED BULK IPC PASS\n",
+        b"K7 MESSAGE PORTS PASS\n",
+    ):
+        assert not acceptance_reached(
+            output.replace(missing, b""),
+            None,
+            False,
+            expect_k8_shared_bulk=True,
+        )
+    for old, new in (
+        (b"1/1 map/unmap, 0 active", b"1/1 map/unmap, 1 active"),
+        (b"1 blocked wake, 0 active", b"0 blocked wake, 0 active"),
+        (b"create=25288", b"create=250001"),
+        (b"25288/250000", b"25288/250001"),
+        (b"map=37472", b"map=0"),
+        (b"unmap=43238", b"unmap=100001"),
+        (b"notify=15409", b"notify=30001"),
+        (b"overruns=0", b"overruns=1"),
+        (b"3 exit, 4 waits, 3 reaped", b"2 exit, 4 waits, 3 reaped"),
+        (b"12 blocks, 5 wake, 6 priority handoff", b"11 blocks, 5 wake, 6 priority handoff"),
+    ):
+        assert not acceptance_reached(
+            output.replace(old, new, 1),
+            None,
+            False,
+            expect_k8_shared_bulk=True,
+        )
+
+
 def test_k2_performance_requires_exact_budgets_and_bounded_measurements() -> None:
     report = (
         b"K2 PERF irq syscall=1200/50000 timer=1300/50000 "

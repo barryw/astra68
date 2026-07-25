@@ -383,6 +383,37 @@ static void test_thread_lifecycle_uses_dedicated_metrics(void)
     assert(stats.metric[KERNEL_PERFORMANCE_SYSCALL_DISPATCH].samples == 0u);
 }
 
+static void test_shared_ipc_uses_dedicated_metrics(void)
+{
+    static const struct {
+        uint32_t syscall;
+        KernelPerformanceMetric metric;
+    } cases[] = {
+        { ASTRA_SYSCALL_AREA_CREATE, KERNEL_PERFORMANCE_AREA_CREATE },
+        { ASTRA_SYSCALL_AREA_MAP, KERNEL_PERFORMANCE_AREA_MAP },
+        { ASTRA_SYSCALL_AREA_UNMAP, KERNEL_PERFORMANCE_AREA_UNMAP },
+        { ASTRA_SYSCALL_RING_NOTIFY, KERNEL_PERFORMANCE_RING_NOTIFY },
+    };
+    uint32_t registers[15] = {0u};
+    uint8_t frame[8];
+
+    reset_fakes();
+    make_frame(frame, 0x0000u, ASTRA_SYSCALL_VECTOR * 4u);
+    for (uint32_t index = 0u;
+         index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        KernelPerformanceStats stats;
+
+        registers[0] = cases[index].syscall;
+        assert(kernel_syscall_entry_dispatch(registers, frame,
+                                             0x70000f80u) ==
+               kernel_dispatch_user_target(&timer_context));
+        assert(kernel_performance_stats(&stats));
+        assert(stats.metric[cases[index].metric].samples == 1u);
+        assert(stats.metric[KERNEL_PERFORMANCE_SYSCALL_DISPATCH].samples ==
+               0u);
+    }
+}
+
 static void test_last_runnable_block_selects_idle_worker(void)
 {
     uint32_t registers[15] = {0u};
@@ -414,6 +445,7 @@ int main(void)
     test_last_process_fault_selects_worker();
     test_nonexit_syscall_resumes_user();
     test_thread_lifecycle_uses_dedicated_metrics();
+    test_shared_ipc_uses_dedicated_metrics();
     test_last_runnable_block_selects_idle_worker();
     puts("dispatch tests passed");
     return 0;

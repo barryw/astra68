@@ -55,6 +55,28 @@ Service boundaries isolate failures, but hot paths batch work through shared
 areas and bounded rings. Astra does not turn every line, input event, or block
 fragment into a synchronous RPC merely to make the kernel boundary smaller.
 
+## Driver extension policy
+
+The public extension surface is a versioned user-space driver/service ABI, not
+a loadable binary kernel extension ABI. A driver service receives only explicit
+IRQ endpoints, cache-policy-checked MMIO mappings, bounded DMA buffers, and
+service handles. It can be restarted and its mappings, IRQs, pins, and pending
+operations can be revoked without trusting driver code in supervisor mode.
+
+Code that cannot be isolated because it participates in exception entry,
+PMMU/cache maintenance, interrupt acknowledgement, or an unavoidable
+latency-critical bus transaction is source-integrated into Axiom. Such code is
+not runtime-loadable: it is reviewed, rebuilt, linked, and qualified with the
+kernel, may use only the internal device-boundary interfaces, and has no ABI
+compatibility guarantee. Third-party binary kexts are deliberately unsupported.
+
+The MC68030 PMMU constrains CPU accesses, not independent FPGA bus masters.
+User-space DMA therefore requires FPGA-enforced address/length bounds or
+kernel-submitted descriptors from pages pinned and charged to the driver
+service. Until that enforcement is qualified, a user driver receives no raw
+DMA programming authority. Device removal, service death, timeout, and reset
+must revoke DMA before frames can be reused.
+
 ## Kernel layers
 
 Dependencies point down only:

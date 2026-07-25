@@ -88,6 +88,41 @@ typedef struct AstraAcquireOptions {
 #define ASTRA_ACQUIRE_OPTIONS_INIT \
     { sizeof(AstraAcquireOptions), ASTRA_ACQUIRE_EXCLUSIVE, 0, { 0, 0, 0, 0, 0 } }
 
+/**
+ * Close one process-owned capability.
+ *
+ * On success, the function replaces @p handle with ::ASTRA_INVALID_HANDLE.
+ * Closing the final capability may wake waiters or notify a peer according to
+ * the object's contract. Numeric copies of a handle do not duplicate it; they
+ * become stale when the capability is closed or transferred.
+ *
+ * @param[in,out] handle Capability to close and invalidate.
+ * @return ::ASTRA_OK, ::ASTRA_ERROR_INVALID_ARGUMENT, or
+ *         ::ASTRA_ERROR_INVALID_HANDLE.
+ * @since 0.1.0
+ */
+ASTRA_NODISCARD AstraResult astra_handle_close(AstraHandle *handle);
+
+/**
+ * Duplicate one cloneable capability while reducing its rights.
+ *
+ * The requested rights must be a nonzero subset of the source rights, and the
+ * source must grant ::ASTRA_RIGHT_TRANSFER. The source remains owned by the
+ * caller. Only object classes with an explicit retain operation are
+ * cloneable; move-only endpoints return ::ASTRA_ERROR_PERMISSION.
+ *
+ * @param source Existing source capability.
+ * @param rights Reduced rights for the new capability.
+ * @param[out] duplicate Receives the independently owned capability.
+ * @return ::ASTRA_OK or a validation, permission, peer-death, or resource
+ *         error.
+ * @since 0.1.0
+ */
+ASTRA_NODISCARD AstraResult astra_handle_duplicate(
+    AstraHandle source,
+    uint32_t rights,
+    AstraHandle *duplicate);
+
 /** @} */
 
 ASTRA_EXTERN_C_END

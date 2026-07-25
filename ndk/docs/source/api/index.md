@@ -5,6 +5,9 @@
 
 core
 resources
+ports
+areas
+bulk-rings
 front-panel
 fonts
 graphics

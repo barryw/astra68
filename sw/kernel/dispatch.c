@@ -226,10 +226,28 @@ KernelDispatchTarget syscall_entry_dispatch_profiled(
 #endif
 
     if (registers != NULL) {
-        if (registers[0] == ASTRA_SYSCALL_THREAD_CREATE)
+        switch (registers[0]) {
+        case ASTRA_SYSCALL_THREAD_CREATE:
             metric = KERNEL_PERFORMANCE_THREAD_CREATE;
-        else if (registers[0] == ASTRA_SYSCALL_THREAD_EXIT)
+            break;
+        case ASTRA_SYSCALL_THREAD_EXIT:
             metric = KERNEL_PERFORMANCE_THREAD_EXIT;
+            break;
+        case ASTRA_SYSCALL_AREA_CREATE:
+            metric = KERNEL_PERFORMANCE_AREA_CREATE;
+            break;
+        case ASTRA_SYSCALL_AREA_MAP:
+            metric = KERNEL_PERFORMANCE_AREA_MAP;
+            break;
+        case ASTRA_SYSCALL_AREA_UNMAP:
+            metric = KERNEL_PERFORMANCE_AREA_UNMAP;
+            break;
+        case ASTRA_SYSCALL_RING_NOTIFY:
+            metric = KERNEL_PERFORMANCE_RING_NOTIFY;
+            break;
+        default:
+            break;
+        }
     }
     performance = kernel_performance_begin_sampled(metric);
 #if ASTRA_KERNEL_SCHED_TRACE

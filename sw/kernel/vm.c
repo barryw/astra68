@@ -23,7 +23,9 @@
 #define VM_KERNEL_OWNER 1u
 #define VM_SDRAM_BASE 0x02000000u
 #define VM_SDRAM_ROOT_INDEX VM_ROOT_INDEX(VM_SDRAM_BASE)
-#define VM_MAPPED_BITMAP_BYTES ((KERNEL_MAX_FRAMES + 7u) / 8u)
+#define VM_MAPPING_COUNT_SHIFT 4u
+#define VM_MAPPING_CLASS_MASK 0x0fu
+#define VM_MAPPING_PRIVATE_CLASS 0x0fu
 
 #if defined(KERNEL_VM_HOST_TEST)
 #define VM_KERNEL_STACK_GUARD 0x02080000u
@@ -52,7 +54,7 @@ static uint32_t kernel_low_table_physical;
 static uint32_t kernel_high_table_physical;
 static uint32_t empty_root_physical;
 static uint32_t current_user_root;
-static uint8_t mapped_user_frames[VM_MAPPED_BITMAP_BYTES];
+static uint8_t mapped_user_frames[KERNEL_MAX_FRAMES];
 static KernelVmStats vm_stats;
 static bool initialized;
 static bool enabled;
@@ -67,6 +69,7 @@ static _Alignas(4) uint32_t transparent_disabled;
 static uint8_t *host_memory;
 static uint32_t host_memory_base;
 static uint32_t host_memory_size;
+static KernelVmSharedMapFault next_shared_map_fault;
 
 void kernel_vm_test_bind_physical_memory(uint8_t *memory, uint32_t base,
                                          uint32_t size)
@@ -74,6 +77,21 @@ void kernel_vm_test_bind_physical_memory(uint8_t *memory, uint32_t base,
     host_memory = memory;
     host_memory_base = base;
     host_memory_size = size;
+}
+
+void kernel_vm_test_fail_next_shared_map(KernelVmSharedMapFault fault)
+{
+    next_shared_map_fault =
+        fault < KERNEL_VM_SHARED_MAP_FAULT_COUNT ?
+            fault : KERNEL_VM_SHARED_MAP_FAULT_NONE;
+}
+
+static bool consume_shared_map_fault(KernelVmSharedMapFault fault)
+{
+    if (next_shared_map_fault != fault)
+        return false;
+    next_shared_map_fault = KERNEL_VM_SHARED_MAP_FAULT_NONE;
+    return true;
 }
 #endif
 
@@ -152,28 +170,95 @@ static uint32_t frame_index(uint32_t physical_address)
 
 static bool frame_is_user_mapped(uint32_t physical_address)
 {
-    uint32_t index;
-
     if ((physical_address & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
         physical_address < VM_SDRAM_BASE ||
         physical_address - VM_SDRAM_BASE >=
             KERNEL_MAX_FRAMES * KERNEL_PAGE_SIZE)
         return false;
-    index = frame_index(physical_address);
-
-    return (mapped_user_frames[index >> 3] &
-            (uint8_t)(1u << (index & 7u))) != 0u;
+    return (mapped_user_frames[frame_index(physical_address)] >>
+            VM_MAPPING_COUNT_SHIFT) != 0u;
 }
 
-static void set_frame_user_mapped(uint32_t physical_address, bool mapped)
+static bool shared_mapping_class(uint32_t virtual_address,
+                                 uint8_t *mapping_class)
+{
+    uint32_t offset;
+
+    if (mapping_class == NULL || virtual_address < KERNEL_VM_AREA_BASE)
+        return false;
+    offset = virtual_address - KERNEL_VM_AREA_BASE;
+    if (offset >= KERNEL_VM_AREA_SLOT_COUNT * KERNEL_VM_AREA_SLOT_SIZE)
+        return false;
+    *mapping_class = (uint8_t)(offset / KERNEL_VM_AREA_SLOT_SIZE);
+    return true;
+}
+
+static bool frame_mapping_can_add(uint32_t physical_address,
+                                  KernelFrameState state,
+                                  uint32_t virtual_address)
+{
+    uint8_t encoded = mapped_user_frames[frame_index(physical_address)];
+    uint8_t count = encoded >> VM_MAPPING_COUNT_SHIFT;
+    uint8_t mapping_class;
+
+    if (state == KERNEL_FRAME_PROCESS)
+        return count == 0u;
+    if (state != KERNEL_FRAME_SHARED ||
+        !shared_mapping_class(virtual_address, &mapping_class) ||
+        count >= KERNEL_VM_SHARED_ALIAS_MAX)
+        return false;
+    return count == 0u ||
+           (encoded & VM_MAPPING_CLASS_MASK) == mapping_class;
+}
+
+static bool frame_mapping_add(uint32_t physical_address,
+                              KernelFrameState state,
+                              uint32_t virtual_address)
 {
     uint32_t index = frame_index(physical_address);
-    uint8_t mask = (uint8_t)(1u << (index & 7u));
+    uint8_t encoded = mapped_user_frames[index];
+    uint8_t count = encoded >> VM_MAPPING_COUNT_SHIFT;
+    uint8_t mapping_class;
 
-    if (mapped)
-        mapped_user_frames[index >> 3] |= mask;
-    else
-        mapped_user_frames[index >> 3] &= (uint8_t)~mask;
+    if (!frame_mapping_can_add(physical_address, state, virtual_address))
+        return false;
+    if (state == KERNEL_FRAME_PROCESS) {
+        mapped_user_frames[index] =
+            (uint8_t)((1u << VM_MAPPING_COUNT_SHIFT) |
+                      VM_MAPPING_PRIVATE_CLASS);
+        return true;
+    }
+    if (!shared_mapping_class(virtual_address, &mapping_class))
+        return false;
+    mapped_user_frames[index] =
+        (uint8_t)(((count + 1u) << VM_MAPPING_COUNT_SHIFT) | mapping_class);
+    return true;
+}
+
+static bool frame_mapping_remove(uint32_t physical_address,
+                                 KernelFrameState state,
+                                 uint32_t virtual_address)
+{
+    uint32_t index = frame_index(physical_address);
+    uint8_t encoded = mapped_user_frames[index];
+    uint8_t count = encoded >> VM_MAPPING_COUNT_SHIFT;
+    uint8_t mapping_class;
+
+    if (state == KERNEL_FRAME_PROCESS) {
+        if (count != 1u ||
+            (encoded & VM_MAPPING_CLASS_MASK) != VM_MAPPING_PRIVATE_CLASS)
+            return false;
+        mapped_user_frames[index] = 0u;
+        return true;
+    }
+    if (state != KERNEL_FRAME_SHARED || count == 0u ||
+        !shared_mapping_class(virtual_address, &mapping_class) ||
+        (encoded & VM_MAPPING_CLASS_MASK) != mapping_class)
+        return false;
+    --count;
+    mapped_user_frames[index] = count == 0u ? 0u :
+        (uint8_t)((count << VM_MAPPING_COUNT_SHIFT) | mapping_class);
+    return true;
 }
 
 static void clear_space(KernelAddressSpace *space)
@@ -359,7 +444,10 @@ KernelVmStatus kernel_vm_init(void)
     kernel_high_table_physical = 0u;
     empty_root_physical = 0u;
     current_user_root = 0u;
-    for (uint32_t index = 0u; index < VM_MAPPED_BITMAP_BYTES; ++index)
+#if defined(KERNEL_VM_HOST_TEST)
+    next_shared_map_fault = KERNEL_VM_SHARED_MAP_FAULT_NONE;
+#endif
+    for (uint32_t index = 0u; index < KERNEL_MAX_FRAMES; ++index)
         mapped_user_frames[index] = 0u;
     reset_stats();
 
@@ -513,7 +601,8 @@ KernelVmStatus kernel_vm_map_page(KernelAddressSpace *space,
         }
         return KERNEL_VM_ALREADY_MAPPED;
     }
-    if (frame_is_user_mapped(physical_address)) {
+    if (!frame_mapping_can_add(physical_address, KERNEL_FRAME_PROCESS,
+                               virtual_address)) {
         if (allocated_table) {
             root[root_index] = VM_DESC_INVALID;
             (void)kernel_memory_release(table_physical, 1u, space->owner);
@@ -533,7 +622,17 @@ KernelVmStatus kernel_vm_map_page(KernelAddressSpace *space,
         return KERNEL_VM_CORRUPT;
     }
 
-    set_frame_user_mapped(physical_address, true);
+    if (!frame_mapping_add(physical_address, KERNEL_FRAME_PROCESS,
+                           virtual_address)) {
+        (void)kernel_memory_release(physical_address, 1u, space->owner);
+        if (allocated_table) {
+            root[root_index] = VM_DESC_INVALID;
+            (void)kernel_memory_release(table_physical, 1u, space->owner);
+            --space->table_pages;
+            --vm_stats.user_table_pages;
+        }
+        return KERNEL_VM_CORRUPT;
+    }
     table[table_index] = physical_address | VM_DESC_PAGE |
         ((permissions & KERNEL_VM_WRITE) != 0u ? 0u :
          VM_DESC_WRITE_PROTECT);
@@ -553,6 +652,8 @@ KernelVmStatus kernel_vm_unmap_page(KernelAddressSpace *space,
     uint32_t table_index;
     uint32_t table_physical;
     uint32_t page_physical;
+    uint32_t frame_owner;
+    KernelFrameInfo frame;
 
     if (!initialized || space == NULL || space->initialized == 0u ||
         !valid_user_page(virtual_address))
@@ -571,13 +672,19 @@ KernelVmStatus kernel_vm_unmap_page(KernelAddressSpace *space,
         return KERNEL_VM_NOT_MAPPED;
 
     page_physical = table[table_index] & VM_DESC_PAGE_ADDRESS;
-    if (!frame_is_user_mapped(page_physical))
+    if (!kernel_memory_frame_info(page_physical, &frame) ||
+        (frame.state != KERNEL_FRAME_PROCESS &&
+         frame.state != KERNEL_FRAME_SHARED) ||
+        !frame_is_user_mapped(page_physical))
         return KERNEL_VM_CORRUPT;
+    frame_owner = frame.owner;
     table[table_index] = VM_DESC_INVALID;
     invalidate_caches();
     flush_all();
-    set_frame_user_mapped(page_physical, false);
-    if (kernel_memory_release(page_physical, 1u, space->owner) !=
+    if (!frame_mapping_remove(page_physical,
+                              (KernelFrameState)frame.state,
+                              virtual_address) ||
+        kernel_memory_release(page_physical, 1u, frame_owner) !=
         KERNEL_MEMORY_OK)
         return KERNEL_VM_CORRUPT;
     --space->mapped_pages;
@@ -586,6 +693,284 @@ KernelVmStatus kernel_vm_unmap_page(KernelAddressSpace *space,
     if (table_empty(table)) {
         root[root_index] = VM_DESC_INVALID;
         flush_all();
+        if (kernel_memory_release(table_physical, 1u, space->owner) !=
+            KERNEL_MEMORY_OK)
+            return KERNEL_VM_CORRUPT;
+        --space->table_pages;
+        --vm_stats.user_table_pages;
+    }
+    return KERNEL_VM_OK;
+}
+
+KernelVmStatus kernel_vm_map_shared_range(
+    KernelAddressSpace *space, uint32_t virtual_address,
+    const uint32_t *physical_pages, uint32_t page_count,
+    uint32_t frame_owner, uint32_t permissions)
+{
+    volatile uint32_t *root;
+    volatile uint32_t *table = NULL;
+    uint32_t root_index;
+    uint32_t table_physical = 0u;
+    uint32_t retained = 0u;
+    uint32_t mapping_count = 0u;
+    uint32_t descriptor_count = 0u;
+    bool allocated_table = false;
+    bool root_published = false;
+    bool cleanup_failed = false;
+    KernelVmStatus result = KERNEL_VM_CORRUPT;
+    uint8_t mapping_class;
+
+    if (!initialized || space == NULL || space->initialized == 0u ||
+        physical_pages == NULL || page_count == 0u ||
+        page_count > KERNEL_VM_AREA_SLOT_SIZE / KERNEL_PAGE_SIZE ||
+        frame_owner == KERNEL_OWNER_NONE ||
+        (virtual_address & (KERNEL_VM_AREA_SLOT_SIZE - 1u)) != 0u ||
+        !shared_mapping_class(virtual_address, &mapping_class) ||
+        (permissions & KERNEL_VM_READ) == 0u ||
+        (permissions & KERNEL_VM_EXEC) != 0u ||
+        (permissions & ~(KERNEL_VM_READ | KERNEL_VM_WRITE)) != 0u)
+        return KERNEL_VM_INVALID_ARGUMENT;
+    (void)mapping_class;
+
+    root = physical_words(space->root_physical);
+    if (root == NULL)
+        return KERNEL_VM_CORRUPT;
+    root_index = VM_ROOT_INDEX(virtual_address);
+    if ((root[root_index] & VM_DESC_TYPE_MASK) == VM_DESC_INVALID) {
+        KernelVmStatus status = allocate_table(space->owner, &table_physical);
+
+        if (status != KERNEL_VM_OK)
+            return status;
+        table = physical_words(table_physical);
+        allocated_table = true;
+    } else if ((root[root_index] & VM_DESC_TYPE_MASK) == VM_DESC_TABLE) {
+        table_physical = root[root_index] & VM_DESC_TABLE_ADDRESS;
+        table = physical_words(table_physical);
+    } else {
+        return KERNEL_VM_CORRUPT;
+    }
+    if (table == NULL) {
+        result = KERNEL_VM_CORRUPT;
+        goto rollback;
+    }
+#if defined(KERNEL_VM_HOST_TEST)
+    if (allocated_table && consume_shared_map_fault(
+            KERNEL_VM_SHARED_MAP_FAULT_AFTER_TABLE_ALLOCATE)) {
+        result = KERNEL_VM_OUT_OF_MEMORY;
+        goto rollback;
+    }
+#endif
+
+    for (uint32_t page = 0u; page < page_count; ++page) {
+        KernelFrameInfo frame;
+        uint32_t physical = physical_pages[page];
+        uint32_t address = virtual_address + page * KERNEL_PAGE_SIZE;
+        uint32_t table_index = VM_TABLE_INDEX(address);
+
+        if ((physical & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
+            !kernel_memory_frame_info(physical, &frame)) {
+            result = KERNEL_VM_INVALID_ARGUMENT;
+            goto rollback;
+        }
+        if ((table[table_index] & VM_DESC_TYPE_MASK) != VM_DESC_INVALID) {
+            result = KERNEL_VM_ALREADY_MAPPED;
+            goto rollback;
+        }
+        if (frame.owner != frame_owner ||
+            frame.state != KERNEL_FRAME_SHARED || frame.references == 0u) {
+            result = KERNEL_VM_NOT_OWNED;
+            goto rollback;
+        }
+        if (!frame_mapping_can_add(physical, KERNEL_FRAME_SHARED, address)) {
+            result = KERNEL_VM_CACHE_ALIAS;
+            goto rollback;
+        }
+        for (uint32_t prior = 0u; prior < page; ++prior) {
+            if (physical_pages[prior] == physical) {
+                result = KERNEL_VM_INVALID_ARGUMENT;
+                goto rollback;
+            }
+        }
+    }
+
+    for (; retained < page_count; ++retained) {
+        if (kernel_memory_retain(physical_pages[retained], 1u,
+                                 frame_owner) != KERNEL_MEMORY_OK)
+            break;
+    }
+    if (retained != page_count) {
+        result = KERNEL_VM_CORRUPT;
+        goto rollback;
+    }
+#if defined(KERNEL_VM_HOST_TEST)
+    if (consume_shared_map_fault(
+            KERNEL_VM_SHARED_MAP_FAULT_AFTER_FRAME_RETAIN)) {
+        result = KERNEL_VM_OUT_OF_MEMORY;
+        goto rollback;
+    }
+#endif
+
+    for (; mapping_count < page_count; ++mapping_count) {
+        uint32_t address =
+            virtual_address + mapping_count * KERNEL_PAGE_SIZE;
+
+        if (!frame_mapping_add(physical_pages[mapping_count],
+                               KERNEL_FRAME_SHARED, address)) {
+            result = KERNEL_VM_CORRUPT;
+            goto rollback;
+        }
+    }
+#if defined(KERNEL_VM_HOST_TEST)
+    if (consume_shared_map_fault(
+            KERNEL_VM_SHARED_MAP_FAULT_AFTER_MAPPING_METADATA)) {
+        result = KERNEL_VM_OUT_OF_MEMORY;
+        goto rollback;
+    }
+#endif
+
+    for (; descriptor_count < page_count; ++descriptor_count) {
+        uint32_t address =
+            virtual_address + descriptor_count * KERNEL_PAGE_SIZE;
+
+        table[VM_TABLE_INDEX(address)] =
+            physical_pages[descriptor_count] | VM_DESC_PAGE |
+            ((permissions & KERNEL_VM_WRITE) != 0u ? 0u :
+             VM_DESC_WRITE_PROTECT);
+    }
+#if defined(KERNEL_VM_HOST_TEST)
+    if (consume_shared_map_fault(
+            KERNEL_VM_SHARED_MAP_FAULT_AFTER_DESCRIPTOR_PUBLISH)) {
+        result = KERNEL_VM_OUT_OF_MEMORY;
+        goto rollback;
+    }
+#endif
+
+    if (allocated_table) {
+        root[root_index] = table_physical | VM_DESC_TABLE;
+        root_published = true;
+    }
+#if defined(KERNEL_VM_HOST_TEST)
+    if (root_published && consume_shared_map_fault(
+            KERNEL_VM_SHARED_MAP_FAULT_AFTER_ROOT_PUBLISH)) {
+        result = KERNEL_VM_OUT_OF_MEMORY;
+        goto rollback;
+    }
+#endif
+
+    invalidate_caches();
+    flush_all();
+    if (allocated_table) {
+        ++space->table_pages;
+        ++vm_stats.user_table_pages;
+    }
+    space->mapped_pages += page_count;
+    vm_stats.user_mappings += page_count;
+    return KERNEL_VM_OK;
+
+rollback:
+    if (root_published)
+        root[root_index] = VM_DESC_INVALID;
+    while (descriptor_count != 0u) {
+        uint32_t address;
+
+        --descriptor_count;
+        address = virtual_address + descriptor_count * KERNEL_PAGE_SIZE;
+        table[VM_TABLE_INDEX(address)] = VM_DESC_INVALID;
+    }
+    if (root_published || (!allocated_table && mapping_count != 0u)) {
+        invalidate_caches();
+        flush_all();
+    }
+    while (mapping_count != 0u) {
+        uint32_t address;
+
+        --mapping_count;
+        address = virtual_address + mapping_count * KERNEL_PAGE_SIZE;
+        if (!frame_mapping_remove(physical_pages[mapping_count],
+                                  KERNEL_FRAME_SHARED, address))
+            cleanup_failed = true;
+    }
+    while (retained != 0u) {
+        --retained;
+        if (kernel_memory_release(physical_pages[retained], 1u,
+                                  frame_owner) != KERNEL_MEMORY_OK)
+            cleanup_failed = true;
+    }
+    if (allocated_table &&
+        kernel_memory_release(table_physical, 1u, space->owner) !=
+            KERNEL_MEMORY_OK)
+        cleanup_failed = true;
+    return cleanup_failed ? KERNEL_VM_CORRUPT : result;
+}
+
+KernelVmStatus kernel_vm_unmap_shared_range(
+    KernelAddressSpace *space, uint32_t virtual_address,
+    const uint32_t *physical_pages, uint32_t page_count,
+    uint32_t frame_owner)
+{
+    volatile uint32_t *root;
+    volatile uint32_t *table;
+    uint32_t root_index;
+    uint32_t table_physical;
+    bool release_table;
+    uint8_t mapping_class;
+
+    if (!initialized || space == NULL || space->initialized == 0u ||
+        physical_pages == NULL || page_count == 0u ||
+        page_count > KERNEL_VM_AREA_SLOT_SIZE / KERNEL_PAGE_SIZE ||
+        frame_owner == KERNEL_OWNER_NONE ||
+        (virtual_address & (KERNEL_VM_AREA_SLOT_SIZE - 1u)) != 0u ||
+        !shared_mapping_class(virtual_address, &mapping_class))
+        return KERNEL_VM_INVALID_ARGUMENT;
+    (void)mapping_class;
+    root = physical_words(space->root_physical);
+    if (root == NULL)
+        return KERNEL_VM_CORRUPT;
+    root_index = VM_ROOT_INDEX(virtual_address);
+    if ((root[root_index] & VM_DESC_TYPE_MASK) != VM_DESC_TABLE)
+        return KERNEL_VM_NOT_MAPPED;
+    table_physical = root[root_index] & VM_DESC_TABLE_ADDRESS;
+    table = physical_words(table_physical);
+    if (table == NULL)
+        return KERNEL_VM_CORRUPT;
+
+    for (uint32_t page = 0u; page < page_count; ++page) {
+        KernelFrameInfo frame;
+        uint32_t address = virtual_address + page * KERNEL_PAGE_SIZE;
+        uint32_t descriptor = table[VM_TABLE_INDEX(address)];
+
+        if ((descriptor & VM_DESC_TYPE_MASK) != VM_DESC_PAGE ||
+            (descriptor & VM_DESC_PAGE_ADDRESS) != physical_pages[page])
+            return KERNEL_VM_NOT_MAPPED;
+        if (!kernel_memory_frame_info(physical_pages[page], &frame) ||
+            frame.owner != frame_owner || frame.state != KERNEL_FRAME_SHARED ||
+            !frame_is_user_mapped(physical_pages[page]))
+            return KERNEL_VM_CORRUPT;
+    }
+
+    for (uint32_t page = 0u; page < page_count; ++page) {
+        uint32_t address = virtual_address + page * KERNEL_PAGE_SIZE;
+
+        table[VM_TABLE_INDEX(address)] = VM_DESC_INVALID;
+    }
+    release_table = table_empty(table);
+    if (release_table)
+        root[root_index] = VM_DESC_INVALID;
+    invalidate_caches();
+    flush_all();
+
+    for (uint32_t page = 0u; page < page_count; ++page) {
+        uint32_t address = virtual_address + page * KERNEL_PAGE_SIZE;
+
+        if (!frame_mapping_remove(physical_pages[page], KERNEL_FRAME_SHARED,
+                                  address) ||
+            kernel_memory_release(physical_pages[page], 1u, frame_owner) !=
+                KERNEL_MEMORY_OK)
+            return KERNEL_VM_CORRUPT;
+    }
+    space->mapped_pages -= page_count;
+    vm_stats.user_mappings -= page_count;
+    if (release_table) {
         if (kernel_memory_release(table_physical, 1u, space->owner) !=
             KERNEL_MEMORY_OK)
             return KERNEL_VM_CORRUPT;
@@ -626,18 +1011,27 @@ KernelVmStatus kernel_vm_destroy_address_space(KernelAddressSpace *space)
         for (uint32_t table_index = 0u; table_index < VM_TABLE_ENTRIES;
              ++table_index) {
             uint32_t page_physical;
+            uint32_t virtual_address;
+            KernelFrameInfo frame;
 
             if ((table[table_index] & VM_DESC_TYPE_MASK) == VM_DESC_INVALID)
                 continue;
             if ((table[table_index] & VM_DESC_TYPE_MASK) != VM_DESC_PAGE)
                 return KERNEL_VM_CORRUPT;
             page_physical = table[table_index] & VM_DESC_PAGE_ADDRESS;
-            if (!frame_is_user_mapped(page_physical))
+            virtual_address = (root_index << 22) |
+                              (table_index << KERNEL_PAGE_SHIFT);
+            if (!kernel_memory_frame_info(page_physical, &frame) ||
+                (frame.state != KERNEL_FRAME_PROCESS &&
+                 frame.state != KERNEL_FRAME_SHARED) ||
+                !frame_is_user_mapped(page_physical))
                 return KERNEL_VM_CORRUPT;
             table[table_index] = VM_DESC_INVALID;
             flush_all();
-            set_frame_user_mapped(page_physical, false);
-            if (kernel_memory_release(page_physical, 1u, space->owner) !=
+            if (!frame_mapping_remove(page_physical,
+                                      (KernelFrameState)frame.state,
+                                      virtual_address) ||
+                kernel_memory_release(page_physical, 1u, frame.owner) !=
                 KERNEL_MEMORY_OK)
                 return KERNEL_VM_CORRUPT;
             --space->mapped_pages;
@@ -694,6 +1088,14 @@ KernelVmStatus kernel_vm_switch_to_empty(void)
     current_user_root = empty_root_physical;
     ++vm_stats.flushes;
     ++vm_stats.switches;
+    return KERNEL_VM_OK;
+}
+
+KernelVmStatus kernel_vm_sync_shared_aliases(void)
+{
+    if (!initialized)
+        return KERNEL_VM_INVALID_ARGUMENT;
+    invalidate_caches();
     return KERNEL_VM_OK;
 }
 

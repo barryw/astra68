@@ -299,11 +299,181 @@ static void test_destroy_releases_read_only_mapping(void)
     assert(kernel_memory_release_owner(77u, NULL) == KERNEL_MEMORY_OK);
 }
 
+static void assert_shared_map_baseline(
+    const KernelAddressSpace *space, const KernelAddressSpace *baseline_space,
+    const uint32_t *physical_pages, uint32_t page_count,
+    const KernelMemoryStats *baseline_memory,
+    const KernelVmStats *baseline_vm, uint32_t root_descriptor)
+{
+    KernelMemoryStats memory;
+    KernelVmStats vm;
+    uint32_t *root = physical_words(space->root_physical);
+
+    assert(memcmp(space, baseline_space, sizeof(*space)) == 0);
+    assert(root[0x100u] == root_descriptor);
+    assert(kernel_memory_stats(&memory));
+    assert(memory.free_frames == baseline_memory->free_frames);
+    assert(memory.owner_slots_used == baseline_memory->owner_slots_used);
+    assert(kernel_vm_stats(&vm));
+    assert(vm.address_spaces == baseline_vm->address_spaces);
+    assert(vm.user_mappings == baseline_vm->user_mappings);
+    assert(vm.user_table_pages == baseline_vm->user_table_pages);
+    for (uint32_t page = 0u; page < page_count; ++page) {
+        KernelFrameInfo frame;
+
+        assert(kernel_memory_frame_info(physical_pages[page], &frame));
+        assert(frame.state == KERNEL_FRAME_SHARED);
+        assert(frame.references == 1u);
+    }
+}
+
+static void test_shared_map_transaction_rolls_back_every_stage(void)
+{
+    static const KernelVmSharedMapFault faults[] = {
+        KERNEL_VM_SHARED_MAP_FAULT_AFTER_TABLE_ALLOCATE,
+        KERNEL_VM_SHARED_MAP_FAULT_AFTER_FRAME_RETAIN,
+        KERNEL_VM_SHARED_MAP_FAULT_AFTER_MAPPING_METADATA,
+        KERNEL_VM_SHARED_MAP_FAULT_AFTER_DESCRIPTOR_PUBLISH,
+        KERNEL_VM_SHARED_MAP_FAULT_AFTER_ROOT_PUBLISH
+    };
+    const uint32_t frame_owner = 0x40000011u;
+
+    for (uint32_t index = 0u;
+         index < sizeof(faults) / sizeof(faults[0]); ++index) {
+        KernelAddressSpace space = {0};
+        KernelAddressSpace baseline_space;
+        KernelMemoryStats initial_memory;
+        KernelMemoryStats baseline_memory;
+        KernelMemoryStats final_memory;
+        KernelVmStats baseline_vm;
+        uint32_t physical_pages[2];
+        uint32_t root_descriptor;
+
+        initialize_test();
+        assert(kernel_memory_stats(&initial_memory));
+        assert(kernel_vm_create_address_space(42u, &space) == KERNEL_VM_OK);
+        assert(kernel_memory_alloc_pages_zeroed(
+                   2u, KERNEL_FRAME_SHARED, frame_owner, physical_pages) ==
+               KERNEL_MEMORY_OK);
+        baseline_space = space;
+        assert(kernel_memory_stats(&baseline_memory));
+        assert(kernel_vm_stats(&baseline_vm));
+        root_descriptor = physical_words(space.root_physical)[0x100u];
+        assert(root_descriptor == 0u);
+
+        kernel_vm_test_fail_next_shared_map(faults[index]);
+        assert(kernel_vm_map_shared_range(
+                   &space, KERNEL_VM_AREA_BASE, physical_pages, 2u,
+                   frame_owner, KERNEL_VM_READ | KERNEL_VM_WRITE) ==
+               KERNEL_VM_OUT_OF_MEMORY);
+        assert_shared_map_baseline(
+            &space, &baseline_space, physical_pages, 2u, &baseline_memory,
+            &baseline_vm, root_descriptor);
+
+        assert(kernel_vm_map_shared_range(
+                   &space, KERNEL_VM_AREA_BASE, physical_pages, 2u,
+                   frame_owner, KERNEL_VM_READ | KERNEL_VM_WRITE) ==
+               KERNEL_VM_OK);
+        assert(kernel_vm_unmap_shared_range(
+                   &space, KERNEL_VM_AREA_BASE, physical_pages, 2u,
+                   frame_owner) == KERNEL_VM_OK);
+        assert(kernel_memory_release(physical_pages[0], 1u, frame_owner) ==
+               KERNEL_MEMORY_OK);
+        assert(kernel_memory_release(physical_pages[1], 1u, frame_owner) ==
+               KERNEL_MEMORY_OK);
+        assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
+        assert(kernel_memory_stats(&final_memory));
+        assert(final_memory.free_frames == initial_memory.free_frames);
+    }
+}
+
+static void test_shared_map_existing_leaf_rollback_and_alias_guards(void)
+{
+    const uint32_t frame_owner = 0x40000012u;
+    KernelAddressSpace first = {0};
+    KernelAddressSpace second = {0};
+    KernelAddressSpace baseline_space;
+    KernelMemoryStats initial_memory;
+    KernelMemoryStats baseline_memory;
+    KernelMemoryStats final_memory;
+    KernelVmStats baseline_vm;
+    KernelFrameInfo frame;
+    uint32_t physical_pages[2];
+    uint32_t private_page;
+    uint32_t root_descriptor;
+    uint32_t *table;
+
+    initialize_test();
+    assert(kernel_memory_stats(&initial_memory));
+    assert(kernel_vm_create_address_space(51u, &first) == KERNEL_VM_OK);
+    assert(kernel_vm_create_address_space(52u, &second) == KERNEL_VM_OK);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 51u,
+                               &private_page) == KERNEL_MEMORY_OK);
+    assert(kernel_vm_map_page(&first, 0x40080000u, private_page,
+                              KERNEL_VM_READ | KERNEL_VM_WRITE) ==
+           KERNEL_VM_OK);
+    assert(kernel_memory_alloc_pages_zeroed(
+               2u, KERNEL_FRAME_SHARED, frame_owner, physical_pages) ==
+           KERNEL_MEMORY_OK);
+    root_descriptor = physical_words(first.root_physical)[0x100u];
+    assert((root_descriptor & 3u) == 2u);
+    table = physical_words(root_descriptor & 0xfffffff0u);
+    assert(table[0] == 0u && table[1] == 0u);
+    baseline_space = first;
+    assert(kernel_memory_stats(&baseline_memory));
+    assert(kernel_vm_stats(&baseline_vm));
+
+    kernel_vm_test_fail_next_shared_map(
+        KERNEL_VM_SHARED_MAP_FAULT_AFTER_DESCRIPTOR_PUBLISH);
+    assert(kernel_vm_map_shared_range(
+               &first, KERNEL_VM_AREA_BASE, physical_pages, 2u, frame_owner,
+               KERNEL_VM_READ | KERNEL_VM_WRITE) ==
+           KERNEL_VM_OUT_OF_MEMORY);
+    assert_shared_map_baseline(
+        &first, &baseline_space, physical_pages, 2u, &baseline_memory,
+        &baseline_vm, root_descriptor);
+    assert(table[0] == 0u && table[1] == 0u);
+
+    assert(kernel_vm_map_shared_range(
+               &first, KERNEL_VM_AREA_BASE, physical_pages, 2u, frame_owner,
+               KERNEL_VM_READ | KERNEL_VM_WRITE) == KERNEL_VM_OK);
+    assert(kernel_vm_map_shared_range(
+               &second, KERNEL_VM_AREA_BASE + KERNEL_VM_AREA_SLOT_SIZE,
+               physical_pages, 2u, frame_owner, KERNEL_VM_READ) ==
+           KERNEL_VM_CACHE_ALIAS);
+    assert(kernel_vm_map_shared_range(
+               &second, KERNEL_VM_AREA_BASE, physical_pages, 2u,
+               frame_owner, KERNEL_VM_READ) == KERNEL_VM_OK);
+    assert(kernel_vm_map_shared_range(
+               &second, KERNEL_VM_AREA_BASE, physical_pages, 2u,
+               frame_owner, KERNEL_VM_READ) == KERNEL_VM_ALREADY_MAPPED);
+    assert(kernel_vm_unmap_shared_range(
+               &second, KERNEL_VM_AREA_BASE, physical_pages, 2u,
+               frame_owner) == KERNEL_VM_OK);
+    assert(kernel_vm_unmap_shared_range(
+               &first, KERNEL_VM_AREA_BASE, physical_pages, 2u,
+               frame_owner) == KERNEL_VM_OK);
+    assert(kernel_memory_frame_info(physical_pages[0], &frame));
+    assert(frame.references == 1u);
+    assert(kernel_memory_release(physical_pages[0], 1u, frame_owner) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_memory_release(physical_pages[1], 1u, frame_owner) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_vm_unmap_page(&first, 0x40080000u) == KERNEL_VM_OK);
+    assert(kernel_memory_release(private_page, 1u, 51u) == KERNEL_MEMORY_OK);
+    assert(kernel_vm_destroy_address_space(&first) == KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&second) == KERNEL_VM_OK);
+    assert(kernel_memory_stats(&final_memory));
+    assert(final_memory.free_frames == initial_memory.free_frames);
+}
+
 int main(void)
 {
     test_kernel_root_and_enable_sequence();
     test_map_switch_unmap_and_stale_guards();
     test_destroy_releases_read_only_mapping();
+    test_shared_map_transaction_rolls_back_every_stage();
+    test_shared_map_existing_leaf_rollback_and_alias_guards();
     puts("KERNEL VM PASS");
     return 0;
 }

@@ -30,6 +30,13 @@ K5_THREAD_BUDGETS = {
     "reap": 125_000,
 }
 K6_WAIT_SET_BUDGETS = {"block": 50_000, "wake": 50_000}
+K7_PORT_BUDGETS = {"send": 25_000, "receive": 30_000}
+K8_SHARED_IPC_BUDGETS = {
+    "create": 250_000,
+    "map": 125_000,
+    "unmap": 100_000,
+    "notify": 30_000,
+}
 AXIOM_PANIC_BANNER = b"*** AXIOM KERNEL PANIC ***"
 
 
@@ -159,7 +166,12 @@ def k5_thread_lifecycle_reached(output: bytes | bytearray) -> bool:
     )
 
 
-def k6_wait_multiple_reached(output: bytes | bytearray) -> bool:
+def _wait_multiple_reached(
+    output: bytes | bytearray,
+    expected_events: int,
+    expected_lifecycle: tuple[int, int, int] = (2, 3, 2),
+    expected_wait_wake: tuple[int, int, int] = (11, 5, 5),
+) -> bool:
     sync = re.search(
         rb"(?m)^Sync objects[ .]+(\d+) event, (\d+) sem; "
         rb"cancel/close/death (\d+)/(\d+)/(\d+)\r?$",
@@ -220,9 +232,15 @@ def k6_wait_multiple_reached(output: bytes | bytearray) -> bool:
     assert timers is not None
     assert process_death is not None
     assert wait_performance is not None
-    if tuple(int(value) for value in sync.groups()) != (4, 1, 1, 1, 1):
+    if tuple(int(value) for value in sync.groups()) != (
+        expected_events,
+        1,
+        1,
+        1,
+        1,
+    ):
         return False
-    if tuple(int(value) for value in lifecycle.groups()) != (2, 3, 2):
+    if tuple(int(value) for value in lifecycle.groups()) != expected_lifecycle:
         return False
     if tuple(int(value) for value in wait_set.groups()) != (7, 4, 4, 2):
         return False
@@ -257,11 +275,15 @@ def k6_wait_multiple_reached(output: bytes | bytearray) -> bool:
     return (
         k3_scheduler_reached(output)
         and re.search(
-            rb"(?m)^Wait/wake[ .]+11 blocks, 5 wake, "
-            rb"5 priority handoff\r?$",
+            rb"(?m)^Wait/wake[ .]+"
+            + str(expected_wait_wake[0]).encode()
+            + rb" blocks, "
+            + str(expected_wait_wake[1]).encode()
+            + rb" wake, "
+            + str(expected_wait_wake[2]).encode()
+            + rb" priority handoff\r?$",
             output,
-        )
-        is not None
+        ) is not None
         and re.search(
             rb"(?m)^Deadlines[ .]+2 expired, 1 priority handoff\r?$",
             output,
@@ -270,6 +292,100 @@ def k6_wait_multiple_reached(output: bytes | bytearray) -> bool:
         and b"K6 BOUNDED WAIT-MULTIPLE PASS" in output
         and b"K5 THREAD LIFECYCLE PASS" in output
         and b"K4 HANDLE SYNCHRONIZATION PASS" in output
+    )
+
+
+def k6_wait_multiple_reached(output: bytes | bytearray) -> bool:
+    return _wait_multiple_reached(output, 4)
+
+
+def _message_port_contract_reached(output: bytes | bytearray) -> bool:
+    ports = re.search(
+        rb"(?m)^Message ports[ .]+(\d+) send, (\d+) receive, "
+        rb"(\d+) backpressure\r?$",
+        output,
+    )
+    transfers = re.search(
+        rb"(?m)^Handle transfer[ .]+(\d+) committed, "
+        rb"max detached (\d+)\r?$",
+        output,
+    )
+    performance = re.search(
+        rb"(?m)^K7 PERF port send=(\d+)/(\d+) "
+        rb"receive=(\d+)/(\d+) overruns=0\r?$",
+        output,
+    )
+    if ports is None or transfers is None or performance is None:
+        return False
+    if tuple(int(value) for value in ports.groups()) != (3, 3, 1):
+        return False
+    if tuple(int(value) for value in transfers.groups()) != (2, 1):
+        return False
+    values = [int(value) for value in performance.groups()]
+    for index, name in enumerate(("send", "receive")):
+        measured = values[index * 2]
+        reported_budget = values[index * 2 + 1]
+        expected_budget = K7_PORT_BUDGETS[name]
+        if (
+            measured <= 0
+            or measured > expected_budget
+            or reported_budget != expected_budget
+        ):
+            return False
+    return True
+
+
+def k7_message_ports_reached(output: bytes | bytearray) -> bool:
+    return (
+        _message_port_contract_reached(output)
+        and _wait_multiple_reached(output, 6)
+        and b"K7 MESSAGE PORTS PASS" in output
+    )
+
+
+def k8_shared_bulk_reached(output: bytes | bytearray) -> bool:
+    areas = re.search(
+        rb"(?m)^Shared areas[ .]+(\d+) create, (\d+)/(\d+) map/unmap, "
+        rb"(\d+) active\r?$",
+        output,
+    )
+    rings = re.search(
+        rb"(?m)^Bulk rings[ .]+(\d+) create, (\d+)/(\d+) notify, "
+        rb"(\d+) blocked wake, (\d+) active\r?$",
+        output,
+    )
+    performance = re.search(
+        rb"(?m)^K8 PERF area create=(\d+)/(\d+) map=(\d+)/(\d+) "
+        rb"unmap=(\d+)/(\d+) notify=(\d+)/(\d+) overruns=0\r?$",
+        output,
+    )
+    if areas is None or rings is None or performance is None:
+        return False
+    if tuple(int(value) for value in areas.groups()) != (1, 1, 1, 0):
+        return False
+    if tuple(int(value) for value in rings.groups()) != (1, 1, 1, 1, 0):
+        return False
+    values = [int(value) for value in performance.groups()]
+    for index, name in enumerate(("create", "map", "unmap", "notify")):
+        measured = values[index * 2]
+        reported_budget = values[index * 2 + 1]
+        expected_budget = K8_SHARED_IPC_BUDGETS[name]
+        if (
+            measured <= 0
+            or measured > expected_budget
+            or reported_budget != expected_budget
+        ):
+            return False
+    return (
+        _message_port_contract_reached(output)
+        and _wait_multiple_reached(
+            output,
+            6,
+            expected_lifecycle=(3, 4, 3),
+            expected_wait_wake=(12, 5, 6),
+        )
+        and b"K8 SHARED BULK IPC PASS" in output
+        and b"K7 MESSAGE PORTS PASS" in output
     )
 
 
@@ -345,6 +461,8 @@ def acceptance_reached(
     expect_k4_synchronization: bool = False,
     expect_k5_thread_lifecycle: bool = False,
     expect_k6_wait_multiple: bool = False,
+    expect_k7_message_ports: bool = False,
+    expect_k8_shared_bulk: bool = False,
 ) -> bool:
     if expect_route_probe:
         match = re.search(
@@ -436,6 +554,10 @@ def acceptance_reached(
                 soak_reached = True
                 break
         kernel_entry_reached = soak_reached
+    elif expect_k8_shared_bulk:
+        kernel_entry_reached = k8_shared_bulk_reached(output)
+    elif expect_k7_message_ports:
+        kernel_entry_reached = k7_message_ports_reached(output)
     elif expect_k6_wait_multiple:
         kernel_entry_reached = k6_wait_multiple_reached(output)
     elif expect_k5_thread_lifecycle:
@@ -576,6 +698,22 @@ def main() -> int:
         ),
     )
     kernel_entry_group.add_argument(
+        "--expect-k8-shared-bulk",
+        action="store_true",
+        help=(
+            "require K8 shared-area and bounded-ring lifecycle, wake, cycle "
+            "budgets, and all retained K7/K6/K5/K4/K3/K2/K1 markers"
+        ),
+    )
+    kernel_entry_group.add_argument(
+        "--expect-k7-message-ports",
+        action="store_true",
+        help=(
+            "require bounded K7 message-port counts, atomic handle-transfer "
+            "evidence, budgets, and all retained K6/K5/K4/K3/K2/K1 markers"
+        ),
+    )
+    kernel_entry_group.add_argument(
         "--expect-k6-wait-multiple",
         action="store_true",
         help=(
@@ -685,6 +823,8 @@ def main() -> int:
         or args.expect_k4_synchronization
         or args.expect_k5_thread_lifecycle
         or args.expect_k6_wait_multiple
+        or args.expect_k7_message_ports
+        or args.expect_k8_shared_bulk
         or args.expect_k1_soak_cycles is not None
         or args.expect_k1_fault_max_cycles is not None
         or args.expect_k1_min_elapsed_cycles is not None
@@ -793,6 +933,8 @@ def main() -> int:
                     args.expect_k4_synchronization,
                     args.expect_k5_thread_lifecycle,
                     args.expect_k6_wait_multiple,
+                    args.expect_k7_message_ports,
+                    args.expect_k8_shared_bulk,
                 ):
                     break
                 if failure_reached(output, args.expect_kernel_panic):
@@ -812,6 +954,8 @@ def main() -> int:
         "graphics" if args.expect_graphics else
         "kernel panic" if args.expect_kernel_panic else
         "K1 soak" if args.expect_k1_soak_cycles is not None else
+        "K8 shared bulk IPC" if args.expect_k8_shared_bulk else
+        "K7 message ports" if args.expect_k7_message_ports else
         "K6 wait-multiple" if args.expect_k6_wait_multiple else
         "K5 thread lifecycle" if args.expect_k5_thread_lifecycle else
         "K4 synchronization" if args.expect_k4_synchronization else
@@ -843,6 +987,8 @@ def main() -> int:
         args.expect_k4_synchronization,
         args.expect_k5_thread_lifecycle,
         args.expect_k6_wait_multiple,
+        args.expect_k7_message_ports,
+        args.expect_k8_shared_bulk,
     ):
         return 0
     if failure_reached(output, args.expect_kernel_panic):

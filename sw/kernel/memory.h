@@ -65,6 +65,9 @@ KernelMemoryStatus kernel_memory_alloc_zeroed(uint32_t frame_count,
                                               KernelFrameState state,
                                               uint32_t owner,
                                               uint32_t *physical_base);
+KernelMemoryStatus kernel_memory_alloc_pages_zeroed(
+    uint32_t frame_count, KernelFrameState state, uint32_t owner,
+    uint32_t *physical_pages);
 KernelMemoryStatus kernel_memory_retain(uint32_t physical_base,
                                         uint32_t frame_count,
                                         uint32_t owner);
@@ -86,5 +89,10 @@ bool kernel_memory_frame_info(uint32_t physical_address,
                               KernelFrameInfo *info);
 bool kernel_memory_owner_frames(uint32_t owner, uint32_t *frame_count);
 bool kernel_memory_stats(KernelMemoryStats *stats);
+
+#if defined(KERNEL_MEMORY_HOST_TEST)
+void kernel_memory_test_bind_physical_memory(uint8_t *memory, uint32_t base,
+                                             uint32_t size);
+#endif
 
 #endif

@@ -1,3 +1,4 @@
+#include "area.h"
 #include "block.h"
 #include "dma.h"
 #include "exception.h"
@@ -22,6 +23,8 @@
      ASTRA_RIGHT_ADMINISTER)
 #define TEST_TIMER_RIGHTS \
     (ASTRA_RIGHT_READ | ASTRA_RIGHT_WAIT | ASTRA_RIGHT_ADMINISTER)
+#define TEST_TRANSFER_SYNC_RIGHTS \
+    (TEST_SYNC_RIGHTS | ASTRA_RIGHT_TRANSFER)
 #define TEST_PROCESS_WAIT_RIGHTS \
     (ASTRA_RIGHT_READ | ASTRA_RIGHT_WAIT)
 
@@ -363,6 +366,8 @@ static void initialize_test(void)
     astra_boot_info_finalize(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
     memset(physical_memory, 0xa5, sizeof(physical_memory));
+    kernel_memory_test_bind_physical_memory(physical_memory, 0x02000000u,
+                                            sizeof(physical_memory));
     kernel_vm_test_bind_physical_memory(physical_memory, 0x02000000u,
                                         sizeof(physical_memory));
     kernel_process_test_bind_physical_memory(physical_memory, 0x02000000u,
@@ -2816,6 +2821,853 @@ static void test_process_fault_death_reports_peer_dead(void)
     assert(final.free_frames == baseline.free_frames);
 }
 
+static void test_message_port_syscall_atomicity_and_cleanup(void)
+{
+    static const uint8_t image[] = {
+        0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u
+    };
+    struct TestMessage {
+        AstraMessageHeader header;
+        uint32_t payload[2];
+    } message;
+    const uint32_t input_message_address = KERNEL_PROCESS_STACK_TOP - 1024u;
+    const uint32_t output_message_address = KERNEL_PROCESS_STACK_TOP - 768u;
+    const uint32_t input_handles_address = KERNEL_PROCESS_STACK_TOP - 512u;
+    const uint32_t output_handles_address = KERNEL_PROCESS_STACK_TOP - 256u;
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 1536u;
+    KernelMemoryStats baseline;
+    KernelMemoryStats final;
+    KernelSchedulerStats stats;
+    KernelCpuContext *next;
+    KernelThread *port_thread;
+    KernelHandle attached;
+    KernelHandle imported;
+    struct TestMessage received;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+    uint32_t receive_handle;
+    uint32_t send_handle;
+    uint32_t event_handle;
+
+    initialize_test();
+    assert(kernel_memory_stats(&baseline));
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_CREATE;
+    registers[1] = 1u;
+    registers[2] = sizeof(message);
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    receive_handle = next->data[1];
+    send_handle = next->data[2];
+    assert(receive_handle != KERNEL_HANDLE_INVALID);
+    assert(send_handle != KERNEL_HANDLE_INVALID);
+    assert(receive_handle != send_handle);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_RECEIVE_TRY;
+    registers[1] = receive_handle;
+    registers[2] = output_message_address;
+    registers[3] = sizeof(message);
+    registers[4] = output_handles_address;
+    registers[5] = 1u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_WOULD_BLOCK);
+    assert(next->data[1] == 0u);
+    assert(next->data[2] == 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_EVENT_CREATE;
+    registers[2] = TEST_TRANSFER_SYNC_RIGHTS;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    event_handle = next->data[1];
+
+    memset(&message, 0, sizeof(message));
+    message.header.total_size = sizeof(message);
+    message.header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
+    message.header.protocol = 0x4b375450u;
+    message.header.protocol_version = 1u;
+    message.header.operation = 7u;
+    message.header.transaction_id = 0x12345678u;
+    message.payload[0] = 0x11223344u;
+    message.payload[1] = 0x55667788u;
+    attached = event_handle;
+    assert(kernel_user_copy_to_asm(input_message_address, &message,
+                                   sizeof(message)) == KERNEL_USER_COPY_OK);
+    assert(kernel_user_copy_to_asm(input_handles_address, &attached,
+                                   sizeof(attached)) == KERNEL_USER_COPY_OK);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_SEND_TRY;
+    registers[1] = send_handle;
+    registers[2] = input_message_address;
+    registers[3] = sizeof(message);
+    registers[4] = input_handles_address;
+    registers[5] = 1u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_process_test_handle_count(process_id) == 4u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CLOSE;
+    registers[1] = event_handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+
+    /* Required sizes are reported without reserving destination slots. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_RECEIVE_TRY;
+    registers[1] = receive_handle;
+    registers[2] = output_message_address;
+    registers[3] = sizeof(message) - 1u;
+    registers[4] = output_handles_address;
+    registers[5] = 0u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_BUFFER_TOO_SMALL);
+    assert(next->data[1] == sizeof(message));
+    assert(next->data[2] == 1u);
+    assert(kernel_process_test_handle_count(process_id) == 4u);
+
+    /* Either copy may fault; neither publishes the queued authority. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_RECEIVE_TRY;
+    registers[1] = receive_handle;
+    registers[2] = 0u;
+    registers[3] = sizeof(message);
+    registers[4] = output_handles_address;
+    registers[5] = 1u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_BAD_ADDRESS);
+    assert(kernel_process_test_handle_count(process_id) == 4u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_RECEIVE_TRY;
+    registers[1] = receive_handle;
+    registers[2] = output_message_address;
+    registers[3] = sizeof(message);
+    registers[4] = 0u;
+    registers[5] = 1u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_BAD_ADDRESS);
+    assert(kernel_process_test_handle_count(process_id) == 4u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_WAIT_ONE;
+    registers[1] = receive_handle;
+    registers[2] = ASTRA_DEADLINE_NONE_HI;
+    registers[3] = ASTRA_DEADLINE_NONE_LO;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_RECEIVE_TRY;
+    registers[1] = receive_handle;
+    registers[2] = output_message_address;
+    registers[3] = sizeof(message);
+    registers[4] = output_handles_address;
+    registers[5] = 1u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == sizeof(message));
+    assert(next->data[2] == 1u);
+    assert(kernel_process_test_handle_count(process_id) == 5u);
+    assert(kernel_user_copy_from_asm(&received, output_message_address,
+                                     sizeof(received)) ==
+           KERNEL_USER_COPY_OK);
+    assert(memcmp(&received, &message, sizeof(message)) == 0);
+    assert(kernel_user_copy_from_asm(&imported, output_handles_address,
+                                     sizeof(imported)) ==
+           KERNEL_USER_COPY_OK);
+    assert(imported != event_handle);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_SIGNAL;
+    registers[1] = imported;
+    registers[2] = 1u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CLOSE;
+    registers[1] = imported;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    /* A full queue is checked before attached handles are touched. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_SEND_TRY;
+    registers[1] = send_handle;
+    registers[2] = input_message_address;
+    registers[3] = sizeof(message);
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_EVENT_CREATE;
+    registers[2] = TEST_TRANSFER_SYNC_RIGHTS;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    event_handle = next->data[1];
+    attached = event_handle;
+    assert(kernel_user_copy_to_asm(input_handles_address, &attached,
+                                   sizeof(attached)) == KERNEL_USER_COPY_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_SEND_TRY;
+    registers[1] = send_handle;
+    registers[2] = input_message_address;
+    registers[3] = sizeof(message);
+    registers[4] = input_handles_address;
+    registers[5] = 1u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_WOULD_BLOCK);
+    assert(kernel_process_test_handle_count(process_id) == 5u);
+    port_thread = kernel_thread_at(0u);
+    assert(port_thread != NULL);
+    assert(port_thread->port_probe_handle == send_handle);
+    assert(port_thread->port_probe_sequence != 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_RECEIVE_TRY;
+    registers[1] = receive_handle;
+    registers[2] = output_message_address;
+    registers[3] = sizeof(message);
+    registers[5] = 0u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(port_thread->port_probe_handle == KERNEL_HANDLE_INVALID);
+    assert(port_thread->port_probe_sequence == 0u);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_WAIT_ONE;
+    registers[1] = send_handle;
+    registers[2] = ASTRA_DEADLINE_NONE_HI;
+    registers[3] = ASTRA_DEADLINE_NONE_LO;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_SEND_TRY;
+    registers[1] = send_handle;
+    registers[2] = input_message_address;
+    registers[3] = sizeof(message);
+    registers[4] = input_handles_address;
+    registers[5] = 1u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_RECEIVE_TRY;
+    registers[1] = receive_handle;
+    registers[2] = output_message_address;
+    registers[3] = sizeof(message);
+    registers[4] = output_handles_address;
+    registers[5] = 1u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&imported, output_handles_address,
+                                     sizeof(imported)) ==
+           KERNEL_USER_COPY_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CLOSE;
+    registers[1] = imported;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+
+    message.header.total_size = sizeof(message) - 1u;
+    assert(kernel_user_copy_to_asm(input_message_address, &message,
+                                   sizeof(message)) == KERNEL_USER_COPY_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_SEND_TRY;
+    registers[1] = send_handle;
+    registers[2] = input_message_address;
+    registers[3] = sizeof(message);
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CLOSE;
+    registers[1] = receive_handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    message.header.total_size = sizeof(message);
+    assert(kernel_user_copy_to_asm(input_message_address, &message,
+                                   sizeof(message)) == KERNEL_USER_COPY_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_SEND_TRY;
+    registers[1] = send_handle;
+    registers[2] = input_message_address;
+    registers[3] = sizeof(message);
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CLOSE;
+    registers[1] = send_handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    assert(kernel_process_stats(&stats));
+    assert(stats.port_created == 1u);
+    assert(stats.port_active == 0u);
+    assert(stats.port_sends == 3u);
+    assert(stats.port_receives == 3u);
+    assert(stats.port_send_would_block == 1u);
+    assert(stats.port_queued_messages == 0u);
+    assert(stats.port_queued_bytes == 0u);
+    assert(stats.port_queued_handles == 0u);
+    assert(stats.handle_transfers == 2u);
+    assert(stats.handle_transfer_max_detached == 1u);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_EXIT;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(kernel_memory_stats(&final));
+    assert(final.free_frames == baseline.free_frames);
+}
+
+static void test_shared_area_and_bulk_ring_syscalls(void)
+{
+    static const uint8_t image[] = {
+        0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u
+    };
+    const uint32_t area_rights =
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+        ASTRA_RIGHT_TRANSFER | ASTRA_RIGHT_ADMINISTER;
+    const uint32_t reduced_rights =
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER;
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
+    AstraBulkRingHeader *header;
+    KernelMemoryStats baseline;
+    KernelMemoryStats final;
+    KernelSchedulerStats stats;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+    uint32_t area_handle;
+    uint32_t reduced_handle;
+    uint32_t producer_handle;
+    uint32_t consumer_handle;
+    uint32_t area_base;
+    uint32_t physical;
+    uint32_t timer_arms;
+
+    initialize_test();
+    assert(kernel_memory_stats(&baseline));
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_AREA_CREATE;
+    registers[1] = 2u * KERNEL_PAGE_SIZE;
+    registers[2] = area_rights;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    area_handle = next->data[1];
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_HANDLE_DUPLICATE;
+    registers[1] = area_handle;
+    registers[2] = reduced_rights;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    reduced_handle = next->data[1];
+    assert(reduced_handle != area_handle);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_AREA_MAP;
+    registers[1] = reduced_handle;
+    registers[2] = ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_AREA_MAP;
+    registers[1] = reduced_handle;
+    registers[2] = ASTRA_AREA_MAP_READ;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    area_base = next->data[1];
+    assert(area_base == KERNEL_VM_AREA_BASE);
+    assert(next->data[2] == 2u * KERNEL_PAGE_SIZE);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_AREA_UNMAP;
+    registers[1] = area_base;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_AREA_MAP;
+    registers[1] = area_handle;
+    registers[2] = ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    area_base = next->data[1];
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_RING_CREATE;
+    registers[1] = area_handle;
+    registers[2] = 0u;
+    registers[3] = 16u;
+    registers[4] = 4u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    producer_handle = next->data[1];
+    consumer_handle = next->data[2];
+    assert(producer_handle != consumer_handle);
+    assert(kernel_vm_test_translate_current(area_base, true, &physical));
+    header = (AstraBulkRingHeader *)(void *)&physical_memory[
+        physical - 0x02000000u];
+    assert(header->magic == ASTRA_BULK_RING_MAGIC);
+    assert(header->element_size == 16u && header->capacity == 4u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_HANDLE_DUPLICATE;
+    registers[1] = producer_handle;
+    registers[2] = ASTRA_RIGHT_WRITE | ASTRA_RIGHT_SIGNAL;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_RING_NOTIFY;
+    registers[1] = producer_handle;
+    registers[2] = 2u;
+    registers[4] = ASTRA_BULK_RING_CONSUMER;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_RING_NOTIFY;
+    registers[1] = producer_handle;
+    registers[2] = 2u;
+    registers[4] = ASTRA_BULK_RING_PRODUCER;
+    timer_arms = timer_arm_count;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == 2u && next->data[2] == 0u);
+    assert(timer_arm_count == timer_arms);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_WAIT_ONE;
+    registers[1] = consumer_handle;
+    registers[2] = 0u;
+    registers[3] = 0u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_RING_NOTIFY;
+    registers[1] = consumer_handle;
+    registers[2] = 2u;
+    registers[4] = ASTRA_BULK_RING_CONSUMER;
+    timer_arms = timer_arm_count;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == 2u && next->data[2] == 2u);
+    assert(timer_arm_count == timer_arms);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_WAIT_ONE;
+    registers[1] = consumer_handle;
+    registers[2] = 0u;
+    registers[3] = 0u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_TIMED_OUT);
+
+    for (uint32_t close = 0u; close < 4u; ++close) {
+        uint32_t handle = close == 0u ? producer_handle :
+            (close == 1u ? consumer_handle :
+             (close == 2u ? reduced_handle : area_handle));
+
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_CLOSE;
+        registers[1] = handle;
+        assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+    }
+    assert(kernel_process_stats(&stats));
+    assert(stats.area_created == 1u);
+    assert(stats.area_active == 0u);
+    assert(stats.area_mappings == 0u);
+    assert(stats.area_committed_pages == 0u);
+    assert(stats.ring_created == 1u);
+    assert(stats.ring_active == 0u);
+    assert(stats.ring_notifications == 2u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_EXIT;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(kernel_memory_stats(&final));
+    assert(final.free_frames == baseline.free_frames);
+}
+
+static void test_area_publication_rolls_back_when_handle_table_full(void)
+{
+    static const uint8_t image[] = {
+        0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u
+    };
+    const uint32_t area_rights =
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+        ASTRA_RIGHT_TRANSFER | ASTRA_RIGHT_ADMINISTER;
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
+    KernelAreaPoolStats before_area;
+    KernelAreaPoolStats after_area;
+    KernelMemoryStats initial_memory;
+    KernelMemoryStats before_failure;
+    KernelMemoryStats after_failure;
+    KernelMemoryStats final_memory;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+    uint32_t area_handle;
+
+    initialize_test();
+    assert(kernel_memory_stats(&initial_memory));
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+
+    registers[0] = ASTRA_SYSCALL_AREA_CREATE;
+    registers[1] = KERNEL_PAGE_SIZE;
+    registers[2] = area_rights;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    area_handle = next->data[1];
+    while (kernel_process_test_handle_count(process_id) <
+           KERNEL_HANDLE_MAX_ENTRIES) {
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_HANDLE_DUPLICATE;
+        registers[1] = area_handle;
+        registers[2] = ASTRA_RIGHT_READ;
+        assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+    }
+    assert(kernel_area_pool_stats(&before_area));
+    assert(before_area.active_areas == 1u);
+    assert(before_area.committed_pages == 1u);
+    assert(kernel_memory_stats(&before_failure));
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_AREA_CREATE;
+    registers[1] = 2u * KERNEL_PAGE_SIZE;
+    registers[2] = area_rights;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_RESOURCE_LIMIT);
+    assert(kernel_process_test_handle_count(process_id) ==
+           KERNEL_HANDLE_MAX_ENTRIES);
+    assert(kernel_area_pool_stats(&after_area));
+    assert(after_area.created_areas == before_area.created_areas + 1u);
+    assert(after_area.active_areas == before_area.active_areas);
+    assert(after_area.closing_areas == before_area.closing_areas);
+    assert(after_area.committed_pages == before_area.committed_pages);
+    assert(after_area.active_mappings == before_area.active_mappings);
+    assert(kernel_memory_stats(&after_failure));
+    assert(after_failure.free_frames == before_failure.free_frames);
+    assert(after_failure.owner_slots_used ==
+           before_failure.owner_slots_used);
+    assert(kernel_area_pool_valid());
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_EXIT;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(kernel_memory_stats(&final_memory));
+    assert(final_memory.free_frames == initial_memory.free_frames);
+}
+
+static void test_area_and_ring_endpoint_transfer_over_port(void)
+{
+    static const uint8_t image[] = {
+        0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u
+    };
+    const uint32_t area_rights =
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+        ASTRA_RIGHT_TRANSFER | ASTRA_RIGHT_ADMINISTER;
+    const uint32_t shared_rights =
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER;
+    const uint32_t input_message_address = KERNEL_PROCESS_STACK_TOP - 1024u;
+    const uint32_t output_message_address = KERNEL_PROCESS_STACK_TOP - 768u;
+    const uint32_t input_handles_address = KERNEL_PROCESS_STACK_TOP - 512u;
+    const uint32_t output_handles_address = KERNEL_PROCESS_STACK_TOP - 256u;
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 1536u;
+    AstraMessageHeader message;
+    AstraMessageHeader received;
+    KernelHandle attached[2];
+    KernelHandle imported[2];
+    KernelHandleTransferStats transfer_stats;
+    KernelMemoryStats baseline;
+    KernelMemoryStats final;
+    KernelSchedulerStats stats;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+    uint32_t area_handle;
+    uint32_t shared_handle;
+    uint32_t producer_handle;
+    uint32_t consumer_handle;
+    uint32_t receive_handle;
+    uint32_t send_handle;
+    uint32_t area_base;
+
+    initialize_test();
+    assert(kernel_memory_stats(&baseline));
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+
+    registers[0] = ASTRA_SYSCALL_AREA_CREATE;
+    registers[1] = KERNEL_PAGE_SIZE;
+    registers[2] = area_rights;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    area_handle = next->data[1];
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_HANDLE_DUPLICATE;
+    registers[1] = area_handle;
+    registers[2] = shared_rights;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    shared_handle = next->data[1];
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_RING_CREATE;
+    registers[1] = area_handle;
+    registers[2] = 0u;
+    registers[3] = 16u;
+    registers[4] = 4u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    producer_handle = next->data[1];
+    consumer_handle = next->data[2];
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_CREATE;
+    registers[1] = 1u;
+    registers[2] = sizeof(message);
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    receive_handle = next->data[1];
+    send_handle = next->data[2];
+
+    memset(&message, 0, sizeof(message));
+    message.total_size = sizeof(message);
+    message.header_size = ASTRA_MESSAGE_HEADER_SIZE;
+    message.protocol = 0x4b384950u;
+    message.protocol_version = 1u;
+    message.operation = 1u;
+    message.transaction_id = 0x12345678u;
+    attached[0] = shared_handle;
+    attached[1] = consumer_handle;
+    assert(kernel_user_copy_to_asm(input_message_address, &message,
+                                   sizeof(message)) == KERNEL_USER_COPY_OK);
+    assert(kernel_user_copy_to_asm(input_handles_address, attached,
+                                   sizeof(attached)) == KERNEL_USER_COPY_OK);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_SEND_TRY;
+    registers[1] = send_handle;
+    registers[2] = input_message_address;
+    registers[3] = sizeof(message);
+    registers[4] = input_handles_address;
+    registers[5] = 2u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_process_test_handle_count(process_id) == 6u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_AREA_MAP;
+    registers[1] = shared_handle;
+    registers[2] = ASTRA_AREA_MAP_READ;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_WAIT_ONE;
+    registers[1] = consumer_handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_RECEIVE_TRY;
+    registers[1] = receive_handle;
+    registers[2] = output_message_address;
+    registers[3] = sizeof(received);
+    registers[4] = output_handles_address;
+    registers[5] = 2u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == sizeof(received));
+    assert(next->data[2] == 2u);
+    assert(kernel_process_test_handle_count(process_id) == 8u);
+    assert(kernel_user_copy_from_asm(&received, output_message_address,
+                                     sizeof(received)) ==
+           KERNEL_USER_COPY_OK);
+    assert(memcmp(&received, &message, sizeof(message)) == 0);
+    assert(kernel_user_copy_from_asm(imported, output_handles_address,
+                                     sizeof(imported)) ==
+           KERNEL_USER_COPY_OK);
+    assert(imported[0] != shared_handle);
+    assert(imported[1] != consumer_handle);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_AREA_MAP;
+    registers[1] = imported[0];
+    registers[2] = ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_RING_CREATE;
+    registers[1] = imported[0];
+    registers[2] = 512u;
+    registers[3] = 16u;
+    registers[4] = 4u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_AREA_MAP;
+    registers[1] = imported[0];
+    registers[2] = ASTRA_AREA_MAP_READ;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    area_base = next->data[1];
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_RING_NOTIFY;
+    registers[1] = producer_handle;
+    registers[2] = 1u;
+    registers[4] = ASTRA_BULK_RING_PRODUCER;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_to_asm(input_handles_address, &imported[1],
+                                   sizeof(imported[1])) ==
+           KERNEL_USER_COPY_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_WAIT_MULTIPLE;
+    registers[1] = input_handles_address;
+    registers[2] = 1u;
+    registers[3] = ASTRA_DEADLINE_NONE_HI;
+    registers[4] = ASTRA_DEADLINE_NONE_LO;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == 0u && next->data[2] == 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_RING_NOTIFY;
+    registers[1] = imported[1];
+    registers[2] = 1u;
+    registers[4] = ASTRA_BULK_RING_CONSUMER;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_AREA_UNMAP;
+    registers[1] = area_base;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    for (uint32_t close = 0u; close < 6u; ++close) {
+        uint32_t handle = close == 0u ? imported[1] :
+            (close == 1u ? producer_handle :
+             (close == 2u ? imported[0] :
+              (close == 3u ? area_handle :
+               (close == 4u ? receive_handle : send_handle))));
+
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_CLOSE;
+        registers[1] = handle;
+        assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+    }
+    assert(kernel_process_stats(&stats));
+    assert(stats.handle_transfers == 1u);
+    assert(stats.handle_transfer_max_detached == 2u);
+    assert(kernel_handle_transfer_stats(&transfer_stats));
+    assert(transfer_stats.committed_exports == 1u);
+    assert(transfer_stats.committed_imports == 1u);
+    assert(transfer_stats.live_detached == 0u);
+    assert(stats.area_active == 0u && stats.area_mappings == 0u);
+    assert(stats.ring_active == 0u);
+    assert(stats.port_active == 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_EXIT;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(kernel_memory_stats(&final));
+    assert(final.free_frames == baseline.free_frames);
+}
+
 int main(void)
 {
     test_preemption_fault_containment_and_teardown();
@@ -2838,6 +3690,10 @@ int main(void)
     test_waitable_timer_syscalls_and_terminal_races();
     test_process_death_wait_handle_lifetime_and_slot_reuse();
     test_process_fault_death_reports_peer_dead();
+    test_message_port_syscall_atomicity_and_cleanup();
+    test_shared_area_and_bulk_ring_syscalls();
+    test_area_publication_rolls_back_when_handle_table_full();
+    test_area_and_ring_endpoint_transfer_over_port();
     puts("process tests passed");
     return 0;
 }

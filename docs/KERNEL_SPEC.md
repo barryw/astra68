@@ -487,7 +487,7 @@ Rights are object-specific subsets of a small common vocabulary such as:
 
 - inspect, wait, signal;
 - read, write, map;
-- send, receive, transfer, duplicate;
+- send, receive, transfer;
 - start, stop, configure, reset;
 - grant or manage.
 
@@ -496,11 +496,45 @@ rights. A generic super-right that bypasses object checks is forbidden.
 
 ## 11. IPC, waits, and shared memory
 
-### 11.1 Channels
+### 11.1 Message ports
 
-**PROPOSAL:** The primary control IPC object is a paired, datagram-oriented
-channel. Each endpoint has a bounded queue charged by message count, byte
-count, and attached-handle count.
+**K7 LOCKED IMPLEMENTATION:** The primary control IPC object is a receiver-owned,
+datagram-oriented message port. Creation returns two process-local handles:
+
+- one nontransferable receive endpoint carrying `read`, `wait`, and
+  `administer`;
+- one transferable send endpoint carrying `read`, `signal`, `wait`, and
+  `transfer`.
+
+The receive endpoint remains owned by the creating service. Bootstrap and
+service discovery grant an initial send endpoint; send endpoints can then move
+through messages without making a global name or process ID authoritative. A
+reply path is another client-created port whose send endpoint is attached to
+the request. This keeps
+the useful Amiga message-port model while making every cross-address-space
+reference explicit and generation safe.
+
+Each port has one bounded FIFO charged to its creator by message count, byte
+count, and attached-handle count. K7 uses these exact development limits:
+
+| Resource | System | Per owner | Per port/message |
+|---|---:|---:|---:|
+| live ports | 16 | 4 | 1 receive endpoint |
+| queued messages | 32 | 16 | configurable 1-8 |
+| queued copied bytes | 8,960 | 4,480 | configurable 24-2,240 |
+| detached handles | 256 | 128 queued to owned ports | 8/message |
+| copied message size | n/a | n/a | 24-280 bytes |
+| waiters | 16/thread pool | n/a | 16 per readiness queue |
+
+These are fixed-pool development limits, not the final 32-process pool sizes.
+Every configured limit is reserved from an existing static pool; no send,
+receive, wait, wake, close, timeout, cancellation, or process-death path uses
+the general heap.
+
+The exact MC68030 fixed state is 11,392 bytes for port/message records, 6,144
+bytes for detached authority, 128 bytes of per-thread failed-probe state, and
+208 bytes of pool statistics/corruption state: 17,872 bytes total against K7's
+20 KiB ceiling.
 
 An enqueue is atomic:
 
@@ -509,16 +543,49 @@ An enqueue is atomic:
 - no short message send exists;
 - a full queue returns an explicit would-block/backpressure result unless the
   caller deliberately selected a deadline-bearing wait;
-- closing one endpoint makes peer death observable and safely discards queued
-  authority according to one defined rule;
-- message order is FIFO per sending endpoint.
+- closing the receive endpoint or losing its owner makes peer death observable
+  to every send endpoint and discards queued authority exactly once;
+- message order is one total FIFO per port.
 
 The kernel transports bounded bytes and handles; versioned service protocols
 give those bytes meaning. It does not parse filesystem, network, GUI, or media
 schemas.
 
-Maximum inline bytes, handles per message, queue capacity, register fast path,
-and copy-versus-rendezvous policy are **OPEN** and must be measured on the
+Raw `PORT_SEND_TRY` and `PORT_RECEIVE_TRY` syscalls never block. The NDK's
+blocking and absolute-deadline calls loop over the raw operation and K6
+`WAIT_ONE`/`WAIT_MULTIPLE` using one unchanged absolute deadline. A failed send
+stores one endpoint/queue sequence token in its calling thread. The immediately
+following matching wait blocks until that sequence changes, even if generic
+24-byte writable readiness is already true; a dequeue between probe and wait
+changes the sequence and makes the wait return immediately. Any intervening
+syscall consumes the token. This prevents a larger byte-capacity failure from
+polling or defeating its deadline without adding another queue or retained user
+pointer. Receive readiness guarantees a queued message.
+
+Successful send moves attached authority into the handle owner's fixed
+generation-safe detached pool and makes the complete message visible in one
+serialized commit. Full queues, malformed messages, bad user addresses,
+invalid/stale/duplicate handles, missing transfer rights, or detached-pool
+exhaustion leave source handles and every queue charge unchanged. While queued,
+detached authority is inaccessible by numeric guessing and is counted as one
+live object reference.
+
+Receive first reserves every destination handle-table slot, then copies the
+message and future handle values to user memory while those slots remain
+hidden. Only after every copy succeeds does one serialized commit publish all
+handles and dequeue the message. Copy failure cancels the hidden reservations,
+leaves the message queued, and publishes no authority. Insufficient message or
+handle output capacity reports both required sizes and leaves the FIFO
+unchanged.
+
+Owner death closes the port with `PEER_DEAD`, wakes both readiness queues,
+returns all count/byte charges, and releases every queued detached handle.
+Explicit final receive-handle close uses `CLOSED` for local waiters and
+`PEER_DEAD` for foreign send endpoints. Later closes merely drop references;
+they cannot complete a waiter or release queued authority twice.
+
+The 24-byte header, 256-byte inline payload, eight-handle maximum, FIFO copy
+policy, and no register fast path are K7 decisions to be measured on the
 12.5 MHz core. Bulk payloads use shared areas rather than increasing the
 inline maximum.
 
@@ -715,9 +782,10 @@ and debugger register numbering before the native ABI is frozen.
 ## 17. Acceptance gates
 
 These labels are the original whole-kernel roadmap and are not the same as the
-incremental K1-K6 implementation-checkpoint names in `STATUS.md`. In
-particular, the current K6 wait-multiple checkpoint does not claim that roadmap
-K3 bounded IPC or roadmap K4 device recovery is complete.
+incremental K1-K7 implementation-checkpoint names in `STATUS.md`. In
+particular, the current K7 message-port checkpoint supplies bounded control IPC
+but does not claim that roadmap K3 shared-area/bulk IPC or roadmap K4 device
+recovery is complete.
 
 ### K0 — architectural probes
 

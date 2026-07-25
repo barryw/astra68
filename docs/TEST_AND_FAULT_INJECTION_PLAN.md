@@ -25,7 +25,7 @@ transport, but expected initial/final state and pass criteria remain identical.
 
 The candidate must retain all of these before routing:
 
-- 17 kernel host suites, GCC `-fanalyzer`, ASan/UBSan, and leak detection;
+- 18 kernel host suites, GCC `-fanalyzer`, ASan/UBSan, and leak detection;
 - 15 AstraVM Rust tests, rustfmt, and Clippy `-D warnings`;
 - 90 shared framework tests and all 30 executions of the 15-case Musashi/RTL
   matrix;
@@ -118,6 +118,23 @@ The candidate must retain all of these before routing:
   detail, fault terminal result, immediate repeated observation, close before
   death, caller death, final reference release, generation reuse, and stale
   process-handle rejection;
+- K7 ports must cover every legal message size, one- and eight-handle transfer,
+  per-port message and byte limits, per-owner port/message/byte limits, global
+  pool exhaustion, count-only and byte-only backpressure, poll, finite and
+  infinite deadline waits, cancellation, receiver close, sender close, and
+  creator death with exact return to every queue and ownership baseline;
+- handle movement must inject failure before and after every reserve, validate,
+  export, copy, import, and publication boundary. Invalid rights/type/stale
+  input, partial detached-pool availability, destination-handle exhaustion,
+  user-copy faults crossing a page boundary, peer death, and caller death must
+  produce either one complete transfer or no transfer, never split authority;
+- a failed receive copyout must leave the original message queued, publish no
+  destination handle, and release every hidden import reservation. Successful
+  receive must publish all handles before making the message slot reusable;
+- target K7 scheduling must complete exactly three sends, three receives, one
+  backpressure event, two committed handle transfers, and one maximum detached
+  authority, then sample nonzero port send/receive cycles within 25,000/30,000
+  limits before publishing the K7 marker;
 - target scheduling must execute `THREAD_CREATE`, block in `WAIT_ONE` on the
   created thread, receive its exact exit status from `THREAD_EXIT`, repeat the
   wait as an immediate level-triggered result, close the handle, reject the
@@ -132,14 +149,14 @@ The candidate must retain all of these before routing:
 - target scheduling must run two threads in one CRP and one thread in another,
   prove same-address-space switches do not increment VM/CRP switches, then
   fault and reap only the second process;
-- the K6 release-development image must pass the complete pin-level SDRAM model
+- the K7 release-development image must pass the complete pin-level SDRAM model
   and two independent ULX3S SRAM reloads of the exact qualified bitstream while
   matching the expected FPGA build ID and SD ROM CRC32;
-- K6 must sample syscall, timer, user-fault, scheduler-pick, same/cross-CRP,
+- K7 must sample syscall, timer, user-fault, scheduler-pick, same/cross-CRP,
   block, wake, deadline expiry, thread create, thread exit, and deferred thread
-  reap, wait-set block, and wait-set wake against the fixed budgets in
+  reap, wait-set block/wake, and port send/receive against the fixed budgets in
   `performance.h`, with at least one sample and zero overruns for every metric;
-- the exact 1,000-cycle Musashi K6 lifecycle workload must complete at or below
+- the exact 1,000-cycle Musashi K7 lifecycle workload must complete at or below
   675,000,000 virtual machine cycles;
 - a real M=1 interrupt must build exact format-0 MSP and format-1 ISP frames,
   preserve saved M, chain `RTE` through MSP, and restart a multiword
@@ -325,18 +342,19 @@ interrupt-disabled time, scheduler lock, wake-to-run latency, same/cross-CRP
 switch, syscall, copy, map/unmap, ATC miss, and device reset. The limits in
 `LOCKING_AND_PREEMPTION.md` are release failures, not informational warnings.
 
-The current K6 limits are 50,000 cycles for syscall and timer dispatch, 125,000
+The current K7 limits are 50,000 cycles for syscall and timer dispatch, 125,000
 for user-fault containment, 10,000 for scheduler selection, 15,000 for same-CRP
 switch, 50,000 for cross-CRP switch, and 15,000 each for block and wake. The
 deadline expiry has a separate 20,000-cycle limit. Thread create, caller exit,
 and deferred reap are limited to 150,000, 50,000, and 125,000 cycles. Wait-set
-block and wake are each limited to 50,000 cycles. The exact K6 pin-level maxima
-are 38,986, 27,656, 31,966, 1,506, 3,092, 4,327, 4,782, 7,888, 10,234,
-124,512, 25,681, 28,879, 6,259, and 10,049 cycles respectively. That run
+block and wake are each limited to 50,000 cycles. Port send and receive are
+limited to 25,000 and 30,000 cycles. The exact K7 pin-level maxima are 39,357,
+27,712, 33,686, 1,476, 3,238, 4,345, 4,832, 7,947, 10,171, 119,841,
+25,926, 28,852, 6,338, 10,126, 12,256, and 17,817 cycles respectively. That run
 intentionally uses a 64 KiB simulated BIST; both routed-hardware runs execute
-the real full-range 32 MiB BIST. Hardware run 1 reports wait-set block/wake
-maxima of 6,267/10,045 cycles; run 2 reports 6,254/10,041. Every one of the
-fourteen metrics has at least one sample and zero overruns in both runs.
+the real full-range 32 MiB BIST. Hardware run 1 reports port send/receive maxima
+of 12,256/17,883 cycles; run 2 reports 12,257/17,880. Every one of the sixteen
+metrics has at least one sample and zero overruns in both runs.
 
 Retained K3 evidence and SHA-256 values are:
 
@@ -423,6 +441,28 @@ Accepted K6 evidence and SHA-256 values are:
   and
 - `docs/evidence/astra68-k6-04524898-hw-2.log`:
   `77ce8067efabaf42c0541309eaa1fcf67264c1ee6dc1edb7ad10cf402e21f141`.
+
+Accepted K7 evidence and SHA-256 values are:
+
+- `docs/evidence/astra68-k7-815347c8d094-host-tests.log`:
+  `3e1c2127e6e9aa5f20acdbf2b9f9e1bda80bf19fb8469dcca00a46f5eed4f375`;
+- `docs/evidence/astra68-k7-815347c8d094-musashi-normal.log`:
+  `0f91cd0ff8825d62a6b2c656edea186ba5c147b306178af12e0b8f7610346e22`;
+- `docs/evidence/astra68-k7-815347c8d094-musashi-performance.log`:
+  `a2d2da52bc4dd8aea8452e5118222a1dfa49e7d885cd4b99c2b02dff11045e2c`;
+- `docs/evidence/astra68-k7-815347c8d094-rtl.log`:
+  `6e5adafaf55a228ae90ca7315c776341eaf5b9075190222168d16a9cac450629`;
+- `docs/evidence/astra68-k7-815347c8d094-provision.log`:
+  `a3c15fe80ccaf05b1f86b61efe6808e6c25c263d6a3eb2c08ea11bdb9889a5c9`;
+- `docs/evidence/astra68-k7-815347c8d094-provision-verify.log`:
+  `0ec8310eea6c218ec247f2e062a21794d53ca10362708e1eeb0f85d4f3cef542`;
+- `docs/evidence/astra68-k7-815347c8d094-esp-production-flash.log`:
+  `ab75830e96c3fe15532fb5941af6e750a7fbd912631f61e106e97b1d6ea3dfcd`;
+- `docs/evidence/astra68-k7-25d9cb8e-815347c8-hw-1.log`:
+  `017ae37943f5c46d1ff8faa26f653ed1fbcbc0db7c02ce16babe2aecb1a04b91`;
+  and
+- `docs/evidence/astra68-k7-25d9cb8e-815347c8-hw-2.log`:
+  `85a40eea380e5dc25b88570db85f92d0fd4d6d6af64beff44bd28a05d97c12c5`.
 
 ## Panic and retained diagnostics
 

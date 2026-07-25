@@ -1,6 +1,6 @@
 # Axiom kernel memory budget
 
-Status: measured K6 wait-multiple baseline plus bounded revision-0.2 targets (2026-07-25)
+Status: measured hardware-qualified K7 baseline plus exact K8 release-candidate accounting (2026-07-25)
 
 The machine has exactly 32 MiB of SDRAM. Every static pool, frame, mapping,
 queue, pin, and graphics reservation is reported separately. A budget is not
@@ -222,6 +222,98 @@ remains 32 x 36 bytes; timers add fixed deadline, heap, and position arrays
 rather than a second object pool. No wait, timer, death, cancellation, close,
 or expiry path allocates memory. The structural sizes are compile-time asserted.
 
+## K7 implemented static budget
+
+K7 consumes at most 20 KiB of incremental fixed state. Compile-time MC68030
+assertions and the exact qualified Beast build measure:
+
+| Object | Limit | Measured bytes |
+|---|---:|---:|
+| port records with two embedded wait queues | 16 x 64 | 1,024 B |
+| copied message records including 280 data bytes | 32 x 324 | 10,368 B |
+| generation-safe detached authority records | 256 | 6,144 B |
+| per-thread failed-send probe fields | 16 x 8 | 128 B |
+| pool statistics and corruption latches | fixed | 208 B |
+| total incremental fixed state | | 17,872 B |
+| remaining against ceiling | | 2,608 B |
+
+Queue payload storage is fixed and charged logically to the receiving port
+owner; no heap allocation is hidden in these numbers. `KernelPort`,
+`KernelPortMessage`, `KernelDetachedEntry`, and `KernelThread` sizes are
+compile-time asserted. The failed-send probe is included in the 180-byte thread
+record and owns no separate object reference.
+
+The exact hardware-qualified 2026-07-25 K7 build reports:
+
+| ELF section | Bytes |
+|---|---:|
+| `.text.entry` | 80 |
+| `.vectors` | 1,024 |
+| `.text` plus read-only data | 67,448 |
+| `.data` | 0 |
+| `.bss` | 30,600 |
+| `.noinit` | 102,016 |
+| interrupt-stack section including alignment and guard | 14,976 |
+| worker MSP section including guard | 12,288 |
+| 16 guarded thread supervisor-stack slots | 196,608 |
+| total through `_kernel_memory_end` | 425,984 |
+| flat kernel binary | 69,496 |
+
+The image ends at `0x02078000` and leaves exactly 98,304 bytes in the fixed
+512 KiB reservation. Its flat-binary SHA-256 is
+`4c9d3807c95a701d8e2f16f52b1321fd97c0393798656ea589e6197c9dfccd4e`.
+K7 adds 12,084 flat-binary bytes and 17,952 BSS bytes over K6. Of the BSS
+increase, 17,872 bytes are the asserted port/message/detached-authority state,
+72 bytes are the two additional 36-byte performance records, and eight bytes
+are bounded accounting/alignment. No port, message, transfer, backpressure,
+close, or peer-death path allocates memory.
+
+## K8 implemented static budget
+
+The exact MC68030 K8 release-candidate build reports:
+
+| ELF section | Bytes |
+|---|---:|
+| `.text.entry` | 80 |
+| `.vectors` | 1,024 |
+| `.text` plus read-only data | 79,744 |
+| `.data` | 0 |
+| `.bss` | 42,208 |
+| `.noinit` | 102,016 |
+| interrupt-stack section including alignment and guard | 15,648 |
+| worker MSP section including guard | 12,288 |
+| 16 guarded thread supervisor-stack slots | 196,608 |
+| total through `_kernel_memory_end` | 450,560 |
+| flat kernel binary | 81,792 |
+
+The image ends at `0x0207e000` and leaves exactly 73,728 bytes in the fixed
+512 KiB kernel reservation. K8 adds 12,296 flat-binary bytes and 11,608 BSS
+bytes over K7. Target-only assertions freeze the 100-byte area record,
+24-byte mapping record, 80-byte ring record, 28-byte handle entry, 28-byte
+detached-authority entry, 536-byte process record, and unchanged 180-byte
+thread record.
+
+The complete BSS delta is accounted as follows:
+
+| Incremental K8 state | Bytes |
+|---|---:|
+| 8 area records | 800 |
+| 32 area-mapping records | 768 |
+| 16 ring records with two embedded wait queues | 1,280 |
+| byte-per-frame mapping class/count ledger growth | 7,168 |
+| larger handle entries inside four process records | 256 |
+| larger detached-authority entries | 1,024 |
+| four additional performance records | 144 |
+| area/ring pool statistics and corruption latches | 126 |
+| bounded accounting and alignment | 42 |
+| total BSS increase | 11,608 |
+
+Area payload pages are real physical commit rather than static kernel state.
+The development profile caps them at 128 pages system-wide, 64 pages per
+creator, and 16 pages per area. Page tables are charged to the mapping address
+space. Rings allocate no payload storage beyond their owning area and reuse
+the existing fixed wait-registration pool.
+
 Major current static objects are:
 
 | Object | Count x size | Bytes |
@@ -230,18 +322,24 @@ Major current static objects are:
 | per-frame owner links | 2 x 8,192 x 2 | 32,768 |
 | owner ledgers | 64 x 8 | 512 |
 | allocator bitmaps | 3 x 1,024 | 3,072 |
-| process slots | 4 x 472 | 1,888 |
-| thread records | 16 x 172 | 2,752 |
+| process slots | 4 x 536 | 2,144 |
+| thread records | 16 x 180 | 2,880 |
 | ready queues | 32 x two 16-bit heads/tails plus bitmap/count | 136 |
 | deadline arrays | positions 32 + heap 32 + results 64 + cycles 128 + count 2 | 258 |
 | wait registrations | 256 x 8 | 2,048 |
 | waitable-timer ordering | deadlines 256 + heap 32 + positions 32 + count | 321 |
 | guarded thread supervisor-stack arena | 16 x 12 KiB | 196,608 |
 | synchronization objects | 32 x 36 | 1,152 |
-| performance metric records | 14 x 36 | 504 |
+| message-port objects | 16 x 64 | 1,024 |
+| copied message records | 32 x 324 | 10,368 |
+| detached authority records | 256 x 28 | 7,168 |
+| shared-area records | 8 x 100 | 800 |
+| shared-area mapping records | 32 x 24 | 768 |
+| bulk-ring records | 16 x 80 | 1,280 |
+| performance metric records | 20 x 36 | 720 |
 | DMA slots | 32 x 36 | 1,152 |
 | block slots | 4 x 64 | 256 |
-| cached-user-frame alias ledger | 8,192 bits | 1,024 |
+| cached-user-frame class/count ledger | 8,192 x 1 | 8,192 |
 | boot-info copy | 1 x 256 | 256 |
 
 ## PMMU table cost
@@ -291,11 +389,11 @@ build report before merge.
 
 - K1 interrupt stack (ISP): 8 KiB plus one unmapped 4 KiB guard.
 - K1 deferred-worker master stack (MSP): 8 KiB plus one unmapped 4 KiB guard.
-- K6 user stack: one mapped 4 KiB page per live thread, with adjacent stack
+- K7 user stack: one mapped 4 KiB page per live thread, with adjacent stack
   bases spaced by 8 KiB so every stack has an unmapped 4 KiB guard interval.
   The 1,000-cycle K5 soak holds two survivor stacks and repeatedly allocates a
   third, retaining an exact 7,986-free-page baseline after every teardown.
-- Current K6 supervisor stack: one guarded 8 KiB stack for each of 16 thread
+- Current K7 supervisor stack: one guarded 8 KiB stack for each of 16 thread
   slots. The static arena reserves 192 KiB, of which 128 KiB is mapped stack
   payload and 64 KiB is unmapped guard space. Full RTL and both routed-hardware
   boots report a maximum observed use of 680 bytes.
@@ -304,23 +402,23 @@ build report before merge.
   preserve the same fault and high-water tests.
 - 128 simultaneous thread stacks would consume 1 MiB; ordinary process quotas
   prevent every process from reaching the global thread limit independently.
-- K6 user threads enter on their own guarded supervisor stacks. Public
+- K7 user threads enter on their own guarded supervisor stacks. Public
   `WAIT_ONE` and `WAIT_MULTIPLE` block on events, semaphores, timers, thread
   death, or process death with an absolute deadline and fixed registrations.
 
-K6 charges thread resources in distinct units rather than hiding them in a
+K7 charges thread resources in distinct units rather than hiding them in a
 single count:
 
 | Charge | Per retained/live thread | Release point |
 |---|---:|---|
-| thread object | one 172-byte global slot | death plus final handle close |
+| thread object | one 180-byte global slot | death plus final handle close |
 | user stack | one 4 KiB physical frame while live | deferred worker after death |
 | user guard | one unmapped 4 KiB logical page while live | deferred worker after death |
 | supervisor stack | two 4 KiB pages from the fixed arena | death plus final handle close |
 | supervisor guard | one unmapped 4 KiB page from the fixed arena | death plus final handle close |
 | handle | one 24-byte development entry in the owning process | `CLOSE` or process teardown |
 
-The K6 qualification cap is 16 global thread objects and 15 per process. A
+The K7 qualification cap is 16 global thread objects and 15 per process. A
 dead thread with an open handle intentionally retains 12 KiB of the fixed
 supervisor arena and its record, but no user physical page. These retained
 charges are bounded and visible; they are not classified as leaks.

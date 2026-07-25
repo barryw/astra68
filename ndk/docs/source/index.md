@@ -10,6 +10,8 @@ register layouts, private kernel structures, or a particular hardware revision.
 
 getting-started
 resource-lifetime
+message-ports
+shared-memory
 graphics
 fonts
 development

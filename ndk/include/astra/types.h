@@ -66,8 +66,28 @@ enum {
     /** A device or transport operation failed. */
     ASTRA_ERROR_IO = -9,
     /** A caller-provided output buffer cannot hold the complete value. */
-    ASTRA_ERROR_BUFFER_TOO_SMALL = -10
+    ASTRA_ERROR_BUFFER_TOO_SMALL = -10,
+    /** A nonblocking operation cannot make progress yet. */
+    ASTRA_ERROR_WOULD_BLOCK = -11,
+    /** The remote endpoint or owning service no longer exists. */
+    ASTRA_ERROR_PEER_DEAD = -12,
+    /** A supplied address cannot be accessed by the current process. */
+    ASTRA_ERROR_BAD_ADDRESS = -13,
+    /** The operation lost a race to explicit cancellation. */
+    ASTRA_ERROR_CANCELLED = -14,
+    /** The local object or endpoint has been closed. */
+    ASTRA_ERROR_CLOSED = -15,
+    /** Committed memory is unavailable. */
+    ASTRA_ERROR_OUT_OF_MEMORY = -16
 };
+
+/** Absolute signed monotonic deadline in nanoseconds. @since 0.1.0 */
+typedef int64_t AstraMonotonicDeadline;
+
+/** Poll once without blocking. */
+#define ASTRA_DEADLINE_POLL ((AstraMonotonicDeadline)0)
+/** Wait without a finite deadline. */
+#define ASTRA_DEADLINE_INFINITE ((AstraMonotonicDeadline)INT64_MAX)
 
 /**
  * Signed 26.6 fixed-point scalar used for device-independent layout metrics.

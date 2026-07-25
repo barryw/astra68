@@ -93,6 +93,8 @@ typedef struct KernelThread {
     uint32_t timer_ticks;
     uint32_t run_count;
     uint32_t syscall_count;
+    KernelHandle port_probe_handle;
+    uint32_t port_probe_sequence;
     KernelHandle self_handle;
     uint16_t slot;
     uint16_t process_slot;

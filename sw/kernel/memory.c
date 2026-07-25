@@ -42,6 +42,20 @@ static uint32_t saved_range_count;
 static KernelMemoryStats stats;
 static bool initialized;
 
+#if defined(KERNEL_MEMORY_HOST_TEST)
+static uint8_t *host_memory;
+static uint32_t host_memory_base;
+static uint32_t host_memory_size;
+
+void kernel_memory_test_bind_physical_memory(uint8_t *memory, uint32_t base,
+                                             uint32_t size)
+{
+    host_memory = memory;
+    host_memory_base = base;
+    host_memory_size = size;
+}
+#endif
+
 _Static_assert(sizeof(KernelFrameInfo) == 8u,
                "frame metadata must remain compact");
 _Static_assert(sizeof(KernelOwnerLedger) == 8u,
@@ -335,7 +349,19 @@ static bool byte_range(uint32_t physical_base, uint32_t byte_count,
 
 static void poison(uint32_t first, uint32_t count, uint32_t value)
 {
-#if !defined(KERNEL_MEMORY_NO_POISON) || KERNEL_MEMORY_NO_POISON == 0
+#if defined(KERNEL_MEMORY_HOST_TEST)
+    uint32_t physical = stats.ram_base + first * KERNEL_PAGE_SIZE;
+    uint32_t size = count * KERNEL_PAGE_SIZE;
+
+    if (host_memory == NULL || physical < host_memory_base ||
+        size > host_memory_size ||
+        physical - host_memory_base > host_memory_size - size)
+        return;
+    kernel_words_fill(
+        (volatile uint32_t *)(void *)(host_memory + physical -
+                                     host_memory_base),
+        size / sizeof(uint32_t), value);
+#elif !defined(KERNEL_MEMORY_NO_POISON) || KERNEL_MEMORY_NO_POISON == 0
     for (uint32_t frame = 0u; frame < count; ++frame) {
         uintptr_t address = (uintptr_t)stats.ram_base +
             (uintptr_t)(first + frame) * KERNEL_PAGE_SIZE;
@@ -537,6 +563,58 @@ KernelMemoryStatus kernel_memory_alloc_zeroed(uint32_t frame_count,
 {
     return allocate_frames(frame_count, alignment_frames, state, owner, 0u,
                            physical_base);
+}
+
+KernelMemoryStatus kernel_memory_alloc_pages_zeroed(
+    uint32_t frame_count, KernelFrameState state, uint32_t owner,
+    uint32_t *physical_pages)
+{
+    uint32_t owner_slot;
+    uint32_t found = 0u;
+    uint32_t allocated;
+
+    if (!initialized || frame_count == 0u || frame_count > stats.total_frames ||
+        !is_dynamic_state(state) || owner == KERNEL_OWNER_NONE ||
+        physical_pages == NULL)
+        return KERNEL_MEMORY_INVALID_ARGUMENT;
+    if (!owner_slot_for_allocation(owner, frame_count, &owner_slot)) {
+        ++stats.allocation_failures;
+        return KERNEL_MEMORY_OUT_OF_MEMORY;
+    }
+
+    for (uint32_t index = 0u;
+         index < stats.total_frames && found < frame_count; ++index) {
+        if (bitmap_test(blocked_bitmap, index))
+            continue;
+        physical_pages[found] = stats.ram_base + index * KERNEL_PAGE_SIZE;
+        ++found;
+    }
+    if (found != frame_count) {
+        for (uint32_t index = 0u; index < found; ++index)
+            physical_pages[index] = 0u;
+        ++stats.allocation_failures;
+        return KERNEL_MEMORY_OUT_OF_MEMORY;
+    }
+
+    for (uint32_t page = 0u; page < frame_count; ++page) {
+        uint32_t index =
+            (physical_pages[page] - stats.ram_base) / KERNEL_PAGE_SIZE;
+        KernelFrameInfo *frame = &frames[index];
+
+        poison(index, 1u, 0u);
+        bitmap_set(blocked_bitmap, index, true);
+        bitmap_set(dynamic_bitmap, index, true);
+        frame->owner = owner;
+        frame->references = 1u;
+        frame->pins = 0u;
+        frame->state = (uint8_t)state;
+        link_owner_frame(owner_slot, index, owner);
+    }
+    stats.free_frames -= frame_count;
+    allocated = stats.total_frames - stats.free_frames;
+    if (allocated > stats.high_water_frames)
+        stats.high_water_frames = allocated;
+    return KERNEL_MEMORY_OK;
 }
 
 KernelMemoryStatus kernel_memory_retain(uint32_t physical_base,

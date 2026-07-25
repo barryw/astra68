@@ -3545,3 +3545,138 @@ CPU, 66.907532 MHz SDRAM, 79.693970 MHz USB, 53.267990 MHz pixel, and
 289.771088 MHz HDMI shift. Persistent FPGA flash remains exact build
 `25D9CB8E`; bitstream SHA-256 remains
 `78cd218f12feb72ccbdcb6bb141d19908c961f3438b6b559bf99b60d1c9d6940`.
+
+### K7 message-port hardware promotion (2026-07-25)
+
+K7 is based on commit `1529496c168975cee0fc46c7955f98ab4a1b8d2b` plus
+bounded message-port implementation patch SHA-256
+`815347c8d094a1507b94ac5f8acb7636903d8eaf6fe8457e2f7a0d641763906e`.
+The frozen source identity is
+`1529496c168975cee0fc46c7955f98ab4a1b8d2b-dirty-815347c8d094`, built with
+`SOURCE_DATE_EPOCH=1785010847`; source archive SHA-256 is
+`79965cebb6da2aefb435d655ee279cd37f8f98bb1fb1dc4ef7c5efa53ebe6e09`
+and extracted tree identity is
+`4466f3e0406207308a8e66a5045dc3a99480b10d`. This checkpoint changes
+kernel/boot software, host tests, NDK declarations and implementation, emulator
+support, the pin-level target ROM, and acceptance tooling only. CPU, PMMU, SoC
+RTL datapaths, constraints, routed resources, and production bitstream are
+unchanged.
+
+K7 adds 16 fixed receiver-owned ports, 32 fixed copied-message records, and a
+256-entry detached-authority pool. Messages are 24-280 bytes with at most eight
+moved handles. Per-port and per-owner message/byte caps, transactional export
+and import, hidden receive slots, copy-fault rollback, count/byte backpressure,
+absolute deadlines, close, owner death, and peer death are all bounded. The
+kernel syscalls remain nonblocking; NDK blocking composes the existing K6 wait
+mechanism without resetting the absolute deadline.
+
+Three performance checkpoints were deliberately not promoted:
+
+1. The first 1,000-iteration soak reached 675,008,833 cycles and failed the
+   675,000,000 ceiling. Exhaustive detached-pool and object-graph validators
+   were running during ordinary maintenance and owner reap.
+2. The O(1)-latch correction completed in 562,257,300 cycles but did not yet
+   expose independently sampled port send and receive metrics, so it could not
+   prove those hot paths remained bounded.
+3. Profiling then found that every successful handle export scanned all 256
+   detached entries only to compute a high-water statistic. The retained
+   implementation transition-maintains live and maximum counts in O(1).
+
+Exhaustive validators remain available to host tests, explicit maintenance
+diagnostics, and milestone checks. Production fast paths use corruption
+latches and transition-maintained counters. No latency limit was raised and no
+failure invariant was removed.
+
+Exact frozen host qualification passes all 18 test binaries; retained log
+`docs/evidence/astra68-k7-815347c8d094-host-tests.log` has SHA-256
+`3e1c2127e6e9aa5f20acdbf2b9f9e1bda80bf19fb8469dcca00a46f5eed4f375`.
+Normal Musashi reaches every K1-K7 marker in 22,750,224 virtual cycles; log
+SHA-256 is
+`0f91cd0ff8825d62a6b2c656edea186ba5c147b306178af12e0b8f7610346e22`.
+The exact 1,000-iteration workload finishes in 563,507,415 cycles under the
+675,000,000 ceiling with 7,986 free pages, 2,024 context switches, 3,624 timer
+ticks, syscall count `0x6C96`, and zero overruns; log SHA-256 is
+`a2d2da52bc4dd8aea8452e5118222a1dfa49e7d885cd4b99c2b02dff11045e2c`.
+
+A clean, non-reused Beast Verilator 5.047 full-SoC build completed in 25.657
+seconds and its pin-level SDRAM run completed in 323.885 seconds. It passes the
+intentional 64 KiB BIST at 115.04 MB/s, PMMU/user-copy isolation, exact K7
+counts of three sends, three receives, one backpressure event, two committed
+transfers, and one maximum detached authority, every K1-K7 marker, and zero
+overruns. Retained transcript
+`docs/evidence/astra68-k7-815347c8d094-rtl.log` has SHA-256
+`6e5adafaf55a228ae90ca7315c776341eaf5b9075190222168d16a9cac450629`.
+
+Measured pin-level maxima and limits are:
+
+| Path | Maximum cycles | Limit |
+|---|---:|---:|
+| syscall | 39,357 | 50,000 |
+| timer IRQ | 27,712 | 50,000 |
+| user-fault dispatch | 33,686 | 125,000 |
+| scheduler selection | 1,476 | 10,000 |
+| same-address-space switch | 3,238 | 15,000 |
+| cross-address-space switch | 4,345 | 50,000 |
+| wait block | 4,832 | 15,000 |
+| wake | 7,947 | 15,000 |
+| deadline expiry | 10,171 | 20,000 |
+| thread create | 119,841 | 150,000 |
+| thread exit | 25,926 | 50,000 |
+| deferred reap | 28,852 | 125,000 |
+| wait-set block | 6,338 | 50,000 |
+| wait-set wake | 10,126 | 50,000 |
+| port send | 12,256 | 25,000 |
+| port receive | 17,817 | 30,000 |
+
+The exact normal artifacts are:
+
+- kernel: 69,496 bytes, SHA-256
+  `4c9d3807c95a701d8e2f16f52b1321fd97c0393798656ea589e6197c9dfccd4e`;
+- kernel ELF: SHA-256
+  `12c39d37b17a2389940074462e56d48e408ad2f88f47a1ef4b5e24242d620c02`;
+- boot payload: 80,944 bytes, CRC32 `B124CB22`, SHA-256
+  `16d22cf05570e94ee03571705d55934ed66060616935e9590724f40afba17e21`;
+  and
+- packaged ROM: 80,976 bytes, SHA-256
+  `4abbc4471f8a84eaec770cab3758f27cb98e1a0768c6ef85295033834b70fd81`.
+
+NUC loaded maintenance passthrough bitstream SHA-256
+`2b423314c35ef00fc16929aaf72f536906abba4b602bfd79ab537e4b78185471`
+only into volatile SRAM. An initial ESP flash command named stale absent device
+`/dev/ttyUSB0` and failed before erase or write; retry on the enumerated
+`/dev/ttyUSB1` completed and verified every region. The existing 244,016 MB SD
+volume was mounted without formatting. Provisioning changed only
+`/sdcard/ASTRA68.ROM`, reported 80,944 payload bytes and CRC32 `B124CB22`, and a
+second independent pass reported that the file already matched. Provision and
+verification logs have SHA-256 values
+`a3c15fe80ccaf05b1f86b61efe6808e6c25c263d6a3eb2c08ea11bdb9889a5c9`
+and
+`0ec8310eea6c218ec247f2e062a21794d53ca10362708e1eeb0f85d4f3cef542`.
+
+Read-only production AstraHost application SHA-256
+`1a822cd9bb08ce9c3dfb6292017e96967b1dada34de78b27200cea22c1227e6e`
+was restored. Its flash verified bootloader, partition table, OTA data, and
+application; retained transcript SHA-256 is
+`ab75830e96c3fe15532fb5941af6e750a7fbd912631f61e106e97b1d6ea3dfcd`.
+
+Production bitstream SHA-256
+`78cd218f12feb72ccbdcb6bb141d19908c961f3438b6b559bf99b60d1c9d6940`
+was verified before each of two independent volatile loads. Both boots report
+build `25D9CB8E`, exact ROM CRC32 `B124CB22`, complete physical 32 MiB
+POST/BIST, PMMU/user-copy isolation, exact K7 counts, all K1-K7 markers, and
+all sixteen cycle gates with zero overruns. Run 1 measures port send/receive at
+12,256/17,883 cycles; run 2 measures 12,257/17,880. Retained transcript
+SHA-256 values are
+`017ae37943f5c46d1ff8faa26f653ed1fbcbc0db7c02ce16babe2aecb1a04b91`
+and
+`85a40eea380e5dc25b88570db85f92d0fd4d6d6af64beff44bd28a05d97c12c5`.
+
+Disposition: K7 implementation, immutable-source reproduction, software,
+fresh pin-level RTL, SD provisioning, production AstraHost restoration, and
+physical hardware promotion PASS. No production SoC synthesis, placement,
+route, pack, or persistent FPGA-flash operation was performed. Mapped resources
+remain 53,079 LUT4s, 25,536 FFs, 101 DP16KDs, and 18 multipliers; packed
+resources remain 66,523 TRELLIS_COMB and 25,565 FFs. The unchanged route passes
+at 15.058201 MHz CPU, 66.907532 MHz SDRAM, 79.693970 MHz USB, 53.267990 MHz
+pixel, and 289.771088 MHz HDMI shift. Persistent FPGA flash remains exact build
+`25D9CB8E`; K7 is loaded from the SD ROM under read-only AstraHost.

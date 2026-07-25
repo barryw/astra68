@@ -1,6 +1,6 @@
 # Axiom kernel and Astra service ABI
 
-Status: provisional ABI contract, revision 0.2 (2026-07-25)
+Status: provisional ABI contract, revision 0.3 (2026-07-25)
 
 The ABI is big-endian, 32-bit, naturally aligned, and independent of kernel C
 layouts. Only the user/kernel ABI and versioned service protocols are stable.
@@ -21,15 +21,15 @@ All reserved fields are written as zero and ignored on input unless a protocol
 version says otherwise. Structure input begins with `size`; the kernel accepts
 only the documented minimum through maximum and never reads beyond `size`.
 
-## Trap ABI 0.2
+## Trap ABI 0.3
 
 The syscall instruction is `TRAP #15`, vector 47.
 
 | Register | Entry | Return |
 |---|---|---|
 | `D0` | syscall number | result code |
-| `D1-D4` | scalar arguments or sizes | syscall-defined values |
-| `A0-A1` | user logical addresses where specified | volatile |
+| `D1-D5` | scalar arguments, sizes, or user logical addresses | syscall-defined values |
+| `A0-A1` | caller scratch | volatile |
 | `D2-D7/A2-A6` | caller state | preserved by C-compatible wrappers |
 | USP | user stack | preserved unless the syscall explicitly changes it |
 
@@ -41,7 +41,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 
 | Number | Name | State | Contract |
 |---:|---|---|---|
-| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010002`, `D2=process handle`, `D3=calling-thread handle` |
+| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010003`, `D2=process handle`, `D3=calling-thread handle` |
 | 1 | `PROGRESS` | K1 TEST ONLY | monotonic test progress, not a product ABI |
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `PROCESS_EXIT` (`EXIT` compatibility alias) | CURRENT | terminates the calling process and all of its threads |
@@ -59,9 +59,12 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 15 | `TIMER_CREATE` | CURRENT K6 | `D1=rights`; returns handle in `D1` |
 | 16 | `TIMER_SET` | CURRENT K6 | `D1=timer handle`, `D2:D3=absolute deadline`; returns woken waiter count in `D1` |
 | 17 | `TIMER_CANCEL` | CURRENT K6 | `D1=timer handle`; returns woken waiter count in `D1` |
+| 18 | `PORT_CREATE` | CURRENT K7 | `D1=max messages`, `D2=max queued bytes`; returns receive handle in `D1`, send handle in `D2` |
+| 19 | `PORT_SEND_TRY` | CURRENT K7 | `D1=send handle`, `D2=message pointer`, `D3=message bytes`, `D4=handle-array pointer`, `D5=handle count` |
+| 20 | `PORT_RECEIVE_TRY` | CURRENT K7 | `D1=receive handle`, `D2=message output`, `D3=message capacity`, `D4=handle output`, `D5=handle capacity`; returns actual/required message bytes in `D1` and handle count in `D2` |
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
-not panic. `QUERY_ABI` reports revision `0x00010002`; a later revision will add
+not panic. `QUERY_ABI` reports revision `0x00010003`; a later revision will add
 feature bits before additional calls freeze.
 
 The thread-entry register contract is `D2=initial argument`, `D4=process self
@@ -97,7 +100,8 @@ failure return `0xffffffff` in `D1` and zero in `D2`. A zero deadline polls.
 The first ready member in input order wins, including duplicate handles.
 
 K6 accepts events, semaphores, timers, thread death, and process death as wait
-members. Process authority is still a generation-safe process-local handle;
+members. K7 adds send and receive port endpoints to that set. Process authority
+is still a generation-safe process-local handle;
 numeric process IDs are never waitable. Waiting on the calling thread or
 calling process is rejected. Thread and normal process death return the exact
 32-bit exit status as detail. A process terminated by a fault or other abnormal
@@ -142,6 +146,7 @@ values. The initial common set is:
 | 11 | committed memory unavailable |
 | 12 | I/O or physical bus failure |
 | 13 | object closed while an operation was pending |
+| 14 | output message or handle capacity is too small |
 
 Subsystem detail is returned in an output record, not encoded into ad hoc
 negative values.
@@ -163,14 +168,18 @@ The generic rights namespace is:
 | 2 | map |
 | 3 | signal/send |
 | 4 | wait/receive |
-| 5 | transfer/duplicate |
+| 5 | transfer |
 | 6 | administer/reset |
 | 7 | debug/inspect |
 
 Object protocols may narrow these rights but cannot reinterpret a bit.
-Transfer is atomic: all receiver slots and message storage are reserved first;
-either every transferred handle is committed once or ownership remains with
-the sender.
+Transfer is atomic and moves authority by default. Send first reserves one
+fixed message slot and detached-authority records, then validates the complete
+source set. Either the complete message and every source handle move into the
+queue in one serialized commit, or every source remains usable by the sender.
+Receive reserves every destination slot before user copy; either all slots are
+published with one dequeued message or the message remains queued and no new
+handle is usable. K7 has no duplicate or rights-reduction syscall.
 
 Event and semaphore creation accepts only `read`, `signal`, `wait`, and
 `administer`. Waiting requires `wait`; signaling requires `signal`; event reset
@@ -178,6 +187,12 @@ requires `administer`. Closing one's own handle never requires an additional
 right. Thread wait cancellation requires the generic `administer` right and
 cannot target a thread for which the caller has no process-local handle.
 Timer creation accepts only `read`, `wait`, and `administer`.
+
+A receive endpoint has `read`, `wait`, and `administer`; it is not
+transferable. A send endpoint has `read`, `signal`, `wait`, and `transfer`.
+`PORT_SEND_TRY` requires `signal`, `PORT_RECEIVE_TRY` requires `read`, and a
+port endpoint in either wait call requires `wait`. K7 moves handles and does
+not duplicate them or reduce their rights.
 
 ## Versioned structures
 
@@ -199,18 +214,37 @@ The initial copied-message header is exactly 24 bytes:
 ```c
 typedef struct AstraMessageHeader {
     uint32_t total_size;
-    uint16_t protocol;
     uint16_t header_size;
+    uint16_t flags;
+    uint32_t protocol;
+    uint16_t protocol_version;
+    uint16_t reserved;
     uint32_t operation;
-    uint32_t flags;
     uint32_t transaction_id;
-    uint32_t reserved;
 } AstraMessageHeader;
 ```
 
-`header_size` is 24 for version 1. `total_size` is 24 through 280 bytes, so at
-most 256 payload bytes are copied. At most eight handles accompany one
-message. Larger payloads use an area plus a bounded producer/consumer ring.
+`header_size` is 24. K7 requires `flags` and `reserved` to be zero.
+`protocol_version` belongs to the service protocol rather than the trap ABI.
+`total_size` is 24 through 280 bytes, so at most 256 payload bytes are copied.
+At most eight handles accompany one message. Larger payloads use an area plus
+a bounded producer/consumer ring.
+
+`PORT_CREATE` accepts 1 through 8 message slots and 24 through 2,240 queued
+bytes. Both endpoint handles publish atomically or neither does. The receive
+endpoint remains owned by the creator. The send endpoint may move to another
+process through a message once that process already has a route to the port.
+
+`PORT_SEND_TRY` copies and validates the complete message and handle vector
+before commit. Success moves every attached handle and enqueues one FIFO
+datagram. Every error, including full byte/count capacity, preserves the
+source handles and queue charges. Duplicate source handles are invalid.
+
+`PORT_RECEIVE_TRY` returns `BUFFER_TOO_SMALL` with both required capacities
+without reserving or dequeuing. After sufficient capacities are supplied it
+reserves hidden destination slots, copies both outputs, and publishes those
+slots together with FIFO removal. A copy fault cancels the hidden reservation,
+leaves the message queued, and exposes no destination handle.
 
 ## Blocking and time
 
@@ -225,6 +259,16 @@ message. Larger payloads use an area plus a bounded producer/consumer ring.
   limit, not an allocation-dependent suggestion.
 - Port sends support blocking, nonblocking, and absolute-deadline modes. Full
   queues provide backpressure or `WOULD_BLOCK`; they never grow.
+- K7 implements blocking port calls in the NDK by retrying the bounded raw
+  operation around K6 wait-one/wait-multiple with one unchanged absolute
+  deadline. The kernel therefore retains no user pointer and owns no second
+  timeout queue.
+- A failed send records one per-thread endpoint/queue sequence token. The next
+  matching wait blocks until that sequence changes even when generic 24-byte
+  writable readiness is already true. This prevents a larger byte-capacity
+  failure from spinning or silently defeating its finite deadline. Any
+  intervening syscall consumes the token; the NDK emits the try/wait pair
+  without an intervening call.
 
 For one synchronization wait, exactly one serialized terminal transition wins:
 

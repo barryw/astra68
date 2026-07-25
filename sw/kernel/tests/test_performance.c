@@ -103,6 +103,18 @@ static void test_required_metrics_and_budget_failure(void)
            KERNEL_PERFORMANCE_BUDGET_THREAD_EXIT);
     assert(stats.metric[KERNEL_PERFORMANCE_THREAD_REAP].budget_cycles ==
            KERNEL_PERFORMANCE_BUDGET_THREAD_REAP);
+    assert(stats.metric[KERNEL_PERFORMANCE_PORT_SEND].budget_cycles ==
+           KERNEL_PERFORMANCE_BUDGET_PORT_SEND);
+    assert(stats.metric[KERNEL_PERFORMANCE_PORT_RECEIVE].budget_cycles ==
+           KERNEL_PERFORMANCE_BUDGET_PORT_RECEIVE);
+    assert(stats.metric[KERNEL_PERFORMANCE_AREA_CREATE].budget_cycles ==
+           KERNEL_PERFORMANCE_BUDGET_AREA_CREATE);
+    assert(stats.metric[KERNEL_PERFORMANCE_AREA_MAP].budget_cycles ==
+           KERNEL_PERFORMANCE_BUDGET_AREA_MAP);
+    assert(stats.metric[KERNEL_PERFORMANCE_AREA_UNMAP].budget_cycles ==
+           KERNEL_PERFORMANCE_BUDGET_AREA_UNMAP);
+    assert(stats.metric[KERNEL_PERFORMANCE_RING_NOTIFY].budget_cycles ==
+           KERNEL_PERFORMANCE_BUDGET_RING_NOTIFY);
     assert(kernel_performance_pass(
         &stats, 1u << KERNEL_PERFORMANCE_DEADLINE_EXPIRE, &failed));
 }

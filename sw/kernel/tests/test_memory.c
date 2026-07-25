@@ -309,6 +309,43 @@ static void test_reinit_discards_stale_dynamic_metadata(void)
     assert(stats.owner_slots_used == 0u);
 }
 
+static void test_scattered_page_allocation_is_atomic(void)
+{
+    static uint32_t impossible[KERNEL_MAX_FRAMES];
+    AstraBootInfo info;
+    KernelMemoryStats before_failure;
+    KernelMemoryStats after_failure;
+    uint32_t contiguous;
+    uint32_t pages[3];
+
+    make_valid_info(&info);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc(6u, 1u, KERNEL_FRAME_PROCESS, 41u,
+                               &contiguous) == KERNEL_MEMORY_OK);
+    for (uint32_t page = 0u; page < 6u; page += 2u)
+        assert(kernel_memory_release(contiguous + page * KERNEL_PAGE_SIZE,
+                                     1u, 41u) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc_pages_zeroed(
+               3u, KERNEL_FRAME_SHARED, 42u, pages) == KERNEL_MEMORY_OK);
+    assert(pages[0] == contiguous);
+    assert(pages[1] == contiguous + 2u * KERNEL_PAGE_SIZE);
+    assert(pages[2] == contiguous + 4u * KERNEL_PAGE_SIZE);
+    assert(kernel_memory_release_owner(41u, NULL) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_release_owner(42u, NULL) == KERNEL_MEMORY_OK);
+
+    for (uint32_t index = 0u; index < KERNEL_MAX_FRAMES; ++index)
+        impossible[index] = UINT32_MAX;
+    assert(kernel_memory_stats(&before_failure));
+    assert(kernel_memory_alloc_pages_zeroed(
+               KERNEL_MAX_FRAMES, KERNEL_FRAME_SHARED, 43u,
+               impossible) == KERNEL_MEMORY_OUT_OF_MEMORY);
+    assert(kernel_memory_stats(&after_failure));
+    assert(after_failure.free_frames == before_failure.free_frames);
+    assert(after_failure.owner_slots_used == before_failure.owner_slots_used);
+    for (uint32_t index = 0u; index < before_failure.free_frames; ++index)
+        assert(impossible[index] == 0u);
+}
+
 static void test_exhaustion_and_checked_ranges(void)
 {
     AstraBootInfo info;
@@ -350,6 +387,7 @@ int main(void)
     test_owner_release_work_scales_with_owned_frames();
     test_owner_ledger_capacity_is_bounded_and_reusable();
     test_reinit_discards_stale_dynamic_metadata();
+    test_scattered_page_allocation_is_atomic();
     test_exhaustion_and_checked_ranges();
     puts("KERNEL MEMORY PASS");
     return 0;
