@@ -4,7 +4,7 @@ Status: design direction; no userspace service described here is implemented.
 
 This document refines `OS_VISION.md` into a coherent userspace shape. It does
 not change the kernel boundary in `KERNEL_SPEC.md`, define a stable service ABI,
-or imply that the current K6 kernel can start these services. Exact wire
+or imply that the current K8 kernel can start these services. Exact wire
 records land only with implementations and executable protocol tests.
 
 Status markers have the same meanings as in `OS_VISION.md`:
@@ -46,8 +46,8 @@ supervisor/registrar
   service lifecycle | discovery | launch | generations | recovery
         |             |             |              |
         v             v             v              v
- storage service   display       input          network/media
- filesystem/VFS    + compositor  routing        services
+ block device      display       input          network/media
+ storage/VFS       + compositor  routing        services
         |             |             |
         +-------------+-------------+
                       |
@@ -60,7 +60,8 @@ Candidate initial service boundaries are:
 | Service | Responsibility | Must not own |
 |---|---|---|
 | supervisor/registrar | start, monitor, name, and restart services; launch applications | filesystem parsing, UI policy |
-| storage | raw-block scheduling, native filesystem, object identity, paths and notifications | SD electrical protocol, application launch policy |
+| block device | generic block scheduling, AstraHost protocol, bounded queues, barriers, media generations, timeout and reset | filesystem parsing, names, application policy |
+| storage/VFS | read-only FAT-family compatibility, AstraFS, object identity, paths, mounts and notifications | SD electrical protocol, direct SPI, application launch policy |
 | display | windows, scenes, composition, Vega/Astraea scheduling and revocation | application behavior, filesystem parsing |
 | font | AFNT/import validation, immutable faces, layout and strike caches | window policy, arbitrary framebuffer access |
 | input | normalize and route keyboard, pointer, buttons and game controls | widget policy, application callbacks |
@@ -83,7 +84,9 @@ scripts with accidental ordering.
    storage-independent services.
 3. Display, font, and input services open ROM resources and protected device
    handles. They can start before the writable filesystem.
-4. Storage publishes mounted volumes and starts filesystem notifications.
+4. The block-device service publishes media generations; storage/VFS mounts
+   read-only FAT-family volumes and, when provisioned, recovers and mounts
+   AstraFS before publishing volume and filesystem notifications.
 5. Workspace starts when display, input, font, and one resource namespace are
    ready. Missing writable storage produces a recovery desktop, not a hang.
 6. Terminal and a bootstrap command environment become available from the
@@ -231,5 +234,6 @@ native environment has the intended personality and failure boundaries.
 - Manifest schema and dependency-cycle validation.
 - Service restart limits and critical-service recovery policy.
 - Clipboard, drag-and-drop, command, and automation wire protocols.
-- Whether the first writable filesystem is transitional or the native format.
+- AstraFS filename case and normalization, open-file deletion, data checksums,
+  journal sizing, indexing scope, and exact version-1 on-disk structures.
 - Exact boundary between terminal, PTY, and POSIX personality services.

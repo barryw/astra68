@@ -232,8 +232,8 @@ IPC occurs inside them.
 
 ## Acceptance evidence
 
-K8 is not complete until exact host, Musashi, pin-level RTL, and ULX3S evidence
-proves:
+The K8 release gate requires exact host, Musashi, pin-level RTL, and ULX3S
+evidence proving:
 
 - allocation failure at every area create/map publication point rolls back to
   the exact frame, mapping, object, handle, and page-table baseline;
@@ -252,14 +252,20 @@ proves:
   the production FPGA bitstream, routed resources, and clock results remain
   unchanged.
 
-The current release candidate passes all 20 host suites normally, under GCC
-ASan/UBSan, and under GCC `-fanalyzer`; all NDK host, sanitizer, MC68030, and
-generated HTML/PDF documentation gates; normal Musashi; and its exact
-1,000-iteration performance workload. That workload completes in 576,508,511
-cycles against the unchanged 675,000,000-cycle ceiling, retains 7,986 free
-pages, and has zero performance overruns. A clean, non-reused Verilator 5.047
-build passes the pin-level 64 KiB SDRAM test, every K1-K8 marker, exact object
-cleanup, and all 20 cycle limits. The measured K8 pin-level maxima are 37,787
-cycles for create, 56,267 for map, 71,295 for unmap, and 29,337 for notify.
-Source freeze, SD provisioning, and two independent ULX3S boots remain open;
-therefore K7 remains the hardware-qualified rollback release.
+The hardware-qualified release at commit
+`56bd1770c834205a4dccc42efb61552a77647988` passes all 20 host suites
+normally, under GCC ASan/UBSan, and under GCC `-fanalyzer`; every NDK host,
+sanitizer, MC68030, and generated HTML/PDF documentation gate; normal Musashi;
+and its exact 1,000-iteration performance workload. That workload completes in
+576,508,485 cycles against the unchanged 675,000,000-cycle ceiling, retains
+7,986 free pages, and has zero performance overruns.
+
+A clean, non-reused Verilator 5.047 build passes the pin-level 64 KiB SDRAM
+test, every K1-K8 marker, exact object cleanup, and all 20 cycle limits. The
+measured K8 pin-level maxima are 37,762 cycles for create, 56,097 for map,
+71,283 for unmap, and 29,390 for notify. Two independent ULX3S boots of the
+unchanged production bitstream pass full 32 MiB POST/BIST, exact source and ROM
+identity, every lifecycle count, and zero overruns. Hardware run 1 measures
+create/map/unmap/notify at 37,763/56,091/71,263/29,416 cycles; run 2 measures
+37,742/56,106/71,263/29,416. K8 is the current release; K7 remains the
+hardware-qualified rollback.

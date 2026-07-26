@@ -1,6 +1,6 @@
 # Axiom resource ownership and failures
 
-Status: normative lifetime contract, revision 0.2 (2026-07-25)
+Status: normative lifetime contract, revision 0.3 (2026-07-25)
 
 Every resource has one accountable owner, finite capacity, explicit rights,
 and a terminal failure path. C cleanup helpers improve normal code but kernel
@@ -75,7 +75,7 @@ and retries after the next timer interrupt. DMA completion and worker
 state-machine host tests prove that the process remains inspectable and is
 reaped exactly once after the final pin retires.
 
-The current K7 split implements the first and last parts of this order with
+The current K8 split implements the first and last parts of this order with
 separate bounded objects. Marking a process `EXITING` removes every one of its
 `CREATED`, `READY`, `RUNNING`, or `BLOCKED` threads from scheduling, removes
 each timed waiter from the fixed deadline heap, and marks them `DEAD` in one
@@ -249,7 +249,19 @@ Terminal endpoint behavior:
 - uncommitted handle transfers remain with the sender;
 - queued detached handles release through port teardown, while received
   handles close through receiver teardown;
-- shared rings remain valid only while their area handles remain live.
+- a ring owns an explicit child reference to its area. Closing the last ordinary
+  area handle does not revoke a live child ring; creator death or terminal area
+  revocation closes both endpoints and wakes their waiters with `PEER_DEAD`.
+
+K8 charges every committed area page to its creator before publication.
+Mappings and child rings each retain explicit area references, while each ring
+endpoint owns one independently transferable handle reference. Area teardown
+first rejects new maps/children, then revokes mappings with the required
+cache/ATC maintenance, closes child rings, and finally returns base frame
+references and commit charges. A ring owns no kernel payload memory; only its
+fixed object record and area-backed bytes exist. Failed create, duplicate, map,
+ring-create, notify, and transfer operations publish either all authority and
+charges or none.
 
 ## Device and DMA ownership
 

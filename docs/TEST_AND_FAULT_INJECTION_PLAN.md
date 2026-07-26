@@ -1,6 +1,6 @@
 # Axiom test and fault-injection plan
 
-Status: normative qualification plan, revision 0.2 (2026-07-25)
+Status: normative qualification plan, revision 0.3 (2026-07-25)
 
 No subsystem is complete because its happy path boots. Every state transition,
 capacity limit, cancellation race, and recovery path has a deterministic test.
@@ -25,7 +25,7 @@ transport, but expected initial/final state and pass criteria remain identical.
 
 The candidate must retain all of these before routing:
 
-- 18 kernel host suites, GCC `-fanalyzer`, ASan/UBSan, and leak detection;
+- 20 kernel host suites, GCC `-fanalyzer`, ASan/UBSan, and leak detection;
 - 15 AstraVM Rust tests, rustfmt, and Clippy `-D warnings`;
 - 90 shared framework tests and all 30 executions of the 15-case Musashi/RTL
   matrix;
@@ -135,6 +135,19 @@ The candidate must retain all of these before routing:
   backpressure event, two committed handle transfers, and one maximum detached
   authority, then sample nonzero port send/receive cycles within 25,000/30,000
   limits before publishing the K7 marker;
+- K8 areas must inject failure through every fallible slot, owner-ledger,
+  frame, mapping-record, leaf-table, descriptor-publication, handle, and
+  accounting stage, including explicit failure after VM publication. Every
+  failure returns frames, references, descriptors, slots, leaves, and charges
+  to the exact pre-call baseline; separate ordering tests verify cache/ATC
+  maintenance;
+- K8 rings must cover full, empty, wrap, batched publication, missed-wakeup
+  windows, wait-multiple, endpoint transfer, reduced-right area transfer,
+  corrupt headers/positions, peer close, creator death, and 1,000 complete
+  lifecycle repetitions without monotonic resource growth;
+- target K8 scheduling must create, map, unmap, and notify through the real
+  syscall paths, sample nonzero maxima within 250,000/125,000/100,000/30,000
+  cycles, and publish the K8 marker only after exact object/accounting cleanup;
 - target scheduling must execute `THREAD_CREATE`, block in `WAIT_ONE` on the
   created thread, receive its exact exit status from `THREAD_EXIT`, repeat the
   wait as an immediate level-triggered result, close the handle, reject the
@@ -152,12 +165,19 @@ The candidate must retain all of these before routing:
 - the K7 release-development image must pass the complete pin-level SDRAM model
   and two independent ULX3S SRAM reloads of the exact qualified bitstream while
   matching the expected FPGA build ID and SD ROM CRC32;
-- K7 must sample syscall, timer, user-fault, scheduler-pick, same/cross-CRP,
+- the K8 release-development image must pass the same complete pin-level SDRAM
+  and two-load ULX3S gate from one immutable source archive, preserving the
+  existing card and changing only `/ASTRA68.ROM`;
+- K8 must sample syscall, timer, user-fault, scheduler-pick, same/cross-CRP,
   block, wake, deadline expiry, thread create, thread exit, and deferred thread
-  reap, wait-set block/wake, and port send/receive against the fixed budgets in
-  `performance.h`, with at least one sample and zero overruns for every metric;
+  reap, wait-set block/wake, port send/receive, area create/map/unmap, and ring
+  notify against the fixed budgets in `performance.h`, with at least one sample
+  and zero overruns for every metric;
 - the exact 1,000-cycle Musashi K7 lifecycle workload must complete at or below
   675,000,000 virtual machine cycles;
+- the exact 1,000-iteration Musashi K8 workload must remain under that same
+  675,000,000-cycle ceiling with every one of 20 metrics sampled and zero
+  overruns;
 - a real M=1 interrupt must build exact format-0 MSP and format-1 ISP frames,
   preserve saved M, chain `RTE` through MSP, and restart a multiword
   instruction after clock-enable stalls;
@@ -342,19 +362,25 @@ interrupt-disabled time, scheduler lock, wake-to-run latency, same/cross-CRP
 switch, syscall, copy, map/unmap, ATC miss, and device reset. The limits in
 `LOCKING_AND_PREEMPTION.md` are release failures, not informational warnings.
 
-The current K7 limits are 50,000 cycles for syscall and timer dispatch, 125,000
-for user-fault containment, 10,000 for scheduler selection, 15,000 for same-CRP
-switch, 50,000 for cross-CRP switch, and 15,000 each for block and wake. The
-deadline expiry has a separate 20,000-cycle limit. Thread create, caller exit,
-and deferred reap are limited to 150,000, 50,000, and 125,000 cycles. Wait-set
-block and wake are each limited to 50,000 cycles. Port send and receive are
-limited to 25,000 and 30,000 cycles. The exact K7 pin-level maxima are 39,357,
-27,712, 33,686, 1,476, 3,238, 4,345, 4,832, 7,947, 10,171, 119,841,
-25,926, 28,852, 6,338, 10,126, 12,256, and 17,817 cycles respectively. That run
-intentionally uses a 64 KiB simulated BIST; both routed-hardware runs execute
-the real full-range 32 MiB BIST. Hardware run 1 reports port send/receive maxima
-of 12,256/17,883 cycles; run 2 reports 12,257/17,880. Every one of the sixteen
-metrics has at least one sample and zero overruns in both runs.
+The current K8 limits retain K7's 50,000 cycles for syscall and timer dispatch,
+125,000 for user-fault containment, 10,000 for scheduler selection, 15,000 for
+same-CRP switch, 50,000 for cross-CRP switch, and 15,000 each for block and
+wake. Deadline expiry is limited to 20,000 cycles; thread create, caller exit,
+and deferred reap to 150,000, 50,000, and 125,000; wait-set block/wake to
+50,000 each; and port send/receive to 25,000/30,000. K8 adds 250,000 for area
+create, 125,000 for area map, 100,000 for area unmap, and 30,000 for ring
+notify.
+
+The exact clean K8 pin-level area create/map/unmap/ring-notify maxima are
+37,762/56,097/71,283/29,390 cycles. The run intentionally uses a 64 KiB
+simulated BIST; both routed-hardware runs execute the real full-range 32 MiB
+BIST. Hardware run 1 reports 37,763/56,091/71,263/29,416 cycles; run 2 reports
+37,742/56,106/71,263/29,416. Every one of the 20 metrics has at least one
+sample and zero overruns in the clean pin-level run and both hardware runs.
+
+The K7 rollback's exact pin-level maxima for the retained first 16 paths are
+39,357, 27,712, 33,686, 1,476, 3,238, 4,345, 4,832, 7,947, 10,171, 119,841,
+25,926, 28,852, 6,338, 10,126, 12,256, and 17,817 cycles respectively.
 
 Retained K3 evidence and SHA-256 values are:
 
@@ -463,6 +489,30 @@ Accepted K7 evidence and SHA-256 values are:
   and
 - `docs/evidence/astra68-k7-25d9cb8e-815347c8-hw-2.log`:
   `85a40eea380e5dc25b88570db85f92d0fd4d6d6af64beff44bd28a05d97c12c5`.
+
+Accepted K8 evidence and SHA-256 values are:
+
+- `docs/evidence/astra68-k8-56bd177-host-tests.log`:
+  `45ac1cebae220e55207ddeae0b99bf46a0baf914a312155adc766b03d336f993`;
+- `docs/evidence/astra68-k8-56bd177-musashi-normal.log`:
+  `6c3781d1d8d5d9c87a72792bac3da507c3afda229db1f63a7169d5033dc68365`;
+- `docs/evidence/astra68-k8-56bd177-musashi-performance.log`:
+  `8517652d853c84f2e902b422171bfbf01c6f28c2e94d7cec4dd4f03f2811f428`;
+- `docs/evidence/astra68-k8-56bd177-rtl.log`:
+  `6a2bdff9164fed71200e23dc0084eb48c1df1261cd6c4537085138d10c6477f5`;
+- `docs/evidence/astra68-k8-56bd177-esp-provision-flash.log`:
+  `e382002231435f714a79091e50ec336b10c83aab8af0bee6657f92963599e1ff`;
+- `docs/evidence/astra68-k8-56bd177-provision.log`:
+  `c7ae9301b48ceed2fe831f64175662a7520ef6c2af1a8971f189c7b1c346f735`;
+- `docs/evidence/astra68-k8-56bd177-provision-verify.log`:
+  `83e8ebf14aa82fefaa2a31253898a3023f7a9af52e4ba5a0d898c95cb0fc1a57`;
+- `docs/evidence/astra68-k8-56bd177-esp-production-flash.log`:
+  `df3e49a9b03a25ad617ff62b284db6507e3c5a0e4b0ea94485fd9a2b71463aba`;
+- `docs/evidence/astra68-k8-25d9cb8e-56bd177-hw-1.log`:
+  `7bab18bcf3881cece216a17a718982cc779f3d52de180fc1fb0ffab9ee9ff66d`;
+  and
+- `docs/evidence/astra68-k8-25d9cb8e-56bd177-hw-2.log`:
+  `3dab5148851e869102d89d412b35aa7a2650ac7a97cc726d861ae9adde56dd82`.
 
 ## Panic and retained diagnostics
 

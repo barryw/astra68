@@ -1,6 +1,6 @@
 # Axiom kernel memory budget
 
-Status: measured hardware-qualified K7 baseline plus exact K8 release-candidate accounting (2026-07-25)
+Status: measured hardware-qualified K8 release accounting (2026-07-25)
 
 The machine has exactly 32 MiB of SDRAM. Every static pool, frame, mapping,
 queue, pin, and graphics reservation is reported separately. A budget is not
@@ -270,24 +270,24 @@ close, or peer-death path allocates memory.
 
 ## K8 implemented static budget
 
-The exact MC68030 K8 release-candidate build reports:
+The exact hardware-qualified MC68030 K8 release build reports:
 
 | ELF section | Bytes |
 |---|---:|
 | `.text.entry` | 80 |
 | `.vectors` | 1,024 |
-| `.text` plus read-only data | 79,744 |
+| `.text` plus read-only data | 79,720 |
 | `.data` | 0 |
-| `.bss` | 42,208 |
+| `.bss` | 42,216 |
 | `.noinit` | 102,016 |
-| interrupt-stack section including alignment and guard | 15,648 |
+| interrupt-stack section including alignment and guard | 15,664 |
 | worker MSP section including guard | 12,288 |
 | 16 guarded thread supervisor-stack slots | 196,608 |
 | total through `_kernel_memory_end` | 450,560 |
-| flat kernel binary | 81,792 |
+| flat kernel binary | 81,768 |
 
 The image ends at `0x0207e000` and leaves exactly 73,728 bytes in the fixed
-512 KiB kernel reservation. K8 adds 12,296 flat-binary bytes and 11,608 BSS
+512 KiB kernel reservation. K8 adds 12,272 flat-binary bytes and 11,616 BSS
 bytes over K7. Target-only assertions freeze the 100-byte area record,
 24-byte mapping record, 80-byte ring record, 28-byte handle entry, 28-byte
 detached-authority entry, 536-byte process record, and unchanged 180-byte
@@ -305,14 +305,17 @@ The complete BSS delta is accounted as follows:
 | larger detached-authority entries | 1,024 |
 | four additional performance records | 144 |
 | area/ring pool statistics and corruption latches | 126 |
-| bounded accounting and alignment | 42 |
-| total BSS increase | 11,608 |
+| bounded accounting and alignment | 50 |
+| total BSS increase | 11,616 |
 
 Area payload pages are real physical commit rather than static kernel state.
 The development profile caps them at 128 pages system-wide, 64 pages per
 creator, and 16 pages per area. Page tables are charged to the mapping address
 space. Rings allocate no payload storage beyond their owning area and reuse
 the existing fixed wait-registration pool.
+
+The exact flat-binary SHA-256 is
+`ea879e760c48342f535ee9aee65bf1bab97e855c2e576579c2ab80ef615ba55b`.
 
 Major current static objects are:
 

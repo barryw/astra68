@@ -1,6 +1,6 @@
 # Astra OS vision and architecture principles
 
-Version 0.2 — living design document
+Version 0.3 — living design document
 
 Astra OS is the working name for the native operating system of Astra 68; the
 final product name remains open. This document defines what the operating
@@ -837,24 +837,49 @@ marks are observable counters, not silent behavior.
 
 ### 14.2 Filesystem direction
 
-Boot media and the first read-only filesystem may use a simple existing format.
-The eventual native filesystem should be chosen only after the block layer,
-fault handling, and recovery paths are reliable.
+**LOCKED:** Astra OS reads FAT-family boot and exchange volumes through a
+protected filesystem service. Initial support is read-only and must include the
+format actually used by the existing 256 GB card without formatting,
+repartitioning, or modifying unrelated files. FAT is a compatibility and
+recovery format, not Astra's writable system filesystem.
 
-**DIRECTION:** A native filesystem should provide:
+**LOCKED:** The native filesystem is **AstraFS**. It occupies a separate GPT
+partition and runs in a protected user-space filesystem service over the
+generic raw-block service. Neither Axiom nor AstraHost parses AstraFS. An ESP
+reset, filesystem-service crash, malformed volume, or failed transaction must
+produce bounded errors and recovery, never kernel corruption or an indefinite
+desktop stall.
+
+The first on-disk design starts with 4 KiB filesystem blocks, independent of
+the PMMU page-size choice, and provides:
 
 - explicit crash-consistency and durability semantics;
-- atomic replace and rename;
+- a checksummed write-ahead metadata journal with transaction sequence numbers,
+  replay that is idempotent, ordered data-before-metadata publication, and
+  explicit flush/barrier use;
+- redundant, generation-tagged superblocks and checksummed metadata;
+- atomic replace and rename plus defined `fsync`/volume-sync completion;
+- extent-based allocation and indexed directories;
 - versioned typed metadata/attributes;
 - indexing and live queries where they materially improve the personal
   workspace;
-- 64-bit file offsets and timestamps from its first on-disk version;
+- 64-bit block numbers, file sizes, file offsets, and timestamps from its first
+  on-disk version;
 - stable object identity independent of a mutable path;
-- change notification with sequence numbers and a resynchronization path.
+- change notification with sequence numbers and a resynchronization path;
+- orphan recovery, online read-only fallback after unrecoverable damage, and
+  an offline verify/repair tool; and
+- power-loss and controller-reset injection at every transaction transition.
 
 Filename case rules, Unicode normalization, removable-volume behavior, open-
-file deletion semantics, indexing scope, and the on-disk design are **OPEN** and
-must be decided before committing user data to a native format.
+file deletion semantics, data checksums, indexing scope, journal sizing, and the
+exact on-disk structures are **OPEN** and require a dedicated `ASTRAFS.md`
+contract before any tool commits user data to the native format.
+
+Creating an AstraFS partition is always an explicit provisioning operation.
+The system must preserve the existing FAT/exFAT game collection and may use the
+remaining card capacity only after showing the exact proposed partition change
+and receiving confirmation.
 
 Pathnames are a discovery convenience, not a security token. Services resolve
 a path atomically into a handle, and subsequent operations use the handle.
@@ -1116,7 +1141,8 @@ containment in one observable result.
 - Safe DMA and cache-maintenance interfaces.
 - Kernel device transports and reset/recovery paths.
 - FreeRTOS ESP32 storage controller and versioned boot-file/raw-block transport.
-- FAT/exFAT boot/recovery partition, SD block service, and initial filesystem.
+- read-only FAT-family compatibility, the SD block service, and the first
+  journal/recovery-qualified AstraFS implementation.
 - Settings and early package/bundle loading.
 
 ### Phase 4 — networked development machine

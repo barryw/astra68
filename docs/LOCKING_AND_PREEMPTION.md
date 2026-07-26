@@ -1,6 +1,6 @@
 # Axiom locking and preemption contract
 
-Status: normative single-core concurrency contract, revision 0.2 (2026-07-25)
+Status: normative single-core concurrency contract, revision 0.3 (2026-07-25)
 
 This design is for one MC68030. It does not emulate SMP. Correct interrupt,
 DMA, and MMIO ordering still applies even though only one CPU executes C code.
@@ -66,10 +66,10 @@ between threads in one process does not reload CRP or flush caches/ATC; host,
 Musashi, full pin-level, and ULX3S tests count that path separately from a
 cross-CRP switch. Timer and voluntary-yield paths apply priority selection.
 The public event/semaphore/timer and death-wait paths prove immediate handoff
-when a higher-priority waiter wakes or its deadline expires. K7 retains
+when a higher-priority waiter wakes or its deadline expires. K8 retains
 transactional runtime thread creation, caller-only thread exit, waitable
-thread/process death, and bounded wait-multiple, and adds bounded message ports
-under provisional ABI 0.2.
+thread/process death, bounded wait-multiple, and K7 message ports, and adds
+waitable bulk-ring endpoints under provisional ABI `0x00010004`.
 
 The running thread owns one absolute quantum deadline. Vesta is always
 reprogrammed to the earlier of that deadline and the root of the wait-deadline

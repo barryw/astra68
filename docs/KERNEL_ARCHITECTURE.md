@@ -1,6 +1,6 @@
 # Axiom kernel architecture for Astra 68
 
-Status: normative design contract, revision 0.2 (2026-07-25)
+Status: normative design contract, revision 0.3 (2026-07-25)
 
 This document defines the kernel shape. Exact memory, ABI, locking, ownership,
 budget, testing, and implementation status live in the companion documents
@@ -144,7 +144,7 @@ The first stable object vocabulary is deliberately small:
 |---|---|---|
 | team/process | parent resource account | `CREATED`, `RUNNING`, `EXITING`, `DEAD` |
 | thread | exactly one process | `CREATED`, `READY`, `RUNNING`, `BLOCKED`, `DEAD` |
-| area | process or shared-memory object | `CREATED`, `MAPPED`, `CLOSING`, `DEAD` |
+| area | creating process plus explicit mapping/child references | `CREATED`, `MAPPED`, `CLOSING` (terminal) |
 | port | process/service | `OPEN`, `PEER_CLOSED`, `CLOSING`, `DEAD` |
 | semaphore/event | process/service | `UNSIGNALED`, `SIGNALED`, `CLOSING`, `DEAD` |
 | timer | process/thread | `IDLE`, `ARMED`, `FIRED`, `CANCELLED`, `DEAD` |
@@ -240,15 +240,16 @@ state. Process death removes all of its threads from ready and wait queues
 before deferred handle/address-space/frame destruction; thread records are not
 reusable until that destruction completes.
 
-The current K6 path has sequence-checked atomic block, priority/FIFO wake-one
+Current K8 retains K6's sequence-checked atomic block, priority/FIFO wake-one
 and wake-all, handle-backed auto/manual events and semaphores, signed absolute
 monotonic-nanosecond deadlines, explicit cancellation, and immediate
 higher-priority handoff on signal or timeout. Timeout, signal, cancellation,
 close, and process death remove a waiter from the object queue and deadline
-heap exactly once. Runtime thread creation, caller-only exit, and level-
-triggered thread/process-death waits, one-shot waitable timers, and bounded
-wait-multiple are exposed through provisional ABI 0.2. Priority inheritance,
-RPC donation, and stable post-0.2 pool sizes are not yet exposed.
+heap exactly once. Runtime thread creation, caller-only exit, level-triggered
+thread/process-death waits, one-shot waitable timers, bounded wait-multiple,
+K7 ports, and K8 areas/rings are exposed through provisional ABI
+`0x00010004`. Priority inheritance, RPC donation, and stable production pool
+sizes are not yet exposed.
 
 ## K5 thread-lifecycle contract
 

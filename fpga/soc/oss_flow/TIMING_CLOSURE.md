@@ -3680,3 +3680,102 @@ resources remain 66,523 TRELLIS_COMB and 25,565 FFs. The unchanged route passes
 at 15.058201 MHz CPU, 66.907532 MHz SDRAM, 79.693970 MHz USB, 53.267990 MHz
 pixel, and 289.771088 MHz HDMI shift. Persistent FPGA flash remains exact build
 `25D9CB8E`; K7 is loaded from the SD ROM under read-only AstraHost.
+
+### K8 shared-area and bulk-ring hardware promotion (2026-07-25)
+
+K8 is exact clean implementation commit
+`56bd1770c834205a4dccc42efb61552a77647988`, built with
+`SOURCE_DATE_EPOCH=1785023940`. Immutable source archive
+`/tmp/astra68-k8-56bd177.tar` has SHA-256
+`b0db820437d5526b9157815c5a280770e59e21930c39d48dddb6d21389d5cb49`
+and was independently extracted as `/tmp/astra68-k8-56bd177` on Beast and NUC.
+This checkpoint changes kernel/boot software, host tests, public NDK code and
+documentation, emulator support, the pin-level target ROM, and acceptance
+tooling only. CPU, PMMU, SoC RTL datapaths, constraints, routed resources, and
+the production bitstream are unchanged.
+
+K8 adds eight fixed areas, 32 mappings, 16 SPSC rings, reduced-right handle
+duplication, transactional page commit/map rollback, fixed cross-process
+logical aliases, batched notifications, wait-multiple integration, corruption
+containment, and peer/creator-death cleanup. All payload storage is charged to
+real area pages; rings allocate no kernel payload queue. This is kernel
+software latency and SDRAM/PMMU integration work, not an FPGA routing change.
+
+All 20 exact host suites pass normally, under GCC ASan/UBSan/leak checks, and
+under GCC `-fanalyzer`. The NDK passes six normal and six sanitizer suites, its
+analyzer, MC68030 library/examples, and generated HTML plus a 106-page PDF.
+Normal Musashi reaches every K1-K8 marker in 24,750,250 virtual cycles. The
+exact 1,000-iteration workload completes in 576,508,485 cycles under the
+unchanged 675,000,000 cap with 7,986 free pages, 2,027 context switches, 4,426
+timer ticks, syscall count `0x69F7`, and zero overruns.
+
+A clean, non-reused Beast Verilator 5.047 full-SoC build completed in 25.228
+seconds and its pin-level SDRAM run completed in 377.592 seconds. It passes the
+intentional 64 KiB BIST at 115.03 MB/s, PMMU/user-copy isolation, exact K8
+object and cleanup counts, every K1-K8 marker, and all 20 cycle limits. The new
+measured paths are:
+
+| Path | Maximum cycles | Limit |
+|---|---:|---:|
+| area create | 37,762 | 250,000 |
+| area map | 56,097 | 125,000 |
+| area unmap | 71,283 | 100,000 |
+| ring notify | 29,390 | 30,000 |
+
+The exact normal artifacts are:
+
+- kernel: 81,768 bytes, SHA-256
+  `ea879e760c48342f535ee9aee65bf1bab97e855c2e576579c2ab80ef615ba55b`;
+- kernel ELF: 112,736 bytes, SHA-256
+  `81a8b2a65ef411c7fe77f5493f485e764e7c4b5331756055e56aea4e7104a3f5`;
+- boot payload: 93,180 bytes, CRC32 `BE5F5D5D`, SHA-256
+  `a70ae3323884ffb3eccaa70b4e4c6be34a2e0a4aa044cee99a632375b6faba2a`;
+  and
+- packaged ROM: 93,212 bytes, SHA-256
+  `ae6bab5ab9a249211ef0b7f1daccb7e00ddb9e683facbe7ecfd7b0d6307d17a8`.
+
+NUC loaded maintenance passthrough bitstream SHA-256
+`2b423314c35ef00fc16929aaf72f536906abba4b602bfd79ab537e4b78185471`
+only into volatile SRAM. One-shot provisioning AstraHost application SHA-256
+`6033a507f51470bdda78c1924308e37f5d5af603cfac54e348da62417379e3ba`
+was flashed and verified. It mounted the existing 244,016 MB card without
+formatting, atomically changed only `/sdcard/ASTRA68.ROM`, and reported the
+93,180-byte payload with CRC32 `BE5F5D5D`; a second independent boot reported
+the file already matched. Exact read-only production AstraHost application
+SHA-256
+`1a822cd9bb08ce9c3dfb6292017e96967b1dada34de78b27200cea22c1227e6e`
+was then restored and verified.
+
+Production bitstream SHA-256
+`78cd218f12feb72ccbdcb6bb141d19908c961f3438b6b559bf99b60d1c9d6940`
+was verified before two independent volatile loads. Both report exact build
+`25D9CB8E`, commit `56bd1770c834205a4dccc42efb61552a77647988`, ROM CRC32
+`BE5F5D5D`, complete physical 32 MiB POST/BIST, PMMU/user-copy isolation, exact
+K8 counts, every K1-K8 marker, and all 20 cycle gates with zero overruns. Run 1
+completes in 4.158 host seconds and measures area
+create/map/unmap/ring-notify at 37,763/56,091/71,263/29,416 cycles. Run 2
+completes in 3.876 seconds and measures 37,742/56,106/71,263/29,416.
+
+Retained evidence SHA-256 values are:
+
+- host tests `45ac1cebae220e55207ddeae0b99bf46a0baf914a312155adc766b03d336f993`;
+- normal Musashi `6c3781d1d8d5d9c87a72792bac3da507c3afda229db1f63a7169d5033dc68365`;
+- performance Musashi `8517652d853c84f2e902b422171bfbf01c6f28c2e94d7cec4dd4f03f2811f428`;
+- pin-level RTL `6a2bdff9164fed71200e23dc0084eb48c1df1261cd6c4537085138d10c6477f5`;
+- provisioner flash `e382002231435f714a79091e50ec336b10c83aab8af0bee6657f92963599e1ff`;
+- provision `c7ae9301b48ceed2fe831f64175662a7520ef6c2af1a8971f189c7b1c346f735`;
+- provision verify `83e8ebf14aa82fefaa2a31253898a3023f7a9af52e4ba5a0d898c95cb0fc1a57`;
+- production AstraHost flash `df3e49a9b03a25ad617ff62b284db6507e3c5a0e4b0ea94485fd9a2b71463aba`;
+- hardware run 1 `7bab18bcf3881cece216a17a718982cc779f3d52de180fc1fb0ffab9ee9ff66d`;
+  and
+- hardware run 2 `3dab5148851e869102d89d412b35aa7a2650ac7a97cc726d861ae9adde56dd82`.
+
+Disposition: K8 implementation, immutable-source reproduction, software,
+fresh pin-level RTL, SD provisioning, production AstraHost restoration, and
+physical hardware promotion PASS. No production SoC synthesis, placement,
+route, pack, or persistent FPGA-flash operation was performed. Mapped resources
+remain 53,079 LUT4s, 25,536 FFs, 101 DP16KDs, and 18 multipliers; packed
+resources remain 66,523 TRELLIS_COMB and 25,565 FFs. The unchanged route passes
+at 15.058201 MHz CPU, 66.907532 MHz SDRAM, 79.693970 MHz USB, 53.267990 MHz
+pixel, and 289.771088 MHz HDMI shift. Persistent FPGA flash remains exact build
+`25D9CB8E`; K8 is loaded from the SD ROM under restored read-only AstraHost.

@@ -12,8 +12,9 @@ surface; Axiom's internal interfaces are not a module ABI.
 The kernel's normative implementation contracts are
 `KERNEL_ARCHITECTURE.md`, `MEMORY_MAP_AND_PMMU.md`, `ABI.md`,
 `LOCKING_AND_PREEMPTION.md`, `RESOURCE_OWNERSHIP_AND_FAILURES.md`,
-`MEMORY_BUDGET.md`, and `TEST_AND_FAULT_INJECTION_PLAN.md`; `STATUS.md`
-separates implemented evidence from planned work.
+`MEMORY_BUDGET.md`, `SHARED_AREAS_AND_BULK_RINGS.md`, and
+`TEST_AND_FAULT_INJECTION_PLAN.md`; `STATUS.md` separates implemented evidence
+from planned work.
 
 The product-level operating-system direction is `OS_VISION.md`. Focused but
 unimplemented userspace design lives in `USERSPACE_ARCHITECTURE.md`,
@@ -59,8 +60,10 @@ personality, zsh, or Vim currently run.
 - The production ROM image is `/ASTRA68.ROM` on the existing FAT/exFAT volume.
   AstraHost reads only that file and preserves unrelated card data. Stage 0 is
   the small immutable FPGA loader; the ROM executes from its SDRAM-backed
-  overlay. Astra's native filesystem will use a separate raw partition through
-  a versioned block service.
+  overlay. Astra OS will read FAT-family compatibility volumes without making
+  them its writable system format. The native journaled filesystem is AstraFS;
+  it will use a separate GPT partition through a versioned generic block
+  service, and exact version-1 on-disk structures remain to be specified.
 - Every ESP32-to-FPGA application, boot, storage, network, input, and control
   transaction uses AstraHost SPI. UART is not a fallback transport. The FPGA
   FTDI diagnostic UART and ESP32's own logging console are independent and may
@@ -156,8 +159,46 @@ personality, zsh, or Vim currently run.
 
 ## Current integration state
 
-- The hardware-qualified K7 bounded message-port release is based on commit
-  `1529496c168975cee0fc46c7955f98ab4a1b8d2b` plus implementation patch
+- The hardware-qualified K8 shared-area and bounded bulk-ring release is exact
+  commit `56bd1770c834205a4dccc42efb61552a77647988`, built reproducibly with
+  `SOURCE_DATE_EPOCH=1785023940`. Its immutable source archive SHA-256 is
+  `b0db820437d5526b9157815c5a280770e59e21930c39d48dddb6d21389d5cb49`
+  and is extracted as `/tmp/astra68-k8-56bd177` on Beast and NUC.
+
+  K8 adds eight fixed shared areas, 32 mappings, 16 SPSC bulk rings,
+  reduced-right handle duplication, real page commit, transactional mapping,
+  one logical address per area across processes, batched notifications,
+  wait-multiple composition, and exact peer/creator-death cleanup. The current
+  profile permits 1-16 committed 4 KiB pages per area, 128 area pages globally,
+  64 per creator, and four mappings per process. Ring payload remains in the
+  area and consumes no kernel payload queue.
+
+  All 20 host suites pass normally, with GCC ASan/UBSan/leak checks, and under
+  GCC `-fanalyzer`; the NDK host, sanitizer, MC68030, HTML, and 106-page PDF
+  gates pass. Normal Musashi reaches K1-K8 in 24,750,250 cycles. The exact
+  1,000-iteration workload completes in 576,508,485 of 675,000,000 allowed
+  cycles with 7,986 free pages and zero overruns. A clean Beast Verilator 5.047
+  build and pin-level SDRAM run pass 64 KiB BIST at 115.03 MB/s, every K1-K8
+  marker, exact cleanup, and all 20 cycle gates. Pin-level area
+  create/map/unmap/ring-notify maxima are 37,762/56,097/71,283/29,390 cycles.
+
+  The exact 81,768-byte kernel SHA-256 is
+  `ea879e760c48342f535ee9aee65bf1bab97e855c2e576579c2ab80ef615ba55b`.
+  The 93,180-byte payload has CRC32 `BE5F5D5D` and SHA-256
+  `a70ae3323884ffb3eccaa70b4e4c6be34a2e0a4aa044cee99a632375b6faba2a`;
+  the 93,212-byte package SHA-256 is
+  `ae6bab5ab9a249211ef0b7f1daccb7e00ddb9e683facbe7ecfd7b0d6307d17a8`.
+  NUC preserved the existing 244,016 MB card, changed only `/ASTRA68.ROM`,
+  independently verified it, and restored exact read-only production
+  AstraHost. Two independent ULX3S loads of unchanged production bitstream
+  `25D9CB8E` pass full 32 MiB POST/BIST, exact source/ROM identity, K1-K8,
+  every lifecycle count, and all 20 budgets with zero overruns. Hardware run 1
+  measures create/map/unmap/notify at 37,763/56,091/71,263/29,416 cycles; run 2
+  measures 37,742/56,106/71,263/29,416. No RTL, route, resource, clock, or
+  persistent FPGA-flash result changed. K8 is current; K7 is its qualified
+  rollback.
+- The hardware-qualified K7 bounded message-port rollback release is based on
+  commit `1529496c168975cee0fc46c7955f98ab4a1b8d2b` plus implementation patch
   SHA-256
   `815347c8d094a1507b94ac5f8acb7636903d8eaf6fe8457e2f7a0d641763906e`.
   The exact source identity is
@@ -217,22 +258,10 @@ personality, zsh, or Vim currently run.
   exact K7 counts, every K1-K7 marker, all sixteen cycle gates, and zero
   overruns. Run 1 measures port send/receive at 12,256/17,883 cycles; run 2
   measures 12,257/17,880. FPGA RTL, resources, route, clocks, persistent flash,
-  and bitstream SHA-256 remain unchanged. K7 is the current release checkpoint;
-  K6 is its rollback.
-
-  The K8 shared-area and bounded bulk-ring release candidate is implemented on
-  this qualified K7 control plane. Its 8 fixed areas, 32 mappings, 16 SPSC
-  rings, real page commit, reduced-right handle duplication, transactional map
-  rollback, same-logical-address cache policy, batched notifications,
-  wait-multiple integration, and peer-death cleanup pass all 20 host suites,
-  GCC analyzer and sanitizer gates, NDK tests/docs, normal Musashi, the
-  1,000-iteration performance soak, and a fresh full-SoC pin-level RTL run.
-  The soak completes in 576,508,511 cycles against the unchanged 675,000,000
-  cap with 7,986 pages free. Pin-level area create/map/unmap/notify maxima are
-  37,787/56,267/71,295/29,337 cycles with zero overruns. Exact source freeze,
-  SD provisioning, and two physical ULX3S boots remain before K8 supersedes K7.
-  Typed object caches, the emergency reserve, allocation tags, and system-wide
-  failure injection follow without weakening fixed queue limits.
+  and bitstream SHA-256 remain unchanged. K7 is the hardware-qualified rollback
+  for K8; K6 is its predecessor. Typed object caches, the emergency reserve,
+  allocation tags, and system-wide failure injection are the next kernel
+  milestone without weakening fixed queue limits.
 - The hardware-qualified K5 thread-lifecycle predecessor is based on commit
   `0208cb516801fe452bf59ef053d6daa0a118ee7e` plus qualified implementation
   patch SHA-256

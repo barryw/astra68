@@ -1,6 +1,6 @@
 # Axiom kernel and Astra service ABI
 
-Status: provisional ABI contract, revision 0.3 (2026-07-25)
+Status: provisional ABI contract, revision 0.4 (2026-07-25)
 
 The ABI is big-endian, 32-bit, naturally aligned, and independent of kernel C
 layouts. Only the user/kernel ABI and versioned service protocols are stable.
@@ -21,7 +21,7 @@ All reserved fields are written as zero and ignored on input unless a protocol
 version says otherwise. Structure input begins with `size`; the kernel accepts
 only the documented minimum through maximum and never reads beyond `size`.
 
-## Trap ABI 0.3
+## Trap ABI 0.4
 
 The syscall instruction is `TRAP #15`, vector 47.
 
@@ -41,7 +41,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 
 | Number | Name | State | Contract |
 |---:|---|---|---|
-| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010003`, `D2=process handle`, `D3=calling-thread handle` |
+| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010004`, `D2=process handle`, `D3=calling-thread handle` |
 | 1 | `PROGRESS` | K1 TEST ONLY | monotonic test progress, not a product ABI |
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `PROCESS_EXIT` (`EXIT` compatibility alias) | CURRENT | terminates the calling process and all of its threads |
@@ -62,9 +62,15 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 18 | `PORT_CREATE` | CURRENT K7 | `D1=max messages`, `D2=max queued bytes`; returns receive handle in `D1`, send handle in `D2` |
 | 19 | `PORT_SEND_TRY` | CURRENT K7 | `D1=send handle`, `D2=message pointer`, `D3=message bytes`, `D4=handle-array pointer`, `D5=handle count` |
 | 20 | `PORT_RECEIVE_TRY` | CURRENT K7 | `D1=receive handle`, `D2=message output`, `D3=message capacity`, `D4=handle output`, `D5=handle capacity`; returns actual/required message bytes in `D1` and handle count in `D2` |
+| 21 | `HANDLE_DUPLICATE` | CURRENT K8 | `D1=source handle`, `D2=requested rights`; returns duplicate handle in `D1` |
+| 22 | `AREA_CREATE` | CURRENT K8 | `D1=byte size`, `D2=rights`; returns area handle in `D1` |
+| 23 | `AREA_MAP` | CURRENT K8 | `D1=area handle`, `D2=map flags`; returns logical base in `D1` and rounded size in `D2` |
+| 24 | `AREA_UNMAP` | CURRENT K8 | `D1=logical mapping base`; removes the complete mapping |
+| 25 | `RING_CREATE` | CURRENT K8 | `D1=area handle`, `D2=offset`, `D3=element size`, `D4=capacity`; returns producer in `D1` and consumer in `D2` |
+| 26 | `RING_NOTIFY` | CURRENT K8 | `D1=endpoint`, `D2=owned position`, `D3=flags`, `D4=endpoint role`; returns producer and consumer positions in `D1:D2` |
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
-not panic. `QUERY_ABI` reports revision `0x00010003`; a later revision will add
+not panic. `QUERY_ABI` reports revision `0x00010004`; a later revision will add
 feature bits before additional calls freeze.
 
 The thread-entry register contract is `D2=initial argument`, `D4=process self
@@ -100,8 +106,9 @@ failure return `0xffffffff` in `D1` and zero in `D2`. A zero deadline polls.
 The first ready member in input order wins, including duplicate handles.
 
 K6 accepts events, semaphores, timers, thread death, and process death as wait
-members. K7 adds send and receive port endpoints to that set. Process authority
-is still a generation-safe process-local handle;
+members. K7 adds send and receive port endpoints; K8 adds producer and consumer
+ring endpoints. Process authority is still a generation-safe process-local
+handle;
 numeric process IDs are never waitable. Waiting on the calling thread or
 calling process is rejected. Thread and normal process death return the exact
 32-bit exit status as detail. A process terminated by a fault or other abnormal
@@ -179,7 +186,10 @@ source set. Either the complete message and every source handle move into the
 queue in one serialized commit, or every source remains usable by the sender.
 Receive reserves every destination slot before user copy; either all slots are
 published with one dequeued message or the message remains queued and no new
-handle is usable. K7 has no duplicate or rights-reduction syscall.
+handle is usable. K8 `HANDLE_DUPLICATE` is non-destructive: the source must
+carry `transfer`, the requested rights must be a nonzero subset of the source,
+and the object must explicitly support retaining another reference. Failure
+publishes no destination handle and leaves the source unchanged.
 
 Event and semaphore creation accepts only `read`, `signal`, `wait`, and
 `administer`. Waiting requires `wait`; signaling requires `signal`; event reset
@@ -193,6 +203,12 @@ transferable. A send endpoint has `read`, `signal`, `wait`, and `transfer`.
 `PORT_SEND_TRY` requires `signal`, `PORT_RECEIVE_TRY` requires `read`, and a
 port endpoint in either wait call requires `wait`. K7 moves handles and does
 not duplicate them or reduce their rights.
+
+An area accepts only `read`, `write`, `map`, `transfer`, and `administer`.
+Every mapping requires `read` and `map`; a writable mapping also requires
+`write`. Ring creation requires `administer` and returns move-only endpoints.
+The producer carries `write`, `signal`, `wait`, and `transfer`; the consumer
+carries `read`, `signal`, `wait`, and `transfer`.
 
 ## Versioned structures
 
@@ -246,6 +262,26 @@ reserves hidden destination slots, copies both outputs, and publishes those
 slots together with FIFO removal. A copy fault cancels the hidden reservation,
 leaves the message queued, and exposes no destination handle.
 
+`AREA_CREATE` accepts 1 through 65,536 bytes, rounds upward to complete 4 KiB
+pages, commits and zeroes every frame before publication, and charges the
+creator's real commit budget. `AREA_MAP` accepts `READ` or `READ|WRITE` and
+chooses a fixed process-local address from `0x40000000..0x4007ffff`; mappings
+of one area use the same logical base in every process. Mapping and unmapping
+are complete transactions. A failed descriptor publication, copy, cache/ATC
+maintenance step, or quota check restores every frame, descriptor, reference,
+and accounting count to its prior state.
+
+`RING_CREATE` places a 64-byte native-big-endian `ARIN` header at a 64-byte
+aligned, nonoverlapping area offset. Element size is four-byte aligned from 4
+through 4,096 bytes; capacity is a power of two from 2 through 1,024, and the
+complete header plus payload must fit the area. The producer alone writes the
+producer position and payload publication; the consumer alone writes the
+consumer position. `RING_NOTIFY` validates the caller-owned monotonic position,
+returns both kernel shadow positions, and wakes the peer. The only current flag
+is `ASTRA_BULK_RING_NOTIFY_CORRUPT`, which terminally closes a corrupt ring.
+The exact shared-header layout, fence ordering, quotas, and lifecycle are
+normative in `SHARED_AREAS_AND_BULK_RINGS.md` and the public NDK headers.
+
 ## Blocking and time
 
 - Deadlines are signed 64-bit monotonic nanoseconds and are absolute.
@@ -269,6 +305,10 @@ leaves the message queued, and exposes no destination handle.
   failure from spinning or silently defeating its finite deadline. Any
   intervening syscall consumes the token; the NDK emits the try/wait pair
   without an intervening call.
+- K8 ring endpoints use the same wait operations. A producer is ready when the
+  ring has capacity and a consumer is ready when data is available. Peer close,
+  creator death, area revocation, and detected corruption wake waiters with the
+  ring's defined terminal result.
 
 For one synchronization wait, exactly one serialized terminal transition wins:
 

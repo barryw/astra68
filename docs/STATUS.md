@@ -9,7 +9,25 @@ must not be presented as working software.
 ## Current source identity
 
 - Branch: `main`.
-- K7 bounded message ports are hardware-qualified from base commit
+- K8 shared areas and bounded bulk rings are hardware-qualified from exact
+  implementation commit `56bd1770c834205a4dccc42efb61552a77647988`, built
+  reproducibly at `2026-07-25T23:59:00Z`. The immutable source archive
+  SHA-256 is
+  `b0db820437d5526b9157815c5a280770e59e21930c39d48dddb6d21389d5cb49`
+  and is extracted as `/tmp/astra68-k8-56bd177` on Beast and NUC.
+- K8 kernel: 81,768 bytes, SHA-256
+  `ea879e760c48342f535ee9aee65bf1bab97e855c2e576579c2ab80ef615ba55b`.
+  The 112,736-byte ELF SHA-256 is
+  `81a8b2a65ef411c7fe77f5493f485e764e7c4b5331756055e56aea4e7104a3f5`.
+- K8 normal boot payload: 93,180 bytes, CRC32 `BE5F5D5D`, SHA-256
+  `a70ae3323884ffb3eccaa70b4e4c6be34a2e0a4aa044cee99a632375b6faba2a`.
+  The 93,212-byte packaged ROM SHA-256 is
+  `ae6bab5ab9a249211ef0b7f1daccb7e00ddb9e683facbe7ecfd7b0d6307d17a8`.
+  K8 passes all 20 host suites, analyzers, sanitizers, NDK and MC68030 gates,
+  generated HTML/PDF documentation, normal and performance Musashi, a clean
+  full pin-level RTL run, SD provisioning, AstraHost restoration, and two
+  independent exact ULX3S boots. K8 is current and K7 is its rollback.
+- K7 bounded message ports are the hardware-qualified rollback from base commit
   `1529496c168975cee0fc46c7955f98ab4a1b8d2b` plus implementation patch
   SHA-256
   `815347c8d094a1507b94ac5f8acb7636903d8eaf6fe8457e2f7a0d641763906e`.
@@ -170,18 +188,21 @@ must not be presented as working software.
 | same-address-space thread switch | CURRENT HW | host, Musashi, full RTL, and ULX3S count this path separately without a CRP/ATC/cache switch |
 | K3 atomic block/wake/deadline substrate | CURRENT HW | sequence-checked wait queues, 16-entry deadline heap, priority/FIFO wake, timeout, close wake-all, and immediate higher-priority handoff pass host, Musashi, full RTL, and ULX3S |
 | handle-backed events and semaphores | CURRENT HW | generation-safe handles, explicit rights, absolute-nanosecond deadlines, cancellation, close, owner death, quotas, and exact-once arbitration pass host, exact Musashi, pin-level RTL, and two ULX3S boots |
-| bounded wait-multiple | CURRENT HW | 1-16 events, semaphores, timers, thread death, and process death share fixed registrations and one deadline; complete prevalidation, deterministic input-order winner, duplicate members, every terminal race, and exact cleanup pass host, Musashi, full pin-level RTL, and two ULX3S boots |
+| bounded wait-multiple | CURRENT HW | 1-16 events, semaphores, timers, thread/process death, ports, and K8 ring endpoints share fixed registrations and one deadline; complete prevalidation, deterministic input-order winner, duplicate members, every terminal race, and exact cleanup pass host, Musashi, full pin-level RTL, and two ULX3S boots |
 | waitable one-shot timers | CURRENT HW | shared 32-object pool plus fixed deterministic timer heap; set/rearm/immediate expiry/cancel/close/owner-death and level readiness pass host, Musashi, full pin-level RTL, and two ULX3S boots |
 | waitable process death | CURRENT HW | generation-safe process handles, normal exit detail, abnormal terminal result, self rejection, prestart-only bootstrap grant, close/reuse, and exact reference cleanup pass host, Musashi, full pin-level RTL, and two ULX3S boots |
 | bounded message ports | CURRENT HW | 16 receiver-owned ports and 32 fixed message records enforce per-port and per-owner count/byte caps, nonblocking backpressure, absolute deadlines, cancellation, close, and peer death; host, Musashi, pin-level RTL, and two ULX3S boots pass |
 | atomic handle transfer | CURRENT HW | up to eight move-only generation-safe handles reserve, validate, and commit exactly once; failed send and failed receive copyout preserve or release authority without leaks, stale reuse, or partial publication |
-| trap ABI query/progress/yield/process-exit/close/clock/sync/thread lifecycle/wait-multiple/timers/ports | CURRENT HW | ABI `0x00010003`, retained K1-K6 calls, and K7 `PORT_CREATE`, `PORT_SEND_TRY`, and `PORT_RECEIVE_TRY` pass host, Musashi, pin-level RTL, and two exact ULX3S boots |
+| reduced-right handle duplication | CURRENT HW | K8 non-destructive duplication requires `transfer`, accepts only a nonzero rights subset on explicitly retainable objects, publishes atomically, and preserves the source on every failure |
+| shared areas | CURRENT HW | eight areas, 32 mappings, 128 committed pages, fixed cross-process logical addresses, transactional descriptor publication/rollback, coherent cache policy, revocation, and exact frame/accounting cleanup pass host, Musashi, pin-level RTL, and two ULX3S boots |
+| bounded SPSC bulk rings | CURRENT HW | 16 area-backed rings use fixed big-endian headers, move-only producer/consumer endpoints, batched notify, fixed wait queues, corruption containment, peer/creator death, and no kernel payload allocation; every backend and two ULX3S boots pass |
+| trap ABI query/progress/yield/process-exit/close/clock/sync/thread lifecycle/wait-multiple/timers/ports/areas/rings | CURRENT HW | ABI `0x00010004`, retained K1-K7 calls, and K8 `HANDLE_DUPLICATE`, `AREA_CREATE`, `AREA_MAP`, `AREA_UNMAP`, `RING_CREATE`, and `RING_NOTIFY` pass host, Musashi, pin-level RTL, and two exact ULX3S boots |
 | offender-only user fault death | CURRENT HW | format-B fault reaps only the offender on Musashi, full RTL, and three exact SRAM boots |
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
 | panic to console and retained early log | CURRENT HW | exact direct and supervisor-guard panic paths pass full RTL plus physical HDMI/log qualification |
-| kernel host analyzer/sanitizer gates | CURRENT | 18 suites, analyzer, ASan/UBSan/leak checks |
-| kernel cycle-budget gate | CURRENT HW | sixteen measured syscall/timer/fault/scheduler/wait/deadline/thread-lifecycle/wait-set/port paths enforce fixed limits in Musashi, full RTL, and two ULX3S boots; zero overruns |
-| end-to-end Musashi performance gate | CURRENT | exact 1,000-iteration K7 workload is 563,507,415 virtual cycles against a 675,000,000-cycle cap |
+| kernel host analyzer/sanitizer gates | CURRENT | 20 suites, analyzer, ASan/UBSan/leak checks |
+| kernel cycle-budget gate | CURRENT HW | twenty measured syscall/timer/fault/scheduler/wait/deadline/thread-lifecycle/wait-set/port/area/ring paths enforce fixed limits in Musashi, full RTL, and two ULX3S boots; zero overruns |
+| end-to-end Musashi performance gate | CURRENT | exact 1,000-iteration K8 workload is 576,508,485 virtual cycles against a 675,000,000-cycle cap |
 | deterministic lifecycle-soak harness | CURRENT HW | dual-host 500,000-cycle legacy Musashi, optimized Musashi, 13-cycle full RTL, routed five-minute candidate, and independent 30-minute release runs pass without drift |
 | deferred user-fault reclamation | CURRENT HW | host proves no maintenance/owner release in fault dispatch; Musashi, full RTL, and ULX3S report bounded masked-fault cycles |
 | shared CPU/PMMU framework | CURRENT | 90 tests, 30 adapter executions, Harte smoke |
@@ -197,22 +218,25 @@ must not be presented as working software.
 | K5 thread-lifecycle hardware boot | CURRENT HW | two exact `25D9CB8E` reloads pass ROM `11BE3620`, full 32 MiB POST/BIST, create/exit/death-wait/reap, all K1-K5 markers, and all twelve cycle budgets with zero overruns |
 | K6 wait-multiple hardware boot | CURRENT HW | fresh Verilator full-SoC run and two independent exact `25D9CB8E` ULX3S loads pass PMMU isolation, exact K6 counters, all K1-K6 markers, all fourteen budgets, and zero overruns |
 | K7 message-port hardware boot | CURRENT HW | fresh Verilator full-SoC run and two independent exact `25D9CB8E` ULX3S loads pass full POST/BIST, exact port/transfer counts, all K1-K7 markers, all sixteen budgets, and zero overruns |
+| K8 shared-area/bulk-ring hardware boot | CURRENT HW | clean Verilator full-SoC run and two independent exact `25D9CB8E` ULX3S loads pass full POST/BIST, exact area/mapping/ring/duplicate counts, K1-K8, all twenty budgets, and zero overruns |
 
 ## Hardware status
 
 - The ULX3S attached to NUC now runs exact persistent guarded-worker release
   `25D9CB8E`. Prior `77B3CDC8` K1 and `6C0D0CA3` K0 images remain qualified
   rollback artifacts, not the board's current flash contents.
-- The same `25D9CB8E` bitstream now boots K7 ROM CRC32 `B124CB22` from SD after
-  two independent volatile reloads. FPGA flash was not rewritten. Normal
-  read-only AstraHost firmware is restored, and `/ASTRA68.ROM` is the only FAT
-  file changed by the provisioning run; the existing 244,016 MB game volume
-  was mounted without formatting and otherwise preserved.
+- The same `25D9CB8E` bitstream now boots K8 ROM CRC32 `BE5F5D5D` from SD after
+  two independent volatile reloads. FPGA flash was not rewritten. Exact
+  read-only production AstraHost application SHA-256
+  `1a822cd9bb08ce9c3dfb6292017e96967b1dada34de78b27200cea22c1227e6e`
+  is restored, and `/ASTRA68.ROM` is the only FAT file changed by the
+  provisioning run; the existing 244,016 MB game volume was mounted without
+  formatting and otherwise preserved.
 - NUC currently enumerates no HDMI capture device. Both K4 hardware transcripts
-  and the K5, K6, and K7 hardware transcript pairs prove that the console generated
-  every required line and marker; the unchanged
+  and the K5, K6, K7, and K8 hardware transcript pairs prove that the console
+  generated every required line and marker; the unchanged
   routed HDMI pipeline retains its exact K1 physical screenshot qualification.
-  A new physical K7 screenshot is a visual evidence follow-up, not an RTL,
+  A new physical K8 screenshot is a visual evidence follow-up, not an RTL,
   scheduler, SDRAM, or ROM-identity failure.
 - Exact `25D9CB8E` maps 53,079 LUT4s, 25,536 GSR-enabled FFs, 101 DP16KDs,
   and 18 multipliers with zero SCCs. The no-waiver route packs 66,523
@@ -522,6 +546,112 @@ and
 This is a software-only promotion: FPGA flash, routed resources, and every
 constrained-clock result remain unchanged.
 
+## K8 shared-area and bounded-ring checkpoint
+
+K8 is exact implementation commit
+`56bd1770c834205a4dccc42efb61552a77647988`, built with
+`SOURCE_DATE_EPOCH=1785023940` (`2026-07-25T23:59:00Z`). Immutable source
+archive `/tmp/astra68-k8-56bd177.tar` has SHA-256
+`b0db820437d5526b9157815c5a280770e59e21930c39d48dddb6d21389d5cb49`
+and was extracted independently as `/tmp/astra68-k8-56bd177` on Beast and NUC.
+
+K8 adds eight fixed shared areas, 32 mapping records, 16 SPSC rings, real
+physical commit, reduced-right handle duplication, transactional map rollback,
+one cache-safe logical address per area across CRPs, batched notifications,
+wait-multiple integration, and terminal peer/creator-death cleanup. The profile
+caps areas at 16 4 KiB pages, area commit at 128 pages system-wide and 64 per
+creator, mappings at four per process, and rings at four per area and creator.
+Ring payload lives entirely in its area; the kernel allocates no payload queue.
+
+All 20 host suites pass normally, under GCC ASan/UBSan/leak checks, and under
+GCC `-fanalyzer`. The NDK passes six normal and six sanitizer suites, its
+analyzer gate, the MC68030 library and examples, and generated HTML plus a
+106-page, 413,053-byte PDF. These tests cover every injected create/map
+publication failure, duplicate/reduced rights, real K7 handle transfer,
+cross-process aliases, lost-wakeup windows, corruption, peer/creator death, and
+1,000 create/map/ring/unmap/lifecycle repetitions with exact baseline return.
+
+Normal Musashi reaches every K1-K8 marker in 24,750,250 cycles. Its K8 area
+create/map/unmap/ring-notify maxima are 25,298/43,908/43,248/14,694 cycles.
+The exact 1,000-iteration workload completes in 576,508,485 cycles against the
+unchanged 675,000,000 ceiling with 7,986 pages free, 2,027 context switches,
+4,426 delivered ticks, syscall count `0x69F7`, and zero overruns. Its K8 maxima
+are 25,328/43,938/43,278/14,724 cycles.
+
+A clean, non-reused Beast Verilator 5.047 build completed in 25.228 seconds and
+its pin-level SDRAM run completed in 377.592 seconds. It passes the intentional
+64 KiB BIST at 115.03 MB/s, PMMU isolation, exact K8 lifecycle counts, every
+K1-K8 marker, and all 20 cycle gates. Area create/map/unmap/ring-notify maxima
+are 37,762/56,097/71,283/29,390 cycles with zero overruns.
+
+Exact normal artifacts are:
+
+- kernel: 81,768 bytes, SHA-256
+  `ea879e760c48342f535ee9aee65bf1bab97e855c2e576579c2ab80ef615ba55b`;
+- kernel ELF: 112,736 bytes, SHA-256
+  `81a8b2a65ef411c7fe77f5493f485e764e7c4b5331756055e56aea4e7104a3f5`;
+- boot payload: 93,180 bytes, CRC32 `BE5F5D5D`, SHA-256
+  `a70ae3323884ffb3eccaa70b4e4c6be34a2e0a4aa044cee99a632375b6faba2a`;
+  and
+- packaged ROM: 93,212 bytes, SHA-256
+  `ae6bab5ab9a249211ef0b7f1daccb7e00ddb9e683facbe7ecfd7b0d6307d17a8`.
+
+NUC loaded maintenance passthrough bitstream SHA-256
+`2b423314c35ef00fc16929aaf72f536906abba4b602bfd79ab537e4b78185471`
+only into volatile SRAM, then flashed and verified one-shot provisioning
+AstraHost application SHA-256
+`6033a507f51470bdda78c1924308e37f5d5af603cfac54e348da62417379e3ba`.
+The existing 244,016 MB card was mounted without formatting. Provisioning
+atomically changed only `/sdcard/ASTRA68.ROM`; a second independent pass
+reported the exact 93,180-byte payload and CRC32 `BE5F5D5D` already matched.
+Exact read-only production AstraHost application SHA-256
+`1a822cd9bb08ce9c3dfb6292017e96967b1dada34de78b27200cea22c1227e6e`
+was then restored and verified.
+
+Production bitstream SHA-256
+`78cd218f12feb72ccbdcb6bb141d19908c961f3438b6b559bf99b60d1c9d6940`
+was verified before each of two independent volatile loads. Both boots report
+build `25D9CB8E`, exact commit and ROM CRC32 `BE5F5D5D`, complete physical
+32 MiB POST/BIST, PMMU/user-copy isolation, exact K8 counts, every K1-K8
+marker, and all 20 cycle gates with zero overruns. Run 1 completes in 4.158
+host seconds and measures area create/map/unmap/ring-notify at
+37,763/56,091/71,263/29,416 cycles. Run 2 completes in 3.876 seconds and
+measures 37,742/56,106/71,263/29,416.
+
+Key accepted evidence SHA-256 values are:
+
+- `evidence/astra68-k8-56bd177-host-tests.log`:
+  `45ac1cebae220e55207ddeae0b99bf46a0baf914a312155adc766b03d336f993`;
+- `evidence/astra68-k8-56bd177-musashi-normal.log`:
+  `6c3781d1d8d5d9c87a72792bac3da507c3afda229db1f63a7169d5033dc68365`;
+- `evidence/astra68-k8-56bd177-musashi-performance.log`:
+  `8517652d853c84f2e902b422171bfbf01c6f28c2e94d7cec4dd4f03f2811f428`;
+- `evidence/astra68-k8-56bd177-rtl.log`:
+  `6a2bdff9164fed71200e23dc0084eb48c1df1261cd6c4537085138d10c6477f5`;
+- `evidence/astra68-k8-56bd177-esp-provision-flash.log`:
+  `e382002231435f714a79091e50ec336b10c83aab8af0bee6657f92963599e1ff`;
+- `evidence/astra68-k8-56bd177-provision.log`:
+  `c7ae9301b48ceed2fe831f64175662a7520ef6c2af1a8971f189c7b1c346f735`;
+- `evidence/astra68-k8-56bd177-provision-verify.log`:
+  `83e8ebf14aa82fefaa2a31253898a3023f7a9af52e4ba5a0d898c95cb0fc1a57`;
+- `evidence/astra68-k8-56bd177-esp-production-flash.log`:
+  `df3e49a9b03a25ad617ff62b284db6507e3c5a0e4b0ea94485fd9a2b71463aba`;
+- `evidence/astra68-k8-25d9cb8e-56bd177-hw-1.log`:
+  `7bab18bcf3881cece216a17a718982cc779f3d52de180fc1fb0ffab9ee9ff66d`;
+  and
+- `evidence/astra68-k8-25d9cb8e-56bd177-hw-2.log`:
+  `3dab5148851e869102d89d412b35aa7a2650ac7a97cc726d861ae9adde56dd82`.
+
+Disposition: K8 implementation, immutable-source reproduction, software,
+fresh pin-level RTL, SD provisioning, production AstraHost restoration, and
+physical hardware promotion PASS. No production SoC synthesis, placement,
+route, pack, or persistent FPGA-flash operation was performed. Mapped resources
+remain 53,079 LUT4s, 25,536 FFs, 101 DP16KDs, and 18 multipliers; packed
+resources remain 66,523 TRELLIS_COMB and 25,565 FFs. The unchanged route passes
+at 15.058201 MHz CPU, 66.907532 MHz SDRAM, 79.693970 MHz USB, 53.267990 MHz
+pixel, and 289.771088 MHz HDMI shift. K8 is the current release; K7 is the
+qualified rollback.
+
 ## K7 bounded message-port checkpoint
 
 K7 adds bounded copied-message IPC on top of K6 wait-multiple. The development
@@ -821,16 +951,16 @@ hash, and persistent FPGA flash remain the exact qualified `25D9CB8E` values.
   timeout handoff are proven through the public K4 handle path on host and
   Musashi. Address-space affinity among equal priorities, inheritance,
   donation, wakeup boost, and real-time budgets are not built.
-- K7 runtime thread creation, caller-only exit, waitable thread/process death,
-  timers, bounded wait-multiple, and message ports have a documented
-  provisional revision-0.2 handle/syscall contract. Stack size is fixed at
-  4 KiB, pool/handle/queue capacities remain development limits, and there is
-  deliberately no asynchronous thread kill.
+- K8 runtime thread creation, caller-only exit, waitable thread/process death,
+  timers, bounded wait-multiple, message ports, shared areas, and SPSC rings
+  have a documented provisional ABI `0x00010004` handle/syscall contract. Stack
+  size is fixed at 4 KiB, pool/handle/queue capacities remain development
+  limits, and there is deliberately no asynchronous thread kill.
 - Ordinary user threads have guarded user and supervisor stacks. Events,
   semaphores, timers, thread death, and process death are public waitable
-  objects through wait-one and wait-multiple. Bounded message ports now provide
-  copied control IPC and atomic handle movement. Shared areas, service
-  discovery, and bulk-data rings do not yet exist.
+  objects through wait-one and wait-multiple. Bounded message ports provide
+  copied control IPC and atomic handle movement; shared areas and rings provide
+  bulk IPC without kernel payload copies. Service discovery does not yet exist.
 - `block.c` and `dma.c` qualify ownership, generation, pin, completion, and
   revocation. Filesystem/block policy still belongs in a user service.
 - The fixed K1 worker services process reap only. It is not yet a general
@@ -838,8 +968,9 @@ hash, and persistent FPGA flash remain the exact qualified `25D9CB8E` values.
   inheritance, or per-device work queues.
 - User-fault retirement is minimal and schedules the interruptible worker.
   Synchronization cancellation, wait-multiple cleanup, timer expiry,
-  thread/process owner-death arbitration, and port peer-death cleanup are
-  current; service supervision and restart policy remain.
+  thread/process owner-death arbitration, port/ring peer-death cleanup, and
+  area mapping revocation are current; service supervision and restart policy
+  remain.
 - The diagnostic UART mirror is emergency FTDI output only. ESP runtime
   communication is SPI.
 
@@ -847,9 +978,10 @@ hash, and persistent FPGA flash remain the exact qualified `25D9CB8E` values.
 
 - boot allocator retirement, typed slabs/object caches, bounded general heap,
   emergency page reserve, per-subsystem allocation tags, and low-memory policy;
-- shared areas, demand-zero pages, stable-default 8 KiB page option, commit accounts, and
-  cache-safe executable/file-page reclamation;
-- shared areas and bulk IPC rings, priority inheritance, and priority donation;
+- demand-zero pages, stable-default 8 KiB page option, general process commit
+  accounts beyond K8 area quotas, and cache-safe executable/file-page
+  reclamation;
+- priority inheritance and priority donation;
 - IRQ endpoint allocation, general deferred device workers, service restart, and
   privileged device-mapping objects;
 - centralized typed MMIO accessors and complete bus-timeout classification;
@@ -874,6 +1006,9 @@ hash, and persistent FPGA flash remain the exact qualified `25D9CB8E` values.
 | handle movement is all-or-nothing across invalid input, detached-pool exhaustion, copy faults, peer death, and destination-slot exhaustion | host handle/port failure injection including the partial detached-pool case, Musashi, and pin-level RTL |
 | failed receive copyout leaves the message queued and publishes no destination handle | host page-boundary/copy-fault matrix and target user-copy qualification |
 | final receive close wakes blocked peers and releases every queued message and detached authority exactly once | host close/owner-death races, Musashi exact counters, and pin-level RTL |
+| failed area create/map publication restores every frame, descriptor, leaf, mapping record, handle, reference, and charge | host allocation-failure matrix, Musashi, fresh pin-level RTL, and two K8 ULX3S boots |
+| one shared area has one cache-policy-compatible logical address across every process and is revoked before frame reuse | host alias/revocation matrix, Musashi, fresh pin-level RTL, and two K8 ULX3S boots |
+| ring full/empty/wrap, notification, wait, corruption, close, peer death, and creator death return every endpoint and waiter to baseline | host ring/lifecycle matrix, Musashi, fresh pin-level RTL, and two K8 ULX3S boots |
 | fixed wait registrations return to baseline after signal, timeout, cancel, close, thread death, and process death | host accounting tests, Musashi exact counters, and pin-level RTL |
 | timer heap ordering and equal-deadline behavior are deterministic without allocation | host timer/process tests, directed Vesta timer test, Musashi, and pin-level RTL |
 | stale process handles cannot name a replacement process and self-wait is rejected | host process/handle tests plus target K6 process-death path |
@@ -887,7 +1022,7 @@ hash, and persistent FPGA flash remain the exact qualified `25D9CB8E` values.
 | event close wakes each waiter exactly once | host sync/process tests plus exact K4 Musashi |
 | process death withdraws every sibling from ready/wait queues before deferred record reuse | host process test, Musashi soak, full RTL, and ULX3S K3 boots |
 | each thread supervisor stack has an unmapped guard, valid canary, and bounded high-water | host VM/thread tests, Musashi, full RTL, and ULX3S K3 boots |
-| every measured K7 hot path stays within its fixed cycle budget | host profiler tests, Musashi, full RTL, and two K7 ULX3S boots |
+| every measured K8 hot path stays within its fixed cycle budget | host profiler tests, Musashi, full RTL, and two K8 ULX3S boots |
 | 1,000-cycle Musashi workload remains at or below 675,000,000 virtual cycles | automated emulator performance gate |
 | ordinary syscalls do not renew the running thread's quantum | host process test, Musashi, full RTL, and two K3 ULX3S boots |
 | timer always targets the earlier active quantum or wait deadline | host platform/process tests plus K3 target timeout handoff |
@@ -911,16 +1046,14 @@ hash, and persistent FPGA flash remain the exact qualified `25D9CB8E` values.
 | duplicate user cached alias is rejected and reusable after unmap | host VM test |
 | cross-CRP same-address code/data cannot expose stale bytes | Musashi and full RTL K1 |
 | malformed syscall corpus never panics | MISSING |
-| every allocation site unwinds exactly | PARTIAL; complete for K5 thread creation, not yet system-wide |
+| every allocation site unwinds exactly | PARTIAL; complete for K5 thread creation and K8 area/ring publication, not yet system-wide |
 
 ## Next actions
 
-1. add shared areas and bounded bulk IPC rings on the qualified K7 control
-   plane, including mapping revocation and exact commit/pin accounting;
-2. introduce typed object caches, the
+1. introduce typed object caches, the
    emergency reserve, allocation tags, and system-wide failure injection;
-3. add IRQ endpoints, bounded deferred-device delivery, the retained trace
+2. add IRQ endpoints, bounded deferred-device delivery, the retained trace
    ring, and the SPI/FTDI kernel monitor before user-space device services;
-4. grow development pools only from measured workload data, and implement and
+3. grow development pools only from measured workload data, and implement and
    benchmark 8 KiB pages against the retained 4 KiB oracle before freezing the
    stable VM ABI.

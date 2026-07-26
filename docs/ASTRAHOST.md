@@ -171,8 +171,8 @@ producers are separate AstraHost modules.
 
 AstraHost mounts the existing FAT12/16/32 or exFAT boot partition without
 formatting and opens only `/ASTRA68.ROM` for reading. The production boot path
-does not modify other files on the card. Astra's native filesystem uses the
-runtime raw multi-sector SPI service for a partition the ESP32 never mounts.
+does not modify other files on the card. AstraFS uses the runtime raw
+multi-sector SPI service for a separate partition the ESP32 never mounts.
 
 The required GPT type GUID is `1A991104-9317-4CFD-B5EB-0402471570AC`.
 AstraHost validates the protective MBR, primary GPT header CRC, complete entry

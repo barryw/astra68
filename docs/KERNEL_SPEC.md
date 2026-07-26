@@ -782,10 +782,10 @@ and debugger register numbering before the native ABI is frozen.
 ## 17. Acceptance gates
 
 These labels are the original whole-kernel roadmap and are not the same as the
-incremental K1-K7 implementation-checkpoint names in `STATUS.md`. In
-particular, the current K7 message-port checkpoint supplies bounded control IPC
-but does not claim that roadmap K3 shared-area/bulk IPC or roadmap K4 device
-recovery is complete.
+incremental K1-K8 implementation-checkpoint names in `STATUS.md`. In
+particular, current K8 supplies bounded control IPC, shared areas, and SPSC bulk
+rings, but it does not claim the whole roadmap K3 service-level latency gate or
+roadmap K4 device recovery is complete.
 
 ### K0 — architectural probes
 
