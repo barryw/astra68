@@ -2347,7 +2347,11 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             kernel_sync_abandon_unpublished(object);
             return KERNEL_PROCESS_CORRUPT;
         }
+#if defined(KERNEL_PROCESS_HOST_TEST)
         if (!kernel_sync_pool_valid())
+#else
+        if (!kernel_sync_pool_healthy())
+#endif
             return KERNEL_PROCESS_CORRUPT;
         break;
     }
@@ -2384,7 +2388,11 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             kernel_sync_abandon_unpublished(object);
             return KERNEL_PROCESS_CORRUPT;
         }
+#if defined(KERNEL_PROCESS_HOST_TEST)
         if (!kernel_sync_pool_valid())
+#else
+        if (!kernel_sync_pool_healthy())
+#endif
             return KERNEL_PROCESS_CORRUPT;
         break;
     }
@@ -2425,7 +2433,11 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             return KERNEL_PROCESS_CORRUPT;
         }
         thread->context.data[1] = handle;
+#if defined(KERNEL_PROCESS_HOST_TEST)
         if (!kernel_area_pool_valid())
+#else
+        if (!kernel_area_pool_healthy())
+#endif
             return KERNEL_PROCESS_CORRUPT;
         break;
     }
@@ -2551,7 +2563,11 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         }
         thread->context.data[1] = producer;
         thread->context.data[2] = consumer;
+#if defined(KERNEL_PROCESS_HOST_TEST)
         if (!kernel_ring_pool_valid() || !kernel_area_pool_valid())
+#else
+        if (!kernel_ring_pool_healthy() || !kernel_area_pool_healthy())
+#endif
             return KERNEL_PROCESS_CORRUPT;
         break;
     }
