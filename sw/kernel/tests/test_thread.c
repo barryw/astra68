@@ -2,6 +2,7 @@
 
 #include <astra/syscall.h>
 
+#include "allocation.h"
 #include "performance.h"
 
 #include <assert.h>
@@ -97,6 +98,39 @@ static void test_priority_fifo_and_process_retirement(void)
     publish_thread(selected);
     assert(kernel_thread_process_runnable(2u));
     assert(kernel_thread_process_count(2u, true) == 1u);
+}
+
+static void test_record_injection_preserves_pool(void)
+{
+    KernelAllocationStats allocation_stats;
+    KernelThread *thread = (KernelThread *)(uintptr_t)1u;
+    KernelThreadPoolStats pool_stats;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_THREAD_RECORD, 1u);
+    assert(kernel_thread_allocate(
+               0u, 0x10000001u, 0u, 0x00100000u, 0x70001000u,
+               0u, KERNEL_THREAD_PRIORITY_NORMAL, &thread) ==
+           KERNEL_THREAD_NO_SLOT);
+    assert(thread == NULL);
+    thread = (KernelThread *)(uintptr_t)1u;
+    kernel_allocation_test_fail_global(1u);
+    assert(kernel_thread_allocate(
+               0u, 0x10000001u, 0u, 0x00100000u, 0x70001000u,
+               0u, KERNEL_THREAD_PRIORITY_NORMAL, &thread) ==
+           KERNEL_THREAD_NO_SLOT);
+    assert(thread == NULL);
+    assert(kernel_thread_pool_stats(&pool_stats));
+    assert(pool_stats.live_threads == 0u);
+    assert(pool_stats.ready_threads == 0u);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_THREAD_RECORD, &allocation_stats));
+    assert(allocation_stats.current_units == 0u);
+    assert(allocation_stats.injected_failures == 2u);
+    assert(kernel_thread_pool_valid());
+    assert(kernel_allocation_valid());
 }
 
 static void test_slot_fifteen_generation_ids_do_not_repeat(void)
@@ -868,6 +902,7 @@ static void test_wait_set_timeout_cancel_and_atomic_admission(void)
 
 int main(void)
 {
+    test_record_injection_preserves_pool();
     test_priority_fifo_and_process_retirement();
     test_slot_fifteen_generation_ids_do_not_repeat();
     test_invalid_inputs_do_not_consume_slots();

@@ -1,3 +1,4 @@
+#include "allocation.h"
 #include "area.h"
 #include "memory.h"
 #include "performance.h"
@@ -233,6 +234,46 @@ static void test_header_batching_waits_and_wrap(void)
     assert(stats.consumer_notifications == 4u);
     assert(stats.wait_wakeups == 2u);
     assert(kernel_ring_pool_valid() && kernel_area_pool_valid());
+}
+
+static void test_ring_injection_releases_child_authority(void)
+{
+    KernelAllocationStats allocation_stats;
+    KernelArea *area;
+    KernelAreaSnapshot snapshot;
+    KernelMemoryStats baseline;
+    KernelMemoryStats after;
+    KernelRing *ring = (KernelRing *)(uintptr_t)1u;
+    KernelRingPoolStats pool_stats;
+
+    initialize_test();
+    assert(kernel_memory_stats(&baseline));
+    assert(kernel_area_create(41u, KERNEL_PAGE_SIZE, &area) ==
+           KERNEL_AREA_OK);
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_RING_OBJECT, 1u);
+    assert(kernel_ring_create(41u, area, 0u, 16u, 4u, &ring) ==
+           KERNEL_RING_NO_SLOT);
+    assert(ring == NULL);
+    ring = (KernelRing *)(uintptr_t)1u;
+    kernel_allocation_test_fail_global(1u);
+    assert(kernel_ring_create(41u, area, 0u, 16u, 4u, &ring) ==
+           KERNEL_RING_NO_SLOT);
+    assert(ring == NULL);
+    assert(kernel_area_snapshot(0u, &snapshot));
+    assert(snapshot.child_references == 0u);
+    assert(kernel_ring_pool_stats(&pool_stats));
+    assert(pool_stats.active_rings == 0u);
+    kernel_area_handle_release(area, NULL);
+    assert(kernel_memory_stats(&after));
+    assert(after.free_frames == baseline.free_frames);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_RING_OBJECT, &allocation_stats));
+    assert(allocation_stats.current_units == 0u);
+    assert(allocation_stats.injected_failures == 2u);
+    assert(kernel_ring_pool_valid());
+    assert(kernel_area_pool_valid());
+    assert(kernel_allocation_valid());
 }
 
 static void test_overlap_corruption_and_creator_death(void)
@@ -527,6 +568,7 @@ int main(void)
                    "bulk-ring producer offset");
     _Static_assert(offsetof(AstraBulkRingHeader, consumer_position) == 0x30u,
                    "bulk-ring consumer offset");
+    test_ring_injection_releases_child_authority();
     test_header_batching_waits_and_wrap();
     test_overlap_corruption_and_creator_death();
     test_validation_no_advance_and_consumer_death();

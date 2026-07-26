@@ -1,3 +1,4 @@
+#include "allocation.h"
 #include "handle.h"
 
 #include <assert.h>
@@ -96,6 +97,68 @@ static void test_cloneable_rights_reduction_and_lifetime(void)
                &table, KERNEL_OBJECT_AREA, RIGHT_QUERY, &state, NULL,
                release_clone, &state, &source) ==
            KERNEL_HANDLE_INVALID_ARGUMENT);
+}
+
+static void test_allocation_injection_preserves_authority(void)
+{
+    KernelAllocationStats detached_stats;
+    KernelAllocationStats slot_stats;
+    KernelHandle handles[2];
+    KernelHandleTable table;
+    KernelHandleTransferBatch batch;
+    ReleaseState released = {0u, 0u};
+
+    kernel_handle_transfer_pool_init();
+    kernel_handle_table_init(&table);
+    assert(kernel_handle_table_set_owner(&table, 51u));
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_HANDLE_SLOT, 1u);
+    assert(kernel_handle_install(
+               &table, KERNEL_OBJECT_DEVICE,
+               RIGHT_QUERY | RIGHT_TRANSFER,
+               (void *)(uintptr_t)0x1000u, release_object, &released,
+               &handles[0]) == KERNEL_HANDLE_TABLE_FULL);
+    assert(kernel_handle_count(&table) == 0u && released.calls == 0u);
+    kernel_allocation_test_fail_global(1u);
+    assert(kernel_handle_install(
+               &table, KERNEL_OBJECT_DEVICE,
+               RIGHT_QUERY | RIGHT_TRANSFER,
+               (void *)(uintptr_t)0x1000u, release_object, &released,
+               &handles[0]) == KERNEL_HANDLE_TABLE_FULL);
+    assert(kernel_handle_count(&table) == 0u && released.calls == 0u);
+
+    for (uint32_t index = 0u; index < 2u; ++index) {
+        assert(kernel_handle_install(
+                   &table, KERNEL_OBJECT_DEVICE,
+                   RIGHT_QUERY | RIGHT_TRANSFER,
+                   (void *)(uintptr_t)(0x2000u + index), release_object,
+                   &released, &handles[index]) == KERNEL_HANDLE_OK);
+    }
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_DETACHED_HANDLE, 2u);
+    assert(kernel_handle_transfer_prepare(
+               &table, handles, 2u, RIGHT_TRANSFER, &batch) ==
+           KERNEL_HANDLE_TRANSFER_POOL_FULL);
+    assert(kernel_handle_count(&table) == 2u);
+    assert(kernel_handle_transfer_pool_valid());
+    kernel_allocation_test_fail_global(2u);
+    assert(kernel_handle_transfer_prepare(
+               &table, handles, 2u, RIGHT_TRANSFER, &batch) ==
+           KERNEL_HANDLE_TRANSFER_POOL_FULL);
+    assert(kernel_handle_count(&table) == 2u);
+    assert(kernel_handle_transfer_pool_valid());
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_DETACHED_HANDLE, &detached_stats));
+    assert(detached_stats.current_units == 0u);
+    assert(detached_stats.injected_failures == 2u);
+    assert(kernel_handle_close_all(&table) == 2u);
+    assert(released.calls == 2u);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_HANDLE_SLOT, &slot_stats));
+    assert(slot_stats.current_units == 0u);
+    assert(slot_stats.injected_failures == 2u);
+    assert(kernel_handle_transfer_pool_valid());
+    assert(kernel_allocation_valid());
 }
 
 static void test_lookup_rights_type_and_stale_reuse(void)
@@ -508,6 +571,7 @@ int main(void)
 {
     kernel_handle_transfer_pool_init();
     assert(kernel_handle_transfer_pool_healthy());
+    test_allocation_injection_preserves_authority();
     test_lookup_rights_type_and_stale_reuse();
     test_capacity_and_close_all();
     test_invalid_arguments();

@@ -1,3 +1,4 @@
+#include "allocation.h"
 #include "area.h"
 #include "memory.h"
 #include "pmmu.h"
@@ -185,6 +186,92 @@ static void test_same_address_aliases_and_atomic_revoke(void)
     assert(kernel_area_pool_valid());
 }
 
+static void test_allocation_injection_preserves_mapping_baseline(void)
+{
+    KernelAddressSpace space = {0};
+    KernelAllocationStats area_allocation;
+    KernelAllocationStats mapping_allocation;
+    KernelAllocationStats page_allocation;
+    KernelArea *area = (KernelArea *)(uintptr_t)1u;
+    KernelAreaPoolStats pool_stats;
+    KernelAreaSnapshot snapshot;
+    KernelMemoryStats baseline;
+    KernelMemoryStats after;
+    uint32_t virtual_base = UINT32_MAX;
+    uint32_t byte_size = UINT32_MAX;
+
+    initialize_test();
+    assert(kernel_memory_stats(&baseline));
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_AREA_OBJECT, 1u);
+    assert(kernel_area_create(31u, KERNEL_PAGE_SIZE, &area) ==
+           KERNEL_AREA_NO_SLOT);
+    assert(area == NULL);
+    area = (KernelArea *)(uintptr_t)1u;
+    kernel_allocation_test_fail_global(1u);
+    assert(kernel_area_create(31u, KERNEL_PAGE_SIZE, &area) ==
+           KERNEL_AREA_NO_SLOT);
+    assert(area == NULL);
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_AREA_PAGES, 1u);
+    assert(kernel_area_create(31u, KERNEL_PAGE_SIZE, &area) ==
+           KERNEL_AREA_OUT_OF_MEMORY);
+    assert(area == NULL);
+    area = (KernelArea *)(uintptr_t)1u;
+    kernel_allocation_test_fail_global(2u);
+    assert(kernel_area_create(31u, KERNEL_PAGE_SIZE, &area) ==
+           KERNEL_AREA_OUT_OF_MEMORY);
+    assert(area == NULL);
+    assert(kernel_memory_stats(&after));
+    assert(after.free_frames == baseline.free_frames);
+
+    assert(kernel_area_create(31u, KERNEL_PAGE_SIZE, &area) ==
+           KERNEL_AREA_OK);
+    assert(kernel_vm_create_address_space(32u, &space) == KERNEL_VM_OK);
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_AREA_MAPPING, 1u);
+    assert(kernel_area_map(area, 32u, &space,
+                           KERNEL_VM_READ | KERNEL_VM_WRITE,
+                           &virtual_base, &byte_size) ==
+           KERNEL_AREA_NO_SLOT);
+    assert(virtual_base == 0u && byte_size == 0u);
+    assert(kernel_area_snapshot(0u, &snapshot));
+    assert(snapshot.mapping_references == 0u);
+    assert(kernel_area_pool_stats(&pool_stats));
+    assert(pool_stats.active_mappings == 0u);
+
+    virtual_base = UINT32_MAX;
+    byte_size = UINT32_MAX;
+    kernel_allocation_test_fail_global(1u);
+    assert(kernel_area_map(area, 32u, &space,
+                           KERNEL_VM_READ | KERNEL_VM_WRITE,
+                           &virtual_base, &byte_size) ==
+           KERNEL_AREA_NO_SLOT);
+    assert(virtual_base == 0u && byte_size == 0u);
+    assert(kernel_area_snapshot(0u, &snapshot));
+    assert(snapshot.mapping_references == 0u);
+
+    kernel_area_handle_release(area, NULL);
+    assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
+    assert(kernel_memory_release_owner(32u, NULL) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&after));
+    assert(after.free_frames == baseline.free_frames);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_AREA_OBJECT, &area_allocation));
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_AREA_PAGES, &page_allocation));
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_AREA_MAPPING, &mapping_allocation));
+    assert(area_allocation.current_units == 0u);
+    assert(page_allocation.current_units == 0u);
+    assert(mapping_allocation.current_units == 0u);
+    assert(area_allocation.injected_failures == 2u);
+    assert(page_allocation.injected_failures == 2u);
+    assert(mapping_allocation.injected_failures == 2u);
+    assert(kernel_area_pool_valid());
+    assert(kernel_allocation_valid());
+}
+
 static void test_child_lifetime_and_quotas(void)
 {
     KernelAreaPoolStats stats;
@@ -352,6 +439,7 @@ static void test_map_transaction_rolls_back_every_stage(void)
 
 int main(void)
 {
+    test_allocation_injection_preserves_mapping_baseline();
     test_same_address_aliases_and_atomic_revoke();
     test_child_lifetime_and_quotas();
     test_create_transaction_rolls_back_every_stage();

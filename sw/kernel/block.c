@@ -1,6 +1,7 @@
 #include "block.h"
 
 #include "generation.h"
+#include "object_cache.h"
 #include "platform.h"
 #include "vesta.h"
 
@@ -22,6 +23,9 @@ typedef struct KernelBlockSlot {
 } KernelBlockSlot;
 
 static KernelBlockSlot slots[KERNEL_BLOCK_MAX_REQUESTS];
+static KernelObjectCache request_cache;
+static uint32_t request_cache_bitmap[
+    KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_BLOCK_MAX_REQUESTS)];
 static KernelPlatformBlockState device_state;
 static KernelBlockStats block_stats;
 static uint32_t device_generation;
@@ -80,6 +84,13 @@ static void clear_slot(KernelBlockSlot *slot)
     slot->state = KERNEL_BLOCK_REQUEST_FREE;
     slot->has_dma = 0u;
     slot->reserved = 0u;
+}
+
+static bool release_slot(KernelBlockSlot *slot)
+{
+    clear_slot(slot);
+    return kernel_object_cache_release(&request_cache, slot) ==
+           KERNEL_OBJECT_CACHE_OK;
 }
 
 static void reset_stats(void)
@@ -156,6 +167,12 @@ void kernel_block_init(void)
     device_state_valid = false;
     device_generation = 0u;
     reset_stats();
+    if (!kernel_object_cache_init(
+            &request_cache, slots, sizeof(slots[0]),
+            KERNEL_BLOCK_MAX_REQUESTS, request_cache_bitmap,
+            KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_BLOCK_MAX_REQUESTS),
+            KERNEL_ALLOCATION_SITE_BLOCK_REQUEST))
+        return;
     for (uint32_t index = 0u; index < KERNEL_BLOCK_MAX_REQUESTS; ++index) {
         slots[index].generation = 0u;
         clear_slot(&slots[index]);
@@ -185,9 +202,13 @@ KernelBlockStatus kernel_block_submit(uint32_t owner, uint8_t operation,
     uint32_t submit_error;
     bool has_dma;
     uint64_t lba_end;
+    void *raw_slot;
+    uint16_t slot_index;
+    KernelObjectCacheStatus cache_status;
 
     if (!initialized || owner == 0u || request == NULL)
         return KERNEL_BLOCK_INVALID_ARGUMENT;
+    *request = KERNEL_BLOCK_HANDLE_INVALID;
     if (!refresh_device_state() ||
         (device_state.state_flags & BLOCK_STATE_LINK_UP) == 0u)
         return KERNEL_BLOCK_NOT_PRESENT;
@@ -224,14 +245,16 @@ KernelBlockStatus kernel_block_submit(uint32_t owner, uint8_t operation,
         direction = KERNEL_DMA_TO_DEVICE;
     }
 
-    for (uint32_t index = 0u; index < KERNEL_BLOCK_MAX_REQUESTS; ++index) {
-        if (slots[index].state == KERNEL_BLOCK_REQUEST_FREE) {
-            slot = &slots[index];
-            break;
-        }
-    }
-    if (slot == NULL)
+    cache_status = kernel_object_cache_claim(
+        &request_cache, owner, &raw_slot, &slot_index);
+    if (cache_status == KERNEL_OBJECT_CACHE_UNAVAILABLE)
         return KERNEL_BLOCK_QUEUE_FULL;
+    if (cache_status != KERNEL_OBJECT_CACHE_OK ||
+        slot_index >= KERNEL_BLOCK_MAX_REQUESTS)
+        return KERNEL_BLOCK_CORRUPT;
+    slot = raw_slot;
+    if (slot->state != KERNEL_BLOCK_REQUEST_FREE)
+        return KERNEL_BLOCK_CORRUPT;
 
     slot->generation = (uint16_t)kernel_generation_next_masked(
         slot->generation, UINT16_MAX);
@@ -241,15 +264,27 @@ KernelBlockStatus kernel_block_submit(uint32_t owner, uint8_t operation,
         KernelDmaStatus dma_status = kernel_dma_begin(
             dma_handle, owner, dma_offset, transfer_bytes, direction,
             device_generation, &token);
-        if (dma_status == KERNEL_DMA_INVALID_HANDLE)
+        if (dma_status == KERNEL_DMA_INVALID_HANDLE) {
+            if (!release_slot(slot))
+                return KERNEL_BLOCK_CORRUPT;
             return KERNEL_BLOCK_INVALID_HANDLE;
-        if (dma_status == KERNEL_DMA_NOT_OWNED)
+        }
+        if (dma_status == KERNEL_DMA_NOT_OWNED) {
+            if (!release_slot(slot))
+                return KERNEL_BLOCK_CORRUPT;
             return KERNEL_BLOCK_NOT_OWNED;
-        if (dma_status == KERNEL_DMA_BUSY)
+        }
+        if (dma_status == KERNEL_DMA_BUSY) {
+            if (!release_slot(slot))
+                return KERNEL_BLOCK_CORRUPT;
             return KERNEL_BLOCK_BUSY;
-        if (dma_status != KERNEL_DMA_OK)
+        }
+        if (dma_status != KERNEL_DMA_OK) {
+            if (!release_slot(slot))
+                return KERNEL_BLOCK_CORRUPT;
             return dma_status == KERNEL_DMA_INVALID_ARGUMENT ?
                 KERNEL_BLOCK_INVALID_ARGUMENT : KERNEL_BLOCK_CORRUPT;
+        }
         physical_buffer = token.physical_address;
     }
 
@@ -257,6 +292,8 @@ KernelBlockStatus kernel_block_submit(uint32_t owner, uint8_t operation,
         handle, operation, 0u, lba, sectors, physical_buffer);
     if (submit_error != 0u) {
         if (has_dma && kernel_dma_abort(&token) != KERNEL_DMA_OK)
+            return KERNEL_BLOCK_CORRUPT;
+        if (!release_slot(slot))
             return KERNEL_BLOCK_CORRUPT;
         ++block_stats.rejected;
         return submit_error_status(submit_error);
@@ -315,7 +352,8 @@ KernelBlockStatus kernel_block_service(uint32_t *serviced_completions)
 
         ++block_stats.completed;
         if (revoking) {
-            clear_slot(slot);
+            if (!release_slot(slot))
+                return KERNEL_BLOCK_CORRUPT;
             continue;
         }
         slot->result.status = generation_match ? completion.status :
@@ -352,7 +390,8 @@ KernelBlockStatus kernel_block_collect(KernelBlockHandle request,
     result->detail = slot->result.detail;
     result->media_generation = slot->result.media_generation;
     result->host_generation = slot->result.host_generation;
-    clear_slot(slot);
+    if (!release_slot(slot))
+        return KERNEL_BLOCK_CORRUPT;
     return KERNEL_BLOCK_OK;
 }
 
@@ -393,7 +432,8 @@ KernelBlockStatus kernel_block_revoke_owner(uint32_t owner,
         if (slot->owner != owner)
             continue;
         if (slot->state == KERNEL_BLOCK_REQUEST_COMPLETED) {
-            clear_slot(slot);
+            if (!release_slot(slot))
+                return KERNEL_BLOCK_CORRUPT;
             ++revoked;
         } else if (slot->state == KERNEL_BLOCK_REQUEST_ACTIVE) {
             slot->state = KERNEL_BLOCK_REQUEST_REVOKING;
@@ -420,5 +460,21 @@ bool kernel_block_stats(KernelBlockStats *result)
     result->unknown_completions = block_stats.unknown_completions;
     result->generation_mismatches = block_stats.generation_mismatches;
     result->revoked_requests = block_stats.revoked_requests;
+    return true;
+}
+
+bool kernel_block_valid(void)
+{
+    if (!initialized || !kernel_object_cache_valid(&request_cache) ||
+        !kernel_dma_valid())
+        return false;
+    for (uint16_t index = 0u; index < KERNEL_BLOCK_MAX_REQUESTS; ++index) {
+        bool claimed = kernel_object_cache_slot_claimed(
+            &request_cache, index);
+
+        if (claimed !=
+            (slots[index].state != KERNEL_BLOCK_REQUEST_FREE))
+            return false;
+    }
     return true;
 }

@@ -4,6 +4,7 @@
 
 #include "bytes.h"
 #include "generation.h"
+#include "object_cache.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -23,6 +24,9 @@ struct KernelSyncObject {
 #define KERNEL_SYNC_TIMER_SLOT_NONE UINT8_MAX
 
 static KernelSyncObject objects[KERNEL_SYNC_OBJECT_MAX];
+static KernelObjectCache object_cache;
+static uint32_t object_cache_bitmap[
+    KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_SYNC_OBJECT_MAX)];
 static uint64_t timer_deadlines[KERNEL_SYNC_OBJECT_MAX];
 static uint8_t timer_heap[KERNEL_SYNC_OBJECT_MAX];
 static uint8_t timer_positions[KERNEL_SYNC_OBJECT_MAX];
@@ -201,6 +205,10 @@ static void update_live_maximum(void)
 static KernelSyncStatus allocate_object(uint32_t owner, uint8_t type,
                                         KernelSyncObject **object)
 {
+    void *raw_object;
+    uint16_t slot;
+    KernelObjectCacheStatus cache_status;
+
     if (owner == 0u || !valid_type(type) || object == NULL)
         return KERNEL_SYNC_INVALID_ARGUMENT;
     *object = NULL;
@@ -208,28 +216,36 @@ static KernelSyncStatus allocate_object(uint32_t owner, uint8_t type,
         ++pool_stats.quota_failures;
         return KERNEL_SYNC_QUOTA_EXCEEDED;
     }
-    for (uint32_t slot = 0u; slot < KERNEL_SYNC_OBJECT_MAX; ++slot) {
-        KernelSyncObject *candidate = &objects[slot];
-        uint32_t generation;
-
-        if (candidate->state != KERNEL_SYNC_FREE)
-            continue;
-        if (timer_positions[slot] != KERNEL_SYNC_TIMER_SLOT_NONE)
-            return KERNEL_SYNC_CORRUPT;
-        generation = kernel_generation_next(candidate->generation);
-        kernel_bytes_clear(candidate, sizeof(*candidate));
-        kernel_thread_wait_queue_init(&candidate->waiters);
-        candidate->owner = owner;
-        candidate->generation = generation;
-        candidate->references = 1u;
-        candidate->type = type;
-        candidate->state = KERNEL_SYNC_LIVE;
-        *object = candidate;
-        update_live_maximum();
-        return KERNEL_SYNC_OK;
+    cache_status = kernel_object_cache_claim(
+        &object_cache, owner, &raw_object, &slot);
+    if (cache_status == KERNEL_OBJECT_CACHE_UNAVAILABLE) {
+        ++pool_stats.allocation_failures;
+        return KERNEL_SYNC_NO_SLOT;
     }
-    ++pool_stats.allocation_failures;
-    return KERNEL_SYNC_NO_SLOT;
+    if (cache_status != KERNEL_OBJECT_CACHE_OK ||
+        slot >= KERNEL_SYNC_OBJECT_MAX) {
+        pool_corrupt = 1u;
+        return KERNEL_SYNC_CORRUPT;
+    }
+    KernelSyncObject *candidate = raw_object;
+    uint32_t generation;
+
+    if (candidate->state != KERNEL_SYNC_FREE ||
+        timer_positions[slot] != KERNEL_SYNC_TIMER_SLOT_NONE) {
+        pool_corrupt = 1u;
+        return KERNEL_SYNC_CORRUPT;
+    }
+    generation = kernel_generation_next(candidate->generation);
+    kernel_bytes_clear(candidate, sizeof(*candidate));
+    kernel_thread_wait_queue_init(&candidate->waiters);
+    candidate->owner = owner;
+    candidate->generation = generation;
+    candidate->references = 1u;
+    candidate->type = type;
+    candidate->state = KERNEL_SYNC_LIVE;
+    *object = candidate;
+    update_live_maximum();
+    return KERNEL_SYNC_OK;
 }
 
 static void free_object(KernelSyncObject *object)
@@ -247,6 +263,9 @@ static void free_object(KernelSyncObject *object)
     kernel_bytes_clear(object, sizeof(*object));
     object->generation = generation;
     object->state = KERNEL_SYNC_FREE;
+    if (kernel_object_cache_release(&object_cache, object) !=
+        KERNEL_OBJECT_CACHE_OK)
+        pool_corrupt = 1u;
 }
 
 static KernelSyncStatus close_object(KernelSyncObject *object,
@@ -285,6 +304,14 @@ static KernelSyncStatus close_object(KernelSyncObject *object,
 
 void kernel_sync_pool_init(void)
 {
+    if (!kernel_object_cache_init(
+            &object_cache, objects, sizeof(objects[0]),
+            KERNEL_SYNC_OBJECT_MAX, object_cache_bitmap,
+            KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_SYNC_OBJECT_MAX),
+            KERNEL_ALLOCATION_SITE_SYNC_OBJECT)) {
+        pool_corrupt = 1u;
+        return;
+    }
     for (uint32_t slot = 0u; slot < KERNEL_SYNC_OBJECT_MAX; ++slot) {
         uint32_t generation = objects[slot].generation;
 
@@ -759,7 +786,9 @@ bool kernel_sync_pool_healthy(void)
 
 bool kernel_sync_pool_valid(void)
 {
-    if (!kernel_sync_pool_healthy() || timer_count > KERNEL_SYNC_OBJECT_MAX)
+    if (!kernel_sync_pool_healthy() ||
+        !kernel_object_cache_valid(&object_cache) ||
+        timer_count > KERNEL_SYNC_OBJECT_MAX)
         return false;
     for (uint32_t position = 0u; position < timer_count; ++position) {
         uint8_t slot = timer_heap[position];
@@ -786,6 +815,8 @@ bool kernel_sync_pool_valid(void)
             kernel_thread_wait_queue_count(&object->waiters);
         bool armed =
             timer_positions[slot] != KERNEL_SYNC_TIMER_SLOT_NONE;
+        bool claimed = kernel_object_cache_slot_claimed(
+            &object_cache, (uint16_t)slot);
 
         if (armed &&
             (timer_positions[slot] >= timer_count ||
@@ -793,13 +824,15 @@ bool kernel_sync_pool_valid(void)
             return false;
 
         if (object->state == KERNEL_SYNC_FREE) {
-            if (object->owner != 0u || object->count != 0u ||
+            if (claimed || object->owner != 0u || object->count != 0u ||
                 object->maximum != 0u || object->close_result != 0u ||
                 object->references != 0u || object->type != KERNEL_SYNC_NONE ||
                 armed || timer_deadlines[slot] != 0u)
                 return false;
             continue;
         }
+        if (!claimed)
+            return false;
         if (waiters == UINT32_MAX || waiters > KERNEL_SYNC_WAITER_MAX ||
             !valid_type(object->type) || object->owner == 0u ||
             object->generation == 0u || object->references == 0u)

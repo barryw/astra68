@@ -8,6 +8,7 @@
 #include "exception.h"
 #include "generation.h"
 #include "memory.h"
+#include "object_cache.h"
 #include "performance.h"
 #include "platform.h"
 #include "port.h"
@@ -52,11 +53,14 @@ typedef struct KernelProcess {
 } KernelProcess;
 
 #if defined(__m68k__)
-_Static_assert(sizeof(KernelProcess) == 536u,
+_Static_assert(sizeof(KernelProcess) == 540u,
                "process record size changed; update the memory budget");
 #endif
 
 static KernelProcess processes[KERNEL_PROCESS_MAX];
+static KernelObjectCache process_cache;
+static uint32_t process_cache_bitmap[
+    KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_PROCESS_MAX)];
 static KernelSchedulerStats scheduler_stats;
 static KernelProcessMaintenanceDiagnostics maintenance_diagnostics;
 static KernelThread *current_thread;
@@ -201,21 +205,6 @@ static uint8_t *physical_bytes(uint32_t physical, uint32_t size)
 #endif
 }
 
-static int32_t find_free_slot(void)
-{
-    for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
-        KernelProcess *process = &processes[index];
-
-        if (process->process_state == KERNEL_PROCESS_UNUSED)
-            return (int32_t)index;
-        if (process->process_state == KERNEL_PROCESS_DEAD &&
-            process->handle_references == 0u &&
-            kernel_thread_wait_queue_count(&process->death_waiters) == 0u)
-            return (int32_t)index;
-    }
-    return -1;
-}
-
 static KernelProcess *process_for_thread(const KernelThread *thread)
 {
     KernelProcess *process;
@@ -260,6 +249,19 @@ static KernelProcessStatus retain_process_handle(KernelProcess *process)
     return KERNEL_PROCESS_OK;
 }
 
+static void maybe_release_process_record(KernelProcess *process)
+{
+    if (!valid_process_pointer(process) ||
+        process->process_state != KERNEL_PROCESS_DEAD ||
+        process->handle_references != 0u ||
+        kernel_thread_wait_queue_count(&process->death_waiters) != 0u ||
+        !kernel_object_cache_is_claimed(&process_cache, process))
+        return;
+    if (kernel_object_cache_release(&process_cache, process) !=
+        KERNEL_OBJECT_CACHE_OK)
+        process_pool_corrupt = 1u;
+}
+
 static void process_handle_release(void *object, void *context)
 {
     KernelProcess *process = object;
@@ -280,6 +282,7 @@ static void process_handle_release(void *object, void *context)
             &woken) != KERNEL_THREAD_OK)
         process_pool_corrupt = 1u;
     scheduler_stats.process_death_wakeups += woken;
+    maybe_release_process_record(process);
 }
 
 static bool process_pool_healthy(void)
@@ -289,7 +292,11 @@ static bool process_pool_healthy(void)
 
 static bool process_pool_valid(void)
 {
-    if (!process_pool_healthy() || !kernel_handle_transfer_pool_valid() ||
+    if (!process_pool_healthy() ||
+        !kernel_allocation_valid() || !kernel_dma_valid() ||
+        !kernel_block_valid() ||
+        !kernel_object_cache_valid(&process_cache) ||
+        !kernel_handle_transfer_pool_valid() ||
         !kernel_port_pool_valid() || !kernel_area_pool_valid() ||
         !kernel_ring_pool_valid())
         return false;
@@ -298,6 +305,8 @@ static bool process_pool_valid(void)
         uint32_t references = 0u;
         uint32_t waiters =
             kernel_thread_wait_queue_count(&process->death_waiters);
+        bool claimed = kernel_object_cache_slot_claimed(
+            &process_cache, (uint16_t)slot);
 
         if (waiters > KERNEL_THREAD_MAX)
             return false;
@@ -315,14 +324,16 @@ static bool process_pool_valid(void)
         if (references != process->handle_references)
             return false;
         if (process->process_state == KERNEL_PROCESS_UNUSED) {
-            if (process->id != 0u || references != 0u || waiters != 0u)
+            if (claimed || process->id != 0u || references != 0u ||
+                waiters != 0u)
                 return false;
         } else if (process->process_state == KERNEL_PROCESS_DEAD) {
-            if (process->id == 0u || waiters != 0u)
+            if (process->id == 0u || waiters != 0u ||
+                claimed != (references != 0u))
                 return false;
         } else if (process->process_state < KERNEL_PROCESS_CREATED ||
                    process->process_state > KERNEL_PROCESS_EXITING ||
-                   process->id == 0u) {
+                   process->id == 0u || !claimed) {
             return false;
         }
     }
@@ -655,6 +666,7 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
         ++scheduler_stats.completed_user_fault_teardowns;
     ++scheduler_stats.dead_processes;
     ++scheduler_stats.completed_teardowns;
+    maybe_release_process_record(process);
     return KERNEL_PROCESS_OK;
 }
 
@@ -975,6 +987,14 @@ void kernel_process_init(void)
     next_thread_create_fault = KERNEL_PROCESS_THREAD_CREATE_FAULT_NONE;
 #endif
     kernel_performance_init();
+    if (!kernel_object_cache_init(
+            &process_cache, processes, sizeof(processes[0]),
+            KERNEL_PROCESS_MAX, process_cache_bitmap,
+            KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_PROCESS_MAX),
+            KERNEL_ALLOCATION_SITE_PROCESS_RECORD)) {
+        process_pool_corrupt = 1u;
+        return;
+    }
     for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
         kernel_bytes_clear(&processes[index], sizeof(processes[index]));
         kernel_thread_wait_queue_init(&processes[index].death_waiters);
@@ -1105,9 +1125,10 @@ static KernelProcessStatus prepare_thread(KernelProcess *process,
     }
 #endif
 
-    if (kernel_memory_alloc_zeroed(
-            1u, 1u, KERNEL_FRAME_PROCESS, process->owner,
-            &stack_physical) != KERNEL_MEMORY_OK) {
+    if (kernel_memory_alloc_zeroed_tagged(
+            KERNEL_ALLOCATION_SITE_THREAD_STACK_PAGE, 1u, 1u,
+            KERNEL_FRAME_PROCESS, process->owner, &stack_physical) !=
+        KERNEL_MEMORY_OK) {
         result = KERNEL_PROCESS_OUT_OF_MEMORY;
         goto failed;
     }
@@ -1280,21 +1301,35 @@ static KernelProcessStatus create_process(const void *image,
     KernelPreparedThread prepared_thread;
     KernelProcessStatus result = KERNEL_PROCESS_CORRUPT;
     KernelHandle self_handle;
+    KernelVmStatus vm_status;
     uint32_t generation;
     uint32_t code_physical = 0u;
     uint32_t initial_thread_id;
     KernelHandle initial_thread_handle;
     bool code_held = false;
-    int32_t slot;
+    void *raw_process;
+    uint16_t slot;
+    KernelObjectCacheStatus cache_status;
 
     if (image == NULL || image_size == 0u || image_size > KERNEL_PAGE_SIZE ||
         entry_offset >= image_size || process_id == NULL)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     *process_id = 0u;
-    slot = find_free_slot();
-    if (slot < 0)
+    cache_status = kernel_object_cache_claim(
+        &process_cache, 0u, &raw_process, &slot);
+    if (cache_status == KERNEL_OBJECT_CACHE_UNAVAILABLE)
         return KERNEL_PROCESS_NO_SLOT;
-    process = &processes[slot];
+    if (cache_status != KERNEL_OBJECT_CACHE_OK ||
+        slot >= KERNEL_PROCESS_MAX) {
+        process_pool_corrupt = 1u;
+        return KERNEL_PROCESS_CORRUPT;
+    }
+    process = raw_process;
+    if (process->process_state != KERNEL_PROCESS_UNUSED &&
+        process->process_state != KERNEL_PROCESS_DEAD) {
+        process_pool_corrupt = 1u;
+        return KERNEL_PROCESS_CORRUPT;
+    }
     generation = kernel_generation_next(process->generation);
     kernel_bytes_clear(process, sizeof(*process));
     kernel_thread_wait_queue_init(&process->death_waiters);
@@ -1307,13 +1342,20 @@ static KernelProcessStatus create_process(const void *image,
     process->default_priority = KERNEL_THREAD_PRIORITY_NORMAL;
     process->priority_ceiling = KERNEL_THREAD_PRIORITY_USER_MAX;
     kernel_handle_table_init(&process->handles);
-
-    if (kernel_vm_create_address_space(process->owner,
-                                       &process->address_space) != KERNEL_VM_OK)
+    if (!kernel_handle_table_set_owner(&process->handles, process->owner))
         goto failed;
-    if (kernel_memory_alloc_zeroed(
-            1u, 1u, KERNEL_FRAME_PROCESS, process->owner,
-            &code_physical) != KERNEL_MEMORY_OK) {
+
+    vm_status = kernel_vm_create_address_space(process->owner,
+                                               &process->address_space);
+    if (vm_status != KERNEL_VM_OK) {
+        if (vm_status == KERNEL_VM_OUT_OF_MEMORY)
+            result = KERNEL_PROCESS_OUT_OF_MEMORY;
+        goto failed;
+    }
+    if (kernel_memory_alloc_zeroed_tagged(
+            KERNEL_ALLOCATION_SITE_PROCESS_CODE_PAGE, 1u, 1u,
+            KERNEL_FRAME_PROCESS, process->owner, &code_physical) !=
+        KERNEL_MEMORY_OK) {
         result = KERNEL_PROCESS_OUT_OF_MEMORY;
         goto failed;
     }
@@ -1326,10 +1368,14 @@ static KernelProcessStatus create_process(const void *image,
     kernel_bytes_clear(code, KERNEL_PAGE_SIZE);
 #endif
     kernel_bytes_copy(code, image, image_size);
-    if (kernel_vm_map_page(&process->address_space, KERNEL_PROCESS_CODE_BASE,
-                           code_physical,
-                           KERNEL_VM_READ | KERNEL_VM_EXEC) != KERNEL_VM_OK)
+    vm_status = kernel_vm_map_page(
+        &process->address_space, KERNEL_PROCESS_CODE_BASE, code_physical,
+        KERNEL_VM_READ | KERNEL_VM_EXEC);
+    if (vm_status != KERNEL_VM_OK) {
+        if (vm_status == KERNEL_VM_OUT_OF_MEMORY)
+            result = KERNEL_PROCESS_OUT_OF_MEMORY;
         goto failed;
+    }
     if (kernel_memory_release(code_physical, 1u, process->owner) !=
         KERNEL_MEMORY_OK)
         goto failed;
@@ -1342,6 +1388,7 @@ static KernelProcessStatus create_process(const void *image,
             KERNEL_PROCESS_RIGHT_QUERY, process, process_handle_release,
             NULL, &self_handle) != KERNEL_HANDLE_OK) {
         process->handle_references = 0u;
+        result = KERNEL_PROCESS_RESOURCE_LIMIT;
         goto failed;
     }
     process->self_handle = self_handle;
@@ -1376,6 +1423,7 @@ failed:
         (void)kernel_vm_destroy_address_space(&process->address_space);
     (void)kernel_memory_release_owner(process->owner, NULL);
     process->process_state = KERNEL_PROCESS_DEAD;
+    maybe_release_process_record(process);
     return result;
 }
 

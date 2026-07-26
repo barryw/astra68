@@ -1,3 +1,4 @@
+#include "allocation.h"
 #include "block.h"
 #include "memory.h"
 #include "platform.h"
@@ -313,12 +314,53 @@ static void test_flush_has_no_dma_buffer(void)
     assert(result.status == 0u && result.sectors == 0u);
 }
 
+static void test_request_injection_does_not_take_dma_ownership(void)
+{
+    KernelAllocationStats allocation_stats;
+    KernelBlockHandle request = 0xdeadbeefu;
+    KernelBlockStats block_before;
+    KernelBlockStats block_after;
+    KernelDmaBufferInfo info;
+    KernelDmaHandle dma;
+
+    initialize_test();
+    assert(kernel_dma_create(15u, KERNEL_PAGE_SIZE, 1u, &dma) ==
+           KERNEL_DMA_OK);
+    assert(kernel_block_stats(&block_before));
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_BLOCK_REQUEST, 1u);
+    assert(kernel_block_submit(15u, BLOCK_OP_READ, 0u, 1u, dma, 0u,
+                               &request) == KERNEL_BLOCK_QUEUE_FULL);
+    assert(request == KERNEL_BLOCK_HANDLE_INVALID);
+    assert(kernel_dma_buffer_info(dma, 15u, &info) == KERNEL_DMA_OK);
+    assert(info.state == KERNEL_DMA_CPU_OWNED);
+    assert(kernel_block_stats(&block_after));
+    assert(block_after.submitted == block_before.submitted);
+    assert(block_after.completed == block_before.completed);
+    request = 0xdeadbeefu;
+    kernel_allocation_test_fail_global(1u);
+    assert(kernel_block_submit(15u, BLOCK_OP_READ, 0u, 1u, dma, 0u,
+                               &request) == KERNEL_BLOCK_QUEUE_FULL);
+    assert(request == KERNEL_BLOCK_HANDLE_INVALID);
+    assert(kernel_dma_buffer_info(dma, 15u, &info) == KERNEL_DMA_OK);
+    assert(info.state == KERNEL_DMA_CPU_OWNED);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_BLOCK_REQUEST, &allocation_stats));
+    assert(allocation_stats.current_units == 0u);
+    assert(allocation_stats.injected_failures == 2u);
+    assert(kernel_block_valid());
+    assert(kernel_dma_valid());
+    assert(kernel_allocation_valid());
+    assert(kernel_dma_close(dma, 15u) == KERNEL_DMA_OK);
+}
+
 int main(void)
 {
     test_read_completion_and_generation_mismatch();
     test_validation_and_submit_rollback();
     test_owner_revoke_and_late_completion();
     test_flush_has_no_dma_buffer();
+    test_request_injection_does_not_take_dma_ownership();
     puts("KERNEL BLOCK PASS");
     return 0;
 }

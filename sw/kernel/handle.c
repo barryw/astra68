@@ -2,6 +2,7 @@
 
 #include "bytes.h"
 #include "generation.h"
+#include "object_cache.h"
 
 #include <stddef.h>
 
@@ -42,6 +43,9 @@ typedef struct KernelDetachedEntry {
 } KernelDetachedEntry;
 
 static KernelDetachedEntry detached_entries[KERNEL_HANDLE_DETACHED_MAX];
+static KernelObjectCache detached_cache;
+static uint32_t detached_cache_bitmap[
+    KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_HANDLE_DETACHED_MAX)];
 static KernelHandleTransferStats transfer_stats;
 static uint8_t transfer_pool_corrupt;
 
@@ -83,6 +87,9 @@ static void free_detached_entry(KernelDetachedEntry *entry)
     entry->generation = kernel_generation_next_masked(
         entry->generation, KERNEL_DETACHED_GENERATION_MASK);
     clear_detached_entry(entry);
+    if (kernel_object_cache_release(&detached_cache, entry) !=
+        KERNEL_OBJECT_CACHE_OK)
+        transfer_pool_corrupt = 1u;
 }
 
 static KernelHandleStatus find_detached_entry(
@@ -167,10 +174,22 @@ static void invalidate_entry(KernelHandleEntry *entry,
     entry->reserved = 0u;
     entry->generation = kernel_generation_next_masked(
         entry->generation, KERNEL_HANDLE_GENERATION_MASK);
+    if (!kernel_allocation_release(KERNEL_ALLOCATION_SITE_HANDLE_SLOT, 1u,
+                                   sizeof(*entry)))
+        transfer_pool_corrupt = 1u;
 }
 
 void kernel_handle_transfer_pool_init(void)
 {
+    if (!kernel_object_cache_init(
+            &detached_cache, detached_entries,
+            sizeof(detached_entries[0]), KERNEL_HANDLE_DETACHED_MAX,
+            detached_cache_bitmap,
+            KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_HANDLE_DETACHED_MAX),
+            KERNEL_ALLOCATION_SITE_DETACHED_HANDLE)) {
+        transfer_pool_corrupt = 1u;
+        return;
+    }
     for (uint32_t index = 0u; index < KERNEL_HANDLE_DETACHED_MAX; ++index) {
         uint32_t generation = detached_entries[index].generation;
 
@@ -198,6 +217,19 @@ void kernel_handle_table_init(KernelHandleTable *table)
         entry->occupied = 0u;
         entry->reserved = 0u;
     }
+    table->owner = 0u;
+}
+
+bool kernel_handle_table_set_owner(KernelHandleTable *table, uint32_t owner)
+{
+    if (table == NULL || owner == 0u || kernel_handle_count(table) != 0u)
+        return false;
+    for (uint32_t index = 0u; index < KERNEL_HANDLE_MAX_ENTRIES; ++index) {
+        if (table->entries[index].reserved != 0u)
+            return false;
+    }
+    table->owner = owner;
+    return true;
 }
 
 static KernelHandleStatus install(KernelHandleTable *table,
@@ -211,6 +243,9 @@ static KernelHandleStatus install(KernelHandleTable *table,
         type == KERNEL_OBJECT_NONE || rights == 0u)
         return KERNEL_HANDLE_INVALID_ARGUMENT;
     *handle = KERNEL_HANDLE_INVALID;
+    if (!kernel_allocation_attempt(KERNEL_ALLOCATION_SITE_HANDLE_SLOT,
+                                   table->owner))
+        return KERNEL_HANDLE_TABLE_FULL;
     for (uint32_t index = 0u; index < KERNEL_HANDLE_MAX_ENTRIES; ++index) {
         KernelHandleEntry *entry = &table->entries[index];
 
@@ -227,9 +262,17 @@ static KernelHandleStatus install(KernelHandleTable *table,
         entry->type = (uint16_t)type;
         entry->occupied = 1u;
         entry->reserved = 0u;
+        if (!kernel_allocation_commit(
+                KERNEL_ALLOCATION_SITE_HANDLE_SLOT, 1u, sizeof(*entry),
+                table->owner)) {
+            entry->occupied = 0u;
+            return KERNEL_HANDLE_CORRUPT;
+        }
         *handle = make_handle(index, entry->generation);
         return KERNEL_HANDLE_OK;
     }
+    kernel_allocation_fail(KERNEL_ALLOCATION_SITE_HANDLE_SLOT,
+                           table->owner);
     return KERNEL_HANDLE_TABLE_FULL;
 }
 
@@ -276,6 +319,10 @@ KernelHandleStatus kernel_handle_duplicate(KernelHandleTable *table,
         source_entry->retain == NULL)
         return KERNEL_HANDLE_ACCESS_DENIED;
 
+    if (!kernel_allocation_attempt(KERNEL_ALLOCATION_SITE_HANDLE_SLOT,
+                                   table->owner))
+        return KERNEL_HANDLE_TABLE_FULL;
+
     for (uint32_t index = 0u; index < KERNEL_HANDLE_MAX_ENTRIES; ++index) {
         KernelHandleEntry *candidate = &table->entries[index];
 
@@ -285,11 +332,17 @@ KernelHandleStatus kernel_handle_duplicate(KernelHandleTable *table,
         destination_index = index;
         break;
     }
-    if (destination == NULL)
+    if (destination == NULL) {
+        kernel_allocation_fail(KERNEL_ALLOCATION_SITE_HANDLE_SLOT,
+                               table->owner);
         return KERNEL_HANDLE_TABLE_FULL;
+    }
     if (!source_entry->retain(source_entry->object,
-                              source_entry->release_context))
+                              source_entry->release_context)) {
+        kernel_allocation_fail(KERNEL_ALLOCATION_SITE_HANDLE_SLOT,
+                               table->owner);
         return KERNEL_HANDLE_INVALID_STATE;
+    }
     if (destination->generation == 0u ||
         destination->generation > KERNEL_HANDLE_GENERATION_MASK)
         destination->generation = 1u;
@@ -301,6 +354,14 @@ KernelHandleStatus kernel_handle_duplicate(KernelHandleTable *table,
     destination->type = source_entry->type;
     destination->occupied = 1u;
     destination->reserved = 0u;
+    if (!kernel_allocation_commit(KERNEL_ALLOCATION_SITE_HANDLE_SLOT, 1u,
+                                  sizeof(*destination), table->owner)) {
+        destination->occupied = 0u;
+        if (source_entry->release != NULL)
+            source_entry->release(source_entry->object,
+                                  source_entry->release_context);
+        return KERNEL_HANDLE_CORRUPT;
+    }
     *duplicate = make_handle(destination_index, destination->generation);
     return KERNEL_HANDLE_OK;
 }
@@ -378,6 +439,11 @@ uint32_t kernel_handle_close_all(KernelHandleTable *table)
         return 0u;
     for (uint32_t index = 0u; index < KERNEL_HANDLE_MAX_ENTRIES; ++index) {
         if (table->entries[index].occupied == 0u) {
+            if (table->entries[index].reserved != 0u &&
+                !kernel_allocation_release(
+                    KERNEL_ALLOCATION_SITE_HANDLE_SLOT, 1u,
+                    sizeof(table->entries[index])))
+                transfer_pool_corrupt = 1u;
             table->entries[index].reserved = 0u;
             continue;
         }
@@ -462,13 +528,26 @@ KernelHandleStatus kernel_handle_transfer_prepare(
         }
     }
 
-    for (uint32_t slot = 0u;
-         slot < KERNEL_HANDLE_DETACHED_MAX && allocated < count; ++slot) {
-        KernelDetachedEntry *destination = &detached_entries[slot];
+    while (allocated < count) {
+        void *raw_destination;
+        uint16_t slot;
+        KernelObjectCacheStatus cache_status = kernel_object_cache_claim(
+            &detached_cache, 0u, &raw_destination, &slot);
+        KernelDetachedEntry *destination;
         const KernelHandleEntry *source;
 
-        if (destination->state != KERNEL_DETACHED_FREE)
-            continue;
+        if (cache_status == KERNEL_OBJECT_CACHE_UNAVAILABLE)
+            break;
+        if (cache_status != KERNEL_OBJECT_CACHE_OK ||
+            slot >= KERNEL_HANDLE_DETACHED_MAX) {
+            transfer_pool_corrupt = 1u;
+            return KERNEL_HANDLE_CORRUPT;
+        }
+        destination = raw_destination;
+        if (destination->state != KERNEL_DETACHED_FREE) {
+            transfer_pool_corrupt = 1u;
+            return KERNEL_HANDLE_CORRUPT;
+        }
         if (destination->generation == 0u ||
             destination->generation > KERNEL_DETACHED_GENERATION_MASK)
             destination->generation = 1u;
@@ -638,10 +717,33 @@ KernelHandleStatus kernel_handle_import_reserve(
 
         if (entry->occupied != 0u || entry->reserved != 0u)
             continue;
+        if (!kernel_allocation_attempt(
+                KERNEL_ALLOCATION_SITE_HANDLE_SLOT,
+                destination_table->owner)) {
+            for (uint32_t rollback = 0u; rollback < reserved; ++rollback) {
+                KernelHandleEntry *prior = &destination_table->entries[
+                    reservation->slots[rollback]];
+
+                prior->reserved = 0u;
+                if (!kernel_allocation_release(
+                        KERNEL_ALLOCATION_SITE_HANDLE_SLOT, 1u,
+                        sizeof(*prior)))
+                    transfer_pool_corrupt = 1u;
+            }
+            reset_import_reservation(reservation);
+            return KERNEL_HANDLE_TABLE_FULL;
+        }
         if (entry->generation == 0u ||
             entry->generation > KERNEL_HANDLE_GENERATION_MASK)
             entry->generation = 1u;
         entry->reserved = 1u;
+        if (!kernel_allocation_commit(
+                KERNEL_ALLOCATION_SITE_HANDLE_SLOT, 1u, sizeof(*entry),
+                destination_table->owner)) {
+            entry->reserved = 0u;
+            transfer_pool_corrupt = 1u;
+            return KERNEL_HANDLE_CORRUPT;
+        }
         reservation->slots[reserved] = (uint8_t)slot;
         reservation->handles[reserved] = make_handle(slot, entry->generation);
         ++reserved;
@@ -723,8 +825,17 @@ KernelHandleStatus kernel_handle_import_cancel(
             destination_table->entries[slot].reserved != 1u)
             return KERNEL_HANDLE_INVALID_STATE;
     }
-    for (uint32_t index = 0u; index < reservation->count; ++index)
-        destination_table->entries[reservation->slots[index]].reserved = 0u;
+    for (uint32_t index = 0u; index < reservation->count; ++index) {
+        KernelHandleEntry *entry =
+            &destination_table->entries[reservation->slots[index]];
+
+        entry->reserved = 0u;
+        if (!kernel_allocation_release(
+                KERNEL_ALLOCATION_SITE_HANDLE_SLOT, 1u, sizeof(*entry))) {
+            transfer_pool_corrupt = 1u;
+            return KERNEL_HANDLE_CORRUPT;
+        }
+    }
     reset_import_reservation(reservation);
     ++transfer_stats.import_rollbacks;
     return KERNEL_HANDLE_OK;
@@ -792,23 +903,26 @@ bool kernel_handle_transfer_pool_valid(void)
     uint32_t live;
     uint32_t reserved;
 
-    if (!kernel_handle_transfer_pool_healthy())
+    if (!kernel_handle_transfer_pool_healthy() ||
+        !kernel_object_cache_valid(&detached_cache))
         return false;
     for (uint32_t index = 0u; index < KERNEL_HANDLE_DETACHED_MAX; ++index) {
         const KernelDetachedEntry *entry = &detached_entries[index];
+        bool claimed = kernel_object_cache_slot_claimed(
+            &detached_cache, (uint16_t)index);
 
         if (entry->generation == 0u ||
             entry->generation > KERNEL_DETACHED_GENERATION_MASK)
             return false;
         if (entry->state == KERNEL_DETACHED_FREE) {
-            if (entry->object != NULL || entry->release != NULL ||
+            if (claimed || entry->object != NULL || entry->release != NULL ||
                 entry->retain != NULL || entry->release_context != NULL ||
                 entry->rights != 0u ||
                 entry->type != KERNEL_OBJECT_NONE || entry->reserved != 0u)
                 return false;
         } else if (entry->state == KERNEL_DETACHED_RESERVED ||
                    entry->state == KERNEL_DETACHED_LIVE) {
-            if (entry->object == NULL || entry->release == NULL ||
+            if (!claimed || entry->object == NULL || entry->release == NULL ||
                 entry->rights == 0u || entry->type == KERNEL_OBJECT_NONE ||
                 entry->reserved != 0u)
                 return false;

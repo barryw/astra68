@@ -4,6 +4,7 @@
 
 #include "bytes.h"
 #include "generation.h"
+#include "object_cache.h"
 #include "performance.h"
 
 #include <stddef.h>
@@ -30,6 +31,9 @@ static _Alignas(4) uint32_t
 #endif
 
 static KernelThread threads[KERNEL_THREAD_MAX];
+static KernelObjectCache thread_cache;
+static uint32_t thread_cache_bitmap[
+    KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_THREAD_MAX)];
 static KernelThreadWaitRegistration
     wait_registrations[KERNEL_THREAD_MAX][KERNEL_THREAD_WAIT_MEMBER_MAX];
 static uint16_t ready_head[KERNEL_THREAD_PRIORITY_LEVELS];
@@ -786,6 +790,14 @@ static KernelThreadStatus wake_death_waiters(KernelThread *thread,
 
 void kernel_thread_pool_init(void)
 {
+    if (!kernel_object_cache_init(
+            &thread_cache, threads, sizeof(threads[0]), KERNEL_THREAD_MAX,
+            thread_cache_bitmap,
+            KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_THREAD_MAX),
+            KERNEL_ALLOCATION_SITE_THREAD_RECORD)) {
+        pool_corrupt = 1u;
+        return;
+    }
     for (uint32_t index = 0u; index < KERNEL_THREAD_MAX; ++index) {
         kernel_bytes_clear(&threads[index], sizeof(threads[index]));
         reset_wait_row((uint16_t)index);
@@ -818,7 +830,9 @@ KernelThreadStatus kernel_thread_allocate(uint16_t process_slot,
                                           KernelThread **thread)
 {
     KernelThread *candidate = NULL;
-    uint16_t candidate_slot = KERNEL_THREAD_SLOT_NONE;
+    void *raw_candidate;
+    uint16_t candidate_slot;
+    KernelObjectCacheStatus cache_status;
     uint32_t generation;
 
     if (process_id == 0u || program_counter == 0u ||
@@ -827,15 +841,20 @@ KernelThreadStatus kernel_thread_allocate(uint16_t process_slot,
         priority >= KERNEL_THREAD_PRIORITY_LEVELS || thread == NULL)
         return KERNEL_THREAD_INVALID_ARGUMENT;
     *thread = NULL;
-    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
-        if (threads[slot].occupied == 0u) {
-            candidate = &threads[slot];
-            candidate_slot = slot;
-            break;
-        }
-    }
-    if (candidate == NULL)
+    cache_status = kernel_object_cache_claim(
+        &thread_cache, process_id, &raw_candidate, &candidate_slot);
+    if (cache_status == KERNEL_OBJECT_CACHE_UNAVAILABLE)
         return KERNEL_THREAD_NO_SLOT;
+    if (cache_status != KERNEL_OBJECT_CACHE_OK ||
+        candidate_slot >= KERNEL_THREAD_MAX) {
+        pool_corrupt = 1u;
+        return KERNEL_THREAD_CORRUPT;
+    }
+    candidate = raw_candidate;
+    if (candidate->occupied != 0u) {
+        pool_corrupt = 1u;
+        return KERNEL_THREAD_CORRUPT;
+    }
 
     generation = kernel_generation_next(candidate->generation);
     kernel_bytes_clear(candidate, sizeof(*candidate));
@@ -864,6 +883,9 @@ KernelThreadStatus kernel_thread_allocate(uint16_t process_slot,
     if (!kernel_context_valid(&candidate->context)) {
         candidate->state = KERNEL_THREAD_DEAD;
         candidate->occupied = 0u;
+        if (kernel_object_cache_release(&thread_cache, candidate) !=
+            KERNEL_OBJECT_CACHE_OK)
+            pool_corrupt = 1u;
         return KERNEL_THREAD_CORRUPT;
     }
     *thread = candidate;
@@ -900,6 +922,11 @@ KernelThreadStatus kernel_thread_abort(KernelThread *thread)
     initialize_kernel_stack(thread);
     thread->state = KERNEL_THREAD_DEAD;
     thread->occupied = 0u;
+    if (kernel_object_cache_release(&thread_cache, thread) !=
+        KERNEL_OBJECT_CACHE_OK) {
+        pool_corrupt = 1u;
+        return KERNEL_THREAD_CORRUPT;
+    }
     ++pool_stats.creation_rollbacks;
     return KERNEL_THREAD_OK;
 }
@@ -1060,6 +1087,11 @@ KernelThreadStatus kernel_thread_finish_reap(KernelThread *thread,
     initialize_kernel_stack(thread);
     clear_reap_pending(thread);
     thread->occupied = 0u;
+    if (kernel_object_cache_release(&thread_cache, thread) !=
+        KERNEL_OBJECT_CACHE_OK) {
+        pool_corrupt = 1u;
+        return KERNEL_THREAD_CORRUPT;
+    }
     ++pool_stats.reaped_threads;
     *released = true;
     return KERNEL_THREAD_OK;
@@ -1621,6 +1653,11 @@ KernelThreadStatus kernel_thread_release_process(uint16_t process_slot)
         thread->stack_released = 1u;
         clear_reap_pending(thread);
         thread->occupied = 0u;
+        if (kernel_object_cache_release(&thread_cache, thread) !=
+            KERNEL_OBJECT_CACHE_OK) {
+            pool_corrupt = 1u;
+            return KERNEL_THREAD_CORRUPT;
+        }
         ++pool_stats.reaped_threads;
         found = true;
     }
@@ -1692,17 +1729,23 @@ bool kernel_thread_pool_stats(KernelThreadPoolStats *stats)
     uint32_t observed_registrations = 0u;
     uint16_t observed_reap_bitmap = 0u;
 
-    if (stats == NULL || pool_corrupt != 0u || !deadline_heap_valid())
+    if (stats == NULL || pool_corrupt != 0u ||
+        !kernel_object_cache_valid(&thread_cache) ||
+        !deadline_heap_valid())
         return false;
     for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
         const KernelThread *thread = &threads[slot];
         uint32_t used;
+        bool claimed = kernel_object_cache_slot_claimed(
+            &thread_cache, slot);
 
         if (thread->occupied == 0u) {
-            if (!wait_row_clear(slot))
+            if (claimed || !wait_row_clear(slot))
                 return false;
             continue;
         }
+        if (!claimed)
+            return false;
         if (thread->reap_pending != 0u)
             observed_reap_bitmap |= (uint16_t)(1u << slot);
         if (!kernel_stack_valid(thread))
@@ -1784,7 +1827,8 @@ bool kernel_thread_pool_stats(KernelThreadPoolStats *stats)
 
 bool kernel_thread_pool_valid(void)
 {
-    return pool_corrupt == 0u;
+    return pool_corrupt == 0u &&
+           kernel_object_cache_valid(&thread_cache);
 }
 
 bool kernel_thread_process_runnable(uint16_t process_slot)

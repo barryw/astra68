@@ -3,6 +3,8 @@
 
 #include <astra/boot.h>
 
+#include "allocation.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -11,6 +13,7 @@
 #define KERNEL_MAX_FRAMES (32u * 1024u * 1024u / KERNEL_PAGE_SIZE)
 #define KERNEL_MAX_FRAME_OWNERS 64u
 #define KERNEL_OWNER_NONE 0u
+#define KERNEL_EMERGENCY_RESERVE_FRAMES 32u
 
 typedef enum KernelFrameState {
     KERNEL_FRAME_UNCLASSIFIED = 0,
@@ -23,7 +26,8 @@ typedef enum KernelFrameState {
     KERNEL_FRAME_PROCESS,
     KERNEL_FRAME_SHARED,
     KERNEL_FRAME_DMA,
-    KERNEL_FRAME_DEVICE
+    KERNEL_FRAME_DEVICE,
+    KERNEL_FRAME_EMERGENCY_RESERVED
 } KernelFrameState;
 
 typedef enum KernelMemoryStatus {
@@ -52,6 +56,10 @@ typedef struct KernelMemoryStats {
     uint32_t owner_slots_used;
     uint32_t owner_release_operations;
     uint32_t owner_release_frame_visits;
+    uint32_t emergency_total_frames;
+    uint32_t emergency_available_frames;
+    uint32_t emergency_acquisitions;
+    uint32_t emergency_failures;
 } KernelMemoryStats;
 
 KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info);
@@ -60,14 +68,28 @@ KernelMemoryStatus kernel_memory_alloc(uint32_t frame_count,
                                        KernelFrameState state,
                                        uint32_t owner,
                                        uint32_t *physical_base);
+KernelMemoryStatus kernel_memory_alloc_tagged(
+    KernelAllocationSite site, uint32_t frame_count,
+    uint32_t alignment_frames, KernelFrameState state, uint32_t owner,
+    uint32_t *physical_base);
 KernelMemoryStatus kernel_memory_alloc_zeroed(uint32_t frame_count,
                                               uint32_t alignment_frames,
                                               KernelFrameState state,
                                               uint32_t owner,
                                               uint32_t *physical_base);
+KernelMemoryStatus kernel_memory_alloc_zeroed_tagged(
+    KernelAllocationSite site, uint32_t frame_count,
+    uint32_t alignment_frames, KernelFrameState state, uint32_t owner,
+    uint32_t *physical_base);
 KernelMemoryStatus kernel_memory_alloc_pages_zeroed(
     uint32_t frame_count, KernelFrameState state, uint32_t owner,
     uint32_t *physical_pages);
+KernelMemoryStatus kernel_memory_alloc_pages_zeroed_tagged(
+    KernelAllocationSite site, uint32_t frame_count, KernelFrameState state,
+    uint32_t owner, uint32_t *physical_pages);
+KernelMemoryStatus kernel_memory_emergency_acquire(
+    KernelAllocationSite site, KernelFrameState state, uint32_t owner,
+    uint32_t *physical_base);
 KernelMemoryStatus kernel_memory_retain(uint32_t physical_base,
                                         uint32_t frame_count,
                                         uint32_t owner);
@@ -87,6 +109,8 @@ bool kernel_memory_range_owned(uint32_t physical_base, uint32_t byte_count,
                                bool require_pinned);
 bool kernel_memory_frame_info(uint32_t physical_address,
                               KernelFrameInfo *info);
+bool kernel_memory_frame_allocation_site(uint32_t physical_address,
+                                         KernelAllocationSite *site);
 bool kernel_memory_owner_frames(uint32_t owner, uint32_t *frame_count);
 bool kernel_memory_stats(KernelMemoryStats *stats);
 

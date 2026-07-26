@@ -4,6 +4,7 @@
 
 #include "bytes.h"
 #include "generation.h"
+#include "object_cache.h"
 
 #include <stddef.h>
 
@@ -54,6 +55,12 @@ _Static_assert(sizeof(KernelAreaMapping) == 24u,
 
 static KernelArea areas[KERNEL_AREA_MAX];
 static KernelAreaMapping mappings[KERNEL_AREA_MAPPING_MAX];
+static KernelObjectCache area_cache;
+static KernelObjectCache mapping_cache;
+static uint32_t area_cache_bitmap[
+    KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_AREA_MAX)];
+static uint32_t mapping_cache_bitmap[
+    KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_AREA_MAPPING_MAX)];
 static KernelAreaPoolStats pool_stats;
 static uint8_t pool_corrupt;
 
@@ -191,6 +198,9 @@ static KernelAreaStatus unmap_record(KernelAreaMapping *mapping,
     if (revoked)
         ++pool_stats.revoked_mappings;
     reset_mapping(mapping);
+    if (kernel_object_cache_release(&mapping_cache, mapping) !=
+        KERNEL_OBJECT_CACHE_OK)
+        return KERNEL_AREA_CORRUPT;
     return KERNEL_AREA_OK;
 }
 
@@ -207,6 +217,9 @@ static void maybe_free(KernelArea *area)
     --pool_stats.active_areas;
     --pool_stats.closing_areas;
     reset_area(area, area->slot);
+    if (kernel_object_cache_release(&area_cache, area) !=
+        KERNEL_OBJECT_CACHE_OK)
+        pool_corrupt = 1u;
 }
 
 static KernelAreaStatus close_area(KernelArea *area, uint32_t terminal_result)
@@ -249,6 +262,19 @@ static KernelAreaStatus close_area(KernelArea *area, uint32_t terminal_result)
 
 void kernel_area_pool_init(void)
 {
+    if (!kernel_object_cache_init(
+            &area_cache, areas, sizeof(areas[0]), KERNEL_AREA_MAX,
+            area_cache_bitmap,
+            KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_AREA_MAX),
+            KERNEL_ALLOCATION_SITE_AREA_OBJECT) ||
+        !kernel_object_cache_init(
+            &mapping_cache, mappings, sizeof(mappings[0]),
+            KERNEL_AREA_MAPPING_MAX, mapping_cache_bitmap,
+            KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_AREA_MAPPING_MAX),
+            KERNEL_ALLOCATION_SITE_AREA_MAPPING)) {
+        pool_corrupt = 1u;
+        return;
+    }
     for (uint32_t slot = 0u; slot < KERNEL_AREA_MAX; ++slot) {
         uint32_t generation = areas[slot].generation;
 
@@ -271,6 +297,9 @@ KernelAreaStatus kernel_area_create(uint32_t creator, uint32_t byte_size,
                                     KernelArea **result)
 {
     KernelArea *area = NULL;
+    void *raw_area;
+    uint16_t area_slot;
+    KernelObjectCacheStatus cache_status;
     uint32_t creator_areas;
     uint32_t creator_pages;
     uint32_t page_count;
@@ -289,15 +318,21 @@ KernelAreaStatus kernel_area_create(uint32_t creator, uint32_t byte_size,
         ++pool_stats.quota_failures;
         return KERNEL_AREA_QUOTA_EXCEEDED;
     }
-    for (uint32_t slot = 0u; slot < KERNEL_AREA_MAX; ++slot) {
-        if (areas[slot].state == KERNEL_AREA_FREE) {
-            area = &areas[slot];
-            break;
-        }
-    }
-    if (area == NULL) {
+    cache_status = kernel_object_cache_claim(
+        &area_cache, creator, &raw_area, &area_slot);
+    if (cache_status == KERNEL_OBJECT_CACHE_UNAVAILABLE) {
         ++pool_stats.allocation_failures;
         return KERNEL_AREA_NO_SLOT;
+    }
+    if (cache_status != KERNEL_OBJECT_CACHE_OK ||
+        area_slot >= KERNEL_AREA_MAX) {
+        pool_corrupt = 1u;
+        return KERNEL_AREA_CORRUPT;
+    }
+    area = raw_area;
+    if (area->state != KERNEL_AREA_FREE || area->slot != area_slot) {
+        pool_corrupt = 1u;
+        return KERNEL_AREA_CORRUPT;
     }
 
     area->generation = kernel_generation_next_masked(
@@ -317,14 +352,21 @@ KernelAreaStatus kernel_area_create(uint32_t creator, uint32_t byte_size,
 #if defined(KERNEL_AREA_HOST_TEST)
     if (consume_test_fault(KERNEL_AREA_TEST_FAULT_CREATE_AFTER_RESERVE)) {
         reset_area(area, area->slot);
+        if (kernel_object_cache_release(&area_cache, area) !=
+            KERNEL_OBJECT_CACHE_OK)
+            pool_corrupt = 1u;
         ++pool_stats.allocation_failures;
         return KERNEL_AREA_OUT_OF_MEMORY;
     }
 #endif
-    if (kernel_memory_alloc_pages_zeroed(
-            page_count, KERNEL_FRAME_SHARED, area->frame_owner,
+    if (kernel_memory_alloc_pages_zeroed_tagged(
+            KERNEL_ALLOCATION_SITE_AREA_PAGES, page_count,
+            KERNEL_FRAME_SHARED, area->frame_owner,
             area->physical_pages) != KERNEL_MEMORY_OK) {
         reset_area(area, area->slot);
+        if (kernel_object_cache_release(&area_cache, area) !=
+            KERNEL_OBJECT_CACHE_OK)
+            pool_corrupt = 1u;
         ++pool_stats.allocation_failures;
         return KERNEL_AREA_OUT_OF_MEMORY;
     }
@@ -342,6 +384,9 @@ KernelAreaStatus kernel_area_create(uint32_t creator, uint32_t byte_size,
             area->physical_pages[page] = 0u;
         }
         reset_area(area, area->slot);
+        if (kernel_object_cache_release(&area_cache, area) !=
+            KERNEL_OBJECT_CACHE_OK)
+            cleanup_failed = true;
         ++pool_stats.allocation_failures;
         if (cleanup_failed) {
             pool_corrupt = 1u;
@@ -435,6 +480,9 @@ KernelAreaStatus kernel_area_map(KernelArea *area, uint32_t process_id,
                                  uint32_t *byte_size)
 {
     KernelAreaMapping *free_mapping = NULL;
+    void *raw_mapping;
+    uint16_t mapping_slot;
+    KernelObjectCacheStatus cache_status;
     uint32_t process_mappings = 0u;
     KernelVmStatus vm_status;
 
@@ -452,8 +500,6 @@ KernelAreaStatus kernel_area_map(KernelArea *area, uint32_t process_id,
         KernelAreaMapping *mapping = &mappings[slot];
 
         if (mapping->active == 0u) {
-            if (free_mapping == NULL)
-                free_mapping = mapping;
             continue;
         }
         if (mapping->process_id == process_id)
@@ -466,15 +512,34 @@ KernelAreaStatus kernel_area_map(KernelArea *area, uint32_t process_id,
             return KERNEL_AREA_OK;
         }
     }
-    if (free_mapping == NULL ||
-        process_mappings >= KERNEL_AREA_PROCESS_MAPPING_MAX)
+    if (process_mappings >= KERNEL_AREA_PROCESS_MAPPING_MAX)
         return KERNEL_AREA_QUOTA_EXCEEDED;
+    cache_status = kernel_object_cache_claim(
+        &mapping_cache, process_id, &raw_mapping, &mapping_slot);
+    if (cache_status == KERNEL_OBJECT_CACHE_UNAVAILABLE)
+        return KERNEL_AREA_NO_SLOT;
+    if (cache_status != KERNEL_OBJECT_CACHE_OK ||
+        mapping_slot >= KERNEL_AREA_MAPPING_MAX) {
+        pool_corrupt = 1u;
+        return KERNEL_AREA_CORRUPT;
+    }
+    free_mapping = raw_mapping;
+    if (free_mapping->active != 0u) {
+        pool_corrupt = 1u;
+        return KERNEL_AREA_CORRUPT;
+    }
 
     vm_status = kernel_vm_map_shared_range(
         space, area->virtual_base, area->physical_pages, area->page_count,
         area->frame_owner, permissions);
     if (vm_status != KERNEL_VM_OK) {
         ++pool_stats.map_rollbacks;
+        reset_mapping(free_mapping);
+        if (kernel_object_cache_release(&mapping_cache, free_mapping) !=
+            KERNEL_OBJECT_CACHE_OK) {
+            pool_corrupt = 1u;
+            return KERNEL_AREA_CORRUPT;
+        }
         if (vm_status == KERNEL_VM_OUT_OF_MEMORY)
             return KERNEL_AREA_OUT_OF_MEMORY;
         if (vm_status == KERNEL_VM_ALREADY_MAPPED)
@@ -490,6 +555,12 @@ KernelAreaStatus kernel_area_map(KernelArea *area, uint32_t process_id,
         if (kernel_vm_unmap_shared_range(
                 space, area->virtual_base, area->physical_pages,
                 area->page_count, area->frame_owner) != KERNEL_VM_OK) {
+            pool_corrupt = 1u;
+            return KERNEL_AREA_CORRUPT;
+        }
+        reset_mapping(free_mapping);
+        if (kernel_object_cache_release(&mapping_cache, free_mapping) !=
+            KERNEL_OBJECT_CACHE_OK) {
             pool_corrupt = 1u;
             return KERNEL_AREA_CORRUPT;
         }
@@ -680,17 +751,21 @@ bool kernel_area_pool_valid(void)
     uint32_t committed = 0u;
     uint32_t active_mappings = 0u;
 
-    if (!kernel_area_pool_healthy())
+    if (!kernel_area_pool_healthy() ||
+        !kernel_object_cache_valid(&area_cache) ||
+        !kernel_object_cache_valid(&mapping_cache))
         return false;
     for (uint32_t slot = 0u; slot < KERNEL_AREA_MAX; ++slot) {
         const KernelArea *area = &areas[slot];
         uint32_t mapping_count = 0u;
+        bool claimed = kernel_object_cache_slot_claimed(
+            &area_cache, (uint16_t)slot);
 
         if (area->slot != slot || area->generation == 0u ||
             area->generation > AREA_GENERATION_MASK)
             return false;
         if (area->state == KERNEL_AREA_FREE) {
-            if (area->creator != 0u || area->frame_owner != 0u ||
+            if (claimed || area->creator != 0u || area->frame_owner != 0u ||
                 area->handle_references != 0u ||
                 area->child_references != 0u ||
                 area->mapping_references != 0u ||
@@ -698,6 +773,8 @@ bool kernel_area_pool_valid(void)
                 return false;
             continue;
         }
+        if (!claimed)
+            return false;
         if (!valid_area(area) || area->creator == 0u ||
             area->frame_owner == 0u || area->page_count == 0u ||
             area->page_count > KERNEL_AREA_PAGE_MAX ||
@@ -717,14 +794,18 @@ bool kernel_area_pool_valid(void)
     }
     for (uint32_t slot = 0u; slot < KERNEL_AREA_MAPPING_MAX; ++slot) {
         const KernelAreaMapping *mapping = &mappings[slot];
+        bool claimed = kernel_object_cache_slot_claimed(
+            &mapping_cache, (uint16_t)slot);
 
         if (mapping->active == 0u) {
-            if (mapping->space != NULL || mapping->area != NULL ||
+            if (claimed || mapping->space != NULL || mapping->area != NULL ||
                 mapping->process_id != 0u || mapping->virtual_base != 0u ||
                 mapping->permissions != 0u)
                 return false;
             continue;
         }
+        if (!claimed)
+            return false;
         if (!valid_area(mapping->area) ||
             mapping->area->state != KERNEL_AREA_LIVE ||
             mapping->space == NULL || mapping->process_id == 0u ||

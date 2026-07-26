@@ -292,8 +292,9 @@ static void invalidate_caches(void)
 static KernelVmStatus allocate_table(uint32_t owner, uint32_t *physical)
 {
     volatile uint32_t *words;
-    KernelMemoryStatus status = kernel_memory_alloc(
-        1u, 1u, KERNEL_FRAME_PAGE_TABLE, owner, physical);
+    KernelMemoryStatus status = kernel_memory_alloc_tagged(
+        KERNEL_ALLOCATION_SITE_VM_PAGE_TABLE, 1u, 1u,
+        KERNEL_FRAME_PAGE_TABLE, owner, physical);
 
     if (status != KERNEL_MEMORY_OK)
         return status == KERNEL_MEMORY_OUT_OF_MEMORY ?

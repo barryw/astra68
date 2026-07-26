@@ -1,3 +1,4 @@
+#include "allocation.h"
 #include "memory.h"
 #include "pmmu.h"
 #include "thread.h"
@@ -207,6 +208,58 @@ static void test_kernel_root_and_enable_sequence(void)
     assert(loaded_tc == KERNEL_PMMU_TC_4K_10_10_SRE);
     assert(function_code_sets == 1u && flush_count == 1u);
     assert(cache_invalidation_count == 1u);
+}
+
+static void test_page_table_injection_preserves_baseline(void)
+{
+    KernelAddressSpace space = {0};
+    KernelAllocationStats allocation_before;
+    KernelAllocationStats allocation_after;
+    KernelMemoryStats memory_before;
+    KernelMemoryStats memory_after;
+    KernelVmStats vm_before;
+    KernelVmStats vm_after;
+
+    initialize_test();
+    assert(kernel_memory_stats(&memory_before));
+    assert(kernel_vm_stats(&vm_before));
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_VM_PAGE_TABLE, &allocation_before));
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_VM_PAGE_TABLE, 1u);
+    assert(kernel_vm_create_address_space(91u, &space) ==
+           KERNEL_VM_OUT_OF_MEMORY);
+    assert(space.initialized == 0u && space.root_physical == 0u);
+    assert(kernel_memory_stats(&memory_after));
+    assert(kernel_vm_stats(&vm_after));
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_VM_PAGE_TABLE, &allocation_after));
+    assert(memory_after.free_frames == memory_before.free_frames);
+    assert(memory_after.owner_slots_used == memory_before.owner_slots_used);
+    assert(vm_after.address_spaces == vm_before.address_spaces);
+    assert(vm_after.user_table_pages == vm_before.user_table_pages);
+    assert(allocation_after.current_units == allocation_before.current_units);
+    assert(allocation_after.current_bytes == allocation_before.current_bytes);
+    assert(allocation_after.injected_failures ==
+           allocation_before.injected_failures + 1u);
+    assert(kernel_allocation_valid());
+
+    kernel_allocation_test_fail_global(1u);
+    assert(kernel_vm_create_address_space(91u, &space) ==
+           KERNEL_VM_OUT_OF_MEMORY);
+    assert(space.initialized == 0u && space.root_physical == 0u);
+    assert(kernel_memory_stats(&memory_after));
+    assert(memory_after.free_frames == memory_before.free_frames);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_VM_PAGE_TABLE, &allocation_after));
+    assert(allocation_after.current_units == allocation_before.current_units);
+    assert(allocation_after.injected_failures ==
+           allocation_before.injected_failures + 2u);
+
+    assert(kernel_vm_create_address_space(91u, &space) == KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
+    assert(kernel_memory_stats(&memory_after));
+    assert(memory_after.free_frames == memory_before.free_frames);
 }
 
 static void test_map_switch_unmap_and_stale_guards(void)
@@ -470,6 +523,7 @@ static void test_shared_map_existing_leaf_rollback_and_alias_guards(void)
 int main(void)
 {
     test_kernel_root_and_enable_sequence();
+    test_page_table_injection_preserves_baseline();
     test_map_switch_unmap_and_stale_guards();
     test_destroy_releases_read_only_mapping();
     test_shared_map_transaction_rolls_back_every_stage();

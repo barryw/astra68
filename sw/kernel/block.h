@@ -81,5 +81,6 @@ KernelBlockStatus kernel_block_revoke_owner(uint32_t owner,
                                             uint32_t *released_buffers,
                                             uint32_t *deferred_buffers);
 bool kernel_block_stats(KernelBlockStats *stats);
+bool kernel_block_valid(void);
 
 #endif

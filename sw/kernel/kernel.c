@@ -1,6 +1,7 @@
 #include <astra/boot.h>
 
 #include "kernel_build_info.h"
+#include "allocation.h"
 #include "block.h"
 #include "bytes.h"
 #include "dma.h"
@@ -307,8 +308,9 @@ static void kernel_user_copy_selftest(void)
     if (!kernel_memory_stats(&before) ||
         kernel_vm_create_address_space(KERNEL_SELFTEST_OWNER, space) !=
             KERNEL_VM_OK ||
-        kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS,
-                            KERNEL_SELFTEST_OWNER, &physical) !=
+        kernel_memory_alloc_tagged(
+            KERNEL_ALLOCATION_SITE_BOOT_SELFTEST_PAGE, 1u, 1u,
+            KERNEL_FRAME_PROCESS, KERNEL_SELFTEST_OWNER, &physical) !=
             KERNEL_MEMORY_OK)
         kernel_panic("user-copy self-test setup failed");
 
@@ -823,6 +825,16 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     if (kernel_read_vbr() != (uint32_t)_kernel_vectors)
         kernel_panic("kernel VBR installation failed");
     kernel_user_copy_selftest();
+    if (!kernel_allocation_retire_boot())
+        kernel_panic("boot allocator retirement failed");
+    if (kernel_allocation_phase() != KERNEL_ALLOCATION_PHASE_RUNTIME ||
+        !kernel_allocation_valid() || !kernel_dma_valid() ||
+        !kernel_block_valid() || !kernel_memory_stats(&memory_stats) ||
+        memory_stats.emergency_total_frames !=
+            KERNEL_EMERGENCY_RESERVE_FRAMES ||
+        memory_stats.emergency_available_frames !=
+            KERNEL_EMERGENCY_RESERVE_FRAMES)
+        kernel_panic("runtime allocator validation failed");
 
     console_puts("BootInfo ........... OK\n");
     console_puts("Early log .......... OK @ 0x");
@@ -847,6 +859,12 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     console_puts(" free / ");
     console_dec32(memory_stats.total_frames);
     console_puts(" total\n");
+    console_puts("Emergency reserve .. ");
+    console_dec32(memory_stats.emergency_available_frames);
+    console_puts(" / ");
+    console_dec32(memory_stats.emergency_total_frames);
+    console_puts(" pages\n");
+    console_puts("Allocators ......... runtime, ledger OK\n");
     console_puts("User copy .......... OK, fault recovery verified\n");
     console_puts("Kernel worker ...... OK, guarded MSP\n");
     console_puts("Thread ISPs ........ ");

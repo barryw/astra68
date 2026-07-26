@@ -4,6 +4,7 @@
 
 #include "bytes.h"
 #include "generation.h"
+#include "object_cache.h"
 #include "vm.h"
 
 #include <stddef.h>
@@ -45,6 +46,9 @@ _Static_assert(sizeof(KernelRing) == 80u,
 #endif
 
 static KernelRing rings[KERNEL_RING_MAX];
+static KernelObjectCache ring_cache;
+static uint32_t ring_cache_bitmap[
+    KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_RING_MAX)];
 static KernelRingPoolStats pool_stats;
 static uint8_t pool_corrupt;
 
@@ -152,6 +156,9 @@ static void maybe_free(KernelRing *ring)
     }
     --pool_stats.active_rings;
     reset_ring(ring, ring->slot);
+    if (kernel_object_cache_release(&ring_cache, ring) !=
+        KERNEL_OBJECT_CACHE_OK)
+        pool_corrupt = 1u;
 }
 
 static KernelRingStatus wake_queue(KernelThreadWaitQueue *queue,
@@ -198,6 +205,14 @@ static KernelRingStatus fail_ring(KernelRing *ring, uint32_t terminal,
 
 void kernel_ring_pool_init(void)
 {
+    if (!kernel_object_cache_init(
+            &ring_cache, rings, sizeof(rings[0]), KERNEL_RING_MAX,
+            ring_cache_bitmap,
+            KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_RING_MAX),
+            KERNEL_ALLOCATION_SITE_RING_OBJECT)) {
+        pool_corrupt = 1u;
+        return;
+    }
     for (uint32_t slot = 0u; slot < KERNEL_RING_MAX; ++slot) {
         uint32_t generation = rings[slot].generation;
 
@@ -213,6 +228,9 @@ KernelRingStatus kernel_ring_create(uint32_t owner, KernelArea *area,
                                     uint32_t capacity, KernelRing **result)
 {
     KernelRing *ring = NULL;
+    void *raw_ring;
+    uint16_t ring_slot;
+    KernelObjectCacheStatus cache_status;
     AstraBulkRingHeader header;
     uint64_t total_size;
 
@@ -244,15 +262,29 @@ KernelRingStatus kernel_ring_create(uint32_t owner, KernelArea *area,
             ++pool_stats.overlap_failures;
             return KERNEL_RING_OVERLAP;
         }
-        if (ring == NULL && rings[slot].state == KERNEL_RING_FREE)
-            ring = &rings[slot];
     }
-    if (ring == NULL) {
+    cache_status = kernel_object_cache_claim(
+        &ring_cache, owner, &raw_ring, &ring_slot);
+    if (cache_status == KERNEL_OBJECT_CACHE_UNAVAILABLE) {
         ++pool_stats.allocation_failures;
         return KERNEL_RING_NO_SLOT;
     }
-    if (kernel_area_child_retain(area) != KERNEL_AREA_OK)
+    if (cache_status != KERNEL_OBJECT_CACHE_OK ||
+        ring_slot >= KERNEL_RING_MAX) {
+        pool_corrupt = 1u;
+        return KERNEL_RING_CORRUPT;
+    }
+    ring = raw_ring;
+    if (ring->state != KERNEL_RING_FREE || ring->slot != ring_slot) {
+        pool_corrupt = 1u;
+        return KERNEL_RING_CORRUPT;
+    }
+    if (kernel_area_child_retain(area) != KERNEL_AREA_OK) {
+        if (kernel_object_cache_release(&ring_cache, ring) !=
+            KERNEL_OBJECT_CACHE_OK)
+            pool_corrupt = 1u;
         return KERNEL_RING_PEER_DEAD;
+    }
 
     ring->generation = kernel_generation_next_masked(
         ring->generation, RING_GENERATION_MASK);
@@ -292,6 +324,9 @@ KernelRingStatus kernel_ring_create(uint32_t owner, KernelArea *area,
         if (release_child(ring) != KERNEL_RING_OK)
             pool_corrupt = 1u;
         reset_ring(ring, ring->slot);
+        if (kernel_object_cache_release(&ring_cache, ring) !=
+            KERNEL_OBJECT_CACHE_OK)
+            pool_corrupt = 1u;
         return KERNEL_RING_CORRUPT;
     }
     ++pool_stats.created_rings;
@@ -590,7 +625,8 @@ bool kernel_ring_pool_valid(void)
     uint32_t active = 0u;
     uint32_t closing = 0u;
 
-    if (!kernel_ring_pool_healthy())
+    if (!kernel_ring_pool_healthy() ||
+        !kernel_object_cache_valid(&ring_cache))
         return false;
     for (uint32_t slot = 0u; slot < KERNEL_RING_MAX; ++slot) {
         const KernelRing *ring = &rings[slot];
@@ -598,6 +634,8 @@ bool kernel_ring_pool_valid(void)
             kernel_thread_wait_queue_count(&ring->producer_waiters);
         uint32_t consumer_waiters =
             kernel_thread_wait_queue_count(&ring->consumer_waiters);
+        bool claimed = kernel_object_cache_slot_claimed(
+            &ring_cache, (uint16_t)slot);
 
         if (ring->slot != slot || ring->generation == 0u ||
             ring->generation > RING_GENERATION_MASK ||
@@ -605,7 +643,7 @@ bool kernel_ring_pool_valid(void)
             consumer_waiters > KERNEL_THREAD_MAX)
             return false;
         if (ring->state == KERNEL_RING_FREE) {
-            if (ring->area != NULL || ring->owner != 0u ||
+            if (claimed || ring->area != NULL || ring->owner != 0u ||
                 ring->producer_references != 0u ||
                 ring->consumer_references != 0u ||
                 producer_waiters != 0u || consumer_waiters != 0u ||
@@ -613,6 +651,8 @@ bool kernel_ring_pool_valid(void)
                 return false;
             continue;
         }
+        if (!claimed)
+            return false;
         if (!valid_ring(ring) || ring->area == NULL || ring->owner == 0u ||
             ring->area_generation == 0u || ring->capacity == 0u ||
             ring->total_size != KERNEL_RING_HEADER_SIZE +

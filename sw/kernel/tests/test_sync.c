@@ -1,3 +1,4 @@
+#include "allocation.h"
 #include "sync.h"
 
 #include <astra/syscall.h>
@@ -107,6 +108,34 @@ static void test_auto_and_manual_event_semantics(void)
            KERNEL_SYNC_INVALID_ARGUMENT);
     kernel_sync_handle_release(manual, NULL);
     assert(kernel_sync_pool_valid());
+}
+
+static void test_object_injection_preserves_pool(void)
+{
+    KernelAllocationStats allocation_stats;
+    KernelSyncObject *object = (KernelSyncObject *)(uintptr_t)1u;
+    KernelSyncPoolStats pool_stats;
+
+    initialize_test();
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_SYNC_OBJECT, 1u);
+    assert(kernel_sync_create_event(17u, 0u, &object) ==
+           KERNEL_SYNC_NO_SLOT);
+    assert(object == NULL);
+    object = (KernelSyncObject *)(uintptr_t)1u;
+    kernel_allocation_test_fail_global(1u);
+    assert(kernel_sync_create_event(17u, 0u, &object) ==
+           KERNEL_SYNC_NO_SLOT);
+    assert(object == NULL);
+    assert(kernel_sync_pool_stats(&pool_stats));
+    assert(pool_stats.live_objects == 0u);
+    assert(pool_stats.allocation_failures == 2u);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_SYNC_OBJECT, &allocation_stats));
+    assert(allocation_stats.current_units == 0u);
+    assert(allocation_stats.injected_failures == 2u);
+    assert(kernel_sync_pool_valid());
+    assert(kernel_allocation_valid());
 }
 
 static void test_semaphore_atomic_handoff_and_overflow(void)
@@ -596,6 +625,7 @@ static void test_timer_wait_set_cancel_duplicate_and_close(void)
 
 int main(void)
 {
+    test_object_injection_preserves_pool();
     test_auto_and_manual_event_semantics();
     test_semaphore_atomic_handoff_and_overflow();
     test_terminal_races_remove_wait_once();

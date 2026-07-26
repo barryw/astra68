@@ -2,6 +2,7 @@
 
 #include <astra/syscall.h>
 
+#include "allocation.h"
 #include "performance.h"
 
 #include <assert.h>
@@ -148,6 +149,67 @@ static void test_fifo_capacity_and_peer_drain(void)
     assert(kernel_port_snapshot(0u, &snapshot));
     assert(snapshot.state == KERNEL_PORT_FREE);
     assert(kernel_port_pool_valid());
+}
+
+static void test_allocation_injection_preserves_queue(void)
+{
+    KernelAllocationStats message_allocation;
+    KernelAllocationStats port_allocation;
+    KernelHandleTable table;
+    KernelPort *port = (KernelPort *)(uintptr_t)1u;
+    KernelPortPoolStats before;
+    KernelPortPoolStats after;
+    uint8_t message[KERNEL_PORT_MESSAGE_SIZE_MIN];
+    uint32_t woken = UINT32_MAX;
+
+    initialize_test();
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_PORT_OBJECT, 1u);
+    assert(kernel_port_create(27u, 2u, 128u, &port) ==
+           KERNEL_PORT_NO_SLOT);
+    assert(port == NULL);
+    port = (KernelPort *)(uintptr_t)1u;
+    kernel_allocation_test_fail_global(1u);
+    assert(kernel_port_create(27u, 2u, 128u, &port) ==
+           KERNEL_PORT_NO_SLOT);
+    assert(port == NULL);
+
+    assert(kernel_port_create(27u, 2u, 128u, &port) == KERNEL_PORT_OK);
+    kernel_handle_table_init(&table);
+    assert(kernel_handle_table_set_owner(&table, 27u));
+    make_message(message, sizeof(message), 0x31u);
+    assert(kernel_port_pool_stats(&before));
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_PORT_MESSAGE, 1u);
+    assert(kernel_port_send(port, &table, message, sizeof(message), NULL,
+                            0u, &woken) == KERNEL_PORT_NO_SLOT);
+    assert(woken == 0u);
+    assert(kernel_port_pool_stats(&after));
+    assert(after.queued_messages == before.queued_messages);
+    assert(after.queued_bytes == before.queued_bytes);
+    assert(after.queued_handles == before.queued_handles);
+    assert(after.sends == before.sends);
+    assert(kernel_handle_count(&table) == 0u);
+    kernel_allocation_test_fail_global(1u);
+    assert(kernel_port_send(port, &table, message, sizeof(message), NULL,
+                            0u, &woken) == KERNEL_PORT_NO_SLOT);
+    assert(woken == 0u);
+    assert(kernel_port_pool_stats(&after));
+    assert(after.queued_messages == before.queued_messages);
+    assert(after.queued_bytes == before.queued_bytes);
+    assert(after.sends == before.sends);
+    release_port(port);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_PORT_OBJECT, &port_allocation));
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_PORT_MESSAGE, &message_allocation));
+    assert(port_allocation.current_units == 0u);
+    assert(message_allocation.current_units == 0u);
+    assert(port_allocation.injected_failures == 2u);
+    assert(message_allocation.injected_failures == 2u);
+    assert(kernel_port_pool_valid());
+    assert(kernel_handle_transfer_pool_valid());
+    assert(kernel_allocation_valid());
 }
 
 static void test_atomic_handle_move_cancel_and_commit(void)
@@ -529,6 +591,7 @@ static void test_pool_quotas_and_generation_reuse(void)
 
 int main(void)
 {
+    test_allocation_injection_preserves_queue();
     test_fifo_capacity_and_peer_drain();
     test_atomic_handle_move_cancel_and_commit();
     test_failed_send_leaves_source_authority();

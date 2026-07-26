@@ -1,3 +1,4 @@
+#include "allocation.h"
 #include "area.h"
 #include "block.h"
 #include "dma.h"
@@ -391,6 +392,189 @@ static void initialize_test(void)
     soak_checkpoint_calls = 0u;
     last_soak_checkpoint = 0u;
     last_soak_free_frames = 0u;
+}
+
+typedef struct TestAllocationBaseline {
+    uint32_t units[KERNEL_ALLOCATION_TAG_COUNT];
+    uint32_t bytes[KERNEL_ALLOCATION_TAG_COUNT];
+} TestAllocationBaseline;
+
+static void capture_allocation_baseline(TestAllocationBaseline *baseline)
+{
+    for (uint32_t tag = 1u; tag < KERNEL_ALLOCATION_TAG_COUNT; ++tag) {
+        KernelAllocationStats stats;
+
+        assert(kernel_allocation_tag_stats((KernelAllocationTag)tag,
+                                           &stats));
+        baseline->units[tag] = stats.current_units;
+        baseline->bytes[tag] = stats.current_bytes;
+    }
+}
+
+static void assert_allocation_baseline(
+    const TestAllocationBaseline *baseline)
+{
+    for (uint32_t tag = 1u; tag < KERNEL_ALLOCATION_TAG_COUNT; ++tag) {
+        KernelAllocationStats stats;
+
+        assert(kernel_allocation_tag_stats((KernelAllocationTag)tag,
+                                           &stats));
+        assert(stats.current_units == baseline->units[tag]);
+        assert(stats.current_bytes == baseline->bytes[tag]);
+    }
+    assert(kernel_allocation_valid());
+}
+
+static uint32_t injected_failure_total(void)
+{
+    uint32_t total = 0u;
+
+    for (uint32_t site = 1u; site < KERNEL_ALLOCATION_SITE_COUNT; ++site) {
+        KernelAllocationStats stats;
+
+        assert(kernel_allocation_site_stats((KernelAllocationSite)site,
+                                            &stats));
+        total += stats.injected_failures;
+    }
+    return total;
+}
+
+static uint32_t allocation_attempt_total(void)
+{
+    uint32_t total = 0u;
+
+    for (uint32_t site = 1u; site < KERNEL_ALLOCATION_SITE_COUNT; ++site) {
+        KernelAllocationStats stats;
+
+        assert(kernel_allocation_site_stats((KernelAllocationSite)site,
+                                            &stats));
+        total += stats.attempts;
+    }
+    return total;
+}
+
+static void terminate_only_process(void)
+{
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    registers[0] = ASTRA_SYSCALL_EXIT;
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u,
+                                     frame, &next) ==
+           KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+}
+
+static void assert_failed_process_create_baseline(
+    const KernelMemoryStats *memory_baseline,
+    const TestAllocationBaseline *allocation_baseline)
+{
+    KernelMemoryStats memory;
+    KernelSchedulerStats scheduler;
+    KernelThreadPoolStats threads;
+
+    assert(kernel_memory_stats(&memory));
+    assert(memory.free_frames == memory_baseline->free_frames);
+    assert(memory.owner_slots_used == memory_baseline->owner_slots_used);
+    assert(memory.emergency_available_frames ==
+           memory_baseline->emergency_available_frames);
+    assert(kernel_process_stats(&scheduler));
+    assert(scheduler.live_processes == 0u);
+    assert(scheduler.live_threads == 0u);
+    assert(kernel_thread_pool_stats(&threads));
+    assert(threads.live_threads == 0u);
+    assert(threads.ready_threads == 0u);
+    assert_allocation_baseline(allocation_baseline);
+}
+
+static void test_process_allocation_failure_matrix(void)
+{
+    static const struct {
+        KernelAllocationSite site;
+        KernelProcessStatus status;
+    } cases[] = {
+        {KERNEL_ALLOCATION_SITE_PROCESS_RECORD, KERNEL_PROCESS_NO_SLOT},
+        {KERNEL_ALLOCATION_SITE_VM_PAGE_TABLE,
+         KERNEL_PROCESS_OUT_OF_MEMORY},
+        {KERNEL_ALLOCATION_SITE_PROCESS_CODE_PAGE,
+         KERNEL_PROCESS_OUT_OF_MEMORY},
+        {KERNEL_ALLOCATION_SITE_THREAD_RECORD,
+         KERNEL_PROCESS_RESOURCE_LIMIT},
+        {KERNEL_ALLOCATION_SITE_THREAD_STACK_PAGE,
+         KERNEL_PROCESS_OUT_OF_MEMORY},
+        {KERNEL_ALLOCATION_SITE_HANDLE_SLOT,
+         KERNEL_PROCESS_RESOURCE_LIMIT}
+    };
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x60u, 0xfcu};
+
+    for (uint32_t index = 0u;
+         index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        KernelAllocationStats site_stats;
+        TestAllocationBaseline allocation_baseline;
+        KernelMemoryStats memory_baseline;
+        uint32_t process_id = UINT32_MAX;
+
+        initialize_test();
+        assert(kernel_memory_stats(&memory_baseline));
+        capture_allocation_baseline(&allocation_baseline);
+        kernel_allocation_test_fail_site(cases[index].site, 1u);
+        assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                     &process_id) == cases[index].status);
+        assert(process_id == 0u);
+        assert(kernel_allocation_site_stats(cases[index].site,
+                                            &site_stats));
+        assert(site_stats.injected_failures == 1u);
+        assert(injected_failure_total() == 1u);
+        assert_failed_process_create_baseline(&memory_baseline,
+                                              &allocation_baseline);
+    }
+}
+
+static void test_process_global_nth_failure_matrix(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x60u, 0xfcu};
+    bool reached_success = false;
+    uint32_t failed_stages = 0u;
+
+    for (uint32_t target = 1u; target <= 16u; ++target) {
+        TestAllocationBaseline allocation_baseline;
+        KernelMemoryStats memory_baseline;
+        KernelMemoryStats final;
+        KernelProcessStatus status;
+        uint32_t process_id = UINT32_MAX;
+
+        initialize_test();
+        assert(kernel_memory_stats(&memory_baseline));
+        capture_allocation_baseline(&allocation_baseline);
+        kernel_allocation_test_fail_global(target);
+        status = kernel_process_create(image, sizeof(image), 0u, 0u,
+                                       &process_id);
+        kernel_allocation_test_clear_failure();
+        if (status == KERNEL_PROCESS_OK) {
+            assert(process_id != 0u);
+            terminate_only_process();
+            assert(kernel_memory_stats(&final));
+            assert(final.free_frames == memory_baseline.free_frames);
+            assert_allocation_baseline(&allocation_baseline);
+            reached_success = true;
+            break;
+        }
+        assert(status == KERNEL_PROCESS_NO_SLOT ||
+               status == KERNEL_PROCESS_OUT_OF_MEMORY ||
+               status == KERNEL_PROCESS_RESOURCE_LIMIT);
+        assert(process_id == 0u);
+        assert(injected_failure_total() == 1u);
+        assert_failed_process_create_baseline(&memory_baseline,
+                                              &allocation_baseline);
+        ++failed_stages;
+    }
+    assert(reached_success);
+    assert(failed_stages >= 8u);
 }
 
 static void test_preemption_fault_containment_and_teardown(void)
@@ -1990,6 +2174,7 @@ static void test_real_stack_oom_rolls_back_thread_create(void)
     uint32_t pressure_frames = 0u;
     uint32_t process_id;
     uint32_t released;
+    uint32_t attempts_before_fault;
 
     initialize_test();
     assert(kernel_memory_stats(&baseline));
@@ -2045,16 +2230,23 @@ static void test_real_stack_oom_rolls_back_thread_create(void)
     assert(after_threads.creation_rollbacks ==
            before_threads.creation_rollbacks + 1u);
 
+    attempts_before_fault = allocation_attempt_total();
+    memset(registers, 0, sizeof(registers));
+    make_frame(frame, 0xau, 2u, KERNEL_PROCESS_CODE_BASE + 2u,
+               0x60000000u);
+    assert(kernel_process_on_fault(registers,
+                                   KERNEL_PROCESS_STACK_TOP - 32u, frame,
+                                   &next) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(allocation_attempt_total() == attempts_before_fault);
     assert(kernel_memory_release_owner(pressure_owner, &released) ==
            KERNEL_MEMORY_OK);
     assert(released == pressure_frames);
-    registers[0] = ASTRA_SYSCALL_EXIT;
-    assert(kernel_process_on_syscall(registers,
-                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
-                                     &next) == KERNEL_PROCESS_NO_RUNNABLE);
-    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
     assert(kernel_memory_stats(&final));
     assert(final.free_frames == baseline.free_frames);
+    assert(final.emergency_available_frames ==
+           baseline.emergency_available_frames);
+    assert(kernel_allocation_valid());
 }
 
 static void test_wait_multiple_syscall_contract_and_races(void)
@@ -3670,6 +3862,8 @@ static void test_area_and_ring_endpoint_transfer_over_port(void)
 
 int main(void)
 {
+    test_process_allocation_failure_matrix();
+    test_process_global_nth_failure_matrix();
     test_preemption_fault_containment_and_teardown();
     test_soak_relaunches_only_after_exact_teardown();
     test_soak_rejects_unexplained_frame_loss();

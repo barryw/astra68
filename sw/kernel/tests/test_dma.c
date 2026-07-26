@@ -1,3 +1,4 @@
+#include "allocation.h"
 #include "dma.h"
 #include "memory.h"
 
@@ -208,12 +209,71 @@ static void test_bounded_table(void)
         assert(kernel_dma_close(handles[index], 1u) == KERNEL_DMA_OK);
 }
 
+static void test_allocation_injection_is_atomic(void)
+{
+    KernelAllocationStats object_stats;
+    KernelAllocationStats page_stats;
+    KernelDmaHandle handle = 0xdeadbeefu;
+    KernelDmaStats dma_stats;
+    KernelMemoryStats baseline;
+    KernelMemoryStats after;
+
+    initialize_memory();
+    assert(kernel_memory_stats(&baseline));
+
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_DMA_OBJECT, 1u);
+    assert(kernel_dma_create(23u, KERNEL_PAGE_SIZE, 1u, &handle) ==
+           KERNEL_DMA_NO_RESOURCES);
+    assert(handle == KERNEL_DMA_HANDLE_INVALID);
+    assert(kernel_memory_stats(&after));
+    assert(after.free_frames == baseline.free_frames);
+
+    handle = 0xdeadbeefu;
+    kernel_allocation_test_fail_global(1u);
+    assert(kernel_dma_create(23u, KERNEL_PAGE_SIZE, 1u, &handle) ==
+           KERNEL_DMA_NO_RESOURCES);
+    assert(handle == KERNEL_DMA_HANDLE_INVALID);
+
+    handle = 0xdeadbeefu;
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_DMA_PAGES, 1u);
+    assert(kernel_dma_create(23u, KERNEL_PAGE_SIZE, 1u, &handle) ==
+           KERNEL_DMA_OUT_OF_MEMORY);
+    assert(handle == KERNEL_DMA_HANDLE_INVALID);
+    assert(kernel_memory_stats(&after));
+    assert(after.free_frames == baseline.free_frames);
+    assert(after.owner_slots_used == baseline.owner_slots_used);
+
+    handle = 0xdeadbeefu;
+    kernel_allocation_test_fail_global(2u);
+    assert(kernel_dma_create(23u, KERNEL_PAGE_SIZE, 1u, &handle) ==
+           KERNEL_DMA_OUT_OF_MEMORY);
+    assert(handle == KERNEL_DMA_HANDLE_INVALID);
+    assert(kernel_memory_stats(&after));
+    assert(after.free_frames == baseline.free_frames);
+    assert(after.owner_slots_used == baseline.owner_slots_used);
+    assert(kernel_dma_stats(&dma_stats));
+    assert(dma_stats.live_buffers == 0u);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_DMA_OBJECT, &object_stats));
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_DMA_PAGES, &page_stats));
+    assert(object_stats.current_units == 0u);
+    assert(page_stats.current_units == 0u);
+    assert(object_stats.injected_failures == 2u);
+    assert(page_stats.injected_failures == 2u);
+    assert(kernel_dma_valid());
+    assert(kernel_allocation_valid());
+}
+
 int main(void)
 {
     test_create_transfer_complete_and_stale_handle();
     test_checked_ranges_and_ownership();
     test_owner_revoke_defers_in_flight_memory();
     test_bounded_table();
+    test_allocation_injection_is_atomic();
     puts("KERNEL DMA PASS");
     return 0;
 }

@@ -4,6 +4,7 @@
 
 #include "bytes.h"
 #include "generation.h"
+#include "object_cache.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -52,6 +53,12 @@ struct KernelPort {
 
 static KernelPort ports[KERNEL_PORT_MAX];
 static KernelPortMessage messages[KERNEL_PORT_MESSAGE_MAX];
+static KernelObjectCache port_cache;
+static KernelObjectCache message_cache;
+static uint32_t port_cache_bitmap[
+    KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_PORT_MAX)];
+static uint32_t message_cache_bitmap[
+    KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_PORT_MESSAGE_MAX)];
 static KernelPortPoolStats pool_stats;
 static uint8_t pool_corrupt;
 
@@ -135,23 +142,41 @@ static void owner_reservations(uint32_t owner, uint32_t *port_count,
         *byte_capacity = owner_bytes;
 }
 
-static KernelPortMessage *allocate_message(void)
+static KernelPortStatus allocate_message(uint32_t owner,
+                                         KernelPortMessage **result)
 {
-    for (uint32_t slot = 0u; slot < KERNEL_PORT_MESSAGE_MAX; ++slot) {
-        KernelPortMessage *message = &messages[slot];
-        uint32_t generation;
+    void *raw_message;
+    uint16_t slot;
+    KernelObjectCacheStatus status = kernel_object_cache_claim(
+        &message_cache, owner, &raw_message, &slot);
 
-        if (message->state != KERNEL_PORT_MESSAGE_FREE)
-            continue;
-        generation = kernel_generation_next(message->generation);
-        kernel_bytes_clear(message, sizeof(*message));
-        message->generation = generation;
-        message->next = KERNEL_PORT_SLOT_NONE;
-        message->port_slot = KERNEL_PORT_SLOT_NONE;
-        message->state = KERNEL_PORT_MESSAGE_RESERVED;
-        return message;
+    if (result == NULL)
+        return KERNEL_PORT_INVALID_ARGUMENT;
+    *result = NULL;
+    if (status == KERNEL_OBJECT_CACHE_UNAVAILABLE) {
+        ++pool_stats.allocation_failures;
+        return KERNEL_PORT_NO_SLOT;
     }
-    return NULL;
+    if (status != KERNEL_OBJECT_CACHE_OK ||
+        slot >= KERNEL_PORT_MESSAGE_MAX) {
+        pool_corrupt = 1u;
+        return KERNEL_PORT_CORRUPT;
+    }
+    KernelPortMessage *message = raw_message;
+    uint32_t generation;
+
+    if (message->state != KERNEL_PORT_MESSAGE_FREE) {
+        pool_corrupt = 1u;
+        return KERNEL_PORT_CORRUPT;
+    }
+    generation = kernel_generation_next(message->generation);
+    kernel_bytes_clear(message, sizeof(*message));
+    message->generation = generation;
+    message->next = KERNEL_PORT_SLOT_NONE;
+    message->port_slot = KERNEL_PORT_SLOT_NONE;
+    message->state = KERNEL_PORT_MESSAGE_RESERVED;
+    *result = message;
+    return KERNEL_PORT_OK;
 }
 
 static void free_message(KernelPortMessage *message)
@@ -170,6 +195,9 @@ static void free_message(KernelPortMessage *message)
     message->next = KERNEL_PORT_SLOT_NONE;
     message->port_slot = KERNEL_PORT_SLOT_NONE;
     message->state = KERNEL_PORT_MESSAGE_FREE;
+    if (kernel_object_cache_release(&message_cache, message) !=
+        KERNEL_OBJECT_CACHE_OK)
+        pool_corrupt = 1u;
 }
 
 static bool wake_one(KernelThreadWaitQueue *queue, uint32_t result,
@@ -262,6 +290,9 @@ static void maybe_free_port(KernelPort *port)
     port->head = KERNEL_PORT_SLOT_NONE;
     port->tail = KERNEL_PORT_SLOT_NONE;
     port->state = KERNEL_PORT_FREE;
+    if (kernel_object_cache_release(&port_cache, port) !=
+        KERNEL_OBJECT_CACHE_OK)
+        pool_corrupt = 1u;
 }
 
 static bool discard_messages(KernelPort *port)
@@ -404,6 +435,19 @@ static KernelPortStatus map_handle_status(KernelHandleStatus status)
 
 void kernel_port_pool_init(void)
 {
+    if (!kernel_object_cache_init(
+            &port_cache, ports, sizeof(ports[0]), KERNEL_PORT_MAX,
+            port_cache_bitmap,
+            KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_PORT_MAX),
+            KERNEL_ALLOCATION_SITE_PORT_OBJECT) ||
+        !kernel_object_cache_init(
+            &message_cache, messages, sizeof(messages[0]),
+            KERNEL_PORT_MESSAGE_MAX, message_cache_bitmap,
+            KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_PORT_MESSAGE_MAX),
+            KERNEL_ALLOCATION_SITE_PORT_MESSAGE)) {
+        pool_corrupt = 1u;
+        return;
+    }
     for (uint32_t slot = 0u; slot < KERNEL_PORT_MAX; ++slot) {
         uint32_t generation = ports[slot].generation;
 
@@ -436,6 +480,9 @@ KernelPortStatus kernel_port_create(uint32_t owner,
     uint32_t owner_ports;
     uint32_t owner_messages;
     uint32_t owner_bytes;
+    void *raw_port;
+    uint16_t slot;
+    KernelObjectCacheStatus cache_status;
 
     if (port == NULL || owner == 0u || maximum_messages == 0u ||
         maximum_messages > KERNEL_PORT_QUEUE_MESSAGES_MAX ||
@@ -456,39 +503,47 @@ KernelPortStatus kernel_port_create(uint32_t owner,
         ++pool_stats.quota_failures;
         return KERNEL_PORT_QUOTA_EXCEEDED;
     }
-    for (uint32_t slot = 0u; slot < KERNEL_PORT_MAX; ++slot) {
-        KernelPort *candidate = &ports[slot];
-        uint32_t generation;
-        uint32_t active;
-
-        if (candidate->state != KERNEL_PORT_FREE)
-            continue;
-        generation = kernel_generation_next(candidate->generation);
-        kernel_bytes_clear(candidate, sizeof(*candidate));
-        kernel_thread_wait_queue_init(&candidate->readable);
-        kernel_thread_wait_queue_init(&candidate->writable);
-        candidate->owner = owner;
-        candidate->generation = generation;
-        candidate->references = 2u;
-        candidate->send_references = 1u;
-        candidate->receive_references = 1u;
-        candidate->head = KERNEL_PORT_SLOT_NONE;
-        candidate->tail = KERNEL_PORT_SLOT_NONE;
-        candidate->maximum_messages = (uint16_t)maximum_messages;
-        candidate->maximum_bytes = (uint16_t)maximum_bytes;
-        candidate->state = KERNEL_PORT_OPEN;
-        candidate->capacity_reserved = 1u;
-        pool_stats.reserved_message_capacity += maximum_messages;
-        pool_stats.reserved_byte_capacity += maximum_bytes;
-        ++pool_stats.created_ports;
-        active = active_port_count();
-        if (active > pool_stats.max_active_ports)
-            pool_stats.max_active_ports = active;
-        *port = candidate;
-        return KERNEL_PORT_OK;
+    cache_status = kernel_object_cache_claim(
+        &port_cache, owner, &raw_port, &slot);
+    if (cache_status == KERNEL_OBJECT_CACHE_UNAVAILABLE) {
+        ++pool_stats.allocation_failures;
+        return KERNEL_PORT_NO_SLOT;
     }
-    ++pool_stats.allocation_failures;
-    return KERNEL_PORT_NO_SLOT;
+    if (cache_status != KERNEL_OBJECT_CACHE_OK || slot >= KERNEL_PORT_MAX) {
+        pool_corrupt = 1u;
+        return KERNEL_PORT_CORRUPT;
+    }
+    KernelPort *candidate = raw_port;
+    uint32_t generation;
+    uint32_t active;
+
+    if (candidate->state != KERNEL_PORT_FREE) {
+        pool_corrupt = 1u;
+        return KERNEL_PORT_CORRUPT;
+    }
+    generation = kernel_generation_next(candidate->generation);
+    kernel_bytes_clear(candidate, sizeof(*candidate));
+    kernel_thread_wait_queue_init(&candidate->readable);
+    kernel_thread_wait_queue_init(&candidate->writable);
+    candidate->owner = owner;
+    candidate->generation = generation;
+    candidate->references = 2u;
+    candidate->send_references = 1u;
+    candidate->receive_references = 1u;
+    candidate->head = KERNEL_PORT_SLOT_NONE;
+    candidate->tail = KERNEL_PORT_SLOT_NONE;
+    candidate->maximum_messages = (uint16_t)maximum_messages;
+    candidate->maximum_bytes = (uint16_t)maximum_bytes;
+    candidate->state = KERNEL_PORT_OPEN;
+    candidate->capacity_reserved = 1u;
+    pool_stats.reserved_message_capacity += maximum_messages;
+    pool_stats.reserved_byte_capacity += maximum_bytes;
+    ++pool_stats.created_ports;
+    active = active_port_count();
+    if (active > pool_stats.max_active_ports)
+        pool_stats.max_active_ports = active;
+    *port = candidate;
+    return KERNEL_PORT_OK;
 }
 
 void kernel_port_abandon_unpublished(KernelPort *port)
@@ -561,6 +616,7 @@ KernelPortStatus kernel_port_send(
     KernelPortMessage *message;
     KernelHandleTransferBatch transfer;
     KernelHandleStatus handle_status;
+    KernelPortStatus message_status;
     uint16_t message_slot;
 
     if (woken_threads != NULL)
@@ -593,11 +649,9 @@ KernelPortStatus kernel_port_send(
           messages[port->tail].next != KERNEL_PORT_SLOT_NONE)))
         return KERNEL_PORT_CORRUPT;
 
-    message = allocate_message();
-    if (message == NULL) {
-        pool_corrupt = 1u;
-        return KERNEL_PORT_CORRUPT;
-    }
+    message_status = allocate_message(port->owner, &message);
+    if (message_status != KERNEL_PORT_OK)
+        return message_status;
     kernel_bytes_copy(message->data, raw_message, message_size);
     message->size = (uint16_t)message_size;
     message->port_slot = port_slot(port);
@@ -1036,6 +1090,8 @@ bool kernel_port_pool_valid(void)
     kernel_bytes_clear(seen_messages, sizeof(seen_messages));
     kernel_bytes_clear(seen_detached, sizeof(seen_detached));
     if (!kernel_port_pool_healthy() ||
+        !kernel_object_cache_valid(&port_cache) ||
+        !kernel_object_cache_valid(&message_cache) ||
         !kernel_handle_transfer_pool_valid())
         return false;
     for (uint32_t port_index = 0u; port_index < KERNEL_PORT_MAX;
@@ -1047,12 +1103,14 @@ bool kernel_port_pool_valid(void)
         uint32_t port_bytes = 0u;
         uint16_t message_slot = port->head;
         uint16_t last = KERNEL_PORT_SLOT_NONE;
+        bool claimed = kernel_object_cache_slot_claimed(
+            &port_cache, (uint16_t)port_index);
 
         if (readable > KERNEL_PORT_WAITER_MAX ||
             writable > KERNEL_PORT_WAITER_MAX)
             return false;
         if (port->state == KERNEL_PORT_FREE) {
-            if (port->owner != 0u || port->references != 0u ||
+            if (claimed || port->owner != 0u || port->references != 0u ||
                 port->send_references != 0u ||
                 port->receive_references != 0u ||
                 port->queued_messages != 0u || port->queued_bytes != 0u ||
@@ -1063,6 +1121,8 @@ bool kernel_port_pool_valid(void)
                 return false;
             continue;
         }
+        if (!claimed)
+            return false;
         if (port->generation == 0u || port->owner == 0u ||
             port->references !=
                 port->send_references + port->receive_references ||
@@ -1153,8 +1213,14 @@ bool kernel_port_pool_valid(void)
         queued_bytes += port_bytes;
     }
     for (uint32_t slot = 0u; slot < KERNEL_PORT_MESSAGE_MAX; ++slot) {
+        bool claimed = kernel_object_cache_slot_claimed(
+            &message_cache, (uint16_t)slot);
+
         if (seen_messages[slot] == 0u &&
             messages[slot].state != KERNEL_PORT_MESSAGE_FREE)
+            return false;
+        if (claimed !=
+            (messages[slot].state != KERNEL_PORT_MESSAGE_FREE))
             return false;
     }
     for (uint32_t port_index = 0u; port_index < KERNEL_PORT_MAX;

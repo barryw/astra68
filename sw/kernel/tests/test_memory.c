@@ -82,11 +82,17 @@ static void test_initial_map(void)
     assert(kernel_memory_stats(&stats));
     assert(stats.ram_base == 0x02000000u);
     assert(stats.total_frames == 8192u);
-    assert(stats.free_frames == 7996u);
-    assert(stats.high_water_frames == 196u);
+    assert(stats.free_frames == 7964u);
+    assert(stats.high_water_frames == 228u);
     assert(stats.owner_slots_used == 0u);
     assert(stats.owner_release_operations == 0u);
     assert(stats.owner_release_frame_visits == 0u);
+    assert(stats.emergency_total_frames ==
+           KERNEL_EMERGENCY_RESERVE_FRAMES);
+    assert(stats.emergency_available_frames ==
+           KERNEL_EMERGENCY_RESERVE_FRAMES);
+    assert(stats.emergency_acquisitions == 0u);
+    assert(stats.emergency_failures == 0u);
 
     assert(kernel_memory_frame_info(ASTRA_EARLY_LOG_ADDRESS, &frame));
     assert(frame.state == KERNEL_FRAME_EARLY_LOG);
@@ -96,6 +102,8 @@ static void test_initial_map(void)
     assert(frame.state == KERNEL_FRAME_ROM_BACKING);
     assert(kernel_memory_frame_info(0x02004000u, &frame));
     assert(frame.state == KERNEL_FRAME_FREE);
+    assert(kernel_memory_frame_info(0x03fff000u, &frame));
+    assert(frame.state == KERNEL_FRAME_EMERGENCY_RESERVED);
 }
 
 static void test_rejects_unclassified_and_unaligned_ram(void)
@@ -361,7 +369,7 @@ static void test_exhaustion_and_checked_ranges(void)
            KERNEL_MEMORY_OK);
     assert(kernel_memory_alloc(7536u, 1u, KERNEL_FRAME_PROCESS, 1u, &second) ==
            KERNEL_MEMORY_OK);
-    assert(kernel_memory_alloc(448u, 1u, KERNEL_FRAME_PROCESS, 1u, &third) ==
+    assert(kernel_memory_alloc(416u, 1u, KERNEL_FRAME_PROCESS, 1u, &third) ==
            KERNEL_MEMORY_OK);
     assert(first == 0x02004000u);
     assert(second == 0x02090000u);
@@ -377,6 +385,246 @@ static void test_exhaustion_and_checked_ranges(void)
                                       KERNEL_FRAME_PROCESS, false));
 }
 
+static void test_emergency_reserve_isolated_and_replenished(void)
+{
+    AstraBootInfo info;
+    KernelAllocationStats cleanup_stats;
+    KernelAllocationStats reserve_stats;
+    KernelMemoryStats baseline;
+    KernelMemoryStats exhausted;
+    KernelMemoryStats borrowed;
+    KernelMemoryStats restored;
+    KernelAllocationSite site;
+    uint32_t emergency[KERNEL_EMERGENCY_RESERVE_FRAMES];
+    uint32_t first;
+    uint32_t second;
+    uint32_t third;
+    uint32_t extra;
+    uint32_t released = 0u;
+
+    make_valid_info(&info);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&baseline));
+    assert(kernel_memory_alloc(12u, 1u, KERNEL_FRAME_PROCESS, 1u, &first) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc(7536u, 1u, KERNEL_FRAME_PROCESS, 1u,
+                               &second) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc(416u, 1u, KERNEL_FRAME_PROCESS, 1u, &third) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&exhausted));
+    assert(exhausted.free_frames == 0u);
+    assert(exhausted.emergency_available_frames ==
+           KERNEL_EMERGENCY_RESERVE_FRAMES);
+
+    for (uint32_t index = 0u;
+         index < KERNEL_EMERGENCY_RESERVE_FRAMES; ++index) {
+        assert(kernel_memory_emergency_acquire(
+                   KERNEL_ALLOCATION_SITE_EMERGENCY_CLEANUP_PAGE,
+                   KERNEL_FRAME_PROCESS, 2u, &emergency[index]) ==
+               KERNEL_MEMORY_OK);
+        assert(kernel_memory_frame_allocation_site(emergency[index], &site));
+        assert(site == KERNEL_ALLOCATION_SITE_EMERGENCY_CLEANUP_PAGE);
+        assert(kernel_memory_retain(emergency[index], 1u, 2u) ==
+               KERNEL_MEMORY_BUSY);
+        assert(kernel_memory_pin(emergency[index], 1u, 2u) ==
+               KERNEL_MEMORY_BUSY);
+    }
+    assert(kernel_memory_emergency_acquire(
+               KERNEL_ALLOCATION_SITE_EMERGENCY_CLEANUP_PAGE,
+               KERNEL_FRAME_PROCESS, 2u, &extra) ==
+           KERNEL_MEMORY_OUT_OF_MEMORY);
+    assert(kernel_memory_stats(&borrowed));
+    assert(borrowed.free_frames == 0u);
+    assert(borrowed.emergency_available_frames == 0u);
+    assert(borrowed.emergency_acquisitions ==
+           KERNEL_EMERGENCY_RESERVE_FRAMES);
+    assert(borrowed.emergency_failures == 1u);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_EMERGENCY_RESERVE, &reserve_stats));
+    assert(reserve_stats.current_units == 0u);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_EMERGENCY_CLEANUP_PAGE, &cleanup_stats));
+    assert(cleanup_stats.current_units == KERNEL_EMERGENCY_RESERVE_FRAMES);
+
+    assert(kernel_memory_release_owner(2u, &released) == KERNEL_MEMORY_OK);
+    assert(released == KERNEL_EMERGENCY_RESERVE_FRAMES);
+    assert(kernel_memory_stats(&restored));
+    assert(restored.free_frames == 0u);
+    assert(restored.emergency_available_frames ==
+           KERNEL_EMERGENCY_RESERVE_FRAMES);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_EMERGENCY_RESERVE, &reserve_stats));
+    assert(reserve_stats.current_units == KERNEL_EMERGENCY_RESERVE_FRAMES);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_EMERGENCY_CLEANUP_PAGE, &cleanup_stats));
+    assert(cleanup_stats.current_units == 0u);
+
+    assert(kernel_memory_release_owner(1u, &released) == KERNEL_MEMORY_OK);
+    assert(released == baseline.free_frames);
+    assert(kernel_memory_stats(&restored));
+    assert(restored.free_frames == baseline.free_frames);
+    assert(restored.emergency_available_frames ==
+           baseline.emergency_available_frames);
+    assert(kernel_allocation_valid());
+    (void)first;
+    (void)second;
+    (void)third;
+}
+
+static void test_tagged_failure_injection_and_boot_retirement(void)
+{
+    AstraBootInfo info;
+    KernelAllocationStats boot_stats;
+    KernelAllocationSite site;
+    KernelMemoryStats before;
+    KernelMemoryStats after;
+    uint32_t physical = 0u;
+
+    make_valid_info(&info);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&before));
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_PROCESS_CODE_PAGE, 1u);
+    assert(kernel_memory_alloc_zeroed_tagged(
+               KERNEL_ALLOCATION_SITE_PROCESS_CODE_PAGE, 1u, 1u,
+               KERNEL_FRAME_PROCESS, 7u, &physical) ==
+           KERNEL_MEMORY_OUT_OF_MEMORY);
+    assert(kernel_memory_stats(&after));
+    assert(after.free_frames == before.free_frames);
+    assert(after.owner_slots_used == before.owner_slots_used);
+
+    physical = 0xdeadbeefu;
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_BOOT_SELFTEST_PAGE, 1u);
+    assert(kernel_memory_alloc_tagged(
+               KERNEL_ALLOCATION_SITE_BOOT_SELFTEST_PAGE, 1u, 1u,
+               KERNEL_FRAME_PROCESS, 8u, &physical) ==
+           KERNEL_MEMORY_OUT_OF_MEMORY);
+    assert(physical == 0u);
+    physical = 0xdeadbeefu;
+    kernel_allocation_test_fail_global(1u);
+    assert(kernel_memory_alloc_tagged(
+               KERNEL_ALLOCATION_SITE_BOOT_SELFTEST_PAGE, 1u, 1u,
+               KERNEL_FRAME_PROCESS, 8u, &physical) ==
+           KERNEL_MEMORY_OUT_OF_MEMORY);
+    assert(physical == 0u);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_BOOT_SELFTEST_PAGE, &boot_stats));
+    assert(boot_stats.current_units == 0u);
+    assert(boot_stats.injected_failures == 2u);
+
+    assert(kernel_memory_alloc_tagged(
+               KERNEL_ALLOCATION_SITE_BOOT_SELFTEST_PAGE, 1u, 1u,
+               KERNEL_FRAME_PROCESS, 8u, &physical) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_frame_allocation_site(physical, &site));
+    assert(site == KERNEL_ALLOCATION_SITE_BOOT_SELFTEST_PAGE);
+    assert(!kernel_allocation_retire_boot());
+    assert(kernel_memory_release(physical, 1u, 8u) == KERNEL_MEMORY_OK);
+    assert(kernel_allocation_retire_boot());
+    assert(kernel_memory_alloc_tagged(
+               KERNEL_ALLOCATION_SITE_BOOT_SELFTEST_PAGE, 1u, 1u,
+               KERNEL_FRAME_PROCESS, 8u, &physical) ==
+           KERNEL_MEMORY_OUT_OF_MEMORY);
+    assert(kernel_memory_stats(&after));
+    assert(after.free_frames == before.free_frames);
+    assert(kernel_allocation_valid());
+}
+
+static void test_emergency_site_injection_is_atomic(void)
+{
+    static const KernelAllocationSite sites[] = {
+        KERNEL_ALLOCATION_SITE_EMERGENCY_FAULT_PAGE,
+        KERNEL_ALLOCATION_SITE_EMERGENCY_CLEANUP_PAGE,
+        KERNEL_ALLOCATION_SITE_EMERGENCY_LOG_PAGE
+    };
+    AstraBootInfo info;
+    KernelAllocationStats allocation_stats;
+    KernelMemoryStats baseline;
+    KernelMemoryStats after;
+
+    make_valid_info(&info);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&baseline));
+    for (uint32_t index = 0u;
+         index < sizeof(sites) / sizeof(sites[0]); ++index) {
+        uint32_t physical = 0xdeadbeefu;
+
+        kernel_allocation_test_fail_site(sites[index], 1u);
+        assert(kernel_memory_emergency_acquire(
+                   sites[index], KERNEL_FRAME_PROCESS, 71u + index,
+                   &physical) == KERNEL_MEMORY_OUT_OF_MEMORY);
+        assert(physical == 0u);
+        assert(kernel_memory_stats(&after));
+        assert(after.free_frames == baseline.free_frames);
+        assert(after.emergency_available_frames ==
+               baseline.emergency_available_frames);
+        assert(after.owner_slots_used == baseline.owner_slots_used);
+        assert(kernel_allocation_site_stats(sites[index],
+                                            &allocation_stats));
+        assert(allocation_stats.current_units == 0u);
+        assert(allocation_stats.injected_failures == 1u);
+
+        physical = 0xdeadbeefu;
+        kernel_allocation_test_fail_global(1u);
+        assert(kernel_memory_emergency_acquire(
+                   sites[index], KERNEL_FRAME_PROCESS, 71u + index,
+                   &physical) == KERNEL_MEMORY_OUT_OF_MEMORY);
+        assert(physical == 0u);
+        assert(kernel_memory_stats(&after));
+        assert(after.emergency_available_frames ==
+               baseline.emergency_available_frames);
+        assert(kernel_allocation_site_stats(sites[index],
+                                            &allocation_stats));
+        assert(allocation_stats.current_units == 0u);
+        assert(allocation_stats.injected_failures == 2u);
+    }
+    assert(kernel_allocation_valid());
+}
+
+static void test_retained_log_is_allocation_free_under_pressure(void)
+{
+    union {
+        uint32_t align;
+        uint8_t bytes[64];
+    } storage;
+    AstraBootInfo info;
+    AstraEarlyLog *log = (AstraEarlyLog *)(void *)storage.bytes;
+    KernelAllocationStats generic_stats;
+    KernelMemoryStats baseline;
+    KernelMemoryStats after;
+    uint32_t physical = 0xdeadbeefu;
+
+    make_valid_info(&info);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    memset(&storage, 0, sizeof(storage));
+    astra_early_log_init(log, sizeof(storage));
+    assert(kernel_memory_stats(&baseline));
+
+    kernel_allocation_test_fail_global(1u);
+    astra_early_log_puts(log, "K9 pressure log\n");
+    assert(astra_early_log_validate(log, sizeof(storage)));
+    assert(log->write_offset == 16u);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 81u,
+                               &physical) == KERNEL_MEMORY_OUT_OF_MEMORY);
+    assert(physical == 0u);
+    assert(kernel_memory_stats(&after));
+    assert(after.free_frames == baseline.free_frames);
+    assert(after.emergency_available_frames ==
+           baseline.emergency_available_frames);
+
+    physical = 0xdeadbeefu;
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_MEMORY_GENERIC, 1u);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 81u,
+                               &physical) == KERNEL_MEMORY_OUT_OF_MEMORY);
+    assert(physical == 0u);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_MEMORY_GENERIC, &generic_stats));
+    assert(generic_stats.current_units == 0u);
+    assert(generic_stats.injected_failures == 2u);
+    assert(kernel_allocation_valid());
+}
+
 int main(void)
 {
     test_initial_map();
@@ -389,6 +637,10 @@ int main(void)
     test_reinit_discards_stale_dynamic_metadata();
     test_scattered_page_allocation_is_atomic();
     test_exhaustion_and_checked_ranges();
+    test_emergency_reserve_isolated_and_replenished();
+    test_emergency_site_injection_is_atomic();
+    test_retained_log_is_allocation_free_under_pressure();
+    test_tagged_failure_injection_and_boot_retirement();
     puts("KERNEL MEMORY PASS");
     return 0;
 }

@@ -2,6 +2,7 @@
 
 #include "generation.h"
 #include "memory.h"
+#include "object_cache.h"
 
 #include <stddef.h>
 
@@ -20,6 +21,9 @@ typedef struct KernelDmaSlot {
 } KernelDmaSlot;
 
 static KernelDmaSlot slots[KERNEL_DMA_MAX_BUFFERS];
+static KernelObjectCache dma_cache;
+static uint32_t dma_cache_bitmap[
+    KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_DMA_MAX_BUFFERS)];
 static KernelDmaStats dma_stats;
 static bool initialized;
 
@@ -80,6 +84,9 @@ static KernelDmaStatus release_slot(KernelDmaSlot *slot)
     if (status != KERNEL_MEMORY_OK)
         return KERNEL_DMA_CORRUPT;
     clear_slot(slot);
+    if (kernel_object_cache_release(&dma_cache, slot) !=
+        KERNEL_OBJECT_CACHE_OK)
+        return KERNEL_DMA_CORRUPT;
     --dma_stats.live_buffers;
     return KERNEL_DMA_OK;
 }
@@ -143,6 +150,12 @@ void kernel_dma_init(void)
 {
     initialized = false;
     reset_stats();
+    if (!kernel_object_cache_init(
+            &dma_cache, slots, sizeof(slots[0]), KERNEL_DMA_MAX_BUFFERS,
+            dma_cache_bitmap,
+            KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_DMA_MAX_BUFFERS),
+            KERNEL_ALLOCATION_SITE_DMA_OBJECT))
+        return;
     for (uint32_t index = 0u; index < KERNEL_DMA_MAX_BUFFERS; ++index) {
         slots[index].generation = 0u;
         clear_slot(&slots[index]);
@@ -159,30 +172,39 @@ KernelDmaStatus kernel_dma_create(uint32_t owner, uint32_t byte_size,
     uint32_t frame_count;
     uint32_t physical_base;
     KernelMemoryStatus memory_status;
+    void *raw_slot;
+    uint16_t slot_index;
+    KernelObjectCacheStatus cache_status;
 
     if (!initialized || owner == KERNEL_OWNER_NONE || byte_size == 0u ||
         alignment_frames == 0u || handle == NULL)
         return KERNEL_DMA_INVALID_ARGUMENT;
+    *handle = KERNEL_DMA_HANDLE_INVALID;
     rounded_size = (uint64_t)byte_size + KERNEL_PAGE_SIZE - 1u;
     frame_count = (uint32_t)(rounded_size >> KERNEL_PAGE_SHIFT);
     if (frame_count == 0u || frame_count > KERNEL_MAX_FRAMES)
         return KERNEL_DMA_INVALID_ARGUMENT;
 
-    for (uint32_t index = 0u; index < KERNEL_DMA_MAX_BUFFERS; ++index) {
-        if (slots[index].state == KERNEL_DMA_FREE) {
-            slot = &slots[index];
-            break;
-        }
-    }
-    if (slot == NULL) {
+    cache_status = kernel_object_cache_claim(
+        &dma_cache, owner, &raw_slot, &slot_index);
+    if (cache_status == KERNEL_OBJECT_CACHE_UNAVAILABLE) {
         ++dma_stats.create_failures;
         return KERNEL_DMA_NO_RESOURCES;
     }
+    if (cache_status != KERNEL_OBJECT_CACHE_OK ||
+        slot_index >= KERNEL_DMA_MAX_BUFFERS)
+        return KERNEL_DMA_CORRUPT;
+    slot = raw_slot;
+    if (slot->state != KERNEL_DMA_FREE)
+        return KERNEL_DMA_CORRUPT;
 
-    memory_status = kernel_memory_alloc(frame_count, alignment_frames,
-                                        KERNEL_FRAME_DMA, owner,
-                                        &physical_base);
+    memory_status = kernel_memory_alloc_tagged(
+        KERNEL_ALLOCATION_SITE_DMA_PAGES, frame_count, alignment_frames,
+        KERNEL_FRAME_DMA, owner, &physical_base);
     if (memory_status != KERNEL_MEMORY_OK) {
+        if (kernel_object_cache_release(&dma_cache, slot) !=
+            KERNEL_OBJECT_CACHE_OK)
+            return KERNEL_DMA_CORRUPT;
         ++dma_stats.create_failures;
         return memory_status == KERNEL_MEMORY_OUT_OF_MEMORY ?
             KERNEL_DMA_OUT_OF_MEMORY : KERNEL_DMA_INVALID_ARGUMENT;
@@ -363,4 +385,21 @@ bool kernel_dma_stats(KernelDmaStats *result)
     result->stale_completions = dma_stats.stale_completions;
     result->create_failures = dma_stats.create_failures;
     return true;
+}
+
+bool kernel_dma_valid(void)
+{
+    uint32_t live = 0u;
+
+    if (!initialized || !kernel_object_cache_valid(&dma_cache))
+        return false;
+    for (uint16_t index = 0u; index < KERNEL_DMA_MAX_BUFFERS; ++index) {
+        bool claimed = kernel_object_cache_slot_claimed(&dma_cache, index);
+
+        if (claimed != (slots[index].state != KERNEL_DMA_FREE))
+            return false;
+        if (claimed)
+            ++live;
+    }
+    return live == dma_stats.live_buffers;
 }

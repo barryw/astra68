@@ -83,5 +83,6 @@ KernelDmaStatus kernel_dma_revoke_owner(uint32_t owner,
                                         uint32_t *released_buffers,
                                         uint32_t *deferred_buffers);
 bool kernel_dma_stats(KernelDmaStats *stats);
+bool kernel_dma_valid(void);
 
 #endif

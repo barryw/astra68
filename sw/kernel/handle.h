@@ -56,6 +56,7 @@ typedef struct KernelHandleEntry {
 
 typedef struct KernelHandleTable {
     KernelHandleEntry entries[KERNEL_HANDLE_MAX_ENTRIES];
+    uint32_t owner;
 } KernelHandleTable;
 
 typedef struct KernelHandleTransferBatch {
@@ -89,6 +90,7 @@ typedef struct KernelHandleTransferStats {
 
 void kernel_handle_transfer_pool_init(void);
 void kernel_handle_table_init(KernelHandleTable *table);
+bool kernel_handle_table_set_owner(KernelHandleTable *table, uint32_t owner);
 KernelHandleStatus kernel_handle_install(KernelHandleTable *table,
                                          KernelObjectType type,
                                          uint32_t rights, void *object,
