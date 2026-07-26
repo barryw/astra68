@@ -1,6 +1,6 @@
 # K9 Memory-Pressure Contract
 
-Status: normative implementation contract for K9
+Status: normative and hardware-qualified implementation contract for K9
 
 K9 hardens the current bounded kernel. It does not enlarge the development
 limits and it does not introduce the future general-purpose kernel heap. The
@@ -204,3 +204,40 @@ K9 is accepted only when all of the following are automated:
    validation all pass after exhaustion, close, peer death, and owner death.
 7. Host, Musashi, full RTL, and repeated routed ULX3S boots pass. K1-K8 cycle
    ceilings and the 675,000,000-cycle 1,000-iteration gate do not regress.
+
+## Qualification
+
+K9 is accepted from exact clean source
+`03660014d7af6d3662504fc076700f04929117ab`, built with
+`SOURCE_DATE_EPOCH=1785033792`. Immutable archive SHA-256 is
+`db884481ef58f27ed4be2823c57a43089b24d140c160d1f512b89f89547151a5`.
+
+All 21 host suites pass normal, ASan/UBSan/leak, and GCC `-fanalyzer` gates.
+The allocation suite reaches all 22 injectable sites through both global-Nth
+and site-Nth selectors. Boot retirement, exact reserve exhaustion, ordinary
+reserve exclusion, owner return, cache/ledger agreement, zero-free process
+cleanup, and allocation-free retained logging all restore their captured
+baselines. NDK, Rust, shared architecture, and Harte gates also pass.
+
+Normal Musashi reaches every K1-K8 marker in 28,000,288 cycles with 32/32
+reserve pages. The exact 1,000-iteration workload completes in 603,007,142 of
+675,000,000 cycles and returns to 7,954 free ordinary pages with zero overruns.
+The first implementation checkpoint was rejected when exhaustive successful
+path validation pushed the generic syscall metric to 66,897 cycles against its
+50,000 limit. The retained implementation moves exhaustive validation to host
+and milestone checks, uses transition-maintained production state, and raises
+no budget.
+
+A fresh Beast Verilator 5.047 full-SoC run passes pin-level 64 KiB BIST at
+115.02 MB/s, the allocation milestone, exact cleanup, K1-K8, and all 20 cycle
+gates. The exact complete production route is build `7DDD9C03`; it has zero
+SCCs and passes the 12.5 MHz CPU and 60 MHz SDRAM constraints without a waiver.
+Bitstream SHA-256 is
+`cf1adbe78cb9f486b3d2fbae36ada91023fda36d8cb4b0ffec7df5828e3c6bf1`.
+
+NUC preserved the existing SD volume and changed only `/ASTRA68.ROM`. Two
+independent volatile loads of the exact bitstream pass full 32 MiB POST/BIST,
+the 32/32 reserve, runtime-ledger validation, K1-K8, all cycle gates, and zero
+overruns. The second boot has physical HDMI evidence. Persistent FPGA flash
+remains exact rollback build `25D9CB8E`; it was not rewritten during K9
+qualification.

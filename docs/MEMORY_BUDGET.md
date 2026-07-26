@@ -1,6 +1,6 @@
 # Axiom kernel memory budget
 
-Status: measured hardware-qualified K8 release accounting (2026-07-25)
+Status: measured hardware-qualified K9 release accounting (2026-07-26)
 
 The machine has exactly 32 MiB of SDRAM. Every static pool, frame, mapping,
 queue, pin, and graphics reservation is reported separately. A budget is not
@@ -317,6 +317,55 @@ the existing fixed wait-registration pool.
 The exact flat-binary SHA-256 is
 `ea879e760c48342f535ee9aee65bf1bab97e855c2e576579c2ab80ef615ba55b`.
 
+## K9 implemented static budget
+
+The exact hardware-qualified MC68030 K9 release build reports:
+
+| ELF section | Bytes |
+|---|---:|
+| `.text.entry` | 80 |
+| `.vectors` | 1,024 |
+| `.text` plus read-only data | 88,084 |
+| `.data` | 0 |
+| `.bss` | 43,800 |
+| `.noinit` | 111,232 |
+| interrupt-stack section including alignment and guard | 12,880 |
+| worker MSP section including guard | 12,288 |
+| 16 guarded thread supervisor-stack slots | 196,608 |
+| total through `_kernel_memory_end` | 466,944 |
+| flat kernel binary | 90,132 |
+
+The image ends at `0x02082000` and leaves exactly 57,344 bytes in the fixed
+512 KiB kernel reservation. K9 adds 8,364 flat-binary bytes, 1,584 BSS bytes,
+and 9,216 no-init bytes over K8. Linker alignment makes that 10,800-byte
+fixed-state addition consume four additional 4 KiB pages in the reserved
+kernel region.
+
+The complete fixed-state delta is accounted as follows:
+
+| Incremental K9 state | Bytes |
+|---|---:|
+| per-frame stable allocation-site IDs | 8,192 |
+| emergency-reserve membership bitmap | 1,024 |
+| 11 typed-cache descriptors | 286 |
+| typed-cache allocation bitmaps | 76 |
+| site records, subsystem aggregates, and injection selector | 1,200 |
+| target alignment | 22 |
+| total fixed-state increase | 10,800 |
+
+Exactly 32 ordinary physical frames, 131,072 bytes, are transferred into the
+emergency reserve during memory initialization. This is committed physical
+capacity rather than image or static-object storage. It changes the normal
+post-boot free count from K8's 7,992 pages to 7,960 pages while reserve
+diagnostics independently report 32/32 available. The exact 1,000-iteration
+K9 workload returns to a 7,954-page live-workload baseline after every
+iteration.
+
+The flat-kernel SHA-256 is
+`6d9397b044e133bb9e04750d78cd46e3b32ea1e418d553e44c9e97f958b6d823`;
+the 124,028-byte ELF SHA-256 is
+`293261fef2378ae767d3f1f6edb4730679fd40ccec28a2dcc8ab944366d959b0`.
+
 Major current static objects are:
 
 | Object | Count x size | Bytes |
@@ -325,7 +374,7 @@ Major current static objects are:
 | per-frame owner links | 2 x 8,192 x 2 | 32,768 |
 | owner ledgers | 64 x 8 | 512 |
 | allocator bitmaps | 3 x 1,024 | 3,072 |
-| process slots | 4 x 536 | 2,144 |
+| process slots | 4 x 540 | 2,160 |
 | thread records | 16 x 180 | 2,880 |
 | ready queues | 32 x two 16-bit heads/tails plus bitmap/count | 136 |
 | deadline arrays | positions 32 + heap 32 + results 64 + cycles 128 + count 2 | 258 |
@@ -340,6 +389,10 @@ Major current static objects are:
 | shared-area mapping records | 32 x 24 | 768 |
 | bulk-ring records | 16 x 80 | 1,280 |
 | performance metric records | 20 x 36 | 720 |
+| typed-cache descriptors and bitmaps | 286 + 76 | 362 |
+| frame allocation-site ledger | 8,192 x 1 | 8,192 |
+| emergency-reserve membership bitmap | 8,192 bits | 1,024 |
+| allocation sites, subsystem totals, and selector | fixed | 1,200 |
 | DMA slots | 32 x 36 | 1,152 |
 | block slots | 4 x 64 | 256 |
 | cached-user-frame class/count ledger | 8,192 x 1 | 8,192 |
@@ -392,11 +445,11 @@ build report before merge.
 
 - K1 interrupt stack (ISP): 8 KiB plus one unmapped 4 KiB guard.
 - K1 deferred-worker master stack (MSP): 8 KiB plus one unmapped 4 KiB guard.
-- K7 user stack: one mapped 4 KiB page per live thread, with adjacent stack
+- K9 user stack: one mapped 4 KiB page per live thread, with adjacent stack
   bases spaced by 8 KiB so every stack has an unmapped 4 KiB guard interval.
-  The 1,000-cycle K5 soak holds two survivor stacks and repeatedly allocates a
-  third, retaining an exact 7,986-free-page baseline after every teardown.
-- Current K7 supervisor stack: one guarded 8 KiB stack for each of 16 thread
+  The 1,000-iteration K9 soak retains an exact 7,954-free-page live-workload
+  baseline after every teardown.
+- Current K9 supervisor stack: one guarded 8 KiB stack for each of 16 thread
   slots. The static arena reserves 192 KiB, of which 128 KiB is mapped stack
   payload and 64 KiB is unmapped guard space. Full RTL and both routed-hardware
   boots report a maximum observed use of 680 bytes.
@@ -405,11 +458,11 @@ build report before merge.
   preserve the same fault and high-water tests.
 - 128 simultaneous thread stacks would consume 1 MiB; ordinary process quotas
   prevent every process from reaching the global thread limit independently.
-- K7 user threads enter on their own guarded supervisor stacks. Public
+- K9 user threads enter on their own guarded supervisor stacks. Public
   `WAIT_ONE` and `WAIT_MULTIPLE` block on events, semaphores, timers, thread
   death, or process death with an absolute deadline and fixed registrations.
 
-K7 charges thread resources in distinct units rather than hiding them in a
+K9 charges thread resources in distinct units rather than hiding them in a
 single count:
 
 | Charge | Per retained/live thread | Release point |
@@ -419,9 +472,9 @@ single count:
 | user guard | one unmapped 4 KiB logical page while live | deferred worker after death |
 | supervisor stack | two 4 KiB pages from the fixed arena | death plus final handle close |
 | supervisor guard | one unmapped 4 KiB page from the fixed arena | death plus final handle close |
-| handle | one 24-byte development entry in the owning process | `CLOSE` or process teardown |
+| handle | one 28-byte development entry in the owning process | `CLOSE` or process teardown |
 
-The K7 qualification cap is 16 global thread objects and 15 per process. A
+The K9 qualification cap is 16 global thread objects and 15 per process. A
 dead thread with an open handle intentionally retains 12 KiB of the fixed
 supervisor arena and its record, but no user physical page. These retained
 charges are bounded and visible; they are not classified as leaks.
@@ -467,3 +520,11 @@ failure count, and owner. Qualification must prove that after cache reclaim and
 ordinary allocation rejection, the emergency reserve can still complete one
 maximum fault, close a maximum-size handle table, drain peer-death IPC, write a
 panic record, and keep input/display/debugger services schedulable.
+
+K9 implements and qualifies the kernel mechanism: all 22 external allocation
+sites are deterministically injectable, zero-free user-fault/process cleanup
+returns every object and frame to baseline, all 32 reserve pages remain
+isolated from ordinary allocation, and retained logging remains
+allocation-free. Disposable user-service caches, pressure notification, input
+and display service prioritization, and offender termination policy remain
+future userspace/kernel policy and are not claimed by this gate.

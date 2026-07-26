@@ -240,7 +240,7 @@ state. Process death removes all of its threads from ready and wait queues
 before deferred handle/address-space/frame destruction; thread records are not
 reusable until that destruction completes.
 
-Current K8 retains K6's sequence-checked atomic block, priority/FIFO wake-one
+Current K9 retains K6's sequence-checked atomic block, priority/FIFO wake-one
 and wake-all, handle-backed auto/manual events and semaphores, signed absolute
 monotonic-nanosecond deadlines, explicit cancellation, and immediate
 higher-priority handoff on signal or timeout. Timeout, signal, cancellation,

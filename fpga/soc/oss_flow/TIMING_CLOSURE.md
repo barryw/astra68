@@ -3779,3 +3779,145 @@ resources remain 66,523 TRELLIS_COMB and 25,565 FFs. The unchanged route passes
 at 15.058201 MHz CPU, 66.907532 MHz SDRAM, 79.693970 MHz USB, 53.267990 MHz
 pixel, and 289.771088 MHz HDMI shift. Persistent FPGA flash remains exact build
 `25D9CB8E`; K8 is loaded from the SD ROM under restored read-only AstraHost.
+
+### K9 memory-pressure exact route and hardware promotion (2026-07-26)
+
+K9 is exact clean source
+`03660014d7af6d3662504fc076700f04929117ab`, built with
+`SOURCE_DATE_EPOCH=1785033792`. Immutable archive
+`/tmp/astra68-k9-0366001.tar` is 19,230,720 bytes with SHA-256
+`db884481ef58f27ed4be2823c57a43089b24d140c160d1f512b89f89547151a5`
+and was independently extracted as `/tmp/astra68-k9-0366001` on Beast and
+NUC. The retained implementation supersedes `a2ae8c2...`: that checkpoint ran
+exhaustive cache and allocation-ledger validators during successful
+`RING_CREATE`, producing a 66,897-cycle generic syscall against the unchanged
+50,000-cycle limit. Exact commit `03660014...` keeps exhaustive validation in
+host and milestone gates and uses transition-maintained production state. No
+latency budget or correctness invariant was relaxed.
+
+All 21 host suites, GCC analyzer, ASan/UBSan/leak, NDK, Rust, 90 shared unit
+tests, 30 Musashi/RTL architecture executions, and both Harte smoke adapters
+pass. Normal Musashi reaches K1-K8 with the emergency reserve at 32/32 in
+28,000,288 cycles. The exact 1,000-iteration workload finishes in 603,007,142
+of 675,000,000 cycles, returns to 7,954 free ordinary pages, and reports zero
+overruns.
+
+A clean Beast Verilator 5.047 full-SoC build and pin-level run pass 64 KiB BIST
+at 115.02 MB/s, exact K9 allocator/cache/reserve cleanup, K1-K8, and every one
+of the 20 retained performance gates. The measured maxima are:
+
+| Path | Maximum cycles | Limit |
+|---|---:|---:|
+| syscall | 42,159 | 50,000 |
+| timer IRQ | 27,945 | 50,000 |
+| user-fault dispatch | 37,590 | 125,000 |
+| scheduler selection | 1,495 | 10,000 |
+| same-address-space switch | 3,176 | 15,000 |
+| cross-address-space switch | 4,379 | 50,000 |
+| wait block | 4,805 | 15,000 |
+| wake | 7,837 | 15,000 |
+| deadline expiry | 10,149 | 20,000 |
+| thread create | 140,439 | 150,000 |
+| thread exit | 26,013 | 50,000 |
+| deferred reap | 31,525 | 125,000 |
+| wait-set block | 6,311 | 50,000 |
+| wait-set wake | 10,021 | 50,000 |
+| port send | 21,221 | 25,000 |
+| port receive | 24,823 | 30,000 |
+| area create | 39,914 | 250,000 |
+| area map | 78,210 | 125,000 |
+| area unmap | 75,892 | 100,000 |
+| ring notify | 29,588 | 30,000 |
+
+The exact normal artifacts are:
+
+- kernel: 90,132 bytes, SHA-256
+  `6d9397b044e133bb9e04750d78cd46e3b32ea1e418d553e44c9e97f958b6d823`;
+- kernel ELF: 124,028 bytes, SHA-256
+  `293261fef2378ae767d3f1f6edb4730679fd40ccec28a2dcc8ab944366d959b0`;
+- boot payload: 101,544 bytes, CRC32 `8E57D4DA`, SHA-256
+  `996f2305477067b2793e678ec93a8a536aba10c677b343d747a05f22d445456d`;
+  and
+- packaged ROM: 101,576 bytes, SHA-256
+  `989e02cdea3722eb7a53037815d6d6bf6b67f97869f29c46cab354473e1bcddd`.
+
+The retained placement-only checkpoint uses the same source, configuration,
+and packed resources. It completes normally with checksum `0x866e48de`, but
+its unrouted estimates are 12.03/12.50 MHz for the CPU domain and
+52.23/60.00 MHz for the SDRAM domain, so both are diagnostic FAIL results.
+Shift, SD, input, pixel, and USB estimates pass. This nextpnr placement mode
+does not emit named critical endpoints: its report contains an empty
+`critical_paths` array, so the exact retained failing-cone identity is the CPU
+and SDRAM clock domains rather than an inferred cell path. Placement log
+SHA-256 is
+`3d7f4b281d676f41debf4af1fca74467b63e1855171ef656a851d7f2f5cd4f3c`;
+placement report SHA-256 is
+`d17211db5935eae724bce4d5bb653866067d3e6714ae3192d76e6bc2a30c8706`.
+Disposition: placement-only timing is rejected as release evidence. The exact
+router result below clears both misses without a constraint, source, feature,
+or floorplan change.
+
+The exact complete-feature route was run on Beast from the same immutable tree
+with Yosys 0.64+159 (`5197b9c8c`), nextpnr-ecp5
+`nextpnr-0.10-45-g98c18d7f`, GHDL 7.0.0-dev, and
+`m68k-linux-gnu-gcc` 13.3.0. Configuration is CPU `TG68K030_MMU2`, divider 0,
+SDRAM/HDMI/USB/SD/AstraHost enabled, seed 4, heap placer, router1, timing weight
+20, `-abc2`, critical floorplan, resource profile `kernel_platform_v1`, and no
+timing waiver. Build UTC is `2026-07-26T03:54:19Z`; SoC build ID is
+`7DDD9C03`.
+
+Yosys reports zero problems and zero SCCs with 53,079 LUT4s, 25,532 mapped
+FFs, 101 DP16KDs, 18 MULT18X18Ds, and 5,063 CCU2Cs. POR validation passes all
+25,536 GSR-enabled FFs. The exact route packs 66,523/83,640 TRELLIS_COMB,
+25,565 FFs, 101/208 DP16KDs, and 18/156 multipliers. The protected
+LUT-permutation gate passes 13,424 cells and 17,654 routed inputs.
+
+| Clock | Achieved MHz | Required MHz | Result |
+|---|---:|---:|---|
+| CPU | 15.058201 | 12.500000 | PASS |
+| input | 38.429024 | 25.000000 | PASS |
+| SD | 100.020004 | 20.000000 | PASS |
+| SDRAM | 66.907532 | 60.002399 | PASS |
+| USB | 79.693970 | 48.000767 | PASS |
+| pixel | 53.267990 | 27.000029 | PASS |
+| HDMI shift | 289.771088 | 135.025650 | PASS |
+
+There is no failed timing cone. SDRAM is the closest retained constrained
+margin and still passes the exact production requirement. Route artifact
+hashes are bitstream
+`cf1adbe78cb9f486b3d2fbae36ada91023fda36d8cb4b0ffec7df5828e3c6bf1`,
+routed JSON
+`1956c067536ce521b10cda7429ada2252af0b0e66f4d9e2debc6ac49caff9f18`,
+nextpnr report JSON
+`bf160c9b72f5285c3fb6f638a4818995f41a8ca67bb839047155cf875ebb55b7`,
+FPGA configuration
+`2d4683241674f13d5e0bb77769ca7fe4db8afd5f8310aeb832cc22f0fe0e95c3`,
+and stage 0
+`7de247f66f2840b26692962118778cddf074f818f08dc61966a0e153439a1820`.
+
+NUC loaded exact maintenance passthrough SHA-256
+`2b423314c35ef00fc16929aaf72f536906abba4b602bfd79ab537e4b78185471`
+only into volatile SRAM. The exact K9 provisioner application SHA-256 is
+`bac5b3935c3dcb7d173beb10732282c3b5a94586b766cffb5fa8bd5cb9f088e1`.
+It mounted the existing 244,016 MB SD volume without formatting and found
+`/ASTRA68.ROM` already matching after installation. Exact read-only production
+AstraHost application SHA-256
+`1a822cd9bb08ce9c3dfb6292017e96967b1dada34de78b27200cea22c1227e6e`
+was restored and independently verified by flash readback.
+
+Two independent volatile loads of exact bitstream `7DDD9C03` pass the real
+full-range 32 MiB POST/BIST, source/ROM identity, PMMU/user-copy isolation,
+32/32 emergency reserve, runtime allocation-ledger validation, K1-K8, and all
+20 performance gates with zero overruns. Run 1 completes in 4.022 seconds and
+reports area create/map/unmap/ring-notify at
+39,909/78,175/75,904/29,548 cycles. Run 2 completes in 3.914 seconds and
+reports 39,909/78,175/75,891/29,535. Physical HDMI for run 2 is retained as
+`docs/evidence/astra68-k9-7ddd9c03-hdmi.png`, SHA-256
+`e7b853d62ab634b7ae1ef023769493f93560007c7520687f5f39604a8b6184eb`.
+
+Disposition: K9 implementation, immutable-source reproduction, host and
+cross-backend qualification, fresh pin-level RTL, exact complete-feature
+route, SD provisioning, AstraHost restoration, two physical boots, and HDMI
+PASS. No constraint, performance budget, feature, or resource policy was
+relaxed. Persistent FPGA flash was not rewritten and remains exact rollback
+build `25D9CB8E`; exact K9 `7DDD9C03` was qualified in volatile SRAM.

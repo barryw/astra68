@@ -12,9 +12,9 @@ surface; Axiom's internal interfaces are not a module ABI.
 The kernel's normative implementation contracts are
 `KERNEL_ARCHITECTURE.md`, `MEMORY_MAP_AND_PMMU.md`, `ABI.md`,
 `LOCKING_AND_PREEMPTION.md`, `RESOURCE_OWNERSHIP_AND_FAILURES.md`,
-`MEMORY_BUDGET.md`, `SHARED_AREAS_AND_BULK_RINGS.md`, and
-`TEST_AND_FAULT_INJECTION_PLAN.md`; `STATUS.md` separates implemented evidence
-from planned work.
+`MEMORY_BUDGET.md`, `SHARED_AREAS_AND_BULK_RINGS.md`,
+`K9_MEMORY_PRESSURE.md`, and `TEST_AND_FAULT_INJECTION_PLAN.md`; `STATUS.md`
+separates implemented evidence from planned work.
 
 The product-level operating-system direction is `OS_VISION.md`. Focused but
 unimplemented userspace design lives in `USERSPACE_ARCHITECTURE.md`,
@@ -43,6 +43,12 @@ personality, zsh, or Vim currently run.
   repeatedly qualified on ULX3S. Its hardware-profile coretest also passes
   translated reads/writes, invalid-descriptor fault recovery, and write
   protection.
+- Exact K9 build `7DDD9C03` independently reroutes the complete production
+  feature set from source `03660014d7af6d3662504fc076700f04929117ab`, passes
+  every constrained clock without a waiver, and passes two ULX3S boots plus
+  physical HDMI. Persistent FPGA flash remains the qualified `25D9CB8E`
+  rollback; K9 was loaded into volatile SRAM and is not claimed as a flash
+  update.
 - Portable CPU/PMMU expectations live in `conformance/` and run through the
   canonical Musashi and RTL adapters. Do not create separate expected results
   in an adapter. White-box RTL tests remain complementary for implementation
@@ -159,6 +165,57 @@ personality, zsh, or Vim currently run.
 
 ## Current integration state
 
+- The hardware-qualified K9 memory-pressure release is exact implementation
+  commit `03660014d7af6d3662504fc076700f04929117ab`, built reproducibly with
+  `SOURCE_DATE_EPOCH=1785033792` (`2026-07-26T02:43:12Z`). Its immutable source
+  archive SHA-256 is
+  `db884481ef58f27ed4be2823c57a43089b24d140c160d1f512b89f89547151a5`
+  and is independently extracted as `/tmp/astra68-k9-0366001` on Beast and
+  NUC.
+
+  K9 places every live fixed object behind one typed cache authority, records
+  stable allocation-site IDs 1-23, and makes all 22 external allocation sites
+  injectable through both global-Nth and site-Nth selectors. It reserves
+  exactly 32 physical pages for fault, cleanup, and future monitor work;
+  ordinary allocators cannot consume them. The boot allocator retires once,
+  every allocation is charged to a subsystem ledger, and teardown remains a
+  bounded zero-allocation path. The existing object, queue, and process limits
+  are unchanged, and K9 deliberately does not add a general kernel heap.
+
+  All 21 host suites pass normally, under GCC ASan/UBSan/leak checks, and under
+  GCC `-fanalyzer`. NDK host, sanitizer, analyzer, MC68030, HTML/PDF, Rustfmt,
+  Clippy, all 15 Rust tests, all 90 shared tests, all 30 architecture adapter
+  executions, and both Harte smoke adapters pass. Normal Musashi reaches K1-K8
+  with the reserve at 32/32 in 28,000,288 cycles. The exact 1,000-iteration
+  workload completes in 603,007,142 of 675,000,000 allowed cycles, returns to
+  its 7,954-free-page baseline, and reports zero overruns. A clean Beast
+  Verilator 5.047 build and pin-level SDRAM run pass 64 KiB BIST at
+  115.02 MB/s, exact allocation cleanup, every K1-K8 marker, and all 20 fixed
+  cycle gates. No performance budget was raised.
+
+  The exact 90,132-byte kernel SHA-256 is
+  `6d9397b044e133bb9e04750d78cd46e3b32ea1e418d553e44c9e97f958b6d823`.
+  The 101,544-byte payload has CRC32 `8E57D4DA` and SHA-256
+  `996f2305477067b2793e678ec93a8a536aba10c677b343d747a05f22d445456d`;
+  the 101,576-byte package SHA-256 is
+  `989e02cdea3722eb7a53037815d6d6bf6b67f97869f29c46cab354473e1bcddd`.
+
+  The complete exact route reports build `7DDD9C03`, zero SCCs, 53,079 LUT4s,
+  25,532 mapped FFs, 101 DP16KDs, and 18 multipliers. It packs 66,523
+  TRELLIS_COMB and 25,565 FFs and passes at 15.058201 MHz CPU, 66.907532 MHz
+  SDRAM, 79.693970 MHz USB, 53.267990 MHz pixel, and 289.771088 MHz HDMI shift.
+  The retained placement-only estimate misses CPU/SDRAM at 12.03/52.23 MHz;
+  it is diagnostic, and the exact route resolves both domains without a source,
+  constraint, feature, or floorplan change.
+  Exact bitstream SHA-256 is
+  `cf1adbe78cb9f486b3d2fbae36ada91023fda36d8cb4b0ffec7df5828e3c6bf1`.
+  NUC preserved the existing 244,016 MB card, changed only `/ASTRA68.ROM`,
+  independently verified it, and restored exact read-only AstraHost. Two
+  independent volatile ULX3S loads pass full 32 MiB POST/BIST, exact source and
+  ROM identities, the 32/32 reserve, the allocation ledger, K1-K8, and every
+  cycle gate with zero overruns in 4.022 and 3.914 seconds. The second run also
+  has retained physical HDMI evidence. Persistent FPGA flash remains exact
+  build `25D9CB8E`. K9 is current; K8 is its qualified rollback.
 - The hardware-qualified K8 shared-area and bounded bulk-ring release is exact
   commit `56bd1770c834205a4dccc42efb61552a77647988`, built reproducibly with
   `SOURCE_DATE_EPOCH=1785023940`. Its immutable source archive SHA-256 is
@@ -195,8 +252,8 @@ personality, zsh, or Vim currently run.
   every lifecycle count, and all 20 budgets with zero overruns. Hardware run 1
   measures create/map/unmap/notify at 37,763/56,091/71,263/29,416 cycles; run 2
   measures 37,742/56,106/71,263/29,416. No RTL, route, resource, clock, or
-  persistent FPGA-flash result changed. K8 is current; K7 is its qualified
-  rollback.
+  persistent FPGA-flash result changed. K8 is the hardware-qualified rollback
+  for K9; K7 is its predecessor.
 - The hardware-qualified K7 bounded message-port rollback release is based on
   commit `1529496c168975cee0fc46c7955f98ab4a1b8d2b` plus implementation patch
   SHA-256
@@ -258,10 +315,8 @@ personality, zsh, or Vim currently run.
   exact K7 counts, every K1-K7 marker, all sixteen cycle gates, and zero
   overruns. Run 1 measures port send/receive at 12,256/17,883 cycles; run 2
   measures 12,257/17,880. FPGA RTL, resources, route, clocks, persistent flash,
-  and bitstream SHA-256 remain unchanged. K7 is the hardware-qualified rollback
-  for K8; K6 is its predecessor. Typed object caches, the emergency reserve,
-  allocation tags, and system-wide failure injection are the next kernel
-  milestone without weakening fixed queue limits.
+  and bitstream SHA-256 remain unchanged. K7 is the predecessor to K8 and K9;
+  K6 is its predecessor.
 - The hardware-qualified K5 thread-lifecycle predecessor is based on commit
   `0208cb516801fe452bf59ef053d6daa0a118ee7e` plus qualified implementation
   patch SHA-256

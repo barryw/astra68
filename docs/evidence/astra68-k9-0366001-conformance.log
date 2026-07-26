@@ -1,0 +1,239 @@
+make: Entering directory '/tmp/astra68-k9-0366001/conformance'
+make -C ../third_party/musashi conformance-target
+make[1]: Entering directory '/tmp/astra68-k9-0366001/third_party/musashi'
+gcc -o  m68kmake  m68kmake.c
+./m68kmake
+
+	Musashi v4.60 68000, 68008, 68010, 68EC020, 68020, 68EC030, 68030, 68EC040, 68040 emulator
+		Copyright Karl Stenerud (kstenerud@gmail.com)
+
+Generated 1967 opcode handlers from 518 primitives
+gcc -Wall -Wextra -pedantic -g -MMD -MP -c -o m68kcpu.o m68kcpu.c
+In file included from m68kcpu.c:49:
+m68kcpu.h: In function ‘m68ki_exception_trapN’:
+m68kcpu.h:2242:14: warning: unused variable ‘t’ [-Wunused-variable]
+ 2242 |         uint t = REG_IR & 0xf;
+      |              ^
+gcc -Wall -Wextra -pedantic -g -MMD -MP -c -o m68kdasm.o m68kdasm.c
+gcc -Wall -Wextra -pedantic -g -MMD -MP -c -o softfloat/softfloat.o softfloat/softfloat.c
+In file included from softfloat/softfloat.c:33:
+softfloat/../m68kcpu.h: In function ‘m68ki_exception_trapN’:
+softfloat/../m68kcpu.h:2242:14: warning: unused variable ‘t’ [-Wunused-variable]
+ 2242 |         uint t = REG_IR & 0xf;
+      |              ^
+gcc -Wall -Wextra -pedantic -g -MMD -MP -c -o astra/pmmu030.o astra/pmmu030.c
+gcc -Wall -Wextra -pedantic -g -MMD -MP -c -o m68kops.o m68kops.c
+In file included from m68kops.c:2:
+m68kcpu.h: In function ‘m68ki_exception_trapN’:
+m68kcpu.h:2242:14: warning: unused variable ‘t’ [-Wunused-variable]
+ 2242 |         uint t = REG_IR & 0xf;
+      |              ^
+m68kops.c: In function ‘m68k_op_bfchg_32_ai’:
+m68kops.c:5324:22: warning: unused variable ‘mask_byte’ [-Wunused-variable]
+ 5324 |                 uint mask_byte = 0;
+      |                      ^~~~~~~~~
+m68kops.c:5323:22: warning: unused variable ‘data_byte’ [-Wunused-variable]
+ 5323 |                 uint data_byte = 0;
+      |                      ^~~~~~~~~
+m68kops.c:5321:22: warning: unused variable ‘data_long’ [-Wunused-variable]
+ 5321 |                 uint data_long;
+      |                      ^~~~~~~~~
+m68kops.c: In function ‘m68k_op_bfchg_32_di’:
+m68kops.c:5364:22: warning: unused variable ‘mask_byte’ [-Wunused-variable]
+ 5364 |                 uint mask_byte = 0;
+      |                      ^~~~~~~~~
+m68kops.c:5363:22: warning: unused variable ‘data_byte’ [-Wunused-variable]
+ 5363 |                 uint data_byte = 0;
+      |                      ^~~~~~~~~
+m68kops.c:5361:22: warning: unused variable ‘data_long’ [-Wunused-variable]
+ 5361 |                 uint data_long;
+      |                      ^~~~~~~~~
+m68kops.c: In function ‘m68k_op_bfchg_32_ix’:
+m68kops.c:5404:22: warning: unused variable ‘mask_byte’ [-Wunused-variable]
+ 5404 |                 uint mask_byte = 0;
+      |                      ^~~~~~~~~
+m68kops.c:5403:22: warning: unused variable ‘data_byte’ [-Wunused-variable]
+ 5403 |                 uint data_byte = 0;
+      |                      ^~~~~~~~~
+m68kops.c:5401:22: warning: unused variable ‘data_long’ [-Wunused-variable]
+ 5401 |                 uint data_long;
+      |                      ^~~~~~~~~
+m68kops.c: In function ‘m68k_op_bfchg_32_aw’:
+m68kops.c:5444:22: warning: unused variable ‘mask_byte’ [-Wunused-variable]
+ 5444 |                 uint mask_byte = 0;
+      |                      ^~~~~~~~~
+m68kops.c:5443:22: warning: unused variable ‘data_byte’ [-Wunused-variable]
+ 5443 |                 uint data_byte = 0;
+      |                      ^~~~~~~~~
+m68kops.c:5441:22: warning: unused variable ‘data_long’ [-Wunused-variable]
+ 5441 |                 uint data_long;
+      |                      ^~~~~~~~~
+m68kops.c: In function ‘m68k_op_bfchg_32_al’:
+m68kops.c:5484:22: warning: unused variable ‘mask_byte’ [-Wunused-variable]
+ 5484 |                 uint mask_byte = 0;
+      |                      ^~~~~~~~~
+m68kops.c:5483:22: warning: unused variable ‘data_byte’ [-Wunused-variable]
+ 5483 |                 uint data_byte = 0;
+      |                      ^~~~~~~~~
+m68kops.c:5481:22: warning: unused variable ‘data_long’ [-Wunused-variable]
+ 5481 |                 uint data_long;
+      |                      ^~~~~~~~~
+m68kops.c: In function ‘m68k_op_bfclr_32_ai’:
+m68kops.c:5559:22: warning: unused variable ‘mask_byte’ [-Wunused-variable]
+ 5559 |                 uint mask_byte = 0;
+      |                      ^~~~~~~~~
+m68kops.c: In function ‘m68k_op_bfclr_32_di’:
+m68kops.c:5597:22: warning: unused variable ‘mask_byte’ [-Wunused-variable]
+ 5597 |                 uint mask_byte = 0;
+      |                      ^~~~~~~~~
+m68kops.c: In function ‘m68k_op_bfclr_32_ix’:
+m68kops.c:5635:22: warning: unused variable ‘mask_byte’ [-Wunused-variable]
+ 5635 |                 uint mask_byte = 0;
+      |                      ^~~~~~~~~
+m68kops.c: In function ‘m68k_op_bfclr_32_aw’:
+m68kops.c:5673:22: warning: unused variable ‘mask_byte’ [-Wunused-variable]
+ 5673 |                 uint mask_byte = 0;
+      |                      ^~~~~~~~~
+m68kops.c: In function ‘m68k_op_bfclr_32_al’:
+m68kops.c:5711:22: warning: unused variable ‘mask_byte’ [-Wunused-variable]
+ 5711 |                 uint mask_byte = 0;
+      |                      ^~~~~~~~~
+m68kops.c: In function ‘m68ki_build_opcode_table’:
+m68kops.c:36445:13: warning: unused variable ‘cycle_cost’ [-Wunused-variable]
+36445 |         int cycle_cost;
+      |             ^~~~~~~~~~
+mkdir -p astra/build
+gcc -Wall -Wextra -pedantic -g -std=c11 -o astra/build/astra_conformance_target ../../conformance/targets/musashi_worker.c m68kcpu.o m68kdasm.o softfloat/softfloat.o astra/pmmu030.o m68kops.o -I. -lm
+make[1]: Leaving directory '/tmp/astra68-k9-0366001/third_party/musashi'
+make -C rtl
+make[1]: Entering directory '/tmp/astra68-k9-0366001/conformance/rtl'
+mkdir -p build
+ghdl -a --std=08 -fsynopsys --workdir=build ../../fpga/cpu/tg68k_c_030_mmu2/TG68K_Pack.vhd ../../fpga/cpu/tg68k_c_030_mmu2/TG68K_ALU.vhd ../../fpga/cpu/tg68k_c_030_mmu2/TG68K_PMMU_030.vhd ../../fpga/cpu/tg68k_c_030_mmu2/TG68K_Cache_030.vhd ../../fpga/cpu/tg68k_c_030_mmu2/TG68K_CacheCtrl_030.vhd ../../fpga/cpu/tg68k_c_030_mmu2/TG68KdotC_Kernel.vhd tb_astra_conformance.vhd
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_ALU.vhd:220:26:warning: declaration of "flags" hides port "Flags" [-Whide]
+                variable flags : std_logic_vector(3 downto 0) := (others => '0');
+                         ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_ALU.vhd:298:26:warning: declaration of "flags" hides port "Flags" [-Whide]
+                variable flags : std_logic_vector(3 downto 0) := (others => '0');
+                         ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_ALU.vhd:337:17:warning: declaration of "dividend" hides signal "dividend" [-Whide]
+                dividend      : std_logic_vector(31 downto 0);
+                ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_ALU.vhd:341:26:warning: declaration of "flags" hides port "Flags" [-Whide]
+                variable flags : std_logic_vector(3 downto 0) := current_flags;
+                         ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_ALU.vhd:368:26:warning: declaration of "flags" hides port "Flags" [-Whide]
+                variable flags : std_logic_vector(3 downto 0) := current_flags;
+                         ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_ALU.vhd:379:17:warning: declaration of "dividend" hides signal "dividend" [-Whide]
+                dividend : std_logic_vector(31 downto 0);
+                ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_ALU.vhd:383:26:warning: declaration of "flags" hides port "Flags" [-Whide]
+                variable flags        : std_logic_vector(3 downto 0) := (others => '0');
+                         ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_ALU.vhd:419:26:warning: declaration of "flags" hides port "Flags" [-Whide]
+                variable flags     : std_logic_vector(3 downto 0) := (others => '0');
+                         ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_PMMU_030.vhd:525:7:warning: declaration of "fc" hides port "fc" [-Whide]
+      fc        : in  std_logic_vector(2 downto 0);
+      ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_PMMU_030.vhd:526:7:warning: declaration of "is_insn" hides port "is_insn" [-Whide]
+      is_insn   : in  std_logic;
+      ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_PMMU_030.vhd:527:7:warning: declaration of "rw" hides port "rw" [-Whide]
+      rw        : in  std_logic;  -- '1'=read, '0'=write
+      ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_PMMU_030.vhd:528:7:warning: declaration of "rmw" hides port "rmw" [-Whide]
+      rmw       : in  std_logic;  -- read-modify-write sequence; requires TTR RWM=1
+      ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_PMMU_030.vhd:645:7:warning: declaration of "fc" hides port "fc" [-Whide]
+      fc      : in  std_logic_vector(2 downto 0);
+      ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_PMMU_030.vhd:646:7:warning: declaration of "is_insn" hides port "is_insn" [-Whide]
+      is_insn : in  std_logic;
+      ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_PMMU_030.vhd:720:28:warning: declaration of "fc" hides port "fc" [-Whide]
+                           fc   : std_logic_vector(2 downto 0);
+                           ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_PMMU_030.vhd:731:32:warning: declaration of "fc" hides port "fc" [-Whide]
+                               fc   : std_logic_vector(2 downto 0);
+                               ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_PMMU_030.vhd:831:26:warning: declaration of "tc" hides signal "TC" [-Whide]
+  function tc_total_bits(tc : std_logic_vector(31 downto 0)) return integer is
+                         ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_PMMU_030.vhd:861:30:warning: declaration of "tc" hides signal "TC" [-Whide]
+  function tc_config_invalid(tc : std_logic_vector(31 downto 0)) return boolean is
+                             ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_PMMU_030.vhd:905:26:warning: declaration of "fc" hides port "fc" [-Whide]
+                         fc : std_logic_vector(2 downto 0);
+                         ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_PMMU_030.vhd:943:5:warning: declaration of "write_protect" hides port "write_protect" [-Whide]
+    write_protect : std_logic;
+    ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_PMMU_030.vhd:974:5:warning: declaration of "write_protect" hides port "write_protect" [-Whide]
+    write_protect : std_logic;
+    ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_PMMU_030.vhd:997:5:warning: declaration of "write_protect" hides port "write_protect" [-Whide]
+    write_protect : std_logic;
+    ^
+../../fpga/cpu/tg68k_c_030_mmu2/TG68K_PMMU_030.vhd:1013:5:warning: declaration of "fc" hides port "fc" [-Whide]
+    fc : std_logic_vector(2 downto 0);
+    ^
+touch build/.analyzed
+ghdl -e --std=08 -fsynopsys --workdir=build -o build/tb_astra_conformance tb_astra_conformance
+make[1]: Leaving directory '/tmp/astra68-k9-0366001/conformance/rtl'
+PYTHONPATH=.. python3 -m pytest tests ../sw/harte/host/tests -q
+........................................................................ [ 80%]
+..................                                                       [100%]
+90 passed in 0.83s
+PYTHONPATH=.. python3 -m conformance.runner cases \
+	--report /tmp/astra68-k9-0366001-conformance/astra68-conformance-matrix.json
+TARGET musashi-68030
+PASS  cpu/abcd-valid-packed-bcd (4 cycles)
+PASS  cpu/add-long-register-carry-zero (2 cycles)
+PASS  cpu/chk-negative-value-sets-negative (40 cycles)
+PASS  cpu/chk-upper-bound-clears-negative (40 cycles)
+PASS  cpu/divs-word-overflow-clears-carry (56 cycles)
+PASS  cpu/divu-word-overflow-clears-carry (44 cycles)
+PASS  cpu/fpu-absent-line-f-vector-11 (20 cycles)
+PASS  cpu/link-a7-stacks-predecrement-value (5 cycles)
+PASS  cpu/move16-is-68040-only-vector-11 (20 cycles)
+PASS  cpu/nbcd-valid-packed-bcd (6 cycles)
+PASS  cpu/sbcd-valid-packed-bcd (4 cycles)
+PASS  pmmu/moves-sfc-dfc-fault-restart (690 cycles)
+PASS  pmmu/table-bus-fault-status (42 cycles)
+PASS  pmmu/translation-and-control-instructions (68 cycles)
+PASS  pmmu/unaligned-data-fault-format-b (92 cycles)
+TARGET_RESULT musashi-68030 total=15 passed=15 failed=0
+TARGET rtl-tg68k030-mmu2
+PASS  cpu/abcd-valid-packed-bcd (2 cycles)
+PASS  cpu/add-long-register-carry-zero (2 cycles)
+PASS  cpu/chk-negative-value-sets-negative (24 cycles)
+PASS  cpu/chk-upper-bound-clears-negative (24 cycles)
+PASS  cpu/divs-word-overflow-clears-carry (34 cycles)
+PASS  cpu/divu-word-overflow-clears-carry (34 cycles)
+PASS  cpu/fpu-absent-line-f-vector-11 (16 cycles)
+PASS  cpu/link-a7-stacks-predecrement-value (6 cycles)
+PASS  cpu/move16-is-68040-only-vector-11 (16 cycles)
+PASS  cpu/nbcd-valid-packed-bcd (2 cycles)
+PASS  cpu/sbcd-valid-packed-bcd (2 cycles)
+PASS  pmmu/moves-sfc-dfc-fault-restart (1676 cycles)
+PASS  pmmu/table-bus-fault-status (95 cycles)
+PASS  pmmu/translation-and-control-instructions (147 cycles)
+PASS  pmmu/unaligned-data-fault-format-b (231 cycles)
+TARGET_RESULT rtl-tg68k030-mmu2 total=15 passed=15 failed=0
+MATRIX_RESULT targets=2 cases=15 passed=30 failed=0 report=/tmp/astra68-k9-0366001-conformance/astra68-conformance-matrix.json
+PYTHONPATH=.. python3 ../sw/harte/host/harte_run.py \
+	--target musashi-68030 --allow-unpinned-corpus \
+	--report /tmp/astra68-k9-0366001-conformance/astra68-harte-musashi-smoke.json \
+	../sw/harte/testdata/register-smoke.json
+vectors=1 in_scope=1 skipped=0
+target=vendored-musashi-68030-pmmu-no-fpu corpus=d1e6cf9732fb
+PASS=1 FAIL=0 ATTEMPTED=1 NEXT_INDEX=1 ABORTED=no REPORT=/tmp/astra68-k9-0366001-conformance/astra68-harte-musashi-smoke.json
+PYTHONPATH=.. python3 ../sw/harte/host/harte_run.py \
+	--target rtl-tg68k030-mmu2 --allow-unpinned-corpus \
+	--report /tmp/astra68-k9-0366001-conformance/astra68-harte-rtl-smoke.json \
+	../sw/harte/testdata/register-smoke.json
+vectors=1 in_scope=1 skipped=0
+target=TG68K.C 68030/PMMU (GHDL) corpus=d1e6cf9732fb
+PASS=1 FAIL=0 ATTEMPTED=1 NEXT_INDEX=1 ABORTED=no REPORT=/tmp/astra68-k9-0366001-conformance/astra68-harte-rtl-smoke.json
+make: Leaving directory '/tmp/astra68-k9-0366001/conformance'

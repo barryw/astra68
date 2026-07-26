@@ -267,5 +267,5 @@ measured K8 pin-level maxima are 37,762 cycles for create, 56,097 for map,
 unchanged production bitstream pass full 32 MiB POST/BIST, exact source and ROM
 identity, every lifecycle count, and zero overruns. Hardware run 1 measures
 create/map/unmap/notify at 37,763/56,091/71,263/29,416 cycles; run 2 measures
-37,742/56,106/71,263/29,416. K8 is the current release; K7 remains the
-hardware-qualified rollback.
+37,742/56,106/71,263/29,416. K8 remains the hardware-qualified shared-area
+milestone and is now the rollback for K9; K7 is its predecessor.

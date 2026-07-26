@@ -75,7 +75,7 @@ and retries after the next timer interrupt. DMA completion and worker
 state-machine host tests prove that the process remains inspectable and is
 reaped exactly once after the final pin retires.
 
-The current K8 split implements the first and last parts of this order with
+The current K9 split implements the first and last parts of this order with
 separate bounded objects. Marking a process `EXITING` removes every one of its
 `CREATED`, `READY`, `RUNNING`, or `BLOCKED` threads from scheduling, removes
 each timed waiter from the fixed deadline heap, and marks them `DEAD` in one
@@ -309,15 +309,17 @@ indefinitely.
 
 ## Low-memory ownership
 
-There is no overcommit. Every page is charged before publication. A fixed
-emergency reserve is owned by the kernel and may only finish a fault, IPC
-cleanup, process death, panic logging, or debugger operation. It may not satisfy
-ordinary application allocation.
+There is no overcommit. Every page is charged before publication. K9 reserves
+exactly 32 physical pages for fault, cleanup, and log classes. Ordinary
+allocation cannot consume them; deterministic exhaustion and owner release
+restore exactly 32/32. Panic and the retained early log remain allocation-free.
 
 Pressure order is cache reclamation, service notification, rejection of
 nonessential allocation, preservation of input/display/init/debugger, then a
 documented non-system victim only as a final policy action by the system
 service. The kernel never chooses a victim through hidden heuristics.
+K9 implements the reserve and rejection mechanism; cache reclamation, service
+notification, service prioritization, and victim policy are not implemented.
 
 ## Diagnostics
 

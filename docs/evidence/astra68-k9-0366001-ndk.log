@@ -1,0 +1,59 @@
+make: Entering directory '/tmp/astra68-k9-0366001/ndk'
+rm -rf build
+m68k-linux-gnu-gcc -Iinclude -I../sw/include -m68030 -msoft-float -Os -ffreestanding -fno-builtin -std=c11 -Wall -Wextra -Werror -MMD -MP -c src/resource.c -o build/m68k/resource.o
+m68k-linux-gnu-gcc -Iinclude -I../sw/include -m68030 -msoft-float -Os -ffreestanding -fno-builtin -std=c11 -Wall -Wextra -Werror -MMD -MP -c src/area.c -o build/m68k/area.o
+m68k-linux-gnu-gcc -Iinclude -I../sw/include -m68030 -msoft-float -Os -ffreestanding -fno-builtin -std=c11 -Wall -Wextra -Werror -MMD -MP -c src/port.c -o build/m68k/port.o
+m68k-linux-gnu-gcc -Iinclude -I../sw/include -m68030 -msoft-float -Os -ffreestanding -fno-builtin -std=c11 -Wall -Wextra -Werror -MMD -MP -c src/bulk_ring.c -o build/m68k/bulk_ring.o
+m68k-linux-gnu-gcc -Iinclude -I../sw/include -m68030 -msoft-float -Os -ffreestanding -fno-builtin -std=c11 -Wall -Wextra -Werror -MMD -MP -c src/front_panel.c -o build/m68k/front_panel.o
+m68k-linux-gnu-gcc -Iinclude -I../sw/include -m68030 -msoft-float -Os -ffreestanding -fno-builtin -std=c11 -Wall -Wextra -Werror -MMD -MP -c src/font.c -o build/m68k/font.o
+m68k-linux-gnu-gcc -Iinclude -I../sw/include -m68030 -msoft-float -Os -ffreestanding -fno-builtin -std=c11 -Wall -Wextra -Werror -MMD -MP -c src/graphics.c -o build/m68k/graphics.o
+m68k-linux-gnu-ar rcs build/m68k/libastra.a build/m68k/resource.o build/m68k/area.o build/m68k/port.o build/m68k/bulk_ring.o build/m68k/front_panel.o build/m68k/font.o build/m68k/graphics.o
+cc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal src/front_panel.c tests/test_front_panel.c -o build/host/test_front_panel
+cc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal src/font.c tests/test_font.c -o build/host/test_font
+cc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal src/graphics.c tests/test_graphics.c -o build/host/test_graphics
+cc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal src/resource.c src/port.c tests/test_port.c -o build/host/test_port
+cc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal src/resource.c src/area.c tests/test_area.c -o build/host/test_area
+cc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal src/resource.c src/bulk_ring.c tests/test_bulk_ring.c -o build/host/test_bulk_ring
+./build/host/test_front_panel
+PASS Astra NDK front-panel API
+./build/host/test_font
+PASS Astra NDK font contract and unavailable backend
+./build/host/test_graphics
+PASS Astra NDK graphics contract and unavailable backend
+./build/host/test_port
+port tests: PASS
+./build/host/test_area
+NDK area tests passed
+./build/host/test_bulk_ring
+NDK bulk-ring tests passed
+cc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal -fsanitize=address,undefined -fno-omit-frame-pointer src/front_panel.c tests/test_front_panel.c -o build/host/test_front_panel_sanitize
+cc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal -fsanitize=address,undefined -fno-omit-frame-pointer src/font.c tests/test_font.c -o build/host/test_font_sanitize
+cc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal -fsanitize=address,undefined -fno-omit-frame-pointer src/graphics.c tests/test_graphics.c -o build/host/test_graphics_sanitize
+cc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal -fsanitize=address,undefined -fno-omit-frame-pointer src/resource.c src/port.c tests/test_port.c -o build/host/test_port_sanitize
+cc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal -fsanitize=address,undefined -fno-omit-frame-pointer src/resource.c src/area.c tests/test_area.c -o build/host/test_area_sanitize
+cc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal -fsanitize=address,undefined -fno-omit-frame-pointer src/resource.c src/bulk_ring.c tests/test_bulk_ring.c -o build/host/test_bulk_ring_sanitize
+./build/host/test_front_panel_sanitize
+PASS Astra NDK front-panel API
+./build/host/test_font_sanitize
+PASS Astra NDK font contract and unavailable backend
+./build/host/test_graphics_sanitize
+PASS Astra NDK graphics contract and unavailable backend
+./build/host/test_port_sanitize
+port tests: PASS
+./build/host/test_area_sanitize
+NDK area tests passed
+./build/host/test_bulk_ring_sanitize
+NDK bulk-ring tests passed
+gcc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal -fanalyzer -c src/resource.c -o build/analyzer/resource.o
+gcc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal -fanalyzer -c src/area.c -o build/analyzer/area.o
+gcc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal -fanalyzer -c src/port.c -o build/analyzer/port.o
+gcc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal -fanalyzer -c src/bulk_ring.c -o build/analyzer/bulk_ring.o
+gcc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal -fanalyzer -c src/front_panel.c -o build/analyzer/front_panel.o
+gcc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal -fanalyzer -c src/font.c -o build/analyzer/font.o
+gcc -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST -Iinclude -I../sw/include -Isrc/internal -fanalyzer -c src/graphics.c -o build/analyzer/graphics.o
+m68k-linux-gnu-gcc -Iinclude -I../sw/include -m68030 -msoft-float -Os -ffreestanding -fno-builtin -std=c11 -Wall -Wextra -Werror -c examples/front_panel.c -o build/m68k/front_panel_example.o
+m68k-linux-gnu-gcc -Iinclude -I../sw/include -m68030 -msoft-float -Os -ffreestanding -fno-builtin -std=c11 -Wall -Wextra -Werror -c examples/font_layout.c -o build/m68k/font_layout_example.o
+m68k-linux-gnu-gcc -Iinclude -I../sw/include -m68030 -msoft-float -Os -ffreestanding -fno-builtin -std=c11 -Wall -Wextra -Werror -c examples/graphics_frame.c -o build/m68k/graphics_frame_example.o
+m68k-linux-gnu-gcc -Iinclude -I../sw/include -m68030 -msoft-float -Os -ffreestanding -fno-builtin -std=c11 -Wall -Wextra -Werror -c examples/port_message.c -o build/m68k/port_message_example.o
+m68k-linux-gnu-gcc -Iinclude -I../sw/include -m68030 -msoft-float -Os -ffreestanding -fno-builtin -std=c11 -Wall -Wextra -Werror -c examples/bulk_ring.c -o build/m68k/bulk_ring_example.o
+make: Leaving directory '/tmp/astra68-k9-0366001/ndk'

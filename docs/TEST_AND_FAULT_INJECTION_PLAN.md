@@ -1,6 +1,6 @@
 # Axiom test and fault-injection plan
 
-Status: normative qualification plan, revision 0.3 (2026-07-25)
+Status: normative qualification plan, revision 0.4 (2026-07-26)
 
 No subsystem is complete because its happy path boots. Every state transition,
 capacity limit, cancellation race, and recovery path has a deterministic test.
@@ -25,7 +25,7 @@ transport, but expected initial/final state and pass criteria remain identical.
 
 The candidate must retain all of these before routing:
 
-- 20 kernel host suites, GCC `-fanalyzer`, ASan/UBSan, and leak detection;
+- 21 kernel host suites, GCC `-fanalyzer`, ASan/UBSan, and leak detection;
 - 15 AstraVM Rust tests, rustfmt, and Clippy `-D warnings`;
 - 90 shared framework tests and all 30 executions of the 15-case Musashi/RTL
   matrix;
@@ -168,6 +168,21 @@ The candidate must retain all of these before routing:
 - the K8 release-development image must pass the same complete pin-level SDRAM
   and two-load ULX3S gate from one immutable source archive, preserving the
   existing card and changing only `/ASTRA68.ROM`;
+- K9 must reach every one of the 22 injectable allocation sites through both
+  global-Nth and site-Nth controls. Each forced failure must return cache,
+  frame, handle, reference, pin, mapping, queue-byte, commit, and reserve
+  counters to the exact captured baseline;
+- K9 boot retirement must occur only with zero boot-live units, be one-way,
+  and reject a later boot-only request without changing allocator state;
+- K9 must prove ordinary allocation cannot consume any of the 32 emergency
+  pages, exhaust the reserve exactly, reject the 33rd request, and restore all
+  32 through direct release and owner teardown;
+- K9 user-fault retirement, process termination, IPC/area cleanup, and retained
+  logging must complete with zero ordinary free pages and no allocation from a
+  teardown path;
+- the K9 release image must pass a clean exact production route at 12.5 MHz CPU
+  and 60 MHz SDRAM with the complete feature set, then pass two independent
+  ULX3S loads and physical HDMI from the same immutable source identity;
 - K8 must sample syscall, timer, user-fault, scheduler-pick, same/cross-CRP,
   block, wake, deadline expiry, thread create, thread exit, and deferred thread
   reap, wait-set block/wake, port send/receive, area create/map/unmap, and ring
@@ -177,6 +192,9 @@ The candidate must retain all of these before routing:
   675,000,000 virtual machine cycles;
 - the exact 1,000-iteration Musashi K8 workload must remain under that same
   675,000,000-cycle ceiling with every one of 20 metrics sampled and zero
+  overruns;
+- the exact 1,000-iteration Musashi K9 workload must retain that ceiling,
+  return to its 7,954-page baseline, preserve all 20 limits, and report zero
   overruns;
 - a real M=1 interrupt must build exact format-0 MSP and format-1 ISP frames,
   preserve saved M, chain `RTE` through MSP, and restart a multiword
@@ -229,6 +247,16 @@ Required injection controls:
 
 Randomized tests use a printed fixed seed and operation log so every failure is
 replayable. Random malformed syscalls and messages must never panic the kernel.
+
+K9 qualifies the deterministic allocation subset with stable site IDs 1-23.
+Site 22 is the internal reserve-establishment transition and is deliberately
+not injectable; all other 22 sites pass both selectors. The host matrix proves
+each injected attempt publishes nothing and restores the complete resource
+baseline. Normal Musashi, the 1,000-iteration Musashi workload, fresh pin-level
+RTL, and two exact routed ULX3S boots then validate the enabled ledgers,
+32/32 reserve, and allocation-free cleanup on the target. Device, IRQ, random
+malformed-syscall, and future heap/service failure classes in the table remain
+separate future gates.
 
 ## State-machine suites
 
@@ -362,7 +390,7 @@ interrupt-disabled time, scheduler lock, wake-to-run latency, same/cross-CRP
 switch, syscall, copy, map/unmap, ATC miss, and device reset. The limits in
 `LOCKING_AND_PREEMPTION.md` are release failures, not informational warnings.
 
-The current K8 limits retain K7's 50,000 cycles for syscall and timer dispatch,
+The current K9 limits retain K8's 50,000 cycles for syscall and timer dispatch,
 125,000 for user-fault containment, 10,000 for scheduler selection, 15,000 for
 same-CRP switch, 50,000 for cross-CRP switch, and 15,000 each for block and
 wake. Deadline expiry is limited to 20,000 cycles; thread create, caller exit,
@@ -377,6 +405,19 @@ simulated BIST; both routed-hardware runs execute the real full-range 32 MiB
 BIST. Hardware run 1 reports 37,763/56,091/71,263/29,416 cycles; run 2 reports
 37,742/56,106/71,263/29,416. Every one of the 20 metrics has at least one
 sample and zero overruns in the clean pin-level run and both hardware runs.
+
+The first K9 checkpoint `a2ae8c2...` was rejected because exhaustive cache and
+allocation-ledger validation in successful `RING_CREATE` made the generic
+syscall sample 66,897 cycles against the unchanged 50,000-cycle limit. Exact
+source `03660014...` retains exhaustive validation in host tests and milestone
+checks while production hot paths use transition-maintained state and health
+latches. No budget changed. Its clean pin-level maxima for the 20 paths are
+42,159, 27,945, 37,590, 1,495, 3,176, 4,379, 4,805, 7,837, 10,149,
+140,439, 26,013, 31,525, 6,311, 10,021, 21,221, 24,823, 39,914, 78,210,
+75,892, and 29,588 cycles. Every metric remains below its K8 limit with zero
+overruns. Hardware run 1 reports area create/map/unmap/ring-notify at
+39,909/78,175/75,904/29,548; run 2 reports
+39,909/78,175/75,891/29,535. Both hardware runs report zero overruns.
 
 The K7 rollback's exact pin-level maxima for the retained first 16 paths are
 39,357, 27,712, 33,686, 1,476, 3,238, 4,345, 4,832, 7,947, 10,171, 119,841,
@@ -513,6 +554,35 @@ Accepted K8 evidence and SHA-256 values are:
   and
 - `docs/evidence/astra68-k8-25d9cb8e-56bd177-hw-2.log`:
   `3dab5148851e869102d89d412b35aa7a2650ac7a97cc726d861ae9adde56dd82`.
+
+Accepted K9 evidence and SHA-256 values are:
+
+| Evidence | SHA-256 |
+|---|---|
+| `docs/evidence/astra68-k9-0366001-host.log` | `a8885ba140da84d5c9f422ec59a39dc6b9b43a3c6aa2aa3194b7b604fb6bac03` |
+| `docs/evidence/astra68-k9-0366001-analyzer.log` | `13e79f0c33453d6eac174a76e052a1b076ed57d188945faa18fe4ea86bb0446c` |
+| `docs/evidence/astra68-k9-0366001-sanitizers.log` | `198bdd40340fc4e1d7442a498bce35bff269b359d6a91df62f96611c5e56971b` |
+| `docs/evidence/astra68-k9-0366001-ndk.log` | `0dc6a863e54c34b45310d5ba2bca5139d7b6eb061f11c4041203c3b44738bfdb` |
+| `docs/evidence/astra68-k9-0366001-conformance.log` | `bed6693f78b26061bcd685d9d64b5bd8ea26ee0239420f35ff8b996b724a383a` |
+| `docs/evidence/astra68-k9-0366001-emu-build.log` | `4241cf22633c594a1239f735fab0d1ff364dca362d40f43dc0fc7d6cfc879d29` |
+| `docs/evidence/astra68-k9-0366001-emu-test.log` | `00e4e5263e04de14df55c65887394490f20c53cfd21c4ccc03aa5e302a2f9852` |
+| `docs/evidence/astra68-k9-0366001-musashi-normal.log` | `d6c89fb784a82406d5a064a48787ab3107ded0c48dc4063408383c14ff9057fe` |
+| `docs/evidence/astra68-k9-0366001-musashi-performance.log` | `b82ffda8b19c06cb4a5a6aa57d3f196b97eefd7da0dde5fc454ecb9e2c59341d` |
+| `docs/evidence/astra68-k9-0366001-rtl.log` | `a843fe2a5488e0d92d724cac158803012277f5d3b0b277ef30b0255b804c9783` |
+| `docs/evidence/astra68-k9-0366001-place.log` | `3d7f4b281d676f41debf4af1fca74467b63e1855171ef656a851d7f2f5cd4f3c` |
+| `docs/evidence/astra68-k9-0366001-place.json` | `d17211db5935eae724bce4d5bb653866067d3e6714ae3192d76e6bc2a30c8706` |
+| `docs/evidence/astra68-k9-0366001-pnr.log` | `26d819bc92fa469577d96ef9f630b54f1dc4853372ba2fba5afbb8131a4a4136` |
+| `docs/evidence/astra68-k9-0366001-pnr.json` | `bf160c9b72f5285c3fb6f638a4818995f41a8ca67bb839047155cf875ebb55b7` |
+| `docs/evidence/astra68-k9-0366001-route.log` | `9a88b6ea19eecae8ae586fd1317f1281e0d9971f258ba52b80b26b5c7cf13e9e` |
+| `docs/evidence/astra68-k9-0366001-route.manifest` | `e93b0dd134df592794769beae34f9786dac92d4da51ea949c1fbc895211fa5df` |
+| `docs/evidence/astra68-k9-0366001-esp-provision-build.log` | `4ffd83526b563e505286523701d17859178988aa5c79a821b9ca4318863ffcab` |
+| `docs/evidence/astra68-k9-0366001-esp-provision-flash.log` | `bb35006a54b3c19f1ac5d0cdc81c5179622d59ccbe5a54b620dd44fb4028bebf` |
+| `docs/evidence/astra68-k9-0366001-provision-verify.log` | `9072b6ad72701b39fe3555bb12bd03a32d26bd8242fa8f4340207ddfb4c25c3f` |
+| `docs/evidence/astra68-k9-0366001-esp-production-flash.log` | `2ce9cb0a3fab7e9f8ffcd1cee7aae0da545690baf384136d50d865a29ac5e099` |
+| `docs/evidence/astra68-k9-0366001-esp-production-readback.log` | `61c6160f1cc10ce605782be8e907cbf02d014918d15a8b743bc12d22db31dbb7` |
+| `docs/evidence/astra68-k9-7ddd9c03-hw-1.log` | `80f7c66401f7b7b568407b357f742a1864a2df928e7a732307c4b0fd9639612d` |
+| `docs/evidence/astra68-k9-7ddd9c03-hw-2.log` | `4cddad1f408606a664b3e585f60560246e11846d60eb4abda3b41a9831741775` |
+| `docs/evidence/astra68-k9-7ddd9c03-hdmi.png` | `e7b853d62ab634b7ae1ef023769493f93560007c7520687f5f39604a8b6184eb` |
 
 ## Panic and retained diagnostics
 

@@ -66,7 +66,7 @@ between threads in one process does not reload CRP or flush caches/ATC; host,
 Musashi, full pin-level, and ULX3S tests count that path separately from a
 cross-CRP switch. Timer and voluntary-yield paths apply priority selection.
 The public event/semaphore/timer and death-wait paths prove immediate handoff
-when a higher-priority waiter wakes or its deadline expires. K8 retains
+when a higher-priority waiter wakes or its deadline expires. K9 retains
 transactional runtime thread creation, caller-only thread exit, waitable
 thread/process death, bounded wait-multiple, and K7 message ports, and adds
 waitable bulk-ring endpoints under provisional ABI `0x00010004`.

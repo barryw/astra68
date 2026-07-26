@@ -180,6 +180,44 @@ preemption, fault containment, and K1 entry. Screenshot SHA-256 is
 Every hardware gate passes. This section replaces `77B3CDC8` as the routed and
 persistent release baseline.
 
+## 7DDD9C03 K9 exact route
+
+Exact K9 source `03660014d7af6d3662504fc076700f04929117ab` was rebuilt and
+routed on Beast with Yosys 0.64+159 and nextpnr-ecp5
+`nextpnr-0.10-45-g98c18d7f`. It retains the complete `kernel_platform_v1`
+feature set, exact 12.5 MHz CPU and 60 MHz SDRAM runtime clocks, and the policy
+that physical ECP5 capacity is the only utilization limit. Yosys reports zero
+SCCs, 53,079 LUT4s, 25,532 mapped FFs, 101 block RAMs, and 18 multipliers.
+POR validation covers 25,536 GSR-enabled FFs. The exact strict seed-4
+heap/router1 route packs:
+
+| Resource | Used | Physical free |
+|---|---:|---:|
+| TRELLIS_COMB | 66,523 (79.53%) | 17,117 |
+| TRELLIS_FF | 25,565 (30.57%) | 58,075 |
+| DP16KD | 101 (48.56%) | 107 |
+| MULT18X18D | 18 (11.54%) | 138 |
+
+Every constrained clock passes without a waiver: 15.058201 MHz CPU,
+66.907532 MHz SDRAM, 79.693970 MHz USB, 53.267990 MHz pixel, and
+289.771088 MHz HDMI shift. The protected LUT-permutation gate passes 13,424
+cells and 17,654 routed inputs. Exact hashes are:
+
+| Artifact | SHA-256 |
+|---|---|
+| bitstream | `cf1adbe78cb9f486b3d2fbae36ada91023fda36d8cb4b0ffec7df5828e3c6bf1` |
+| routed JSON | `1956c067536ce521b10cda7429ada2252af0b0e66f4d9e2debc6ac49caff9f18` |
+| nextpnr report JSON | `bf160c9b72f5285c3fb6f638a4818995f41a8ca67bb839047155cf875ebb55b7` |
+| FPGA configuration | `2d4683241674f13d5e0bb77769ca7fe4db8afd5f8310aeb832cc22f0fe0e95c3` |
+| stage 0 | `7de247f66f2840b26692962118778cddf074f818f08dc61966a0e153439a1820` |
+
+Two independent volatile ULX3S loads pass exact build/ROM identity, full
+32 MiB POST/BIST, K9 allocator/reserve checks, K1-K8, every performance gate,
+and zero overruns. Physical HDMI confirms the second run. FPGA flash remains
+exact `25D9CB8E`; K9 qualification did not change the persistent image.
+`7DDD9C03` is the current routed K9 release, while `25D9CB8E` remains its
+persistent rollback.
+
 ### K3 software-only qualification
 
 The 2026-07-24 K3 one-shot scheduler/deadline checkpoint based on

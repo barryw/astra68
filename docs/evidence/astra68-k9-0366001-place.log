@@ -1,0 +1,324 @@
+Warning: get_nets argument '$glbnet$clk' matched no objects.
+Warning: get_nets argument '$glbnet$sd_clk_in' matched no objects.
+Warning: get_nets argument '$glbnet$sdram_domain_clk' matched no objects.
+Warning: get_nets argument '$glbnet$video_pixel_clk' matched no objects.
+Warning: get_nets argument '$glbnet$video_shift_clk' matched no objects.
+Warning: get_nets argument '$glbnet$usb_phy_domain_clk' matched no objects.
+Warning: get_nets argument '$glbnet$clk25_mhz$TRELLIS_IO_IN' matched no objects.
+Info: constraining clock net 'clk25_mhz' to 25.00 MHz
+Info: constraining clock net 'clk' to 12.50 MHz
+Info: constraining clock net 'sd_clk' to 20.00 MHz
+
+Info: Logic utilisation before packing:
+Info:     Total LUT4s:     64105/83640    76%
+Info:         logic LUTs:  53079/83640    63%
+Info:         carry LUTs:  10126/83640    12%
+Info:           RAM LUTs:    600/10455     5%
+Info:          RAMW LUTs:    300/20910     1%
+
+Info:      Total DFFs:     25566/83640    30%
+
+Info: Packing IOs..
+Info: $usb_fpga_bd_dp$iobuf_i: $auto$simplemap.cc:331:simplemap_tribuf$619940.Y
+Info: pin 'usb_fpga_bd_dp$tr_io' constrained to Bel 'X107/Y0/PIOA'.
+Info: $usb_fpga_bd_dn$iobuf_i: $auto$simplemap.cc:331:simplemap_tribuf$619941.Y
+Info: pin 'usb_fpga_bd_dn$tr_io' constrained to Bel 'X107/Y0/PIOB'.
+Info: $sdram_d[15]$iobuf_i: $auto$simplemap.cc:331:simplemap_tribuf$621891.Y
+Info: pin 'sdram_d[15]$tr_io' constrained to Bel 'X126/Y20/PIOC'.
+Info: $sdram_d[14]$iobuf_i: $auto$simplemap.cc:331:simplemap_tribuf$621890.Y
+Info: pin 'sdram_d[14]$tr_io' constrained to Bel 'X126/Y41/PIOC'.
+Info: $sdram_d[13]$iobuf_i: $auto$simplemap.cc:331:simplemap_tribuf$621889.Y
+Info: pin 'sdram_d[13]$tr_io' constrained to Bel 'X126/Y14/PIOD'.
+Info: $sdram_d[12]$iobuf_i: $auto$simplemap.cc:331:simplemap_tribuf$621888.Y
+Info: pin 'sdram_d[12]$tr_io' constrained to Bel 'X126/Y14/PIOC'.
+Info: $sdram_d[11]$iobuf_i: $auto$simplemap.cc:331:simplemap_tribuf$621887.Y
+Info: pin 'sdram_d[11]$tr_io' constrained to Bel 'X126/Y35/PIOA'.
+Info: $sdram_d[10]$iobuf_i: $auto$simplemap.cc:331:simplemap_tribuf$621886.Y
+Info: pin 'sdram_d[10]$tr_io' constrained to Bel 'X126/Y35/PIOB'.
+Info: $sdram_d[9]$iobuf_i: $auto$simplemap.cc:331:simplemap_tribuf$621885.Y
+Info: pin 'sdram_d[9]$tr_io' constrained to Bel 'X126/Y35/PIOC'.
+Info: $sdram_d[8]$iobuf_i: $auto$simplemap.cc:331:simplemap_tribuf$621884.Y
+Info: pin 'sdram_d[8]$tr_io' constrained to Bel 'X126/Y35/PIOD'.
+Info: $sdram_d[7]$iobuf_i: $auto$simplemap.cc:331:simplemap_tribuf$621883.Y
+Info: pin 'sdram_d[7]$tr_io' constrained to Bel 'X126/Y86/PIOD'.
+Info: $sdram_d[6]$iobuf_i: $auto$simplemap.cc:331:simplemap_tribuf$621882.Y
+Info: pin 'sdram_d[6]$tr_io' constrained to Bel 'X126/Y92/PIOD'.
+Info: $sdram_d[5]$iobuf_i: $auto$simplemap.cc:331:simplemap_tribuf$621881.Y
+Info: pin 'sdram_d[5]$tr_io' constrained to Bel 'X126/Y89/PIOD'.
+Info: $sdram_d[4]$iobuf_i: $auto$simplemap.cc:331:simplemap_tribuf$621880.Y
+Info: pin 'sdram_d[4]$tr_io' constrained to Bel 'X126/Y83/PIOD'.
+Info: $sdram_d[3]$iobuf_i: $auto$simplemap.cc:331:simplemap_tribuf$621879.Y
+Info: pin 'sdram_d[3]$tr_io' constrained to Bel 'X126/Y53/PIOC'.
+Info: $sdram_d[2]$iobuf_i: $auto$simplemap.cc:331:simplemap_tribuf$621878.Y
+Info: pin 'sdram_d[2]$tr_io' constrained to Bel 'X126/Y50/PIOD'.
+Info: $sdram_d[1]$iobuf_i: $auto$simplemap.cc:331:simplemap_tribuf$621877.Y
+Info: pin 'sdram_d[1]$tr_io' constrained to Bel 'X126/Y50/PIOC'.
+Info: $sdram_d[0]$iobuf_i: $auto$simplemap.cc:331:simplemap_tribuf$621876.Y
+Info: pin 'sdram_d[0]$tr_io' constrained to Bel 'X126/Y20/PIOD'.
+Info: sd_d[3] feeds TRELLIS_IO sd_d3_pad, removing $nextpnr_iobuf sd_d[3].
+Info: pin 'sd_d3_pad' constrained to Bel 'X0/Y53/PIOA'.
+Info: sd_d[2] feeds TRELLIS_IO sd_d2_pad, removing $nextpnr_iobuf sd_d[2].
+Info: pin 'sd_d2_pad' constrained to Bel 'X0/Y53/PIOD'.
+Info: sd_d[1] feeds TRELLIS_IO sd_d1_pad, removing $nextpnr_iobuf sd_d[1].
+Info: pin 'sd_d1_pad' constrained to Bel 'X0/Y53/PIOC'.
+Info: sd_d[0] feeds TRELLIS_IO sd_d0_pad, removing $nextpnr_iobuf sd_d[0].
+Info: pin 'sd_d0_pad' constrained to Bel 'X0/Y50/PIOC'.
+Info: sd_cmd feeds TRELLIS_IO sd_cmd_pad, removing $nextpnr_iobuf sd_cmd.
+Info: pin 'sd_cmd_pad' constrained to Bel 'X0/Y53/PIOB'.
+Info: sd_clk feeds TRELLIS_IO sd_clk_pad, removing $nextpnr_iobuf sd_clk.
+Info: pin 'sd_clk_pad' constrained to Bel 'X0/Y47/PIOC'.
+Info: pin 'wifi_gpio0$tr_io' constrained to Bel 'X0/Y47/PIOB'.
+Info: pin 'wifi_en$tr_io' constrained to Bel 'X0/Y50/PIOB'.
+Info: pin 'usb_fpga_pu_dp$tr_io' constrained to Bel 'X71/Y0/PIOA'.
+Info: pin 'usb_fpga_pu_dn$tr_io' constrained to Bel 'X71/Y0/PIOB'.
+Info: pin 'switches[3]$tr_io' constrained to Bel 'X9/Y0/PIOA'.
+Info: pin 'switches[2]$tr_io' constrained to Bel 'X9/Y0/PIOB'.
+Info: pin 'switches[1]$tr_io' constrained to Bel 'X13/Y0/PIOB'.
+Info: pin 'switches[0]$tr_io' constrained to Bel 'X13/Y0/PIOA'.
+Info: pin 'sdram_wen$tr_io' constrained to Bel 'X126/Y86/PIOC'.
+Info: pin 'sdram_rasn$tr_io' constrained to Bel 'X126/Y86/PIOB'.
+Info: pin 'sdram_dqm[1]$tr_io' constrained to Bel 'X126/Y38/PIOA'.
+Info: pin 'sdram_dqm[0]$tr_io' constrained to Bel 'X126/Y89/PIOC'.
+Info: pin 'sdram_csn$tr_io' constrained to Bel 'X126/Y86/PIOA'.
+Info: pin 'sdram_clk$tr_io' constrained to Bel 'X126/Y38/PIOB'.
+Info: pin 'sdram_cke$tr_io' constrained to Bel 'X126/Y38/PIOC'.
+Info: pin 'sdram_casn$tr_io' constrained to Bel 'X126/Y89/PIOA'.
+Info: pin 'sdram_ba[1]$tr_io' constrained to Bel 'X126/Y83/PIOB'.
+Info: pin 'sdram_ba[0]$tr_io' constrained to Bel 'X126/Y83/PIOC'.
+Info: pin 'sdram_a[12]$tr_io' constrained to Bel 'X126/Y41/PIOA'.
+Info: pin 'sdram_a[11]$tr_io' constrained to Bel 'X126/Y38/PIOD'.
+Info: pin 'sdram_a[10]$tr_io' constrained to Bel 'X126/Y83/PIOA'.
+Info: pin 'sdram_a[9]$tr_io' constrained to Bel 'X126/Y41/PIOB'.
+Info: pin 'sdram_a[8]$tr_io' constrained to Bel 'X126/Y44/PIOA'.
+Info: pin 'sdram_a[7]$tr_io' constrained to Bel 'X126/Y44/PIOC'.
+Info: pin 'sdram_a[6]$tr_io' constrained to Bel 'X126/Y41/PIOD'.
+Info: pin 'sdram_a[5]$tr_io' constrained to Bel 'X126/Y44/PIOB'.
+Info: pin 'sdram_a[4]$tr_io' constrained to Bel 'X126/Y44/PIOD'.
+Info: pin 'sdram_a[3]$tr_io' constrained to Bel 'X126/Y47/PIOC'.
+Info: pin 'sdram_a[2]$tr_io' constrained to Bel 'X126/Y47/PIOA'.
+Info: pin 'sdram_a[1]$tr_io' constrained to Bel 'X126/Y47/PIOD'.
+Info: pin 'sdram_a[0]$tr_io' constrained to Bel 'X126/Y47/PIOB'.
+Info: pin 'reset_n$tr_io' constrained to Bel 'X6/Y0/PIOB'.
+Info: pin 'leds[7]$tr_io' constrained to Bel 'X0/Y41/PIOD'.
+Info: pin 'leds[6]$tr_io' constrained to Bel 'X0/Y38/PIOD'.
+Info: pin 'leds[5]$tr_io' constrained to Bel 'X0/Y44/PIOD'.
+Info: pin 'leds[4]$tr_io' constrained to Bel 'X0/Y38/PIOB'.
+Info: pin 'leds[3]$tr_io' constrained to Bel 'X0/Y38/PIOC'.
+Info: pin 'leds[2]$tr_io' constrained to Bel 'X0/Y38/PIOA'.
+Info: pin 'leds[1]$tr_io' constrained to Bel 'X0/Y35/PIOD'.
+Info: pin 'leds[0]$tr_io' constrained to Bel 'X0/Y35/PIOC'.
+Info: pin 'gpdi_dp[3]$tr_io' constrained to Bel 'X116/Y0/PIOA'.
+Info: pin 'gpdi_dp[2]$tr_io' constrained to Bel 'X76/Y0/PIOA'.
+Info: pin 'gpdi_dp[1]$tr_io' constrained to Bel 'X83/Y0/PIOA'.
+Info: pin 'gpdi_dp[0]$tr_io' constrained to Bel 'X110/Y0/PIOA'.
+Info: pin 'ftdi_txd$tr_io' constrained to Bel 'X0/Y89/PIOB'.
+Info: pin 'ftdi_rxd$tr_io' constrained to Bel 'X0/Y56/PIOC'.
+Info: pin 'clk25_mhz$tr_io' constrained to Bel 'X0/Y47/PIOA'.
+Info: pin 'buttons[5]$tr_io' constrained to Bel 'X126/Y17/PIOD'.
+Info: pin 'buttons[4]$tr_io' constrained to Bel 'X6/Y95/PIOA'.
+Info: pin 'buttons[3]$tr_io' constrained to Bel 'X6/Y95/PIOB'.
+Info: pin 'buttons[2]$tr_io' constrained to Bel 'X126/Y89/PIOB'.
+Info: pin 'buttons[1]$tr_io' constrained to Bel 'X4/Y95/PIOB'.
+Info: pin 'buttons[0]$tr_io' constrained to Bel 'X4/Y95/PIOA'.
+Info: IOLOGIC component g_hdmi.hdmi_inst.serializer.lattice_ecp5_shift[2].ddr_tmds connected to PIO Bel X76/Y0/PIOA
+Info: IOLOGIC component g_hdmi.hdmi_inst.serializer.lattice_ecp5_shift[1].ddr_tmds connected to PIO Bel X83/Y0/PIOA
+Info: IOLOGIC component g_hdmi.hdmi_inst.serializer.lattice_ecp5_shift[0].ddr_tmds connected to PIO Bel X110/Y0/PIOA
+Info: IOLOGIC component g_hdmi.hdmi_inst.serializer.ddr_tmds_clock connected to PIO Bel X116/Y0/PIOA
+Info: IOLOGIC component $auto$ff.cc:337:slice$729001 connected to PIO Bel X0/Y50/PIOC
+Info: Packing constants..
+Info: Packing carries...
+Info: Packing LUTs...
+Info: Packing LUT5-7s...
+Info: Packing FFs...
+Info:     9674 FFs paired with LUTs.
+Info: Generating derived timing constraints...
+Info:     Input frequency of PLL 'g_video_clocks.video_pll.pll_inst' is constrained to 25.0 MHz
+Info:     Derived frequency constraint of 135.0 MHz for net video_shift_clk
+Info:     Derived frequency constraint of 27.0 MHz for net video_pixel_clk
+Info:     Derived frequency constraint of 540.2 MHz for net g_video_clocks.video_pll_o[2]
+Info:     Derived frequency constraint of 540.2 MHz for net g_video_clocks.video_pll_o[3]
+Info:     Input frequency of PLL 'g_sdram_enabled.sdram_pll.pll_inst' is constrained to 25.0 MHz
+Info:     Derived frequency constraint of 60.0 MHz for net sdram_domain_clk
+Info:     Derived frequency constraint of 100.0 MHz for net g_sdram_enabled.sd_pll_o[1]
+Info:     Derived frequency constraint of 600.2 MHz for net g_sdram_enabled.sd_pll_o[2]
+Info:     Derived frequency constraint of 600.2 MHz for net g_sdram_enabled.sd_pll_o[3]
+Info:     Input frequency of PLL 'g_sdram_enabled.g_usb_phy_clock.usb_pll.pll_inst' is constrained to 100.0 MHz
+Info:     Derived frequency constraint of 48.0 MHz for net usb_phy_domain_clk
+Info:     Derived frequency constraint of 576.0 MHz for net g_sdram_enabled.g_usb_phy_clock.usb_pll_o[1]
+Info:     Derived frequency constraint of 576.0 MHz for net g_sdram_enabled.g_usb_phy_clock.usb_pll_o[2]
+Info:     Derived frequency constraint of 576.0 MHz for net g_sdram_enabled.g_usb_phy_clock.usb_pll_o[3]
+Info: Promoting globals...
+Info:     promoting clock net clk to global network
+Info:     promoting clock net sdram_domain_clk to global network
+Info:     promoting clock net clk25_mhz$TRELLIS_IO_IN to global network
+Info:     promoting clock net video_pixel_clk to global network
+Info:     promoting clock net usb_phy_domain_clk to global network
+Info:     promoting clock net sd_clk_in to global network
+Info:     promoting clock net video_shift_clk to global network
+Info: Checksum: 0x9fcb8062
+
+Info: Device utilisation:
+Info: 	          TRELLIS_IO:      77/    365    21%
+Info: 	                DCCA:       7/     56    12%
+Info: 	              DP16KD:     101/    208    48%
+Info: 	          MULT18X18D:      18/    156    11%
+Info: 	              ALU54B:       0/     78     0%
+Info: 	             EHXPLLL:       3/      4    75%
+Info: 	             EXTREFB:       0/      2     0%
+Info: 	                DCUA:       0/      2     0%
+Info: 	           PCSCLKDIV:       0/      2     0%
+Info: 	             IOLOGIC:       1/    224     0%
+Info: 	            SIOLOGIC:       4/    141     2%
+Info: 	                 GSR:       1/      1   100%
+Info: 	               JTAGG:       0/      1     0%
+Info: 	                OSCG:       0/      1     0%
+Info: 	               SEDGA:       0/      1     0%
+Info: 	                 DTR:       0/      1     0%
+Info: 	             USRMCLK:       0/      1     0%
+Info: 	             CLKDIVF:       0/      4     0%
+Info: 	           ECLKSYNCB:       0/     10     0%
+Info: 	             DLLDELD:       0/      8     0%
+Info: 	              DDRDLL:       0/      4     0%
+Info: 	             DQSBUFM:       0/     14     0%
+Info: 	     TRELLIS_ECLKBUF:       0/      8     0%
+Info: 	        ECLKBRIDGECS:       0/      2     0%
+Info: 	                DCSC:       0/      2     0%
+Info: 	          TRELLIS_FF:   25565/  83640    30%
+Info: 	        TRELLIS_COMB:   66523/  83640    79%
+Info: 	        TRELLIS_RAMW:     150/  10455     1%
+
+Astra floorplan mode: critical; explicit=astraea_blitter,astraea_blitter_cdc,astraea_blitter_control,host_io; enforced=hdmi_ser_gpdi,tg68k_cache,sdram_compare,sdram_edge,host_io,astraea_blitter_control,astraea_blitter_cdc,astraea_blitter
+Astra floorplan constraints: astraea_blitter=2329, astraea_blitter_cdc=1283, astraea_blitter_control=1297, astraea_copper=554, astraea_core=113, astraea_draw=10072, bus_masters=0, cpu_mem=14176, hdmi_pixel=243, hdmi_ser_gpdi=75, host_io=699, lyra_audio=0, post_console=51, sdram_compare=151, sdram_edge=1474, tg68k_alu=1881, tg68k_cache=1348, tg68k_pmmu=10440, vega_sprites=4083, vega_tiles=0, vega_video=1918
+Astra floorplan region hdmi_ser_gpdi: enforced=yes; cells=75; constrained=75; buckets: SIOLOGIC=4/50 8.0% spare=46, TRELLIS_COMB=30/10248 0.3% spare=10218, TRELLIS_FF=41/10248 0.4% spare=10207; top cell types: TRELLIS_FF=41, TRELLIS_COMB=30, SIOLOGIC=4
+Astra floorplan region tg68k_cache: enforced=yes; cells=1348; constrained=1348; buckets: TRELLIS_COMB=841/10440 8.1% spare=9599, TRELLIS_FF=431/10440 4.1% spare=10009, TRELLIS_RAMW=76/1305 5.8% spare=1229; top cell types: TRELLIS_COMB=841, TRELLIS_FF=431, TRELLIS_RAMW=76
+Astra floorplan region tg68k_pmmu: enforced=no; cells=10440; constrained=0; buckets: TRELLIS_COMB=7575/40200 18.8% spare=32625, TRELLIS_FF=2865/40200 7.1% spare=37335; top cell types: TRELLIS_COMB=7575, TRELLIS_FF=2865
+Astra floorplan region tg68k_alu: enforced=no; cells=1881; constrained=0; buckets: MULT18X18D=10/48 20.8% spare=38, TRELLIS_COMB=1550/18696 8.3% spare=17146, TRELLIS_FF=321/18696 1.7% spare=18375; top cell types: TRELLIS_COMB=1550, TRELLIS_FF=321, MULT18X18D=10
+Astra floorplan region hdmi_pixel: enforced=no; cells=243; constrained=0; buckets: TRELLIS_COMB=160/16936 0.9% spare=16776, TRELLIS_FF=83/16936 0.5% spare=16853; top cell types: TRELLIS_COMB=160, TRELLIS_FF=83
+Astra floorplan region sdram_compare: enforced=yes; cells=151; constrained=151; buckets: TRELLIS_COMB=113/3264 3.5% spare=3151, TRELLIS_FF=38/3264 1.2% spare=3226; top cell types: TRELLIS_COMB=113, TRELLIS_FF=38
+Astra floorplan region sdram_edge: enforced=yes; cells=1474; constrained=1474; buckets: TRELLIS_COMB=721/15776 4.6% spare=15055, TRELLIS_FF=753/15776 4.8% spare=15023; top cell types: TRELLIS_FF=753, TRELLIS_COMB=721
+Astra floorplan region host_io: enforced=yes; cells=699; constrained=699; buckets: DP16KD=2/42 4.8% spare=40, IOLOGIC=1/60 1.7% spare=59, TRELLIS_COMB=401/16072 2.5% spare=15671, TRELLIS_FF=279/16072 1.7% spare=15793, TRELLIS_RAMW=16/2009 0.8% spare=1993; top cell types: TRELLIS_COMB=401, TRELLIS_FF=279, TRELLIS_RAMW=16, DP16KD=2
+Astra floorplan region post_console: enforced=no; cells=51; constrained=0; buckets: DP16KD=3/19 15.8% spare=16, TRELLIS_COMB=38/10800 0.4% spare=10762, TRELLIS_FF=10/10800 0.1% spare=10790; top cell types: TRELLIS_COMB=38, TRELLIS_FF=10, DP16KD=3
+Astra floorplan region astraea_draw: enforced=no; cells=10072; constrained=0; buckets: DP16KD=6/72 8.3% spare=66, MULT18X18D=2/24 8.3% spare=22, TRELLIS_COMB=6519/20976 31.1% spare=14457, TRELLIS_FF=3545/20976 16.9% spare=17431; top cell types: TRELLIS_COMB=6519, TRELLIS_FF=3545, DP16KD=6, MULT18X18D=2
+Astra floorplan region vega_sprites: enforced=no; cells=4083; constrained=0; buckets: DP16KD=21/70 30.0% spare=49, MULT18X18D=1/70 1.4% spare=69, TRELLIS_COMB=2401/31752 7.6% spare=29351, TRELLIS_FF=1647/31752 5.2% spare=30105, TRELLIS_RAMW=13/3969 0.3% spare=3956; top cell types: TRELLIS_COMB=2401, TRELLIS_FF=1647, DP16KD=21, TRELLIS_RAMW=13
+Astra floorplan region astraea_copper: enforced=no; cells=554; constrained=0; buckets: DP16KD=16/23 69.6% spare=7, TRELLIS_COMB=305/11872 2.6% spare=11567, TRELLIS_FF=233/11872 2.0% spare=11639; top cell types: TRELLIS_COMB=305, TRELLIS_FF=233, DP16KD=16
+Astra floorplan region astraea_blitter_control: enforced=yes; cells=1297; constrained=1297; buckets: TRELLIS_COMB=1107/6960 15.9% spare=5853, TRELLIS_FF=190/6960 2.7% spare=6770; top cell types: TRELLIS_COMB=1107, TRELLIS_FF=190
+Astra floorplan region astraea_blitter_cdc: enforced=yes; cells=1283; constrained=1283; buckets: TRELLIS_COMB=537/6960 7.7% spare=6423, TRELLIS_FF=746/6960 10.7% spare=6214; top cell types: TRELLIS_FF=746, TRELLIS_COMB=537
+Astra floorplan region astraea_blitter: enforced=yes; cells=2329; constrained=2329; buckets: TRELLIS_COMB=1420/18040 7.9% spare=16620, TRELLIS_FF=901/18040 5.0% spare=17139, TRELLIS_RAMW=8/2255 0.4% spare=2247; top cell types: TRELLIS_COMB=1420, TRELLIS_FF=901, TRELLIS_RAMW=8
+Astra floorplan region vega_video: enforced=no; cells=1918; constrained=0; buckets: DP16KD=2/56 3.6% spare=54, MULT18X18D=5/56 8.9% spare=51, TRELLIS_COMB=1224/23400 5.2% spare=22176, TRELLIS_FF=687/23400 2.9% spare=22713; top cell types: TRELLIS_COMB=1224, TRELLIS_FF=687, MULT18X18D=5, DP16KD=2
+Astra floorplan region cpu_mem: enforced=no; cells=14176; constrained=0; buckets: TRELLIS_COMB=11469/53040 21.6% spare=41571, TRELLIS_FF=2707/53040 5.1% spare=50333; top cell types: TRELLIS_COMB=11469, TRELLIS_FF=2707
+Astra floorplan region astraea_core: enforced=no; cells=113; constrained=0; buckets: TRELLIS_COMB=109/32400 0.3% spare=32291, TRELLIS_FF=4/32400 0.0% spare=32396; top cell types: TRELLIS_COMB=109, TRELLIS_FF=4
+Info: Placed 86 cells based on constraints.
+Info: Creating initial analytic placement for 64076 cells, random placement wirelen = 7076069.
+Info:     at initial placer iter 0, wirelen = 94052
+Info:     at initial placer iter 1, wirelen = 114540
+Info:     at initial placer iter 2, wirelen = 118715
+Info:     at initial placer iter 3, wirelen = 125708
+Info: Running main analytical placer.
+Info:     at iteration #1, type ALL: wirelen solved = 130800, spread = 1907333, legal = 1871190; time = 4.65s
+Info:     at iteration #2, type ALL: wirelen solved = 159048, spread = 987350, legal = 1036958; time = 2.78s
+Info:     at iteration #3, type ALL: wirelen solved = 264625, spread = 771737, legal = 872188; time = 2.97s
+Info:     at iteration #4, type ALL: wirelen solved = 305045, spread = 705668, legal = 804024; time = 2.60s
+Info:     at iteration #5, type ALL: wirelen solved = 344845, spread = 662828, legal = 768871; time = 2.49s
+Info:     at iteration #6, type ALL: wirelen solved = 369512, spread = 644785, legal = 747096; time = 2.16s
+Info:     at iteration #7, type ALL: wirelen solved = 381572, spread = 631586, legal = 734822; time = 2.04s
+Info:     at iteration #8, type ALL: wirelen solved = 395098, spread = 623297, legal = 716544; time = 1.97s
+Info:     at iteration #9, type ALL: wirelen solved = 403090, spread = 616484, legal = 699904; time = 1.90s
+Info:     at iteration #10, type ALL: wirelen solved = 412178, spread = 611524, legal = 698373; time = 1.83s
+Info:     at iteration #11, type ALL: wirelen solved = 418138, spread = 607683, legal = 700813; time = 1.87s
+Info:     at iteration #12, type ALL: wirelen solved = 422395, spread = 600991, legal = 690657; time = 1.82s
+Info:     at iteration #13, type ALL: wirelen solved = 428415, spread = 604499, legal = 690672; time = 1.86s
+Info:     at iteration #14, type ALL: wirelen solved = 436836, spread = 597732, legal = 686043; time = 1.82s
+Info:     at iteration #15, type ALL: wirelen solved = 438739, spread = 596673, legal = 685647; time = 1.72s
+Info:     at iteration #16, type ALL: wirelen solved = 443148, spread = 596382, legal = 683974; time = 1.74s
+Info:     at iteration #17, type ALL: wirelen solved = 444914, spread = 593835, legal = 681953; time = 1.68s
+Info:     at iteration #18, type ALL: wirelen solved = 449570, spread = 591228, legal = 673790; time = 1.72s
+Info:     at iteration #19, type ALL: wirelen solved = 451224, spread = 590281, legal = 676096; time = 1.77s
+Info:     at iteration #20, type ALL: wirelen solved = 454293, spread = 592471, legal = 666789; time = 1.70s
+Info:     at iteration #21, type ALL: wirelen solved = 458160, spread = 589411, legal = 676001; time = 1.73s
+Info:     at iteration #22, type ALL: wirelen solved = 458510, spread = 589072, legal = 663092; time = 1.72s
+Info:     at iteration #23, type ALL: wirelen solved = 461410, spread = 590331, legal = 679769; time = 1.73s
+Info:     at iteration #24, type ALL: wirelen solved = 464007, spread = 591647, legal = 675903; time = 1.75s
+Info:     at iteration #25, type ALL: wirelen solved = 465701, spread = 591685, legal = 672999; time = 1.64s
+Info:     at iteration #26, type ALL: wirelen solved = 466355, spread = 591134, legal = 675412; time = 1.74s
+Info:     at iteration #27, type ALL: wirelen solved = 470054, spread = 591696, legal = 673814; time = 1.74s
+Info: HeAP Placer Time: 76.94s
+Info:   of which solving equations: 38.87s
+Info:   of which spreading cells: 7.91s
+Info:   of which strict legalisation: 15.51s
+
+Info: Running simulated annealing placer for refinement.
+Info:   at iteration #1: temp = 0.000000, timing cost = 19814, wirelen = 663092
+Info:   at iteration #5: temp = 0.000000, timing cost = 11097, wirelen = 594719
+Info:   at iteration #10: temp = 0.000000, timing cost = 10224, wirelen = 576064
+Info:   at iteration #15: temp = 0.000000, timing cost = 10021, wirelen = 565582
+Info:   at iteration #20: temp = 0.000000, timing cost = 10228, wirelen = 562925
+Info:   at iteration #25: temp = 0.000000, timing cost = 9682, wirelen = 561711
+Info:   at iteration #30: temp = 0.000000, timing cost = 9700, wirelen = 561225
+Info:   at iteration #35: temp = 0.000000, timing cost = 9666, wirelen = 561127
+Info:   at iteration #38: temp = 0.000000, timing cost = 9711, wirelen = 561081 
+Info: SA placement time 213.63s
+
+Info: Max frequency for clock         '$glbnet$video_shift_clk': 195.89 MHz (PASS at 135.01 MHz)
+Info: Max frequency for clock               '$glbnet$sd_clk_in': 106.12 MHz (PASS at 20.00 MHz)
+Info: Max frequency for clock '$glbnet$clk25_mhz$TRELLIS_IO_IN': 36.48 MHz (PASS at 25.00 MHz)
+Info: Max frequency for clock         '$glbnet$video_pixel_clk': 52.45 MHz (PASS at 27.00 MHz)
+Info: Max frequency for clock      '$glbnet$usb_phy_domain_clk': 76.91 MHz (PASS at 48.00 MHz)
+Info: Max frequency for clock                     '$glbnet$clk': 12.03 MHz (FAIL at 12.50 MHz)
+Info: Max frequency for clock        '$glbnet$sdram_domain_clk': 52.23 MHz (FAIL at 60.00 MHz)
+
+Info: Max delay <async>                                 -> <async>                                : 0.96 ns
+Info: Max delay <async>                                 -> posedge $glbnet$clk                    : 10.18 ns
+Info: Max delay <async>                                 -> posedge $glbnet$clk25_mhz$TRELLIS_IO_IN: 10.34 ns
+Info: Max delay <async>                                 -> posedge $glbnet$sd_clk_in              : 12.02 ns
+Info: Max delay <async>                                 -> posedge $glbnet$sdram_domain_clk       : 12.88 ns
+Info: Max delay <async>                                 -> posedge $glbnet$usb_phy_domain_clk     : 12.18 ns
+Info: Max delay <async>                                 -> posedge $glbnet$video_pixel_clk        : 4.02 ns
+Info: Max delay posedge $glbnet$clk                     -> <async>                                : 50.20 ns
+Info: Max delay posedge $glbnet$clk                     -> posedge $glbnet$clk25_mhz$TRELLIS_IO_IN: 2.53 ns
+Info: Max delay posedge $glbnet$clk                     -> posedge $glbnet$sdram_domain_clk       : 13.35 ns
+Info: Max delay posedge $glbnet$clk                     -> posedge $glbnet$video_pixel_clk        : 1.33 ns
+Info: Max delay posedge $glbnet$clk25_mhz$TRELLIS_IO_IN -> posedge $glbnet$clk                    : 2.67 ns
+Info: Max delay posedge $glbnet$clk25_mhz$TRELLIS_IO_IN -> posedge $glbnet$sdram_domain_clk       : 4.05 ns
+Info: Max delay posedge $glbnet$clk25_mhz$TRELLIS_IO_IN -> posedge $glbnet$usb_phy_domain_clk     : 2.70 ns
+Info: Max delay posedge $glbnet$sd_clk_in               -> posedge $glbnet$sdram_domain_clk       : 1.33 ns
+Info: Max delay posedge $glbnet$sdram_domain_clk        -> <async>                                : 9.64 ns
+Info: Max delay posedge $glbnet$sdram_domain_clk        -> posedge $glbnet$clk                    : 8.38 ns
+Info: Max delay posedge $glbnet$sdram_domain_clk        -> posedge $glbnet$clk25_mhz$TRELLIS_IO_IN: 8.06 ns
+Info: Max delay posedge $glbnet$sdram_domain_clk        -> posedge $glbnet$sd_clk_in              : 5.58 ns
+Info: Max delay posedge $glbnet$sdram_domain_clk        -> posedge $glbnet$usb_phy_domain_clk     : 9.90 ns
+Info: Max delay posedge $glbnet$sdram_domain_clk        -> posedge $glbnet$video_pixel_clk        : 1.16 ns
+Info: Max delay posedge $glbnet$usb_phy_domain_clk      -> <async>                                : 8.04 ns
+Info: Max delay posedge $glbnet$usb_phy_domain_clk      -> posedge $glbnet$clk                    : 3.49 ns
+Info: Max delay posedge $glbnet$usb_phy_domain_clk      -> posedge $glbnet$clk25_mhz$TRELLIS_IO_IN: 3.24 ns
+Info: Max delay posedge $glbnet$video_pixel_clk         -> posedge $glbnet$clk                    : 3.96 ns
+Info: Max delay posedge $glbnet$video_pixel_clk         -> posedge $glbnet$sdram_domain_clk       : 1.16 ns
+Info: Max delay posedge $glbnet$video_pixel_clk         -> posedge $glbnet$video_shift_clk        : 11.90 ns
+
+Info: Slack histogram:
+Info:  legend: * represents 240 endpoint(s)
+Info:          + represents [1,240) endpoint(s)
+Info: [ -3153,    967) |*+
+Info: [   967,   5087) |*****************+
+Info: [  5087,   9207) |*********************************+
+Info: [  9207,  13327) |************************************************************ 
+Info: [ 13327,  17447) |******************************+
+Info: [ 17447,  21567) |**+
+Info: [ 21567,  25687) |*******+
+Info: [ 25687,  29807) |******************+
+Info: [ 29807,  33927) |********************+
+Info: [ 33927,  38047) |****************+
+Info: [ 38047,  42167) |****+
+Info: [ 42167,  46287) |**+
+Info: [ 46287,  50407) |****+
+Info: [ 50407,  54527) |**+
+Info: [ 54527,  58647) |**+
+Info: [ 58647,  62767) |**+
+Info: [ 62767,  66887) |*******+
+Info: [ 66887,  71007) |*******+
+Info: [ 71007,  75127) |****************************+
+Info: [ 75127,  79247) |***************************+
+Info: Checksum: 0x866e48de
+
+7 warnings, 0 errors
+
+Info: Program finished normally.

@@ -4,7 +4,7 @@ Status: design direction; no userspace service described here is implemented.
 
 This document refines `OS_VISION.md` into a coherent userspace shape. It does
 not change the kernel boundary in `KERNEL_SPEC.md`, define a stable service ABI,
-or imply that the current K8 kernel can start these services. Exact wire
+or imply that the current K9 kernel can start these services. Exact wire
 records land only with implementations and executable protocol tests.
 
 Status markers have the same meanings as in `OS_VISION.md`:

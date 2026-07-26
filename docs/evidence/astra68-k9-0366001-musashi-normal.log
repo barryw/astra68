@@ -1,0 +1,117 @@
+make: Entering directory '/tmp/astra68-k9-0366001/emu'
+rustup run 1.97.0 cargo run -p astravm-machine --example kernel -- ../sw/boot/astra_boot.bin
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running `target/debug/examples/kernel ../sw/boot/astra_boot.bin`
+ASTRA 68 SYSTEM ROM v0.3
+Built: 2026-07-26T02:43:12Z  Git: 03660014d7af6d3662504fc076700f04929117ab
+
+Vesta:  v1.0
+CPU:    TG68K.C 68030 MMU2 @ 12500000 Hz
+MMU:    integrated 68030 PMMU
+RAM:    32 MiB @ 0x02000000
+ROM:    256 KiB @ 0xFFE00000
+BUILD:  0x18EBE2E1
+Chips:  VSTA v1.0, ASTR v1.0, VEGA v1.0
+NVRAM:  not present; defaults active
+
+POST
+  SDRAM init ........ OK
+  Front panel ....... OK
+  Data/byte lanes .... OK
+  Address lines ...... OK
+  Cache coherence .... OK
+  CPU BRAM cycles (256 bytes payload)
+    8-bit  write=5139 read=7688
+    16-bit write=2067 read=2574
+    32-bit write=1299 read=1294
+  CPU memory cycles (16384 bytes payload)
+    8-bit  write=229393 read=294922
+      write dmiss=0 rdreq=0 wrreq=0 wait=0 lhit=0 lmiss=0 post=0
+      read  dmiss=0 rdreq=0 wrreq=0 wait=0 lhit=0 lmiss=0 post=0
+      hot read=294927
+    16-bit write=114696 read=147466
+      write dmiss=0 rdreq=0 wrreq=0 wait=0 lhit=0 lmiss=0 post=0
+      read  dmiss=0 rdreq=0 wrreq=0 wait=0 lhit=0 lmiss=0 post=0
+      hot read=147471
+    32-bit write=65544 read=65549
+      write dmiss=0 rdreq=0 wrreq=0 wait=0 lhit=0 lmiss=0 post=0
+      read  dmiss=0 rdreq=0 wrreq=0 wait=0 lhit=0 lmiss=0 post=0
+      hot read=65551
+  Astraea DMA (64 KiB)
+    fill=102 copy=102
+  Full-range BIST ... [W................................R................................W................................R................................] OK
+
+POST PASS
+  Kernel image ...... OK
+Starting Axiom kernel
+AXIOM KERNEL v0.1.0-dev
+Built: 2026-07-26T02:43:12Z
+Git:   03660014d7af6d3662504fc076700f04929117ab
+
+BootInfo ........... OK
+Early log .......... OK @ 0x02000000
+VBR ................ OK @ 0x02010400
+Kernel image ....... 90132 bytes @ 0x02010000
+CPU ................ MC68030 @ 12500000 Hz
+PMMU ............... enabled, SRP 0x02004000
+Physical pages ..... 7960 free / 8192 total
+Emergency reserve .. 32 / 32 pages
+Allocators ......... runtime, ledger OK
+User copy .......... OK, fault recovery verified
+Kernel worker ...... OK, guarded MSP
+Thread ISPs ........ 16 guarded, 8 KiB each
+Vesta timer ........ OK, one-shot 5 ms
+AstraHost runtime ... not present
+User processes ...... 2 ready, cache isolation armed
+User threads ........ 3 ready, priority scheduler armed
+
+User tasks .......... OK, 5 ms one-shot quantum
+Fault containment ... OK, offender reaped
+Context switches .... 30
+Thread scheduler .... 2 live, priority queues OK
+Same-CRP switches ... 17
+Wait/wake ........... 12 blocks, 5 wake, 6 priority handoff
+Deadlines ........... 2 expired, 1 priority handoff
+Sync objects ........ 6 event, 1 sem; cancel/close/death 1/1/1
+Thread ISP max ...... 1664 / 8192 bytes
+Thread lifecycle .... 3 exit, 4 waits, 3 reaped
+Wait multiple ....... 7 calls, 4 block, 4 wake; max 2 members
+Wait registrations .. 1 live, 3 max
+Waitable timers ..... 1 created, 1 armed, 1 expired
+Process death ....... 1 waits, 0 blocked wakes
+Message ports ....... 3 send, 3 receive, 1 backpressure
+Handle transfer ..... 2 committed, max detached 1
+Shared areas ........ 1 create, 1/1 map/unmap, 0 active
+Bulk rings .......... 1 create, 1/1 notify, 1 blocked wake, 0 active
+K2 PERF irq syscall=23430/50000 timer=13850/50000 fault=19725/125000
+K2 PERF sched pick=768/10000 same=1379/15000 cross=1666/50000
+K2 PERF wait block=2825/15000 wake=4303/15000 overruns=0
+K3 PERF deadline expire=5963/20000 overruns=0
+K5 PERF thread create=75303/150000 exit=12908/50000 reap=20973/125000 overruns=0
+K6 PERF wait-set block=3674/50000 wake=5485/50000 overruns=0
+K7 PERF port send=11617/25000 receive=13890/30000 overruns=0
+K8 PERF area create=23775/250000 map=40976/125000 unmap=51978/100000 notify=14694/30000 overruns=0
+K2 PERFORMANCE PASS
+
+K8 SHARED BULK IPC PASS
+
+K7 MESSAGE PORTS PASS
+
+K6 BOUNDED WAIT-MULTIPLE PASS
+
+K5 THREAD LIFECYCLE PASS
+
+K4 HANDLE SYNCHRONIZATION PASS
+
+K3 ONE-SHOT SCHEDULER PASS
+
+K3 DEADLINE QUEUE PASS
+
+K2 BLOCKING SUBSTRATE PASS
+
+K2 THREAD SUBSTRATE PASS
+
+K1 PROTECTED ENTRY PASS
+KERNEL MULTITASKING
+backend=MUSASHI 68030 / REAL ROM cycles=28000288 pc=0x02020044 build=0x18EBE2E1 scratch=0x4B314F4B
+make: Leaving directory '/tmp/astra68-k9-0366001/emu'
