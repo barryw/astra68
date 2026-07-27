@@ -338,11 +338,10 @@ module tb_astra_host_boot_soc #(
         spi_deselect();
         require_ok("INPUT_EVENT");
 
-        // The monitor is a deferred kernel service. A supervisor-mode IRQ
-        // during bootstrap may queue it, but cannot switch from the active
-        // kernel_main stack into the worker. Start the transport test only
-        // once user scheduling is armed so its first IRQ can dispatch work.
-        wait (kernel_runtime_seen && kernel_scheduler_seen);
+        // Keep external monitor traffic outside the sampled K1-K10 boot
+        // performance window. An unrelated monitor IRQ inside a measured
+        // operation would charge interrupt time to that operation.
+        wait (k10_seen && k10_performance_seen);
         // Exercise the complete ESP-facing monitor path. Each byte crosses
         // SPI, the service parser, the async FIFO, the Vesta IRQ path, and the
         // kernel worker before the response returns through the reverse path.
