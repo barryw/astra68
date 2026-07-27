@@ -115,14 +115,61 @@ static void test_required_metrics_and_budget_failure(void)
            KERNEL_PERFORMANCE_BUDGET_AREA_UNMAP);
     assert(stats.metric[KERNEL_PERFORMANCE_RING_NOTIFY].budget_cycles ==
            KERNEL_PERFORMANCE_BUDGET_RING_NOTIFY);
+    assert(stats.metric[KERNEL_PERFORMANCE_HARD_IRQ].budget_cycles ==
+           KERNEL_PERFORMANCE_BUDGET_HARD_IRQ);
+    assert(stats.metric[KERNEL_PERFORMANCE_HARD_IRQ_WAKE].budget_cycles ==
+           KERNEL_PERFORMANCE_BUDGET_HARD_IRQ_WAKE);
+    assert(stats.metric[KERNEL_PERFORMANCE_IRQ_READ].budget_cycles ==
+           KERNEL_PERFORMANCE_BUDGET_IRQ_READ);
+    assert(stats.metric[KERNEL_PERFORMANCE_IRQ_ACK].budget_cycles ==
+           KERNEL_PERFORMANCE_BUDGET_IRQ_ACK);
+    assert(stats.metric[KERNEL_PERFORMANCE_DEVICE_BATCH].budget_cycles ==
+           KERNEL_PERFORMANCE_BUDGET_DEVICE_BATCH);
+    assert(stats.metric[KERNEL_PERFORMANCE_MONITOR_COMMAND].budget_cycles ==
+           KERNEL_PERFORMANCE_BUDGET_MONITOR_COMMAND);
+    assert((KERNEL_PERFORMANCE_REQUIRED_MASK &
+            KERNEL_PERFORMANCE_K10_MASK) == 0u);
+    assert((KERNEL_PERFORMANCE_VALID_MASK & KERNEL_PERFORMANCE_K10_MASK) ==
+           KERNEL_PERFORMANCE_K10_MASK);
+    assert(KERNEL_PERFORMANCE_RELEASE_MASK ==
+           KERNEL_PERFORMANCE_VALID_MASK);
     assert(kernel_performance_pass(
         &stats, 1u << KERNEL_PERFORMANCE_DEADLINE_EXPIRE, &failed));
+}
+
+static void test_conditional_span_selects_one_metric(void)
+{
+    KernelPerformanceSpan span;
+    KernelPerformanceStats stats;
+
+    kernel_performance_init();
+    kernel_performance_test_set_cycles(1000u, 23u);
+    span = kernel_performance_span_begin();
+    kernel_performance_span_end(span, KERNEL_PERFORMANCE_HARD_IRQ_WAKE);
+    assert(kernel_performance_stats(&stats));
+    assert(stats.metric[KERNEL_PERFORMANCE_HARD_IRQ].calls == 0u);
+    assert(stats.metric[KERNEL_PERFORMANCE_HARD_IRQ].samples == 0u);
+    assert(stats.metric[KERNEL_PERFORMANCE_HARD_IRQ_WAKE].calls == 1u);
+    assert(stats.metric[KERNEL_PERFORMANCE_HARD_IRQ_WAKE].samples == 1u);
+    assert(stats.metric[KERNEL_PERFORMANCE_HARD_IRQ_WAKE].maximum_cycles ==
+           23u);
+
+    kernel_performance_freeze();
+    assert(kernel_performance_start_window(
+        KERNEL_PERFORMANCE_METRIC_MASK(KERNEL_PERFORMANCE_HARD_IRQ)));
+    span = kernel_performance_span_begin();
+    kernel_performance_span_end(span, KERNEL_PERFORMANCE_HARD_IRQ_WAKE);
+    assert(kernel_performance_sampling_enabled != 0u);
+    span = kernel_performance_span_begin();
+    kernel_performance_span_end(span, KERNEL_PERFORMANCE_HARD_IRQ);
+    assert(kernel_performance_sampling_enabled == 0u);
 }
 
 int main(void)
 {
     test_bounded_sampling_windows_and_totals();
     test_required_metrics_and_budget_failure();
+    test_conditional_span_selects_one_metric();
     puts("performance tests passed");
     return 0;
 }

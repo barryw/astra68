@@ -225,6 +225,25 @@ module tb_boot_sdram #(
     integer bist_cycles = 0;
     real bist_mbps;
 
+    // Optional nonintrusive kernel profiler. TG68K's fetch PC can run ahead of
+    // calls, so sample the execution PC exported by the core. This does not
+    // perturb guest execution or alter production RTL. The caller supplies
+    // exact addresses from the ELF.
+    reg pc_profile_enabled = 1'b0;
+    reg pc_profile_active = 1'b0;
+    reg [31:0] pc_profile_start = 32'd0;
+    reg [31:0] pc_profile_stop = 32'd0;
+    reg [31:0] pc_profile_previous = 32'd0;
+    integer pc_profile_target = 1;
+    integer pc_profile_seen = 0;
+    integer pc_profile_fd = 0;
+    reg pc_profile_finish = 1'b0;
+    longint unsigned pc_profile_cycles = 0;
+    reg [31:0] pc_profile_icache_hits = 32'd0;
+    reg [31:0] pc_profile_icache_misses = 32'd0;
+    reg [31:0] pc_profile_dcache_hits = 32'd0;
+    reg [31:0] pc_profile_dcache_misses = 32'd0;
+
     initial begin
         expect_kernel_panic = EXPECT_KERNEL_PANIC;
         if ($test$plusargs("expect-kernel-panic")) expect_kernel_panic = 1'b1;
@@ -235,6 +254,63 @@ module tb_boot_sdram #(
         end
         if (expect_kernel_panic && expect_kernel_soak)
             $fatal(1, "panic and soak expectations are mutually exclusive");
+        if ($value$plusargs("profile-pc-start=%h", pc_profile_start) &&
+            $value$plusargs("profile-pc-stop=%h", pc_profile_stop)) begin
+            pc_profile_enabled = 1'b1;
+            pc_profile_finish = $test$plusargs("profile-pc-finish");
+            if (!$value$plusargs("profile-pc-target=%d", pc_profile_target))
+                pc_profile_target = 1;
+            if (pc_profile_target < 1)
+                $fatal(1, "profile-pc-target must be positive");
+        end
+    end
+
+    always @(posedge dut.clk) begin
+        if (pc_profile_enabled) begin
+            if (!pc_profile_active &&
+                dut.tg_dbg_exe_pc == pc_profile_start &&
+                pc_profile_previous != pc_profile_start) begin
+                pc_profile_seen = pc_profile_seen + 1;
+                if (pc_profile_seen == pc_profile_target) begin
+                    pc_profile_fd = $fopen("pc_profile.log", "w");
+                    if (pc_profile_fd == 0)
+                        $fatal(1, "unable to open pc_profile.log");
+                    pc_profile_active = 1'b1;
+                    pc_profile_cycles = 0;
+                    pc_profile_icache_hits = dut.tg_icache_hits;
+                    pc_profile_icache_misses = dut.tg_icache_misses;
+                    pc_profile_dcache_hits = dut.tg_dcache_hits;
+                    pc_profile_dcache_misses = dut.tg_dcache_misses;
+                    $display("PC PROFILE START occurrence=%0d pc=%08x",
+                             pc_profile_seen, dut.tg_dbg_exe_pc);
+                end
+            end
+            if (pc_profile_active) begin
+                $fwrite(pc_profile_fd,
+                        "%0d %08x %08x %b %b %03b %08x %08x %08x %08x\n",
+                        pc_profile_cycles, dut.tg_dbg_exe_pc, dut.cpu_adr,
+                        dut.cpu_as_n, dut.cpu_rw_n, dut.cpu_fc,
+                        dut.tg_icache_hits, dut.tg_icache_misses,
+                        dut.tg_dcache_hits, dut.tg_dcache_misses);
+                pc_profile_cycles = pc_profile_cycles + 1;
+                if (dut.tg_dbg_exe_pc == pc_profile_stop &&
+                    pc_profile_previous != pc_profile_stop) begin
+                    $display("PC PROFILE STOP cycles=%0d I$=%0d/%0d D$=%0d/%0d",
+                             pc_profile_cycles,
+                             dut.tg_icache_hits - pc_profile_icache_hits,
+                             dut.tg_icache_misses - pc_profile_icache_misses,
+                             dut.tg_dcache_hits - pc_profile_dcache_hits,
+                             dut.tg_dcache_misses - pc_profile_dcache_misses);
+                    $fclose(pc_profile_fd);
+                    pc_profile_fd = 0;
+                    pc_profile_active = 1'b0;
+                    pc_profile_enabled = 1'b0;
+                    if (pc_profile_finish)
+                        $finish;
+                end
+            end
+            pc_profile_previous = dut.tg_dbg_exe_pc;
+        end
     end
 
     always @(posedge dut.g_sdram_enabled.sd_domain_clk) begin

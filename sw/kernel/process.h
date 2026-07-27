@@ -3,6 +3,7 @@
 
 #include "context.h"
 #include "handle.h"
+#include "irq.h"
 #include "thread.h"
 
 #include <stdbool.h>
@@ -69,7 +70,8 @@ typedef enum KernelProcessMaintenanceFailure {
     KERNEL_PROCESS_MAINTENANCE_CREATE,
     KERNEL_PROCESS_MAINTENANCE_THREAD_REAP,
     KERNEL_PROCESS_MAINTENANCE_OWNER_FRAMES,
-    KERNEL_PROCESS_MAINTENANCE_OWNER_FRAME_UNDERFLOW
+    KERNEL_PROCESS_MAINTENANCE_OWNER_FRAME_UNDERFLOW,
+    KERNEL_PROCESS_MAINTENANCE_IRQ_REVOCATION
 } KernelProcessMaintenanceFailure;
 
 typedef struct KernelProcessMaintenanceDiagnostics {
@@ -146,6 +148,7 @@ typedef struct KernelSchedulerStats {
     uint32_t sync_live_objects;
     uint32_t sync_max_live_objects;
     uint32_t sync_wait_calls;
+    uint32_t sync_blocked_waits;
     uint32_t sync_signal_calls;
     uint32_t sync_cancellations;
     uint32_t sync_close_wakeups;
@@ -178,12 +181,16 @@ typedef struct KernelSchedulerStats {
     uint32_t port_receives;
     uint32_t port_send_would_block;
     uint32_t port_receive_would_block;
+    uint32_t port_receive_buffer_too_small;
     uint32_t port_wait_wakeups;
     uint32_t port_owner_deaths;
     uint32_t port_queued_messages;
     uint32_t port_queued_bytes;
     uint32_t port_queued_handles;
     uint32_t handle_transfers;
+    uint32_t handle_transfer_imports;
+    uint32_t handle_transfer_import_rollbacks;
+    uint32_t handle_transfer_live_detached;
     uint32_t handle_transfer_pool_exhaustions;
     uint32_t handle_transfer_max_detached;
     uint32_t area_created;
@@ -198,6 +205,8 @@ typedef struct KernelSchedulerStats {
     uint32_t ring_producer_notifications;
     uint32_t ring_consumer_notifications;
     uint32_t ring_wait_wakeups;
+    uint32_t ring_peer_closures;
+    uint32_t irq_wake_to_run_max_cycles;
     uint8_t milestone_complete;
     uint8_t reserved[3];
 } KernelSchedulerStats;
@@ -218,6 +227,14 @@ KernelProcessStatus kernel_process_set_thread_bootstrap_argument(
 KernelProcessStatus kernel_process_grant_handle(
     uint32_t recipient_process_id, uint32_t target_process_id,
     uint32_t rights, KernelHandle *handle);
+KernelProcessStatus kernel_process_grant_irq(
+    uint32_t recipient_process_id, const KernelIrqBinding *binding,
+    uint32_t rights, KernelHandle *handle);
+KernelProcessStatus kernel_process_qualification_authorize(
+    uint32_t process_id, uint32_t irq_source_mask);
+bool kernel_process_qualification_status(uint32_t process_id,
+                                         uint32_t *authorized_sources,
+                                         uint32_t *completed_sources);
 KernelProcessStatus kernel_process_start(KernelCpuContext **next_context);
 bool kernel_process_active(void);
 KernelCpuContext *kernel_process_current_context(void);
@@ -227,6 +244,9 @@ KernelProcessStatus kernel_process_on_timer(const uint32_t *registers,
                                             uint32_t user_stack,
                                             const void *raw_frame,
                                             KernelCpuContext **next_context);
+KernelProcessStatus kernel_process_on_interrupt_wakeup(
+    const uint32_t *registers, uint32_t user_stack, const void *raw_frame,
+    KernelCpuContext **next_context);
 KernelProcessStatus kernel_process_on_supervisor_timer(void);
 KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                                               uint32_t user_stack,
@@ -244,7 +264,7 @@ bool kernel_process_maintenance_pending(void);
 bool kernel_process_snapshot(uint32_t slot, KernelProcessSnapshot *snapshot);
 bool kernel_process_stats(KernelSchedulerStats *stats);
 
-void kernel_process_milestone_reached(void);
+void kernel_process_milestone_reached(const KernelSchedulerStats *stats);
 
 #if ASTRA_KERNEL_SOAK_SELFTEST
 KernelProcessStatus kernel_process_soak_configure(

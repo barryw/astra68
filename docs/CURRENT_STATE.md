@@ -13,8 +13,9 @@ The kernel's normative implementation contracts are
 `KERNEL_ARCHITECTURE.md`, `MEMORY_MAP_AND_PMMU.md`, `ABI.md`,
 `LOCKING_AND_PREEMPTION.md`, `RESOURCE_OWNERSHIP_AND_FAILURES.md`,
 `MEMORY_BUDGET.md`, `SHARED_AREAS_AND_BULK_RINGS.md`,
-`K9_MEMORY_PRESSURE.md`, and `TEST_AND_FAULT_INJECTION_PLAN.md`; `STATUS.md`
-separates implemented evidence from planned work.
+`K9_MEMORY_PRESSURE.md`, `K10_DEVICE_AND_OBSERVABILITY.md`, and
+`TEST_AND_FAULT_INJECTION_PLAN.md`; `STATUS.md` separates implemented evidence
+from planned work.
 
 The product-level operating-system direction is `OS_VISION.md`. Focused but
 unimplemented userspace design lives in `USERSPACE_ARCHITECTURE.md`,
@@ -165,6 +166,32 @@ personality, zsh, or Vim currently run.
 
 ## Current integration state
 
+- K10 device and observability support is the active pre-route candidate. It
+  adds 16 generation-safe IRQ endpoints with four fixed records each, one
+  bounded common Vesta dispatcher, typed MMIO accessors, first-fault bus
+  diagnostics and target timeouts, a 64 KiB allocation-free retained trace,
+  eight deferred-work classes on the existing guarded worker, and one bounded
+  monitor parser shared by FTDI and AstraHost SPI. The user ABI is
+  `0x00010005`; arbitrary source binding remains privileged and no device
+  policy moved into Axiom.
+
+  The candidate passes all 28 host suites normally, under GCC
+  ASan/UBSan/leak checks, and under GCC `-fanalyzer`; the MC68030 cross-build,
+  NDK SDK and generated HTML/PDF documentation, Rust, shared architecture,
+  Harte smoke, focused USB, bus-fault, SDRAM-timeout, framebuffer-guard, and
+  all 29 hardware-checker cases also pass. Fresh Beast Verilator 5.047 snapshot
+  `/tmp/astra68-k10-final-sim-20260727b` completes the full HDMI-enabled
+  pin-level run in 2,051.123 seconds and exits zero after
+  `ASTRAHOST KERNEL ENTRY PASS`; its 154,905-byte durable transcript is
+  `/tmp/k10-final-hostboot-20260727b.log`. It covers 32 MiB BIST, PMMU,
+  scheduler/fault containment, five required device sources delivered and
+  acknowledged, exact owner-death cleanup, and AstraHost-SPI monitor output.
+  Removing only Verilator's `UART: ` transcript prefix makes the simulated
+  output pass the strict raw-serial `--expect-k10-device` gate. Exact committed
+  rerun, production route, immutable artifact identities, and repeated ULX3S
+  checks are still release gates. K10 must not be described as
+  hardware-qualified; K9 remains the current hardware-qualified release and
+  rollback.
 - The hardware-qualified K9 memory-pressure release is exact implementation
   commit `03660014d7af6d3662504fc076700f04929117ab`, built reproducibly with
   `SOURCE_DATE_EPOCH=1785033792` (`2026-07-26T02:43:12Z`). Its immutable source

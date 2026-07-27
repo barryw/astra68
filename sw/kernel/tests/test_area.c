@@ -21,9 +21,13 @@ void kernel_pmmu_load_srp(const KernelPmmuRootPointer *root) { (void)root; }
 void kernel_pmmu_load_crp(const KernelPmmuRootPointer *root) { (void)root; }
 void kernel_pmmu_load_tt0(const uint32_t *value) { (void)value; }
 void kernel_pmmu_load_tt1(const uint32_t *value) { (void)value; }
+void kernel_pmmu_read_tc(uint32_t *value) { *value = 0u; }
+void kernel_pmmu_read_srp(KernelPmmuRootPointer *root) { *root = (KernelPmmuRootPointer){0}; }
+void kernel_pmmu_read_crp(KernelPmmuRootPointer *root) { *root = (KernelPmmuRootPointer){0}; }
 void kernel_pmmu_flush_all(void) { }
 void kernel_pmmu_set_user_function_codes(void) { }
 void kernel_cache_invalidate_all(void) { }
+uint32_t kernel_cache_read_control(void) { return 0u; }
 
 static void add_range(AstraBootInfo *info, uint32_t base, uint32_t size,
                       uint32_t type, uint32_t flags)
@@ -78,7 +82,7 @@ static void initialize_test(void)
               ASTRA_MEMORY_RANGE_KERNEL,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, 0x02090000u, 0x01d70000u,
+    add_range(&info, ASTRA_KERNEL_USABLE_ADDRESS, ASTRA_KERNEL_USABLE_SIZE,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);

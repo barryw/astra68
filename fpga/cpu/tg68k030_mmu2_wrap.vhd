@@ -58,6 +58,7 @@ entity tg68k_wrap is
         DBG_DCACHE_HITS   : out std_logic_vector(31 downto 0);
         DBG_DCACHE_MISSES : out std_logic_vector(31 downto 0);
         DBG_D2C   : out std_logic_vector(31 downto 0);
+        DBG_EXE_PC : out std_logic_vector(31 downto 0);
         DBG_IMM   : out std_logic_vector(31 downto 0);
         DBG_ARIN  : out std_logic_vector(31 downto 0)
     );
@@ -81,6 +82,7 @@ architecture rtl of tg68k_wrap is
     signal tg_cacr       : std_logic_vector(31 downto 0);
     signal tg_vbr        : std_logic_vector(31 downto 0);
     signal tg_debug_pc   : std_logic_vector(31 downto 0);
+    signal tg_debug_exe_pc : std_logic_vector(31 downto 0);
     signal tg_trap_vector : std_logic_vector(31 downto 0);
     signal pmmu_walker_req  : std_logic;
     signal pmmu_walker_we   : std_logic;
@@ -504,6 +506,7 @@ begin
                                  BERRn = '0' else '0';
 
     DBG_D2C <= tg_debug_pc;
+    DBG_EXE_PC <= tg_debug_exe_pc;
     DBG_ICACHE_HITS <= std_logic_vector(icache_hits);
     DBG_ICACHE_MISSES <= std_logic_vector(icache_misses);
     DBG_DCACHE_HITS <= std_logic_vector(dcache_hits);
@@ -623,7 +626,7 @@ begin
             debug_get_2ndopc => open,
             debug_fline_brief_pending => open,
             debug_fline_opcode_pc => open,
-            debug_exe_PC => open,
+            debug_exe_PC => tg_debug_exe_pc,
             debug_memaddr_delta_rega => open,
             debug_memaddr_delta_regb => open,
             debug_addsub_q => open,

@@ -3,14 +3,19 @@
 #include "block.h"
 #include "dma.h"
 #include "exception.h"
+#include "irq.h"
 #include "memory.h"
 #include "platform.h"
 #include "pmmu.h"
+#include "port.h"
 #include "process.h"
 #include "qualification.h"
+#include "ring.h"
 #include "sync.h"
+#include "trace.h"
 #include "user_copy.h"
 #include "vm.h"
+#include "worker.h"
 
 #include <astra/syscall.h>
 
@@ -44,6 +49,133 @@ static uint32_t disable_hook_thread_count;
 static bool interrupts_enabled;
 static bool timer_on_disable_armed;
 static bool timer_on_disable_fired;
+static uint32_t irq_configure_count;
+static uint32_t irq_mask_count;
+static uint32_t irq_enable_count;
+static uint32_t irq_ack_count;
+static uint32_t irq_capture_count;
+static uint32_t irq_complete_count;
+static uint32_t irq_quiesce_count;
+static uint32_t irq_quiesce_failures_remaining;
+static uint32_t irq_reset_schedule_count;
+static uint32_t irq_capture_status;
+static uint8_t irq_test_source;
+static uint32_t qualification_prepare_count;
+static uint32_t qualification_consume_count;
+static uint32_t qualification_consumed_status;
+
+static bool irq_controller_configure(uint8_t source, uint8_t trigger,
+                                     uint8_t ipl, uint8_t vector,
+                                     void *context)
+{
+    (void)context;
+    assert(source < KERNEL_IRQ_SOURCE_COUNT);
+    assert(trigger == KERNEL_IRQ_TRIGGER_LEVEL ||
+           trigger == KERNEL_IRQ_TRIGGER_EDGE);
+    assert(ipl >= 1u && ipl <= 7u);
+    assert(vector == KERNEL_IRQ_COMMON_VECTOR);
+    ++irq_configure_count;
+    return true;
+}
+
+static bool irq_controller_mask(uint8_t source, void *context)
+{
+    (void)context;
+    assert(source < KERNEL_IRQ_SOURCE_COUNT);
+    ++irq_mask_count;
+    return true;
+}
+
+static bool irq_controller_enable(uint8_t source, void *context)
+{
+    (void)context;
+    assert(source < KERNEL_IRQ_SOURCE_COUNT);
+    ++irq_enable_count;
+    return true;
+}
+
+static bool irq_controller_acknowledge(uint8_t source, void *context)
+{
+    (void)context;
+    assert(source < KERNEL_IRQ_SOURCE_COUNT);
+    ++irq_ack_count;
+    return true;
+}
+
+static bool irq_device_capture(uint8_t source, uint32_t *status,
+                               void *context)
+{
+    (void)context;
+    assert(source == irq_test_source);
+    assert(status != NULL);
+    *status = irq_capture_status;
+    ++irq_capture_count;
+    return true;
+}
+
+static bool irq_device_complete(uint8_t source,
+                                const KernelIrqRecord *record,
+                                void *context)
+{
+    (void)context;
+    assert(source == irq_test_source);
+    assert(record != NULL && record->sequence != 0u);
+    ++irq_complete_count;
+    return true;
+}
+
+static bool irq_device_quiesce(uint8_t source, void *context)
+{
+    (void)context;
+    assert(source == irq_test_source);
+    ++irq_quiesce_count;
+    if (irq_quiesce_failures_remaining == 0u)
+        return true;
+    --irq_quiesce_failures_remaining;
+    return false;
+}
+
+bool kernel_interrupt_device_binding(uint8_t source,
+                                     KernelIrqBinding *binding)
+{
+    if (binding == NULL || source != irq_test_source)
+        return false;
+    *binding = (KernelIrqBinding){
+        .capture = irq_device_capture,
+        .complete = irq_device_complete,
+        .quiesce = irq_device_quiesce,
+        .context = NULL,
+        .source = source,
+        .trigger = KERNEL_IRQ_TRIGGER_LEVEL,
+        .ipl = 3u,
+        .vector = KERNEL_IRQ_COMMON_VECTOR,
+    };
+    return true;
+}
+
+bool kernel_interrupt_schedule_device_reset(void)
+{
+    if (!kernel_irq_revocation_pending())
+        return false;
+    ++irq_reset_schedule_count;
+    return true;
+}
+
+bool kernel_platform_qualification_irq_prepare(uint8_t source)
+{
+    assert(source == irq_test_source);
+    ++qualification_prepare_count;
+    return true;
+}
+
+bool kernel_platform_qualification_irq_consume(uint8_t source,
+                                               uint32_t status)
+{
+    assert(source == irq_test_source);
+    ++qualification_consume_count;
+    qualification_consumed_status = status;
+    return true;
+}
 
 static int copy_user_bytes(void *buffer, uint32_t user_address,
                            uint32_t size, bool to_user)
@@ -102,7 +234,7 @@ void kernel_enable_interrupts(void)
     ++interrupt_enable_count;
 }
 
-void kernel_disable_interrupts(void)
+static void fire_timer_before_mask(void)
 {
     if (timer_on_disable_armed) {
         KernelProcessSnapshot process;
@@ -115,8 +247,27 @@ void kernel_disable_interrupts(void)
         assert(kernel_thread_pool_valid());
         timer_on_disable_fired = true;
     }
+}
+
+void kernel_disable_interrupts(void)
+{
+    fire_timer_before_mask();
     interrupts_enabled = false;
     ++interrupt_disable_count;
+}
+
+uint16_t kernel_interrupt_save_disable(void)
+{
+    uint16_t saved = interrupts_enabled ? 0x2000u : 0x2700u;
+
+    fire_timer_before_mask();
+    interrupts_enabled = false;
+    return saved;
+}
+
+void kernel_interrupt_restore(uint16_t status_register)
+{
+    interrupts_enabled = (status_register & 0x0700u) != 0x0700u;
 }
 
 void kernel_platform_cpu_cycles(KernelPlatformCycleCount *cycles)
@@ -124,6 +275,38 @@ void kernel_platform_cpu_cycles(KernelPlatformCycleCount *cycles)
     assert(cycles != NULL);
     cycles->high = (uint32_t)(scheduler_test_cycles >> 32);
     cycles->low = (uint32_t)scheduler_test_cycles;
+}
+
+bool kernel_trace_write(KernelTraceEvent event, uint16_t flags,
+                        uint32_t argument0, uint32_t argument1,
+                        uint32_t argument2, uint32_t argument3)
+{
+    (void)event;
+    (void)flags;
+    (void)argument0;
+    (void)argument1;
+    (void)argument2;
+    (void)argument3;
+    return true;
+}
+
+bool kernel_trace_write_at(KernelTraceEvent event, uint16_t flags,
+                           uint64_t timestamp, uint32_t argument0,
+                           uint32_t argument1, uint32_t argument2,
+                           uint32_t argument3)
+{
+    (void)timestamp;
+    return kernel_trace_write(event, flags, argument0, argument1,
+                              argument2, argument3);
+}
+
+bool kernel_trace_stage_at(KernelTraceEvent event, uint16_t flags,
+                           uint64_t timestamp, uint32_t argument0,
+                           uint32_t argument1, uint32_t argument2,
+                           uint32_t argument3)
+{
+    return kernel_trace_write_at(event, flags, timestamp, argument0,
+                                 argument1, argument2, argument3);
 }
 
 uint64_t kernel_platform_monotonic_ns(void)
@@ -179,6 +362,21 @@ void kernel_pmmu_load_tt1(const uint32_t *value)
     (void)value;
 }
 
+void kernel_pmmu_read_tc(uint32_t *value)
+{
+    *value = 0u;
+}
+
+void kernel_pmmu_read_srp(KernelPmmuRootPointer *root)
+{
+    *root = (KernelPmmuRootPointer){0};
+}
+
+void kernel_pmmu_read_crp(KernelPmmuRootPointer *root)
+{
+    *root = (KernelPmmuRootPointer){0};
+}
+
 void kernel_pmmu_flush_all(void)
 {
 }
@@ -189,6 +387,11 @@ void kernel_pmmu_set_user_function_codes(void)
 
 void kernel_cache_invalidate_all(void)
 {
+}
+
+uint32_t kernel_cache_read_control(void)
+{
+    return 0u;
 }
 
 bool kernel_platform_block_present(void)
@@ -227,8 +430,9 @@ void kernel_platform_block_ack_state(void)
 {
 }
 
-void kernel_process_milestone_reached(void)
+void kernel_process_milestone_reached(const KernelSchedulerStats *stats)
 {
+    assert(stats != NULL);
     ++milestone_calls;
 }
 
@@ -314,6 +518,13 @@ static void add_range(AstraBootInfo *info, uint32_t base, uint32_t size,
 static void initialize_test(void)
 {
     AstraBootInfo info;
+    const KernelIrqControllerOps irq_ops = {
+        .configure = irq_controller_configure,
+        .mask = irq_controller_mask,
+        .enable = irq_controller_enable,
+        .acknowledge = irq_controller_acknowledge,
+        .context = NULL,
+    };
 
     memset(&info, 0, sizeof(info));
     info.magic = ASTRA_BOOT_INFO_MAGIC;
@@ -352,7 +563,7 @@ static void initialize_test(void)
               ASTRA_MEMORY_RANGE_KERNEL,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, 0x02090000u, 0x01d70000u,
+    add_range(&info, ASTRA_KERNEL_USABLE_ADDRESS, ASTRA_KERNEL_USABLE_SIZE,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
@@ -377,6 +588,21 @@ static void initialize_test(void)
     assert(kernel_vm_enable() == KERNEL_VM_OK);
     kernel_dma_init();
     kernel_block_init();
+    irq_configure_count = 0u;
+    irq_mask_count = 0u;
+    irq_enable_count = 0u;
+    irq_ack_count = 0u;
+    irq_capture_count = 0u;
+    irq_complete_count = 0u;
+    irq_quiesce_count = 0u;
+    irq_quiesce_failures_remaining = 0u;
+    irq_reset_schedule_count = 0u;
+    irq_capture_status = 0u;
+    irq_test_source = 0u;
+    qualification_prepare_count = 0u;
+    qualification_consume_count = 0u;
+    qualification_consumed_status = 0u;
+    assert(kernel_irq_pool_init(&irq_ops));
     scheduler_test_cycles = 0u;
     timer_arm_count = 0u;
     timer_last_load = 0u;
@@ -590,6 +816,7 @@ static void test_preemption_fault_containment_and_teardown(void)
     KernelThreadSnapshot survivor_thread;
     KernelThreadSnapshot sibling_thread;
     KernelSchedulerStats stats;
+    KernelSyncPoolStats sync_stats;
     KernelVmStats before_same_space_switch;
     KernelVmStats after_same_space_switch;
     KernelVmStats after_cross_space_switch;
@@ -901,6 +1128,7 @@ static void test_preemption_fault_containment_and_teardown(void)
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(milestone_calls == 1u);
     assert(kernel_process_stats(&stats));
+    assert(kernel_sync_pool_stats(&sync_stats));
     assert(stats.live_processes == 1u);
     assert(stats.dead_processes == 1u);
     assert(stats.created_threads == 3u);
@@ -929,6 +1157,8 @@ static void test_preemption_fault_containment_and_teardown(void)
     assert(stats.sync_live_objects == 1u);
     assert(stats.sync_max_live_objects >= 4u);
     assert(stats.sync_wait_calls == 6u);
+    assert(stats.sync_blocked_waits == sync_stats.blocked_waits);
+    assert(stats.sync_blocked_waits >= 5u);
     assert(stats.sync_signal_calls == 2u);
     assert(stats.sync_cancellations == 1u);
     assert(stats.sync_close_wakeups == 1u);
@@ -1425,6 +1655,369 @@ static void test_sync_syscall_rights_and_stale_handles(void)
     assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
 }
 
+static void test_irq_syscalls_waits_rights_and_owner_cleanup(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    const uint32_t full_rights =
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_WAIT |
+        ASTRA_RIGHT_TRANSFER | ASTRA_RIGHT_ADMINISTER;
+    KernelIrqBinding binding = {
+        .capture = irq_device_capture,
+        .complete = irq_device_complete,
+        .quiesce = irq_device_quiesce,
+        .context = NULL,
+        .source = 5u,
+        .trigger = KERNEL_IRQ_TRIGGER_LEVEL,
+        .ipl = 3u,
+        .vector = KERNEL_IRQ_COMMON_VECTOR,
+    };
+    KernelCpuContext *next;
+    KernelIrqPoolStats irq_stats;
+    AstraIrqRecord record;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+    uint32_t irq_handle;
+    uint32_t reduced_handle;
+    uint32_t user_record = KERNEL_PROCESS_STACK_TOP - 64u;
+    uint32_t woken;
+
+    initialize_test();
+    irq_test_source = binding.source;
+    irq_capture_status = 0x5a68c030u;
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_grant_irq(process_id, &binding, full_rights,
+                                    &irq_handle) == KERNEL_PROCESS_OK);
+    assert(irq_handle != KERNEL_HANDLE_INVALID);
+    assert(irq_configure_count == 1u && irq_mask_count == 1u);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+
+    registers[0] = ASTRA_SYSCALL_HANDLE_DUPLICATE;
+    registers[1] = irq_handle;
+    registers[2] = ASTRA_RIGHT_READ | ASTRA_RIGHT_WAIT;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    reduced_handle = next->data[1];
+    assert(reduced_handle != irq_handle);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_IRQ_ARM;
+    registers[1] = reduced_handle;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_IRQ_ARM;
+    registers[1] = irq_handle;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(irq_enable_count == 1u);
+
+    assert(kernel_irq_dispatch(binding.source, binding.vector,
+                               UINT64_C(0x1122334455667788), &woken) ==
+           KERNEL_IRQ_OK);
+    assert(woken == 0u && irq_capture_count == 1u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_WAIT_ONE;
+    registers[1] = reduced_handle;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_IRQ_READ;
+    registers[1] = reduced_handle;
+    registers[2] = user_record;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == 0u);
+    assert(kernel_user_copy_from_asm(&record, user_record, sizeof(record)) ==
+           KERNEL_USER_COPY_OK);
+    assert(record.timestamp_high == 0x11223344u);
+    assert(record.timestamp_low == 0x55667788u);
+    assert(record.status == irq_capture_status);
+    assert(record.sequence != 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_IRQ_ACK;
+    registers[1] = reduced_handle;
+    registers[2] = record.sequence;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_IRQ_ACK;
+    registers[1] = irq_handle;
+    registers[2] = record.sequence + 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    registers[2] = record.sequence;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(irq_complete_count == 1u && irq_ack_count == 1u);
+    assert(irq_enable_count == 2u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_IRQ_REVOKE;
+    registers[1] = irq_handle;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(irq_quiesce_count == 0u);
+    assert(kernel_process_maintenance_pending());
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(irq_reset_schedule_count == 1u);
+    assert(kernel_irq_service_revocations(
+               KERNEL_WORKER_DEVICE_RESET_BATCH, &woken) == KERNEL_IRQ_OK);
+    assert(woken == 1u);
+    assert(irq_quiesce_count == 1u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_WAIT_ONE;
+    registers[1] = reduced_handle;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
+
+    for (uint32_t close = 0u; close < 2u; ++close) {
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_CLOSE;
+        registers[1] = close == 0u ? reduced_handle : irq_handle;
+        assert(kernel_process_on_syscall(
+                   registers, KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                   &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+    }
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_IRQ_ARM;
+    registers[1] = irq_handle;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_EXIT;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(kernel_irq_pool_stats(&irq_stats));
+    assert(irq_stats.live_endpoints == 0u);
+
+    initialize_test();
+    binding.source = 6u;
+    irq_test_source = binding.source;
+    irq_quiesce_failures_remaining = 2u;
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_grant_irq(process_id, &binding, full_rights,
+                                    &irq_handle) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_EXIT;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance_pending());
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(irq_reset_schedule_count == 1u);
+    assert(kernel_irq_service_revocations(
+               KERNEL_WORKER_DEVICE_RESET_BATCH, &woken) ==
+           KERNEL_IRQ_DEVICE_ERROR);
+    assert(woken == 0u && irq_quiesce_count == 1u);
+    assert(kernel_irq_pool_stats(&irq_stats));
+    assert(irq_stats.live_endpoints == 1u);
+    assert(irq_stats.revoking_endpoints == 1u);
+    assert(kernel_process_maintenance_pending());
+    assert(kernel_irq_service_revocations(
+               KERNEL_WORKER_DEVICE_RESET_BATCH, &woken) ==
+           KERNEL_IRQ_DEVICE_ERROR);
+    assert(woken == 0u && irq_quiesce_count == 2u);
+    assert(kernel_irq_service_revocations(
+               KERNEL_WORKER_DEVICE_RESET_BATCH, &woken) == KERNEL_IRQ_OK);
+    assert(woken == 1u);
+    assert(irq_quiesce_count == 3u);
+    assert(kernel_irq_pool_stats(&irq_stats));
+    assert(irq_stats.live_endpoints == 0u);
+    assert(irq_stats.revoking_endpoints == 0u);
+    assert(!kernel_process_maintenance_pending());
+}
+
+static void test_private_irq_qualification_control(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    const uint32_t source_mask = 1u << 5;
+    KernelCpuContext *next;
+    KernelIrqPoolStats irq_stats;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+    uint32_t irq_handle;
+    uint32_t authorized;
+    uint32_t completed;
+    uint32_t reset_completed;
+
+    initialize_test();
+    irq_test_source = 5u;
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_qualification_authorize(
+               process_id, 1u << 31) == KERNEL_PROCESS_INVALID_ARGUMENT);
+    assert(kernel_process_qualification_authorize(
+               process_id, source_mask) == KERNEL_PROCESS_OK);
+    assert(kernel_process_qualification_status(
+        process_id, &authorized, &completed));
+    assert(authorized == source_mask && completed == 0u);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+
+    registers[0] = ASTRA_SYSCALL_PROGRESS;
+    registers[1] = KERNEL_QUALIFICATION_COMMAND_QUERY_IRQS;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == source_mask);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROGRESS;
+    registers[1] = KERNEL_QUALIFICATION_COMMAND_BIND_IRQ;
+    registers[2] = 4u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROGRESS;
+    registers[1] = KERNEL_QUALIFICATION_COMMAND_BIND_IRQ;
+    registers[2] = irq_test_source;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    irq_handle = next->data[1];
+    assert(irq_handle != KERNEL_HANDLE_INVALID);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROGRESS;
+    registers[1] = KERNEL_QUALIFICATION_COMMAND_PREPARE_IRQ;
+    registers[2] = irq_test_source;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(qualification_prepare_count == 1u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROGRESS;
+    registers[1] = KERNEL_QUALIFICATION_COMMAND_CONSUME_IRQ;
+    registers[2] = irq_test_source;
+    registers[3] = 0xa568c030u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(qualification_consume_count == 1u);
+    assert(qualification_consumed_status == 0xa568c030u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROGRESS;
+    registers[1] = KERNEL_QUALIFICATION_COMMAND_COMPLETE_IRQS;
+    registers[2] = 0u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    registers[2] = source_mask;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_process_qualification_status(
+        process_id, &authorized, &completed));
+    assert(completed == source_mask);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CLOSE;
+    registers[1] = irq_handle;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_IRQ_ARM;
+    registers[1] = irq_handle;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+    assert(kernel_irq_pool_stats(&irq_stats));
+    assert(irq_stats.live_endpoints == 1u);
+    assert(irq_stats.revoking_endpoints == 1u);
+    assert(kernel_process_maintenance_pending());
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(irq_reset_schedule_count == 1u);
+    assert(kernel_irq_service_revocations(
+               KERNEL_WORKER_DEVICE_RESET_BATCH, &reset_completed) ==
+           KERNEL_IRQ_OK);
+    assert(reset_completed == 1u);
+    assert(kernel_irq_pool_stats(&irq_stats));
+    assert(irq_stats.live_endpoints == 0u);
+    assert(irq_stats.revoking_endpoints == 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_EXIT;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROGRESS;
+    registers[1] = KERNEL_QUALIFICATION_COMMAND_QUERY_IRQS;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_EXIT;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+}
+
 static void test_priority_selection_and_equal_priority_rotation(void)
 {
     static const uint8_t image[] = {0x4eu, 0x71u, 0x60u, 0xfcu};
@@ -1568,6 +2161,34 @@ static void test_last_runnable_timed_wait_wakes_from_supervisor_idle(void)
     assert(stats.deadline_expirations == 1u);
     assert(stats.deadline_preemptions == 0u);
     assert(stats.deadline_depth == 0u);
+}
+
+static void test_prestart_timer_cannot_consume_published_thread(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
+    KernelCpuContext *next;
+    KernelProcessSnapshot process;
+    uint32_t process_id;
+    uint32_t thread_id;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    interrupts_enabled = true;
+    disable_hook_process_slot = 0u;
+    disable_hook_thread_count = 1u;
+    timer_on_disable_armed = true;
+    assert(kernel_process_create_thread(
+               process_id, 2u, 0u, KERNEL_THREAD_PRIORITY_NORMAL,
+               &thread_id) == KERNEL_PROCESS_OK);
+    assert(timer_on_disable_fired);
+    assert(!kernel_process_active());
+    assert(kernel_process_snapshot(0u, &process));
+    assert(process.thread_count == 2u);
+    assert(process.live_threads == 2u);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(next != NULL);
+    assert(kernel_process_active());
 }
 
 static void test_normal_syscalls_do_not_renew_quantum(void)
@@ -3030,6 +3651,8 @@ static void test_message_port_syscall_atomicity_and_cleanup(void)
     KernelMemoryStats baseline;
     KernelMemoryStats final;
     KernelSchedulerStats stats;
+    KernelHandleTransferStats transfer_stats;
+    KernelPortPoolStats port_stats;
     KernelCpuContext *next;
     KernelThread *port_thread;
     KernelHandle attached;
@@ -3323,15 +3946,28 @@ static void test_message_port_syscall_atomicity_and_cleanup(void)
     assert(next->data[0] == ASTRA_SYSCALL_OK);
 
     assert(kernel_process_stats(&stats));
+    assert(kernel_port_pool_stats(&port_stats));
+    assert(kernel_handle_transfer_stats(&transfer_stats));
     assert(stats.port_created == 1u);
     assert(stats.port_active == 0u);
     assert(stats.port_sends == 3u);
     assert(stats.port_receives == 3u);
     assert(stats.port_send_would_block == 1u);
+    assert(stats.port_receive_buffer_too_small ==
+           port_stats.receive_buffer_too_small);
+    assert(stats.port_receive_buffer_too_small != 0u);
     assert(stats.port_queued_messages == 0u);
     assert(stats.port_queued_bytes == 0u);
     assert(stats.port_queued_handles == 0u);
     assert(stats.handle_transfers == 2u);
+    assert(stats.handle_transfer_imports == transfer_stats.committed_imports);
+    assert(stats.handle_transfer_imports != 0u);
+    assert(stats.handle_transfer_import_rollbacks ==
+           transfer_stats.import_rollbacks);
+    assert(stats.handle_transfer_import_rollbacks != 0u);
+    assert(stats.handle_transfer_live_detached ==
+           transfer_stats.live_detached);
+    assert(stats.handle_transfer_live_detached == 0u);
     assert(stats.handle_transfer_max_detached == 1u);
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_EXIT;
@@ -3357,6 +3993,7 @@ static void test_shared_area_and_bulk_ring_syscalls(void)
     KernelMemoryStats baseline;
     KernelMemoryStats final;
     KernelSchedulerStats stats;
+    KernelRingPoolStats ring_stats;
     KernelCpuContext *next;
     uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
     uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
@@ -3521,6 +4158,7 @@ static void test_shared_area_and_bulk_ring_syscalls(void)
         assert(next->data[0] == ASTRA_SYSCALL_OK);
     }
     assert(kernel_process_stats(&stats));
+    assert(kernel_ring_pool_stats(&ring_stats));
     assert(stats.area_created == 1u);
     assert(stats.area_active == 0u);
     assert(stats.area_mappings == 0u);
@@ -3528,6 +4166,8 @@ static void test_shared_area_and_bulk_ring_syscalls(void)
     assert(stats.ring_created == 1u);
     assert(stats.ring_active == 0u);
     assert(stats.ring_notifications == 2u);
+    assert(stats.ring_peer_closures == ring_stats.peer_closures);
+    assert(stats.ring_peer_closures != 0u);
 
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_EXIT;
@@ -3841,9 +4481,14 @@ static void test_area_and_ring_endpoint_transfer_over_port(void)
         assert(next->data[0] == ASTRA_SYSCALL_OK);
     }
     assert(kernel_process_stats(&stats));
-    assert(stats.handle_transfers == 1u);
-    assert(stats.handle_transfer_max_detached == 2u);
     assert(kernel_handle_transfer_stats(&transfer_stats));
+    assert(stats.handle_transfers == 1u);
+    assert(stats.handle_transfer_imports == transfer_stats.committed_imports);
+    assert(stats.handle_transfer_imports != 0u);
+    assert(stats.handle_transfer_live_detached ==
+           transfer_stats.live_detached);
+    assert(stats.handle_transfer_live_detached == 0u);
+    assert(stats.handle_transfer_max_detached == 2u);
     assert(transfer_stats.committed_exports == 1u);
     assert(transfer_stats.committed_imports == 1u);
     assert(transfer_stats.live_detached == 0u);
@@ -3869,9 +4514,12 @@ int main(void)
     test_soak_rejects_unexplained_frame_loss();
     test_invalid_creation_does_not_allocate();
     test_sync_syscall_rights_and_stale_handles();
+    test_irq_syscalls_waits_rights_and_owner_cleanup();
+    test_private_irq_qualification_control();
     test_priority_selection_and_equal_priority_rotation();
     test_per_process_thread_limit_is_bounded_and_reclaimable();
     test_last_runnable_timed_wait_wakes_from_supervisor_idle();
+    test_prestart_timer_cannot_consume_published_thread();
     test_normal_syscalls_do_not_renew_quantum();
     test_worker_time_does_not_consume_user_quantum();
     test_public_thread_lifecycle_and_exact_charges();

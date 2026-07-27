@@ -726,6 +726,123 @@ _k1_survivor_image_entry:
 	move.l  #KERNEL_QUALIFICATION_K8_RESULT, \
 		KERNEL_QUALIFICATION_K8_RESULT_OFFSET(%a0)
 
+	| K10: every present production device source uses one endpoint path.
+	move.l  #KERNEL_QUALIFICATION_COMMAND_QUERY_IRQS, %d1
+	moveq   #ASTRA_SYSCALL_PROGRESS, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %d1, %d6
+	move.l  %d6, KERNEL_QUALIFICATION_K10_SOURCE_MASK_OFFSET(%a0)
+
+	.macro K10_QUALIFY_IRQ source, bit, expected, result_offset
+	move.l  %d6, %d1
+	andi.l  #\bit, %d1
+	beq     .Lk10_skip_\@
+
+	move.l  #KERNEL_QUALIFICATION_COMMAND_BIND_IRQ, %d1
+	moveq   #\source, %d2
+	moveq   #ASTRA_SYSCALL_PROGRESS, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %d1, %d7
+
+	move.l  #KERNEL_QUALIFICATION_COMMAND_PREPARE_IRQ, %d1
+	moveq   #\source, %d2
+	moveq   #ASTRA_SYSCALL_PROGRESS, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+
+	move.l  %d7, %d1
+	moveq   #ASTRA_SYSCALL_IRQ_ARM, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+
+	move.l  %d7, %d1
+	move.l  #ASTRA_DEADLINE_NONE_HI, %d2
+	moveq   #-1, %d3
+	moveq   #ASTRA_SYSCALL_WAIT_ONE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+
+	move.l  %d7, %d1
+	move.l  #KERNEL_QUALIFICATION_SHARED_BASE + \
+		KERNEL_QUALIFICATION_K10_IRQ_RECORD_OFFSET, %d2
+	moveq   #ASTRA_SYSCALL_IRQ_READ, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	tst.l   %d1
+	bne     .Lmain_fail
+	move.l  KERNEL_QUALIFICATION_K10_IRQ_RECORD_OFFSET + 8(%a0), %d4
+	move.l  %d4, %d5
+	andi.l  #\expected, %d5
+	cmpi.l  #\expected, %d5
+	bne     .Lmain_fail
+
+	move.l  #KERNEL_QUALIFICATION_COMMAND_CONSUME_IRQ, %d1
+	moveq   #\source, %d2
+	move.l  %d4, %d3
+	moveq   #ASTRA_SYSCALL_PROGRESS, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+
+	move.l  %d7, %d1
+	move.l  KERNEL_QUALIFICATION_K10_IRQ_RECORD_OFFSET + 12(%a0), %d2
+	moveq   #ASTRA_SYSCALL_IRQ_ACK, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %d7, %d1
+	moveq   #ASTRA_SYSCALL_CLOSE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+
+	move.l  %d7, %d1
+	moveq   #ASTRA_SYSCALL_IRQ_ARM, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	cmpi.l  #ASTRA_SYSCALL_INVALID_HANDLE, %d0
+	bne     .Lmain_fail
+	move.l  #KERNEL_QUALIFICATION_K10_SOURCE_RESULT, \result_offset(%a0)
+.Lk10_skip_\@:
+	.endm
+
+	K10_QUALIFY_IRQ KERNEL_QUALIFICATION_IRQ_STORAGE, \
+		KERNEL_QUALIFICATION_IRQ_BIT(KERNEL_QUALIFICATION_IRQ_STORAGE), \
+		KERNEL_QUALIFICATION_IRQ_STORAGE_EXPECTED, \
+		KERNEL_QUALIFICATION_K10_STORAGE_RESULT_OFFSET
+	K10_QUALIFY_IRQ KERNEL_QUALIFICATION_IRQ_INPUT, \
+		KERNEL_QUALIFICATION_IRQ_BIT(KERNEL_QUALIFICATION_IRQ_INPUT), \
+		KERNEL_QUALIFICATION_IRQ_INPUT_EXPECTED, \
+		KERNEL_QUALIFICATION_K10_INPUT_RESULT_OFFSET
+	K10_QUALIFY_IRQ KERNEL_QUALIFICATION_IRQ_VEGA, \
+		KERNEL_QUALIFICATION_IRQ_BIT(KERNEL_QUALIFICATION_IRQ_VEGA), \
+		KERNEL_QUALIFICATION_IRQ_VEGA_EXPECTED, \
+		KERNEL_QUALIFICATION_K10_VEGA_RESULT_OFFSET
+	K10_QUALIFY_IRQ KERNEL_QUALIFICATION_IRQ_USB, \
+		KERNEL_QUALIFICATION_IRQ_BIT(KERNEL_QUALIFICATION_IRQ_USB), \
+		KERNEL_QUALIFICATION_IRQ_USB_EXPECTED, \
+		KERNEL_QUALIFICATION_K10_USB_RESULT_OFFSET
+	K10_QUALIFY_IRQ KERNEL_QUALIFICATION_IRQ_ASTRAEA, \
+		KERNEL_QUALIFICATION_IRQ_BIT(KERNEL_QUALIFICATION_IRQ_ASTRAEA), \
+		KERNEL_QUALIFICATION_IRQ_ASTRAEA_EXPECTED, \
+		KERNEL_QUALIFICATION_K10_ASTRAEA_RESULT_OFFSET
+
+	move.l  #KERNEL_QUALIFICATION_COMMAND_COMPLETE_IRQS, %d1
+	move.l  %d6, %d2
+	moveq   #ASTRA_SYSCALL_PROGRESS, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  #KERNEL_QUALIFICATION_K10_RESULT, \
+		KERNEL_QUALIFICATION_K10_RESULT_OFFSET(%a0)
+
 	moveq   #0, %d3
 .Lmain_progress_loop:
 	cmpi.l  #0x53555256, (%a0)
@@ -989,6 +1106,24 @@ _k1_offender_image_entry:
 	movea.l #KERNEL_QUALIFICATION_SHARED_BASE, %a0
 	move.l  #0x4f464644, (%a0)
 	move.l  %d2, %d6
+	move.l  #KERNEL_QUALIFICATION_COMMAND_QUERY_IRQS, %d1
+	moveq   #ASTRA_SYSCALL_PROGRESS, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     6f
+	btst    #KERNEL_QUALIFICATION_IRQ_ASTRAEA, %d1
+	beq     8f
+	move.l  #KERNEL_QUALIFICATION_COMMAND_BIND_IRQ, %d1
+	moveq   #KERNEL_QUALIFICATION_IRQ_ASTRAEA, %d2
+	moveq   #ASTRA_SYSCALL_PROGRESS, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     6f
+	moveq   #ASTRA_SYSCALL_IRQ_ARM, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     6f
+8:
 	moveq   #0, %d1
 	moveq   #KERNEL_QUALIFICATION_SYNC_RIGHTS, %d2
 	moveq   #ASTRA_SYSCALL_EVENT_CREATE, %d0

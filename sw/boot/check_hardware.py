@@ -37,6 +37,15 @@ K8_SHARED_IPC_BUDGETS = {
     "unmap": 100_000,
     "notify": 30_000,
 }
+K10_DEVICE_BUDGETS = {
+    "irq": 1_250,
+    "wake": 5_000,
+    "read": 15_000,
+    "ack": 20_000,
+    "worker": 50_000,
+    "monitor": 125_000,
+}
+K10_IRQ_SOURCE_MASK = 0x000003B0
 AXIOM_PANIC_BANNER = b"*** AXIOM KERNEL PANIC ***"
 
 
@@ -343,7 +352,10 @@ def k7_message_ports_reached(output: bytes | bytearray) -> bool:
     )
 
 
-def k8_shared_bulk_reached(output: bytes | bytearray) -> bool:
+def _shared_bulk_contract_reached(
+    output: bytes | bytearray,
+    expected_wait_wake: tuple[int, int, int],
+) -> bool:
     areas = re.search(
         rb"(?m)^Shared areas[ .]+(\d+) create, (\d+)/(\d+) map/unmap, "
         rb"(\d+) active\r?$",
@@ -382,10 +394,143 @@ def k8_shared_bulk_reached(output: bytes | bytearray) -> bool:
             output,
             6,
             expected_lifecycle=(3, 4, 3),
-            expected_wait_wake=(12, 5, 6),
+            expected_wait_wake=expected_wait_wake,
         )
         and b"K8 SHARED BULK IPC PASS" in output
         and b"K7 MESSAGE PORTS PASS" in output
+    )
+
+
+def k8_shared_bulk_reached(output: bytes | bytearray) -> bool:
+    return _shared_bulk_contract_reached(output, (12, 5, 6))
+
+
+def k10_device_reached(output: bytes | bytearray) -> bool:
+    device = re.search(
+        rb"(?m)^Device IRQs[ .]+K10 PASS, mask=0x([0-9A-Fa-f]{8}) "
+        rb"delivered/acked=(\d+)/(\d+) owner-death=(\d+)\r?$",
+        output,
+    )
+    irq = re.search(
+        rb"(?m)^K10 PERF irq=(\d+)/(\d+) wake=(\d+)/(\d+) "
+        rb"overruns=0\r?$",
+        output,
+    )
+    irq_samples = re.search(
+        rb"(?m)^K10 PERF irq min=(\d+) latest=(\d+) samples=(\d+)\r?$",
+        output,
+    )
+    endpoint = re.search(
+        rb"(?m)^K10 PERF endpoint read=(\d+)/(\d+) ack=(\d+)/(\d+) "
+        rb"overruns=0\r?$",
+        output,
+    )
+    deferred = re.search(
+        rb"(?m)^K10 PERF worker=(\d+)/(\d+) monitor=(\d+)/(\d+) "
+        rb"overruns=0\r?$",
+        output,
+    )
+    latency = re.search(
+        rb"(?m)^K10 LATENCY worker_dispatch_max=(\d+) "
+        rb"endpoint_wake_run_max=(\d+) irqoff_max=(\d+)\r?$",
+        output,
+    )
+    boot = re.search(
+        rb"(?m)^K10 BOOT trace_init=(\d+) process_init=(\d+) "
+        rb"process_start_irqoff=(\d+)\r?$",
+        output,
+    )
+    trace = re.search(
+        rb"(?m)^K10 TRACE staged=(\d+) flushed=(\d+) pending=(\d+) "
+        rb"max=(\d+) dropped=(\d+)\r?$",
+        output,
+    )
+    if any(
+        match is None
+        for match in (
+            device,
+            irq,
+            irq_samples,
+            endpoint,
+            deferred,
+            latency,
+            boot,
+            trace,
+        )
+    ):
+        return False
+    assert device is not None
+    assert irq is not None
+    assert irq_samples is not None
+    assert endpoint is not None
+    assert deferred is not None
+    assert latency is not None
+    assert boot is not None
+    assert trace is not None
+
+    source_mask, delivered, acknowledged, owner_deaths = (
+        int(device.group(1), 16),
+        int(device.group(2)),
+        int(device.group(3)),
+        int(device.group(4)),
+    )
+    if (
+        source_mask != K10_IRQ_SOURCE_MASK
+        or delivered != 5
+        or acknowledged != delivered
+        or owner_deaths != 1
+    ):
+        return False
+
+    performance_lines = (
+        (irq, ("irq", "wake")),
+        (endpoint, ("read", "ack")),
+        (deferred, ("worker", "monitor")),
+    )
+    maximums: dict[str, int] = {}
+    for match, names in performance_lines:
+        values = [int(value) for value in match.groups()]
+        for index, name in enumerate(names):
+            measured = values[index * 2]
+            reported_budget = values[index * 2 + 1]
+            expected_budget = K10_DEVICE_BUDGETS[name]
+            if (
+                measured <= 0
+                or measured > expected_budget
+                or reported_budget != expected_budget
+            ):
+                return False
+            maximums[name] = measured
+
+    minimum, latest, samples = (
+        int(value) for value in irq_samples.groups()
+    )
+    if (
+        minimum <= 0
+        or minimum > maximums["irq"]
+        or latest <= 0
+        or latest > maximums["irq"]
+        or samples < 5
+    ):
+        return False
+    if any(int(value) <= 0 for value in latency.groups()):
+        return False
+    if any(int(value) <= 0 for value in boot.groups()):
+        return False
+    staged, flushed, pending, maximum_pending, dropped = (
+        int(value) for value in trace.groups()
+    )
+    if (
+        staged != flushed
+        or pending != 0
+        or maximum_pending > 32
+        or dropped != 0
+    ):
+        return False
+    return (
+        _shared_bulk_contract_reached(output, (13, 5, 6))
+        and b"K10 PERFORMANCE PASS" in output
+        and b"KERNEL MULTITASKING" in output
     )
 
 
@@ -463,6 +608,7 @@ def acceptance_reached(
     expect_k6_wait_multiple: bool = False,
     expect_k7_message_ports: bool = False,
     expect_k8_shared_bulk: bool = False,
+    expect_k10_device: bool = False,
 ) -> bool:
     if expect_route_probe:
         match = re.search(
@@ -554,6 +700,8 @@ def acceptance_reached(
                 soak_reached = True
                 break
         kernel_entry_reached = soak_reached
+    elif expect_k10_device:
+        kernel_entry_reached = k10_device_reached(output)
     elif expect_k8_shared_bulk:
         kernel_entry_reached = k8_shared_bulk_reached(output)
     elif expect_k7_message_ports:
@@ -698,6 +846,14 @@ def main() -> int:
         ),
     )
     kernel_entry_group.add_argument(
+        "--expect-k10-device",
+        action="store_true",
+        help=(
+            "require the K10 IRQ, owner-death, deferred-work, monitor, trace, "
+            "cycle-budget, and retained K8-through-K1 contracts"
+        ),
+    )
+    kernel_entry_group.add_argument(
         "--expect-k8-shared-bulk",
         action="store_true",
         help=(
@@ -825,6 +981,7 @@ def main() -> int:
         or args.expect_k6_wait_multiple
         or args.expect_k7_message_ports
         or args.expect_k8_shared_bulk
+        or args.expect_k10_device
         or args.expect_k1_soak_cycles is not None
         or args.expect_k1_fault_max_cycles is not None
         or args.expect_k1_min_elapsed_cycles is not None
@@ -935,6 +1092,7 @@ def main() -> int:
                     args.expect_k6_wait_multiple,
                     args.expect_k7_message_ports,
                     args.expect_k8_shared_bulk,
+                    args.expect_k10_device,
                 ):
                     break
                 if failure_reached(output, args.expect_kernel_panic):
@@ -954,6 +1112,7 @@ def main() -> int:
         "graphics" if args.expect_graphics else
         "kernel panic" if args.expect_kernel_panic else
         "K1 soak" if args.expect_k1_soak_cycles is not None else
+        "K10 device and observability" if args.expect_k10_device else
         "K8 shared bulk IPC" if args.expect_k8_shared_bulk else
         "K7 message ports" if args.expect_k7_message_ports else
         "K6 wait-multiple" if args.expect_k6_wait_multiple else
@@ -989,6 +1148,7 @@ def main() -> int:
         args.expect_k6_wait_multiple,
         args.expect_k7_message_ports,
         args.expect_k8_shared_bulk,
+        args.expect_k10_device,
     ):
         return 0
     if failure_reached(output, args.expect_kernel_panic):

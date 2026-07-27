@@ -3,7 +3,8 @@
 `default_nettype none
 
 module usb_ohci_ctrl_cdc #(
-    parameter integer ADDR_WIDTH = 10
+    parameter integer ADDR_WIDTH = 10,
+    parameter integer CTRL_TIMEOUT_CYCLES = 2048
 ) (
     input  wire                  cpu_clk,
     input  wire                  cpu_rst,
@@ -14,6 +15,7 @@ module usb_ohci_ctrl_cdc #(
     input  wire [31:0]           cpu_wdata,
     output wire                  cpu_busy,
     output reg                   cpu_done,
+    output reg                   cpu_error,
     output reg  [31:0]           cpu_rdata,
 
     input  wire                  ctrl_clk,
@@ -43,7 +45,11 @@ module usb_ohci_ctrl_cdc #(
     reg request_seen_ctrl;
     reg response_toggle_ctrl;
     reg [31:0] response_data_ctrl;
+    reg response_error_ctrl;
     reg ctrl_state;
+    localparam integer TIMEOUT_WIDTH = CTRL_TIMEOUT_CYCLES <= 1 ? 1 :
+                                       $clog2(CTRL_TIMEOUT_CYCLES);
+    reg [TIMEOUT_WIDTH-1:0] timeout_count;
 
     assign cpu_busy = request_busy_cpu;
 
@@ -58,6 +64,7 @@ module usb_ohci_ctrl_cdc #(
             request_toggle_cpu <= 1'b0;
             response_seen_cpu <= 1'b0;
             response_sync_cpu <= 2'b00;
+            cpu_error <= 1'b0;
             cpu_rdata <= 32'd0;
         end else begin
             response_sync_cpu <= {
@@ -71,12 +78,14 @@ module usb_ohci_ctrl_cdc #(
                 request_wdata_cpu <= cpu_wdata;
                 request_busy_cpu <= 1'b1;
                 request_toggle_cpu <= ~request_toggle_cpu;
+                cpu_error <= 1'b0;
             end
 
             if (request_busy_cpu &&
                 response_sync_cpu[1] != response_seen_cpu) begin
                 response_seen_cpu <= response_sync_cpu[1];
                 cpu_rdata <= response_data_ctrl;
+                cpu_error <= response_error_ctrl;
                 request_busy_cpu <= 1'b0;
                 cpu_done <= 1'b1;
             end
@@ -89,6 +98,8 @@ module usb_ohci_ctrl_cdc #(
             request_seen_ctrl <= 1'b0;
             response_toggle_ctrl <= 1'b0;
             response_data_ctrl <= 32'd0;
+            response_error_ctrl <= 1'b0;
+            timeout_count <= {TIMEOUT_WIDTH{1'b0}};
             wb_cyc <= 1'b0;
             wb_stb <= 1'b0;
             wb_we <= 1'b0;
@@ -113,16 +124,31 @@ module usb_ohci_ctrl_cdc #(
                         wb_sel <= request_be_cpu;
                         wb_cyc <= 1'b1;
                         wb_stb <= 1'b1;
+                        timeout_count <= {TIMEOUT_WIDTH{1'b0}};
                         ctrl_state <= CTRL_ACTIVE;
                     end
                 end
                 CTRL_ACTIVE: begin
                     if (wb_ack) begin
                         response_data_ctrl <= wb_rdata;
+                        response_error_ctrl <= 1'b0;
                         response_toggle_ctrl <= ~response_toggle_ctrl;
                         wb_cyc <= 1'b0;
                         wb_stb <= 1'b0;
                         ctrl_state <= CTRL_IDLE;
+                    end else if (timeout_count >=
+                                 CTRL_TIMEOUT_CYCLES - 1) begin
+                        // Wishbone side effects occur only with ACK. Withdraw
+                        // the cycle in the target domain before reporting the
+                        // failure across the clock boundary.
+                        response_data_ctrl <= 32'd0;
+                        response_error_ctrl <= 1'b1;
+                        response_toggle_ctrl <= ~response_toggle_ctrl;
+                        wb_cyc <= 1'b0;
+                        wb_stb <= 1'b0;
+                        ctrl_state <= CTRL_IDLE;
+                    end else begin
+                        timeout_count <= timeout_count + 1'b1;
                     end
                 end
                 default: ctrl_state <= CTRL_IDLE;

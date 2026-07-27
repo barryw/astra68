@@ -86,6 +86,9 @@ static const KernelAllocationSiteInfo site_info[KERNEL_ALLOCATION_SITE_COUNT] = 
     },
     [KERNEL_ALLOCATION_SITE_MEMORY_GENERIC] = {
         "memory-generic", KERNEL_ALLOCATION_TAG_MEMORY, 0u, 1u, 0u
+    },
+    [KERNEL_ALLOCATION_SITE_IRQ_ENDPOINT] = {
+        "irq-endpoint", KERNEL_ALLOCATION_TAG_DEVICE, 0u, 1u, 0u
     }
 };
 

@@ -191,6 +191,7 @@ module astra_soc #(
     reg         sdram_bist_start;
     wire [24:0] sdram_cpu_addr;
     wire        sdram_bridge_busy;
+    wire        sdram_bridge_request_busy;
     wire        sdram_bridge_done;
     wire [31:0] sdram_bridge_rdata;
     wire        sdram_ready_cpu;
@@ -302,6 +303,13 @@ module astra_soc #(
     wire [31:0] host_runtime_event_value;
     wire [31:0] host_runtime_event_timestamp;
     wire [31:0] host_runtime_event_device_sequence;
+    wire        host_runtime_monitor_input_valid;
+    wire        host_runtime_monitor_input_ready;
+    wire [7:0]  host_runtime_monitor_input_data;
+    wire        host_runtime_monitor_output_valid;
+    wire        host_runtime_monitor_output_ready;
+    wire [7:0]  host_runtime_monitor_output_data;
+    wire        host_monitor_irq;
     wire        host_spi_miso;
     wire        host_spi_miso_oe;
     wire        sd_clk_in;
@@ -311,6 +319,8 @@ module astra_soc #(
     reg         usb_ctrl_start = 1'b0;
     wire        usb_ctrl_busy;
     wire        usb_ctrl_done;
+    wire        usb_ctrl_error;
+    wire        usb_ctrl_cycle_done;
     wire [31:0] usb_ctrl_rdata;
     wire        usb_irq;
     wire        usb_ready_cpu;
@@ -589,6 +599,7 @@ module astra_soc #(
                     .cpu_write(!cpu_rw_n), .cpu_addr(cpu_adr[11:2]),
                     .cpu_be(be), .cpu_wdata(cpu_dout),
                     .cpu_busy(usb_ctrl_busy), .cpu_done(usb_ctrl_done),
+                    .cpu_error(usb_ctrl_error),
                     .cpu_rdata(usb_ctrl_rdata), .cpu_irq(usb_irq),
                     .ctrl_clk(clk25_mhz), .ctrl_rst(usb_ctrl_rst),
                     .mem_clk(sd_domain_clk), .mem_rst(usb_mem_rst),
@@ -611,6 +622,7 @@ module astra_soc #(
             end else begin : g_usb_host_disabled
                 assign usb_ctrl_busy = 1'b0;
                 assign usb_ctrl_done = 1'b0;
+                assign usb_ctrl_error = 1'b0;
                 assign usb_ctrl_rdata = 32'd0;
                 assign usb_irq = 1'b0;
                 assign usb_dma_fault = 1'b0;
@@ -781,7 +793,19 @@ module astra_soc #(
                         .runtime_event_timestamp(
                             host_runtime_event_timestamp),
                         .runtime_event_device_sequence(
-                            host_runtime_event_device_sequence)
+                            host_runtime_event_device_sequence),
+                        .runtime_monitor_input_valid(
+                            host_runtime_monitor_input_valid),
+                        .runtime_monitor_input_ready(
+                            host_runtime_monitor_input_ready),
+                        .runtime_monitor_input_data(
+                            host_runtime_monitor_input_data),
+                        .runtime_monitor_output_valid(
+                            host_runtime_monitor_output_valid),
+                        .runtime_monitor_output_ready(
+                            host_runtime_monitor_output_ready),
+                        .runtime_monitor_output_data(
+                            host_runtime_monitor_output_data)
                     );
                     assign host_dma_busy_mem = host_mem_lock;
             end else begin : g_astra_host_disabled
@@ -825,6 +849,9 @@ module astra_soc #(
                     assign host_runtime_event_value = 32'd0;
                     assign host_runtime_event_timestamp = 32'd0;
                     assign host_runtime_event_device_sequence = 32'd0;
+                    assign host_runtime_monitor_input_valid = 1'b0;
+                    assign host_runtime_monitor_input_data = 8'd0;
+                    assign host_runtime_monitor_output_ready = 1'b0;
             end
 
             localparam [2:0] DMA_OWNER_NONE = 3'd0;
@@ -1008,6 +1035,7 @@ module astra_soc #(
                 .cpu_cache_flush(sdram_bist_busy | astraea_cache_flush |
                                  host_cache_flush_cpu),
                 .cpu_busy(sdram_bridge_busy),
+                .cpu_request_busy(sdram_bridge_request_busy),
                 .cpu_done(sdram_bridge_done),
                 .cpu_rdata(sdram_bridge_rdata),
                 .cpu_line_hits(sdram_line_hits),
@@ -1125,6 +1153,7 @@ module astra_soc #(
             assign sdram_a = 13'd0;
             assign sdram_d = 16'hzzzz;
             assign sdram_bridge_busy = 1'b0;
+            assign sdram_bridge_request_busy = 1'b0;
             assign sdram_bridge_done = 1'b0;
             assign sdram_bridge_rdata = 32'd0;
             assign sdram_ready_cpu = 1'b0;
@@ -1187,6 +1216,9 @@ module astra_soc #(
             assign host_runtime_event_value = 32'd0;
             assign host_runtime_event_timestamp = 32'd0;
             assign host_runtime_event_device_sequence = 32'd0;
+            assign host_runtime_monitor_input_valid = 1'b0;
+            assign host_runtime_monitor_input_data = 8'd0;
+            assign host_runtime_monitor_output_ready = 1'b0;
         end
     endgenerate
 
@@ -1277,6 +1309,7 @@ module astra_soc #(
     wire [1:0]  tg_siz;
     wire [2:0]  tg_fc;
     wire [31:0] tg_dbg_status;
+    wire [31:0] tg_dbg_exe_pc;
     wire [31:0] tg_dbg_imm;
     wire [31:0] tg_dbg_arin;
     wire [31:0] tg_icache_hits;
@@ -1328,16 +1361,16 @@ module astra_soc #(
     localparam [31:0] BKPT_ILLEGAL_DIN = 32'h4afc0000; // word read at A[1:0]=00 samples [31:16]
     (* syn_preserve = 1 *) reg [5:0] cpu_ctl = 6'b111111;
     always @(posedge clk) cpu_ctl <= {4'b1111, ~rst, 1'b1};   // bit1 = HALT_INn = ~rst
-    wire bkpt_ack_read = !cpu_as_n && cpu_rw_n
-                       && (cpu_fc == 3'b111)
-                       && (cpu_adr[31:8] == 24'h000000);
+    wire bkpt_ack_address = cpu_rw_n && (cpu_fc == 3'b111) &&
+                            (cpu_adr[31:8] == 24'h000000);
+    wire bkpt_ack_read = !cpu_as_n && bkpt_ack_address;
     // MC68030 interrupt acknowledge cycles use CPU space and the sign-extended
     // address 0xfffffff0 | (level << 1). Vesta always terminates the cycle;
     // when no source remains it returns Motorola's spurious vector 24.
-    wire cpu_iack_read = !cpu_as_n && cpu_rw_n
-                       && (cpu_fc == 3'b111)
-                       && (cpu_adr[31:5] == 27'h7ffffff)
-                       && cpu_adr[4] && !cpu_adr[0];
+    wire cpu_iack_address = cpu_rw_n && (cpu_fc == 3'b111) &&
+                            (cpu_adr[31:5] == 27'h7ffffff) &&
+                            cpu_adr[4] && !cpu_adr[0];
+    wire cpu_iack_read = !cpu_as_n && cpu_iack_address;
 `ifdef ASTRA_SOC_SIM_IRQ
     // The simulation injector and real Vesta sources coexist. This lets the
     // CPU regression exercise Vesta's production vectored-IACK path before it
@@ -1443,6 +1476,7 @@ module astra_soc #(
                 .DBG_DCACHE_HITS(tg_dcache_hits),
                 .DBG_DCACHE_MISSES(tg_dcache_misses),
                 .DBG_D2C    (tg_dbg_status),
+                .DBG_EXE_PC (tg_dbg_exe_pc),
                 .DBG_IMM    (tg_dbg_imm),
                 .DBG_ARIN   (tg_dbg_arin)
             );
@@ -1487,30 +1521,24 @@ module astra_soc #(
     // guard result there so active-cycle BERR cannot feed the range checks
     // back through TG's same-cycle clock-enable path.
     reg cpu_framebuffer_write_fault_q = 1'b0;
-    always @(posedge clk) begin
-        if (rst)
-            cpu_framebuffer_write_fault_q <= 1'b0;
-        else if (cpu_as_n)
-            cpu_framebuffer_write_fault_q <=
-                cpu_framebuffer_write_fault_next;
-    end
-    wire cpu_framebuffer_write_fault = !cpu_as_n &&
-        cpu_framebuffer_write_fault_q;
-    assign cpu_berrn = cpu_external_berrn &&
-                       !cpu_framebuffer_write_fault;
+    reg cpu_unmapped_fault_q = 1'b0;
+    reg cpu_usb_unavailable_fault_q = 1'b0;
+    reg cpu_target_error_q = 1'b0;
     wire sel_ram  = (cpu_adr[31:15] == 17'h03FF); // 0x01FF8000..0x01FFFFFF
     wire sel_sys  = (cpu_adr[31:9]  == 23'h7FF800);
     wire sel_vesta_irq = (cpu_adr[31:8] == 24'hFFF003);
     wire sel_vesta_timer = (cpu_adr[31:8] == 24'hFFF004) &&
                            (cpu_adr[7:5] == 3'b000);
     wire sel_vesta_irq_timer = sel_vesta_irq || sel_vesta_timer;
+    wire sel_bus_fault = (cpu_adr[31:8] == 24'hFFF008) &&
+                         (cpu_adr[7:5] == 3'b000);
     wire sel_astraea = SDRAM_ENABLE && (cpu_adr[31:16] == 16'hFFF1);
     wire sel_usb = USB_ENABLE && SDRAM_ENABLE &&
                    (cpu_adr[31:12] == 20'hFFF40);
     wire sel_host_runtime = ASTRA_HOST_ENABLE &&
                             (cpu_adr[31:8] == 24'hFFF001) &&
                             (cpu_adr[7:0] >= 8'h50) &&
-                            (cpu_adr[7:0] < 8'hb4);
+                            (cpu_adr[7:0] < 8'hd4);
     wire sel_host_input = ASTRA_HOST_ENABLE &&
                           (cpu_adr[31:8] == 24'hFFF007) &&
                           (cpu_adr[7:0] < 8'h28);
@@ -1520,6 +1548,52 @@ module astra_soc #(
     wire sel_vega_text = HDMI_ENABLE && (cpu_adr[31:12] == 20'hFFF22);
     wire sel_vega_regs = HDMI_ENABLE && (cpu_adr[31:16] == 16'hFFF2) &&
                          !sel_vega_text;
+    wire cpu_cycle_mapped = sel_rom || sel_stage2_rom || sel_sdram ||
+                            sel_ram || sel_sys || sel_vesta_irq_timer ||
+                            sel_bus_fault || sel_astraea || sel_usb ||
+                            sel_host_runtime || sel_host_input || sel_uart ||
+                            sel_spi || sel_panel || sel_vega_text ||
+                            sel_vega_regs || bkpt_ack_address ||
+                            cpu_iack_address;
+    wire cpu_unmapped_fault_next = !cpu_cycle_mapped;
+    wire cpu_usb_unavailable_fault_next = sel_usb && !usb_ready_cpu;
+
+    // Setup-phase classification is registered before AS falls. This keeps
+    // broad address decode and device-ready state out of TG's active-cycle
+    // BERR/clock-enable cone.
+    always @(posedge clk) begin
+        if (rst) begin
+            cpu_framebuffer_write_fault_q <= 1'b0;
+            cpu_unmapped_fault_q <= 1'b0;
+            cpu_usb_unavailable_fault_q <= 1'b0;
+        end else if (cpu_as_n) begin
+            cpu_framebuffer_write_fault_q <=
+                cpu_framebuffer_write_fault_next;
+            cpu_unmapped_fault_q <= cpu_unmapped_fault_next;
+            cpu_usb_unavailable_fault_q <=
+                cpu_usb_unavailable_fault_next;
+        end
+    end
+
+    always @(posedge clk) begin
+        if (rst || cpu_as_n)
+            cpu_target_error_q <= 1'b0;
+        else if (usb_ctrl_cycle_done && usb_ctrl_error)
+            cpu_target_error_q <= 1'b1;
+    end
+
+    wire cpu_framebuffer_write_fault = !cpu_as_n &&
+                                       cpu_framebuffer_write_fault_q;
+    wire cpu_unmapped_fault = !cpu_as_n && cpu_unmapped_fault_q;
+    wire cpu_usb_unavailable_fault = !cpu_as_n &&
+                                     cpu_usb_unavailable_fault_q;
+    wire cpu_bus_timeout_fault;
+    assign cpu_berrn = cpu_external_berrn &&
+                       !cpu_framebuffer_write_fault &&
+                       !cpu_unmapped_fault &&
+                       !cpu_usb_unavailable_fault &&
+                       !cpu_bus_timeout_fault &&
+                       !cpu_target_error_q;
     wire [31:0] panel_rdata;
     reg [7:0] led_r;
 
@@ -1527,9 +1601,59 @@ module astra_soc #(
         (8'h40 + {5'd0, cpu_adr[4:2]}) : {2'd0, cpu_adr[7:2]};
     wire [5:0] host_runtime_reg_index = sel_host_runtime ?
         cpu_adr[7:2] - 6'h14 : cpu_adr[7:2];
+    wire [31:0] vesta_bus_fault_rdata;
+    reg         bus_fault_capture_strobe = 1'b0;
+    reg [31:0]  bus_fault_capture_status = 32'd0;
+    reg [31:0]  bus_fault_capture_address = 32'd0;
+    reg [31:0]  bus_fault_capture_target = 32'd0;
+    reg [63:0]  bus_fault_capture_cycles = 64'd0;
+
+    localparam [31:0] BUS_TARGET_UNKNOWN = 32'd0;
+    localparam [31:0] BUS_TARGET_UNMAPPED = 32'd1;
+    localparam [31:0] BUS_TARGET_SDRAM = 32'd2;
+    localparam [31:0] BUS_TARGET_USB = 32'd3;
+    localparam [31:0] BUS_TARGET_VEGA = 32'd4;
+    localparam [31:0] BUS_TARGET_ASTRAEA = 32'd5;
+    localparam [31:0] BUS_TARGET_ASTRAHOST = 32'd6;
+    localparam [31:0] BUS_TARGET_UART = 32'd7;
+    localparam [31:0] BUS_TARGET_SPI = 32'd8;
+    localparam [31:0] BUS_TARGET_PANEL = 32'd9;
+    localparam [31:0] BUS_TARGET_BOOT_MEMORY = 32'd10;
+    localparam [31:0] BUS_TARGET_FRAMEBUFFER_GUARD = 32'd11;
+    localparam [31:0] BUS_TARGET_EXTERNAL = 32'd12;
+    wire [31:0] cpu_cycle_target_next =
+        sel_host_runtime || sel_host_input ? BUS_TARGET_ASTRAHOST :
+        sel_sdram ? BUS_TARGET_SDRAM :
+        sel_usb ? BUS_TARGET_USB :
+        sel_vega_regs || sel_vega_text ? BUS_TARGET_VEGA :
+        sel_astraea ? BUS_TARGET_ASTRAEA :
+        sel_uart ? BUS_TARGET_UART :
+        sel_spi ? BUS_TARGET_SPI :
+        sel_panel ? BUS_TARGET_PANEL :
+        sel_rom || sel_stage2_rom || sel_ram ? BUS_TARGET_BOOT_MEMORY :
+        BUS_TARGET_UNKNOWN;
+    reg [31:0] cpu_cycle_target_q = BUS_TARGET_UNKNOWN;
+    always @(posedge clk) begin
+        if (rst)
+            cpu_cycle_target_q <= BUS_TARGET_UNKNOWN;
+        else if (cpu_as_n)
+            cpu_cycle_target_q <= cpu_cycle_target_next;
+    end
+    wire cpu_cycle_target_is_device =
+        cpu_cycle_target_q >= BUS_TARGET_USB &&
+        cpu_cycle_target_q <= BUS_TARGET_PANEL;
+    wire cpu_bus_cycle_complete = cpu_dsack_n != 2'b11 ||
+                                  usb_ctrl_cycle_done ||
+                                  !cpu_external_berrn ||
+                                  cpu_framebuffer_write_fault ||
+                                  cpu_unmapped_fault ||
+                                  cpu_usb_unavailable_fault ||
+                                  cpu_target_error_q;
+    wire bus_timeout_active;
+    assign cpu_bus_timeout_fault = !cpu_as_n && bus_timeout_active;
     assign vesta_irq_sources = {
         21'd0, 1'b0, astraea_irq, vega_irq,
-        usb_irq || usb_dma_fault, 1'b0,
+        usb_irq || usb_dma_fault, host_monitor_irq,
         host_input_irq, host_storage_irq, uart_tx_irq, uart_rx_irq, 2'b00
     };
 
@@ -1537,6 +1661,11 @@ module astra_soc #(
         .clk(clk), .rst(rst),
         .select(sel_vesta_irq_timer),
         .reg_index(vesta_irq_reg_index),
+        // TG68K exposes a 16-bit bus, so a longword MMIO read completes as
+        // two beats. Claim only on the low-word beat (or a native longword)
+        // after the complete IRQ_CURRENT value has been sampled.
+        .read_strobe(bus_read_stb && cpu_rw_n &&
+                     ((cpu_siz == 2'b00) || cpu_adr[1])),
         .write_strobe(bus_write_stb && cpu_data_en && !cpu_rw_n),
         .write_data(cpu_dout), .byte_enable(be),
         .read_data(vesta_irq_rdata),
@@ -1544,6 +1673,23 @@ module astra_soc #(
         .iack_strobe(cpu_iack_read), .iack_level(cpu_adr[3:1]),
         .iack_vector(vesta_iack_vector),
         .iack_valid(vesta_iack_valid)
+    );
+
+    vesta_bus_fault #(.TIMEOUT_CYCLES(2048)) vesta_bus_fault_i (
+        .clk(clk), .rst(rst),
+        .select(sel_bus_fault), .reg_index(cpu_adr[4:2]),
+        .write_strobe(bus_write_stb && cpu_data_en && !cpu_rw_n),
+        .write_data(cpu_dout), .byte_enable(be),
+        .read_data(vesta_bus_fault_rdata),
+        .fault_strobe(bus_fault_capture_strobe),
+        .fault_status(bus_fault_capture_status),
+        .fault_address(bus_fault_capture_address),
+        .fault_target(bus_fault_capture_target),
+        .fault_cycles(bus_fault_capture_cycles),
+        .fault_valid(),
+        .cycle_active(!cpu_as_n),
+        .cycle_complete(cpu_bus_cycle_complete),
+        .timeout_active(bus_timeout_active)
     );
 
     astra_front_panel #(.CLK_HZ(CPU_CLK_HZ)) front_panel_i (
@@ -1734,6 +1880,7 @@ module astra_soc #(
                 .read_data(host_runtime_rdata),
                 .storage_irq(host_storage_irq),
                 .input_irq(host_input_irq),
+                .monitor_irq(host_monitor_irq),
                 .mem_clk(sdram_domain_clk), .mem_rst(sdram_domain_rst),
                 .request_valid(host_runtime_request_valid),
                 .request_ready(host_runtime_request_ready),
@@ -1771,12 +1918,19 @@ module astra_soc #(
                 .event_value(host_runtime_event_value),
                 .event_timestamp(host_runtime_event_timestamp),
                 .event_device_sequence(
-                    host_runtime_event_device_sequence)
+                    host_runtime_event_device_sequence),
+                .monitor_input_valid(host_runtime_monitor_input_valid),
+                .monitor_input_ready(host_runtime_monitor_input_ready),
+                .monitor_input_data(host_runtime_monitor_input_data),
+                .monitor_output_valid(host_runtime_monitor_output_valid),
+                .monitor_output_ready(host_runtime_monitor_output_ready),
+                .monitor_output_data(host_runtime_monitor_output_data)
             );
         end else begin : g_host_runtime_disabled
             assign host_runtime_rdata = 32'd0;
             assign host_storage_irq = 1'b0;
             assign host_input_irq = 1'b0;
+            assign host_monitor_irq = 1'b0;
             assign host_runtime_request_valid = 1'b0;
             assign host_runtime_request_id = 32'd0;
             assign host_runtime_request_op = 8'd0;
@@ -1789,6 +1943,9 @@ module astra_soc #(
             assign host_runtime_completion_ready = 1'b0;
             assign host_runtime_state_ready = 1'b0;
             assign host_runtime_event_ready = 1'b0;
+            assign host_runtime_monitor_input_ready = 1'b0;
+            assign host_runtime_monitor_output_valid = 1'b0;
+            assign host_runtime_monitor_output_data = 8'd0;
         end
     endgenerate
 
@@ -2086,7 +2243,11 @@ module astra_soc #(
     localparam [2:0] BS_IDLE=3'd0, BS_WAIT=3'd1, BS_ACK=3'd2,
                      BS_END=3'd3, BS_SDRAM=3'd4, BS_USB=3'd5;
     reg [2:0] bs;
+    // A CDC response can arrive after an external BERR abandoned its USB
+    // request. Only the bus state that launched that request may consume it.
+    assign usb_ctrl_cycle_done = bs == BS_USB && usb_ctrl_done;
     reg [1:0] waitc;
+    reg       bus_cycle_error;
     reg       sdram_cycle_started;
     wire      sdram_post_cycle = sel_sdram && !cpu_rw_n && tg_postable_out;
     reg [31:0] cpu_sdram_reads = 32'd0;
@@ -2140,8 +2301,10 @@ module astra_soc #(
         usb_ctrl_start <= 1'b0;
         bus_write_stb <= 1'b0;
         bus_read_stb  <= 1'b0;
+        bus_fault_capture_strobe <= 1'b0;
         if (rst) begin
             bs <= BS_IDLE; dsack_n <= 2'b11;
+            bus_cycle_error <= 1'b0;
             rom_overlay_sdram <= 1'b0;
             host_boot_request_cpu <= 1'b0;
             usb_ctrl_start <= 1'b0;
@@ -2149,6 +2312,10 @@ module astra_soc #(
             cpu_sdram_reads <= 32'd0;
             cpu_sdram_writes <= 32'd0;
             cpu_sdram_wait_cycles <= 32'd0;
+            bus_fault_capture_status <= 32'd0;
+            bus_fault_capture_address <= 32'd0;
+            bus_fault_capture_target <= 32'd0;
+            bus_fault_capture_cycles <= 64'd0;
             cpu_cycle_snapshot <= 64'd0;
             sys_scratch <= 32'd0;
             sdram_bist_start <= 1'b0;
@@ -2185,6 +2352,46 @@ module astra_soc #(
             dbg_fault_prog_siz1 <= 2'd0;
             dbg_fault_prog_siz2 <= 2'd0;
             dbg_fault_prog_siz3 <= 2'd0;
+        end else if (!cpu_as_n && !cpu_berrn && bs != BS_END) begin
+            // BERR has priority in every wait state. Move directly to the
+            // teardown state before any local write strobe can be emitted.
+            bus_cycle_error <= 1'b1;
+            bus_fault_capture_strobe <= 1'b1;
+            bus_fault_capture_address <= cpu_adr;
+            bus_fault_capture_cycles <= cpu_cycle_count;
+            if (cpu_bus_timeout_fault) begin
+                bus_fault_capture_status <= {
+                    21'd0, cpu_fc, 1'b0, cpu_siz, !cpu_rw_n,
+                    cpu_cycle_target_is_device ? 4'b1010 : 4'b0010
+                };
+                bus_fault_capture_target <= cpu_cycle_target_q;
+            end else if (cpu_framebuffer_write_fault) begin
+                bus_fault_capture_status <= {
+                    21'd0, cpu_fc, 1'b0, cpu_siz,
+                    !cpu_rw_n, 4'b1000
+                };
+                bus_fault_capture_target <= BUS_TARGET_FRAMEBUFFER_GUARD;
+            end else if (cpu_usb_unavailable_fault ||
+                         cpu_target_error_q) begin
+                bus_fault_capture_status <= {
+                    21'd0, cpu_fc, 1'b0, cpu_siz,
+                    !cpu_rw_n, 4'b1000
+                };
+                bus_fault_capture_target <= BUS_TARGET_USB;
+            end else if (cpu_unmapped_fault) begin
+                bus_fault_capture_status <= {
+                    21'd0, cpu_fc, 1'b0, cpu_siz,
+                    !cpu_rw_n, 4'b0100
+                };
+                bus_fault_capture_target <= BUS_TARGET_UNMAPPED;
+            end else begin
+                bus_fault_capture_status <= {
+                    21'd0, cpu_fc, 1'b0, cpu_siz,
+                    !cpu_rw_n, 4'b1000
+                };
+                bus_fault_capture_target <= BUS_TARGET_EXTERNAL;
+            end
+            bs <= BS_END;
         end else begin
         if (bs == BS_SDRAM)
             cpu_sdram_wait_cycles <= cpu_sdram_wait_cycles + 32'd1;
@@ -2192,15 +2399,11 @@ module astra_soc #(
             BS_IDLE: begin
                 dsack_n <= 2'b11;
                 if (!cpu_as_n) begin
-                    // BERR terminates the cycle without committing a local
-                    // slave side effect. This also makes injected faults test
-                    // the processor's RTE replay path rather than a leaked write.
-                    if (!cpu_berrn) begin
-                        bs <= BS_END;
+                    bus_cycle_error <= 1'b0;
                     // A posted SDRAM write still owns the external bus. Cache
                     // hits may execute inside the TG030, but no later ROM,
                     // MMIO, PMMU, or SDRAM cycle can pass it.
-                    end else if (sdram_bridge_busy) begin
+                    if (sdram_bridge_request_busy) begin
                         bs <= BS_IDLE;
                     end else if (sel_usb && usb_ready_cpu) begin
                         if (!usb_ctrl_busy) begin
@@ -2209,7 +2412,10 @@ module astra_soc #(
                         end
                     end else if (sel_sdram) begin
                         sdram_cycle_started <= 1'b0;
-                        if (sdram_ready_cpu) begin
+                        // A DMA cache fence blocks new SDRAM admission, but
+                        // not unrelated ROM or MMIO cycles. Wait here until
+                        // the bridge can actually capture this request.
+                        if (sdram_ready_cpu && !sdram_bridge_busy) begin
                             sdram_cpu_start <= 1'b1;
                             sdram_cycle_started <= 1'b1;
                             if (cpu_rw_n)
@@ -2286,6 +2492,7 @@ module astra_soc #(
                                        host_runtime_rdata :
                                    sel_sys  ? sys_rdata :
                                    sel_vesta_irq_timer ? vesta_irq_rdata :
+                                   sel_bus_fault ? vesta_bus_fault_rdata :
                                    sel_astraea ? astraea_rdata :
                                    sel_vega_regs ? vega_rdata :
                                    sel_vega_text ? {4{console_cpu_rdata}} :
@@ -2356,13 +2563,25 @@ module astra_soc #(
             end
             BS_USB: begin
                 if (usb_ctrl_done) begin
-                    if (cpu_rw_n) begin
+                    if (usb_ctrl_error) begin
+                        bus_cycle_error <= 1'b1;
+                        bus_fault_capture_strobe <= 1'b1;
+                        bus_fault_capture_status <= {
+                            21'd0, cpu_fc, 1'b0, cpu_siz,
+                            !cpu_rw_n, 4'b1010
+                        };
+                        bus_fault_capture_address <= cpu_adr;
+                        bus_fault_capture_target <= BUS_TARGET_USB;
+                        bus_fault_capture_cycles <= cpu_cycle_count;
+                        bs <= BS_END;
+                    end else if (cpu_rw_n) begin
                         cpu_din <= usb_ctrl_rdata;
                         bus_read_stb <= 1'b1;
                     end else begin
                         bus_write_stb <= 1'b1;
                     end
-                    dsack_n <= 2'b00;
+                    if (!usb_ctrl_error)
+                        dsack_n <= 2'b00;
                     bs <= BS_END;
                 end
             end
@@ -2377,6 +2596,7 @@ module astra_soc #(
                                host_runtime_rdata :
                            sel_sys  ? sys_rdata :
                            sel_vesta_irq_timer ? vesta_irq_rdata :
+                           sel_bus_fault ? vesta_bus_fault_rdata :
                            sel_astraea ? astraea_rdata :
                            sel_vega_regs ? vega_rdata :
                            sel_vega_text ? {4{console_cpu_rdata}} :
@@ -2387,9 +2607,10 @@ module astra_soc #(
                 bs <= BS_END;
             end
             BS_END: begin
-                dsack_n <= 2'b00;
+                dsack_n <= bus_cycle_error ? 2'b11 : 2'b00;
                 if (cpu_as_n) begin
                     dsack_n <= 2'b11;
+                    bus_cycle_error <= 1'b0;
                     sdram_cycle_started <= 1'b0;
                     bs <= BS_IDLE;
                 end

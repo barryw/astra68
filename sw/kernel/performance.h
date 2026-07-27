@@ -24,6 +24,12 @@
 #define KERNEL_PERFORMANCE_BUDGET_AREA_MAP         125000u
 #define KERNEL_PERFORMANCE_BUDGET_AREA_UNMAP       100000u
 #define KERNEL_PERFORMANCE_BUDGET_RING_NOTIFY       30000u
+#define KERNEL_PERFORMANCE_BUDGET_HARD_IRQ            1250u
+#define KERNEL_PERFORMANCE_BUDGET_HARD_IRQ_WAKE       5000u
+#define KERNEL_PERFORMANCE_BUDGET_IRQ_READ           15000u
+#define KERNEL_PERFORMANCE_BUDGET_IRQ_ACK            20000u
+#define KERNEL_PERFORMANCE_BUDGET_DEVICE_BATCH       50000u
+#define KERNEL_PERFORMANCE_BUDGET_MONITOR_COMMAND   125000u
 
 typedef enum KernelPerformanceMetric {
     KERNEL_PERFORMANCE_SYSCALL_DISPATCH = 0,
@@ -46,15 +52,32 @@ typedef enum KernelPerformanceMetric {
     KERNEL_PERFORMANCE_AREA_MAP,
     KERNEL_PERFORMANCE_AREA_UNMAP,
     KERNEL_PERFORMANCE_RING_NOTIFY,
+    KERNEL_PERFORMANCE_HARD_IRQ,
+    KERNEL_PERFORMANCE_HARD_IRQ_WAKE,
+    KERNEL_PERFORMANCE_IRQ_READ,
+    KERNEL_PERFORMANCE_IRQ_ACK,
+    KERNEL_PERFORMANCE_DEVICE_BATCH,
+    KERNEL_PERFORMANCE_MONITOR_COMMAND,
     KERNEL_PERFORMANCE_METRIC_COUNT
 } KernelPerformanceMetric;
 
 _Static_assert(KERNEL_PERFORMANCE_METRIC_COUNT < 32,
                "performance metric mask exceeds one word");
 
-#define KERNEL_PERFORMANCE_REQUIRED_MASK \
-    ((1u << KERNEL_PERFORMANCE_METRIC_COUNT) - 1u)
 #define KERNEL_PERFORMANCE_METRIC_MASK(metric) (1u << (uint32_t)(metric))
+#define KERNEL_PERFORMANCE_VALID_MASK \
+    ((1u << KERNEL_PERFORMANCE_METRIC_COUNT) - 1u)
+#define KERNEL_PERFORMANCE_REQUIRED_MASK \
+    ((1u << KERNEL_PERFORMANCE_HARD_IRQ) - 1u)
+#define KERNEL_PERFORMANCE_K10_MASK \
+    (KERNEL_PERFORMANCE_METRIC_MASK(KERNEL_PERFORMANCE_HARD_IRQ) | \
+     KERNEL_PERFORMANCE_METRIC_MASK(KERNEL_PERFORMANCE_HARD_IRQ_WAKE) | \
+     KERNEL_PERFORMANCE_METRIC_MASK(KERNEL_PERFORMANCE_IRQ_READ) | \
+     KERNEL_PERFORMANCE_METRIC_MASK(KERNEL_PERFORMANCE_IRQ_ACK) | \
+     KERNEL_PERFORMANCE_METRIC_MASK(KERNEL_PERFORMANCE_DEVICE_BATCH) | \
+     KERNEL_PERFORMANCE_METRIC_MASK(KERNEL_PERFORMANCE_MONITOR_COMMAND))
+#define KERNEL_PERFORMANCE_RELEASE_MASK \
+    (KERNEL_PERFORMANCE_REQUIRED_MASK | KERNEL_PERFORMANCE_K10_MASK)
 #define KERNEL_PERFORMANCE_SOAK_MASK \
     (KERNEL_PERFORMANCE_METRIC_MASK( \
          KERNEL_PERFORMANCE_SYSCALL_DISPATCH) | \
@@ -72,6 +95,13 @@ typedef struct KernelPerformanceToken {
     uint8_t active;
     uint16_t generation;
 } KernelPerformanceToken;
+
+typedef struct KernelPerformanceSpan {
+    uint32_t started;
+    uint16_t generation;
+    uint8_t active;
+    uint8_t reserved;
+} KernelPerformanceSpan;
 
 typedef struct KernelPerformanceMetricStats {
     uint32_t calls;
@@ -93,12 +123,18 @@ extern uint8_t kernel_performance_sampling_enabled;
 
 void kernel_performance_init(void);
 void kernel_performance_freeze(void);
+uint32_t kernel_performance_cycles_low(void);
 bool kernel_performance_start_window(uint32_t metric_mask);
 KernelPerformanceToken kernel_performance_begin_sampled(
     KernelPerformanceMetric metric);
 void kernel_performance_end_sampled(KernelPerformanceToken token);
+KernelPerformanceSpan kernel_performance_span_begin(void);
+void kernel_performance_span_end(KernelPerformanceSpan span,
+                                 KernelPerformanceMetric metric);
 void kernel_performance_record(KernelPerformanceMetric metric,
                                uint32_t cycles);
+void kernel_performance_record_call(KernelPerformanceMetric metric,
+                                    uint32_t cycles);
 bool kernel_performance_stats(KernelPerformanceStats *stats);
 bool kernel_performance_pass(const KernelPerformanceStats *stats,
                              uint32_t required_mask,

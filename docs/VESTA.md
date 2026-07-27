@@ -31,6 +31,7 @@ Block map (VESTA_BASE +):
   0x0500  UART
   0x0600  SPI / SD
   0x0700  ordered input event queue
+  0x0800  sticky physical bus-fault diagnostics
   0x1000  front-panel GPIO (separate 4 KiB PMMU page)
 ```
 
@@ -359,7 +360,45 @@ fields. Input IRQ source 5 remains asserted while any event is queued.
 
 ---
 
-## 9. Front-panel GPIO (0x1000)
+## 9. Physical bus-fault diagnostics (0x0800)
+
+This block records the first physical bus failure that has not yet been
+acknowledged. A subsequent failure increments `BUS_FAULT_LOST` without
+changing the original record. The vector-2 handler therefore sees one coherent
+address, status, target, and timestamp even during a fault storm.
+
+| Offset | Name | Acc | Reset | Description |
+|---|---|---|---|---|
+| 0x0800 | `BUS_FAULT_STATUS` | RO | 0 | valid, reason, and captured bus attributes |
+| 0x0804 | `BUS_FAULT_ADDRESS` | RO | 0 | exact physical address on the CPU bus |
+| 0x0808 | `BUS_FAULT_TARGET` | RO | 0 | decoded target class below |
+| 0x080C | `BUS_FAULT_CYCLES_LO` | RO | 0 | low half of captured CPU cycle count |
+| 0x0810 | `BUS_FAULT_CYCLES_HI` | RO | 0 | high half of captured CPU cycle count |
+| 0x0814 | `BUS_FAULT_LOST` | RO | 0 | saturating count of later unrecorded faults |
+| 0x0818 | `BUS_TIMEOUT_CYCLES` | RO | 2048 | maximum target completion deadline |
+| 0x081C | `BUS_FAULT_ACK` | RW1C | 0 | write `[0]VALID=1` after copying the record |
+
+`BUS_FAULT_STATUS` is `[0]VALID [1]TIMEOUT [2]UNMAPPED [3]DEVICE
+[4]WRITE [6:5]SIZ [10:8]FC`. `SIZ` is the raw MC68030 transfer-size field:
+`0=long`, `1=byte`, `2=word`, and `3=three bytes`. `FC` is the raw function
+code. Hardware supplies `VALID`; fault producers cannot clear it.
+
+Target values are `0=UNKNOWN`, `1=UNMAPPED`, `2=SDRAM`, `3=USB`, `4=VEGA`,
+`5=ASTRAEA`, `6=ASTRAHOST`, `7=UART`, `8=SPI`, `9=PANEL`, `10=BOOT_MEMORY`,
+`11=FRAMEBUFFER_GUARD`, and `12=EXTERNAL`.
+
+An ACK and a new failure on the same clock atomically replace the old record
+with the new one and reset `LOST`. The CPU watchdog suppresses local SoC write
+strobes once timeout wins and reports `BERR`; it cannot retroactively cancel a
+request already accepted by an independent clock domain. Such targets require
+their own bounded completion or target-domain withdrawal. The USB control
+bridge withdraws a silent Wishbone request before returning an error. An SDRAM
+timeout is a fatal memory-fabric failure with an indeterminate in-flight write
+outcome, not a recoverable process fault.
+
+---
+
+## 10. Front-panel GPIO (0x1000)
 
 The ULX3S front panel has six software-visible pushbuttons, four DIP switches,
 and eight LEDs. The seventh pushbutton remains the active-low hardware reset
@@ -399,7 +438,7 @@ private firmware/hardware ABI.
 
 ---
 
-## 10. Programming sketches
+## 11. Programming sketches
 
 **Set up a user process's regions + switch to it**
 ```c
@@ -447,7 +486,7 @@ VESTA->UART_DATA = c;
 
 ---
 
-## 11. Decisions & open
+## 12. Decisions & open
 
 **Decided:** process protection uses the CPU's built-in paged PMMU · the Vesta
 region unit is retired · per-source IRQ level+vector config · aggregated chip

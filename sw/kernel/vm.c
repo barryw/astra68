@@ -112,34 +112,62 @@ static volatile uint32_t *physical_words(uint32_t physical_address)
 #endif
 }
 
+KernelVmMapping kernel_vm_probe_current(uint32_t virtual_address,
+                                        bool supervisor,
+                                        uint32_t *physical_address)
+{
+    volatile uint32_t *root;
+    volatile uint32_t *table;
+    uint32_t root_physical;
+    uint32_t root_descriptor;
+    uint32_t page_descriptor;
+
+    if (physical_address == NULL || !initialized)
+        return KERNEL_VM_MAPPING_UNKNOWN;
+    if (!supervisor && (virtual_address < KERNEL_VM_USER_MIN ||
+                        virtual_address > KERNEL_VM_USER_MAX))
+        return KERNEL_VM_MAPPING_UNMAPPED;
+    root_physical = supervisor ? kernel_root_physical : current_user_root;
+    if (root_physical == 0u)
+        return KERNEL_VM_MAPPING_UNKNOWN;
+    root = physical_words(root_physical);
+    if (root == NULL)
+        return KERNEL_VM_MAPPING_UNKNOWN;
+    root_descriptor = root[VM_ROOT_INDEX(virtual_address)];
+    if ((root_descriptor & VM_DESC_TYPE_MASK) == VM_DESC_INVALID)
+        return KERNEL_VM_MAPPING_UNMAPPED;
+    if ((root_descriptor & VM_DESC_TYPE_MASK) == VM_DESC_PAGE) {
+        *physical_address = (root_descriptor & 0xffc00000u) |
+                            (virtual_address & 0x003fffffu);
+        return (root_descriptor & VM_DESC_WRITE_PROTECT) != 0u ?
+            KERNEL_VM_MAPPING_READ_ONLY : KERNEL_VM_MAPPING_READ_WRITE;
+    }
+    if ((root_descriptor & VM_DESC_TYPE_MASK) != VM_DESC_TABLE)
+        return KERNEL_VM_MAPPING_UNKNOWN;
+    table = physical_words(root_descriptor & VM_DESC_TABLE_ADDRESS);
+    if (table == NULL)
+        return KERNEL_VM_MAPPING_UNKNOWN;
+    page_descriptor = table[VM_TABLE_INDEX(virtual_address)];
+    if ((page_descriptor & VM_DESC_TYPE_MASK) == VM_DESC_INVALID)
+        return KERNEL_VM_MAPPING_UNMAPPED;
+    if ((page_descriptor & VM_DESC_TYPE_MASK) != VM_DESC_PAGE)
+        return KERNEL_VM_MAPPING_UNKNOWN;
+    *physical_address = (page_descriptor & VM_DESC_PAGE_ADDRESS) |
+                        (virtual_address & (KERNEL_PAGE_SIZE - 1u));
+    return (page_descriptor & VM_DESC_WRITE_PROTECT) != 0u ?
+        KERNEL_VM_MAPPING_READ_ONLY : KERNEL_VM_MAPPING_READ_WRITE;
+}
+
 #if defined(KERNEL_VM_HOST_TEST)
 bool kernel_vm_test_translate_current(uint32_t virtual_address, bool write,
                                       uint32_t *physical_address)
 {
-    volatile uint32_t *root;
-    volatile uint32_t *table;
-    uint32_t root_descriptor;
-    uint32_t page_descriptor;
+    KernelVmMapping mapping = kernel_vm_probe_current(
+        virtual_address, false, physical_address);
 
-    if (physical_address == NULL || current_user_root == 0u ||
-        virtual_address < KERNEL_VM_USER_MIN ||
-        virtual_address > KERNEL_VM_USER_MAX)
+    if (mapping != KERNEL_VM_MAPPING_READ_WRITE &&
+        !(mapping == KERNEL_VM_MAPPING_READ_ONLY && !write))
         return false;
-    root = physical_words(current_user_root);
-    if (root == NULL)
-        return false;
-    root_descriptor = root[VM_ROOT_INDEX(virtual_address)];
-    if ((root_descriptor & VM_DESC_TYPE_MASK) != VM_DESC_TABLE)
-        return false;
-    table = physical_words(root_descriptor & VM_DESC_TABLE_ADDRESS);
-    if (table == NULL)
-        return false;
-    page_descriptor = table[VM_TABLE_INDEX(virtual_address)];
-    if ((page_descriptor & VM_DESC_TYPE_MASK) != VM_DESC_PAGE ||
-        (write && (page_descriptor & VM_DESC_WRITE_PROTECT) != 0u))
-        return false;
-    *physical_address = (page_descriptor & VM_DESC_PAGE_ADDRESS) |
-                        (virtual_address & (KERNEL_PAGE_SIZE - 1u));
     return *physical_address >= host_memory_base &&
            *physical_address - host_memory_base < host_memory_size;
 }
@@ -1122,5 +1150,29 @@ bool kernel_vm_stats(KernelVmStats *result)
     result->flushes = vm_stats.flushes;
     result->cache_invalidations = vm_stats.cache_invalidations;
     result->switches = vm_stats.switches;
+    return true;
+}
+
+bool kernel_vm_control_state(KernelVmControlState *state)
+{
+    KernelPmmuRootPointer srp;
+    KernelPmmuRootPointer crp;
+    uint32_t tc;
+
+    if (!initialized || state == NULL)
+        return false;
+    kernel_pmmu_read_srp(&srp);
+    kernel_pmmu_read_crp(&crp);
+    kernel_pmmu_read_tc(&tc);
+    state->srp_limit_descriptor = srp.limit_descriptor;
+    state->srp_table_address = srp.table_address;
+    state->crp_limit_descriptor = crp.limit_descriptor;
+    state->crp_table_address = crp.table_address;
+    state->translation_control = tc;
+    state->cache_control = kernel_cache_read_control();
+    state->translation_enabled = enabled ? 1u : 0u;
+    state->reserved[0] = 0u;
+    state->reserved[1] = 0u;
+    state->reserved[2] = 0u;
     return true;
 }

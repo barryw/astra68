@@ -19,7 +19,7 @@ module tb_sdram32_cpu_bridge;
     reg cpu_instruction = 1'b0;
     reg cpu_postable = 1'b0;
     reg cpu_cache_flush = 1'b0;
-    wire cpu_busy, cpu_done;
+    wire cpu_busy, cpu_request_busy, cpu_done;
     wire [31:0] cpu_rdata;
     wire [31:0] cpu_line_hits, cpu_line_misses;
     wire [31:0] cpu_posted_writes;
@@ -47,6 +47,7 @@ module tb_sdram32_cpu_bridge;
         .cpu_postable(cpu_postable),
         .cpu_cache_flush(cpu_cache_flush),
         .cpu_busy(cpu_busy), .cpu_done(cpu_done),
+        .cpu_request_busy(cpu_request_busy),
         .cpu_rdata(cpu_rdata), .cpu_line_hits(cpu_line_hits),
         .cpu_line_misses(cpu_line_misses),
         .cpu_posted_writes(cpu_posted_writes),
@@ -148,7 +149,7 @@ module tb_sdram32_cpu_bridge;
             @(negedge cpu_clk);
             cpu_start = 1'b0;
             wait (cpu_done);
-            if (!cpu_busy)
+            if (!cpu_busy || !cpu_request_busy)
                 $fatal(1, "posted write did not remain externally pending");
             wait (!cpu_busy);
             if (request_count != expected_request)
@@ -203,6 +204,9 @@ module tb_sdram32_cpu_bridge;
         // DMA/BIST flushes invalidate all lines, and locked reads bypass them.
         @(negedge cpu_clk);
         cpu_cache_flush = 1'b1;
+        #1;
+        if (!cpu_busy || cpu_request_busy)
+            $fatal(1, "idle DMA fence did not separate fence/request busy");
         @(negedge cpu_clk);
         cpu_cache_flush = 1'b0;
         issue(25'h000010c, 1'b0, 4'b1111, 32'd0,
@@ -229,11 +233,11 @@ module tb_sdram32_cpu_bridge;
         @(negedge cpu_clk);
         cpu_start = 1'b0;
         wait (cpu_done);
-        if (!cpu_busy || mem_cache_quiescent)
+        if (!cpu_busy || !cpu_request_busy || mem_cache_quiescent)
             $fatal(1, "posted write was not pending before DMA fence");
         cpu_cache_flush = 1'b1;
         wait (mem_cache_quiescent);
-        if (!cpu_busy || request_count != 21)
+        if (!cpu_busy || cpu_request_busy || request_count != 21)
             $fatal(1, "DMA fence acknowledged before posted write drained");
 
         @(negedge cpu_clk);

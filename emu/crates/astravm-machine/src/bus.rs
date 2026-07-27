@@ -25,8 +25,14 @@ const BIST_SWEEP_CYCLES: u64 = 1_437_500;
 const BIST_TOTAL_CYCLES: u64 = BIST_SWEEP_CYCLES * 4;
 
 const BLIT_DONE: u32 = 1 << 1;
+const BLIT_IRQ_ENABLE: u32 = 1 << 1;
 const BLIT_MODE_COPY: u32 = 0;
 const BLIT_MODE_FILL: u32 = 1;
+const ASTRAEA_IRQ_BLIT_DONE: u32 = 1 << 0;
+const VEGA_IRQ_VBLANK: u32 = 1 << 0;
+const VEGA_FRAME_CYCLES: u64 = CPU_HZ / 60;
+const IRQ_SOURCE_VEGA: u32 = 8;
+const IRQ_SOURCE_ASTRAEA: u32 = 9;
 const TIMER_ENABLE: u32 = 1 << 0;
 const TIMER_PERIODIC: u32 = 1 << 1;
 const TIMER_IRQ_ENABLE: u32 = 1 << 2;
@@ -90,6 +96,17 @@ struct Astraea {
     op: u32,
     color: u32,
     status: u32,
+    irq_enable: u32,
+    irq_status: u32,
+    blit_irq_enable: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Vega {
+    irq_enable: u32,
+    irq_status: u32,
+    frame_counter: u32,
+    next_vblank: u64,
 }
 
 pub(crate) struct MachineBus {
@@ -102,6 +119,7 @@ pub(crate) struct MachineBus {
     cycle_offset: u64,
     bist: BistState,
     astraea: Astraea,
+    vega: Vega,
     scratch: u32,
     scratch_trace: [u32; 32],
     scratch_trace_next: usize,
@@ -136,6 +154,10 @@ impl MachineBus {
             cycle_offset: 0,
             bist: BistState::Idle,
             astraea: Astraea::default(),
+            vega: Vega {
+                next_vblank: VEGA_FRAME_CYCLES,
+                ..Vega::default()
+            },
             scratch: 0,
             scratch_trace: [0; 32],
             scratch_trace_next: 0,
@@ -164,6 +186,10 @@ impl MachineBus {
         self.cycle_offset = 0;
         self.bist = BistState::Idle;
         self.astraea = Astraea::default();
+        self.vega = Vega {
+            next_vblank: VEGA_FRAME_CYCLES,
+            ..Vega::default()
+        };
         self.scratch = 0;
         self.scratch_trace = [0; 32];
         self.scratch_trace_next = 0;
@@ -224,9 +250,9 @@ impl MachineBus {
     }
 
     pub(crate) fn prepare_execution(&mut self, requested: u64) -> (u64, u32) {
-        self.refresh_timers();
+        self.refresh_device_events();
         let now = self.current_cycles();
-        let next_event = self
+        let next_timer = self
             .timers
             .iter()
             .filter(|timer| timer.control & TIMER_ENABLE != 0)
@@ -235,11 +261,13 @@ impl MachineBus {
             .map(|deadline| deadline - now)
             .min()
             .unwrap_or(requested);
+        let next_vblank = self.vega.next_vblank.saturating_sub(now).max(1);
+        let next_event = next_timer.min(next_vblank);
         (requested.min(next_event).max(1), self.irq_level())
     }
 
     pub(crate) fn interrupt_acknowledge(&mut self, level: u32) -> u32 {
-        self.refresh_timers();
+        self.refresh_device_events();
         let pending = self.pending_enabled();
         for source in 0..32 {
             let config = self.irq_config[source];
@@ -251,7 +279,7 @@ impl MachineBus {
     }
 
     pub(crate) fn interrupt_level(&mut self) -> u32 {
-        self.refresh_timers();
+        self.refresh_device_events();
         self.irq_level()
     }
 
@@ -443,17 +471,7 @@ impl MachineBus {
             return self.read_astraea(address - ASTRAEA_BASE);
         }
         if (VEGA_BASE..VEGA_BASE + 0x0100).contains(&address) {
-            return match address - VEGA_BASE {
-                0x00 => 0x5645_4741,
-                0x04 => 0x0001_0000,
-                0x08 => 1,
-                0x0c => 1 << 4,
-                0x18 => 0,
-                0x1c => 1,
-                0x28 => (480 << 16) | 720,
-                0x30 => 0x0010_1820,
-                _ => 0,
-            };
+            return self.read_vega(address - VEGA_BASE);
         }
         0
     }
@@ -473,11 +491,15 @@ impl MachineBus {
         }
         if (ASTRAEA_BASE..ASTRAEA_BASE + 0x0100).contains(&address) {
             self.write_astraea(address - ASTRAEA_BASE, value);
+            return;
+        }
+        if (VEGA_BASE..VEGA_BASE + 0x0100).contains(&address) {
+            self.write_vega(address - VEGA_BASE, value);
         }
     }
 
     fn read_vesta(&mut self, offset: u32) -> u32 {
-        self.refresh_timers();
+        self.refresh_device_events();
         match offset {
             0x000 => 0x5653_5441,
             0x004 => 0x0001_0000,
@@ -628,6 +650,26 @@ impl MachineBus {
         }
     }
 
+    fn refresh_device_events(&mut self) {
+        self.refresh_timers();
+        self.refresh_video();
+    }
+
+    fn refresh_video(&mut self) {
+        let now = self.current_cycles();
+
+        if now < self.vega.next_vblank {
+            return;
+        }
+        let frames = (now - self.vega.next_vblank) / VEGA_FRAME_CYCLES + 1;
+        self.vega.next_vblank = self
+            .vega
+            .next_vblank
+            .saturating_add(frames.saturating_mul(VEGA_FRAME_CYCLES));
+        self.vega.frame_counter = self.vega.frame_counter.wrapping_add(frames as u32);
+        self.vega.irq_status |= VEGA_IRQ_VBLANK;
+    }
+
     fn timer_value(&self, index: usize) -> u32 {
         let timer = self.timers[index];
         let Some(deadline) = timer.deadline else {
@@ -645,6 +687,16 @@ impl MachineBus {
             if timer.status & TIMER_EXPIRED != 0 && timer.control & TIMER_IRQ_ENABLE != 0 {
                 pending |= 1_u32 << source;
             }
+        }
+        if self.vega.irq_status & self.vega.irq_enable != 0 {
+            pending |= 1_u32 << IRQ_SOURCE_VEGA;
+        }
+        if self.astraea.irq_status
+            & (self.astraea.irq_enable
+                | (u32::from(self.astraea.blit_irq_enable) * ASTRAEA_IRQ_BLIT_DONE))
+            != 0
+        {
+            pending |= 1_u32 << IRQ_SOURCE_ASTRAEA;
         }
         pending
     }
@@ -684,6 +736,8 @@ impl MachineBus {
         match offset {
             0x00 => 0x4153_5452,
             0x04 => 0x0001_0000,
+            0x10 => self.astraea.irq_enable,
+            0x14 => self.astraea.irq_status,
             0x40 => self.astraea.src,
             0x44 => self.astraea.dst,
             0x4c => self.astraea.src_pitch,
@@ -698,6 +752,8 @@ impl MachineBus {
 
     fn write_astraea(&mut self, offset: u32, value: u32) {
         match offset {
+            0x10 => self.astraea.irq_enable = value & ASTRAEA_IRQ_BLIT_DONE,
+            0x14 => self.astraea.irq_status &= !value,
             0x40 => self.astraea.src = value,
             0x44 => self.astraea.dst = value,
             0x4c => self.astraea.src_pitch = value,
@@ -705,7 +761,12 @@ impl MachineBus {
             0x58 => self.astraea.dim = value,
             0x5c => self.astraea.op = value,
             0x60 => self.astraea.color = value,
-            0x68 if value & 1 != 0 => self.run_blitter(),
+            0x68 => {
+                self.astraea.blit_irq_enable = value & BLIT_IRQ_ENABLE != 0;
+                if value & 1 != 0 {
+                    self.run_blitter();
+                }
+            }
             _ => {}
         }
     }
@@ -722,7 +783,7 @@ impl MachineBus {
         };
         let row_bytes = match width.checked_mul(element_bytes) {
             Some(bytes) if bytes != 0 && height != 0 => bytes,
-            _ => return self.blit_error(1),
+            _ => return self.blit_complete(0),
         };
         let src_pitch = self.astraea.src_pitch as usize;
         let dst_pitch = self.astraea.dst_pitch as usize;
@@ -752,11 +813,43 @@ impl MachineBus {
                 _ => return self.blit_error(1),
             }
         }
-        self.astraea.status = BLIT_DONE;
+        self.blit_complete(0);
     }
 
     fn blit_error(&mut self, code: u32) {
-        self.astraea.status = BLIT_DONE | (code << 8);
+        self.blit_complete(code);
+    }
+
+    fn blit_complete(&mut self, error: u32) {
+        self.astraea.status = BLIT_DONE | (error << 8);
+        self.astraea.irq_status |= ASTRAEA_IRQ_BLIT_DONE;
+    }
+
+    fn read_vega(&mut self, offset: u32) -> u32 {
+        self.refresh_video();
+        match offset {
+            0x00 => 0x5645_4741,
+            0x04 => 0x0005_0000,
+            0x08 => 1,
+            0x0c => 1 << 4,
+            0x10 => self.vega.irq_enable,
+            0x14 => self.vega.irq_status,
+            0x18 => 0,
+            0x1c => 1,
+            0x28 => (480 << 16) | 720,
+            0x30 => 0x0010_1820,
+            0x64 => self.vega.frame_counter,
+            _ => 0,
+        }
+    }
+
+    fn write_vega(&mut self, offset: u32, value: u32) {
+        self.refresh_video();
+        match offset {
+            0x10 => self.vega.irq_enable = value & 0x7,
+            0x14 => self.vega.irq_status &= !value,
+            _ => {}
+        }
     }
 
     fn start_bist(&mut self) {
@@ -975,6 +1068,56 @@ mod tests {
         bus.write32(VESTA_BASE + 0x40c, TIMER_EXPIRED);
         assert_eq!(bus.read32(VESTA_BASE + 0x300), 0);
         assert_eq!(bus.prepare_execution(1_000), (100, 0));
+    }
+
+    #[test]
+    fn vega_vblank_drives_a_vectored_interrupt() {
+        let mut bus = MachineBus::new(&test_rom()).unwrap();
+
+        bus.write32(VESTA_BASE + 0x380 + IRQ_SOURCE_VEGA * 4, (84 << 8) | 3);
+        bus.write32(VESTA_BASE + 0x304, 1 << IRQ_SOURCE_VEGA);
+        bus.write32(VEGA_BASE + 0x10, VEGA_IRQ_VBLANK);
+        assert_eq!(
+            bus.prepare_execution(VEGA_FRAME_CYCLES + 100).0,
+            VEGA_FRAME_CYCLES
+        );
+
+        bus.finish_timeslice(VEGA_FRAME_CYCLES);
+        assert_eq!(bus.prepare_execution(1_000).1, 3);
+        assert_ne!(bus.read32(VESTA_BASE + 0x300) & (1 << IRQ_SOURCE_VEGA), 0);
+        assert_eq!(
+            bus.read32(VESTA_BASE + 0x310),
+            IRQ_VALID | (84 << IRQ_VECTOR_SHIFT) | (IRQ_SOURCE_VEGA << IRQ_SOURCE_SHIFT) | 3
+        );
+        assert_eq!(bus.read32(VEGA_BASE + 0x14), VEGA_IRQ_VBLANK);
+
+        bus.write32(VEGA_BASE + 0x14, VEGA_IRQ_VBLANK);
+        assert_eq!(bus.read32(VESTA_BASE + 0x300) & (1 << IRQ_SOURCE_VEGA), 0);
+    }
+
+    #[test]
+    fn astraea_noop_completion_drives_a_vectored_interrupt() {
+        let mut bus = MachineBus::new(&test_rom()).unwrap();
+
+        bus.write32(VESTA_BASE + 0x380 + IRQ_SOURCE_ASTRAEA * 4, (84 << 8) | 3);
+        bus.write32(VESTA_BASE + 0x304, 1 << IRQ_SOURCE_ASTRAEA);
+        bus.write32(ASTRAEA_BASE + 0x10, ASTRAEA_IRQ_BLIT_DONE);
+        bus.write32(ASTRAEA_BASE + 0x58, 0);
+        bus.write32(ASTRAEA_BASE + 0x68, 1 | BLIT_IRQ_ENABLE);
+
+        assert_eq!(bus.read32(ASTRAEA_BASE + 0x6c), BLIT_DONE);
+        assert_eq!(bus.read32(ASTRAEA_BASE + 0x14), ASTRAEA_IRQ_BLIT_DONE);
+        assert_eq!(bus.prepare_execution(1_000).1, 3);
+        assert_ne!(
+            bus.read32(VESTA_BASE + 0x300) & (1 << IRQ_SOURCE_ASTRAEA),
+            0
+        );
+
+        bus.write32(ASTRAEA_BASE + 0x14, ASTRAEA_IRQ_BLIT_DONE);
+        assert_eq!(
+            bus.read32(VESTA_BASE + 0x300) & (1 << IRQ_SOURCE_ASTRAEA),
+            0
+        );
     }
 
     #[test]

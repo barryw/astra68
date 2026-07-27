@@ -10,6 +10,7 @@ module vesta_irq_timer (
 
     input  wire        select,
     input  wire [7:0]  reg_index,
+    input  wire        read_strobe,
     input  wire        write_strobe,
     input  wire [31:0] write_data,
     input  wire [3:0]  byte_enable,
@@ -365,7 +366,13 @@ module vesta_irq_timer (
                                                 byte_enable);
             end
 
-            if (select && write_strobe && reg_index == REG_IRQ_ENABLE)
+            // Reading IRQ_CURRENT atomically claims and masks the selected
+            // source. The single-core handler can therefore enqueue bounded
+            // deferred work without a read/modify/write of IRQ_ENABLE.
+            if (select && read_strobe && reg_index == REG_IRQ_CURRENT &&
+                active_valid)
+                irq_enable <= irq_enable & ~(32'd1 << active_source);
+            else if (select && write_strobe && reg_index == REG_IRQ_ENABLE)
                 irq_enable <= merge_bytes(irq_enable, write_data, byte_enable);
 
             if (select && write_strobe && reg_index >= REG_IRQ_CFG &&

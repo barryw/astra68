@@ -396,6 +396,14 @@ def test_k8_shared_bulk_requires_exact_cleanup_wake_budgets_and_history() -> Non
     assert acceptance_reached(
         output, None, False, expect_k8_shared_bulk=True
     )
+    k10_history = output.replace(
+        b"12 blocks, 5 wake, 6 priority handoff",
+        b"13 blocks, 5 wake, 6 priority handoff",
+    )
+    assert check_hardware._shared_bulk_contract_reached(
+        k10_history, (13, 5, 6)
+    )
+    assert not check_hardware.k8_shared_bulk_reached(k10_history)
     for missing in (
         b"Shared areas ........ 1 create, 1/1 map/unmap, 0 active\n",
         b"Bulk rings .......... 1 create, 1/1 notify, 1 blocked wake, 0 active\n",
@@ -428,6 +436,85 @@ def test_k8_shared_bulk_requires_exact_cleanup_wake_budgets_and_history() -> Non
             False,
             expect_k8_shared_bulk=True,
         )
+
+
+def test_k10_device_requires_exact_irq_trace_and_budgets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lower_contracts: list[tuple[int, int, int]] = []
+
+    def shared_contract(
+        _output: bytes | bytearray,
+        expected_wait_wake: tuple[int, int, int],
+    ) -> bool:
+        lower_contracts.append(expected_wait_wake)
+        return True
+
+    monkeypatch.setattr(
+        check_hardware, "_shared_bulk_contract_reached", shared_contract
+    )
+    output = (
+        b"POST PASS\n"
+        b"Device IRQs ........ K10 PASS, mask=0x000003B0 "
+        b"delivered/acked=5/5 owner-death=1\n"
+        b"K10 PERF irq=1225/1250 wake=1176/5000 overruns=0\n"
+        b"K10 PERF irq min=1213 latest=1213 samples=5\n"
+        b"K10 PERF endpoint read=2725/15000 ack=6538/20000 overruns=0\n"
+        b"K10 PERF worker=18421/50000 monitor=25952/125000 overruns=0\n"
+        b"K10 LATENCY worker_dispatch_max=34056 "
+        b"endpoint_wake_run_max=40762 irqoff_max=1383042\n"
+        b"K10 BOOT trace_init=2571 process_init=256128 "
+        b"process_start_irqoff=7716\n"
+        b"K10 TRACE staged=0 flushed=0 pending=0 max=0 dropped=0\n"
+        b"K10 PERFORMANCE PASS\n"
+        b"KERNEL MULTITASKING\n"
+    )
+
+    assert acceptance_reached(
+        output, None, False, expect_k10_device=True
+    )
+    assert lower_contracts == [(13, 5, 6)]
+
+    for old, new in (
+        (b"mask=0x000003B0", b"mask=0x000003A0"),
+        (b"delivered/acked=5/5", b"delivered/acked=4/5"),
+        (b"owner-death=1", b"owner-death=0"),
+        (b"irq=1225", b"irq=0"),
+        (b"irq=1225", b"irq=1251"),
+        (b"1225/1250", b"1225/1251"),
+        (b"wake=1176", b"wake=5001"),
+        (b"overruns=0", b"overruns=1"),
+        (b"irq min=1213", b"irq min=0"),
+        (b"latest=1213", b"latest=0"),
+        (b"samples=5", b"samples=4"),
+        (b"read=2725", b"read=0"),
+        (b"ack=6538", b"ack=20001"),
+        (b"worker=18421", b"worker=50001"),
+        (b"monitor=25952", b"monitor=125001"),
+        (b"worker_dispatch_max=34056", b"worker_dispatch_max=0"),
+        (b"process_init=256128", b"process_init=0"),
+        (b"staged=0 flushed=0", b"staged=1 flushed=0"),
+        (b"pending=0", b"pending=1"),
+        (b"max=0", b"max=33"),
+        (b"dropped=0", b"dropped=1"),
+        (b"K10 PERFORMANCE PASS\n", b""),
+        (b"KERNEL MULTITASKING\n", b""),
+    ):
+        assert not acceptance_reached(
+            output.replace(old, new, 1),
+            None,
+            False,
+            expect_k10_device=True,
+        )
+
+    monkeypatch.setattr(
+        check_hardware,
+        "_shared_bulk_contract_reached",
+        lambda _output, _expected_wait_wake: False,
+    )
+    assert not acceptance_reached(
+        output, None, False, expect_k10_device=True
+    )
 
 
 def test_k2_performance_requires_exact_budgets_and_bounded_measurements() -> None:

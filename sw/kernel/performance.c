@@ -53,6 +53,18 @@ static const uint32_t performance_budgets[KERNEL_PERFORMANCE_METRIC_COUNT] = {
         KERNEL_PERFORMANCE_BUDGET_AREA_UNMAP,
     [KERNEL_PERFORMANCE_RING_NOTIFY] =
         KERNEL_PERFORMANCE_BUDGET_RING_NOTIFY,
+    [KERNEL_PERFORMANCE_HARD_IRQ] =
+        KERNEL_PERFORMANCE_BUDGET_HARD_IRQ,
+    [KERNEL_PERFORMANCE_HARD_IRQ_WAKE] =
+        KERNEL_PERFORMANCE_BUDGET_HARD_IRQ_WAKE,
+    [KERNEL_PERFORMANCE_IRQ_READ] =
+        KERNEL_PERFORMANCE_BUDGET_IRQ_READ,
+    [KERNEL_PERFORMANCE_IRQ_ACK] =
+        KERNEL_PERFORMANCE_BUDGET_IRQ_ACK,
+    [KERNEL_PERFORMANCE_DEVICE_BATCH] =
+        KERNEL_PERFORMANCE_BUDGET_DEVICE_BATCH,
+    [KERNEL_PERFORMANCE_MONITOR_COMMAND] =
+        KERNEL_PERFORMANCE_BUDGET_MONITOR_COMMAND,
 };
 
 #if defined(KERNEL_PERFORMANCE_HOST_TEST)
@@ -84,6 +96,11 @@ static bool valid_metric(KernelPerformanceMetric metric)
     return (uint32_t)metric < KERNEL_PERFORMANCE_METRIC_COUNT;
 }
 
+uint32_t kernel_performance_cycles_low(void)
+{
+    return performance_cycles_low();
+}
+
 void kernel_performance_init(void)
 {
     kernel_bytes_clear(&performance_stats, sizeof(performance_stats));
@@ -109,7 +126,7 @@ void kernel_performance_freeze(void)
 bool kernel_performance_start_window(uint32_t metric_mask)
 {
     if (metric_mask == 0u ||
-        (metric_mask & ~KERNEL_PERFORMANCE_REQUIRED_MASK) != 0u ||
+        (metric_mask & ~KERNEL_PERFORMANCE_VALID_MASK) != 0u ||
         kernel_performance_sampling_enabled != 0u)
         return false;
     performance_generation = (uint16_t)kernel_generation_next_masked(
@@ -118,6 +135,19 @@ bool kernel_performance_start_window(uint32_t metric_mask)
     performance_window_active = 1u;
     kernel_performance_sampling_enabled = 1u;
     return true;
+}
+
+static void complete_window_metric(KernelPerformanceMetric metric)
+{
+    if (performance_window_active == 0u)
+        return;
+    performance_window_pending &= ~KERNEL_PERFORMANCE_METRIC_MASK(metric);
+    if (performance_window_pending != 0u)
+        return;
+    performance_generation = (uint16_t)kernel_generation_next_masked(
+        performance_generation, UINT16_MAX);
+    performance_window_active = 0u;
+    kernel_performance_sampling_enabled = 0u;
 }
 
 KernelPerformanceToken kernel_performance_begin_sampled(
@@ -167,6 +197,20 @@ void kernel_performance_record(KernelPerformanceMetric metric,
         ++stats->overruns;
 }
 
+void kernel_performance_record_call(KernelPerformanceMetric metric,
+                                    uint32_t cycles)
+{
+    KernelPerformanceMetricStats *stats;
+
+    if (!valid_metric(metric))
+        return;
+    stats = &performance_stats.metric[metric];
+    if (stats->calls != UINT32_MAX)
+        ++stats->calls;
+    kernel_performance_record(metric, cycles);
+    complete_window_metric(metric);
+}
+
 void kernel_performance_end_sampled(KernelPerformanceToken token)
 {
     uint32_t finished;
@@ -177,17 +221,41 @@ void kernel_performance_end_sampled(KernelPerformanceToken token)
     finished = performance_cycles_low();
     kernel_performance_record((KernelPerformanceMetric)token.metric,
                               finished - token.started);
-    if (performance_window_active != 0u) {
-        performance_window_pending &=
-            ~KERNEL_PERFORMANCE_METRIC_MASK(token.metric);
-        if (performance_window_pending == 0u) {
-            performance_generation =
-                (uint16_t)kernel_generation_next_masked(
-                    performance_generation, UINT16_MAX);
-            performance_window_active = 0u;
-            kernel_performance_sampling_enabled = 0u;
-        }
-    }
+    complete_window_metric((KernelPerformanceMetric)token.metric);
+}
+
+KernelPerformanceSpan kernel_performance_span_begin(void)
+{
+    KernelPerformanceSpan span = {0u, 0u, 0u, 0u};
+
+    if (kernel_performance_sampling_enabled == 0u)
+        return span;
+    span.started = performance_cycles_low();
+    span.generation = performance_generation;
+    span.active = 1u;
+    return span;
+}
+
+void kernel_performance_span_end(KernelPerformanceSpan span,
+                                 KernelPerformanceMetric metric)
+{
+    KernelPerformanceMetricStats *stats;
+    uint32_t finished;
+    uint32_t metric_mask;
+
+    if (span.active == 0u || span.generation != performance_generation ||
+        !valid_metric(metric))
+        return;
+    metric_mask = KERNEL_PERFORMANCE_METRIC_MASK(metric);
+    if (performance_window_active != 0u &&
+        (performance_window_pending & metric_mask) == 0u)
+        return;
+    stats = &performance_stats.metric[metric];
+    if (stats->calls != UINT32_MAX)
+        ++stats->calls;
+    finished = performance_cycles_low();
+    kernel_performance_record(metric, finished - span.started);
+    complete_window_metric(metric);
 }
 
 bool kernel_performance_stats(KernelPerformanceStats *stats)
@@ -202,7 +270,7 @@ bool kernel_performance_pass(const KernelPerformanceStats *stats,
                              uint32_t required_mask,
                              KernelPerformanceMetric *failed_metric)
 {
-    uint32_t valid_mask = KERNEL_PERFORMANCE_REQUIRED_MASK;
+    uint32_t valid_mask = KERNEL_PERFORMANCE_VALID_MASK;
 
     if (stats == NULL || (required_mask & ~valid_mask) != 0u)
         return false;

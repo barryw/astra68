@@ -25,6 +25,11 @@ atomic master-mode `STOP`. Vesta TIMER0 is one-shot: the hard timer
 acknowledges, samples the monotonic cycle counter, expires bounded scheduler
 deadlines, records quantum expiry, moves a bounded worker retry bit to ready
 work, and requests scheduling. It never allocates or destroys an object.
+All pending-work publication, including worker self-signaling, updates the
+bitmap and `BLOCKED` to `READY` transition while interrupts are masked and then
+restores the caller's exact prior interrupt state. Thus an interrupt cannot
+publish a different work class between a worker load and store and have that
+bit lost.
 
 User-fault dispatch performs only fault classification, atomic transition to
 `EXITING`, withdrawal from scheduling, selection of a runnable or empty CRP,

@@ -6,6 +6,7 @@ module tb_vesta_irq_timer;
     reg rst = 1'b1;
     reg select = 1'b0;
     reg [7:0] reg_index = 8'd0;
+    reg read_strobe = 1'b0;
     reg write_strobe = 1'b0;
     reg [31:0] write_data = 32'd0;
     reg [3:0] byte_enable = 4'd0;
@@ -33,7 +34,8 @@ module tb_vesta_irq_timer;
 
     vesta_irq_timer dut (
         .clk(clk), .rst(rst), .select(select), .reg_index(reg_index),
-        .write_strobe(write_strobe), .write_data(write_data),
+        .read_strobe(read_strobe), .write_strobe(write_strobe),
+        .write_data(write_data),
         .byte_enable(byte_enable), .read_data(read_data),
         .source_level(source_level), .cpu_ipln_n(cpu_ipln_n),
         .iack_strobe(iack_strobe), .iack_level(iack_level),
@@ -58,6 +60,23 @@ module tb_vesta_irq_timer;
             write_strobe = 1'b0;
             select = 1'b0;
             byte_enable = 4'd0;
+        end
+    endtask
+
+    task automatic claim_irq(input [31:0] expected);
+        begin
+            @(negedge clk);
+            select = 1'b1;
+            reg_index = IRQ_CURRENT;
+            read_strobe = 1'b1;
+            #1;
+            if (read_data !== expected)
+                $fatal(1, "claim expected %08x got %08x",
+                       expected, read_data);
+            @(posedge clk);
+            #1;
+            read_strobe = 1'b0;
+            select = 1'b0;
         end
     endtask
 
@@ -145,6 +164,9 @@ module tb_vesta_irq_timer;
         #1;
         expect_ipl(3'b100);
         expect_reg(IRQ_CURRENT, 32'h80550303);
+        claim_irq(32'h80550303);
+        expect_reg(IRQ_ENABLE, 32'h00000040);
+        write_reg(IRQ_ENABLE, 32'h00000048, 4'b1111);
         write_reg(IRQ_ACK, 32'h00000008, 4'b1111);
         expect_reg(IRQ_PENDING, 32'h00000008);
 

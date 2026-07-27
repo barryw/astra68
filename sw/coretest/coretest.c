@@ -31,6 +31,7 @@
 #define BERR_ARM_USER_PROG_READ "0x15"
 #define BERR_ARM_SDRAM_SUP_DATA_WRITE "0x4b"
 #define BERR_SDRAM_TARGET 0x02000100u
+#define BERR_UNMAPPED_TARGET 0xfff00900u
 #ifdef CORETEST_SIM_FB_GUARD
 #define BERR_SDRAM_ARM_ASM ""
 #else
@@ -7028,11 +7029,63 @@ static void test_sdram_combined_write_berr(void)
     chk_access_fault_status(0x00100628u, 0x0105u);
     chk_access_fault_long(0x00100630u, 0x34u, 0x13579bdfu);
     chk_access_fault_long(0x0010062cu, 0x2cu, BERR_SDRAM_TARGET);
+    chk32(0x00100634u, VESTA->BUS_FAULT_STATUS & 0x000007ffu,
+          BUS_FAULT_VALID | BUS_FAULT_DEVICE | BUS_FAULT_WRITE |
+          (5u << BUS_FAULT_FC_SHIFT));
+    chk32(0x00100638u, VESTA->BUS_FAULT_ADDRESS, BERR_SDRAM_TARGET);
 #ifdef CORETEST_SIM_FB_GUARD
-    chk32(0x00100634u, rd32(BERR_SDRAM_TARGET), 0x0badcafeu);
+    chk32(0x0010063cu, VESTA->BUS_FAULT_TARGET,
+          BUS_FAULT_TARGET_FRAMEBUFFER_GUARD);
 #else
-    chk32(0x00100634u, rd32(BERR_SDRAM_TARGET), 0x13579bdfu);
+    chk32(0x0010063cu, VESTA->BUS_FAULT_TARGET,
+          BUS_FAULT_TARGET_EXTERNAL);
 #endif
+    chk32(0x00100640u,
+          (VESTA->BUS_FAULT_CYCLES_LO != 0u ||
+           VESTA->BUS_FAULT_CYCLES_HI != 0u) ? 1u : 0u, 1u);
+    chk32(0x00100644u, VESTA->BUS_FAULT_LOST, 0u);
+    chk32(0x00100648u, VESTA->BUS_TIMEOUT_CYCLES, 2048u);
+    VESTA->BUS_FAULT_ACK = BUS_FAULT_VALID;
+    chk32(0x0010064cu,
+          VESTA->BUS_FAULT_STATUS & BUS_FAULT_VALID, 0u);
+#ifdef CORETEST_SIM_FB_GUARD
+    chk32(0x00100650u, rd32(BERR_SDRAM_TARGET), 0x0badcafeu);
+#else
+    chk32(0x00100650u, rd32(BERR_SDRAM_TARGET), 0x13579bdfu);
+#endif
+
+    arm_exception_recovery_skip_data_cycle(0x0008u);
+    __asm__ volatile(
+        "move.l #0x01ff9500,%%d0\n\t"
+        "movec %%d0,%%vbr\n\t"
+        "lea 1f,%%a0\n\t"
+        "move.l %%a0,0x01ff9284\n\t"
+        "move.l #0x2468ace0,%%d1\n\t"
+        "move.l %%d1,0xfff00900\n\t"
+        "move.l #0xbadbad,%%d1\n"
+        "1:\n\t"
+        "moveq #0,%%d0\n\t"
+        "movec %%d0,%%vbr"
+        :
+        :
+        : "a0", "d0", "d1", "cc", "memory");
+
+    chk_access_fault_frame(0x00100660u, 0x0008u, 0x2000u, 0x2000u, 0u);
+    chk_access_fault_status(0x00100678u, 0x0105u);
+    chk_access_fault_long(0x0010067cu, 0x34u, 0x2468ace0u);
+    chk_access_fault_long(0x00100680u, 0x2cu, BERR_UNMAPPED_TARGET);
+    chk32(0x00100684u, VESTA->BUS_FAULT_STATUS & 0x000007ffu,
+          BUS_FAULT_VALID | BUS_FAULT_UNMAPPED | BUS_FAULT_WRITE |
+          (2u << BUS_FAULT_SIZE_SHIFT) |
+          (5u << BUS_FAULT_FC_SHIFT));
+    chk32(0x00100688u, VESTA->BUS_FAULT_ADDRESS,
+          BERR_UNMAPPED_TARGET);
+    chk32(0x0010068cu, VESTA->BUS_FAULT_TARGET,
+          BUS_FAULT_TARGET_UNMAPPED);
+    chk32(0x00100690u, VESTA->BUS_FAULT_LOST, 1u);
+    VESTA->BUS_FAULT_ACK = BUS_FAULT_VALID;
+    chk32(0x00100694u,
+          VESTA->BUS_FAULT_STATUS & BUS_FAULT_VALID, 0u);
 }
 #endif
 

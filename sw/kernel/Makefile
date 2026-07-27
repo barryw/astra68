@@ -22,19 +22,24 @@ LDFLAGS = -T kernel.ld -nostdlib -no-pie \
 
 OBJECTS = $(BUILD_DIR)/entry.o $(BUILD_DIR)/vectors.o \
           $(BUILD_DIR)/kernel.o $(BUILD_DIR)/platform.o \
+          $(BUILD_DIR)/mmio.o $(BUILD_DIR)/trace.o \
+          $(BUILD_DIR)/irq.o $(BUILD_DIR)/interrupt.o \
+          $(BUILD_DIR)/monitor.o $(BUILD_DIR)/irq_latency.o \
+          $(BUILD_DIR)/fault.o \
           $(BUILD_DIR)/allocation.o $(BUILD_DIR)/object_cache.o \
           $(BUILD_DIR)/memory.o $(BUILD_DIR)/dma.o $(BUILD_DIR)/block.o \
           $(BUILD_DIR)/handle.o $(BUILD_DIR)/bytes.o \
-          $(BUILD_DIR)/context.o \
-          $(BUILD_DIR)/performance.o \
-          $(BUILD_DIR)/thread.o $(BUILD_DIR)/sync.o $(BUILD_DIR)/port.o \
+	  $(BUILD_DIR)/context.o \
+	  $(BUILD_DIR)/performance.o \
+	  $(BUILD_DIR)/thread.o $(BUILD_DIR)/sync.o $(BUILD_DIR)/port.o \
           $(BUILD_DIR)/area.o $(BUILD_DIR)/ring.o \
           $(BUILD_DIR)/process.o \
           $(BUILD_DIR)/user_test.o \
           $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/worker.o \
           $(BUILD_DIR)/worker_asm.o \
           $(BUILD_DIR)/pmmu.o $(BUILD_DIR)/vm.o \
-          $(BUILD_DIR)/exception.o $(BUILD_DIR)/user_copy.o \
+          $(BUILD_DIR)/exception.o \
+          $(BUILD_DIR)/user_copy.o \
           $(BUILD_DIR)/user_copy_asm.o \
           $(BUILD_DIR)/boot_contract.o
 
@@ -54,14 +59,38 @@ $(OBJECTS): $(BUILD_INFO)
 $(BUILD_DIR)/entry.o: entry.S kernel.ld | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/vectors.o: vectors.S context.h dispatch.h thread.h user_copy.h kernel.ld | $(BUILD_DIR)
+$(BUILD_DIR)/vectors.o: vectors.S context.h dispatch.h thread.h user_copy.h \
+                        irq_latency.h kernel.ld | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/kernel.o: kernel.c $(BUILD_INFO) allocation.h bytes.h dispatch.h process.h thread.h \
+$(BUILD_DIR)/kernel.o: kernel.c $(BUILD_INFO) allocation.h bytes.h dispatch.h fault.h interrupt.h irq_latency.h monitor.h process.h thread.h trace.h \
                        ../include/astra/boot.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/platform.o: platform.c platform.h ../include/vesta.h | $(BUILD_DIR)
+$(BUILD_DIR)/platform.o: platform.c platform.h mmio.h ../include/astraea.h \
+                         ../include/ohci.h ../include/vega.h \
+                         ../include/vesta.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/mmio.o: mmio.c mmio.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/trace.o: trace.c trace.h platform.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/irq.o: irq.c irq.h thread.h bytes.h generation.h trace.h \
+                     object_cache.h allocation.h \
+                     ../include/astra/syscall.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/interrupt.o: interrupt.c interrupt.h irq.h monitor.h platform.h trace.h worker.h \
+                           ../include/astraea.h ../include/ohci.h \
+                           ../include/vega.h ../include/vesta.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/monitor.o: monitor.c monitor.h bytes.h worker.h irq.h irq_latency.h handle.h memory.h \
+                         performance.h platform.h process.h thread.h trace.h \
+                         vm.h ../include/vesta.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/allocation.o: allocation.c allocation.h | $(BUILD_DIR)
@@ -97,6 +126,10 @@ $(BUILD_DIR)/performance.o: performance.c performance.h bytes.h generation.h \
                             platform.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
+$(BUILD_DIR)/irq_latency.o: irq_latency.c irq_latency.h performance.h \
+                            bytes.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
 $(BUILD_DIR)/thread.o: thread.c thread.h bytes.h generation.h context.h handle.h \
                        object_cache.h allocation.h \
                        performance.h | $(BUILD_DIR)
@@ -122,7 +155,7 @@ $(BUILD_DIR)/ring.o: ring.c ring.h area.h thread.h bytes.h generation.h \
                      vm.h ../include/astra/syscall.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/process.o: process.c process.h thread.h sync.h port.h area.h ring.h context.h handle.h block.h \
+$(BUILD_DIR)/process.o: process.c process.h thread.h sync.h port.h area.h ring.h context.h handle.h block.h interrupt.h \
                         bytes.h \
                         generation.h \
                         object_cache.h allocation.h \
@@ -132,16 +165,18 @@ $(BUILD_DIR)/process.o: process.c process.h thread.h sync.h port.h area.h ring.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/dispatch.o: dispatch.c dispatch.h process.h thread.h context.h \
+                         fault.h interrupt.h trace.h \
                          performance.h \
                          exception.h panic.h platform.h user_copy.h \
-                         worker.h | $(BUILD_DIR)
+                         worker.h ../include/vesta.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/worker.o: worker.c worker.h process.h context.h panic.h \
                        platform.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/worker_asm.o: worker.S worker.h context.h kernel.ld | $(BUILD_DIR)
+$(BUILD_DIR)/worker_asm.o: worker.S worker.h context.h irq_latency.h \
+                           kernel.ld | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/user_test.o: user_test.S qualification.h \
@@ -155,6 +190,10 @@ $(BUILD_DIR)/vm.o: vm.c vm.h pmmu.h memory.h thread.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/exception.o: exception.c exception.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/fault.o: fault.c fault.h exception.h platform.h vm.h \
+                      ../include/vesta.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/user_copy.o: user_copy.c user_copy.h exception.h vm.h | $(BUILD_DIR)
@@ -183,12 +222,15 @@ verify: astra_kernel.elf astra_kernel.bin
 
 test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_allocation \
       $(BUILD_DIR)/test_memory \
-      $(BUILD_DIR)/test_platform \
+      $(BUILD_DIR)/test_mmio $(BUILD_DIR)/test_trace $(BUILD_DIR)/test_irq \
+      $(BUILD_DIR)/test_platform $(BUILD_DIR)/test_interrupt \
+      $(BUILD_DIR)/test_monitor \
       $(BUILD_DIR)/test_dma $(BUILD_DIR)/test_block $(BUILD_DIR)/test_vm \
-      $(BUILD_DIR)/test_exception $(BUILD_DIR)/test_user_copy \
+      $(BUILD_DIR)/test_exception $(BUILD_DIR)/test_fault \
+      $(BUILD_DIR)/test_user_copy \
       $(BUILD_DIR)/test_handle $(BUILD_DIR)/test_bytes \
       $(BUILD_DIR)/test_context \
-      $(BUILD_DIR)/test_performance \
+      $(BUILD_DIR)/test_performance $(BUILD_DIR)/test_irq_latency \
       $(BUILD_DIR)/test_thread $(BUILD_DIR)/test_sync \
       $(BUILD_DIR)/test_port $(BUILD_DIR)/test_area $(BUILD_DIR)/test_ring \
       $(BUILD_DIR)/test_process $(BUILD_DIR)/test_worker \
@@ -196,16 +238,23 @@ test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_allocation \
 	./$(BUILD_DIR)/test_boot_contract
 	./$(BUILD_DIR)/test_allocation
 	./$(BUILD_DIR)/test_memory
+	./$(BUILD_DIR)/test_mmio
+	./$(BUILD_DIR)/test_trace
+	./$(BUILD_DIR)/test_irq
 	./$(BUILD_DIR)/test_platform
+	./$(BUILD_DIR)/test_interrupt
+	./$(BUILD_DIR)/test_monitor
 	./$(BUILD_DIR)/test_dma
 	./$(BUILD_DIR)/test_block
 	./$(BUILD_DIR)/test_vm
 	./$(BUILD_DIR)/test_exception
+	./$(BUILD_DIR)/test_fault
 	./$(BUILD_DIR)/test_user_copy
 	./$(BUILD_DIR)/test_handle
 	./$(BUILD_DIR)/test_bytes
 	./$(BUILD_DIR)/test_context
 	./$(BUILD_DIR)/test_performance
+	./$(BUILD_DIR)/test_irq_latency
 	./$(BUILD_DIR)/test_thread
 	./$(BUILD_DIR)/test_sync
 	./$(BUILD_DIR)/test_port
@@ -236,11 +285,61 @@ $(BUILD_DIR)/test_memory: tests/test_memory.c memory.c memory.h \
 		../common/boot_contract.c allocation.c memory.c \
 		tests/test_memory.c -o $@
 
-$(BUILD_DIR)/test_platform: tests/test_platform.c platform.c platform.h \
-                              ../include/vesta.h | $(BUILD_DIR)
+$(BUILD_DIR)/test_mmio: tests/test_mmio.c mmio.c mmio.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
-		-DKERNEL_PLATFORM_HOST_TEST=1 -I. -I../include \
-		platform.c tests/test_platform.c -o $@
+		-DKERNEL_MMIO_HOST_TEST=1 -I. \
+		mmio.c tests/test_mmio.c -o $@
+
+$(BUILD_DIR)/test_trace: tests/test_trace.c trace.c trace.h bytes.c bytes.h \
+			    platform.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
+		-DKERNEL_TRACE_HOST_TEST=1 -I. \
+		bytes.c trace.c tests/test_trace.c -o $@
+
+$(BUILD_DIR)/test_irq: tests/test_irq.c irq.c irq.h thread.c thread.h trace.h \
+			 allocation.c allocation.h object_cache.c object_cache.h \
+			 bytes.c bytes.h generation.h \
+			 performance.c performance.h platform.h \
+			 context.c context.h exception.c exception.h \
+			 handle.h ../include/astra/syscall.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
+		-DKERNEL_PERFORMANCE_HOST_TEST=1 -I. -I../include \
+		allocation.c object_cache.c bytes.c exception.c context.c \
+		performance.c thread.c irq.c tests/test_irq.c -o $@
+
+$(BUILD_DIR)/test_platform: tests/test_platform.c platform.c platform.h \
+                              mmio.c mmio.h \
+                              ../include/astraea.h ../include/ohci.h \
+                              ../include/vega.h ../include/vesta.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
+		-DKERNEL_PLATFORM_HOST_TEST=1 -DKERNEL_MMIO_HOST_TEST=1 \
+		-I. -I../include mmio.c platform.c tests/test_platform.c -o $@
+
+$(BUILD_DIR)/test_interrupt: tests/test_interrupt.c interrupt.c interrupt.h trace.h \
+			 irq.c irq.h monitor.h platform.c platform.h mmio.c mmio.h \
+			 thread.c thread.h allocation.c allocation.h \
+			 object_cache.c object_cache.h bytes.c bytes.h generation.h \
+			 performance.c performance.h context.c context.h \
+			 exception.c exception.h handle.h \
+			 ../include/astra/syscall.h ../include/astraea.h \
+			 ../include/ohci.h ../include/vega.h \
+			 ../include/vesta.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
+		-DKERNEL_PLATFORM_HOST_TEST=1 -DKERNEL_MMIO_HOST_TEST=1 \
+		-DKERNEL_PERFORMANCE_HOST_TEST=1 -I. -I../include \
+		allocation.c object_cache.c bytes.c exception.c context.c \
+		performance.c thread.c mmio.c platform.c irq.c interrupt.c \
+		tests/test_interrupt.c -o $@
+
+
+$(BUILD_DIR)/test_monitor: tests/test_monitor.c monitor.c monitor.h bytes.c bytes.h \
+			    performance.c performance.h worker.h \
+			    irq.h irq_latency.h handle.h memory.h performance.h platform.h \
+			    process.h thread.h trace.h vm.h ../include/vesta.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
+		-DKERNEL_MONITOR_HOST_TEST=1 -DKERNEL_PERFORMANCE_HOST_TEST=1 \
+		-I. -I../include bytes.c performance.c monitor.c \
+		tests/test_monitor.c -o $@
 
 $(BUILD_DIR)/test_dma: tests/test_dma.c dma.c dma.h generation.h \
                        allocation.c allocation.h object_cache.c object_cache.h \
@@ -277,6 +376,11 @@ $(BUILD_DIR)/test_exception: tests/test_exception.c exception.c \
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I. \
 		exception.c tests/test_exception.c -o $@
 
+$(BUILD_DIR)/test_fault: tests/test_fault.c fault.c fault.h exception.h \
+                          platform.h vm.h ../include/vesta.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
+		-I. -I../include fault.c tests/test_fault.c -o $@
+
 $(BUILD_DIR)/test_user_copy: tests/test_user_copy.c user_copy.c user_copy.h \
                              exception.c exception.h vm.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
@@ -305,6 +409,14 @@ $(BUILD_DIR)/test_performance: tests/test_performance.c performance.c \
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_PERFORMANCE_HOST_TEST=1 -I. \
 		bytes.c performance.c tests/test_performance.c -o $@
+
+$(BUILD_DIR)/test_irq_latency: tests/test_irq_latency.c irq_latency.c \
+				       irq_latency.h performance.c performance.h \
+				       bytes.c bytes.h generation.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
+		-DKERNEL_PERFORMANCE_HOST_TEST=1 -I. \
+		bytes.c performance.c irq_latency.c \
+		tests/test_irq_latency.c -o $@
 
 $(BUILD_DIR)/test_thread: tests/test_thread.c thread.c thread.h \
 			    allocation.c allocation.h object_cache.c object_cache.h \
@@ -378,6 +490,8 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
                             thread.c thread.h sync.c sync.h \
                             port.c port.h \
                             area.c area.h ring.c ring.h \
+                            irq.c irq.h \
+                            interrupt.h worker.h \
                             context.c context.h \
                             handle.c handle.h \
                             exception.c exception.h vm.c vm.h pmmu.h \
@@ -398,10 +512,11 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
 		dma.c block.c vm.c exception.c \
 		user_copy.c \
 		bytes.c context.c handle.c performance.c thread.c sync.c port.c \
-		area.c ring.c process.c \
+		area.c ring.c irq.c process.c \
 		tests/test_process.c -o $@
 
 $(BUILD_DIR)/test_dispatch: tests/test_dispatch.c dispatch.c dispatch.h \
+			     fault.h interrupt.h trace.h \
 			     performance.c performance.h bytes.c bytes.h generation.h \
                              exception.c exception.h process.h context.h \
                              panic.h platform.h user_copy.h worker.h | $(BUILD_DIR)
@@ -411,10 +526,12 @@ $(BUILD_DIR)/test_dispatch: tests/test_dispatch.c dispatch.c dispatch.h \
 		tests/test_dispatch.c -o $@
 
 $(BUILD_DIR)/test_worker: tests/test_worker.c worker.c worker.h process.h \
-                           context.h panic.h platform.h | $(BUILD_DIR)
+			   performance.c performance.h bytes.c bytes.h \
+			   context.h panic.h platform.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
-		-DKERNEL_WORKER_HOST_TEST=1 -I. -I../include \
-		worker.c tests/test_worker.c -o $@
+		-DKERNEL_WORKER_HOST_TEST=1 -DKERNEL_PERFORMANCE_HOST_TEST=1 \
+		-I. -I../include bytes.c performance.c worker.c \
+		tests/test_worker.c -o $@
 
 clean:
 	rm -rf $(BUILD_DIR) astra_kernel.elf astra_kernel.bin astra_kernel.map

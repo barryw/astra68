@@ -31,6 +31,7 @@ if [[ -n "${CORETEST_SIM_TIMEOUT_PS:-}" ]]; then
 fi
 if [[ "${CORETEST_SDRAM_BERR:-0}" == "1" || "$coretest_fb_guard" == "1" ]]; then
     coretest_cpu_cflags+=(-DCORETEST_SIM_FOCUS_SDRAM_BERR=1)
+    verilator_define_args+=(-DCORETEST_SIM_BUS_FAULTS)
     verilator_sdram_args+=(-GSDRAM_ENABLE_PARAM=1)
     verilator_sdram_sources=(
         ecp5pll_sim.sv
@@ -69,6 +70,7 @@ if [[ "${CORETEST_REUSE_SIM:-0}" != "1" || ! -x obj_dir/Vtb_coretest ]]; then
         "${verilator_debug_args[@]}" \
         "${verilator_sdram_args[@]}" \
         tb_coretest.sv tb_sdram32_controller.sv ../astra_soc.sv ../astra_front_panel.sv ../vesta_irq_timer.sv \
+        ../vesta_bus_fault.sv \
         ../tg68k_cache_store.sv ../vega_sprite_builder.sv \
         ../vega_video.sv \
         ../boot_memory_map.sv ../uart_tx.sv ../uart_rx.sv ../uart_rx_fifo.sv ../spi_sd.sv \

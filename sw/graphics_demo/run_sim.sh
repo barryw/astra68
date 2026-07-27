@@ -67,7 +67,8 @@ verilator --binary -j 0 --Mdir obj_dir_graphics_demo \
     --top-module tb_graphics_demo -Wno-lint -Wno-UNOPTFLAT --timing \
     "${verilator_params[@]}" \
     tb_graphics_demo.sv tb_sdram32_controller.sv ecp5pll_sim.sv \
-    ../astra_soc.sv ../astra_front_panel.sv ../vesta_irq_timer.sv ../boot_memory_map.sv \
+    ../astra_soc.sv ../astra_front_panel.sv ../vesta_irq_timer.sv \
+    ../vesta_bus_fault.sv ../boot_memory_map.sv \
     ../tg68k_cache_store.sv ../post_console.sv \
     ../astraea_blitter.sv ../astraea_pixel_port.sv ../astraea_draw.sv \
     ../astraea_copper.sv ../astraea_chip.sv \

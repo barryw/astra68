@@ -41,6 +41,7 @@ static uint8_t frame_allocation_sites[KERNEL_MAX_FRAMES] KERNEL_NOINIT;
 static KernelSavedRange saved_ranges[ASTRA_BOOT_MAX_MEMORY_RANGES]
     KERNEL_NOINIT;
 static uint32_t saved_range_count;
+static uint32_t contiguous_search_hint;
 static KernelMemoryStats stats;
 static bool initialized;
 
@@ -439,6 +440,7 @@ KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info)
     kernel_allocation_init();
     initialized = false;
     saved_range_count = 0u;
+    contiguous_search_hint = 0u;
     reset_stats();
 
     if (info == NULL || astra_boot_info_validate(info) != ASTRA_BOOT_VALID)
@@ -542,6 +544,45 @@ KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info)
     return KERNEL_MEMORY_OK;
 }
 
+static bool find_contiguous_frames(uint32_t begin, uint32_t end,
+                                   uint32_t frame_count,
+                                   uint32_t alignment_frames,
+                                   uint32_t *found)
+{
+    uint32_t ram_frame = stats.ram_base / KERNEL_PAGE_SIZE;
+
+    if (begin > end)
+        return false;
+    for (uint32_t first = begin; first <= end;) {
+        uint32_t misalignment =
+            (ram_frame + first) & (alignment_frames - 1u);
+        uint32_t unavailable = frame_count;
+
+        if (misalignment != 0u) {
+            uint32_t skip = alignment_frames - misalignment;
+
+            if (skip > end - first)
+                return false;
+            first += skip;
+            continue;
+        }
+        for (uint32_t index = 0u; index < frame_count; ++index) {
+            if (bitmap_test(blocked_bitmap, first + index)) {
+                unavailable = index;
+                break;
+            }
+        }
+        if (unavailable == frame_count) {
+            *found = first;
+            return true;
+        }
+        if (unavailable + 1u > end - first)
+            return false;
+        first += unavailable + 1u;
+    }
+    return false;
+}
+
 static KernelMemoryStatus allocate_frames(uint32_t frame_count,
                                           uint32_t alignment_frames,
                                           KernelFrameState state,
@@ -551,7 +592,10 @@ static KernelMemoryStatus allocate_frames(uint32_t frame_count,
                                           uint32_t *physical_base)
 {
     uint32_t allocated;
+    uint32_t first;
+    uint32_t last;
     uint32_t owner_slot;
+    bool available;
 
     if (!initialized || physical_base == NULL || frame_count == 0u ||
         frame_count > stats.total_frames ||
@@ -570,16 +614,19 @@ static KernelMemoryStatus allocate_frames(uint32_t frame_count,
         return KERNEL_MEMORY_OUT_OF_MEMORY;
     }
 
-    for (uint32_t first = 0u;
-         first <= stats.total_frames - frame_count; ++first) {
-        uint32_t physical_frame = stats.ram_base / KERNEL_PAGE_SIZE + first;
-        bool available = (physical_frame & (alignment_frames - 1u)) == 0u;
+    last = stats.total_frames - frame_count;
+    available = contiguous_search_hint <= last &&
+        find_contiguous_frames(contiguous_search_hint, last, frame_count,
+                               alignment_frames, &first);
+    if (!available && contiguous_search_hint != 0u) {
+        uint32_t wrap_last = contiguous_search_hint - 1u;
 
-        for (uint32_t index = 0u; available && index < frame_count; ++index)
-            available = !bitmap_test(blocked_bitmap, first + index);
-        if (!available)
-            continue;
-
+        if (wrap_last > last)
+            wrap_last = last;
+        available = find_contiguous_frames(0u, wrap_last, frame_count,
+                                           alignment_frames, &first);
+    }
+    if (available) {
         if (!kernel_allocation_commit(site, frame_count,
                                       frame_count * KERNEL_PAGE_SIZE,
                                       owner))
@@ -600,6 +647,9 @@ static KernelMemoryStatus allocate_frames(uint32_t frame_count,
         allocated = stats.total_frames - stats.free_frames;
         if (allocated > stats.high_water_frames)
             stats.high_water_frames = allocated;
+        contiguous_search_hint = first + frame_count;
+        if (contiguous_search_hint >= stats.total_frames)
+            contiguous_search_hint = 0u;
         *physical_base = stats.ram_base + first * KERNEL_PAGE_SIZE;
         return KERNEL_MEMORY_OK;
     }

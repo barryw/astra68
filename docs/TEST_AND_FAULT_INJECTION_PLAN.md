@@ -1,6 +1,6 @@
 # Axiom test and fault-injection plan
 
-Status: normative qualification plan, revision 0.4 (2026-07-26)
+Status: normative qualification plan, revision 0.5 (2026-07-26)
 
 No subsystem is complete because its happy path boots. Every state transition,
 capacity limit, cancellation race, and recovery path has a deterministic test.
@@ -25,7 +25,7 @@ transport, but expected initial/final state and pass criteria remain identical.
 
 The candidate must retain all of these before routing:
 
-- 21 kernel host suites, GCC `-fanalyzer`, ASan/UBSan, and leak detection;
+- 28 kernel host suites, GCC `-fanalyzer`, ASan/UBSan, and leak detection;
 - 15 AstraVM Rust tests, rustfmt, and Clippy `-D warnings`;
 - 90 shared framework tests and all 30 executions of the 15-case Musashi/RTL
   matrix;
@@ -183,6 +183,32 @@ The candidate must retain all of these before routing:
 - the K9 release image must pass a clean exact production route at 12.5 MHz CPU
   and 60 MHz SDRAM with the complete feature set, then pass two independent
   ULX3S loads and physical HDMI from the same immutable source identity;
+- K10 IRQ endpoints must cover all `FREE`, `MASKED`, `ARMED`, `PENDING`, and
+  `REVOKING` transitions; edge and level acknowledgement ordering; exact head
+  sequence matching; stale handle/sequence reuse; ring overflow; 64-event
+  storm quarantine; close; duplicated handles; blocked waiters; owner death;
+  and exact return of every endpoint, record, waiter, route, and charge;
+- timer, Vega/vblank, AstraHost storage, AstraHost input, USB, and Astraea must
+  traverse the same bounded common dispatcher. Target qualification must
+  report a nonzero delivered and acknowledged count for every required source,
+  no unbounded source scan, no hard-IRQ allocation, and no lost waiter wake;
+- typed MMIO tests must cover every width, natural alignment, aperture check,
+  compiler/CPU ordering point, synchronized write, and readback fence. Kernel
+  device code may not bypass these accessors with an ad-hoc volatile pointer;
+- the bus watchdog must cover unmapped, timeout, device, late, simultaneous
+  acknowledge/new-fault, split CPU cycle, and lost-record cases. A USB control
+  request must withdraw in its target domain before the outer CPU watchdog;
+  an accepted SDRAM timeout must be classified as system-fatal because its
+  write outcome cannot be cancelled or contained to one process;
+- the 64 KiB trace must cover commit-last publication, wrap, torn-read
+  rejection, pre-PMMU staging, panic snapshot, and operation with zero ordinary
+  free pages. The shared post-PMMU monitor parser must cover FTDI and AstraHost
+  SPI input, bounded output/backpressure, truncation, peer reset, guarded-worker
+  operation, and pressure-time `mem`, `irqs`, and `trace` commands;
+- the K10 release image must pass a clean exact production route at 12.5 MHz
+  CPU and 60 MHz SDRAM with the complete feature set, then pass two independent
+  ULX3S loads, full POST/BIST, physical HDMI, exact identity, IRQ stress, and
+  interactive FTDI/AstraHost-SPI monitor checks;
 - K8 must sample syscall, timer, user-fault, scheduler-pick, same/cross-CRP,
   block, wake, deadline expiry, thread create, thread exit, and deferred thread
   reap, wait-set block/wake, port send/receive, area create/map/unmap, and ring

@@ -3,7 +3,9 @@
 // traffic and SDRAM DMA cross into and out of that domain explicitly.
 `default_nettype none
 
-module usb_ohci_host (
+module usb_ohci_host #(
+    parameter integer CTRL_TIMEOUT_CYCLES = 2048
+) (
     input  wire        cpu_clk,
     input  wire        cpu_rst,
     input  wire        cpu_start,
@@ -13,6 +15,7 @@ module usb_ohci_host (
     input  wire [31:0] cpu_wdata,
     output wire        cpu_busy,
     output wire        cpu_done,
+    output wire        cpu_error,
     output wire [31:0] cpu_rdata,
     output wire        cpu_irq,
 
@@ -67,6 +70,7 @@ module usb_ohci_host (
     wire [31:0] dma_fault_addr_mem;
     wire ctrl_cpu_busy;
     wire ctrl_cpu_done;
+    wire ctrl_cpu_error;
     wire [31:0] ctrl_cpu_rdata;
 
     wire custom_select = cpu_addr[9:4] == 6'h3c; // byte 0xF00..0xF3F
@@ -99,6 +103,7 @@ module usb_ohci_host (
     assign dma_fault_addr = dma_fault_addr_cpu;
     assign cpu_busy = ctrl_cpu_busy;
     assign cpu_done = ctrl_cpu_done || custom_done;
+    assign cpu_error = custom_done ? 1'b0 : ctrl_cpu_error;
     assign cpu_rdata = custom_done ? custom_rdata : ctrl_cpu_rdata;
 
     always @(posedge cpu_clk) begin
@@ -141,12 +146,15 @@ module usb_ohci_host (
         end
     end
 
-    usb_ohci_ctrl_cdc ctrl_cdc_i (
+    usb_ohci_ctrl_cdc #(
+        .CTRL_TIMEOUT_CYCLES(CTRL_TIMEOUT_CYCLES)
+    ) ctrl_cdc_i (
         .cpu_clk(cpu_clk), .cpu_rst(cpu_rst),
         .cpu_start(cpu_start && !custom_select),
         .cpu_write(cpu_write), .cpu_addr(cpu_addr), .cpu_be(cpu_be),
         .cpu_wdata(cpu_wdata), .cpu_busy(ctrl_cpu_busy),
-        .cpu_done(ctrl_cpu_done), .cpu_rdata(ctrl_cpu_rdata),
+        .cpu_done(ctrl_cpu_done), .cpu_error(ctrl_cpu_error),
+        .cpu_rdata(ctrl_cpu_rdata),
         .ctrl_clk(ctrl_clk), .ctrl_rst(ctrl_rst),
         .wb_cyc(ctrl_cyc), .wb_stb(ctrl_stb), .wb_we(ctrl_we),
         .wb_addr(ctrl_addr), .wb_wdata(ctrl_wdata), .wb_sel(ctrl_sel),

@@ -19,7 +19,7 @@ verilator --binary -j 0 --Mdir obj_dir_route_probe \
     --top-module tb_route_probe -Wno-lint -Wno-UNOPTFLAT --timing \
     tb_route_probe.sv ecp5pll_sim.sv \
     ../astra_soc.sv ../post_console.sv ../astra_front_panel.sv \
-    ../vesta_irq_timer.sv ../boot_memory_map.sv \
+    ../vesta_irq_timer.sv ../vesta_bus_fault.sv ../boot_memory_map.sv \
     ../tg68k_cache_store.sv ../astraea_blitter.sv \
     ../astraea_pixel_port.sv ../astraea_draw.sv ../astraea_copper.sv \
     ../astraea_chip.sv \

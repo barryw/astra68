@@ -82,7 +82,14 @@ module astra_host_service #(
     output reg  [31:0] runtime_event_header,
     output reg  [31:0] runtime_event_value,
     output reg  [31:0] runtime_event_timestamp,
-    output reg  [31:0] runtime_event_device_sequence
+    output reg  [31:0] runtime_event_device_sequence,
+
+    output reg         runtime_monitor_input_valid,
+    input  wire        runtime_monitor_input_ready,
+    output reg  [7:0]  runtime_monitor_input_data,
+    input  wire        runtime_monitor_output_valid,
+    output reg         runtime_monitor_output_ready,
+    input  wire [7:0]  runtime_monitor_output_data
 );
     localparam [7:0] CMD_IDENTIFY    = 8'h01;
     localparam [7:0] CMD_BOOT_STATUS = 8'h02;
@@ -96,6 +103,8 @@ module astra_host_service #(
     localparam [7:0] CMD_BLOCK_FETCH   = 8'h23;
     localparam [7:0] CMD_BLOCK_COMPLETE = 8'h24;
     localparam [7:0] CMD_INPUT_EVENT    = 8'h30;
+    localparam [7:0] CMD_MONITOR_WRITE  = 8'h31;
+    localparam [7:0] CMD_MONITOR_READ   = 8'h32;
 
     localparam [7:0] STATUS_OK           = 8'h00;
     localparam [7:0] STATUS_BAD_COMMAND  = 8'h01;
@@ -523,9 +532,9 @@ module astra_host_service #(
             response[3] <= "8";
             response[4] <= "H";
             response[5] <= 8'd1;
-            response[6] <= 8'd1;
+            response[6] <= 8'd2;
             response[7] <= 8'h00;
-            response[8] <= 8'h07; // boot stream, raw block, input events
+            response[8] <= 8'h0f; // boot, block, input, kernel monitor
             response[9] <= boot_flags;
             response[10] <= error_code;
             response[11] <= bytes_received[31:24];
@@ -533,6 +542,19 @@ module astra_host_service #(
             response[13] <= bytes_received[15:8];
             response[14] <= bytes_received[7:0];
             response_length <= 6'd15;
+            response_index <= 6'd0;
+        end
+    endtask
+
+    task automatic queue_monitor_response(
+        input       valid,
+        input [7:0] value
+    );
+        begin
+            response[0] <= STATUS_OK;
+            response[1] <= {7'd0, valid};
+            response[2] <= value;
+            response_length <= valid ? 6'd3 : 6'd2;
             response_index <= 6'd0;
         end
     endtask
@@ -887,6 +909,8 @@ module astra_host_service #(
         issue_request <= 1'b0;
         runtime_request_ready <= 1'b0;
         runtime_dma_start <= 1'b0;
+        runtime_monitor_input_valid <= 1'b0;
+        runtime_monitor_output_ready <= 1'b0;
         if (rst) begin
             state <= S_IDLE;
             argument_index <= 4'd0;
@@ -1041,6 +1065,7 @@ module astra_host_service #(
             runtime_event_value <= 32'd0;
             runtime_event_timestamp <= 32'd0;
             runtime_event_device_sequence <= 32'd0;
+            runtime_monitor_input_data <= 8'd0;
             reset_transfer();
         end else begin
             // Isolate the block-RAM FIFO clock-to-Q path from command decode.
@@ -1178,7 +1203,8 @@ module astra_host_service #(
                             end
                             CMD_SERVICE_HELLO, CMD_BLOCK_POLL,
                             CMD_BLOCK_PUSH, CMD_BLOCK_FETCH,
-                            CMD_BLOCK_COMPLETE, CMD_INPUT_EVENT: begin
+                            CMD_BLOCK_COMPLETE, CMD_INPUT_EVENT,
+                            CMD_MONITOR_WRITE, CMD_MONITOR_READ: begin
                                 runtime_command <= rx_buffer_data;
                                 runtime_length <= 16'd0;
                                 runtime_index <= 16'd0;
@@ -1637,6 +1663,8 @@ module astra_host_service #(
                         state <= S_IDLE;
                         queue_simple_response(STATUS_BUSY);
                     end else if (runtime_command != CMD_SERVICE_HELLO &&
+                                 runtime_command != CMD_MONITOR_WRITE &&
+                                 runtime_command != CMD_MONITOR_READ &&
                                  !service_link_up) begin
                         state <= S_IDLE;
                         queue_simple_response(STATUS_BAD_STATE);
@@ -1879,6 +1907,40 @@ module astra_host_service #(
                                         message_word4_q;
                                     runtime_event_valid <= 1'b1;
                                     state <= S_RT_WAIT_EVENT;
+                                end
+                            end
+
+                            CMD_MONITOR_WRITE: begin
+                                if (runtime_length != 16'd1) begin
+                                    state <= S_IDLE;
+                                    queue_simple_response(
+                                        STATUS_BAD_ARGUMENT);
+                                end else if (!runtime_monitor_input_ready) begin
+                                    state <= S_IDLE;
+                                    queue_simple_response(STATUS_BUSY);
+                                end else begin
+                                    runtime_monitor_input_data <=
+                                        runtime_buffer[0];
+                                    runtime_monitor_input_valid <= 1'b1;
+                                    state <= S_IDLE;
+                                    queue_simple_response(STATUS_OK);
+                                end
+                            end
+
+                            CMD_MONITOR_READ: begin
+                                if (runtime_length != 0) begin
+                                    state <= S_IDLE;
+                                    queue_simple_response(
+                                        STATUS_BAD_ARGUMENT);
+                                end else if (runtime_monitor_output_valid) begin
+                                    runtime_monitor_output_ready <= 1'b1;
+                                    state <= S_IDLE;
+                                    queue_monitor_response(
+                                        1'b1,
+                                        runtime_monitor_output_data);
+                                end else begin
+                                    state <= S_IDLE;
+                                    queue_monitor_response(1'b0, 8'd0);
                                 end
                             end
 

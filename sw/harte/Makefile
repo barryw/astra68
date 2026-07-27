@@ -23,6 +23,7 @@ SOC_ID_SRCS = ../../fpga/soc/astra_soc.sv ../../fpga/soc/astra_soc.lpf \
               ../../fpga/soc/uart_tx.sv ../../fpga/soc/uart_rx.sv \
               ../../fpga/soc/uart_rx_fifo.sv ../../fpga/soc/spi_sd.sv \
               ../../fpga/soc/astra_front_panel.sv ../../fpga/soc/vesta_irq_timer.sv \
+              ../../fpga/soc/vesta_bus_fault.sv \
               ../../fpga/soc/astra_host_async_byte_fifo.sv \
               ../../fpga/soc/astra_host_spi_slave.sv \
               ../../fpga/soc/astra_async_fifo.sv \

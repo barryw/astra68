@@ -23,7 +23,8 @@ typedef enum KernelObjectType {
     KERNEL_OBJECT_PORT_RECEIVE = 7,
     KERNEL_OBJECT_AREA = 8,
     KERNEL_OBJECT_RING_PRODUCER = 9,
-    KERNEL_OBJECT_RING_CONSUMER = 10
+    KERNEL_OBJECT_RING_CONSUMER = 10,
+    KERNEL_OBJECT_IRQ = 11
 } KernelObjectType;
 
 typedef enum KernelHandleStatus {
@@ -57,6 +58,7 @@ typedef struct KernelHandleEntry {
 typedef struct KernelHandleTable {
     KernelHandleEntry entries[KERNEL_HANDLE_MAX_ENTRIES];
     uint32_t owner;
+    uint32_t free_slots;
 } KernelHandleTable;
 
 typedef struct KernelHandleTransferBatch {
@@ -120,6 +122,7 @@ KernelHandleStatus kernel_handle_close(KernelHandleTable *table,
 uint32_t kernel_handle_close_all(KernelHandleTable *table);
 uint32_t kernel_handle_count(const KernelHandleTable *table);
 uint32_t kernel_handle_available(const KernelHandleTable *table);
+bool kernel_handle_table_valid(const KernelHandleTable *table);
 KernelHandleStatus kernel_handle_transfer_prepare(
     const KernelHandleTable *source_table, const KernelHandle *source_handles,
     uint32_t count, uint32_t required_rights,

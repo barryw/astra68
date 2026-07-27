@@ -13,6 +13,7 @@ test_bytes="${SDRAM_SIM_TEST_BYTES:-65536}"
 timeout_ns="${SDRAM_SIM_TIMEOUT_NS:-$((500000000 + test_bytes * 40000))}"
 progress="${SDRAM_SIM_PROGRESS:-0}"
 reuse_sim="${SDRAM_SIM_REUSE:-0}"
+build_only="${SDRAM_SIM_BUILD_ONLY:-0}"
 kernel_panic_selftest="${KERNEL_PANIC_SELFTEST:-0}"
 kernel_sched_trace="${KERNEL_SCHED_TRACE:-0}"
 kernel_soak_selftest="${KERNEL_SOAK_SELFTEST:-0}"
@@ -59,9 +60,10 @@ if [[ "$reuse_sim" != "1" || ! -x obj_dir_boot_sdram/Vtb_boot_sdram ]]; then
     verilator --binary -j 0 --Mdir obj_dir_boot_sdram \
         --top-module tb_boot_sdram -Wno-lint -Wno-UNOPTFLAT --timing \
         -GTEST_BYTES="$test_bytes" -GPROGRESS="$progress" \
-        -GBOOT_TIMEOUT_NS="$timeout_ns" \
+        -GBOOT_TIMEOUT_NS="64'd${timeout_ns}" \
         tb_boot_sdram.sv tb_sdram32_controller.sv ecp5pll_sim.sv \
-        ../astra_soc.sv ../astra_front_panel.sv ../vesta_irq_timer.sv ../boot_memory_map.sv ../tg68k_cache_store.sv \
+        ../astra_soc.sv ../astra_front_panel.sv ../vesta_irq_timer.sv \
+        ../vesta_bus_fault.sv ../boot_memory_map.sv ../tg68k_cache_store.sv \
         ../astraea_blitter.sv ../astraea_pixel_port.sv ../astraea_draw.sv \
         ../astraea_copper.sv ../astraea_chip.sv \
         ../vega_sprite_builder.sv ../vega_video.sv \
@@ -72,5 +74,8 @@ if [[ "$reuse_sim" != "1" || ! -x obj_dir_boot_sdram/Vtb_boot_sdram ]]; then
         ../thirdparty/core_sdram_axi4/sdram_axi_core.v boot_sdram_core.v
 else
     echo "reusing obj_dir_boot_sdram/Vtb_boot_sdram (caller guarantees matching RTL/generics)"
+fi
+if [[ "$build_only" == "1" ]]; then
+    exit 0
 fi
 ./obj_dir_boot_sdram/Vtb_boot_sdram "${sim_args[@]}"

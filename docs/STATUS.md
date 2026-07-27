@@ -1,6 +1,6 @@
 # Axiom kernel status
 
-Status date: 2026-07-26
+Status date: 2026-07-27
 
 This is the kernel-specific truth table. `CURRENT_STATE.md` remains the whole
 machine continuation map. A row marked CURRENT has evidence; PLANNED or MISSING
@@ -9,6 +9,23 @@ must not be presented as working software.
 ## Current source identity
 
 - Branch: `main`.
+- K10 device and observability is an unpromoted pre-route candidate in the
+  current working tree. Its exact implementation identity will be frozen
+  before routing. All 28 host suites, analyzers, sanitizers, MC68030
+  cross-build, NDK, Rust, shared architecture, Harte smoke, focused
+  USB/bus-fault RTL, and all 29 hardware-checker tests pass. Fresh Beast
+  Verilator 5.047 snapshot `/tmp/astra68-k10-final-sim-20260727b` completes the
+  full HDMI-enabled pin-level run in 2,051.123 seconds and exits zero after
+  `ASTRAHOST KERNEL ENTRY PASS`. Its 154,905-byte durable transcript is
+  `/tmp/k10-final-hostboot-20260727b.log`. It covers 32 MiB BIST, PMMU,
+  scheduler/fault containment, K10 source mask `0x000003B0`,
+  delivered/acknowledged `5/5`, one exact owner-death cleanup, and
+  AstraHost-SPI monitor output. Removing only Verilator's `UART: ` transcript
+  prefix makes that output pass `--expect-k10-device`; raw board serial does
+  not contain the prefix. The exact committed rerun, no-waiver production
+  route, two ULX3S boots, physical HDMI, and interactive FTDI/AstraHost-SPI
+  monitor checks remain pending. K9 therefore remains the current
+  hardware-qualified release.
 - K9 memory-pressure hardening is hardware-qualified from exact implementation
   commit `03660014d7af6d3662504fc076700f04929117ab`, built reproducibly at
   `2026-07-26T02:43:12Z`. The immutable source archive SHA-256 is
@@ -215,16 +232,21 @@ must not be presented as working software.
 | bounded wait-multiple | CURRENT HW | 1-16 events, semaphores, timers, thread/process death, ports, and K8 ring endpoints share fixed registrations and one deadline; complete prevalidation, deterministic input-order winner, duplicate members, every terminal race, and exact cleanup pass host, Musashi, full pin-level RTL, and two ULX3S boots |
 | waitable one-shot timers | CURRENT HW | shared 32-object pool plus fixed deterministic timer heap; set/rearm/immediate expiry/cancel/close/owner-death and level readiness pass host, Musashi, full pin-level RTL, and two ULX3S boots |
 | waitable process death | CURRENT HW | generation-safe process handles, normal exit detail, abnormal terminal result, self rejection, prestart-only bootstrap grant, close/reuse, and exact reference cleanup pass host, Musashi, full pin-level RTL, and two ULX3S boots |
+| bounded IRQ endpoints and common Vesta dispatcher | CURRENT SIM | 16 generation-safe endpoints, four fixed records each, edge/level ordering, exact sequence acknowledgement, overflow/storm masking, waiter wake, stale generation rejection, and owner-death cleanup pass host tests and the corrected complete pin-level K10 boot |
+| typed kernel MMIO accessors | CURRENT HOST/RTL | width/alignment/range/order/fence tests, MC68030 cross-build, and focused USB/control-path RTL pass; production kernel C uses the centralized accessors |
+| physical bus watchdog and first-fault diagnostics | CURRENT RTL | sticky first-fault/lost accounting, unmapped and timeout BERR, split-cycle strobe suppression, USB target withdrawal, SDRAM-fatal classification, and framebuffer-guard tests pass focused host/RTL gates |
+| retained allocation-free trace ring | CURRENT SIM | fixed 64 KiB/2,047-record section, commit-last records, wrap/torn-read checks, panic snapshot, and zero-ordinary-memory operation pass host and target qualification |
+| bounded FTDI/AstraHost-SPI monitor core | CURRENT SIM | one fixed post-PMMU parser/command table, bounded lines/fragments, backpressure/truncation, guarded-worker dispatch, and zero-ordinary-memory host checks; the retained trace stages pre-PMMU events independently, and physical interactive transport checks remain pending |
 | bounded message ports | CURRENT HW | 16 receiver-owned ports and 32 fixed message records enforce per-port and per-owner count/byte caps, nonblocking backpressure, absolute deadlines, cancellation, close, and peer death; host, Musashi, pin-level RTL, and two ULX3S boots pass |
 | atomic handle transfer | CURRENT HW | up to eight move-only generation-safe handles reserve, validate, and commit exactly once; failed send and failed receive copyout preserve or release authority without leaks, stale reuse, or partial publication |
 | reduced-right handle duplication | CURRENT HW | K8 non-destructive duplication requires `transfer`, accepts only a nonzero rights subset on explicitly retainable objects, publishes atomically, and preserves the source on every failure |
 | shared areas | CURRENT HW | eight areas, 32 mappings, 128 committed pages, fixed cross-process logical addresses, transactional descriptor publication/rollback, coherent cache policy, revocation, and exact frame/accounting cleanup pass host, Musashi, pin-level RTL, and two ULX3S boots |
 | bounded SPSC bulk rings | CURRENT HW | 16 area-backed rings use fixed big-endian headers, move-only producer/consumer endpoints, batched notify, fixed wait queues, corruption containment, peer/creator death, and no kernel payload allocation; every backend and two ULX3S boots pass |
-| trap ABI query/progress/yield/process-exit/close/clock/sync/thread lifecycle/wait-multiple/timers/ports/areas/rings | CURRENT HW | ABI `0x00010004`, retained K1-K7 calls, and K8 calls retained unchanged by K9 pass host, Musashi, pin-level RTL, and two exact ULX3S boots |
+| trap ABI query/progress/yield/process-exit/close/clock/sync/thread lifecycle/wait-multiple/timers/ports/areas/rings/IRQs | CURRENT SIM | ABI `0x00010005`; retained K1-K9 calls remain unchanged and the K10 IRQ operations pass host and complete pin-level target qualification; K9 ABI remains the hardware-qualified subset |
 | offender-only user fault death | CURRENT HW | format-B fault reaps only the offender on Musashi, full RTL, and three exact SRAM boots |
 | last-process supervisor idle transition | CURRENT HOST | process/dispatch tests; target assembly builds |
 | panic to console and retained early log | CURRENT HW | exact direct and supervisor-guard panic paths pass full RTL plus physical HDMI/log qualification |
-| kernel host analyzer/sanitizer gates | CURRENT | 21 suites, analyzer, ASan/UBSan/leak checks |
+| kernel host analyzer/sanitizer gates | CURRENT | 28 suites, analyzer, ASan/UBSan/leak checks |
 | kernel cycle-budget gate | CURRENT HW | twenty measured syscall/timer/fault/scheduler/wait/deadline/thread-lifecycle/wait-set/port/area/ring paths retain fixed K8 limits in K9 Musashi, full RTL, and two ULX3S boots; zero overruns |
 | end-to-end Musashi performance gate | CURRENT | exact 1,000-iteration K9 workload is 603,007,142 virtual cycles against a 675,000,000-cycle cap with a stable 7,954-page baseline |
 | deterministic lifecycle-soak harness | CURRENT HW | dual-host 500,000-cycle legacy Musashi, optimized Musashi, 13-cycle full RTL, routed five-minute candidate, and independent 30-minute release runs pass without drift |
@@ -1005,10 +1027,10 @@ hash, and persistent FPGA flash remain the exact qualified `25D9CB8E` values.
   timeout handoff are proven through the public K4 handle path on host and
   Musashi. Address-space affinity among equal priorities, inheritance,
   donation, wakeup boost, and real-time budgets are not built.
-- K9 retains K8 runtime thread creation, caller-only exit, waitable
+- K10 retains K8 runtime thread creation, caller-only exit, waitable
   thread/process death, timers, bounded wait-multiple, message ports, shared
   areas, and SPSC rings
-  have a documented provisional ABI `0x00010004` handle/syscall contract. Stack
+  have a documented provisional ABI `0x00010005` handle/syscall contract. Stack
   size is fixed at 4 KiB, pool/handle/queue capacities remain development
   limits, and there is deliberately no asynchronous thread kill.
 - Ordinary user threads have guarded user and supervisor stacks. Events,
@@ -1018,9 +1040,10 @@ hash, and persistent FPGA flash remain the exact qualified `25D9CB8E` values.
   bulk IPC without kernel payload copies. Service discovery does not yet exist.
 - `block.c` and `dma.c` qualify ownership, generation, pin, completion, and
   revocation. Filesystem/block policy still belongs in a user service.
-- The fixed K1 worker services process reap only. It is not yet a general
-  scheduler-owned kernel-thread class and has no general wait object, priority
-  inheritance, or per-device work queues.
+- The fixed K1 worker now services process reap plus eight bounded K10 device
+  classes. It is not yet a general scheduler-owned kernel-thread class and has
+  no general wait object, priority inheritance, or independently scheduled
+  per-device work queues.
 - User-fault retirement is minimal and schedules the interruptible worker.
   Synchronization cancellation, wait-multiple cleanup, timer expiry,
   thread/process owner-death arbitration, port/ring peer-death cleanup, and
@@ -1037,10 +1060,9 @@ hash, and persistent FPGA flash remain the exact qualified `25D9CB8E` values.
   accounts beyond K8 area quotas, and cache-safe executable/file-page
   reclamation;
 - priority inheritance and priority donation;
-- IRQ endpoint allocation, general deferred device workers, service restart, and
-  privileged device-mapping objects;
-- centralized typed MMIO accessors and complete bus-timeout classification;
-- fixed allocation-free trace ring and interactive SPI/FTDI monitor commands;
+- service restart, privileged device-mapping objects, and independently
+  scheduled user-service deferred handlers;
+- physical interactive qualification of the implemented SPI/FTDI monitor;
 - graphics-service command ring/mapping revocation and dedicated graphics RAM
   arena.
 
@@ -1104,15 +1126,20 @@ hash, and persistent FPGA flash remain the exact qualified `25D9CB8E` values.
 | kernel stack guard access reaches retained panic path | full RTL and physical hardware at exact address `0x02028000` |
 | duplicate user cached alias is rejected and reusable after unmap | host VM test |
 | cross-CRP same-address code/data cannot expose stale bytes | Musashi and full RTL K1 |
+| IRQ readiness cannot be lost between test and blocking; close/death wakes every waiter exactly once | host IRQ/process race matrix and complete pin-level K10 boot |
+| stale IRQ handles and acknowledgement sequences cannot affect a reused endpoint | host IRQ generation/reuse matrix and target K10 counters |
+| hard IRQ, fault record, trace, endpoint revoke, and monitor-pressure paths allocate no memory | 28 host suites, zero-free injection, analyzer/sanitizer gates, and target K10 qualification |
+| a matched SDRAM fabric timeout is system-fatal rather than offender-contained | dispatch host regression plus focused SDRAM BERR RTL |
 | malformed syscall corpus never panics | MISSING |
 | every allocation site unwinds exactly | CURRENT; all 22 injectable sites pass global-Nth and site-Nth failure matrices with exact resource baselines |
 
 ## Next actions
 
-1. add IRQ endpoints, bounded deferred-device delivery, the retained trace
-   ring, and the SPI/FTDI kernel monitor before user-space device services;
-2. add the malformed-syscall corpus, centralized typed MMIO accessors, and
-   physical bus-timeout classification before exposing device mappings;
+1. freeze the K10 source identity, pass the exact 12.5 MHz CPU / 60 MHz SDRAM
+   production route, then complete two ULX3S boots and interactive FTDI/SPI
+   monitor, IRQ stress, HDMI, and exact-identity checks;
+2. add the malformed-syscall corpus before exposing device mappings or
+   starting a protected device service;
 3. grow development pools only from measured workload data, and implement and
    benchmark 8 KiB pages against the retained 4 KiB oracle before freezing the
    stable VM ABI.

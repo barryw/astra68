@@ -7,11 +7,13 @@
 #include "bytes.h"
 #include "exception.h"
 #include "generation.h"
+#include "interrupt.h"
 #include "memory.h"
 #include "object_cache.h"
 #include "performance.h"
 #include "platform.h"
 #include "port.h"
+#include "qualification.h"
 #include "ring.h"
 #include "sync.h"
 #include "user_copy.h"
@@ -20,6 +22,13 @@
 #include <stddef.h>
 
 #define PROCESS_OWNER_PREFIX 0x10000000u
+#define PROCESS_QUALIFICATION_CLIENT_MAX 2u
+
+typedef struct KernelProcessQualificationClient {
+    uint32_t process_id;
+    uint32_t authorized_sources;
+    uint32_t completed_sources;
+} KernelProcessQualificationClient;
 
 typedef struct KernelProcess {
     KernelAddressSpace address_space;
@@ -53,7 +62,7 @@ typedef struct KernelProcess {
 } KernelProcess;
 
 #if defined(__m68k__)
-_Static_assert(sizeof(KernelProcess) == 540u,
+_Static_assert(sizeof(KernelProcess) == 544u,
                "process record size changed; update the memory budget");
 #endif
 
@@ -63,10 +72,13 @@ static uint32_t process_cache_bitmap[
     KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_PROCESS_MAX)];
 static KernelSchedulerStats scheduler_stats;
 static KernelProcessMaintenanceDiagnostics maintenance_diagnostics;
+static KernelProcessQualificationClient
+    qualification_clients[PROCESS_QUALIFICATION_CLIENT_MAX];
 static KernelThread *current_thread;
 static uint64_t quantum_deadline;
 static uint32_t scheduler_quantum_cycles;
 static uint8_t scheduler_initialized;
+static uint8_t scheduler_started;
 static uint8_t quantum_active;
 static uint8_t quantum_preempt_pending;
 static uint8_t deadline_preempt_pending;
@@ -93,6 +105,14 @@ _Static_assert(ASTRA_RIGHT_READ == KERNEL_SYNC_RIGHT_QUERY &&
                    ASTRA_RIGHT_ADMINISTER ==
                        KERNEL_SYNC_RIGHT_ADMINISTER,
                "synchronization-right ABI mismatch");
+_Static_assert(ASTRA_RIGHT_READ == KERNEL_IRQ_RIGHT_READ &&
+                   ASTRA_RIGHT_SIGNAL == KERNEL_IRQ_RIGHT_SIGNAL &&
+                   ASTRA_RIGHT_WAIT == KERNEL_IRQ_RIGHT_WAIT &&
+                   ASTRA_RIGHT_TRANSFER == KERNEL_IRQ_RIGHT_TRANSFER &&
+                   ASTRA_RIGHT_ADMINISTER == KERNEL_IRQ_RIGHT_ADMINISTER,
+               "IRQ-right ABI mismatch");
+_Static_assert(sizeof(AstraIrqRecord) == sizeof(KernelIrqRecord),
+               "IRQ record kernel/ABI size mismatch");
 _Static_assert(ASTRA_MESSAGE_HEADER_SIZE == KERNEL_PORT_MESSAGE_SIZE_MIN &&
                    ASTRA_MESSAGE_SIZE_MAX ==
                        KERNEL_PORT_MESSAGE_SIZE_MAX &&
@@ -298,8 +318,12 @@ static bool process_pool_valid(void)
         !kernel_object_cache_valid(&process_cache) ||
         !kernel_handle_transfer_pool_valid() ||
         !kernel_port_pool_valid() || !kernel_area_pool_valid() ||
-        !kernel_ring_pool_valid())
+        !kernel_ring_pool_valid() || !kernel_irq_pool_valid())
         return false;
+    for (uint32_t owner = 0u; owner < KERNEL_PROCESS_MAX; ++owner) {
+        if (!kernel_handle_table_valid(&processes[owner].handles))
+            return false;
+    }
     for (uint32_t slot = 0u; slot < KERNEL_PROCESS_MAX; ++slot) {
         const KernelProcess *process = &processes[slot];
         uint32_t references = 0u;
@@ -618,10 +642,12 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
 #if defined(KERNEL_PROCESS_HOST_TEST)
         if (!kernel_sync_pool_valid() || !kernel_port_pool_valid() ||
             !kernel_area_pool_valid() || !kernel_ring_pool_valid() ||
-            !kernel_handle_transfer_pool_valid() || !process_pool_valid())
+            !kernel_handle_transfer_pool_valid() ||
+            !kernel_irq_pool_valid() || !process_pool_valid())
 #else
         if (!kernel_sync_pool_healthy() || !kernel_port_pool_healthy() ||
             !kernel_area_pool_healthy() || !kernel_ring_pool_healthy() ||
+            !kernel_irq_pool_healthy() ||
             !kernel_handle_transfer_pool_healthy() ||
             !process_pool_healthy())
 #endif
@@ -746,14 +772,7 @@ static KernelProcessStatus finish_thread_reaps(void)
 
 static void check_milestone(void)
 {
-#if !defined(KERNEL_PROCESS_HOST_TEST)
-    KernelAreaPoolStats area_stats;
-    KernelHandleTransferStats handle_stats;
-    KernelPortPoolStats port_stats;
-    KernelRingPoolStats ring_stats;
-#endif
-    KernelSyncPoolStats sync_stats;
-    KernelThreadPoolStats thread_stats;
+    KernelSchedulerStats stats;
     uint32_t measured_stack_use;
     bool survivor_ready = false;
 
@@ -761,73 +780,68 @@ static void check_milestone(void)
         return;
     if (milestone_progress_ready == 0u)
         return;
-    if (!kernel_thread_pool_stats(&thread_stats) ||
-        !kernel_sync_pool_stats(&sync_stats) ||
-        scheduler_stats.created_processes < 2u ||
-        scheduler_stats.created_threads < 3u ||
-        scheduler_stats.timer_preemptions == 0u ||
-        scheduler_stats.same_address_space_switches == 0u ||
-        scheduler_stats.cross_address_space_switches == 0u ||
-        scheduler_stats.wait_blocks < 2u ||
-        scheduler_stats.sync_wakeups == 0u ||
-        scheduler_stats.wake_preemptions == 0u ||
-        scheduler_stats.quantum_expirations == 0u ||
-        scheduler_stats.deadline_expirations == 0u ||
-        scheduler_stats.deadline_preemptions == 0u ||
-        thread_stats.blocked_threads == 0u ||
-        thread_stats.deadline_max_depth == 0u ||
-        thread_stats.wait_cancellations == 0u ||
+    if (!kernel_process_stats(&stats) ||
+        stats.created_processes < 2u ||
+        stats.created_threads < 3u ||
+        stats.timer_preemptions == 0u ||
+        stats.same_address_space_switches == 0u ||
+        stats.cross_address_space_switches == 0u ||
+        stats.wait_blocks < 2u ||
+        stats.sync_wakeups == 0u ||
+        stats.wake_preemptions == 0u ||
+        stats.quantum_expirations == 0u ||
+        stats.deadline_expirations == 0u ||
+        stats.deadline_preemptions == 0u ||
+        stats.blocked_threads == 0u ||
+        stats.deadline_max_depth == 0u ||
+        stats.sync_cancellations == 0u ||
 #if !defined(KERNEL_PROCESS_HOST_TEST)
-        !kernel_area_pool_stats(&area_stats) ||
-        !kernel_port_pool_stats(&port_stats) ||
-        !kernel_ring_pool_stats(&ring_stats) ||
-        !kernel_handle_transfer_stats(&handle_stats) ||
-        scheduler_stats.wait_set_calls < 4u ||
-        thread_stats.wait_set_blocks < 2u ||
-        thread_stats.wait_set_wakeups < 2u ||
-        thread_stats.wait_registration_max < 2u ||
-        thread_stats.max_wait_members < 2u ||
-        sync_stats.created_timers == 0u ||
-        sync_stats.timer_arms == 0u ||
-        sync_stats.timer_expirations == 0u ||
-        scheduler_stats.process_death_waits == 0u ||
-        port_stats.created_ports == 0u ||
-        port_stats.sends < 3u ||
-        port_stats.receives < 3u ||
-        port_stats.send_would_block == 0u ||
-        port_stats.receive_buffer_too_small == 0u ||
-        port_stats.active_ports != 0u ||
-        port_stats.queued_messages != 0u ||
-        port_stats.queued_bytes != 0u ||
-        port_stats.queued_handles != 0u ||
-        handle_stats.committed_exports < 2u ||
-        handle_stats.committed_imports < 2u ||
-        handle_stats.import_rollbacks == 0u ||
-        handle_stats.live_detached != 0u ||
-        area_stats.created_areas == 0u ||
-        area_stats.active_areas != 0u ||
-        area_stats.committed_pages != 0u ||
-        area_stats.active_mappings != 0u ||
-        area_stats.map_operations == 0u ||
-        area_stats.unmap_operations == 0u ||
-        ring_stats.created_rings == 0u ||
-        ring_stats.active_rings != 0u ||
-        ring_stats.producer_notifications == 0u ||
-        ring_stats.consumer_notifications == 0u ||
-        ring_stats.wait_wakeups == 0u ||
-        ring_stats.peer_closures == 0u ||
+        stats.wait_set_calls < 4u ||
+        stats.wait_set_blocks < 2u ||
+        stats.wait_set_wakeups < 2u ||
+        stats.wait_set_registration_max < 2u ||
+        stats.wait_set_max_members < 2u ||
+        stats.timer_created == 0u ||
+        stats.timer_arms == 0u ||
+        stats.timer_expirations == 0u ||
+        stats.process_death_waits == 0u ||
+        stats.port_created == 0u ||
+        stats.port_sends < 3u ||
+        stats.port_receives < 3u ||
+        stats.port_send_would_block == 0u ||
+        stats.port_receive_buffer_too_small == 0u ||
+        stats.port_active != 0u ||
+        stats.port_queued_messages != 0u ||
+        stats.port_queued_bytes != 0u ||
+        stats.port_queued_handles != 0u ||
+        stats.handle_transfers < 2u ||
+        stats.handle_transfer_imports < 2u ||
+        stats.handle_transfer_import_rollbacks == 0u ||
+        stats.handle_transfer_live_detached != 0u ||
+        stats.area_created == 0u ||
+        stats.area_active != 0u ||
+        stats.area_committed_pages != 0u ||
+        stats.area_mappings != 0u ||
+        stats.area_map_operations == 0u ||
+        stats.area_unmap_operations == 0u ||
+        stats.ring_created == 0u ||
+        stats.ring_active != 0u ||
+        stats.ring_producer_notifications == 0u ||
+        stats.ring_consumer_notifications == 0u ||
+        stats.ring_wait_wakeups == 0u ||
+        stats.ring_peer_closures == 0u ||
 #endif
-        sync_stats.created_events < 3u ||
-        sync_stats.created_semaphores == 0u ||
-        sync_stats.blocked_waits < 5u ||
-        sync_stats.signal_calls < 2u ||
-        sync_stats.close_wakeups == 0u ||
-        sync_stats.owner_deaths == 0u ||
-        thread_stats.kernel_stack_entries == 0u ||
-        thread_stats.kernel_stack_max_used == 0u ||
+        stats.sync_created_events < 3u ||
+        stats.sync_created_semaphores == 0u ||
+        stats.sync_blocked_waits < 5u ||
+        stats.sync_signal_calls < 2u ||
+        stats.sync_close_wakeups == 0u ||
+        stats.sync_owner_deaths == 0u ||
+        stats.kernel_stack_entries == 0u ||
+        stats.kernel_stack_max_used == 0u ||
         !kernel_thread_stacks_valid() ||
-        scheduler_stats.user_faults == 0u ||
-        scheduler_stats.completed_user_fault_teardowns == 0u)
+        stats.user_faults == 0u ||
+        stats.completed_user_fault_teardowns == 0u)
         return;
     for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
         const KernelProcess *process = &processes[index];
@@ -859,7 +873,8 @@ static void check_milestone(void)
         measured_stack_use == 0u)
         return;
     scheduler_stats.milestone_complete = 1u;
-    kernel_process_milestone_reached();
+    stats.milestone_complete = 1u;
+    kernel_process_milestone_reached(&stats);
 }
 
 static KernelProcessStatus wake_process_death(KernelProcess *process)
@@ -891,11 +906,14 @@ static KernelProcessStatus retire_current(KernelProcessExitReason reason,
     uint32_t closed_ports;
     uint32_t closed_rings;
     uint32_t closed_areas;
+    uint32_t revoked_irqs;
     uint32_t revoked_area_mappings;
     uint32_t retired_threads;
+    uint32_t woken_irq_waiters;
     uint32_t woken_ring_waiters;
     uint32_t woken_port_waiters;
     uint32_t woken_sync_waiters;
+    KernelIrqStatus irq_status;
 
     if (next_context == NULL || current_thread == NULL)
         return KERNEL_PROCESS_INVALID_STATE;
@@ -917,6 +935,11 @@ static KernelProcessStatus retire_current(KernelProcessExitReason reason,
         return KERNEL_PROCESS_CORRUPT;
     scheduler_stats.live_threads -= retired_threads;
     scheduler_stats.dead_threads += retired_threads;
+    irq_status = kernel_irq_owner_died(retiring->id, &revoked_irqs,
+                                       &woken_irq_waiters);
+    if (irq_status != KERNEL_IRQ_OK &&
+        irq_status != KERNEL_IRQ_DEVICE_ERROR)
+        return KERNEL_PROCESS_CORRUPT;
     if (kernel_sync_owner_died(retiring->id, ASTRA_SYSCALL_PEER_DEAD,
                                &closed_sync_objects,
                                &woken_sync_waiters) != KERNEL_SYNC_OK)
@@ -934,7 +957,9 @@ static KernelProcessStatus retire_current(KernelProcessExitReason reason,
     (void)closed_ports;
     (void)closed_rings;
     (void)closed_areas;
+    (void)revoked_irqs;
     (void)revoked_area_mappings;
+    (void)woken_irq_waiters;
     (void)woken_port_waiters;
     (void)woken_ring_waiters;
     (void)woken_sync_waiters;
@@ -983,10 +1008,15 @@ static KernelProcessStatus retire_current_thread(
 void kernel_process_init(void)
 {
     scheduler_initialized = 0u;
+    scheduler_started = 0u;
 #if defined(KERNEL_PROCESS_HOST_TEST)
     next_thread_create_fault = KERNEL_PROCESS_THREAD_CREATE_FAULT_NONE;
 #endif
     kernel_performance_init();
+    if (!kernel_irq_pool_healthy()) {
+        process_pool_corrupt = 1u;
+        return;
+    }
     if (!kernel_object_cache_init(
             &process_cache, processes, sizeof(processes[0]),
             KERNEL_PROCESS_MAX, process_cache_bitmap,
@@ -997,11 +1027,14 @@ void kernel_process_init(void)
     }
     for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
         kernel_bytes_clear(&processes[index], sizeof(processes[index]));
+        kernel_handle_table_init(&processes[index].handles);
         kernel_thread_wait_queue_init(&processes[index].death_waiters);
     }
     kernel_bytes_clear(&scheduler_stats, sizeof(scheduler_stats));
     kernel_bytes_clear(&maintenance_diagnostics,
                        sizeof(maintenance_diagnostics));
+    kernel_bytes_clear(qualification_clients,
+                       sizeof(qualification_clients));
     kernel_thread_pool_init();
     kernel_sync_pool_init();
     kernel_handle_transfer_pool_init();
@@ -1294,8 +1327,7 @@ static KernelProcessStatus create_process(const void *image,
                                           uint32_t image_size,
                                           uint32_t entry_offset,
                                           uint32_t initial_argument,
-                                          uint32_t *process_id,
-                                          bool interruptible)
+                                          uint32_t *process_id)
 {
     KernelProcess *process;
     KernelPreparedThread prepared_thread;
@@ -1306,6 +1338,7 @@ static KernelProcessStatus create_process(const void *image,
     uint32_t code_physical = 0u;
     uint32_t initial_thread_id;
     KernelHandle initial_thread_handle;
+    uint16_t saved_status;
     bool code_held = false;
     void *raw_process;
     uint16_t slot;
@@ -1397,22 +1430,20 @@ static KernelProcessStatus create_process(const void *image,
                             &prepared_thread);
     if (result != KERNEL_PROCESS_OK)
         goto failed;
-    if (interruptible)
-        kernel_disable_interrupts();
+    saved_status = kernel_interrupt_save_disable();
     result = commit_thread(&prepared_thread, &initial_thread_id,
                            &initial_thread_handle);
+    if (result == KERNEL_PROCESS_OK) {
+        ++scheduler_stats.created_processes;
+        ++scheduler_stats.live_processes;
+        *process_id = process->id;
+    }
+    kernel_interrupt_restore(saved_status);
     if (result != KERNEL_PROCESS_OK) {
-        if (interruptible)
-            kernel_enable_interrupts();
         (void)abort_prepared_thread(&prepared_thread);
         goto failed;
     }
     (void)initial_thread_handle;
-    ++scheduler_stats.created_processes;
-    ++scheduler_stats.live_processes;
-    *process_id = process->id;
-    if (interruptible)
-        kernel_enable_interrupts();
     return KERNEL_PROCESS_OK;
 
 failed:
@@ -1434,7 +1465,7 @@ KernelProcessStatus kernel_process_create(const void *image,
                                           uint32_t *process_id)
 {
     return create_process(image, image_size, entry_offset, initial_argument,
-                          process_id, false);
+                          process_id);
 }
 
 KernelProcessStatus kernel_process_create_thread(uint32_t process_id,
@@ -1447,6 +1478,7 @@ KernelProcessStatus kernel_process_create_thread(uint32_t process_id,
     KernelPreparedThread prepared_thread;
     KernelHandle thread_handle;
     KernelProcessStatus status;
+    uint16_t saved_status;
 
     if (process == NULL)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
@@ -1454,7 +1486,9 @@ KernelProcessStatus kernel_process_create_thread(uint32_t process_id,
                             KERNEL_THREAD_RIGHTS, &prepared_thread);
     if (status != KERNEL_PROCESS_OK)
         return status;
+    saved_status = kernel_interrupt_save_disable();
     status = commit_thread(&prepared_thread, thread_id, &thread_handle);
+    kernel_interrupt_restore(saved_status);
     if (status != KERNEL_PROCESS_OK)
         (void)abort_prepared_thread(&prepared_thread);
     return status;
@@ -1508,20 +1542,222 @@ KernelProcessStatus kernel_process_grant_handle(
         KERNEL_PROCESS_RESOURCE_LIMIT : KERNEL_PROCESS_CORRUPT;
 }
 
+KernelProcessStatus kernel_process_grant_irq(
+    uint32_t recipient_process_id, const KernelIrqBinding *binding,
+    uint32_t rights, KernelHandle *handle)
+{
+    KernelProcess *recipient = find_process_by_id(recipient_process_id);
+    KernelIrqEndpoint *endpoint = NULL;
+    KernelIrqStatus irq_status;
+    KernelHandleStatus handle_status;
+
+    if (recipient == NULL || binding == NULL || handle == NULL ||
+        rights == 0u || (rights & ~KERNEL_IRQ_RIGHTS) != 0u)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    *handle = KERNEL_HANDLE_INVALID;
+    irq_status = kernel_irq_bind(recipient->id, binding, &endpoint);
+    if (irq_status == KERNEL_IRQ_NO_SLOT ||
+        irq_status == KERNEL_IRQ_QUOTA_EXCEEDED ||
+        irq_status == KERNEL_IRQ_SOURCE_BUSY)
+        return KERNEL_PROCESS_RESOURCE_LIMIT;
+    if (irq_status == KERNEL_IRQ_INVALID_ARGUMENT)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    if (irq_status != KERNEL_IRQ_OK || endpoint == NULL)
+        return irq_status == KERNEL_IRQ_DEVICE_ERROR ?
+            KERNEL_PROCESS_INVALID_STATE : KERNEL_PROCESS_CORRUPT;
+    handle_status = kernel_handle_install_cloneable(
+        &recipient->handles, KERNEL_OBJECT_IRQ, rights, endpoint,
+        kernel_irq_handle_retain, kernel_irq_handle_release, NULL, handle);
+    if (handle_status == KERNEL_HANDLE_OK) {
+#if defined(KERNEL_PROCESS_HOST_TEST)
+        return process_pool_valid() ? KERNEL_PROCESS_OK :
+                                      KERNEL_PROCESS_CORRUPT;
+#else
+        return process_pool_healthy() && kernel_irq_pool_healthy() ?
+            KERNEL_PROCESS_OK : KERNEL_PROCESS_CORRUPT;
+#endif
+    }
+    kernel_irq_abandon_unpublished(endpoint);
+    return handle_status == KERNEL_HANDLE_TABLE_FULL ?
+        KERNEL_PROCESS_RESOURCE_LIMIT : KERNEL_PROCESS_CORRUPT;
+}
+
+KernelProcessStatus kernel_process_qualification_authorize(
+    uint32_t process_id, uint32_t irq_source_mask)
+{
+    KernelProcessQualificationClient *available = NULL;
+
+    if (find_process_by_id(process_id) == NULL ||
+        (irq_source_mask & ~KERNEL_QUALIFICATION_IRQ_SOURCE_MASK) != 0u ||
+        scheduler_started != 0u)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    for (uint32_t index = 0u;
+         index < PROCESS_QUALIFICATION_CLIENT_MAX; ++index) {
+        KernelProcessQualificationClient *client =
+            &qualification_clients[index];
+
+        if (client->process_id == process_id) {
+            client->authorized_sources = irq_source_mask;
+            client->completed_sources = 0u;
+            return KERNEL_PROCESS_OK;
+        }
+        if (client->process_id == 0u && available == NULL)
+            available = client;
+    }
+    if (available == NULL)
+        return KERNEL_PROCESS_RESOURCE_LIMIT;
+    available->process_id = process_id;
+    available->authorized_sources = irq_source_mask;
+    available->completed_sources = 0u;
+    return KERNEL_PROCESS_OK;
+}
+
+bool kernel_process_qualification_status(uint32_t process_id,
+                                         uint32_t *authorized_sources,
+                                         uint32_t *completed_sources)
+{
+    if (authorized_sources == NULL || completed_sources == NULL)
+        return false;
+    for (uint32_t index = 0u;
+         index < PROCESS_QUALIFICATION_CLIENT_MAX; ++index) {
+        const KernelProcessQualificationClient *client =
+            &qualification_clients[index];
+
+        if (client->process_id != process_id)
+            continue;
+        *authorized_sources = client->authorized_sources;
+        *completed_sources = client->completed_sources;
+        return true;
+    }
+    return false;
+}
+
+static KernelProcessQualificationClient *qualification_client(
+    uint32_t process_id)
+{
+    for (uint32_t index = 0u;
+         index < PROCESS_QUALIFICATION_CLIENT_MAX; ++index) {
+        if (qualification_clients[index].process_id == process_id)
+            return &qualification_clients[index];
+    }
+    return NULL;
+}
+
+static bool qualification_source_allowed(
+    const KernelProcessQualificationClient *client, uint32_t source)
+{
+    return client != NULL && source < KERNEL_IRQ_SOURCE_COUNT &&
+           (client->authorized_sources & (1u << source)) != 0u;
+}
+
+static KernelProcessStatus qualification_command(
+    KernelProcess *process, KernelThread *thread, uint32_t *syscall_result,
+    bool *handled)
+{
+    KernelProcessQualificationClient *client;
+    uint32_t command;
+    uint32_t source;
+
+    if (process == NULL || thread == NULL || syscall_result == NULL ||
+        handled == NULL)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    command = thread->context.data[1];
+    *handled = (command & KERNEL_QUALIFICATION_COMMAND_MASK) ==
+        KERNEL_QUALIFICATION_COMMAND_PREFIX;
+    if (!*handled)
+        return KERNEL_PROCESS_OK;
+    client = qualification_client(process->id);
+    if (client == NULL) {
+        *syscall_result = ASTRA_SYSCALL_ACCESS_DENIED;
+        return KERNEL_PROCESS_OK;
+    }
+    source = thread->context.data[2];
+    switch (command) {
+    case KERNEL_QUALIFICATION_COMMAND_QUERY_IRQS:
+        thread->context.data[1] = client->authorized_sources;
+        return KERNEL_PROCESS_OK;
+    case KERNEL_QUALIFICATION_COMMAND_BIND_IRQ: {
+        KernelIrqBinding binding;
+        KernelHandle handle;
+        KernelProcessStatus status;
+
+        if (!qualification_source_allowed(client, source) ||
+            !kernel_interrupt_device_binding((uint8_t)source, &binding)) {
+            *syscall_result = ASTRA_SYSCALL_ACCESS_DENIED;
+            return KERNEL_PROCESS_OK;
+        }
+        status = kernel_process_grant_irq(process->id, &binding,
+                                          KERNEL_IRQ_RIGHTS, &handle);
+        if (status == KERNEL_PROCESS_OK) {
+            thread->context.data[1] = handle;
+            return KERNEL_PROCESS_OK;
+        }
+        if (status == KERNEL_PROCESS_INVALID_ARGUMENT) {
+            *syscall_result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            return KERNEL_PROCESS_OK;
+        }
+        if (status == KERNEL_PROCESS_RESOURCE_LIMIT) {
+            *syscall_result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            return KERNEL_PROCESS_OK;
+        }
+        if (status == KERNEL_PROCESS_INVALID_STATE) {
+            *syscall_result = ASTRA_SYSCALL_IO_ERROR;
+            return KERNEL_PROCESS_OK;
+        }
+        return status;
+    }
+    case KERNEL_QUALIFICATION_COMMAND_PREPARE_IRQ:
+        if (!qualification_source_allowed(client, source))
+            *syscall_result = ASTRA_SYSCALL_ACCESS_DENIED;
+        else if (!kernel_platform_qualification_irq_prepare(
+                     (uint8_t)source))
+            *syscall_result = ASTRA_SYSCALL_IO_ERROR;
+        return KERNEL_PROCESS_OK;
+    case KERNEL_QUALIFICATION_COMMAND_CONSUME_IRQ:
+        if (!qualification_source_allowed(client, source))
+            *syscall_result = ASTRA_SYSCALL_ACCESS_DENIED;
+        else if (!kernel_platform_qualification_irq_consume(
+                     (uint8_t)source, thread->context.data[3]))
+            *syscall_result = ASTRA_SYSCALL_IO_ERROR;
+        return KERNEL_PROCESS_OK;
+    case KERNEL_QUALIFICATION_COMMAND_COMPLETE_IRQS:
+        if (source != client->authorized_sources) {
+            *syscall_result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            return KERNEL_PROCESS_OK;
+        }
+        client->completed_sources = source;
+        return KERNEL_PROCESS_OK;
+    default:
+        *syscall_result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+        return KERNEL_PROCESS_OK;
+    }
+}
+
 KernelProcessStatus kernel_process_start(KernelCpuContext **next_context)
 {
     KernelThread *next = NULL;
+    KernelProcessStatus activate_status;
     KernelThreadStatus status;
 
-    if (next_context == NULL || current_thread != NULL)
+    if (next_context == NULL || current_thread != NULL ||
+        scheduler_initialized == 0u || scheduler_started != 0u)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     *next_context = NULL;
+    scheduler_started = 1u;
     status = kernel_thread_take_next(&next);
-    if (status == KERNEL_THREAD_NO_RUNNABLE)
+    if (status == KERNEL_THREAD_NO_RUNNABLE) {
+        scheduler_started = 0u;
         return KERNEL_PROCESS_NO_RUNNABLE;
-    if (status != KERNEL_THREAD_OK || next == NULL)
+    }
+    if (status != KERNEL_THREAD_OK || next == NULL) {
+        scheduler_started = 0u;
         return KERNEL_PROCESS_CORRUPT;
-    return activate(next, next_context);
+    }
+    activate_status = activate(next, next_context);
+
+    if (activate_status != KERNEL_PROCESS_OK)
+        scheduler_started = 0u;
+    return activate_status;
 }
 
 bool kernel_process_active(void)
@@ -1613,6 +1849,33 @@ KernelProcessStatus kernel_process_on_timer(const uint32_t *registers,
     return KERNEL_PROCESS_OK;
 }
 
+KernelProcessStatus kernel_process_on_interrupt_wakeup(
+    const uint32_t *registers, uint32_t user_stack, const void *raw_frame,
+    KernelCpuContext **next_context)
+{
+    KernelProcess *current;
+    KernelThread *previous;
+    KernelProcessStatus status;
+
+    if (next_context == NULL)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    *next_context = NULL;
+    status = capture_current(registers, user_stack, raw_frame, &current,
+                             &previous);
+    if (status != KERNEL_PROCESS_OK)
+        return status;
+    (void)current;
+    if (ready_thread_outranks(previous)) {
+        status = schedule_pending(next_context);
+        if (status == KERNEL_PROCESS_OK &&
+            *next_context != &previous->context)
+            ++scheduler_stats.wake_preemptions;
+        return status;
+    }
+    *next_context = &previous->context;
+    return KERNEL_PROCESS_OK;
+}
+
 KernelProcessStatus kernel_process_on_supervisor_timer(void)
 {
     KernelCpuContext *next = NULL;
@@ -1632,6 +1895,10 @@ KernelProcessStatus kernel_process_on_supervisor_timer(void)
     if (current_thread == NULL) {
         uint8_t ready_priority;
 
+        if (scheduler_started == 0u) {
+            scheduler_timer_rearm_at(now);
+            return KERNEL_PROCESS_OK;
+        }
         if (kernel_thread_highest_ready_priority(&ready_priority)) {
             (void)ready_priority;
             status = schedule_next(&next);
@@ -1795,6 +2062,42 @@ static bool area_status_to_syscall(KernelAreaStatus status,
     }
 }
 
+static bool irq_status_to_syscall(KernelIrqStatus status, uint32_t *result)
+{
+    if (result == NULL)
+        return false;
+    switch (status) {
+    case KERNEL_IRQ_OK:
+        *result = ASTRA_SYSCALL_OK;
+        return true;
+    case KERNEL_IRQ_WOULD_BLOCK:
+        *result = ASTRA_SYSCALL_WOULD_BLOCK;
+        return true;
+    case KERNEL_IRQ_CLOSED:
+        *result = ASTRA_SYSCALL_PEER_DEAD;
+        return true;
+    case KERNEL_IRQ_INVALID_ARGUMENT:
+    case KERNEL_IRQ_INVALID_STATE:
+    case KERNEL_IRQ_SEQUENCE_MISMATCH:
+        *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+        return true;
+    case KERNEL_IRQ_NO_SLOT:
+    case KERNEL_IRQ_QUOTA_EXCEEDED:
+    case KERNEL_IRQ_SOURCE_BUSY:
+        *result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+        return true;
+    case KERNEL_IRQ_OVERFLOW:
+    case KERNEL_IRQ_STORM:
+    case KERNEL_IRQ_DEVICE_ERROR:
+        *result = ASTRA_SYSCALL_IO_ERROR;
+        return true;
+    case KERNEL_IRQ_UNCLAIMED:
+    case KERNEL_IRQ_CORRUPT:
+    default:
+        return false;
+    }
+}
+
 static KernelRingEndpoint ring_endpoint_for_type(KernelObjectType type)
 {
     return type == KERNEL_OBJECT_RING_PRODUCER ?
@@ -1843,7 +2146,8 @@ static KernelProcessStatus wait_handle_set(
             types[index] != KERNEL_OBJECT_PORT_SEND &&
             types[index] != KERNEL_OBJECT_PORT_RECEIVE &&
             types[index] != KERNEL_OBJECT_RING_PRODUCER &&
-            types[index] != KERNEL_OBJECT_RING_CONSUMER) {
+            types[index] != KERNEL_OBJECT_RING_CONSUMER &&
+            types[index] != KERNEL_OBJECT_IRQ) {
             *syscall_result = ASTRA_SYSCALL_INVALID_HANDLE;
             return KERNEL_PROCESS_OK;
         }
@@ -1947,6 +2251,38 @@ static KernelProcessStatus wait_handle_set(
                     set_wait_outputs(thread, true, index, 0u);
                 return KERNEL_PROCESS_OK;
             }
+        } else if (types[index] == KERNEL_OBJECT_IRQ) {
+            KernelIrqStatus irq_status = kernel_irq_prepare_wait(
+                objects[index], &specs[index]);
+
+            if (irq_status == KERNEL_IRQ_OK) {
+                KernelIrqRecord record;
+                uint32_t event_flags;
+                KernelIrqStatus read_status = kernel_irq_read(
+                    objects[index], &record, &event_flags);
+
+                if (read_status != KERNEL_IRQ_OK &&
+                    read_status != KERNEL_IRQ_OVERFLOW &&
+                    read_status != KERNEL_IRQ_STORM &&
+                    read_status != KERNEL_IRQ_DEVICE_ERROR)
+                    return KERNEL_PROCESS_CORRUPT;
+                set_wait_outputs(thread, multiple, index, event_flags);
+                return KERNEL_PROCESS_OK;
+            }
+            if (irq_status == KERNEL_IRQ_CLOSED) {
+                *syscall_result = ASTRA_SYSCALL_PEER_DEAD;
+                if (multiple)
+                    set_wait_outputs(thread, true, index, 0u);
+                return KERNEL_PROCESS_OK;
+            }
+            if (irq_status == KERNEL_IRQ_QUOTA_EXCEEDED) {
+                *syscall_result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+                return KERNEL_PROCESS_OK;
+            }
+            if (irq_status != KERNEL_IRQ_WOULD_BLOCK)
+                return irq_status == KERNEL_IRQ_INVALID_ARGUMENT ||
+                               irq_status == KERNEL_IRQ_INVALID_STATE ?
+                    KERNEL_PROCESS_INVALID_STATE : KERNEL_PROCESS_CORRUPT;
         } else if (types[index] == KERNEL_OBJECT_THREAD) {
             bool ready;
             KernelThreadStatus thread_status =
@@ -2037,6 +2373,9 @@ static KernelProcessStatus wait_handle_set(
                     objects[index], ring_endpoint_for_type(types[index])) !=
                 KERNEL_RING_OK)
                 return KERNEL_PROCESS_CORRUPT;
+        } else if (types[index] == KERNEL_OBJECT_IRQ) {
+            if (kernel_irq_commit_wait(objects[index]) != KERNEL_IRQ_OK)
+                return KERNEL_PROCESS_CORRUPT;
         } else if (types[index] == KERNEL_OBJECT_THREAD) {
             if (kernel_thread_commit_death_wait(objects[index]) !=
                 KERNEL_THREAD_OK)
@@ -2122,6 +2461,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
     uint32_t syscall;
     uint32_t result = ASTRA_SYSCALL_OK;
     bool wake_preemption_pending = false;
+    bool qualification_progress = false;
 
     if (next_context == NULL)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
@@ -2148,12 +2488,24 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         thread->context.data[3] = thread->self_handle;
         break;
     case ASTRA_SYSCALL_PROGRESS:
-        if (thread->context.data[1] < current->progress)
-            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
-        else {
-            current->progress = thread->context.data[1];
-            if (current->progress >= KERNEL_PROCESS_PROGRESS_GOAL)
-                milestone_progress_ready = 1u;
+        {
+            bool qualification_handled;
+
+            status = qualification_command(
+                current, thread, &result, &qualification_handled);
+            if (status != KERNEL_PROCESS_OK)
+                return status;
+            if (qualification_handled) {
+                qualification_progress = true;
+                break;
+            }
+            if (thread->context.data[1] < current->progress)
+                result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            else {
+                current->progress = thread->context.data[1];
+                if (current->progress >= KERNEL_PROCESS_PROGRESS_GOAL)
+                    milestone_progress_ready = 1u;
+            }
         }
         break;
     case ASTRA_SYSCALL_YIELD: {
@@ -2241,12 +2593,14 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             if (!kernel_sync_pool_valid() || !kernel_thread_pool_valid() ||
                 !kernel_port_pool_valid() ||
                 !kernel_area_pool_valid() || !kernel_ring_pool_valid() ||
+                !kernel_irq_pool_valid() ||
                 !kernel_handle_transfer_pool_valid() ||
                 !process_pool_valid())
 #else
             if (!kernel_sync_pool_healthy() || !kernel_thread_pool_valid() ||
                 !kernel_port_pool_healthy() ||
                 !kernel_area_pool_healthy() || !kernel_ring_pool_healthy() ||
+                !kernel_irq_pool_healthy() ||
                 !kernel_handle_transfer_pool_healthy() ||
                 !process_pool_healthy())
 #endif
@@ -2858,6 +3212,103 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             return KERNEL_PROCESS_CORRUPT;
         break;
     }
+    case ASTRA_SYSCALL_IRQ_READ:
+    case ASTRA_SYSCALL_IRQ_ACK:
+    case ASTRA_SYSCALL_IRQ_ARM:
+    case ASTRA_SYSCALL_IRQ_MASK:
+    case ASTRA_SYSCALL_IRQ_RECOVER:
+    case ASTRA_SYSCALL_IRQ_REVOKE: {
+        KernelIrqEndpoint *endpoint = NULL;
+        KernelHandleStatus handle_status;
+        KernelIrqStatus irq_status;
+        uint32_t required_rights;
+
+        if (syscall == ASTRA_SYSCALL_IRQ_READ)
+            required_rights = ASTRA_RIGHT_READ;
+        else if (syscall == ASTRA_SYSCALL_IRQ_ACK)
+            required_rights = ASTRA_RIGHT_SIGNAL;
+        else
+            required_rights = ASTRA_RIGHT_ADMINISTER;
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1], KERNEL_OBJECT_IRQ,
+            required_rights, (void **)&endpoint);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || endpoint == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+
+        switch (syscall) {
+        case ASTRA_SYSCALL_IRQ_READ: {
+            KernelIrqRecord record;
+            uint32_t event_flags = 0u;
+            uint32_t user_record = thread->context.data[2];
+            int copy_status;
+
+            if ((user_record & (sizeof(uint32_t) - 1u)) != 0u) {
+                result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+                break;
+            }
+            irq_status = kernel_irq_read(endpoint, &record, &event_flags);
+            thread->context.data[1] = event_flags;
+            if (irq_status != KERNEL_IRQ_OK) {
+                if (!irq_status_to_syscall(irq_status, &result))
+                    return KERNEL_PROCESS_CORRUPT;
+                break;
+            }
+            copy_status = kernel_copy_to_user(user_record, &record,
+                                              sizeof(record));
+            if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+                copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
+                result = ASTRA_SYSCALL_BAD_ADDRESS;
+                break;
+            }
+            if (copy_status != KERNEL_USER_COPY_OK)
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        case ASTRA_SYSCALL_IRQ_ACK:
+            irq_status = kernel_irq_ack(endpoint, thread->context.data[2]);
+            if (!irq_status_to_syscall(irq_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        case ASTRA_SYSCALL_IRQ_ARM:
+            irq_status = kernel_irq_arm(endpoint);
+            if (!irq_status_to_syscall(irq_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        case ASTRA_SYSCALL_IRQ_MASK:
+            irq_status = kernel_irq_mask(endpoint);
+            if (!irq_status_to_syscall(irq_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        case ASTRA_SYSCALL_IRQ_RECOVER:
+            irq_status = kernel_irq_recover(endpoint);
+            if (!irq_status_to_syscall(irq_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        case ASTRA_SYSCALL_IRQ_REVOKE: {
+            uint32_t woken = 0u;
+
+            irq_status = kernel_irq_revoke(endpoint, &woken);
+            thread->context.data[1] = woken;
+            if (!irq_status_to_syscall(irq_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        default:
+            return KERNEL_PROCESS_CORRUPT;
+        }
+        if (!kernel_irq_pool_valid())
+            return KERNEL_PROCESS_CORRUPT;
+        break;
+    }
     case ASTRA_SYSCALL_WAIT_ONE: {
         KernelHandle handle = thread->context.data[1];
         uint64_t deadline_cycles;
@@ -3147,7 +3598,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
     } else {
         *next_context = &thread->context;
     }
-    if (syscall == ASTRA_SYSCALL_PROGRESS)
+    if (syscall == ASTRA_SYSCALL_PROGRESS && !qualification_progress)
         check_milestone();
     return KERNEL_PROCESS_OK;
 }
@@ -3200,7 +3651,7 @@ static KernelProcessStatus soak_relaunch(void)
     }
     status = create_process(
         soak_state.image, soak_state.image_size, soak_state.entry_offset,
-        cycles, &process_id, true);
+        cycles, &process_id);
     if (status != KERNEL_PROCESS_OK || process_id == 0u)
         return maintenance_failed(
             KERNEL_PROCESS_MAINTENANCE_CREATE,
@@ -3222,11 +3673,19 @@ KernelProcessStatus kernel_process_maintenance(void)
 #else
     if (!process_pool_healthy() || !kernel_port_pool_healthy() ||
         !kernel_area_pool_healthy() || !kernel_ring_pool_healthy() ||
+        !kernel_irq_pool_healthy() ||
         !kernel_handle_transfer_pool_healthy())
 #endif
         return KERNEL_PROCESS_CORRUPT;
     kernel_bytes_clear(&maintenance_diagnostics,
                        sizeof(maintenance_diagnostics));
+
+    if (kernel_irq_revocation_pending()) {
+        if (!kernel_interrupt_schedule_device_reset())
+            return maintenance_failed(
+                KERNEL_PROCESS_MAINTENANCE_IRQ_REVOCATION,
+                KERNEL_PROCESS_CORRUPT, 0u, 1u);
+    }
 
     if (kernel_process_maintenance_pending()) {
         KernelBlockStatus block_status = kernel_block_service(NULL);
@@ -3344,6 +3803,8 @@ bool kernel_process_maintenance_pending(void)
         scheduler_stats.milestone_complete != 0u)
         return true;
 #endif
+    if (kernel_irq_revocation_pending())
+        return true;
     if (kernel_thread_reap_pending())
         return true;
     for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
@@ -3482,6 +3943,7 @@ bool kernel_process_stats(KernelSchedulerStats *stats)
     stats->sync_live_objects = sync_stats.live_objects;
     stats->sync_max_live_objects = sync_stats.max_live_objects;
     stats->sync_wait_calls = sync_stats.wait_calls;
+    stats->sync_blocked_waits = sync_stats.blocked_waits;
     stats->sync_signal_calls = sync_stats.signal_calls;
     stats->sync_cancellations = thread_stats.wait_cancellations;
     stats->sync_close_wakeups = sync_stats.close_wakeups;
@@ -3517,12 +3979,17 @@ bool kernel_process_stats(KernelSchedulerStats *stats)
     stats->port_receives = port_stats.receives;
     stats->port_send_would_block = port_stats.send_would_block;
     stats->port_receive_would_block = port_stats.receive_would_block;
+    stats->port_receive_buffer_too_small =
+        port_stats.receive_buffer_too_small;
     stats->port_wait_wakeups = port_stats.wait_wakeups;
     stats->port_owner_deaths = port_stats.owner_deaths;
     stats->port_queued_messages = port_stats.queued_messages;
     stats->port_queued_bytes = port_stats.queued_bytes;
     stats->port_queued_handles = port_stats.queued_handles;
     stats->handle_transfers = handle_stats.committed_exports;
+    stats->handle_transfer_imports = handle_stats.committed_imports;
+    stats->handle_transfer_import_rollbacks = handle_stats.import_rollbacks;
+    stats->handle_transfer_live_detached = handle_stats.live_detached;
     stats->handle_transfer_pool_exhaustions =
         handle_stats.pool_exhaustions;
     stats->handle_transfer_max_detached = handle_stats.max_live_detached;
@@ -3539,6 +4006,9 @@ bool kernel_process_stats(KernelSchedulerStats *stats)
     stats->ring_producer_notifications = ring_stats.producer_notifications;
     stats->ring_consumer_notifications = ring_stats.consumer_notifications;
     stats->ring_wait_wakeups = ring_stats.wait_wakeups;
+    stats->ring_peer_closures = ring_stats.peer_closures;
+    stats->irq_wake_to_run_max_cycles =
+        thread_stats.irq_wake_to_run_max_cycles;
     stats->milestone_complete = scheduler_stats.milestone_complete;
     stats->reserved[0] = 0u;
     stats->reserved[1] = 0u;

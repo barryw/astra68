@@ -249,6 +249,7 @@ read_verilog -sv -DSYNTHESIS -DLATTICE_ECP5 \
   $H/packet_picker.sv $H/tmds_channel.sv $H/serializer.sv $H/hdmi.sv \
   $SOC/uart_tx.sv $SOC/uart_rx.sv $SOC/uart_rx_fifo.sv $SOC/spi_sd.sv \
   $SOC/astra_front_panel.sv $SOC/vesta_irq_timer.sv \
+  $SOC/vesta_bus_fault.sv \
   $SOC/astra_host_async_byte_fifo.sv $SOC/astra_host_spi_slave.sv \
   $SOC/astra_async_fifo.sv $SOC/astra_host_runtime.sv \
   $SOC/astra_host_service.sv \

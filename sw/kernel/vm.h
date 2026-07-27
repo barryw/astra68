@@ -27,6 +27,13 @@ typedef enum KernelVmStatus {
     KERNEL_VM_CORRUPT
 } KernelVmStatus;
 
+typedef enum KernelVmMapping {
+    KERNEL_VM_MAPPING_UNKNOWN = 0,
+    KERNEL_VM_MAPPING_UNMAPPED,
+    KERNEL_VM_MAPPING_READ_ONLY,
+    KERNEL_VM_MAPPING_READ_WRITE
+} KernelVmMapping;
+
 typedef struct KernelAddressSpace {
     uint32_t owner;
     uint32_t root_physical;
@@ -53,6 +60,17 @@ typedef struct KernelVmStats {
     uint32_t switches;
 } KernelVmStats;
 
+typedef struct KernelVmControlState {
+    uint32_t srp_limit_descriptor;
+    uint32_t srp_table_address;
+    uint32_t crp_limit_descriptor;
+    uint32_t crp_table_address;
+    uint32_t translation_control;
+    uint32_t cache_control;
+    uint8_t translation_enabled;
+    uint8_t reserved[3];
+} KernelVmControlState;
+
 KernelVmStatus kernel_vm_init(void);
 KernelVmStatus kernel_vm_enable(void);
 bool kernel_vm_enabled(void);
@@ -77,6 +95,10 @@ KernelVmStatus kernel_vm_switch(const KernelAddressSpace *space);
 KernelVmStatus kernel_vm_switch_to_empty(void);
 KernelVmStatus kernel_vm_sync_shared_aliases(void);
 bool kernel_vm_stats(KernelVmStats *stats);
+bool kernel_vm_control_state(KernelVmControlState *state);
+KernelVmMapping kernel_vm_probe_current(uint32_t virtual_address,
+                                        bool supervisor,
+                                        uint32_t *physical_address);
 
 #if defined(KERNEL_VM_HOST_TEST)
 typedef enum KernelVmSharedMapFault {

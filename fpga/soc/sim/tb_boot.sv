@@ -35,9 +35,11 @@ module tb_boot;
     reg build_seen = 1'b0;
     reg cpu_seen = 1'b0;
     reg vesta_seen = 1'b0;
+    integer uart_bytes = 0;
 
     always @(posedge dut.clk) begin
         if (dut.uart_start) begin
+            uart_bytes <= uart_bytes + 1;
             if (dut.uart_data == 8'h0d) begin
                 // CR is part of the wire protocol but not the line comparison.
             end else if (dut.uart_data == 8'h0a) begin
@@ -73,8 +75,11 @@ module tb_boot;
 
     initial begin
         #100_000_000;
-        $fatal(1, "boot UART timeout adr=0x%08x fc=%b rw=%b as=%b dsack=%b",
+        $fatal(1, "boot UART timeout adr=%08x fc=%b rw=%b as=%b dsack=%b bytes=%0d bs=%0d berr=%b fetch=%08x/%08x/%08x/%08x vec=%08x",
                dut.cpu_adr, dut.cpu_fc, dut.cpu_rw_n, dut.cpu_as_n,
-               dut.dsack_n);
+               dut.dsack_n, uart_bytes, dut.bs, dut.cpu_berrn,
+               dut.dbg_prog_adr0, dut.dbg_prog_adr1,
+               dut.dbg_prog_adr2, dut.dbg_prog_adr3,
+               dut.dbg_last_vec_adr);
     end
 endmodule

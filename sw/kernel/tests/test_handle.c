@@ -51,6 +51,45 @@ static void release_clone(void *object, void *context)
     ++state->release_calls;
 }
 
+static void test_free_slot_bitmap_invariants(void)
+{
+    KernelHandleTable table;
+    KernelHandle handles[4];
+    ReleaseState released = {0u, 0u};
+    uint32_t saved_free_slots;
+
+    kernel_handle_table_init(&table);
+    assert(kernel_handle_table_valid(&table));
+    assert(kernel_handle_available(&table) == KERNEL_HANDLE_MAX_ENTRIES);
+    for (uint32_t index = 0u; index < 4u; ++index) {
+        assert(kernel_handle_install(
+                   &table, KERNEL_OBJECT_DEVICE, RIGHT_QUERY,
+                   (void *)(uintptr_t)(index + 1u), release_object,
+                   &released, &handles[index]) == KERNEL_HANDLE_OK);
+        assert(kernel_handle_table_valid(&table));
+        assert(kernel_handle_available(&table) ==
+               KERNEL_HANDLE_MAX_ENTRIES - index - 1u);
+    }
+
+    saved_free_slots = table.free_slots;
+    table.free_slots |= 1u;
+    assert(!kernel_handle_table_valid(&table));
+    table.free_slots = saved_free_slots;
+    assert(kernel_handle_table_valid(&table));
+
+    assert(kernel_handle_close(&table, handles[1]) == KERNEL_HANDLE_OK);
+    assert(kernel_handle_table_valid(&table));
+    saved_free_slots = table.free_slots;
+    table.free_slots &= ~(1u << 1);
+    assert(!kernel_handle_table_valid(&table));
+    table.free_slots = saved_free_slots;
+    assert(kernel_handle_table_valid(&table));
+    assert(kernel_handle_close_all(&table) == 3u);
+    assert(kernel_handle_table_valid(&table));
+    assert(kernel_handle_available(&table) == KERNEL_HANDLE_MAX_ENTRIES);
+    assert(released.calls == 4u);
+}
+
 static void test_cloneable_rights_reduction_and_lifetime(void)
 {
     KernelHandleTable table;
@@ -571,6 +610,7 @@ int main(void)
 {
     kernel_handle_transfer_pool_init();
     assert(kernel_handle_transfer_pool_healthy());
+    test_free_slot_bitmap_invariants();
     test_allocation_injection_preserves_authority();
     test_lookup_rights_type_and_stale_reuse();
     test_capacity_and_close_all();

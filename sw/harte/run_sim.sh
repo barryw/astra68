@@ -13,7 +13,8 @@ CORE_OUT=harte_core.v bash mkcore.sh
 
 verilator --binary -j 0 --Mdir obj_dir_harte --top-module tb_soc \
     -Wno-lint -Wno-UNOPTFLAT --timing \
-    tb_soc.sv ../astra_soc.sv ../astra_front_panel.sv ../vesta_irq_timer.sv ../boot_memory_map.sv \
+    tb_soc.sv ../astra_soc.sv ../astra_front_panel.sv ../vesta_irq_timer.sv \
+    ../vesta_bus_fault.sv ../boot_memory_map.sv \
     ../astraea_blitter.sv ../astraea_pixel_port.sv ../astraea_draw.sv \
     ../astraea_copper.sv ../astraea_chip.sv \
     ../tg68k_cache_store.sv ../vega_sprite_builder.sv \

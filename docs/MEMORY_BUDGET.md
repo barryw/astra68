@@ -1,6 +1,7 @@
 # Axiom kernel memory budget
 
-Status: measured hardware-qualified K9 release accounting (2026-07-26)
+Status: hardware-qualified K9 release plus measured pre-route K10 candidate
+accounting (2026-07-27)
 
 The machine has exactly 32 MiB of SDRAM. Every static pool, frame, mapping,
 queue, pin, and graphics reservation is reported separately. A budget is not
@@ -11,9 +12,10 @@ permission to allocate dynamically without a quota.
 | Reservation | Bytes |
 |---|---:|
 | early retained log | 16,384 |
-| kernel load reservation | 524,288 |
+| kernel bootstrap reservation | 524,288 |
+| K10 retained trace reservation | 65,536 |
 | ROM backing | 262,144 |
-| remaining before future graphics/device carveouts | 32,751,616 |
+| remaining in the K10 candidate before future graphics/device carveouts | 32,686,080 |
 
 The detailed split and bootstrap BRAM are in `MEMORY_MAP.md`. The kernel starts
 from BootInfo ranges, not the arithmetic above.
@@ -397,6 +399,55 @@ Major current static objects are:
 | block slots | 4 x 64 | 256 |
 | cached-user-frame class/count ledger | 8,192 x 1 | 8,192 |
 | boot-info copy | 1 x 256 | 256 |
+
+## K10 implemented candidate budget
+
+The current pre-route MC68030 K10 build reports:
+
+| ELF section | Bytes |
+|---|---:|
+| `.text.entry` | 80 |
+| `.vectors` | 1,024 |
+| `.text` plus read-only data | 119,412 |
+| `.data` | 0 |
+| `.bss` | 49,768 |
+| `.noinit` | 111,232 |
+| interrupt-stack section including alignment and guard | 14,736 |
+| worker MSP section including guard | 12,288 |
+| 16 guarded thread supervisor-stack slots | 196,608 |
+| `.kernel_trace` | 65,536 |
+| reserved span through `_kernel_memory_end` | 589,824 |
+| flat kernel binary | 121,460 |
+
+The bootstrap portion ends at `0x0208B000`, leaving 20,480 bytes in the fixed
+512 KiB bootstrap reservation. The retained trace occupies exactly
+`0x02090000..0x0209FFFF`; BootInfo reserves the contiguous 576 KiB kernel range
+through `0x0209FFFF`, and allocatable RAM resumes at `0x020A0000`. The memory
+initializer therefore reports 7,948 ordinary free pages plus the separate
+32-page emergency reserve. The target K10 workload reports 7,944 ordinary free
+pages after its two qualification processes are established.
+
+Relative to exact K9, K10 adds 31,328 flat-binary bytes and 5,968 BSS bytes;
+`.noinit` is unchanged. The BSS increase is fully assigned as follows:
+
+| Incremental K10 fixed state | Bytes |
+|---|---:|
+| 16 IRQ endpoints, four embedded records each | 2,048 |
+| 32 Vesta source-route records | 896 |
+| 32 pre-PMMU staged trace records | 896 |
+| two bounded monitor transport channels | 788 |
+| six additional performance records | 216 |
+| eight deferred-class callback/context/counter tables | 128 |
+| controller, fault, monitor, latency state, and alignment | 444 |
+| 32-entry claimed-interrupt handoff ring | 512 |
+| claimed-interrupt indices, counters, and alignment | 40 |
+| total BSS increase | 5,968 |
+
+The 64 KiB trace is allocation-free fixed storage outside `.bss`; it is not
+charged again to the heap or physical-frame allocator. IRQ endpoints consume
+128 bytes per live slot from their fixed typed cache and have no separate
+record allocation. This accounting is implementation evidence only. Exact
+committed hashes, route resources, and hardware promotion remain pending.
 
 ## PMMU table cost
 

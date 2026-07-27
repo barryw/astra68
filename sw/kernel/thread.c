@@ -47,10 +47,20 @@ static uint16_t deadline_positions[KERNEL_THREAD_MAX];
 static uint16_t deadline_count;
 static uint16_t wait_registration_count;
 static uint16_t reap_pending_bitmap;
+static uint16_t irq_wake_bitmap;
+static uint32_t irq_wake_cycles[KERNEL_THREAD_MAX];
 static KernelThreadPoolStats pool_stats;
 static uint8_t pool_corrupt;
 
 static bool valid_thread(const KernelThread *thread);
+
+static void clear_irq_wake(uint16_t slot)
+{
+    if (slot >= KERNEL_THREAD_MAX)
+        return;
+    irq_wake_bitmap &= (uint16_t)~(uint16_t)(1u << slot);
+    irq_wake_cycles[slot] = 0u;
+}
 
 static void mark_reap_pending(KernelThread *thread)
 {
@@ -448,6 +458,18 @@ static KernelThreadWaitRegistration *registration_at(uint16_t identifier)
     return &wait_registrations[thread_slot][member];
 }
 
+static KernelThread *registration_thread_at(uint16_t identifier)
+{
+    return identifier < THREAD_WAIT_REGISTRATION_COUNT ?
+        &threads[identifier / KERNEL_THREAD_WAIT_MEMBER_MAX] : NULL;
+}
+
+static uint16_t registration_member_at(uint16_t identifier)
+{
+    return identifier < THREAD_WAIT_REGISTRATION_COUNT ?
+        (uint16_t)(identifier % KERNEL_THREAD_WAIT_MEMBER_MAX) : UINT16_MAX;
+}
+
 static uint16_t registration_identifier(
     const KernelThreadWaitRegistration *registration)
 {
@@ -509,8 +531,8 @@ static bool valid_wait_queue(const KernelThreadWaitQueue *queue)
             traversed >= queue->count)
             return false;
         registration = registration_at(identifier);
-        thread = registration_thread(registration);
-        member = registration_member(registration);
+        thread = registration_thread_at(identifier);
+        member = registration_member_at(identifier);
         if (registration == NULL || !valid_thread(thread) ||
             thread->state != KERNEL_THREAD_BLOCKED ||
             thread->wait_member_count == 0u ||
@@ -623,7 +645,10 @@ static KernelThreadStatus remove_wait_registration(
         registration->queue == NULL)
         return KERNEL_THREAD_INVALID_STATE;
     queue = registration->queue;
-    if (!valid_wait_queue(queue) || queue->count == 0u)
+    if (registration != registration_at(identifier) || queue->count == 0u ||
+        queue->count > KERNEL_THREAD_MAX ||
+        queue->head >= THREAD_WAIT_REGISTRATION_COUNT ||
+        queue->tail >= THREAD_WAIT_REGISTRATION_COUNT)
         return KERNEL_THREAD_CORRUPT;
     previous = registration->previous;
     next = registration->next;
@@ -635,7 +660,8 @@ static KernelThreadStatus remove_wait_registration(
     } else {
         KernelThreadWaitRegistration *before = registration_at(previous);
 
-        if (before == NULL || before->next != identifier)
+        if (before == NULL || before->queue != queue ||
+            before->next != identifier)
             return KERNEL_THREAD_CORRUPT;
         before->next = next;
     }
@@ -646,15 +672,20 @@ static KernelThreadStatus remove_wait_registration(
     } else {
         KernelThreadWaitRegistration *after = registration_at(next);
 
-        if (after == NULL || after->previous != identifier)
+        if (after == NULL || after->queue != queue ||
+            after->previous != identifier)
             return KERNEL_THREAD_CORRUPT;
         after->previous = previous;
     }
     --queue->count;
-    if (queue->count == 0u &&
-        (queue->head != THREAD_WAIT_REGISTRATION_NONE ||
-         queue->tail != THREAD_WAIT_REGISTRATION_NONE))
+    if (queue->count == 0u) {
+        if (queue->head != THREAD_WAIT_REGISTRATION_NONE ||
+            queue->tail != THREAD_WAIT_REGISTRATION_NONE)
+            return KERNEL_THREAD_CORRUPT;
+    } else if (queue->head >= THREAD_WAIT_REGISTRATION_COUNT ||
+               queue->tail >= THREAD_WAIT_REGISTRATION_COUNT) {
         return KERNEL_THREAD_CORRUPT;
+    }
     if (wait_registration_count == 0u)
         return KERNEL_THREAD_CORRUPT;
     --wait_registration_count;
@@ -670,22 +701,24 @@ static KernelThreadStatus withdraw_wait_set(
 {
     uint16_t member_count;
 
-    if (!valid_thread(thread) || thread->state != KERNEL_THREAD_BLOCKED ||
+    if (thread == NULL || thread->state != KERNEL_THREAD_BLOCKED ||
         thread->wait_member_count == 0u ||
         thread->wait_member_count > KERNEL_THREAD_WAIT_MEMBER_MAX)
         return KERNEL_THREAD_INVALID_STATE;
     member_count = thread->wait_member_count;
-    if (advance_sequences) {
-        for (uint16_t member = 0u; member < member_count; ++member) {
-            KernelThreadWaitQueue *queue =
-                wait_registrations[thread->slot][member].queue;
-            bool seen = queue == already_advanced;
+    for (uint16_t member = 0u; member < member_count; ++member) {
+        KernelThreadWaitQueue *queue =
+            wait_registrations[thread->slot][member].queue;
+        bool seen = queue == already_advanced;
 
-            if (queue == NULL)
+        if (queue == NULL)
+            return KERNEL_THREAD_CORRUPT;
+        for (uint16_t prior = 0u; prior < member && !seen; ++prior)
+            seen = wait_registrations[thread->slot][prior].queue == queue;
+        if (!seen) {
+            if (!valid_wait_queue(queue))
                 return KERNEL_THREAD_CORRUPT;
-            for (uint16_t prior = 0u; prior < member && !seen; ++prior)
-                seen = wait_registrations[thread->slot][prior].queue == queue;
-            if (!seen)
+            if (advance_sequences)
                 queue->sequence = kernel_generation_next(queue->sequence);
         }
     }
@@ -773,7 +806,7 @@ static KernelThreadStatus wake_death_waiters(KernelThread *thread,
         KernelThread *waiter;
 
         registration = registration_at(queue->head);
-        waiter = registration_thread(registration);
+        waiter = registration_thread_at(queue->head);
         if (registration == NULL || !valid_thread(waiter))
             return KERNEL_THREAD_CORRUPT;
         if (wake_waiter(registration, queue, result,
@@ -805,6 +838,7 @@ void kernel_thread_pool_init(void)
         deadline_results[index] = 0u;
         deadline_heap[index] = KERNEL_THREAD_SLOT_NONE;
         deadline_positions[index] = KERNEL_THREAD_SLOT_NONE;
+        irq_wake_cycles[index] = 0u;
     }
     for (uint32_t priority = 0u;
          priority < KERNEL_THREAD_PRIORITY_LEVELS; ++priority) {
@@ -818,6 +852,7 @@ void kernel_thread_pool_init(void)
     deadline_count = 0u;
     wait_registration_count = 0u;
     reap_pending_bitmap = 0u;
+    irq_wake_bitmap = 0u;
 }
 
 KernelThreadStatus kernel_thread_allocate(uint16_t process_slot,
@@ -1145,6 +1180,16 @@ KernelThreadStatus take_next_fast(KernelThread **thread)
     if (status != KERNEL_THREAD_OK)
         return status;
     next->state = KERNEL_THREAD_RUNNING;
+    if ((irq_wake_bitmap & (uint16_t)(1u << slot)) != 0u) {
+        uint32_t elapsed = kernel_performance_cycles_low() -
+                           irq_wake_cycles[slot];
+
+        clear_irq_wake(slot);
+        if (pool_stats.irq_wake_to_run_samples != UINT32_MAX)
+            ++pool_stats.irq_wake_to_run_samples;
+        if (elapsed > pool_stats.irq_wake_to_run_max_cycles)
+            pool_stats.irq_wake_to_run_max_cycles = elapsed;
+    }
     *thread = next;
     return KERNEL_THREAD_OK;
 }
@@ -1204,7 +1249,7 @@ uint32_t kernel_thread_wait_queue_waiter_count(
     while (identifier != THREAD_WAIT_REGISTRATION_NONE) {
         KernelThreadWaitRegistration *registration =
             registration_at(identifier);
-        KernelThread *thread = registration_thread(registration);
+        KernelThread *thread = registration_thread_at(identifier);
         uint16_t bit;
 
         if (!valid_thread(thread))
@@ -1360,9 +1405,8 @@ KernelThreadStatus wake_one_fast(KernelThreadWaitQueue *queue,
     if (queue->count == 0u)
         return KERNEL_THREAD_NO_RUNNABLE;
     registration = registration_at(queue->head);
-    waiter = registration_thread(registration);
-    if (!valid_thread(waiter) ||
-        wake_waiter(registration, queue, result, 0u, false) !=
+    waiter = registration_thread_at(queue->head);
+    if (wake_waiter(registration, queue, result, 0u, false) !=
             KERNEL_THREAD_OK)
         return KERNEL_THREAD_CORRUPT;
     *thread = waiter;
@@ -1378,11 +1422,14 @@ KernelThreadStatus wake_one_profiled(KernelThreadWaitQueue *queue,
     KernelThreadStatus status;
     KernelPerformanceMetric metric = KERNEL_PERFORMANCE_WAKE;
 
-    if (valid_wait_queue(queue) && queue->count != 0u) {
-        KernelThread *waiter = registration_thread(
-            registration_at(queue->head));
+    if (queue != NULL && queue->count != 0u &&
+        queue->head < THREAD_WAIT_REGISTRATION_COUNT) {
+        KernelThreadWaitRegistration *registration =
+            registration_at(queue->head);
+        KernelThread *waiter = registration_thread_at(queue->head);
 
-        if (valid_thread(waiter) &&
+        if (registration != NULL && registration->queue == queue &&
+            valid_thread(waiter) &&
             waiter->wait_mode == KERNEL_THREAD_WAIT_MULTIPLE)
             metric = KERNEL_PERFORMANCE_WAIT_SET_WAKE;
     }
@@ -1407,22 +1454,33 @@ KernelThreadStatus wake_all_fast(KernelThreadWaitQueue *queue,
                                  uint32_t result,
                                  uint32_t detail,
                                  bool write_one_detail,
+                                 bool irq_wake,
                                  uint32_t *woken_threads)
 {
+    uint32_t wake_cycle = 0u;
     uint32_t woken = 0u;
 
     if (!valid_wait_queue(queue))
         return KERNEL_THREAD_INVALID_ARGUMENT;
+    if (irq_wake && queue->count != 0u)
+        wake_cycle = kernel_performance_cycles_low();
     queue->sequence = kernel_generation_next(queue->sequence);
     while (queue->count != 0u) {
         KernelThreadWaitRegistration *registration =
             registration_at(queue->head);
+        KernelThread *waiter;
 
-        if (registration == NULL ||
-            wake_waiter(registration, queue, result, detail,
+        if (registration == NULL)
+            return KERNEL_THREAD_CORRUPT;
+        waiter = registration_thread_at(queue->head);
+        if (wake_waiter(registration, queue, result, detail,
                         write_one_detail) !=
                 KERNEL_THREAD_OK)
             return KERNEL_THREAD_CORRUPT;
+        if (irq_wake) {
+            irq_wake_cycles[waiter->slot] = wake_cycle;
+            irq_wake_bitmap |= (uint16_t)(1u << waiter->slot);
+        }
         ++woken;
     }
     if (woken_threads != NULL)
@@ -1435,23 +1493,28 @@ KernelThreadStatus wake_all_profiled(KernelThreadWaitQueue *queue,
                                      uint32_t result,
                                      uint32_t detail,
                                      bool write_one_detail,
+                                     bool irq_wake,
                                      uint32_t *woken_threads)
 {
     KernelPerformanceToken performance;
     KernelThreadStatus status;
     KernelPerformanceMetric metric = KERNEL_PERFORMANCE_WAKE;
 
-    if (valid_wait_queue(queue) && queue->count != 0u) {
-        KernelThread *waiter = registration_thread(
-            registration_at(queue->head));
+    if (queue != NULL && queue->count != 0u &&
+        queue->head < THREAD_WAIT_REGISTRATION_COUNT) {
+        KernelThreadWaitRegistration *registration =
+            registration_at(queue->head);
+        KernelThread *waiter = registration_thread_at(queue->head);
 
-        if (valid_thread(waiter) &&
+        if (registration != NULL && registration->queue == queue &&
+            valid_thread(waiter) &&
             waiter->wait_mode == KERNEL_THREAD_WAIT_MULTIPLE)
             metric = KERNEL_PERFORMANCE_WAIT_SET_WAKE;
     }
 
     performance = kernel_performance_begin_sampled(metric);
     status = wake_all_fast(queue, result, detail, write_one_detail,
+                           irq_wake,
                            woken_threads);
     kernel_performance_end(performance);
     return status;
@@ -1465,14 +1528,25 @@ KernelThreadStatus kernel_thread_wake_all(KernelThreadWaitQueue *queue,
                                          woken_threads);
 }
 
+KernelThreadStatus kernel_thread_wake_all_irq(
+    KernelThreadWaitQueue *queue, uint32_t result,
+    uint32_t *woken_threads)
+{
+    if (kernel_performance_sampling_enabled == 0u)
+        return wake_all_fast(queue, result, 0u, false, true,
+                             woken_threads);
+    return wake_all_profiled(queue, result, 0u, false, true,
+                             woken_threads);
+}
+
 KernelThreadStatus kernel_thread_wake_all_detail(
     KernelThreadWaitQueue *queue, uint32_t result, uint32_t detail,
     bool write_one_detail, uint32_t *woken_threads)
 {
     if (kernel_performance_sampling_enabled == 0u)
-        return wake_all_fast(queue, result, detail, write_one_detail,
+        return wake_all_fast(queue, result, detail, write_one_detail, false,
                              woken_threads);
-    return wake_all_profiled(queue, result, detail, write_one_detail,
+    return wake_all_profiled(queue, result, detail, write_one_detail, false,
                              woken_threads);
 }
 
@@ -1598,6 +1672,7 @@ KernelThreadStatus kernel_thread_retire_process(uint16_t process_slot,
 
             if (status != KERNEL_THREAD_OK)
                 return status;
+            clear_irq_wake(thread->slot);
         } else if (thread->state == KERNEL_THREAD_BLOCKED) {
             bool cancelled_deadline =
                 deadline_positions[thread->slot] !=
@@ -1740,11 +1815,15 @@ bool kernel_thread_pool_stats(KernelThreadPoolStats *stats)
             &thread_cache, slot);
 
         if (thread->occupied == 0u) {
-            if (claimed || !wait_row_clear(slot))
+            if (claimed || !wait_row_clear(slot) ||
+                (irq_wake_bitmap & (uint16_t)(1u << slot)) != 0u)
                 return false;
             continue;
         }
         if (!claimed)
+            return false;
+        if ((irq_wake_bitmap & (uint16_t)(1u << slot)) != 0u &&
+            thread->state != KERNEL_THREAD_READY)
             return false;
         if (thread->reap_pending != 0u)
             observed_reap_bitmap |= (uint16_t)(1u << slot);
@@ -1822,6 +1901,10 @@ bool kernel_thread_pool_stats(KernelThreadPoolStats *stats)
     stats->wait_registrations = wait_registration_count;
     stats->wait_registration_max = pool_stats.wait_registration_max;
     stats->max_wait_members = pool_stats.max_wait_members;
+    stats->irq_wake_to_run_samples =
+        pool_stats.irq_wake_to_run_samples;
+    stats->irq_wake_to_run_max_cycles =
+        pool_stats.irq_wake_to_run_max_cycles;
     return true;
 }
 

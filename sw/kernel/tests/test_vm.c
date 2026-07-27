@@ -46,6 +46,21 @@ void kernel_pmmu_load_tt1(const uint32_t *value)
     loaded_tt1 = *value;
 }
 
+void kernel_pmmu_read_tc(uint32_t *value)
+{
+    *value = loaded_tc;
+}
+
+void kernel_pmmu_read_srp(KernelPmmuRootPointer *root)
+{
+    *root = loaded_srp;
+}
+
+void kernel_pmmu_read_crp(KernelPmmuRootPointer *root)
+{
+    *root = loaded_crp;
+}
+
 void kernel_pmmu_flush_all(void)
 {
     ++flush_count;
@@ -59,6 +74,11 @@ void kernel_pmmu_set_user_function_codes(void)
 void kernel_cache_invalidate_all(void)
 {
     ++cache_invalidation_count;
+}
+
+uint32_t kernel_cache_read_control(void)
+{
+    return 0x00003119u;
 }
 
 static uint32_t *physical_words(uint32_t physical)
@@ -119,7 +139,7 @@ static void initialize_test(void)
               ASTRA_MEMORY_RANGE_KERNEL,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, 0x02090000u, 0x01d70000u,
+    add_range(&info, ASTRA_KERNEL_USABLE_ADDRESS, ASTRA_KERNEL_USABLE_SIZE,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
@@ -149,12 +169,14 @@ static void initialize_test(void)
 
 static void test_kernel_root_and_enable_sequence(void)
 {
+    KernelVmControlState control;
     KernelVmStats stats;
     uint32_t *root;
     uint32_t *low;
     uint32_t *high;
     uint32_t low_physical;
     uint32_t high_physical;
+    uint32_t translated;
 
     initialize_test();
     assert(kernel_vm_stats(&stats));
@@ -197,6 +219,23 @@ static void test_kernel_root_and_enable_sequence(void)
     assert(high[(0xfff20000u >> 12) & 0x3ffu] == 0xfff20041u);
     assert(high[(0xfff40000u >> 12) & 0x3ffu] == 0xfff40041u);
     assert(high[(0xfff30000u >> 12) & 0x3ffu] == 0u);
+    assert(kernel_vm_probe_current(0x02010004u, true, &translated) ==
+           KERNEL_VM_MAPPING_READ_WRITE);
+    assert(translated == 0x02010004u);
+    assert(kernel_vm_probe_current(0x02080000u, true, &translated) ==
+           KERNEL_VM_MAPPING_UNMAPPED);
+    assert(kernel_vm_probe_current(0x02401234u, true, &translated) ==
+           KERNEL_VM_MAPPING_READ_WRITE);
+    assert(translated == 0x02401234u);
+    assert(kernel_vm_probe_current(0xfff40020u, true, &translated) ==
+           KERNEL_VM_MAPPING_READ_WRITE);
+    assert(translated == 0xfff40020u);
+    assert(kernel_vm_probe_current(0xfff30000u, true, &translated) ==
+           KERNEL_VM_MAPPING_UNMAPPED);
+    assert(kernel_vm_probe_current(0x10000000u, false, &translated) ==
+           KERNEL_VM_MAPPING_UNMAPPED);
+    assert(kernel_vm_probe_current(0x10000000u, false, NULL) ==
+           KERNEL_VM_MAPPING_UNKNOWN);
 
     assert(kernel_vm_enable() == KERNEL_VM_OK);
     assert(kernel_vm_enabled());
@@ -208,6 +247,16 @@ static void test_kernel_root_and_enable_sequence(void)
     assert(loaded_tc == KERNEL_PMMU_TC_4K_10_10_SRE);
     assert(function_code_sets == 1u && flush_count == 1u);
     assert(cache_invalidation_count == 1u);
+    assert(kernel_vm_control_state(&control));
+    assert(control.srp_limit_descriptor == loaded_srp.limit_descriptor);
+    assert(control.srp_table_address == loaded_srp.table_address);
+    assert(control.crp_limit_descriptor == loaded_crp.limit_descriptor);
+    assert(control.crp_table_address == loaded_crp.table_address);
+    assert(control.translation_control == loaded_tc);
+    assert(control.cache_control == 0x00003119u);
+    assert(control.translation_enabled == 1u);
+    assert(control.reserved[0] == 0u && control.reserved[1] == 0u &&
+           control.reserved[2] == 0u);
 }
 
 static void test_page_table_injection_preserves_baseline(void)
@@ -268,6 +317,7 @@ static void test_map_switch_unmap_and_stale_guards(void)
     KernelFrameInfo frame;
     KernelVmStats stats;
     uint32_t physical;
+    uint32_t translated;
     uint32_t *root;
     uint32_t *table;
     uint32_t table_physical;
@@ -304,6 +354,9 @@ static void test_map_switch_unmap_and_stale_guards(void)
     assert(kernel_vm_switch(&space) == KERNEL_VM_OK);
     assert(loaded_crp.table_address == space.root_physical);
     assert(cache_invalidation_count == 3u);
+    assert(kernel_vm_probe_current(0x10000000u, false, &translated) ==
+           KERNEL_VM_MAPPING_READ_WRITE);
+    assert(translated == physical);
     assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_BUSY);
     assert(kernel_vm_unmap_page(&space, 0x10000000u) == KERNEL_VM_OK);
     assert(cache_invalidation_count == 4u);
@@ -314,7 +367,12 @@ static void test_map_switch_unmap_and_stale_guards(void)
            KERNEL_VM_NOT_MAPPED);
     assert(kernel_vm_map_page(&space, 0x10001000u, physical,
                               KERNEL_VM_READ) == KERNEL_VM_OK);
+    assert(kernel_vm_probe_current(0x10001004u, false, &translated) ==
+           KERNEL_VM_MAPPING_READ_ONLY);
+    assert(translated == physical + 4u);
     assert(kernel_vm_unmap_page(&space, 0x10001000u) == KERNEL_VM_OK);
+    assert(kernel_vm_probe_current(0x10001000u, false, &translated) ==
+           KERNEL_VM_MAPPING_UNMAPPED);
     assert(cache_invalidation_count == 6u);
     assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
     assert(cache_invalidation_count == 7u);

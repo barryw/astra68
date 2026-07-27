@@ -41,8 +41,9 @@ kernel.
 | `0x01FF8000` | `0x01FFFFFF` | 32 KiB | Firmware scratch, `BootInfo`, stack | Firmware until handoff data is copied |
 | `0x02000000` | `0x02003FFF` | 16 KiB | Early ring log | Kernel diagnostics |
 | `0x02004000` | `0x0200FFFF` | 48 KiB | Usable RAM | Physical-page allocator |
-| `0x02010000` | `0x0208FFFF` | 512 KiB | Kernel image, BSS, stack | Kernel |
-| `0x02090000` | `0x03DFFFFF` | 29.4375 MiB | Usable RAM | Physical-page allocator |
+| `0x02010000` | `0x0208FFFF` | 512 KiB | Kernel bootstrap image, BSS, stacks | Kernel |
+| `0x02090000` | `0x0209FFFF` | 64 KiB | Retained kernel trace | Kernel diagnostics |
+| `0x020A0000` | `0x03DFFFFF` | 29.375 MiB | Usable RAM | Physical-page allocator |
 | `0x03E00000` | `0x03E3FFFF` | 256 KiB | System-ROM backing | Firmware/ROM mapping |
 | `0x03E40000` | `0x03FFFFFF` | 1.75 MiB | Usable RAM | Physical-page allocator |
 
@@ -66,6 +67,7 @@ the high SDRAM aperture until a deliberate low-memory mapping is implemented.
 | `0xFFF00500` | `0xFFF0050F` | 16 B | Diagnostic UART | [VESTA.md](VESTA.md) |
 | `0xFFF00600` | `0xFFF0060B` | 12 B | Direct-SD recovery SPI | [VESTA.md](VESTA.md) |
 | `0xFFF00700` | `0xFFF00727` | 40 B | AstraHost input event queue | [VESTA.md](VESTA.md) |
+| `0xFFF00800` | `0xFFF0081F` | 32 B | Physical bus-fault diagnostics | [VESTA.md](VESTA.md) |
 | `0xFFF01000` | `0xFFF01FFF` | 4 KiB | Front-panel GPIO | [VESTA.md](VESTA.md) |
 
 The front-panel block deliberately owns a complete 4 KiB page. A protected OS

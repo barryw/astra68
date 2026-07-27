@@ -34,6 +34,7 @@
 static uint32_t screen_row;
 static uint32_t screen_col;
 static int screen_enabled;
+static uint32_t kernel_load_cycles;
 static const char *last_failure_phase;
 static uint32_t last_failure_address;
 static uint32_t last_failure_expected;
@@ -101,7 +102,9 @@ static void screen_puts(const char *s)
 
 static void screen_init(void)
 {
-    screen_enabled = VEGA->ID == VEGA_ID_MAGIC && (VEGA->CAPS & VEGA_CAP_POST_TEXT);
+    screen_enabled = (VESTA->SYS_STATUS & SYS_VIDEO_READY) != 0u &&
+                     VEGA->ID == VEGA_ID_MAGIC &&
+                     (VEGA->CAPS & VEGA_CAP_POST_TEXT) != 0u;
     screen_clear();
 }
 
@@ -910,18 +913,60 @@ static int load_kernel_image(uint32_t *image_size)
 {
     uint32_t size = (uint32_t)_kernel_blob_end -
                     (uint32_t)_kernel_blob_start;
-    volatile uint8_t *destination =
-        (volatile uint8_t *)ASTRA_KERNEL_LOAD_ADDRESS;
+    const uint32_t *source_words =
+        (const uint32_t *)(const void *)_kernel_blob_start;
+    volatile uint32_t *destination_words =
+        (volatile uint32_t *)ASTRA_KERNEL_LOAD_ADDRESS;
+    uint32_t word_count = size / sizeof(uint32_t);
+    uint32_t byte_offset = word_count * sizeof(uint32_t);
 
     if (size == 0u || size > ASTRA_KERNEL_RESERVED_SIZE)
         return post_failure_text("invalid kernel image size");
-    for (uint32_t index = 0; index < size; ++index)
-        destination[index] = _kernel_blob_start[index];
-    for (uint32_t index = 0; index < size; ++index) {
-        if (destination[index] != _kernel_blob_start[index])
+    if ((((uint32_t)_kernel_blob_start | ASTRA_KERNEL_LOAD_ADDRESS) &
+         (sizeof(uint32_t) - 1u)) != 0u)
+        return post_failure_text("unaligned kernel image");
+
+    uint32_t index = 0u;
+    while (word_count - index >= 8u) {
+        destination_words[index + 0u] = source_words[index + 0u];
+        destination_words[index + 1u] = source_words[index + 1u];
+        destination_words[index + 2u] = source_words[index + 2u];
+        destination_words[index + 3u] = source_words[index + 3u];
+        destination_words[index + 4u] = source_words[index + 4u];
+        destination_words[index + 5u] = source_words[index + 5u];
+        destination_words[index + 6u] = source_words[index + 6u];
+        destination_words[index + 7u] = source_words[index + 7u];
+        index += 8u;
+    }
+    while (index < word_count) {
+        destination_words[index] = source_words[index];
+        ++index;
+    }
+    volatile uint8_t *destination_bytes =
+        (volatile uint8_t *)ASTRA_KERNEL_LOAD_ADDRESS;
+    while (byte_offset < size) {
+        destination_bytes[byte_offset] = _kernel_blob_start[byte_offset];
+        ++byte_offset;
+    }
+
+    for (index = 0u; index < word_count; ++index) {
+        uint32_t actual = destination_words[index];
+
+        if (actual != source_words[index])
             return post_failure("kernel image copy",
-                                ASTRA_KERNEL_LOAD_ADDRESS + index,
-                                _kernel_blob_start[index], destination[index]);
+                                ASTRA_KERNEL_LOAD_ADDRESS +
+                                    index * sizeof(uint32_t),
+                                source_words[index], actual);
+    }
+    byte_offset = word_count * sizeof(uint32_t);
+    while (byte_offset < size) {
+        uint8_t actual = destination_bytes[byte_offset];
+
+        if (actual != _kernel_blob_start[byte_offset])
+            return post_failure("kernel image copy tail",
+                                ASTRA_KERNEL_LOAD_ADDRESS + byte_offset,
+                                _kernel_blob_start[byte_offset], actual);
+        ++byte_offset;
     }
     *image_size = size;
     return 1;
@@ -932,6 +977,7 @@ static int prepare_kernel_handoff(void)
     AstraEarlyLog *log = (AstraEarlyLog *)ASTRA_EARLY_LOG_ADDRESS;
     uint32_t image_size = 0u;
     uint32_t ram_end = VESTA->RAM_BASE + VESTA->RAM_SIZE;
+    uint32_t load_started;
 
     if (VESTA->RAM_BASE != ASTRA_EARLY_LOG_ADDRESS ||
         VESTA->RAM_SIZE != 0x02000000u ||
@@ -939,7 +985,9 @@ static int prepare_kernel_handoff(void)
         return post_failure_text("unsupported kernel RAM map");
     if ((ASTRAEA->BLIT_STATUS & BLIT_BUSY) != 0u)
         return post_failure_text("DMA active at kernel handoff");
+    load_started = VESTA->CPU_CYCLES_LO;
     if (!load_kernel_image(&image_size)) return 0;
+    kernel_load_cycles = VESTA->CPU_CYCLES_LO - load_started;
 
     astra_early_log_init(log, ASTRA_EARLY_LOG_SIZE);
     astra_early_log_puts(log, "firmware: POST passed\n");
@@ -986,7 +1034,7 @@ static int prepare_kernel_handoff(void)
                    ASTRA_MEMORY_RANGE_KERNEL,
                    ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                    ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
-    add_boot_range(0x02090000u, 0x01d70000u,
+    add_boot_range(ASTRA_KERNEL_USABLE_ADDRESS, ASTRA_KERNEL_USABLE_SIZE,
                    ASTRA_MEMORY_RANGE_USABLE,
                    ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                    ASTRA_MEMORY_CACHEABLE);
@@ -1041,7 +1089,9 @@ void kmain(void)
     if (!prepare_kernel_handoff())
         idle_forever("HALTED: KERNEL LOAD FAILURE\n",
                      "\n" ROM_BANNER " - KERNEL LOAD FAILURE\n");
-    uart_puts("OK\n");
+    uart_puts("OK, ");
+    uart_dec32(kernel_load_cycles);
+    uart_puts(" cycles\n");
     uart_puts("Starting Axiom kernel\n");
     boot_kernel_handoff(ASTRA_BOOT_HANDOFF_MAGIC, &kernel_boot_info,
                         ASTRA_KERNEL_LOAD_ADDRESS);

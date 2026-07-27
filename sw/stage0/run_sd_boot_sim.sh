@@ -27,7 +27,8 @@ if [[ "$reuse_sim" != "1" || ! -x obj_dir_sd_boot/Vtb_sd_boot ]]; then
         --top-module tb_sd_boot -Wno-lint -Wno-UNOPTFLAT --timing \
         -GTEST_BYTES="$test_bytes" -GPROGRESS="$progress" \
         tb_sd_boot.sv sd_card_spi_model.sv tb_sdram32_controller.sv \
-        ecp5pll_sim.sv ../astra_soc.sv ../astra_front_panel.sv ../vesta_irq_timer.sv ../boot_memory_map.sv \
+        ecp5pll_sim.sv ../astra_soc.sv ../astra_front_panel.sv \
+        ../vesta_irq_timer.sv ../vesta_bus_fault.sv ../boot_memory_map.sv \
         ../tg68k_cache_store.sv ../astraea_blitter.sv ../astraea_pixel_port.sv \
         ../astraea_draw.sv ../astraea_copper.sv ../astraea_chip.sv \
         ../vega_sprite_builder.sv \

@@ -9,6 +9,9 @@
     (1000u / KERNEL_PLATFORM_QUANTUM_MS)
 #define KERNEL_PLATFORM_CPU_HZ 12500000u
 #define KERNEL_PLATFORM_NS_PER_CPU_CYCLE 80u
+#define KERNEL_PLATFORM_STORAGE_IRQ_STATE_CHANGE (1u << 31)
+#define KERNEL_PLATFORM_USB_IRQ_DMA_FAULT         (1u << 31)
+#define KERNEL_PLATFORM_USB_IRQ_CONTROLLER        (1u << 29)
 
 typedef struct KernelPlatformBlockState {
     uint32_t capabilities;
@@ -42,6 +45,16 @@ typedef struct KernelPlatformCycleCount {
     uint32_t low;
 } KernelPlatformCycleCount;
 
+typedef struct KernelPlatformBusFault {
+    uint32_t status;
+    uint32_t address;
+    uint32_t target;
+    uint32_t cycles_high;
+    uint32_t cycles_low;
+    uint32_t lost;
+    uint32_t timeout_cycles;
+} KernelPlatformBusFault;
+
 void kernel_platform_interrupt_init(uint32_t cpu_hz);
 uint32_t kernel_platform_quantum_cycles(void);
 void kernel_platform_timer_arm(uint32_t cycles);
@@ -53,11 +66,47 @@ uint64_t kernel_platform_monotonic_ns(void);
 uint64_t kernel_platform_cycles_to_ns(uint64_t cycles);
 bool kernel_platform_deadline_to_cycles(int64_t deadline_ns,
                                         uint64_t *deadline_cycles);
-bool kernel_interrupt_dispatch(void);
+uint32_t kernel_platform_system_status(void);
+uint32_t kernel_platform_build_id(void);
+bool kernel_platform_post_text_present(void);
+bool kernel_platform_post_text_read(uint32_t cell, uint8_t *value);
+bool kernel_platform_post_text_write(uint32_t cell, uint8_t value);
+bool kernel_platform_bus_fault_read(KernelPlatformBusFault *fault);
+void kernel_platform_bus_fault_acknowledge(void);
+void kernel_platform_debug_marker(uint32_t value);
+bool kernel_platform_diagnostic_putc(uint8_t value);
+bool kernel_platform_diagnostic_try_putc(uint8_t value);
+uint32_t kernel_platform_diagnostic_rx_status(void);
+bool kernel_platform_diagnostic_getc(uint8_t *value);
+void kernel_platform_diagnostic_ack_overrun(void);
+bool kernel_platform_monitor_spi_present(void);
+uint32_t kernel_platform_monitor_spi_status(void);
+bool kernel_platform_monitor_spi_getc(uint8_t *value);
+bool kernel_platform_monitor_spi_try_putc(uint8_t value);
+void kernel_platform_monitor_spi_ack_errors(uint32_t errors);
+bool kernel_platform_irq_current(uint8_t *source, uint8_t *vector);
+bool kernel_platform_irq_configure(uint8_t source, uint8_t trigger,
+                                   uint8_t ipl, uint8_t vector,
+                                   void *context);
+bool kernel_platform_irq_mask(uint8_t source, void *context);
+bool kernel_platform_irq_enable(uint8_t source, void *context);
+bool kernel_platform_irq_acknowledge(uint8_t source, void *context);
+bool kernel_platform_timer_irq_service(uint8_t source, uint64_t timestamp,
+                                       void *context);
+bool kernel_platform_device_irq_capture(uint8_t source, uint32_t *status);
+bool kernel_platform_device_irq_complete(uint8_t source);
+bool kernel_platform_device_irq_quiesce(uint8_t source);
+uint32_t kernel_platform_qualification_irq_sources(void);
+bool kernel_platform_qualification_irq_prepare(uint8_t source);
+bool kernel_platform_qualification_irq_consume(uint8_t source,
+                                               uint32_t status);
 void kernel_enable_interrupts(void);
 void kernel_disable_interrupts(void);
+uint16_t kernel_interrupt_save_disable(void);
+void kernel_interrupt_restore(uint16_t status_register);
 
 bool kernel_platform_block_present(void);
+uint32_t kernel_platform_block_state_flags(void);
 bool kernel_platform_block_state(KernelPlatformBlockState *state);
 uint32_t kernel_platform_block_submit(uint32_t id, uint8_t operation,
                                       uint8_t flags, uint64_t lba,
@@ -66,11 +115,18 @@ uint32_t kernel_platform_block_submit(uint32_t id, uint8_t operation,
 bool kernel_platform_block_pop_completion(
     KernelPlatformBlockCompletion *completion);
 void kernel_platform_block_ack_state(void);
+bool kernel_platform_input_present(void);
 bool kernel_input_pop(KernelInputEvent *event);
 
 #if defined(KERNEL_PLATFORM_HOST_TEST)
+#include "astraea.h"
+#include "ohci.h"
 #include "vesta.h"
+#include "vega.h"
 VestaRegs *kernel_platform_test_registers(void);
+AstraeaRegs *kernel_platform_test_astraea_registers(void);
+VegaRegs *kernel_platform_test_vega_registers(void);
+OhciRegs *kernel_platform_test_ohci_registers(void);
 #endif
 
 #endif

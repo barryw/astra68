@@ -177,6 +177,8 @@ typedef struct KernelThreadPoolStats {
     uint32_t wait_registrations;
     uint32_t wait_registration_max;
     uint32_t max_wait_members;
+    uint32_t irq_wake_to_run_samples;
+    uint32_t irq_wake_to_run_max_cycles;
 } KernelThreadPoolStats;
 
 void kernel_thread_pool_init(void);
@@ -234,6 +236,9 @@ KernelThreadStatus kernel_thread_wake_one(KernelThreadWaitQueue *queue,
 KernelThreadStatus kernel_thread_wake_all(KernelThreadWaitQueue *queue,
                                           uint32_t result,
                                           uint32_t *woken_threads);
+KernelThreadStatus kernel_thread_wake_all_irq(
+    KernelThreadWaitQueue *queue, uint32_t result,
+    uint32_t *woken_threads);
 KernelThreadStatus kernel_thread_wake_all_detail(
     KernelThreadWaitQueue *queue, uint32_t result, uint32_t detail,
     bool write_one_detail, uint32_t *woken_threads);

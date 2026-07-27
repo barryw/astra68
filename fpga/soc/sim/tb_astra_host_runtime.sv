@@ -18,6 +18,7 @@ module tb_astra_host_runtime;
     wire [31:0] read_data;
     wire storage_irq;
     wire input_irq;
+    wire monitor_irq;
 
     wire request_valid;
     reg request_ready = 1'b0;
@@ -55,13 +56,22 @@ module tb_astra_host_runtime;
     reg [31:0] event_timestamp = 32'd0;
     reg [31:0] event_device_sequence = 32'd0;
 
-    astra_host_runtime dut (
+    reg monitor_input_valid = 1'b0;
+    wire monitor_input_ready;
+    reg [7:0] monitor_input_data = 8'd0;
+    wire monitor_output_valid;
+    reg monitor_output_ready = 1'b0;
+    wire [7:0] monitor_output_data;
+    integer monitor_index;
+
+    astra_host_runtime #(.MONITOR_ADDR_WIDTH(2)) dut (
         .cpu_clk(cpu_clk), .cpu_rst(cpu_rst),
         .host_select(host_select), .input_select(input_select),
         .reg_index(reg_index), .write_strobe(write_strobe),
         .write_data(write_data), .byte_enable(byte_enable),
         .read_data(read_data), .storage_irq(storage_irq),
-        .input_irq(input_irq), .mem_clk(mem_clk), .mem_rst(mem_rst),
+        .input_irq(input_irq), .monitor_irq(monitor_irq),
+        .mem_clk(mem_clk), .mem_rst(mem_rst),
         .request_valid(request_valid), .request_ready(request_ready),
         .request_id(request_id), .request_op(request_op),
         .request_flags(request_flags), .request_lba(request_lba),
@@ -84,7 +94,13 @@ module tb_astra_host_runtime;
         .event_host_generation(event_host_generation),
         .event_header(event_header), .event_value(event_value),
         .event_timestamp(event_timestamp),
-        .event_device_sequence(event_device_sequence)
+        .event_device_sequence(event_device_sequence),
+        .monitor_input_valid(monitor_input_valid),
+        .monitor_input_ready(monitor_input_ready),
+        .monitor_input_data(monitor_input_data),
+        .monitor_output_valid(monitor_output_valid),
+        .monitor_output_ready(monitor_output_ready),
+        .monitor_output_data(monitor_output_data)
     );
 
     task automatic host_write(
@@ -158,6 +174,52 @@ module tb_astra_host_runtime;
         cpu_rst = 1'b0;
         repeat (3) @(posedge mem_clk);
         mem_rst = 1'b0;
+
+        // The kernel monitor is available before storage HELLO. Both queues
+        // are bounded, preserve byte order across CDC, and report bad CPU
+        // operations without consuming or fabricating data.
+        expect_host_read(6'h19, 32'h4d4f4e49);
+        expect_host_read(6'h1a, 32'h00010000);
+        expect_host_read(6'h1b, 32'h00000007);
+        host_write(6'h1e, 32'd1, 4'b1111);
+        expect_host_read(6'h20, 32'h00000001);
+        host_write(6'h20, 32'h00000001, 4'b1111);
+        expect_host_read(6'h20, 32'd0);
+
+        wait (monitor_input_ready);
+        @(negedge mem_clk);
+        monitor_input_data = 8'h68;
+        monitor_input_valid = 1'b1;
+        @(negedge mem_clk);
+        monitor_input_valid = 1'b0;
+        wait (monitor_irq);
+        repeat (2) @(posedge cpu_clk);
+        expect_host_read(6'h1d, 32'h00000068);
+        host_write(6'h1e, 32'd1, 4'b1111);
+        repeat (2) @(posedge cpu_clk);
+        if (monitor_irq)
+            $fatal(1, "monitor IRQ did not clear after RX pop");
+
+        // Four FIFO entries plus the registered read-side prefetch slot are
+        // usable before backpressure is asserted.
+        for (monitor_index = 0; monitor_index < 5;
+             monitor_index = monitor_index + 1)
+            host_write(6'h1f, 32'h00000040 + monitor_index, 4'b1111);
+        host_write(6'h1f, 32'h000000ff, 4'b1111);
+        expect_host_read(6'h20, 32'h00000002);
+        for (monitor_index = 0; monitor_index < 5;
+             monitor_index = monitor_index + 1) begin
+            wait (monitor_output_valid);
+            if (monitor_output_data !== 8'h40 + monitor_index)
+                $fatal(1, "monitor TX ordering mismatch index=%0d",
+                       monitor_index);
+            @(negedge mem_clk);
+            monitor_output_ready = 1'b1;
+            @(negedge mem_clk);
+            monitor_output_ready = 1'b0;
+        end
+        host_write(6'h20, 32'h00000002, 4'b1111);
+        expect_host_read(6'h20, 32'd0);
 
         // Publish a live, writable 4 GiB-equivalent test medium.
         wait (state_ready);
@@ -272,7 +334,7 @@ module tb_astra_host_runtime;
         if (input_irq)
             $fatal(1, "input IRQ did not clear after POP");
 
-        $display("PASS AstraHost queued descriptors, validation, CDC, completions, media generations, and input events");
+        $display("PASS AstraHost block/input/monitor queues, validation, CDC, and bounded errors");
         $finish;
     end
 

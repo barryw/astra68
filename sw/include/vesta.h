@@ -112,7 +112,15 @@ typedef volatile struct {
     uint32_t BLOCK_HOST_GEN;        // 0x1A8
     uint32_t BLOCK_STATE_ACK;       // 0x1AC write bit 0
     uint32_t BLOCK_MAX_SECTORS;     // 0x1B0
-    uint32_t _r1[(0x200 - 0x1B4) / 4];
+    uint32_t MONITOR_ID;            // 0x1B4 "MONI"
+    uint32_t MONITOR_VERSION;       // 0x1B8
+    uint32_t MONITOR_CAPS;          // 0x1BC
+    uint32_t MONITOR_STATUS;        // 0x1C0 queue state and levels
+    uint32_t MONITOR_RX_DATA;       // 0x1C4 low byte; peek
+    uint32_t MONITOR_RX_POP;        // 0x1C8 write bit 0
+    uint32_t MONITOR_TX_DATA;       // 0x1CC write low byte
+    uint32_t MONITOR_ERROR;         // 0x1D0 RW1C
+    uint32_t _r1[(0x200 - 0x1D4) / 4];
     // region table 0x200
     VestaRegion REGION[16];  // 0x200..0x2FF
     // interrupt controller 0x300
@@ -148,6 +156,16 @@ typedef volatile struct {
     uint32_t INPUT_DEVICE_SEQ;  // 0x71C device[31:16], sequence[15:0]
     uint32_t INPUT_HOST_GEN;    // 0x720
     uint32_t INPUT_POP;         // 0x724 write bit 0
+    uint32_t _r6[(0x800 - 0x728) / 4];
+    // sticky physical bus-fault diagnostics 0x800
+    uint32_t BUS_FAULT_STATUS;    // 0x800 status and captured bus attributes
+    uint32_t BUS_FAULT_ADDRESS;   // 0x804 exact physical bus address
+    uint32_t BUS_FAULT_TARGET;    // 0x808 BUS_FAULT_TARGET_*
+    uint32_t BUS_FAULT_CYCLES_LO; // 0x80C low cycle timestamp
+    uint32_t BUS_FAULT_CYCLES_HI; // 0x810 high cycle timestamp
+    uint32_t BUS_FAULT_LOST;      // 0x814 saturating faults not recorded
+    uint32_t BUS_TIMEOUT_CYCLES;  // 0x818 maximum slave completion deadline
+    uint32_t BUS_FAULT_ACK;       // 0x81C RW1C BUS_FAULT_VALID
 } VestaRegs;
 
 #define VESTA ((VestaRegs *)VESTA_BASE)
@@ -239,6 +257,22 @@ typedef volatile struct {
 #define BLOCK_ERROR_BAD_ID        (1u << 7)
 #define BLOCK_ERROR_BAD_FLAGS     (1u << 8)
 
+// ---- AstraHost kernel-monitor queues ----
+#define MONITOR_ID_MAGIC 0x4D4F4E49u // "MONI"
+#define MONITOR_VERSION_1_0 0x00010000u
+#define MONITOR_CAP_RX  (1u << 0)
+#define MONITOR_CAP_TX  (1u << 1)
+#define MONITOR_CAP_IRQ (1u << 2)
+#define MONITOR_STATUS_RX_VALID (1u << 0)
+#define MONITOR_STATUS_TX_READY (1u << 1)
+#define MONITOR_STATUS_RX_EMPTY (1u << 2)
+#define MONITOR_STATUS_TX_FULL  (1u << 3)
+#define MONITOR_STATUS_RX_LEVEL(v) (((v) >> 8) & 0xFFu)
+#define MONITOR_STATUS_TX_LEVEL(v) (((v) >> 16) & 0xFFu)
+#define MONITOR_RX_POP_BIT (1u << 0)
+#define MONITOR_ERROR_RX_EMPTY (1u << 0)
+#define MONITOR_ERROR_TX_FULL  (1u << 1)
+
 // ---- MMU_CTRL ----
 #define MMU_ENABLE       (1u << 0)
 #define MMU_SUPER_BYPASS (1u << 1)
@@ -269,7 +303,7 @@ typedef volatile struct {
 #define IRQ_SRC_UART_TX  3
 #define IRQ_SRC_STORAGE  4
 #define IRQ_SRC_INPUT    5
-#define IRQ_SRC_RESERVED6 6
+#define IRQ_SRC_ASTRAHOST_MONITOR 6
 #define IRQ_SRC_USB       7
 #define IRQ_SRC_VEGA     8
 #define IRQ_SRC_ASTRAEA  9
@@ -303,6 +337,35 @@ typedef volatile struct {
 #define INPUT_EVENT_SEQUENCE(v) ((v) & 0xFFFFu)
 #define INPUT_POP_BIT (1u << 0)
 
+// ---- Physical bus-fault diagnostics ----
+#define BUS_FAULT_VALID    (1u << 0)
+#define BUS_FAULT_TIMEOUT  (1u << 1)
+#define BUS_FAULT_UNMAPPED (1u << 2)
+#define BUS_FAULT_DEVICE   (1u << 3)
+#define BUS_FAULT_WRITE    (1u << 4)
+#define BUS_FAULT_SIZE_SHIFT 5u
+#define BUS_FAULT_SIZE_MASK  (3u << BUS_FAULT_SIZE_SHIFT)
+#define BUS_FAULT_SIZE(status) \
+    (((status) & BUS_FAULT_SIZE_MASK) >> BUS_FAULT_SIZE_SHIFT)
+#define BUS_FAULT_FC_SHIFT 8u
+#define BUS_FAULT_FC_MASK  (7u << BUS_FAULT_FC_SHIFT)
+#define BUS_FAULT_FC(status) \
+    (((status) & BUS_FAULT_FC_MASK) >> BUS_FAULT_FC_SHIFT)
+
+#define BUS_FAULT_TARGET_UNKNOWN           0u
+#define BUS_FAULT_TARGET_UNMAPPED          1u
+#define BUS_FAULT_TARGET_SDRAM             2u
+#define BUS_FAULT_TARGET_USB               3u
+#define BUS_FAULT_TARGET_VEGA              4u
+#define BUS_FAULT_TARGET_ASTRAEA           5u
+#define BUS_FAULT_TARGET_ASTRAHOST         6u
+#define BUS_FAULT_TARGET_UART              7u
+#define BUS_FAULT_TARGET_SPI               8u
+#define BUS_FAULT_TARGET_PANEL             9u
+#define BUS_FAULT_TARGET_BOOT_MEMORY      10u
+#define BUS_FAULT_TARGET_FRAMEBUFFER_GUARD 11u
+#define BUS_FAULT_TARGET_EXTERNAL         12u
+
 // ---- UART_STATUS ----
 #define UART_TX_READY   (1u << 0)
 #define UART_TX_BUSY    (1u << 1)
@@ -321,6 +384,10 @@ typedef volatile struct {
 
 _Static_assert(offsetof(VestaRegs, BLOCK_ID) == 0x150u,
                "Vesta block-service ABI offset");
+_Static_assert(offsetof(VestaRegs, MONITOR_ID) == 0x1b4u,
+               "Vesta monitor ABI offset");
+_Static_assert(offsetof(VestaRegs, MONITOR_ERROR) == 0x1d0u,
+               "Vesta monitor-error ABI offset");
 _Static_assert(offsetof(VestaRegs, IRQ_PENDING) == 0x300u,
                "Vesta IRQ ABI offset");
 _Static_assert(offsetof(VestaRegs, TIMER) == 0x400u,
@@ -329,5 +396,9 @@ _Static_assert(offsetof(VestaRegs, INPUT_ID) == 0x700u,
                "Vesta input ABI offset");
 _Static_assert(offsetof(VestaRegs, INPUT_POP) == 0x724u,
                "Vesta input-pop ABI offset");
+_Static_assert(offsetof(VestaRegs, BUS_FAULT_STATUS) == 0x800u,
+               "Vesta bus-fault ABI offset");
+_Static_assert(offsetof(VestaRegs, BUS_FAULT_ACK) == 0x81cu,
+               "Vesta bus-fault ACK ABI offset");
 
 #endif // ASTRA_VESTA_H

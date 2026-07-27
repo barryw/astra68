@@ -11,7 +11,8 @@ module astra_host_runtime #(
     parameter [31:0] SDRAM_BYTES = 32'h02000000,
     parameter [15:0] MAX_SECTORS = 16,
     parameter integer QUEUE_ADDR_WIDTH = 2,
-    parameter integer INPUT_ADDR_WIDTH = 4
+    parameter integer INPUT_ADDR_WIDTH = 4,
+    parameter integer MONITOR_ADDR_WIDTH = 7
 ) (
     input  wire        cpu_clk,
     input  wire        cpu_rst,
@@ -24,6 +25,7 @@ module astra_host_runtime #(
     output reg  [31:0] read_data,
     output wire        storage_irq,
     output wire        input_irq,
+    output wire        monitor_irq,
 
     input  wire        mem_clk,
     input  wire        mem_rst,
@@ -62,7 +64,14 @@ module astra_host_runtime #(
     input  wire [31:0] event_header,
     input  wire [31:0] event_value,
     input  wire [31:0] event_timestamp,
-    input  wire [31:0] event_device_sequence
+    input  wire [31:0] event_device_sequence,
+
+    input  wire        monitor_input_valid,
+    output wire        monitor_input_ready,
+    input  wire [7:0]  monitor_input_data,
+    output wire        monitor_output_valid,
+    input  wire        monitor_output_ready,
+    output wire [7:0]  monitor_output_data
 );
     localparam [7:0] BLOCK_OP_READ  = 8'd1;
     localparam [7:0] BLOCK_OP_WRITE = 8'd2;
@@ -108,6 +117,14 @@ module astra_host_runtime #(
     localparam [5:0] HR_HOST_GEN       = 6'h16;
     localparam [5:0] HR_STATE_ACK      = 6'h17;
     localparam [5:0] HR_MAX_SECTORS    = 6'h18;
+    localparam [5:0] HR_MONITOR_ID      = 6'h19;
+    localparam [5:0] HR_MONITOR_VERSION = 6'h1a;
+    localparam [5:0] HR_MONITOR_CAPS    = 6'h1b;
+    localparam [5:0] HR_MONITOR_STATUS  = 6'h1c;
+    localparam [5:0] HR_MONITOR_RX_DATA = 6'h1d;
+    localparam [5:0] HR_MONITOR_RX_POP  = 6'h1e;
+    localparam [5:0] HR_MONITOR_TX_DATA = 6'h1f;
+    localparam [5:0] HR_MONITOR_ERROR   = 6'h20;
 
     // Input register indices, relative to Vesta offset 0x700.
     localparam [5:0] IR_ID             = 6'h00;
@@ -135,6 +152,7 @@ module astra_host_runtime #(
     reg [63:0] current_media_sectors;
     reg [15:0] current_max_sectors;
     reg        state_change_pending;
+    reg [31:0] monitor_error_status;
 
     function automatic [31:0] merge_bytes(
         input [31:0] old_value,
@@ -165,6 +183,12 @@ module astra_host_runtime #(
                      write_data[0];
     wire event_pop = input_select && write_strobe &&
                      reg_index == IR_POP && byte_enable[0] && write_data[0];
+    wire monitor_rx_pop_attempt = host_select && write_strobe &&
+        reg_index == HR_MONITOR_RX_POP && byte_enable[0] && write_data[0];
+    wire monitor_tx_push_attempt = host_select && write_strobe &&
+        reg_index == HR_MONITOR_TX_DATA && byte_enable[0];
+    wire monitor_error_clear = host_select && write_strobe &&
+        reg_index == HR_MONITOR_ERROR;
 
     wire [7:0] staged_op = staged_op_flags[7:0];
     wire [7:0] staged_flags = staged_op_flags[15:8];
@@ -313,8 +337,52 @@ module astra_host_runtime #(
         .overflow(event_fifo_overflow), .underflow(event_fifo_underflow)
     );
 
+    wire [7:0] monitor_rx_fifo_read_data;
+    wire monitor_rx_fifo_read_valid;
+    wire [MONITOR_ADDR_WIDTH:0] monitor_rx_write_level;
+    wire [MONITOR_ADDR_WIDTH:0] monitor_rx_read_level;
+    wire [7:0] monitor_rx_read_level_8 = monitor_rx_read_level;
+    wire monitor_rx_fifo_overflow;
+    wire monitor_rx_fifo_underflow;
+
+    astra_async_fifo #(
+        .DATA_WIDTH(8), .ADDR_WIDTH(MONITOR_ADDR_WIDTH)
+    ) monitor_rx_fifo_i (
+        .wr_clk(mem_clk), .wr_rst(mem_rst),
+        .wr_data(monitor_input_data), .wr_valid(monitor_input_valid),
+        .wr_ready(monitor_input_ready), .wr_level(monitor_rx_write_level),
+        .rd_clk(cpu_clk), .rd_rst(cpu_rst),
+        .rd_data(monitor_rx_fifo_read_data),
+        .rd_valid(monitor_rx_fifo_read_valid),
+        .rd_ready(monitor_rx_pop_attempt), .rd_level(monitor_rx_read_level),
+        .overflow(monitor_rx_fifo_overflow),
+        .underflow(monitor_rx_fifo_underflow)
+    );
+
+    wire monitor_tx_fifo_write_ready;
+    wire [MONITOR_ADDR_WIDTH:0] monitor_tx_write_level;
+    wire [MONITOR_ADDR_WIDTH:0] monitor_tx_read_level;
+    wire [7:0] monitor_tx_write_level_8 = monitor_tx_write_level;
+    wire monitor_tx_fifo_overflow;
+    wire monitor_tx_fifo_underflow;
+
+    astra_async_fifo #(
+        .DATA_WIDTH(8), .ADDR_WIDTH(MONITOR_ADDR_WIDTH)
+    ) monitor_tx_fifo_i (
+        .wr_clk(cpu_clk), .wr_rst(cpu_rst),
+        .wr_data(write_data[7:0]), .wr_valid(monitor_tx_push_attempt),
+        .wr_ready(monitor_tx_fifo_write_ready),
+        .wr_level(monitor_tx_write_level),
+        .rd_clk(mem_clk), .rd_rst(mem_rst),
+        .rd_data(monitor_output_data), .rd_valid(monitor_output_valid),
+        .rd_ready(monitor_output_ready), .rd_level(monitor_tx_read_level),
+        .overflow(monitor_tx_fifo_overflow),
+        .underflow(monitor_tx_fifo_underflow)
+    );
+
     assign storage_irq = completion_fifo_read_valid || state_change_pending;
     assign input_irq = event_fifo_read_valid;
+    assign monitor_irq = monitor_rx_fifo_read_valid;
 
     always @(posedge cpu_clk) begin
         if (cpu_rst) begin
@@ -331,6 +399,7 @@ module astra_host_runtime #(
             current_media_sectors <= 64'd0;
             current_max_sectors <= MAX_SECTORS;
             state_change_pending <= 1'b0;
+            monitor_error_status <= 32'd0;
         end else begin
             if (host_select && write_strobe) begin
                 case (reg_index)
@@ -384,6 +453,21 @@ module astra_host_runtime #(
                 current_media_sectors <= state_fifo_read_data[159:96];
                 current_max_sectors <= state_fifo_read_data[175:160];
             end
+
+            if (monitor_error_clear ||
+                (monitor_rx_pop_attempt && !monitor_rx_fifo_read_valid) ||
+                (monitor_tx_push_attempt &&
+                 !monitor_tx_fifo_write_ready)) begin
+                monitor_error_status <=
+                    (monitor_error_status &
+                     ~(monitor_error_clear ?
+                       (write_data & byte_mask) : 32'd0)) |
+                    {30'd0,
+                     monitor_tx_push_attempt &&
+                        !monitor_tx_fifo_write_ready,
+                     monitor_rx_pop_attempt &&
+                        !monitor_rx_fifo_read_valid};
+            end
         end
     end
 
@@ -424,6 +508,19 @@ module astra_host_runtime #(
                 HR_HOST_GEN: read_data = current_host_generation;
                 HR_STATE_ACK: read_data = {31'd0, state_change_pending};
                 HR_MAX_SECTORS: read_data = {16'd0, current_max_sectors};
+                HR_MONITOR_ID: read_data = 32'h4d4f4e49; // "MONI"
+                HR_MONITOR_VERSION: read_data = 32'h00010000;
+                HR_MONITOR_CAPS: read_data = 32'h00000007;
+                HR_MONITOR_STATUS: read_data = {
+                    8'd0, monitor_tx_write_level_8,
+                    monitor_rx_read_level_8, 4'd0,
+                    monitor_error_status[1:0],
+                    monitor_tx_fifo_write_ready,
+                    monitor_rx_fifo_read_valid
+                };
+                HR_MONITOR_RX_DATA:
+                    read_data = {24'd0, monitor_rx_fifo_read_data};
+                HR_MONITOR_ERROR: read_data = monitor_error_status;
                 default: read_data = 32'd0;
             endcase
         end else if (input_select) begin
@@ -451,6 +548,8 @@ module astra_host_runtime #(
             $fatal(1, "astra_host_runtime MAX_SECTORS must be nonzero");
         if (SDRAM_BYTES == 0)
             $fatal(1, "astra_host_runtime SDRAM_BYTES must be nonzero");
+        if (MONITOR_ADDR_WIDTH < 2 || MONITOR_ADDR_WIDTH > 7)
+            $fatal(1, "monitor FIFO must contain 4 to 128 bytes");
     end
 `endif
 endmodule

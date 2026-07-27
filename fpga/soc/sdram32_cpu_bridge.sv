@@ -18,6 +18,7 @@ module sdram32_cpu_bridge (
     input  wire        cpu_postable,
     input  wire        cpu_cache_flush,
     output wire        cpu_busy,
+    output wire        cpu_request_busy,
     output reg         cpu_done,
     output reg  [31:0] cpu_rdata,
     output reg  [31:0] cpu_line_hits,
@@ -103,6 +104,7 @@ module sdram32_cpu_bridge (
     // A DMA flush is also a bus fence. New CPU SDRAM accesses remain stalled
     // until DMA releases the fence, while an already-posted request drains.
     assign cpu_busy = request_busy_cpu || cpu_cache_flush;
+    assign cpu_request_busy = request_busy_cpu;
     wire flush_ack_cpu = cpu_cache_flush && !cpu_rst && !request_busy_cpu;
     assign mem_write = write_cpu;
     assign mem_addr = line_mem ?

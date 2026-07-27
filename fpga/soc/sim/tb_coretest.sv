@@ -201,6 +201,8 @@ module tb_coretest #(
                 end
             end
             if (sim_berr_match) begin
+                if (dut.cpu_dsack_n !== 2'b11 || dut.bus_write_stb)
+                    $fatal(1, "BERR cycle asserted DSACK or committed write");
                 if (DEBUG_IRQ) begin
                     $display("[%0t] BERR_MATCH adr=0x%08x fc=%b rw=%b siz=%b be=%b dout=0x%08x din=0x%08x tgpc=0x%08x",
                              $time, dut.cpu_adr, dut.cpu_fc, dut.cpu_rw_n,
@@ -628,10 +630,47 @@ module tb_coretest #(
                      !framebuffer_guard_fault_active) begin
             framebuffer_guard_fault_active <= 1'b1;
             framebuffer_guard_faults <= framebuffer_guard_faults + 1;
+            if (dut.cpu_dsack_n !== 2'b11 || dut.bus_write_stb)
+                $fatal(1, "framebuffer BERR asserted DSACK or committed write");
             if (dut.cpu_adr !== BERR_SDRAM_TARGET_ADDR ||
                 dut.cpu_rw_n !== 1'b0 || dut.cpu_siz !== 2'b00 ||
                 dut.be !== 4'b1111 || dut.cpu_dout !== 32'h13579bdf)
                 $fatal(1, "framebuffer guard fault cycle mismatch");
+        end
+    end
+`endif
+`ifdef CORETEST_SIM_BUS_FAULTS
+    integer unmapped_faults = 0;
+    reg unmapped_fault_active = 1'b0;
+    always @(posedge dut.clk) begin
+        if (dut.rst || dut.cpu_as_n) begin
+            unmapped_fault_active <= 1'b0;
+        end else if (dut.cpu_unmapped_fault && !unmapped_fault_active) begin
+            unmapped_fault_active <= 1'b1;
+            unmapped_faults <= unmapped_faults + 1;
+            if (dut.cpu_dsack_n !== 2'b11 ||
+                dut.bus_read_stb || dut.bus_write_stb)
+                $fatal(1, "unmapped BERR asserted DSACK or local bus strobe");
+            if (dut.cpu_rw_n !== 1'b0 || dut.cpu_fc !== 3'b101 ||
+                dut.cpu_siz !== 2'b10)
+                $fatal(1, "unmapped fault attributes mismatch: adr=%08x fc=%b rw=%b siz=%b be=%b data=%08x",
+                       dut.cpu_adr, dut.cpu_fc, dut.cpu_rw_n,
+                       dut.cpu_siz, dut.be, dut.cpu_dout);
+            if (unmapped_faults == 0 &&
+                (dut.cpu_adr !== 32'hfff00900 || dut.be !== 4'b1100 ||
+                 dut.cpu_dout !== 32'h24680000))
+                $fatal(1, "unmapped upper-word fault mismatch: adr=%08x be=%b data=%08x",
+                       dut.cpu_adr, dut.be, dut.cpu_dout);
+            if (unmapped_faults == 1 &&
+                (dut.cpu_adr !== 32'hfff00902 || dut.be !== 4'b0011 ||
+                 dut.cpu_dout !== 32'h0000ace0))
+                $fatal(1, "unmapped lower-word fault mismatch: adr=%08x be=%b data=%08x",
+                       dut.cpu_adr, dut.be, dut.cpu_dout);
+            if (unmapped_faults > 1)
+                $fatal(1, "unexpected extra unmapped fault %0d", unmapped_faults);
+            $display("[%0t] UNMAPPED_BERR beat=%0d adr=%08x siz=%b be=%b data=%08x",
+                     $time, unmapped_faults, dut.cpu_adr, dut.cpu_siz,
+                     dut.be, dut.cpu_dout);
         end
     end
 `endif
@@ -687,6 +726,11 @@ module tb_coretest #(
                 if (framebuffer_guard_faults != 1)
                     $fatal(1, "expected one framebuffer guard fault, got %0d",
                            framebuffer_guard_faults);
+`endif
+`ifdef CORETEST_SIM_BUS_FAULTS
+                if (unmapped_faults != 2)
+                    $fatal(1, "expected two unmapped physical beats, got %0d",
+                           unmapped_faults);
 `endif
                 if (pmmu_rmc_walks != 0) begin
                     if (pmmu_rmc_walks < 3)

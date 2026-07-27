@@ -7,11 +7,18 @@
 #include "dma.h"
 #include "dispatch.h"
 #include "exception.h"
+#include "fault.h"
+#include "interrupt.h"
+#include "irq.h"
+#include "irq_latency.h"
 #include "memory.h"
+#include "monitor.h"
 #include "panic.h"
 #include "performance.h"
 #include "platform.h"
 #include "process.h"
+#include "qualification.h"
+#include "trace.h"
 #include "user_copy.h"
 #include "vm.h"
 #include "worker.h"
@@ -30,6 +37,8 @@ extern uint8_t _kernel_entry[];
 extern uint8_t _kernel_image_start[];
 extern uint8_t _kernel_file_end[];
 extern uint8_t _kernel_memory_end[];
+extern uint8_t _kernel_trace_start[];
+extern uint8_t _kernel_trace_end[];
 extern uint8_t _kernel_stack_guard[];
 extern uint8_t _kernel_vectors[];
 extern uint8_t _k1_survivor_image_start[];
@@ -48,7 +57,16 @@ static AstraEarlyLog *early_log;
 static uint32_t screen_row;
 static uint32_t screen_col;
 static int screen_enabled;
+static uint32_t process_bootstrap_irqoff_cycles;
+static uint32_t process_init_cycles;
+static uint32_t trace_init_cycles;
+static uint32_t qualification_survivor_process_id;
 static KernelAddressSpace user_copy_selftest_space;
+static const KernelMonitorBuildInfo monitor_build_info = {
+    ASTRA_KERNEL_VERSION,
+    ASTRA_KERNEL_BUILD_UTC,
+    ASTRA_KERNEL_GIT_REVISION
+};
 #if ASTRA_KERNEL_SOAK_SELFTEST
 static KernelPlatformCycleCount soak_started;
 #endif
@@ -56,8 +74,12 @@ static KernelPlatformCycleCount soak_started;
 static void screen_clear(void)
 {
     if (!screen_enabled) return;
-    for (uint32_t index = 0; index < VEGA_POST_COLS * VEGA_POST_ROWS; ++index)
-        VEGA_POST_TEXT[index] = ' ';
+    for (uint32_t index = 0; index < VEGA_POST_COLS * VEGA_POST_ROWS; ++index) {
+        if (!kernel_platform_post_text_write(index, ' ')) {
+            screen_enabled = 0;
+            return;
+        }
+    }
     screen_row = SCREEN_TOP_MARGIN;
     screen_col = SCREEN_LEFT_MARGIN;
 }
@@ -69,12 +91,24 @@ static void screen_scroll(void)
 
     for (uint32_t row = SCREEN_TOP_MARGIN; row < last_row; ++row) {
         for (uint32_t col = SCREEN_LEFT_MARGIN; col < last_col; ++col) {
-            VEGA_POST_TEXT[row * VEGA_POST_COLS + col] =
-                VEGA_POST_TEXT[(row + 1u) * VEGA_POST_COLS + col];
+            uint8_t value;
+            uint32_t destination = row * VEGA_POST_COLS + col;
+            uint32_t source = (row + 1u) * VEGA_POST_COLS + col;
+
+            if (!kernel_platform_post_text_read(source, &value) ||
+                !kernel_platform_post_text_write(destination, value)) {
+                screen_enabled = 0;
+                return;
+            }
         }
     }
-    for (uint32_t col = SCREEN_LEFT_MARGIN; col < last_col; ++col)
-        VEGA_POST_TEXT[last_row * VEGA_POST_COLS + col] = ' ';
+    for (uint32_t col = SCREEN_LEFT_MARGIN; col < last_col; ++col) {
+        if (!kernel_platform_post_text_write(
+                last_row * VEGA_POST_COLS + col, ' ')) {
+            screen_enabled = 0;
+            return;
+        }
+    }
     screen_row = last_row;
     screen_col = SCREEN_LEFT_MARGIN;
 }
@@ -89,8 +123,12 @@ static void screen_putc(char value)
         screen_col = SCREEN_LEFT_MARGIN;
         ++screen_row;
     } else {
-        VEGA_POST_TEXT[screen_row * VEGA_POST_COLS + screen_col] =
-            (uint8_t)value;
+        if (!kernel_platform_post_text_write(
+                screen_row * VEGA_POST_COLS + screen_col,
+                (uint8_t)value)) {
+            screen_enabled = 0;
+            return;
+        }
         if (++screen_col == last_col) {
             screen_col = SCREEN_LEFT_MARGIN;
             ++screen_row;
@@ -101,15 +139,7 @@ static void screen_putc(char value)
 
 static void diagnostic_uart_putc(char value)
 {
-    uint32_t start = VESTA->CPU_CYCLES_LO;
-    uint32_t timeout = VESTA->CPU_HZ / 1000u;
-
-    if (timeout == 0u) timeout = 1u;
-    while ((VESTA->UART_STATUS & UART_TX_READY) == 0u) {
-        if ((uint32_t)(VESTA->CPU_CYCLES_LO - start) >= timeout)
-            return;
-    }
-    VESTA->UART_DATA = (uint8_t)value;
+    (void)kernel_platform_diagnostic_putc((uint8_t)value);
 }
 
 static void console_putc(char value)
@@ -165,8 +195,7 @@ static void console_init(void)
     early_log = (AstraEarlyLog *)ASTRA_EARLY_LOG_ADDRESS;
     if (!astra_early_log_validate(early_log, ASTRA_EARLY_LOG_SIZE))
         astra_early_log_init(early_log, ASTRA_EARLY_LOG_SIZE);
-    screen_enabled = VEGA->ID == VEGA_ID_MAGIC &&
-                     (VEGA->CAPS & VEGA_CAP_POST_TEXT) != 0u;
+    screen_enabled = kernel_platform_post_text_present();
     screen_clear();
 }
 
@@ -178,6 +207,8 @@ static void halt_forever(void)
 
 static void panic_worker_state(void)
 {
+    KernelInterruptStats interrupt_stats;
+    KernelIrqPoolStats irq_stats;
     KernelProcessMaintenanceDiagnostics maintenance;
     KernelWorkerStats stats;
 
@@ -189,6 +220,8 @@ static void panic_worker_state(void)
     console_hex32(stats.pending_work);
     console_puts(" retry=0x");
     console_hex32(stats.retry_work);
+    console_puts(" registered=0x");
+    console_hex32(stats.registered_work);
     console_puts(" signals=");
     console_dec32(stats.signals);
     console_puts(" dispatches=");
@@ -202,6 +235,32 @@ static void panic_worker_state(void)
     console_puts(" entries=");
     console_dec32(stats.main_entries);
     console_putc('\n');
+    if (kernel_interrupt_stats(&interrupt_stats)) {
+        console_puts("Deferred IRQ: pending=");
+        console_dec32(interrupt_stats.pending);
+        console_puts(" max=");
+        console_dec32(interrupt_stats.maximum_pending);
+        console_puts(" queued=");
+        console_dec32(interrupt_stats.queued);
+        console_puts(" dispatched=");
+        console_dec32(interrupt_stats.dispatched);
+        console_puts(" dropped=");
+        console_dec32(interrupt_stats.dropped);
+        console_putc('\n');
+    }
+    if (kernel_irq_pool_stats(&irq_stats)) {
+        console_puts("IRQ errors: vector=");
+        console_dec32(irq_stats.bad_vector_interrupts);
+        console_puts(" controller=");
+        console_dec32(irq_stats.controller_failures);
+        console_puts(" device=");
+        console_dec32(irq_stats.device_failures);
+        console_puts(" unclaimed=");
+        console_dec32(irq_stats.unclaimed_interrupts);
+        console_puts(" masked=");
+        console_dec32(irq_stats.masked_interrupts);
+        console_putc('\n');
+    }
     if (!kernel_process_maintenance_diagnostics(&maintenance) ||
         maintenance.failure == KERNEL_PROCESS_MAINTENANCE_NONE)
         return;
@@ -216,8 +275,41 @@ static void panic_worker_state(void)
     console_putc('\n');
 }
 
+static void panic_trace_records(void)
+{
+    KernelTraceRecord records[16];
+    uint32_t count = kernel_trace_copy_recent(records, 16u);
+
+    console_puts("Trace: newest ");
+    console_dec32(count);
+    console_puts(" records\n");
+    for (uint32_t index = 0u; index < count; ++index) {
+        const KernelTraceRecord *record = &records[index];
+
+        console_puts(" T ");
+        console_hex32(record->commit_sequence);
+        console_putc(' ');
+        console_hex32(record->timestamp_high);
+        console_hex32(record->timestamp_low);
+        console_puts(" e=");
+        console_hex32(record->event);
+        console_puts(" f=");
+        console_hex32(record->flags);
+        for (uint32_t argument = 0u; argument < 4u; ++argument) {
+            console_puts(" a=");
+            console_hex32(record->argument[argument]);
+        }
+        console_putc('\n');
+    }
+}
+
 static void panic_begin(const char *reason)
 {
+    (void)kernel_trace_write(
+        KERNEL_TRACE_EVENT_PANIC, 0u, (uint32_t)(uintptr_t)reason,
+        kernel_dispatch_last_supervisor_irq_pc(),
+        kernel_dispatch_last_supervisor_irq_sr(),
+        kernel_platform_build_id());
     screen_clear();
     early_log->flags |= ASTRA_EARLY_LOG_FLAG_PANIC;
     ++early_log->sequence;
@@ -229,7 +321,7 @@ static void panic_begin(const char *reason)
     console_puts("Built:  " ASTRA_KERNEL_BUILD_UTC "\n");
     console_puts("Git:    " ASTRA_KERNEL_GIT_REVISION "\n");
     console_puts("HW:     0x");
-    console_hex32(VESTA->BUILD_ID);
+    console_hex32(kernel_platform_build_id());
     console_putc('\n');
     if (kernel_dispatch_last_supervisor_irq_pc() != 0u) {
         console_puts("Last supervisor IRQ: SR=0x");
@@ -239,13 +331,14 @@ static void panic_begin(const char *reason)
         console_putc('\n');
     }
     panic_worker_state();
+    panic_trace_records();
 }
 
 static void panic_finish(void) __attribute__((noreturn));
 static void panic_finish(void)
 {
     console_puts("\nSYSTEM HALTED\n");
-    VESTA->SCRATCH = ASTRA_KERNEL_STATUS_PANIC;
+    kernel_platform_debug_marker(ASTRA_KERNEL_STATUS_PANIC);
     halt_forever();
 }
 
@@ -255,7 +348,60 @@ void kernel_panic(const char *reason)
     panic_finish();
 }
 
-void kernel_exception_panic(const void *raw_frame)
+static const char *fault_kind_name(uint8_t kind)
+{
+    switch ((KernelFaultKind)kind) {
+    case KERNEL_FAULT_PMMU_TRANSLATION:
+        return "PMMU translation";
+    case KERNEL_FAULT_PMMU_PROTECTION:
+        return "PMMU protection";
+    case KERNEL_FAULT_PHYSICAL_UNMAPPED:
+        return "physical unmapped";
+    case KERNEL_FAULT_PHYSICAL_TIMEOUT:
+        return "physical timeout";
+    case KERNEL_FAULT_PHYSICAL_DEVICE:
+        return "physical device";
+    case KERNEL_FAULT_PHYSICAL_EXTERNAL:
+        return "physical external";
+    case KERNEL_FAULT_KERNEL_BUG:
+        return "kernel access bug";
+    default:
+        return "invalid";
+    }
+}
+
+static void panic_fault_report(const KernelFaultReport *fault)
+{
+    if (fault == NULL)
+        return;
+    console_puts("\nClass:  ");
+    console_puts(fault_kind_name(fault->kind));
+    console_puts("\nPhysical: 0x");
+    console_hex32(fault->expected_physical);
+    if (fault->bus_record_present == 0u)
+        return;
+    console_puts("\nBus:      0x");
+    console_hex32(fault->bus_address);
+    console_puts("  status=0x");
+    console_hex32(fault->bus_status);
+    console_puts("  target=");
+    console_dec32(fault->bus_target);
+    console_puts("\nBus time: 0x");
+    console_hex32(fault->bus_cycles_high);
+    console_hex32(fault->bus_cycles_low);
+    console_puts("  lost=");
+    console_dec32(fault->bus_lost);
+    console_puts("  deadline=");
+    console_dec32(fault->bus_timeout_cycles);
+    console_puts("  matched=");
+    console_dec32(fault->bus_record_matched);
+}
+
+static void exception_panic(const void *raw_frame,
+                            const KernelFaultReport *fault)
+    __attribute__((noreturn));
+static void exception_panic(const void *raw_frame,
+                            const KernelFaultReport *fault)
 {
     KernelExceptionFrame frame;
     KernelExceptionStatus status = kernel_exception_decode(
@@ -281,9 +427,21 @@ void kernel_exception_panic(const void *raw_frame)
         console_hex32(frame.special_status);
         console_puts("\nFault:  0x");
         console_hex32(frame.fault_address);
+        panic_fault_report(fault);
     }
     console_putc('\n');
     panic_finish();
+}
+
+void kernel_exception_panic(const void *raw_frame)
+{
+    exception_panic(raw_frame, NULL);
+}
+
+void kernel_exception_panic_classified(const void *raw_frame,
+                                       const KernelFaultReport *fault)
+{
+    exception_panic(raw_frame, fault);
 }
 
 static bool bytes_equal(const uint8_t *left, const uint8_t *right,
@@ -371,6 +529,10 @@ static void validate_image_contract(void)
         boot_info.kernel_image_size != linked_image_size ||
         boot_info.kernel_memory_size < linked_memory_size)
         kernel_panic("kernel image contract mismatch");
+    if ((uint32_t)_kernel_trace_start != ASTRA_KERNEL_TRACE_ADDRESS ||
+        (uint32_t)(_kernel_trace_end - _kernel_trace_start) !=
+            ASTRA_KERNEL_TRACE_SIZE)
+        kernel_panic("retained trace contract mismatch");
     if (boot_info.early_log_base != ASTRA_EARLY_LOG_ADDRESS ||
         boot_info.early_log_size != ASTRA_EARLY_LOG_SIZE)
         kernel_panic("early log contract mismatch");
@@ -405,6 +567,15 @@ static void report_kernel_performance(
         add_saturating_u32(
             performance->metric[KERNEL_PERFORMANCE_AREA_UNMAP].overruns,
             performance->metric[KERNEL_PERFORMANCE_RING_NOTIFY].overruns));
+    uint32_t irq_overruns = add_saturating_u32(
+        performance->metric[KERNEL_PERFORMANCE_HARD_IRQ].overruns,
+        performance->metric[KERNEL_PERFORMANCE_HARD_IRQ_WAKE].overruns);
+    uint32_t endpoint_overruns = add_saturating_u32(
+        performance->metric[KERNEL_PERFORMANCE_IRQ_READ].overruns,
+        performance->metric[KERNEL_PERFORMANCE_IRQ_ACK].overruns);
+    uint32_t deferred_overruns = add_saturating_u32(
+        performance->metric[KERNEL_PERFORMANCE_DEVICE_BATCH].overruns,
+        performance->metric[KERNEL_PERFORMANCE_MONITOR_COMMAND].overruns);
 
     console_puts("K2 PERF irq syscall=");
     console_dec32(performance->metric[
@@ -527,9 +698,60 @@ static void report_kernel_performance(
     console_puts(" overruns=");
     console_dec32(shared_ipc_overruns);
     console_putc('\n');
+    console_puts("K10 PERF irq=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_HARD_IRQ].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_HARD_IRQ);
+    console_puts(" wake=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_HARD_IRQ_WAKE].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_HARD_IRQ_WAKE);
+    console_puts(" overruns=");
+    console_dec32(irq_overruns);
+    console_putc('\n');
+    console_puts("K10 PERF irq min=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_HARD_IRQ].minimum_cycles);
+    console_puts(" latest=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_HARD_IRQ].latest_cycles);
+    console_puts(" samples=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_HARD_IRQ].samples);
+    console_putc('\n');
+    console_puts("K10 PERF endpoint read=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_IRQ_READ].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_IRQ_READ);
+    console_puts(" ack=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_IRQ_ACK].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_IRQ_ACK);
+    console_puts(" overruns=");
+    console_dec32(endpoint_overruns);
+    console_putc('\n');
+    console_puts("K10 PERF worker=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_DEVICE_BATCH].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_DEVICE_BATCH);
+    console_puts(" monitor=");
+    console_dec32(performance->metric[
+        KERNEL_PERFORMANCE_MONITOR_COMMAND].maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_PERFORMANCE_BUDGET_MONITOR_COMMAND);
+    console_puts(" overruns=");
+    console_dec32(deferred_overruns);
+    console_putc('\n');
 #if ASTRA_KERNEL_SCHED_TRACE
     console_puts("K2 TRACE syscall max id=");
     console_dec32(kernel_dispatch_syscall_max_number());
+    console_puts(" arg=");
+    console_hex32(kernel_dispatch_syscall_max_argument());
     console_puts(" body=");
     console_dec32(kernel_dispatch_syscall_max_body_cycles());
     console_putc('\n');
@@ -539,6 +761,16 @@ static void report_kernel_performance(
         if (index != 0u)
             console_putc(',');
         console_dec32(kernel_dispatch_wait_set_trace_cycles(index));
+    }
+    console_putc('\n');
+    console_puts("K5 TRACE thread-create body/ticks=");
+    for (uint32_t index = 0u;
+         index < kernel_dispatch_thread_create_trace_count(); ++index) {
+        if (index != 0u)
+            console_putc(',');
+        console_dec32(kernel_dispatch_thread_create_trace_cycles(index));
+        console_putc('/');
+        console_dec32(kernel_dispatch_thread_create_trace_ticks(index));
     }
     console_putc('\n');
 #endif
@@ -569,24 +801,63 @@ static void report_kernel_performance_failure(
     console_putc('\n');
 }
 
-void kernel_process_milestone_reached(void)
+void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
 {
     KernelPerformanceMetric failed_metric;
     KernelPerformanceStats performance;
+    KernelIrqOffLatencyStats irqoff_stats;
     KernelSchedulerStats stats;
+    KernelTraceStageStats trace_stage_stats;
+    KernelWorkerStats worker_stats;
+    KernelIrqPoolStats irq_stats;
+    uint32_t performance_mask;
+    uint32_t qualification_authorized;
+    uint32_t qualification_completed;
 
     kernel_performance_freeze();
-    if (!kernel_process_stats(&stats) ||
-        !kernel_performance_stats(&performance))
+    if (validated == NULL)
         kernel_panic("scheduler statistics unavailable");
-    if (!kernel_performance_pass(&performance,
-                                 KERNEL_PERFORMANCE_REQUIRED_MASK,
+    kernel_bytes_copy(&stats, validated, sizeof(stats));
+    if (!kernel_performance_stats(&performance) ||
+        !kernel_irqoff_latency_stats(&irqoff_stats) ||
+        !kernel_irq_pool_stats(&irq_stats) ||
+        !kernel_trace_stage_stats(&trace_stage_stats) ||
+        !kernel_worker_stats(&worker_stats))
+        kernel_panic("scheduler statistics unavailable");
+    if (!kernel_process_qualification_status(
+            qualification_survivor_process_id,
+            &qualification_authorized, &qualification_completed) ||
+        qualification_completed != qualification_authorized ||
+        irq_stats.live_endpoints != 0u)
+        kernel_panic("K10 device qualification incomplete");
+    performance_mask =
+        qualification_completed == KERNEL_QUALIFICATION_IRQ_SOURCE_MASK ?
+            KERNEL_PERFORMANCE_RELEASE_MASK :
+            KERNEL_PERFORMANCE_REQUIRED_MASK;
+    if (!kernel_performance_pass(&performance, performance_mask,
                                  &failed_metric)) {
         report_kernel_performance_failure(&performance, failed_metric);
         kernel_panic("kernel performance budget exceeded");
     }
+    if (performance_mask == KERNEL_PERFORMANCE_RELEASE_MASK)
+        console_puts("K10 PERFORMANCE PASS\n");
     console_puts("\nUser tasks .......... OK, 5 ms one-shot quantum\n");
     console_puts("Fault containment ... OK, offender reaped\n");
+    console_puts("Device IRQs ......... ");
+    if (qualification_completed ==
+        KERNEL_QUALIFICATION_IRQ_SOURCE_MASK)
+        console_puts("K10 PASS");
+    else
+        console_puts("K10 partial");
+    console_puts(", mask=0x");
+    console_hex32(qualification_completed);
+    console_puts(" delivered/acked=");
+    console_dec32(irq_stats.deliveries);
+    console_putc('/');
+    console_dec32(irq_stats.acknowledgements);
+    console_puts(" owner-death=");
+    console_dec32(irq_stats.owner_deaths);
+    console_putc('\n');
     console_puts("Context switches .... ");
     console_dec32(stats.context_switches);
     console_puts("\nThread scheduler .... ");
@@ -689,6 +960,31 @@ void kernel_process_milestone_reached(void)
     console_dec32(stats.ring_active);
     console_puts(" active\n");
     report_kernel_performance(&performance);
+    console_puts("K10 LATENCY worker_dispatch_max=");
+    console_dec32(worker_stats.max_dispatch_latency_cycles);
+    console_puts(" endpoint_wake_run_max=");
+    console_dec32(stats.irq_wake_to_run_max_cycles);
+    console_puts(" irqoff_max=");
+    console_dec32(irqoff_stats.maximum_cycles);
+    console_putc('\n');
+    console_puts("K10 BOOT trace_init=");
+    console_dec32(trace_init_cycles);
+    console_puts(" process_init=");
+    console_dec32(process_init_cycles);
+    console_puts(" process_start_irqoff=");
+    console_dec32(process_bootstrap_irqoff_cycles);
+    console_putc('\n');
+    console_puts("K10 TRACE staged=");
+    console_dec32(trace_stage_stats.staged);
+    console_puts(" flushed=");
+    console_dec32(trace_stage_stats.flushed);
+    console_puts(" pending=");
+    console_dec32(trace_stage_stats.pending);
+    console_puts(" max=");
+    console_dec32(trace_stage_stats.maximum_pending);
+    console_puts(" dropped=");
+    console_dec32(trace_stage_stats.dropped);
+    console_putc('\n');
     console_puts("K2 PERFORMANCE PASS\n");
     console_puts("\nK8 SHARED BULK IPC PASS\n");
     console_puts("\nK7 MESSAGE PORTS PASS\n");
@@ -701,7 +997,7 @@ void kernel_process_milestone_reached(void)
     console_puts("\nK2 THREAD SUBSTRATE PASS\n");
     console_puts("\nK1 PROTECTED ENTRY PASS\n");
     console_puts("KERNEL MULTITASKING\n");
-    VESTA->SCRATCH = ASTRA_KERNEL_STATUS_K1_READY;
+    kernel_platform_debug_marker(ASTRA_KERNEL_STATUS_K1_READY);
 }
 
 #if ASTRA_KERNEL_SOAK_SELFTEST
@@ -760,7 +1056,7 @@ void kernel_process_soak_checkpoint(uint32_t cycles,
     console_puts("K2 PERFORMANCE SOAK PASS cycle=");
     console_dec32(cycles);
     console_putc('\n');
-    VESTA->SCRATCH = ASTRA_KERNEL_STATUS_K1_SOAK;
+    kernel_platform_debug_marker(ASTRA_KERNEL_STATUS_K1_SOAK);
 }
 #endif
 
@@ -779,12 +1075,24 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     uint32_t survivor_image_size;
     uint32_t survivor_entry_offset;
     uint32_t sibling_entry_offset;
+    uint32_t process_bootstrap_started;
+    uint32_t trace_started;
+    uint32_t qualification_sources;
 #if ASTRA_KERNEL_SOAK_SELFTEST
     KernelMemoryStats soak_baseline;
 #endif
 
-    VESTA->SCRATCH = ASTRA_KERNEL_STATUS_BOOTING;
+    kernel_platform_debug_marker(ASTRA_KERNEL_STATUS_BOOTING);
     console_init();
+    kernel_irqoff_latency_init();
+    trace_started = kernel_platform_cpu_cycles_low();
+    if (!kernel_trace_init() ||
+        !kernel_trace_write(
+            KERNEL_TRACE_EVENT_BOOT, 0u, handoff_magic,
+            (uint32_t)(uintptr_t)firmware_info,
+            kernel_platform_build_id(), 0u))
+        kernel_panic("retained trace initialization failed");
+    trace_init_cycles = kernel_platform_cpu_cycles_low() - trace_started;
     console_puts("AXIOM KERNEL v" ASTRA_KERNEL_VERSION "\n");
     console_puts("Built: " ASTRA_KERNEL_BUILD_UTC "\n");
     console_puts("Git:   " ASTRA_KERNEL_GIT_REVISION "\n\n");
@@ -811,6 +1119,8 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         kernel_panic("PMMU enable failed");
     if (kernel_worker_init() != KERNEL_WORKER_OK)
         kernel_panic("kernel worker initialization failed");
+    if (!kernel_monitor_init(&monitor_build_info))
+        kernel_panic("kernel monitor initialization failed");
     if (!kernel_memory_stats(&memory_stats))
         kernel_panic("physical memory stats unavailable");
     if (!kernel_vm_stats(&vm_stats))
@@ -871,30 +1181,36 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     console_dec32(vm_stats.kernel_thread_stack_guards);
     console_puts(" guarded, 8 KiB each\n");
 
-    kernel_platform_interrupt_init(boot_info.cpu_hz);
+    if (!kernel_interrupt_init(boot_info.cpu_hz))
+        kernel_panic("interrupt controller initialization failed");
+    process_bootstrap_started = kernel_platform_cpu_cycles_low();
+    kernel_process_init();
+    process_init_cycles =
+        kernel_platform_cpu_cycles_low() - process_bootstrap_started;
     kernel_enable_interrupts();
-    uint32_t timer_start = VESTA->CPU_CYCLES_LO;
+    uint32_t timer_start = kernel_platform_cpu_cycles_low();
     while (kernel_platform_ticks() < 2u) {
-        if ((uint32_t)(VESTA->CPU_CYCLES_LO - timer_start) >
+        if ((uint32_t)(kernel_platform_cpu_cycles_low() - timer_start) >
             boot_info.cpu_hz)
             kernel_panic("Vesta timer interrupt timeout");
     }
     console_puts("Vesta timer ........ OK, one-shot 5 ms\n");
 
-    if ((VESTA->SYS_STATUS & SYS_ASTRA_HOST) != 0u) {
+    if ((kernel_platform_system_status() & SYS_ASTRA_HOST) != 0u) {
         if (!kernel_platform_block_present())
             kernel_panic("AstraHost block controller missing");
-        uint32_t host_start = VESTA->CPU_CYCLES_LO;
-        while ((VESTA->BLOCK_STATE & BLOCK_STATE_LINK_UP) == 0u) {
-            if ((uint32_t)(VESTA->CPU_CYCLES_LO - host_start) >
+        uint32_t host_start = kernel_platform_cpu_cycles_low();
+        while ((kernel_platform_block_state_flags() &
+                BLOCK_STATE_LINK_UP) == 0u) {
+            if ((uint32_t)(kernel_platform_cpu_cycles_low() - host_start) >
                 boot_info.cpu_hz)
                 kernel_panic("AstraHost runtime handshake timeout");
         }
         console_puts("AstraHost runtime ... OK, media ");
-        console_puts((VESTA->BLOCK_STATE & BLOCK_STATE_MEDIA_PRESENT) != 0u ?
+        console_puts((kernel_platform_block_state_flags() &
+                      BLOCK_STATE_MEDIA_PRESENT) != 0u ?
                      "present\n" : "not provisioned\n");
-        kernel_platform_block_ack_state();
-        if (VESTA->INPUT_ID != INPUT_ID_MAGIC)
+        if (!kernel_platform_input_present())
             kernel_panic("AstraHost input controller missing");
         console_puts("Input queue ......... OK\n");
     } else {
@@ -921,12 +1237,16 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         (uint32_t)(_k1_offender_image_end - _k1_offender_image_start);
     offender_entry_offset =
         (uint32_t)(_k1_offender_image_entry - _k1_offender_image_start);
-    kernel_disable_interrupts();
-    kernel_process_init();
     if (kernel_process_create(_k1_survivor_image_start, survivor_image_size,
                               survivor_entry_offset, 0u,
                               &survivor_process_id) != KERNEL_PROCESS_OK)
         kernel_panic("survivor process creation failed");
+    qualification_sources = kernel_platform_qualification_irq_sources();
+    qualification_survivor_process_id = survivor_process_id;
+    if (kernel_process_qualification_authorize(
+            survivor_process_id, qualification_sources) !=
+            KERNEL_PROCESS_OK)
+        kernel_panic("survivor IRQ qualification authorization failed");
     if (kernel_process_create_thread(
             survivor_process_id, sibling_entry_offset, 0u,
             KERNEL_THREAD_PRIORITY_NORMAL + 1u, &sibling_thread_id) !=
@@ -940,6 +1260,11 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
                               offender_entry_offset, 0u,
                               &process_id) != KERNEL_PROCESS_OK)
         kernel_panic("fault process creation failed");
+    if (kernel_process_qualification_authorize(
+            process_id,
+            qualification_sources & IRQ_BIT(IRQ_SRC_ASTRAEA)) !=
+            KERNEL_PROCESS_OK)
+        kernel_panic("fault-process IRQ qualification authorization failed");
     if (kernel_process_grant_handle(
             survivor_process_id, process_id,
             KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_WAIT,
@@ -961,10 +1286,14 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     console_dec32(soak_baseline.free_frames);
     console_puts(" pages\n");
 #endif
+    console_puts("User processes ...... 2 ready, cache isolation armed\n");
+    console_puts("User threads ........ 3 ready, priority scheduler armed\n");
+    process_bootstrap_started = kernel_platform_cpu_cycles_low();
+    kernel_disable_interrupts();
     if (kernel_process_start(&first_context) != KERNEL_PROCESS_OK ||
         first_context == NULL)
         kernel_panic("initial process scheduling failed");
-    console_puts("User processes ...... 2 ready, cache isolation armed\n");
-    console_puts("User threads ........ 3 ready, priority scheduler armed\n");
+    process_bootstrap_irqoff_cycles =
+        kernel_platform_cpu_cycles_low() - process_bootstrap_started;
     kernel_enter_user(first_context);
 }

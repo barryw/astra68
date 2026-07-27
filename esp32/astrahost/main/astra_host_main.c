@@ -835,6 +835,20 @@ static esp_err_t run_runtime_service(void)
     esp_err_t error = fpga_service_hello();
     if (error != ESP_OK)
         return error;
+    astra_input_event_t link_event = {
+        .header = ((uint32_t)ASTRA_INPUT_SYSTEM << 24) |
+                  ((uint32_t)ASTRA_INPUT_SYSTEM_LINK_KIND << 16) |
+                  ASTRA_INPUT_SYSTEM_LINK_FLAGS,
+        .value = ASTRA_INPUT_SYSTEM_LINK_VALUE,
+        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000),
+        .device_sequence =
+            ((uint32_t)ASTRA_INPUT_SYSTEM_DEVICE_ID << 16) |
+            ((uint16_t)host_generation != 0u ?
+                 (uint16_t)host_generation : 1u),
+    };
+    error = service_input_event(&link_event);
+    if (error != ESP_OK)
+        return error;
 
     for (;;) {
         astra_input_event_t event;

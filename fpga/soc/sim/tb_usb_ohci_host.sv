@@ -22,6 +22,7 @@ module tb_usb_ohci_host;
     reg [31:0] cpu_wdata = 32'd0;
     wire cpu_busy;
     wire cpu_done;
+    wire cpu_error;
     wire [31:0] cpu_rdata;
     wire cpu_irq;
     wire mem_lock;
@@ -69,7 +70,8 @@ module tb_usb_ohci_host;
         .cpu_clk(cpu_clk), .cpu_rst(cpu_rst),
         .cpu_start(cpu_start), .cpu_write(cpu_write),
         .cpu_addr(cpu_addr), .cpu_be(cpu_be), .cpu_wdata(cpu_wdata),
-        .cpu_busy(cpu_busy), .cpu_done(cpu_done), .cpu_rdata(cpu_rdata),
+        .cpu_busy(cpu_busy), .cpu_done(cpu_done), .cpu_error(cpu_error),
+        .cpu_rdata(cpu_rdata),
         .cpu_irq(cpu_irq), .ctrl_clk(ctrl_clk), .ctrl_rst(ctrl_rst),
         .mem_clk(mem_clk), .mem_rst(mem_rst),
         .mem_lock(mem_lock), .mem_valid(mem_valid), .mem_ready(mem_ready),
@@ -106,6 +108,9 @@ module tb_usb_ohci_host;
             end
             if (!cpu_done)
                 $fatal(1, "OHCI control access timed out at %03x",
+                       byte_address);
+            if (cpu_error)
+                $fatal(1, "OHCI control access failed at %03x",
                        byte_address);
             result = cpu_rdata;
         end

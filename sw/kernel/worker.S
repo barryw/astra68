@@ -41,10 +41,12 @@ _kernel_restore_worker_context:
 kernel_worker_arch_wait:
 	| STOP in master mode at IPL0. The interrupt return restores MSP and
 	| execution continues here; mask again before C examines worker state.
-	| No registers are changed other than SR; the interrupt may clobber only
-	| registers covered by its normal entry/exit contract.
+	| The latency hooks and interrupt may clobber D0-D1/A0-A1; the C ABI
+	| already classifies those registers as caller-saved.
+	jsr     kernel_irqoff_latency_exit
 	stop    #0x3000
 	ori.w   #0x0700, %sr
+	jsr     kernel_irqoff_latency_enter
 	rts
 
 	.section .note.GNU-stack, "", @progbits

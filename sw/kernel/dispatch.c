@@ -1,17 +1,18 @@
 #include "dispatch.h"
 
 #include "exception.h"
+#include "fault.h"
+#include "interrupt.h"
 #include "panic.h"
 #include "performance.h"
 #include "platform.h"
 #include "process.h"
+#include "trace.h"
 #include "user_copy.h"
 #include "worker.h"
-#if ASTRA_KERNEL_SCHED_TRACE
-#include "vesta.h"
-#endif
 
 #include <astra/syscall.h>
+#include <vesta.h>
 
 #include <stddef.h>
 
@@ -20,16 +21,23 @@ static uint32_t last_supervisor_irq_pc;
 static uint16_t last_supervisor_irq_sr;
 #if ASTRA_KERNEL_SCHED_TRACE
 #define KERNEL_DISPATCH_WAIT_SET_TRACE_MAX 8u
+#define KERNEL_DISPATCH_THREAD_CREATE_TRACE_MAX 8u
 static uint32_t syscall_max_number;
+static uint32_t syscall_max_argument;
 static uint32_t syscall_max_body_cycles;
 static uint32_t wait_set_trace_cycles[KERNEL_DISPATCH_WAIT_SET_TRACE_MAX];
 static uint32_t wait_set_trace_count;
+static uint32_t thread_create_trace_cycles[
+    KERNEL_DISPATCH_THREAD_CREATE_TRACE_MAX];
+static uint32_t thread_create_trace_ticks[
+    KERNEL_DISPATCH_THREAD_CREATE_TRACE_MAX];
+static uint32_t thread_create_trace_count;
 #endif
 
 #if ASTRA_KERNEL_SCHED_TRACE
 static void scheduler_trace(uint32_t value)
 {
-    VESTA->SCRATCH = value;
+    kernel_platform_debug_marker(value);
 }
 #else
 static void scheduler_trace(uint32_t value)
@@ -61,6 +69,15 @@ uint32_t kernel_dispatch_syscall_max_number(void)
 #endif
 }
 
+uint32_t kernel_dispatch_syscall_max_argument(void)
+{
+#if ASTRA_KERNEL_SCHED_TRACE
+    return syscall_max_argument;
+#else
+    return 0u;
+#endif
+}
+
 uint32_t kernel_dispatch_syscall_max_body_cycles(void)
 {
 #if ASTRA_KERNEL_SCHED_TRACE
@@ -89,6 +106,37 @@ uint32_t kernel_dispatch_wait_set_trace_cycles(uint32_t index)
 #endif
 }
 
+uint32_t kernel_dispatch_thread_create_trace_count(void)
+{
+#if ASTRA_KERNEL_SCHED_TRACE
+    return thread_create_trace_count;
+#else
+    return 0u;
+#endif
+}
+
+uint32_t kernel_dispatch_thread_create_trace_cycles(uint32_t index)
+{
+#if ASTRA_KERNEL_SCHED_TRACE
+    return index < thread_create_trace_count ?
+        thread_create_trace_cycles[index] : 0u;
+#else
+    (void)index;
+    return 0u;
+#endif
+}
+
+uint32_t kernel_dispatch_thread_create_trace_ticks(uint32_t index)
+{
+#if ASTRA_KERNEL_SCHED_TRACE
+    return index < thread_create_trace_count ?
+        thread_create_trace_ticks[index] : 0u;
+#else
+    (void)index;
+    return 0u;
+#endif
+}
+
 uint32_t kernel_dispatch_last_supervisor_irq_pc(void)
 {
     return last_supervisor_irq_pc;
@@ -105,6 +153,76 @@ static void record_user_fault_irqoff(uint32_t started)
 
     if (elapsed > user_fault_irqoff_max_cycles)
         user_fault_irqoff_max_cycles = elapsed;
+}
+
+static bool fault_is_pmmu(const KernelFaultReport *fault)
+{
+    return fault->kind == KERNEL_FAULT_PMMU_TRANSLATION ||
+           fault->kind == KERNEL_FAULT_PMMU_PROTECTION;
+}
+
+static bool fault_is_physical(const KernelFaultReport *fault)
+{
+    return fault->kind == KERNEL_FAULT_PHYSICAL_UNMAPPED ||
+           fault->kind == KERNEL_FAULT_PHYSICAL_TIMEOUT ||
+           fault->kind == KERNEL_FAULT_PHYSICAL_DEVICE ||
+           fault->kind == KERNEL_FAULT_PHYSICAL_EXTERNAL;
+}
+
+static bool fault_is_fatal_memory_fabric(const KernelFaultReport *fault)
+{
+    return fault_is_physical(fault) &&
+           fault->bus_record_matched != 0u &&
+           fault->bus_target == BUS_FAULT_TARGET_SDRAM;
+}
+
+static uint16_t fault_trace_flags(const KernelFaultReport *fault,
+                                  bool stale)
+{
+    uint16_t flags = (uint16_t)(fault->kind &
+                                KERNEL_FAULT_TRACE_KIND_MASK);
+
+    flags |= (uint16_t)((fault->mapping <<
+                         KERNEL_FAULT_TRACE_MAPPING_SHIFT) &
+                        KERNEL_FAULT_TRACE_MAPPING_MASK);
+    if (fault->write != 0u)
+        flags |= KERNEL_FAULT_TRACE_WRITE;
+    if (fault->bus_record_matched != 0u)
+        flags |= KERNEL_FAULT_TRACE_RECORD_MATCHED;
+    if (stale)
+        flags |= KERNEL_FAULT_TRACE_RECORD_STALE;
+    if (fault->bus_lost != 0u)
+        flags |= KERNEL_FAULT_TRACE_RECORD_LOST;
+    return flags;
+}
+
+static void trace_access_fault(const KernelExceptionFrame *frame,
+                               const KernelFaultReport *fault)
+{
+    uint64_t bus_timestamp = ((uint64_t)fault->bus_cycles_high << 32) |
+                             fault->bus_cycles_low;
+
+    if (fault->bus_record_present != 0u &&
+        fault->bus_record_matched == 0u) {
+        (void)kernel_trace_write_at(
+            KERNEL_TRACE_EVENT_PHYSICAL_FAULT,
+            fault_trace_flags(fault, true), bus_timestamp,
+            fault->logical_address, fault->bus_address,
+            fault->bus_status, fault->bus_target);
+    }
+    if (fault_is_physical(fault)) {
+        (void)kernel_trace_write_at(
+            KERNEL_TRACE_EVENT_PHYSICAL_FAULT,
+            fault_trace_flags(fault, false), bus_timestamp,
+            fault->logical_address, fault->bus_address,
+            fault->bus_status, fault->bus_target);
+    } else {
+        (void)kernel_trace_write(
+            KERNEL_TRACE_EVENT_PMMU_FAULT,
+            fault_trace_flags(fault, false), fault->logical_address,
+            fault->expected_physical, frame->special_status,
+            frame->program_counter);
+    }
 }
 
 static __attribute__((noinline))
@@ -170,13 +288,38 @@ KernelDispatchTarget kernel_access_entry_dispatch(const uint32_t *registers,
                                                   uint32_t user_stack)
 {
     KernelExceptionFrame frame;
+    KernelFaultReport fault;
+    bool copy_recovered;
 
-    if (kernel_user_copy_handle_fault(raw_frame))
-        return KERNEL_DISPATCH_RESUME;
     if (kernel_exception_decode(raw_frame, KERNEL_EXCEPTION_FRAME_MAX_SIZE,
-                                &frame) != KERNEL_EXCEPTION_OK ||
-        frame.from_user == 0u)
+                                &frame) != KERNEL_EXCEPTION_OK)
         kernel_exception_panic(raw_frame);
+    copy_recovered = kernel_user_copy_handle_fault(raw_frame);
+    if (!kernel_fault_capture(&frame, &fault))
+        kernel_exception_panic(raw_frame);
+
+    trace_access_fault(&frame, &fault);
+    if (fault_is_fatal_memory_fabric(&fault))
+        kernel_exception_panic_classified(raw_frame, &fault);
+    if (fault_is_pmmu(&fault) && fault.bus_record_present != 0u &&
+        fault.bus_record_matched == 0u)
+        kernel_platform_bus_fault_acknowledge();
+    if (copy_recovered) {
+        if (fault_is_physical(&fault))
+            kernel_platform_bus_fault_acknowledge();
+        else if (!fault_is_pmmu(&fault))
+            kernel_exception_panic_classified(raw_frame, &fault);
+        return KERNEL_DISPATCH_RESUME;
+    }
+    if (fault_is_pmmu(&fault)) {
+        if (frame.from_user == 0u)
+            kernel_exception_panic_classified(raw_frame, &fault);
+        return dispatch_user_fault(registers, raw_frame, user_stack);
+    }
+    if (!fault_is_physical(&fault) || frame.from_user == 0u)
+        kernel_exception_panic_classified(raw_frame, &fault);
+
+    kernel_platform_bus_fault_acknowledge();
     return dispatch_user_fault(registers, raw_frame, user_stack);
 }
 
@@ -222,6 +365,7 @@ KernelDispatchTarget syscall_entry_dispatch_profiled(
     KernelDispatchTarget target;
 #if ASTRA_KERNEL_SCHED_TRACE
     uint32_t started;
+    uint32_t started_ticks = 0u;
     uint32_t elapsed;
 #endif
 
@@ -252,6 +396,8 @@ KernelDispatchTarget syscall_entry_dispatch_profiled(
     performance = kernel_performance_begin_sampled(metric);
 #if ASTRA_KERNEL_SCHED_TRACE
     started = kernel_platform_cpu_cycles_low();
+    if (metric == KERNEL_PERFORMANCE_THREAD_CREATE)
+        started_ticks = kernel_platform_ticks();
 #endif
     target = syscall_entry_dispatch_fast(registers, raw_frame, user_stack);
 #if ASTRA_KERNEL_SCHED_TRACE
@@ -260,10 +406,19 @@ KernelDispatchTarget syscall_entry_dispatch_profiled(
         registers[0] == ASTRA_SYSCALL_WAIT_MULTIPLE &&
         wait_set_trace_count < KERNEL_DISPATCH_WAIT_SET_TRACE_MAX)
         wait_set_trace_cycles[wait_set_trace_count++] = elapsed;
+    if (metric == KERNEL_PERFORMANCE_THREAD_CREATE &&
+        thread_create_trace_count <
+            KERNEL_DISPATCH_THREAD_CREATE_TRACE_MAX) {
+        thread_create_trace_cycles[thread_create_trace_count] = elapsed;
+        thread_create_trace_ticks[thread_create_trace_count] =
+            kernel_platform_ticks() - started_ticks;
+        ++thread_create_trace_count;
+    }
     if (metric == KERNEL_PERFORMANCE_SYSCALL_DISPATCH &&
         elapsed > syscall_max_body_cycles) {
         syscall_max_body_cycles = elapsed;
         syscall_max_number = registers != NULL ? registers[0] : UINT32_MAX;
+        syscall_max_argument = registers != NULL ? registers[1] : 0u;
     }
 #endif
     kernel_performance_end(performance);
@@ -279,15 +434,35 @@ KernelDispatchTarget kernel_syscall_entry_dispatch(
 }
 
 static __attribute__((noinline))
-KernelDispatchTarget timer_entry_dispatch_fast(
+KernelDispatchTarget interrupt_entry_dispatch_fast(
     const uint32_t *registers, const void *raw_frame, uint32_t user_stack)
 {
     KernelExceptionFrame frame;
     KernelCpuContext *next = NULL;
     KernelProcessStatus status;
+    KernelInterruptDispatchResult interrupt;
+    uint32_t woken_threads;
 
-    if (!kernel_interrupt_dispatch())
-        return KERNEL_DISPATCH_RESUME;
+    interrupt = kernel_interrupt_dispatch(&woken_threads);
+    if (interrupt == KERNEL_INTERRUPT_FATAL)
+        kernel_panic("interrupt dispatch failed");
+    if (interrupt != KERNEL_INTERRUPT_TIMER) {
+        if (woken_threads == 0u && !kernel_worker_work_pending())
+            return KERNEL_DISPATCH_RESUME;
+        if (kernel_exception_decode(raw_frame,
+                                    KERNEL_EXCEPTION_FRAME_MAX_SIZE,
+                                    &frame) != KERNEL_EXCEPTION_OK)
+            kernel_exception_panic(raw_frame);
+        if (frame.from_user == 0u || !kernel_process_active())
+            return KERNEL_DISPATCH_RESUME;
+        status = kernel_process_on_interrupt_wakeup(
+            registers, user_stack, raw_frame, &next);
+        if (status != KERNEL_PROCESS_OK || next == NULL)
+            kernel_panic("device interrupt scheduling failed");
+        if (kernel_worker_try_select())
+            return KERNEL_DISPATCH_WORKER;
+        return kernel_dispatch_user_target(next);
+    }
     if (kernel_exception_decode(raw_frame, KERNEL_EXCEPTION_FRAME_MAX_SIZE,
                                 &frame) != KERNEL_EXCEPTION_OK)
         kernel_exception_panic(raw_frame);
@@ -319,7 +494,7 @@ KernelDispatchTarget timer_entry_dispatch_fast(
 }
 
 static __attribute__((noinline))
-KernelDispatchTarget timer_entry_dispatch_profiled(
+KernelDispatchTarget interrupt_entry_dispatch_profiled(
     const uint32_t *registers, const void *raw_frame, uint32_t user_stack)
 {
     KernelPerformanceToken performance;
@@ -327,15 +502,17 @@ KernelDispatchTarget timer_entry_dispatch_profiled(
 
     performance = kernel_performance_begin_sampled(
         KERNEL_PERFORMANCE_TIMER_DISPATCH);
-    target = timer_entry_dispatch_fast(registers, raw_frame, user_stack);
+    target = interrupt_entry_dispatch_fast(registers, raw_frame, user_stack);
     kernel_performance_end(performance);
     return target;
 }
 
-KernelDispatchTarget kernel_timer_entry_dispatch(
+KernelDispatchTarget kernel_interrupt_entry_dispatch(
     const uint32_t *registers, const void *raw_frame, uint32_t user_stack)
 {
     if (kernel_performance_sampling_enabled == 0u)
-        return timer_entry_dispatch_fast(registers, raw_frame, user_stack);
-    return timer_entry_dispatch_profiled(registers, raw_frame, user_stack);
+        return interrupt_entry_dispatch_fast(registers, raw_frame,
+                                             user_stack);
+    return interrupt_entry_dispatch_profiled(registers, raw_frame,
+                                              user_stack);
 }

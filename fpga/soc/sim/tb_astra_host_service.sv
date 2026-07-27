@@ -67,12 +67,20 @@ module tb_astra_host_service;
     wire [31:0] event_timestamp;
     wire [31:0] event_device_sequence;
 
+    wire monitor_input_valid;
+    reg monitor_input_ready = 1'b0;
+    wire [7:0] monitor_input_data;
+    reg monitor_output_valid = 1'b0;
+    wire monitor_output_ready;
+    reg [7:0] monitor_output_data = 8'd0;
+
     reg [7:0] memory [0:2047];
     reg [7:0] boot_memory [0:31];
     reg response_pending = 1'b0;
     reg [31:0] response_data = 32'd0;
     integer mem_transactions = 0;
-    reg saw_cache_flush = 1'b0;
+    integer cache_flush_cycles = 0;
+    integer saved_cache_flush_cycles;
 
     reg [7:0] tx_queue [0:4095];
     integer tx_write = 0;
@@ -135,7 +143,13 @@ module tb_astra_host_service;
         .runtime_event_header(event_header),
         .runtime_event_value(event_value),
         .runtime_event_timestamp(event_timestamp),
-        .runtime_event_device_sequence(event_device_sequence)
+        .runtime_event_device_sequence(event_device_sequence),
+        .runtime_monitor_input_valid(monitor_input_valid),
+        .runtime_monitor_input_ready(monitor_input_ready),
+        .runtime_monitor_input_data(monitor_input_data),
+        .runtime_monitor_output_valid(monitor_output_valid),
+        .runtime_monitor_output_ready(monitor_output_ready),
+        .runtime_monitor_output_data(monitor_output_data)
     );
 
     function automatic [31:0] crc32_byte(
@@ -165,7 +179,7 @@ module tb_astra_host_service;
         end
 
         if (cache_flush)
-            saw_cache_flush <= 1'b1;
+            cache_flush_cycles <= cache_flush_cycles + 1;
 
         mem_rsp_valid <= response_pending;
         mem_rdata <= response_data;
@@ -475,8 +489,10 @@ module tb_astra_host_service;
         expect_byte("8");
         expect_byte("H");
         expect_byte(8'd1);
-        expect_byte(8'd1);
-        for (i = 7; i < 15; i = i + 1)
+        expect_byte(8'd2);
+        expect_byte(8'h00);
+        expect_byte(8'h0f);
+        for (i = 9; i < 15; i = i + 1)
             receive_byte(received);
 
         boot_crc = 32'hffffffff;
@@ -484,7 +500,7 @@ module tb_astra_host_service;
             boot_crc = crc32_byte(boot_crc, i == 0 ? 8'h02 :
                 i == 4 ? 8'hff : i == 5 ? 8'he0 : i == 6 ? 8'h04 : 8'h00);
         boot_crc = ~boot_crc;
-        saw_cache_flush = 1'b0;
+        saved_cache_flush_cycles = cache_flush_cycles;
         pending_guard_start = 25'h1e00000;
         pending_guard_end = 26'h1e00008;
         pending_guard_valid = 1'b1;
@@ -512,8 +528,43 @@ module tb_astra_host_service;
         expect_byte(8'h00);
         if (boot_memory[0] != 8'h02 || boot_memory[4] != 8'hff)
             $fatal(1, "legacy boot data mismatch");
-        if (!saw_cache_flush)
+        if (cache_flush_cycles == saved_cache_flush_cycles)
             $fatal(1, "legacy boot DMA did not request cache invalidation");
+
+        // Monitor traffic is independent of storage negotiation. Each write
+        // is one retry-safe byte and each read consumes at most one queued
+        // response byte.
+        $display("service test: kernel monitor");
+        start_runtime(8'h31, 16'd1);
+        send_byte("h");
+        expect_byte(8'h07);
+        if (monitor_input_valid)
+            $fatal(1, "full monitor input queue accepted a byte");
+
+        monitor_input_ready = 1'b1;
+        start_runtime(8'h31, 16'd1);
+        send_byte("h");
+        wait (monitor_input_valid);
+        if (monitor_input_data != "h")
+            $fatal(1, "monitor input byte mismatch");
+        expect_byte(8'h00);
+        monitor_input_ready = 1'b0;
+
+        start_runtime(8'h31, 16'd0);
+        expect_byte(8'h03);
+        start_runtime(8'h32, 16'd0);
+        expect_byte(8'h00);
+        expect_byte(8'h00);
+
+        monitor_output_data = "K";
+        monitor_output_valid = 1'b1;
+        start_runtime(8'h32, 16'd0);
+        wait (monitor_output_ready);
+        @(negedge clk);
+        monitor_output_valid = 1'b0;
+        expect_byte(8'h00);
+        expect_byte(8'h01);
+        expect_byte("K");
 
         $display("service test: hello");
         start_runtime(8'h20, 16'd0);
@@ -532,7 +583,7 @@ module tb_astra_host_service;
 
         $display("service test: read request");
         poll_request(32'h11, 8'd1, 32'h02000100, 32'd2, 32'd1);
-        saw_cache_flush = 1'b0;
+        saved_cache_flush_cycles = cache_flush_cycles;
         saved_transactions = mem_transactions;
         send_push_bad_crc(32'h11, 32'd0);
         if (mem_transactions != saved_transactions)
@@ -545,7 +596,7 @@ module tb_astra_host_service;
             $fatal(1, "protected push reached SDRAM");
         front_guard_valid = 1'b0;
         send_push(32'h11, 32'd0);
-        if (!saw_cache_flush)
+        if (cache_flush_cycles == saved_cache_flush_cycles)
             $fatal(1, "SD-to-RAM DMA did not request cache invalidation");
         for (i = 0; i < 256; i = i + 1)
             if (memory[256 + i] !== pattern(i))
@@ -707,7 +758,7 @@ module tb_astra_host_service;
         if (state_flags != 32'h00000007)
             $fatal(1, "runtime link did not recover after HELLO");
 
-        $display("PASS AstraHost boot, block DMA, CRC/retry, generations, input, cache coherency, timeout, and link recovery");
+        $display("PASS AstraHost boot, block/input/monitor, DMA, retry, timeout, and recovery");
         $finish;
     end
 endmodule

@@ -15,7 +15,8 @@ cp ../../../sw/boot/rom_boot.hex rom_init.hex
 CORE_OUT=boot_core.v bash mkcore.sh
 verilator --binary -j 0 --Mdir obj_dir_boot --top-module tb_boot \
     -Wno-lint -Wno-UNOPTFLAT --timing \
-    tb_boot.sv ../astra_soc.sv ../astra_front_panel.sv ../vesta_irq_timer.sv ../boot_memory_map.sv ../tg68k_cache_store.sv \
+    tb_boot.sv ../astra_soc.sv ../astra_front_panel.sv ../vesta_irq_timer.sv \
+    ../vesta_bus_fault.sv ../boot_memory_map.sv ../tg68k_cache_store.sv \
     ../astraea_blitter.sv ../astraea_pixel_port.sv ../astraea_draw.sv \
     ../astraea_copper.sv ../astraea_chip.sv \
     ../vega_sprite_builder.sv ../vega_video.sv \

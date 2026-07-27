@@ -3,7 +3,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010004
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010005
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -32,6 +32,12 @@
 #define ASTRA_SYSCALL_AREA_UNMAP       24
 #define ASTRA_SYSCALL_RING_CREATE      25
 #define ASTRA_SYSCALL_RING_NOTIFY      26
+#define ASTRA_SYSCALL_IRQ_READ         27
+#define ASTRA_SYSCALL_IRQ_ACK          28
+#define ASTRA_SYSCALL_IRQ_ARM          29
+#define ASTRA_SYSCALL_IRQ_MASK         30
+#define ASTRA_SYSCALL_IRQ_RECOVER      31
+#define ASTRA_SYSCALL_IRQ_REVOKE       32
 
 #define ASTRA_SYSCALL_PROCESS_EXIT ASTRA_SYSCALL_EXIT
 
@@ -72,6 +78,11 @@
 #define ASTRA_WAIT_MULTIPLE_MAX 16
 #define ASTRA_WAIT_INDEX_NONE 0xffffffff
 
+#define ASTRA_IRQ_RECORD_SIZE 16u
+#define ASTRA_IRQ_EVENT_OVERFLOW     (1u << 0)
+#define ASTRA_IRQ_EVENT_STORM        (1u << 1)
+#define ASTRA_IRQ_EVENT_DEVICE_ERROR (1u << 2)
+
 #ifndef ASTRA_AREA_ABI_CONSTANTS_DEFINED
 #define ASTRA_AREA_ABI_CONSTANTS_DEFINED 1
 #define ASTRA_AREA_SIZE_MAX 0x00010000u
@@ -108,6 +119,16 @@
 #ifndef __ASSEMBLER__
 
 #include <stdint.h>
+
+typedef struct AstraIrqRecord {
+    uint32_t timestamp_high;
+    uint32_t timestamp_low;
+    uint32_t status;
+    uint32_t sequence;
+} AstraIrqRecord;
+
+_Static_assert(sizeof(AstraIrqRecord) == ASTRA_IRQ_RECORD_SIZE,
+               "IRQ record ABI size changed");
 
 #ifndef ASTRA_MESSAGE_HEADER_DEFINED
 #define ASTRA_MESSAGE_HEADER_DEFINED 1

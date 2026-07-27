@@ -11,8 +11,9 @@ document defines how the kernel translates, owns, and changes those ranges.
 |---|---:|---|
 | `0x02000000..0x02003FFF` | 16 KiB | wired early log |
 | `0x02004000..0x0200FFFF` | 48 KiB | allocatable after handoff |
-| `0x02010000..0x0208FFFF` | 512 KiB | wired kernel reservation |
-| `0x02090000..0x03DFFFFF` | 29.4375 MiB | allocatable |
+| `0x02010000..0x0208FFFF` | 512 KiB | wired kernel bootstrap reservation |
+| `0x02090000..0x0209FFFF` | 64 KiB | wired retained trace |
+| `0x020A0000..0x03DFFFFF` | 29.375 MiB | allocatable |
 | `0x03E00000..0x03E3FFFF` | 256 KiB | wired ROM backing |
 | `0x03E40000..0x03FFFFFF` | 1.75 MiB | allocatable |
 | `0xFFE00000..0xFFE3FFFF` | 256 KiB | read/execute ROM alias |

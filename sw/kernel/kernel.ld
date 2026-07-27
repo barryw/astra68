@@ -10,6 +10,7 @@ PHDRS {
 
 MEMORY {
   KERNEL (rwx) : ORIGIN = 0x02010000, LENGTH = 512K
+  TRACE  (rw)  : ORIGIN = 0x02090000, LENGTH = 64K
 }
 
 SECTIONS {
@@ -77,7 +78,17 @@ SECTIONS {
   } > KERNEL :data
 
   . = ALIGN(4096);
-  _kernel_memory_end = .;
+  _kernel_bootstrap_end = .;
+
+  .kernel_trace ORIGIN(TRACE) (NOLOAD) : {
+    . = ALIGN(16);
+    _kernel_trace_start = .;
+    KEEP(*(.kernel_trace))
+    . = ALIGN(16);
+    _kernel_trace_end = .;
+  } > TRACE :data
+
+  _kernel_memory_end = _kernel_trace_end;
 
   /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) }
 }
@@ -95,5 +106,9 @@ ASSERT((_kernel_thread_stacks_start & 4095) == 0,
        "kernel thread stack arena must remain page aligned")
 ASSERT(_kernel_thread_stacks_end - _kernel_thread_stacks_start == 196608,
        "kernel thread stack arena size changed")
-ASSERT(_kernel_memory_end <= ORIGIN(KERNEL) + LENGTH(KERNEL),
+ASSERT(_kernel_bootstrap_end <= ORIGIN(KERNEL) + LENGTH(KERNEL),
        "kernel exceeds its reserved bootstrap region")
+ASSERT(ORIGIN(TRACE) == ORIGIN(KERNEL) + LENGTH(KERNEL),
+       "trace must directly follow the bootstrap region")
+ASSERT(_kernel_trace_end - _kernel_trace_start == LENGTH(TRACE),
+       "retained trace must occupy exactly 64 KiB")
