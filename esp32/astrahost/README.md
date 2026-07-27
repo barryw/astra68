@@ -67,6 +67,18 @@ ASTRA_FPGA_SPI_HZ=10000000 ./build-docker.sh
 The output is under `build/`. Flashing is intentionally separate from building
 so an ordinary build cannot alter the board or SD card.
 
+For physical AstraHost-SPI kernel-monitor qualification, build the isolated
+diagnostic image with:
+
+```sh
+ASTRA_MONITOR_SELFTEST=1 ./build-docker.sh
+```
+
+Its output is under `build-monitor-selftest/`. After kernel startup, it sends
+`build`, `irqs`, `mem`, and `trace` through the SPI monitor protocol, validates
+each bounded reply, logs `ASTRAHOST MONITOR SELFTEST PASS`, and continues the
+normal storage/input service. Normal builds do not contain or run this test.
+
 For initial board provisioning only, a validated package can be embedded in a
 separate firmware build:
 

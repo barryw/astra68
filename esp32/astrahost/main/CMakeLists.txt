@@ -39,3 +39,9 @@ if(DEFINED ASTRA_FPGA_SPI_HZ)
         ${COMPONENT_LIB} PRIVATE ASTRA_FPGA_SPI_HZ=${ASTRA_FPGA_SPI_HZ}
     )
 endif()
+
+if(ASTRA_MONITOR_SELFTEST)
+    target_compile_definitions(
+        ${COMPONENT_LIB} PRIVATE ASTRA_MONITOR_SELFTEST=1
+    )
+endif()

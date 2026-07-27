@@ -443,6 +443,7 @@ static void render_faults(KernelMonitorBuilder *builder)
 
 static void render_devices(KernelMonitorBuilder *builder)
 {
+    KernelMonitorStats monitor;
     KernelWorkerStats worker;
     uint32_t system = kernel_platform_system_status();
 
@@ -454,6 +455,15 @@ static void render_devices(KernelMonitorBuilder *builder)
     if (kernel_worker_stats(&worker))
         builder_key_dec(builder, " worker_max=",
                         worker.max_dispatch_latency_cycles);
+    if (kernel_monitor_stats(&monitor)) {
+        builder_key_dec(
+            builder, " mon_ftdi=",
+            monitor.transport[KERNEL_MONITOR_TRANSPORT_FTDI].commands);
+        builder_key_dec(
+            builder, " mon_spi=",
+            monitor.transport[
+                KERNEL_MONITOR_TRANSPORT_ASTRAHOST_SPI].commands);
+    }
 }
 
 static const KernelMonitorCommand commands[] = {

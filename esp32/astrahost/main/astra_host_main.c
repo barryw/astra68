@@ -45,6 +45,11 @@
 #define ASTRA_SD_RETRY_MS 1000
 #define ASTRA_SERVICE_IDLE_MS 1
 
+#ifdef ASTRA_MONITOR_SELFTEST
+#define ASTRA_MONITOR_SELFTEST_TIMEOUT_US 15000000
+#define ASTRA_MONITOR_SELFTEST_RESPONSE_BYTES 128u
+#endif
+
 #define ASTRA_SPI_FRAME_MAX 512u
 #define ASTRA_POLL_RESPONSE_BYTES 30u
 #define ASTRA_FETCH_RESPONSE_BYTES (15u + ASTRA_BLOCK_CHUNK_BYTES)
@@ -821,9 +826,125 @@ static esp_err_t service_input_event(const astra_input_event_t *event)
                                      "INPUT_EVENT");
 }
 
+#ifdef ASTRA_MONITOR_SELFTEST
+static esp_err_t fpga_monitor_write_byte(uint8_t value)
+{
+    return fpga_runtime_status(ASTRA_CMD_MONITOR_WRITE, &value, 1,
+                               "MONITOR_WRITE");
+}
+
+static esp_err_t fpga_monitor_read_byte(bool *valid, uint8_t *value)
+{
+    uint8_t response[3];
+    size_t received = 0;
+    int64_t deadline = esp_timer_get_time() + ASTRA_RESPONSE_TIMEOUT_US;
+    esp_err_t error = fpga_send_runtime_command(
+        ASTRA_CMD_MONITOR_READ, NULL, 0);
+    if (error != ESP_OK)
+        return error;
+
+    while (received < 2 ||
+           ((response[1] & 1u) != 0 && received < sizeof(response))) {
+        size_t batch = 0;
+        error = fpga_read_available(response + received,
+                                    sizeof(response) - received, &batch);
+        if (error != ESP_OK)
+            return error;
+        received += batch;
+        if (esp_timer_get_time() >= deadline)
+            return ESP_ERR_TIMEOUT;
+        if (batch == 0)
+            taskYIELD();
+    }
+
+    if (response[0] != ASTRA_STATUS_OK)
+        return ESP_ERR_INVALID_RESPONSE;
+    *valid = (response[1] & 1u) != 0;
+    *value = *valid ? response[2] : 0;
+    return ESP_OK;
+}
+
+static esp_err_t fpga_monitor_command(const char *command,
+                                      const char *expected_prefix)
+{
+    char response[ASTRA_MONITOR_SELFTEST_RESPONSE_BYTES];
+    size_t length = 0;
+    esp_err_t error;
+
+    for (const char *cursor = command; *cursor != '\0'; ++cursor) {
+        error = fpga_monitor_write_byte((uint8_t)*cursor);
+        if (error != ESP_OK)
+            return error;
+    }
+    error = fpga_monitor_write_byte('\n');
+    if (error != ESP_OK)
+        return error;
+
+    int64_t deadline =
+        esp_timer_get_time() + ASTRA_MONITOR_SELFTEST_TIMEOUT_US;
+    while (esp_timer_get_time() < deadline) {
+        bool valid;
+        uint8_t value;
+        error = fpga_monitor_read_byte(&valid, &value);
+        if (error != ESP_OK)
+            return error;
+        if (!valid) {
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+        if (value == '\n') {
+            response[length] = '\0';
+            if (strncmp(response, expected_prefix,
+                        strlen(expected_prefix)) != 0) {
+                ESP_LOGE(TAG, "MONITOR %s unexpected response: %s",
+                         command, response);
+                return ESP_ERR_INVALID_RESPONSE;
+            }
+            ESP_LOGI(TAG, "MONITOR %s => %s", command, response);
+            return ESP_OK;
+        }
+        if (length + 1 >= sizeof(response))
+            return ESP_ERR_INVALID_SIZE;
+        response[length++] = (char)value;
+    }
+
+    return ESP_ERR_TIMEOUT;
+}
+
+static esp_err_t run_monitor_selftest(void)
+{
+    static const struct {
+        const char *command;
+        const char *expected_prefix;
+    } checks[] = {
+        {"build", "kernel="},
+        {"irqs", "live="},
+        {"mem", "total="},
+        {"trace", "next="},
+    };
+
+    ESP_LOGI(TAG, "starting AstraHost-SPI kernel monitor self-test");
+    for (size_t index = 0; index < sizeof(checks) / sizeof(checks[0]);
+         ++index) {
+        esp_err_t error = fpga_monitor_command(
+            checks[index].command, checks[index].expected_prefix);
+        if (error != ESP_OK) {
+            ESP_LOGE(TAG, "MONITOR %s failed: %s", checks[index].command,
+                     esp_err_to_name(error));
+            return error;
+        }
+    }
+    ESP_LOGI(TAG, "ASTRAHOST MONITOR SELFTEST PASS");
+    return ESP_OK;
+}
+#endif
+
 static esp_err_t run_runtime_service(void)
 {
-    const uint8_t required = ASTRA_CAP_RAW_BLOCK | ASTRA_CAP_INPUT_EVENTS;
+    uint8_t required = ASTRA_CAP_RAW_BLOCK | ASTRA_CAP_INPUT_EVENTS;
+#ifdef ASTRA_MONITOR_SELFTEST
+    required |= ASTRA_CAP_KERNEL_MONITOR;
+#endif
     if ((fpga_capabilities & required) != required)
         return ESP_ERR_NOT_SUPPORTED;
 
@@ -849,6 +970,12 @@ static esp_err_t run_runtime_service(void)
     error = service_input_event(&link_event);
     if (error != ESP_OK)
         return error;
+
+#ifdef ASTRA_MONITOR_SELFTEST
+    error = run_monitor_selftest();
+    if (error != ESP_OK)
+        return error;
+#endif
 
     for (;;) {
         astra_input_event_t event;

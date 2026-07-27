@@ -4,6 +4,9 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 image="${ESP_IDF_IMAGE:-espressif/idf:v5.5.4}"
 build_dir=build
+if [[ "${ASTRA_MONITOR_SELFTEST:-}" == "1" ]]; then
+    build_dir=build-monitor-selftest
+fi
 docker_args=(
     run --rm
     -e HOME=/tmp
@@ -29,6 +32,7 @@ fi
 docker_args+=(
     -e "ASTRA_BUILD_DIR=$build_dir"
     -e "ASTRA_FPGA_SPI_HZ=${ASTRA_FPGA_SPI_HZ:-}"
+    -e "ASTRA_MONITOR_SELFTEST=${ASTRA_MONITOR_SELFTEST:-}"
     -e "ASTRA_PROVISION_REPLACE=${ASTRA_PROVISION_REPLACE:-}"
     -v "$script_dir:/project"
     -w /project
@@ -62,6 +66,11 @@ docker_args+=(
         fi
         if [[ -n "$ASTRA_FPGA_SPI_HZ" ]]; then
             cmake_args+=("-D" "ASTRA_FPGA_SPI_HZ=$ASTRA_FPGA_SPI_HZ")
+        fi
+        if [[ "$ASTRA_MONITOR_SELFTEST" == "1" ]]; then
+            cmake_args+=("-D" "ASTRA_MONITOR_SELFTEST=ON")
+        else
+            cmake_args+=("-D" "ASTRA_MONITOR_SELFTEST=OFF")
         fi
         if [[ "$ASTRA_PROVISION_REPLACE" == "1" ]]; then
             cmake_args+=("-D" "ASTRA_PROVISION_REPLACE=ON")

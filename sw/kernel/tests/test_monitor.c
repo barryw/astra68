@@ -407,6 +407,21 @@ static void test_spi_uses_same_parser_and_bounded_response(void)
     assert(strstr((char *)spi_tx, "hw=1234ABCD") != NULL);
 }
 
+static void test_transport_counts_are_observable(void)
+{
+    KernelIrqInternalBinding binding;
+    size_t response_start = uart_tx_length;
+
+    assert(kernel_monitor_uart_binding(&binding));
+    feed_uart("devices\n");
+    drain_uart_irq(&binding);
+    service_until_complete(KERNEL_MONITOR_TRANSPORT_FTDI,
+                           KERNEL_WORKER_MONITOR_RX_BATCH);
+    uart_tx[uart_tx_length] = '\0';
+    assert(strstr((char *)uart_tx + response_start,
+                  "mon_ftdi=3 mon_spi=1") != NULL);
+}
+
 static void test_overflow_and_failed_sink_are_bounded(void)
 {
     KernelIrqInternalBinding binding;
@@ -482,13 +497,14 @@ int main(void)
     assert((registered_work & KERNEL_WORKER_MONITOR_SPI) != 0u);
     test_ftdi_parser_and_zero_memory_command();
     test_spi_uses_same_parser_and_bounded_response();
+    test_transport_counts_are_observable();
     test_overflow_and_failed_sink_are_bounded();
     test_input_ring_drop_trace_is_coalesced_per_irq();
     assert(kernel_performance_stats(&performance));
     assert(performance.metric[KERNEL_PERFORMANCE_MONITOR_COMMAND].calls ==
-           5u);
+           6u);
     assert(performance.metric[KERNEL_PERFORMANCE_MONITOR_COMMAND].samples ==
-           5u);
+           6u);
     assert(performance.metric[
         KERNEL_PERFORMANCE_MONITOR_COMMAND].maximum_cycles == 97u);
     assert(performance.metric[

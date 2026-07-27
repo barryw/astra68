@@ -315,6 +315,8 @@ perf  trace  mmu      faults  devices
 dumps committed numeric records. Monitor operation, including `mem`, `irqs`,
 and `trace`, must continue with zero ordinary free pages. A failed output sink
 drops a bounded fragment and records the loss; it cannot stall the kernel.
+The `devices` response includes cumulative `mon_ftdi` and `mon_spi` command
+counts so one transport can independently prove that the other executed.
 
 ## Failure injection and performance gates
 
