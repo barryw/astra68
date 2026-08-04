@@ -28,6 +28,7 @@ OBJECTS = $(BUILD_DIR)/entry.o $(BUILD_DIR)/vectors.o \
           $(BUILD_DIR)/fault.o \
           $(BUILD_DIR)/allocation.o $(BUILD_DIR)/object_cache.o \
           $(BUILD_DIR)/memory.o $(BUILD_DIR)/dma.o $(BUILD_DIR)/block.o \
+          $(BUILD_DIR)/device.o \
           $(BUILD_DIR)/handle.o $(BUILD_DIR)/bytes.o \
 	  $(BUILD_DIR)/context.o \
 	  $(BUILD_DIR)/performance.o \
@@ -63,7 +64,7 @@ $(BUILD_DIR)/vectors.o: vectors.S context.h dispatch.h thread.h user_copy.h \
                         irq_latency.h kernel.ld | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/kernel.o: kernel.c $(BUILD_INFO) allocation.h bytes.h dispatch.h fault.h interrupt.h irq_latency.h monitor.h process.h thread.h trace.h \
+$(BUILD_DIR)/kernel.o: kernel.c $(BUILD_INFO) allocation.h bytes.h device.h dispatch.h fault.h interrupt.h irq_latency.h monitor.h process.h thread.h trace.h \
                        ../include/astra/boot.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
@@ -112,6 +113,10 @@ $(BUILD_DIR)/block.o: block.c block.h dma.h generation.h platform.h \
                       ../include/vesta.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
+$(BUILD_DIR)/device.o: device.c device.h bytes.h generation.h object_cache.h \
+                       allocation.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
 $(BUILD_DIR)/handle.o: handle.c handle.h bytes.h generation.h \
                        object_cache.h allocation.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
@@ -155,7 +160,7 @@ $(BUILD_DIR)/ring.o: ring.c ring.h area.h thread.h bytes.h generation.h \
                      vm.h ../include/astra/syscall.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/process.o: process.c process.h thread.h sync.h port.h area.h ring.h context.h handle.h block.h interrupt.h \
+$(BUILD_DIR)/process.o: process.c process.h thread.h sync.h port.h area.h ring.h context.h handle.h block.h device.h interrupt.h \
                         bytes.h \
                         generation.h \
                         object_cache.h allocation.h \
@@ -225,7 +230,8 @@ test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_allocation \
       $(BUILD_DIR)/test_mmio $(BUILD_DIR)/test_trace $(BUILD_DIR)/test_irq \
       $(BUILD_DIR)/test_platform $(BUILD_DIR)/test_interrupt \
       $(BUILD_DIR)/test_monitor \
-      $(BUILD_DIR)/test_dma $(BUILD_DIR)/test_block $(BUILD_DIR)/test_vm \
+      $(BUILD_DIR)/test_dma $(BUILD_DIR)/test_block $(BUILD_DIR)/test_device \
+      $(BUILD_DIR)/test_vm \
       $(BUILD_DIR)/test_exception $(BUILD_DIR)/test_fault \
       $(BUILD_DIR)/test_user_copy \
       $(BUILD_DIR)/test_handle $(BUILD_DIR)/test_bytes \
@@ -246,6 +252,7 @@ test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_allocation \
 	./$(BUILD_DIR)/test_monitor
 	./$(BUILD_DIR)/test_dma
 	./$(BUILD_DIR)/test_block
+	./$(BUILD_DIR)/test_device
 	./$(BUILD_DIR)/test_vm
 	./$(BUILD_DIR)/test_exception
 	./$(BUILD_DIR)/test_fault
@@ -366,6 +373,12 @@ $(BUILD_DIR)/test_block: tests/test_block.c block.c block.h dma.c dma.h \
 		../common/boot_contract.c allocation.c object_cache.c memory.c \
 		dma.c block.c \
 		tests/test_block.c -o $@
+
+$(BUILD_DIR)/test_device: tests/test_device.c device.c device.h bytes.c bytes.h generation.h \
+                           allocation.c allocation.h object_cache.c \
+                           object_cache.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I. \
+		allocation.c object_cache.c bytes.c device.c tests/test_device.c -o $@
 
 $(BUILD_DIR)/test_vm: tests/test_vm.c vm.c vm.h pmmu.h memory.c memory.h \
                       allocation.c allocation.h \
@@ -503,7 +516,7 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
                             handle.c handle.h \
                             exception.c exception.h vm.c vm.h pmmu.h \
                             user_copy.c user_copy.h \
-                            block.c block.h dma.c dma.h memory.c memory.h \
+                            block.c block.h device.c device.h dma.c dma.h memory.c memory.h \
                             platform.h ../common/boot_contract.c \
                             ../include/astra/boot.h ../include/ohci.h \
                             ../include/astra/syscall.h | $(BUILD_DIR)
@@ -516,7 +529,7 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
 		-DASTRA_KERNEL_SOAK_SELFTEST=1 \
 		-I. -I../include \
 		../common/boot_contract.c allocation.c object_cache.c memory.c \
-		dma.c block.c vm.c exception.c \
+		dma.c block.c device.c vm.c exception.c \
 		user_copy.c \
 		bytes.c context.c handle.c performance.c thread.c sync.c port.c \
 		area.c ring.c irq.c process.c \

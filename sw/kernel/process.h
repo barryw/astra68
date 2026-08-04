@@ -2,6 +2,7 @@
 #define ASTRA_KERNEL_PROCESS_H
 
 #include "context.h"
+#include "device.h"
 #include "handle.h"
 #include "irq.h"
 #include "thread.h"
@@ -230,6 +231,9 @@ KernelProcessStatus kernel_process_grant_handle(
 KernelProcessStatus kernel_process_grant_irq(
     uint32_t recipient_process_id, const KernelIrqBinding *binding,
     uint32_t rights, KernelHandle *handle);
+KernelProcessStatus kernel_process_grant_device(
+    uint32_t recipient_process_id, uint32_t device_id, uint32_t rights,
+    KernelHandle *handle);
 KernelProcessStatus kernel_process_qualification_authorize(
     uint32_t process_id, uint32_t irq_source_mask);
 bool kernel_process_qualification_status(uint32_t process_id,

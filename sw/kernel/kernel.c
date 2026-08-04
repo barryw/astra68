@@ -5,6 +5,7 @@
 #include "block.h"
 #include "bytes.h"
 #include "dma.h"
+#include "device.h"
 #include "dispatch.h"
 #include "exception.h"
 #include "fault.h"
@@ -1132,6 +1133,8 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         kernel_panic("thread ISP arena contract mismatch");
     kernel_dma_init();
     kernel_block_init();
+    if (!kernel_device_init() || !kernel_device_seal_registry())
+        kernel_panic("device registry initialization failed");
     if (kernel_read_vbr() != (uint32_t)_kernel_vectors)
         kernel_panic("kernel VBR installation failed");
     kernel_user_copy_selftest();
@@ -1139,7 +1142,8 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         kernel_panic("boot allocator retirement failed");
     if (kernel_allocation_phase() != KERNEL_ALLOCATION_PHASE_RUNTIME ||
         !kernel_allocation_valid() || !kernel_dma_valid() ||
-        !kernel_block_valid() || !kernel_memory_stats(&memory_stats) ||
+        !kernel_block_valid() || !kernel_device_pool_valid() ||
+        !kernel_memory_stats(&memory_stats) ||
         memory_stats.emergency_total_frames !=
             KERNEL_EMERGENCY_RESERVE_FRAMES ||
         memory_stats.emergency_available_frames !=

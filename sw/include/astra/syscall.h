@@ -3,7 +3,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010005
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010006
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -38,6 +38,19 @@
 #define ASTRA_SYSCALL_IRQ_MASK         30
 #define ASTRA_SYSCALL_IRQ_RECOVER      31
 #define ASTRA_SYSCALL_IRQ_REVOKE       32
+#define ASTRA_SYSCALL_DEVICE_QUERY     33
+#define ASTRA_SYSCALL_DEVICE_RESET     34
+#define ASTRA_SYSCALL_DEVICE_REVOKE    35
+
+#define ASTRA_DEVICE_INFO_SIZE 24u
+#define ASTRA_DEVICE_STATE_READY      1u
+#define ASTRA_DEVICE_STATE_LEASED     2u
+#define ASTRA_DEVICE_STATE_QUIESCING  3u
+#define ASTRA_DEVICE_STATE_RESETTING  4u
+#define ASTRA_DEVICE_STATE_FAILED     5u
+#define ASTRA_DEVICE_LEASE_ACTIVE     1u
+#define ASTRA_DEVICE_LEASE_REVOKING   2u
+#define ASTRA_DEVICE_LEASE_REVOKED    3u
 
 #define ASTRA_SYSCALL_PROCESS_EXIT ASTRA_SYSCALL_EXIT
 
@@ -126,6 +139,20 @@ typedef struct AstraIrqRecord {
     uint32_t status;
     uint32_t sequence;
 } AstraIrqRecord;
+
+typedef struct AstraDeviceInfo {
+    uint32_t size;
+    uint32_t device_id;
+    uint32_t class_id;
+    uint32_t capabilities;
+    uint32_t generation;
+    uint8_t device_state;
+    uint8_t lease_state;
+    uint16_t reserved;
+} AstraDeviceInfo;
+
+_Static_assert(sizeof(AstraDeviceInfo) == ASTRA_DEVICE_INFO_SIZE,
+               "device-info ABI size changed");
 
 _Static_assert(sizeof(AstraIrqRecord) == ASTRA_IRQ_RECORD_SIZE,
                "IRQ record ABI size changed");

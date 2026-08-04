@@ -1,10 +1,23 @@
 # Axiom kernel status
 
-Status date: 2026-07-27
+Status date: 2026-08-04
 
 This is the kernel-specific truth table. `CURRENT_STATE.md` remains the whole
 machine continuation map. A row marked CURRENT has evidence; PLANNED or MISSING
 must not be presented as working software.
+
+## Unqualified driver-substrate candidate
+
+- CURRENT SOURCE: fixed registry and exclusive generation-safe leases; 8
+  devices, 8 leases, and 2 leases per process.
+- CURRENT SOURCE: trusted grant, read/transfer/administer rights, and
+  provisional query/reset/revoke syscalls at ABI `0x00010006`.
+- CURRENT SOURCE: owner death revokes, quiesces, and resets before handle
+  closure; failed recovery contains the target as `FAILED`.
+- TESTED ON BEAST: device tests, process/syscall integration, malformed
+  syscall coverage, and the freestanding MC68030 link.
+- NOT YET QUALIFIED: full gates, emulator/Arty execution, performance,
+  physical registrations, discovery, or userspace service protocols.
 
 ## Current source identity
 

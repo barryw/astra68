@@ -64,6 +64,27 @@ static uint8_t irq_test_source;
 static uint32_t qualification_prepare_count;
 static uint32_t qualification_consume_count;
 static uint32_t qualification_consumed_status;
+static uint32_t device_quiesce_count;
+static uint32_t device_reset_count;
+static bool device_reset_ok;
+
+static bool test_device_quiesce(uint32_t device_id, uint32_t generation,
+                                void *context)
+{
+    (void)context;
+    assert(device_id == 1u && generation != 0u);
+    ++device_quiesce_count;
+    return true;
+}
+
+static bool test_device_reset(uint32_t device_id, uint32_t generation,
+                              void *context)
+{
+    (void)context;
+    assert(device_id == 1u && generation != 0u);
+    ++device_reset_count;
+    return device_reset_ok;
+}
 
 static bool irq_controller_configure(uint8_t source, uint8_t trigger,
                                      uint8_t ipl, uint8_t vector,
@@ -592,6 +613,23 @@ static void initialize_test(void)
     assert(kernel_vm_enable() == KERNEL_VM_OK);
     kernel_dma_init();
     kernel_block_init();
+    assert(kernel_device_init());
+    {
+        const KernelDeviceDefinition device = {
+            .quiesce = test_device_quiesce,
+            .reset = test_device_reset,
+            .context = NULL,
+            .device_id = 1u,
+            .class_id = 0x47505500u,
+            .capabilities = 0x00000003u,
+        };
+
+        assert(kernel_device_register(&device) == KERNEL_DEVICE_OK);
+    }
+    assert(kernel_device_seal_registry());
+    device_quiesce_count = 0u;
+    device_reset_count = 0u;
+    device_reset_ok = true;
     irq_configure_count = 0u;
     irq_mask_count = 0u;
     irq_enable_count = 0u;
@@ -1868,6 +1906,90 @@ static void test_irq_syscalls_waits_rights_and_owner_cleanup(void)
     assert(irq_stats.live_endpoints == 0u);
     assert(irq_stats.revoking_endpoints == 0u);
     assert(!kernel_process_maintenance_pending());
+}
+
+static void test_device_lease_syscalls_rights_and_owner_cleanup(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    const uint32_t full_rights =
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_TRANSFER | ASTRA_RIGHT_ADMINISTER;
+    KernelCpuContext *next;
+    KernelDeviceStats device_stats;
+    AstraDeviceInfo info;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+    uint32_t device_handle;
+    uint32_t query_handle;
+    uint32_t user_info = KERNEL_PROCESS_STACK_TOP - 64u;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_grant_device(process_id, 1u, full_rights,
+                                       &device_handle) == KERNEL_PROCESS_OK);
+    assert(device_handle != KERNEL_HANDLE_INVALID);
+    assert(kernel_process_grant_device(process_id, 1u, full_rights,
+                                       &query_handle) ==
+           KERNEL_PROCESS_RESOURCE_LIMIT);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+
+    registers[0] = ASTRA_SYSCALL_HANDLE_DUPLICATE;
+    registers[1] = device_handle;
+    registers[2] = ASTRA_RIGHT_READ;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    query_handle = next->data[1];
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_DEVICE_RESET;
+    registers[1] = query_handle;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_DEVICE_QUERY;
+    registers[1] = query_handle;
+    registers[2] = user_info;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&info, user_info, sizeof(info)) ==
+           KERNEL_USER_COPY_OK);
+    assert(info.size == sizeof(info));
+    assert(info.device_id == 1u && info.class_id == 0x47505500u);
+    assert(info.capabilities == 3u && info.generation != 0u);
+    assert(info.reserved == 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_DEVICE_RESET;
+    registers[1] = device_handle;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(device_reset_count == 1u);
+
+    device_reset_ok = false;
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_EXIT;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(device_quiesce_count == 1u && device_reset_count == 2u);
+    assert(kernel_device_stats(&device_stats));
+    assert(device_stats.live_leases == 0u);
+    assert(device_stats.owner_deaths == 1u);
+    assert(device_stats.reset_failures == 1u);
+    assert(kernel_device_pool_valid());
 }
 
 static void test_private_irq_qualification_control(void)
@@ -4051,6 +4173,9 @@ static void test_malformed_syscall_and_message_corpus(void)
         {ASTRA_SYSCALL_IRQ_MASK, ASTRA_SYSCALL_INVALID_HANDLE},
         {ASTRA_SYSCALL_IRQ_RECOVER, ASTRA_SYSCALL_INVALID_HANDLE},
         {ASTRA_SYSCALL_IRQ_REVOKE, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_DEVICE_QUERY, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_DEVICE_RESET, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_DEVICE_REVOKE, ASTRA_SYSCALL_INVALID_HANDLE},
     };
     static const uint32_t bad_message_addresses[] = {
         0u,
@@ -4120,6 +4245,9 @@ static void test_malformed_syscall_and_message_corpus(void)
         case ASTRA_SYSCALL_IRQ_MASK:
         case ASTRA_SYSCALL_IRQ_RECOVER:
         case ASTRA_SYSCALL_IRQ_REVOKE:
+        case ASTRA_SYSCALL_DEVICE_QUERY:
+        case ASTRA_SYSCALL_DEVICE_RESET:
+        case ASTRA_SYSCALL_DEVICE_REVOKE:
             registers[1] = KERNEL_HANDLE_INVALID;
             break;
         case ASTRA_SYSCALL_THREAD_CREATE:
@@ -4877,6 +5005,7 @@ int main(void)
     test_invalid_creation_does_not_allocate();
     test_sync_syscall_rights_and_stale_handles();
     test_irq_syscalls_waits_rights_and_owner_cleanup();
+    test_device_lease_syscalls_rights_and_owner_cleanup();
     test_private_irq_qualification_control();
     test_priority_selection_and_equal_priority_rotation();
     test_per_process_thread_limit_is_bounded_and_reclaimable();

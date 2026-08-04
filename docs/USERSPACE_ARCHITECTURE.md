@@ -6,6 +6,9 @@ This document refines `OS_VISION.md` into a coherent userspace shape. It does
 not change the kernel boundary in `KERNEL_SPEC.md`, define a stable service ABI,
 or imply that the current K9 kernel can start these services. Exact wire
 records land only with implementations and executable protocol tests.
+`DRIVER_AND_SERVICE_ARCHITECTURE.md` defines the common protected-driver
+lifecycle, privilege boundary, performance admission rule, and storage and
+graphics layering used here.
 
 Status markers have the same meanings as in `OS_VISION.md`:
 

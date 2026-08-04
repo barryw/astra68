@@ -23,10 +23,12 @@ capacity contract. `PRESENTATION.md` remains authoritative for the tear-free
 scene invariant where it does not conflict with the dimensions, formats, and
 transport defined here.
 
-`ndk/include/astra/graphics.h` is still a pre-Arty draft that advertises tile
-objects, 32 sprites, and legacy formats. It is not a published ABI and must be
-reconciled with this document before the display service or NDK graphics API is
-treated as stable.
+`ndk/include/astra/graphics.h` now reflects the Arty hardware boundary,
+including two tile layers, 64 sprites, independent 1..128 sprite source
+extents, the 8192-pixel line budget, palette banks, drawing capabilities,
+glyphs, bounded flood fill, raster programs, and fences. It remains a draft
+service API until the display service implementation and ABI tests promote it;
+the RTL register layout is not the application ABI.
 
 This document freezes architectural behavior, not implementation status. A
 feature is not production-ready until it passes the release gates in this
@@ -74,16 +76,14 @@ Arty HDMI displays the complete 720p test raster. This qualifies the fixed
 timing, clocking, reset, TMDS encoding, serialization, pins, and board output;
 it was the transport-only qualification checkpoint.
 
-Integrated checkpoint `boot-text6` subsequently connects that transport to
-the real PS DDR paths, validated framebuffer and two tile layers, palettes,
-compositor, scheduler, frame-boundary scene promotion, counters, and a
-boot-only CP437 status plane. The exact full-system route closes at 200 MHz
-with +0.002 ns setup and +0.019 ns hold slack. The active Arty boot verifies
-the complete blank RGB565 splash in the reserved graphics arena, then
-publishes four real status rows through a vblank-swapped double-buffered cell
-plane. A live row-only update succeeds without rebuilding the framebuffer.
-Sprites, copper, blitter/virtual sprites, geometry/fill, AFNT glyph expansion,
-and command execution remain unimplemented. Exact hashes and evidence are in
+Historical checkpoint `boot-text6` first connected that transport to the real
+PS DDR paths, validated framebuffer and two tile layers, palettes, compositor,
+scheduler, frame-boundary scene promotion, counters, and a boot-only CP437
+status plane. The promoted version-1 release now also includes all 64 sprites,
+bounded command and completion transport, the complete blitter and virtual
+sprites, geometry and bounded fill, AFNT glyph expansion, and dual-bank copper.
+The clean full-system route and repeated Arty hardware certifications pass.
+Exact hashes, resources, timing, failed experiments, and evidence are in
 `fpga/arty/graphics/TIMING_CLOSURE.md`.
 
 The boot CP437 plane is deliberately not the version-1 application font

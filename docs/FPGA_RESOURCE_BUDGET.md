@@ -51,11 +51,11 @@ timing failures, and all 23,261 routable nets complete. It uses:
 | BRAM36-equivalent tiles | 29.5 | 21.07% | 110.5 |
 | DSP48 | 5 | 2.27% | 215 |
 
-These are the current complete-system planning numbers for the implemented
-scanout path. They do not include sprites, copper, blitter/virtual sprites,
-geometry/fill, AFNT glyph expansion, or command execution. Those features
-still require their own integrated route; nominal free capacity does not prove
-that the final floorplan will close.
+These are historical complete-system planning numbers for the first
+implemented scanout path. They do not include the later sprites, copper,
+blitter/virtual sprites, geometry/fill, AFNT glyph expansion, or command
+execution now present in the qualified release. The complete copper checkpoint
+below supersedes them for current capacity planning.
 
 Bitstream SHA-256 is
 `869b0b4917135486376ab868f5599963dced75a2f8cfa76b2261fe01d0439cf4`.
@@ -165,7 +165,8 @@ included in these totals.
 
 The historical complete-blitter OOC checkpoints were useful for attributing
 growth but are not additive capacity numbers. The exact integrated route below
-supersedes them and is the only current complete-system planning baseline.
+superseded them at that stage; the later complete copper-qualified checkpoint
+is the current complete-system planning baseline.
 
 The exact bitstream SHA-256 is
 `fbfd7f80572dd9b0783e94d61cacda4388453083c8a8cae39ffc131628eef2aa`.
@@ -173,10 +174,10 @@ Route, source, release and hardware evidence is in
 `fpga/arty/graphics/TIMING_CLOSURE.md` and
 `docs/evidence/astra-arty-render-basic-hardware-20260801.log`.
 
-### Arty complete renderer qualified route
+### Arty complete-blitter qualified route
 
-Checkpoint `full-route-24-checkpoint-49` is the active hardware-qualified
-graphics release. It retains framebuffer and tile scanout, boot text, all 64
+Checkpoint `full-route-24-checkpoint-49` is the historical complete-blitter
+release. It retains framebuffer and tile scanout, boot text, all 64
 sprites, command/completion transport, descriptor validation, timeout/reset,
 the shared pixel writer, and the complete blitter. The exact Beast Vivado
 2024.2 route meets 200 MHz render/build timing at +0.013 ns, 74.25 MHz pixel

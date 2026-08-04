@@ -1,6 +1,6 @@
 # Axiom kernel and Astra service ABI
 
-Status: provisional ABI contract, revision 0.4 (2026-07-25)
+Status: provisional ABI contract, revision 0.6 (2026-08-04)
 
 The ABI is big-endian, 32-bit, naturally aligned, and independent of kernel C
 layouts. Only the user/kernel ABI and versioned service protocols are stable.
@@ -21,7 +21,7 @@ All reserved fields are written as zero and ignored on input unless a protocol
 version says otherwise. Structure input begins with `size`; the kernel accepts
 only the documented minimum through maximum and never reads beyond `size`.
 
-## Trap ABI 0.4
+## Trap ABI 0.6
 
 The syscall instruction is `TRAP #15`, vector 47.
 
@@ -41,7 +41,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 
 | Number | Name | State | Contract |
 |---:|---|---|---|
-| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010004`, `D2=process handle`, `D3=calling-thread handle` |
+| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010006`, `D2=process handle`, `D3=calling-thread handle` |
 | 1 | `PROGRESS` | K1 TEST ONLY | monotonic test progress, not a product ABI |
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `PROCESS_EXIT` (`EXIT` compatibility alias) | CURRENT | terminates the calling process and all of its threads |
@@ -68,10 +68,19 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 24 | `AREA_UNMAP` | CURRENT K8 | `D1=logical mapping base`; removes the complete mapping |
 | 25 | `RING_CREATE` | CURRENT K8 | `D1=area handle`, `D2=offset`, `D3=element size`, `D4=capacity`; returns producer in `D1` and consumer in `D2` |
 | 26 | `RING_NOTIFY` | CURRENT K8 | `D1=endpoint`, `D2=owned position`, `D3=flags`, `D4=endpoint role`; returns producer and consumer positions in `D1:D2` |
+| 27-32 | `IRQ_*` | CURRENT K10 | bounded read, acknowledge, arm, mask, recover, and revoke on an IRQ endpoint |
+| 33 | `DEVICE_QUERY` | CURRENT CANDIDATE | `D1=device handle`, `D2=aligned AstraDeviceInfo output`; requires read |
+| 34 | `DEVICE_RESET` | CURRENT CANDIDATE | `D1=device handle`; requires administer and advances generation |
+| 35 | `DEVICE_REVOKE` | CURRENT CANDIDATE | `D1=device handle`; requires administer; quiesces and resets |
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
-not panic. `QUERY_ABI` reports revision `0x00010004`; a later revision will add
+not panic. `QUERY_ABI` reports revision `0x00010006`; a later revision may add
 feature bits before additional calls freeze.
+
+`AstraDeviceInfo` is 24 bytes and naturally four-byte aligned. It contains
+size, device ID, class ID, capabilities, generation, device state, lease
+state, and a zero reserved field. It exposes no pointer, owner, or kernel
+layout. Only trusted bootstrap code can grant the initial physical lease.
 
 The thread-entry register contract is `D2=initial argument`, `D4=process self
 handle`, and `D5=thread self handle`; all other general registers begin at

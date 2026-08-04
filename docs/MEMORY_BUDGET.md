@@ -20,6 +20,15 @@ permission to allocate dynamically without a quota.
 The detailed split and bootstrap BRAM are in `MEMORY_MAP.md`. The kernel starts
 from BootInfo ranges, not the arithmetic above.
 
+## Provisional device-lease substrate (2026-08-04)
+
+The MC68030 object reports 494 bytes of fixed BSS and 1,830 bytes of text for
+`device.o`. BSS is exact: eight 16-byte lease records (128 bytes), eight
+36-byte device records (288 bytes), 44 bytes of counters, 26 bytes of object-
+cache state, a 4-byte bitmap, and four bytes of flags/padding. It allocates no
+heap memory or physical pages. These remain candidate figures until the next
+complete Axiom release is frozen and hardware-qualified.
+
 ## Measured K1 image
 
 The 2026-07-22 exact Beast build from

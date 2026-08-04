@@ -1,6 +1,6 @@
 # Axiom resource ownership and failures
 
-Status: normative lifetime contract, revision 0.3 (2026-07-25)
+Status: normative lifetime contract, revision 0.4 (2026-08-04)
 
 Every resource has one accountable owner, finite capacity, explicit rights,
 and a terminal failure path. C cleanup helpers improve normal code but kernel
@@ -50,23 +50,30 @@ found wholly inside the kernel panics with an object dump.
 Termination is a bounded state machine:
 
 ```text
-RUNNING -> EXITING -> THREADS_STOPPED -> HANDLES_CLOSED
-        -> DEVICES_REVOKED -> VM_DESTROYED -> ACCOUNT_EMPTY -> DEAD
+RUNNING -> EXITING -> THREADS_STOPPED -> DEVICES_REVOKED
+        -> HANDLES_CLOSED -> VM_DESTROYED -> ACCOUNT_EMPTY -> DEAD
 ```
 
 Exact order:
 
 1. prevent creation of new threads, handles, waits, mappings, and submissions;
 2. remove every thread from ready/wait queues and record its terminal reason;
-3. atomically withdraw handles, then invoke release callbacks without the
+3. revoke each physical-device lease owned by the process, quiesce/reset the
+   target, and invalidate the old generation;
+4. atomically withdraw handles, then invoke release callbacks without the
    handle-table lock;
-4. cancel queued device work and mark active DMA requests revoking;
-5. wake IPC peers and return uncommitted transferred handles;
-6. switch away from the address space, unmap areas, and flush required ATC and
+5. cancel queued device work and mark active DMA requests revoking;
+6. wake IPC peers and return uncommitted transferred handles;
+7. switch away from the address space, unmap areas, and flush required ATC and
    cache state;
-7. retain pinned frames until matching completion or reset retires them;
-8. release all remaining owned frames and quota charges;
-9. mark `DEAD` and make the diagnostic death record observable.
+8. retain pinned frames until matching completion or reset retires them;
+9. release all remaining owned frames and quota charges;
+10. mark `DEAD` and make the diagnostic death record observable.
+
+Device leases use fixed pools: 8 devices, 8 leases, and 2 leases per owner.
+Each lease is exclusive and generation tagged. Owner death revokes before
+handle close, so duplicate or transferred references cannot retain authority.
+Failed quiesce or reset contains the target in `FAILED`; it is not rebound.
 
 The process may remain `EXITING` while a device owns pinned memory. This is not
 a leak: the request has a finite deadline/reset path and an inspectable owner.

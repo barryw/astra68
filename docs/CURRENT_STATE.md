@@ -17,12 +17,24 @@ The kernel's normative implementation contracts are
 `TEST_AND_FAULT_INJECTION_PLAN.md`; `STATUS.md` separates implemented evidence
 from planned work.
 
-The product-level operating-system direction is `OS_VISION.md`. Focused but
-unimplemented userspace design lives in `USERSPACE_ARCHITECTURE.md`,
-`DESKTOP_AND_UI.md`, `TERMINAL_AND_POSIX.md`,
+The product-level operating-system direction is `OS_VISION.md`. Focused
+userspace design and the provisional kernel driver boundary live in
+`USERSPACE_ARCHITECTURE.md`,
+`DRIVER_AND_SERVICE_ARCHITECTURE.md`, `DESKTOP_AND_UI.md`, `TERMINAL_AND_POSIX.md`,
 `APPLICATION_AND_KIT_MODEL.md`, `USERSPACE_BUDGET.md`, and
 `RESOURCE_MODEL.md`. These are not evidence that services, a desktop, a POSIX
 personality, zsh, or Vim currently run.
+
+## Driver substrate candidate (2026-08-04)
+
+The working tree contains a provisional Axiom device-lease substrate: an
+8-entry sealed registry, 8 exclusive generation-tagged leases, a 2-lease
+per-process limit, read/transfer/administer rights, trusted bootstrap grants,
+query/reset/revoke syscalls at ABI `0x00010006`, and owner-death quiesce/reset
+before handle closure. It reuses handles, ports, shared areas, rings, IRQ
+endpoints, and user-copy; no generic I/O queue or class policy was added.
+Focused device and process tests and the freestanding MC68030 link pass on
+Beast. Full qualification and physical device registration remain pending.
 
 ## Active Arty migration override (2026-07-30)
 

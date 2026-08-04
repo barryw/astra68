@@ -49,7 +49,8 @@ Filesystems, executable policy, networking, graphics policy, window management,
 input policy, audio mixing, and ordinary device policy run in protected user
 services. Display hardware is owned by one graphics service. SD and network
 protocols remain on the ESP; FPGA/ESP runtime transport is SPI, never UART.
-There is no stable in-kernel module ABI.
+There is no stable in-kernel module ABI. The common extension model and its
+performance admission rule are defined in `DRIVER_AND_SERVICE_ARCHITECTURE.md`.
 
 Service boundaries isolate failures, but hot paths batch work through shared
 areas and bounded rings. Astra does not turn every line, input event, or block
@@ -149,6 +150,7 @@ The first stable object vocabulary is deliberately small:
 | semaphore/event | process/service | `UNSIGNALED`, `SIGNALED`, `CLOSING`, `DEAD` |
 | timer | process/thread | `IDLE`, `ARMED`, `FIRED`, `CANCELLED`, `DEAD` |
 | IRQ endpoint | privileged service | `MASKED`, `ARMED`, `PENDING`, `REVOKING` |
+| physical-device lease | privileged service | `ACTIVE`, `REVOKING`, `REVOKED` |
 | device mapping | privileged service | `CREATED`, `MAPPED`, `REVOKING`, `DEAD` |
 
 Numeric process and thread IDs are diagnostic labels only. Authority always

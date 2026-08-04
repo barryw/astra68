@@ -5,6 +5,7 @@
 #include "area.h"
 #include "block.h"
 #include "bytes.h"
+#include "device.h"
 #include "exception.h"
 #include "generation.h"
 #include "interrupt.h"
@@ -637,18 +638,30 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
     uint32_t released_frames = 0u;
 
     if (process->handles_closed == 0u) {
+        uint32_t revoked_leases = 0u;
+
+        KernelDeviceStatus device_status =
+            kernel_device_owner_died(process->id, &revoked_leases);
+
+        if (device_status != KERNEL_DEVICE_OK &&
+            device_status != KERNEL_DEVICE_QUIESCE_FAILED &&
+            device_status != KERNEL_DEVICE_RESET_FAILED)
+            return KERNEL_PROCESS_CORRUPT;
+        (void)revoked_leases;
         (void)kernel_handle_close_all(&process->handles);
         process->self_handle = KERNEL_HANDLE_INVALID;
 #if defined(KERNEL_PROCESS_HOST_TEST)
         if (!kernel_sync_pool_valid() || !kernel_port_pool_valid() ||
             !kernel_area_pool_valid() || !kernel_ring_pool_valid() ||
             !kernel_handle_transfer_pool_valid() ||
-            !kernel_irq_pool_valid() || !process_pool_valid())
+            !kernel_irq_pool_valid() || !kernel_device_pool_valid() ||
+            !process_pool_valid())
 #else
         if (!kernel_sync_pool_healthy() || !kernel_port_pool_healthy() ||
             !kernel_area_pool_healthy() || !kernel_ring_pool_healthy() ||
             !kernel_irq_pool_healthy() ||
             !kernel_handle_transfer_pool_healthy() ||
+            !kernel_device_pool_valid() ||
             !process_pool_healthy())
 #endif
             return KERNEL_PROCESS_CORRUPT;
@@ -1582,6 +1595,42 @@ KernelProcessStatus kernel_process_grant_irq(
         KERNEL_PROCESS_RESOURCE_LIMIT : KERNEL_PROCESS_CORRUPT;
 }
 
+KernelProcessStatus kernel_process_grant_device(
+    uint32_t recipient_process_id, uint32_t device_id, uint32_t rights,
+    KernelHandle *handle)
+{
+    KernelProcess *recipient = find_process_by_id(recipient_process_id);
+    KernelDeviceLease *lease = NULL;
+    KernelDeviceStatus device_status;
+    KernelHandleStatus handle_status;
+
+    if (recipient == NULL || handle == NULL || rights == 0u ||
+        (rights & ~KERNEL_DEVICE_RIGHTS) != 0u)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    *handle = KERNEL_HANDLE_INVALID;
+    device_status = kernel_device_acquire(recipient->id, device_id, &lease);
+    if (device_status == KERNEL_DEVICE_NO_SLOT ||
+        device_status == KERNEL_DEVICE_QUOTA_EXCEEDED ||
+        device_status == KERNEL_DEVICE_BUSY)
+        return KERNEL_PROCESS_RESOURCE_LIMIT;
+    if (device_status == KERNEL_DEVICE_INVALID_ARGUMENT ||
+        device_status == KERNEL_DEVICE_NOT_FOUND)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    if (device_status != KERNEL_DEVICE_OK || lease == NULL)
+        return device_status == KERNEL_DEVICE_REVOKED ?
+            KERNEL_PROCESS_INVALID_STATE : KERNEL_PROCESS_CORRUPT;
+    handle_status = kernel_handle_install_cloneable(
+        &recipient->handles, KERNEL_OBJECT_DEVICE, rights, lease,
+        kernel_device_handle_retain, kernel_device_handle_release, NULL,
+        handle);
+    if (handle_status == KERNEL_HANDLE_OK)
+        return process_pool_valid() && kernel_device_pool_valid() ?
+            KERNEL_PROCESS_OK : KERNEL_PROCESS_CORRUPT;
+    kernel_device_abandon_unpublished(lease);
+    return handle_status == KERNEL_HANDLE_TABLE_FULL ?
+        KERNEL_PROCESS_RESOURCE_LIMIT : KERNEL_PROCESS_CORRUPT;
+}
+
 KernelProcessStatus kernel_process_qualification_authorize(
     uint32_t process_id, uint32_t irq_source_mask)
 {
@@ -2098,6 +2147,37 @@ static bool irq_status_to_syscall(KernelIrqStatus status, uint32_t *result)
     }
 }
 
+static bool device_status_to_syscall(KernelDeviceStatus status,
+                                     uint32_t *result)
+{
+    if (result == NULL)
+        return false;
+    switch (status) {
+    case KERNEL_DEVICE_OK:
+        *result = ASTRA_SYSCALL_OK;
+        return true;
+    case KERNEL_DEVICE_INVALID_ARGUMENT:
+    case KERNEL_DEVICE_NOT_FOUND:
+        *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+        return true;
+    case KERNEL_DEVICE_BUSY:
+    case KERNEL_DEVICE_NO_SLOT:
+    case KERNEL_DEVICE_QUOTA_EXCEEDED:
+        *result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+        return true;
+    case KERNEL_DEVICE_REVOKED:
+        *result = ASTRA_SYSCALL_PEER_DEAD;
+        return true;
+    case KERNEL_DEVICE_QUIESCE_FAILED:
+    case KERNEL_DEVICE_RESET_FAILED:
+        *result = ASTRA_SYSCALL_IO_ERROR;
+        return true;
+    case KERNEL_DEVICE_CORRUPT:
+    default:
+        return false;
+    }
+}
+
 static KernelRingEndpoint ring_endpoint_for_type(KernelObjectType type)
 {
     return type == KERNEL_OBJECT_RING_PRODUCER ?
@@ -2593,14 +2673,14 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             if (!kernel_sync_pool_valid() || !kernel_thread_pool_valid() ||
                 !kernel_port_pool_valid() ||
                 !kernel_area_pool_valid() || !kernel_ring_pool_valid() ||
-                !kernel_irq_pool_valid() ||
+                !kernel_irq_pool_valid() || !kernel_device_pool_valid() ||
                 !kernel_handle_transfer_pool_valid() ||
                 !process_pool_valid())
 #else
             if (!kernel_sync_pool_healthy() || !kernel_thread_pool_valid() ||
                 !kernel_port_pool_healthy() ||
                 !kernel_area_pool_healthy() || !kernel_ring_pool_healthy() ||
-                !kernel_irq_pool_healthy() ||
+                !kernel_irq_pool_healthy() || !kernel_device_pool_valid() ||
                 !kernel_handle_transfer_pool_healthy() ||
                 !process_pool_healthy())
 #endif
@@ -3306,6 +3386,74 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             return KERNEL_PROCESS_CORRUPT;
         }
         if (!kernel_irq_pool_valid())
+            return KERNEL_PROCESS_CORRUPT;
+        break;
+    }
+    case ASTRA_SYSCALL_DEVICE_QUERY:
+    case ASTRA_SYSCALL_DEVICE_RESET:
+    case ASTRA_SYSCALL_DEVICE_REVOKE: {
+        KernelDeviceLease *lease = NULL;
+        KernelDeviceStatus device_status;
+        KernelHandleStatus handle_status;
+        uint32_t required_rights = syscall == ASTRA_SYSCALL_DEVICE_QUERY ?
+            ASTRA_RIGHT_READ : ASTRA_RIGHT_ADMINISTER;
+
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1], KERNEL_OBJECT_DEVICE,
+            required_rights, (void **)&lease);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || lease == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+
+        if (syscall == ASTRA_SYSCALL_DEVICE_QUERY) {
+            KernelDeviceSnapshot snapshot;
+            AstraDeviceInfo info;
+            uint32_t user_info = thread->context.data[2];
+            int copy_status;
+
+            if ((user_info & (sizeof(uint32_t) - 1u)) != 0u) {
+                result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+                break;
+            }
+            device_status = kernel_device_query(lease, &snapshot);
+            if (!device_status_to_syscall(device_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            if (device_status != KERNEL_DEVICE_OK)
+                break;
+            info.size = sizeof(info);
+            info.device_id = snapshot.device_id;
+            info.class_id = snapshot.class_id;
+            info.capabilities = snapshot.capabilities;
+            info.generation = snapshot.generation;
+            info.device_state = snapshot.device_state;
+            info.lease_state = snapshot.lease_state;
+            info.reserved = 0u;
+            copy_status = kernel_copy_to_user(user_info, &info, sizeof(info));
+            if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+                copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
+                result = ASTRA_SYSCALL_BAD_ADDRESS;
+                break;
+            }
+            if (copy_status != KERNEL_USER_COPY_OK)
+                return KERNEL_PROCESS_CORRUPT;
+        } else if (syscall == ASTRA_SYSCALL_DEVICE_RESET) {
+            device_status = kernel_device_reset(lease);
+            if (!device_status_to_syscall(device_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+        } else {
+            device_status = kernel_device_revoke(lease);
+            if (!device_status_to_syscall(device_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+        }
+        if (!kernel_device_pool_valid())
             return KERNEL_PROCESS_CORRUPT;
         break;
     }
