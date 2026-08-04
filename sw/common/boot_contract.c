@@ -70,7 +70,9 @@ AstraBootValidation astra_boot_info_validate(const AstraBootInfo *info)
         if (!range_end(range->base, range->size, &end) ||
             (index != 0u && range->base < previous_end) ||
             range->type < ASTRA_MEMORY_RANGE_USABLE ||
-            range->type > ASTRA_MEMORY_RANGE_ROM_BACKING)
+            range->type > ASTRA_MEMORY_RANGE_DEVICE ||
+            (range->type == ASTRA_MEMORY_RANGE_DEVICE &&
+             range->flags != (ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE)))
             return ASTRA_BOOT_BAD_MEMORY_MAP;
         previous_end = end;
     }

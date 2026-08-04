@@ -1,0 +1,205 @@
+// SPDX-License-Identifier: MIT
+#ifndef ASTRA_GRAPHICS_HW_H
+#define ASTRA_GRAPHICS_HW_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+enum {
+    ASTRA_GRAPHICS_ARENA_BASE = 0x18000000u,
+    ASTRA_GRAPHICS_ARENA_LIMIT = 0x20000000u,
+    ASTRA_GRAPHICS_ARENA_BYTES =
+        ASTRA_GRAPHICS_ARENA_LIMIT - ASTRA_GRAPHICS_ARENA_BASE,
+    ASTRA_FRAMEBUFFER_BASE = ASTRA_GRAPHICS_ARENA_BASE,
+    ASTRA_FRAMEBUFFER_LIMIT = ASTRA_GRAPHICS_ARENA_LIMIT,
+    ASTRA_FRAMEBUFFER_WIDTH = 1280u,
+    ASTRA_FRAMEBUFFER_HEIGHT = 720u,
+    ASTRA_FRAMEBUFFER_PITCH = ASTRA_FRAMEBUFFER_WIDTH * 2u,
+    ASTRA_FRAMEBUFFER_BYTES =
+        ASTRA_FRAMEBUFFER_PITCH * ASTRA_FRAMEBUFFER_HEIGHT,
+    ASTRA_CONTROL_BASE = 0x43c00000u,
+    ASTRA_CONTROL_BYTES = 0x00010000u,
+    ASTRA_GRAPHICS_DEVICE_ID = 0x41535452u,
+    ASTRA_GRAPHICS_VERSION = 0x00010005u,
+    ASTRA_CAP_BOOT_TEXT = 0x00000040u,
+    ASTRA_CAP_SPRITE_ENGINE = 0x00000080u,
+    ASTRA_CAP_RENDER_ENGINE = 0x00000100u,
+    ASTRA_CAP_COPPER = 0x00000200u,
+    ASTRA_BOOT_TEXT_COLS = 36u,
+    ASTRA_BOOT_TEXT_ROWS = 4u,
+    ASTRA_BOOT_TEXT_CELLS =
+        ASTRA_BOOT_TEXT_COLS * ASTRA_BOOT_TEXT_ROWS,
+};
+
+enum astra_graphics_register {
+    ASTRA_REG_DEVICE_ID = 0x000,
+    ASTRA_REG_VERSION = 0x004,
+    ASTRA_REG_CAPABILITIES = 0x008,
+    ASTRA_REG_GLOBAL_CONTROL = 0x00c,
+    ASTRA_REG_COMMIT = 0x010,
+    ASTRA_REG_GENERATION = 0x014,
+    ASTRA_REG_BACKDROP = 0x018,
+    ASTRA_REG_ARENA_BASE = 0x01c,
+    ASTRA_REG_ARENA_LIMIT = 0x020,
+    ASTRA_REG_COMMIT_ERRORS = 0x024,
+    ASTRA_REG_COMMIT_DEFERRALS = 0x028,
+    ASTRA_REG_FB_BASE = 0x040,
+    ASTRA_REG_FB_PITCH = 0x044,
+    ASTRA_REG_FB_SIZE = 0x048,
+    ASTRA_REG_FB_VIEWPORT_X = 0x04c,
+    ASTRA_REG_FB_VIEWPORT_Y = 0x050,
+    ASTRA_REG_FB_CONTROL = 0x054,
+    ASTRA_REG_FB_KEY = 0x058,
+    ASTRA_REG_TILE0_CONTROL = 0x098,
+    ASTRA_REG_TILE1_CONTROL = 0x0d8,
+    ASTRA_REG_BOOT_TEXT_CONTROL = 0x140,
+    ASTRA_REG_BOOT_TEXT_INDEX = 0x144,
+    ASTRA_REG_BOOT_TEXT_CELL = 0x148,
+    ASTRA_REG_BOOT_TEXT_COMMIT = 0x14c,
+    ASTRA_REG_BOOT_TEXT_GENERATION = 0x150,
+    ASTRA_REG_BOOT_TEXT_GEOMETRY = 0x154,
+    ASTRA_REG_BOOT_TEXT_ORIGIN = 0x158,
+    ASTRA_REG_SPRITE_CONTROL = 0x180,
+    ASTRA_REG_SPRITE_DESCRIPTOR_SELECTOR = 0x184,
+    ASTRA_REG_SPRITE_DESCRIPTOR_DATA = 0x188,
+    ASTRA_REG_SPRITE_PALETTE_SELECTOR = 0x18c,
+    ASTRA_REG_SPRITE_PALETTE_DATA = 0x190,
+    ASTRA_REG_SPRITE_STATUS = 0x194,
+    ASTRA_REG_SPRITE_BUILD_CYCLES = 0x198,
+    ASTRA_REG_SPRITE_READ_BYTES = 0x19c,
+    ASTRA_REG_SPRITE_PIXELS_ADMITTED = 0x1a0,
+    ASTRA_REG_SPRITE_PIXELS_DROPPED = 0x1a4,
+    ASTRA_REG_SPRITE_OVERFLOW_LOW = 0x1a8,
+    ASTRA_REG_SPRITE_OVERFLOW_HIGH = 0x1ac,
+    ASTRA_REG_SPRITE_OVERFLOW_LINE = 0x1b0,
+    ASTRA_REG_SPRITE_OVERFLOW_COUNT = 0x1b4,
+    ASTRA_REG_SPRITE_COLLISION_ROW = 0x1b8,
+    ASTRA_REG_SPRITE_COLLISION_LOW = 0x1bc,
+    ASTRA_REG_SPRITE_COLLISION_HIGH = 0x1c0,
+    ASTRA_REG_SPRITE_COLLISION_FRAME = 0x1c4,
+    ASTRA_REG_SPRITE_AXI_ERRORS = 0x1c8,
+    ASTRA_REG_SPRITE_DEADLINE_ERRORS = 0x1cc,
+    ASTRA_REG_SPRITE_MAX_BUILD_CYCLES = 0x1d0,
+    ASTRA_REG_RENDER_CONTROL = 0x200,
+    ASTRA_REG_RENDER_SUBMISSION_RING_OFFSET = 0x204,
+    ASTRA_REG_RENDER_SUBMISSION_PRODUCER = 0x208,
+    ASTRA_REG_RENDER_SUBMISSION_CONSUMER = 0x20c,
+    ASTRA_REG_RENDER_COMPLETION_RING_OFFSET = 0x210,
+    ASTRA_REG_RENDER_COMPLETION_PRODUCER = 0x214,
+    ASTRA_REG_RENDER_COMPLETION_CONSUMER = 0x218,
+    ASTRA_REG_RENDER_RESOURCE_GENERATION = 0x21c,
+    ASTRA_REG_RENDER_STATUS = 0x220,
+    ASTRA_REG_RENDER_RETIRED_FENCE = 0x224,
+    ASTRA_REG_RENDER_LAST_FAULT = 0x228,
+    ASTRA_REG_RENDER_COMMANDS_SUBMITTED = 0x22c,
+    ASTRA_REG_RENDER_COMMANDS_COMPLETED = 0x230,
+    ASTRA_REG_RENDER_COMMANDS_FAILED = 0x234,
+    ASTRA_REG_RENDER_BACKPRESSURE_CYCLES = 0x238,
+    ASTRA_REG_RENDER_TIMEOUT_COUNT = 0x23c,
+    ASTRA_REG_RENDER_RESET_COUNT = 0x240,
+    ASTRA_REG_RENDER_IRQ_PENDING = 0x244,
+    ASTRA_REG_COPPER_DEVICE_ID = 0x4000,
+    ASTRA_REG_COPPER_VERSION = 0x4004,
+    ASTRA_REG_COPPER_CONTROL = 0x4008,
+    ASTRA_REG_COPPER_STATUS = 0x400c,
+    ASTRA_REG_COPPER_VALIDATE_RANGE = 0x4010,
+    ASTRA_REG_COPPER_VALIDATE_START = 0x4014,
+    ASTRA_REG_COPPER_VALIDATE_STATUS = 0x4018,
+    ASTRA_REG_COPPER_FAULT = 0x401c,
+    ASTRA_REG_COPPER_PC = 0x4020,
+    ASTRA_REG_COPPER_RETIRED = 0x4024,
+    ASTRA_REG_COPPER_IRQ_PENDING = 0x4028,
+    ASTRA_REG_COPPER_IRQ_SOURCES = 0x402c,
+    ASTRA_REG_COPPER_DISPATCH_SELECTOR = 0x4030,
+    ASTRA_REG_COPPER_DISPATCH_ENDPOINT = 0x4034,
+    ASTRA_REG_COPPER_PROGRAM = 0x8000,
+};
+
+enum astra_copper_control {
+    ASTRA_COPPER_ENABLE = 1u << 0,
+    ASTRA_COPPER_PROMOTE = 1u << 1,
+    ASTRA_COPPER_CLEAR_FAULT = 1u << 2,
+};
+
+enum astra_copper_status {
+    ASTRA_COPPER_STATUS_ACTIVE_BANK = 1u << 0,
+    ASTRA_COPPER_STATUS_EDIT_BANK = 1u << 1,
+    ASTRA_COPPER_STATUS_VALIDATE_BUSY = 1u << 2,
+    ASTRA_COPPER_STATUS_VALIDATE_DONE = 1u << 3,
+    ASTRA_COPPER_STATUS_VALIDATE_VALID = 1u << 4,
+    ASTRA_COPPER_STATUS_PROMOTION_PENDING = 1u << 5,
+    ASTRA_COPPER_STATUS_PROMOTED = 1u << 6,
+    ASTRA_COPPER_STATUS_RUNNING = 1u << 7,
+    ASTRA_COPPER_STATUS_WAITING = 1u << 8,
+    ASTRA_COPPER_STATUS_IRQ_PENDING = 1u << 9,
+    ASTRA_COPPER_STATUS_FAULT = 1u << 10,
+};
+
+enum astra_render_control {
+    ASTRA_RENDER_CONTROL_ENABLE = 1u << 0,
+    ASTRA_RENDER_CONTROL_REBASE = 1u << 1,
+    ASTRA_RENDER_CONTROL_SOFT_RESET = 1u << 2,
+};
+
+enum astra_render_status {
+    ASTRA_RENDER_ENGINE_BUSY = 1u << 0,
+    ASTRA_RENDER_ENGINE_RESET_ACTIVE = 1u << 1,
+    ASTRA_RENDER_ENGINE_CONFIG_FAULT = 1u << 2,
+    ASTRA_RENDER_ENGINE_IRQ_PENDING = 1u << 3,
+    ASTRA_RENDER_ENGINE_ENABLED = 1u << 4,
+};
+
+enum astra_sprite_status {
+    ASTRA_SPRITE_STATUS_WRITE_READY = 1u << 0,
+    ASTRA_SPRITE_STATUS_VALIDATE_BUSY = 1u << 1,
+    ASTRA_SPRITE_STATUS_PENDING_VALID = 1u << 2,
+    ASTRA_SPRITE_STATUS_PENDING_READY = 1u << 3,
+    ASTRA_SPRITE_STATUS_ACTIVATE_BUSY = 1u << 4,
+    ASTRA_SPRITE_STATUS_BUILDER_BUSY = 1u << 5,
+    ASTRA_SPRITE_STATUS_FETCH_ERROR = 1u << 6,
+    ASTRA_SPRITE_STATUS_DEADLINE_ERROR = 1u << 7,
+    ASTRA_SPRITE_STATUS_SLOT_VALID_MASK = 0x0fu << 8,
+    ASTRA_SPRITE_STATUS_ENABLED = 1u << 12,
+    ASTRA_SPRITE_STATUS_CLONE_PENDING = 1u << 13,
+    ASTRA_SPRITE_STATUS_ACTIVATION_PENDING = 1u << 14,
+    ASTRA_SPRITE_STATUS_COLLISION_EVENT = 1u << 15,
+};
+
+struct astra_graphics_memory_map {
+    void *mapping;
+    size_t mapping_bytes;
+    volatile uint8_t *data;
+    size_t data_bytes;
+};
+
+struct astra_graphics_device {
+    int memory_fd;
+    volatile uint32_t *registers;
+    volatile uint8_t *framebuffer;
+};
+
+void astra_graphics_device_init(struct astra_graphics_device *device);
+int astra_graphics_device_open(struct astra_graphics_device *device,
+                               bool map_framebuffer);
+void astra_graphics_device_close(struct astra_graphics_device *device);
+int astra_graphics_device_validate(const struct astra_graphics_device *device,
+                                   bool require_boot_text);
+void astra_graphics_memory_map_init(struct astra_graphics_memory_map *mapping);
+int astra_graphics_memory_map_open(
+    const struct astra_graphics_device *device,
+    struct astra_graphics_memory_map *mapping,
+    uint32_t physical_address, size_t bytes);
+void astra_graphics_memory_map_close(
+    struct astra_graphics_memory_map *mapping);
+int astra_graphics_scene_commit(
+    const struct astra_graphics_device *device, uint64_t timeout_ns,
+    uint32_t *generation_out);
+uint32_t astra_mmio_read(const struct astra_graphics_device *device,
+                         unsigned offset);
+void astra_mmio_write(const struct astra_graphics_device *device,
+                      unsigned offset, uint32_t value);
+void astra_graphics_memory_barrier(void);
+uint64_t astra_monotonic_nanoseconds(void);
+
+#endif

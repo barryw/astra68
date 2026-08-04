@@ -25,7 +25,9 @@ fn main() -> ExitCode {
     };
 
     while !machine.snapshot().ready_for_loader
+        && !machine.snapshot().kernel_ready
         && !machine.snapshot().post_failed
+        && !machine.snapshot().kernel_panicked
         && machine.snapshot().cycles < BOOT_TIMEOUT_CYCLES
     {
         machine.advance(250_000);
@@ -38,7 +40,7 @@ fn main() -> ExitCode {
         snapshot.backend, snapshot.cycles, snapshot.cpu_pc, snapshot.build_id
     );
 
-    if snapshot.ready_for_loader {
+    if snapshot.ready_for_loader || snapshot.kernel_ready {
         ExitCode::SUCCESS
     } else {
         eprintln!("\nUART transcript:\n{}", machine.serial_transcript());

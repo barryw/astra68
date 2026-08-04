@@ -1,5 +1,6 @@
 #include "allocation.h"
 #include "block.h"
+#include "ohci.h"
 #include "memory.h"
 #include "platform.h"
 #include "vesta.h"
@@ -154,10 +155,13 @@ static void initialize_test(void)
               ASTRA_MEMORY_RANGE_ROM_BACKING,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_EXECUTE |
                   ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, 0x03e40000u, 0x001c0000u,
+    add_range(&info, 0x03e40000u, 0x000c0000u,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
+    add_range(&info, OHCI_DMA_POOL_BASE, OHCI_DMA_POOL_SIZE,
+              ASTRA_MEMORY_RANGE_DEVICE,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
     astra_boot_info_finalize(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
     kernel_dma_init();

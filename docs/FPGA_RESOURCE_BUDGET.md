@@ -1,5 +1,376 @@
 # FPGA resource budget
 
+## Active Arty Z7-20 budget (2026-07-30)
+
+The active PL target is `xc7z020clg400-1` on the Arty Z7-20 attached to
+`beast`. It provides 53,200 LUTs, 106,400 flip-flops, 140 36-Kbit block RAMs,
+and 220 DSP slices. The MC68030/PMMU executes through QEMU on the ARM processing
+system and consumes no PL LUT, BRAM, or DSP capacity.
+
+There is no artificial utilization cap. A design is accepted only when the
+complete production feature set fits, routes, meets every clock including the
+74.25 MHz 720p pixel path and its 371.25 MHz HDMI serializer clock, and passes
+the hardware gates in
+[`GRAPHICS_ARCHITECTURE.md`](GRAPHICS_ARCHITECTURE.md). Isolated synthesis and
+nominal free resources are planning evidence only.
+
+The PS/DDR framebuffer, two-tile-layer scanout, and dynamic boot-text baseline
+has a qualified full route, exact boot package, and hardware DDR readback
+result. It uses 13,096 total LUTs, 12,892 registers, 29.5 BRAM36-equivalent
+tiles, and five DSPs. The active complete-renderer release below supersedes that
+baseline for current capacity planning. Linux reserves the version-1 128 MiB
+graphics arena as `no-map`; that DDR allocation is not a PL resource count.
+
+Version 1 now includes two INDEX4/INDEX8 tile layers. The retired 720-pixel
+4bpp tile builder maps in an isolated XC7 planning run to approximately 1,220
+logic cells, 1,331 flip-flops, four BRAM36 equivalents, and no DSPs. That is a
+historical lower-bound data point. The provisional envelope for both 720p
+tile layers, their shared AXI path, palette integration, and final composition
+was 4,000 LUTs and 16 BRAM36s. It was neither a utilization cap nor release
+evidence.
+
+That provisional envelope is now superseded by the integrated checkpoint
+below. Historical component values remain useful for attributing growth but
+must not be added to the integrated total.
+
+### Arty integrated scanout checkpoint
+
+Exact Beast Vivado 2024.2 checkpoint `boot-text6` contains Zynq PS integration,
+GP0 graphics control, three 64-bit HP DDR read paths, framebuffer and two tile
+line builders, palette stores, compositor, line scheduler, complete HDMI
+transport, and the four-row tear-free boot-text plane. It fully routes with
++0.002 ns setup slack, +0.019 ns hold slack, +0.538 ns pulse-width slack, no
+timing failures, and all 23,261 routable nets complete. It uses:
+
+| Resource | Used | Device percent | Physical free |
+|---|---:|---:|---:|
+| Slice LUTs, total | 13,096 | 24.62% | 40,104 |
+| LUT as logic | 11,253 | 21.15% | 41,947 |
+| LUT as memory | 1,843 | 10.59% of LUT-RAM capacity | 15,557 |
+| Slice registers | 12,892 | 12.12% | 93,508 |
+| BRAM36-equivalent tiles | 29.5 | 21.07% | 110.5 |
+| DSP48 | 5 | 2.27% | 215 |
+
+These are the current complete-system planning numbers for the implemented
+scanout path. They do not include sprites, copper, blitter/virtual sprites,
+geometry/fill, AFNT glyph expansion, or command execution. Those features
+still require their own integrated route; nominal free capacity does not prove
+that the final floorplan will close.
+
+Bitstream SHA-256 is
+`869b0b4917135486376ab868f5599963dced75a2f8cfa76b2261fe01d0439cf4`.
+The exact source and report identities, functional coverage, active boot
+hashes, and hardware evidence are recorded in
+`fpga/arty/graphics/TIMING_CLOSURE.md`.
+
+### Arty integrated 64-sprite checkpoint
+
+Exact Beast Vivado 2024.2 checkpoint `sprite64-cdc-full2` is the historical
+hardware-qualified sprite checkpoint. It adds the complete 64-sprite engine and the
+line-slot bundled-data CDC correction. It fully routes with +0.024 ns setup,
++0.034 ns hold, +0.538 ns pulse-width slack, no failing endpoints, and all
+41,778 routable nets complete. It uses:
+
+| Resource | Used | Device percent | Physical free |
+|---|---:|---:|---:|
+| Slice LUTs, total | 21,954 | 41.27% | 31,246 |
+| Slice registers | 23,003 | 21.62% | 83,397 |
+| BRAM36-equivalent tiles | 85.5 | 61.07% | 54.5 |
+| DSP48 | 51 | 23.18% | 169 |
+
+The qualified sprite system therefore costs 8,858 LUTs, 10,111 registers, 56
+BRAM36-equivalent tiles and 46 DSPs over `boot-text6`. Its INDEX8 shape pixels
+reside in the reserved DDR graphics arena and do not consume BRAM; the 85.5
+BRAM total covers descriptors, palettes, working lines, published lines and
+the pre-existing scanout system. Hardware stress, complete off-screen clipping,
+edge clipping and the visible 64-sprite grid pass with zero drops, overflow,
+AXI errors or deadline errors. These are historical complete-system planning
+numbers for the implemented scanout and sprite path.
+
+Bitstream SHA-256 is
+`4b1cea2a4c97b96c6fda0d04d883c16f118cec95e35249a171020ee4e33380b2`.
+Exact source, report and checkpoint identities are in
+`fpga/arty/graphics/TIMING_CLOSURE.md`.
+
+### Arty basic-renderer rejected route
+
+Exact Beast Vivado 2024.2 checkpoint `basic-blitter-route-1` adds the bounded
+command/completion transport, descriptor validation, shared pixel writer, and
+basic clipped fill and overlap-safe same-format copy. Functional simulation
+passes and all 54,974 nets route, but the checkpoint is not a release because
+the 200 MHz renderer domain fails setup at -7.828 ns. Its measured resources
+are useful for capacity planning only:
+
+| Resource | Used | Device percent | Physical free |
+|---|---:|---:|---:|
+| Slice LUTs, total | 29,363 | 55.19% | 23,837 |
+| LUT as logic | 24,233 | 45.55% | 28,967 |
+| LUT as memory | 5,130 | 29.48% of LUT-RAM capacity | 12,270 |
+| Slice registers | 30,565 | 28.73% | 75,835 |
+| BRAM36-equivalent tiles | 85.5 | 61.07% | 54.5 |
+| DSP48 | 65 | 29.55% | 155 |
+
+Relative to the hardware-qualified sprite release, this candidate adds 7,409
+LUTs, 7,562 registers and 14 DSPs with no BRAM growth. The result confirms that
+the first renderer stage fits comfortably in physical resources; it does not
+prove timing closure or final graphics capacity. Exact paths, source hashes,
+reports, and the rejected-artifact disposition are in
+`fpga/arty/graphics/TIMING_CLOSURE.md`.
+
+The subsequent `full-route-2` checkpoint contains the timing-clean focused
+blitter repair. It also routes every net, but remains rejected at -5.236 ns
+because command-processor range validation and completion-result selection
+form the new limiting cone. Its measured planning totals are:
+
+| Resource | Used | Device percent | Physical free |
+|---|---:|---:|---:|
+| Slice LUTs, total | 28,900 | 54.32% | 24,300 |
+| LUT as logic | 23,770 | 44.68% | 29,430 |
+| LUT as memory | 5,130 | 29.48% of LUT-RAM capacity | 12,270 |
+| Slice registers | 31,146 | 29.27% | 75,254 |
+| BRAM36-equivalent tiles | 85.5 | 61.07% | 54.5 |
+| DSP48 | 65 | 29.55% | 155 |
+
+Relative to the qualified sprite release, this exact candidate adds 6,946
+LUTs, 8,143 registers and 14 DSPs with no BRAM growth. Physical capacity is
+still not the Stage 1 blocker; the measured 200 MHz command-processor path is.
+
+### Arty Stage 1 basic renderer qualified route
+
+Checkpoint `path-boundary-3/full-route-9` is the hardware-qualified Stage 1
+renderer. It includes the complete framebuffer/tile/sprite/boot-text path plus
+bounded submission and completion rings, surface validation, timeout/reset,
+the shared pixel writer, clipped fill, and overlap-safe same-format copy. The
+exact Beast Vivado 2024.2 route meets 200 MHz render/build timing at +0.003 ns,
+74.25 MHz pixel timing at +1.462 ns, hold at +0.013 ns, and pulse width at
++0.538 ns. All 55,816 routable nets complete with zero errors.
+
+| Resource | Used | Device percent | Physical free |
+|---|---:|---:|---:|
+| Slice LUTs, total | 28,549 | 53.66% | 24,651 |
+| LUT as logic | 23,525 | 44.22% | 29,675 |
+| LUT as memory | 5,024 | 28.87% of LUT-RAM capacity | 12,376 |
+| Slice registers | 33,087 | 31.10% | 73,313 |
+| Occupied slices | 10,982 | 82.57% | 2,318 |
+| BRAM36-equivalent tiles | 84.5 | 60.36% | 55.5 |
+| DSP48E1 | 61 | 27.73% | 159 |
+
+Relative to the qualified sprite release, Stage 1 adds 6,595 LUTs, 10,084
+registers and 10 DSPs while using one fewer BRAM36-equivalent tile after final
+packing. Although logical LUT, register, BRAM and DSP headroom remains broad,
+only 2,318 physical slices remain unused. Future graphics stages must therefore
+track placed slice occupancy and timing, not infer capacity from LUT count
+alone. Complete blitter/virtual sprites, geometry, glyphs, and copper are not
+included in these totals.
+
+The historical complete-blitter OOC checkpoints were useful for attributing
+growth but are not additive capacity numbers. The exact integrated route below
+supersedes them and is the only current complete-system planning baseline.
+
+The exact bitstream SHA-256 is
+`fbfd7f80572dd9b0783e94d61cacda4388453083c8a8cae39ffc131628eef2aa`.
+Route, source, release and hardware evidence is in
+`fpga/arty/graphics/TIMING_CLOSURE.md` and
+`docs/evidence/astra-arty-render-basic-hardware-20260801.log`.
+
+### Arty complete renderer qualified route
+
+Checkpoint `full-route-24-checkpoint-49` is the active hardware-qualified
+graphics release. It retains framebuffer and tile scanout, boot text, all 64
+sprites, command/completion transport, descriptor validation, timeout/reset,
+the shared pixel writer, and the complete blitter. The exact Beast Vivado
+2024.2 route meets 200 MHz render/build timing at +0.013 ns, 74.25 MHz pixel
+timing at +2.620 ns, hold at +0.051 ns, and pulse width at +0.538 ns. All
+59,647 routable nets complete with zero errors.
+
+| Resource | Used | Device percent | Physical free |
+|---|---:|---:|---:|
+| Slice LUTs, total | 30,185 | 56.74% | 23,015 |
+| LUT as logic | 25,161 | 47.30% | 28,039 |
+| LUT as memory | 5,024 | 28.87% of LUT-RAM capacity | 12,376 |
+| Slice registers | 36,050 | 33.88% | 70,350 |
+| Occupied slices | 11,695 | 87.93% | 1,605 |
+| BRAM36-equivalent tiles | 84.5 | 60.36% | 55.5 |
+| DSP48E1 | 66 | 30.00% | 154 |
+
+Relative to Stage 1, the complete blitter adds 1,636 LUTs, 2,963 registers,
+five DSPs, and 713 occupied slices while BRAM use is unchanged. Logical LUT,
+register, BRAM, and DSP headroom remains substantial, but only 1,605 physical
+slices are currently unused. Virtual sprites, geometry and pattern/flood
+operations, AFNT glyph expansion, and copper are not included. Each must be
+evaluated by a new exact full route; nominal LUT headroom alone is not a fit
+claim.
+
+The exact bitstream SHA-256 is
+`96c98a4dadb5703efcc93121b3d6c6226dc319c52e9054697de98f1e8cca17a0`.
+Active `BOOT.BIN` is
+`dfd34dd31bafd199889d7d2cc1f9f2682b72636b296e4f4b3a1964d4ef6acbaa`.
+Ten consecutive complete-blitter hardware runs pass 29 fenced commands and
+verify 1,196,651 pixels with zero backpressure or engine errors. Exact route,
+source, release, and hardware identities are in
+`fpga/arty/graphics/TIMING_CLOSURE.md`.
+
+### Arty geometry qualified checkpoint
+
+Checkpoint-44 `full-route-17-166m667` adds line, rectangle, circle, ellipse,
+pattern-fill, and bounded flood engines to the complete renderer. It was the
+qualified capacity authority before AFNT. The exact Beast Vivado 2024.2 route at
+166,666,672 Hz meets setup at `+0.060 ns`, hold at `+0.016 ns`, and pulse width
+at `+0.538 ns`, with zero failing endpoints. AFNT glyph expansion and copper
+are not included.
+
+| Resource | Used | Device percent | Physical free |
+|---|---:|---:|---:|
+| Slice LUTs, total | 32,207 | 60.54% | 20,993 |
+| Slice registers | 39,098 | 36.75% | 67,302 |
+| Occupied slices | 12,344 | 92.81% | 956 |
+| BRAM36-equivalent tiles | 84.5 | 60.36% | 55.5 |
+| DSP48E1 | 70 | 31.82% | 150 |
+
+Relative to the hardware-qualified complete-blitter release, this checkpoint
+adds 2,022 LUTs, 3,048 registers, four DSPs, and 649 occupied slices. Virtual
+sprites remain bounded groups of existing blitter commands and add no second
+descriptor engine. The remaining 956 physical slices are the operative
+capacity risk for AFNT and dual-bank copper; logical LUT and BRAM headroom must
+not be used as a substitute for exact placed-and-routed evidence.
+
+The exact bitstream SHA-256 is
+`b2599c5c3b00f312fc4a8b149944243c0885741f5df061f91d521009ce24472b`.
+Ten consecutive hardware-certification runs pass every geometry primitive,
+the exact 60-pixel flood topology, and explicit bounded workspace overflow
+with zero backpressure.
+
+### Arty AFNT qualified checkpoint
+
+`full-route-3-interbeat-gap-166m667` is the active qualified capacity
+authority. It adds shared-pipeline AFNT glyph expansion for MASK1, A4, A8,
+INDEX4, and INDEX8. The exact Beast Vivado 2024.2 route at 166,666,672 Hz
+meets setup at `+0.078 ns`, hold at `+0.015 ns`, and pulse width at
+`+0.538 ns`; all 68,601 routable nets complete without error. Copper is not
+included.
+
+| Resource | Used | Device percent | Physical free |
+|---|---:|---:|---:|
+| Slice LUTs, total | 34,379 | 64.62% | 18,821 |
+| LUT as memory | 5,025 | 28.88% of LUT-RAM capacity | 12,375 |
+| Slice registers | 40,952 | 38.49% | 65,448 |
+| Occupied slices | 12,674 | 95.29% | 626 |
+| BRAM36-equivalent tiles | 84.5 | 60.36% | 55.5 |
+| DSP48E1 | 80 | 36.36% | 140 |
+
+Relative to the geometry checkpoint, AFNT adds 2,172 LUTs, 1,854 registers,
+ten DSPs, and 330 occupied slices with no BRAM growth. The 5,025 memory LUTs
+are 3,774 distributed-RAM LUTs and 1,251 SRL LUTs; AFNT and the render command
+processor themselves infer no LUT RAM. The dominant attributable memory LUTs
+are the sprite line builder and collision banks, scene store, tile line
+builders, boot text, framebuffer support, and PS SmartConnect FIFOs.
+
+Only 626 physical slices remain unused. That density, rather than aggregate
+LUT, register, BRAM, or DSP availability, is the primary copper integration
+risk. Copper's dual 4096-instruction banks must be explicit BRAM, and an exact
+full route is required before any capacity claim. Twenty consecutive complete
+AFNT hardware runs and five independent sprite runs pass. Exact artifacts and
+log hashes are in `fpga/arty/graphics/TIMING_CLOSURE.md`.
+
+### Arty complete copper-qualified checkpoint
+
+The complete production graphics design now includes the BRAM-only dual-bank
+4096-instruction copper, WAIT/SKIP, validated MOVE, IRQ, command dispatch, and
+hardware register timing classes. The exact Beast Vivado 2024.2 route at
+166,666,672 Hz meets setup at `+0.036 ns` and hold at `+0.016 ns`, with zero
+failed, unrouted, partially routed, or overlapping nets.
+
+| Resource | Used | Device percent | Physical free |
+|---|---:|---:|---:|
+| Slice LUTs, total | 37,534 | 70.55% | 15,666 |
+| LUT as memory | 5,025 | 28.88% of LUT-RAM capacity | 12,375 |
+| Slice registers | 44,655 | 41.97% | 61,745 |
+| Occupied slices | 13,036 | 98.02% | 264 |
+| BRAM36-equivalent tiles | 118 | 84.29% | 22 |
+| DSP48E1 | 83 | 37.73% | 137 |
+
+Relative to the AFNT checkpoint, complete copper adds 3,155 LUTs, 3,703
+registers, 33.5 BRAM36-equivalent tiles, three DSPs, and 362 occupied slices.
+The copper stores account for 16 RAMB36 blocks and no LUTRAM in the focused
+implementation. Total LUT-memory use remains 5,025; it is dominated by small,
+ported, or asynchronous memories in sprite, tile, boot-text, framebuffer, and
+PS SmartConnect logic rather than the copper instruction store.
+
+Only 22 BRAM36-equivalent tiles and 264 physical slices remain. BRAM is the
+primary capacity limit for future PL features, and physical packing is also
+tight. This is not a routing failure: global utilization is approximately
+29.4% vertical and 34.7% horizontal, the exact design routes completely, and
+the normal build flow reproduces a timing-clean bitstream. New graphics
+storage must therefore justify BRAM explicitly; large memories belong in DDR
+unless deterministic on-chip access is required.
+
+### Arty tile span checkpoint
+
+The first retained Arty RTL component is the tile span walker at source SHA-256
+`2e83680312229492fd9ca9ed07353f21094c48bbf0ec787e0c4bdf9abeb97e86`.
+On Beast, Vivado 2024.2 routed it out of context for `xc7z020clg400-1` against a
+5.000 ns clock with 0.263 ns setup slack, 0.189 ns hold slack, and no timing
+waiver. It uses 197 LUTs, 104 flip-flops, no BRAM, and no DSPs. The routed DCP
+SHA-256 is
+`eada9ee0f3237aeefdb98046d5dce1b03719c03e98a4677c8fd0e0dff03ddd76`.
+
+At 200 MHz the maximum 241-span 8x8 line plan takes 1.205 microseconds before
+backpressure. Directed simulation covers aligned and unaligned lines, signed
+positive and negative scroll, independent wrap, 8x8 and 16x16 tiles,
+backpressure, extreme signed scroll, and invalid configuration. This is valid
+evidence for the span planner only. OOC ports do not have final top-level
+placement, and the checkpoint says nothing yet about AXI service, line-cache
+BRAM, tile palettes, composition, HDMI, or complete-system timing.
+
+### Arty complete tile-line checkpoint
+
+The complete tile-line builder source and routed history are identified in
+`fpga/arty/graphics/TIMING_CLOSURE.md`. On Beast, Vivado 2024.2 routes the
+exact `xc7z020clg400-1` component against the 5.000 ns build-clock constraint
+with -0.085 ns setup slack on two endpoints and +0.027 ns hold slack. It uses:
+
+| Resource | Used | Device percent |
+|---|---:|---:|
+| Slice LUTs | 1,794 | 3.37% |
+| Slice registers | 1,428 | 1.34% |
+| BRAM36 | 6 | 4.29% |
+| DSP48 | 0 | 0.00% |
+
+The measured 1280-pixel INDEX8 build takes 1,338 clocks at 200 MHz, leaving
+3,106 clocks before the 4,444-clock 720p line deadline. This result includes
+one tile layer's span planning, ordered AXI read control and response tags,
+descriptor and pattern storage, pixel expansion, and four line slots. It does
+not include the Zynq PS/AXI interconnect, a second layer, palettes, the final
+compositor, framebuffer/sprite paths, or HDMI. The OOC design deliberately
+lacks final external delays and real PS clock placement, but the measured
+85 ps miss remains an explicit risk that the full integration must close.
+
+### Arty 720p transport checkpoint
+
+The exact Zynq PS plus fixed 1280x720p60 HDMI shell fully routes on Beast
+Vivado 2024.2 with +5.393 ns setup slack, +0.160 ns hold slack, +0.538 ns
+pulse-width slack, no failing endpoints, no routing errors, and no methodology
+findings. It uses:
+
+| Resource | Used | Device percent |
+|---|---:|---:|
+| Slice LUTs | 202 | 0.38% |
+| Slice registers | 102 | 0.10% |
+| BRAM36 | 0 | 0.00% |
+| DSP48 | 0 | 0.00% |
+| BUFG | 4 | 12.50% |
+| MMCM | 1 | 25.00% |
+| OSERDESE2 | 8 | n/a |
+
+Bitstream SHA-256 is
+`f8db5c827b32f202500a201e7d8ba4f01e21cdbc55259d867bbeb8c45a1e778a`.
+The exact bitstream is active on Arty and physical HDMI displays the retained
+full-frame test raster. These counts cover transport only, not DDR, AXI,
+framebuffers, tiles, sprites, copper, blitter, geometry, or glyph hardware.
+
+Everything below this notice is the retained ULX3S LFE5U-85F budget and route
+history. It does not constrain the Arty implementation.
+
 This document records Astra 68's production capacity on the ULX3S LFE5U-85F.
 The current release has no artificial utilization cap: physical device
 capacity and a successful timing-clean route are the limits.
@@ -279,6 +650,50 @@ The font is now one 2048x9 `DP16KD`, so the three unused font-bank blocks are
 physically absent rather than counted as prospective savings. The corrected
 `B1F9E60D` route is the release baseline above; P55 remains only the historical
 checkpoint that isolated the font-bank problem.
+
+## 320CAE59 routed splash checkpoint
+
+Build `320CAE59` is the first complete hardware-rendered splash route. Beast
+Yosys 0.64+159 reports zero SCCs, 53,867 LUT4s, 25,996 GSR-enabled FFs, 103
+block RAMs, and 18 multipliers. The exact strict seed-4 heap/router1 route
+packs:
+
+| Resource | Used | Physical free |
+|---|---:|---:|
+| TRELLIS_COMB | 67,539 (80.75%) | 16,101 |
+| TRELLIS_FF | 26,025 (31.12%) | 57,615 |
+| DP16KD | 103 (49.52%) | 105 |
+| MULT18X18D | 18 (11.54%) | 138 |
+
+Every production constraint passes without a waiver: 14.044352 MHz CPU,
+66.600067 MHz SDRAM, 79.516541 MHz USB, 55.812916 MHz pixel, and 255.623718
+MHz HDMI shift. The bitstream SHA-256 is
+`74d1dcaa0af7eb4fa96570a7844b64b1f29115030e6952829c50f378e364c7ce`.
+This checkpoint is not a release: its first ULX3S splash presentation exposed
+the Vega baseline-copy race documented in `TIMING_CLOSURE.md`, so build
+`320CAE59` is rejected. These counts remain valid historical capacity evidence
+for that exact source only.
+
+## C53E68B7 routed splash repair checkpoint
+
+Exact fixed build `C53E68B7` includes the Vega baseline-copy arbitration
+repair and the complete production feature set. Beast Yosys 0.64+159 reports
+zero SCCs, 53,641 LUT4s, 25,991 mapped FFs, 103 block RAMs, and 18
+multipliers. The exact strict seed-4 heap/router1 route packs:
+
+| Resource | Used | Physical free |
+|---|---:|---:|
+| TRELLIS_COMB | 67,295 (80.46%) | 16,345 |
+| TRELLIS_FF | 26,024 (31.11%) | 57,616 |
+| DP16KD | 103 (49.52%) | 105 |
+| MULT18X18D | 18 (11.54%) | 138 |
+
+Every production constraint passes without a waiver: 14.127087 MHz CPU,
+67.971725 MHz SDRAM, 75.982063 MHz USB, 55.224213 MHz pixel, and 310.077515
+MHz HDMI shift. The bitstream SHA-256 is
+`9c6a1f575596bf612fa9649940a3c3a65758aa7e55684cebf3b42ba62c576b46`.
+This is retained route and capacity evidence. It becomes a release candidate
+only after repeated SRAM-only ULX3S boots and physical HDMI qualification.
 
 ## Acceptance rules
 

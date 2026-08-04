@@ -1,5 +1,13 @@
 # Astraea — DMA / Drawing / Copper Register Map (v0.4)
 
+> **Legacy ULX3S implementation contract.** This document remains authoritative
+> for the implemented ULX3S Astraea v0.4 block and its regression evidence. The
+> active Arty Z7-20 graphics architecture is
+> [`GRAPHICS_ARCHITECTURE.md`](GRAPHICS_ARCHITECTURE.md), which supersedes these
+> formats, address widths, command transport, copper capacity, memory topology,
+> and performance limits for the new target. Do not extend this register map
+> into the Arty ABI by inference.
+
 Astraea is the Astra 68 "brain" chip (Agnus analog). Four subsystems:
 
 1. **Memory arbiter** — schedules the one 16-bit SDRAM among all masters.

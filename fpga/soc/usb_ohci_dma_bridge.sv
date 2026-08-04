@@ -184,15 +184,24 @@ module usb_ohci_dma_bridge #(
                 end
                 MEM_DECODE: begin
                     if (request_address_valid) begin
-                        mem_write <= request_we_mem;
-                        mem_addr <= request_byte_addr_mem - SDRAM_BASE;
-                        mem_be <= {
-                            request_sel_mem[0], request_sel_mem[1],
-                            request_sel_mem[2], request_sel_mem[3]
-                        };
-                        mem_wdata <= byte_swap32(request_wdata_mem);
-                        mem_valid <= 1'b1;
-                        mem_state <= MEM_REQUEST;
+                        // The generated OHCI engine emits masked no-op beats
+                        // in some register-update bursts. Wishbone requires an
+                        // acknowledgement, but SDRAM has no command to issue
+                        // when every byte lane is disabled.
+                        if (request_we_mem && request_sel_mem == 4'b0000) begin
+                            response_data <= 32'd0;
+                            mem_state <= MEM_RETURN;
+                        end else begin
+                            mem_write <= request_we_mem;
+                            mem_addr <= request_byte_addr_mem - SDRAM_BASE;
+                            mem_be <= {
+                                request_sel_mem[0], request_sel_mem[1],
+                                request_sel_mem[2], request_sel_mem[3]
+                            };
+                            mem_wdata <= byte_swap32(request_wdata_mem);
+                            mem_valid <= 1'b1;
+                            mem_state <= MEM_REQUEST;
+                        end
                     end else begin
                         response_data <= 32'd0;
                         fault <= 1'b1;

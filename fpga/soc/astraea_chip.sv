@@ -72,6 +72,7 @@ module astraea_chip (
     wire cpu_blitter_write = cpu_write_stb && cpu_blitter_select;
     wire cpu_draw_select = cpu_addr >= 16'h0100 && cpu_addr < 16'h0180;
     wire cpu_draw_write = cpu_write_stb && cpu_draw_select;
+    wire [13:0] cpu_word_addr = cpu_addr[15:2];
 
     wire copper_move_raw;
     wire [17:0] copper_move_addr_raw;
@@ -281,7 +282,7 @@ module astraea_chip (
             end
             if (global_irq_stat_write && blitter_be[0] && blitter_wdata[3])
                 draw_irq_pending <= 1'b0;
-            if (cpu_write_stb && cpu_addr == 16'h0090 && cpu_be[0])
+            if (cpu_write_stb && cpu_word_addr == 14'h0024 && cpu_be[0])
                 copper_irq_source_pending <= copper_irq_source_pending &
                                              ~cpu_wdata[3:0];
             if (copper_irq_event) begin
@@ -299,16 +300,16 @@ module astraea_chip (
                      (draw_irq_enable && draw_irq_pending);
 
     always @* begin
-        if (cpu_addr == 16'h0004)
+        if (cpu_word_addr == 14'h0001)
             cpu_rdata = ASTRAEA_VERSION;
-        else if (cpu_addr == 16'h0014)
+        else if (cpu_word_addr == 14'h0005)
             cpu_rdata = blitter_rdata |
                         {28'd0, draw_irq_pending, 1'b0,
                          copper_irq_pending, 1'b0};
-        else if (cpu_addr == 16'h0018)
+        else if (cpu_word_addr == 14'h0006)
             cpu_rdata = CAP_COPY | CAP_FILL | CAP_COPY_KEY | CAP_COPY_MASK |
                         CAP_GEOMETRY | CAP_GLYPH | CAP_FLOOD | CAP_COPPER;
-        else if (cpu_addr == 16'h0090)
+        else if (cpu_word_addr == 14'h0024)
             cpu_rdata = {28'd0, copper_irq_source_pending};
         else if (cpu_blitter_select)
             cpu_rdata = blitter_rdata;

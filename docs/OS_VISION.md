@@ -191,37 +191,35 @@ the native design rather than defining it.
 
 ## 4. Current hardware assumption
 
-**LOCKED:** Astra 68 uses a 68030-class core with its paged PMMU and caches
-built into the CPU implementation. The operating system will be designed for
-that architecture; an external Vesta region-MMU is not an alternate OS target.
+**LOCKED:** Astra OS sees one big-endian MC68030-class CPU with its paged PMMU
+and caches. The active Arty target executes that machine through QEMU TCG on
+the Zynq ARM processing system. This changes the implementation boundary, not
+the guest architecture or ABI. An external Vesta region MMU is not an alternate
+OS target.
 
-The exact RTL revision must still earn acceptance against the MC68030 integer,
-exception, cache, and PMMU contract in `docs/MC68030_COMPLIANCE.md`. Locking the
-architectural target does not waive defects in a candidate implementation.
+The QEMU implementation must continue to earn acceptance against Motorola
+MC68030 semantics, the shared conformance suite, Musashi, and retained RTL
+tests. No emulator-specific semantic may become part of the Astra ABI.
 
-The older WF68K30L, 68020/no-PMMU TG68K, first TG030/PMMU import, and Vesta
-region-MMU path are retired. Their RTL, wrappers, and selectable build paths
-have been removed. Historical reports may retain their names as provenance,
-but no active hardware or OS design may depend on them.
+The active hardware baseline is:
 
-The initial software baseline remains:
-
-- one big-endian 68030-class CPU;
-- 32 MiB physical SDRAM;
+- one big-endian MC68030-class virtual CPU with an integrated PMMU;
+- the Arty Z7-20's 512 MiB DDR shared deliberately among Linux, QEMU guest RAM,
+  and reserved device memory, with the final guest allocation fixed by the boot
+  memory contract rather than the old 32 MiB ULX3S limit;
 - full supervisor/user separation and paged address translation;
 - no hardware FPU, with soft-float where needed;
-- separate CPU instruction and data caches;
-- multiple chipset DMA masters sharing SDRAM;
-- Vega v0.5 framebuffer scanout with pixel-granular X/Y viewport scrolling,
-  exactly 16 hardware sprites, and no tile layers. The earlier 32-sprite/tile
-  draft was reduced to fit and route the complete ULX3S production system; it
-  is not an application-visible fallback configuration;
-- audio hosted by an AstraHost/ESP service rather than an instantiated FPGA
-  Lyra block. The Lyra aperture remains reserved and its old proposal is not a
-  production capability;
-- an ESP32-class I/O coprocessor running ESP-IDF FreeRTOS and owning SD plus
-  Wi-Fi/TCP/UDP, connected to the FPGA exclusively through SPI;
-- ROM/BRAM sufficient for POST, recovery, and boot loading.
+- Arty Vega/Astraea graphics as frozen by `GRAPHICS_ARCHITECTURE.md`, including
+  1920x1080p60, two-axis ring scrolling, two independently scrolling tile
+  layers, and exactly 64 hardware sprites. Sprite 0 is the optional desktop
+  pointer and becomes an ordinary sprite when the pointer is disabled;
+- Linux-owned SD, host integration, and board services exposed through explicit
+  Astra device contracts rather than inherited Nova behavior;
+- a separately specified audio subsystem and fixed-point game-math coprocessor;
+- enough immutable PL/boot state to report failure before normal services run.
+
+The retired ULX3S TG68K system remains valuable conformance and rollback
+evidence but is not the active resource, memory, or I/O topology.
 
 ## 5. System structure
 
@@ -651,9 +649,9 @@ pages come after the native ABI is stable enough to deserve sharing.
 **DIRECTION:** A protected display service owns desktop composition and Vega/
 Astraea policy.
 
-`docs/PRESENTATION.md` defines the required hardware-backed shadow scene,
-fenced back-surface rendering, active-surface write guard, vblank promotion,
-and copper exception.
+`docs/GRAPHICS_ARCHITECTURE.md` and `docs/PRESENTATION.md` define the required
+hardware-backed shadow scene, fenced back-surface rendering, active-surface
+write guard, vblank promotion, and copper exception.
 
 - Applications render to shared surfaces or submit validated scene commands.
 - Drawing submission is batched and asynchronous.
@@ -678,7 +676,7 @@ behavior obvious.
 `docs/DESKTOP_AND_UI.md` defines the Amiga-inspired but non-clone workspace,
 window, scene, command, and responsiveness direction. Exact chrome, palette,
 icons, menu activation, and the final workspace name remain **OPEN** and must be
-selected from measured prototypes on the physical 720x480 output.
+selected from measured prototypes on the physical 1920x1080 output.
 
 ## 12. Graphics and media as native services
 
@@ -686,10 +684,11 @@ selected from measured prototypes on the physical 720x480 output.
 
 Astra should expose chipset-aware protected objects such as:
 
-- RGB565 drawing and presentation surfaces;
+- INDEX8, RGB565, and XRGB8888 drawing and presentation surfaces;
 - composited windows and fullscreen scenes;
 - pixel-scrolled and wrapped framebuffer surfaces;
-- validated sets for the production Vega limit of 16 sprites, plus palettes;
+- validated sets for the production Vega limit of 64 sprites, plus sixteen
+  independently selectable 256-entry sprite palette banks;
 - font faces, designed bitmap strikes, positioned glyph runs, and resident ROM
   fallback faces;
 - validated copper programs;

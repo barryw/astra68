@@ -201,9 +201,24 @@ module vega_video (
     reg [31:0] completed_frame_cpu;
     reg [31:0] retired_fb_base_cpu;
     reg [31:0] frame_counter_cpu;
+    reg        present_validate_busy_cpu;
+    reg [31:0] present_validate_product_cpu;
+    reg [31:0] present_validate_multiplicand_cpu;
+    reg [15:0] present_validate_multiplier_cpu;
+    reg [3:0]  present_validate_step_cpu;
+    reg [25:0] pending_fb_end_cpu;
+    reg [25:0] reg_fb_end_active_cpu;
+    reg [25:0] baseline_fb_end_cpu;
+    reg        reg_fb_end_valid_cpu;
+    reg        baseline_fb_end_valid_cpu;
 
     wire scene_copy_busy = scene_copy_state != SCENE_COPY_IDLE;
-    wire scene_locked = present_pending_cpu || scene_copy_busy;
+    // A routine baseline restore touches only the baseline and active banks,
+    // so the independent shadow bank remains editable. A pending generation
+    // or a shadow-sourced commit must keep that bank immutable.
+    wire scene_commit_busy = scene_copy_busy && scene_copy_present;
+    wire scene_locked = present_validate_busy_cpu || present_pending_cpu ||
+                        scene_commit_busy;
     wire [31:0] draw_fence_delta = draw_completed_fence -
                                     pending_draw_fence_cpu;
     wire [31:0] blitter_fence_delta = blitter_completed_fence -
@@ -257,6 +272,19 @@ module vega_video (
                               cop_sprite_table_write;
     wire [1:0] sprite_table_write_bank = cpu_sprite_table_write ?
                                           shadow_scene_bank : 2'd0;
+    wire shadow_memory_write = cpu_palette_write ||
+                               cpu_sprite_table_write;
+    // Palette and descriptor RAMs share their CPU port with the scene copier.
+    // During a routine baseline restore, give a shadow-bank edit one cycle and
+    // resume the copy afterward. Present commits remain locked and unpaused.
+    wire scene_copy_pause = scene_copy_busy && !scene_copy_present &&
+                            shadow_memory_write;
+    wire scene_copy_read_cycle = !scene_copy_pause &&
+        (scene_copy_state == SCENE_COPY_ACTIVE_READ ||
+         scene_copy_state == SCENE_COPY_SHADOW_READ);
+    wire scene_copy_write_cycle = !scene_copy_pause &&
+        (scene_copy_state == SCENE_COPY_ACTIVE_WRITE ||
+         scene_copy_state == SCENE_COPY_SHADOW_WRITE);
 
     reg [1:0] vblank_toggle_sync_cpu;
     reg       vblank_toggle_seen_cpu;
@@ -301,11 +329,8 @@ module vega_video (
                                     {1'b0, active_width_cpu};
     wire [16:0] fb_view_bottom_cpu = {1'b0, reg_fb_view[31:16]} +
                                      {1'b0, active_height_cpu};
-    wire [32:0] fb_end_cpu = {1'b0, reg_fb_base_active} +
-        (fb_virtual_height_cpu - 16'd1) * reg_fb_pitch[15:0] +
-        fb_min_pitch_cpu;
-    wire fb_config_error_cpu = reg_ctrl[0] && reg_ctrl[1] &&
-        (reg_fb_format[31:3] != 29'd0 ||
+    wire fb_static_config_error_cpu =
+         reg_fb_format[31:3] != 29'd0 ||
          reg_fb_format[2:0] > 3'd1 ||
          reg_fb_wrap[31:2] != 30'd0 ||
          reg_fb_base_active[31:25] != 7'd0 ||
@@ -323,8 +348,9 @@ module vega_video (
          (reg_fb_format[2:0] == 3'd1 ?
           |fb_virtual_width_cpu[1:0] : fb_virtual_width_cpu[0]) ||
          fb_min_pitch_cpu[16] ||
-         reg_fb_pitch[15:0] < fb_min_pitch_cpu[15:0] ||
-         fb_end_cpu > 33'h02000000);
+         reg_fb_pitch[15:0] < fb_min_pitch_cpu[15:0];
+    wire fb_config_error_cpu = reg_ctrl[0] && reg_ctrl[1] &&
+        (fb_static_config_error_cpu || !reg_fb_end_valid_cpu);
     wire config_error_cpu = fb_config_error_cpu ||
                             sprite_error_sync_cpu[1];
     wire [15:0] shadow_fb_virtual_width_cpu =
@@ -341,12 +367,8 @@ module vega_video (
         {1'b0, shadow_fb_view[15:0]} + {1'b0, shadow_width_cpu};
     wire [16:0] shadow_fb_view_bottom_cpu =
         {1'b0, shadow_fb_view[31:16]} + {1'b0, shadow_height_cpu};
-    wire [32:0] shadow_fb_end_cpu = {1'b0, reg_fb_base_staged} +
-        (shadow_fb_virtual_height_cpu - 16'd1) *
-            shadow_fb_pitch[15:0] +
-        shadow_fb_min_pitch_cpu;
-    wire shadow_fb_config_error_cpu = shadow_ctrl[0] && shadow_ctrl[1] &&
-        (shadow_fb_format[31:3] != 29'd0 ||
+    wire shadow_fb_static_config_error_cpu =
+         shadow_fb_format[31:3] != 29'd0 ||
          shadow_fb_format[2:0] > 3'd1 ||
          shadow_fb_wrap[31:2] != 30'd0 ||
          reg_fb_base_staged[31:25] != 7'd0 ||
@@ -367,22 +389,41 @@ module vega_video (
           |shadow_fb_virtual_width_cpu[1:0] :
           shadow_fb_virtual_width_cpu[0]) ||
          shadow_fb_min_pitch_cpu[16] ||
-         shadow_fb_pitch[15:0] < shadow_fb_min_pitch_cpu[15:0] ||
-         shadow_fb_end_cpu > 33'h02000000);
-    wire shadow_config_error_cpu = shadow_fb_config_error_cpu;
+         shadow_fb_pitch[15:0] < shadow_fb_min_pitch_cpu[15:0];
+    wire shadow_config_error_cpu = shadow_ctrl[0] && shadow_ctrl[1] &&
+                                   shadow_fb_static_config_error_cpu;
+    wire [31:0] present_validate_product_next =
+        present_validate_product_cpu +
+        (present_validate_multiplier_cpu[0] ?
+         present_validate_multiplicand_cpu : 32'd0);
+    wire [32:0] present_validate_end_next =
+        {1'b0, reg_fb_base_staged} +
+        {1'b0, present_validate_product_next} +
+        {16'd0, shadow_fb_min_pitch_cpu};
+    // The endpoint is exclusive, so exactly 32 MiB is legal. This explicit
+    // high-bit test avoids recreating a wide magnitude comparator after the
+    // iterative product.
+    wire present_validate_end_out_of_range =
+        |present_validate_end_next[32:26] ||
+        (present_validate_end_next[25] &&
+         |present_validate_end_next[24:0]);
 
     // Framebuffer pixels are page-swapped, not copied. Protect both the
     // currently scanned surface and a submitted next surface so no writer can
     // race the vblank promotion edge.
-    assign front_guard_valid = reg_ctrl[0] && reg_ctrl[1] &&
-                               !fb_config_error_cpu;
-    assign front_guard_start = reg_fb_base_active[24:0];
-    assign front_guard_end = fb_end_cpu[25:0];
-    assign pending_guard_valid = present_pending_cpu && shadow_ctrl[0] &&
-                                 shadow_ctrl[1] &&
-                                 !shadow_fb_config_error_cpu;
+    // A malformed trusted copper geometry change conservatively guards all
+    // SDRAM until vblank restores the validated baseline.
+    assign front_guard_valid = reg_ctrl[0] && reg_ctrl[1];
+    assign front_guard_start = fb_config_error_cpu ? 25'd0 :
+                               reg_fb_base_active[24:0];
+    assign front_guard_end = fb_config_error_cpu ? 26'h2000000 :
+                             reg_fb_end_active_cpu;
+    assign pending_guard_valid =
+        (present_validate_busy_cpu || present_pending_cpu) &&
+        shadow_ctrl[0] && shadow_ctrl[1];
     assign pending_guard_start = reg_fb_base_staged[24:0];
-    assign pending_guard_end = shadow_fb_end_cpu[25:0];
+    assign pending_guard_end = present_validate_busy_cpu ? 26'h2000000 :
+                               pending_fb_end_cpu;
 
     assign beam_x = pixel_x;
     assign beam_y = pixel_y;
@@ -391,31 +432,24 @@ module vega_video (
     always @(posedge cpu_clk) begin
         // The CPU port is shared by edits and the bounded vblank copier. The
         // pixel port remains dedicated to active bank zero.
-        case (scene_copy_state)
-            SCENE_COPY_ACTIVE_READ, SCENE_COPY_SHADOW_READ:
-                palette_copy_q <= palette_mem[
-                    {scene_copy_source_bank, scene_copy_index}];
-            SCENE_COPY_ACTIVE_WRITE, SCENE_COPY_SHADOW_WRITE: begin
-                palette_mem[{scene_copy_dest_bank, scene_copy_index}] <=
-                    palette_copy_q;
-                palette_framebuffer_mem[
-                    {scene_copy_dest_bank, scene_copy_index}] <=
-                    palette_copy_q;
-            end
-            default: begin
-                if (palette_write && write_be == 4'b1111) begin
-                    palette_mem[{palette_write_bank,
-                                 palette_write_index}] <=
-                        write_data & 32'h00ffffff;
-                    palette_framebuffer_mem[{palette_write_bank,
-                                             palette_write_index}] <=
-                        write_data & 32'h00ffffff;
-                end else begin
-                    palette_cpu_q <= palette_mem[
-                        {shadow_scene_bank, palette_cpu_index}];
-                end
-            end
-        endcase
+        if (scene_copy_read_cycle) begin
+            palette_copy_q <= palette_mem[
+                {scene_copy_source_bank, scene_copy_index}];
+        end else if (scene_copy_write_cycle) begin
+            palette_mem[{scene_copy_dest_bank, scene_copy_index}] <=
+                palette_copy_q;
+            palette_framebuffer_mem[
+                {scene_copy_dest_bank, scene_copy_index}] <= palette_copy_q;
+        end else if (palette_write && write_be == 4'b1111) begin
+            palette_mem[{palette_write_bank, palette_write_index}] <=
+                write_data & 32'h00ffffff;
+            palette_framebuffer_mem[
+                {palette_write_bank, palette_write_index}] <=
+                write_data & 32'h00ffffff;
+        end else begin
+            palette_cpu_q <= palette_mem[
+                {shadow_scene_bank, palette_cpu_index}];
+        end
 
         if (regs_cpu_rst) begin
             reg_ctrl <= 5'd0;
@@ -481,6 +515,16 @@ module vega_video (
             completed_frame_cpu <= 32'd0;
             retired_fb_base_cpu <= 32'd0;
             frame_counter_cpu <= 32'd0;
+            present_validate_busy_cpu <= 1'b0;
+            present_validate_product_cpu <= 32'd0;
+            present_validate_multiplicand_cpu <= 32'd0;
+            present_validate_multiplier_cpu <= 16'd0;
+            present_validate_step_cpu <= 4'd0;
+            pending_fb_end_cpu <= 26'd0;
+            reg_fb_end_active_cpu <= 26'd0;
+            baseline_fb_end_cpu <= 26'd0;
+            reg_fb_end_valid_cpu <= 1'b0;
+            baseline_fb_end_valid_cpu <= 1'b0;
             vblank_toggle_sync_cpu <= 2'b00;
             vblank_toggle_seen_cpu <= 1'b0;
             raster_toggle_sync_cpu <= 2'b00;
@@ -526,14 +570,40 @@ module vega_video (
             if (sprite_collision_event_cpu)
                 reg_irq_stat[2] <= 1'b1;
 
+            // The unregistered ECP5 DSP implementation of this range product
+            // has failed on physical hardware despite passing RTL simulation.
+            // Use the same deterministic 16-step unsigned shift/add contract
+            // already proven by Astraea's command validator.
+            if (present_validate_busy_cpu) begin
+                present_validate_product_cpu <=
+                    present_validate_product_next;
+                present_validate_multiplicand_cpu <=
+                    present_validate_multiplicand_cpu << 1;
+                present_validate_multiplier_cpu <=
+                    {1'b0, present_validate_multiplier_cpu[15:1]};
+                if (present_validate_step_cpu == 4'd15) begin
+                    present_validate_busy_cpu <= 1'b0;
+                    if (present_validate_end_out_of_range) begin
+                        present_invalid_sticky_cpu <= 1'b1;
+                    end else begin
+                        pending_fb_end_cpu <=
+                            present_validate_end_next[25:0];
+                        present_pending_cpu <= 1'b1;
+                    end
+                end else begin
+                    present_validate_step_cpu <=
+                        present_validate_step_cpu + 4'd1;
+                end
+            end
+
             // Immediate CPU controls remain writable while a scene is locked.
-            if (cpu_write_stb && cpu_addr[9:2] == 8'h04)
+            if (cpu_write_stb && cpu_addr[15:2] == 14'h0004)
                 reg_irq_en <= merge_be({29'd0, reg_irq_en}, cpu_wdata,
                                        cpu_be);
-            if (cpu_write_stb && cpu_addr[9:2] == 8'h05)
+            if (cpu_write_stb && cpu_addr[15:2] == 14'h0005)
                 reg_irq_stat <= reg_irq_stat &
                     ~merge_be(32'd0, cpu_wdata, cpu_be);
-            if (cpu_write_stb && cpu_addr[9:2] == 8'h03 && cpu_be[0] &&
+            if (cpu_write_stb && cpu_addr[15:2] == 14'h0003 && cpu_be[0] &&
                 cpu_wdata[5])
                 underrun_sticky_cpu <= 1'b0;
 
@@ -596,7 +666,7 @@ module vega_video (
 
             // A present captures an immutable generation and its render
             // dependencies. Invalid or full submissions fail explicitly.
-            if (cpu_write_stb && cpu_addr[9:2] == 8'h14 && cpu_be[0] &&
+            if (cpu_write_stb && cpu_addr[15:2] == 14'h0014 && cpu_be[0] &&
                 cpu_wdata[0]) begin
                 if (scene_locked || shadow_config_error_cpu) begin
                     present_invalid_sticky_cpu <= 1'b1;
@@ -604,11 +674,22 @@ module vega_video (
                     pending_generation_cpu <= shadow_generation_cpu;
                     pending_draw_fence_cpu <= shadow_draw_fence_cpu;
                     pending_blitter_fence_cpu <= shadow_blitter_fence_cpu;
-                    present_pending_cpu <= 1'b1;
                     present_done_sticky_cpu <= 1'b0;
+                    if (shadow_ctrl[0] && shadow_ctrl[1]) begin
+                        present_validate_busy_cpu <= 1'b1;
+                        present_validate_product_cpu <= 32'd0;
+                        present_validate_multiplicand_cpu <=
+                            {16'd0, shadow_fb_pitch[15:0]};
+                        present_validate_multiplier_cpu <=
+                            shadow_fb_virtual_height_cpu - 16'd1;
+                        present_validate_step_cpu <= 4'd0;
+                    end else begin
+                        pending_fb_end_cpu <= 26'd0;
+                        present_pending_cpu <= 1'b1;
+                    end
                 end
             end
-            if (cpu_write_stb && cpu_addr[9:2] == 8'h15 && cpu_be[0]) begin
+            if (cpu_write_stb && cpu_addr[15:2] == 14'h0015 && cpu_be[0]) begin
                 if (cpu_wdata[2]) present_done_sticky_cpu <= 1'b0;
                 if (cpu_wdata[3]) present_invalid_sticky_cpu <= 1'b0;
                 if (cpu_wdata[4])
@@ -634,6 +715,12 @@ module vega_video (
                     8'h1c: reg_fb_wrap <= cop_wdata;
                     default: begin end
                 endcase
+                if (cop_addr[9:2] == 8'h06 ||
+                    cop_addr[9:2] == 8'h10 ||
+                    cop_addr[9:2] == 8'h11 ||
+                    cop_addr[9:2] == 8'h12 ||
+                    cop_addr[9:2] == 8'h1b)
+                    reg_fb_end_valid_cpu <= 1'b0;
             end
             if (cop_write_stb && !cpu_write_stb &&
                 cop_addr >= 16'h0800 && cop_addr < 16'h0808) begin
@@ -643,40 +730,42 @@ module vega_video (
                     reg_spr_budget <= cop_wdata[15:0];
             end
 
-            case (scene_copy_state)
-                SCENE_COPY_ACTIVE_READ:
-                    scene_copy_state <= SCENE_COPY_ACTIVE_WRITE;
-                SCENE_COPY_ACTIVE_WRITE: begin
-                    if (scene_copy_index == 8'hff) begin
-                        if (scene_copy_present) begin
-                            scene_copy_index <= 8'd0;
-                            scene_copy_dest_bank <= baseline_scene_bank;
-                            scene_copy_state <= SCENE_COPY_SHADOW_READ;
+            if (!scene_copy_pause) begin
+                case (scene_copy_state)
+                    SCENE_COPY_ACTIVE_READ:
+                        scene_copy_state <= SCENE_COPY_ACTIVE_WRITE;
+                    SCENE_COPY_ACTIVE_WRITE: begin
+                        if (scene_copy_index == 8'hff) begin
+                            if (scene_copy_present) begin
+                                scene_copy_index <= 8'd0;
+                                scene_copy_dest_bank <= baseline_scene_bank;
+                                scene_copy_state <= SCENE_COPY_SHADOW_READ;
+                            end else begin
+                                scene_copy_state <= SCENE_COPY_IDLE;
+                            end
                         end else begin
-                            scene_copy_state <= SCENE_COPY_IDLE;
+                            scene_copy_index <= scene_copy_index + 8'd1;
+                            scene_copy_state <= SCENE_COPY_ACTIVE_READ;
                         end
-                    end else begin
-                        scene_copy_index <= scene_copy_index + 8'd1;
-                        scene_copy_state <= SCENE_COPY_ACTIVE_READ;
                     end
-                end
-                SCENE_COPY_SHADOW_READ:
-                    scene_copy_state <= SCENE_COPY_SHADOW_WRITE;
-                SCENE_COPY_SHADOW_WRITE: begin
-                    if (scene_copy_index == 8'hff) begin
-                        baseline_scene_bank <= scene_copy_source_bank;
-                        shadow_scene_bank <= scene_copy_dest_bank;
-                        completed_generation_cpu <= pending_generation_cpu;
-                        completed_frame_cpu <= frame_counter_cpu;
-                        present_done_sticky_cpu <= 1'b1;
-                        scene_copy_state <= SCENE_COPY_IDLE;
-                    end else begin
-                        scene_copy_index <= scene_copy_index + 8'd1;
-                        scene_copy_state <= SCENE_COPY_SHADOW_READ;
+                    SCENE_COPY_SHADOW_READ:
+                        scene_copy_state <= SCENE_COPY_SHADOW_WRITE;
+                    SCENE_COPY_SHADOW_WRITE: begin
+                        if (scene_copy_index == 8'hff) begin
+                            baseline_scene_bank <= scene_copy_source_bank;
+                            shadow_scene_bank <= scene_copy_dest_bank;
+                            completed_generation_cpu <= pending_generation_cpu;
+                            completed_frame_cpu <= frame_counter_cpu;
+                            present_done_sticky_cpu <= 1'b1;
+                            scene_copy_state <= SCENE_COPY_IDLE;
+                        end else begin
+                            scene_copy_index <= scene_copy_index + 8'd1;
+                            scene_copy_state <= SCENE_COPY_SHADOW_READ;
+                        end
                     end
-                end
-                default: begin end
-            endcase
+                    default: begin end
+                endcase
+            end
 
             // Vblank restores the committed baseline every frame. A ready
             // present selects the edit bank as the new source, atomically
@@ -707,6 +796,12 @@ module vega_video (
                         baseline_backdrop <= shadow_backdrop;
                         reg_fb_base_active <= reg_fb_base_staged;
                         baseline_fb_base <= reg_fb_base_staged;
+                        reg_fb_end_active_cpu <= pending_fb_end_cpu;
+                        baseline_fb_end_cpu <= pending_fb_end_cpu;
+                        reg_fb_end_valid_cpu <=
+                            shadow_ctrl[0] && shadow_ctrl[1];
+                        baseline_fb_end_valid_cpu <=
+                            shadow_ctrl[0] && shadow_ctrl[1];
                         reg_fb_pitch <= shadow_fb_pitch;
                         baseline_fb_pitch <= shadow_fb_pitch;
                         reg_fb_format <= shadow_fb_format;
@@ -731,6 +826,8 @@ module vega_video (
                         reg_raster_cmp <= baseline_raster_cmp;
                         reg_backdrop <= baseline_backdrop;
                         reg_fb_base_active <= baseline_fb_base;
+                        reg_fb_end_active_cpu <= baseline_fb_end_cpu;
+                        reg_fb_end_valid_cpu <= baseline_fb_end_valid_cpu;
                         reg_fb_pitch <= baseline_fb_pitch;
                         reg_fb_format <= baseline_fb_format;
                         reg_fb_colorkey <= baseline_fb_colorkey;
@@ -803,6 +900,7 @@ module vega_video (
                                      config_error_cpu,
                                      underrun_sticky_cpu, display_ready,
                                      sprite_overflow_cpu,
+                                     present_validate_busy_cpu ||
                                      present_pending_cpu || scene_copy_busy,
                                      hblank_level_sync_cpu[1],
                                      vblank_level_sync_cpu[1]};
@@ -829,7 +927,8 @@ module vega_video (
                     copy_deadline_sticky_cpu,
                     shadow_write_rejected_sticky_cpu,
                     present_invalid_sticky_cpu, present_done_sticky_cpu,
-                    scene_copy_busy, present_pending_cpu};
+                    scene_copy_busy,
+                    present_validate_busy_cpu || present_pending_cpu};
                 8'h16: cpu_rdata = completed_generation_cpu;
                 8'h17: cpu_rdata = completed_frame_cpu;
                 8'h18: cpu_rdata = retired_fb_base_cpu;
@@ -1206,12 +1305,8 @@ module vega_video (
         .cpu_rdata(sprite_table_rdata),
         .cpu_shadow_bank(shadow_scene_bank),
         .cpu_write_bank(sprite_table_write_bank),
-        .scene_copy_read(
-            scene_copy_state == SCENE_COPY_ACTIVE_READ ||
-            scene_copy_state == SCENE_COPY_SHADOW_READ),
-        .scene_copy_write(
-            scene_copy_state == SCENE_COPY_ACTIVE_WRITE ||
-            scene_copy_state == SCENE_COPY_SHADOW_WRITE),
+        .scene_copy_read(scene_copy_read_cycle),
+        .scene_copy_write(scene_copy_write_cycle),
         .scene_copy_source_bank(scene_copy_source_bank),
         .scene_copy_dest_bank(scene_copy_dest_bank),
         .scene_copy_index(scene_copy_index),

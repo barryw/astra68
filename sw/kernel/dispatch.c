@@ -510,9 +510,15 @@ KernelDispatchTarget interrupt_entry_dispatch_profiled(
 KernelDispatchTarget kernel_interrupt_entry_dispatch(
     const uint32_t *registers, const void *raw_frame, uint32_t user_stack)
 {
+    KernelPerformanceInterruptToken interrupt;
+    KernelDispatchTarget target;
+
     if (kernel_performance_sampling_enabled == 0u)
         return interrupt_entry_dispatch_fast(registers, raw_frame,
                                              user_stack);
-    return interrupt_entry_dispatch_profiled(registers, raw_frame,
-                                              user_stack);
+    interrupt = kernel_performance_interrupt_enter();
+    target = interrupt_entry_dispatch_profiled(registers, raw_frame,
+                                                user_stack);
+    kernel_performance_interrupt_leave(interrupt);
+    return target;
 }

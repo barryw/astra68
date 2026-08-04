@@ -5,13 +5,15 @@ use astravm_machine::{
 };
 use eframe::egui::{
     self, Align, Align2, Color32, FontId, Frame, Layout, Margin, RichText, Sense, Stroke,
-    StrokeKind, Vec2,
+    StrokeKind, TextureHandle, TextureOptions, Vec2,
 };
 use std::time::Duration;
 
 pub struct AstraVmApp {
     host: MachineHost,
     snapshot: MachineSnapshot,
+    display_texture: Option<TextureHandle>,
+    display_generation: u64,
 }
 
 impl AstraVmApp {
@@ -20,6 +22,8 @@ impl AstraVmApp {
         Self {
             host: MachineHost::spawn(),
             snapshot: AstraMachine::new().snapshot(),
+            display_texture: None,
+            display_generation: 0,
         }
     }
 
@@ -53,14 +57,14 @@ impl AstraVmApp {
                     ui.add_space(14.0);
                     status_badge(
                         ui,
-                        if self.snapshot.ready_for_loader {
+                        if self.snapshot.ready_for_loader || self.snapshot.kernel_ready {
                             "POST PASS"
                         } else if self.snapshot.paused {
                             "PAUSED"
                         } else {
                             "POWER ON"
                         },
-                        if self.snapshot.ready_for_loader {
+                        if self.snapshot.ready_for_loader || self.snapshot.kernel_ready {
                             theme::ION
                         } else {
                             theme::AMBER
@@ -128,8 +132,14 @@ impl AstraVmApp {
             );
             ui.label(
                 RichText::new(format!(
-                    "{} × {} / ROM CONSOLE",
-                    DISPLAY_WIDTH, DISPLAY_HEIGHT
+                    "{} × {} / {}",
+                    DISPLAY_WIDTH,
+                    DISPLAY_HEIGHT,
+                    if self.display_texture.is_some() {
+                        "INDEX8 FRAMEBUFFER"
+                    } else {
+                        "ROM CONSOLE"
+                    }
                 ))
                 .size(10.0)
                 .monospace()
@@ -169,28 +179,37 @@ impl AstraVmApp {
                 StrokeKind::Inside,
             );
 
-            let width_limited = (screen.width() - 20.0) / (POST_COLS as f32 * 0.61);
-            let height_limited = (screen.height() - 18.0) / (POST_ROWS as f32 * 1.2);
-            let font_size = width_limited.min(height_limited).clamp(8.0, 16.0);
-            let line_height = font_size * 1.2;
-            let origin = screen.left_top() + egui::vec2(10.0, 8.0);
-            let font = FontId::monospace(font_size);
-
-            for (row, text) in self.snapshot.console_rows.iter().enumerate() {
-                let color = if text.contains("POST PASS") || text.contains("READY FOR") {
-                    theme::ION
-                } else if text.contains("POST") {
-                    theme::STARLIGHT
-                } else {
-                    Color32::from_rgb(174, 198, 201)
-                };
-                painter.text(
-                    origin + egui::vec2(0.0, row as f32 * line_height),
-                    Align2::LEFT_TOP,
-                    text,
-                    font.clone(),
-                    color,
+            if let Some(texture) = &self.display_texture {
+                painter.image(
+                    texture.id(),
+                    screen,
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                    Color32::WHITE,
                 );
+            } else {
+                let width_limited = (screen.width() - 20.0) / (POST_COLS as f32 * 0.61);
+                let height_limited = (screen.height() - 18.0) / (POST_ROWS as f32 * 1.2);
+                let font_size = width_limited.min(height_limited).clamp(8.0, 16.0);
+                let line_height = font_size * 1.2;
+                let origin = screen.left_top() + egui::vec2(10.0, 8.0);
+                let font = FontId::monospace(font_size);
+
+                for (row, text) in self.snapshot.console_rows.iter().enumerate() {
+                    let color = if text.contains("POST PASS") || text.contains("READY FOR") {
+                        theme::ION
+                    } else if text.contains("POST") {
+                        theme::STARLIGHT
+                    } else {
+                        Color32::from_rgb(174, 198, 201)
+                    };
+                    painter.text(
+                        origin + egui::vec2(0.0, row as f32 * line_height),
+                        Align2::LEFT_TOP,
+                        text,
+                        font.clone(),
+                        color,
+                    );
+                }
             }
 
             for y in (screen.top() as i32..screen.bottom() as i32).step_by(4) {
@@ -306,7 +325,9 @@ impl AstraVmApp {
                 }
 
                 ui.add_space(8.0);
-                let (label, color) = if self.snapshot.ready_for_loader {
+                let (label, color) = if self.snapshot.kernel_ready {
+                    ("AXIOM KERNEL READY", theme::ION)
+                } else if self.snapshot.ready_for_loader {
                     ("READY FOR OS LOADER", theme::ION)
                 } else if self.snapshot.paused {
                     ("CLOCK HALTED", theme::AMBER)
@@ -364,6 +385,16 @@ impl AstraVmApp {
 impl eframe::App for AstraVmApp {
     fn logic(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
         if let Some(snapshot) = self.host.latest_snapshot() {
+            if snapshot.display_generation != self.display_generation {
+                self.display_generation = snapshot.display_generation;
+                self.display_texture = snapshot.display_rgba.as_deref().map(|rgba| {
+                    let image = egui::ColorImage::from_rgba_unmultiplied(
+                        [DISPLAY_WIDTH, DISPLAY_HEIGHT],
+                        rgba,
+                    );
+                    context.load_texture("vega-framebuffer", image, TextureOptions::NEAREST)
+                });
+            }
             self.snapshot = snapshot;
         }
 

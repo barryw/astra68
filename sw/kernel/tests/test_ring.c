@@ -4,6 +4,7 @@
 #include "performance.h"
 #include "pmmu.h"
 #include "ring.h"
+#include "ohci.h"
 #include "thread.h"
 #include "vm.h"
 
@@ -95,10 +96,13 @@ static void initialize_test(void)
               ASTRA_MEMORY_RANGE_ROM_BACKING,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_EXECUTE |
                   ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, 0x03e40000u, 0x001c0000u,
+    add_range(&info, 0x03e40000u, 0x000c0000u,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
+    add_range(&info, OHCI_DMA_POOL_BASE, OHCI_DMA_POOL_SIZE,
+              ASTRA_MEMORY_RANGE_DEVICE,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
     astra_boot_info_finalize(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
     memset(physical_memory, 0xa5, sizeof(physical_memory));

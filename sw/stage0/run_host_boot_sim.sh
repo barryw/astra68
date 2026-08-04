@@ -13,6 +13,7 @@ reuse_sim="${ASTRA_HOST_SIM_REUSE:-0}"
 kernel_panic_selftest="${KERNEL_PANIC_SELFTEST:-0}"
 hdmi_enable="${ASTRA_HOST_SIM_HDMI:-1}"
 wait_kernel_ready="${ASTRA_HOST_SIM_WAIT_READY:-0}"
+stop_after_post="${ASTRA_HOST_SIM_STOP_AFTER_POST:-0}"
 sim_args=()
 if [[ "$kernel_panic_selftest" == "1" ]]; then
     sim_args+=(+expect-kernel-panic)
@@ -20,7 +21,9 @@ fi
 if [[ "$wait_kernel_ready" == "1" ]]; then
     sim_args+=(+wait-kernel-ready)
 fi
-
+if [[ "$stop_after_post" == "1" ]]; then
+    sim_args+=(+stop-after-post)
+fi
 make -C sw/stage0 clean all BOOT_BACKEND=host
 make -C sw/boot clean all \
     CPU_CLK_DIV_BIT=0 SDRAM_ENABLE=1 HDMI_ENABLE="$hdmi_enable" \

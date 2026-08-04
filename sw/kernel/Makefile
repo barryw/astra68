@@ -266,7 +266,8 @@ test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_allocation \
 
 $(BUILD_DIR)/test_boot_contract: tests/test_boot_contract.c \
                                   ../common/boot_contract.c \
-                                  ../include/astra/boot.h | $(BUILD_DIR)
+                                  ../include/astra/boot.h \
+                                  ../include/ohci.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I../include \
 		../common/boot_contract.c tests/test_boot_contract.c -o $@
 
@@ -279,7 +280,8 @@ $(BUILD_DIR)/test_allocation: tests/test_allocation.c allocation.c \
 $(BUILD_DIR)/test_memory: tests/test_memory.c memory.c memory.h \
                           allocation.c allocation.h \
                           ../common/boot_contract.c \
-                          ../include/astra/boot.h | $(BUILD_DIR)
+                          ../include/astra/boot.h \
+                          ../include/ohci.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_MEMORY_NO_POISON=1 -I. -I../include \
 		../common/boot_contract.c allocation.c memory.c \
@@ -345,7 +347,8 @@ $(BUILD_DIR)/test_dma: tests/test_dma.c dma.c dma.h generation.h \
                        allocation.c allocation.h object_cache.c object_cache.h \
                        memory.c memory.h \
                        ../common/boot_contract.c \
-                       ../include/astra/boot.h | $(BUILD_DIR)
+                       ../include/astra/boot.h \
+                       ../include/ohci.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_MEMORY_NO_POISON=1 -I. -I../include \
 		../common/boot_contract.c allocation.c object_cache.c memory.c \
@@ -356,7 +359,8 @@ $(BUILD_DIR)/test_block: tests/test_block.c block.c block.h dma.c dma.h \
                          object_cache.c object_cache.h \
                          memory.c memory.h platform.h \
                          ../common/boot_contract.c \
-                         ../include/astra/boot.h ../include/vesta.h | $(BUILD_DIR)
+                         ../include/astra/boot.h ../include/ohci.h \
+                         ../include/vesta.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_MEMORY_NO_POISON=1 -I. -I../include \
 		../common/boot_contract.c allocation.c object_cache.c memory.c \
@@ -365,7 +369,8 @@ $(BUILD_DIR)/test_block: tests/test_block.c block.c block.h dma.c dma.h \
 
 $(BUILD_DIR)/test_vm: tests/test_vm.c vm.c vm.h pmmu.h memory.c memory.h \
                       allocation.c allocation.h \
-                      ../common/boot_contract.c ../include/astra/boot.h | $(BUILD_DIR)
+                      ../common/boot_contract.c ../include/astra/boot.h \
+                      ../include/ohci.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_MEMORY_NO_POISON=1 -DKERNEL_VM_HOST_TEST=1 \
 		-I. -I../include ../common/boot_contract.c allocation.c memory.c vm.c \
@@ -458,6 +463,7 @@ $(BUILD_DIR)/test_area: tests/test_area.c area.c area.h vm.c vm.h \
 			  memory.c memory.h bytes.c bytes.h generation.h \
 			  allocation.c allocation.h object_cache.c object_cache.h \
 			  ../common/boot_contract.c ../include/astra/boot.h \
+			  ../include/ohci.h \
 			  ../include/astra/syscall.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_MEMORY_NO_POISON=1 -DKERNEL_VM_HOST_TEST=1 \
@@ -473,6 +479,7 @@ $(BUILD_DIR)/test_ring: tests/test_ring.c ring.c ring.h area.c area.h \
 			  performance.c performance.h context.c context.h \
 			  exception.c exception.h bytes.c bytes.h generation.h \
 			  ../common/boot_contract.c ../include/astra/boot.h \
+			  ../include/ohci.h \
 			  ../include/astra/syscall.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_MEMORY_NO_POISON=1 -DKERNEL_VM_HOST_TEST=1 \
@@ -498,7 +505,7 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
                             user_copy.c user_copy.h \
                             block.c block.h dma.c dma.h memory.c memory.h \
                             platform.h ../common/boot_contract.c \
-                            ../include/astra/boot.h \
+                            ../include/astra/boot.h ../include/ohci.h \
                             ../include/astra/syscall.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_MEMORY_NO_POISON=1 -DKERNEL_VM_HOST_TEST=1 \

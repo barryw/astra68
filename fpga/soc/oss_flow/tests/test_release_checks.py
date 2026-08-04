@@ -22,6 +22,7 @@ check_timing = load_module("check_timing")
 prepare_route_input = load_module("prepare_route_input")
 make_route_probe_bitstream = load_module("make_route_probe_bitstream")
 check_por = load_module("check_por")
+check_pll_spec = load_module("check_pll_spec")
 check_post_font_rom = load_module("check_post_font_rom")
 check_ecp5_lut_permutation = load_module("check_ecp5_lut_permutation")
 refresh_ecp5_lutperm = load_module("refresh_ecp5_lutperm")
@@ -58,6 +59,15 @@ class SynthesisFlowTests(unittest.TestCase):
 
         self.assertLess(mapped_json, font_gate)
         self.assertLess(font_gate, synth_only)
+
+    def test_synthesis_checks_physical_pll_specification(self):
+        flow = (FLOW_DIR / "mkbit.sh").read_text(encoding="utf-8")
+        mapped_json = flow.index("write_json astra.json")
+        pll_gate = flow.index("python3 check_pll_spec.py astra.json")
+        synth_only = flow.index('if [ "${SYNTH_ONLY:-0}" = "1" ]')
+
+        self.assertLess(mapped_json, pll_gate)
+        self.assertLess(pll_gate, synth_only)
 
 
 class PostFontRomGateTests(unittest.TestCase):
@@ -390,6 +400,94 @@ class PowerOnResetGateTests(unittest.TestCase):
     def test_rejects_design_without_packed_flip_flops(self):
         with self.assertRaisesRegex(ValueError, "no TRELLIS_FF"):
             check_por.check_por(self.synthesis())
+
+
+class PllSpecificationGateTests(unittest.TestCase):
+    @staticmethod
+    def pll_cell(
+        *,
+        input_hz=25_000_000,
+        requested=(50_000_000, 60_000_000, 100_000_000, 0),
+        ref_div=1,
+        feedback_div=2,
+        primary_div=12,
+        secondary_divs=(10, 6, 1),
+    ):
+        def encoded(value):
+            return f"{value:032b}"
+
+        return {
+            "type": "EHXPLLL",
+            "attributes": {
+                "ASTRA_PLL_IN_HZ": encoded(input_hz),
+                **{
+                    f"ASTRA_PLL_OUT{index}_HZ": encoded(frequency)
+                    for index, frequency in enumerate(requested)
+                },
+                **{
+                    f"ASTRA_PLL_OUT{index}_TOL_HZ": encoded(0)
+                    for index in range(4)
+                },
+            },
+            "parameters": {
+                "CLKI_DIV": encoded(ref_div),
+                "CLKFB_DIV": encoded(feedback_div),
+                "CLKOP_DIV": encoded(primary_div),
+                "CLKOP_ENABLE": "ENABLED",
+                "FEEDBK_PATH": "CLKOP",
+                **{
+                    f"{name}_DIV": encoded(divisor)
+                    for name, divisor in zip(
+                        ("CLKOS", "CLKOS2", "CLKOS3"), secondary_divs
+                    )
+                },
+                **{
+                    f"{name}_ENABLE": (
+                        "ENABLED" if requested[index] else "DISABLED"
+                    )
+                    for index, name in enumerate(
+                        ("CLKOS", "CLKOS2", "CLKOS3"), start=1
+                    )
+                },
+            },
+        }
+
+    def design(self, cell=None):
+        return {
+            "modules": {
+                "astra_soc": {
+                    "cells": {"pll": cell if cell is not None else self.pll_cell()}
+                }
+            }
+        }
+
+    def test_accepts_in_spec_exact_outputs(self):
+        measurements = check_pll_spec.check_pll_spec(self.design())
+        self.assertEqual(len(measurements), 1)
+        self.assertEqual(measurements[0]["pfd_hz"], 25_000_000)
+        self.assertEqual(measurements[0]["vco_hz"], 600_000_000)
+
+    def test_rejects_project_trellis_low_pfd_limit(self):
+        cell = self.pll_cell(
+            requested=(60_000_000, 100_000_000, 0, 0),
+            ref_div=5,
+            feedback_div=12,
+            primary_div=10,
+            secondary_divs=(6, 1, 1),
+        )
+        with self.assertRaisesRegex(ValueError, "PFD 5000000 Hz"):
+            check_pll_spec.check_pll_spec(self.design(cell))
+
+    def test_rejects_wrong_output_divider(self):
+        cell = self.pll_cell(secondary_divs=(10, 5, 1))
+        with self.assertRaisesRegex(ValueError, "output 2 is 120000000 Hz"):
+            check_pll_spec.check_pll_spec(self.design(cell))
+
+    def test_rejects_missing_generator_metadata(self):
+        cell = self.pll_cell()
+        del cell["attributes"]["ASTRA_PLL_IN_HZ"]
+        with self.assertRaisesRegex(ValueError, "missing PLL metadata"):
+            check_pll_spec.check_pll_spec(self.design(cell))
 
 
 class RouteProbeBitstreamTests(unittest.TestCase):

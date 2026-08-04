@@ -5,6 +5,7 @@
 #ifndef ASTRA_ASTRAEA_H
 #define ASTRA_ASTRAEA_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define ASTRAEA_BASE 0xFFF10000u
@@ -24,7 +25,8 @@ typedef volatile struct {
     uint32_t STATUS;         // 0x00C
     uint32_t IRQ_EN;         // 0x010
     uint32_t IRQ_STAT;       // 0x014
-    uint32_t _r0[2];         // 0x018..0x01C
+    uint32_t CAPS;           // 0x018
+    uint32_t _r0;            // 0x01C
     uint32_t _r1[8];         // 0x020..0x03C reserved in v0.4
     // blitter
     uint32_t BLIT_SRC;       // 0x040
@@ -174,6 +176,13 @@ typedef struct AstraeaGlyphDescriptor {
     uint32_t destination_position;
     uint32_t size;
 } AstraeaGlyphDescriptor;
+
+_Static_assert(offsetof(AstraeaRegs, CAPS) == 0x018u,
+               "Astraea capability ABI offset");
+_Static_assert(offsetof(AstraeaRegs, DRAW_DST) == 0x100u,
+               "Astraea draw ABI offset");
+_Static_assert(sizeof(AstraeaGlyphDescriptor) == 16u,
+               "Astraea glyph descriptor ABI size");
 
 // ---- Copper opcodes (w0[31:29]) + operand helpers ----
 #define COP_OP_END   (0u << 29)

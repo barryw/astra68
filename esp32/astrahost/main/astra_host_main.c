@@ -46,7 +46,6 @@
 #define ASTRA_SERVICE_IDLE_MS 1
 
 #ifdef ASTRA_MONITOR_SELFTEST
-#define ASTRA_MONITOR_SELFTEST_START_DELAY_MS 6000
 #define ASTRA_MONITOR_SELFTEST_TIMEOUT_US 15000000
 #define ASTRA_MONITOR_SELFTEST_RESPONSE_BYTES 128u
 #endif
@@ -973,9 +972,6 @@ static esp_err_t run_runtime_service(void)
         return error;
 
 #ifdef ASTRA_MONITOR_SELFTEST
-    ESP_LOGI(TAG, "kernel monitor self-test starts in %u ms",
-             ASTRA_MONITOR_SELFTEST_START_DELAY_MS);
-    vTaskDelay(pdMS_TO_TICKS(ASTRA_MONITOR_SELFTEST_START_DELAY_MS));
     error = run_monitor_selftest();
     if (error != ESP_OK)
         return error;

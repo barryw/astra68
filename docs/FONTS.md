@@ -1,5 +1,11 @@
 # Astra Fonts and Hardware Glyph Rendering (draft v0.2)
 
+> AFNT remains the native hardware-ready font contract. The Arty graphics
+> target adds A8 coverage and XRGB8888 destinations as required by
+> [`GRAPHICS_ARCHITECTURE.md`](GRAPHICS_ARCHITECTURE.md); existing
+> INDEX8/RGB565 Astraea details below describe the implemented ULX3S path until
+> the register-level Arty revision is written.
+
 This document defines the native font direction for Astra 68 and the boundary
 between font files, the font/display services, and Astraea. The graphical OS
 must not draw bitmap glyphs with CPU pixel loops.
@@ -60,7 +66,7 @@ tool version ship together. The bundled faces use Astra names so the system is
 not presenting converted builds as untouched upstream font binaries.
 
 The first ROM set contains only measured, native-size strikes appropriate for
-720x480. At minimum it provides regular UI, emphasized UI, and regular mono
+1920x1080. At minimum it provides regular UI, emphasized UI, and regular mono
 text plus Basic Latin, Latin-1, common punctuation, arrows, box drawing, and a
 replacement glyph. Exact strike sizes are selected from HDMI specimens on the
 real panel, not from desktop preview alone. The ROM font payload has a separate
@@ -109,8 +115,9 @@ Initial chunk types:
 
 Metrics use signed 26.6 fixed point. Character maps use 32-bit Unicode scalar
 values and 32-bit glyph IDs rather than an 8-bit contiguous character range.
-Each strike records horizontal and vertical pixel size separately so fonts can
-be designed for the primary 720x480 mode's non-square pixels.
+Each strike records horizontal and vertical pixel size separately. The primary
+1920x1080 mode uses square pixels; independent metrics preserve imported and
+future-mode fidelity without changing AFNT.
 
 The exact disk record sizes are frozen only when the AFNT reader, writer,
 validator, and malformed-file tests land together. Version 0 files are not an
@@ -125,14 +132,16 @@ supported strike or converts it once into a protected cache.
 | Format | Required behavior |
 |---|---|
 | `MASK1` | One bit per pixel; select draw color or transparent/background |
-| `A4` | Four-bit coverage; blend one draw color into RGB565 |
+| `A4` | Four-bit coverage; blend one draw color into RGB565 or XRGB8888 |
+| `A8` | Eight-bit coverage; blend one draw color into RGB565 or XRGB8888 |
 | `INDEX4` | Four-bit color index with a transparent index |
 | `INDEX8` | Eight-bit color index with a transparent index |
 
 `MASK1` is mandatory for rescue and baseline hardware. `A4` is the normal
-anti-aliased UI-text path. Its RGB565 blend may time-multiplex one DSP across
-the three color channels because SDRAM read/modify/write traffic, not arithmetic
-latency, is expected to limit text throughput.
+compact anti-aliased UI-text path. `A8` is required by the Arty graphics
+contract for full-coverage text into direct-color surfaces. Implementations may
+time-multiplex arithmetic only when measured command and scanout deadlines
+remain satisfied.
 
 For an `A4` coverage value `a` in 0..15, each RGB565 channel is computed in its
 native 5- or 6-bit range as:
@@ -146,10 +155,10 @@ foreground bit-exact. Intermediate rounding follows the formula above in both
 the software model and RTL.
 
 `INDEX4` and `INDEX8` provide hardware color fonts with a palette cached for the
-job. Binary transparency is mandatory. Palette alpha and direct RGBA glyphs are
-format extensions and capability-gated; they are not required for the first
-desktop. A layered color glyph can also be represented as multiple positioned
-`MASK1` runs with different colors without CPU rasterization.
+job. Binary transparency remains available. The Arty path also accepts palette
+alpha and composes it using the graphics architecture's exact source-over rule.
+A layered color glyph can also be represented as multiple positioned `MASK1`
+runs with different colors without CPU rasterization.
 
 Rows have explicit byte pitch. Packed bits/nibbles are most-significant first,
 and unused tail bits are zero. Astraea accepts arbitrary source, palette,
@@ -177,12 +186,14 @@ A glyph job supplies one source strike and palette plus:
 - a bounded array of source rectangles and signed destination positions;
 - completion fence/event and optional damage rectangle.
 
-The implemented low-level batch is an array of 16-byte big-endian descriptors.
+The implemented ULX3S low-level batch is an array of 16-byte big-endian
+descriptors.
 Each descriptor carries a source offset relative to the strike bitmap base,
 unsigned source `(y,x)`, signed destination `(y,x)`, and unsigned
 `(height,width)`. Astraea validates every descriptor before using it and keeps
-the palette cached for the whole command. `ASTRAEA.md` is the normative MMIO
-and descriptor contract; applications only see the protected draw-list API.
+the palette cached for the whole command. `ASTRAEA.md` is the normative ULX3S
+MMIO and descriptor contract; `GRAPHICS_ARCHITECTURE.md` defines the Arty
+command boundary. Applications only see the protected draw-list API.
 
 Layout is deliberately outside hardware. Complex-script shaping, fallback, and
 bidirectional text evolve in software without changing RTL. Raster expansion,
@@ -420,7 +431,7 @@ Host and native tooling should share the same AFNT writer and golden files.
 Amiga import is tested with monochrome, proportional, kerning, missing-glyph,
 and color-font fixtures.
 
-## 8. Hardware status and resource gate
+## 8. Legacy ULX3S hardware status and resource gate
 
 The glyph path uses the Astraea draw engine and exact SDRAM pixel port documented
 in `ASTRAEA.md`. The first implementation now provides:

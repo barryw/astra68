@@ -1,0 +1,101 @@
+diff --git a/target/m68k/op_helper.c b/target/m68k/op_helper.c
+index 15bad5d..81aca85 100644
+--- a/target/m68k/op_helper.c
++++ b/target/m68k/op_helper.c
+@@ -70,6 +70,12 @@ throwaway:
+         case 4:
+             sp += 8;
+             break;
++        case 0xa:
++            sp += 24;
++            break;
++        case 0xb:
++            sp += 84;
++            break;
+         case 7:
+             sp += 52;
+             break;
+@@ -272,6 +278,64 @@ static inline void do_stack_frame(CPUM68KState *env, uint32_t *sp,
+     cpu_stw_mmuidx_ra(env, *sp, sr, MMU_KERNEL_IDX, 0);
+ }
+ 
++static inline void m68k030_push_word(CPUM68KState *env, uint32_t *sp,
++                                     uint16_t value)
++{
++    *sp -= 2;
++    cpu_stw_mmuidx_ra(env, *sp, value, MMU_KERNEL_IDX, 0);
++}
++
++static inline void m68k030_push_long(CPUM68KState *env, uint32_t *sp,
++                                     uint32_t value)
++{
++    *sp -= 4;
++    cpu_stl_mmuidx_ra(env, *sp, value, MMU_KERNEL_IDX, 0);
++}
++
++/* MC68030 format-B long bus-fault frame, MC68030UM section 8.2. */
++static void m68k030_stack_frame_b(CPUM68KState *env, uint32_t *sp,
++                                  uint16_t sr, unsigned vector,
++                                  uint32_t pc)
++{
++    unsigned i;
++
++    /* Internal registers, 18 words. */
++    for (i = 0; i < 9; ++i) {
++        m68k030_push_long(env, sp, 0);
++    }
++    /* Version zero and internal information. */
++    m68k030_push_word(env, sp, 0);
++    /* Three internal words. */
++    m68k030_push_long(env, sp, 0);
++    m68k030_push_word(env, sp, 0);
++    /* Data input buffer. */
++    m68k030_push_long(env, sp, 0);
++    /* Two internal words. */
++    m68k030_push_long(env, sp, 0);
++    /* Stage-B address. */
++    m68k030_push_long(env, sp, pc);
++    /* Four internal words. */
++    m68k030_push_long(env, sp, 0);
++    m68k030_push_long(env, sp, 0);
++    /* Data output buffer. */
++    m68k030_push_long(env, sp, 0);
++    /* Two internal words. */
++    m68k030_push_word(env, sp, 0);
++    m68k030_push_word(env, sp, 0);
++    /* Data-cycle fault address. */
++    m68k030_push_long(env, sp, env->mmu.ar);
++    /* Instruction pipe stages B and C. */
++    m68k030_push_word(env, sp, 0);
++    m68k030_push_word(env, sp, 0);
++    /* Special status and internal state. */
++    m68k030_push_word(env, sp, env->mmu.ssw);
++    m68k030_push_word(env, sp, 0);
++    /* Common frame. */
++    m68k030_push_word(env, sp, 0xb000u | (vector << 2));
++    m68k030_push_long(env, sp, pc);
++    m68k030_push_word(env, sp, sr);
++}
++
+ static void m68k_interrupt_all(CPUM68KState *env, int is_hw)
+ {
+     CPUState *cs = env_cpu(env);
+@@ -321,6 +385,18 @@ static void m68k_interrupt_all(CPUM68KState *env, int is_hw)
+ 
+     switch (cs->exception_index) {
+     case EXCP_ACCESS:
++        if (m68k_feature(env, M68K_FEATURE_M68030) &&
++            env->mmu.fault_030) {
++            if (env->mmu.fault) {
++                cpu_abort(cs, "DOUBLE MMU FAULT\n");
++            }
++            env->mmu.fault = true;
++            m68k030_stack_frame_b(env, &sp, oldsr,
++                                  cs->exception_index, env->pc);
++            env->mmu.fault_030 = false;
++            env->mmu.fault = false;
++            break;
++        }
+         if (env->mmu.fault) {
+             cpu_abort(cs, "DOUBLE MMU FAULT\n");
+         }

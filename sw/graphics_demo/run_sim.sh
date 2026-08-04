@@ -38,6 +38,12 @@ case "$mode" in
     blit-config)
         build_rom blit-config "" ../stage0/stage0.ld blit_diag.c
         ;;
+    sdram-exec-blit)
+        build_rom sdram-exec-blit "" ../boot/astra_st.ld blit_diag.c
+        cp fpga/soc/sim/rom_init.hex fpga/soc/sim/sdram_exec_rom.hex
+        build_rom sdram-exec-loader "" ../stage0/stage0.ld \
+            sdram_exec_loader.c
+        ;;
     stress-index8)
         build_rom stress-index8 "-DDEMO_STRESS_SPRITES=1"
         ;;
@@ -46,7 +52,7 @@ case "$mode" in
             "-DDEMO_STRESS_SPRITES=1 -DDEMO_STRESS_RGB565=1"
         ;;
     *)
-        echo "usage: $0 [normal|hardware-map|blit-config|stress-index8|stress-rgb565|all]" >&2
+        echo "usage: $0 [normal|hardware-map|blit-config|sdram-exec-blit|stress-index8|stress-rgb565|all]" >&2
         exit 2
         ;;
 esac
@@ -57,11 +63,15 @@ cd fpga/soc/sim
 rm -rf obj_dir_graphics_demo graphics_demo_core.v
 CORE_OUT=graphics_demo_core.v bash mkcore.sh
 verilator_params=()
-if [[ "$mode" == hardware-map || "$mode" == blit-config ]]; then
+if [[ "$mode" == hardware-map || "$mode" == blit-config ||
+      "$mode" == sdram-exec-blit ]]; then
     verilator_params+=("-GPRODUCTION_MAP=1")
 fi
-if [[ "$mode" == blit-config ]]; then
+if [[ "$mode" == blit-config || "$mode" == sdram-exec-blit ]]; then
     verilator_params+=("-GDIAGNOSTIC_ONLY=1")
+fi
+if [[ "$mode" == sdram-exec-blit ]]; then
+    verilator_params+=("-GSDRAM_EXEC=1")
 fi
 verilator --binary -j 0 --Mdir obj_dir_graphics_demo \
     --top-module tb_graphics_demo -Wno-lint -Wno-UNOPTFLAT --timing \

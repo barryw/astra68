@@ -59,21 +59,29 @@ the host renderer consumes only the newest available snapshot.
 The CPU continues executing the ROM and can proceed into a future loader; only
 a POST failure is terminal to an execution slice.
 
-The default ROM is an intentionally checked-in, embedded artifact and its
-provenance is recorded in
-[`rom/README.md`](rom/README.md). To exercise a newly built image without
-recompiling AstraVM:
+The boot ROM is generated from `sw/boot` and is never stored in Git. Its
+reproducible release provenance is recorded in
+[`rom/README.md`](rom/README.md). Build it before running AstraVM:
 
 ```sh
-rtk env ASTRA68_BOOT_ROM=../sw/boot/astra_boot.bin make run
+make -C sw/boot
 ```
+
+To exercise another image without recompiling AstraVM:
+
+```sh
+rtk target/release/astravm --rom ../sw/boot/astra_boot.bin
+```
+
+`ASTRA68_BOOT_ROM` remains available as a fallback when `--rom` is omitted.
 
 The current emulated hardware slice covers reset aliasing, ROM, BRAM, SDRAM,
 Vesta identity/UART/BIST/timers/vectored IRQs, front-panel MMIO, Vega bootstrap
-text, Astraea POST fill/copy, PMMU-enabled kernel entry, and kernel completion
-status. New devices should be added behind the same headless bus boundary with
-focused unit tests before their UI tooling is introduced. The cross-host test
-matrix and explicit model boundaries are recorded in [`RESULTS.md`](RESULTS.md).
+text and indexed framebuffer presentation, Astraea POST fill/copy and batched
+MASK1 glyph drawing, PMMU-enabled kernel entry, and kernel completion status.
+New devices should be added behind the same headless bus boundary with focused
+unit tests before their UI tooling is introduced. The cross-host test matrix
+and explicit model boundaries are recorded in [`RESULTS.md`](RESULTS.md).
 
 MC68030 PMMU descriptor traffic uses a separate fallible physical-bus path.
 Mapped Astra apertures return data; an unmapped table address reports a

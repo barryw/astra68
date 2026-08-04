@@ -1148,11 +1148,25 @@ extern uint m68ki_pmmu_translate_addr(uint address, uint function_code,
 				      uint instruction, uint fault_address,
 				      uint cycle_index);
 
+static inline uint m68ki_pmmu_translate_addr_fast(
+	uint address, uint function_code, pmmu030_access access,
+	uint transfer_size, uint data_output, uint instruction,
+	uint fault_address, uint cycle_index)
+{
+	uint physical_address;
+	if(pmmu030_fast_translate_inline(&PMMU_STATE, address,
+		(uint8_t)function_code, access, &physical_address))
+		return physical_address;
+	return m68ki_pmmu_translate_addr(address, function_code, access,
+		transfer_size, data_output, instruction, fault_address,
+		cycle_index);
+}
+
 static inline uint m68ki_read_translated_program_16(uint address, uint fc)
 {
 #if M68K_EMULATE_PMMU
-	if(HAS_PMMU && pmmu030_translation_active(&PMMU_STATE))
-		address = m68ki_pmmu_translate_addr(address, fc, PMMU030_ACCESS_READ,
+	if(HAS_PMMU && pmmu030_translation_active_inline(&PMMU_STATE))
+		address = m68ki_pmmu_translate_addr_fast(address, fc, PMMU030_ACCESS_READ,
 						     2u, 0u, 1u, address, 0u);
 #else
 	(void)fc;
@@ -1232,7 +1246,7 @@ static inline uint m68ki_read_imm_32(void)
 	m68ki_check_address_error(address, MODE_READ, fc); /* auto-disable (see m68kcpu.h) */
 	REG_PC += 4;
 #if M68K_EMULATE_PMMU
-	if(HAS_PMMU && pmmu030_translation_active(&PMMU_STATE))
+	if(HAS_PMMU && pmmu030_translation_active_inline(&PMMU_STATE))
 		return (m68ki_read_translated_program_16(address, fc) << 16) |
 		       m68ki_read_translated_program_16(address + 2u, fc);
 #endif
@@ -1317,8 +1331,8 @@ static inline uint m68ki_read_8_fc(uint address, uint fc)
 	}
 
 #if M68K_EMULATE_PMMU
-	if(HAS_PMMU && pmmu030_translation_active(&PMMU_STATE))
-		address = m68ki_pmmu_translate_addr(address, fc, PMMU030_ACCESS_READ,
+	if(HAS_PMMU && pmmu030_translation_active_inline(&PMMU_STATE))
+		address = m68ki_pmmu_translate_addr_fast(address, fc, PMMU030_ACCESS_READ,
 						     1u, 0u, 0u, address,
 						     cycle_index);
 #endif
@@ -1350,9 +1364,9 @@ static inline uint m68ki_read_16_fc(uint address, uint fc)
 	}
 
 #if M68K_EMULATE_PMMU
-	if(HAS_PMMU && pmmu030_translation_active(&PMMU_STATE))
+	if(HAS_PMMU && pmmu030_translation_active_inline(&PMMU_STATE))
 	{
-		uint page_mask = pmmu030_page_mask(&PMMU_STATE);
+		uint page_mask = pmmu030_page_mask_inline(&PMMU_STATE);
 		if((PMMU_STATE.tc & PMMU030_TC_ENABLE) &&
 		   ((address & ~page_mask) != ((address + 1u) & ~page_mask)))
 		{
@@ -1360,7 +1374,7 @@ static inline uint m68ki_read_16_fc(uint address, uint fc)
 			uint i;
 			result = 0;
 			for(i = 0; i < 2u; ++i)
-				physical[i] = m68ki_pmmu_translate_addr(address + i, fc,
+				physical[i] = m68ki_pmmu_translate_addr_fast(address + i, fc,
 					PMMU030_ACCESS_READ, 2u, 0u, 0u, address,
 					cycle_index);
 			for(i = 0; i < 2u; ++i)
@@ -1369,7 +1383,7 @@ static inline uint m68ki_read_16_fc(uint address, uint fc)
 			m68ki_log_data_cycle(logical_address, fc, 2u, 0u, result);
 			return result;
 		}
-		address = m68ki_pmmu_translate_addr(address, fc, PMMU030_ACCESS_READ,
+		address = m68ki_pmmu_translate_addr_fast(address, fc, PMMU030_ACCESS_READ,
 						     2u, 0u, 0u, address,
 						     cycle_index);
 	}
@@ -1402,9 +1416,9 @@ static inline uint m68ki_read_32_fc(uint address, uint fc)
 	}
 
 #if M68K_EMULATE_PMMU
-	if(HAS_PMMU && pmmu030_translation_active(&PMMU_STATE))
+	if(HAS_PMMU && pmmu030_translation_active_inline(&PMMU_STATE))
 	{
-		uint page_mask = pmmu030_page_mask(&PMMU_STATE);
+		uint page_mask = pmmu030_page_mask_inline(&PMMU_STATE);
 		if((PMMU_STATE.tc & PMMU030_TC_ENABLE) &&
 		   ((address & ~page_mask) != ((address + 3u) & ~page_mask)))
 		{
@@ -1412,7 +1426,7 @@ static inline uint m68ki_read_32_fc(uint address, uint fc)
 			uint i;
 			result = 0;
 			for(i = 0; i < 4u; ++i)
-				physical[i] = m68ki_pmmu_translate_addr(address + i, fc,
+				physical[i] = m68ki_pmmu_translate_addr_fast(address + i, fc,
 					PMMU030_ACCESS_READ, 4u, 0u, 0u, address,
 					cycle_index);
 			for(i = 0; i < 4u; ++i)
@@ -1421,7 +1435,7 @@ static inline uint m68ki_read_32_fc(uint address, uint fc)
 			m68ki_log_data_cycle(logical_address, fc, 4u, 0u, result);
 			return result;
 		}
-		address = m68ki_pmmu_translate_addr(address, fc, PMMU030_ACCESS_READ,
+		address = m68ki_pmmu_translate_addr_fast(address, fc, PMMU030_ACCESS_READ,
 						     4u, 0u, 0u, address,
 						     cycle_index);
 	}
@@ -1454,9 +1468,9 @@ static inline void m68ki_write_8_fc(uint address, uint fc, uint value)
 	}
 
 #if M68K_EMULATE_PMMU
-	if(HAS_PMMU && pmmu030_translation_active(&PMMU_STATE))
+	if(HAS_PMMU && pmmu030_translation_active_inline(&PMMU_STATE))
 	{
-		address = m68ki_pmmu_translate_addr(address, fc, PMMU030_ACCESS_WRITE,
+		address = m68ki_pmmu_translate_addr_fast(address, fc, PMMU030_ACCESS_WRITE,
 						     1u, value, 0u, address,
 						     cycle_index);
 		if(CPU_BUS_FAULT_DEFERRED)
@@ -1491,9 +1505,9 @@ static inline void m68ki_write_16_fc(uint address, uint fc, uint value)
 	}
 
 #if M68K_EMULATE_PMMU
-	if(HAS_PMMU && pmmu030_translation_active(&PMMU_STATE))
+	if(HAS_PMMU && pmmu030_translation_active_inline(&PMMU_STATE))
 	{
-		uint page_mask = pmmu030_page_mask(&PMMU_STATE);
+		uint page_mask = pmmu030_page_mask_inline(&PMMU_STATE);
 		if((PMMU_STATE.tc & PMMU030_TC_ENABLE) &&
 		   ((address & ~page_mask) != ((address + 1u) & ~page_mask)))
 		{
@@ -1501,7 +1515,7 @@ static inline void m68ki_write_16_fc(uint address, uint fc, uint value)
 			uint i;
 			for(i = 0; i < 2u; ++i)
 			{
-				physical[i] = m68ki_pmmu_translate_addr(address + i, fc,
+				physical[i] = m68ki_pmmu_translate_addr_fast(address + i, fc,
 					PMMU030_ACCESS_WRITE, 2u, value, 0u, address,
 					cycle_index);
 				if(CPU_BUS_FAULT_DEFERRED)
@@ -1513,7 +1527,7 @@ static inline void m68ki_write_16_fc(uint address, uint fc, uint value)
 					     MASK_OUT_ABOVE_16(value));
 			return;
 		}
-		address = m68ki_pmmu_translate_addr(address, fc, PMMU030_ACCESS_WRITE,
+		address = m68ki_pmmu_translate_addr_fast(address, fc, PMMU030_ACCESS_WRITE,
 						     2u, value, 0u, address,
 						     cycle_index);
 		if(CPU_BUS_FAULT_DEFERRED)
@@ -1546,9 +1560,9 @@ static inline void m68ki_write_32_fc(uint address, uint fc, uint value)
 	}
 
 #if M68K_EMULATE_PMMU
-	if(HAS_PMMU && pmmu030_translation_active(&PMMU_STATE))
+	if(HAS_PMMU && pmmu030_translation_active_inline(&PMMU_STATE))
 	{
-		uint page_mask = pmmu030_page_mask(&PMMU_STATE);
+		uint page_mask = pmmu030_page_mask_inline(&PMMU_STATE);
 		if((PMMU_STATE.tc & PMMU030_TC_ENABLE) &&
 		   ((address & ~page_mask) != ((address + 3u) & ~page_mask)))
 		{
@@ -1556,7 +1570,7 @@ static inline void m68ki_write_32_fc(uint address, uint fc, uint value)
 			uint i;
 			for(i = 0; i < 4u; ++i)
 			{
-				physical[i] = m68ki_pmmu_translate_addr(address + i, fc,
+				physical[i] = m68ki_pmmu_translate_addr_fast(address + i, fc,
 					PMMU030_ACCESS_WRITE, 4u, value, 0u, address,
 					cycle_index);
 				if(CPU_BUS_FAULT_DEFERRED)
@@ -1568,7 +1582,7 @@ static inline void m68ki_write_32_fc(uint address, uint fc, uint value)
 			m68ki_log_data_cycle(logical_address, fc, 4u, 1u, value);
 			return;
 		}
-		address = m68ki_pmmu_translate_addr(address, fc, PMMU030_ACCESS_WRITE,
+		address = m68ki_pmmu_translate_addr_fast(address, fc, PMMU030_ACCESS_WRITE,
 						     4u, value, 0u, address,
 						     cycle_index);
 		if(CPU_BUS_FAULT_DEFERRED)
@@ -1593,9 +1607,9 @@ static inline void m68ki_write_32_pd_fc(uint address, uint fc, uint value)
 		return;
 
 #if M68K_EMULATE_PMMU
-	if(HAS_PMMU && pmmu030_translation_active(&PMMU_STATE))
+	if(HAS_PMMU && pmmu030_translation_active_inline(&PMMU_STATE))
 	{
-		address = m68ki_pmmu_translate_addr(address, fc, PMMU030_ACCESS_WRITE,
+		address = m68ki_pmmu_translate_addr_fast(address, fc, PMMU030_ACCESS_WRITE,
 						     4u, value, 0u, address,
 						     cycle_index);
 		if(CPU_BUS_FAULT_DEFERRED)

@@ -31,11 +31,11 @@ static void test_bounded_sampling_windows_and_totals(void)
 
     token = kernel_performance_begin(
         KERNEL_PERFORMANCE_SCHEDULER_PICK);
-    assert(token.active != 0u);
+    assert(token.metric < KERNEL_PERFORMANCE_METRIC_COUNT);
     kernel_performance_freeze();
     kernel_performance_end(token);
     token = kernel_performance_begin(KERNEL_PERFORMANCE_SCHEDULER_PICK);
-    assert(token.active == 0u);
+    assert(token.metric >= KERNEL_PERFORMANCE_METRIC_COUNT);
     assert(kernel_performance_stats(&stats));
     assert(stats.metric[KERNEL_PERFORMANCE_SCHEDULER_PICK].calls == 4u);
     assert(stats.metric[KERNEL_PERFORMANCE_SCHEDULER_PICK].samples == 3u);
@@ -50,13 +50,13 @@ static void test_bounded_sampling_windows_and_totals(void)
         KERNEL_PERFORMANCE_METRIC_MASK(KERNEL_PERFORMANCE_WAKE)));
 
     token = kernel_performance_begin(KERNEL_PERFORMANCE_WAIT_BLOCK);
-    assert(token.active == 0u);
+    assert(token.metric >= KERNEL_PERFORMANCE_METRIC_COUNT);
     token = kernel_performance_begin(
         KERNEL_PERFORMANCE_SCHEDULER_PICK);
     kernel_performance_end(token);
     token = kernel_performance_begin(
         KERNEL_PERFORMANCE_SCHEDULER_PICK);
-    assert(token.active == 0u);
+    assert(token.metric >= KERNEL_PERFORMANCE_METRIC_COUNT);
     token = kernel_performance_begin(KERNEL_PERFORMANCE_WAKE);
     kernel_performance_end(token);
     assert(kernel_performance_sampling_enabled == 0u);
@@ -165,11 +165,99 @@ static void test_conditional_span_selects_one_metric(void)
     assert(kernel_performance_sampling_enabled == 0u);
 }
 
+static void test_interrupt_time_is_excluded_without_losing_samples(void)
+{
+    KernelPerformanceInterruptToken interrupt;
+    KernelPerformanceInterruptToken nested;
+    KernelPerformanceStats stats;
+    KernelPerformanceToken token;
+
+    kernel_performance_init();
+    kernel_performance_freeze();
+    assert(kernel_performance_start_window(
+        KERNEL_PERFORMANCE_METRIC_MASK(KERNEL_PERFORMANCE_WAKE)));
+    kernel_performance_test_set_cycles(100u, 0u);
+
+    token = kernel_performance_begin(KERNEL_PERFORMANCE_WAKE);
+    assert(token.metric < KERNEL_PERFORMANCE_METRIC_COUNT);
+    kernel_performance_test_set_cycles(120u, 0u);
+    interrupt = kernel_performance_interrupt_enter();
+    kernel_performance_test_set_cycles(160u, 0u);
+    kernel_performance_interrupt_leave(interrupt);
+    kernel_performance_test_set_cycles(190u, 0u);
+    kernel_performance_end(token);
+    assert(kernel_performance_stats(&stats));
+    assert(stats.metric[KERNEL_PERFORMANCE_WAKE].calls == 1u);
+    assert(stats.metric[KERNEL_PERFORMANCE_WAKE].samples == 1u);
+    assert(stats.metric[KERNEL_PERFORMANCE_WAKE].maximum_cycles == 50u);
+    assert(stats.metric[KERNEL_PERFORMANCE_WAKE].overruns == 0u);
+    assert(kernel_performance_sampling_enabled == 0u);
+
+    kernel_performance_init();
+    kernel_performance_freeze();
+    assert(kernel_performance_start_window(
+        KERNEL_PERFORMANCE_METRIC_MASK(
+            KERNEL_PERFORMANCE_TIMER_DISPATCH)));
+    kernel_performance_test_set_cycles(200u, 0u);
+    interrupt = kernel_performance_interrupt_enter();
+    kernel_performance_test_set_cycles(210u, 0u);
+    token = kernel_performance_begin(KERNEL_PERFORMANCE_TIMER_DISPATCH);
+    kernel_performance_test_set_cycles(230u, 0u);
+    kernel_performance_end(token);
+    kernel_performance_test_set_cycles(240u, 0u);
+    kernel_performance_interrupt_leave(interrupt);
+    assert(kernel_performance_sampling_enabled == 0u);
+    assert(kernel_performance_stats(&stats));
+    assert(stats.metric[KERNEL_PERFORMANCE_TIMER_DISPATCH].calls == 1u);
+    assert(stats.metric[KERNEL_PERFORMANCE_TIMER_DISPATCH].samples == 1u);
+    assert(stats.metric[KERNEL_PERFORMANCE_TIMER_DISPATCH].maximum_cycles ==
+           20u);
+
+    kernel_performance_init();
+    kernel_performance_freeze();
+    assert(kernel_performance_start_window(
+        KERNEL_PERFORMANCE_METRIC_MASK(KERNEL_PERFORMANCE_WAKE)));
+    kernel_performance_test_set_cycles(300u, 0u);
+    token = kernel_performance_begin(KERNEL_PERFORMANCE_WAKE);
+    kernel_performance_test_set_cycles(320u, 0u);
+    interrupt = kernel_performance_interrupt_enter();
+    kernel_performance_test_set_cycles(330u, 0u);
+    nested = kernel_performance_interrupt_enter();
+    kernel_performance_test_set_cycles(350u, 0u);
+    kernel_performance_interrupt_leave(nested);
+    kernel_performance_test_set_cycles(380u, 0u);
+    kernel_performance_interrupt_leave(interrupt);
+    kernel_performance_test_set_cycles(410u, 0u);
+    kernel_performance_end(token);
+    assert(kernel_performance_stats(&stats));
+    assert(stats.metric[KERNEL_PERFORMANCE_WAKE].samples == 1u);
+    assert(stats.metric[KERNEL_PERFORMANCE_WAKE].maximum_cycles == 50u);
+
+    kernel_performance_init();
+    kernel_performance_freeze();
+    assert(kernel_performance_start_window(
+        KERNEL_PERFORMANCE_METRIC_MASK(KERNEL_PERFORMANCE_WAKE)));
+    kernel_performance_test_set_cycles(1000u, 0u);
+    token = kernel_performance_begin(KERNEL_PERFORMANCE_WAKE);
+    for (uint32_t irq = 0u; irq < 65u; ++irq) {
+        kernel_performance_test_set_cycles(1010u + irq * 10u, 0u);
+        interrupt = kernel_performance_interrupt_enter();
+        kernel_performance_test_set_cycles(1015u + irq * 10u, 0u);
+        kernel_performance_interrupt_leave(interrupt);
+    }
+    kernel_performance_test_set_cycles(2000u, 0u);
+    kernel_performance_end(token);
+    assert(kernel_performance_stats(&stats));
+    assert(stats.metric[KERNEL_PERFORMANCE_WAKE].samples == 1u);
+    assert(stats.metric[KERNEL_PERFORMANCE_WAKE].maximum_cycles == 1000u);
+}
+
 int main(void)
 {
     test_bounded_sampling_windows_and_totals();
     test_required_metrics_and_budget_failure();
     test_conditional_span_selects_one_metric();
+    test_interrupt_time_is_excluded_without_losing_samples();
     puts("performance tests passed");
     return 0;
 }

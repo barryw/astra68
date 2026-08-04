@@ -53,15 +53,29 @@ static bool astra_pmmu_lastwrite_eligible(uint opcode)
     return true;
 }
 
+static inline bool astra_pmmu_fast_translate(uint32_t logical_address,
+                                             uint8_t function_code,
+                                             pmmu030_access access,
+                                             uint32_t *physical_address)
+{
+    return pmmu030_fast_translate_inline(&PMMU_STATE, logical_address,
+                                         function_code, access,
+                                         physical_address);
+}
+
 uint m68ki_pmmu_translate_addr(uint address, uint function_code,
                               pmmu030_access access, uint transfer_size,
                               uint data_output, uint instruction,
                               uint fault_address, uint cycle_index)
 {
-    pmmu030_result result = pmmu030_translate(&PMMU_STATE, &astra_pmmu_bus,
-                                               address,
-                                               (uint8_t)function_code,
-                                               access);
+    uint32_t physical_address;
+    pmmu030_result result;
+
+    if (astra_pmmu_fast_translate(address, (uint8_t)function_code, access,
+                                  &physical_address))
+        return physical_address;
+    result = pmmu030_translate(&PMMU_STATE, &astra_pmmu_bus, address,
+                               (uint8_t)function_code, access);
 
     PMMU_ENABLED = (PMMU_STATE.tc & PMMU030_TC_ENABLE) != 0u;
     if (result.fault != PMMU030_FAULT_NONE) {

@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 static uint32_t interrupt_save_count;
 static uint32_t interrupt_restore_count;
@@ -264,6 +265,7 @@ static void test_production_irq_qualification_controls(void)
     VegaRegs *video = kernel_platform_test_vega_registers();
     AstraeaRegs *astraea = kernel_platform_test_astraea_registers();
     OhciRegs *usb = kernel_platform_test_ohci_registers();
+    OhciHcca *hcca = kernel_platform_test_ohci_hcca();
     uint32_t status;
 
     clear_registers(registers);
@@ -316,12 +318,20 @@ static void test_production_irq_qualification_controls(void)
                                                        status));
     assert(video->IRQ_EN == 0u);
 
-    usb->CONTROL = OHCI_CONTROL_HCFS_SUSPEND;
+    usb->CONTROL = OHCI_CONTROL_HCFS_RESET;
     usb->INTERRUPT_STATUS = OHCI_INT_RHSC;
+    usb->ASTRA_DMA_POOL_BASE = OHCI_DMA_POOL_BASE;
+    usb->ASTRA_DMA_POOL_SIZE = OHCI_DMA_POOL_SIZE;
+    memset(hcca, 0xa5, sizeof(*hcca));
     assert(kernel_platform_qualification_irq_prepare(IRQ_SRC_USB));
+    assert(usb->HCCA == OHCI_DMA_POOL_BASE);
     assert((usb->CONTROL & OHCI_CONTROL_HCFS_MASK) ==
            OHCI_CONTROL_HCFS_OPERATIONAL);
+    assert(usb->COMMAND_STATUS == 0u);
     assert(usb->INTERRUPT_ENABLE == (OHCI_INT_MIE | OHCI_INT_SF));
+    for (uint32_t index = 0u;
+         index < sizeof(*hcca) / sizeof(uint32_t); ++index)
+        assert(((const uint32_t *)(const void *)hcca)[index] == 0u);
     usb->INTERRUPT_STATUS = OHCI_INT_SF;
     usb->ASTRA_STATUS = OHCI_ASTRA_IRQ;
     assert(kernel_platform_device_irq_capture(IRQ_SRC_USB, &status));
@@ -330,6 +340,8 @@ static void test_production_irq_qualification_controls(void)
                                                        status));
     assert((usb->CONTROL & OHCI_CONTROL_HCFS_MASK) ==
            OHCI_CONTROL_HCFS_SUSPEND);
+    assert(usb->COMMAND_STATUS == 0u);
+    assert(usb->HCCA == 0u);
 
     astraea->IRQ_STAT = ASTRAEA_IRQ_COPPER;
     assert(kernel_platform_qualification_irq_prepare(IRQ_SRC_ASTRAEA));

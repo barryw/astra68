@@ -1,16 +1,23 @@
 # build artifacts
 **/build/
 **/target/
+!emu/qemu/qemu-9.2/target/
+!emu/qemu/qemu-9.2/target/m68k/
+!emu/qemu/qemu-9.2/target/m68k/*.c
+!emu/qemu/qemu-9.2/target/m68k/*.h
 *.bit
 *.elf
 *.bin
-!emu/rom/astra_boot.bin
 *.d
 *.dSYM/
 *.o
 *.map
 *.rom
 *.img
+*.dcp
+*.jou
+*.rpt
+*.xsa
 esp32/astrahost/build/
 esp32/astrahost/build-provision/
 esp32/astrahost/sdkconfig
@@ -26,6 +33,7 @@ vsim.log
 # python
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Harte test data (large, fetched on demand)
 sw/harte/data/
@@ -52,6 +60,14 @@ fpga/soc/oss_flow/astra.json
 fpga/soc/oss_flow/astra.config
 fpga/soc/oss_flow/*.log
 .superpowers/
+
+# generated release evidence stays on the durable build store
+docs/evidence/
+
+# generated protocol bindings and packed boot payloads
+fpga/arty/graphics/astra_render_protocol.vh
+fpga/arty/linux/astra_render_protocol.h
+sw/boot/assets/*.lz4
 
 # OS
 .DS_Store

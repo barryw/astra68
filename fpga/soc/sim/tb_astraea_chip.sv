@@ -88,8 +88,15 @@ module tb_astraea_chip;
         begin
             @(negedge clk);
             cpu_addr = address;
-            cpu_be = 4'b1111;
-            cpu_wdata = value;
+            cpu_be = 4'b1100;
+            cpu_wdata = {value[31:16], 16'd0};
+            cpu_write_stb = 1'b1;
+            @(negedge clk);
+            cpu_write_stb = 1'b0;
+            @(negedge clk);
+            cpu_addr = address + 16'd2;
+            cpu_be = 4'b0011;
+            cpu_wdata = {16'd0, value[15:0]};
             cpu_write_stb = 1'b1;
             @(negedge clk);
             cpu_write_stb = 1'b0;
@@ -103,7 +110,11 @@ module tb_astraea_chip;
             @(negedge clk);
             cpu_addr = address;
             repeat (2) @(posedge clk);
-            #1 value = cpu_rdata;
+            #1 value[31:16] = cpu_rdata[31:16];
+            @(negedge clk);
+            cpu_addr = address + 16'd2;
+            repeat (2) @(posedge clk);
+            #1 value[15:0] = cpu_rdata[15:0];
         end
     endtask
 
@@ -195,6 +206,29 @@ module tb_astraea_chip;
                    value, cpu_irq);
         if (cpu_busy || cpu_done || cache_flush)
             $fatal(1, "idle blitter status mismatch");
+
+        // The kernel qualification path deliberately launches a zero-sized
+        // blit. It must complete without memory traffic and raise BLIT_DONE.
+        write32(16'h0010, 32'd0);
+        write32(16'h0014, 32'h00000001);
+        write32(16'h0058, 32'd0);
+        write32(16'h0010, 32'h00000001);
+        write32(16'h0068, 32'h00000003);
+        timeout = 0;
+        while (!cpu_irq && timeout < 100) begin
+            @(posedge clk);
+            timeout = timeout + 1;
+        end
+        read32(16'h0014, value);
+        if (timeout >= 100 || !value[0] || !cpu_irq)
+            $fatal(1,
+                   "zero-sized blit IRQ mismatch timeout=%0d stat=%08x irq=%b",
+                   timeout, value, cpu_irq);
+        write32(16'h0010, 32'd0);
+        write32(16'h0014, 32'h00000001);
+        repeat (2) @(posedge clk);
+        if (cpu_irq)
+            $fatal(1, "zero-sized blit IRQ did not clear");
 
         // A fully clipped draw command exercises draw MMIO, completion, fence,
         // and global IRQ plumbing without requiring the memory test model.

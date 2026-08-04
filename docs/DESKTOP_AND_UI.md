@@ -3,8 +3,9 @@
 Status: product and architecture direction; no desktop service is implemented.
 
 This document defines the intended feel and behavioral model of Astra's native
-graphical environment. `PRESENTATION.md`, `VEGA.md`, `ASTRAEA.md`, and
-`FONTS.md` remain authoritative for implemented hardware behavior.
+graphical environment. `GRAPHICS_ARCHITECTURE.md` defines the active Arty
+target. `PRESENTATION.md`, `VEGA.md`, `ASTRAEA.md`, and `FONTS.md` retain the
+implemented ULX3S behavior and contracts carried forward by the new design.
 
 ## 1. Experience target
 
@@ -25,7 +26,7 @@ Adopt the principles, not the artifacts:
 | small tools that compose well | frozen historical ABI baggage |
 
 The visual design should be recognizably Astra: crisp, compact, readable, and
-confident at 720x480. It should not depend on nostalgia, fake scanlines, giant
+confident at 1920x1080. It should not depend on nostalgia, fake scanlines, giant
 touch-sized controls, excessive padding, translucent decoration, or animation
 that delays an action.
 
@@ -37,13 +38,13 @@ mounted-volume presentation, and the user's arrangement.
 
 The normal desktop uses:
 
-- two RGB565 scanout surfaces for tear-free page flipping;
+- two wrapped RGB565 or XRGB8888 scanout surfaces for tear-free presentation;
 - application-owned off-screen surfaces with explicit damage;
 - Astraea blits and drawing commands to compose the back surface;
 - fenced vblank presentation through Vega;
 - hardware glyph runs for normal UI and terminal text;
-- one of the 16 hardware sprites reserved for the pointer while the desktop is
-  active, leaving 15 available to the active desktop Scene.
+- sprite descriptor 0 for the pointer while the desktop is active, leaving 63
+  of the 64 hardware descriptors available to the active desktop Scene.
 
 The remaining hardware sprites are not general window objects. A protected
 fullscreen game or scene may receive a validated sprite set. Exclusive
@@ -101,7 +102,7 @@ services, running jobs, and queries are distinct typed objects even when they
 have icons or can be reached by paths.
 
 Exact chrome, color palette, icon language, menu activation behavior, and
-workspace name remain **OPEN** and require real 720x480 hardware prototypes.
+workspace name remain **OPEN** and require real 1920x1080 hardware prototypes.
 
 ## 5. Scenes
 
@@ -123,9 +124,9 @@ bandwidth measurements.
 
 ## 6. Scrolling and animation
 
-Vega v0.5 provides pixel-granular X/Y framebuffer viewport scrolling and
-independent wrap. The UI and game kits expose that capability as a surface or
-scene operation, not MMIO.
+The Arty Vega contract provides pixel-granular X/Y framebuffer viewport
+scrolling and independent wrap. The UI and game kits expose that capability as
+a surface or scene operation, not MMIO.
 
 - Scrolling uses a larger or ring-shaped framebuffer where that avoids copies.
 - The copper may animate permitted viewport/register values during scanout.
@@ -134,9 +135,11 @@ scene operation, not MMIO.
   unsynchronized wall-clock timers.
 - A missed frame retains the previous completed frame; it never tears.
 
-The retired tile engine is not part of the desktop or game API. Tile-like
-software can use indexed surfaces, sprites, blits, and hardware viewport
-scrolling.
+The two hardware tile layers are first-class game-scene resources. They support
+pixel-granular X/Y scroll, independent wrap, foreground overlays, and
+copper-controlled scroll bands. Desktop content normally uses fenced chunky
+surfaces; tile layers are available when a workspace effect can justify their
+resource and bandwidth cost rather than being exposed as a second widget API.
 
 ## 7. Commands, menus, and automation
 

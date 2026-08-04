@@ -4,6 +4,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#if defined(__m68k__)
+#include "mmio.h"
+
+#include <stddef.h>
+#include <vesta.h>
+#endif
+
 #define KERNEL_PLATFORM_QUANTUM_MS 5u
 #define KERNEL_PLATFORM_QUANTUM_HZ \
     (1000u / KERNEL_PLATFORM_QUANTUM_MS)
@@ -60,7 +67,16 @@ uint32_t kernel_platform_quantum_cycles(void);
 void kernel_platform_timer_arm(uint32_t cycles);
 void kernel_platform_timer_disarm(void);
 uint32_t kernel_platform_ticks(void);
+#if defined(__m68k__)
+static inline __attribute__((always_inline)) uint32_t
+kernel_platform_cpu_cycles_low(void)
+{
+    return kernel_mmio_read32(
+        VESTA_BASE + (uint32_t)offsetof(VestaRegs, CPU_CYCLES_LO));
+}
+#else
 uint32_t kernel_platform_cpu_cycles_low(void);
+#endif
 void kernel_platform_cpu_cycles(KernelPlatformCycleCount *cycles);
 uint64_t kernel_platform_monotonic_ns(void);
 uint64_t kernel_platform_cycles_to_ns(uint64_t cycles);
@@ -127,6 +143,7 @@ VestaRegs *kernel_platform_test_registers(void);
 AstraeaRegs *kernel_platform_test_astraea_registers(void);
 VegaRegs *kernel_platform_test_vega_registers(void);
 OhciRegs *kernel_platform_test_ohci_registers(void);
+OhciHcca *kernel_platform_test_ohci_hcca(void);
 #endif
 
 #endif

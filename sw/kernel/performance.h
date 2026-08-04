@@ -91,10 +91,21 @@ _Static_assert(KERNEL_PERFORMANCE_METRIC_COUNT < 32,
 
 typedef struct KernelPerformanceToken {
     uint32_t started;
+    uint16_t interrupt_epoch;
+    uint8_t generation;
     uint8_t metric;
-    uint8_t active;
-    uint16_t generation;
 } KernelPerformanceToken;
+
+_Static_assert(sizeof(KernelPerformanceToken) == 8u,
+               "performance token must remain register-copyable");
+
+typedef struct KernelPerformanceInterruptToken {
+    uint32_t started;
+    uint32_t sequence;
+} KernelPerformanceInterruptToken;
+
+_Static_assert(sizeof(KernelPerformanceInterruptToken) == 8u,
+               "interrupt performance token must remain register-copyable");
 
 typedef struct KernelPerformanceSpan {
     uint32_t started;
@@ -124,6 +135,9 @@ extern uint8_t kernel_performance_sampling_enabled;
 void kernel_performance_init(void);
 void kernel_performance_freeze(void);
 uint32_t kernel_performance_cycles_low(void);
+KernelPerformanceInterruptToken kernel_performance_interrupt_enter(void);
+void kernel_performance_interrupt_leave(
+    KernelPerformanceInterruptToken token);
 bool kernel_performance_start_window(uint32_t metric_mask);
 KernelPerformanceToken kernel_performance_begin_sampled(
     KernelPerformanceMetric metric);
@@ -144,7 +158,9 @@ static inline __attribute__((always_inline))
 KernelPerformanceToken kernel_performance_begin(
     KernelPerformanceMetric metric)
 {
-    KernelPerformanceToken token = {0u, 0u, 0u, 0u};
+    KernelPerformanceToken token = {
+        0u, 0u, 0u, (uint8_t)KERNEL_PERFORMANCE_METRIC_COUNT
+    };
 
     if (kernel_performance_sampling_enabled != 0u)
         token = kernel_performance_begin_sampled(metric);
@@ -154,7 +170,7 @@ KernelPerformanceToken kernel_performance_begin(
 static inline __attribute__((always_inline))
 void kernel_performance_end(KernelPerformanceToken token)
 {
-    if (token.active != 0u)
+    if (token.metric < KERNEL_PERFORMANCE_METRIC_COUNT)
         kernel_performance_end_sampled(token);
 }
 

@@ -1,6 +1,7 @@
 use astravm_machine::{AstraMachine, CPU_HZ, MachineSnapshot};
 use std::env;
 use std::fs;
+use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -22,11 +23,12 @@ pub struct MachineHost {
 
 impl MachineHost {
     pub fn spawn() -> Self {
+        let rom_path = configured_rom_path();
         let (command_tx, command_rx) = sync_channel(16);
         let (snapshot_tx, snapshot_rx) = sync_channel(2);
         let worker = thread::Builder::new()
             .name("astravm-machine".to_owned())
-            .spawn(move || machine_thread(command_rx, snapshot_tx))
+            .spawn(move || machine_thread(command_rx, snapshot_tx, rom_path))
             .expect("failed to start AstraVM machine thread");
 
         Self {
@@ -64,8 +66,12 @@ impl Drop for MachineHost {
     }
 }
 
-fn machine_thread(commands: Receiver<MachineCommand>, snapshots: SyncSender<MachineSnapshot>) {
-    let mut machine = load_machine();
+fn machine_thread(
+    commands: Receiver<MachineCommand>,
+    snapshots: SyncSender<MachineSnapshot>,
+    rom_path: Option<PathBuf>,
+) {
+    let mut machine = load_machine(rom_path);
     let mut last_host_tick = Instant::now();
     let mut next_snapshot = last_host_tick;
     let mut fractional_cycles = 0_u128;
@@ -103,12 +109,26 @@ fn machine_thread(commands: Receiver<MachineCommand>, snapshots: SyncSender<Mach
     }
 }
 
-fn load_machine() -> AstraMachine {
-    let Ok(path) = env::var("ASTRA68_BOOT_ROM") else {
+fn configured_rom_path() -> Option<PathBuf> {
+    let mut arguments = env::args_os().skip(1);
+    while let Some(argument) = arguments.next() {
+        if argument == "--rom" {
+            return Some(PathBuf::from(
+                arguments
+                    .next()
+                    .unwrap_or_else(|| panic!("--rom requires a path")),
+            ));
+        }
+    }
+    env::var_os("ASTRA68_BOOT_ROM").map(PathBuf::from)
+}
+
+fn load_machine(path: Option<PathBuf>) -> AstraMachine {
+    let Some(path) = path else {
         return AstraMachine::new();
     };
     let rom = fs::read(&path)
-        .unwrap_or_else(|error| panic!("failed to read ASTRA68_BOOT_ROM '{path}': {error}"));
+        .unwrap_or_else(|error| panic!("failed to read boot ROM '{}': {error}", path.display()));
     AstraMachine::try_with_rom(&rom)
-        .unwrap_or_else(|error| panic!("invalid ASTRA68_BOOT_ROM '{path}': {error}"))
+        .unwrap_or_else(|error| panic!("invalid boot ROM '{}': {error}", path.display()))
 }

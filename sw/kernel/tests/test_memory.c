@@ -1,4 +1,5 @@
 #include "memory.h"
+#include "ohci.h"
 
 #include <assert.h>
 #include <stdint.h>
@@ -64,10 +65,13 @@ static void make_valid_info(AstraBootInfo *info)
               ASTRA_MEMORY_RANGE_ROM_BACKING,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_EXECUTE |
                   ASTRA_MEMORY_CACHEABLE);
-    add_range(info, 0x03e40000u, 0x001c0000u,
+    add_range(info, 0x03e40000u, 0x000c0000u,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
+    add_range(info, OHCI_DMA_POOL_BASE, OHCI_DMA_POOL_SIZE,
+              ASTRA_MEMORY_RANGE_DEVICE,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
     astra_boot_info_finalize(info);
 }
 
@@ -82,8 +86,8 @@ static void test_initial_map(void)
     assert(kernel_memory_stats(&stats));
     assert(stats.ram_base == 0x02000000u);
     assert(stats.total_frames == 8192u);
-    assert(stats.free_frames == 7948u);
-    assert(stats.high_water_frames == 244u);
+    assert(stats.free_frames == 7692u);
+    assert(stats.high_water_frames == 500u);
     assert(stats.owner_slots_used == 0u);
     assert(stats.owner_release_operations == 0u);
     assert(stats.owner_release_frame_visits == 0u);
@@ -104,8 +108,10 @@ static void test_initial_map(void)
     assert(frame.state == KERNEL_FRAME_ROM_BACKING);
     assert(kernel_memory_frame_info(0x02004000u, &frame));
     assert(frame.state == KERNEL_FRAME_FREE);
-    assert(kernel_memory_frame_info(0x03fff000u, &frame));
+    assert(kernel_memory_frame_info(0x03eff000u, &frame));
     assert(frame.state == KERNEL_FRAME_EMERGENCY_RESERVED);
+    assert(kernel_memory_frame_info(0x03fff000u, &frame));
+    assert(frame.state == KERNEL_FRAME_DEVICE);
 }
 
 static void test_rejects_unclassified_and_unaligned_ram(void)
@@ -371,7 +377,7 @@ static void test_exhaustion_and_checked_ranges(void)
            KERNEL_MEMORY_OK);
     assert(kernel_memory_alloc(7520u, 1u, KERNEL_FRAME_PROCESS, 1u, &second) ==
            KERNEL_MEMORY_OK);
-    assert(kernel_memory_alloc(416u, 1u, KERNEL_FRAME_PROCESS, 1u, &third) ==
+    assert(kernel_memory_alloc(160u, 1u, KERNEL_FRAME_PROCESS, 1u, &third) ==
            KERNEL_MEMORY_OK);
     assert(first == 0x02004000u);
     assert(second == ASTRA_KERNEL_USABLE_ADDRESS);
@@ -415,7 +421,7 @@ static void test_emergency_reserve_isolated_and_replenished(void)
            KERNEL_MEMORY_OK);
     assert(kernel_memory_alloc(7520u, 1u, KERNEL_FRAME_PROCESS, 1u,
                                &second) == KERNEL_MEMORY_OK);
-    assert(kernel_memory_alloc(416u, 1u, KERNEL_FRAME_PROCESS, 1u, &third) ==
+    assert(kernel_memory_alloc(160u, 1u, KERNEL_FRAME_PROCESS, 1u, &third) ==
            KERNEL_MEMORY_OK);
     assert(kernel_memory_stats(&exhausted));
     assert(exhausted.free_frames == 0u);

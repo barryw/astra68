@@ -1,5 +1,6 @@
 #include "allocation.h"
 #include "memory.h"
+#include "ohci.h"
 #include "pmmu.h"
 #include "thread.h"
 #include "vm.h"
@@ -147,10 +148,13 @@ static void initialize_test(void)
               ASTRA_MEMORY_RANGE_ROM_BACKING,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_EXECUTE |
                   ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, 0x03e40000u, 0x001c0000u,
+    add_range(&info, 0x03e40000u, 0x000c0000u,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
+    add_range(&info, OHCI_DMA_POOL_BASE, OHCI_DMA_POOL_SIZE,
+              ASTRA_MEMORY_RANGE_DEVICE,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
     astra_boot_info_finalize(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
     memset(physical_memory, 0xa5, sizeof(physical_memory));
@@ -173,8 +177,10 @@ static void test_kernel_root_and_enable_sequence(void)
     KernelVmStats stats;
     uint32_t *root;
     uint32_t *low;
+    uint32_t *top;
     uint32_t *high;
     uint32_t low_physical;
+    uint32_t top_physical;
     uint32_t high_physical;
     uint32_t translated;
 
@@ -201,8 +207,17 @@ static void test_kernel_root_and_enable_sequence(void)
                   KERNEL_PAGE_SIZE) | 1u));
     }
     assert(low[0x3ffu] == 0x023ff001u);
-    for (uint32_t index = 9u; index <= 15u; ++index)
+    for (uint32_t index = 9u; index < 15u; ++index)
         assert(root[index] == ((index << 22) | 1u));
+    assert((root[15] & 3u) == 2u);
+    top_physical = root[15] & 0xfffffff0u;
+    top = physical_words(top_physical);
+    assert(top[0] == 0x03c00001u);
+    assert(top[(ASTRA_ROM_BACKING_ADDRESS - 0x03c00000u) >> 12] ==
+           (ASTRA_ROM_BACKING_ADDRESS | 1u));
+    assert(top[(OHCI_DMA_POOL_BASE - 0x03c00000u) >> 12] ==
+           (OHCI_DMA_POOL_BASE | 0x41u));
+    assert(top[0x3ffu] == 0x03fff041u);
     assert(stats.kernel_stack_guard == 0x02080000u);
     assert(stats.kernel_worker_stack_guard == 0x02083000u);
     assert(stats.kernel_thread_stack_arena ==
@@ -211,7 +226,7 @@ static void test_kernel_root_and_enable_sequence(void)
            KERNEL_THREAD_SUPERVISOR_HOST_ARENA_BASE +
                KERNEL_THREAD_MAX * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE);
     assert(stats.kernel_thread_stack_guards == KERNEL_THREAD_MAX);
-    assert(stats.supervisor_table_pages == 3u);
+    assert(stats.supervisor_table_pages == 4u);
     assert((root[1023] & 3u) == 2u);
     high_physical = root[1023] & 0xfffffff0u;
     high = physical_words(high_physical);
@@ -227,6 +242,10 @@ static void test_kernel_root_and_enable_sequence(void)
     assert(kernel_vm_probe_current(0x02401234u, true, &translated) ==
            KERNEL_VM_MAPPING_READ_WRITE);
     assert(translated == 0x02401234u);
+    assert(kernel_vm_probe_current(OHCI_DMA_POOL_BASE + 0x84u, true,
+                                   &translated) ==
+           KERNEL_VM_MAPPING_READ_WRITE);
+    assert(translated == OHCI_DMA_POOL_BASE + 0x84u);
     assert(kernel_vm_probe_current(0xfff40020u, true, &translated) ==
            KERNEL_VM_MAPPING_READ_WRITE);
     assert(translated == 0xfff40020u);

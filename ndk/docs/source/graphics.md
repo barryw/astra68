@@ -50,17 +50,23 @@ scroll, independent X/Y wrapping, transparency, and foreground/background
 placement. Updating a layer copies and validates the descriptor; passing null
 disables it.
 
-An {c:struct}`AstraSpriteSet` contains up to 32 copied sprite descriptions.
+An {c:struct}`AstraSpriteSet` contains up to 64 copied sprite descriptions.
 Replacing an entry is atomic from the next presentation that references the
-set. The service validates source bounds, clipping, priority, palette bank,
-transparency, and collision policy before publishing hardware descriptors.
+set. Every sprite references an INDEX8 source rectangle whose width and height
+are independently selectable from 1 through 128 pixels. Destination width and
+height are independently selectable from 1 through 1024 pixels for
+nearest-neighbor scaling. The service validates source bounds, clipping,
+priority, palette bank, transparency, opacity, and collision policy before
+publishing hardware descriptors. Each sprite independently selects one of
+sixteen 256-entry ARGB palette banks.
 Vega admits complete sprites in descending priority and ascending descriptor
 index until the scanline pixel budget is exhausted. The primary 720-pixel mode
-guarantees 1,024 sprite pixels/line with INDEX8 scanout and 512 with RGB565;
-query the corresponding {c:struct}`AstraGraphicsInfo` fields rather than
-assuming a descriptor count implies unlimited overlapping width. Overflow is
-reported as {c:enumerator}`ASTRA_DISPLAY_STATUS_SPRITE_OVERFLOW` and never
-becomes a scanout underrun.
+guarantees 8,192 admitted sprite pixels per line, independent of framebuffer
+format; query {c:member}`AstraGraphicsInfo.max_sprite_pixels_per_line` rather
+than assuming a descriptor count implies unlimited overlapping width.
+Overflow is reported as
+{c:enumerator}`ASTRA_DISPLAY_STATUS_SPRITE_OVERFLOW` and never becomes a
+scanout underrun.
 
 An {c:struct}`AstraRasterProgram` is an immutable ordered list of validated beam
 changes. Public target identifiers deliberately expose only display-safe

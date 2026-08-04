@@ -26,6 +26,27 @@ must not be presented as working software.
   route, two ULX3S boots, physical HDMI, and interactive FTDI/AstraHost-SPI
   monitor checks remain pending. K9 therefore remains the current
   hardware-qualified release.
+- The current working tree also adds the native INDEX8 boot splash and Astraea
+  MASK1 status text. It is based on
+  `4579138eb3d30e26aef658252fba28b15dd33420`; the exact 25-file source
+  manifest is
+  `docs/evidence/astra68-splash-source-manifest-20260727.sha256`, SHA-256
+  `c53e68b7f9be69917c07aa31a66a9b78552254013b822bf889974c52fbd026d1`.
+  The earlier `320CAE59` source routed without a timing waiver but failed its
+  first ULX3S scene presentation because a routine Vega baseline copy rejected
+  shadow edits and the submit. That bitstream is rejected. The fixed Beast
+  snapshot `/tmp/astra68-splash-hwglyph-vega-lock-20260727` arbitrates shared
+  palette/descriptor RAM writes while leaving the independent shadow scene
+  editable. Its forced-overlap Vega test, full directed graphics suite, and
+  exact release-ROM TG68K/SDRAM/HDMI boot all pass; the latter uses the
+  reproducible 223,004-byte, CRC32 `84E611A6` ROM and completes all 24 hardware
+  glyph jobs and both framebuffer pixel checks. Exact fixed build `C53E68B7`
+  now routes the complete production feature set on Beast with zero SCCs and
+  no waiver: 67,295 TRELLIS_COMB, 26,024 TRELLIS_FF, 103 DP16KD, and 18
+  MULT18X18D cells, with 14.127087 MHz CPU and 67.971725 MHz SDRAM achieved.
+  Bitstream SHA-256 is
+  `9c6a1f575596bf612fa9649940a3c3a65758aa7e55684cebf3b42ba62c576b46`.
+  Repeated SRAM-only ULX3S boots and physical HDMI qualification remain.
 - K9 memory-pressure hardening is hardware-qualified from exact implementation
   commit `03660014d7af6d3662504fc076700f04929117ab`, built reproducibly at
   `2026-07-26T02:43:12Z`. The immutable source archive SHA-256 is

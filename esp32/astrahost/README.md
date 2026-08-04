@@ -74,12 +74,13 @@ diagnostic image with:
 ASTRA_MONITOR_SELFTEST=1 ./build-docker.sh
 ```
 
-Its output is under `build-monitor-selftest/`. It waits six seconds so boot
-performance sampling is complete, then sends `build`, `irqs`, `mem`, and
-`trace` through the SPI monitor protocol, validates each bounded reply, logs
-`ASTRAHOST MONITOR SELFTEST PASS`, and continues the normal storage/input
-service. A subsequent FTDI `devices` command reports the observed `mon_spi`
-count. Normal builds do not contain or run this test.
+Its output is under `build-monitor-selftest/`. After runtime `HELLO`, it sends
+`build`, `irqs`, `mem`, and `trace` through the SPI monitor protocol, validates
+each bounded reply, logs `ASTRAHOST MONITOR SELFTEST PASS`, and continues the
+normal storage/input service. The bounded response deadline allows an early
+request to wait for guarded-worker startup. A subsequent FTDI `devices` command
+reports the observed `mon_spi` count. Normal builds do not contain or run this
+test.
 
 For initial board provisioning only, a validated package can be embedded in a
 separate firmware build:

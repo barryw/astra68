@@ -3,6 +3,7 @@ include ../../mk/m68k-cross.mk
 CC       = $(CROSS)gcc
 OBJCOPY  = $(CROSS)objcopy
 OBJDUMP  = $(CROSS)objdump
+HOST_CC ?= cc
 CPU_CLK_DIV_BIT ?= 0
 SDRAM_ENABLE ?= 1
 HDMI_ENABLE ?= 1
@@ -28,6 +29,10 @@ ASTRA_FLOORPLAN_ENFORCE ?= host_io,astraea_blitter,astraea_blitter_cdc,astraea_b
 RESOURCE_PROFILE ?= complete_chipset
 ROM_VERSION ?= 0.3
 BUILD_INFO = build/rom_build_info.h
+SPLASH_SOURCE = assets/astra_boot_splash.png
+SPLASH_FONT = ../../fpga/soc/post_fonts.hex
+SPLASH_PACKER = pack_boot_splash.py
+SPLASH_PAYLOAD = assets/astra_boot_splash.pal8.lz4
 KERNEL_DIR = ../kernel
 KERNEL_BIN = $(KERNEL_DIR)/astra_kernel.bin
 KERNEL_VERSION ?= 0.1.0-dev
@@ -107,9 +112,11 @@ BUILD_CONFIG = CPU=TG68K030_MMU2 CPU_CLK_DIV_BIT=$(CPU_CLK_DIV_BIT) \
                KERNEL_SCHED_TRACE=$(KERNEL_SCHED_TRACE) \
                KERNEL_SOAK_SELFTEST=$(KERNEL_SOAK_SELFTEST)
 ID_SRCS = Makefile ../../mk/m68k-cross.mk gen_build_info.py boot.c crt0.S $(LD) \
-          kernel_blob.S ../common/boot_contract.c ../include/astra/boot.h \
+          kernel_blob.S splash_blob.S splash.c splash.h lz4_legacy.c \
+          lz4_legacy.h $(SPLASH_PACKER) $(SPLASH_SOURCE) assets/README.md \
+          ../common/boot_contract.c ../include/astra/boot.h \
           ../include/astra/syscall.h ../include/vesta.h ../include/vega.h \
-          ../include/astraea.h \
+          ../include/astraea.h ../include/ohci.h \
           ../../ndk/include/astra/attributes.h \
           ../../ndk/include/astra/types.h \
           ../../ndk/include/astra/resource.h \
@@ -122,6 +129,10 @@ ID_SRCS = Makefile ../../mk/m68k-cross.mk gen_build_info.py boot.c crt0.S $(LD) 
 
 all: astra_boot.bin astra68.rom
 
+$(SPLASH_PAYLOAD): $(SPLASH_SOURCE) $(SPLASH_FONT) $(SPLASH_PACKER)
+	python3 $(SPLASH_PACKER) --image $(SPLASH_SOURCE) \
+		--font $(SPLASH_FONT) --output $@
+
 $(BUILD_INFO): FORCE gen_build_info.py
 	@mkdir -p $(dir $@)
 	@python3 gen_build_info.py --version "$(ROM_VERSION)" --output "$@"
@@ -132,10 +143,15 @@ $(KERNEL_BIN): FORCE $(KERNEL_ID_SRCS) ../common/boot_contract.c \
 		KERNEL_VERSION=$(KERNEL_VERSION) PANIC_SELFTEST=$(KERNEL_PANIC_SELFTEST) \
 		SCHED_TRACE=$(KERNEL_SCHED_TRACE) SOAK_SELFTEST=$(KERNEL_SOAK_SELFTEST)
 
-astra_boot.elf: crt0.S kernel_blob.S boot.c ../common/boot_contract.c \
-                ../../ndk/src/front_panel.c $(LD) $(BUILD_INFO) $(KERNEL_BIN)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ crt0.S kernel_blob.S boot.c \
-		../common/boot_contract.c ../../ndk/src/front_panel.c
+astra_boot.elf: crt0.S kernel_blob.S splash_blob.S splash.c splash.h \
+                lz4_legacy.c lz4_legacy.h \
+                $(SPLASH_PAYLOAD) boot.c \
+                ../common/boot_contract.c ../../ndk/src/front_panel.c \
+                ../include/ohci.h \
+                $(LD) $(BUILD_INFO) $(KERNEL_BIN)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ crt0.S kernel_blob.S splash_blob.S \
+		splash.c lz4_legacy.c boot.c ../common/boot_contract.c \
+		../../ndk/src/front_panel.c
 
 astra_boot.bin: astra_boot.elf
 	$(OBJCOPY) -O binary $< $@
@@ -146,12 +162,21 @@ astra68.rom: astra_boot.bin package_rom.py
 verify: astra_boot.elf
 	@echo "== sections =="; $(OBJDUMP) -h $< | grep -E 'Idx|vectors|text|data|bss'
 	@echo "== reset vectors (SP @ +0, PC @ +4) =="; $(OBJDUMP) -s -j .vectors $< | sed -n '3,4p'
-	@echo "== symbols =="; $(OBJDUMP) -t $< | grep -E '_start|kmain|_stack_top|_kernel_blob|boot_kernel_handoff' | head
+	@echo "== symbols =="; $(OBJDUMP) -t $< | grep -E '_start|kmain|_stack_top|_kernel_blob|_splash_blob|boot_kernel_handoff' | head
 	@echo "== embedded kernel =="; $(OBJDUMP) -h $(KERNEL_DIR)/astra_kernel.elf | \
 		grep -E 'Idx|text.entry|vectors|text|data|bss|kernel_stack'
 	@bytes=$$(wc -c < $(KERNEL_BIN)); \
 	  test $$bytes -le $$((0x80000)); \
 	  printf 'kernel payload: %s bytes\n' "$$bytes"
+
+test_lz4_legacy: test_lz4_legacy.c lz4_legacy.c lz4_legacy.h \
+                 $(SPLASH_PAYLOAD)
+	$(HOST_CC) -std=c11 -O2 -Wall -Wextra -Werror -o $@ \
+		test_lz4_legacy.c lz4_legacy.c
+
+test: test_lz4_legacy
+	./test_lz4_legacy
+	PYTHONPATH=../.. python3 -m pytest tests -q
 
 id:
 	@ID=`{ printf '%s\n' '$(BUILD_CONFIG)'; cat $(ID_SRCS); } | sha1sum | cut -c1-8`; \
@@ -161,10 +186,10 @@ config:
 	@printf '%s\n' '$(BUILD_CONFIG)'
 
 clean:
-	rm -f *.elf *.bin *.map *.rom
+	rm -f *.elf *.bin *.map *.rom test_lz4_legacy $(SPLASH_PAYLOAD)
 	rm -rf build
 	$(MAKE) -C $(KERNEL_DIR) clean
 
 FORCE:
 
-.PHONY: all verify id config clean FORCE
+.PHONY: all verify id config test clean FORCE

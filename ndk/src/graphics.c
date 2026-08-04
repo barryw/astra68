@@ -52,6 +52,13 @@ static int rect_valid(const AstraRectI32 *rectangle)
            rectangle->height <= 32767u;
 }
 
+static int sprite_source_rect_valid(const AstraRectI32 *rectangle)
+{
+    return rect_valid(rectangle) && rectangle->x >= 0 && rectangle->y >= 0 &&
+           rectangle->width <= ASTRA_SPRITE_SOURCE_WIDTH_MAX &&
+           rectangle->height <= ASTRA_SPRITE_SOURCE_HEIGHT_MAX;
+}
+
 static int paint_valid(const AstraDrawPaint *paint)
 {
     return paint != 0 && paint->size >= sizeof(*paint) &&
@@ -334,14 +341,22 @@ AstraResult astra_sprite_set_update(AstraSpriteSet *sprite_set,
                                     uint32_t index,
                                     const AstraSpriteUpdate *update)
 {
-    if (sprite_set == 0 || index >= 32u)
+    if (sprite_set == 0 || index >= ASTRA_GRAPHICS_SPRITE_COUNT)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     if (update != 0 &&
         (update->size < sizeof(*update) || update->source == 0 ||
-         !rect_valid(&update->source_rect) ||
-         (update->flags & ~SPRITE_FLAGS) != 0 || update->priority > 15u ||
-         update->palette_bank > 15u || update->transparent_index > 15u ||
-         update->reserved8 != 0 || !words_are_zero(update->reserved, 4)))
+         !sprite_source_rect_valid(&update->source_rect) ||
+         update->destination.x < -32768 ||
+         update->destination.x > 32767 ||
+         update->destination.y < -32768 ||
+         update->destination.y > 32767 ||
+         update->destination_width == 0u ||
+         update->destination_width > ASTRA_SPRITE_DESTINATION_EXTENT_MAX ||
+         update->destination_height == 0u ||
+         update->destination_height > ASTRA_SPRITE_DESTINATION_EXTENT_MAX ||
+         (update->flags & ~SPRITE_FLAGS) != 0 ||
+         update->palette_bank >= ASTRA_SPRITE_PALETTE_BANK_COUNT ||
+         !words_are_zero(update->reserved, 2)))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     return ASTRA_ERROR_INVALID_HANDLE;
 }

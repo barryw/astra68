@@ -23,6 +23,8 @@
 #define VM_KERNEL_OWNER 1u
 #define VM_SDRAM_BASE 0x02000000u
 #define VM_SDRAM_ROOT_INDEX VM_ROOT_INDEX(VM_SDRAM_BASE)
+#define VM_SDRAM_TOP_ROOT_INDEX 15u
+#define VM_SDRAM_TOP_BASE (VM_SDRAM_TOP_ROOT_INDEX << 22)
 #define VM_MAPPING_COUNT_SHIFT 4u
 #define VM_MAPPING_CLASS_MASK 0x0fu
 #define VM_MAPPING_PRIVATE_CLASS 0x0fu
@@ -51,6 +53,7 @@ extern uint8_t _kernel_thread_stacks_end[];
 
 static uint32_t kernel_root_physical;
 static uint32_t kernel_low_table_physical;
+static uint32_t kernel_top_table_physical;
 static uint32_t kernel_high_table_physical;
 static uint32_t empty_root_physical;
 static uint32_t current_user_root;
@@ -337,6 +340,22 @@ static KernelVmStatus allocate_table(uint32_t owner, uint32_t *physical)
     return KERNEL_VM_OK;
 }
 
+static void release_kernel_table(uint32_t *physical)
+{
+    if (*physical == 0u)
+        return;
+    (void)kernel_memory_release(*physical, 1u, VM_KERNEL_OWNER);
+    *physical = 0u;
+}
+
+static void release_supervisor_tables(void)
+{
+    release_kernel_table(&kernel_high_table_physical);
+    release_kernel_table(&kernel_top_table_physical);
+    release_kernel_table(&kernel_low_table_physical);
+    release_kernel_table(&kernel_root_physical);
+}
+
 static void set_mmio_page(volatile uint32_t *table, uint32_t address)
 {
     table[VM_TABLE_INDEX(address)] =
@@ -371,6 +390,7 @@ static KernelVmStatus build_supervisor_root(void)
 {
     volatile uint32_t *root;
     volatile uint32_t *low_table;
+    volatile uint32_t *top_table;
     volatile uint32_t *high_table;
     KernelVmStatus status;
 
@@ -395,36 +415,22 @@ static KernelVmStatus build_supervisor_root(void)
     if (status != KERNEL_VM_OK)
         return status;
     status = allocate_table(VM_KERNEL_OWNER, &kernel_low_table_physical);
-    if (status != KERNEL_VM_OK) {
-        (void)kernel_memory_release(kernel_root_physical, 1u,
-                                    VM_KERNEL_OWNER);
-        kernel_root_physical = 0u;
-        return status;
-    }
+    if (status != KERNEL_VM_OK)
+        goto fail;
+    status = allocate_table(VM_KERNEL_OWNER, &kernel_top_table_physical);
+    if (status != KERNEL_VM_OK)
+        goto fail;
     status = allocate_table(VM_KERNEL_OWNER, &kernel_high_table_physical);
-    if (status != KERNEL_VM_OK) {
-        (void)kernel_memory_release(kernel_low_table_physical, 1u,
-                                    VM_KERNEL_OWNER);
-        (void)kernel_memory_release(kernel_root_physical, 1u,
-                                    VM_KERNEL_OWNER);
-        kernel_low_table_physical = 0u;
-        kernel_root_physical = 0u;
-        return status;
-    }
+    if (status != KERNEL_VM_OK)
+        goto fail;
     root = physical_words(kernel_root_physical);
     low_table = physical_words(kernel_low_table_physical);
+    top_table = physical_words(kernel_top_table_physical);
     high_table = physical_words(kernel_high_table_physical);
-    if (root == NULL || low_table == NULL || high_table == NULL) {
-        (void)kernel_memory_release(kernel_high_table_physical, 1u,
-                                    VM_KERNEL_OWNER);
-        (void)kernel_memory_release(kernel_low_table_physical, 1u,
-                                    VM_KERNEL_OWNER);
-        (void)kernel_memory_release(kernel_root_physical, 1u,
-                                    VM_KERNEL_OWNER);
-        kernel_high_table_physical = 0u;
-        kernel_low_table_physical = 0u;
-        kernel_root_physical = 0u;
-        return KERNEL_VM_CORRUPT;
+    if (root == NULL || low_table == NULL || top_table == NULL ||
+        high_table == NULL) {
+        status = KERNEL_VM_CORRUPT;
+        goto fail;
     }
 
     for (uint32_t index = 0u; index < VM_TABLE_ENTRIES; ++index) {
@@ -435,8 +441,24 @@ static KernelVmStatus build_supervisor_root(void)
     }
     root[VM_SDRAM_ROOT_INDEX] =
         kernel_low_table_physical | VM_DESC_TABLE;
-    for (uint32_t index = VM_SDRAM_ROOT_INDEX + 1u; index <= 15u; ++index)
+    for (uint32_t index = VM_SDRAM_ROOT_INDEX + 1u;
+         index < VM_SDRAM_TOP_ROOT_INDEX; ++index)
         root[index] = (index << 22) | VM_DESC_PAGE;
+    for (uint32_t index = 0u; index < VM_TABLE_ENTRIES; ++index) {
+        KernelFrameInfo frame;
+        uint32_t address = VM_SDRAM_TOP_BASE + index * KERNEL_PAGE_SIZE;
+        uint32_t descriptor = address | VM_DESC_PAGE;
+
+        if (!kernel_memory_frame_info(address, &frame)) {
+            status = KERNEL_VM_CORRUPT;
+            goto fail;
+        }
+        if (frame.state == KERNEL_FRAME_DEVICE)
+            descriptor |= VM_DESC_CACHE_INHIBIT;
+        top_table[index] = descriptor;
+    }
+    root[VM_SDRAM_TOP_ROOT_INDEX] =
+        kernel_top_table_physical | VM_DESC_TABLE;
     root[1023] = kernel_high_table_physical | VM_DESC_TABLE;
 
     set_mmio_range(high_table, 0xfff00000u, 16u);
@@ -444,6 +466,10 @@ static KernelVmStatus build_supervisor_root(void)
     set_mmio_range(high_table, 0xfff20000u, 16u);
     set_mmio_range(high_table, 0xfff40000u, 1u);
     return KERNEL_VM_OK;
+
+fail:
+    release_supervisor_tables();
+    return status;
 }
 
 static bool valid_user_page(uint32_t virtual_address)
@@ -470,6 +496,7 @@ KernelVmStatus kernel_vm_init(void)
     enabled = false;
     kernel_root_physical = 0u;
     kernel_low_table_physical = 0u;
+    kernel_top_table_physical = 0u;
     kernel_high_table_physical = 0u;
     empty_root_physical = 0u;
     current_user_root = 0u;
@@ -485,15 +512,7 @@ KernelVmStatus kernel_vm_init(void)
         return status;
     status = allocate_table(VM_KERNEL_OWNER, &empty_root_physical);
     if (status != KERNEL_VM_OK) {
-        (void)kernel_memory_release(kernel_high_table_physical, 1u,
-                                    VM_KERNEL_OWNER);
-        (void)kernel_memory_release(kernel_low_table_physical, 1u,
-                                    VM_KERNEL_OWNER);
-        (void)kernel_memory_release(kernel_root_physical, 1u,
-                                    VM_KERNEL_OWNER);
-        kernel_high_table_physical = 0u;
-        kernel_low_table_physical = 0u;
-        kernel_root_physical = 0u;
+        release_supervisor_tables();
         return status;
     }
 
@@ -512,7 +531,7 @@ KernelVmStatus kernel_vm_init(void)
     vm_stats.kernel_thread_stack_arena = VM_KERNEL_THREAD_STACKS_START;
     vm_stats.kernel_thread_stack_arena_end = VM_KERNEL_THREAD_STACKS_END;
     vm_stats.kernel_thread_stack_guards = KERNEL_THREAD_MAX;
-    vm_stats.supervisor_table_pages = 3u;
+    vm_stats.supervisor_table_pages = 4u;
     initialized = true;
     return KERNEL_VM_OK;
 }

@@ -10,7 +10,9 @@ fn main() {
 
     let generator_source = musashi.join("m68kmake.c");
     let generator = out_dir.join(format!("m68kmake{}", env::consts::EXE_SUFFIX));
-    let compiler = cc::Build::new().get_compiler();
+    let host = env::var("HOST").expect("Cargo must provide the build host");
+    let mut host_build = cc::Build::new();
+    let compiler = host_build.host(&host).target(&host).get_compiler();
     let status = compiler
         .to_command()
         .arg(&generator_source)
@@ -31,6 +33,7 @@ fn main() {
     assert!(status.success(), "Musashi opcode generation failed");
 
     let sources = [
+        manifest_dir.join("c/fast_memory.c"),
         musashi.join("m68kcpu.c"),
         musashi.join("m68kdasm.c"),
         musashi.join("softfloat/softfloat.c"),
@@ -45,15 +48,20 @@ fn main() {
         .define("M68K_EMULATE_INT_ACK", "M68K_OPT_ON")
         .flag_if_supported("-fno-common")
         .warnings(false)
-        .files(&sources)
-        .compile("astravm_musashi");
+        .files(&sources);
+    if env::var_os("ASTRA_M68K_OPCODE_PROFILE").is_some() {
+        build.define("ASTRA_M68K_OPCODE_PROFILE", "1");
+    }
+    build.compile("astravm_musashi");
 
     if env::var("CARGO_CFG_TARGET_FAMILY").as_deref() == Ok("unix") {
         println!("cargo:rustc-link-lib=m");
     }
 
+    println!("cargo:rerun-if-env-changed=ASTRA_M68K_OPCODE_PROFILE");
+
     rerun_if_changed(&generator_source);
-    for source in sources.iter().take(4) {
+    for source in &sources {
         rerun_if_changed(source);
     }
     for header in [

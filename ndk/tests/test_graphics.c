@@ -29,11 +29,15 @@ _Static_assert(sizeof(AstraDrawPaint) == 32, "AstraDrawPaint ABI");
 _Static_assert(sizeof(AstraPattern8) == 16, "AstraPattern8 ABI");
 _Static_assert(sizeof(AstraRasterChange) == 12, "AstraRasterChange ABI");
 _Static_assert(sizeof(AstraDisplayStatus) == 32, "AstraDisplayStatus ABI");
-_Static_assert(ASTRA_GRAPHICS_SPRITE_COUNT == 32, "sprite descriptor count");
-_Static_assert(ASTRA_SPRITE_PIXELS_PER_LINE_INDEX8 == 1024,
-               "INDEX8 sprite budget");
-_Static_assert(ASTRA_SPRITE_PIXELS_PER_LINE_RGB565 == 512,
-               "RGB565 sprite budget");
+_Static_assert(ASTRA_GRAPHICS_SPRITE_COUNT == 64, "sprite descriptor count");
+_Static_assert(ASTRA_SPRITE_SOURCE_WIDTH_MAX == 128,
+               "sprite source width");
+_Static_assert(ASTRA_SPRITE_SOURCE_HEIGHT_MAX == 128,
+               "sprite source height");
+_Static_assert(ASTRA_SPRITE_DESTINATION_EXTENT_MAX == 1024,
+               "sprite destination extent");
+_Static_assert(ASTRA_SPRITE_PIXELS_PER_LINE == 8192,
+               "sprite pixel budget");
 
 static void test_initializers(void)
 {
@@ -58,8 +62,10 @@ static void test_initializers(void)
     CHECK(tile_layers._private_handle == ASTRA_INVALID_HANDLE);
     CHECK(fence._private_handle == ASTRA_INVALID_HANDLE);
     CHECK(info.size == sizeof(info));
-    CHECK(info.max_sprite_pixels_index8 == 0);
-    CHECK(info.max_sprite_pixels_rgb565 == 0);
+    CHECK(info.max_sprite_width == 0);
+    CHECK(info.max_sprite_height == 0);
+    CHECK(info.max_sprite_pixels_per_line == 0);
+    CHECK(info.sprite_palette_bank_count == 0);
     CHECK(create_info.size == sizeof(create_info));
     CHECK(surface_info.size == sizeof(surface_info));
     CHECK(paint.size == sizeof(paint) && paint.foreground.alpha == 255);
@@ -143,23 +149,67 @@ static void test_sprite_and_raster_validation(void)
     AstraSurface source = ASTRA_SURFACE_INIT;
     AstraSpriteSet sprites = ASTRA_SPRITE_SET_INIT;
     AstraRasterProgram program = ASTRA_RASTER_PROGRAM_INIT;
-    AstraSpriteUpdate update = {
-        sizeof(AstraSpriteUpdate), &source, { 0, 0, 16, 16 }, { 4, 5 },
-        ASTRA_SPRITE_VISIBLE, 3, 2, 0, 0, { 0, 0, 0, 0 }
-    };
+    AstraSpriteUpdate update = ASTRA_SPRITE_UPDATE_INIT;
     AstraRasterChange changes[2] = {
         { 20, 0, ASTRA_RASTER_TARGET_BACKDROP, 0, 0x1234 },
         { 40, 0, ASTRA_RASTER_TARGET_TILE0_SCROLL, 0, 0x00010002 }
     };
+    uint32_t extent;
+
+    update.source = &source;
+    update.source_rect = (AstraRectI32){ 0, 0, 16, 16 };
+    update.destination = (AstraPointI32){ 4, 5 };
+    update.destination_width = 16;
+    update.destination_height = 16;
+    update.flags = ASTRA_SPRITE_VISIBLE;
+    update.priority = 3;
+    update.palette_bank = 2;
 
     CHECK(astra_sprite_set_create(&display, &sprites) ==
           ASTRA_ERROR_INVALID_HANDLE);
     CHECK(astra_sprite_set_update(&sprites, 0, &update) ==
           ASTRA_ERROR_INVALID_HANDLE);
-    update.priority = 16;
+    for (extent = 1; extent <= 128; ++extent) {
+        update.source_rect.width = extent;
+        update.source_rect.height = 129u - extent;
+        CHECK(astra_sprite_set_update(&sprites, 63, &update) ==
+              ASTRA_ERROR_INVALID_HANDLE);
+    }
+    update.source_rect = (AstraRectI32){ 0, 0, 0, 1 };
     CHECK(astra_sprite_set_update(&sprites, 0, &update) ==
           ASTRA_ERROR_INVALID_ARGUMENT);
-    CHECK(astra_sprite_set_update(&sprites, 32, 0) ==
+    update.source_rect = (AstraRectI32){ 0, 0, 129, 1 };
+    CHECK(astra_sprite_set_update(&sprites, 0, &update) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    update.source_rect = (AstraRectI32){ 0, 0, 1, 0 };
+    CHECK(astra_sprite_set_update(&sprites, 0, &update) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    update.source_rect = (AstraRectI32){ 0, 0, 1, 129 };
+    CHECK(astra_sprite_set_update(&sprites, 0, &update) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    update.source_rect = (AstraRectI32){ 0, 0, 128, 128 };
+    update.destination_width = 1024;
+    update.destination_height = 1024;
+    update.priority = 255;
+    update.transparent_index = 255;
+    CHECK(astra_sprite_set_update(&sprites, 63, &update) ==
+          ASTRA_ERROR_INVALID_HANDLE);
+    update.destination_width = 0;
+    CHECK(astra_sprite_set_update(&sprites, 0, &update) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    update.destination_width = 1025;
+    CHECK(astra_sprite_set_update(&sprites, 0, &update) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    update.destination_width = 16;
+    update.destination_height = 1025;
+    CHECK(astra_sprite_set_update(&sprites, 0, &update) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    update.destination_height = 16;
+    update.palette_bank = 16;
+    CHECK(astra_sprite_set_update(&sprites, 0, &update) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    update.palette_bank = 0;
+    CHECK(astra_sprite_set_update(&sprites, 64, 0) ==
           ASTRA_ERROR_INVALID_ARGUMENT);
 
     CHECK(astra_raster_program_create(&display, changes, 2, &program) ==

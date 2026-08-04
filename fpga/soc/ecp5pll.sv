@@ -37,7 +37,11 @@ module ecp5pll
   output       locked
 );
 
-  localparam PFD_MIN =   3125000;
+  // ECP5/ECP5-5G Family Data Sheet v3.4, table 3.23 (September 2025).
+  // Project Trellis' experimental calculator used 3.125 MHz here, but that is
+  // below the current silicon specification and produced hardware-only lock
+  // failures once the complete design was loaded.
+  localparam PFD_MIN =  10000000;
   localparam PFD_MAX = 400000000;
   localparam VCO_MIN = 400000000;
   localparam VCO_MAX = 800000000;
@@ -205,6 +209,11 @@ module ecp5pll
   // (* FREQUENCY_PIN_CLKOS="034.234567" *)
   // (* FREQUENCY_PIN_CLKOS2="111.345678" *)
   // (* FREQUENCY_PIN_CLKOS3="123.456789" *)
+  (* ASTRA_PLL_IN_HZ=in_hz *)
+  (* ASTRA_PLL_OUT0_HZ=out0_hz, ASTRA_PLL_OUT0_TOL_HZ=out0_tol_hz *)
+  (* ASTRA_PLL_OUT1_HZ=out1_hz, ASTRA_PLL_OUT1_TOL_HZ=out1_tol_hz *)
+  (* ASTRA_PLL_OUT2_HZ=out2_hz, ASTRA_PLL_OUT2_TOL_HZ=out2_tol_hz *)
+  (* ASTRA_PLL_OUT3_HZ=out3_hz, ASTRA_PLL_OUT3_TOL_HZ=out3_tol_hz *)
   (* ICP_CURRENT="12" *) (* LPF_RESISTOR="8" *) (* MFG_ENABLE_FILTEROPAMP="1" *) (* MFG_GMCREF_SEL="2" *)
   EHXPLLL
   #(
@@ -244,8 +253,8 @@ module ecp5pll
   )
   pll_inst
   (
-    .RST(1'b0),
-    .STDBY(1'b0),
+    .RST(reset_en ? reset : 1'b0),
+    .STDBY(standby_en ? standby : 1'b0),
     .CLKI(clk_i),
     .CLKOP(CLKOP),
     .CLKOS (clk_o[1]),

@@ -8,9 +8,25 @@
 
 static KernelPerformanceStats performance_stats;
 static uint32_t performance_window_pending;
+static volatile uint32_t performance_interrupt_epoch;
+static uint32_t performance_interrupt_depth;
 static uint16_t performance_generation;
 static uint8_t performance_window_active;
 uint8_t kernel_performance_sampling_enabled;
+
+#define KERNEL_PERFORMANCE_INTERRUPT_RECORD_COUNT 64u
+
+typedef struct PerformanceInterruptRecord {
+    uint32_t sequence;
+    uint32_t cycles;
+} PerformanceInterruptRecord;
+
+static volatile PerformanceInterruptRecord performance_interrupt_records[
+    KERNEL_PERFORMANCE_INTERRUPT_RECORD_COUNT];
+
+_Static_assert((KERNEL_PERFORMANCE_INTERRUPT_RECORD_COUNT &
+                (KERNEL_PERFORMANCE_INTERRUPT_RECORD_COUNT - 1u)) == 0u,
+               "interrupt performance record count must be a power of two");
 
 static const uint32_t performance_budgets[KERNEL_PERFORMANCE_METRIC_COUNT] = {
     [KERNEL_PERFORMANCE_SYSCALL_DISPATCH] =
@@ -105,6 +121,13 @@ void kernel_performance_init(void)
 {
     kernel_bytes_clear(&performance_stats, sizeof(performance_stats));
     performance_window_pending = 0u;
+    performance_interrupt_epoch = 0u;
+    performance_interrupt_depth = 0u;
+    for (uint32_t record = 0u;
+         record < KERNEL_PERFORMANCE_INTERRUPT_RECORD_COUNT; ++record) {
+        performance_interrupt_records[record].sequence = 0u;
+        performance_interrupt_records[record].cycles = 0u;
+    }
     performance_generation = 1u;
     performance_window_active = 0u;
     for (uint32_t metric = 0u;
@@ -112,6 +135,34 @@ void kernel_performance_init(void)
         performance_stats.metric[metric].budget_cycles =
             performance_budgets[metric];
     kernel_performance_sampling_enabled = 1u;
+}
+
+KernelPerformanceInterruptToken kernel_performance_interrupt_enter(void)
+{
+    KernelPerformanceInterruptToken token = {0u, 0u};
+
+    token.sequence = ++performance_interrupt_epoch;
+    ++performance_interrupt_depth;
+    if (performance_interrupt_depth == 1u)
+        token.started = performance_cycles_low();
+    return token;
+}
+
+void kernel_performance_interrupt_leave(
+    KernelPerformanceInterruptToken token)
+{
+    volatile PerformanceInterruptRecord *record;
+    uint32_t elapsed = 0u;
+
+    if (performance_interrupt_depth == 0u)
+        return;
+    if (performance_interrupt_depth == 1u)
+        elapsed = performance_cycles_low() - token.started;
+    --performance_interrupt_depth;
+    record = &performance_interrupt_records[
+        token.sequence & (KERNEL_PERFORMANCE_INTERRUPT_RECORD_COUNT - 1u)];
+    record->cycles = elapsed;
+    record->sequence = token.sequence;
 }
 
 void kernel_performance_freeze(void)
@@ -153,8 +204,11 @@ static void complete_window_metric(KernelPerformanceMetric metric)
 KernelPerformanceToken kernel_performance_begin_sampled(
     KernelPerformanceMetric metric)
 {
-    KernelPerformanceToken token = {0u, 0u, 0u, 0u};
+    KernelPerformanceToken token = {
+        0u, 0u, 0u, (uint8_t)KERNEL_PERFORMANCE_METRIC_COUNT
+    };
     KernelPerformanceMetricStats *stats;
+    uint32_t interrupt_epoch;
     uint32_t metric_mask;
 
     if (!valid_metric(metric) || kernel_performance_sampling_enabled == 0u)
@@ -166,10 +220,13 @@ KernelPerformanceToken kernel_performance_begin_sampled(
     stats = &performance_stats.metric[metric];
     if (stats->calls != UINT32_MAX)
         ++stats->calls;
-    token.started = performance_cycles_low();
+    do {
+        interrupt_epoch = performance_interrupt_epoch;
+        token.started = performance_cycles_low();
+    } while (performance_interrupt_epoch != interrupt_epoch);
+    token.interrupt_epoch = (uint16_t)interrupt_epoch;
+    token.generation = (uint8_t)performance_generation;
     token.metric = (uint8_t)metric;
-    token.active = 1u;
-    token.generation = performance_generation;
     return token;
 }
 
@@ -211,16 +268,58 @@ void kernel_performance_record_call(KernelPerformanceMetric metric,
     complete_window_metric(metric);
 }
 
+static bool interrupt_cycles_between(uint16_t started_epoch,
+                                     uint32_t finished_epoch,
+                                     uint32_t *cycles)
+{
+    uint32_t count = (uint16_t)((uint16_t)finished_epoch - started_epoch);
+    uint32_t first_sequence;
+    uint32_t total = 0u;
+
+    if (cycles == NULL ||
+        count > KERNEL_PERFORMANCE_INTERRUPT_RECORD_COUNT)
+        return false;
+    first_sequence = finished_epoch - count + 1u;
+    for (uint32_t offset = 0u; offset < count; ++offset) {
+        uint32_t sequence = first_sequence + offset;
+        volatile const PerformanceInterruptRecord *record =
+            &performance_interrupt_records[
+                sequence &
+                (KERNEL_PERFORMANCE_INTERRUPT_RECORD_COUNT - 1u)];
+        uint32_t committed = record->sequence;
+        uint32_t elapsed;
+
+        if (committed != sequence)
+            return false;
+        elapsed = record->cycles;
+        if (record->sequence != committed || UINT32_MAX - total < elapsed)
+            return false;
+        total += elapsed;
+    }
+    *cycles = total;
+    return true;
+}
+
 void kernel_performance_end_sampled(KernelPerformanceToken token)
 {
+    uint32_t elapsed;
+    uint32_t excluded;
     uint32_t finished;
+    uint32_t interrupt_epoch;
 
-    if (token.active == 0u || token.generation != performance_generation ||
-        token.metric >= KERNEL_PERFORMANCE_METRIC_COUNT)
+    if (token.metric >= KERNEL_PERFORMANCE_METRIC_COUNT ||
+        token.generation != (uint8_t)performance_generation)
         return;
-    finished = performance_cycles_low();
+    do {
+        interrupt_epoch = performance_interrupt_epoch;
+        finished = performance_cycles_low();
+    } while (performance_interrupt_epoch != interrupt_epoch);
+    elapsed = finished - token.started;
+    if (interrupt_cycles_between(token.interrupt_epoch, interrupt_epoch,
+                                 &excluded) && excluded <= elapsed)
+        elapsed -= excluded;
     kernel_performance_record((KernelPerformanceMetric)token.metric,
-                              finished - token.started);
+                              elapsed);
     complete_window_metric((KernelPerformanceMetric)token.metric);
 }
 

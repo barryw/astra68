@@ -613,6 +613,7 @@ static void test_device_service_death_quiesces_source(void)
     endpoint = bind_device(53u, IRQ_SRC_USB);
     ohci->CONTROL = OHCI_CONTROL_HCFS_OPERATIONAL | OHCI_CONTROL_PLE |
                     OHCI_CONTROL_CLE | OHCI_CONTROL_BLE | 1u;
+    ohci->HCCA = OHCI_DMA_POOL_BASE;
     ohci->INTERRUPT_STATUS = OHCI_INT_WDH | OHCI_INT_RHSC;
     ohci->ASTRA_STATUS = OHCI_ASTRA_IRQ | OHCI_ASTRA_DMA_FAULT;
     assert(kernel_irq_owner_died(53u, &revoked, &woken) == KERNEL_IRQ_OK);
@@ -628,9 +629,12 @@ static void test_device_service_death_quiesces_source(void)
     service_scheduled_device_reset();
     assert(ohci->INTERRUPT_DISABLE ==
            (ohci_interrupt_sources() | OHCI_INT_MIE));
-    assert(ohci->INTERRUPT_STATUS == (OHCI_INT_WDH | OHCI_INT_RHSC));
-    assert(ohci->ASTRA_STATUS == OHCI_ASTRA_DMA_FAULT);
-    assert(ohci->CONTROL == (OHCI_CONTROL_HCFS_SUSPEND | 1u));
+    assert(ohci->INTERRUPT_STATUS == 0u);
+    assert(ohci->INTERRUPT_ENABLE == 0u);
+    assert(ohci->ASTRA_STATUS == 0u);
+    assert(ohci->CONTROL == OHCI_CONTROL_HCFS_SUSPEND);
+    assert(ohci->COMMAND_STATUS == 0u);
+    assert(ohci->HCCA == 0u);
     kernel_irq_handle_release(endpoint, NULL);
     assert(kernel_irq_pool_valid());
 

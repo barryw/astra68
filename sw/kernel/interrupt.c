@@ -283,14 +283,13 @@ static KernelInterruptDispatchResult classify_device_status(
 
 static __attribute__((noinline))
 KernelInterruptDispatchResult dispatch_device_interrupt(
-    uint8_t source, uint8_t vector, uint32_t *woken_threads)
+    uint8_t source, uint8_t vector)
 {
     KernelDeferredInterrupt *event;
     KernelPlatformCycleCount timestamp;
     uint32_t pending;
     uint32_t write_sequence;
 
-    *woken_threads = 0u;
     kernel_platform_cpu_cycles(&timestamp);
     write_sequence = deferred_write_sequence;
     pending = write_sequence - deferred_read_sequence;
@@ -302,11 +301,8 @@ KernelInterruptDispatchResult dispatch_device_interrupt(
         write_sequence & (KERNEL_INTERRUPT_DEFERRED_DEPTH - 1u)];
     event->timestamp_high = timestamp.high;
     event->timestamp_low = timestamp.low;
-    event->elapsed_cycles = 0u;
     event->source = source;
     event->vector = vector;
-    event->reserved[0] = 0u;
-    event->reserved[1] = 0u;
     if (kernel_worker_signal(KERNEL_WORKER_IRQ_DISPATCH) != KERNEL_WORKER_OK) {
         interrupt_increment_saturating(&deferred_dropped);
         return KERNEL_INTERRUPT_FATAL;
@@ -335,7 +331,7 @@ KernelInterruptDispatchResult kernel_interrupt_dispatch(
         return KERNEL_INTERRUPT_NONE;
     if (source == IRQ_SRC_TIMER0)
         return dispatch_timer_interrupt(vector, woken_threads);
-    return dispatch_device_interrupt(source, vector, woken_threads);
+    return dispatch_device_interrupt(source, vector);
 }
 
 bool kernel_interrupt_stats(KernelInterruptStats *stats)

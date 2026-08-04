@@ -1,5 +1,11 @@
 # Tear-free presentation contract
 
+> The scene ownership and all-or-nothing presentation invariant in this
+> document carry forward to Arty. The active dimensions, formats, memory
+> topology, triple-bank behavior, and command dependencies are frozen by
+> [`GRAPHICS_ARCHITECTURE.md`](GRAPHICS_ARCHITECTURE.md). Numeric 720x480 and
+> ULX3S examples below describe the implemented legacy path.
+
 ## Status
 
 This document defines the implemented production behavior. Vega keeps separate
@@ -31,9 +37,9 @@ active-register privilege by using the same MMIO address.
 
 CPU writes to visual state update a pending shadow, never the active scanout
 copy. Visual state includes mode, framebuffer descriptor, viewport, default
-palette and backdrop, colorkey, sprite and virtual-sprite state, and other
-frame-scoped presentation controls. Status, interrupt acknowledgement, fault
-reporting, and diagnostic controls remain immediate.
+palettes and backdrop, colorkey, tile layers, sprite and virtual-sprite state,
+and other frame-scoped presentation controls. Status, interrupt
+acknowledgement, fault reporting, and diagnostic controls remain immediate.
 
 At vblank, Vega promotes one complete validated shadow generation before the
 line-zero prefetch deadline. The promotion is all-or-nothing. Invalid,
@@ -84,7 +90,8 @@ Every accepted scene generation and present request has a monotonically
 increasing identifier. Completion reports the actual frame number, retired
 surface, and status. The display service can therefore release old surfaces,
 command buffers, palettes, and sprite resources without guessing about beam
-timing.
+timing. The same retirement rule covers tile maps, tile patterns, and tile
+palette banks retained by a scene.
 
 Queue-full, invalid-resource, missed-deadline, and active-surface-hazard results
 are explicit. A missed frame is represented by retaining the last complete

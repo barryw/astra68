@@ -90,6 +90,8 @@ static KernelFrameState boot_state(uint32_t type)
         return KERNEL_FRAME_KERNEL;
     case ASTRA_MEMORY_RANGE_ROM_BACKING:
         return KERNEL_FRAME_ROM_BACKING;
+    case ASTRA_MEMORY_RANGE_DEVICE:
+        return KERNEL_FRAME_DEVICE;
     default:
         return KERNEL_FRAME_UNCLASSIFIED;
     }

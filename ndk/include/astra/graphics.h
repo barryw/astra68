@@ -33,7 +33,7 @@ enum {
     ASTRA_GRAPHICS_CAP_PAGE_FLIP = 1u << 1,
     /** Two scrolling tile layers are available. */
     ASTRA_GRAPHICS_CAP_TILE_LAYERS = 1u << 2,
-    /** The 32-entry hardware sprite compositor is available. */
+    /** The 64-entry hardware sprite compositor is available. */
     ASTRA_GRAPHICS_CAP_SPRITES = 1u << 3,
     /** Validated beam-synchronized raster programs are available. */
     ASTRA_GRAPHICS_CAP_RASTER_PROGRAM = 1u << 4,
@@ -126,11 +126,17 @@ enum {
 /** Static hardware sprite limits for the primary 720-pixel scanout mode. */
 enum {
     /** Number of hardware sprite descriptors. */
-    ASTRA_GRAPHICS_SPRITE_COUNT = 32,
-    /** Maximum admitted sprite pixels/line with INDEX8 scanout. */
-    ASTRA_SPRITE_PIXELS_PER_LINE_INDEX8 = 1024,
-    /** Maximum admitted sprite pixels/line with RGB565 scanout. */
-    ASTRA_SPRITE_PIXELS_PER_LINE_RGB565 = 512
+    ASTRA_GRAPHICS_SPRITE_COUNT = 64,
+    /** Maximum INDEX8 source width. */
+    ASTRA_SPRITE_SOURCE_WIDTH_MAX = 128,
+    /** Maximum INDEX8 source height. */
+    ASTRA_SPRITE_SOURCE_HEIGHT_MAX = 128,
+    /** Maximum destination width or height after scaling. */
+    ASTRA_SPRITE_DESTINATION_EXTENT_MAX = 1024,
+    /** Guaranteed aggregate admitted sprite pixels per scanline. */
+    ASTRA_SPRITE_PIXELS_PER_LINE = 8192,
+    /** Number of independently selectable 256-entry palette banks. */
+    ASTRA_SPRITE_PALETTE_BANK_COUNT = 16
 };
 
 /** Raster-program targets exposed by the validated display service. */
@@ -206,8 +212,8 @@ typedef struct AstraFence {
 #define ASTRA_FENCE_INIT { ASTRA_INVALID_HANDLE }
 /** Initializer for ::AstraGraphicsInfo. */
 #define ASTRA_GRAPHICS_INFO_INIT \
-    { sizeof(AstraGraphicsInfo), 0, 0, 0, 0, 0, 0, 0, 0, 0, \
-      { 0, 0, 0, 0, 0 } }
+    { sizeof(AstraGraphicsInfo), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, \
+      { 0, 0, 0, 0 } }
 /** Initializer for ::AstraSurfaceCreateInfo. */
 #define ASTRA_SURFACE_CREATE_INFO_INIT \
     { sizeof(AstraSurfaceCreateInfo), 0, 0, 0, 0, 0, 0, \
@@ -223,6 +229,10 @@ typedef struct AstraFence {
 #define ASTRA_TILE_LAYER_UPDATE_INIT \
     { sizeof(AstraTileLayerUpdate), 0, 0, 0, 0, 0, 8, 0, 0, \
       { 0, 0, 0, 0 } }
+/** Initializer for ::AstraSpriteUpdate. */
+#define ASTRA_SPRITE_UPDATE_INIT \
+    { sizeof(AstraSpriteUpdate), 0, { 0, 0, 0, 0 }, { 0, 0 }, 0, \
+      0, 0, 0, 255, 0, 0, 0, 0, { 0, 0 } }
 /** Initializer for ::AstraDisplayStatus. */
 #define ASTRA_DISPLAY_STATUS_INIT \
     { sizeof(AstraDisplayStatus), 0, 0, { 0, 0, 0, 0, 0 } }
@@ -298,12 +308,16 @@ typedef struct AstraGraphicsInfo {
     uint16_t sprite_count;
     /** Number of hardware tile layers. */
     uint16_t tile_layer_count;
-    /** Maximum admitted sprite pixels/line with INDEX8 scanout. */
-    uint16_t max_sprite_pixels_index8;
-    /** Maximum admitted sprite pixels/line with RGB565 scanout. */
-    uint16_t max_sprite_pixels_rgb565;
+    /** Largest supported sprite source width. */
+    uint16_t max_sprite_width;
+    /** Largest supported sprite source height. */
+    uint16_t max_sprite_height;
+    /** Guaranteed aggregate admitted sprite pixels per scanline. */
+    uint16_t max_sprite_pixels_per_line;
+    /** Number of independently selectable sprite palette banks. */
+    uint16_t sprite_palette_bank_count;
     /** Reserved for compatible growth; initialize to zero. */
-    uint32_t reserved[5];
+    uint32_t reserved[4];
 } AstraGraphicsInfo;
 
 /** Parameters for allocating a protected graphics surface. */
@@ -398,24 +412,32 @@ typedef struct AstraTileLayerUpdate {
 typedef struct AstraSpriteUpdate {
     /** Structure size in bytes. */
     uint32_t size;
-    /** INDEX4 pattern surface retained by the service. */
+    /** INDEX8 image surface retained by the service. */
     const AstraSurface *source;
-    /** Source rectangle within @p source. */
+    /** Source rectangle; width and height are independently 1 through 128. */
     AstraRectI32 source_rect;
     /** Signed top-left destination position. */
     AstraPointI32 destination;
     /** Bitwise `ASTRA_SPRITE_*` values. */
     uint32_t flags;
-    /** Composition priority from zero through 15. */
+    /** Composition priority from zero through 255. */
     uint8_t priority;
-    /** Sixteen-color palette bank from zero through 15. */
+    /** 256-entry palette bank from zero through 15. */
     uint8_t palette_bank;
-    /** Transparent 4-bit source index. */
+    /** Transparent 8-bit source index. */
     uint8_t transparent_index;
-    /** Reserved; initialize to zero. */
-    uint8_t reserved8;
+    /** Global opacity from transparent zero through opaque 255. */
+    uint8_t opacity;
+    /** Scaled destination width from 1 through 1024. */
+    uint16_t destination_width;
+    /** Scaled destination height from 1 through 1024. */
+    uint16_t destination_height;
+    /** Collision class bits contributed by this sprite. */
+    uint16_t collision_class;
+    /** Collision classes eligible to collide with this sprite. */
+    uint16_t collision_mask;
     /** Reserved for compatible growth; initialize to zero. */
-    uint32_t reserved[4];
+    uint32_t reserved[2];
 } AstraSpriteUpdate;
 
 /** One validated beam-synchronized register change. */

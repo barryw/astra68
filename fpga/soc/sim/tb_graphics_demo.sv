@@ -3,9 +3,13 @@
 
 module tb_graphics_demo #(
     parameter bit PRODUCTION_MAP = 1'b0,
-    parameter bit DIAGNOSTIC_ONLY = 1'b0
+    parameter bit DIAGNOSTIC_ONLY = 1'b0,
+    parameter bit SDRAM_EXEC = 1'b0
 );
     localparam integer LINE_DEADLINE_MEM_CYCLES = 1906;
+    localparam integer DIAGNOSTIC_ROM_WORDS = 1024;
+    localparam integer MAX_DMA_CACHE_FENCE_CYCLES = 256;
+    localparam [24:0] STAGE2_SDRAM_OFFSET = 25'h1e00000;
 
     reg clk25 = 1'b0;
     reg rstn = 1'b0;
@@ -54,6 +58,41 @@ module tb_graphics_demo #(
         .addr(sdram_a), .ba(sdram_ba), .dqm(sdram_dqm),
         .dq_in(sdram_d), .dq_out(model_dq), .dq_oe(model_dq_oe)
     );
+
+    reg [31:0] diagnostic_rom [0:DIAGNOSTIC_ROM_WORDS-1];
+    integer diagnostic_word;
+    reg [24:0] diagnostic_offset;
+    reg [23:0] diagnostic_key;
+
+    function automatic [23:0] model_key(input [24:0] byte_offset);
+        model_key = {byte_offset[9], byte_offset[11:10],
+                     byte_offset[24:12], byte_offset[8:2], 1'b0};
+    endfunction
+
+    initial begin
+        if (SDRAM_EXEC) begin
+            for (diagnostic_word = 0;
+                 diagnostic_word < DIAGNOSTIC_ROM_WORDS;
+                 diagnostic_word = diagnostic_word + 1)
+                diagnostic_rom[diagnostic_word] = 32'd0;
+            $readmemh("sdram_exec_rom.hex", diagnostic_rom);
+            for (diagnostic_word = 0;
+                 diagnostic_word < DIAGNOSTIC_ROM_WORDS;
+                 diagnostic_word = diagnostic_word + 1) begin
+                diagnostic_offset = STAGE2_SDRAM_OFFSET +
+                                    diagnostic_word * 4;
+                diagnostic_key = model_key(diagnostic_offset);
+                memory.memory[diagnostic_key] = {
+                    diagnostic_rom[diagnostic_word][23:16],
+                    diagnostic_rom[diagnostic_word][31:24]
+                };
+                memory.memory[diagnostic_key + 1'b1] = {
+                    diagnostic_rom[diagnostic_word][7:0],
+                    diagnostic_rom[diagnostic_word][15:8]
+                };
+            end
+        end
+    end
 
     initial begin
         repeat (20) @(posedge clk25);
@@ -127,11 +166,63 @@ module tb_graphics_demo #(
     end
 
     integer timeout = 0;
+    integer dma_cache_fence_cycles = 0;
+    integer max_dma_cache_fence_cycles = 0;
+    reg cpu_sdram_during_dma_seen = 1'b0;
+    reg unfenced_dma_seen = 1'b0;
+    reg astraea_caps_read_seen = 1'b0;
+    reg astraea_caps_response_pending = 1'b0;
     always @(posedge dut.clk) begin
         if (!rstn) begin
             timeout <= 0;
+            dma_cache_fence_cycles <= 0;
+            max_dma_cache_fence_cycles <= 0;
+            cpu_sdram_during_dma_seen <= 1'b0;
+            unfenced_dma_seen <= 1'b0;
+            astraea_caps_read_seen <= 1'b0;
+            astraea_caps_response_pending <= 1'b0;
         end else begin
             timeout <= timeout + 1;
+            astraea_caps_response_pending <= 1'b0;
+            if (dut.bs == 3'd1 && dut.cpu_rw_n && dut.sel_astraea &&
+                dut.cpu_adr[15:0] == 16'h0018) begin
+                astraea_caps_read_seen <= 1'b1;
+                astraea_caps_response_pending <= 1'b1;
+                if (dut.g_sdram_enabled.astraea_i.cpu_addr !== 16'h0018 ||
+                    dut.astraea_rdata !== 32'h000000ff)
+                    $fatal(1,
+                           "Astraea SoC capability read mismatch bus=%08x device_addr=%04x device_data=%08x captured=%08x",
+                           dut.cpu_adr,
+                           dut.g_sdram_enabled.astraea_i.cpu_addr,
+                           dut.astraea_rdata, dut.cpu_din);
+            end
+            if (astraea_caps_response_pending) begin
+                if (dut.cpu_din !== 32'h000000ff ||
+                    dut.cpu_din_visible !== 32'h000000ff)
+                    $fatal(1,
+                           "Astraea capability response was not retained for TG68K");
+            end
+            if (SDRAM_EXEC) begin
+                if (dut.astraea_cache_flush) begin
+                    dma_cache_fence_cycles <= dma_cache_fence_cycles + 1;
+                    if (dma_cache_fence_cycles + 1 >
+                        max_dma_cache_fence_cycles)
+                        max_dma_cache_fence_cycles <=
+                            dma_cache_fence_cycles + 1;
+                end else begin
+                    dma_cache_fence_cycles <= 0;
+                end
+                if (dut.astraea_dma_active && !dut.astraea_cache_flush)
+                    unfenced_dma_seen <= 1'b1;
+                if (dut.astraea_dma_active && !dut.astraea_cache_flush &&
+                    dut.sdram_cpu_start)
+                    cpu_sdram_during_dma_seen <= 1'b1;
+                if (dma_cache_fence_cycles >=
+                    MAX_DMA_CACHE_FENCE_CYCLES)
+                    $fatal(1,
+                           "graphics DMA cache fence exceeded bound cycles=%0d",
+                           dma_cache_fence_cycles + 1);
+            end
             if (leds[7]) begin
                 $display("GRAPHICS FAIL stage=%0d LEDs=%02x pc=%08x",
                          leds[6:0], leds, dut.cpu_adr);
@@ -175,7 +266,18 @@ module tb_graphics_demo #(
             end
             if (leds == 8'h5a) begin
                 if (DIAGNOSTIC_ONLY) begin
-                    $display("BLITTER CONFIG DIAGNOSTIC PASS");
+                    if (!astraea_caps_read_seen)
+                        $fatal(1, "Astraea capability read was not exercised");
+                    if (SDRAM_EXEC &&
+                        (!unfenced_dma_seen ||
+                         !cpu_sdram_during_dma_seen))
+                        $fatal(1,
+                               "SDRAM CPU did not progress during graphics DMA unfenced=%b cpu_request=%b",
+                               unfenced_dma_seen,
+                               cpu_sdram_during_dma_seen);
+                    $display("BLITTER CONFIG DIAGNOSTIC PASS fence_max=%0d cpu_during_dma=%b",
+                             max_dma_cache_fence_cycles,
+                             cpu_sdram_during_dma_seen);
                     $finish;
                 end else begin
                     if (dut.vega_i.config_error_cpu ||
@@ -223,6 +325,27 @@ module tb_graphics_demo #(
                 end
             end
             if (timeout > 32'd3000000) begin
+                $display("VEGA PRESENT validate=%b step=%0d pending=%b copy=%0d/%b locked=%b invalid=%b done=%b generation=%08x/%08x",
+                         dut.vega_i.present_validate_busy_cpu,
+                         dut.vega_i.present_validate_step_cpu,
+                         dut.vega_i.present_pending_cpu,
+                         dut.vega_i.scene_copy_state,
+                         dut.vega_i.scene_copy_present,
+                         dut.vega_i.scene_locked,
+                         dut.vega_i.present_invalid_sticky_cpu,
+                         dut.vega_i.present_done_sticky_cpu,
+                         dut.vega_i.completed_generation_cpu,
+                         dut.vega_i.pending_generation_cpu);
+                $display("VEGA RETIRE vblank=%b/%b/%b frame=%0d writers=%b fences draw=%08x/%08x blit=%08x/%08x",
+                         dut.vega_i.vblank_toggle_pixel,
+                         dut.vega_i.vblank_toggle_sync_cpu[1],
+                         dut.vega_i.vblank_toggle_seen_cpu,
+                         dut.vega_i.frame_counter_cpu,
+                         dut.present_writers_idle,
+                         dut.vega_i.draw_completed_fence,
+                         dut.vega_i.pending_draw_fence_cpu,
+                         dut.vega_i.blitter_completed_fence,
+                         dut.vega_i.pending_blitter_fence_cpu);
                 if (DIAGNOSTIC_ONLY) begin
                     $display("BLIT CPU pending=%b busy_sync=%b done=%b start=%b done_sync=%b seen=%b",
                              dut.g_sdram_enabled.astraea_i.blitter_i.start_pending_cpu,
@@ -256,5 +379,17 @@ module tb_graphics_demo #(
                        dut.g_sdram_enabled.astraea_i.draw_i.state);
             end
         end
+    end
+
+    always @(posedge dut.clk) begin
+        if (SDRAM_EXEC && dut.bus_fault_capture_strobe)
+            $fatal(1,
+                   "SDRAM execution fault during graphics DMA status=%08x address=%08x target=%08x cache_fence=%b dma_owner=%0d blit_state=%0d",
+                   dut.bus_fault_capture_status,
+                   dut.bus_fault_capture_address,
+                   dut.bus_fault_capture_target,
+                   dut.astraea_cache_flush,
+                   dut.g_sdram_enabled.dma_owner,
+                   dut.g_sdram_enabled.astraea_i.blitter_i.state_mem);
     end
 endmodule

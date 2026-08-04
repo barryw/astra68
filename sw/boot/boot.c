@@ -2,6 +2,8 @@
 #include "vesta.h"
 #include "vega.h"
 #include "astraea.h"
+#include "ohci.h"
+#include "splash.h"
 #include "rom_build_info.h"
 #include <astra/boot.h>
 #include <astra/front_panel.h>
@@ -841,15 +843,82 @@ static int test_full_range(uint32_t ram_base, uint32_t ram_size)
     return post_failure_text("SDRAM BIST timeout");
 }
 
+static int full_range_bist_complete(void)
+{
+    uint32_t status = VESTA->MEMTEST_STATUS;
+
+    return (status & MEMTEST_DONE) != 0u &&
+           (status & MEMTEST_BUSY) == 0u;
+}
+
+static int start_graphics_splash(void)
+{
+    uint32_t started;
+    uint32_t cycles;
+    int start_ok;
+    int status_ok = 0;
+
+    if (astra_boot_splash_active())
+        return 1;
+    uart_puts("  Graphics splash .... ");
+    started = VESTA->CPU_CYCLES_LO;
+    start_ok = astra_boot_splash_start();
+    if (start_ok)
+        status_ok = astra_boot_splash_mark_ok(
+            ASTRA_SPLASH_STATUS_GRAPHICS);
+    if (!start_ok || !status_ok) {
+        uart_puts("FAIL (");
+        uart_puts(astra_boot_splash_error_text());
+        uart_puts(") blit=");
+        uart_hex32(ASTRAEA->BLIT_STATUS);
+        uart_putc('/');
+        uart_hex32(ASTRAEA->BLIT_FENCE);
+        uart_puts(" draw=");
+        uart_hex32(ASTRAEA->DRAW_STATUS);
+        uart_putc('/');
+        uart_hex32(ASTRAEA->DRAW_FENCE);
+        uart_puts(" present=");
+        uart_hex32(VEGA->PRESENT_STATUS);
+        uart_putc('/');
+        uart_hex32(VEGA->PRESENT_COMPLETED_GENERATION);
+        uart_puts(" ids=");
+        uart_hex32(VEGA->ID);
+        uart_putc('/');
+        uart_hex32(VEGA->CAPS);
+        uart_putc('/');
+        uart_hex32(ASTRAEA->ID);
+        uart_putc('/');
+        uart_hex32(ASTRAEA->CAPS);
+        uart_putc('\n');
+        return post_failure_text("graphics splash initialization");
+    }
+    cycles = VESTA->CPU_CYCLES_LO - started;
+    uart_puts("OK, ");
+    uart_dec32(cycles);
+    uart_puts(" cycles\n");
+    return 1;
+}
+
 static int run_post(void)
 {
     uint32_t ram_base = VESTA->RAM_BASE;
     uint32_t ram_size = VESTA->RAM_SIZE;
+    int splash_deferred = 0;
 
     uart_puts("\nPOST\n");
     uart_puts("  SDRAM init ........ ");
     if (!wait_for_sdram()) return 0;
     uart_puts("OK\n");
+
+    if (screen_enabled && full_range_bist_complete()) {
+        if (!start_graphics_splash())
+            return 0;
+    } else if (screen_enabled) {
+        serial_puts("  Graphics splash .... deferred until RAM BIST\n");
+        splash_deferred = 1;
+    } else {
+        serial_puts("  Graphics splash .... unavailable; text only\n");
+    }
 
     uart_puts("  Front panel ....... ");
     if (!test_front_panel()) return 0;
@@ -889,6 +958,12 @@ static int run_post(void)
     screen_puts("  Full-range BIST .... ");
     if (!test_full_range(ram_base, ram_size)) return 0;
     screen_puts("OK\n");
+    if (splash_deferred && !start_graphics_splash())
+        return 0;
+    if (astra_boot_splash_active() &&
+        (!astra_boot_splash_mark_ok(ASTRA_SPLASH_STATUS_MEMORY) ||
+         !astra_boot_splash_mark_ok(ASTRA_SPLASH_STATUS_POST)))
+        return post_failure_text("graphics POST status");
     return 1;
 }
 
@@ -978,6 +1053,7 @@ static int prepare_kernel_handoff(void)
     uint32_t image_size = 0u;
     uint32_t ram_end = VESTA->RAM_BASE + VESTA->RAM_SIZE;
     uint32_t load_started;
+    int usb_dma_present = 0;
 
     if (VESTA->RAM_BASE != ASTRA_EARLY_LOG_ADDRESS ||
         VESTA->RAM_SIZE != 0x02000000u ||
@@ -985,6 +1061,13 @@ static int prepare_kernel_handoff(void)
         return post_failure_text("unsupported kernel RAM map");
     if ((ASTRAEA->BLIT_STATUS & BLIT_BUSY) != 0u)
         return post_failure_text("DMA active at kernel handoff");
+    if ((VESTA->SYS_STATUS & SYS_USB_READY) != 0u) {
+        if (OHCI->ASTRA_ID != OHCI_ASTRA_ID_MAGIC ||
+            OHCI->ASTRA_DMA_POOL_BASE != OHCI_DMA_POOL_BASE ||
+            OHCI->ASTRA_DMA_POOL_SIZE != OHCI_DMA_POOL_SIZE)
+            return post_failure_text("USB DMA aperture");
+        usb_dma_present = 1;
+    }
     load_started = VESTA->CPU_CYCLES_LO;
     if (!load_kernel_image(&image_size)) return 0;
     kernel_load_cycles = VESTA->CPU_CYCLES_LO - load_started;
@@ -1042,10 +1125,25 @@ static int prepare_kernel_handoff(void)
                    ASTRA_MEMORY_RANGE_ROM_BACKING,
                    ASTRA_MEMORY_READ | ASTRA_MEMORY_EXECUTE |
                    ASTRA_MEMORY_CACHEABLE);
-    add_boot_range(0x03e40000u, 0x001c0000u,
-                   ASTRA_MEMORY_RANGE_USABLE,
-                   ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
-                   ASTRA_MEMORY_CACHEABLE);
+    // The splash is retired before handoff. Keep the OHCI DMA arena reserved
+    // and uncached when that engine is present; return the remainder to the
+    // physical allocator.
+    if (usb_dma_present) {
+        add_boot_range(ASTRA_BOOT_SPLASH_ADDRESS,
+                       OHCI_DMA_POOL_BASE - ASTRA_BOOT_SPLASH_ADDRESS,
+                       ASTRA_MEMORY_RANGE_USABLE,
+                       ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
+                       ASTRA_MEMORY_CACHEABLE);
+        add_boot_range(OHCI_DMA_POOL_BASE, OHCI_DMA_POOL_SIZE,
+                       ASTRA_MEMORY_RANGE_DEVICE,
+                       ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
+    } else {
+        add_boot_range(ASTRA_BOOT_SPLASH_ADDRESS,
+                       ram_end - ASTRA_BOOT_SPLASH_ADDRESS,
+                       ASTRA_MEMORY_RANGE_USABLE,
+                       ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
+                       ASTRA_MEMORY_CACHEABLE);
+    }
     astra_boot_info_finalize(&kernel_boot_info);
     if (astra_boot_info_validate(&kernel_boot_info) != ASTRA_BOOT_VALID)
         return post_failure_text("firmware BootInfo validation");
@@ -1054,6 +1152,7 @@ static int prepare_kernel_handoff(void)
 
 static void idle_forever(const char *screen_message, const char *serial_message)
 {
+    (void)astra_boot_splash_stop();
     uart_puts(screen_message);
     for (;;) {
         serial_puts(serial_message);
@@ -1089,10 +1188,17 @@ void kmain(void)
     if (!prepare_kernel_handoff())
         idle_forever("HALTED: KERNEL LOAD FAILURE\n",
                      "\n" ROM_BANNER " - KERNEL LOAD FAILURE\n");
+    if (astra_boot_splash_active() &&
+        !astra_boot_splash_mark_ok(ASTRA_SPLASH_STATUS_KERNEL))
+        idle_forever("HALTED: SPLASH FAILURE\n",
+                     "\n" ROM_BANNER " - SPLASH FAILURE\n");
     uart_puts("OK, ");
     uart_dec32(kernel_load_cycles);
     uart_puts(" cycles\n");
     uart_puts("Starting Axiom kernel\n");
+    if (!astra_boot_splash_stop())
+        idle_forever("HALTED: DISPLAY HANDOFF FAILURE\n",
+                     "\n" ROM_BANNER " - DISPLAY HANDOFF FAILURE\n");
     boot_kernel_handoff(ASTRA_BOOT_HANDOFF_MAGIC, &kernel_boot_info,
                         ASTRA_KERNEL_LOAD_ADDRESS);
 }

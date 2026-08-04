@@ -3921,3 +3921,274 @@ route, SD provisioning, AstraHost restoration, two physical boots, and HDMI
 PASS. No constraint, performance budget, feature, or resource policy was
 relaxed. Persistent FPGA flash was not rewritten and remains exact rollback
 build `25D9CB8E`; exact K9 `7DDD9C03` was qualified in volatile SRAM.
+
+## 2026-07-27 hardware-rendered boot-splash simulation checkpoint
+
+The unpromoted candidate is based on commit
+`4579138eb3d30e26aef658252fba28b15dd33420` plus the 23 implementation,
+asset, and test files listed in
+`docs/evidence/astra68-splash-source-manifest-20260727.sha256`. The manifest's
+SHA-256 is
+`320cae593a249550db75fae11132311ba07acb88df601ca9a9b1014a0fbc4df8`.
+The exact Beast build tree is `/tmp/astra68-splash-hwglyph-20260727`.
+
+The splash is native 720x480 INDEX8. The source image uses no more than 252
+colors and reserves four stable palette entries for status text. The
+framebuffer, 256-entry BGRA palette, and 256-glyph 8x16 MASK1 font are 350,720
+bytes raw and 86,654 bytes in the checked legacy-LZ4 payload. Firmware decodes
+the background and writes fixed glyph descriptors; it does not rasterize text.
+Astraea copies the initial framebuffer and performs every glyph draw. Vega
+retires each update through fenced vblank presentation and mirrors completed
+status changes into the alternate framebuffer.
+
+The first integrated run found that Astraea capability reads returned zero.
+TG68K correctly exposes a 32-bit MC68030 MMIO access as two external 16-bit
+beats at offsets `+0` and `+2`; Astraea's special-register decoder compared the
+full byte address and returned zero for the second beat. The retained RTL
+decodes special registers by aligned word index, including ID, capability,
+IRQ, and copper-source accesses. `tb_astraea_chip.sv` now performs the same
+two-beat longword contract, including the inter-beat idle cycle observed at the
+SoC boundary.
+
+Verification on Beast used Verilator 5.047 and the existing TG68K/GHDL path:
+
+- all directed SDRAM, blitter, copper, draw/glyph, Astraea chip, sprite, Vega,
+  and integrated 68030 graphics tests pass;
+- the SDRAM-executing long-DMA diagnostic passes with the CPU making progress
+  while graphics DMA is active;
+- the host C decoder test passes and all 32 Python boot tests pass;
+- regenerating the splash produces the exact checked 86,654-byte payload with
+  SHA-256
+  `93fd13d08db1374440638a95dbaa41c4d6d0a1aa5492490b58a3ec098abfdeea`;
+  and
+- a fresh full TG68K, pin-level SDRAM, and HDMI-enabled boot runs the
+  222,732-byte ROM with CRC32 `3429C216`, reports the splash in 8,823,984 CPU
+  cycles, passes POST, loads the kernel, reaches `Starting Axiom kernel`, and
+  exits zero after
+  `ASTRAHOST BOOT SPLASH PASS blit=1 draw=24 MASK1=24`. The observer checks
+  completed fences and direct Astraea writes to the expected `OK` pixel in
+  both physical framebuffers.
+
+Resource result: not measured for this checkpoint. Constrained-clock result:
+not measured; no synthesis, placement, or route was run. Failed timing cone:
+none identified because physical implementation has not started. Disposition:
+functional simulation PASS, production release PENDING. The next retained
+checkpoint must freeze the source identity, rerun exact K10 acceptance, route
+the complete 12.5 MHz CPU / 60 MHz SDRAM design without a waiver, and pass
+repeated POST, SDRAM, splash, HDMI, and kernel checks on the ULX3S attached to
+NUC. K9 build `7DDD9C03` remains the current hardware-qualified release, and
+persistent flash remains rollback build `25D9CB8E`.
+
+## 2026-07-27 routed splash rejection and Vega presentation repair
+
+The 23-file simulation candidate was frozen as build `320CAE59` in exact Beast
+snapshot `/tmp/astra68-splash-hwglyph-20260727`. Yosys 0.64+159 mapped the
+complete production feature set with zero combinational SCCs to 53,867 LUT4s,
+25,996 GSR-enabled FFs, 103 DP16KDs, and 18 multipliers. nextpnr
+`0.10-45-g98c18d7f`, seed 4, heap timing weight 20, router1, and the critical
+floorplan packed 67,539 TRELLIS_COMB and 26,025 TRELLIS_FF cells. Every exact
+constraint passed without a waiver:
+
+| Domain | Required | Achieved |
+|---|---:|---:|
+| CPU | 12.500000 MHz | 14.044352 MHz |
+| input | 25.000000 MHz | 39.902637 MHz |
+| SD | 20.000000 MHz | 113.623459 MHz |
+| SDRAM | 60.002399 MHz | 66.600067 MHz |
+| USB | 48.000767 MHz | 79.516541 MHz |
+| pixel | 27.000029 MHz | 55.812916 MHz |
+| HDMI shift | 135.025650 MHz | 255.623718 MHz |
+
+The protected LUT-permutation gate covered 13,652 cells and 17,870 routed
+inputs. Exact bitstream SHA-256 is
+`74d1dcaa0af7eb4fa96570a7844b64b1f29115030e6952829c50f378e364c7ce`;
+routed-JSON SHA-256 is
+`efe654a1085280d7303e2c6e6590e2ef353f5e5076772c623c543c2689a17c12`.
+
+NUC provisioned the exact ROM without formatting or otherwise changing the
+existing SD volume, restored read-only AstraHost firmware, and loaded the
+bitstream into volatile SRAM. The first board boot failed deterministically:
+
+```text
+Graphics splash .... FAIL (initial present)
+blit=00000002/00000001
+draw=00000002/00000010
+present=00000004/00000002
+ids=56454741/00000077/41535452/000000FF
+POST FAIL: graphics splash initialization
+```
+
+The IDs, capability bits, blitter fence 1, draw fence 16, and cleanup
+generation 2 prove that SDRAM, MMIO, asset decode, Astraea drawing, and a later
+Vega present all worked. Generation 1 was rejected because Vega's
+`scene_locked` included every scene copy. A routine vblank baseline restore
+touches only baseline and active banks, but the boot's shadow edits and submit
+overlapped it. Merely removing that lock lost palette and sprite writes because
+those RAMs share their CPU port with the copier; the full Vega test caught that
+failure at sprite composition.
+
+The retained repair locks the shadow only for a pending generation or a
+shadow-sourced commit. During a routine baseline restore, a shadow palette or
+descriptor write receives one cycle of port priority and pauses the copy;
+scalar writes require no pause. A directed test deliberately writes scalar,
+palette, and sprite state and submits while the baseline copy is active. It
+checks pending/completed generation state, sticky rejection bits, RAM
+readback, and the complete 27-frame Vega behavior.
+
+The fixed candidate is base commit
+`4579138eb3d30e26aef658252fba28b15dd33420` plus the 25 files in
+`docs/evidence/astra68-splash-source-manifest-20260727.sha256`, manifest
+SHA-256
+`c53e68b7f9be69917c07aa31a66a9b78552254013b822bf889974c52fbd026d1`,
+and exact Beast snapshot
+`/tmp/astra68-splash-hwglyph-vega-lock-20260727`. The standalone Vega test and
+full directed graphics suite pass. A fresh Verilator 5.047 TG68K, pin-level
+SDRAM, and HDMI boot first exits zero in 545.626 seconds after an
+8,823,984-cycle splash. The final deterministic release ROM is then rebuilt
+with fixed timestamp `2026-07-27T21:02:28Z` and explicit revision
+`4579138eb3d30e26aef658252fba28b15dd33420-dirty-c53e68b7`. That exact
+223,004-byte packaged image has payload CRC32 `84E611A6`, SHA-256
+`1b5e3210fcbd51f87351647a398742610b6ba56ec2da334abe8a391991f29c28`,
+and passes a fresh 539.667-second run after an 8,800,670-cycle splash and
+`ASTRAHOST BOOT SPLASH PASS blit=1 draw=24 MASK1=24`.
+
+Disposition: build `320CAE59` route PASS, hardware FAIL, REJECTED. Fixed build
+identity `C53E68B7` functional simulation PASS, route and board qualification
+PENDING. Persistent FPGA flash remains rollback build `25D9CB8E`.
+
+## 2026-07-27 C53E68B7 production route
+
+The repaired 25-file candidate was routed from immutable Beast snapshot
+`/tmp/astra68-splash-hwglyph-vega-lock-20260727`. Its source identity is base
+commit `4579138eb3d30e26aef658252fba28b15dd33420` plus
+`docs/evidence/astra68-splash-source-manifest-20260727.sha256`; the manifest
+SHA-256 is
+`c53e68b7f9be69917c07aa31a66a9b78552254013b822bf889974c52fbd026d1`
+and the resulting build ID is `C53E68B7`. The exact release ROM is 223,004
+bytes, has payload CRC32 `84E611A6`, and has SHA-256
+`1b5e3210fcbd51f87351647a398742610b6ba56ec2da334abe8a391991f29c28`.
+
+The complete production design was built on Beast at
+`2026-07-27T22:12:20Z` with Yosys 0.64+159 and nextpnr
+`nextpnr-0.10-45-g98c18d7f`: seed 4, heap placer, timing weight 20, router1,
+critical floorplan, CPU divider 0, and no timing waiver. SDRAM, HDMI, USB, SD,
+AstraHost, the 68030 PMMU core, the full graphics subsystem, and the exact
+release ROM are enabled. POR checks cover 25,995 GSR-enabled FFs, the POST font
+occupies one DP16KD, and the netlist has zero combinational SCCs. Yosys maps
+53,641 LUT4s, 25,991 FFs, 103 DP16KDs, and 18 multipliers. Packing uses 67,295
+of 83,640 TRELLIS_COMB cells, 26,024 TRELLIS_FFs, 103 of 208 DP16KDs, and 18
+of 156 MULT18X18Ds. The protected LUT-permutation gate covers 13,634 cells and
+17,852 routed inputs.
+
+| Domain | Required | Achieved |
+|---|---:|---:|
+| CPU | 12.500000 MHz | 14.127087 MHz |
+| input | 25.000000 MHz | 44.644852 MHz |
+| SD | 20.000000 MHz | 106.917572 MHz |
+| SDRAM | 60.002399 MHz | 67.971725 MHz |
+| USB | 48.000767 MHz | 75.982063 MHz |
+| pixel | 27.000029 MHz | 55.224213 MHz |
+| HDMI shift | 135.025650 MHz | 310.077515 MHz |
+
+Artifact SHA-256 values:
+
+- bitstream: `9c6a1f575596bf612fa9649940a3c3a65758aa7e55684cebf3b42ba62c576b46`;
+- config: `ac4dcf5a9eeb576873edb0955fdadc0c036fda4a46e77fcd8bca10b092d37233`;
+- synthesis JSON: `4f5ce127f801cadad18afdad1d7419beca3e59daeee22926b6526781a21fdb5f`;
+- placed JSON: `4ff1ff621215c9fae9452a7efe2c04e8d59c1374d7e1fb12b2b600c57e1fdd10`;
+- routed JSON: `7aca8c7df7da117b97f6f5b4f6aca7ab771bf7e2a891df655579b74d20bdd730`;
+- route input: `ce3c87f8d2a837c3c03195cead5431dccb8e406b60ea9ca41f72ac7b17513e23`;
+- placement report: `ae6668b3b7318c3cfc2124f600d39a10b376f8557a495503a36d8b65f09ebe58`;
+  and
+- route report: `d1ce1492ad6bb67bc5dcde7551cba09300d6e996ec37b37ce45d33cf5217ea2f`.
+
+Disposition: exact source, deterministic ROM, full functional simulation, and
+no-waiver production route PASS. Board qualification is PENDING: provision
+only `/ASTRA68.ROM` on the existing SD filesystem, restore read-only AstraHost,
+load this exact bitstream into volatile SRAM, then require repeated POST,
+SDRAM, hardware-glyph splash, kernel, and physical HDMI passes. Persistent
+FPGA flash remains rollback build `25D9CB8E` until those checks pass.
+
+## 2026-07-27 K10 USB rejection and PLL specification correction
+
+Exact K10 candidate `E671488A` passes the complete pin-level K1-K10 simulation,
+including delivery and acknowledgement of all five required device interrupt
+sources. Its full Beast route has zero SCCs and passes every release constraint:
+13.525578 MHz CPU, 69.041702 MHz SDRAM, and 77.489349 MHz USB against the
+required 12.5, 60.002399, and 48.000767 MHz clocks. It packs 67,649 of 83,640
+TRELLIS_COMB cells, 103 DP16KDs, and 14 multipliers. Exact identities are
+routed JSON
+`23d6aa130a082fd7d68801ee840570376d138dd3e0096f1fd118170c9bbe23a0`,
+bitstream
+`c4fdb5e2081f79316d289d9be506496149b71d66523119683c703bdc3842257e`,
+configuration
+`e42e1176a63219fe9b1ef77eb0ac12947bd79ef2fe13f646003cbaa056a03d1c`,
+and ROM
+`059012259e768e3575e3c855cd548a630c62690a692b5a85e1a61b08e17e9bd0`
+with payload CRC32 `54EE6FC3`.
+
+The exact image is rejected for hardware release. Repeated ULX3S boots reach
+K10 with only four sources delivered and acknowledged:
+
+```text
+Device IRQs ......... K10 partial, mask=0x00000330 delivered/acked=4/4 owner-death=1
+devices: system=0x0000003B block=0x00000001 input=1 worker_max=8368 mon_ftdi=4 mon_spi=0
+```
+
+The absent expected bit is USB `0x00000080`; SDRAM, video, SD, AstraHost, and
+the remaining device path are ready. This isolates the release failure to the
+USB clock/readiness branch rather than the kernel IRQ endpoint or common Vesta
+dispatcher.
+
+Inspection of the exact routed primitives found a silicon-specification
+violation. The system PLL uses `CLKI_DIV=5`, giving a 5 MHz PFD from 25 MHz,
+and the cascaded USB PLL uses `CLKI_DIV=25`, giving a 4 MHz PFD from 100 MHz.
+The video PLL generated from 25 MHz likewise uses a 5 MHz PFD. The current
+[ECP5/ECP5-5G Family Data Sheet v3.4, table 3.23](https://www.latticesemi.com/view_document?document_id=50461)
+specifies 10-400 MHz for `fPFD` and 400-800 MHz for `fVCO`. The local
+`ecp5pll.sv` inherited Project Trellis' experimental 3.125 MHz lower bound, so
+the generator accepted configurations outside the current Lattice contract.
+An isolated four-PLL board probe repeatedly locked and ran all outputs, which
+shows why a small diagnostic was misleading: out-of-spec lock in one loading
+condition is not production evidence. An attempted routed-net LED tap was also
+rejected when adding eight sinks caused router1 to rip up more than 20,000
+existing arcs; that image was stopped and never loaded because it no longer
+represented the exact route under test.
+
+The retained correction preserves every external clock and all three physical
+PLLs while selecting legal divider relationships:
+
+| PLL | Input | CLKI/FB/CLKOP dividers | PFD | VCO | Active outputs |
+|---|---:|---:|---:|---:|---:|
+| system | 25 MHz | 1 / 2 / 12 | 25 MHz | 600 MHz | 50, 60, 100 MHz |
+| USB | 100 MHz | 5 / 3 / 8 | 20 MHz | 480 MHz | 60, 48 MHz |
+| video | 25 MHz | 1 / 3 / 9 | 25 MHz | 675 MHz | 75, 135, 27 MHz |
+
+`ecp5pll.sv` now uses the vendor 10 MHz lower bound. Each generated primitive
+carries its requested input/output metadata, and `check_pll_spec.py` is a
+mandatory post-synthesis gate that recomputes PFD, VCO, enable state, and every
+output from the physical `EHXPLLL` parameters. Its regression fixture
+reproduces and rejects the former 5 MHz configuration.
+
+The exact diagnostic source is base commit
+`4579138eb3d30e26aef658252fba28b15dd33420` plus the 64 FPGA/software files in
+`docs/evidence/astra68-k10-pll-source-manifest-20260727.sha256`; that manifest
+has SHA-256
+`c5d23b07ba29c6675024e093d589073df364dc7efa177332c6de1f4e130afaff`.
+Beast snapshot `/tmp/astra68-pll-spec-20260727` passes all 34 release-checker
+unit tests and the focused USB control-CDC, DMA-bridge, and OHCI-host tests.
+Synthesis-only with Yosys 0.64+159 maps 53,982 LUT4s, 26,131 GSR-enabled FFs,
+103 DP16KDs, 14 multipliers, three PLLs, zero SCCs, and zero reported problems.
+The exact synthesis JSON SHA-256 is
+`f042482ce6dd0388fec444b426e11e723b14e07b1a5d4da443e0851fabfe5b0e`;
+the log SHA-256 is
+`68b9c264a906930d7d1f5ca1989703ecc8bf2a5912f08ec28c4c22794c38b3ff`.
+
+Disposition: the former production clock tree is a measured hardware FAIL and
+is rejected. The corrected topology and permanent netlist gate are focused
+unit, USB, and synthesis PASS. Placement resources, constrained-clock results,
+and a failed timing cone are not measured because no corrected placement or
+route has run yet. The next evidence step is one exact no-waiver production
+route, followed by SRAM-only ULX3S qualification requiring 5/5 K10 sources,
+repeated POST/SDRAM/kernel passes, and physical HDMI. Persistent flash remains
+exact rollback build `25D9CB8E`.

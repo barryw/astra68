@@ -289,6 +289,7 @@ module tb_astraea_blitter;
     integer i;
     integer elapsed_copy;
     integer elapsed_fill;
+    integer elapsed_frame;
     integer elapsed_misc;
     integer elem_size;
     integer elem_bytes;
@@ -307,6 +308,7 @@ module tb_astraea_blitter;
     reg [24:0] test_mask;
     real copy_mbps;
     real fill_mbps;
+    real frame_mbps;
 
     initial begin
         repeat (8) @(posedge mem_clk);
@@ -343,6 +345,32 @@ module tb_astraea_blitter;
             native_read(25'h0003000 + i * 4, word);
             if (word !== 32'h5aa5c33c)
                 $fatal(1, "fill mismatch i=%0d got=%08x", i, word);
+        end
+
+        // The firmware splash uses this exact INDEX8 frame geometry near the
+        // top of SDRAM. Keep it as a directed liveness and bandwidth gate so
+        // a whole-machine boot is never the first place to exercise it.
+        native_write(25'h1e40000, 4'b1111, 32'h5a000000);
+        for (i = 0; i < 480; i = i + 1)
+            native_write(25'h1e40000 + i * 720 + 716,
+                         4'b1111, {24'h000000, i[7:0]});
+        read_byte(25'h1e40000, byte_value);
+        if (byte_value !== 8'h5a)
+            $fatal(1, "full-frame source first byte mismatch %02x", byte_value);
+        read_byte(25'h1e945ff, byte_value);
+        if (byte_value !== 8'hdf)
+            $fatal(1, "full-frame source last byte mismatch %02x", byte_value);
+        start_blit(25'h1e40000, 25'h1e98000, 16'd720, 16'd720,
+                   16'd720, 16'd480, 32'd0, 32'd0, elapsed_frame);
+        read_byte(25'h1e98000, byte_value);
+        if (byte_value !== 8'h5a)
+            $fatal(1, "full-frame copy first byte mismatch %02x", byte_value);
+        for (i = 0; i < 480; i = i + 1) begin
+            read_byte(25'h1e98000 + i * 720 + 719, byte_value);
+            if (byte_value !== i[7:0])
+                $fatal(1,
+                       "full-frame copy row %0d tail mismatch %02x expected=%02x",
+                       i, byte_value, i[7:0]);
         end
 
         // Unaligned byte copy with untouched guard bytes.
@@ -604,9 +632,11 @@ module tb_astraea_blitter;
 
         copy_mbps = (1024.0 * 60.0) / elapsed_copy;
         fill_mbps = (2048.0 * 60.0) / elapsed_fill;
-        $display("ASTRAEA BLITTER PASS copy=%0.2f MB/s fill=%0.2f MB/s copy_cycles=%0d fill_cycles=%0d",
-                 copy_mbps, fill_mbps, elapsed_copy, elapsed_fill);
-        if (copy_mbps < 38.0 || fill_mbps < 88.0)
+        frame_mbps = (345600.0 * 60.0) / elapsed_frame;
+        $display("ASTRAEA BLITTER PASS copy=%0.2f MB/s fill=%0.2f MB/s frame=%0.2f MB/s copy_cycles=%0d fill_cycles=%0d frame_cycles=%0d",
+                 copy_mbps, fill_mbps, frame_mbps, elapsed_copy,
+                 elapsed_fill, elapsed_frame);
+        if (copy_mbps < 38.0 || fill_mbps < 88.0 || frame_mbps < 38.0)
             $fatal(1, "blitter bandwidth target missed");
         $finish;
     end

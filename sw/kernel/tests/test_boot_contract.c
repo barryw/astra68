@@ -1,5 +1,7 @@
 #include <astra/boot.h>
 
+#include "ohci.h"
+
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -61,8 +63,11 @@ static void make_valid_info(AstraBootInfo *info)
     add_range(info, ASTRA_ROM_BACKING_ADDRESS, ASTRA_ROM_BACKING_SIZE,
               ASTRA_MEMORY_RANGE_ROM_BACKING,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
-    add_range(info, 0x03e40000u, 0x001c0000u, ASTRA_MEMORY_RANGE_USABLE,
+    add_range(info, 0x03e40000u, 0x000c0000u, ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE | ASTRA_MEMORY_CACHEABLE);
+    add_range(info, OHCI_DMA_POOL_BASE, OHCI_DMA_POOL_SIZE,
+              ASTRA_MEMORY_RANGE_DEVICE,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
     astra_boot_info_finalize(info);
 }
 
@@ -89,6 +94,11 @@ static void test_boot_info(void)
 
     make_valid_info(&info);
     info.memory_ranges[3].base = info.memory_ranges[2].base;
+    astra_boot_info_finalize(&info);
+    assert(astra_boot_info_validate(&info) == ASTRA_BOOT_BAD_MEMORY_MAP);
+
+    make_valid_info(&info);
+    info.memory_ranges[7].flags |= ASTRA_MEMORY_CACHEABLE;
     astra_boot_info_finalize(&info);
     assert(astra_boot_info_validate(&info) == ASTRA_BOOT_BAD_MEMORY_MAP);
 }

@@ -314,7 +314,9 @@ static KernelWorkerStatus service_once(void)
         process_status = kernel_process_maintenance();
     for (uint32_t index = 1u; index < KERNEL_WORKER_CLASS_COUNT; ++index) {
         uint32_t bit = 1u << index;
-        KernelPerformanceToken performance = {0u, 0u, 0u, 0u};
+        KernelPerformanceToken performance = {
+            0u, 0u, 0u, (uint8_t)KERNEL_PERFORMANCE_METRIC_COUNT
+        };
         KernelWorkerServiceResult service_result;
 
         if ((work & bit) == 0u)

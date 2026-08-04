@@ -23,6 +23,16 @@ module tb_astra_host_boot_soc #(
     localparam [31:0] KERNEL_STATUS_READY = 32'h4b314f4b;
     localparam [31:0] KERNEL_STATUS_PANIC = 32'h4b50414e;
     localparam [31:0] EARLY_LOG_MAGIC = 32'h41364c47;
+    localparam [24:0] SPLASH_FB_A = 25'h1e40000;
+    localparam [24:0] SPLASH_FB_B = 25'h1e98000;
+    localparam integer SPLASH_STAR_PIXEL = 60 * 720 + 360;
+    localparam integer SPLASH_GRAPHICS_OK_PIXEL = 366 * 720 + 522;
+    localparam [24:0] SPLASH_GRAPHICS_OK_A_ADDRESS =
+        SPLASH_FB_A + SPLASH_GRAPHICS_OK_PIXEL;
+    localparam [24:0] SPLASH_GRAPHICS_OK_B_ADDRESS =
+        SPLASH_FB_B + SPLASH_GRAPHICS_OK_PIXEL;
+    localparam [3:0] SPLASH_GRAPHICS_OK_BE =
+        4'b1000 >> SPLASH_GRAPHICS_OK_A_ADDRESS[1:0];
 
     reg clk25 = 1'b0;
     reg rstn = 1'b0;
@@ -81,6 +91,12 @@ module tb_astra_host_boot_soc #(
         .sdram_a(sdram_a), .sdram_d(sdram_d)
     );
 
+    always @(posedge clk25) begin
+        if (!dut.g_sdram_enabled.sd_pll_locked &&
+            dut.g_sdram_enabled.usb_phy_pll_locked)
+            $fatal(1, "USB PLL locked before its upstream PLL");
+    end
+
     wire video_console_ok;
     generate
         if (HDMI_ENABLE) begin : g_video_console_check
@@ -117,6 +133,13 @@ module tb_astra_host_boot_soc #(
     integer payload_offset;
     reg [7:0] response;
     reg [7:0] ignored;
+    reg stop_after_post = 1'b0;
+    reg splash_graphics_seen = 1'b0;
+    reg kernel_start_seen = 1'b0;
+    reg [31:0] splash_draw_completed_fence_q = 32'd0;
+    reg [31:0] splash_mask1_jobs = 32'd0;
+    reg splash_ok_a_draw_write_seen = 1'b0;
+    reg splash_ok_b_draw_write_seen = 1'b0;
 
     function automatic [31:0] image_be32(input integer offset);
         image_be32 = {rom_image[offset], rom_image[offset + 1],
@@ -338,10 +361,12 @@ module tb_astra_host_boot_soc #(
         spi_deselect();
         require_ok("INPUT_EVENT");
 
-        // Keep external monitor traffic outside the sampled K1-K10 boot
-        // performance window. An unrelated monitor IRQ inside a measured
-        // operation would charge interrupt time to that operation.
-        wait (k10_seen && k10_performance_seen);
+        // The monitor is a deferred kernel service. A supervisor-mode IRQ
+        // during bootstrap may queue it, but cannot switch from the active
+        // kernel_main stack into the worker. Start once user scheduling is
+        // armed so the release performance window measures the real command.
+        // Interrupt-aware sampling excludes this IRQ from unrelated metrics.
+        wait (kernel_runtime_seen && kernel_scheduler_seen);
         // Exercise the complete ESP-facing monitor path. Each byte crosses
         // SPI, the service parser, the async FIFO, the Vesta IRQ path, and the
         // kernel worker before the response returns through the reverse path.
@@ -538,6 +563,8 @@ module tb_astra_host_boot_soc #(
                 if (uart_line == "SDRAM full BIST ... OK") bist_seen <= 1'b1;
                 if (uart_line == "AstraHost ROM ..... OK") host_seen <= 1'b1;
                 if (uart_line == "Starting system ROM") handoff_seen <= 1'b1;
+                if (uart_line == "Starting Axiom kernel")
+                    kernel_start_seen <= 1'b1;
                 if (uart_line.len() > 21 &&
                     uart_line.substr(0, 20) == "ASTRA 68 SYSTEM ROM v")
                     stage2_seen <= 1'b1;
@@ -593,6 +620,37 @@ module tb_astra_host_boot_soc #(
     end
 
     always @(posedge dut.clk) begin
+        if (HDMI_ENABLE && dut.vega_graphics_active)
+            splash_graphics_seen <= 1'b1;
+        if (stop_after_post && kernel_start_seen && splash_graphics_seen &&
+            !dut.vega_graphics_active) begin
+            if (dut.astraea_blitter_completed_fence < 32'd1 ||
+                dut.astraea_draw_completed_fence < 32'd24)
+                $fatal(1,
+                       "splash did not use complete blitter/glyph path: fences=%0d/%0d",
+                       dut.astraea_blitter_completed_fence,
+                       dut.astraea_draw_completed_fence);
+            if (splash_mask1_jobs < 32'd24 ||
+                !splash_ok_a_draw_write_seen ||
+                !splash_ok_b_draw_write_seen)
+                $fatal(1,
+                       "splash status was not hardware-rendered: MASK1 jobs=%0d writes=%b/%b",
+                       splash_mask1_jobs, splash_ok_a_draw_write_seen,
+                       splash_ok_b_draw_write_seen);
+            if (sdram_byte(SPLASH_FB_A + SPLASH_STAR_PIXEL) != 8'h2e ||
+                sdram_byte(SPLASH_FB_B + SPLASH_STAR_PIXEL) != 8'h2e)
+                $fatal(1, "splash background decode/copy mismatch");
+            if (sdram_byte(SPLASH_FB_A + SPLASH_GRAPHICS_OK_PIXEL) !=
+                    8'hfe ||
+                sdram_byte(SPLASH_FB_B + SPLASH_GRAPHICS_OK_PIXEL) !=
+                    8'hfe)
+                $fatal(1, "hardware-rendered splash status mismatch");
+            $display("ASTRAHOST BOOT SPLASH PASS blit=%0d draw=%0d MASK1=%0d",
+                     dut.astraea_blitter_completed_fence,
+                     dut.astraea_draw_completed_fence,
+                     splash_mask1_jobs);
+            $finish;
+        end
         if (!qualification_finished && k10_seen &&
             k10_performance_seen && monitor_seen &&
             !wait_kernel_ready && !expect_kernel_panic) begin
@@ -611,6 +669,41 @@ module tb_astra_host_boot_soc #(
                      parsed_k10_acked, parsed_k10_owner_death,
                      sdram_be32(25'h0000010));
             $finish;
+        end
+    end
+
+    // Status text is command data from the CPU; only Astraea may rasterize it.
+    // Retain proof of both the MASK1 execution path and the resulting writes.
+    always @(posedge dut.g_sdram_enabled.sd_domain_clk) begin
+        if (!rstn) begin
+            splash_draw_completed_fence_q <= 32'd0;
+            splash_mask1_jobs <= 32'd0;
+            splash_ok_a_draw_write_seen <= 1'b0;
+            splash_ok_b_draw_write_seen <= 1'b0;
+        end else begin
+            splash_draw_completed_fence_q <=
+                dut.g_sdram_enabled.astraea_i.draw_i.completed_fence_mem;
+            if (HDMI_ENABLE &&
+                dut.g_sdram_enabled.astraea_i.draw_i.completed_fence_mem !=
+                    splash_draw_completed_fence_q &&
+                dut.g_sdram_enabled.astraea_i.draw_i.cfg_op_cpu[7:0] == 8'd8)
+                splash_mask1_jobs <= splash_mask1_jobs + 32'd1;
+
+            if (HDMI_ENABLE &&
+                dut.g_sdram_enabled.astraea_i.mem_use_draw &&
+                dut.g_sdram_enabled.astraea_i.mem_valid &&
+                dut.g_sdram_enabled.astraea_i.mem_ready &&
+                dut.g_sdram_enabled.astraea_i.mem_write &&
+                dut.g_sdram_enabled.astraea_i.draw_i.cfg_op_cpu[7:0] == 8'd8 &&
+                (dut.g_sdram_enabled.astraea_i.mem_be &
+                 SPLASH_GRAPHICS_OK_BE) != 4'd0) begin
+                if (dut.g_sdram_enabled.astraea_i.mem_addr ==
+                    {SPLASH_GRAPHICS_OK_A_ADDRESS[24:2], 2'b00})
+                    splash_ok_a_draw_write_seen <= 1'b1;
+                if (dut.g_sdram_enabled.astraea_i.mem_addr ==
+                    {SPLASH_GRAPHICS_OK_B_ADDRESS[24:2], 2'b00})
+                    splash_ok_b_draw_write_seen <= 1'b1;
+            end
         end
     end
 
@@ -690,8 +783,11 @@ module tb_astra_host_boot_soc #(
     end
 
     initial begin
+        stop_after_post = $test$plusargs("stop-after-post");
+        // Full production memory benchmarks plus the complete K1-K10 UART
+        // report exceed the reduced-benchmark harness's former 4.5 s bound.
         if ($test$plusargs("wait-kernel-ready"))
-            #4_500_000_000;
+            #(64'd6_000_000_000);
         else
             #2_000_000_000;
         $fatal(1, "AstraHost boot timeout pc=%08x request=%b bytes=%0d",

@@ -13,6 +13,7 @@ module tb_vega_video;
     localparam [24:0] SPR_BASE = 25'h0003000;
     localparam [23:0] POST_RGB = 24'hdeadc0;
     localparam [23:0] BACKDROP = 24'h123456;
+    localparam [23:0] OVERLAP_BACKDROP = 24'h0badc0;
     localparam [23:0] SPR_RGB = 24'h20a0e0;
     localparam [23:0] INDEX_RGB = 24'hd08020;
     localparam [23:0] INDEX_SCROLL_BOTTOM_RGB = 24'h35b8f0;
@@ -317,11 +318,38 @@ module tb_vega_video;
         end
     endtask
 
+    task automatic wait_baseline_copy_active;
+        integer timeout;
+        begin
+            timeout = 0;
+            while (!dut.scene_copy_busy || dut.scene_copy_present) begin
+                @(posedge cpu_clk);
+                timeout = timeout + 1;
+                if (timeout > 500000)
+                    $fatal(1, "baseline scene-copy timeout state=%0d present=%b",
+                           dut.scene_copy_state, dut.scene_copy_present);
+            end
+        end
+    endtask
+
     task automatic present_scene;
+        integer timeout;
         begin
             scene_generation = scene_generation + 1;
             reg_write(16'h0034, scene_generation);
             reg_write(16'h0050, 32'd1);
+            if (dut.shadow_ctrl[0] && dut.shadow_ctrl[1] &&
+                !dut.shadow_fb_static_config_error_cpu &&
+                (!dut.present_validate_busy_cpu || !pending_guard_valid ||
+                 pending_guard_end != 26'h2000000))
+                $fatal(1, "framebuffer submit was not guarded during validation");
+            timeout = 0;
+            while (dut.present_validate_busy_cpu) begin
+                @(posedge cpu_clk);
+                timeout = timeout + 1;
+                if (timeout > 32)
+                    $fatal(1, "present validation timeout");
+            end
         end
     endtask
 
@@ -405,12 +433,61 @@ module tb_vega_video;
         if (value !== {16'd480, 16'd720})
             $fatal(1, "Vega active size mismatch %08x", value);
 
+        // Palette indices share the low MMIO address bits with scalar
+        // controls. Aperture qualification must prevent those writes from
+        // enabling IRQs or accidentally submitting a scene.
+        reg_write(16'h0410, 32'h00000007);
+        reg_read(16'h0010, value);
+        if (value !== 32'd0)
+            $fatal(1, "palette write aliased IRQ enable %08x", value);
+        reg_write(16'h0450, 32'h00000001);
+        reg_read(16'h0054, value);
+        if (value[3:0] !== 4'd0)
+            $fatal(1, "palette write aliased present control %08x", value);
+
+        // TG68K may retain byte-lane address bits on a longword transfer.
+        // Scalar decoding uses the complete word address, not a literal
+        // byte address and not the aperture-ambiguous low index alone.
+        reg_write(16'h0013, 32'h00000007);
+        reg_read(16'h0010, value);
+        if (value !== 32'h00000007)
+            $fatal(1, "lane-addressed IRQ enable was ignored %08x", value);
+        reg_write(16'h0017, 32'hffffffff);
+        reg_write(16'h0013, 32'd0);
+
+        // A normal vblank restore copies the committed baseline into the
+        // active bank. It must not lock the independent shadow scene. Submit
+        // while that copy is in flight to reproduce the hardware boot phase.
+        wait_baseline_copy_active();
+        if (dut.scene_locked)
+            $fatal(1, "baseline restore incorrectly locked shadow scene");
+        reg_write(16'h0030, {8'd0, OVERLAP_BACKDROP});
         reg_write(16'h040c, 32'h00abcdef);
+        reg_write(16'h1000, 32'h13579bdf);
+        if (!dut.scene_copy_busy || dut.scene_copy_present)
+            $fatal(1, "baseline restore ended before overlap submission");
+        present_scene();
+        reg_read(16'h0054, value);
+        if (!value[0] || value[3] || value[4])
+            $fatal(1, "baseline-overlap present rejected status=%08x", value);
+        active_frame = frame_count + 2;
+        wait_frame(active_frame);
+        wait_scene_editable();
+        reg_read(16'h0054, value);
+        if (value[0] || !value[2] || value[3] || value[4])
+            $fatal(1, "baseline-overlap present failed status=%08x", value);
+        reg_read(16'h0058, value);
+        if (value !== scene_generation)
+            $fatal(1, "baseline-overlap generation mismatch %08x", value);
+
         cpu_addr = 16'h040c;
         repeat (2) @(posedge cpu_clk);
         #1;
         if (cpu_rdata !== 32'h00abcdef)
             $fatal(1, "palette readback mismatch %08x", cpu_rdata);
+        reg_read(16'h1000, value);
+        if (value !== 32'h13579bdf)
+            $fatal(1, "sprite-table readback mismatch %08x", value);
 
         reg_write(16'h0030, {8'd0, BACKDROP});
         reg_write(16'h0040, {7'd0, PAGE0});
@@ -429,7 +506,8 @@ module tb_vega_video;
         if (!value[2] || !value[4])
             $fatal(1, "pending/ready status mismatch %08x", value);
 
-        wait_frame(1);
+        active_frame = frame_count + 1;
+        wait_frame(active_frame);
         if (!front_guard_valid || front_guard_start != PAGE0 ||
             front_guard_end != {1'b0, PAGE0} + 26'd691200 ||
             pending_guard_valid)
@@ -734,13 +812,27 @@ module tb_vega_video;
         reg_write(16'h0044, 32'd716);
         expect_present_rejected("short framebuffer pitch");
         reg_write(16'h0044, 32'd720);
+        reg_write(16'h0040, 32'h01faba00);
         present_scene();
         reg_read(16'h0054, value);
         if (!value[0] || value[3])
             $fatal(1, "valid framebuffer scene was rejected %08x", value);
+        if (!pending_guard_valid ||
+            pending_guard_start != 25'h1faba00 ||
+            pending_guard_end != 26'h2000000)
+            $fatal(1, "exact-limit pending guard mismatch %07x..%08x",
+                   pending_guard_start, pending_guard_end);
         active_frame = frame_count + 1;
         wait_frame(active_frame);
         wait_scene_editable();
+        if (!front_guard_valid || front_guard_start != 25'h1faba00 ||
+            front_guard_end != 26'h2000000)
+            $fatal(1, "exact-limit active guard mismatch %07x..%08x",
+                   front_guard_start, front_guard_end);
+
+        reg_write(16'h0040, 32'h01faba04);
+        expect_present_rejected("framebuffer endpoint beyond SDRAM");
+        reg_write(16'h0040, {7'd0, INDEX_PAGE});
 
         reg_write(16'h006c, {16'd480, 16'd723});
         expect_present_rejected("unaligned RGB565 virtual width");

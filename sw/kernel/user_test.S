@@ -1106,6 +1106,10 @@ _k1_offender_image_entry:
 	movea.l #KERNEL_QUALIFICATION_SHARED_BASE, %a0
 	move.l  #0x4f464644, (%a0)
 	move.l  %d2, %d6
+	| K10 qualification is a one-shot boot test. Soak relaunches carry a
+	| nonzero cycle argument and exercise only fault teardown/recovery.
+	tst.l   %d6
+	bne     8f
 	move.l  #KERNEL_QUALIFICATION_COMMAND_QUERY_IRQS, %d1
 	moveq   #ASTRA_SYSCALL_PROGRESS, %d0
 	trap    #ASTRA_SYSCALL_TRAP

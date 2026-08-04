@@ -46,8 +46,17 @@ module ecp5pll #(
         initial forever #(HALF_PERIOD) clk_o[3] = ~clk_o[3];
     end
 
-    initial begin
-        repeat (8) @(posedge clk_i);
-        locked = 1'b1;
+    integer lock_count = 0;
+    always @(posedge clk_i) begin
+        if ((reset_en != 0 && reset) ||
+            (standby_en != 0 && standby)) begin
+            lock_count <= 0;
+            locked <= 1'b0;
+        end else if (!locked) begin
+            if (lock_count == 7)
+                locked <= 1'b1;
+            else
+                lock_count <= lock_count + 1;
+        end
     end
 endmodule

@@ -51,6 +51,12 @@ extern void m68ki_build_opcode_table(void);
 #include "m68kfpu.c"
 #include "m68kmmu.h" /* Astra68 MC68030 PMMU integration */
 
+#if defined(ASTRA_M68K_OPCODE_PROFILE)
+#include <inttypes.h>
+#include <stdio.h>
+#include <stdlib.h>
+#endif
+
 /* ======================================================================== */
 /* ================================= DATA ================================= */
 /* ======================================================================== */
@@ -79,6 +85,25 @@ const char *const m68ki_cpu_names[] =
 
 /* The CPU core */
 m68ki_cpu_core m68ki_cpu = {0};
+
+#if defined(ASTRA_M68K_OPCODE_PROFILE)
+static uint64_t astra_m68k_opcode_counts[UINT16_MAX + 1u];
+
+static void astra_m68k_opcode_profile_dump(void)
+{
+	uint64_t total = 0;
+	unsigned opcode;
+
+	for (opcode = 0; opcode <= UINT16_MAX; ++opcode)
+		total += astra_m68k_opcode_counts[opcode];
+	fprintf(stderr, "M68K_PROFILE total=%" PRIu64 "\n", total);
+	for (opcode = 0; opcode <= UINT16_MAX; ++opcode) {
+		if (astra_m68k_opcode_counts[opcode] != 0)
+			fprintf(stderr, "M68K_OPCODE %04X %" PRIu64 "\n", opcode,
+				astra_m68k_opcode_counts[opcode]);
+	}
+}
+#endif
 
 #if M68K_EMULATE_ADDRESS_ERROR
 #ifdef _BSD_SETJMP_H
@@ -1034,6 +1059,9 @@ int m68k_execute(int num_cycles)
 
 			/* Read an instruction and call its handler */
 			REG_IR = m68ki_read_imm_16();
+#if defined(ASTRA_M68K_OPCODE_PROFILE)
+			++astra_m68k_opcode_counts[REG_IR];
+#endif
 			CPU_INSTRUCTION_ACTIVE = 1u;
 			m68ki_instruction_jump_table[REG_IR]();
 			CPU_INSTRUCTION_ACTIVE = 0u;
@@ -1131,6 +1159,9 @@ void m68k_init(void)
 	if(!emulation_initialized)
 		{
 		m68ki_build_opcode_table();
+#if defined(ASTRA_M68K_OPCODE_PROFILE)
+		atexit(astra_m68k_opcode_profile_dump);
+#endif
 		emulation_initialized = 1;
 	}
 

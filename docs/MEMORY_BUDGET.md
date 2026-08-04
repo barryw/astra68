@@ -536,17 +536,34 @@ canary and high-water values under nested format-B faults and interrupt storms.
 ## Graphics arena
 
 Graphics memory is excluded from general kernel/free-process statistics once
-the boot arena is carved. Baseline double-buffered 720x480 RGB565 scanout is:
+the boot arena is carved. The Arty target reserves the contiguous 128 MiB range
+`0x18000000..0x1fffffff` from its 512 MiB DDR as `no-map`; Linux and Axiom use
+the lower 384 MiB as general memory. The physical address is board-specific and
+is not part of the application ABI.
+
+Baseline double-buffered 1280x720 RGB565 scanout is:
 
 ```text
-720 * 480 * 2 bytes/pixel * 2 buffers = 1,382,400 bytes
+1280 * 720 * 2 bytes/pixel * 2 buffers = 3,686,400 bytes
 ```
 
-One framebuffer is 691,200 bytes (675 KiB). A wider scrolling surface is
-charged by `virtual_width * virtual_height * bytes_per_pixel * buffer_count`.
-The arena size is **not selected yet**; `STATUS.md` must remain MISSING until
-surface workloads, contiguity, and INDEX8/RGB565 mixes are measured. Command
-rings, palettes, sprites, and user-visible surfaces receive separate charges.
+One framebuffer is 1,843,200 bytes (1.76 MiB). The version-1 maximum scrolling
+surface is 2560x1440; two RGB565 rings consume 14,745,600 bytes (14.06 MiB),
+while two XRGB8888 rings consume 29,491,200 bytes (28.13 MiB). A surface is
+always charged by `virtual_width * virtual_height * bytes_per_pixel *
+buffer_count`.
+
+Sprite INDEX8 images are charged separately. One maximum 128x128 image is
+16 KiB and 64 distinct maximum images are exactly 1 MiB. The arena allocator
+holds a 2 MiB reclaimable sprite reserve, enough for simultaneous maximum
+ACTIVE and PENDING scenes. This is a capacity guarantee rather than a fixed
+address partition; animation caches can borrow all otherwise-unpinned arena
+memory. Descriptor metadata and the four active palette replicas reside in PL
+memory and are reported in FPGA resource accounting, not DDR arena usage.
+
+Command rings, completion rings, tile maps and patterns, engine workspaces,
+sprite images, and user-visible surfaces retain distinct owner, current, peak,
+and pinned-byte charges even though they share the arena allocator.
 
 ## Commit and quota defaults
 

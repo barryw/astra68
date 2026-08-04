@@ -1,5 +1,13 @@
 # Vega — Video Chip Register Map (v0.5)
 
+> **Legacy ULX3S implementation contract.** This document remains authoritative
+> for the implemented ULX3S Vega v0.5 block and its regression evidence. The
+> active Arty Z7-20 graphics architecture is
+> [`GRAPHICS_ARCHITECTURE.md`](GRAPHICS_ARCHITECTURE.md), which supersedes these
+> dimensions, formats, sprite limits, memory aperture, and presentation
+> capacities for the new target. Do not extend this register map into the Arty
+> ABI by inference.
+
 Vega is the Astra 68 display chip: framebuffer scanout with pixel-granular
 two-axis viewport scrolling, 16 hardware sprites, palette, backdrop, and the
 raster/beam interface the copper (Astraea) and CPU use for raster effects.

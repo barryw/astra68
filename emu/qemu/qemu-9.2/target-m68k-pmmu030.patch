@@ -1,0 +1,170 @@
+diff --git a/target/m68k/cpu.c b/target/m68k/cpu.c
+index 5fe3355..0c3d4ff 100644
+--- a/target/m68k/cpu.c
++++ b/target/m68k/cpu.c
+@@ -84,6 +84,9 @@ static void m68k_cpu_reset_hold(Object *obj, ResetType type)
+     }
+ 
+     memset(env, 0, offsetof(CPUM68KState, end_reset_fields));
++    if (m68k_feature(env, M68K_FEATURE_M68030)) {
++        pmmu030_reset(&env->pmmu030);
++    }
+ #ifdef CONFIG_USER_ONLY
+     cpu_m68k_set_sr(env, 0);
+ #else
+@@ -215,6 +218,7 @@ static void m68030_cpu_initfn(Object *obj)
+     m68020_cpu_initfn(obj);
+     m68k_unset_feature(env, M68K_FEATURE_M68020);
+     m68k_set_feature(env, M68K_FEATURE_M68030);
++    pmmu030_init(&env->pmmu030);
+ }
+ 
+ /*
+diff --git a/target/m68k/cpu.h b/target/m68k/cpu.h
+index b5bbeed..56329af 100644
+--- a/target/m68k/cpu.h
++++ b/target/m68k/cpu.h
+@@ -24,6 +24,7 @@
+ #include "exec/cpu-defs.h"
+ #include "qemu/cpu-float.h"
+ #include "cpu-qom.h"
++#include "pmmu030.h"
+ 
+ #define OS_BYTE     0
+ #define OS_WORD     1
+@@ -137,6 +138,11 @@ typedef struct CPUArchState {
+         bool fault;
+         uint32_t ttr[4];
+         uint32_t mmusr;
++        bool fault_030;
++        uint8_t fault_030_fc;
++        uint8_t fault_030_size;
++        uint8_t fault_030_access;
++        uint8_t fault_030_kind;
+     } mmu;
+ 
+     /* Control registers.  */
+@@ -154,6 +160,7 @@ typedef struct CPUArchState {
+     struct {} end_reset_fields;
+ 
+     /* Fields from here on are preserved across CPU reset. */
++    pmmu030_state pmmu030;
+     uint64_t features;
+ } CPUM68KState;
+ 
+@@ -187,6 +194,10 @@ struct M68kCPUClass {
+ void m68k_cpu_do_interrupt(CPUState *cpu);
+ bool m68k_cpu_exec_interrupt(CPUState *cpu, int int_req);
+ hwaddr m68k_cpu_get_phys_page_debug(CPUState *cpu, vaddr addr);
++hwaddr m68k_pmmu030_get_phys_debug(CPUState *cpu, vaddr addr);
++bool m68k_pmmu030_tlb_fill(CPUState *cs, vaddr address, int size,
++                           MMUAccessType access_type, int mmu_idx,
++                           bool probe, uintptr_t retaddr);
+ #endif /* !CONFIG_USER_ONLY */
+ void m68k_cpu_dump_state(CPUState *cpu, FILE *f, int flags);
+ int m68k_cpu_gdb_read_register(CPUState *cpu, GByteArray *buf, int reg);
+diff --git a/target/m68k/helper.c b/target/m68k/helper.c
+index 9bfc6ae..4fa9933 100644
+--- a/target/m68k/helper.c
++++ b/target/m68k/helper.c
+@@ -912,6 +912,9 @@ hwaddr m68k_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
+     int access_type;
+     target_ulong page_size;
+ 
++    if (m68k_feature(env, M68K_FEATURE_M68030)) {
++        return m68k_pmmu030_get_phys_debug(cs, addr);
++    }
+     if ((env->mmu.tcr & M68K_TCR_ENABLED) == 0) {
+         /* MMU disabled */
+         return addr;
+@@ -961,6 +964,12 @@ bool m68k_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
+     int ret;
+     target_ulong page_size;
+ 
++    if (m68k_feature(env, M68K_FEATURE_M68030)) {
++        return m68k_pmmu030_tlb_fill(cs, address, size,
++                                     qemu_access_type, mmu_idx,
++                                     probe, retaddr);
++    }
++
+     if ((env->mmu.tcr & M68K_TCR_ENABLED) == 0) {
+         /* MMU disabled */
+         tlb_set_page(cs, address & TARGET_PAGE_MASK,
+diff --git a/target/m68k/helper.h b/target/m68k/helper.h
+index 95aa5e5..d4dcb82 100644
+--- a/target/m68k/helper.h
++++ b/target/m68k/helper.h
+@@ -127,6 +127,7 @@ DEF_HELPER_3(chk, void, env, s32, s32)
+ DEF_HELPER_4(chk2, void, env, s32, s32, s32)
+ 
+ #if !defined(CONFIG_USER_ONLY)
++DEF_HELPER_4(pmmu030_op, void, env, i32, i32, i32)
+ DEF_HELPER_3(ptest, void, env, i32, i32)
+ DEF_HELPER_3(pflush, void, env, i32, i32)
+ DEF_HELPER_FLAGS_1(reset, TCG_CALL_NO_RWG, void, env)
+diff --git a/target/m68k/meson.build b/target/m68k/meson.build
+index 4d213da..87a380e 100644
+--- a/target/m68k/meson.build
++++ b/target/m68k/meson.build
+@@ -1,6 +1,8 @@
+ m68k_ss = ss.source_set()
+ m68k_ss.add(files(
++  'astra_pmmu030.c',
+   'cpu.c',
++  'pmmu030.c',
+   'fpu_helper.c',
+   'gdbstub.c',
+   'helper.c',
+diff --git a/target/m68k/translate.c b/target/m68k/translate.c
+index ad3ce34..cbccbfc 100644
+--- a/target/m68k/translate.c
++++ b/target/m68k/translate.c
+@@ -4624,6 +4624,40 @@ DISAS_INSN(cinv)
+ }
+ 
+ #if !defined(CONFIG_USER_ONLY)
++DISAS_INSN(pmmu030)
++{
++    uint16_t extension;
++    unsigned command_class;
++    unsigned flush_mode;
++    bool needs_ea = true;
++    TCGv address;
++
++    if (IS_USER(s)) {
++        gen_exception(s, s->base.pc_next, EXCP_PRIVILEGE);
++        return;
++    }
++
++    extension = read_im16(env, s);
++    command_class = extension >> 13;
++    if (command_class == 1u && (extension & 0xfc00u) != 0x2000u) {
++        flush_mode = (extension >> 10) & 7u;
++        needs_ea = flush_mode == 6u;
++    }
++
++    if (needs_ea) {
++        address = gen_lea(env, s, insn, OS_UNSIZED);
++        if (address == NULL_QREG) {
++            address = tcg_constant_i32(0);
++        }
++    } else {
++        address = tcg_constant_i32(0);
++    }
++    gen_helper_pmmu030_op(tcg_env, address,
++                           tcg_constant_i32(extension),
++                           tcg_constant_i32(insn));
++    gen_exit_tb(s);
++}
++
+ DISAS_INSN(pflush)
+ {
+     TCGv opmode;
+@@ -5982,6 +6016,7 @@ void register_m68k_insns (CPUM68KState *env)
+     INSN(bfop_mem, e8c0, ffc0, BITFIELD);   /* bftst */
+     INSN(bfop_reg, e8c0, fff8, BITFIELD);   /* bftst */
+     BASE(undef_fpu, f000, f000);
++    INSN(pmmu030,   f000, ffc0, M68030);
+     INSN(fpu,       f200, ffc0, CF_FPU);
+     INSN(fbcc,      f280, ffc0, CF_FPU);
+     INSN(fpu,       f200, ffc0, FPU);

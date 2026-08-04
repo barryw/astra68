@@ -24,6 +24,283 @@ unimplemented userspace design lives in `USERSPACE_ARCHITECTURE.md`,
 `RESOURCE_MODEL.md`. These are not evidence that services, a desktop, a POSIX
 personality, zsh, or Vim currently run.
 
+## Active Arty migration override (2026-07-30)
+
+The active machine target has moved from ULX3S to the Arty Z7-20 attached to
+`beast`. The Zynq processing system runs Linux and executes the unchanged
+big-endian MC68030/PMMU machine through the Astra QEMU backend. The exact Axiom
+K1-K10 image reaches the required markers there, and the accepted current CPU
+performance baseline is approximately 30 MHz equivalent. Musashi and the
+retained RTL core remain behavioral and conformance oracles; the MC68030 CPU is
+not part of the active Arty PL resource budget.
+
+The Arty provides 512 MiB DDR. The active device tree reserves the physically
+contiguous 128 MiB range `0x18000000..0x1fffffff` as `no-map` graphics memory;
+Linux System RAM ends at `0x17ffffff`. The remaining memory is available to
+Linux, QEMU, the Astra guest, and non-graphics services. Read-only `/`, writable
+`/data`, persistent SSH state, DHCP, and the shared Mac-directory service all
+survive the graphics boot-package replacement.
+
+[`GRAPHICS_ARCHITECTURE.md`](GRAPHICS_ARCHITECTURE.md) is the normative Arty
+Vega/Astraea contract. It locks 1280x720p60, INDEX8/RGB565/XRGB8888 scanout,
+two-axis ring scrolling, two INDEX4/INDEX8 tile layers with pixel scrolling,
+64 INDEX8 sprites up to 128x128 with sixteen independently selected 256-entry
+palette banks, sprite 0 as the optional desktop cursor, fenced scene promotion,
+copper, blitter/virtual sprites, geometry, pattern and flood operations, AFNT
+glyph expansion, bounded command rings, and the ARM/PL coherence and release
+gates.
+
+The output decision is based on PG235, UG934, PG230, UG471, DS187, and the
+Digilent board manual. CEA 720p60 uses 1280x720 active, 1650x750 total, a
+74.25 MHz pixel clock, 742.5 Mb/s TMDS lanes, and a 371.25 MHz DDR serializer
+clock. The rejected 1080p60 proposal would require 1.485 Gb/s lanes and a
+742.5 MHz serializer clock, beyond the device's characterized clock limits.
+
+The qualified transport shell remains the rollback checkpoint. Physical HDMI
+shows its complete 1280x720 test raster; retained screenshot
+`docs/evidence/astra-arty-720p60-hdmi-20260729.png` has SHA-256
+`a5ca652d6cbc075b018f0b7f4f08d414f9ebbac6edaf81460d4fc3b8f1d3f12d`.
+That shell established the exact 74.25 MHz pixel and 371.25 MHz serializer
+path before DDR integration.
+
+Integrated checkpoint `boot-text6` supersedes the earlier `full8` base. It includes
+the Zynq PS, GP0 control, three 64-bit HP DDR read paths, INDEX8/RGB565/
+XRGB8888 framebuffer scanout, both tile layers, palette stores, ordered
+composition, four-line scheduling, atomic frame-boundary scene promotion,
+counters, HDMI, and a four-row double-buffered CP437 boot-text plane. All nine
+directed simulation programs pass; the final 1280-pixel INDEX8 tile test takes
+1,346 of 4,444 available 200 MHz clocks. ARM software also passes strict
+cross-compilation, GCC static analysis, and host unit tests.
+
+The exact full-system Beast Vivado 2024.2 route meets every constraint with
++0.002 ns setup, +0.019 ns hold, and +0.538 ns pulse-width slack; all 23,261
+routable nets complete without error. It uses 13,096 total LUTs, 12,892
+registers, 29.5 BRAM36-equivalent tiles, and five DSPs. Bitstream SHA-256 is
+`869b0b4917135486376ab868f5599963dced75a2f8cfa76b2261fe01d0439cf4`.
+The boot-text route history records and fixes the initial flip-flop inference,
+two pixel/font cones, oversized selector carry chain, and direct GP0 readback
+cone. Exact source, report, methodology, CDC, resource, and artifact identities
+are in `fpga/arty/graphics/TIMING_CLOSURE.md`.
+
+The sprite-qualified XSA generated its own FSBL and boot package. That
+`BOOT.BIN` SHA-256 is
+`b88b142cc4624ea70dafc65b0aec900d506bcf17f90fc1c7ea6f5f834d8098a5`;
+active `image.ub` SHA-256 remains
+`e9ef016f059cb3bc71138edf2a5ae47646a0e11b3dab3b81f7362f592b97b542`.
+The previous boot files remain on the card under hash-qualified rollback
+names. U-Boot and the Linux kernel payload are unchanged.
+
+The text-free 1280x720 PNG is checked in exactly, SHA-256
+`cdf001bb70e130c9267f5205261eb3855f1b74cbbba832dbcd22fb6d66f77ff9`.
+The deterministic big-endian RGB565 image is 1,843,200 bytes, SHA-256
+`86eb30739db77b85f4deb1915fb9cb9263ab4755ae318ffb1b7a4a95b7017ba4`,
+and CRC32 `611029ee`. On Arty, the static ARM loader wrote and read back every
+byte, promoted graphics generation 1 with zero deferrals, and published the
+final text bank at generation 2. A live row-only update advances generation 3;
+MMIO reports capabilities `0x000000ff`, including the sprite engine.
+The FPGA manager reports `operating`, `/` remains read-only, and `/data`
+remains writable. Hardware evidence is
+`docs/evidence/astra-arty-boot-text6-hardware-20260730.log`. Direct monitor
+confirmation passes: all four dynamic rows are visible, correctly colored,
+aligned inside the lower panel, and clear of the Astra OS badge. The retained
+frame is `docs/evidence/astra-arty-boot-text6-hdmi-20260730.png`, SHA-256
+`e2c00ecb090a4ac6eb5e93a48cf5562976e8ff1868932552672e9f877c13d0ae`.
+
+Historical hardware release `sprite64-cdc-full2`, now superseded by the
+complete renderer below, replaced `boot-text6` and the earlier
+`sprite64-full3` candidate. It provides 64 INDEX8 shapes up to
+128x128, sixteen per-sprite-selected ARGB palette banks, front/behind planes,
+alpha and opacity, scaling, signed positioning and clipping, atomic scene
+promotion, and all-pairs collision reporting. A bundled-data CDC correction
+delays pixel-domain line-slot capture until one clock after the synchronized
+publication toggle; a directed skew test presents the toggle before its tag
+and proves that stale line metadata cannot be consumed.
+
+The complete directed suite passes. The exact Beast Vivado 2024.2 production
+route completes all 41,778 routable nets with +0.024 ns setup, +0.034 ns hold,
+and +0.538 ns pulse-width slack. It uses 21,954 LUTs, 23,003 registers, 85.5
+BRAM36-equivalent tiles and 51 DSPs. On Arty, the 64-way stress, fully hidden,
+edge-clipped and aligned-grid phases all pass with zero dropped pixels,
+overflow, AXI errors or deadline errors. Fully off-screen sprites issue zero
+source reads and admit zero pixels. Physical HDMI inspection confirms the
+aligned 8x8 grid has no scanline flicker. Exact evidence is in
+`docs/evidence/astra-arty-sprite64-cdc-hardware-20260731.log`; the retained
+frame is `docs/evidence/astra-arty-sprite64-cdc-hdmi-20260731.png`.
+
+The bounded command/fence transport, descriptor validation, timeout/reset
+handling, shared pixel writer, basic clipped fill, and overlap-safe same-format
+copy were hardware-qualified at Stage 1 and are retained in the complete
+renderer below. Exact Stage 1 checkpoint
+`path-boundary-3/full-route-9` routes all 55,816 nets and meets every constraint
+at +0.003 ns setup, +0.013 ns hold, and +0.538 ns pulse-width slack. It uses
+28,549 LUTs, 33,087 registers, 84.5 BRAM36-equivalent tiles, 61 DSPs, and
+10,982 of 13,300 physical slices. The complete directed suite still passes;
+the tile workload improves from 1,346 to 1,179 build clocks.
+
+Stage 1 `BOOT.BIN` SHA-256 was
+`c118b5a9aa88b1d5d682ce92553b8b45b9133aa9efe1a8b8d5c0432ecd137509`;
+the FIT was and remains
+`e9ef016f059cb3bc71138edf2a5ae47646a0e11b3dab3b81f7362f592b97b542`.
+After reboot, FPGA manager reports `operating`, capabilities are `0x000001ff`,
+`/` is read-only, and `/data` is writable. Six consecutive basic-renderer
+hardware runs each execute six fenced commands, verify 1,196,608 result pixels,
+and report zero backpressure or engine errors. Visible scene promotion and
+restore reach generations 6 and 7, and the complete 64-sprite hardware
+regression passes unchanged. Evidence is
+`docs/evidence/astra-arty-render-basic-hardware-20260801.log`; exact route and
+source identities are in `fpga/arty/graphics/TIMING_CLOSURE.md`.
+
+Independent sprite source width and height from 1 through 128 are now an
+explicitly certified contract, not merely permissive descriptor fields. The
+scene-store regression accepts all 16,384 source-size pairs while preserving
+all 131,072 horizontal scaling checks and rejects zero or 129 on either axis.
+The line-builder regression performs real first/last-row fetches for every
+width and every height, both reflection axes, minimum legal 64/128-byte pitch,
+admitted-pixel and AXI-byte accounting, and allocation-bound checks. The public
+NDK now reports 64 descriptors, the 8,192-pixel line budget, INDEX8 sources,
+independent 1..128 source extents and 1..1024 destination extents.
+
+No sprite RTL or bitstream changed for this qualification. On the Stage 1
+`c118b5a9...` Arty release, three consecutive certifier runs, including a
+no-reboot repeat, cover every width and height across two packed 64-sprite
+scenes. Both dimension phases fetch exactly 4,352 AXI bytes per line, peak near
+3,070 build clocks, and report zero drops, overflow, AXI errors or deadlines.
+The retained visible scene uses 327,680 bytes rather than the 1 MiB maximum
+shape set. That Stage 1 certifier's SHA-256 is
+`4692f723917d2589085580f7222c55804da6653e6db1cd77797abfad12b77f3a`;
+the complete graphics-regression log is
+`/mnt/Documents/astra68/work/sprite-v1/variable-dimensions-1/graphics-regression-20260801.log`
+(SHA-256 `f074f620419a2392bab91aded927f5523abd9a0b99683546bbfc0eaa4c629be3`);
+the persistent hardware log is
+`/mnt/Documents/astra68/work/sprite-v1/variable-dimensions-1/hardware-20260801.log`
+(SHA-256 `7955bfb2199dc64af4c36b6cfe12c474a63d999b0355c701dc8d3116fbc44657`).
+
+The complete blitter is now hardware-qualified. Exact production checkpoint
+`full-route-24-checkpoint-49` includes framebuffer and tile scanout, boot text,
+64 independently sized sprites, command/fence transport, and the complete
+blitter. Beast Vivado 2024.2 routes all 59,647 routable nets with +0.013 ns
+setup, +0.051 ns hold, +0.538 ns pulse-width slack, and no failing endpoint.
+The 74.25 MHz pixel domain has +2.620 ns setup slack. The route uses 30,185
+LUTs, 36,050 registers, 84.5 BRAM36-equivalent tiles, 66 DSPs, and 11,695 of
+13,300 physical slices.
+
+Active `BOOT.BIN` SHA-256 is
+`dfd34dd31bafd199889d7d2cc1f9f2682b72636b296e4f4b3a1964d4ef6acbaa`;
+the FIT remains
+`e9ef016f059cb3bc71138edf2a5ae47646a0e11b3dab3b81f7362f592b97b542`.
+FPGA manager reports `operating`, `/` is read-only, `/data` is read-write, and
+the complete splash readback still passes 1,843,200 bytes with CRC32
+`611029ee`. Ten consecutive complete-blitter hardware runs each retire 29
+fenced commands and verify exactly 1,196,651 pixels with zero backpressure or
+engine errors. Coverage includes scaling, X/Y reflection, clipping, keying,
+all 16 ROPs, format conversion, premultiplied source-over/opacity, palette
+expansion, MASK1 suppression, and overlap-safe copy. Installed certifier
+SHA-256 is
+`c1ea9c75827c5de62a930ed5119b3ce72e26358146bb98b1c3e6783204f01c5d`.
+Exact closure history, source identity, route artifacts, and NAS hardware
+evidence are in `fpga/arty/graphics/TIMING_CLOSURE.md`.
+
+Virtual sprites are now certified as bounded groups of ordinary BLIT commands
+into hidden surfaces. This deliberately reuses each command's validation,
+deadline, completion, and reset contract; the final sequence is the group
+fence, and presentation is forbidden unless every completion through it
+succeeds. A parent-command hardware batch sequencer was rejected after
+behavioral success because it regressed focused 200 MHz timing. Restoring the
+qualified command processor reroutes at +0.002 ns setup slack. On the unchanged
+Route-24 bitstream, ten consecutive Arty runs each complete 64 scaled RGB565
+virtual sprites, verify 16,384 pixels and fence 93, and report zero
+backpressure or engine errors. Exact failed experiments and retained evidence
+are in `fpga/arty/graphics/TIMING_CLOSURE.md`.
+
+Geometry command validation and dispatch now cover lines, outlined/filled
+rectangles, circles, ellipses, transparent/opaque 8x8 pattern fills, and a
+bounded scanline flood fill through the shared writer. Flood workspace is
+caller-provided and validated; exhaustion returns `WORK_OVERFLOW`. The complete
+graphics suite passes, including the focused 60-pixel fill, eight-pixel
+overflow case, and integrated 40-command regression.
+
+Geometry is now hardware-qualified at an actual 166,666,672 Hz renderer
+clock. The exact checkpoint-44 `full-route-17-166m667` route meets setup at
+`+0.060 ns`, hold at `+0.016 ns`, and pulse width at `+0.538 ns`, with zero
+failing endpoints. It uses 32,207 LUTs, 39,098 registers, 84.5
+BRAM36-equivalent tiles, 70 DSPs, and 12,344 of 13,300 slices. The exact
+bitstream SHA-256 is
+`b2599c5c3b00f312fc4a8b149944243c0885741f5df061f91d521009ce24472b`;
+active `BOOT.BIN` is
+`08e188e2747ec801df151e517c50c126029b388ba048af6a95cd22549f24b3c9`.
+The unchanged FIT remains
+`e9ef016f059cb3bc71138edf2a5ae47646a0e11b3dab3b81f7362f592b97b542`.
+
+The complete 22-program graphics regression passes against the exact source.
+Ten consecutive Arty hardware runs then pass the complete blitter, 64-command
+virtual-sprite group, line/rectangle/circle/ellipse/pattern batch, exact
+60-pixel bounded flood, and one-entry workspace overflow. Every run reports
+zero backpressure; geometry takes 18,901 through 19,299 renderer clocks and
+overflow containment takes 1,597 through 1,804 clocks. Installed certifier
+SHA-256 is
+`ca83f3c564613fe88e0cf15399d94b6a5b2200c118b2a53e8202bb5cfdea7d2c`.
+Evidence is retained under
+`/mnt/Documents/astra68/work/render-v1/flood-1/cp49-postroute-strategy/full-route-17-166m667/hardware-cert`.
+
+The 200 MHz `full-route-14` result remains rejected at
+`-0.249/-38.962 ns` across 456 endpoints. A requested 185 MHz build quantizes
+to 187.5 MHz and also fails at `-0.218/-12.770 ns` across 176 endpoints. These
+measurements establish the 166.667 MHz point rather than a waiver. The
+measured 200 MHz path population is distributed across command, writer,
+blitter, geometry, flood, framebuffer, sprite, and PS interconnect logic.
+Post-route routing/critical-pin optimization gives zero improvement, while
+`Performance_ExtraTimingOpt` cannot place more than five percent of movable
+instances. Those failed experiments remain relevant if a future feature again
+pressures timing; they are not open geometry work.
+
+AFNT glyph expansion is now hardware-qualified for MASK1, A4, A8, INDEX4, and
+INDEX8. The first timing-clean candidate exposed a real intermittent AXI
+failure on hardware: two of ten runs lost descriptor beat zero when legal
+inter-beat backpressure occurred. The receiver now captures each descriptor
+beat only on `RVALID && RREADY`, and a focused three-cycle-gap regression
+guards that contract. The exact replacement route at 166,666,672 Hz meets
+setup at `+0.078 ns`, hold at `+0.015 ns`, and pulse width at `+0.538 ns`; all
+68,601 routable nets complete without error.
+
+The complete graphics release now includes dual-bank copper. Each bank holds
+4096 instructions in BRAM; WAIT, SKIP, validated MOVE, IRQ, command dispatch,
+and hardware-enforced register timing classes are connected. Focused copper
+tests and the frozen complete graphics regression pass. Ten consecutive Arty
+copper certifications pass bank switching, execution, IRQ delivery, command
+dispatch, and containment of an aligned forbidden MOVE target. Ten complete
+renderer runs and ten sprite runs also pass with zero backpressure, timeout,
+reset, dropped sprite, overflow, AXI, or deadline error.
+
+The exact complete route at 166,666,672 Hz meets setup at `+0.036 ns` and hold
+at `+0.016 ns`. It uses 37,534 LUTs, 44,655 registers, 118 BRAM36-equivalent
+tiles, 83 DSPs, and 13,036 of 13,300 physical slices. All routable nets are
+complete. The first post-route physical-optimization checkpoint left one AXI
+address connection incomplete despite meeting timing; `route_design
+-preserve` completed it without changing the `+0.036/+0.016 ns` result. The
+normal build now runs the same documented repair as a post-route hook and a
+clean from-source build independently completed, generated a bitstream, and
+passed the exact timing gate.
+
+The hardware-qualified recovery bitstream SHA-256 is
+`6281d7cd544e279edf693d1fe41a7e47259845afdc3c3c0d0045e18c04e27879`;
+active `BOOT.BIN` SHA-256 is
+`9637e1035acb9d1bd6d2bd0eec2e3cf9ca5c13023560af8d2b4f27a546444504`.
+The clean reproducibility build bitstream SHA-256 is
+`7fdda9ab456d8df7c8d6eacf3c2b337d1409f47bc0ea0888ac51eaa76a125f0c`.
+Exact route, regression, deployment, and hardware evidence is retained under
+`/mnt/Documents/astra68/work/render-v1/copper-1/integration-13` and recorded in
+`fpga/arty/graphics/TIMING_CLOSURE.md`.
+
+The inherited root image still emits nonfatal read-only volatile-directory,
+unclean FAT, interface-rename, and resolver warnings. Those host-image cleanup
+items are separate from the now-correct graphics memory map.
+
+The older sections below retain ULX3S qualification history and rollback
+evidence. Statements below that call ULX3S, 32 MiB SDRAM, 16 sprites, 720x480,
+the FPGA TG68K core, NUC attachment, or AstraHost/ESP transport the active
+production boundary are historical unless repeated in this override. They
+must not be used to infer the Arty architecture.
+
 ## Locked architecture
 
 - The sole RTL CPU is the repaired TG68K.C MC68030 integer core with integrated
@@ -166,6 +443,65 @@ personality, zsh, or Vim currently run.
 
 ## Current integration state
 
+- The unpromoted working tree based on
+  `4579138eb3d30e26aef658252fba28b15dd33420` adds the native boot splash and
+  hardware-rendered status text. The canonical image is 720x480 INDEX8 with at
+  most 252 image colors; palette entries 252-255 are reserved for status text.
+  Its framebuffer, BGRA palette, and 8x16 MASK1 font occupy 350,720 bytes raw
+  and 86,654 bytes as a reproducible legacy-LZ4 payload. For text, firmware
+  builds fixed glyph descriptors only; Astraea executes the MASK1 draws, while
+  Vega presents the double-buffered scene at vblank.
+
+  Integration exposed and fixed an Astraea MMIO bug: one MC68030 longword read
+  arrives as 16-bit beats at register offsets `+0` and `+2`, but the special
+  register decoder previously matched only the first byte address. Aligned
+  word-index decoding now returns both halves of ID, capability, IRQ, and
+  copper-source registers, and the directed chip test models the real two-beat
+  bus contract.
+
+  Exact Beast snapshot `/tmp/astra68-splash-hwglyph-20260727` passes the full
+  directed graphics suite, both CPU blitter diagnostics, the C LZ4 test, and
+  all 32 Python boot tests. A fresh Verilator 5.047 full TG68K/SDRAM/HDMI boot
+  executes the 222,732-byte ROM with CRC32 `3429C216`, reports splash startup
+  in 8,823,984 CPU cycles, passes POST, loads the kernel, and exits zero at
+  `Starting Axiom kernel` with
+  `ASTRAHOST BOOT SPLASH PASS blit=1 draw=24 MASK1=24`. The test observes
+  Astraea draw-master writes to the sampled `OK` pixel in both framebuffers;
+  CPU software rasterization cannot satisfy it.
+
+  Exact build `320CAE59` then routed the complete production feature set with
+  zero SCCs and passed every clock, including 14.044352 MHz CPU and 66.600067
+  MHz SDRAM. Its first ULX3S boot rejected generation 1 at `Graphics splash`
+  while the cleanup generation 2 completed. The hardware-only phase exposed
+  that Vega treated every routine baseline-to-active scene copy as a shadow
+  lock. A simple unlock was also incorrect because palette and sprite RAMs
+  share the copy port and would silently lose overlapping writes. The retained
+  fix leaves scalar shadow state editable and pauses a non-present baseline
+  copy for one cycle whenever a palette or descriptor write needs that port;
+  pending and committing generations remain immutable.
+
+  Fixed Beast snapshot `/tmp/astra68-splash-hwglyph-vega-lock-20260727`
+  passes a forced scalar/palette/sprite overlap test, the full directed graphics
+  suite, and an exact release-ROM TG68K/SDRAM/HDMI boot. The deterministic
+  223,004-byte ROM has CRC32 `84E611A6`, a fixed
+  `2026-07-27T21:02:28Z` timestamp, and revision
+  `4579138eb3d30e26aef658252fba28b15dd33420-dirty-c53e68b7`. It reports
+  8,800,670 splash cycles and exits zero in 539.667 seconds with
+  `ASTRAHOST BOOT SPLASH PASS blit=1 draw=24 MASK1=24`. The exact 25-file
+  source manifest is
+  `docs/evidence/astra68-splash-source-manifest-20260727.sha256`, whose SHA-256
+  is `c53e68b7f9be69917c07aa31a66a9b78552254013b822bf889974c52fbd026d1`.
+  Build `320CAE59` is rejected. Exact fixed build `C53E68B7` now routes the
+  complete production feature set on Beast with zero SCCs and no timing
+  waiver. Yosys 0.64+159 reports 53,641 LUT4s, 25,991 mapped FFs, 103
+  DP16KDs, and 18 multipliers; nextpnr 0.10-45-g98c18d7f packs 67,295
+  TRELLIS_COMB and 26,024 TRELLIS_FF cells. The exact route reaches
+  14.127087 MHz CPU and 67.971725 MHz SDRAM against the required 12.5 MHz and
+  60.002399 MHz constraints, and every input, SD, USB, pixel, and HDMI shift
+  constraint also passes. Bitstream SHA-256 is
+  `9c6a1f575596bf612fa9649940a3c3a65758aa7e55684cebf3b42ba62c576b46`.
+  Repeated SRAM-only ULX3S boots and physical HDMI qualification remain before
+  release; persistent flash remains rollback build `25D9CB8E`.
 - K10 device and observability support is the active pre-route candidate. It
   adds 16 generation-safe IRQ endpoints with four fixed records each, one
   bounded common Vesta dispatcher, typed MMIO accessors, first-fault bus
@@ -192,6 +528,20 @@ personality, zsh, or Vim currently run.
   checks are still release gates. K10 must not be described as
   hardware-qualified; K9 remains the current hardware-qualified release and
   rollback.
+
+  Exact routed candidate `E671488A` subsequently passed all release timing
+  constraints but is rejected on ULX3S: K10 repeatedly receives 4/5 required
+  sources, with only USB `0x80` absent. Exact routed-net inspection found the
+  system, USB, and video PLLs operating at 5, 4, and 5 MHz PFD respectively,
+  below Lattice's current 10 MHz ECP5 minimum. The local experimental PLL
+  calculator had incorrectly accepted 3.125 MHz. The corrected three-PLL
+  topology preserves exact 60 MHz SDRAM, 48 MHz USB, and 27/135 MHz video
+  clocks while using 20-25 MHz PFDs and 480-675 MHz VCOs. A mandatory
+  synthesized-primitive gate now verifies those ranges and all output dividers.
+  Exact Beast synthesis and focused USB tests pass; corrected placement, route,
+  and SRAM-only board confirmation remain pending. See the latest section of
+  `fpga/soc/oss_flow/TIMING_CLOSURE.md`. Persistent flash remains exact
+  `25D9CB8E`.
 - The hardware-qualified K9 memory-pressure release is exact implementation
   commit `03660014d7af6d3662504fc076700f04929117ab`, built reproducibly with
   `SOURCE_DATE_EPOCH=1785033792` (`2026-07-26T02:43:12Z`). Its immutable source

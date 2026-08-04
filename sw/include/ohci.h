@@ -127,6 +127,10 @@ _Static_assert(offsetof(OhciRegs, RH_PORT_STATUS) == 0x054u,
 _Static_assert(offsetof(OhciRegs, ASTRA_ID) == 0xF00u,
                "Astra OHCI extension ABI offset");
 _Static_assert(sizeof(OhciHcca) == 256u, "OHCI HCCA size");
+_Static_assert((OHCI_DMA_POOL_BASE & (sizeof(OhciHcca) - 1u)) == 0u,
+               "OHCI HCCA alignment");
+_Static_assert(OHCI_DMA_POOL_SIZE >= sizeof(OhciHcca),
+               "OHCI DMA pool holds HCCA");
 _Static_assert(sizeof(OhciEndpointDescriptor) == 16u,
                "OHCI endpoint descriptor size");
 _Static_assert(sizeof(OhciTransferDescriptor) == 16u,

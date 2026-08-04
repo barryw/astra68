@@ -198,6 +198,11 @@ void kmain(void)
     if (VESTA->ID != VESTA_ID_MAGIC || VEGA->ID != VEGA_ID_MAGIC ||
         ASTRAEA->ID != ASTRAEA_ID_MAGIC || !wait_sdram())
         finish(0x11u, (const struct command_result *)0, 0u);
+    if (ASTRAEA->CAPS != (ASTRAEA_CAP_COPY | ASTRAEA_CAP_FILL |
+                          ASTRAEA_CAP_COPY_KEY | ASTRAEA_CAP_COPY_MASK |
+                          ASTRAEA_CAP_GEOMETRY | ASTRAEA_CAP_GLYPH |
+                          ASTRAEA_CAP_FLOOD | ASTRAEA_CAP_COPPER))
+        finish(0x12u, (const struct command_result *)0, 0u);
 
     baseline = run_fill(&results[0], 'A', 0u, 1u, 0);
     tall = run_fill(&results[1], 'B', 0u, 480u, 0);

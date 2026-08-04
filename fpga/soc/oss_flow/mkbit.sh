@@ -298,6 +298,7 @@ scc -expect 0;
 write_json astra.json;
 " > "$YOSYS_LOG" 2>&1
 python3 check_por.py astra.json
+python3 check_pll_spec.py astra.json
 if [ "$HDMI_ENABLE" = "1" ]; then
   python3 check_post_font_rom.py astra.json
 fi

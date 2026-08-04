@@ -1,0 +1,177 @@
+{
+  "abi_version": 1,
+  "command_bytes": 64,
+  "completion_bytes": 32,
+  "surface_descriptor_bytes": 32,
+  "glyph_descriptor_bytes": 16,
+  "max_glyph_descriptors": 4096,
+  "ring_entries": 1024,
+  "max_deadline_us": 500000,
+  "max_surface_dimension": 4096,
+  "formats": {
+    "INDEX8": 0,
+    "RGB565": 1,
+    "XRGB8888": 2,
+    "ARGB8888": 3,
+    "MASK1": 4,
+    "A4": 5,
+    "A8": 6,
+    "INDEX4": 7
+  },
+  "opcodes": {
+    "FILL": 1,
+    "BLIT": 2,
+    "BLIT_BATCH": 3,
+    "LINE": 256,
+    "RECT": 257,
+    "CIRCLE": 258,
+    "ELLIPSE": 259,
+    "PATTERN_FILL": 260,
+    "FLOOD_FILL": 261,
+    "GLYPH_RUN": 512
+  },
+  "status": {
+    "OK": 0,
+    "BAD_VERSION": 1,
+    "BAD_SIZE": 2,
+    "BAD_OPCODE": 3,
+    "BAD_FLAGS": 4,
+    "BAD_SEQUENCE": 5,
+    "BAD_GENERATION": 6,
+    "BAD_CLIP": 7,
+    "BAD_DESCRIPTOR": 8,
+    "BAD_RANGE": 9,
+    "UNSUPPORTED": 10,
+    "AXI_READ": 11,
+    "AXI_WRITE": 12,
+    "TIMEOUT": 13,
+    "RESET": 14,
+    "QUEUE_CONFIG": 15,
+    "WORK_OVERFLOW": 16
+  },
+  "surface_flags": {
+    "READ": 1,
+    "WRITE": 2
+  },
+  "command_flags": {
+    "BLIT_REFLECT_X": 1,
+    "BLIT_REFLECT_Y": 2,
+    "BLIT_SOURCE_KEY": 4,
+    "BLIT_MASK1": 8,
+    "BLIT_ALPHA": 16,
+    "BLIT_PALETTE": 32,
+    "BLIT_ROP_ENABLE": 64,
+    "BLIT_ROP_SHIFT": 8,
+    "BLIT_ROP_MASK": 3840,
+    "BLIT_ALLOWED_MASK": 3967
+  },
+  "geometry_flags": {
+    "FILLED": 1,
+    "PATTERN_OPAQUE": 2,
+    "ALLOWED_MASK": 3
+  },
+  "glyph_flags": {
+    "OPAQUE_BACKGROUND": 1,
+    "ALLOWED_MASK": 1
+  },
+  "glyph_options": {
+    "TRANSPARENT_INDEX_MASK": 255
+  },
+  "blit_rops": {
+    "CLEAR": 0,
+    "NOR": 1,
+    "DESTINATION_AND_NOT_SOURCE": 2,
+    "NOT_SOURCE": 3,
+    "SOURCE_AND_NOT_DESTINATION": 4,
+    "NOT_DESTINATION": 5,
+    "XOR": 6,
+    "NAND": 7,
+    "AND": 8,
+    "XNOR": 9,
+    "DESTINATION": 10,
+    "NOT_SOURCE_OR_DESTINATION": 11,
+    "SOURCE": 12,
+    "SOURCE_OR_NOT_DESTINATION": 13,
+    "OR": 14,
+    "SET": 15
+  },
+  "blit_options": {
+    "VALUE_MASK": 16777215,
+    "OPACITY_SHIFT": 24,
+    "OPACITY_MASK": 4278190080
+  },
+  "command_word_offsets": {
+    "VERSION_SIZE": 0,
+    "OPCODE_FLAGS": 1,
+    "SEQUENCE": 2,
+    "RESOURCE_GENERATION": 3,
+    "DEADLINE_US": 4,
+    "RESERVED": 5,
+    "CLIP_LEFT_TOP": 6,
+    "CLIP_RIGHT_BOTTOM": 7,
+    "DST_DESCRIPTOR": 8,
+    "SRC_DESCRIPTOR": 9,
+    "AUX_DESCRIPTOR": 10,
+    "SRC_X_Y": 11,
+    "DST_X_Y": 12,
+    "SRC_WIDTH_HEIGHT": 13,
+    "DST_WIDTH_HEIGHT": 14,
+    "OPTIONS": 15
+  },
+  "geometry_word_offsets": {
+    "DST_DESCRIPTOR": 8,
+    "PATTERN_HI": 9,
+    "PATTERN_LO": 10,
+    "P0": 11,
+    "P1": 12,
+    "RADII_OR_ORIGIN": 13,
+    "BACKGROUND": 14,
+    "FOREGROUND": 15
+  },
+  "flood_word_offsets": {
+    "DST_DESCRIPTOR": 8,
+    "RESERVED_SOURCE": 9,
+    "WORKSPACE_DESCRIPTOR": 10,
+    "SEED": 11,
+    "RESERVED_12": 12,
+    "RESERVED_13": 13,
+    "RESERVED_14": 14,
+    "REPLACEMENT": 15
+  },
+  "glyph_word_offsets": {
+    "DST_DESCRIPTOR": 8,
+    "SRC_DESCRIPTOR": 9,
+    "DESCRIPTOR_OFFSET": 10,
+    "DESCRIPTOR_COUNT": 11,
+    "FOREGROUND": 12,
+    "BACKGROUND": 13,
+    "OPTIONS": 14,
+    "RESERVED": 15
+  },
+  "glyph_descriptor_word_offsets": {
+    "SOURCE_OFFSET": 0,
+    "SOURCE_X_Y": 1,
+    "DESTINATION_X_Y": 2,
+    "WIDTH_HEIGHT": 3
+  },
+  "surface_word_offsets": {
+    "VERSION_SIZE": 0,
+    "GENERATION": 1,
+    "DATA_OFFSET": 2,
+    "DATA_BYTES": 3,
+    "PITCH": 4,
+    "WIDTH_HEIGHT": 5,
+    "FORMAT_FLAGS": 6,
+    "PALETTE_OFFSET": 7
+  },
+  "completion_word_offsets": {
+    "VERSION_SIZE": 0,
+    "OPCODE_STATUS": 1,
+    "SEQUENCE": 2,
+    "COUNT": 3,
+    "START_CYCLE": 4,
+    "END_CYCLE": 5,
+    "FAULT_DETAIL": 6,
+    "RESOURCE_GENERATION": 7
+  }
+}

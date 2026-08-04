@@ -1,8 +1,9 @@
 # Embedded boot ROM
 
 `astra_boot.bin` is the unchanged Astra 68 boot ROM consumed by both hardware
-and AstraVM. It is embedded in `astravm-machine` so the desktop reference
-machine boots without requiring an m68k cross-compiler at runtime.
+and AstraVM. It is a generated build artifact and is not stored in Git.
+AstraVM loads `sw/boot/astra_boot.bin` by default or the path in
+`ASTRA68_BOOT_ROM`.
 
 - Source commit: `ad3f2a3ee7fbce87f5d10bc90910ed2e9c4135f8`
 - Source epoch: `1783980086` (`2026-07-13T22:01:26Z`)
@@ -20,6 +21,7 @@ rtk env SOURCE_DATE_EPOCH=1783980086 \
   make -C sw/boot CPU_CLK_DIV_BIT=0 ROM_VERSION=0.3
 ```
 
-Copy the resulting `sw/boot/astra_boot.bin` here after verifying its vectors
-and digest. For development builds, set `ASTRA68_BOOT_ROM=/path/to/image.bin`
-when launching AstraVM; the emulator validates the reset vectors before use.
+Verify the resulting `sw/boot/astra_boot.bin` vectors and digest before a
+release. For development builds, set
+`ASTRA68_BOOT_ROM=/path/to/image.bin` when launching AstraVM; the emulator
+validates the reset vectors before use.

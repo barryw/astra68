@@ -44,11 +44,14 @@
      OHCI_INT_UE | OHCI_INT_FNO | OHCI_INT_RHSC | OHCI_INT_OC)
 #define OHCI_INTERRUPT_DISABLE_ALL \
     (OHCI_INTERRUPT_SOURCES | OHCI_INT_MIE)
+#define OHCI_SOFT_RESET_TIMEOUT_CYCLES \
+    (KERNEL_PLATFORM_CPU_HZ / 100000u)
 
 #if defined(KERNEL_PLATFORM_HOST_TEST)
 #define PLATFORM_TEST_MMIO_SIZE \
     ((OHCI_BASE - VESTA_BASE) + (uint32_t)sizeof(OhciRegs))
 static _Alignas(4) uint8_t platform_test_mmio[PLATFORM_TEST_MMIO_SIZE];
+static _Alignas(256) OhciHcca platform_test_ohci_hcca;
 
 VestaRegs *kernel_platform_test_registers(void)
 {
@@ -82,10 +85,69 @@ OhciRegs *kernel_platform_test_ohci_registers(void)
         return NULL;
     return (OhciRegs *)(void *)&platform_test_mmio[OHCI_BASE - VESTA_BASE];
 }
+
+OhciHcca *kernel_platform_test_ohci_hcca(void)
+{
+    return &platform_test_ohci_hcca;
+}
 #endif
 
 static volatile uint32_t tick_count;
 static uint32_t quantum_cycles;
+
+static volatile OhciHcca *ohci_hcca(void)
+{
+#if defined(KERNEL_PLATFORM_HOST_TEST)
+    return &platform_test_ohci_hcca;
+#else
+    return (volatile OhciHcca *)(uintptr_t)OHCI_DMA_POOL_BASE;
+#endif
+}
+
+static void ohci_hcca_clear(void)
+{
+    volatile uint32_t *words = (volatile uint32_t *)ohci_hcca();
+
+    for (uint32_t index = 0u;
+         index < sizeof(OhciHcca) / sizeof(uint32_t); ++index)
+        words[index] = 0u;
+    kernel_mmio_cpu_sync();
+}
+
+static bool ohci_controller_soft_reset(void)
+{
+    uint32_t status = OHCI_READ(INTERRUPT_STATUS) &
+                      OHCI_INTERRUPT_SOURCES;
+    uint32_t astra_status = OHCI_READ(ASTRA_STATUS);
+    uint32_t started = VESTA_READ(CPU_CYCLES_LO);
+    uint32_t attempts = OHCI_SOFT_RESET_TIMEOUT_CYCLES;
+
+    OHCI_WRITE(INTERRUPT_DISABLE, OHCI_INTERRUPT_DISABLE_ALL);
+    if (status != 0u)
+        OHCI_WRITE(INTERRUPT_STATUS, status);
+    if ((astra_status & OHCI_ASTRA_DMA_FAULT) != 0u)
+        OHCI_WRITE(ASTRA_STATUS, OHCI_ASTRA_DMA_FAULT);
+    OHCI_WRITE(COMMAND_STATUS, OHCI_COMMAND_HCR);
+#if defined(KERNEL_PLATFORM_HOST_TEST)
+    // The host MMIO buffer has no register side effects; model HCR completion.
+    OHCI_WRITE(COMMAND_STATUS, 0u);
+    OHCI_WRITE(CONTROL, OHCI_CONTROL_HCFS_SUSPEND);
+    OHCI_WRITE(INTERRUPT_STATUS, 0u);
+    OHCI_WRITE(INTERRUPT_ENABLE, 0u);
+    OHCI_WRITE(HCCA, 0u);
+    OHCI_WRITE(ASTRA_STATUS, 0u);
+#endif
+    while ((OHCI_READ(COMMAND_STATUS) & OHCI_COMMAND_HCR) != 0u) {
+        if ((uint32_t)(VESTA_READ(CPU_CYCLES_LO) - started) >=
+                OHCI_SOFT_RESET_TIMEOUT_CYCLES ||
+            --attempts == 0u)
+            return false;
+    }
+    kernel_mmio_cpu_sync();
+    return (kernel_mmio_fence32(OHCI_ADDRESS(CONTROL)) &
+            OHCI_CONTROL_HCFS_MASK) == OHCI_CONTROL_HCFS_SUSPEND &&
+           kernel_mmio_fence32(OHCI_ADDRESS(HCCA)) == 0u;
+}
 
 static uint32_t divide_ns_limb(uint32_t remainder, uint32_t limb,
                                uint32_t *next_remainder)
@@ -153,10 +215,12 @@ uint32_t kernel_platform_ticks(void)
     return tick_count;
 }
 
+#if !defined(__m68k__)
 uint32_t kernel_platform_cpu_cycles_low(void)
 {
     return VESTA_READ(CPU_CYCLES_LO);
 }
+#endif
 
 void kernel_platform_cpu_cycles(KernelPlatformCycleCount *cycles)
 {
@@ -531,23 +595,7 @@ bool kernel_platform_device_irq_quiesce(uint8_t source)
         kernel_mmio_cpu_sync();
         return true;
     case IRQ_SRC_USB: {
-        uint32_t control = OHCI_READ(CONTROL);
-        uint32_t status = OHCI_READ(INTERRUPT_STATUS) &
-                          OHCI_INTERRUPT_SOURCES;
-        uint32_t astra_status = OHCI_READ(ASTRA_STATUS);
-
-        OHCI_WRITE(INTERRUPT_DISABLE, OHCI_INTERRUPT_DISABLE_ALL);
-        if (status != 0u)
-            OHCI_WRITE(INTERRUPT_STATUS, status);
-        if ((astra_status & OHCI_ASTRA_DMA_FAULT) != 0u)
-            OHCI_WRITE(ASTRA_STATUS, OHCI_ASTRA_DMA_FAULT);
-        control &= ~(OHCI_CONTROL_PLE | OHCI_CONTROL_IE |
-                     OHCI_CONTROL_CLE | OHCI_CONTROL_BLE |
-                     OHCI_CONTROL_HCFS_MASK);
-        control |= OHCI_CONTROL_HCFS_SUSPEND;
-        OHCI_WRITE(CONTROL, control);
-        kernel_mmio_cpu_sync();
-        return true;
+        return ohci_controller_soft_reset();
     }
     case IRQ_SRC_ASTRAEA:
         pending = ASTRAEA_READ(IRQ_STAT);
@@ -605,24 +653,29 @@ bool kernel_platform_qualification_irq_prepare(uint8_t source)
         (void)kernel_mmio_fence32(VEGA_ADDRESS(IRQ_EN));
         return true;
     case IRQ_SRC_USB: {
-        uint32_t control = OHCI_READ(CONTROL);
-        uint32_t status = OHCI_READ(INTERRUPT_STATUS) &
-                          OHCI_INTERRUPT_SOURCES;
+        uint32_t control;
 
-        OHCI_WRITE(INTERRUPT_DISABLE, OHCI_INTERRUPT_DISABLE_ALL);
-        if (status != 0u)
-            OHCI_WRITE(INTERRUPT_STATUS, status);
-        if ((OHCI_READ(ASTRA_STATUS) & OHCI_ASTRA_DMA_FAULT) != 0u)
-            OHCI_WRITE(ASTRA_STATUS, OHCI_ASTRA_DMA_FAULT);
-        control &= ~(OHCI_CONTROL_PLE | OHCI_CONTROL_IE |
-                     OHCI_CONTROL_CLE | OHCI_CONTROL_BLE |
-                     OHCI_CONTROL_HCFS_MASK);
+        if (OHCI_READ(ASTRA_DMA_POOL_BASE) != OHCI_DMA_POOL_BASE ||
+            OHCI_READ(ASTRA_DMA_POOL_SIZE) != OHCI_DMA_POOL_SIZE)
+            return false;
+        if (!ohci_controller_soft_reset())
+            return false;
+        ohci_hcca_clear();
+        control = OHCI_READ(CONTROL);
+        control &= ~OHCI_CONTROL_HCFS_MASK;
         control |= OHCI_CONTROL_HCFS_OPERATIONAL;
+        OHCI_WRITE(HCCA, OHCI_DMA_POOL_BASE);
         OHCI_WRITE(CONTROL, control);
         OHCI_WRITE(INTERRUPT_ENABLE, OHCI_INT_MIE | OHCI_INT_SF);
         kernel_mmio_cpu_sync();
-        (void)kernel_mmio_fence32(OHCI_ADDRESS(CONTROL));
-        return true;
+        return kernel_mmio_fence32(OHCI_ADDRESS(HCCA)) ==
+                   OHCI_DMA_POOL_BASE &&
+               (kernel_mmio_fence32(OHCI_ADDRESS(CONTROL)) &
+                OHCI_CONTROL_HCFS_MASK) ==
+                   OHCI_CONTROL_HCFS_OPERATIONAL &&
+               (kernel_mmio_fence32(OHCI_ADDRESS(INTERRUPT_ENABLE)) &
+                (OHCI_INT_MIE | OHCI_INT_SF)) ==
+                   (OHCI_INT_MIE | OHCI_INT_SF);
     }
     case IRQ_SRC_ASTRAEA:
         pending = ASTRAEA_READ(IRQ_STAT);

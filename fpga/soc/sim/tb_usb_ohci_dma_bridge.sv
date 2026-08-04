@@ -134,6 +134,31 @@ module tb_usb_ohci_dma_bridge;
         if (mem_lock)
             $fatal(1, "DMA ownership did not release");
 
+        // OHCI emits zero-select writes for masked beats in HCCA update
+        // bursts. They are legal no-ops and must complete without reaching
+        // the SDRAM controller, whose write command requires a byte lane.
+        begin_wb(1'b1, 32'h03f00084, 4'b0000, 32'hdeadbeef);
+        begin : wait_for_noop_ack
+            integer timeout;
+            timeout = 0;
+            while (!wb_ack && timeout < 100) begin
+                @(negedge wb_clk);
+                if (mem_valid)
+                    $fatal(1, "zero-select write reached native memory");
+                timeout = timeout + 1;
+            end
+            if (!wb_ack)
+                $fatal(1, "zero-select write did not complete");
+        end
+        if (wb_err || wb_rdata !== 32'd0 || fault)
+            $fatal(1, "zero-select write completion mismatch");
+        @(negedge wb_clk);
+        wb_cyc = 1'b0;
+        wb_stb = 1'b0;
+        repeat (4) @(negedge mem_clk);
+        if (mem_lock)
+            $fatal(1, "zero-select write did not release DMA ownership");
+
         begin_wb(1'b0, 32'h03fffffc, 4'b1111, 32'd0);
         complete_memory(32'h04030201);
         if (mem_write || mem_addr !== 25'h1fffffc)

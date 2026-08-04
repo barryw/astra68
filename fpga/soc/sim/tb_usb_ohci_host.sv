@@ -43,6 +43,7 @@ module tb_usb_ohci_host;
     reg memory_pending = 1'b0;
     integer dma_count = 0;
     reg hcca_dma_seen = 1'b0;
+    reg zero_lane_write_seen = 1'b0;
 
     always @(posedge mem_clk) begin
         mem_ready <= 1'b0;
@@ -51,6 +52,7 @@ module tb_usb_ohci_host;
             memory_pending <= 1'b0;
             dma_count <= 0;
             hcca_dma_seen <= 1'b0;
+            zero_lane_write_seen <= 1'b0;
         end else begin
             if (mem_valid && !memory_pending) begin
                 mem_ready <= 1'b1;
@@ -58,6 +60,8 @@ module tb_usb_ohci_host;
                 dma_count <= dma_count + 1;
                 if (mem_addr >= 25'h1f00000 && mem_addr < 25'h1f00100)
                     hcca_dma_seen <= 1'b1;
+                if (mem_write && mem_be == 4'b0000)
+                    zero_lane_write_seen <= 1'b1;
             end else if (memory_pending) begin
                 mem_rdata <= 32'd0;
                 mem_rsp_valid <= 1'b1;
@@ -116,6 +120,34 @@ module tb_usb_ohci_host;
         end
     endtask
 
+    task automatic soft_reset;
+        integer attempt;
+        reg completed;
+        reg [31:0] reset_value;
+        begin
+            access(1'b1, 12'h008, 32'h00000001, reset_value);
+            completed = 1'b0;
+            begin : wait_for_soft_reset
+                for (attempt = 0; attempt < 100; attempt = attempt + 1) begin
+                    access(1'b0, 12'h008, 32'd0, reset_value);
+                    if ((reset_value & 32'h00000001) == 0) begin
+                        completed = 1'b1;
+                        disable wait_for_soft_reset;
+                    end
+                end
+            end
+            if (!completed)
+                $fatal(1, "OHCI host-controller reset did not complete");
+            access(1'b0, 12'h004, 32'd0, reset_value);
+            if ((reset_value & 32'h000000c0) !== 32'h000000c0)
+                $fatal(1, "OHCI reset did not enter Suspend: %08x",
+                       reset_value);
+            access(1'b0, 12'h018, 32'd0, reset_value);
+            if (reset_value !== 32'd0)
+                $fatal(1, "OHCI reset retained HCCA: %08x", reset_value);
+        end
+    endtask
+
     reg [31:0] value;
     initial begin
         repeat (5) @(posedge mem_clk);
@@ -140,6 +172,11 @@ module tb_usb_ohci_host;
         if (value !== 32'h03f00000)
             $fatal(1, "HCCA readback mismatch %08x", value);
 
+        access(1'b0, 12'h004, 32'd0, value);
+        if ((value & 32'h000000c0) !== 32'h00000000)
+            $fatal(1, "OHCI did not start in Reset: %08x", value);
+        soft_reset();
+
         access(1'b0, 12'hf00, 32'd0, value);
         if (value !== 32'h41555342)
             $fatal(1, "Astra USB extension ID mismatch %08x", value);
@@ -152,6 +189,8 @@ module tb_usb_ohci_host;
 
         // Enter HCFS=Operational with all schedules disabled. A conforming
         // OHCI controller still maintains the HCCA frame state every 1 ms.
+        access(1'b1, 12'h018, 32'h03f00000, value);
+        access(1'b1, 12'h010, 32'h80000004, value);
         access(1'b1, 12'h004, 32'h00000080, value);
         begin : wait_for_hcca_dma
             repeat (100000) begin
@@ -165,6 +204,25 @@ module tb_usb_ohci_host;
         if (dma_fault)
             $fatal(1, "valid HCCA DMA raised a bridge fault at %08x",
                    dma_fault_addr);
+        if (zero_lane_write_seen)
+            $fatal(1, "OHCI zero-select write reached native SDRAM");
+        begin : wait_for_sof_irq
+            repeat (100000) begin
+                @(posedge cpu_clk);
+                if (cpu_irq)
+                    disable wait_for_sof_irq;
+            end
+        end
+        if (!cpu_irq)
+            $fatal(1, "OHCI start-of-frame did not reach the CPU IRQ domain");
+        access(1'b0, 12'h00c, 32'd0, value);
+        if ((value & 32'h00000004) == 0)
+            $fatal(1, "OHCI IRQ lacked start-of-frame status: %08x", value);
+
+        soft_reset();
+        access(1'b0, 12'h010, 32'd0, value);
+        if (value !== 32'd0)
+            $fatal(1, "OHCI reset retained interrupt enables: %08x", value);
 
         $display("USB OHCI HOST PASS revision=%02x ports=%0d dma=%0d",
                  8'h10, 1, dma_count);

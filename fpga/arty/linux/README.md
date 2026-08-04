@@ -1,0 +1,102 @@
+# Arty Linux support
+
+The Arty Z7-20 boots a deliberately small Linux appliance with a read-only root
+and persistent writable state under `/data`. The rootfs overlay in this
+directory is the Astra-owned source for board-specific early-boot files.
+
+`retire_nova_runtime.sh` performs the one-time migration from the inherited
+Nova image. It removes the Nova daemon, its init links, and the legacy
+`novacap` module and autoload paths; installs a persistent module blacklist;
+installs `astra-firstboot` after `mountall` and before `udev`; changes the
+board identity to `astra-arty`; exposes
+`/data/astra/share` through Samba; preserves persistent SSH state and legacy
+`/data/nova` contents; and restores the root filesystem read-only. Files
+removed from the immutable root are backed up under `/data/astra/retired-nova`
+before migration.
+
+Removing `/etc/modules-load.d/novacap.conf` alone is insufficient. The
+inherited device tree supplies a modalias, so udev auto-probes any installed
+`novacap.ko` and the driver stalls on the retired Nova AXI aperture. The
+migration archives and removes the module, runs `depmod`, and restarts udev to
+release its mappings of atomically replaced `modules.*.bin` files. Linux 6.6
+otherwise returns `EBUSY` from `sb_prepare_remount_readonly()` while those
+deleted mappings contribute to the superblock remove count. The migration now
+fails if it cannot prove that `/` was restored read-only.
+
+The deployed image now uses the integrated 1280x720p60 PS/DDR graphics design,
+not the pattern shell. The release pipeline is deliberately split into
+auditable stages:
+
+- `../build_fsbl.sh` generates and compiles the Zynq FSBL from the exact XSA.
+- `build_device_tree.sh` removes retired Nova nodes, reserves the 128 MiB
+  graphics arena as `no-map`, and assigns the 100/166.667 MHz fabric clocks
+  used by the geometry-qualified release.
+- `build_fit_image.sh` reuses the unchanged Linux kernel and constructs a new
+  verified FIT with the Astra device tree.
+- `make` cross-builds the static ARM graphics loader and live boot-status
+  utility with strict warnings; `make analyze test-host` is required.
+- `../package_boot.sh` builds an exact FSBL/bitstream/U-Boot/DTB `BOOT.BIN`.
+- `deploy_graphics_release.sh` verifies every input hash, retains hash-named
+  rollback files, atomically installs the boot files, assets, and boot/status/
+  sprite/renderer utilities, and leaves `/` read-only.
+
+At early boot, `astra-firstboot` runs `astra-graphics-boot`. The loader maps
+only the reserved physical arena, copies the exact big-endian RGB565 splash,
+executes a data-synchronization barrier, reads every byte back, verifies CRC32,
+programs the validated shadow scene, and waits for frame-boundary promotion.
+It then writes four real boot rows through the boot-text mailbox. The hardware
+renders CP437 glyphs over the blank image and promotes each text bank only at
+vertical blank. The loader has finite timeouts and reports a precise failure;
+it never prints `OK` for a check it did not perform.
+
+`astra-boot-status` updates one row after boot without rebuilding the complete
+plane:
+
+```sh
+/data/astra/bin/astra-boot-status stage 3 'Axiom launch' READY amber
+```
+
+The common MMIO layer validates device identity, version, capabilities, text
+geometry, and origin before use. Both tools are static ARM executables. The
+host formatter tests and GCC static analyzer are part of release packaging.
+
+Active release identities are:
+
+| Artifact | SHA-256 |
+|---|---|
+| `BOOT.BIN` | `9637e1035acb9d1bd6d2bd0eec2e3cf9ca5c13023560af8d2b4f27a546444504` |
+| `image.ub` | `e9ef016f059cb3bc71138edf2a5ae47646a0e11b3dab3b81f7362f592b97b542` |
+| Device tree | `dc04732176732a9fa6fa4bb1293bc64d877308d80f56403c3f5dbf720cd22147` |
+| Graphics loader | `6be16a2515161a9fe98b316e0ddba3c3c516d8393bf8422201ee76df29eebd43` |
+| Boot-status utility | `1cf76956e6a406d0d05247b97262aecffdf7c4e15e96c03141042358f1254020` |
+| Sprite certifier | `0bad57d1a227137fcffd8d5477c98cc5d06187e4e1329e297929b5a7d7e1b52e` |
+| Renderer certifier | `3c62ba876f3df9c29d87e4ed52aa651c12f7d5f098e86cd73ed6c9406c51da9d` |
+| Copper certifier | `28a318ccdaade128e21199c139c20c7aab2c80c3270a9283850bddc43dc8edb3` |
+| Blank RGB565 splash | `86eb30739db77b85f4deb1915fb9cb9263ab4755ae318ffb1b7a4a95b7017ba4` |
+
+The board readback passes all 1,843,200 bytes with CRC32 `611029ee`, activates
+scene generation 1 with zero deferrals, publishes final boot-text generation
+2, and reports the FPGA manager `operating`. Graphics capabilities are
+`0x000003ff`. Ten consecutive renderer-certification runs each execute 29
+fenced commands and verify 1,196,651 result pixels with zero backpressure or
+engine errors. They cover fill, overlap-safe copy, scaling, reflection,
+clipping, keying, every ROP, direct-color conversion, source-over/opacity,
+palette expansion, and MASK1 suppression. The complete sprite hardware
+regression also passes unchanged. Ten consecutive copper certifications pass
+dual-bank execution, WAIT/SKIP, validated MOVE, IRQ, command dispatch, and
+invalid-target containment. Boot-text status is `0x00000007`:
+write-ready, commit-ready, and active.
+Linux System RAM ends at `0x17ffffff`; the arena begins at `0x18000000`, so the
+kernel cannot allocate over graphics memory. An unattended boot reaches login,
+keeps `/` read-only and `/data` read-write, restores persistent SSH, starts
+Samba, and acquires `192.168.1.188`. Complete copper-release hardware evidence
+is retained under
+`/mnt/Documents/astra68/work/render-v1/copper-1/integration-13/hardware-cert`.
+The retained physical HDMI frame is
+`docs/evidence/astra-arty-boot-text6-hdmi-20260730.png`; it confirms all four
+dynamic rows render correctly inside the lower panel.
+
+The inherited userspace still emits nonfatal volatile-directory, unclean FAT,
+RTC, resolver, and interface-naming warnings. The retired Nova reservations and
+device aliases are gone; the remaining warnings are host-image cleanup work,
+not graphics-memory-map failures.

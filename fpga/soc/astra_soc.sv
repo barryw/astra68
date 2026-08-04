@@ -106,11 +106,15 @@ module astra_soc #(
     GSR por_gsr_i (.GSR(1'b1));
 `endif
 
-    // Dedicated 27/135 MHz video clocks. This is the same PLL relationship as
-    // NovaVM's hardware-proven ULX3S 720x480 HDMI path.
+    // Dedicated 27/135 MHz video clocks. Production derives the video PLL
+    // from the legal 60 MHz system-PLL output so CLKOP/CLKOS remain on the
+    // same physical outputs as the last routed design. The SDRAM-disabled
+    // diagnostic topology retains the direct 25 MHz reference.
     wire video_pixel_clk;
     wire video_shift_clk;
     wire video_pll_locked;
+    wire video_reference_clk;
+    wire video_reference_locked;
     generate
         if (HDMI_ENABLE) begin : g_video_clocks
 `ifdef VERILATOR
@@ -122,24 +126,25 @@ module astra_soc #(
 `else
             wire [3:0] video_pll_o;
             ecp5pll #(
-                .in_hz(25000000),
-                .out0_hz(135000000),
-                .out1_hz(27000000),
-                .out2_hz(0),
-                .out3_hz(0)
+                .in_hz(SDRAM_ENABLE ? 60000000 : 25000000),
+                .out0_hz(SDRAM_ENABLE ? 135000000 : 75000000),
+                .out1_hz(SDRAM_ENABLE ? 27000000 : 135000000),
+                .out2_hz(SDRAM_ENABLE ? 0 : 27000000),
+                .out3_hz(0),
+                .reset_en(SDRAM_ENABLE ? 1 : 0)
             ) video_pll (
-                .clk_i(clk25_mhz),
+                .clk_i(SDRAM_ENABLE ? video_reference_clk : clk25_mhz),
                 .clk_o(video_pll_o),
                 .locked(video_pll_locked),
-                .reset(1'b0),
+                .reset(SDRAM_ENABLE ? !video_reference_locked : 1'b0),
                 .standby(1'b0),
                 .phasesel(2'b00),
                 .phasedir(1'b0),
                 .phasestep(1'b0),
                 .phaseloadreg(1'b0)
             );
-            assign video_shift_clk = video_pll_o[0];
-            assign video_pixel_clk = video_pll_o[1];
+            assign video_shift_clk = SDRAM_ENABLE ? video_pll_o[0] : video_pll_o[1];
+            assign video_pixel_clk = SDRAM_ENABLE ? video_pll_o[1] : video_pll_o[2];
 `endif
         end else begin : g_video_clocks_disabled
             assign video_shift_clk = 1'b0;
@@ -207,12 +212,56 @@ module astra_soc #(
     wire        astraea_busy;
     wire        astraea_done;
     wire        astraea_irq;
-    wire        astraea_cache_flush;
+    wire        astraea_dma_active;
     wire [31:0] astraea_blitter_completed_fence;
     wire [31:0] astraea_draw_completed_fence;
     wire        astraea_cop_move_stb;
     wire [17:0] astraea_cop_move_addr;
     wire [31:0] astraea_cop_move_data;
+
+    // DMA reads start only after prior CPU writes have drained and both CPU
+    // caches have been invalidated. The CPU then runs between bounded DMA
+    // chunks. A second fence at completion removes lines that may have been
+    // cached while the engine was writing its destination.
+    localparam [1:0] ASTRAEA_COHERENCE_IDLE = 2'd0;
+    localparam [1:0] ASTRAEA_COHERENCE_PRE  = 2'd1;
+    localparam [1:0] ASTRAEA_COHERENCE_RUN  = 2'd2;
+    localparam [1:0] ASTRAEA_COHERENCE_POST = 2'd3;
+    reg [1:0] astraea_coherence_state = ASTRAEA_COHERENCE_IDLE;
+    wire astraea_cache_flush =
+        astraea_coherence_state == ASTRAEA_COHERENCE_PRE ||
+        astraea_coherence_state == ASTRAEA_COHERENCE_POST;
+    wire astraea_dma_admit_cpu =
+        astraea_coherence_state == ASTRAEA_COHERENCE_RUN;
+
+    always @(posedge clk) begin
+        if (rst || !SDRAM_ENABLE) begin
+            astraea_coherence_state <= ASTRAEA_COHERENCE_IDLE;
+        end else begin
+            case (astraea_coherence_state)
+                ASTRAEA_COHERENCE_IDLE: begin
+                    if (astraea_dma_active)
+                        astraea_coherence_state <= ASTRAEA_COHERENCE_PRE;
+                end
+                ASTRAEA_COHERENCE_PRE: begin
+                    if (!astraea_dma_active)
+                        astraea_coherence_state <= ASTRAEA_COHERENCE_POST;
+                    else if (!sdram_bridge_request_busy)
+                        astraea_coherence_state <= ASTRAEA_COHERENCE_RUN;
+                end
+                ASTRAEA_COHERENCE_RUN: begin
+                    if (!astraea_dma_active)
+                        astraea_coherence_state <= ASTRAEA_COHERENCE_POST;
+                end
+                default: begin
+                    if (astraea_dma_active)
+                        astraea_coherence_state <= ASTRAEA_COHERENCE_PRE;
+                    else if (!sdram_bridge_request_busy)
+                        astraea_coherence_state <= ASTRAEA_COHERENCE_IDLE;
+                end
+            endcase
+        end
+    end
     wire [31:0] vega_rdata;
     wire        vega_irq;
     wire        vega_graphics_active;
@@ -371,14 +420,17 @@ module astra_soc #(
             always #8.333 sd_domain_clk = ~sd_domain_clk;
 `else
             wire       sd_domain_clk;
-            assign sd_domain_clk = sd_pll_o[0];
+            assign sd_domain_clk = sd_pll_o[2];
 `endif
 
+            // CLKOP is an internal 50 MHz feedback clock. The 120 MHz PLL
+            // reference and 60 MHz SDRAM/video-reference clocks are exact
+            // secondary outputs at a legal 25 MHz PFD and 600 MHz VCO.
             ecp5pll #(
                 .in_hz(25000000),
-                .out0_hz(60000000),
-                .out1_hz(USB_ENABLE ? 100000000 : 0),
-                .out2_hz(0),
+                .out0_hz(50000000),
+                .out1_hz(USB_ENABLE ? 120000000 : 0),
+                .out2_hz(60000000),
                 .out3_hz(0)
             ) sdram_pll (
                 .clk_i(clk25_mhz),
@@ -391,32 +443,37 @@ module astra_soc #(
                 .phasestep(1'b0),
                 .phaseloadreg(1'b0)
             );
+            assign video_reference_clk = sd_pll_o[2];
+            assign video_reference_locked = sd_pll_locked;
 
             if (USB_ENABLE) begin : g_usb_phy_clock
-`ifdef VERILATOR
-                reg usb_phy_clk_sim = 1'b0;
-                always #10.417 usb_phy_clk_sim = ~usb_phy_clk_sim;
-                assign usb_phy_clk_internal = usb_phy_clk_sim;
-                assign usb_phy_pll_locked = 1'b1;
-`else
                 wire [3:0] usb_pll_o;
+                // A 120 MHz reference selects a 24 MHz PFD and 576 MHz VCO.
+                // The exact 48 MHz PHY clock remains on CLKOP, matching the
+                // last routed design's global-clock source.
                 ecp5pll #(
-                    .in_hz(100000000),
+                    .in_hz(120000000),
                     .out0_hz(48000000),
                     .out1_hz(0),
                     .out2_hz(0),
-                    .out3_hz(0)
+                    .out3_hz(0),
+                    .reset_en(1)
                 ) usb_pll (
                     .clk_i(sd_pll_o[1]),
                     .clk_o(usb_pll_o),
                     .locked(usb_phy_pll_locked),
-                    .reset(1'b0),
+                    .reset(!sd_pll_locked),
                     .standby(1'b0),
                     .phasesel(2'b00),
                     .phasedir(1'b0),
                     .phasestep(1'b0),
                     .phaseloadreg(1'b0)
                 );
+`ifdef VERILATOR
+                reg usb_phy_clk_sim = 1'b0;
+                always #10.417 usb_phy_clk_sim = ~usb_phy_clk_sim;
+                assign usb_phy_clk_internal = usb_phy_clk_sim;
+`else
                 assign usb_phy_clk_internal = usb_pll_o[0];
 `endif
             end else begin : g_usb_phy_clock_disabled
@@ -864,6 +921,9 @@ module astra_soc #(
             reg dma_use_host = 1'b0;
             reg dma_use_usb = 1'b0;
             reg host_mem_lock_arb = 1'b0;
+            (* async_reg = "true" *) reg [1:0]
+                astraea_dma_admit_sync_mem = 2'b00;
+            wire astraea_dma_admit_mem = astraea_dma_admit_sync_mem[1];
 
             // Retain the encoded view for simulation diagnostics. The datapath
             // below consumes the registered one-hot grants directly.
@@ -879,11 +939,16 @@ module astra_soc #(
             always @(posedge sd_domain_clk) begin
                 if (!sd_locked || sd_manual_reset) begin
                     host_mem_lock_arb <= 1'b0;
+                    astraea_dma_admit_sync_mem <= 2'b00;
                     dma_use_bist <= 1'b0;
                     dma_use_blit <= 1'b0;
                     dma_use_host <= 1'b0;
                     dma_use_usb <= 1'b0;
                 end else begin
+                    astraea_dma_admit_sync_mem <= {
+                        astraea_dma_admit_sync_mem[0],
+                        astraea_dma_admit_cpu
+                    };
                     // Cache fencing begins from the raw service lock, while
                     // arbitration consumes this registered boundary. The
                     // delayed release safely holds ownership for one extra
@@ -908,7 +973,7 @@ module astra_soc #(
                             dma_use_usb <= 1'b1;
                         else if (host_mem_lock_arb)
                             dma_use_host <= 1'b1;
-                        else if (blit_mem_lock)
+                        else if (blit_mem_lock && astraea_dma_admit_mem)
                             dma_use_blit <= 1'b1;
                     end
                 end
@@ -1097,7 +1162,7 @@ module astra_soc #(
                 .cpu_busy(astraea_busy),
                 .cpu_done(astraea_done),
                 .cpu_irq(astraea_irq),
-                .cache_flush(astraea_cache_flush),
+                .cache_flush(astraea_dma_active),
                 .blitter_completed_fence(
                     astraea_blitter_completed_fence),
                 .draw_completed_fence(astraea_draw_completed_fence),
@@ -1125,6 +1190,8 @@ module astra_soc #(
                 .mem_rdata(blit_mem_rdata)
             );
         end else begin : g_sdram_disabled
+            assign video_reference_clk = 1'b0;
+            assign video_reference_locked = 1'b0;
             assign sdram_domain_clk = 1'b0;
             assign sdram_domain_rst = 1'b1;
             assign usb_ctrl_busy = 1'b0;
@@ -1169,7 +1236,7 @@ module astra_soc #(
             assign astraea_busy = 1'b0;
             assign astraea_done = 1'b0;
             assign astraea_irq = 1'b0;
-            assign astraea_cache_flush = 1'b0;
+            assign astraea_dma_active = 1'b0;
             assign astraea_blitter_completed_fence = 32'd0;
             assign astraea_draw_completed_fence = 32'd0;
             assign astraea_cop_move_stb = 1'b0;

@@ -10,6 +10,7 @@ mod musashi;
 use bus::MachineBus;
 pub use bus::RomError;
 use musashi::MusashiCpu;
+use std::{env, fs, path::PathBuf, sync::Arc};
 
 pub const CPU_HZ: u64 = 12_500_000;
 pub const RAM_BYTES: u32 = 32 * 1024 * 1024;
@@ -18,8 +19,6 @@ pub const DISPLAY_HEIGHT: usize = 480;
 pub const POST_COLS: usize = 90;
 pub const POST_ROWS: usize = 30;
 pub const BOOT_TIMEOUT_CYCLES: u64 = 100_000_000;
-
-const DEFAULT_ROM: &[u8] = include_bytes!("../../../rom/astra_boot.bin");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PostState {
@@ -54,6 +53,8 @@ pub struct MachineSnapshot {
     pub kernel_ready: bool,
     pub kernel_soaking: bool,
     pub kernel_panicked: bool,
+    pub display_generation: u64,
+    pub display_rgba: Option<Arc<[u8]>>,
     pub stages: Vec<PostStageSnapshot>,
     pub console_rows: Vec<String>,
 }
@@ -147,7 +148,15 @@ impl Default for AstraMachine {
 
 impl AstraMachine {
     pub fn new() -> Self {
-        Self::try_with_rom(DEFAULT_ROM).expect("embedded Astra boot ROM must be valid")
+        let path = default_rom_path();
+        let rom = fs::read(&path).unwrap_or_else(|error| {
+            panic!(
+                "failed to read Astra boot ROM '{}': {error}; build it with make -C sw/boot or set ASTRA68_BOOT_ROM",
+                path.display()
+            )
+        });
+        Self::try_with_rom(&rom)
+            .unwrap_or_else(|error| panic!("invalid Astra boot ROM '{}': {error}", path.display()))
     }
 
     pub fn try_with_rom(rom: &[u8]) -> Result<Self, RomError> {
@@ -188,6 +197,9 @@ impl AstraMachine {
     pub fn snapshot(&self) -> MachineSnapshot {
         let console_rows = self.bus.console_rows();
         let transcript = rows_to_transcript(&console_rows);
+        let ready_for_loader = self.bus.ready_for_loader();
+        let post_failed = self.bus.post_failed();
+        let kernel_ready = self.bus.kernel_ready();
         MachineSnapshot {
             cycles: self.bus.cycles(),
             cpu_hz: CPU_HZ,
@@ -198,14 +210,17 @@ impl AstraMachine {
             scratch_trace: self.bus.scratch_trace(),
             backend: "MUSASHI 68030 / REAL ROM",
             paused: self.paused,
-            ready_for_loader: self.bus.ready_for_loader(),
-            post_failed: self.bus.post_failed(),
-            kernel_ready: self.bus.kernel_ready(),
+            ready_for_loader,
+            post_failed,
+            kernel_ready,
             kernel_soaking: self.bus.kernel_soaking(),
             kernel_panicked: self.bus.kernel_panicked(),
+            display_generation: self.bus.display_generation(),
+            display_rgba: self.bus.display_rgba(),
             stages: stage_snapshots(
                 &transcript,
-                self.bus.post_failed(),
+                post_failed,
+                ready_for_loader || kernel_ready,
                 self.bus.bist_progress_milli(),
             ),
             console_rows,
@@ -221,9 +236,18 @@ impl AstraMachine {
     }
 }
 
+fn default_rom_path() -> PathBuf {
+    env::var_os("ASTRA68_BOOT_ROM")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../sw/boot/astra_boot.bin")
+        })
+}
+
 fn stage_snapshots(
     transcript: &str,
     post_failed: bool,
+    post_complete: bool,
     bist_progress_milli: u16,
 ) -> Vec<PostStageSnapshot> {
     let mut stages: Vec<_> = POST_STAGES
@@ -252,7 +276,12 @@ fn stage_snapshots(
         })
         .collect();
 
-    if stages.iter().all(|stage| stage.state == PostState::Pending) {
+    if post_complete {
+        for stage in &mut stages {
+            stage.state = PostState::Passed;
+            stage.progress_milli = 1000;
+        }
+    } else if stages.iter().all(|stage| stage.state == PostState::Pending) {
         stages[0].state = PostState::Running;
         stages[0].progress_milli = 100;
     }
@@ -287,11 +316,17 @@ fn rows_to_transcript(rows: &[String]) -> String {
 mod tests {
     use super::*;
 
-    fn run_to_terminal(machine: &mut AstraMachine, chunk_cycles: u64) {
-        while !machine.snapshot().ready_for_loader
-            && !machine.snapshot().post_failed
-            && machine.snapshot().cycles < BOOT_TIMEOUT_CYCLES
-        {
+    fn run_to_boot_complete(machine: &mut AstraMachine, chunk_cycles: u64) {
+        loop {
+            let snapshot = machine.snapshot();
+            if snapshot.ready_for_loader
+                || snapshot.kernel_ready
+                || snapshot.post_failed
+                || snapshot.kernel_panicked
+                || snapshot.cycles >= BOOT_TIMEOUT_CYCLES
+            {
+                break;
+            }
             machine.advance(chunk_cycles);
         }
     }
@@ -308,18 +343,30 @@ mod tests {
     }
 
     #[test]
+    fn completed_post_stages_survive_console_replacement() {
+        let stages = stage_snapshots("KERNEL MULTITASKING\n", false, true, 0);
+
+        assert!(
+            stages
+                .iter()
+                .all(|stage| stage.state == PostState::Passed && stage.progress_milli == 1000)
+        );
+    }
+
+    #[test]
     fn unchanged_boot_rom_completes_post() {
         let mut machine = AstraMachine::new();
-        run_to_terminal(&mut machine, 250_000);
+        run_to_boot_complete(&mut machine, 250_000);
         let snapshot = machine.snapshot();
         let screen = machine.console_transcript();
         let serial = machine.serial_transcript();
 
         assert!(
-            snapshot.ready_for_loader,
+            snapshot.kernel_ready,
             "screen:\n{screen}\nserial:\n{serial}"
         );
         assert!(!snapshot.post_failed);
+        assert!(!snapshot.kernel_panicked);
         assert!(snapshot.cycles < BOOT_TIMEOUT_CYCLES);
         assert!(
             snapshot
@@ -327,9 +374,11 @@ mod tests {
                 .iter()
                 .all(|stage| stage.state == PostState::Passed)
         );
-        assert!(screen.contains("ASTRA 68 SYSTEM ROM v0.3"));
-        assert!(screen.contains("POST PASS"));
-        assert!(screen.contains("READY FOR OS LOADER"));
+        assert!(serial.contains("ASTRA 68 SYSTEM ROM v0.3"));
+        assert!(serial.contains("POST PASS"));
+        assert!(serial.contains("Starting Axiom kernel"));
+        assert!(screen.contains("K1 PROTECTED ENTRY PASS"));
+        assert!(screen.contains("KERNEL MULTITASKING"));
         assert!(!screen.contains("FUNCTIONAL MODEL"));
         assert!(serial.contains("CPU BRAM cycles"));
         assert!(serial.contains("Astraea DMA"));
@@ -338,27 +387,29 @@ mod tests {
     #[test]
     fn post_completion_does_not_halt_the_machine() {
         let mut machine = AstraMachine::new();
-        run_to_terminal(&mut machine, 250_000);
+        run_to_boot_complete(&mut machine, 250_000);
         let completed_at = machine.snapshot().cycles;
 
         machine.advance(10_000);
 
-        assert!(machine.snapshot().ready_for_loader);
-        assert!(machine.snapshot().cycles > completed_at);
+        let snapshot = machine.snapshot();
+        assert!(snapshot.kernel_ready);
+        assert!(!snapshot.kernel_panicked);
+        assert!(snapshot.cycles > completed_at);
     }
 
     #[test]
     fn timeslice_chunking_does_not_change_rom_output() {
         let mut coarse_chunks = AstraMachine::new();
-        run_to_terminal(&mut coarse_chunks, 250_000);
+        run_to_boot_complete(&mut coarse_chunks, 250_000);
 
         let mut many_chunks = AstraMachine::new();
-        run_to_terminal(&mut many_chunks, 50_000);
+        run_to_boot_complete(&mut many_chunks, 50_000);
 
-        assert!(coarse_chunks.snapshot().ready_for_loader);
-        assert!(many_chunks.snapshot().ready_for_loader);
-        // READY is painted before the ROM finishes its final serial summary.
-        // Let both machines drain that bounded tail before comparing output.
+        assert!(coarse_chunks.snapshot().kernel_ready);
+        assert!(many_chunks.snapshot().kernel_ready);
+        // Kernel-ready status precedes the final bounded diagnostic tail.
+        // Let both machines drain it before comparing observable output.
         coarse_chunks.advance(1_000_000);
         many_chunks.advance(1_000_000);
         assert_eq!(

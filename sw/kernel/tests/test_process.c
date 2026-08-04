@@ -9,6 +9,7 @@
 #include "pmmu.h"
 #include "port.h"
 #include "process.h"
+#include "ohci.h"
 #include "qualification.h"
 #include "ring.h"
 #include "sync.h"
@@ -571,10 +572,13 @@ static void initialize_test(void)
               ASTRA_MEMORY_RANGE_ROM_BACKING,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_EXECUTE |
                   ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, 0x03e40000u, 0x001c0000u,
+    add_range(&info, 0x03e40000u, 0x000c0000u,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
+    add_range(&info, OHCI_DMA_POOL_BASE, OHCI_DMA_POOL_SIZE,
+              ASTRA_MEMORY_RANGE_DEVICE,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
     astra_boot_info_finalize(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
     memset(physical_memory, 0xa5, sizeof(physical_memory));
@@ -3978,6 +3982,364 @@ static void test_message_port_syscall_atomicity_and_cleanup(void)
     assert(final.free_frames == baseline.free_frames);
 }
 
+#define MALFORMED_SYSCALL_SEED 0x68c0304bu
+#define MALFORMED_SYSCALL_CASES 4096u
+#define MALFORMED_MESSAGE_CASES 1024u
+
+typedef struct MalformedSyscallCase {
+    uint32_t syscall;
+    uint32_t expected_result;
+} MalformedSyscallCase;
+
+static uint32_t malformed_random(uint32_t *state)
+{
+    uint32_t value = *state;
+
+    value ^= value << 13;
+    value ^= value >> 17;
+    value ^= value << 5;
+    *state = value;
+    return value;
+}
+
+static void malformed_check(bool condition, const char *phase,
+                            uint32_t case_index, uint32_t syscall,
+                            uint32_t observed, uint32_t expected)
+{
+    if (!condition) {
+        fprintf(stderr,
+                "malformed corpus failure: seed=%08x phase=%s case=%u "
+                "syscall=%08x observed=%08x expected=%08x\n",
+                MALFORMED_SYSCALL_SEED, phase, case_index, syscall,
+                observed, expected);
+        fflush(stderr);
+    }
+    assert(condition);
+}
+
+static void test_malformed_syscall_and_message_corpus(void)
+{
+    static const uint8_t image[] = {
+        0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u
+    };
+    static const MalformedSyscallCase cases[] = {
+        {UINT32_MAX, ASTRA_SYSCALL_BAD_SYSCALL},
+        {ASTRA_SYSCALL_CLOSE, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_HANDLE_DUPLICATE, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_THREAD_CREATE, ASTRA_SYSCALL_INVALID_ARGUMENT},
+        {ASTRA_SYSCALL_EVENT_CREATE, ASTRA_SYSCALL_INVALID_ARGUMENT},
+        {ASTRA_SYSCALL_SEMAPHORE_CREATE, ASTRA_SYSCALL_INVALID_ARGUMENT},
+        {ASTRA_SYSCALL_WAIT_ONE, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_WAIT_MULTIPLE, ASTRA_SYSCALL_INVALID_ARGUMENT},
+        {ASTRA_SYSCALL_SIGNAL, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_EVENT_RESET, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_CANCEL_WAIT, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_TIMER_CREATE, ASTRA_SYSCALL_INVALID_ARGUMENT},
+        {ASTRA_SYSCALL_TIMER_SET, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_TIMER_CANCEL, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_PORT_CREATE, ASTRA_SYSCALL_INVALID_ARGUMENT},
+        {ASTRA_SYSCALL_PORT_SEND_TRY, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_PORT_RECEIVE_TRY, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_AREA_CREATE, ASTRA_SYSCALL_INVALID_ARGUMENT},
+        {ASTRA_SYSCALL_AREA_MAP, ASTRA_SYSCALL_INVALID_ARGUMENT},
+        {ASTRA_SYSCALL_AREA_UNMAP, ASTRA_SYSCALL_INVALID_ARGUMENT},
+        {ASTRA_SYSCALL_RING_CREATE, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_RING_NOTIFY, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_IRQ_READ, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_IRQ_ACK, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_IRQ_ARM, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_IRQ_MASK, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_IRQ_RECOVER, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_IRQ_REVOKE, ASTRA_SYSCALL_INVALID_HANDLE},
+    };
+    static const uint32_t bad_message_addresses[] = {
+        0u,
+        1u,
+        UINT32_MAX - 7u,
+        KERNEL_PROCESS_STACK_BASE - 8u,
+        KERNEL_PROCESS_STACK_TOP - 8u,
+    };
+    const uint32_t message_address = KERNEL_PROCESS_STACK_TOP - 2048u;
+    const uint32_t handles_address = KERNEL_PROCESS_STACK_TOP - 1536u;
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 3072u;
+    KernelMemoryStats system_baseline;
+    KernelMemoryStats process_baseline;
+    KernelMemoryStats current_memory;
+    TestAllocationBaseline allocation_baseline;
+    KernelSchedulerStats stats;
+    KernelPortPoolStats port_stats;
+    KernelCpuContext *next;
+    KernelProcessStatus process_status;
+    AstraMessageHeader header;
+    uint8_t message[ASTRA_MESSAGE_SIZE_MAX];
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT];
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+    uint32_t receive_handle;
+    uint32_t send_handle;
+    uint32_t state = MALFORMED_SYSCALL_SEED;
+    uint32_t handle_baseline;
+    uint32_t invalid_handle = KERNEL_HANDLE_INVALID;
+
+    initialize_test();
+    assert(kernel_memory_stats(&system_baseline));
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(kernel_memory_stats(&process_baseline));
+    capture_allocation_baseline(&allocation_baseline);
+    handle_baseline = kernel_process_test_handle_count(process_id);
+
+    for (uint32_t case_index = 0u;
+         case_index < MALFORMED_SYSCALL_CASES; ++case_index) {
+        const MalformedSyscallCase *test_case =
+            &cases[case_index % (sizeof(cases) / sizeof(cases[0]))];
+        uint32_t syscall = test_case->syscall;
+
+        for (uint32_t reg = 0u; reg < KERNEL_CONTEXT_REGISTER_COUNT; ++reg)
+            registers[reg] = malformed_random(&state);
+        if (syscall == UINT32_MAX)
+            syscall = malformed_random(&state) | 0x80000000u;
+        registers[0] = syscall;
+        switch (test_case->syscall) {
+        case ASTRA_SYSCALL_CLOSE:
+        case ASTRA_SYSCALL_HANDLE_DUPLICATE:
+        case ASTRA_SYSCALL_SIGNAL:
+        case ASTRA_SYSCALL_EVENT_RESET:
+        case ASTRA_SYSCALL_CANCEL_WAIT:
+        case ASTRA_SYSCALL_TIMER_CANCEL:
+        case ASTRA_SYSCALL_PORT_SEND_TRY:
+        case ASTRA_SYSCALL_PORT_RECEIVE_TRY:
+        case ASTRA_SYSCALL_RING_CREATE:
+        case ASTRA_SYSCALL_RING_NOTIFY:
+        case ASTRA_SYSCALL_IRQ_READ:
+        case ASTRA_SYSCALL_IRQ_ACK:
+        case ASTRA_SYSCALL_IRQ_ARM:
+        case ASTRA_SYSCALL_IRQ_MASK:
+        case ASTRA_SYSCALL_IRQ_RECOVER:
+        case ASTRA_SYSCALL_IRQ_REVOKE:
+            registers[1] = KERNEL_HANDLE_INVALID;
+            break;
+        case ASTRA_SYSCALL_THREAD_CREATE:
+            registers[1] = KERNEL_PROCESS_CODE_BASE + 1u;
+            break;
+        case ASTRA_SYSCALL_EVENT_CREATE:
+            registers[2] = 1u << 31;
+            break;
+        case ASTRA_SYSCALL_SEMAPHORE_CREATE:
+            registers[3] = 1u << 31;
+            break;
+        case ASTRA_SYSCALL_WAIT_ONE:
+            registers[1] = KERNEL_HANDLE_INVALID;
+            registers[2] = ASTRA_DEADLINE_NONE_HI;
+            registers[3] = ASTRA_DEADLINE_NONE_LO;
+            break;
+        case ASTRA_SYSCALL_WAIT_MULTIPLE:
+            registers[2] = 0u;
+            break;
+        case ASTRA_SYSCALL_TIMER_CREATE:
+            registers[1] = 1u << 31;
+            break;
+        case ASTRA_SYSCALL_TIMER_SET:
+            registers[1] = KERNEL_HANDLE_INVALID;
+            registers[2] = ASTRA_DEADLINE_NONE_HI;
+            registers[3] = ASTRA_DEADLINE_NONE_LO;
+            break;
+        case ASTRA_SYSCALL_PORT_CREATE:
+            registers[1] = 0u;
+            break;
+        case ASTRA_SYSCALL_AREA_CREATE:
+            registers[2] = 1u << 31;
+            break;
+        case ASTRA_SYSCALL_AREA_MAP:
+            registers[2] = 0u;
+            break;
+        case ASTRA_SYSCALL_AREA_UNMAP:
+            registers[1] = 0u;
+            break;
+        default:
+            break;
+        }
+
+        process_status = kernel_process_on_syscall(
+            registers, user_stack, frame, &next);
+        malformed_check(process_status == KERNEL_PROCESS_OK, "syscall-status",
+                        case_index, syscall, (uint32_t)process_status,
+                        (uint32_t)KERNEL_PROCESS_OK);
+        malformed_check(next != NULL, "syscall-context", case_index,
+                        syscall, next == NULL ? 0u : 1u, 1u);
+        malformed_check(next->data[0] == test_case->expected_result,
+                        "syscall-result", case_index, syscall,
+                        next->data[0], test_case->expected_result);
+
+        if ((case_index & 63u) == 63u) {
+            assert(kernel_process_test_handle_count(process_id) ==
+                   handle_baseline);
+            assert(kernel_memory_stats(&current_memory));
+            assert(current_memory.free_frames ==
+                   process_baseline.free_frames);
+            assert_allocation_baseline(&allocation_baseline);
+            assert(kernel_sync_pool_valid());
+            assert(kernel_thread_pool_valid());
+            assert(kernel_port_pool_valid());
+            assert(kernel_area_pool_valid());
+            assert(kernel_ring_pool_valid());
+            assert(kernel_irq_pool_valid());
+            assert(kernel_handle_transfer_pool_valid());
+        }
+    }
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_CREATE;
+    registers[1] = ASTRA_PORT_MESSAGES_MAX;
+    registers[2] = ASTRA_PORT_BYTES_MAX;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    receive_handle = next->data[1];
+    send_handle = next->data[2];
+    handle_baseline = kernel_process_test_handle_count(process_id);
+    capture_allocation_baseline(&allocation_baseline);
+    assert(kernel_memory_stats(&process_baseline));
+
+    for (uint32_t case_index = 0u;
+         case_index < MALFORMED_MESSAGE_CASES; ++case_index) {
+        uint32_t message_size = ASTRA_MESSAGE_HEADER_SIZE +
+            malformed_random(&state) % (ASTRA_MESSAGE_INLINE_MAX + 1u);
+
+        for (uint32_t offset = 0u; offset < message_size; ++offset)
+            message[offset] = (uint8_t)malformed_random(&state);
+        memset(&header, 0, sizeof(header));
+        header.total_size = message_size;
+        header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
+        switch (case_index & 3u) {
+        case 0u:
+            header.total_size = message_size ^ 1u;
+            break;
+        case 1u:
+            header.header_size = ASTRA_MESSAGE_HEADER_SIZE + 4u;
+            break;
+        case 2u:
+            header.flags = (uint16_t)(malformed_random(&state) | 1u);
+            break;
+        default:
+            header.reserved = (uint16_t)(malformed_random(&state) | 1u);
+            break;
+        }
+        memcpy(message, &header, sizeof(header));
+        assert(kernel_user_copy_to_asm(message_address, message,
+                                       message_size) ==
+               KERNEL_USER_COPY_OK);
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_PORT_SEND_TRY;
+        registers[1] = send_handle;
+        registers[2] = message_address;
+        registers[3] = message_size;
+        process_status = kernel_process_on_syscall(
+            registers, user_stack, frame, &next);
+        malformed_check(process_status == KERNEL_PROCESS_OK,
+                        "message-status", case_index,
+                        ASTRA_SYSCALL_PORT_SEND_TRY,
+                        (uint32_t)process_status,
+                        (uint32_t)KERNEL_PROCESS_OK);
+        malformed_check(next != NULL, "message-context", case_index,
+                        ASTRA_SYSCALL_PORT_SEND_TRY,
+                        next == NULL ? 0u : 1u, 1u);
+        malformed_check(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT,
+                        "message-result", case_index,
+                        ASTRA_SYSCALL_PORT_SEND_TRY, next->data[0],
+                        ASTRA_SYSCALL_INVALID_ARGUMENT);
+    }
+
+    memset(message, 0, ASTRA_MESSAGE_HEADER_SIZE);
+    memset(&header, 0, sizeof(header));
+    header.total_size = ASTRA_MESSAGE_HEADER_SIZE;
+    header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
+    memcpy(message, &header, sizeof(header));
+    assert(kernel_user_copy_to_asm(message_address, message,
+                                   ASTRA_MESSAGE_HEADER_SIZE) ==
+           KERNEL_USER_COPY_OK);
+    for (uint32_t case_index = 0u;
+         case_index < sizeof(bad_message_addresses) /
+                          sizeof(bad_message_addresses[0]); ++case_index) {
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_PORT_SEND_TRY;
+        registers[1] = send_handle;
+        registers[2] = bad_message_addresses[case_index];
+        registers[3] = ASTRA_MESSAGE_HEADER_SIZE;
+        process_status = kernel_process_on_syscall(
+            registers, user_stack, frame, &next);
+        malformed_check(process_status == KERNEL_PROCESS_OK,
+                        "message-address-status", case_index,
+                        ASTRA_SYSCALL_PORT_SEND_TRY,
+                        (uint32_t)process_status,
+                        (uint32_t)KERNEL_PROCESS_OK);
+        malformed_check(next != NULL, "message-address-context", case_index,
+                        ASTRA_SYSCALL_PORT_SEND_TRY,
+                        next == NULL ? 0u : 1u, 1u);
+        malformed_check(next->data[0] == ASTRA_SYSCALL_BAD_ADDRESS,
+                        "message-address-result", case_index,
+                        ASTRA_SYSCALL_PORT_SEND_TRY, next->data[0],
+                        ASTRA_SYSCALL_BAD_ADDRESS);
+    }
+
+    assert(kernel_user_copy_to_asm(handles_address, &invalid_handle,
+                                   sizeof(invalid_handle)) ==
+           KERNEL_USER_COPY_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PORT_SEND_TRY;
+    registers[1] = send_handle;
+    registers[2] = message_address;
+    registers[3] = ASTRA_MESSAGE_HEADER_SIZE;
+    registers[4] = handles_address;
+    registers[5] = 1u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+
+    registers[4] = handles_address + 1u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    registers[4] = handles_address;
+    registers[5] = ASTRA_MESSAGE_HANDLES_MAX + 1u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    assert(kernel_process_test_handle_count(process_id) == handle_baseline);
+    assert(kernel_memory_stats(&current_memory));
+    assert(current_memory.free_frames == process_baseline.free_frames);
+    assert_allocation_baseline(&allocation_baseline);
+    assert(kernel_process_stats(&stats));
+    assert(kernel_port_pool_stats(&port_stats));
+    assert(stats.port_queued_messages == 0u);
+    assert(stats.port_queued_bytes == 0u);
+    assert(stats.port_queued_handles == 0u);
+    assert(port_stats.active_ports == 1u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CLOSE;
+    registers[1] = receive_handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    registers[1] = send_handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_EXIT;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(kernel_memory_stats(&current_memory));
+    assert(current_memory.free_frames == system_baseline.free_frames);
+}
+
 static void test_shared_area_and_bulk_ring_syscalls(void)
 {
     static const uint8_t image[] = {
@@ -4533,6 +4895,7 @@ int main(void)
     test_process_death_wait_handle_lifetime_and_slot_reuse();
     test_process_fault_death_reports_peer_dead();
     test_message_port_syscall_atomicity_and_cleanup();
+    test_malformed_syscall_and_message_corpus();
     test_shared_area_and_bulk_ring_syscalls();
     test_area_publication_rolls_back_when_handle_table_full();
     test_area_and_ring_endpoint_transfer_over_port();
