@@ -1,6 +1,28 @@
-# lwext4 big-endian evaluation
+# lwext4 big-endian qualification
 
-Status: candidate qualified far enough to keep; not adopted, not vendored
+Status: **adopted and vendored** at `third_party/lwext4` on 2026-08-05. This
+directory is no longer an evaluation of an external checkout; it is the
+big-endian regression gate for the vendored tree.
+
+What changed with adoption:
+
+- `LWEXT4_DIR` and `make patch` are gone. The vendored tree is already patched,
+  and `third_party/lwext4/astra/patches/` holds the patches as the audit
+  record.
+- The rig builds the storage suite's own `tests/test_ext4_mount.c` against the
+  shipped port, profile and bounded allocator, rather than a bespoke probe. The
+  thing under test is now the thing that ships.
+- `src/probe.c` and the `src/*alloc*.c` helpers are retained as the record of
+  the original evaluation; they are not built by the current Makefile.
+- The allocator class table is measured here, on LP32, because a host
+  measurement describes a different workload — see `make measure`.
+
+Everything below is the original evaluation, kept because it is the evidence
+the adoption decision rests on.
+
+---
+
+# lwext4 big-endian evaluation (historical)
 
 `docs/STORAGE_AND_VFS.md` names a constrained 4 KiB-block ext4 profile as the
 leading native writable volume and `lwext4` as one candidate implementation.

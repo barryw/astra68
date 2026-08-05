@@ -1,102 +1,120 @@
-# lwext4 big-endian evaluation rig.
+# lwext4 big-endian qualification rig.
 #
-# lwext4 is not vendored. Point LWEXT4_DIR at a checkout of
-# https://github.com/gkostka/lwext4 (evaluated at
-# 58bcf89a121b72d4fb66334f1693d3b30e4cb9c5), apply patches/, then build the
-# host and MC68030 probes.
+# lwext4 is now vendored at ../../../../third_party/lwext4 with the three
+# big-endian defect patches applied in tree, so this rig no longer points at an
+# external checkout and no longer applies patches. What it does now is keep the
+# vendored tree honest: it builds the same port, the same build profile and the
+# same bounded allocator the MC68030 service ships, as a Linux user-mode m68k
+# binary, and runs the storage suite's own mount test under qemu-m68k against a
+# real mke2fs image that e2fsck then judges.
 #
-# The m68k probe is a Linux user-mode binary run under qemu-m68k. It exists to
-# qualify lwext4's big-endian behaviour and its allocation and size budgets
-# before any decision to run it inside an Astra service.
+# This is the only place big-endian and LP32 are both visible. That is also why
+# the allocator class table is measured here and not on the host: an m68k
+# struct carrying a pointer is smaller than the host's and lands in a different
+# size class, so host peaks describe a different workload.
+#
+# Needs on Beast: m68k-linux-gnu-gcc, a user-mode qemu-m68k, mke2fs, e2fsck.
 
-LWEXT4_DIR ?= $(CURDIR)/lwext4
-ALLOC_DIR ?= $(CURDIR)/../../alloc
+LWEXT4 ?= ../../../../third_party/lwext4
+USERSPACE := ../..
+STORAGE := $(USERSPACE)/storage
+ALLOC_DIR ?= $(USERSPACE)/alloc
 QEMU_M68K ?= qemu-m68k
 IMAGE ?= build/probe.img
-IMAGE_MB ?= 32
+IMAGE_MB ?= 16
 BLOCK_SIZE ?= 4096
+MKE2FS ?= mke2fs
+E2FSCK ?= e2fsck
 
 CROSS ?= m68k-linux-gnu-
 HOST_CC ?= gcc
 
-CPPFLAGS := -Iinclude -I$(LWEXT4_DIR)/include -I$(LWEXT4_DIR)/blockdev/linux \
-	-DCONFIG_USE_DEFAULT_CONFIG=0
-COMMON_FLAGS := -std=gnu11 -O0 -g -fno-strict-aliasing
+# The frozen mkfs profile, kept identical to sw/userspace/storage/Makefile.
+MKFS_FEATURES := ^64bit,^casefold,^extent,^ext_attr,^metadata_csum_seed
+
+# ext4_mkfs.c and ext4_mbr.c are vendored but never built; see
+# third_party/lwext4/ASTRA_VENDOR.md.
+LWEXT4_SOURCES := $(filter-out %/ext4_mkfs.c %/ext4_mbr.c, \
+	$(wildcard $(LWEXT4)/src/*.c))
+
+CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
+	-I$(STORAGE)/include -I$(USERSPACE)/../include \
+	-I$(USERSPACE)/runtime/include -I$(ALLOC_DIR)/include \
+	-DCONFIG_USE_DEFAULT_CFG=0
+COMMON_FLAGS := -std=gnu11 -O2 -g -fno-strict-aliasing
 TARGET_FLAGS := -static -m68030
 SIZE_FLAGS := -std=gnu11 -Os -m68030 -msoft-float -ffreestanding -fno-builtin \
-	-ffunction-sections -fdata-sections -DCONFIG_DEBUG_PRINTF=0 \
-	-DCONFIG_DEBUG_ASSERT=0
+	-ffunction-sections -fdata-sections
 
-FULL_SOURCES := $(wildcard $(LWEXT4_DIR)/src/*.c)
-BSD_SOURCES := $(filter-out %/ext4_extent.c %/ext4_xattr.c,$(FULL_SOURCES))
-BACKEND := $(LWEXT4_DIR)/blockdev/linux/file_dev.c
+# Exactly the sources the service links, plus the mount test that drives them.
+PORT_SOURCES := $(STORAGE)/src/block_device.c $(STORAGE)/src/memory_block.c \
+	$(STORAGE)/src/ext4_port.c $(STORAGE)/src/ext4_alloc.c \
+	$(STORAGE)/src/ext4_xattr_stub.c $(ALLOC_DIR)/src/alloc.c
+MOUNT_TEST := $(STORAGE)/tests/test_ext4_mount.c
+MOUNT_INPUTS := $(MOUNT_TEST) $(PORT_SOURCES) $(LWEXT4_SOURCES)
 
-all: build/probe-host build/probe-m68k
+all: build/mount-m68k build/mount-host
 
-build/probe-host: src/probe.c $(FULL_SOURCES) $(BACKEND)
-	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $^ -o $@
-
-build/probe-m68k: src/probe.c $(FULL_SOURCES) $(BACKEND)
+# Big-endian, 32-bit, run under qemu-m68k. This is the run that counts.
+build/mount-m68k: $(MOUNT_INPUTS)
 	@mkdir -p $(@D)
 	$(CROSS)gcc $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $^ -o $@
 
-# GPL-free profile: ext4_extent.c and ext4_xattr.c are the only GPLv2 files.
-build/probe-m68k-bsd: src/probe.c src/xattr_stub.c $(BSD_SOURCES) $(BACKEND)
+# The little-endian reference over the same sources.
+build/mount-host: $(MOUNT_INPUTS)
 	@mkdir -p $(@D)
-	$(CROSS)gcc $(CPPFLAGS) -DASTRA_PROFILE_BSD $(COMMON_FLAGS) \
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $^ -o $@
+
+# The control that separates a big-endian defect from a 32-bit or m68k ABI one:
+# LP32 and m68k are unchanged, only the endian conversions are switched off.
+#
+# It is a diagnostic, not a gate, and it is deliberately not wired into any
+# target that runs it. Against a real mke2fs image it MUST fail to mount with
+# ENOTSUP, because it reads a little-endian superblock as native big-endian.
+# That failure is the control working. Reach for it when the big-endian build
+# misbehaves and the question is whether the cause is endianness at all: a
+# defect that reproduces here as well is not an endian defect.
+build/mount-m68k-le: $(MOUNT_INPUTS)
+	@mkdir -p $(@D)
+	$(CROSS)gcc $(CPPFLAGS) -DASTRA_FORCE_LE $(COMMON_FLAGS) \
 		$(TARGET_FLAGS) $^ -o $@
 
-build/probe-m68k-alloc: src/probe.c src/alloc_track.c $(FULL_SOURCES) $(BACKEND)
-	@mkdir -p $(@D)
-	$(CROSS)gcc $(CPPFLAGS) -DCONFIG_USE_USER_MALLOC=1 -DASTRA_TRACK_ALLOC \
-		$(COMMON_FLAGS) $(TARGET_FLAGS) $^ -o $@
+# Always rebuilt, never cached: the test writes the image back so e2fsck can
+# judge it, so a failed run leaves a half-populated volume that would otherwise
+# be inherited by the next one.
+image:
+	@mkdir -p $(dir $(IMAGE))
+	dd if=/dev/zero of=$(IMAGE) bs=1M count=$(IMAGE_MB) status=none
+	$(MKE2FS) -q -t ext4 -b $(BLOCK_SIZE) -I 256 -O $(MKFS_FEATURES) -F \
+		$(IMAGE)
 
-# Same workload carried by the real bounded allocator instead of the host heap.
-build/probe-m68k-astra-alloc: src/probe.c src/port_alloc.c $(ALLOC_DIR)/src/alloc.c \
-		$(FULL_SOURCES) $(BACKEND)
-	@mkdir -p $(@D)
-	$(CROSS)gcc $(CPPFLAGS) -I$(ALLOC_DIR)/include \
-		-DCONFIG_USE_USER_MALLOC=1 -DASTRA_TRACK_ALLOC \
-		$(COMMON_FLAGS) $(TARGET_FLAGS) $^ -o $@
+# Format offline with mke2fs, populate big-endian through the Astra port, then
+# verify with the tool that shares no code with lwext4.
+interop: build/mount-m68k image
+	$(QEMU_M68K) build/mount-m68k $(IMAGE)
+	$(E2FSCK) -fn $(IMAGE)
 
-patch:
-	for p in patches/*.patch; do patch -d $(LWEXT4_DIR) -p1 -N < $$p || true; done
+# Re-reading a volume the big-endian build already wrote proves the other
+# direction: the second run mounts what the first one left and re-verifies
+# every file before touching anything.
+reread: build/mount-m68k image
+	$(QEMU_M68K) build/mount-m68k $(IMAGE)
+	$(QEMU_M68K) build/mount-m68k $(IMAGE) verify-only
+	$(E2FSCK) -fn $(IMAGE)
 
-$(IMAGE):
-	@mkdir -p $(@D)
-	dd if=/dev/zero of=$@ bs=1M count=$(IMAGE_MB) status=none
-	mke2fs -q -t ext4 -b $(BLOCK_SIZE) -I 256 -O ^64bit,^casefold -F $@
-
-# Format offline with mke2fs, populate big-endian, then verify with the tools
-# that do not share lwext4's code: e2fsck and the Linux ext4 driver.
-interop: build/probe-m68k $(IMAGE)
-	$(QEMU_M68K) build/probe-m68k $(IMAGE) populate
-	e2fsck -fn $(IMAGE)
-
-alloc: build/probe-m68k-alloc $(IMAGE)
-	$(QEMU_M68K) build/probe-m68k-alloc $(IMAGE) populate
-
-# Qualifies libastraalloc under lwext4's real allocation pattern, big-endian.
-astra-alloc: build/probe-m68k-astra-alloc $(IMAGE)
-	$(QEMU_M68K) build/probe-m68k-astra-alloc $(IMAGE) populate
+# The allocator class table is measured from this run, not from a host one.
+measure: build/mount-m68k image
+	$(QEMU_M68K) build/mount-m68k $(IMAGE)
 
 size:
-	@mkdir -p build/size/full build/size/bsd
-	@for f in $(FULL_SOURCES); do \
+	@mkdir -p build/size
+	@for f in $(LWEXT4_SOURCES); do \
 		$(CROSS)gcc $(CPPFLAGS) $(SIZE_FLAGS) -c $$f \
-			-o build/size/full/`basename $$f .c`.o; done
-	@for f in $(BSD_SOURCES); do \
-		$(CROSS)gcc $(CPPFLAGS) -DASTRA_PROFILE_BSD $(SIZE_FLAGS) -c $$f \
-			-o build/size/bsd/`basename $$f .c`.o; done
-	@$(CROSS)gcc $(CPPFLAGS) -DASTRA_PROFILE_BSD $(SIZE_FLAGS) \
-		-c src/xattr_stub.c -o build/size/bsd/xattr_stub.o
-	@echo "full profile (extents + xattr, includes GPLv2 files):"
-	@$(CROSS)size -t build/size/full/*.o | tail -1
-	@echo "BSD-only profile (no extents, no xattr):"
-	@$(CROSS)size -t build/size/bsd/*.o | tail -1
+			-o build/size/`basename $$f .c`.o; done
+	@echo "lwext4 BSD-3 profile (no extents, no xattr, no mkfs, no mbr):"
+	@$(CROSS)size -t build/size/*.o | tail -1
 
 clean:
 	rm -rf build
 
-.PHONY: all patch interop alloc astra-alloc size clean
+.PHONY: all image interop reread measure size clean
