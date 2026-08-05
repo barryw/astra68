@@ -87,6 +87,75 @@ astra_block_collect(uint32_t device, uint32_t block_request,
     return result.status;
 }
 
+uint64_t
+astra_clock_monotonic(void)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_CLOCK_MONOTONIC, 0u, 0u, 0u, 0u, 0u,
+                   &result);
+    if (result.status != ASTRA_SYSCALL_OK) {
+        return 0u;
+    }
+    return ((uint64_t)result.value0 << 32) | result.value1;
+}
+
+/*
+ * Deadlines are absolute monotonic nanoseconds. ASTRA_DEADLINE_NONE waits
+ * forever, which a service may do but a boot check may not.
+ */
+uint32_t
+astra_wait_one(uint32_t handle, uint64_t deadline_ns, uint32_t *detail)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_WAIT_ONE, handle,
+                   (uint32_t)(deadline_ns >> 32), (uint32_t)deadline_ns, 0u,
+                   0u, &result);
+    if (detail != NULL) {
+        *detail = result.value0;
+    }
+    return result.status;
+}
+
+uint32_t
+astra_irq_arm(uint32_t handle)
+{
+    return invoke(ASTRA_SYSCALL_IRQ_ARM, handle).status;
+}
+
+uint32_t
+astra_irq_read(uint32_t handle, AstraIrqRecord *record, uint32_t *events)
+{
+    AstraSyscallResult result;
+
+    if (record == NULL) {
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    astra_syscall5(ASTRA_SYSCALL_IRQ_READ, handle,
+                   (uint32_t)(uintptr_t)record, 0u, 0u, 0u, &result);
+    if (events != NULL) {
+        *events = result.value0;
+    }
+    return result.status;
+}
+
+uint32_t
+astra_irq_ack(uint32_t handle, uint32_t sequence)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_IRQ_ACK, handle, sequence, 0u, 0u, 0u,
+                   &result);
+    return result.status;
+}
+
+uint32_t
+astra_device_reset(uint32_t handle)
+{
+    return invoke(ASTRA_SYSCALL_DEVICE_RESET, handle).status;
+}
+
 uint32_t
 astra_process_info(uint32_t handle, AstraProcessInfo *info)
 {

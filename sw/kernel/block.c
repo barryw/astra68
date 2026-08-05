@@ -147,6 +147,18 @@ static bool refresh_device_state(void)
     if (changed) {
         device_generation = kernel_generation_next(device_generation);
     }
+    /*
+     * The transport raises its storage interrupt for two reasons: a queued
+     * completion and a pending state change. The interrupt cannot be
+     * acknowledged while either is outstanding, so the engine clears the state
+     * change as soon as it has read the state that caused it. Leaving it set
+     * makes every acknowledgement by the service that owns the endpoint fail,
+     * which looks like a device error and is really an unread notification.
+     *
+     * A service still learns about media changes: the generations it sees in
+     * geometry and in completions are what carry that, not this bit.
+     */
+    kernel_platform_block_ack_state();
     return true;
 }
 

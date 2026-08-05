@@ -31,6 +31,14 @@ uint32_t astra_query_abi(uint32_t *abi_version, uint32_t *process_handle,
 uint32_t astra_process_info(uint32_t handle, AstraProcessInfo *info);
 uint32_t astra_progress(uint32_t value);
 uint32_t astra_device_query(uint32_t handle, AstraDeviceInfo *info);
+uint32_t astra_device_reset(uint32_t handle);
+uint64_t astra_clock_monotonic(void);
+uint32_t astra_wait_one(uint32_t handle, uint64_t deadline_ns,
+                        uint32_t *detail);
+uint32_t astra_irq_arm(uint32_t handle);
+uint32_t astra_irq_read(uint32_t handle, AstraIrqRecord *record,
+                        uint32_t *events);
+uint32_t astra_irq_ack(uint32_t handle, uint32_t sequence);
 uint32_t astra_dma_create(uint32_t byte_size, AstraDmaBufferInfo *info);
 uint32_t astra_block_query(uint32_t device, AstraBlockGeometry *geometry);
 uint32_t astra_block_submit(uint32_t device, const AstraBlockRequest *request,

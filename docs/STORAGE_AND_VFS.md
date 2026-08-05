@@ -94,12 +94,34 @@ cached state. A reset the service asks for terminates its in-flight requests
 with a status it can still collect, so a reset cannot leave it waiting for a
 completion the device will never send.
 
-Two things are deliberately not there yet. The service polls `BLOCK_COLLECT`
-rather than waiting on the completion endpoint it holds — the endpoint is the
-right thing to wait on and the service loop will, but a boot check that must
-terminate either way does not need it. And a per-request timeout is not
-enforced by the kernel; the ceilings bound resource use, but a device that
-never answers currently leaves a request outstanding until reset.
+The service waits on the completion endpoint it was granted rather than
+polling, and the wait carries a deadline. Three rules came out of making that
+work:
+
+- **Arm before submitting.** A granted endpoint starts masked, so the
+  interrupt source is disabled until its first arm. Arming after submission
+  leaves a window in which the completion fires into a disabled source and the
+  service then waits for an interrupt that already happened.
+- **A record must be read and acknowledged before the next arm.** Leaving one
+  queued refuses every later arm and strands the service, so a completion
+  taken by the fast path still drains the endpoint.
+- **The engine clears the transport's state-change notification** once it has
+  read the state behind it. The storage interrupt has two causes, a queued
+  completion and a state change, and it cannot be acknowledged while either is
+  outstanding. The initial media-present notification was never cleared, so
+  the first acknowledgement by the endpoint's owner failed and read as a
+  device error. Services still learn about media changes through the
+  generations in geometry and completions.
+
+A device that never answers is now bounded rather than a hang: the wait
+deadline expires, the service resets the device, and the reset ends every
+in-flight request with a status it can still collect. The kernel does not
+enforce a deadline of its own — the waiter's deadline is the timeout, which
+means a service that chooses to wait forever still can.
+
+In a `K1_QUALIFICATION=1` build the initial image receives no block
+capabilities: that harness owns every device IRQ source, and a source has
+exactly one owner.
 
 ## Arty bring-up backend
 

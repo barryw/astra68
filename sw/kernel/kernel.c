@@ -916,6 +916,13 @@ static void start_initial_user_image(void)
      * as part of the load, so a grant failure unwinds the whole launch.
      */
     kernel_bytes_clear(capabilities, sizeof(capabilities));
+    /*
+     * The qualification harness owns every device IRQ source in its build, and
+     * a source has exactly one owner. Granting the storage endpoint here would
+     * take it from the harness and fail the K10 device gate, so the
+     * qualification build runs the initial image without block capabilities.
+     */
+#if !ASTRA_KERNEL_K1_QUALIFICATION
     if (kernel_platform_block_present()) {
         capabilities[capability_count].name = ASTRA_CAPABILITY_BLOCK_DEVICE;
         capabilities[capability_count].kind =
@@ -929,6 +936,7 @@ static void start_initial_user_image(void)
         capabilities[capability_count].rights = KERNEL_IRQ_RIGHTS;
         ++capability_count;
     }
+#endif
 
     status = kernel_process_create_executable(
         (const void *)(uintptr_t)boot_info.user_image_base,
@@ -979,9 +987,25 @@ void kernel_process_initial_image_progress(uint32_t stage)
     case ASTRA_SUPERVISOR_STAGE_BLOCK_ONLINE:
         console_puts("block geometry read\n");
         break;
-    case ASTRA_SUPERVISOR_STAGE_BLOCK_VERIFIED:
-        console_puts("block round-trip verified, service resident\n");
+    case ASTRA_SUPERVISOR_STAGE_BLOCK_VERIFIED: {
+        KernelIrqPoolStats irq_stats;
+
+        console_puts("block round-trip verified, service resident");
+        /*
+         * Whether the service actually waited on its completion endpoint is
+         * not visible from the outside, and a round-trip that never blocked
+         * would leave the interrupt path unexercised at boot. The counters
+         * say which happened.
+         */
+        if (kernel_irq_pool_stats(&irq_stats)) {
+            console_puts(", irq delivered/acked=");
+            console_dec32(irq_stats.deliveries);
+            console_putc('/');
+            console_dec32(irq_stats.acknowledgements);
+        }
+        console_putc('\n');
         break;
+    }
     default:
         console_puts("stage ");
         console_dec32(stage);

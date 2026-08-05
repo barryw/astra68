@@ -24,6 +24,18 @@ static uint64_t submitted_lba;
 static uint16_t submitted_sectors;
 static uint32_t submitted_buffer;
 
+static uint32_t state_acknowledgements;
+
+/*
+ * The engine clears the transport's state-change notification once it has read
+ * the state behind it; without that, the owner of the storage endpoint can
+ * never acknowledge its interrupt.
+ */
+void kernel_platform_block_ack_state(void)
+{
+    ++state_acknowledgements;
+}
+
 bool kernel_platform_block_state(KernelPlatformBlockState *state)
 {
     if (!fake_state_available || state == NULL)
