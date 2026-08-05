@@ -8,6 +8,13 @@
 #include <astra/process.h>
 #include <astra/syscall.h>
 
+/*
+ * Exit status of a process that failed an assertion, tagged the same way the
+ * supervisor tags its own result: "AS" in the high halfword, the failing
+ * source line in the low one.
+ */
+#define ASTRA_ASSERT_STATUS_TAG 0x41530000u
+
 typedef struct AstraSyscallResult {
     uint32_t status;
     uint32_t value0;
@@ -46,6 +53,10 @@ uint32_t astra_block_lease_submit(uint32_t device, const AstraBlockRequest *requ
 uint32_t astra_block_lease_collect(uint32_t device, uint32_t block_request,
                              AstraBlockCompletion *completion);
 void astra_process_exit(uint32_t status) __attribute__((noreturn));
+
+/* Declared identically by the freestanding <assert.h> vendored code sees. */
+void astra_assert_failed(const char *file, unsigned int line,
+                         const char *expression) __attribute__((noreturn));
 void astra_thread_exit(uint32_t status) __attribute__((noreturn));
 
 int astra_main(const AstraStartupInfo *startup);

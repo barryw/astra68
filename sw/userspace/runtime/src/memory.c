@@ -96,6 +96,16 @@ strncmp(const char *left, const char *right, size_t count)
 }
 
 char *
+strcpy(char *destination, const char *source)
+{
+    char *out = destination;
+
+    while ((*out++ = *source++) != '\0') {
+    }
+    return destination;
+}
+
+char *
 strncpy(char *destination, const char *source, size_t count)
 {
     char *out = destination;

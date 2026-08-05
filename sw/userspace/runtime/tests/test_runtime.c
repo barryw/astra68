@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <astra/process.h>
@@ -113,6 +114,95 @@ test_memory_primitives(void)
     assert(strncpy(copy, source, truncating) == copy);
     assert(copy[0] == 'a' && copy[1] == 's' && copy[2] == 't');
     assert(copy[3] == 'z');
+
+    /* strcpy terminates and, unlike strncpy, writes nothing past the NUL. */
+    memset(data, 'z', sizeof(data));
+    assert(strcpy(data, source) == data);
+    assert(memcmp(data, "astra", 6u) == 0);
+    assert(data[6] == 'z');
+    source[0] = '\0';
+    assert(strcpy(data, source) == data);
+    assert(data[0] == '\0' && data[1] == 's');
+}
+
+typedef void (*QsortFn)(void *, size_t, size_t,
+                        int (*)(const void *, const void *));
+
+static int
+compare_ints(const void *left, const void *right)
+{
+    int a = *(const int *)left;
+    int b = *(const int *)right;
+
+    return a < b ? -1 : (a > b ? 1 : 0);
+}
+
+/*
+ * The runtime's qsort is heapsort, chosen because lwext4 sorts directory
+ * entries read from a volume Astra did not create. The cases that matter are
+ * therefore the adversarial shapes — already sorted, reversed, all equal —
+ * not a random array.
+ */
+static void
+test_qsort(void)
+{
+    int values[64];
+    int index;
+    /*
+     * Called through a plain function pointer for the degenerate cases. The
+     * host's <stdlib.h> declares qsort with a nonnull attribute, so a direct
+     * call with NULL is rejected by -Wnonnull and reported by UBSan — both
+     * reacting to the declaration rather than to the implementation under
+     * test. The pointer carries no such attribute, so the guard clause that
+     * exists to survive these arguments can actually be given them.
+     */
+    QsortFn const call = qsort;
+
+    /* Degenerate inputs must not touch memory or crash. */
+    call(NULL, 4u, sizeof(int), compare_ints);
+    call(values, 0u, sizeof(int), compare_ints);
+    call(values, 4u, 0u, compare_ints);
+    call(values, 4u, sizeof(int), NULL);
+
+    for (index = 0; index < 64; ++index) {
+        values[index] = 63 - index; /* reversed */
+    }
+    qsort(values, 64u, sizeof(int), compare_ints);
+    for (index = 0; index < 64; ++index) {
+        assert(values[index] == index);
+    }
+
+    /* Already sorted. */
+    qsort(values, 64u, sizeof(int), compare_ints);
+    for (index = 0; index < 64; ++index) {
+        assert(values[index] == index);
+    }
+
+    /* All equal: every comparison returns 0. */
+    for (index = 0; index < 64; ++index) {
+        values[index] = 7;
+    }
+    qsort(values, 64u, sizeof(int), compare_ints);
+    for (index = 0; index < 64; ++index) {
+        assert(values[index] == 7);
+    }
+
+    /* An odd count with duplicates, so sift_down's child bounds get exercised. */
+    for (index = 0; index < 37; ++index) {
+        values[index] = (index * 17) % 11;
+    }
+    qsort(values, 37u, sizeof(int), compare_ints);
+    for (index = 1; index < 37; ++index) {
+        assert(values[index - 1] <= values[index]);
+    }
+
+    /* Two elements, both orders: the smallest array the loop can reorder. */
+    values[0] = 2;
+    values[1] = 1;
+    qsort(values, 2u, sizeof(int), compare_ints);
+    assert(values[0] == 1 && values[1] == 2);
+    qsort(values, 2u, sizeof(int), compare_ints);
+    assert(values[0] == 1 && values[1] == 2);
 }
 
 static void
@@ -139,6 +229,7 @@ main(void)
 {
     test_startup_contract();
     test_memory_primitives();
+    test_qsort();
     test_syscall_wrappers();
     return 0;
 }
