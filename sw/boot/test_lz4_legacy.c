@@ -1,5 +1,7 @@
 #include "lz4_legacy.h"
 
+#include <astra/crc32.h>
+
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -9,7 +11,13 @@
 #define SPLASH_RAW_BYTES 350720u
 #define SPLASH_RAW_CRC32 0x0c8b36ddu
 
-static uint32_t crc32(const uint8_t *bytes, size_t size)
+/*
+ * The nibble-table CRC-32 firmware uses to verify every decompressed ROM
+ * payload. Checked here against the published check value and against the
+ * bitwise form it replaced, because a wrong table would silently accept a
+ * corrupt kernel.
+ */
+static uint32_t crc32_bitwise(const uint8_t *bytes, size_t size)
 {
     uint32_t crc = 0xffffffffu;
 
@@ -19,6 +27,32 @@ static uint32_t crc32(const uint8_t *bytes, size_t size)
             crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
     }
     return ~crc;
+}
+
+static void test_crc32(void)
+{
+    static const char check[] = "123456789";
+    uint8_t pattern[512];
+    uint32_t index;
+
+    assert(astra_crc32(check, 9u) == 0xcbf43926u);
+    assert(astra_crc32("", 0u) == 0u);
+    assert(astra_crc32("a", 1u) == 0xe8b7be43u);
+
+    for (index = 0u; index < sizeof(pattern); ++index)
+        pattern[index] = (uint8_t)(index * 37u + (index >> 3));
+    for (index = 0u; index <= sizeof(pattern); ++index)
+        assert(astra_crc32(pattern, index) == crc32_bitwise(pattern, index));
+
+    /* Streaming in pieces must equal one pass over the whole buffer. */
+    assert((~astra_crc32_update(
+                astra_crc32_update(0xffffffffu, pattern, 100u),
+                pattern + 100u, 412u)) == astra_crc32(pattern, 512u));
+}
+
+static uint32_t crc32(const uint8_t *bytes, size_t size)
+{
+    return astra_crc32(bytes, size);
 }
 
 static uint8_t *read_file(const char *path, uint32_t *size)
@@ -97,6 +131,7 @@ static void test_checked_in_splash(void)
 
 int main(void)
 {
+    test_crc32();
     test_literal_and_rejections();
     test_checked_in_splash();
     puts("boot splash LZ4 tests: PASS");

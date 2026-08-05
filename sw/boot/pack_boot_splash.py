@@ -182,7 +182,7 @@ def build_payload(image: Path, font: Path) -> bytes:
 def compress_legacy_lz4(payload: bytes, output: Path) -> bytes:
     executable = shutil.which("lz4")
     if executable is None:
-        raise RuntimeError("lz4 command is required to regenerate the splash")
+        raise RuntimeError("lz4 command is required to build ROM payloads")
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="astra68-splash-") as directory:
         raw_path = Path(directory) / "splash.pal8"

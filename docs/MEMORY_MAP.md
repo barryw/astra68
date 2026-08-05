@@ -30,6 +30,47 @@ The ROM payload occupies SDRAM controller offsets
 `0x03E00000..0x03E3FFFF`. The OS must reserve that backing range while the ROM
 aperture is in use.
 
+## ROM budget
+
+The ROM is a fixed 256 KiB window decoded in RTL — `boot_memory_map.sv` compares
+`address[31:18]` for both the low alias and the `0xFFE00000` aperture, and the
+SDRAM backing translation adds an 18-bit offset to `0x01E00000`. Enlarging it is
+a bitstream change and therefore a timing-closure re-qualification, so the
+budget is fixed and software fits inside it.
+
+**What may live in ROM:** exactly the chain that runs before a filesystem
+exists, plus enough to explain a failure when one never will — reset vectors and
+firmware, the kernel, the initial user image, the block-device service, a
+read-only reader for the boot volume, and the console font. Everything else is a
+file on storage: filesystem stacks beyond the boot volume, terminal, shell,
+fonts, desktop, applications, and diagnostics beyond POST.
+
+lwext4 is the load-bearing example. It is 66–80 KiB of MC68030 text
+(`docs/STORAGE_AND_VFS.md`) and it does **not** belong in ROM: `sw/stage0` reads
+FAT in a 2,020-byte image, so the boot volume is reachable without it and the
+full filesystem stack can be loaded as an ordinary file.
+
+Measured at ROM v0.3 with boot ABI 0.3 (`astra68.rom` reports this on every
+build):
+
+| Payload | Bytes | Form |
+|---|---:|---|
+| kernel image | 85,032 | LZ4 of 129,244 |
+| splash asset | 86,654 | LZ4 of 350,720 |
+| firmware code, rodata, vectors | ~15,000 | uncompressed; it is the decoder |
+| initial user image | 1,913 | LZ4 of 6,468 |
+| **used** | **189,064** | 72.1% |
+| **free** | **73,080** | |
+
+Both loadable images ship as LZ4-legacy streams decoded into their load
+addresses by the same decoder the splash has always used, then verified by
+CRC-32 against a build-time constant. That replaced a read-back comparison
+which compression made impossible, and it preserves what that comparison
+actually proved: the destination RAM holds the intended image. Stronger codecs
+were measured and rejected — gzip and xz save a further 28 KiB and 46 KiB but
+cost roughly 1.5–3 s of decode at 12.5 MHz, plus a larger decoder, to buy space
+that is not currently scarce.
+
 ## Boot reservations
 
 The boot ABI publishes these sorted physical ranges in `AstraBootInfo`. They

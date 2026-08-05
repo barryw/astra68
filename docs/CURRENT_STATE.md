@@ -45,9 +45,13 @@ reports and gates on. Verified in QEMU end to end; 30 kernel suites, 6
 userspace suites, sanitizers, `-fanalyzer`, both QEMU certifiers, and the
 MC68030 kernel image all pass.
 
-The initial image is 1,306 bytes of MC68030 text (6,468-byte ELF). The ROM file
-is now 237,868 of 262,144 bytes, leaving 24,276 bytes of ROM headroom — the
-next thing added to the ROM must account for it.
+The initial image is 1,306 bytes of MC68030 text (6,468-byte ELF). The kernel
+and that image now ship LZ4-compressed in ROM and are CRC-32 verified after
+firmware decodes them into their load addresses, which took the ROM from 90.7%
+to **72.1% used: 189,064 of 262,144, with 73,080 free**. `docs/MEMORY_MAP.md`
+records the budget, the measured codec comparison, and the rule for what is
+allowed to live in ROM — notably that lwext4 is not, because stage 0 reaches a
+FAT boot volume in 2,020 bytes.
 
 lwext4 is qualified big-endian behind three one-line upstream fixes but is
 neither vendored nor adopted. There is no VFS and no terminal.

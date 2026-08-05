@@ -5,6 +5,9 @@
 #include "ohci.h"
 #include "splash.h"
 #include "rom_build_info.h"
+#include "rom_payloads.h"
+#include "lz4_legacy.h"
+#include <astra/crc32.h>
 #include <astra/boot.h>
 #include <astra/front_panel.h>
 
@@ -987,57 +990,33 @@ static void add_boot_range(uint32_t base, uint32_t size, uint32_t type,
 }
 
 /*
- * Copies a ROM-resident image into RAM and reads it back. Firmware verifies
- * because nothing downstream can: the kernel is handed an address and a length
- * and has no second copy to compare against.
+ * Decodes a ROM-resident LZ4 image into RAM and checksums the result.
+ *
+ * The images ship compressed because the ROM is a fixed 256 KiB window decoded
+ * in RTL, so bytes there cost a bitstream to buy. Firmware verifies because
+ * nothing downstream can: the kernel is handed an address and a length and has
+ * no second copy to compare against. The CRC covers the destination, which is
+ * what the previous read-back comparison covered.
  */
-static int copy_image(const uint8_t *source, uint32_t destination,
-                      uint32_t size, const char *copy_phase,
-                      const char *tail_phase)
+static int decode_payload(const uint8_t *source, uint32_t source_size,
+                          uint32_t destination, uint32_t capacity,
+                          uint32_t raw_size, uint32_t raw_crc32,
+                          const char *decode_phase, const char *crc_phase)
 {
-    const uint32_t *source_words = (const uint32_t *)(const void *)source;
-    volatile uint32_t *destination_words = (volatile uint32_t *)destination;
-    volatile uint8_t *destination_bytes = (volatile uint8_t *)destination;
-    uint32_t word_count = size / sizeof(uint32_t);
-    uint32_t byte_offset = word_count * sizeof(uint32_t);
-    uint32_t index = 0u;
-    while (word_count - index >= 8u) {
-        destination_words[index + 0u] = source_words[index + 0u];
-        destination_words[index + 1u] = source_words[index + 1u];
-        destination_words[index + 2u] = source_words[index + 2u];
-        destination_words[index + 3u] = source_words[index + 3u];
-        destination_words[index + 4u] = source_words[index + 4u];
-        destination_words[index + 5u] = source_words[index + 5u];
-        destination_words[index + 6u] = source_words[index + 6u];
-        destination_words[index + 7u] = source_words[index + 7u];
-        index += 8u;
-    }
-    while (index < word_count) {
-        destination_words[index] = source_words[index];
-        ++index;
-    }
-    while (byte_offset < size) {
-        destination_bytes[byte_offset] = source[byte_offset];
-        ++byte_offset;
-    }
+    AstraLz4Result decoded;
+    uint32_t actual;
 
-    for (index = 0u; index < word_count; ++index) {
-        uint32_t actual = destination_words[index];
-
-        if (actual != source_words[index])
-            return post_failure(copy_phase,
-                                destination + index * sizeof(uint32_t),
-                                source_words[index], actual);
-    }
-    byte_offset = word_count * sizeof(uint32_t);
-    while (byte_offset < size) {
-        uint8_t actual = destination_bytes[byte_offset];
-
-        if (actual != source[byte_offset])
-            return post_failure(tail_phase, destination + byte_offset,
-                                source[byte_offset], actual);
-        ++byte_offset;
-    }
+    if (raw_size == 0u || raw_size > capacity)
+        return post_failure(decode_phase, destination, capacity, raw_size);
+    decoded = astra_lz4_legacy_decode(source, source_size,
+                                      (uint8_t *)destination, capacity,
+                                      raw_size);
+    if (decoded != ASTRA_LZ4_OK)
+        return post_failure(decode_phase, destination, ASTRA_LZ4_OK,
+                            (uint32_t)decoded);
+    actual = astra_crc32((const void *)destination, raw_size);
+    if (actual != raw_crc32)
+        return post_failure(crc_phase, destination, raw_crc32, actual);
     return 1;
 }
 
@@ -1046,15 +1025,15 @@ static int load_kernel_image(uint32_t *image_size)
     uint32_t size = (uint32_t)_kernel_blob_end -
                     (uint32_t)_kernel_blob_start;
 
-    if (size == 0u || size > ASTRA_KERNEL_RESERVED_SIZE)
-        return post_failure_text("invalid kernel image size");
-    if ((((uint32_t)_kernel_blob_start | ASTRA_KERNEL_LOAD_ADDRESS) &
-         (sizeof(uint32_t) - 1u)) != 0u)
-        return post_failure_text("unaligned kernel image");
-    if (!copy_image(_kernel_blob_start, ASTRA_KERNEL_LOAD_ADDRESS, size,
-                    "kernel image copy", "kernel image copy tail"))
+    if (size == 0u || size != ASTRA_KERNEL_PAYLOAD_COMPRESSED_BYTES)
+        return post_failure_text("invalid kernel payload size");
+    if (!decode_payload(_kernel_blob_start, size, ASTRA_KERNEL_LOAD_ADDRESS,
+                        ASTRA_KERNEL_RESERVED_SIZE,
+                        ASTRA_KERNEL_PAYLOAD_RAW_BYTES,
+                        ASTRA_KERNEL_PAYLOAD_RAW_CRC32,
+                        "kernel image decode", "kernel image CRC"))
         return 0;
-    *image_size = size;
+    *image_size = ASTRA_KERNEL_PAYLOAD_RAW_BYTES;
     return 1;
 }
 
@@ -1066,18 +1045,21 @@ static int load_kernel_image(uint32_t *image_size)
 static int load_user_image(uint32_t *image_size, uint32_t *reservation)
 {
     uint32_t size = (uint32_t)_user_blob_end - (uint32_t)_user_blob_start;
+    uint32_t raw = ASTRA_USER_PAYLOAD_RAW_BYTES;
     uint32_t pages;
 
-    if (size == 0u || size > ASTRA_USER_IMAGE_MAX_SIZE)
-        return post_failure_text("invalid user image size");
-    if (((uint32_t)_user_blob_start & (sizeof(uint32_t) - 1u)) != 0u)
-        return post_failure_text("unaligned user image");
-    if (!copy_image(_user_blob_start, ASTRA_USER_IMAGE_ADDRESS, size,
-                    "user image copy", "user image copy tail"))
+    if (size == 0u || size != ASTRA_USER_PAYLOAD_COMPRESSED_BYTES)
+        return post_failure_text("invalid user payload size");
+    if (raw > ASTRA_USER_IMAGE_MAX_SIZE)
+        return post_failure_text("user image exceeds its reservation");
+    if (!decode_payload(_user_blob_start, size, ASTRA_USER_IMAGE_ADDRESS,
+                        ASTRA_USER_IMAGE_MAX_SIZE, raw,
+                        ASTRA_USER_PAYLOAD_RAW_CRC32,
+                        "user image decode", "user image CRC"))
         return 0;
-    pages = (size + ASTRA_USER_IMAGE_ALIGNMENT - 1u) /
+    pages = (raw + ASTRA_USER_IMAGE_ALIGNMENT - 1u) /
             ASTRA_USER_IMAGE_ALIGNMENT;
-    *image_size = size;
+    *image_size = raw;
     *reservation = pages * ASTRA_USER_IMAGE_ALIGNMENT;
     return 1;
 }

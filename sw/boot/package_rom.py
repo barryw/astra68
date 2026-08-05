@@ -73,9 +73,12 @@ def main() -> None:
     temporary.replace(args.output)
     if args.hex_output is not None:
         write_byte_hex(args.hex_output, image)
+    free = MAX_PAYLOAD_SIZE - len(payload)
     print(
         f"{args.output}: {len(payload)} payload bytes, "
-        f"crc32={zlib.crc32(payload):08x}"
+        f"crc32={zlib.crc32(payload):08x}, "
+        f"{free} bytes free of {MAX_PAYLOAD_SIZE} "
+        f"({100.0 * len(payload) / MAX_PAYLOAD_SIZE:.1f}% used)"
     )
 
 

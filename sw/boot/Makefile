@@ -29,6 +29,9 @@ ASTRA_FLOORPLAN_ENFORCE ?= host_io,astraea_blitter,astraea_blitter_cdc,astraea_b
 RESOURCE_PROFILE ?= complete_chipset
 ROM_VERSION ?= 0.3
 BUILD_INFO = build/rom_build_info.h
+ROM_PAYLOADS = build/rom_payloads.h
+KERNEL_PAYLOAD = build/astra_kernel.lz4
+USER_PAYLOAD = build/astra_supervisor.lz4
 SPLASH_SOURCE = assets/astra_boot_splash.png
 SPLASH_FONT = ../../fpga/soc/post_fonts.hex
 SPLASH_PACKER = pack_boot_splash.py
@@ -122,11 +125,13 @@ BUILD_CONFIG = CPU=TG68K030_MMU2 CPU_CLK_DIV_BIT=$(CPU_CLK_DIV_BIT) \
                KERNEL_PANIC_SELFTEST=$(KERNEL_PANIC_SELFTEST) \
                KERNEL_SCHED_TRACE=$(KERNEL_SCHED_TRACE) \
                KERNEL_SOAK_SELFTEST=$(KERNEL_SOAK_SELFTEST)
-ID_SRCS = Makefile ../../mk/m68k-cross.mk gen_build_info.py boot.c crt0.S $(LD) \
+ID_SRCS = Makefile ../../mk/m68k-cross.mk gen_build_info.py pack_payload.py \
+          boot.c crt0.S $(LD) \
           kernel_blob.S user_blob.S splash_blob.S splash.c splash.h lz4_legacy.c \
           lz4_legacy.h $(SPLASH_PACKER) $(SPLASH_SOURCE) assets/README.md \
           ../common/boot_contract.c ../include/astra/boot.h \
-          ../include/astra/syscall.h ../include/vesta.h ../include/vega.h \
+          ../include/astra/syscall.h ../include/astra/crc32.h \
+          ../common/crc32.c ../include/vesta.h ../include/vega.h \
           ../include/astraea.h ../include/ohci.h \
           ../../ndk/include/astra/attributes.h \
           ../../ndk/include/astra/types.h \
@@ -157,15 +162,28 @@ $(KERNEL_BIN): FORCE $(KERNEL_ID_SRCS) ../common/boot_contract.c \
 $(USER_IMAGE): FORCE $(USER_IMAGE_ID_SRCS)
 	$(MAKE) -C $(USER_IMAGE_DIR) all CROSS=$(CROSS)
 
+# The ROM window is 256 KiB decoded in RTL, so both images ship compressed and
+# firmware decodes them into their load addresses. Sizes and CRCs are built in
+# as constants rather than a parsed container header.
+$(ROM_PAYLOADS) $(KERNEL_PAYLOAD) $(USER_PAYLOAD) &: pack_payload.py \
+                pack_boot_splash.py $(KERNEL_BIN) $(USER_IMAGE)
+	@mkdir -p build
+	python3 pack_payload.py \
+		--payload KERNEL=$(KERNEL_BIN)=$(KERNEL_PAYLOAD) \
+		--payload USER=$(USER_IMAGE)=$(USER_PAYLOAD) \
+		--header $(ROM_PAYLOADS)
+
 astra_boot.elf: crt0.S kernel_blob.S user_blob.S splash_blob.S splash.c \
                 splash.h lz4_legacy.c lz4_legacy.h \
                 $(SPLASH_PAYLOAD) boot.c \
                 ../common/boot_contract.c ../../ndk/src/front_panel.c \
                 ../include/ohci.h \
-                $(LD) $(BUILD_INFO) $(KERNEL_BIN) $(USER_IMAGE)
+                $(LD) $(BUILD_INFO) $(ROM_PAYLOADS) \
+                $(KERNEL_PAYLOAD) $(USER_PAYLOAD)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ crt0.S kernel_blob.S user_blob.S \
 		splash_blob.S splash.c lz4_legacy.c boot.c \
-		../common/boot_contract.c ../../ndk/src/front_panel.c
+		../common/boot_contract.c ../common/crc32.c \
+		../../ndk/src/front_panel.c
 
 astra_boot.bin: astra_boot.elf
 	$(OBJCOPY) -O binary $< $@
@@ -184,9 +202,10 @@ verify: astra_boot.elf
 	  printf 'kernel payload: %s bytes\n' "$$bytes"
 
 test_lz4_legacy: test_lz4_legacy.c lz4_legacy.c lz4_legacy.h \
+                 ../common/crc32.c ../include/astra/crc32.h \
                  $(SPLASH_PAYLOAD)
 	$(HOST_CC) -std=c11 -O2 -Wall -Wextra -Werror -o $@ \
-		test_lz4_legacy.c lz4_legacy.c
+		-I../include test_lz4_legacy.c lz4_legacy.c ../common/crc32.c
 
 test: test_lz4_legacy
 	./test_lz4_legacy

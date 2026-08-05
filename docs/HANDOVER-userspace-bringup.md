@@ -31,7 +31,8 @@ Working and gated:
 | User link contract | `sw/userspace/runtime/astra_user.ld` | produces exactly the accepted shape |
 | Executable loader | `kernel_process_create_executable()` in `sw/kernel/process.c` | transactional; allocation-failure sweep restores exact baseline |
 | Process query ABI | syscall 37 `PROCESS_INFO` | capability-gated, tested end to end |
-| Initial user image path | boot ABI 0.3, `sw/boot/user_blob.S`, `start_initial_user_image()` | firmware embeds, copies, verifies, and describes one image; kernel loads and launches it |
+| Initial user image path | boot ABI 0.3, `sw/boot/user_blob.S`, `start_initial_user_image()` | firmware embeds, decodes, CRC-verifies, and describes one image; kernel loads and launches it |
+| ROM payload compression | `sw/boot/pack_payload.py`, `decode_payload()`, `sw/common/crc32.c` | kernel and user image ship LZ4; ROM 72.1% used, 73,080 B free |
 | First service | `sw/userspace/supervisor` | 1,306 B MC68030 text; verifies startup block, ABI, and its own `PROCESS_INFO` from user mode, then exits with a tagged status |
 
 Gate status at handover: 30 kernel suites pass, kernel cross-builds, 6 userspace
@@ -39,9 +40,16 @@ suites pass under ASan/UBSan, GCC `-fanalyzer` clean, both QEMU certifiers pass,
 and a full QEMU boot reports:
 
 ```
+astra68.rom: 189064 payload bytes, 73080 bytes free of 262144 (72.1% used)
+  Kernel image ...... OK
 Initial image ....... loaded, 6468 bytes, process 0x10000012
 Initial image ....... OK, startup block and ABI verified from user mode
 ```
+
+Decode cost is **not yet measured on hardware**. QEMU's cycle counter is TCG
+bookkeeping, not 68030 time, so the firmware's `Kernel image ...... OK, N
+cycles` line is meaningless there. Measure it on the board before treating the
+compression as free.
 
 Not done: no terminal, no VFS, no block admission syscalls. lwext4 is qualified
 but **not vendored and not adopted**.
@@ -159,10 +167,11 @@ emulation, and there is now a real process to admit it to.
 
 Facts from the bring-up slice that constrain what comes next:
 
-- **The initial image is capped at 48 KiB** (`ASTRA_USER_IMAGE_MAX_SIZE`) and
-  the ROM file has **24,276 bytes of headroom** (237,868 of 262,144 used). The
-  supervisor is 6,468 bytes today. Growing it, or embedding anything else in
-  the ROM, must account for both ceilings. Stripping the image buys ~1 KiB.
+- **ROM is 72.1% used: 189,064 of 262,144, with 73,080 free.** Both loadable
+  images are LZ4 in ROM and CRC-32 verified after decode. The initial image is
+  separately capped at 48 KiB decompressed (`ASTRA_USER_IMAGE_MAX_SIZE`); it is
+  6,468 bytes today, 1,913 compressed. `docs/MEMORY_MAP.md` holds the budget
+  and the rule for what may live in ROM at all.
 - **The K1 milestone never completes under QEMU**, with or without media, on
   this tree and on the tree before it. It waits on device qualification the
   emulator does not drive. Do not use milestone output as an emulation gate;
@@ -183,10 +192,16 @@ Facts from the bring-up slice that constrain what comes next:
 
 ## 7. Known problems not caused by this work
 
-- `sw/boot/astra_boot.bin` in the tree is a stale 2026-07-18 build and panics
-  with `Vesta timer interrupt timeout` on both the old and the new QEMU. A ROM
-  rebuilt from the current tree boots fine. Rebuild or drop the committed
-  binary.
+- A stale `sw/boot/astra_boot.bin` may sit in a working tree from an old build
+  and panics with `Vesta timer interrupt timeout`. It is **not** committed —
+  `git ls-files sw/boot` lists no binaries — so `make` in `sw/boot` replaces it.
+  A ROM built from the current tree boots fine.
+- `sw/boot` `make test` runs `pytest tests` after the C test. Beast has no
+  pytest installed, so that step fails there; the 38 Python tests pass on the
+  Mac. Install pytest on Beast or run that half locally.
+- Building the ROM now requires the `lz4` command line tool for payload
+  compression (Beast has it). Firmware decodes with its own in-tree decoder;
+  the dependency is build-time only.
 - `sw/userspace/shell/Makefile` passed a header into the compile line, which
   broke `make test` on clang; fixed here, worth knowing if it reappears.
 - `docs/MEMORY_BUDGET.md` per-milestone tables are historical and do not carry
@@ -203,11 +218,17 @@ Facts from the bring-up slice that constrain what comes next:
 cd sw/userspace && make test && make sanitize && make analyze && make all
 
 # the whole boot path, including the initial user image (Beast)
-cd sw/boot && make astra_boot.bin
+cd sw/boot && make astra_boot.bin && make test    # pytest half needs the Mac
 timeout 200 /tmp/qemu-final-build/qemu-system-m68k -M astra68 -m 32M \
     -bios astra_boot.bin -nographic -serial mon:stdio \
     -drive if=none,format=raw,file=/tmp/storage.img < /dev/null | \
     grep "Initial image"
+
+# payload verification actually stops a corrupt ROM: flip one byte inside the
+# compressed kernel and the firmware must refuse to hand off
+python3 -c 'd=bytearray(open("astra_boot.bin","rb").read()); d[0x02fe0+12000]^=0xff;
+open("/tmp/corrupt.bin","wb").write(d)'
+# expect: POST FAIL: kernel image CRC @ 0x02010000 expected=... actual=...
 
 # kernel: 30 suites plus the cross-built image (Beast only)
 cd sw/kernel && make test && make
