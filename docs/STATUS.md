@@ -11,13 +11,70 @@ must not be presented as working software.
 - CURRENT SOURCE: fixed registry and exclusive generation-safe leases; 8
   devices, 8 leases, and 2 leases per process.
 - CURRENT SOURCE: trusted grant, read/transfer/administer rights, and
-  provisional query/reset/revoke syscalls at ABI `0x00010006`.
+  query/reset/revoke plus bounded physical-input reads at ABI `0x00010007`.
 - CURRENT SOURCE: owner death revokes, quiesces, and resets before handle
   closure; failed recovery contains the target as `FAILED`.
 - TESTED ON BEAST: device tests, process/syscall integration, malformed
   syscall coverage, and the freestanding MC68030 link.
 - NOT YET QUALIFIED: full gates, emulator/Arty execution, performance,
   physical registrations, discovery, or userspace service protocols.
+
+## Input transport candidate
+
+- CURRENT SOURCE: stable 20-byte keyboard/pointer records, bounded Vesta FIFO,
+  sticky overflow, independent device sequences, host generation, and input
+  IRQ source 5.
+- CURRENT SOURCE: QEMU accepts QMP or Linux evdev keyboard/pointer events and
+  maps physical keys to USB HID Keyboard/Keypad Usage IDs.
+- CURRENT SOURCE: Axiom conditionally registers the input controller in its
+  sealed device registry and provides bounded quiesce, reset, drain, and event
+  delivery through an exclusive lease. Reads are capped at 16 records, preserve
+  a record across copy faults, and report plus acknowledge sticky overflow.
+- TESTED ON BEAST AND ARTY ARM: `emu/qemu/test-input.py` passes ordering,
+  encoding, queue-limit, overflow, and IRQ tests against the exact QEMU 9.2.4
+  builds.
+- CURRENT SOURCE: allocation-free input service core, replaceable keymap with a
+  built-in US map, modifier/lock state, bounded repeat, integer pointer
+  acceleration/clipping, focus routing, reset repair, and fixed-size
+  application-port messages.
+- TESTED ON BEAST: functional tests, ASan/UBSan, GCC `-fanalyzer`, MC68030
+  cross-build, and the complete kernel host regression suite pass. Target size
+  is 3,095 bytes of text and 368 bytes of caller-owned state.
+- NOT YET QUALIFIED: physical keyboard/mouse evdev events, protected-process
+  launcher/runtime integration, live application ports, non-US keymaps,
+  composition/IME, or display-service focus authorization.
+
+## Userspace runtime foundation
+
+- CURRENT SOURCE: 64-byte versioned startup information and bounded 16-byte
+  initial-capability records in `sw/include/astra/process.h`.
+- CURRENT SOURCE: separate MC68030 `crt0`, one C-callable `TRAP #15` veneer,
+  typed query/yield/close/exit wrappers, startup validation, and freestanding
+  memory/string primitives in `libastrart.a`.
+- TESTED ON BEAST: warnings-as-errors host tests, ASan/UBSan, generated m68k
+  veneer inspection, and the canonical `-m68030 -msoft-float` cross-build pass.
+  Archive objects total 660 bytes of text; separate `crt0` is 46 bytes, with no
+  data or BSS.
+- NOT YET IMPLEMENTED: ELF acceptance/loading, supervisor executable,
+  transactional process launch, heap/VM growth, stdio, VFS bindings, or a
+  standards C library. The runtime is a foundation, not a running service.
+
+## Userspace storage foundation
+
+- CURRENT SOURCE: bounded synchronous block facade with 64-bit LBA validation,
+  512-4096-byte sector geometry, media generations, read-only/presence state,
+  deadlines, and per-operation call/failure/sector/total/max metrics.
+- CURRENT SOURCE: caller-owned memory/image backend with deterministic failure
+  injection and media removal/reinsertion. It is the reference backend for
+  filesystem tests and emulator images, not an on-disk filesystem.
+- TESTED ON BEAST: 100,000 deterministic randomized reads/writes/flushes verify
+  847,243 sectors against an independent 2 MiB oracle. Warnings-as-errors,
+  ASan/UBSan, GCC `-fanalyzer`, and MC68030 cross-build pass. Target text is
+  1,492 bytes with zero data/BSS; final host averages are 84 ns read and 74 ns
+  write facade overhead.
+- NOT YET IMPLEMENTED: block-device userspace admission, Arty QEMU image
+  backend, filesystem handler, VFS, protected storage service, or shell file
+  commands. `STORAGE_AND_VFS.md` defines the retained route and release gates.
 
 ## Current source identity
 

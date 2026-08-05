@@ -122,7 +122,7 @@ class policy.
 - Storage is fixed; no heap, physical pages, or duplicate I/O queue is added.
 
 The provisional trap ABI is `DEVICE_QUERY=33`, `DEVICE_RESET=34`, and
-`DEVICE_REVOKE=35` at revision `0x00010006`. Requests reuse existing ports,
+`DEVICE_REVOKE=35` at revision `0x00010007`. Requests reuse existing ports,
 shared areas, rings, waits, and handle transfer. Discovery and class protocols
 remain open.
 
@@ -226,7 +226,82 @@ Convenience and speculative speed are not sufficient reasons to add kernel
 policy. Assembly is appropriate for measured Axiom or service hot paths when
 generated MC68030 code demonstrates a material gain.
 
-## 7. Storage stack
+## 7. Input stack
+
+**LOCKED:** Physical input crosses the Arty boundary as follows:
+
+```text
+USB keyboard/mouse -> Linux usbhid/evdev -> QEMU Astra adapter
+                   -> bounded Vesta FIFO + IRQ 5 -> Axiom mechanism
+                   -> protected input service -> per-client event ports
+```
+
+Linux and QEMU translate host transport only. They do not own focus, keymaps,
+composition, shortcuts, acceleration, gestures, repeat, or application routing.
+The Axiom device lease grants one trusted input service exclusive ownership;
+Axiom masks the IRQ and resets/drains the FIFO before that lease can be reused.
+
+The physical ABI is version `0x00010001`. The hardware FIFO has 32 slots with
+31 usable records. Each 20-byte record contains a class/kind/flags header, a
+value, millisecond timestamp, 16-bit device plus 16-bit sequence, and host
+generation. Keyboard values are USB HID Keyboard/Keypad Usage IDs. Pointer
+values are signed X/Y motion or normalized button IDs. Overflow is sticky and
+must be acknowledged after the service records the loss and repairs state.
+
+**DIRECTION:** The input service drains hardware in bounded batches after one
+IRQ notification and publishes normalized logical events through bounded
+ports. It owns keymap and composition state, key repeat, pointer acceleration,
+focus routing, grabs, and device arrival/removal. Applications never map Vesta
+or consume physical records directly. A service restart advances generation,
+releases all grabs, synthesizes cancellation for held logical state, and wakes
+clients with peer-dead before replacement publication.
+
+`INPUT_READ_TRY=36` drains one through sixteen records through an exclusive
+input-device lease. `D1` supplies the lease, `D2` a naturally aligned event
+array, and `D3` its capacity. Success returns the count in `D1`; `D2` reports
+sticky hardware overflow. A record is consumed only after its user copy
+succeeds. A successful overflow report acknowledges the sticky bit; a copy
+fault does neither. Empty reads return `WOULD_BLOCK`, and IRQ 5 remains the wait
+source.
+
+The physical FIFO, IRQ, device lifecycle, and protected userspace delivery
+mechanism are implemented. The allocation-free input policy core and logical
+event protocol are also implemented in `sw/userspace/input`. It provides:
+
+- a replaceable keymap callback, with a built-in US map, and separate
+  physical-key and Unicode text events;
+- left/right modifier and Caps Lock tracking;
+- bounded single-key repeat with configurable delay and interval;
+- integer-only pointer acceleration, clipping, and full-queue coalescing;
+- one explicit focus owner among at most eight attached clients;
+- generation and overflow repair through synthetic state-reset events;
+- fixed-size port messages with full-queue and peer-death handling.
+
+The MC68030 library contributes 3,095 bytes of text. Its caller-owned service
+state is exactly 368 bytes on the target and performs no dynamic allocation.
+Each logical event is 32 bytes; its complete port message is 56 bytes. A client
+port can therefore use the kernel's eight-message limit with a 448-byte queue.
+Physical keys remain USB HID usages. Text is emitted only on key-down/repeat
+when Ctrl, Alt, and GUI modifiers are clear. Games and editors consume key
+events; text widgets and terminals consume Unicode text events while retaining
+key events for commands such as Ctrl-A.
+
+The display or workspace service is the only authority allowed to change input
+focus. A full client port never blocks the input service. Pointer motion is
+coalesced to the newest bounded position. Loss of a critical key, text, button,
+or focus event marks that client desynchronized; its next successful delivery
+begins with `STATE_RESET|LOSS`. Service or client death clears focus and held
+state. One physical overflow indication is applied only to the first record of
+its drained batch, preventing duplicate repair notifications.
+
+The remaining boundary is process integration: the reusable service launcher
+must start this core in a protected process and pass its input-device lease,
+IRQ endpoint, and publication/control ports without fixed handle values. The
+repository does not yet have that production launcher or userspace syscall
+runtime, so the service is cross-built and certified but is not claimed to be
+running inside Astra.
+
+## 8. Storage stack
 
 **DIRECTION:** Storage uses these replaceable layers:
 

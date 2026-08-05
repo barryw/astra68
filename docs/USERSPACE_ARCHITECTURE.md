@@ -1,11 +1,13 @@
 # Astra OS userspace architecture
 
-Status: design direction; no userspace service described here is implemented.
+Status: design direction; runtime, shell, and input-service foundations exist,
+but no protected userspace service is launched yet.
 
 This document refines `OS_VISION.md` into a coherent userspace shape. It does
-not change the kernel boundary in `KERNEL_SPEC.md`, define a stable service ABI,
-or imply that the current K9 kernel can start these services. Exact wire
-records land only with implementations and executable protocol tests.
+not change the kernel boundary in `KERNEL_SPEC.md` or imply that the current
+kernel can start these services. `USERSPACE_RUNTIME.md` defines the implemented
+machine-facing runtime foundation. Exact service wire records land only with
+implementations and executable protocol tests.
 `DRIVER_AND_SERVICE_ARCHITECTURE.md` defines the common protected-driver
 lifecycle, privilege boundary, performance admission rule, and storage and
 graphics layering used here.
