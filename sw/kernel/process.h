@@ -22,6 +22,19 @@
 #define KERNEL_PROCESS_PROGRESS_GOAL 64u
 #define KERNEL_PROCESS_THREAD_MAX 15u
 
+/*
+ * The ceiling on text, data and BSS a single process image may map. 64 pages
+ * (256 KiB) was too small for the first service that holds a mounted volume:
+ * the filesystem's bounded arena alone is 216 KiB of BSS, and the image needed
+ * 78 pages. KERNEL_PROCESS_MAX is 4, so this ceiling bounds image memory at
+ * 2 MiB of the 32 MiB machine.
+ *
+ * It lives here rather than in process.c because the loader's test measures a
+ * real executable against it. Held in two places it went stale, and the test
+ * kept refusing an image the kernel had been loading happily for weeks.
+ */
+#define KERNEL_PROCESS_IMAGE_PAGES_MAX 128u
+
 #define KERNEL_PROCESS_RIGHT_QUERY     (1u << 0)
 #define KERNEL_PROCESS_RIGHT_TERMINATE (1u << 1)
 #define KERNEL_PROCESS_RIGHT_WAIT      (1u << 4)

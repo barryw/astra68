@@ -21,7 +21,23 @@
 #define MOCK_BUFFER 0x300u
 #define MOCK_REQUEST 0x400u
 
-static int mock_armed;
+/*
+ * The endpoint states kernel_irq_arm() and kernel_irq_ack() move through, not a
+ * boolean. A boolean was the reason a defect shipped: it modelled an
+ * acknowledgement as disarming the endpoint, which is the opposite of what the
+ * kernel does, so the second transfer on one attachment passed here and failed
+ * on the device.
+ */
+#define MOCK_IRQ_MASKED 0
+#define MOCK_IRQ_ARMED 1
+#define MOCK_IRQ_PENDING 2
+
+static int mock_irq_state;
+static uint32_t mock_arm_refusals;
+static uint32_t mock_ack_before_collect;
+static int mock_answers_before_collect;
+static int mock_answers_during_collect;
+static int mock_completion_queued;   /* the transport's completion-valid bit */
 static int mock_record_pending;
 static int mock_request_active;
 static int mock_request_complete;
@@ -41,7 +57,12 @@ static int mock_submitted_while_armed;
 static void
 mock_reset(void)
 {
-    mock_armed = 0;
+    mock_irq_state = MOCK_IRQ_MASKED;
+    mock_arm_refusals = 0u;
+    mock_ack_before_collect = 0u;
+    mock_answers_before_collect = 0;
+    mock_answers_during_collect = 0;
+    mock_completion_queued = 0;
     mock_record_pending = 0;
     mock_request_active = 0;
     mock_request_complete = 0;
@@ -112,10 +133,22 @@ astra_block_lease_submit(uint32_t device, const AstraBlockRequest *request,
     ++mock_submit_calls;
     mock_submitted_operation = request->operation;
     /* The endpoint must already be armed: the event cannot be missed. */
-    mock_submitted_while_armed = mock_armed;
+    mock_submitted_while_armed = mock_irq_state != MOCK_IRQ_MASKED;
     mock_request_active = 1;
     mock_request_complete = 0;
     *block_request = MOCK_REQUEST;
+    if (mock_answers_before_collect) {
+        /*
+         * What the device model actually does: the completion and its record
+         * are both queued before the service ever polls, so the first collect
+         * succeeds and the request never waits. That is the path every boot
+         * takes, and the one the wait-driven tests below never reach.
+         */
+        mock_request_complete = 1;
+        mock_completion_queued = 1;
+        mock_record_pending = 1;
+        mock_irq_state = MOCK_IRQ_PENDING;
+    }
     return ASTRA_SYSCALL_OK;
 }
 
@@ -125,10 +158,29 @@ astra_block_lease_collect(uint32_t device, uint32_t block_request,
 {
     assert(device == MOCK_DEVICE);
     assert(block_request == MOCK_REQUEST);
+    /*
+     * Collection drains the transport before it looks anything up, which is
+     * what clears the completion the interrupt is still pointing at. It
+     * happens on every call, including the ones that find nothing to return.
+     */
+    mock_completion_queued = 0;
     if (!mock_request_active) {
         return ASTRA_SYSCALL_INVALID_HANDLE;
     }
     if (!mock_request_complete) {
+        if (mock_answers_during_collect) {
+            /*
+             * The race a real device wins about one request in fifteen: this
+             * collection found nothing, and the completion and its record land
+             * in the gap before the caller does anything else. Anything that
+             * acknowledges here is acknowledging a completion still sitting in
+             * the transport.
+             */
+            mock_request_complete = 1;
+            mock_completion_queued = 1;
+            mock_record_pending = 1;
+            mock_irq_state = MOCK_IRQ_PENDING;
+        }
         return ASTRA_SYSCALL_WOULD_BLOCK;
     }
     memset(completion, 0, sizeof(*completion));
@@ -140,14 +192,23 @@ astra_block_lease_collect(uint32_t device, uint32_t block_request,
     return ASTRA_SYSCALL_OK;
 }
 
+/*
+ * kernel_irq_arm() takes a masked endpoint with nothing queued and nothing
+ * flagged. Anything else is KERNEL_IRQ_INVALID_STATE, which reaches user mode
+ * as ASTRA_SYSCALL_INVALID_ARGUMENT. Arming an armed endpoint is therefore a
+ * refusal, not a no-op, and arming one with a record still queued is what
+ * strands a service.
+ */
 uint32_t
 astra_irq_arm(uint32_t handle)
 {
     assert(handle == MOCK_IRQ);
-    /* Arming with a record still queued is what strands a service. */
-    assert(!mock_record_pending);
     ++mock_arm_calls;
-    mock_armed = 1;
+    if (mock_irq_state != MOCK_IRQ_MASKED || mock_record_pending) {
+        ++mock_arm_refusals;
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    mock_irq_state = MOCK_IRQ_ARMED;
     return ASTRA_SYSCALL_OK;
 }
 
@@ -166,16 +227,30 @@ astra_irq_read(uint32_t handle, AstraIrqRecord *record, uint32_t *events)
     return ASTRA_SYSCALL_OK;
 }
 
+/*
+ * Acknowledging the last record re-enables the source and leaves the endpoint
+ * armed. Nothing has to arm it again, and anything that tries is refused.
+ *
+ * The transport refuses to complete its interrupt while a completion is still
+ * queued behind it, and collecting is what clears that. Acknowledging first is
+ * a device error, not a harmless reordering.
+ */
 uint32_t
 astra_irq_ack(uint32_t handle, uint32_t sequence)
 {
     assert(handle == MOCK_IRQ);
-    assert(mock_record_pending);
+    if (!mock_record_pending) {
+        return ASTRA_SYSCALL_WOULD_BLOCK;
+    }
+    if (mock_completion_queued) {
+        ++mock_ack_before_collect;
+        return ASTRA_SYSCALL_IO_ERROR;
+    }
     assert(sequence == mock_sequence);
     ++mock_ack_calls;
     ++mock_sequence;
     mock_record_pending = 0;
-    mock_armed = 0;
+    mock_irq_state = MOCK_IRQ_ARMED;
     return ASTRA_SYSCALL_OK;
 }
 
@@ -186,14 +261,17 @@ astra_wait_one(uint32_t handle, uint64_t deadline_ns, uint32_t *detail)
     assert(deadline_ns > mock_now_ns);
     (void)detail;
     ++mock_wait_calls;
-    assert(mock_armed);
+    /* A completion cannot be delivered into a masked source. */
+    assert(mock_irq_state != MOCK_IRQ_MASKED);
     if (!mock_device_answers) {
         mock_now_ns += 1000000000u;
         return ASTRA_SYSCALL_TIMED_OUT;
     }
     /* The device answers: a completion and its interrupt arrive. */
     mock_request_complete = 1;
+    mock_completion_queued = 1;
     mock_record_pending = 1;
+    mock_irq_state = MOCK_IRQ_PENDING;
     return ASTRA_SYSCALL_OK;
 }
 
@@ -204,6 +282,7 @@ astra_device_reset(uint32_t handle)
     ++mock_reset_calls;
     mock_completion_status = ASTRA_BLOCK_COMPLETION_RESET;
     mock_request_complete = 1;
+    mock_completion_queued = 1;
     mock_request_active = 1;
     return ASTRA_SYSCALL_OK;
 }
@@ -261,6 +340,114 @@ test_request_order(void)
     assert(mock_wait_calls == 1u);
     /* Every delivered record was acknowledged. */
     assert(mock_ack_calls == 1u);
+    assert(!mock_record_pending);
+    /* And acknowledged after its completion was collected, never before. */
+    assert(mock_ack_before_collect == 0u);
+    assert(mock_reset_calls == 0u);
+}
+
+/*
+ * Two transfers on one attachment.
+ *
+ * Every earlier gate issued exactly one, and one transfer cannot see what the
+ * endpoint was left in. A filesystem issues thousands, and the second one is
+ * where it stopped: the acknowledgement had already re-armed the endpoint, and
+ * arming it again was refused, so the transfer returned IO_ERROR before it
+ * reached the device.
+ *
+ * These drive flush rather than read. Every operation runs the same
+ * run_request(), which is where the endpoint is sequenced; read and write add
+ * only a copy to and from transfer memory, and transfer memory is addressed by
+ * a uint32_t the host cannot make point at anything real.
+ */
+static void
+test_second_transfer_on_one_attachment(void)
+{
+    AstraLeaseBlock lease;
+
+    assert(attach(&lease) == ASTRA_BLOCK_OK);
+    mock_answers_before_collect = 1;
+
+    assert(astra_lease_block_backend()->flush(&lease, 0u) == ASTRA_BLOCK_OK);
+    /* The partition table read: the first transfer a filesystem asks for. */
+    assert(astra_lease_block_backend()->flush(&lease, 0u) == ASTRA_BLOCK_OK);
+    /* And it keeps going, rather than working once more and then stopping. */
+    assert(astra_lease_block_backend()->flush(&lease, 0u) == ASTRA_BLOCK_OK);
+
+    /* Each completion was consumed, and nothing armed an armed endpoint. */
+    assert(mock_submit_calls == 3u);
+    assert(mock_ack_calls == 3u);
+    assert(mock_arm_refusals == 0u);
+    assert(mock_ack_before_collect == 0u);
+    assert(!mock_record_pending);
+    /* It never waited: the device had already answered. */
+    assert(mock_wait_calls == 0u);
+    assert(mock_reset_calls == 0u);
+}
+
+/* The same two transfers down the path that does wait for its interrupt. */
+static void
+test_second_transfer_through_the_wait_path(void)
+{
+    AstraLeaseBlock lease;
+
+    assert(attach(&lease) == ASTRA_BLOCK_OK);
+
+    assert(astra_lease_block_backend()->flush(&lease, 0u) == ASTRA_BLOCK_OK);
+    assert(astra_lease_block_backend()->flush(&lease, 0u) == ASTRA_BLOCK_OK);
+    assert(mock_wait_calls == 2u);
+    assert(mock_ack_calls == 2u);
+    assert(mock_arm_refusals == 0u);
+    /* The waiting path is where the acknowledgement used to come first. */
+    assert(mock_ack_before_collect == 0u);
+    assert(!mock_record_pending);
+}
+
+/*
+ * The endpoint is armed once. The kernel keeps it armed across every
+ * acknowledgement, so a service that arms per request is asking for a state
+ * transition that is not available to it.
+ */
+static void
+test_endpoint_is_armed_once(void)
+{
+    AstraLeaseBlock lease;
+
+    assert(attach(&lease) == ASTRA_BLOCK_OK);
+    mock_answers_before_collect = 1;
+
+    assert(astra_lease_block_backend()->flush(&lease, 0u) == ASTRA_BLOCK_OK);
+    assert(astra_lease_block_backend()->flush(&lease, 0u) == ASTRA_BLOCK_OK);
+    assert(astra_lease_block_backend()->flush(&lease, 0u) == ASTRA_BLOCK_OK);
+    assert(mock_arm_calls == 1u);
+}
+
+/*
+ * The device completes in the gap after a collection returned nothing.
+ *
+ * This is the shape that survived the first two fixes and still stopped the
+ * mount, roughly one request in fifteen. Acknowledging at that moment reaches
+ * the transport while the completion is still queued, which does not merely
+ * fail: it marks the endpoint with a device error and masks it, and no arm
+ * recovers that. The request must collect again instead.
+ */
+static void
+test_completion_that_lands_after_an_empty_collect(void)
+{
+    AstraLeaseBlock lease;
+    uint32_t index;
+
+    assert(attach(&lease) == ASTRA_BLOCK_OK);
+    mock_answers_during_collect = 1;
+
+    for (index = 0u; index < 20u; ++index) {
+        assert(astra_lease_block_backend()->flush(&lease, 0u) ==
+               ASTRA_BLOCK_OK);
+    }
+    assert(mock_submit_calls == 20u);
+    assert(mock_ack_calls == 20u);
+    assert(mock_ack_before_collect == 0u);
+    assert(mock_arm_refusals == 0u);
     assert(!mock_record_pending);
     assert(mock_reset_calls == 0u);
 }
@@ -403,6 +590,10 @@ main(void)
     test_attach_claims_one_transfer();
     test_attach_rejections();
     test_request_order();
+    test_second_transfer_on_one_attachment();
+    test_second_transfer_through_the_wait_path();
+    test_endpoint_is_armed_once();
+    test_completion_that_lands_after_an_empty_collect();
     test_device_that_never_answers();
     test_completion_statuses_reach_the_caller();
     test_transfer_ceilings();

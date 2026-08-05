@@ -1006,6 +1006,15 @@ void kernel_process_initial_image_progress(uint32_t stage)
         console_putc('\n');
         break;
     }
+    case ASTRA_SUPERVISOR_STAGE_VOLUME_FOUND:
+        console_puts("volume found in the partition table\n");
+        break;
+    case ASTRA_SUPERVISOR_STAGE_VOLUME_MOUNTED:
+        console_puts("volume mounted, journal recovered and started\n");
+        break;
+    case ASTRA_SUPERVISOR_STAGE_VOLUME_VERIFIED:
+        console_puts("volume verified, written and re-read, unmounted\n");
+        break;
     default:
         console_puts("stage ");
         console_dec32(stage);

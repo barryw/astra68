@@ -281,9 +281,9 @@ test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_allocation \
 	./$(BUILD_DIR)/test_elf
 
 $(BUILD_DIR)/test_elf: tests/test_elf.c elf.c elf.h bytes.c bytes.h \
-                       | $(BUILD_DIR)
+                       memory.h process.h vm.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I. \
-		bytes.c elf.c tests/test_elf.c -o $@
+		-I../include bytes.c elf.c tests/test_elf.c -o $@
 
 $(BUILD_DIR)/test_boot_contract: tests/test_boot_contract.c \
                                   ../common/boot_contract.c \

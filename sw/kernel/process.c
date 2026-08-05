@@ -1835,13 +1835,10 @@ failed:
  */
 #define KERNEL_PROCESS_STARTUP_BASE KERNEL_VM_USER_MIN
 /*
- * The ceiling on text, data and BSS a single process image may map. 64 pages
- * (256 KiB) was too small for the first service that holds a mounted volume:
- * the filesystem's bounded arena alone is 216 KiB of BSS, and the image needed
- * 78 pages. KERNEL_PROCESS_MAX is 4, so this ceiling bounds image memory at
- * 2 MiB of the 32 MiB machine.
+ * The ceiling on text, data and BSS a single process image may map is
+ * KERNEL_PROCESS_IMAGE_PAGES_MAX, declared in process.h beside the rest of the
+ * acceptance contract so the loader and its test cannot hold different numbers.
  */
-#define KERNEL_PROCESS_IMAGE_PAGES_MAX 128u
 
 static uint32_t segment_vm_rights(uint32_t elf_rights)
 {

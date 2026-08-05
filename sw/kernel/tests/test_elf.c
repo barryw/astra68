@@ -5,6 +5,9 @@
 #include <string.h>
 
 #include "elf.h"
+#include "memory.h"
+#include "process.h"
+#include "vm.h"
 
 #define PAGE 4096u
 #define IMAGE_CAPACITY (16u * PAGE)
@@ -522,6 +525,19 @@ static void test_single_byte_corruption(void)
 static void test_real_image(void)
 {
     const char *path = getenv("ASTRA_ELF_FIXTURE");
+    /*
+     * The limits the kernel itself applies, not the synthetic ones the
+     * hand-built images above are measured against. A real service is far
+     * larger than those: the supervisor needs 78 pages once lwext4's arena is
+     * in its BSS. Measured against the 64-page ceiling used for the images in
+     * this file it was refused, and the refusal said nothing about the loader.
+     */
+    static const KernelElfLimits real_limits = {
+        .minimum_address = KERNEL_VM_USER_MIN + KERNEL_PAGE_SIZE,
+        .maximum_address = KERNEL_PROCESS_STACK_BASE - 1u,
+        .maximum_pages = KERNEL_PROCESS_IMAGE_PAGES_MAX,
+        .page_size = KERNEL_PAGE_SIZE,
+    };
     KernelElfImage plan;
     KernelElfStatus status;
     static uint8_t fixture[512u * 1024u];
@@ -534,14 +550,16 @@ static void test_real_image(void)
     file = fopen(path, "rb");
     if (file == NULL) {
         printf("FAIL fixture %s: cannot open\n", path);
+        fflush(stdout);
         abort();
     }
     length = fread(fixture, 1u, sizeof(fixture), file);
     fclose(file);
 
-    status = kernel_elf_accept(fixture, (uint32_t)length, &limits, &plan);
+    status = kernel_elf_accept(fixture, (uint32_t)length, &real_limits, &plan);
     if (status != KERNEL_ELF_OK) {
         printf("FAIL fixture %s: %s\n", path, kernel_elf_status_text(status));
+        fflush(stdout);
         abort();
     }
     printf("fixture %s: %u segments, %u pages, entry 0x%08x\n", path,

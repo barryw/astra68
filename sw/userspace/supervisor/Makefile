@@ -35,20 +35,32 @@ HOST_TEST := build/host/test_supervisor
 TEST_SOURCES := src/supervisor.c $(RUNTIME)/src/startup.c \
 	tests/test_supervisor.c
 
-all: $(TARGET) size
+# Two invocations on purpose. Make has no rule here for the libraries the sub-
+# makes build, so it stats them once, before those sub-makes run, and compares
+# the image against that stale stat. A library rebuilt in the same invocation
+# therefore left the previous ELF in place — the stale-object trap wearing a
+# different hat, and it costs an experiment every time it happens. A second
+# invocation stats them afresh.
+all:
+	$(MAKE) libraries
+	$(MAKE) image
 
-# The image is the deliverable, so the link contract is part of the build:
-# astra_user.ld produces exactly the shape kernel_elf_accept() takes.
-$(TARGET): $(OBJECTS) $(RUNTIME)/astra_user.ld | runtime
-	@mkdir -p $(@D)
-	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(RUNTIME_CRT0) $(OBJECTS) \
-		$(EXT4_LIB) $(STORAGE_LIB) $(ALLOC_LIB) $(RUNTIME_LIB) -lgcc
+image: $(TARGET) size
 
-runtime:
+libraries:
 	$(MAKE) -C $(RUNTIME) all
 	$(MAKE) -C $(ALLOC) all
 	$(MAKE) -C $(STORAGE) $(STORAGE_LIB:$(STORAGE)/%=%)
 	$(MAKE) -C $(STORAGE) $(EXT4_LIB:$(STORAGE)/%=%)
+
+# The image is the deliverable, so the link contract is part of the build:
+# astra_user.ld produces exactly the shape kernel_elf_accept() takes. The
+# archives are named as prerequisites so a rebuilt library relinks the image.
+$(TARGET): $(OBJECTS) $(RUNTIME)/astra_user.ld $(RUNTIME_CRT0) $(EXT4_LIB) \
+		$(STORAGE_LIB) $(ALLOC_LIB) $(RUNTIME_LIB)
+	@mkdir -p $(@D)
+	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(RUNTIME_CRT0) $(OBJECTS) \
+		$(EXT4_LIB) $(STORAGE_LIB) $(ALLOC_LIB) $(RUNTIME_LIB) -lgcc
 
 build/m68k/%.o: src/%.c
 	@mkdir -p $(@D)
@@ -90,4 +102,4 @@ size: $(TARGET)
 clean:
 	rm -rf build
 
-.PHONY: all runtime test sanitize analyze size clean
+.PHONY: all image libraries test sanitize analyze size clean

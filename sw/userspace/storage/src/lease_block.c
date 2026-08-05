@@ -6,6 +6,13 @@
 
 #define LEASE_BLOCK_DEFAULT_TIMEOUT_NS 2000000000u
 
+/*
+ * A bound on the drain loop, not the kernel's record ring depth, which is not
+ * part of the syscall ABI. The loop ends when the endpoint reports it has no
+ * record left; this only stops a kernel that never says so from spinning here.
+ */
+#define LEASE_BLOCK_DRAIN_LIMIT 8u
+
 AstraBlockStatus
 astra_lease_block_status(uint32_t completion_status)
 {
@@ -60,9 +67,22 @@ timeout_of(const AstraLeaseBlock *lease)
 }
 
 /*
- * Consumes a delivered record so the endpoint can be armed again. Delivery
- * disarms the source, so a record actually taken here clears the armed flag;
- * finding none leaves it as it was.
+ * Consumes every delivered record.
+ *
+ * Acknowledging the last record is what re-enables the source: the kernel
+ * leaves the endpoint armed rather than returning it to the caller masked, so
+ * a successful acknowledgement means the endpoint still needs nothing. Only a
+ * failed one leaves it masked with its event flags set, and that state is
+ * cleared by a recover, not by an arm.
+ *
+ * This drains rather than taking one record because the storage interrupt has
+ * two causes. A state change and a completion each leave a record, and a
+ * record left behind refuses every later arm.
+ *
+ * It may only be called with nothing in flight. The transport refuses to
+ * complete its interrupt while a completion is still queued, and a failed
+ * acknowledgement does not merely fail: it marks the endpoint with a device
+ * error and masks it, which no arm can undo.
  */
 static uint32_t
 drain(AstraLeaseBlock *lease)
@@ -70,20 +90,33 @@ drain(AstraLeaseBlock *lease)
     AstraIrqRecord record;
     uint32_t events = 0u;
     uint32_t status;
+    uint32_t taken;
 
-    (void)memset(&record, 0, sizeof(record));
-    status = astra_irq_read(lease->irq, &record, &events);
-    if (status == ASTRA_SYSCALL_WOULD_BLOCK) {
-        return ASTRA_SYSCALL_OK;
+    for (taken = 0u; taken < LEASE_BLOCK_DRAIN_LIMIT; ++taken) {
+        (void)memset(&record, 0, sizeof(record));
+        status = astra_irq_read(lease->irq, &record, &events);
+        if (status == ASTRA_SYSCALL_WOULD_BLOCK) {
+            return ASTRA_SYSCALL_OK;
+        }
+        if (status != ASTRA_SYSCALL_OK) {
+            lease->armed = 0u;
+            return status;
+        }
+        status = astra_irq_ack(lease->irq, record.sequence);
+        if (status != ASTRA_SYSCALL_OK) {
+            lease->armed = 0u;
+            return status;
+        }
+        lease->armed = 1u;
     }
-    if (status != ASTRA_SYSCALL_OK) {
-        return status;
-    }
-    lease->armed = 0u;
-    return astra_irq_ack(lease->irq, record.sequence);
+    return ASTRA_SYSCALL_OK;
 }
 
-/* Arming an already-armed endpoint is refused, so ask only when it is not. */
+/*
+ * Arming is a transition out of the masked state, and the kernel refuses it
+ * from any other. The flag records whether the endpoint still needs one, so
+ * this asks exactly once per attachment rather than once per request.
+ */
 static uint32_t
 arm(AstraLeaseBlock *lease)
 {
@@ -117,6 +150,15 @@ run_request(AstraLeaseBlock *lease, uint32_t operation, uint64_t lba,
     uint32_t block_request = 0u;
     uint32_t status;
 
+    /*
+     * Nothing is in flight at this point, so the transport has no completion
+     * queued and a record left over from the last request can be safely
+     * acknowledged. Doing it before the arm matters twice over: the kernel
+     * refuses to arm an endpoint that still holds a record.
+     */
+    if (drain(lease) != ASTRA_SYSCALL_OK) {
+        return ASTRA_BLOCK_IO_ERROR;
+    }
     if (arm(lease) != ASTRA_SYSCALL_OK) {
         return ASTRA_BLOCK_IO_ERROR;
     }
@@ -148,6 +190,19 @@ run_request(AstraLeaseBlock *lease, uint32_t operation, uint64_t lba,
         status = astra_block_lease_collect(lease->device, block_request,
                                            &completion);
         if (status == ASTRA_SYSCALL_OK) {
+            /*
+             * The records are drained here and nowhere else in this loop.
+             * Collecting is what pops the completion out of the transport,
+             * and the transport refuses to complete its interrupt while one
+             * is still queued. Only once this request has been collected is
+             * nothing in flight, and only then can no further completion
+             * appear between the check and the acknowledgement.
+             *
+             * Acknowledging after a collection that returned nothing is the
+             * shape that fails: it races the device, which queues the
+             * completion in the gap, and the acknowledgement then quarantines
+             * the endpoint instead of merely failing.
+             */
             if (drain(lease) != ASTRA_SYSCALL_OK) {
                 return ASTRA_BLOCK_IO_ERROR;
             }
@@ -167,8 +222,7 @@ run_request(AstraLeaseBlock *lease, uint32_t operation, uint64_t lba,
         if (status == ASTRA_SYSCALL_TIMED_OUT) {
             break;
         }
-        if (status != ASTRA_SYSCALL_OK || drain(lease) != ASTRA_SYSCALL_OK ||
-            arm(lease) != ASTRA_SYSCALL_OK) {
+        if (status != ASTRA_SYSCALL_OK) {
             return ASTRA_BLOCK_IO_ERROR;
         }
     }

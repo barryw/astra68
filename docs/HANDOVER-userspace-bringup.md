@@ -17,35 +17,42 @@ build `test_process` (mach-o section attributes) or the kernel image.
 
 The one-line summary of where this stands: **a real ext4 filesystem now runs on
 big-endian MC68030 through the same block facade the ROM-loaded service uses,
-and `e2fsck` calls the volume it writes clean.**
+`e2fsck` calls the volume it writes clean, and the initial image mounts that
+volume from the device lease at every boot.**
 
-**The initial image now carries that filesystem and runs on the board.** ABI 0.4
-raised the image ceiling to 256 KiB, the supervisor links lwext4, and it loads
-and holds its lease on real hardware. One defect stands between that and a
-mounted volume, and it is in the block path rather than the filesystem: see
-section 6, which is where to start.
+The second-transfer defect that blocked the mount is fixed. It was three
+distinct faults in the same few lines of `run_request()`, described in section
+6, and none of them were in the filesystem.
 
-On the board, with the filesystem-carrying image (243,416-byte ROM):
+Under QEMU, with the filesystem-carrying image and a partitioned card:
 
 ```
-Kernel image ....... 126536 bytes @ 0x02044000
-AstraHost runtime ... OK, media present
 Initial image ....... loaded, 98732 bytes, process 0x10000011, 2 granted capabilities
 Initial image ....... startup block and ABI verified from user mode
 Initial image ....... block lease and completion endpoint held
 Initial image ....... block geometry read
 Initial image ....... block round-trip verified, service resident, irq delivered/acked=1/1
+Initial image ....... volume found in the partition table
+Initial image ....... volume mounted, journal recovered and started
+Initial image ....... volume verified, written and re-read, unmounted
 ```
 
-Three further lines — stages 5, 6 and 7 — are what a mounted volume looks like,
-and they are what section 6 is about.
+The last three lines are stages 5, 6 and 7. They mount the volume through the
+lease, recover and start the journal, write and re-read a 4 KiB file, unmount,
+and then assert nothing is left allocated and the port never addressed outside
+its partition window.
+
+**This has not been re-run on the board since the fix.** It is verified on
+Beast; the board run is the first thing to do next.
 
 Gate status: 30 kernel suites, both kernel build configurations, 8 userspace
 suites under ASan/UBSan, GCC `-fanalyzer` clean, the MC68030 kernel image, the
 boot C and Python tests, both QEMU device certifiers, repeated QEMU boots with
 and without media, and — new in phase 4 — the filesystem mount test on the host
 and on big-endian MC68030 under `qemu-m68k` with `e2fsck` as the independent
-judge, plus a freestanding link of the whole filesystem stack.
+judge, plus a freestanding link of the whole filesystem stack. The
+`ASTRA_ELF_FIXTURE` gate is included and passing again — see 6.5 for why it was
+not.
 
 ---
 
@@ -65,7 +72,7 @@ judge, plus a freestanding link of the whole filesystem stack.
 | Transfer memory | `ASTRA_SYSCALL_DMA_CREATE`, `create_dma_buffer()` | owner-charged, contiguous, cache-inhibited; 4 buffers / 16 pages per service |
 | Block admission | `BLOCK_QUERY`/`BLOCK_SUBMIT`/`BLOCK_COLLECT`, ABI `0x0001000a` | lease-gated, fault-injected, round-trip proven at every boot |
 | Lease-backed facade | `sw/userspace/storage/src/lease_block.c` | `AstraBlockBackend` on the real device; interrupt-driven with a deadline |
-| First service | `sw/userspace/supervisor` | 85,400 B MC68030 text with lwext4 linked in, 98,732-byte ELF; resident; verifies itself, its lease and one real transfer, then tries the volume |
+| First service | `sw/userspace/supervisor` | MC68030 text with lwext4 linked in, 98,732-byte ELF, 78 loaded pages; resident; verifies itself, its lease and one real transfer, then mounts the volume |
 | lwext4 vendor | `third_party/lwext4` | BSD-3-Clause subset at upstream `58bcf89`; GPLv2 files not imported; 3 big-endian patches applied in tree |
 | lwext4 port | `sw/userspace/storage/src/ext4_port.c` | 949 B text; binds `AstraBlockDevice` to `ext4_blockdev`; splits transfers, maps status to errno, refuses a re-entrant lock |
 | lwext4 build profile | `sw/userspace/storage/port/include/generated/ext4_config.h` | one profile for host and target; owns errno and oflags so `<errno.h>`, `<fcntl.h>` and `<unistd.h>` drop out |
@@ -73,11 +80,10 @@ judge, plus a freestanding link of the whole filesystem stack.
 | Freestanding C headers | `sw/userspace/runtime/freestanding` | `string.h`, `stdlib.h`, `assert.h`, `inttypes.h`; target only |
 | Runtime primitives | `sw/userspace/runtime/src/{sort,assert}.c` | `qsort` (heapsort, 302 B) and a tagged-exit assertion handler (18 B) |
 | Initial image ceiling | `sw/include/astra/boot.h`, ABI 0.4 | 256 KiB, was 48 KiB; kernel moved to `0x02044000`; costs no RAM |
-| Volume check | `sw/userspace/supervisor/src/volume.c` | mounts through the lease, window-confined; blocked on the second-transfer defect |
+| Volume check | `sw/userspace/supervisor/src/volume.c` | mounts through the lease, window-confined; passes at every boot |
 | Partition reader | `sw/userspace/storage/src/mbr.c` | read-only MBR; FAT type list identical to `sw/stage0` |
 
-Not done: no VFS, no terminal, and the volume does not mount on the device yet
-— one defect, localised, see section 6.
+Not done: no VFS and no terminal. The volume mounts, so phase 5 is next.
 
 ---
 
@@ -307,79 +313,124 @@ Profile everything so performance is measurable and regressions are visible.
 | 3 | Block service + lease-backed `AstraBlockBackend` | **done** |
 | 4 | lwext4 vendor + port layer | **done** |
 | 4b | Initial image carries the filesystem and runs on the board | **done** (ABI 0.4) |
-| 4c | Mount the volume through the device lease | blocked on one block-path defect |
+| 4c | Mount the volume through the device lease | **done** |
 | 5 | VFS service | next |
 | 6 | Terminal service + VFS client Kit + shell builtins | |
 | 7 | Introspection filesystem (`PROC:`) | |
 
 ---
 
-## 6. Start here next session
+## 6. The second-transfer defect, and what it actually was
 
-**One thing is in the way, it is well localised, and it is not in the
-filesystem.** The initial image now carries lwext4 and runs on the board. The
-volume check reaches `astra_mbr_read()`, whose read of sector 0 returns
-`ASTRA_BLOCK_IO_ERROR`, so the service reports "nothing to mount" and parks.
+This section is kept because the three faults it describes are properties of
+the block ABI, not of the code that tripped over them, and the next service to
+drive a device endpoint will meet all three.
 
-That read is **the second transfer ever issued on one lease attachment.**
-Everything before it did exactly one. The path had never been exercised twice,
-and a filesystem was always going to be the thing that found it.
+The symptom was that the second transfer on one lease attachment returned
+`ASTRA_BLOCK_IO_ERROR`, so `astra_mbr_read()` failed and the supervisor
+reported "nothing to mount". Every earlier gate issued exactly one transfer,
+and one transfer cannot observe what the endpoint was left in.
 
-### What is already known about it
+All three faults were in `run_request()` in
+`sw/userspace/storage/src/lease_block.c`.
 
-The first request's flow through `run_request()` in
-`sw/userspace/storage/src/lease_block.c` is:
+### 6.1 Acknowledging re-arms; arming again is refused
 
-```
-arm -> submit -> collect(WOULD_BLOCK) -> wait -> drain -> arm -> collect(OK) -> drain
-```
+`kernel_irq_ack()` re-enables the source and leaves the endpoint `ARMED` when
+it takes the last record. `kernel_irq_arm()` accepts only a `MASKED` endpoint
+and answers anything else with `KERNEL_IRQ_INVALID_STATE`, which reaches user
+mode as `ASTRA_SYSCALL_INVALID_ARGUMENT`.
 
-The second `arm` re-arms after the record is drained; the `collect` that
-follows consumes nothing, so `drain` finds no record. One consequence of that
-is already fixed: the endpoint was left armed, and the next request armed an
-already-armed source. `AstraLeaseBlock` now carries an `armed` flag, `arm()`
-asks only when disarmed, and `drain()` clears it when a record is actually
-taken, because delivery disarms the source.
+The service cleared its `armed` flag when it acknowledged, which is backwards,
+so the next request armed an already-armed endpoint and was refused before it
+reached the device. **The endpoint is armed once per attachment.** The kernel
+keeps it armed; nothing needs to arm it again.
 
-**That fix alone does not make the second read succeed.** The remaining
-suspicion is the other half of the same shape: when the first request's initial
-`collect` returns OK *before* the interrupt is delivered, the record arrives
-afterwards and sits queued. `drain` at that point finds nothing. A queued
-record then refuses every later arm — which is exactly the documented failure
-mode in section 4.3 and would present as `IO_ERROR` on the next request.
+### 6.2 Collect before acknowledging, never after an empty collect
 
-### The next diagnostic, concretely
+`kernel_platform_device_irq_complete()` reports the storage interrupt complete
+only when the transport has no queued completion *and* no unread state change.
+`BLOCK_COLLECT` is what clears both: it runs `kernel_block_service()` first,
+which pops completions and acknowledges the state change.
 
-Instrument `run_request()` to report the `AstraIrqRecord` and the event bits at
-the point of failure, plus which of its `IO_ERROR` returns fired — there are
-five and they are indistinguishable from outside. `astra_progress()` is the
-cheapest channel: the kernel prints `stage N` for any value it does not
-recognise, which is how the `IO_ERROR` was identified in the first place
-(`stage 29` = `20 + ASTRA_BLOCK_IO_ERROR`).
+So an acknowledgement before the collection fails as a device error. That is
+not a soft failure — `kernel_irq_ack()` sets `KERNEL_IRQ_EVENT_DEVICE_ERROR`
+and masks the endpoint, and no arm undoes it. Only a recover does, and a
+recover refuses while a record is still queued.
 
-Iterate on **Beast, not the board**. The failure reproduces identically there
-and a cycle is under two minutes:
+### 6.3 The completion can land in the gap
+
+Acknowledging straight after a collection that returned nothing is still
+wrong, and this is the one that survived the first two fixes. The device
+completes the request in the window between the collect returning and the
+acknowledgement being issued, and the acknowledgement then reaches a transport
+that has a completion queued again. On Beast this lost about one request in
+fifteen — thirteen transfers of the mount succeeded before it hit.
+
+The rule that holds: **acknowledge only where nothing is in flight.** That is
+two places, and `run_request()` now drains at both and nowhere else:
+
+- at the top, before the arm, which also matters because the kernel refuses to
+  arm an endpoint that still holds a record;
+- immediately after a collection that returned this request's completion.
+
+Waking from `astra_wait_one()` is *not* such a place. The loop simply collects
+again.
+
+`drain()` consumes every queued record rather than one, because the storage
+interrupt has two causes and a record left behind refuses every later arm.
+
+### 6.4 What the host test was doing wrong
+
+`tests/test_lease_block.c` passed throughout. Its mock modelled an
+acknowledgement as *disarming* the endpoint — the opposite of the kernel — and
+had no notion of the transport's completion-valid bit, so every ordering above
+was legal in the model.
+
+The mock is now a state machine that mirrors `kernel_irq_arm()`,
+`kernel_irq_ack()` and the completion-valid rule, including a mode where the
+device answers in the gap after an empty collect. Against the code as it was,
+these tests fail. That is the point of them.
+
+### 6.5 Two build defects found on the way
+
+Both cost an experiment each and are fixed:
+
+- **`sw/userspace/supervisor/Makefile` did not relink on a changed library.**
+  The archives were order-only prerequisites of a phony `runtime` target, and
+  make stats a file it has no rule for *before* running that sub-make, so a
+  rebuilt `libastrablock.a` was compared against a stale timestamp and the
+  previous ELF stayed in place. It builds in two invocations now. This is the
+  stale-object trap in a different hat: the image boots, and it is not the code
+  you just wrote.
+- **The `ASTRA_ELF_FIXTURE` gate had been failing since lwext4 was linked in.**
+  `test_elf.c` measured a real executable against the 64-page ceiling used for
+  its hand-built images, while the kernel had already been raised to 128 pages
+  for exactly this image. The supervisor needs 78. `KERNEL_PROCESS_IMAGE_PAGES_MAX`
+  now lives in `process.h` so the loader and its test cannot hold different
+  numbers, and the fixture is measured against the limits the kernel applies.
+  The test also lost its failure message to a buffered `stdout` that `abort()`
+  never flushed, which is why it looked like a silent crash.
+
+### Reproducing
 
 ```sh
-# /tmp/part.img already exists on Beast: 1 GiB, MBR, FAT32 at 2048,
-# ext4 at 133120 on the frozen profile.
 cd sw/userspace && make all && cd ../boot && make astra_boot.bin
 timeout 240 /tmp/qemu-final-build/qemu-system-m68k -M astra68 -m 32M \
     -bios astra_boot.bin -nographic -monitor none -serial stdio -no-reboot \
     -drive if=none,format=raw,file=/tmp/part.img < /dev/null | grep "Initial image"
 ```
 
-Success looks like three more lines after the round-trip: stages 5, 6 and 7 —
-volume found, mounted, verified.
+Eight `Initial image` lines, ending in "volume verified, written and re-read,
+unmounted".
 
-### After that
+`astra_progress()` remains the cheapest instrument in this path: the kernel
+prints `stage N` for any value it does not recognise, and the counter is
+monotonic, so probe values must increase or they are silently refused.
 
-The volume check in `sw/userspace/supervisor/src/volume.c` already does the
-whole sequence: read the partition table, find the Linux entry, bind the port to
-that window, mount, recover, journal, write and re-read a 4 KiB file, unmount,
-then assert nothing is left allocated, the arena was not over-run, and
-`out_of_partition_refusals` is zero. It is written and builds; it is only
-waiting on the block path.
+## 6b. Where to go next
+
+**Run it on the board.** Everything above is verified on Beast only.
 
 Then phase 5 proper — the VFS service — and the loader it needs. Note that
 **the loader is no longer the blocker it was**: ABI 0.4 raised the initial image
@@ -394,8 +445,11 @@ Constraints that will bite:
   in `reentry_refusals`. A deliberate tripwire: the service is single-threaded
   today, and this fires the day it is not, instead of silently corrupting the
   block cache. Threads mean replacing it with a real lock.
+- **The acknowledge-only-when-idle rule in 6.3 assumes one request in flight.**
+  The engine allows four. A service that pipelines requests cannot reason
+  "nothing is in flight" per request and needs a different rule.
 - **Transfer splitting is in the port, not in lwext4.** `run_transfer()` chops
-  requests to `max_transfer_sectors`. The m68k gate splits 4,265 times.
+  requests to `max_transfer_sectors`. The m68k gate splits 7,555 times.
 - **Several device failures collapse to `EIO`** at the lwext4 boundary, because
   lwext4's errno set has no `ETIMEDOUT` or `ECANCELED`. The exact status is in
   `AstraExt4Port::last_status`; anything deciding whether to retry reads it
@@ -509,7 +563,7 @@ make size
 python3 emu/qemu/test-block.py "$(./emu/qemu/build.sh host)"
 python3 emu/qemu/test-input.py "$(./emu/qemu/build.sh host)"
 
-# the fast partitioned-boot loop, which is where the open defect reproduces
+# the partitioned boot: eight Initial image lines, ending in the mounted volume
 timeout 240 /tmp/qemu-final-build/qemu-system-m68k -M astra68 -m 32M \
     -bios sw/boot/astra_boot.bin -nographic -monitor none -serial stdio \
     -no-reboot -drive if=none,format=raw,file=/tmp/part.img < /dev/null |
