@@ -1,0 +1,417 @@
+#!/usr/bin/env python3
+"""Certify the Astra QEMU AstraHost block-service MMIO contract."""
+
+import argparse
+import json
+import os
+import socket
+import struct
+import subprocess
+import tempfile
+import time
+
+
+VESTA = 0xFFF00000
+SYS_STATUS = VESTA + 0x010
+IRQ_RAW = VESTA + 0x300
+
+BLOCK_ID = VESTA + 0x150
+BLOCK_VERSION = VESTA + 0x154
+BLOCK_CAPS = VESTA + 0x158
+BLOCK_STATE = VESTA + 0x15C
+BLOCK_MEDIA_GEN = VESTA + 0x160
+BLOCK_MEDIA_SIZE_HI = VESTA + 0x164
+BLOCK_MEDIA_SIZE_LO = VESTA + 0x168
+BLOCK_QUEUE = VESTA + 0x16C
+BLOCK_REQ_ID = VESTA + 0x170
+BLOCK_REQ_OP = VESTA + 0x174
+BLOCK_REQ_LBA_HI = VESTA + 0x178
+BLOCK_REQ_LBA_LO = VESTA + 0x17C
+BLOCK_REQ_SECTORS = VESTA + 0x180
+BLOCK_REQ_BUFFER = VESTA + 0x184
+BLOCK_REQ_SUBMIT = VESTA + 0x188
+BLOCK_CPL_ID = VESTA + 0x18C
+BLOCK_CPL_STATUS = VESTA + 0x190
+BLOCK_CPL_DETAIL = VESTA + 0x194
+BLOCK_CPL_MEDIA_GEN = VESTA + 0x198
+BLOCK_CPL_HOST_GEN = VESTA + 0x19C
+BLOCK_CPL_POP = VESTA + 0x1A0
+BLOCK_ERROR = VESTA + 0x1A4
+BLOCK_HOST_GEN = VESTA + 0x1A8
+BLOCK_STATE_ACK = VESTA + 0x1AC
+BLOCK_MAX_SECTORS = VESTA + 0x1B0
+
+SYS_ASTRA_HOST = 1 << 5
+
+STATE_LINK_UP = 1 << 0
+STATE_MEDIA_PRESENT = 1 << 1
+STATE_WRITE_ENABLE = 1 << 2
+
+QUEUE_COMPLETION_VALID = 1 << 20
+QUEUE_REQUEST_READY = 1 << 8
+
+OP_READ = 1
+OP_WRITE = 2
+OP_FLUSH = 3
+SUBMIT = 1
+POP = 1
+STATE_ACK = 1
+
+ERROR_BAD_OP = 1 << 0
+ERROR_BAD_COUNT = 1 << 1
+ERROR_BAD_BUFFER = 1 << 2
+ERROR_NO_MEDIA = 1 << 3
+ERROR_WRITE_PROTECT = 1 << 4
+ERROR_LBA_RANGE = 1 << 5
+ERROR_BAD_ID = 1 << 7
+ERROR_BAD_FLAGS = 1 << 8
+
+IRQ_STORAGE = 1 << 4
+
+SDRAM_BASE = 0x02000000
+SDRAM_SIZE = 32 * 1024 * 1024
+SECTOR = 512
+IMAGE_SECTORS = 2048
+BUFFER = SDRAM_BASE + 0x10000
+
+
+def image_byte(offset):
+    return ((offset * 7) + (offset >> 9) + 0x5A) & 0xFF
+
+
+class LineSocket:
+    def __init__(self, path):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        deadline = time.monotonic() + 5.0
+        while True:
+            try:
+                self.sock.connect(path)
+                break
+            except (FileNotFoundError, ConnectionRefusedError):
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.01)
+        self.file = self.sock.makefile("rwb", buffering=0)
+
+    def send(self, line):
+        self.file.write(line.encode("ascii") + b"\n")
+        reply = self.file.readline().decode("ascii").strip()
+        if not reply.startswith("OK"):
+            raise RuntimeError(f"command {line!r} failed: {reply}")
+        return reply[2:].strip()
+
+    def close(self):
+        self.file.close()
+        self.sock.close()
+
+
+class QmpSocket(LineSocket):
+    def __init__(self, path):
+        super().__init__(path)
+        greeting = json.loads(self.file.readline())
+        if "QMP" not in greeting:
+            raise RuntimeError(f"invalid QMP greeting: {greeting}")
+        self.execute("qmp_capabilities")
+
+    def execute(self, command, arguments=None):
+        request = {"execute": command}
+        if arguments is not None:
+            request["arguments"] = arguments
+        self.file.write(json.dumps(request).encode("ascii") + b"\n")
+        while True:
+            reply = json.loads(self.file.readline())
+            if "event" in reply:
+                continue
+            if "error" in reply:
+                raise RuntimeError(f"QMP {command} failed: {reply['error']}")
+            return reply.get("return")
+
+
+class AstraBlockTest:
+    def __init__(self, qtest, image_path):
+        self.qtest = qtest
+        self.image_path = image_path
+        self.swap = False
+        self.next_id = 1
+
+    def read32(self, address):
+        value = int(self.qtest.send(f"readl 0x{address:x}"), 0)
+        if self.swap:
+            return int.from_bytes(value.to_bytes(4, "little"), "big")
+        return value
+
+    def write32(self, address, value):
+        if self.swap:
+            value = int.from_bytes(value.to_bytes(4, "big"), "little")
+        self.qtest.send(f"writel 0x{address:x} 0x{value:x}")
+
+    def read_memory(self, address, size):
+        payload = self.qtest.send(f"read 0x{address:x} 0x{size:x}")
+        return bytes.fromhex(payload[2:] if payload.startswith("0x") else payload)
+
+    def write_memory(self, address, data):
+        self.qtest.send(f"write 0x{address:x} 0x{len(data):x} 0x{data.hex()}")
+
+    def detect_endian(self):
+        value = self.read32(BLOCK_ID)
+        if value == 0x54534F48:
+            self.swap = True
+            value = self.read32(BLOCK_ID)
+        if value != 0x484F5354:
+            raise AssertionError(f"block ID mismatch: 0x{value:08x}")
+
+    def submit(self, operation, lba=0, sectors=0, buffer=BUFFER, flags=0,
+               request_id=None):
+        if request_id is None:
+            request_id = self.next_id
+            self.next_id += 1
+        self.write32(BLOCK_ERROR, 0xFFFFFFFF)
+        self.write32(BLOCK_REQ_ID, request_id)
+        self.write32(BLOCK_REQ_OP, (flags << 8) | operation)
+        self.write32(BLOCK_REQ_LBA_HI, lba >> 32)
+        self.write32(BLOCK_REQ_LBA_LO, lba & 0xFFFFFFFF)
+        self.write32(BLOCK_REQ_SECTORS, sectors)
+        self.write32(BLOCK_REQ_BUFFER, buffer)
+        self.write32(BLOCK_REQ_SUBMIT, SUBMIT)
+        return request_id, self.read32(BLOCK_ERROR)
+
+    def await_completion(self):
+        for _ in range(16):
+            if self.read32(BLOCK_QUEUE) & QUEUE_COMPLETION_VALID:
+                break
+            self.qtest.send("clock_step")
+        else:
+            raise AssertionError("completion never became valid")
+        completion = {
+            "id": self.read32(BLOCK_CPL_ID),
+            "status": self.read32(BLOCK_CPL_STATUS) >> 16,
+            "sectors": self.read32(BLOCK_CPL_STATUS) & 0xFFFF,
+            "detail": self.read32(BLOCK_CPL_DETAIL),
+            "media_generation": self.read32(BLOCK_CPL_MEDIA_GEN),
+            "host_generation": self.read32(BLOCK_CPL_HOST_GEN),
+        }
+        return completion
+
+    def pop(self):
+        self.write32(BLOCK_CPL_POP, POP)
+
+    def test_identity(self):
+        assert self.read32(SYS_STATUS) & SYS_ASTRA_HOST, "SYS_ASTRA_HOST clear"
+        assert self.read32(BLOCK_VERSION) == 0x00010000
+        assert self.read32(BLOCK_CAPS) == 0x7, "read, write, and flush expected"
+        assert self.read32(BLOCK_MAX_SECTORS) == 16
+        state = self.read32(BLOCK_STATE)
+        assert state == (STATE_LINK_UP | STATE_MEDIA_PRESENT |
+                         STATE_WRITE_ENABLE), f"state 0x{state:x}"
+        sectors = (self.read32(BLOCK_MEDIA_SIZE_HI) << 32) | \
+            self.read32(BLOCK_MEDIA_SIZE_LO)
+        assert sectors == IMAGE_SECTORS, sectors
+        assert self.read32(BLOCK_MEDIA_GEN) == 1
+        assert self.read32(BLOCK_HOST_GEN) != 0
+
+    def test_reset_state_change(self):
+        """A reset raises a state change; the storage IRQ holds until acked."""
+        assert self.read32(BLOCK_STATE_ACK) == STATE_ACK
+        assert self.read32(IRQ_RAW) & IRQ_STORAGE
+        self.write32(BLOCK_STATE_ACK, STATE_ACK)
+        assert self.read32(BLOCK_STATE_ACK) == 0
+        assert not self.read32(IRQ_RAW) & IRQ_STORAGE
+        queue = self.read32(BLOCK_QUEUE)
+        assert queue & QUEUE_REQUEST_READY
+        assert not queue & QUEUE_COMPLETION_VALID
+
+    def test_read(self):
+        request_id, error = self.submit(OP_READ, lba=3, sectors=4)
+        assert error == 0, f"read rejected 0x{error:x}"
+        assert not self.read32(BLOCK_QUEUE) & QUEUE_COMPLETION_VALID, \
+            "completion must not be immediate"
+        assert not self.read32(IRQ_RAW) & IRQ_STORAGE
+
+        completion = self.await_completion()
+        assert self.read32(IRQ_RAW) & IRQ_STORAGE, "completion must raise IRQ"
+        assert completion["id"] == request_id
+        assert completion["status"] == 0, completion
+        assert completion["sectors"] == 4, completion
+        assert completion["detail"] == 0
+        assert completion["media_generation"] == 1
+        assert completion["host_generation"] == self.read32(BLOCK_HOST_GEN)
+
+        got = self.read_memory(BUFFER, 4 * SECTOR)
+        want = bytes(image_byte(3 * SECTOR + i) for i in range(4 * SECTOR))
+        assert got == want, "read data mismatch"
+
+        self.pop()
+        assert not self.read32(BLOCK_QUEUE) & QUEUE_COMPLETION_VALID
+        assert not self.read32(IRQ_RAW) & IRQ_STORAGE
+
+    def test_write_and_flush(self):
+        payload = bytes((i * 13 + 7) & 0xFF for i in range(2 * SECTOR))
+        self.write_memory(BUFFER, payload)
+
+        request_id, error = self.submit(OP_WRITE, lba=10, sectors=2)
+        assert error == 0, f"write rejected 0x{error:x}"
+        completion = self.await_completion()
+        assert completion["id"] == request_id
+        assert completion["status"] == 0 and completion["sectors"] == 2
+        self.pop()
+
+        _, error = self.submit(OP_FLUSH)
+        assert error == 0, f"flush rejected 0x{error:x}"
+        completion = self.await_completion()
+        assert completion["status"] == 0 and completion["sectors"] == 0
+        self.pop()
+
+        with open(self.image_path, "rb") as image:
+            image.seek(10 * SECTOR)
+            assert image.read(2 * SECTOR) == payload, "image content mismatch"
+
+    def test_read_back_written_data(self):
+        self.write_memory(BUFFER, b"\x00" * (2 * SECTOR))
+        _, error = self.submit(OP_READ, lba=10, sectors=2)
+        assert error == 0
+        completion = self.await_completion()
+        assert completion["status"] == 0
+        self.pop()
+        got = self.read_memory(BUFFER, 2 * SECTOR)
+        want = bytes((i * 13 + 7) & 0xFF for i in range(2 * SECTOR))
+        assert got == want, "written data did not read back"
+
+    def test_rejections(self):
+        """Every rejection reports its own bit and produces no completion."""
+        cases = [
+            ("bad op", dict(operation=9, sectors=1), ERROR_BAD_OP),
+            ("zero count", dict(operation=OP_READ, sectors=0),
+             ERROR_BAD_COUNT),
+            ("oversized count", dict(operation=OP_READ, sectors=17),
+             ERROR_BAD_COUNT),
+            ("flush with sectors", dict(operation=OP_FLUSH, sectors=1),
+             ERROR_BAD_COUNT),
+            ("unaligned buffer",
+             dict(operation=OP_READ, sectors=1, buffer=BUFFER + 1),
+             ERROR_BAD_BUFFER),
+            ("buffer below SDRAM",
+             dict(operation=OP_READ, sectors=1, buffer=0x1000),
+             ERROR_BAD_BUFFER),
+            ("buffer overruns SDRAM",
+             dict(operation=OP_READ, sectors=2,
+                  buffer=SDRAM_BASE + SDRAM_SIZE - SECTOR),
+             ERROR_BAD_BUFFER),
+            ("lba past media",
+             dict(operation=OP_READ, lba=IMAGE_SECTORS, sectors=1),
+             ERROR_LBA_RANGE),
+            ("transfer crosses end",
+             dict(operation=OP_READ, lba=IMAGE_SECTORS - 1, sectors=2),
+             ERROR_LBA_RANGE),
+            ("zero id",
+             dict(operation=OP_READ, sectors=1, request_id=0),
+             ERROR_BAD_ID),
+            ("unknown flags",
+             dict(operation=OP_READ, sectors=1, flags=0x80),
+             ERROR_BAD_FLAGS),
+        ]
+        for name, arguments, expected in cases:
+            _, error = self.submit(**arguments)
+            assert error & expected, f"{name}: error 0x{error:x}"
+            self.qtest.send("clock_step")
+            assert not self.read32(BLOCK_QUEUE) & QUEUE_COMPLETION_VALID, \
+                f"{name} produced a completion"
+            assert not self.read32(IRQ_RAW) & IRQ_STORAGE, \
+                f"{name} raised an interrupt"
+
+        # BLOCK_ERROR is write-one-to-clear and accumulates until cleared.
+        self.write32(BLOCK_ERROR, 0)
+        assert self.read32(BLOCK_ERROR) != 0, "a zero write must clear nothing"
+        self.write32(BLOCK_ERROR, 0xFFFFFFFF)
+        assert self.read32(BLOCK_ERROR) == 0
+
+    def test_queue_full(self):
+        """A second submission while one transfer is active is refused."""
+        _, error = self.submit(OP_READ, lba=0, sectors=1)
+        assert error == 0
+        queue = self.read32(BLOCK_QUEUE)
+        assert not queue & QUEUE_REQUEST_READY, "device claimed to be ready"
+        _, error = self.submit(OP_READ, lba=1, sectors=1)
+        assert error & (1 << 6), f"expected queue-full, got 0x{error:x}"
+        completion = self.await_completion()
+        assert completion["status"] == 0
+        self.pop()
+        assert self.read32(BLOCK_QUEUE) & QUEUE_REQUEST_READY
+
+    def run(self):
+        self.detect_endian()
+        self.test_identity()
+        self.test_reset_state_change()
+        self.test_read()
+        self.test_write_and_flush()
+        self.test_read_back_written_data()
+        self.test_rejections()
+        self.test_queue_full()
+
+
+def build_image(path):
+    with open(path, "wb") as image:
+        image.write(bytes(image_byte(i)
+                          for i in range(IMAGE_SECTORS * SECTOR)))
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("qemu", help="Astra QEMU system emulator")
+    args = parser.parse_args()
+
+    with tempfile.TemporaryDirectory(prefix="astra-block-") as temp:
+        rom = os.path.join(temp, "block-test.rom")
+        image = os.path.join(temp, "storage.img")
+        qtest_path = os.path.join(temp, "qtest.sock")
+        qmp_path = os.path.join(temp, "qmp.sock")
+        with open(rom, "wb") as output:
+            output.write(struct.pack(">II", 0x02001000, 0xFFE00008))
+        build_image(image)
+
+        command = [
+            args.qemu, "-machine", "astra68,accel=qtest", "-m", "32M",
+            "-bios", rom, "-S", "-display", "none", "-nodefaults",
+            "-drive", f"if=none,format=raw,file={image}",
+            "-qtest", f"unix:{qtest_path},server=on,wait=off",
+            "-qmp", f"unix:{qmp_path},server=on,wait=off",
+        ]
+        environment = os.environ.copy()
+        private_lib = os.path.realpath(
+            os.path.join(os.path.dirname(args.qemu), "..", "lib"))
+        if os.path.isdir(private_lib):
+            existing = environment.get("LD_LIBRARY_PATH")
+            environment["LD_LIBRARY_PATH"] = (
+                private_lib if not existing else f"{private_lib}:{existing}"
+            )
+        process = subprocess.Popen(command, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True,
+                                   env=environment)
+        qtest = qmp = None
+        try:
+            qtest = LineSocket(qtest_path)
+            qmp = QmpSocket(qmp_path)
+            qmp.execute("cont")
+            AstraBlockTest(qtest, image).run()
+            print("ASTRA QEMU BLOCK PASS")
+        finally:
+            if qmp is not None:
+                try:
+                    qmp.execute("quit")
+                except (BrokenPipeError, EOFError):
+                    pass
+                qmp.close()
+            if qtest is not None:
+                qtest.close()
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+            if process.returncode not in (0, None):
+                print(stdout)
+                print(stderr)
+                raise SystemExit(f"qemu exited {process.returncode}")
+
+
+if __name__ == "__main__":
+    main()
