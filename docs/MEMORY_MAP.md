@@ -45,10 +45,21 @@ read-only reader for the boot volume, and the console font. Everything else is a
 file on storage: filesystem stacks beyond the boot volume, terminal, shell,
 fonts, desktop, applications, and diagnostics beyond POST.
 
-lwext4 is the load-bearing example. It is 66–80 KiB of MC68030 text
+lwext4 is the load-bearing example. It is 64–74 KiB of MC68030 text
 (`docs/STORAGE_AND_VFS.md`) and it does **not** belong in ROM: `sw/stage0` reads
 FAT in a 2,020-byte image, so the boot volume is reachable without it and the
 full filesystem stack can be loaded as an ordinary file.
+
+That reasoning is sound but it is not what actually stops it, and the
+difference matters when planning. Measured on hardware: a supervisor with
+lwext4 linked in is 98,732 bytes raw and 57,350 compressed, and the resulting
+ROM is 243,304 of 262,144 — **it fits here**. Firmware rejects it anyway with
+`POST FAIL: user image exceeds its reservation`, because the initial user image
+is capped at `ASTRA_USER_IMAGE_MAX_SIZE` = 48 KiB by the RAM hole between
+`ASTRA_USER_IMAGE_ADDRESS` (`0x02004000`) and `ASTRA_KERNEL_LOAD_ADDRESS`
+(`0x02010000`), not by this budget. Raising it is a boot ABI change that moves
+the kernel. The ROM budget is therefore not the reason to load the filesystem
+from a file; the user image reservation is.
 
 Measured at ROM v0.3 with boot ABI 0.3 (`astra68.rom` reports this on every
 build):

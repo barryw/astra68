@@ -21,7 +21,10 @@ and `e2fsck` calls the volume it writes clean.**
 
 Before that, and still true: a user-mode service loaded from ROM reads sectors
 off a real block device through that facade, and the kernel proves it on every
-boot.
+boot. That chain now also runs **on the board** — see section 3 — with the
+block round-trip verified against a partitioned image on its SD-backed storage.
+The filesystem itself does not yet run there, for a reason worth reading in
+section 6 before planning around it.
 
 ```
 astra68.rom: 191864 payload bytes, 70280 bytes free of 262144 (73.2% used)
@@ -81,6 +84,38 @@ Scratch state on Beast, all disposable:
 | `/tmp/astra-qemu-final/source-8c7066…` | prepared QEMU source | via `emu/qemu/prepare-source.sh` |
 | `/tmp/lwext4-verify/` | obsolete — lwext4 is vendored now, no external checkout is used | delete it |
 | `/tmp/storage.img` | 64 MiB raw image the boot check reads sector 0 from | `truncate -s 64M` |
+| `/tmp/astra-qemu-arty/build-arty-*/qemu-system-m68k` | **ARM** emulator for the board, built by `emu/qemu/build.sh arty` | ~6 min |
+
+### The board
+
+`astra-arty`, an Arty Z7-20, at **192.168.1.188**, root ssh from Beast (not
+from the Mac). It is a Zynq: ARMv7 Cortex-A9 running Linux 6.6-xilinx, with the
+graphics design in the PL. **The m68k is QEMU on the ARM cores, not the FPGA
+fabric**, so a board run is real hardware for storage, graphics and the SD path
+but is still TCG for the CPU. 68030 timing is no more real there than on Beast;
+journal replay cost still cannot be measured this way.
+
+Traps found while deploying:
+
+- **The board's shipped `qemu-system-m68k-astra` predates the block device
+  model.** All three binaries under `/data/astra/qemu/bin` return zero for
+  `strings … | grep "Astra68 storage image"`. Symptom is
+  `AstraHost runtime ... not present` and `0 granted capabilities` even with a
+  `-drive` attached. Fix is `emu/qemu/build.sh arty` on Beast, which
+  cross-compiles with `arm-linux-gnueabihf-` against armhf pkgconfig.
+- The board is BusyBox: no `truncate`, no `timeout`, no `pkill`, and `losetup`
+  takes `-o OFS LOOPDEV FILE` rather than `--find`. `/` is read-only; only
+  `/data` is writable, so logs go there and not `/tmp`.
+- `/data/astra/bin/astra-qemu` requires evdev keyboard *and* mouse and exits if
+  either is missing. The board currently has only a trackball, so a headless
+  run must invoke the emulator directly with
+  `LD_LIBRARY_PATH=/data/astra/qemu/lib`.
+
+Deployed by this work, all non-destructive and alongside the existing files:
+`/data/astra/rom/astra_boot-phase4.bin`,
+`/data/astra/qemu/bin/qemu-system-m68k-astra-phase4`, and
+`/data/astra/storage.img` — 1 GiB, MBR, 64 MiB FAT32 LBA at sector 2048 and an
+ext4 volume at sector 133120 on the frozen profile.
 
 Traps that have each cost time:
 
@@ -280,17 +315,41 @@ states the three translations the port owns.
 **What phase 4 did not do, and what it means.** The filesystem has only ever
 run against the *memory* backend. Every gate — host and m68k — mounts a volume
 held in RAM. It has never been mounted through `lease_block.c` on the real
-device, and that is not an oversight: there is no way to get there yet. lwext4
-is 64–74 KiB of text and `docs/MEMORY_MAP.md` rules it out of the 256 KiB ROM
-window, so the filesystem must load as an ordinary file — and the loader that
-would read that file is the thing phase 5 builds. The facade is the same object
-in both cases, which is the entire argument for believing the first real-device
-mount will work, but it is an argument and not yet a measurement.
+device. The facade is the same object in both cases, which is the argument for
+believing the first real-device mount will work, but it is an argument and not
+yet a measurement.
 
-The first thing worth doing in phase 5 is therefore probably not the VFS
-surface. It is closing that loop: get lwext4 onto the real device once, however
-crudely, so the port is proven against the transport it will actually use
-before a service is designed on top of it.
+**The reason it cannot be, and an earlier claim in this file that was wrong.**
+This document previously said lwext4 is ruled out of the initial image by the
+256 KiB ROM window. That is not the binding constraint, and it was measured
+directly by trying it on hardware. A supervisor with lwext4 linked in builds to
+98,732 bytes, compresses to 57,350, and the resulting ROM is 243,304 of
+262,144 — **it fits in ROM with room to spare.** Firmware still refuses it:
+
+```
+POST FAIL: user image exceeds its reservation
+```
+
+`ASTRA_USER_IMAGE_MAX_SIZE` is `0x0000c000`, **48 KiB**, and it is not a policy
+number that can simply be raised. The image lands at
+`ASTRA_USER_IMAGE_ADDRESS` `0x02004000` and the next reservation,
+`ASTRA_KERNEL_LOAD_ADDRESS`, begins at `0x02010000`. The window *is* the hole
+between them. Growing it moves the kernel, which is a boot ABI 0.3 → 0.4 change
+touching firmware, `sw/common/boot_contract.c`, the kernel, and
+`test_boot_contract`.
+
+So the initial image is capped at 48 KiB by RAM layout, not by ROM budget, and
+the file loader phase 5 builds is **mandatory rather than merely preferable**.
+That also settles the earlier "put the fs stack in the ROM instead of writing a
+FAT reader" option: it does not work, for a reason that has nothing to do with
+ROM space.
+
+The mount sequence itself is not the hard part and was written and built during
+this work before being reverted: read the partition table, find the Linux
+entry, bind the port to that window, `ext4_device_register` / `ext4_mount` /
+`ext4_recover` / `ext4_journal_start`, write and re-read a file, unmount, then
+assert nothing is left allocated and `out_of_partition_refusals` is zero. It
+belongs in whatever service phase 5 loads from FAT, not in the initial image.
 
 Constraints that will bite:
 
