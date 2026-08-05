@@ -127,7 +127,7 @@ Notes that matter:
 | `third_party/musashi` | – | 68030 model + Astra PMMU rewrite | **conformance oracle** |
 | `conformance/` | 33 | shared architectural cases; targets `musashi-68030` and `rtl-tg68k030-mmu2` | active oracle |
 | `emu/qemu` | – | **Astra QEMU 9.2.4 fork — the emulator** | active |
-| `emu/crates` | 36 | AstraVM, Rust desktop machine on Musashi | superseded |
+| ~~`emu/crates`~~ | – | AstraVM, Rust desktop machine on Musashi | **removed 2026-08-05** |
 | `fpga/arty` | 133 | Arty Z7 Linux, FSBL, device tree, FIT, graphics loader | **active** |
 | `fpga/soc` | 124 | SoC RTL and the oss flow / timing closure | active (ULX3S lineage) |
 | `fpga/cpu` | 175 | `tg68k_c_030_mmu2`, the repaired TG68K core | retained oracle |
@@ -141,8 +141,8 @@ Notes that matter:
 | `build/` | **0** | untracked build output at the repo root | should not exist |
 | `docs/evidence/` | 0 | ignored working view of retained evidence | never stage |
 
-`emu/target` is 2.1 GB of untracked Rust build artifacts; `fpga/` is 2.3 GB
-mostly untracked. Only 36 files under `emu/` are tracked.
+`fpga/` is 2.3 GB, mostly untracked build output. `emu/` is now the QEMU fork
+alone, 14 tracked files.
 
 ---
 
@@ -261,7 +261,7 @@ where noted.
 
 | Item | Evidence |
 |---|---|
-| `emu/crates` (AstraVM) + `Cargo.*`, `rust-toolchain.toml` | A second emulator, on Musashi, superseded by the QEMU fork. `git grep astravm` outside `emu/` returns **0**. Frees 2.1 GB of untracked artifacts. |
+| ~~`emu/crates` (AstraVM)~~ | **Done 2026-08-05.** A second emulator, on Musashi, superseded by the QEMU fork; nothing outside `emu/` referenced it. Freed 2.1 GB of untracked artifacts. `emu/` is now just `qemu/`. |
 | `build/` at repo root | **0 tracked files**; build output that should never have been there. |
 
 ### Needs a decision — do not delete on inference

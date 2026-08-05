@@ -59,9 +59,9 @@ system is **Astra OS**.
   scaling, reflection, keying, MASK1, palette attachments, source-over,
   opacity, all sixteen ROPs, and supported format conversion. Its 200 MHz
   timing and integrated hardware release gates are still open.
-- AstraVM provides a native Rust desktop reference machine using the real boot
-  ROM and the shared Musashi MC68030/PMMU model. A QEMU backend runs the active
-  Arty machine.
+- The Astra QEMU backend runs the active Arty machine and is the only emulator.
+  The Musashi MC68030/PMMU model is retained as a conformance oracle for the
+  RTL CPU, not as a machine to run Astra on.
 
 ## Direction
 
@@ -116,7 +116,7 @@ remain valuable behavioral and regression oracles.
 | [`ndk/`](ndk/) | Public Astra developer interfaces and generated documentation |
 | [`fpga/arty/`](fpga/arty/) | Active Zynq/Arty hardware, Linux integration, and graphics RTL |
 | [`fpga/cpu/`](fpga/cpu/) | Retained MC68030/PMMU RTL and conformance integration |
-| [`emu/`](emu/) | AstraVM and the active QEMU machine backend |
+| [`emu/qemu/`](emu/qemu/) | The Astra QEMU machine backend |
 | [`conformance/`](conformance/) | Shared architectural tests and implementation adapters |
 | [`third_party/`](third_party/) | Vendored upstream components with their original notices |
 
@@ -129,10 +129,8 @@ host-side entry points are:
 # Axiom host tests
 make -C sw/kernel test
 
-# Native AstraVM checks and tests
-make -C emu toolchain
-make -C emu check
-make -C emu test
+# Emulator for the host, the desktop, or the Arty board
+emu/qemu/build.sh host
 
 # Directed active-graphics RTL suite (requires Icarus Verilog)
 fpga/arty/graphics/run_tests.sh
@@ -144,8 +142,9 @@ route, deployment, and rollback procedures are intentionally kept in the
 component documentation because a reduced or unconstrained bitstream is not
 release evidence.
 
-See [AstraVM](emu/README.md), [Arty graphics](fpga/arty/graphics/README.md),
-and the [shared conformance harness](conformance/README.md) for focused setup.
+See [the inventory](docs/INVENTORY.md) for the machines, boards and toolchains,
+[Arty graphics](fpga/arty/graphics/README.md), and the
+[shared conformance harness](conformance/README.md) for focused setup.
 
 ## Engineering rules
 
