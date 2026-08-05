@@ -11,6 +11,25 @@ invoke(uint32_t number, uint32_t argument0)
 }
 
 uint32_t
+astra_progress(uint32_t value)
+{
+    return invoke(ASTRA_SYSCALL_PROGRESS, value).status;
+}
+
+uint32_t
+astra_device_query(uint32_t handle, AstraDeviceInfo *info)
+{
+    AstraSyscallResult result;
+
+    if (info == NULL) {
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    astra_syscall5(ASTRA_SYSCALL_DEVICE_QUERY, handle,
+                   (uint32_t)(uintptr_t)info, 0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
 astra_process_info(uint32_t handle, AstraProcessInfo *info)
 {
     AstraSyscallResult result;

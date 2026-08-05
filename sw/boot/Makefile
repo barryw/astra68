@@ -44,6 +44,7 @@ KERNEL_VERSION ?= 0.1.0-dev
 KERNEL_PANIC_SELFTEST ?= 0
 KERNEL_SCHED_TRACE ?= 0
 KERNEL_SOAK_SELFTEST ?= 0
+KERNEL_K1_QUALIFICATION ?= 0
 
 CFLAGS  = -m68030 -msoft-float -Os -ffreestanding -fno-builtin -nostdlib \
           -Wa,--noexecstack -Wall -Wextra \
@@ -124,7 +125,8 @@ BUILD_CONFIG = CPU=TG68K030_MMU2 CPU_CLK_DIV_BIT=$(CPU_CLK_DIV_BIT) \
                ROM_VERSION=$(ROM_VERSION) KERNEL_VERSION=$(KERNEL_VERSION) \
                KERNEL_PANIC_SELFTEST=$(KERNEL_PANIC_SELFTEST) \
                KERNEL_SCHED_TRACE=$(KERNEL_SCHED_TRACE) \
-               KERNEL_SOAK_SELFTEST=$(KERNEL_SOAK_SELFTEST)
+               KERNEL_SOAK_SELFTEST=$(KERNEL_SOAK_SELFTEST) \
+               KERNEL_K1_QUALIFICATION=$(KERNEL_K1_QUALIFICATION)
 ID_SRCS = Makefile ../../mk/m68k-cross.mk gen_build_info.py pack_payload.py \
           boot.c crt0.S $(LD) \
           kernel_blob.S user_blob.S splash_blob.S splash.c splash.h lz4_legacy.c \
@@ -157,7 +159,8 @@ $(KERNEL_BIN): FORCE $(KERNEL_ID_SRCS) ../common/boot_contract.c \
                ../include/astra/boot.h ../include/astra/syscall.h
 	$(MAKE) -C $(KERNEL_DIR) all CROSS=$(CROSS) \
 		KERNEL_VERSION=$(KERNEL_VERSION) PANIC_SELFTEST=$(KERNEL_PANIC_SELFTEST) \
-		SCHED_TRACE=$(KERNEL_SCHED_TRACE) SOAK_SELFTEST=$(KERNEL_SOAK_SELFTEST)
+		SCHED_TRACE=$(KERNEL_SCHED_TRACE) SOAK_SELFTEST=$(KERNEL_SOAK_SELFTEST) \
+		K1_QUALIFICATION=$(KERNEL_K1_QUALIFICATION)
 
 $(USER_IMAGE): FORCE $(USER_IMAGE_ID_SRCS)
 	$(MAKE) -C $(USER_IMAGE_DIR) all CROSS=$(CROSS)

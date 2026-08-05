@@ -94,6 +94,7 @@ static uint8_t worker_active;
 static uint8_t milestone_progress_ready;
 static uint8_t process_pool_corrupt;
 static uint32_t initial_image_process_id;
+static uint32_t initial_image_progress;
 static uint8_t initial_image_exited;
 
 _Static_assert(KERNEL_THREAD_STACK_SIZE == KERNEL_PAGE_SIZE,
@@ -1082,6 +1083,7 @@ void kernel_process_init(void)
     kernel_bytes_clear(qualification_clients,
                        sizeof(qualification_clients));
     initial_image_process_id = 0u;
+    initial_image_progress = 0u;
     initial_image_exited = 0u;
     kernel_thread_pool_init();
     kernel_sync_pool_init();
@@ -1609,26 +1611,83 @@ static KernelProcessStatus map_segments(KernelProcess *process,
  * before it ran; destroying the block does not close them, and normal handle
  * lifetime rules release them.
  */
-static KernelProcessStatus publish_startup_block(KernelProcess *process,
-                                                 KernelHandle process_handle,
-                                                 KernelHandle thread_handle)
+#define STARTUP_CAPABILITY_TOTAL_MAX \
+    (2u + KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX)
+
+/*
+ * Grants the objects the launcher named, in the process that is being built.
+ * Nothing is published yet: on failure the caller's unwind closes the handle
+ * table, which releases every lease and endpoint installed here.
+ */
+static KernelProcessStatus grant_bootstrap_capabilities(
+    KernelProcess *process,
+    const KernelProcessBootstrapCapability *requested, uint32_t count,
+    AstraStartupCapability *granted)
+{
+    for (uint32_t index = 0u; index < count; ++index) {
+        const KernelProcessBootstrapCapability *entry = &requested[index];
+        KernelHandle handle = KERNEL_HANDLE_INVALID;
+        KernelProcessStatus status;
+
+        if (entry->name == 0u || entry->rights == 0u)
+            return KERNEL_PROCESS_INVALID_ARGUMENT;
+        switch (entry->kind) {
+        case KERNEL_PROCESS_BOOTSTRAP_DEVICE:
+            status = kernel_process_grant_device(process->id, entry->device_id,
+                                                 entry->rights, &handle);
+            break;
+        case KERNEL_PROCESS_BOOTSTRAP_IRQ: {
+            KernelIrqBinding binding;
+
+            if (!kernel_interrupt_device_binding(entry->irq_source, &binding))
+                return KERNEL_PROCESS_INVALID_ARGUMENT;
+            status = kernel_process_grant_irq(process->id, &binding,
+                                              entry->rights, &handle);
+            break;
+        }
+        default:
+            return KERNEL_PROCESS_INVALID_ARGUMENT;
+        }
+        if (status != KERNEL_PROCESS_OK)
+            return status;
+        if (handle == KERNEL_HANDLE_INVALID)
+            return KERNEL_PROCESS_CORRUPT;
+        granted[index].name = entry->name;
+        granted[index].handle = handle;
+        granted[index].rights = entry->rights;
+        granted[index].flags = 0u;
+    }
+    return KERNEL_PROCESS_OK;
+}
+
+static KernelProcessStatus publish_startup_block(
+    KernelProcess *process, KernelHandle process_handle,
+    KernelHandle thread_handle, const AstraStartupCapability *bootstrap,
+    uint32_t bootstrap_count)
 {
     uint8_t page[ASTRA_STARTUP_INFO_SIZE +
-                 (2u * ASTRA_STARTUP_CAPABILITY_SIZE)];
+                 (STARTUP_CAPABILITY_TOTAL_MAX *
+                  ASTRA_STARTUP_CAPABILITY_SIZE)];
     AstraStartupInfo info;
-    AstraStartupCapability capability[2];
+    AstraStartupCapability capability[STARTUP_CAPABILITY_TOTAL_MAX];
+    uint32_t count = 2u + bootstrap_count;
+    uint32_t published_bytes;
 
+    if (bootstrap_count > KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
     kernel_bytes_clear(&info, sizeof(info));
     kernel_bytes_clear(capability, sizeof(capability));
+    published_bytes = ASTRA_STARTUP_INFO_SIZE +
+                      (count * ASTRA_STARTUP_CAPABILITY_SIZE);
 
     info.magic = ASTRA_STARTUP_MAGIC;
     info.abi_version = ASTRA_STARTUP_ABI_VERSION;
     info.header_size = ASTRA_STARTUP_INFO_SIZE;
-    info.total_size = (uint32_t)sizeof(page);
+    info.total_size = published_bytes;
     info.syscall_abi_version = ASTRA_SYSCALL_ABI_VERSION;
     info.process_handle = process_handle;
     info.thread_handle = thread_handle;
-    info.capability_count = 2u;
+    info.capability_count = count;
     info.capabilities_address =
         KERNEL_PROCESS_STARTUP_BASE + ASTRA_STARTUP_INFO_SIZE;
 
@@ -1638,19 +1697,25 @@ static KernelProcessStatus publish_startup_block(KernelProcess *process,
     capability[1].name = ASTRA_CAPABILITY_THREAD;
     capability[1].handle = thread_handle;
     capability[1].rights = KERNEL_THREAD_RIGHTS;
+    /* Freestanding: a struct assignment here would call libc memcpy. */
+    if (bootstrap_count != 0u)
+        kernel_bytes_copy(&capability[2], bootstrap,
+                          bootstrap_count * sizeof(capability[0]));
 
     kernel_bytes_copy(page, &info, sizeof(info));
     kernel_bytes_copy(page + ASTRA_STARTUP_INFO_SIZE, capability,
-                      sizeof(capability));
+                      count * ASTRA_STARTUP_CAPABILITY_SIZE);
 
     return publish_page(process, KERNEL_PROCESS_STARTUP_BASE, page,
-                        (uint32_t)sizeof(page), KERNEL_VM_READ);
+                        published_bytes, KERNEL_VM_READ);
 }
 
-KernelProcessStatus kernel_process_create_executable(const void *image,
-                                                     uint32_t image_size,
-                                                     uint32_t *process_id)
+KernelProcessStatus kernel_process_create_executable(
+    const void *image, uint32_t image_size,
+    const KernelProcessBootstrapCapability *capabilities,
+    uint32_t capability_count, uint32_t *process_id)
 {
+    AstraStartupCapability granted[KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX];
     /* Static so the initialiser is not copied through a libc memcpy. */
     static const KernelElfLimits limits = {
         .minimum_address = KERNEL_VM_USER_MIN + KERNEL_PAGE_SIZE,
@@ -1673,8 +1738,11 @@ KernelProcessStatus kernel_process_create_executable(const void *image,
     KernelObjectCacheStatus cache_status;
     uint32_t index;
 
-    if (image == NULL || process_id == NULL)
+    if (image == NULL || process_id == NULL ||
+        capability_count > KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX ||
+        (capability_count != 0u && capabilities == NULL))
         return KERNEL_PROCESS_INVALID_ARGUMENT;
+    kernel_bytes_clear(granted, sizeof(granted));
     *process_id = 0u;
     if (kernel_elf_accept(image, image_size, &limits, &plan) != KERNEL_ELF_OK)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
@@ -1763,8 +1831,16 @@ KernelProcessStatus kernel_process_create_executable(const void *image,
     prepared_thread.thread->context.data[4] = self_handle;
     prepared_thread.thread->context.data[5] = prepared_thread.handle;
 
+    result = grant_bootstrap_capabilities(process, capabilities,
+                                          capability_count, granted);
+    if (result != KERNEL_PROCESS_OK) {
+        (void)abort_prepared_thread(&prepared_thread);
+        goto failed;
+    }
+
     result = publish_startup_block(process, self_handle,
-                                   prepared_thread.handle);
+                                   prepared_thread.handle, granted,
+                                   capability_count);
     if (result != KERNEL_PROCESS_OK) {
         (void)abort_prepared_thread(&prepared_thread);
         goto failed;
@@ -1799,6 +1875,7 @@ failed:
 void kernel_process_register_initial_image(uint32_t process_id)
 {
     initial_image_process_id = process_id;
+    initial_image_progress = 0u;
     initial_image_exited = 0u;
 }
 
@@ -2917,6 +2994,18 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                 current->progress = thread->context.data[1];
                 if (current->progress >= KERNEL_PROCESS_PROGRESS_GOAL)
                     milestone_progress_ready = 1u;
+                /*
+                 * The initial image reports how far it has come up through
+                 * the same counter every process has. Nothing new is needed
+                 * for the kernel to know its service reached each stage.
+                 */
+                if (initial_image_process_id != 0u &&
+                    current->id == initial_image_process_id &&
+                    current->progress > initial_image_progress) {
+                    initial_image_progress = current->progress;
+                    kernel_process_initial_image_progress(
+                        initial_image_progress);
+                }
             }
         }
         break;

@@ -10,6 +10,8 @@ KERNEL_VERSION ?= 0.1.0-dev
 PANIC_SELFTEST ?= 0
 SCHED_TRACE ?= 0
 SOAK_SELFTEST ?= 0
+# The K1/K10 qualification pair is a milestone harness, not a boot workload.
+K1_QUALIFICATION ?= 0
 BUILD_DIR = build
 BUILD_INFO = $(BUILD_DIR)/kernel_build_info.h
 
@@ -54,7 +56,8 @@ $(BUILD_INFO): FORCE gen_build_info.py | $(BUILD_DIR)
 	python3 gen_build_info.py --version "$(KERNEL_VERSION)" \
 		--panic-selftest "$(PANIC_SELFTEST)" \
 		--sched-trace "$(SCHED_TRACE)" \
-		--soak-selftest "$(SOAK_SELFTEST)" --output "$@"
+		--soak-selftest "$(SOAK_SELFTEST)" \
+		--k1-qualification "$(K1_QUALIFICATION)" --output "$@"
 
 $(OBJECTS): $(BUILD_INFO)
 

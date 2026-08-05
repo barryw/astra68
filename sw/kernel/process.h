@@ -218,15 +218,37 @@ KernelProcessStatus kernel_process_create(const void *image,
                                           uint32_t entry_offset,
                                           uint32_t initial_argument,
                                           uint32_t *process_id);
+#define KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX 4u
+
+typedef enum KernelProcessBootstrapKind {
+    KERNEL_PROCESS_BOOTSTRAP_DEVICE = 1,
+    KERNEL_PROCESS_BOOTSTRAP_IRQ
+} KernelProcessBootstrapKind;
+
+/*
+ * One object handed to a process at launch. Granting happens inside creation
+ * so a failed grant unwinds with the load and the published capability table
+ * can never name a handle that does not exist.
+ */
+typedef struct KernelProcessBootstrapCapability {
+    uint32_t name;      /* four-character name for the startup block */
+    uint32_t rights;
+    uint32_t device_id; /* KERNEL_PROCESS_BOOTSTRAP_DEVICE */
+    uint8_t kind;
+    uint8_t irq_source; /* KERNEL_PROCESS_BOOTSTRAP_IRQ */
+    uint8_t reserved[2];
+} KernelProcessBootstrapCapability;
+
 /*
  * Loads a validated big-endian MC68030 executable into a new process, publishes
  * its startup block and self capabilities, and makes its initial thread
  * runnable. All or nothing: a failure anywhere leaves no frames, mappings, or
  * handles behind.
  */
-KernelProcessStatus kernel_process_create_executable(const void *image,
-                                                     uint32_t image_size,
-                                                     uint32_t *process_id);
+KernelProcessStatus kernel_process_create_executable(
+    const void *image, uint32_t image_size,
+    const KernelProcessBootstrapCapability *capabilities,
+    uint32_t capability_count, uint32_t *process_id);
 /* Names the process loaded from the firmware-supplied image. */
 void kernel_process_register_initial_image(uint32_t process_id);
 KernelProcessStatus kernel_process_create_thread(uint32_t process_id,
@@ -286,6 +308,8 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *stats);
  */
 void kernel_process_initial_image_exited(uint32_t exit_status,
                                          uint32_t exit_reason);
+/* Each new stage the firmware-supplied image reports as it comes up. */
+void kernel_process_initial_image_progress(uint32_t stage);
 
 #if ASTRA_KERNEL_SOAK_SELFTEST
 KernelProcessStatus kernel_process_soak_configure(

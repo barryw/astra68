@@ -36,6 +36,7 @@ def main() -> None:
     parser.add_argument("--panic-selftest", required=True, type=int)
     parser.add_argument("--sched-trace", required=True, type=int)
     parser.add_argument("--soak-selftest", required=True, type=int)
+    parser.add_argument("--k1-qualification", required=True, type=int)
     parser.add_argument("--output", required=True, type=pathlib.Path)
     args = parser.parse_args()
 
@@ -65,6 +66,7 @@ def main() -> None:
 #define ASTRA_KERNEL_PANIC_SELFTEST {args.panic_selftest}
 #define ASTRA_KERNEL_SCHED_TRACE {args.sched_trace}
 #define ASTRA_KERNEL_SOAK_SELFTEST {args.soak_selftest}
+#define ASTRA_KERNEL_K1_QUALIFICATION {args.k1_qualification}
 
 #endif
 """

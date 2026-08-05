@@ -40,6 +40,8 @@
 static uint8_t physical_memory[32u * 1024u * 1024u];
 static uint32_t milestone_calls;
 static uint32_t initial_image_exits;
+static uint32_t initial_image_progress_reports;
+static uint32_t last_initial_image_stage;
 static uint32_t last_initial_image_status;
 static uint32_t last_initial_image_reason;
 static uint32_t soak_checkpoint_calls;
@@ -526,6 +528,12 @@ void kernel_process_initial_image_exited(uint32_t exit_status,
     last_initial_image_reason = exit_reason;
 }
 
+void kernel_process_initial_image_progress(uint32_t stage)
+{
+    ++initial_image_progress_reports;
+    last_initial_image_stage = stage;
+}
+
 void kernel_process_soak_checkpoint(uint32_t cycles,
                                     uint32_t baseline_free_frames)
 {
@@ -743,6 +751,8 @@ static void initialize_test(void)
     kernel_process_init();
     milestone_calls = 0u;
     initial_image_exits = 0u;
+    initial_image_progress_reports = 0u;
+    last_initial_image_stage = 0u;
     last_initial_image_status = 0u;
     last_initial_image_reason = 0u;
     soak_checkpoint_calls = 0u;
@@ -5257,7 +5267,7 @@ static void test_executable_loading(void)
     assert(kernel_memory_stats(&before));
 
     assert(kernel_process_create_executable(loader_image, loader_image_size,
-                                            &process_id) ==
+                                            NULL, 0u, &process_id) ==
            KERNEL_PROCESS_OK);
     assert(process_id != 0u);
     {
@@ -5287,6 +5297,72 @@ static void test_executable_loading(void)
  * The kernel must learn how the firmware-supplied image ended at the moment it
  * ends: nothing else keeps that outcome once the process record is reclaimed.
  */
+/*
+ * Objects handed over at launch must be in the process's handle table and
+ * named in its startup capability table before it runs, and a grant that
+ * cannot be satisfied must leave no trace of the launch at all.
+ */
+static void test_bootstrap_capabilities(void)
+{
+    KernelProcessBootstrapCapability capabilities[2];
+    KernelMemoryStats before;
+    KernelMemoryStats after;
+    uint32_t process_id = 0u;
+    uint32_t handles_before;
+
+    loader_build_image();
+    initialize_test();
+    assert(kernel_memory_stats(&before));
+
+    memset(capabilities, 0, sizeof(capabilities));
+    capabilities[0].name = 0x44455631u; /* DEV1 */
+    capabilities[0].kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+    capabilities[0].device_id = 1u;
+    capabilities[0].rights = KERNEL_DEVICE_RIGHT_QUERY;
+
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            capabilities, 1u,
+                                            &process_id) == KERNEL_PROCESS_OK);
+    /* Self process, self thread, and the granted lease. */
+    assert(kernel_process_test_handle_count(process_id) == 3u);
+
+    /* An unknown device cannot be granted, and the launch leaves nothing. */
+    loader_build_image();
+    initialize_test();
+    assert(kernel_memory_stats(&before));
+    handles_before = 0u;
+    memset(capabilities, 0, sizeof(capabilities));
+    capabilities[0].name = 0x44455632u;
+    capabilities[0].kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+    capabilities[0].device_id = 0x5a5a5a5au;
+    capabilities[0].rights = KERNEL_DEVICE_RIGHT_QUERY;
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            capabilities, 1u, &process_id) !=
+           KERNEL_PROCESS_OK);
+    assert(kernel_memory_stats(&after));
+    assert(after.free_frames == before.free_frames);
+    (void)handles_before;
+
+    /* A malformed request is refused before anything is allocated. */
+    memset(capabilities, 0, sizeof(capabilities));
+    capabilities[0].name = 0u;
+    capabilities[0].kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+    capabilities[0].device_id = 1u;
+    capabilities[0].rights = KERNEL_DEVICE_RIGHT_QUERY;
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            capabilities, 1u, &process_id) ==
+           KERNEL_PROCESS_INVALID_ARGUMENT);
+    assert(kernel_process_create_executable(
+               loader_image, loader_image_size, capabilities,
+               KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX + 1u, &process_id) ==
+           KERNEL_PROCESS_INVALID_ARGUMENT);
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 1u, &process_id) ==
+           KERNEL_PROCESS_INVALID_ARGUMENT);
+    assert(kernel_memory_stats(&after));
+    assert(after.free_frames == before.free_frames);
+}
+
 static void test_initial_image_exit_is_reported(void)
 {
     const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
@@ -5301,7 +5377,7 @@ static void test_initial_image_exit_is_reported(void)
     assert(initial_image_exits == 0u);
 
     assert(kernel_process_create_executable(loader_image, loader_image_size,
-                                            &process_id) ==
+                                            NULL, 0u, &process_id) ==
            KERNEL_PROCESS_OK);
     kernel_process_register_initial_image(process_id);
     assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
@@ -5315,11 +5391,42 @@ static void test_initial_image_exit_is_reported(void)
     assert(last_initial_image_status == exit_status);
     assert(last_initial_image_reason == KERNEL_PROCESS_EXIT_SYSCALL);
 
+    /*
+     * Stages are reported as the counter advances, once each, and only for
+     * the registered image.
+     */
+    loader_build_image();
+    initialize_test();
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &process_id) ==
+           KERNEL_PROCESS_OK);
+    kernel_process_register_initial_image(process_id);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROGRESS;
+    registers[1] = 1u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(initial_image_progress_reports == 1u);
+    assert(last_initial_image_stage == 1u);
+
+    /* Re-reporting the same stage is not a new stage. */
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(initial_image_progress_reports == 1u);
+
+    registers[1] = 3u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(initial_image_progress_reports == 2u);
+    assert(last_initial_image_stage == 3u);
+
     /* An unregistered process must not be mistaken for the initial image. */
     loader_build_image();
     initialize_test();
     assert(kernel_process_create_executable(loader_image, loader_image_size,
-                                            &process_id) ==
+                                            NULL, 0u, &process_id) ==
            KERNEL_PROCESS_OK);
     assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
@@ -5342,31 +5449,31 @@ static void test_executable_rejections_do_not_allocate(void)
     assert(kernel_memory_stats(&before));
 
     assert(kernel_process_create_executable(NULL, loader_image_size,
-                                            &process_id) ==
+                                            NULL, 0u, &process_id) ==
            KERNEL_PROCESS_INVALID_ARGUMENT);
     assert(kernel_process_create_executable(loader_image, loader_image_size,
-                                            NULL) ==
+                                            NULL, 0u, NULL) ==
            KERNEL_PROCESS_INVALID_ARGUMENT);
 
     /* Little-endian identification. */
     loader_build_image();
     loader_image[5] = 1u;
     assert(kernel_process_create_executable(loader_image, loader_image_size,
-                                            &process_id) ==
+                                            NULL, 0u, &process_id) ==
            KERNEL_PROCESS_INVALID_ARGUMENT);
 
     /* Writable and executable in one segment. */
     loader_build_image();
     loader_put32(LOADER_PHOFF + 24u, 7u);
     assert(kernel_process_create_executable(loader_image, loader_image_size,
-                                            &process_id) ==
+                                            NULL, 0u, &process_id) ==
            KERNEL_PROCESS_INVALID_ARGUMENT);
 
     /* An entry point that is not inside executable code. */
     loader_build_image();
     loader_put32(24u, LOADER_DATA_VADDR);
     assert(kernel_process_create_executable(loader_image, loader_image_size,
-                                            &process_id) ==
+                                            NULL, 0u, &process_id) ==
            KERNEL_PROCESS_INVALID_ARGUMENT);
 
     /* A segment that would land on the startup block. */
@@ -5374,7 +5481,7 @@ static void test_executable_rejections_do_not_allocate(void)
     loader_put32(LOADER_PHOFF + 8u, KERNEL_VM_USER_MIN);
     loader_put32(24u, KERNEL_VM_USER_MIN);
     assert(kernel_process_create_executable(loader_image, loader_image_size,
-                                            &process_id) ==
+                                            NULL, 0u, &process_id) ==
            KERNEL_PROCESS_INVALID_ARGUMENT);
 
     assert(kernel_memory_stats(&after));
@@ -5397,7 +5504,7 @@ static void test_executable_load_rolls_back_every_allocation(void)
 
         kernel_allocation_test_fail_global(attempt);
         status = kernel_process_create_executable(loader_image,
-                                                  loader_image_size,
+                                                  loader_image_size, NULL, 0u,
                                                   &process_id);
         kernel_allocation_test_fail_global(0u);
         if (status == KERNEL_PROCESS_OK) {
@@ -5537,6 +5644,7 @@ int main(void)
     test_area_publication_rolls_back_when_handle_table_full();
     test_area_and_ring_endpoint_transfer_over_port();
     test_executable_loading();
+    test_bootstrap_capabilities();
     test_initial_image_exit_is_reported();
     test_executable_rejections_do_not_allocate();
     test_executable_load_rolls_back_every_allocation();

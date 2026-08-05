@@ -1,3 +1,4 @@
+#include <astra/block.h>
 #include <astra/boot.h>
 #include <astra/input.h>
 #include <astra/supervisor.h>
@@ -63,13 +64,40 @@ static int screen_enabled;
 static uint32_t process_bootstrap_irqoff_cycles;
 static uint32_t process_init_cycles;
 static uint32_t trace_init_cycles;
+#if ASTRA_KERNEL_K1_QUALIFICATION
 static uint32_t qualification_survivor_process_id;
+#endif
 static KernelAddressSpace user_copy_selftest_space;
 static const KernelMonitorBuildInfo monitor_build_info = {
     ASTRA_KERNEL_VERSION,
     ASTRA_KERNEL_BUILD_UTC,
     ASTRA_KERNEL_GIT_REVISION
 };
+
+/*
+ * Quiescing the block controller means no new work reaches it and every
+ * in-flight request is revoked with its DMA pages returned; the engine already
+ * owns that sequence for owner death, so a lease revocation reuses it.
+ */
+static bool block_device_quiesce(uint32_t device_id, uint32_t generation,
+                                 void *context)
+{
+    (void)generation;
+    (void)context;
+    return device_id == ASTRA_DEVICE_ID_BLOCK0 &&
+           kernel_platform_block_present();
+}
+
+static bool block_device_reset(uint32_t device_id, uint32_t generation,
+                               void *context)
+{
+    (void)generation;
+    (void)context;
+    if (device_id != ASTRA_DEVICE_ID_BLOCK0)
+        return false;
+    kernel_platform_block_ack_state();
+    return true;
+}
 
 static bool input_device_quiesce(uint32_t device_id, uint32_t generation,
                                  void *context)
@@ -100,8 +128,26 @@ static bool register_physical_devices(void)
         INPUT_CAP_KEYBOARD | INPUT_CAP_POINTER
     };
 
+    static const KernelDeviceDefinition block = {
+        block_device_quiesce,
+        block_device_reset,
+        NULL,
+        ASTRA_DEVICE_ID_BLOCK0,
+        ASTRA_DEVICE_CLASS_BLOCK,
+        ASTRA_BLOCK_CAP_READ | ASTRA_BLOCK_CAP_WRITE | ASTRA_BLOCK_CAP_FLUSH
+    };
+
     if (kernel_platform_input_present()) {
         if (kernel_device_register(&input) != KERNEL_DEVICE_OK)
+            return false;
+    }
+    /*
+     * The block controller is only present when the host runtime attached
+     * media. A machine without it boots without a block service rather than
+     * failing, which is the ULX3S case today.
+     */
+    if (kernel_platform_block_present()) {
+        if (kernel_device_register(&block) != KERNEL_DEVICE_OK)
             return false;
     }
     return true;
@@ -577,11 +623,14 @@ static void validate_image_contract(void)
         kernel_panic("early log contract mismatch");
 }
 
+#if ASTRA_KERNEL_K1_QUALIFICATION || ASTRA_KERNEL_SOAK_SELFTEST
 static uint32_t add_saturating_u32(uint32_t left, uint32_t right)
 {
     return right > UINT32_MAX - left ? UINT32_MAX : left + right;
 }
+#endif
 
+#if ASTRA_KERNEL_K1_QUALIFICATION || ASTRA_KERNEL_SOAK_SELFTEST
 static void report_kernel_performance(
     const KernelPerformanceStats *performance)
 {
@@ -814,7 +863,9 @@ static void report_kernel_performance(
     console_putc('\n');
 #endif
 }
+#endif
 
+#if ASTRA_KERNEL_K1_QUALIFICATION || ASTRA_KERNEL_SOAK_SELFTEST
 static void report_kernel_performance_failure(
     const KernelPerformanceStats *performance,
     KernelPerformanceMetric failed_metric)
@@ -839,6 +890,7 @@ static void report_kernel_performance_failure(
     console_dec32(metric->overruns);
     console_putc('\n');
 }
+#endif
 
 /*
  * Starts the one user image firmware placed in RAM. This is the whole of
@@ -847,6 +899,8 @@ static void report_kernel_performance_failure(
  */
 static void start_initial_user_image(void)
 {
+    KernelProcessBootstrapCapability capabilities[2];
+    uint32_t capability_count = 0u;
     uint32_t process_id = 0u;
     KernelProcessStatus status;
 
@@ -855,9 +909,31 @@ static void start_initial_user_image(void)
         console_puts("not supplied\n");
         return;
     }
+
+    /*
+     * The initial image is the block service until there is a launch path for
+     * a separate one. It receives the device lease and the completion endpoint
+     * as part of the load, so a grant failure unwinds the whole launch.
+     */
+    kernel_bytes_clear(capabilities, sizeof(capabilities));
+    if (kernel_platform_block_present()) {
+        capabilities[capability_count].name = ASTRA_CAPABILITY_BLOCK_DEVICE;
+        capabilities[capability_count].kind =
+            KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+        capabilities[capability_count].device_id = ASTRA_DEVICE_ID_BLOCK0;
+        capabilities[capability_count].rights = KERNEL_DEVICE_RIGHTS;
+        ++capability_count;
+        capabilities[capability_count].name = ASTRA_CAPABILITY_BLOCK_IRQ;
+        capabilities[capability_count].kind = KERNEL_PROCESS_BOOTSTRAP_IRQ;
+        capabilities[capability_count].irq_source = IRQ_SRC_STORAGE;
+        capabilities[capability_count].rights = KERNEL_IRQ_RIGHTS;
+        ++capability_count;
+    }
+
     status = kernel_process_create_executable(
         (const void *)(uintptr_t)boot_info.user_image_base,
-        boot_info.user_image_size, &process_id);
+        boot_info.user_image_size, capabilities, capability_count,
+        &process_id);
     if (status != KERNEL_PROCESS_OK || process_id == 0u) {
         console_puts("rejected, status ");
         console_dec32((uint32_t)status);
@@ -869,28 +945,63 @@ static void start_initial_user_image(void)
     console_dec32(boot_info.user_image_size);
     console_puts(" bytes, process 0x");
     console_hex32(process_id);
-    console_putc('\n');
+    console_puts(", ");
+    console_dec32(capability_count);
+    console_puts(" granted capabilities\n");
 }
 
-/* Reports how the firmware-supplied image ended, as it ends. */
+/*
+ * The initial image is a resident service. Any exit is a boot failure: it is
+ * the only thing running, and nothing else can start what it was going to.
+ * Its status names the check that failed.
+ */
 void kernel_process_initial_image_exited(uint32_t exit_status,
                                          uint32_t exit_reason)
 {
+    console_puts("Initial image ....... EXITED, reason ");
+    console_dec32(exit_reason);
+    console_puts(" status 0x");
+    console_hex32(exit_status);
+    console_putc('\n');
+    kernel_panic("initial user image exited");
+}
+
+void kernel_process_initial_image_progress(uint32_t stage)
+{
     console_puts("Initial image ....... ");
-    if (exit_reason != KERNEL_PROCESS_EXIT_SYSCALL ||
-        exit_status != ASTRA_SUPERVISOR_STATUS_OK) {
-        console_puts("FAIL, reason ");
-        console_dec32(exit_reason);
-        console_puts(" status 0x");
-        console_hex32(exit_status);
+    switch (stage) {
+    case ASTRA_SUPERVISOR_STAGE_SELF_VERIFIED:
+        console_puts("startup block and ABI verified from user mode\n");
+        break;
+    case ASTRA_SUPERVISOR_STAGE_BLOCK_LEASED:
+        console_puts("block lease and completion endpoint held\n");
+        break;
+    case ASTRA_SUPERVISOR_STAGE_BLOCK_ONLINE:
+        console_puts("block geometry read\n");
+        break;
+    case ASTRA_SUPERVISOR_STAGE_BLOCK_VERIFIED:
+        console_puts("block round-trip verified, service resident\n");
+        break;
+    default:
+        console_puts("stage ");
+        console_dec32(stage);
         console_putc('\n');
-        kernel_panic("initial user image reported a failure");
+        break;
     }
-    console_puts("OK, startup block and ABI verified from user mode\n");
 }
 
 void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
 {
+#if !ASTRA_KERNEL_K1_QUALIFICATION
+    /*
+     * The milestone is the K1/K10 qualification report: it asserts device
+     * qualification completed and enforces the performance budget against a
+     * workload only that harness produces. A normal boot reports readiness
+     * through the initial image instead.
+     */
+    (void)validated;
+}
+#else
     KernelPerformanceMetric failed_metric;
     KernelPerformanceStats performance;
     KernelIrqOffLatencyStats irqoff_stats;
@@ -1087,6 +1198,7 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
     console_puts("KERNEL MULTITASKING\n");
     kernel_platform_debug_marker(ASTRA_KERNEL_STATUS_K1_READY);
 }
+#endif
 
 #if ASTRA_KERNEL_SOAK_SELFTEST
 void kernel_process_soak_checkpoint(uint32_t cycles,
@@ -1154,6 +1266,9 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     KernelMemoryStats memory_stats;
     KernelVmStats vm_stats;
     KernelCpuContext *first_context;
+    uint32_t process_bootstrap_started;
+    uint32_t trace_started;
+#if ASTRA_KERNEL_K1_QUALIFICATION
     uint32_t process_id;
     uint32_t survivor_process_id;
     uint32_t sibling_thread_id;
@@ -1163,9 +1278,8 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     uint32_t survivor_image_size;
     uint32_t survivor_entry_offset;
     uint32_t sibling_entry_offset;
-    uint32_t process_bootstrap_started;
-    uint32_t trace_started;
     uint32_t qualification_sources;
+#endif
 #if ASTRA_KERNEL_SOAK_SELFTEST
     KernelMemoryStats soak_baseline;
 #endif
@@ -1319,6 +1433,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
 #error "ASTRA_KERNEL_PANIC_SELFTEST must be 0, 1, or 2"
 #endif
 
+#if ASTRA_KERNEL_K1_QUALIFICATION
     survivor_image_size =
         (uint32_t)(_k1_survivor_image_end - _k1_survivor_image_start);
     survivor_entry_offset =
@@ -1344,14 +1459,6 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
             KERNEL_THREAD_PRIORITY_NORMAL + 1u, &sibling_thread_id) !=
             KERNEL_PROCESS_OK || sibling_thread_id == 0u)
         kernel_panic("sibling thread creation failed");
-#if !ASTRA_KERNEL_SOAK_SELFTEST
-    /*
-     * The soak build measures against an exact free-frame baseline taken
-     * before user mode starts, and the initial image releases its frames when
-     * it exits. Those two cannot both hold, so the soak runs without it.
-     */
-    start_initial_user_image();
-#endif
 #if ASTRA_KERNEL_SOAK_SELFTEST
     if (!kernel_memory_stats(&soak_baseline))
         kernel_panic("K1 soak baseline unavailable");
@@ -1388,6 +1495,8 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
 #endif
     console_puts("User processes ...... 2 ready, cache isolation armed\n");
     console_puts("User threads ........ 3 ready, priority scheduler armed\n");
+#endif
+    start_initial_user_image();
     process_bootstrap_started = kernel_platform_cpu_cycles_low();
     kernel_disable_interrupts();
     if (kernel_process_start(&first_context) != KERNEL_PROCESS_OK ||
