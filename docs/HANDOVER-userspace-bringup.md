@@ -19,21 +19,26 @@ The one-line summary of where this stands: **a real ext4 filesystem now runs on
 big-endian MC68030 through the same block facade the ROM-loaded service uses,
 and `e2fsck` calls the volume it writes clean.**
 
-Before that, and still true: a user-mode service loaded from ROM reads sectors
-off a real block device through that facade, and the kernel proves it on every
-boot. That chain now also runs **on the board** — see section 3 — with the
-block round-trip verified against a partitioned image on its SD-backed storage.
-The filesystem itself does not yet run there, for a reason worth reading in
-section 6 before planning around it.
+**The initial image now carries that filesystem and runs on the board.** ABI 0.4
+raised the image ceiling to 256 KiB, the supervisor links lwext4, and it loads
+and holds its lease on real hardware. One defect stands between that and a
+mounted volume, and it is in the block path rather than the filesystem: see
+section 6, which is where to start.
+
+On the board, with the filesystem-carrying image (243,416-byte ROM):
 
 ```
-astra68.rom: 191864 payload bytes, 70280 bytes free of 262144 (73.2% used)
-Initial image ....... loaded, 15140 bytes, process 0x10000011, 2 granted capabilities
+Kernel image ....... 126536 bytes @ 0x02044000
+AstraHost runtime ... OK, media present
+Initial image ....... loaded, 98732 bytes, process 0x10000011, 2 granted capabilities
 Initial image ....... startup block and ABI verified from user mode
 Initial image ....... block lease and completion endpoint held
 Initial image ....... block geometry read
 Initial image ....... block round-trip verified, service resident, irq delivered/acked=1/1
 ```
+
+Three further lines — stages 5, 6 and 7 — are what a mounted volume looks like,
+and they are what section 6 is about.
 
 Gate status: 30 kernel suites, both kernel build configurations, 8 userspace
 suites under ASan/UBSan, GCC `-fanalyzer` clean, the MC68030 kernel image, the
@@ -55,21 +60,24 @@ judge, plus a freestanding link of the whole filesystem stack.
 | ELF acceptance profile | `sw/kernel/elf.c` | 1,668 B text; mutation-tested; validated against real toolchain output |
 | User link contract | `sw/userspace/runtime/astra_user.ld` | produces exactly the accepted shape |
 | Executable loader | `kernel_process_create_executable()` | transactional; grants bootstrap capabilities inside creation |
-| Initial user image path | boot ABI 0.3, `sw/boot/user_blob.S`, `start_initial_user_image()` | firmware embeds, decodes, CRC-verifies, and describes one image |
+| Initial user image path | boot ABI 0.4, `sw/boot/user_blob.S`, `start_initial_user_image()` | firmware embeds, decodes, CRC-verifies, and describes one image |
 | ROM payload compression | `sw/boot/pack_payload.py`, `decode_payload()`, `sw/common/crc32.c` | kernel and user image ship LZ4, CRC-32 verified after decode |
 | Transfer memory | `ASTRA_SYSCALL_DMA_CREATE`, `create_dma_buffer()` | owner-charged, contiguous, cache-inhibited; 4 buffers / 16 pages per service |
 | Block admission | `BLOCK_QUERY`/`BLOCK_SUBMIT`/`BLOCK_COLLECT`, ABI `0x0001000a` | lease-gated, fault-injected, round-trip proven at every boot |
 | Lease-backed facade | `sw/userspace/storage/src/lease_block.c` | `AstraBlockBackend` on the real device; interrupt-driven with a deadline |
-| First service | `sw/userspace/supervisor` | 5,514 B MC68030 text; resident; verifies itself, its lease, and one real transfer |
+| First service | `sw/userspace/supervisor` | 85,400 B MC68030 text with lwext4 linked in, 98,732-byte ELF; resident; verifies itself, its lease and one real transfer, then tries the volume |
 | lwext4 vendor | `third_party/lwext4` | BSD-3-Clause subset at upstream `58bcf89`; GPLv2 files not imported; 3 big-endian patches applied in tree |
 | lwext4 port | `sw/userspace/storage/src/ext4_port.c` | 949 B text; binds `AstraBlockDevice` to `ext4_blockdev`; splits transfers, maps status to errno, refuses a re-entrant lock |
 | lwext4 build profile | `sw/userspace/storage/port/include/generated/ext4_config.h` | one profile for host and target; owns errno and oflags so `<errno.h>`, `<fcntl.h>` and `<unistd.h>` drop out |
 | Bounded allocation for lwext4 | `sw/userspace/storage/src/ext4_alloc.c` | `astra_ext4_alloc_classes`, measured on LP32; 216,060 B arena, sized by journal size rather than volume size |
 | Freestanding C headers | `sw/userspace/runtime/freestanding` | `string.h`, `stdlib.h`, `assert.h`, `inttypes.h`; target only |
 | Runtime primitives | `sw/userspace/runtime/src/{sort,assert}.c` | `qsort` (heapsort, 302 B) and a tagged-exit assertion handler (18 B) |
+| Initial image ceiling | `sw/include/astra/boot.h`, ABI 0.4 | 256 KiB, was 48 KiB; kernel moved to `0x02044000`; costs no RAM |
+| Volume check | `sw/userspace/supervisor/src/volume.c` | mounts through the lease, window-confined; blocked on the second-transfer defect |
+| Partition reader | `sw/userspace/storage/src/mbr.c` | read-only MBR; FAT type list identical to `sw/stage0` |
 
-Not done: no VFS, no terminal. The filesystem runs, but nothing above it does,
-and it has never run against the real device — see section 6.
+Not done: no VFS, no terminal, and the volume does not mount on the device yet
+— one defect, localised, see section 6.
 
 ---
 
@@ -298,6 +306,8 @@ Profile everything so performance is measurable and regressions are visible.
 | 2 | Block admission syscalls | **done** |
 | 3 | Block service + lease-backed `AstraBlockBackend` | **done** |
 | 4 | lwext4 vendor + port layer | **done** |
+| 4b | Initial image carries the filesystem and runs on the board | **done** (ABI 0.4) |
+| 4c | Mount the volume through the device lease | blocked on one block-path defect |
 | 5 | VFS service | next |
 | 6 | Terminal service + VFS client Kit + shell builtins | |
 | 7 | Introspection filesystem (`PROC:`) | |
@@ -306,92 +316,107 @@ Profile everything so performance is measurable and regressions are visible.
 
 ## 6. Start here next session
 
-Phase 5: the VFS service.
+**One thing is in the way, it is well localised, and it is not in the
+filesystem.** The initial image now carries lwext4 and runs on the board. The
+volume check reaches `astra_mbr_read()`, whose read of sector 0 returns
+`ASTRA_BLOCK_IO_ERROR`, so the service reports "nothing to mount" and parks.
 
-Read first: `third_party/lwext4/ASTRA_VENDOR.md` for what was imported and why,
-and `sw/userspace/storage/include/astra/ext4_port.h`, whose header comment
-states the three translations the port owns.
+That read is **the second transfer ever issued on one lease attachment.**
+Everything before it did exactly one. The path had never been exercised twice,
+and a filesystem was always going to be the thing that found it.
 
-**What phase 4 did not do, and what it means.** The filesystem has only ever
-run against the *memory* backend. Every gate — host and m68k — mounts a volume
-held in RAM. It has never been mounted through `lease_block.c` on the real
-device. The facade is the same object in both cases, which is the argument for
-believing the first real-device mount will work, but it is an argument and not
-yet a measurement.
+### What is already known about it
 
-**The reason it cannot be, and an earlier claim in this file that was wrong.**
-This document previously said lwext4 is ruled out of the initial image by the
-256 KiB ROM window. That is not the binding constraint, and it was measured
-directly by trying it on hardware. A supervisor with lwext4 linked in builds to
-98,732 bytes, compresses to 57,350, and the resulting ROM is 243,304 of
-262,144 — **it fits in ROM with room to spare.** Firmware still refuses it:
+The first request's flow through `run_request()` in
+`sw/userspace/storage/src/lease_block.c` is:
 
 ```
-POST FAIL: user image exceeds its reservation
+arm -> submit -> collect(WOULD_BLOCK) -> wait -> drain -> arm -> collect(OK) -> drain
 ```
 
-`ASTRA_USER_IMAGE_MAX_SIZE` is `0x0000c000`, **48 KiB**, and it is not a policy
-number that can simply be raised. The image lands at
-`ASTRA_USER_IMAGE_ADDRESS` `0x02004000` and the next reservation,
-`ASTRA_KERNEL_LOAD_ADDRESS`, begins at `0x02010000`. The window *is* the hole
-between them. Growing it moves the kernel, which is a boot ABI 0.3 → 0.4 change
-touching firmware, `sw/common/boot_contract.c`, the kernel, and
-`test_boot_contract`.
+The second `arm` re-arms after the record is drained; the `collect` that
+follows consumes nothing, so `drain` finds no record. One consequence of that
+is already fixed: the endpoint was left armed, and the next request armed an
+already-armed source. `AstraLeaseBlock` now carries an `armed` flag, `arm()`
+asks only when disarmed, and `drain()` clears it when a record is actually
+taken, because delivery disarms the source.
 
-So the initial image is capped at 48 KiB by RAM layout, not by ROM budget, and
-the file loader phase 5 builds is **mandatory rather than merely preferable**.
-That also settles the earlier "put the fs stack in the ROM instead of writing a
-FAT reader" option: it does not work, for a reason that has nothing to do with
-ROM space.
+**That fix alone does not make the second read succeed.** The remaining
+suspicion is the other half of the same shape: when the first request's initial
+`collect` returns OK *before* the interrupt is delivered, the record arrives
+afterwards and sits queued. `drain` at that point finds nothing. A queued
+record then refuses every later arm — which is exactly the documented failure
+mode in section 4.3 and would present as `IO_ERROR` on the next request.
 
-The mount sequence itself is not the hard part and was written and built during
-this work before being reverted: read the partition table, find the Linux
-entry, bind the port to that window, `ext4_device_register` / `ext4_mount` /
-`ext4_recover` / `ext4_journal_start`, write and re-read a file, unmount, then
-assert nothing is left allocated and `out_of_partition_refusals` is zero. It
-belongs in whatever service phase 5 loads from FAT, not in the initial image.
+### The next diagnostic, concretely
+
+Instrument `run_request()` to report the `AstraIrqRecord` and the event bits at
+the point of failure, plus which of its `IO_ERROR` returns fired — there are
+five and they are indistinguishable from outside. `astra_progress()` is the
+cheapest channel: the kernel prints `stage N` for any value it does not
+recognise, which is how the `IO_ERROR` was identified in the first place
+(`stage 29` = `20 + ASTRA_BLOCK_IO_ERROR`).
+
+Iterate on **Beast, not the board**. The failure reproduces identically there
+and a cycle is under two minutes:
+
+```sh
+# /tmp/part.img already exists on Beast: 1 GiB, MBR, FAT32 at 2048,
+# ext4 at 133120 on the frozen profile.
+cd sw/userspace && make all && cd ../boot && make astra_boot.bin
+timeout 240 /tmp/qemu-final-build/qemu-system-m68k -M astra68 -m 32M \
+    -bios astra_boot.bin -nographic -monitor none -serial stdio -no-reboot \
+    -drive if=none,format=raw,file=/tmp/part.img < /dev/null | grep "Initial image"
+```
+
+Success looks like three more lines after the round-trip: stages 5, 6 and 7 —
+volume found, mounted, verified.
+
+### After that
+
+The volume check in `sw/userspace/supervisor/src/volume.c` already does the
+whole sequence: read the partition table, find the Linux entry, bind the port to
+that window, mount, recover, journal, write and re-read a 4 KiB file, unmount,
+then assert nothing is left allocated, the arena was not over-run, and
+`out_of_partition_refusals` is zero. It is written and builds; it is only
+waiting on the block path.
+
+Then phase 5 proper — the VFS service — and the loader it needs. Note that
+**the loader is no longer the blocker it was**: ABI 0.4 raised the initial image
+ceiling to 256 KiB, so a service can carry a filesystem without being loaded
+from a file. The file loader is still where this is going, because phases 6 and
+7 load a terminal, a shell and fonts, but it is no longer on the critical path
+for proving storage.
 
 Constraints that will bite:
 
-- **The port refuses a re-entrant block-device lock with `EBUSY`** and counts
-  it in `reentry_refusals`. That is a deliberate tripwire, not a limitation:
-  the service is single-threaded today, and the day it is not, this fires
-  instead of silently corrupting the block cache. If phase 5 adds threads, this
-  is the first thing that must be replaced with a real lock.
-- **Transfer splitting is in the port, not in lwext4.** lwext4 asks for as many
-  blocks as it likes; `run_transfer()` chops the request to the device's
-  `max_transfer_sectors`. The m68k gate splits 4,264 times, so this path is
-  well exercised, but it means a device reporting a tiny cap silently costs
-  many more transfers rather than failing.
-- **Several device failures collapse to `EIO`** at the lwext4 boundary because
-  lwext4's own errno set has no `ETIMEDOUT` or `ECANCELED`. The exact status
-  survives in `AstraExt4Port::last_status`, and anything deciding whether to
-  retry must read it there, not the errno.
+- **The port refuses a re-entrant block-device lock with `EBUSY`** and counts it
+  in `reentry_refusals`. A deliberate tripwire: the service is single-threaded
+  today, and this fires the day it is not, instead of silently corrupting the
+  block cache. Threads mean replacing it with a real lock.
+- **Transfer splitting is in the port, not in lwext4.** `run_transfer()` chops
+  requests to `max_transfer_sectors`. The m68k gate splits 4,265 times.
+- **Several device failures collapse to `EIO`** at the lwext4 boundary, because
+  lwext4's errno set has no `ETIMEDOUT` or `ECANCELED`. The exact status is in
+  `AstraExt4Port::last_status`; anything deciding whether to retry reads it
+  there, not the errno.
 - **A failed assertion inside lwext4 exits the process** with
   `ASTRA_ASSERT_STATUS_TAG | line`, i.e. `0x4153xxxx`. For the initial image
-  that is a kernel panic. If a panic status starts with `0x4153`, the low
+  that is a kernel panic. A panic status starting `0x4153` means the low
   halfword is a line number in a `third_party/lwext4/src` file.
-- **The service is single-threaded and synchronous.** One request is in flight
-  at a time even though the engine allows four. A filesystem worker blocking on
-  a transfer blocks the whole service until phase 5 gives it threads.
-- **A filesystem wanting concurrent I/O needs a buffer per outstanding
-  request**, and transfer memory is capped at 4 buffers and 16 pages per
-  service.
-- **`KERNEL_PROCESS_MAX` is 4**; the default boot uses one, and K1 costs two
-  more when enabled.
-
-- **Name collisions are real here.** The syscall ABI and the storage facade are
-  linked into the same program; the ABI uses `AstraBlockLeaseInfo` and
-  `astra_block_lease_*` precisely because `AstraBlockGeometry` and
+- **The status halfword is full.** Bit 15 was the last one and the volume check
+  took it. Anything else that needs to report failure uses the progress counter.
+- **The service is single-threaded and synchronous.** One request in flight even
+  though the engine allows four.
+- **`KERNEL_PROCESS_MAX` is 4**; the default boot uses one, K1 costs two more.
+- **Name collisions are real here.** The syscall ABI uses `AstraBlockLeaseInfo`
+  and `astra_block_lease_*` precisely because `AstraBlockGeometry` and
   `astra_block_query` were already taken. Check before naming.
-- **The supervisor's exit status is a tagged halfword**, not a byte, and any
-  exit is a boot failure the kernel turns into a panic.
+- **The supervisor's exit status is a tagged halfword** and any exit is a boot
+  failure the kernel turns into a panic.
 - Two things the block path still lacks: a **kernel-enforced per-request
-  deadline** (today the waiter's deadline is the timeout, so a service that
-  chooses to wait forever still can), and **`LATE` and `CANCELLED` completions**
-  have ABI values but no producer.
-
----
+  deadline** (today the waiter's deadline is the timeout), and **`LATE` and
+  `CANCELLED` completions** have ABI values but no producer.
 
 ## 7. Known problems not caused by this work
 
@@ -483,4 +508,19 @@ make size
 # QEMU device models
 python3 emu/qemu/test-block.py "$(./emu/qemu/build.sh host)"
 python3 emu/qemu/test-input.py "$(./emu/qemu/build.sh host)"
+
+# the fast partitioned-boot loop, which is where the open defect reproduces
+timeout 240 /tmp/qemu-final-build/qemu-system-m68k -M astra68 -m 32M \
+    -bios sw/boot/astra_boot.bin -nographic -monitor none -serial stdio \
+    -no-reboot -drive if=none,format=raw,file=/tmp/part.img < /dev/null |
+    grep "Initial image"
+
+# the board (from beast; see docs/INVENTORY.md for the layout it expects)
+emu/qemu/build.sh arty          # the emulator must carry the storage model
+scp sw/boot/astra_boot.bin root@192.168.1.188:/data/astra/rom/astra_boot-fs.bin
+ssh root@192.168.1.188 'LD_LIBRARY_PATH=/data/astra/qemu/lib \
+    /data/astra/qemu/bin/qemu-system-m68k-astra-phase4 -M astra68 -m 32M \
+    -bios /data/astra/rom/astra_boot-fs.bin -nographic -monitor none \
+    -serial stdio -no-reboot \
+    -drive if=none,format=raw,file=/data/astra/storage.img'
 ```
