@@ -21,6 +21,7 @@
 #include <astra/block.h>
 #include <vesta.h>
 #include <astra/syscall.h>
+#include <astra/display.h>
 #include <astra/input.h>
 #include <astra/process.h>
 
@@ -81,6 +82,39 @@ static uint32_t input_event_head;
 static uint32_t input_event_count;
 static uint32_t input_event_status;
 static uint32_t input_overflow_acks;
+
+/*
+ * The character plane the console syscalls drive. Modelled rather than
+ * stubbed, so the tests can assert what actually reached the screen.
+ */
+#define TEST_CONSOLE_COLUMNS 90u
+#define TEST_CONSOLE_ROWS 30u
+
+static uint8_t console_cells[TEST_CONSOLE_COLUMNS * TEST_CONSOLE_ROWS];
+static uint32_t console_writes;
+static bool console_present = true;
+
+bool kernel_platform_post_text_present(void)
+{
+    return console_present;
+}
+
+void kernel_platform_post_text_geometry(uint32_t *columns, uint32_t *rows)
+{
+    if (columns != NULL)
+        *columns = TEST_CONSOLE_COLUMNS;
+    if (rows != NULL)
+        *rows = TEST_CONSOLE_ROWS;
+}
+
+bool kernel_platform_post_text_write(uint32_t cell, uint8_t value)
+{
+    if (cell >= sizeof(console_cells))
+        return false;
+    console_cells[cell] = value;
+    ++console_writes;
+    return true;
+}
 
 uint32_t kernel_platform_input_status(void)
 {
@@ -804,6 +838,18 @@ static void initialize_test(void)
         assert(kernel_device_register(&input) == KERNEL_DEVICE_OK);
     }
     {
+        const KernelDeviceDefinition display = {
+            .quiesce = test_input_quiesce,
+            .reset = test_input_reset,
+            .context = NULL,
+            .device_id = ASTRA_DEVICE_ID_DISPLAY0,
+            .class_id = ASTRA_DEVICE_CLASS_DISPLAY,
+            .capabilities = ASTRA_DISPLAY_CAP_TEXT,
+        };
+
+        assert(kernel_device_register(&display) == KERNEL_DEVICE_OK);
+    }
+    {
         const KernelDeviceDefinition block = {
             .quiesce = test_block_quiesce,
             .reset = test_block_reset,
@@ -820,6 +866,9 @@ static void initialize_test(void)
     device_quiesce_count = 0u;
     device_reset_count = 0u;
     device_reset_ok = true;
+    memset(console_cells, 0, sizeof(console_cells));
+    console_writes = 0u;
+    console_present = true;
     input_event_head = 0u;
     input_event_count = 0u;
     input_event_status = 0u;
@@ -2189,6 +2238,152 @@ static void test_device_lease_syscalls_rights_and_owner_cleanup(void)
     assert(device_stats.owner_deaths == 1u);
     assert(device_stats.reset_failures == 1u);
     assert(kernel_device_pool_valid());
+}
+
+/*
+ * The console syscalls are device operations, not a privileged shortcut: they
+ * are reached through a display lease carrying the right the call needs, and
+ * they refuse anything that would write outside the plane.
+ */
+static void test_console_writes_through_a_display_lease(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+    uint32_t display_handle;
+    uint32_t read_only_handle;
+    uint32_t input_handle;
+    uint32_t user_cells = KERNEL_PROCESS_STACK_TOP - 128u;
+    const uint8_t text[4] = {'A', 'B', 'C', 'D'};
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_grant_device(
+               process_id, ASTRA_DEVICE_ID_DISPLAY0,
+               ASTRA_RIGHT_READ | ASTRA_RIGHT_TRANSFER,
+               &display_handle) == KERNEL_PROCESS_OK);
+    assert(kernel_process_grant_device(
+               process_id, ASTRA_DEVICE_ID_INPUT0, ASTRA_RIGHT_READ,
+               &input_handle) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, KERNEL_PROCESS_CODE_BASE, 0u);
+
+    /*
+     * A device has exactly one lease, so the query-only handle is a duplicate
+     * with a narrowed rights mask -- which is how a service hands a client a
+     * handle it may look at but not draw with.
+     */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_HANDLE_DUPLICATE;
+    registers[1] = display_handle;
+    registers[2] = ASTRA_RIGHT_READ;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    read_only_handle = next->data[1];
+
+    /* Geometry comes back in D1/D2. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CONSOLE_INFO;
+    registers[1] = display_handle;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == TEST_CONSOLE_COLUMNS);
+    assert(next->data[2] == TEST_CONSOLE_ROWS);
+
+    /* A handle without TRANSFER cannot draw. */
+    assert(kernel_user_copy_to_asm(user_cells, text, sizeof(text)) ==
+           KERNEL_USER_COPY_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CONSOLE_WRITE;
+    registers[1] = read_only_handle;
+    registers[2] = 0u;
+    registers[3] = user_cells;
+    registers[4] = sizeof(text);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    assert(console_writes == 0u);
+
+    /* A lease on another device is not a display lease. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CONSOLE_WRITE;
+    registers[1] = input_handle;
+    registers[2] = 0u;
+    registers[3] = user_cells;
+    registers[4] = sizeof(text);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED ||
+           next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(console_writes == 0u);
+
+    /* The write lands where it was asked to. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CONSOLE_WRITE;
+    registers[1] = display_handle;
+    registers[2] = TEST_CONSOLE_COLUMNS + 2u;
+    registers[3] = user_cells;
+    registers[4] = sizeof(text);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(console_writes == sizeof(text));
+    assert(console_cells[TEST_CONSOLE_COLUMNS + 2u] == 'A');
+    assert(console_cells[TEST_CONSOLE_COLUMNS + 5u] == 'D');
+    assert(console_cells[TEST_CONSOLE_COLUMNS + 1u] == 0u);
+
+    /*
+     * A run that would leave the plane is refused whole. The last cell is
+     * addressable; one past it is not, and neither is a run that straddles
+     * the end.
+     */
+    console_writes = 0u;
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CONSOLE_WRITE;
+    registers[1] = display_handle;
+    registers[2] = TEST_CONSOLE_COLUMNS * TEST_CONSOLE_ROWS - 2u;
+    registers[3] = user_cells;
+    registers[4] = sizeof(text);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(console_writes == 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CONSOLE_WRITE;
+    registers[1] = display_handle;
+    registers[2] = 0u;
+    registers[3] = user_cells;
+    registers[4] = ASTRA_CONSOLE_WRITE_MAX + 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(console_writes == 0u);
+
+    /* An unreadable source is reported, and nothing reaches the plane. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CONSOLE_WRITE;
+    registers[1] = display_handle;
+    registers[2] = 0u;
+    registers[3] = 0u;
+    registers[4] = sizeof(text);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_BAD_ADDRESS);
+    assert(console_writes == 0u);
 }
 
 static void test_input_batch_read_is_bounded_and_fault_atomic(void)
@@ -4433,6 +4628,8 @@ static void test_malformed_syscall_and_message_corpus(void)
     };
     static const MalformedSyscallCase cases[] = {
         {UINT32_MAX, ASTRA_SYSCALL_BAD_SYSCALL},
+        {ASTRA_SYSCALL_CONSOLE_INFO, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_CONSOLE_WRITE, ASTRA_SYSCALL_INVALID_HANDLE},
         {ASTRA_SYSCALL_CLOSE, ASTRA_SYSCALL_INVALID_HANDLE},
         {ASTRA_SYSCALL_HANDLE_DUPLICATE, ASTRA_SYSCALL_INVALID_HANDLE},
         {ASTRA_SYSCALL_THREAD_CREATE, ASTRA_SYSCALL_INVALID_ARGUMENT},
@@ -6224,6 +6421,7 @@ int main(void)
     test_sync_syscall_rights_and_stale_handles();
     test_irq_syscalls_waits_rights_and_owner_cleanup();
     test_device_lease_syscalls_rights_and_owner_cleanup();
+    test_console_writes_through_a_display_lease();
     test_input_batch_read_is_bounded_and_fault_atomic();
     test_private_irq_qualification_control();
     test_priority_selection_and_equal_priority_rotation();

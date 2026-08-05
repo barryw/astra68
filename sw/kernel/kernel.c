@@ -1,5 +1,6 @@
 #include <astra/block.h>
 #include <astra/boot.h>
+#include <astra/display.h>
 #include <astra/input.h>
 #include <astra/supervisor.h>
 
@@ -117,8 +118,33 @@ static bool input_device_reset(uint32_t device_id, uint32_t generation,
            kernel_platform_input_reset();
 }
 
+static bool display_device_quiesce(uint32_t device_id, uint32_t generation,
+                                   void *context)
+{
+    (void)generation;
+    (void)context;
+    return device_id == ASTRA_DEVICE_ID_DISPLAY0;
+}
+
+static bool display_device_reset(uint32_t device_id, uint32_t generation,
+                                 void *context)
+{
+    (void)generation;
+    (void)context;
+    return device_id == ASTRA_DEVICE_ID_DISPLAY0;
+}
+
 static bool register_physical_devices(void)
 {
+    static const KernelDeviceDefinition display = {
+        display_device_quiesce,
+        display_device_reset,
+        NULL,
+        ASTRA_DEVICE_ID_DISPLAY0,
+        ASTRA_DEVICE_CLASS_DISPLAY,
+        ASTRA_DISPLAY_CAP_TEXT
+    };
+
     static const KernelDeviceDefinition input = {
         input_device_quiesce,
         input_device_reset,
@@ -137,6 +163,10 @@ static bool register_physical_devices(void)
         ASTRA_BLOCK_CAP_READ | ASTRA_BLOCK_CAP_WRITE | ASTRA_BLOCK_CAP_FLUSH
     };
 
+    if (kernel_platform_post_text_present()) {
+        if (kernel_device_register(&display) != KERNEL_DEVICE_OK)
+            return false;
+    }
     if (kernel_platform_input_present()) {
         if (kernel_device_register(&input) != KERNEL_DEVICE_OK)
             return false;
@@ -899,7 +929,8 @@ static void report_kernel_performance_failure(
  */
 static void start_initial_user_image(void)
 {
-    KernelProcessBootstrapCapability capabilities[2];
+    KernelProcessBootstrapCapability capabilities[
+        KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX];
     uint32_t capability_count = 0u;
     uint32_t process_id = 0u;
     KernelProcessStatus status;
@@ -936,7 +967,40 @@ static void start_initial_user_image(void)
         capabilities[capability_count].rights = KERNEL_IRQ_RIGHTS;
         ++capability_count;
     }
+    /*
+     * The keyboard, for the same reason and on the same terms as the block
+     * device: a terminal cannot read a key without a lease on the device the
+     * events come from. A machine with no input device boots without one.
+     */
+    if (kernel_platform_input_present()) {
+        capabilities[capability_count].name = ASTRA_CAPABILITY_INPUT_DEVICE;
+        capabilities[capability_count].kind =
+            KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+        capabilities[capability_count].device_id = ASTRA_DEVICE_ID_INPUT0;
+        capabilities[capability_count].rights = KERNEL_DEVICE_RIGHTS;
+        ++capability_count;
+    }
+    /*
+     * The screen, on the same terms. The kernel keeps drawing POST and panic
+     * output on the same plane, because that has to work when no process
+     * does; the lease is what says who else may.
+     */
+    if (kernel_platform_post_text_present()) {
+        capabilities[capability_count].name = ASTRA_CAPABILITY_DISPLAY_DEVICE;
+        capabilities[capability_count].kind =
+            KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+        capabilities[capability_count].device_id = ASTRA_DEVICE_ID_DISPLAY0;
+        capabilities[capability_count].rights = KERNEL_DEVICE_RIGHTS;
+        ++capability_count;
+    }
 #endif
+    /*
+     * Four sources, four slots. The compile-time check is here because the
+     * array is sized by the ABI maximum and a fifth grant would otherwise
+     * overrun it silently.
+     */
+    _Static_assert(KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX >= 4u,
+                   "bootstrap capability slots exhausted");
 
     status = kernel_process_create_executable(
         (const void *)(uintptr_t)boot_info.user_image_base,

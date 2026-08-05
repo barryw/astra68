@@ -92,6 +92,8 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 39 | `BLOCK_QUERY` | CURRENT CANDIDATE | `D1=block lease with QUERY right`, `D2=aligned AstraBlockLeaseInfo` |
 | 40 | `BLOCK_SUBMIT` | CURRENT CANDIDATE | `D1=block lease with TRANSFER right`, `D2=aligned AstraBlockRequest`; returns the request handle in `D1` |
 | 41 | `BLOCK_COLLECT` | CURRENT CANDIDATE | `D1=block lease with TRANSFER right`, `D2=aligned AstraBlockCompletion`, `D3=request handle`; `WOULD_BLOCK` until the device answers |
+| 42 | `CONSOLE_INFO` | CURRENT CANDIDATE | `D1=display lease with QUERY right`; returns character-plane `D1=columns`, `D2=rows` |
+| 43 | `CONSOLE_WRITE` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=first cell index`, `D3=cell bytes`, `D4=count` (at most `ASTRA_CONSOLE_WRITE_MAX`); writes one run of character cells |
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
 not panic. `QUERY_ABI` reports revision `0x00010008`; a later revision may add

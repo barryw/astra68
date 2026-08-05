@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include <astra/block.h>
+#include <astra/input.h>
 #include <astra/process.h>
 #include <astra/syscall.h>
 
@@ -52,6 +53,13 @@ uint32_t astra_block_lease_submit(uint32_t device, const AstraBlockRequest *requ
                             uint32_t *block_request);
 uint32_t astra_block_lease_collect(uint32_t device, uint32_t block_request,
                              AstraBlockCompletion *completion);
+uint32_t astra_console_info(uint32_t device, uint32_t *columns,
+                            uint32_t *rows);
+uint32_t astra_console_write(uint32_t device, uint32_t cell,
+                             const uint8_t *cells, uint32_t count);
+uint32_t astra_input_read(uint32_t device, AstraInputEvent *events,
+                          uint32_t capacity, uint32_t *count,
+                          uint32_t *flags);
 void astra_process_exit(uint32_t status) __attribute__((noreturn));
 
 /* Declared identically by the freestanding <assert.h> vendored code sees. */

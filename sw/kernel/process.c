@@ -1,6 +1,7 @@
 #include "process.h"
 
 #include <astra/block.h>
+#include <astra/display.h>
 #include <astra/syscall.h>
 #include <astra/input.h>
 #include <astra/process.h>
@@ -3328,6 +3329,95 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         thread->context.data[2] = current->self_handle;
         thread->context.data[3] = thread->self_handle;
         break;
+    /*
+     * The character plane of the display device. Both calls are gated by a
+     * lease on that device with the rights the operation needs, the same way
+     * block and input are: the screen has one owner, and saying which process
+     * that is belongs in a capability rather than in this switch.
+     */
+    case ASTRA_SYSCALL_CONSOLE_INFO:
+    case ASTRA_SYSCALL_CONSOLE_WRITE: {
+        KernelDeviceLease *lease = NULL;
+        KernelDeviceSnapshot snapshot;
+        KernelHandleStatus handle_status;
+        KernelDeviceStatus device_status;
+        /*
+         * Device rights are not generic rights: a lease carries QUERY,
+         * TRANSFER and ADMINISTER only. Drawing is a transfer to the device
+         * for the same reason submitting a block request is, and asking for
+         * ASTRA_RIGHT_WRITE here would name a right no lease can hold.
+         */
+        uint32_t required_rights =
+            syscall == ASTRA_SYSCALL_CONSOLE_INFO ? ASTRA_RIGHT_READ :
+                                                    ASTRA_RIGHT_TRANSFER;
+        uint32_t columns = 0u;
+        uint32_t rows = 0u;
+
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1], KERNEL_OBJECT_DEVICE,
+            required_rights, (void **)&lease);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || lease == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        device_status = kernel_device_query(lease, &snapshot);
+        if (!device_status_to_syscall(device_status, &result))
+            return KERNEL_PROCESS_CORRUPT;
+        if (device_status != KERNEL_DEVICE_OK)
+            break;
+        if (snapshot.class_id != ASTRA_DEVICE_CLASS_DISPLAY ||
+            snapshot.device_id != ASTRA_DEVICE_ID_DISPLAY0) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (!kernel_platform_post_text_present()) {
+            result = ASTRA_SYSCALL_IO_ERROR;
+            break;
+        }
+        kernel_platform_post_text_geometry(&columns, &rows);
+        if (syscall == ASTRA_SYSCALL_CONSOLE_INFO) {
+            thread->context.data[1] = columns;
+            thread->context.data[2] = rows;
+            break;
+        }
+        {
+            uint8_t cells[ASTRA_CONSOLE_WRITE_MAX];
+            uint32_t cell = thread->context.data[2];
+            uint32_t user_cells = thread->context.data[3];
+            uint32_t count = thread->context.data[4];
+            uint32_t index;
+            int copy_status;
+
+            if (count == 0u || count > ASTRA_CONSOLE_WRITE_MAX ||
+                cell > columns * rows || columns * rows - cell < count) {
+                result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+                break;
+            }
+            copy_status = kernel_copy_from_user(cells, user_cells, count);
+            if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+                copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
+                result = ASTRA_SYSCALL_BAD_ADDRESS;
+                break;
+            }
+            if (copy_status != KERNEL_USER_COPY_OK)
+                return KERNEL_PROCESS_CORRUPT;
+            for (index = 0u; index < count; ++index) {
+                if (!kernel_platform_post_text_write(cell + index,
+                                                     cells[index])) {
+                    result = ASTRA_SYSCALL_IO_ERROR;
+                    break;
+                }
+            }
+        }
+        break;
+    }
     case ASTRA_SYSCALL_PROGRESS:
         {
             bool qualification_handled;

@@ -298,6 +298,14 @@ bool kernel_platform_post_text_write(uint32_t cell, uint8_t value)
     return true;
 }
 
+void kernel_platform_post_text_geometry(uint32_t *columns, uint32_t *rows)
+{
+    if (columns != NULL)
+        *columns = VEGA_POST_COLS;
+    if (rows != NULL)
+        *rows = VEGA_POST_ROWS;
+}
+
 bool kernel_platform_bus_fault_read(KernelPlatformBusFault *fault)
 {
     uint32_t status;

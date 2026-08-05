@@ -216,3 +216,52 @@ astra_thread_exit(uint32_t status)
     for (;;) {
     }
 }
+
+uint32_t
+astra_console_info(uint32_t device, uint32_t *columns, uint32_t *rows)
+{
+    AstraSyscallResult result;
+
+    if (columns == NULL || rows == NULL) {
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    astra_syscall5(ASTRA_SYSCALL_CONSOLE_INFO, device, 0u, 0u, 0u, 0u,
+                   &result);
+    if (result.status == ASTRA_SYSCALL_OK) {
+        *columns = result.value0;
+        *rows = result.value1;
+    }
+    return result.status;
+}
+
+uint32_t
+astra_console_write(uint32_t device, uint32_t cell, const uint8_t *cells,
+                    uint32_t count)
+{
+    AstraSyscallResult result;
+
+    if (cells == NULL || count == 0u) {
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    astra_syscall5(ASTRA_SYSCALL_CONSOLE_WRITE, device, cell,
+                   (uint32_t)(uintptr_t)cells, count, 0u, &result);
+    return result.status;
+}
+
+uint32_t
+astra_input_read(uint32_t device, AstraInputEvent *events, uint32_t capacity,
+                 uint32_t *count, uint32_t *flags)
+{
+    AstraSyscallResult result;
+
+    if (events == NULL || count == NULL || flags == NULL) {
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    *count = 0u;
+    *flags = 0u;
+    astra_syscall5(ASTRA_SYSCALL_INPUT_READ_TRY, device,
+                   (uint32_t)(uintptr_t)events, capacity, 0u, 0u, &result);
+    *count = result.value0;
+    *flags = result.value1;
+    return result.status;
+}

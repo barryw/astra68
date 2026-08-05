@@ -87,6 +87,7 @@ uint32_t kernel_platform_build_id(void);
 bool kernel_platform_post_text_present(void);
 bool kernel_platform_post_text_read(uint32_t cell, uint8_t *value);
 bool kernel_platform_post_text_write(uint32_t cell, uint8_t value);
+void kernel_platform_post_text_geometry(uint32_t *columns, uint32_t *rows);
 bool kernel_platform_bus_fault_read(KernelPlatformBusFault *fault);
 void kernel_platform_bus_fault_acknowledge(void);
 void kernel_platform_debug_marker(uint32_t value);
