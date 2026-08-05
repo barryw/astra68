@@ -18,8 +18,12 @@
 #include "cpu.h"
 #include "hw/boards.h"
 #include "hw/loader.h"
+#include "hw/m68k/astra_input.h"
+#include "sysemu/block-backend.h"
+#include "sysemu/blockdev.h"
 #include "sysemu/reset.h"
 #include "sysemu/runstate.h"
+#include "ui/input.h"
 
 #define ASTRA_BRAM_BASE          0x01ff8000u
 #define ASTRA_BRAM_SIZE          (32 * KiB)
@@ -53,7 +57,66 @@
 #define ASTRAEA_IRQ_DRAW_DONE    (1u << 3)
 #define IRQ_SOURCE_VEGA          8
 #define IRQ_SOURCE_ASTRAEA       9
+#define IRQ_SOURCE_INPUT         5
+#define IRQ_SOURCE_STORAGE       4
 #define IRQ_VALID                (1u << 31)
+
+#define SYS_STATUS_BASE          0x0000000fu
+#define SYS_STATUS_ASTRA_HOST    (1u << 5)
+
+/*
+ * AstraHost runtime block service, Vesta offsets 0x150..0x1b0. The register
+ * contract, the 512-byte sector, and the 16-sector transfer ceiling are
+ * defined by sw/include/vesta.h and docs/ASTRAHOST.md; this model is the
+ * emulator implementation of the same contract over a host image.
+ */
+#define BLOCK_ID_MAGIC           0x484f5354u /* "HOST" */
+#define BLOCK_VERSION_1_0        0x00010000u
+#define BLOCK_SECTOR_SIZE        512u
+#define BLOCK_MAX_SECTORS        16u
+#define BLOCK_CAP_READ           (1u << 0)
+#define BLOCK_CAP_WRITE          (1u << 1)
+#define BLOCK_CAP_FLUSH          (1u << 2)
+#define BLOCK_STATE_LINK_UP      (1u << 0)
+#define BLOCK_STATE_MEDIA_PRESENT (1u << 1)
+#define BLOCK_STATE_WRITE_ENABLE (1u << 2)
+#define BLOCK_QUEUE_COMPLETION_VALID (1u << 20)
+#define BLOCK_QUEUE_COMPLETION_SHIFT 12
+#define BLOCK_QUEUE_REQUEST_READY (1u << 8)
+#define BLOCK_OP_READ            1u
+#define BLOCK_OP_WRITE           2u
+#define BLOCK_OP_FLUSH           3u
+#define BLOCK_SUBMIT             (1u << 0)
+#define BLOCK_CPL_POP_BIT        (1u << 0)
+#define BLOCK_STATE_ACK_BIT      (1u << 0)
+#define BLOCK_ERROR_BAD_OP       (1u << 0)
+#define BLOCK_ERROR_BAD_COUNT    (1u << 1)
+#define BLOCK_ERROR_BAD_BUFFER   (1u << 2)
+#define BLOCK_ERROR_NO_MEDIA     (1u << 3)
+#define BLOCK_ERROR_WRITE_PROTECT (1u << 4)
+#define BLOCK_ERROR_LBA_RANGE    (1u << 5)
+#define BLOCK_ERROR_QUEUE_FULL   (1u << 6)
+#define BLOCK_ERROR_BAD_ID       (1u << 7)
+#define BLOCK_ERROR_BAD_FLAGS    (1u << 8)
+
+#define BLOCK_COMPLETION_OK      0u
+#define BLOCK_COMPLETION_IO_ERROR 1u
+
+#define BLOCK_COMPLETION_QUEUE_SIZE 4u
+#define BLOCK_COMPLETION_QUEUE_MASK (BLOCK_COMPLETION_QUEUE_SIZE - 1u)
+
+/*
+ * The physical service completes one transfer at a time over SPI. Completing
+ * after a short virtual delay keeps the guest on the interrupt path it will
+ * use on hardware instead of letting a store to BLOCK_REQ_SUBMIT finish the
+ * transfer before the next instruction retires.
+ */
+#define BLOCK_SERVICE_DELAY_NS   20000ull
+
+#define ASTRA_INPUT_QUEUE_SIZE   32u
+#define ASTRA_INPUT_QUEUE_MASK   (ASTRA_INPUT_QUEUE_SIZE - 1u)
+#define ASTRA_INPUT_DEVICE_KEYBOARD 1u
+#define ASTRA_INPUT_DEVICE_POINTER  2u
 
 typedef struct Astra68State Astra68State;
 
@@ -93,6 +156,55 @@ typedef struct VegaState {
     uint32_t regs[ASTRA_VEGA_SIZE / 4];
 } VegaState;
 
+typedef struct AstraBlockCompletion {
+    uint32_t id;
+    uint32_t status;
+    uint32_t sectors;
+    uint32_t detail;
+    uint32_t media_generation;
+    uint32_t host_generation;
+} AstraBlockCompletion;
+
+typedef struct AstraBlockState {
+    BlockBackend *blk;
+    QEMUTimer *service_timer;
+    AstraBlockCompletion completion[BLOCK_COMPLETION_QUEUE_SIZE];
+    uint8_t head;
+    uint8_t tail;
+    /* Registers the guest programs before writing BLOCK_REQ_SUBMIT. */
+    uint32_t req_id;
+    uint32_t req_op;
+    uint32_t req_lba_hi;
+    uint32_t req_lba_lo;
+    uint32_t req_sectors;
+    uint32_t req_buffer;
+    /* The one transfer the service is executing. */
+    uint32_t active_id;
+    uint32_t active_op;
+    uint32_t active_sectors;
+    uint32_t active_buffer;
+    uint64_t active_lba;
+    bool busy;
+    uint32_t error;
+    uint32_t host_generation;
+    uint32_t media_generation;
+    uint64_t media_sectors;
+    bool write_enable;
+    bool state_change;
+} AstraBlockState;
+
+typedef struct AstraInputState {
+    AstraInputEvent queue[ASTRA_INPUT_QUEUE_SIZE];
+    uint8_t head;
+    uint8_t tail;
+    uint16_t keyboard_sequence;
+    uint16_t pointer_sequence;
+    uint32_t host_generation;
+    uint32_t dropped;
+    bool overflow;
+    QemuInputHandlerState *handler;
+} AstraInputState;
+
 struct Astra68State {
     M68kCPU *cpu;
     MemoryRegion bram;
@@ -114,9 +226,144 @@ struct Astra68State {
     AstraTimer timers[2];
     AstraeaState astraea;
     VegaState vega;
+    AstraInputState input;
+    AstraBlockState block;
     uint8_t panel_led_data;
     uint8_t panel_led_ownership;
     bool trace_timers;
+};
+
+static Astra68State *astra_input_machine;
+
+static void astra_update_irq(Astra68State *s);
+
+static uint32_t astra_input_level(const AstraInputState *input)
+{
+    return (input->tail - input->head) & ASTRA_INPUT_QUEUE_MASK;
+}
+
+static uint32_t astra_input_status(const AstraInputState *input)
+{
+    uint32_t level = astra_input_level(input);
+    return level | (level != 0 ? ASTRA_INPUT_STATUS_VALID : 0) |
+           (input->overflow ? ASTRA_INPUT_STATUS_OVERFLOW : 0);
+}
+
+static bool astra_input_push(Astra68State *s, uint8_t event_class,
+                             uint8_t kind, uint16_t flags, uint32_t value,
+                             uint16_t device, uint16_t *sequence)
+{
+    AstraInputState *input = &s->input;
+    uint8_t next = (input->tail + 1u) & ASTRA_INPUT_QUEUE_MASK;
+    AstraInputEvent *event;
+
+    if (next == input->head) {
+        input->overflow = true;
+        input->dropped++;
+        astra_update_irq(s);
+        return false;
+    }
+    ++*sequence;
+    event = &input->queue[input->tail];
+    event->header = ((uint32_t)event_class << 24) |
+                    ((uint32_t)kind << 16) | flags;
+    event->value = value;
+    event->timestamp_ms = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL);
+    event->device_sequence = (uint32_t)device << 16 | *sequence;
+    event->host_generation = input->host_generation;
+    input->tail = next;
+    astra_update_irq(s);
+    return true;
+}
+
+static uint16_t astra_usb_usage_for_qcode(QKeyCode qcode)
+{
+    guint usage;
+
+    for (usage = 0; usage < qemu_input_map_usb_to_qcode_len; ++usage) {
+        if (qemu_input_map_usb_to_qcode[usage] == qcode) {
+            return usage;
+        }
+    }
+    return 0;
+}
+
+static uint32_t astra_pointer_button(InputButton button)
+{
+    switch (button) {
+    case INPUT_BUTTON_LEFT: return 1;
+    case INPUT_BUTTON_MIDDLE: return 2;
+    case INPUT_BUTTON_RIGHT: return 3;
+    case INPUT_BUTTON_WHEEL_UP: return 4;
+    case INPUT_BUTTON_WHEEL_DOWN: return 5;
+    case INPUT_BUTTON_SIDE: return 6;
+    case INPUT_BUTTON_EXTRA: return 7;
+    case INPUT_BUTTON_WHEEL_LEFT: return 8;
+    case INPUT_BUTTON_WHEEL_RIGHT: return 9;
+    default: return 0;
+    }
+}
+
+static void astra_input_event(DeviceState *device, QemuConsole *console,
+                              InputEvent *event)
+{
+    Astra68State *s = astra_input_machine;
+    uint16_t flags;
+    uint16_t usage;
+    uint32_t button;
+    InputMoveEvent *move;
+
+    (void)device;
+    (void)console;
+    if (s == NULL) {
+        return;
+    }
+    switch (event->type) {
+    case INPUT_EVENT_KIND_KEY:
+        usage = astra_usb_usage_for_qcode(
+            qemu_input_key_value_to_qcode(event->u.key.data->key));
+        if (usage != 0) {
+            flags = event->u.key.data->down ? ASTRA_INPUT_FLAG_DOWN : 0;
+            astra_input_push(s, ASTRA_INPUT_CLASS_KEYBOARD,
+                             ASTRA_INPUT_KEY_PHYSICAL, flags, usage,
+                             ASTRA_INPUT_DEVICE_KEYBOARD,
+                             &s->input.keyboard_sequence);
+        }
+        break;
+    case INPUT_EVENT_KIND_BTN:
+        button = astra_pointer_button(event->u.btn.data->button);
+        if (button != 0) {
+            flags = event->u.btn.data->down ? ASTRA_INPUT_FLAG_DOWN : 0;
+            astra_input_push(s, ASTRA_INPUT_CLASS_POINTER,
+                             ASTRA_INPUT_POINTER_BUTTON, flags, button,
+                             ASTRA_INPUT_DEVICE_POINTER,
+                             &s->input.pointer_sequence);
+        }
+        break;
+    case INPUT_EVENT_KIND_REL:
+    case INPUT_EVENT_KIND_ABS:
+        move = event->type == INPUT_EVENT_KIND_REL ?
+               event->u.rel.data : event->u.abs.data;
+        flags = move->axis == INPUT_AXIS_Y ? ASTRA_INPUT_FLAG_AXIS_Y : 0;
+        astra_input_push(s, ASTRA_INPUT_CLASS_POINTER,
+                         event->type == INPUT_EVENT_KIND_REL ?
+                         ASTRA_INPUT_POINTER_RELATIVE :
+                         ASTRA_INPUT_POINTER_ABSOLUTE,
+                         flags, (uint32_t)move->value,
+                         ASTRA_INPUT_DEVICE_POINTER,
+                         &s->input.pointer_sequence);
+        break;
+    case INPUT_EVENT_KIND_MTT:
+    case INPUT_EVENT_KIND__MAX:
+        break;
+    }
+}
+
+static const QemuInputHandler astra_input_handler = {
+    .name = "Astra 68 keyboard and pointer",
+    .mask = INPUT_EVENT_MASK_KEY | INPUT_EVENT_MASK_BTN |
+            INPUT_EVENT_MASK_REL | INPUT_EVENT_MASK_ABS,
+    .event = astra_input_event,
 };
 
 static uint64_t astra_now_cycles(Astra68State *s)
@@ -136,6 +383,197 @@ static uint64_t astra_timer_period_ns(const AstraTimer *timer)
     return muldiv64(cycles, NANOSECONDS_PER_SECOND, ASTRA_CPU_HZ);
 }
 
+static bool astra_block_present(const Astra68State *s)
+{
+    return s->block.blk != NULL;
+}
+
+static uint32_t astra_block_completion_level(const AstraBlockState *block)
+{
+    return (block->tail - block->head) & BLOCK_COMPLETION_QUEUE_MASK;
+}
+
+static uint32_t astra_block_state_flags(const Astra68State *s)
+{
+    uint32_t flags;
+
+    if (!astra_block_present(s)) {
+        return 0;
+    }
+    flags = BLOCK_STATE_LINK_UP;
+    if (s->block.media_sectors != 0) {
+        flags |= BLOCK_STATE_MEDIA_PRESENT;
+    }
+    if (s->block.write_enable) {
+        flags |= BLOCK_STATE_WRITE_ENABLE;
+    }
+    return flags;
+}
+
+static uint32_t astra_block_queue(const Astra68State *s)
+{
+    const AstraBlockState *block = &s->block;
+    uint32_t level = astra_block_completion_level(block);
+    uint32_t queue = level << BLOCK_QUEUE_COMPLETION_SHIFT;
+
+    if (level != 0) {
+        queue |= BLOCK_QUEUE_COMPLETION_VALID;
+    }
+    if (block->busy) {
+        queue |= 1u;
+    } else if (astra_block_present(s) &&
+               level < BLOCK_COMPLETION_QUEUE_MASK) {
+        /*
+         * One transfer is active at a time, and a request is only accepted
+         * while the completion queue can still take its result.
+         */
+        queue |= BLOCK_QUEUE_REQUEST_READY;
+    }
+    return queue;
+}
+
+static void astra_block_push_completion(Astra68State *s, uint32_t status,
+                                        uint32_t sectors, uint32_t detail)
+{
+    AstraBlockState *block = &s->block;
+    AstraBlockCompletion *completion = &block->completion[block->tail];
+
+    completion->id = block->active_id;
+    completion->status = status;
+    completion->sectors = sectors;
+    completion->detail = detail;
+    completion->media_generation = block->media_generation;
+    completion->host_generation = block->host_generation;
+    block->tail = (block->tail + 1u) & BLOCK_COMPLETION_QUEUE_MASK;
+}
+
+static void astra_block_service(void *opaque)
+{
+    Astra68State *s = opaque;
+    AstraBlockState *block = &s->block;
+    uint32_t sectors = block->active_sectors;
+    uint8_t *buffer;
+    int rc;
+
+    if (!block->busy) {
+        return;
+    }
+    buffer = s->sdram + (block->active_buffer - ASTRA_SDRAM_BASE);
+
+    switch (block->active_op) {
+    case BLOCK_OP_READ:
+        rc = blk_pread(block->blk,
+                       (int64_t)block->active_lba * BLOCK_SECTOR_SIZE,
+                       (int64_t)sectors * BLOCK_SECTOR_SIZE, buffer, 0);
+        break;
+    case BLOCK_OP_WRITE:
+        rc = blk_pwrite(block->blk,
+                        (int64_t)block->active_lba * BLOCK_SECTOR_SIZE,
+                        (int64_t)sectors * BLOCK_SECTOR_SIZE, buffer, 0);
+        break;
+    default:
+        rc = blk_flush(block->blk);
+        sectors = 0;
+        break;
+    }
+
+    if (rc < 0) {
+        astra_block_push_completion(s, BLOCK_COMPLETION_IO_ERROR, 0,
+                                    (uint32_t)-rc);
+    } else {
+        astra_block_push_completion(s, BLOCK_COMPLETION_OK, sectors, 0);
+    }
+    block->busy = false;
+    astra_update_irq(s);
+}
+
+static uint32_t astra_block_validate(Astra68State *s)
+{
+    const AstraBlockState *block = &s->block;
+    uint32_t operation = block->req_op & 0xffu;
+    uint32_t flags = (block->req_op >> 8) & 0xffu;
+    uint32_t sectors = block->req_sectors & 0xffffu;
+    uint64_t lba = ((uint64_t)block->req_lba_hi << 32) | block->req_lba_lo;
+    uint64_t bytes;
+    uint32_t error = 0;
+
+    if (!astra_block_present(s) || block->media_sectors == 0) {
+        return BLOCK_ERROR_NO_MEDIA;
+    }
+    if (block->req_id == 0) {
+        error |= BLOCK_ERROR_BAD_ID;
+    }
+    if (flags != 0) {
+        error |= BLOCK_ERROR_BAD_FLAGS;
+    }
+    if (block->busy) {
+        error |= BLOCK_ERROR_QUEUE_FULL;
+    }
+
+    if (operation == BLOCK_OP_FLUSH) {
+        if (sectors != 0) {
+            error |= BLOCK_ERROR_BAD_COUNT;
+        }
+        return error;
+    }
+    if (operation != BLOCK_OP_READ && operation != BLOCK_OP_WRITE) {
+        return error | BLOCK_ERROR_BAD_OP;
+    }
+
+    if (sectors == 0 || sectors > BLOCK_MAX_SECTORS) {
+        error |= BLOCK_ERROR_BAD_COUNT;
+        return error;
+    }
+    if (operation == BLOCK_OP_WRITE && !block->write_enable) {
+        error |= BLOCK_ERROR_WRITE_PROTECT;
+    }
+    if (lba >= block->media_sectors ||
+        block->media_sectors - lba < sectors) {
+        error |= BLOCK_ERROR_LBA_RANGE;
+    }
+
+    bytes = (uint64_t)sectors * BLOCK_SECTOR_SIZE;
+    if ((block->req_buffer & 3u) != 0 ||
+        block->req_buffer < ASTRA_SDRAM_BASE ||
+        block->req_buffer - ASTRA_SDRAM_BASE > ASTRA_SDRAM_SIZE ||
+        ASTRA_SDRAM_SIZE - (block->req_buffer - ASTRA_SDRAM_BASE) < bytes) {
+        error |= BLOCK_ERROR_BAD_BUFFER;
+    }
+    return error;
+}
+
+static void astra_block_submit(Astra68State *s)
+{
+    AstraBlockState *block = &s->block;
+    uint32_t error = astra_block_validate(s);
+
+    if (error != 0) {
+        block->error |= error;
+        return;
+    }
+
+    block->active_id = block->req_id;
+    block->active_op = block->req_op & 0xffu;
+    block->active_sectors = block->req_sectors & 0xffffu;
+    block->active_buffer = block->req_buffer;
+    block->active_lba = ((uint64_t)block->req_lba_hi << 32) |
+                        block->req_lba_lo;
+    block->busy = true;
+    timer_mod_ns(block->service_timer,
+                 qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                 BLOCK_SERVICE_DELAY_NS);
+}
+
+static void astra_block_pop_completion(Astra68State *s)
+{
+    AstraBlockState *block = &s->block;
+
+    if (astra_block_completion_level(block) == 0) {
+        return;
+    }
+    block->head = (block->head + 1u) & BLOCK_COMPLETION_QUEUE_MASK;
+}
+
 static uint32_t astra_pending_raw(Astra68State *s)
 {
     uint32_t pending = s->irq_soft;
@@ -153,6 +591,14 @@ static uint32_t astra_pending_raw(Astra68State *s)
     }
     if (s->astraea.irq_status & s->astraea.irq_enable) {
         pending |= 1u << IRQ_SOURCE_ASTRAEA;
+    }
+    if (astra_input_level(&s->input) != 0) {
+        pending |= 1u << IRQ_SOURCE_INPUT;
+    }
+    if (astra_block_present(s) &&
+        (astra_block_completion_level(&s->block) != 0 ||
+         s->block.state_change)) {
+        pending |= 1u << IRQ_SOURCE_STORAGE;
     }
     return pending;
 }
@@ -260,7 +706,9 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
     case 0x000: return 0x56535441; /* VSTA */
     case 0x004: return 0x00010000;
     case 0x008: return 0x41363801;
-    case 0x010: return 0x0000000f;
+    case 0x010:
+        return SYS_STATUS_BASE |
+               (astra_block_present(s) ? SYS_STATUS_ASTRA_HOST : 0);
     case 0x018: return s->scratch;
     case 0x01c: return 0x00068030;
     case 0x020: return 0x54474d32;
@@ -293,11 +741,74 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
     case 0x0f0:
         cycles = astra_now_cycles(s);
         return cycles >> 32;
+    case 0x150:
+        return astra_block_present(s) ? BLOCK_ID_MAGIC : 0;
+    case 0x154:
+        return astra_block_present(s) ? BLOCK_VERSION_1_0 : 0;
+    case 0x158:
+        if (!astra_block_present(s)) {
+            return 0;
+        }
+        return BLOCK_CAP_READ | BLOCK_CAP_FLUSH |
+               (s->block.write_enable ? BLOCK_CAP_WRITE : 0);
+    case 0x15c: return astra_block_state_flags(s);
+    case 0x160: return s->block.media_generation;
+    case 0x164: return (uint32_t)(s->block.media_sectors >> 32);
+    case 0x168: return (uint32_t)s->block.media_sectors;
+    case 0x16c: return astra_block_queue(s);
+    case 0x170: return s->block.req_id;
+    case 0x174: return s->block.req_op;
+    case 0x178: return s->block.req_lba_hi;
+    case 0x17c: return s->block.req_lba_lo;
+    case 0x180: return s->block.req_sectors;
+    case 0x184: return s->block.req_buffer;
+    case 0x18c:
+        return astra_block_completion_level(&s->block) != 0 ?
+               s->block.completion[s->block.head].id : 0;
+    case 0x190:
+        return astra_block_completion_level(&s->block) != 0 ?
+               (s->block.completion[s->block.head].status << 16) |
+               (s->block.completion[s->block.head].sectors & 0xffffu) : 0;
+    case 0x194:
+        return astra_block_completion_level(&s->block) != 0 ?
+               s->block.completion[s->block.head].detail : 0;
+    case 0x198:
+        return astra_block_completion_level(&s->block) != 0 ?
+               s->block.completion[s->block.head].media_generation : 0;
+    case 0x19c:
+        return astra_block_completion_level(&s->block) != 0 ?
+               s->block.completion[s->block.head].host_generation : 0;
+    case 0x1a4: return s->block.error;
+    case 0x1a8: return s->block.host_generation;
+    case 0x1ac: return s->block.state_change ? BLOCK_STATE_ACK_BIT : 0;
+    case 0x1b0:
+        return astra_block_present(s) ? BLOCK_MAX_SECTORS : 0;
     case 0x300: return astra_pending_raw(s);
     case 0x304: return s->irq_enable;
     case 0x308: return s->irq_soft;
     case 0x310: return astra_irq_current(s);
     case 0x504: return 1;
+    case 0x700: return ASTRA_DEVICE_CLASS_INPUT;
+    case 0x704: return ASTRA_INPUT_VERSION_1_1;
+    case 0x708:
+        return ASTRA_INPUT_CAP_KEYBOARD | ASTRA_INPUT_CAP_POINTER;
+    case 0x70c: return astra_input_status(&s->input);
+    case 0x710:
+        return astra_input_level(&s->input) != 0 ?
+               s->input.queue[s->input.head].header : 0;
+    case 0x714:
+        return astra_input_level(&s->input) != 0 ?
+               s->input.queue[s->input.head].value : 0;
+    case 0x718:
+        return astra_input_level(&s->input) != 0 ?
+               s->input.queue[s->input.head].timestamp_ms : 0;
+    case 0x71c:
+        return astra_input_level(&s->input) != 0 ?
+               s->input.queue[s->input.head].device_sequence : 0;
+    case 0x720:
+        return astra_input_level(&s->input) != 0 ?
+               s->input.queue[s->input.head].host_generation :
+               s->input.host_generation;
     default:
         if (offset >= 0x380 && offset <= 0x3fc && !(offset & 3)) {
             return s->irq_config[(offset - 0x380) / 4];
@@ -374,9 +885,45 @@ static void astra_vesta_write32(Astra68State *s, hwaddr offset,
         s->irq_soft &= ~value;
         astra_update_irq(s);
         break;
+    case 0x170: s->block.req_id = value; break;
+    case 0x174: s->block.req_op = value; break;
+    case 0x178: s->block.req_lba_hi = value; break;
+    case 0x17c: s->block.req_lba_lo = value; break;
+    case 0x180: s->block.req_sectors = value; break;
+    case 0x184: s->block.req_buffer = value; break;
+    case 0x188:
+        if (value & BLOCK_SUBMIT) {
+            astra_block_submit(s);
+        }
+        break;
+    case 0x1a0:
+        if (value & BLOCK_CPL_POP_BIT) {
+            astra_block_pop_completion(s);
+            astra_update_irq(s);
+        }
+        break;
+    case 0x1a4:
+        s->block.error &= ~value;
+        break;
+    case 0x1ac:
+        if (value & BLOCK_STATE_ACK_BIT) {
+            s->block.state_change = false;
+            astra_update_irq(s);
+        }
+        break;
     case 0x500:
         fputc(value & 0xff, stdout);
         fflush(stdout);
+        break;
+    case 0x724:
+        if ((value & ASTRA_INPUT_POP_EVENT) != 0 &&
+            astra_input_level(&s->input) != 0) {
+            s->input.head = (s->input.head + 1u) & ASTRA_INPUT_QUEUE_MASK;
+        }
+        if ((value & ASTRA_INPUT_ACK_OVERFLOW) != 0) {
+            s->input.overflow = false;
+        }
+        astra_update_irq(s);
         break;
     default:
         if (offset >= 0x380 && offset <= 0x3fc && !(offset & 3)) {
@@ -678,6 +1225,34 @@ static void astra_cpu_reset(void *opaque)
     s->cpu->env.aregs[7] = s->initial_sp;
     s->cpu->env.pc = s->initial_pc;
     s->reset_clock_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    s->input.head = 0;
+    s->input.tail = 0;
+    s->input.keyboard_sequence = 0;
+    s->input.pointer_sequence = 0;
+    s->input.overflow = false;
+    s->input.dropped = 0;
+    ++s->input.host_generation;
+
+    if (s->block.service_timer) {
+        timer_del(s->block.service_timer);
+    }
+    s->block.head = 0;
+    s->block.tail = 0;
+    s->block.busy = false;
+    s->block.error = 0;
+    s->block.req_id = 0;
+    s->block.req_op = 0;
+    s->block.req_lba_hi = 0;
+    s->block.req_lba_lo = 0;
+    s->block.req_sectors = 0;
+    s->block.req_buffer = 0;
+    /*
+     * A reset is a fresh host service generation. The guest must resynchronise
+     * before trusting any state it cached, so raise the pending state change
+     * the storage interrupt reports.
+     */
+    ++s->block.host_generation;
+    s->block.state_change = astra_block_present(s);
 }
 
 static void astra68_init(MachineState *machine)
@@ -685,6 +1260,7 @@ static void astra68_init(MachineState *machine)
     Astra68State *s = g_new0(Astra68State, 1);
     MemoryRegion *sysmem = get_system_memory();
     const char *firmware = machine->firmware;
+    DriveInfo *dinfo;
     char *filename;
     char *contents;
     gsize firmware_size;
@@ -692,6 +1268,8 @@ static void astra68_init(MachineState *machine)
     int i;
 
     s->trace_timers = g_getenv("ASTRA_QEMU_TIMER_TRACE") != NULL;
+    s->input.host_generation = 0;
+    astra_input_machine = s;
 
     if (machine->ram_size != ASTRA_SDRAM_SIZE) {
         error_report("Astra68 requires exactly 32 MiB for the K1-K10 profile");
@@ -762,6 +1340,41 @@ static void astra68_init(MachineState *machine)
     timer_mod_ns(s->vega.vblank_timer,
                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
                  NANOSECONDS_PER_SECOND / 60);
+
+    s->input.handler = qemu_input_handler_register(NULL,
+                                                   &astra_input_handler);
+    qemu_input_handler_activate(s->input.handler);
+
+    /*
+     * The AstraHost block service is present only when an image is attached
+     * with -drive if=none. Without one the machine reports no block controller
+     * and SYS_ASTRA_HOST stays clear, so the K1-K10 boot path is unchanged.
+     * if=none is the interface QEMU allows a machine to claim without a qdev
+     * device behind it.
+     */
+    dinfo = drive_get(IF_NONE, 0, 0);
+    if (dinfo) {
+        int64_t length;
+
+        s->block.blk = blk_by_legacy_dinfo(dinfo);
+        blk_set_perm(s->block.blk, BLK_PERM_CONSISTENT_READ | BLK_PERM_WRITE,
+                     BLK_PERM_ALL, &error_fatal);
+        length = blk_getlength(s->block.blk);
+        if (length < 0) {
+            error_report("Astra68 storage image is not readable");
+            exit(EXIT_FAILURE);
+        }
+        if (length % BLOCK_SECTOR_SIZE) {
+            error_report("Astra68 storage image must be a multiple of %u bytes",
+                         BLOCK_SECTOR_SIZE);
+            exit(EXIT_FAILURE);
+        }
+        s->block.media_sectors = (uint64_t)length / BLOCK_SECTOR_SIZE;
+        s->block.write_enable = blk_is_writable(s->block.blk);
+        s->block.media_generation = 1;
+        s->block.service_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                              astra_block_service, s);
+    }
 
     astra_cpu_reset(s);
 }

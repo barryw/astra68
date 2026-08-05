@@ -9,6 +9,7 @@ QEMU_URL="https://download.qemu.org/${QEMU_ARCHIVE}"
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 REPOSITORY=$(CDPATH='' cd -- "$SCRIPT_DIR/../.." && pwd)
 OVERLAY="$SCRIPT_DIR/qemu-9.2"
+PUBLIC_INPUT="$REPOSITORY/sw/include/astra/input.h"
 
 sha256_file()
 {
@@ -35,6 +36,8 @@ overlay_identity()
         find . -type f -print | LC_ALL=C sort | while IFS= read -r file; do
             printf '%s  %s\n' "$(sha256_file "$file")" "$file"
         done
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_INPUT")" \
+            "sw/include/astra/input.h"
     ) | sha256_stream
 }
 
@@ -92,13 +95,21 @@ mkdir -p "$STAGE"
 tar -xJf "$ARCHIVE" -C "$STAGE"
 STAGED_SOURCE="$STAGE/qemu-$QEMU_VERSION"
 
+for required in configure meson.build hw/m68k/meson.build target/m68k/cpu.c; do
+    if [ ! -f "$STAGED_SOURCE/$required" ]; then
+        echo "Incomplete QEMU extraction: missing $required" >&2
+        exit 2
+    fi
+done
+
 cp "$OVERLAY/hw/m68k/astra68.c" "$STAGED_SOURCE/hw/m68k/astra68.c"
 cp "$OVERLAY/target/m68k/astra_pmmu030.c" "$STAGED_SOURCE/target/m68k/astra_pmmu030.c"
 cp "$OVERLAY/target/m68k/pmmu030.c" "$STAGED_SOURCE/target/m68k/pmmu030.c"
 cp "$OVERLAY/target/m68k/pmmu030.h" "$STAGED_SOURCE/target/m68k/pmmu030.h"
-patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/meson.build.patch"
-patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/target-m68k-pmmu030.patch"
-patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/target-m68k-68030-frames.patch"
+cp "$PUBLIC_INPUT" "$STAGED_SOURCE/include/hw/m68k/astra_input.h"
+patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/meson.build.patch" >&2
+patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/target-m68k-pmmu030.patch" >&2
+patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/target-m68k-68030-frames.patch" >&2
 
 {
     printf 'qemu_version=%s\n' "$QEMU_VERSION"

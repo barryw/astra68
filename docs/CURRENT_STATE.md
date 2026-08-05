@@ -25,16 +25,67 @@ userspace design and the provisional kernel driver boundary live in
 `RESOURCE_MODEL.md`. These are not evidence that services, a desktop, a POSIX
 personality, zsh, or Vim currently run.
 
+## Userspace bring-up line (2026-08-04)
+
+`docs/HANDOVER-userspace-bringup.md` is the resume point for the userspace,
+storage, and loader work aimed at a shell on Astra. Implemented and gated in
+the working tree: the observability contract (`docs/OBSERVABILITY.md`), a
+bounded userspace allocator, a QEMU Vesta block service that lets
+`sw/kernel/block.c` run in emulation for the first time, a strict big-endian
+MC68030 ELF acceptance profile with a transactional loader, and a
+capability-gated process-info syscall at ABI `0x00010008`.
+
+lwext4 is qualified big-endian behind three one-line upstream fixes but is
+neither vendored nor adopted. Nothing loads an ELF at boot yet, and there is no
+VFS or terminal. None of this work is committed.
+
 ## Driver substrate candidate (2026-08-04)
 
 The working tree contains a provisional Axiom device-lease substrate: an
 8-entry sealed registry, 8 exclusive generation-tagged leases, a 2-lease
 per-process limit, read/transfer/administer rights, trusted bootstrap grants,
-query/reset/revoke syscalls at ABI `0x00010006`, and owner-death quiesce/reset
-before handle closure. It reuses handles, ports, shared areas, rings, IRQ
+query/reset/revoke and bounded input-read syscalls at ABI `0x00010007`, and
+owner-death quiesce/reset before handle closure. It reuses handles, ports,
+shared areas, rings, IRQ
 endpoints, and user-copy; no generic I/O queue or class policy was added.
 Focused device and process tests and the freestanding MC68030 link pass on
 Beast. Full qualification and physical device registration remain pending.
+
+## Input transport candidate (2026-08-04)
+
+The working tree defines input ABI `0x00010001` in `sw/include/astra/input.h`.
+It carries 20-byte big-endian physical keyboard and pointer records. Keyboard
+values are USB HID Keyboard/Keypad Usage IDs; pointer records carry signed
+relative/absolute axes or normalized button IDs. The Vesta queue has 32 slots,
+31 usable records, independent 16-bit keyboard and pointer sequences, a host
+generation, sticky overflow, and IRQ source 5. Axiom registers this controller
+as exclusive physical device `0x494e0001` when present and supplies bounded
+quiesce/reset/drain operations.
+
+The exact QEMU 9.2.4 host build passes `emu/qemu/test-input.py` on Beast. The
+active Arty ARMv7 build SHA-256 is
+`54468714d702eb807237ecf12865c1cf88c2956637cd14d5ec753fcebe31b517`
+and passes the same certifier on the Arty plus the unchanged deployed Axiom ROM
+through `ASTRA68-QEMU READY`. The prior active emulator is retained under its
+hash-qualified rollback name. The certifier covers keyboard usage
+mapping, signed X/Y motion, pointer buttons, FIFO ordering, independent device
+sequences, full-queue overflow, pop/overflow acknowledgement, and IRQ
+assertion/deassertion. The Arty Linux kernel has USB HID, input, keyboard,
+mouse, and evdev support built in. No physical keyboard or mouse event node was
+present at the checkpoint, so direct evdev hardware-event qualification remains
+pending. Protected userspace can drain physical events through the input-device
+lease. The cross-built, allocation-free input service core now implements a
+replaceable keymap with a built-in US map, separate key/text events, modifiers
+and Caps Lock, bounded repeat,
+integer pointer acceleration and clipping, eight-client focus routing,
+generation/overflow reset repair, and bounded 56-byte application-port
+  messages. Beast functional, sanitizer, GCC analyzer, MC68030 cross-build, and
+  kernel regression gates pass. The target library is 3,095 bytes of text with a
+  fixed 368-byte state object. It is not yet running as an Astra process: the
+  base syscall runtime now exists, but the production ELF loader, supervisor,
+  and launch-time transfer of its device lease, IRQ endpoint, and ports remain
+  unimplemented. Physical evdev qualification is also still pending because no
+  keyboard or mouse event node was present.
 
 ## Active Arty migration override (2026-07-30)
 
@@ -406,7 +457,23 @@ must not be used to infer the Arty architecture.
 - Small binaries, shared immutable Kits after ABI stabilization, bounded
   service count, and continuous size/launch/resident-memory measurement are
   product requirements. `USERSPACE_BUDGET.md` records provisional first
-  envelopes; no userspace measurement has yet validated them.
+  envelopes. The first permanent userspace substrate now exists under
+  `sw/userspace/runtime`: a versioned 64-byte startup contract, MC68030 `crt0`,
+  C-callable trap veneer, typed baseline wrappers, and freestanding byte
+  primitives. Its canonical Beast build passes host and sanitizer tests and
+  measures 660 bytes of archive-object text plus a separate 46-byte `crt0`,
+  with no data or BSS. No ELF loader, supervisor executable, heap, stdio, or
+  standards libc exists yet; `USERSPACE_RUNTIME.md` records the boundary and
+  next acceptance slice.
+- The first reusable storage substrate now exists in `sw/userspace/storage`.
+  Its bounded block facade and caller-owned memory/image backend track
+  generations, media state, deadlines, errors, sectors, and total/maximum
+  latency for query/read/write/flush. A 100,000-operation Beast stress run
+  verifies 847,243 sectors against an independent oracle and passes
+  ASan/UBSan, GCC `-fanalyzer`, and the MC68030 cross-build. Target size is
+  1,492 bytes of text with no data/BSS. `STORAGE_AND_VFS.md` records the exact
+  route to protected VFS and shell boot; no filesystem handler, VFS service,
+  Arty guest disk, or block syscall surface exists yet.
 
 ## Hardware and build topology
 

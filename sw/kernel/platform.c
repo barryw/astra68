@@ -708,7 +708,7 @@ bool kernel_platform_qualification_irq_consume(uint8_t source,
         KernelInputEvent event;
 
         if ((status & INPUT_EVENT_VALID) == 0u ||
-            !kernel_input_pop(&event))
+            !kernel_input_peek(&event) || !kernel_input_consume())
             return false;
         kernel_mmio_cpu_sync();
         return INPUT_EVENT_CLASS(event.header) ==
@@ -855,7 +855,12 @@ bool kernel_platform_input_present(void)
     return VESTA_READ(INPUT_ID) == INPUT_ID_MAGIC;
 }
 
-bool kernel_input_pop(KernelInputEvent *event)
+uint32_t kernel_platform_input_status(void)
+{
+    return VESTA_READ(INPUT_STATUS);
+}
+
+bool kernel_input_peek(KernelInputEvent *event)
 {
     if (event == 0 || (VESTA_READ(INPUT_STATUS) & INPUT_EVENT_VALID) == 0u)
         return false;
@@ -864,6 +869,40 @@ bool kernel_input_pop(KernelInputEvent *event)
     event->timestamp_ms = VESTA_READ(INPUT_TIMESTAMP);
     event->device_sequence = VESTA_READ(INPUT_DEVICE_SEQ);
     event->host_generation = VESTA_READ(INPUT_HOST_GEN);
+    return true;
+}
+
+bool kernel_input_consume(void)
+{
+    if ((VESTA_READ(INPUT_STATUS) & INPUT_EVENT_VALID) == 0u)
+        return false;
     VESTA_WRITE(INPUT_POP, INPUT_POP_BIT);
     return true;
+}
+
+void kernel_platform_input_ack_overflow(void)
+{
+    VESTA_WRITE(INPUT_POP, ASTRA_INPUT_ACK_OVERFLOW);
+    kernel_mmio_cpu_sync();
+}
+
+bool kernel_platform_input_quiesce(void)
+{
+    return kernel_platform_irq_mask(IRQ_SRC_INPUT, NULL);
+}
+
+bool kernel_platform_input_reset(void)
+{
+    uint32_t drained = 0u;
+
+    if (!kernel_platform_input_quiesce())
+        return false;
+    while ((VESTA_READ(INPUT_STATUS) & INPUT_EVENT_VALID) != 0u &&
+           drained < 31u) {
+        VESTA_WRITE(INPUT_POP, INPUT_POP_BIT);
+        ++drained;
+    }
+    kernel_platform_input_ack_overflow();
+    return (VESTA_READ(INPUT_STATUS) &
+            (INPUT_EVENT_VALID | ASTRA_INPUT_STATUS_OVERFLOW)) == 0u;
 }

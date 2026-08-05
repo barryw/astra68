@@ -6,6 +6,20 @@ The ABI is big-endian, 32-bit, naturally aligned, and independent of kernel C
 layouts. Only the user/kernel ABI and versioned service protocols are stable.
 Kernel-internal structures and function calls may change at any time.
 
+## Process startup ABI 1
+
+`sw/include/astra/process.h` defines the 64-byte `AstraStartupInfo` and 16-byte
+`AstraStartupCapability` records. The initial thread enters `_start` with the
+read-only startup-block logical address in `D2`, its process self handle in
+`D4`, and its thread self handle in `D5`. The block carries explicit bounded
+argument, environment, and initial-capability tables. Counts are independent
+of addresses, the capability count is at most 32, and all reserved words are
+zero. `docs/USERSPACE_RUNTIME.md` defines validation, ownership, and exit.
+
+The boot-supplied supervisor and every later protected loader use this same
+contract. General ELF parsing remains userspace policy; Axiom validates the
+final mappings, entry, stack, handles, and startup block before publication.
+
 ## Machine ABI
 
 - CPU: MC68030, `-m68030`, software floating point.
@@ -41,7 +55,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 
 | Number | Name | State | Contract |
 |---:|---|---|---|
-| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010006`, `D2=process handle`, `D3=calling-thread handle` |
+| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010008`, `D2=process handle`, `D3=calling-thread handle` |
 | 1 | `PROGRESS` | K1 TEST ONLY | monotonic test progress, not a product ABI |
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `PROCESS_EXIT` (`EXIT` compatibility alias) | CURRENT | terminates the calling process and all of its threads |
@@ -72,15 +86,45 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 33 | `DEVICE_QUERY` | CURRENT CANDIDATE | `D1=device handle`, `D2=aligned AstraDeviceInfo output`; requires read |
 | 34 | `DEVICE_RESET` | CURRENT CANDIDATE | `D1=device handle`; requires administer and advances generation |
 | 35 | `DEVICE_REVOKE` | CURRENT CANDIDATE | `D1=device handle`; requires administer; quiesces and resets |
+| 36 | `INPUT_READ_TRY` | CURRENT CANDIDATE | `D1=input-device lease`, `D2=aligned AstraInputEvent array`, `D3=capacity 1-16`; returns count in `D1` and overflow flags in `D2` |
+| 37 | `PROCESS_INFO` | CURRENT CANDIDATE | `D1=process handle with QUERY right`, `D2=aligned AstraProcessInfo`; copies one 48-byte record |
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
-not panic. `QUERY_ABI` reports revision `0x00010006`; a later revision may add
+not panic. `QUERY_ABI` reports revision `0x00010008`; a later revision may add
 feature bits before additional calls freeze.
 
 `AstraDeviceInfo` is 24 bytes and naturally four-byte aligned. It contains
 size, device ID, class ID, capabilities, generation, device state, lease
 state, and a zero reserved field. It exposes no pointer, owner, or kernel
 layout. Only trusted bootstrap code can grant the initial physical lease.
+
+`INPUT_READ_TRY` returns `ASTRA_INPUT_READ_OVERFLOW` in `D2` when records were
+lost. The successful syscall atomically acknowledges that sticky hardware bit;
+the input service must discard or reconstruct held logical state before
+publishing later events. Overflow without a queued record returns `OK` with a
+zero count. A copy fault does not consume its record or acknowledge overflow.
+
+### Logical input service protocol
+
+`sw/include/astra/input_service.h` defines protocol `INPT`, version 1. A
+logical event is exactly 32 bytes with size/version, type/flags, millisecond
+timestamp, nonzero service sequence, focus generation, code, and two signed
+values. Event types are physical key, Unicode text, pointer motion, pointer
+button, focus, and state reset. No raw pointer or compiler-dependent enum
+crosses the boundary.
+
+Events use operation `EVENT=1` and are carried as a normal 24-byte
+`AstraMessageHeader` followed by one logical event. The complete message is 56
+bytes. `transaction_id` equals the logical event sequence. Keyboard `code` is
+a USB HID usage; text `code` is a Unicode scalar value; pointer-button `code`
+is an `ASTRA_INPUT_BUTTON_*` value. Pointer motion carries the current clipped
+X/Y position. Key and text `value_x` carries the modifier mask.
+
+The flags distinguish down, repeat, synthetic, focused, and loss events.
+Clients must discard held-key/button state on `STATE_RESET`. A focus generation
+change also invalidates assumptions made under the prior focus owner. Queue
+full is bounded behavior, never implicit growth: pointer motion may coalesce,
+while loss of a critical event forces a reset before later delivery.
 
 The thread-entry register contract is `D2=initial argument`, `D4=process self
 handle`, and `D5=thread self handle`; all other general registers begin at
@@ -290,6 +334,37 @@ returns both kernel shadow positions, and wakes the peer. The only current flag
 is `ASTRA_BULK_RING_NOTIFY_CORRUPT`, which terminally closes a corrupt ring.
 The exact shared-header layout, fence ordering, quotas, and lifecycle are
 normative in `SHARED_AREAS_AND_BULK_RINGS.md` and the public NDK headers.
+
+## Physical input ABI 1.1
+
+`sw/include/astra/input.h` defines the host-to-machine input record. This is a
+big-endian hardware ABI between the QEMU/physical adapter and Axiom; it is not
+the application input protocol.
+
+```c
+typedef struct AstraInputEvent {
+    uint32_t header;
+    uint32_t value;
+    uint32_t timestamp_ms;
+    uint32_t device_sequence;
+    uint32_t host_generation;
+} AstraInputEvent;
+```
+
+The structure is exactly 20 bytes with natural four-byte alignment. Header
+bits 31..24 are class, 23..16 are kind, and 15..0 are flags. Keyboard values
+are USB HID Keyboard/Keypad Usage IDs. Relative pointer values are signed
+two's-complement 32-bit deltas; button values use the public normalized button
+constants. `device_sequence` contains a 16-bit logical device followed by a
+16-bit per-device sequence. Sequence wrap is legal; discontinuity, generation
+change, or sticky overflow requires logical held-state repair by the input
+service.
+
+The producer owns tail publication and record contents. Axiom owns head pop
+and overflow acknowledgement. The 32-slot ring intentionally exposes at most
+31 records. The consumer reads all five words before writing `POP_EVENT`.
+Application-visible events will be copied or normalized into bounded service
+ports; applications never consume this MMIO record directly.
 
 ## Blocking and time
 

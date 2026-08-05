@@ -1,4 +1,5 @@
 #include <astra/boot.h>
+#include <astra/input.h>
 
 #include "kernel_build_info.h"
 #include "allocation.h"
@@ -68,6 +69,42 @@ static const KernelMonitorBuildInfo monitor_build_info = {
     ASTRA_KERNEL_BUILD_UTC,
     ASTRA_KERNEL_GIT_REVISION
 };
+
+static bool input_device_quiesce(uint32_t device_id, uint32_t generation,
+                                 void *context)
+{
+    (void)generation;
+    (void)context;
+    return device_id == ASTRA_DEVICE_ID_INPUT0 &&
+           kernel_platform_input_quiesce();
+}
+
+static bool input_device_reset(uint32_t device_id, uint32_t generation,
+                               void *context)
+{
+    (void)generation;
+    (void)context;
+    return device_id == ASTRA_DEVICE_ID_INPUT0 &&
+           kernel_platform_input_reset();
+}
+
+static bool register_physical_devices(void)
+{
+    static const KernelDeviceDefinition input = {
+        input_device_quiesce,
+        input_device_reset,
+        NULL,
+        ASTRA_DEVICE_ID_INPUT0,
+        ASTRA_DEVICE_CLASS_INPUT,
+        INPUT_CAP_KEYBOARD | INPUT_CAP_POINTER
+    };
+
+    if (kernel_platform_input_present()) {
+        if (kernel_device_register(&input) != KERNEL_DEVICE_OK)
+            return false;
+    }
+    return true;
+}
 #if ASTRA_KERNEL_SOAK_SELFTEST
 static KernelPlatformCycleCount soak_started;
 #endif
@@ -1133,7 +1170,8 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         kernel_panic("thread ISP arena contract mismatch");
     kernel_dma_init();
     kernel_block_init();
-    if (!kernel_device_init() || !kernel_device_seal_registry())
+    if (!kernel_device_init() || !register_physical_devices() ||
+        !kernel_device_seal_registry())
         kernel_panic("device registry initialization failed");
     if (kernel_read_vbr() != (uint32_t)_kernel_vectors)
         kernel_panic("kernel VBR installation failed");
