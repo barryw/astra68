@@ -15,9 +15,13 @@ Everything described here is committed. Build and test on `beast`; the Mac has
 Homebrew `m68k-elf-gcc` and is fine for the ELF and userspace work but **cannot**
 build `test_process` (mach-o section attributes) or the kernel image.
 
-The one-line summary of where this stands: **a user-mode service loaded from
-ROM reads sectors off a real block device through the same facade a filesystem
-will use, and the kernel proves it on every boot.**
+The one-line summary of where this stands: **a real ext4 filesystem now runs on
+big-endian MC68030 through the same block facade the ROM-loaded service uses,
+and `e2fsck` calls the volume it writes clean.**
+
+Before that, and still true: a user-mode service loaded from ROM reads sectors
+off a real block device through that facade, and the kernel proves it on every
+boot.
 
 ```
 astra68.rom: 191864 payload bytes, 70280 bytes free of 262144 (73.2% used)
@@ -28,10 +32,12 @@ Initial image ....... block geometry read
 Initial image ....... block round-trip verified, service resident, irq delivered/acked=1/1
 ```
 
-Gate status: 30 kernel suites, both kernel build configurations, 7 userspace
+Gate status: 30 kernel suites, both kernel build configurations, 8 userspace
 suites under ASan/UBSan, GCC `-fanalyzer` clean, the MC68030 kernel image, the
-boot C and Python tests, both QEMU device certifiers, and repeated QEMU boots
-with and without media.
+boot C and Python tests, both QEMU device certifiers, repeated QEMU boots with
+and without media, and — new in phase 4 — the filesystem mount test on the host
+and on big-endian MC68030 under `qemu-m68k` with `e2fsck` as the independent
+judge, plus a freestanding link of the whole filesystem stack.
 
 ---
 
@@ -52,9 +58,15 @@ with and without media.
 | Block admission | `BLOCK_QUERY`/`BLOCK_SUBMIT`/`BLOCK_COLLECT`, ABI `0x0001000a` | lease-gated, fault-injected, round-trip proven at every boot |
 | Lease-backed facade | `sw/userspace/storage/src/lease_block.c` | `AstraBlockBackend` on the real device; interrupt-driven with a deadline |
 | First service | `sw/userspace/supervisor` | 5,514 B MC68030 text; resident; verifies itself, its lease, and one real transfer |
+| lwext4 vendor | `third_party/lwext4` | BSD-3-Clause subset at upstream `58bcf89`; GPLv2 files not imported; 3 big-endian patches applied in tree |
+| lwext4 port | `sw/userspace/storage/src/ext4_port.c` | 949 B text; binds `AstraBlockDevice` to `ext4_blockdev`; splits transfers, maps status to errno, refuses a re-entrant lock |
+| lwext4 build profile | `sw/userspace/storage/port/include/generated/ext4_config.h` | one profile for host and target; owns errno and oflags so `<errno.h>`, `<fcntl.h>` and `<unistd.h>` drop out |
+| Bounded allocation for lwext4 | `sw/userspace/storage/src/ext4_alloc.c` | `astra_ext4_alloc_classes`, measured on LP32; 151,936 B arena carries the workload with zero failures |
+| Freestanding C headers | `sw/userspace/runtime/freestanding` | `string.h`, `stdlib.h`, `assert.h`, `inttypes.h`; target only |
+| Runtime primitives | `sw/userspace/runtime/src/{sort,assert}.c` | `qsort` (heapsort, 302 B) and a tagged-exit assertion handler (18 B) |
 
-Not done: no filesystem, no VFS, no terminal. lwext4 is qualified but **not
-vendored and not adopted**.
+Not done: no VFS, no terminal. The filesystem runs, but nothing above it does,
+and it has never run against the real device — see section 6.
 
 ---
 
@@ -67,7 +79,7 @@ Scratch state on Beast, all disposable:
 | `/tmp/qemu-final-build/qemu-system-m68k` | system emulator with the block and input models | ~5 min |
 | `/tmp/qemu-m68k-user-build/qemu-m68k` | user-mode qemu-m68k 9.2.4, needed to run the lwext4 probes | ~5 min |
 | `/tmp/astra-qemu-final/source-8c7066…` | prepared QEMU source | via `emu/qemu/prepare-source.sh` |
-| `/tmp/lwext4-verify/` | lwext4 checkout + eval rig + alloc copy | `git clone` + `make patch` |
+| `/tmp/lwext4-verify/` | obsolete — lwext4 is vendored now, no external checkout is used | delete it |
 | `/tmp/storage.img` | 64 MiB raw image the boot check reads sector 0 from | `truncate -s 64M` |
 
 Traps that have each cost time:
@@ -107,10 +119,20 @@ let alone tested. Patches are in `sw/userspace/storage/lwext4-eval/patches/`:
 The third is invisible against lwext4's own `mkfs` (it leaves the seed zero) and
 only appears against an `mke2fs` image — which is the profile Astra intends.
 
-**The GPLv2 claim in the old docs was wrong.** `ext4_journal.c` is BSD-2-clause;
-only `ext4_extent.c` and `ext4_xattr.c` are GPLv2. A build without those two
-passes the same big-endian checks and is 66,395 bytes of MC68030 text against
-79,891 with them.
+**The GPLv2 claim in the old docs was wrong, and so was the correction.**
+Only `ext4_extent.c` and `ext4_xattr.c` are GPLv2; everything else, journalling
+included, is **BSD-3-Clause**, not BSD-2-clause — the notice carries the
+non-endorsement third clause and upstream's README says "BSD3".
+
+Astra ships the BSD-3 subset and **does not vendor the two GPLv2 files at
+all**, so extents and xattrs are not switches someone can flip later. Upstream's
+root `LICENSE` is the GPLv2 text, which exists only because of those two files;
+it is deliberately not imported, because shipping it beside a BSD-3-only subset
+would misreport the licence of the whole directory to any audit that reads it.
+
+The price of the exclusion is real: indirect block mapping instead of extents,
+and no on-disk home for POSIX ACLs or security labels. Volumes must be
+formatted `-O ^extent,^ext_attr`, which is not the default ext4 shape.
 
 **lwext4's own `mkfs` mis-accounts free blocks at 4 KiB** whenever the last
 group is short, on both endians, hidden at its default 1024-byte block size. Do
@@ -126,6 +148,19 @@ frozen profile states `^casefold` explicitly. Verified both directions:
 and exactly `CONFIG_BLOCK_DEV_CACHE_SIZE + 1` block buffers. That measurement is
 what the allocator's class table was built from, and it must be re-measured
 against a real volume size before shipping, because the journal scales.
+
+**The class table is LP32-only, and this bites immediately.** Re-measured
+through the shipped port on big-endian MC68030 the original table is right:
+855/16/1/17 against counts of 900/32/4/20, zero failures, 151,936-byte arena.
+The identical code on an LP64 host produces a completely different shape —
+class 64 goes *unused* because every pointer-bearing descriptor grows past 64
+bytes, and the htree sort array grows from 4,092 bytes to 5,456 and stops
+fitting a 4 KiB block at all. The host mount test therefore carries its own
+measured table; see `host_classes` in `tests/test_ext4_mount.c`. Never size the
+shipped table from a host run.
+
+On MC68030 that sort array is 4,092 bytes against a 4,096-byte class — a
+**four-byte margin**. Any increase in the filesystem block size breaks it.
 
 ### 4.2 ROM
 
@@ -208,8 +243,8 @@ Profile everything so performance is measurable and regressions are visible.
 | 1b | Firmware-supplied initial image and the first service that runs from it | **done** |
 | 2 | Block admission syscalls | **done** |
 | 3 | Block service + lease-backed `AstraBlockBackend` | **done** |
-| 4 | lwext4 vendor + port layer | next |
-| 5 | VFS service | |
+| 4 | lwext4 vendor + port layer | **done** |
+| 5 | VFS service | next |
 | 6 | Terminal service + VFS client Kit + shell builtins | |
 | 7 | Introspection filesystem (`PROC:`) | |
 
@@ -217,17 +252,47 @@ Profile everything so performance is measurable and regressions are visible.
 
 ## 6. Start here next session
 
-Phase 4: vendor lwext4 and write the port layer. The facade underneath it runs
-on the real device, so a filesystem written against `sw/userspace/storage` runs
-on hardware unchanged — that is the whole point of phase 3.
+Phase 5: the VFS service.
 
-The port layer is the piece to design first: lwext4 wants a block device
-interface and a lock, and `AstraBlockDevice` already supplies the first. Feed
-it the lease-backed backend and the deterministic memory backend interchangeably
-so the filesystem's own tests keep running on the host.
+Read first: `third_party/lwext4/ASTRA_VENDOR.md` for what was imported and why,
+and `sw/userspace/storage/include/astra/ext4_port.h`, whose header comment
+states the three translations the port owns.
+
+**What phase 4 did not do, and what it means.** The filesystem has only ever
+run against the *memory* backend. Every gate — host and m68k — mounts a volume
+held in RAM. It has never been mounted through `lease_block.c` on the real
+device, and that is not an oversight: there is no way to get there yet. lwext4
+is 64–74 KiB of text and `docs/MEMORY_MAP.md` rules it out of the 256 KiB ROM
+window, so the filesystem must load as an ordinary file — and the loader that
+would read that file is the thing phase 5 builds. The facade is the same object
+in both cases, which is the entire argument for believing the first real-device
+mount will work, but it is an argument and not yet a measurement.
+
+The first thing worth doing in phase 5 is therefore probably not the VFS
+surface. It is closing that loop: get lwext4 onto the real device once, however
+crudely, so the port is proven against the transport it will actually use
+before a service is designed on top of it.
 
 Constraints that will bite:
 
+- **The port refuses a re-entrant block-device lock with `EBUSY`** and counts
+  it in `reentry_refusals`. That is a deliberate tripwire, not a limitation:
+  the service is single-threaded today, and the day it is not, this fires
+  instead of silently corrupting the block cache. If phase 5 adds threads, this
+  is the first thing that must be replaced with a real lock.
+- **Transfer splitting is in the port, not in lwext4.** lwext4 asks for as many
+  blocks as it likes; `run_transfer()` chops the request to the device's
+  `max_transfer_sectors`. The m68k gate splits 4,264 times, so this path is
+  well exercised, but it means a device reporting a tiny cap silently costs
+  many more transfers rather than failing.
+- **Several device failures collapse to `EIO`** at the lwext4 boundary because
+  lwext4's own errno set has no `ETIMEDOUT` or `ECANCELED`. The exact status
+  survives in `AstraExt4Port::last_status`, and anything deciding whether to
+  retry must read it there, not the errno.
+- **A failed assertion inside lwext4 exits the process** with
+  `ASTRA_ASSERT_STATUS_TAG | line`, i.e. `0x4153xxxx`. For the initial image
+  that is a kernel panic. If a panic status starts with `0x4153`, the low
+  halfword is a line number in a `third_party/lwext4/src` file.
 - **The service is single-threaded and synchronous.** One request is in flight
   at a time even though the engine allows four. A filesystem worker blocking on
   a transfer blocks the whole service until phase 5 gives it threads.
@@ -236,6 +301,7 @@ Constraints that will bite:
   service.
 - **`KERNEL_PROCESS_MAX` is 4**; the default boot uses one, and K1 costs two
   more when enabled.
+
 - **Name collisions are real here.** The syscall ABI and the storage facade are
   linked into the same program; the ABI uses `AstraBlockLeaseInfo` and
   `astra_block_lease_*` precisely because `AstraBlockGeometry` and
@@ -264,6 +330,22 @@ Constraints that will bite:
   Makefiles now generate and include depfiles, because a runtime object built
   against an older ABI constant boots and then fails its startup check with
   exit 127. If you ever see 127, suspect a stale object first.
+- **`mke2fs` defaults move, and the frozen profile is subtractive.** A recent
+  `mke2fs` enables `metadata_csum_seed`, which lwext4's supported-incompat set
+  does not contain, so mount returns `ENOTSUP` (95). The profile subtracts it
+  explicitly. If a future `mke2fs` adds another default incompat feature the
+  symptom is the same `ENOTSUP` at mount, and the fix is another `^feature` in
+  `EXT4_MKFS_FEATURES` in both `sw/userspace/storage/Makefile` and the
+  qualification rig's Makefile, which deliberately hold identical copies.
+- **On macOS the `mke2fs` on `PATH` may be Android platform-tools'**, and there
+  is no `e2fsck` or `dumpe2fs` beside it. It formats well enough for
+  `make ext4-test`, but the `e2fsck` half of the gate only exists on Beast.
+- The **`-DASTRA_FORCE_LE` control build is expected to fail to mount** a real
+  image with `ENOTSUP`. That failure is the control working, not a regression.
+- lwext4's config guard is spelled `CONFIG_USE_DEFAULT_CFG`, not
+  `CONFIG_USE_DEFAULT_CONFIG`. The old eval rig defined the latter and worked
+  anyway, because `#if !CONFIG_USE_DEFAULT_CFG` reads an undefined macro as 0
+  and includes the profile regardless.
 - `docs/MEMORY_BUDGET.md` per-milestone tables are historical. `KernelProcess`
   is now 596 bytes (472 originally, +4 for the executable span, +48 for the
   four transfer-memory records); the compile-time assertion in
@@ -305,10 +387,18 @@ open("/tmp/corrupt.bin","wb").write(d)'
 ASTRA_ELF_FIXTURE=sw/userspace/supervisor/build/m68k/astra_supervisor.elf \
     sw/kernel/build/test_elf
 
-# lwext4 big-endian, e2fsck, and the bounded allocator under it
+# the filesystem on the host, and the freestanding link of the whole stack
+cd sw/userspace/storage
+make ext4-test      # needs mke2fs; builds a fresh volume every run
+make linkcheck      # proves lwext4 + port + allocator need no C library
+
+# the filesystem on big-endian MC68030, judged by e2fsck (Beast)
 cd sw/userspace/storage/lwext4-eval
-export LWEXT4_DIR=/path/to/lwext4 QEMU_M68K=/path/to/qemu-m68k
-make patch && make interop && make astra-alloc && make size
+export QEMU_M68K=/tmp/qemu-m68k-user-build/qemu-m68k
+make interop        # populate under qemu-m68k, then e2fsck -fn
+make reread         # a second process re-mounts and re-verifies what it wrote
+make measure        # the LP32 allocator class measurement
+make size
 
 # QEMU device models
 python3 emu/qemu/test-block.py "$(./emu/qemu/build.sh host)"

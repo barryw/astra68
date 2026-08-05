@@ -225,9 +225,17 @@ The reasons are journaling/recovery, extents, indexed directories, metadata
 checksums, 64-bit sizes, mature Linux formatting/inspection/fsck tools, and the
 ability to validate images independently.
 
-`lwext4` is only a candidate implementation. Its upstream HEAD
-`58bcf89a121b72d4fb66334f1693d3b30e4cb9c5` dates from 2022-09-22 and upstream
-states that big-endian behavior is coded but untested.
+`lwext4` is **adopted**, as of 2026-08-05. It is vendored at
+`third_party/lwext4` from upstream
+`58bcf89a121b72d4fb66334f1693d3b30e4cb9c5` (2022-09-22, still upstream HEAD),
+without the two GPLv2 files and with the three big-endian defect patches
+applied in tree. `third_party/lwext4/ASTRA_VENDOR.md` is the vendor record and
+is authoritative on what was excluded and why. The port that binds it to Astra
+is `sw/userspace/storage/src/ext4_port.c`, and the build profile that
+configures it is `sw/userspace/storage/port/include/generated/ext4_config.h`.
+
+The material that follows records how that decision was reached and what
+constrains it.
 
 `sw/userspace/storage/lwext4-eval` now measures both of the recorded risks on
 2026-08-04 instead of assuming them. Big-endian is not merely untested: lwext4
@@ -243,43 +251,76 @@ that Linux mounts with byte-exact content, and it reads images Linux wrote.
 
 The GPLv2 claim was wrong in one respect. `ext4_extent.c` and `ext4_xattr.c`
 are the only GPLv2-or-later files; `ext4_journal.c` and everything else are
-BSD-2-clause, so journaling does not import GPLv2 code. A build with
-`CONFIG_EXTENTS_ENABLE=0` and `CONFIG_XATTR_ENABLE=0` omits both GPLv2 files
-and passes the same big-endian checks against an `-O ^extent,^ext_attr` volume,
-at the cost of indirect block mapping instead of extents.
+**BSD-3-Clause**, so journaling does not import GPLv2 code. Earlier revisions
+of this document said BSD-2-clause; that was wrong. The notice carries the
+non-endorsement third clause, and upstream's own README calls the GPL-free
+subset "BSD3". A build with `CONFIG_EXTENTS_ENABLE=0` and
+`CONFIG_XATTR_ENABLE=0` omits both GPLv2 files and passes the same big-endian
+checks against an `-O ^extent,^ext_attr` volume, at the cost of indirect block
+mapping instead of extents.
 
-Two measured costs are now on record. MC68030 object text is 79,891 bytes with
-extents and xattr and 66,395 bytes without, both with 4,652 bytes of BSS. The
-fixed evaluation workload performs 15,475 allocations with a 110,592-byte peak
-and 888 simultaneously live blocks at 4 KiB blocks, leaking nothing at unmount.
-The allocation shape is not a heap workload: 855 live 33..64-byte descriptors
-and exactly `CONFIG_BLOCK_DEV_CACHE_SIZE + 1` block buffers.
+**The BSD-3 profile is the one Astra ships**, and the two GPLv2 files are not
+vendored at all, so extents and extended attributes are not build switches that
+could be flipped later without revisiting the import. The cost is on the
+record: indirect block mapping, and no on-disk home for POSIX ACLs or security
+labels.
+
+Measured costs. MC68030 object text for the shipped profile is 63,934 bytes
+with `m68k-elf-gcc` 13 and 73,568 bytes with `m68k-elf-gcc` 16.1, both with
+4,652 bytes of BSS — the spread is the toolchain, not the profile, and the
+number is only meaningful when quoted with its compiler. The whole filesystem
+stack — lwext4, the port, the block facade, the bounded allocator and the
+runtime — links to 82,936 bytes of MC68030 text.
+
+Allocation shape, measured on big-endian MC68030 under `qemu-m68k` against a
+16 MiB volume through the shipped port: 9,394 allocations, 888 simultaneously
+live blocks, a 126,400-byte peak charge, nothing live at unmount. It is not a
+heap workload: 855 live 33..64-byte descriptors and exactly
+`CONFIG_BLOCK_DEV_CACHE_SIZE + 1` block buffers.
 
 `sw/userspace/alloc` is the bounded allocator built from that measurement and
-described in `USERSPACE_RUNTIME.md`. It carries the same big-endian workload
-with zero failures, zero rejections, zero live blocks at unmount, and its
-free-list, bitmap, and counter invariant intact, against a 151,936-byte arena.
-The
-class table must be re-measured against the real volume size, where the journal
-scales, before a service ships with it.
+described in `USERSPACE_RUNTIME.md`. It carries the workload with zero
+failures, zero rejections, zero live blocks at unmount, and its free-list,
+bitmap and counter invariants intact, against a 151,936-byte arena.
+`astra_ext4_alloc_classes` is the class table, and it is measured on LP32 only.
+An LP64 host running the same code produces a different shape — pointer-bearing
+structures grow, the 33..64-byte descriptors spill into the next class up, and
+the htree sort array grows from 4,092 bytes to 5,456 and no longer fits a 4 KiB
+block — so a host measurement must never be used to size it.
 
-lwext4 needs no C library. The freestanding MC68030 build leaves only
-`malloc`, `free`, `qsort`, the `mem*`/`str*` primitives `libastrart` already
-provides, and three 64-bit libgcc helpers undefined.
+The table still has to be re-measured against the real volume size before a
+service ships with it, because the journal scales with the volume and 16 MiB is
+not that volume.
+
+lwext4 needs no C library, and this is now checked by a link rather than
+asserted: `make linkcheck` in `sw/userspace/storage` links the whole stack
+under the same `-nostdlib` contract a service uses. What it leaves undefined is
+`qsort`, the `mem*`/`str*` primitives, `astra_assert_failed`, the allocator and
+block entry points, and four 64-bit libgcc helpers — `__ashldi3`, `__lshrdi3`,
+`__udivdi3` and `__umoddi3`. `libastrart` supplies `qsort` (heapsort, chosen
+because the arrays being sorted come off a volume Astra did not create) and
+`strcpy`; `sw/userspace/runtime/freestanding` supplies the four standard
+headers the vendored sources include.
 
 Separately, `ext4_mkfs` mis-accounts free blocks when the last block group is
 short, on both endians, and the defect is hidden at lwext4's default 1024-byte
 block size. Astra formats offline with `mke2fs`, so this is off the first boot
-path, but lwext4's own `mkfs` is not usable at 4 KiB blocks as it stands.
+path. `ext4_mkfs.c` is vendored but not in the built set, along with
+`ext4_mbr.c`, which has no caller.
 
-lwext4 may be adopted only after:
+The adoption gate, and where each item stands:
 
-- license and source-publication policy are explicit;
-- every supported feature is frozen in an exact mkfs profile;
-- the same images pass native host, m68k emulator, Linux mount, and `e2fsck`;
-- power is cut after every block write/flush transition and recovery passes;
-- malformed-image fuzzing cannot escape the service;
-- performance and memory fit the published budgets.
+| Condition | State |
+|---|---|
+| license and source-publication policy explicit | **met** — BSD-3-Clause only, GPLv2 files not imported, recorded in `ASTRA_VENDOR.md` |
+| every supported feature frozen in an exact mkfs profile | **met** — `-b 4096 -I 256 -O ^64bit,^casefold,^extent,^ext_attr,^metadata_csum_seed`, held identically by the storage and qualification Makefiles |
+| the same images pass native host, m68k emulator, Linux mount and `e2fsck` | **met** for host, m68k emulator and `e2fsck`; Linux loop-mount of an image written by the shipped port is not re-run since adoption |
+| power cut after every block write/flush transition, recovery passes | **not done** |
+| malformed-image fuzzing cannot escape the service | **not done** |
+| performance and memory fit the published budgets | **partly** — memory measured and inside the arena; performance not measured on hardware |
+
+The last three are what stands between the current state and a volume Astra
+would trust with a user's data.
 
 Littlefs remains a comparison candidate for bounded crash behavior, but its
 raw-flash wear-leveling model and reduced Unix metadata are not an automatic
