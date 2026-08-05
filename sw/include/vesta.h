@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <astra/input.h>
 
 #define VESTA_BASE 0xFFF00000u
 
@@ -325,17 +326,17 @@ typedef volatile struct {
 // ---- Generic input queue ----
 #define INPUT_ID_MAGIC 0x494E5054u // "INPT"
 #define INPUT_VERSION_1_0 0x00010000u
-#define INPUT_CAP_KEYBOARD (1u << 0)
-#define INPUT_CAP_POINTER  (1u << 1)
+#define INPUT_CAP_KEYBOARD ASTRA_INPUT_CAP_KEYBOARD
+#define INPUT_CAP_POINTER  ASTRA_INPUT_CAP_POINTER
 #define INPUT_CAP_GAMEPAD  (1u << 2)
-#define INPUT_EVENT_VALID  (1u << 8)
+#define INPUT_EVENT_VALID  ASTRA_INPUT_STATUS_VALID
 #define INPUT_EVENT_LEVEL(v) ((v) & 0x1Fu)
-#define INPUT_EVENT_CLASS(v) (((v) >> 24) & 0xFFu)
-#define INPUT_EVENT_KIND(v) (((v) >> 16) & 0xFFu)
-#define INPUT_EVENT_FLAGS(v) ((v) & 0xFFFFu)
+#define INPUT_EVENT_CLASS(v) ASTRA_INPUT_EVENT_CLASS(v)
+#define INPUT_EVENT_KIND(v) ASTRA_INPUT_EVENT_KIND(v)
+#define INPUT_EVENT_FLAGS(v) ASTRA_INPUT_EVENT_FLAGS(v)
 #define INPUT_EVENT_DEVICE(v) (((v) >> 16) & 0xFFFFu)
 #define INPUT_EVENT_SEQUENCE(v) ((v) & 0xFFFFu)
-#define INPUT_POP_BIT (1u << 0)
+#define INPUT_POP_BIT ASTRA_INPUT_POP_EVENT
 
 // ---- Physical bus-fault diagnostics ----
 #define BUS_FAULT_VALID    (1u << 0)

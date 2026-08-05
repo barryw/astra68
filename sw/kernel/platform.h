@@ -132,7 +132,12 @@ bool kernel_platform_block_pop_completion(
     KernelPlatformBlockCompletion *completion);
 void kernel_platform_block_ack_state(void);
 bool kernel_platform_input_present(void);
-bool kernel_input_pop(KernelInputEvent *event);
+uint32_t kernel_platform_input_status(void);
+bool kernel_input_peek(KernelInputEvent *event);
+bool kernel_input_consume(void);
+void kernel_platform_input_ack_overflow(void);
+bool kernel_platform_input_quiesce(void);
+bool kernel_platform_input_reset(void);
 
 #if defined(KERNEL_PLATFORM_HOST_TEST)
 #include "astraea.h"
