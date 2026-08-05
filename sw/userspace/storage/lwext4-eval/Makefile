@@ -31,6 +31,7 @@ HOST_CC ?= gcc
 
 # The frozen mkfs profile, kept identical to sw/userspace/storage/Makefile.
 MKFS_FEATURES := ^64bit,^casefold,^extent,^ext_attr,^metadata_csum_seed
+MKFS_JOURNAL := -J size=4
 
 # ext4_mkfs.c and ext4_mbr.c are vendored but never built; see
 # third_party/lwext4/ASTRA_VENDOR.md.
@@ -87,8 +88,8 @@ build/mount-m68k-le: $(MOUNT_INPUTS)
 image:
 	@mkdir -p $(dir $(IMAGE))
 	dd if=/dev/zero of=$(IMAGE) bs=1M count=$(IMAGE_MB) status=none
-	$(MKE2FS) -q -t ext4 -b $(BLOCK_SIZE) -I 256 -O $(MKFS_FEATURES) -F \
-		$(IMAGE)
+	$(MKE2FS) -q -t ext4 -b $(BLOCK_SIZE) -I 256 -O $(MKFS_FEATURES) \
+		$(MKFS_JOURNAL) -F $(IMAGE)
 
 # Format offline with mke2fs, populate big-endian through the Astra port, then
 # verify with the tool that shares no code with lwext4.
@@ -122,6 +123,11 @@ partitioned: build/mount-m68k image
 #
 # The image is sparse and the volume stays on disk: a 32-bit process cannot
 # hold it, and on LP32 a size_t byte offset cannot address it.
+#
+# This one deliberately does NOT pin the journal. Astra's own profile does, but
+# a card formatted on Linux with defaults gets a 128 MiB journal, and that is
+# the case the class table is sized for. This is the gate for a volume Astra
+# did not format.
 BIG_IMAGE ?= build/big.img
 BIG_GB ?= 200
 

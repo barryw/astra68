@@ -173,6 +173,22 @@ build/host/test_ext4_mount: $(EXT4_MOUNT_TEST_SOURCES) $(HOST_HEADERS)
 # this target fails — which is the behaviour to want from a frozen profile.
 EXT4_MKFS_FEATURES := ^64bit,^casefold,^extent,^ext_attr,^metadata_csum_seed
 
+# The journal is pinned rather than left to mke2fs, which derives it from the
+# volume size: 128 MiB for a 20 GB card.
+#
+# Two reasons, and the second is the larger one. Memory: lwext4's live
+# descriptor count tracks journal size and saturates at 16 MiB, so a default
+# journal costs 1,767 of the 33..64-byte descriptors against 855 for this one,
+# at any volume size. Recovery: replay after an unclean shutdown is
+# proportional to outstanding journal content, and this machine is a 12.5 MHz
+# 68030 behind an SD card, so a 128 MiB journal bounds worst-case boot delay
+# 32 times worse than a 4 MiB one.
+#
+# Astra's write workload is small; 4 MiB is many transactions' worth. The class
+# table is deliberately NOT shrunk to match, so a card formatted elsewhere with
+# a default journal still mounts. See src/ext4_alloc.c.
+EXT4_MKFS_JOURNAL := -J size=4
+
 # The volume is rebuilt on every run rather than cached. The test writes the
 # image back so e2fsck can judge it, which means a failed run leaves a
 # half-populated volume behind; inheriting that would make the next run's
@@ -181,13 +197,13 @@ ext4-test: build/host/test_ext4_mount
 	@mkdir -p build/host
 	dd if=/dev/zero of=build/host/ext4-test.img bs=1048576 count=16 \
 		status=none
-	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) -F \
-		build/host/ext4-test.img
+	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) \
+		$(EXT4_MKFS_JOURNAL) -F build/host/ext4-test.img
 	./build/host/test_ext4_mount build/host/ext4-test.img
 	@echo "--- partitioned: the volume must not touch the boot partition"
 	dd if=/dev/zero of=build/host/ext4-part.img bs=1048576 count=16 status=none
-	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) -F \
-		build/host/ext4-part.img
+	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) \
+		$(EXT4_MKFS_JOURNAL) -F build/host/ext4-part.img
 	./build/host/test_ext4_mount build/host/ext4-part.img partitioned
 
 sanitize:

@@ -304,11 +304,32 @@ three size classes do not move at any volume size: 16, 1, and 17 respectively.
 `mke2fs` picks the journal from the volume size unless told otherwise, which is
 why the effect looks like volume scaling until it is measured directly.
 
-The shipped table is sized for the plateau, so any volume up to 1 TiB mounts
-whatever journal it was formatted with. The arena is **216,060 bytes**. Pinning
-the journal at 4 MiB with `-J size=4` would halve the dominant class and return
-the arena to 151,936 bytes; that is the lever to reach for if RAM gets tight,
-at the cost of less write batching.
+The frozen profile therefore **pins the journal at 4 MiB** rather than letting
+`mke2fs` derive it, which would give a 20 GB card a 128 MiB one. The larger
+reason is not memory but recovery: replay after an unclean shutdown is
+proportional to outstanding journal content, and on a 12.5 MHz 68030 behind an
+SD card a 128 MiB journal bounds worst-case boot delay 32 times worse than a
+4 MiB one. That cost is not yet measured on hardware — QEMU's cycle counter is
+TCG bookkeeping and neither block backend has realistic timing — but its shape
+is not in doubt, and it points the same way as the memory result. Astra's write
+workload is small; 4 MiB is many transactions' worth.
+
+The class table is deliberately **not** shrunk to match. Sized for the plateau,
+any volume up to 1 TiB mounts whatever journal it was formatted with, so a card
+formatted on Linux with defaults still works. The arena is **216,060 bytes**
+against the 151,936 a pinned-journal-only build would need; 64 KiB out of
+32 MiB is cheap insurance against refusing a perfectly valid ext4 volume.
+`make bigvolume` is the gate for that case and deliberately does not pin the
+journal.
+
+Measured at 20 GB, which is the realistic Astra volume size:
+
+| Journal | Peak 33..64-byte descriptors |
+|---|---:|
+| 4 MiB (the frozen profile) | 855 |
+| 8 MiB | 1,501 |
+| 16 MiB | 1,767 |
+| 128 MiB (`mke2fs` default at 20 GB) | 1,767 |
 
 This resolves the open question in earlier revisions of this document, which
 recorded that the table had to be re-measured against a real volume size before
@@ -338,7 +359,7 @@ The adoption gate, and where each item stands:
 | Condition | State |
 |---|---|
 | license and source-publication policy explicit | **met** — BSD-3-Clause only, GPLv2 files not imported, recorded in `ASTRA_VENDOR.md` |
-| every supported feature frozen in an exact mkfs profile | **met** — `-b 4096 -I 256 -O ^64bit,^casefold,^extent,^ext_attr,^metadata_csum_seed`, held identically by the storage and qualification Makefiles |
+| every supported feature frozen in an exact mkfs profile | **met** — `-b 4096 -I 256 -O ^64bit,^casefold,^extent,^ext_attr,^metadata_csum_seed -J size=4`, held identically by the storage and qualification Makefiles |
 | the same images pass native host, m68k emulator, Linux mount and `e2fsck` | **met** for host, m68k emulator and `e2fsck`; Linux loop-mount of an image written by the shipped port is not re-run since adoption |
 | power cut after every block write/flush transition, recovery passes | **not done** |
 | malformed-image fuzzing cannot escape the service | **not done** |

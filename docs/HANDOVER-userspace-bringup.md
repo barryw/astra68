@@ -61,7 +61,7 @@ judge, plus a freestanding link of the whole filesystem stack.
 | lwext4 vendor | `third_party/lwext4` | BSD-3-Clause subset at upstream `58bcf89`; GPLv2 files not imported; 3 big-endian patches applied in tree |
 | lwext4 port | `sw/userspace/storage/src/ext4_port.c` | 949 B text; binds `AstraBlockDevice` to `ext4_blockdev`; splits transfers, maps status to errno, refuses a re-entrant lock |
 | lwext4 build profile | `sw/userspace/storage/port/include/generated/ext4_config.h` | one profile for host and target; owns errno and oflags so `<errno.h>`, `<fcntl.h>` and `<unistd.h>` drop out |
-| Bounded allocation for lwext4 | `sw/userspace/storage/src/ext4_alloc.c` | `astra_ext4_alloc_classes`, measured on LP32; 151,936 B arena carries the workload with zero failures |
+| Bounded allocation for lwext4 | `sw/userspace/storage/src/ext4_alloc.c` | `astra_ext4_alloc_classes`, measured on LP32; 216,060 B arena, sized by journal size rather than volume size |
 | Freestanding C headers | `sw/userspace/runtime/freestanding` | `string.h`, `stdlib.h`, `assert.h`, `inttypes.h`; target only |
 | Runtime primitives | `sw/userspace/runtime/src/{sort,assert}.c` | `qsort` (heapsort, 302 B) and a tagged-exit assertion handler (18 B) |
 
@@ -108,7 +108,8 @@ The QEMU tarball is cached at
 
 **Big-endian is broken upstream, and it is three one-line defects.** Upstream
 never sets `CONFIG_BIG_ENDIAN` in any build, so big-endian was never compiled,
-let alone tested. Patches are in `sw/userspace/storage/lwext4-eval/patches/`:
+let alone tested. Patches are applied in tree and retained at
+`third_party/lwext4/astra/patches/`:
 
 | Site | Defect |
 |---|---|
@@ -154,9 +155,16 @@ big-endian MC68030 from 16 MiB to 1 TiB: a journal of 4 MiB or less needs 855
 of the 33..64-byte descriptors, 16 MiB or more needs 1,767, and that is flat to
 1 TiB. Volume size changes nothing past that step. `mke2fs` derives the journal
 from the volume size, which makes the effect masquerade as volume scaling until
-measured directly. The shipped table is sized for the plateau: counts
-1900/32/4/20, a 216,060-byte arena. `-J size=4` halves the dominant class and
-returns the arena to 151,936 bytes if RAM ever gets tight.
+measured directly. The frozen profile pins the journal at `-J size=4`, mainly for recovery time
+rather than memory: replay after an unclean shutdown scales with outstanding
+journal content, and a 128 MiB journal on this hardware bounds worst-case boot
+delay 32 times worse than a 4 MiB one. That is unmeasured on hardware and
+cannot be measured under QEMU.
+
+The class table is deliberately not shrunk to match: counts 1900/32/4/20, a
+216,060-byte arena, sized for the plateau so a card formatted on Linux with
+defaults still mounts. `make bigvolume` is that case and does not pin the
+journal. Shrinking to 900 would return 64 KiB and refuse such cards.
 
 A 200 GB volume with the default journal used to exhaust the arena — 241
 refused allocations, absorbed by lwext4, `e2fsck` clean, and the test reported
