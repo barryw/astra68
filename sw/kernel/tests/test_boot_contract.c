@@ -7,6 +7,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#define USER_IMAGE_RESERVATION 0x2000u
+#define USER_IMAGE_SIZE 0x1234u
+
 static void add_range(AstraBootInfo *info, uint32_t base, uint32_t size,
                       uint32_t type, uint32_t flags)
 {
@@ -45,13 +48,19 @@ static void make_valid_info(AstraBootInfo *info)
     info->kernel_entry = ASTRA_KERNEL_LOAD_ADDRESS;
     info->early_log_base = ASTRA_EARLY_LOG_ADDRESS;
     info->early_log_size = ASTRA_EARLY_LOG_SIZE;
+    info->user_image_base = ASTRA_USER_IMAGE_ADDRESS;
+    info->user_image_size = USER_IMAGE_SIZE;
     info->memory_range_entry_size = sizeof(AstraBootMemoryRange);
 
     add_range(info, ASTRA_BOOT_SCRATCH_ADDRESS, ASTRA_BOOT_SCRATCH_SIZE,
               ASTRA_MEMORY_RANGE_FIRMWARE, ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
     add_range(info, ASTRA_EARLY_LOG_ADDRESS, ASTRA_EARLY_LOG_SIZE,
               ASTRA_MEMORY_RANGE_EARLY_LOG, ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
-    add_range(info, 0x02004000u, 0x0000c000u, ASTRA_MEMORY_RANGE_USABLE,
+    add_range(info, ASTRA_USER_IMAGE_ADDRESS, USER_IMAGE_RESERVATION,
+              ASTRA_MEMORY_RANGE_FIRMWARE, ASTRA_MEMORY_READ);
+    add_range(info, ASTRA_USER_IMAGE_ADDRESS + USER_IMAGE_RESERVATION,
+              ASTRA_USER_IMAGE_MAX_SIZE - USER_IMAGE_RESERVATION,
+              ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE | ASTRA_MEMORY_CACHEABLE);
     add_range(info, ASTRA_KERNEL_LOAD_ADDRESS, ASTRA_KERNEL_RESERVED_SIZE,
               ASTRA_MEMORY_RANGE_KERNEL,
@@ -98,9 +107,53 @@ static void test_boot_info(void)
     assert(astra_boot_info_validate(&info) == ASTRA_BOOT_BAD_MEMORY_MAP);
 
     make_valid_info(&info);
-    info.memory_ranges[7].flags |= ASTRA_MEMORY_CACHEABLE;
+    info.memory_ranges[8].flags |= ASTRA_MEMORY_CACHEABLE;
     astra_boot_info_finalize(&info);
     assert(astra_boot_info_validate(&info) == ASTRA_BOOT_BAD_MEMORY_MAP);
+}
+
+static void test_user_image(void)
+{
+    AstraBootInfo info;
+
+    /* Firmware may legitimately supply no initial user image. */
+    make_valid_info(&info);
+    info.user_image_base = 0u;
+    info.user_image_size = 0u;
+    astra_boot_info_finalize(&info);
+    assert(astra_boot_info_validate(&info) == ASTRA_BOOT_VALID);
+
+    make_valid_info(&info);
+    info.user_image_size = ASTRA_USER_IMAGE_MAX_SIZE + 1u;
+    astra_boot_info_finalize(&info);
+    assert(astra_boot_info_validate(&info) == ASTRA_BOOT_BAD_USER_IMAGE);
+
+    make_valid_info(&info);
+    info.user_image_base += 4u;
+    astra_boot_info_finalize(&info);
+    assert(astra_boot_info_validate(&info) == ASTRA_BOOT_BAD_USER_IMAGE);
+
+    /* A size that runs past the reservation escapes firmware-owned memory. */
+    make_valid_info(&info);
+    info.user_image_size = USER_IMAGE_RESERVATION + 1u;
+    astra_boot_info_finalize(&info);
+    assert(astra_boot_info_validate(&info) == ASTRA_BOOT_BAD_USER_IMAGE);
+
+    /* Memory the allocator will hand out cannot hold the image. */
+    make_valid_info(&info);
+    info.user_image_base = ASTRA_USER_IMAGE_ADDRESS + USER_IMAGE_RESERVATION;
+    astra_boot_info_finalize(&info);
+    assert(astra_boot_info_validate(&info) == ASTRA_BOOT_BAD_USER_IMAGE);
+
+    make_valid_info(&info);
+    info.user_image_base = 0u;
+    astra_boot_info_finalize(&info);
+    assert(astra_boot_info_validate(&info) == ASTRA_BOOT_BAD_USER_IMAGE);
+
+    make_valid_info(&info);
+    info.user_image_size = 0u;
+    astra_boot_info_finalize(&info);
+    assert(astra_boot_info_validate(&info) == ASTRA_BOOT_BAD_USER_IMAGE);
 }
 
 static void test_early_log(void)
@@ -131,6 +184,7 @@ static void test_early_log(void)
 int main(void)
 {
     test_boot_info();
+    test_user_image();
     test_early_log();
     puts("BOOT CONTRACT PASS");
     return 0;

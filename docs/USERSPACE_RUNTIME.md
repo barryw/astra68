@@ -208,9 +208,45 @@ Granting foreign objects at launch is not implemented. The capability table
 format is complete and validated; additional entries arrive with the first
 service that has something to hand over.
 
+## The first service
+
+`sw/userspace/supervisor` is the image firmware hands to the kernel. It is the
+supervisor/registrar of `docs/USERSPACE_ARCHITECTURE.md` at its first
+increment: it validates the startup block the loader published, calls
+`QUERY_ABI`, calls `PROCESS_INFO` on its own handle, and exits with a status
+that names what it checked.
+
+The status is tagged (`ASTRA_SUPERVISOR_STATUS_TAG`, `sw/include/astra/supervisor.h`)
+with one bit per failed check in the low byte. The tag matters: a process that
+never reached user mode exits zero, so an untagged zero cannot be mistaken for
+success. The kernel prints the outcome the moment the process ends and panics
+on anything but the expected value, because the process record is reclaimed
+with its last handle and no later poll could recover it.
+
+Gathering is separated from judging. `supervisor_validate()` takes what was
+observed and returns the verdict, so the whole judgement runs on the host under
+ASan/UBSan and `-fanalyzer`, where a `trap` instruction cannot. The MC68030
+image is 1,306 bytes of text with no data or BSS.
+
+## The boot path for the first image
+
+Boot ABI 0.3 adds `user_image_base` and `user_image_size` to `AstraBootInfo`.
+Firmware embeds the linked ELF in the ROM file, copies it to
+`ASTRA_USER_IMAGE_ADDRESS`, verifies the copy, and reserves exactly the pages
+it fills as firmware memory. The contract rejects any description that is
+unaligned, larger than `ASTRA_USER_IMAGE_MAX_SIZE`, or not contained in a
+readable firmware range — memory the allocator could hand out cannot hold an
+image the kernel reads later.
+
+The kernel loads it with `kernel_process_create_executable()` and registers it
+as the initial image. No filesystem lookup, no path, no policy beyond the ELF
+acceptance profile. Measured end to end under QEMU: the kernel reports
+`Initial image ....... loaded, 6468 bytes` and then
+`Initial image ....... OK, startup block and ABI verified from user mode`.
+
 ## Next implementation boundary
 
 Filesystem lookup remains outside Axiom. Firmware supplies the first image;
 the protected supervisor loads later programs through storage/VFS services.
-The remaining slice is one runtime-linked service that queries its ABI through
-its startup block and exits cleanly.
+The next slice is the block admission syscalls in `docs/STORAGE_AND_VFS.md`,
+which is what the supervisor needs before it can start anything else.

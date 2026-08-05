@@ -21,3 +21,5 @@ astra_syscall5:
 	movem.l (%sp)+, %d2-%d5
 	rts
 	.size astra_syscall5, .-astra_syscall5
+
+	.section .note.GNU-stack, "", @progbits

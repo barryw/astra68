@@ -1,5 +1,6 @@
 #include <astra/boot.h>
 #include <astra/input.h>
+#include <astra/supervisor.h>
 
 #include "kernel_build_info.h"
 #include "allocation.h"
@@ -839,6 +840,55 @@ static void report_kernel_performance_failure(
     console_putc('\n');
 }
 
+/*
+ * Starts the one user image firmware placed in RAM. This is the whole of
+ * Axiom's bootstrap exception: no path here, no filesystem, no policy beyond
+ * the ELF acceptance profile the loader already enforces.
+ */
+static void start_initial_user_image(void)
+{
+    uint32_t process_id = 0u;
+    KernelProcessStatus status;
+
+    console_puts("Initial image ....... ");
+    if (boot_info.user_image_size == 0u) {
+        console_puts("not supplied\n");
+        return;
+    }
+    status = kernel_process_create_executable(
+        (const void *)(uintptr_t)boot_info.user_image_base,
+        boot_info.user_image_size, &process_id);
+    if (status != KERNEL_PROCESS_OK || process_id == 0u) {
+        console_puts("rejected, status ");
+        console_dec32((uint32_t)status);
+        console_putc('\n');
+        kernel_panic("initial user image rejected");
+    }
+    kernel_process_register_initial_image(process_id);
+    console_puts("loaded, ");
+    console_dec32(boot_info.user_image_size);
+    console_puts(" bytes, process 0x");
+    console_hex32(process_id);
+    console_putc('\n');
+}
+
+/* Reports how the firmware-supplied image ended, as it ends. */
+void kernel_process_initial_image_exited(uint32_t exit_status,
+                                         uint32_t exit_reason)
+{
+    console_puts("Initial image ....... ");
+    if (exit_reason != KERNEL_PROCESS_EXIT_SYSCALL ||
+        exit_status != ASTRA_SUPERVISOR_STATUS_OK) {
+        console_puts("FAIL, reason ");
+        console_dec32(exit_reason);
+        console_puts(" status 0x");
+        console_hex32(exit_status);
+        console_putc('\n');
+        kernel_panic("initial user image reported a failure");
+    }
+    console_puts("OK, startup block and ABI verified from user mode\n");
+}
+
 void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
 {
     KernelPerformanceMetric failed_metric;
@@ -1294,6 +1344,14 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
             KERNEL_THREAD_PRIORITY_NORMAL + 1u, &sibling_thread_id) !=
             KERNEL_PROCESS_OK || sibling_thread_id == 0u)
         kernel_panic("sibling thread creation failed");
+#if !ASTRA_KERNEL_SOAK_SELFTEST
+    /*
+     * The soak build measures against an exact free-frame baseline taken
+     * before user mode starts, and the initial image releases its frames when
+     * it exits. Those two cannot both hold, so the soak runs without it.
+     */
+    start_initial_user_image();
+#endif
 #if ASTRA_KERNEL_SOAK_SELFTEST
     if (!kernel_memory_stats(&soak_baseline))
         kernel_panic("K1 soak baseline unavailable");

@@ -136,7 +136,7 @@ The following are not software workarounds:
 
 ### 4.1 Entry state
 
-**IMPLEMENTED (ABI 0.1):** Firmware transfers control once and provides facts,
+**IMPLEMENTED (ABI 0.3):** Firmware transfers control once and provides facts,
 not runtime services. The canonical structure and constants are in
 `sw/include/astra/boot.h`; `docs/MEMORY_MAP.md` records its fixed reservations.
 The handoff contract is:
@@ -151,14 +151,18 @@ The handoff contract is:
 - the firmware stack remains in the published bootstrap-BRAM range only until
   the kernel installs its private stack;
 - sorted RAM, firmware, early-log, kernel, and ROM-backing ranges in the
-  checksummed 256-byte `BootInfo` structure.
+  checksummed 264-byte `BootInfo` structure;
+- `user_image_base`/`user_image_size` describing the one initial user image,
+  or zero/zero when firmware supplies none. The span must lie inside a
+  readable firmware range: the kernel reads those bytes after it owns the map,
+  so memory the allocator can hand out cannot hold them.
 
 The separately linked kernel is copied and verified at `0x02010000` before
 entry. The kernel validates the independent register magic, pointer, ABI
 version, size, checksum, required flags, platform identity, image bounds, log,
 and memory ranges before trusting the handoff. VBR and private stack ownership
 move to the kernel in the first assembly instructions. USP/MSP are not inputs
-to ABI 0.1 and must be initialized before use.
+to the boot ABI and must be initialized before use.
 
 ### 4.2 Initialization order
 
@@ -391,6 +395,11 @@ its physical ranges, virtual mappings, sizes, rights, and entry point without
 performing filesystem lookup or general-purpose ELF policy. Once that initial
 supervisor service runs, all later executable parsing and loading occurs in
 user space.
+
+**IMPLEMENTED:** firmware embeds and copies the image, and the kernel loads it
+with `kernel_process_create_executable()` and registers it as the initial
+image. Its exit is reported the moment it happens, because the process record
+is reclaimed with its last handle.
 
 The kernel validates final entry PC, stack, mapping permissions, and initial
 SR before starting a thread. The loader, not the kernel, owns filesystem paths

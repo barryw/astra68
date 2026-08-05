@@ -7,13 +7,21 @@
 #define ASTRA_BOOT_HANDOFF_MAGIC 0x4136384bu /* "A68K" */
 #define ASTRA_BOOT_INFO_MAGIC    0x41363842u /* "A68B" */
 #define ASTRA_BOOT_ABI_MAJOR     0u
-#define ASTRA_BOOT_ABI_MINOR     2u
+#define ASTRA_BOOT_ABI_MINOR     3u
 
 #define ASTRA_BOOT_INFO_ADDRESS       0x01ff8000u
 #define ASTRA_BOOT_SCRATCH_ADDRESS    0x01ff8000u
 #define ASTRA_BOOT_SCRATCH_SIZE       0x00008000u
 #define ASTRA_EARLY_LOG_ADDRESS       0x02000000u
 #define ASTRA_EARLY_LOG_SIZE          0x00004000u
+/*
+ * The one firmware-supplied user image lands between the early log and the
+ * kernel. Firmware reserves only the pages the image occupies and returns the
+ * rest of the hole to the physical allocator.
+ */
+#define ASTRA_USER_IMAGE_ADDRESS      0x02004000u
+#define ASTRA_USER_IMAGE_MAX_SIZE     0x0000c000u
+#define ASTRA_USER_IMAGE_ALIGNMENT    0x00001000u
 #define ASTRA_KERNEL_LOAD_ADDRESS     0x02010000u
 #define ASTRA_KERNEL_TRACE_ADDRESS    0x02090000u
 #define ASTRA_KERNEL_TRACE_SIZE       0x00010000u
@@ -92,6 +100,13 @@ typedef struct {
     uint32_t kernel_entry;
     uint32_t early_log_base;
     uint32_t early_log_size;
+    /*
+     * The single initial user image, or zero/zero when firmware supplies
+     * none. This is a load description, not a filesystem: the kernel reads
+     * these bytes in place and performs no lookup.
+     */
+    uint32_t user_image_base;
+    uint32_t user_image_size;
     uint32_t memory_range_count;
     uint32_t memory_range_entry_size;
     AstraBootMemoryRange memory_ranges[ASTRA_BOOT_MAX_MEMORY_RANGES];
@@ -120,7 +135,8 @@ typedef enum {
     ASTRA_BOOT_BAD_PLATFORM,
     ASTRA_BOOT_BAD_KERNEL,
     ASTRA_BOOT_BAD_LOG,
-    ASTRA_BOOT_BAD_MEMORY_MAP
+    ASTRA_BOOT_BAD_MEMORY_MAP,
+    ASTRA_BOOT_BAD_USER_IMAGE
 } AstraBootValidation;
 
 uint32_t astra_boot_checksum(const AstraBootInfo *info);
@@ -135,7 +151,7 @@ void astra_early_log_puts(AstraEarlyLog *log, const char *text);
 
 _Static_assert(sizeof(AstraBootMemoryRange) == 16u,
                "AstraBootMemoryRange ABI size");
-_Static_assert(sizeof(AstraBootInfo) == 256u, "AstraBootInfo ABI size");
+_Static_assert(sizeof(AstraBootInfo) == 264u, "AstraBootInfo ABI size");
 _Static_assert(sizeof(AstraEarlyLog) == 32u, "AstraEarlyLog ABI size");
 
 #endif

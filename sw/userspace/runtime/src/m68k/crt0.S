@@ -27,3 +27,5 @@ _start:
 .Lhalt:
 	bra     .Lhalt
 	.size _start, .-_start
+
+	.section .note.GNU-stack, "", @progbits

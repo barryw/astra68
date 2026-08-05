@@ -227,6 +227,8 @@ KernelProcessStatus kernel_process_create(const void *image,
 KernelProcessStatus kernel_process_create_executable(const void *image,
                                                      uint32_t image_size,
                                                      uint32_t *process_id);
+/* Names the process loaded from the firmware-supplied image. */
+void kernel_process_register_initial_image(uint32_t process_id);
 KernelProcessStatus kernel_process_create_thread(uint32_t process_id,
                                                  uint32_t entry_offset,
                                                  uint32_t initial_argument,
@@ -278,6 +280,12 @@ bool kernel_process_snapshot(uint32_t slot, KernelProcessSnapshot *snapshot);
 bool kernel_process_stats(KernelSchedulerStats *stats);
 
 void kernel_process_milestone_reached(const KernelSchedulerStats *stats);
+/*
+ * Reported the moment the firmware-supplied image ends, because its record is
+ * reclaimed with its last handle and no later poll can recover the outcome.
+ */
+void kernel_process_initial_image_exited(uint32_t exit_status,
+                                         uint32_t exit_reason);
 
 #if ASTRA_KERNEL_SOAK_SELFTEST
 KernelProcessStatus kernel_process_soak_configure(

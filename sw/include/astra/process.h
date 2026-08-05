@@ -11,6 +11,10 @@
 
 #define ASTRA_PROCESS_INFO_SIZE 48u
 
+/* Capability names a process always receives: itself and its first thread. */
+#define ASTRA_CAPABILITY_PROCESS 0x50524f43u /* "PROC" */
+#define ASTRA_CAPABILITY_THREAD  0x54485244u /* "THRD" */
+
 #ifndef __ASSEMBLER__
 
 #include <stdint.h>

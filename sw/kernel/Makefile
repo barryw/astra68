@@ -66,7 +66,8 @@ $(BUILD_DIR)/vectors.o: vectors.S context.h dispatch.h thread.h user_copy.h \
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/kernel.o: kernel.c $(BUILD_INFO) allocation.h bytes.h device.h dispatch.h fault.h interrupt.h irq_latency.h monitor.h process.h thread.h trace.h \
-                       ../include/astra/boot.h | $(BUILD_DIR)
+                       ../include/astra/boot.h ../include/astra/supervisor.h \
+                       | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/platform.o: platform.c platform.h mmio.h ../include/astraea.h \

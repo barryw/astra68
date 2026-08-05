@@ -49,6 +49,8 @@ static AstraBootInfo kernel_boot_info
 
 extern const uint8_t _kernel_blob_start[];
 extern const uint8_t _kernel_blob_end[];
+extern const uint8_t _user_blob_start[];
+extern const uint8_t _user_blob_end[];
 extern void boot_kernel_handoff(uint32_t magic, const AstraBootInfo *boot_info,
                                 uint32_t entry) __attribute__((noreturn));
 
@@ -984,23 +986,20 @@ static void add_boot_range(uint32_t base, uint32_t size, uint32_t type,
     range->flags = flags;
 }
 
-static int load_kernel_image(uint32_t *image_size)
+/*
+ * Copies a ROM-resident image into RAM and reads it back. Firmware verifies
+ * because nothing downstream can: the kernel is handed an address and a length
+ * and has no second copy to compare against.
+ */
+static int copy_image(const uint8_t *source, uint32_t destination,
+                      uint32_t size, const char *copy_phase,
+                      const char *tail_phase)
 {
-    uint32_t size = (uint32_t)_kernel_blob_end -
-                    (uint32_t)_kernel_blob_start;
-    const uint32_t *source_words =
-        (const uint32_t *)(const void *)_kernel_blob_start;
-    volatile uint32_t *destination_words =
-        (volatile uint32_t *)ASTRA_KERNEL_LOAD_ADDRESS;
+    const uint32_t *source_words = (const uint32_t *)(const void *)source;
+    volatile uint32_t *destination_words = (volatile uint32_t *)destination;
+    volatile uint8_t *destination_bytes = (volatile uint8_t *)destination;
     uint32_t word_count = size / sizeof(uint32_t);
     uint32_t byte_offset = word_count * sizeof(uint32_t);
-
-    if (size == 0u || size > ASTRA_KERNEL_RESERVED_SIZE)
-        return post_failure_text("invalid kernel image size");
-    if ((((uint32_t)_kernel_blob_start | ASTRA_KERNEL_LOAD_ADDRESS) &
-         (sizeof(uint32_t) - 1u)) != 0u)
-        return post_failure_text("unaligned kernel image");
-
     uint32_t index = 0u;
     while (word_count - index >= 8u) {
         destination_words[index + 0u] = source_words[index + 0u];
@@ -1017,10 +1016,8 @@ static int load_kernel_image(uint32_t *image_size)
         destination_words[index] = source_words[index];
         ++index;
     }
-    volatile uint8_t *destination_bytes =
-        (volatile uint8_t *)ASTRA_KERNEL_LOAD_ADDRESS;
     while (byte_offset < size) {
-        destination_bytes[byte_offset] = _kernel_blob_start[byte_offset];
+        destination_bytes[byte_offset] = source[byte_offset];
         ++byte_offset;
     }
 
@@ -1028,22 +1025,60 @@ static int load_kernel_image(uint32_t *image_size)
         uint32_t actual = destination_words[index];
 
         if (actual != source_words[index])
-            return post_failure("kernel image copy",
-                                ASTRA_KERNEL_LOAD_ADDRESS +
-                                    index * sizeof(uint32_t),
+            return post_failure(copy_phase,
+                                destination + index * sizeof(uint32_t),
                                 source_words[index], actual);
     }
     byte_offset = word_count * sizeof(uint32_t);
     while (byte_offset < size) {
         uint8_t actual = destination_bytes[byte_offset];
 
-        if (actual != _kernel_blob_start[byte_offset])
-            return post_failure("kernel image copy tail",
-                                ASTRA_KERNEL_LOAD_ADDRESS + byte_offset,
-                                _kernel_blob_start[byte_offset], actual);
+        if (actual != source[byte_offset])
+            return post_failure(tail_phase, destination + byte_offset,
+                                source[byte_offset], actual);
         ++byte_offset;
     }
+    return 1;
+}
+
+static int load_kernel_image(uint32_t *image_size)
+{
+    uint32_t size = (uint32_t)_kernel_blob_end -
+                    (uint32_t)_kernel_blob_start;
+
+    if (size == 0u || size > ASTRA_KERNEL_RESERVED_SIZE)
+        return post_failure_text("invalid kernel image size");
+    if ((((uint32_t)_kernel_blob_start | ASTRA_KERNEL_LOAD_ADDRESS) &
+         (sizeof(uint32_t) - 1u)) != 0u)
+        return post_failure_text("unaligned kernel image");
+    if (!copy_image(_kernel_blob_start, ASTRA_KERNEL_LOAD_ADDRESS, size,
+                    "kernel image copy", "kernel image copy tail"))
+        return 0;
     *image_size = size;
+    return 1;
+}
+
+/*
+ * The one initial user image. Firmware does not parse it: the kernel owns the
+ * ELF acceptance profile. Firmware only places it where the kernel can read it
+ * and reserves exactly the pages it occupies.
+ */
+static int load_user_image(uint32_t *image_size, uint32_t *reservation)
+{
+    uint32_t size = (uint32_t)_user_blob_end - (uint32_t)_user_blob_start;
+    uint32_t pages;
+
+    if (size == 0u || size > ASTRA_USER_IMAGE_MAX_SIZE)
+        return post_failure_text("invalid user image size");
+    if (((uint32_t)_user_blob_start & (sizeof(uint32_t) - 1u)) != 0u)
+        return post_failure_text("unaligned user image");
+    if (!copy_image(_user_blob_start, ASTRA_USER_IMAGE_ADDRESS, size,
+                    "user image copy", "user image copy tail"))
+        return 0;
+    pages = (size + ASTRA_USER_IMAGE_ALIGNMENT - 1u) /
+            ASTRA_USER_IMAGE_ALIGNMENT;
+    *image_size = size;
+    *reservation = pages * ASTRA_USER_IMAGE_ALIGNMENT;
     return 1;
 }
 
@@ -1051,6 +1086,8 @@ static int prepare_kernel_handoff(void)
 {
     AstraEarlyLog *log = (AstraEarlyLog *)ASTRA_EARLY_LOG_ADDRESS;
     uint32_t image_size = 0u;
+    uint32_t user_image_size = 0u;
+    uint32_t user_image_reservation = 0u;
     uint32_t ram_end = VESTA->RAM_BASE + VESTA->RAM_SIZE;
     uint32_t load_started;
     int usb_dma_present = 0;
@@ -1071,10 +1108,12 @@ static int prepare_kernel_handoff(void)
     load_started = VESTA->CPU_CYCLES_LO;
     if (!load_kernel_image(&image_size)) return 0;
     kernel_load_cycles = VESTA->CPU_CYCLES_LO - load_started;
+    if (!load_user_image(&user_image_size, &user_image_reservation)) return 0;
 
     astra_early_log_init(log, ASTRA_EARLY_LOG_SIZE);
     astra_early_log_puts(log, "firmware: POST passed\n");
     astra_early_log_puts(log, "firmware: kernel image copied and verified\n");
+    astra_early_log_puts(log, "firmware: user image copied and verified\n");
 
     clear_bytes(&kernel_boot_info, sizeof(kernel_boot_info));
     kernel_boot_info.magic = ASTRA_BOOT_INFO_MAGIC;
@@ -1101,6 +1140,8 @@ static int prepare_kernel_handoff(void)
     kernel_boot_info.kernel_entry = ASTRA_KERNEL_LOAD_ADDRESS;
     kernel_boot_info.early_log_base = ASTRA_EARLY_LOG_ADDRESS;
     kernel_boot_info.early_log_size = ASTRA_EARLY_LOG_SIZE;
+    kernel_boot_info.user_image_base = ASTRA_USER_IMAGE_ADDRESS;
+    kernel_boot_info.user_image_size = user_image_size;
     kernel_boot_info.memory_range_entry_size = sizeof(AstraBootMemoryRange);
 
     add_boot_range(ASTRA_BOOT_SCRATCH_ADDRESS, ASTRA_BOOT_SCRATCH_SIZE,
@@ -1109,7 +1150,14 @@ static int prepare_kernel_handoff(void)
     add_boot_range(ASTRA_EARLY_LOG_ADDRESS, ASTRA_EARLY_LOG_SIZE,
                    ASTRA_MEMORY_RANGE_EARLY_LOG,
                    ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
-    add_boot_range(0x02004000u, 0x0000c000u,
+    /*
+     * The user image keeps only the pages it fills; the rest of the hole below
+     * the kernel goes back to the physical allocator.
+     */
+    add_boot_range(ASTRA_USER_IMAGE_ADDRESS, user_image_reservation,
+                   ASTRA_MEMORY_RANGE_FIRMWARE, ASTRA_MEMORY_READ);
+    add_boot_range(ASTRA_USER_IMAGE_ADDRESS + user_image_reservation,
+                   ASTRA_USER_IMAGE_MAX_SIZE - user_image_reservation,
                    ASTRA_MEMORY_RANGE_USABLE,
                    ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                    ASTRA_MEMORY_CACHEABLE);

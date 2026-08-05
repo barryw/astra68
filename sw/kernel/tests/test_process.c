@@ -39,6 +39,9 @@
 
 static uint8_t physical_memory[32u * 1024u * 1024u];
 static uint32_t milestone_calls;
+static uint32_t initial_image_exits;
+static uint32_t last_initial_image_status;
+static uint32_t last_initial_image_reason;
 static uint32_t soak_checkpoint_calls;
 static uint32_t last_soak_checkpoint;
 static uint32_t last_soak_free_frames;
@@ -515,6 +518,14 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *stats)
     ++milestone_calls;
 }
 
+void kernel_process_initial_image_exited(uint32_t exit_status,
+                                         uint32_t exit_reason)
+{
+    ++initial_image_exits;
+    last_initial_image_status = exit_status;
+    last_initial_image_reason = exit_reason;
+}
+
 void kernel_process_soak_checkpoint(uint32_t cycles,
                                     uint32_t baseline_free_frames)
 {
@@ -731,6 +742,9 @@ static void initialize_test(void)
     timer_on_disable_fired = false;
     kernel_process_init();
     milestone_calls = 0u;
+    initial_image_exits = 0u;
+    last_initial_image_status = 0u;
+    last_initial_image_reason = 0u;
     soak_checkpoint_calls = 0u;
     last_soak_checkpoint = 0u;
     last_soak_free_frames = 0u;
@@ -5269,6 +5283,54 @@ static void test_executable_loading(void)
     assert(after.free_frames < before.free_frames);
 }
 
+/*
+ * The kernel must learn how the firmware-supplied image ended at the moment it
+ * ends: nothing else keeps that outcome once the process record is reclaimed.
+ */
+static void test_initial_image_exit_is_reported(void)
+{
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
+    const uint32_t exit_status = 0x53565200u;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id = 0u;
+
+    loader_build_image();
+    initialize_test();
+    assert(initial_image_exits == 0u);
+
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            &process_id) ==
+           KERNEL_PROCESS_OK);
+    kernel_process_register_initial_image(process_id);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    registers[0] = ASTRA_SYSCALL_PROCESS_EXIT;
+    registers[1] = exit_status;
+    /* The image is the only process here, so the run queue empties with it. */
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_NO_RUNNABLE);
+    assert(initial_image_exits == 1u);
+    assert(last_initial_image_status == exit_status);
+    assert(last_initial_image_reason == KERNEL_PROCESS_EXIT_SYSCALL);
+
+    /* An unregistered process must not be mistaken for the initial image. */
+    loader_build_image();
+    initialize_test();
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            &process_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_EXIT;
+    registers[1] = exit_status;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_NO_RUNNABLE);
+    assert(initial_image_exits == 0u);
+}
+
 static void test_executable_rejections_do_not_allocate(void)
 {
     KernelMemoryStats before;
@@ -5475,6 +5537,7 @@ int main(void)
     test_area_publication_rolls_back_when_handle_table_full();
     test_area_and_ring_endpoint_transfer_over_port();
     test_executable_loading();
+    test_initial_image_exit_is_reported();
     test_executable_rejections_do_not_allocate();
     test_executable_load_rolls_back_every_allocation();
     test_process_info_syscall();

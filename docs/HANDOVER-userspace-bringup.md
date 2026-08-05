@@ -1,6 +1,6 @@
 # Astra 68 — Handover: userspace bring-up toward a terminal
 
-Date: 2026-08-04. Written to be read cold in a fresh session.
+Date: 2026-08-05. Written to be read cold in a fresh session.
 
 Goal of this workstream: get far enough to run a shell on Astra, with an
 lwext4-backed filesystem underneath it, and continue bootstrapping from there.
@@ -9,15 +9,11 @@ the resume point for the userspace/storage/loader line of work.
 
 ---
 
-## 1. Read this first: nothing is committed
+## 1. Read this first
 
-Every change described here is in the working tree and **not committed**. That
-includes new files. `git status` should show roughly 17 modified and 15
-untracked paths. Do not clean, stash, or reset before reading section 3.
-
-The remote and scratch state described in section 3 is also disposable and
-partly expensive to rebuild. It is not required to resume, but knowing what is
-already built there saves rebuilding it.
+Everything described here is committed. The remote and scratch state in
+section 3 is disposable and partly expensive to rebuild; it is not required to
+resume, but knowing what is already built there saves rebuilding it.
 
 ---
 
@@ -35,12 +31,20 @@ Working and gated:
 | User link contract | `sw/userspace/runtime/astra_user.ld` | produces exactly the accepted shape |
 | Executable loader | `kernel_process_create_executable()` in `sw/kernel/process.c` | transactional; allocation-failure sweep restores exact baseline |
 | Process query ABI | syscall 37 `PROCESS_INFO` | capability-gated, tested end to end |
+| Initial user image path | boot ABI 0.3, `sw/boot/user_blob.S`, `start_initial_user_image()` | firmware embeds, copies, verifies, and describes one image; kernel loads and launches it |
+| First service | `sw/userspace/supervisor` | 1,306 B MC68030 text; verifies startup block, ABI, and its own `PROCESS_INFO` from user mode, then exits with a tagged status |
 
-Gate status at handover: 30 kernel suites pass, kernel cross-builds, 5 userspace
-suites pass under ASan/UBSan, GCC `-fanalyzer` clean, both QEMU certifiers pass.
+Gate status at handover: 30 kernel suites pass, kernel cross-builds, 6 userspace
+suites pass under ASan/UBSan, GCC `-fanalyzer` clean, both QEMU certifiers pass,
+and a full QEMU boot reports:
 
-Not done: nothing loads an ELF at boot yet. No terminal. No VFS. lwext4 is
-qualified but **not vendored and not adopted**.
+```
+Initial image ....... loaded, 6468 bytes, process 0x10000012
+Initial image ....... OK, startup block and ABI verified from user mode
+```
+
+Not done: no terminal, no VFS, no block admission syscalls. lwext4 is qualified
+but **not vendored and not adopted**.
 
 ---
 
@@ -133,6 +137,7 @@ every later piece:
 |---|---|---|
 | 0 | Observability contract | **done** |
 | 1 | ELF acceptance, loader, startup block, capability transfer, launch, process query ABI | **done** |
+| 1b | Firmware-supplied initial image and the first service that runs from it | **done** |
 | 2 | Block admission syscalls | next |
 | 3 | Block service + lease-backed `AstraBlockBackend` | |
 | 4 | lwext4 vendor + port layer | |
@@ -148,28 +153,31 @@ Profile everything so performance is measurable and regressions are visible.
 
 ## 6. Start here next session
 
-The loader works but **nothing loads an ELF at boot**. The immediate next slice
-is the one named at the end of `docs/USERSPACE_RUNTIME.md`:
+Phase 2: the six block admission requirements already specified in
+`docs/STORAGE_AND_VFS.md`. The kernel block engine works, is exercisable in
+emulation, and there is now a real process to admit it to.
 
-> one runtime-linked service that reads its startup block, queries its ABI
-> through it, and exits cleanly.
+Facts from the bring-up slice that constrain what comes next:
 
-Concretely:
-
-1. Link a minimal service with `libastrart` + `astra_user.ld` and confirm
-   `kernel_elf_accept()` takes it (the test already has an
-   `ASTRA_ELF_FIXTURE` hook for exactly this).
-2. Get that image into the kernel's reach at boot. `sw/kernel/user_test.S`
-   currently supplies flat blobs; the ELF path needs a firmware-supplied image
-   instead, per the boot contract.
-3. Launch it with `kernel_process_create_executable()` and have it call
-   `QUERY_ABI` and `PROCESS_INFO` on its own handle, then exit with a known
-   status. That closes the loop end to end and gives the first real
-   `PROC:`-shaped data from a real process.
-
-After that, phase 2: the six block admission requirements already specified in
-`docs/STORAGE_AND_VFS.md`. The kernel block engine works and is now exercisable
-in emulation, so that work is unblocked.
+- **The initial image is capped at 48 KiB** (`ASTRA_USER_IMAGE_MAX_SIZE`) and
+  the ROM file has **24,276 bytes of headroom** (237,868 of 262,144 used). The
+  supervisor is 6,468 bytes today. Growing it, or embedding anything else in
+  the ROM, must account for both ceilings. Stripping the image buys ~1 KiB.
+- **The K1 milestone never completes under QEMU**, with or without media, on
+  this tree and on the tree before it. It waits on device qualification the
+  emulator does not drive. Do not use milestone output as an emulation gate;
+  the initial-image report is printed from the exit path precisely so it does
+  not depend on that.
+- **The soak build excludes the initial image.** `ASTRA_KERNEL_SOAK_SELFTEST`
+  compares an exact free-frame baseline captured before user mode, and the
+  image releases frames when it exits.
+- **`KERNEL_PROCESS_MAX` is 4** and boot now uses three: survivor, offender,
+  and the initial image. Anything that needs a fourth process at boot has to
+  raise that limit or retire the K1 qualification pair.
+- The supervisor's exit status is tagged (`ASTRA_SUPERVISOR_STATUS_TAG`) so a
+  process that never reached user mode — which exits zero — cannot be read as
+  success. Keep that property when the service stops exiting and starts
+  staying resident: the kernel will need a different liveness signal then.
 
 ---
 
@@ -193,6 +201,13 @@ in emulation, so that work is unblocked.
 ```sh
 # userspace: host tests, sanitizers, analyzer, MC68030 cross-build
 cd sw/userspace && make test && make sanitize && make analyze && make all
+
+# the whole boot path, including the initial user image (Beast)
+cd sw/boot && make astra_boot.bin
+timeout 200 /tmp/qemu-final-build/qemu-system-m68k -M astra68 -m 32M \
+    -bios astra_boot.bin -nographic -serial mon:stdio \
+    -drive if=none,format=raw,file=/tmp/storage.img < /dev/null | \
+    grep "Initial image"
 
 # kernel: 30 suites plus the cross-built image (Beast only)
 cd sw/kernel && make test && make

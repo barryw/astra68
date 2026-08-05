@@ -11,6 +11,19 @@ invoke(uint32_t number, uint32_t argument0)
 }
 
 uint32_t
+astra_process_info(uint32_t handle, AstraProcessInfo *info)
+{
+    AstraSyscallResult result;
+
+    if (info == NULL) {
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    astra_syscall5(ASTRA_SYSCALL_PROCESS_INFO, handle,
+                   (uint32_t)(uintptr_t)info, 0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
 astra_yield(void)
 {
     return invoke(ASTRA_SYSCALL_YIELD, 0u).status;

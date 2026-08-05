@@ -26,6 +26,7 @@ uint32_t astra_yield(void);
 uint32_t astra_close(uint32_t handle);
 uint32_t astra_query_abi(uint32_t *abi_version, uint32_t *process_handle,
                          uint32_t *thread_handle);
+uint32_t astra_process_info(uint32_t handle, AstraProcessInfo *info);
 void astra_process_exit(uint32_t status) __attribute__((noreturn));
 void astra_thread_exit(uint32_t status) __attribute__((noreturn));
 

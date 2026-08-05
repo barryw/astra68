@@ -35,6 +35,8 @@ SPLASH_PACKER = pack_boot_splash.py
 SPLASH_PAYLOAD = assets/astra_boot_splash.pal8.lz4
 KERNEL_DIR = ../kernel
 KERNEL_BIN = $(KERNEL_DIR)/astra_kernel.bin
+USER_IMAGE_DIR = ../userspace/supervisor
+USER_IMAGE = $(USER_IMAGE_DIR)/build/m68k/astra_supervisor.elf
 KERNEL_VERSION ?= 0.1.0-dev
 KERNEL_PANIC_SELFTEST ?= 0
 KERNEL_SCHED_TRACE ?= 0
@@ -84,6 +86,15 @@ STAGE0_ID_SRCS = ../stage0/Makefile ../stage0/crt0.S ../stage0/stage0.c \
                  ../stage0/stage0.ld ../stage0/fat_loader.c \
                  ../stage0/fat_loader.h
 
+USER_IMAGE_ID_SRCS = $(USER_IMAGE_DIR)/Makefile \
+                     $(sort $(wildcard $(USER_IMAGE_DIR)/src/*.c \
+                             $(USER_IMAGE_DIR)/include/*.h)) \
+                     ../userspace/runtime/Makefile \
+                     ../userspace/runtime/astra_user.ld \
+                     $(sort $(wildcard ../userspace/runtime/src/*.c \
+                             ../userspace/runtime/src/m68k/*.S \
+                             ../userspace/runtime/include/astra/*.h))
+
 KERNEL_ID_SRCS = $(KERNEL_DIR)/Makefile \
                  $(sort $(wildcard $(KERNEL_DIR)/*.c $(KERNEL_DIR)/*.h \
                          $(KERNEL_DIR)/*.S $(KERNEL_DIR)/*.ld \
@@ -112,7 +123,7 @@ BUILD_CONFIG = CPU=TG68K030_MMU2 CPU_CLK_DIV_BIT=$(CPU_CLK_DIV_BIT) \
                KERNEL_SCHED_TRACE=$(KERNEL_SCHED_TRACE) \
                KERNEL_SOAK_SELFTEST=$(KERNEL_SOAK_SELFTEST)
 ID_SRCS = Makefile ../../mk/m68k-cross.mk gen_build_info.py boot.c crt0.S $(LD) \
-          kernel_blob.S splash_blob.S splash.c splash.h lz4_legacy.c \
+          kernel_blob.S user_blob.S splash_blob.S splash.c splash.h lz4_legacy.c \
           lz4_legacy.h $(SPLASH_PACKER) $(SPLASH_SOURCE) assets/README.md \
           ../common/boot_contract.c ../include/astra/boot.h \
           ../include/astra/syscall.h ../include/vesta.h ../include/vega.h \
@@ -124,7 +135,7 @@ ID_SRCS = Makefile ../../mk/m68k-cross.mk gen_build_info.py boot.c crt0.S $(LD) 
           ../../ndk/src/front_panel.c \
           ../../ndk/src/internal/memory_map.h \
           ../../ndk/src/internal/mmio.h \
-          $(KERNEL_ID_SRCS) \
+          $(KERNEL_ID_SRCS) $(USER_IMAGE_ID_SRCS) \
           $(SOC_ID_SRCS) $(CPU_ID_SRCS) $(STAGE0_ID_SRCS)
 
 all: astra_boot.bin astra68.rom
@@ -143,15 +154,18 @@ $(KERNEL_BIN): FORCE $(KERNEL_ID_SRCS) ../common/boot_contract.c \
 		KERNEL_VERSION=$(KERNEL_VERSION) PANIC_SELFTEST=$(KERNEL_PANIC_SELFTEST) \
 		SCHED_TRACE=$(KERNEL_SCHED_TRACE) SOAK_SELFTEST=$(KERNEL_SOAK_SELFTEST)
 
-astra_boot.elf: crt0.S kernel_blob.S splash_blob.S splash.c splash.h \
-                lz4_legacy.c lz4_legacy.h \
+$(USER_IMAGE): FORCE $(USER_IMAGE_ID_SRCS)
+	$(MAKE) -C $(USER_IMAGE_DIR) all CROSS=$(CROSS)
+
+astra_boot.elf: crt0.S kernel_blob.S user_blob.S splash_blob.S splash.c \
+                splash.h lz4_legacy.c lz4_legacy.h \
                 $(SPLASH_PAYLOAD) boot.c \
                 ../common/boot_contract.c ../../ndk/src/front_panel.c \
                 ../include/ohci.h \
-                $(LD) $(BUILD_INFO) $(KERNEL_BIN)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ crt0.S kernel_blob.S splash_blob.S \
-		splash.c lz4_legacy.c boot.c ../common/boot_contract.c \
-		../../ndk/src/front_panel.c
+                $(LD) $(BUILD_INFO) $(KERNEL_BIN) $(USER_IMAGE)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ crt0.S kernel_blob.S user_blob.S \
+		splash_blob.S splash.c lz4_legacy.c boot.c \
+		../common/boot_contract.c ../../ndk/src/front_panel.c
 
 astra_boot.bin: astra_boot.elf
 	$(OBJCOPY) -O binary $< $@

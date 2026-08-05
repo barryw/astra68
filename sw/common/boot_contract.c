@@ -23,6 +23,37 @@ void astra_boot_info_finalize(AstraBootInfo *info)
     info->checksum = 0u - astra_boot_checksum(info);
 }
 
+/*
+ * The initial user image is optional, but when firmware claims one the span
+ * must be memory the physical allocator will never hand out: the kernel reads
+ * those bytes long after it has taken ownership of the map. Firmware memory is
+ * the only class that carries that guarantee and is still plain readable RAM.
+ */
+static AstraBootValidation validate_user_image(const AstraBootInfo *info)
+{
+    uint32_t image_end;
+
+    if (info->user_image_base == 0u && info->user_image_size == 0u)
+        return ASTRA_BOOT_VALID;
+    if (!range_end(info->user_image_base, info->user_image_size, &image_end) ||
+        info->user_image_size > ASTRA_USER_IMAGE_MAX_SIZE ||
+        (info->user_image_base & (ASTRA_USER_IMAGE_ALIGNMENT - 1u)) != 0u)
+        return ASTRA_BOOT_BAD_USER_IMAGE;
+
+    for (uint32_t index = 0; index < info->memory_range_count; ++index) {
+        const AstraBootMemoryRange *range = &info->memory_ranges[index];
+        uint32_t end;
+
+        if (!range_end(range->base, range->size, &end)) continue;
+        if (range->type != ASTRA_MEMORY_RANGE_FIRMWARE ||
+            (range->flags & ASTRA_MEMORY_READ) == 0u)
+            continue;
+        if (info->user_image_base >= range->base && image_end <= end)
+            return ASTRA_BOOT_VALID;
+    }
+    return ASTRA_BOOT_BAD_USER_IMAGE;
+}
+
 AstraBootValidation astra_boot_info_validate(const AstraBootInfo *info)
 {
     uint32_t ram_end;
@@ -76,14 +107,14 @@ AstraBootValidation astra_boot_info_validate(const AstraBootInfo *info)
             return ASTRA_BOOT_BAD_MEMORY_MAP;
         previous_end = end;
     }
-    return ASTRA_BOOT_VALID;
+    return validate_user_image(info);
 }
 
 const char *astra_boot_validation_name(AstraBootValidation validation)
 {
     static const char *const names[] = {
         "valid", "pointer", "magic", "version", "size", "checksum",
-        "flags", "platform", "kernel", "log", "memory map"
+        "flags", "platform", "kernel", "log", "memory map", "user image"
     };
 
     if ((unsigned)validation >= sizeof(names) / sizeof(names[0]))

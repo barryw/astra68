@@ -25,19 +25,32 @@ userspace design and the provisional kernel driver boundary live in
 `RESOURCE_MODEL.md`. These are not evidence that services, a desktop, a POSIX
 personality, zsh, or Vim currently run.
 
-## Userspace bring-up line (2026-08-04)
+## Userspace bring-up line (2026-08-05)
 
 `docs/HANDOVER-userspace-bringup.md` is the resume point for the userspace,
-storage, and loader work aimed at a shell on Astra. Implemented and gated in
-the working tree: the observability contract (`docs/OBSERVABILITY.md`), a
-bounded userspace allocator, a QEMU Vesta block service that lets
-`sw/kernel/block.c` run in emulation for the first time, a strict big-endian
-MC68030 ELF acceptance profile with a transactional loader, and a
-capability-gated process-info syscall at ABI `0x00010008`.
+storage, and loader work aimed at a shell on Astra. Implemented and gated: the
+observability contract (`docs/OBSERVABILITY.md`), a bounded userspace
+allocator, a QEMU Vesta block service that lets `sw/kernel/block.c` run in
+emulation for the first time, a strict big-endian MC68030 ELF acceptance
+profile with a transactional loader, and a capability-gated process-info
+syscall at ABI `0x00010008`.
+
+**Astra runs a real user program at boot.** Boot ABI 0.3 carries
+`user_image_base`/`user_image_size`; firmware embeds the linked supervisor ELF
+in the ROM, copies it to `0x02004000`, verifies the copy, and reserves only the
+pages it fills. The kernel loads it with `kernel_process_create_executable()`,
+and the process validates its startup block, queries the syscall ABI, reads
+`PROCESS_INFO` on its own handle, and exits with a tagged status the kernel
+reports and gates on. Verified in QEMU end to end; 30 kernel suites, 6
+userspace suites, sanitizers, `-fanalyzer`, both QEMU certifiers, and the
+MC68030 kernel image all pass.
+
+The initial image is 1,306 bytes of MC68030 text (6,468-byte ELF). The ROM file
+is now 237,868 of 262,144 bytes, leaving 24,276 bytes of ROM headroom — the
+next thing added to the ROM must account for it.
 
 lwext4 is qualified big-endian behind three one-line upstream fixes but is
-neither vendored nor adopted. Nothing loads an ELF at boot yet, and there is no
-VFS or terminal. None of this work is committed.
+neither vendored nor adopted. There is no VFS and no terminal.
 
 ## Driver substrate candidate (2026-08-04)
 

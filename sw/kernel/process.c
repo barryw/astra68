@@ -93,6 +93,8 @@ static uint8_t deadline_preempt_pending;
 static uint8_t worker_active;
 static uint8_t milestone_progress_ready;
 static uint8_t process_pool_corrupt;
+static uint32_t initial_image_process_id;
+static uint8_t initial_image_exited;
 
 _Static_assert(KERNEL_THREAD_STACK_SIZE == KERNEL_PAGE_SIZE,
                "one user-stack slot must map exactly one VM page");
@@ -960,6 +962,16 @@ static KernelProcessStatus retire_current(KernelProcessExitReason reason,
     retiring->exit_status = exit_status;
     retiring->terminal_result = reason == KERNEL_PROCESS_EXIT_USER_FAULT ?
         ASTRA_SYSCALL_PEER_DEAD : ASTRA_SYSCALL_OK;
+    /*
+     * The initial image is the one process whose death the kernel itself must
+     * notice: its record is reclaimed as soon as the last handle closes, and
+     * after that there is nobody left to ask how boot went.
+     */
+    if (initial_image_process_id != 0u &&
+        retiring->id == initial_image_process_id && !initial_image_exited) {
+        initial_image_exited = 1u;
+        kernel_process_initial_image_exited(exit_status, (uint32_t)reason);
+    }
     if (kernel_thread_retire_process(retiring_slot, ASTRA_SYSCALL_PEER_DEAD,
                                      &retired_threads) !=
         KERNEL_THREAD_OK || retired_threads != retiring->live_threads)
@@ -1069,6 +1081,8 @@ void kernel_process_init(void)
                        sizeof(maintenance_diagnostics));
     kernel_bytes_clear(qualification_clients,
                        sizeof(qualification_clients));
+    initial_image_process_id = 0u;
+    initial_image_exited = 0u;
     kernel_thread_pool_init();
     kernel_sync_pool_init();
     kernel_handle_transfer_pool_init();
@@ -1618,10 +1632,10 @@ static KernelProcessStatus publish_startup_block(KernelProcess *process,
     info.capabilities_address =
         KERNEL_PROCESS_STARTUP_BASE + ASTRA_STARTUP_INFO_SIZE;
 
-    capability[0].name = 0x50524f43u; /* "PROC" */
+    capability[0].name = ASTRA_CAPABILITY_PROCESS;
     capability[0].handle = process_handle;
     capability[0].rights = KERNEL_PROCESS_RIGHT_QUERY;
-    capability[1].name = 0x54485244u; /* "THRD" */
+    capability[1].name = ASTRA_CAPABILITY_THREAD;
     capability[1].handle = thread_handle;
     capability[1].rights = KERNEL_THREAD_RIGHTS;
 
@@ -1780,6 +1794,12 @@ failed:
     process->process_state = KERNEL_PROCESS_DEAD;
     maybe_release_process_record(process);
     return result;
+}
+
+void kernel_process_register_initial_image(uint32_t process_id)
+{
+    initial_image_process_id = process_id;
+    initial_image_exited = 0u;
 }
 
 KernelProcessStatus kernel_process_create(const void *image,
