@@ -281,16 +281,41 @@ heap workload: 855 live 33..64-byte descriptors and exactly
 `sw/userspace/alloc` is the bounded allocator built from that measurement and
 described in `USERSPACE_RUNTIME.md`. It carries the workload with zero
 failures, zero rejections, zero live blocks at unmount, and its free-list,
-bitmap and counter invariants intact, against a 151,936-byte arena.
+bitmap and counter invariants intact.
 `astra_ext4_alloc_classes` is the class table, and it is measured on LP32 only.
 An LP64 host running the same code produces a different shape — pointer-bearing
 structures grow, the 33..64-byte descriptors spill into the next class up, and
 the htree sort array grows from 4,092 bytes to 5,456 and no longer fits a 4 KiB
 block — so a host measurement must never be used to size it.
 
-The table still has to be re-measured against the real volume size before a
-service ships with it, because the journal scales with the volume and 16 MiB is
-not that volume.
+### What actually drives the filesystem's memory demand
+
+It is the **journal size**, not the volume size. Measured on big-endian
+MC68030 across volumes from 16 MiB to 1 TiB:
+
+| Journal | 33..64-byte descriptors live at peak |
+|---|---:|
+| 4 MiB or smaller | 855 |
+| 16 MiB or larger | 1,767, and flat all the way to 1 TiB |
+
+Volume size changes nothing once past that step, because what is live is
+bounded by the size of a transaction rather than by the journal file. The other
+three size classes do not move at any volume size: 16, 1, and 17 respectively.
+`mke2fs` picks the journal from the volume size unless told otherwise, which is
+why the effect looks like volume scaling until it is measured directly.
+
+The shipped table is sized for the plateau, so any volume up to 1 TiB mounts
+whatever journal it was formatted with. The arena is **216,060 bytes**. Pinning
+the journal at 4 MiB with `-J size=4` would halve the dominant class and return
+the arena to 151,936 bytes; that is the lever to reach for if RAM gets tight,
+at the cost of less write batching.
+
+This resolves the open question in earlier revisions of this document, which
+recorded that the table had to be re-measured against a real volume size before
+shipping. It has been. A 200 GB volume with the default journal previously
+exhausted the arena — 241 refused allocations, absorbed by lwext4, with `e2fsck`
+still reporting the result clean. The mount test now fails on any refused
+allocation, because a budget that is silently over-run is not a budget.
 
 lwext4 needs no C library, and this is now checked by a link rather than
 asserted: `make linkcheck` in `sw/userspace/storage` links the whole stack

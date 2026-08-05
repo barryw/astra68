@@ -14,10 +14,18 @@ DEPFLAGS := -MMD -MP
 TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections
 HOST_FLAGS := -O2 -fno-builtin
-# Host tests need the same depfile discipline as the target build: a test
-# binary silently linked against an older header reports a result it did not
-# earn. This was not hypothetical.
-HOST_DEPFLAGS := -MMD -MP
+# Host tests need the same rebuild discipline as the target build: a test binary
+# silently linked against an older header reports a result it did not earn, and
+# that is not hypothetical — it happened during the partition work.
+#
+# The target build uses depfiles. The host rules compile and link in one step
+# from many sources, which clang refuses to combine with -MMD and a single -o,
+# so they take every header as a prerequisite instead. Coarser than a depfile
+# and it rebuilds more than it must; host tests are cheap and a wrong pass is
+# not.
+HOST_HEADERS := $(wildcard include/astra/*.h ../../include/astra/*.h \
+	$(RUNTIME)/include/astra/*.h $(ALLOC)/include/astra/*.h \
+	port/include/generated/*.h tests/*.h)
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 SOURCES := src/block_device.c src/memory_block.c src/mbr.c
 # The lease backend calls syscalls, so it is target-only.
@@ -94,15 +102,17 @@ build/m68k/lwext4/%.o: $(LWEXT4)/src/%.c
 	$(CC) $(EXT4_CPPFLAGS) $(FREESTANDING) $(EXT4_VENDOR_FLAGS) \
 		$(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
 
-$(HOST_TEST): $(SOURCES) tests/test_block_device.c
+$(HOST_TEST): $(SOURCES) tests/test_block_device.c $(HOST_HEADERS)
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(HOST_DEPFLAGS) $^ -o $@
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SOURCES) tests/test_block_device.c -o $@
 
 LEASE_TEST_SOURCES := src/lease_block.c tests/test_lease_block.c
 
-build/host/test_lease_block: $(LEASE_TEST_SOURCES)
+build/host/test_lease_block: $(LEASE_TEST_SOURCES) $(HOST_HEADERS)
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(HOST_DEPFLAGS) $^ -o $@
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(LEASE_TEST_SOURCES) -o $@
 
 # The port's own logic: transfer splitting, the errno map, lock re-entry and
 # init validation. It drives the ext4_blockdev callbacks directly, so it needs
@@ -110,19 +120,20 @@ build/host/test_lease_block: $(LEASE_TEST_SOURCES)
 PORT_TEST_SOURCES := src/block_device.c src/memory_block.c src/ext4_port.c \
 	tests/test_ext4_port.c
 
-build/host/test_ext4_port: $(PORT_TEST_SOURCES)
+build/host/test_ext4_port: $(PORT_TEST_SOURCES) $(HOST_HEADERS)
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(EXT4_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(HOST_DEPFLAGS) \
-		$^ -o $@
+	$(HOST_CC) $(CPPFLAGS) $(EXT4_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(PORT_TEST_SOURCES) -o $@
 
 # The partition table reader, which decides which window a volume is confined
 # to. It touches no lwext4 header: a partition table is not a filesystem.
 MBR_TEST_SOURCES := src/block_device.c src/memory_block.c src/mbr.c \
 	tests/test_mbr.c
 
-build/host/test_mbr: $(MBR_TEST_SOURCES)
+build/host/test_mbr: $(MBR_TEST_SOURCES) $(HOST_HEADERS)
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(HOST_DEPFLAGS) $^ -o $@
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(MBR_TEST_SOURCES) -o $@
 
 test: $(HOST_TEST) build/host/test_lease_block build/host/test_ext4_port \
 		build/host/test_mbr
@@ -139,12 +150,14 @@ test: $(HOST_TEST) build/host/test_lease_block build/host/test_ext4_port \
 # this is a target you have to ask for, and it fails loudly when it cannot run.
 EXT4_MOUNT_TEST_SOURCES := src/block_device.c src/memory_block.c src/mbr.c \
 	src/ext4_port.c src/ext4_alloc.c src/ext4_xattr_stub.c \
-	$(ALLOC)/src/alloc.c $(LWEXT4_SOURCES) tests/test_ext4_mount.c
+	$(ALLOC)/src/alloc.c $(LWEXT4_SOURCES) tests/test_ext4_mount.c \
+	tests/file_block.c
 
-build/host/test_ext4_mount: $(EXT4_MOUNT_TEST_SOURCES)
+build/host/test_ext4_mount: $(EXT4_MOUNT_TEST_SOURCES) $(HOST_HEADERS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(ALLOC_CPPFLAGS) $(EXT4_CPPFLAGS) \
-		$(EXT4_VENDOR_FLAGS) $(HOST_FLAGS) $(HOST_DEPFLAGS) $^ -o $@
+		$(EXT4_VENDOR_FLAGS) $(HOST_FLAGS) $(EXT4_MOUNT_TEST_SOURCES) \
+		-o $@
 
 # The frozen profile: 4 KiB blocks, 256-byte inodes, no 64bit, no casefold,
 # and no extents or xattr because those two implementations are GPLv2 and are
@@ -245,7 +258,7 @@ size: $(OBJECTS) $(PORT_OBJECTS) $(LWEXT4_OBJECTS)
 
 # Header dependencies: a stale object compiled against an older ABI
 # constant is indistinguishable from a working one until it runs.
--include $(wildcard build/m68k/*.d build/m68k/*/*.d build/host/*.d)
+-include $(wildcard build/m68k/*.d build/m68k/*/*.d)
 
 clean:
 	rm -rf build

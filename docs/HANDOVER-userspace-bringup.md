@@ -149,10 +149,21 @@ and exactly `CONFIG_BLOCK_DEV_CACHE_SIZE + 1` block buffers. That measurement is
 what the allocator's class table was built from, and it must be re-measured
 against a real volume size before shipping, because the journal scales.
 
-**The class table is LP32-only, and this bites immediately.** Re-measured
-through the shipped port on big-endian MC68030 the original table is right:
-855/16/1/17 against counts of 900/32/4/20, zero failures, 151,936-byte arena.
-The identical code on an LP64 host produces a completely different shape —
+**Memory demand is set by the journal size, not the volume size.** Measured on
+big-endian MC68030 from 16 MiB to 1 TiB: a journal of 4 MiB or less needs 855
+of the 33..64-byte descriptors, 16 MiB or more needs 1,767, and that is flat to
+1 TiB. Volume size changes nothing past that step. `mke2fs` derives the journal
+from the volume size, which makes the effect masquerade as volume scaling until
+measured directly. The shipped table is sized for the plateau: counts
+1900/32/4/20, a 216,060-byte arena. `-J size=4` halves the dominant class and
+returns the arena to 151,936 bytes if RAM ever gets tight.
+
+A 200 GB volume with the default journal used to exhaust the arena — 241
+refused allocations, absorbed by lwext4, `e2fsck` clean, and the test reported
+PASS. It now fails on any refused allocation.
+
+**The class table is LP32-only.** The identical code on an LP64 host produces a
+completely different shape —
 class 64 goes *unused* because every pointer-bearing descriptor grows past 64
 bytes, and the htree sort array grows from 4,092 bytes to 5,456 and stops
 fitting a 4 KiB block at all. The host mount test therefore carries its own
@@ -397,7 +408,9 @@ cd sw/userspace/storage/lwext4-eval
 export QEMU_M68K=/tmp/qemu-m68k-user-build/qemu-m68k
 make interop        # populate under qemu-m68k, then e2fsck -fn
 make reread         # a second process re-mounts and re-verifies what it wrote
+make partitioned    # a real card layout; fails if the boot region moved
 make measure        # the LP32 allocator class measurement
+make bigvolume      # a 200 GB sparse volume; BIG_GB= to change the size
 make size
 
 # QEMU device models

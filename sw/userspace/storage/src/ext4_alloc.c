@@ -3,16 +3,25 @@
 #include <stddef.h>
 
 /*
- * Measured on big-endian MC68030 under qemu-m68k against a 16 MiB mke2fs
- * volume, running the storage suite's own mount test:
+ * Measured on big-endian MC68030 under qemu-m68k, running the storage suite's
+ * own mount test against mke2fs volumes.
  *
- *   class 64    peak_live=855   class 2048  peak_live=1
- *   class 128   peak_live=16    class 4096  peak_live=17
+ * The demand is set by the **journal size**, not the volume size. Measured
+ * across 16 MiB to 1 TiB:
  *
- * with 9,396 allocations, zero failures, zero rejections, nothing live at
- * unmount and a 126,400-byte peak charge. Counts carry only the headroom
- * above those peaks that the earlier evaluation already established; a
- * bounded allocator exists so exhaustion is reported, not absorbed.
+ *   journal 4 MiB or smaller   class 64 peak_live=855
+ *   journal 16 MiB or larger   class 64 peak_live=1767, flat to 1 TiB
+ *
+ * A 200 GB volume with a 4 MiB journal needs 855; the same volume with the
+ * default journal needs 1767. Volume size itself changes nothing once past
+ * that step, because what is live is bounded by the size of a transaction
+ * rather than by the journal file. The other three classes do not move at all:
+ * 16, 1 and 17 respectively, at every size tested.
+ *
+ * Sized for the plateau so that any volume up to 1 TiB mounts whatever journal
+ * it was formatted with. That costs about 64 KiB of arena over sizing for a
+ * pinned 4 MiB journal — a lever worth remembering if RAM ever gets tight,
+ * since it halves this class.
  *
  * These are LP32 numbers and they are the ones that matter, because LP32 is
  * what ships. The same workload on an LP64 host produces a different shape
@@ -20,7 +29,7 @@
  * next class up — so a host measurement must not be used to size this.
  */
 const AstraAllocClass astra_ext4_alloc_classes[ASTRA_EXT4_ALLOC_CLASS_COUNT] = {
-    {64u, 900u},   /* inode refs, directory contexts, journal descriptors */
+    {64u, 1900u},  /* inode refs, directory contexts, journal descriptors */
     {128u, 32u},   /* short-lived working structures */
     {2048u, 4u},   /* the superblock copy */
     {4096u, 20u},  /* CONFIG_BLOCK_DEV_CACHE_SIZE + 1, plus headroom */

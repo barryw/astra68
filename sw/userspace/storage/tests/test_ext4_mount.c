@@ -34,6 +34,8 @@
 #include <ext4.h>
 #include <ext4_debug.h>
 
+#include "file_block.h"
+
 #define MOUNT_POINT "/volume/"
 #define SECTOR_SIZE 512u
 #define MAX_TRANSFER_SECTORS 4u
@@ -70,8 +72,20 @@ boot_pattern(size_t offset)
 }
 
 static AstraMemoryBlock memory;
+static AstraFileBlock file_backing;
 static AstraBlockDevice device;
 static AstraExt4Port port;
+
+/*
+ * "on-file" mode keeps the volume on disk instead of in RAM. It exists for one
+ * question the RAM-backed gates cannot answer: how lwext4's memory demand
+ * scales with volume size. A 32-bit process cannot hold a 200 GB volume, and
+ * on LP32 a size_t byte offset cannot even address one.
+ *
+ * It gives up what the RAM path provides — byte-level inspection of regions
+ * outside the volume — so it is a measurement mode, not a replacement gate.
+ */
+static int on_file;
 
 static AstraAllocator allocator;
 
@@ -341,12 +355,25 @@ bring_up(void)
     }
     astra_ext4_alloc_bind(&allocator);
 
-    astra_memory_block_init(&memory, storage, storage_bytes, SECTOR_SIZE,
-                            MAX_TRANSFER_SECTORS, ASTRA_BLOCK_FLAG_PRESENT);
-    astra_block_device_init(&device, &astra_memory_block_backend, &memory,
-                            nanoseconds, NULL);
+    if (on_file) {
+        astra_block_device_init(&device, &astra_file_block_backend,
+                                &file_backing, nanoseconds, NULL);
+    } else {
+        astra_memory_block_init(&memory, storage, storage_bytes, SECTOR_SIZE,
+                                MAX_TRANSFER_SECTORS,
+                                ASTRA_BLOCK_FLAG_PRESENT);
+        astra_block_device_init(&device, &astra_memory_block_backend, &memory,
+                                nanoseconds, NULL);
+    }
     if (astra_block_query(&device, &geometry) != ASTRA_BLOCK_OK) {
         return fail("astra_block_query", 0);
+    }
+    if (on_file) {
+        printf("volume: %llu sectors of %u bytes (%llu MiB)\n",
+               (unsigned long long)geometry.sector_count,
+               (unsigned)geometry.sector_size,
+               (unsigned long long)(geometry.sector_count /
+                                    (1048576u / geometry.sector_size)));
     }
 
     port_status = astra_ext4_port_init(&port, &device, partition, sector_buffer,
@@ -692,12 +719,18 @@ main(int argc, char **argv)
     }
     verify_only = argc > 2 && strcmp(argv[2], "verify-only") == 0;
     partitioned = argc > 2 && strcmp(argv[2], "partitioned") == 0;
+    on_file = argc > 2 && strcmp(argv[2], "on-file") == 0;
 
     if (getenv("ASTRA_EXT4_DEBUG") != NULL) {
         ext4_dmask_set(DEBUG_ALL);
     }
 
-    if (load_image(argv[1])) {
+    if (on_file) {
+        if (astra_file_block_open(&file_backing, argv[1], SECTOR_SIZE,
+                                  MAX_TRANSFER_SECTORS) != 0) {
+            return fail("astra_file_block_open", 0);
+        }
+    } else if (load_image(argv[1])) {
         return 1;
     }
     if (partitioned && build_partitioned_layout()) {
@@ -720,6 +753,18 @@ main(int argc, char **argv)
     do_umount();
     report();
 
+    /*
+     * An exhausted arena is a failed run even when lwext4 absorbs it and the
+     * volume comes out clean. It did exactly that against a 200 GB volume
+     * before this check existed: 241 refused allocations, e2fsck clean, and a
+     * reported PASS. A budget that is silently over-run is not a budget.
+     */
+    if (astra_alloc_metrics(&allocator)->failures != 0u) {
+        printf("FAIL allocator refused %lu allocations; the arena is too "
+               "small for this volume\n",
+               (unsigned long)astra_alloc_metrics(&allocator)->failures);
+        ++failures;
+    }
     /* Nothing may be left allocated once the volume is unmounted. */
     if (astra_alloc_metrics(&allocator)->live_blocks != 0u) {
         printf("FAIL allocator live blocks after umount: %lu\n",
@@ -747,11 +792,15 @@ main(int argc, char **argv)
     if (partitioned) {
         check_boot_region_intact();
     }
-    if (store_image(argv[1])) {
-        return 1;
+    /* On-file mode wrote through to the image already. */
+    if (on_file) {
+        astra_file_block_close(&file_backing);
+    } else {
+        if (store_image(argv[1])) {
+            return 1;
+        }
+        free(storage);
     }
-
-    free(storage);
     if (failures != 0) {
         printf("astra ext4 mount: FAIL (%d)\n", failures);
         return 1;

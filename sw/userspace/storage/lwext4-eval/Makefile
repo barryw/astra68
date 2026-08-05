@@ -37,7 +37,7 @@ MKFS_FEATURES := ^64bit,^casefold,^extent,^ext_attr,^metadata_csum_seed
 LWEXT4_SOURCES := $(filter-out %/ext4_mkfs.c %/ext4_mbr.c, \
 	$(wildcard $(LWEXT4)/src/*.c))
 
-CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
+CPPFLAGS := -I$(STORAGE)/tests -I$(LWEXT4)/include -I$(STORAGE)/port/include \
 	-I$(STORAGE)/include -I$(USERSPACE)/../include \
 	-I$(USERSPACE)/runtime/include -I$(ALLOC_DIR)/include \
 	-DCONFIG_USE_DEFAULT_CFG=0
@@ -51,7 +51,8 @@ PORT_SOURCES := $(STORAGE)/src/block_device.c $(STORAGE)/src/memory_block.c \
 	$(STORAGE)/src/mbr.c $(STORAGE)/src/ext4_port.c \
 	$(STORAGE)/src/ext4_alloc.c $(STORAGE)/src/ext4_xattr_stub.c \
 	$(ALLOC_DIR)/src/alloc.c
-MOUNT_TEST := $(STORAGE)/tests/test_ext4_mount.c
+MOUNT_TEST := $(STORAGE)/tests/test_ext4_mount.c \
+	$(STORAGE)/tests/file_block.c
 MOUNT_INPUTS := $(MOUNT_TEST) $(PORT_SOURCES) $(LWEXT4_SOURCES)
 
 all: build/mount-m68k build/mount-host
@@ -111,6 +112,30 @@ partitioned: build/mount-m68k image
 	$(QEMU_M68K) build/mount-m68k $(IMAGE) partitioned
 	$(E2FSCK) -fn $(IMAGE)
 
+# How lwext4's memory demand scales with volume size.
+#
+# The class table is measured against a 16 MiB volume, and the journal and the
+# block group descriptor table both scale with the real thing. A 200 GB volume
+# has roughly 1,500 block groups against that image's 4. The arena is a hard
+# 151,936 bytes and fails closed, so this has to be measured rather than
+# assumed before a card is committed to a size.
+#
+# The image is sparse and the volume stays on disk: a 32-bit process cannot
+# hold it, and on LP32 a size_t byte offset cannot address it.
+BIG_IMAGE ?= build/big.img
+BIG_GB ?= 200
+
+bigvolume: build/mount-m68k
+	@mkdir -p $(dir $(BIG_IMAGE))
+	rm -f $(BIG_IMAGE)
+	truncate -s $(BIG_GB)G $(BIG_IMAGE)
+	$(MKE2FS) -q -t ext4 -b $(BLOCK_SIZE) -I 256 -O $(MKFS_FEATURES) -F \
+		$(BIG_IMAGE)
+	@echo "--- apparent / actual size:"
+	@du -sh --apparent-size $(BIG_IMAGE); du -sh $(BIG_IMAGE)
+	$(QEMU_M68K) build/mount-m68k $(BIG_IMAGE) on-file
+	$(E2FSCK) -fn $(BIG_IMAGE)
+
 # The allocator class table is measured from this run, not from a host one.
 measure: build/mount-m68k image
 	$(QEMU_M68K) build/mount-m68k $(IMAGE)
@@ -126,4 +151,4 @@ size:
 clean:
 	rm -rf build
 
-.PHONY: all image interop reread partitioned measure size clean
+.PHONY: all image interop reread partitioned bigvolume measure size clean
