@@ -158,21 +158,23 @@ Arty Z7 Linux (ARM Cortex-A9)
                  -> block lease + completion IRQ endpoint
 ```
 
-### Boot memory layout (`sw/include/astra/boot.h`, ABI 0.3)
+### Boot memory layout (`sw/include/astra/boot.h`, ABI 0.4)
 
 | Symbol | Address | Size |
 |---|---|---|
 | `ASTRA_BOOT_INFO/SCRATCH_ADDRESS` | `0x01ff8000` | 32 KiB |
 | `ASTRA_EARLY_LOG_ADDRESS` | `0x02000000` | 16 KiB |
-| `ASTRA_USER_IMAGE_ADDRESS` | `0x02004000` | **`MAX_SIZE` 48 KiB** |
-| `ASTRA_KERNEL_LOAD_ADDRESS` | `0x02010000` | |
-| `ASTRA_KERNEL_TRACE_ADDRESS` | `0x02090000` | 64 KiB |
-| `ASTRA_KERNEL_USABLE_ADDRESS` | `0x020a0000` | ~29.4 MiB |
+| `ASTRA_USER_IMAGE_ADDRESS` | `0x02004000` | **`MAX_SIZE` 256 KiB** (48 KiB before ABI 0.4) |
+| `ASTRA_KERNEL_LOAD_ADDRESS` | `0x02044000` | |
+| `ASTRA_KERNEL_TRACE_ADDRESS` | `0x020c4000` | 64 KiB |
+| `ASTRA_KERNEL_USABLE_ADDRESS` | `0x020d4000` | ~29.2 MiB |
 | `ASTRA_ROM_BACKING_ADDRESS` | `0x03e00000` | 256 KiB |
 
-**The 48 KiB user image cap is the hole between `0x02004000` and the kernel.**
-It is not a policy number; raising it moves the kernel and is a boot ABI change.
-This — not the ROM budget — is why the filesystem cannot be the initial image.
+**The user image ceiling is the hole between `0x02004000` and the kernel.** It
+was 48 KiB, which was not a policy number but whatever happened to fit; boot ABI
+0.4 moved the kernel up and made it 256 KiB. Firmware reserves only the pages
+the image fills and returns the remainder to the allocator, so the ceiling costs
+nothing when unused — free frames were 7939/8192 before and after.
 
 ### ROM
 

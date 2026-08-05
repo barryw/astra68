@@ -7,7 +7,7 @@
 #define ASTRA_BOOT_HANDOFF_MAGIC 0x4136384bu /* "A68K" */
 #define ASTRA_BOOT_INFO_MAGIC    0x41363842u /* "A68B" */
 #define ASTRA_BOOT_ABI_MAJOR     0u
-#define ASTRA_BOOT_ABI_MINOR     3u
+#define ASTRA_BOOT_ABI_MINOR     4u
 
 #define ASTRA_BOOT_INFO_ADDRESS       0x01ff8000u
 #define ASTRA_BOOT_SCRATCH_ADDRESS    0x01ff8000u
@@ -17,17 +17,25 @@
 /*
  * The one firmware-supplied user image lands between the early log and the
  * kernel. Firmware reserves only the pages the image occupies and returns the
- * rest of the hole to the physical allocator.
+ * rest of the hole to the physical allocator, so MAX_SIZE is a ceiling on what
+ * may be loaded rather than memory committed to it.
+ *
+ * ABI 0.4 raised that ceiling from 48 KiB to 256 KiB and moved the kernel up to
+ * make room. 48 KiB was not a policy number — it was whatever fitted between
+ * the early log and the kernel — and it was small enough that an initial image
+ * carrying a filesystem was refused by POST while still fitting in ROM. Since
+ * the unused remainder goes back to the allocator, the larger ceiling costs
+ * nothing at run time.
  */
 #define ASTRA_USER_IMAGE_ADDRESS      0x02004000u
-#define ASTRA_USER_IMAGE_MAX_SIZE     0x0000c000u
+#define ASTRA_USER_IMAGE_MAX_SIZE     0x00040000u
 #define ASTRA_USER_IMAGE_ALIGNMENT    0x00001000u
-#define ASTRA_KERNEL_LOAD_ADDRESS     0x02010000u
-#define ASTRA_KERNEL_TRACE_ADDRESS    0x02090000u
+#define ASTRA_KERNEL_LOAD_ADDRESS     0x02044000u
+#define ASTRA_KERNEL_TRACE_ADDRESS    0x020c4000u
 #define ASTRA_KERNEL_TRACE_SIZE       0x00010000u
 #define ASTRA_KERNEL_RESERVED_SIZE    0x00090000u
-#define ASTRA_KERNEL_USABLE_ADDRESS   0x020a0000u
-#define ASTRA_KERNEL_USABLE_SIZE      0x01d60000u
+#define ASTRA_KERNEL_USABLE_ADDRESS   0x020d4000u
+#define ASTRA_KERNEL_USABLE_SIZE      0x01d2c000u
 #define ASTRA_ROM_BACKING_ADDRESS     0x03e00000u
 #define ASTRA_ROM_BACKING_SIZE        0x00040000u
 

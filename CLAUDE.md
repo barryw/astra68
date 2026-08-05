@@ -73,10 +73,13 @@ Currently true:
   drive attached. Check with
   `strings <qemu> | grep -c "Astra68 storage image"` — zero means too old.
   Rebuild with `emu/qemu/build.sh arty` on `beast`.
-- **The initial user image is capped at 48 KiB** by RAM layout
-  (`ASTRA_USER_IMAGE_MAX_SIZE`, the hole between `0x02004000` and the kernel at
-  `0x02010000`) — **not** by the ROM budget. lwext4 fits in ROM and still gets
-  `POST FAIL: user image exceeds its reservation`.
+- **The initial user image ceiling is `ASTRA_USER_IMAGE_MAX_SIZE`**, the hole
+  between `0x02004000` and the kernel. It was 48 KiB and is **256 KiB since
+  boot ABI 0.4**; overrunning it is `POST FAIL: user image exceeds its
+  reservation`, which is a RAM-layout refusal and not a ROM budget one.
+  Firmware reserves only the pages the image fills, so the ceiling costs
+  nothing unused. Anything hardcoding the old layout is a latent bug — seven
+  kernel tests did.
 - **The board is BusyBox**: no `truncate`, `timeout`, `pkill`; `losetup` takes
   `-o OFS LOOPDEV FILE`. `/` is read-only, only `/data` is writable.
 - **QEMU's cycle counter is TCG bookkeeping**, not 68030 time. Any `N cycles`

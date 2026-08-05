@@ -151,7 +151,7 @@ static void initialize_test(void)
     add_range(&info, ASTRA_EARLY_LOG_ADDRESS, ASTRA_EARLY_LOG_SIZE,
               ASTRA_MEMORY_RANGE_EARLY_LOG,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
-    add_range(&info, 0x02004000u, 0x0000c000u,
+    add_range(&info, ASTRA_USER_IMAGE_ADDRESS, ASTRA_USER_IMAGE_MAX_SIZE,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);

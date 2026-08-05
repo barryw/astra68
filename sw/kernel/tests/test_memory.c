@@ -49,7 +49,12 @@ static void make_valid_info(AstraBootInfo *info)
     add_range(info, ASTRA_EARLY_LOG_ADDRESS, ASTRA_EARLY_LOG_SIZE,
               ASTRA_MEMORY_RANGE_EARLY_LOG,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
-    add_range(info, 0x02004000u, 0x0000c000u,
+    /*
+     * The user image hole, expressed through the constants rather than
+     * literals: it moved when ABI 0.4 raised the ceiling, and a hardcoded
+     * range silently left a gap that only surfaced as a failed init.
+     */
+    add_range(info, ASTRA_USER_IMAGE_ADDRESS, ASTRA_USER_IMAGE_MAX_SIZE,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
@@ -373,13 +378,20 @@ static void test_exhaustion_and_checked_ranges(void)
 
     make_valid_info(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
-    assert(kernel_memory_alloc(12u, 1u, KERNEL_FRAME_PROCESS, 1u, &first) ==
+    /*
+     * Drains the three usable regions exactly, so the sizes are derived from
+     * the layout rather than written out: ABI 0.4 moved 52 frames from the tail
+     * into the user image hole and literal counts stopped matching.
+     */
+    assert(kernel_memory_alloc(ASTRA_USER_IMAGE_MAX_SIZE / 0x1000u, 1u,
+                               KERNEL_FRAME_PROCESS, 1u, &first) ==
            KERNEL_MEMORY_OK);
-    assert(kernel_memory_alloc(7520u, 1u, KERNEL_FRAME_PROCESS, 1u, &second) ==
+    assert(kernel_memory_alloc(ASTRA_KERNEL_USABLE_SIZE / 0x1000u, 1u,
+                               KERNEL_FRAME_PROCESS, 1u, &second) ==
            KERNEL_MEMORY_OK);
     assert(kernel_memory_alloc(160u, 1u, KERNEL_FRAME_PROCESS, 1u, &third) ==
            KERNEL_MEMORY_OK);
-    assert(first == 0x02004000u);
+    assert(first == ASTRA_USER_IMAGE_ADDRESS);
     assert(second == ASTRA_KERNEL_USABLE_ADDRESS);
     assert(third == 0x03e40000u);
     assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 1u, &extra) ==
@@ -417,9 +429,11 @@ static void test_emergency_reserve_isolated_and_replenished(void)
     make_valid_info(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
     assert(kernel_memory_stats(&baseline));
-    assert(kernel_memory_alloc(12u, 1u, KERNEL_FRAME_PROCESS, 1u, &first) ==
+    assert(kernel_memory_alloc(ASTRA_USER_IMAGE_MAX_SIZE / 0x1000u, 1u,
+                               KERNEL_FRAME_PROCESS, 1u, &first) ==
            KERNEL_MEMORY_OK);
-    assert(kernel_memory_alloc(7520u, 1u, KERNEL_FRAME_PROCESS, 1u,
+    assert(kernel_memory_alloc(ASTRA_KERNEL_USABLE_SIZE / 0x1000u, 1u,
+                               KERNEL_FRAME_PROCESS, 1u,
                                &second) == KERNEL_MEMORY_OK);
     assert(kernel_memory_alloc(160u, 1u, KERNEL_FRAME_PROCESS, 1u, &third) ==
            KERNEL_MEMORY_OK);
