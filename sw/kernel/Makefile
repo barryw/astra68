@@ -34,6 +34,7 @@ OBJECTS = $(BUILD_DIR)/entry.o $(BUILD_DIR)/vectors.o \
 	  $(BUILD_DIR)/performance.o \
 	  $(BUILD_DIR)/thread.o $(BUILD_DIR)/sync.o $(BUILD_DIR)/port.o \
           $(BUILD_DIR)/area.o $(BUILD_DIR)/ring.o \
+          $(BUILD_DIR)/elf.o \
           $(BUILD_DIR)/process.o \
           $(BUILD_DIR)/user_test.o \
           $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/worker.o \
@@ -155,6 +156,9 @@ $(BUILD_DIR)/area.o: area.c area.h handle.h memory.h vm.h bytes.h \
                      generation.h ../include/astra/syscall.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
+$(BUILD_DIR)/elf.o: elf.c elf.h bytes.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
 $(BUILD_DIR)/ring.o: ring.c ring.h area.h thread.h bytes.h generation.h \
                      object_cache.h allocation.h \
                      vm.h ../include/astra/syscall.h | $(BUILD_DIR)
@@ -240,7 +244,7 @@ test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_allocation \
       $(BUILD_DIR)/test_thread $(BUILD_DIR)/test_sync \
       $(BUILD_DIR)/test_port $(BUILD_DIR)/test_area $(BUILD_DIR)/test_ring \
       $(BUILD_DIR)/test_process $(BUILD_DIR)/test_worker \
-      $(BUILD_DIR)/test_dispatch
+      $(BUILD_DIR)/test_dispatch $(BUILD_DIR)/test_elf
 	./$(BUILD_DIR)/test_boot_contract
 	./$(BUILD_DIR)/test_allocation
 	./$(BUILD_DIR)/test_memory
@@ -270,6 +274,12 @@ test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_allocation \
 	./$(BUILD_DIR)/test_process
 	./$(BUILD_DIR)/test_worker
 	./$(BUILD_DIR)/test_dispatch
+	./$(BUILD_DIR)/test_elf
+
+$(BUILD_DIR)/test_elf: tests/test_elf.c elf.c elf.h bytes.c bytes.h \
+                       | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I. \
+		bytes.c elf.c tests/test_elf.c -o $@
 
 $(BUILD_DIR)/test_boot_contract: tests/test_boot_contract.c \
                                   ../common/boot_contract.c \
@@ -517,8 +527,10 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
                             exception.c exception.h vm.c vm.h pmmu.h \
                             user_copy.c user_copy.h \
                             block.c block.h device.c device.h dma.c dma.h memory.c memory.h \
+                            elf.c elf.h \
                             platform.h ../common/boot_contract.c \
                             ../include/astra/boot.h ../include/ohci.h \
+                            ../include/astra/process.h \
                             ../include/astra/syscall.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_MEMORY_NO_POISON=1 -DKERNEL_VM_HOST_TEST=1 \
@@ -532,7 +544,7 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
 		dma.c block.c device.c vm.c exception.c \
 		user_copy.c \
 		bytes.c context.c handle.c performance.c thread.c sync.c port.c \
-		area.c ring.c irq.c process.c \
+		area.c ring.c irq.c elf.c process.c \
 		tests/test_process.c -o $@
 
 $(BUILD_DIR)/test_dispatch: tests/test_dispatch.c dispatch.c dispatch.h \

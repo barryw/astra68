@@ -218,6 +218,15 @@ KernelProcessStatus kernel_process_create(const void *image,
                                           uint32_t entry_offset,
                                           uint32_t initial_argument,
                                           uint32_t *process_id);
+/*
+ * Loads a validated big-endian MC68030 executable into a new process, publishes
+ * its startup block and self capabilities, and makes its initial thread
+ * runnable. All or nothing: a failure anywhere leaves no frames, mappings, or
+ * handles behind.
+ */
+KernelProcessStatus kernel_process_create_executable(const void *image,
+                                                     uint32_t image_size,
+                                                     uint32_t *process_id);
 KernelProcessStatus kernel_process_create_thread(uint32_t process_id,
                                                  uint32_t entry_offset,
                                                  uint32_t initial_argument,

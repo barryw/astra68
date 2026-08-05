@@ -19,6 +19,8 @@
 #include "worker.h"
 
 #include <astra/syscall.h>
+#include <astra/input.h>
+#include <astra/process.h>
 
 #include <assert.h>
 #include <stdint.h>
@@ -67,6 +69,61 @@ static uint32_t qualification_consumed_status;
 static uint32_t device_quiesce_count;
 static uint32_t device_reset_count;
 static bool device_reset_ok;
+static KernelInputEvent input_events[ASTRA_INPUT_READ_BATCH_MAX + 1u];
+static uint32_t input_event_head;
+static uint32_t input_event_count;
+static uint32_t input_event_status;
+static uint32_t input_overflow_acks;
+
+uint32_t kernel_platform_input_status(void)
+{
+    uint32_t status = input_event_status;
+
+    if (input_event_count != 0u)
+        status |= ASTRA_INPUT_STATUS_VALID;
+    return status;
+}
+
+bool kernel_input_peek(KernelInputEvent *event)
+{
+    if (event == NULL || input_event_count == 0u)
+        return false;
+    *event = input_events[input_event_head];
+    return true;
+}
+
+bool kernel_input_consume(void)
+{
+    if (input_event_count == 0u)
+        return false;
+    ++input_event_head;
+    --input_event_count;
+    return true;
+}
+
+void kernel_platform_input_ack_overflow(void)
+{
+    input_event_status &= ~ASTRA_INPUT_STATUS_OVERFLOW;
+    ++input_overflow_acks;
+}
+
+static bool test_input_quiesce(uint32_t device_id, uint32_t generation,
+                               void *context)
+{
+    (void)context;
+    return device_id == ASTRA_DEVICE_ID_INPUT0 && generation != 0u;
+}
+
+static bool test_input_reset(uint32_t device_id, uint32_t generation,
+                             void *context)
+{
+    (void)context;
+    input_event_head = 0u;
+    input_event_count = 0u;
+    input_event_status = 0u;
+    input_overflow_acks = 0u;
+    return device_id == ASTRA_DEVICE_ID_INPUT0 && generation != 0u;
+}
 
 static bool test_device_quiesce(uint32_t device_id, uint32_t generation,
                                 void *context)
@@ -626,10 +683,27 @@ static void initialize_test(void)
 
         assert(kernel_device_register(&device) == KERNEL_DEVICE_OK);
     }
+    {
+        const KernelDeviceDefinition input = {
+            .quiesce = test_input_quiesce,
+            .reset = test_input_reset,
+            .context = NULL,
+            .device_id = ASTRA_DEVICE_ID_INPUT0,
+            .class_id = ASTRA_DEVICE_CLASS_INPUT,
+            .capabilities = ASTRA_INPUT_CAP_KEYBOARD |
+                            ASTRA_INPUT_CAP_POINTER,
+        };
+
+        assert(kernel_device_register(&input) == KERNEL_DEVICE_OK);
+    }
     assert(kernel_device_seal_registry());
     device_quiesce_count = 0u;
     device_reset_count = 0u;
     device_reset_ok = true;
+    input_event_head = 0u;
+    input_event_count = 0u;
+    input_event_status = 0u;
+    input_overflow_acks = 0u;
     irq_configure_count = 0u;
     irq_mask_count = 0u;
     irq_enable_count = 0u;
@@ -1990,6 +2064,94 @@ static void test_device_lease_syscalls_rights_and_owner_cleanup(void)
     assert(device_stats.owner_deaths == 1u);
     assert(device_stats.reset_failures == 1u);
     assert(kernel_device_pool_valid());
+}
+
+static void test_input_batch_read_is_bounded_and_fault_atomic(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    KernelCpuContext *next;
+    AstraInputEvent received[3];
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+    uint32_t input_handle;
+    uint32_t user_events = KERNEL_PROCESS_STACK_TOP - 128u;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_grant_device(
+               process_id, ASTRA_DEVICE_ID_INPUT0, ASTRA_RIGHT_READ,
+               &input_handle) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+
+    registers[0] = ASTRA_SYSCALL_INPUT_READ_TRY;
+    registers[1] = input_handle;
+    registers[2] = user_events;
+    registers[3] = 2u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_WOULD_BLOCK);
+    assert(next->data[1] == 0u && next->data[2] == 0u);
+
+    for (uint32_t index = 0u; index < 3u; ++index) {
+        input_events[index] = (KernelInputEvent){
+            .header = ASTRA_INPUT_HEADER(ASTRA_INPUT_CLASS_KEYBOARD,
+                                         ASTRA_INPUT_KEY_PHYSICAL,
+                                         ASTRA_INPUT_FLAG_DOWN),
+            .value = 4u + index,
+            .timestamp_ms = 100u + index,
+            .device_sequence = (1u << 16) | (index + 1u),
+            .host_generation = 7u,
+        };
+    }
+    input_event_count = 3u;
+    input_event_status = ASTRA_INPUT_STATUS_OVERFLOW;
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_INPUT_READ_TRY;
+    registers[1] = input_handle;
+    registers[2] = 4u;
+    registers[3] = 2u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_BAD_ADDRESS);
+    assert(next->data[1] == 0u && input_event_count == 3u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_INPUT_READ_TRY;
+    registers[1] = input_handle;
+    registers[2] = user_events;
+    registers[3] = 2u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == 2u);
+    assert(next->data[2] == ASTRA_INPUT_READ_OVERFLOW);
+    assert(input_event_count == 1u);
+    assert(input_overflow_acks == 1u);
+    assert((input_event_status & ASTRA_INPUT_STATUS_OVERFLOW) == 0u);
+    assert(kernel_user_copy_from_asm(received, user_events,
+                                     2u * sizeof(received[0])) ==
+           KERNEL_USER_COPY_OK);
+    assert(received[0].value == 4u && received[1].value == 5u);
+    assert(received[0].host_generation == 7u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_INPUT_READ_TRY;
+    registers[1] = input_handle;
+    registers[2] = user_events;
+    registers[3] = ASTRA_INPUT_READ_BATCH_MAX + 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(input_event_count == 1u);
 }
 
 static void test_private_irq_qualification_control(void)
@@ -4176,6 +4338,7 @@ static void test_malformed_syscall_and_message_corpus(void)
         {ASTRA_SYSCALL_DEVICE_QUERY, ASTRA_SYSCALL_INVALID_HANDLE},
         {ASTRA_SYSCALL_DEVICE_RESET, ASTRA_SYSCALL_INVALID_HANDLE},
         {ASTRA_SYSCALL_DEVICE_REVOKE, ASTRA_SYSCALL_INVALID_HANDLE},
+        {ASTRA_SYSCALL_INPUT_READ_TRY, ASTRA_SYSCALL_INVALID_HANDLE},
     };
     static const uint32_t bad_message_addresses[] = {
         0u,
@@ -4248,6 +4411,7 @@ static void test_malformed_syscall_and_message_corpus(void)
         case ASTRA_SYSCALL_DEVICE_QUERY:
         case ASTRA_SYSCALL_DEVICE_RESET:
         case ASTRA_SYSCALL_DEVICE_REVOKE:
+        case ASTRA_SYSCALL_INPUT_READ_TRY:
             registers[1] = KERNEL_HANDLE_INVALID;
             break;
         case ASTRA_SYSCALL_THREAD_CREATE:
@@ -4995,6 +5159,287 @@ static void test_area_and_ring_endpoint_transfer_over_port(void)
     assert(final.free_frames == baseline.free_frames);
 }
 
+/*
+ * Executable loading. The strongest available proof that the loader is
+ * transactional is that a failure at any allocation site returns the free
+ * frame count to exactly its pre-load value, so the sweep below drives the
+ * global-Nth selector across every site the load touches.
+ */
+#define LOADER_TEXT_VADDR 0x00100000u
+#define LOADER_DATA_VADDR 0x00101000u
+#define LOADER_PHOFF 52u
+
+static uint8_t loader_image[3u * KERNEL_PAGE_SIZE];
+static uint32_t loader_image_size;
+
+static void loader_put16(uint32_t offset, uint16_t value)
+{
+    loader_image[offset] = (uint8_t)(value >> 8);
+    loader_image[offset + 1u] = (uint8_t)value;
+}
+
+static void loader_put32(uint32_t offset, uint32_t value)
+{
+    loader_image[offset] = (uint8_t)(value >> 24);
+    loader_image[offset + 1u] = (uint8_t)(value >> 16);
+    loader_image[offset + 2u] = (uint8_t)(value >> 8);
+    loader_image[offset + 3u] = (uint8_t)value;
+}
+
+/* Read-execute text at 0x100000, read-write data with a BSS tail at 0x101000. */
+static void loader_build_image(void)
+{
+    memset(loader_image, 0, sizeof(loader_image));
+    loader_image_size = 3u * KERNEL_PAGE_SIZE;
+
+    loader_image[0] = 0x7fu;
+    loader_image[1] = 'E';
+    loader_image[2] = 'L';
+    loader_image[3] = 'F';
+    loader_image[4] = 1u;
+    loader_image[5] = 2u;
+    loader_image[6] = 1u;
+
+    loader_put16(16u, 2u); /* ET_EXEC */
+    loader_put16(18u, 4u); /* EM_68K */
+    loader_put32(20u, 1u);
+    loader_put32(24u, LOADER_TEXT_VADDR);
+    loader_put32(28u, LOADER_PHOFF);
+    loader_put16(40u, 52u);
+    loader_put16(42u, 32u);
+    loader_put16(44u, 2u);
+
+    loader_put32(LOADER_PHOFF + 0u, 1u);
+    loader_put32(LOADER_PHOFF + 4u, KERNEL_PAGE_SIZE);
+    loader_put32(LOADER_PHOFF + 8u, LOADER_TEXT_VADDR);
+    loader_put32(LOADER_PHOFF + 16u, KERNEL_PAGE_SIZE);
+    loader_put32(LOADER_PHOFF + 20u, KERNEL_PAGE_SIZE);
+    loader_put32(LOADER_PHOFF + 24u, 5u); /* PF_R | PF_X */
+    loader_put32(LOADER_PHOFF + 28u, KERNEL_PAGE_SIZE);
+
+    loader_put32(LOADER_PHOFF + 32u + 0u, 1u);
+    loader_put32(LOADER_PHOFF + 32u + 4u, 2u * KERNEL_PAGE_SIZE);
+    loader_put32(LOADER_PHOFF + 32u + 8u, LOADER_DATA_VADDR);
+    loader_put32(LOADER_PHOFF + 32u + 16u, 0x40u);
+    loader_put32(LOADER_PHOFF + 32u + 20u, KERNEL_PAGE_SIZE);
+    loader_put32(LOADER_PHOFF + 32u + 24u, 6u); /* PF_R | PF_W */
+    loader_put32(LOADER_PHOFF + 32u + 28u, KERNEL_PAGE_SIZE);
+
+    /* A NOP at the entry point so the text page holds real instructions. */
+    loader_image[KERNEL_PAGE_SIZE] = 0x4eu;
+    loader_image[KERNEL_PAGE_SIZE + 1u] = 0x71u;
+}
+
+static void test_executable_loading(void)
+{
+    KernelProcessSnapshot snapshot;
+    KernelMemoryStats before;
+    KernelMemoryStats after;
+    uint32_t process_id = 0u;
+    uint32_t frames = 0u;
+
+    loader_build_image();
+    initialize_test();
+    assert(kernel_memory_stats(&before));
+
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            &process_id) ==
+           KERNEL_PROCESS_OK);
+    assert(process_id != 0u);
+    {
+        uint32_t slot;
+        bool found = false;
+
+        for (slot = 0u; slot < KERNEL_PROCESS_MAX; ++slot) {
+            if (!kernel_process_snapshot(slot, &snapshot) ||
+                snapshot.id != process_id)
+                continue;
+            found = true;
+            break;
+        }
+        assert(found);
+    }
+    assert(snapshot.live_threads == 1u);
+    assert(snapshot.thread_count == 1u);
+
+    /* Text, data, and the startup block are all charged to the process. */
+    assert(kernel_memory_owner_frames(process_id, &frames));
+    assert(frames >= 3u);
+    assert(kernel_memory_stats(&after));
+    assert(after.free_frames < before.free_frames);
+}
+
+static void test_executable_rejections_do_not_allocate(void)
+{
+    KernelMemoryStats before;
+    KernelMemoryStats after;
+    uint32_t process_id = 0xdeadbeefu;
+
+    loader_build_image();
+    initialize_test();
+    assert(kernel_memory_stats(&before));
+
+    assert(kernel_process_create_executable(NULL, loader_image_size,
+                                            &process_id) ==
+           KERNEL_PROCESS_INVALID_ARGUMENT);
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL) ==
+           KERNEL_PROCESS_INVALID_ARGUMENT);
+
+    /* Little-endian identification. */
+    loader_build_image();
+    loader_image[5] = 1u;
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            &process_id) ==
+           KERNEL_PROCESS_INVALID_ARGUMENT);
+
+    /* Writable and executable in one segment. */
+    loader_build_image();
+    loader_put32(LOADER_PHOFF + 24u, 7u);
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            &process_id) ==
+           KERNEL_PROCESS_INVALID_ARGUMENT);
+
+    /* An entry point that is not inside executable code. */
+    loader_build_image();
+    loader_put32(24u, LOADER_DATA_VADDR);
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            &process_id) ==
+           KERNEL_PROCESS_INVALID_ARGUMENT);
+
+    /* A segment that would land on the startup block. */
+    loader_build_image();
+    loader_put32(LOADER_PHOFF + 8u, KERNEL_VM_USER_MIN);
+    loader_put32(24u, KERNEL_VM_USER_MIN);
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            &process_id) ==
+           KERNEL_PROCESS_INVALID_ARGUMENT);
+
+    assert(kernel_memory_stats(&after));
+    assert(after.free_frames == before.free_frames);
+}
+
+static void test_executable_load_rolls_back_every_allocation(void)
+{
+    KernelMemoryStats baseline;
+    uint32_t attempt;
+
+    loader_build_image();
+    initialize_test();
+    assert(kernel_memory_stats(&baseline));
+
+    for (attempt = 1u; attempt <= 24u; ++attempt) {
+        KernelMemoryStats after;
+        uint32_t process_id = 0xdeadbeefu;
+        KernelProcessStatus status;
+
+        kernel_allocation_test_fail_global(attempt);
+        status = kernel_process_create_executable(loader_image,
+                                                  loader_image_size,
+                                                  &process_id);
+        kernel_allocation_test_fail_global(0u);
+        if (status == KERNEL_PROCESS_OK) {
+            /* Past the last injectable site; the load legitimately succeeded. */
+            initialize_test();
+            assert(kernel_memory_stats(&baseline));
+            continue;
+        }
+        assert(process_id == 0u);
+        assert(kernel_memory_stats(&after));
+        assert(after.free_frames == baseline.free_frames);
+        assert(kernel_allocation_valid());
+    }
+}
+
+/*
+ * A process may inspect a process it holds a handle to, and always holds its
+ * own. Enumerating other processes is not a syscall by design; that authority
+ * belongs to an introspection service, per OBSERVABILITY.md.
+ */
+static void test_process_info_syscall(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t user_info = KERNEL_PROCESS_STACK_TOP - 64u;
+    AstraProcessInfo info;
+    uint32_t process_id;
+    uint32_t self_handle;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_QUERY_ABI;
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == ASTRA_SYSCALL_ABI_VERSION);
+    self_handle = next->data[2];
+    assert(self_handle != 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_INFO;
+    registers[1] = self_handle;
+    registers[2] = user_info;
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&info, user_info, sizeof(info)) ==
+           KERNEL_USER_COPY_OK);
+    assert(info.size == sizeof(info));
+    assert(info.id == process_id);
+    assert(info.generation != 0u);
+    assert(info.owner == process_id);
+    assert(info.live_threads == 1u && info.thread_count == 1u);
+    assert(info.handle_references != 0u);
+    assert(info.reserved == 0u);
+    /* The owner ledger already charges this process for its own pages. */
+    assert(info.resident_frames != 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_INFO;
+    registers[1] = self_handle + 0x1000u;
+    registers[2] = user_info;
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_INFO;
+    registers[1] = self_handle;
+    registers[2] = user_info + 1u;
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_INFO;
+    registers[1] = self_handle;
+    registers[2] = 0x00000004u; /* unmapped */
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_BAD_ADDRESS);
+}
+
 int main(void)
 {
     test_process_allocation_failure_matrix();
@@ -5006,6 +5451,7 @@ int main(void)
     test_sync_syscall_rights_and_stale_handles();
     test_irq_syscalls_waits_rights_and_owner_cleanup();
     test_device_lease_syscalls_rights_and_owner_cleanup();
+    test_input_batch_read_is_bounded_and_fault_atomic();
     test_private_irq_qualification_control();
     test_priority_selection_and_equal_priority_rotation();
     test_per_process_thread_limit_is_bounded_and_reclaimable();
@@ -5028,6 +5474,10 @@ int main(void)
     test_shared_area_and_bulk_ring_syscalls();
     test_area_publication_rolls_back_when_handle_table_full();
     test_area_and_ring_endpoint_transfer_over_port();
+    test_executable_loading();
+    test_executable_rejections_do_not_allocate();
+    test_executable_load_rolls_back_every_allocation();
+    test_process_info_syscall();
     puts("process tests passed");
     return 0;
 }
