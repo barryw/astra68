@@ -30,6 +30,19 @@ astra_device_query(uint32_t handle, AstraDeviceInfo *info)
 }
 
 uint32_t
+astra_dma_create(uint32_t byte_size, AstraDmaBufferInfo *info)
+{
+    AstraSyscallResult result;
+
+    if (info == NULL) {
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    astra_syscall5(ASTRA_SYSCALL_DMA_CREATE, byte_size,
+                   (uint32_t)(uintptr_t)info, 0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
 astra_process_info(uint32_t handle, AstraProcessInfo *info)
 {
     AstraSyscallResult result;

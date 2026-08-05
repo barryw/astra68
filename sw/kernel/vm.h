@@ -10,6 +10,13 @@
 #define KERNEL_VM_AREA_SLOT_SIZE 0x00010000u
 #define KERNEL_VM_AREA_SLOT_COUNT 8u
 #define KERNEL_VM_SHARED_ALIAS_MAX 4u
+/*
+ * Transfer memory lands in its own window. Each buffer is process-private, so
+ * the slot index is per address space rather than global.
+ */
+#define KERNEL_VM_DMA_BASE 0x50000000u
+#define KERNEL_VM_DMA_SLOT_SIZE 0x00010000u
+#define KERNEL_VM_DMA_SLOT_COUNT 4u
 
 #define KERNEL_VM_READ  (1u << 0)
 #define KERNEL_VM_WRITE (1u << 1)
@@ -83,6 +90,14 @@ KernelVmStatus kernel_vm_map_page(KernelAddressSpace *space,
                                   uint32_t permissions);
 KernelVmStatus kernel_vm_unmap_page(KernelAddressSpace *space,
                                     uint32_t virtual_address);
+/*
+ * Maps a DMA frame the process owns, cache-inhibited: the device writes these
+ * pages behind the data cache's back.
+ */
+KernelVmStatus kernel_vm_map_transfer_page(KernelAddressSpace *space,
+                                           uint32_t virtual_address,
+                                           uint32_t physical_address,
+                                           uint32_t permissions);
 KernelVmStatus kernel_vm_map_shared_range(
     KernelAddressSpace *space, uint32_t virtual_address,
     const uint32_t *physical_pages, uint32_t page_count,

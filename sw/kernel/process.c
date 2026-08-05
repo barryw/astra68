@@ -1,5 +1,6 @@
 #include "process.h"
 
+#include <astra/block.h>
 #include <astra/syscall.h>
 #include <astra/input.h>
 #include <astra/process.h>
@@ -37,6 +38,21 @@ typedef struct KernelProcessQualificationClient {
     uint32_t completed_sources;
 } KernelProcessQualificationClient;
 
+/*
+ * One transfer-memory buffer a process owns. The engine already allocates
+ * owner-charged, physically contiguous, generation-tracked frames and already
+ * revokes them on owner death; what was missing was a user-visible handle for
+ * one and a mapping of its frames into the owner. This record is that bridge,
+ * not a second memory mechanism.
+ */
+typedef struct KernelProcessDmaBuffer {
+    KernelDmaHandle dma;
+    uint32_t virtual_base;
+    uint16_t page_count;
+    uint8_t slot;
+    uint8_t active;
+} KernelProcessDmaBuffer;
+
 typedef struct KernelProcess {
     KernelAddressSpace address_space;
     KernelHandleTable handles;
@@ -66,11 +82,12 @@ typedef struct KernelProcess {
     uint8_t supervisor_guard_pages;
     uint8_t handles_closed;
     uint8_t address_space_destroyed;
-    uint8_t reserved;
+    uint8_t dma_pages;
+    KernelProcessDmaBuffer dma_buffers[KERNEL_VM_DMA_SLOT_COUNT];
 } KernelProcess;
 
 #if defined(__m68k__)
-_Static_assert(sizeof(KernelProcess) == 548u,
+_Static_assert(sizeof(KernelProcess) == 596u,
                "process record size changed; update the memory budget");
 #endif
 
@@ -929,6 +946,133 @@ static KernelProcessStatus wake_process_death(KernelProcess *process)
             true, &woken) != KERNEL_THREAD_OK)
         return KERNEL_PROCESS_CORRUPT;
     scheduler_stats.process_death_wakeups += woken;
+    return KERNEL_PROCESS_OK;
+}
+
+/*
+ * Unmapping and closing must both happen exactly once, whether the service
+ * closed the handle or died holding it. The engine defers reclaim while a
+ * transfer is still in flight, so a buffer closed under the device is
+ * released when the device is done with it, not while it is writing.
+ */
+static void dma_buffer_release(void *object, void *context)
+{
+    KernelProcessDmaBuffer *buffer = object;
+    KernelProcess *process = context;
+
+    if (buffer == NULL || process == NULL || buffer->active == 0u)
+        return;
+    for (uint32_t page = 0u; page < buffer->page_count; ++page) {
+        (void)kernel_vm_unmap_page(
+            &process->address_space,
+            buffer->virtual_base + (page * KERNEL_PAGE_SIZE));
+    }
+    (void)kernel_dma_close(buffer->dma, process->owner);
+    if (process->dma_pages >= buffer->page_count)
+        process->dma_pages -= (uint8_t)buffer->page_count;
+    else
+        process->dma_pages = 0u;
+    buffer->dma = KERNEL_DMA_HANDLE_INVALID;
+    buffer->virtual_base = 0u;
+    buffer->page_count = 0u;
+    buffer->active = 0u;
+}
+
+static KernelProcessStatus create_dma_buffer(KernelProcess *process,
+                                             uint32_t byte_size,
+                                             AstraDmaBufferInfo *info)
+{
+    KernelProcessDmaBuffer *buffer = NULL;
+    KernelDmaBufferInfo engine_info;
+    KernelDmaHandle dma = KERNEL_DMA_HANDLE_INVALID;
+    KernelHandle handle = KERNEL_HANDLE_INVALID;
+    KernelVmStatus vm_status = KERNEL_VM_OK;
+    uint32_t page_count;
+    uint32_t slot;
+    uint32_t mapped = 0u;
+
+    if (process == NULL || info == NULL)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    if (byte_size == 0u || byte_size > KERNEL_VM_DMA_SLOT_SIZE)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    page_count = (byte_size + KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE;
+    /* Hard ceilings: exceeding one is a rejection, never a stall. */
+    if (page_count == 0u ||
+        (uint32_t)process->dma_pages + page_count >
+            ASTRA_DMA_MAX_PAGES_PER_SERVICE)
+        return KERNEL_PROCESS_RESOURCE_LIMIT;
+    for (slot = 0u; slot < KERNEL_VM_DMA_SLOT_COUNT; ++slot) {
+        if (process->dma_buffers[slot].active == 0u) {
+            buffer = &process->dma_buffers[slot];
+            break;
+        }
+    }
+    if (buffer == NULL)
+        return KERNEL_PROCESS_RESOURCE_LIMIT;
+
+    {
+        KernelDmaStatus dma_status = kernel_dma_create(
+            process->owner, page_count * KERNEL_PAGE_SIZE, 1u, &dma);
+
+        if (dma_status == KERNEL_DMA_NO_RESOURCES)
+            return KERNEL_PROCESS_RESOURCE_LIMIT;
+        if (dma_status == KERNEL_DMA_OUT_OF_MEMORY)
+            return KERNEL_PROCESS_OUT_OF_MEMORY;
+        if (dma_status == KERNEL_DMA_INVALID_ARGUMENT)
+            return KERNEL_PROCESS_INVALID_ARGUMENT;
+        if (dma_status != KERNEL_DMA_OK ||
+            dma == KERNEL_DMA_HANDLE_INVALID)
+            return KERNEL_PROCESS_CORRUPT;
+    }
+    if (kernel_dma_buffer_info(dma, process->owner, &engine_info) !=
+            KERNEL_DMA_OK ||
+        engine_info.frame_count != page_count) {
+        (void)kernel_dma_close(dma, process->owner);
+        return KERNEL_PROCESS_CORRUPT;
+    }
+
+    buffer->dma = dma;
+    buffer->slot = (uint8_t)slot;
+    buffer->page_count = (uint16_t)page_count;
+    buffer->virtual_base = KERNEL_VM_DMA_BASE + (slot * KERNEL_VM_DMA_SLOT_SIZE);
+    for (mapped = 0u; mapped < page_count; ++mapped) {
+        vm_status = kernel_vm_map_transfer_page(
+            &process->address_space,
+            buffer->virtual_base + (mapped * KERNEL_PAGE_SIZE),
+            engine_info.physical_base + (mapped * KERNEL_PAGE_SIZE),
+            KERNEL_VM_READ | KERNEL_VM_WRITE);
+        if (vm_status != KERNEL_VM_OK)
+            break;
+    }
+    if (mapped != page_count) {
+        while (mapped-- != 0u)
+            (void)kernel_vm_unmap_page(
+                &process->address_space,
+                buffer->virtual_base + (mapped * KERNEL_PAGE_SIZE));
+        (void)kernel_dma_close(dma, process->owner);
+        buffer->dma = KERNEL_DMA_HANDLE_INVALID;
+        buffer->virtual_base = 0u;
+        buffer->page_count = 0u;
+        return vm_status == KERNEL_VM_OUT_OF_MEMORY ?
+            KERNEL_PROCESS_OUT_OF_MEMORY : KERNEL_PROCESS_INVALID_STATE;
+    }
+
+    buffer->active = 1u;
+    process->dma_pages += (uint8_t)page_count;
+    if (kernel_handle_install(&process->handles, KERNEL_OBJECT_DMA,
+                              ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, buffer,
+                              dma_buffer_release, process, &handle) !=
+        KERNEL_HANDLE_OK) {
+        dma_buffer_release(buffer, process);
+        return KERNEL_PROCESS_RESOURCE_LIMIT;
+    }
+
+    kernel_bytes_clear(info, sizeof(*info));
+    info->size = ASTRA_DMA_BUFFER_INFO_SIZE;
+    info->handle = handle;
+    info->virtual_base = buffer->virtual_base;
+    info->byte_size = page_count * KERNEL_PAGE_SIZE;
+    info->page_count = page_count;
     return KERNEL_PROCESS_OK;
 }
 
@@ -3885,6 +4029,49 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             kernel_platform_input_ack_overflow();
         result = count == 0u && flags == 0u ? ASTRA_SYSCALL_WOULD_BLOCK :
                                              ASTRA_SYSCALL_OK;
+        break;
+    }
+    case ASTRA_SYSCALL_DMA_CREATE: {
+        AstraDmaBufferInfo info;
+        uint32_t user_info = thread->context.data[2];
+        int copy_status;
+
+        if ((user_info & (sizeof(uint32_t) - 1u)) != 0u) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        status = create_dma_buffer(current, thread->context.data[1], &info);
+        if (status == KERNEL_PROCESS_INVALID_ARGUMENT) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (status == KERNEL_PROCESS_RESOURCE_LIMIT) {
+            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        }
+        if (status == KERNEL_PROCESS_OUT_OF_MEMORY) {
+            result = ASTRA_SYSCALL_OUT_OF_MEMORY;
+            break;
+        }
+        if (status != KERNEL_PROCESS_OK)
+            return status;
+
+        copy_status = kernel_copy_to_user(user_info, &info, sizeof(info));
+        if (copy_status != KERNEL_USER_COPY_OK) {
+            /*
+             * The caller cannot learn the handle, so it can never close it.
+             * Release it here rather than leak pinned pages for the life of
+             * the process.
+             */
+            (void)kernel_handle_close(&current->handles, info.handle);
+            result = copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+                     copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT ?
+                ASTRA_SYSCALL_BAD_ADDRESS : ASTRA_SYSCALL_IO_ERROR;
+            break;
+        }
+        thread->context.data[1] = info.handle;
+        thread->context.data[2] = info.virtual_base;
+        thread->context.data[3] = info.byte_size;
         break;
     }
     case ASTRA_SYSCALL_PROCESS_INFO: {

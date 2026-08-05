@@ -30,6 +30,7 @@ uint32_t astra_query_abi(uint32_t *abi_version, uint32_t *process_handle,
 uint32_t astra_process_info(uint32_t handle, AstraProcessInfo *info);
 uint32_t astra_progress(uint32_t value);
 uint32_t astra_device_query(uint32_t handle, AstraDeviceInfo *info);
+uint32_t astra_dma_create(uint32_t byte_size, AstraDmaBufferInfo *info);
 void astra_process_exit(uint32_t status) __attribute__((noreturn));
 void astra_thread_exit(uint32_t status) __attribute__((noreturn));
 

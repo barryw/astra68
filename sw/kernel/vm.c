@@ -210,6 +210,16 @@ static bool frame_is_user_mapped(uint32_t physical_address)
             VM_MAPPING_COUNT_SHIFT) != 0u;
 }
 
+/*
+ * Transfer memory is mapped once, into one address space, cache-inhibited. It
+ * carries none of the aliasing a shared area does, so it is accounted exactly
+ * like a private process page rather than gaining a second alias class.
+ */
+static bool private_mapping_state(KernelFrameState state)
+{
+    return state == KERNEL_FRAME_PROCESS || state == KERNEL_FRAME_DMA;
+}
+
 static bool shared_mapping_class(uint32_t virtual_address,
                                  uint8_t *mapping_class)
 {
@@ -232,7 +242,7 @@ static bool frame_mapping_can_add(uint32_t physical_address,
     uint8_t count = encoded >> VM_MAPPING_COUNT_SHIFT;
     uint8_t mapping_class;
 
-    if (state == KERNEL_FRAME_PROCESS)
+    if (private_mapping_state(state))
         return count == 0u;
     if (state != KERNEL_FRAME_SHARED ||
         !shared_mapping_class(virtual_address, &mapping_class) ||
@@ -253,7 +263,7 @@ static bool frame_mapping_add(uint32_t physical_address,
 
     if (!frame_mapping_can_add(physical_address, state, virtual_address))
         return false;
-    if (state == KERNEL_FRAME_PROCESS) {
+    if (private_mapping_state(state)) {
         mapped_user_frames[index] =
             (uint8_t)((1u << VM_MAPPING_COUNT_SHIFT) |
                       VM_MAPPING_PRIVATE_CLASS);
@@ -275,7 +285,7 @@ static bool frame_mapping_remove(uint32_t physical_address,
     uint8_t count = encoded >> VM_MAPPING_COUNT_SHIFT;
     uint8_t mapping_class;
 
-    if (state == KERNEL_FRAME_PROCESS) {
+    if (private_mapping_state(state)) {
         if (count != 1u ||
             (encoded & VM_MAPPING_CLASS_MASK) != VM_MAPPING_PRIVATE_CLASS)
             return false;
@@ -583,10 +593,18 @@ KernelVmStatus kernel_vm_create_address_space(uint32_t owner,
     return KERNEL_VM_OK;
 }
 
-KernelVmStatus kernel_vm_map_page(KernelAddressSpace *space,
-                                  uint32_t virtual_address,
-                                  uint32_t physical_address,
-                                  uint32_t permissions)
+/*
+ * Transfer memory is mapped cache-inhibited. The 68030 data cache does not
+ * snoop the device writing into these frames, so a cached mapping would hand
+ * the service whichever stale line it read last. Ordinary process pages stay
+ * cacheable.
+ */
+static KernelVmStatus map_owned_page(KernelAddressSpace *space,
+                                     uint32_t virtual_address,
+                                     uint32_t physical_address,
+                                     uint32_t permissions,
+                                     KernelFrameState required_state,
+                                     bool cache_inhibit)
 {
     volatile uint32_t *root;
     volatile uint32_t *table;
@@ -606,7 +624,7 @@ KernelVmStatus kernel_vm_map_page(KernelAddressSpace *space,
                          KERNEL_VM_EXEC)) != 0u)
         return KERNEL_VM_INVALID_ARGUMENT;
     if (!kernel_memory_frame_info(physical_address, &frame) ||
-        frame.owner != space->owner || frame.state != KERNEL_FRAME_PROCESS ||
+        frame.owner != space->owner || frame.state != required_state ||
         frame.references == 0u)
         return KERNEL_VM_NOT_OWNED;
 
@@ -670,7 +688,7 @@ KernelVmStatus kernel_vm_map_page(KernelAddressSpace *space,
         return KERNEL_VM_CORRUPT;
     }
 
-    if (!frame_mapping_add(physical_address, KERNEL_FRAME_PROCESS,
+    if (!frame_mapping_add(physical_address, required_state,
                            virtual_address)) {
         (void)kernel_memory_release(physical_address, 1u, space->owner);
         if (allocated_table) {
@@ -683,12 +701,33 @@ KernelVmStatus kernel_vm_map_page(KernelAddressSpace *space,
     }
     table[table_index] = physical_address | VM_DESC_PAGE |
         ((permissions & KERNEL_VM_WRITE) != 0u ? 0u :
-         VM_DESC_WRITE_PROTECT);
+         VM_DESC_WRITE_PROTECT) |
+        (cache_inhibit ? VM_DESC_CACHE_INHIBIT : 0u);
     invalidate_caches();
     flush_all();
     ++space->mapped_pages;
     ++vm_stats.user_mappings;
     return KERNEL_VM_OK;
+}
+
+KernelVmStatus kernel_vm_map_page(KernelAddressSpace *space,
+                                  uint32_t virtual_address,
+                                  uint32_t physical_address,
+                                  uint32_t permissions)
+{
+    return map_owned_page(space, virtual_address, physical_address,
+                          permissions, KERNEL_FRAME_PROCESS, false);
+}
+
+KernelVmStatus kernel_vm_map_transfer_page(KernelAddressSpace *space,
+                                           uint32_t virtual_address,
+                                           uint32_t physical_address,
+                                           uint32_t permissions)
+{
+    if ((permissions & KERNEL_VM_EXEC) != 0u)
+        return KERNEL_VM_INVALID_ARGUMENT;
+    return map_owned_page(space, virtual_address, physical_address,
+                          permissions, KERNEL_FRAME_DMA, true);
 }
 
 KernelVmStatus kernel_vm_unmap_page(KernelAddressSpace *space,
@@ -722,7 +761,8 @@ KernelVmStatus kernel_vm_unmap_page(KernelAddressSpace *space,
     page_physical = table[table_index] & VM_DESC_PAGE_ADDRESS;
     if (!kernel_memory_frame_info(page_physical, &frame) ||
         (frame.state != KERNEL_FRAME_PROCESS &&
-         frame.state != KERNEL_FRAME_SHARED) ||
+         frame.state != KERNEL_FRAME_SHARED &&
+         frame.state != KERNEL_FRAME_DMA) ||
         !frame_is_user_mapped(page_physical))
         return KERNEL_VM_CORRUPT;
     frame_owner = frame.owner;

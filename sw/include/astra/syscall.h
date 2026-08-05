@@ -3,7 +3,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010008
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010009
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -43,6 +43,9 @@
 #define ASTRA_SYSCALL_DEVICE_REVOKE    35
 #define ASTRA_SYSCALL_INPUT_READ_TRY   36
 #define ASTRA_SYSCALL_PROCESS_INFO     37
+#define ASTRA_SYSCALL_DMA_CREATE       38
+
+#define ASTRA_DMA_BUFFER_INFO_SIZE 20u
 
 #define ASTRA_INPUT_READ_BATCH_MAX 16u
 #define ASTRA_INPUT_READ_OVERFLOW  (1u << 0)
@@ -145,6 +148,20 @@ typedef struct AstraIrqRecord {
     uint32_t sequence;
 } AstraIrqRecord;
 
+/*
+ * Transfer memory a service owns: kernel-allocated, physically contiguous,
+ * charged to the caller, and mapped into it read/write. The service never
+ * names a physical address; the handle is what it hands to the block engine.
+ * Released by ASTRA_SYSCALL_CLOSE like any other handle.
+ */
+typedef struct AstraDmaBufferInfo {
+    uint32_t size;
+    uint32_t handle;
+    uint32_t virtual_base;
+    uint32_t byte_size;
+    uint32_t page_count;
+} AstraDmaBufferInfo;
+
 typedef struct AstraDeviceInfo {
     uint32_t size;
     uint32_t device_id;
@@ -158,6 +175,9 @@ typedef struct AstraDeviceInfo {
 
 _Static_assert(sizeof(AstraDeviceInfo) == ASTRA_DEVICE_INFO_SIZE,
                "device-info ABI size changed");
+
+_Static_assert(sizeof(AstraDmaBufferInfo) == ASTRA_DMA_BUFFER_INFO_SIZE,
+               "dma-buffer-info ABI size changed");
 
 _Static_assert(sizeof(AstraIrqRecord) == ASTRA_IRQ_RECORD_SIZE,
                "IRQ record ABI size changed");

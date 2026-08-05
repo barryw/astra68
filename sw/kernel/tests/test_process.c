@@ -18,6 +18,7 @@
 #include "vm.h"
 #include "worker.h"
 
+#include <astra/block.h>
 #include <astra/syscall.h>
 #include <astra/input.h>
 #include <astra/process.h>
@@ -5302,6 +5303,144 @@ static void test_executable_loading(void)
  * named in its startup capability table before it runs, and a grant that
  * cannot be satisfied must leave no trace of the launch at all.
  */
+/*
+ * Transfer memory is the one thing a block service must own before it can
+ * submit anything, so the ceilings and the release path matter more than the
+ * happy case: a leaked pinned page is a page the system never gets back.
+ */
+static void test_dma_transfer_memory(void)
+{
+    const uint32_t user_info = KERNEL_PROCESS_STACK_TOP - 64u;
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
+    KernelCpuContext *next;
+    KernelMemoryStats before;
+    KernelMemoryStats after;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    AstraDmaBufferInfo info;
+    uint32_t process_id = 0u;
+    uint32_t handles[ASTRA_DMA_MAX_BUFFERS_PER_SERVICE];
+    uint32_t index;
+
+    loader_build_image();
+    initialize_test();
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &process_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    assert(kernel_memory_stats(&before));
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_DMA_CREATE;
+    registers[1] = KERNEL_PAGE_SIZE;
+    registers[2] = user_info;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&info, user_info, sizeof(info)) ==
+           KERNEL_USER_COPY_OK);
+    assert(info.size == ASTRA_DMA_BUFFER_INFO_SIZE);
+    assert(info.handle != 0u);
+    assert(info.byte_size == KERNEL_PAGE_SIZE);
+    assert(info.page_count == 1u);
+    assert(info.virtual_base >= KERNEL_VM_DMA_BASE);
+    assert(info.virtual_base <
+           KERNEL_VM_DMA_BASE +
+               (KERNEL_VM_DMA_SLOT_COUNT * KERNEL_VM_DMA_SLOT_SIZE));
+
+    /* The mapping is real: the buffer is writable through user copy. */
+    {
+        static const uint8_t pattern[8] = {1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u};
+        uint8_t readback[8] = {0u};
+
+        assert(kernel_user_copy_to_asm(info.virtual_base, pattern,
+                                       sizeof(pattern)) ==
+               KERNEL_USER_COPY_OK);
+        assert(kernel_user_copy_from_asm(readback, info.virtual_base,
+                                         sizeof(readback)) ==
+               KERNEL_USER_COPY_OK);
+        assert(memcmp(readback, pattern, sizeof(pattern)) == 0);
+    }
+
+    /* Closing the handle returns every pinned page. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CLOSE;
+    registers[1] = info.handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_memory_stats(&after));
+    assert(after.free_frames == before.free_frames);
+
+    /* Sizes outside one slot are refused before anything is allocated. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_DMA_CREATE;
+    registers[1] = 0u;
+    registers[2] = user_info;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    registers[1] = KERNEL_VM_DMA_SLOT_SIZE + 1u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    /* An unwritable info pointer must not leave the buffer behind. */
+    registers[1] = KERNEL_PAGE_SIZE;
+    registers[2] = KERNEL_VM_USER_MAX & ~3u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_BAD_ADDRESS);
+    assert(kernel_memory_stats(&after));
+    assert(after.free_frames == before.free_frames);
+
+    /* The buffer ceiling is a rejection, not a stall. */
+    for (index = 0u; index < ASTRA_DMA_MAX_BUFFERS_PER_SERVICE; ++index) {
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_DMA_CREATE;
+        registers[1] = KERNEL_PAGE_SIZE;
+        registers[2] = user_info;
+        assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        assert(kernel_user_copy_from_asm(&info, user_info, sizeof(info)) ==
+               KERNEL_USER_COPY_OK);
+        handles[index] = info.handle;
+    }
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_DMA_CREATE;
+    registers[1] = KERNEL_PAGE_SIZE;
+    registers[2] = user_info;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_RESOURCE_LIMIT);
+
+    /* Freeing one slot admits exactly one more buffer. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CLOSE;
+    registers[1] = handles[0];
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_DMA_CREATE;
+    registers[1] = KERNEL_PAGE_SIZE;
+    registers[2] = user_info;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    /* The page ceiling binds independently of the buffer count. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_DMA_CREATE;
+    registers[1] = ASTRA_DMA_MAX_PAGES_PER_SERVICE * KERNEL_PAGE_SIZE;
+    registers[2] = user_info;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_RESOURCE_LIMIT);
+}
+
 static void test_bootstrap_capabilities(void)
 {
     KernelProcessBootstrapCapability capabilities[2];
@@ -5644,6 +5783,7 @@ int main(void)
     test_area_publication_rolls_back_when_handle_table_full();
     test_area_and_ring_endpoint_transfer_over_port();
     test_executable_loading();
+    test_dma_transfer_memory();
     test_bootstrap_capabilities();
     test_initial_image_exit_is_reported();
     test_executable_rejections_do_not_allocate();
