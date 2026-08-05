@@ -22,6 +22,9 @@
  * have started.
  */
 
+/* A boot check must terminate whether or not the device answers. */
+#define BLOCK_POLL_LIMIT 100000u
+
 static const AstraStartupCapability *
 find_capability(const AstraStartupCapability *capabilities, uint32_t count,
                 uint32_t name)
@@ -71,6 +74,83 @@ claim_block_lease(const AstraStartupInfo *startup,
         return 0u;
     }
     return device->handle;
+}
+
+/*
+ * One real transfer through the admission path, at every boot: geometry, a
+ * transfer buffer the service owns, a read of the first sector, and a
+ * collected completion. If any of it is wrong the service exits and the
+ * kernel turns that into a panic naming the check, which is the whole point of
+ * proving it here rather than trusting it.
+ */
+static uint32_t
+verify_block_round_trip(uint32_t device)
+{
+    AstraBlockGeometry geometry;
+    AstraDmaBufferInfo buffer;
+    AstraBlockRequest request;
+    AstraBlockCompletion completion;
+    uint32_t block_request = 0u;
+    uint32_t status;
+    uint32_t attempt;
+
+    (void)memset(&geometry, 0, sizeof(geometry));
+    if (astra_block_query(device, &geometry) != ASTRA_SYSCALL_OK ||
+        geometry.size != ASTRA_BLOCK_GEOMETRY_SIZE ||
+        geometry.sector_bytes != ASTRA_BLOCK_SECTOR_BYTES ||
+        geometry.max_transfer_sectors == 0u ||
+        geometry.sector_count == 0u ||
+        (geometry.capabilities & ASTRA_BLOCK_CAP_READ) == 0u ||
+        (geometry.state_flags & ASTRA_BLOCK_STATE_LINK_UP) == 0u ||
+        (geometry.state_flags & ASTRA_BLOCK_STATE_MEDIA_PRESENT) == 0u) {
+        return ASTRA_SUPERVISOR_FAIL_BLOCK_GEOMETRY;
+    }
+    (void)astra_progress(ASTRA_SUPERVISOR_STAGE_BLOCK_ONLINE);
+
+    (void)memset(&buffer, 0, sizeof(buffer));
+    if (astra_dma_create(geometry.sector_bytes, &buffer) !=
+            ASTRA_SYSCALL_OK ||
+        buffer.size != ASTRA_DMA_BUFFER_INFO_SIZE ||
+        buffer.handle == 0u || buffer.virtual_base == 0u ||
+        buffer.byte_size < geometry.sector_bytes) {
+        return ASTRA_SUPERVISOR_FAIL_BLOCK_MEMORY;
+    }
+
+    (void)memset(&request, 0, sizeof(request));
+    request.size = ASTRA_BLOCK_REQUEST_SIZE;
+    request.operation = ASTRA_BLOCK_OP_READ;
+    request.buffer = buffer.handle;
+    request.sectors = 1u;
+    request.lba = 0u;
+    if (astra_block_submit(device, &request, &block_request) !=
+            ASTRA_SYSCALL_OK || block_request == 0u) {
+        (void)astra_close(buffer.handle);
+        return ASTRA_SUPERVISOR_FAIL_BLOCK_IO;
+    }
+
+    /*
+     * Bounded polling with yields. The completion endpoint this service holds
+     * is the right thing to wait on, and the block service loop will; a boot
+     * check that must terminate either way does not need it yet.
+     */
+    (void)memset(&completion, 0, sizeof(completion));
+    status = ASTRA_SYSCALL_WOULD_BLOCK;
+    for (attempt = 0u; attempt < BLOCK_POLL_LIMIT; ++attempt) {
+        status = astra_block_collect(device, block_request, &completion);
+        if (status != ASTRA_SYSCALL_WOULD_BLOCK) {
+            break;
+        }
+        (void)astra_yield();
+    }
+    (void)astra_close(buffer.handle);
+    if (status != ASTRA_SYSCALL_OK ||
+        completion.size != ASTRA_BLOCK_COMPLETION_SIZE ||
+        completion.request != block_request ||
+        completion.status != ASTRA_BLOCK_COMPLETION_OK ||
+        completion.sectors != 1u) {
+        return ASTRA_SUPERVISOR_FAIL_BLOCK_IO;
+    }
+    return 0u;
 }
 
 static void
@@ -123,6 +203,12 @@ astra_main(const AstraStartupInfo *startup)
         park();
     }
     (void)astra_progress(ASTRA_SUPERVISOR_STAGE_BLOCK_LEASED);
+
+    status = verify_block_round_trip(block_device);
+    if (status != 0u) {
+        return (int)(ASTRA_SUPERVISOR_STATUS_TAG | status);
+    }
+    (void)astra_progress(ASTRA_SUPERVISOR_STAGE_BLOCK_VERIFIED);
 
     park();
     return (int)ASTRA_SUPERVISOR_STATUS_OK;

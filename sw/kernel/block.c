@@ -450,6 +450,52 @@ KernelBlockStatus kernel_block_revoke_owner(uint32_t owner,
     return KERNEL_BLOCK_OK;
 }
 
+KernelBlockStatus kernel_block_terminate_owner(uint32_t owner,
+                                               uint16_t status,
+                                               uint32_t *terminated)
+{
+    uint32_t ended = 0u;
+
+    if (!initialized || owner == 0u)
+        return KERNEL_BLOCK_INVALID_ARGUMENT;
+    for (uint32_t index = 0u; index < KERNEL_BLOCK_MAX_REQUESTS; ++index) {
+        KernelBlockSlot *slot = &slots[index];
+
+        if (slot->owner != owner ||
+            slot->state != KERNEL_BLOCK_REQUEST_ACTIVE)
+            continue;
+        if (slot->has_dma != 0u &&
+            kernel_dma_abort(&slot->dma_token) != KERNEL_DMA_OK)
+            return KERNEL_BLOCK_CORRUPT;
+        slot->result.status = status;
+        slot->result.sectors = 0u;
+        slot->result.detail = 0u;
+        slot->result.media_generation = slot->expected_media_generation;
+        slot->result.host_generation = slot->expected_host_generation;
+        slot->state = KERNEL_BLOCK_REQUEST_COMPLETED;
+        ++ended;
+    }
+    if (terminated != NULL)
+        *terminated = ended;
+    return KERNEL_BLOCK_OK;
+}
+
+uint32_t kernel_block_owner_requests(uint32_t owner)
+{
+    uint32_t count = 0u;
+
+    if (!initialized || owner == 0u)
+        return 0u;
+    for (uint32_t index = 0u; index < KERNEL_BLOCK_MAX_REQUESTS; ++index) {
+        const KernelBlockSlot *slot = &slots[index];
+
+        if (slot->owner == owner &&
+            slot->state != KERNEL_BLOCK_REQUEST_FREE)
+            ++count;
+    }
+    return count;
+}
+
 bool kernel_block_stats(KernelBlockStats *result)
 {
     if (!initialized || result == NULL)

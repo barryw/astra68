@@ -226,9 +226,11 @@ The image ends at `0x02071000` and leaves exactly 126,976 bytes in the fixed
 K6 reserves 2,048 BSS bytes for `16 x 16`
 intrusive wait registrations at eight bytes each. Registrations are partitioned
 by thread slot and require no allocator metadata. The measured MC68030 layouts
-are 172 bytes per `KernelThread` and 472 bytes per `KernelProcess`; compile-time
+are 172 bytes per `KernelThread` and 596 bytes per `KernelProcess`; compile-time
 assertions reject silent movement. The 16 thread records consume 2,752 bytes
-and four process records consume 1,888 bytes. The shared synchronization pool
+and four process records consume 2,384 bytes. The process record grew from
+472 to 596 bytes across the loader (four bytes recording the executable span)
+and block admission (four transfer-memory records and their page count). The shared synchronization pool
 remains 32 x 36 bytes; timers add fixed deadline, heap, and position arrays
 rather than a second object pool. No wait, timer, death, cancellation, close,
 or expiry path allocates memory. The structural sizes are compile-time asserted.

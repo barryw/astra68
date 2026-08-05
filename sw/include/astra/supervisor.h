@@ -7,10 +7,12 @@
  * The kernel cannot see inside a user process, so the supervisor reports what
  * it checked through the only channel every process has: its exit status. The
  * tag proves the code ran at all — a process that never reached user mode
- * exits zero — and the low byte names the check that failed.
+ * exits zero — and the low halfword names the checks that failed. The
+ * halfword is deliberate: a byte ran out of room once the block checks
+ * arrived, and overflowing bits corrupted the tag rather than the result.
  */
-#define ASTRA_SUPERVISOR_STATUS_TAG   0x53565200u /* "SVR" + result byte */
-#define ASTRA_SUPERVISOR_STATUS_MASK  0xffffff00u
+#define ASTRA_SUPERVISOR_STATUS_TAG   0x53560000u /* "SV" + result halfword */
+#define ASTRA_SUPERVISOR_STATUS_MASK  0xffff0000u
 #define ASTRA_SUPERVISOR_STATUS_OK    ASTRA_SUPERVISOR_STATUS_TAG
 
 /*
@@ -32,5 +34,8 @@
 #define ASTRA_SUPERVISOR_FAIL_PROCESS_INFO (1u << 5)
 #define ASTRA_SUPERVISOR_FAIL_INFO_CONTENT (1u << 6)
 #define ASTRA_SUPERVISOR_FAIL_BLOCK_LEASE  (1u << 7)
+#define ASTRA_SUPERVISOR_FAIL_BLOCK_GEOMETRY (1u << 8)
+#define ASTRA_SUPERVISOR_FAIL_BLOCK_MEMORY (1u << 9)
+#define ASTRA_SUPERVISOR_FAIL_BLOCK_IO     (1u << 10)
 
 #endif

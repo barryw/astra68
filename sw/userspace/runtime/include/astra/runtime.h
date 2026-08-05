@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <astra/block.h>
 #include <astra/process.h>
 #include <astra/syscall.h>
 
@@ -31,6 +32,11 @@ uint32_t astra_process_info(uint32_t handle, AstraProcessInfo *info);
 uint32_t astra_progress(uint32_t value);
 uint32_t astra_device_query(uint32_t handle, AstraDeviceInfo *info);
 uint32_t astra_dma_create(uint32_t byte_size, AstraDmaBufferInfo *info);
+uint32_t astra_block_query(uint32_t device, AstraBlockGeometry *geometry);
+uint32_t astra_block_submit(uint32_t device, const AstraBlockRequest *request,
+                            uint32_t *block_request);
+uint32_t astra_block_collect(uint32_t device, uint32_t block_request,
+                             AstraBlockCompletion *completion);
 void astra_process_exit(uint32_t status) __attribute__((noreturn));
 void astra_thread_exit(uint32_t status) __attribute__((noreturn));
 

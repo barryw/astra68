@@ -19,6 +19,7 @@
 #include "worker.h"
 
 #include <astra/block.h>
+#include <vesta.h>
 #include <astra/syscall.h>
 #include <astra/input.h>
 #include <astra/process.h>
@@ -479,15 +480,45 @@ uint32_t kernel_cache_read_control(void)
     return 0u;
 }
 
+/*
+ * A block controller the admission tests can actually drive: it accepts one
+ * request at a time, records what it was asked to do, and completes when the
+ * test says so. Without it the syscall layer could only be tested for its
+ * rejections, which is the half that does not carry data.
+ */
+static bool block_device_present = true;
+static uint32_t block_submit_error;
+static uint32_t block_submitted_id;
+static uint32_t block_submitted_buffer;
+static uint8_t block_submitted_operation;
+static uint16_t block_submitted_sectors;
+static uint64_t block_submitted_lba;
+static uint32_t block_submit_calls;
+static bool block_completion_ready;
+static KernelPlatformBlockCompletion block_completion;
+static uint32_t block_media_generation = 7u;
+static uint32_t block_host_generation = 3u;
+static uint32_t block_state_flags =
+    BLOCK_STATE_LINK_UP | BLOCK_STATE_MEDIA_PRESENT | BLOCK_STATE_WRITE_ENABLE;
+static uint32_t block_ack_calls;
+
 bool kernel_platform_block_present(void)
 {
-    return false;
+    return block_device_present;
 }
 
 bool kernel_platform_block_state(KernelPlatformBlockState *state)
 {
-    (void)state;
-    return false;
+    if (state == NULL || !block_device_present)
+        return false;
+    memset(state, 0, sizeof(*state));
+    state->capabilities = BLOCK_CAP_READ | BLOCK_CAP_WRITE | BLOCK_CAP_FLUSH;
+    state->state_flags = block_state_flags;
+    state->media_generation = block_media_generation;
+    state->host_generation = block_host_generation;
+    state->media_sectors = 2048u;
+    state->max_sectors = 16u;
+    return true;
 }
 
 uint32_t kernel_platform_block_submit(uint32_t id, uint8_t operation,
@@ -495,24 +526,79 @@ uint32_t kernel_platform_block_submit(uint32_t id, uint8_t operation,
                                       uint16_t sectors,
                                       uint32_t physical_buffer)
 {
-    (void)id;
-    (void)operation;
     (void)flags;
-    (void)lba;
-    (void)sectors;
-    (void)physical_buffer;
-    return 1u;
+    ++block_submit_calls;
+    if (block_submit_error != 0u)
+        return block_submit_error;
+    block_submitted_id = id;
+    block_submitted_operation = operation;
+    block_submitted_lba = lba;
+    block_submitted_sectors = sectors;
+    block_submitted_buffer = physical_buffer;
+    return 0u;
+}
+
+/* Makes the pending request complete on the next service pass. */
+static void block_complete_request(uint16_t status, uint16_t sectors)
+{
+    memset(&block_completion, 0, sizeof(block_completion));
+    block_completion.id = block_submitted_id;
+    block_completion.status = status;
+    block_completion.sectors = sectors;
+    block_completion.media_generation = block_media_generation;
+    block_completion.host_generation = block_host_generation;
+    block_completion_ready = true;
 }
 
 bool kernel_platform_block_pop_completion(
     KernelPlatformBlockCompletion *completion)
 {
-    (void)completion;
-    return false;
+    if (completion == NULL || !block_completion_ready)
+        return false;
+    *completion = block_completion;
+    block_completion_ready = false;
+    return true;
 }
 
 void kernel_platform_block_ack_state(void)
 {
+    ++block_ack_calls;
+}
+
+static bool test_block_quiesce(uint32_t device_id, uint32_t generation,
+                               void *context)
+{
+    (void)generation;
+    (void)context;
+    return device_id == ASTRA_DEVICE_ID_BLOCK0;
+}
+
+static bool test_block_reset(uint32_t device_id, uint32_t generation,
+                             void *context)
+{
+    (void)generation;
+    (void)context;
+    ++block_ack_calls;
+    return device_id == ASTRA_DEVICE_ID_BLOCK0;
+}
+
+static void reset_block_device(void)
+{
+    block_device_present = true;
+    block_submit_error = 0u;
+    block_submitted_id = 0u;
+    block_submitted_buffer = 0u;
+    block_submitted_operation = 0u;
+    block_submitted_sectors = 0u;
+    block_submitted_lba = 0u;
+    block_submit_calls = 0u;
+    block_completion_ready = false;
+    block_media_generation = 7u;
+    block_host_generation = 3u;
+    block_state_flags = BLOCK_STATE_LINK_UP | BLOCK_STATE_MEDIA_PRESENT |
+                        BLOCK_STATE_WRITE_ENABLE;
+    block_ack_calls = 0u;
+    memset(&block_completion, 0, sizeof(block_completion));
 }
 
 void kernel_process_milestone_reached(const KernelSchedulerStats *stats)
@@ -688,6 +774,7 @@ static void initialize_test(void)
                                              sizeof(physical_memory));
     assert(kernel_vm_init() == KERNEL_VM_OK);
     assert(kernel_vm_enable() == KERNEL_VM_OK);
+    reset_block_device();
     kernel_dma_init();
     kernel_block_init();
     assert(kernel_device_init());
@@ -715,6 +802,19 @@ static void initialize_test(void)
         };
 
         assert(kernel_device_register(&input) == KERNEL_DEVICE_OK);
+    }
+    {
+        const KernelDeviceDefinition block = {
+            .quiesce = test_block_quiesce,
+            .reset = test_block_reset,
+            .context = NULL,
+            .device_id = ASTRA_DEVICE_ID_BLOCK0,
+            .class_id = ASTRA_DEVICE_CLASS_BLOCK,
+            .capabilities = ASTRA_BLOCK_CAP_READ | ASTRA_BLOCK_CAP_WRITE |
+                            ASTRA_BLOCK_CAP_FLUSH,
+        };
+
+        assert(kernel_device_register(&block) == KERNEL_DEVICE_OK);
     }
     assert(kernel_device_seal_registry());
     device_quiesce_count = 0u;
@@ -5308,6 +5408,371 @@ static void test_executable_loading(void)
  * submit anything, so the ceilings and the release path matter more than the
  * happy case: a leaked pinned page is a page the system never gets back.
  */
+/*
+ * The admission path a filesystem will sit on: geometry, a submitted read
+ * against process-owned transfer memory, and a collected completion. Every
+ * rejection here is one a filesystem would otherwise discover as corruption.
+ */
+static void test_block_admission(void)
+{
+    const uint32_t user_info = KERNEL_PROCESS_STACK_TOP - 64u;
+    const uint32_t user_request = KERNEL_PROCESS_STACK_TOP - 128u;
+    const uint32_t user_out = KERNEL_PROCESS_STACK_TOP - 256u;
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
+    KernelProcessBootstrapCapability capabilities[1];
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    AstraDmaBufferInfo buffer;
+    AstraBlockGeometry geometry;
+    AstraBlockRequest request;
+    AstraBlockCompletion completion;
+    uint32_t process_id = 0u;
+    uint32_t lease_handle;
+    uint32_t block_request;
+
+    loader_build_image();
+    initialize_test();
+    memset(capabilities, 0, sizeof(capabilities));
+    capabilities[0].name = ASTRA_CAPABILITY_BLOCK_DEVICE;
+    capabilities[0].kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+    capabilities[0].device_id = ASTRA_DEVICE_ID_BLOCK0;
+    capabilities[0].rights = KERNEL_DEVICE_RIGHTS;
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            capabilities, 1u, &process_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+
+    /* The lease is the third handle: self process, self thread, then it. */
+    lease_handle = 0u;
+    {
+        AstraStartupCapability table[4];
+
+        assert(kernel_user_copy_from_asm(
+                   table, KERNEL_VM_USER_MIN + ASTRA_STARTUP_INFO_SIZE,
+                   sizeof(table)) == KERNEL_USER_COPY_OK);
+        for (uint32_t index = 0u; index < 4u; ++index) {
+            if (table[index].name == ASTRA_CAPABILITY_BLOCK_DEVICE)
+                lease_handle = table[index].handle;
+        }
+    }
+    assert(lease_handle != 0u);
+
+    /* Geometry is what the transport reports, not what the caller assumes. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_BLOCK_QUERY;
+    registers[1] = lease_handle;
+    registers[2] = user_out;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&geometry, user_out, sizeof(geometry)) ==
+           KERNEL_USER_COPY_OK);
+    assert(geometry.size == ASTRA_BLOCK_GEOMETRY_SIZE);
+    assert(geometry.sector_bytes == ASTRA_BLOCK_SECTOR_BYTES);
+    assert(geometry.sector_count == 2048u);
+    assert(geometry.max_transfer_sectors == 16u);
+    assert((geometry.capabilities & ASTRA_BLOCK_CAP_READ) != 0u);
+
+    /* Transfer memory, then one read of the first sector. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_DMA_CREATE;
+    registers[1] = KERNEL_PAGE_SIZE;
+    registers[2] = user_info;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&buffer, user_info, sizeof(buffer)) ==
+           KERNEL_USER_COPY_OK);
+
+    memset(&request, 0, sizeof(request));
+    request.size = ASTRA_BLOCK_REQUEST_SIZE;
+    request.operation = ASTRA_BLOCK_OP_READ;
+    request.buffer = buffer.handle;
+    request.sectors = 1u;
+    request.lba = 0u;
+    assert(kernel_user_copy_to_asm(user_request, &request,
+                                   sizeof(request)) == KERNEL_USER_COPY_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_BLOCK_SUBMIT;
+    registers[1] = lease_handle;
+    registers[2] = user_request;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    block_request = next->data[1];
+    assert(block_request != 0u);
+    assert(block_submit_calls == 1u);
+    assert(block_submitted_operation == BLOCK_OP_READ);
+    assert(block_submitted_sectors == 1u);
+    /* The device is handed a physical address the caller never saw. */
+    assert(block_submitted_buffer != 0u);
+    assert(block_submitted_buffer != buffer.virtual_base);
+
+    /* Until the device answers, collection is a would-block, not an error. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_BLOCK_COLLECT;
+    registers[1] = lease_handle;
+    registers[2] = user_out;
+    registers[3] = block_request;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_WOULD_BLOCK);
+
+    block_complete_request(0u, 1u);
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&completion, user_out,
+                                     sizeof(completion)) ==
+           KERNEL_USER_COPY_OK);
+    assert(completion.size == ASTRA_BLOCK_COMPLETION_SIZE);
+    assert(completion.request == block_request);
+    assert(completion.status == ASTRA_BLOCK_COMPLETION_OK);
+    assert(completion.sectors == 1u);
+
+    /* Read bytes commit exactly once: the same request cannot be collected
+     * twice. */
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+}
+
+/*
+ * Fault injection across the admission surface. STORAGE_AND_VFS.md requires
+ * this before a filesystem is allowed to depend on the API, and the reason is
+ * concrete: every rejection below is a case where a filesystem would otherwise
+ * read someone else's bytes, wait forever, or believe a transfer happened.
+ */
+static void test_block_admission_faults(void)
+{
+    const uint32_t user_info = KERNEL_PROCESS_STACK_TOP - 64u;
+    const uint32_t user_request = KERNEL_PROCESS_STACK_TOP - 128u;
+    const uint32_t user_out = KERNEL_PROCESS_STACK_TOP - 256u;
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
+    KernelProcessBootstrapCapability capabilities[1];
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    AstraDmaBufferInfo buffer;
+    AstraBlockRequest request;
+    AstraBlockCompletion completion;
+    uint32_t process_id = 0u;
+    uint32_t lease_handle = 0u;
+    uint32_t requests[ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE];
+    uint32_t index;
+
+    loader_build_image();
+    initialize_test();
+    memset(capabilities, 0, sizeof(capabilities));
+    capabilities[0].name = ASTRA_CAPABILITY_BLOCK_DEVICE;
+    capabilities[0].kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+    capabilities[0].device_id = ASTRA_DEVICE_ID_BLOCK0;
+    capabilities[0].rights = KERNEL_DEVICE_RIGHTS;
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            capabilities, 1u, &process_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    {
+        AstraStartupCapability table[4];
+
+        assert(kernel_user_copy_from_asm(
+                   table, KERNEL_VM_USER_MIN + ASTRA_STARTUP_INFO_SIZE,
+                   sizeof(table)) == KERNEL_USER_COPY_OK);
+        for (index = 0u; index < 4u; ++index) {
+            if (table[index].name == ASTRA_CAPABILITY_BLOCK_DEVICE)
+                lease_handle = table[index].handle;
+        }
+    }
+    assert(lease_handle != 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_DMA_CREATE;
+    registers[1] = KERNEL_PAGE_SIZE;
+    registers[2] = user_info;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&buffer, user_info, sizeof(buffer)) ==
+           KERNEL_USER_COPY_OK);
+
+    memset(&request, 0, sizeof(request));
+    request.size = ASTRA_BLOCK_REQUEST_SIZE;
+    request.operation = ASTRA_BLOCK_OP_READ;
+    request.buffer = buffer.handle;
+    request.sectors = 1u;
+    request.lba = 0u;
+
+#define SUBMIT_EXPECT(expected)                                              \
+    do {                                                                     \
+        assert(kernel_user_copy_to_asm(user_request, &request,               \
+                                       sizeof(request)) ==                   \
+               KERNEL_USER_COPY_OK);                                         \
+        memset(registers, 0, sizeof(registers));                             \
+        registers[0] = ASTRA_SYSCALL_BLOCK_SUBMIT;                           \
+        registers[1] = lease_handle;                                         \
+        registers[2] = user_request;                                         \
+        assert(kernel_process_on_syscall(registers, user_stack, frame,       \
+                                         &next) == KERNEL_PROCESS_OK);       \
+        assert(next->data[0] == (expected));                                 \
+    } while (0)
+
+    /* A request the caller did not fill in as this ABI describes. */
+    request.size = ASTRA_BLOCK_REQUEST_SIZE - 4u;
+    SUBMIT_EXPECT(ASTRA_SYSCALL_INVALID_ARGUMENT);
+    request.size = ASTRA_BLOCK_REQUEST_SIZE;
+    request.reserved = 1u;
+    SUBMIT_EXPECT(ASTRA_SYSCALL_INVALID_ARGUMENT);
+    request.reserved = 0u;
+
+    /* Transfer memory the caller does not own, or is not memory at all. */
+    request.buffer = lease_handle;
+    SUBMIT_EXPECT(ASTRA_SYSCALL_INVALID_HANDLE);
+    request.buffer = buffer.handle + 0x1000u;
+    SUBMIT_EXPECT(ASTRA_SYSCALL_INVALID_HANDLE);
+    request.buffer = buffer.handle;
+
+    /* A transfer that would run past the buffer it names. */
+    request.sectors = (KERNEL_PAGE_SIZE / ASTRA_BLOCK_SECTOR_BYTES) + 1u;
+    SUBMIT_EXPECT(ASTRA_SYSCALL_INVALID_ARGUMENT);
+    request.sectors = 1u;
+    request.buffer_offset = KERNEL_PAGE_SIZE;
+    SUBMIT_EXPECT(ASTRA_SYSCALL_INVALID_ARGUMENT);
+    request.buffer_offset = 0u;
+
+    /* Beyond the media, and beyond one transfer. */
+    request.lba = 2048u;
+    SUBMIT_EXPECT(ASTRA_SYSCALL_INVALID_ARGUMENT);
+    request.lba = 0u;
+    request.sectors = 17u;
+    SUBMIT_EXPECT(ASTRA_SYSCALL_INVALID_ARGUMENT);
+    request.sectors = 1u;
+
+    /* Write protection and absent media are the device's answer, not ours. */
+    block_state_flags &= ~(uint32_t)BLOCK_STATE_WRITE_ENABLE;
+    request.operation = ASTRA_BLOCK_OP_WRITE;
+    SUBMIT_EXPECT(ASTRA_SYSCALL_ACCESS_DENIED);
+    request.operation = ASTRA_BLOCK_OP_READ;
+    block_state_flags |= BLOCK_STATE_WRITE_ENABLE;
+
+    block_state_flags &= ~(uint32_t)BLOCK_STATE_MEDIA_PRESENT;
+    SUBMIT_EXPECT(ASTRA_SYSCALL_PEER_DEAD);
+    block_state_flags |= BLOCK_STATE_MEDIA_PRESENT;
+
+    /* A transport that refuses the request reports, and nothing is queued. */
+    block_submit_error = BLOCK_ERROR_BAD_ID;
+    SUBMIT_EXPECT(ASTRA_SYSCALL_IO_ERROR);
+    block_submit_error = 0u;
+
+    /*
+     * One buffer carries one transfer at a time, so filling the request queue
+     * takes a buffer each. That is the engine refusing to let two transfers
+     * share memory it cannot police, and it is worth pinning down here.
+     */
+    request.buffer = buffer.handle;
+    SUBMIT_EXPECT(ASTRA_SYSCALL_OK);
+    requests[0] = next->data[1];
+    SUBMIT_EXPECT(ASTRA_SYSCALL_RESOURCE_LIMIT);
+
+    for (index = 1u; index < ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE; ++index) {
+        AstraDmaBufferInfo extra;
+
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_DMA_CREATE;
+        registers[1] = KERNEL_PAGE_SIZE;
+        registers[2] = user_info;
+        assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        assert(kernel_user_copy_from_asm(&extra, user_info, sizeof(extra)) ==
+               KERNEL_USER_COPY_OK);
+        request.buffer = extra.handle;
+        SUBMIT_EXPECT(ASTRA_SYSCALL_OK);
+        requests[index] = next->data[1];
+    }
+    /* The queue is full: the next request is refused, not queued. */
+    request.buffer = buffer.handle;
+    SUBMIT_EXPECT(ASTRA_SYSCALL_RESOURCE_LIMIT);
+
+    /* A device error is reported as one, with the transport detail intact. */
+    block_submitted_id = requests[0];
+    block_complete_request(BLOCK_ERROR_LBA_RANGE, 0u);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_BLOCK_COLLECT;
+    registers[1] = lease_handle;
+    registers[2] = user_out;
+    registers[3] = requests[0];
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&completion, user_out,
+                                     sizeof(completion)) ==
+           KERNEL_USER_COPY_OK);
+    assert(completion.status == ASTRA_BLOCK_COMPLETION_DEVICE_ERROR);
+
+    /* Media that changed under a request is distinct from a device error. */
+    block_submitted_id = requests[1];
+    block_media_generation += 1u;
+    block_complete_request(0u, 1u);
+    registers[3] = requests[1];
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_BLOCK_COLLECT;
+    registers[1] = lease_handle;
+    registers[2] = user_out;
+    registers[3] = requests[1];
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&completion, user_out,
+                                     sizeof(completion)) ==
+           KERNEL_USER_COPY_OK);
+    assert(completion.status == ASTRA_BLOCK_COMPLETION_MEDIA_CHANGED);
+
+    /* A reset ends what is in flight, and the service can still be told. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_DEVICE_RESET;
+    registers[1] = lease_handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_BLOCK_COLLECT;
+    registers[1] = lease_handle;
+    registers[2] = user_out;
+    registers[3] = requests[2];
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&completion, user_out,
+                                     sizeof(completion)) ==
+           KERNEL_USER_COPY_OK);
+    assert(completion.status == ASTRA_BLOCK_COMPLETION_RESET);
+    assert(completion.sectors == 0u);
+
+    /* A request that never existed is not a completion. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_BLOCK_COLLECT;
+    registers[1] = lease_handle;
+    registers[2] = user_out;
+    registers[3] = 0xdeadbeefu;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+
+    /* Geometry needs a block lease, not any device handle. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_BLOCK_QUERY;
+    registers[1] = 0xbadf00du;
+    registers[2] = user_out;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+
+#undef SUBMIT_EXPECT
+}
+
 static void test_dma_transfer_memory(void)
 {
     const uint32_t user_info = KERNEL_PROCESS_STACK_TOP - 64u;
@@ -5784,6 +6249,8 @@ int main(void)
     test_area_and_ring_endpoint_transfer_over_port();
     test_executable_loading();
     test_dma_transfer_memory();
+    test_block_admission();
+    test_block_admission_faults();
     test_bootstrap_capabilities();
     test_initial_image_exit_is_reported();
     test_executable_rejections_do_not_allocate();

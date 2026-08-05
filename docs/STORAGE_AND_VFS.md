@@ -75,6 +75,32 @@ The userspace admission work must provide:
 The API must be fault-injected before use by a filesystem. No temporary polling
 syscall or unrestricted physical-address argument is acceptable.
 
+**IMPLEMENTED** at syscall ABI `0x0001000a`, and fault-injected before any
+filesystem depends on it:
+
+| # | Where |
+|---|---|
+| 1 | `BLOCK_QUERY` renders `AstraBlockGeometry` from the transport: sector size and count, maximum transfer, capabilities, state flags, and both generations |
+| 2 | `BLOCK_SUBMIT` takes an `AstraBlockRequest` naming a transfer-memory **handle** and an offset; the kernel resolves it to pages the caller never sees |
+| 3 | The engine's request handles are generation-tagged, and the completion IRQ endpoint is granted to the same service at launch |
+| 4 | `BLOCK_COLLECT` drains the transport, releases the request on collection so bytes commit exactly once, and reports OK, device error, reset, and media-changed distinctly |
+| 5 | Process teardown already revoked in-flight requests and DMA; closing a transfer handle unmaps and returns its pages, and the engine defers reclaim while a transfer is in flight |
+| 6 | 4 requests, 4 buffers, and 16 pinned pages per service, each a rejection rather than a stall; one buffer carries one transfer at a time |
+
+Collection distinguishes a device error from a reset from a media change,
+because a filesystem must treat them differently: a device error is about one
+request, a reset ends everything in flight, and a media change invalidates
+cached state. A reset the service asks for terminates its in-flight requests
+with a status it can still collect, so a reset cannot leave it waiting for a
+completion the device will never send.
+
+Two things are deliberately not there yet. The service polls `BLOCK_COLLECT`
+rather than waiting on the completion endpoint it holds — the endpoint is the
+right thing to wait on and the service loop will, but a boot check that must
+terminate either way does not need it. And a per-request timeout is not
+enforced by the kernel; the ceilings bound resource use, but a device that
+never answers currently leaves a request outstanding until reset.
+
 ## Arty bring-up backend
 
 The initial Arty backend is a preallocated image under `/data/astra/storage`,

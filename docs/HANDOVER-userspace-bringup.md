@@ -32,7 +32,9 @@ Working and gated:
 | Executable loader | `kernel_process_create_executable()` in `sw/kernel/process.c` | transactional; allocation-failure sweep restores exact baseline |
 | Process query ABI | syscall 37 `PROCESS_INFO` | capability-gated, tested end to end |
 | Initial user image path | boot ABI 0.3, `sw/boot/user_blob.S`, `start_initial_user_image()` | firmware embeds, decodes, CRC-verifies, and describes one image; kernel loads and launches it |
-| ROM payload compression | `sw/boot/pack_payload.py`, `decode_payload()`, `sw/common/crc32.c` | kernel and user image ship LZ4; ROM 72.1% used, 73,080 B free |
+| ROM payload compression | `sw/boot/pack_payload.py`, `decode_payload()`, `sw/common/crc32.c` | kernel and user image ship LZ4; ROM 72.0% used, 73,480 B free |
+| Transfer memory | `ASTRA_SYSCALL_DMA_CREATE`, `create_dma_buffer()` | owner-charged, contiguous, cache-inhibited, 4 buffers / 16 pages per service |
+| Block admission | `BLOCK_QUERY`/`BLOCK_SUBMIT`/`BLOCK_COLLECT` at ABI `0x0001000a` | lease-gated, fault-injected, round-trip proven at every boot |
 | First service | `sw/userspace/supervisor` | 1,306 B MC68030 text; verifies startup block, ABI, and its own `PROCESS_INFO` from user mode, then exits with a tagged status |
 
 Gate status at handover: 30 kernel suites pass, kernel cross-builds, 6 userspace
@@ -146,8 +148,8 @@ every later piece:
 | 0 | Observability contract | **done** |
 | 1 | ELF acceptance, loader, startup block, capability transfer, launch, process query ABI | **done** |
 | 1b | Firmware-supplied initial image and the first service that runs from it | **done** |
-| 2 | Block admission syscalls | next |
-| 3 | Block service + lease-backed `AstraBlockBackend` | |
+| 2 | Block admission syscalls | **done** |
+| 3 | Block service + lease-backed `AstraBlockBackend` | next |
 | 4 | lwext4 vendor + port layer | |
 | 5 | VFS service | |
 | 6 | Terminal service + VFS client Kit + shell builtins | |
@@ -161,34 +163,41 @@ Profile everything so performance is measurable and regressions are visible.
 
 ## 6. Start here next session
 
-Phase 2: the six block admission requirements already specified in
-`docs/STORAGE_AND_VFS.md`. The kernel block engine works, is exercisable in
-emulation, and there is now a real process to admit it to.
+Phase 3: the block service proper. The kernel side is done — a service already
+holds the lease, owns transfer memory, and moves sectors. What is missing is
+the service shape around it, and `sw/userspace/storage` already has the
+synchronous facade and a memory backend to plug into.
 
-Facts from the bring-up slice that constrain what comes next:
+Concretely:
 
-- **ROM is 72.1% used: 189,064 of 262,144, with 73,080 free.** Both loadable
-  images are LZ4 in ROM and CRC-32 verified after decode. The initial image is
-  separately capped at 48 KiB decompressed (`ASTRA_USER_IMAGE_MAX_SIZE`); it is
-  6,468 bytes today, 1,913 compressed. `docs/MEMORY_MAP.md` holds the budget
-  and the rule for what may live in ROM at all.
-- **The K1 milestone never completes under QEMU**, with or without media, on
-  this tree and on the tree before it. It waits on device qualification the
-  emulator does not drive. Do not use milestone output as an emulation gate;
-  the initial-image report is printed from the exit path precisely so it does
-  not depend on that.
-- **The soak build excludes the initial image.** `ASTRA_KERNEL_SOAK_SELFTEST`
-  compares an exact free-frame baseline captured before user mode, and the
-  image releases frames when it exits.
-- **`KERNEL_PROCESS_MAX` is 4** and boot now uses three: survivor, offender,
-  and the initial image. Anything that needs a fourth process at boot has to
-  raise that limit or retire the K1 qualification pair.
-- The supervisor's exit status is tagged (`ASTRA_SUPERVISOR_STATUS_TAG`) so a
-  process that never reached user mode — which exits zero — cannot be read as
-  success. Keep that property when the service stops exiting and starts
-  staying resident: the kernel will need a different liveness signal then.
+1. **Wait on the completion endpoint.** The service holds the storage IRQ
+   endpoint and currently polls `BLOCK_COLLECT` instead. `IRQ_ARM`/`IRQ_READ`/
+   `IRQ_ACK` are the calls; this is the one deliberate shortcut in the
+   admission path and the first thing phase 3 should remove.
+2. **Back `AstraBlockBackend` with the lease** so `sw/userspace/storage`'s
+   facade runs on real hardware rather than the memory image, and its metrics
+   publish through the registry.
+3. **Per-request timeouts.** The ceilings bound resources; nothing bounds a
+   device that never answers. A request needs a deadline and a path to reset.
 
----
+Facts from phase 2 that constrain what comes next:
+
+- **One buffer carries one transfer at a time.** Filling the 4-deep request
+  queue takes four buffers. That is the engine refusing to let two transfers
+  share memory it cannot police, not a limit to work around.
+- **Device rights are not generic rights.** A lease carries `QUERY`,
+  `TRANSFER`, and `ADMINISTER` (bits 0, 5, 6). Reading geometry is a query;
+  moving data is a transfer. Using `ASTRA_RIGHT_WRITE` for I/O silently fails
+  as `ACCESS_DENIED`.
+- **`KERNEL_PROCESS_MAX` is 4** and the default boot now uses one. K1 costs
+  two more when enabled.
+- **Userspace Makefiles now track header dependencies.** They did not, and a
+  stale object compiled against an older ABI constant boots and then fails its
+  startup check with exit 127 — which looks exactly like a kernel bug. If you
+  see that, suspect a stale object first.
+- **The supervisor's exit status is a tagged halfword**, not a byte. The byte
+  ran out of room when the block checks arrived and overflowing bits corrupted
+  the tag itself.
 
 ## 7. Known problems not caused by this work
 

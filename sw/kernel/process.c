@@ -1076,6 +1076,178 @@ static KernelProcessStatus create_dma_buffer(KernelProcess *process,
     return KERNEL_PROCESS_OK;
 }
 
+/*
+ * The block admission calls, once the lease has proved authority. The engine
+ * owns every validation that depends on the device: presence, media, write
+ * protection, capability, transfer ceiling, and range. This layer owns what
+ * depends on the caller: which buffer it may name, how many requests it may
+ * hold, and how a result is rendered back to it.
+ */
+static uint32_t block_geometry(AstraBlockGeometry *geometry)
+{
+    KernelPlatformBlockState state;
+
+    kernel_bytes_clear(geometry, sizeof(*geometry));
+    if (!kernel_platform_block_state(&state))
+        return ASTRA_SYSCALL_IO_ERROR;
+    geometry->size = ASTRA_BLOCK_GEOMETRY_SIZE;
+    geometry->sector_bytes = ASTRA_BLOCK_SECTOR_BYTES;
+    geometry->max_transfer_sectors = state.max_sectors;
+    geometry->capabilities = state.capabilities;
+    geometry->state_flags = state.state_flags;
+    geometry->media_generation = state.media_generation;
+    geometry->host_generation = state.host_generation;
+    geometry->sector_count = state.media_sectors;
+    return ASTRA_SYSCALL_OK;
+}
+
+static uint32_t block_completion_status(uint16_t engine_status)
+{
+    if (engine_status == 0u)
+        return ASTRA_BLOCK_COMPLETION_OK;
+    if (engine_status == KERNEL_BLOCK_COMPLETION_MEDIA_CHANGED)
+        return ASTRA_BLOCK_COMPLETION_MEDIA_CHANGED;
+    if (engine_status == KERNEL_BLOCK_COMPLETION_RESET)
+        return ASTRA_BLOCK_COMPLETION_RESET;
+    if (engine_status == KERNEL_BLOCK_COMPLETION_CANCELLED)
+        return ASTRA_BLOCK_COMPLETION_CANCELLED;
+    return ASTRA_BLOCK_COMPLETION_DEVICE_ERROR;
+}
+
+static uint32_t block_submit_status(KernelBlockStatus status)
+{
+    switch (status) {
+    case KERNEL_BLOCK_OK:
+        return ASTRA_SYSCALL_OK;
+    case KERNEL_BLOCK_INVALID_ARGUMENT:
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    case KERNEL_BLOCK_INVALID_HANDLE:
+    case KERNEL_BLOCK_NOT_OWNED:
+        return ASTRA_SYSCALL_INVALID_HANDLE;
+    case KERNEL_BLOCK_NOT_PRESENT:
+    case KERNEL_BLOCK_NO_MEDIA:
+        return ASTRA_SYSCALL_PEER_DEAD;
+    case KERNEL_BLOCK_WRITE_PROTECTED:
+        return ASTRA_SYSCALL_ACCESS_DENIED;
+    case KERNEL_BLOCK_OUT_OF_RANGE:
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    case KERNEL_BLOCK_UNSUPPORTED:
+        return ASTRA_SYSCALL_BAD_SYSCALL;
+    case KERNEL_BLOCK_QUEUE_FULL:
+    case KERNEL_BLOCK_BUSY:
+        return ASTRA_SYSCALL_RESOURCE_LIMIT;
+    default:
+        return ASTRA_SYSCALL_IO_ERROR;
+    }
+}
+
+static uint32_t block_syscall(KernelProcess *process, KernelThread *thread,
+                              uint32_t syscall)
+{
+    uint32_t user_address = thread->context.data[2];
+    int copy_status;
+
+    if ((user_address & (sizeof(uint32_t) - 1u)) != 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+
+    if (syscall == ASTRA_SYSCALL_BLOCK_QUERY) {
+        AstraBlockGeometry geometry;
+        uint32_t status = block_geometry(&geometry);
+
+        if (status != ASTRA_SYSCALL_OK)
+            return status;
+        copy_status = kernel_copy_to_user(user_address, &geometry,
+                                          sizeof(geometry));
+        return copy_status == KERNEL_USER_COPY_OK ?
+            ASTRA_SYSCALL_OK : ASTRA_SYSCALL_BAD_ADDRESS;
+    }
+
+    if (syscall == ASTRA_SYSCALL_BLOCK_SUBMIT) {
+        AstraBlockRequest request;
+        KernelProcessDmaBuffer *buffer = NULL;
+        KernelBlockHandle handle = KERNEL_BLOCK_HANDLE_INVALID;
+        KernelDmaHandle dma = KERNEL_DMA_HANDLE_INVALID;
+        KernelHandleStatus handle_status;
+        KernelBlockStatus block_status;
+        uint32_t transfer_bytes;
+
+        copy_status = kernel_copy_from_user(&request, user_address,
+                                            sizeof(request));
+        if (copy_status != KERNEL_USER_COPY_OK)
+            return ASTRA_SYSCALL_BAD_ADDRESS;
+        if (request.size != ASTRA_BLOCK_REQUEST_SIZE ||
+            request.reserved != 0u ||
+            request.sectors > UINT16_MAX)
+            return ASTRA_SYSCALL_INVALID_ARGUMENT;
+        if (kernel_block_owner_requests(process->owner) >=
+            ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE)
+            return ASTRA_SYSCALL_RESOURCE_LIMIT;
+
+        if (request.operation != ASTRA_BLOCK_OP_FLUSH) {
+            /*
+             * Transfer memory is named by handle. A service can only reach a
+             * buffer it owns, and the kernel resolves it to physical pages the
+             * caller never sees.
+             */
+            handle_status = kernel_handle_lookup(
+                &process->handles, request.buffer, KERNEL_OBJECT_DMA,
+                ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, (void **)&buffer);
+            if (handle_status != KERNEL_HANDLE_OK || buffer == NULL ||
+                buffer->active == 0u)
+                return ASTRA_SYSCALL_INVALID_HANDLE;
+            transfer_bytes = request.sectors * ASTRA_BLOCK_SECTOR_BYTES;
+            if (transfer_bytes == 0u ||
+                request.buffer_offset > (uint32_t)buffer->page_count *
+                    KERNEL_PAGE_SIZE ||
+                transfer_bytes > ((uint32_t)buffer->page_count *
+                                  KERNEL_PAGE_SIZE) - request.buffer_offset)
+                return ASTRA_SYSCALL_INVALID_ARGUMENT;
+            dma = buffer->dma;
+        }
+
+        block_status = kernel_block_submit(
+            process->owner, (uint8_t)request.operation, request.lba,
+            (uint16_t)request.sectors, dma, request.buffer_offset, &handle);
+        if (block_status != KERNEL_BLOCK_OK)
+            return block_submit_status(block_status);
+        thread->context.data[1] = handle;
+        return ASTRA_SYSCALL_OK;
+    }
+
+    {
+        AstraBlockCompletion completion;
+        KernelBlockResult engine_result;
+        KernelBlockStatus block_status;
+
+        /*
+         * Draining the transport here is what makes collection self
+         * sufficient: a service that waited on its completion endpoint does
+         * not also depend on maintenance having run.
+         */
+        if (kernel_block_service(NULL) != KERNEL_BLOCK_OK)
+            return ASTRA_SYSCALL_IO_ERROR;
+        block_status = kernel_block_collect(thread->context.data[3],
+                                            process->owner, &engine_result);
+        if (block_status == KERNEL_BLOCK_PENDING)
+            return ASTRA_SYSCALL_WOULD_BLOCK;
+        if (block_status != KERNEL_BLOCK_OK)
+            return block_submit_status(block_status);
+
+        kernel_bytes_clear(&completion, sizeof(completion));
+        completion.size = ASTRA_BLOCK_COMPLETION_SIZE;
+        completion.request = thread->context.data[3];
+        completion.status = block_completion_status(engine_result.status);
+        completion.detail = engine_result.detail;
+        completion.sectors = engine_result.sectors;
+        completion.media_generation = engine_result.media_generation;
+        completion.host_generation = engine_result.host_generation;
+        copy_status = kernel_copy_to_user(user_address, &completion,
+                                          sizeof(completion));
+        return copy_status == KERNEL_USER_COPY_OK ?
+            ASTRA_SYSCALL_OK : ASTRA_SYSCALL_BAD_ADDRESS;
+    }
+}
+
 static KernelProcessStatus retire_current(KernelProcessExitReason reason,
                                           uint32_t exit_status,
                                           KernelCpuContext **next_context)
@@ -4031,6 +4203,54 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                                              ASTRA_SYSCALL_OK;
         break;
     }
+    case ASTRA_SYSCALL_BLOCK_QUERY:
+    case ASTRA_SYSCALL_BLOCK_SUBMIT:
+    case ASTRA_SYSCALL_BLOCK_COLLECT: {
+        KernelDeviceLease *lease = NULL;
+        KernelDeviceSnapshot snapshot;
+        KernelHandleStatus handle_status;
+        /*
+         * Reading geometry is a query; moving data is a transfer. These are
+         * the device right names, which is what a lease actually carries.
+         */
+        uint32_t required_rights = syscall == ASTRA_SYSCALL_BLOCK_QUERY ?
+            KERNEL_DEVICE_RIGHT_QUERY : KERNEL_DEVICE_RIGHT_TRANSFER;
+
+        /*
+         * Authority first: every block operation is gated on the lease
+         * handle, never on the process being trusted. The lease also carries
+         * the device identity, so a handle to some other device cannot reach
+         * the block engine.
+         */
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1], KERNEL_OBJECT_DEVICE,
+            required_rights, (void **)&lease);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || lease == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        if (kernel_device_query(lease, &snapshot) != KERNEL_DEVICE_OK) {
+            result = ASTRA_SYSCALL_IO_ERROR;
+            break;
+        }
+        if (snapshot.device_id != ASTRA_DEVICE_ID_BLOCK0) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (snapshot.lease_state != ASTRA_DEVICE_LEASE_ACTIVE) {
+            result = ASTRA_SYSCALL_PEER_DEAD;
+            break;
+        }
+        result = block_syscall(current, thread, syscall);
+        break;
+    }
     case ASTRA_SYSCALL_DMA_CREATE: {
         AstraDmaBufferInfo info;
         uint32_t user_info = thread->context.data[2];
@@ -4187,6 +4407,21 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             if (copy_status != KERNEL_USER_COPY_OK)
                 return KERNEL_PROCESS_CORRUPT;
         } else if (syscall == ASTRA_SYSCALL_DEVICE_RESET) {
+            KernelDeviceSnapshot reset_snapshot;
+
+            /*
+             * A reset the service asked for must not leave it waiting on
+             * completions the device will never send. Ending them first, with
+             * a status the service can still collect, is what makes a reset
+             * recoverable rather than a lost request.
+             */
+            if (kernel_device_query(lease, &reset_snapshot) ==
+                    KERNEL_DEVICE_OK &&
+                reset_snapshot.device_id == ASTRA_DEVICE_ID_BLOCK0 &&
+                kernel_block_terminate_owner(
+                    current->owner, KERNEL_BLOCK_COMPLETION_RESET, NULL) !=
+                    KERNEL_BLOCK_OK)
+                return KERNEL_PROCESS_CORRUPT;
             device_status = kernel_device_reset(lease);
             if (!device_status_to_syscall(device_status, &result))
                 return KERNEL_PROCESS_CORRUPT;

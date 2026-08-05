@@ -43,6 +43,51 @@ astra_dma_create(uint32_t byte_size, AstraDmaBufferInfo *info)
 }
 
 uint32_t
+astra_block_query(uint32_t device, AstraBlockGeometry *geometry)
+{
+    AstraSyscallResult result;
+
+    if (geometry == NULL) {
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    astra_syscall5(ASTRA_SYSCALL_BLOCK_QUERY, device,
+                   (uint32_t)(uintptr_t)geometry, 0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
+astra_block_submit(uint32_t device, const AstraBlockRequest *request,
+                   uint32_t *block_request)
+{
+    AstraSyscallResult result;
+
+    if (request == NULL || block_request == NULL) {
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    astra_syscall5(ASTRA_SYSCALL_BLOCK_SUBMIT, device,
+                   (uint32_t)(uintptr_t)request, 0u, 0u, 0u, &result);
+    if (result.status == ASTRA_SYSCALL_OK) {
+        *block_request = result.value0;
+    }
+    return result.status;
+}
+
+uint32_t
+astra_block_collect(uint32_t device, uint32_t block_request,
+                    AstraBlockCompletion *completion)
+{
+    AstraSyscallResult result;
+
+    if (completion == NULL) {
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    astra_syscall5(ASTRA_SYSCALL_BLOCK_COLLECT, device,
+                   (uint32_t)(uintptr_t)completion, block_request, 0u, 0u,
+                   &result);
+    return result.status;
+}
+
+uint32_t
 astra_process_info(uint32_t handle, AstraProcessInfo *info)
 {
     AstraSyscallResult result;

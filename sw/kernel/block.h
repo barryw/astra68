@@ -8,7 +8,15 @@
 
 #define KERNEL_BLOCK_MAX_REQUESTS 4u
 #define KERNEL_BLOCK_HANDLE_INVALID 0u
+/*
+ * Synthetic completion statuses the engine produces itself. They sit above the
+ * transport's own status values so a device error can never be mistaken for
+ * one, and they exist because a service must be able to tell "the device said
+ * no" from "the device was taken away".
+ */
 #define KERNEL_BLOCK_COMPLETION_MEDIA_CHANGED 6u
+#define KERNEL_BLOCK_COMPLETION_RESET 7u
+#define KERNEL_BLOCK_COMPLETION_CANCELLED 8u
 
 typedef uint32_t KernelBlockHandle;
 
@@ -80,6 +88,17 @@ KernelBlockStatus kernel_block_request_info(KernelBlockHandle request,
 KernelBlockStatus kernel_block_revoke_owner(uint32_t owner,
                                             uint32_t *released_buffers,
                                             uint32_t *deferred_buffers);
+/*
+ * Ends every in-flight request of a living owner with a synthetic status, so
+ * a reset cannot leave a service waiting for completions the device will
+ * never send. The records stay collectable: the owner is still there to be
+ * told what happened to its requests.
+ */
+KernelBlockStatus kernel_block_terminate_owner(uint32_t owner,
+                                               uint16_t status,
+                                               uint32_t *terminated);
+/* In-flight and collectable requests a single owner holds. */
+uint32_t kernel_block_owner_requests(uint32_t owner);
 bool kernel_block_stats(KernelBlockStats *stats);
 bool kernel_block_valid(void);
 

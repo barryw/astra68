@@ -6,6 +6,7 @@ HOST_CC ?= cc
 ANALYZER_CC ?= gcc
 CPPFLAGS := -Iinclude -I../../include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
+DEPFLAGS := -MMD -MP
 TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin
 HOST_FLAGS := -O2
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
@@ -26,7 +27,7 @@ $(TARGET): $(TARGET_OBJECTS)
 
 build/m68k/%.o: src/%.c $(HEADERS)
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(HOST_TEST): $(SOURCES) tests/test_input_service_core.c $(HEADERS)
 	@mkdir -p $(@D)
@@ -49,6 +50,10 @@ analyze:
 		-c src/input_service_core.c -o build/analyzer/input_service_core.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/input_port_sink.c -o build/analyzer/input_port_sink.o
+
+# Header dependencies: a stale object compiled against an older ABI
+# constant is indistinguishable from a working one until it runs.
+-include $(wildcard build/m68k/*.d build/m68k/*/*.d)
 
 clean:
 	rm -rf build

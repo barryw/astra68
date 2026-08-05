@@ -88,6 +88,10 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 35 | `DEVICE_REVOKE` | CURRENT CANDIDATE | `D1=device handle`; requires administer; quiesces and resets |
 | 36 | `INPUT_READ_TRY` | CURRENT CANDIDATE | `D1=input-device lease`, `D2=aligned AstraInputEvent array`, `D3=capacity 1-16`; returns count in `D1` and overflow flags in `D2` |
 | 37 | `PROCESS_INFO` | CURRENT CANDIDATE | `D1=process handle with QUERY right`, `D2=aligned AstraProcessInfo`; copies one 48-byte record |
+| 38 | `DMA_CREATE` | CURRENT CANDIDATE | `D1=byte size`, `D2=aligned AstraDmaBufferInfo`; allocates owner-charged contiguous transfer memory, maps it cache-inhibited, and returns a handle closed by `CLOSE` |
+| 39 | `BLOCK_QUERY` | CURRENT CANDIDATE | `D1=block lease with QUERY right`, `D2=aligned AstraBlockGeometry` |
+| 40 | `BLOCK_SUBMIT` | CURRENT CANDIDATE | `D1=block lease with TRANSFER right`, `D2=aligned AstraBlockRequest`; returns the request handle in `D1` |
+| 41 | `BLOCK_COLLECT` | CURRENT CANDIDATE | `D1=block lease with TRANSFER right`, `D2=aligned AstraBlockCompletion`, `D3=request handle`; `WOULD_BLOCK` until the device answers |
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
 not panic. `QUERY_ABI` reports revision `0x00010008`; a later revision may add

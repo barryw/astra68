@@ -53,6 +53,23 @@ records the budget, the measured codec comparison, and the rule for what is
 allowed to live in ROM — notably that lwext4 is not, because stage 0 reaches a
 FAT boot volume in 2,020 bytes.
 
+**Block admission is implemented and a user-mode service moves real data.**
+Syscall ABI `0x0001000a` adds transfer memory (`DMA_CREATE`) and the three
+block calls (`BLOCK_QUERY`, `BLOCK_SUBMIT`, `BLOCK_COLLECT`), all gated on a
+device lease the initial image receives at launch. The service holds
+process-owned, cache-inhibited, physically contiguous transfer memory, submits
+a read naming a buffer handle rather than an address, and collects a completion
+that distinguishes device errors, resets, and media changes. Every boot with
+media attached proves the whole path:
+
+```
+Initial image ....... block round-trip verified, service resident
+```
+
+The K1/K10 qualification pair is now `K1_QUALIFICATION=1`, not a boot workload;
+that build remains the gate for the performance budget and the device-IRQ
+report.
+
 lwext4 is qualified big-endian behind three one-line upstream fixes but is
 neither vendored nor adopted. There is no VFS and no terminal.
 
