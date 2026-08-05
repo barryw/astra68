@@ -80,7 +80,7 @@ filesystem depends on it:
 
 | # | Where |
 |---|---|
-| 1 | `BLOCK_QUERY` renders `AstraBlockGeometry` from the transport: sector size and count, maximum transfer, capabilities, state flags, and both generations |
+| 1 | `BLOCK_QUERY` renders `AstraBlockLeaseInfo` from the transport: sector size and count, maximum transfer, capabilities, state flags, and both generations |
 | 2 | `BLOCK_SUBMIT` takes an `AstraBlockRequest` naming a transfer-memory **handle** and an offset; the kernel resolves it to pages the caller never sees |
 | 3 | The engine's request handles are generation-tagged, and the completion IRQ endpoint is granted to the same service at launch |
 | 4 | `BLOCK_COLLECT` drains the transport, releases the request on collection so bytes commit exactly once, and reports OK, device error, reset, and media-changed distinctly |
@@ -122,6 +122,23 @@ means a service that chooses to wait forever still can.
 In a `K1_QUALIFICATION=1` build the initial image receives no block
 capabilities: that harness owns every device IRQ source, and a source has
 exactly one owner.
+
+## The facade on real hardware
+
+`sw/userspace/storage/src/lease_block.c` implements `AstraBlockBackend` over
+the lease, so the synchronous facade filesystems talk to now runs on the
+device rather than only on the deterministic memory backend. The initial image
+reads its boot sector through `astra_block_read()` — the call a filesystem
+makes — instead of driving the syscalls itself.
+
+Transfer memory is claimed once at attach, sized for one maximum transfer.
+Allocating per request would fail under exactly the load a service needs to
+survive, because transfer memory is hard-capped.
+
+The syscall ABI names its own structures for what they are — `AstraBlockLeaseInfo`,
+`astra_block_lease_query`/`_submit`/`_collect` — because the facade already
+owned `AstraBlockGeometry` and `astra_block_query`. Both would have been linked
+into the same service, and the collision only became visible when they were.
 
 ## Arty bring-up backend
 

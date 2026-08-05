@@ -40,10 +40,10 @@ uint32_t astra_irq_read(uint32_t handle, AstraIrqRecord *record,
                         uint32_t *events);
 uint32_t astra_irq_ack(uint32_t handle, uint32_t sequence);
 uint32_t astra_dma_create(uint32_t byte_size, AstraDmaBufferInfo *info);
-uint32_t astra_block_query(uint32_t device, AstraBlockGeometry *geometry);
-uint32_t astra_block_submit(uint32_t device, const AstraBlockRequest *request,
+uint32_t astra_block_lease_query(uint32_t device, AstraBlockLeaseInfo *geometry);
+uint32_t astra_block_lease_submit(uint32_t device, const AstraBlockRequest *request,
                             uint32_t *block_request);
-uint32_t astra_block_collect(uint32_t device, uint32_t block_request,
+uint32_t astra_block_lease_collect(uint32_t device, uint32_t block_request,
                              AstraBlockCompletion *completion);
 void astra_process_exit(uint32_t status) __attribute__((noreturn));
 void astra_thread_exit(uint32_t status) __attribute__((noreturn));

@@ -47,7 +47,7 @@
 #define ASTRA_BLOCK_COMPLETION_RESET         4u
 #define ASTRA_BLOCK_COMPLETION_MEDIA_CHANGED 5u
 
-#define ASTRA_BLOCK_GEOMETRY_SIZE   40u
+#define ASTRA_BLOCK_LEASE_INFO_SIZE   40u
 #define ASTRA_BLOCK_REQUEST_SIZE    32u
 #define ASTRA_BLOCK_COMPLETION_SIZE 32u
 
@@ -60,7 +60,7 @@
 
 #include <stdint.h>
 
-typedef struct AstraBlockGeometry {
+typedef struct AstraBlockLeaseInfo {
     uint32_t size;
     uint32_t sector_bytes;
     uint32_t max_transfer_sectors;
@@ -70,7 +70,7 @@ typedef struct AstraBlockGeometry {
     uint32_t host_generation;
     uint32_t reserved;
     uint64_t sector_count;
-} AstraBlockGeometry;
+} AstraBlockLeaseInfo;
 
 typedef struct AstraBlockRequest {
     uint32_t size;
@@ -93,7 +93,7 @@ typedef struct AstraBlockCompletion {
     uint32_t flags;
 } AstraBlockCompletion;
 
-_Static_assert(sizeof(AstraBlockGeometry) == ASTRA_BLOCK_GEOMETRY_SIZE,
+_Static_assert(sizeof(AstraBlockLeaseInfo) == ASTRA_BLOCK_LEASE_INFO_SIZE,
                "block geometry ABI size changed");
 _Static_assert(sizeof(AstraBlockRequest) == ASTRA_BLOCK_REQUEST_SIZE,
                "block request ABI size changed");

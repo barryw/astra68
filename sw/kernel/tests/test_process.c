@@ -5424,7 +5424,7 @@ static void test_block_admission(void)
     uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
     uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
     AstraDmaBufferInfo buffer;
-    AstraBlockGeometry geometry;
+    AstraBlockLeaseInfo geometry;
     AstraBlockRequest request;
     AstraBlockCompletion completion;
     uint32_t process_id = 0u;
@@ -5469,7 +5469,7 @@ static void test_block_admission(void)
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(kernel_user_copy_from_asm(&geometry, user_out, sizeof(geometry)) ==
            KERNEL_USER_COPY_OK);
-    assert(geometry.size == ASTRA_BLOCK_GEOMETRY_SIZE);
+    assert(geometry.size == ASTRA_BLOCK_LEASE_INFO_SIZE);
     assert(geometry.sector_bytes == ASTRA_BLOCK_SECTOR_BYTES);
     assert(geometry.sector_count == 2048u);
     assert(geometry.max_transfer_sectors == 16u);

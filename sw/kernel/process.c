@@ -1083,14 +1083,14 @@ static KernelProcessStatus create_dma_buffer(KernelProcess *process,
  * depends on the caller: which buffer it may name, how many requests it may
  * hold, and how a result is rendered back to it.
  */
-static uint32_t block_geometry(AstraBlockGeometry *geometry)
+static uint32_t block_lease_info(AstraBlockLeaseInfo *geometry)
 {
     KernelPlatformBlockState state;
 
     kernel_bytes_clear(geometry, sizeof(*geometry));
     if (!kernel_platform_block_state(&state))
         return ASTRA_SYSCALL_IO_ERROR;
-    geometry->size = ASTRA_BLOCK_GEOMETRY_SIZE;
+    geometry->size = ASTRA_BLOCK_LEASE_INFO_SIZE;
     geometry->sector_bytes = ASTRA_BLOCK_SECTOR_BYTES;
     geometry->max_transfer_sectors = state.max_sectors;
     geometry->capabilities = state.capabilities;
@@ -1151,8 +1151,8 @@ static uint32_t block_syscall(KernelProcess *process, KernelThread *thread,
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
 
     if (syscall == ASTRA_SYSCALL_BLOCK_QUERY) {
-        AstraBlockGeometry geometry;
-        uint32_t status = block_geometry(&geometry);
+        AstraBlockLeaseInfo geometry;
+        uint32_t status = block_lease_info(&geometry);
 
         if (status != ASTRA_SYSCALL_OK)
             return status;

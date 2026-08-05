@@ -43,7 +43,7 @@ astra_dma_create(uint32_t byte_size, AstraDmaBufferInfo *info)
 }
 
 uint32_t
-astra_block_query(uint32_t device, AstraBlockGeometry *geometry)
+astra_block_lease_query(uint32_t device, AstraBlockLeaseInfo *geometry)
 {
     AstraSyscallResult result;
 
@@ -56,7 +56,7 @@ astra_block_query(uint32_t device, AstraBlockGeometry *geometry)
 }
 
 uint32_t
-astra_block_submit(uint32_t device, const AstraBlockRequest *request,
+astra_block_lease_submit(uint32_t device, const AstraBlockRequest *request,
                    uint32_t *block_request)
 {
     AstraSyscallResult result;
@@ -73,7 +73,7 @@ astra_block_submit(uint32_t device, const AstraBlockRequest *request,
 }
 
 uint32_t
-astra_block_collect(uint32_t device, uint32_t block_request,
+astra_block_lease_collect(uint32_t device, uint32_t block_request,
                     AstraBlockCompletion *completion)
 {
     AstraSyscallResult result;

@@ -5,7 +5,8 @@ SIZE := $(CROSS)size
 HOST_CC ?= cc
 ANALYZER_CC ?= gcc
 RUNTIME := ../runtime
-CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include
+CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include \
+	-I../storage/include -I../metrics/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
 TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
@@ -17,6 +18,8 @@ LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 SOURCES := src/supervisor.c src/main.c
 OBJECTS := build/m68k/supervisor.o build/m68k/main.o
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
+STORAGE := ../storage
+STORAGE_LIB := $(STORAGE)/build/m68k/libastrablock.a
 RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0.o
 TARGET := build/m68k/astra_supervisor.elf
 HOST_TEST := build/host/test_supervisor
@@ -30,10 +33,11 @@ all: $(TARGET) size
 $(TARGET): $(OBJECTS) $(RUNTIME)/astra_user.ld | runtime
 	@mkdir -p $(@D)
 	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(RUNTIME_CRT0) $(OBJECTS) \
-		$(RUNTIME_LIB)
+		$(STORAGE_LIB) $(RUNTIME_LIB)
 
 runtime:
 	$(MAKE) -C $(RUNTIME) all
+	$(MAKE) -C $(STORAGE) $(STORAGE_LIB:$(STORAGE)/%=%)
 
 build/m68k/%.o: src/%.c
 	@mkdir -p $(@D)

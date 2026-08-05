@@ -5,7 +5,7 @@ AR := $(CROSS)ar
 SIZE := $(CROSS)size
 HOST_CC ?= cc
 ANALYZER_CC ?= gcc
-CPPFLAGS := -Iinclude -I../../include
+CPPFLAGS := -Iinclude -I../../include -I../runtime/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
 TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
@@ -13,7 +13,9 @@ TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
 HOST_FLAGS := -O2 -fno-builtin
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 SOURCES := src/block_device.c src/memory_block.c
-OBJECTS := build/m68k/block_device.o build/m68k/memory_block.o
+# The lease backend calls syscalls, so it is target-only.
+OBJECTS := build/m68k/block_device.o build/m68k/memory_block.o \
+	build/m68k/lease_block.o
 TARGET := build/m68k/libastrablock.a
 HOST_TEST := build/host/test_block_device
 
@@ -31,11 +33,22 @@ $(HOST_TEST): $(SOURCES) tests/test_block_device.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
-test: $(HOST_TEST)
+LEASE_TEST_SOURCES := src/lease_block.c tests/test_lease_block.c
+
+build/host/test_lease_block: $(LEASE_TEST_SOURCES)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
+
+test: $(HOST_TEST) build/host/test_lease_block
 	./$(HOST_TEST)
+	./build/host/test_lease_block
 
 sanitize:
 	@mkdir -p build/host
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) $(LEASE_TEST_SOURCES) \
+		-o build/host/test_lease_block_sanitize
+	./build/host/test_lease_block_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) $(SOURCES) tests/test_block_device.c \
 		-o build/host/test_block_device_sanitize
@@ -47,6 +60,8 @@ analyze:
 		-c src/block_device.c -o build/analyzer/block_device.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/memory_block.c -o build/analyzer/memory_block.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/lease_block.c -o build/analyzer/lease_block.o
 
 size: $(OBJECTS)
 	$(SIZE) $^

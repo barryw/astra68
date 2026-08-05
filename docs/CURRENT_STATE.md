@@ -66,6 +66,11 @@ media attached proves the whole path:
 Initial image ....... block round-trip verified, service resident
 ```
 
+The block facade in `sw/userspace/storage` now has a lease-backed
+`AstraBlockBackend`, so the initial image reads its boot sector through
+`astra_block_read()` — the call a filesystem makes — over an interrupt-driven,
+deadline-bounded transport rather than by driving syscalls itself.
+
 The K1/K10 qualification pair is now `K1_QUALIFICATION=1`, not a boot workload;
 that build remains the gate for the performance budget and the device-IRQ
 report.

@@ -35,6 +35,7 @@ Working and gated:
 | ROM payload compression | `sw/boot/pack_payload.py`, `decode_payload()`, `sw/common/crc32.c` | kernel and user image ship LZ4; ROM 72.0% used, 73,480 B free |
 | Transfer memory | `ASTRA_SYSCALL_DMA_CREATE`, `create_dma_buffer()` | owner-charged, contiguous, cache-inhibited, 4 buffers / 16 pages per service |
 | Block admission | `BLOCK_QUERY`/`BLOCK_SUBMIT`/`BLOCK_COLLECT` at ABI `0x0001000a` | lease-gated, fault-injected, round-trip proven at every boot |
+| Lease-backed facade | `sw/userspace/storage/src/lease_block.c` | `AstraBlockBackend` on the real device; interrupt-driven with a deadline |
 | First service | `sw/userspace/supervisor` | 1,306 B MC68030 text; verifies startup block, ABI, and its own `PROCESS_INFO` from user mode, then exits with a tagged status |
 
 Gate status at handover: 30 kernel suites pass, kernel cross-builds, 6 userspace
@@ -149,7 +150,7 @@ every later piece:
 | 1 | ELF acceptance, loader, startup block, capability transfer, launch, process query ABI | **done** |
 | 1b | Firmware-supplied initial image and the first service that runs from it | **done** |
 | 2 | Block admission syscalls | **done** |
-| 3 | Block service + lease-backed `AstraBlockBackend` | next |
+| 3 | Block service + lease-backed `AstraBlockBackend` | **done** |
 | 4 | lwext4 vendor + port layer | |
 | 5 | VFS service | |
 | 6 | Terminal service + VFS client Kit + shell builtins | |
@@ -163,41 +164,30 @@ Profile everything so performance is measurable and regressions are visible.
 
 ## 6. Start here next session
 
-Phase 3: the block service proper. The kernel side is done — a service already
-holds the lease, owns transfer memory, and moves sectors. What is missing is
-the service shape around it, and `sw/userspace/storage` already has the
-synchronous facade and a memory backend to plug into.
+Phase 4: vendor lwext4 and write the port layer, then phase 5's VFS service.
+The facade underneath it now runs on the real device, so a filesystem written
+against `sw/userspace/storage` runs on hardware unchanged.
 
-Concretely:
+Facts that constrain what comes next:
 
-1. **Wait on the completion endpoint.** The service holds the storage IRQ
-   endpoint and currently polls `BLOCK_COLLECT` instead. `IRQ_ARM`/`IRQ_READ`/
-   `IRQ_ACK` are the calls; this is the one deliberate shortcut in the
-   admission path and the first thing phase 3 should remove.
-2. **Back `AstraBlockBackend` with the lease** so `sw/userspace/storage`'s
-   facade runs on real hardware rather than the memory image, and its metrics
-   publish through the registry.
-3. **Per-request timeouts.** The ceilings bound resources; nothing bounds a
-   device that never answers. A request needs a deadline and a path to reset.
-
-Facts from phase 2 that constrain what comes next:
-
-- **One buffer carries one transfer at a time.** Filling the 4-deep request
-  queue takes four buffers. That is the engine refusing to let two transfers
-  share memory it cannot police, not a limit to work around.
-- **Device rights are not generic rights.** A lease carries `QUERY`,
-  `TRANSFER`, and `ADMINISTER` (bits 0, 5, 6). Reading geometry is a query;
-  moving data is a transfer. Using `ASTRA_RIGHT_WRITE` for I/O silently fails
-  as `ACCESS_DENIED`.
-- **`KERNEL_PROCESS_MAX` is 4** and the default boot now uses one. K1 costs
-  two more when enabled.
-- **Userspace Makefiles now track header dependencies.** They did not, and a
-  stale object compiled against an older ABI constant boots and then fails its
-  startup check with exit 127 — which looks exactly like a kernel bug. If you
-  see that, suspect a stale object first.
-- **The supervisor's exit status is a tagged halfword**, not a byte. The byte
-  ran out of room when the block checks arrived and overflowing bits corrupted
-  the tag itself.
+- **The service is single-threaded and synchronous.** One request is in flight
+  at a time even though the engine allows four. A filesystem worker blocking
+  on a transfer blocks the whole service until phase 5 gives it threads.
+- **lwext4 must not go in the ROM.** `docs/MEMORY_MAP.md` records why: ROM
+  holds the chain that reaches the boot volume, and stage 0 reads FAT in 2,020
+  bytes. lwext4 is 66-80 KiB and belongs on the boot volume as a file.
+- **One buffer carries one transfer at a time**, and transfer memory is capped
+  at 4 buffers and 16 pages per service. A filesystem wanting concurrent I/O
+  needs a buffer per outstanding request.
+- **Device rights are not generic rights**: a lease carries `QUERY`,
+  `TRANSFER`, and `ADMINISTER` (bits 0, 5, 6).
+- **The engine acknowledges the transport's state-change notification** when it
+  reads the state behind it. Anything else that consumes storage interrupts
+  must not assume that bit survives.
+- **Name collisions are real here.** The syscall ABI and the storage facade are
+  now linked into the same program; the ABI uses `AstraBlockLeaseInfo` and
+  `astra_block_lease_*` precisely because `AstraBlockGeometry` and
+  `astra_block_query` were already taken.
 
 ## 7. Known problems not caused by this work
 
