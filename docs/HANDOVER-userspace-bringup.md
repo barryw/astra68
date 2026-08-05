@@ -42,8 +42,13 @@ lease, recover and start the journal, write and re-read a 4 KiB file, unmount,
 and then assert nothing is left allocated and the port never addressed outside
 its partition window.
 
-**This has not been re-run on the board since the fix.** It is verified on
-Beast; the board run is the first thing to do next.
+Verified on the board as well: it mounts, verifies and unmounts the volume
+there, 3 seconds wall from process start, of which roughly 2.8 is POST and
+boot.
+
+**Performance was a second, separate defect, and it is fixed too.** See
+section 6c. Mount and volume verification went from 82 seconds to 0.10 on
+Beast, and from 25.5 seconds to 3 on the board.
 
 Gate status: 30 kernel suites, both kernel build configurations, 8 userspace
 suites under ASan/UBSan, GCC `-fanalyzer` clean, the MC68030 kernel image, the
@@ -428,6 +433,55 @@ unmounted".
 prints `stage N` for any value it does not recognise, and the counter is
 monotonic, so probe values must increase or they are silently refused.
 
+## 6c. The wait latency, and why the block path was not interrupt-driven
+
+Fixed, but the shape is worth keeping: the measurement pointed at three
+innocent parties before it reached the guilty one.
+
+Every transfer that had to block cost a **full lease timeout** -- two seconds.
+A mount was 82 seconds on Beast and 22.7 on the board. The same I/O volume
+(2,112 reads, 7,374 writes, 4,264 splits) driven straight at a file through
+`lwext4-eval` takes **0.08 seconds**, which is what proved neither lwext4 nor
+TCG was responsible.
+
+Measured at each layer, and each one exonerated in turn:
+
+| Interval | Latency |
+|---|---|
+| submit to the transport completing the I/O | under 1 ms, 0 slow events in 49 |
+| completion to its interrupt being enabled | `enable=1 level=3` on all 49 |
+| interrupt raised to the kernel handler running | 29 to 886 us |
+| interrupt raised to the **waiting thread** running | **2.000 s** |
+
+Two seconds is the lease deadline to the microsecond. Cutting the deadline to
+100 ms moved the wake to 100.05 ms, which settled it: the wake was never the
+interrupt's doing. The thread slept to its own deadline every time.
+
+The cause is that **device interrupts are always deferred**
+(`dispatch_device_interrupt()`): the handler queues the event and signals the
+worker, so the thread is woken later inside `service_deferred_interrupts()`,
+by which point no interrupt is left to carry a scheduling decision. The
+interrupt path could not have made one anyway -- an idle kernel is halted in
+`kernel_worker_arch_wait()`, so the frame is a supervisor frame and
+`interrupt_entry_dispatch_fast()` returns without scheduling.
+
+That left `kernel_process_worker_resume()`, which resumed `current_thread`
+rather than selecting one. With nothing running it returned NULL, the worker
+halted again, and the next thing to run was the timer -- armed to the sleeping
+thread's own deadline. It selects a ready thread now, the way the supervisor
+timer path already did.
+
+Lessons that outlive this defect:
+
+- **A deadline that exactly matches an observed latency is not a coincidence.**
+  Two seconds was the answer before the cause was known.
+- **Instrument both sides of the boundary.** The QEMU-side probes proved the
+  device was fast and the interrupt prompt; the guest-side counters proved the
+  waits returned OK rather than timing out. Neither alone would have located
+  it, and both were needed to stop suspecting the emulator.
+- **`stop #0x3000` really does halt**, and the CPU really does wake on the
+  interrupt. The handler ran in microseconds. Only the *thread* was late.
+
 ## 6b. Where to go next
 
 **Run it on the board.** Everything above is verified on Beast only.
@@ -448,6 +502,14 @@ Constraints that will bite:
 - **The acknowledge-only-when-idle rule in 6.3 assumes one request in flight.**
   The engine allows four. A service that pipelines requests cannot reason
   "nothing is in flight" per request and needs a different rule.
+- **The four user LEDs on the Arty are PL pins driven from RTL**, not from the
+  PS: `astra_arty_graphics_top.sv` assigns them `video_locked`, `~build_reset`,
+  `scene_active` and `frame_counter[5]`, which is the three-on-one-flashing the
+  board shows. There is no AXI GPIO and no EMIO routed to them, so nothing in
+  software can drive one -- an activity light is a bitstream change and a
+  timing-closure re-qualification. The cheapest version, if it is ever worth
+  it, repoints `led[3]` at a spare bit of the existing graphics register file
+  at `0x43c00000` rather than adding new IP.
 - **Transfer splitting is in the port, not in lwext4.** `run_transfer()` chops
   requests to `max_transfer_sectors`. The m68k gate splits 7,555 times.
 - **Several device failures collapse to `EIO`** at the lwext4 boundary, because
