@@ -24,7 +24,10 @@
 #define ASTRA_SUPERVISOR_STAGE_BLOCK_LEASED   2u
 #define ASTRA_SUPERVISOR_STAGE_BLOCK_ONLINE   3u
 #define ASTRA_SUPERVISOR_STAGE_BLOCK_VERIFIED 4u
-#define ASTRA_SUPERVISOR_STAGE_MAX            4u
+#define ASTRA_SUPERVISOR_STAGE_VOLUME_FOUND   5u
+#define ASTRA_SUPERVISOR_STAGE_VOLUME_MOUNTED 6u
+#define ASTRA_SUPERVISOR_STAGE_VOLUME_VERIFIED 7u
+#define ASTRA_SUPERVISOR_STAGE_MAX            7u
 
 #define ASTRA_SUPERVISOR_FAIL_STARTUP      (1u << 0)
 #define ASTRA_SUPERVISOR_FAIL_QUERY_ABI    (1u << 1)
@@ -41,5 +44,13 @@
 #define ASTRA_SUPERVISOR_FAIL_BLOCK_TIMEOUT (1u << 12)
 #define ASTRA_SUPERVISOR_FAIL_BLOCK_ARM    (1u << 13)
 #define ASTRA_SUPERVISOR_FAIL_BLOCK_DRAIN  (1u << 14)
+/*
+ * The filesystem check gets one aggregate bit because bit 15 is the last the
+ * halfword has. Which stage it reached is in the progress counter instead, and
+ * that is the better channel anyway: the boot log then shows whether the
+ * partition was found, the volume mounted, or the read-back failed, rather than
+ * one bit meaning "something about ext4".
+ */
+#define ASTRA_SUPERVISOR_FAIL_VOLUME       (1u << 15)
 
 #endif

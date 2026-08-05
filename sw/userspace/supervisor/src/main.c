@@ -1,4 +1,5 @@
 #include <supervisor.h>
+#include <volume.h>
 
 #include <astra/block.h>
 #include <astra/block_device.h>
@@ -128,6 +129,16 @@ verify_block_round_trip(uint32_t device, uint32_t irq)
         }
     }
 
+    /*
+     * The volume is mounted while the lease is still held. Detaching and
+     * reattaching would claim transfer memory twice, and that resource is
+     * hard-capped precisely so it cannot be done casually.
+     */
+    if (failure == 0u) {
+        (void)astra_progress(ASTRA_SUPERVISOR_STAGE_BLOCK_VERIFIED);
+        failure = supervisor_verify_volume(&block);
+    }
+
     astra_lease_block_detach(&lease);
     return failure;
 }
@@ -188,7 +199,6 @@ astra_main(const AstraStartupInfo *startup)
     if (status != 0u) {
         return (int)(ASTRA_SUPERVISOR_STATUS_TAG | status);
     }
-    (void)astra_progress(ASTRA_SUPERVISOR_STAGE_BLOCK_VERIFIED);
 
     park();
     return (int)ASTRA_SUPERVISOR_STATUS_OK;

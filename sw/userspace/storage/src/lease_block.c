@@ -59,23 +59,44 @@ timeout_of(const AstraLeaseBlock *lease)
         LEASE_BLOCK_DEFAULT_TIMEOUT_NS;
 }
 
-/* Consumes a delivered record so the endpoint can be armed again. */
+/*
+ * Consumes a delivered record so the endpoint can be armed again. Delivery
+ * disarms the source, so a record actually taken here clears the armed flag;
+ * finding none leaves it as it was.
+ */
 static uint32_t
-drain(uint32_t irq)
+drain(AstraLeaseBlock *lease)
 {
     AstraIrqRecord record;
     uint32_t events = 0u;
     uint32_t status;
 
     (void)memset(&record, 0, sizeof(record));
-    status = astra_irq_read(irq, &record, &events);
+    status = astra_irq_read(lease->irq, &record, &events);
     if (status == ASTRA_SYSCALL_WOULD_BLOCK) {
         return ASTRA_SYSCALL_OK;
     }
     if (status != ASTRA_SYSCALL_OK) {
         return status;
     }
-    return astra_irq_ack(irq, record.sequence);
+    lease->armed = 0u;
+    return astra_irq_ack(lease->irq, record.sequence);
+}
+
+/* Arming an already-armed endpoint is refused, so ask only when it is not. */
+static uint32_t
+arm(AstraLeaseBlock *lease)
+{
+    uint32_t status;
+
+    if (lease->armed != 0u) {
+        return ASTRA_SYSCALL_OK;
+    }
+    status = astra_irq_arm(lease->irq);
+    if (status == ASTRA_SYSCALL_OK) {
+        lease->armed = 1u;
+    }
+    return status;
 }
 
 /*
@@ -96,7 +117,7 @@ run_request(AstraLeaseBlock *lease, uint32_t operation, uint64_t lba,
     uint32_t block_request = 0u;
     uint32_t status;
 
-    if (astra_irq_arm(lease->irq) != ASTRA_SYSCALL_OK) {
+    if (arm(lease) != ASTRA_SYSCALL_OK) {
         return ASTRA_BLOCK_IO_ERROR;
     }
 
@@ -127,7 +148,7 @@ run_request(AstraLeaseBlock *lease, uint32_t operation, uint64_t lba,
         status = astra_block_lease_collect(lease->device, block_request,
                                            &completion);
         if (status == ASTRA_SYSCALL_OK) {
-            if (drain(lease->irq) != ASTRA_SYSCALL_OK) {
+            if (drain(lease) != ASTRA_SYSCALL_OK) {
                 return ASTRA_BLOCK_IO_ERROR;
             }
             if (completion.status == ASTRA_BLOCK_COMPLETION_OK &&
@@ -146,9 +167,8 @@ run_request(AstraLeaseBlock *lease, uint32_t operation, uint64_t lba,
         if (status == ASTRA_SYSCALL_TIMED_OUT) {
             break;
         }
-        if (status != ASTRA_SYSCALL_OK || drain(lease->irq) !=
-                ASTRA_SYSCALL_OK ||
-            astra_irq_arm(lease->irq) != ASTRA_SYSCALL_OK) {
+        if (status != ASTRA_SYSCALL_OK || drain(lease) != ASTRA_SYSCALL_OK ||
+            arm(lease) != ASTRA_SYSCALL_OK) {
             return ASTRA_BLOCK_IO_ERROR;
         }
     }

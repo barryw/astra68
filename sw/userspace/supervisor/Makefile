@@ -5,8 +5,15 @@ SIZE := $(CROSS)size
 HOST_CC ?= cc
 ANALYZER_CC ?= gcc
 RUNTIME := ../runtime
+STORAGE := ../storage
+ALLOC := ../alloc
+LWEXT4 := ../../../third_party/lwext4
 CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include \
-	-I../storage/include -I../metrics/include
+	-I$(STORAGE)/include -I../metrics/include -I$(ALLOC)/include
+# The volume check speaks lwext4 as well as Astra and links freestanding, so it
+# needs the vendored headers, the build profile, and the libc shims.
+EXT4_CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
+	-DCONFIG_USE_DEFAULT_CFG=0 -I$(RUNTIME)/freestanding
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
 TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
@@ -15,11 +22,13 @@ HOST_FLAGS := -O2 -fno-builtin
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 	-Wl,--build-id=none -T $(RUNTIME)/astra_user.ld
-SOURCES := src/supervisor.c src/main.c
-OBJECTS := build/m68k/supervisor.o build/m68k/main.o
+SOURCES := src/supervisor.c src/main.c src/volume.c
+OBJECTS := build/m68k/supervisor.o build/m68k/main.o \
+	build/m68k/volume.o
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
-STORAGE := ../storage
 STORAGE_LIB := $(STORAGE)/build/m68k/libastrablock.a
+EXT4_LIB := $(STORAGE)/build/m68k/libastraext4.a
+ALLOC_LIB := $(ALLOC)/build/m68k/libastraalloc.a
 RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0.o
 TARGET := build/m68k/astra_supervisor.elf
 HOST_TEST := build/host/test_supervisor
@@ -33,15 +42,22 @@ all: $(TARGET) size
 $(TARGET): $(OBJECTS) $(RUNTIME)/astra_user.ld | runtime
 	@mkdir -p $(@D)
 	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(RUNTIME_CRT0) $(OBJECTS) \
-		$(STORAGE_LIB) $(RUNTIME_LIB)
+		$(EXT4_LIB) $(STORAGE_LIB) $(ALLOC_LIB) $(RUNTIME_LIB) -lgcc
 
 runtime:
 	$(MAKE) -C $(RUNTIME) all
+	$(MAKE) -C $(ALLOC) all
 	$(MAKE) -C $(STORAGE) $(STORAGE_LIB:$(STORAGE)/%=%)
+	$(MAKE) -C $(STORAGE) $(EXT4_LIB:$(STORAGE)/%=%)
 
 build/m68k/%.o: src/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
+
+build/m68k/volume.o: src/volume.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(EXT4_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) \
+		$(DEPFLAGS) -c $< -o $@
 
 $(HOST_TEST): $(TEST_SOURCES)
 	@mkdir -p $(@D)

@@ -58,13 +58,14 @@ Currently true:
   removes the CPU verification oracle.
 - The FPGA MC68030 is **not** in the active Arty PL budget.
 
-## Emulators — there are two, only one is current
+## The emulator
 
-- **`emu/qemu` — the Astra QEMU 9.2.4 fork. This is the emulator.** It carries
-  the astra68 machine, the Vesta block and input models. Build with
-  `emu/qemu/build.sh {host|desktop|arty}`.
-- **`emu/crates` — AstraVM**, a Rust desktop machine on Musashi. Superseded by
-  the QEMU fork and referenced nowhere outside `emu/`.
+**`emu/qemu` — the Astra QEMU 9.2.4 fork. It is the only emulator.** It carries
+the astra68 machine and the Vesta block and input models. Build with
+`emu/qemu/build.sh {host|desktop|arty}`; `arty` cross-compiles for the board.
+
+AstraVM, a second Rust machine on Musashi, was removed on 2026-08-05. Musashi
+itself stays, as a conformance oracle only — see above.
 
 ## Traps that have each cost real time
 
