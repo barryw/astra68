@@ -83,6 +83,26 @@ run_transfer(AstraExt4Port *port, void *read_buffer,
         port->last_status = ASTRA_BLOCK_INVALID_ARGUMENT;
         return EINVAL;
     }
+
+    /*
+     * The window is enforced here, before any address reaches the device.
+     *
+     * lwext4 has already added part_offset by this point, so `block` is an
+     * absolute device address and the arithmetic that produced it is lwext4's.
+     * Checking it against the window the caller declared is what makes a
+     * miscomputed address, or a volume whose superblock lies about its size,
+     * unable to reach the FAT partition that boots the machine. Without this
+     * the only thing standing between a filesystem bug and an unbootable card
+     * is that the bug happened not to point there.
+     */
+    if ((uint64_t)count > port->sector_count ||
+        block < port->first_sector ||
+        block - port->first_sector > port->sector_count - (uint64_t)count) {
+        ++port->out_of_partition_refusals;
+        port->last_status = ASTRA_BLOCK_OUT_OF_RANGE;
+        return EINVAL;
+    }
+
     if (count > chunk_max) {
         ++port->split_transfers;
     }
@@ -235,11 +255,13 @@ port_unlock(struct ext4_blockdev *blockdev)
 
 AstraExt4Status
 astra_ext4_port_init(AstraExt4Port *port, AstraBlockDevice *device,
-                     void *sector_buffer, uint32_t sector_buffer_bytes,
-                     uint64_t transfer_timeout)
+                     const AstraExt4Partition *partition, void *sector_buffer,
+                     uint32_t sector_buffer_bytes, uint64_t transfer_timeout)
 {
     const AstraBlockGeometry *geometry;
     unsigned char *clear;
+    uint64_t first_sector = 0u;
+    uint64_t sector_count;
     uint32_t index;
 
     if (port == NULL || device == NULL || sector_buffer == NULL) {
@@ -258,6 +280,28 @@ astra_ext4_port_init(AstraExt4Port *port, AstraBlockDevice *device,
         return ASTRA_EXT4_BUFFER_TOO_SMALL;
     }
 
+    sector_count = geometry->sector_count;
+    if (partition != NULL) {
+        first_sector = partition->first_sector;
+        if (first_sector >= geometry->sector_count) {
+            return ASTRA_EXT4_PARTITION_INVALID;
+        }
+        sector_count = partition->sector_count != 0u
+                           ? partition->sector_count
+                           : geometry->sector_count - first_sector;
+        if (sector_count > geometry->sector_count - first_sector) {
+            return ASTRA_EXT4_PARTITION_INVALID;
+        }
+    }
+    /*
+     * A window smaller than one sector cannot hold a superblock, and one that
+     * starts at sector 0 while shorter than the device is a partition overlaying
+     * the partition table. Neither is a mount worth attempting.
+     */
+    if (sector_count == 0u) {
+        return ASTRA_EXT4_PARTITION_INVALID;
+    }
+
     clear = (unsigned char *)port;
     for (index = 0u; index < (uint32_t)sizeof(*port); ++index) {
         clear[index] = 0u;
@@ -267,6 +311,8 @@ astra_ext4_port_init(AstraExt4Port *port, AstraBlockDevice *device,
     port->transfer_timeout = transfer_timeout;
     port->last_status = ASTRA_BLOCK_OK;
     port->media_generation = geometry->media_generation;
+    port->first_sector = first_sector;
+    port->sector_count = sector_count;
 
     port->interface.open = port_open;
     port->interface.bread = port_bread;
@@ -279,10 +325,13 @@ astra_ext4_port_init(AstraExt4Port *port, AstraBlockDevice *device,
     port->interface.ph_bbuf = sector_buffer;
     port->interface.p_user = port;
 
+    /*
+     * ph_bcnt stays the whole device because lwext4 computes absolute
+     * addresses from part_offset; part_size is what bounds the volume.
+     */
     port->blockdev.bdif = &port->interface;
-    port->blockdev.part_offset = 0u;
-    port->blockdev.part_size =
-        geometry->sector_count * (uint64_t)geometry->sector_size;
+    port->blockdev.part_offset = first_sector * (uint64_t)geometry->sector_size;
+    port->blockdev.part_size = sector_count * (uint64_t)geometry->sector_size;
 
     return ASTRA_EXT4_OK;
 }

@@ -28,6 +28,7 @@
 #include <astra/block_device.h>
 #include <astra/ext4_alloc.h>
 #include <astra/ext4_port.h>
+#include <astra/mbr.h>
 #include <astra/memory_block.h>
 
 #include <ext4.h>
@@ -42,6 +43,31 @@
 static uint8_t *storage;
 static size_t storage_bytes;
 static uint8_t sector_buffer[SECTOR_SIZE];
+
+/*
+ * Partitioned mode wraps the plain ext4 image in the layout a real card
+ * carries: a partition table, a boot partition standing in for FAT, and the
+ * volume after it. The stand-in is filled with a known pattern rather than a
+ * real FAT filesystem, because what is being checked is that not one byte of
+ * it moves — and a pattern detects that more sharply than a filesystem would.
+ *
+ * This is the layout that makes the mount meaningful. Every other gate mounts
+ * a whole-disk image, where a partition-offset bug cannot show itself.
+ */
+#define BOOT_FIRST_SECTOR 2048u
+#define BOOT_SECTOR_COUNT 8192u /* 4 MiB standing in for the FAT volume */
+#define BOOT_PATTERN_SEED 0x1cu
+
+static const AstraExt4Partition *partition;
+static AstraExt4Partition partition_window;
+static int partitioned;
+static uint64_t volume_first_sector;
+
+static uint8_t
+boot_pattern(size_t offset)
+{
+    return (uint8_t)((offset * 13u) + (offset >> 9) + BOOT_PATTERN_SEED);
+}
 
 static AstraMemoryBlock memory;
 static AstraBlockDevice device;
@@ -134,20 +160,156 @@ load_image(const char *path)
     return 0;
 }
 
+/*
+ * Writes back only the volume, not the container. e2fsck is handed the same
+ * bare filesystem image it was given, so the gate does not depend on e2fsck
+ * understanding Astra's partition layout.
+ */
 static int
 store_image(const char *path)
 {
     FILE *image = fopen(path, "wb");
+    const uint8_t *from = storage;
+    size_t bytes = storage_bytes;
 
+    if (partitioned) {
+        from = storage + (size_t)volume_first_sector * SECTOR_SIZE;
+        bytes = storage_bytes - (size_t)volume_first_sector * SECTOR_SIZE;
+    }
     if (image == NULL) {
         return fail("fopen image for write", 0);
     }
-    if (fwrite(storage, 1u, storage_bytes, image) != storage_bytes) {
+    if (fwrite(from, 1u, bytes, image) != bytes) {
         fclose(image);
         return fail("fwrite image", 0);
     }
     if (fclose(image) != 0) {
         return fail("fclose image", 0);
+    }
+    return 0;
+}
+
+/*
+ * Rebuilds the loaded image as a partitioned card: the ext4 volume moves to
+ * sit after a boot partition, and a partition table is written in front of
+ * both.
+ */
+static int
+build_partitioned_layout(void)
+{
+    size_t volume_bytes = storage_bytes;
+    size_t volume_sectors = volume_bytes / SECTOR_SIZE;
+    size_t total_sectors;
+    uint8_t *grown;
+    uint8_t *entry;
+    size_t index;
+
+    volume_first_sector = BOOT_FIRST_SECTOR + BOOT_SECTOR_COUNT;
+    total_sectors = (size_t)volume_first_sector + volume_sectors;
+
+    grown = malloc(total_sectors * SECTOR_SIZE);
+    if (grown == NULL) {
+        return fail("malloc partitioned image", 0);
+    }
+    memset(grown, 0, (size_t)volume_first_sector * SECTOR_SIZE);
+    memcpy(grown + (size_t)volume_first_sector * SECTOR_SIZE, storage,
+           volume_bytes);
+    free(storage);
+    storage = grown;
+    storage_bytes = total_sectors * SECTOR_SIZE;
+
+    /* The boot partition's contents: a pattern that must survive untouched. */
+    for (index = 0u; index < (size_t)BOOT_SECTOR_COUNT * SECTOR_SIZE;
+         ++index) {
+        storage[(size_t)BOOT_FIRST_SECTOR * SECTOR_SIZE + index] =
+            boot_pattern(index);
+    }
+
+    /* A partition table stage0 would accept: FAT32 LBA first, then ours. */
+    storage[510] = 0x55u;
+    storage[511] = 0xaau;
+    entry = &storage[446u];
+    entry[0] = 0x80u;
+    entry[4] = 0x0cu;
+    entry[8] = (uint8_t)(BOOT_FIRST_SECTOR & 0xffu);
+    entry[9] = (uint8_t)((BOOT_FIRST_SECTOR >> 8) & 0xffu);
+    entry[12] = (uint8_t)(BOOT_SECTOR_COUNT & 0xffu);
+    entry[13] = (uint8_t)((BOOT_SECTOR_COUNT >> 8) & 0xffu);
+
+    entry = &storage[446u + 16u];
+    entry[4] = 0x83u;
+    entry[8] = (uint8_t)(volume_first_sector & 0xffu);
+    entry[9] = (uint8_t)((volume_first_sector >> 8) & 0xffu);
+    entry[10] = (uint8_t)((volume_first_sector >> 16) & 0xffu);
+    entry[12] = (uint8_t)(volume_sectors & 0xffu);
+    entry[13] = (uint8_t)((volume_sectors >> 8) & 0xffu);
+    entry[14] = (uint8_t)((volume_sectors >> 16) & 0xffu);
+
+    partition_window.first_sector = volume_first_sector;
+    partition_window.sector_count = volume_sectors;
+    partition = &partition_window;
+    return 0;
+}
+
+/*
+ * The partition table is re-read through the same reader a service would use,
+ * so the window the volume is mounted with is the one on the disk rather than
+ * the one this test happens to remember.
+ */
+static int
+check_layout_via_reader(void)
+{
+    AstraMbrTable table;
+    const AstraMbrEntry *boot;
+    const AstraMbrEntry *volume;
+
+    if (astra_mbr_read(&device, sector_buffer, sizeof(sector_buffer), &table,
+                       0u) != ASTRA_BLOCK_OK) {
+        return fail("astra_mbr_read", 0);
+    }
+    boot = astra_mbr_find(&table, ASTRA_MBR_FAT);
+    volume = astra_mbr_find(&table, ASTRA_MBR_LINUX);
+    if (boot == NULL || volume == NULL) {
+        return fail("partition table missing an entry", 0);
+    }
+    if (boot->first_sector != BOOT_FIRST_SECTOR ||
+        boot->sector_count != BOOT_SECTOR_COUNT) {
+        return fail("boot partition geometry", 0);
+    }
+    if (volume->first_sector != volume_first_sector) {
+        return fail("volume partition geometry", 0);
+    }
+    if (!astra_mbr_range_conflicts(&table, ASTRA_MBR_ENTRY_COUNT,
+                                   BOOT_FIRST_SECTOR, 1u)) {
+        return fail("boot partition reported as free space", 0);
+    }
+    return 0;
+}
+
+/* Not one byte of the boot partition or the partition table may have moved. */
+static int
+check_boot_region_intact(void)
+{
+    size_t index;
+
+    for (index = 0u; index < (size_t)BOOT_SECTOR_COUNT * SECTOR_SIZE;
+         ++index) {
+        size_t at = (size_t)BOOT_FIRST_SECTOR * SECTOR_SIZE + index;
+
+        if (storage[at] != boot_pattern(index)) {
+            printf("FAIL boot partition modified at byte %lu\n",
+                   (unsigned long)index);
+            ++failures;
+            return 1;
+        }
+    }
+    if (storage[510] != 0x55u || storage[511] != 0xaau) {
+        return fail("partition table signature destroyed", 0);
+    }
+    for (index = 0u; index < 16u; ++index) {
+        if (storage[446u + index] == 0u && index == 4u) {
+            return fail("boot partition entry cleared", 0);
+        }
     }
     return 0;
 }
@@ -187,7 +349,7 @@ bring_up(void)
         return fail("astra_block_query", 0);
     }
 
-    port_status = astra_ext4_port_init(&port, &device, sector_buffer,
+    port_status = astra_ext4_port_init(&port, &device, partition, sector_buffer,
                                        sizeof(sector_buffer), 0u);
     if (port_status != ASTRA_EXT4_OK) {
         return fail("astra_ext4_port_init", (int)port_status);
@@ -529,12 +691,25 @@ main(int argc, char **argv)
         return 2;
     }
     verify_only = argc > 2 && strcmp(argv[2], "verify-only") == 0;
+    partitioned = argc > 2 && strcmp(argv[2], "partitioned") == 0;
 
     if (getenv("ASTRA_EXT4_DEBUG") != NULL) {
         ext4_dmask_set(DEBUG_ALL);
     }
 
-    if (load_image(argv[1]) || bring_up() || do_mount()) {
+    if (load_image(argv[1])) {
+        return 1;
+    }
+    if (partitioned && build_partitioned_layout()) {
+        return 1;
+    }
+    if (bring_up()) {
+        return 1;
+    }
+    if (partitioned && check_layout_via_reader()) {
+        return 1;
+    }
+    if (do_mount()) {
         return 1;
     }
     if (verify_only) {
@@ -558,6 +733,19 @@ main(int argc, char **argv)
     if (port.split_transfers == 0u) {
         printf("FAIL no transfer was split; the cap never bound\n");
         ++failures;
+    }
+    /*
+     * The window is a boundary, not a convention. Any refusal here means
+     * something asked for an address outside the volume, which on a real card
+     * is the boot partition.
+     */
+    if (port.out_of_partition_refusals != 0u) {
+        printf("FAIL %lu transfers addressed outside the volume\n",
+               (unsigned long)port.out_of_partition_refusals);
+        ++failures;
+    }
+    if (partitioned) {
+        check_boot_region_intact();
     }
     if (store_image(argv[1])) {
         return 1;

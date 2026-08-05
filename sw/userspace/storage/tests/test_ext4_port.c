@@ -55,7 +55,7 @@ bring_up(AstraMemoryBlock *memory, AstraBlockDevice *device,
     astra_block_device_init(device, &astra_memory_block_backend, memory, ticks,
                             NULL);
     assert(astra_block_query(device, &geometry) == ASTRA_BLOCK_OK);
-    assert(astra_ext4_port_init(port, device, sector_buffer,
+    assert(astra_ext4_port_init(port, device, NULL, sector_buffer,
                                 sizeof(sector_buffer), 1000u) ==
            ASTRA_EXT4_OK);
 }
@@ -68,14 +68,14 @@ test_init_rejects_bad_bindings(void)
     AstraExt4Port port;
     AstraBlockGeometry geometry;
 
-    assert(astra_ext4_port_init(NULL, &device, sector_buffer,
+    assert(astra_ext4_port_init(NULL, &device, NULL, sector_buffer,
                                 sizeof(sector_buffer), 0u) ==
            ASTRA_EXT4_INVALID_ARGUMENT);
-    assert(astra_ext4_port_init(&port, NULL, sector_buffer,
+    assert(astra_ext4_port_init(&port, NULL, NULL, sector_buffer,
                                 sizeof(sector_buffer), 0u) ==
            ASTRA_EXT4_INVALID_ARGUMENT);
-    assert(astra_ext4_port_init(&port, &device, NULL, TEST_SECTOR_SIZE, 0u) ==
-           ASTRA_EXT4_INVALID_ARGUMENT);
+    assert(astra_ext4_port_init(&port, &device, NULL, NULL, TEST_SECTOR_SIZE,
+                                0u) == ASTRA_EXT4_INVALID_ARGUMENT);
 
     /* Geometry never queried: the device does not yet know its own shape. */
     astra_memory_block_init(&memory, storage, sizeof(storage),
@@ -83,22 +83,174 @@ test_init_rejects_bad_bindings(void)
                             ASTRA_BLOCK_FLAG_PRESENT);
     astra_block_device_init(&device, &astra_memory_block_backend, &memory,
                             ticks, NULL);
-    assert(astra_ext4_port_init(&port, &device, sector_buffer,
+    assert(astra_ext4_port_init(&port, &device, NULL, sector_buffer,
                                 sizeof(sector_buffer), 0u) ==
            ASTRA_EXT4_GEOMETRY_UNSUPPORTED);
 
     assert(astra_block_query(&device, &geometry) == ASTRA_BLOCK_OK);
-    assert(astra_ext4_port_init(&port, &device, sector_buffer,
+    assert(astra_ext4_port_init(&port, &device, NULL, sector_buffer,
                                 TEST_SECTOR_SIZE - 1u, 0u) ==
            ASTRA_EXT4_BUFFER_TOO_SMALL);
 
     /* Media absent at bind time is refused rather than deferred to first I/O. */
     astra_memory_block_set_present(&memory, 0);
     assert(astra_block_query(&device, &geometry) == ASTRA_BLOCK_OK);
-    assert(astra_ext4_port_init(&port, &device, sector_buffer,
+    assert(astra_ext4_port_init(&port, &device, NULL, sector_buffer,
                                 sizeof(sector_buffer), 0u) ==
            ASTRA_EXT4_NO_MEDIA);
     astra_memory_block_set_present(&memory, 1);
+}
+
+/*
+ * The window is the boundary between an Astra volume and the FAT partition
+ * that boots the machine, so its edges are checked rather than assumed.
+ */
+static void
+test_partition_window_is_validated(void)
+{
+    AstraMemoryBlock memory;
+    AstraBlockDevice device;
+    AstraExt4Port port;
+    AstraBlockGeometry geometry;
+    AstraExt4Partition partition;
+
+    astra_memory_block_init(&memory, storage, sizeof(storage),
+                            TEST_SECTOR_SIZE, TEST_MAX_TRANSFER,
+                            ASTRA_BLOCK_FLAG_PRESENT);
+    astra_block_device_init(&device, &astra_memory_block_backend, &memory,
+                            ticks, NULL);
+    assert(astra_block_query(&device, &geometry) == ASTRA_BLOCK_OK);
+
+    /* Starting at or past the end of the device. */
+    partition.first_sector = TEST_SECTORS;
+    partition.sector_count = 1u;
+    assert(astra_ext4_port_init(&port, &device, &partition, sector_buffer,
+                                sizeof(sector_buffer), 0u) ==
+           ASTRA_EXT4_PARTITION_INVALID);
+
+    /* Running past the end by one sector. */
+    partition.first_sector = 64u;
+    partition.sector_count = TEST_SECTORS - 63u;
+    assert(astra_ext4_port_init(&port, &device, &partition, sector_buffer,
+                                sizeof(sector_buffer), 0u) ==
+           ASTRA_EXT4_PARTITION_INVALID);
+
+    /* Exactly reaching the end is legal. */
+    partition.first_sector = 64u;
+    partition.sector_count = TEST_SECTORS - 64u;
+    assert(astra_ext4_port_init(&port, &device, &partition, sector_buffer,
+                                sizeof(sector_buffer), 0u) == ASTRA_EXT4_OK);
+    assert(port.first_sector == 64u);
+    assert(port.sector_count == TEST_SECTORS - 64u);
+    assert(port.blockdev.part_offset == 64u * (uint64_t)TEST_SECTOR_SIZE);
+    assert(port.blockdev.part_size ==
+           (TEST_SECTORS - 64u) * (uint64_t)TEST_SECTOR_SIZE);
+    /* ph_bcnt stays the whole device: lwext4 addresses are absolute. */
+    assert(port.blockdev.bdif->ph_bcnt == TEST_SECTORS);
+
+    /* A zero-length window has nowhere to put a superblock. */
+    partition.first_sector = 64u;
+    partition.sector_count = 0u; /* means "to the end", so this one is legal */
+    assert(astra_ext4_port_init(&port, &device, &partition, sector_buffer,
+                                sizeof(sector_buffer), 0u) == ASTRA_EXT4_OK);
+    assert(port.sector_count == TEST_SECTORS - 64u);
+
+    /* NULL means the whole device, which is what a bare image wants. */
+    assert(astra_ext4_port_init(&port, &device, NULL, sector_buffer,
+                                sizeof(sector_buffer), 0u) == ASTRA_EXT4_OK);
+    assert(port.first_sector == 0u);
+    assert(port.sector_count == TEST_SECTORS);
+}
+
+/*
+ * The property that matters most on a real card: a volume confined to a window
+ * cannot reach outside it, whatever address it asks for. lwext4 has already
+ * added part_offset by the time these callbacks run, so a bug in its
+ * arithmetic — or a superblock that lies about the volume size — arrives here
+ * as an absolute address pointing at someone else's partition.
+ */
+static void
+test_window_refuses_addresses_outside_it(void)
+{
+    AstraMemoryBlock memory;
+    AstraBlockDevice device;
+    AstraExt4Port port;
+    AstraBlockGeometry geometry;
+    AstraExt4Partition partition;
+    struct ext4_blockdev *blockdev;
+    const uint64_t first = 2048u;
+    const uint64_t count = 1024u;
+    size_t index;
+
+    astra_memory_block_init(&memory, storage, sizeof(storage),
+                            TEST_SECTOR_SIZE, TEST_MAX_TRANSFER,
+                            ASTRA_BLOCK_FLAG_PRESENT);
+    astra_block_device_init(&device, &astra_memory_block_backend, &memory,
+                            ticks, NULL);
+    assert(astra_block_query(&device, &geometry) == ASTRA_BLOCK_OK);
+
+    partition.first_sector = first;
+    partition.sector_count = count;
+    assert(astra_ext4_port_init(&port, &device, &partition, sector_buffer,
+                                sizeof(sector_buffer), 0u) == ASTRA_EXT4_OK);
+    blockdev = astra_ext4_port_blockdev(&port);
+
+    /* Fill everything outside the window with a pattern that must survive. */
+    memset(storage, 0x5a, sizeof(storage));
+
+    /* Just before the window. */
+    assert(blockdev->bdif->bwrite(blockdev, expected, first - 1u, 1u) ==
+           EINVAL);
+    assert(port.out_of_partition_refusals == 1u);
+    assert(port.last_status == ASTRA_BLOCK_OUT_OF_RANGE);
+
+    /* Straddling the start. */
+    assert(blockdev->bdif->bwrite(blockdev, expected, first - 2u, 4u) ==
+           EINVAL);
+    assert(port.out_of_partition_refusals == 2u);
+
+    /* Just past the end. */
+    assert(blockdev->bdif->bwrite(blockdev, expected, first + count, 1u) ==
+           EINVAL);
+    assert(port.out_of_partition_refusals == 3u);
+
+    /* Straddling the end. */
+    assert(blockdev->bdif->bwrite(blockdev, expected, first + count - 2u,
+                                  4u) == EINVAL);
+    assert(port.out_of_partition_refusals == 4u);
+
+    /* Sector 0, where the partition table lives. */
+    assert(blockdev->bdif->bwrite(blockdev, expected, 0u, 1u) == EINVAL);
+    assert(port.out_of_partition_refusals == 5u);
+
+    /* A count larger than the whole window. */
+    assert(blockdev->bdif->bread(blockdev, transfer, first,
+                                 (uint32_t)count + 1u) == EINVAL);
+    assert(port.out_of_partition_refusals == 6u);
+
+    /* Nothing outside the window was touched by any of that. */
+    for (index = 0u; index < sizeof(storage); ++index) {
+        assert(storage[index] == 0x5a);
+    }
+
+    /* Both edges of the window itself are reachable. */
+    for (index = 0u; index < TEST_SECTOR_SIZE; ++index) {
+        expected[index] = (uint8_t)(index ^ 0x3cu);
+    }
+    assert(blockdev->bdif->bwrite(blockdev, expected, first, 1u) == EOK);
+    assert(blockdev->bdif->bwrite(blockdev, expected, first + count - 1u,
+                                  1u) == EOK);
+    assert(port.out_of_partition_refusals == 6u);
+
+    /* And they landed at the absolute addresses asked for. */
+    assert(memcmp(storage + (size_t)first * TEST_SECTOR_SIZE, expected,
+                  TEST_SECTOR_SIZE) == 0);
+    assert(memcmp(storage + (size_t)(first + count - 1u) * TEST_SECTOR_SIZE,
+                  expected, TEST_SECTOR_SIZE) == 0);
+
+    /* The sector immediately outside each edge is still untouched. */
+    assert(storage[(size_t)(first - 1u) * TEST_SECTOR_SIZE] == 0x5a);
+    assert(storage[(size_t)(first + count) * TEST_SECTOR_SIZE] == 0x5a);
 }
 
 static void
@@ -347,6 +499,8 @@ int
 main(void)
 {
     test_init_rejects_bad_bindings();
+    test_partition_window_is_validated();
+    test_window_refuses_addresses_outside_it();
     test_blockdev_shape();
     test_transfer_is_split_not_refused();
     test_failures_map_and_are_recorded();

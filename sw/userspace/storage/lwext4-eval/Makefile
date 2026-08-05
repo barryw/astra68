@@ -48,8 +48,9 @@ SIZE_FLAGS := -std=gnu11 -Os -m68030 -msoft-float -ffreestanding -fno-builtin \
 
 # Exactly the sources the service links, plus the mount test that drives them.
 PORT_SOURCES := $(STORAGE)/src/block_device.c $(STORAGE)/src/memory_block.c \
-	$(STORAGE)/src/ext4_port.c $(STORAGE)/src/ext4_alloc.c \
-	$(STORAGE)/src/ext4_xattr_stub.c $(ALLOC_DIR)/src/alloc.c
+	$(STORAGE)/src/mbr.c $(STORAGE)/src/ext4_port.c \
+	$(STORAGE)/src/ext4_alloc.c $(STORAGE)/src/ext4_xattr_stub.c \
+	$(ALLOC_DIR)/src/alloc.c
 MOUNT_TEST := $(STORAGE)/tests/test_ext4_mount.c
 MOUNT_INPUTS := $(MOUNT_TEST) $(PORT_SOURCES) $(LWEXT4_SOURCES)
 
@@ -102,6 +103,14 @@ reread: build/mount-m68k image
 	$(QEMU_M68K) build/mount-m68k $(IMAGE) verify-only
 	$(E2FSCK) -fn $(IMAGE)
 
+# The layout a real card carries: a partition table, a boot partition standing
+# in for FAT, and the volume behind it. The volume is written back on its own so
+# e2fsck still judges a bare filesystem, and the run fails if a single byte of
+# the boot partition moved.
+partitioned: build/mount-m68k image
+	$(QEMU_M68K) build/mount-m68k $(IMAGE) partitioned
+	$(E2FSCK) -fn $(IMAGE)
+
 # The allocator class table is measured from this run, not from a host one.
 measure: build/mount-m68k image
 	$(QEMU_M68K) build/mount-m68k $(IMAGE)
@@ -117,4 +126,4 @@ size:
 clean:
 	rm -rf build
 
-.PHONY: all image interop reread measure size clean
+.PHONY: all image interop reread partitioned measure size clean

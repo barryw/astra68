@@ -43,8 +43,25 @@ typedef enum AstraExt4Status {
     ASTRA_EXT4_INVALID_ARGUMENT = 1,
     ASTRA_EXT4_BUFFER_TOO_SMALL = 2,
     ASTRA_EXT4_GEOMETRY_UNSUPPORTED = 3,
-    ASTRA_EXT4_NO_MEDIA = 4
+    ASTRA_EXT4_NO_MEDIA = 4,
+    ASTRA_EXT4_PARTITION_INVALID = 5
 } AstraExt4Status;
+
+/*
+ * The window on the device a mount is confined to.
+ *
+ * Astra's card carries a FAT boot partition alongside its own volumes, so a
+ * mount is almost never the whole device. lwext4 biases every address by
+ * `part_offset` itself, so the port's job is not to translate addresses — it is
+ * to make the window an enforced boundary rather than an arithmetic
+ * convention. A filesystem that miscomputes an address, or metadata on a
+ * volume that lies about its own size, must not be able to reach the partition
+ * holding the code that boots the machine.
+ */
+typedef struct AstraExt4Partition {
+    uint64_t first_sector;
+    uint64_t sector_count; /* 0 means "to the end of the device" */
+} AstraExt4Partition;
 
 typedef struct AstraExt4Port {
     /* Must stay first: lwext4 hands back &port->blockdev by address. */
@@ -61,6 +78,16 @@ typedef struct AstraExt4Port {
 
     /* Media generation at bind time; a change under a mount invalidates it. */
     uint32_t media_generation;
+
+    /* The enforced window. Every transfer is checked against it. */
+    uint64_t first_sector;
+    uint64_t sector_count;
+
+    /*
+     * Transfers refused for falling outside the window. Any non-zero value is
+     * a defect that would otherwise have written to another partition.
+     */
+    uint32_t out_of_partition_refusals;
 
     /*
      * Held across a block operation. lwext4's lock exists for multi-partition
@@ -80,6 +107,10 @@ typedef struct AstraExt4Port {
  * single-sector bounce buffer and must be at least one sector and aligned for
  * the device; the caller owns it so the port allocates nothing.
  *
+ * `partition` confines the mount to a window of the device. Passing NULL means
+ * the whole device, which is what a bare filesystem image wants and what a
+ * partitioned card never does.
+ *
  * `transfer_timeout` is in the units of the device's clock. Zero means no
  * deadline is imposed by the port.
  *
@@ -87,6 +118,7 @@ typedef struct AstraExt4Port {
  */
 AstraExt4Status astra_ext4_port_init(AstraExt4Port *port,
                                      AstraBlockDevice *device,
+                                     const AstraExt4Partition *partition,
                                      void *sector_buffer,
                                      uint32_t sector_buffer_bytes,
                                      uint64_t transfer_timeout);

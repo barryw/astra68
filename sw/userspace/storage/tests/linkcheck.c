@@ -75,8 +75,8 @@ astra_main(const AstraStartupInfo *startup)
     }
     astra_block_device_init(&device, astra_lease_block_backend(), &lease, NULL,
                             NULL);
-    if (astra_ext4_port_init(&port, &device, sector, sizeof(sector), 0u) !=
-        ASTRA_EXT4_OK) {
+    if (astra_ext4_port_init(&port, &device, NULL, sector, sizeof(sector),
+                             0u) != ASTRA_EXT4_OK) {
         return 3;
     }
     return ext4_device_register(astra_ext4_port_blockdev(&port), "astra");

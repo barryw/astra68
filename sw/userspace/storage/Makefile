@@ -14,11 +14,15 @@ DEPFLAGS := -MMD -MP
 TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections
 HOST_FLAGS := -O2 -fno-builtin
+# Host tests need the same depfile discipline as the target build: a test
+# binary silently linked against an older header reports a result it did not
+# earn. This was not hypothetical.
+HOST_DEPFLAGS := -MMD -MP
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
-SOURCES := src/block_device.c src/memory_block.c
+SOURCES := src/block_device.c src/memory_block.c src/mbr.c
 # The lease backend calls syscalls, so it is target-only.
 OBJECTS := build/m68k/block_device.o build/m68k/memory_block.o \
-	build/m68k/lease_block.o
+	build/m68k/mbr.o build/m68k/lease_block.o
 TARGET := build/m68k/libastrablock.a
 HOST_TEST := build/host/test_block_device
 
@@ -92,13 +96,13 @@ build/m68k/lwext4/%.o: $(LWEXT4)/src/%.c
 
 $(HOST_TEST): $(SOURCES) tests/test_block_device.c
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(HOST_DEPFLAGS) $^ -o $@
 
 LEASE_TEST_SOURCES := src/lease_block.c tests/test_lease_block.c
 
 build/host/test_lease_block: $(LEASE_TEST_SOURCES)
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(HOST_DEPFLAGS) $^ -o $@
 
 # The port's own logic: transfer splitting, the errno map, lock re-entry and
 # init validation. It drives the ext4_blockdev callbacks directly, so it needs
@@ -108,13 +112,24 @@ PORT_TEST_SOURCES := src/block_device.c src/memory_block.c src/ext4_port.c \
 
 build/host/test_ext4_port: $(PORT_TEST_SOURCES)
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(EXT4_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+	$(HOST_CC) $(CPPFLAGS) $(EXT4_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(HOST_DEPFLAGS) \
 		$^ -o $@
 
-test: $(HOST_TEST) build/host/test_lease_block build/host/test_ext4_port
+# The partition table reader, which decides which window a volume is confined
+# to. It touches no lwext4 header: a partition table is not a filesystem.
+MBR_TEST_SOURCES := src/block_device.c src/memory_block.c src/mbr.c \
+	tests/test_mbr.c
+
+build/host/test_mbr: $(MBR_TEST_SOURCES)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(HOST_DEPFLAGS) $^ -o $@
+
+test: $(HOST_TEST) build/host/test_lease_block build/host/test_ext4_port \
+		build/host/test_mbr
 	./$(HOST_TEST)
 	./build/host/test_lease_block
 	./build/host/test_ext4_port
+	./build/host/test_mbr
 
 # ---------------------------------------------------------------------------
 # Whole-library mount test.
@@ -122,14 +137,14 @@ test: $(HOST_TEST) build/host/test_lease_block build/host/test_ext4_port
 # Split from `test` because it needs mke2fs to build the volume. A gate that
 # silently skips when a tool is missing reports success it did not earn, so
 # this is a target you have to ask for, and it fails loudly when it cannot run.
-EXT4_MOUNT_TEST_SOURCES := src/block_device.c src/memory_block.c \
+EXT4_MOUNT_TEST_SOURCES := src/block_device.c src/memory_block.c src/mbr.c \
 	src/ext4_port.c src/ext4_alloc.c src/ext4_xattr_stub.c \
 	$(ALLOC)/src/alloc.c $(LWEXT4_SOURCES) tests/test_ext4_mount.c
 
 build/host/test_ext4_mount: $(EXT4_MOUNT_TEST_SOURCES)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(ALLOC_CPPFLAGS) $(EXT4_CPPFLAGS) \
-		$(EXT4_VENDOR_FLAGS) $(HOST_FLAGS) $^ -o $@
+		$(EXT4_VENDOR_FLAGS) $(HOST_FLAGS) $(HOST_DEPFLAGS) $^ -o $@
 
 # The frozen profile: 4 KiB blocks, 256-byte inodes, no 64bit, no casefold,
 # and no extents or xattr because those two implementations are GPLv2 and are
@@ -156,6 +171,11 @@ ext4-test: build/host/test_ext4_mount
 	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) -F \
 		build/host/ext4-test.img
 	./build/host/test_ext4_mount build/host/ext4-test.img
+	@echo "--- partitioned: the volume must not touch the boot partition"
+	dd if=/dev/zero of=build/host/ext4-part.img bs=1048576 count=16 status=none
+	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) -F \
+		build/host/ext4-part.img
+	./build/host/test_ext4_mount build/host/ext4-part.img partitioned
 
 sanitize:
 	@mkdir -p build/host
@@ -171,6 +191,10 @@ sanitize:
 		$(SANITIZER_FLAGS) $(PORT_TEST_SOURCES) \
 		-o build/host/test_ext4_port_sanitize
 	./build/host/test_ext4_port_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) $(MBR_TEST_SOURCES) \
+		-o build/host/test_mbr_sanitize
+	./build/host/test_mbr_sanitize
 
 analyze:
 	@mkdir -p build/analyzer
@@ -180,6 +204,8 @@ analyze:
 		-c src/memory_block.c -o build/analyzer/memory_block.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/lease_block.c -o build/analyzer/lease_block.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/mbr.c -o build/analyzer/mbr.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(EXT4_CPPFLAGS) $(COMMON_FLAGS) \
 		$(HOST_FLAGS) -fanalyzer \
 		-c src/ext4_port.c -o build/analyzer/ext4_port.o
@@ -219,7 +245,7 @@ size: $(OBJECTS) $(PORT_OBJECTS) $(LWEXT4_OBJECTS)
 
 # Header dependencies: a stale object compiled against an older ABI
 # constant is indistinguishable from a working one until it runs.
--include $(wildcard build/m68k/*.d build/m68k/*/*.d)
+-include $(wildcard build/m68k/*.d build/m68k/*/*.d build/host/*.d)
 
 clean:
 	rm -rf build
