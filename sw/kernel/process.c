@@ -2574,7 +2574,39 @@ KernelCpuContext *kernel_process_worker_resume(void)
 {
     KernelCpuContext *next;
 
-    if (worker_active == 0u || process_for_thread(current_thread) == NULL ||
+    if (worker_active == 0u)
+        return NULL;
+    /*
+     * Nothing was running when the worker went idle, so a thread woken since
+     * then has to be selected here.
+     *
+     * Device interrupts are always deferred: the handler queues the event and
+     * signals the worker, and the wake happens later inside
+     * service_deferred_interrupts(). By then there is no interrupt left to
+     * carry a scheduling decision, and the interrupt path could not have made
+     * one anyway -- it returns to a supervisor frame, because an idle kernel
+     * is halted in kernel_worker_arch_wait().
+     *
+     * Leaving the selection out made every transfer that had to block wait for
+     * the timer instead, and the timer is armed to the sleeping thread's own
+     * deadline. One full lease timeout per blocking transfer, which is what
+     * made an interrupt-driven block path behave like a polled one.
+     */
+    if (current_thread == NULL) {
+        uint8_t ready_priority;
+
+        if (scheduler_initialized == 0u || scheduler_started == 0u ||
+            !kernel_thread_highest_ready_priority(&ready_priority))
+            return NULL;
+        (void)ready_priority;
+        if (schedule_next(&next) != KERNEL_PROCESS_OK ||
+            current_thread == NULL)
+            return NULL;
+        worker_active = 0u;
+        scheduler_start_quantum();
+        return &current_thread->context;
+    }
+    if (process_for_thread(current_thread) == NULL ||
         current_thread->state != KERNEL_THREAD_RUNNING ||
         !kernel_context_valid(&current_thread->context))
         return NULL;
