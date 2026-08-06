@@ -52,6 +52,13 @@ static AstraExt4Port volume_port;
 static AstraExt4Partition volume_window;
 static AstraBlockDevice *volume_block;
 static int volume_window_valid;
+/*
+ * Set while lwext4 holds the volume. It is what tells the caller its device and
+ * lease are still spoken for: the port keeps a pointer to the device across a
+ * mount, so releasing either while this is set leaves the filesystem addressing
+ * memory nobody owns any more.
+ */
+static int volume_mounted;
 static uint8_t volume_sector[ASTRA_BLOCK_SECTOR_BYTES];
 static uint8_t volume_pattern[VOLUME_CHECK_BYTES];
 
@@ -139,6 +146,12 @@ write_and_verify(void)
     return 0u;
 }
 
+int
+supervisor_volume_is_mounted(void)
+{
+    return volume_mounted;
+}
+
 uint32_t
 supervisor_verify_volume(AstraBlockDevice *block, int keep_mounted)
 {
@@ -192,6 +205,7 @@ supervisor_verify_volume(AstraBlockDevice *block, int keep_mounted)
         (void)ext4_device_unregister(VOLUME_DEVICE_NAME);
         return ASTRA_SUPERVISOR_FAIL_VOLUME;
     }
+    volume_mounted = 1;
     (void)astra_progress(ASTRA_SUPERVISOR_STAGE_VOLUME_MOUNTED);
 
     failure = write_and_verify();
@@ -209,6 +223,7 @@ supervisor_verify_volume(AstraBlockDevice *block, int keep_mounted)
     }
 
     (void)ext4_journal_stop(VOLUME_MOUNT_POINT);
+    volume_mounted = 0;
     if (ext4_umount(VOLUME_MOUNT_POINT) != EOK) {
         failure = ASTRA_SUPERVISOR_FAIL_VOLUME;
     }
