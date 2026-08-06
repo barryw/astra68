@@ -77,6 +77,12 @@ SCRIPT = [
     # line the shell accepted and the refusal it answered with -- neither of
     # which passed an activity to the other.
     ("cat events:activity/00000006", "command refused"),
+    # The command: the same store, the last screen of it, and two dimensions at
+    # once -- which is the one thing a path could not say until subsystem/ grew
+    # levels under it.
+    ("events", "namespace bound"),
+    ("events --subsystem shell --level warning", "command refused"),
+    ("events --boot -1", "the store is RAM"),
 ]
 
 QCODE = {" ": "spc", "\n": "ret", "/": "slash", ".": "dot", "-": "minus"}
@@ -273,6 +279,26 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
                     return 1
                 if verbose:
                     print("ok: %r -> %r" % (line, expected))
+
+            # A live tail, and the way out of it. Not in SCRIPT because ending
+            # it is a keystroke rather than a line: any key ends a follow and
+            # that key is consumed, so a typed line would lose its first
+            # character. Enter is the key with nothing to lose.
+            for line, expected in (("events --follow", "-- following"),
+                                   (None, "WORK:>")):
+                if line is not None:
+                    machine.qmp.type_line(line)
+                else:
+                    machine.qmp.key("ret")
+                if machine.wait_for_screen(expected, command_deadline) is None:
+                    print("FAIL: the follow produced no %r within %.0fs"
+                          % (expected, command_deadline))
+                    for row in machine.screen():
+                        if row:
+                            print("    |%s|" % row)
+                    return 1
+                if verbose:
+                    print("ok: follow -> %r" % expected)
 
             # A count left here means keys are arriving and nobody is taking
             # them, which is how a refused input syscall presents.

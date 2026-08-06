@@ -111,13 +111,18 @@ events --follow                 live, until a key is pressed
 It is a shell builtin, like every other command here, and moves to `COMMANDS:`
 with the loader. The shell is where the parser and the pager already are.
 
-- [ ] Step 1: the command.
-- [ ] Step 2: `cd sw/userspace && make test && make sanitize && make analyze`
+- [x] Step 1: the command.
+- [x] Step 2: `cd sw/userspace && make test && make sanitize && make analyze`
       and the cross-build.
-- [ ] Step 3: the terminal gate — `events` shows the boot's own notices, and
-      `events --subsystem shell` shows the command that was just typed and
-      nothing from the volume.
-- [ ] Step 4: the whole gate on Beast, then commit and update the handover.
+- [x] Step 3: the terminal gate — `events` shows the boot's own notices,
+      `events --subsystem shell --level warning` shows the refusal and nothing
+      from the volume, and `events --boot -1` says why it cannot.
+- [x] Step 4: the whole gate on Beast, then commit and update the handover.
+
+**The follow is gated outside `SCRIPT`.** Ending it is a keystroke rather than
+a line, and the key that ends it is consumed — so a typed line would lose its
+first character. The gate types `events --follow`, waits for the banner, sends
+one Enter, and waits for the prompt: Enter is the key with nothing to lose.
 
 ---
 
