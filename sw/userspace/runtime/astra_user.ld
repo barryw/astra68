@@ -20,6 +20,9 @@ ENTRY(_start)
 
 ASTRA_PAGE_SIZE = 0x1000;
 ASTRA_TEXT_BASE = 0x00100000;
+/* astra/event_descriptor.h's ASTRA_EVENT_CATALOG_BASE, which a linker script
+ * cannot include. The two must agree; the runtime test checks that they do. */
+ASTRA_EVENT_CATALOG_BASE = 0xE0000000;
 
 PHDRS
 {
@@ -62,6 +65,26 @@ SECTIONS
         *(COMMON)
         __bss_end = .;
     } :data
+
+    /*
+     * The event catalog: every ASTRA_EVENT call site's subsystem, level, file,
+     * line, format and argument types, emitted once each.
+     *
+     * Not loaded, not mapped, and based far from every real address, because a
+     * descriptor's address is only ever used as a message id -- so it can
+     * never be mistaken for a pointer nor collide with the reserved ids. The
+     * ROM image strips the section, the way it already strips DWARF, and a
+     * build step reads it into a catalog first.
+     *
+     * KEEP, because --gc-sections is on and a record referenced only by having
+     * its address taken is exactly what a collector gets wrong.
+     */
+    . = ASTRA_EVENT_CATALOG_BASE;
+    .astra_events (INFO) : {
+        __astra_events_start = .;
+        KEEP(*(.astra_events))
+        __astra_events_end = .;
+    }
 
     /*
      * Nothing else may reach the image. A section that is not placed here is a

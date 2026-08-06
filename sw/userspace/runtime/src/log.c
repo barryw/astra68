@@ -18,6 +18,7 @@
  */
 
 #include <astra/event.h>
+#include <astra/event_emit.h>
 #include <astra/runtime.h>
 #include <astra/syscall.h>
 
@@ -135,4 +136,70 @@ astra_assert_message(char *out, uint32_t capacity, const char *file,
                     expression != NULL ? expression : "?");
     out[length] = '\0';
     return length;
+}
+
+/*
+ * The lowest level each subsystem emits. Info by default, so `debug` call
+ * sites stay compiled in and cost one branch until someone asks for them --
+ * which is the point of leaving them in at all.
+ */
+uint8_t astra_event_levels[ASTRA_EVENT_SUBSYSTEM_MAX] = {
+    ASTRA_EVENT_LEVEL_INFO, ASTRA_EVENT_LEVEL_INFO, ASTRA_EVENT_LEVEL_INFO,
+    ASTRA_EVENT_LEVEL_INFO, ASTRA_EVENT_LEVEL_INFO, ASTRA_EVENT_LEVEL_INFO,
+    ASTRA_EVENT_LEVEL_INFO, ASTRA_EVENT_LEVEL_INFO
+};
+
+void
+astra_event_level_set(uint32_t subsystem, uint32_t level)
+{
+    if (subsystem >= ASTRA_EVENT_SUBSYSTEM_MAX ||
+        level > ASTRA_EVENT_LEVEL_ERROR) {
+        return;
+    }
+    astra_event_levels[subsystem] = (uint8_t)level;
+}
+
+uint32_t
+astra_event_pack(uint8_t *out, uint32_t capacity, const uint32_t *values,
+                 uint32_t count)
+{
+    uint32_t at = 0u;
+
+    if (out == NULL || count > ASTRA_EVENT_ARGUMENT_COUNT_MAX ||
+        count * 4u > capacity) {
+        return 0u;
+    }
+    /*
+     * Big-endian by hand rather than by memcpy. These bytes are a wire format
+     * that a reader on another machine has to decode, and depending on this
+     * one's byte order is how a log becomes unreadable the day something else
+     * reads it.
+     */
+    for (uint32_t index = 0u; index < count; ++index) {
+        out[at++] = (uint8_t)(values[index] >> 24);
+        out[at++] = (uint8_t)(values[index] >> 16);
+        out[at++] = (uint8_t)(values[index] >> 8);
+        out[at++] = (uint8_t)values[index];
+    }
+    return at;
+}
+
+uint32_t
+astra_event_emit_packed(const AstraEventDescriptor *descriptor, uint32_t level,
+                        const uint32_t *values, uint32_t count)
+{
+    uint8_t payload[ASTRA_EVENT_ARGUMENT_COUNT_MAX * 4u];
+    uint32_t length;
+
+    if (descriptor == NULL || count > ASTRA_EVENT_ARGUMENT_COUNT_MAX ||
+        (values == NULL) != (count == 0u)) {
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    length = count == 0u ? 0u :
+        astra_event_pack(payload, sizeof(payload), values, count);
+    if (count != 0u && length == 0u) {
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    return astra_event_emit((uint32_t)(uintptr_t)descriptor, level,
+                            length != 0u ? payload : NULL, length);
 }

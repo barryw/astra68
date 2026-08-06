@@ -50,6 +50,21 @@
 #define ASTRA_EVENT_ARGUMENT_MAX 24u
 
 /*
+ * The subsystems a level can be set for. A small closed set, because the
+ * configuration is one level per subsystem and a person has to be able to read
+ * the list -- an open-ended registry would be a file nobody can audit.
+ */
+#define ASTRA_EVENT_SUBSYSTEM_KERNEL     0u
+#define ASTRA_EVENT_SUBSYSTEM_RUNTIME    1u
+#define ASTRA_EVENT_SUBSYSTEM_SUPERVISOR 2u
+#define ASTRA_EVENT_SUBSYSTEM_STORAGE    3u
+#define ASTRA_EVENT_SUBSYSTEM_VFS        4u
+#define ASTRA_EVENT_SUBSYSTEM_SHELL      5u
+#define ASTRA_EVENT_SUBSYSTEM_INPUT      6u
+#define ASTRA_EVENT_SUBSYSTEM_DISPLAY    7u
+#define ASTRA_EVENT_SUBSYSTEM_MAX        8u
+
+/*
  * Reserved message ids. A message id becomes the address of a descriptor once
  * the ASTRA_EVENT macro exists, and descriptors live far above these.
  */

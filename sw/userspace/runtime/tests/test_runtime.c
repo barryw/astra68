@@ -5,6 +5,7 @@
 
 #include <astra/process.h>
 #include <astra/event.h>
+#include <astra/event_emit.h>
 #include <astra/runtime.h>
 #include <astra/syscall.h>
 
@@ -315,6 +316,111 @@ static void test_event_channel(void)
     assert(astra_log(oversized) == ASTRA_SYSCALL_OK);
 }
 
+/*
+ * The typed event macro. What matters is not that an enabled call site emits
+ * -- it is that a disabled one issues no syscall at all, because that is the
+ * entire argument for leaving `debug` call sites compiled into shipping code.
+ */
+static void test_event_macro(void)
+{
+    uint32_t calls;
+
+    for (uint32_t index = 0u; index < ASTRA_EVENT_SUBSYSTEM_MAX; ++index)
+        astra_event_level_set(index, ASTRA_EVENT_LEVEL_INFO);
+
+    /* The message id is the descriptor's address, not a number anyone typed. */
+    mock_status = ASTRA_SYSCALL_OK;
+    ASTRA_EVENT2(ASTRA_EVENT_SUBSYSTEM_VFS, ASTRA_EVENT_LEVEL_WARNING,
+                 "write refused, status %u after %u sectors", 5u, 128u);
+    assert(mock_number == ASTRA_SYSCALL_LOG_WRITE);
+    assert(mock_argument0 > ASTRA_EVENT_MESSAGE_RESERVED_MAX);
+    assert(mock_argument1 == ASTRA_EVENT_LEVEL_WARNING);
+    assert(mock_argument3 == 8u);
+
+    /*
+     * The bytes themselves are checked against the packer directly. A host
+     * pointer does not survive the 32-bit syscall ABI, so the mock cannot
+     * read what it was handed -- which is a property of the host and not of
+     * the machine, and the packer is pure and needs no mock anyway.
+     */
+    {
+        const uint32_t values[2] = {5u, 128u};
+        uint8_t packed[16] = {0u};
+
+        assert(astra_event_pack(packed, sizeof(packed), values, 2u) == 8u);
+        assert(packed[0] == 0u && packed[3] == 5u);
+        assert(packed[6] == 0u && packed[7] == 128u);
+        /* Big-endian on the wire, whatever this host happens to be. */
+        {
+            const uint32_t wide[1] = {0x11223344u};
+
+            assert(astra_event_pack(packed, sizeof(packed), wide, 1u) == 4u);
+            assert(packed[0] == 0x11u && packed[1] == 0x22u &&
+                   packed[2] == 0x33u && packed[3] == 0x44u);
+        }
+        /* A buffer that cannot hold them packs nothing rather than some. */
+        assert(astra_event_pack(packed, 4u, values, 2u) == 0u);
+        assert(astra_event_pack(NULL, 16u, values, 2u) == 0u);
+    }
+
+    /* Two call sites are two descriptors, so two different message ids. */
+    {
+        uint32_t first = mock_argument0;
+
+        ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_VFS, ASTRA_EVENT_LEVEL_WARNING,
+                     "a different message");
+        assert(mock_argument0 != first);
+        assert(mock_argument3 == 0u);
+    }
+
+    /* Below the subsystem's level: one branch, and no syscall. */
+    calls = mock_calls;
+    ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_VFS, ASTRA_EVENT_LEVEL_DEBUG,
+                 "not emitted %u", 1u);
+    assert(mock_calls == calls);
+
+    /* Raising the level opens it, without rebuilding anything. */
+    astra_event_level_set(ASTRA_EVENT_SUBSYSTEM_VFS, ASTRA_EVENT_LEVEL_DEBUG);
+    ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_VFS, ASTRA_EVENT_LEVEL_DEBUG,
+                 "emitted now %u", 1u);
+    assert(mock_calls == calls + 1u);
+
+    /* One subsystem's level is not another's. */
+    calls = mock_calls;
+    ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_DEBUG,
+                 "still quiet");
+    assert(mock_calls == calls);
+
+    /* A level nobody has is refused rather than stored. */
+    astra_event_level_set(ASTRA_EVENT_SUBSYSTEM_VFS,
+                          ASTRA_EVENT_LEVEL_ERROR + 1u);
+    assert(astra_event_levels[ASTRA_EVENT_SUBSYSTEM_VFS] ==
+           ASTRA_EVENT_LEVEL_DEBUG);
+    astra_event_level_set(ASTRA_EVENT_SUBSYSTEM_MAX, ASTRA_EVENT_LEVEL_ERROR);
+
+    astra_event_level_set(ASTRA_EVENT_SUBSYSTEM_VFS, ASTRA_EVENT_LEVEL_INFO);
+}
+
+/*
+ * The descriptor is a wire format the catalog tool walks in fixed steps, so
+ * its shape is a contract between C and Python and not an implementation
+ * detail either of them may change alone.
+ */
+static void test_event_descriptor_layout(void)
+{
+    AstraEventDescriptor descriptor;
+
+    assert(sizeof(descriptor) == ASTRA_EVENT_DESCRIPTOR_SIZE);
+    assert((char *)&descriptor.magic - (char *)&descriptor == 0);
+    assert((char *)&descriptor.line - (char *)&descriptor == 4);
+    assert((char *)&descriptor.subsystem - (char *)&descriptor == 6);
+    assert((char *)&descriptor.level - (char *)&descriptor == 7);
+    assert((char *)&descriptor.argument_count - (char *)&descriptor == 8);
+    assert((char *)descriptor.argument_type - (char *)&descriptor == 9);
+    assert((char *)descriptor.file - (char *)&descriptor == 16);
+    assert((char *)descriptor.format - (char *)&descriptor == 64);
+}
+
 /* The assertion message: the half that survives when the channel is refused. */
 static void test_assert_message(void)
 {
@@ -355,6 +461,8 @@ main(void)
     test_qsort();
     test_syscall_wrappers();
     test_event_channel();
+    test_event_macro();
+    test_event_descriptor_layout();
     test_assert_message();
     return 0;
 }

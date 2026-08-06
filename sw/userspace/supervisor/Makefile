@@ -90,8 +90,10 @@ $(TARGET): $(OBJECTS) $(RUNTIME)/astra_user.ld $(RUNTIME_CRT0) $(EXT4_LIB) \
 		$(VFS_LIB) $(EXT4_LIB) $(STORAGE_LIB) $(ALLOC_LIB) $(TERMINAL_LIB) \
 		$(SHELL_LIB) $(RUNTIME_LIB) -lgcc
 
+# The catalog section goes the way DWARF does: read out at build time, never
+# carried in the window the firmware compresses into ROM.
 $(IMAGE): $(TARGET)
-	$(OBJCOPY) --strip-debug $< $@
+	$(OBJCOPY) --strip-debug --remove-section=.astra_events $< $@
 
 build/m68k/%.o: src/%.c
 	@mkdir -p $(@D)

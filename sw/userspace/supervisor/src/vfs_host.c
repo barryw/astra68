@@ -15,6 +15,7 @@
 
 #include <vfs_host.h>
 
+#include <astra/event_emit.h>
 #include <astra/vfs_ext4_backend.h>
 #include <astra/vfs_local_transport.h>
 #include <astra/vfs_service_core.h>
@@ -55,6 +56,16 @@ bind_standard_assigns(void)
     if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
         (void)astra_assign_bind(&vfs_assigns, "WORK", vfs_client.session,
                                 ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "work");
+    } else {
+        /*
+         * The first typed event on the machine, and it is one that used to say
+         * nothing at all: a volume that would not take a work directory left
+         * WORK: quietly unbound, and the terminal then refused every path a
+         * person typed for a reason nothing on the machine had recorded.
+         */
+        ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
+                     ASTRA_EVENT_LEVEL_WARNING,
+                     "WORK: unbound, mkdir refused with status %u", status);
     }
 }
 
