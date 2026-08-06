@@ -255,13 +255,24 @@ EVENTS:
   file includes `event_emit.h`, and the test asserts the ELF contributes no
   descriptors from it.
 
-- [ ] Step 1: failing tests — a leaf renders its events in order; a page boundary
-      splits between records and never inside one; an unknown activity is
-      `NOT_FOUND`; every write verb is refused; a read past the end returns zero
-      moved rather than an error.
-- [ ] Step 2: the backend.
-- [ ] Step 3: `cd sw/userspace && make test && make sanitize && make analyze`.
-- [ ] Step 4: commit.
+- [x] Step 1: failing tests — a leaf renders its events in order; the same bytes
+      come back whatever the page size; a path is the filter; an unknown
+      activity name is `NOT_FOUND` and an unused one is empty; every write verb
+      is refused; the boot ring outlives its tier.
+- [x] Step 2: the backend.
+- [x] Step 3: `cd sw/userspace && make test && make sanitize && make analyze`.
+- [x] Step 4: commit.
+
+**A page may end mid-line, so the resume memo is a line boundary.** Memoising
+where a read stopped would resume with the straddled record already consumed
+and silently drop the rest of that line — found by reading the same file at
+every page size from 1 to 40 bytes, which is now the test.
+
+**Two names the plan did not have.** The boot ring is its own leaf,
+`boot/current/earliest`, because merging it into `all` would show every early
+event twice. And `boot/-1` is absent rather than empty, for the same reason the
+store is RAM: a directory that existed and never had anything in it would be a
+promise the machine cannot keep.
 
 ### Task 6: Wired to the machine
 
