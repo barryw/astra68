@@ -160,6 +160,16 @@ def test_a_header_without_the_enum_is_refused(tmp_path):
         trace_decode.kernel_event_names(str(header))
 
 
+def test_catalogs_are_loaded_from_elfs_not_from_a_rendered_file():
+    """There is no catalog file. The section in the binary is the catalog, and
+    a rendered copy beside it would be a second thing to keep in step."""
+    import inspect
+
+    source = inspect.getsource(trace_decode)
+    assert "json" not in source
+    assert "read_section" in source
+
+
 def test_the_real_kernel_header_parses():
     """The decoder reads the live enum, so a name added to it is a name this
     tool knows without anyone editing this tool."""

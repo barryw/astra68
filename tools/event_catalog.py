@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract the event catalog from an Astra ELF.
+"""Show the event catalog carried by an Astra ELF.
 
 Every ASTRA_EVENT call site emits a 128-byte descriptor into `.astra_events`,
 a section the loader never maps and the ROM image strips. This reads them back
@@ -13,10 +13,20 @@ against the catalog for the image the emitting process was running.
 The struct is `AstraEventDescriptor` in sw/include/astra/event_descriptor.h.
 Its layout is a contract between that header and this file; the runtime's host
 test asserts the offsets below so the two cannot drift apart silently.
+
+This writes nothing. It used to render JSON, which had exactly one reader --
+trace_decode.py, in this directory -- and a serialization between two halves of
+one program is ceremony, not an interface. Both read the section through
+`read_section` and `parse` instead, and the printed form here is for a person.
+
+When a catalog does have to be a file -- a bundle carrying its own, or the
+events service resolving ids on the machine -- the file is the section's bytes
+verbatim, which `objcopy -O binary --only-section=.astra_events` already
+produces. A fixed 128-byte record is an index on a 30 MHz machine; a parse is
+not.
 """
 
 import argparse
-import json
 import struct
 import sys
 
@@ -116,7 +126,6 @@ def parse(base, blob):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("elf", help="an Astra ELF carrying .astra_events")
-    parser.add_argument("-o", "--output", help="where to write the catalog")
     arguments = parser.parse_args(argv)
 
     try:
@@ -126,13 +135,12 @@ def main(argv=None):
         print("event_catalog: %s" % error, file=sys.stderr)
         return 1
 
-    text = json.dumps(catalog, indent=2, sort_keys=True) + "\n"
-    if arguments.output:
-        with open(arguments.output, "w") as handle:
-            handle.write(text)
-        print("%d messages -> %s" % (len(catalog), arguments.output))
-    else:
-        sys.stdout.write(text)
+    for message_id in sorted(catalog):
+        entry = catalog[message_id]
+        print("%s  %-8s %-11s %-46s %s:%d" % (
+            message_id, entry["level"], entry["subsystem"], entry["format"],
+            entry["file"], entry["line"]))
+    print("%d messages" % len(catalog), file=sys.stderr)
     return 0
 
 

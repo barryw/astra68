@@ -6,7 +6,6 @@ refusals. A fixture produced by the cross-compiler would test whatever the
 compiler happened to emit, which is the thing the contract exists to constrain.
 """
 
-import json
 import struct
 import subprocess
 import sys
@@ -132,15 +131,18 @@ def test_a_non_elf_is_refused(tmp_path):
         event_catalog.read_section(str(path))
 
 
-def test_the_command_line_writes_a_catalog(tmp_path):
+def test_the_command_line_prints_for_a_person(tmp_path):
+    """It writes no file. The only reader of the catalog it used to render was
+    trace_decode.py, which reads the section itself now."""
     elf = build_elf(tmp_path / "cli.elf", descriptor())
-    output = tmp_path / "catalog.json"
     result = subprocess.run(
         [sys.executable,
          str(Path(__file__).resolve().parents[1] / "event_catalog.py"),
-         str(elf), "-o", str(output)],
+         str(elf)],
         capture_output=True, text=True)
 
     assert result.returncode == 0, result.stderr
-    catalog = json.loads(output.read_text())
-    assert catalog["0xe0000000"]["line"] == 66
+    assert "0xe0000000" in result.stdout
+    assert "refused with status %u" in result.stdout
+    assert "src/vfs_host.c:66" in result.stdout
+    assert list(tmp_path.glob("*.json")) == []

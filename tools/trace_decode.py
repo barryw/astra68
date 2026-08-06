@@ -14,15 +14,21 @@ occurrence costs 32 bytes: everything static about a message stayed behind.
 The ring lives at a fixed address in retained RAM, so getting one off a machine
 is a memory dump:
 
-    (qemu) memsave 0x020c4000 65536 /tmp/ring.bin
-    tools/trace_decode.py /tmp/ring.bin --catalog /tmp/supervisor.json
+    (qemu) pmemsave 0x020c4000 65536 "/tmp/ring.bin"
+    tools/trace_decode.py /tmp/ring.bin --elf astra_supervisor.elf
+
+The catalog is read straight out of the ELF's .astra_events section. There is
+no catalog file and no serialization step: the section is the catalog, a
+rendered copy of it would be a second thing to keep in step with the binary,
+and the only reader was this script.
 """
 
 import argparse
-import json
 import re
 import struct
 import sys
+
+sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
 from pathlib import Path
 
 RING_ADDRESS = 0x020C4000
@@ -74,11 +80,15 @@ def kernel_event_names(header_path):
 
 
 def load_catalogs(paths):
+    """Message id -> descriptor, from the ELFs the events were emitted by."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import event_catalog
+
     catalog = {}
     for path in paths or []:
-        with open(path) as handle:
-            for message_id, entry in json.load(handle).items():
-                catalog[int(message_id, 16)] = entry
+        base, blob = event_catalog.read_section(path)
+        for message_id, entry in event_catalog.parse(base, blob).items():
+            catalog[int(message_id, 16)] = entry
     return catalog
 
 
@@ -232,8 +242,8 @@ def decode(blob, catalog, kernel_names):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ring", help="a dump of the 64 KiB trace ring")
-    parser.add_argument("--catalog", action="append",
-                        help="an event_catalog.py JSON; repeatable")
+    parser.add_argument("--elf", action="append",
+                        help="an ELF whose events may appear here; repeatable")
     parser.add_argument("--trace-header",
                         default=str(Path(__file__).resolve().parents[1] /
                                     "sw/kernel/trace.h"),
@@ -244,7 +254,7 @@ def main(argv=None):
 
     try:
         blob = Path(arguments.ring).read_bytes()
-        catalog = load_catalogs(arguments.catalog)
+        catalog = load_catalogs(arguments.elf)
         names = kernel_event_names(arguments.trace_header)
         header, lines = decode(blob, catalog, names)
     except (TraceError, OSError, ValueError) as error:
