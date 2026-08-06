@@ -100,6 +100,7 @@ itself stays, as a conformance oracle only — see above.
 | Complete inventory of everything | `docs/INVENTORY.md` |
 | Project-wide continuation map | `docs/CURRENT_STATE.md` (mind the override) |
 | Storage / filesystem line of work | `docs/HANDOVER-userspace-bringup.md` |
+| Debug surface and the namespace work | `docs/HANDOVER-debug-and-namespace.md` |
 | Service protocols and thread stacks | `docs/HANDOVER-vfs-and-stacks.md` |
 | ROM budget and memory layout | `docs/MEMORY_MAP.md`, `sw/include/astra/boot.h` |
 | Debugging a program on the machine | `docs/DEBUGGING.md` |
