@@ -27,9 +27,27 @@
 
 #define KERNEL_THREAD_SLOT_NONE UINT16_MAX
 
+/*
+ * One slot of address space per thread, of which the low part is mapped and
+ * the rest is guard. The stride is address space and costs page-table entries
+ * only; the size is committed RAM.
+ *
+ * Both were one page, and that was too small the moment a request crossed a
+ * service boundary: a shell command through the storage protocol is shell ->
+ * Kit -> service -> backend -> lwext4's write path, and it faulted 20 bytes
+ * below this base. Three pages clears it with room measured by -fstack-usage.
+ *
+ * This is the interim shape. The intended one is reserve-and-grow: keep the
+ * stride as a reservation, commit one page, and map further pages from the
+ * fault handler when the faulting address is inside the reservation and above
+ * the guard. That needs the user-fault path to tell a growing stack from a
+ * wild pointer, which it cannot do yet -- every user fault kills the process.
+ * When it lands, SIZE becomes the initial commit and STRIDE the cap, so
+ * nothing here has to be unpicked first.
+ */
 #define KERNEL_THREAD_STACK_BASE 0x70000000u
-#define KERNEL_THREAD_STACK_STRIDE 0x00002000u
-#define KERNEL_THREAD_STACK_SIZE 0x00001000u
+#define KERNEL_THREAD_STACK_STRIDE 0x00004000u
+#define KERNEL_THREAD_STACK_SIZE 0x00003000u
 
 #define KERNEL_THREAD_RIGHT_QUERY       (1u << 0)
 #define KERNEL_THREAD_RIGHT_WAIT        (1u << 4)

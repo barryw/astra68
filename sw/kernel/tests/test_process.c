@@ -9,6 +9,14 @@
 #include "pmmu.h"
 #include "port.h"
 #include "process.h"
+
+/*
+ * A thread's committed stack in pages. Written out once here rather than at
+ * each assertion: the counts below are about how many stacks a process holds,
+ * not about how big one is, and a change to the size should not read as a
+ * change to what these tests check.
+ */
+#define TEST_STACK_PAGES (KERNEL_THREAD_STACK_SIZE / KERNEL_PAGE_SIZE)
 #include "ohci.h"
 #include "qualification.h"
 #include "ring.h"
@@ -2929,7 +2937,9 @@ static void test_public_thread_lifecycle_and_exact_charges(void)
     assert(kernel_process_snapshot(0u, &process));
     assert(process.thread_count == 2u);
     assert(process.live_threads == 2u);
-    assert(process.user_stack_pages == 2u);
+    /* Two threads, each committing a whole stack. Derived from the
+     * constant so a change to the stack size is not a test edit. */
+    assert(process.user_stack_pages == 2u * TEST_STACK_PAGES);
     assert(process.user_guard_pages == 2u);
     assert(process.supervisor_stack_pages == 4u);
     assert(process.supervisor_guard_pages == 2u);
@@ -2960,7 +2970,7 @@ static void test_public_thread_lifecycle_and_exact_charges(void)
     assert(kernel_process_snapshot(0u, &process));
     assert(process.thread_count == 2u);
     assert(process.live_threads == 1u);
-    assert(process.user_stack_pages == 1u);
+    assert(process.user_stack_pages == TEST_STACK_PAGES);
     assert(process.user_guard_pages == 1u);
     assert(process.supervisor_stack_pages == 4u);
     assert(process.supervisor_guard_pages == 2u);
@@ -3048,7 +3058,7 @@ static void test_public_thread_lifecycle_and_exact_charges(void)
     assert(kernel_process_snapshot(0u, &process));
     assert(process.thread_count == 1u);
     assert(process.live_threads == 1u);
-    assert(process.user_stack_pages == 1u);
+    assert(process.user_stack_pages == TEST_STACK_PAGES);
 
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_THREAD_EXIT;

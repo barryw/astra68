@@ -115,8 +115,20 @@ static uint32_t initial_image_process_id;
 static uint32_t initial_image_progress;
 static uint8_t initial_image_exited;
 
-_Static_assert(KERNEL_THREAD_STACK_SIZE == KERNEL_PAGE_SIZE,
-               "one user-stack slot must map exactly one VM page");
+/* Whole pages, and the guard must be at least one page below the next slot. */
+_Static_assert(KERNEL_THREAD_STACK_SIZE % KERNEL_PAGE_SIZE == 0u &&
+                   KERNEL_THREAD_STACK_SIZE != 0u,
+               "a user stack must be a whole number of VM pages");
+_Static_assert(KERNEL_THREAD_STACK_STRIDE >=
+                   KERNEL_THREAD_STACK_SIZE + KERNEL_PAGE_SIZE,
+               "each stack slot needs an unmapped guard page above it");
+
+#define KERNEL_THREAD_STACK_PAGES \
+    (KERNEL_THREAD_STACK_SIZE / KERNEL_PAGE_SIZE)
+
+/* uint8_t counters hold the per-process totals. */
+_Static_assert(KERNEL_PROCESS_THREAD_MAX * KERNEL_THREAD_STACK_PAGES <= 255u,
+               "user_stack_pages cannot count this many stack pages");
 _Static_assert(KERNEL_PROCESS_THREAD_MAX <= 16u,
                "stack slot bitmap exceeds its storage");
 _Static_assert(KERNEL_PROCESS_MAX == KERNEL_VM_SHARED_ALIAS_MAX,
@@ -782,19 +794,25 @@ static KernelProcessStatus finish_thread_reaps(void)
         stack_bit = (uint16_t)(1u << thread->stack_slot);
         if (thread->stack_released == 0u) {
             if ((process->stack_slots & stack_bit) == 0u ||
-                process->user_stack_pages == 0u ||
+                process->user_stack_pages < KERNEL_THREAD_STACK_PAGES ||
                 process->user_guard_pages == 0u) {
                 kernel_performance_end(performance);
                 return KERNEL_PROCESS_CORRUPT;
             }
-            if (kernel_vm_unmap_page(&process->address_space,
-                                     thread->user_stack_base) !=
-                KERNEL_VM_OK) {
-                kernel_performance_end(performance);
-                return KERNEL_PROCESS_CORRUPT;
+            for (uint32_t page = 0u; page < KERNEL_THREAD_STACK_PAGES;
+                 ++page) {
+                if (kernel_vm_unmap_page(
+                        &process->address_space,
+                        thread->user_stack_base +
+                            (page * KERNEL_PAGE_SIZE)) != KERNEL_VM_OK) {
+                    kernel_performance_end(performance);
+                    return KERNEL_PROCESS_CORRUPT;
+                }
             }
             process->stack_slots &= (uint16_t)~stack_bit;
-            --process->user_stack_pages;
+            process->user_stack_pages =
+                (uint8_t)(process->user_stack_pages -
+                          KERNEL_THREAD_STACK_PAGES);
             --process->user_guard_pages;
         }
         if (kernel_thread_finish_reap(thread, &released) !=
@@ -1484,7 +1502,7 @@ static KernelProcessStatus prepare_thread(KernelProcess *process,
     uint32_t stack_top;
     int32_t stack_slot;
     bool stack_held = false;
-    bool stack_mapped = false;
+    uint32_t stack_pages_mapped = 0u;
     bool handle_installed = false;
     bool cleanup_failed = false;
     KernelProcessStatus result = KERNEL_PROCESS_CORRUPT;
@@ -1535,41 +1553,52 @@ static KernelProcessStatus prepare_thread(KernelProcess *process,
     }
 #endif
 
-    if (kernel_memory_alloc_zeroed_tagged(
-            KERNEL_ALLOCATION_SITE_THREAD_STACK_PAGE, 1u, 1u,
-            KERNEL_FRAME_PROCESS, process->owner, &stack_physical) !=
-        KERNEL_MEMORY_OK) {
-        result = KERNEL_PROCESS_OUT_OF_MEMORY;
-        goto failed;
-    }
-    stack_held = true;
-#if defined(KERNEL_PROCESS_HOST_TEST)
-    stack = physical_bytes(stack_physical, KERNEL_PAGE_SIZE);
-    if (stack == NULL)
-        goto failed;
-    /* Host memory tests disable allocator writes to synthetic addresses. */
-    kernel_bytes_clear(stack, KERNEL_PAGE_SIZE);
-#endif
-#if defined(KERNEL_PROCESS_HOST_TEST)
-    if (consume_thread_create_fault(
-            KERNEL_PROCESS_THREAD_CREATE_FAULT_STACK_MAP)) {
-        result = KERNEL_PROCESS_OUT_OF_MEMORY;
-        goto failed;
-    }
-#endif
-    vm_status = kernel_vm_map_page(
-        &process->address_space, stack_base, stack_physical,
-        KERNEL_VM_READ | KERNEL_VM_WRITE);
-    if (vm_status != KERNEL_VM_OK) {
-        if (vm_status == KERNEL_VM_OUT_OF_MEMORY)
+    /*
+     * One page at a time rather than one contiguous run: the pages are mapped
+     * separately anyway, so demanding physical contiguity would fail against a
+     * fragmented pool for no benefit. `stack_pages_mapped` is what the failure
+     * path unwinds, so a partial mapping leaves nothing behind.
+     */
+    for (stack_pages_mapped = 0u;
+         stack_pages_mapped < KERNEL_THREAD_STACK_PAGES;) {
+        uint32_t page_address =
+            stack_base + (stack_pages_mapped * KERNEL_PAGE_SIZE);
+
+        if (kernel_memory_alloc_zeroed_tagged(
+                KERNEL_ALLOCATION_SITE_THREAD_STACK_PAGE, 1u, 1u,
+                KERNEL_FRAME_PROCESS, process->owner, &stack_physical) !=
+            KERNEL_MEMORY_OK) {
             result = KERNEL_PROCESS_OUT_OF_MEMORY;
-        goto failed;
+            goto failed;
+        }
+        stack_held = true;
+#if defined(KERNEL_PROCESS_HOST_TEST)
+        stack = physical_bytes(stack_physical, KERNEL_PAGE_SIZE);
+        if (stack == NULL)
+            goto failed;
+        /* Host memory tests disable allocator writes to synthetic addresses. */
+        kernel_bytes_clear(stack, KERNEL_PAGE_SIZE);
+        if (consume_thread_create_fault(
+                KERNEL_PROCESS_THREAD_CREATE_FAULT_STACK_MAP)) {
+            result = KERNEL_PROCESS_OUT_OF_MEMORY;
+            goto failed;
+        }
+#endif
+        vm_status = kernel_vm_map_page(
+            &process->address_space, page_address, stack_physical,
+            KERNEL_VM_READ | KERNEL_VM_WRITE);
+        if (vm_status != KERNEL_VM_OK) {
+            if (vm_status == KERNEL_VM_OUT_OF_MEMORY)
+                result = KERNEL_PROCESS_OUT_OF_MEMORY;
+            goto failed;
+        }
+        ++stack_pages_mapped;
+        /* The mapping owns the frame now; the reservation must not also. */
+        if (kernel_memory_release(stack_physical, 1u, process->owner) !=
+            KERNEL_MEMORY_OK)
+            goto failed;
+        stack_held = false;
     }
-    stack_mapped = true;
-    if (kernel_memory_release(stack_physical, 1u, process->owner) !=
-        KERNEL_MEMORY_OK)
-        goto failed;
-    stack_held = false;
 
 #if defined(KERNEL_PROCESS_HOST_TEST)
     if (consume_thread_create_fault(
@@ -1611,10 +1640,14 @@ failed:
         kernel_handle_close(&process->handles, thread_handle) !=
             KERNEL_HANDLE_OK)
         cleanup_failed = true;
-    if (stack_mapped &&
-        kernel_vm_unmap_page(&process->address_space, stack_base) !=
+    while (stack_pages_mapped != 0u) {
+        --stack_pages_mapped;
+        if (kernel_vm_unmap_page(
+                &process->address_space,
+                stack_base + (stack_pages_mapped * KERNEL_PAGE_SIZE)) !=
             KERNEL_VM_OK)
-        cleanup_failed = true;
+            cleanup_failed = true;
+    }
     if (stack_held &&
         kernel_memory_release(stack_physical, 1u, process->owner) !=
             KERNEL_MEMORY_OK)
@@ -1684,7 +1717,8 @@ static KernelProcessStatus commit_thread(KernelPreparedThread *prepared,
     process->stack_slots |= (uint16_t)(1u << prepared->stack_slot);
     ++process->thread_count;
     ++process->live_threads;
-    ++process->user_stack_pages;
+    process->user_stack_pages =
+        (uint8_t)(process->user_stack_pages + KERNEL_THREAD_STACK_PAGES);
     ++process->user_guard_pages;
     process->supervisor_stack_pages +=
         KERNEL_THREAD_SUPERVISOR_STACK_SIZE / KERNEL_PAGE_SIZE;

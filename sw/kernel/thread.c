@@ -4,6 +4,8 @@
 
 #include "bytes.h"
 #include "generation.h"
+/* KERNEL_PAGE_SIZE: the guard below a stack is expressed in pages. */
+#include "memory.h"
 #include "object_cache.h"
 #include "performance.h"
 
@@ -92,8 +94,16 @@ _Static_assert(KERNEL_THREAD_MAX <= 16u,
                "reap bitmap cannot represent every thread slot");
 _Static_assert(THREAD_WAIT_REGISTRATION_COUNT < UINT16_MAX,
                "wait registration identifiers must fit in 16 bits");
-_Static_assert(KERNEL_THREAD_STACK_STRIDE >= KERNEL_THREAD_STACK_SIZE * 2u,
-               "thread stacks require an unmapped guard interval");
+/*
+ * The guard is the part of a slot's stride that is never mapped, so an
+ * overflow leaves the mapping instead of reaching the next thread's stack.
+ * One page is enough for that and is what the rule has always meant; the
+ * previous form demanded a guard as large as the stack itself, which was the
+ * same thing only while a stack was one page.
+ */
+_Static_assert(KERNEL_THREAD_STACK_STRIDE >=
+                   KERNEL_THREAD_STACK_SIZE + KERNEL_PAGE_SIZE,
+               "thread stacks require an unmapped guard page");
 _Static_assert(KERNEL_THREAD_SUPERVISOR_STACK_SIZE % sizeof(uint32_t) == 0u,
                "supervisor stack must contain whole longwords");
 
