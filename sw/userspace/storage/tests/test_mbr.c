@@ -171,6 +171,41 @@ test_rejects_bad_tables(void)
     assert(table.entry[0].kind == ASTRA_MBR_GPT_PROTECTIVE);
     assert(astra_mbr_find(&table, ASTRA_MBR_FAT) == NULL);
 
+    /*
+     * Overlapping entries, which is the dangerous shape rather than merely the
+     * malformed one. The port confines a mount to the window this table hands
+     * out so a filesystem defect cannot reach the boot partition; if the table
+     * itself overlaps, that window is legitimately inside the boot partition
+     * and every write to it is correctly permitted. The table has to be refused
+     * here or the enforcement downstream guarantees nothing.
+     */
+    begin_table();
+    set_entry(0u, 0x0cu, 2048u, 1024u, 1);
+    set_entry(1u, 0x83u, 2560u, 1024u, 0);
+    assert(astra_mbr_read(&device, sector_buffer, sizeof(sector_buffer),
+                          &table, 0u) == ASTRA_BLOCK_CORRUPT);
+
+    /* One partition wholly inside another is the same refusal. */
+    begin_table();
+    set_entry(0u, 0x0cu, 2048u, 1024u, 1);
+    set_entry(1u, 0x83u, 2100u, 16u, 0);
+    assert(astra_mbr_read(&device, sector_buffer, sizeof(sector_buffer),
+                          &table, 0u) == ASTRA_BLOCK_CORRUPT);
+
+    /* A partition over the table itself is refused however small. */
+    begin_table();
+    set_entry(0u, 0x83u, 0u, 64u, 0);
+    assert(astra_mbr_read(&device, sector_buffer, sizeof(sector_buffer),
+                          &table, 0u) == ASTRA_BLOCK_CORRUPT);
+
+    /* Butting up exactly, which is the layout every real card uses, is fine. */
+    begin_table();
+    set_entry(0u, 0x0cu, 2048u, 512u, 1);
+    set_entry(1u, 0x83u, 2560u, 512u, 0);
+    assert(astra_mbr_read(&device, sector_buffer, sizeof(sector_buffer),
+                          &table, 0u) == ASTRA_BLOCK_OK);
+    assert(table.used == 2u);
+
     assert(astra_mbr_read(NULL, sector_buffer, sizeof(sector_buffer), &table,
                           0u) == ASTRA_BLOCK_INVALID_ARGUMENT);
     assert(astra_mbr_read(&device, NULL, sizeof(sector_buffer), &table, 0u) ==

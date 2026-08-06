@@ -119,6 +119,31 @@ astra_mbr_read(AstraBlockDevice *device, void *sector_buffer,
         entry->sector_count = count;
         ++table->used;
     }
+
+    /*
+     * Overlapping entries are refused for the same reason an entry running past
+     * the device is, and it is the more dangerous of the two.
+     *
+     * The port confines a mount to the window this table hands out, so that a
+     * filesystem defect cannot reach the partition holding the code that boots
+     * the machine. That guarantee is only as good as the table: if two entries
+     * overlap, the window is legitimately inside the boot partition and every
+     * write to it is correctly permitted. Checking here is what makes the
+     * enforcement downstream mean what it claims.
+     *
+     * A second pass rather than a check inside the loop above, because an entry
+     * can only be compared against entries that have been parsed.
+     */
+    for (index = 0u; index < ASTRA_MBR_ENTRY_COUNT; ++index) {
+        if (table->entry[index].sector_count == 0u) {
+            continue;
+        }
+        if (astra_mbr_range_conflicts(table, index,
+                                      table->entry[index].first_sector,
+                                      table->entry[index].sector_count)) {
+            return ASTRA_BLOCK_CORRUPT;
+        }
+    }
     return ASTRA_BLOCK_OK;
 }
 
