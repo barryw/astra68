@@ -1,11 +1,11 @@
 # Astra 68 — Handover: the loader, and what is left of milestone 1
 
-Date: 2026-08-07, updated 2026-08-06 after tasks 2 and 2b. Written to be read
-cold in a fresh session.
+Date: 2026-08-07, updated 2026-08-06 after tasks 2, 2b, 3 and 4. Written to be
+read cold in a fresh session.
 
-A program can launch a program, a launcher has wrappers for it, and every image
-now declares what it is. The three tasks left turn that into `COMMANDS:events`
-running from the prompt.
+**A program runs from the prompt.** `status 7` is a file on the volume, launched
+by name, reporting the status it exited with. Two tasks left: the storage
+protocol over ports, and then `events` becomes one of those files.
 
 **Everything is on `main`.** `origin/main` is still at `d1fef0c`; everything
 since is local and unpushed.
@@ -14,7 +14,7 @@ since is local and unpushed.
 
 ## 1. Resume here
 
-**Task 4 of `docs/superpowers/plans/2026-08-07-launch-milestone-1.md`.**
+**Task 5 of `docs/superpowers/plans/2026-08-07-launch-milestone-1.md`.**
 
 The plan has six tasks and one was added while task 1 was being built:
 
@@ -24,13 +24,13 @@ The plan has six tasks and one was added while task 1 was being built:
 | 2 | runtime wrappers, and seeding an assign table from a capability table | **done**, `d0bd9a3` |
 | 2b | `ASTRA_PROGRAM`, mandatory provenance, link fails without it | **done**, `5be6f15` |
 | 3 | streams — `STDOUT`, `STDERR`, `STDIN` as grants, not numbers | **done**, `c9058d9` |
-| 4 | the shell launches by name; `COMMANDS:` bound; `status` proves it | next |
-| 5 | the storage protocol over ports | |
+| 4 | the shell launches by name; `COMMANDS:` bound; `status` proves it | **done**, `fc8a643` |
+| 5 | the storage protocol over ports | next |
 | 6 | `events` becomes `COMMANDS:events`; the builtin is deleted | |
 
 Each finished task has a "what the build settled" block under it in the plan.
-Read task 2's and 2b's before task 3 — one of them is a decision task 3 has to
-make, below.
+Read task 4's before starting task 5: it did task 5's first step already, and
+§3 below says what is left.
 
 Design authority: `docs/superpowers/specs/2026-08-07-program-launch-design.md`,
 and `2026-08-06-filesystem-layout-design.md` §2.5 (lookup), §11 (what a file is)
@@ -66,18 +66,29 @@ returns
   over, and each segment page bounces through one page of kernel memory
   (`launch_page`). A launched image is never read through a user pointer.
 
-## 3. The finding that changes task 5
+## 3. What task 5 still has to do, and what is already done
 
-**Only a cloneable object can be granted.** A copy needs a retain, and areas,
-IRQ endpoints and devices have one — installed with
-`kernel_handle_install_cloneable`. **Ports do not.** They are installed with
-`kernel_handle_install` and move through the transfer machinery instead.
+**`kernel_port_handle_retain` exists.** Task 4 needed it before its own gate
+would pass — a grant is a handle duplicate and a duplicate needs a retain — so
+the send endpoint is installed cloneable now. **Only the send endpoint**: a
+second receive handle would be a second service on one port, with messages going
+to whichever end asked first, so granting one is `ACCESS_DENIED`. Task 5 does not
+have to start there any more.
 
-So before a child can be handed a service handle, `kernel_port_handle_retain`
-has to exist and the port endpoints have to be installed cloneable. That is
-task 5's first step, not a surprise in the middle of it.
+**What task 5 does have to do** is the reason a launched child gets no namespace
+today. An assign's handle is a routing token `vfs_host.c` invented —
+`CLIENT_HANDLE(index, session)` — not a kernel handle, so `WORK:`, `COMMANDS:`
+and `EVENTS:` cannot be granted at all. Turning those into real port send handles
+is what makes `launch_grants` in `console_shell.c` grow from three entries to
+six. **Six is `ASTRA_LAUNCH_GRANT_MAX` exactly**, so `SYS:` does not fit and
+somebody has to decide that on purpose rather than discover it.
 
-## 4. What tasks 2 and 2b built, and the one decision they left task 3
+**And the trap, from both directions.** Attaching a handle to a port message
+*moves* it; installing one cloneable lets it be *copied*. A grant is a copy and a
+reply channel is a move, and they use different machinery — `astra_stream_read`
+makes a reply port per call for exactly that reason.
+
+## 4. What tasks 2, 2b, 3 and 4 built
 
 **Task 2** — `astra_launch` and `astra_process_wait` in
 `sw/userspace/runtime/src/launch.c`, and `astra_assign_seed` in
@@ -89,10 +100,12 @@ task 5's first step, not a surprise in the middle of it.
   everything else.
 - Both wrappers clear their outputs before anything, including before their own
   refusal. `exit_status` is published only when the wait established one.
-- `astra_assign_seed` binds every published capability except `PROCESS` and
-  `THREAD`. Roots do not travel in the published table yet — the launch spec's
-  §2 has `root_offset` in the grant and `AstraStartupCapability` has nowhere to
-  put one — so every binding is at its mount's own root.
+- `astra_assign_seed` turns a capability table into a namespace. It bound
+  everything but `PROCESS` and `THREAD` when it landed; **task 3 replaced that
+  with the flag rule below**, so read that bullet rather than this one. Roots
+  still do not travel in the published table — the launch spec's §2 has
+  `root_offset` in the grant and `AstraStartupCapability` has nowhere to put one
+  — so every binding is at its mount's own root.
 
 **Task 3** — `sw/include/astra/stream_service.h`, `sw/userspace/streams/`,
 `sw/userspace/supervisor/src/console_stream.c`, and the runtime's port wrappers
@@ -109,16 +122,26 @@ in `sw/userspace/runtime/src/port.c`.
 - `console_stream_stdout()` / `_stderr()` / `_stdin()` are the send handles a
   launch grants. They exist before the first prompt, because a child is handed
   what its launcher already holds.
-- **`console_stream_offer` is called by nobody.** That is `STDIN`'s only missing
-  piece and it is task 4's: while a child runs, the line the editor finishes
-  goes to the source instead of to `run_line`.
+- `astra_stream_read` makes a **reply port per call**, because a handle attached
+  to a message is moved rather than copied. The streams mock models the move,
+  and a test asserts the mock does — a mock that copied is what let a broken
+  version pass once already.
 
-**The trap task 3 found, which task 5 will meet again.** Attaching a handle to a
-port message **moves** it — ports carry no retain, so the sender's entry is
-invalidated. A reply handle cannot be cached across calls; `astra_stream_read`
-makes a reply port per read. The streams mock models this deliberately, and a
-test asserts the mock does, because a mock that copied is what let the broken
-version pass.
+**Task 4** — `console_shell.c`'s `command_launch`, `launch_path`,
+`launch_grants` and `pump_once`; the `COMMANDS:` binding in `vfs_host.c`;
+`sw/userspace/commands/status`; and `astra_image.install`.
+
+- **A word that is not a builtin is a launch.** `APPS:` then `COMMANDS:`, top
+  level only; a word carrying a `:` names its own assign and is resolved
+  directly, which is what an assign does instead of `PATH`. A 64 KiB load buffer
+  in BSS, one launch at a time.
+- **`pump_once` is the loop body, called from the prompt and from the wait for a
+  child.** Anything a serving wait forgets to pump is a service a child hangs
+  on, so there is one copy of it and no second answer.
+- A line typed while a child runs goes to `console_stream_offer`. If the source
+  will not take it the editor is not committed, so the line stays on screen.
+- The gate runs a real program: `status 7` → `exited 7`, `status` → `exited 0`,
+  `commands:status 3` → `exited 3`, `nosuchthing` → `not a command`.
 
 **Task 2b** — `sw/include/astra/program.h`, the `ASSERT` at the end of
 `sw/userspace/runtime/astra_user.ld`, and `tools/program_info.py`.
