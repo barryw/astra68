@@ -72,7 +72,6 @@ typedef struct KernelBlockStats {
 } KernelBlockStats;
 
 void kernel_block_init(void);
-bool kernel_block_available(void);
 KernelBlockStatus kernel_block_submit(uint32_t owner, uint8_t operation,
                                       uint64_t lba, uint16_t sectors,
                                       KernelDmaHandle dma_handle,

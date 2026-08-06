@@ -1028,15 +1028,6 @@ KernelPortStatus kernel_port_owner_died(uint32_t owner,
     return KERNEL_PORT_OK;
 }
 
-uint32_t kernel_port_terminal_result(const KernelPort *port,
-                                     KernelPortEndpoint endpoint)
-{
-    if (!valid_port_pointer(port) || !valid_endpoint(endpoint))
-        return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    return endpoint == KERNEL_PORT_ENDPOINT_SEND ?
-        port->send_terminal : port->receive_terminal;
-}
-
 bool kernel_port_snapshot(uint32_t slot, KernelPortSnapshot *snapshot)
 {
     const KernelPort *port;

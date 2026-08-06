@@ -23,8 +23,14 @@ TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections
 HOST_FLAGS := -O2 -fno-builtin
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
+# --gc-sections is what makes the -ffunction-sections every module already
+# compiles with actually pay. Without it the sections were cut up and then all
+# linked in regardless: lwext4 alone contributes paths this service never
+# calls, and collecting them takes the image from 82,084 bytes of text to
+# 70,304 with BSS unchanged. It is the initial user image, so that is ROM the
+# firmware carries and pages the loader maps on every boot.
 LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
-	-Wl,--build-id=none -T $(RUNTIME)/astra_user.ld
+	-Wl,--build-id=none -Wl,--gc-sections -T $(RUNTIME)/astra_user.ld
 SOURCES := src/supervisor.c src/main.c src/volume.c src/console_shell.c
 OBJECTS := build/m68k/supervisor.o build/m68k/main.o \
 	build/m68k/volume.o build/m68k/console_shell.o

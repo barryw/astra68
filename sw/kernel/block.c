@@ -193,12 +193,6 @@ void kernel_block_init(void)
     (void)refresh_device_state();
 }
 
-bool kernel_block_available(void)
-{
-    return initialized && refresh_device_state() &&
-        (device_state.state_flags & BLOCK_STATE_LINK_UP) != 0u;
-}
-
 KernelBlockStatus kernel_block_submit(uint32_t owner, uint8_t operation,
                                       uint64_t lba, uint16_t sectors,
                                       KernelDmaHandle dma_handle,

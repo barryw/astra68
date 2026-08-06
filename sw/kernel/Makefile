@@ -16,10 +16,39 @@ BUILD_DIR = build
 BUILD_INFO = $(BUILD_DIR)/kernel_build_info.h
 
 CPPFLAGS = -I../include -I$(BUILD_DIR) -include $(BUILD_INFO)
+# -ffunction-sections with --gc-sections below. A large part of this kernel is
+# introspection and test surface -- the *_snapshot, *_stats and
+# *_test_fail_* entry points the host suites drive -- and the image itself
+# never reaches any of it. Without the pair it was all linked in anyway: 9,604
+# bytes of text, 7,599 of ROM payload after LZ4, and two pages of RAM, spent on
+# code the machine cannot execute. The suites compile the same sources on the
+# host and keep using those entry points, so nothing is deleted to gain this.
+#
+# -fdata-sections is deliberately not set: measured, it removes four further
+# bytes and is not worth the object-layout churn.
+# Beyond -Wall -Wextra. Each of these is a class of defect this kernel cannot
+# afford rather than a style preference: -Wcast-align and -Wpointer-arith
+# because the target is a 68030 where a misaligned access faults;
+# -Wjump-misses-init because every allocating path here unwinds through a
+# `goto failed`; -Wundef because reading an undefined macro as 0 silently picks
+# a branch, which has already cost this project time in lwext4's config guard;
+# -Wcast-qual because the handle table enforces capability rights and const is
+# load-bearing there; -Wduplicated-cond, -Wduplicated-branches and -Wlogical-op
+# because they catch copy-paste in exactly the long condition chains this code
+# is made of. The kernel was already clean for all of them bar four sites.
+WARNINGS = -Wall -Wextra -Werror -Wshadow -Wcast-align -Wcast-qual \
+           -Wpointer-arith -Wwrite-strings -Wundef -Wnull-dereference \
+           -Wduplicated-cond -Wduplicated-branches -Wlogical-op \
+           -Wjump-misses-init -Warray-bounds=2 -Wformat=2 \
+           -Wstrict-prototypes -Wmissing-prototypes -Wshift-overflow=2
 CFLAGS = -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin \
          -fno-common -fno-pic -fno-pie -fno-stack-protector \
-         -Wa,--noexecstack -Wall -Wextra -Werror
-LDFLAGS = -T kernel.ld -nostdlib -no-pie \
+         -Wa,--noexecstack $(WARNINGS) -ffunction-sections
+# kernel.ld already KEEPs the three sections nothing references by symbol --
+# .text.entry, .vectors and .kernel_trace -- which is what makes collecting the
+# rest safe. A new section that only the hardware or the ROM reaches needs the
+# same treatment or it will be collected.
+LDFLAGS = -T kernel.ld -nostdlib -no-pie -Wl,--gc-sections \
           -Wl,--build-id=none,-Map=astra_kernel.map
 
 OBJECTS = $(BUILD_DIR)/entry.o $(BUILD_DIR)/vectors.o \

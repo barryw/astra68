@@ -153,8 +153,6 @@ KernelPortStatus kernel_port_commit_wait(KernelPort *port,
 KernelPortStatus kernel_port_owner_died(uint32_t owner,
                                         uint32_t *closed_ports,
                                         uint32_t *woken_threads);
-uint32_t kernel_port_terminal_result(const KernelPort *port,
-                                     KernelPortEndpoint endpoint);
 bool kernel_port_snapshot(uint32_t slot, KernelPortSnapshot *snapshot);
 bool kernel_port_pool_stats(KernelPortPoolStats *stats);
 bool kernel_port_pool_healthy(void);
