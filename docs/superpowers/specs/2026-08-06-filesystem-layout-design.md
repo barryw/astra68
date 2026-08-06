@@ -397,7 +397,10 @@ by name at runtime, so nothing can be impersonated by registering first.
 ### 3.4 The event sink starts first
 
 It is what records the failures of everything after it. Before it exists,
-failures go to the console channel, which needs no service and no disk.
+failures go to the console channel, which needs no service and no disk — and
+which stops narrating the moment the service drains the ring, because from then
+on it is a second timeline over the terminal's own display. The event spec's
+§6.1 has the rule.
 
 ### 3.5 A machine with no state volume still boots
 

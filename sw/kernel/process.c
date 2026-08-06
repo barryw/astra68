@@ -100,6 +100,24 @@ static KernelObjectCache process_cache;
 static uint32_t process_cache_bitmap[
     KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_PROCESS_MAX)];
 static KernelSchedulerStats scheduler_stats;
+/*
+ * Whether the console still narrates what programs say.
+ *
+ * The console sink exists because it works when nothing else does: before the
+ * events service is running there is no other way to see an event, and the
+ * layout spec's "the event sink starts first" rests on it. Once something has
+ * drained the ring, that is no longer true -- and the sink is then a second
+ * timeline, painted over the terminal's own plane by a writer the terminal
+ * knows nothing about.
+ *
+ * So the first successful drain closes it. Not a setting, not a level: the
+ * drain itself is the proof that a better reader exists, and proof is a better
+ * trigger than configuration. It does not reopen if that reader stops -- a
+ * service that dies is reported as a service that died, which is the honest
+ * account of that, rather than the console quietly resuming and looking like
+ * nothing happened.
+ */
+static uint8_t diagnostic_console_open = 1u;
 static KernelProcessMaintenanceDiagnostics maintenance_diagnostics;
 static KernelProcessQualificationClient
     qualification_clients[PROCESS_QUALIFICATION_CLIENT_MAX];
@@ -1444,6 +1462,11 @@ void kernel_process_init(void)
 {
     scheduler_initialized = 0u;
     scheduler_started = 0u;
+    /*
+     * A fresh boot narrates again. The sink closes when a reader appears, and
+     * on this side of a reset there is not one yet.
+     */
+    diagnostic_console_open = 1u;
 #if defined(KERNEL_PROCESS_HOST_TEST)
     next_thread_create_fault = KERNEL_PROCESS_THREAD_CREATE_FAULT_NONE;
 #endif
@@ -4034,7 +4057,9 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         record.activity = current_thread->activity;
         record.thread = (uint16_t)current_thread->id;
         record.payload_length = (uint16_t)length;
-        kernel_process_diagnostic_log(&record, payload, length);
+        if (diagnostic_console_open) {
+            kernel_process_diagnostic_log(&record, payload, length);
+        }
         break;
     }
     case ASTRA_SYSCALL_TRACE_READ: {
@@ -4088,6 +4113,11 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         if (capacity > ASTRA_TRACE_READ_BATCH_MAX)
             capacity = ASTRA_TRACE_READ_BATCH_MAX;
 
+        /*
+         * Somebody with the authority to read the stream is reading it, so the
+         * console stops narrating. See diagnostic_console_open.
+         */
+        diagnostic_console_open = 0u;
         copied = kernel_trace_drain_user(cursor, events, capacity, &cursor,
                                          &lost);
         if (copied != 0u) {

@@ -84,6 +84,7 @@ Before that, two things this session left on the table, both written into
 | Four tiers, four budgets, eviction accounted | `sw/userspace/events/src/event_store.c` |
 | `EVENTS:` as a tree — `ls`, `cat`, no new protocol | `sw/userspace/events/src/event_backend.c` |
 | One command's story, read on the machine | `emu/qemu/test-terminal.py` |
+| The console stops narrating once a reader exists | `diagnostic_console_open`, `sw/kernel/process.c` |
 
 ## 4. The three design decisions worth not relitigating
 
@@ -265,9 +266,7 @@ successor in `GRAPHICS_ARCHITECTURE.md`. Nothing has measured it hot yet.
 - The event system's numbers — tier budgets, token-bucket rates, boot ring size,
   coalescing window — which want a measured workload rather than an opinion. The
   eviction accounting that supplies one is now built.
-- Whether the console should keep rendering every event now that `EVENTS:`
-  exists. It currently repaints the terminal's own plane, which is the noise in
-  every screenshot in this document.
+
 - Whether an unresolved assign that the system knows exists should say so
   (`EVENTS: is held by the events service — try events`) rather than
   `not found`, which is what a typo also gives. Nothing leaks: the standard

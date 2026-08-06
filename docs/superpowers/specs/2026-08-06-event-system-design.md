@@ -229,6 +229,16 @@ wrong.
 the console sink. Logs are where secrets leak, so observation is the privileged
 half.
 
+**The console sink closes the moment something drains the ring.** It exists
+because it works when nothing else does — before the events service there is no
+other way to see an event, which is what §3.4 of the layout spec rests on. Once
+a reader with the authority to drain has drained, the sink is a second timeline
+painted over the terminal's own plane by a writer the terminal knows nothing
+about. The drain is the proof that a better reader exists, and proof is a better
+trigger than a setting; it does not reopen if that reader stops, because a
+service that dies is reported as one, and a console quietly resuming would look
+like nothing had happened.
+
 This reverses the console channel as built in `2a995b8`, where the *write* was
 gated. That was right for a debug console and is wrong for the system of
 record.

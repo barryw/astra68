@@ -6454,6 +6454,33 @@ static void test_reading_the_stream_is_the_privileged_half(void)
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+
+    /*
+     * And the console has stopped narrating. The sink exists because it works
+     * when nothing else does; a drain is proof that something else does, and
+     * proof is a better trigger than a setting. Until this, every event a
+     * program emitted was painted over the terminal's own plane by a writer the
+     * terminal knows nothing about.
+     */
+    {
+        uint32_t reports = diagnostic_log_reports;
+        KernelTraceHeader before;
+        KernelTraceHeader after;
+
+        assert(kernel_trace_header(&before));
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_LOG_WRITE;
+        registers[1] = ASTRA_EVENT_MESSAGE_UNSTRUCTURED;
+        registers[2] = ASTRA_EVENT_LEVEL_ERROR;
+        assert(kernel_process_on_syscall(registers,
+                                         KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        assert(diagnostic_log_reports == reports);
+        /* Silenced, not lost: the record is in the ring like any other. */
+        assert(kernel_trace_header(&after));
+        assert(after.next_sequence != before.next_sequence);
+    }
 }
 
 /*
