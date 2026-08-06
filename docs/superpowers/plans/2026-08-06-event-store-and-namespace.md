@@ -201,13 +201,29 @@ private path to a disk.
 Host-tested: the store takes a client and a clock, both of which the host test
 already knows how to fake for the VFS.
 
-- [ ] Step 1: failing tests — a drained record lands in the tier its level
+- [x] Step 1: failing tests — a drained record lands in the tier its level
       names; a full tier evicts oldest and counts it; a screaming `info`
-      subsystem cannot evict an `error`; the boot ring survives a tier wrap;
-      `debug` never lands; a store with no volume still accepts and bounds.
-- [ ] Step 2: the store.
-- [ ] Step 3: `cd sw/userspace && make test && make sanitize && make analyze`.
-- [ ] Step 4: commit.
+      subsystem cannot evict an `error`; the boot ring keeps the earliest;
+      `debug` never lands; an eviction nobody can name is still counted.
+- [x] Step 2: the store.
+- [x] Step 3: `cd sw/userspace && make test && make sanitize && make analyze`.
+- [x] Step 4: commit.
+
+**The store is RAM, and that is a deferral rather than a design.** The four
+rings, the budget, the fractions and the eviction accounting are the real
+piece and the disk backing slots behind them; what is missing is the write to
+the state volume's `events/` and therefore §8.2's *last M boots*. `EVENTS:boot/
+current` is everything the boot ring can mean today, and `boot/-1` will not
+exist until this lands. **Trigger:** the first time a question needs an event
+from before the last reboot — which is most of the questions worth asking, so
+this is the next thing after plan 6 rather than a someday.
+
+Two smaller things the build settled: an event lands in **exactly one** tier
+(the presented bit wins over the level, and the boot ring is the one deliberate
+copy), and eviction is attributed by looking the displaced record's message id
+up in the catalog — a drained record carries an id, and which subsystem emitted
+it is static context. Without a catalog the eviction counts as unattributed
+rather than not at all.
 
 ### Task 5: The events backend
 

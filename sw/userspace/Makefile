@@ -1,4 +1,5 @@
-SUBDIRS := runtime metrics alloc storage vfs input shell terminal supervisor
+SUBDIRS := runtime metrics alloc storage vfs events input shell terminal \
+	supervisor
 
 all test sanitize analyze clean:
 	@for dir in $(SUBDIRS); do $(MAKE) -C $$dir $@ || exit $$?; done
