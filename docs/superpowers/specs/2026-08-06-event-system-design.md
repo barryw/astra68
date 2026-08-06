@@ -79,6 +79,17 @@ call site that wants two events.
 The inline string is the escape hatch and it is deliberately awkward, because
 it is the one argument type that costs what text logging costs.
 
+**Log the object, not the name.** Where an object exists — a file, a mount, a
+process — the event carries its identity and a reader holding the right
+authority resolves it back to a name. This is redaction by not having the data,
+which is the only kind that cannot leak, and it is the same rule as "identity
+is the object, never the string" in the layout spec.
+
+An inline string is therefore for the case where there is no object: a volume
+label read off a disk that would not mount, a name that failed to resolve. An
+event copied off this machine is less legible as a result, and that is the
+correct trade rather than a regrettable one.
+
 ---
 
 ## 2. Emitting
@@ -102,6 +113,13 @@ low enough that they should be.
 `sw/kernel/user_copy.c` already uses this exact pattern —
 `_kernel_user_copy_sites_start/end` is a table of descriptors in a dedicated
 section, consumed by the fault handler. The mechanism is proven here.
+
+**The kernel's own events use it too.** The existing `KernelTraceEvent` enum —
+`SYSCALL_ENTRY`, `IRQ_DELIVER`, `PMMU_FAULT` and the rest — becomes descriptors
+like everything else, so there is one event model, one catalog format and one
+reader for the whole machine. Two kinds of event would be the first exception
+to "one way to do each thing", and the first exception is the one that teaches
+everyone the rule is negotiable.
 
 ---
 
@@ -330,13 +348,32 @@ window and by the budgets for the durable one.
 ## 9. Configuration, and turning it off
 
 One file, `events.conf`, in `DEFAULTS:` with overrides in `CONFIG:`. A level per
-subsystem and a global default; tier budgets; the boot ring's size. That is the
-whole surface. No filters, no pipelines, no routing rules, no plugin
+subsystem, a global default, and **one number**: the total events budget. The
+three tiers and the boot ring are fixed fractions of it, so a person sets one
+value and cannot produce an incoherent split — a tiny record tier beside a huge
+detail tier looks reasonable right up to the moment you need yesterday's error.
+
+The starting fractions and the token-bucket rates are provisional. §8.4's
+eviction accounting is what corrects them, on a real workload rather than by
+invention. That is the whole surface. No filters, no pipelines, no routing rules, no plugin
 directory — an event system with a configuration language is a program nobody
 can predict, and §"Why this shape" of the layout spec says why that is not on
 offer.
 
-### 9.1 What "off" actually costs
+### 9.1 Raising a level while something is wrong
+
+Levels apply at boot, like everything else in `CONFIG:`. The one exception is
+diagnostic rather than configurational: `events` can raise a subsystem's level
+**for the current boot**, because the fault you cannot reproduce is the one you
+cannot afford to reboot away from.
+
+It says that it is temporary, and `events` shows any level that differs from
+the file. This is deliberately a second way to set one thing, which the service
+rule refuses — the difference is that a service set changes rarely and never
+mid-investigation, while a log level is exactly the thing you need to change
+while the evidence is still on the machine.
+
+### 9.2 What "off" actually costs
 
 Three different things get called off, and they are not the same:
 
@@ -355,7 +392,7 @@ and its disk writes — and it is a separate line in the manifest. Doing only
 that leaves call sites still paying for a syscall into a ring nobody drains,
 which is the worst of both and is worth saying out loud.
 
-### 9.2 A disabled log must never look like an empty one
+### 9.3 A disabled log must never look like an empty one
 
 If capture is off, the machine says so — at boot, and in the `events` command's
 output, in place of the empty list it would otherwise print. Silence and
@@ -371,7 +408,8 @@ this off; they are not allowed to be confused later about whether they did.
 |---|---|
 | `ASTRA_SYSCALL_LOG_WRITE` | becomes the event append: message id and typed arguments, into the trace ring |
 | Its authority | ungated to emit; `ASTRA_RIGHT_DEBUG` moves to reading and to the console sink |
-| `sw/kernel/trace.c` | gains the user record type and per-process emission accounting |
+| `sw/kernel/trace.c` | gains the user record type and per-process emission accounting; its own event enum becomes descriptors |
+| `sw/kernel/monitor.c` | the `trace` command renders through the catalog |
 | Message headers | gain the activity field; the VFS Kit sets it |
 | `sw/userspace/runtime` | `ASTRA_EVENT`, the descriptor section, the per-subsystem enable words |
 | Build | a step extracting descriptors into a catalog, for the kernel and per bundle |
@@ -379,12 +417,9 @@ this off; they are not allowed to be confused later about whether they did.
 
 ## 11. Open questions
 
-- The actual numbers: tier budgets, token-bucket rates, the boot ring's N and
-  M, and the coalescing window. All of them want measurement rather than
-  invention, and §8.4's eviction accounting is what will provide it.
-- Whether the kernel's existing trace events get message ids too, or stay a
-  separate enum the reader special-cases.
-- How a person adjusts per-subsystem levels at runtime, and whether that is
-  configuration in `CONFIG:` or a command against the service, or both.
-- Redaction: an inline string argument can carry anything a program has, and
-  the machine has no notion yet of a value that should not be recorded.
+- The provisional numbers behind the single budget knob: the tier fractions,
+  the token-bucket rates, the boot ring's size and the coalescing window. These
+  need a real workload rather than an opinion, and §8.4's eviction accounting
+  is what will supply one.
+- Whether an activity should ever be attributed to a person's action in the
+  interface, once there is an interface to attribute it to.
