@@ -442,8 +442,8 @@ bugs. An NVRAM TLV is reserved for the boot-attempt counter.
 
 ## 10. Open questions for the next specs
 
-- The event record: fields, levels, and what context the system attaches
-  without being asked.
+- The event record, levels and correlation are specified in
+  `2026-08-06-event-system-design.md`.
 - The shell language, and what a startup entry looks like once one exists.
 - The bundle manifest: how an application declares the authority it wants,
   which documents it opens, and how a person sees and answers that request.
