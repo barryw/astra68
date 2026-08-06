@@ -319,8 +319,9 @@ Profile everything so performance is measurable and regressions are visible.
 | 4 | lwext4 vendor + port layer | **done** |
 | 4b | Initial image carries the filesystem and runs on the board | **done** (ABI 0.4) |
 | 4c | Mount the volume through the device lease | **done** |
+| 4d | Terminal on the character plane, changes reaching the disk | **done** |
 | 5 | VFS service | next |
-| 6 | Terminal service + VFS client Kit + shell builtins | |
+| 6 | Terminal service + VFS client Kit + shell builtins | partly, see 6d |
 | 7 | Introspection filesystem (`PROC:`) | |
 
 ---
@@ -534,45 +535,86 @@ Constraints that will bite:
   deadline** (today the waiter's deadline is the timeout), and **`LATE` and
   `CANCELLED` completions** have ABI values but no producer.
 
-## 6d. The terminal, and the one thing it cannot do
+## 6d. The terminal, and the dangling device behind it
 
-Astra boots to a terminal on the 90x30 character plane, on Beast and on the
-board, driven by keys injected over QMP `input-send-event`. Working: `ls`,
-`cd`, `pwd`, `mkdir`, `clear`, `help`, line editing, history, scrolling.
+Astra boots to a terminal on the character plane, on Beast and on the board,
+driven by keys injected over QMP `input-send-event`. Working: `ls`, `cd`,
+`pwd`, `mkdir`, `cat`, `write`, `rm`, `clear`, `help`, line editing, history,
+scrolling. **What the terminal changes now reaches the disk**, judged from
+outside by `e2fsck` and `debugfs` on the card the emulator wrote.
 
-**Nothing the terminal changes reaches the disk.** A `mkdir` is visible for
-the rest of the session and gone after a restart; `debugfs` on the volume
-shows only `lost+found`. `write` is worse: `ext4_fwrite` returns EOK having
-moved zero bytes, the file is created empty, and reopening it fails EINVAL.
+### What the defect actually was
 
-What is known, so it need not be rediscovered:
+The symptom was that nothing the terminal did survived a restart: a `mkdir`
+lasted the session and `debugfs` showed only `lost+found`, while `write`
+reported `write: short, 0 of 5`.
 
-- **The old boot check only worked because it unmounted.** The unmount was the
-  flush. `supervisor_verify_volume()` mounts, writes 4 KiB, reads it back and
-  unmounts, and the write reached the disk on the way out.
+**It was not lwext4, not big-endian, and not flushing.** It was a lifetime bug
+in `sw/userspace/supervisor/src/main.c`. `verify_block_round_trip()` held the
+`AstraLeaseBlock` and the `AstraBlockDevice` as **locals**, and:
+
+```c
+failure = supervisor_verify_volume(&block, want_terminal);  /* leaves it MOUNTED */
+astra_lease_block_detach(&lease);                           /* releases the lease */
+return failure;                                             /* frame dies */
+```
+
+`console_shell_run()` then ran on that reclaimed stack. A mounted volume keeps
+`volume_port.device` pointing at the device, so every filesystem write
+dereferenced a dead frame, read a corrupted `max_transfer_sectors` out of it
+and was refused as `ASTRA_BLOCK_TRANSFER_TOO_LARGE`. Reads kept working out of
+lwext4's block cache, which is exactly why it read as a filesystem defect.
+
+Measured at the moment of a failed `write`: `alloc live=40 peak=46 fail=0
+oop=0 last=5 wfail=17 wok=62`. Zero allocator failures, zero out-of-partition
+refusals, and 17 of 62 device writes refused with status 5. Nothing about that
+is a filesystem.
+
+The fix gives the lease and the device process lifetime and detaches only when
+the volume is not mounted, with `supervisor_volume_is_mounted()` as the single
+source of truth for that question.
+
+### What was disproved on the way, so it is not re-investigated
+
+- **Partial-block writes are fine on both endians.** 1, 5, 4095, 4096 and 4097
+  bytes through the port all move their full byte count, on the LP64 host and
+  on big-endian MC68030 under `qemu-m68k`. The "moved zero bytes" reading was
+  the dangling device, not a read-modify-write defect.
+- **The unmount was never the flush.** A volume written and abandoned without
+  unmounting comes back complete after `ext4_recover()`, on both endians.
+- **`ext4_cache_write_back()` is not the difference.** The passing gates enable
+  it and the supervisor does not; forcing it on changes nothing here.
+- **The LP64 class table on an LP32 target starves lwext4 silently.** A probe
+  that used `host_classes` on m68k lost every transaction after the second and
+  looked exactly like a big-endian journal defect. `sizeof(void *) == 4u`
+  selects `astra_ext4_alloc_classes`; the mount test does this and any new
+  probe must too. This cost an hour and will cost the next person the same.
+
+### Flushing, as measured
+
+- **Per-operation journal commit happens.** Every mutating lwext4 call is
+  wrapped in `ext4_trans_start`/`ext4_trans_stop`, and `trans_stop` runs
+  `jbd_journal_commit_trans`. A command is durable at the journal when it
+  returns.
+- **Checkpointing to final locations is lazy, and that is correct.** After a
+  killed emulator, `debugfs` without replay sees the dirents but zero-size
+  inodes; `e2fsck` with replay completes it and a second pass is clean.
+- **There is no unmount on shutdown**, so the superblock free-block and
+  free-inode counters are stale after every hard stop. `e2fsck` corrects them.
+  The volume is correct; it is merely always dirty.
+- **`astra_block_flush()` has no caller anywhere in `sw/`.** lwext4's
+  `ext4_blockdev_iface` has no flush hook, so the port never issues one and
+  there is no barrier between a journal commit and the media. Harmless under
+  QEMU. Not harmless on the board's real SD path, and it is the next thing to
+  fix in this area.
+
+Three related notes:
+
 - **A second mount is not possible.** lwext4 answers EINVAL from inside
   `ext4_block_init`/`ext4_fs_init`, not from the mount preamble, and
   re-initialising the port first does not help. So "mount once and keep it" is
-  the only shape available, which is why the check now takes a `keep_mounted`
-  flag.
-- **`ext4_cache_flush()` alone does not persist anything.** It returns EOK
-  after a `mkdir` and the directory still does not survive a restart. With a
-  journal running, lwext4 holds changes in the open transaction.
-- **Closing and reopening the journal to force a commit is untried and
-  suspect.** The one attempt killed the emulator mid-run; it was not
-  investigated and the change was reverted rather than committed.
-- **The size distinction is the lead for the zero-byte write.** The boot check
-  writes exactly 4096 bytes, one full block, and succeeds. The shell writes a
-  handful and moves nothing. That is the partial-block read-modify-write path,
-  and this project has already found three big-endian defects in lwext4 that
-  upstream never compiled. A fourth there would be in character.
-
-The next step is a host test rather than more boot runs: write 1, 5, 4095,
-4096 and 4097 bytes through the port on both endians with `e2fsck` as judge.
-`lwext4-eval` already has that shape.
-
-Two related notes:
-
+  the only shape available, which is why the check takes a `keep_mounted` flag
+  — and it is that flag that created the lifetime bug above.
 - **Nothing prevents unmounting a volume in use**, here or in lwext4. The VFS
   service needs open-handle refcounting and an `EBUSY` on unmount, and it is
   cheaper to build that in than to retrofit it.
@@ -583,10 +625,16 @@ Two related notes:
   handed scanout over. Astra wants an explicit notion of a text display and a
   graphics display, with the terminal claiming the text one and clearing the
   splash behind it, rather than relying on whatever the launcher happened to
-  leave on screen.
+  leave on screen. **This is the only reason a terminal has not been seen on a
+  screen; it runs.**
 
 ## 7. Known problems not caused by this work
 
+- **`KERNEL_DEVICE_LEASE_OWNER_MAX` was raised from 2 to 4 for the terminal's
+  display lease and `sw/kernel/tests/test_device.c` was not updated**, so
+  `make test` in `sw/kernel` aborted in `test_quota_and_owner_death` from
+  commit `46923c7` onward. The test now derives its counts from the constant
+  rather than writing them out, so the next bump cannot repeat it.
 - A stale `sw/boot/astra_boot.bin` may sit in a working tree from an old build
   and panics with `Vesta timer interrupt timeout`. It is **not** committed —
   `git ls-files sw/boot` lists no binaries — so `make` in `sw/boot` replaces it.
