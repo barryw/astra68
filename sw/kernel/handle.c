@@ -223,6 +223,33 @@ static KernelHandleStatus find_entry(const KernelHandleTable *table,
     return KERNEL_HANDLE_OK;
 }
 
+/*
+ * find_entry for callers that are going to mutate what they find.
+ *
+ * The lookup and every validation it performs stay in find_entry and are not
+ * duplicated here. Two call sites used to take the const result and cast the
+ * qualifier away, which reads as "the const was inconvenient" and trains the
+ * next reader to ignore it -- on the table that enforces capability rights,
+ * which is the last place that should be true. Recovering the index from the
+ * array the entry demonstrably came from needs no cast at all, so the compiler
+ * keeps checking what the cast used to hide.
+ */
+static KernelHandleStatus find_entry_mutable(KernelHandleTable *table,
+                                             KernelHandle handle,
+                                             KernelHandleEntry **entry)
+{
+    const KernelHandleEntry *found = NULL;
+    KernelHandleStatus status;
+
+    if (table == NULL || entry == NULL)
+        return KERNEL_HANDLE_INVALID_ARGUMENT;
+    status = find_entry(table, handle, &found);
+    if (status != KERNEL_HANDLE_OK)
+        return status;
+    *entry = &table->entries[found - table->entries];
+    return KERNEL_HANDLE_OK;
+}
+
 static void invalidate_entry(KernelHandleTable *table,
                              KernelHandleEntry *entry,
                              KernelHandleReleaseRecord *record)
@@ -488,13 +515,13 @@ KernelHandleStatus kernel_handle_lookup_any(const KernelHandleTable *table,
 KernelHandleStatus kernel_handle_close(KernelHandleTable *table,
                                        KernelHandle handle)
 {
-    const KernelHandleEntry *found;
+    KernelHandleEntry *found;
     KernelHandleReleaseRecord record;
-    KernelHandleStatus status = find_entry(table, handle, &found);
+    KernelHandleStatus status = find_entry_mutable(table, handle, &found);
 
     if (status != KERNEL_HANDLE_OK)
         return status;
-    invalidate_entry(table, (KernelHandleEntry *)found, &record);
+    invalidate_entry(table, found, &record);
     if (record.release != NULL)
         record.release(record.object, record.context);
     return KERNEL_HANDLE_OK;
@@ -698,9 +725,9 @@ KernelHandleStatus kernel_handle_transfer_commit_export(
         return KERNEL_HANDLE_INVALID_ARGUMENT;
 
     for (uint32_t index = 0u; index < batch->count; ++index) {
-        const KernelHandleEntry *source = NULL;
+        KernelHandleEntry *source = NULL;
         KernelDetachedEntry *destination = NULL;
-        KernelHandleStatus status = find_entry(
+        KernelHandleStatus status = find_entry_mutable(
             source_table, batch->source[index], &source);
 
         if (status != KERNEL_HANDLE_OK)
@@ -715,7 +742,7 @@ KernelHandleStatus kernel_handle_transfer_commit_export(
             source->rights != destination->rights ||
             source->type != destination->type)
             return KERNEL_HANDLE_INVALID_STATE;
-        sources[index] = (KernelHandleEntry *)source;
+        sources[index] = source;
         destinations[index] = destination;
     }
     if (transfer_stats.reserved_detached < batch->count ||

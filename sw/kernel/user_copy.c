@@ -11,7 +11,14 @@
 #define M68K_FC_USER_DATA   0x0001u
 #define M68K_BUS_ERROR_VECTOR_OFFSET 0x0008u
 
-#if !KERNEL_USER_COPY_HOST_TEST
+/*
+ * defined() rather than a bare `#if KERNEL_USER_COPY_HOST_TEST`, which reads an
+ * undefined macro as 0 and so selects a branch by accident rather than by
+ * intent. This project has already been bitten by that spelling once, in
+ * lwext4's CONFIG_USE_DEFAULT_CFG guard, and process.c uses the explicit form
+ * for its own host-test switches.
+ */
+#if !defined(KERNEL_USER_COPY_HOST_TEST)
 extern const KernelUserCopyFaultSite _kernel_user_copy_sites_start[];
 extern const KernelUserCopyFaultSite _kernel_user_copy_sites_end[];
 #endif
@@ -138,7 +145,7 @@ bool kernel_user_copy_recover_frame(
 
 bool kernel_user_copy_handle_fault(void *raw_frame)
 {
-#if KERNEL_USER_COPY_HOST_TEST
+#if defined(KERNEL_USER_COPY_HOST_TEST)
     (void)raw_frame;
     return false;
 #else

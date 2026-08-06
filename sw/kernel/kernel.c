@@ -1357,6 +1357,15 @@ void kernel_process_soak_checkpoint(uint32_t cycles,
 }
 #endif
 
+/*
+ * Declared as well as defined because nothing else declares it: the only caller
+ * is `jsr kernel_main` in entry.S, which the C compiler cannot check. Writing
+ * the prototype out puts the handoff signature somewhere a reader and
+ * -Wmissing-prototypes can both see, so a change to it is a visible edit rather
+ * than a silent disagreement with the assembly.
+ */
+void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info);
+
 void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
 {
     AstraBootValidation validation;

@@ -1488,6 +1488,16 @@ static KernelProcessStatus prepare_thread(KernelProcess *process,
     bool handle_installed = false;
     bool cleanup_failed = false;
     KernelProcessStatus result = KERNEL_PROCESS_CORRUPT;
+    KernelVmStatus vm_status;
+#if defined(KERNEL_PROCESS_HOST_TEST)
+    /*
+     * Declared here rather than at its first use so no `goto failed` jumps
+     * over its initialisation. The cleanup path does not touch it today, which
+     * is the only reason that was harmless; it stops being harmless the moment
+     * someone adds a release that does.
+     */
+    uint8_t *stack = NULL;
+#endif
 
     if (process == NULL || prepared == NULL ||
         !entry_within_code(process, entry) ||
@@ -1534,7 +1544,7 @@ static KernelProcessStatus prepare_thread(KernelProcess *process,
     }
     stack_held = true;
 #if defined(KERNEL_PROCESS_HOST_TEST)
-    uint8_t *stack = physical_bytes(stack_physical, KERNEL_PAGE_SIZE);
+    stack = physical_bytes(stack_physical, KERNEL_PAGE_SIZE);
     if (stack == NULL)
         goto failed;
     /* Host memory tests disable allocator writes to synthetic addresses. */
@@ -1547,7 +1557,7 @@ static KernelProcessStatus prepare_thread(KernelProcess *process,
         goto failed;
     }
 #endif
-    KernelVmStatus vm_status = kernel_vm_map_page(
+    vm_status = kernel_vm_map_page(
         &process->address_space, stack_base, stack_physical,
         KERNEL_VM_READ | KERNEL_VM_WRITE);
     if (vm_status != KERNEL_VM_OK) {
@@ -1710,6 +1720,8 @@ static KernelProcessStatus create_process(const void *image,
     void *raw_process;
     uint16_t slot;
     KernelObjectCacheStatus cache_status;
+    /* See prepare_thread: hoisted so no `goto failed` jumps over it. */
+    uint8_t *code = NULL;
 
     if (image == NULL || image_size == 0u || image_size > KERNEL_PAGE_SIZE ||
         entry_offset >= image_size || process_id == NULL)
@@ -1761,7 +1773,7 @@ static KernelProcessStatus create_process(const void *image,
         goto failed;
     }
     code_held = true;
-    uint8_t *code = physical_bytes(code_physical, KERNEL_PAGE_SIZE);
+    code = physical_bytes(code_physical, KERNEL_PAGE_SIZE);
     if (code == NULL)
         goto failed;
 #if defined(KERNEL_PROCESS_HOST_TEST)
