@@ -12,10 +12,16 @@ seq 124  warning  10000011/16 act 00000006  command refused, status 6
                                          (src/console_shell.c:183)
 ```
 
-Plan 5 of six is **done**: the ring is drainable, `readdir` is a cursor, the
-catalog is on the machine, the store has its tiers, and `EVENTS:` is a synthetic
-tree served through the ordinary VFS backend seam. Plan 6 — the `events`
-command — is what remains.
+**All six plans of the event system are done.** The ring is drainable, `readdir`
+is a cursor, the catalog is on the machine, the store has its tiers, `EVENTS:`
+is a synthetic tree served through the ordinary VFS backend seam, and `events`
+is the search over it:
+
+```
+WORK:> events --subsystem shell --level warning
+seq 124  warning  10000011/16 act 00000006  command refused, status 6
+                                            (src/console_shell.c:183)
+```
 
 Before this the namespace stopped being a Kit and became how the machine names
 files, and statuses got one vocabulary and a verdict a program cannot forge.
@@ -44,25 +50,29 @@ at all — `ANALYZER_CC=gcc` is Apple clang, which has no `-fanalyzer`.
 
 ## 2. Resume here
 
-**Plan 6: the `events` command** —
-`docs/superpowers/plans/` does not have it written yet, and the spec's §7.3 is
-the scope: filters composed across level, subsystem, process and time; a live
-tail; and §9.1's level change for the current boot. A path is already the
-interface for everything a directory can express, so this is search and nothing
-else.
+**Persist the store.** It is the one thing the event system promises and does
+not do: the tiers, the budget and the eviction accounting are real, and they
+are all in RAM, so `EVENTS:boot/-1` does not exist and every question about a
+boot that has already ended is unanswerable. Most questions worth asking are
+exactly that. The service already holds a storage client and the state volume
+already has an `events/` directory reserved for it (layout spec §2.2); what is
+missing is the write, the read-back at start, and the boot ring's *last M
+boots*.
 
-Before that, two things this session left on the table, both written into
-`2026-08-06-event-store-and-namespace.md` with their triggers:
+Two smaller things, in order of what they unblock:
 
-- **The store is RAM.** The tiers, the budget and the eviction accounting are
-  the real piece; what is missing is the write to the state volume's `events/`,
-  and therefore the spec's *last M boots*. `EVENTS:boot/-1` does not exist
-  rather than existing empty. Most questions worth asking are about a boot that
-  has already ended, so this is the next thing after plan 6 rather than a
-  someday.
-- **No token bucket (§8.4) and no coalescing (§8.3).** The spec asks for a
-  measured workload and there was none until the store existed. The eviction
-  accounting is in place to supply one.
+- **The token bucket (§8.4) and coalescing (§8.3).** The spec asks for a
+  measured workload and there is now a store to measure one on, with the
+  eviction accounting already collecting the evidence.
+- **`events --level-set` (§9.1)** and `--process`, both of which wait on the
+  port transport: per-subsystem levels live in each process's own runtime, so
+  setting another process's level is a control operation on a service and not
+  a write. `OBSERVABILITY.md`'s rule.
+
+Beyond the event system, `docs/CURRENT_STATE.md` is the map. The two biggest
+unbuilt pieces it names are the loader — which turns every "the service is in
+the supervisor's process" note in this document into a launch — and the shell
+language.
 
 ## 3. What the machine gained
 
@@ -85,6 +95,8 @@ Before that, two things this session left on the table, both written into
 | `EVENTS:` as a tree — `ls`, `cat`, no new protocol | `sw/userspace/events/src/event_backend.c` |
 | One command's story, read on the machine | `emu/qemu/test-terminal.py` |
 | The console stops narrating once a reader exists | `diagnostic_console_open`, `sw/kernel/process.c` |
+| Two dimensions at once, as a path | `EVENTS:subsystem/<name>/<level>` |
+| The last screen, a filter, and a live tail | `events`, `sw/userspace/supervisor/src/console_shell.c` |
 
 ## 4. The three design decisions worth not relitigating
 
