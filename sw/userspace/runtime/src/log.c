@@ -6,53 +6,64 @@
  * and one halfword of exit status on its way out. Anything with a bug in it
  * was diagnosed by inference.
  *
- * The channel is authority, not a free line: the kernel gates the write on a
- * process handle carrying ASTRA_RIGHT_DEBUG, and a build with no debug surface
- * grants that to nobody. A program therefore has to treat logging as something
- * that can be refused, which is why nothing here retries or panics -- the
- * status comes back and the caller carries on.
+ * It is not authority any more. Emitting needs no capability at all, because a
+ * machine whose account of what happened depends on one has holes exactly
+ * where something went wrong; ASTRA_RIGHT_DEBUG gates reading other processes'
+ * events instead. Nothing here can be refused for want of a right, and the
+ * status that comes back means the call was malformed.
  *
- * The handle is remembered at startup rather than passed at every call. It is
- * the same handle for the life of the process, and threading it through every
- * diagnostic site is how diagnostics end up not being written.
+ * A line longer than one event's payload is emitted as a chain rather than a
+ * longer record. Splitting here rather than in the kernel keeps the syscall
+ * one call for one event, and the record one slot wide.
  */
 
+#include <astra/event.h>
 #include <astra/runtime.h>
 #include <astra/syscall.h>
 
-static uint32_t log_process_handle;
-
-void
-astra_log_bind(uint32_t process_handle)
-{
-    log_process_handle = process_handle;
-}
-
 uint32_t
-astra_log_handle(void)
+astra_event_emit(uint32_t message, uint32_t flags, const void *payload,
+                 uint32_t length)
 {
-    return log_process_handle;
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_LOG_WRITE, message, flags,
+                   (uint32_t)(uintptr_t)payload, length, 0u, &result);
+    return result.status;
 }
 
 uint32_t
 astra_log_write(const void *bytes, uint32_t length)
 {
-    AstraSyscallResult result;
+    const uint8_t *text = bytes;
+    uint32_t sent = 0u;
 
     if (bytes == NULL || length == 0u || length > ASTRA_LOG_MAX_BYTES) {
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     }
-    /*
-     * Refused here rather than in the kernel when nothing has bound a handle:
-     * a program that logs before it has validated its startup block is asking
-     * with an authority it has not been given yet.
-     */
-    if (log_process_handle == 0u) {
-        return ASTRA_SYSCALL_INVALID_HANDLE;
+    while (sent < length) {
+        uint32_t chunk = length - sent;
+        uint32_t flags = ASTRA_EVENT_LEVEL_NOTICE |
+                         ASTRA_EVENT_FLAG_INLINE_STRING;
+        uint32_t status;
+
+        if (chunk > ASTRA_EVENT_ARGUMENT_MAX) {
+            chunk = ASTRA_EVENT_ARGUMENT_MAX;
+            flags |= ASTRA_EVENT_FLAG_CONTINUED;
+        }
+        status = astra_event_emit(ASTRA_EVENT_MESSAGE_UNSTRUCTURED, flags,
+                                  text + sent, chunk);
+        /*
+         * A refused chunk ends the line rather than retrying it. The caller
+         * gets the status of the first thing that went wrong, and a partial
+         * line on the console is honest about having been cut off.
+         */
+        if (status != ASTRA_SYSCALL_OK) {
+            return status;
+        }
+        sent += chunk;
     }
-    astra_syscall5(ASTRA_SYSCALL_LOG_WRITE, log_process_handle,
-                   (uint32_t)(uintptr_t)bytes, length, 0u, 0u, &result);
-    return result.status;
+    return ASTRA_SYSCALL_OK;
 }
 
 uint32_t
@@ -69,11 +80,6 @@ astra_log(const char *text)
     if (length == 0u) {
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     }
-    /*
-     * A longer line is cut rather than split. Splitting would interleave with
-     * whatever else is writing to the same console, and half a line arriving
-     * under another process's prefix is worse than a line that ends early.
-     */
     return astra_log_write(text, length);
 }
 

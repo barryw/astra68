@@ -46,6 +46,7 @@
 #include <astra/display.h>
 #include <astra/input.h>
 #include <astra/process.h>
+#include <astra/event.h>
 #include <astra/status.h>
 
 #include <assert.h>
@@ -420,37 +421,11 @@ void kernel_platform_cpu_cycles(KernelPlatformCycleCount *cycles)
     cycles->low = (uint32_t)scheduler_test_cycles;
 }
 
-bool kernel_trace_write(KernelTraceEvent event, uint16_t flags,
-                        uint32_t argument0, uint32_t argument1,
-                        uint32_t argument2, uint32_t argument3)
-{
-    (void)event;
-    (void)flags;
-    (void)argument0;
-    (void)argument1;
-    (void)argument2;
-    (void)argument3;
-    return true;
-}
-
-bool kernel_trace_write_at(KernelTraceEvent event, uint16_t flags,
-                           uint64_t timestamp, uint32_t argument0,
-                           uint32_t argument1, uint32_t argument2,
-                           uint32_t argument3)
-{
-    (void)timestamp;
-    return kernel_trace_write(event, flags, argument0, argument1,
-                              argument2, argument3);
-}
-
-bool kernel_trace_stage_at(KernelTraceEvent event, uint16_t flags,
-                           uint64_t timestamp, uint32_t argument0,
-                           uint32_t argument1, uint32_t argument2,
-                           uint32_t argument3)
-{
-    return kernel_trace_write_at(event, flags, timestamp, argument0,
-                                 argument1, argument2, argument3);
-}
+/*
+ * The real ring, not a stub. Emitting is a copy into it now, so a test that
+ * stubbed the ring out could not tell an event that was recorded from one that
+ * was dropped -- which is the property this file has to check.
+ */
 
 uint64_t kernel_platform_monotonic_ns(void)
 {
@@ -704,14 +679,22 @@ static uint32_t last_diagnostic_process;
 static char last_diagnostic_text[ASTRA_LOG_MAX_BYTES + 1u];
 static uint32_t last_diagnostic_length;
 
-void kernel_process_diagnostic_log(uint32_t process_id, const char *text,
-                                   uint32_t length)
+static uint16_t last_diagnostic_flags;
+static uint32_t last_diagnostic_message;
+
+void kernel_process_diagnostic_log(const KernelTraceUserRecord *record,
+                                   const void *payload, uint32_t length)
 {
+    /* The real sink's gate, mirrored: the console is a debug surface. */
+    if (!kernel_process_debug_surface())
+        return;
     ++diagnostic_log_reports;
-    last_diagnostic_process = process_id;
+    last_diagnostic_process = record->process;
+    last_diagnostic_flags = record->flags;
+    last_diagnostic_message = record->message;
     last_diagnostic_length = length;
-    assert(length <= ASTRA_LOG_MAX_BYTES);
-    memcpy(last_diagnostic_text, text, length);
+    assert(length <= ASTRA_EVENT_ARGUMENT_MAX);
+    memcpy(last_diagnostic_text, payload, length);
     last_diagnostic_text[length] = '\0';
 }
 
@@ -6671,161 +6654,156 @@ static void test_user_stack_grows_on_fault_and_guards_the_floor(void)
  * console the operator reads, so every way of asking wrongly has to be a
  * refusal that is counted rather than a line that gets through.
  */
-static void test_diagnostic_log_is_gated_and_sanitised(void)
+static void test_any_process_may_emit_an_event(void)
 {
     static const uint8_t image[] = {0x4eu, 0x71u};
-    static const char line[] = "volume mounted at /";
-    static const char nasty[] = "clean\x1b[2Jand\ndirty";
-    char oversized[ASTRA_LOG_MAX_BYTES + 1u];
+    static const char line[] = "volume mounted";
     KernelCpuContext *next;
-    KernelProcessSnapshot snapshot;
     KernelSchedulerStats stats;
     uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
     uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
     uint32_t user_text = KERNEL_PROCESS_STACK_TOP - 512u;
     uint32_t process_id;
-    uint32_t other_id;
-    KernelHandle self_handle;
-    KernelHandle narrow_handle = KERNEL_HANDLE_INVALID;
-    KernelHandle observer_handle = KERNEL_HANDLE_INVALID;
-    uint32_t reports;
     uint32_t refusals;
 
     initialize_test();
+    assert(kernel_trace_init());
+    assert(kernel_process_debug_surface());
     assert(kernel_process_create(image, sizeof(image), 0u, 0u,
                                  &process_id) == KERNEL_PROCESS_OK);
     assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
-    assert(kernel_process_snapshot(0u, &snapshot));
-    self_handle = snapshot.self_handle;
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, KERNEL_PROCESS_CODE_BASE, 0u);
-
-    /* This build has a debug surface, so a process may speak for itself. */
-    assert(kernel_process_debug_surface());
     assert(kernel_user_copy_to_asm(user_text, line, sizeof(line) - 1u) ==
            KERNEL_USER_COPY_OK);
+
+    /*
+     * The reversal. Emitting used to need a process handle carrying
+     * ASTRA_RIGHT_DEBUG, and the call took one; there is no handle now and
+     * nothing to hold. If the machine's account of what happened depended on
+     * a capability, it would have holes exactly where something went wrong.
+     */
     diagnostic_log_reports = 0u;
     registers[0] = ASTRA_SYSCALL_LOG_WRITE;
-    registers[1] = self_handle;
-    registers[2] = user_text;
-    registers[3] = sizeof(line) - 1u;
+    registers[1] = ASTRA_EVENT_MESSAGE_UNSTRUCTURED;
+    registers[2] = ASTRA_EVENT_LEVEL_WARNING | ASTRA_EVENT_FLAG_INLINE_STRING;
+    registers[3] = user_text;
+    registers[4] = sizeof(line) - 1u;
     assert(kernel_process_on_syscall(registers,
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(diagnostic_log_reports == 1u);
     assert(last_diagnostic_process == process_id);
+    assert(last_diagnostic_message == ASTRA_EVENT_MESSAGE_UNSTRUCTURED);
     assert(last_diagnostic_length == sizeof(line) - 1u);
     assert(strcmp(last_diagnostic_text, line) == 0);
+    assert(KERNEL_TRACE_LEVEL_OF(last_diagnostic_flags) ==
+           ASTRA_EVENT_LEVEL_WARNING);
     assert(kernel_process_stats(&stats));
     assert(stats.diagnostic_logs == 1u);
     assert(stats.diagnostic_log_bytes == sizeof(line) - 1u);
     assert(stats.diagnostic_log_refusals == 0u);
 
     /*
-     * Control characters are replaced, not dropped. The console is shared with
-     * the kernel's own output: a program that could write an escape sequence
-     * could clear the screen, and one that could write a newline could dress
-     * its next line up as something the kernel said.
+     * The event is in the ring, which is the record. The console is a sink on
+     * it rather than a second destination, so the two cannot disagree about
+     * what was said or about the order it was said in.
      */
-    assert(kernel_user_copy_to_asm(user_text, nasty, sizeof(nasty) - 1u) ==
-           KERNEL_USER_COPY_OK);
-    registers[3] = sizeof(nasty) - 1u;
+    {
+        KernelTraceUserRecord user;
+        KernelTraceHeader header;
+        uint8_t payload[ASTRA_EVENT_ARGUMENT_MAX];
+        uint32_t length = 0u;
+        uint32_t slot;
+
+        assert(kernel_trace_header(&header));
+        /* Two slots back: the header of the pair, then its arguments. */
+        slot = header.write_index - 2u;
+        assert(kernel_trace_read_user(slot, &user, payload, sizeof(payload),
+                                      &length));
+        assert(user.message == ASTRA_EVENT_MESSAGE_UNSTRUCTURED);
+        assert(user.process == process_id);
+        assert(length == sizeof(line) - 1u);
+        assert(memcmp(payload, line, length) == 0);
+    }
+
+    /* An event with no arguments at all is a legal event. */
+    registers[3] = 0u;
+    registers[4] = 0u;
     assert(kernel_process_on_syscall(registers,
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
-    assert(last_diagnostic_length == sizeof(nasty) - 1u);
-    assert(strcmp(last_diagnostic_text, "clean.[2Jand.dirty") == 0);
+    assert(diagnostic_log_reports == 2u);
 
-    /* The longest allowed line is allowed, and one byte more is not. */
-    memset(oversized, 'x', sizeof(oversized));
-    assert(kernel_user_copy_to_asm(user_text, oversized,
-                                   ASTRA_LOG_MAX_BYTES) ==
-           KERNEL_USER_COPY_OK);
-    registers[3] = ASTRA_LOG_MAX_BYTES;
-    assert(kernel_process_on_syscall(registers,
-                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
-                                     &next) == KERNEL_PROCESS_OK);
-    assert(next->data[0] == ASTRA_SYSCALL_OK);
-    assert(last_diagnostic_length == ASTRA_LOG_MAX_BYTES);
-
-    reports = diagnostic_log_reports;
     refusals = 0u;
+    diagnostic_log_reports = 0u;
 
-    registers[3] = ASTRA_LOG_MAX_BYTES + 1u;
+    /* A message id of zero names no message. */
+    registers[1] = ASTRA_EVENT_MESSAGE_NONE;
+    registers[3] = user_text;
+    registers[4] = 4u;
     assert(kernel_process_on_syscall(registers,
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
     ++refusals;
+    registers[1] = ASTRA_EVENT_MESSAGE_UNSTRUCTURED;
 
+    /* More than one event's payload is refused, never truncated. */
+    registers[4] = ASTRA_EVENT_ARGUMENT_MAX + 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    ++refusals;
+    registers[4] = 4u;
+
+    /* A length with no payload, and a payload with no length. */
     registers[3] = 0u;
     assert(kernel_process_on_syscall(registers,
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
     ++refusals;
+    registers[3] = user_text;
+    registers[4] = 0u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    ++refusals;
+    registers[4] = 4u;
+
+    /* A level outside the five, and a flag this build does not know. */
+    registers[2] = ASTRA_EVENT_LEVEL_ERROR + 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    ++refusals;
+    registers[2] = 0x8000u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    ++refusals;
+    registers[2] = ASTRA_EVENT_LEVEL_INFO | ASTRA_EVENT_FLAG_INLINE_STRING;
 
     /* An address the process does not own is refused, not read. */
-    registers[2] = 4u;
-    registers[3] = 8u;
+    registers[3] = 4u;
+    registers[4] = 8u;
     assert(kernel_process_on_syscall(registers,
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_BAD_ADDRESS);
     ++refusals;
-    registers[2] = user_text;
 
-    /* A handle that is not a process handle at all. */
-    registers[1] = KERNEL_HANDLE_INVALID;
-    registers[3] = 4u;
-    assert(kernel_process_on_syscall(registers,
-                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
-                                     &next) == KERNEL_PROCESS_OK);
-    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
-    ++refusals;
-
-    /*
-     * The same process, through a second handle to itself that carries only
-     * QUERY. The right is what opens the channel, not the identity: a process
-     * holding a weaker handle to itself is refused like anyone else.
-     */
-    assert(kernel_process_grant_handle(process_id, process_id,
-                                       KERNEL_PROCESS_RIGHT_QUERY,
-                                       &narrow_handle) == KERNEL_PROCESS_OK);
-    registers[0] = ASTRA_SYSCALL_LOG_WRITE;
-    registers[1] = narrow_handle;
-    registers[2] = user_text;
-    registers[3] = 4u;
-    assert(kernel_process_on_syscall(registers,
-                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
-                                     &next) == KERNEL_PROCESS_OK);
-    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
-    ++refusals;
-
-    /*
-     * DEBUG over *another* process is a debugger's authority, and it is not
-     * the authority to write lines in that process's name.
-     */
-    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
-                                 &other_id) == KERNEL_PROCESS_OK);
-    assert(kernel_process_grant_handle(process_id, other_id,
-                                       KERNEL_PROCESS_RIGHT_DEBUG,
-                                       &observer_handle) ==
-           KERNEL_PROCESS_OK);
-    registers[1] = observer_handle;
-    assert(kernel_process_on_syscall(registers,
-                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
-                                     &next) == KERNEL_PROCESS_OK);
-    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
-    ++refusals;
-
-    /* Not one of those refusals reached the console, and all were counted. */
-    assert(diagnostic_log_reports == reports);
+    /* Not one of those refusals reached the sink, and all were counted. */
+    assert(diagnostic_log_reports == 0u);
     assert(kernel_process_stats(&stats));
     assert(stats.diagnostic_log_refusals == refusals);
 }
-
 
 /*
  * The same kernel as a machine ships: no debug surface at all. A process gets
@@ -6833,7 +6811,7 @@ static void test_diagnostic_log_is_gated_and_sanitised(void)
  * everyone -- which is the point of having the surface be one decision rather
  * than a scatter of them.
  */
-static void test_no_debug_surface_closes_the_channel(void)
+static void test_no_debug_surface_closes_only_the_console(void)
 {
     static const uint8_t image[] = {0x4eu, 0x71u};
     static const char line[] = "please";
@@ -6857,19 +6835,39 @@ static void test_no_debug_surface_closes_the_channel(void)
     assert(kernel_user_copy_to_asm(user_text, line, sizeof(line) - 1u) ==
            KERNEL_USER_COPY_OK);
 
+    /*
+     * No debug surface closes the console, and nothing else. The event is
+     * still emitted and is still in the ring: a production machine keeps its
+     * account of itself and simply does not narrate it. The channel used to be
+     * refused outright here, which is what put the holes in the account.
+     */
+    assert(kernel_trace_init());
     reports = diagnostic_log_reports;
     registers[0] = ASTRA_SYSCALL_LOG_WRITE;
-    registers[1] = snapshot.self_handle;
-    registers[2] = user_text;
-    registers[3] = sizeof(line) - 1u;
+    registers[1] = ASTRA_EVENT_MESSAGE_UNSTRUCTURED;
+    registers[2] = ASTRA_EVENT_LEVEL_ERROR | ASTRA_EVENT_FLAG_INLINE_STRING;
+    registers[3] = user_text;
+    registers[4] = sizeof(line) - 1u;
     assert(kernel_process_on_syscall(registers,
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);
-    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(diagnostic_log_reports == reports);
     assert(kernel_process_stats(&stats));
-    assert(stats.diagnostic_logs == 0u);
-    assert(stats.diagnostic_log_refusals == 1u);
+    assert(stats.diagnostic_logs == 1u);
+    assert(stats.diagnostic_log_refusals == 0u);
+    {
+        KernelTraceUserRecord user;
+        KernelTraceHeader header;
+        uint8_t payload[ASTRA_EVENT_ARGUMENT_MAX];
+        uint32_t length = 0u;
+
+        assert(kernel_trace_header(&header));
+        assert(kernel_trace_read_user(header.write_index - 2u, &user, payload,
+                                      sizeof(payload), &length));
+        assert(user.process == process_id);
+        assert(length == sizeof(line) - 1u);
+    }
 
     /* Everything else the handle carries is untouched by the decision. */
     memset(registers, 0, sizeof(registers));
@@ -6975,8 +6973,8 @@ int main(void)
     test_a_program_cannot_forge_a_verdict();
     test_initial_image_exit_is_reported();
     test_user_stack_grows_on_fault_and_guards_the_floor();
-    test_diagnostic_log_is_gated_and_sanitised();
-    test_no_debug_surface_closes_the_channel();
+    test_any_process_may_emit_an_event();
+    test_no_debug_surface_closes_only_the_console();
     test_fault_report_names_only_what_it_knows();
     test_executable_rejections_do_not_allocate();
     test_executable_load_rolls_back_every_allocation();

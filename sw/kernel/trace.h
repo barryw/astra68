@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <astra/event.h>
+
 #define KERNEL_TRACE_MAGIC 0x41545243u /* "ATRC" */
 #define KERNEL_TRACE_ABI_VERSION 1u
 #define KERNEL_TRACE_STORAGE_SIZE 0x00010000u
@@ -78,35 +80,25 @@ typedef struct KernelTraceRecord {
 #define KERNEL_TRACE_EVENT_USER_ARGUMENTS 0xE001u
 
 /*
- * Five levels, ordered, because filtering by severity is the one thing every
- * reader of a log wants. This is where severity lives on this machine; a
- * status never carries it, and astra/status.h says why.
+ * The levels and flags are astra/event.h's, spelled the way the ring spells
+ * things. One definition, so a program's call and the record it lands in can
+ * never disagree about what a bit means.
  */
-#define KERNEL_TRACE_LEVEL_DEBUG   0u
-#define KERNEL_TRACE_LEVEL_INFO    1u
-#define KERNEL_TRACE_LEVEL_NOTICE  2u
-#define KERNEL_TRACE_LEVEL_WARNING 3u
-#define KERNEL_TRACE_LEVEL_ERROR   4u
+#define KERNEL_TRACE_LEVEL_DEBUG   ASTRA_EVENT_LEVEL_DEBUG
+#define KERNEL_TRACE_LEVEL_INFO    ASTRA_EVENT_LEVEL_INFO
+#define KERNEL_TRACE_LEVEL_NOTICE  ASTRA_EVENT_LEVEL_NOTICE
+#define KERNEL_TRACE_LEVEL_WARNING ASTRA_EVENT_LEVEL_WARNING
+#define KERNEL_TRACE_LEVEL_ERROR   ASTRA_EVENT_LEVEL_ERROR
 
-#define KERNEL_TRACE_LEVEL_MASK    0x0007u
+#define KERNEL_TRACE_LEVEL_MASK    ASTRA_EVENT_LEVEL_MASK
 #define KERNEL_TRACE_LEVEL_OF(flags) \
     ((uint32_t)((flags) & KERNEL_TRACE_LEVEL_MASK))
-/* The person was shown this. What makes an event notification history. */
-#define KERNEL_TRACE_FLAG_PRESENTED     0x0008u
-/* The payload is text rather than typed arguments. */
-#define KERNEL_TRACE_FLAG_INLINE_STRING 0x0010u
-#define KERNEL_TRACE_FLAG_MASK (KERNEL_TRACE_LEVEL_MASK | \
-                                KERNEL_TRACE_FLAG_PRESENTED | \
-                                KERNEL_TRACE_FLAG_INLINE_STRING)
+#define KERNEL_TRACE_FLAG_PRESENTED     ASTRA_EVENT_FLAG_PRESENTED
+#define KERNEL_TRACE_FLAG_INLINE_STRING ASTRA_EVENT_FLAG_INLINE_STRING
+#define KERNEL_TRACE_FLAG_CONTINUED     ASTRA_EVENT_FLAG_CONTINUED
+#define KERNEL_TRACE_FLAG_MASK          ASTRA_EVENT_FLAG_MASK
 
-/*
- * 24 rather than the design's 32: eight bytes of the argument slot pay for its
- * own commit sequence and its discriminator, without which a slot stops being
- * self-describing and kernel_trace_read_slot cannot answer for one in
- * isolation -- which is the API the monitor and every existing test are built
- * on. Four u32 arguments or three u64 ones fit.
- */
-#define KERNEL_TRACE_ARGUMENT_BYTES 24u
+#define KERNEL_TRACE_ARGUMENT_BYTES ASTRA_EVENT_ARGUMENT_MAX
 
 typedef struct KernelTraceUserRecord {
     uint32_t commit_sequence;

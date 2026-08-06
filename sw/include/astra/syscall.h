@@ -52,16 +52,25 @@
 #define ASTRA_SYSCALL_LOG_WRITE        44
 
 /*
- * The diagnostic channel. A process that is not holding the display lease has
- * no way to say anything about itself -- the progress counter is a monotonic
- * integer and the exit status is one halfword -- so a service debugging itself
- * had nothing to say it with.
+ * The event channel. A process that is not holding the display lease has no
+ * way to say anything about itself -- the progress counter is a monotonic
+ * integer and the exit status is one word -- so a service debugging itself had
+ * nothing to say it with.
  *
- * It is authority, not a free channel: the write is gated on a process handle
- * carrying ASTRA_RIGHT_DEBUG, and a build that does not want a diagnostic
- * surface simply does not grant that right. The kernel prints the process id
- * with every line and passes through printable bytes only, so nothing a
- * program writes can be mistaken for something the kernel said.
+ * It is not authority. The call takes a message id, flags, and at most
+ * ASTRA_EVENT_ARGUMENT_MAX bytes of arguments, and no capability at all: a
+ * machine whose account of what happened depends on a right has holes exactly
+ * where something went wrong. ASTRA_RIGHT_DEBUG gates *reading* other
+ * processes' events, and gates the console sink, which is where the leaking
+ * risk actually is.
+ *
+ * There is no handle either. A process may only speak for itself, and the
+ * kernel already knows who is calling, so there is nothing to pass and nothing
+ * to get wrong.
+ *
+ * This is the cap on one line of text, which the runtime splits into a chain
+ * of events. One event carries at most ASTRA_EVENT_ARGUMENT_MAX; see
+ * astra/event.h.
  */
 #define ASTRA_LOG_MAX_BYTES 128u
 

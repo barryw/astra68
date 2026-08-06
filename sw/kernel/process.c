@@ -5,6 +5,7 @@
 #include <astra/syscall.h>
 #include <astra/input.h>
 #include <astra/process.h>
+#include <astra/event.h>
 #include <astra/status.h>
 
 #include "area.h"
@@ -23,6 +24,7 @@
 #include "qualification.h"
 #include "ring.h"
 #include "sync.h"
+#include "trace.h"
 #include "user_copy.h"
 #include "vm.h"
 
@@ -3938,68 +3940,75 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
      * ACCESS_DENIED to everyone.
      */
     case ASTRA_SYSCALL_LOG_WRITE: {
-        KernelProcess *target = NULL;
-        KernelHandleStatus handle_status;
-        char text[ASTRA_LOG_MAX_BYTES];
-        uint32_t user_text = thread->context.data[2];
-        uint32_t length = thread->context.data[3];
-        uint32_t index;
+        /*
+         * An event append, and nothing gates it.
+         *
+         * This used to demand a process handle carrying ASTRA_RIGHT_DEBUG and
+         * then check the handle named the caller. Both are gone: a process may
+         * only speak for itself, and with no handle there is nothing to check
+         * and nothing to get wrong -- the kernel already knows who is calling.
+         * A machine whose account of itself depends on a capability has holes
+         * exactly where something went wrong, so the right moved to reading.
+         */
+        uint8_t payload[ASTRA_EVENT_ARGUMENT_MAX];
+        KernelTraceUserRecord record;
+        uint32_t message = thread->context.data[1];
+        uint32_t flags = thread->context.data[2];
+        uint32_t user_payload = thread->context.data[3];
+        uint32_t length = thread->context.data[4];
         int copy_status;
 
-        handle_status = kernel_handle_lookup(
-            &current->handles, thread->context.data[1], KERNEL_OBJECT_PROCESS,
-            KERNEL_PROCESS_RIGHT_DEBUG, (void **)&target);
-        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
-            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
-            ++scheduler_stats.diagnostic_log_refusals;
-            result = ASTRA_SYSCALL_INVALID_HANDLE;
-            break;
-        }
-        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
-            ++scheduler_stats.diagnostic_log_refusals;
-            result = ASTRA_SYSCALL_ACCESS_DENIED;
-            break;
-        }
-        if (handle_status != KERNEL_HANDLE_OK || target == NULL)
-            return KERNEL_PROCESS_CORRUPT;
-        /*
-         * A process may only speak for itself. A handle to another process
-         * carrying DEBUG is a debugger's authority over it, which is a
-         * different thing from writing lines in its name.
-         */
-        if (target != current) {
-            ++scheduler_stats.diagnostic_log_refusals;
-            result = ASTRA_SYSCALL_ACCESS_DENIED;
-            break;
-        }
-        if (length == 0u || length > ASTRA_LOG_MAX_BYTES) {
+        if (message == 0u || flags > UINT16_MAX ||
+            (flags & ~(uint32_t)ASTRA_EVENT_FLAG_MASK) != 0u ||
+            (flags & ASTRA_EVENT_LEVEL_MASK) > ASTRA_EVENT_LEVEL_ERROR ||
+            length > ASTRA_EVENT_ARGUMENT_MAX ||
+            (user_payload == 0u) != (length == 0u)) {
             ++scheduler_stats.diagnostic_log_refusals;
             result = ASTRA_SYSCALL_INVALID_ARGUMENT;
             break;
         }
-        copy_status = kernel_copy_from_user(text, user_text, length);
-        if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
-            copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
-            ++scheduler_stats.diagnostic_log_refusals;
-            result = ASTRA_SYSCALL_BAD_ADDRESS;
-            break;
+        if (length != 0u) {
+            copy_status = kernel_copy_from_user(payload, user_payload, length);
+            if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+                copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
+                ++scheduler_stats.diagnostic_log_refusals;
+                result = ASTRA_SYSCALL_BAD_ADDRESS;
+                break;
+            }
+            if (copy_status != KERNEL_USER_COPY_OK)
+                return KERNEL_PROCESS_CORRUPT;
         }
-        if (copy_status != KERNEL_USER_COPY_OK)
-            return KERNEL_PROCESS_CORRUPT;
         /*
-         * Printable bytes only. The console is shared with the kernel's own
-         * output, and a program that could write control characters into it
-         * could move the cursor, clear the screen, or dress a line up as a
-         * panic. A byte that should not be there is shown as a dot rather
-         * than dropped, so the line still has the length it was written with.
+         * The ring refuses only what this handler has already checked, so a
+         * refusal here means the ring itself is unusable. The event is lost
+         * and counted, and the call still succeeds: a program is never made to
+         * fail because the machine could not write down what it said.
          */
-        for (index = 0u; index < length; ++index) {
-            if (text[index] < 0x20 || text[index] > 0x7e)
-                text[index] = '.';
+        if (kernel_trace_write_user(message, current->id,
+                                    (uint16_t)current_thread->id,
+                                    (uint16_t)flags,
+                                    length != 0u ? payload : NULL, length)) {
+            ++scheduler_stats.diagnostic_logs;
+            scheduler_stats.diagnostic_log_bytes += length;
+        } else {
+            ++scheduler_stats.diagnostic_log_refusals;
         }
-        ++scheduler_stats.diagnostic_logs;
-        scheduler_stats.diagnostic_log_bytes += length;
-        kernel_process_diagnostic_log(current->id, text, length);
+        /*
+         * The console is a sink on the stream, not a second destination: the
+         * record is already in the ring by the time it renders, so the two
+         * cannot disagree about order or about what was said. It renders even
+         * when the ring refused, because a machine that cannot write to its
+         * own ring is exactly when someone needs to be told something -- and
+         * the counter above is what says the record itself was lost.
+         */
+        record.event = KERNEL_TRACE_EVENT_USER;
+        record.flags = (uint16_t)flags;
+        record.process = current->id;
+        record.message = message;
+        record.activity = 0u;
+        record.thread = (uint16_t)current_thread->id;
+        record.payload_length = (uint16_t)length;
+        kernel_process_diagnostic_log(&record, payload, length);
         break;
     }
     case ASTRA_SYSCALL_PROGRESS:

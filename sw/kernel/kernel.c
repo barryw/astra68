@@ -1044,15 +1044,63 @@ void kernel_process_initial_image_exited(uint32_t exit_status,
  * one the kernel wrote. The bytes arrive already bounded and already stripped
  * of anything unprintable.
  */
-void kernel_process_diagnostic_log(uint32_t process_id, const char *text,
-                                   uint32_t length)
+void kernel_process_diagnostic_log(const KernelTraceUserRecord *record,
+                                   const void *payload, uint32_t length)
 {
-    console_puts("[log ");
-    console_hex32(process_id);
-    console_puts("] ");
-    for (uint32_t index = 0u; index < length; ++index)
-        console_putc(text[index]);
-    console_putc('\n');
+    static const char *const level_name[] = {
+        "debug", "info", "notice", "warning", "error"
+    };
+    const uint8_t *bytes = payload;
+    /*
+     * Whether the previous line said more was coming. A chain of continued
+     * chunks is one line on the console, so only the first carries a prefix.
+     */
+    static uint8_t continuing;
+
+    if (record == NULL)
+        return;
+    /*
+     * The console is a sink on the stream and this build has none. The event
+     * is in the ring either way: a production machine keeps its account of
+     * itself and simply does not narrate it.
+     */
+    if (!kernel_process_debug_surface())
+        return;
+    if (!continuing) {
+        console_putc('[');
+        console_puts(level_name[KERNEL_TRACE_LEVEL_OF(record->flags)]);
+        console_putc(' ');
+        console_hex32(record->process);
+        console_puts("] ");
+    }
+    continuing = (record->flags & KERNEL_TRACE_FLAG_CONTINUED) != 0u;
+    if ((record->flags & KERNEL_TRACE_FLAG_INLINE_STRING) == 0u) {
+        /*
+         * A typed event has no text until there is a catalog to render it
+         * through. The id is what a reader needs meanwhile, and printing it is
+         * better than printing the raw arguments as though they were words.
+         */
+        console_puts("event 0x");
+        console_hex32(record->message);
+        console_putc('\n');
+        return;
+    }
+    /*
+     * Printable bytes only, and this is the place for it: the console is
+     * shared with the kernel's own output, so a program that could write an
+     * escape sequence could clear the screen and one that could write a
+     * newline could dress its next line up as something the kernel said. The
+     * ring keeps what the program actually wrote -- it is a record, and
+     * sanitising a record would be losing evidence.
+     */
+    for (uint32_t index = 0u; index < length; ++index) {
+        char value = (char)bytes[index];
+
+        console_putc(value < 0x20 || value > 0x7e ? '.' : value);
+    }
+    /* A continued line has more of itself coming, and no newline yet. */
+    if ((record->flags & KERNEL_TRACE_FLAG_CONTINUED) == 0u)
+        console_putc('\n');
 }
 
 /*

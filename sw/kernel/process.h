@@ -6,6 +6,7 @@
 #include "handle.h"
 #include "irq.h"
 #include "thread.h"
+#include "trace.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -369,8 +370,8 @@ void kernel_process_initial_image_progress(uint32_t stage);
  * sink lives with it; `bytes` is already bounded and stripped of anything
  * unprintable by the time it arrives.
  */
-void kernel_process_diagnostic_log(uint32_t process_id, const char *text,
-                                   uint32_t length);
+void kernel_process_diagnostic_log(const KernelTraceUserRecord *record,
+                                   const void *payload, uint32_t length);
 
 /*
  * What a faulting address turned out to be. The kernel knows where every

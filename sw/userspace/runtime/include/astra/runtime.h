@@ -63,16 +63,17 @@ uint32_t astra_input_read(uint32_t device, AstraInputEvent *events,
 void astra_process_exit(uint32_t status) __attribute__((noreturn));
 
 /*
- * The diagnostic channel. Bound once from the startup block, then usable from
- * anywhere without threading a handle through every call site.
+ * The event channel. No handle, no binding and no capability: emitting is
+ * universal, because an account of what happened that depends on a right has
+ * holes exactly where something went wrong.
  *
- * Every one of these can be refused -- a build without a debug surface grants
- * no process the right to write -- so the status is returned and never acted
- * on here. Diagnostics that a program depends on are a program that stops
- * working when the diagnostics are turned off.
+ * A status still comes back and is still never acted on here -- it says the
+ * call was malformed, not that permission was refused. Diagnostics a program
+ * depends on are a program that stops working when the diagnostics do.
  */
-void astra_log_bind(uint32_t process_handle);
-uint32_t astra_log_handle(void);
+uint32_t astra_event_emit(uint32_t message, uint32_t flags,
+                          const void *payload, uint32_t length);
+/* A line of text, as a chain of ASTRA_EVENT_MESSAGE_UNSTRUCTURED events. */
 uint32_t astra_log_write(const void *bytes, uint32_t length);
 uint32_t astra_log(const char *text);
 uint32_t astra_assert_message(char *out, uint32_t capacity, const char *file,

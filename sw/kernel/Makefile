@@ -346,7 +346,7 @@ $(BUILD_DIR)/test_mmio: tests/test_mmio.c mmio.c mmio.h | $(BUILD_DIR)
 $(BUILD_DIR)/test_trace: tests/test_trace.c trace.c trace.h bytes.c bytes.h \
 			    platform.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
-		-DKERNEL_TRACE_HOST_TEST=1 -I. \
+		-DKERNEL_TRACE_HOST_TEST=1 -I. -I../include \
 		bytes.c trace.c tests/test_trace.c -o $@
 
 $(BUILD_DIR)/test_irq: tests/test_irq.c irq.c irq.h thread.c thread.h trace.h \
@@ -551,6 +551,7 @@ $(BUILD_DIR)/test_ring: tests/test_ring.c ring.c ring.h area.c area.h \
 $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
 			    allocation.c allocation.h object_cache.c object_cache.h \
 			    performance.c performance.h bytes.c bytes.h generation.h \
+                            trace.c trace.h \
                             thread.c thread.h sync.c sync.h \
                             port.c port.h \
                             area.c area.h ring.c ring.h \
@@ -578,7 +579,7 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
 		dma.c block.c device.c vm.c exception.c \
 		user_copy.c \
 		bytes.c context.c handle.c performance.c thread.c sync.c port.c \
-		area.c ring.c irq.c elf.c process.c \
+		area.c ring.c irq.c elf.c trace.c process.c \
 		tests/test_process.c -o $@
 
 $(BUILD_DIR)/test_dispatch: tests/test_dispatch.c dispatch.c dispatch.h \

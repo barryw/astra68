@@ -5,6 +5,7 @@
 
 #include <supervisor.h>
 
+#include <astra/event.h>
 #include <astra/runtime.h>
 #include <astra/syscall.h>
 
@@ -243,7 +244,8 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
     (void)argument4;
     if (number == ASTRA_SYSCALL_LOG_WRITE) {
         ++mock_log_calls;
-        assert(argument0 == PROCESS_HANDLE);
+        /* A message id, not a handle: emitting names what it is saying. */
+        assert(argument0 == ASTRA_EVENT_MESSAGE_UNSTRUCTURED);
     }
     result->status = ASTRA_SYSCALL_OK;
     result->value0 = 0u;
@@ -283,27 +285,27 @@ test_capability_names_are_bounded_strings(void)
     assert(astra_capability_name_equal(field, "ABCDEFGHIJKLMNO"));
 }
 
-/* Accepting a launch binds the channel; refusing one leaves it unbound. */
+/*
+ * Emitting needs nothing. The channel used to be handed its authority by a
+ * validated startup block; now a process that has validated nothing and holds
+ * nothing can still say what it is doing, because an account of what happened
+ * that depends on a right has holes exactly where something went wrong.
+ */
 static void
-test_launch_binds_the_diagnostic_channel(void)
+test_emitting_needs_no_authority(void)
 {
     AstraStartupInfo startup = valid_startup();
     uint32_t calls = mock_log_calls;
 
-    astra_log_bind(0u);
-    assert(astra_startup_validate(&startup) == 1);
-    assert(astra_log_handle() == PROCESS_HANDLE);
     assert(astra_log("supervisor up") == ASTRA_SYSCALL_OK);
     assert(mock_log_calls == calls + 1u);
 
-    /* A refused launch hands over no authority, so nothing can be written. */
-    astra_log_bind(0u);
+    /* A refused launch changes nothing about it. */
     startup.magic = 0u;
     assert(astra_startup_validate(&startup) == 0);
-    assert(astra_log_handle() == 0u);
     calls = mock_log_calls;
-    assert(astra_log("no authority") == ASTRA_SYSCALL_INVALID_HANDLE);
-    assert(mock_log_calls == calls);
+    assert(astra_log("still speaking") == ASTRA_SYSCALL_OK);
+    assert(mock_log_calls == calls + 1u);
 }
 
 int
@@ -316,7 +318,7 @@ main(void)
     test_process_view();
     test_failures_accumulate();
     test_capability_names_are_bounded_strings();
-    test_launch_binds_the_diagnostic_channel();
+    test_emitting_needs_no_authority();
     puts("SUPERVISOR PASS");
     return 0;
 }

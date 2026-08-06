@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include <astra/process.h>
+#include <astra/event.h>
 #include <astra/runtime.h>
 #include <astra/syscall.h>
 
@@ -11,6 +12,7 @@ static uint32_t mock_number;
 static uint32_t mock_argument0;
 static uint32_t mock_argument1;
 static uint32_t mock_argument2;
+static uint32_t mock_argument3;
 static uint32_t mock_calls;
 static uint32_t mock_status = ASTRA_SYSCALL_OK;
 
@@ -23,17 +25,18 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
     mock_argument0 = argument0;
     mock_argument1 = argument1;
     mock_argument2 = argument2;
+    mock_argument3 = argument3;
     ++mock_calls;
     /*
-     * Every wrapper but the diagnostic one takes a single argument, and the
-     * mock has always enforced that. The log carries a buffer and a length,
-     * so it is the one call where the rest are allowed to be set.
+     * Every wrapper but the event one takes a single argument, and the mock
+     * has always enforced that. An event carries a message, flags, a buffer
+     * and a length, so it is the one call where the rest may be set.
      */
     if (number != ASTRA_SYSCALL_LOG_WRITE) {
         assert(argument1 == 0u);
         assert(argument2 == 0u);
+        assert(argument3 == 0u);
     }
-    assert(argument3 == 0u);
     assert(argument4 == 0u);
     result->status = mock_status;
     result->value0 = ASTRA_SYSCALL_ABI_VERSION;
@@ -240,52 +243,33 @@ test_syscall_wrappers(void)
 
 
 /*
- * The diagnostic channel, from both ends: what it sends when it is allowed to,
- * and what it refuses without reaching the kernel at all. The refusals matter
- * more than the sends -- a channel that quietly issues a syscall with a bad
- * length or an unbound handle is one the kernel has to defend against.
+ * The event channel, from both ends: what it sends, and what it refuses
+ * without reaching the kernel at all. The refusals matter more than the sends
+ * -- a channel that quietly issues a syscall with a bad length is one the
+ * kernel has to defend against.
  */
-static void test_log_channel(void)
+static void test_event_channel(void)
 {
     static const char line[] = "volume mounted";
     char oversized[ASTRA_LOG_MAX_BYTES + 32u];
-    AstraStartupInfo startup;
     uint32_t calls;
 
-    /* Validating the startup block is what hands the channel its authority. */
-    astra_log_bind(0u);
-    startup = valid_startup();
-    startup.process_handle = 0x1234u;
-    assert(astra_startup_validate(&startup) == 1);
-    assert(astra_log_handle() == 0x1234u);
-
-    /* A block that fails validation hands over nothing. */
-    astra_log_bind(0u);
-    startup.magic = 0u;
-    assert(astra_startup_validate(&startup) == 0);
-    assert(astra_log_handle() == 0u);
-
-    /* Unbound: no authority has been handed over, so nothing is sent. */
-    astra_log_bind(0u);
-    assert(astra_log_handle() == 0u);
-    calls = mock_calls;
-    assert(astra_log_write(line, 4u) == ASTRA_SYSCALL_INVALID_HANDLE);
-    assert(mock_calls == calls);
-
-    astra_log_bind(0x600du);
-    assert(astra_log_handle() == 0x600du);
-
-    /* Bound: the handle, the buffer and the length reach the syscall. */
+    /*
+     * No binding and no handle. Emitting is universal now: a process that has
+     * validated nothing and holds nothing can still say what it is doing.
+     */
     mock_status = ASTRA_SYSCALL_OK;
     assert(astra_log_write(line, sizeof(line) - 1u) == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_LOG_WRITE);
-    assert(mock_argument0 == 0x600du);
-    assert(mock_argument1 == (uint32_t)(uintptr_t)line);
-    assert(mock_argument2 == sizeof(line) - 1u);
+    assert(mock_argument0 == ASTRA_EVENT_MESSAGE_UNSTRUCTURED);
+    assert(mock_argument1 == (ASTRA_EVENT_LEVEL_NOTICE |
+                              ASTRA_EVENT_FLAG_INLINE_STRING));
+    assert(mock_argument2 == (uint32_t)(uintptr_t)line);
+    assert(mock_argument3 == sizeof(line) - 1u);
 
     /* A refusal is returned, not acted on. */
-    mock_status = ASTRA_SYSCALL_ACCESS_DENIED;
-    assert(astra_log_write(line, 4u) == ASTRA_SYSCALL_ACCESS_DENIED);
+    mock_status = ASTRA_SYSCALL_INVALID_ARGUMENT;
+    assert(astra_log_write(line, 4u) == ASTRA_SYSCALL_INVALID_ARGUMENT);
     mock_status = ASTRA_SYSCALL_OK;
 
     /* Bad arguments never become a syscall. */
@@ -298,13 +282,37 @@ static void test_log_channel(void)
     assert(astra_log("") == ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(mock_calls == calls);
 
+    /*
+     * A line longer than one event's payload is a chain, not a longer record,
+     * and every chunk but the last says so. Five events for 100 bytes: four
+     * full ones and a remainder of four.
+     */
+    calls = mock_calls;
+    assert(astra_log_write(oversized, 100u) == ASTRA_SYSCALL_OK);
+    assert(mock_calls == calls + 5u);
+    assert(mock_argument3 == 100u - 4u * ASTRA_EVENT_ARGUMENT_MAX);
+    assert((mock_argument1 & ASTRA_EVENT_FLAG_CONTINUED) == 0u);
+
+    /* One that fits exactly is one event, and it is not continued. */
+    calls = mock_calls;
+    assert(astra_log_write(oversized, ASTRA_EVENT_ARGUMENT_MAX) ==
+           ASTRA_SYSCALL_OK);
+    assert(mock_calls == calls + 1u);
+    assert((mock_argument1 & ASTRA_EVENT_FLAG_CONTINUED) == 0u);
+
+    /* A chunk refused mid-line stops the line rather than retrying it. */
+    mock_status = ASTRA_SYSCALL_INVALID_ARGUMENT;
+    calls = mock_calls;
+    assert(astra_log_write(oversized, 100u) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(mock_calls == calls + 1u);
+    mock_status = ASTRA_SYSCALL_OK;
+
     /* A string is measured, and one too long is cut rather than refused. */
     assert(astra_log("hello") == ASTRA_SYSCALL_OK);
-    assert(mock_argument2 == 5u);
+    assert(mock_argument3 == 5u);
     memset(oversized, 'x', sizeof(oversized));
     oversized[sizeof(oversized) - 1u] = '\0';
     assert(astra_log(oversized) == ASTRA_SYSCALL_OK);
-    assert(mock_argument2 == ASTRA_LOG_MAX_BYTES);
 }
 
 /* The assertion message: the half that survives when the channel is refused. */
@@ -346,7 +354,7 @@ main(void)
     test_memory_primitives();
     test_qsort();
     test_syscall_wrappers();
-    test_log_channel();
+    test_event_channel();
     test_assert_message();
     return 0;
 }
