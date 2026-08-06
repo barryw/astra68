@@ -1,6 +1,8 @@
 #ifndef ASTRA_EVENT_H
 #define ASTRA_EVENT_H
 
+#include <stdint.h>
+
 /*
  * What a program says about itself, and the shape the kernel records it in.
  *
@@ -71,5 +73,34 @@
 #define ASTRA_EVENT_MESSAGE_NONE         0u
 #define ASTRA_EVENT_MESSAGE_UNSTRUCTURED 1u  /* a line of text, as text */
 #define ASTRA_EVENT_MESSAGE_RESERVED_MAX 15u
+
+/*
+ * One drained event, as a reader receives it.
+ *
+ * The ring stores an event in one slot and its arguments in the next; this is
+ * the two rejoined, at a fixed stride, so a drain is a copy and a reader is an
+ * index rather than a walk. `payload_length` says how much of the payload is
+ * the event's; the rest is zero and means nothing.
+ *
+ * Fixed stride costs the 24 argument bytes on an event that has none. That is
+ * the right trade for a bounded batch: the alternative is a variable-length
+ * stream, which is a parser in the one place -- the drain out of the kernel --
+ * where the machine can least afford one.
+ */
+#define ASTRA_EVENT_DRAINED_SIZE 56u
+
+typedef struct AstraEventDrained {
+    uint32_t sequence;         /* the ring's total order; the drain cursor */
+    uint32_t timestamp_high;
+    uint32_t timestamp_low;
+    uint32_t process;          /* generation-tagged, per OBSERVABILITY.md */
+    uint32_t message;
+    uint32_t activity;
+    uint16_t thread;
+    uint16_t flags;            /* level, presented, inline string */
+    uint16_t payload_length;   /* 0..ASTRA_EVENT_ARGUMENT_MAX */
+    uint16_t reserved;
+    uint8_t  payload[ASTRA_EVENT_ARGUMENT_MAX];
+} AstraEventDrained;
 
 #endif

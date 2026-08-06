@@ -180,6 +180,30 @@ bool kernel_trace_read_user(uint32_t slot, KernelTraceUserRecord *record,
                             void *payload, uint32_t capacity,
                             uint32_t *payload_length);
 
+/*
+ * Copies the user events after `after_sequence`, oldest first, and returns how
+ * many. `after_sequence` of zero means everything the ring still holds, which
+ * is what a reader that has never read before asks for.
+ *
+ * `*cursor` becomes the sequence to pass next time -- the last event returned,
+ * or `after_sequence` unchanged when there was nothing. A caller that stops
+ * early because its buffer filled resumes exactly where it stopped, so a drain
+ * is a bounded page and a cursor like every other enumeration in this system.
+ *
+ * `*lost` counts what the caller will never see: the slots the ring displaced
+ * while it was away, plus any event found here whose arguments a wrap ate. It
+ * is a count of ring slots, not of events -- an event with arguments occupies
+ * two -- and it is reported rather than rounded, because the one thing a reader
+ * must not be told about a gap is nothing.
+ *
+ * Kernel events are skipped, not counted as loss. They are in the same ring on
+ * purpose, and the plan that turns their enum into descriptors is what makes
+ * them drainable; until then they are simply not this reader's records.
+ */
+uint32_t kernel_trace_drain_user(uint32_t after_sequence,
+                                 AstraEventDrained *events, uint32_t capacity,
+                                 uint32_t *cursor, uint32_t *lost);
+
 bool kernel_trace_header(KernelTraceHeader *header);
 bool kernel_trace_read_slot(uint32_t slot, KernelTraceRecord *record);
 bool kernel_trace_read_recent(uint32_t newest_offset,

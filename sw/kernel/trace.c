@@ -52,6 +52,8 @@ _Static_assert(sizeof(KernelTraceStorage) == KERNEL_TRACE_STORAGE_SIZE,
                "trace storage must occupy exactly 64 KiB");
 _Static_assert(sizeof(KernelTraceStagedRecord) == 28u,
                "staged trace record size changed");
+_Static_assert(sizeof(AstraEventDrained) == ASTRA_EVENT_DRAINED_SIZE,
+               "the drained event is ABI: userspace indexes it by stride");
 
 static void trace_barrier(void)
 {
@@ -546,6 +548,97 @@ bool kernel_trace_read_user(uint32_t slot, KernelTraceUserRecord *record,
         return false;
     *payload_length = length;
     return true;
+}
+
+/*
+ * Strictly after, on a counter that wraps. The ring holds 2047 slots and a
+ * sequence advances once per slot, so a half-space comparison is exact here for
+ * any cursor a reader could still be holding: a cursor older than that is
+ * already outside the ring and is reported as loss rather than compared.
+ */
+static bool sequence_after(uint32_t sequence, uint32_t other)
+{
+    uint32_t distance = sequence - other;
+
+    return distance != 0u && distance < 0x80000000u;
+}
+
+uint32_t kernel_trace_drain_user(uint32_t after_sequence,
+                                 AstraEventDrained *events, uint32_t capacity,
+                                 uint32_t *cursor, uint32_t *lost)
+{
+    KernelTraceHeader header;
+    uint32_t available;
+    uint32_t produced = 0u;
+    uint32_t missed = 0u;
+    uint32_t oldest;
+
+    if (cursor == NULL || lost == NULL)
+        return 0u;
+    *cursor = after_sequence;
+    *lost = 0u;
+    if (events == NULL || capacity == 0u || !kernel_trace_header(&header))
+        return 0u;
+
+    available = committed_count(&header);
+    if (available == 0u)
+        return 0u;
+    /*
+     * What the ring can still answer for. A cursor older than this is a reader
+     * that was away too long, and the distance is exactly what it missed.
+     */
+    oldest = sequence_before(header.next_sequence, available);
+    if (after_sequence != 0u && sequence_after(oldest, after_sequence))
+        missed = oldest - after_sequence - 1u;
+
+    for (uint32_t offset = available; offset-- > 0u && produced < capacity;) {
+        KernelTraceUserRecord record;
+        AstraEventDrained *event;
+        uint32_t expected = sequence_before(header.next_sequence, offset + 1u);
+        uint32_t slot = (header.write_index + KERNEL_TRACE_CAPACITY - 1u -
+                         offset) % KERNEL_TRACE_CAPACITY;
+        uint32_t length = 0u;
+        uint8_t payload[KERNEL_TRACE_ARGUMENT_BYTES];
+
+        if (after_sequence != 0u && !sequence_after(expected, after_sequence))
+            continue;
+        if (!kernel_trace_read_user(slot, &record, payload, sizeof(payload),
+                                    &length)) {
+            /*
+             * Either it is not this reader's record, or it is one whose
+             * arguments are gone. The difference is visible in the slot itself,
+             * and only the second is a loss: rendering a header without the
+             * arguments it promised is the one answer a reader cannot tell from
+             * an event that never had any.
+             */
+            KernelTraceRecord raw;
+
+            if (kernel_trace_read_slot(slot, &raw) &&
+                raw.event == KERNEL_TRACE_EVENT_USER)
+                ++missed;
+            continue;
+        }
+        if (record.commit_sequence != expected)
+            continue;
+
+        event = &events[produced];
+        event->sequence = record.commit_sequence;
+        event->timestamp_high = record.timestamp_high;
+        event->timestamp_low = record.timestamp_low;
+        event->process = record.process;
+        event->message = record.message;
+        event->activity = record.activity;
+        event->thread = record.thread;
+        event->flags = record.flags;
+        event->payload_length = (uint16_t)length;
+        event->reserved = 0u;
+        for (uint32_t index = 0u; index < KERNEL_TRACE_ARGUMENT_BYTES; ++index)
+            event->payload[index] = index < length ? payload[index] : 0u;
+        *cursor = record.commit_sequence;
+        ++produced;
+    }
+    *lost = missed;
+    return produced;
 }
 
 #if defined(KERNEL_TRACE_HOST_TEST)

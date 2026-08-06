@@ -319,6 +319,100 @@ static void test_a_user_event_shares_the_one_ring(void)
     assert(record.event == KERNEL_TRACE_EVENT_USER);
 }
 
+/*
+ * A drain is a bounded page and a cursor, oldest first, and the kernel's own
+ * records are not this reader's business.
+ */
+static void test_a_drain_is_a_page_and_a_cursor(void)
+{
+    AstraEventDrained events[4];
+    uint32_t cursor = 0u;
+    uint32_t lost = 7u;
+
+    reset_ring();
+    assert(kernel_trace_write_user(0x100u, 0x1000u, 1u, 0x11u,
+                                   KERNEL_TRACE_LEVEL_INFO, NULL, 0u));
+    assert(kernel_trace_write_at(KERNEL_TRACE_EVENT_BOOT, 0u, 1u, 0u, 0u, 0u,
+                                 0u));
+    assert(kernel_trace_write_user(0x200u, 0x1000u, 2u, 0x22u,
+                                   KERNEL_TRACE_LEVEL_ERROR, "abcd", 4u));
+
+    assert(kernel_trace_drain_user(0u, events, 4u, &cursor, &lost) == 2u);
+    assert(lost == 0u);
+    /* Oldest first, because a story is read forwards. */
+    assert(events[0].message == 0x100u);
+    assert(events[0].activity == 0x11u);
+    assert(events[0].payload_length == 0u);
+    assert(events[1].message == 0x200u);
+    assert(events[1].payload_length == 4u);
+    assert(events[1].payload[0] == 'a' && events[1].payload[3] == 'd');
+    /* The bytes past the length are zero, and mean nothing. */
+    assert(events[1].payload[4] == 0u);
+    assert(events[1].sequence > events[0].sequence);
+    assert(cursor == events[1].sequence);
+
+    /* Draining again from the cursor yields nothing, and does not move it. */
+    assert(kernel_trace_drain_user(cursor, events, 4u, &cursor, &lost) == 0u);
+    assert(cursor == events[1].sequence);
+    assert(lost == 0u);
+
+    /* Only what is new. */
+    assert(kernel_trace_write_user(0x300u, 0x1000u, 3u, 0u,
+                                   KERNEL_TRACE_LEVEL_NOTICE, NULL, 0u));
+    assert(kernel_trace_drain_user(cursor, events, 4u, &cursor, &lost) == 1u);
+    assert(events[0].message == 0x300u);
+    assert(cursor == events[0].sequence);
+
+    /* A full buffer stops where it stopped, and the cursor resumes there. */
+    assert(kernel_trace_write_user(0x400u, 0x1000u, 4u, 0u,
+                                   KERNEL_TRACE_LEVEL_NOTICE, NULL, 0u));
+    assert(kernel_trace_write_user(0x500u, 0x1000u, 5u, 0u,
+                                   KERNEL_TRACE_LEVEL_NOTICE, NULL, 0u));
+    assert(kernel_trace_drain_user(cursor, events, 1u, &cursor, &lost) == 1u);
+    assert(events[0].message == 0x400u);
+    assert(kernel_trace_drain_user(cursor, events, 1u, &cursor, &lost) == 1u);
+    assert(events[0].message == 0x500u);
+}
+
+/*
+ * What the reader will never see is counted rather than passed over. A gap
+ * nobody is told about makes every record after it an assumption.
+ */
+static void test_a_drain_says_what_it_lost(void)
+{
+    AstraEventDrained events[2];
+    uint32_t cursor = 0u;
+    uint32_t lost = 0u;
+    uint32_t first_cursor;
+
+    reset_ring();
+    assert(kernel_trace_write_user(1u, 0x1000u, 1u, 0u,
+                                   KERNEL_TRACE_LEVEL_INFO, NULL, 0u));
+    assert(kernel_trace_drain_user(0u, events, 2u, &cursor, &lost) == 1u);
+    first_cursor = cursor;
+
+    /* Away for longer than the ring is deep. */
+    for (uint32_t index = 0u; index < KERNEL_TRACE_CAPACITY + 4u; ++index)
+        assert(kernel_trace_write_user(2u, 0x1000u, 1u, 0u,
+                                       KERNEL_TRACE_LEVEL_INFO, NULL, 0u));
+    assert(kernel_trace_drain_user(first_cursor, events, 2u, &cursor,
+                                   &lost) == 2u);
+    assert(lost >= 4u);
+
+    /*
+     * An event whose arguments a wrap ate is a loss too, and not a record
+     * rendered without them: a header on its own is the one answer a reader
+     * cannot tell from an event that had no arguments.
+     */
+    reset_ring();
+    assert(kernel_trace_write_user(3u, 0x1000u, 1u, 0u,
+                                   KERNEL_TRACE_LEVEL_INFO, "wxyz", 4u));
+    kernel_trace_test_overwrite_argument_slot(1u);
+    lost = 0u;
+    assert(kernel_trace_drain_user(0u, events, 2u, &cursor, &lost) == 0u);
+    assert(lost == 1u);
+}
+
 int main(void)
 {
     test_retained_ring_wrap_and_torn_read();
@@ -329,6 +423,8 @@ int main(void)
     test_argument_refusals();
     test_arguments_lost_to_a_wrap_are_reported_as_lost();
     test_a_user_event_shares_the_one_ring();
+    test_a_drain_is_a_page_and_a_cursor();
+    test_a_drain_says_what_it_lost();
     puts("retained trace tests passed");
     return 0;
 }

@@ -85,13 +85,20 @@ a bounded copy and an authority check rather than new ring machinery.
 - A torn slot is skipped and counted, not returned. `kernel_trace_test_inject_torn_read`
   exists for exactly this test.
 
-- [ ] Step 1: failing tests — a caller without `ASTRA_RIGHT_DEBUG` is refused; a
+- [x] Step 1: failing tests — a caller without `ASTRA_RIGHT_DEBUG` is refused; a
       drain returns records in sequence order; a second drain from the returned
       cursor returns only what is new; overtaken records are reported as loss; a
       torn slot is counted rather than returned.
-- [ ] Step 2: the syscall and the copy.
-- [ ] Step 3: `cd sw/kernel && make test` on Beast, both configurations.
-- [ ] Step 4: commit.
+- [x] Step 2: the syscall and the copy.
+- [x] Step 3: `cd sw/kernel && make test` on Beast, both configurations.
+- [x] Step 4: commit.
+
+**As built, one thing narrower than this plan said:** the handle must *name the
+caller*. Reading is every process's events at once, and borrowing a DEBUG handle
+over some third process to obtain that would launder an authority nobody
+granted. Only a diagnostic-surface build puts DEBUG on a process's own handle,
+so that is the gate today; when the loader exists it becomes the manifest's
+`serves EVENTS:r` grant, and the ABI does not change.
 
 ### Task 2: `readdir` becomes a cursor
 

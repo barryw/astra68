@@ -63,6 +63,35 @@
 #define ASTRA_SYSCALL_ACTIVITY         45
 
 /*
+ * The other half of the reversal: reading the stream back.
+ *
+ * data[1] is a process handle carrying ASTRA_RIGHT_DEBUG that names the caller;
+ * data[2] is the cursor -- the sequence already seen, zero for everything the
+ * ring still holds; data[3] is where to put them and data[4] is how many
+ * AstraEventDrained records will fit, clamped to ASTRA_TRACE_READ_BATCH_MAX.
+ *
+ * It returns how many were copied in data[1], the cursor to pass next time in
+ * data[2], and in data[3] how many records the caller will never see because
+ * the ring displaced them first. That last one is the point: a log that
+ * quietly loses records is worse than one that admits it, because everything
+ * read after the gap is an assumption.
+ *
+ * The handle must name the caller. Reading the machine's whole stream is the
+ * observer's own authority, and borrowing a debug handle over some third
+ * process to obtain it would be laundering authority through a bystander. Only
+ * a build with a diagnostic surface puts DEBUG on a process's own handle, which
+ * is what makes this a capability rather than a syscall anyone can reach.
+ */
+#define ASTRA_SYSCALL_TRACE_READ       46
+
+/*
+ * The most one call copies. Small on purpose: a drain is a bounded page and a
+ * cursor like every other enumeration here, and the batch is what a kernel
+ * stack can hold without asking anyone's permission -- 8 * 56 bytes.
+ */
+#define ASTRA_TRACE_READ_BATCH_MAX 8u
+
+/*
  * The event channel. A process that is not holding the display lease has no
  * way to say anything about itself -- the progress counter is a monotonic
  * integer and the exit status is one word -- so a service debugging itself had

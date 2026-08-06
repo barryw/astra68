@@ -6315,6 +6315,205 @@ static void test_an_activity_is_the_threads_own(void)
     assert(stats.diagnostic_logs == 1u);
 }
 
+/*
+ * Emitting is universal and reading is authority. This is the reading half:
+ * one call returns a bounded page of the machine's stream and a cursor, and it
+ * takes a capability that only a diagnostic build hands a process over itself.
+ */
+static void test_reading_the_stream_is_the_privileged_half(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    static const char line[] = "said";
+    KernelCpuContext *next;
+    KernelProcessSnapshot snapshot;
+    KernelHandle observer_handle = KERNEL_HANDLE_INVALID;
+    AstraEventDrained drained[ASTRA_TRACE_READ_BATCH_MAX];
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t user_text = KERNEL_PROCESS_STACK_TOP - 512u;
+    uint32_t user_events = KERNEL_PROCESS_STACK_TOP - 1024u;
+    uint32_t process_id = 0u;
+    uint32_t other_id = 0u;
+    uint32_t cursor;
+
+    initialize_test();
+    assert(kernel_trace_init());
+    assert(kernel_process_debug_surface());
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(kernel_process_snapshot(0u, &snapshot));
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(kernel_user_copy_to_asm(user_text, line, sizeof(line) - 1u) ==
+           KERNEL_USER_COPY_OK);
+
+    /*
+     * The ring survives a re-init on purpose -- it is what a machine that just
+     * crashed is read from -- so whatever earlier tests left in it is drained
+     * first and the cursor that leaves is where this test starts.
+     */
+    registers[0] = ASTRA_SYSCALL_TRACE_READ;
+    registers[1] = snapshot.self_handle;
+    registers[2] = 0u;
+    registers[3] = user_events;
+    registers[4] = ASTRA_TRACE_READ_BATCH_MAX;
+    do {
+        assert(kernel_process_on_syscall(registers,
+                                         KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        registers[2] = next->data[2];
+    } while (next->data[1] != 0u);
+    cursor = registers[2];
+
+    /* Two events to read back: one bare, one carrying its text. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_LOG_WRITE;
+    registers[1] = ASTRA_EVENT_MESSAGE_UNSTRUCTURED;
+    registers[2] = ASTRA_EVENT_LEVEL_NOTICE;
+    registers[3] = 0u;
+    registers[4] = 0u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    registers[2] = ASTRA_EVENT_LEVEL_ERROR | ASTRA_EVENT_FLAG_INLINE_STRING;
+    registers[3] = user_text;
+    registers[4] = sizeof(line) - 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_TRACE_READ;
+    registers[1] = snapshot.self_handle;
+    registers[2] = cursor;
+    registers[3] = user_events;
+    registers[4] = 2u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == 2u);
+    assert(next->data[3] == 0u);
+    cursor = next->data[2];
+    assert(cursor != 0u);
+    assert(kernel_user_copy_from_asm(drained, user_events,
+                                     2u * ASTRA_EVENT_DRAINED_SIZE) ==
+           KERNEL_USER_COPY_OK);
+    assert(drained[0].process == process_id);
+    assert(drained[0].payload_length == 0u);
+    assert(KERNEL_TRACE_LEVEL_OF(drained[1].flags) == ASTRA_EVENT_LEVEL_ERROR);
+    assert(drained[1].payload_length == sizeof(line) - 1u);
+    assert(drained[1].payload[0] == 's');
+    assert(drained[1].sequence == cursor);
+
+    /* The cursor is where it stopped: nothing new, nothing repeated. */
+    registers[2] = cursor;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == 0u);
+    assert(next->data[2] == cursor);
+
+    /* A buffer that is not there is refused before anything is drained. */
+    registers[2] = 0u;
+    registers[3] = 0u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    registers[3] = 0x00001000u; /* unmapped */
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_BAD_ADDRESS);
+
+    /* A handle that names nothing, and a handle of the wrong kind. */
+    registers[3] = user_events;
+    registers[1] = KERNEL_HANDLE_INVALID;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+
+    /*
+     * DEBUG over another process is a debugger's authority over that process.
+     * Reading the whole machine's stream through it would launder an authority
+     * nobody granted through a bystander that happens to be observable.
+     */
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &other_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_grant_handle(process_id, other_id,
+                                       KERNEL_PROCESS_RIGHT_DEBUG,
+                                       &observer_handle) == KERNEL_PROCESS_OK);
+    registers[1] = observer_handle;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+}
+
+/*
+ * No diagnostic surface, no reading. The events are still emitted and still in
+ * the ring -- a production machine keeps its account of itself -- and there is
+ * simply nothing on this build that can hand them out.
+ */
+static void test_no_debug_surface_closes_the_stream(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    KernelCpuContext *next;
+    KernelProcessSnapshot snapshot;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t user_events = KERNEL_PROCESS_STACK_TOP - 1024u;
+    uint32_t process_id = 0u;
+
+    kernel_process_set_debug_surface(0);
+    initialize_test();
+    assert(kernel_trace_init());
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(kernel_process_snapshot(0u, &snapshot));
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, KERNEL_PROCESS_CODE_BASE, 0u);
+
+    registers[0] = ASTRA_SYSCALL_LOG_WRITE;
+    registers[1] = ASTRA_EVENT_MESSAGE_UNSTRUCTURED;
+    registers[2] = ASTRA_EVENT_LEVEL_NOTICE;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_TRACE_READ;
+    registers[1] = snapshot.self_handle;
+    registers[3] = user_events;
+    registers[4] = 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+
+    /* The record is in the ring regardless; only the door is shut. */
+    {
+        KernelTraceUserRecord user;
+        KernelTraceHeader header;
+        uint32_t length = 0u;
+
+        assert(kernel_trace_header(&header));
+        assert(kernel_trace_read_user(header.write_index - 1u, &user, NULL, 0u,
+                                      &length));
+        assert(user.process == process_id);
+    }
+
+    kernel_process_set_debug_surface(-1);
+    assert(kernel_process_debug_surface());
+}
+
 static void test_a_program_cannot_forge_a_verdict(void)
 {
     const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
@@ -7060,6 +7259,8 @@ int main(void)
     test_block_admission_faults();
     test_bootstrap_capabilities();
     test_an_activity_is_the_threads_own();
+    test_reading_the_stream_is_the_privileged_half();
+    test_no_debug_surface_closes_the_stream();
     test_a_program_cannot_forge_a_verdict();
     test_initial_image_exit_is_reported();
     test_user_stack_grows_on_fault_and_guards_the_floor();

@@ -4037,6 +4037,75 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         kernel_process_diagnostic_log(&record, payload, length);
         break;
     }
+    case ASTRA_SYSCALL_TRACE_READ: {
+        /*
+         * Reading the stream, which is the half that is authority.
+         *
+         * Emitting is universal because an account of the machine with holes
+         * where something went wrong is not an account. Reading is the
+         * opposite: it is every process's events at once, which is where a
+         * secret leaks, so it takes a capability and only a build carrying a
+         * diagnostic surface puts one on a process's own handle.
+         */
+        AstraEventDrained events[ASTRA_TRACE_READ_BATCH_MAX];
+        KernelProcess *target = NULL;
+        KernelHandleStatus handle_status;
+        uint32_t cursor = thread->context.data[2];
+        uint32_t user_buffer = thread->context.data[3];
+        uint32_t capacity = thread->context.data[4];
+        uint32_t copied;
+        uint32_t lost = 0u;
+        int copy_status;
+
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1], KERNEL_OBJECT_PROCESS,
+            KERNEL_PROCESS_RIGHT_DEBUG, (void **)&target);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || target == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        /*
+         * The handle must name the caller. DEBUG over another process is a
+         * debugger's authority over that process; using it to read the whole
+         * machine's stream would be laundering an authority nobody granted
+         * through a bystander that happens to be observable.
+         */
+        if (target != current) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (user_buffer == 0u || capacity == 0u) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (capacity > ASTRA_TRACE_READ_BATCH_MAX)
+            capacity = ASTRA_TRACE_READ_BATCH_MAX;
+
+        copied = kernel_trace_drain_user(cursor, events, capacity, &cursor,
+                                         &lost);
+        if (copied != 0u) {
+            copy_status = kernel_copy_to_user(
+                user_buffer, events, copied * ASTRA_EVENT_DRAINED_SIZE);
+            if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+                copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
+                result = ASTRA_SYSCALL_BAD_ADDRESS;
+                break;
+            }
+            if (copy_status != KERNEL_USER_COPY_OK)
+                return KERNEL_PROCESS_CORRUPT;
+        }
+        thread->context.data[1] = copied;
+        thread->context.data[2] = cursor;
+        thread->context.data[3] = lost;
+        break;
+    }
     case ASTRA_SYSCALL_PROGRESS:
         {
             bool qualification_handled;
