@@ -122,6 +122,74 @@ test_dotdot_cannot_climb_out(void)
     assert(strcmp(out, "src/y") == 0);
 }
 
+static void
+test_qualifying(void)
+{
+    char out[64];
+
+    /* A relative word is relative to where the shell is standing. */
+    assert(astra_path_qualify("WORK", "src", "main.c", out, sizeof(out)) ==
+           ASTRA_VFS_OK);
+    assert(strcmp(out, "WORK:src/main.c") == 0);
+
+    assert(astra_path_qualify("WORK", "", "main.c", out, sizeof(out)) ==
+           ASTRA_VFS_OK);
+    assert(strcmp(out, "WORK:main.c") == 0);
+
+    /* No word at all names where the shell is standing. */
+    assert(astra_path_qualify("WORK", "src", NULL, out, sizeof(out)) ==
+           ASTRA_VFS_OK);
+    assert(strcmp(out, "WORK:src") == 0);
+    assert(astra_path_qualify("WORK", "", "", out, sizeof(out)) ==
+           ASTRA_VFS_OK);
+    assert(strcmp(out, "WORK:") == 0);
+
+    /* A word carrying an assign is already absolute and is left alone. */
+    assert(astra_path_qualify("WORK", "src", "SYS:commands", out,
+                              sizeof(out)) == ASTRA_VFS_OK);
+    assert(strcmp(out, "SYS:commands") == 0);
+    assert(astra_path_qualify("WORK", "src", "SYS:", out, sizeof(out)) ==
+           ASTRA_VFS_OK);
+    assert(strcmp(out, "SYS:") == 0);
+
+    /*
+     * A colon after a separator is a character in a file name, not an assign:
+     * only the first component can carry one.
+     */
+    assert(astra_path_qualify("WORK", "src", "a/b:c", out, sizeof(out)) ==
+           ASTRA_VFS_OK);
+    assert(strcmp(out, "WORK:src/a/b:c") == 0);
+
+    /* `..` is passed through for the resolver to refuse, not quietly eaten. */
+    assert(astra_path_qualify("WORK", "src", "..", out, sizeof(out)) ==
+           ASTRA_VFS_OK);
+    assert(strcmp(out, "WORK:src/..") == 0);
+}
+
+static void
+test_qualify_refusals(void)
+{
+    char out[64];
+    char tiny[8];
+
+    /* A shell with no assign has nowhere to stand and nothing to name. */
+    assert(astra_path_qualify("", "", "main.c", out, sizeof(out)) ==
+           ASTRA_VFS_ERR_INVALID);
+    assert(astra_path_qualify(NULL, "", "main.c", out, sizeof(out)) ==
+           ASTRA_VFS_ERR_INVALID);
+    assert(astra_path_qualify("WORK", NULL, "main.c", out, sizeof(out)) ==
+           ASTRA_VFS_ERR_INVALID);
+    assert(astra_path_qualify("WORK", "src", "main.c", NULL, sizeof(out)) ==
+           ASTRA_VFS_ERR_INVALID);
+    /* Truncation would name a different file. */
+    assert(astra_path_qualify("WORK", "src", "main.c", tiny, sizeof(tiny)) ==
+           ASTRA_VFS_ERR_INVALID);
+    assert(astra_path_qualify("WORK", "src", "SYS:a/very/long/one", tiny,
+                              sizeof(tiny)) == ASTRA_VFS_ERR_INVALID);
+    assert(astra_path_qualify("WORK", "src", NULL, tiny, 2u) ==
+           ASTRA_VFS_ERR_INVALID);
+}
+
 int
 main(void)
 {
@@ -129,6 +197,8 @@ main(void)
     test_refusals();
     test_normalising();
     test_dotdot_cannot_climb_out();
+    test_qualifying();
+    test_qualify_refusals();
     puts("ASTRA VFS PATH PASS");
     return 0;
 }

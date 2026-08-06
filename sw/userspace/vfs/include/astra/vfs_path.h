@@ -20,4 +20,15 @@ uint32_t astra_path_split(const char *path, char *name, uint32_t name_capacity,
 
 uint32_t astra_path_normalise(const char *rest, char *out, uint32_t capacity);
 
+/*
+ * What a word typed at a prompt means, given where the shell is standing.
+ *
+ * A word whose first component carries a colon is already absolute and is
+ * copied; anything else is joined onto the current assign and directory. The
+ * result is still only a string -- it is astra_assign_resolve() that decides
+ * whether the process holds what it names.
+ */
+uint32_t astra_path_qualify(const char *assign, const char *directory,
+                            const char *typed, char *out, uint32_t capacity);
+
 #endif
