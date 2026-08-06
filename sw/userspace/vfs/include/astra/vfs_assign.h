@@ -69,18 +69,20 @@ uint32_t astra_assign_bind(AstraAssignTable *table, const char *name,
  * the whole of that translation, and it replaces the table rather than adding
  * to it -- a namespace is what a process was given, not an accumulation.
  *
- * PROCESS and THREAD are skipped. They are the handles the kernel installs for
- * every process whether it asked or not: authority over itself, not names in a
- * namespace, and a `PROCESS:` that resolved and then failed at the first read
- * would be worse than one that never resolved at all.
+ * **Only a grant carrying ASTRA_CAPABILITY_FLAG_NAMESPACE becomes a name.** The
+ * rule is positive on purpose. A capability table publishes every kind of
+ * authority a process holds and they are not all names: `WORK:src/main.c` means
+ * something and `STDOUT:src/main.c` is nonsense. The alternative is a list here
+ * of capabilities that are not mounts, which grows every time a new kind is
+ * invented and lives in a file that has nothing to do with any of them. PROCESS
+ * and THREAD are excluded by construction rather than by being remembered: the
+ * kernel installs them carrying no flags.
  *
- * An entry that is not a namespace name -- one the shell could not type back,
- * or one carrying no rights -- is skipped rather than fatal. The capability
- * table is where every kind of authority a process holds is published, so
- * entries that are not mounts are the ordinary case, and one of them must not
- * cost a child the names it was actually given. Running out of room is the one
- * thing that is reported, because a namespace quietly missing its tail is a
- * program failing later for a reason nothing wrote down.
+ * An entry that declared itself a name and is not one -- a name the shell could
+ * not type back, or one carrying no rights -- is skipped rather than fatal, so
+ * one bad grant cannot cost a child the names it was actually given. Running
+ * out of room is the one thing reported, because a namespace quietly missing
+ * its tail is a program failing later for a reason nothing wrote down.
  *
  * No root travels in the published capability table yet, so every binding is
  * made at its mount's own root. The launch spec's grant has a root offset and

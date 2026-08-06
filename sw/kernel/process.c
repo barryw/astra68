@@ -2334,7 +2334,13 @@ static KernelProcessStatus grant_bootstrap_capabilities(
         astra_capability_name_set(granted[index].name, entry->name);
         granted[index].handle = handle;
         granted[index].rights = entry->rights;
-        granted[index].flags = 0u;
+        /*
+         * Carried across, never interpreted. What a grant is for -- a name in
+         * the child's namespace, a place to write -- is the launcher's
+         * statement to the child, and a kernel that read it would be deciding
+         * what a name means.
+         */
+        granted[index].flags = entry->flags;
     }
     return KERNEL_PROCESS_OK;
 }
@@ -4302,12 +4308,22 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             for (uint32_t at = 0u; at + 1u < ASTRA_CAPABILITY_NAME_MAX; ++at)
                 names[index][at] = grants[index].name[at];
             names[index][ASTRA_CAPABILITY_NAME_MAX - 1u] = '\0';
-            if (names[index][0] == '\0' || grants[index].rights == 0u) {
+            /*
+             * A flag bit nobody interprets today is a bit that means something
+             * else tomorrow, so an unknown one is refused rather than carried.
+             * Accepting it would make the field unversionable: a child built
+             * against a later ABI could not tell a flag it was granted from one
+             * that happened to be set.
+             */
+            if (names[index][0] == '\0' || grants[index].rights == 0u ||
+                (grants[index].flags & ~(uint32_t)ASTRA_CAPABILITY_FLAG_MASK) !=
+                    0u) {
                 result = ASTRA_SYSCALL_INVALID_ARGUMENT;
                 break;
             }
             requested[index].name = names[index];
             requested[index].rights = grants[index].rights;
+            requested[index].flags = grants[index].flags;
             requested[index].source_handle = grants[index].handle;
             requested[index].kind = KERNEL_PROCESS_BOOTSTRAP_HANDLE;
         }

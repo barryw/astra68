@@ -177,11 +177,11 @@ astra_assign_seed(AstraAssignTable *table,
          */
         char name[ASTRA_CAPABILITY_NAME_MAX];
 
-        copy(name, capabilities[index].name, ASTRA_CAPABILITY_NAME_MAX);
-        if (same(name, ASTRA_CAPABILITY_PROCESS) ||
-            same(name, ASTRA_CAPABILITY_THREAD)) {
+        if ((capabilities[index].flags &
+             ASTRA_CAPABILITY_FLAG_NAMESPACE) == 0u) {
             continue;
         }
+        copy(name, capabilities[index].name, ASTRA_CAPABILITY_NAME_MAX);
         if (astra_assign_bind(table, name, capabilities[index].handle,
                               capabilities[index].rights,
                               "") == ASTRA_VFS_ERR_LIMIT) {

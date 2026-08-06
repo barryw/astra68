@@ -32,6 +32,30 @@
 #define ASTRA_LAUNCH_ARGUMENT_MAX 8u
 #define ASTRA_LAUNCH_ARGUMENT_BYTES 192u
 
+/*
+ * What a grant is *for*, which is not the same question as what it confers.
+ *
+ * A capability table publishes every kind of authority a process holds, and
+ * they are not all the same kind of thing. `WORK` is a name in a namespace and
+ * `WORK:src/main.c` means something; `STDOUT` is a place to write and
+ * `STDOUT:src/main.c` is nonsense. Without a flag the only way to tell them
+ * apart is a list of names that are not mounts, which grows every time a new
+ * kind of capability is invented and is kept in a file that has nothing to do
+ * with any of them.
+ *
+ * So a grant says which it is, and a namespace is seeded from the ones that
+ * said so. The rule is positive: a capability is not a name unless somebody
+ * declared it one. The two the kernel installs for every process, PROCESS and
+ * THREAD, carry no flags and are therefore excluded by construction rather
+ * than by being remembered.
+ *
+ * Unknown bits are refused rather than passed through. A bit nobody interprets
+ * today is a bit that means something else tomorrow, and accepting it now makes
+ * the field unversionable.
+ */
+#define ASTRA_CAPABILITY_FLAG_NAMESPACE (1u << 0)
+#define ASTRA_CAPABILITY_FLAG_MASK      (ASTRA_CAPABILITY_FLAG_NAMESPACE)
+
 typedef struct AstraLaunchGrant {
     char     name[ASTRA_CAPABILITY_NAME_MAX];  /* what the child calls it */
     uint32_t handle;                           /* the caller's own handle */

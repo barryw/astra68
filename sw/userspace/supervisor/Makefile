@@ -10,13 +10,14 @@ STORAGE := ../storage
 ALLOC := ../alloc
 VFS := ../vfs
 EVENTS := ../events
+STREAMS := ../streams
 SHELL_DIR := ../shell
 TERMINAL_DIR := ../terminal
 LWEXT4 := ../../../third_party/lwext4
 CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include \
 	-I$(STORAGE)/include -I../metrics/include -I$(ALLOC)/include \
 	-I$(SHELL_DIR)/include -I$(TERMINAL_DIR)/include -I$(VFS)/include \
-	-I$(EVENTS)/include
+	-I$(EVENTS)/include -I$(STREAMS)/include
 # The volume check speaks lwext4 as well as Astra and links freestanding, so it
 # needs the vendored headers, the build profile, and the libc shims.
 EXT4_CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
@@ -36,8 +37,10 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 	-Wl,--build-id=none -Wl,--gc-sections -T $(RUNTIME)/astra_user.ld
 SOURCES := src/supervisor.c src/main.c src/volume.c src/console_shell.c \
+	src/console_stream.c \
 	src/vfs_host.c src/events_host.c
 OBJECTS := build/m68k/supervisor.o build/m68k/main.o build/m68k/vfs_host.o \
+	build/m68k/console_stream.o \
 	build/m68k/volume.o build/m68k/console_shell.o build/m68k/events_host.o
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 STORAGE_LIB := $(STORAGE)/build/m68k/libastrablock.a
@@ -45,6 +48,7 @@ EXT4_LIB := $(STORAGE)/build/m68k/libastraext4.a
 ALLOC_LIB := $(ALLOC)/build/m68k/libastraalloc.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
 EVENTS_LIB := $(EVENTS)/build/m68k/libastraevents.a
+STREAMS_LIB := $(STREAMS)/build/m68k/libastrastreams.a
 SHELL_LIB := $(SHELL_DIR)/build/m68k/libastrashell.a
 TERMINAL_LIB := $(TERMINAL_DIR)/build/m68k/libastraterminal.a
 RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0.o
@@ -84,6 +88,7 @@ libraries:
 	$(MAKE) -C $(STORAGE) $(EXT4_LIB:$(STORAGE)/%=%)
 	$(MAKE) -C $(VFS) all
 	$(MAKE) -C $(EVENTS) all
+	$(MAKE) -C $(STREAMS) all
 	$(MAKE) -C $(SHELL_DIR) all
 	$(MAKE) -C $(TERMINAL_DIR) all
 
@@ -92,11 +97,12 @@ libraries:
 # archives are named as prerequisites so a rebuilt library relinks the image.
 $(TARGET): $(OBJECTS) $(RUNTIME)/astra_user.ld $(RUNTIME_CRT0) $(EXT4_LIB) \
 		$(STORAGE_LIB) $(ALLOC_LIB) $(RUNTIME_LIB) $(SHELL_LIB) \
-		$(TERMINAL_LIB) $(VFS_LIB) $(EVENTS_LIB)
+		$(TERMINAL_LIB) $(VFS_LIB) $(EVENTS_LIB) $(STREAMS_LIB)
 	@mkdir -p $(@D)
 	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(RUNTIME_CRT0) $(OBJECTS) \
-		$(EVENTS_LIB) $(VFS_LIB) $(EXT4_LIB) $(STORAGE_LIB) $(ALLOC_LIB) \
-		$(TERMINAL_LIB) $(SHELL_LIB) $(RUNTIME_LIB) -lgcc
+		$(STREAMS_LIB) $(EVENTS_LIB) $(VFS_LIB) $(EXT4_LIB) \
+		$(STORAGE_LIB) $(ALLOC_LIB) $(TERMINAL_LIB) $(SHELL_LIB) \
+		$(RUNTIME_LIB) -lgcc
 
 # The catalog section goes the way DWARF does: read out at build time, never
 # carried in the window the firmware compresses into ROM.
@@ -148,6 +154,8 @@ analyze:
 		-c src/supervisor.c -o build/analyzer/supervisor.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/main.c -o build/analyzer/main.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/console_stream.c -o build/analyzer/console_stream.o
 
 size: $(IMAGE)
 	$(SIZE) $(IMAGE)

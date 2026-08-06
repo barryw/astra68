@@ -5690,6 +5690,13 @@ static void test_block_admission(void)
     capabilities[0].kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
     capabilities[0].device_id = ASTRA_DEVICE_ID_BLOCK0;
     capabilities[0].rights = KERNEL_DEVICE_RIGHTS;
+    /*
+     * The flags word, which the kernel carries and never reads. What a grant is
+     * *for* is the launcher's statement to the child, so the only thing worth
+     * asserting is that it arrives in the published record exactly as it was
+     * set -- and this is the one test that already reads that table.
+     */
+    capabilities[0].flags = ASTRA_CAPABILITY_FLAG_NAMESPACE;
     assert(kernel_process_create_executable(loader_image, loader_image_size,
                                             capabilities, 1u, &process_id) ==
            KERNEL_PROCESS_OK);
@@ -5704,10 +5711,15 @@ static void test_block_admission(void)
         assert(kernel_user_copy_from_asm(
                    table, KERNEL_VM_USER_MIN + ASTRA_STARTUP_INFO_SIZE,
                    sizeof(table)) == KERNEL_USER_COPY_OK);
+        /* The two the kernel installs for every process declare nothing. */
+        assert(table[0].flags == 0u);
+        assert(table[1].flags == 0u);
         for (uint32_t index = 0u; index < 4u; ++index) {
             if (astra_capability_name_equal(table[index].name,
-                                            ASTRA_CAPABILITY_BLOCK_DEVICE))
+                                            ASTRA_CAPABILITY_BLOCK_DEVICE)) {
                 lease_handle = table[index].handle;
+                assert(table[index].flags == ASTRA_CAPABILITY_FLAG_NAMESPACE);
+            }
         }
     }
     assert(lease_handle != 0u);
@@ -6759,8 +6771,23 @@ static void test_a_program_can_launch_a_program(void)
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
 
-    /* And a subset of it is granted, which is what a child's namespace is. */
+    /*
+     * A flag bit this ABI does not define is refused rather than carried. A bit
+     * nobody interprets today means something else tomorrow, and a child built
+     * against the later ABI could not tell a flag it was granted from one that
+     * happened to be set.
+     */
     grant.rights = ASTRA_RIGHT_READ;
+    grant.flags = (uint32_t)ASTRA_CAPABILITY_FLAG_MASK + 1u;
+    assert(kernel_user_copy_to_asm(user_grants, &grant, sizeof(grant)) ==
+           KERNEL_USER_COPY_OK);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    /* And a subset of it is granted, which is what a child's namespace is. */
+    grant.flags = ASTRA_CAPABILITY_FLAG_NAMESPACE;
     assert(kernel_user_copy_to_asm(user_grants, &grant, sizeof(grant)) ==
            KERNEL_USER_COPY_OK);
     assert(kernel_process_on_syscall(registers,

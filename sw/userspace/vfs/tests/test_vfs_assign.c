@@ -275,35 +275,48 @@ capability(AstraStartupCapability *entry, const char *name, uint32_t handle,
     astra_capability_name_set(entry->name, name);
     entry->handle = handle;
     entry->rights = rights;
+    entry->flags = ASTRA_CAPABILITY_FLAG_NAMESPACE;
+}
+
+/* A capability that is authority without being a name: a stream, a device. */
+static void
+capability_unnamed(AstraStartupCapability *entry, const char *name,
+                   uint32_t handle, uint32_t rights)
+{
+    capability(entry, name, handle, rights);
     entry->flags = 0u;
 }
 
 static void
 test_seeding_from_a_capability_table(void)
 {
-    AstraStartupCapability capabilities[4];
+    AstraStartupCapability capabilities[5];
     AstraAssignTable table;
     const AstraAssign *found;
 
     /* The shape the kernel publishes: its own two first, then the grants. */
-    capability(&capabilities[0], ASTRA_CAPABILITY_PROCESS, 1u,
-               ASTRA_RIGHT_READ);
-    capability(&capabilities[1], ASTRA_CAPABILITY_THREAD, 2u, ASTRA_RIGHT_READ);
+    capability_unnamed(&capabilities[0], ASTRA_CAPABILITY_PROCESS, 1u,
+                       ASTRA_RIGHT_READ);
+    capability_unnamed(&capabilities[1], ASTRA_CAPABILITY_THREAD, 2u,
+                       ASTRA_RIGHT_READ);
     capability(&capabilities[2], "WORK", 9u,
                ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE);
     capability(&capabilities[3], "EVENTS", 11u, ASTRA_RIGHT_READ);
-
-    assert(astra_assign_seed(&table, capabilities, 4u) == ASTRA_VFS_OK);
-
     /*
-     * Two bindings out of four entries. PROCESS and THREAD are the handles
-     * every process is given whether it asked or not; they are authority over
-     * itself, not names in a namespace, and a `PROCESS:` that resolved and then
-     * failed at the first read would be worse than one that never resolved.
+     * A stream. It is a perfectly good capability with a perfectly good name
+     * and it is not a namespace entry: `STDOUT:src/main.c` is nonsense. It is
+     * excluded because it did not declare itself a name, which is the same
+     * mechanism that excludes PROCESS and THREAD -- and the reason there is no
+     * list here of capabilities that are not mounts.
      */
+    capability_unnamed(&capabilities[4], "STDOUT", 13u, ASTRA_RIGHT_SIGNAL);
+
+    assert(astra_assign_seed(&table, capabilities, 5u) == ASTRA_VFS_OK);
+
     assert(table.count == 2u);
     assert(astra_assign_lookup(&table, ASTRA_CAPABILITY_PROCESS) == NULL);
     assert(astra_assign_lookup(&table, ASTRA_CAPABILITY_THREAD) == NULL);
+    assert(astra_assign_lookup(&table, "STDOUT") == NULL);
 
     found = astra_assign_lookup(&table, "WORK");
     assert(found != NULL);

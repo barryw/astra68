@@ -96,6 +96,26 @@ uint32_t astra_process_wait(uint32_t handle, uint64_t deadline_ns,
                             uint32_t *exit_status);
 
 /*
+ * Ports: the only way one process reaches another.
+ *
+ * Creating one yields both ends, and handing an end away is what publishes a
+ * service. A send that does not fit answers ASTRA_SYSCALL_WOULD_BLOCK, which is
+ * back pressure and not an error -- the port is the queue, and a caller that
+ * retries is doing the right thing. A receive with nothing waiting answers the
+ * same way.
+ *
+ * `astra_port_receive` reports the size the message needed even when it refused
+ * for want of room, because that number is the point of the refusal.
+ */
+uint32_t astra_port_create(uint32_t message_max, uint32_t byte_max,
+                           uint32_t *receive_handle, uint32_t *send_handle);
+uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
+                         const uint32_t *handles, uint32_t handle_count);
+uint32_t astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
+                            uint32_t *handles, uint32_t handle_capacity,
+                            uint32_t *size, uint32_t *handle_count);
+
+/*
  * The event channel. No handle, no binding and no capability: emitting is
  * universal, because an account of what happened that depends on a right has
  * holes exactly where something went wrong.

@@ -19,6 +19,7 @@
  */
 
 #include <console_shell.h>
+#include <console_stream.h>
 #include <events_host.h>
 
 #include <astra/bytes.h>
@@ -920,6 +921,22 @@ void console_shell_run(uint32_t display, uint32_t input,
         return;
     }
     astra_shell_editor_init(&shell.editor);
+    /*
+     * The streams a launched program will be granted. They exist before the
+     * first prompt because a launch cannot create them -- a child is handed
+     * what its launcher already holds -- and a terminal that could not offer
+     * one would be a machine where no program can print.
+     *
+     * A failure here is not fatal to the terminal: the shell's own output does
+     * not go through the sink, so what is lost is the ability to launch
+     * something that writes, and that is worth booting without.
+     */
+    if (!console_stream_start(&shell.terminal)) {
+        ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
+                     ASTRA_EVENT_LEVEL_WARNING,
+                     "console streams unavailable, launched programs "
+                     "cannot write");
+    }
 
     astra_terminal_clear(&shell.terminal);
     write_line("Astra 68");
@@ -947,6 +964,15 @@ void console_shell_run(uint32_t display, uint32_t input,
          * bounded pump per pass is what keeps a burst from becoming a stall.
          */
         supervisor_events_pump();
+        /*
+         * And the streams, for the same reason and on the same terms. Nothing
+         * writes to them until a program is launched, so today this is a
+         * receive that finds an empty port; it is here now because the loop
+         * that serves a child has to be the loop that already exists, and a
+         * pump added at the same time as the first child would be a pump
+         * nobody had ever seen run.
+         */
+        console_stream_pump();
         if (input == 0u) {
             (void)astra_yield();
             continue;

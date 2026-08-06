@@ -242,14 +242,59 @@ typedef struct AstraStreamWrite {
   the runtime; `astra_print(text)` over the first, because every program will
   want it.
 
-- [ ] Step 1: failing tests — a write renders into a terminal model; a write
+- [x] Step 1: failing tests — a write renders into a terminal model; a write
       longer than one message is refused rather than truncated, and the client
       loops instead; a full sink answers `WOULD_BLOCK` and loses nothing; a read
       with nothing available is short rather than an error; a stream a program
       was not granted is a handle it does not have.
-- [ ] Step 2: the sink, the client and the runtime wrappers.
-- [ ] Step 3: `cd sw/userspace && make test && make sanitize && make analyze`.
-- [ ] Step 4: commit.
+- [x] Step 2: the sink, the client and the runtime wrappers.
+- [x] Step 3: `cd sw/userspace && make test && make sanitize && make analyze`.
+- [x] Step 4: commit.
+
+**The grant flag, settled first.** Seeding bound every published capability that
+was not `PROCESS` or `THREAD`, so a `STDOUT` grant would have been bound as
+though `STDOUT:src/main.c` meant something. `AstraLaunchGrant.flags` existed,
+unused and not propagated. It is now carried through
+`KernelProcessBootstrapCapability` into the published record, unknown bits are
+refused at the syscall, and `astra_assign_seed` binds only
+`ASTRA_CAPABILITY_FLAG_NAMESPACE`. **The rule is positive**: a capability is not
+a name unless somebody declared it one, so `PROCESS` and `THREAD` are excluded
+by construction rather than by a list that grows every time a new kind of
+capability is invented. Four lines of kernel and the blacklist is gone.
+
+**Four things the build settled.**
+
+- **Attaching a handle to a port message *moves* it.** Ports carry no retain, so
+  they go through the transfer machinery: the sender's entry is invalidated. A
+  first client cached one reply port across reads, passed its tests, and would
+  have named nothing on the second read on the machine — the mock copied where
+  the kernel moves. `astra_stream_read` now creates a reply port per call, and
+  **the mock models the move**, with a test that asserts it does. This is the
+  same finding as task 1's "ports are not cloneable", from the other direction.
+- **The port is the queue, so the sink has none.** Back pressure is the kernel's
+  `WOULD_BLOCK` on a full port, and `astra_stream_write` reports exactly how
+  much went — which is what makes it lossless, because a caller retries from
+  there rather than from a guess. A buffer in the sink would have been a second
+  place to drop a message.
+- **A reader blocks on its reply port rather than yielding at it.** A yield loop
+  burns a scheduling slot per pass for as long as somebody takes to type, and on
+  a machine whose shell is also the thing that has to answer, that is time taken
+  from the answer. The host test's `astra_wait_one` pumps the source, which is
+  not a convenience: it is exactly the serving wait the machine does.
+- **`astra_print` takes a handle**, unlike the plan's `astra_print(text)`. A
+  print with no handle is descriptor 1 with the serial numbers filed off, and
+  ambient output is what 4.1 refuses. The protocol also rides `AstraMessageHeader`
+  rather than the plan's bare struct, because the kernel refuses a port message
+  without a valid one.
+
+**`STDIN` is wired but not fed.** `console_stream_offer` is the seam and nothing
+calls it yet: what the line editor has finished with only becomes a child's
+input once there is a child, and the shell's serving wait is task 4. The source,
+its protocol and its tests are done, so task 4 adds a call rather than a
+mechanism.
+
+The supervisor grew 1,328 bytes of text and 732 of BSS: two ports, a sink, a
+source and the client.
 
 ### Task 4: The shell launches by name
 

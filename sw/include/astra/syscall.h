@@ -186,6 +186,9 @@
 
 #define ASTRA_DEADLINE_NONE_HI 0x7fffffffu
 #define ASTRA_DEADLINE_NONE_LO 0xffffffffu
+/* The same deadline as one number, for the callers that take one. */
+#define ASTRA_DEADLINE_FOREVER \
+    ((((uint64_t)ASTRA_DEADLINE_NONE_HI) << 32) | ASTRA_DEADLINE_NONE_LO)
 
 #define ASTRA_WAIT_MULTIPLE_MAX 16
 #define ASTRA_WAIT_INDEX_NONE 0xffffffff

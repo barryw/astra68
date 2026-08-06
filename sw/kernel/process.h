@@ -304,6 +304,13 @@ typedef struct KernelProcessBootstrapCapability {
      */
     const char *name;
     uint32_t rights;
+    /*
+     * ASTRA_CAPABILITY_FLAG_*, copied into the published record unchanged. The
+     * kernel checks the bits are ones it knows and never acts on them: what a
+     * grant is for is the child's business, and a kernel that interpreted this
+     * would be deciding what a name means.
+     */
+    uint32_t flags;
     uint32_t device_id;      /* KERNEL_PROCESS_BOOTSTRAP_DEVICE */
     uint32_t source_handle;  /* KERNEL_PROCESS_BOOTSTRAP_HANDLE */
     uint8_t kind;
