@@ -34,10 +34,12 @@ static void
 valid_capabilities(AstraStartupCapability *capabilities)
 {
     memset(capabilities, 0, 2u * sizeof(*capabilities));
-    capabilities[0].name = ASTRA_CAPABILITY_PROCESS;
+    astra_capability_name_set(capabilities[0].name,
+                              ASTRA_CAPABILITY_PROCESS);
     capabilities[0].handle = PROCESS_HANDLE;
     capabilities[0].rights = 1u;
-    capabilities[1].name = ASTRA_CAPABILITY_THREAD;
+    astra_capability_name_set(capabilities[1].name,
+                              ASTRA_CAPABILITY_THREAD);
     capabilities[1].handle = THREAD_HANDLE;
     capabilities[1].rights = 1u;
 }
@@ -161,7 +163,8 @@ test_capability_table(void)
     assert(supervisor_validate(&startup, capabilities, &probe) == expected);
 
     valid_capabilities(capabilities);
-    capabilities[1].name = ASTRA_CAPABILITY_PROCESS;
+    astra_capability_name_set(capabilities[1].name,
+                              ASTRA_CAPABILITY_PROCESS);
     assert(supervisor_validate(&startup, capabilities, &probe) == expected);
 }
 
@@ -248,6 +251,38 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
     result->value2 = 0u;
 }
 
+/*
+ * Capability names are bounded strings now. The comparison has to refuse a
+ * field with no NUL in it: reading one as a name would run off the record.
+ */
+static void
+test_capability_names_are_bounded_strings(void)
+{
+    char unterminated[ASTRA_CAPABILITY_NAME_MAX];
+    char field[ASTRA_CAPABILITY_NAME_MAX];
+
+    assert(astra_capability_name_equal("PROCESS", "PROCESS"));
+    assert(!astra_capability_name_equal("PROCESS", "PROC"));
+    assert(!astra_capability_name_equal("PROC", "PROCESS"));
+    assert(!astra_capability_name_equal("", "PROCESS"));
+    assert(!astra_capability_name_equal(NULL, "PROCESS"));
+    assert(!astra_capability_name_equal("PROCESS", NULL));
+
+    memset(unterminated, 'A', sizeof(unterminated));
+    assert(!astra_capability_name_equal(unterminated, "AAAA"));
+
+    /* Setting a name fills the rest of the field, so no stale bytes remain. */
+    memset(field, 'Z', sizeof(field));
+    astra_capability_name_set(field, "WORK");
+    assert(astra_capability_name_equal(field, "WORK"));
+    assert(field[sizeof(field) - 1u] == '\0');
+
+    /* A name longer than the field is truncated and stays terminated. */
+    astra_capability_name_set(field, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+    assert(field[ASTRA_CAPABILITY_NAME_MAX - 1u] == '\0');
+    assert(astra_capability_name_equal(field, "ABCDEFGHIJKLMNO"));
+}
+
 /* Accepting a launch binds the channel; refusing one leaves it unbound. */
 static void
 test_launch_binds_the_diagnostic_channel(void)
@@ -280,6 +315,7 @@ main(void)
     test_capability_table();
     test_process_view();
     test_failures_accumulate();
+    test_capability_names_are_bounded_strings();
     test_launch_binds_the_diagnostic_channel();
     puts("SUPERVISOR PASS");
     return 0;

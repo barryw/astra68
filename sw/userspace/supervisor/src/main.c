@@ -42,10 +42,10 @@ supervisor_clock(void *context)
 
 static const AstraStartupCapability *
 find_capability(const AstraStartupCapability *capabilities, uint32_t count,
-                uint32_t name)
+                const char *name)
 {
     for (uint32_t index = 0u; index < count; ++index) {
-        if (capabilities[index].name == name) {
+        if (astra_capability_name_equal(capabilities[index].name, name)) {
             return &capabilities[index];
         }
     }

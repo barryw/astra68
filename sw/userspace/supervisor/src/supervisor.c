@@ -5,10 +5,10 @@
 
 static int
 capability_matches(const AstraStartupCapability *capabilities, uint32_t count,
-                   uint32_t name, uint32_t handle)
+                   const char *name, uint32_t handle)
 {
     for (uint32_t index = 0u; index < count; ++index) {
-        if (capabilities[index].name != name) {
+        if (!astra_capability_name_equal(capabilities[index].name, name)) {
             continue;
         }
         return capabilities[index].handle == handle &&

@@ -2189,7 +2189,8 @@ static KernelProcessStatus grant_bootstrap_capabilities(
         KernelHandle handle = KERNEL_HANDLE_INVALID;
         KernelProcessStatus status;
 
-        if (entry->name == 0u || entry->rights == 0u)
+        if (entry->name == NULL || entry->name[0] == '\0' ||
+            entry->rights == 0u)
             return KERNEL_PROCESS_INVALID_ARGUMENT;
         switch (entry->kind) {
         case KERNEL_PROCESS_BOOTSTRAP_DEVICE:
@@ -2212,7 +2213,7 @@ static KernelProcessStatus grant_bootstrap_capabilities(
             return status;
         if (handle == KERNEL_HANDLE_INVALID)
             return KERNEL_PROCESS_CORRUPT;
-        granted[index].name = entry->name;
+        astra_capability_name_set(granted[index].name, entry->name);
         granted[index].handle = handle;
         granted[index].rights = entry->rights;
         granted[index].flags = 0u;
@@ -2251,10 +2252,12 @@ static KernelProcessStatus publish_startup_block(
     info.capabilities_address =
         KERNEL_PROCESS_STARTUP_BASE + ASTRA_STARTUP_INFO_SIZE;
 
-    capability[0].name = ASTRA_CAPABILITY_PROCESS;
+    astra_capability_name_set(capability[0].name,
+                              ASTRA_CAPABILITY_PROCESS);
     capability[0].handle = process_handle;
     capability[0].rights = KERNEL_PROCESS_RIGHT_QUERY;
-    capability[1].name = ASTRA_CAPABILITY_THREAD;
+    astra_capability_name_set(capability[1].name,
+                              ASTRA_CAPABILITY_THREAD);
     capability[1].handle = thread_handle;
     capability[1].rights = KERNEL_THREAD_RIGHTS;
     /* Freestanding: a struct assignment here would call libc memcpy. */

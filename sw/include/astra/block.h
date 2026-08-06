@@ -14,8 +14,8 @@
 #define ASTRA_DEVICE_ID_BLOCK0   UINT32_C(0x424c0001)
 
 /* Capability-table names published in the initial image's startup block. */
-#define ASTRA_CAPABILITY_BLOCK_DEVICE UINT32_C(0x424c4b44) /* BLKD */
-#define ASTRA_CAPABILITY_BLOCK_IRQ    UINT32_C(0x424c4b49) /* BLKI */
+#define ASTRA_CAPABILITY_BLOCK_DEVICE "BLOCK_DEVICE"
+#define ASTRA_CAPABILITY_BLOCK_IRQ    "BLOCK_IRQ"
 
 /*
  * The transport is fixed at 512-byte sectors today. It is reported rather than

@@ -4,19 +4,27 @@
 #define ASTRA_STARTUP_MAGIC 0x41535452u
 #define ASTRA_STARTUP_ABI_VERSION 1u
 #define ASTRA_STARTUP_INFO_SIZE 64u
-#define ASTRA_STARTUP_CAPABILITY_SIZE 16u
+#define ASTRA_STARTUP_CAPABILITY_SIZE 28u
+#define ASTRA_CAPABILITY_NAME_MAX 16u
 #define ASTRA_STARTUP_CAPABILITY_MAX 32u
 
 #define ASTRA_STARTUP_FLAG_SUPERVISOR (1u << 0)
 
 #define ASTRA_PROCESS_INFO_SIZE 48u
 
-/* Capability names a process always receives: itself and its first thread. */
-#define ASTRA_CAPABILITY_PROCESS 0x50524f43u /* "PROC" */
-#define ASTRA_CAPABILITY_THREAD  0x54485244u /* "THRD" */
+/*
+ * Capability names a process always receives: itself and its first thread.
+ *
+ * Names rather than four-character codes, because this table became the
+ * machine's namespace -- COMMANDS, DRIVERS, WORK -- and a name a person reads
+ * in a startup manifest cannot be limited to what fits in a uint32.
+ */
+#define ASTRA_CAPABILITY_PROCESS "PROCESS"
+#define ASTRA_CAPABILITY_THREAD  "THREAD"
 
 #ifndef __ASSEMBLER__
 
+#include <stddef.h>
 #include <stdint.h>
 
 /* Logical addresses are represented as integers at the process ABI boundary. */
@@ -65,7 +73,7 @@ typedef struct AstraProcessInfo {
 } AstraProcessInfo;
 
 typedef struct AstraStartupCapability {
-    uint32_t name;
+    char     name[ASTRA_CAPABILITY_NAME_MAX];
     uint32_t handle;
     uint32_t rights;
     uint32_t flags;
@@ -75,6 +83,50 @@ _Static_assert(sizeof(AstraStartupInfo) == ASTRA_STARTUP_INFO_SIZE,
                "startup-info ABI size changed");
 _Static_assert(sizeof(AstraProcessInfo) == ASTRA_PROCESS_INFO_SIZE,
                "process-info ABI size changed");
+
+/*
+ * Compares two capability names. Bounded on both sides: a field with no NUL in
+ * it is not a name, and treating it as one would read past the record.
+ */
+static inline int
+astra_capability_name_equal(const char *left, const char *right)
+{
+    uint32_t index = 0u;
+
+    if (left == NULL || right == NULL) {
+        return 0;
+    }
+    while (index < ASTRA_CAPABILITY_NAME_MAX) {
+        if (left[index] != right[index]) {
+            return 0;
+        }
+        if (left[index] == '\0') {
+            return 1;
+        }
+        ++index;
+    }
+    return 0;   /* unterminated: not a name */
+}
+
+/* Writes a name into a capability entry, NUL-filling the rest of the field. */
+static inline void
+astra_capability_name_set(char *field, const char *name)
+{
+    uint32_t index = 0u;
+
+    if (field == NULL) {
+        return;
+    }
+    while (name != NULL && index + 1u < ASTRA_CAPABILITY_NAME_MAX &&
+           name[index] != '\0') {
+        field[index] = name[index];
+        ++index;
+    }
+    while (index < ASTRA_CAPABILITY_NAME_MAX) {
+        field[index++] = '\0';
+    }
+}
+
 _Static_assert(sizeof(AstraStartupCapability) ==
                    ASTRA_STARTUP_CAPABILITY_SIZE,
                "startup-capability ABI size changed");

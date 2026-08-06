@@ -5710,7 +5710,8 @@ static void test_block_admission(void)
                    table, KERNEL_VM_USER_MIN + ASTRA_STARTUP_INFO_SIZE,
                    sizeof(table)) == KERNEL_USER_COPY_OK);
         for (uint32_t index = 0u; index < 4u; ++index) {
-            if (table[index].name == ASTRA_CAPABILITY_BLOCK_DEVICE)
+            if (astra_capability_name_equal(table[index].name,
+                                            ASTRA_CAPABILITY_BLOCK_DEVICE))
                 lease_handle = table[index].handle;
         }
     }
@@ -5839,7 +5840,8 @@ static void test_block_admission_faults(void)
                    table, KERNEL_VM_USER_MIN + ASTRA_STARTUP_INFO_SIZE,
                    sizeof(table)) == KERNEL_USER_COPY_OK);
         for (index = 0u; index < 4u; ++index) {
-            if (table[index].name == ASTRA_CAPABILITY_BLOCK_DEVICE)
+            if (astra_capability_name_equal(table[index].name,
+                                            ASTRA_CAPABILITY_BLOCK_DEVICE))
                 lease_handle = table[index].handle;
         }
     }
@@ -6176,7 +6178,7 @@ static void test_bootstrap_capabilities(void)
     assert(kernel_memory_stats(&before));
 
     memset(capabilities, 0, sizeof(capabilities));
-    capabilities[0].name = 0x44455631u; /* DEV1 */
+    capabilities[0].name = "DEV1";
     capabilities[0].kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
     capabilities[0].device_id = 1u;
     capabilities[0].rights = KERNEL_DEVICE_RIGHT_QUERY;
@@ -6193,7 +6195,7 @@ static void test_bootstrap_capabilities(void)
     assert(kernel_memory_stats(&before));
     handles_before = 0u;
     memset(capabilities, 0, sizeof(capabilities));
-    capabilities[0].name = 0x44455632u;
+    capabilities[0].name = "DEV2";
     capabilities[0].kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
     capabilities[0].device_id = 0x5a5a5a5au;
     capabilities[0].rights = KERNEL_DEVICE_RIGHT_QUERY;

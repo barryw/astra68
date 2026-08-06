@@ -279,7 +279,13 @@ typedef enum KernelProcessBootstrapKind {
  * can never name a handle that does not exist.
  */
 typedef struct KernelProcessBootstrapCapability {
-    uint32_t name;      /* four-character name for the startup block */
+    /*
+     * The name the process will see in its startup block. A pointer to a
+     * string literal rather than a copy: these descriptors are built by the
+     * kernel from constants, and the copy into the bounded ABI field happens
+     * where the startup block is written.
+     */
+    const char *name;
     uint32_t rights;
     uint32_t device_id; /* KERNEL_PROCESS_BOOTSTRAP_DEVICE */
     uint8_t kind;
