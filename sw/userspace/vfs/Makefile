@@ -59,10 +59,11 @@ $(HOST_TEST): $(CORE_SOURCES) tests/test_vfs_service_core.c $(HEADERS)
 
 ASSIGN_TEST := build/host/test_vfs_assign
 
-$(ASSIGN_TEST): src/vfs_assign.c tests/test_vfs_assign.c $(HEADERS)
+$(ASSIGN_TEST): src/vfs_assign.c src/vfs_path.c tests/test_vfs_assign.c \
+		$(HEADERS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		src/vfs_assign.c tests/test_vfs_assign.c -o $@
+		src/vfs_assign.c src/vfs_path.c tests/test_vfs_assign.c -o $@
 
 PATH_TEST := build/host/test_vfs_path
 
@@ -89,6 +90,10 @@ sanitize:
 		$(SANITIZER_FLAGS) src/vfs_path.c tests/test_vfs_path.c \
 		-o build/host/test_vfs_path_sanitize
 	./build/host/test_vfs_path_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) src/vfs_assign.c src/vfs_path.c \
+		tests/test_vfs_assign.c -o build/host/test_vfs_assign_sanitize
+	./build/host/test_vfs_assign_sanitize
 
 analyze:
 	@mkdir -p build/analyzer

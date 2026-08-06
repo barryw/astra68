@@ -11,12 +11,13 @@ test_bind_and_look_up(void)
     const AstraAssign *found;
 
     astra_assign_table_init(&table);
-    assert(astra_assign_bind(&table, "WORK", 7u, 3u) == ASTRA_VFS_OK);
+    assert(astra_assign_bind(&table, "WORK", 7u, 3u, "work") == ASTRA_VFS_OK);
 
     found = astra_assign_lookup(&table, "WORK");
     assert(found != NULL);
     assert(found->handle == 7u);
     assert(found->rights == 3u);
+    assert(strcmp(found->root, "work") == 0);
 
     /* Case-insensitive: a person typing work: means WORK:. */
     assert(astra_assign_lookup(&table, "work") == found);
@@ -36,27 +37,69 @@ test_refusals(void)
     memset(oversized, 'A', sizeof(oversized));
     oversized[sizeof(oversized) - 1u] = '\0';
 
-    assert(astra_assign_bind(&table, "", 1u, 1u) == ASTRA_VFS_ERR_INVALID);
-    assert(astra_assign_bind(&table, oversized, 1u, 1u) ==
+    assert(astra_assign_bind(&table, "", 1u, 1u, "") == ASTRA_VFS_ERR_INVALID);
+    assert(astra_assign_bind(&table, oversized, 1u, 1u, "") ==
            ASTRA_VFS_ERR_INVALID);
     /* A binding without a handle or without rights is not authority. */
-    assert(astra_assign_bind(&table, "WORK", 0u, 1u) ==
+    assert(astra_assign_bind(&table, "WORK", 0u, 1u, "") ==
            ASTRA_VFS_ERR_INVALID);
-    assert(astra_assign_bind(&table, "WORK", 1u, 0u) ==
+    assert(astra_assign_bind(&table, "WORK", 1u, 0u, "") ==
            ASTRA_VFS_ERR_INVALID);
     /* A space makes a name that cannot be typed back at the machine. */
-    assert(astra_assign_bind(&table, "WO RK", 1u, 1u) ==
+    assert(astra_assign_bind(&table, "WO RK", 1u, 1u, "") ==
            ASTRA_VFS_ERR_INVALID);
     /* The colon is the separator, so it cannot be inside a name. */
-    assert(astra_assign_bind(&table, "WORK:", 1u, 1u) ==
+    assert(astra_assign_bind(&table, "WORK:", 1u, 1u, "") ==
            ASTRA_VFS_ERR_INVALID);
-    assert(astra_assign_bind(NULL, "WORK", 1u, 1u) == ASTRA_VFS_ERR_INVALID);
-    assert(astra_assign_bind(&table, NULL, 1u, 1u) == ASTRA_VFS_ERR_INVALID);
+    assert(astra_assign_bind(NULL, "WORK", 1u, 1u, "") ==
+           ASTRA_VFS_ERR_INVALID);
+    assert(astra_assign_bind(&table, NULL, 1u, 1u, "") ==
+           ASTRA_VFS_ERR_INVALID);
 
     /* Nothing above bound anything. */
     assert(astra_assign_lookup(&table, "WORK") == NULL);
     assert(astra_assign_lookup(&table, NULL) == NULL);
     assert(astra_assign_lookup(NULL, "WORK") == NULL);
+}
+
+static void
+test_roots_are_normalised(void)
+{
+    AstraAssignTable table;
+    const AstraAssign *found;
+
+    astra_assign_table_init(&table);
+    /*
+     * A root is stored as the volume-relative path it means, without the
+     * leading separator: three spellings, one root.
+     */
+    assert(astra_assign_bind(&table, "A", 1u, 1u, "/work") == ASTRA_VFS_OK);
+    assert(astra_assign_bind(&table, "B", 1u, 1u, "work/") == ASTRA_VFS_OK);
+    assert(astra_assign_bind(&table, "C", 1u, 1u, "/./work") == ASTRA_VFS_OK);
+    found = astra_assign_lookup(&table, "A");
+    assert(strcmp(found->root, "work") == 0);
+    assert(strcmp(astra_assign_lookup(&table, "B")->root, "work") == 0);
+    assert(strcmp(astra_assign_lookup(&table, "C")->root, "work") == 0);
+
+    /* The mount's own root is the empty root, not "/". */
+    assert(astra_assign_bind(&table, "D", 1u, 1u, "") == ASTRA_VFS_OK);
+    assert(strcmp(astra_assign_lookup(&table, "D")->root, "") == 0);
+
+    /* `..` inside a root is arithmetic and lands at the mount's own root. */
+    assert(astra_assign_bind(&table, "F", 1u, 1u, "/work/..") == ASTRA_VFS_OK);
+    assert(strcmp(astra_assign_lookup(&table, "F")->root, "") == 0);
+
+    /*
+     * A root that climbs out of the mount is not a root. Binding is where
+     * authority is handed over, so it is the last place this can be checked.
+     */
+    assert(astra_assign_bind(&table, "E", 1u, 1u, "..") ==
+           ASTRA_VFS_ERR_INVALID);
+    assert(astra_assign_bind(&table, "E", 1u, 1u, "work/../..") ==
+           ASTRA_VFS_ERR_INVALID);
+    assert(astra_assign_bind(&table, "E", 1u, 1u, NULL) ==
+           ASTRA_VFS_ERR_INVALID);
+    assert(astra_assign_lookup(&table, "E") == NULL);
 }
 
 static void
@@ -67,11 +110,12 @@ test_rebinding_and_capacity(void)
     uint32_t index;
 
     astra_assign_table_init(&table);
-    assert(astra_assign_bind(&table, "WORK", 7u, 3u) == ASTRA_VFS_OK);
-    /* Rebinding replaces: a name has one meaning at a time. */
-    assert(astra_assign_bind(&table, "work", 9u, 1u) == ASTRA_VFS_OK);
+    assert(astra_assign_bind(&table, "WORK", 7u, 3u, "old") == ASTRA_VFS_OK);
+    /* Rebinding replaces, root and all: a name has one meaning at a time. */
+    assert(astra_assign_bind(&table, "work", 9u, 1u, "new") == ASTRA_VFS_OK);
     assert(astra_assign_lookup(&table, "WORK")->handle == 9u);
     assert(astra_assign_lookup(&table, "WORK")->rights == 1u);
+    assert(strcmp(astra_assign_lookup(&table, "WORK")->root, "new") == 0);
     assert(table.count == 1u);
 
     assert(astra_assign_unbind(&table, "WORK") == ASTRA_VFS_OK);
@@ -80,10 +124,10 @@ test_rebinding_and_capacity(void)
 
     for (index = 0u; index < ASTRA_ASSIGN_MAX; ++index) {
         snprintf(name, sizeof(name), "N%u", index);
-        assert(astra_assign_bind(&table, name, index + 1u, 1u) ==
+        assert(astra_assign_bind(&table, name, index + 1u, 1u, "") ==
                ASTRA_VFS_OK);
     }
-    assert(astra_assign_bind(&table, "ONEMORE", 1u, 1u) ==
+    assert(astra_assign_bind(&table, "ONEMORE", 1u, 1u, "") ==
            ASTRA_VFS_ERR_LIMIT);
 
     /* A full table still answers for what it holds. */
@@ -102,15 +146,119 @@ test_unbinding_keeps_the_rest_reachable(void)
      * is removed is worse than one that cannot remove at all.
      */
     astra_assign_table_init(&table);
-    assert(astra_assign_bind(&table, "SYS", 1u, 1u) == ASTRA_VFS_OK);
-    assert(astra_assign_bind(&table, "WORK", 2u, 2u) == ASTRA_VFS_OK);
-    assert(astra_assign_bind(&table, "TEMP", 3u, 3u) == ASTRA_VFS_OK);
+    assert(astra_assign_bind(&table, "SYS", 1u, 1u, "") == ASTRA_VFS_OK);
+    assert(astra_assign_bind(&table, "WORK", 2u, 2u, "work") == ASTRA_VFS_OK);
+    assert(astra_assign_bind(&table, "TEMP", 3u, 3u, "temp") == ASTRA_VFS_OK);
 
     assert(astra_assign_unbind(&table, "SYS") == ASTRA_VFS_OK);
     assert(table.count == 2u);
     assert(astra_assign_lookup(&table, "SYS") == NULL);
     assert(astra_assign_lookup(&table, "WORK")->handle == 2u);
+    assert(strcmp(astra_assign_lookup(&table, "WORK")->root, "work") == 0);
     assert(astra_assign_lookup(&table, "TEMP")->handle == 3u);
+    assert(strcmp(astra_assign_lookup(&table, "TEMP")->root, "temp") == 0);
+}
+
+static void
+test_resolving(void)
+{
+    AstraAssignTable table;
+    const AstraAssign *assign = NULL;
+    char wire[64];
+
+    astra_assign_table_init(&table);
+    assert(astra_assign_bind(&table, "SYS", 5u, ASTRA_RIGHT_READ, "") ==
+           ASTRA_VFS_OK);
+    assert(astra_assign_bind(&table, "WORK", 5u,
+                             ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "work") ==
+           ASTRA_VFS_OK);
+
+    assert(astra_assign_resolve(&table, "WORK:src/main.c", ASTRA_RIGHT_READ,
+                                wire, sizeof(wire), &assign) == ASTRA_VFS_OK);
+    assert(strcmp(wire, "/work/src/main.c") == 0);
+    assert(assign != NULL && assign->handle == 5u);
+
+    /* An assign alone names its own root, with no trailing separator. */
+    assert(astra_assign_resolve(&table, "WORK:", ASTRA_RIGHT_READ, wire,
+                                sizeof(wire), NULL) == ASTRA_VFS_OK);
+    assert(strcmp(wire, "/work") == 0);
+
+    /* An assign rooted at the mount resolves to the mount. */
+    assert(astra_assign_resolve(&table, "sys:", ASTRA_RIGHT_READ, wire,
+                                sizeof(wire), NULL) == ASTRA_VFS_OK);
+    assert(strcmp(wire, "/") == 0);
+    assert(astra_assign_resolve(&table, "SYS:commands/ls", ASTRA_RIGHT_READ,
+                                wire, sizeof(wire), NULL) == ASTRA_VFS_OK);
+    assert(strcmp(wire, "/commands/ls") == 0);
+
+    /* The rest is normalised on the way through. */
+    assert(astra_assign_resolve(&table, "WORK:src/lib/../main.c",
+                                ASTRA_RIGHT_READ, wire, sizeof(wire), NULL) ==
+           ASTRA_VFS_OK);
+    assert(strcmp(wire, "/work/src/main.c") == 0);
+
+    /* A rest that normalises away names the assign's root. */
+    assert(astra_assign_resolve(&table, "WORK:src/..", ASTRA_RIGHT_READ, wire,
+                                sizeof(wire), NULL) == ASTRA_VFS_OK);
+    assert(strcmp(wire, "/work") == 0);
+    assert(astra_assign_resolve(&table, "SYS:.", ASTRA_RIGHT_READ, wire,
+                                sizeof(wire), NULL) == ASTRA_VFS_OK);
+    assert(strcmp(wire, "/") == 0);
+}
+
+static void
+test_resolution_refusals(void)
+{
+    AstraAssignTable table;
+    char wire[64];
+    char tiny[6];
+
+    astra_assign_table_init(&table);
+    assert(astra_assign_bind(&table, "SYS", 5u, ASTRA_RIGHT_READ, "") ==
+           ASTRA_VFS_OK);
+    assert(astra_assign_bind(&table, "WORK", 5u,
+                             ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "work") ==
+           ASTRA_VFS_OK);
+
+    /* The point of the whole arrangement: SYS: cannot be written through. */
+    assert(astra_assign_resolve(&table, "SYS:passwd", ASTRA_RIGHT_WRITE, wire,
+                                sizeof(wire), NULL) == ASTRA_VFS_ERR_ACCESS);
+    assert(astra_assign_resolve(&table, "SYS:passwd",
+                                ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, wire,
+                                sizeof(wire), NULL) == ASTRA_VFS_ERR_ACCESS);
+
+    /* A name this process was not given cannot be spelled into existence. */
+    assert(astra_assign_resolve(&table, "APPS:Editor", ASTRA_RIGHT_READ, wire,
+                                sizeof(wire), NULL) == ASTRA_VFS_ERR_NOT_FOUND);
+
+    /* Nothing above an assign's root is nameable, from either assign. */
+    assert(astra_assign_resolve(&table, "WORK:..", ASTRA_RIGHT_READ, wire,
+                                sizeof(wire), NULL) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(astra_assign_resolve(&table, "WORK:../..", ASTRA_RIGHT_READ, wire,
+                                sizeof(wire), NULL) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(astra_assign_resolve(&table, "WORK:src/../../etc",
+                                ASTRA_RIGHT_READ, wire, sizeof(wire), NULL) ==
+           ASTRA_VFS_ERR_NOT_FOUND);
+    assert(astra_assign_resolve(&table, "SYS:../etc", ASTRA_RIGHT_READ, wire,
+                                sizeof(wire), NULL) == ASTRA_VFS_ERR_NOT_FOUND);
+
+    /* Not a path on this machine. */
+    assert(astra_assign_resolve(&table, "/etc/passwd", ASTRA_RIGHT_READ, wire,
+                                sizeof(wire), NULL) == ASTRA_VFS_ERR_INVALID);
+    assert(astra_assign_resolve(&table, "main.c", ASTRA_RIGHT_READ, wire,
+                                sizeof(wire), NULL) == ASTRA_VFS_ERR_INVALID);
+    assert(astra_assign_resolve(&table, NULL, ASTRA_RIGHT_READ, wire,
+                                sizeof(wire), NULL) == ASTRA_VFS_ERR_INVALID);
+    /* An empty namespace holds nothing, which is not the same as refusing. */
+    assert(astra_assign_resolve(NULL, "WORK:x", ASTRA_RIGHT_READ, wire,
+                                sizeof(wire), NULL) == ASTRA_VFS_ERR_NOT_FOUND);
+
+    /* Truncation would name a different file. */
+    assert(astra_assign_resolve(&table, "WORK:src/main.c", ASTRA_RIGHT_READ,
+                                tiny, sizeof(tiny), NULL) ==
+           ASTRA_VFS_ERR_INVALID);
+    assert(astra_assign_resolve(&table, "WORK:x", ASTRA_RIGHT_READ, wire, 1u,
+                                NULL) == ASTRA_VFS_ERR_INVALID);
 }
 
 int
@@ -118,8 +266,11 @@ main(void)
 {
     test_bind_and_look_up();
     test_refusals();
+    test_roots_are_normalised();
     test_rebinding_and_capacity();
     test_unbinding_keeps_the_rest_reachable();
+    test_resolving();
+    test_resolution_refusals();
     puts("ASTRA VFS ASSIGN PASS");
     return 0;
 }

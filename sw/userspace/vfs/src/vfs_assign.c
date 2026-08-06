@@ -76,6 +76,21 @@ same(const char *left, const char *right)
     return 1;
 }
 
+/* Copies and pads, so an entry never carries bytes of the name before it. */
+static void
+copy(char *out, const char *in, uint32_t capacity)
+{
+    uint32_t index = 0u;
+
+    while (index + 1u < capacity && in[index] != '\0') {
+        out[index] = in[index];
+        ++index;
+    }
+    while (index < capacity) {
+        out[index++] = '\0';
+    }
+}
+
 void
 astra_assign_table_init(AstraAssignTable *table)
 {
@@ -86,6 +101,7 @@ astra_assign_table_init(AstraAssignTable *table)
     }
     for (index = 0u; index < ASTRA_ASSIGN_MAX; ++index) {
         table->entries[index].name[0] = '\0';
+        table->entries[index].root[0] = '\0';
         table->entries[index].handle = 0u;
         table->entries[index].rights = 0u;
     }
@@ -94,9 +110,10 @@ astra_assign_table_init(AstraAssignTable *table)
 
 uint32_t
 astra_assign_bind(AstraAssignTable *table, const char *name, uint32_t handle,
-                  uint32_t rights)
+                  uint32_t rights, const char *root)
 {
     char canonical_name[ASTRA_CAPABILITY_NAME_MAX];
+    char canonical_root[ASTRA_ASSIGN_ROOT_MAX];
     uint32_t index;
 
     /*
@@ -104,12 +121,24 @@ astra_assign_bind(AstraAssignTable *table, const char *name, uint32_t handle,
      * then fails, which is worse than a name that does not resolve: the caller
      * learns it has no authority one operation later than it should.
      */
-    if (table == NULL || handle == 0u || rights == 0u ||
+    if (table == NULL || handle == 0u || rights == 0u || root == NULL ||
         !canonical(name, canonical_name)) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    /*
+     * The root goes through the path parser rather than growing rules of its
+     * own. Binding is where authority is handed over, so it is the last place
+     * a root that climbs out of its mount can be refused -- everything
+     * downstream of here trusts it.
+     */
+    if (astra_path_normalise(root, canonical_root, sizeof(canonical_root)) !=
+        ASTRA_VFS_OK) {
         return ASTRA_VFS_ERR_INVALID;
     }
     for (index = 0u; index < table->count; ++index) {
         if (same(table->entries[index].name, canonical_name)) {
+            copy(table->entries[index].root, canonical_root,
+                 ASTRA_ASSIGN_ROOT_MAX);
             table->entries[index].handle = handle;
             table->entries[index].rights = rights;
             return ASTRA_VFS_OK;
@@ -118,9 +147,10 @@ astra_assign_bind(AstraAssignTable *table, const char *name, uint32_t handle,
     if (table->count >= ASTRA_ASSIGN_MAX) {
         return ASTRA_VFS_ERR_LIMIT;
     }
-    for (index = 0u; index < ASTRA_CAPABILITY_NAME_MAX; ++index) {
-        table->entries[table->count].name[index] = canonical_name[index];
-    }
+    copy(table->entries[table->count].name, canonical_name,
+         ASTRA_CAPABILITY_NAME_MAX);
+    copy(table->entries[table->count].root, canonical_root,
+         ASTRA_ASSIGN_ROOT_MAX);
     table->entries[table->count].handle = handle;
     table->entries[table->count].rights = rights;
     ++table->count;
@@ -167,4 +197,70 @@ astra_assign_unbind(AstraAssignTable *table, const char *name)
         return ASTRA_VFS_OK;
     }
     return ASTRA_VFS_ERR_NOT_FOUND;
+}
+
+uint32_t
+astra_assign_resolve(const AstraAssignTable *table, const char *path,
+                     uint32_t rights, char *wire, uint32_t capacity,
+                     const AstraAssign **assign)
+{
+    char name[ASTRA_CAPABILITY_NAME_MAX];
+    /*
+     * The one scratch buffer in the namespace path, and a frame the deep chain
+     * never sees: resolution finishes before the client call it feeds, so this
+     * is not paid on top of the service, the backend and lwext4 underneath.
+     */
+    char rest[ASTRA_VFS_PATH_MAX];
+    const AstraAssign *found;
+    uint32_t length = 0u;
+    uint32_t status;
+
+    if (wire == NULL || capacity < 2u) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    status = astra_path_split(path, name, sizeof(name), rest, sizeof(rest));
+    if (status != ASTRA_VFS_OK) {
+        return status;
+    }
+    found = astra_assign_lookup(table, name);
+    if (found == NULL) {
+        return ASTRA_VFS_ERR_NOT_FOUND;
+    }
+    if ((found->rights & rights) != rights) {
+        return ASTRA_VFS_ERR_ACCESS;
+    }
+
+    /* The mount-absolute prefix: "/" and then the assign's own root. */
+    wire[length++] = '/';
+    while (found->root[length - 1u] != '\0') {
+        if (length + 1u >= capacity) {
+            return ASTRA_VFS_ERR_INVALID;
+        }
+        wire[length] = found->root[length - 1u];
+        ++length;
+    }
+    if (length > 1u) {
+        if (length + 1u >= capacity) {
+            return ASTRA_VFS_ERR_INVALID;
+        }
+        wire[length++] = '/';
+    }
+    /*
+     * Normalised straight into the tail of the caller's buffer. The parser
+     * backtracks within the buffer it was given, so it cannot walk back over
+     * the root: the `..` refusal and the assign boundary are one mechanism
+     * rather than two that have to agree with each other.
+     */
+    status = astra_path_normalise(rest, wire + length, capacity - length);
+    if (status != ASTRA_VFS_OK) {
+        return status;
+    }
+    /* An empty rest names the assign's own root, which carries no separator. */
+    if (wire[length] == '\0' && length > 1u) {
+        wire[length - 1u] = '\0';
+    }
+    if (assign != NULL) {
+        *assign = found;
+    }
+    return ASTRA_VFS_OK;
 }
