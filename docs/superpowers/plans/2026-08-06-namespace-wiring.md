@@ -73,7 +73,7 @@ Both are stated here so they are not later mistaken for bugs.
   - `astra_assign_bind(table, name, handle, rights, root)` — one argument wider
   - `uint32_t astra_assign_resolve(const AstraAssignTable *table, const char *path, uint32_t rights, char *wire, uint32_t capacity, const AstraAssign **assign)` → `ASTRA_VFS_OK`, `ASTRA_VFS_ERR_INVALID` (not a `NAME:rest` path), `ASTRA_VFS_ERR_NOT_FOUND` (no such assign, or `..` out of one), `ASTRA_VFS_ERR_ACCESS` (rights)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `sw/userspace/vfs/tests/test_vfs_assign.c`, every existing `astra_assign_bind`
 call gains a root argument — pass `""` for the volume root, so
@@ -210,7 +210,7 @@ this plan was written, including the shell's whole chain — qualify, resolve,
 and the `cd ..` that walks back to an assign's root and then refuses to leave
 it. They pass as written.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 In `sw/userspace/vfs/Makefile`, the assign test now needs the path parser:
 
@@ -225,7 +225,7 @@ Run: `cd sw/userspace/vfs && make test`
 Expected: FAIL — `astra_assign_bind` takes four arguments, `astra_assign_resolve`
 is undefined, `AstraAssign` has no `root`.
 
-- [ ] **Step 3: Widen the header**
+- [x] **Step 3: Widen the header**
 
 In `sw/userspace/vfs/include/astra/vfs_assign.h`, add the include, the bound,
 the field, and the call:
@@ -274,7 +274,7 @@ uint32_t astra_assign_resolve(const AstraAssignTable *table, const char *path,
                               const AstraAssign **assign);
 ```
 
-- [ ] **Step 4: Write the implementation**
+- [x] **Step 4: Write the implementation**
 
 In `sw/userspace/vfs/src/vfs_assign.c`, add a bounded copy helper and use it for
 both fields, so an entry is written the same way in both branches of `bind`:
@@ -413,12 +413,12 @@ astra_assign_resolve(const AstraAssignTable *table, const char *path,
 }
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `cd sw/userspace/vfs && make test`
 Expected: PASS, printing `ASTRA VFS ASSIGN PASS` and `ASTRA VFS PATH PASS`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add sw/userspace/vfs
@@ -442,7 +442,7 @@ that it can be. `console_shell.c` has no host test and cannot get one — it is
 a syscall away from a display — so anything in it that can be got wrong belongs
 in the Kit instead. What is left in Task 3 is glue.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `sw/userspace/vfs/tests/test_vfs_path.c`, add:
 
@@ -509,12 +509,12 @@ test_qualify_refusals(void)
 
 Call both from `main()`.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd sw/userspace/vfs && make test`
 Expected: FAIL — `astra_path_qualify` undefined.
 
-- [ ] **Step 3: Declare it**
+- [x] **Step 3: Declare it**
 
 In `sw/userspace/vfs/include/astra/vfs_path.h`:
 
@@ -531,7 +531,7 @@ uint32_t astra_path_qualify(const char *assign, const char *directory,
                             const char *typed, char *out, uint32_t capacity);
 ```
 
-- [ ] **Step 4: Write it**
+- [x] **Step 4: Write it**
 
 In `sw/userspace/vfs/src/vfs_path.c`:
 
@@ -601,12 +601,12 @@ astra_path_qualify(const char *assign, const char *directory,
 }
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `cd sw/userspace/vfs && make test && make sanitize`
 Expected: PASS throughout.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add sw/userspace/vfs
@@ -627,7 +627,7 @@ git commit -m "feat(vfs): what a typed word means, given where the shell stands"
 - Produces: `AstraAssignTable *supervisor_assigns(void)` — the process's
   namespace, or `NULL` before a volume is mounted.
 
-- [ ] **Step 1: Bind the namespace where the volume is mounted**
+- [x] **Step 1: Bind the namespace where the volume is mounted**
 
 In `vfs_host.h`, declare the accessor and include `<astra/vfs_assign.h>`. In
 `vfs_host.c`, add the table and populate it at the end of
@@ -680,7 +680,7 @@ supervisor_assigns(void)
 `bind_standard_assigns()` is called after it — the binding uses the client, so
 the client has to be usable first.
 
-- [ ] **Step 2: The shell stands in an assign**
+- [x] **Step 2: The shell stands in an assign**
 
 In `console_shell.c`: `SHELL_PATH_MAX` becomes `ASTRA_VFS_PATH_MAX`, since a
 path the protocol will refuse is not worth building, and the state gains the
@@ -826,14 +826,14 @@ and the banner becomes `volume_ready ? "namespace: SYS: read-only, WORK:
 writable" : "volume: not mounted, file commands will fail"`. `command_help`
 gains one line: `paths are ASSIGN:path -- try ls SYS:`.
 
-- [ ] **Step 3: Build both ways on the Mac**
+- [x] **Step 3: Build both ways on the Mac**
 
 Run: `cd sw/userspace && make test && make sanitize && make all`
 Expected: PASS, and a supervisor image well inside its 256 KiB reservation —
 it was 108 KiB before this plan, and the namespace adds a table of sixteen
 92-byte entries in BSS, which the reservation does not count.
 
-- [ ] **Step 4: Teach the gate the property this plan exists for**
+- [x] **Step 4: Teach the gate the property this plan exists for**
 
 In `emu/qemu/test-terminal.py`, `SCRIPT` becomes:
 
@@ -853,7 +853,7 @@ SCRIPT = [
 The first four are unchanged and still pass: they are relative words, and the
 shell now stands in `WORK:` instead of at `/`.
 
-- [ ] **Step 5: Believe it on Beast**
+- [x] **Step 5: Believe it on Beast**
 
 Everything below is Beast; the Mac cannot run any of it.
 
@@ -873,7 +873,7 @@ If the gate's first `mkdir` fails with "not found", `/work` was not created:
 check the boot log for the volume mounting at all, since `bind_standard_assigns`
 runs after the mount and a volume that never mounted binds nothing.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add sw/userspace/supervisor emu/qemu/test-terminal.py

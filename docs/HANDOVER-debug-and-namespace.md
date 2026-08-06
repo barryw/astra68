@@ -15,35 +15,34 @@ other working branches.
 
 ## 1. Where things stand
 
-`origin/main` is at `d1fef0c`. Four commits are local and unpushed:
-
-| Commit | What |
-|---|---|
-| `374044b` | the namespace implementation plan |
-| `a3caf20` | capability names become bounded strings |
-| `75b97fb` | the assign table |
-| `06dd882` | assign-rooted path parsing |
+`origin/main` is at `d1fef0c`. Everything since is local and unpushed: the two
+namespace plans and their five implementation commits, from `a3caf20`
+(capability names become bounded strings) to `cbc31d9` (the shell stands in an
+assign), plus the spec sections on naming a second volume.
 
 Every gate is green on Beast: 30 kernel suites in both configurations,
 userspace test/sanitize/analyze/cross-build, `ext4-test`, the ELF fixture at 84
-pages, the terminal gate, and the boot budget at 0.08s of 1.00s. Kernel line
+pages, the terminal gate at six lines, and the boot budget at 0.09s of 1.00s. Kernel line
 coverage is 82.9% (`cd sw/kernel && make coverage`).
 
 ## 2. Resume here
 
-**The wiring plan, which is not yet written.**
+**Nothing in the namespace plans. Both are complete and both are green on
+Beast, including the terminal gate.**
 
-`docs/superpowers/plans/2026-08-06-namespace-foundation.md` is complete: all
-three tasks are done and committed. The Kit now holds string capability names,
-the assign table (`astra_assign_bind`/`_lookup`/`_unbind`) and the path parser
-(`astra_path_split`, `astra_path_normalise`), each with host tests, and
-`..` at an assign's root is `ASTRA_VFS_ERR_NOT_FOUND` rather than a parent.
+`2026-08-06-namespace-foundation.md` and `2026-08-06-namespace-wiring.md` are
+finished. The machine has no `/` any more: a path is `ASSIGN:rest`, the
+supervisor binds `SYS:` (read-only, the volume root) and `WORK:` (read/write,
+`work/`, created if the volume has none) when it mounts, and the shell stands
+in an assign. `write SYS:x` answers *access denied* from the namespace, before
+the filesystem is asked -- the terminal gate types that and reads it back off
+the screen.
 
-The next plan wires the shell and the ext4 backend onto the assign table, and
-has the supervisor bind the standard assigns from its capability table. That
-one changes behaviour on the machine; everything so far only added to the Kit.
-It is also the first of these that must be believed on Beast rather than the
-Mac, because it moves the shell's path handling.
+The next thing is a choice rather than a queue. Either the mounter service and
+volume identity (spec 1.6, which is where a second volume gets a name), or the
+events work in `2026-08-06-event-system-design.md`, which is independent of all
+of this. The bundle manifest and the startup manifest both want a launch path,
+which userspace still does not have.
 
 **`make analyze` cannot run on the Mac at all** — `ANALYZER_CC=gcc` resolves to
 Apple clang, which has no `-fanalyzer`. This predates the namespace work; the
@@ -92,8 +91,10 @@ deliberate and they are not yet done:
 2. **`LOG_WRITE` writes to the console, not the trace ring.** The spec requires
    one ordered stream with one set of sequence numbers, with the console as a
    sink on it.
-3. **The shell still builds `/`-rooted paths** and the ext4 backend still
-   prefixes a mount point. Both go when the wiring plan lands.
+3. ~~The shell builds `/`-rooted paths.~~ **Done.** The shell is assign-rooted
+   as of `cbc31d9`. The ext4 backend still prefixes lwext4's own mount point,
+   and deliberately keeps doing so: `"/vol/"` is that backend's namespace, not
+   the machine's, and the spec's 9 row means *when there are two mounts*.
 
 ## 5. Traps this session found
 
@@ -115,6 +116,10 @@ deliberate and they are not yet done:
   faults by growing a stack, so `user_faults` and `user_stack_growths` are
   separate counters on purpose. A test that resets one and not the other reads
   a stale count from a previous test in the same binary.
+- **A colon needs a chord.** The terminal gate types with QMP qcodes and had
+  no way to send one, so `SYS:` could not be typed until `chord()` existed.
+  Assign names are case-insensitive, which is why `sys:` in lower case is
+  enough and no other shifted key is needed.
 - **The terminal gate needs its own settle.** `test-terminal.py` waits on the
   screen rather than sleeping, because a fixed two-second settle was flaky
   against TCG: `readdir` reopens the directory per entry, and a listing that had
