@@ -11,6 +11,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <astra/process.h>
+
 #ifndef ASTRA_KERNEL_SOAK_SELFTEST
 #define ASTRA_KERNEL_SOAK_SELFTEST 0
 #endif
@@ -91,7 +93,13 @@ typedef enum KernelProcessStatus {
     KERNEL_PROCESS_NO_RUNNABLE,
     KERNEL_PROCESS_DEFERRED,
     KERNEL_PROCESS_RESOURCE_LIMIT,
-    KERNEL_PROCESS_CORRUPT
+    KERNEL_PROCESS_CORRUPT,
+    /*
+     * Appended rather than inserted: the monitor prints these by number, and a
+     * renumbering would silently change what an old capture means.
+     */
+    KERNEL_PROCESS_ACCESS_DENIED,
+    KERNEL_PROCESS_INVALID_HANDLE
 } KernelProcessStatus;
 
 typedef enum KernelProcessMaintenanceFailure {
@@ -271,7 +279,15 @@ KernelProcessStatus kernel_process_create(const void *image,
 
 typedef enum KernelProcessBootstrapKind {
     KERNEL_PROCESS_BOOTSTRAP_DEVICE = 1,
-    KERNEL_PROCESS_BOOTSTRAP_IRQ
+    KERNEL_PROCESS_BOOTSTRAP_IRQ,
+    /*
+     * A handle the launcher already holds, copied into the child with rights
+     * that are a subset of the launcher's. This is the only kind a syscall can
+     * ask for: the other two name objects the kernel decides about, and letting
+     * a program request one of those by number would be an authority the caller
+     * did not have to hold first.
+     */
+    KERNEL_PROCESS_BOOTSTRAP_HANDLE
 } KernelProcessBootstrapKind;
 
 /*
@@ -288,9 +304,10 @@ typedef struct KernelProcessBootstrapCapability {
      */
     const char *name;
     uint32_t rights;
-    uint32_t device_id; /* KERNEL_PROCESS_BOOTSTRAP_DEVICE */
+    uint32_t device_id;      /* KERNEL_PROCESS_BOOTSTRAP_DEVICE */
+    uint32_t source_handle;  /* KERNEL_PROCESS_BOOTSTRAP_HANDLE */
     uint8_t kind;
-    uint8_t irq_source; /* KERNEL_PROCESS_BOOTSTRAP_IRQ */
+    uint8_t irq_source;      /* KERNEL_PROCESS_BOOTSTRAP_IRQ */
     uint8_t reserved[2];
 } KernelProcessBootstrapCapability;
 
@@ -304,6 +321,28 @@ KernelProcessStatus kernel_process_create_executable(
     const void *image, uint32_t image_size,
     const KernelProcessBootstrapCapability *capabilities,
     uint32_t capability_count, uint32_t *process_id);
+
+/*
+ * The same load, launched by a program rather than by the firmware: the
+ * capability list may name handles out of `source_table`, and the child
+ * receives the argument vector.
+ *
+ * `source_table` is the launcher's own handle table and is what makes the
+ * subset rule checkable; NULL is the firmware's case, where there is no
+ * launcher and no handle to copy.
+ *
+ * Exactly one of `image` and `user_image` is supplied. `image` is a pointer the
+ * kernel may read; `user_image` is an address in the launcher's own space,
+ * which the kernel may only reach through user_copy -- so the headers arrive
+ * through a bounded window and every page bounces through one page of kernel
+ * memory.
+ */
+KernelProcessStatus kernel_process_launch(
+    const void *image, uint32_t image_size, uint32_t user_image,
+    const KernelHandleTable *source_table,
+    const KernelProcessBootstrapCapability *capabilities,
+    uint32_t capability_count, const AstraLaunchArguments *arguments,
+    uint32_t *process_id);
 /* Names the process loaded from the firmware-supplied image. */
 void kernel_process_register_initial_image(uint32_t process_id);
 KernelProcessStatus kernel_process_create_thread(uint32_t process_id,

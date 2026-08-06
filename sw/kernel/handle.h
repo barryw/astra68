@@ -108,6 +108,14 @@ KernelHandleStatus kernel_handle_duplicate(KernelHandleTable *table,
                                            KernelHandle source,
                                            uint32_t rights,
                                            KernelHandle *duplicate);
+/*
+ * The same copy, into another process's table: what a launch grants a child.
+ * The source must carry TRANSFER and the rights must be a subset of it, so no
+ * path through here creates authority that did not already exist.
+ */
+KernelHandleStatus kernel_handle_duplicate_into(
+    const KernelHandleTable *source_table, KernelHandle source,
+    uint32_t rights, KernelHandleTable *table, KernelHandle *duplicate);
 KernelHandleStatus kernel_handle_lookup(const KernelHandleTable *table,
                                         KernelHandle handle,
                                         KernelObjectType required_type,

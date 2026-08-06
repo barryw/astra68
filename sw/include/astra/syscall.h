@@ -85,6 +85,27 @@
 #define ASTRA_SYSCALL_TRACE_READ       46
 
 /*
+ * Launching a program.
+ *
+ * data[1] is the ELF image in the caller's own memory and data[2] its length;
+ * data[3] is an AstraLaunchGrant array and data[4] how many; data[5] is an
+ * AstraLaunchArguments block, or zero for none. It returns a handle to the new
+ * process in data[1] -- carrying QUERY, WAIT and TERMINATE, and never DEBUG,
+ * because having launched something is not authority to inspect it -- and the
+ * new process id in data[2].
+ *
+ * Every grant names a handle the caller already holds, with rights that are a
+ * subset of the caller's. A handle it does not hold, or rights wider than its
+ * own, fails the whole call rather than being dropped: a child whose namespace
+ * is quietly smaller than the line that launched it says would fail later, as a
+ * path that does not resolve for a reason nobody can see.
+ *
+ * There is no fork. Nothing is inherited implicitly, so what a program may
+ * touch is what somebody wrote down.
+ */
+#define ASTRA_SYSCALL_PROCESS_CREATE   48
+
+/*
  * The most one call copies. Small on purpose: a drain is a bounded page and a
  * cursor like every other enumeration here, and the batch is what a kernel
  * stack can hold without asking anyone's permission -- 8 * 56 bytes.

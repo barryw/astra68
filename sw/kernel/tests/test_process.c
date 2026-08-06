@@ -6541,6 +6541,254 @@ static void test_no_debug_surface_closes_the_stream(void)
     assert(kernel_process_debug_surface());
 }
 
+/*
+ * Launching. The kernel has loaded ELF images since the first boot; what is new
+ * is a door a program can reach, and the rule that makes the door safe: a
+ * parent hands a child a subset of what the parent already holds.
+ */
+/*
+ * Half a page of file, mapped as a whole page: the tail of the page is where
+ * this test keeps the grant block, because a launcher's image and the grants
+ * that go with it both have to live in memory the launcher actually holds.
+ */
+#define LAUNCH_IMAGE_BYTES 2048u
+#define LAUNCH_VADDR 0x00200000u
+
+static uint8_t launch_image[LAUNCH_IMAGE_BYTES];
+
+static void launch_put16(uint32_t offset, uint16_t value)
+{
+    launch_image[offset] = (uint8_t)(value >> 8);
+    launch_image[offset + 1u] = (uint8_t)value;
+}
+
+static void launch_put32(uint32_t offset, uint32_t value)
+{
+    launch_image[offset] = (uint8_t)(value >> 24);
+    launch_image[offset + 1u] = (uint8_t)(value >> 16);
+    launch_image[offset + 2u] = (uint8_t)(value >> 8);
+    launch_image[offset + 3u] = (uint8_t)value;
+}
+
+/*
+ * One page: the headers and the text in the same segment, which is what a
+ * launched image looks like when it is small enough to fit in the one user page
+ * this test can hand over.
+ */
+static void launch_build_image(void)
+{
+    memset(launch_image, 0, sizeof(launch_image));
+    launch_image[0] = 0x7fu;
+    launch_image[1] = 'E';
+    launch_image[2] = 'L';
+    launch_image[3] = 'F';
+    launch_image[4] = 1u;  /* 32-bit */
+    launch_image[5] = 2u;  /* big-endian */
+    launch_image[6] = 1u;  /* version */
+    launch_put16(16u, 2u);        /* ET_EXEC */
+    launch_put16(18u, 4u);        /* EM_68K */
+    launch_put32(20u, 1u);        /* version */
+    launch_put32(24u, LAUNCH_VADDR + 0x100u); /* entry */
+    launch_put32(28u, 52u);       /* phoff */
+    launch_put32(36u, 0u);        /* flags */
+    launch_put16(40u, 52u);       /* ehsize */
+    launch_put16(42u, 32u);       /* phentsize */
+    launch_put16(44u, 1u);        /* phnum */
+
+    launch_put32(52u, 1u);                 /* PT_LOAD */
+    launch_put32(52u + 4u, 0u);            /* offset */
+    launch_put32(52u + 8u, LAUNCH_VADDR);  /* vaddr */
+    launch_put32(52u + 16u, LAUNCH_IMAGE_BYTES);  /* filesz */
+    launch_put32(52u + 20u, KERNEL_PAGE_SIZE);    /* memsz, zero-filled tail */
+    launch_put32(52u + 24u, 5u);           /* PF_R | PF_X */
+    launch_put32(52u + 28u, KERNEL_PAGE_SIZE);
+
+    launch_image[0x100] = 0x4eu; /* NOP at the entry point */
+    launch_image[0x101] = 0x71u;
+}
+
+static void test_a_program_can_launch_a_program(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    /* The whole image, page-aligned, in the launcher's own memory. */
+    uint32_t user_image = KERNEL_PROCESS_STACK_TOP - KERNEL_PAGE_SIZE;
+    uint32_t user_grants = KERNEL_PROCESS_STACK_TOP - KERNEL_PAGE_SIZE +
+                           LAUNCH_IMAGE_BYTES;
+    AstraLaunchGrant grant;
+    uint32_t process_id = 0u;
+    uint32_t child_id = 0u;
+    uint32_t child_handle = 0u;
+    uint32_t send_handle;
+
+    launch_build_image();
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(kernel_user_copy_to_asm(user_image, launch_image,
+                                   sizeof(launch_image)) ==
+           KERNEL_USER_COPY_OK);
+
+    /* A launch with nothing granted: the child gets its own self and thread. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_CREATE;
+    registers[1] = user_image;
+    registers[2] = LAUNCH_IMAGE_BYTES;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    child_handle = next->data[1];
+    child_id = next->data[2];
+    assert(child_handle != KERNEL_HANDLE_INVALID);
+    assert(child_id != 0u && child_id != process_id);
+
+    /*
+     * What the launcher was handed back: enough to wait for the child and end
+     * it, and not the authority to read its account of itself. Having started
+     * something is not permission to inspect it.
+     */
+    {
+        uint32_t registers_query[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+        uint32_t user_info = KERNEL_PROCESS_STACK_TOP - 512u;
+
+        /* QUERY: the launcher can ask what its child is doing. */
+        registers_query[0] = ASTRA_SYSCALL_PROCESS_INFO;
+        registers_query[1] = child_handle;
+        registers_query[2] = user_info;
+        assert(kernel_process_on_syscall(registers_query,
+                                         KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+        /* DEBUG: it cannot read the child's account of itself. */
+        memset(registers_query, 0, sizeof(registers_query));
+        registers_query[0] = ASTRA_SYSCALL_TRACE_READ;
+        registers_query[1] = child_handle;
+        registers_query[3] = user_info;
+        registers_query[4] = 1u;
+        assert(kernel_process_on_syscall(registers_query,
+                                         KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    }
+
+    /* An image that is not one is refused, and nothing is left behind. */
+    {
+        KernelSchedulerStats before;
+        KernelSchedulerStats after;
+
+        assert(kernel_process_stats(&before));
+        assert(kernel_user_copy_to_asm(user_image, image, sizeof(image)) ==
+               KERNEL_USER_COPY_OK);
+        registers[2] = LAUNCH_IMAGE_BYTES;
+        assert(kernel_process_on_syscall(registers,
+                                         KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+        assert(kernel_process_stats(&after));
+        assert(after.live_processes == before.live_processes);
+        assert(kernel_user_copy_to_asm(user_image, launch_image,
+                                       sizeof(launch_image)) ==
+               KERNEL_USER_COPY_OK);
+    }
+
+    /* No image at all, and more grants than the ABI carries. */
+    registers[1] = 0u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    registers[1] = user_image;
+    registers[3] = user_grants;
+    registers[4] = ASTRA_LAUNCH_GRANT_MAX + 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    /* A handle the caller does not hold names nothing it can give away. */
+    memset(&grant, 0, sizeof(grant));
+    memcpy(grant.name, "WORK", 5u);
+    grant.handle = 0x7fffu;
+    grant.rights = ASTRA_RIGHT_READ;
+    assert(kernel_user_copy_to_asm(user_grants, &grant, sizeof(grant)) ==
+           KERNEL_USER_COPY_OK);
+    registers[4] = 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+
+    /*
+     * An area, because only a cloneable object can be granted: a copy needs a
+     * retain, and a handle whose object has none can be moved but not shared.
+     * Areas, IRQ endpoints and devices have one; ports do not yet, which is a
+     * dependency the day a service handle is what a child is handed.
+     */
+    {
+        uint32_t registers_area[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+
+        registers_area[0] = ASTRA_SYSCALL_AREA_CREATE;
+        registers_area[1] = KERNEL_PAGE_SIZE;
+        registers_area[2] = ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                            ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER;
+        assert(kernel_process_on_syscall(registers_area,
+                                         KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        send_handle = next->data[1];
+        assert(send_handle != KERNEL_HANDLE_INVALID);
+    }
+
+    /*
+     * Wider than the caller holds is refused whole. A launch that narrowed
+     * silently would produce a child whose namespace disagrees with the line
+     * that launched it, and the first symptom would be somewhere else entirely.
+     */
+    grant.handle = send_handle;
+    grant.rights = ASTRA_RIGHT_ADMINISTER;
+    assert(kernel_user_copy_to_asm(user_grants, &grant, sizeof(grant)) ==
+           KERNEL_USER_COPY_OK);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+
+    /* And a subset of it is granted, which is what a child's namespace is. */
+    grant.rights = ASTRA_RIGHT_READ;
+    assert(kernel_user_copy_to_asm(user_grants, &grant, sizeof(grant)) ==
+           KERNEL_USER_COPY_OK);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    {
+        KernelProcessSnapshot child;
+        uint32_t granted_id = next->data[2];
+        int found = 0;
+
+        for (uint32_t slot = 0u; slot < KERNEL_PROCESS_MAX; ++slot) {
+            if (!kernel_process_snapshot(slot, &child) ||
+                child.id != granted_id)
+                continue;
+            found = 1;
+            break;
+        }
+        /*
+         * The child is real and runnable. That the grant was checked rather
+         * than ignored is what the refusal above proves: the same call with one
+         * right more does not get this far.
+         */
+        assert(found);
+        assert(child.live_threads == 1u);
+    }
+}
+
 static void test_a_program_cannot_forge_a_verdict(void)
 {
     const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
@@ -7286,6 +7534,7 @@ int main(void)
     test_block_admission_faults();
     test_bootstrap_capabilities();
     test_an_activity_is_the_threads_own();
+    test_a_program_can_launch_a_program();
     test_reading_the_stream_is_the_privileged_half();
     test_no_debug_surface_closes_the_stream();
     test_a_program_cannot_forge_a_verdict();

@@ -77,16 +77,31 @@ anything is allocated: the handle must be held, and the rights must be a subset.
 Then the existing `kernel_process_create_executable` does the work it already
 does.
 
-- [ ] Step 1: failing tests — a launch from a valid image runs and exits with
-      its own status; a grant naming a handle the caller does not hold is
-      refused whole; rights wider than the caller's are refused whole; a
-      malformed ELF is refused with nothing allocated; the returned handle
-      carries `WAIT` and not `DEBUG`; the caller can wait on it and read the
-      exit status; a child that faults reports `ASTRA_STATUS_FAULTED` and not
-      success.
-- [ ] Step 2: the syscall.
-- [ ] Step 3: `cd sw/kernel && make test` on Beast, both configurations.
-- [ ] Step 4: commit.
+- [x] Step 1: failing tests — a launch from a valid image creates a runnable
+      child; a grant naming a handle the caller does not hold is
+      `INVALID_HANDLE`; rights wider than the caller's are `ACCESS_DENIED`; a
+      malformed image is refused with no process left behind; the returned
+      handle answers `PROCESS_INFO` and refuses `TRACE_READ`.
+- [x] Step 2: the syscall.
+- [x] Step 3: `cd sw/kernel && make test` on Beast, both configurations.
+- [x] Step 4: commit.
+
+**Three things the build settled.**
+
+- **The image is in the launcher's memory, so the kernel may not read it
+  directly.** The headers arrive through a bounded window —
+  `kernel_elf_accept_windowed`, which refuses a program header table outside
+  the bytes it was actually handed — and every page bounces through one page of
+  kernel memory. That is the third copy of a launched image, and it is the one
+  bounded rather than proportional to the program.
+- **Only a cloneable object can be granted.** A copy needs a retain, and areas,
+  IRQ endpoints and devices have one. **Ports do not**, so task 5 must give the
+  port endpoints a retain before a service handle can be what a child is
+  handed. Found here rather than there, which is the cheap place to find it.
+- **The child's argv is published into its startup page**, after the capability
+  table, as a vector of addresses and then the bytes. Task 4 needs it and the
+  ABI already had `argc`/`argv_address`, so it landed with the syscall rather
+  than after it.
 
 ### Task 2: The runtime's half
 

@@ -92,6 +92,17 @@ typedef struct KernelElfImage {
  * Validates the whole image before reporting anything. On any failure `plan`
  * is left cleared, so a caller cannot act on a partially accepted image.
  */
+/*
+ * The same acceptance, with the headers bounded to the first `readable` bytes.
+ * A loader copying an image out of another process holds a window rather than
+ * the file, and everything this reads has to be inside it.
+ */
+KernelElfStatus kernel_elf_accept_windowed(const void *image,
+                                           uint32_t image_size,
+                                           uint32_t readable,
+                                           const KernelElfLimits *limits,
+                                           KernelElfImage *plan);
+
 KernelElfStatus kernel_elf_accept(const void *image, uint32_t image_size,
                                   const KernelElfLimits *limits,
                                   KernelElfImage *plan);

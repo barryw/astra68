@@ -177,9 +177,11 @@ static KernelElfStatus accept_load_segment(const uint8_t *header,
     return KERNEL_ELF_OK;
 }
 
-KernelElfStatus kernel_elf_accept(const void *image, uint32_t image_size,
-                                  const KernelElfLimits *limits,
-                                  KernelElfImage *plan)
+KernelElfStatus kernel_elf_accept_windowed(const void *image,
+                                           uint32_t image_size,
+                                           uint32_t readable,
+                                           const KernelElfLimits *limits,
+                                           KernelElfImage *plan)
 {
     const uint8_t *bytes = image;
     uint32_t header_offset;
@@ -198,7 +200,8 @@ KernelElfStatus kernel_elf_accept(const void *image, uint32_t image_size,
 
     kernel_bytes_clear(plan, sizeof(*plan));
 
-    if (image_size < KERNEL_ELF_HEADER_SIZE)
+    if (image_size < KERNEL_ELF_HEADER_SIZE ||
+        readable < KERNEL_ELF_HEADER_SIZE)
         return KERNEL_ELF_TRUNCATED;
 
     status = check_identity(bytes);
@@ -229,6 +232,17 @@ KernelElfStatus kernel_elf_accept(const void *image, uint32_t image_size,
         return KERNEL_ELF_BAD_HEADER_TABLE;
     table_bytes = header_count * KERNEL_ELF_PHENTSIZE;
     if (!range_within(header_offset, table_bytes, image_size))
+        return KERNEL_ELF_BAD_HEADER_TABLE;
+    /*
+     * The table has to be inside the bytes the caller actually handed over. A
+     * loader reading an image out of another address space holds a window on
+     * it, not the whole file, and a program header table that points past that
+     * window would be read out of whatever follows the window in the kernel.
+     * Refusing it also refuses the file that puts its table at the far end of a
+     * large image, which nothing this machine links produces and which exists
+     * mainly to make a loader read somewhere it did not mean to.
+     */
+    if (!range_within(header_offset, table_bytes, readable))
         return KERNEL_ELF_BAD_HEADER_TABLE;
 
     for (index = 0u; index < header_count; ++index) {
@@ -346,4 +360,13 @@ const char *kernel_elf_status_text(KernelElfStatus status)
     case KERNEL_ELF_BAD_ENTRY: return "entry point outside executable code";
     }
     return "unknown";
+}
+
+KernelElfStatus kernel_elf_accept(const void *image, uint32_t image_size,
+                                  const KernelElfLimits *limits,
+                                  KernelElfImage *plan)
+{
+    /* The whole image is readable: the firmware's case, and every test's. */
+    return kernel_elf_accept_windowed(image, image_size, image_size, limits,
+                                      plan);
 }

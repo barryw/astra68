@@ -19,6 +19,43 @@
  * machine's namespace -- COMMANDS, DRIVERS, WORK -- and a name a person reads
  * in a startup manifest cannot be limited to what fits in a uint32.
  */
+/*
+ * What a launch hands a child.
+ *
+ * One grant is one name in the child's capability table, standing for a handle
+ * the *caller already holds*, with rights that are a subset of the caller's. A
+ * launch creates no authority: there is no path through it that produces a
+ * capability which did not exist a moment earlier, which is what makes it safe
+ * to expose as a syscall at all.
+ */
+#define ASTRA_LAUNCH_GRANT_MAX 6u
+#define ASTRA_LAUNCH_ARGUMENT_MAX 8u
+#define ASTRA_LAUNCH_ARGUMENT_BYTES 192u
+
+typedef struct AstraLaunchGrant {
+    char     name[ASTRA_CAPABILITY_NAME_MAX];  /* what the child calls it */
+    uint32_t handle;                           /* the caller's own handle */
+    uint32_t rights;                           /* a subset of what it holds */
+    uint32_t flags;
+} AstraLaunchGrant;
+
+#define ASTRA_LAUNCH_GRANT_SIZE 28u
+_Static_assert(sizeof(AstraLaunchGrant) == ASTRA_LAUNCH_GRANT_SIZE,
+               "the launch grant is ABI: the kernel copies it in fixed steps");
+
+/*
+ * The whole of a launch's arguments in one block, so the syscall copies once
+ * and validates once. `bytes` holds the argument words back to back, each
+ * NUL-terminated; a count with no bytes behind it is refused rather than
+ * treated as an empty vector, because a program's argv and its argc disagreeing
+ * is a defect the child cannot detect.
+ */
+typedef struct AstraLaunchArguments {
+    uint16_t count;
+    uint16_t length;
+    char     bytes[ASTRA_LAUNCH_ARGUMENT_BYTES];
+} AstraLaunchArguments;
+
 #define ASTRA_CAPABILITY_PROCESS "PROCESS"
 #define ASTRA_CAPABILITY_THREAD  "THREAD"
 

@@ -2186,9 +2186,31 @@ static KernelProcessStatus publish_page(KernelProcess *process,
     return KERNEL_PROCESS_OK;
 }
 
+/*
+ * One page of an image on its way into a process, when the image is in another
+ * process's memory rather than in the kernel's.
+ *
+ * A launcher hands over an address in its own address space, and the kernel
+ * cannot map a segment straight out of it: reading it directly would be the
+ * kernel dereferencing a user pointer, which is the one thing user_copy.c
+ * exists to stop. So each page bounces, through a buffer bounded at exactly one
+ * page. This is the third copy of a launched image -- the launcher's buffer,
+ * this, and the frame -- and it is the one that is bounded rather than
+ * proportional to the program.
+ */
+static uint8_t launch_page[KERNEL_PAGE_SIZE];
+/*
+ * The window the acceptance profile is allowed to read of a launched image. It
+ * holds the ELF header and a program header table that follows it, which is
+ * what every image this machine links produces.
+ */
+#define KERNEL_PROCESS_LAUNCH_HEADER_BYTES 1024u
+static uint8_t launch_header[KERNEL_PROCESS_LAUNCH_HEADER_BYTES];
+
 static KernelProcessStatus map_segments(KernelProcess *process,
                                         const KernelElfImage *plan,
-                                        const uint8_t *image)
+                                        const uint8_t *image,
+                                        uint32_t user_image)
 {
     for (uint32_t index = 0u; index < plan->segment_count; ++index) {
         const KernelElfSegment *segment = &plan->segment[index];
@@ -2197,6 +2219,7 @@ static KernelProcessStatus map_segments(KernelProcess *process,
         for (uint32_t page = 0u; page < segment->page_count; ++page) {
             uint32_t offset = page * KERNEL_PAGE_SIZE;
             uint32_t copy = 0u;
+            const uint8_t *source = NULL;
             KernelProcessStatus status;
 
             /* Bytes past the file size are the segment's zero-filled tail. */
@@ -2205,11 +2228,21 @@ static KernelProcessStatus map_segments(KernelProcess *process,
                 if (copy > KERNEL_PAGE_SIZE)
                     copy = KERNEL_PAGE_SIZE;
             }
+            if (copy != 0u) {
+                if (user_image != 0u) {
+                    int copy_status = kernel_copy_from_user(
+                        launch_page,
+                        user_image + segment->file_offset + offset, copy);
+
+                    if (copy_status != KERNEL_USER_COPY_OK)
+                        return KERNEL_PROCESS_INVALID_ARGUMENT;
+                    source = launch_page;
+                } else {
+                    source = image + segment->file_offset + offset;
+                }
+            }
             status = publish_page(process, segment->virtual_address + offset,
-                                  copy != 0u ?
-                                      image + segment->file_offset + offset :
-                                      NULL,
-                                  copy, rights);
+                                  source, copy, rights);
             if (status != KERNEL_PROCESS_OK)
                 return status;
         }
@@ -2232,7 +2265,7 @@ static KernelProcessStatus map_segments(KernelProcess *process,
  * table, which releases every lease and endpoint installed here.
  */
 static KernelProcessStatus grant_bootstrap_capabilities(
-    KernelProcess *process,
+    KernelProcess *process, const KernelHandleTable *source_table,
     const KernelProcessBootstrapCapability *requested, uint32_t count,
     AstraStartupCapability *granted)
 {
@@ -2258,6 +2291,39 @@ static KernelProcessStatus grant_bootstrap_capabilities(
                                               entry->rights, &handle);
             break;
         }
+        case KERNEL_PROCESS_BOOTSTRAP_HANDLE: {
+            /*
+             * A launch creates no authority. The copy refuses a source that
+             * does not carry TRANSFER and refuses rights that are not a subset
+             * of it, so a caller can only hand over what it already holds, and
+             * only narrowed. A handle it does not hold does not resolve at all.
+             */
+            KernelHandleStatus handle_status;
+
+            if (source_table == NULL)
+                return KERNEL_PROCESS_INVALID_ARGUMENT;
+            handle_status = kernel_handle_duplicate_into(
+                source_table, entry->source_handle, entry->rights,
+                &process->handles, &handle);
+            /*
+             * Two different mistakes, told apart: a handle the caller does not
+             * hold at all, and rights it holds less of than it asked to give.
+             * A person reading a refused launch needs to know which, because
+             * one is a bug in what was passed and the other is a bug in what
+             * was expected.
+             */
+            if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+                handle_status == KERNEL_HANDLE_TYPE_MISMATCH)
+                return KERNEL_PROCESS_INVALID_HANDLE;
+            if (handle_status == KERNEL_HANDLE_INVALID_ARGUMENT)
+                return KERNEL_PROCESS_INVALID_ARGUMENT;
+            if (handle_status == KERNEL_HANDLE_ACCESS_DENIED)
+                return KERNEL_PROCESS_ACCESS_DENIED;
+            if (handle_status != KERNEL_HANDLE_OK)
+                return KERNEL_PROCESS_NO_SLOT;
+            status = KERNEL_PROCESS_OK;
+            break;
+        }
         default:
             return KERNEL_PROCESS_INVALID_ARGUMENT;
         }
@@ -2273,14 +2339,72 @@ static KernelProcessStatus grant_bootstrap_capabilities(
     return KERNEL_PROCESS_OK;
 }
 
+/*
+ * The argument vector, after the capability table in the same page.
+ *
+ * A vector of addresses and then the bytes they point at, both inside the one
+ * page the child already maps read-only. Nothing is copied a second time and
+ * nothing needs an allocator before `main`, which is what makes an argument
+ * cheap enough that a program can have several.
+ *
+ * Returns the bytes appended, or 0 when there is nothing to append. `*vector`
+ * is where the child will find the addresses.
+ */
+static uint32_t append_arguments(uint8_t *page, uint32_t at, uint32_t capacity,
+                                 const AstraLaunchArguments *arguments,
+                                 uint32_t *vector, uint32_t *count)
+{
+    uint32_t vector_at = at;
+    uint32_t text_at;
+    uint32_t consumed = 0u;
+    uint32_t written = 0u;
+
+    *vector = 0u;
+    *count = 0u;
+    if (arguments == NULL || arguments->count == 0u) {
+        return 0u;
+    }
+    text_at = vector_at + (arguments->count * 4u);
+    if (text_at + arguments->length > capacity) {
+        return 0u;
+    }
+    for (uint32_t index = 0u; index < arguments->count; ++index) {
+        uint32_t address = KERNEL_PROCESS_STARTUP_BASE + text_at + written;
+        uint32_t length = 0u;
+
+        while (consumed + length < arguments->length &&
+               arguments->bytes[consumed + length] != '\0') {
+            ++length;
+        }
+        if (consumed + length >= arguments->length) {
+            /* A count that promises more words than the bytes hold. */
+            return 0u;
+        }
+        page[vector_at + (index * 4u)] = (uint8_t)(address >> 24);
+        page[vector_at + (index * 4u) + 1u] = (uint8_t)(address >> 16);
+        page[vector_at + (index * 4u) + 2u] = (uint8_t)(address >> 8);
+        page[vector_at + (index * 4u) + 3u] = (uint8_t)address;
+        for (uint32_t byte = 0u; byte <= length; ++byte) {
+            page[text_at + written + byte] = (uint8_t)arguments->bytes[consumed + byte];
+        }
+        written += length + 1u;
+        consumed += length + 1u;
+    }
+    *vector = KERNEL_PROCESS_STARTUP_BASE + vector_at;
+    *count = arguments->count;
+    return (arguments->count * 4u) + written;
+}
+
 static KernelProcessStatus publish_startup_block(
     KernelProcess *process, KernelHandle process_handle,
     KernelHandle thread_handle, const AstraStartupCapability *bootstrap,
-    uint32_t bootstrap_count)
+    uint32_t bootstrap_count, const AstraLaunchArguments *arguments)
 {
     uint8_t page[ASTRA_STARTUP_INFO_SIZE +
                  (STARTUP_CAPABILITY_TOTAL_MAX *
-                  ASTRA_STARTUP_CAPABILITY_SIZE)];
+                  ASTRA_STARTUP_CAPABILITY_SIZE) +
+                 (ASTRA_LAUNCH_ARGUMENT_MAX * 4u) +
+                 ASTRA_LAUNCH_ARGUMENT_BYTES];
     AstraStartupInfo info;
     AstraStartupCapability capability[STARTUP_CAPABILITY_TOTAL_MAX];
     uint32_t count = 2u + bootstrap_count;
@@ -2317,9 +2441,20 @@ static KernelProcessStatus publish_startup_block(
         kernel_bytes_copy(&capability[2], bootstrap,
                           bootstrap_count * sizeof(capability[0]));
 
-    kernel_bytes_copy(page, &info, sizeof(info));
+    kernel_bytes_clear(page, sizeof(page));
     kernel_bytes_copy(page + ASTRA_STARTUP_INFO_SIZE, capability,
                       count * ASTRA_STARTUP_CAPABILITY_SIZE);
+    if (arguments != NULL && arguments->count != 0u) {
+        uint32_t appended = append_arguments(page, published_bytes,
+                                             (uint32_t)sizeof(page), arguments,
+                                             &info.argv_address, &info.argc);
+
+        if (appended == 0u)
+            return KERNEL_PROCESS_INVALID_ARGUMENT;
+        published_bytes += appended;
+        info.total_size = published_bytes;
+    }
+    kernel_bytes_copy(page, &info, sizeof(info));
 
     return publish_page(process, KERNEL_PROCESS_STARTUP_BASE, page,
                         published_bytes, KERNEL_VM_READ);
@@ -2329,6 +2464,18 @@ KernelProcessStatus kernel_process_create_executable(
     const void *image, uint32_t image_size,
     const KernelProcessBootstrapCapability *capabilities,
     uint32_t capability_count, uint32_t *process_id)
+{
+    /* The firmware's case: no launcher, so no handle to copy and no argv. */
+    return kernel_process_launch(image, image_size, 0u, NULL, capabilities,
+                                 capability_count, NULL, process_id);
+}
+
+KernelProcessStatus kernel_process_launch(
+    const void *image, uint32_t image_size, uint32_t user_image,
+    const KernelHandleTable *source_table,
+    const KernelProcessBootstrapCapability *capabilities,
+    uint32_t capability_count, const AstraLaunchArguments *arguments,
+    uint32_t *process_id)
 {
     AstraStartupCapability granted[KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX];
     /* Static so the initialiser is not copied through a libc memcpy. */
@@ -2353,14 +2500,33 @@ KernelProcessStatus kernel_process_create_executable(
     KernelObjectCacheStatus cache_status;
     uint32_t index;
 
-    if (image == NULL || process_id == NULL ||
+    if ((image == NULL) == (user_image == 0u) || process_id == NULL ||
         capability_count > KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX ||
         (capability_count != 0u && capabilities == NULL))
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     kernel_bytes_clear(granted, sizeof(granted));
     *process_id = 0u;
-    if (kernel_elf_accept(image, image_size, &limits, &plan) != KERNEL_ELF_OK)
+    if (user_image != 0u) {
+        /*
+         * The headers, out of the launcher's memory and into a window the
+         * kernel owns. Everything the acceptance profile reads is in here, and
+         * a file whose program header table is not is refused rather than
+         * followed out of the window.
+         */
+        uint32_t window = image_size < KERNEL_PROCESS_LAUNCH_HEADER_BYTES ?
+            image_size : KERNEL_PROCESS_LAUNCH_HEADER_BYTES;
+
+        kernel_bytes_clear(launch_header, sizeof(launch_header));
+        if (kernel_copy_from_user(launch_header, user_image, window) !=
+            KERNEL_USER_COPY_OK)
+            return KERNEL_PROCESS_INVALID_ARGUMENT;
+        if (kernel_elf_accept_windowed(launch_header, image_size, window,
+                                       &limits, &plan) != KERNEL_ELF_OK)
+            return KERNEL_PROCESS_INVALID_ARGUMENT;
+    } else if (kernel_elf_accept(image, image_size, &limits, &plan) !=
+               KERNEL_ELF_OK) {
         return KERNEL_PROCESS_INVALID_ARGUMENT;
+    }
 
     cache_status = kernel_object_cache_claim(&process_cache, 0u, &raw_process,
                                              &slot);
@@ -2417,7 +2583,7 @@ KernelProcessStatus kernel_process_create_executable(
         goto failed;
     }
 
-    result = map_segments(process, &plan, image);
+    result = map_segments(process, &plan, image, user_image);
     if (result != KERNEL_PROCESS_OK)
         goto failed;
 
@@ -2446,7 +2612,7 @@ KernelProcessStatus kernel_process_create_executable(
     prepared_thread.thread->context.data[4] = self_handle;
     prepared_thread.thread->context.data[5] = prepared_thread.handle;
 
-    result = grant_bootstrap_capabilities(process, capabilities,
+    result = grant_bootstrap_capabilities(process, source_table, capabilities,
                                           capability_count, granted);
     if (result != KERNEL_PROCESS_OK) {
         (void)abort_prepared_thread(&prepared_thread);
@@ -2455,7 +2621,7 @@ KernelProcessStatus kernel_process_create_executable(
 
     result = publish_startup_block(process, self_handle,
                                    prepared_thread.handle, granted,
-                                   capability_count);
+                                   capability_count, arguments);
     if (result != KERNEL_PROCESS_OK) {
         (void)abort_prepared_thread(&prepared_thread);
         goto failed;
@@ -4060,6 +4226,134 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         if (diagnostic_console_open) {
             kernel_process_diagnostic_log(&record, payload, length);
         }
+        break;
+    }
+    case ASTRA_SYSCALL_PROCESS_CREATE: {
+        /*
+         * A launch, and the rule that makes it safe to expose: a parent hands a
+         * child a subset of what the parent already holds. Nothing here can
+         * produce a capability that did not exist a moment earlier, so what a
+         * program may touch is always something somebody wrote down.
+         *
+         * There is no fork, so there is nothing to inherit implicitly and no
+         * second path that answers the same question differently.
+         */
+        AstraLaunchGrant grants[ASTRA_LAUNCH_GRANT_MAX];
+        KernelProcessBootstrapCapability requested[ASTRA_LAUNCH_GRANT_MAX];
+        char names[ASTRA_LAUNCH_GRANT_MAX][ASTRA_CAPABILITY_NAME_MAX];
+        AstraLaunchArguments arguments;
+        uint32_t image = thread->context.data[1];
+        uint32_t image_size = thread->context.data[2];
+        uint32_t grant_address = thread->context.data[3];
+        uint32_t grant_count = thread->context.data[4];
+        uint32_t argument_address = thread->context.data[5];
+        uint32_t child_id = 0u;
+        KernelHandle child_handle = KERNEL_HANDLE_INVALID;
+        KernelProcessStatus launch_status;
+        int copy_status;
+
+        if (image == 0u || image_size == 0u ||
+            grant_count > ASTRA_LAUNCH_GRANT_MAX ||
+            (grant_count != 0u) != (grant_address != 0u)) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        /*
+         * Room for the handle the caller will be given, checked before
+         * anything is built. A child that exists and cannot be handed to its
+         * launcher is a process nobody can wait for, and unwinding one is
+         * strictly harder than not starting it.
+         */
+        if (kernel_handle_available(&current->handles) == 0u) {
+            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        }
+        kernel_bytes_clear(&arguments, sizeof(arguments));
+        kernel_bytes_clear(requested, sizeof(requested));
+        if (grant_count != 0u) {
+            copy_status = kernel_copy_from_user(
+                grants, grant_address,
+                grant_count * (uint32_t)sizeof(grants[0]));
+            if (copy_status != KERNEL_USER_COPY_OK) {
+                result = ASTRA_SYSCALL_BAD_ADDRESS;
+                break;
+            }
+        }
+        if (argument_address != 0u) {
+            copy_status = kernel_copy_from_user(&arguments, argument_address,
+                                                (uint32_t)sizeof(arguments));
+            if (copy_status != KERNEL_USER_COPY_OK) {
+                result = ASTRA_SYSCALL_BAD_ADDRESS;
+                break;
+            }
+            if (arguments.count > ASTRA_LAUNCH_ARGUMENT_MAX ||
+                arguments.length > ASTRA_LAUNCH_ARGUMENT_BYTES ||
+                (arguments.count != 0u) != (arguments.length != 0u)) {
+                result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+                break;
+            }
+        }
+        for (uint32_t index = 0u; index < grant_count; ++index) {
+            /*
+             * The name is copied out of the wire record and terminated here,
+             * because everything below takes a C string and bytes off a
+             * caller's memory are not one until somebody says so.
+             */
+            for (uint32_t at = 0u; at + 1u < ASTRA_CAPABILITY_NAME_MAX; ++at)
+                names[index][at] = grants[index].name[at];
+            names[index][ASTRA_CAPABILITY_NAME_MAX - 1u] = '\0';
+            if (names[index][0] == '\0' || grants[index].rights == 0u) {
+                result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+                break;
+            }
+            requested[index].name = names[index];
+            requested[index].rights = grants[index].rights;
+            requested[index].source_handle = grants[index].handle;
+            requested[index].kind = KERNEL_PROCESS_BOOTSTRAP_HANDLE;
+        }
+        if (result != ASTRA_SYSCALL_OK)
+            break;
+
+        launch_status = kernel_process_launch(
+            NULL, image_size, image, &current->handles, requested, grant_count,
+            arguments.count != 0u ? &arguments : NULL, &child_id);
+        if (launch_status == KERNEL_PROCESS_INVALID_ARGUMENT) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (launch_status == KERNEL_PROCESS_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (launch_status == KERNEL_PROCESS_INVALID_HANDLE) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (launch_status == KERNEL_PROCESS_NO_SLOT ||
+            launch_status == KERNEL_PROCESS_OUT_OF_MEMORY ||
+            launch_status == KERNEL_PROCESS_RESOURCE_LIMIT) {
+            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        }
+        if (launch_status != KERNEL_PROCESS_OK)
+            return KERNEL_PROCESS_CORRUPT;
+
+        /*
+         * What the launcher gets back: enough to watch it, wait for it and end
+         * it, and nothing else. DEBUG is not implied by having started
+         * something -- reading another process's account of itself is a
+         * separate grant, and it has to stay one.
+         */
+        launch_status = kernel_process_grant_handle(
+            current->id, child_id,
+            KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_WAIT |
+                KERNEL_PROCESS_RIGHT_TERMINATE,
+            &child_handle);
+        /* The slot was reserved above, so a failure here is not a shortage. */
+        if (launch_status != KERNEL_PROCESS_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        thread->context.data[1] = child_handle;
+        thread->context.data[2] = child_id;
         break;
     }
     case ASTRA_SYSCALL_TRACE_READ: {

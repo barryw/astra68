@@ -399,20 +399,34 @@ KernelHandleStatus kernel_handle_install_cloneable(
                    release_context, handle);
 }
 
-KernelHandleStatus kernel_handle_duplicate(KernelHandleTable *table,
-                                           KernelHandle source,
-                                           uint32_t rights,
-                                           KernelHandle *duplicate)
+/*
+ * One object, two handles, and the second one may be in another process.
+ *
+ * This is the copy a launch is made of: the parent keeps what it had and the
+ * child receives the same object with rights that are a subset. The two rules
+ * that make that safe were already here for the same-table case and are the
+ * whole of §1.1 of the launch design -- the source must carry TRANSFER, and
+ * the requested rights must be a subset of the source's. A launch therefore
+ * cannot produce authority that did not exist a moment earlier, and it cannot
+ * do it by accident either.
+ *
+ * The allocation is charged to the destination table's owner, because that is
+ * whose slot it is.
+ */
+KernelHandleStatus kernel_handle_duplicate_into(
+    const KernelHandleTable *source_table, KernelHandle source,
+    uint32_t rights, KernelHandleTable *table, KernelHandle *duplicate)
 {
     const KernelHandleEntry *source_entry;
     KernelHandleEntry *destination;
     uint32_t destination_index = 0u;
     KernelHandleStatus status;
 
-    if (table == NULL || duplicate == NULL || rights == 0u)
+    if (source_table == NULL || table == NULL || duplicate == NULL ||
+        rights == 0u)
         return KERNEL_HANDLE_INVALID_ARGUMENT;
     *duplicate = KERNEL_HANDLE_INVALID;
-    status = find_entry(table, source, &source_entry);
+    status = find_entry(source_table, source, &source_entry);
     if (status != KERNEL_HANDLE_OK)
         return status;
     if ((source_entry->rights & (1u << 5)) == 0u ||
@@ -461,6 +475,15 @@ KernelHandleStatus kernel_handle_duplicate(KernelHandleTable *table,
     }
     *duplicate = make_handle(destination_index, destination->generation);
     return KERNEL_HANDLE_OK;
+}
+
+KernelHandleStatus kernel_handle_duplicate(KernelHandleTable *table,
+                                           KernelHandle source,
+                                           uint32_t rights,
+                                           KernelHandle *duplicate)
+{
+    return kernel_handle_duplicate_into(table, source, rights, table,
+                                        duplicate);
 }
 
 KernelHandleStatus kernel_handle_lookup(const KernelHandleTable *table,
