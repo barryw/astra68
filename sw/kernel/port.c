@@ -563,6 +563,45 @@ void kernel_port_abandon_unpublished(KernelPort *port)
         pool_corrupt = 1u;
 }
 
+/*
+ * A second handle to the same endpoint.
+ *
+ * Ports had no retain at all until a launch needed one: they moved through the
+ * transfer machinery, which hands an endpoint over rather than sharing it, and
+ * that is still how a reply channel travels. What a launch needs is different
+ * -- the launcher keeps its stream sink and the child gets one too -- and a
+ * copy needs a reference the release will match.
+ *
+ * **Only the send endpoint may be copied.** A second receive handle is a second
+ * service on one port, with messages going to whichever end asked first; that
+ * is a worker pool, it is a real thing to want, and it is not something a
+ * launch should be able to create by accident. Refusing it here means a grant
+ * of a receive endpoint fails loudly instead of quietly splitting a service.
+ */
+bool kernel_port_handle_retain(void *object, void *context)
+{
+    KernelPort *port = object;
+    KernelPortEndpoint endpoint =
+        (KernelPortEndpoint)(uintptr_t)context;
+
+    if (!valid_port_pointer(port) || !valid_endpoint(endpoint) ||
+        !active_state(port->state) || port->references == 0u)
+        return false;
+    if (endpoint != KERNEL_PORT_ENDPOINT_SEND)
+        return false;
+    /*
+     * A sender count of zero means every sender has gone and the port has
+     * already been told so. Reviving one from a handle nobody holds would
+     * reopen a channel the receiver was told was finished with.
+     */
+    if (port->send_references == 0u || port->send_references == UINT16_MAX ||
+        port->references == UINT16_MAX)
+        return false;
+    ++port->send_references;
+    ++port->references;
+    return true;
+}
+
 void kernel_port_handle_release(void *object, void *context)
 {
     KernelPort *port = object;

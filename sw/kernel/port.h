@@ -124,6 +124,11 @@ KernelPortStatus kernel_port_create(uint32_t owner,
                                     uint32_t maximum_bytes,
                                     KernelPort **port);
 void kernel_port_abandon_unpublished(KernelPort *port);
+/*
+ * A second handle to a port's send endpoint, which is what makes a service
+ * grantable at launch. Only the send endpoint: see the definition.
+ */
+bool kernel_port_handle_retain(void *object, void *context);
 void kernel_port_handle_release(void *object, void *context);
 KernelPortStatus kernel_port_send(
     KernelPort *port, KernelHandleTable *source_table,

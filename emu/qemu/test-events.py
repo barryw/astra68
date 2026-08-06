@@ -111,7 +111,7 @@ def run(qemu, rom, image, catalog, deadline):
     # image that happens to be lying around.
     scratch = os.path.join(directory, "card.img")
     shutil.copyfile(image, scratch)
-    astra_image.install_catalog(scratch, catalog)
+    astra_image.install(scratch, catalog)
     image = scratch
     machine = subprocess.Popen(
         [qemu, "-M", "astra68", "-m", "32M", "-bios", rom,

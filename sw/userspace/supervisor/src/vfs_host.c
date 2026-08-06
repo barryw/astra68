@@ -69,6 +69,22 @@ bind_standard_assigns(void)
                      "WORK: unbound, mkdir refused with status %u", status);
     }
     /*
+     * Where programs live, and read-only because that is what stops a person
+     * breaking the machine by editing a file. The same shape WORK: has: made
+     * if it is missing, because a volume with no commands directory has not
+     * had one installed yet, and omitted rather than fatal if it refuses.
+     */
+    status = astra_vfs_mkdir(&vfs_client, "/commands");
+    if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
+        (void)astra_assign_bind(&vfs_assigns, "COMMANDS", vfs_handle,
+                                ASTRA_RIGHT_READ, "commands");
+    } else {
+        ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
+                     ASTRA_EVENT_LEVEL_WARNING,
+                     "COMMANDS: unbound, mkdir refused with status %u",
+                     status);
+    }
+    /*
      * What namespace this boot actually got. A rare fact recorded once, which
      * every later event is read against: a person asking why a path was
      * refused needs to know what the process was holding, and reconstructing

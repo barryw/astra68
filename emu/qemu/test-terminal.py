@@ -82,6 +82,25 @@ SCRIPT = [
     # levels under it.
     ("events", "namespace bound"),
     ("events --subsystem shell --level warning", "command refused"),
+    # A program. `status` is a file in COMMANDS: that the gate installed, not
+    # anything the ROM carries: this is the first line in this script whose
+    # answer required loading an ELF off the volume and running it.
+    #
+    # It prints nothing, on purpose -- what is on the screen is the shell
+    # reporting what the child exited with, so the number proves the argument
+    # vector arrived and the status came back through the wait.
+    ("status 7", "exited 7"),
+    # No argument is zero, which is what a program that did what it was asked
+    # says. It also proves argc reaches the child correctly rather than the
+    # child reading whatever was after the vector.
+    ("status", "exited 0"),
+    # COMMANDS: is bound and searched, so a bare name resolves there without
+    # the person naming it -- and naming it explicitly is the same file.
+    ("commands:status 3", "exited 3"),
+    # And the one that used to be a hang waiting to happen: a name that is not
+    # a builtin and is not a file. Two places are looked in, both top level
+    # only, and then it says so.
+    ("nosuchthing", "not a command"),
     ("events --boot -1", "the store is RAM"),
 ]
 
@@ -249,7 +268,7 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
         scratch = os.path.join(temporary, "card.img")
         shutil.copyfile(image, scratch)
         # Into the copy, so the image this gate was pointed at is untouched.
-        astra_image.install_catalog(scratch, catalog)
+        astra_image.install(scratch, catalog)
         machine = Machine(qemu, rom, scratch, temporary)
         try:
             if not machine.wait_for_serial(BOOT_MARKER, boot_deadline):

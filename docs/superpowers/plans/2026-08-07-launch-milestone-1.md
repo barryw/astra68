@@ -317,12 +317,51 @@ source and the client.
 The gate's image preparation grows a second job beside the catalog: place the
 built commands into `commands/` on the volume copy.
 
-- [ ] Step 1: the binding, the launch path, the serving wait, and `status`.
-- [ ] Step 2: `emu/qemu/astra_image.py` installs `COMMANDS:` contents.
-- [ ] Step 3: the terminal gate — `status 7` reports 7, `status` with no
+- [x] Step 1: the binding, the launch path, the serving wait, and `status`.
+- [x] Step 2: `emu/qemu/astra_image.py` installs `COMMANDS:` contents.
+- [x] Step 3: the terminal gate — `status 7` reports 7, `status` with no
       argument reports 0, and a name that is not there says so rather than
       hanging.
-- [ ] Step 4: the whole gate on Beast, then commit.
+- [x] Step 4: the whole gate on Beast, then commit.
+
+**Task 5's first step happened here, because nothing worked without it.** The
+first run of the gate said `status: would not start`: a grant is a
+`kernel_handle_duplicate`, a duplicate needs a retain, and ports had none — the
+finding task 1 wrote down, arriving exactly where it said it would. So
+`kernel_port_handle_retain` exists now and the send endpoint is installed
+cloneable.
+
+**Only the send endpoint.** A second receive handle is a second service on one
+port, with messages going to whichever end asked first. That is a worker pool,
+it is a real thing to want, and a launch must not be able to create one by
+accident — so granting a receive endpoint is `ACCESS_DENIED`, with a kernel test
+for both halves.
+
+**Four things the build settled.**
+
+- **A launched child gets the streams and no namespace.** `WORK:`, `COMMANDS:`
+  and `EVENTS:` cannot be granted yet: an assign's handle is a routing token
+  `vfs_host.c` invented, not a kernel handle, because the storage service is
+  still reached by a function pointer. Task 5 turns those into port handles and
+  `launch_grants` grows three entries. This is why `status` was the right first
+  program — it needs nothing.
+- **`pump_once` is one function called from two places.** The prompt's loop and
+  the wait for a child are the same body. A serving wait that pumped a subset of
+  what the prompt pumps is a child that works until it calls the one service the
+  wait forgot, and that is a bug nobody would find twice.
+- **One keyboard, and the foreground gets it.** A line typed while a child runs
+  goes to `console_stream_offer` rather than to `run_line`. If the source will
+  not take it the editor is not committed, so the line stays on screen and the
+  person presses return again — nothing typed is lost to a child that reads
+  slowly. That is the `STDIN` seam task 3 left, and it was a call, not a
+  mechanism.
+- **The image builder does both jobs in one lift.** `install()` writes the
+  catalog and the commands inside a single slice-fsck-splice, because two lifts
+  would mean two journal recoveries and the second would replay over the first's
+  work — the trap the file already had a paragraph about.
+
+The supervisor grew to 91,449 bytes of text and 358,318 of BSS, most of the
+latter being the 64 KiB load buffer. Boot is 0.09s of a 1.00s budget.
 
 ### Task 5: The storage protocol over ports
 

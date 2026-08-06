@@ -6772,11 +6772,55 @@ static void test_a_program_can_launch_a_program(void)
     assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
 
     /*
+     * A port, which is how a child is handed a service. The send endpoint is
+     * cloneable and the receive one is not: publishing a service is handing out
+     * senders, and a second receive handle would be a second service on one
+     * port with messages going to whichever end asked first. A launch must not
+     * be able to create that by accident.
+     */
+    {
+        uint32_t registers_port[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+        uint32_t port_receive;
+        uint32_t port_send;
+
+        registers_port[0] = ASTRA_SYSCALL_PORT_CREATE;
+        registers_port[1] = 2u;
+        registers_port[2] = 512u;
+        assert(kernel_process_on_syscall(registers_port,
+                                         KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        port_receive = next->data[1];
+        port_send = next->data[2];
+
+        grant.handle = port_send;
+        grant.rights = ASTRA_RIGHT_SIGNAL;
+        grant.flags = ASTRA_CAPABILITY_FLAG_NAMESPACE;
+        assert(kernel_user_copy_to_asm(user_grants, &grant, sizeof(grant)) ==
+               KERNEL_USER_COPY_OK);
+        assert(kernel_process_on_syscall(registers,
+                                         KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+        /* The receiver cannot be copied, so granting one is refused. */
+        grant.handle = port_receive;
+        grant.rights = ASTRA_RIGHT_READ;
+        assert(kernel_user_copy_to_asm(user_grants, &grant, sizeof(grant)) ==
+               KERNEL_USER_COPY_OK);
+        assert(kernel_process_on_syscall(registers,
+                                         KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    }
+
+    /*
      * A flag bit this ABI does not define is refused rather than carried. A bit
      * nobody interprets today means something else tomorrow, and a child built
      * against the later ABI could not tell a flag it was granted from one that
      * happened to be set.
      */
+    grant.handle = send_handle;
     grant.rights = ASTRA_RIGHT_READ;
     grant.flags = (uint32_t)ASTRA_CAPABILITY_FLAG_MASK + 1u;
     assert(kernel_user_copy_to_asm(user_grants, &grant, sizeof(grant)) ==

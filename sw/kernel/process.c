@@ -3819,10 +3819,16 @@ static KernelProcessStatus port_syscall(KernelProcess *current,
             }
             return KERNEL_PROCESS_CORRUPT;
         }
-        handle_status = kernel_handle_install(
+        /*
+         * The send endpoint is cloneable and the receive one is not. A service
+         * is published by handing out send handles -- at launch, to a child --
+         * and that is a copy; a second receive handle would be a second
+         * service on one port. See kernel_port_handle_retain.
+         */
+        handle_status = kernel_handle_install_cloneable(
             &current->handles, KERNEL_OBJECT_PORT_SEND,
             KERNEL_PORT_SEND_RIGHTS, port,
-            kernel_port_handle_release,
+            kernel_port_handle_retain, kernel_port_handle_release,
             (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND,
             &send_handle);
         if (handle_status != KERNEL_HANDLE_OK) {
