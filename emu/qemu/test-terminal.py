@@ -32,6 +32,9 @@ import tempfile
 import threading
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import astra_image
+
 # VEGA_POST_TEXT_BASE and its geometry, from sw/include/vega.h. The terminal
 # writes cells here through ASTRA_SYSCALL_CONSOLE_WRITE.
 PLANE = 0xFFF22000
@@ -60,6 +63,20 @@ SCRIPT = [
     # from the filesystem, which would have been happy to write there.
     ("ls sys:", "work/"),
     ("write sys:hello.txt no", "access denied"),
+    # EVENTS: is a tree, and that is the whole claim: no bespoke client, no
+    # query language, just a path. `ls` walks it and `cat` reads it.
+    ("ls events:", "activity/"),
+    ("ls events:boot/current", "earliest"),
+    # One command is one story, read back on the machine that recorded it. The
+    # first line typed at this prompt begins activity 1 -- the kernel's counter
+    # starts there every boot -- and that line was `mkdir proto`, so this is
+    # the shell's own account of the first thing this test did.
+    ("cat events:activity/00000001", "command accepted"),
+    # And the refusal, which is the one that pays for the design: the sixth
+    # line typed was `write sys:hello.txt no`, and its story holds both the
+    # line the shell accepted and the refusal it answered with -- neither of
+    # which passed an activity to the other.
+    ("cat events:activity/00000006", "command refused"),
 ]
 
 QCODE = {" ": "spc", "\n": "ret", "/": "slash", ".": "dot", "-": "minus"}
@@ -221,10 +238,12 @@ class Machine:
             self.process.kill()
 
 
-def run(qemu, rom, image, boot_deadline, command_deadline, verbose):
+def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
     with tempfile.TemporaryDirectory(prefix="astra-terminal-") as temporary:
         scratch = os.path.join(temporary, "card.img")
         shutil.copyfile(image, scratch)
+        # Into the copy, so the image this gate was pointed at is untouched.
+        astra_image.install_catalog(scratch, catalog)
         machine = Machine(qemu, rom, scratch, temporary)
         try:
             if not machine.wait_for_serial(BOOT_MARKER, boot_deadline):
@@ -273,13 +292,16 @@ def main():
     parser.add_argument("rom", help="astra_boot.bin")
     parser.add_argument("--image", required=True,
                         help="card image with an ext4 volume; copied, not written")
+    parser.add_argument("--catalog", default=astra_image.DEFAULT_CATALOG,
+        help="the .astra_events bytes to place on the volume as SYS:" +
+             astra_image.CATALOG_NAME)
     parser.add_argument("--boot-deadline", type=float, default=90.0)
     parser.add_argument("--command-deadline", type=float, default=60.0)
     parser.add_argument("--verbose", action="store_true")
     arguments = parser.parse_args()
     return run(arguments.qemu, arguments.rom, arguments.image,
-               arguments.boot_deadline, arguments.command_deadline,
-               arguments.verbose)
+               arguments.catalog, arguments.boot_deadline,
+               arguments.command_deadline, arguments.verbose)
 
 
 if __name__ == "__main__":

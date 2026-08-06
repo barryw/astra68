@@ -1,9 +1,11 @@
 #include <console_shell.h>
+#include <events_host.h>
 #include <supervisor.h>
 #include <volume.h>
 
 #include <astra/block.h>
 #include <astra/display.h>
+#include <astra/event_emit.h>
 #include <astra/block_device.h>
 #include <astra/lease_block.h>
 #include <astra/bytes.h>
@@ -248,6 +250,30 @@ astra_main(const AstraStartupInfo *startup)
         const AstraStartupCapability *keyboard = find_capability(
             capabilities, startup->capability_count,
             ASTRA_CAPABILITY_INPUT_DEVICE);
+
+        /*
+         * EVENTS: before the terminal, so the first thing a person can ask
+         * about includes the boot they are looking at. Its absence is not a
+         * boot failure: the ring still records everything and the machine
+         * simply cannot be asked from here, which is the layout spec's rule
+         * that a binding which cannot be made is omitted rather than fatal.
+         */
+        if (supervisor_events_start(startup->process_handle)) {
+            ASTRA_EVENT2(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
+                         ASTRA_EVENT_LEVEL_NOTICE,
+                         "EVENTS: bound, catalog %u messages, status %u",
+                         supervisor_events_catalog_count(),
+                         supervisor_events_catalog_status());
+        } else {
+            /*
+             * Said out loud, because silence and nothing-happened are
+             * different facts and a machine that renders them identically is
+             * lying about the more important one.
+             */
+            ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
+                         ASTRA_EVENT_LEVEL_WARNING,
+                         "EVENTS: unavailable, history is in the ring only");
+        }
 
         if (display != NULL && display->handle != 0u) {
             /*

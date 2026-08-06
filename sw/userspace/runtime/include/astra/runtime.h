@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include <astra/block.h>
+#include <astra/event.h>
 #include <astra/input.h>
 #include <astra/process.h>
 #include <astra/syscall.h>
@@ -86,6 +87,21 @@ uint32_t astra_event_emit(uint32_t message, uint32_t flags,
 uint32_t astra_activity_begin(void);
 uint32_t astra_activity_adopt(uint32_t activity);
 uint32_t astra_activity_current(void);
+/*
+ * Reading the stream back: the other half of the reversal above. `cursor` is
+ * the sequence already seen and is updated to what to pass next; `lost` counts
+ * the records the ring displaced before this call reached them, which a reader
+ * must be told rather than left to infer from a history that is mysteriously
+ * short.
+ *
+ * The process handle must carry ASTRA_RIGHT_DEBUG and must name the caller.
+ * Emitting needs no capability and reading does, because reading is every
+ * process's events at once.
+ */
+uint32_t astra_trace_read(uint32_t process_handle, uint32_t *cursor,
+                          AstraEventDrained *events, uint32_t capacity,
+                          uint32_t *copied, uint32_t *lost);
+
 /* A line of text, as a chain of ASTRA_EVENT_MESSAGE_UNSTRUCTURED events. */
 uint32_t astra_log_write(const void *bytes, uint32_t length);
 uint32_t astra_log(const char *text);

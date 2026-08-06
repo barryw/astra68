@@ -83,9 +83,16 @@ astra_event_catalog_init(AstraEventCatalog *catalog, const void *bytes,
     catalog->records = NULL;
     catalog->count = 0u;
     catalog->base = 0u;
+    /*
+     * Natural alignment, not four. A descriptor's widest member is a uint32_t
+     * and m68k aligns those to two bytes, so a static array of them can sit at
+     * an odd multiple of two -- and a hardcoded four rejected the machine's own
+     * catalog while every host test passed. Ask the compiler what the type
+     * needs and the question cannot be got wrong per target.
+     */
     if (bytes == NULL || size == 0u ||
         size % ASTRA_EVENT_DESCRIPTOR_SIZE != 0u ||
-        ((uintptr_t)bytes & 3u) != 0u ||
+        ((uintptr_t)bytes % _Alignof(AstraEventDescriptor)) != 0u ||
         records[0].magic != ASTRA_EVENT_DESCRIPTOR_MAGIC) {
         return 0;
     }

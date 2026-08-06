@@ -33,10 +33,11 @@ typedef struct AstraEventCatalog {
 
 /*
  * Adopts `bytes` in place; nothing is copied and the caller keeps it alive.
- * Refuses a length that is not a whole number of descriptors, a misaligned
- * buffer, or a first record whose magic is wrong -- each of which means the
- * file is not this build's catalog, and a catalog that is nearly right renders
- * every event wrongly rather than failing once.
+ * Refuses a length that is not a whole number of descriptors, a buffer that
+ * does not meet the descriptor's own alignment, or a first record whose magic
+ * is wrong -- each of which means the file is not this build's catalog, and a
+ * catalog that is nearly right renders every event wrongly rather than failing
+ * once.
  *
  * Returns 1 on success and 0 on refusal, leaving an empty catalog behind: a
  * reader with no catalog shows ids, which is honest, rather than text it made

@@ -291,16 +291,36 @@ promise the machine cannot keep.
   `EVENTS:`, which is the layout spec's rule that a binding that cannot be made
   is omitted rather than fatal — and it says so, loudly.
 
-- [ ] Step 1: the wiring.
-- [ ] Step 2: extend `emu/qemu/test-events.py`: type a command that fails, read
-      the activity id out of the ring, then `cat EVENTS:activity/<id>` in the
-      terminal and assert both the acceptance and the refusal appear, in order,
-      with their file and line. That is the end-to-end claim of this plan and it
-      is one assertion.
-- [ ] Step 3: the whole gate on Beast — 30 kernel suites in both configurations,
-      userspace test/sanitize/analyze/cross-build, `ext4-test`, the terminal
-      gate, the events gate, and the boot budget under 1.00s.
-- [ ] Step 4: commit and update the handover.
+- [x] Step 1: the wiring.
+- [x] Step 2: the assertion went into `emu/qemu/test-terminal.py` rather than
+      the events gate, because that is the one that can read the screen: it
+      types a command that fails and then `cat EVENTS:activity/00000006` in the
+      terminal, asserting the refusal comes back rendered. Activity ids are the
+      kernel's counter, so the sixth typed line is activity 6 — deterministic,
+      and no id has to be read out of the ring.
+- [x] Step 3: the whole gate on Beast — 30 kernel suites in both
+      configurations, userspace test/sanitize/analyze/cross-build, `ext4-test`,
+      the terminal gate, the events gate, the boot budget at 0.09s of 1.00s,
+      and 29 pytest cases on the Mac.
+- [x] Step 4: commit and update the handover.
+
+**Four things this task cost, each written down so the next one does not.**
+
+- **m68k aligns a `uint32_t` to two bytes.** The catalog reader demanded four,
+  so the machine's own catalog was refused and every line rendered as a message
+  id while every host test passed. It asks the compiler now:
+  `_Alignof(AstraEventDescriptor)`.
+- **A second service numbers its sessions from one too.** The router matched an
+  assign to a client by session, so both mounts answered to handle 1 and every
+  `EVENTS:` path listed the volume. The handle is the router's own slot now.
+- **`sw/boot` must be rebuilt after `sw/userspace`.** The ROM carries the user
+  image, so a rebuilt supervisor that is not re-ROMmed boots the old one — and
+  the decoder reads the *new* catalog, which renders every id as the wrong
+  message. That looks exactly like a catalog bug.
+- **A journal replay lands on top of anything `debugfs` wrote.** The gate now
+  lifts the volume out of the image, `e2fsck -fy`s it, writes the catalog and
+  puts it back. In place does not work: `e2fsck` cannot reopen an
+  `image?offset=` target after recovering a journal.
 
 ---
 

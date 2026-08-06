@@ -24,6 +24,7 @@ static AstraVfsExt4Backend vfs_backend;
 static AstraVfsService vfs_service;
 static AstraVfsClient vfs_client;
 static AstraAssignTable vfs_assigns;
+static uint32_t vfs_handle;
 static int vfs_ready;
 
 /*
@@ -44,7 +45,7 @@ bind_standard_assigns(void)
     uint32_t status;
 
     astra_assign_table_init(&vfs_assigns);
-    (void)astra_assign_bind(&vfs_assigns, "SYS", vfs_client.session,
+    (void)astra_assign_bind(&vfs_assigns, "SYS", vfs_handle,
                             ASTRA_RIGHT_READ, "");
     /*
      * A volume with no work directory on it has not been used yet, so making
@@ -54,7 +55,7 @@ bind_standard_assigns(void)
      */
     status = astra_vfs_mkdir(&vfs_client, "/work");
     if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
-        (void)astra_assign_bind(&vfs_assigns, "WORK", vfs_client.session,
+        (void)astra_assign_bind(&vfs_assigns, "WORK", vfs_handle,
                                 ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "work");
     } else {
         /*
@@ -102,6 +103,10 @@ supervisor_vfs_start(const char *mount_point)
         return 0;
     }
     vfs_ready = 1;
+    vfs_handle = supervisor_vfs_register(&vfs_client);
+    if (vfs_handle == 0u) {
+        return 0;
+    }
     /* Binding uses the client, so the client has to be usable first. */
     bind_standard_assigns();
     return 1;
@@ -117,4 +122,66 @@ AstraAssignTable *
 supervisor_assigns(void)
 {
     return vfs_ready ? &vfs_assigns : NULL;
+}
+
+/*
+ * The router. Two entries because there are two services, and matched by
+ * session because that is what an assign carries as its handle today.
+ */
+#define VFS_CLIENT_MAX 2u
+static AstraVfsClient *vfs_clients[VFS_CLIENT_MAX];
+
+/*
+ * The handle an assign carries: this table's slot, one-based, in the high
+ * halfword, and the session in the low one. The session alone would not do --
+ * each service numbers its own sessions from one, so every mount would answer
+ * to the same handle and the first registered would answer for all of them.
+ */
+#define CLIENT_HANDLE(index, session) \
+    ((((index) + 1u) << 16) | ((session) & 0xFFFFu))
+
+uint32_t
+supervisor_vfs_register(AstraVfsClient *client)
+{
+    if (client == NULL) {
+        return 0u;
+    }
+    for (uint32_t index = 0u; index < VFS_CLIENT_MAX; ++index) {
+        if (vfs_clients[index] == NULL || vfs_clients[index] == client) {
+            vfs_clients[index] = client;
+            return CLIENT_HANDLE(index, client->session);
+        }
+    }
+    return 0u;
+}
+
+void
+supervisor_vfs_set_activity(uint32_t activity)
+{
+    for (uint32_t index = 0u; index < VFS_CLIENT_MAX; ++index) {
+        if (vfs_clients[index] != NULL) {
+            vfs_clients[index]->activity = activity;
+        }
+    }
+}
+
+AstraVfsClient *
+supervisor_vfs_client_for(const AstraAssign *assign)
+{
+    uint32_t slot;
+
+    if (assign == NULL) {
+        return supervisor_vfs_client();
+    }
+    slot = assign->handle >> 16;
+    if (slot != 0u && slot <= VFS_CLIENT_MAX &&
+        vfs_clients[slot - 1u] != NULL) {
+        return vfs_clients[slot - 1u];
+    }
+    /*
+     * A binding whose service is gone. NULL rather than the storage client:
+     * sending a path for one mount to another would answer with somebody
+     * else's namespace, which is worse than not answering.
+     */
+    return NULL;
 }

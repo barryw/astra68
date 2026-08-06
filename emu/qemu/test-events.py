@@ -27,12 +27,16 @@ import argparse
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import astra_image
 
 COMMAND = "write sys:nope no"
 RING_ADDRESS = 0x020C4000
@@ -97,11 +101,18 @@ class Qmp:
         self.key("ret")
 
 
-def run(qemu, rom, image, deadline):
+def run(qemu, rom, image, catalog, deadline):
     """Boots, waits for the terminal, and returns the ring as bytes."""
     directory = tempfile.mkdtemp()
     socket_path = os.path.join(directory, "events-qmp.sock")
     ring_path = os.path.join(directory, "ring.bin")
+    # A copy, with this build's catalog on it: the machine resolves ids from
+    # SYS: and the gate must boot what a built machine actually has, not an
+    # image that happens to be lying around.
+    scratch = os.path.join(directory, "card.img")
+    shutil.copyfile(image, scratch)
+    astra_image.install_catalog(scratch, catalog)
+    image = scratch
     machine = subprocess.Popen(
         [qemu, "-M", "astra68", "-m", "32M", "-bios", rom,
          "-display", "none", "-monitor", "none", "-serial", "stdio",
@@ -158,6 +169,7 @@ def main():
     parser.add_argument("--image", required=True)
     parser.add_argument("--elf", default=os.path.join(
         ROOT, "sw/userspace/supervisor/build/m68k/astra_supervisor.elf"))
+    parser.add_argument("--catalog", default=astra_image.DEFAULT_CATALOG)
     parser.add_argument("--boot-deadline", type=float, default=90.0)
     arguments = parser.parse_args()
 
@@ -172,7 +184,7 @@ def main():
         os.path.join(ROOT, "sw/kernel/trace.h"))
 
     ring, serial = run(arguments.qemu, arguments.rom, arguments.image,
-                       arguments.boot_deadline)
+                       arguments.catalog, arguments.boot_deadline)
     header, lines = trace_decode.decode(ring, catalog, names)
 
     user = [line for line in lines if " kernel   " not in line]

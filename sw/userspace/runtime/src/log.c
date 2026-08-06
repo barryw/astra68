@@ -34,6 +34,30 @@ astra_event_emit(uint32_t message, uint32_t flags, const void *payload,
 }
 
 uint32_t
+astra_trace_read(uint32_t process_handle, uint32_t *cursor,
+                 AstraEventDrained *events, uint32_t capacity,
+                 uint32_t *copied, uint32_t *lost)
+{
+    AstraSyscallResult result;
+
+    if (cursor == NULL || events == NULL || copied == NULL || lost == NULL ||
+        capacity == 0u) {
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    *copied = 0u;
+    *lost = 0u;
+    astra_syscall5(ASTRA_SYSCALL_TRACE_READ, process_handle, *cursor,
+                   (uint32_t)(uintptr_t)events, capacity, 0u, &result);
+    if (result.status != ASTRA_SYSCALL_OK) {
+        return result.status;
+    }
+    *copied = result.value0;
+    *cursor = result.value1;
+    *lost = result.value2;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
 astra_log_write(const void *bytes, uint32_t length)
 {
     const uint8_t *text = bytes;

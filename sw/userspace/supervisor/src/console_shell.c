@@ -19,6 +19,7 @@
  */
 
 #include <console_shell.h>
+#include <events_host.h>
 
 #include <astra/bytes.h>
 #include <astra/display.h>
@@ -80,17 +81,28 @@ static int shell_equal(const char *left, const char *right)
  * disk -- and a name the shell was never given does not resolve at all.
  */
 static uint32_t shell_path(const char *name, uint32_t rights, char *wire,
-                           uint32_t capacity)
+                           uint32_t capacity, AstraVfsClient **client)
 {
     char typed[SHELL_PATH_MAX];
+    const AstraAssign *assign = NULL;
     uint32_t status;
 
     status = astra_path_qualify(shell.assign, shell.directory, name, typed,
                                 sizeof(typed));
     if (status != ASTRA_VFS_OK)
         return status;
-    return astra_assign_resolve(supervisor_assigns(), typed, rights, wire,
-                                capacity, NULL);
+    status = astra_assign_resolve(supervisor_assigns(), typed, rights, wire,
+                                  capacity, &assign);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    /*
+     * A name is a binding to a mount, and there are two mounts now. Asking
+     * which service speaks for the assign is what keeps the shell from sending
+     * an EVENTS: path to the volume -- and it is the same question a launched
+     * program will answer with a port handle.
+     */
+    *client = supervisor_vfs_client_for(assign);
+    return *client != NULL ? ASTRA_VFS_OK : ASTRA_VFS_ERR_NOT_FOUND;
 }
 
 /* The one place the shell reaches storage. NULL when no volume is mounted. */
@@ -185,6 +197,7 @@ static void command_ls(int argc, char *const *argv)
 {
     char path[SHELL_PATH_MAX];
     char name[ASTRA_VFS_NAME_MAX];
+    AstraVfsClient *client = NULL;
     uint64_t cursor = 0u;
     uint32_t shown = 0u;
     uint16_t kind = 0u;
@@ -195,13 +208,13 @@ static void command_ls(int argc, char *const *argv)
         return;
     }
     status = shell_path(argc > 1 ? argv[1] : NULL, ASTRA_RIGHT_READ, path,
-                        sizeof(path));
+                        sizeof(path), &client);
     if (status != ASTRA_VFS_OK) {
         report_status("ls", status);
         return;
     }
     for (;;) {
-        status = astra_vfs_readdir(storage(), path, cursor, name, sizeof(name),
+        status = astra_vfs_readdir(client, path, cursor, name, sizeof(name),
                                    &kind, &cursor);
         /* Running past the last entry is how a listing ends, not a failure. */
         if (status == ASTRA_VFS_ERR_NOT_FOUND)
@@ -225,6 +238,8 @@ static void command_cd(int argc, char *const *argv)
     char typed[SHELL_PATH_MAX];
     char wire[SHELL_PATH_MAX];
     char name[ASTRA_CAPABILITY_NAME_MAX];
+    const AstraAssign *assign = NULL;
+    AstraVfsClient *client = NULL;
     uint16_t kind = 0u;
     uint32_t status;
 
@@ -240,14 +255,19 @@ static void command_cd(int argc, char *const *argv)
     if (status == ASTRA_VFS_OK) {
         status = astra_assign_resolve(supervisor_assigns(), typed,
                                       ASTRA_RIGHT_READ, wire, sizeof(wire),
-                                      NULL);
+                                      &assign);
+    }
+    if (status == ASTRA_VFS_OK) {
+        client = supervisor_vfs_client_for(assign);
+        if (client == NULL)
+            status = ASTRA_VFS_ERR_NOT_FOUND;
     }
     if (status != ASTRA_VFS_OK) {
         report_status("cd", status);
         return;
     }
     /* Verified before it is adopted, so the prompt never lies. */
-    status = astra_vfs_stat(storage(), wire, NULL, &kind);
+    status = astra_vfs_stat(client, wire, NULL, &kind);
     if (status != ASTRA_VFS_OK) {
         report_status("cd", status);
         return;
@@ -276,6 +296,7 @@ static void command_cat(int argc, char *const *argv)
 {
     char path[SHELL_PATH_MAX];
     uint8_t chunk[SHELL_READ_CHUNK];
+    AstraVfsClient *client = NULL;
     AstraVfsFile file;
     uint64_t offset = 0u;
     uint32_t moved = 0u;
@@ -289,19 +310,20 @@ static void command_cat(int argc, char *const *argv)
         write_line("cat: needs a file");
         return;
     }
-    status = shell_path(argv[1], ASTRA_RIGHT_READ, path, sizeof(path));
+    status = shell_path(argv[1], ASTRA_RIGHT_READ, path, sizeof(path),
+                        &client);
     if (status != ASTRA_VFS_OK) {
         report_status("cat", status);
         return;
     }
-    status = astra_vfs_open(storage(), path, ASTRA_VFS_OPEN_READ, &file, NULL,
+    status = astra_vfs_open(client, path, ASTRA_VFS_OPEN_READ, &file, NULL,
                             NULL);
     if (status != ASTRA_VFS_OK) {
         report_status("cat", status);
         return;
     }
     for (;;) {
-        status = astra_vfs_read(storage(), file, offset, chunk, sizeof(chunk),
+        status = astra_vfs_read(client, file, offset, chunk, sizeof(chunk),
                                 &moved);
         if (status != ASTRA_VFS_OK) {
             report_status("cat", status);
@@ -313,13 +335,14 @@ static void command_cat(int argc, char *const *argv)
         astra_terminal_write_bytes(&shell.terminal, chunk, moved);
         offset += moved;
     }
-    (void)astra_vfs_close(storage(), file);
+    (void)astra_vfs_close(client, file);
     astra_terminal_putc(&shell.terminal, '\n');
 }
 
 static void command_mkdir(int argc, char *const *argv)
 {
     char path[SHELL_PATH_MAX];
+    AstraVfsClient *client = NULL;
     uint32_t status;
 
     if (storage() == NULL) {
@@ -330,12 +353,13 @@ static void command_mkdir(int argc, char *const *argv)
         write_line("mkdir: needs a name");
         return;
     }
-    status = shell_path(argv[1], ASTRA_RIGHT_WRITE, path, sizeof(path));
+    status = shell_path(argv[1], ASTRA_RIGHT_WRITE, path, sizeof(path),
+                        &client);
     if (status != ASTRA_VFS_OK) {
         report_status("mkdir", status);
         return;
     }
-    status = astra_vfs_mkdir(storage(), path);
+    status = astra_vfs_mkdir(client, path);
     if (status != ASTRA_VFS_OK)
         report_status("mkdir", status);
 }
@@ -344,6 +368,7 @@ static void command_mkdir(int argc, char *const *argv)
 static void command_write(int argc, char *const *argv)
 {
     char path[SHELL_PATH_MAX];
+    AstraVfsClient *client = NULL;
     AstraVfsFile file;
     uint64_t offset = 0u;
     uint32_t moved = 0u;
@@ -358,12 +383,13 @@ static void command_write(int argc, char *const *argv)
         write_line("write: needs a name");
         return;
     }
-    status = shell_path(argv[1], ASTRA_RIGHT_WRITE, path, sizeof(path));
+    status = shell_path(argv[1], ASTRA_RIGHT_WRITE, path, sizeof(path),
+                        &client);
     if (status != ASTRA_VFS_OK) {
         report_status("write", status);
         return;
     }
-    status = astra_vfs_open(storage(), path,
+    status = astra_vfs_open(client, path,
                             ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
                                 ASTRA_VFS_OPEN_TRUNCATE,
                             &file, NULL, NULL);
@@ -383,7 +409,7 @@ static void command_write(int argc, char *const *argv)
          * regardless.
          */
         while (sent < length) {
-            status = astra_vfs_write(storage(), file, offset + sent,
+            status = astra_vfs_write(client, file, offset + sent,
                                      word + sent, length - sent, &moved);
             if (status != ASTRA_VFS_OK) {
                 report_status("write", status);
@@ -396,7 +422,7 @@ static void command_write(int argc, char *const *argv)
             sent += moved;
         }
         offset += sent;
-        status = astra_vfs_write(storage(), file, offset,
+        status = astra_vfs_write(client, file, offset,
                                  index + 1 < argc ? " " : "\n", 1u, &moved);
         if (status != ASTRA_VFS_OK) {
             report_status("write", status);
@@ -405,12 +431,13 @@ static void command_write(int argc, char *const *argv)
         offset += moved;
     }
 finish:
-    (void)astra_vfs_close(storage(), file);
+    (void)astra_vfs_close(client, file);
 }
 
 static void command_rm(int argc, char *const *argv)
 {
     char path[SHELL_PATH_MAX];
+    AstraVfsClient *client = NULL;
     uint32_t status;
 
     if (storage() == NULL) {
@@ -421,12 +448,13 @@ static void command_rm(int argc, char *const *argv)
         write_line("rm: needs a name");
         return;
     }
-    status = shell_path(argv[1], ASTRA_RIGHT_WRITE, path, sizeof(path));
+    status = shell_path(argv[1], ASTRA_RIGHT_WRITE, path, sizeof(path),
+                        &client);
     if (status != ASTRA_VFS_OK) {
         report_status("rm", status);
         return;
     }
-    status = astra_vfs_unlink(storage(), path);
+    status = astra_vfs_unlink(client, path);
     if (status != ASTRA_VFS_OK)
         report_status("rm", status);
 }
@@ -461,8 +489,7 @@ static void run_line(const char *line)
      * is then reading one number.
      */
     (void)astra_activity_begin();
-    if (storage() != NULL)
-        storage()->activity = astra_activity_current();
+    supervisor_vfs_set_activity(astra_activity_current());
     ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
                  "command accepted, %u words", (uint32_t)words.argc);
 
@@ -624,6 +651,13 @@ void console_shell_run(uint32_t display, uint32_t input,
 
         uint32_t status;
 
+        /*
+         * The drain, off the critical path of everything except itself. It is
+         * here because this is the loop the machine already has: the events
+         * service is in this process until there is a launch path, and a
+         * bounded pump per pass is what keeps a burst from becoming a stall.
+         */
+        supervisor_events_pump();
         if (input == 0u) {
             (void)astra_yield();
             continue;
