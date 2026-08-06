@@ -28,14 +28,20 @@
  */
 
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
-#define ASTRA_VFS_VERSION  UINT16_C(1)
+#define ASTRA_VFS_VERSION  UINT16_C(2)
 
 /*
  * The oldest version this build can still speak. A client asks for a minimum
  * and the service replies with the version it chose; when the ranges do not
  * overlap the session is refused rather than downgraded silently.
+ *
+ * Version 2 gave READDIR a cursor and the reply the field to return it in.
+ * Version 1 is not spoken: a version 1 client would send a directory index
+ * where this one reads a cursor, and the two agree on every value that matters
+ * except the ones a listing is made of. Refusing the session is the only
+ * honest answer, and nothing in this tree speaks version 1 anyway.
  */
-#define ASTRA_VFS_VERSION_MIN UINT16_C(1)
+#define ASTRA_VFS_VERSION_MIN UINT16_C(2)
 
 #define ASTRA_VFS_PATH_MAX 192u
 #define ASTRA_VFS_NAME_MAX 64u
@@ -115,7 +121,7 @@ typedef uint32_t AstraVfsSession;
 #define ASTRA_VFS_SESSION_INVALID UINT32_C(0)
 
 #define ASTRA_VFS_REQUEST_SIZE 224u
-#define ASTRA_VFS_REPLY_SIZE   224u
+#define ASTRA_VFS_REPLY_SIZE   232u
 
 /*
  * One request record covers every operation. A union of per-operation records
@@ -146,7 +152,14 @@ typedef struct AstraVfsRequest {
     uint16_t version;       /* the version the sender is speaking */
     uint32_t session;       /* ASTRA_VFS_SESSION_INVALID on HELLO */
     uint32_t file;          /* the subject handle, or ASTRA_VFS_FILE_INVALID */
-    uint32_t flags;         /* open modes, or a readdir index */
+    uint32_t flags;         /* open modes */
+    /*
+     * Where in the node to start: bytes for READ and WRITE, and for READDIR
+     * the backend's own cursor into the directory, zero to begin a scan. A
+     * directory is read from a position like everything else here; what
+     * differs is that only the backend can say what the next position is, so
+     * the reply carries it back.
+     */
     uint64_t offset;
     uint32_t length;        /* bytes for READ/WRITE, at most ASTRA_VFS_IO_MAX */
     /*
@@ -171,7 +184,17 @@ typedef struct AstraVfsReply {
     uint32_t session;
     uint32_t file;
     uint64_t node_size;
-    uint32_t count;         /* bytes moved, or entries remaining */
+    /*
+     * READDIR: the cursor that reaches the entry after this one, to pass as
+     * the next request's offset. Zero on every other operation.
+     *
+     * A field of its own rather than a second meaning for `node_size`: a
+     * listing that resumes from the wrong number silently skips or repeats
+     * entries, and that is not a bug anybody finds by reading a struct whose
+     * fields mean two things.
+     */
+    uint64_t cursor;
+    uint32_t count;         /* bytes moved, or the entry name's length */
     uint16_t kind;
     uint16_t reserved;      /* must be zero */
     uint8_t payload[ASTRA_VFS_IO_MAX];

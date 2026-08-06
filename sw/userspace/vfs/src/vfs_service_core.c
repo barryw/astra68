@@ -363,17 +363,24 @@ handle_readdir(AstraVfsService *service, const AstraVfsRequest *request,
 {
     AstraVfsNodeInfo info;
     char name[ASTRA_VFS_NAME_MAX];
+    uint64_t next = 0u;
     uint32_t index;
 
     info.size = 0u;
     info.kind = ASTRA_VFS_KIND_UNKNOWN;
     name[0] = '\0';
     reply->status = service->backend.ops->readdir(
-        service->backend.context, (const char *)request->body.path, request->flags,
-        name, (uint32_t)sizeof(name), &info);
+        service->backend.context, (const char *)request->body.path,
+        request->offset, name, (uint32_t)sizeof(name), &info, &next);
     if (reply->status != ASTRA_VFS_OK) {
         return;
     }
+    /*
+     * Handed back unread. The cursor is the backend's own and the core has no
+     * business knowing what it counts -- which is what keeps a scan stateless
+     * here and costs nothing when a client walks away mid-listing.
+     */
+    reply->cursor = next;
     for (index = 0u; index < ASTRA_VFS_NAME_MAX && name[index] != '\0';
          ++index) {
         reply->payload[index] = (uint8_t)name[index];

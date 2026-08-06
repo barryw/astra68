@@ -122,14 +122,22 @@ entry gets deleted along with the walk.
 This is the layout spec's §1.7 debt for union assigns, paid here because
 `EVENTS:activity` puts it on the critical path.
 
-- [ ] Step 1: failing tests — a full scan visits every entry exactly once; an
-      opaque cookie round-trips through the wire record; a cookie from a
-      different directory yields no entry rather than a wrong one; a scan of a
-      large directory does not re-walk (assert the backend's open count).
-- [ ] Step 2: the contract, the ext4 backend, the core, the client.
-- [ ] Step 3: `cd sw/userspace && make test && make sanitize && make analyze`,
-      then `cd sw/userspace/storage && make ext4-test` on Beast.
-- [ ] Step 4: commit.
+- [x] Step 1: failing tests — a full scan visits every entry exactly once; an
+      opaque cookie round-trips through the wire record; a cookie nothing
+      issued is refused rather than answered; a scan does not re-walk (assert
+      the backend's visit count).
+- [x] Step 2: the contract, the ext4 backend, the core, the client.
+- [x] Step 3: `cd sw/userspace && make test && make sanitize && make analyze`,
+      then `cd sw/userspace/storage && make ext4-test` on Beast — plus the
+      terminal gate, because `ls` over lwext4 is the only thing that proves the
+      real cursor and no host test reaches it.
+- [x] Step 4: commit.
+
+**The protocol went to version 2, with no version 1 compatibility.** A version 1
+client sends a directory index where this one reads a cursor; the two agree on
+every value except the ones a listing is made of. `ASTRA_VFS_VERSION_MIN` moved
+with it, so a mismatched pair is refused at HELLO instead of listing a directory
+wrongly. Nothing in this tree speaks version 1.
 
 ### Task 3: The catalog on the machine
 

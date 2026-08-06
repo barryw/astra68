@@ -49,14 +49,23 @@ typedef struct AstraVfsBackendOps {
                       const void *buffer, uint32_t length, uint32_t *moved);
     uint32_t (*stat)(void *context, const char *path, AstraVfsNodeInfo *info);
     /*
-     * Returns the entry at `index` in the directory at `path`. Index-addressed
-     * rather than cursor-addressed because a cursor is per-session state the
-     * service would have to reclaim when a client dies mid-scan, and the
-     * protocol is stateless per request by design.
+     * Returns one entry of the directory at `path`, resuming from `cookie`,
+     * and yields in `next` the cookie that reaches the entry after it. A
+     * `cookie` of zero starts a scan; running past the last entry is
+     * ASTRA_VFS_ERR_NOT_FOUND, which is how a listing ends rather than a
+     * failure.
+     *
+     * The cookie is the backend's own -- an offset, an index, whatever it can
+     * resume from in constant time. The service stores nothing and hands it
+     * back unread, so the protocol stays stateless per request and a client
+     * that dies mid-scan strands nothing. That was the reason this was
+     * index-addressed; a cookie keeps the property and drops the cost, because
+     * an index makes a backend walk from the start for every entry and a
+     * directory listing quadratic.
      */
-    uint32_t (*readdir)(void *context, const char *path, uint32_t index,
+    uint32_t (*readdir)(void *context, const char *path, uint64_t cookie,
                         char *name, uint32_t name_capacity,
-                        AstraVfsNodeInfo *info);
+                        AstraVfsNodeInfo *info, uint64_t *next);
     uint32_t (*mkdir)(void *context, const char *path);
     uint32_t (*unlink)(void *context, const char *path);
 } AstraVfsBackendOps;

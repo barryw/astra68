@@ -161,26 +161,34 @@ fake_stat(void *context, const char *path, AstraVfsNodeInfo *info)
     return ASTRA_VFS_OK;
 }
 
+/*
+ * The cookie is the slot after the one returned, so a scan resumes where it
+ * stopped without counting from the first node. `fake_readdir_scans` is how a
+ * test sees that a listing costs one visit per entry rather than one walk.
+ */
+static uint32_t fake_readdir_visits;
+
 static uint32_t
-fake_readdir(void *context, const char *path, uint32_t index, char *name,
-             uint32_t capacity, AstraVfsNodeInfo *info)
+fake_readdir(void *context, const char *path, uint64_t cookie, char *name,
+             uint32_t capacity, AstraVfsNodeInfo *info, uint64_t *next)
 {
-    uint32_t seen = 0u;
     uint32_t slot;
 
     (void)context;
     (void)path;
-    for (slot = 0u; slot < FAKE_NODE_MAX; ++slot) {
+    if (cookie > FAKE_NODE_MAX) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    for (slot = (uint32_t)cookie; slot < FAKE_NODE_MAX; ++slot) {
+        ++fake_readdir_visits;
         if (!fake.nodes[slot].used) {
             continue;
         }
-        if (seen == index) {
-            snprintf(name, capacity, "%s", fake.nodes[slot].path);
-            info->size = fake.nodes[slot].size;
-            info->kind = fake.nodes[slot].kind;
-            return ASTRA_VFS_OK;
-        }
-        ++seen;
+        snprintf(name, capacity, "%s", fake.nodes[slot].path);
+        info->size = fake.nodes[slot].size;
+        info->kind = fake.nodes[slot].kind;
+        *next = slot + 1u;
+        return ASTRA_VFS_OK;
     }
     return ASTRA_VFS_ERR_NOT_FOUND;
 }
@@ -544,6 +552,7 @@ test_client_through_transport(void)
     uint64_t size = 0u;
     uint16_t kind = 0u;
     uint32_t moved = 0u;
+    uint32_t status;
     char name[ASTRA_VFS_NAME_MAX];
     uint8_t buffer[32];
     static const char text[] = "pluggable";
@@ -575,12 +584,50 @@ test_client_through_transport(void)
     assert(size == sizeof(text) - 1u);
     assert(kind == ASTRA_VFS_KIND_FILE);
 
-    assert(astra_vfs_readdir(&client, "/", 0u, name, sizeof(name), &kind) ==
-           ASTRA_VFS_OK);
-    assert(name[0] != '\0');
-    /* Past the last entry is a clean end, not an error to guess at. */
-    assert(astra_vfs_readdir(&client, "/", 99u, name, sizeof(name), &kind) ==
-           ASTRA_VFS_ERR_NOT_FOUND);
+    {
+        /*
+         * A scan visits every entry exactly once and costs one visit per
+         * entry. Index-addressed, this walked from the first node for every
+         * entry, which is a listing that gets slower the longer it is -- and
+         * on a 30 MHz machine that is the difference between a directory you
+         * can list and one you cannot.
+         */
+        char seen[FAKE_NODE_MAX][ASTRA_VFS_NAME_MAX];
+        uint64_t cursor = 0u;
+        uint64_t previous;
+        uint32_t entries = 0u;
+        uint32_t at;
+
+        fake_readdir_visits = 0u;
+        for (;;) {
+            previous = cursor;
+            status = astra_vfs_readdir(&client, "/", cursor, name,
+                                       sizeof(name), &kind, &cursor);
+            if (status == ASTRA_VFS_ERR_NOT_FOUND) {
+                break;
+            }
+            assert(status == ASTRA_VFS_OK);
+            assert(name[0] != '\0');
+            /* A cursor that did not move is a listing that never ends. */
+            assert(cursor > previous);
+            assert(entries < FAKE_NODE_MAX);
+            for (at = 0u; at < entries; ++at) {
+                assert(strcmp(seen[at], name) != 0);
+            }
+            snprintf(seen[entries], sizeof(seen[entries]), "%s", name);
+            ++entries;
+        }
+        assert(entries >= 2u);
+        assert(fake_readdir_visits <= FAKE_NODE_MAX + entries);
+
+        /* Past the last entry is a clean end, not an error to guess at. */
+        assert(astra_vfs_readdir(&client, "/", cursor, name, sizeof(name),
+                                 &kind, &cursor) == ASTRA_VFS_ERR_NOT_FOUND);
+        /* A cursor nothing issued is refused rather than answered. */
+        assert(astra_vfs_readdir(&client, "/", FAKE_NODE_MAX + 1u, name,
+                                 sizeof(name), &kind,
+                                 &cursor) == ASTRA_VFS_ERR_INVALID);
+    }
 
     assert(astra_vfs_unlink(&client, "/dir/note.txt") == ASTRA_VFS_OK);
     assert(astra_vfs_stat(&client, "/dir/note.txt", &size, &kind) ==

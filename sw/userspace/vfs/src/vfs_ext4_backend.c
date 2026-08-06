@@ -300,15 +300,23 @@ ext4_backend_stat(void *context, const char *path, AstraVfsNodeInfo *info)
     return ASTRA_VFS_OK;
 }
 
+/*
+ * The cookie is lwext4's own iterator offset. `ext4_dir.next_off` is where the
+ * next entry begins and `ext4_dir_entry_next` resumes from it, so a scan seeks
+ * once and reads one entry instead of walking from the first entry every time.
+ * A listing of N entries costs N reads rather than N-squared, which is what
+ * EVENTS: needs and what every large directory needed anyway.
+ */
 static uint32_t
-ext4_backend_readdir(void *context, const char *path, uint32_t index,
-                     char *name, uint32_t capacity, AstraVfsNodeInfo *info)
+ext4_backend_readdir(void *context, const char *path, uint64_t cookie,
+                     char *name, uint32_t capacity, AstraVfsNodeInfo *info,
+                     uint64_t *next)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
     char full[ASTRA_VFS_EXT4_PATH_MAX];
     ext4_dir directory;
     const ext4_direntry *entry;
-    uint32_t seen = 0u;
+    uint32_t copied;
     int rc;
 
     if (!build_path(backend, path, full, sizeof(full))) {
@@ -318,31 +326,29 @@ ext4_backend_readdir(void *context, const char *path, uint32_t index,
     if (rc != EOK) {
         return status_of(rc);
     }
+    directory.next_off = cookie;
     for (;;) {
         entry = ext4_dir_entry_next(&directory);
         if (entry == NULL) {
             (void)ext4_dir_close(&directory);
             return ASTRA_VFS_ERR_NOT_FOUND; /* past the last entry */
         }
-        if (entry->name_length == 0u) {
-            continue;
-        }
-        if (seen == index) {
+        if (entry->name_length != 0u) {
             break;
         }
-        ++seen;
     }
     if ((uint32_t)entry->name_length + 1u > capacity) {
         (void)ext4_dir_close(&directory);
         return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
     }
-    for (seen = 0u; seen < entry->name_length; ++seen) {
-        name[seen] = (char)entry->name[seen];
+    for (copied = 0u; copied < entry->name_length; ++copied) {
+        name[copied] = (char)entry->name[copied];
     }
     name[entry->name_length] = '\0';
     info->size = 0u;
     info->kind = entry->inode_type == EXT4_DE_DIR ?
         ASTRA_VFS_KIND_DIRECTORY : ASTRA_VFS_KIND_FILE;
+    *next = directory.next_off;
     (void)ext4_dir_close(&directory);
     return ASTRA_VFS_OK;
 }

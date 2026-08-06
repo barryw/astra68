@@ -185,7 +185,7 @@ static void command_ls(int argc, char *const *argv)
 {
     char path[SHELL_PATH_MAX];
     char name[ASTRA_VFS_NAME_MAX];
-    uint32_t index = 0u;
+    uint64_t cursor = 0u;
     uint32_t shown = 0u;
     uint16_t kind = 0u;
     uint32_t status;
@@ -201,8 +201,8 @@ static void command_ls(int argc, char *const *argv)
         return;
     }
     for (;;) {
-        status = astra_vfs_readdir(storage(), path, index, name, sizeof(name),
-                                   &kind);
+        status = astra_vfs_readdir(storage(), path, cursor, name, sizeof(name),
+                                   &kind, &cursor);
         /* Running past the last entry is how a listing ends, not a failure. */
         if (status == ASTRA_VFS_ERR_NOT_FOUND)
             break;
@@ -215,7 +215,6 @@ static void command_ls(int argc, char *const *argv)
             astra_terminal_putc(&shell.terminal, '/');
         astra_terminal_putc(&shell.terminal, '\n');
         ++shown;
-        ++index;
     }
     if (shown == 0u)
         write_line("(empty)");

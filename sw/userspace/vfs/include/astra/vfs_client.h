@@ -83,10 +83,15 @@ uint32_t astra_vfs_write(AstraVfsClient *client, AstraVfsFile file,
 
 uint32_t astra_vfs_stat(AstraVfsClient *client, const char *path,
                         uint64_t *size, uint16_t *kind);
-/* Returns ASTRA_VFS_ERR_NOT_FOUND once `index` passes the last entry. */
+/*
+ * One entry, resuming from `cursor`; zero begins a scan and `*next` is what to
+ * pass for the entry after this one. Returns ASTRA_VFS_ERR_NOT_FOUND once a
+ * scan passes the last entry, which is how a listing ends rather than a
+ * failure.
+ */
 uint32_t astra_vfs_readdir(AstraVfsClient *client, const char *path,
-                           uint32_t index, char *name, uint32_t capacity,
-                           uint16_t *kind);
+                           uint64_t cursor, char *name, uint32_t capacity,
+                           uint16_t *kind, uint64_t *next);
 uint32_t astra_vfs_mkdir(AstraVfsClient *client, const char *path);
 uint32_t astra_vfs_unlink(AstraVfsClient *client, const char *path);
 

@@ -264,13 +264,14 @@ astra_vfs_stat(AstraVfsClient *client, const char *path, uint64_t *size,
 }
 
 uint32_t
-astra_vfs_readdir(AstraVfsClient *client, const char *path, uint32_t index,
-                  char *name, uint32_t capacity, uint16_t *kind)
+astra_vfs_readdir(AstraVfsClient *client, const char *path, uint64_t cursor,
+                  char *name, uint32_t capacity, uint16_t *kind,
+                  uint64_t *next)
 {
     uint32_t status;
     uint32_t at;
 
-    if (client == NULL || name == NULL || capacity == 0u) {
+    if (client == NULL || name == NULL || capacity == 0u || next == NULL) {
         return ASTRA_VFS_ERR_INVALID;
     }
     name[0] = '\0';
@@ -278,11 +279,12 @@ astra_vfs_readdir(AstraVfsClient *client, const char *path, uint32_t index,
     if (!set_path(&client->request, path)) {
         return ASTRA_VFS_ERR_INVALID;
     }
-    client->request.flags = index;
+    client->request.offset = cursor;
     status = exchange(client, ASTRA_VFS_OP_READDIR);
     if (status != ASTRA_VFS_OK) {
         return status;
     }
+    *next = client->reply.cursor;
     if (client->reply.count >= capacity || client->reply.count >= ASTRA_VFS_IO_MAX) {
         return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
     }
