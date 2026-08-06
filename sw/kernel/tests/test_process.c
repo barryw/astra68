@@ -46,6 +46,7 @@
 #include <astra/display.h>
 #include <astra/input.h>
 #include <astra/process.h>
+#include <astra/status.h>
 
 #include <assert.h>
 #include <stdint.h>
@@ -1411,6 +1412,11 @@ static void test_preemption_fault_containment_and_teardown(void)
     assert(offender.process_state == KERNEL_PROCESS_EXITING);
     assert(offender.thread_state == KERNEL_THREAD_DEAD);
     assert(offender.exit_reason == KERNEL_PROCESS_EXIT_USER_FAULT);
+    /*
+     * It never returned a status, so it must not report the one that means
+     * success. A waiter reading only this value has to see that it was killed.
+     */
+    assert(offender.exit_status == (uint32_t)ASTRA_STATUS_FAULTED);
     assert(offender.fault_vector == 2u);
     assert(offender.fault_address == 0x60000000u);
     assert(kernel_process_stats(&stats));
@@ -4285,7 +4291,13 @@ static void test_process_fault_death_reports_peer_dead(void)
                                    &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
     assert(next->data[1] == 0u);
-    assert(next->data[2] == 0u);
+    /*
+     * The waiter is told what killed it, not zero. Zero is what a program
+     * returns when it succeeded, and a waiter that reads only the status --
+     * which is the whole reason the status exists -- used to be told that a
+     * process which had crashed had finished cleanly.
+     */
+    assert(next->data[2] == (uint32_t)ASTRA_STATUS_FAULTED);
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
                KERNEL_PROCESS_CODE_BASE, 0u);
     memset(registers, 0, sizeof(registers));
@@ -6226,6 +6238,51 @@ static void test_bootstrap_capabilities(void)
     assert(after.free_frames == before.free_frames);
 }
 
+/*
+ * The verdict bit is the system's alone. A program that sets one in its own
+ * exit status is claiming the machine killed it, and the value is worth
+ * reading only if that claim cannot be made.
+ */
+static void test_a_program_cannot_forge_a_verdict(void)
+{
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    KernelProcessSnapshot process;
+    uint32_t process_id = 0u;
+
+    loader_build_image();
+    initialize_test();
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &process_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    registers[0] = ASTRA_SYSCALL_PROCESS_EXIT;
+    registers[1] = (uint32_t)ASTRA_STATUS_FAULTED;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_snapshot(0u, &process));
+    assert(process.exit_reason == KERNEL_PROCESS_EXIT_SYSCALL);
+    assert(process.exit_status == (uint32_t)ASTRA_STATUS_BAD_EXIT);
+
+    /* A status of its own is carried through untouched. */
+    loader_build_image();
+    initialize_test();
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &process_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    registers[0] = ASTRA_SYSCALL_PROCESS_EXIT;
+    registers[1] = (uint32_t)ASTRA_STATUS_PROGRAM_FIRST + 7u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_snapshot(0u, &process));
+    assert(process.exit_status == (uint32_t)ASTRA_STATUS_PROGRAM_FIRST + 7u);
+}
+
 static void test_initial_image_exit_is_reported(void)
 {
     const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
@@ -6581,6 +6638,7 @@ static void test_user_stack_grows_on_fault_and_guards_the_floor(void)
     assert(kernel_process_snapshot(0u, &process));
     assert(process.process_state == KERNEL_PROCESS_EXITING);
     assert(process.exit_reason == KERNEL_PROCESS_EXIT_USER_FAULT);
+    assert(process.exit_status == (uint32_t)ASTRA_STATUS_FAULTED);
     assert(process.fault_address == TEST_STACK_FLOOR(0) - 4u);
     assert(kernel_process_stats(&stats));
     assert(stats.user_faults == 1u);
@@ -6914,6 +6972,7 @@ int main(void)
     test_block_admission();
     test_block_admission_faults();
     test_bootstrap_capabilities();
+    test_a_program_cannot_forge_a_verdict();
     test_initial_image_exit_is_reported();
     test_user_stack_grows_on_fault_and_guards_the_floor();
     test_diagnostic_log_is_gated_and_sanitised();

@@ -5,6 +5,7 @@
 #include <astra/syscall.h>
 #include <astra/input.h>
 #include <astra/process.h>
+#include <astra/status.h>
 
 #include "area.h"
 #include "block.h"
@@ -982,11 +983,13 @@ static KernelProcessStatus wake_process_death(KernelProcess *process)
         process->process_state != KERNEL_PROCESS_EXITING ||
         process->exit_reason == KERNEL_PROCESS_EXIT_NONE)
         return KERNEL_PROCESS_INVALID_STATE;
+    /*
+     * The status is reported as it stands, never zeroed. A waiter that reads
+     * only the status used to see success for a process that had crashed.
+     */
     if (kernel_thread_wake_all_detail(
             &process->death_waiters, process->terminal_result,
-            process->terminal_result == ASTRA_SYSCALL_OK ?
-                process->exit_status : 0u,
-            true, &woken) != KERNEL_THREAD_OK)
+            process->exit_status, true, &woken) != KERNEL_THREAD_OK)
         return KERNEL_PROCESS_CORRUPT;
     scheduler_stats.process_death_wakeups += woken;
     return KERNEL_PROCESS_OK;
@@ -1319,7 +1322,25 @@ static KernelProcessStatus retire_current(KernelProcessExitReason reason,
     retiring = &processes[retiring_slot];
     retiring->process_state = KERNEL_PROCESS_EXITING;
     retiring->exit_reason = (uint8_t)reason;
-    retiring->exit_status = exit_status;
+    /*
+     * A process killed by its own fault never returned a status, and zero is
+     * the one value that must not stand in for one: it is what a program says
+     * when it succeeded. The verdict replaces it here, at the single point
+     * every process passes through on its way out, so that the death wait, the
+     * process info record, the snapshot and the kernel's own boot line all
+     * report the same answer rather than three of them agreeing by accident.
+     *
+     * The verdict bit is the system's alone, so a status carrying one did not
+     * come from the program whatever it claims. crt0 already refuses to exit
+     * with one; this is the same substitution for anything that did not come
+     * through crt0, and it is what makes the bit worth reading at all.
+     */
+    if (reason == KERNEL_PROCESS_EXIT_USER_FAULT)
+        retiring->exit_status = (uint32_t)ASTRA_STATUS_FAULTED;
+    else if ((exit_status & (uint32_t)ASTRA_STATUS_VERDICT) != 0u)
+        retiring->exit_status = (uint32_t)ASTRA_STATUS_BAD_EXIT;
+    else
+        retiring->exit_status = exit_status;
     retiring->terminal_result = reason == KERNEL_PROCESS_EXIT_USER_FAULT ?
         ASTRA_SYSCALL_PEER_DEAD : ASTRA_SYSCALL_OK;
     /*
@@ -3028,8 +3049,7 @@ static KernelProcessStatus prepare_process_death_wait(
         target->process_state == KERNEL_PROCESS_DEAD) {
         *ready = true;
         *wait_result = target->terminal_result;
-        *exit_status = target->terminal_result == ASTRA_SYSCALL_OK ?
-            target->exit_status : 0u;
+        *exit_status = target->exit_status;
         return KERNEL_PROCESS_OK;
     }
     if (target->process_state != KERNEL_PROCESS_CREATED &&

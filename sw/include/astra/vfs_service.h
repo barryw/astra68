@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+#include <astra/status.h>
 #include <astra/syscall.h>
 
 /*
@@ -77,24 +78,29 @@
  * leak which backend is behind it, which is exactly the coupling this whole
  * arrangement exists to prevent, and errno sets differ between implementations
  * anyway. A backend maps its own failures onto these.
+ *
+ * These are the machine's own status vocabulary rather than a set of their
+ * own -- see astra/status.h. The numbers are unchanged and are on the wire;
+ * the names stay because callers read them, and both spellings mean one
+ * value so the two can never drift apart.
  */
-#define ASTRA_VFS_OK              UINT32_C(0)
-#define ASTRA_VFS_ERR_PROTOCOL    UINT32_C(1)  /* malformed or wrong version */
-#define ASTRA_VFS_ERR_NOT_FOUND   UINT32_C(2)
-#define ASTRA_VFS_ERR_EXISTS      UINT32_C(3)
-#define ASTRA_VFS_ERR_NOT_DIR     UINT32_C(4)
-#define ASTRA_VFS_ERR_IS_DIR      UINT32_C(5)
-#define ASTRA_VFS_ERR_ACCESS      UINT32_C(6)
-#define ASTRA_VFS_ERR_NO_SPACE    UINT32_C(7)
-#define ASTRA_VFS_ERR_INVALID     UINT32_C(8)
-#define ASTRA_VFS_ERR_BAD_HANDLE  UINT32_C(9)
-#define ASTRA_VFS_ERR_LIMIT       UINT32_C(10) /* out of sessions or files */
-#define ASTRA_VFS_ERR_IO          UINT32_C(11)
-#define ASTRA_VFS_ERR_NOT_EMPTY   UINT32_C(12)
-#define ASTRA_VFS_ERR_UNSUPPORTED UINT32_C(13)
-#define ASTRA_VFS_ERR_BUSY        UINT32_C(14)
+#define ASTRA_VFS_OK              ((uint32_t)ASTRA_STATUS_OK)
+#define ASTRA_VFS_ERR_PROTOCOL    ((uint32_t)ASTRA_STATUS_PROTOCOL)
+#define ASTRA_VFS_ERR_NOT_FOUND   ((uint32_t)ASTRA_STATUS_NOT_FOUND)
+#define ASTRA_VFS_ERR_EXISTS      ((uint32_t)ASTRA_STATUS_EXISTS)
+#define ASTRA_VFS_ERR_NOT_DIR     ((uint32_t)ASTRA_STATUS_NOT_DIR)
+#define ASTRA_VFS_ERR_IS_DIR      ((uint32_t)ASTRA_STATUS_IS_DIR)
+#define ASTRA_VFS_ERR_ACCESS      ((uint32_t)ASTRA_STATUS_ACCESS)
+#define ASTRA_VFS_ERR_NO_SPACE    ((uint32_t)ASTRA_STATUS_NO_SPACE)
+#define ASTRA_VFS_ERR_INVALID     ((uint32_t)ASTRA_STATUS_INVALID)
+#define ASTRA_VFS_ERR_BAD_HANDLE  ((uint32_t)ASTRA_STATUS_BAD_HANDLE)
+#define ASTRA_VFS_ERR_LIMIT       ((uint32_t)ASTRA_STATUS_LIMIT)
+#define ASTRA_VFS_ERR_IO          ((uint32_t)ASTRA_STATUS_IO)
+#define ASTRA_VFS_ERR_NOT_EMPTY   ((uint32_t)ASTRA_STATUS_NOT_EMPTY)
+#define ASTRA_VFS_ERR_UNSUPPORTED ((uint32_t)ASTRA_STATUS_UNSUPPORTED)
+#define ASTRA_VFS_ERR_BUSY        ((uint32_t)ASTRA_STATUS_BUSY)
 /* The caller's buffer cannot hold what the reply carried; not a wire fault. */
-#define ASTRA_VFS_ERR_BUFFER_TOO_SMALL UINT32_C(15)
+#define ASTRA_VFS_ERR_BUFFER_TOO_SMALL ((uint32_t)ASTRA_STATUS_BUFFER_TOO_SMALL)
 
 /*
  * A file handle is a slot index plus a generation, so a stale handle is

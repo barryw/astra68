@@ -8,6 +8,7 @@
 #include <astra/lease_block.h>
 #include <astra/bytes.h>
 #include <astra/runtime.h>
+#include <astra/status.h>
 #include <astra/syscall.h>
 
 /*
@@ -262,5 +263,13 @@ astra_main(const AstraStartupInfo *startup)
     }
 
     park();
-    return (int)ASTRA_SUPERVISOR_STATUS_OK;
+    /*
+     * Unreachable -- the service is resident and parks forever -- but it is
+     * still the contract this file states, and success is zero like anything
+     * else on the machine. The tag was standing in for a proof of life back
+     * when a process that never reached user mode also exited zero; the
+     * verdict statuses in astra/status.h carry that now, so success no longer
+     * has to be spelled unusually to be believed.
+     */
+    return ASTRA_STATUS_OK;
 }
