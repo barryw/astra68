@@ -163,8 +163,9 @@ bool kernel_trace_stage_stats(KernelTraceStageStats *stats);
  * log that carries one is worse than a log that carries none.
  */
 bool kernel_trace_write_user(uint32_t message, uint32_t process,
-                             uint16_t thread, uint16_t flags,
-                             const void *payload, uint32_t payload_length);
+                             uint16_t thread, uint32_t activity,
+                             uint16_t flags, const void *payload,
+                             uint32_t payload_length);
 
 /*
  * Reads the user event at `slot`. Returns false when the slot is not a user

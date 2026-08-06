@@ -149,7 +149,15 @@ typedef struct AstraVfsRequest {
     uint32_t flags;         /* open modes, or a readdir index */
     uint64_t offset;
     uint32_t length;        /* bytes for READ/WRITE, at most ASTRA_VFS_IO_MAX */
-    uint32_t reserved;      /* must be zero */
+    /*
+     * What the caller was doing when it asked. The Kit fills this from the
+     * calling thread's current activity and the service adopts it for the
+     * duration of handling, so one request is one story across every process
+     * it touches -- and no caller writes correlation code to get it.
+     *
+     * Was `reserved, must be zero`, and zero still means no activity.
+     */
+    uint32_t activity;
     AstraVfsBody body;
 } AstraVfsRequest;
 

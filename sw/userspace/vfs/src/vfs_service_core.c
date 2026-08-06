@@ -404,13 +404,16 @@ astra_vfs_service_dispatch(AstraVfsService *service, uint32_t operation,
     ++service->stats.requests;
 
     /*
-     * Shape before meaning. A record whose own size or reserved field is wrong
-     * came from a different build of this protocol, and answering it as though
-     * the fields meant what this build thinks they mean is how a version skew
-     * turns into data loss instead of an error.
+     * Shape before meaning. A record whose own size is wrong came from a
+     * different build of this protocol, and answering it as though the fields
+     * meant what this build thinks they mean is how a version skew turns into
+     * data loss instead of an error.
+     *
+     * The activity is not checked. It is the caller's account of what it was
+     * doing, any value is as valid as any other, and a service that refused a
+     * request over one would be refusing work because of a log field.
      */
     if (request->size != (uint16_t)ASTRA_VFS_REQUEST_SIZE ||
-        request->reserved != 0u ||
         operation == 0u || operation > ASTRA_VFS_OP_MAX ||
         (operation_takes_path(operation) && !path_valid(request))) {
         ++service->stats.protocol_rejects;

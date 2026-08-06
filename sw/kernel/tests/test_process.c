@@ -6226,6 +6226,95 @@ static void test_bootstrap_capabilities(void)
  * exit status is claiming the machine killed it, and the value is worth
  * reading only if that claim cannot be made.
  */
+/*
+ * An activity is the thread's own, held by the kernel, and stamped on every
+ * event that thread emits. No call site passes one, because the call sites
+ * that matter are the ones that would forget.
+ */
+static void test_an_activity_is_the_threads_own(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    static const char line[] = "doing a thing";
+    KernelCpuContext *next;
+    KernelThreadSnapshot thread;
+    KernelSchedulerStats stats;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t user_text = KERNEL_PROCESS_STACK_TOP - 512u;
+    uint32_t process_id = 0u;
+    uint32_t first;
+    uint32_t second;
+
+    initialize_test();
+    assert(kernel_trace_init());
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, KERNEL_PROCESS_CODE_BASE, 0u);
+
+    /* A thread starts inside no story at all, and zero is how that reads. */
+    assert(kernel_thread_snapshot(0u, &thread));
+    assert(thread.activity == 0u);
+
+    /* Beginning one yields an id that is never zero -- zero already means
+     * "no activity", and an allocator that could return it would make the
+     * two indistinguishable. */
+    registers[0] = ASTRA_SYSCALL_ACTIVITY;
+    registers[1] = 0u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    first = next->data[1];
+    assert(first != 0u);
+    assert(kernel_thread_snapshot(0u, &thread));
+    assert(thread.activity == first);
+
+    /* The next one is a different story. */
+    registers[1] = 0u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    second = next->data[1];
+    assert(second != first && second != 0u);
+
+    /* Adopting is how a service joins the story it was called from. */
+    registers[1] = first;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[1] == first);
+    assert(kernel_thread_snapshot(0u, &thread));
+    assert(thread.activity == first);
+
+    /* And the event carries it without anybody saying so. */
+    assert(kernel_user_copy_to_asm(user_text, line, sizeof(line) - 1u) ==
+           KERNEL_USER_COPY_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_LOG_WRITE;
+    registers[1] = ASTRA_EVENT_MESSAGE_UNSTRUCTURED;
+    registers[2] = ASTRA_EVENT_LEVEL_NOTICE | ASTRA_EVENT_FLAG_INLINE_STRING;
+    registers[3] = user_text;
+    registers[4] = sizeof(line) - 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    {
+        KernelTraceUserRecord record;
+        KernelTraceHeader header;
+        uint8_t payload[ASTRA_EVENT_ARGUMENT_MAX];
+        uint32_t length = 0u;
+
+        assert(kernel_trace_header(&header));
+        assert(kernel_trace_read_user(header.write_index - 2u, &record,
+                                      payload, sizeof(payload), &length));
+        assert(record.activity == first);
+    }
+    assert(kernel_process_stats(&stats));
+    assert(stats.diagnostic_logs == 1u);
+}
+
 static void test_a_program_cannot_forge_a_verdict(void)
 {
     const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
@@ -6970,6 +7059,7 @@ int main(void)
     test_block_admission();
     test_block_admission_faults();
     test_bootstrap_capabilities();
+    test_an_activity_is_the_threads_own();
     test_a_program_cannot_forge_a_verdict();
     test_initial_image_exit_is_reported();
     test_user_stack_grows_on_fault_and_guards_the_floor();

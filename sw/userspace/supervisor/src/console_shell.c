@@ -29,6 +29,7 @@
 #include <astra/syscall.h>
 #include <astra/terminal.h>
 
+#include <astra/event_emit.h>
 #include <astra/vfs_assign.h>
 #include <astra/vfs_client.h>
 #include <astra/vfs_path.h>
@@ -162,6 +163,13 @@ static void report_status(const char *what, uint32_t status)
         "unsupported", "busy", "buffer too small"
     };
 
+    /*
+     * The screen tells the person; the event tells the machine. A refused
+     * command used to leave nothing behind at all once the line scrolled off,
+     * which is the failure this whole system exists to stop.
+     */
+    ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_WARNING,
+                 "command refused, status %u", status);
     astra_terminal_write(&shell.terminal, what);
     astra_terminal_write(&shell.terminal, ": ");
     if (status < (uint32_t)(sizeof(text) / sizeof(text[0]))) {
@@ -445,6 +453,19 @@ static void run_line(const char *line)
 
     if (astra_shell_parse(line, &words) != ASTRA_SHELL_OK || words.argc == 0)
         return;
+
+    /*
+     * A typed line is a unit of work, so it is where a story begins. Every
+     * event emitted from here until the next line -- by the shell, by the Kit,
+     * by the service and by the backend, because they are all downstream of
+     * this thread -- carries this activity, and reading one command's account
+     * is then reading one number.
+     */
+    (void)astra_activity_begin();
+    if (storage() != NULL)
+        storage()->activity = astra_activity_current();
+    ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
+                 "command accepted, %u words", (uint32_t)words.argc);
 
     if (shell_equal(words.argv[0], "help"))
         command_help();

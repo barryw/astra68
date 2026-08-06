@@ -125,6 +125,14 @@ typedef struct KernelThread {
     uint32_t timer_ticks;
     uint32_t run_count;
     uint32_t syscall_count;
+    /*
+     * What this thread is doing, for correlation. Set by the thread itself
+     * through ASTRA_SYSCALL_ACTIVITY and stamped on every event it emits, so
+     * no call site has to remember to pass one -- the ones that matter would
+     * be the ones that forgot. Zero means no activity, which is what an event
+     * outside any unit of work carries.
+     */
+    uint32_t activity;
     KernelHandle port_probe_handle;
     uint32_t port_probe_sequence;
     KernelHandle self_handle;
@@ -168,6 +176,7 @@ typedef struct KernelThreadSnapshot {
     uint32_t timer_ticks;
     uint32_t run_count;
     uint32_t syscall_count;
+    uint32_t activity;
     KernelHandle self_handle;
     uint16_t process_slot;
     uint16_t stack_slot;

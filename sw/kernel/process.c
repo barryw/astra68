@@ -114,6 +114,12 @@ static uint8_t deadline_preempt_pending;
 static uint8_t worker_active;
 static uint8_t milestone_progress_ready;
 static uint8_t process_pool_corrupt;
+/*
+ * One counter for the whole machine, so an activity id is unique across every
+ * process without anybody coordinating. Monotonic within a boot; a reader
+ * distinguishes boots by the boot event rather than by the id.
+ */
+static uint32_t next_activity;
 static uint32_t initial_image_process_id;
 static uint32_t initial_image_progress;
 static uint8_t initial_image_exited;
@@ -3939,6 +3945,26 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
      * a build with no debug surface grants it to nobody and this answers
      * ACCESS_DENIED to everyone.
      */
+    case ASTRA_SYSCALL_ACTIVITY: {
+        /*
+         * Ids come from one kernel counter, so they are unique across every
+         * process without anybody coordinating. Zero is never issued: it is
+         * what "no activity" means, and an allocator that could return it
+         * would make the two indistinguishable.
+         */
+        uint32_t requested = thread->context.data[1];
+
+        if (requested == 0u) {
+            ++next_activity;
+            if (next_activity == 0u)
+                next_activity = 1u;
+            current_thread->activity = next_activity;
+        } else {
+            current_thread->activity = requested;
+        }
+        thread->context.data[1] = current_thread->activity;
+        break;
+    }
     case ASTRA_SYSCALL_LOG_WRITE: {
         /*
          * An event append, and nothing gates it.
@@ -3986,7 +4012,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
          */
         if (kernel_trace_write_user(message, current->id,
                                     (uint16_t)current_thread->id,
-                                    (uint16_t)flags,
+                                    current_thread->activity, (uint16_t)flags,
                                     length != 0u ? payload : NULL, length)) {
             ++scheduler_stats.diagnostic_logs;
             scheduler_stats.diagnostic_log_bytes += length;
@@ -4005,7 +4031,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         record.flags = (uint16_t)flags;
         record.process = current->id;
         record.message = message;
-        record.activity = 0u;
+        record.activity = current_thread->activity;
         record.thread = (uint16_t)current_thread->id;
         record.payload_length = (uint16_t)length;
         kernel_process_diagnostic_log(&record, payload, length);

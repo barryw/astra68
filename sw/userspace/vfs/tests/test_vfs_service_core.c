@@ -445,10 +445,16 @@ test_malformed_records(void)
     assert(reply.status == ASTRA_VFS_ERR_PROTOCOL);
     assert(reply.size == ASTRA_VFS_REPLY_SIZE);
 
+    /*
+     * An activity is the caller's account of what it was doing, so any value
+     * is as valid as any other. This field used to be reserved-must-be-zero
+     * and a non-zero one was a protocol error; refusing work over a log field
+     * would be the service deciding what a caller may call its own story.
+     */
     begin_request(&request, session, "/a");
-    request.reserved = 1u;
+    request.activity = 0x1a2bu;
     astra_vfs_service_dispatch(&service, ASTRA_VFS_OP_STAT, &request, &reply);
-    assert(reply.status == ASTRA_VFS_ERR_PROTOCOL);
+    assert(reply.status != ASTRA_VFS_ERR_PROTOCOL);
 
     /* An unterminated path is a malformed record, not a long path. */
     begin_request(&request, session, NULL);

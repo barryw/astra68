@@ -413,8 +413,9 @@ static KernelTraceSlot *claim_slot(KernelTraceHeader *header)
 }
 
 bool kernel_trace_write_user(uint32_t message, uint32_t process,
-                             uint16_t thread, uint16_t flags,
-                             const void *payload, uint32_t payload_length)
+                             uint16_t thread, uint32_t activity,
+                             uint16_t flags, const void *payload,
+                             uint32_t payload_length)
 {
     const uint8_t *bytes = payload;
     KernelTraceHeader *header;
@@ -453,7 +454,7 @@ bool kernel_trace_write_user(uint32_t message, uint32_t process,
     record->flags = flags;
     record->process = process;
     record->message = message;
-    record->activity = 0u;
+    record->activity = activity;
     record->thread = thread;
     record->payload_length = (uint16_t)payload_length;
     trace_barrier();

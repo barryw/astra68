@@ -73,6 +73,19 @@ void astra_process_exit(uint32_t status) __attribute__((noreturn));
  */
 uint32_t astra_event_emit(uint32_t message, uint32_t flags,
                           const void *payload, uint32_t length);
+
+/*
+ * What this thread is doing. Begin one where a unit of work starts -- a
+ * keystroke reaching the shell, a launch, a boot step -- and every event
+ * emitted until the next one is part of that story. Adopting is how a service
+ * joins the story it was called from.
+ *
+ * Activities are flat. No parent, no spans: nesting brings lifetime questions,
+ * and a system must not report causality it cannot substantiate.
+ */
+uint32_t astra_activity_begin(void);
+uint32_t astra_activity_adopt(uint32_t activity);
+uint32_t astra_activity_current(void);
 /* A line of text, as a chain of ASTRA_EVENT_MESSAGE_UNSTRUCTURED events. */
 uint32_t astra_log_write(const void *bytes, uint32_t length);
 uint32_t astra_log(const char *text);

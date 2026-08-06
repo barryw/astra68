@@ -21,6 +21,17 @@ begin(AstraVfsClient *client)
     request->version = client->version != 0u ? client->version :
                                                ASTRA_VFS_VERSION;
     request->session = client->session;
+    /*
+     * Taken from the client rather than from a parameter. Correlation nobody
+     * has to remember is correlation that is there when it matters: the call
+     * sites that would forget one are exactly the ones being debugged.
+     *
+     * The Kit does not reach for the runtime to read it. A client belongs to
+     * one thread doing one thing at a time -- that is what a session is --
+     * so whoever owns the client sets this when the work starts, in one place
+     * rather than at every call.
+     */
+    request->activity = client->activity;
 }
 
 /*

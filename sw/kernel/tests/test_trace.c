@@ -179,7 +179,7 @@ static void test_a_user_event_carries_its_arguments(void)
     for (uint32_t index = 0u; index < sizeof(payload); ++index)
         payload[index] = (uint8_t)(index + 1u);
 
-    assert(kernel_trace_write_user(0x11223344u, 0x1000u, 7u,
+    assert(kernel_trace_write_user(0x11223344u, 0x1000u, 7u, 0x5150u,
                                    KERNEL_TRACE_LEVEL_WARNING, payload, 12u));
     assert(kernel_trace_read_user(0u, &user, read_back, sizeof(read_back),
                                   &length));
@@ -191,8 +191,8 @@ static void test_a_user_event_carries_its_arguments(void)
     assert(length == 12u);
     for (uint32_t index = 0u; index < length; ++index)
         assert(read_back[index] == payload[index]);
-    /* Nothing has filled one in yet, and zero is how a reader knows. */
-    assert(user.activity == 0u);
+    /* The activity the emitter was in, carried without a call site saying so. */
+    assert(user.activity == 0x5150u);
     /* The arguments are a slot of their own, and it says so. */
     assert(!kernel_trace_read_user(1u, &user, read_back, sizeof(read_back),
                                    &length));
@@ -206,7 +206,7 @@ static void test_an_event_with_no_arguments_costs_one_slot(void)
     uint32_t length = 7u;
 
     reset_ring();
-    assert(kernel_trace_write_user(1u, 0x1000u, 1u, KERNEL_TRACE_LEVEL_INFO,
+    assert(kernel_trace_write_user(1u, 0x1000u, 1u, 0u, KERNEL_TRACE_LEVEL_INFO,
                                    NULL, 0u));
     assert(kernel_trace_header(&header));
     assert(header.write_index == 1u);
@@ -214,7 +214,7 @@ static void test_an_event_with_no_arguments_costs_one_slot(void)
     assert(length == 0u);
 
     /* One with arguments costs two, and they are consecutive. */
-    assert(kernel_trace_write_user(2u, 0x1000u, 1u, KERNEL_TRACE_LEVEL_INFO,
+    assert(kernel_trace_write_user(2u, 0x1000u, 1u, 0u, KERNEL_TRACE_LEVEL_INFO,
                                    "ab", 2u));
     assert(kernel_trace_header(&header));
     assert(header.write_index == 3u);
@@ -242,25 +242,26 @@ static void test_argument_refusals(void)
      * argument is a wrong value rather than a missing one, and a log carrying
      * one is worse than a log carrying neither.
      */
-    assert(!kernel_trace_write_user(1u, 0x1000u, 1u, KERNEL_TRACE_LEVEL_INFO,
+    assert(!kernel_trace_write_user(1u, 0x1000u, 1u, 0u, KERNEL_TRACE_LEVEL_INFO,
                                     payload, sizeof(payload)));
     /* A length with no payload, and a payload with no length. */
-    assert(!kernel_trace_write_user(1u, 0x1000u, 1u, KERNEL_TRACE_LEVEL_INFO,
+    assert(!kernel_trace_write_user(1u, 0x1000u, 1u, 0u, KERNEL_TRACE_LEVEL_INFO,
                                     NULL, 4u));
-    assert(!kernel_trace_write_user(1u, 0x1000u, 1u, KERNEL_TRACE_LEVEL_INFO,
+    assert(!kernel_trace_write_user(1u, 0x1000u, 1u, 0u, KERNEL_TRACE_LEVEL_INFO,
                                     payload, 0u));
     /* A message id of zero names no message. */
-    assert(!kernel_trace_write_user(0u, 0x1000u, 1u, KERNEL_TRACE_LEVEL_INFO,
+    assert(!kernel_trace_write_user(0u, 0x1000u, 1u, 0u, KERNEL_TRACE_LEVEL_INFO,
                                     NULL, 0u));
     /* A level outside the five is a caller defect, not a level. */
     assert(!kernel_trace_write_user(1u, 0x1000u, 1u,
+                                    0u,
                                     KERNEL_TRACE_LEVEL_ERROR + 1u, NULL, 0u));
     /*
      * A flag this build does not know is a record it cannot render. Accepting
      * one silently means a reader shows the event as though the bit were
      * clear, which is a wrong answer rather than a refused one.
      */
-    assert(!kernel_trace_write_user(1u, 0x1000u, 1u, 0x8000u, NULL, 0u));
+    assert(!kernel_trace_write_user(1u, 0x1000u, 1u, 0u, 0x8000u, NULL, 0u));
 
     /* Nothing above reached the ring. */
     assert(kernel_trace_header(&header));
@@ -280,7 +281,7 @@ static void test_arguments_lost_to_a_wrap_are_reported_as_lost(void)
      * wrong value in a log is worse than an absent one.
      */
     reset_ring();
-    assert(kernel_trace_write_user(1u, 0x1000u, 1u, KERNEL_TRACE_LEVEL_INFO,
+    assert(kernel_trace_write_user(1u, 0x1000u, 1u, 0u, KERNEL_TRACE_LEVEL_INFO,
                                    "abcd", 4u));
     kernel_trace_test_overwrite_argument_slot(1u);
     assert(!kernel_trace_read_user(0u, &user, read_back, sizeof(read_back),
@@ -301,7 +302,7 @@ static void test_a_user_event_shares_the_one_ring(void)
     reset_ring();
     assert(kernel_trace_write_at(KERNEL_TRACE_EVENT_BOOT, 0u, 1u, 0u, 0u, 0u,
                                  0u));
-    assert(kernel_trace_write_user(9u, 0x1000u, 1u, KERNEL_TRACE_LEVEL_NOTICE,
+    assert(kernel_trace_write_user(9u, 0x1000u, 1u, 0u, KERNEL_TRACE_LEVEL_NOTICE,
                                    NULL, 0u));
     assert(kernel_trace_write_at(KERNEL_TRACE_EVENT_PANIC, 0u, 2u, 0u, 0u, 0u,
                                  0u));

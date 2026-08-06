@@ -203,3 +203,39 @@ astra_event_emit_packed(const AstraEventDescriptor *descriptor, uint32_t level,
     return astra_event_emit((uint32_t)(uintptr_t)descriptor, level,
                             length != 0u ? payload : NULL, length);
 }
+
+/*
+ * ponytail: one cached activity per process, not per thread. The kernel holds
+ * the truth per thread; this is what the Kit reads to marshal an activity into
+ * a request without a syscall per call. Correct while a process has one thread
+ * doing one thing at a time, which is the shell and the storage service today;
+ * per-thread storage is the upgrade when a process has two units of work at
+ * once.
+ */
+static uint32_t activity_cached;
+
+uint32_t
+astra_activity_begin(void)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_ACTIVITY, 0u, 0u, 0u, 0u, 0u, &result);
+    activity_cached = result.status == ASTRA_SYSCALL_OK ? result.value0 : 0u;
+    return activity_cached;
+}
+
+uint32_t
+astra_activity_adopt(uint32_t activity)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_ACTIVITY, activity, 0u, 0u, 0u, 0u, &result);
+    activity_cached = result.status == ASTRA_SYSCALL_OK ? result.value0 : 0u;
+    return activity_cached;
+}
+
+uint32_t
+astra_activity_current(void)
+{
+    return activity_cached;
+}

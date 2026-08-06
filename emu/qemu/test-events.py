@@ -18,6 +18,9 @@ It asserts three properties in one pass:
   * kernel events and user events are one ordered stream. The user event's
     sequence number falls among the kernel's, which is the property the whole
     "one ring" decision exists for.
+  * one command is one story. A refused command emits from the shell twice --
+    once accepting the line, once refusing it -- and both carry the same
+    non-zero activity, which nothing in the shell passed to either.
 """
 
 import argparse
@@ -31,6 +34,7 @@ import tempfile
 import threading
 import time
 
+COMMAND = "write sys:nope no"
 RING_ADDRESS = 0x020C4000
 RING_SIZE = 0x10000
 BOOT_MARKER = "stage 8"
@@ -66,6 +70,31 @@ class Qmp:
 
     def monitor(self, line):
         return self.execute("human-monitor-command", {"command-line": line})
+
+    def send(self, down, qcode):
+        self.execute("input-send-event", {"events": [
+            {"type": "key",
+             "data": {"down": down, "key": {"type": "qcode", "data": qcode}}}]})
+        time.sleep(0.02)
+
+    def key(self, qcode):
+        for down in (True, False):
+            self.send(down, qcode)
+
+    def type_line(self, text):
+        """A colon is shift and semicolon; assign names are case-insensitive,
+        so it is the only shifted key a command line here needs."""
+        codes = {" ": "spc", ".": "dot", "/": "slash", "-": "minus"}
+        for character in text:
+            if character in codes:
+                self.key(codes[character])
+            elif character == ":":
+                self.send(True, "shift")
+                self.key("semicolon")
+                self.send(False, "shift")
+            else:
+                self.key(character)
+        self.key("ret")
 
 
 def run(qemu, rom, image, deadline):
@@ -104,6 +133,10 @@ def run(qemu, rom, image, deadline):
         # emitted. The ring is retained RAM at a fixed address; the quotes
         # around the path are required, and their absence is one line of
         # "invalid char" from the monitor.
+        # A command that fails, so the shell emits both halves of a story:
+        # the line it accepted and the refusal it answered with.
+        qmp.type_line(COMMAND)
+        time.sleep(8)
         reply = qmp.monitor('pmemsave 0x%08x %d "%s"' %
                             (RING_ADDRESS, RING_SIZE, ring_path))
         if reply.get("return"):
@@ -167,6 +200,17 @@ def main():
         if not kernel or not (min(kernel) < sequence < max(kernel) or
                               sequence > min(kernel)):
             failures.append("the user event is not ordered among the kernel's")
+
+    # One command, one story: the shell's two events share an activity that
+    # nothing passed to either of them.
+    shell = [line for line in user if "command " in line]
+    activities = set(re.findall(r"act ([0-9a-f]+)", " ".join(shell)))
+    if len(shell) < 2:
+        failures.append("the shell emitted %d events for a command, not 2"
+                        % len(shell))
+    elif len(activities) != 1:
+        failures.append("the command's events carry %d activities: %s"
+                        % (len(activities), sorted(activities)))
 
     print("ring: %d records, %d wraps, %d dropped" %
           (len(lines), header["wraps"], header["dropped"]))

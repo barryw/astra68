@@ -108,6 +108,18 @@ deliberate and they are not yet done:
   invisible to it, so a build on Beast fails with "No rule to make target" for
   a file that exists on the Mac. Commit first, or `scp` the new files
   separately.
+- **`git ls-files | tar` ships whatever directory you are standing in.** Run it
+  from anywhere but the repo root and it scatters a subtree into Beast's root
+  -- `sw/userspace/supervisor` lands as `~/astra68/src`, `~/astra68/include`
+  and, worst, `~/astra68/Makefile` on top of nothing, which then shadows
+  nothing but confuses everything. Always `cd` to the repo root in the same
+  command. This cost two debugging rounds in one session.
+- **tar preserves mtimes, so a shipped file can look older than the object
+  built from its previous version.** The Mac and Beast do not agree about the
+  time, and make believes the timestamps: a source that definitely changed
+  produces no rebuild and no error. `find sw -name '*.[ch]' -exec touch {} +`
+  after extracting, or `make clean`. The symptom is a feature that is in the
+  source on Beast and absent from the binary.
 - **`scheduler_stats` moves between builds.** Reading counters through the QEMU
   monitor needs the symbol address from *that* build; `make K1_QUALIFICATION=1`
   leaves a different kernel in the tree than `make` does, and the address

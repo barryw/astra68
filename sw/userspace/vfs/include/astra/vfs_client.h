@@ -32,6 +32,12 @@ typedef struct AstraVfsClient {
     uint32_t session;
     uint16_t version;       /* the version agreed at connect */
     /*
+     * What the owner of this client is currently doing. Stamped on every
+     * request so one request is one story across every process it touches.
+     * Zero until somebody sets it, which reads as no activity.
+     */
+    uint32_t activity;
+    /*
      * The in-flight records live here rather than on the caller's stack, and
      * that is a requirement rather than a preference: a user thread gets one
      * 4 KiB stack, and at 224 bytes each a request/reply pair per frame sank

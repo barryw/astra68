@@ -50,6 +50,17 @@
 #define ASTRA_SYSCALL_CONSOLE_INFO     42
 #define ASTRA_SYSCALL_CONSOLE_WRITE    43
 #define ASTRA_SYSCALL_LOG_WRITE        44
+/*
+ * The calling thread's activity: what it is currently doing, for correlation.
+ * data[1] of zero begins a fresh one; anything else adopts that value, which
+ * is how a service joins the story it was called from. Both return the
+ * thread's current activity.
+ *
+ * The kernel holds it, per thread, so that every event is stamped without any
+ * call site passing one. A machine where correlation is a parameter is a
+ * machine where the events that matter are the ones that forgot it.
+ */
+#define ASTRA_SYSCALL_ACTIVITY         45
 
 /*
  * The event channel. A process that is not holding the display lease has no
