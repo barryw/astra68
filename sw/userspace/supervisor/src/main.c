@@ -9,6 +9,7 @@
 #include <astra/block_device.h>
 #include <astra/lease_block.h>
 #include <astra/bytes.h>
+#include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/status.h>
 #include <astra/syscall.h>
@@ -29,6 +30,15 @@
  * kernel turns into a panic, because nothing else can start what it would
  * have started.
  */
+
+/*
+ * The first image on the machine declares what it is, like every other one.
+ * The rule that every program carries its own provenance has no exceptions,
+ * and that is the only way a rule about every program survives the first
+ * program that finds it inconvenient. Layout spec 11.2.
+ */
+ASTRA_PROGRAM("supervisor", 0, 1, 0, "Barry Walker",
+              "Copyright 2026 Barry Walker");
 
 /*
  * Whether a terminal will follow the volume check, which decides if the check

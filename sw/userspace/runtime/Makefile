@@ -21,7 +21,7 @@ TARGET := build/m68k/libastrart.a
 CRT0 := build/m68k/crt0.o
 HOST_TEST := build/host/test_runtime
 
-all: $(TARGET) $(CRT0) size
+all: $(TARGET) $(CRT0) link-contract size
 
 $(TARGET): $(TARGET_OBJECTS)
 	@mkdir -p $(@D)
@@ -72,6 +72,40 @@ analyze:
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/event_catalog.c -o build/analyzer/event_catalog.o
 
+# The rule that every Astra image declares its own provenance, checked where
+# images are made rather than where headers are included. Two links against the
+# real astra_user.ld: one that must succeed and one that must fail.
+#
+# --gc-sections is on, matching the supervisor's link, because the collector is
+# the whole reason .astra_program needs KEEP -- a contract test that dropped the
+# flag would pass while the real build silently shipped no record.
+#
+# The successful image is then read back by tools/program_info.py. That is the
+# only check anywhere that the C struct and the Python parser agree: the tool's
+# own pytest builds its fixture by hand, which pins the format but cannot
+# notice the compiler laying the struct out differently.
+LINK_CONTRACT_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
+	-Wl,--build-id=none -Wl,--gc-sections -T astra_user.ld
+
+link-contract: tests/link_contract_with.c tests/link_contract_without.c \
+		astra_user.ld
+	@mkdir -p build/contract
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) \
+		$(LINK_CONTRACT_FLAGS) tests/link_contract_with.c \
+		-o build/contract/with.elf
+	@python3 ../../../tools/program_info.py build/contract/with.elf | \
+		grep -q '^contract 1\.2\.3$$' || \
+		{ echo "link contract: the record did not survive the link"; \
+		  python3 ../../../tools/program_info.py build/contract/with.elf; \
+		  exit 1; }
+	@if $(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) \
+		$(LINK_CONTRACT_FLAGS) tests/link_contract_without.c \
+		-o build/contract/without.elf >/dev/null 2>&1; then \
+		echo "link contract: an image with no ASTRA_PROGRAM record linked"; \
+		exit 1; \
+	fi
+	@echo "link contract: PASS"
+
 size: $(TARGET_OBJECTS) $(CRT0)
 	$(SIZE) $^
 
@@ -82,4 +116,4 @@ size: $(TARGET_OBJECTS) $(CRT0)
 clean:
 	rm -rf build
 
-.PHONY: all test sanitize analyze size clean
+.PHONY: all test sanitize analyze link-contract size clean

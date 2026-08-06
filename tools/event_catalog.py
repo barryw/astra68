@@ -67,8 +67,14 @@ def _name(table, index, what):
     raise CatalogError("unknown %s %d" % (what, index))
 
 
-def read_section(path):
-    """Returns (base_address, bytes) for .astra_events, big-endian ELF32."""
+def read_section(path, section=SECTION_NAME):
+    """Returns (base_address, bytes) for a named section of a big-endian ELF32.
+
+    The section name is a parameter because program_info.py in this directory
+    reads `.astra_program` the same way. Two copies of a section-header walk
+    would be two places for the same off-by-one, and this is already the module
+    trace_decode.py imports its ELF reading from.
+    """
     with open(path, "rb") as handle:
         data = handle.read()
     if data[:4] != b"\x7fELF":
@@ -90,10 +96,10 @@ def read_section(path):
     for index in range(e_shnum):
         name_offset, _, _, address, offset, size = header(index)
         end = names.index(b"\0", name_offset)
-        if names[name_offset:end].decode("ascii") != SECTION_NAME:
+        if names[name_offset:end].decode("ascii") != section:
             continue
         return address, data[offset:offset + size]
-    raise CatalogError("%s has no %s section" % (path, SECTION_NAME))
+    raise CatalogError("%s has no %s section" % (path, section))
 
 
 def parse(base, blob):

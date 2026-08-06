@@ -23,6 +23,9 @@ ASTRA_TEXT_BASE = 0x00100000;
 /* astra/event_descriptor.h's ASTRA_EVENT_CATALOG_BASE, which a linker script
  * cannot include. The two must agree; the runtime test checks that they do. */
 ASTRA_EVENT_CATALOG_BASE = 0xE0000000;
+/* astra/program.h's ASTRA_PROGRAM_SIZE, for the same reason. A disagreement
+ * here refuses every image at link time, which is as loud as a mistake gets. */
+ASTRA_PROGRAM_SIZE = 120;
 
 PHDRS
 {
@@ -46,6 +49,24 @@ SECTIONS
     } :text
 
     . = ALIGN(ASTRA_PAGE_SIZE);
+
+    /*
+     * What this image says it is: one ASTRA_PROGRAM record, and the assertion
+     * at the end of this file that there is exactly one.
+     *
+     * Loaded, unlike the event catalog below. Truth about a file is in the file
+     * (layout spec 11.4), so the record has to survive into the image that gets
+     * installed -- a `version` command reading an unstripped build would be
+     * answering about a different file than the one that runs.
+     *
+     * KEEP, because --gc-sections is on and nothing references this record by
+     * name: it is found by walking the section, which a collector cannot see.
+     */
+    .astra_program : {
+        __astra_program_start = .;
+        KEEP(*(.astra_program))
+        __astra_program_end = .;
+    } :rodata
 
     .rodata : {
         *(.rodata .rodata.*)
@@ -98,3 +119,16 @@ SECTIONS
         *(.gnu.attributes)
     }
 }
+
+/*
+ * Every Astra program declares its own provenance, and this is what makes that
+ * a rule rather than a habit: an image with no ASTRA_PROGRAM record does not
+ * link. Two records are caught earlier and more usefully, by the duplicate
+ * `astra_program` symbol naming both files.
+ *
+ * Layout spec 11.2. The supervisor declares one too -- it is the first image on
+ * the machine and the rule has no exceptions, which is the only way a rule
+ * about every program survives the first program that finds it inconvenient.
+ */
+ASSERT(__astra_program_end - __astra_program_start == ASTRA_PROGRAM_SIZE,
+       "this image declares no ASTRA_PROGRAM record; see astra/program.h")

@@ -170,12 +170,44 @@ The supervisor declares one too — it is the first image on the machine and the
 rule has no exceptions, which is the only way a rule about every program
 survives the first program that finds it inconvenient.
 
-- [ ] Step 1: the record, the macro, the linker assertion, and a host test that
+- [x] Step 1: the record, the macro, the linker assertion, and a host test that
       an image missing it does not link.
-- [ ] Step 2: `tools/program_info.py` reads it out of an ELF, with a pytest
+- [x] Step 2: `tools/program_info.py` reads it out of an ELF, with a pytest
       case, so a person can ask what a file is before running it.
-- [ ] Step 3: the userspace gate and the cross-build on Beast.
-- [ ] Step 4: commit.
+- [x] Step 3: the userspace gate and the cross-build on Beast.
+- [x] Step 4: commit.
+
+**Three things the build settled.**
+
+- **The record is loaded, unlike the event catalog beside it.** Layout §11.4 is
+  the reason: truth about a file is in the file, so a `version` command has to
+  read the provenance off the image as *installed*, not off an unstripped build
+  in somebody's tree. `.astra_program` sits at the head of the rodata segment
+  and survives the `objcopy` that strips `.astra_events`. It costs the ROM 120
+  bytes: 88,099 to 88,219 of text, which is the record and nothing else.
+- **Two mechanisms, because they catch different mistakes.** The linker's
+  `ASSERT` refuses an image with no record. A *second* record is caught earlier
+  and far more usefully by the duplicate `astra_program` symbol, which names
+  both files — the macro's object is deliberately not static for that reason.
+  A string too long for its field is a `_Static_assert`, not a truncation: a cut
+  copyright notice is a legal statement nobody made.
+- **The link contract is a make target, not a host test.** `make link-contract`
+  in the runtime links `tests/link_contract_with.c` and
+  `tests/link_contract_without.c` against the real `astra_user.ld` with
+  `--gc-sections` on — the collector is the whole reason the section needs
+  `KEEP`, and a check that dropped the flag would pass while the real build
+  shipped no record. It then reads the linked image back with
+  `tools/program_info.py`, which is the only place anything checks that the C
+  struct and the Python parser agree; the tool's own pytest builds its fixture
+  by hand, which pins the format but cannot notice the compiler laying the
+  struct out differently. It runs as part of `make all`, because that is the
+  step that already needs a cross toolchain.
+
+**`build_id` is zero and says so.** The field is in the record and
+`ASTRA_BUILD_ID` overrides it, but nothing defines one yet: the events spec's
+process-start event is what needs a build id to be real, and a number that
+looks like provenance and is not would be worse than an honest zero.
+**Trigger:** the process-start event, or the second catalog.
 
 ### Task 3: Streams
 
