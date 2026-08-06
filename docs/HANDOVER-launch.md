@@ -1,10 +1,11 @@
 # Astra 68 — Handover: the loader, and what is left of milestone 1
 
-Date: 2026-08-07. Written to be read cold in a fresh session.
+Date: 2026-08-07, updated 2026-08-06 after tasks 2 and 2b. Written to be read
+cold in a fresh session.
 
-A program can launch a program. `ASTRA_SYSCALL_PROCESS_CREATE` landed with the
-rule that makes it safe — a launch creates no authority — and the five tasks
-after it turn that into `COMMANDS:events` running from the prompt.
+A program can launch a program, a launcher has wrappers for it, and every image
+now declares what it is. The three tasks left turn that into `COMMANDS:events`
+running from the prompt.
 
 **Everything is on `main`.** `origin/main` is still at `d1fef0c`; everything
 since is local and unpushed.
@@ -13,19 +14,23 @@ since is local and unpushed.
 
 ## 1. Resume here
 
-**Task 2 of `docs/superpowers/plans/2026-08-07-launch-milestone-1.md`.**
+**Task 3 of `docs/superpowers/plans/2026-08-07-launch-milestone-1.md`.**
 
 The plan has six tasks and one was added while task 1 was being built:
 
 | Task | What | State |
 |---|---|---|
 | 1 | the launch syscall | **done**, `3090f1a` |
-| 2 | runtime wrappers, and seeding an assign table from a capability table | next |
-| 2b | `ASTRA_PROGRAM`, mandatory provenance, link fails without it | added 2026-08-07 |
-| 3 | streams — `STDOUT`, `STDERR`, `STDIN` as grants, not numbers | |
+| 2 | runtime wrappers, and seeding an assign table from a capability table | **done**, `d0bd9a3` |
+| 2b | `ASTRA_PROGRAM`, mandatory provenance, link fails without it | **done**, `5be6f15` |
+| 3 | streams — `STDOUT`, `STDERR`, `STDIN` as grants, not numbers | next |
 | 4 | the shell launches by name; `COMMANDS:` bound; `status` proves it | |
 | 5 | the storage protocol over ports | |
 | 6 | `events` becomes `COMMANDS:events`; the builtin is deleted | |
+
+Each finished task has a "what the build settled" block under it in the plan.
+Read task 2's and 2b's before task 3 — one of them is a decision task 3 has to
+make, below.
 
 Design authority: `docs/superpowers/specs/2026-08-07-program-launch-design.md`,
 and `2026-08-06-filesystem-layout-design.md` §2.5 (lookup), §11 (what a file is)
@@ -72,23 +77,43 @@ So before a child can be handed a service handle, `kernel_port_handle_retain`
 has to exist and the port endpoints have to be installed cloneable. That is
 task 5's first step, not a surprise in the middle of it.
 
-## 4. Task 2, concretely
+## 4. What tasks 2 and 2b built, and the one decision they left task 3
 
-**Files:** `sw/userspace/runtime/include/astra/runtime.h`,
-`sw/userspace/runtime/src/launch.c` (new),
-`sw/userspace/runtime/tests/test_runtime.c`,
-`sw/userspace/vfs/src/vfs_assign.c`
+**Task 2** — `astra_launch` and `astra_process_wait` in
+`sw/userspace/runtime/src/launch.c`, and `astra_assign_seed` in
+`sw/userspace/vfs/src/vfs_assign.c`.
 
-1. `astra_launch(image, length, grants, count, arguments, &handle, &id)` and
-   `astra_process_wait(handle, &status)` — thin wrappers, tested against the
-   syscall mock in `test_runtime.c`, which asserts what each register carries.
-2. Seeding: a launched program's namespace *is* its capability table, so the
-   runtime turns `AstraStartupCapability[]` into an `AstraAssignTable`. Name and
-   rights come straight across; **roots do not exist in the published table yet**
-   — the launch spec's §2 has `root_offset` in the grant and the published
-   `AstraStartupCapability` has nowhere to put one. Bind at the mount root for
-   now and add the root when the first grant needs one, which is a deliberate
-   deferral rather than an oversight.
+- `astra_process_wait` takes a **deadline** the plan's signature did not, and
+  zero polls. The supervisor hosts the services its child calls, so it may never
+  block on one; task 4's serving wait is a poll in the loop that already pumps
+  everything else.
+- Both wrappers clear their outputs before anything, including before their own
+  refusal. `exit_status` is published only when the wait established one.
+- `astra_assign_seed` binds every published capability except `PROCESS` and
+  `THREAD`. Roots do not travel in the published table yet — the launch spec's
+  §2 has `root_offset` in the grant and `AstraStartupCapability` has nowhere to
+  put one — so every binding is at its mount's own root.
+
+**The decision task 3 inherits.** Seeding binds *every* capability that is not
+`PROCESS` or `THREAD`, and a `STDOUT` grant would be caught by that and bound as
+though it were a mount. So task 3 has to say which grants are namespace entries.
+`AstraLaunchGrant` already has a `flags` word and it is **unused and not
+propagated** — `KernelProcessBootstrapCapability` in `sw/kernel/process.c` has
+no field for it, so carrying a flag across is roughly four lines of kernel and
+one test. That is the same deferral as `root_offset` and this is the grant that
+needs it. Decide it before writing the stream client, not after.
+
+**Task 2b** — `sw/include/astra/program.h`, the `ASSERT` at the end of
+`sw/userspace/runtime/astra_user.ld`, and `tools/program_info.py`.
+
+- `ASTRA_PROGRAM(name, major, minor, patch, author, copyright)` emits one
+  120-byte record into `.astra_program`. No record, no link.
+- The record is **loaded** and survives the strip, unlike the event catalog:
+  `python3 tools/program_info.py <any Astra ELF>` works on the installed image.
+- `make link-contract` in the runtime is the check, and it runs inside
+  `make all`. Every new program in `sw/userspace/commands/` needs one
+  `ASTRA_PROGRAM` line or it will not link — that is the point, but it is also
+  the first error task 4 will hit.
 
 ## 5. Working on this machine
 
@@ -118,7 +143,8 @@ python3 emu/qemu/test-events.py  ... same arguments
 python3 emu/qemu/time-boot.py    ... --runs 5 --budget 1.0
 ```
 
-On the Mac: `python3 -m pytest tools/tests/`. **Reap QEMU** after a gate —
+On the Mac: `python3 -m pytest tools/tests/` (38 cases) and
+`python3 -m pytest sw/boot/tests/`. **Reap QEMU** after a gate —
 `pkill -f qemu-system-m68k` — because a lingering emulator makes the next gate
 look like a machine that will not boot.
 
