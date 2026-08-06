@@ -4,13 +4,15 @@
  * This is the glue the design conversation called glue: it pumps keys from the
  * input device into the line editor, runs the command the editor hands back,
  * and pushes the resulting cells at the display lease. The parts worth keeping
- * are underneath it -- the cell model, the keymap, the line editor -- and the
- * commands here call lwext4 directly because the supervisor already holds the
- * mounted volume. A VFS service takes that over when there is one, and the
- * dispatch below is what changes.
+ * are underneath it -- the cell model, the keymap, the line editor.
  *
- * Paths are absolute inside the mount point. A working directory is kept as a
- * string and joined here rather than in lwext4, which has no notion of one.
+ * It names no filesystem. Every command reaches storage through the protocol
+ * in astra/vfs_client.h, like any other client would, and this file is built
+ * without lwext4 on its include path so a filesystem call reappearing here
+ * fails to compile rather than being noticed in review.
+ *
+ * Paths are absolute within the volume. A working directory is kept as a
+ * string and joined here, because the protocol has no notion of one.
  */
 
 #include <console_shell.h>
@@ -24,9 +26,9 @@
 #include <astra/syscall.h>
 #include <astra/terminal.h>
 
-#include <ext4.h>
+#include <astra/vfs_client.h>
+#include <vfs_host.h>
 
-#define SHELL_MOUNT_POINT "/vol/"
 #define SHELL_PATH_MAX 256u
 #define SHELL_READ_CHUNK 128u
 
@@ -86,7 +88,7 @@ static int shell_append(char *destination, uint32_t capacity, const char *text)
 static int shell_resolve(const char *name, char *out, uint32_t capacity)
 {
     out[0] = '\0';
-    if (!shell_append(out, capacity, SHELL_MOUNT_POINT))
+    if (!shell_append(out, capacity, "/"))
         return 0;
     if (name == NULL || name[0] == '\0') {
         return shell_append(out, capacity, shell.directory);
@@ -99,6 +101,12 @@ static int shell_resolve(const char *name, char *out, uint32_t capacity)
     if (shell.directory[0] != '\0' && !shell_append(out, capacity, "/"))
         return 0;
     return shell_append(out, capacity, name);
+}
+
+/* The one place the shell reaches storage. NULL when no volume is mounted. */
+static AstraVfsClient *storage(void)
+{
+    return supervisor_vfs_client();
 }
 
 static void write_line(const char *text)
@@ -124,46 +132,65 @@ static void write_number(uint32_t value)
         astra_terminal_putc(&shell.terminal, (uint8_t)digits[--index]);
 }
 
-static void report_errno(const char *what, int code)
+/*
+ * Protocol statuses, not errno. The shell cannot know what filesystem answered
+ * and has no business printing its error numbers; these are the same values
+ * any client of the storage protocol sees.
+ */
+static void report_status(const char *what, uint32_t status)
 {
+    static const char *const text[] = {
+        "ok", "protocol error", "not found", "already exists",
+        "not a directory", "is a directory", "access denied", "no space",
+        "invalid", "bad handle", "limit reached", "I/O error", "not empty",
+        "unsupported", "busy", "buffer too small"
+    };
+
     astra_terminal_write(&shell.terminal, what);
-    astra_terminal_write(&shell.terminal, ": failed, error ");
-    write_number((uint32_t)code);
+    astra_terminal_write(&shell.terminal, ": ");
+    if (status < (uint32_t)(sizeof(text) / sizeof(text[0]))) {
+        astra_terminal_write(&shell.terminal, text[status]);
+    } else {
+        astra_terminal_write(&shell.terminal, "status ");
+        write_number(status);
+    }
     astra_terminal_putc(&shell.terminal, '\n');
 }
 
 static void command_ls(int argc, char *const *argv)
 {
     char path[SHELL_PATH_MAX];
-    ext4_dir directory;
-    const ext4_direntry *entry;
+    char name[ASTRA_VFS_NAME_MAX];
+    uint32_t index = 0u;
     uint32_t shown = 0u;
-    int rc;
+    uint16_t kind = 0u;
+    uint32_t status;
 
+    if (storage() == NULL) {
+        write_line("ls: no volume");
+        return;
+    }
     if (!shell_resolve(argc > 1 ? argv[1] : NULL, path, sizeof(path))) {
         write_line("ls: path too long");
         return;
     }
-    rc = ext4_dir_open(&directory, path);
-    if (rc != EOK) {
-        report_errno("ls", rc);
-        return;
-    }
     for (;;) {
-        entry = ext4_dir_entry_next(&directory);
-        if (entry == NULL)
+        status = astra_vfs_readdir(storage(), path, index, name, sizeof(name),
+                                   &kind);
+        /* Running past the last entry is how a listing ends, not a failure. */
+        if (status == ASTRA_VFS_ERR_NOT_FOUND)
             break;
-        if (entry->name_length == 0u)
-            continue;
-        /* "." and ".." are real entries; showing them is honest. */
-        astra_terminal_write_bytes(&shell.terminal, entry->name,
-                                   entry->name_length);
-        if (entry->inode_type == EXT4_DE_DIR)
+        if (status != ASTRA_VFS_OK) {
+            report_status("ls", status);
+            return;
+        }
+        astra_terminal_write(&shell.terminal, name);
+        if (kind == ASTRA_VFS_KIND_DIRECTORY)
             astra_terminal_putc(&shell.terminal, '/');
         astra_terminal_putc(&shell.terminal, '\n');
         ++shown;
+        ++index;
     }
-    (void)ext4_dir_close(&directory);
     if (shown == 0u)
         write_line("(empty)");
 }
@@ -172,8 +199,8 @@ static void command_cd(int argc, char *const *argv)
 {
     char path[SHELL_PATH_MAX];
     char candidate[SHELL_PATH_MAX];
-    ext4_dir directory;
-    int rc;
+    uint16_t kind = 0u;
+    uint32_t status;
 
     if (argc < 2 || shell_equal(argv[1], "/")) {
         shell.directory[0] = '\0';
@@ -191,6 +218,10 @@ static void command_cd(int argc, char *const *argv)
     }
     if (shell_equal(argv[1], "."))
         return;
+    if (storage() == NULL) {
+        write_line("cd: no volume");
+        return;
+    }
 
     /* Verified before it is adopted, so the prompt never lies. */
     candidate[0] = '\0';
@@ -212,12 +243,15 @@ static void command_cd(int argc, char *const *argv)
         write_line("cd: path too long");
         return;
     }
-    rc = ext4_dir_open(&directory, path);
-    if (rc != EOK) {
-        report_errno("cd", rc);
+    status = astra_vfs_stat(storage(), path, NULL, &kind);
+    if (status != ASTRA_VFS_OK) {
+        report_status("cd", status);
         return;
     }
-    (void)ext4_dir_close(&directory);
+    if (kind != ASTRA_VFS_KIND_DIRECTORY) {
+        write_line("cd: not a directory");
+        return;
+    }
     (void)memcpy(shell.directory, candidate, sizeof(shell.directory));
 }
 
@@ -225,10 +259,15 @@ static void command_cat(int argc, char *const *argv)
 {
     char path[SHELL_PATH_MAX];
     uint8_t chunk[SHELL_READ_CHUNK];
-    ext4_file file;
-    size_t moved = 0u;
-    int rc;
+    AstraVfsFile file;
+    uint64_t offset = 0u;
+    uint32_t moved = 0u;
+    uint32_t status;
 
+    if (storage() == NULL) {
+        write_line("cat: no volume");
+        return;
+    }
     if (argc < 2) {
         write_line("cat: needs a file");
         return;
@@ -237,30 +276,38 @@ static void command_cat(int argc, char *const *argv)
         write_line("cat: path too long");
         return;
     }
-    rc = ext4_fopen(&file, path, "rb");
-    if (rc != EOK) {
-        report_errno("cat", rc);
+    status = astra_vfs_open(storage(), path, ASTRA_VFS_OPEN_READ, &file, NULL,
+                            NULL);
+    if (status != ASTRA_VFS_OK) {
+        report_status("cat", status);
         return;
     }
     for (;;) {
-        rc = ext4_fread(&file, chunk, sizeof(chunk), &moved);
-        if (rc != EOK) {
-            report_errno("cat", rc);
+        status = astra_vfs_read(storage(), file, offset, chunk, sizeof(chunk),
+                                &moved);
+        if (status != ASTRA_VFS_OK) {
+            report_status("cat", status);
             break;
         }
+        /* A short read is normal: one message carries a bounded payload. */
         if (moved == 0u)
             break;
         astra_terminal_write_bytes(&shell.terminal, chunk, moved);
+        offset += moved;
     }
-    (void)ext4_fclose(&file);
+    (void)astra_vfs_close(storage(), file);
     astra_terminal_putc(&shell.terminal, '\n');
 }
 
 static void command_mkdir(int argc, char *const *argv)
 {
     char path[SHELL_PATH_MAX];
-    int rc;
+    uint32_t status;
 
+    if (storage() == NULL) {
+        write_line("mkdir: no volume");
+        return;
+    }
     if (argc < 2) {
         write_line("mkdir: needs a name");
         return;
@@ -269,20 +316,25 @@ static void command_mkdir(int argc, char *const *argv)
         write_line("mkdir: path too long");
         return;
     }
-    rc = ext4_dir_mk(path);
-    if (rc != EOK)
-        report_errno("mkdir", rc);
+    status = astra_vfs_mkdir(storage(), path);
+    if (status != ASTRA_VFS_OK)
+        report_status("mkdir", status);
 }
 
 /* write NAME TEXT... -- creates or truncates, then writes the rest of the line. */
 static void command_write(int argc, char *const *argv)
 {
     char path[SHELL_PATH_MAX];
-    ext4_file file;
-    size_t moved = 0u;
-    int rc;
+    AstraVfsFile file;
+    uint64_t offset = 0u;
+    uint32_t moved = 0u;
+    uint32_t status;
     int index;
 
+    if (storage() == NULL) {
+        write_line("write: no volume");
+        return;
+    }
     if (argc < 2) {
         write_line("write: needs a name");
         return;
@@ -291,44 +343,60 @@ static void command_write(int argc, char *const *argv)
         write_line("write: path too long");
         return;
     }
-    rc = ext4_fopen(&file, path, "wb");
-    if (rc != EOK) {
-        report_errno("write", rc);
+    status = astra_vfs_open(storage(), path,
+                            ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+                                ASTRA_VFS_OPEN_TRUNCATE,
+                            &file, NULL, NULL);
+    if (status != ASTRA_VFS_OK) {
+        report_status("write", status);
         return;
     }
     for (index = 2; index < argc; ++index) {
-        uint32_t length = shell_strlen(argv[index]);
+        const char *word = argv[index];
+        uint32_t length = shell_strlen(word);
+        uint32_t sent = 0u;
 
-        rc = ext4_fwrite(&file, argv[index], length, &moved);
-        if (rc != EOK) {
-            report_errno("write", rc);
-            break;
+        /*
+         * Looping over a short write rather than treating one as an error.
+         * A message carries a bounded payload today and a ring will still
+         * transfer short later, so the caller has to be written this way
+         * regardless.
+         */
+        while (sent < length) {
+            status = astra_vfs_write(storage(), file, offset + sent,
+                                     word + sent, length - sent, &moved);
+            if (status != ASTRA_VFS_OK) {
+                report_status("write", status);
+                goto finish;
+            }
+            if (moved == 0u) {
+                write_line("write: stalled");
+                goto finish;
+            }
+            sent += moved;
         }
-        if (moved != length) {
-            /* A short write is not an error code, so say what happened. */
-            astra_terminal_write(&shell.terminal, "write: short, ");
-            write_number((uint32_t)moved);
-            astra_terminal_write(&shell.terminal, " of ");
-            write_number(length);
-            astra_terminal_putc(&shell.terminal, '\n');
-            break;
+        offset += sent;
+        status = astra_vfs_write(storage(), file, offset,
+                                 index + 1 < argc ? " " : "\n", 1u, &moved);
+        if (status != ASTRA_VFS_OK) {
+            report_status("write", status);
+            goto finish;
         }
-        rc = ext4_fwrite(&file, index + 1 < argc ? " " : "\n", 1u, &moved);
-        if (rc != EOK) {
-            report_errno("write", rc);
-            break;
-        }
+        offset += moved;
     }
-    rc = ext4_fclose(&file);
-    if (rc != EOK)
-        report_errno("write", rc);
+finish:
+    (void)astra_vfs_close(storage(), file);
 }
 
 static void command_rm(int argc, char *const *argv)
 {
     char path[SHELL_PATH_MAX];
-    int rc;
+    uint32_t status;
 
+    if (storage() == NULL) {
+        write_line("rm: no volume");
+        return;
+    }
     if (argc < 2) {
         write_line("rm: needs a name");
         return;
@@ -337,9 +405,9 @@ static void command_rm(int argc, char *const *argv)
         write_line("rm: path too long");
         return;
     }
-    rc = ext4_fremove(path);
-    if (rc != EOK)
-        report_errno("rm", rc);
+    status = astra_vfs_unlink(storage(), path);
+    if (status != ASTRA_VFS_OK)
+        report_status("rm", status);
 }
 
 static void command_help(void)
@@ -460,7 +528,15 @@ static void feed_key(uint32_t code)
 void console_shell_run(uint32_t display, uint32_t input,
                        int volume_ready)
 {
-    AstraInputEvent events[ASTRA_INPUT_READ_BATCH_MAX];
+    /*
+     * Static, not automatic. A user thread gets one 4 KiB stack, and this
+     * function sits at the bottom of every command's call chain -- shell, Kit,
+     * service, backend, then lwext4's own write path, which is the deepest
+     * thing in the system. A batch buffer here is paid for by every frame
+     * above it. Moving it out of the frame is the difference between `write`
+     * working and faulting.
+     */
+    static AstraInputEvent events[ASTRA_INPUT_READ_BATCH_MAX];
     uint32_t columns = 0u;
     uint32_t rows = 0u;
 

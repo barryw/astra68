@@ -7,12 +7,13 @@ ANALYZER_CC ?= gcc
 RUNTIME := ../runtime
 STORAGE := ../storage
 ALLOC := ../alloc
+VFS := ../vfs
 SHELL_DIR := ../shell
 TERMINAL_DIR := ../terminal
 LWEXT4 := ../../../third_party/lwext4
 CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include \
 	-I$(STORAGE)/include -I../metrics/include -I$(ALLOC)/include \
-	-I$(SHELL_DIR)/include -I$(TERMINAL_DIR)/include
+	-I$(SHELL_DIR)/include -I$(TERMINAL_DIR)/include -I$(VFS)/include
 # The volume check speaks lwext4 as well as Astra and links freestanding, so it
 # needs the vendored headers, the build profile, and the libc shims.
 EXT4_CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
@@ -31,13 +32,15 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 # firmware carries and pages the loader maps on every boot.
 LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 	-Wl,--build-id=none -Wl,--gc-sections -T $(RUNTIME)/astra_user.ld
-SOURCES := src/supervisor.c src/main.c src/volume.c src/console_shell.c
-OBJECTS := build/m68k/supervisor.o build/m68k/main.o \
+SOURCES := src/supervisor.c src/main.c src/volume.c src/console_shell.c \
+	src/vfs_host.c
+OBJECTS := build/m68k/supervisor.o build/m68k/main.o build/m68k/vfs_host.o \
 	build/m68k/volume.o build/m68k/console_shell.o
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 STORAGE_LIB := $(STORAGE)/build/m68k/libastrablock.a
 EXT4_LIB := $(STORAGE)/build/m68k/libastraext4.a
 ALLOC_LIB := $(ALLOC)/build/m68k/libastraalloc.a
+VFS_LIB := $(VFS)/build/m68k/libastravfs.a
 SHELL_LIB := $(SHELL_DIR)/build/m68k/libastrashell.a
 TERMINAL_LIB := $(TERMINAL_DIR)/build/m68k/libastraterminal.a
 RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0.o
@@ -63,6 +66,7 @@ libraries:
 	$(MAKE) -C $(ALLOC) all
 	$(MAKE) -C $(STORAGE) $(STORAGE_LIB:$(STORAGE)/%=%)
 	$(MAKE) -C $(STORAGE) $(EXT4_LIB:$(STORAGE)/%=%)
+	$(MAKE) -C $(VFS) all
 	$(MAKE) -C $(SHELL_DIR) all
 	$(MAKE) -C $(TERMINAL_DIR) all
 
@@ -71,17 +75,20 @@ libraries:
 # archives are named as prerequisites so a rebuilt library relinks the image.
 $(TARGET): $(OBJECTS) $(RUNTIME)/astra_user.ld $(RUNTIME_CRT0) $(EXT4_LIB) \
 		$(STORAGE_LIB) $(ALLOC_LIB) $(RUNTIME_LIB) $(SHELL_LIB) \
-		$(TERMINAL_LIB)
+		$(TERMINAL_LIB) $(VFS_LIB)
 	@mkdir -p $(@D)
 	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(RUNTIME_CRT0) $(OBJECTS) \
-		$(EXT4_LIB) $(STORAGE_LIB) $(ALLOC_LIB) $(TERMINAL_LIB) \
+		$(VFS_LIB) $(EXT4_LIB) $(STORAGE_LIB) $(ALLOC_LIB) $(TERMINAL_LIB) \
 		$(SHELL_LIB) $(RUNTIME_LIB) -lgcc
 
 build/m68k/%.o: src/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
 
-build/m68k/console_shell.o: src/console_shell.c
+# vfs_host binds lwext4 to the storage protocol, so it is the only file here
+# besides volume.c that gets the vendored headers. console_shell.c deliberately
+# does not: if a filesystem call reappears in the shell, it fails to compile.
+build/m68k/vfs_host.o: src/vfs_host.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(EXT4_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) \
 		$(DEPFLAGS) -c $< -o $@

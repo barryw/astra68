@@ -19,6 +19,8 @@
 
 #include <volume.h>
 
+#include <vfs_host.h>
+
 #include <astra/alloc.h>
 #include <astra/block.h>
 #include <astra/bytes.h>
@@ -218,6 +220,15 @@ supervisor_verify_volume(AstraBlockDevice *block, int keep_mounted)
      * run in that case.
      */
     if (keep_mounted && failure == 0u) {
+        /*
+         * The volume stays mounted for the storage service, not for the
+         * terminal: nothing above this line touches lwext4 any more, and the
+         * terminal reaches the volume through the protocol like any other
+         * client would.
+         */
+        if (!supervisor_vfs_start(VOLUME_MOUNT_POINT)) {
+            return ASTRA_SUPERVISOR_FAIL_VOLUME;
+        }
         (void)astra_progress(ASTRA_SUPERVISOR_STAGE_VOLUME_VERIFIED);
         return 0u;
     }
