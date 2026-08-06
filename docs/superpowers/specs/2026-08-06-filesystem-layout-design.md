@@ -1,7 +1,10 @@
 # Astra namespace and filesystem layout
 
 Date: 2026-08-06
-Status: design, approved in conversation; not implemented
+Status: design, approved in conversation. §1.1–§1.4 are built; everything else
+is not. §1.6 and §1.7 were added after the first three tasks landed, to answer
+how a second volume is named and what it means to join one to a name that
+already exists.
 
 Scope: what names exist, what they point at, what the system sees at startup,
 where configuration lives, and the rules that keep a person from breaking the
@@ -102,7 +105,104 @@ of resolving to whatever occupies the slot. Silently resolving to the wrong
 disk is the Unix mount-point mistake and the block layer already tracks the
 generations needed to avoid it.
 
-### 1.6 No symbolic links
+### 1.6 A second volume is named by its label, never by its slot
+
+There is no `DH0:`, `DH1:`, `DH2:`. Numbering volumes by the order they were
+discovered is `/dev/sda` with a colon on the end: plug a card reader in before
+power-on and the disk renames itself, a `CONFIG:` line naming `DH1:` means a
+different disk on a different machine, and after a hot-plug nobody can say which
+disk they are looking at. §1.5 exists to prevent exactly that, and a slot number
+would reintroduce it as a naming convention.
+
+**A volume's label is its name.** A volume labelled `PHOTOS` mounts as
+`PHOTOS:`. Move the disk to another Astra and it is still `PHOTOS:`, because the
+name travelled with the medium rather than with the socket. This is the one part
+of the Amiga's three namespaces worth keeping: its *volume* name followed the
+disk, and only its *device* name named the socket.
+
+| The Amiga had | Astra |
+|---|---|
+| `DH0:`, the device — a socket | nothing. A drive is a block capability, not a path; you format the drive you hold a handle to, and it has no name in this namespace at all. |
+| `Work:`, the volume — a label | kept, and it is now the only way a mount acquires a name |
+| `SYS:`, `LIBS:`, the assigns | kept, and now the same mechanism as the above |
+
+The boot volume is `SYS:` **by role, not by label**: it is the volume the system
+was started from, which is the sense the Amiga's `SYS:` also had. Its label is
+whatever it happens to be, and nothing may depend on that label being any
+particular string.
+
+Three cases, each with one answer:
+
+- **A volume with no label** is not bound. The mounter reports what it saw to a
+  caller holding the right to ask, and a person binds it by naming it. Nothing
+  becomes reachable without someone saying so, which is §1.1's rule and not a
+  new one.
+- **Two volumes with the same label.** The first bound wins; the second is
+  reported and left unbound rather than silently shadowing it. The label is a
+  name and the uuid is the identity (§1.4), so this is a name collision and is
+  answered like one.
+- **A bound volume that leaves.** The binding stays and fails as *that volume is
+  not present*. Media generation is already tracked by the block layer.
+
+### 1.7 One name may cover several volumes
+
+An assign may name an **ordered list** of `(mount, root, rights)` rather than one
+of them. Lookup tries each member in order and the first hit answers.
+
+This is the Amiga's multi-directory assign, and it is the honest way to answer
+"I want more room in `WORK:`". A second volume joined to `WORK:` extends what
+that name reaches without the two disks becoming one thing.
+
+**It is not, and must never become, block-level spanning.** Concatenating two
+devices under one filesystem — LVM, a device-mapper stripe, a multi-device
+filesystem — is refused for this machine:
+
+- ext4 does not span devices, so it would mean a volume manager underneath
+  lwext4, on a 68030, on a bounded allocator. The cost is enormous and the
+  benefit is that one number is larger.
+- It makes both media **one failure domain**. Remove the second disk and the
+  whole volume is destroyed, including everything that was on the first one.
+  On a single-user machine with removable media, a design where pulling a card
+  corrupts the boot volume is wrong on its face, and it contradicts §7 and §3.5
+  outright.
+
+A union has the recoverable failure instead: a member that is gone takes only
+the files that were on it, and every other member still answers.
+
+The rules that make it predictable:
+
+- **A member is joined explicitly, never by coincidence of label.** A disk
+  labelled `work` appearing in a slot must not silently join `WORK:` — that is
+  a mechanism for handing someone a card that shadows the files they read every
+  day. Joining is a line in `CONFIG:startup` or a command a person ran.
+- **Creation goes to the primary**, which is the first member holding write
+  rights and is fixed when the binding is made. Never "whichever has the most
+  free space": a person must be able to answer *which disk is this file on*
+  without looking.
+- **Shadowing is first-hit, and the order is stated.** Two members carrying the
+  same name means the later one is invisible. This is the same two-places,
+  one-stated-order rule as command lookup in §2.5, and it needs the same thing
+  §2.5 needs — a way to ask which member answered.
+- **Rights are per member.** A read-only member under a writable union is the
+  useful case, not an edge one: shipped content that a person's own volume
+  overrides, which is §5's `DEFAULTS:`/`CONFIG:` layering at the namespace level
+  instead of inside one reader.
+- **A missing member is skipped and said out loud, once.** The union keeps
+  working; a name that silently returns less than it did yesterday is worse than
+  a name that says why.
+- **The `..` rule is unaffected.** Resolution still produces one member and one
+  path within that member's root, and no member's root can be climbed out of.
+  A union adds candidates, never an escape.
+
+**The cost, stated before it is paid: listing a union directory.** The storage
+protocol addresses `readdir` by index and the ext4 backend reopens the directory
+per entry, so one listing is already quadratic; a union multiplies that by the
+member count and adds a duplicate-name check whose memory is proportional to the
+directory rather than bounded. Union listing therefore waits on `readdir`
+becoming a cursor. Lookup, open, read and write do not — they stop at the first
+member that answers and cost one extra attempt per member that does not.
+
+### 1.8 No symbolic links
 
 The native filesystem has none. Assigns are the aliasing mechanism, and links
 would add loops, resolution races, and subtree escapes to do a job already
@@ -481,6 +581,9 @@ bugs. An NVRAM TLV is reserved for the boot-attempt counter.
 | `console_shell.c` | `/`-rooted paths and `shell_resolve` become assign-rooted |
 | `vfs_ext4_backend.c` | mount-point prefixing becomes a bound mount handle |
 | VFS client Kit | assign table, resolution, and the rule that `..` stops at a root |
+| `AstraAssign` | one `(mount, root, rights)` becomes an ordered list of them (§1.7) |
+| `ASTRA_VFS_OP_READDIR` | index-addressed today; a union listing needs a cursor (§1.7) |
+| The mounter | nothing enumerates volumes; the supervisor finds one partition and stops (§1.6) |
 | `ASTRA_SYSCALL_LOG_WRITE` | appends to the trace ring; console becomes a sink |
 | `AstraStartupInfo` | gains the launch context and the list of granted objects |
 | NVRAM TLVs | state-volume identity; failsafe flag; reserved boot-attempt counter |
@@ -495,3 +598,9 @@ bugs. An NVRAM TLV is reserved for the boot-attempt counter.
 - System update: `SYS:` is a binding to a volume identity, so A/B images are
   two volumes and a rebind. Nothing here precludes it; nothing here specifies
   it.
+- The mounter service: what it does when media arrives, what a person is shown,
+  and what the command that binds a volume by hand looks like. §1.6 fixes the
+  naming rule and leaves the service to its own spec.
+- Where a union's membership is written down, and what `CONFIG:startup` says.
+  §1.7 fixes the semantics and not the syntax, which waits on the shell
+  language like every other startup line.
