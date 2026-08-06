@@ -203,10 +203,9 @@ record.
 
 ### 6.2 Emission is accounted, and loss is recorded
 
-Universal emission needs a bound. Each process has an emission budget; events
-beyond it are dropped and counted. When the ring overflows before the service
-drains it, the service records *lost N events* rather than dropping silently —
-the same rule the input FIFO already follows for overflow.
+Universal emission needs a bound; §8.4 is the bound. When the ring overflows
+before the service drains it, the service records *lost N events* rather than
+dropping silently — the same rule the input FIFO already follows for overflow.
 
 A log that quietly loses records is worse than one that admits it, because
 everything read from it afterwards is an assumption.
@@ -245,18 +244,88 @@ machine.
 
 ---
 
-## 8. Storage
+## 8. Retention: what rolls off, and when
 
-`EVENTS:` holds a bounded on-disk ring with a size budget, dropping oldest.
-It never grows without limit, because a machine that will not boot after
-logging too much about not booting is `/var/log` in a nicer hat.
+Runaway logs are the failure that bites every system, and a single bounded ring
+with drop-oldest is not enough to prevent it. It solves the disk filling and
+leaves the worse problem: one subsystem in a retry loop evicting the failure
+you were looking for.
 
-The kernel trace ring is the transport, not the store: the service drains it
-into `EVENTS:` and the disk ring is what survives a reboot. History is
-therefore bounded twice — by the ring for the live window, by the budget for
-the durable one.
+### 8.1 Level decides the store; each store has its own budget
 
----
+Not time. Time-based expiry with no size bound fills disks; a size bound with
+no structure loses signal to noise.
+
+| Tier | Holds | Sizing |
+|---|---|---|
+| `presented` | events the person was shown — the user-visible bit | tiny volume, longest life; this is the notification history |
+| `record` | notice, warning, error | the default working history |
+| `detail` | info | largest volume, shortest life |
+| — | debug | **never persists**: live subscription only, dropped at drain |
+
+Independent budgets are the point. A subsystem screaming at `info` can evict
+only `info`. It cannot reach the errors, and it cannot reach what the person
+was told.
+
+### 8.2 The boot ring
+
+The earliest events are the most valuable and a first-in-first-out store
+evicts them first. A small dedicated ring keeps the first N events of the last
+M boots, always, outside the tier budgets.
+
+Boot is when a debugger cannot be attached and when the most expensive failures
+happen. This is the cheapest possible fix for "the log rolled before I got
+there".
+
+### 8.3 Identical events coalesce
+
+Same message id, same arguments, within a window: one stored record with a
+repeat count and a last-seen tick. Syslog's "last message repeated 500 times",
+except structured — the count and the span both survive, rather than both being
+lost.
+
+This is the largest single source of log bloat and it is nearly free here,
+because an event is already an id and typed arguments rather than a formatted
+line.
+
+Coalescing happens at drain, so a **stored** record is the §1.1 ring record
+plus a repeat count and a last-seen tick. The ring record itself never changes
+shape; the kernel does no matching.
+
+### 8.4 Emission is rate limited per subsystem
+
+A token bucket — a sustained rate and a burst — per subsystem. A loop that
+emits a million events spends its own budget, and the excess is counted as loss
+**attributed to that subsystem**, so a reader sees `storage lost 4,201 events`
+rather than a history that is mysteriously short.
+
+Throttling at the source is what keeps the store's rules simple: there is one
+ring per tier, and no subsystem has a reserved share of it. The consequence,
+stated rather than hidden: within a tier, a subsystem that sits just under its
+rate for hours still evicts older events belonging to a quieter one.
+
+**Eviction is recorded** — what was dropped, and from which subsystem — so if
+guaranteed per-subsystem floors turn out to be needed, that case gets made from
+evidence rather than from taste. Adding floors later changes the store layout,
+which is why the evidence is collected now.
+
+### 8.5 Logging may never cause the failure
+
+- **Emitting is a copy into the kernel ring.** Never a disk write, never a
+  block. A program's syscall does not wait for storage, ever.
+- **The service drains off the critical path.** A slow or full disk becomes
+  loss markers, not a stalled machine.
+- **The events service may not emit an event caused by handling an event.**
+  That feedback loop is how a logging subsystem takes a machine down, and the
+  rule against it has to be structural rather than careful.
+- **A broken retention configuration means defaults**, loudly — the layout
+  spec's parse-fully-or-not-at-all rule already requires this.
+
+### 8.6 Where the stores live
+
+`EVENTS:` holds the tiers and the boot ring. The kernel trace ring is the
+transport, not the store: history is bounded twice, by the ring for the live
+window and by the budgets for the durable one.
 
 ## 9. What this changes in existing code
 
@@ -272,8 +341,9 @@ the durable one.
 
 ## 10. Open questions
 
-- The emission budget's actual numbers, which need measurement rather than
-  invention.
+- The actual numbers: tier budgets, token-bucket rates, the boot ring's N and
+  M, and the coalescing window. All of them want measurement rather than
+  invention, and §8.4's eviction accounting is what will provide it.
 - Whether the kernel's existing trace events get message ids too, or stay a
   separate enum the reader special-cases.
 - How a person adjusts per-subsystem levels at runtime, and whether that is
