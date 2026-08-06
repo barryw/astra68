@@ -468,6 +468,9 @@ its installation with its existence.
 
 ### 4.1 A bundle is a directory
 
+An application's metadata — its icon, its name for a person, what it opens —
+lives here rather than beside it. See §11.3.
+
 An application is a directory containing everything it needs. Installing is
 copying it into `APPS:`; removing it is deleting it. There is no installer, no
 registry, no receipt database, and no files left behind in four other places.
@@ -702,3 +705,114 @@ bugs. An NVRAM TLV is reserved for the boot-attempt counter.
   naming rule and leaves the service to its own spec.
 Union assigns are **not** an open question. §1.7 decided against building them
 and named the trigger that would reopen it.
+
+---
+
+## 11. What a file is, and what says so
+
+Added 2026-08-07, when launching made "is this runnable?" a question somebody
+had to answer.
+
+### 11.1 Type is content
+
+`sw/kernel/elf.c` already decides what an executable is: the magic, 32-bit
+big-endian, `ET_EXEC`, `EM_68K`, `e_flags` of zero, a 32-byte program header
+entry, and a `PT_GNU_STACK` carrying execute is a refusal. That acceptance
+profile is the type check and it is the only one that decides whether bytes run.
+
+**Nothing else may substitute for it.** A type recorded beside a file is a claim
+the loader has to verify anyway, so trusting it buys nothing and costs the one
+property worth having: what makes something executable is what is in it, never
+what it is called or what some other file says about it.
+
+This machine already types by content everywhere — `AEVD` on an event
+descriptor, `ATRC` on the trace ring, `STOR` on the storage protocol — so the
+rule is not new, it is the house style written down: **an Astra file format
+begins with a four-byte tag and a version, and that is its type.** Bytes with no
+tag anybody knows are a document, which is the honest default rather than an
+error.
+
+**There is no execute bit.** Running a program you can already read is not an
+escalation, because a launch creates no authority (`2026-08-07-program-launch-design.md`
+§1.1) — the child gets a subset of what the launcher holds. `chmod +x` answers a
+question that only exists where authority is ambient.
+
+Refused, with the reasons: **extensions**, which are typing by string and §1.4
+already says identity is the object; **a sidecar per file**, the Amiga's `.info`,
+which doubles the entries in every directory and separates from what it
+describes the first time somebody copies one; **extended attributes**, which
+would bind the machine's model to what one backend happens to implement, and the
+handler contract has no operation for them.
+
+### 11.2 A command carries its own provenance, and the link fails without it
+
+Every program in `COMMANDS:` states who wrote it, which version it is, and who
+holds the copyright. Not by convention — the linker refuses an image that does
+not.
+
+```c
+ASTRA_PROGRAM("events", 1, 0, 0, "Barry Walker",
+              "Copyright 2026 Barry Walker");
+```
+
+The macro emits one fixed-size record into `.astra_program`, the same way
+`ASTRA_EVENT` emits a descriptor into `.astra_events`, and `astra_user.ld`
+asserts the section is exactly one record long. A program with none does not
+link, and a program with two does not either.
+
+| Field | Bytes | Why |
+|---|---|---|
+| magic, `APRG` | 4 | it types itself, per §11.1 |
+| record version | 2 | this record outlives this design |
+| major, minor, patch | 6 | semantic versioning, as numbers rather than a string nobody can compare |
+| build id | 4 | which build, joined to the events spec's process-start event |
+| name | 24 | what it calls itself, which need not be what it was installed as |
+| author | 32 | |
+| copyright | 48 | |
+
+Mandatory because the alternative is what every other system has: a fleet of
+files nobody can attribute, and a version question answered by a changelog if
+one was kept. A machine that can say *this is `events` 1.0.0, by whom, built
+when* about every program it holds is answering support questions that otherwise
+cost an afternoon each — and the cost is 120 bytes and one line at the top of a
+source file.
+
+**Reading it is a host-tool operation first.** Off the machine it is a section
+in an ELF, read the way `tools/event_catalog.py` reads the catalog. On the
+machine it arrives when something needs it — a `version` command, or a desktop
+showing what it is about to run — and that is the same order the event catalog
+was built in, for the same reason.
+
+### 11.3 An application's metadata is in its bundle
+
+A bundle is already a directory with a manifest (§4.1), so an application's
+icon, its name for a person, and what it can open live there — beside the
+program, travelling with it, one thing to install and one thing to remove.
+
+The Amiga's `.info` did three jobs at once, and they are three different
+questions:
+
+| Question | Answer |
+|---|---|
+| What does this file look like | its type's icon (§11.1), not its own |
+| What does this *application* look like | its bundle's resources |
+| What opens this | a binding per type in `CONFIG:`, never a tool named per file |
+
+A per-file custom icon is the one thing genuinely given up. The trigger to
+revisit is a person asking to change one, and the answer then is a file per
+directory rather than a file per file.
+
+### 11.4 Truth is in the file; a directory may cache it
+
+A desktop listing five hundred files would open every one of them to read four
+bytes, which is five hundred round trips at 30 MHz. That is a real cost and it
+points at stored metadata — so the rule that keeps stored metadata from becoming
+the index this design refuses elsewhere:
+
+> **Truth is in the file. A directory may hold a rebuildable cache of it.**
+
+A cache may be stale, deleted or absent and everything still works, slower.
+An index that *decides* something can be none of those. Nothing may resolve a
+name, choose a program, or answer "what is this" from a cache without the file
+being able to overrule it, and any cache this machine grows has to be
+reconstructible by reading the directory it describes.
