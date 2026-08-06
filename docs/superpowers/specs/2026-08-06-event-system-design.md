@@ -1,9 +1,15 @@
 # Astra event and logging system
 
 Date: 2026-08-06
-Status: design, approved in conversation. §1.1's record, §6.1's authority
-reversal and §6's one-stream rule are built; the macro, the catalog, activity,
-the service and the `events` command are not.
+Status: design, approved in conversation. Built: §1.1's record and ring, §2's
+macro and descriptor section, §3's catalog as read by host tools, §4's activity,
+§6.1's authority reversal and §6's one-stream rule. Not built: the service and
+its tiers (§8), the catalog on the machine, `EVENTS:` (§7) and the `events`
+command.
+
+§7 was rewritten on 2026-08-06: `EVENTS:` is a synthetic tree served through the
+existing VFS backend seam, not a bespoke query protocol. §4's cross-process
+adoption is on the wire and waits on the port transport.
 
 Depends on `2026-08-06-filesystem-layout-design.md`, which fixes where the
 store lives and settles that program lines and kernel events share one ordered
@@ -240,33 +246,93 @@ everything read from it afterwards is an assumption.
 
 ## 7. Reading
 
-### 7.1 A service, queried from the terminal first
+### 7.1 `EVENTS:` is a synthetic tree
 
-The events service owns the store; nothing else holds `EVENTS:`. It answers
-bounded queries — by activity, level, subsystem, process, time range — and a
-live subscription.
+The events service owns the store and publishes it **as a filesystem**.
+`EVENTS:` is the second synthetic tree beside `PROC:`, served through the same
+node contract a disk is served through, with the text rendered at read time.
 
-**The terminal client is the first client and stays first-class.** A
-Console-style window is a second client of the same protocol, not a replacement
-for it, and nothing about the store or the protocol assumes a GUI exists.
+```
+EVENTS:
+  boot/
+    current/
+      all  notice  warning  error
+    -1/  -2/                        the boot ring, §8.2
+  activity/
+    0000001a                        one request across every process
+  subsystem/
+    storage/  shell/  vfs/
+```
+
+Reading history is `cat`. Watching it is re-reading a file that grew, which is
+what `--follow` becomes. Narrowing it is naming a different file. Nothing needs
+a bespoke client, and the machine gains a queryable log without gaining a
+protocol.
+
+**This is not a new mechanism, and choosing it is not ambition.**
+`docs/OBSERVABILITY.md` already imposed the requirement that makes it work —
+nodes generated at read time, bounded cookie-based enumeration, nothing assuming
+a stable on-disk size — and already said that the constraint that matters is
+that *no special case is needed* to add a tree beside `PROC:`. A private
+events-only door would be exactly that special case, and it would be more code:
+`AstraVfsBackendOps` is an existing, host-tested seam with one implementation
+behind it, so an events backend is a few hundred lines and no new wire format.
+
+### 7.2 The rights on the assign are the authority
+
+§6.1 makes reading the privileged half. The privilege is the binding: `EVENTS:`
+is granted read-only, by the startup manifest, to whoever holds observer
+authority. A process granted nothing does not see the tree at all.
+
+That is one authority model rather than two — the same mechanism that makes
+`SYS:` unwritable — and it has a consequence worth stating: **nothing can `rm`
+an event**, because the namespace offers no verb that would. A store whose
+deletion policy is enforced by a command is a store with an undo button on the
+evidence.
+
+### 7.3 `events` is search, not the only door
+
+The command survives, and its job narrows to what a path cannot say: filters
+composed across level, subsystem, process and time; a live tail; and the
+current-boot level change of §9.1.
 
 ```
 events                             the last screen of notice and above
 events --level debug --subsystem storage
-events --activity 1a2b             one request across every process
+events --activity 1a2b             = cat EVENTS:activity/0000001a
 events --follow                    live, as they happen
-events --boot -1                   the boot before this one
+events --boot -1                   = cat EVENTS:boot/-1/all
 ```
 
 `--activity` is the one that pays for the whole design: it is the command that
 would have shown, in one screen, the input-read refusal that took a session to
-find.
+find. It is now also one `cat`, from any program, with no client library.
 
-### 7.2 Bounded answers
+**The terminal is the first reader and stays first-class.** A Console-style
+window is a second reader of the same files, not a replacement for them, and
+nothing here assumes a GUI exists.
 
-A query returns a bounded page and a cursor, like every other enumeration in
-this system. Nothing renders an unbounded result into memory on a 32 MiB
-machine.
+### 7.4 Two costs this shape has, named before they are discovered
+
+**`readdir` must become a cursor.** It is index-addressed, and the ext4 backend
+reopens the directory and walks to the index for every entry, so enumeration is
+already quadratic. `ls EVENTS:activity` over thousands of entries would be
+brutal at 30 MHz. This is the same debt the layout spec's §1.7 named for union
+assigns — one piece of work, two things unlocked — but `EVENTS:` puts it on the
+critical path.
+
+**The catalog has to be on the machine.** Rendering at read time means resolving
+format strings there. It is not a parse: the file is the `.astra_events`
+section's bytes **verbatim**, which `objcopy -O binary --only-section` already
+produces, and lookup is `(id - base) / 128`. An index, not a parser. §8's rule
+about what the machine reads is what makes this cheap enough to do at read time.
+
+### 7.5 Bounded answers
+
+A read returns a bounded page and a cursor, like every other enumeration in this
+system. Nothing renders an unbounded result into memory on a 32 MiB machine, and
+a file whose size is not known before the read is exactly what the handler
+contract was made to allow.
 
 ---
 
@@ -349,9 +415,14 @@ which is why the evidence is collected now.
 
 ### 8.6 Where the stores live
 
-`EVENTS:` holds the tiers and the boot ring. The kernel trace ring is the
-transport, not the store: history is bounded twice, by the ring for the live
-window and by the budgets for the durable one.
+The tiers and the boot ring are the events service's own bytes, in the state
+volume's `events/`, which no other program holds a binding to. `EVENTS:` is the
+view of them (§7.1), so the tiers are a storage decision and the tree is a
+naming one, and neither constrains the other: `boot/current/warning` is a filter
+over the `record` tier, not a file that exists.
+
+The kernel trace ring is the transport, not the store: history is bounded twice,
+by the ring for the live window and by the budgets for the durable one.
 
 ## 9. Configuration, and turning it off
 
@@ -422,6 +493,10 @@ this off; they are not allowed to be confused later about whether they did.
 | `sw/userspace/runtime` | `ASTRA_EVENT`, the descriptor section, the per-subsystem enable words |
 | Build | a step extracting descriptors into a catalog, for the kernel and per bundle |
 | `astra_assert_failed` | emits an event instead of formatting a line |
+| `AstraVfsBackendOps.readdir` | index becomes a cursor; the ext4 backend stops walking from zero per entry — §7.4 |
+| The events service | gains a VFS backend serving the §7.1 tree; nothing else in the VFS changes |
+| `STARTUP:` | gains `serves NAME:r`, for `EVENTS:` and later `PROC:` — layout spec §3.2 |
+| The catalog on the machine | the `.astra_events` bytes verbatim on `SYS:`, indexed, never parsed |
 
 ## 11. Open questions
 

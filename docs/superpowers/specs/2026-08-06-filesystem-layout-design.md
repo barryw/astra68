@@ -252,13 +252,24 @@ a command is run by a person and inherits theirs.
 |---|---|---|
 | `CONFIG:` | machine configuration, overriding `DEFAULTS:` | survives system updates |
 | `APPS:` | installed applications | one directory each; see §4 |
-| `EVENTS:` | the event store | bounded; see §6 |
 | `WORK:` | the person's files | the only place they live |
 | `TEMP:` | scratch | emptied at every boot |
 
+The state volume also carries `events/`, which is **not** an assign anybody
+holds. It is the events service's own bounded store, bound read-write to that
+one service and to nothing else; what the rest of the machine reads is the
+synthetic `EVENTS:` below. See §6.
+
 ### 2.3 Synthetic
 
-`PROC:`, as specified in `OBSERVABILITY.md`.
+`PROC:`, as specified in `OBSERVABILITY.md`, and `EVENTS:`, which renders the
+event store at read time — the tree in the event spec's §7.1. Neither is a
+special mechanism: both are handlers behind the same node contract as a disk,
+and `OBSERVABILITY.md` already requires that adding one needs no special case.
+
+A synthetic tree is bound with the rights that describe it. `EVENTS:` is bound
+read-only, so nothing can `rm` an event, and a process that was granted no
+binding does not see the tree at all.
 
 ### 2.4 The tree
 
@@ -270,7 +281,8 @@ SYS:                      read-only mount
   version                 what this system image is
 
 <state volume>            writable mount
-  config/  events/  work/  temp/
+  config/  work/  temp/
+  events/                 the events service's store; no assign names it
   apps/
     Editor/               one directory per application
       manifest  program  libs/  resources/
@@ -316,15 +328,27 @@ handed to it.
 An ordered file, one entry per line:
 
 ```
-service SERVICES:events   grants EVENTS:rw TEMP:rw          required
-service SERVICES:storage  grants DRIVERS:r  CONFIG:r        required
-service SERVICES:input    grants CONFIG:r                   required
-command COMMANDS:shell    grants WORK:rw APPS:r COMMANDS:r LIBS:r  required
+service SERVICES:events   grants STORE:rw TEMP:rw  serves EVENTS:r  required
+service SERVICES:storage  grants DRIVERS:r  CONFIG:r                required
+service SERVICES:input    grants CONFIG:r                           required
+command COMMANDS:shell    grants WORK:rw APPS:r COMMANDS:r LIBS:r   required
 ```
 
 One file states what every program on the machine may touch. That is not
 answerable on a Unix at any price, and it is answerable here because the
 namespace is granted rather than ambient.
+
+Two clauses beyond the first draft, both general rather than events-specific:
+
+- **`STORE:` is a service's own private state**, bound by the supervisor to the
+  directory the state volume keeps for that service. It exists only inside that
+  service's namespace, so two services both holding `STORE:` hold different
+  directories and neither can name the other's.
+- **`serves NAME:r`** declares a synthetic tree this service publishes and the
+  rights it is published with. `EVENTS:` and `PROC:` arrive this way. It is a
+  grant in the other direction — a `grants EVENTS:r` on some later entry can
+  only name what a `serves` produced — which is what keeps one file the answer
+  to what may touch what.
 
 **A grant whose binding does not exist is omitted, not fatal.** With no state
 volume there is no `APPS:` to hand the shell, so the shell starts with a
@@ -378,7 +402,9 @@ failures go to the console channel, which needs no service and no disk.
 ### 3.5 A machine with no state volume still boots
 
 Fresh disk, failed disk, first power-on: `SYS:` alone yields a working system.
-`EVENTS:` and `TEMP:` fall back to RAM, `CONFIG:` is absent and defaults apply,
+the event store and `TEMP:` fall back to RAM — `EVENTS:` is served either way,
+because the tree is the service and not the disk — `CONFIG:` is absent and
+defaults apply,
 `WORK:` and `APPS:` are unbound and naming them fails cleanly.
 
 A system that cannot boot because a writable partition is missing has confused
@@ -531,9 +557,15 @@ the person who wrote the file.
 The format, levels and automatic context are the next spec. Two things are
 fixed here because they are layout and ordering decisions:
 
-**`EVENTS:` is a bounded on-disk ring.** It has a size budget, it drops oldest,
+**The store is a bounded on-disk ring.** It has a size budget, it drops oldest,
 and it never grows without limit. A machine that will not boot because it
 logged too much about not booting is `/var/log` in a nicer hat.
+
+**`EVENTS:` is the view of it, not the bytes.** The store is the state volume's
+`events/`, which only the events service holds (`STORE:`, §3.2). What everything
+else sees is a synthetic read-only tree the service serves through the ordinary
+node contract, so `ls` and `cat` are how history is read and nothing can delete
+an event by writing to the namespace. The event spec's §7 has the tree.
 
 **One stream, two sinks.** `OBSERVABILITY.md` requires that program lines and
 kernel events share one ordered stream with one set of sequence numbers. The

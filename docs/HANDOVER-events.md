@@ -38,11 +38,17 @@ at all — `ANALYZER_CC=gcc` is Apple clang, which has no `-fanalyzer`.
 
 ## 2. Resume here
 
-**Rewrite the events spec's §2.2 and §7 around `EVENTS:` as a synthetic tree,
-then re-scope plan 5.** This was agreed in conversation and is not yet written
-down, which makes it the one thing that will be lost if it is not done first.
+**Execute plan 5, `docs/superpowers/plans/2026-08-06-event-store-and-namespace.md`,
+starting at its task 1.**
 
-The decision, and why it is not what the spec currently says:
+The spec rewrite this section used to ask for is **done**: the events spec's §7
+is now `EVENTS:` as a synthetic tree, with §8.6 and §10 following it, and the
+layout spec's §2.2, §2.3, §3.2, §3.5 and §6 moved `EVENTS:` out of the writable
+assigns and into the synthetic ones. Two clauses in the startup manifest are new
+and general rather than events-specific: `STORE:` for a service's own private
+state, and `serves NAME:r` for a synthetic tree a service publishes.
+
+The decision, and why it is not what the spec used to say:
 
 `2026-08-06-event-system-design.md` §7.1 has the events service answering
 bounded queries through a bespoke `events` command, and says *"nothing else
@@ -79,7 +85,7 @@ hundred lines behind a tested interface — no new protocol, no new client, and
 `ls`/`cat` work unchanged. The `events` command survives as *search*, not as
 the only door.
 
-Two costs to write into the plan rather than discover:
+Two costs, now written into the plan rather than left to discover:
 
 - **`readdir` must become a cursor.** It is index-addressed and the ext4
   backend reopens the directory per entry, so it is already quadratic.
@@ -92,8 +98,12 @@ Two costs to write into the plan rather than discover:
   produces it — and lookup is `(id - base) / 128`. An index, not a parse. Do
   not put a parser on this machine for this.
 
-After that: plan 5 (the service, tiers, retention, rate limits) and plan 6
-(the `events` command).
+Plan 5 is six tasks: the ring drain syscall, `readdir` as a cursor, the catalog
+on the machine, the store and its tiers, the events backend, and the wiring with
+an end-to-end gate. The token bucket (§8.4) and coalescing (§8.3) are
+deliberately deferred inside it, each with a written trigger — the spec asks for
+a measured workload and there is none until the store exists. Plan 6 is the
+`events` command.
 
 ## 3. What the machine gained
 
@@ -244,9 +254,8 @@ successor in `GRAPHICS_ARCHITECTURE.md`. Nothing has measured it hot yet.
 
 ## 9. Open decisions, carried forward
 
-- The events spec rewrite in §2 above. **Do this first.**
 - `readdir` as a cursor: needed by `EVENTS:`, by union assigns, and by any
-  large directory. Currently quadratic.
+  large directory. Currently quadratic. **Plan 5, task 2.**
 - The shell language, which the startup manifest's syntax will want.
 - The bundle manifest: how an application declares the authority it wants.
 - The event system's numbers — tier budgets, token-bucket rates, boot ring size,
