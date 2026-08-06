@@ -534,6 +534,57 @@ Constraints that will bite:
   deadline** (today the waiter's deadline is the timeout), and **`LATE` and
   `CANCELLED` completions** have ABI values but no producer.
 
+## 6d. The terminal, and the one thing it cannot do
+
+Astra boots to a terminal on the 90x30 character plane, on Beast and on the
+board, driven by keys injected over QMP `input-send-event`. Working: `ls`,
+`cd`, `pwd`, `mkdir`, `clear`, `help`, line editing, history, scrolling.
+
+**Nothing the terminal changes reaches the disk.** A `mkdir` is visible for
+the rest of the session and gone after a restart; `debugfs` on the volume
+shows only `lost+found`. `write` is worse: `ext4_fwrite` returns EOK having
+moved zero bytes, the file is created empty, and reopening it fails EINVAL.
+
+What is known, so it need not be rediscovered:
+
+- **The old boot check only worked because it unmounted.** The unmount was the
+  flush. `supervisor_verify_volume()` mounts, writes 4 KiB, reads it back and
+  unmounts, and the write reached the disk on the way out.
+- **A second mount is not possible.** lwext4 answers EINVAL from inside
+  `ext4_block_init`/`ext4_fs_init`, not from the mount preamble, and
+  re-initialising the port first does not help. So "mount once and keep it" is
+  the only shape available, which is why the check now takes a `keep_mounted`
+  flag.
+- **`ext4_cache_flush()` alone does not persist anything.** It returns EOK
+  after a `mkdir` and the directory still does not survive a restart. With a
+  journal running, lwext4 holds changes in the open transaction.
+- **Closing and reopening the journal to force a commit is untried and
+  suspect.** The one attempt killed the emulator mid-run; it was not
+  investigated and the change was reverted rather than committed.
+- **The size distinction is the lead for the zero-byte write.** The boot check
+  writes exactly 4096 bytes, one full block, and succeeds. The shell writes a
+  handful and moves nothing. That is the partial-block read-modify-write path,
+  and this project has already found three big-endian defects in lwext4 that
+  upstream never compiled. A fourth there would be in character.
+
+The next step is a host test rather than more boot runs: write 1, 5, 4095,
+4096 and 4097 bytes through the port on both endians with `e2fsck` as judge.
+`lwext4-eval` already has that shape.
+
+Two related notes:
+
+- **Nothing prevents unmounting a volume in use**, here or in lwext4. The VFS
+  service needs open-handle refcounting and an `EBUSY` on unmount, and it is
+  cheaper to build that in than to retrofit it.
+- **The terminal is not visible on the board's monitor.** Its bytes are in the
+  character plane -- a read of `0xFFF22000` returns the prompt and the `ls`
+  output -- but the screen still shows the Zynq-side splash, because the raw
+  emulator was invoked instead of `/data/astra/bin/astra-qemu` and nothing
+  handed scanout over. Astra wants an explicit notion of a text display and a
+  graphics display, with the terminal claiming the text one and clearing the
+  splash behind it, rather than relying on whatever the launcher happened to
+  leave on screen.
+
 ## 7. Known problems not caused by this work
 
 - A stale `sw/boot/astra_boot.bin` may sit in a working tree from an old build
