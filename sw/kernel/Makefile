@@ -600,7 +600,16 @@ $(BUILD_DIR)/test_worker: tests/test_worker.c worker.c worker.h process.h \
 
 clean:
 	rm -rf $(BUILD_DIR) astra_kernel.elf astra_kernel.bin astra_kernel.map
+	rm -f *.gcov.json.gz
+
+# Line coverage over the host suites. The instrumented build is not the one
+# anything else should link against, so this cleans before and after.
+coverage:
+	$(MAKE) clean
+	$(MAKE) test HOST_EXTRA_FLAGS="--coverage -O0 -Wno-error"
+	python3 tools/coverage.py
+	$(MAKE) clean
 
 FORCE:
 
-.PHONY: all clean test verify FORCE
+.PHONY: all clean coverage test verify FORCE

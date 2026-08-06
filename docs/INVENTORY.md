@@ -213,6 +213,9 @@ cd sw/userspace && make test && make sanitize && make analyze && make all
 # kernel: 30 suites, default image, qualification image              (beast)
 cd sw/kernel && make test && make && make clean && make K1_QUALIFICATION=1
 
+# kernel line coverage over those suites, per source file            (beast)
+cd sw/kernel && make coverage
+
 # boot ROM                                                          (beast)
 cd sw/boot && make astra_boot.bin && make test   # pytest half: Mac only
 
