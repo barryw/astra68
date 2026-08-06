@@ -323,8 +323,10 @@ critical path.
 
 **The catalog has to be on the machine.** Rendering at read time means resolving
 format strings there. It is not a parse: the file is the `.astra_events`
-section's bytes **verbatim**, which `objcopy -O binary --only-section` already
-produces, and lookup is `(id - base) / 128`. An index, not a parser. §8's rule
+section's bytes **verbatim**, which `objcopy -O binary --only-section` produces
+— given `--set-section-flags .astra_events=alloc,load,contents`, because the
+section is `(INFO)` and binary output otherwise writes an empty file and says
+nothing — and lookup is `(id - base) / 128`. An index, not a parser. §8's rule
 about what the machine reads is what makes this cheap enough to do at read time.
 
 ### 7.5 Bounded answers

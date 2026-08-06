@@ -52,6 +52,10 @@ TARGET := build/m68k/astra_supervisor.elf
 # in it. TARGET keeps the symbols, and that is the file a debugger is pointed
 # at.
 IMAGE := build/m68k/astra_supervisor.image.elf
+# The catalog the machine reads: the .astra_events section's bytes verbatim, so
+# a lookup on the machine is (id - base) / 128 and never a parse. It is a build
+# product and belongs on SYS:, not in git.
+CATALOG := build/m68k/astra_events.cat
 HOST_TEST := build/host/test_supervisor
 # log.c comes along because validating a startup block is what binds the
 # diagnostic channel, so the two cannot be linked apart.
@@ -68,7 +72,7 @@ all:
 	$(MAKE) libraries
 	$(MAKE) image
 
-image: $(IMAGE) size
+image: $(IMAGE) $(CATALOG) size
 
 libraries:
 	$(MAKE) -C $(RUNTIME) all
@@ -94,6 +98,14 @@ $(TARGET): $(OBJECTS) $(RUNTIME)/astra_user.ld $(RUNTIME_CRT0) $(EXT4_LIB) \
 # carried in the window the firmware compresses into ROM.
 $(IMAGE): $(TARGET)
 	$(OBJCOPY) --strip-debug --remove-section=.astra_events $< $@
+
+# --set-section-flags because the section is (INFO) in the linker script and
+# objcopy's binary output emits allocatable sections only; without it this
+# produces an empty file rather than an error, which is the kind of build step
+# that goes unnoticed until a reader shows message ids instead of text.
+$(CATALOG): $(TARGET)
+	$(OBJCOPY) -O binary --only-section=.astra_events \
+		--set-section-flags .astra_events=alloc,load,contents $< $@
 
 build/m68k/%.o: src/%.c
 	@mkdir -p $(@D)

@@ -5,6 +5,7 @@
 
 #include <astra/process.h>
 #include <astra/event.h>
+#include <astra/event_catalog.h>
 #include <astra/event_emit.h>
 #include <astra/runtime.h>
 #include <astra/syscall.h>
@@ -421,6 +422,122 @@ static void test_event_descriptor_layout(void)
     assert((char *)descriptor.format - (char *)&descriptor == 64);
 }
 
+/*
+ * The catalog on the machine: a division and a bounds check, and a render that
+ * walks one string once. The bytes here are built the way objcopy produces
+ * them -- descriptors back to back, this build's own byte order -- because that
+ * is exactly what the machine will read.
+ */
+static void set_format(char *out, const char *text)
+{
+    uint32_t index = 0u;
+
+    while (text[index] != '\0' && index + 1u < ASTRA_EVENT_FORMAT_MAX) {
+        out[index] = text[index];
+        ++index;
+    }
+    out[index] = '\0';
+}
+
+static void test_event_catalog(void)
+{
+    static const uint32_t base = 0xE0000000u;
+    /* _Alignas is not C11-portable here; a descriptor array is aligned by its
+     * own type, which is what the reader requires. */
+    AstraEventDescriptor records[3];
+    AstraEventCatalog catalog;
+    uint8_t payload[8];
+    char text[64];
+
+    memset(records, 0, sizeof(records));
+    for (uint32_t index = 0u; index < 3u; ++index) {
+        records[index].magic = ASTRA_EVENT_DESCRIPTOR_MAGIC;
+        records[index].line = (uint16_t)(10u + index);
+        records[index].subsystem = ASTRA_EVENT_SUBSYSTEM_STORAGE;
+        records[index].level = ASTRA_EVENT_LEVEL_WARNING;
+    }
+    records[0].argument_count = 0u;
+    set_format(records[0].format, "nothing to say");
+    records[1].argument_count = 2u;
+    records[1].argument_type[0] = ASTRA_EVENT_ARG_U32;
+    records[1].argument_type[1] = ASTRA_EVENT_ARG_S32;
+    set_format(records[1].format, "write refused, status %u after %d sectors");
+    records[2].argument_count = 1u;
+    records[2].argument_type[0] = ASTRA_EVENT_ARG_U32;
+    set_format(records[2].format, "100%% of %x");
+
+    assert(astra_event_catalog_init(&catalog, records, sizeof(records), base));
+    assert(catalog.count == 3u);
+
+    /* An id is an index: base plus the record's offset, and nothing else. */
+    assert(astra_event_catalog_lookup(&catalog, base) == &records[0]);
+    assert(astra_event_catalog_lookup(&catalog, base + 128u) == &records[1]);
+    assert(astra_event_catalog_lookup(&catalog, base - 4u) == NULL);
+    assert(astra_event_catalog_lookup(&catalog, base + 384u) == NULL);
+    /* An id that does not land on a record was emitted by another image. */
+    assert(astra_event_catalog_lookup(&catalog, base + 64u) == NULL);
+
+    (void)astra_event_catalog_render(&catalog, base, 0u, NULL, 0u, text,
+                                     sizeof(text));
+    assert(strcmp(text, "nothing to say") == 0);
+
+    assert(astra_event_pack(payload, sizeof(payload),
+                            (const uint32_t[]){5u, (uint32_t)-3}, 2u) == 8u);
+    (void)astra_event_catalog_render(&catalog, base + 128u, 0u, payload, 8u,
+                                     text, sizeof(text));
+    assert(strcmp(text, "write refused, status 5 after -3 sectors") == 0);
+
+    /* %% is a literal, and hexadecimal is what it says. */
+    assert(astra_event_pack(payload, sizeof(payload),
+                            (const uint32_t[]){0xbeefu}, 1u) == 4u);
+    (void)astra_event_catalog_render(&catalog, base + 256u, 0u, payload, 4u,
+                                     text, sizeof(text));
+    assert(strcmp(text, "100% of beef") == 0);
+
+    /*
+     * A format wanting a value the occurrence does not carry says so. Reading
+     * past the payload would be a fault, and printing a zero would be a
+     * measurement somebody believes.
+     */
+    (void)astra_event_catalog_render(&catalog, base + 128u, 0u, NULL, 0u, text,
+                                     sizeof(text));
+    assert(strcmp(text, "write refused, status <missing> after <missing> "
+                        "sectors") == 0);
+
+    /* An inline string is the payload, and the format is not consulted. */
+    (void)astra_event_catalog_render(&catalog, base, ASTRA_EVENT_FLAG_INLINE_STRING,
+                                     (const uint8_t *)"raw line", 8u, text,
+                                     sizeof(text));
+    assert(strcmp(text, "raw line") == 0);
+
+    /* An id no catalog holds renders as itself rather than as nothing. */
+    (void)astra_event_catalog_render(&catalog, 0x12345678u, 0u, NULL, 0u, text,
+                                     sizeof(text));
+    assert(strcmp(text, "message 0x12345678") == 0);
+
+    /* Truncation stays inside the buffer and stays terminated. */
+    {
+        char tiny[8];
+
+        (void)astra_event_catalog_render(&catalog, base, 0u, NULL, 0u, tiny,
+                                         sizeof(tiny));
+        assert(tiny[sizeof(tiny) - 1u] == '\0');
+        assert(strcmp(tiny, "nothing") == 0);
+    }
+
+    /*
+     * A file that is not a whole number of descriptors, or whose first record
+     * is not one, is refused whole. A catalog that is nearly right renders
+     * every event wrongly, which is worse than one that fails once.
+     */
+    assert(!astra_event_catalog_init(&catalog, records, sizeof(records) - 4u,
+                                     base));
+    assert(catalog.records == NULL);
+    records[0].magic = 0u;
+    assert(!astra_event_catalog_init(&catalog, records, sizeof(records), base));
+    assert(astra_event_catalog_lookup(&catalog, base) == NULL);
+}
+
 /* The assertion message: the half that survives when the channel is refused. */
 static void test_assert_message(void)
 {
@@ -463,6 +580,7 @@ main(void)
     test_event_channel();
     test_event_macro();
     test_event_descriptor_layout();
+    test_event_catalog();
     test_assert_message();
     return 0;
 }

@@ -21,9 +21,15 @@ one program is ceremony, not an interface. Both read the section through
 
 When a catalog does have to be a file -- a bundle carrying its own, or the
 events service resolving ids on the machine -- the file is the section's bytes
-verbatim, which `objcopy -O binary --only-section=.astra_events` already
-produces. A fixed 128-byte record is an index on a 30 MHz machine; a parse is
-not.
+verbatim, which objcopy produces:
+
+    objcopy -O binary --only-section=.astra_events \
+        --set-section-flags .astra_events=alloc,load,contents in.elf out.cat
+
+The flags are not optional. The section is (INFO) in the linker script, and
+objcopy's binary output emits allocatable sections only, so without them this
+writes an empty file and says nothing. The supervisor's Makefile has the rule.
+A fixed 128-byte record is an index on a 30 MHz machine; a parse is not.
 """
 
 import argparse

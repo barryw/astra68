@@ -156,17 +156,24 @@ The file is `objcopy -O binary --only-section=.astra_events` over the image, on
   string.
 
 `tools/event_catalog.py` and `tools/trace_decode.py` stay the off-machine
-readers and stay authoritative for the format. The C renderer is checked against
-them by rendering the same descriptors from the same bytes and comparing, which
-is a test, not a second source of truth.
+readers and stay authoritative for the format.
 
-- [ ] Step 1: failing tests — a known id resolves to its descriptor; an id below
+- [x] Step 1: failing tests — a known id resolves to its descriptor; an id below
       base, above the end, or misaligned is refused; each argument type renders;
       a format string wanting an argument that is not there renders a marker
       rather than reading past the record.
-- [ ] Step 2: the extraction step, the lookup, the renderer.
-- [ ] Step 3: `cd sw/userspace && make test && make sanitize && make analyze`.
-- [ ] Step 4: commit.
+- [x] Step 2: the extraction step, the lookup, the renderer.
+- [x] Step 3: `cd sw/userspace && make test && make sanitize && make analyze`.
+- [x] Step 4: commit.
+
+**Two things the plan said loosely and the build settled.** `objcopy -O binary
+--only-section` needs `--set-section-flags .astra_events=alloc,load,contents`:
+the section is `(INFO)`, binary output emits allocatable sections only, and
+without the flags it writes an empty file and says nothing. And the C renderer
+is **not** cross-checked against the Python one in a host test — the `.cat` is
+big-endian m68k and the reader is a struct cast by design, so an x86 host test
+cannot read the real file. The synthetic descriptors here prove the logic; the
+real bytes are proven end to end when `EVENTS:` renders in the QEMU gate.
 
 ### Task 4: The store
 

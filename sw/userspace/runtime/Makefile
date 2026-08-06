@@ -13,7 +13,7 @@ TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
 HOST_FLAGS := -O2 -fno-builtin
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 TARGET_C_SOURCES := src/startup.c src/syscall.c src/memory.c src/log.c \
-	src/sort.c src/assert.c
+	src/sort.c src/assert.c src/event_catalog.c
 TARGET_ASM_SOURCES := src/m68k/syscall.S
 TARGET_OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(TARGET_C_SOURCES)) \
 	$(patsubst src/%.S,build/m68k/%.o,$(TARGET_ASM_SOURCES))
@@ -40,7 +40,7 @@ $(CRT0): src/m68k/crt0.S
 	$(CC) $(CPPFLAGS) -m68030 -msoft-float $(DEPFLAGS) -c $< -o $@
 
 HOST_TEST_SOURCES := src/startup.c src/syscall.c src/memory.c src/sort.c \
-	src/log.c \
+	src/log.c src/event_catalog.c \
 	tests/test_runtime.c
 
 $(HOST_TEST): $(HOST_TEST_SOURCES)
@@ -67,6 +67,8 @@ analyze:
 		-c src/memory.c -o build/analyzer/memory.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/sort.c -o build/analyzer/sort.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/event_catalog.c -o build/analyzer/event_catalog.o
 
 size: $(TARGET_OBJECTS) $(CRT0)
 	$(SIZE) $^
