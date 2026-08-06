@@ -101,6 +101,10 @@ analyze:
 		-c src/vfs_service_core.c -o build/analyzer/vfs_service_core.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/vfs_client.c -o build/analyzer/vfs_client.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/vfs_assign.c -o build/analyzer/vfs_assign.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/vfs_path.c -o build/analyzer/vfs_path.o
 
 # Header dependencies: a stale object compiled against an older ABI
 # constant is indistinguishable from a working one until it runs.
