@@ -53,9 +53,19 @@ SCRIPT = [
     ("write hello.txt via the protocol", "hello.txt"),
     ("ls", "proto/"),
     ("cat hello.txt", "via the protocol"),
+    # The namespace, end to end. The shell stands in WORK:, so the four lines
+    # above are relative words inside it. SYS: is the same volume at its root
+    # and shows the work directory the supervisor made, and it was granted read
+    # and nothing else -- so the refusal below comes from the assign rather than
+    # from the filesystem, which would have been happy to write there.
+    ("ls sys:", "work/"),
+    ("write sys:hello.txt no", "access denied"),
 ]
 
 QCODE = {" ": "spc", "\n": "ret", "/": "slash", ".": "dot", "-": "minus"}
+# Keys that need a modifier held. Assign names are case-insensitive, so a
+# colon is the only shifted character the script needs.
+SHIFTED = {":": "semicolon"}
 
 
 class Qmp:
@@ -93,20 +103,32 @@ class Qmp:
     def monitor(self, line):
         return self.execute("human-monitor-command", {"command-line": line})
 
+    def send(self, down, qcode):
+        self.execute("input-send-event", {"events": [
+            {"type": "key",
+             "data": {"down": down,
+                      "key": {"type": "qcode", "data": qcode}}}]})
+        time.sleep(0.02)
+
     def key(self, qcode):
         # Press and release: the shell acts on the press, but a key left down
         # would hold the modifier state the next press is translated against.
         for down in (True, False):
-            self.execute("input-send-event", {"events": [
-                {"type": "key",
-                 "data": {"down": down,
-                          "key": {"type": "qcode", "data": qcode}}}]})
-            time.sleep(0.02)
+            self.send(down, qcode)
+
+    def chord(self, modifier, qcode):
+        # The keymap translates a press against the modifiers held at that
+        # moment, so the modifier stays down across both edges of the key.
+        self.send(True, modifier)
+        self.key(qcode)
+        self.send(False, modifier)
 
     def type_line(self, text):
         for character in text:
             if character in QCODE:
                 self.key(QCODE[character])
+            elif character in SHIFTED:
+                self.chord("shift", SHIFTED[character])
             elif character.isalnum():
                 self.key(character)
             else:

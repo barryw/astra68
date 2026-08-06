@@ -11,8 +11,11 @@
  * without lwext4 on its include path so a filesystem call reappearing here
  * fails to compile rather than being noticed in review.
  *
- * Paths are absolute within the volume. A working directory is kept as a
- * string and joined here, because the protocol has no notion of one.
+ * It also builds no paths. There is no root on this machine: a path is
+ * ASSIGN:rest, the shell stands in an assign and a directory under it, and
+ * turning a typed word into something the protocol can carry is two Kit calls
+ * -- qualify, then resolve. Both are host-tested; this file is glue, and the
+ * arrangement is deliberate because glue cannot be tested here.
  */
 
 #include <console_shell.h>
@@ -26,10 +29,13 @@
 #include <astra/syscall.h>
 #include <astra/terminal.h>
 
+#include <astra/vfs_assign.h>
 #include <astra/vfs_client.h>
+#include <astra/vfs_path.h>
 #include <vfs_host.h>
 
-#define SHELL_PATH_MAX 256u
+/* A path the protocol will refuse to carry is not worth building. */
+#define SHELL_PATH_MAX ASTRA_VFS_PATH_MAX
 #define SHELL_READ_CHUNK 128u
 
 typedef struct ConsoleShell {
@@ -38,7 +44,8 @@ typedef struct ConsoleShell {
     uint32_t display;
     uint32_t input;
     uint32_t modifiers;
-    char directory[SHELL_PATH_MAX];   /* relative to the mount, no leading / */
+    char assign[ASTRA_CAPABILITY_NAME_MAX];  /* the assign it is standing in */
+    char directory[SHELL_PATH_MAX];          /* normalised, under that assign */
     int running;
 } ConsoleShell;
 
@@ -65,42 +72,24 @@ static int shell_equal(const char *left, const char *right)
     return left[index] == right[index];
 }
 
-/* Appends with truncation reported, so a long path fails rather than overruns. */
-static int shell_append(char *destination, uint32_t capacity, const char *text)
-{
-    uint32_t length = shell_strlen(destination);
-    uint32_t index = 0u;
-
-    while (text[index] != '\0') {
-        if (length + 1u >= capacity)
-            return 0;
-        destination[length++] = text[index++];
-    }
-    destination[length] = '\0';
-    return 1;
-}
-
 /*
- * Builds the absolute lwext4 path for a name typed at the prompt. A leading
- * slash is absolute from the mount; "." and ".." are resolved here because
- * lwext4 does not.
+ * A word typed at the prompt becomes a path the protocol can carry, or a
+ * refusal that says which kind it was. The rights are the command's own, so a
+ * write through an assign granted only read is refused here rather than by the
+ * disk -- and a name the shell was never given does not resolve at all.
  */
-static int shell_resolve(const char *name, char *out, uint32_t capacity)
+static uint32_t shell_path(const char *name, uint32_t rights, char *wire,
+                           uint32_t capacity)
 {
-    out[0] = '\0';
-    if (!shell_append(out, capacity, "/"))
-        return 0;
-    if (name == NULL || name[0] == '\0') {
-        return shell_append(out, capacity, shell.directory);
-    }
-    if (name[0] == '/') {
-        return shell_append(out, capacity, name + 1);
-    }
-    if (!shell_append(out, capacity, shell.directory))
-        return 0;
-    if (shell.directory[0] != '\0' && !shell_append(out, capacity, "/"))
-        return 0;
-    return shell_append(out, capacity, name);
+    char typed[SHELL_PATH_MAX];
+    uint32_t status;
+
+    status = astra_path_qualify(shell.assign, shell.directory, name, typed,
+                                sizeof(typed));
+    if (status != ASTRA_VFS_OK)
+        return status;
+    return astra_assign_resolve(supervisor_assigns(), typed, rights, wire,
+                                capacity, NULL);
 }
 
 /* The one place the shell reaches storage. NULL when no volume is mounted. */
@@ -197,8 +186,10 @@ static void command_ls(int argc, char *const *argv)
         write_line("ls: no volume");
         return;
     }
-    if (!shell_resolve(argc > 1 ? argv[1] : NULL, path, sizeof(path))) {
-        write_line("ls: path too long");
+    status = shell_path(argc > 1 ? argv[1] : NULL, ASTRA_RIGHT_READ, path,
+                        sizeof(path));
+    if (status != ASTRA_VFS_OK) {
+        report_status("ls", status);
         return;
     }
     for (;;) {
@@ -224,53 +215,32 @@ static void command_ls(int argc, char *const *argv)
 
 static void command_cd(int argc, char *const *argv)
 {
-    char path[SHELL_PATH_MAX];
-    char candidate[SHELL_PATH_MAX];
+    char typed[SHELL_PATH_MAX];
+    char wire[SHELL_PATH_MAX];
+    char name[ASTRA_CAPABILITY_NAME_MAX];
     uint16_t kind = 0u;
     uint32_t status;
 
-    if (argc < 2 || shell_equal(argv[1], "/")) {
-        shell.directory[0] = '\0';
-        return;
-    }
-    if (shell_equal(argv[1], ".."))  {
-        uint32_t length = shell_strlen(shell.directory);
-
-        while (length != 0u && shell.directory[length - 1u] != '/')
-            --length;
-        if (length != 0u)
-            --length;
-        shell.directory[length] = '\0';
-        return;
-    }
-    if (shell_equal(argv[1], "."))
-        return;
     if (storage() == NULL) {
         write_line("cd: no volume");
         return;
     }
-
-    /* Verified before it is adopted, so the prompt never lies. */
-    candidate[0] = '\0';
-    if (argv[1][0] == '/') {
-        if (!shell_append(candidate, sizeof(candidate), argv[1] + 1)) {
-            write_line("cd: path too long");
-            return;
-        }
-    } else {
-        if (!shell_append(candidate, sizeof(candidate), shell.directory) ||
-            (shell.directory[0] != '\0' &&
-             !shell_append(candidate, sizeof(candidate), "/")) ||
-            !shell_append(candidate, sizeof(candidate), argv[1])) {
-            write_line("cd: path too long");
-            return;
-        }
+    /* `cd` alone goes to the assign's root, not to where it already is. */
+    status = astra_path_qualify(shell.assign,
+                                argc > 1 ? shell.directory : "",
+                                argc > 1 ? argv[1] : NULL, typed,
+                                sizeof(typed));
+    if (status == ASTRA_VFS_OK) {
+        status = astra_assign_resolve(supervisor_assigns(), typed,
+                                      ASTRA_RIGHT_READ, wire, sizeof(wire),
+                                      NULL);
     }
-    if (!shell_resolve(candidate, path, sizeof(path))) {
-        write_line("cd: path too long");
+    if (status != ASTRA_VFS_OK) {
+        report_status("cd", status);
         return;
     }
-    status = astra_vfs_stat(storage(), path, NULL, &kind);
+    /* Verified before it is adopted, so the prompt never lies. */
+    status = astra_vfs_stat(storage(), wire, NULL, &kind);
     if (status != ASTRA_VFS_OK) {
         report_status("cd", status);
         return;
@@ -279,7 +249,20 @@ static void command_cd(int argc, char *const *argv)
         write_line("cd: not a directory");
         return;
     }
-    (void)memcpy(shell.directory, candidate, sizeof(shell.directory));
+    /*
+     * Adopted only now, and taken apart by the same parser that resolved it.
+     * `wire` is finished with, so it is the scratch the split needs rather
+     * than a fourth buffer on a stack that has lwext4 underneath it.
+     */
+    if (astra_path_split(typed, name, sizeof(name), wire, sizeof(wire)) !=
+            ASTRA_VFS_OK ||
+        astra_path_normalise(wire, shell.directory,
+                             sizeof(shell.directory)) != ASTRA_VFS_OK) {
+        shell.directory[0] = '\0';
+        write_line("cd: path too long");
+        return;
+    }
+    (void)memcpy(shell.assign, name, sizeof(shell.assign));
 }
 
 static void command_cat(int argc, char *const *argv)
@@ -299,8 +282,9 @@ static void command_cat(int argc, char *const *argv)
         write_line("cat: needs a file");
         return;
     }
-    if (!shell_resolve(argv[1], path, sizeof(path))) {
-        write_line("cat: path too long");
+    status = shell_path(argv[1], ASTRA_RIGHT_READ, path, sizeof(path));
+    if (status != ASTRA_VFS_OK) {
+        report_status("cat", status);
         return;
     }
     status = astra_vfs_open(storage(), path, ASTRA_VFS_OPEN_READ, &file, NULL,
@@ -339,8 +323,9 @@ static void command_mkdir(int argc, char *const *argv)
         write_line("mkdir: needs a name");
         return;
     }
-    if (!shell_resolve(argv[1], path, sizeof(path))) {
-        write_line("mkdir: path too long");
+    status = shell_path(argv[1], ASTRA_RIGHT_WRITE, path, sizeof(path));
+    if (status != ASTRA_VFS_OK) {
+        report_status("mkdir", status);
         return;
     }
     status = astra_vfs_mkdir(storage(), path);
@@ -366,8 +351,9 @@ static void command_write(int argc, char *const *argv)
         write_line("write: needs a name");
         return;
     }
-    if (!shell_resolve(argv[1], path, sizeof(path))) {
-        write_line("write: path too long");
+    status = shell_path(argv[1], ASTRA_RIGHT_WRITE, path, sizeof(path));
+    if (status != ASTRA_VFS_OK) {
+        report_status("write", status);
         return;
     }
     status = astra_vfs_open(storage(), path,
@@ -428,8 +414,9 @@ static void command_rm(int argc, char *const *argv)
         write_line("rm: needs a name");
         return;
     }
-    if (!shell_resolve(argv[1], path, sizeof(path))) {
-        write_line("rm: path too long");
+    status = shell_path(argv[1], ASTRA_RIGHT_WRITE, path, sizeof(path));
+    if (status != ASTRA_VFS_OK) {
+        report_status("rm", status);
         return;
     }
     status = astra_vfs_unlink(storage(), path);
@@ -441,11 +428,13 @@ static void command_help(void)
 {
     write_line("commands: ls [dir], cd [dir], cat FILE, mkdir DIR,");
     write_line("          write FILE TEXT..., rm FILE, pwd, clear, help");
+    write_line("paths are ASSIGN:path -- there is no root. try ls SYS:");
 }
 
 static void prompt(void)
 {
-    astra_terminal_write(&shell.terminal, "astra:/");
+    astra_terminal_write(&shell.terminal, shell.assign);
+    astra_terminal_write(&shell.terminal, ":");
     astra_terminal_write(&shell.terminal, shell.directory);
     astra_terminal_write(&shell.terminal, "> ");
 }
@@ -462,7 +451,8 @@ static void run_line(const char *line)
     else if (shell_equal(words.argv[0], "clear"))
         astra_terminal_clear(&shell.terminal);
     else if (shell_equal(words.argv[0], "pwd")) {
-        astra_terminal_putc(&shell.terminal, '/');
+        astra_terminal_write(&shell.terminal, shell.assign);
+        astra_terminal_putc(&shell.terminal, ':');
         write_line(shell.directory);
     } else if (shell_equal(words.argv[0], "ls"))
         command_ls(words.argc, words.argv);
@@ -577,6 +567,17 @@ void console_shell_run(uint32_t display, uint32_t input,
     shell.display = display;
     shell.input = input;
     shell.running = 1;
+    /*
+     * A namespace is granted, so the shell starts wherever it was actually
+     * given rather than at a root that does not exist. WORK: first, because a
+     * person's files are what a terminal is for; SYS: is the fallback on a
+     * volume that would not take a work directory.
+     */
+    if (astra_assign_lookup(supervisor_assigns(), "WORK") != NULL) {
+        (void)memcpy(shell.assign, "WORK", 5u);
+    } else if (astra_assign_lookup(supervisor_assigns(), "SYS") != NULL) {
+        (void)memcpy(shell.assign, "SYS", 4u);
+    }
     if (astra_terminal_init(&shell.terminal, columns, rows, render_cells,
                             &shell) != ASTRA_TERMINAL_OK) {
         (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
@@ -586,7 +587,7 @@ void console_shell_run(uint32_t display, uint32_t input,
 
     astra_terminal_clear(&shell.terminal);
     write_line("Astra 68");
-    write_line(volume_ready ? "volume: mounted at /" :
+    write_line(volume_ready ? "namespace: SYS: read-only, WORK: writable" :
                              "volume: not mounted, file commands will fail");
     command_help();
     prompt();
