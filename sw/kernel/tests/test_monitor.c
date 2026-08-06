@@ -2,6 +2,8 @@
 #include "irq_latency.h"
 #include "memory.h"
 #include "monitor.h"
+
+#include <astra/event.h>
 #include "performance.h"
 #include "platform.h"
 #include "process.h"
@@ -247,6 +249,10 @@ bool kernel_irqoff_latency_stats(KernelIrqOffLatencyStats *stats)
     return true;
 }
 
+/* What the trace view is shown, so a test can put a user event newest. */
+static uint16_t stub_newest_event = KERNEL_TRACE_EVENT_BOOT;
+static bool stub_debug_surface = true;
+
 bool kernel_trace_header(KernelTraceHeader *header)
 {
     memset(header, 0, sizeof(*header));
@@ -259,8 +265,29 @@ bool kernel_trace_read_recent(uint32_t newest_offset,
 {
     assert(newest_offset == 0u);
     memset(record, 0, sizeof(*record));
-    record->event = KERNEL_TRACE_EVENT_BOOT;
+    record->event = stub_newest_event;
     return true;
+}
+
+bool kernel_trace_read_user(uint32_t slot, KernelTraceUserRecord *record,
+                            void *payload, uint32_t capacity,
+                            uint32_t *payload_length)
+{
+    (void)slot;
+    (void)payload;
+    (void)capacity;
+    memset(record, 0, sizeof(*record));
+    record->event = KERNEL_TRACE_EVENT_USER;
+    record->process = 0x1234u;
+    record->message = ASTRA_EVENT_MESSAGE_UNSTRUCTURED;
+    record->flags = ASTRA_EVENT_LEVEL_WARNING | ASTRA_EVENT_FLAG_INLINE_STRING;
+    *payload_length = 9u;
+    return true;
+}
+
+bool kernel_process_debug_surface(void)
+{
+    return stub_debug_surface;
 }
 
 bool kernel_trace_write(KernelTraceEvent event, uint16_t flags,
@@ -375,6 +402,46 @@ static void test_ftdi_parser_and_zero_memory_command(void)
     assert(stats.transport[KERNEL_MONITOR_TRANSPORT_FTDI].command_overruns ==
            0u);
     assert(trace_commands == 3u);
+}
+
+/*
+ * Reading is the privileged half, and a user event is described rather than
+ * quoted. Emitting needs no capability -- an account of what happened that
+ * depended on one would have holes exactly where something went wrong -- but a
+ * log is where secrets leak, and this line goes to a serial console.
+ */
+static void test_trace_describes_a_user_event_without_quoting_it(void)
+{
+    KernelIrqInternalBinding binding;
+
+    assert(kernel_monitor_uart_binding(&binding));
+    stub_newest_event = KERNEL_TRACE_EVENT_USER;
+    stub_debug_surface = true;
+    uart_tx_length = 0u;
+    feed_uart("trace\n");
+    drain_uart_irq(&binding);
+    service_until_complete(KERNEL_MONITOR_TRANSPORT_FTDI,
+                           KERNEL_WORKER_MONITOR_RX_BATCH);
+    uart_tx[uart_tx_length] = '\0';
+    assert(strstr((char *)uart_tx, "process=0x00001234") != NULL);
+    assert(strstr((char *)uart_tx, "level=3") != NULL);
+    assert(strstr((char *)uart_tx, "bytes=9") != NULL);
+    /* The program's own bytes are never rendered, in any form. */
+    assert(strstr((char *)uart_tx, "arg0=") == NULL);
+
+    /* A build with no debug surface does not answer at all. */
+    stub_debug_surface = false;
+    uart_tx_length = 0u;
+    feed_uart("trace\n");
+    drain_uart_irq(&binding);
+    service_until_complete(KERNEL_MONITOR_TRANSPORT_FTDI,
+                           KERNEL_WORKER_MONITOR_RX_BATCH);
+    uart_tx[uart_tx_length] = '\0';
+    assert(strstr((char *)uart_tx, "process=0x") == NULL);
+    assert(strstr((char *)uart_tx, "next=") == NULL);
+
+    stub_debug_surface = true;
+    stub_newest_event = KERNEL_TRACE_EVENT_BOOT;
 }
 
 static void test_spi_uses_same_parser_and_bounded_response(void)
@@ -500,11 +567,14 @@ int main(void)
     test_transport_counts_are_observable();
     test_overflow_and_failed_sink_are_bounded();
     test_input_ring_drop_trace_is_coalesced_per_irq();
+    /* Last: it issues commands, which the transport counters above check. */
+    test_trace_describes_a_user_event_without_quoting_it();
     assert(kernel_performance_stats(&performance));
+    /* Six, plus the two `trace` commands the last test issues. */
     assert(performance.metric[KERNEL_PERFORMANCE_MONITOR_COMMAND].calls ==
-           6u);
+           8u);
     assert(performance.metric[KERNEL_PERFORMANCE_MONITOR_COMMAND].samples ==
-           6u);
+           8u);
     assert(performance.metric[
         KERNEL_PERFORMANCE_MONITOR_COMMAND].maximum_cycles == 97u);
     assert(performance.metric[

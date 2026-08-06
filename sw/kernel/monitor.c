@@ -391,6 +391,16 @@ static void render_trace(KernelMonitorBuilder *builder)
     KernelTraceHeader header;
     KernelTraceRecord record;
 
+    /*
+     * Reading is the privileged half. Emitting an event needs no capability at
+     * all, because an account of what happened that depends on one has holes
+     * exactly where something went wrong -- but a log is where secrets leak,
+     * so looking at one is a debug surface.
+     */
+    if (!kernel_process_debug_surface()) {
+        render_unavailable(builder);
+        return;
+    }
     if (!kernel_trace_header(&header)) {
         render_unavailable(builder);
         return;
@@ -398,11 +408,38 @@ static void render_trace(KernelMonitorBuilder *builder)
     builder_key_dec(builder, "next=", header.next_sequence);
     builder_key_dec(builder, " wraps=", header.wrap_count);
     builder_key_dec(builder, " dropped=", header.dropped_count);
-    if (kernel_trace_read_recent(0u, &record)) {
-        builder_key_dec(builder, " event=", record.event);
-        builder_key_hex(builder, " flags=0x", record.flags);
-        builder_key_hex(builder, " arg0=0x", record.argument[0]);
+    if (!kernel_trace_read_recent(0u, &record))
+        return;
+    builder_key_dec(builder, " event=", record.event);
+    /*
+     * A user event is described, never quoted. Its arguments are a program's
+     * own bytes -- text, today -- and this line goes to a serial console that
+     * a person is reading over someone's shoulder. The catalog renders these
+     * properly later; until it does, saying which message it was beats
+     * printing four words of it in hex.
+     */
+    if (record.event == KERNEL_TRACE_EVENT_USER) {
+        KernelTraceUserRecord user;
+        uint8_t payload[KERNEL_TRACE_ARGUMENT_BYTES];
+        uint32_t length = 0u;
+        uint32_t slot = (header.write_index + KERNEL_TRACE_CAPACITY - 1u) %
+                        KERNEL_TRACE_CAPACITY;
+
+        if (kernel_trace_read_user(slot, &user, payload, sizeof(payload),
+                                   &length)) {
+            builder_key_hex(builder, " process=0x", user.process);
+            builder_key_hex(builder, " message=0x", user.message);
+            builder_key_dec(builder, " level=", KERNEL_TRACE_LEVEL_OF(
+                                                    user.flags));
+            builder_key_dec(builder, " bytes=", length);
+        }
+        return;
     }
+    /* An argument slot on its own says nothing; its header already did. */
+    if (record.event == KERNEL_TRACE_EVENT_USER_ARGUMENTS)
+        return;
+    builder_key_hex(builder, " flags=0x", record.flags);
+    builder_key_hex(builder, " arg0=0x", record.argument[0]);
 }
 
 static void render_mmu(KernelMonitorBuilder *builder)
