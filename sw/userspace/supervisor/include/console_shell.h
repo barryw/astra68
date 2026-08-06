@@ -8,6 +8,7 @@
  * the status halfword has no bits left, so how far it got is reported through
  * the progress counter and the caller parks either way.
  */
-void console_shell_run(uint32_t display, uint32_t input);
+void console_shell_run(uint32_t display, uint32_t input,
+                       int volume_ready);
 
 #endif

@@ -300,8 +300,17 @@ static void command_write(int argc, char *const *argv)
         uint32_t length = shell_strlen(argv[index]);
 
         rc = ext4_fwrite(&file, argv[index], length, &moved);
-        if (rc != EOK || moved != length) {
+        if (rc != EOK) {
             report_errno("write", rc);
+            break;
+        }
+        if (moved != length) {
+            /* A short write is not an error code, so say what happened. */
+            astra_terminal_write(&shell.terminal, "write: short, ");
+            write_number((uint32_t)moved);
+            astra_terminal_write(&shell.terminal, " of ");
+            write_number(length);
+            astra_terminal_putc(&shell.terminal, '\n');
             break;
         }
         rc = ext4_fwrite(&file, index + 1 < argc ? " " : "\n", 1u, &moved);
@@ -448,7 +457,8 @@ static void feed_key(uint32_t code)
     astra_terminal_putc(&shell.terminal, ' ');
 }
 
-void console_shell_run(uint32_t display, uint32_t input)
+void console_shell_run(uint32_t display, uint32_t input,
+                       int volume_ready)
 {
     AstraInputEvent events[ASTRA_INPUT_READ_BATCH_MAX];
     uint32_t columns = 0u;
@@ -473,6 +483,8 @@ void console_shell_run(uint32_t display, uint32_t input)
 
     astra_terminal_clear(&shell.terminal);
     write_line("Astra 68");
+    write_line(volume_ready ? "volume: mounted at /" :
+                             "volume: not mounted, file commands will fail");
     command_help();
     prompt();
     if (astra_terminal_flush(&shell.terminal) != ASTRA_TERMINAL_OK) {

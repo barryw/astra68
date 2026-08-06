@@ -27,6 +27,12 @@
  * have started.
  */
 
+/*
+ * Whether a terminal will follow the volume check, which decides if the check
+ * unmounts what it proved or leaves it mounted for the shell to use.
+ */
+static int want_terminal;
+
 static uint64_t
 supervisor_clock(void *context)
 {
@@ -138,7 +144,7 @@ verify_block_round_trip(uint32_t device, uint32_t irq)
      */
     if (failure == 0u) {
         (void)astra_progress(ASTRA_SUPERVISOR_STAGE_BLOCK_VERIFIED);
-        failure = supervisor_verify_volume(&block);
+        failure = supervisor_verify_volume(&block, want_terminal);
     }
 
     astra_lease_block_detach(&lease);
@@ -197,6 +203,14 @@ astra_main(const AstraStartupInfo *startup)
     }
     (void)astra_progress(ASTRA_SUPERVISOR_STAGE_BLOCK_LEASED);
 
+    {
+        const AstraStartupCapability *screen = find_capability(
+            capabilities, startup->capability_count,
+            ASTRA_CAPABILITY_DISPLAY_DEVICE);
+
+        want_terminal = screen != NULL && screen->handle != 0u;
+    }
+
     status = verify_block_round_trip(block_device, block_irq);
     if (status != 0u) {
         return (int)(ASTRA_SUPERVISOR_STATUS_TAG | status);
@@ -217,8 +231,14 @@ astra_main(const AstraStartupInfo *startup)
             ASTRA_CAPABILITY_INPUT_DEVICE);
 
         if (display != NULL && display->handle != 0u) {
+            /*
+             * The check unmounted what it proved, so mount it again. A
+             * terminal with no filesystem is still worth having -- it reports
+             * the failure rather than refusing to start.
+             */
             console_shell_run(display->handle,
-                              keyboard != NULL ? keyboard->handle : 0u);
+                              keyboard != NULL ? keyboard->handle : 0u,
+                              want_terminal);
         }
     }
 

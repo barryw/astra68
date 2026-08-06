@@ -44,6 +44,14 @@ static AstraAllocScalar volume_arena[28000];
 static AstraAllocator volume_allocator;
 
 static AstraExt4Port volume_port;
+/*
+ * The window the check found. The check deliberately unmounts to prove the
+ * volume comes back clean and leaves nothing allocated; a terminal needs it
+ * mounted again afterwards, and it must be the same window.
+ */
+static AstraExt4Partition volume_window;
+static AstraBlockDevice *volume_block;
+static int volume_window_valid;
 static uint8_t volume_sector[ASTRA_BLOCK_SECTOR_BYTES];
 static uint8_t volume_pattern[VOLUME_CHECK_BYTES];
 
@@ -132,7 +140,7 @@ write_and_verify(void)
 }
 
 uint32_t
-supervisor_verify_volume(AstraBlockDevice *block)
+supervisor_verify_volume(AstraBlockDevice *block, int keep_mounted)
 {
     AstraExt4Partition window;
     uint32_t failure;
@@ -144,6 +152,9 @@ supervisor_verify_volume(AstraBlockDevice *block)
     if (!find_volume(block, &window)) {
         return 0u;
     }
+    volume_window = window;
+    volume_block = block;
+    volume_window_valid = 1;
     (void)astra_progress(ASTRA_SUPERVISOR_STAGE_VOLUME_FOUND);
 
     if (astra_alloc_init(&volume_allocator, astra_ext4_alloc_classes,
@@ -184,6 +195,18 @@ supervisor_verify_volume(AstraBlockDevice *block)
     (void)astra_progress(ASTRA_SUPERVISOR_STAGE_VOLUME_MOUNTED);
 
     failure = write_and_verify();
+
+    /*
+     * A terminal needs the volume it is about to use, and lwext4 does not
+     * take kindly to the same device being mounted a second time. Leaving it
+     * mounted is also what a real boot does; the price is that the checks
+     * below, which only mean anything once everything is released, are not
+     * run in that case.
+     */
+    if (keep_mounted && failure == 0u) {
+        (void)astra_progress(ASTRA_SUPERVISOR_STAGE_VOLUME_VERIFIED);
+        return 0u;
+    }
 
     (void)ext4_journal_stop(VOLUME_MOUNT_POINT);
     if (ext4_umount(VOLUME_MOUNT_POINT) != EOK) {

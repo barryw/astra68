@@ -17,6 +17,8 @@
  * round-trip rather than reattaching, because transfer memory is hard-capped
  * and claiming it twice is exactly what that cap exists to prevent.
  */
-uint32_t supervisor_verify_volume(AstraBlockDevice *block);
+uint32_t supervisor_verify_volume(AstraBlockDevice *block,
+                                  int keep_mounted);
+
 
 #endif
