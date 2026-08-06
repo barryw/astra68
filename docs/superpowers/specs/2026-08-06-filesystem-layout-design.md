@@ -162,13 +162,22 @@ filesystem — is refused for this machine:
   corrupts the boot volume is wrong on its face, and it contradicts §7 and §3.5
   outright.
 
-**Not built: union assigns.** An assign could name an ordered list of
-`(mount, root, rights)` rather than one of them, with lookup trying each member
-and the first hit answering — the Amiga's multi-directory assign. That has the
-recoverable failure block spanning does not: a member that is gone takes only
-the files that were on it, and every other member still answers.
+**Union assigns: designed here, and now approved for `COMMANDS:`.** An assign
+names an ordered list of `(mount, root, rights)` rather than one of them, with
+lookup trying each member and the first hit answering — the Amiga's
+multi-directory assign. That has the recoverable failure block spanning does
+not: a member that is gone takes only the files that were on it, and every
+other member still answers.
 
-It is not built, and a second volume gets a second name instead.
+**Amended 2026-08-07: the trigger below is met.** A person who installs a
+program somewhere the system did not ship it wants to type its bare name, and
+"spell the category" is exactly the thing a command's name being bare exists to
+avoid. Commands are therefore a collection that genuinely cannot be split by
+name, which is what §1.7 said to wait for. The prerequisite this section named
+— `readdir` becoming a cursor — was paid in `78965bd`.
+
+It is built for `COMMANDS:` first. A second *volume* still gets a second name:
+more room remains a second name, and nothing about this amendment changes that.
 
 The reason is that no part of this machine needs one name to reach two volumes.
 More room is a second name — `PHOTOS:` — which is what an assign is for, and
@@ -181,10 +190,20 @@ the lookup loop — that is a few lines — but everything around it: `readdir`
 becoming a cursor, a way to ask which member answered, and a shadowing rule a
 person has to hold in their head.
 
-**The trigger to revisit.** When one logical collection genuinely cannot be
-split by name — when something other than a person's taste requires a single
-name to span media — this is the design to build, and the rules below are what
-it must obey. Running out of room on one disk is not that trigger.
+**The trigger.** When one logical collection genuinely cannot be split by name
+— when something other than a person's taste requires a single name to span
+media — this is the design to build, and the rules below are what it must obey.
+Running out of room on one disk is not that trigger; a command whose name must
+be bare is.
+
+**What this is not.** A union assign has the shape of a search path and none of
+its substance, and the difference is why it is allowed here while `PATH` is
+not. A path variable is a string any program can rewrite, so anything that can
+set it can decide which program runs. A union is a *binding*: it is joined by a
+line in `CONFIG:startup` or by a command a person ran, its members carry their
+own rights, and a program cannot extend the list by naming anything. The
+question `PATH` cannot answer — which one ran — is answerable here, and the
+launch records it.
 
 The rules it would have to obey:
 
@@ -211,13 +230,31 @@ The rules it would have to obey:
   path within that member's root, and no member's root can be climbed out of.
   A union adds candidates, never an escape.
 
-**The cost that would have to be paid first: listing a union directory.** The
-storage protocol addresses `readdir` by index and the ext4 backend reopens the
-directory per entry, so one listing is already quadratic; a union multiplies that by the
-member count and adds a duplicate-name check whose memory is proportional to the
-directory rather than bounded. Union listing therefore waits on `readdir`
-becoming a cursor. Lookup, open, read and write do not — they stop at the first
-member that answers and cost one extra attempt per member that does not.
+**Resolution stays pure.** `astra_assign_resolve` is a string operation today —
+name and path in, wire path out, no disk touched, refusals decided locally, and
+tested without a filesystem anywhere near it. A union tempts the obvious
+implementation, which is to stat each member until one answers, and that drags
+I/O into the layer whose whole value is not having any.
+
+So resolution answers *per member*: it takes the member's index and returns that
+member's path, or `NOT_FOUND` once the index passes the last one. The Kit loops
+over the candidates and stops at the first that opens, because the Kit is
+already where the I/O is. The pure function stays pure, the trying happens once,
+and a caller that wants to know which member answered is holding the index that
+says so.
+
+**Listing a union.** The cost this section named first — `readdir` addressed by
+index, quadratic in the ext4 backend — was paid in `78965bd`; enumeration is a
+cursor now. What remains is duplicate names, and the answer is to **not**
+deduplicate: each member is listed in order and a name that appears twice is
+shown twice, with the member it came from. A duplicate-name set is memory
+proportional to the directory rather than to the page, which is the one thing
+every enumeration on this machine refuses. Seeing both is also the honest
+answer: the shadowing is real, and hiding the loser makes a listing disagree
+with what a lookup would do.
+
+Lookup, open, read and write cost one extra attempt per member that does not
+answer, and stop at the first that does.
 
 ### 1.8 No symbolic links
 
@@ -295,8 +332,12 @@ A bare command name is searched in exactly two places, in this order:
 1. `APPS:`
 2. `COMMANDS:`
 
-`APPS:` first, so a person can replace a shipped command deliberately. Two
-entries, one stated order, no configurable search path: a path variable is a
+`APPS:` first, so a person can replace a shipped command deliberately. Where
+`COMMANDS:` is a union (§1.7), its members are tried in their stated order after
+`APPS:`, and the resolved member is what the launch records — so the list a
+person can read and the answer to "which one ran" are the same thing.
+
+Two entries, one stated order, no configurable search path: a path variable is a
 hijacking surface and an unanswerable "which one ran" question, and neither is
 worth the flexibility on a machine with two locations.
 
