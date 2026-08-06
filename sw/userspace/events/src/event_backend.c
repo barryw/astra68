@@ -22,6 +22,7 @@
 #define KIND_SUBSYSTEM_DIR 5u
 #define KIND_MERGED      6u   /* a leaf over the three level tiers */
 #define KIND_EARLIEST    7u   /* a leaf over the boot ring */
+#define KIND_SUBSYSTEM_ONE 8u /* one subsystem, and the levels under it */
 
 #define LINE_MAX 160u
 
@@ -47,6 +48,13 @@ static const struct {
     {"earliest", ASTRA_EVENT_LEVEL_DEBUG, KIND_EARLIEST}
 };
 #define BOOT_LEAF_COUNT (sizeof(boot_leaf) / sizeof(boot_leaf[0]))
+/*
+ * The same names under a subsystem, minus `earliest`: the boot ring is the
+ * boot's, not a subsystem's. Two dimensions at once is the one thing a single
+ * directory could not name, and it is a path rather than a query because
+ * anything `events` can ask for has to be something `cat` could have asked for.
+ */
+#define LEVEL_LEAF_COUNT (BOOT_LEAF_COUNT - 1u)
 
 static const uint32_t merged_tier[] = {
     ASTRA_EVENT_TIER_PRESENTED, ASTRA_EVENT_TIER_RECORD,
@@ -357,11 +365,35 @@ describe(AstraEventsNode *node, const char *path)
     rest = after(path, "/subsystem/");
     if (rest != NULL) {
         for (index = 0u; index < ASTRA_EVENT_SUBSYSTEM_MAX; ++index) {
-            if (equal(rest, subsystem_name[index])) {
-                node->kind = KIND_MERGED;
-                node->subsystem = (uint8_t)index;
+            const char *level = after(rest, subsystem_name[index]);
+
+            if (level == NULL) {
+                continue;
+            }
+            node->subsystem = (uint8_t)index;
+            /*
+             * A subsystem is a directory of levels, and `all` is the one that
+             * means every level of it. A node that were both a file and a
+             * directory would have to answer `ls` and `cat` with two different
+             * kinds, and the protocol refuses a read on a directory for good
+             * reasons that are not worth arguing with here.
+             */
+            if (*level == '\0') {
+                node->kind = KIND_SUBSYSTEM_ONE;
                 return ASTRA_VFS_OK;
             }
+            if (*level != '/') {
+                continue;   /* a longer name that merely starts the same way */
+            }
+            ++level;
+            for (uint32_t leaf = 0u; leaf < LEVEL_LEAF_COUNT; ++leaf) {
+                if (equal(level, boot_leaf[leaf].name)) {
+                    node->kind = KIND_MERGED;
+                    node->level_min = boot_leaf[leaf].level_min;
+                    return ASTRA_VFS_OK;
+                }
+            }
+            return ASTRA_VFS_ERR_NOT_FOUND;
         }
         return ASTRA_VFS_ERR_NOT_FOUND;
     }
@@ -373,7 +405,7 @@ is_directory(uint8_t kind)
 {
     return kind == KIND_ROOT || kind == KIND_BOOT ||
            kind == KIND_BOOT_CURRENT || kind == KIND_ACTIVITY_DIR ||
-           kind == KIND_SUBSYSTEM_DIR;
+           kind == KIND_SUBSYSTEM_DIR || kind == KIND_SUBSYSTEM_ONE;
 }
 
 /* ------------------------------------------------------------------- verbs */
@@ -681,6 +713,11 @@ events_readdir(void *context, const char *path, uint64_t cookie, char *name,
     case KIND_SUBSYSTEM_DIR:
         if (cookie < ASTRA_EVENT_SUBSYSTEM_MAX) {
             entry = subsystem_name[cookie];
+        }
+        break;
+    case KIND_SUBSYSTEM_ONE:
+        if (cookie < LEVEL_LEAF_COUNT) {
+            entry = boot_leaf[cookie].name;
             info->kind = ASTRA_VFS_KIND_FILE;
         }
         break;

@@ -206,9 +206,21 @@ static void test_a_path_is_the_filter(void)
     assert(strstr(text, "volume refused") == NULL);
 
     /* A subsystem is a catalog lookup, because that is where it lives. */
-    (void)read_all("/subsystem/storage", text, sizeof(text));
+    (void)read_all("/subsystem/storage/all", text, sizeof(text));
     assert(strstr(text, "volume refused") != NULL);
     assert(strstr(text, "command accepted") == NULL);
+
+    /*
+     * Two dimensions at once, as a path. This is the one thing a single
+     * directory could not name, and it is what `events --subsystem storage
+     * --level warning` builds -- so the command can stay a path builder rather
+     * than becoming a second door onto the store.
+     */
+    (void)read_all("/subsystem/storage/warning", text, sizeof(text));
+    assert(strstr(text, "volume refused") != NULL);
+    assert(read_all("/subsystem/shell/warning", text, sizeof(text)) == 0u);
+    (void)read_all("/subsystem/shell/all", text, sizeof(text));
+    assert(strstr(text, "command accepted") != NULL);
 
     /* An activity nothing emitted is empty, not an error: the name is valid. */
     assert(read_all("/activity/deadbeef", text, sizeof(text)) == 0u);
@@ -222,6 +234,12 @@ static void test_a_path_is_the_filter(void)
         assert(ops->open(&backend, "/activity/nope", ASTRA_VFS_OPEN_READ,
                          &node, &info) == ASTRA_VFS_ERR_NOT_FOUND);
         assert(ops->open(&backend, "/subsystem/nothing", ASTRA_VFS_OPEN_READ,
+                         &node, &info) == ASTRA_VFS_ERR_NOT_FOUND);
+        /* A level nothing defines, under a subsystem that exists. */
+        assert(ops->open(&backend, "/subsystem/shell/loud", ASTRA_VFS_OPEN_READ,
+                         &node, &info) == ASTRA_VFS_ERR_NOT_FOUND);
+        /* A name that merely starts like one of ours is not one of ours. */
+        assert(ops->open(&backend, "/subsystem/shellish", ASTRA_VFS_OPEN_READ,
                          &node, &info) == ASTRA_VFS_ERR_NOT_FOUND);
         assert(ops->open(&backend, "/boot/-1/all", ASTRA_VFS_OPEN_READ, &node,
                          &info) == ASTRA_VFS_ERR_NOT_FOUND);
@@ -261,6 +279,16 @@ static void test_the_tree_lists_itself(void)
         ++entries;
     }
     assert(entries == 2u);
+
+    /* A subsystem is a directory of levels now. */
+    cookie = 0u;
+    entries = 0u;
+    while (ops->readdir(&backend, "/subsystem/shell", cookie, name,
+                        sizeof(name), &info, &cookie) == ASTRA_VFS_OK) {
+        assert(info.kind == ASTRA_VFS_KIND_FILE);
+        ++entries;
+    }
+    assert(entries == 4u);
 
     /* boot/ holds current/ and nothing it cannot answer for. */
     cookie = 0u;
