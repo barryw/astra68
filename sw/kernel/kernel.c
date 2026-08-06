@@ -1038,6 +1038,23 @@ void kernel_process_initial_image_exited(uint32_t exit_status,
     kernel_panic("initial user image exited");
 }
 
+/*
+ * A process's own diagnostic line. Prefixed with the process id and never
+ * with anything a program chose, so a line a program wrote cannot be read as
+ * one the kernel wrote. The bytes arrive already bounded and already stripped
+ * of anything unprintable.
+ */
+void kernel_process_diagnostic_log(uint32_t process_id, const char *text,
+                                   uint32_t length)
+{
+    console_puts("[log ");
+    console_hex32(process_id);
+    console_puts("] ");
+    for (uint32_t index = 0u; index < length; ++index)
+        console_putc(text[index]);
+    console_putc('\n');
+}
+
 void kernel_process_initial_image_progress(uint32_t stage)
 {
     console_puts("Initial image ....... ");
@@ -1427,7 +1444,14 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         kernel_panic("PMMU enable failed");
     if (kernel_worker_init() != KERNEL_WORKER_OK)
         kernel_panic("kernel worker initialization failed");
-    if (!kernel_monitor_init(&monitor_build_info))
+    /*
+     * The monitor answers whoever is on the UART with page tables, handle
+     * tables and memory maps. That is exactly what a developer needs and
+     * exactly what a shipped machine should not offer, so it stands up only
+     * where the build says it has a debug surface.
+     */
+    if (kernel_process_debug_surface() &&
+        !kernel_monitor_init(&monitor_build_info))
         kernel_panic("kernel monitor initialization failed");
     if (!kernel_memory_stats(&memory_stats))
         kernel_panic("physical memory stats unavailable");

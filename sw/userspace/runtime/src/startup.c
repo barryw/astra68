@@ -24,5 +24,14 @@ astra_startup_validate(const AstraStartupInfo *startup)
 
     reserved_or = startup->reserved[0] | startup->reserved[1] |
                   startup->reserved[2];
-    return reserved_or == 0u;
+    if (reserved_or != 0u) {
+        return 0;
+    }
+    /*
+     * The diagnostic channel is bound here because this is the one call every
+     * program makes before it does anything else, and because a handle that
+     * has not been validated is not one to log through.
+     */
+    astra_log_bind(startup->process_handle);
+    return 1;
 }

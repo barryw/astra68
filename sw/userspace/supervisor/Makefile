@@ -53,8 +53,10 @@ TARGET := build/m68k/astra_supervisor.elf
 # at.
 IMAGE := build/m68k/astra_supervisor.image.elf
 HOST_TEST := build/host/test_supervisor
+# log.c comes along because validating a startup block is what binds the
+# diagnostic channel, so the two cannot be linked apart.
 TEST_SOURCES := src/supervisor.c $(RUNTIME)/src/startup.c \
-	tests/test_supervisor.c
+	$(RUNTIME)/src/log.c tests/test_supervisor.c
 
 # Two invocations on purpose. Make has no rule here for the libraries the sub-
 # makes build, so it stats them once, before those sub-makes run, and compares

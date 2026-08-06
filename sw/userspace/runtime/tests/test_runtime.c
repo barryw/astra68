@@ -9,6 +9,10 @@
 
 static uint32_t mock_number;
 static uint32_t mock_argument0;
+static uint32_t mock_argument1;
+static uint32_t mock_argument2;
+static uint32_t mock_calls;
+static uint32_t mock_status = ASTRA_SYSCALL_OK;
 
 void
 astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
@@ -17,11 +21,21 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
 {
     mock_number = number;
     mock_argument0 = argument0;
-    assert(argument1 == 0u);
-    assert(argument2 == 0u);
+    mock_argument1 = argument1;
+    mock_argument2 = argument2;
+    ++mock_calls;
+    /*
+     * Every wrapper but the diagnostic one takes a single argument, and the
+     * mock has always enforced that. The log carries a buffer and a length,
+     * so it is the one call where the rest are allowed to be set.
+     */
+    if (number != ASTRA_SYSCALL_LOG_WRITE) {
+        assert(argument1 == 0u);
+        assert(argument2 == 0u);
+    }
     assert(argument3 == 0u);
     assert(argument4 == 0u);
-    result->status = ASTRA_SYSCALL_OK;
+    result->status = mock_status;
     result->value0 = ASTRA_SYSCALL_ABI_VERSION;
     result->value1 = 0x11111111u;
     result->value2 = 0x22222222u;
@@ -224,6 +238,107 @@ test_syscall_wrappers(void)
     assert(thread == 0x22222222u);
 }
 
+
+/*
+ * The diagnostic channel, from both ends: what it sends when it is allowed to,
+ * and what it refuses without reaching the kernel at all. The refusals matter
+ * more than the sends -- a channel that quietly issues a syscall with a bad
+ * length or an unbound handle is one the kernel has to defend against.
+ */
+static void test_log_channel(void)
+{
+    static const char line[] = "volume mounted";
+    char oversized[ASTRA_LOG_MAX_BYTES + 32u];
+    AstraStartupInfo startup;
+    uint32_t calls;
+
+    /* Validating the startup block is what hands the channel its authority. */
+    astra_log_bind(0u);
+    startup = valid_startup();
+    startup.process_handle = 0x1234u;
+    assert(astra_startup_validate(&startup) == 1);
+    assert(astra_log_handle() == 0x1234u);
+
+    /* A block that fails validation hands over nothing. */
+    astra_log_bind(0u);
+    startup.magic = 0u;
+    assert(astra_startup_validate(&startup) == 0);
+    assert(astra_log_handle() == 0u);
+
+    /* Unbound: no authority has been handed over, so nothing is sent. */
+    astra_log_bind(0u);
+    assert(astra_log_handle() == 0u);
+    calls = mock_calls;
+    assert(astra_log_write(line, 4u) == ASTRA_SYSCALL_INVALID_HANDLE);
+    assert(mock_calls == calls);
+
+    astra_log_bind(0x600du);
+    assert(astra_log_handle() == 0x600du);
+
+    /* Bound: the handle, the buffer and the length reach the syscall. */
+    mock_status = ASTRA_SYSCALL_OK;
+    assert(astra_log_write(line, sizeof(line) - 1u) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_LOG_WRITE);
+    assert(mock_argument0 == 0x600du);
+    assert(mock_argument1 == (uint32_t)(uintptr_t)line);
+    assert(mock_argument2 == sizeof(line) - 1u);
+
+    /* A refusal is returned, not acted on. */
+    mock_status = ASTRA_SYSCALL_ACCESS_DENIED;
+    assert(astra_log_write(line, 4u) == ASTRA_SYSCALL_ACCESS_DENIED);
+    mock_status = ASTRA_SYSCALL_OK;
+
+    /* Bad arguments never become a syscall. */
+    calls = mock_calls;
+    assert(astra_log_write(NULL, 4u) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_log_write(line, 0u) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_log_write(line, ASTRA_LOG_MAX_BYTES + 1u) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_log(NULL) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_log("") == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(mock_calls == calls);
+
+    /* A string is measured, and one too long is cut rather than refused. */
+    assert(astra_log("hello") == ASTRA_SYSCALL_OK);
+    assert(mock_argument2 == 5u);
+    memset(oversized, 'x', sizeof(oversized));
+    oversized[sizeof(oversized) - 1u] = '\0';
+    assert(astra_log(oversized) == ASTRA_SYSCALL_OK);
+    assert(mock_argument2 == ASTRA_LOG_MAX_BYTES);
+}
+
+/* The assertion message: the half that survives when the channel is refused. */
+static void test_assert_message(void)
+{
+    char message[64];
+    char tiny[8];
+    uint32_t length;
+
+    length = astra_assert_message(message, sizeof(message), "vfs_client.c",
+                                  231u, "client != NULL");
+    assert(strcmp(message, "vfs_client.c:231: client != NULL") == 0);
+    assert(length == strlen(message));
+
+    /* Zero is a line number like any other, not a missing one. */
+    (void)astra_assert_message(message, sizeof(message), "a.c", 0u, "x");
+    assert(strcmp(message, "a.c:0: x") == 0);
+
+    /* Missing pieces are marked rather than skipped, so the shape holds. */
+    (void)astra_assert_message(message, sizeof(message), NULL, 7u, NULL);
+    assert(strcmp(message, "?:7: ?") == 0);
+
+    /* Truncation stays inside the buffer and stays terminated. */
+    length = astra_assert_message(tiny, sizeof(tiny), "some_long_name.c", 42u,
+                                  "condition");
+    assert(length == sizeof(tiny) - 1u);
+    assert(tiny[sizeof(tiny) - 1u] == '\0');
+    assert(strncmp(tiny, "some_lo", 7) == 0);
+
+    /* No buffer, no message, and no write. */
+    assert(astra_assert_message(NULL, sizeof(message), "a.c", 1u, "x") == 0u);
+    assert(astra_assert_message(message, 0u, "a.c", 1u, "x") == 0u);
+}
+
 int
 main(void)
 {
@@ -231,5 +346,7 @@ main(void)
     test_memory_primitives();
     test_qsort();
     test_syscall_wrappers();
+    test_log_channel();
+    test_assert_message();
     return 0;
 }

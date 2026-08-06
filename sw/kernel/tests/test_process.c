@@ -677,6 +677,22 @@ void kernel_process_initial_image_progress(uint32_t stage)
     last_initial_image_stage = stage;
 }
 
+static uint32_t diagnostic_log_reports;
+static uint32_t last_diagnostic_process;
+static char last_diagnostic_text[ASTRA_LOG_MAX_BYTES + 1u];
+static uint32_t last_diagnostic_length;
+
+void kernel_process_diagnostic_log(uint32_t process_id, const char *text,
+                                   uint32_t length)
+{
+    ++diagnostic_log_reports;
+    last_diagnostic_process = process_id;
+    last_diagnostic_length = length;
+    assert(length <= ASTRA_LOG_MAX_BYTES);
+    memcpy(last_diagnostic_text, text, length);
+    last_diagnostic_text[length] = '\0';
+}
+
 void kernel_process_soak_checkpoint(uint32_t cycles,
                                     uint32_t baseline_free_frames)
 {
@@ -6551,6 +6567,230 @@ static void test_user_stack_grows_on_fault_and_guards_the_floor(void)
     assert(after_teardown.free_frames >= baseline.free_frames);
 }
 
+
+/*
+ * The diagnostic channel. A process may write a bounded line about itself if
+ * it holds ASTRA_RIGHT_DEBUG over itself, and may not do anything else at all.
+ *
+ * The refusals are the substance here. This is a syscall that reaches the
+ * console the operator reads, so every way of asking wrongly has to be a
+ * refusal that is counted rather than a line that gets through.
+ */
+static void test_diagnostic_log_is_gated_and_sanitised(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    static const char line[] = "volume mounted at /";
+    static const char nasty[] = "clean\x1b[2Jand\ndirty";
+    char oversized[ASTRA_LOG_MAX_BYTES + 1u];
+    KernelCpuContext *next;
+    KernelProcessSnapshot snapshot;
+    KernelSchedulerStats stats;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t user_text = KERNEL_PROCESS_STACK_TOP - 512u;
+    uint32_t process_id;
+    uint32_t other_id;
+    KernelHandle self_handle;
+    KernelHandle narrow_handle = KERNEL_HANDLE_INVALID;
+    KernelHandle observer_handle = KERNEL_HANDLE_INVALID;
+    uint32_t reports;
+    uint32_t refusals;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(kernel_process_snapshot(0u, &snapshot));
+    self_handle = snapshot.self_handle;
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, KERNEL_PROCESS_CODE_BASE, 0u);
+
+    /* This build has a debug surface, so a process may speak for itself. */
+    assert(kernel_process_debug_surface());
+    assert(kernel_user_copy_to_asm(user_text, line, sizeof(line) - 1u) ==
+           KERNEL_USER_COPY_OK);
+    diagnostic_log_reports = 0u;
+    registers[0] = ASTRA_SYSCALL_LOG_WRITE;
+    registers[1] = self_handle;
+    registers[2] = user_text;
+    registers[3] = sizeof(line) - 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(diagnostic_log_reports == 1u);
+    assert(last_diagnostic_process == process_id);
+    assert(last_diagnostic_length == sizeof(line) - 1u);
+    assert(strcmp(last_diagnostic_text, line) == 0);
+    assert(kernel_process_stats(&stats));
+    assert(stats.diagnostic_logs == 1u);
+    assert(stats.diagnostic_log_bytes == sizeof(line) - 1u);
+    assert(stats.diagnostic_log_refusals == 0u);
+
+    /*
+     * Control characters are replaced, not dropped. The console is shared with
+     * the kernel's own output: a program that could write an escape sequence
+     * could clear the screen, and one that could write a newline could dress
+     * its next line up as something the kernel said.
+     */
+    assert(kernel_user_copy_to_asm(user_text, nasty, sizeof(nasty) - 1u) ==
+           KERNEL_USER_COPY_OK);
+    registers[3] = sizeof(nasty) - 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(last_diagnostic_length == sizeof(nasty) - 1u);
+    assert(strcmp(last_diagnostic_text, "clean.[2Jand.dirty") == 0);
+
+    /* The longest allowed line is allowed, and one byte more is not. */
+    memset(oversized, 'x', sizeof(oversized));
+    assert(kernel_user_copy_to_asm(user_text, oversized,
+                                   ASTRA_LOG_MAX_BYTES) ==
+           KERNEL_USER_COPY_OK);
+    registers[3] = ASTRA_LOG_MAX_BYTES;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(last_diagnostic_length == ASTRA_LOG_MAX_BYTES);
+
+    reports = diagnostic_log_reports;
+    refusals = 0u;
+
+    registers[3] = ASTRA_LOG_MAX_BYTES + 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    ++refusals;
+
+    registers[3] = 0u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    ++refusals;
+
+    /* An address the process does not own is refused, not read. */
+    registers[2] = 4u;
+    registers[3] = 8u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_BAD_ADDRESS);
+    ++refusals;
+    registers[2] = user_text;
+
+    /* A handle that is not a process handle at all. */
+    registers[1] = KERNEL_HANDLE_INVALID;
+    registers[3] = 4u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+    ++refusals;
+
+    /*
+     * The same process, through a second handle to itself that carries only
+     * QUERY. The right is what opens the channel, not the identity: a process
+     * holding a weaker handle to itself is refused like anyone else.
+     */
+    assert(kernel_process_grant_handle(process_id, process_id,
+                                       KERNEL_PROCESS_RIGHT_QUERY,
+                                       &narrow_handle) == KERNEL_PROCESS_OK);
+    registers[0] = ASTRA_SYSCALL_LOG_WRITE;
+    registers[1] = narrow_handle;
+    registers[2] = user_text;
+    registers[3] = 4u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    ++refusals;
+
+    /*
+     * DEBUG over *another* process is a debugger's authority, and it is not
+     * the authority to write lines in that process's name.
+     */
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &other_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_grant_handle(process_id, other_id,
+                                       KERNEL_PROCESS_RIGHT_DEBUG,
+                                       &observer_handle) ==
+           KERNEL_PROCESS_OK);
+    registers[1] = observer_handle;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    ++refusals;
+
+    /* Not one of those refusals reached the console, and all were counted. */
+    assert(diagnostic_log_reports == reports);
+    assert(kernel_process_stats(&stats));
+    assert(stats.diagnostic_log_refusals == refusals);
+}
+
+
+/*
+ * The same kernel as a machine ships: no debug surface at all. A process gets
+ * no ASTRA_RIGHT_DEBUG over itself, so the diagnostic channel is closed to
+ * everyone -- which is the point of having the surface be one decision rather
+ * than a scatter of them.
+ */
+static void test_no_debug_surface_closes_the_channel(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    static const char line[] = "please";
+    KernelCpuContext *next;
+    KernelProcessSnapshot snapshot;
+    KernelSchedulerStats stats;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t user_text = KERNEL_PROCESS_STACK_TOP - 512u;
+    uint32_t process_id;
+    uint32_t reports;
+
+    kernel_process_set_debug_surface(0);
+    initialize_test();
+    assert(!kernel_process_debug_surface());
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(kernel_process_snapshot(0u, &snapshot));
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(kernel_user_copy_to_asm(user_text, line, sizeof(line) - 1u) ==
+           KERNEL_USER_COPY_OK);
+
+    reports = diagnostic_log_reports;
+    registers[0] = ASTRA_SYSCALL_LOG_WRITE;
+    registers[1] = snapshot.self_handle;
+    registers[2] = user_text;
+    registers[3] = sizeof(line) - 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    assert(diagnostic_log_reports == reports);
+    assert(kernel_process_stats(&stats));
+    assert(stats.diagnostic_logs == 0u);
+    assert(stats.diagnostic_log_refusals == 1u);
+
+    /* Everything else the handle carries is untouched by the decision. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_INFO;
+    registers[1] = snapshot.self_handle;
+    registers[2] = user_text;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    /* Back to this build's own answer for whatever runs next. */
+    kernel_process_set_debug_surface(-1);
+    assert(kernel_process_debug_surface());
+}
+
 int main(void)
 {
     test_process_allocation_failure_matrix();
@@ -6593,6 +6833,8 @@ int main(void)
     test_bootstrap_capabilities();
     test_initial_image_exit_is_reported();
     test_user_stack_grows_on_fault_and_guards_the_floor();
+    test_diagnostic_log_is_gated_and_sanitised();
+    test_no_debug_surface_closes_the_channel();
     test_executable_rejections_do_not_allocate();
     test_executable_load_rolls_back_every_allocation();
     test_process_info_syscall();

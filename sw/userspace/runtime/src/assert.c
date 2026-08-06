@@ -2,14 +2,16 @@
  * Assertion failure handling for Astra userspace.
  *
  * Reached only from the freestanding <assert.h>, which vendored code compiles
- * against. There is nowhere to print to, so the diagnosis has to survive in
- * the exit status: the kernel turns any exit of the initial image into a
- * panic, and the panic reports that status.
+ * against.
  *
- * The line number is carried and the file name is not, because the status is
- * one word and a halfword of it is already the tag. A line number plus the
- * knowledge that the assertion came from the filesystem library is enough to
- * find the site; a status that said only "assertion failed" would not be.
+ * The file name and the expression go out on the diagnostic channel, and the
+ * line number still goes into the exit status. Both, because they fail in
+ * different circumstances: a build with no debug surface refuses the write and
+ * leaves only the status, and a status is one word that cannot say which of
+ * two files had an assertion on line 231.
+ *
+ * The log is attempted first and its refusal ignored. An assertion that could
+ * not report itself must still exit with the same status it always did.
  */
 
 #include <astra/runtime.h>
@@ -18,7 +20,13 @@ void
 astra_assert_failed(const char *file, unsigned int line,
                     const char *expression)
 {
-    (void)file;
-    (void)expression;
+    char message[ASTRA_LOG_MAX_BYTES];
+    uint32_t length;
+
+    length = astra_assert_message(message, sizeof(message), file, line,
+                                  expression);
+    if (length != 0u) {
+        (void)astra_log_write(message, length);
+    }
     astra_process_exit(ASTRA_ASSERT_STATUS_TAG | (line & 0xffffu));
 }

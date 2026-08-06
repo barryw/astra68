@@ -62,6 +62,22 @@ uint32_t astra_input_read(uint32_t device, AstraInputEvent *events,
                           uint32_t *flags);
 void astra_process_exit(uint32_t status) __attribute__((noreturn));
 
+/*
+ * The diagnostic channel. Bound once from the startup block, then usable from
+ * anywhere without threading a handle through every call site.
+ *
+ * Every one of these can be refused -- a build without a debug surface grants
+ * no process the right to write -- so the status is returned and never acted
+ * on here. Diagnostics that a program depends on are a program that stops
+ * working when the diagnostics are turned off.
+ */
+void astra_log_bind(uint32_t process_handle);
+uint32_t astra_log_handle(void);
+uint32_t astra_log_write(const void *bytes, uint32_t length);
+uint32_t astra_log(const char *text);
+uint32_t astra_assert_message(char *out, uint32_t capacity, const char *file,
+                              uint32_t line, const char *expression);
+
 /* Declared identically by the freestanding <assert.h> vendored code sees. */
 void astra_assert_failed(const char *file, unsigned int line,
                          const char *expression) __attribute__((noreturn));

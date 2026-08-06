@@ -3,7 +3,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x0001000a
+#define ASTRA_SYSCALL_ABI_VERSION 0x0001000b
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -49,6 +49,21 @@
 #define ASTRA_SYSCALL_BLOCK_COLLECT    41
 #define ASTRA_SYSCALL_CONSOLE_INFO     42
 #define ASTRA_SYSCALL_CONSOLE_WRITE    43
+#define ASTRA_SYSCALL_LOG_WRITE        44
+
+/*
+ * The diagnostic channel. A process that is not holding the display lease has
+ * no way to say anything about itself -- the progress counter is a monotonic
+ * integer and the exit status is one halfword -- so a service debugging itself
+ * had nothing to say it with.
+ *
+ * It is authority, not a free channel: the write is gated on a process handle
+ * carrying ASTRA_RIGHT_DEBUG, and a build that does not want a diagnostic
+ * surface simply does not grant that right. The kernel prints the process id
+ * with every line and passes through printable bytes only, so nothing a
+ * program writes can be mistaken for something the kernel said.
+ */
+#define ASTRA_LOG_MAX_BYTES 128u
 
 #define ASTRA_DMA_BUFFER_INFO_SIZE 20u
 

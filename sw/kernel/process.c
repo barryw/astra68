@@ -1495,6 +1495,42 @@ uint32_t kernel_process_test_handle_count(uint32_t process_id)
 }
 #endif
 
+#if defined(KERNEL_PROCESS_HOST_TEST)
+/*
+ * The host suites have to be able to stand in the shipped configuration as
+ * well as the development one. The compile-time constant is still what a real
+ * build is made from; this only lets a test ask what happens on the other side
+ * of it, which is the side nobody exercises by accident and the side where a
+ * mistake is a backdoor rather than a missing convenience.
+ */
+static int debug_surface_override = -1;
+
+void kernel_process_set_debug_surface(int enabled)
+{
+    debug_surface_override = enabled;
+}
+#endif
+
+bool kernel_process_debug_surface(void)
+{
+#if defined(KERNEL_PROCESS_HOST_TEST)
+    if (debug_surface_override >= 0)
+        return debug_surface_override != 0;
+#endif
+    return ASTRA_KERNEL_DEBUG_SURFACE != 0;
+}
+
+/*
+ * What a process holds over itself. QUERY always; DEBUG only where the build
+ * carries a diagnostic surface, which is what makes the log channel a
+ * capability rather than a syscall anyone can reach.
+ */
+static uint32_t self_handle_rights(void)
+{
+    return KERNEL_PROCESS_RIGHT_QUERY |
+           (kernel_process_debug_surface() ? KERNEL_PROCESS_RIGHT_DEBUG : 0u);
+}
+
 static int32_t find_stack_slot(const KernelProcess *process)
 {
     for (uint32_t slot = 0u; slot < KERNEL_PROCESS_THREAD_MAX; ++slot) {
@@ -1989,7 +2025,7 @@ static KernelProcessStatus create_process(const void *image,
     process->handle_references = 1u;
     if (kernel_handle_install(
             &process->handles, KERNEL_OBJECT_PROCESS,
-            KERNEL_PROCESS_RIGHT_QUERY, process, process_handle_release,
+            self_handle_rights(), process, process_handle_release,
             NULL, &self_handle) != KERNEL_HANDLE_OK) {
         process->handle_references = 0u;
         result = KERNEL_PROCESS_RESOURCE_LIMIT;
@@ -2333,7 +2369,7 @@ KernelProcessStatus kernel_process_create_executable(
     process->process_state = KERNEL_PROCESS_CREATED;
     process->handle_references = 1u;
     if (kernel_handle_install(&process->handles, KERNEL_OBJECT_PROCESS,
-                              KERNEL_PROCESS_RIGHT_QUERY, process,
+                              self_handle_rights(), process,
                               process_handle_release, NULL,
                               &self_handle) != KERNEL_HANDLE_OK) {
         process->handle_references = 0u;
@@ -2470,8 +2506,15 @@ KernelProcessStatus kernel_process_grant_handle(
     KernelHandleStatus handle_status;
     KernelProcessStatus status;
 
+    /*
+     * DEBUG is grantable over another process on purpose: it is the authority
+     * a debugger would hold, and it is deliberately not the authority to write
+     * diagnostic lines in that process's name -- the log syscall refuses a
+     * handle that names anyone but the caller.
+     */
     if (recipient == NULL || target == NULL || handle == NULL ||
-        rights == 0u || (rights & ~KERNEL_PROCESS_RIGHTS) != 0u)
+        rights == 0u ||
+        (rights & ~(KERNEL_PROCESS_RIGHTS | KERNEL_PROCESS_RIGHT_DEBUG)) != 0u)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     *handle = KERNEL_HANDLE_INVALID;
     status = retain_process_handle(target);
@@ -3863,6 +3906,77 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                 }
             }
         }
+        break;
+    }
+    /*
+     * The diagnostic channel: a bounded line of text from a process that holds
+     * ASTRA_RIGHT_DEBUG over itself. The right is the whole of the policy --
+     * a build with no debug surface grants it to nobody and this answers
+     * ACCESS_DENIED to everyone.
+     */
+    case ASTRA_SYSCALL_LOG_WRITE: {
+        KernelProcess *target = NULL;
+        KernelHandleStatus handle_status;
+        char text[ASTRA_LOG_MAX_BYTES];
+        uint32_t user_text = thread->context.data[2];
+        uint32_t length = thread->context.data[3];
+        uint32_t index;
+        int copy_status;
+
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1], KERNEL_OBJECT_PROCESS,
+            KERNEL_PROCESS_RIGHT_DEBUG, (void **)&target);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            ++scheduler_stats.diagnostic_log_refusals;
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            ++scheduler_stats.diagnostic_log_refusals;
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || target == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        /*
+         * A process may only speak for itself. A handle to another process
+         * carrying DEBUG is a debugger's authority over it, which is a
+         * different thing from writing lines in its name.
+         */
+        if (target != current) {
+            ++scheduler_stats.diagnostic_log_refusals;
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (length == 0u || length > ASTRA_LOG_MAX_BYTES) {
+            ++scheduler_stats.diagnostic_log_refusals;
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        copy_status = kernel_copy_from_user(text, user_text, length);
+        if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+            copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
+            ++scheduler_stats.diagnostic_log_refusals;
+            result = ASTRA_SYSCALL_BAD_ADDRESS;
+            break;
+        }
+        if (copy_status != KERNEL_USER_COPY_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        /*
+         * Printable bytes only. The console is shared with the kernel's own
+         * output, and a program that could write control characters into it
+         * could move the cursor, clear the screen, or dress a line up as a
+         * panic. A byte that should not be there is shown as a dot rather
+         * than dropped, so the line still has the length it was written with.
+         */
+        for (index = 0u; index < length; ++index) {
+            if (text[index] < 0x20 || text[index] > 0x7e)
+                text[index] = '.';
+        }
+        ++scheduler_stats.diagnostic_logs;
+        scheduler_stats.diagnostic_log_bytes += length;
+        kernel_process_diagnostic_log(current->id, text, length);
         break;
     }
     case ASTRA_SYSCALL_PROGRESS:
@@ -5426,6 +5540,9 @@ bool kernel_process_stats(KernelSchedulerStats *stats)
     stats->user_stack_growths = scheduler_stats.user_stack_growths;
     stats->user_stack_pages_committed =
         scheduler_stats.user_stack_pages_committed;
+    stats->diagnostic_logs = scheduler_stats.diagnostic_logs;
+    stats->diagnostic_log_bytes = scheduler_stats.diagnostic_log_bytes;
+    stats->diagnostic_log_refusals = scheduler_stats.diagnostic_log_refusals;
     stats->completed_user_fault_teardowns =
         scheduler_stats.completed_user_fault_teardowns;
     stats->completed_teardowns = scheduler_stats.completed_teardowns;

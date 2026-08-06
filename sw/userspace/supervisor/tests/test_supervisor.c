@@ -220,6 +220,57 @@ test_failures_accumulate(void)
             ASTRA_SUPERVISOR_FAIL_INFO_CONTENT));
 }
 
+
+/*
+ * The supervisor links the runtime's startup validation, and validating a
+ * startup block is what binds the diagnostic channel, so the syscall the
+ * channel issues has to exist for this test to link. Recording it also lets
+ * the binding itself be checked.
+ */
+static uint32_t mock_log_calls;
+
+void
+astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
+               uint32_t argument2, uint32_t argument3, uint32_t argument4,
+               AstraSyscallResult *result)
+{
+    (void)argument1;
+    (void)argument2;
+    (void)argument3;
+    (void)argument4;
+    if (number == ASTRA_SYSCALL_LOG_WRITE) {
+        ++mock_log_calls;
+        assert(argument0 == PROCESS_HANDLE);
+    }
+    result->status = ASTRA_SYSCALL_OK;
+    result->value0 = 0u;
+    result->value1 = 0u;
+    result->value2 = 0u;
+}
+
+/* Accepting a launch binds the channel; refusing one leaves it unbound. */
+static void
+test_launch_binds_the_diagnostic_channel(void)
+{
+    AstraStartupInfo startup = valid_startup();
+    uint32_t calls = mock_log_calls;
+
+    astra_log_bind(0u);
+    assert(astra_startup_validate(&startup) == 1);
+    assert(astra_log_handle() == PROCESS_HANDLE);
+    assert(astra_log("supervisor up") == ASTRA_SYSCALL_OK);
+    assert(mock_log_calls == calls + 1u);
+
+    /* A refused launch hands over no authority, so nothing can be written. */
+    astra_log_bind(0u);
+    startup.magic = 0u;
+    assert(astra_startup_validate(&startup) == 0);
+    assert(astra_log_handle() == 0u);
+    calls = mock_log_calls;
+    assert(astra_log("no authority") == ASTRA_SYSCALL_INVALID_HANDLE);
+    assert(mock_log_calls == calls);
+}
+
 int
 main(void)
 {
@@ -229,6 +280,7 @@ main(void)
     test_capability_table();
     test_process_view();
     test_failures_accumulate();
+    test_launch_binds_the_diagnostic_channel();
     puts("SUPERVISOR PASS");
     return 0;
 }

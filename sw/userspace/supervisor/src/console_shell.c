@@ -109,6 +109,33 @@ static AstraVfsClient *storage(void)
     return supervisor_vfs_client();
 }
 
+/* "input read refused, status N" without a formatter, since there is none. */
+static uint32_t describe_input_failure(char *out, uint32_t capacity,
+                                       uint32_t status)
+{
+    static const char prefix[] = "input read refused, status ";
+    uint32_t length = 0u;
+    char digits[10];
+    uint32_t count = 0u;
+
+    while (prefix[length] != '\0' && length + 1u < capacity) {
+        out[length] = prefix[length];
+        ++length;
+    }
+    if (status == 0u && length + 1u < capacity) {
+        out[length++] = '0';
+    }
+    while (status != 0u && count < sizeof(digits)) {
+        digits[count++] = (char)('0' + (status % 10u));
+        status /= 10u;
+    }
+    while (count != 0u && length + 1u < capacity) {
+        out[length++] = digits[--count];
+    }
+    out[length] = '\0';
+    return length;
+}
+
 static void write_line(const char *text)
 {
     astra_terminal_write(&shell.terminal, text);
@@ -595,6 +622,18 @@ void console_shell_run(uint32_t display, uint32_t input,
             continue;
         }
         if (status != ASTRA_SYSCALL_OK) {
+            /*
+             * The refusal that used to be invisible. A rejected input read
+             * looked exactly like an empty queue for a whole session, and the
+             * terminal sat there saying nothing at all; now it says which
+             * status it was refused with before it goes.
+             */
+            char report[32];
+
+            (void)astra_log_write(report,
+                                  describe_input_failure(report,
+                                                         sizeof(report),
+                                                         status));
             (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
             return;
         }

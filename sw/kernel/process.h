@@ -14,6 +14,21 @@
 #define ASTRA_KERNEL_SOAK_SELFTEST 0
 #endif
 
+/*
+ * Whether this build carries a debug surface at all: the serial monitor, and
+ * ASTRA_RIGHT_DEBUG on a process's handle to itself.
+ *
+ * On during development, which is every build today. A shipped machine turns
+ * it off and loses both in one decision rather than in several -- the monitor
+ * answers anyone on the UART with page tables and handle tables, and the
+ * diagnostic channel is a process writing to the console the operator reads.
+ * Neither is a defect; both are a choice that has to be made once, somewhere
+ * findable.
+ */
+#ifndef ASTRA_KERNEL_DEBUG_SURFACE
+#define ASTRA_KERNEL_DEBUG_SURFACE 1
+#endif
+
 #define KERNEL_PROCESS_MAX 4u
 #define KERNEL_PROCESS_CODE_BASE 0x00100000u
 #define KERNEL_PROCESS_STACK_BASE KERNEL_THREAD_STACK_BASE
@@ -39,6 +54,13 @@
 #define KERNEL_PROCESS_RIGHT_QUERY     (1u << 0)
 #define KERNEL_PROCESS_RIGHT_TERMINATE (1u << 1)
 #define KERNEL_PROCESS_RIGHT_WAIT      (1u << 4)
+/*
+ * ASTRA_RIGHT_DEBUG in the same bit. Deliberately outside
+ * KERNEL_PROCESS_RIGHTS: it is granted to a process over itself when the build
+ * carries a debug surface, and to nothing otherwise, which is what makes the
+ * diagnostic channel a decision rather than an ambient capability.
+ */
+#define KERNEL_PROCESS_RIGHT_DEBUG     (1u << 7)
 #define KERNEL_PROCESS_RIGHTS \
     (KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_TERMINATE | \
      KERNEL_PROCESS_RIGHT_WAIT)
@@ -143,6 +165,10 @@ typedef struct KernelSchedulerStats {
      */
     uint32_t user_stack_growths;
     uint32_t user_stack_pages_committed;
+    uint32_t diagnostic_logs;
+    uint32_t diagnostic_log_bytes;
+    /* Counted rather than silent: a denied channel looks like a broken one. */
+    uint32_t diagnostic_log_refusals;
     uint32_t completed_user_fault_teardowns;
     uint32_t completed_teardowns;
     uint32_t forced_frame_releases;
@@ -332,6 +358,19 @@ void kernel_process_initial_image_exited(uint32_t exit_status,
                                          uint32_t exit_reason);
 /* Each new stage the firmware-supplied image reports as it comes up. */
 void kernel_process_initial_image_progress(uint32_t stage);
+/*
+ * Where a process's diagnostic line goes. The kernel owns the console, so the
+ * sink lives with it; `bytes` is already bounded and stripped of anything
+ * unprintable by the time it arrives.
+ */
+void kernel_process_diagnostic_log(uint32_t process_id, const char *text,
+                                   uint32_t length);
+/* True when this build grants ASTRA_RIGHT_DEBUG and stands the monitor up. */
+bool kernel_process_debug_surface(void);
+#if defined(KERNEL_PROCESS_HOST_TEST)
+/* Host suites only: stand in the shipped configuration. -1 restores the build's. */
+void kernel_process_set_debug_surface(int enabled);
+#endif
 
 #if ASTRA_KERNEL_SOAK_SELFTEST
 KernelProcessStatus kernel_process_soak_configure(
