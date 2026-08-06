@@ -43,7 +43,16 @@
 #define ASTRA_STATUS_UNSUPPORTED     13
 #define ASTRA_STATUS_BUSY            14
 #define ASTRA_STATUS_BUFFER_TOO_SMALL 15
-/* 16..31 are unassigned, and are the system's to spend. */
+/*
+ * The service is not there. Distinct from every failure above it, because
+ * those are answers a service gave and this is the absence of one: a caller
+ * can retry a BUSY and must not retry into a peer that has gone, and something
+ * has to be restarted rather than asked again.
+ *
+ * 16, because 1..15 are on the storage wire and are not renumbered.
+ */
+#define ASTRA_STATUS_PEER_DEAD       16
+/* 17..31 are unassigned, and are the system's to spend. */
 #define ASTRA_STATUS_SYSTEM_MAX      31
 
 /*

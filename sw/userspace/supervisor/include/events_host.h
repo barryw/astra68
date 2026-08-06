@@ -20,6 +20,9 @@ int supervisor_events_start(uint32_t process_handle);
  * costs several passes rather than a stall. Called from wherever the
  * supervisor already has somewhere to do periodic work.
  */
+/* The send handle a launch grants for EVENTS:. */
+uint32_t supervisor_events_port(void);
+
 void supervisor_events_pump(void);
 
 /*

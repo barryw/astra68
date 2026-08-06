@@ -107,6 +107,12 @@
 #define ASTRA_VFS_ERR_BUSY        ((uint32_t)ASTRA_STATUS_BUSY)
 /* The caller's buffer cannot hold what the reply carried; not a wire fault. */
 #define ASTRA_VFS_ERR_BUFFER_TOO_SMALL ((uint32_t)ASTRA_STATUS_BUFFER_TOO_SMALL)
+/*
+ * The service is gone. Only a transport that crosses a process can produce
+ * this -- a local call cannot fail to be delivered -- and it is the one thing
+ * a caller needs from a transport that it cannot get from a reply.
+ */
+#define ASTRA_VFS_ERR_PEER        ((uint32_t)ASTRA_STATUS_PEER_DEAD)
 
 /*
  * A file handle is a slot index plus a generation, so a stale handle is

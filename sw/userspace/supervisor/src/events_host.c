@@ -19,7 +19,12 @@
 #include <astra/runtime.h>
 #include <astra/vfs_client.h>
 #include <astra/vfs_local_transport.h>
+#include <astra/vfs_port_transport.h>
 #include <astra/vfs_service_core.h>
+
+/* One request deep. Reading history is not a hot path. */
+#define EVENTS_PORT_MESSAGES 1u
+#define EVENTS_PORT_BUDGET 2u
 
 /*
  * 256 records is 18 KiB of BSS, and the whole store: four tiers and the boot
@@ -46,7 +51,9 @@ static AstraEventStore store;
 static AstraEventsBackend backend;
 static AstraVfsService service;
 static AstraVfsClient client;
+static AstraVfsPortService events_port;
 static uint32_t events_handle;
+static uint32_t events_receive;
 static uint32_t debug_handle;
 static uint32_t drain_cursor;
 /* Why the catalog is not loaded, when it is not: the status that refused it. */
@@ -136,8 +143,23 @@ supervisor_events_start(uint32_t process_handle)
         ASTRA_VFS_OK) {
         return 0;
     }
-    events_handle = supervisor_vfs_register(&client);
-    if (events_handle == 0u) {
+    /*
+     * A port of its own, because EVENTS: is a second service and a child is
+     * granted it separately from the volume. Reading history across a process
+     * boundary is the same protocol as reading a file, which is the point.
+     */
+    if (astra_port_create(EVENTS_PORT_MESSAGES,
+                          EVENTS_PORT_MESSAGES *
+                              (uint32_t)sizeof(AstraVfsRequestMessage),
+                          &events_receive, &events_handle) !=
+        ASTRA_SYSCALL_OK) {
+        return 0;
+    }
+    if (!astra_vfs_port_service_init(&events_port, events_receive,
+                                     &service)) {
+        return 0;
+    }
+    if (supervisor_vfs_register(&client, events_handle) == 0u) {
         return 0;
     }
     /*
@@ -156,6 +178,12 @@ supervisor_events_start(uint32_t process_handle)
 }
 
 uint32_t
+supervisor_events_port(void)
+{
+    return events_ready ? events_handle : 0u;
+}
+
+uint32_t
 supervisor_events_catalog_count(void)
 {
     return catalog.count;
@@ -170,6 +198,16 @@ supervisor_events_catalog_status(void)
 void
 supervisor_events_pump(void)
 {
+    /*
+     * Answering clients comes first and is unconditional: the drain below
+     * gives up permanently when the ring refuses it, and a service that
+     * stopped answering because its own logging failed would be the logging
+     * subsystem taking the machine down by the route this file exists to
+     * avoid.
+     */
+    if (events_ready) {
+        (void)astra_vfs_port_service_pump(&events_port, EVENTS_PORT_BUDGET);
+    }
     /*
      * Static, not automatic: a user thread gets one 4 KiB stack and a batch of
      * eight drained records is 448 bytes of it. The same reason the shell's

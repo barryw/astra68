@@ -199,7 +199,14 @@ static void report_status(const char *what, uint32_t status)
         "ok", "protocol error", "not found", "already exists",
         "not a directory", "is a directory", "access denied", "no space",
         "invalid", "bad handle", "limit reached", "I/O error", "not empty",
-        "unsupported", "busy", "buffer too small"
+        "unsupported", "busy", "buffer too small",
+        /*
+         * 16, and the first status here that a transport produces rather than
+         * a filesystem. "not found" is a volume answering; this is nobody
+         * answering, and a person needs to be able to tell those apart at the
+         * prompt because only one of them is worth retrying.
+         */
+        "the service is gone"
     };
 
     /*
@@ -852,35 +859,91 @@ static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
 }
 
 /*
- * The grants a launched command is handed.
+ * The grants a launched command is handed: three streams, and a namespace.
  *
- * The three streams and nothing else, today. The namespace a child ought to
- * get -- WORK:, COMMANDS:, EVENTS: -- cannot be granted yet: an assign's handle
- * is a routing token this file invented, not a kernel handle, because the
- * storage service is still reached by a function pointer. Task 5 turns those
- * into port handles and this function grows three entries.
+ * `ASTRA_LAUNCH_GRANT_MAX` is six and this uses all six, which is a fact worth
+ * stating rather than discovering. **`SYS:` is the one left out**, deliberately:
+ * a command needs somewhere to read its own data, somewhere to write, and its
+ * history, and it does not need the whole volume. The day something does, the
+ * ceiling is what has to move, and moving it is a decision rather than an
+ * accident.
  *
- * SIGNAL and nothing more. A child sends on these and never receives; the reply
- * port a read needs is one the child creates and holds itself.
+ * SIGNAL and nothing more, on all of them. A child sends on these and never
+ * receives; the reply port a request needs is one the child creates and holds
+ * itself. The rights that decide what a child may *do* with a mount are on its
+ * own assign table, seeded from these grants -- which is why the namespace
+ * entries carry their read and write rights in `rights` as well.
  */
 static uint32_t launch_grants(AstraLaunchGrant *grants)
 {
-    static const char *const names[] = {"STDOUT", "STDERR", "STDIN"};
-    uint32_t handles[3];
+    static const char *const stream_names[] = {"STDOUT", "STDERR", "STDIN"};
+    static const char *const mount_names[] = {"WORK", "COMMANDS", "EVENTS"};
+    uint32_t streams[3];
+    uint32_t mounts[3];
+    uint32_t mount_flags[3];
     uint32_t count = 0u;
 
-    handles[0] = console_stream_stdout();
-    handles[1] = console_stream_stderr();
-    handles[2] = console_stream_stdin();
-    for (uint32_t index = 0u; index < 3u; ++index) {
-        if (handles[index] == 0u) {
+    streams[0] = console_stream_stdout();
+    streams[1] = console_stream_stderr();
+    streams[2] = console_stream_stdin();
+    for (uint32_t index = 0u; index < 3u && count < ASTRA_LAUNCH_GRANT_MAX;
+         ++index) {
+        if (streams[index] == 0u) {
             continue;
         }
-        astra_capability_name_set(grants[count].name, names[index]);
-        grants[count].handle = handles[index];
+        astra_capability_name_set(grants[count].name, stream_names[index]);
+        grants[count].handle = streams[index];
         grants[count].rights = ASTRA_RIGHT_SIGNAL;
         /* A stream is authority, not a name: STDOUT:file.txt is nonsense. */
         grants[count].flags = 0u;
+        ++count;
+    }
+
+    /*
+     * The namespace. A grant names a service's port and the rights the child
+     * may use it with, and those rights are a copy of what this process holds
+     * on the same binding -- a launch creates no authority, so a child cannot
+     * be given a writable COMMANDS: by a shell that only has a readable one.
+     */
+    mounts[0] = supervisor_vfs_port();
+    mounts[1] = supervisor_vfs_port();
+    mounts[2] = supervisor_events_port();
+    for (uint32_t index = 0u; index < 3u; ++index) {
+        const AstraAssign *assign = astra_assign_lookup(supervisor_assigns(),
+                                                        mount_names[index]);
+
+        /*
+         * A launch creates no authority, so what a child may do with a mount
+         * is a copy of what this process may do with it -- never more. A shell
+         * holding a readable COMMANDS: cannot grant a writable one.
+         */
+        mount_flags[index] = ASTRA_CAPABILITY_FLAG_NAMESPACE;
+        if (assign == NULL) {
+            mounts[index] = 0u;
+            continue;
+        }
+        if ((assign->rights & ASTRA_RIGHT_READ) != 0u) {
+            mount_flags[index] |= ASTRA_CAPABILITY_FLAG_READ;
+        }
+        if ((assign->rights & ASTRA_RIGHT_WRITE) != 0u) {
+            mount_flags[index] |= ASTRA_CAPABILITY_FLAG_WRITE;
+        }
+    }
+    for (uint32_t index = 0u; index < 3u && count < ASTRA_LAUNCH_GRANT_MAX;
+         ++index) {
+        if (mounts[index] == 0u) {
+            continue;
+        }
+        astra_capability_name_set(grants[count].name, mount_names[index]);
+        grants[count].handle = mounts[index];
+        /*
+         * SIGNAL and nothing else. What the child may *do* with the mount
+         * travels in the flags, because "may write files" is not an authority
+         * a port carries and asking the kernel for it is refused -- correctly,
+         * since there is no such thing to give.
+         */
+        grants[count].rights = ASTRA_RIGHT_SIGNAL;
+        grants[count].flags = mount_flags[index];
         ++count;
     }
     return count;
@@ -987,8 +1050,15 @@ static void command_launch(const char *word, int argc, char *const *argv)
                           launch_grants(grants), &arguments, &handle,
                           &child_id);
     if (status != ASTRA_SYSCALL_OK) {
+        /*
+         * With the number. "would not start" on its own says nothing a person
+         * can act on, and the difference between a grant refused and a
+         * malformed image is the whole of what they need to know.
+         */
         astra_terminal_write(&shell.terminal, word);
-        write_line(": would not start");
+        astra_terminal_write(&shell.terminal, ": would not start, status ");
+        write_number(status);
+        astra_terminal_putc(&shell.terminal, '\n');
         ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_WARNING,
                      "launch refused, status %u", status);
         return;
@@ -1203,6 +1273,15 @@ static int pump_once(void)
      * call is the whole reason a wait for a child can be a wait at all.
      */
     console_stream_pump();
+    /*
+     * And the storage service, which a child reaches by a port now. This is
+     * the call that makes a launched program able to open a file: it is
+     * blocked on a reply that only this loop can produce.
+     *
+     * The events service answers on its own port inside supervisor_events_pump
+     * above, for the same reason.
+     */
+    supervisor_vfs_pump();
     if (shell.input == 0u) {
         (void)astra_yield();
         return 1;

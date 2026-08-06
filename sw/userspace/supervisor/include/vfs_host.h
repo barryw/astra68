@@ -29,12 +29,23 @@ AstraAssignTable *supervisor_assigns(void);
  * which is a listing of the wrong filesystem rather than an error, and the
  * kind of bug that reads as "the tree is empty".
  *
- * ponytail: a table of two, and the handle is its index. When a service is a
- * process this becomes the port handle the assign already carries, and callers
- * do not change.
+ * The handle *is* the service's port send handle now, which is what makes a
+ * child's namespace possible: the same number the shell routes on is the one a
+ * launch hands over. It used to be a token this file invented, and a token
+ * cannot be granted to anything.
  */
-uint32_t supervisor_vfs_register(AstraVfsClient *client);
+uint32_t supervisor_vfs_register(AstraVfsClient *client, uint32_t port_handle);
 AstraVfsClient *supervisor_vfs_client_for(const AstraAssign *assign);
+
+/* The send handle a launch grants for SYS:, WORK: and COMMANDS:. */
+uint32_t supervisor_vfs_port(void);
+
+/*
+ * Answers whatever asked, bounded per call. Run from the loop that already
+ * pumps everything else: a service that blocked in its own receive would stop
+ * the child it is serving.
+ */
+void supervisor_vfs_pump(void);
 
 /*
  * Stamps what this thread is doing onto every client, so a request carries the

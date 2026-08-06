@@ -6,25 +6,42 @@
  * core on top, and hands out a connected client. The terminal above it names
  * no filesystem at all.
  *
- * The service is in this process because userspace cannot create a process --
- * no syscall does it. That is a deployment limit, not a design one: every
- * caller already goes through the protocol, so the day a loader exists, this
- * file is replaced by a launch and a port transport, and no caller changes.
+ * The service is still in this process, and is now reachable from outside it.
+ * It has a port: a launched child is granted a send handle and speaks the same
+ * protocol across a process boundary that the shell speaks inside one. Moving
+ * the service out is a launch and a mount point away, and no caller changes
+ * when it happens -- which was the whole reason resolution lives in the Kit.
  * See docs/DRIVER_AND_SERVICE_ARCHITECTURE.md 9.1.
+ *
+ * The supervisor's own client keeps the local transport. Not an optimisation:
+ * this process is the only thing that pumps the port, so a client here that
+ * waited on a reply would be waiting for itself.
  */
 
 #include <vfs_host.h>
 
 #include <astra/event_emit.h>
+#include <astra/runtime.h>
 #include <astra/vfs_ext4_backend.h>
 #include <astra/vfs_local_transport.h>
+#include <astra/vfs_port_transport.h>
 #include <astra/vfs_service_core.h>
+
+/*
+ * Two requests deep. One in flight per client and the supervisor is the only
+ * thing that answers, so depth beyond a small number buys a child nothing but
+ * a longer queue to wait behind.
+ */
+#define VFS_PORT_MESSAGES 2u
+#define VFS_PORT_BUDGET 4u
 
 static AstraVfsExt4Backend vfs_backend;
 static AstraVfsService vfs_service;
 static AstraVfsClient vfs_client;
+static AstraVfsPortService vfs_port;
 static AstraAssignTable vfs_assigns;
 static uint32_t vfs_handle;
+static uint32_t vfs_receive;
 static int vfs_ready;
 
 /*
@@ -118,9 +135,23 @@ supervisor_vfs_start(const char *mount_point)
                           &vfs_service) != ASTRA_VFS_OK) {
         return 0;
     }
+    /*
+     * The port, and the handle every assign is bound with. It has to exist
+     * before the bindings do: a name is bound to the authority a child will be
+     * granted, so binding to anything else would mean handing a child a
+     * different number than the one the shell resolves.
+     */
+    if (astra_port_create(VFS_PORT_MESSAGES,
+                          VFS_PORT_MESSAGES *
+                              (uint32_t)sizeof(AstraVfsRequestMessage),
+                          &vfs_receive, &vfs_handle) != ASTRA_SYSCALL_OK) {
+        return 0;
+    }
+    if (!astra_vfs_port_service_init(&vfs_port, vfs_receive, &vfs_service)) {
+        return 0;
+    }
     vfs_ready = 1;
-    vfs_handle = supervisor_vfs_register(&vfs_client);
-    if (vfs_handle == 0u) {
+    if (supervisor_vfs_register(&vfs_client, vfs_handle) == 0u) {
         return 0;
     }
     /* Binding uses the client, so the client has to be usable first. */
@@ -134,6 +165,20 @@ supervisor_vfs_client(void)
     return vfs_ready ? &vfs_client : NULL;
 }
 
+uint32_t
+supervisor_vfs_port(void)
+{
+    return vfs_ready ? vfs_handle : 0u;
+}
+
+void
+supervisor_vfs_pump(void)
+{
+    if (vfs_ready) {
+        (void)astra_vfs_port_service_pump(&vfs_port, VFS_PORT_BUDGET);
+    }
+}
+
 AstraAssignTable *
 supervisor_assigns(void)
 {
@@ -141,31 +186,39 @@ supervisor_assigns(void)
 }
 
 /*
- * The router. Two entries because there are two services, and matched by
- * session because that is what an assign carries as its handle today.
+ * The router, and what an assign's handle now is.
+ *
+ * It used to be a token this file invented -- a slot and a session packed into
+ * a word -- which worked for routing inside one process and could not be
+ * granted to anything, because it was not a kernel handle. **It is the
+ * service's port send handle now.** That is what makes a child's namespace
+ * possible: the same number the shell routes on is the one a launch hands over.
+ *
+ * The table stays, and is a shortcut rather than a router: the supervisor's own
+ * clients keep the local transport, because a service in this process must not
+ * be reached through a port this process is the only thing that pumps. A shell
+ * blocked on a reply from a service that only runs when the shell pumps it is
+ * a deadlock, and it is one line of code away at all times.
  */
 #define VFS_CLIENT_MAX 2u
-static AstraVfsClient *vfs_clients[VFS_CLIENT_MAX];
 
-/*
- * The handle an assign carries: this table's slot, one-based, in the high
- * halfword, and the session in the low one. The session alone would not do --
- * each service numbers its own sessions from one, so every mount would answer
- * to the same handle and the first registered would answer for all of them.
- */
-#define CLIENT_HANDLE(index, session) \
-    ((((index) + 1u) << 16) | ((session) & 0xFFFFu))
+static struct {
+    AstraVfsClient *client;
+    uint32_t handle;      /* the service's port send handle */
+} vfs_clients[VFS_CLIENT_MAX];
 
 uint32_t
-supervisor_vfs_register(AstraVfsClient *client)
+supervisor_vfs_register(AstraVfsClient *client, uint32_t port_handle)
 {
-    if (client == NULL) {
+    if (client == NULL || port_handle == 0u) {
         return 0u;
     }
     for (uint32_t index = 0u; index < VFS_CLIENT_MAX; ++index) {
-        if (vfs_clients[index] == NULL || vfs_clients[index] == client) {
-            vfs_clients[index] = client;
-            return CLIENT_HANDLE(index, client->session);
+        if (vfs_clients[index].client == NULL ||
+            vfs_clients[index].client == client) {
+            vfs_clients[index].client = client;
+            vfs_clients[index].handle = port_handle;
+            return port_handle;
         }
     }
     return 0u;
@@ -175,8 +228,8 @@ void
 supervisor_vfs_set_activity(uint32_t activity)
 {
     for (uint32_t index = 0u; index < VFS_CLIENT_MAX; ++index) {
-        if (vfs_clients[index] != NULL) {
-            vfs_clients[index]->activity = activity;
+        if (vfs_clients[index].client != NULL) {
+            vfs_clients[index].client->activity = activity;
         }
     }
 }
@@ -184,15 +237,14 @@ supervisor_vfs_set_activity(uint32_t activity)
 AstraVfsClient *
 supervisor_vfs_client_for(const AstraAssign *assign)
 {
-    uint32_t slot;
-
     if (assign == NULL) {
         return supervisor_vfs_client();
     }
-    slot = assign->handle >> 16;
-    if (slot != 0u && slot <= VFS_CLIENT_MAX &&
-        vfs_clients[slot - 1u] != NULL) {
-        return vfs_clients[slot - 1u];
+    for (uint32_t index = 0u; index < VFS_CLIENT_MAX; ++index) {
+        if (vfs_clients[index].client != NULL &&
+            vfs_clients[index].handle == assign->handle) {
+            return vfs_clients[index].client;
+        }
     }
     /*
      * A binding whose service is gone. NULL rather than the storage client:

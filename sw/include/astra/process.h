@@ -54,7 +54,25 @@
  * the field unversionable.
  */
 #define ASTRA_CAPABILITY_FLAG_NAMESPACE (1u << 0)
-#define ASTRA_CAPABILITY_FLAG_MASK      (ASTRA_CAPABILITY_FLAG_NAMESPACE)
+/*
+ * And what the child may do with the name, which is a different vocabulary
+ * from `rights` and cannot share the word with it.
+ *
+ * `rights` is what the *kernel* enforces on the handle: a port send endpoint
+ * carries READ, SIGNAL, WAIT and TRANSFER, and a grant asking for more than
+ * that is refused -- correctly, because there is no such authority to give.
+ * "May write files through this mount" is not a property of a port; it is a
+ * property of the mount, enforced above the kernel by the same Kit that
+ * enforces it for the process doing the granting.
+ *
+ * Putting it here rather than in `rights` is what keeps the kernel out of
+ * deciding what a name means. It carries these bits and never reads them.
+ */
+#define ASTRA_CAPABILITY_FLAG_READ      (1u << 1)
+#define ASTRA_CAPABILITY_FLAG_WRITE     (1u << 2)
+#define ASTRA_CAPABILITY_FLAG_MASK                                            \
+    (ASTRA_CAPABILITY_FLAG_NAMESPACE | ASTRA_CAPABILITY_FLAG_READ |           \
+     ASTRA_CAPABILITY_FLAG_WRITE)
 
 typedef struct AstraLaunchGrant {
     char     name[ASTRA_CAPABILITY_NAME_MAX];  /* what the child calls it */

@@ -274,8 +274,20 @@ capability(AstraStartupCapability *entry, const char *name, uint32_t handle,
 {
     astra_capability_name_set(entry->name, name);
     entry->handle = handle;
-    entry->rights = rights;
+    /*
+     * `rights` is the kernel's word and is not what a namespace entry is bound
+     * with; the flags are. A published grant carries SIGNAL on a port handle
+     * and says READ or WRITE about the mount, and those are different
+     * vocabularies that cannot share a field.
+     */
+    entry->rights = ASTRA_RIGHT_SIGNAL;
     entry->flags = ASTRA_CAPABILITY_FLAG_NAMESPACE;
+    if ((rights & ASTRA_RIGHT_READ) != 0u) {
+        entry->flags |= ASTRA_CAPABILITY_FLAG_READ;
+    }
+    if ((rights & ASTRA_RIGHT_WRITE) != 0u) {
+        entry->flags |= ASTRA_CAPABILITY_FLAG_WRITE;
+    }
 }
 
 /* A capability that is authority without being a name: a stream, a device. */
@@ -355,7 +367,11 @@ test_seeding_refusals(void)
      * it was given.
      */
     capability(&capabilities[1], "not a name", 10u, ASTRA_RIGHT_READ);
-    /* Rights of zero would bind a name that resolves and then refuses. */
+    /*
+     * A grant that says it is a name and grants nothing on it would bind a
+     * name that resolves and then refuses everything, which tells its holder
+     * one call too late that it was given nothing.
+     */
     capability(&capabilities[2], "EVENTS", 11u, 0u);
 
     assert(astra_assign_seed(&table, capabilities, 3u) == ASTRA_VFS_OK);

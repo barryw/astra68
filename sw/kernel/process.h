@@ -275,7 +275,24 @@ KernelProcessStatus kernel_process_create(const void *image,
                                           uint32_t entry_offset,
                                           uint32_t initial_argument,
                                           uint32_t *process_id);
-#define KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX 4u
+/*
+ * How many capabilities the loader will publish for a child.
+ *
+ * This was 4 while the only caller was firmware handing a device to the
+ * initial image, and `ASTRA_LAUNCH_GRANT_MAX` -- the number the *syscall*
+ * checks against -- has always been 6. Two constants for one limit, and
+ * nothing made them agree: a launch of five or six grants passed the syscall's
+ * check and was refused by the loader with ASTRA_SYSCALL_INVALID_ARGUMENT,
+ * from a depth that says nothing about which grant or why. It stayed latent
+ * for four tasks because nothing granted more than three.
+ *
+ * They are one number now, and the assertion is what keeps them one.
+ */
+#define KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX ASTRA_LAUNCH_GRANT_MAX
+
+_Static_assert(KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX ==
+                   ASTRA_LAUNCH_GRANT_MAX,
+               "the loader's ceiling and the launch ABI's must be one number");
 
 typedef enum KernelProcessBootstrapKind {
     KERNEL_PROCESS_BOOTSTRAP_DEVICE = 1,

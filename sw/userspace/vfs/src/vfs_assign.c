@@ -177,13 +177,33 @@ astra_assign_seed(AstraAssignTable *table,
          */
         char name[ASTRA_CAPABILITY_NAME_MAX];
 
+        uint32_t rights = 0u;
+
         if ((capabilities[index].flags &
              ASTRA_CAPABILITY_FLAG_NAMESPACE) == 0u) {
             continue;
         }
+        /*
+         * What the child may do with the name comes from the flags, not from
+         * `rights`. `rights` is what the kernel enforces on the handle -- a
+         * port send endpoint and what may be done to it -- and "may write
+         * files through this mount" is not one of those things. Reading the
+         * two out of one word would mean a grant of a writable mount asking
+         * the kernel for an authority no port has, and being refused.
+         */
+        if ((capabilities[index].flags & ASTRA_CAPABILITY_FLAG_READ) != 0u) {
+            rights |= ASTRA_RIGHT_READ;
+        }
+        if ((capabilities[index].flags & ASTRA_CAPABILITY_FLAG_WRITE) != 0u) {
+            rights |= ASTRA_RIGHT_WRITE;
+        }
         copy(name, capabilities[index].name, ASTRA_CAPABILITY_NAME_MAX);
-        if (astra_assign_bind(table, name, capabilities[index].handle,
-                              capabilities[index].rights,
+        /*
+         * A name granted with no rights at all binds nothing: it would resolve
+         * and then refuse every operation, which tells its holder one call too
+         * late that it was never given anything.
+         */
+        if (astra_assign_bind(table, name, capabilities[index].handle, rights,
                               "") == ASTRA_VFS_ERR_LIMIT) {
             return ASTRA_VFS_ERR_LIMIT;
         }

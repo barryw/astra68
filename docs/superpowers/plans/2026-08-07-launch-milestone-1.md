@@ -382,14 +382,55 @@ those. The router in `vfs_host.c` is deleted rather than extended.
 existed unused since the activity landed, and this is the boundary it was
 written for.
 
-- [ ] Step 1: failing tests — a request crosses a port and the reply matches
+- [x] Step 1: failing tests — a request crosses a port and the reply matches
       what the local transport would have produced; a reply to a dead peer is
       `PEER_DEAD` and not a hang; an activity set by the caller is the service's
       activity while it handles the request and is restored after.
-- [ ] Step 2: the transport, the serve loop, the grants.
-- [ ] Step 3: `cd sw/userspace && make test && make sanitize && make analyze`,
+- [x] Step 2: the transport, the serve loop, the grants.
+- [x] Step 3: `cd sw/userspace && make test && make sanitize && make analyze`,
       then both QEMU gates.
-- [ ] Step 4: commit.
+- [x] Step 4: commit.
+
+**The bug this task existed to find.** `ASTRA_LAUNCH_GRANT_MAX` is 6 and
+`KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX` was 4: two constants for one limit,
+with nothing making them agree. A launch of five or six grants passed the
+syscall's check and was refused by the loader with `INVALID_ARGUMENT`, from a
+depth that says nothing about which grant or why. It had been latent since task
+1 because nothing had ever granted more than three. They are one number now and
+a `_Static_assert` keeps them one.
+
+**Four things the build settled.**
+
+- **A grant's `rights` and what a child may do with a mount are different
+  vocabularies, and cannot share a word.** The first attempt put
+  `ASTRA_RIGHT_WRITE` in the grant's rights and the kernel refused it —
+  correctly, because a port send endpoint carries no such authority and there
+  was nothing to give. "May write files through this mount" is a property of
+  the mount, enforced above the kernel, so it travels in the capability flags:
+  `ASTRA_CAPABILITY_FLAG_READ` and `_WRITE` beside `_NAMESPACE`. The kernel
+  carries them and still never reads them.
+- **An assign's handle is the service's port send handle now.** It used to be a
+  token `vfs_host.c` invented, which routed inside one process and could be
+  granted to nothing. The router did not go — it is keyed on a real handle
+  instead of an invented one — because the supervisor's own clients must keep
+  the local transport: this process is the only thing that pumps the port, so a
+  client here waiting on a reply would be waiting for itself. That deadlock is
+  one line of code away at all times.
+- **The transport is tested against the local one, field for field.** The claim
+  is not that it works, it is that a caller cannot tell — so the same
+  operations run through both and every reply field is compared. A transport
+  that dropped a cursor or a kind would pass a test that only checked statuses.
+- **`astra_activity_adopt` finally has its boundary.** It has existed unused
+  since the activity landed; the service adopts the caller's activity for the
+  duration of a request and restores it before replying, so one request is one
+  story across a process boundary and no caller writes correlation code.
+
+**What is still to prove.** Nothing on the machine yet *uses* a granted mount:
+`status` needs no namespace, so the grants are proved to be accepted and not
+yet to be usable. Task 6 is that proof — `events` reads `EVENTS:` from a
+separate process over exactly this transport.
+
+Supervisor text 92,487, boot 0.09s of a 1.00s budget.
 
 ### Task 6: `events` becomes a program
 
