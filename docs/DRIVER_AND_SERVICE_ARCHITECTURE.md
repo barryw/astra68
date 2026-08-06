@@ -374,6 +374,69 @@ Volumes and assigns such as `SYS:` and `WORK:` belong to the storage namespace.
 Arbitrary devices do not masquerade as filesystems. A compatibility `/dev`
 entry maps to a typed adapter handle and never exposes raw MMIO.
 
+### 9.1 One open call, not two
+
+**LOCKED:** Astra has a single open operation. There is no separate
+`OpenLibrary` and `OpenDevice`.
+
+Exec needed two because they were two different mechanisms. A library was a
+jump table in the *caller's* address space: `OpenLibrary` returned a base
+pointer and the caller `JSR`ed through negative offsets off it. A device was a
+message port reached with `IORequest`. The version argument to `OpenLibrary`
+therefore bound the version of the code you were about to jump into, which is
+why an interface could not move independently of its implementation, and why a
+defect in a library was a defect in every caller.
+
+Astra has protected address spaces and no in-process jump table, so that first
+case does not exist. What remains is one operation:
+
+```text
+open(name, minimum protocol version) -> typed session handle
+close(session handle)
+```
+
+The properties worth keeping from Exec are kept: things have names, opening
+states a minimum version and fails cleanly when it cannot be met, open and
+close are symmetric, and lifetime is explicit. The property that caused the
+damage is not: a session handle is a capability with rights and a generation,
+not a pointer into another component's code, and a service that dies wakes its
+clients with peer-dead instead of taking them with it.
+
+`ASTRA_SYSCALL_CLOSE` over a generation-checked handle is already the whole of
+`CloseLibrary`. No new mechanism is required.
+
+### 9.2 Two version axes, deliberately
+
+**LOCKED:** The protocol version and the client-library version are separate
+numbers and are negotiated separately. Exec had one number for both, which is
+the root of the coupling described above.
+
+- The **protocol version** is the wire contract, carried in
+  `AstraMessageHeader.protocol` and `.protocol_version` and negotiated in the
+  session-open reply. It governs what the two sides may say to each other.
+- The **Kit version** is the client-side code a caller links or maps, governed
+  by the rules in `docs/APPLICATION_AND_KIT_MODEL.md`. It governs ergonomics
+  and nothing else.
+
+A service may be reimplemented entirely — a different filesystem behind the
+same storage protocol, a different backend behind the same graphics protocol —
+without recompiling a single client, because the client depends on the protocol
+and not on the implementation. This is what makes the system pluggable, and it
+is the whole reason the two numbers are not one.
+
+### 9.3 What discovery is today
+
+The registrar is **DIRECTION** and unimplemented. Until it exists, a process
+receives its authority through the startup capability table
+(`AstraStartupCapability{name, handle, rights, flags}`), which resolves a name
+to a handle carrying explicit rights. That is the same shape as opening a
+service, minus the ability to ask at runtime.
+
+This is deliberate and additive: the registrar replaces *handed to you at
+launch* with *ask by name at any time*, and returns the same kind of handle
+under the same rights model. A client written against the session handle does
+not change when discovery arrives.
+
 ## 10. Acceptance before publication
 
 No driver or handler ABI is stable until it has executable tests for:

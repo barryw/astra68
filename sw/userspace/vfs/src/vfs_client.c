@@ -1,0 +1,314 @@
+/*
+ * The client half of the storage protocol. Marshalling only: no filesystem
+ * knowledge, no transport knowledge, no state beyond the session it agreed.
+ */
+
+#include <astra/vfs_client.h>
+
+#include <stddef.h>
+
+static void
+begin(AstraVfsClient *client)
+{
+    AstraVfsRequest *request = &client->request;
+    uint32_t index;
+    unsigned char *bytes = (unsigned char *)request;
+
+    for (index = 0u; index < (uint32_t)sizeof(*request); ++index) {
+        bytes[index] = 0u;
+    }
+    request->size = (uint16_t)ASTRA_VFS_REQUEST_SIZE;
+    request->version = client->version != 0u ? client->version :
+                                               ASTRA_VFS_VERSION;
+    request->session = client->session;
+}
+
+/*
+ * Copies a path into the record and refuses one that will not fit, rather
+ * than truncating. A truncated path names a different file, and the service
+ * would answer about that one.
+ */
+static int
+set_path(AstraVfsRequest *request, const char *path)
+{
+    uint32_t index = 0u;
+
+    if (path == NULL) {
+        return 0;
+    }
+    while (path[index] != '\0') {
+        if (index + 1u >= ASTRA_VFS_PATH_MAX) {
+            return 0;
+        }
+        request->body.path[index] = (uint8_t)path[index];
+        ++index;
+    }
+    request->body.path[index] = 0u;
+    return 1;
+}
+
+static uint32_t
+exchange(AstraVfsClient *client, uint32_t operation)
+{
+    AstraVfsReply *reply = &client->reply;
+    uint32_t status;
+
+    if (client == NULL || client->transport == NULL) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    status = client->transport(client->context, operation, &client->request,
+                               reply);
+    if (status != ASTRA_VFS_OK) {
+        return status;
+    }
+    /*
+     * A reply whose size is not the one this build compiled against came from
+     * a different version of the protocol. Trusting its fields would mean
+     * reading whatever now lives at those offsets.
+     */
+    if (reply->size != (uint16_t)ASTRA_VFS_REPLY_SIZE) {
+        return ASTRA_VFS_ERR_PROTOCOL;
+    }
+    return reply->status;
+}
+
+uint32_t
+astra_vfs_connect(AstraVfsClient *client, AstraVfsTransport transport,
+                  void *context)
+{
+    uint32_t status;
+
+    if (client == NULL || transport == NULL) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    client->transport = transport;
+    client->context = context;
+    client->session = ASTRA_VFS_SESSION_INVALID;
+    client->version = ASTRA_VFS_VERSION;
+
+    begin(client);
+    status = exchange(client, ASTRA_VFS_OP_HELLO);
+    if (status != ASTRA_VFS_OK) {
+        return status;
+    }
+    /*
+     * The service may only choose a version this build can speak. A reply
+     * outside the range means the two sides disagree about what the numbers
+     * mean, which is not something to proceed through.
+     */
+    if (client->reply.version < ASTRA_VFS_VERSION_MIN ||
+        client->reply.version > ASTRA_VFS_VERSION) {
+        return ASTRA_VFS_ERR_PROTOCOL;
+    }
+    client->session = client->reply.session;
+    client->version = client->reply.version;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t
+astra_vfs_disconnect(AstraVfsClient *client)
+{
+    uint32_t status;
+
+    if (client == NULL || client->session == ASTRA_VFS_SESSION_INVALID) {
+        return ASTRA_VFS_OK;
+    }
+    begin(client);
+    status = exchange(client, ASTRA_VFS_OP_BYE);
+    client->session = ASTRA_VFS_SESSION_INVALID;
+    return status;
+}
+
+uint32_t
+astra_vfs_open(AstraVfsClient *client, const char *path, uint32_t flags,
+               AstraVfsFile *file, uint64_t *size, uint16_t *kind)
+{
+    uint32_t status;
+
+    if (client == NULL || file == NULL) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    *file = ASTRA_VFS_FILE_INVALID;
+    begin(client);
+    if (!set_path(&client->request, path)) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    client->request.flags = flags;
+    status = exchange(client, ASTRA_VFS_OP_OPEN);
+    if (status != ASTRA_VFS_OK) {
+        return status;
+    }
+    *file = client->reply.file;
+    if (size != NULL) {
+        *size = client->reply.node_size;
+    }
+    if (kind != NULL) {
+        *kind = client->reply.kind;
+    }
+    return ASTRA_VFS_OK;
+}
+
+uint32_t
+astra_vfs_close(AstraVfsClient *client, AstraVfsFile file)
+{
+
+    if (client == NULL) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    begin(client);
+    client->request.file = file;
+    return exchange(client, ASTRA_VFS_OP_CLOSE);
+}
+
+uint32_t
+astra_vfs_read(AstraVfsClient *client, AstraVfsFile file, uint64_t offset,
+               void *buffer, uint32_t length, uint32_t *moved)
+{
+    uint32_t status;
+    uint32_t index;
+    uint8_t *out = buffer;
+
+    if (client == NULL || buffer == NULL || moved == NULL) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    *moved = 0u;
+    if (length > ASTRA_VFS_IO_MAX) {
+        length = ASTRA_VFS_IO_MAX;
+    }
+    begin(client);
+    client->request.file = file;
+    client->request.offset = offset;
+    client->request.length = length;
+    status = exchange(client, ASTRA_VFS_OP_READ);
+    if (status != ASTRA_VFS_OK) {
+        return status;
+    }
+    if (client->reply.count > length) {
+        return ASTRA_VFS_ERR_PROTOCOL; /* a service claiming more than it sent */
+    }
+    for (index = 0u; index < client->reply.count; ++index) {
+        out[index] = client->reply.payload[index];
+    }
+    *moved = client->reply.count;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t
+astra_vfs_write(AstraVfsClient *client, AstraVfsFile file, uint64_t offset,
+                const void *buffer, uint32_t length, uint32_t *moved)
+{
+    const uint8_t *in = buffer;
+    uint32_t status;
+    uint32_t index;
+
+    if (client == NULL || buffer == NULL || moved == NULL) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    *moved = 0u;
+    if (length > ASTRA_VFS_IO_MAX) {
+        length = ASTRA_VFS_IO_MAX;
+    }
+    begin(client);
+    client->request.file = file;
+    client->request.offset = offset;
+    client->request.length = length;
+    for (index = 0u; index < length; ++index) {
+        client->request.body.payload[index] = in[index];
+    }
+    status = exchange(client, ASTRA_VFS_OP_WRITE);
+    if (status != ASTRA_VFS_OK) {
+        return status;
+    }
+    if (client->reply.count > length) {
+        return ASTRA_VFS_ERR_PROTOCOL;
+    }
+    *moved = client->reply.count;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t
+astra_vfs_stat(AstraVfsClient *client, const char *path, uint64_t *size,
+               uint16_t *kind)
+{
+    uint32_t status;
+
+    if (client == NULL) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    begin(client);
+    if (!set_path(&client->request, path)) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    status = exchange(client, ASTRA_VFS_OP_STAT);
+    if (status != ASTRA_VFS_OK) {
+        return status;
+    }
+    if (size != NULL) {
+        *size = client->reply.node_size;
+    }
+    if (kind != NULL) {
+        *kind = client->reply.kind;
+    }
+    return ASTRA_VFS_OK;
+}
+
+uint32_t
+astra_vfs_readdir(AstraVfsClient *client, const char *path, uint32_t index,
+                  char *name, uint32_t capacity, uint16_t *kind)
+{
+    uint32_t status;
+    uint32_t at;
+
+    if (client == NULL || name == NULL || capacity == 0u) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    name[0] = '\0';
+    begin(client);
+    if (!set_path(&client->request, path)) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    client->request.flags = index;
+    status = exchange(client, ASTRA_VFS_OP_READDIR);
+    if (status != ASTRA_VFS_OK) {
+        return status;
+    }
+    if (client->reply.count >= capacity || client->reply.count >= ASTRA_VFS_IO_MAX) {
+        return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
+    }
+    for (at = 0u; at < client->reply.count; ++at) {
+        name[at] = (char)client->reply.payload[at];
+    }
+    name[client->reply.count] = '\0';
+    if (kind != NULL) {
+        *kind = client->reply.kind;
+    }
+    return ASTRA_VFS_OK;
+}
+
+uint32_t
+astra_vfs_mkdir(AstraVfsClient *client, const char *path)
+{
+
+    if (client == NULL) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    begin(client);
+    if (!set_path(&client->request, path)) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    return exchange(client, ASTRA_VFS_OP_MKDIR);
+}
+
+uint32_t
+astra_vfs_unlink(AstraVfsClient *client, const char *path)
+{
+
+    if (client == NULL) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    begin(client);
+    if (!set_path(&client->request, path)) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    return exchange(client, ASTRA_VFS_OP_UNLINK);
+}
