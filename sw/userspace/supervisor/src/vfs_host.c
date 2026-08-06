@@ -67,6 +67,15 @@ bind_standard_assigns(void)
                      ASTRA_EVENT_LEVEL_WARNING,
                      "WORK: unbound, mkdir refused with status %u", status);
     }
+    /*
+     * What namespace this boot actually got. A rare fact recorded once, which
+     * every later event is read against: a person asking why a path was
+     * refused needs to know what the process was holding, and reconstructing
+     * that from the refusals afterwards is guesswork.
+     */
+    ASTRA_EVENT2(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR, ASTRA_EVENT_LEVEL_NOTICE,
+                 "namespace bound, %u assigns on session %u",
+                 vfs_assigns.count, vfs_client.session);
 }
 
 int
