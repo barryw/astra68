@@ -300,11 +300,39 @@ asked what the program said.
 A shell script launched from the GUI starts the shell with the script; whether
 a terminal window appears is declared in the manifest rather than guessed.
 
-### 4.4 Deliberately not now
+### 4.4 One instance per application, many documents
 
-Delivering a second document to an already-running instance. A launch is a
-message, so this is a routing decision later rather than a mechanism change,
-and building it before there is a GUI would be building it blind.
+An application runs once. Launching a document it already has open, or a second
+document, delivers to the running instance rather than starting another copy.
+A launch is already a message, so this is routing rather than a new mechanism:
+the instance holds a receive port and the launcher sends the launch record to
+it.
+
+This is a resource decision before it is a taste one. A second copy of an
+editor on a 32 MiB machine costs a second image, a second heap and a second set
+of kits to hold one more document, and the multi-document interface every
+desktop settled on exists because that trade is a bad one.
+
+The rules that make it work:
+
+- **Commands are not applications.** A command in `COMMANDS:` runs and exits,
+  and two invocations are two processes as they have always been. Single
+  instance is a property of a bundle, which is the thing with documents, a
+  manifest and a lifetime.
+- **Identity comes from the manifest**, not from the path a bundle sits at. Two
+  copies of the same application are the same application, and the launcher
+  runs one of them.
+- **Delivery is bounded and its failure is visible.** An instance that does not
+  accept a launch within a deadline is reported to the person, who can leave it
+  or replace it. A launcher that waits forever on a hung application is a
+  desktop that stops responding for a reason nobody can see.
+- **A dead instance is replaced, not resurrected.** If the process is gone the
+  launcher starts a fresh one; the person does not need to know one had died.
+
+The cost, stated plainly: one crash takes every open document with it. That is
+the trade every multi-document system makes, and the alternative -- a process
+per document, the way modern browsers isolate tabs -- costs more memory than
+this machine has.
 
 ---
 
