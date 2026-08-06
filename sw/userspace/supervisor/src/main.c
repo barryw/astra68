@@ -100,11 +100,22 @@ claim_block_lease(const AstraStartupInfo *startup,
  * sector, and check what came back. Proving the path a filesystem takes is
  * worth more than proving a path only this check takes.
  */
+/*
+ * The lease and the device facade have process lifetime, not call lifetime.
+ *
+ * They were locals until a terminal followed the volume check. A mounted volume
+ * keeps a pointer to the device, so when the check started leaving it mounted
+ * these two outlived the frame they were declared in: the shell's stack reused
+ * that memory, every filesystem write read a corrupted geometry out of it and
+ * was refused as ASTRA_BLOCK_TRANSFER_TOO_LARGE, and reads kept working out of
+ * lwext4's cache. That reads as a filesystem defect and is not one.
+ */
+static AstraLeaseBlock lease;
+static AstraBlockDevice block;
+
 static uint32_t
 verify_block_round_trip(uint32_t device, uint32_t irq)
 {
-    AstraLeaseBlock lease;
-    AstraBlockDevice block;
     AstraBlockGeometry geometry;
     uint8_t sector[ASTRA_BLOCK_SECTOR_BYTES];
     uint32_t failure = 0u;
@@ -147,7 +158,14 @@ verify_block_round_trip(uint32_t device, uint32_t irq)
         failure = supervisor_verify_volume(&block, want_terminal);
     }
 
-    astra_lease_block_detach(&lease);
+    /*
+     * The lease is what the mounted volume transfers through, so it may only be
+     * released once nothing holds it. The check unmounts unless a terminal is
+     * following, and it is the check that knows which happened.
+     */
+    if (!supervisor_volume_is_mounted()) {
+        astra_lease_block_detach(&lease);
+    }
     return failure;
 }
 
@@ -232,9 +250,10 @@ astra_main(const AstraStartupInfo *startup)
 
         if (display != NULL && display->handle != 0u) {
             /*
-             * The check unmounted what it proved, so mount it again. A
-             * terminal with no filesystem is still worth having -- it reports
-             * the failure rather than refusing to start.
+             * The check left the volume mounted for exactly this, so the shell
+             * inherits it rather than mounting a second time -- lwext4 refuses
+             * that. A terminal with no filesystem is still worth having: it
+             * reports the failure rather than refusing to start.
              */
             console_shell_run(display->handle,
                               keyboard != NULL ? keyboard->handle : 0u,
