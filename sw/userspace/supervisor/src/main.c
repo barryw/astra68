@@ -1,7 +1,9 @@
+#include <console_shell.h>
 #include <supervisor.h>
 #include <volume.h>
 
 #include <astra/block.h>
+#include <astra/display.h>
 #include <astra/block_device.h>
 #include <astra/lease_block.h>
 #include <astra/bytes.h>
@@ -198,6 +200,26 @@ astra_main(const AstraStartupInfo *startup)
     status = verify_block_round_trip(block_device, block_irq);
     if (status != 0u) {
         return (int)(ASTRA_SUPERVISOR_STATUS_TAG | status);
+    }
+
+    /*
+     * The volume is proven, so the machine has somewhere to put things and a
+     * terminal is worth having. A missing display capability is not a boot
+     * failure: the service stays resident either way, and the progress counter
+     * says which happened.
+     */
+    {
+        const AstraStartupCapability *display = find_capability(
+            capabilities, startup->capability_count,
+            ASTRA_CAPABILITY_DISPLAY_DEVICE);
+        const AstraStartupCapability *keyboard = find_capability(
+            capabilities, startup->capability_count,
+            ASTRA_CAPABILITY_INPUT_DEVICE);
+
+        if (display != NULL && display->handle != 0u) {
+            console_shell_run(display->handle,
+                              keyboard != NULL ? keyboard->handle : 0u);
+        }
     }
 
     park();

@@ -27,7 +27,13 @@
 #define ASTRA_SUPERVISOR_STAGE_VOLUME_FOUND   5u
 #define ASTRA_SUPERVISOR_STAGE_VOLUME_MOUNTED 6u
 #define ASTRA_SUPERVISOR_STAGE_VOLUME_VERIFIED 7u
-#define ASTRA_SUPERVISOR_STAGE_MAX            7u
+/*
+ * The terminal is a stage rather than a failure bit because the halfword has
+ * none left, and because "how far did it get" is what the boot log is for.
+ */
+#define ASTRA_SUPERVISOR_STAGE_TERMINAL       8u
+#define ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED 9u
+#define ASTRA_SUPERVISOR_STAGE_MAX            9u
 
 #define ASTRA_SUPERVISOR_FAIL_STARTUP      (1u << 0)
 #define ASTRA_SUPERVISOR_FAIL_QUERY_ABI    (1u << 1)

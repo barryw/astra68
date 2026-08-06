@@ -6,7 +6,15 @@
 
 #define KERNEL_DEVICE_MAX 8u
 #define KERNEL_DEVICE_LEASE_MAX 8u
-#define KERNEL_DEVICE_LEASE_OWNER_MAX 2u
+/*
+ * Leases one process may hold at once. Two was enough while a service owned a
+ * single device; the initial image holds the block device, the keyboard and
+ * the screen until those are separate services, which is three. Four bounds it
+ * at the number of device classes that exist rather than at what today needs,
+ * and costs nothing: leases come from the shared pool above, so this is a
+ * policy ceiling and not an array size.
+ */
+#define KERNEL_DEVICE_LEASE_OWNER_MAX 4u
 
 #define KERNEL_DEVICE_RIGHT_QUERY      (1u << 0)
 #define KERNEL_DEVICE_RIGHT_TRANSFER   (1u << 5)
