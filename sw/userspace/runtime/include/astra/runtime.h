@@ -64,6 +64,38 @@ uint32_t astra_input_read(uint32_t device, AstraInputEvent *events,
 void astra_process_exit(uint32_t status) __attribute__((noreturn));
 
 /*
+ * Starting a program.
+ *
+ * `image` is the whole ELF, in this process's own memory; the kernel copies it
+ * out through a bounded window rather than reading it where it lies. Each grant
+ * names a handle *this* process already holds, under a name the child will know
+ * it by, with rights that are a subset of the ones it is held by here. A launch
+ * creates no authority, so there is no argument to this call that produces a
+ * capability which did not exist a moment earlier.
+ *
+ * Nothing is validated here that the kernel validates: one answer to one
+ * question. The handle that comes back carries QUERY, WAIT and TERMINATE, and
+ * never DEBUG -- having started something is not permission to read its account
+ * of itself.
+ */
+uint32_t astra_launch(const void *image, uint32_t length,
+                      const AstraLaunchGrant *grants, uint32_t count,
+                      const AstraLaunchArguments *arguments,
+                      uint32_t *process_handle, uint32_t *process_id);
+
+/*
+ * Waiting for a child, which is the machine's ordinary wait named for what a
+ * launcher does with it. A deadline of zero polls, and that is the form a
+ * process hosting services must use: a wait that stops serving the child it is
+ * waiting for is a deadlock this architecture makes easy to write.
+ *
+ * `exit_status` is the child's status and only ever that: a wait that timed out
+ * established no status and publishes none.
+ */
+uint32_t astra_process_wait(uint32_t handle, uint64_t deadline_ns,
+                            uint32_t *exit_status);
+
+/*
  * The event channel. No handle, no binding and no capability: emitting is
  * universal, because an account of what happened that depends on a right has
  * holes exactly where something went wrong.

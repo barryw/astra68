@@ -15,6 +15,7 @@ static uint32_t mock_argument0;
 static uint32_t mock_argument1;
 static uint32_t mock_argument2;
 static uint32_t mock_argument3;
+static uint32_t mock_argument4;
 static uint32_t mock_calls;
 static uint32_t mock_status = ASTRA_SYSCALL_OK;
 
@@ -28,18 +29,25 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
     mock_argument1 = argument1;
     mock_argument2 = argument2;
     mock_argument3 = argument3;
+    mock_argument4 = argument4;
     ++mock_calls;
     /*
-     * Every wrapper but the event one takes a single argument, and the mock
-     * has always enforced that. An event carries a message, flags, a buffer
-     * and a length, so it is the one call where the rest may be set.
+     * Every wrapper but the event one and the launch takes a single argument,
+     * and the mock has always enforced that. An event carries a message, flags,
+     * a buffer and a length; a launch carries an image, its length, a grant
+     * array, a count and an argument block -- the one call that fills every
+     * register the ABI has.
      */
-    if (number != ASTRA_SYSCALL_LOG_WRITE) {
+    if (number != ASTRA_SYSCALL_LOG_WRITE &&
+        number != ASTRA_SYSCALL_PROCESS_CREATE &&
+        number != ASTRA_SYSCALL_WAIT_ONE) {
         assert(argument1 == 0u);
         assert(argument2 == 0u);
         assert(argument3 == 0u);
     }
-    assert(argument4 == 0u);
+    if (number != ASTRA_SYSCALL_PROCESS_CREATE) {
+        assert(argument4 == 0u);
+    }
     result->status = mock_status;
     result->value0 = ASTRA_SYSCALL_ABI_VERSION;
     result->value1 = 0x11111111u;
@@ -241,6 +249,108 @@ test_syscall_wrappers(void)
     assert(abi == ASTRA_SYSCALL_ABI_VERSION);
     assert(process == 0x11111111u);
     assert(thread == 0x22222222u);
+}
+
+/*
+ * The launch, from the launcher's side. What is checked here is the marshalling
+ * and nothing else: every rule about what a launch may hand over is the
+ * kernel's, and a wrapper that re-decided any of it would be a second answer to
+ * a question that must have one.
+ *
+ * What the wrapper does owe its caller is that the two outputs are never left
+ * carrying whatever was in them before. A launcher that reads a handle out of a
+ * refused launch closes a handle somebody else is holding.
+ */
+static void test_launch(void)
+{
+    static const uint8_t image[64] = {0u};
+    AstraLaunchGrant grants[2];
+    AstraLaunchArguments arguments;
+    uint32_t handle = 0xdeadbeefu;
+    uint32_t id = 0xdeadbeefu;
+    uint32_t calls;
+
+    memset(grants, 0, sizeof(grants));
+    memset(&arguments, 0, sizeof(arguments));
+
+    mock_status = ASTRA_SYSCALL_OK;
+    assert(astra_launch(image, (uint32_t)sizeof(image), grants, 2u, &arguments,
+                        &handle, &id) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_PROCESS_CREATE);
+    assert(mock_argument0 == (uint32_t)(uintptr_t)image);
+    assert(mock_argument1 == (uint32_t)sizeof(image));
+    assert(mock_argument2 == (uint32_t)(uintptr_t)grants);
+    assert(mock_argument3 == 2u);
+    assert(mock_argument4 == (uint32_t)(uintptr_t)&arguments);
+    /* data[1] is the handle and data[2] the id, in that order. */
+    assert(handle == ASTRA_SYSCALL_ABI_VERSION);
+    assert(id == 0x11111111u);
+
+    /* Nothing granted and nothing said: three registers that stay zero. */
+    assert(astra_launch(image, (uint32_t)sizeof(image), NULL, 0u, NULL,
+                        &handle, &id) == ASTRA_SYSCALL_OK);
+    assert(mock_argument2 == 0u);
+    assert(mock_argument3 == 0u);
+    assert(mock_argument4 == 0u);
+
+    /* A refused launch produces no handle and no id, not a stale pair. */
+    mock_status = ASTRA_SYSCALL_ACCESS_DENIED;
+    handle = 0xdeadbeefu;
+    id = 0xdeadbeefu;
+    assert(astra_launch(image, (uint32_t)sizeof(image), grants, 1u, NULL,
+                        &handle, &id) == ASTRA_SYSCALL_ACCESS_DENIED);
+    assert(handle == 0u && id == 0u);
+    mock_status = ASTRA_SYSCALL_OK;
+
+    /* Nowhere to put the answer is refused here rather than in the kernel. */
+    calls = mock_calls;
+    assert(astra_launch(image, (uint32_t)sizeof(image), NULL, 0u, NULL, NULL,
+                        &id) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_launch(image, (uint32_t)sizeof(image), NULL, 0u, NULL, &handle,
+                        NULL) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(mock_calls == calls);
+}
+
+/*
+ * Waiting for a child. The wait itself is the one the machine already had; what
+ * this adds is that `exit_status` means the child's status and nothing else --
+ * a timed-out wait establishes no status, so it publishes none.
+ */
+static void test_process_wait(void)
+{
+    static const uint64_t forever =
+        ((uint64_t)ASTRA_DEADLINE_NONE_HI << 32) | ASTRA_DEADLINE_NONE_LO;
+    uint32_t status = 0xdeadbeefu;
+    uint32_t calls;
+
+    mock_status = ASTRA_SYSCALL_OK;
+    assert(astra_process_wait(9u, forever, &status) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_WAIT_ONE);
+    assert(mock_argument0 == 9u);
+    assert(mock_argument1 == ASTRA_DEADLINE_NONE_HI);
+    assert(mock_argument2 == ASTRA_DEADLINE_NONE_LO);
+    assert(status == ASTRA_SYSCALL_ABI_VERSION);   /* data[1] is the status */
+
+    /*
+     * A child that faulted still has a status, and it is the one thing its
+     * launcher has to report. PEER_DEAD is how the wait says which it was.
+     */
+    mock_status = ASTRA_SYSCALL_PEER_DEAD;
+    status = 0xdeadbeefu;
+    assert(astra_process_wait(9u, 0u, &status) == ASTRA_SYSCALL_PEER_DEAD);
+    assert(status == ASTRA_SYSCALL_ABI_VERSION);
+
+    /* A poll that found the child still running says nothing about a status. */
+    mock_status = ASTRA_SYSCALL_TIMED_OUT;
+    status = 0xdeadbeefu;
+    assert(astra_process_wait(9u, 0u, &status) == ASTRA_SYSCALL_TIMED_OUT);
+    assert(status == 0u);
+    assert(mock_argument1 == 0u && mock_argument2 == 0u);
+    mock_status = ASTRA_SYSCALL_OK;
+
+    calls = mock_calls;
+    assert(astra_process_wait(9u, 0u, NULL) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(mock_calls == calls);
 }
 
 
@@ -577,6 +687,8 @@ main(void)
     test_memory_primitives();
     test_qsort();
     test_syscall_wrappers();
+    test_launch();
+    test_process_wait();
     test_event_channel();
     test_event_macro();
     test_event_descriptor_layout();

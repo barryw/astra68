@@ -12,8 +12,8 @@ TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 HOST_FLAGS := -O2 -fno-builtin
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
-TARGET_C_SOURCES := src/startup.c src/syscall.c src/memory.c src/log.c \
-	src/sort.c src/assert.c src/event_catalog.c
+TARGET_C_SOURCES := src/startup.c src/syscall.c src/launch.c src/memory.c \
+	src/log.c src/sort.c src/assert.c src/event_catalog.c
 TARGET_ASM_SOURCES := src/m68k/syscall.S
 TARGET_OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(TARGET_C_SOURCES)) \
 	$(patsubst src/%.S,build/m68k/%.o,$(TARGET_ASM_SOURCES))
@@ -39,8 +39,8 @@ $(CRT0): src/m68k/crt0.S
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -m68030 -msoft-float $(DEPFLAGS) -c $< -o $@
 
-HOST_TEST_SOURCES := src/startup.c src/syscall.c src/memory.c src/sort.c \
-	src/log.c src/event_catalog.c \
+HOST_TEST_SOURCES := src/startup.c src/syscall.c src/launch.c src/memory.c \
+	src/sort.c src/log.c src/event_catalog.c \
 	tests/test_runtime.c
 
 $(HOST_TEST): $(HOST_TEST_SOURCES)
@@ -63,6 +63,8 @@ analyze:
 		-c src/startup.c -o build/analyzer/startup.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/syscall.c -o build/analyzer/syscall.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/launch.c -o build/analyzer/launch.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/memory.c -o build/analyzer/memory.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \

@@ -157,6 +157,40 @@ astra_assign_bind(AstraAssignTable *table, const char *name, uint32_t handle,
     return ASTRA_VFS_OK;
 }
 
+uint32_t
+astra_assign_seed(AstraAssignTable *table,
+                  const AstraStartupCapability *capabilities, uint32_t count)
+{
+    uint32_t index;
+
+    if (table == NULL || (count != 0u && capabilities == NULL) ||
+        count > ASTRA_STARTUP_CAPABILITY_MAX) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    astra_assign_table_init(table);
+    for (index = 0u; index < count; ++index) {
+        /*
+         * The name is copied out and terminated here: the published field is
+         * fixed-width bytes and is not a C string until somebody says so. The
+         * kernel terminates at the same place, so a name too long to carry is
+         * the same name on both sides of the launch.
+         */
+        char name[ASTRA_CAPABILITY_NAME_MAX];
+
+        copy(name, capabilities[index].name, ASTRA_CAPABILITY_NAME_MAX);
+        if (same(name, ASTRA_CAPABILITY_PROCESS) ||
+            same(name, ASTRA_CAPABILITY_THREAD)) {
+            continue;
+        }
+        if (astra_assign_bind(table, name, capabilities[index].handle,
+                              capabilities[index].rights,
+                              "") == ASTRA_VFS_ERR_LIMIT) {
+            return ASTRA_VFS_ERR_LIMIT;
+        }
+    }
+    return ASTRA_VFS_OK;
+}
+
 const AstraAssign *
 astra_assign_lookup(const AstraAssignTable *table, const char *name)
 {

@@ -60,6 +60,37 @@ void astra_assign_table_init(AstraAssignTable *table);
 uint32_t astra_assign_bind(AstraAssignTable *table, const char *name,
                            uint32_t handle, uint32_t rights, const char *root);
 
+/*
+ * Builds a namespace out of what a launch handed over.
+ *
+ * A launched program's capability table *is* its namespace: there is no
+ * manifest to read and no path to search, so the names it may use are exactly
+ * the ones somebody granted it, under the names that somebody chose. This is
+ * the whole of that translation, and it replaces the table rather than adding
+ * to it -- a namespace is what a process was given, not an accumulation.
+ *
+ * PROCESS and THREAD are skipped. They are the handles the kernel installs for
+ * every process whether it asked or not: authority over itself, not names in a
+ * namespace, and a `PROCESS:` that resolved and then failed at the first read
+ * would be worse than one that never resolved at all.
+ *
+ * An entry that is not a namespace name -- one the shell could not type back,
+ * or one carrying no rights -- is skipped rather than fatal. The capability
+ * table is where every kind of authority a process holds is published, so
+ * entries that are not mounts are the ordinary case, and one of them must not
+ * cost a child the names it was actually given. Running out of room is the one
+ * thing that is reported, because a namespace quietly missing its tail is a
+ * program failing later for a reason nothing wrote down.
+ *
+ * No root travels in the published capability table yet, so every binding is
+ * made at its mount's own root. The launch spec's grant has a root offset and
+ * the published record has nowhere to put one; that is added when the first
+ * grant needs it.
+ */
+uint32_t astra_assign_seed(AstraAssignTable *table,
+                           const AstraStartupCapability *capabilities,
+                           uint32_t count);
+
 const AstraAssign *astra_assign_lookup(const AstraAssignTable *table,
                                        const char *name);
 

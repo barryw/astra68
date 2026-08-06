@@ -77,6 +77,51 @@ better and is not first. It means the kernel speaking the storage protocol,
 which is a service dependency inside the kernel, and that is a decision that
 should be made when there is a reason rather than to save a buffer.
 
+### 1.4 Three copies, and how each one goes away
+
+Task 1's build made the count exact. A launch copies the image three times, and
+they are three different problems that happen to look like one:
+
+1. **Disk into the launcher's buffer.** The kernel has no filesystem. Storage is
+   a userspace service reached over the storage protocol, so there is no
+   `kernel_open`, and the bytes have to be read by somebody in userspace before
+   any syscall can be made about them.
+2. **The launcher's buffer into a kernel window.** Two reasons, and the second
+   is the one that would survive fixing the first. The headers are validated and
+   then used, so reading them where the launcher can still write them is a
+   double fetch: another thread in that process rewrites the program header
+   table between the check and the load. `kernel_elf_accept_windowed` closes
+   that by bringing the headers across once, into memory the launcher cannot
+   reach. Separately, the source pages are in the launcher's map and the
+   destination frames belong to a process that does not exist yet.
+3. **The window into the child's frames.** One page of kernel memory, reused per
+   segment page. This is the copy that is bounded rather than proportional to
+   the program, which is why it is the one that costs the least to keep.
+
+**The real fix is a page cache and file-backed mapping**, and it removes the
+argument for all three rather than optimising any of them. A read-only text
+segment is the same bytes for every instance of a program, so the end state is
+that the child's `.text` *is* the cached frames: one read from the volume, ever,
+shared by every process running that image, and a second `events` costing no
+text at all. That is also what makes a shared library possible later, and what
+makes a 16 MiB machine able to run several programs at once instead of several
+copies of the same one. It is a real subsystem — eviction, coherency with a
+write to a file that is currently mapped — and it is not milestone 1.
+
+**The cheap middle step, if the copy ever shows up in a measurement:** take an
+**area handle and an offset** instead of a raw pointer, and *transfer* it rather
+than clone it. The launcher loses the mapping at the moment of the call, so the
+double fetch is gone by construction rather than by copying, and the kernel can
+work frame to frame with no bounce page. Areas already carry a retain; this
+costs an ABI change to §2 and nothing else. It is strictly less than the page
+cache and buys strictly less: copy 1 remains, and nothing is shared between two
+instances of the same program.
+
+Neither is scheduled. Copy 3 is bounded, so what it costs is one page and some
+cycles — not correctness, and not a ceiling anybody will hit. **Trigger:** the
+first measurement where launch latency matters, or the second concurrent
+instance of one program.
+
 ---
 
 ## 2. The syscall

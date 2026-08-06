@@ -261,6 +261,134 @@ test_resolution_refusals(void)
                                 NULL) == ASTRA_VFS_ERR_INVALID);
 }
 
+/*
+ * Seeding a namespace from what a launch handed over.
+ *
+ * A launched program's capability table *is* its namespace: there is no
+ * manifest to read and no path to search, so the names it may use are exactly
+ * the ones somebody granted it. This is the whole of that translation.
+ */
+static void
+capability(AstraStartupCapability *entry, const char *name, uint32_t handle,
+           uint32_t rights)
+{
+    astra_capability_name_set(entry->name, name);
+    entry->handle = handle;
+    entry->rights = rights;
+    entry->flags = 0u;
+}
+
+static void
+test_seeding_from_a_capability_table(void)
+{
+    AstraStartupCapability capabilities[4];
+    AstraAssignTable table;
+    const AstraAssign *found;
+
+    /* The shape the kernel publishes: its own two first, then the grants. */
+    capability(&capabilities[0], ASTRA_CAPABILITY_PROCESS, 1u,
+               ASTRA_RIGHT_READ);
+    capability(&capabilities[1], ASTRA_CAPABILITY_THREAD, 2u, ASTRA_RIGHT_READ);
+    capability(&capabilities[2], "WORK", 9u,
+               ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE);
+    capability(&capabilities[3], "EVENTS", 11u, ASTRA_RIGHT_READ);
+
+    assert(astra_assign_seed(&table, capabilities, 4u) == ASTRA_VFS_OK);
+
+    /*
+     * Two bindings out of four entries. PROCESS and THREAD are the handles
+     * every process is given whether it asked or not; they are authority over
+     * itself, not names in a namespace, and a `PROCESS:` that resolved and then
+     * failed at the first read would be worse than one that never resolved.
+     */
+    assert(table.count == 2u);
+    assert(astra_assign_lookup(&table, ASTRA_CAPABILITY_PROCESS) == NULL);
+    assert(astra_assign_lookup(&table, ASTRA_CAPABILITY_THREAD) == NULL);
+
+    found = astra_assign_lookup(&table, "WORK");
+    assert(found != NULL);
+    assert(found->handle == 9u);
+    assert(found->rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE));
+    /* No root travels in the published table yet, so a grant is its mount. */
+    assert(found->root[0] == '\0');
+
+    found = astra_assign_lookup(&table, "EVENTS");
+    assert(found != NULL);
+    assert(found->handle == 11u);
+    assert(found->rights == ASTRA_RIGHT_READ);
+
+    /* A name is canonical however the grant spelled it. */
+    capability(&capabilities[2], "work", 9u, ASTRA_RIGHT_READ);
+    assert(astra_assign_seed(&table, capabilities, 3u) == ASTRA_VFS_OK);
+    assert(astra_assign_lookup(&table, "WORK") != NULL);
+
+    /* Seeding replaces a namespace rather than adding to one. */
+    assert(astra_assign_seed(&table, capabilities, 2u) == ASTRA_VFS_OK);
+    assert(table.count == 0u);
+}
+
+static void
+test_seeding_refusals(void)
+{
+    AstraStartupCapability capabilities[3];
+    AstraAssignTable table;
+
+    capability(&capabilities[0], "WORK", 9u, ASTRA_RIGHT_READ);
+    /*
+     * A grant that is not a namespace name is skipped, not fatal. The
+     * capability table is where every kind of authority a process holds is
+     * published, so entries that are not mounts are the ordinary case rather
+     * than a malformed table -- and one of them must not cost a child the names
+     * it was given.
+     */
+    capability(&capabilities[1], "not a name", 10u, ASTRA_RIGHT_READ);
+    /* Rights of zero would bind a name that resolves and then refuses. */
+    capability(&capabilities[2], "EVENTS", 11u, 0u);
+
+    assert(astra_assign_seed(&table, capabilities, 3u) == ASTRA_VFS_OK);
+    assert(table.count == 1u);
+    assert(astra_assign_lookup(&table, "WORK") != NULL);
+    assert(astra_assign_lookup(&table, "EVENTS") == NULL);
+
+    /* A table with nothing in it is a namespace with nothing in it. */
+    assert(astra_assign_seed(&table, NULL, 0u) == ASTRA_VFS_OK);
+    assert(table.count == 0u);
+
+    assert(astra_assign_seed(NULL, capabilities, 1u) == ASTRA_VFS_ERR_INVALID);
+    assert(astra_assign_seed(&table, NULL, 1u) == ASTRA_VFS_ERR_INVALID);
+    assert(astra_assign_seed(&table, capabilities,
+                             ASTRA_STARTUP_CAPABILITY_MAX + 1u) ==
+           ASTRA_VFS_ERR_INVALID);
+}
+
+/*
+ * More grants than a namespace holds. It cannot happen from one launch today --
+ * six is the grant ceiling and sixteen the namespace's -- but the startup table
+ * carries thirty-two, so the arithmetic that makes it impossible is somewhere
+ * else. A namespace quietly missing the names past the sixteenth is the failure
+ * this refuses to have.
+ */
+static void
+test_seeding_beyond_capacity(void)
+{
+    AstraStartupCapability capabilities[ASTRA_ASSIGN_MAX + 2u];
+    AstraAssignTable table;
+    uint32_t index;
+
+    for (index = 0u; index < ASTRA_ASSIGN_MAX + 2u; ++index) {
+        char name[ASTRA_CAPABILITY_NAME_MAX];
+
+        name[0] = 'N';
+        name[1] = (char)('A' + (index / 10u));
+        name[2] = (char)('0' + (index % 10u));
+        name[3] = '\0';
+        capability(&capabilities[index], name, index + 1u, ASTRA_RIGHT_READ);
+    }
+    assert(astra_assign_seed(&table, capabilities, ASTRA_ASSIGN_MAX + 2u) ==
+           ASTRA_VFS_ERR_LIMIT);
+    assert(table.count == ASTRA_ASSIGN_MAX);
+}
+
 int
 main(void)
 {
@@ -271,6 +399,9 @@ main(void)
     test_unbinding_keeps_the_rest_reachable();
     test_resolving();
     test_resolution_refusals();
+    test_seeding_from_a_capability_table();
+    test_seeding_refusals();
+    test_seeding_beyond_capacity();
     puts("ASTRA VFS ASSIGN PASS");
     return 0;
 }

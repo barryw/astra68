@@ -49,6 +49,13 @@ events spec's §3 and the process-start event of the launch spec's §2 are for.
 `events` mostly reads rather than emits, so this is visible and small.
 **Trigger:** the second program that emits events worth reading.
 
+**No page cache, so an image is copied three times.** The launch spec's §1.4
+now has the count, the reason for each one and the way out: file-backed mapping,
+where a program's read-only text *is* the cached frames and a second instance
+costs no text at all. That is the fix worth having and it is a subsystem, not a
+tweak. **Trigger:** launch latency showing up in a measurement, or the second
+concurrent instance of one program.
+
 **No redirection, no pipes, no job control.** A stream is a capability, so
 redirection is a different grant rather than a new mechanism; what is missing is
 a shell language to spell it, which is its own spec.
@@ -117,12 +124,36 @@ whose capability table is its namespace, and the runtime already validates it.
 What is new is seeding an `AstraAssignTable` from that table, so a child gets
 `WORK:` and `EVENTS:` as names rather than as handles it has to interpret.
 
-- [ ] Step 1: failing tests against the syscall mock — the wrappers marshal what
+- [x] Step 1: failing tests against the syscall mock — the wrappers marshal what
       the ABI says; an assign table seeded from a capability table has the
       names, roots and rights the table carried.
-- [ ] Step 2: the wrappers and the seeding.
-- [ ] Step 3: `cd sw/userspace && make test && make sanitize && make analyze`.
-- [ ] Step 4: commit.
+- [x] Step 2: the wrappers and the seeding.
+- [x] Step 3: `cd sw/userspace && make test && make sanitize && make analyze`.
+- [x] Step 4: commit.
+
+**Three things the build settled.**
+
+- **`astra_process_wait` takes a deadline**, which the plan's signature did not.
+  A deadline of zero polls, and polling is the only form the supervisor may use:
+  it hosts the services its child is calling, so a wait that blocks is the
+  deadlock in the global constraints. A wrapper task 4 has to bypass is not a
+  wrapper.
+- **Both wrappers clear their outputs before anything else**, including before
+  the refusal. A launcher that reads a handle out of a launch that did not
+  happen closes a handle belonging to something else, and that fault surfaces a
+  long way from here. `exit_status` is published only when the wait established
+  one — a clean exit or a fault — so a zero from a timed-out poll is the absence
+  of an answer rather than an answer.
+- **Seeding skips `PROCESS` and `THREAD` by name.** They are what the kernel
+  installs for every process whether it asked or not, and they are authority
+  over itself rather than names in a namespace. Everything else the table
+  carries is bound, and an entry the namespace cannot take — no rights, a name
+  nobody could type — is skipped rather than fatal, because the capability table
+  is where *every* kind of authority is published and one odd entry must not
+  cost a child the names it was given. Running out of room is the one thing
+  reported. The flag that would say "this grant is a mount" is the same deferral
+  as the grant's root: added when the first grant needs one, which is task 3's
+  `STDOUT`.
 
 ### Task 2b: `ASTRA_PROGRAM`, and the link that fails without it
 
