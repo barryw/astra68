@@ -300,6 +300,14 @@ entries, one stated order, no configurable search path: a path variable is a
 hijacking surface and an unanswerable "which one ran" question, and neither is
 worth the flexibility on a machine with two locations.
 
+**`COMMANDS:` may have subdirectories, and they are never searched.** A bare
+name resolves against its top level only; a program in a category is named by
+its category, `dev/objdump`. A searched tree is a search path with the
+configuration file removed and the ordering hidden in the directory layout —
+same hijacking surface, same unanswerable question, plus a scan on every
+invocation. `2026-08-07-program-launch-design.md` §5 has the reasoning and what
+else was considered.
+
 ### 2.6 Deliberately absent
 
 `CACHE:` and `STATE:` are not in this design. Nothing generates either yet and
