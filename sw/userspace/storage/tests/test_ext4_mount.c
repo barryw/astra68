@@ -465,6 +465,70 @@ write_file(const char *path, unsigned index, unsigned bytes)
     return 0;
 }
 
+/*
+ * A full volume must say so.
+ *
+ * This is the only condition that proves the write path reports failure rather
+ * than absorbing it, and it is not reachable from the other modes: every one of
+ * them writes far less than the volume holds.
+ *
+ * lwext4 as imported failed it. ext4_fwrite ended with
+ * `r = ext4_fs_put_inode_ref(&ref)`, which overwrote whatever error the write
+ * had produced, so an ENOSPC out of ext4_fs_append_inode_dblk came back as EOK
+ * with zero bytes moved -- and took the commit branch rather than the abort
+ * one, journalling a transaction whose write had failed. A device EIO
+ * mid-write returned EOK by the same path. See astra patch 0004.
+ *
+ * So the assertion that matters is not "a write eventually fails" but "no write
+ * ever claims EOK while moving less than it was given". The first is what a
+ * correct implementation does; the second is what the broken one cannot do.
+ */
+#define FILL_CHUNK 4096u
+/* Larger than any volume this test is run against, so a pass cannot be a hang. */
+#define FILL_CHUNK_LIMIT 262144u
+
+static int
+check_full_volume_reports_enospc(void)
+{
+    static uint8_t chunk[FILL_CHUNK];
+    ext4_file file;
+    unsigned written_chunks;
+    int rc;
+
+    (void)memset(chunk, 0x5a, sizeof(chunk));
+    rc = ext4_fopen(&file, MOUNT_POINT "fill.bin", "wb");
+    if (rc != EOK) {
+        return fail("ext4_fopen(fill)", rc);
+    }
+    for (written_chunks = 0u; written_chunks < FILL_CHUNK_LIMIT;
+         ++written_chunks) {
+        size_t moved = 0u;
+
+        rc = ext4_fwrite(&file, chunk, sizeof(chunk), &moved);
+        if (rc != EOK) {
+            break; /* The volume filled and the write path said so. */
+        }
+        if (moved != sizeof(chunk)) {
+            (void)ext4_fclose(&file);
+            printf("FAIL ext4_fwrite returned EOK having moved %lu of %u "
+                   "after %u chunks\n",
+                   (unsigned long)moved, (unsigned)sizeof(chunk),
+                   written_chunks);
+            ++failures;
+            return 1;
+        }
+    }
+    (void)ext4_fclose(&file);
+    if (written_chunks == FILL_CHUNK_LIMIT) {
+        return fail("volume never filled; raise FILL_CHUNK_LIMIT", 0);
+    }
+    printf("full volume: %u chunks written, then rc=%d\n", written_chunks, rc);
+    if (ext4_fremove(MOUNT_POINT "fill.bin") != EOK) {
+        return fail("ext4_fremove(fill)", 0);
+    }
+    return 0;
+}
+
 static int
 read_verify(const char *path, unsigned index, unsigned bytes)
 {
@@ -710,16 +774,19 @@ main(int argc, char **argv)
      * amount of read-back inside the writing process can establish.
      */
     int verify_only;
+    int full_volume;
 
     setvbuf(stdout, NULL, _IONBF, 0);
 
     if (argc < 2) {
-        printf("usage: %s <image> [verify-only]\n", argv[0]);
+        printf("usage: %s <image> [verify-only|partitioned|on-file|full]\n",
+               argv[0]);
         return 2;
     }
     verify_only = argc > 2 && strcmp(argv[2], "verify-only") == 0;
     partitioned = argc > 2 && strcmp(argv[2], "partitioned") == 0;
     on_file = argc > 2 && strcmp(argv[2], "on-file") == 0;
+    full_volume = argc > 2 && strcmp(argv[2], "full") == 0;
 
     if (getenv("ASTRA_EXT4_DEBUG") != NULL) {
         ext4_dmask_set(DEBUG_ALL);
@@ -747,6 +814,8 @@ main(int argc, char **argv)
     }
     if (verify_only) {
         verify();
+    } else if (full_volume) {
+        (void)check_full_volume_reports_enospc();
     } else if (populate() == 0) {
         verify();
     }

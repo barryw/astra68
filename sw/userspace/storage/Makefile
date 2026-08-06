@@ -205,6 +205,11 @@ ext4-test: build/host/test_ext4_mount
 	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) \
 		$(EXT4_MKFS_JOURNAL) -F build/host/ext4-part.img
 	./build/host/test_ext4_mount build/host/ext4-part.img partitioned
+	@echo "--- full: a volume with no space left must say so"
+	dd if=/dev/zero of=build/host/ext4-full.img bs=1048576 count=16 status=none
+	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) \
+		$(EXT4_MKFS_JOURNAL) -F build/host/ext4-full.img
+	./build/host/test_ext4_mount build/host/ext4-full.img full
 
 sanitize:
 	@mkdir -p build/host
