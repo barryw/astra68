@@ -15,13 +15,14 @@ other working branches.
 
 ## 1. Where things stand
 
-`origin/main` is at `d1fef0c`. Three commits are local and unpushed:
+`origin/main` is at `d1fef0c`. Four commits are local and unpushed:
 
 | Commit | What |
 |---|---|
 | `374044b` | the namespace implementation plan |
 | `a3caf20` | capability names become bounded strings |
 | `75b97fb` | the assign table |
+| `06dd882` | assign-rooted path parsing |
 
 Every gate is green on Beast: 30 kernel suites in both configurations,
 userspace test/sanitize/analyze/cross-build, `ext4-test`, the ELF fixture at 84
@@ -30,21 +31,23 @@ coverage is 82.9% (`cd sw/kernel && make coverage`).
 
 ## 2. Resume here
 
-**`docs/superpowers/plans/2026-08-06-namespace-foundation.md`, Task 3.**
+**The wiring plan, which is not yet written.**
 
-Tasks 1 and 2 are done and committed. Task 3 is assign-rooted path parsing —
-`astra_path_split` and `astra_path_normalise` — and the plan carries the
-complete test file and implementation. It is self-contained: two new files in
-`sw/userspace/vfs` plus a Makefile target, nothing existing changes, and it
-builds and tests on the Mac.
+`docs/superpowers/plans/2026-08-06-namespace-foundation.md` is complete: all
+three tasks are done and committed. The Kit now holds string capability names,
+the assign table (`astra_assign_bind`/`_lookup`/`_unbind`) and the path parser
+(`astra_path_split`, `astra_path_normalise`), each with host tests, and
+`..` at an assign's root is `ASTRA_VFS_ERR_NOT_FOUND` rather than a parent.
 
-It is also the piece with the security property in it: `..` at an assign's root
-is an error rather than a parent, so no string a program can build escapes the
-authority it was given. The tests for that are the point of the task.
+The next plan wires the shell and the ext4 backend onto the assign table, and
+has the supervisor bind the standard assigns from its capability table. That
+one changes behaviour on the machine; everything so far only added to the Kit.
+It is also the first of these that must be believed on Beast rather than the
+Mac, because it moves the shell's path handling.
 
-After Task 3, the next plan — not yet written — wires the shell and the ext4
-backend onto the assign table. That one changes behaviour on the machine;
-everything so far only adds to the Kit.
+**`make analyze` cannot run on the Mac at all** — `ANALYZER_CC=gcc` resolves to
+Apple clang, which has no `-fanalyzer`. This predates the namespace work; the
+analyze gate is a Beast gate.
 
 ## 3. What the machine gained this session
 

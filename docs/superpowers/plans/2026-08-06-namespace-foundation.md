@@ -32,7 +32,7 @@
 - Produces: `ASTRA_CAPABILITY_NAME_MAX` (16), `AstraStartupCapability.name` as `char[16]`, and `astra_capability_name_equal(const char *a, const char *b)` returning `int`.
 - Consumes: nothing.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `sw/userspace/supervisor/tests/test_supervisor.c`, add:
 
@@ -55,12 +55,12 @@ test_capability_names_are_bounded_strings(void)
 
 Call it from `main()` beside the other tests.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd sw/userspace/supervisor && make test`
 Expected: FAIL — `ASTRA_CAPABILITY_NAME_MAX` undeclared, `astra_capability_name_equal` undefined.
 
-- [ ] **Step 3: Widen the ABI**
+- [x] **Step 3: Widen the ABI**
 
 In `sw/include/astra/process.h`, replace the capability constants and struct:
 
@@ -111,7 +111,7 @@ astra_capability_name_equal(const char *left, const char *right)
 In `block.h`, `display.h` and `input.h`, replace the fourcc constants with
 strings: `"BLOCK_DEVICE"`, `"BLOCK_IRQ"`, `"DISPLAY"`, `"INPUT"`.
 
-- [ ] **Step 4: Fix every producer and consumer**
+- [x] **Step 4: Fix every producer and consumer**
 
 In `sw/kernel/process.c`, the bootstrap table assigns names by value today.
 Replace each `capability[N].name = ASTRA_CAPABILITY_X;` with a bounded copy:
@@ -136,7 +136,7 @@ In `supervisor.c` and `main.c`, replace `capabilities[index].name == name` and
 `capabilities[index].name != name` with `astra_capability_name_equal(...)`.
 Their `name` parameters change from `uint32_t` to `const char *`.
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `cd sw/userspace && make test`
 Expected: PASS, including `SUPERVISOR PASS`.
@@ -144,7 +144,7 @@ Expected: PASS, including `SUPERVISOR PASS`.
 Run on Beast: `cd sw/kernel && make test`
 Expected: PASS — `test_bootstrap_capabilities` still passes with string names.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add sw/include/astra sw/kernel sw/userspace/supervisor
@@ -170,7 +170,7 @@ git commit -m "feat(abi): capability names become bounded strings"
   - `const AstraAssign *astra_assign_lookup(const AstraAssignTable *table, const char *name)` → entry or `NULL`
   - `uint32_t astra_assign_unbind(AstraAssignTable *table, const char *name)`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `sw/userspace/vfs/tests/test_vfs_assign.c`:
 
@@ -264,7 +264,7 @@ main(void)
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 In `sw/userspace/vfs/Makefile`, add `src/vfs_assign.c` to `CORE_SOURCES` so the
 m68k library carries it, and add this beside the existing `$(HOST_TEST)` rule:
@@ -289,7 +289,7 @@ test: $(HOST_TEST) $(ASSIGN_TEST)
 Run: `cd sw/userspace/vfs && make test`
 Expected: FAIL — `astra/vfs_assign.h` not found.
 
-- [ ] **Step 3: Write the header**
+- [x] **Step 3: Write the header**
 
 Create `sw/userspace/vfs/include/astra/vfs_assign.h`:
 
@@ -334,7 +334,7 @@ uint32_t astra_assign_unbind(AstraAssignTable *table, const char *name);
 #endif
 ```
 
-- [ ] **Step 4: Write the implementation**
+- [x] **Step 4: Write the implementation**
 
 Create `sw/userspace/vfs/src/vfs_assign.c`:
 
@@ -486,12 +486,12 @@ astra_assign_unbind(AstraAssignTable *table, const char *name)
 }
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `cd sw/userspace/vfs && make test`
 Expected: PASS, printing `ASTRA VFS ASSIGN PASS`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add sw/userspace/vfs
@@ -512,7 +512,7 @@ git commit -m "feat(vfs): a process's assign table"
 - Consumes: `ASTRA_CAPABILITY_NAME_MAX` from Task 1.
 - Produces: `uint32_t astra_path_split(const char *path, char *name, uint32_t name_capacity, char *rest, uint32_t rest_capacity)` returning `ASTRA_VFS_OK` or `ASTRA_VFS_ERR_INVALID`, and `uint32_t astra_path_normalise(const char *rest, char *out, uint32_t capacity)` returning `ASTRA_VFS_OK`, `ASTRA_VFS_ERR_INVALID`, or `ASTRA_VFS_ERR_NOT_FOUND` when `..` would climb out.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `sw/userspace/vfs/tests/test_vfs_path.c`:
 
@@ -628,7 +628,7 @@ main(void)
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 In `sw/userspace/vfs/Makefile`, add `src/vfs_path.c` to `CORE_SOURCES`, and:
 
@@ -653,7 +653,7 @@ test: $(HOST_TEST) $(ASSIGN_TEST) $(PATH_TEST)
 Run: `cd sw/userspace/vfs && make test`
 Expected: FAIL — `astra/vfs_path.h` not found.
 
-- [ ] **Step 3: Write the header**
+- [x] **Step 3: Write the header**
 
 Create `sw/userspace/vfs/include/astra/vfs_path.h`:
 
@@ -683,7 +683,7 @@ uint32_t astra_path_normalise(const char *rest, char *out, uint32_t capacity);
 #endif
 ```
 
-- [ ] **Step 4: Write the implementation**
+- [x] **Step 4: Write the implementation**
 
 Create `sw/userspace/vfs/src/vfs_path.c`:
 
@@ -806,17 +806,17 @@ astra_path_normalise(const char *rest, char *out, uint32_t capacity)
 }
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `cd sw/userspace/vfs && make test`
 Expected: PASS, printing `ASTRA VFS PATH PASS`.
 
-- [ ] **Step 6: Run every host suite that could have been disturbed**
+- [x] **Step 6: Run every host suite that could have been disturbed**
 
 Run: `cd sw/userspace && make test && make sanitize`
 Expected: PASS throughout.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add sw/userspace/vfs
