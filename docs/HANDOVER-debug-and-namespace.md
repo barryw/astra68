@@ -27,6 +27,12 @@ coverage is 82.9% (`cd sw/kernel && make coverage`).
 
 ## 2. Resume here
 
+**Superseded. `docs/HANDOVER-events.md` is the current resume point** -- the
+namespace work below is finished, and the event system, the status vocabulary
+and the assign wiring all landed after this document was written. Read that
+one; this page is still accurate about the debug surface and about how the
+namespace design was arrived at.
+
 **Nothing in the namespace plans. Both are complete and both are green on
 Beast, including the terminal gate.**
 
