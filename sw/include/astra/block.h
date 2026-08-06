@@ -60,8 +60,11 @@
 
 #include <stdint.h>
 
+/* For ASTRA_ABI_ALIGNMENT: these records cross the syscall boundary. */
+#include <astra/syscall.h>
+
 typedef struct AstraBlockLeaseInfo {
-    uint32_t size;
+    _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t size;
     uint32_t sector_bytes;
     uint32_t max_transfer_sectors;
     uint32_t capabilities;
@@ -73,7 +76,7 @@ typedef struct AstraBlockLeaseInfo {
 } AstraBlockLeaseInfo;
 
 typedef struct AstraBlockRequest {
-    uint32_t size;
+    _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t size;
     uint32_t operation;
     uint32_t buffer;        /* transfer-memory handle, never an address */
     uint32_t buffer_offset;
@@ -83,7 +86,7 @@ typedef struct AstraBlockRequest {
 } AstraBlockRequest;
 
 typedef struct AstraBlockCompletion {
-    uint32_t size;
+    _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t size;
     uint32_t request;
     uint32_t status;
     uint32_t detail;
@@ -99,6 +102,13 @@ _Static_assert(sizeof(AstraBlockRequest) == ASTRA_BLOCK_REQUEST_SIZE,
                "block request ABI size changed");
 _Static_assert(sizeof(AstraBlockCompletion) == ASTRA_BLOCK_COMPLETION_SIZE,
                "block completion ABI size changed");
+
+_Static_assert(_Alignof(AstraBlockLeaseInfo) % ASTRA_ABI_ALIGNMENT == 0u,
+               "block geometry must satisfy the syscall alignment rule");
+_Static_assert(_Alignof(AstraBlockRequest) % ASTRA_ABI_ALIGNMENT == 0u,
+               "block request must satisfy the syscall alignment rule");
+_Static_assert(_Alignof(AstraBlockCompletion) % ASTRA_ABI_ALIGNMENT == 0u,
+               "block completion must satisfy the syscall alignment rule");
 
 #endif
 

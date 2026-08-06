@@ -147,8 +147,20 @@
 
 #include <stdint.h>
 
+/*
+ * Every record the syscall boundary copies to or from user memory carries
+ * ASTRA_ABI_ALIGNMENT, and the kernel refuses an address that does not hold
+ * it. The alignment has to be written down here rather than assumed: the m68k
+ * ABI aligns uint32_t to two bytes, so a record built from uint32_t fields is
+ * only four-byte aligned by luck of where the linker or the stack happens to
+ * put it. A batch buffer that moved from a stack frame into .bss landed on an
+ * odd word and every read was refused with INVALID_ARGUMENT -- which the
+ * caller saw as "no input", so it looked like a hang rather than a refusal.
+ */
+#define ASTRA_ABI_ALIGNMENT 4u
+
 typedef struct AstraIrqRecord {
-    uint32_t timestamp_high;
+    _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t timestamp_high;
     uint32_t timestamp_low;
     uint32_t status;
     uint32_t sequence;
@@ -161,7 +173,7 @@ typedef struct AstraIrqRecord {
  * Released by ASTRA_SYSCALL_CLOSE like any other handle.
  */
 typedef struct AstraDmaBufferInfo {
-    uint32_t size;
+    _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t size;
     uint32_t handle;
     uint32_t virtual_base;
     uint32_t byte_size;
@@ -169,7 +181,7 @@ typedef struct AstraDmaBufferInfo {
 } AstraDmaBufferInfo;
 
 typedef struct AstraDeviceInfo {
-    uint32_t size;
+    _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t size;
     uint32_t device_id;
     uint32_t class_id;
     uint32_t capabilities;
@@ -187,6 +199,18 @@ _Static_assert(sizeof(AstraDmaBufferInfo) == ASTRA_DMA_BUFFER_INFO_SIZE,
 
 _Static_assert(sizeof(AstraIrqRecord) == ASTRA_IRQ_RECORD_SIZE,
                "IRQ record ABI size changed");
+
+/*
+ * The refusal these prevent is silent at the call site, so it is caught at
+ * compile time on the target that has the weaker alignment rule rather than
+ * at run time on the machine that hangs.
+ */
+_Static_assert(_Alignof(AstraDeviceInfo) % ASTRA_ABI_ALIGNMENT == 0u,
+               "device-info must satisfy the syscall alignment rule");
+_Static_assert(_Alignof(AstraDmaBufferInfo) % ASTRA_ABI_ALIGNMENT == 0u,
+               "dma-buffer-info must satisfy the syscall alignment rule");
+_Static_assert(_Alignof(AstraIrqRecord) % ASTRA_ABI_ALIGNMENT == 0u,
+               "IRQ record must satisfy the syscall alignment rule");
 
 #ifndef ASTRA_MESSAGE_HEADER_DEFINED
 #define ASTRA_MESSAGE_HEADER_DEFINED 1

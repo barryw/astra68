@@ -3,6 +3,9 @@
 
 #include <stdint.h>
 
+/* For ASTRA_ABI_ALIGNMENT: an event batch is copied across the syscall. */
+#include <astra/syscall.h>
+
 #define ASTRA_INPUT_VERSION_1_1 UINT32_C(0x00010001)
 
 #define ASTRA_INPUT_CAP_KEYBOARD (UINT32_C(1) << 0)
@@ -60,7 +63,7 @@
 typedef uint16_t AstraPhysicalKey;
 
 typedef struct AstraInputEvent {
-    uint32_t header;
+    _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t header;
     uint32_t value;
     uint32_t timestamp_ms;
     uint32_t device_sequence;
@@ -68,5 +71,7 @@ typedef struct AstraInputEvent {
 } AstraInputEvent;
 
 _Static_assert(sizeof(AstraInputEvent) == 20u, "input event ABI size");
+_Static_assert(_Alignof(AstraInputEvent) % ASTRA_ABI_ALIGNMENT == 0u,
+               "input event must satisfy the syscall alignment rule");
 
 #endif

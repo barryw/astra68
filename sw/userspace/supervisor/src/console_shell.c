@@ -498,11 +498,29 @@ void console_shell_run(uint32_t display, uint32_t input,
         uint32_t flags = 0u;
         uint32_t index;
 
-        if (input == 0u ||
-            astra_input_read(input, events, ASTRA_INPUT_READ_BATCH_MAX,
-                             &count, &flags) != ASTRA_SYSCALL_OK) {
+        uint32_t status;
+
+        if (input == 0u) {
             (void)astra_yield();
             continue;
+        }
+        status = astra_input_read(input, events, ASTRA_INPUT_READ_BATCH_MAX,
+                                  &count, &flags);
+        /*
+         * An empty queue is the ordinary case and the only one worth yielding
+         * over. Anything else is a refused call, and treating a refusal as
+         * "no input" is what turned a rejected buffer address into a terminal
+         * that looked hung: the loop spun forever and said nothing. A broken
+         * input path is exactly as fatal to a terminal as a broken flush, and
+         * is reported the same way.
+         */
+        if (status == ASTRA_SYSCALL_WOULD_BLOCK) {
+            (void)astra_yield();
+            continue;
+        }
+        if (status != ASTRA_SYSCALL_OK) {
+            (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
+            return;
         }
         for (index = 0u; index < count; ++index) {
             uint32_t header = events[index].header;
