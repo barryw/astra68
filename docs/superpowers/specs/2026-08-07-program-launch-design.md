@@ -194,6 +194,46 @@ anything.
 A parent that wants a child to see less says less. That is the whole mechanism,
 and it is the same table the startup block already publishes.
 
+### 4.1 Streams are capabilities, not numbers
+
+A launched program needs somewhere to write and somewhere to read. Three more
+grants, named the way everything else here is named:
+
+| Grant | What it is | What it carries |
+|---|---|---|
+| `STDOUT` | a send handle to a text sink | bounded text, no reply |
+| `STDERR` | a send handle to a text sink | the same, granted separately |
+| `STDIN` | a send handle to a text source | a bounded request, and a reply with what there is |
+
+**Not file descriptors 0, 1 and 2.** An integer table with a dup and a close is
+the POSIX personality's job; here a stream is a capability with a name, so a
+program that was not granted `STDIN` does not have one and says so, rather than
+reading from whatever inherited the number.
+
+- **Writing is fire and forget with back pressure.** A write is one bounded
+  message and there is no reply, because a reply per line doubles the round
+  trips at 30 MHz and nothing a program does depends on the sink's opinion. A
+  full sink answers `WOULD_BLOCK`, which is the back pressure and the only
+  answer a writer needs.
+- **Reading is a request and a reply.** The child asks for at most N bytes and
+  gets what there is, possibly short, possibly none — the same short-read rule
+  the storage protocol already has, for the same reason.
+- **Redirection is a different grant.** `events > log.txt` is the launcher
+  handing a sink that writes to a file instead of the terminal, which is what
+  makes redirection a capability operation rather than a shell trick. It is not
+  built here; it costs nothing to leave the door open, and everything to close
+  it by making streams integers.
+- **The terminal service owns the terminal.** `TERMINAL_AND_POSIX.md` §2 already
+  has the layering: the terminal owns the cell model and the shell does not draw
+  through it. Today the supervisor hosts it, like every other service, and moves
+  out on the same day they do.
+
+**`STDERR` is not where a program says what went wrong.** It is where a program
+says something a person should read *now*. What went wrong is an event, with a
+level, an activity and a source location, and it is in `EVENTS:` whether anybody
+was watching or not. A program that only writes its failures to `stderr` has
+told the person at the terminal and told the machine nothing.
+
 ---
 
 ## 5. Command lookup, and what a directory in `COMMANDS:` means
