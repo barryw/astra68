@@ -144,17 +144,13 @@ Three cases, each with one answer:
 - **A bound volume that leaves.** The binding stays and fails as *that volume is
   not present*. Media generation is already tracked by the block layer.
 
-### 1.7 One name may cover several volumes
+### 1.7 A volume is never joined to another volume
 
-An assign may name an **ordered list** of `(mount, root, rights)` rather than one
-of them. Lookup tries each member in order and the first hit answers.
+Two things could be meant by "extend `WORK:` with a second disk". One is
+permanently refused and one is designed and deliberately not built.
 
-This is the Amiga's multi-directory assign, and it is the honest way to answer
-"I want more room in `WORK:`". A second volume joined to `WORK:` extends what
-that name reaches without the two disks becoming one thing.
-
-**It is not, and must never become, block-level spanning.** Concatenating two
-devices under one filesystem — LVM, a device-mapper stripe, a multi-device
+**Refused: block-level spanning.** Concatenating two devices under one
+filesystem — LVM, a device-mapper stripe, a multi-device
 filesystem — is refused for this machine:
 
 - ext4 does not span devices, so it would mean a volume manager underneath
@@ -166,10 +162,31 @@ filesystem — is refused for this machine:
   corrupts the boot volume is wrong on its face, and it contradicts §7 and §3.5
   outright.
 
-A union has the recoverable failure instead: a member that is gone takes only
+**Not built: union assigns.** An assign could name an ordered list of
+`(mount, root, rights)` rather than one of them, with lookup trying each member
+and the first hit answering — the Amiga's multi-directory assign. That has the
+recoverable failure block spanning does not: a member that is gone takes only
 the files that were on it, and every other member still answers.
 
-The rules that make it predictable:
+It is not built, and a second volume gets a second name instead.
+
+The reason is that no part of this machine needs one name to reach two volumes.
+More room is a second name — `PHOTOS:` — which is what an assign is for, and
+two names cost nothing to implement and nothing to explain. Meanwhile the two
+places where a search order genuinely exists, command lookup in §2.5 and kit
+lookup in §4.1, are both **fixed two-element lists with a stated order**, both
+hardcoded where they are used. A general union would be a third implementation
+of something that already exists twice in a simpler form, and its cost is not
+the lookup loop — that is a few lines — but everything around it: `readdir`
+becoming a cursor, a way to ask which member answered, and a shadowing rule a
+person has to hold in their head.
+
+**The trigger to revisit.** When one logical collection genuinely cannot be
+split by name — when something other than a person's taste requires a single
+name to span media — this is the design to build, and the rules below are what
+it must obey. Running out of room on one disk is not that trigger.
+
+The rules it would have to obey:
 
 - **A member is joined explicitly, never by coincidence of label.** A disk
   labelled `work` appearing in a slot must not silently join `WORK:` — that is
@@ -194,9 +211,9 @@ The rules that make it predictable:
   path within that member's root, and no member's root can be climbed out of.
   A union adds candidates, never an escape.
 
-**The cost, stated before it is paid: listing a union directory.** The storage
-protocol addresses `readdir` by index and the ext4 backend reopens the directory
-per entry, so one listing is already quadratic; a union multiplies that by the
+**The cost that would have to be paid first: listing a union directory.** The
+storage protocol addresses `readdir` by index and the ext4 backend reopens the
+directory per entry, so one listing is already quadratic; a union multiplies that by the
 member count and adds a duplicate-name check whose memory is proportional to the
 directory rather than bounded. Union listing therefore waits on `readdir`
 becoming a cursor. Lookup, open, read and write do not — they stop at the first
@@ -581,8 +598,6 @@ bugs. An NVRAM TLV is reserved for the boot-attempt counter.
 | `console_shell.c` | `/`-rooted paths and `shell_resolve` become assign-rooted |
 | `vfs_ext4_backend.c` | mount-point prefixing becomes a bound mount handle |
 | VFS client Kit | assign table, resolution, and the rule that `..` stops at a root |
-| `AstraAssign` | one `(mount, root, rights)` becomes an ordered list of them (§1.7) |
-| `ASTRA_VFS_OP_READDIR` | index-addressed today; a union listing needs a cursor (§1.7) |
 | The mounter | nothing enumerates volumes; the supervisor finds one partition and stops (§1.6) |
 | `ASTRA_SYSCALL_LOG_WRITE` | appends to the trace ring; console becomes a sink |
 | `AstraStartupInfo` | gains the launch context and the list of granted objects |
@@ -601,6 +616,5 @@ bugs. An NVRAM TLV is reserved for the boot-attempt counter.
 - The mounter service: what it does when media arrives, what a person is shown,
   and what the command that binds a volume by hand looks like. §1.6 fixes the
   naming rule and leaves the service to its own spec.
-- Where a union's membership is written down, and what `CONFIG:startup` says.
-  §1.7 fixes the semantics and not the syntax, which waits on the shell
-  language like every other startup line.
+Union assigns are **not** an open question. §1.7 decided against building them
+and named the trigger that would reopen it.
