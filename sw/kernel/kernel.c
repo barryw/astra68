@@ -1055,6 +1055,41 @@ void kernel_process_diagnostic_log(uint32_t process_id, const char *text,
     console_putc('\n');
 }
 
+/*
+ * A user fault, said out loud. What a process died of used to survive only as
+ * a trace record in hex, so the address that mattered and the instruction that
+ * caused it were there and unreadable.
+ */
+void kernel_process_fault_report(uint32_t process_id, uint32_t thread_id,
+                                 uint32_t program_counter,
+                                 uint32_t fault_address, uint32_t vector,
+                                 uint32_t kind)
+{
+    console_puts("*** user fault: process 0x");
+    console_hex32(process_id);
+    console_puts(" thread 0x");
+    console_hex32(thread_id);
+    console_puts("\n    pc 0x");
+    console_hex32(program_counter);
+    console_puts("  address 0x");
+    console_hex32(fault_address);
+    console_puts("  vector ");
+    console_dec32(vector);
+    switch (kind) {
+    case KERNEL_PROCESS_FAULT_STACK_GUARD:
+        console_puts("\n    the address is this thread's stack guard page: "
+                     "the stack ran past its reservation");
+        break;
+    case KERNEL_PROCESS_FAULT_STACK_ARENA:
+        console_puts("\n    the address is inside the thread stack arena but "
+                     "not this thread's own stack");
+        break;
+    default:
+        break;
+    }
+    console_puts("\n    symbolize with tools/symbolize.py\n");
+}
+
 void kernel_process_initial_image_progress(uint32_t stage)
 {
     console_puts("Initial image ....... ");

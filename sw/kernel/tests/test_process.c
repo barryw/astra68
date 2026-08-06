@@ -677,6 +677,27 @@ void kernel_process_initial_image_progress(uint32_t stage)
     last_initial_image_stage = stage;
 }
 
+static uint32_t fault_reports;
+static uint32_t last_fault_process;
+static uint32_t last_fault_pc;
+static uint32_t last_fault_address;
+static uint32_t last_fault_vector;
+static uint32_t last_fault_kind;
+
+void kernel_process_fault_report(uint32_t process_id, uint32_t thread_id,
+                                 uint32_t program_counter,
+                                 uint32_t fault_address, uint32_t vector,
+                                 uint32_t kind)
+{
+    (void)thread_id;
+    ++fault_reports;
+    last_fault_process = process_id;
+    last_fault_pc = program_counter;
+    last_fault_address = fault_address;
+    last_fault_vector = vector;
+    last_fault_kind = kind;
+}
+
 static uint32_t diagnostic_log_reports;
 static uint32_t last_diagnostic_process;
 static char last_diagnostic_text[ASTRA_LOG_MAX_BYTES + 1u];
@@ -6476,6 +6497,7 @@ static void test_user_stack_grows_on_fault_and_guards_the_floor(void)
     uint32_t fault_pc = KERNEL_PROCESS_CODE_BASE + 2u;
 
     initialize_test();
+    fault_reports = 0u;
     assert(kernel_memory_stats(&baseline));
     assert(kernel_process_create(image, sizeof(image), 0u, 0u,
                                  &process_id) == KERNEL_PROCESS_OK);
@@ -6517,6 +6539,8 @@ static void test_user_stack_grows_on_fault_and_guards_the_floor(void)
     assert(stats.user_stack_pages_committed == 1u);
     /* Growth is not a user fault and must not be counted as one. */
     assert(stats.user_faults == 0u);
+    /* Nor reported as one: a fault that was answered is not news. */
+    assert(fault_reports == 0u);
 
     /*
      * A frame bigger than a page can touch its bottom first, so the span
@@ -6559,6 +6583,17 @@ static void test_user_stack_grows_on_fault_and_guards_the_floor(void)
     assert(kernel_process_stats(&stats));
     assert(stats.user_faults == 1u);
     assert(stats.user_stack_growths == 3u);
+    /*
+     * The fault that killed it is reported once, in terms a reader can use:
+     * where the instruction was, what address it touched, and that the address
+     * was the guard page rather than a wild pointer.
+     */
+    assert(fault_reports == 1u);
+    assert(last_fault_process == process_id);
+    assert(last_fault_pc == fault_pc);
+    assert(last_fault_address == TEST_STACK_FLOOR(0) - 4u);
+    assert(last_fault_vector == 2u);
+    assert(last_fault_kind == KERNEL_PROCESS_FAULT_STACK_GUARD);
 
     /* Everything committed by growth comes back, not just the first page. */
     while (kernel_process_maintenance_pending())
@@ -6791,6 +6826,52 @@ static void test_no_debug_surface_closes_the_channel(void)
     assert(kernel_process_debug_surface());
 }
 
+
+/*
+ * A fault outside any stack is reported as what it is. The classification is
+ * only useful if it is narrow: calling a wild pointer a stack overflow would
+ * send the reader to the wrong place, which is worse than saying nothing.
+ */
+static void test_fault_report_names_only_what_it_knows(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+
+    initialize_test();
+    fault_reports = 0u;
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+
+    make_frame(frame, 0xau, 2u, KERNEL_PROCESS_CODE_BASE + 6u, 0x60000000u);
+    assert(kernel_process_on_fault(registers, KERNEL_PROCESS_STACK_TOP - 8u,
+                                   frame, &next) ==
+           KERNEL_PROCESS_NO_RUNNABLE);
+    assert(fault_reports == 1u);
+    assert(last_fault_address == 0x60000000u);
+    assert(last_fault_kind == KERNEL_PROCESS_FAULT_OTHER);
+
+    /*
+     * An address in another thread's slot is inside the arena and outside this
+     * thread's stack, which is a third thing and is said as one.
+     */
+    initialize_test();
+    fault_reports = 0u;
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0xau, 2u, KERNEL_PROCESS_CODE_BASE + 6u,
+               TEST_STACK_BASE(3));
+    assert(kernel_process_on_fault(registers, KERNEL_PROCESS_STACK_TOP - 8u,
+                                   frame, &next) ==
+           KERNEL_PROCESS_NO_RUNNABLE);
+    assert(fault_reports == 1u);
+    assert(last_fault_kind == KERNEL_PROCESS_FAULT_STACK_ARENA);
+}
+
 int main(void)
 {
     test_process_allocation_failure_matrix();
@@ -6835,6 +6916,7 @@ int main(void)
     test_user_stack_grows_on_fault_and_guards_the_floor();
     test_diagnostic_log_is_gated_and_sanitised();
     test_no_debug_surface_closes_the_channel();
+    test_fault_report_names_only_what_it_knows();
     test_executable_rejections_do_not_allocate();
     test_executable_load_rolls_back_every_allocation();
     test_process_info_syscall();

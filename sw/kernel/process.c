@@ -5194,6 +5194,30 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
 }
 
 /*
+ * Names the address for the reader. A guard page is the interesting answer:
+ * it is a stack that ran past its reservation, and it looks exactly like a
+ * wild pointer to anyone reading hex.
+ */
+static uint32_t classify_fault_address(const KernelThread *thread,
+                                       uint32_t address)
+{
+    uint32_t arena_end = KERNEL_THREAD_STACK_BASE +
+                         (KERNEL_PROCESS_THREAD_MAX *
+                          KERNEL_THREAD_STACK_STRIDE);
+
+    if (thread != NULL && thread->stack_slot < KERNEL_PROCESS_THREAD_MAX) {
+        uint32_t slot_base = stack_slot_base(thread->stack_slot);
+
+        if (address >= slot_base && address < slot_base +
+                                                  KERNEL_THREAD_STACK_GUARD_SIZE)
+            return KERNEL_PROCESS_FAULT_STACK_GUARD;
+    }
+    if (address >= KERNEL_THREAD_STACK_BASE && address < arena_end)
+        return KERNEL_PROCESS_FAULT_STACK_ARENA;
+    return KERNEL_PROCESS_FAULT_OTHER;
+}
+
+/*
  * The copy path's way in. The user thread never faulted on this page -- the
  * kernel reached it first, on the user's behalf -- so the growth that its own
  * access would have triggered has to be done here instead, or a syscall
@@ -5254,6 +5278,11 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
     current->fault_vector = (uint16_t)(frame.vector_offset >> 2);
     current->fault_address = frame.fault_address;
     ++scheduler_stats.user_faults;
+    kernel_process_fault_report(current->id, thread->id,
+                                frame.program_counter, frame.fault_address,
+                                frame.vector_offset >> 2,
+                                classify_fault_address(thread,
+                                                       frame.fault_address));
     return retire_current(KERNEL_PROCESS_EXIT_USER_FAULT, 0u,
                           next_context);
 }

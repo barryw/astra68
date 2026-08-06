@@ -365,6 +365,28 @@ void kernel_process_initial_image_progress(uint32_t stage);
  */
 void kernel_process_diagnostic_log(uint32_t process_id, const char *text,
                                    uint32_t length);
+
+/*
+ * What a faulting address turned out to be. The kernel knows where every
+ * thread's stack and guard page are and the developer does not, so saying
+ * "this was your stack guard" costs nothing here and saves the reader from
+ * matching hex against a memory map.
+ */
+typedef enum KernelProcessFaultKind {
+    KERNEL_PROCESS_FAULT_OTHER = 0,
+    KERNEL_PROCESS_FAULT_STACK_GUARD,
+    KERNEL_PROCESS_FAULT_STACK_ARENA
+} KernelProcessFaultKind;
+
+/*
+ * A user fault, reported before the process is retired. The address and the
+ * program counter existed only as raw trace records before this, which meant
+ * a program dying said nothing legible about where.
+ */
+void kernel_process_fault_report(uint32_t process_id, uint32_t thread_id,
+                                 uint32_t program_counter,
+                                 uint32_t fault_address, uint32_t vector,
+                                 uint32_t kind);
 /* True when this build grants ASTRA_RIGHT_DEBUG and stands the monitor up. */
 bool kernel_process_debug_surface(void);
 #if defined(KERNEL_PROCESS_HOST_TEST)
