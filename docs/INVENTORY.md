@@ -235,6 +235,16 @@ python3 emu/qemu/test-input.py "$(./emu/qemu/build.sh host)"
 python3 emu/qemu/test-terminal.py /tmp/qemu-final-build/qemu-system-m68k \
     sw/boot/astra_boot.bin --image /tmp/part.img
 
+# a debugger, with ROM, kernel and user symbols                        (beast)
+QEMU=/tmp/qemu-final-build/qemu-system-m68k ./emu/qemu/debug.sh --image /tmp/part.img
+
+# an address from a panic or a fault report, named
+python3 tools/symbolize.py 0x0010044a
+
+# the ROM packer's guard, and the symbolizer's routing (pytest: Mac only)
+cd sw/boot && python3 -m pytest tests/test_pack_payload.py
+python3 -m pytest tools/tests/test_symbolize.py
+
 # emulator builds
 emu/qemu/build.sh host      # x86_64 / native
 emu/qemu/build.sh desktop   # with UI

@@ -102,6 +102,7 @@ itself stays, as a conformance oracle only — see above.
 | Storage / filesystem line of work | `docs/HANDOVER-userspace-bringup.md` |
 | Service protocols and thread stacks | `docs/HANDOVER-vfs-and-stacks.md` |
 | ROM budget and memory layout | `docs/MEMORY_MAP.md`, `sw/include/astra/boot.h` |
+| Debugging a program on the machine | `docs/DEBUGGING.md` |
 | What is implemented vs planned | `docs/STATUS.md` |
 | FPGA timing closure | `fpga/soc/oss_flow/TIMING_CLOSURE.md` |
 
