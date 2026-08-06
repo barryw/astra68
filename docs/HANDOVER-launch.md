@@ -14,7 +14,7 @@ since is local and unpushed.
 
 ## 1. Resume here
 
-**Task 3 of `docs/superpowers/plans/2026-08-07-launch-milestone-1.md`.**
+**Task 4 of `docs/superpowers/plans/2026-08-07-launch-milestone-1.md`.**
 
 The plan has six tasks and one was added while task 1 was being built:
 
@@ -23,8 +23,8 @@ The plan has six tasks and one was added while task 1 was being built:
 | 1 | the launch syscall | **done**, `3090f1a` |
 | 2 | runtime wrappers, and seeding an assign table from a capability table | **done**, `d0bd9a3` |
 | 2b | `ASTRA_PROGRAM`, mandatory provenance, link fails without it | **done**, `5be6f15` |
-| 3 | streams — `STDOUT`, `STDERR`, `STDIN` as grants, not numbers | next |
-| 4 | the shell launches by name; `COMMANDS:` bound; `status` proves it | |
+| 3 | streams — `STDOUT`, `STDERR`, `STDIN` as grants, not numbers | **done**, `c9058d9` |
+| 4 | the shell launches by name; `COMMANDS:` bound; `status` proves it | next |
 | 5 | the storage protocol over ports | |
 | 6 | `events` becomes `COMMANDS:events`; the builtin is deleted | |
 
@@ -94,14 +94,31 @@ task 5's first step, not a surprise in the middle of it.
   §2 has `root_offset` in the grant and `AstraStartupCapability` has nowhere to
   put one — so every binding is at its mount's own root.
 
-**The decision task 3 inherits.** Seeding binds *every* capability that is not
-`PROCESS` or `THREAD`, and a `STDOUT` grant would be caught by that and bound as
-though it were a mount. So task 3 has to say which grants are namespace entries.
-`AstraLaunchGrant` already has a `flags` word and it is **unused and not
-propagated** — `KernelProcessBootstrapCapability` in `sw/kernel/process.c` has
-no field for it, so carrying a flag across is roughly four lines of kernel and
-one test. That is the same deferral as `root_offset` and this is the grant that
-needs it. Decide it before writing the stream client, not after.
+**Task 3** — `sw/include/astra/stream_service.h`, `sw/userspace/streams/`,
+`sw/userspace/supervisor/src/console_stream.c`, and the runtime's port wrappers
+in `sw/userspace/runtime/src/port.c`.
+
+- The grant-flag question is **settled**: `ASTRA_CAPABILITY_FLAG_NAMESPACE` is
+  carried by the kernel from the grant into the published record, and
+  `astra_assign_seed` binds only the grants that declared themselves names. A
+  launch that wants a child to have `WORK:` must set that bit; a `STDOUT` grant
+  must not. Unknown flag bits are `INVALID_ARGUMENT` at the syscall.
+- `astra_stream_write(handle, bytes, length, &written)`, `astra_print(handle,
+  text)` and `astra_stream_read(source, bytes, capacity, &length)` are the
+  client. **`astra_print` takes a handle** — there is no ambient output.
+- `console_stream_stdout()` / `_stderr()` / `_stdin()` are the send handles a
+  launch grants. They exist before the first prompt, because a child is handed
+  what its launcher already holds.
+- **`console_stream_offer` is called by nobody.** That is `STDIN`'s only missing
+  piece and it is task 4's: while a child runs, the line the editor finishes
+  goes to the source instead of to `run_line`.
+
+**The trap task 3 found, which task 5 will meet again.** Attaching a handle to a
+port message **moves** it — ports carry no retain, so the sender's entry is
+invalidated. A reply handle cannot be cached across calls; `astra_stream_read`
+makes a reply port per read. The streams mock models this deliberately, and a
+test asserts the mock does, because a mock that copied is what let the broken
+version pass.
 
 **Task 2b** — `sw/include/astra/program.h`, the `ASSERT` at the end of
 `sw/userspace/runtime/astra_user.ld`, and `tools/program_info.py`.
