@@ -28,26 +28,40 @@
 #define KERNEL_THREAD_SLOT_NONE UINT16_MAX
 
 /*
- * One slot of address space per thread, of which the low part is mapped and
- * the rest is guard. The stride is address space and costs page-table entries
- * only; the size is committed RAM.
+ * Reserve-and-grow. Each thread owns one slot of address space:
  *
- * Both were one page, and that was too small the moment a request crossed a
- * service boundary: a shell command through the storage protocol is shell ->
- * Kit -> service -> backend -> lwext4's write path, and it faulted 20 bytes
- * below this base. Three pages clears it with room measured by -fstack-usage.
+ *   slot_base                                              slot_base + STRIDE
+ *   |                                                                       |
+ *   [ GUARD ][ . . . . . . . grows down into here . . . . . ][ committed at ]
+ *   [ 1 page][                                              ][   creation   ]
  *
- * This is the interim shape. The intended one is reserve-and-grow: keep the
- * stride as a reservation, commit one page, and map further pages from the
- * fault handler when the faulting address is inside the reservation and above
- * the guard. That needs the user-fault path to tell a growing stack from a
- * wild pointer, which it cannot do yet -- every user fault kills the process.
- * When it lands, SIZE becomes the initial commit and STRIDE the cap, so
- * nothing here has to be unpicked first.
+ * The stride is a **reservation**. It costs page-table entries, not RAM, so
+ * the common case needs no number from anybody: a thread starts with SIZE
+ * committed at the top of its slot and the fault handler maps another page
+ * each time the stack reaches one, up to the floor. The floor page is never
+ * mapped, so a wild pointer still dies where it always did.
+ *
+ * The committed part was one page, and that was too small the moment a
+ * request crossed a service boundary: a shell command through the storage
+ * protocol is shell -> Kit -> service -> backend -> lwext4's write path, and
+ * it faulted 20 bytes below the slot base. It was then three pages, which is a
+ * guess that happens to fit today's deepest chain and says nothing about the
+ * next one. Growth is what removes the guess.
+ *
+ * Linux does the same for a main thread and Windows carries reserve and commit
+ * in the PE header. Go copies growable stacks instead, which needs compiler
+ * cooperation Astra does not have.
+ *
+ * The growth itself rests on one property of the machine: an access fault
+ * leaves the program counter on the faulting instruction, so re-entering user
+ * mode there re-runs the access against the page that has since been mapped.
+ * That is what the emulator does -- see the resume note in process.c, which is
+ * where a machine that reran the bus cycle instead would have to be handled.
  */
 #define KERNEL_THREAD_STACK_BASE 0x70000000u
-#define KERNEL_THREAD_STACK_STRIDE 0x00004000u
-#define KERNEL_THREAD_STACK_SIZE 0x00003000u
+#define KERNEL_THREAD_STACK_STRIDE 0x00010000u
+#define KERNEL_THREAD_STACK_GUARD_SIZE 0x00001000u
+#define KERNEL_THREAD_STACK_SIZE 0x00001000u
 
 #define KERNEL_THREAD_RIGHT_QUERY       (1u << 0)
 #define KERNEL_THREAD_RIGHT_WAIT        (1u << 4)
@@ -132,6 +146,13 @@ typedef struct KernelThread {
     uint16_t handle_references;
     uint8_t stack_released;
     uint8_t reap_pending;
+    /*
+     * Pages committed to this thread's stack, always contiguous and always
+     * ending at user_stack_top. Growth moves user_stack_base down and this up;
+     * the reap path unmaps exactly this many, which is why it is counted here
+     * rather than derived from a constant that is no longer fixed.
+     */
+    uint8_t stack_pages;
 } KernelThread;
 
 typedef struct KernelThreadSnapshot {
@@ -159,7 +180,8 @@ typedef struct KernelThreadSnapshot {
     uint8_t deadline_waiting;
     uint8_t stack_released;
     uint8_t reap_pending;
-    uint8_t reserved[3];
+    uint8_t stack_pages;
+    uint8_t reserved[2];
     uint32_t exit_status;
     uint32_t terminal_result;
     uint16_t handle_references;

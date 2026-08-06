@@ -17,8 +17,9 @@
 #define KERNEL_PROCESS_MAX 4u
 #define KERNEL_PROCESS_CODE_BASE 0x00100000u
 #define KERNEL_PROCESS_STACK_BASE KERNEL_THREAD_STACK_BASE
+/* The top of the first slot's reservation: where its stack pointer starts. */
 #define KERNEL_PROCESS_STACK_TOP \
-    (KERNEL_PROCESS_STACK_BASE + KERNEL_THREAD_STACK_SIZE)
+    (KERNEL_PROCESS_STACK_BASE + KERNEL_THREAD_STACK_STRIDE)
 #define KERNEL_PROCESS_PROGRESS_GOAL 64u
 #define KERNEL_PROCESS_THREAD_MAX 15u
 
@@ -134,6 +135,14 @@ typedef struct KernelSchedulerStats {
     uint32_t total_syscalls_low;
     uint32_t total_syscalls_high;
     uint32_t user_faults;
+    /*
+     * Faults answered by committing a stack page instead of retiring the
+     * process. They are deliberately not counted as user faults: one is the
+     * system working and the other is a process dying, and a single number
+     * that mixed them could not be read for either.
+     */
+    uint32_t user_stack_growths;
+    uint32_t user_stack_pages_committed;
     uint32_t completed_user_fault_teardowns;
     uint32_t completed_teardowns;
     uint32_t forced_frame_releases;

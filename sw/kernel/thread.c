@@ -82,6 +82,11 @@ _Static_assert(offsetof(KernelThread, kernel_stack_top) ==
                    KERNEL_THREAD_KERNEL_STACK_TOP_OFFSET,
                "assembly thread stack offset changed");
 #if defined(__m68k__)
+/*
+ * Unchanged by the stack-page count: the byte fits the padding the record
+ * already carried, so remembering how far each stack has grown costs no
+ * kernel RAM at all.
+ */
 _Static_assert(sizeof(KernelThread) == 180u,
                "thread record size changed; update the memory budget");
 _Static_assert(sizeof(KernelThreadWaitRegistration) == 8u,
@@ -95,14 +100,15 @@ _Static_assert(KERNEL_THREAD_MAX <= 16u,
 _Static_assert(THREAD_WAIT_REGISTRATION_COUNT < UINT16_MAX,
                "wait registration identifiers must fit in 16 bits");
 /*
- * The guard is the part of a slot's stride that is never mapped, so an
- * overflow leaves the mapping instead of reaching the next thread's stack.
- * One page is enough for that and is what the rule has always meant; the
- * previous form demanded a guard as large as the stack itself, which was the
- * same thing only while a stack was one page.
+ * The guard is the floor page of a slot's stride, which is never mapped, so an
+ * overflow leaves the mapping instead of reaching the thread's stack below it.
+ * The stride has to hold that page plus what is committed at creation; the
+ * space between them is what growth is allowed to take.
  */
+_Static_assert(KERNEL_THREAD_STACK_GUARD_SIZE == KERNEL_PAGE_SIZE,
+               "the stack guard is one page");
 _Static_assert(KERNEL_THREAD_STACK_STRIDE >=
-                   KERNEL_THREAD_STACK_SIZE + KERNEL_PAGE_SIZE,
+                   KERNEL_THREAD_STACK_SIZE + KERNEL_THREAD_STACK_GUARD_SIZE,
                "thread stacks require an unmapped guard page");
 _Static_assert(KERNEL_THREAD_SUPERVISOR_STACK_SIZE % sizeof(uint32_t) == 0u,
                "supervisor stack must contain whole longwords");
@@ -913,6 +919,8 @@ KernelThreadStatus kernel_thread_allocate(uint16_t process_slot,
     candidate->stack_slot = stack_slot;
     candidate->user_stack_top = user_stack;
     candidate->user_stack_base = user_stack - KERNEL_THREAD_STACK_SIZE;
+    candidate->stack_pages =
+        (uint8_t)(KERNEL_THREAD_STACK_SIZE / KERNEL_PAGE_SIZE);
     candidate->ready_previous = KERNEL_THREAD_SLOT_NONE;
     candidate->ready_next = KERNEL_THREAD_SLOT_NONE;
     /* Slot release validates the complete wait row before clearing occupied. */
@@ -1795,9 +1803,9 @@ bool kernel_thread_snapshot(uint32_t slot, KernelThreadSnapshot *snapshot)
             1u : 0u;
     snapshot->stack_released = thread->stack_released;
     snapshot->reap_pending = thread->reap_pending;
+    snapshot->stack_pages = thread->stack_pages;
     snapshot->reserved[0] = 0u;
     snapshot->reserved[1] = 0u;
-    snapshot->reserved[2] = 0u;
     snapshot->exit_status = thread->exit_status;
     snapshot->terminal_result = thread->terminal_result;
     snapshot->handle_references = thread->handle_references;

@@ -17,6 +17,20 @@
  * change to what these tests check.
  */
 #define TEST_STACK_PAGES (KERNEL_THREAD_STACK_SIZE / KERNEL_PAGE_SIZE)
+
+/*
+ * A slot is a reservation and the stack is committed at the top of it, so the
+ * base a thread starts with is a stride up from its slot and a stack down
+ * again -- not the slot's own base, which is the guard.
+ */
+#define TEST_STACK_TOP(slot) \
+    (KERNEL_THREAD_STACK_BASE + \
+     ((uint32_t)(slot) + 1u) * KERNEL_THREAD_STACK_STRIDE)
+#define TEST_STACK_BASE(slot) (TEST_STACK_TOP(slot) - KERNEL_THREAD_STACK_SIZE)
+#define TEST_STACK_FLOOR(slot) \
+    (KERNEL_THREAD_STACK_BASE + \
+     (uint32_t)(slot) * KERNEL_THREAD_STACK_STRIDE + \
+     KERNEL_THREAD_STACK_GUARD_SIZE)
 #include "ohci.h"
 #include "qualification.h"
 #include "ring.h"
@@ -1152,9 +1166,8 @@ static void test_preemption_fault_containment_and_teardown(void)
     assert(kernel_thread_snapshot(1u, &sibling_thread));
     assert(survivor_thread.process_id == survivor_id);
     assert(sibling_thread.process_id == survivor_id);
-    assert(survivor_thread.user_stack_base == KERNEL_THREAD_STACK_BASE);
-    assert(sibling_thread.user_stack_base ==
-           KERNEL_THREAD_STACK_BASE + KERNEL_THREAD_STACK_STRIDE);
+    assert(survivor_thread.user_stack_base == TEST_STACK_BASE(0));
+    assert(sibling_thread.user_stack_base == TEST_STACK_BASE(1));
     assert(survivor_thread.self_handle != sibling_thread.self_handle);
 
     assert(kernel_dma_create(offender.owner, KERNEL_PAGE_SIZE, 1u,
@@ -6420,6 +6433,124 @@ static void test_process_info_syscall(void)
     assert(next->data[0] == ASTRA_SYSCALL_BAD_ADDRESS);
 }
 
+
+/*
+ * Reserve-and-grow, from both ends: a stack that reaches a page it has not
+ * committed gets it and carries on, and one that reaches the floor still dies.
+ *
+ * The distinction is the whole point of the feature. If growth answered every
+ * fault below a stack, the guard page would stop meaning anything and a wild
+ * pointer would quietly be given memory instead of killing the process.
+ */
+static void test_user_stack_grows_on_fault_and_guards_the_floor(void)
+{
+    static const uint8_t image[] = {
+        0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u
+    };
+    KernelCpuContext *next;
+    KernelMemoryStats baseline;
+    KernelMemoryStats after_growth;
+    KernelMemoryStats after_teardown;
+    KernelProcessSnapshot process;
+    KernelThreadSnapshot thread;
+    KernelSchedulerStats stats;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT];
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+    uint32_t fault_pc = KERNEL_PROCESS_CODE_BASE + 2u;
+
+    initialize_test();
+    assert(kernel_memory_stats(&baseline));
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+
+    assert(kernel_thread_snapshot(0u, &thread));
+    assert(thread.user_stack_top == TEST_STACK_TOP(0));
+    assert(thread.user_stack_base == TEST_STACK_BASE(0));
+    assert(thread.stack_pages == TEST_STACK_PAGES);
+    assert(kernel_process_snapshot(0u, &process));
+    assert(process.user_stack_pages == TEST_STACK_PAGES);
+
+    /* One byte under the committed base: the ordinary case, one page. */
+    memset(registers, 0, sizeof(registers));
+    assert(kernel_memory_stats(&baseline));
+    make_frame(frame, 0xau, 2u, fault_pc, TEST_STACK_BASE(0) - 4u);
+    assert(kernel_process_on_fault(registers, TEST_STACK_BASE(0) - 4u, frame,
+                                   &next) == KERNEL_PROCESS_OK);
+    assert(next != NULL);
+    /*
+     * Resumed, not rescheduled and not retired: the same thread, at the
+     * instruction that faulted, which is what makes the access run again.
+     */
+    assert(next == kernel_process_current_context());
+    assert(next->program_counter == fault_pc);
+    assert(kernel_process_snapshot(0u, &process));
+    assert(process.process_state == KERNEL_PROCESS_RUNNING);
+    assert(process.exit_reason == KERNEL_PROCESS_EXIT_NONE);
+    assert(kernel_thread_snapshot(0u, &thread));
+    assert(thread.stack_pages == TEST_STACK_PAGES + 1u);
+    assert(thread.user_stack_base ==
+           TEST_STACK_BASE(0) - KERNEL_PAGE_SIZE);
+    assert(thread.user_stack_top == TEST_STACK_TOP(0));
+    assert(process.user_stack_pages == TEST_STACK_PAGES + 1u);
+    assert(kernel_memory_stats(&after_growth));
+    assert(after_growth.free_frames == baseline.free_frames - 1u);
+    assert(kernel_process_stats(&stats));
+    assert(stats.user_stack_growths == 1u);
+    assert(stats.user_stack_pages_committed == 1u);
+    /* Growth is not a user fault and must not be counted as one. */
+    assert(stats.user_faults == 0u);
+
+    /*
+     * A frame bigger than a page can touch its bottom first, so the span
+     * between the address and what is held has to arrive at once -- a hole
+     * would leave user_stack_base describing pages that are not mapped.
+     */
+    make_frame(frame, 0xau, 2u, fault_pc,
+               TEST_STACK_BASE(0) - (4u * KERNEL_PAGE_SIZE) + 8u);
+    assert(kernel_process_on_fault(registers, TEST_STACK_BASE(0) - 4u, frame,
+                                   &next) == KERNEL_PROCESS_OK);
+    assert(kernel_thread_snapshot(0u, &thread));
+    assert(thread.stack_pages == TEST_STACK_PAGES + 4u);
+    assert(thread.user_stack_base ==
+           TEST_STACK_BASE(0) - (4u * KERNEL_PAGE_SIZE));
+    assert(kernel_process_stats(&stats));
+    assert(stats.user_stack_growths == 2u);
+    assert(stats.user_stack_pages_committed == 4u);
+    assert(kernel_memory_stats(&after_growth));
+    assert(after_growth.free_frames == baseline.free_frames - 4u);
+
+    /* The copy path reaches the same growth without a user-visible fault. */
+    assert(!kernel_process_commit_user_stack(thread.user_stack_base, 4u));
+    assert(kernel_process_commit_user_stack(
+        thread.user_stack_base - KERNEL_PAGE_SIZE, 16u));
+    assert(kernel_thread_snapshot(0u, &thread));
+    assert(thread.stack_pages == TEST_STACK_PAGES + 5u);
+    assert(!kernel_process_commit_user_stack(TEST_STACK_FLOOR(0) - 4u, 4u));
+
+    /*
+     * The floor is still a wall. This is the only process, so retiring it
+     * leaves nothing runnable -- which is the answer, not an error.
+     */
+    make_frame(frame, 0xau, 2u, fault_pc, TEST_STACK_FLOOR(0) - 4u);
+    assert(kernel_process_on_fault(registers, TEST_STACK_FLOOR(0) - 4u, frame,
+                                   &next) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_snapshot(0u, &process));
+    assert(process.process_state == KERNEL_PROCESS_EXITING);
+    assert(process.exit_reason == KERNEL_PROCESS_EXIT_USER_FAULT);
+    assert(process.fault_address == TEST_STACK_FLOOR(0) - 4u);
+    assert(kernel_process_stats(&stats));
+    assert(stats.user_faults == 1u);
+    assert(stats.user_stack_growths == 3u);
+
+    /* Everything committed by growth comes back, not just the first page. */
+    while (kernel_process_maintenance_pending())
+        assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(kernel_memory_stats(&after_teardown));
+    assert(after_teardown.free_frames >= baseline.free_frames);
+}
+
 int main(void)
 {
     test_process_allocation_failure_matrix();
@@ -6461,6 +6592,7 @@ int main(void)
     test_block_admission_faults();
     test_bootstrap_capabilities();
     test_initial_image_exit_is_reported();
+    test_user_stack_grows_on_fault_and_guards_the_floor();
     test_executable_rejections_do_not_allocate();
     test_executable_load_rolls_back_every_allocation();
     test_process_info_syscall();

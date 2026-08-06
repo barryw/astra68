@@ -63,6 +63,30 @@ static void end_copy(void)
     active_scope.direction = 0u;
 }
 
+/*
+ * A stack page the thread has not reached yet is the one bad address that is
+ * not an error: the user never faulted on it, because the kernel touched it
+ * first on the user's behalf. Growing and running the copy again is what the
+ * user's own access would have got from the fault handler.
+ *
+ * The copy restarts from the beginning rather than resuming. Both directions
+ * are idempotent over the same bytes, and one attempt is enough because growth
+ * commits the whole span below the address at once, so a second failure is a
+ * real bad address.
+ */
+static bool grew_for_copy(int status, uint32_t user_address, uint32_t size)
+{
+#if defined(KERNEL_USER_COPY_HOST_TEST)
+    (void)status;
+    (void)user_address;
+    (void)size;
+    return false;
+#else
+    return status == KERNEL_USER_COPY_BAD_ADDRESS &&
+           kernel_process_commit_user_stack(user_address, size);
+#endif
+}
+
 int kernel_copy_from_user(void *kernel_destination, uint32_t user_source,
                           uint32_t size)
 {
@@ -77,6 +101,9 @@ int kernel_copy_from_user(void *kernel_destination, uint32_t user_source,
     if (status != KERNEL_USER_COPY_OK)
         return status;
     status = kernel_user_copy_from_asm(kernel_destination, user_source, size);
+    if (grew_for_copy(status, user_source, size))
+        status = kernel_user_copy_from_asm(kernel_destination, user_source,
+                                           size);
     end_copy();
     return status;
 }
@@ -95,6 +122,9 @@ int kernel_copy_to_user(uint32_t user_destination, const void *kernel_source,
     if (status != KERNEL_USER_COPY_OK)
         return status;
     status = kernel_user_copy_to_asm(user_destination, kernel_source, size);
+    if (grew_for_copy(status, user_destination, size))
+        status = kernel_user_copy_to_asm(user_destination, kernel_source,
+                                         size);
     end_copy();
     return status;
 }

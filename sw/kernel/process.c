@@ -115,20 +115,34 @@ static uint32_t initial_image_process_id;
 static uint32_t initial_image_progress;
 static uint8_t initial_image_exited;
 
-/* Whole pages, and the guard must be at least one page below the next slot. */
+/* Whole pages, and the floor of every slot must stay unmapped. */
 _Static_assert(KERNEL_THREAD_STACK_SIZE % KERNEL_PAGE_SIZE == 0u &&
                    KERNEL_THREAD_STACK_SIZE != 0u,
                "a user stack must be a whole number of VM pages");
+_Static_assert(KERNEL_THREAD_STACK_STRIDE % KERNEL_PAGE_SIZE == 0u,
+               "a stack reservation must be a whole number of VM pages");
 _Static_assert(KERNEL_THREAD_STACK_STRIDE >=
-                   KERNEL_THREAD_STACK_SIZE + KERNEL_PAGE_SIZE,
-               "each stack slot needs an unmapped guard page above it");
+                   KERNEL_THREAD_STACK_SIZE + KERNEL_THREAD_STACK_GUARD_SIZE,
+               "each stack slot needs an unmapped guard page below it");
 
 #define KERNEL_THREAD_STACK_PAGES \
     (KERNEL_THREAD_STACK_SIZE / KERNEL_PAGE_SIZE)
 
-/* uint8_t counters hold the per-process totals. */
-_Static_assert(KERNEL_PROCESS_THREAD_MAX * KERNEL_THREAD_STACK_PAGES <= 255u,
-               "user_stack_pages cannot count this many stack pages");
+/* What the reservation allows a stack to reach, guard page excluded. */
+#define KERNEL_THREAD_STACK_PAGES_MAX \
+    ((KERNEL_THREAD_STACK_STRIDE - KERNEL_THREAD_STACK_GUARD_SIZE) / \
+     KERNEL_PAGE_SIZE)
+
+/*
+ * uint8_t counters hold the per-process totals, and a fully grown set of
+ * stacks is the worst case they have to survive -- not the committed set,
+ * which is what this bounded before growth existed.
+ */
+_Static_assert(
+    KERNEL_PROCESS_THREAD_MAX * KERNEL_THREAD_STACK_PAGES_MAX <= 255u,
+    "user_stack_pages cannot count this many stack pages");
+_Static_assert(KERNEL_THREAD_STACK_PAGES_MAX <= 255u,
+               "a thread's committed page count must fit its uint8_t");
 _Static_assert(KERNEL_PROCESS_THREAD_MAX <= 16u,
                "stack slot bitmap exceeds its storage");
 _Static_assert(KERNEL_PROCESS_MAX == KERNEL_VM_SHARED_ALIAS_MAX,
@@ -793,14 +807,25 @@ static KernelProcessStatus finish_thread_reaps(void)
             KERNEL_PERFORMANCE_THREAD_REAP);
         stack_bit = (uint16_t)(1u << thread->stack_slot);
         if (thread->stack_released == 0u) {
+            /*
+             * What this thread grew to, not what every thread starts with.
+             * The pages are contiguous and end at the top of the slot, so the
+             * count and the base describe the same range from either end.
+             */
+            uint32_t committed = thread->stack_pages;
+
             if ((process->stack_slots & stack_bit) == 0u ||
-                process->user_stack_pages < KERNEL_THREAD_STACK_PAGES ||
+                committed == 0u ||
+                committed > KERNEL_THREAD_STACK_PAGES_MAX ||
+                thread->user_stack_base +
+                        (committed * KERNEL_PAGE_SIZE) !=
+                    thread->user_stack_top ||
+                process->user_stack_pages < committed ||
                 process->user_guard_pages == 0u) {
                 kernel_performance_end(performance);
                 return KERNEL_PROCESS_CORRUPT;
             }
-            for (uint32_t page = 0u; page < KERNEL_THREAD_STACK_PAGES;
-                 ++page) {
+            for (uint32_t page = 0u; page < committed; ++page) {
                 if (kernel_vm_unmap_page(
                         &process->address_space,
                         thread->user_stack_base +
@@ -811,8 +836,7 @@ static KernelProcessStatus finish_thread_reaps(void)
             }
             process->stack_slots &= (uint16_t)~stack_bit;
             process->user_stack_pages =
-                (uint8_t)(process->user_stack_pages -
-                          KERNEL_THREAD_STACK_PAGES);
+                (uint8_t)(process->user_stack_pages - committed);
             --process->user_guard_pages;
         }
         if (kernel_thread_finish_reap(thread, &released) !=
@@ -1480,6 +1504,127 @@ static int32_t find_stack_slot(const KernelProcess *process)
     return -1;
 }
 
+/*
+ * A slot is a reservation, and these three addresses are the whole of its
+ * layout: the guard page sits at the base, the stack pointer starts at the
+ * top, and everything between the floor and the top may be committed.
+ */
+static uint32_t stack_slot_base(uint32_t slot)
+{
+    return KERNEL_THREAD_STACK_BASE + slot * KERNEL_THREAD_STACK_STRIDE;
+}
+
+static uint32_t stack_slot_floor(uint32_t slot)
+{
+    return stack_slot_base(slot) + KERNEL_THREAD_STACK_GUARD_SIZE;
+}
+
+static uint32_t stack_slot_top(uint32_t slot)
+{
+    return stack_slot_base(slot) + KERNEL_THREAD_STACK_STRIDE;
+}
+
+/*
+ * Commits the pages between an address a thread's stack has reached and the
+ * lowest one it already holds, and answers whether it did.
+ *
+ * The whole span is mapped rather than the one page containing the address: a
+ * frame larger than a page can touch its bottom first, and leaving a hole
+ * would make user_stack_base stop describing what is mapped.
+ *
+ * Refusing is the important half. The floor page of the slot is never mapped,
+ * so a stack that runs past its reservation still dies exactly where it used
+ * to, and an address already inside the committed range is some other defect
+ * -- a write to a read-only page, say -- which must not be answered by
+ * committing memory to it.
+ */
+static bool grow_user_stack(KernelProcess *process, KernelThread *thread,
+                            uint32_t address)
+{
+    uint32_t slot;
+    uint32_t page;
+    uint32_t pages;
+    uint32_t mapped = 0u;
+    bool failed = false;
+
+    if (process == NULL || thread == NULL ||
+        thread->stack_slot >= KERNEL_PROCESS_THREAD_MAX)
+        return false;
+    slot = thread->stack_slot;
+    /* A stack that is not this slot's reservation is not one to grow. */
+    if (thread->user_stack_top != stack_slot_top(slot) ||
+        (thread->user_stack_base & (KERNEL_PAGE_SIZE - 1u)) != 0u)
+        return false;
+    if (address < stack_slot_floor(slot) ||
+        address >= thread->user_stack_base)
+        return false;
+    page = address & ~(KERNEL_PAGE_SIZE - 1u);
+    pages = (thread->user_stack_base - page) / KERNEL_PAGE_SIZE;
+    if (pages == 0u ||
+        (uint32_t)thread->stack_pages + pages > KERNEL_THREAD_STACK_PAGES_MAX ||
+        (uint32_t)process->user_stack_pages + pages > 255u)
+        return false;
+
+    while (mapped < pages) {
+        uint32_t page_address = page + (mapped * KERNEL_PAGE_SIZE);
+        uint32_t physical = 0u;
+
+        if (kernel_memory_alloc_zeroed_tagged(
+                KERNEL_ALLOCATION_SITE_THREAD_STACK_PAGE, 1u, 1u,
+                KERNEL_FRAME_PROCESS, process->owner, &physical) !=
+            KERNEL_MEMORY_OK) {
+            failed = true;
+            break;
+        }
+#if defined(KERNEL_PROCESS_HOST_TEST)
+        {
+            /* Host memory tests disable allocator writes to synthetic pages. */
+            uint8_t *bytes = physical_bytes(physical, KERNEL_PAGE_SIZE);
+
+            if (bytes != NULL)
+                kernel_bytes_clear(bytes, KERNEL_PAGE_SIZE);
+        }
+#endif
+        if (kernel_vm_map_page(&process->address_space, page_address, physical,
+                               KERNEL_VM_READ | KERNEL_VM_WRITE) !=
+            KERNEL_VM_OK) {
+            (void)kernel_memory_release(physical, 1u, process->owner);
+            failed = true;
+            break;
+        }
+        /* The mapping owns the frame now; the reservation must not also. */
+        if (kernel_memory_release(physical, 1u, process->owner) !=
+            KERNEL_MEMORY_OK) {
+            failed = true;
+            ++mapped;
+            break;
+        }
+        ++mapped;
+    }
+    if (failed) {
+        /*
+         * Unwound rather than kept: a half-grown stack would leave
+         * user_stack_base describing pages that are not there, and the
+         * process is about to be retired for the fault anyway.
+         */
+        while (mapped != 0u) {
+            --mapped;
+            (void)kernel_vm_unmap_page(
+                &process->address_space,
+                page + (mapped * KERNEL_PAGE_SIZE));
+        }
+        return false;
+    }
+
+    thread->user_stack_base = page;
+    thread->stack_pages = (uint8_t)(thread->stack_pages + pages);
+    process->user_stack_pages =
+        (uint8_t)(process->user_stack_pages + pages);
+    ++scheduler_stats.user_stack_growths;
+    scheduler_stats.user_stack_pages_committed += pages;
+    return true;
+}
+
 typedef struct KernelPreparedThread {
     KernelProcess *process;
     KernelThread *thread;
@@ -1532,9 +1677,13 @@ static KernelProcessStatus prepare_thread(KernelProcess *process,
     stack_slot = find_stack_slot(process);
     if (stack_slot < 0)
         return KERNEL_PROCESS_RESOURCE_LIMIT;
-    stack_base = KERNEL_THREAD_STACK_BASE +
-                 (uint32_t)stack_slot * KERNEL_THREAD_STACK_STRIDE;
-    stack_top = stack_base + KERNEL_THREAD_STACK_SIZE;
+    /*
+     * The commitment is at the **top** of the slot, not the bottom: a stack
+     * grows down, so the pages it starts with are the ones it uses first and
+     * the room it may grow into is underneath them.
+     */
+    stack_top = stack_slot_top((uint32_t)stack_slot);
+    stack_base = stack_top - KERNEL_THREAD_STACK_SIZE;
 
     thread_status = kernel_thread_allocate(
         (uint16_t)(process - processes), process->id,
@@ -1670,14 +1819,22 @@ static KernelProcessStatus abort_prepared_thread(
         prepared->handle == KERNEL_HANDLE_INVALID ||
         prepared->stack_slot >= KERNEL_PROCESS_THREAD_MAX)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
-    stack_base = KERNEL_THREAD_STACK_BASE +
-                 (uint32_t)prepared->stack_slot * KERNEL_THREAD_STACK_STRIDE;
+    stack_base = stack_slot_top((uint32_t)prepared->stack_slot) -
+                 KERNEL_THREAD_STACK_SIZE;
     if (kernel_handle_close(&prepared->process->handles, prepared->handle) !=
         KERNEL_HANDLE_OK)
         cleanup_failed = true;
-    if (kernel_vm_unmap_page(&prepared->process->address_space, stack_base) !=
-        KERNEL_VM_OK)
-        cleanup_failed = true;
+    /*
+     * Every page committed at creation, not the first one. A thread that has
+     * not been published cannot have grown, so the count is still the
+     * creation-time one.
+     */
+    for (uint32_t page = 0u; page < KERNEL_THREAD_STACK_PAGES; ++page) {
+        if (kernel_vm_unmap_page(&prepared->process->address_space,
+                                 stack_base + (page * KERNEL_PAGE_SIZE)) !=
+            KERNEL_VM_OK)
+            cleanup_failed = true;
+    }
     if (kernel_thread_abort(prepared->thread) != KERNEL_THREAD_OK)
         cleanup_failed = true;
     prepared->process = NULL;
@@ -4922,6 +5079,29 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
     return KERNEL_PROCESS_OK;
 }
 
+/*
+ * The copy path's way in. The user thread never faulted on this page -- the
+ * kernel reached it first, on the user's behalf -- so the growth that its own
+ * access would have triggered has to be done here instead, or a syscall
+ * writing into a fresh frame would answer BAD_ADDRESS for a perfectly good
+ * stack address.
+ *
+ * Only the lowest address of the range is offered: growth commits everything
+ * between it and what the thread already holds, so the rest of the range is
+ * covered by the same call.
+ */
+bool kernel_process_commit_user_stack(uint32_t address, uint32_t size)
+{
+    KernelProcess *process;
+
+    if (size == 0u || current_thread == NULL)
+        return false;
+    process = process_for_thread(current_thread);
+    if (process == NULL || process->process_state != KERNEL_PROCESS_RUNNING)
+        return false;
+    return grow_user_stack(process, current_thread, address);
+}
+
 KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
                                             uint32_t user_stack,
                                             const void *raw_frame,
@@ -4939,11 +5119,24 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
                              &thread);
     if (status != KERNEL_PROCESS_OK)
         return status;
-    (void)thread;
     if (kernel_exception_decode(raw_frame, KERNEL_EXCEPTION_FRAME_MAX_SIZE,
                                 &frame) != KERNEL_EXCEPTION_OK ||
         frame.from_user == 0u)
         return KERNEL_PROCESS_INVALID_CONTEXT;
+    /*
+     * A stack reaching a page it has not committed yet is not a fault to die
+     * of, and it is the only fault this kernel answers rather than reports.
+     * Resuming works because the context carries the faulting instruction's
+     * own program counter -- capture_current took it from the frame -- so
+     * re-entering user mode re-runs the access against the page now mapped.
+     * A machine that resumed a bus cycle from the frame instead of restarting
+     * the instruction would need the frame returned intact rather than this.
+     */
+    if (frame.access_fault != 0u &&
+        grow_user_stack(current, thread, frame.fault_address)) {
+        *next_context = &thread->context;
+        return KERNEL_PROCESS_OK;
+    }
     current->fault_vector = (uint16_t)(frame.vector_offset >> 2);
     current->fault_address = frame.fault_address;
     ++scheduler_stats.user_faults;
@@ -5230,6 +5423,9 @@ bool kernel_process_stats(KernelSchedulerStats *stats)
     stats->total_syscalls_low = scheduler_stats.total_syscalls_low;
     stats->total_syscalls_high = scheduler_stats.total_syscalls_high;
     stats->user_faults = scheduler_stats.user_faults;
+    stats->user_stack_growths = scheduler_stats.user_stack_growths;
+    stats->user_stack_pages_committed =
+        scheduler_stats.user_stack_pages_committed;
     stats->completed_user_fault_teardowns =
         scheduler_stats.completed_user_fault_teardowns;
     stats->completed_teardowns = scheduler_stats.completed_teardowns;

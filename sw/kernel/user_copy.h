@@ -40,6 +40,14 @@ bool kernel_user_copy_recover_frame(
     const KernelUserCopyFaultScope *scope,
     const KernelUserCopyFaultSite *sites, uint32_t site_count);
 
+/*
+ * Commits user stack pages under `address` for the running thread, and answers
+ * whether it had to. Implemented by the process layer, which owns the stack
+ * reservations; declared here because the copy path is the one caller that
+ * meets an uncommitted stack page without taking a fault the user can see.
+ */
+bool kernel_process_commit_user_stack(uint32_t address, uint32_t size);
+
 int kernel_user_copy_from_asm(void *kernel_destination, uint32_t user_source,
                               uint32_t size);
 int kernel_user_copy_to_asm(uint32_t user_destination,

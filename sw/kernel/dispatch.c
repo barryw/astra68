@@ -242,10 +242,21 @@ KernelDispatchTarget dispatch_user_fault_fast(const uint32_t *registers,
           (status == KERNEL_PROCESS_NO_RUNNABLE && next == NULL &&
            !kernel_process_active())))
         kernel_panic("user-fault process teardown failed");
-    schedule_process_worker();
     scheduler_trace(0x4b464f55u); /* KFOU */
     record_user_fault_irqoff(started);
-    return KERNEL_DISPATCH_WORKER;
+    /*
+     * Not every user fault is a death now. One that grew a stack leaves the
+     * thread runnable and nothing to tear down, so the worker is scheduled on
+     * the same condition the syscall path uses rather than unconditionally --
+     * a worker with no teardown waiting for it panics on arrival.
+     */
+    if (kernel_process_maintenance_pending()) {
+        schedule_process_worker();
+        return KERNEL_DISPATCH_WORKER;
+    }
+    if (next == NULL)
+        kernel_panic("user fault left no context to resume");
+    return kernel_dispatch_user_target(next);
 }
 
 static __attribute__((noinline))
