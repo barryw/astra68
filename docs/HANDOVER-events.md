@@ -1,109 +1,68 @@
-# Astra 68 — Handover: the event system, statuses, and the namespace wired on
+# Astra 68 — Handover: EVENTS: is a filesystem
 
 Date: 2026-08-06. Written to be read cold in a fresh session.
 
-Three things landed. The namespace stopped being a Kit and became how the
-machine names files. Statuses got one vocabulary and a verdict a program cannot
-forge. And the event system went from a design to four of its six plans, ending
-with a line a person can read:
+The machine can now be asked what happened, on the machine, through `cat`:
 
 ```
-seq 206  info     10000011/16 act 00000001  command accepted, 3 words
-                                            (src/console_shell.c:467)
-seq 208  warning  10000011/16 act 00000001  command refused, status 6
-                                            (src/console_shell.c:171)
+WORK:> cat events:activity/00000006
+seq 122  info  10000011/16 act 00000006  command accepted, 3 words
+                                         (src/console_shell.c:493)
+seq 124  warning  10000011/16 act 00000006  command refused, status 6
+                                         (src/console_shell.c:183)
 ```
 
+Plan 5 of six is **done**: the ring is drainable, `readdir` is a cursor, the
+catalog is on the machine, the store has its tiers, and `EVENTS:` is a synthetic
+tree served through the ordinary VFS backend seam. Plan 6 — the `events`
+command — is what remains.
+
+Before this the namespace stopped being a Kit and became how the machine names
+files, and statuses got one vocabulary and a verdict a program cannot forge.
 Two events, one activity, and **nothing in the shell passed that id to either
-of them.**
+of them** — that was true in the ring already; what is new is that the machine
+itself can show it.
 
-`docs/HANDOVER-debug-and-namespace.md` is the previous resume point and is
-still accurate about the debug surface. **Everything is on `main`.**
+`docs/HANDOVER-debug-and-namespace.md` is still accurate about the debug
+surface. **Everything is on `main`.**
 
 ---
 
 ## 1. Where things stand
 
-`origin/main` is at `d1fef0c`. **Twenty commits are local and unpushed**, from
-`06dd882` (assign-rooted path parsing) to `a3e3798` (the catalog is the
-section).
+`origin/main` is at `d1fef0c`. **Twenty-eight commits are local and unpushed**,
+from `06dd882` (assign-rooted path parsing) to `87ea376` (the machine can be
+asked what happened).
 
 Every gate is green on Beast: 30 kernel suites in both configurations,
 userspace test/sanitize/analyze/cross-build, `ext4-test`, 29 pytest cases in
-`tools/tests`, the terminal gate at six lines, the new events gate, and the
-boot budget at 0.09s of 1.00s.
+`tools/tests`, the terminal gate — now ten lines, four of them `EVENTS:` — the
+events gate, and the boot budget at 0.09s of 1.00s.
 
 **Nothing here was believed from the Mac.** The Mac cannot run `make analyze`
 at all — `ANALYZER_CC=gcc` is Apple clang, which has no `-fanalyzer`.
 
 ## 2. Resume here
 
-**Execute plan 5, `docs/superpowers/plans/2026-08-06-event-store-and-namespace.md`,
-starting at its task 1.**
+**Plan 6: the `events` command** —
+`docs/superpowers/plans/` does not have it written yet, and the spec's §7.3 is
+the scope: filters composed across level, subsystem, process and time; a live
+tail; and §9.1's level change for the current boot. A path is already the
+interface for everything a directory can express, so this is search and nothing
+else.
 
-The spec rewrite this section used to ask for is **done**: the events spec's §7
-is now `EVENTS:` as a synthetic tree, with §8.6 and §10 following it, and the
-layout spec's §2.2, §2.3, §3.2, §3.5 and §6 moved `EVENTS:` out of the writable
-assigns and into the synthetic ones. Two clauses in the startup manifest are new
-and general rather than events-specific: `STORE:` for a service's own private
-state, and `serves NAME:r` for a synthetic tree a service publishes.
+Before that, two things this session left on the table, both written into
+`2026-08-06-event-store-and-namespace.md` with their triggers:
 
-The decision, and why it is not what the spec used to say:
-
-`2026-08-06-event-system-design.md` §7.1 has the events service answering
-bounded queries through a bespoke `events` command, and says *"nothing else
-holds `EVENTS:`"*. That was questioned and does not survive contact with
-`docs/OBSERVABILITY.md`, which already established the pattern:
-
-> *"How much history and **which additional trees live beside `PROC:`** remain
-> open. The constraint that matters now is that **no special case is needed to
-> add them**."*
-
-and which already imposed the handler-contract requirement that makes it work —
-nodes generated at read time, bounded cookie-based enumeration, no assumption
-of a stable on-disk size. `EVENTS:` is the second tree, not a new mechanism.
-
-```
-EVENTS:
-  boot/
-    current/  all  notice  warning  error
-    -1/ -2/                        the boot ring
-  activity/
-    0000001a                       one request across every process
-  subsystem/
-    storage/  shell/  vfs/
-```
-
-Read-only by the rights on the assign, which is the same mechanism that already
-makes `SYS:` unwritable — so nothing can `rm` an event. `--follow` becomes
-re-reading a file that grew.
-
-**The reason this is less work, not more:** `AstraVfsBackendOps` already exists
-and is already the seam. `vfs_ext4_backend.c` is one implementation and the
-service core is backend-agnostic and host-tested. An events backend is a few
-hundred lines behind a tested interface — no new protocol, no new client, and
-`ls`/`cat` work unchanged. The `events` command survives as *search*, not as
-the only door.
-
-Two costs, now written into the plan rather than left to discover:
-
-- **`readdir` must become a cursor.** It is index-addressed and the ext4
-  backend reopens the directory per entry, so it is already quadratic.
-  `ls EVENTS:activity` over thousands of entries would be brutal at 30 MHz.
-  This is the same debt the layout spec's §1.7 named for union assigns, so one
-  piece of work unlocks two things — but it is on the critical path now.
-- **The catalog has to be on the machine.** Rendering text at read time means
-  resolving format strings there. The file is the `.astra_events` section's
-  bytes **verbatim** — `objcopy -O binary --only-section=.astra_events` already
-  produces it — and lookup is `(id - base) / 128`. An index, not a parse. Do
-  not put a parser on this machine for this.
-
-Plan 5 is six tasks: the ring drain syscall, `readdir` as a cursor, the catalog
-on the machine, the store and its tiers, the events backend, and the wiring with
-an end-to-end gate. The token bucket (§8.4) and coalescing (§8.3) are
-deliberately deferred inside it, each with a written trigger — the spec asks for
-a measured workload and there is none until the store exists. Plan 6 is the
-`events` command.
+- **The store is RAM.** The tiers, the budget and the eviction accounting are
+  the real piece; what is missing is the write to the state volume's `events/`,
+  and therefore the spec's *last M boots*. `EVENTS:boot/-1` does not exist
+  rather than existing empty. Most questions worth asking are about a boot that
+  has already ended, so this is the next thing after plan 6 rather than a
+  someday.
+- **No token bucket (§8.4) and no coalescing (§8.3).** The spec asks for a
+  measured workload and there was none until the store existed. The eviction
+  accounting is in place to supply one.
 
 ## 3. What the machine gained
 
@@ -119,6 +78,12 @@ a measured workload and there is none until the store exists. Plan 6 is the
 | One activity across a whole command | `ASTRA_SYSCALL_ACTIVITY` |
 | A readable stream, off-machine | `tools/trace_decode.py` |
 | An end-to-end gate for all of it | `emu/qemu/test-events.py` |
+| The ring drained into userspace, gated on DEBUG | `ASTRA_SYSCALL_TRACE_READ` |
+| A directory scan that resumes instead of restarting | `AstraVfsBackendOps.readdir`, protocol v2 |
+| The catalog on the machine, as an index | `sw/userspace/runtime/src/event_catalog.c` |
+| Four tiers, four budgets, eviction accounted | `sw/userspace/events/src/event_store.c` |
+| `EVENTS:` as a tree — `ls`, `cat`, no new protocol | `sw/userspace/events/src/event_backend.c` |
+| One command's story, read on the machine | `emu/qemu/test-terminal.py` |
 
 ## 4. The three design decisions worth not relitigating
 
@@ -162,9 +127,46 @@ Each of these is deliberate and written into the plan that made it.
 - **The kernel's own `KernelTraceEvent` enum is not descriptors.** Converting
   ~50 call sites in the most-tested code buys readability the decoder already
   delivers by reading the enum out of `trace.h`. Optional, per subsystem, later.
+  Until then the drain skips kernel records — they are in the ring, they are not
+  in `EVENTS:`.
+- **The store is RAM, so history does not survive a reboot.** `EVENTS:boot/-1`
+  is absent rather than empty, which is the honest shape of a promise the
+  machine cannot yet keep.
+- **The boot ring is its own leaf, `boot/current/earliest`.** Merging it into
+  `all` would show every early event twice, because it is a copy.
+- **`ls EVENTS:activity` costs a rescan per entry.** Marked `ponytail:` in
+  `event_backend.c`; the upgrade is a small ring of distinct activities kept in
+  the store. Bounded today by the store's size, which is a few hundred records.
+- **`EVENTS:` is bound by the mounter, not by a manifest.** `serves EVENTS:r`
+  is written into the layout spec's §3.2 and nothing reads a manifest yet.
 
 ## 6. Traps this session found
 
+- **`sw/boot` carries the user image, so it must be rebuilt after
+  `sw/userspace`.** A rebuilt supervisor that is not re-ROMmed boots the
+  *previous* one, while `test-events.py` decodes the ring against the *new*
+  ELF's catalog — so every id resolves to the wrong message and the levels and
+  arguments all look shifted by one. That reads as a catalog bug and is a stale
+  ROM. **Cost most of an hour.** `cd sw/userspace && make all && cd ../boot &&
+  make astra_boot.bin`, every time.
+- **m68k aligns a `uint32_t` to two bytes, not four.** A reader that demanded
+  four-byte alignment refused the machine's own catalog while every host test
+  passed, because x86 happened to give it four. Ask the compiler:
+  `_Alignof(T)`. This will bite anything else that validates a buffer it was
+  handed.
+- **Two services each number their sessions from one.** A router that matched
+  an assign to a client by session handed every `EVENTS:` path to the volume,
+  which lists the wrong filesystem rather than failing. The handle carries the
+  router's slot now.
+- **A journal replay lands on top of anything `debugfs` wrote.** An image a
+  machine has run has transactions pending; lwext4 replays them at mount and
+  the file is on the host and absent on the machine. `e2fsck -fy` first — and
+  not in place, because `e2fsck` cannot reopen an `image?offset=` target after
+  recovering a journal. `emu/qemu/astra_image.py` lifts the volume out, fixes
+  it, and puts it back.
+- **`git ls-files | tar` ships only what git tracks.** A new file that has not
+  been `git add`ed is missing on Beast, and the failure is a missing rule for a
+  source that is plainly there in the editor.
 - **`git ls-files | tar` ships whatever directory you are standing in.** The
   Bash tool's cwd persists between calls. Running it from `sw/userspace` or
   `sw/userspace/supervisor` scatters a subtree into Beast's repo root —
@@ -202,6 +204,8 @@ cd sw/userspace && make test && make sanitize && make analyze && make all
 cd sw/userspace/storage && make ext4-test
 cd sw/boot && make astra_boot.bin
 
+# Both gates put this build's catalog on a copy of the volume first, so the
+# machine resolves ids the way a built machine actually would.
 python3 emu/qemu/test-events.py /tmp/qemu-final-build/qemu-system-m68k \
     sw/boot/astra_boot.bin --image /tmp/part.img
 python3 emu/qemu/test-terminal.py /tmp/qemu-final-build/qemu-system-m68k \
@@ -254,12 +258,16 @@ successor in `GRAPHICS_ARCHITECTURE.md`. Nothing has measured it hot yet.
 
 ## 9. Open decisions, carried forward
 
-- `readdir` as a cursor: needed by `EVENTS:`, by union assigns, and by any
-  large directory. Currently quadratic. **Plan 5, task 2.**
+- Persisting the store to the state volume's `events/`, which is what makes
+  `EVENTS:boot/-1` mean anything. §2 above.
 - The shell language, which the startup manifest's syntax will want.
 - The bundle manifest: how an application declares the authority it wants.
 - The event system's numbers — tier budgets, token-bucket rates, boot ring size,
-  coalescing window — which want a measured workload rather than an opinion.
+  coalescing window — which want a measured workload rather than an opinion. The
+  eviction accounting that supplies one is now built.
+- Whether the console should keep rendering every event now that `EVENTS:`
+  exists. It currently repaints the terminal's own plane, which is the noise in
+  every screenshot in this document.
 - Whether an unresolved assign that the system knows exists should say so
   (`EVENTS: is held by the events service — try events`) rather than
   `not found`, which is what a typo also gives. Nothing leaks: the standard
