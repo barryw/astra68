@@ -83,7 +83,7 @@ in the status. The two specs agree.
 - Produces: `KernelTraceUserRecord`, `KernelTraceArgumentRecord`,
   `kernel_trace_write_user()`, `kernel_trace_read_user()`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `sw/kernel/tests/test_trace.c`:
 
@@ -178,12 +178,12 @@ static void test_arguments_lost_to_a_wrap_are_reported_as_lost(void)
 
 Call all four from `main()`.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run on Beast: `cd sw/kernel && make test`
 Expected: FAIL — `KernelTraceUserRecord` undeclared.
 
-- [ ] **Step 3: Declare the record**
+- [x] **Step 3: Declare the record**
 
 In `sw/kernel/trace.h`, beside the existing record:
 
@@ -280,7 +280,7 @@ _Static_assert(sizeof(KernelTraceArgumentRecord) == KERNEL_TRACE_RECORD_SIZE,
                "argument trace record must occupy exactly one slot");
 ```
 
-- [ ] **Step 4: Write it**
+- [x] **Step 4: Write it**
 
 In `sw/kernel/trace.c`. The header slot is written **first** and the argument
 slot second, which is what makes the loss detectable: a wrapping writer reaches
@@ -301,12 +301,12 @@ then reads the following slot and requires its `event` to be
 `KERNEL_TRACE_EVENT_USER_ARGUMENTS` and its `commit_sequence` to be exactly the
 header's plus one. Anything else means the arguments are gone.
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run on Beast: `cd sw/kernel && make test`
 Expected: PASS, all suites.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add sw/kernel/trace.h sw/kernel/trace.c sw/kernel/tests/test_trace.c
@@ -342,7 +342,7 @@ the old handler enforced by looking a handle up and then checking it named the
 caller. With no handle there is nothing to check and nothing to get wrong: the
 kernel already knows who is calling.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `sw/kernel/tests/test_process.c`, `test_diagnostic_log_is_gated_and_sanitised`
 becomes `test_any_process_may_emit_an_event` and asserts the reversal:
@@ -373,13 +373,13 @@ The sanitising test survives, moved to the console sink in Task 3 — the ring
 carries the bytes a program wrote, and it is the sink that must not be made to
 render them as a cursor movement.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run on Beast: `cd sw/kernel && make test`
 Expected: FAIL — the handler still demands a handle, so the call is refused
 with `ASTRA_SYSCALL_INVALID_HANDLE`.
 
-- [ ] **Step 3: Rewrite the handler**
+- [x] **Step 3: Rewrite the handler**
 
 In `sw/kernel/process.c`, the `ASTRA_SYSCALL_LOG_WRITE` case loses its
 `kernel_handle_lookup`, its `target != current` check and its three
@@ -393,7 +393,7 @@ The three counters stay as they are — `diagnostic_logs`,
 limiting is going to need exactly this accounting per process, and renaming
 them now would be churn twice.
 
-- [ ] **Step 4: Keep the userspace surface working**
+- [x] **Step 4: Keep the userspace surface working**
 
 In `sw/userspace/runtime/src/log.c`, `astra_log_write` and `astra_log` keep
 their signatures and their call sites, and become one reserved message id:
@@ -412,7 +412,7 @@ or are removed along with them — the handle they remember is exactly what this
 plan deletes. Removing them is the honest option and the call sites are few;
 `grep -rn astra_log_bind sw/` names all of them.
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run on Beast:
 ```sh
@@ -421,7 +421,7 @@ cd sw/userspace && make test && make sanitize && make all
 ```
 Expected: PASS throughout.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add sw/include/astra/syscall.h sw/kernel sw/userspace/runtime
@@ -430,14 +430,18 @@ git commit -m "feat(events): emitting is universal, because an account with hole
 
 ---
 
-### Task 3: Reading is the authority, and the console is a sink
+### Task 3: Reading is the authority
+
+**As built, the console sink moved in Task 2 rather than here.** The two were
+coupled: the syscall stops sanitising, so the sink has to start in the same
+commit or the tree carries a window where nothing does.
 
 **Files:**
 - Modify: `sw/kernel/kernel.c` (`kernel_process_diagnostic_log` becomes the sink)
 - Modify: `sw/kernel/monitor.c` (the `trace` command's read path)
 - Modify: `sw/kernel/tests/test_process.c`, `sw/kernel/tests/test_monitor.c`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Two properties, one test each:
 
@@ -449,18 +453,18 @@ Two properties, one test each:
   in the ring. That is the whole point of the split: a production machine keeps
   its account of itself and simply does not narrate it.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run on Beast: `cd sw/kernel && make test`
 Expected: FAIL — sanitising still happens in the syscall handler.
 
-- [ ] **Step 3: Move the sanitising to the sink**
+- [x] **Step 3: Move the sanitising to the sink**
 
 `kernel_process_diagnostic_log` takes the record rather than a sanitised
 string, renders it when `kernel_process_debug_surface()` is on, and does the
 `0x20..0x7e` substitution itself.
 
-- [ ] **Step 4: Gate reading**
+- [x] **Step 4: Gate reading**
 
 The monitor's `trace` command is the only reader that exists today. It gains the
 `ASTRA_RIGHT_DEBUG` requirement that the write path just lost — see the events
@@ -468,7 +472,7 @@ spec §6.1: logs are where secrets leak, so observation is the privileged half.
 A syscall-level read path is plan 6's business; this step is the rule arriving
 where the only reader is.
 
-- [ ] **Step 5: The whole gate, on Beast**
+- [x] **Step 5: The whole gate, on Beast**
 
 ```sh
 cd sw/kernel && make test && make && make clean && make K1_QUALIFICATION=1
@@ -485,7 +489,7 @@ unmoved. The terminal gate matters more than usual here: `console_shell.c` calls
 `astra_log_write` on a refused input read, which is the one call site where this
 plan's regression would look exactly like the bug the gate was written for.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add sw/kernel

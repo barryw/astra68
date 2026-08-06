@@ -1,7 +1,9 @@
 # Astra event and logging system
 
 Date: 2026-08-06
-Status: design, approved in conversation; not implemented
+Status: design, approved in conversation. §1.1's record, §6.1's authority
+reversal and §6's one-stream rule are built; the macro, the catalog, activity,
+the service and the `events` command are not.
 
 Depends on `2026-08-06-filesystem-layout-design.md`, which fixes where the
 store lives and settles that program lines and kernel events share one ordered
@@ -73,8 +75,14 @@ something that changed twice is the usual way logs get fat.
 
 A bounded set: `u32`, `u64`, `s32`, `status`, `handle`, and one bounded inline
 string for the case where a name genuinely varies — a path, a volume label. At
-most four arguments and at most 32 bytes of them; a call site wanting more is a
-call site that wants two events.
+most four arguments and at most **24** bytes of them; a call site wanting more
+is a call site that wants two events.
+
+24 rather than 32 because the second ring slot spends eight bytes on its own
+commit sequence and its discriminator, without which a slot stops being
+self-describing and a reader cannot answer for one in isolation. Four `u32`
+arguments or three `u64` ones fit; four `u64`s is the one combination that does
+not, and the macro refuses it at compile time.
 
 The inline string is the escape hatch and it is deliberately awkward, because
 it is the one argument type that costs what text logging costs.
