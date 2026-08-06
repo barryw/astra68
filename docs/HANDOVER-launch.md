@@ -3,9 +3,12 @@
 Date: 2026-08-07, updated 2026-08-06 after tasks 2, 2b, 3 and 4. Written to be
 read cold in a fresh session.
 
-**A program runs from the prompt.** `status 7` is a file on the volume, launched
-by name, reporting the status it exited with. Two tasks left: the storage
-protocol over ports, and then `events` becomes one of those files.
+**A program runs from the prompt, and it is handed a namespace.** `status 7` is
+a file on the volume, launched by name, reporting the status it exited with; a
+child is granted `STDOUT`, `STDERR`, `STDIN`, `WORK:`, `COMMANDS:` and `EVENTS:`,
+the last three as port handles to services it can reach across a process
+boundary. One task left: `events` becomes one of those files, and the builtin
+goes in the same commit.
 
 **Everything is on `main`.** `origin/main` is still at `d1fef0c`; everything
 since is local and unpushed.
@@ -14,7 +17,7 @@ since is local and unpushed.
 
 ## 1. Resume here
 
-**Task 5 of `docs/superpowers/plans/2026-08-07-launch-milestone-1.md`.**
+**Task 6 of `docs/superpowers/plans/2026-08-07-launch-milestone-1.md`.** The last one.
 
 The plan has six tasks and one was added while task 1 was being built:
 
@@ -25,12 +28,11 @@ The plan has six tasks and one was added while task 1 was being built:
 | 2b | `ASTRA_PROGRAM`, mandatory provenance, link fails without it | **done**, `5be6f15` |
 | 3 | streams — `STDOUT`, `STDERR`, `STDIN` as grants, not numbers | **done**, `c9058d9` |
 | 4 | the shell launches by name; `COMMANDS:` bound; `status` proves it | **done**, `fc8a643` |
-| 5 | the storage protocol over ports | next |
-| 6 | `events` becomes `COMMANDS:events`; the builtin is deleted | |
+| 5 | the storage protocol over ports | **done**, `3d66e07` |
+| 6 | `events` becomes `COMMANDS:events`; the builtin is deleted | next |
 
 Each finished task has a "what the build settled" block under it in the plan.
-Read task 4's before starting task 5: it did task 5's first step already, and
-§3 below says what is left.
+Read task 5's before starting task 6 — §3 below is the short version.
 
 Design authority: `docs/superpowers/specs/2026-08-07-program-launch-design.md`,
 and `2026-08-06-filesystem-layout-design.md` §2.5 (lookup), §11 (what a file is)
@@ -66,27 +68,33 @@ returns
   over, and each segment page bounces through one page of kernel memory
   (`launch_page`). A launched image is never read through a user pointer.
 
-## 3. What task 5 still has to do, and what is already done
+## 3. What task 6 needs to know
 
-**`kernel_port_handle_retain` exists.** Task 4 needed it before its own gate
-would pass — a grant is a handle duplicate and a duplicate needs a retain — so
-the send endpoint is installed cloneable now. **Only the send endpoint**: a
-second receive handle would be a second service on one port, with messages going
-to whichever end asked first, so granting one is `ACCESS_DENIED`. Task 5 does not
-have to start there any more.
+**A child has a namespace, and nothing has used one yet.** `launch_grants` in
+`console_shell.c` hands over all six: three streams, then `WORK:`, `COMMANDS:`
+and `EVENTS:` as port send handles. **`SYS:` is the one left out** — six is
+`ASTRA_LAUNCH_GRANT_MAX` exactly. Task 6 is the first program to use a mount, so
+it is also the proof that the whole chain works end to end.
 
-**What task 5 does have to do** is the reason a launched child gets no namespace
-today. An assign's handle is a routing token `vfs_host.c` invented —
-`CLIENT_HANDLE(index, session)` — not a kernel handle, so `WORK:`, `COMMANDS:`
-and `EVENTS:` cannot be granted at all. Turning those into real port send handles
-is what makes `launch_grants` in `console_shell.c` grow from three entries to
-six. **Six is `ASTRA_LAUNCH_GRANT_MAX` exactly**, so `SYS:` does not fit and
-somebody has to decide that on purpose rather than discover it.
+**What a child does with them:** `astra_assign_seed(&table, capabilities,
+count)` turns its capability table into an `AstraAssignTable`, then
+`astra_vfs_connect(&client, astra_vfs_port_transport, &handle)` where `handle`
+is the assign's. From there it is the same Kit the shell uses, unchanged.
+
+**Two vocabularies, one word apart.** A grant's `rights` is what the *kernel*
+enforces on a handle (a port send endpoint carries `READ|SIGNAL|WAIT|TRANSFER`);
+what a child may *do* with a mount rides in the flags —
+`ASTRA_CAPABILITY_FLAG_READ` and `_WRITE` beside `_NAMESPACE`. Putting mount
+rights in `rights` asks the kernel for authority no port has, and is refused.
+
+**Two constants for one limit, now one.** `ASTRA_LAUNCH_GRANT_MAX` and
+`KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX` disagreed (6 versus 4) and a launch of
+more than four grants failed with `INVALID_ARGUMENT` from inside the loader. A
+`_Static_assert` holds them together now.
 
 **And the trap, from both directions.** Attaching a handle to a port message
 *moves* it; installing one cloneable lets it be *copied*. A grant is a copy and a
-reply channel is a move, and they use different machinery — `astra_stream_read`
-makes a reply port per call for exactly that reason.
+reply channel is a move — which is why every reply port is created per call.
 
 ## 4. What tasks 2, 2b, 3 and 4 built
 
