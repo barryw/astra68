@@ -127,8 +127,8 @@ a command is run by a person and inherits theirs.
 | Assign | Holds | Rule |
 |---|---|---|
 | `CONFIG:` | machine configuration, overriding `DEFAULTS:` | survives system updates |
-| `APPS:` | installed applications, self-contained | a bundle is a directory |
-| `EVENTS:` | the event store | bounded; see §5 |
+| `APPS:` | installed applications | one directory each; see §4 |
+| `EVENTS:` | the event store | bounded; see §6 |
 | `WORK:` | the person's files | the only place they live |
 | `TEMP:` | scratch | emptied at every boot |
 
@@ -146,7 +146,10 @@ SYS:                      read-only mount
   version                 what this system image is
 
 <state volume>            writable mount
-  config/  apps/  events/  work/  temp/
+  config/  events/  work/  temp/
+  apps/
+    Editor/               one directory per application
+      manifest  program  libs/  resources/
 ```
 
 ### 2.5 Command lookup
@@ -221,7 +224,91 @@ its installation with its existence.
 
 ---
 
-## 4. Configuration
+## 4. Applications and how they launch
+
+### 4.1 A bundle is a directory
+
+An application is a directory containing everything it needs. Installing is
+copying it into `APPS:`; removing it is deleting it. There is no installer, no
+registry, no receipt database, and no files left behind in four other places.
+
+```
+APPS:Editor/
+  manifest          what it is, what it wants, what it opens
+  program           the executable
+  libs/             kits private to this application
+  resources/        icons, layouts, data
+```
+
+**A bundle is never written to by the application inside it.** Settings go to
+`CONFIG:Editor/`, documents to `WORK:`. That is what makes a bundle replaceable
+by copying over it, backed up by copying it, and identical on two machines — an
+application that writes into itself is one that cannot be updated without
+losing state or updated without carrying state it should not have.
+
+Kits resolve from the bundle's `libs/` first, then `LIBS:`, the same two-place
+rule with a stated order as command lookup in §2.5. A bundle can carry a kit
+version the system does not have without asking anyone's permission and without
+affecting anything else.
+
+The manifest declares the application's name, the authority it wants, whether
+it wants a terminal, and which documents it opens. What that file looks like,
+and how a person sees and answers an authority request, is the bundle spec —
+not this one.
+
+### 4.2 Two launch contexts
+
+A program is launched from the shell or from the GUI, as on the Amiga, and it
+is told which. The distinction is not cosmetic: the two contexts hand over
+different things.
+
+| | Launched from the shell | Launched from the GUI |
+|---|---|---|
+| Arguments | `argv` strings, plus a handle for every path argument | the objects it was launched with, as handles |
+| Terminal | attached | **none** |
+| Namespace | inherits the shell's, broadly | what the manifest asked for and was granted |
+| Working directory | the shell's | the bundle's, plus wherever the documents came from |
+| Exit status | returned to the shell | returned to the launcher, which must show a failure rather than swallow it |
+
+Two things follow, and both are improvements on the Amiga rather than copies of
+it.
+
+**The launch context is stated, not inferred.** An Amiga program worked out
+where it came from by testing whether it had a CLI, which meant every program
+carried the same fragile deduction. Astra puts it in the startup block as a
+field, and a program that does not care never looks.
+
+**Structurally the two contexts deliver the same thing:** a list of granted
+objects. Typing `edit WORK:notes.txt` and dropping `notes.txt` on the editor
+both hand the editor a handle to that file — the difference is who chose it and
+whether a terminal came too. The powerbox and the command line turn out to be
+the same mechanism, which is why the editor needs no assigns at all in either
+case.
+
+### 4.3 A program must never assume a terminal
+
+Launched from the GUI it has no terminal handle, so writing to one is not a
+fault to guard against — there is nothing to write to. Diagnostics go to the
+event channel, which exists in both contexts and needs neither a terminal nor a
+disk.
+
+This is the fix for the Amiga's worst launch-time behaviour, where a program
+started from Workbench wrote into the void and people resorted to a serial
+cable to find out why. Here the output is in `EVENTS:` and the machine can be
+asked what the program said.
+
+A shell script launched from the GUI starts the shell with the script; whether
+a terminal window appears is declared in the manifest rather than guessed.
+
+### 4.4 Deliberately not now
+
+Delivering a second document to an already-running instance. A launch is a
+message, so this is a routing decision later rather than a mechanism change,
+and building it before there is a GUI would be building it blind.
+
+---
+
+## 5. Configuration
 
 ### 4.1 Two layers
 
@@ -249,7 +336,7 @@ the person who wrote the file.
 
 ---
 
-## 5. Where events live
+## 6. Where events live
 
 The format, levels and automatic context are the next spec. Two things are
 fixed here because they are layout and ordering decisions:
@@ -268,7 +355,7 @@ timeline the existing direction warns against.
 
 ---
 
-## 6. Not breaking the machine
+## 7. Not breaking the machine
 
 The governing rule:
 
@@ -300,7 +387,7 @@ bugs. An NVRAM TLV is reserved for the boot-attempt counter.
 
 ---
 
-## 7. Accepted limits
+## 8. Accepted limits
 
 - **Nothing can scan the whole machine.** No `find /`, no indexer, no
   search-everywhere without being handed everywhere. Correct for this machine,
@@ -313,7 +400,7 @@ bugs. An NVRAM TLV is reserved for the boot-attempt counter.
 
 ---
 
-## 8. What this changes in existing code
+## 9. What this changes in existing code
 
 | Piece | Change |
 |---|---|
@@ -322,15 +409,16 @@ bugs. An NVRAM TLV is reserved for the boot-attempt counter.
 | `vfs_ext4_backend.c` | mount-point prefixing becomes a bound mount handle |
 | VFS client Kit | assign table, resolution, and the rule that `..` stops at a root |
 | `ASTRA_SYSCALL_LOG_WRITE` | appends to the trace ring; console becomes a sink |
+| `AstraStartupInfo` | gains the launch context and the list of granted objects |
 | NVRAM TLVs | state-volume identity; failsafe flag; reserved boot-attempt counter |
 
-## 9. Open questions for the next specs
+## 10. Open questions for the next specs
 
 - The event record: fields, levels, and what context the system attaches
   without being asked.
 - The shell language, and what a startup entry looks like once one exists.
-- How an application bundle declares the authority it wants, and how a person
-  sees and answers that request.
+- The bundle manifest: how an application declares the authority it wants,
+  which documents it opens, and how a person sees and answers that request.
 - System update: `SYS:` is a binding to a volume identity, so A/B images are
   two volumes and a rebind. Nothing here precludes it; nothing here specifies
   it.
