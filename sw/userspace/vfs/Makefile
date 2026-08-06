@@ -19,17 +19,19 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 # include path clean is what stops a backend detail leaking into it by
 # accident, so the two are compiled with different flags on purpose.
 CORE_SOURCES := src/vfs_service_core.c src/vfs_client.c \
-	src/vfs_local_transport.c
+	src/vfs_local_transport.c src/vfs_assign.c
 EXT4_CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
 	-DCONFIG_USE_DEFAULT_CFG=0 -I$(RUNTIME)/freestanding
 
 HEADERS := include/astra/vfs_service_core.h include/astra/vfs_backend.h \
 	include/astra/vfs_client.h include/astra/vfs_local_transport.h \
+	include/astra/vfs_assign.h \
 	../../include/astra/vfs_service.h \
 	../../include/astra/syscall.h
 
 TARGET := build/m68k/libastravfs.a
 TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
+	build/m68k/vfs_assign.o \
 	build/m68k/vfs_local_transport.o build/m68k/vfs_ext4_backend.o
 HOST_TEST := build/host/test_vfs_service_core
 
@@ -55,8 +57,16 @@ $(HOST_TEST): $(CORE_SOURCES) tests/test_vfs_service_core.c $(HEADERS)
 		src/vfs_service_core.c src/vfs_client.c \
 		src/vfs_local_transport.c tests/test_vfs_service_core.c -o $@
 
-test: $(HOST_TEST)
+ASSIGN_TEST := build/host/test_vfs_assign
+
+$(ASSIGN_TEST): src/vfs_assign.c tests/test_vfs_assign.c $(HEADERS)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/vfs_assign.c tests/test_vfs_assign.c -o $@
+
+test: $(HOST_TEST) $(ASSIGN_TEST)
 	./$(HOST_TEST)
+	./$(ASSIGN_TEST)
 
 sanitize:
 	@mkdir -p build/host
