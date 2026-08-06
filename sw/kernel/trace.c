@@ -7,7 +7,12 @@
 
 typedef struct KernelTraceStorage {
     KernelTraceHeader header;
-    KernelTraceRecord records[KERNEL_TRACE_CAPACITY];
+    /*
+     * A union rather than a cast. Every slot is one of three shapes and they
+     * share their first member, so reading a slot as the shape its event field
+     * names is defined behaviour here and would be type punning anywhere else.
+     */
+    KernelTraceSlot records[KERNEL_TRACE_CAPACITY];
 } KernelTraceStorage;
 
 typedef struct KernelTraceStagedRecord {
@@ -37,6 +42,12 @@ _Static_assert(sizeof(KernelTraceHeader) == KERNEL_TRACE_HEADER_SIZE,
                "trace header size changed");
 _Static_assert(sizeof(KernelTraceRecord) == KERNEL_TRACE_RECORD_SIZE,
                "trace record size changed");
+_Static_assert(sizeof(KernelTraceUserRecord) == KERNEL_TRACE_RECORD_SIZE,
+               "user trace record must occupy exactly one slot");
+_Static_assert(sizeof(KernelTraceArgumentRecord) == KERNEL_TRACE_RECORD_SIZE,
+               "argument trace record must occupy exactly one slot");
+_Static_assert(sizeof(KernelTraceSlot) == KERNEL_TRACE_RECORD_SIZE,
+               "a trace slot must be one record wide");
 _Static_assert(sizeof(KernelTraceStorage) == KERNEL_TRACE_STORAGE_SIZE,
                "trace storage must occupy exactly 64 KiB");
 _Static_assert(sizeof(KernelTraceStagedRecord) == 28u,
@@ -149,7 +160,7 @@ bool kernel_trace_write_at(KernelTraceEvent event, uint16_t flags,
     header = &trace_storage.header;
     index = header->write_index;
     sequence = header->next_sequence;
-    record = &trace_storage.records[index];
+    record = &trace_storage.records[index].record;
     if (header->wrap_count != 0u && record->commit_sequence != 0u)
         increment_saturating(&header->dropped_count);
 
@@ -296,7 +307,7 @@ bool kernel_trace_read_slot(uint32_t slot, KernelTraceRecord *record)
     if (!kernel_trace_valid() || slot >= KERNEL_TRACE_CAPACITY ||
         record == NULL)
         return false;
-    source = &trace_storage.records[slot];
+    source = &trace_storage.records[slot].record;
     first_commit = source->commit_sequence;
     if (first_commit == 0u)
         return false;
@@ -377,16 +388,181 @@ uint32_t kernel_trace_copy_recent(KernelTraceRecord *records,
     return copied;
 }
 
+/* Steps the write index on, counting a wrap. */
+static void advance_write_index(KernelTraceHeader *header)
+{
+    uint32_t index = header->write_index + 1u;
+
+    if (index == KERNEL_TRACE_CAPACITY) {
+        index = 0u;
+        increment_saturating(&header->wrap_count);
+    }
+    header->write_index = index;
+}
+
+/* Claims the slot the write index points at, counting what it displaced. */
+static KernelTraceSlot *claim_slot(KernelTraceHeader *header)
+{
+    KernelTraceSlot *slot = &trace_storage.records[header->write_index];
+
+    if (header->wrap_count != 0u && slot->record.commit_sequence != 0u)
+        increment_saturating(&header->dropped_count);
+    slot->record.commit_sequence = 0u;
+    trace_barrier();
+    return slot;
+}
+
+bool kernel_trace_write_user(uint32_t message, uint32_t process,
+                             uint16_t thread, uint16_t flags,
+                             const void *payload, uint32_t payload_length)
+{
+    const uint8_t *bytes = payload;
+    KernelTraceHeader *header;
+    KernelTraceUserRecord *record;
+    KernelTraceArgumentRecord *arguments;
+    KernelPlatformCycleCount cycles;
+    uint32_t sequence;
+    uint16_t saved_status;
+
+    if (message == 0u ||
+        KERNEL_TRACE_LEVEL_OF(flags) > KERNEL_TRACE_LEVEL_ERROR ||
+        (flags & (uint16_t)~KERNEL_TRACE_FLAG_MASK) != 0u ||
+        payload_length > KERNEL_TRACE_ARGUMENT_BYTES ||
+        (payload == NULL) != (payload_length == 0u))
+        return false;
+
+    saved_status = kernel_interrupt_save_disable();
+    if (!kernel_trace_valid()) {
+        kernel_interrupt_restore(saved_status);
+        return false;
+    }
+    header = &trace_storage.header;
+    kernel_platform_cpu_cycles(&cycles);
+
+    /*
+     * The header slot first and the arguments second. Both go inside one
+     * interrupt-disabled window so a reader can never catch the pair half
+     * written, and the order is what makes a loss detectable rather than
+     * silent: a wrapping writer reaches the header before the arguments.
+     */
+    sequence = header->next_sequence;
+    record = &claim_slot(header)->user;
+    record->timestamp_high = cycles.high;
+    record->timestamp_low = cycles.low;
+    record->event = KERNEL_TRACE_EVENT_USER;
+    record->flags = flags;
+    record->process = process;
+    record->message = message;
+    record->activity = 0u;
+    record->thread = thread;
+    record->payload_length = (uint16_t)payload_length;
+    trace_barrier();
+    record->commit_sequence = sequence;
+    trace_barrier();
+    header->next_sequence = next_sequence(sequence);
+    advance_write_index(header);
+
+    if (payload_length != 0u) {
+        sequence = header->next_sequence;
+        arguments = &claim_slot(header)->arguments;
+        arguments->event = KERNEL_TRACE_EVENT_USER_ARGUMENTS;
+        arguments->reserved = 0u;
+        for (uint32_t index = 0u; index < KERNEL_TRACE_ARGUMENT_BYTES;
+             ++index)
+            arguments->payload[index] =
+                index < payload_length ? bytes[index] : 0u;
+        trace_barrier();
+        arguments->commit_sequence = sequence;
+        trace_barrier();
+        header->next_sequence = next_sequence(sequence);
+        advance_write_index(header);
+    }
+
+    kernel_interrupt_restore(saved_status);
+    return true;
+}
+
+bool kernel_trace_read_user(uint32_t slot, KernelTraceUserRecord *record,
+                            void *payload, uint32_t capacity,
+                            uint32_t *payload_length)
+{
+    volatile KernelTraceUserRecord *source;
+    volatile KernelTraceArgumentRecord *arguments;
+    uint8_t *out = payload;
+    uint32_t expected;
+    uint32_t first_commit;
+    uint32_t second_commit;
+    uint32_t length;
+    uint32_t next_slot;
+
+    if (!kernel_trace_valid() || slot >= KERNEL_TRACE_CAPACITY ||
+        record == NULL || payload_length == NULL)
+        return false;
+    source = &trace_storage.records[slot].user;
+    first_commit = source->commit_sequence;
+    if (first_commit == 0u || source->event != KERNEL_TRACE_EVENT_USER)
+        return false;
+    trace_barrier();
+    record->commit_sequence = first_commit;
+    record->timestamp_high = source->timestamp_high;
+    record->timestamp_low = source->timestamp_low;
+    record->event = source->event;
+    record->flags = source->flags;
+    record->process = source->process;
+    record->message = source->message;
+    record->activity = source->activity;
+    record->thread = source->thread;
+    record->payload_length = source->payload_length;
+    trace_barrier();
+    second_commit = source->commit_sequence;
+    if (first_commit != second_commit || second_commit == 0u)
+        return false;
+
+    *payload_length = 0u;
+    length = record->payload_length;
+    if (length == 0u)
+        return true;
+    if (length > KERNEL_TRACE_ARGUMENT_BYTES || out == NULL ||
+        capacity < length)
+        return false;
+
+    /*
+     * The arguments are in the next slot and carry the next sequence number.
+     * Anything else means the ring wrapped over them, and the caller is told
+     * nothing rather than whatever now occupies that memory.
+     */
+    next_slot = slot + 1u == KERNEL_TRACE_CAPACITY ? 0u : slot + 1u;
+    expected = next_sequence(first_commit);
+    arguments = &trace_storage.records[next_slot].arguments;
+    if (arguments->commit_sequence != expected ||
+        arguments->event != KERNEL_TRACE_EVENT_USER_ARGUMENTS)
+        return false;
+    trace_barrier();
+    for (uint32_t index = 0u; index < length; ++index)
+        out[index] = arguments->payload[index];
+    trace_barrier();
+    if (arguments->commit_sequence != expected)
+        return false;
+    *payload_length = length;
+    return true;
+}
+
 #if defined(KERNEL_TRACE_HOST_TEST)
 void kernel_trace_test_inject_torn_read(uint32_t slot)
 {
     torn_read_slot = slot < KERNEL_TRACE_CAPACITY ? slot : UINT32_MAX;
 }
 
+void kernel_trace_test_overwrite_argument_slot(uint32_t slot)
+{
+    if (slot < KERNEL_TRACE_CAPACITY)
+        trace_storage.records[slot].arguments.commit_sequence = 0u;
+}
+
 void kernel_trace_test_invalidate(uint32_t stale_commit_sequence)
 {
     trace_storage.header.magic = 0u;
-    trace_storage.records[0].commit_sequence = stale_commit_sequence;
+    trace_storage.records[0].record.commit_sequence = stale_commit_sequence;
     trace_initialized = 0u;
 }
 #endif
