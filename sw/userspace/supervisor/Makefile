@@ -2,6 +2,7 @@ include ../../../mk/m68k-cross.mk
 
 CC := $(CROSS)gcc
 SIZE := $(CROSS)size
+OBJCOPY := $(CROSS)objcopy
 HOST_CC ?= cc
 ANALYZER_CC ?= gcc
 RUNTIME := ../runtime
@@ -21,7 +22,7 @@ EXT4_CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
 TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
-	-ffunction-sections -fdata-sections
+	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 HOST_FLAGS := -O2 -fno-builtin
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 # --gc-sections is what makes the -ffunction-sections every module already
@@ -45,6 +46,12 @@ SHELL_LIB := $(SHELL_DIR)/build/m68k/libastrashell.a
 TERMINAL_LIB := $(TERMINAL_DIR)/build/m68k/libastraterminal.a
 RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0.o
 TARGET := build/m68k/astra_supervisor.elf
+# What the ROM carries. Identical to TARGET as far as the loader is concerned
+# -- same segments, same entry -- with the debug information removed, because
+# the payload is compressed into a fixed ROM window and DWARF has no business
+# in it. TARGET keeps the symbols, and that is the file a debugger is pointed
+# at.
+IMAGE := build/m68k/astra_supervisor.image.elf
 HOST_TEST := build/host/test_supervisor
 TEST_SOURCES := src/supervisor.c $(RUNTIME)/src/startup.c \
 	tests/test_supervisor.c
@@ -59,7 +66,7 @@ all:
 	$(MAKE) libraries
 	$(MAKE) image
 
-image: $(TARGET) size
+image: $(IMAGE) size
 
 libraries:
 	$(MAKE) -C $(RUNTIME) all
@@ -80,6 +87,9 @@ $(TARGET): $(OBJECTS) $(RUNTIME)/astra_user.ld $(RUNTIME_CRT0) $(EXT4_LIB) \
 	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(RUNTIME_CRT0) $(OBJECTS) \
 		$(VFS_LIB) $(EXT4_LIB) $(STORAGE_LIB) $(ALLOC_LIB) $(TERMINAL_LIB) \
 		$(SHELL_LIB) $(RUNTIME_LIB) -lgcc
+
+$(IMAGE): $(TARGET)
+	$(OBJCOPY) --strip-debug $< $@
 
 build/m68k/%.o: src/%.c
 	@mkdir -p $(@D)
@@ -119,8 +129,8 @@ analyze:
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/main.c -o build/analyzer/main.o
 
-size: $(TARGET)
-	$(SIZE) $(TARGET)
+size: $(IMAGE)
+	$(SIZE) $(IMAGE)
 
 # Header dependencies: a stale object compiled against an older ABI
 # constant is indistinguishable from a working one until it runs.

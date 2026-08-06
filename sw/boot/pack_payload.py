@@ -22,11 +22,50 @@ from pack_boot_splash import compress_legacy_lz4
 
 GUARD = "ASTRA_ROM_PAYLOADS_H"
 
+ELF_MAGIC = b"\x7fELF"
+
+
+def debug_sections(image: bytes) -> list[str]:
+    """Names of any DWARF sections in a big-endian 32-bit ELF.
+
+    Every m68k object is compiled with -g so a debugger has something to say,
+    and nothing that ships is supposed to carry the result: the kernel becomes
+    a raw binary and the user image is stripped. This is what makes that a rule
+    rather than a habit -- the ROM window is fixed in RTL, and DWARF arriving
+    in it would be found as a size failure with no obvious cause.
+    """
+    if not image.startswith(ELF_MAGIC) or len(image) < 52:
+        return []
+    if image[4] != 1 or image[5] != 2:  # 32-bit, big-endian
+        return []
+    section_offset = int.from_bytes(image[32:36], "big")
+    entry_size = int.from_bytes(image[46:48], "big")
+    count = int.from_bytes(image[48:50], "big")
+    names_index = int.from_bytes(image[50:52], "big")
+    if section_offset == 0 or count == 0 or names_index >= count:
+        return []
+    names_header = section_offset + names_index * entry_size
+    names_start = int.from_bytes(image[names_header + 16:names_header + 20], "big")
+    found = []
+    for index in range(count):
+        header = section_offset + index * entry_size
+        name_offset = int.from_bytes(image[header:header + 4], "big")
+        end = image.index(b"\0", names_start + name_offset)
+        name = image[names_start + name_offset:end].decode("ascii", "replace")
+        if name.startswith(".debug"):
+            found.append(name)
+    return found
+
 
 def pack(name: str, source: Path, output: Path) -> dict[str, object]:
     raw = source.read_bytes()
     if not raw:
         raise SystemExit(f"{source}: empty payload")
+    carried = debug_sections(raw)
+    if carried:
+        raise SystemExit(
+            f"{source}: carries debug information into the ROM "
+            f"({', '.join(carried[:4])}); strip it before packing")
     compressed = compress_legacy_lz4(raw, output)
     return {
         "name": name,

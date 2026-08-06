@@ -12,7 +12,7 @@ CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
 TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
-	-ffunction-sections -fdata-sections
+	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 HOST_FLAGS := -O2 -fno-builtin
 # Host tests need the same rebuild discipline as the target build: a test binary
 # silently linked against an older header reports a result it did not earn, and
