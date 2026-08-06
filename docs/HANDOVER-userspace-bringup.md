@@ -628,6 +628,41 @@ Three related notes:
   leave on screen. **This is the only reason a terminal has not been seen on a
   screen; it runs.**
 
+## 6e. What the boot path costs, and what still cannot be seen
+
+`emu/qemu/time-boot.py` times each stage from the serial stream. Baseline on
+Beast, 5 runs, median seconds since launch:
+
+| Stage | Reached | Delta |
+|---|---|---|
+| POST | 0.02 | 0.02 |
+| kernel handoff | 0.02 | 0.00 |
+| user image loaded | 0.05 | 0.02 |
+| block round-trip | 0.05 | 0.01 |
+| partition read | 0.05 | 0.00 |
+| mount + journal | 0.08 | 0.02 |
+| volume verify | 0.09 | 0.02 |
+| terminal up | 0.09 | 0.00 |
+
+Spread across runs is 0.08 to 0.10, so a stage that doubles is visible. `--budget`
+turns it into a gate. **These are host seconds for a fixed workload, not 68030
+time**, and the same is true on the board: the CPU is TCG in both places.
+
+The filesystem workload is deterministic and worth diffing directly: `make
+ext4-test` reports 2,112 reads / 7,374 writes / 4,264 splits every run. The
+splits are the test forcing `max_transfer_sectors` to 4; the device model
+reports 16, and a 4 KiB block is 8 sectors, so the real path splits nothing and
+costs one device round trip per block.
+
+**The metrics registry is wired to nothing.** `sw/userspace/metrics` implements
+the sampler contract from `docs/OBSERVABILITY.md` and is covered by its own
+test, `astra_block_sampler` and `astra_alloc_sampler` both exist, and no shipped
+code calls `astra_metric_register` — the supervisor does not even link the
+module. `--gc-sections` collects all three. So the numbers above come from
+outside the machine, and nothing running on Astra can report its own. That is
+not costly to fix, but it needs a reader to be worth anything, and the reader is
+`PROC:` in phase 7.
+
 ## 7. Known problems not caused by this work
 
 - **`KERNEL_DEVICE_LEASE_OWNER_MAX` was raised from 2 to 4 for the terminal's
@@ -723,6 +758,10 @@ make size
 # QEMU device models
 python3 emu/qemu/test-block.py "$(./emu/qemu/build.sh host)"
 python3 emu/qemu/test-input.py "$(./emu/qemu/build.sh host)"
+
+# what the boot path costs, per stage, so a regression in it is visible
+python3 emu/qemu/time-boot.py /tmp/qemu-final-build/qemu-system-m68k \
+    sw/boot/astra_boot.bin --image /tmp/part.img --runs 5 --budget 1.0
 
 # the partitioned boot: eight Initial image lines, ending in the mounted volume
 timeout 240 /tmp/qemu-final-build/qemu-system-m68k -M astra68 -m 32M \
