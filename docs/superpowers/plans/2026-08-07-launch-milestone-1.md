@@ -124,6 +124,28 @@ What is new is seeding an `AstraAssignTable` from that table, so a child gets
 - [ ] Step 3: `cd sw/userspace && make test && make sanitize && make analyze`.
 - [ ] Step 4: commit.
 
+### Task 2b: `ASTRA_PROGRAM`, and the link that fails without it
+
+**Files:** `sw/include/astra/program.h` (new),
+`sw/userspace/runtime/astra_user.ld`, `sw/userspace/supervisor/src/main.c`,
+`tools/program_info.py` (new), `tools/tests/`
+
+Layout spec §11.2: every image declares its name, semantic version, build id,
+author and copyright, in one fixed record in `.astra_program`, and the linker
+script asserts there is exactly one. The macro is `ASTRA_EVENT`'s shape and the
+extraction is `event_catalog.py`'s.
+
+The supervisor declares one too — it is the first image on the machine and the
+rule has no exceptions, which is the only way a rule about every program
+survives the first program that finds it inconvenient.
+
+- [ ] Step 1: the record, the macro, the linker assertion, and a host test that
+      an image missing it does not link.
+- [ ] Step 2: `tools/program_info.py` reads it out of an ELF, with a pytest
+      case, so a person can ask what a file is before running it.
+- [ ] Step 3: the userspace gate and the cross-build on Beast.
+- [ ] Step 4: commit.
+
 ### Task 3: Streams
 
 **Files:** `sw/include/astra/stream_service.h` (new),
