@@ -15,11 +15,11 @@ newer.
 
 ## 1. Where things stand
 
-Nothing here is pushed. `main` is at `8b24f0a`, which is where the terminal
-persistence fix landed earlier in the same session.
-
-**Branch `review/kernel-storage-hardening`** — 8 commits, tree clean, every gate
-green. Ready to merge.
+**Everything is on `main`, and there are no other working branches.** The
+branch layout this file described — `review/kernel-storage-hardening` and
+`wip/vfs-terminal-wiring` — was merged and deleted on 2026-08-06. Work on
+`main` directly. `main` is 15 commits ahead of `origin/main`; nothing is
+pushed.
 
 | Commit | What |
 |---|---|
@@ -30,11 +30,20 @@ green. Ready to merge.
 | `34d6638` | port syscalls lifted out of the dispatch switch |
 | `fa9c4f9` | boot-path timing harness and baseline |
 | `79becbd` | the storage protocol and the service behind it |
-| `27d8016` | three-page thread stacks |
+| `27d8016` | three-page thread stacks (superseded by `bd35ad5`) |
+| `30ce278` | the syscall records carry the alignment the kernel demands |
+| `270bccf` | `emu/qemu/test-terminal.py`, the terminal's first gate |
+| `d8e6f4c` | the terminal moved behind the storage protocol |
+| `bd35ad5` | reserve-and-grow thread stacks |
+| `e20eb85` | `make coverage` over the kernel's host suites |
 
-**Branch `wip/vfs-terminal-wiring`** — 1 commit, **does not work**, do not merge.
-It is the wiring that makes the terminal a client of the protocol. Kept on a
-branch so it is not lost. See section 4.
+Every gate is green on Beast: 30 kernel suites in both configurations,
+userspace test/sanitize/analyze/cross-build, `ext4-test`, the ELF fixture at 84
+pages, the boot budget at 0.08s of 1.00s, and the terminal gate.
+
+Kernel line coverage over the host suites is **82.8% of 14,197 executable
+lines** (`make coverage` in `sw/kernel`). Weakest: `monitor.c` 65.4%,
+`process.c` 77.6%.
 
 ---
 
@@ -95,31 +104,48 @@ What had already been ruled out, and stayed ruled out:
 by `e2fsck` and `debugfs` on the image afterwards. It has not been rebased or
 merged; its commit message still says it hangs, and that message is now wrong.
 
-### 2.2 Reserve-and-grow stacks
+### 2.2 Reserve-and-grow stacks — done, 2026-08-06
 
-Three pages is the interim shape and `sw/kernel/thread.h` says so where the
-constants are defined. The intended shape:
+Landed as `bd35ad5`. A slot is now a 64 KiB **reservation** with an unmapped
+guard page at its floor; a thread starts with one committed page at the top and
+the fault handler commits more as the stack reaches them. Address space costs
+page-table entries rather than RAM, so no thread needs a size chosen for it,
+and a wild pointer still dies on the guard.
 
-- keep `KERNEL_THREAD_STACK_STRIDE` as a **reservation** and widen it;
-- commit one page at thread creation, as before;
-- on a user fault, if the address is inside the reservation and above the guard
-  floor, map a page and resume instead of killing the process;
-- keep the floor page unmapped, so a genuine wild pointer still dies.
+The blocker recorded here was real but understated. Three things had to change,
+not one:
 
-**The blocker is the user-fault path.** Today every user fault sets
-`KERNEL_PROCESS_EXIT_USER_FAULT` and kills the process — there is no demand
-paging anywhere in the kernel, checked. Nothing asks whether a fault was a
-stack growing.
+- **`kernel_process_on_fault` answers the fault** rather than retiring the
+  process. Resuming works because the captured context already carries the
+  faulting instruction's own program counter, so re-entering user mode re-runs
+  the access. That is a property of the machine, not a law: QEMU restores the
+  PC to the faulting instruction before stacking the format-B frame, and its
+  RTE pops that frame and resumes there rather than rerunning a bus cycle.
+  A machine that reran the cycle would need the frame handed back intact.
+- **`dispatch_user_fault_fast` scheduled the process worker unconditionally**,
+  because every user fault used to be a death. The first growth that worked
+  panicked here with `process worker missing teardown`. It now schedules on the
+  same condition the syscall path uses.
+- **`kernel_copy_to_user` grows and retries once.** When a syscall writes into
+  a fresh frame the kernel reaches the page before the user does, so the user's
+  fault handler never sees it and a good stack address would have come back
+  `BAD_ADDRESS`.
 
-Nothing has to be unpicked first: the size becomes the initial commit and the
-stride becomes the cap.
+Measured on the machine, not argued: a supervisor made to touch 12 KiB of stack
+it was never given commits **three pages in one fault, with zero user faults**,
+and carries on into a working terminal; one made to write into the guard page
+dies as before. The counters are `user_stack_growths` and
+`user_stack_pages_committed` in `KernelSchedulerStats`, kept apart from
+`user_faults` because one is the system working and the other is a process
+dying.
 
-Why this shape rather than the Amiga's `stack` command: reserving address space
-costs page-table entries, not RAM, so the common case needs no number at all,
-and the guard page turns a wrong guess from silent corruption into a clean
-fault. Linux does the same for a main thread; Windows carries reserve and commit
-in the PE header; Go copies growable stacks, which needs compiler cooperation
-Astra does not have.
+**The shell itself no longer grows at all.** Moving its input batch out of the
+frame took the deepest chain under a single page, so the three-page commit that
+prompted this work is not needed by the thing that prompted it. That is the
+point: nothing had to be sized for it. It also means the terminal gate does not
+exercise growth — the probes above are what do, and they are temporary by
+design. If you need to re-run one, insert it in `main.c` before
+`console_shell_run` and read the counters through the QEMU monitor.
 
 ---
 
@@ -193,23 +219,38 @@ moving independently of its implementation.
 
 ## 4. Stacks, as they are today
 
-`KERNEL_THREAD_STACK_SIZE` is `0x3000` and `KERNEL_THREAD_STACK_STRIDE` is
-`0x4000`, so each of 16 slots is three committed pages and one unmapped guard
-page. That is 256 KiB of address space — page-table entries, not RAM — and 8 KiB
-more committed per thread than before. The default boot runs one thread.
+`KERNEL_THREAD_STACK_STRIDE` is `0x10000` and `KERNEL_THREAD_STACK_SIZE`, now
+the **initial commit**, is `0x1000`. Each of 15 slots is one guard page at the
+floor, up to 15 growable pages above it, and a stack pointer starting at the
+top of the stride. That is 960 KiB of address space — page-table entries, not
+RAM — against one committed page per thread. The default boot runs one thread
+and never grows.
 
-- `prepare_thread` maps the pages in a loop and unwinds exactly the ones it
-  mapped, so a partial mapping leaves nothing behind.
-- The reap path unmaps every page of the slot rather than the first.
-- `user_stack_pages` counts pages now, not threads, and a static assert checks
-  the count still fits the `uint8_t` holding it.
-- Two assertions had the old assumption written out by hand and now derive from
-  the constant: `thread.c` required a guard as large as the stack, which was the
-  same thing as a guard page only while a stack was one page.
+Layout, per slot:
 
-**A user-stack overflow presents as a fault just below `0x70000000`.** If a
-panic reports a fault address a little under that, it is a stack overflow and
-not a wild pointer.
+```
+slot_base                                          slot_base + STRIDE
+|                                                                   |
+[ GUARD ][ . . . . grows down into here . . . . ][ committed at start ]
+[ 1 page]                                        [       1 page       ]
+```
+
+- `prepare_thread` maps the initial pages at the **top** of the slot and unwinds
+  exactly the ones it mapped, so a partial mapping leaves nothing behind.
+- `grow_user_stack` commits the whole span between the faulting address and
+  what the thread holds, because a frame larger than a page can touch its
+  bottom first and a hole would make `user_stack_base` describe pages that are
+  not mapped.
+- The reap path unmaps `thread->stack_pages`, what this thread grew to, not a
+  constant. The count fits padding the record already had, so it costs no
+  kernel RAM.
+- `user_stack_pages` is bounded by the fully grown worst case now, not the
+  committed one, and a static assert checks it still fits its `uint8_t`.
+
+**A user-stack overflow presents as a fault in the guard page at the bottom of
+the slot** — for the first thread, just under `0x70001000`. A fault below a
+slot's floor is a real overflow or a wild pointer; one above it is answered by
+growth and never reaches a panic.
 
 ---
 
