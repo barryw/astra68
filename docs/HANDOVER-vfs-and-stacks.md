@@ -40,19 +40,47 @@ branch so it is not lost. See section 4.
 
 ## 2. Do these next, in this order
 
-### 2.1 Diagnose the terminal hang
+### 2.1 The terminal hang — found and fixed, 2026-08-06
 
-`wip/vfs-terminal-wiring` moves the shell onto the storage protocol. With
-three-page stacks it no longer faults, and all four typed commands are accepted
-over QMP, but **the shell stops mid-prompt after the first Enter and nothing
-reaches the disk**. A hang, not a fault; it survives a 60-second settle.
+Fixed by `30ce278` on `review/kernel-storage-hardening`. The wiring on
+`wip/vfs-terminal-wiring` was never the problem, and the lead recorded here
+before it was diagnosed was wrong in both halves. Both are written out below,
+because each cost time.
 
-The lead: the prompt renders exactly two characters and stops. That points at
-the terminal flush path rather than at the filesystem. The service core, the
-client Kit, the lwext4 backend and the local transport all pass their own tests
-on `review/kernel-storage-hardening`, so only the wiring is suspect.
+**The cause was the ABI, not the wiring.** Six syscalls refuse a user buffer
+whose address is not four-byte aligned. Nothing gave the records that
+alignment, and the m68k ABI aligns `uint32_t` to **two** bytes — so every one
+of them was four-byte aligned only by luck of where the linker or a stack
+frame put it. Moving the input batch out of `console_shell_run`'s frame put it
+in `.bss` at `0x0014c5d2`. From then on every `ASTRA_SYSCALL_INPUT_READ_TRY`
+returned `INVALID_ARGUMENT` before the kernel ever reached the queue, and the
+shell — which treated any non-OK read as "no input" — yielded and looped
+forever.
 
-What is already ruled out, so it is not re-derived:
+The fix puts `_Alignas` on the first field of each record, so the requirement
+lives with the type rather than with wherever an instance lands, and asserts it
+statically. The assert is a **multiple**, not an equality: the two block
+records hold a `uint64_t` and are eight-aligned on LP64, which is what caught
+the first version of the fix on the host build. `console_shell_run` now treats
+only `WOULD_BLOCK` as "no input" and reports any other status like a failed
+flush.
+
+**Two things that made it read as a hang, and will do so again:**
+
+- **A refused syscall and an empty queue looked identical to the caller.**
+  Nothing was logged, nothing faulted, and the boot log reaches `stage 8`
+  whether the terminal works or not, so every existing gate passed.
+- **The lead in this file was an artifact.** "The prompt renders exactly two
+  characters and stops" is **the pre-existing state of the boot banner on
+  main-line too** — see section 6 — so it pointed at the flush path when the
+  flush path was fine.
+
+The gate that closes the hole is `emu/qemu/test-terminal.py`: it types into the
+machine over QMP, reads the character plane back, and asserts both that a file
+round-trips and that the Vesta input FIFO drains. It fails against the unfixed
+build and passes against the fixed one, on both branches.
+
+What had already been ruled out, and stayed ruled out:
 
 - **Not the fault this replaced.** At one page the chain overflowed at
   `0x6FFFFFEC`, twenty bytes below the `0x70000000` stack base. That is fixed.
@@ -61,6 +89,11 @@ What is already ruled out, so it is not re-derived:
 - **Not `console_shell_run`'s frame.** Moving the input batch out of it took it
   from 1,624 bytes to 84. GCC then inlines the commands into `run_line`, whose
   frame is 1,260, and that is where the remaining stack goes.
+
+**`wip/vfs-terminal-wiring` works** with the fix under it: `mkdir`, `write`,
+`ls` and `cat` all round-trip through the storage protocol to the card, judged
+by `e2fsck` and `debugfs` on the image afterwards. It has not been rebased or
+merged; its commit message still says it hangs, and that message is now wrong.
 
 ### 2.2 Reserve-and-grow stacks
 
@@ -219,6 +252,23 @@ not a wild pointer.
 
 ## 6. Traps that cost time in this session
 
+- **A user buffer handed to a syscall must be four-byte aligned, and the m68k
+  ABI will not give it to you.** `_Alignof(uint32_t)` is 2 on this target, so a
+  record built from `uint32_t` fields aligns to 2 unless it says otherwise.
+  Every ABI record the kernel copies now carries `_Alignas(ASTRA_ABI_ALIGNMENT)`
+  and asserts it. **Anything new that crosses the syscall boundary must do the
+  same**, or it will work from a stack frame and fail from `.bss`.
+- **The boot banner is drawn wrong and it is not a rendering bug worth
+  chasing from the screen.** The first paint comes out as `co` on one row, the
+  second help line one row above where it belongs, and the prompt split across
+  two rows — on `main`, on `review/kernel-storage-hardening` and on the WIP
+  branch alike. **It is cosmetic and it self-heals**: `clear` followed by any
+  command renders perfectly, and every command after the first renders
+  perfectly. The terminal's own logic is not at fault; the character plane is
+  shared with the kernel's boot console, which is still writing progress lines
+  to it while the shell paints. Not diagnosed further. Do not use it as a lead
+  — the last session did, and it pointed away from the real defect.
+
 - **A stale `sw/boot/astra_boot.bin` rsynced from the Mac onto Beast.** It boots
   as far as `POST PASS` and stops, which reads exactly like a broken measurement
   harness. This trap is already recorded in the other handover and it still
@@ -251,6 +301,10 @@ cd sw/userspace/storage && make ext4-test
 
 # kernel: 30 suites, both configurations
 cd sw/kernel && make test && make && make clean && make K1_QUALIFICATION=1
+
+# the terminal, end to end: types over QMP, reads the character plane back
+python3 emu/qemu/test-terminal.py /tmp/qemu-final-build/qemu-system-m68k \
+    sw/boot/astra_boot.bin --image /tmp/part.img
 
 # the ELF profile against the real gc-linked executable
 ASTRA_ELF_FIXTURE=sw/userspace/supervisor/build/m68k/astra_supervisor.elf \

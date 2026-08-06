@@ -228,6 +228,10 @@ make interop && make reread && make partitioned && make measure && make bigvolum
 python3 emu/qemu/test-block.py "$(./emu/qemu/build.sh host)"
 python3 emu/qemu/test-input.py "$(./emu/qemu/build.sh host)"
 
+# the terminal end to end: types over QMP, judges the character plane   (beast)
+python3 emu/qemu/test-terminal.py /tmp/qemu-final-build/qemu-system-m68k \
+    sw/boot/astra_boot.bin --image /tmp/part.img
+
 # emulator builds
 emu/qemu/build.sh host      # x86_64 / native
 emu/qemu/build.sh desktop   # with UI
