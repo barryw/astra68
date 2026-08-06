@@ -23,6 +23,13 @@ Three properties are the point:
 - The system's integrity never depends on the correctness of anything a person
   can edit.
 - A power user can bend the machine without being able to brick it.
+- **There is one way to do each thing.** Linux's flexibility is its most
+  expensive feature: configuration lives in four places, in three formats, with
+  two mechanisms to enable it, and the cost is paid by every person who has to
+  work out which one is in force. A 68030 with 32 MiB does not get to afford
+  that, and would not want it if it could. One place, one format, one
+  mechanism, every time — and where something is deliberately not offered, the
+  reason is written down rather than left as an absence.
 
 ---
 
@@ -208,12 +215,50 @@ smaller namespace and naming `APPS:` fails cleanly inside it. An entry fails
 only when its own program fails. Without this rule §3.4 would be a promise the
 manifest could not keep.
 
-### 3.3 The event sink starts first
+### 3.3 Services
+
+A **service** is a long-running program the system starts with authority it
+declares. It is not a command, which runs and exits, and not an application,
+which has documents and a single instance. Three kinds, three locations,
+one rule each.
+
+**The manifest is the only source of truth for what runs.** There is no runtime
+start, stop, enable, disable, or mask. Turning a service off is editing its
+line; the change takes effect at the next boot.
+
+This is justified by this machine specifically. The terminal is up **0.08
+seconds** after reset, measured, with a gate that fails the build at 1.00s. A
+reboot costs less than reading the manual for a service manager, so runtime
+manipulation buys almost nothing and costs a state machine — the one where
+systemd has *enabled*, *disabled*, *masked*, *static*, *started* and *stopped*,
+and no one can say which combination they are in. Here the question "is it
+running?" is answered by one file and one boot.
+
+A `service` command shows what is running, what failed to start and why, and
+edits the manifest when asked. It has no verbs that change the running set
+without changing the file.
+
+**User entries live in `CONFIG:startup`**, appended after the shipped sequence,
+and are never `required` — §7.
+
+**A service that dies is reported, not restarted.** Its clients hold handles to
+it; restarting silently would hand them a service that does not remember them,
+and the kernel already models the honest answer as `PEER_DEAD`. The system
+continues with the service absent, which on a single-user machine means the
+person is told that storage is gone rather than watching a restart loop.
+Automatic restart becomes meaningful when reconnection is designed, and that is
+not now.
+
+**There is no registrar.** A client reaches a service through a handle it was
+granted at launch, as `CLAUDE.md` already directs. Nothing looks a service up
+by name at runtime, so nothing can be impersonated by registering first.
+
+### 3.4 The event sink starts first
 
 It is what records the failures of everything after it. Before it exists,
 failures go to the console channel, which needs no service and no disk.
 
-### 3.4 A machine with no state volume still boots
+### 3.5 A machine with no state volume still boots
 
 Fresh disk, failed disk, first power-on: `SYS:` alone yields a working system.
 `EVENTS:` and `TEMP:` fall back to RAM, `CONFIG:` is absent and defaults apply,

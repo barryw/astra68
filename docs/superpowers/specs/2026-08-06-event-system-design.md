@@ -327,7 +327,45 @@ which is why the evidence is collected now.
 transport, not the store: history is bounded twice, by the ring for the live
 window and by the budgets for the durable one.
 
-## 9. What this changes in existing code
+## 9. Configuration, and turning it off
+
+One file, `events.conf`, in `DEFAULTS:` with overrides in `CONFIG:`. A level per
+subsystem and a global default; tier budgets; the boot ring's size. That is the
+whole surface. No filters, no pipelines, no routing rules, no plugin
+directory — an event system with a configuration language is a program nobody
+can predict, and §"Why this shape" of the layout spec says why that is not on
+offer.
+
+### 9.1 What "off" actually costs
+
+Three different things get called off, and they are not the same:
+
+| What | Cost of an event at a call site | What is lost |
+|---|---|---|
+| Subsystem level raised | one load, compare and branch | events below the level, from that subsystem |
+| Global level `off` | the same branch, everywhere | the machine's account of itself |
+| Not compiled in | nothing | requires rebuilding, so not available to a person with a shipped system |
+
+A person who turns events off gets the second row: **one branch per call site**,
+no syscall, no ring traffic, no service, no disk. Zero is only reachable by
+rebuilding, and this design does not pretend otherwise.
+
+Not starting the events *service* is a separate saving — a process, its memory
+and its disk writes — and it is a separate line in the manifest. Doing only
+that leaves call sites still paying for a syscall into a ring nobody drains,
+which is the worst of both and is worth saying out loud.
+
+### 9.2 A disabled log must never look like an empty one
+
+If capture is off, the machine says so — at boot, and in the `events` command's
+output, in place of the empty list it would otherwise print. Silence and
+nothing-happened are different facts and a machine that renders them
+identically is lying about the more important one.
+
+Hiding the switch would be worse than the switch. A person is allowed to turn
+this off; they are not allowed to be confused later about whether they did.
+
+## 10. What this changes in existing code
 
 | Piece | Change |
 |---|---|
@@ -339,7 +377,7 @@ window and by the budgets for the durable one.
 | Build | a step extracting descriptors into a catalog, for the kernel and per bundle |
 | `astra_assert_failed` | emits an event instead of formatting a line |
 
-## 10. Open questions
+## 11. Open questions
 
 - The actual numbers: tier budgets, token-bucket rates, the boot ring's N and
   M, and the coalescing window. All of them want measurement rather than
