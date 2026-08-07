@@ -170,6 +170,24 @@ static uint32_t shell_path_primary(const char *typed, uint32_t rights,
  * academic: a name that lives only on a read-only member must come back
  * "access denied", not "not found" -- the file is right there, and telling a
  * person it is absent when it is merely untouchable is the wrong refusal.
+ *
+ * Existence and permission are different questions, and resolving with the
+ * *operation's* rights used to ask them as one. astra_assign_resolve refuses
+ * ASTRA_VFS_ERR_ACCESS for a member whose bound rights do not cover what was
+ * requested, and it does that before any I/O -- so that refusal has told
+ * this function nothing about whether the member actually holds the name.
+ * Treating it as this function's own worst status anyway let a member that
+ * merely cannot be written outrun every other member's honest NOT_FOUND, so
+ * a name sitting on no member at all came back "access denied" instead of
+ * "not found": the exact failure this comment is here to keep from coming
+ * back. So every member is now resolved for existence only, with READ -- the
+ * same right `cd` and `cat` already ask for, since a name has to be readable
+ * to be found before anything decides whether it may also be acted on. Only
+ * once a stat confirms the name is really there is the caller's `rights`
+ * checked against the member that holds it; a member that has the name but
+ * not the right is remembered exactly like the read-only-member case above
+ * and the walk moves on, while a member that lacks even READ still refuses
+ * at resolve, unchanged.
  */
 static uint32_t shell_locate(const char *typed, uint32_t rights, char *wire,
                              uint32_t capacity, AstraVfsClient **client,
@@ -181,8 +199,9 @@ static uint32_t shell_locate(const char *typed, uint32_t rights, char *wire,
         const AstraAssign *assign = NULL;
         uint32_t status;
 
-        status = astra_assign_resolve(supervisor_assigns(), typed, rights,
-                                      member, wire, capacity, &assign);
+        status = astra_assign_resolve(supervisor_assigns(), typed,
+                                      ASTRA_RIGHT_READ, member, wire, capacity,
+                                      &assign);
         if (status == ASTRA_VFS_ERR_NOT_FOUND)
             return worst;
         if (status != ASTRA_VFS_OK) {
@@ -194,8 +213,20 @@ static uint32_t shell_locate(const char *typed, uint32_t rights, char *wire,
         if (*client == NULL)
             continue;
         status = astra_vfs_stat(*client, wire, NULL, kind);
-        if (status == ASTRA_VFS_OK)
+        if (status == ASTRA_VFS_OK) {
+            if ((assign->rights & rights) != rights) {
+                /*
+                 * It is here, but not writable (or otherwise usable as asked)
+                 * here -- not the same thing as absent, so this must not let
+                 * a later member's ordinary NOT_FOUND look like the final
+                 * word once none of them turn out to hold the name at all.
+                 */
+                if (worst == ASTRA_VFS_ERR_NOT_FOUND)
+                    worst = ASTRA_VFS_ERR_ACCESS;
+                continue;
+            }
             return ASTRA_VFS_OK;
+        }
         /*
          * Not on this member: the next one still might have it. But the same
          * worst-status rule applies to a stat that failed for its own reason

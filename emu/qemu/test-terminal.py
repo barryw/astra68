@@ -120,6 +120,23 @@ SCRIPT = [
     # the original. The fix locates the holder before opening, so this must
     # report the refusal the read-only member actually gives.
     ("write commands:status no", "access denied"),
+    # The mirror case: a name on *no* member of COMMANDS: at all. The line
+    # above proves a name that genuinely exists, on a member that cannot
+    # take a write, is refused; this one proves a name nobody has yet still
+    # gets created -- on member 0, the only member willing to take it --
+    # rather than being refused by the same "access denied" the read-only
+    # member earns further down the walk.
+    ("write commands:brandnew text", "brandnew"),
+    # Where it landed, not merely that something happened: member 0 is
+    # /local/commands, the writable member, and this is the only place a
+    # name that was on no member could have gone.
+    ("ls commands:", "brandnew  [0]"),
+    # And the milder failure the same conflation caused in `rm`: a name on
+    # no member at all must be reported "not found", not "access denied" --
+    # a member refusing on rights alone has said nothing about whether the
+    # name is there, and mistaking that refusal for the answer is exactly
+    # the bug the two lines above also guard against.
+    ("rm commands:doesnotexist", "not found"),
     # And the one that used to be a hang waiting to happen: a name that is not
     # a builtin and is not a file. Two places are looked in, both top level
     # only, and then it says so.
