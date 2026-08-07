@@ -6875,6 +6875,71 @@ static void test_a_program_can_launch_a_program(void)
     assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
 
     /*
+     * The root each grant carries is validated the same way the name and
+     * rights are: before anything is built, and regardless of what else about
+     * the grant is fine. `grant` is otherwise fully valid here -- a handle the
+     * caller holds, a right it actually has -- so a rejection below can only
+     * be the root.
+     */
+    grant.handle = send_handle;
+    grant.rights = ASTRA_RIGHT_READ;
+    grant.flags = 0u;
+
+    /* A root that is nothing but a climb. */
+    memset(grant.root, 0, sizeof(grant.root));
+    memcpy(grant.root, "..", 3u);
+    assert(kernel_user_copy_to_asm(user_grants, &grant, sizeof(grant)) ==
+           KERNEL_USER_COPY_OK);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    /* A `..` component further in is still a climb, not only a leading one. */
+    memset(grant.root, 0, sizeof(grant.root));
+    memcpy(grant.root, "a/../b", 7u);
+    assert(kernel_user_copy_to_asm(user_grants, &grant, sizeof(grant)) ==
+           KERNEL_USER_COPY_OK);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    /*
+     * A leading separator is the mount's own root spelled the wrong way -- the
+     * empty string already says that, and this field does not get a second
+     * spelling for it.
+     */
+    memset(grant.root, 0, sizeof(grant.root));
+    memcpy(grant.root, "/commands", 10u);
+    assert(kernel_user_copy_to_asm(user_grants, &grant, sizeof(grant)) ==
+           KERNEL_USER_COPY_OK);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    /*
+     * A root with no NUL in it is not a C string. The field is exactly
+     * ASTRA_CAPABILITY_ROOT_MAX wide, so filling every byte leaves no room for
+     * a terminator, and reading it as one would run past the record.
+     */
+    memset(grant.root, 'x', sizeof(grant.root));
+    assert(kernel_user_copy_to_asm(user_grants, &grant, sizeof(grant)) ==
+           KERNEL_USER_COPY_OK);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    /*
+     * Restored to the empty root the rest of this test relies on -- nothing
+     * below is exercising this field, and it must keep reaching the results
+     * it already asserts.
+     */
+    memset(grant.root, 0, sizeof(grant.root));
+
+    /*
      * A port, which is how a child is handed a service. The send endpoint is
      * cloneable and the receive one is not: publishing a service is handing out
      * senders, and a second receive handle would be a second service on one
@@ -6935,6 +7000,12 @@ static void test_a_program_can_launch_a_program(void)
 
     /* And a subset of it is granted, which is what a child's namespace is. */
     grant.flags = ASTRA_CAPABILITY_FLAG_NAMESPACE;
+    /*
+     * A legitimate root rides along and changes nothing here -- proving the
+     * refusals above were about the roots that climbed or claimed a mount's
+     * own top, and not that every root is rejected.
+     */
+    memcpy(grant.root, "local/commands", 15u);
     assert(kernel_user_copy_to_asm(user_grants, &grant, sizeof(grant)) ==
            KERNEL_USER_COPY_OK);
     assert(kernel_process_on_syscall(registers,

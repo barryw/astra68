@@ -2407,7 +2407,15 @@ static KernelProcessStatus publish_startup_block(
     KernelHandle thread_handle, const AstraStartupCapability *bootstrap,
     uint32_t bootstrap_count, const AstraLaunchArguments *arguments)
 {
-    uint8_t page[ASTRA_STARTUP_INFO_SIZE +
+    /*
+     * _Alignas(4): AstraStartupCapability's widest member is a uint32_t, and
+     * ASTRA_STARTUP_INFO_SIZE is itself a multiple of 4, so an aligned page
+     * keeps the cast below aligned too. Without this the array is a plain
+     * uint8_t[] with no alignment guarantee, and the cast through (void *)
+     * would silence -Wcast-align without making the access safe -- on a
+     * 68030 a misaligned access faults rather than merely costing cycles.
+     */
+    _Alignas(4) uint8_t page[ASTRA_STARTUP_INFO_SIZE +
                  (STARTUP_CAPABILITY_TOTAL_MAX *
                   ASTRA_STARTUP_CAPABILITY_SIZE) +
                  (ASTRA_LAUNCH_ARGUMENT_MAX * 4u) +
