@@ -141,9 +141,10 @@ test_unbinding_keeps_the_rest_reachable(void)
     AstraAssignTable table;
 
     /*
-     * Unbinding moves the last entry into the hole, so the entry that moved
-     * has to remain findable. A table that loses a name when a different one
-     * is removed is worse than one that cannot remove at all.
+     * Unbinding shifts the remaining entries down, so the entries that moved
+     * have to remain findable at their new positions. A table that loses a
+     * name when a different one is removed is worse than one that cannot
+     * remove at all.
      */
     astra_assign_table_init(&table);
     assert(astra_assign_bind(&table, "SYS", 1u, 1u, "") == ASTRA_VFS_OK);
@@ -511,14 +512,24 @@ test_unbinding_a_union_keeps_the_order_of_the_rest(void)
     AstraAssignTable table;
 
     astra_assign_table_init(&table);
+    /*
+     * COMMANDS's two members are bound after WORK, so its second member ends
+     * up as the table's last entry. Unbinding WORK opens a hole earlier in
+     * the table than either member: the deleted algorithm compacted a hole
+     * by copying the last entry into it, which would have dropped the
+     * second member into WORK's old slot, ahead of the first member --
+     * inverting the two members' order. Shifting down instead leaves every
+     * survivor, members included, in the order it was bound. (SYS is bound
+     * first only so WORK is not itself the table's last entry.)
+     */
+    assert(astra_assign_bind(&table, "SYS", 4u, ASTRA_RIGHT_READ, "") ==
+           ASTRA_VFS_OK);
     assert(astra_assign_bind(&table, "WORK", 1u, ASTRA_RIGHT_READ, "work") ==
            ASTRA_VFS_OK);
     assert(astra_assign_bind(&table, "COMMANDS", 2u, ASTRA_RIGHT_READ,
                              "local/commands") == ASTRA_VFS_OK);
     assert(astra_assign_join(&table, "COMMANDS", 3u, ASTRA_RIGHT_READ,
                              "commands") == ASTRA_VFS_OK);
-    assert(astra_assign_bind(&table, "SYS", 4u, ASTRA_RIGHT_READ, "") ==
-           ASTRA_VFS_OK);
 
     /* Removing a name removes every member of it, and nothing else moves. */
     assert(astra_assign_unbind(&table, "WORK") == ASTRA_VFS_OK);
