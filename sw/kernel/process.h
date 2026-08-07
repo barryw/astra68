@@ -287,13 +287,12 @@ KernelProcessStatus kernel_process_create(const void *image,
  * from a depth that says nothing about which grant or why. It stayed latent
  * for four tasks because nothing granted more than three.
  *
- * They are one number now, and the assertion is what keeps them one.
+ * They are one number now: this is defined as `ASTRA_LAUNCH_GRANT_MAX`
+ * itself, textually, rather than a separate constant kept equal to it. The
+ * alias is what makes them one number; there is nothing left for an assert
+ * to check.
  */
 #define KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX ASTRA_LAUNCH_GRANT_MAX
-
-_Static_assert(KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX ==
-                   ASTRA_LAUNCH_GRANT_MAX,
-               "the loader's ceiling and the launch ABI's must be one number");
 
 /*
  * What one process can be holding at once, and why the handle table is the

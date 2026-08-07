@@ -44,6 +44,9 @@
  * namespace needed, which is how a ceiling becomes a surprise.
  */
 #define ASTRA_LAUNCH_GRANT_MAX 8u
+_Static_assert(ASTRA_LAUNCH_GRANT_MAX == 8u,
+               "the grant ceiling is ABI: a child's capability table and "
+               "every array sized by it are laid out from this number");
 #define ASTRA_LAUNCH_ARGUMENT_MAX 8u
 #define ASTRA_LAUNCH_ARGUMENT_BYTES 192u
 
