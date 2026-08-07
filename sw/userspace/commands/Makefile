@@ -31,7 +31,7 @@ STREAMS_LIB := $(STREAMS)/build/m68k/libastrastreams.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
 RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0.o
 
-COMMANDS := status events
+COMMANDS := status events devices
 # What the gate installs on the volume: stripped, the way the ROM's own image
 # is, because a command carries no more DWARF onto a card than the supervisor
 # carries into ROM. The unstripped ELF stays beside it for a debugger.

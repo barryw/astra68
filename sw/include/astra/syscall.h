@@ -3,7 +3,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x0001000b
+#define ASTRA_SYSCALL_ABI_VERSION 0x0001000c
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -104,6 +104,7 @@
  * touch is what somebody wrote down.
  */
 #define ASTRA_SYSCALL_PROCESS_CREATE   48
+#define ASTRA_SYSCALL_IRQ_ENDPOINT_INFO 49
 
 /*
  * The most one call copies. Small on purpose: a drain is a bounded page and a
@@ -194,6 +195,28 @@
 #define ASTRA_WAIT_INDEX_NONE 0xffffffff
 
 #define ASTRA_IRQ_RECORD_SIZE 16u
+#define ASTRA_IRQ_ENDPOINT_INFO_SIZE 36u
+
+/*
+ * The states an endpoint can be in, as ASTRA_SYSCALL_IRQ_ENDPOINT_INFO reports
+ * them. They are the kernel's own, published so that a program reading the
+ * surface renders a word rather than a number.
+ */
+#define ASTRA_IRQ_ENDPOINT_FREE     0u
+#define ASTRA_IRQ_ENDPOINT_MASKED   1u
+#define ASTRA_IRQ_ENDPOINT_ARMED    2u
+#define ASTRA_IRQ_ENDPOINT_PENDING  3u
+#define ASTRA_IRQ_ENDPOINT_REVOKING 4u
+
+/*
+ * Why an endpoint stopped serving, if it did. These are sticky: an endpoint
+ * carrying any of them answers every read with the matching status until
+ * something recovers it, which is the whole reason this surface exists -- a
+ * quarantined device is otherwise indistinguishable from an idle one.
+ */
+#define ASTRA_IRQ_ENDPOINT_EVENT_OVERFLOW     (1u << 0)
+#define ASTRA_IRQ_ENDPOINT_EVENT_STORM        (1u << 1)
+#define ASTRA_IRQ_ENDPOINT_EVENT_DEVICE_ERROR (1u << 2)
 #define ASTRA_IRQ_EVENT_OVERFLOW     (1u << 0)
 #define ASTRA_IRQ_EVENT_STORM        (1u << 1)
 #define ASTRA_IRQ_EVENT_DEVICE_ERROR (1u << 2)
@@ -268,6 +291,34 @@ typedef struct AstraDmaBufferInfo {
     uint32_t page_count;
 } AstraDmaBufferInfo;
 
+/*
+ * What an interrupt endpoint is doing, and whether it is still doing it.
+ *
+ * A device that quarantines itself goes on looking exactly like a device
+ * nobody is using: the handles are still open, the driver is still calling,
+ * and every call comes back with an I/O error whose cause is three layers
+ * down. This is the surface that tells them apart, and `event_flags` is the
+ * field that does it.
+ */
+typedef struct AstraIrqEndpointInfo {
+    _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t size;
+    uint32_t owner;          /* process id, or zero when the slot is free */
+    uint32_t generation;
+    uint32_t delivered;
+    uint32_t acknowledged;
+    uint32_t dropped;
+    uint16_t references;
+    uint16_t waiters;
+    uint8_t source;
+    uint8_t state;           /* ASTRA_IRQ_ENDPOINT_* */
+    uint8_t trigger;
+    uint8_t ipl;
+    uint8_t pending_records;
+    uint8_t event_flags;     /* ASTRA_IRQ_ENDPOINT_EVENT_* */
+    uint8_t consecutive;
+    uint8_t reserved;
+} AstraIrqEndpointInfo;
+
 typedef struct AstraDeviceInfo {
     _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t size;
     uint32_t device_id;
@@ -287,6 +338,11 @@ _Static_assert(sizeof(AstraDmaBufferInfo) == ASTRA_DMA_BUFFER_INFO_SIZE,
 
 _Static_assert(sizeof(AstraIrqRecord) == ASTRA_IRQ_RECORD_SIZE,
                "IRQ record ABI size changed");
+
+_Static_assert(sizeof(AstraIrqEndpointInfo) == ASTRA_IRQ_ENDPOINT_INFO_SIZE,
+               "IRQ endpoint-info ABI size changed");
+_Static_assert(_Alignof(AstraIrqEndpointInfo) % ASTRA_ABI_ALIGNMENT == 0u,
+               "IRQ endpoint-info must satisfy the syscall alignment rule");
 
 /*
  * The refusal these prevent is silent at the call site, so it is caught at

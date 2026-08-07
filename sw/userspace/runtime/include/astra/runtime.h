@@ -150,6 +150,9 @@ uint32_t astra_activity_current(void);
  * Emitting needs no capability and reading does, because reading is every
  * process's events at once.
  */
+uint32_t astra_irq_endpoint_info(uint32_t process_handle, uint32_t slot,
+                                 AstraIrqEndpointInfo *info,
+                                 uint32_t *slots);
 uint32_t astra_trace_read(uint32_t process_handle, uint32_t *cursor,
                           AstraEventDrained *events, uint32_t capacity,
                           uint32_t *copied, uint32_t *lost);

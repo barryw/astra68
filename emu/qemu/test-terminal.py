@@ -104,6 +104,11 @@ SCRIPT = [
     # only, and then it says so.
     ("nosuchthing", "not a command"),
     ("events --boot -1", "the store is RAM"),
+    # What the machine's interrupt endpoints are doing, asked from the prompt.
+    # Before this existed a device that quarantined itself was invisible: it
+    # looked exactly like a device nobody was using, and every call against it
+    # came back with an I/O error three layers from its cause.
+    ("devices", "delivered"),
 ]
 
 QCODE = {" ": "spc", "\n": "ret", "/": "slash", ".": "dot", "-": "minus"}
@@ -341,6 +346,28 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
                     return 1
                 if verbose:
                     print("ok: %r -> %r" % (line, expected))
+
+            # And no endpoint is quarantined.
+            #
+            # These three flags are sticky: an endpoint carrying one answers
+            # every read with it until something recovers the endpoint, so a
+            # single one here means a device is gone for the rest of the boot.
+            # A storm quarantine on healthy storage is what made this gate fail
+            # about half its runs, from a burst of transfers that were all
+            # being serviced correctly -- so the table is read rather than only
+            # rendered.
+            rows = machine.screen()
+            stuck = [row for row in rows
+                     if any(flag in row for flag in
+                            ("storm", "device-error", "overflow"))]
+            if stuck:
+                print("FAIL: an endpoint is quarantined")
+                for row in stuck:
+                    print("    |%s|" % row)
+                dump_ring(machine)
+                return 1
+            if verbose:
+                print("ok: no endpoint is quarantined")
 
             # What a program said, before what this shell says about it.
             #

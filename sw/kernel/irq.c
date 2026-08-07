@@ -1386,6 +1386,59 @@ bool kernel_irq_snapshot(uint32_t slot, KernelIrqSnapshot *snapshot)
     return true;
 }
 
+/*
+ * The two spellings of an endpoint's state and its sticky events are one
+ * numbering, and these are what keep them one. They are separate definitions
+ * because the kernel's are internal and userspace's are ABI, and a renumbering
+ * on either side would otherwise be a silent misreport rather than a build
+ * failure.
+ */
+_Static_assert((int)KERNEL_IRQ_FREE == (int)ASTRA_IRQ_ENDPOINT_FREE &&
+                   (int)KERNEL_IRQ_MASKED == (int)ASTRA_IRQ_ENDPOINT_MASKED &&
+                   (int)KERNEL_IRQ_ARMED == (int)ASTRA_IRQ_ENDPOINT_ARMED &&
+                   (int)KERNEL_IRQ_PENDING == (int)ASTRA_IRQ_ENDPOINT_PENDING &&
+                   (int)KERNEL_IRQ_REVOKING ==
+                       (int)ASTRA_IRQ_ENDPOINT_REVOKING,
+               "endpoint states must mean the same on both sides of the ABI");
+_Static_assert(KERNEL_IRQ_EVENT_OVERFLOW == ASTRA_IRQ_ENDPOINT_EVENT_OVERFLOW &&
+                   KERNEL_IRQ_EVENT_STORM == ASTRA_IRQ_ENDPOINT_EVENT_STORM &&
+                   KERNEL_IRQ_EVENT_DEVICE_ERROR ==
+                       ASTRA_IRQ_ENDPOINT_EVENT_DEVICE_ERROR,
+               "endpoint events must mean the same on both sides of the ABI");
+
+bool kernel_irq_endpoint_info(uint32_t slot, AstraIrqEndpointInfo *info)
+{
+    KernelIrqSnapshot snapshot;
+
+    if (info == NULL || slot >= KERNEL_IRQ_ENDPOINT_MAX)
+        return false;
+    kernel_bytes_clear(info, sizeof(*info));
+    info->size = ASTRA_IRQ_ENDPOINT_INFO_SIZE;
+    if (!kernel_irq_snapshot(slot, &snapshot))
+        return false;
+    /*
+     * A free slot answers with its size and nothing else. Iterating callers
+     * read the owner to know whether the rest means anything.
+     */
+    if (snapshot.owner == 0u || endpoints[slot].state == KERNEL_IRQ_FREE)
+        return true;
+    info->owner = snapshot.owner;
+    info->generation = snapshot.generation;
+    info->delivered = snapshot.delivered;
+    info->acknowledged = snapshot.acknowledged;
+    info->dropped = snapshot.dropped;
+    info->references = snapshot.references;
+    info->waiters = snapshot.waiters;
+    info->source = snapshot.source;
+    info->state = snapshot.state;
+    info->trigger = snapshot.trigger;
+    info->ipl = snapshot.ipl;
+    info->pending_records = snapshot.pending_records;
+    info->event_flags = snapshot.event_flags;
+    info->consecutive = snapshot.consecutive;
+    return true;
+}
+
 bool kernel_irq_pool_stats(KernelIrqPoolStats *stats)
 {
     if (stats == NULL || pool_initialized == 0u)

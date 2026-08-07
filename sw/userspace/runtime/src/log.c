@@ -57,6 +57,28 @@ astra_trace_read(uint32_t process_handle, uint32_t *cursor,
     return ASTRA_SYSCALL_OK;
 }
 
+/*
+ * What an interrupt endpoint is doing, for a program that has the diagnostic
+ * capability. `slots` is filled on every call, including a refused one, so a
+ * caller sizes its loop from the machine rather than from a constant.
+ */
+uint32_t
+astra_irq_endpoint_info(uint32_t process_handle, uint32_t slot,
+                        AstraIrqEndpointInfo *info, uint32_t *slots)
+{
+    AstraSyscallResult result;
+
+    if (info == NULL) {
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    astra_syscall5(ASTRA_SYSCALL_IRQ_ENDPOINT_INFO, process_handle, slot,
+                   (uint32_t)(uintptr_t)info, 0u, 0u, &result);
+    if (slots != NULL) {
+        *slots = result.value0;
+    }
+    return result.status;
+}
+
 uint32_t
 astra_log_write(const void *bytes, uint32_t length)
 {
