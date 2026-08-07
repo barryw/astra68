@@ -141,12 +141,51 @@ SCRIPT = [
     # a builtin and is not a file. Two places are looked in, both top level
     # only, and then it says so.
     ("nosuchthing", "not a command"),
-    ("events --boot -1", "the store is RAM"),
     # What the machine's interrupt endpoints are doing, asked from the prompt.
     # Before this existed a device that quarantined itself was invisible: it
     # looked exactly like a device nobody was using, and every call against it
     # came back with an I/O error three layers from its cause.
-    ("devices", "delivered"),
+    #
+    # Read through SYS:, not the bare name: the gate now installs a shadow
+    # under this same name on COMMANDS:'s writable member (below), and a bare
+    # `devices` or a `COMMANDS:devices` walks that union's members in the same
+    # order either way, member 0 first -- so both would now launch the shadow,
+    # not this program. SYS: is one mount of the whole volume, not a union, and
+    # reaches the shipped binary directly, which is what this line is actually
+    # here to run.
+    ("sys:commands/devices", "delivered"),
+    # The namespace printed back, and the whole of the order a lookup uses.
+    # Before this existed the search order was a comment in one function.
+    ("assign", "local/commands"),
+    # A child resolving through a union it was granted. `which` holds COMMANDS:
+    # as two grants with two roots and loops them with the same Kit function
+    # the shell uses -- so this line is the roots-in-grants fix and the union
+    # crossing a process boundary at once. `status` is only on the shipped
+    # member, so member 1 is the honest answer.
+    ("which status", "/commands/status [1]"),
+    # And the shadowing. The gate installed a `devices` into the writable
+    # member, so the person's own copy is what a lookup finds -- member 0,
+    # ahead of the shipped one.
+    ("which devices", "/local/commands/devices [0]"),
+    # Which is also what runs: the shadowing copy is `which`'s image under
+    # another name, so it answers the way `which` does rather than the way the
+    # shipped `devices` does.
+    ("devices status", "/commands/status [1]"),
+    # Both members listed, nothing deduplicated. The line above already proves
+    # a lookup finds the writable member's `devices` first; this proves `ls`
+    # still shows the shipped member's `devices` too -- checked by name and
+    # member rather than by the bare "[1]" every other row here would also
+    # satisfy, since a listing that quietly dropped the loser would read no
+    # differently from one that never had it.
+    ("ls commands:", "devices  [1]"),
+    # Last on purpose. `run()` reads the *current* screen after SCRIPT finishes
+    # to check that this line's own output and the shell's report of its exit
+    # are still on it and in order (see the child-order check below) -- the
+    # terminal is 30 rows and five new commands' worth of listings sit between
+    # here and where this line used to be, which was enough to scroll that
+    # output off before the check ever read it. Run last, its output is what
+    # the check finds.
+    ("events --boot -1", "the store is RAM"),
 ]
 
 QCODE = {" ": "spc", "\n": "ret", "/": "slash", ".": "dot", "-": "minus"}
