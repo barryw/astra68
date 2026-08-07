@@ -535,22 +535,50 @@ static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
 {
     static const char *const places[] = {"APPS:", "COMMANDS:"};
     char typed[SHELL_PATH_MAX];
-    const AstraAssign *assign = NULL;
     uint32_t status = ASTRA_VFS_ERR_NOT_FOUND;
 
     for (uint32_t index = 0u; word[index] != '\0'; ++index) {
         if (word[index] != ':') {
             continue;
         }
-        /* Named its own assign: one place, no search, and answerable. */
-        status = astra_assign_resolve(supervisor_assigns(), word,
-                                      ASTRA_RIGHT_READ, 0u, wire, capacity,
-                                      &assign);
-        if (status != ASTRA_VFS_OK) {
-            return status;
+        /*
+         * Named its own assign: one place, no search -- but the assign it
+         * names can still be a union, and `COMMANDS:status` typed out is the
+         * same lookup a bare `status` would have done through the COMMANDS:
+         * place, so it walks members the same way.
+         */
+        for (uint32_t member = 0u; ; ++member) {
+            const AstraAssign *found = NULL;
+
+            status = astra_assign_resolve(supervisor_assigns(), word,
+                                          ASTRA_RIGHT_READ, member, wire,
+                                          capacity, &found);
+            if (status == ASTRA_VFS_ERR_NOT_FOUND) {
+                return status;    /* past the last member: nothing named it */
+            }
+            if (status != ASTRA_VFS_OK) {
+                continue;
+            }
+            *client = supervisor_vfs_client_for(found);
+            if (*client == NULL) {
+                continue;
+            }
+            {
+                uint16_t kind = 0u;
+
+                if (astra_vfs_stat(*client, wire, NULL, &kind) !=
+                    ASTRA_VFS_OK) {
+                    continue;   /* not on this member: try the next */
+                }
+                if (kind == ASTRA_VFS_KIND_DIRECTORY) {
+                    continue;   /* a directory is not a command */
+                }
+            }
+            ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL,
+                         ASTRA_EVENT_LEVEL_NOTICE,
+                         "launching named directly, member %u", member);
+            return ASTRA_VFS_OK;
         }
-        *client = supervisor_vfs_client_for(assign);
-        return *client != NULL ? ASTRA_VFS_OK : ASTRA_VFS_ERR_NOT_FOUND;
     }
 
     for (uint32_t place = 0u; place < 2u; ++place) {
@@ -566,14 +594,42 @@ static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
             typed[length++] = word[index];
         }
         typed[length] = '\0';
-        status = astra_assign_resolve(supervisor_assigns(), typed,
-                                      ASTRA_RIGHT_READ, 0u, wire, capacity,
-                                      &assign);
-        if (status != ASTRA_VFS_OK) {
-            continue;   /* not bound, or not there: try the next place */
-        }
-        *client = supervisor_vfs_client_for(assign);
-        if (*client != NULL) {
+        /*
+         * Every member of the place, in order, and the first that opens wins.
+         * The index is the answer to "which one ran": a path variable cannot
+         * answer that question, and a union is holding it by the time the
+         * child starts.
+         */
+        for (uint32_t member = 0u; ; ++member) {
+            const AstraAssign *found = NULL;
+
+            status = astra_assign_resolve(supervisor_assigns(), typed,
+                                          ASTRA_RIGHT_READ, member, wire,
+                                          capacity, &found);
+            if (status == ASTRA_VFS_ERR_NOT_FOUND) {
+                break;      /* past the last member: try the next place */
+            }
+            if (status != ASTRA_VFS_OK) {
+                continue;
+            }
+            *client = supervisor_vfs_client_for(found);
+            if (*client == NULL) {
+                continue;
+            }
+            {
+                uint16_t kind = 0u;
+
+                if (astra_vfs_stat(*client, wire, NULL, &kind) !=
+                    ASTRA_VFS_OK) {
+                    continue;   /* not on this member: try the next */
+                }
+                if (kind == ASTRA_VFS_KIND_DIRECTORY) {
+                    continue;   /* a directory is not a command */
+                }
+            }
+            ASTRA_EVENT2(ASTRA_EVENT_SUBSYSTEM_SHELL,
+                         ASTRA_EVENT_LEVEL_NOTICE,
+                         "launching from place %u member %u", place, member);
             return ASTRA_VFS_OK;
         }
     }
@@ -583,9 +639,10 @@ static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
 /*
  * The grants a launched command is handed: three streams, and a namespace.
  *
- * `ASTRA_LAUNCH_GRANT_MAX` is six and this uses all six, which is a fact worth
- * stating rather than discovering. **`SYS:` is the one left out**, deliberately:
- * a command needs somewhere to read its own data, somewhere to write, and its
+ * `ASTRA_LAUNCH_GRANT_MAX` is eight and this uses all seven -- three streams
+ * plus WORK, two COMMANDS members and EVENTS -- which is a fact worth stating
+ * rather than discovering. **`SYS:` is the one left out**, deliberately: a
+ * command needs somewhere to read its own data, somewhere to write, and its
  * history, and it does not need the whole volume. The day something does, the
  * ceiling is what has to move, and moving it is a decision rather than an
  * accident.
@@ -601,8 +658,6 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
     static const char *const stream_names[] = {"STDOUT", "STDERR", "STDIN"};
     static const char *const mount_names[] = {"WORK", "COMMANDS", "EVENTS"};
     uint32_t streams[3];
-    uint32_t mounts[3];
-    uint32_t mount_flags[3];
     uint32_t count = 0u;
 
     streams[0] = console_stream_stdout();
@@ -622,51 +677,35 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
     }
 
     /*
-     * The namespace. A grant names a service's port and the rights the child
-     * may use it with, and those rights are a copy of what this process holds
-     * on the same binding -- a launch creates no authority, so a child cannot
-     * be given a writable COMMANDS: by a shell that only has a readable one.
+     * The namespace, member by member. A name with two members is granted
+     * twice, in order, because a member is a repeated name on both sides of a
+     * launch -- and a child that was handed only the first member would be a
+     * child whose COMMANDS: quietly means less than the prompt's.
+     *
+     * The root travels now, so a child's COMMANDS: means the directory it was
+     * granted rather than the whole volume.
      */
-    mounts[0] = supervisor_vfs_port();
-    mounts[1] = supervisor_vfs_port();
-    mounts[2] = supervisor_events_port();
-    for (uint32_t index = 0u; index < 3u; ++index) {
-        const AstraAssign *assign = astra_assign_lookup(supervisor_assigns(),
-                                                        mount_names[index]);
-
-        /*
-         * A launch creates no authority, so what a child may do with a mount
-         * is a copy of what this process may do with it -- never more. A shell
-         * holding a readable COMMANDS: cannot grant a writable one.
-         */
-        mount_flags[index] = ASTRA_CAPABILITY_FLAG_NAMESPACE;
-        if (assign == NULL) {
-            mounts[index] = 0u;
-            continue;
-        }
-        if ((assign->rights & ASTRA_RIGHT_READ) != 0u) {
-            mount_flags[index] |= ASTRA_CAPABILITY_FLAG_READ;
-        }
-        if ((assign->rights & ASTRA_RIGHT_WRITE) != 0u) {
-            mount_flags[index] |= ASTRA_CAPABILITY_FLAG_WRITE;
-        }
-    }
     for (uint32_t index = 0u; index < 3u && count < ASTRA_LAUNCH_GRANT_MAX;
          ++index) {
-        if (mounts[index] == 0u) {
-            continue;
+        for (uint32_t member = 0u; count < ASTRA_LAUNCH_GRANT_MAX; ++member) {
+            const AstraAssign *assign =
+                astra_assign_member(supervisor_assigns(), mount_names[index],
+                                    member);
+
+            if (assign == NULL) {
+                break;
+            }
+            astra_capability_name_set(grants[count].name, mount_names[index]);
+            grants[count].handle = assign->handle;
+            grants[count].rights = ASTRA_RIGHT_SIGNAL;
+            grants[count].flags = ASTRA_CAPABILITY_FLAG_NAMESPACE |
+                ((assign->rights & ASTRA_RIGHT_READ) != 0u ?
+                     ASTRA_CAPABILITY_FLAG_READ : 0u) |
+                ((assign->rights & ASTRA_RIGHT_WRITE) != 0u ?
+                     ASTRA_CAPABILITY_FLAG_WRITE : 0u);
+            astra_capability_root_set(grants[count].root, assign->root);
+            ++count;
         }
-        astra_capability_name_set(grants[count].name, mount_names[index]);
-        grants[count].handle = mounts[index];
-        /*
-         * SIGNAL and nothing else. What the child may *do* with the mount
-         * travels in the flags, because "may write files" is not an authority
-         * a port carries and asking the kernel for it is refused -- correctly,
-         * since there is no such thing to give.
-         */
-        grants[count].rights = ASTRA_RIGHT_SIGNAL;
-        grants[count].flags = mount_flags[index];
-        ++count;
     }
     return count;
 }

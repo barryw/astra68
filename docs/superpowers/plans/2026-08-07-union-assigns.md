@@ -1394,16 +1394,28 @@ git commit -m "feat(vfs): the Kit tries a union's members, because the Kit has t
 
 ---
 
-### Task 6: The supervisor's two members
+### Task 6: The supervisor's two members, and the walk over them
+
+**Amended during execution (2026-08-07).** This task originally stopped at
+binding the union and granting both members, leaving the shell's member walk to
+task 7. That split does not survive a boot: the moment `COMMANDS:` gains
+`local/commands` as member 0, a `launch_path` that resolves only member 0 finds
+an empty directory, and **every bare command name on the machine becomes "not a
+command"**. The gate caught it at 10 of 22. Binding a union and looking in all
+of it are one deliverable, so task 7's step 1 is folded in here and task 7 keeps
+the listing and the `assign` builtin.
 
 **Files:**
 - Modify: `sw/userspace/supervisor/src/vfs_host.c:59-113` (`bind_standard_assigns`)
 - Modify: `sw/userspace/supervisor/src/console_shell.c:599-...` (`launch_grants`)
+- Modify: `sw/userspace/supervisor/src/console_shell.c:556-579` (`launch_path`,
+  the step moved from task 7)
 
 **Interfaces:**
-- Consumes: `astra_assign_join` (task 3), `AstraLaunchGrant.root` (task 1).
-- Produces: a `COMMANDS:` with two members in the supervisor's table, and a
-  launch that grants both.
+- Consumes: `astra_assign_join`, `astra_assign_member` (task 3),
+  `AstraLaunchGrant.root` (task 1).
+- Produces: a `COMMANDS:` with two members in the supervisor's table, a launch
+  that grants both, and a shell that tries every member of each place.
 
 - [ ] **Step 1: Bind the union**
 
@@ -1532,17 +1544,22 @@ git commit -m "feat(supervisor): COMMANDS: is two members, the person's first"
 
 ---
 
-### Task 7: The shell — lookup, listing, and `assign`
+### Task 7: The shell — listing, and `assign`
 
 **Files:**
-- Modify: `sw/userspace/supervisor/src/console_shell.c` (`launch_path`,
-  `command_ls`, a new `command_assign`, the builtin table and the help line)
+- Modify: `sw/userspace/supervisor/src/console_shell.c` (`command_ls`, a new
+  `command_assign`, the builtin chain and the help line)
 
 **Interfaces:**
 - Consumes: `astra_assign_member` (task 3), `astra_vfs_assign_open` (task 5).
 - Produces: nothing later tasks call; the gate reads its output.
 
-- [ ] **Step 1: Loop the members in `launch_path`**
+- [ ] ~~**Step 1: Loop the members in `launch_path`**~~ **— moved into task 6.**
+
+A `COMMANDS:` bound with two members and a shell that looks in only the first
+is a machine where no bare name runs at all, so this cannot land a task later
+than the bind. It is task 6's now; the code below is kept as the record of what
+was specified.
 
 Replace the two-place loop in `launch_path` (`console_shell.c:556-579`) with
 one that walks members inside each place, and report which member answered:

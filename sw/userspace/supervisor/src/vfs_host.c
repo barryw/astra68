@@ -86,20 +86,53 @@ bind_standard_assigns(void)
                      "WORK: unbound, mkdir refused with status %u", status);
     }
     /*
-     * Where programs live, and read-only because that is what stops a person
-     * breaking the machine by editing a file. The same shape WORK: has: made
-     * if it is missing, because a volume with no commands directory has not
-     * had one installed yet, and omitted rather than fatal if it refuses.
+     * Where programs live, and a union: the person's own directory first, then
+     * the shipped one. A name found in `local/commands` shadows the command
+     * the system shipped, which is what override means -- and the shadowing is
+     * visible, because a listing shows both and a launch records which member
+     * answered.
+     *
+     * Both members are made if they are missing and omitted rather than fatal
+     * if the volume refuses, the same shape WORK: has. A volume with no
+     * commands directory has not had one installed yet.
      */
-    status = astra_vfs_mkdir(&vfs_client, "/commands");
+    status = astra_vfs_mkdir(&vfs_client, "/local");
+    if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
+        status = astra_vfs_mkdir(&vfs_client, "/local/commands");
+    }
     if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
         (void)astra_assign_bind(&vfs_assigns, "COMMANDS", vfs_handle,
-                                ASTRA_RIGHT_READ, "commands");
+                                ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE,
+                                "local/commands");
+    } else {
+        /*
+         * Said once, and the union keeps working. A name that silently returns
+         * less than it did yesterday is worse than a name that says why.
+         */
+        ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
+                     ASTRA_EVENT_LEVEL_WARNING,
+                     "COMMANDS: local member skipped, mkdir refused with "
+                     "status %u", status);
+    }
+    status = astra_vfs_mkdir(&vfs_client, "/commands");
+    if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
+        /*
+         * Bind if the first member never made it, join if it did: the shipped
+         * member answers on its own rather than the name vanishing with the
+         * writable one.
+         */
+        if (astra_assign_lookup(&vfs_assigns, "COMMANDS") == NULL) {
+            (void)astra_assign_bind(&vfs_assigns, "COMMANDS", vfs_handle,
+                                    ASTRA_RIGHT_READ, "commands");
+        } else {
+            (void)astra_assign_join(&vfs_assigns, "COMMANDS", vfs_handle,
+                                    ASTRA_RIGHT_READ, "commands");
+        }
     } else {
         ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
                      ASTRA_EVENT_LEVEL_WARNING,
-                     "COMMANDS: unbound, mkdir refused with status %u",
-                     status);
+                     "COMMANDS: shipped member skipped, mkdir refused with "
+                     "status %u", status);
     }
     /*
      * What namespace this boot actually got. A rare fact recorded once, which
