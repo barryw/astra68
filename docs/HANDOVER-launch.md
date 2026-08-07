@@ -1,46 +1,126 @@
-# Astra 68 — Handover: the loader, and what is left of milestone 1
+# Astra 68 — Handover: milestone 1, and the one thing left in it
 
-Date: 2026-08-07, updated 2026-08-06 after tasks 2, 2b, 3 and 4. Written to be
-read cold in a fresh session.
+Date: 2026-08-07. Written to be read cold in a fresh session. Read `CLAUDE.md`
+first; this is the continuation map for the launch milestone only.
 
-**A program runs from the prompt, and it is handed a namespace.** `status 7` is
-a file on the volume, launched by name, reporting the status it exited with; a
-child is granted `STDOUT`, `STDERR`, `STDIN`, `WORK:`, `COMMANDS:` and `EVENTS:`,
-the last three as port handles to services it can reach across a process
-boundary. One task left: `events` becomes one of those files, and the builtin
-goes in the same commit.
+**A program runs from the prompt.** `status 7` is a file on the volume, found
+by name, loaded, run, and its exit status reported. A launched child is handed
+six capabilities: `STDOUT`, `STDERR`, `STDIN`, `WORK:`, `COMMANDS:` and
+`EVENTS:` — the last three as port handles to services it reaches across a
+process boundary.
 
-**Tasks 1-5 are on `main` and pushed** (`ec75bb4`). **Task 6 is unfinished and
-lives on the branch `task6-events-program`**, which does *not* pass the terminal
-gate -- see §3a. It is on a branch precisely so `main` stays green.
+**One task is left and it is blocked on a bug.** `events` is now a program too,
+and its first request to the events service is never answered. §2 is the whole
+of what is known about that, and it is where to start.
 
 ---
 
-## 1. Resume here
+## 1. Where the code is
 
-**Task 6 of `docs/superpowers/plans/2026-08-07-launch-milestone-1.md`.** The last one.
+| Where | What | State |
+|---|---|---|
+| `main` | tasks 1–5 | **pushed**, `ec75bb4`. Every gate green. |
+| `task6-events-program` | task 6 | `7d211f7`. **The terminal gate fails.** |
 
-The plan has six tasks and one was added while task 1 was being built:
+`main` was pushed to `origin` at `435d530..ec75bb4`, 48 commits. Task 6 is on a
+branch on purpose: it does not pass, and `main` stays green.
+
+The plan is `docs/superpowers/plans/2026-08-07-launch-milestone-1.md`. Every
+finished task has a **"what the build settled"** block written under it — those
+blocks are the real record and are worth reading before touching what they
+describe.
 
 | Task | What | State |
 |---|---|---|
-| 1 | the launch syscall | **done**, `3090f1a` |
-| 2 | runtime wrappers, and seeding an assign table from a capability table | **done**, `d0bd9a3` |
-| 2b | `ASTRA_PROGRAM`, mandatory provenance, link fails without it | **done**, `5be6f15` |
-| 3 | streams — `STDOUT`, `STDERR`, `STDIN` as grants, not numbers | **done**, `c9058d9` |
-| 4 | the shell launches by name; `COMMANDS:` bound; `status` proves it | **done**, `fc8a643` |
-| 5 | the storage protocol over ports | **done**, `3d66e07` |
-| 6 | `events` becomes `COMMANDS:events`; the builtin is deleted | next |
+| 1 | the launch syscall | done, `3090f1a` |
+| 2 | runtime wrappers, seeding a namespace from a capability table | done, `d0bd9a3` |
+| 2b | `ASTRA_PROGRAM`, mandatory provenance, link fails without it | done, `5be6f15` |
+| 3 | streams — `STDOUT`/`STDERR`/`STDIN` as grants, not numbers | done, `c9058d9` |
+| 4 | the shell launches by name; `COMMANDS:` bound; `status` proves it | done, `fc8a643` |
+| 5 | the storage protocol over ports | done, `3d66e07` |
+| 6 | `events` becomes `COMMANDS:events`; the builtin goes | **blocked**, §2 |
 
-Each finished task has a "what the build settled" block under it in the plan.
-Read task 5's before starting task 6 — §3 below is the short version.
+---
 
-Design authority: `docs/superpowers/specs/2026-08-07-program-launch-design.md`,
-and `2026-08-06-filesystem-layout-design.md` §2.5 (lookup), §11 (what a file is)
-and §1.7 (union assigns, approved 2026-08-07 — that is milestone 1.5, after this
-one).
+## 2. Resume here: the refusal nobody has explained
 
-## 2. What task 1 built, that task 2 builds on
+On the branch, type `events` at the prompt. The child launches, is granted
+`EVENTS:`, and hangs until it gives up. The chain is understood up to exactly
+one step.
+
+```
+child:      astra_port_send(EVENTS: handle, request, 248 bytes, +1 handle) -> OK
+supervisor: astra_port_receive(events_receive, ...)  -> RESOURCE_LIMIT, every pass
+child:      the second send fills the one-deep port  -> WOULD_BLOCK
+child:      exits 14 (ASTRA_VFS_ERR_BUSY)
+```
+
+The message **is** queued on the right port. The supervisor **cannot take it
+out**. It retries every loop pass and gets `ASTRA_SYSCALL_RESOURCE_LIMIT` (5)
+forever.
+
+**How to see it.** The branch prints the evidence on the terminal already:
+
+- `events: probe handle N / probe create 0 / probe send 0` — a raw
+  `astra_port_send` from the child, which succeeds. In
+  `sw/userspace/commands/events/events.c`.
+- `  [events served 0, refused 0, stalled 5` — printed by `command_launch`
+  after any child exits. `stalled` is the last non-`WOULD_BLOCK` status the
+  service's receive returned.
+
+**What has been ruled out.** The per-process handle table. It was 16 entries
+and the supervisor now holds eight port endpoints — sink, source, storage and
+events, two ends each — plus its own two, the devices, and a child's process
+handle. That looked exactly like the cause. It is now **31**
+(`sw/kernel/handle.h`) **and the symptom is unchanged.** The change is right on
+its own merits and should stay; it is not the bug.
+
+**Where to look next.** Whatever else makes `kernel_port_receive_prepare`
+return a status that `port_status_to_syscall` maps to `RESOURCE_LIMIT` when the
+message carries one attached handle. Two candidates are not yet eliminated:
+
+- `kernel_handle_import_reserve` in `sw/kernel/handle.c`;
+- the detached-handle pool — `KERNEL_HANDLE_DETACHED_MAX` and
+  `transfer_stats.reserved_detached`. Note that reservation accounting is
+  global rather than per process.
+
+The receive path is `sw/kernel/port.c`; the caller is
+`astra_vfs_port_service_pump` in `sw/userspace/vfs/src/vfs_port_transport.c`.
+
+**The fastest way to bisect it** is a kernel unit test rather than the machine.
+`sw/kernel/tests/test_process.c` can create a port, send a message carrying an
+attached handle, and receive it in the same process. If that passes, the
+difference is that the sender is a *different* process — which points at the
+transfer and detach path rather than at the receive.
+
+**Scaffolding to delete once it is fixed:** the `probe` lines in `events.c` and
+the `[events served/refused/stalled` line in `command_launch`. Keep the
+`stalled` field itself — a pump that silently stops receiving is
+indistinguishable from one nobody is calling, and that ambiguity is what made
+this expensive.
+
+**What is on the branch and should survive regardless of the bug:**
+
+- The stream `INFO` message and `astra_stream_size`, with tests. A pager asks
+  how tall the screen is instead of assuming 80x24; this machine is 90x30.
+- The port transport **bounds its wait for a reply**. A wait with no deadline
+  is the hang task 5's step 1 said it must not have; only the send side had
+  been covered, and this bug is what proved it.
+- The transport tells a full port apart from a dead peer, instead of calling
+  everything `PEER_DEAD`.
+- The events drain no longer shares a health flag with the service's ability to
+  answer clients. It did, which would have stopped a service because its own
+  logging failed — the exact failure that file's header warns about.
+- `KERNEL_HANDLE_MAX_ENTRIES` 16 → 31, and the table-exhaustion test now
+  derives its fill from the real per-process limits (`KERNEL_SYNC_OWNER_MAX`,
+  `KERNEL_PORT_OWNER_MAX`, `KERNEL_PROCESS_THREAD_MAX`) instead of assuming a
+  table size.
+
+---
+
+## 3. The mechanisms, as they now stand
+
+### 3.1 A launch
 
 ```
 ASTRA_SYSCALL_PROCESS_CREATE (48)
@@ -52,164 +132,131 @@ returns
   data[2] the new process id
 ```
 
-- `AstraLaunchGrant` and `AstraLaunchArguments` are in `sw/include/astra/process.h`;
-  `ASTRA_LAUNCH_GRANT_MAX` is 6, `ASTRA_LAUNCH_ARGUMENT_MAX` 8, and the argument
-  bytes are bounded at 192.
-- **The subset rule was already implemented.** `kernel_handle_duplicate`'s two
-  checks — the source must carry `TRANSFER`, the rights must be a subset — are
-  exactly §1.1 of the launch spec. It grew a destination table
-  (`kernel_handle_duplicate_into`) and the launch grew nothing.
-- A handle the caller does not hold is `INVALID_HANDLE`; rights wider than its
-  own are `ACCESS_DENIED`. Two different mistakes, told apart on purpose.
-- **argv is already published** into the child's startup page, after the
-  capability table: a vector of addresses, then the bytes. `astra_main` gets it
-  through `AstraStartupInfo.argc` / `argv_address`, which the runtime already
-  validates.
+- **A launch creates no authority.** Every grant names a handle the caller
+  holds, with rights that are a subset. A handle it does not hold is
+  `INVALID_HANDLE`; rights wider than its own are `ACCESS_DENIED`. Two
+  different mistakes, told apart on purpose.
+- `ASTRA_LAUNCH_GRANT_MAX` is **6** and `launch_grants` uses all six. **`SYS:`
+  is the one left out**, deliberately: a command needs somewhere to read its
+  own data, somewhere to write, and its history — not the whole volume.
+- The image is copied three times; the launch spec's §1.4 says why each one
+  exists and how they go away (a page cache and file-backed mapping).
 - `kernel_elf_accept_windowed` bounds the headers to the bytes actually handed
-  over, and each segment page bounces through one page of kernel memory
-  (`launch_page`). A launched image is never read through a user pointer.
+  over, and every segment page bounces through one page of kernel memory. A
+  launched image is never read through a user pointer.
 
-## 3a. Where task 6 actually stopped -- read this first
+### 3.2 What a grant says
 
-`events` is a program, it launches, it is granted `EVENTS:`, and its first
-request **is never answered**. The chain is understood up to one unexplained
-step:
+`AstraLaunchGrant` carries a name, a handle, `rights` and `flags`, and the last
+two are **different vocabularies that cannot share a word**:
 
-- The child's `astra_port_send` to its `EVENTS:` handle returns **OK**: the
-  message is queued on the events service's port. Verified with a raw probe in
-  `events.c` (`probe handle 264 / create 0 / send 0`).
-- The supervisor's `astra_vfs_port_service_pump` then gets
-  **`ASTRA_SYSCALL_RESOURCE_LIMIT`** from `astra_port_receive`, every pass, and
-  the message stays queued forever. Visible as `stalled 5` on the terminal line
-  the shell now prints after a child exits.
-- The client's second send then fills the one-deep port and returns
-  `WOULD_BLOCK`, so the child exits 14 (`ASTRA_VFS_ERR_BUSY`).
+- `rights` is what the **kernel** enforces on the handle. A port send endpoint
+  carries `READ | SIGNAL | WAIT | TRANSFER` and nothing else, so a grant asking
+  for `ASTRA_RIGHT_WRITE` on one is refused — correctly, because there is no
+  such authority to give.
+- `flags` is what the grant is **for**, carried by the kernel and never read by
+  it: `ASTRA_CAPABILITY_FLAG_NAMESPACE`, `_READ`, `_WRITE`. Unknown bits are
+  `INVALID_ARGUMENT` at the syscall, so the field stays versionable.
 
-**What has been ruled out:** the handle table. It was 16 entries and the
-supervisor now holds eight port endpoints, so that looked exactly like the
-cause; it is now 31 (see `sw/kernel/handle.h`) **and the symptom is unchanged**.
-That change is worth keeping on its own merits, but it is not the bug.
+`astra_assign_seed` binds **only** grants carrying `_NAMESPACE`, and takes the
+mount's rights from `_READ`/`_WRITE`. The rule is positive: a capability is not
+a name unless somebody declared it one, so `PROCESS`, `THREAD` and `STDOUT` are
+excluded by construction rather than by a list that grows.
 
-**Where to look next:** whatever else makes `kernel_port_receive_prepare`
-return a status that `port_status_to_syscall` maps to `RESOURCE_LIMIT` when the
-message carries one attached handle. `kernel_handle_import_reserve` and the
-detached-handle pool are the two candidates not yet eliminated. The receive is
-in `sw/kernel/port.c`; the caller is `astra_vfs_port_service_pump`.
+### 3.3 What a child does on the other side
 
-**Scaffolding to remove once it is fixed:** the `probe` lines in
-`sw/userspace/commands/events/events.c`, and the `[events served/refused/
-stalled` line in `command_launch`. The `stalled` counter itself is worth
-keeping -- a pump that silently stops receiving is what made this take an
-afternoon.
+```c
+astra_assign_seed(&assigns, capabilities, startup->capability_count);
+assign = astra_assign_lookup(&assigns, "EVENTS");
+astra_vfs_connect(&client, astra_vfs_port_transport, &assign->handle);
+```
 
-**What is already good on the branch and should survive:** the stream `INFO`
-message and `astra_stream_size` (with tests), the transport's bounded reply wait
-(a wait with no deadline was the hang task 5's step 1 said it must not have),
-the transport telling a full port apart from a dead peer, and the events
-service's drain no longer sharing a health flag with its ability to answer
-clients.
+From there it is the same Kit the shell uses, unchanged — which is what the
+transport being a callback has been for since the protocol was written.
+`sw/userspace/commands/events/events.c` is the worked example.
 
-## 3. What task 6 needs to know
+### 3.4 Streams
 
-**A child has a namespace, and nothing has used one yet.** `launch_grants` in
-`console_shell.c` hands over all six: three streams, then `WORK:`, `COMMANDS:`
-and `EVENTS:` as port send handles. **`SYS:` is the one left out** — six is
-`ASTRA_LAUNCH_GRANT_MAX` exactly. Task 6 is the first program to use a mount, so
-it is also the proof that the whole chain works end to end.
+`astra_stream_write(handle, bytes, length, &written)`, `astra_print(handle,
+text)`, `astra_stream_read(source, bytes, capacity, &length)`,
+`astra_stream_size(handle, &columns, &rows)`.
 
-**What a child does with them:** `astra_assign_seed(&table, capabilities,
-count)` turns its capability table into an `AstraAssignTable`, then
-`astra_vfs_connect(&client, astra_vfs_port_transport, &handle)` where `handle`
-is the assign's. From there it is the same Kit the shell uses, unchanged.
+- **Every one takes a handle.** There is no ambient output; a print with no
+  handle is descriptor 1 with the serial numbers filed off.
+- The **port is the queue**. Back pressure is the kernel's `WOULD_BLOCK`, and
+  `astra_stream_write` reports exactly how much arrived, which is what makes it
+  lossless — a caller retries from there rather than from a guess.
+- `astra_stream_size` answering zero and zero is a **successful** answer meaning
+  "no geometry" — a file has none — so a redirected program simply does not
+  page.
 
-**Two vocabularies, one word apart.** A grant's `rights` is what the *kernel*
-enforces on a handle (a port send endpoint carries `READ|SIGNAL|WAIT|TRANSFER`);
-what a child may *do* with a mount rides in the flags —
-`ASTRA_CAPABILITY_FLAG_READ` and `_WRITE` beside `_NAMESPACE`. Putting mount
-rights in `rights` asks the kernel for authority no port has, and is refused.
+### 3.5 Provenance
 
-**Two constants for one limit, now one.** `ASTRA_LAUNCH_GRANT_MAX` and
-`KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX` disagreed (6 versus 4) and a launch of
-more than four grants failed with `INVALID_ARGUMENT` from inside the loader. A
-`_Static_assert` holds them together now.
+`ASTRA_PROGRAM(name, major, minor, patch, author, copyright)` emits one
+120-byte record into `.astra_program`. **No record, no link.** The record is
+loaded and survives the strip, so `python3 tools/program_info.py <any Astra
+ELF>` works on the image as installed. `make link-contract` in the runtime is
+the check, and it runs inside `make all`.
 
-**And the trap, from both directions.** Attaching a handle to a port message
-*moves* it; installing one cloneable lets it be *copied*. A grant is a copy and a
-reply channel is a move — which is why every reply port is created per call.
+Every new program in `sw/userspace/commands/` needs one `ASTRA_PROGRAM` line or
+it will not link. That is the point, and it is also the first error a new
+command hits.
 
-## 4. What tasks 2, 2b, 3 and 4 built
+### 3.6 The serving wait
 
-**Task 2** — `astra_launch` and `astra_process_wait` in
-`sw/userspace/runtime/src/launch.c`, and `astra_assign_seed` in
-`sw/userspace/vfs/src/vfs_assign.c`.
+The services are in the supervisor's process, so **waiting for a child means
+serving it**. `pump_once` in `console_shell.c` is one function called from two
+places — the prompt's loop and the wait for a child — because a serving wait
+that pumped a subset of what the prompt pumps is a child that works until it
+calls the one service the wait forgot.
 
-- `astra_process_wait` takes a **deadline** the plan's signature did not, and
-  zero polls. The supervisor hosts the services its child calls, so it may never
-  block on one; task 4's serving wait is a poll in the loop that already pumps
-  everything else.
-- Both wrappers clear their outputs before anything, including before their own
-  refusal. `exit_status` is published only when the wait established one.
-- `astra_assign_seed` turns a capability table into a namespace. It bound
-  everything but `PROCESS` and `THREAD` when it landed; **task 3 replaced that
-  with the flag rule below**, so read that bullet rather than this one. Roots
-  still do not travel in the published table — the launch spec's §2 has
-  `root_offset` in the grant and `AstraStartupCapability` has nowhere to put one
-  — so every binding is at its mount's own root.
+A line typed while a child runs goes to `console_stream_offer` rather than to
+`run_line`, **with the newline the person pressed**. Without it an empty line
+offers nothing at all and a child waiting for input never sees that return was
+pressed. If the source will not take the line the editor is not committed, so
+it stays on screen and nothing typed is lost.
 
-**Task 3** — `sw/include/astra/stream_service.h`, `sw/userspace/streams/`,
-`sw/userspace/supervisor/src/console_stream.c`, and the runtime's port wrappers
-in `sw/userspace/runtime/src/port.c`.
+---
 
-- The grant-flag question is **settled**: `ASTRA_CAPABILITY_FLAG_NAMESPACE` is
-  carried by the kernel from the grant into the published record, and
-  `astra_assign_seed` binds only the grants that declared themselves names. A
-  launch that wants a child to have `WORK:` must set that bit; a `STDOUT` grant
-  must not. Unknown flag bits are `INVALID_ARGUMENT` at the syscall.
-- `astra_stream_write(handle, bytes, length, &written)`, `astra_print(handle,
-  text)` and `astra_stream_read(source, bytes, capacity, &length)` are the
-  client. **`astra_print` takes a handle** — there is no ambient output.
-- `console_stream_stdout()` / `_stderr()` / `_stdin()` are the send handles a
-  launch grants. They exist before the first prompt, because a child is handed
-  what its launcher already holds.
-- `astra_stream_read` makes a **reply port per call**, because a handle attached
-  to a message is moved rather than copied. The streams mock models the move,
-  and a test asserts the mock does — a mock that copied is what let a broken
-  version pass once already.
+## 4. Traps that have each cost real time
 
-**Task 4** — `console_shell.c`'s `command_launch`, `launch_path`,
-`launch_grants` and `pump_once`; the `COMMANDS:` binding in `vfs_host.c`;
-`sw/userspace/commands/status`; and `astra_image.install`.
+In addition to the ones in `CLAUDE.md`, which all still apply.
 
-- **A word that is not a builtin is a launch.** `APPS:` then `COMMANDS:`, top
-  level only; a word carrying a `:` names its own assign and is resolved
-  directly, which is what an assign does instead of `PATH`. A 64 KiB load buffer
-  in BSS, one launch at a time.
-- **`pump_once` is the loop body, called from the prompt and from the wait for a
-  child.** Anything a serving wait forgets to pump is a service a child hangs
-  on, so there is one copy of it and no second answer.
-- A line typed while a child runs goes to `console_stream_offer`. If the source
-  will not take it the editor is not committed, so the line stays on screen.
-- The gate runs a real program: `status 7` → `exited 7`, `status` → `exited 0`,
-  `commands:status 3` → `exited 3`, `nosuchthing` → `not a command`.
+- **Attaching a handle to a port message *moves* it.** The sender's entry is
+  invalidated, so a reply handle cannot be cached across calls — every reply
+  port is created per call. A first client cached one and passed its tests,
+  because the mock **copied** where the kernel **moves**. The mocks in
+  `test_streams.c` and `test_vfs_port.c` now model the move, and a test asserts
+  that they do.
+- **Installing a handle cloneable lets it be *copied*.** A grant is a copy and
+  a reply channel is a move: different machinery, same-looking code.
+  `kernel_port_handle_retain` exists now and **only the send endpoint is
+  cloneable** — a second receive handle would be a second service on one port,
+  with messages going to whichever end asked first, so granting one is
+  `ACCESS_DENIED`.
+- **Two constants for one limit.** `ASTRA_LAUNCH_GRANT_MAX` (6) and
+  `KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX` (4) disagreed, so a launch of more
+  than four grants failed with `INVALID_ARGUMENT` from inside the loader, which
+  names neither the grant nor the reason. It stayed latent for four tasks. They
+  are one number with a `_Static_assert` now — **look for the others.**
+- **The supervisor must never reach its own services through a port.** It is
+  the only thing that pumps them, so a client here waiting on a reply would be
+  waiting for itself. `astra_vfs_local_transport` stays for exactly this, and
+  the deadlock is one line of code away at all times.
+- **A status the shell prints must carry its number.** "would not start" and
+  "I/O error" each cost a round trip before they were made to say which status,
+  and how far a read had got. Diagnosis time is the thing being optimised.
+- `report_status`'s table in `console_shell.c` is indexed by status. It has the
+  sixteen protocol statuses plus `ASTRA_STATUS_PEER_DEAD`; anything added to
+  `astra/status.h` below 32 needs a name here or prints as a bare number.
 
-**Task 2b** — `sw/include/astra/program.h`, the `ASSERT` at the end of
-`sw/userspace/runtime/astra_user.ld`, and `tools/program_info.py`.
-
-- `ASTRA_PROGRAM(name, major, minor, patch, author, copyright)` emits one
-  120-byte record into `.astra_program`. No record, no link.
-- The record is **loaded** and survives the strip, unlike the event catalog:
-  `python3 tools/program_info.py <any Astra ELF>` works on the installed image.
-- `make link-contract` in the runtime is the check, and it runs inside
-  `make all`. Every new program in `sw/userspace/commands/` needs one
-  `ASTRA_PROGRAM` line or it will not link — that is the point, but it is also
-  the first error task 4 will hit.
+---
 
 ## 5. Working on this machine
 
-Ship and build, always from the repo root, and **always rebuild the boot image
-after userspace** — the ROM carries the user image, so a rebuilt supervisor that
-is not re-ROMmed boots the previous one and every event id resolves to the wrong
-message:
+Ship and build from the repo root, and **always rebuild the boot image after
+userspace** — the ROM carries the user image, so a rebuilt supervisor that is
+not re-ROMmed boots the previous one.
 
 ```sh
 git add -A                      # tar ships only what git tracks
@@ -227,25 +274,39 @@ cd sw/userspace && make test && make sanitize && make analyze && make all
 cd sw/userspace/storage && make ext4-test
 cd sw/boot && make astra_boot.bin
 python3 emu/qemu/test-terminal.py /tmp/qemu-final-build/qemu-system-m68k \
-    sw/boot/astra_boot.bin --image /tmp/part.img
+    sw/boot/astra_boot.bin --image /tmp/part.img --verbose
 python3 emu/qemu/test-events.py  ... same arguments
 python3 emu/qemu/time-boot.py    ... --runs 5 --budget 1.0
 ```
 
+`--verbose` on the terminal gate prints each line as it passes and dumps the
+screen on failure. It is the fastest debugging surface the machine has.
+
 On the Mac: `python3 -m pytest tools/tests/` (38 cases) and
-`python3 -m pytest sw/boot/tests/`. **Reap QEMU** after a gate —
+`python3 -m pytest sw/boot/tests/`. **Reap QEMU** after every gate —
 `pkill -f qemu-system-m68k` — because a lingering emulator makes the next gate
 look like a machine that will not boot.
 
-`docs/HANDOVER-events.md` §6 has the rest of the traps, and they all still
-apply: `git ls-files | tar` ships only tracked files and only from the directory
-you are standing in, m68k aligns a `uint32_t` to two bytes, a journal replay
-lands on top of anything `debugfs` wrote.
+Last known-good figures on `main`: supervisor text **92,487**, boot **0.09s**
+of a 1.00s budget.
 
-## 6. Where the machine is otherwise
+---
 
-The event system is finished — six plans, `EVENTS:` is a synthetic tree and
-`events` reads it. The console sink stops narrating once something drains the
-ring, so a terminal capture is readable again. The one promise the event system
-does not keep is durability: the store is RAM, so `EVENTS:boot/-1` does not
-exist. That is the next thing after this milestone and milestone 1.5.
+## 6. Design authority
+
+| Question | File |
+|---|---|
+| Launch, grants, streams, command lookup | `docs/superpowers/specs/2026-08-07-program-launch-design.md` |
+| The three image copies, and the way out of them | the same, §1.4 |
+| Lookup order, what a file is, provenance | `docs/superpowers/specs/2026-08-06-filesystem-layout-design.md` §2.5, §11 |
+| Union assigns (milestone 1.5, not this one) | the same, §1.7 |
+| The plan, and every "what the build settled" | `docs/superpowers/plans/2026-08-07-launch-milestone-1.md` |
+
+## 7. After this milestone
+
+Two things are queued and neither is started:
+
+- **Milestone 1.5: union assigns**, approved 2026-08-07, layout spec §1.7.
+- **The events store is RAM**, so `EVENTS:boot/-1` does not exist. Durability
+  is the next thing after 1.5, and the terminal gate already asserts the
+  refusal so nobody mistakes it for a missing feature.
