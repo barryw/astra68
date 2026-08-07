@@ -90,6 +90,65 @@ typedef struct KernelTraceRecord {
 #define KERNEL_TRACE_LEVEL_WARNING ASTRA_EVENT_LEVEL_WARNING
 #define KERNEL_TRACE_LEVEL_ERROR   ASTRA_EVENT_LEVEL_ERROR
 
+/*
+ * What this build keeps, and why there are two of them.
+ *
+ * Tracing used to be unconditional: every record site was compiled into every
+ * image and wrote on every pass. That is the right default for finding things
+ * and the wrong one for shipping, because the chatty sites are the expensive
+ * ones -- an interrupt delivery and its acknowledgement are two records per
+ * transfer, and a disk doing sequential work fills the ring with them.
+ *
+ * So a site declares the level it writes at and the build decides. A release
+ * keeps what a person needs to explain a machine that misbehaved -- faults,
+ * quarantines, the boot -- and compiles the rest to nothing, paying no ROM and
+ * no cycles for it. A debug build keeps everything, including the
+ * deliver/acknowledge stream that is how a device driver problem is actually
+ * found.
+ *
+ * `make` is release. `make ASTRA_BUILD=debug` is the other one. The level is a
+ * compile-time constant either way, so the comparison folds and a site below
+ * the floor leaves no code behind.
+ */
+#ifndef KERNEL_TRACE_BUILD_LEVEL
+#define KERNEL_TRACE_BUILD_LEVEL KERNEL_TRACE_LEVEL_NOTICE
+#endif
+
+/*
+ * Writes a record if this build keeps that level. The arguments are
+ * kernel_trace_write's, unchanged, so a site gains a level and nothing else.
+ *
+ * The whole call is inside the `if`, so a compiled-out site evaluates none of
+ * its arguments -- which matters, because several of them are function calls
+ * that walk an endpoint to build its flags.
+ */
+#if KERNEL_TRACE_BUILD_LEVEL <= KERNEL_TRACE_LEVEL_DEBUG
+/*
+ * A debug build keeps every level, so there is no test to make. Spelled as its
+ * own definition rather than a comparison that is always true, because a
+ * comparison that is always true is a warning and this kernel builds with
+ * -Werror.
+ */
+#define KERNEL_TRACE(level, ...)                                              \
+    do {                                                                      \
+        (void)(level);                                                        \
+        (void)kernel_trace_write(__VA_ARGS__);                                \
+    } while (0)
+#else
+#define KERNEL_TRACE(level, ...)                                              \
+    do {                                                                      \
+        if ((level) >= KERNEL_TRACE_BUILD_LEVEL)                              \
+            (void)kernel_trace_write(__VA_ARGS__);                            \
+    } while (0)
+#endif
+
+/* Whether a level staged at run time survives this build. See KernelIrqTrace. */
+#if KERNEL_TRACE_BUILD_LEVEL <= KERNEL_TRACE_LEVEL_DEBUG
+#define KERNEL_TRACE_KEEPS(level) ((void)(level), 1)
+#else
+#define KERNEL_TRACE_KEEPS(level) ((level) >= KERNEL_TRACE_BUILD_LEVEL)
+#endif
+
 #define KERNEL_TRACE_LEVEL_MASK    ASTRA_EVENT_LEVEL_MASK
 #define KERNEL_TRACE_LEVEL_OF(flags) \
     ((uint32_t)((flags) & KERNEL_TRACE_LEVEL_MASK))

@@ -536,7 +536,8 @@ static void publish_response(KernelMonitorBuilder *builder)
     if (builder->truncated != 0u) {
         channel->response[builder->length++] = '!';
         increment_saturating(&channel->stats.output_truncations);
-        (void)kernel_trace_write(
+        KERNEL_TRACE(
+            KERNEL_TRACE_LEVEL_WARNING,
             KERNEL_TRACE_EVENT_MONITOR_DROP, channel->transport,
             KERNEL_MONITOR_DROP_RESPONSE_TRUNCATED,
             channel->stats.output_truncations, 0u, 0u);
@@ -582,7 +583,12 @@ static void dispatch_command(KernelMonitorChannel *channel)
         increment_saturating(&channel->stats.command_overruns);
     kernel_performance_end(performance);
     increment_saturating(&channel->stats.commands);
-    (void)kernel_trace_write(
+    /*
+     * A person typing at the monitor is a rare thing that explains what was
+     * done to a machine, not a per-transfer stream, so it is kept.
+     */
+    KERNEL_TRACE(
+        KERNEL_TRACE_LEVEL_NOTICE,
         KERNEL_TRACE_EVENT_MONITOR_COMMAND, channel->transport,
         command_index, channel->line_length, elapsed,
         channel->stats.command_overruns);
@@ -598,7 +604,8 @@ static void complete_line(KernelMonitorChannel *channel)
         builder_puts(&builder, "ERR line too long");
         publish_response(&builder);
         increment_saturating(&channel->stats.line_overflows);
-        (void)kernel_trace_write(
+        KERNEL_TRACE(
+            KERNEL_TRACE_LEVEL_WARNING,
             KERNEL_TRACE_EVENT_MONITOR_DROP, channel->transport,
             KERNEL_MONITOR_DROP_LINE_FULL,
             channel->stats.line_overflows, 0u, 0u);
@@ -647,7 +654,8 @@ static bool uart_flush(KernelMonitorChannel *channel,
             else
                 channel->stats.output_dropped += remaining;
             increment_saturating(&channel->stats.sink_failures);
-            (void)kernel_trace_write(
+            KERNEL_TRACE(
+                KERNEL_TRACE_LEVEL_WARNING,
                 KERNEL_TRACE_EVENT_MONITOR_DROP, channel->transport,
                 KERNEL_MONITOR_DROP_OUTPUT_SINK, remaining,
                 channel->stats.sink_failures, 0u);

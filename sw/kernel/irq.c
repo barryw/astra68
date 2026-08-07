@@ -99,22 +99,23 @@ static uint32_t endpoint_slot(const KernelIrqEndpoint *endpoint)
     return (uint32_t)(endpoint - &endpoints[0]);
 }
 
-static void trace_endpoint(KernelTraceEvent event,
+static void trace_endpoint(uint8_t level, KernelTraceEvent event,
                            const KernelIrqEndpoint *endpoint,
                            uint32_t argument2, uint32_t argument3)
 {
-    (void)kernel_trace_write(event, endpoint_trace_flags(endpoint),
-                             endpoint->owner, endpoint->generation,
-                             argument2, argument3);
+    KERNEL_TRACE(level, event, endpoint_trace_flags(endpoint),
+                 endpoint->owner, endpoint->generation,
+                 argument2, argument3);
 }
 
-static void set_dispatch_trace(KernelIrqTrace *trace,
+static void set_dispatch_trace(KernelIrqTrace *trace, uint8_t level,
                                KernelTraceEvent event, uint16_t flags,
                                uint32_t argument0, uint32_t argument1,
                                uint32_t argument2, uint32_t argument3)
 {
     if (trace == NULL)
         return;
+    trace->level = level;
     trace->argument[0] = argument0;
     trace->argument[1] = argument1;
     trace->argument[2] = argument2;
@@ -137,7 +138,12 @@ static void trace_quarantine(uint8_t source, KernelIrqStatus reason,
         owner = endpoint->owner;
         generation = endpoint->generation;
     }
-    set_dispatch_trace(trace, KERNEL_TRACE_EVENT_IRQ_QUARANTINE, flags,
+    /*
+     * A quarantine is why a device stopped serving, so it survives a release
+     * build. It is the one IRQ record that does.
+     */
+    set_dispatch_trace(trace, KERNEL_TRACE_LEVEL_WARNING,
+                       KERNEL_TRACE_EVENT_IRQ_QUARANTINE, flags,
                        source, (uint32_t)reason, owner, generation);
 }
 
@@ -297,7 +303,8 @@ static bool finish_quiesce(KernelIrqEndpoint *endpoint)
     if (!controller_acknowledge(endpoint->source))
         return false;
     endpoint->flags |= KERNEL_IRQ_FLAG_QUIESCED;
-    trace_endpoint(KERNEL_TRACE_EVENT_DEVICE_RESET, endpoint,
+    trace_endpoint(KERNEL_TRACE_LEVEL_NOTICE,
+                   KERNEL_TRACE_EVENT_DEVICE_RESET, endpoint,
                    endpoint->source, 0u);
     clear_route(endpoint->source);
     return true;
@@ -403,8 +410,8 @@ KernelIrqStatus kernel_irq_bind_internal(
     route->vector = binding->vector;
     route->internal_armed = 0u;
     increment_saturating(&pool_stats.internal_routes);
-    (void)kernel_trace_write(
-        KERNEL_TRACE_EVENT_IRQ_BIND,
+    KERNEL_TRACE(
+        KERNEL_TRACE_LEVEL_NOTICE, KERNEL_TRACE_EVENT_IRQ_BIND,
         KERNEL_IRQ_TRACE_INTERNAL |
             (binding->source & KERNEL_IRQ_TRACE_SOURCE_MASK),
         binding->source, binding->trigger, binding->ipl, binding->vector);
@@ -425,8 +432,8 @@ KernelIrqStatus kernel_irq_arm_internal(uint8_t source)
     if (!controller_enable(source))
         return KERNEL_IRQ_DEVICE_ERROR;
     route->internal_armed = 1u;
-    (void)kernel_trace_write(
-        KERNEL_TRACE_EVENT_IRQ_ARM,
+    KERNEL_TRACE(
+        KERNEL_TRACE_LEVEL_DEBUG, KERNEL_TRACE_EVENT_IRQ_ARM,
         KERNEL_IRQ_TRACE_INTERNAL |
             (source & KERNEL_IRQ_TRACE_SOURCE_MASK),
         source, 1u, route->ipl, route->vector);
@@ -445,8 +452,8 @@ KernelIrqStatus kernel_irq_mask_internal(uint8_t source)
     if (!controller_mask(source))
         return KERNEL_IRQ_DEVICE_ERROR;
     route->internal_armed = 0u;
-    (void)kernel_trace_write(
-        KERNEL_TRACE_EVENT_IRQ_ARM,
+    KERNEL_TRACE(
+        KERNEL_TRACE_LEVEL_DEBUG, KERNEL_TRACE_EVENT_IRQ_ARM,
         KERNEL_IRQ_TRACE_INTERNAL |
             (source & KERNEL_IRQ_TRACE_SOURCE_MASK),
         source, 0u, route->ipl, route->vector);
@@ -537,7 +544,8 @@ KernelIrqStatus kernel_irq_bind(uint32_t owner,
     if (live > pool_stats.max_live_endpoints)
         pool_stats.max_live_endpoints = live;
     *endpoint = candidate;
-    trace_endpoint(KERNEL_TRACE_EVENT_IRQ_BIND, candidate,
+    trace_endpoint(KERNEL_TRACE_LEVEL_NOTICE,
+                   KERNEL_TRACE_EVENT_IRQ_BIND, candidate,
                    endpoint_slot(candidate),
                    ((uint32_t)candidate->trigger << 24) |
                        ((uint32_t)candidate->ipl << 16) |
@@ -615,7 +623,8 @@ KernelIrqStatus kernel_irq_arm(KernelIrqEndpoint *endpoint)
     endpoint->flags &= (uint8_t)~(KERNEL_IRQ_FLAG_MASKED |
                                   KERNEL_IRQ_FLAG_ADMIN_MASKED);
     endpoint->state = KERNEL_IRQ_ARMED;
-    trace_endpoint(KERNEL_TRACE_EVENT_IRQ_ARM, endpoint,
+    trace_endpoint(KERNEL_TRACE_LEVEL_DEBUG,
+                   KERNEL_TRACE_EVENT_IRQ_ARM, endpoint,
                    endpoint_slot(endpoint), endpoint->record_count);
     return KERNEL_IRQ_OK;
 }
@@ -635,7 +644,8 @@ KernelIrqStatus kernel_irq_mask(KernelIrqEndpoint *endpoint)
                        KERNEL_IRQ_FLAG_ADMIN_MASKED;
     endpoint->state = endpoint->record_count == 0u ?
         KERNEL_IRQ_MASKED : KERNEL_IRQ_PENDING;
-    trace_endpoint(KERNEL_TRACE_EVENT_IRQ_ARM, endpoint,
+    trace_endpoint(KERNEL_TRACE_LEVEL_DEBUG,
+                   KERNEL_TRACE_EVENT_IRQ_ARM, endpoint,
                    endpoint_slot(endpoint), endpoint->record_count);
     return KERNEL_IRQ_OK;
 }
@@ -759,7 +769,7 @@ static __attribute__((noinline)) KernelIrqStatus dispatch_internal(
     route->internal_armed = 1u;
     increment_saturating(&pool_stats.internal_deliveries);
     set_dispatch_trace(
-        trace, KERNEL_TRACE_EVENT_IRQ_DELIVER,
+        trace, KERNEL_TRACE_LEVEL_DEBUG, KERNEL_TRACE_EVENT_IRQ_DELIVER,
         KERNEL_IRQ_TRACE_INTERNAL |
             (source & KERNEL_IRQ_TRACE_SOURCE_MASK),
         source, vector, 0u, 0u);
@@ -931,7 +941,7 @@ static __attribute__((noinline)) KernelIrqStatus dispatch_endpoint(
     *woken_threads = woken;
     if (trace == NULL || trace->valid == 0u)
         set_dispatch_trace(
-            trace, KERNEL_TRACE_EVENT_IRQ_DELIVER,
+            trace, KERNEL_TRACE_LEVEL_DEBUG, KERNEL_TRACE_EVENT_IRQ_DELIVER,
             endpoint_trace_flags(endpoint), endpoint->owner,
             endpoint->generation, record->sequence, record->status);
     if (source_claimed &&
@@ -1000,7 +1010,12 @@ KernelIrqStatus kernel_irq_dispatch(uint8_t source, uint8_t vector,
     KernelIrqStatus status = kernel_irq_dispatch_traced(
         source, vector, timestamp, woken_threads, &trace);
 
-    if (trace.valid != 0u)
+    /*
+     * The same drop the deferred writer makes, for the same reason: the level
+     * travels with the staged record because the site that built it was inside
+     * an interrupt and could not gate on it.
+     */
+    if (trace.valid != 0u && KERNEL_TRACE_KEEPS(trace.level))
         (void)kernel_trace_stage_at(
             (KernelTraceEvent)trace.event, trace.flags, timestamp,
             trace.argument[0], trace.argument[1], trace.argument[2],
@@ -1088,7 +1103,8 @@ KernelIrqStatus kernel_irq_ack(KernelIrqEndpoint *endpoint,
              * every later read with DEVICE_ERROR and nothing anywhere says
              * when it started or why. Finding that out once cost a session.
              */
-            trace_endpoint(KERNEL_TRACE_EVENT_IRQ_QUARANTINE, endpoint,
+            trace_endpoint(KERNEL_TRACE_LEVEL_WARNING,
+                   KERNEL_TRACE_EVENT_IRQ_QUARANTINE, endpoint,
                            KERNEL_IRQ_DEVICE_ERROR, 1u);
             result = KERNEL_IRQ_DEVICE_ERROR;
             goto finished;
@@ -1099,7 +1115,8 @@ KernelIrqStatus kernel_irq_ack(KernelIrqEndpoint *endpoint,
         !controller_acknowledge(endpoint->source)) {
         endpoint->flags |= KERNEL_IRQ_EVENT_DEVICE_ERROR |
                            KERNEL_IRQ_FLAG_MASKED;
-        trace_endpoint(KERNEL_TRACE_EVENT_IRQ_QUARANTINE, endpoint,
+        trace_endpoint(KERNEL_TRACE_LEVEL_WARNING,
+                   KERNEL_TRACE_EVENT_IRQ_QUARANTINE, endpoint,
                        KERNEL_IRQ_DEVICE_ERROR, 2u);
         result = KERNEL_IRQ_DEVICE_ERROR;
         goto finished;
@@ -1130,7 +1147,8 @@ KernelIrqStatus kernel_irq_ack(KernelIrqEndpoint *endpoint,
     endpoint->consecutive = 0u;
     increment_saturating(&endpoint->acknowledged);
     increment_saturating(&pool_stats.acknowledgements);
-    trace_endpoint(KERNEL_TRACE_EVENT_IRQ_ACK, endpoint,
+    trace_endpoint(KERNEL_TRACE_LEVEL_DEBUG,
+                   KERNEL_TRACE_EVENT_IRQ_ACK, endpoint,
                    acknowledged_sequence, endpoint->record_count);
     if (endpoint->record_count != 0u) {
         endpoint->state = KERNEL_IRQ_PENDING;
@@ -1158,7 +1176,8 @@ KernelIrqStatus kernel_irq_ack(KernelIrqEndpoint *endpoint,
             endpoint->flags |= KERNEL_IRQ_EVENT_DEVICE_ERROR |
                                KERNEL_IRQ_FLAG_MASKED;
             endpoint->state = KERNEL_IRQ_MASKED;
-            trace_endpoint(KERNEL_TRACE_EVENT_IRQ_QUARANTINE, endpoint,
+            trace_endpoint(KERNEL_TRACE_LEVEL_WARNING,
+                   KERNEL_TRACE_EVENT_IRQ_QUARANTINE, endpoint,
                            KERNEL_IRQ_DEVICE_ERROR, 3u);
             result = KERNEL_IRQ_DEVICE_ERROR;
             goto finished;
@@ -1244,7 +1263,8 @@ KernelIrqStatus kernel_irq_revoke(KernelIrqEndpoint *endpoint,
         }
         pool_stats.wait_wakeups += woken;
         *woken_threads = woken;
-        trace_endpoint(KERNEL_TRACE_EVENT_IRQ_REVOKE, endpoint,
+        trace_endpoint(KERNEL_TRACE_LEVEL_NOTICE,
+                   KERNEL_TRACE_EVENT_IRQ_REVOKE, endpoint,
                        endpoint_slot(endpoint), woken);
         if (!masked)
             return KERNEL_IRQ_DEVICE_ERROR;

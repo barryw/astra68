@@ -1017,14 +1017,26 @@ static void test_trace_covers_endpoint_lifecycle(void)
     endpoint = bind_endpoint(&controller, &device, 12u, 12u,
                              KERNEL_IRQ_TRIGGER_EDGE);
     assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_BIND] == 1u);
+    /*
+     * Arming, delivery and acknowledgement are the per-transfer stream: two
+     * records for every interrupt a device raises, which is what a debug build
+     * is for and what a release must not be paying. The lifecycle records
+     * around them -- bind, revoke, reset, quarantine -- are rare and explain a
+     * machine that misbehaved, so they are kept either way. This asserts that
+     * split rather than a fixed count, because the count is the build's to
+     * decide.
+     */
+    const uint32_t chatty = KERNEL_TRACE_KEEPS(KERNEL_TRACE_LEVEL_DEBUG) ?
+        1u : 0u;
+
     assert(kernel_irq_arm(endpoint) == KERNEL_IRQ_OK);
-    assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_ARM] == 1u);
+    assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_ARM] == chatty);
     assert(kernel_irq_dispatch(12u, KERNEL_IRQ_COMMON_VECTOR, 1234u,
                                &woken) == KERNEL_IRQ_OK);
-    assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_DELIVER] == 1u);
+    assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_DELIVER] == chatty);
     assert(kernel_irq_read(endpoint, &record, &event_flags) == KERNEL_IRQ_OK);
     assert(kernel_irq_ack(endpoint, record.sequence) == KERNEL_IRQ_OK);
-    assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_ACK] == 1u);
+    assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_ACK] == chatty);
     kernel_irq_handle_release(endpoint, NULL);
     assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_REVOKE] == 1u);
     assert(service_all_revocations() == 1u);

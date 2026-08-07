@@ -276,10 +276,34 @@ ssh beast 'cd ~/astra68 && tar xzf /tmp/astra-src.tgz && \
   find sw -name "*.[ch]" -exec touch {} +'
 ```
 
+**There are two kernels, and `make` builds the shipping one.**
+
+```sh
+make                      # release: quarantines, faults and the boot
+make ASTRA_BUILD=debug    # and every interrupt delivered and acknowledged
+```
+
+A site declares the level it writes at and the build decides; anything below
+the floor is compiled out, so a release pays no ROM and no cycles for it. On a
+run of the terminal gate that is **41 ring records against 1,639** -- the
+per-interrupt stream is two records per transferred sector, which fills a
+64 KiB ring in seconds and is exactly what you want when a device is
+misbehaving. Reach for `ASTRA_BUILD=debug` then, and read the ring with
+`emu/qemu/irq_quarantine_probe.py` or the dump the terminal gate now prints on
+any failure.
+
+`ASTRA_BUILD` must be given to whichever make you run: `sw/boot` rebuilds the
+kernel, so `make -C sw/boot ASTRA_BUILD=debug` is what produces a debug ROM.
+Building the kernel debug and then the ROM without it silently ships a release
+kernel.
+
 The gates, all on Beast:
 
 ```sh
 cd sw/kernel && make test && make && make clean && make K1_QUALIFICATION=1
+# and the host suite at the other floor, so the debug build cannot rot:
+cd sw/kernel && make test \
+    HOST_EXTRA_FLAGS="-DKERNEL_TRACE_BUILD_LEVEL=KERNEL_TRACE_LEVEL_DEBUG"
 cd sw/userspace && make test && make sanitize && make analyze && make all
 cd sw/userspace/storage && make ext4-test
 cd sw/boot && make astra_boot.bin

@@ -217,8 +217,8 @@ static void trace_access_fault(const KernelExceptionFrame *frame,
             fault->logical_address, fault->bus_address,
             fault->bus_status, fault->bus_target);
     } else {
-        (void)kernel_trace_write(
-            KERNEL_TRACE_EVENT_PMMU_FAULT,
+        KERNEL_TRACE(
+            KERNEL_TRACE_LEVEL_ERROR, KERNEL_TRACE_EVENT_PMMU_FAULT,
             fault_trace_flags(fault, false), fault->logical_address,
             fault->expected_physical, frame->special_status,
             frame->program_counter);

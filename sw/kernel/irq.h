@@ -81,7 +81,14 @@ typedef struct KernelIrqTrace {
     uint16_t event;
     uint16_t flags;
     uint8_t valid;
-    uint8_t reserved[3];
+    /*
+     * The level the staging site declared. A dispatch record is built inside
+     * the interrupt and written after it, so the site cannot gate itself the
+     * way an ordinary KERNEL_TRACE call does -- it carries its level here
+     * instead, and the writer drops it if this build does not keep that level.
+     */
+    uint8_t level;
+    uint8_t reserved[2];
 } KernelIrqTrace;
 
 typedef bool (*KernelIrqCapture)(uint8_t source, uint32_t *status,
