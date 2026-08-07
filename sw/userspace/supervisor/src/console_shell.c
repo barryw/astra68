@@ -1363,6 +1363,20 @@ static int pump_once(void)
         (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
         return 0;
     }
+    /*
+     * The other invisible input failure. A refused call at least came back
+     * with a status; an overflow comes back with ASTRA_SYSCALL_OK and a flag
+     * nothing here used to look at, so a keystroke the queue had no room for
+     * vanished with no trace anywhere a person or this gate could see. The
+     * line a command produces afterward is not the line that was typed, and
+     * until now nothing said so. There is no count to give: the emulator
+     * knows how many it dropped and no register carries that number out, so
+     * this says only that it happened, which is what can honestly be known.
+     */
+    if ((flags & ASTRA_INPUT_READ_OVERFLOW) != 0u) {
+        ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_WARNING,
+                     "input overflowed, some keystrokes never arrived");
+    }
     for (uint32_t index = 0u; index < count; ++index) {
         uint32_t header = events[index].header;
         uint32_t usage = events[index].value;
