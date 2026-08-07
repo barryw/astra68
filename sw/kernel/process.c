@@ -91,7 +91,7 @@ typedef struct KernelProcess {
 } KernelProcess;
 
 #if defined(__m68k__)
-_Static_assert(sizeof(KernelProcess) == 596u,
+_Static_assert(sizeof(KernelProcess) == 1016u,
                "process record size changed; update the memory budget");
 #endif
 

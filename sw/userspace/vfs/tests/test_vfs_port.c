@@ -426,13 +426,22 @@ test_a_dead_peer_is_reported_and_not_waited_on(void)
                           NULL) == ASTRA_VFS_ERR_PEER);
     refuse_send = 0;
 
-    /* A handle that names nothing is the same fact to a caller. */
+    /*
+     * A handle that names nothing is **not** the same fact, and used to be
+     * reported as though it were.
+     *
+     * A service that died is a thing to give up on; a handle this caller never
+     * held is this caller's own mistake, and it is fixed somewhere completely
+     * different. Collapsing both into "peer dead" is what made a wrong handle
+     * look like a missing service and cost an afternoon finding out which, so
+     * the two are asserted apart here rather than together.
+     */
     {
         uint32_t nothing = MOCK_PORT_MAX - 1u;
         AstraVfsClient orphan;
 
         assert(astra_vfs_connect(&orphan, astra_vfs_port_transport,
-                                 &nothing) == ASTRA_VFS_ERR_PEER);
+                                 &nothing) == ASTRA_VFS_ERR_BAD_HANDLE);
     }
     served = NULL;
 }

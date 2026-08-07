@@ -35,4 +35,23 @@ uint32_t supervisor_verify_volume(AstraBlockDevice *block,
  */
 int supervisor_volume_is_mounted(void);
 
+/*
+ * The last status the device gave this volume's block port, as an
+ * AstraBlockStatus.
+ *
+ * lwext4 has one errno for a timeout, a cancellation, a short transfer and a
+ * corrupt reply, so everything below it arrives at a caller as `I/O error` --
+ * which names the layer that gave up rather than the thing that went wrong.
+ * The port already keeps the distinction; this is how anything above it can
+ * say which, and a refusal a person is shown should carry it.
+ */
+uint32_t supervisor_volume_device_status(void);
+
+/*
+ * Where the last refused transfer gave up, as (site * 256) + syscall status,
+ * or zero if none has been. See AstraLeaseBlockSite. The device status above
+ * says a transfer failed; this says which call in its life did.
+ */
+uint32_t supervisor_volume_device_failure(void);
+
 #endif

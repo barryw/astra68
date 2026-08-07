@@ -39,7 +39,40 @@ typedef struct AstraLeaseBlock {
      * filesystem did.
      */
     uint32_t armed;
+    /*
+     * Where the last refused request gave up, and with which syscall status.
+     *
+     * Seven different things in this file answer ASTRA_BLOCK_IO_ERROR, lwext4
+     * has one errno for all of them, and a person is shown "I/O error" -- which
+     * names the layer that gave up rather than what went wrong. A completion
+     * that could not be acknowledged and a device that refused a submission
+     * call for entirely different things, and neither is legible from here.
+     *
+     * The site is an AstraLeaseBlockSite; the status is the syscall's own.
+     */
+    uint32_t last_site;
+    uint32_t last_status;
 } AstraLeaseBlock;
+
+/* Where in a request's life it was refused. Ordered as the request runs. */
+typedef enum AstraLeaseBlockSite {
+    ASTRA_LEASE_BLOCK_SITE_NONE = 0,
+    ASTRA_LEASE_BLOCK_SITE_DRAIN_BEFORE_ARM = 1,
+    ASTRA_LEASE_BLOCK_SITE_ARM = 2,
+    ASTRA_LEASE_BLOCK_SITE_SUBMIT = 3,
+    ASTRA_LEASE_BLOCK_SITE_COLLECT = 4,
+    ASTRA_LEASE_BLOCK_SITE_DRAIN_AFTER_COLLECT = 5,
+    ASTRA_LEASE_BLOCK_SITE_SHORT_TRANSFER = 6,
+    ASTRA_LEASE_BLOCK_SITE_WAIT = 7,
+    ASTRA_LEASE_BLOCK_SITE_RESET = 8
+} AstraLeaseBlockSite;
+
+/*
+ * Where the last refused request gave up, packed as (site * 256) + status, or
+ * zero if none has been. One number because it travels through a terminal line
+ * and a person reads it back to this enum.
+ */
+uint32_t astra_lease_block_last_failure(const AstraLeaseBlock *lease);
 
 /*
  * Claims transfer memory sized for one maximum transfer and records the

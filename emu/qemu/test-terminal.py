@@ -299,6 +299,38 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
                 if verbose:
                     print("ok: %r -> %r" % (line, expected))
 
+            # What a program said, before what this shell says about it.
+            #
+            # Two separate failures hide here and both were real. A launched
+            # program writes through the sink, which reaches the cell model but
+            # is painted only by the flush at the bottom of the shell's pump --
+            # and that pump used to return early on any pass with no keystroke,
+            # so a program that printed one line and exited printed nothing at
+            # all until somebody pressed a key. Waiting for the line above
+            # catches that.
+            #
+            # The order catches the other. A child's exit is noticed while its
+            # last words are still queued on the sink, so a launcher that
+            # reported the exit without draining first printed "exited 13"
+            # above the line that says what 13 meant. Both lines are on screen
+            # either way, which is why this asserts on their order and not on
+            # their presence.
+            rows = machine.screen()
+            said = next((index for index, row in enumerate(rows)
+                         if "the store is RAM" in row), None)
+            exited = next((index for index, row in enumerate(rows)
+                           if "events: exited 13" in row), None)
+            if said is None or exited is None or said >= exited:
+                print("FAIL: the child's line and the shell's report of its "
+                      "exit are out of order (line at %r, exit at %r)"
+                      % (said, exited))
+                for row in rows:
+                    if row:
+                        print("    |%s|" % row)
+                return 1
+            if verbose:
+                print("ok: the child's last line precedes its exit report")
+
             # A live tail, and the way out of it. Not in SCRIPT because
             # ending it is a bare return rather than a command: `events` is a
             # program now and what it reads is STDIN, which is lines -- so the

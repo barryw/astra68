@@ -305,7 +305,6 @@ astra_main(const AstraStartupInfo *startup)
         /* Nowhere to write is not a failure this program can report. */
         return ASTRA_STATUS_ACCESS;
     }
-    say("events: probe stdout");
     assign = astra_assign_lookup(&assigns, "EVENTS");
     if (assign == NULL) {
         say("events: this program was not granted EVENTS:");
@@ -317,35 +316,16 @@ astra_main(const AstraStartupInfo *startup)
      * Nothing above this line knows which, which was the point of the
      * transport being a callback since the day the protocol was written.
      */
-    say_number("events: probe handle ", events_handle);
-    {
-        AstraVfsRequestMessage probe;
-        uint32_t reply_receive = 0u;
-        uint32_t reply_send = 0u;
-        uint32_t probe_status;
-
-        for (uint32_t index = 0u; index < sizeof(probe); ++index) {
-            ((uint8_t *)&probe)[index] = 0u;
-        }
-        probe_status = astra_port_create(1u, (uint32_t)sizeof(probe),
-                                         &reply_receive, &reply_send);
-        say_number("events: probe create ", probe_status);
-        probe.header.total_size = (uint32_t)sizeof(probe);
-        probe.header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
-        probe.header.protocol = ASTRA_VFS_PROTOCOL;
-        probe.header.protocol_version = ASTRA_VFS_VERSION;
-        probe.header.operation = ASTRA_VFS_OP_HELLO;
-        probe.request.size = ASTRA_VFS_REQUEST_SIZE;
-        probe.request.version = ASTRA_VFS_VERSION;
-        probe_status = astra_port_send(events_handle, &probe, sizeof(probe),
-                                       &reply_send, 1u);
-        say_number("events: probe send ", probe_status);
-    }
-    say("events: probe connecting");
     status = astra_vfs_connect(&client, astra_vfs_port_transport,
                                &events_handle);
     if (status != ASTRA_VFS_OK) {
-        say("events: the events service did not answer");
+        /*
+         * With the number. "did not answer" alone cannot tell a service that
+         * is not there from one whose reply channel could not be made, and
+         * those two call for entirely different things.
+         */
+        say_number("events: the events service did not answer, status ",
+                   status);
         return (int)status;
     }
 
@@ -468,9 +448,7 @@ astra_main(const AstraStartupInfo *startup)
      * geometry answers zero, and zero means do not page -- which is what a
      * redirected `events` should do.
      */
-    say("events: probe connected");
     (void)astra_stream_size(out, &columns, &rows);
-    say("events: probe sized");
     offset = rows > 1u ? tail_from(file, rows - 1u) : 0u;
     offset = print_from(file, offset);
     if (offset == 0u) {

@@ -21,6 +21,7 @@
 #include <console_shell.h>
 #include <console_stream.h>
 #include <events_host.h>
+#include <volume.h>
 
 #include <astra/bytes.h>
 #include <astra/display.h>
@@ -769,6 +770,15 @@ static void command_launch(const char *word, int argc, char *const *argv)
         write_number(length);
         astra_terminal_write(&shell.terminal, " of ");
         write_number((uint32_t)size);
+        /*
+         * And what the device said, because "I/O error" is lwext4's one errno
+         * for a timeout, a cancellation, a short transfer and a corrupt reply.
+         * Which of those it was decides whether retrying is worth anything.
+         */
+        astra_terminal_write(&shell.terminal, ", device ");
+        write_number(supervisor_volume_device_status());
+        astra_terminal_write(&shell.terminal, "/");
+        write_number(supervisor_volume_device_failure());
         astra_terminal_putc(&shell.terminal, '\n');
         report_status(word, status != ASTRA_VFS_OK ? status :
                                                      ASTRA_VFS_ERR_INVALID);
@@ -817,6 +827,13 @@ static void command_launch(const char *word, int argc, char *const *argv)
     }
     shell.child = 0u;
     (void)astra_close(handle);
+    /*
+     * The child's last words before this shell's account of the child. Its
+     * exit was noticed by the wait above, which leaves whatever it wrote on
+     * the way out still queued on the sink -- so without this the shell's
+     * "exited 13" prints above the line that says what 13 meant.
+     */
+    (void)console_stream_drain();
 
     astra_terminal_write(&shell.terminal, word);
     if (status == ASTRA_SYSCALL_OK) {
@@ -826,13 +843,18 @@ static void command_launch(const char *word, int argc, char *const *argv)
     } else {
         write_line(": did not finish");
     }
-    astra_terminal_write(&shell.terminal, "  [events served ");
-    write_number(supervisor_events_served());
-    astra_terminal_write(&shell.terminal, ", refused ");
-    write_number(supervisor_events_refused());
-    astra_terminal_write(&shell.terminal, ", stalled ");
-    write_number(supervisor_events_stalled());
-    astra_terminal_putc(&shell.terminal, '\n');
+    /*
+     * A service that stopped receiving is indistinguishable from one nobody is
+     * calling, and that ambiguity is what made the launch of the first program
+     * expensive to diagnose. So the stall is reported, and only the stall:
+     * counting what was served says nothing once it works.
+     */
+    if (supervisor_events_stalled() != 0u) {
+        astra_terminal_write(&shell.terminal, "  [events service stalled, "
+                             "status ");
+        write_number(supervisor_events_stalled());
+        write_line("]");
+    }
     ASTRA_EVENT2(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
                  "child %u finished with status %u", child_id, exit_status);
 }
@@ -1033,12 +1055,15 @@ static int pump_once(void)
      * above, for the same reason.
      */
     supervisor_vfs_pump();
-    if (shell.input == 0u) {
-        (void)astra_yield();
-        return 1;
-    }
-    status = astra_input_read(shell.input, events, ASTRA_INPUT_READ_BATCH_MAX,
-                              &count, &flags);
+    /*
+     * A machine with no keyboard still has a screen, and a child still writes
+     * to it. This used to return here, which meant the flush at the bottom --
+     * the only thing that paints -- was reachable only by way of a keystroke.
+     */
+    status = shell.input != 0u ?
+        astra_input_read(shell.input, events, ASTRA_INPUT_READ_BATCH_MAX,
+                         &count, &flags) :
+        ASTRA_SYSCALL_WOULD_BLOCK;
     /*
      * An empty queue is the ordinary case and the only one worth yielding
      * over. Anything else is a refused call, and treating a refusal as
@@ -1046,12 +1071,16 @@ static int pump_once(void)
      * that looked hung: the loop spun forever and said nothing. A broken
      * input path is exactly as fatal to a terminal as a broken flush, and
      * is reported the same way.
+     *
+     * It falls through to the flush rather than returning. **A pass with no
+     * key still has cells to paint**: a launched program's output arrives
+     * through the sink above and nothing typed it. Returning early here left
+     * that output in the model until somebody happened to press a key, so a
+     * program that printed one line and exited printed nothing at all -- and
+     * a person waiting for that line had to type to see it, which is the one
+     * thing they were waiting to be told they could do.
      */
-    if (status == ASTRA_SYSCALL_WOULD_BLOCK) {
-        (void)astra_yield();
-        return 1;
-    }
-    if (status != ASTRA_SYSCALL_OK) {
+    if (status != ASTRA_SYSCALL_OK && status != ASTRA_SYSCALL_WOULD_BLOCK) {
         /*
          * The refusal that used to be invisible. A rejected input read
          * looked exactly like an empty queue for a whole session, and the

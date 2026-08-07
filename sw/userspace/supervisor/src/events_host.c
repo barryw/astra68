@@ -188,18 +188,6 @@ supervisor_events_start(uint32_t process_handle)
 }
 
 uint32_t
-supervisor_events_served(void)
-{
-    return events_port.requests;
-}
-
-uint32_t
-supervisor_events_refused(void)
-{
-    return events_port.refused + events_port.dropped;
-}
-
-uint32_t
 supervisor_events_stalled(void)
 {
     return events_port.stalled;

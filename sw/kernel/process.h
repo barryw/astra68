@@ -5,6 +5,7 @@
 #include "device.h"
 #include "handle.h"
 #include "irq.h"
+#include "port.h"
 #include "thread.h"
 #include "trace.h"
 
@@ -293,6 +294,37 @@ KernelProcessStatus kernel_process_create(const void *image,
 _Static_assert(KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX ==
                    ASTRA_LAUNCH_GRANT_MAX,
                "the loader's ceiling and the launch ABI's must be one number");
+
+/*
+ * What one process can be holding at once, and why the handle table is the
+ * size it is.
+ *
+ * This is the budget that was never written down, and its absence cost a whole
+ * task. A supervisor hosting services holds: everything it was granted at
+ * launch, its own process and thread, both endpoints of every port it may own,
+ * a handle to each child it may have started, and -- the term nobody counted
+ * -- room to *import* the handles one arriving message carries, because a
+ * receive installs them before it can hand them over.
+ *
+ * When the table was sixteen entries the sum below came to 27 and the machine
+ * was four short. Nothing said so: the receive that could not import a child's
+ * reply channel answered RESOURCE_LIMIT, the message stayed queued, and the
+ * child waited for an answer that could not be produced. The table was widened
+ * and the demand still was not written down, so nothing would have caught it
+ * happening again.
+ *
+ * Adding a port, a bootstrap grant or a transfer slot now fails here, at
+ * compile time, naming the budget -- rather than in a service that mysteriously
+ * stops answering.
+ */
+#define KERNEL_PROCESS_HANDLE_DEMAND                                          \
+    (KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX + 2u +                           \
+     (2u * KERNEL_PORT_OWNER_MAX) + (KERNEL_PROCESS_MAX - 1u) +               \
+     KERNEL_HANDLE_TRANSFER_MAX)
+
+_Static_assert(KERNEL_PROCESS_HANDLE_DEMAND <= KERNEL_HANDLE_MAX_ENTRIES,
+               "handle table is smaller than one process can be holding: see "
+               "KERNEL_PROCESS_HANDLE_DEMAND");
 
 typedef enum KernelProcessBootstrapKind {
     KERNEL_PROCESS_BOOTSTRAP_DEVICE = 1,

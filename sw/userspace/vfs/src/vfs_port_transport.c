@@ -117,6 +117,18 @@ astra_vfs_port_transport(void *context, uint32_t operation,
         if (status == ASTRA_SYSCALL_INVALID_HANDLE) {
             return ASTRA_VFS_ERR_BAD_HANDLE;
         }
+        /*
+         * The service is gone. This is the case the whole return value exists
+         * for, and splitting the three above out of it left it falling into
+         * the default -- so a caller whose service had died was told
+         * ASTRA_VFS_ERR_NOT_FOUND, which to anything above here means the file
+         * is not there rather than that nobody is. The receive path in this
+         * same file has always answered ASTRA_VFS_ERR_PEER for it.
+         */
+        if (status == ASTRA_SYSCALL_PEER_DEAD ||
+            status == ASTRA_SYSCALL_CLOSED) {
+            return ASTRA_VFS_ERR_PEER;
+        }
         return ASTRA_VFS_ERR_NOT_FOUND;
     }
     {

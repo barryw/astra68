@@ -30,6 +30,15 @@
 #define CONSOLE_STREAM_SOURCE_MESSAGES 2u
 #define CONSOLE_STREAM_PUMP_BUDGET 4u
 
+/*
+ * How many pumps a drain will spend before giving up. A dead writer cannot
+ * refill the sink, so a drain ends on its first empty pass and never reaches
+ * this; the ceiling is here because a terminal that could hang relaying is
+ * worse than one that drops a line, and a live writer must not be able to hold
+ * the shell's prompt hostage by writing forever.
+ */
+#define CONSOLE_STREAM_DRAIN_MAX 16u
+
 static AstraStreamSink sink;
 static AstraStreamSource source;
 static AstraTerminal *sink_terminal;
@@ -152,6 +161,36 @@ console_stream_pump(void)
     }
     (void)astra_stream_sink_pump(&sink, CONSOLE_STREAM_PUMP_BUDGET);
     (void)astra_stream_source_pump(&source, CONSOLE_STREAM_PUMP_BUDGET);
+}
+
+/*
+ * Relays what the sink still holds, and returns when it holds nothing.
+ *
+ * **A writer's exit does not mean its output has arrived.** The last thing a
+ * child wrote is still queued on this port when its process record goes, and a
+ * launcher that reported the exit without draining first would print its own
+ * account of the child above the child's last words. That is what put
+ * "exited 13" above the line explaining why, and a reader who has to
+ * reassemble the order is being told something false about it.
+ */
+uint32_t
+console_stream_drain(void)
+{
+    uint32_t relayed = 0u;
+
+    if (!stream_ready) {
+        return 0u;
+    }
+    for (uint32_t pass = 0u; pass < CONSOLE_STREAM_DRAIN_MAX; ++pass) {
+        uint32_t moved = astra_stream_sink_pump(&sink,
+                                                CONSOLE_STREAM_PUMP_BUDGET);
+
+        if (moved == 0u) {
+            break;
+        }
+        relayed += moved;
+    }
+    return relayed;
 }
 
 uint32_t
