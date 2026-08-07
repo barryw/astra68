@@ -806,13 +806,71 @@ static __attribute__((noinline)) KernelIrqStatus dispatch_endpoint(
     }
     if (route->capture != NULL &&
         !route->capture(source, &status, route->context)) {
-        endpoint->flags |= KERNEL_IRQ_EVENT_DEVICE_ERROR |
-                           KERNEL_IRQ_FLAG_MASKED;
-        endpoint->state = KERNEL_IRQ_PENDING;
-        (void)controller_mask(source);
-        increment_saturating(&pool_stats.device_failures);
-        trace_quarantine(source, KERNEL_IRQ_DEVICE_ERROR, endpoint, trace);
-        return KERNEL_IRQ_DEVICE_ERROR;
+        /*
+         * Nothing was pending, which is not a fault.
+         *
+         * A capture answers false for one reason -- its status register shows
+         * no work -- and no capture in sw/kernel/platform.c has any way to
+         * report a hardware failure, so false cannot mean one. This used to
+         * set KERNEL_IRQ_EVENT_DEVICE_ERROR, which is sticky: kernel_irq_read
+         * answers with it forever after, so a single spurious interrupt ended
+         * the device for the rest of the boot.
+         *
+         * It is reachable whenever a driver polls for the same completion the
+         * interrupt was raised for. astra_block_lease_collect does exactly
+         * that, and beating the CPU to the queue killed storage partway
+         * through a session: every transfer afterwards was ASTRA_BLOCK_IO_ERROR
+         * and nothing brought it back. A spurious interrupt is ordinary on real
+         * hardware. It is acknowledged, counted, and survived.
+         *
+         * A device that fails is still reported -- through `complete`, in
+         * kernel_irq_ack, which is the callback a device answers with.
+         */
+        bool acknowledged = controller_acknowledge(source);
+        bool re_enabled = true;
+
+        if (endpoint->trigger == KERNEL_IRQ_TRIGGER_LEVEL) {
+            /*
+             * The mask taken above this call has to come back off. Leaving it
+             * on would be worse than the quarantine it replaces: the endpoint
+             * would go on believing it is armed while the source is masked,
+             * and the next interrupt would never arrive at all.
+             */
+            endpoint->flags &= (uint8_t)~KERNEL_IRQ_FLAG_MASKED;
+            re_enabled = controller_enable(source);
+        }
+        if (!acknowledged || !re_enabled) {
+            endpoint->flags |= KERNEL_IRQ_EVENT_DEVICE_ERROR |
+                               KERNEL_IRQ_FLAG_MASKED;
+            endpoint->state = KERNEL_IRQ_PENDING;
+            (void)controller_mask(source);
+            increment_saturating(&pool_stats.device_failures);
+            trace_quarantine(source, KERNEL_IRQ_DEVICE_ERROR, endpoint,
+                             trace);
+            return KERNEL_IRQ_DEVICE_ERROR;
+        }
+        increment_saturating(&pool_stats.unclaimed_interrupts);
+        /*
+         * One of these is ordinary; a flood of them is the storm.
+         *
+         * An interrupt that carries no work is the shape a wedged line takes:
+         * it re-asserts, nothing is pending, and answering it produces nothing
+         * to acknowledge -- so it would spin here forever, and no other guard
+         * would see it. The record ring's overflow only catches deliveries
+         * that queue, and these never queue. So the budget that used to be
+         * spent on a busy device is spent here instead, where the interrupts
+         * really are noise.
+         */
+        note_storm_delivery(endpoint, timestamp);
+        if (endpoint->consecutive >= KERNEL_IRQ_STORM_BUDGET) {
+            endpoint->flags |= KERNEL_IRQ_EVENT_STORM |
+                               KERNEL_IRQ_FLAG_MASKED;
+            (void)controller_mask(source);
+            increment_saturating(&pool_stats.storm_quarantines);
+            trace_quarantine(source, KERNEL_IRQ_STORM, endpoint, trace);
+            return KERNEL_IRQ_STORM;
+        }
+        return KERNEL_IRQ_UNCLAIMED;
     }
     if (endpoint->trigger == KERNEL_IRQ_TRIGGER_EDGE &&
         !controller_acknowledge(source)) {
@@ -1023,6 +1081,15 @@ KernelIrqStatus kernel_irq_ack(KernelIrqEndpoint *endpoint,
                                KERNEL_IRQ_FLAG_MASKED;
             (void)controller_mask(endpoint->source);
             increment_saturating(&pool_stats.device_failures);
+            /*
+             * Said out loud. These three are the only places that set the
+             * sticky DEVICE_ERROR flag without leaving a record of doing it,
+             * and a device that dies here dies silently: the endpoint answers
+             * every later read with DEVICE_ERROR and nothing anywhere says
+             * when it started or why. Finding that out once cost a session.
+             */
+            trace_endpoint(KERNEL_TRACE_EVENT_IRQ_QUARANTINE, endpoint,
+                           KERNEL_IRQ_DEVICE_ERROR, 1u);
             result = KERNEL_IRQ_DEVICE_ERROR;
             goto finished;
         }
@@ -1032,6 +1099,8 @@ KernelIrqStatus kernel_irq_ack(KernelIrqEndpoint *endpoint,
         !controller_acknowledge(endpoint->source)) {
         endpoint->flags |= KERNEL_IRQ_EVENT_DEVICE_ERROR |
                            KERNEL_IRQ_FLAG_MASKED;
+        trace_endpoint(KERNEL_TRACE_EVENT_IRQ_QUARANTINE, endpoint,
+                       KERNEL_IRQ_DEVICE_ERROR, 2u);
         result = KERNEL_IRQ_DEVICE_ERROR;
         goto finished;
     }
@@ -1041,6 +1110,24 @@ KernelIrqStatus kernel_irq_ack(KernelIrqEndpoint *endpoint,
     endpoint->head = (uint8_t)((endpoint->head + 1u) %
                                KERNEL_IRQ_RECORD_DEPTH);
     --endpoint->record_count;
+    /*
+     * The owner retired this interrupt, so the run of them stops here.
+     *
+     * **A serviced interrupt is work, not noise.** The storm counter used to
+     * count every delivery in the window and be cleared by nothing except
+     * kernel_irq_recover, so sixty-four completions that were each read and
+     * acknowledged the moment they arrived quarantined the endpoint exactly as
+     * hard as a line nobody was answering. A busy disk is not a storm: on the
+     * machine this killed storage partway through a session -- one burst of
+     * sequential transfers, every one of them handled -- and the volume never
+     * came back, because the flag is sticky.
+     *
+     * What is left is what the word means: interrupts arriving that nobody
+     * retires. Deliveries nobody drains are caught sooner by the record ring's
+     * overflow, and deliveries that carry no work are counted where they are
+     * recognised, in dispatch_endpoint.
+     */
+    endpoint->consecutive = 0u;
     increment_saturating(&endpoint->acknowledged);
     increment_saturating(&pool_stats.acknowledgements);
     trace_endpoint(KERNEL_TRACE_EVENT_IRQ_ACK, endpoint,
@@ -1071,6 +1158,8 @@ KernelIrqStatus kernel_irq_ack(KernelIrqEndpoint *endpoint,
             endpoint->flags |= KERNEL_IRQ_EVENT_DEVICE_ERROR |
                                KERNEL_IRQ_FLAG_MASKED;
             endpoint->state = KERNEL_IRQ_MASKED;
+            trace_endpoint(KERNEL_TRACE_EVENT_IRQ_QUARANTINE, endpoint,
+                           KERNEL_IRQ_DEVICE_ERROR, 3u);
             result = KERNEL_IRQ_DEVICE_ERROR;
             goto finished;
         }
