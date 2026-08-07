@@ -49,6 +49,13 @@ INPUT_COUNT_MASK = 0xFF
 
 BOOT_MARKER = "stage 8"
 
+# The empty prompt this fixture's shell settles on between commands. It is
+# `shell.assign + ":" + shell.directory + "> "` from console_shell.c's
+# `prompt()`, and this script never types `cd` or switches assigns, so it is
+# always exactly this -- `screen()` below rstrips every row, which is why the
+# trailing space here is not part of the constant.
+PROMPT = "WORK:>"
+
 # Typed in order. Each line is followed by Enter, then the screen is polled
 # until `expect` appears, so the check waits on the machine rather than on a
 # guessed settle time -- the emulated CPU is slow enough that a fixed sleep is
@@ -313,6 +320,31 @@ class Machine:
                 return None
             time.sleep(0.25)
 
+    def wait_for_prompt(self, deadline):
+        """Waits for the shell to be genuinely done with the command it was
+        last given, rather than for some prompt to merely be visible.
+
+        A row *containing* the prompt is not a safe signal: the row a command
+        was typed into still starts with the prompt text once it is history
+        on screen, and it sits there for as long as anything typed after it
+        does not scroll it away. A substring check would call that "ready"
+        the instant it was typed, which is the same race this exists to
+        close -- the harness would go on typing while the shell was still
+        loading an image for the command that row belongs to.
+        What is unique to a prompt nobody has answered yet is that its row is
+        *exactly* the prompt and nothing else: every prompt on screen that
+        already has a command's text following it got that text appended the
+        moment somebody (this script) started typing into it, so only the one
+        the shell just printed, fresh, is bare. That is what this polls for.
+        """
+        end = time.monotonic() + deadline
+        while True:
+            if any(row == PROMPT for row in self.screen()):
+                return True
+            if time.monotonic() >= end:
+                return False
+            time.sleep(0.05)
+
     def close(self):
         try:
             self.qmp.execute("quit")
@@ -360,6 +392,27 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
                     return 1
                 if verbose:
                     print("ok: %r -> %r" % (line, expected))
+                # Back pressure. `expected` appearing is not the same as the
+                # shell being ready for what gets typed next: for a command
+                # that launches a program, `expected` is often the program's
+                # own output, printed while the shell is still waiting on it
+                # -- reading a program image off the volume does not pump
+                # input, so keys arriving before the shell is truly back at
+                # its prompt queue up behind it instead of being consumed as
+                # they arrive, which is the window a stress run reproduces as
+                # a corrupted next line and a step that times out with no
+                # explanation. Waiting for the bare prompt closes that window
+                # by construction: it cannot appear until the shell has come
+                # all the way back.
+                if not machine.wait_for_prompt(command_deadline):
+                    print("FAIL: %r produced %r but the shell never came "
+                          "back to %r within %.0fs"
+                          % (line, expected, PROMPT, command_deadline))
+                    for row in machine.screen():
+                        if row:
+                            print("    |%s|" % row)
+                    dump_ring(machine)
+                    return 1
 
             # And no endpoint is quarantined.
             #
@@ -436,6 +489,39 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
                     return 1
                 if verbose:
                     print("ok: follow -> %r" % expected)
+
+            # And no input overflowed.
+            #
+            # The emulator's input queue is 32 events deep and drops silently
+            # at the hardware level when it is full -- nothing above it in the
+            # kernel or the model can undo a drop once it happens, so this
+            # gate cannot see it through the screen the way it sees everything
+            # else. It can see the shell's account of it: `pump_once` now
+            # reports the overflow flag the kernel already surfaced as a
+            # warning-level shell event, so this reads that back rather than
+            # trusting that this run's timing happened to stay under 32 --
+            # the same reasoning as the quarantine check above, and it must
+            # be typed fresh: the last time this subsystem's warnings were on
+            # screen was SCRIPT's own check of them, long since scrolled off.
+            machine.qmp.type_line("events --subsystem shell --level warning")
+            if not machine.wait_for_prompt(command_deadline):
+                print("FAIL: the overflow check itself produced no prompt "
+                      "within %.0fs" % command_deadline)
+                for row in machine.screen():
+                    if row:
+                        print("    |%s|" % row)
+                dump_ring(machine)
+                return 1
+            overflowed = [row for row in machine.screen()
+                          if "input overflowed" in row]
+            if overflowed:
+                print("FAIL: input overflowed during the run")
+                for row in overflowed:
+                    print("    |%s|" % row)
+                dump_ring(machine)
+                return 1
+            if verbose:
+                print("ok: no input overflowed")
 
             # A count left here means keys are arriving and nobody is taking
             # them, which is how a refused input syscall presents.
