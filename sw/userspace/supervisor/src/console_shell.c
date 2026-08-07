@@ -196,7 +196,16 @@ static uint32_t shell_locate(const char *typed, uint32_t rights, char *wire,
         status = astra_vfs_stat(*client, wire, NULL, kind);
         if (status == ASTRA_VFS_OK)
             return ASTRA_VFS_OK;
-        /* Not on this member: the next one still might have it. */
+        /*
+         * Not on this member: the next one still might have it. But the same
+         * worst-status rule applies to a stat that failed for its own reason
+         * as to a resolve that did (astra/vfs_union.h) -- a member whose
+         * device answered ASTRA_VFS_ERR_IO or ASTRA_VFS_ERR_PROTOCOL did not
+         * say "absent", it said "I could not tell you", and a later member's
+         * ordinary NOT_FOUND must not bury that.
+         */
+        if (status != ASTRA_VFS_ERR_NOT_FOUND && worst == ASTRA_VFS_ERR_NOT_FOUND)
+            worst = status;
     }
 }
 
@@ -304,6 +313,7 @@ static void command_ls(int argc, char *const *argv)
     AstraVfsClient *client = NULL;
     uint32_t shown = 0u;
     uint32_t members = 0u;
+    uint32_t worst = ASTRA_VFS_ERR_NOT_FOUND;
     uint32_t status;
 
     if (storage() == NULL) {
@@ -335,6 +345,15 @@ static void command_ls(int argc, char *const *argv)
             break;
         }
         if (status != ASTRA_VFS_OK) {
+            /*
+             * The same worst-status rule as shell_locate and
+             * shell_path_primary (astra/vfs_union.h): a member that refused
+             * for a reason other than plain absence must survive to the
+             * final report, so a name whose only members lack read rights is
+             * told "access denied" rather than the ordinary "not found".
+             */
+            if (worst == ASTRA_VFS_ERR_NOT_FOUND)
+                worst = status;
             continue;
         }
         client = supervisor_vfs_client_for(assign);
@@ -366,7 +385,7 @@ static void command_ls(int argc, char *const *argv)
         }
     }
     if (members == 0u) {
-        report_status("ls", ASTRA_VFS_ERR_NOT_FOUND);
+        report_status("ls", worst);
         return;
     }
     if (shown == 0u)
@@ -549,16 +568,30 @@ static void command_write(int argc, char *const *argv)
      * primary: writing through the union at member zero regardless would let
      * a person "edit" a shipped file on a later member and silently get a
      * new, shadowing copy on the first one instead of the edit they asked
-     * for. Truncate-without-create is the existence probe and the open in
-     * one step, since the Kit already tries every member for one open call.
+     * for.
+     *
+     * This used to open with WRITE|TRUNCATE and no CREATE, on the reasoning
+     * that a truncate-without-create open is an existence probe: a member
+     * that lacks the file would refuse and the walk would move on. That
+     * reasoning does not hold on this machine. The ext4 backend's mode_of()
+     * (vfs_ext4_backend.c) maps ASTRA_VFS_OPEN_TRUNCATE to lwext4's "wb"
+     * whether or not ASTRA_VFS_OPEN_CREATE is set, and "wb" both creates and
+     * truncates -- so the probe at the writable primary always succeeds by
+     * creating an empty file there, and the walk never reaches the member
+     * that actually holds the name. An open is not an existence test here.
+     *
+     * So the name is located first, with no handle opened, exactly as `rm`
+     * already does -- and only once a holder is found, or confirmed absent
+     * everywhere, is anything opened.
      */
-    status = astra_vfs_assign_open(supervisor_assigns(), typed,
-                                   ASTRA_RIGHT_WRITE,
-                                   ASTRA_VFS_OPEN_WRITE |
-                                       ASTRA_VFS_OPEN_TRUNCATE,
-                                   shell_client_for, NULL, path, sizeof(path),
-                                   &file, NULL, NULL, &client, NULL);
-    if (status == ASTRA_VFS_ERR_NOT_FOUND) {
+    status = shell_locate(typed, ASTRA_RIGHT_WRITE, path, sizeof(path),
+                          &client, NULL);
+    if (status == ASTRA_VFS_OK) {
+        /* Found: write in place, on the member that already has it. */
+        status = astra_vfs_open(client, path,
+                                ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_TRUNCATE,
+                                &file, NULL, NULL);
+    } else if (status == ASTRA_VFS_ERR_NOT_FOUND) {
         /* Not on any member: a name nobody has yet is created on the primary. */
         status = shell_path_primary(typed, ASTRA_RIGHT_WRITE, path,
                                     sizeof(path), &client);

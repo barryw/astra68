@@ -99,6 +99,20 @@ SCRIPT = [
     # COMMANDS: is bound and searched, so a bare name resolves there without
     # the person naming it -- and naming it explicitly is the same file.
     ("commands:status 3", "exited 3"),
+    # A write to a name that exists only on COMMANDS:'s read-only member:
+    # `status` is shipped on `/commands`, and the writable member,
+    # `/local/commands`, is empty in this fixture. Without the fix, `write`
+    # opens with WRITE|TRUNCATE and no CREATE, on the reasoning that a
+    # truncate-without-create open is an existence probe -- but the ext4
+    # backend's "wb" mode creates whether or not CREATE was asked for, so
+    # the probe always succeeds at the writable member by creating an empty
+    # `status` there, and the walk never reaches the member that actually
+    # holds the name. A person editing the shipped file would silently get a
+    # second, shadow copy instead of the edit they typed, and every later
+    # `cat`, `ls` and `write` of `commands:status` would see the shadow, not
+    # the original. The fix locates the holder before opening, so this must
+    # report the refusal the read-only member actually gives.
+    ("write commands:status no", "access denied"),
     # And the one that used to be a hang waiting to happen: a name that is not
     # a builtin and is not a file. Two places are looked in, both top level
     # only, and then it says so.
