@@ -26,11 +26,11 @@
 #define ASTRA_ASSIGN_MAX 16u
 
 /*
- * Where an assign begins inside its mount. Roots are short by nature -- work,
- * apps, sys/commands -- and this is per entry, so the bound is the difference
- * between a namespace that costs one kilobyte and one that costs three.
+ * Where an assign begins inside its mount. This is the grant's root field and
+ * nothing else: two constants for one limit is the mistake that cost four
+ * tasks the last time, so there is one.
  */
-#define ASTRA_ASSIGN_ROOT_MAX 64u
+#define ASTRA_ASSIGN_ROOT_MAX ASTRA_CAPABILITY_ROOT_MAX
 
 typedef struct AstraAssign {
     char     name[ASTRA_CAPABILITY_NAME_MAX];  /* canonical uppercase */

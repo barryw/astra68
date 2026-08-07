@@ -360,6 +360,13 @@ typedef struct KernelProcessBootstrapCapability {
      * would be deciding what a name means.
      */
     uint32_t flags;
+    /*
+     * Where the name begins inside its mount, or NULL for the mount's own
+     * root. A pointer for the same reason `name` is one: the firmware builds
+     * these from constants, and the copy into the bounded ABI field happens
+     * where the startup block is written.
+     */
+    const char *root;
     uint32_t device_id;      /* KERNEL_PROCESS_BOOTSTRAP_DEVICE */
     uint32_t source_handle;  /* KERNEL_PROCESS_BOOTSTRAP_HANDLE */
     uint8_t kind;

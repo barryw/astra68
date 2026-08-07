@@ -2341,6 +2341,7 @@ static KernelProcessStatus grant_bootstrap_capabilities(
          * what a name means.
          */
         granted[index].flags = entry->flags;
+        astra_capability_root_set(granted[index].root, entry->root);
     }
     return KERNEL_PROCESS_OK;
 }
@@ -2412,14 +2413,21 @@ static KernelProcessStatus publish_startup_block(
                  (ASTRA_LAUNCH_ARGUMENT_MAX * 4u) +
                  ASTRA_LAUNCH_ARGUMENT_BYTES];
     AstraStartupInfo info;
-    AstraStartupCapability capability[STARTUP_CAPABILITY_TOTAL_MAX];
+    /*
+     * Written straight into the page. A second array of these used to sit on
+     * this frame and be copied in whole; at 92 bytes a record that is 920
+     * bytes of an 8 KiB supervisor stack, under a syscall frame that is now
+     * carrying eight grants of its own.
+     */
+    AstraStartupCapability *capability =
+        (AstraStartupCapability *)(void *)(page + ASTRA_STARTUP_INFO_SIZE);
     uint32_t count = 2u + bootstrap_count;
     uint32_t published_bytes;
 
     if (bootstrap_count > KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     kernel_bytes_clear(&info, sizeof(info));
-    kernel_bytes_clear(capability, sizeof(capability));
+    kernel_bytes_clear(page, sizeof(page));
     published_bytes = ASTRA_STARTUP_INFO_SIZE +
                       (count * ASTRA_STARTUP_CAPABILITY_SIZE);
 
@@ -2447,9 +2455,6 @@ static KernelProcessStatus publish_startup_block(
         kernel_bytes_copy(&capability[2], bootstrap,
                           bootstrap_count * sizeof(capability[0]));
 
-    kernel_bytes_clear(page, sizeof(page));
-    kernel_bytes_copy(page + ASTRA_STARTUP_INFO_SIZE, capability,
-                      count * ASTRA_STARTUP_CAPABILITY_SIZE);
     if (arguments != NULL && arguments->count != 0u) {
         uint32_t appended = append_arguments(page, published_bytes,
                                              (uint32_t)sizeof(page), arguments,
@@ -4327,6 +4332,47 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                 result = ASTRA_SYSCALL_INVALID_ARGUMENT;
                 break;
             }
+            /*
+             * The root is validated in place rather than copied out: `grants`
+             * is the kernel's own copy already, so a field with a NUL in it is
+             * a C string here. A field without one is not a root and is
+             * refused -- carrying it would read past the record.
+             *
+             * A leading separator or a `..` component is refused for a
+             * different reason: this is where a root enters the system from
+             * outside, and a root that climbs is not a root. Resolution's own
+             * `..` rule is unaffected and still runs later.
+             */
+            {
+                uint32_t at;
+                int terminated = 0;
+
+                for (at = 0u; at < ASTRA_CAPABILITY_ROOT_MAX; ++at) {
+                    if (grants[index].root[at] == '\0') {
+                        terminated = 1;
+                        break;
+                    }
+                }
+                if (!terminated || grants[index].root[0] == '/') {
+                    result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+                    break;
+                }
+                for (at = 0u; at + 1u < ASTRA_CAPABILITY_ROOT_MAX &&
+                                grants[index].root[at] != '\0'; ++at) {
+                    if (grants[index].root[at] != '.' ||
+                        grants[index].root[at + 1u] != '.')
+                        continue;
+                    if ((at == 0u || grants[index].root[at - 1u] == '/') &&
+                        (grants[index].root[at + 2u] == '\0' ||
+                         grants[index].root[at + 2u] == '/')) {
+                        result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+                        break;
+                    }
+                }
+                if (result != ASTRA_SYSCALL_OK)
+                    break;
+            }
+            requested[index].root = grants[index].root;
             requested[index].name = names[index];
             requested[index].rights = grants[index].rights;
             requested[index].flags = grants[index].flags;

@@ -2,9 +2,19 @@
 #define ASTRA_PROCESS_H
 
 #define ASTRA_STARTUP_MAGIC 0x41535452u
-#define ASTRA_STARTUP_ABI_VERSION 1u
+#define ASTRA_STARTUP_ABI_VERSION 2u
 #define ASTRA_STARTUP_INFO_SIZE 64u
-#define ASTRA_STARTUP_CAPABILITY_SIZE 28u
+#define ASTRA_STARTUP_CAPABILITY_SIZE 92u
+/*
+ * Where a granted name begins inside its mount, and the one number for it.
+ *
+ * A grant that could not say this made every binding a child built land at the
+ * mount's own root, so a child holding COMMANDS: was holding the whole volume.
+ * Sixty-four bytes because that is what an assign's own root costs; a shorter
+ * field here would be a second limit, a truncation rule, and an explanation
+ * that never ends.
+ */
+#define ASTRA_CAPABILITY_ROOT_MAX 64u
 #define ASTRA_CAPABILITY_NAME_MAX 16u
 #define ASTRA_STARTUP_CAPABILITY_MAX 32u
 
@@ -79,9 +89,16 @@ typedef struct AstraLaunchGrant {
     uint32_t handle;                           /* the caller's own handle */
     uint32_t rights;                           /* a subset of what it holds */
     uint32_t flags;
+    /*
+     * Normalised, mount-relative, no leading separator: "commands", or "" for
+     * the mount's own root. Carried by the kernel and never read by it, the
+     * same contract `flags` has -- what a name means is the launcher's
+     * statement to the child.
+     */
+    char     root[ASTRA_CAPABILITY_ROOT_MAX];
 } AstraLaunchGrant;
 
-#define ASTRA_LAUNCH_GRANT_SIZE 28u
+#define ASTRA_LAUNCH_GRANT_SIZE 92u
 _Static_assert(sizeof(AstraLaunchGrant) == ASTRA_LAUNCH_GRANT_SIZE,
                "the launch grant is ABI: the kernel copies it in fixed steps");
 
@@ -156,6 +173,8 @@ typedef struct AstraStartupCapability {
     uint32_t handle;
     uint32_t rights;
     uint32_t flags;
+    /* Where the name begins inside its mount, "" for the mount's own root. */
+    char     root[ASTRA_CAPABILITY_ROOT_MAX];
 } AstraStartupCapability;
 
 _Static_assert(sizeof(AstraStartupInfo) == ASTRA_STARTUP_INFO_SIZE,
@@ -209,6 +228,30 @@ astra_capability_name_set(char *field, const char *name)
 _Static_assert(sizeof(AstraStartupCapability) ==
                    ASTRA_STARTUP_CAPABILITY_SIZE,
                "startup-capability ABI size changed");
+
+/*
+ * Copies and pads a root into a bounded ABI field. NULL is the empty root,
+ * which is what the firmware's own grants carry: they name devices, not places
+ * in a filesystem, and a NULL here would otherwise be a special case at every
+ * call site instead of one.
+ */
+static inline void
+astra_capability_root_set(char *field, const char *root)
+{
+    uint32_t index = 0u;
+
+    if (field == NULL) {
+        return;
+    }
+    while (root != NULL && index + 1u < ASTRA_CAPABILITY_ROOT_MAX &&
+           root[index] != '\0') {
+        field[index] = root[index];
+        ++index;
+    }
+    while (index < ASTRA_CAPABILITY_ROOT_MAX) {
+        field[index++] = '\0';
+    }
+}
 
 #endif
 
