@@ -296,6 +296,9 @@ capability(AstraStartupCapability *entry, const char *name, uint32_t handle,
     if ((rights & ASTRA_RIGHT_WRITE) != 0u) {
         entry->flags |= ASTRA_CAPABILITY_FLAG_WRITE;
     }
+    /* Every grant has a root now, so a helper that never mentions one still
+     * has to leave a defined one: the mount's own. */
+    astra_capability_root_set(entry->root, NULL);
 }
 
 /* A capability that is authority without being a name: a stream, a device. */
@@ -305,6 +308,15 @@ capability_unnamed(AstraStartupCapability *entry, const char *name,
 {
     capability(entry, name, handle, rights);
     entry->flags = 0u;
+}
+
+/* Same grant, rooted somewhere other than the mount's own root. */
+static void
+capability_rooted(AstraStartupCapability *entry, const char *name,
+                  uint32_t handle, uint32_t rights, const char *root)
+{
+    capability(entry, name, handle, rights);
+    astra_capability_root_set(entry->root, root);
 }
 
 static void
@@ -342,7 +354,7 @@ test_seeding_from_a_capability_table(void)
     assert(found != NULL);
     assert(found->handle == 9u);
     assert(found->rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE));
-    /* No root travels in the published table yet, so a grant is its mount. */
+    /* This grant carried no root, so it binds at the mount's own root. */
     assert(found->root[0] == '\0');
 
     found = astra_assign_lookup(&table, "EVENTS");
@@ -358,6 +370,42 @@ test_seeding_from_a_capability_table(void)
     /* Seeding replaces a namespace rather than adding to one. */
     assert(astra_assign_seed(&table, capabilities, 2u) == ASTRA_VFS_OK);
     assert(table.count == 0u);
+}
+
+static void
+test_seeding_builds_a_union(void)
+{
+    AstraAssignTable table;
+    AstraStartupCapability capabilities[3];
+    char wire[ASTRA_VFS_PATH_MAX];
+
+    capability_rooted(&capabilities[0], "WORK", 4u,
+                      ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "work");
+    capability_rooted(&capabilities[1], "COMMANDS", 5u,
+                      ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "local/commands");
+    capability_rooted(&capabilities[2], "COMMANDS", 5u, ASTRA_RIGHT_READ,
+                      "commands");
+
+    assert(astra_assign_seed(&table, capabilities, 3u) == ASTRA_VFS_OK);
+    assert(table.count == 3u);
+
+    /*
+     * The root travels now. Before this a child's COMMANDS: was bound at its
+     * mount's own root, so a bare name resolved against the whole volume.
+     */
+    assert(astra_assign_resolve(&table, "WORK:notes", ASTRA_RIGHT_READ, 0u,
+                                wire, sizeof(wire), NULL) == ASTRA_VFS_OK);
+    assert(strcmp(wire, "/work/notes") == 0);
+
+    /* Order in the capability table is order in the namespace. */
+    assert(astra_assign_resolve(&table, "COMMANDS:status", ASTRA_RIGHT_READ,
+                                0u, wire, sizeof(wire), NULL) == ASTRA_VFS_OK);
+    assert(strcmp(wire, "/local/commands/status") == 0);
+    assert(astra_assign_resolve(&table, "COMMANDS:status", ASTRA_RIGHT_READ,
+                                1u, wire, sizeof(wire), NULL) == ASTRA_VFS_OK);
+    assert(strcmp(wire, "/commands/status") == 0);
+    assert(astra_assign_member(&table, "COMMANDS", 1u)->rights ==
+           ASTRA_RIGHT_READ);
 }
 
 static void
@@ -558,6 +606,7 @@ main(void)
     test_resolving();
     test_resolution_refusals();
     test_seeding_from_a_capability_table();
+    test_seeding_builds_a_union();
     test_seeding_refusals();
     test_seeding_beyond_capacity();
     puts("ASTRA VFS ASSIGN PASS");

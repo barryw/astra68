@@ -259,14 +259,30 @@ astra_assign_seed(AstraAssignTable *table,
         if ((capabilities[index].flags & ASTRA_CAPABILITY_FLAG_WRITE) != 0u) {
             rights |= ASTRA_RIGHT_WRITE;
         }
-        copy(name, capabilities[index].name, ASTRA_CAPABILITY_NAME_MAX);
         /*
          * A name granted with no rights at all binds nothing: it would resolve
          * and then refuse every operation, which tells its holder one call too
          * late that it was never given anything.
          */
-        if (astra_assign_bind(table, name, capabilities[index].handle, rights,
-                              "") == ASTRA_VFS_ERR_LIMIT) {
+        char root[ASTRA_ASSIGN_ROOT_MAX];
+        uint32_t status;
+
+        copy(name, capabilities[index].name, ASTRA_CAPABILITY_NAME_MAX);
+        copy(root, capabilities[index].root, ASTRA_ASSIGN_ROOT_MAX);
+        /*
+         * The first record of a name binds and every later one joins, so order
+         * in the capability table is order in the namespace. The grant array is
+         * then the authority manifest for the child's search order as well as
+         * for its authority: one list, read once, meaning one thing.
+         */
+        if (astra_assign_lookup(table, name) == NULL) {
+            status = astra_assign_bind(table, name, capabilities[index].handle,
+                                       rights, root);
+        } else {
+            status = astra_assign_join(table, name, capabilities[index].handle,
+                                       rights, root);
+        }
+        if (status == ASTRA_VFS_ERR_LIMIT) {
             return ASTRA_VFS_ERR_LIMIT;
         }
     }

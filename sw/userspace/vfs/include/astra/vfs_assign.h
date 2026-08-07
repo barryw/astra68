@@ -105,10 +105,10 @@ const AstraAssign *astra_assign_member(const AstraAssignTable *table,
  * out of room is the one thing reported, because a namespace quietly missing
  * its tail is a program failing later for a reason nothing wrote down.
  *
- * No root travels in the published capability table yet, so every binding is
- * made at its mount's own root. The launch spec's grant has a root offset and
- * the published record has nowhere to put one; that is added when the first
- * grant needs it.
+ * The root travels in the record and is bound with the name, so a child's
+ * COMMANDS: means the directory it was granted rather than the whole volume.
+ * A name granted twice is a union: the first record binds and each later one
+ * joins, in the order the launcher listed them.
  */
 uint32_t astra_assign_seed(AstraAssignTable *table,
                            const AstraStartupCapability *capabilities,
