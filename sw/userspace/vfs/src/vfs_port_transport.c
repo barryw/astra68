@@ -28,6 +28,18 @@
  */
 #define VFS_PORT_REPLY_MESSAGES 1u
 
+/*
+ * How long a client waits for a reply before deciding there is nobody there.
+ *
+ * A wait with no deadline is the hang this whole return value exists to
+ * prevent: a service that took a request and will never answer is
+ * indistinguishable, from here, from one that is merely slow -- and only one of
+ * those is worth waiting for. Ten seconds is far beyond anything real (the
+ * machine's entire boot is under a tenth of one) and far short of a person
+ * deciding the machine is dead.
+ */
+#define VFS_PORT_REPLY_DEADLINE_NS 10000000000ull
+
 static void
 fill_header(AstraMessageHeader *header, uint32_t operation, uint32_t size,
             uint32_t transaction)
@@ -88,35 +100,54 @@ astra_vfs_port_transport(void *context, uint32_t operation,
         (void)astra_close(handles[0]);
         (void)astra_close(receive);
         /*
-         * A full port is back pressure everywhere else on this machine and is
-         * not here: the protocol is synchronous, so a caller with one request
-         * outstanding cannot have filled anything, and a port that will not
-         * take this one is a service that is not running.
+         * Which failure it was, because they call for different things. A full
+         * port is a service that is behind and a caller may try again; a
+         * refused message is this client's own mistake; anything else is a
+         * service that is not there. Collapsing all three into "peer dead" is
+         * what made a wrong message size look like a missing service, and cost
+         * an afternoon finding out which.
          */
-        return ASTRA_VFS_ERR_PEER;
+        if (status == ASTRA_SYSCALL_WOULD_BLOCK) {
+            return ASTRA_VFS_ERR_BUSY;
+        }
+        if (status == ASTRA_SYSCALL_INVALID_ARGUMENT ||
+            status == ASTRA_SYSCALL_BAD_ADDRESS) {
+            return ASTRA_VFS_ERR_INVALID;
+        }
+        if (status == ASTRA_SYSCALL_INVALID_HANDLE) {
+            return ASTRA_VFS_ERR_BAD_HANDLE;
+        }
+        return ASTRA_VFS_ERR_NOT_FOUND;
     }
-    for (;;) {
-        status = astra_port_receive(receive, &incoming, sizeof(incoming),
-                                    NULL, 0u, &size, NULL);
-        if (status == ASTRA_SYSCALL_OK) {
-            break;
-        }
-        if (status != ASTRA_SYSCALL_WOULD_BLOCK) {
-            (void)astra_close(receive);
+    {
+        uint64_t deadline = astra_clock_monotonic() +
+                            VFS_PORT_REPLY_DEADLINE_NS;
+
+        for (;;) {
+            status = astra_port_receive(receive, &incoming, sizeof(incoming),
+                                        NULL, 0u, &size, NULL);
+            if (status == ASTRA_SYSCALL_OK) {
+                break;
+            }
+            if (status != ASTRA_SYSCALL_WOULD_BLOCK) {
+                (void)astra_close(receive);
+                /*
+                 * The service took the request and will not answer. Every way
+                 * that happens is the same fact to a caller: nobody is there.
+                 */
+                return ASTRA_VFS_ERR_PEER;
+            }
             /*
-             * The service took the request and will not answer. Every way that
-             * happens is the same fact to a caller: there is nobody there.
+             * Blocked on the reply port rather than spinning at it -- a yield
+             * loop would burn a scheduling slot for the whole of a disk read
+             * -- and bounded, because a wait with no end is the hang this
+             * return value exists to prevent.
              */
-            return ASTRA_VFS_ERR_PEER;
-        }
-        /*
-         * Blocked on the reply port rather than spinning at it. A yield loop
-         * would burn a scheduling slot for the whole of a disk read.
-         */
-        status = astra_wait_one(receive, ASTRA_DEADLINE_FOREVER, NULL);
-        if (status != ASTRA_SYSCALL_OK) {
-            (void)astra_close(receive);
-            return ASTRA_VFS_ERR_PEER;
+            status = astra_wait_one(receive, deadline, NULL);
+            if (status != ASTRA_SYSCALL_OK) {
+                (void)astra_close(receive);
+                return ASTRA_VFS_ERR_PEER;
+            }
         }
     }
     (void)astra_close(receive);
@@ -148,6 +179,7 @@ astra_vfs_port_service_init(AstraVfsPortService *host, uint32_t receive,
     host->requests = 0u;
     host->refused = 0u;
     host->dropped = 0u;
+    host->stalled = 0u;
     return 1;
 }
 
@@ -171,7 +203,11 @@ astra_vfs_port_service_pump(AstraVfsPortService *host, uint32_t budget)
                                              &size, &handle_count);
 
         if (status != ASTRA_SYSCALL_OK) {
-            break;   /* WOULD_BLOCK is an empty port and the ordinary way out */
+            /* WOULD_BLOCK is an empty port and the ordinary way out. */
+            if (status != ASTRA_SYSCALL_WOULD_BLOCK) {
+                host->stalled = status;
+            }
+            break;
         }
         /*
          * No reply handle, no reply. A request that did not say where the

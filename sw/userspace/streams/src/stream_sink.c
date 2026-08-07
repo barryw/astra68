@@ -55,10 +55,50 @@ astra_stream_sink_init(AstraStreamSink *sink, uint32_t receive,
     sink->receive = receive;
     sink->render = render;
     sink->context = context;
+    sink->columns = 0u;
+    sink->rows = 0u;
     sink->messages = 0u;
     sink->bytes = 0u;
     sink->refused = 0u;
+    sink->dropped = 0u;
     return 1;
+}
+
+void
+astra_stream_sink_size(AstraStreamSink *sink, uint32_t columns, uint32_t rows)
+{
+    if (sink == NULL) {
+        return;
+    }
+    sink->columns = columns > 0xFFFFu ? 0xFFFFu : (uint16_t)columns;
+    sink->rows = rows > 0xFFFFu ? 0xFFFFu : (uint16_t)rows;
+}
+
+/*
+ * Answers "how big are you". The one message here that has a reply, and it has
+ * one because the alternative is every program assuming 80x24.
+ */
+static void
+answer_size(AstraStreamSink *sink, const AstraStreamRead *request,
+            uint32_t reply_handle)
+{
+    AstraStreamSize reply;
+
+    reply.header.total_size = (uint32_t)sizeof(reply);
+    reply.header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
+    reply.header.flags = 0u;
+    reply.header.protocol = ASTRA_STREAM_SERVICE_PROTOCOL;
+    reply.header.protocol_version = ASTRA_STREAM_SERVICE_VERSION;
+    reply.header.reserved = 0u;
+    reply.header.operation = ASTRA_STREAM_OPERATION_SIZE;
+    reply.header.transaction_id = request->header.transaction_id;
+    reply.columns = sink->columns;
+    reply.rows = sink->rows;
+    reply.status = ASTRA_SYSCALL_OK;
+    if (astra_port_send(reply_handle, &reply, sizeof(reply), NULL, 0u) !=
+        ASTRA_SYSCALL_OK) {
+        ++sink->dropped;
+    }
 }
 
 uint32_t
@@ -68,6 +108,9 @@ astra_stream_sink_pump(AstraStreamSink *sink, uint32_t budget)
      * Static, not automatic: a user thread gets one 4 KiB stack and this
      * message is 224 bytes of it. The same reason the event drain's batch and
      * the shell's input batch live outside their frames.
+     *
+     * One buffer for both shapes: a write is the larger of the two, and an
+     * info request is read out of its front.
      */
     static AstraStreamWrite message;
     uint32_t rendered = 0u;
@@ -76,10 +119,12 @@ astra_stream_sink_pump(AstraStreamSink *sink, uint32_t budget)
         return 0u;
     }
     while (rendered < budget) {
+        uint32_t handles[1] = {0u};
+        uint32_t handle_count = 0u;
         uint32_t size = 0u;
         uint32_t status = astra_port_receive(sink->receive, &message,
-                                             sizeof(message), NULL, 0u, &size,
-                                             NULL);
+                                             sizeof(message), handles, 1u,
+                                             &size, &handle_count);
 
         if (status != ASTRA_SYSCALL_OK) {
             /*
@@ -89,11 +134,27 @@ astra_stream_sink_pump(AstraStreamSink *sink, uint32_t budget)
              */
             break;
         }
+        if (accept_header(&message.header, size,
+                          ASTRA_STREAM_OPERATION_INFO,
+                          (uint32_t)sizeof(AstraStreamRead))) {
+            if (handle_count != 1u) {
+                /* Asked how big, and did not say where to answer. */
+                ++sink->refused;
+                continue;
+            }
+            answer_size(sink, (const AstraStreamRead *)&message, handles[0]);
+            (void)astra_close(handles[0]);
+            ++rendered;
+            continue;
+        }
         if (!accept_header(&message.header, size,
                            ASTRA_STREAM_OPERATION_WRITE,
                            (uint32_t)sizeof(message)) ||
-            message.length > ASTRA_STREAM_WRITE_MAX) {
+            message.length > ASTRA_STREAM_WRITE_MAX || handle_count != 0u) {
             ++sink->refused;
+            if (handle_count == 1u) {
+                (void)astra_close(handles[0]);
+            }
             continue;
         }
         sink->render(sink->context, message.bytes, message.length,

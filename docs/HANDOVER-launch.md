@@ -10,8 +10,9 @@ the last three as port handles to services it can reach across a process
 boundary. One task left: `events` becomes one of those files, and the builtin
 goes in the same commit.
 
-**Everything is on `main`.** `origin/main` is still at `d1fef0c`; everything
-since is local and unpushed.
+**Tasks 1-5 are on `main` and pushed** (`ec75bb4`). **Task 6 is unfinished and
+lives on the branch `task6-events-program`**, which does *not* pass the terminal
+gate -- see §3a. It is on a branch precisely so `main` stays green.
 
 ---
 
@@ -67,6 +68,46 @@ returns
 - `kernel_elf_accept_windowed` bounds the headers to the bytes actually handed
   over, and each segment page bounces through one page of kernel memory
   (`launch_page`). A launched image is never read through a user pointer.
+
+## 3a. Where task 6 actually stopped -- read this first
+
+`events` is a program, it launches, it is granted `EVENTS:`, and its first
+request **is never answered**. The chain is understood up to one unexplained
+step:
+
+- The child's `astra_port_send` to its `EVENTS:` handle returns **OK**: the
+  message is queued on the events service's port. Verified with a raw probe in
+  `events.c` (`probe handle 264 / create 0 / send 0`).
+- The supervisor's `astra_vfs_port_service_pump` then gets
+  **`ASTRA_SYSCALL_RESOURCE_LIMIT`** from `astra_port_receive`, every pass, and
+  the message stays queued forever. Visible as `stalled 5` on the terminal line
+  the shell now prints after a child exits.
+- The client's second send then fills the one-deep port and returns
+  `WOULD_BLOCK`, so the child exits 14 (`ASTRA_VFS_ERR_BUSY`).
+
+**What has been ruled out:** the handle table. It was 16 entries and the
+supervisor now holds eight port endpoints, so that looked exactly like the
+cause; it is now 31 (see `sw/kernel/handle.h`) **and the symptom is unchanged**.
+That change is worth keeping on its own merits, but it is not the bug.
+
+**Where to look next:** whatever else makes `kernel_port_receive_prepare`
+return a status that `port_status_to_syscall` maps to `RESOURCE_LIMIT` when the
+message carries one attached handle. `kernel_handle_import_reserve` and the
+detached-handle pool are the two candidates not yet eliminated. The receive is
+in `sw/kernel/port.c`; the caller is `astra_vfs_port_service_pump`.
+
+**Scaffolding to remove once it is fixed:** the `probe` lines in
+`sw/userspace/commands/events/events.c`, and the `[events served/refused/
+stalled` line in `command_launch`. The `stalled` counter itself is worth
+keeping -- a pump that silently stops receiving is what made this take an
+afternoon.
+
+**What is already good on the branch and should survive:** the stream `INFO`
+message and `astra_stream_size` (with tests), the transport's bounded reply wait
+(a wait with no deadline was the hang task 5's step 1 said it must not have),
+the transport telling a full port apart from a dead peer, and the events
+service's drain no longer sharing a health flag with its ability to answer
+clients.
 
 ## 3. What task 6 needs to know
 

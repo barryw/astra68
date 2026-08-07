@@ -163,6 +163,16 @@ astra_yield(void)
     return ASTRA_SYSCALL_OK;
 }
 
+/* Monotonic enough for a deadline the test never means to reach. */
+static uint64_t mock_now;
+
+uint64_t
+astra_clock_monotonic(void)
+{
+    mock_now += 1000u;
+    return mock_now;
+}
+
 uint32_t
 astra_activity_current(void)
 {

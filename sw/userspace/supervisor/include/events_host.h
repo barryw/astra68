@@ -23,6 +23,11 @@ int supervisor_events_start(uint32_t process_handle);
 /* The send handle a launch grants for EVENTS:. */
 uint32_t supervisor_events_port(void);
 
+/* Requests this service answered, and requests it could not. */
+uint32_t supervisor_events_served(void);
+uint32_t supervisor_events_refused(void);
+uint32_t supervisor_events_stalled(void);
+
 void supervisor_events_pump(void);
 
 /*

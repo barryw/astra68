@@ -88,6 +88,13 @@ console_stream_start(AstraTerminal *terminal)
         !astra_stream_source_init(&source, source_receive)) {
         return 0;
     }
+    /*
+     * How big this sink is, for a program that pages. It comes from the
+     * terminal rather than a constant, which is the whole reason the question
+     * is a message: a program that assumed 80x24 would be wrong on the 90x30
+     * plane this machine actually has.
+     */
+    astra_stream_sink_size(&sink, terminal->columns, terminal->rows);
     stream_ready = 1;
     return 1;
 }

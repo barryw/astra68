@@ -299,10 +299,11 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
                 if verbose:
                     print("ok: %r -> %r" % (line, expected))
 
-            # A live tail, and the way out of it. Not in SCRIPT because ending
-            # it is a keystroke rather than a line: any key ends a follow and
-            # that key is consumed, so a typed line would lose its first
-            # character. Enter is the key with nothing to lose.
+            # A live tail, and the way out of it. Not in SCRIPT because
+            # ending it is a bare return rather than a command: `events` is a
+            # program now and what it reads is STDIN, which is lines -- so the
+            # way out is an empty line, and the shell hands the child the
+            # newline that was pressed rather than swallowing it.
             for line, expected in (("events --follow", "-- following"),
                                    (None, "WORK:>")):
                 if line is not None:

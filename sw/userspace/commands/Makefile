@@ -16,7 +16,9 @@ SIZE := $(CROSS)size
 OBJCOPY := $(CROSS)objcopy
 RUNTIME := ../runtime
 STREAMS := ../streams
-CPPFLAGS := -I../../include -I$(RUNTIME)/include -I$(STREAMS)/include
+VFS := ../vfs
+CPPFLAGS := -I../../include -I$(RUNTIME)/include -I$(STREAMS)/include \
+	-I$(VFS)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
 TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
@@ -26,9 +28,10 @@ LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 STREAMS_LIB := $(STREAMS)/build/m68k/libastrastreams.a
+VFS_LIB := $(VFS)/build/m68k/libastravfs.a
 RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0.o
 
-COMMANDS := status
+COMMANDS := status events
 # What the gate installs on the volume: stripped, the way the ROM's own image
 # is, because a command carries no more DWARF onto a card than the supervisor
 # carries into ROM. The unstripped ELF stays beside it for a debugger.
@@ -43,16 +46,17 @@ all: libraries
 libraries:
 	$(MAKE) -C $(RUNTIME) all
 	$(MAKE) -C $(STREAMS) all
+	$(MAKE) -C $(VFS) all
 
 # .SECONDEXPANSION so a command's source is <name>/<name>.c rather than a
 # second list to keep in step with the first.
 .SECONDEXPANSION:
-build/m68k/%: $$*/$$*.c $(RUNTIME_LIB) $(STREAMS_LIB) $(RUNTIME_CRT0) \
-		$(RUNTIME)/astra_user.ld
+build/m68k/%: $$*/$$*.c $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) \
+		$(RUNTIME_CRT0) $(RUNTIME)/astra_user.ld
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
 		$(LINK_FLAGS) -o $@.elf $(RUNTIME_CRT0) $< \
-		$(STREAMS_LIB) $(RUNTIME_LIB) -lgcc
+		$(VFS_LIB) $(STREAMS_LIB) $(RUNTIME_LIB) -lgcc
 	$(OBJCOPY) --strip-debug --remove-section=.astra_events $@.elf $@
 
 size: $(IMAGES)

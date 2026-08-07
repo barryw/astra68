@@ -53,6 +53,13 @@ typedef struct AstraVfsPortService {
     uint32_t requests;   /* dispatched and answered */
     uint32_t refused;    /* received, and not this protocol */
     uint32_t dropped;    /* answered nobody: the reply had nowhere to go */
+    /*
+     * The last thing a receive said that was not "the port is empty". A pump
+     * that stopped for any other reason used to leave no trace at all, and a
+     * service that silently stops receiving looks exactly like one nobody is
+     * calling -- which cost an afternoon telling those two apart.
+     */
+    uint32_t stalled;
 } AstraVfsPortService;
 
 int astra_vfs_port_service_init(AstraVfsPortService *host, uint32_t receive,

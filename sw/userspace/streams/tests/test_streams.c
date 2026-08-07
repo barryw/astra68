@@ -46,6 +46,14 @@ static uint32_t next_port = 1u;
 static uint32_t mock_activity = 0x5A5A5A5Au;
 static uint32_t yields;
 static uint32_t closes;
+/*
+ * The service side runs inside the client's wait. Not a convenience for the
+ * test: on the machine the supervisor's loop pumps while a child is blocked
+ * inside a call, and serving the child you are waiting for is the whole shape
+ * of this architecture.
+ */
+static AstraStreamSource *served_source;
+static AstraStreamSink *served_sink;
 
 static void
 mock_reset(void)
@@ -54,6 +62,8 @@ mock_reset(void)
     next_port = 1u;
     yields = 0u;
     closes = 0u;
+    served_source = NULL;
+    served_sink = NULL;
 }
 
 static uint32_t
@@ -176,15 +186,6 @@ astra_close(uint32_t handle)
     return ASTRA_SYSCALL_OK;
 }
 
-/*
- * A reader blocks on its reply port rather than spinning on it, so the wait is
- * where the other side gets to run. That is not a convenience for the test: it
- * is exactly what happens on the machine, where the supervisor's loop pumps the
- * source while the child is blocked inside astra_stream_read. Serving the child
- * you are waiting for is the whole shape of this architecture.
- */
-static AstraStreamSource *served_source;
-
 uint32_t
 astra_wait_one(uint32_t handle, uint64_t deadline_ns, uint32_t *detail)
 {
@@ -195,6 +196,9 @@ astra_wait_one(uint32_t handle, uint64_t deadline_ns, uint32_t *detail)
     assert(handle != 0u && handle < MOCK_PORT_MAX);
     if (served_source != NULL) {
         (void)astra_stream_source_pump(served_source, 4u);
+    }
+    if (served_sink != NULL) {
+        (void)astra_stream_sink_pump(served_sink, 4u);
     }
     assert(ports[handle].count != 0u &&
            "a wait nothing can wake: the reply was never sent");
@@ -589,10 +593,56 @@ test_a_message_that_is_not_the_protocol_is_counted_not_rendered(void)
     assert(source.refused == 1u);
 }
 
+/*
+ * How big the far end is, which is the question every pager has to ask and
+ * every other machine's programs answer with a guess.
+ */
+static void
+test_a_program_can_ask_how_big_the_screen_is(void)
+{
+    AstraStreamSink sink;
+    uint32_t handle;
+    uint32_t columns = 0xffffffffu;
+    uint32_t rows = 0xffffffffu;
+
+    mock_reset();
+    assert(astra_terminal_init(&terminal, 90u, 30u, no_render, NULL) ==
+           ASTRA_TERMINAL_OK);
+    handle = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_stream_sink_init(&sink, handle, to_terminal, NULL));
+    astra_stream_sink_size(&sink, terminal.columns, terminal.rows);
+
+    /* The sink answers inside the asker's wait, the way the machine does it. */
+    served_sink = &sink;
+    assert(astra_stream_size(handle, &columns, &rows) == ASTRA_SYSCALL_OK);
+    assert(columns == 90u && rows == 30u);
+    served_sink = NULL;
+
+    /*
+     * A sink with no geometry -- a file, and a pipe when there is one --
+     * answers zero, and that is an answer rather than a failure. A program
+     * that treated it as one could not be redirected.
+     */
+    mock_reset();
+    handle = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_stream_sink_init(&sink, handle, to_terminal, NULL));
+    served_sink = &sink;
+    columns = 0xffffffffu;
+    rows = 0xffffffffu;
+    assert(astra_stream_size(handle, &columns, &rows) == ASTRA_SYSCALL_OK);
+    assert(columns == 0u && rows == 0u);
+    served_sink = NULL;
+
+    /* And a stream nobody granted still has no size to give. */
+    assert(astra_stream_size(0u, &columns, &rows) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+}
+
 int
 main(void)
 {
     test_a_write_reaches_the_terminal();
+    test_a_program_can_ask_how_big_the_screen_is();
     test_a_long_write_is_several_messages_never_a_cut_one();
     test_a_full_sink_says_so_and_loses_nothing();
     test_a_print_retries_until_the_text_is_gone();

@@ -5,7 +5,29 @@
 #include <stdint.h>
 
 #define KERNEL_HANDLE_INVALID 0u
-#define KERNEL_HANDLE_MAX_ENTRIES 16u
+/*
+ * How many objects one process may hold at once.
+ *
+ * It was 16, which was generous when a process held its own two, a device or
+ * three, and nothing else. The supervisor now hosts services, and a service is
+ * a port: two endpoints each for the stream sink, the stream source, the
+ * storage service and the events service is eight handles before anything else
+ * -- and then a launch adds the child's process handle, and receiving a
+ * request adds the reply handle that came with it.
+ *
+ * At 16 the table filled exactly one slot short of that last one. The symptom
+ * was a launched program's first request sitting in a port nobody could take
+ * it out of: `astra_port_receive` answered RESOURCE_LIMIT because it could not
+ * install the attached reply handle, the message stayed queued, and the child
+ * waited for an answer that could not be produced. Nothing was broken and
+ * nothing said so.
+ *
+ * 31 costs 420 bytes per process and 1,680 across the machine, which is
+ * nothing against being one handle short of a working service. Thirty-one and
+ * not thirty-two because the free-slot bitmap is a single uint32_t and
+ * handle.c asserts the range it can represent.
+ */
+#define KERNEL_HANDLE_MAX_ENTRIES 31u
 #define KERNEL_HANDLE_TRANSFER_MAX 8u
 #define KERNEL_HANDLE_DETACHED_MAX 256u
 

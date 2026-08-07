@@ -38,13 +38,25 @@ typedef struct AstraStreamSink {
     uint32_t receive;
     AstraStreamRender render;
     void *context;
+    /*
+     * How big the far end is, for a program that pages. Zero means no
+     * geometry, which is an answer -- a file has none -- rather than a
+     * failure, so a program that is redirected simply does not page.
+     */
+    uint16_t columns;
+    uint16_t rows;
     uint32_t messages;   /* rendered */
     uint32_t bytes;
     uint32_t refused;    /* received, and not this protocol */
+    uint32_t dropped;    /* answered nobody: the reply had nowhere to go */
 } AstraStreamSink;
 
 int astra_stream_sink_init(AstraStreamSink *sink, uint32_t receive,
                            AstraStreamRender render, void *context);
+
+/* What this sink tells a program that asks. Zero and zero until it is set. */
+void astra_stream_sink_size(AstraStreamSink *sink, uint32_t columns,
+                            uint32_t rows);
 
 /*
  * Drains at most `budget` messages and returns how many it rendered. Bounded
@@ -107,6 +119,14 @@ uint32_t astra_stream_write(uint32_t handle, const void *bytes,
  * how loaded the machine was.
  */
 uint32_t astra_print(uint32_t handle, const char *text);
+
+/*
+ * How big the far end is. Zero and zero is a successful answer meaning "no
+ * geometry" -- a sink writing to a file has none -- and a program that paged
+ * anyway on that answer would be one that could not be redirected.
+ */
+uint32_t astra_stream_size(uint32_t handle, uint32_t *columns,
+                           uint32_t *rows);
 
 /*
  * At most `capacity` bytes from `source`, the STDIN handle a launch granted.
