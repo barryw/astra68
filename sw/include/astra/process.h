@@ -38,7 +38,12 @@
  * capability which did not exist a moment earlier, which is what makes it safe
  * to expose as a syscall at all.
  */
-#define ASTRA_LAUNCH_GRANT_MAX 6u
+/*
+ * Eight, because a shell hands a child three streams, its namespace, and a
+ * COMMANDS: that has two members. Six was exactly what a single-member
+ * namespace needed, which is how a ceiling becomes a surprise.
+ */
+#define ASTRA_LAUNCH_GRANT_MAX 8u
 #define ASTRA_LAUNCH_ARGUMENT_MAX 8u
 #define ASTRA_LAUNCH_ARGUMENT_BYTES 192u
 

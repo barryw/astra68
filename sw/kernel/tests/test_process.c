@@ -6334,6 +6334,15 @@ static void test_capability_roots_are_bounded(void)
     astra_capability_root_set(field, oversized);
     assert(field[ASTRA_CAPABILITY_ROOT_MAX - 1u] == '\0');
     assert(strlen(field) == ASTRA_CAPABILITY_ROOT_MAX - 1u);
+
+    /*
+     * One number, checked here as well as asserted at compile time. A launch
+     * of more than the loader's ceiling used to fail with INVALID_ARGUMENT
+     * from inside the loader, naming neither the grant nor the reason, and it
+     * stayed latent for four tasks.
+     */
+    assert(ASTRA_LAUNCH_GRANT_MAX == 8u);
+    assert(ASTRA_LAUNCH_GRANT_MAX == KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX);
 }
 
 /*
