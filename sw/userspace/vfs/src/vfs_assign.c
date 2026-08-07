@@ -135,14 +135,22 @@ astra_assign_bind(AstraAssignTable *table, const char *name, uint32_t handle,
         ASTRA_VFS_OK) {
         return ASTRA_VFS_ERR_INVALID;
     }
-    for (index = 0u; index < table->count; ++index) {
-        if (same(table->entries[index].name, canonical_name)) {
-            copy(table->entries[index].root, canonical_root,
-                 ASTRA_ASSIGN_ROOT_MAX);
-            table->entries[index].handle = handle;
-            table->entries[index].rights = rights;
-            return ASTRA_VFS_OK;
+    /*
+     * A name has one meaning at a time, and that meaning may now be a list --
+     * so binding drops every member of the name before it makes the new one.
+     * Editing the first member in place would leave a union whose head a
+     * caller replaced and whose tail it never mentioned.
+     */
+    index = 0u;
+    while (index < table->count) {
+        if (!same(table->entries[index].name, canonical_name)) {
+            ++index;
+            continue;
         }
+        for (uint32_t at = index; at + 1u < table->count; ++at) {
+            table->entries[at] = table->entries[at + 1u];
+        }
+        --table->count;
     }
     if (table->count >= ASTRA_ASSIGN_MAX) {
         return ASTRA_VFS_ERR_LIMIT;
@@ -155,6 +163,60 @@ astra_assign_bind(AstraAssignTable *table, const char *name, uint32_t handle,
     table->entries[table->count].rights = rights;
     ++table->count;
     return ASTRA_VFS_OK;
+}
+
+uint32_t
+astra_assign_join(AstraAssignTable *table, const char *name, uint32_t handle,
+                  uint32_t rights, const char *root)
+{
+    char canonical_name[ASTRA_CAPABILITY_NAME_MAX];
+    char canonical_root[ASTRA_ASSIGN_ROOT_MAX];
+
+    if (table == NULL || handle == 0u || rights == 0u || root == NULL ||
+        !canonical(name, canonical_name)) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    if (astra_path_normalise(root, canonical_root, sizeof(canonical_root)) !=
+        ASTRA_VFS_OK) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    if (astra_assign_member(table, canonical_name, 0u) == NULL) {
+        return ASTRA_VFS_ERR_NOT_FOUND;
+    }
+    if (table->count >= ASTRA_ASSIGN_MAX) {
+        return ASTRA_VFS_ERR_LIMIT;
+    }
+    copy(table->entries[table->count].name, canonical_name,
+         ASTRA_CAPABILITY_NAME_MAX);
+    copy(table->entries[table->count].root, canonical_root,
+         ASTRA_ASSIGN_ROOT_MAX);
+    table->entries[table->count].handle = handle;
+    table->entries[table->count].rights = rights;
+    ++table->count;
+    return ASTRA_VFS_OK;
+}
+
+const AstraAssign *
+astra_assign_member(const AstraAssignTable *table, const char *name,
+                    uint32_t member)
+{
+    char canonical_name[ASTRA_CAPABILITY_NAME_MAX];
+    uint32_t index;
+    uint32_t seen = 0u;
+
+    if (table == NULL || !canonical(name, canonical_name)) {
+        return NULL;
+    }
+    for (index = 0u; index < table->count; ++index) {
+        if (!same(table->entries[index].name, canonical_name)) {
+            continue;
+        }
+        if (seen == member) {
+            return &table->entries[index];
+        }
+        ++seen;
+    }
+    return NULL;
 }
 
 uint32_t
@@ -214,49 +276,43 @@ astra_assign_seed(AstraAssignTable *table,
 const AstraAssign *
 astra_assign_lookup(const AstraAssignTable *table, const char *name)
 {
-    char canonical_name[ASTRA_CAPABILITY_NAME_MAX];
-    uint32_t index;
-
-    if (table == NULL || !canonical(name, canonical_name)) {
-        return NULL;
-    }
-    for (index = 0u; index < table->count; ++index) {
-        if (same(table->entries[index].name, canonical_name)) {
-            return &table->entries[index];
-        }
-    }
-    return NULL;
+    return astra_assign_member(table, name, 0u);
 }
 
 uint32_t
 astra_assign_unbind(AstraAssignTable *table, const char *name)
 {
     char canonical_name[ASTRA_CAPABILITY_NAME_MAX];
-    uint32_t index;
+    uint32_t index = 0u;
+    uint32_t removed = 0u;
 
     if (table == NULL || !canonical(name, canonical_name)) {
         return ASTRA_VFS_ERR_INVALID;
     }
-    for (index = 0u; index < table->count; ++index) {
+    /*
+     * Every member goes, and the rest shift down. The last entry used to be
+     * moved into the hole, on the reasoning that order is not a property of a
+     * namespace. It is one now: a member's position is the order it is tried
+     * in, so compacting by swap would silently reorder somebody else's union.
+     */
+    while (index < table->count) {
         if (!same(table->entries[index].name, canonical_name)) {
+            ++index;
             continue;
         }
-        /*
-         * The last entry moves into the hole. Order is not a property of a
-         * namespace -- a name means what it is bound to, not where it sits --
-         * so compacting costs nothing and keeps lookup linear over `count`.
-         */
-        table->entries[index] = table->entries[table->count - 1u];
+        for (uint32_t at = index; at + 1u < table->count; ++at) {
+            table->entries[at] = table->entries[at + 1u];
+        }
         --table->count;
-        return ASTRA_VFS_OK;
+        ++removed;
     }
-    return ASTRA_VFS_ERR_NOT_FOUND;
+    return removed != 0u ? ASTRA_VFS_OK : ASTRA_VFS_ERR_NOT_FOUND;
 }
 
 uint32_t
 astra_assign_resolve(const AstraAssignTable *table, const char *path,
-                     uint32_t rights, char *wire, uint32_t capacity,
-                     const AstraAssign **assign)
+                     uint32_t rights, uint32_t member, char *wire,
+                     uint32_t capacity, const AstraAssign **assign)
 {
     char name[ASTRA_CAPABILITY_NAME_MAX];
     /*
@@ -276,7 +332,7 @@ astra_assign_resolve(const AstraAssignTable *table, const char *path,
     if (status != ASTRA_VFS_OK) {
         return status;
     }
-    found = astra_assign_lookup(table, name);
+    found = astra_assign_member(table, name, member);
     if (found == NULL) {
         return ASTRA_VFS_ERR_NOT_FOUND;
     }

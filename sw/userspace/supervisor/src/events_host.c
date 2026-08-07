@@ -92,7 +92,7 @@ load_catalog(void)
     }
     catalog_status = astra_assign_resolve(supervisor_assigns(),
                                           "SYS:astra_events.cat",
-                                          ASTRA_RIGHT_READ, wire,
+                                          ASTRA_RIGHT_READ, 0u, wire,
                                           sizeof(wire), &assign);
     if (catalog_status != ASTRA_VFS_OK) {
         return;

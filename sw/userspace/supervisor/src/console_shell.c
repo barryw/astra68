@@ -120,8 +120,8 @@ static uint32_t shell_path(const char *name, uint32_t rights, char *wire,
                                 sizeof(typed));
     if (status != ASTRA_VFS_OK)
         return status;
-    status = astra_assign_resolve(supervisor_assigns(), typed, rights, wire,
-                                  capacity, &assign);
+    status = astra_assign_resolve(supervisor_assigns(), typed, rights, 0u,
+                                  wire, capacity, &assign);
     if (status != ASTRA_VFS_OK)
         return status;
     /*
@@ -290,7 +290,7 @@ static void command_cd(int argc, char *const *argv)
                                 sizeof(typed));
     if (status == ASTRA_VFS_OK) {
         status = astra_assign_resolve(supervisor_assigns(), typed,
-                                      ASTRA_RIGHT_READ, wire, sizeof(wire),
+                                      ASTRA_RIGHT_READ, 0u, wire, sizeof(wire),
                                       &assign);
     }
     if (status == ASTRA_VFS_OK) {
@@ -544,7 +544,7 @@ static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
         }
         /* Named its own assign: one place, no search, and answerable. */
         status = astra_assign_resolve(supervisor_assigns(), word,
-                                      ASTRA_RIGHT_READ, wire, capacity,
+                                      ASTRA_RIGHT_READ, 0u, wire, capacity,
                                       &assign);
         if (status != ASTRA_VFS_OK) {
             return status;
@@ -567,7 +567,7 @@ static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
         }
         typed[length] = '\0';
         status = astra_assign_resolve(supervisor_assigns(), typed,
-                                      ASTRA_RIGHT_READ, wire, capacity,
+                                      ASTRA_RIGHT_READ, 0u, wire, capacity,
                                       &assign);
         if (status != ASTRA_VFS_OK) {
             continue;   /* not bound, or not there: try the next place */
