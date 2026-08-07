@@ -30,9 +30,20 @@ static AstraAssignTable assigns;
 static uint32_t out;
 
 /*
- * One client per distinct handle, made when a member first needs it. Two
- * members of one union on one volume share a handle and therefore a client;
- * two on different volumes would not, and nothing here has to change for that.
+ * One client per distinct handle, made when a member first needs it. That is
+ * a slot per member visited, not per volume, because a launched child never
+ * receives one shared handle for two members the way the shell does: the
+ * shell's own table binds both COMMANDS members to the same connection in
+ * bind_standard_assigns, but launch_grants copies that one handle number into
+ * a separate grant record per member, and grant_bootstrap_capabilities hands
+ * each grant to kernel_handle_duplicate_into, which claims the next free slot
+ * in the child's own handle table with no check for an existing entry on the
+ * same object. So this process is handed two different handle numbers for
+ * COMMANDS's two members even though both name the same VFS session
+ * underneath, and the first loop below can never fold them back into one
+ * client. What it is for instead is a name that gets resolved more than once
+ * in a single run: that lookup does repeat a handle number, and finding the
+ * client already open is what keeps it from being connected twice.
  */
 static struct {
     uint32_t handle;

@@ -188,6 +188,23 @@ SCRIPT = [
     ("events --boot -1", "the store is RAM"),
 ]
 
+# The exit-order check near the end of run() rereads the *current* screen
+# after SCRIPT finishes rather than capturing output as it goes, so this
+# line's output -- and the shell's report of its exit, which the check also
+# needs -- is only guaranteed to still be among the 30 rendered rows while
+# this is the last thing SCRIPT types. Anything appended after it pushes
+# both off the top before that check runs, which is the exact scroll-
+# dependent flake that put this line here in the first place (see the
+# comment above it). This assertion turns a future mistake like that into an
+# immediate, named failure instead of a mysterious one at the bottom of a
+# run.
+assert SCRIPT[-1] == ("events --boot -1", "the store is RAM"), (
+    "SCRIPT's last entry must stay (\"events --boot -1\", \"the store is "
+    "RAM\") -- the exit-order check in run() rereads the rendered screen "
+    "right after SCRIPT finishes and needs this command's own output and "
+    "the shell's exit report for it to both still be on screen, which is "
+    "only true while this line is typed last")
+
 QCODE = {" ": "spc", "\n": "ret", "/": "slash", ".": "dot", "-": "minus"}
 # Keys that need a modifier held. Assign names are case-insensitive, so a
 # colon is the only shifted character the script needs.
