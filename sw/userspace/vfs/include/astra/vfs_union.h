@@ -31,8 +31,16 @@ typedef AstraVfsClient *(*AstraVfsAssignClientFn)(const AstraAssign *assign,
  *
  * `rights` is what the operation needs and is checked per member, so a
  * read-only member under a writable union is skipped for a write rather than
- * refusing the whole call. Returns what the last attempt returned when nothing
- * answered, and ASTRA_VFS_ERR_NOT_FOUND when the name has no members at all.
+ * refusing the whole call. Every member is tried even after one fails, since a
+ * union's value is that one broken member costs only the files on it.
+ *
+ * When nothing answers, this returns the *worst* status any member gave
+ * rather than the last one: ASTRA_VFS_ERR_NOT_FOUND if that is all any member
+ * ever said, or the first status that was not ASTRA_VFS_ERR_NOT_FOUND
+ * otherwise. NOT_FOUND means "absent", the ordinary case, and must not bury
+ * something like ASTRA_VFS_ERR_IO -- a caller told "not found" when a device
+ * actually failed has no reason to stop asking it. ASTRA_VFS_ERR_NOT_FOUND is
+ * also what a name with no members at all returns.
  */
 uint32_t astra_vfs_assign_open(const AstraAssignTable *table, const char *path,
                                uint32_t rights, uint32_t flags,

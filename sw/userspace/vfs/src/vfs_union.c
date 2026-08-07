@@ -25,6 +25,7 @@ astra_vfs_assign_open(const AstraAssignTable *table, const char *path,
         const AstraAssign *assign = NULL;
         AstraVfsClient *serving;
         uint32_t resolved;
+        uint32_t opened;
 
         resolved = astra_assign_resolve(table, path, rights, index, wire,
                                         capacity, &assign);
@@ -38,7 +39,15 @@ astra_vfs_assign_open(const AstraAssignTable *table, const char *path,
             break;
         }
         if (resolved != ASTRA_VFS_OK) {
-            status = resolved;
+            /*
+             * NOT_FOUND is the ordinary case -- a member that simply is not
+             * the answer -- so it never displaces a status that already says
+             * something more specific. See the comment below for why that
+             * matters.
+             */
+            if (status == ASTRA_VFS_ERR_NOT_FOUND) {
+                status = resolved;
+            }
             if (resolved == ASTRA_VFS_ERR_NOT_FOUND) {
                 break;
             }
@@ -46,11 +55,26 @@ astra_vfs_assign_open(const AstraAssignTable *table, const char *path,
         }
         serving = client_for(assign, context);
         if (serving == NULL) {
-            status = ASTRA_VFS_ERR_NOT_FOUND;
             continue;
         }
-        status = astra_vfs_open(serving, wire, flags, file, size, kind);
-        if (status != ASTRA_VFS_OK) {
+        opened = astra_vfs_open(serving, wire, flags, file, size, kind);
+        if (opened != ASTRA_VFS_OK) {
+            /*
+             * Keep trying every member regardless of what this one said: a
+             * union's whole value is that one broken member costs only the
+             * files on it, and a device that is failing must not stop a
+             * working member later in the list from answering. But between
+             * two failures, remember the worse one rather than the last one
+             * -- ASTRA_VFS_ERR_NOT_FOUND just means "absent", the ordinary
+             * case, while ASTRA_VFS_ERR_IO and friends mean a device could
+             * not answer at all. A caller told "not found" when the truth is
+             * "the device failed" has no reason to stop retrying, and will
+             * hammer a machine that can never answer -- the single most
+             * expensive wrong answer this project has already paid for once.
+             */
+            if (status == ASTRA_VFS_ERR_NOT_FOUND) {
+                status = opened;
+            }
             continue;
         }
         if (client != NULL) {
