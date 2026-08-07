@@ -12,10 +12,44 @@ SCHED_TRACE ?= 0
 SOAK_SELFTEST ?= 0
 # The K1/K10 qualification pair is a milestone harness, not a boot workload.
 K1_QUALIFICATION ?= 0
+
+# Release or debug, and the only thing it decides is how much the kernel says.
+#
+# A release keeps what explains a machine that misbehaved -- faults,
+# quarantines, the boot -- and compiles the chatty sites away entirely, so they
+# cost no ROM and no cycles. A debug build keeps everything, including the
+# interrupt deliver/acknowledge stream, which is how a device problem is
+# actually found and which is far too noisy to ship.
+#
+# Both are built by the gates, because a release that nobody builds is a
+# release that does not compile when it matters.
+ASTRA_BUILD ?= release
+
+# The qualification harness carries no diagnostic surface.
+#
+# It is a device gate, not a machine anyone reads: nothing in it asks the
+# kernel what it has been doing, and the introspection that answers that
+# question is real code in a kernel whose bootstrap region is nearly full. The
+# surface is what puts DEBUG on a process's own handle, so removing it removes
+# the syscalls that right guards along with it.
+ifeq ($(K1_QUALIFICATION),1)
+CPPFLAGS_DEBUG_SURFACE = -DASTRA_KERNEL_DEBUG_SURFACE=0
+endif
+
+ifeq ($(ASTRA_BUILD),release)
+KERNEL_TRACE_BUILD_LEVEL = KERNEL_TRACE_LEVEL_NOTICE
+else ifeq ($(ASTRA_BUILD),debug)
+KERNEL_TRACE_BUILD_LEVEL = KERNEL_TRACE_LEVEL_DEBUG
+else
+$(error ASTRA_BUILD must be release or debug, not '$(ASTRA_BUILD)')
+endif
+
 BUILD_DIR = build
 BUILD_INFO = $(BUILD_DIR)/kernel_build_info.h
 
-CPPFLAGS = -I../include -I$(BUILD_DIR) -include $(BUILD_INFO)
+CPPFLAGS = -I../include -I$(BUILD_DIR) -include $(BUILD_INFO) \
+           -DKERNEL_TRACE_BUILD_LEVEL=$(KERNEL_TRACE_BUILD_LEVEL) \
+           $(CPPFLAGS_DEBUG_SURFACE)
 # -ffunction-sections with --gc-sections below. A large part of this kernel is
 # introspection and test surface -- the *_snapshot, *_stats and
 # *_test_fail_* entry points the host suites drive -- and the image itself
@@ -87,7 +121,8 @@ $(BUILD_INFO): FORCE gen_build_info.py | $(BUILD_DIR)
 		--panic-selftest "$(PANIC_SELFTEST)" \
 		--sched-trace "$(SCHED_TRACE)" \
 		--soak-selftest "$(SOAK_SELFTEST)" \
-		--k1-qualification "$(K1_QUALIFICATION)" --output "$@"
+		--k1-qualification "$(K1_QUALIFICATION)" \
+		--build "$(ASTRA_BUILD)" --output "$@"
 
 $(OBJECTS): $(BUILD_INFO)
 

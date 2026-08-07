@@ -3,6 +3,8 @@
 
 #include "thread.h"
 
+#include <astra/syscall.h>
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -81,7 +83,14 @@ typedef struct KernelIrqTrace {
     uint16_t event;
     uint16_t flags;
     uint8_t valid;
-    uint8_t reserved[3];
+    /*
+     * The level the staging site declared. A dispatch record is built inside
+     * the interrupt and written after it, so the site cannot gate itself the
+     * way an ordinary KERNEL_TRACE call does -- it carries its level here
+     * instead, and the writer drops it if this build does not keep that level.
+     */
+    uint8_t level;
+    uint8_t reserved[2];
 } KernelIrqTrace;
 
 typedef bool (*KernelIrqCapture)(uint8_t source, uint32_t *status,
@@ -211,6 +220,17 @@ KernelIrqStatus kernel_irq_service_revocations(uint32_t batch_limit,
                                                uint32_t *completed);
 bool kernel_irq_revocation_pending(void);
 bool kernel_irq_snapshot(uint32_t slot, KernelIrqSnapshot *snapshot);
+
+/*
+ * The same slot, in the shape userspace is given it.
+ *
+ * Published because a quarantined device is otherwise indistinguishable from
+ * an idle one: the handles are still open and every call comes back with an
+ * I/O error three layers from its cause. Returns false for a slot out of
+ * range; a free slot is a successful answer with a zero owner, because "no
+ * endpoint here" is a fact a caller iterating wants told rather than an error.
+ */
+bool kernel_irq_endpoint_info(uint32_t slot, AstraIrqEndpointInfo *info);
 bool kernel_irq_pool_stats(KernelIrqPoolStats *stats);
 bool kernel_irq_pool_healthy(void);
 bool kernel_irq_pool_valid(void);

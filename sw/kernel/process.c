@@ -91,7 +91,7 @@ typedef struct KernelProcess {
 } KernelProcess;
 
 #if defined(__m68k__)
-_Static_assert(sizeof(KernelProcess) == 596u,
+_Static_assert(sizeof(KernelProcess) == 1016u,
                "process record size changed; update the memory budget");
 #endif
 
@@ -4452,6 +4452,69 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         thread->context.data[3] = lost;
         break;
     }
+#if ASTRA_KERNEL_DEBUG_SURFACE
+    case ASTRA_SYSCALL_IRQ_ENDPOINT_INFO: {
+        /*
+         * What the machine's interrupt endpoints are doing.
+         *
+         * On the same terms as reading the trace stream, and for the same
+         * reason: it is every process's devices at once, so it takes the
+         * diagnostic capability rather than being universal. A device that
+         * quarantined itself is otherwise invisible -- it looks exactly like a
+         * device nobody is using, while every call against it comes back with
+         * an I/O error whose cause is three layers down. Finding that out once
+         * without this cost a session.
+         */
+        AstraIrqEndpointInfo info;
+        KernelProcess *target = NULL;
+        KernelHandleStatus handle_status;
+        uint32_t slot = thread->context.data[2];
+        uint32_t user_buffer = thread->context.data[3];
+        int copy_status;
+
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1], KERNEL_OBJECT_PROCESS,
+            KERNEL_PROCESS_RIGHT_DEBUG, (void **)&target);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || target == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        /* The handle must name the caller. See ASTRA_SYSCALL_TRACE_READ. */
+        if (target != current) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        /*
+         * How many slots there are, always -- so a caller can size its loop
+         * from the first call rather than from a constant it compiled in.
+         */
+        thread->context.data[1] = KERNEL_IRQ_ENDPOINT_MAX;
+        if (user_buffer == 0u) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (!kernel_irq_endpoint_info(slot, &info)) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        copy_status = kernel_copy_to_user(user_buffer, &info, sizeof(info));
+        if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+            copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
+            result = ASTRA_SYSCALL_BAD_ADDRESS;
+            break;
+        }
+        if (copy_status != KERNEL_USER_COPY_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        break;
+    }
+#endif
     case ASTRA_SYSCALL_PROGRESS:
         {
             bool qualification_handled;

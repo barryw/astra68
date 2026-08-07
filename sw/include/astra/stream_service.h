@@ -39,6 +39,8 @@
 #define ASTRA_STREAM_OPERATION_WRITE UINT32_C(1)
 #define ASTRA_STREAM_OPERATION_READ  UINT32_C(2)
 #define ASTRA_STREAM_OPERATION_DATA  UINT32_C(3) /* the reply to a read */
+#define ASTRA_STREAM_OPERATION_INFO  UINT32_C(4) /* how big is this thing */
+#define ASTRA_STREAM_OPERATION_SIZE  UINT32_C(5) /* the reply to an info */
 
 /*
  * Writing is fire and forget, with back pressure.
@@ -88,8 +90,29 @@ typedef struct AstraStreamData {
     uint8_t  bytes[ASTRA_STREAM_WRITE_MAX];
 } AstraStreamData;
 
+/*
+ * How big the far end is, when it has a size at all.
+ *
+ * A program that pages its output has to know how tall the screen is, and the
+ * only thing that knows is whatever is rendering it. Asking is one message on a
+ * protocol that already exists; the alternative is a program that assumes 80x24
+ * and is wrong on every terminal that is not, which is what every other machine
+ * gets wrong.
+ *
+ * A sink with no geometry -- a file, a pipe when there is one -- answers zero
+ * for both, and that is an answer: it means "do not page", not "something went
+ * wrong". A program that treated it as an error could not be redirected.
+ */
+typedef struct AstraStreamSize {
+    AstraMessageHeader header;
+    uint16_t columns;
+    uint16_t rows;
+    uint32_t status;
+} AstraStreamSize;
+
 #define ASTRA_STREAM_WRITE_SIZE (ASTRA_MESSAGE_HEADER_SIZE + 8u + \
                                  ASTRA_STREAM_WRITE_MAX)
+#define ASTRA_STREAM_SIZE_SIZE  (ASTRA_MESSAGE_HEADER_SIZE + 8u)
 #define ASTRA_STREAM_READ_SIZE  (ASTRA_MESSAGE_HEADER_SIZE + 8u)
 #define ASTRA_STREAM_DATA_SIZE  ASTRA_STREAM_WRITE_SIZE
 
@@ -99,6 +122,8 @@ _Static_assert(sizeof(AstraStreamRead) == ASTRA_STREAM_READ_SIZE,
                "stream read message ABI size changed");
 _Static_assert(sizeof(AstraStreamData) == ASTRA_STREAM_DATA_SIZE,
                "stream data message ABI size changed");
+_Static_assert(sizeof(AstraStreamSize) == ASTRA_STREAM_SIZE_SIZE,
+               "stream size message ABI size changed");
 _Static_assert(ASTRA_STREAM_WRITE_SIZE <= ASTRA_MESSAGE_SIZE_MAX,
                "a stream message must fit one port message");
 

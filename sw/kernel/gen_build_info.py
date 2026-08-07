@@ -37,6 +37,8 @@ def main() -> None:
     parser.add_argument("--sched-trace", required=True, type=int)
     parser.add_argument("--soak-selftest", required=True, type=int)
     parser.add_argument("--k1-qualification", required=True, type=int)
+    parser.add_argument("--build", required=True,
+                        choices=("release", "debug"))
     parser.add_argument("--output", required=True, type=pathlib.Path)
     args = parser.parse_args()
 
@@ -67,6 +69,12 @@ def main() -> None:
 #define ASTRA_KERNEL_SCHED_TRACE {args.sched_trace}
 #define ASTRA_KERNEL_SOAK_SELFTEST {args.soak_selftest}
 #define ASTRA_KERNEL_K1_QUALIFICATION {args.k1_qualification}
+// Which of the two builds this is. It is in the header rather than only
+// in the compiler flags so that changing it changes the header every
+// object depends on, which is what makes switching rebuild the kernel
+// instead of relinking yesterday's objects under a new name.
+#define ASTRA_KERNEL_BUILD \"{args.build}\"
+#define ASTRA_KERNEL_BUILD_DEBUG {1 if args.build == "debug" else 0}
 
 #endif
 """

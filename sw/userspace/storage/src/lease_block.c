@@ -140,6 +140,23 @@ arm(AstraLeaseBlock *lease)
  * still collect, so a device that stops answering is bounded rather than a
  * hang.
  */
+/*
+ * Records where a request was refused and returns the status a caller sees.
+ *
+ * Everything here answers ASTRA_BLOCK_IO_ERROR because that is what lwext4 can
+ * take, and lwext4 has one errno for a timeout, a cancellation, a short
+ * transfer and a corrupt reply. So the distinction is kept here instead of
+ * being thrown away at the boundary: a person shown "I/O error" can still ask
+ * what the device actually did.
+ */
+static AstraBlockStatus
+refused(AstraLeaseBlock *lease, AstraLeaseBlockSite site, uint32_t status)
+{
+    lease->last_site = (uint32_t)site;
+    lease->last_status = status;
+    return ASTRA_BLOCK_IO_ERROR;
+}
+
 static AstraBlockStatus
 run_request(AstraLeaseBlock *lease, uint32_t operation, uint64_t lba,
             uint32_t sector_count)
@@ -156,11 +173,13 @@ run_request(AstraLeaseBlock *lease, uint32_t operation, uint64_t lba,
      * acknowledged. Doing it before the arm matters twice over: the kernel
      * refuses to arm an endpoint that still holds a record.
      */
-    if (drain(lease) != ASTRA_SYSCALL_OK) {
-        return ASTRA_BLOCK_IO_ERROR;
+    status = drain(lease);
+    if (status != ASTRA_SYSCALL_OK) {
+        return refused(lease, ASTRA_LEASE_BLOCK_SITE_DRAIN_BEFORE_ARM, status);
     }
-    if (arm(lease) != ASTRA_SYSCALL_OK) {
-        return ASTRA_BLOCK_IO_ERROR;
+    status = arm(lease);
+    if (status != ASTRA_SYSCALL_OK) {
+        return refused(lease, ASTRA_LEASE_BLOCK_SITE_ARM, status);
     }
 
     (void)memset(&request, 0, sizeof(request));
@@ -181,7 +200,7 @@ run_request(AstraLeaseBlock *lease, uint32_t operation, uint64_t lba,
         return ASTRA_BLOCK_INVALID_ARGUMENT;
     }
     if (status != ASTRA_SYSCALL_OK) {
-        return ASTRA_BLOCK_IO_ERROR;
+        return refused(lease, ASTRA_LEASE_BLOCK_SITE_SUBMIT, status);
     }
 
     deadline = astra_clock_monotonic() + timeout_of(lease);
@@ -203,19 +222,24 @@ run_request(AstraLeaseBlock *lease, uint32_t operation, uint64_t lba,
              * completion in the gap, and the acknowledgement then quarantines
              * the endpoint instead of merely failing.
              */
-            if (drain(lease) != ASTRA_SYSCALL_OK) {
-                return ASTRA_BLOCK_IO_ERROR;
+            uint32_t drained = drain(lease);
+
+            if (drained != ASTRA_SYSCALL_OK) {
+                return refused(lease,
+                               ASTRA_LEASE_BLOCK_SITE_DRAIN_AFTER_COLLECT,
+                               drained);
             }
             if (completion.status == ASTRA_BLOCK_COMPLETION_OK &&
                 completion.sectors != sector_count &&
                 operation != ASTRA_BLOCK_OP_FLUSH) {
                 /* A short transfer reported as success is still short. */
-                return ASTRA_BLOCK_IO_ERROR;
+                return refused(lease, ASTRA_LEASE_BLOCK_SITE_SHORT_TRANSFER,
+                               completion.sectors);
             }
             return astra_lease_block_status(completion.status);
         }
         if (status != ASTRA_SYSCALL_WOULD_BLOCK) {
-            return ASTRA_BLOCK_IO_ERROR;
+            return refused(lease, ASTRA_LEASE_BLOCK_SITE_COLLECT, status);
         }
 
         status = astra_wait_one(lease->irq, deadline, NULL);
@@ -223,12 +247,13 @@ run_request(AstraLeaseBlock *lease, uint32_t operation, uint64_t lba,
             break;
         }
         if (status != ASTRA_SYSCALL_OK) {
-            return ASTRA_BLOCK_IO_ERROR;
+            return refused(lease, ASTRA_LEASE_BLOCK_SITE_WAIT, status);
         }
     }
 
-    if (astra_device_reset(lease->device) != ASTRA_SYSCALL_OK) {
-        return ASTRA_BLOCK_IO_ERROR;
+    status = astra_device_reset(lease->device);
+    if (status != ASTRA_SYSCALL_OK) {
+        return refused(lease, ASTRA_LEASE_BLOCK_SITE_RESET, status);
     }
     (void)astra_block_lease_collect(lease->device, block_request,
                                     &completion);
@@ -378,4 +403,13 @@ astra_lease_block_detach(AstraLeaseBlock *lease)
     lease->buffer = 0u;
     lease->buffer_base = 0u;
     lease->buffer_bytes = 0u;
+}
+
+uint32_t
+astra_lease_block_last_failure(const AstraLeaseBlock *lease)
+{
+    if (lease == NULL || lease->last_site == ASTRA_LEASE_BLOCK_SITE_NONE) {
+        return 0u;
+    }
+    return (lease->last_site * 256u) + (lease->last_status & 0xffu);
 }

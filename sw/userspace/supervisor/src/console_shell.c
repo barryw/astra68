@@ -21,12 +21,14 @@
 #include <console_shell.h>
 #include <console_stream.h>
 #include <events_host.h>
+#include <volume.h>
 
 #include <astra/bytes.h>
 #include <astra/display.h>
 #include <astra/keymap.h>
 #include <astra/runtime.h>
 #include <astra/shell.h>
+#include <astra/stream.h>
 #include <astra/supervisor.h>
 #include <astra/syscall.h>
 #include <astra/terminal.h>
@@ -493,299 +495,19 @@ static void command_rm(int argc, char *const *argv)
         report_status("rm", status);
 }
 
-/*
- * `events` -- the half of reading that a path cannot express.
- *
- * EVENTS: already answers "show me": that is `cat`, and it is the whole
- * interface for one filter. What a path cannot say is "the last screen of it",
- * "two dimensions at once" and "keep going". So this command is a path builder
- * and a pager, and nothing it can ask for is anything `cat` could not have
- * asked for -- which is what stops it becoming a second door onto the store.
- */
-
-#define EVENTS_TAIL_MAX 64u
-
-static uint32_t events_append(char *out, uint32_t capacity, uint32_t at,
-                              const char *text)
-{
-    while (*text != '\0' && at + 1u < capacity) {
-        out[at++] = *text++;
-    }
-    out[at] = '\0';
-    return at;
-}
-
-/* Exactly what the activity directory prints: eight lowercase hex digits. */
-static int events_activity_name(const char *typed, char *out)
-{
-    static const char digits[] = "0123456789abcdef";
-    uint32_t value = 0u;
-    uint32_t seen = 0u;
-
-    while (typed[seen] != '\0') {
-        char digit = typed[seen];
-        uint32_t nibble;
-
-        if (digit >= '0' && digit <= '9')
-            nibble = (uint32_t)(digit - '0');
-        else if (digit >= 'a' && digit <= 'f')
-            nibble = 10u + (uint32_t)(digit - 'a');
-        else if (digit >= 'A' && digit <= 'F')
-            nibble = 10u + (uint32_t)(digit - 'A');
-        else
-            return 0;
-        value = (value << 4) | nibble;
-        ++seen;
-        if (seen > 8u)
-            return 0;
-    }
-    if (seen == 0u)
-        return 0;
-    for (uint32_t index = 0u; index < 8u; ++index) {
-        out[index] = digits[(value >> ((7u - index) * 4u)) & 0xFu];
-    }
-    out[8] = '\0';
-    return 1;
-}
-
-/* Prints from `offset` to the end, and returns where it stopped. */
-static uint64_t events_print(AstraVfsClient *client, AstraVfsFile file,
-                             uint64_t offset)
-{
-    uint8_t chunk[SHELL_READ_CHUNK];
-
-    for (;;) {
-        uint32_t moved = 0u;
-
-        if (astra_vfs_read(client, file, offset, chunk, sizeof(chunk),
-                           &moved) != ASTRA_VFS_OK || moved == 0u)
-            break;
-        astra_terminal_write_bytes(&shell.terminal, chunk, moved);
-        offset += moved;
-    }
-    return offset;
-}
-
-/*
- * Where the last `lines` lines begin. A ring of offsets rather than of text:
- * the screen decides how many, and re-reading is cheaper than holding a copy of
- * something the store is still appending to.
- */
-static uint64_t events_tail(AstraVfsClient *client, AstraVfsFile file,
-                            uint32_t lines, uint64_t *end)
-{
-    uint64_t starts[EVENTS_TAIL_MAX];
-    uint8_t chunk[SHELL_READ_CHUNK];
-    uint64_t offset = 0u;
-    uint32_t count = 0u;
-    uint32_t oldest = 0u;
-
-    if (lines == 0u || lines > EVENTS_TAIL_MAX)
-        lines = EVENTS_TAIL_MAX;
-    starts[0] = 0u;
-    count = 1u;
-    for (;;) {
-        uint32_t moved = 0u;
-
-        if (astra_vfs_read(client, file, offset, chunk, sizeof(chunk),
-                           &moved) != ASTRA_VFS_OK || moved == 0u)
-            break;
-        for (uint32_t index = 0u; index < moved; ++index) {
-            if (chunk[index] != '\n')
-                continue;
-            /* A line begins after the newline that ended the one before. */
-            if (count == lines) {
-                starts[oldest] = offset + index + 1u;
-                oldest = (oldest + 1u) % lines;
-            } else {
-                starts[count++] = offset + index + 1u;
-            }
-        }
-        offset += moved;
-    }
-    if (end != NULL)
-        *end = offset;
-    return count == lines ? starts[oldest] : starts[0];
-}
-
-/* Live, until a key is pressed. Nothing else on this machine can interrupt. */
-static void events_follow(AstraVfsClient *client, AstraVfsFile file,
-                          uint64_t offset)
-{
-    static AstraInputEvent keys[ASTRA_INPUT_READ_BATCH_MAX];
-
-    write_line("-- following, press any key --");
-    for (;;) {
-        uint32_t count = 0u;
-        uint32_t flags = 0u;
-        uint64_t moved_to;
-
-        /*
-         * The drain, because the events service is in this process and this
-         * loop is now the machine's only one. Without it the file cannot grow
-         * and a follow would watch a store nobody is filling.
-         */
-        supervisor_events_pump();
-        moved_to = events_print(client, file, offset);
-        if (moved_to != offset) {
-            offset = moved_to;
-            (void)astra_terminal_flush(&shell.terminal);
-        }
-        if (astra_input_read(shell.input, keys, ASTRA_INPUT_READ_BATCH_MAX,
-                             &count, &flags) == ASTRA_SYSCALL_OK && count != 0u)
-            break;
-        (void)astra_yield();
-    }
-    write_line("");
-}
-
-static void command_events(int argc, char *const *argv)
-{
-    static const char *const level_name[] = {"all", "notice", "warning",
-                                             "error"};
-    char path[SHELL_PATH_MAX];
-    char activity[9];
-    const char *level = "notice";
-    const char *subsystem = NULL;
-    AstraVfsClient *client = NULL;
-    AstraVfsFile file;
-    uint64_t offset;
-    uint64_t end = 0u;
-    uint32_t at = 0u;
-    uint32_t status;
-    int follow = 0;
-    int by_activity = 0;
-
-    for (int index = 1; index < argc; ++index) {
-        const char *word = argv[index];
-        const char *value = index + 1 < argc ? argv[index + 1] : NULL;
-
-        if (shell_equal(word, "--all")) {
-            level = "all";
-        } else if (shell_equal(word, "--follow")) {
-            follow = 1;
-        } else if (shell_equal(word, "--level")) {
-            int known = 0;
-
-            if (value == NULL) {
-                write_line("events: --level needs a name");
-                return;
-            }
-            /*
-             * debug is not a level the store has. It is a live subscription,
-             * dropped at drain, and saying so is better than showing `all` and
-             * letting somebody conclude that nothing was emitted.
-             */
-            if (shell_equal(value, "debug")) {
-                write_line("events: debug is never stored, showing all");
-                level = "all";
-                known = 1;
-            }
-            for (uint32_t name = 0u;
-                 !known && name < sizeof(level_name) / sizeof(level_name[0]);
-                 ++name) {
-                if (shell_equal(value, level_name[name])) {
-                    level = level_name[name];
-                    known = 1;
-                }
-            }
-            if (!known) {
-                write_line("events: levels are all, notice, warning, error");
-                return;
-            }
-            ++index;
-        } else if (shell_equal(word, "--subsystem")) {
-            if (value == NULL) {
-                write_line("events: --subsystem needs a name");
-                return;
-            }
-            subsystem = value;
-            ++index;
-        } else if (shell_equal(word, "--activity")) {
-            if (value == NULL || !events_activity_name(value, activity)) {
-                write_line("events: --activity takes up to eight hex digits");
-                return;
-            }
-            by_activity = 1;
-            ++index;
-        } else if (shell_equal(word, "--boot")) {
-            /*
-             * Recognised and refused with the reason, rather than built into a
-             * path that answers `not found` -- which is also what a typo gives,
-             * and the two must not look the same.
-             */
-            write_line("events: only this boot is kept; the store is RAM");
-            return;
-        } else if (shell_equal(word, "--since")) {
-            write_line("events: no wall clock yet, so no time range");
-            return;
-        } else if (shell_equal(word, "--level-set")) {
-            write_line("events: setting a level needs the port transport");
-            return;
-        } else {
-            write_line("events: unknown option");
-            return;
-        }
-    }
-
-    if (by_activity && subsystem != NULL) {
-        /* An activity is already a slice through every other dimension. */
-        write_line("events: --activity is every subsystem, by definition");
-        return;
-    }
-    if (follow && shell.input == 0u) {
-        write_line("events: no keyboard, so nothing could end a follow");
-        return;
-    }
-
-    at = events_append(path, sizeof(path), at, "EVENTS:");
-    if (by_activity) {
-        at = events_append(path, sizeof(path), at, "activity/");
-        at = events_append(path, sizeof(path), at, activity);
-    } else if (subsystem != NULL) {
-        at = events_append(path, sizeof(path), at, "subsystem/");
-        at = events_append(path, sizeof(path), at, subsystem);
-        at = events_append(path, sizeof(path), at, "/");
-        at = events_append(path, sizeof(path), at, level);
-    } else {
-        at = events_append(path, sizeof(path), at, "boot/current/");
-        at = events_append(path, sizeof(path), at, level);
-    }
-
-    {
-        char wire[SHELL_PATH_MAX];
-
-        status = shell_path(path, ASTRA_RIGHT_READ, wire, sizeof(wire),
-                            &client);
-        if (status != ASTRA_VFS_OK) {
-            report_status("events", status);
-            return;
-        }
-        status = astra_vfs_open(client, wire, ASTRA_VFS_OPEN_READ, &file, NULL,
-                                NULL);
-    }
-    if (status != ASTRA_VFS_OK) {
-        report_status("events", status);
-        return;
-    }
-    /* The last screen of it, because a terminal is what is doing the reading. */
-    offset = events_tail(client, file, shell.terminal.rows - 1u, &end);
-    offset = events_print(client, file, offset);
-    if (offset == 0u)
-        write_line("(nothing at that level)");
-    if (follow)
-        events_follow(client, file, offset);
-    (void)astra_vfs_close(client, file);
-}
 
 static void command_help(void)
 {
-    write_line("commands: ls [dir], cd [dir], cat FILE, mkdir DIR,");
+    write_line("builtins: ls [dir], cd [dir], cat FILE, mkdir DIR,");
     write_line("          write FILE TEXT..., rm FILE, pwd, clear, help");
-    write_line("          events [--all|--level L|--subsystem S|--activity ID]");
-    write_line("                 [--follow]");
     write_line("paths are ASSIGN:path -- there is no root. try ls SYS:");
-    write_line("any other word is a program in COMMANDS:. try status 7");
+    /*
+     * `events` is named here as a file, not a builtin, and that is the whole
+     * point of the line. It moved out on the day a program could be launched,
+     * and a help text that still listed it as a builtin would be the machine
+     * describing itself as it used to be.
+     */
+    write_line("programs live in COMMANDS:. try status 7, or events");
 }
 
 static void prompt(void)
@@ -1035,6 +757,29 @@ static void command_launch(const char *word, int argc, char *const *argv)
     }
     (void)astra_vfs_close(client, file);
     if (status != ASTRA_VFS_OK || length == 0u) {
+        /*
+         * With how far it got. A read that fails partway through an image says
+         * something quite different from one that fails at the first byte, and
+         * the status alone cannot tell them apart.
+         */
+        ASTRA_EVENT2(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_WARNING,
+                     "image read stopped at %u bytes, status %u", length,
+                     status);
+        astra_terminal_write(&shell.terminal, word);
+        astra_terminal_write(&shell.terminal, ": read stopped at ");
+        write_number(length);
+        astra_terminal_write(&shell.terminal, " of ");
+        write_number((uint32_t)size);
+        /*
+         * And what the device said, because "I/O error" is lwext4's one errno
+         * for a timeout, a cancellation, a short transfer and a corrupt reply.
+         * Which of those it was decides whether retrying is worth anything.
+         */
+        astra_terminal_write(&shell.terminal, ", device ");
+        write_number(supervisor_volume_device_status());
+        astra_terminal_write(&shell.terminal, "/");
+        write_number(supervisor_volume_device_failure());
+        astra_terminal_putc(&shell.terminal, '\n');
         report_status(word, status != ASTRA_VFS_OK ? status :
                                                      ASTRA_VFS_ERR_INVALID);
         return;
@@ -1082,6 +827,13 @@ static void command_launch(const char *word, int argc, char *const *argv)
     }
     shell.child = 0u;
     (void)astra_close(handle);
+    /*
+     * The child's last words before this shell's account of the child. Its
+     * exit was noticed by the wait above, which leaves whatever it wrote on
+     * the way out still queued on the sink -- so without this the shell's
+     * "exited 13" prints above the line that says what 13 meant.
+     */
+    (void)console_stream_drain();
 
     astra_terminal_write(&shell.terminal, word);
     if (status == ASTRA_SYSCALL_OK) {
@@ -1090,6 +842,18 @@ static void command_launch(const char *word, int argc, char *const *argv)
         astra_terminal_putc(&shell.terminal, '\n');
     } else {
         write_line(": did not finish");
+    }
+    /*
+     * A service that stopped receiving is indistinguishable from one nobody is
+     * calling, and that ambiguity is what made the launch of the first program
+     * expensive to diagnose. So the stall is reported, and only the stall:
+     * counting what was served says nothing once it works.
+     */
+    if (supervisor_events_stalled() != 0u) {
+        astra_terminal_write(&shell.terminal, "  [events service stalled, "
+                             "status ");
+        write_number(supervisor_events_stalled());
+        write_line("]");
     }
     ASTRA_EVENT2(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
                  "child %u finished with status %u", child_id, exit_status);
@@ -1134,8 +898,6 @@ static void run_line(const char *line)
         command_write(words.argc, words.argv);
     else if (shell_equal(words.argv[0], "rm"))
         command_rm(words.argc, words.argv);
-    else if (shell_equal(words.argv[0], "events"))
-        command_events(words.argc, words.argv);
     else
         /*
          * Not a builtin, so it is a program. There is no third case: a word
@@ -1207,10 +969,21 @@ static void feed_key(uint32_t code)
          * to read.
          */
         if (shell.child != 0u) {
+            /*
+             * With the newline the person pressed. Without it an empty line
+             * offers nothing at all, so a child waiting for input would never
+             * see that return was pressed -- and a child reading a line could
+             * not tell where it ended. The newline is the line.
+             */
+            static uint8_t line[ASTRA_STREAM_WRITE_MAX];
             uint32_t length = shell_strlen(shell.editor.line);
 
-            if (console_stream_offer((const uint8_t *)shell.editor.line,
-                                     length) == length) {
+            if (length > ASTRA_STREAM_WRITE_MAX - 1u) {
+                length = ASTRA_STREAM_WRITE_MAX - 1u;
+            }
+            (void)memcpy(line, shell.editor.line, length);
+            line[length++] = '\n';
+            if (console_stream_offer(line, length) == length) {
                 astra_shell_editor_commit(&shell.editor);
             }
             return;
@@ -1282,12 +1055,15 @@ static int pump_once(void)
      * above, for the same reason.
      */
     supervisor_vfs_pump();
-    if (shell.input == 0u) {
-        (void)astra_yield();
-        return 1;
-    }
-    status = astra_input_read(shell.input, events, ASTRA_INPUT_READ_BATCH_MAX,
-                              &count, &flags);
+    /*
+     * A machine with no keyboard still has a screen, and a child still writes
+     * to it. This used to return here, which meant the flush at the bottom --
+     * the only thing that paints -- was reachable only by way of a keystroke.
+     */
+    status = shell.input != 0u ?
+        astra_input_read(shell.input, events, ASTRA_INPUT_READ_BATCH_MAX,
+                         &count, &flags) :
+        ASTRA_SYSCALL_WOULD_BLOCK;
     /*
      * An empty queue is the ordinary case and the only one worth yielding
      * over. Anything else is a refused call, and treating a refusal as
@@ -1295,12 +1071,16 @@ static int pump_once(void)
      * that looked hung: the loop spun forever and said nothing. A broken
      * input path is exactly as fatal to a terminal as a broken flush, and
      * is reported the same way.
+     *
+     * It falls through to the flush rather than returning. **A pass with no
+     * key still has cells to paint**: a launched program's output arrives
+     * through the sink above and nothing typed it. Returning early here left
+     * that output in the model until somebody happened to press a key, so a
+     * program that printed one line and exited printed nothing at all -- and
+     * a person waiting for that line had to type to see it, which is the one
+     * thing they were waiting to be told they could do.
      */
-    if (status == ASTRA_SYSCALL_WOULD_BLOCK) {
-        (void)astra_yield();
-        return 1;
-    }
-    if (status != ASTRA_SYSCALL_OK) {
+    if (status != ASTRA_SYSCALL_OK && status != ASTRA_SYSCALL_WOULD_BLOCK) {
         /*
          * The refusal that used to be invisible. A rejected input read
          * looked exactly like an empty queue for a whole session, and the

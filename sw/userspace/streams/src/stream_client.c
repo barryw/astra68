@@ -129,16 +129,107 @@ astra_print(uint32_t handle, const char *text)
     }
 }
 
+/*
+ * The request-and-wait both askers share: create a reply port, attach its send
+ * end, wait for the answer. One copy, because the reply port per call and the
+ * blocking wait are the two things easiest to get subtly wrong twice.
+ */
+static uint32_t
+ask(uint32_t handle, uint32_t operation, uint32_t capacity, void *reply,
+    uint32_t reply_size, uint32_t expected_operation)
+{
+    AstraStreamRead request;
+    uint32_t handles[1];
+    uint32_t receive = 0u;
+    uint32_t size = 0u;
+    uint32_t status;
+
+    status = astra_port_create(STREAM_REPLY_MESSAGES, reply_size, &receive,
+                               &handles[0]);
+    if (status != ASTRA_SYSCALL_OK) {
+        return status;
+    }
+    fill_header(&request.header, operation, (uint32_t)sizeof(request));
+    request.capacity = (uint16_t)capacity;
+    request.reserved = 0u;
+    request.activity = astra_activity_current();
+    status = astra_port_send(handle, &request, sizeof(request), handles, 1u);
+    if (status != ASTRA_SYSCALL_OK) {
+        /* The send failed, so the handle did not go: both ends are still ours. */
+        (void)astra_close(handles[0]);
+        (void)astra_close(receive);
+        return status;
+    }
+    for (;;) {
+        status = astra_port_receive(receive, reply, reply_size, NULL, 0u,
+                                    &size, NULL);
+        if (status == ASTRA_SYSCALL_OK) {
+            break;
+        }
+        if (status != ASTRA_SYSCALL_WOULD_BLOCK) {
+            (void)astra_close(receive);
+            return status;
+        }
+        /*
+         * Blocked on the reply port, not spinning on it. A yield loop would
+         * burn a scheduling slot per pass for as long as somebody takes to
+         * type, which on a machine whose shell is also the thing that has to
+         * answer is time taken from the answer.
+         */
+        status = astra_wait_one(receive, ASTRA_DEADLINE_FOREVER, NULL);
+        if (status != ASTRA_SYSCALL_OK) {
+            (void)astra_close(receive);
+            return status;
+        }
+    }
+    (void)astra_close(receive);
+    {
+        const AstraMessageHeader *header = reply;
+
+        if (size != reply_size ||
+            header->protocol != ASTRA_STREAM_SERVICE_PROTOCOL ||
+            header->operation != expected_operation) {
+            return ASTRA_SYSCALL_INVALID_ARGUMENT;
+        }
+    }
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
+astra_stream_size(uint32_t handle, uint32_t *columns, uint32_t *rows)
+{
+    AstraStreamSize reply;
+    uint32_t status;
+
+    if (columns != NULL) {
+        *columns = 0u;
+    }
+    if (rows != NULL) {
+        *rows = 0u;
+    }
+    if (handle == 0u || columns == NULL || rows == NULL) {
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    status = ask(handle, ASTRA_STREAM_OPERATION_INFO, 0u, &reply,
+                 (uint32_t)sizeof(reply), ASTRA_STREAM_OPERATION_SIZE);
+    if (status != ASTRA_SYSCALL_OK) {
+        return status;
+    }
+    if (reply.status != ASTRA_SYSCALL_OK) {
+        return reply.status;
+    }
+    /* Zero and zero is an answer: this sink has no geometry. */
+    *columns = reply.columns;
+    *rows = reply.rows;
+    return ASTRA_SYSCALL_OK;
+}
+
 uint32_t
 astra_stream_read(uint32_t source, void *bytes, uint32_t capacity,
                   uint32_t *length)
 {
-    AstraStreamRead request;
     static AstraStreamData reply;
     uint8_t *out = bytes;
-    uint32_t handles[1];
-    uint32_t receive = 0u;
-    uint32_t size = 0u;
     uint32_t status;
     uint32_t give;
 
@@ -151,61 +242,12 @@ astra_stream_read(uint32_t source, void *bytes, uint32_t capacity,
     if (capacity > ASTRA_STREAM_WRITE_MAX) {
         capacity = ASTRA_STREAM_WRITE_MAX;
     }
-    /*
-     * A port per read, and this is not a missed optimisation. Attaching a
-     * handle to a message *moves* it: ports carry no retain, so they travel
-     * through the transfer machinery rather than being copied, and a reply
-     * handle kept across calls would name nothing the second time. Two
-     * syscalls, on a path a person is typing into.
-     */
-    status = astra_port_create(STREAM_REPLY_MESSAGES, STREAM_REPLY_BYTES,
-                               &receive, &handles[0]);
+    status = ask(source, ASTRA_STREAM_OPERATION_READ, capacity, &reply,
+                 (uint32_t)sizeof(reply), ASTRA_STREAM_OPERATION_DATA);
     if (status != ASTRA_SYSCALL_OK) {
         return status;
     }
-    fill_header(&request.header, ASTRA_STREAM_OPERATION_READ,
-                (uint32_t)sizeof(request));
-    request.capacity = (uint16_t)capacity;
-    request.reserved = 0u;
-    request.activity = astra_activity_current();
-    /*
-     * The reply end travels with the request, which is what lets the source
-     * answer exactly the caller that asked and hold nothing afterwards.
-     */
-    status = astra_port_send(source, &request, sizeof(request), handles, 1u);
-    if (status != ASTRA_SYSCALL_OK) {
-        /* The send failed, so the handle did not go: both ends are still ours. */
-        (void)astra_close(handles[0]);
-        (void)astra_close(receive);
-        return status;
-    }
-    /*
-     * Blocked on the reply port, not spinning on it. A yield loop would burn a
-     * scheduling slot per pass for as long as somebody takes to type, which on
-     * a machine whose shell is also the thing that has to answer is time taken
-     * from the answer. The kernel wakes this thread when the message lands.
-     */
-    for (;;) {
-        status = astra_port_receive(receive, &reply, sizeof(reply), NULL, 0u,
-                                    &size, NULL);
-        if (status == ASTRA_SYSCALL_OK) {
-            break;
-        }
-        if (status != ASTRA_SYSCALL_WOULD_BLOCK) {
-            (void)astra_close(receive);
-            return status;
-        }
-        status = astra_wait_one(receive, ASTRA_DEADLINE_FOREVER, NULL);
-        if (status != ASTRA_SYSCALL_OK) {
-            (void)astra_close(receive);
-            return status;
-        }
-    }
-    (void)astra_close(receive);
-    if (size != sizeof(reply) ||
-        reply.header.protocol != ASTRA_STREAM_SERVICE_PROTOCOL ||
-        reply.header.operation != ASTRA_STREAM_OPERATION_DATA ||
-        reply.length > ASTRA_STREAM_WRITE_MAX) {
+    if (reply.length > ASTRA_STREAM_WRITE_MAX) {
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     }
     if (reply.status != ASTRA_SYSCALL_OK) {

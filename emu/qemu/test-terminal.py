@@ -32,7 +32,9 @@ import tempfile
 import threading
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, HERE)
 import astra_image
 
 # VEGA_POST_TEXT_BASE and its geometry, from sw/include/vega.h. The terminal
@@ -102,6 +104,11 @@ SCRIPT = [
     # only, and then it says so.
     ("nosuchthing", "not a command"),
     ("events --boot -1", "the store is RAM"),
+    # What the machine's interrupt endpoints are doing, asked from the prompt.
+    # Before this existed a device that quarantined itself was invisible: it
+    # looked exactly like a device nobody was using, and every call against it
+    # came back with an I/O error three layers from its cause.
+    ("devices", "delivered"),
 ]
 
 QCODE = {" ": "spc", "\n": "ret", "/": "slash", ".": "dot", "-": "minus"}
@@ -176,6 +183,46 @@ class Qmp:
             else:
                 raise RuntimeError("no qcode for %r" % character)
         self.key("ret")
+
+
+# The kernel trace ring, at the fixed address the loader retains it at. It is
+# RAM and survives whatever killed the thing under test, which is the point:
+# when a gate step fails the interesting evidence is usually what the kernel
+# was doing just before, and re-running to get it changes the timing that
+# produced it.
+RING_ADDRESS = 0x020C4000
+RING_SIZE = 0x10000
+
+
+def dump_ring(machine, records=40):
+    """Prints the tail of the kernel trace ring, best effort."""
+    try:
+        path = os.path.join(tempfile.mkdtemp(prefix="astra-ring-"), "ring.bin")
+        reply = machine.qmp.monitor('pmemsave 0x%08x %d "%s"'
+                                    % (RING_ADDRESS, RING_SIZE, path))
+        if reply and reply.strip():
+            print("    (ring unavailable: %s)" % reply.strip())
+            return
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import trace_decode
+        names = trace_decode.kernel_event_names(
+            os.path.join(ROOT, "sw/kernel/trace.h"))
+        with open(path, "rb") as handle:
+            _, lines = trace_decode.decode(handle.read(), {}, names)
+    except Exception as error:                       # noqa: BLE001
+        print("    (ring unavailable: %s)" % error)
+        return
+    quarantines = [line for line in lines if "quarantine" in line]
+    print("    --- kernel ring, last %d of %d records ---"
+          % (min(records, len(lines)), len(lines)))
+    for line in lines[-records:]:
+        print("    %s" % line)
+    if quarantines:
+        print("    --- every quarantine in this boot ---")
+        for line in quarantines:
+            print("    %s" % line)
+    else:
+        print("    --- no quarantine records in this boot ---")
 
 
 class Machine:
@@ -295,14 +342,70 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
                     for row in machine.screen():
                         if row:
                             print("    |%s|" % row)
+                    dump_ring(machine)
                     return 1
                 if verbose:
                     print("ok: %r -> %r" % (line, expected))
 
-            # A live tail, and the way out of it. Not in SCRIPT because ending
-            # it is a keystroke rather than a line: any key ends a follow and
-            # that key is consumed, so a typed line would lose its first
-            # character. Enter is the key with nothing to lose.
+            # And no endpoint is quarantined.
+            #
+            # These three flags are sticky: an endpoint carrying one answers
+            # every read with it until something recovers the endpoint, so a
+            # single one here means a device is gone for the rest of the boot.
+            # A storm quarantine on healthy storage is what made this gate fail
+            # about half its runs, from a burst of transfers that were all
+            # being serviced correctly -- so the table is read rather than only
+            # rendered.
+            rows = machine.screen()
+            stuck = [row for row in rows
+                     if any(flag in row for flag in
+                            ("storm", "device-error", "overflow"))]
+            if stuck:
+                print("FAIL: an endpoint is quarantined")
+                for row in stuck:
+                    print("    |%s|" % row)
+                dump_ring(machine)
+                return 1
+            if verbose:
+                print("ok: no endpoint is quarantined")
+
+            # What a program said, before what this shell says about it.
+            #
+            # Two separate failures hide here and both were real. A launched
+            # program writes through the sink, which reaches the cell model but
+            # is painted only by the flush at the bottom of the shell's pump --
+            # and that pump used to return early on any pass with no keystroke,
+            # so a program that printed one line and exited printed nothing at
+            # all until somebody pressed a key. Waiting for the line above
+            # catches that.
+            #
+            # The order catches the other. A child's exit is noticed while its
+            # last words are still queued on the sink, so a launcher that
+            # reported the exit without draining first printed "exited 13"
+            # above the line that says what 13 meant. Both lines are on screen
+            # either way, which is why this asserts on their order and not on
+            # their presence.
+            rows = machine.screen()
+            said = next((index for index, row in enumerate(rows)
+                         if "the store is RAM" in row), None)
+            exited = next((index for index, row in enumerate(rows)
+                           if "events: exited 13" in row), None)
+            if said is None or exited is None or said >= exited:
+                print("FAIL: the child's line and the shell's report of its "
+                      "exit are out of order (line at %r, exit at %r)"
+                      % (said, exited))
+                for row in rows:
+                    if row:
+                        print("    |%s|" % row)
+                return 1
+            if verbose:
+                print("ok: the child's last line precedes its exit report")
+
+            # A live tail, and the way out of it. Not in SCRIPT because
+            # ending it is a bare return rather than a command: `events` is a
+            # program now and what it reads is STDIN, which is lines -- so the
+            # way out is an empty line, and the shell hands the child the
+            # newline that was pressed rather than swallowing it.
             for line, expected in (("events --follow", "-- following"),
                                    (None, "WORK:>")):
                 if line is not None:
@@ -315,6 +418,7 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
                     for row in machine.screen():
                         if row:
                             print("    |%s|" % row)
+                    dump_ring(machine)
                     return 1
                 if verbose:
                     print("ok: follow -> %r" % expected)

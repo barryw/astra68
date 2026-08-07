@@ -33,6 +33,57 @@ void kernel_platform_cpu_cycles(KernelPlatformCycleCount *cycles)
     cycles->low = (uint32_t)simulated_cycles;
 }
 
+/*
+ * What a release build keeps, and what it costs nothing for.
+ *
+ * Tracing used to be unconditional, so the chatty sites -- two records per
+ * interrupt, which is two per transferred sector -- were in the shipping ROM
+ * and wrote on every pass. A release now compiles them away and keeps what
+ * explains a machine that misbehaved.
+ *
+ * The host suite builds with the default floor, which is the release one, so
+ * that is what this asserts: a warning is written, a debug record is not, and
+ * the site that was compiled out left nothing behind that could write later.
+ * The debug build is checked by the same file compiled the other way -- see
+ * the static assertions, which are what fail if the two floors are ever made
+ * to mean the same thing.
+ */
+_Static_assert(KERNEL_TRACE_LEVEL_DEBUG < KERNEL_TRACE_LEVEL_NOTICE,
+               "trace levels must order from chatty to severe");
+_Static_assert(KERNEL_TRACE_LEVEL_NOTICE < KERNEL_TRACE_LEVEL_ERROR,
+               "trace levels must order from chatty to severe");
+
+static void test_the_build_decides_which_levels_are_kept(void)
+{
+    KernelTraceHeader header;
+    uint32_t before;
+
+    assert(kernel_trace_init());
+    assert(kernel_trace_header(&header));
+    before = header.next_sequence;
+
+    /* Severe enough for any build: it is written whichever floor is set. */
+    KERNEL_TRACE(KERNEL_TRACE_LEVEL_ERROR, KERNEL_TRACE_EVENT_PANIC, 0u,
+                 1u, 2u, 3u, 4u);
+    assert(kernel_trace_header(&header));
+    assert(header.next_sequence > before);
+    before = header.next_sequence;
+
+    /*
+     * And the chatty one, which this build's floor decides. Written under
+     * ASTRA_BUILD=debug and absent under the release default -- and absent
+     * means no record at all, not a record nobody reads.
+     */
+    KERNEL_TRACE(KERNEL_TRACE_LEVEL_DEBUG, KERNEL_TRACE_EVENT_IRQ_DELIVER, 0u,
+                 1u, 2u, 3u, 4u);
+    assert(kernel_trace_header(&header));
+    if (KERNEL_TRACE_KEEPS(KERNEL_TRACE_LEVEL_DEBUG)) {
+        assert(header.next_sequence > before);
+    } else {
+        assert(header.next_sequence == before);
+    }
+}
+
 static void test_retained_ring_wrap_and_torn_read(void)
 {
     KernelTraceHeader before_reinit;
@@ -425,6 +476,8 @@ int main(void)
     test_a_user_event_shares_the_one_ring();
     test_a_drain_is_a_page_and_a_cursor();
     test_a_drain_says_what_it_lost();
+    /* Last: the ring is retained, and this one writes into it. */
+    test_the_build_decides_which_levels_are_kept();
     puts("retained trace tests passed");
     return 0;
 }

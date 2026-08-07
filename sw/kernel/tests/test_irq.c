@@ -499,6 +499,136 @@ static void test_level_acknowledgement_order_and_retry(void)
     assert_endpoint_free(slot);
 }
 
+/*
+ * An interrupt with nothing behind it must not cost the device.
+ *
+ * **A capture that finds nothing pending is not a fault.** Every capture in
+ * sw/kernel/platform.c returns false for exactly one reason -- the source's
+ * status register shows no work -- and not one of them has any way to report a
+ * hardware failure, because none of them is given one. Dispatch nevertheless
+ * read false as a device failure and set the endpoint's DEVICE_ERROR flag,
+ * which is sticky: kernel_irq_read answers with it forever afterwards, so one
+ * spurious interrupt ends the device for the rest of the boot.
+ *
+ * It is reachable in ordinary operation, and it was reached. A caller polling
+ * astra_block_lease_collect takes the completion out of the queue itself, and
+ * it can win that race against the CPU taking the interrupt the device raised
+ * for the same completion -- so the handler runs with the queue already empty.
+ * On the machine this killed storage partway through a session: every transfer
+ * after it was refused ASTRA_BLOCK_IO_ERROR and the volume never came back,
+ * from one interrupt that had simply arrived a moment late.
+ *
+ * A spurious interrupt is a normal event on real hardware. It is counted and
+ * acknowledged, and the endpoint goes on serving.
+ */
+static void test_a_capture_with_nothing_pending_is_not_a_failure(void)
+{
+    FakeController controller;
+    FakeDevice device;
+    KernelIrqEndpoint *endpoint;
+    KernelIrqRecord record;
+    KernelIrqPoolStats stats;
+    uint32_t event_flags;
+    uint32_t slot;
+    uint32_t woken;
+
+    initialize_test(&controller);
+    endpoint = bind_endpoint(&controller, &device, 3u, 4u,
+                             KERNEL_IRQ_TRIGGER_EDGE);
+    slot = find_endpoint_slot(3u, 4u);
+    assert(kernel_irq_arm(endpoint) == KERNEL_IRQ_OK);
+
+    /* The completion was already taken: the handler finds an empty queue. */
+    device.fail_capture = 1u;
+    clear_log(&controller);
+    assert(kernel_irq_dispatch(4u, KERNEL_IRQ_COMMON_VECTOR, 30u, &woken) ==
+           KERNEL_IRQ_UNCLAIMED);
+    assert(woken == 0u);
+    /* Acknowledged at the controller and left enabled, never masked. */
+    expect_log(&controller, "RA");
+    assert(kernel_irq_pool_stats(&stats));
+    assert(stats.unclaimed_interrupts == 1u);
+    assert(stats.device_failures == 0u);
+
+    /* No record, and -- the whole point -- no sticky error behind it. */
+    assert(kernel_irq_read(endpoint, &record, &event_flags) ==
+           KERNEL_IRQ_WOULD_BLOCK);
+
+    /* The next real interrupt is delivered as though nothing had happened. */
+    clear_log(&controller);
+    assert(kernel_irq_dispatch(4u, KERNEL_IRQ_COMMON_VECTOR, 31u, &woken) ==
+           KERNEL_IRQ_OK);
+    assert(kernel_irq_read(endpoint, &record, &event_flags) == KERNEL_IRQ_OK);
+    assert(kernel_irq_ack(endpoint, record.sequence) == KERNEL_IRQ_OK);
+
+    /*
+     * And the negative half: a device that refuses its own completion is a
+     * real fault and must still quarantine. `complete` is the callback a
+     * device answers with, so it is the one that can say so.
+     */
+    assert(kernel_irq_dispatch(4u, KERNEL_IRQ_COMMON_VECTOR, 32u, &woken) ==
+           KERNEL_IRQ_OK);
+    assert(kernel_irq_read(endpoint, &record, &event_flags) == KERNEL_IRQ_OK);
+    device.fail_complete = 1u;
+    assert(kernel_irq_ack(endpoint, record.sequence) ==
+           KERNEL_IRQ_DEVICE_ERROR);
+    assert(kernel_irq_pool_stats(&stats));
+    assert(stats.device_failures == 1u);
+    /*
+     * The refused acknowledgement leaves the record where it was, so the
+     * sticky flag is only visible once it drains -- which is why it takes a
+     * second acknowledgement to see the state the device is now in.
+     */
+    assert(kernel_irq_ack(endpoint, record.sequence) ==
+           KERNEL_IRQ_DEVICE_ERROR);
+    assert(kernel_irq_read(endpoint, &record, &event_flags) ==
+           KERNEL_IRQ_DEVICE_ERROR);
+
+    assert(kernel_irq_recover(endpoint) == KERNEL_IRQ_OK);
+    release_and_service(endpoint, slot);
+}
+
+/*
+ * The same, level-triggered.
+ *
+ * A level source is masked before its capture runs and unmasked by the
+ * acknowledgement that follows, so a capture that finds nothing has to put the
+ * mask back itself. Getting this wrong is worse than the failure it replaces:
+ * the endpoint survives, still believing it is armed, while the controller has
+ * the source masked -- and the next interrupt never comes at all.
+ */
+static void test_a_level_capture_with_nothing_pending_re_enables(void)
+{
+    FakeController controller;
+    FakeDevice device;
+    KernelIrqEndpoint *endpoint;
+    KernelIrqRecord record;
+    uint32_t event_flags;
+    uint32_t slot;
+    uint32_t woken;
+
+    initialize_test(&controller);
+    endpoint = bind_endpoint(&controller, &device, 2u, 3u,
+                             KERNEL_IRQ_TRIGGER_LEVEL);
+    slot = find_endpoint_slot(2u, 3u);
+    assert(kernel_irq_arm(endpoint) == KERNEL_IRQ_OK);
+
+    device.fail_capture = 1u;
+    clear_log(&controller);
+    assert(kernel_irq_dispatch(3u, KERNEL_IRQ_COMMON_VECTOR, 20u, &woken) ==
+           KERNEL_IRQ_UNCLAIMED);
+    /* Masked for the capture, acknowledged, and enabled again on the way out. */
+    expect_log(&controller, "MRAE");
+
+    /* Still armed, so a real interrupt still arrives and still lands. */
+    clear_log(&controller);
+    assert(kernel_irq_dispatch(3u, KERNEL_IRQ_COMMON_VECTOR, 21u, &woken) ==
+           KERNEL_IRQ_OK);
+    assert(kernel_irq_read(endpoint, &record, &event_flags) == KERNEL_IRQ_OK);
+    assert(kernel_irq_ack(endpoint, record.sequence) == KERNEL_IRQ_OK);
+    release_and_service(endpoint, slot);
+}
+
 static void test_wait_race_and_wakeup(void)
 {
     FakeController controller;
@@ -576,27 +706,88 @@ static void test_overflow_and_storm_quarantine(void)
     assert(event_flags == KERNEL_IRQ_EVENT_OVERFLOW);
     assert(kernel_irq_recover(endpoint) == KERNEL_IRQ_OK);
 
+    /*
+     * A storm is interrupts nobody retires, so these are not one: spurious
+     * ones, which carry no work and leave nothing to acknowledge. The budget
+     * is spent here rather than on a device that is merely busy.
+     */
+    device.fail_capture = KERNEL_IRQ_STORM_BUDGET;
     for (uint32_t index = 0u; index < KERNEL_IRQ_STORM_BUDGET; ++index) {
         KernelIrqStatus dispatch_status = kernel_irq_dispatch(
             5u, KERNEL_IRQ_COMMON_VECTOR, 1000u + index, &woken);
 
         assert(dispatch_status ==
-               (index + 1u == KERNEL_IRQ_STORM_BUDGET ? KERNEL_IRQ_STORM :
-                                                        KERNEL_IRQ_OK));
-        assert(kernel_irq_read(endpoint, &record, &event_flags) ==
-               KERNEL_IRQ_OK);
-        KernelIrqStatus ack_status = kernel_irq_ack(endpoint, record.sequence);
-
-        assert(ack_status ==
-               (index + 1u == KERNEL_IRQ_STORM_BUDGET ? KERNEL_IRQ_STORM :
-                                                        KERNEL_IRQ_OK));
+               (index + 1u == KERNEL_IRQ_STORM_BUDGET ?
+                    KERNEL_IRQ_STORM : KERNEL_IRQ_UNCLAIMED));
     }
+    assert(kernel_irq_read(endpoint, &record, &event_flags) ==
+           KERNEL_IRQ_STORM);
+    assert(event_flags == KERNEL_IRQ_EVENT_STORM);
     assert(kernel_irq_recover(endpoint) == KERNEL_IRQ_OK);
     assert(kernel_irq_pool_stats(&stats));
     assert(stats.dropped_records == 1u);
     assert(stats.overflow_quarantines == 1u);
     assert(stats.storm_quarantines == 1u);
     assert(stats.max_pending_records == KERNEL_IRQ_RECORD_DEPTH);
+    release_and_service(endpoint, slot);
+}
+
+/*
+ * A busy device is not a storm.
+ *
+ * This is the one that cost a session. The storm counter counted every
+ * delivery in its window and was cleared by nothing but kernel_irq_recover, so
+ * a device answering as fast as it was asked -- every interrupt read and
+ * acknowledged the moment it arrived -- was quarantined at sixty-four exactly
+ * as if nobody had been listening. The flag is sticky, so kernel_irq_read
+ * answered KERNEL_IRQ_STORM for the rest of the boot: on the machine, one
+ * burst of sequential transfers during a journal flush ended storage, and
+ * every later read came back ASTRA_BLOCK_IO_ERROR from a volume that was
+ * perfectly healthy.
+ *
+ * Many times the budget, all of them serviced, and the endpoint is still
+ * serving at the end of it.
+ */
+static void test_a_serviced_device_is_never_a_storm(void)
+{
+    FakeController controller;
+    FakeDevice device;
+    KernelIrqEndpoint *endpoint;
+    KernelIrqPoolStats stats;
+    KernelIrqRecord record;
+    uint32_t event_flags;
+    uint32_t slot;
+    uint32_t woken;
+
+    initialize_test(&controller);
+    endpoint = bind_endpoint(&controller, &device, 4u, 5u,
+                             KERNEL_IRQ_TRIGGER_LEVEL);
+    slot = find_endpoint_slot(4u, 5u);
+    assert(kernel_irq_arm(endpoint) == KERNEL_IRQ_OK);
+
+    for (uint32_t index = 0u; index < (KERNEL_IRQ_STORM_BUDGET * 4u);
+         ++index) {
+        /*
+         * Every one of them inside the storm window, which is the case the
+         * old counter could not tell from a wedged line: the timestamp never
+         * advances, so nothing here is saved by the window expiring.
+         */
+        clear_log(&controller);   /* the fake's log is not the subject here */
+        assert(kernel_irq_dispatch(5u, KERNEL_IRQ_COMMON_VECTOR, 200u,
+                                   &woken) == KERNEL_IRQ_OK);
+        assert(kernel_irq_read(endpoint, &record, &event_flags) ==
+               KERNEL_IRQ_OK);
+        assert(event_flags == 0u);
+        assert(kernel_irq_ack(endpoint, record.sequence) == KERNEL_IRQ_OK);
+    }
+
+    /* Still armed, still clean, and no quarantine was ever taken. */
+    assert(kernel_irq_read(endpoint, &record, &event_flags) ==
+           KERNEL_IRQ_WOULD_BLOCK);
+    assert(event_flags == 0u);
+    assert(kernel_irq_pool_stats(&stats));
+    assert(stats.storm_quarantines == 0u);
+    assert(stats.overflow_quarantines == 0u);
     release_and_service(endpoint, slot);
 }
 
@@ -826,14 +1017,26 @@ static void test_trace_covers_endpoint_lifecycle(void)
     endpoint = bind_endpoint(&controller, &device, 12u, 12u,
                              KERNEL_IRQ_TRIGGER_EDGE);
     assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_BIND] == 1u);
+    /*
+     * Arming, delivery and acknowledgement are the per-transfer stream: two
+     * records for every interrupt a device raises, which is what a debug build
+     * is for and what a release must not be paying. The lifecycle records
+     * around them -- bind, revoke, reset, quarantine -- are rare and explain a
+     * machine that misbehaved, so they are kept either way. This asserts that
+     * split rather than a fixed count, because the count is the build's to
+     * decide.
+     */
+    const uint32_t chatty = KERNEL_TRACE_KEEPS(KERNEL_TRACE_LEVEL_DEBUG) ?
+        1u : 0u;
+
     assert(kernel_irq_arm(endpoint) == KERNEL_IRQ_OK);
-    assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_ARM] == 1u);
+    assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_ARM] == chatty);
     assert(kernel_irq_dispatch(12u, KERNEL_IRQ_COMMON_VECTOR, 1234u,
                                &woken) == KERNEL_IRQ_OK);
-    assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_DELIVER] == 1u);
+    assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_DELIVER] == chatty);
     assert(kernel_irq_read(endpoint, &record, &event_flags) == KERNEL_IRQ_OK);
     assert(kernel_irq_ack(endpoint, record.sequence) == KERNEL_IRQ_OK);
-    assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_ACK] == 1u);
+    assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_ACK] == chatty);
     kernel_irq_handle_release(endpoint, NULL);
     assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_REVOKE] == 1u);
     assert(service_all_revocations() == 1u);
@@ -850,8 +1053,11 @@ int main(void)
     test_internal_route_uses_common_order();
     test_internal_edge_route_avoids_level_mask_cycle();
     test_level_acknowledgement_order_and_retry();
+    test_a_capture_with_nothing_pending_is_not_a_failure();
+    test_a_level_capture_with_nothing_pending_re_enables();
     test_wait_race_and_wakeup();
     test_overflow_and_storm_quarantine();
+    test_a_serviced_device_is_never_a_storm();
     test_reference_owner_death_and_quiesce_retry();
     test_revocation_service_is_batch_bounded();
     test_limits_failures_and_diagnostics();

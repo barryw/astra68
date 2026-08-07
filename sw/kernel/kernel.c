@@ -420,8 +420,8 @@ static void panic_trace_records(void)
 
 static void panic_begin(const char *reason)
 {
-    (void)kernel_trace_write(
-        KERNEL_TRACE_EVENT_PANIC, 0u, (uint32_t)(uintptr_t)reason,
+    KERNEL_TRACE(
+        KERNEL_TRACE_LEVEL_ERROR, KERNEL_TRACE_EVENT_PANIC, 0u, (uint32_t)(uintptr_t)reason,
         kernel_dispatch_last_supervisor_irq_pc(),
         kernel_dispatch_last_supervisor_irq_sr(),
         kernel_platform_build_id());

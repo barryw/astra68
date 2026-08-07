@@ -23,6 +23,13 @@ int supervisor_events_start(uint32_t process_handle);
 /* The send handle a launch grants for EVENTS:. */
 uint32_t supervisor_events_port(void);
 
+/*
+ * The last status the service's receive refused with, or zero. A pump that
+ * silently stopped receiving looks exactly like one nobody is calling, and
+ * telling those two apart is what this exists for.
+ */
+uint32_t supervisor_events_stalled(void);
+
 void supervisor_events_pump(void);
 
 /*

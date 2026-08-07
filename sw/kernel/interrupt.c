@@ -101,11 +101,29 @@ static bool write_dispatch_trace(uint8_t source, uint8_t vector,
                                  uint64_t timestamp,
                                  const KernelIrqTrace *trace)
 {
-    if (trace != NULL && trace->valid != 0u)
+    if (trace != NULL && trace->valid != 0u) {
+        /*
+         * The staging site declared a level and could not gate on it: the
+         * record is built inside the interrupt and written after it. So the
+         * drop happens here. It is a comparison rather than a compiled-out
+         * branch because the level is only known at run time -- but the
+         * expensive half, the ring write, is what it skips.
+         */
+        if (!KERNEL_TRACE_KEEPS(trace->level))
+            return true;
         return kernel_trace_write_at(
             (KernelTraceEvent)trace->event, trace->flags, timestamp,
             trace->argument[0], trace->argument[1], trace->argument[2],
             trace->argument[3]);
+    }
+    /*
+     * One record per interrupt taken, which is the chattiest thing the kernel
+     * writes -- a disk doing sequential work produces two of these per sector.
+     * A release build compiles it away entirely; nothing above needs to know
+     * that an interrupt happened and was handled normally.
+     */
+    if (!KERNEL_TRACE_KEEPS(KERNEL_TRACE_LEVEL_DEBUG))
+        return true;
     return kernel_trace_write_at(
         KERNEL_TRACE_EVENT_IRQ_EXIT,
         (uint16_t)((source & KERNEL_IRQ_TRACE_SOURCE_MASK) |

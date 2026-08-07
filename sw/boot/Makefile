@@ -45,6 +45,11 @@ KERNEL_PANIC_SELFTEST ?= 0
 KERNEL_SCHED_TRACE ?= 0
 KERNEL_SOAK_SELFTEST ?= 0
 KERNEL_K1_QUALIFICATION ?= 0
+# Passed through to the kernel, because this target rebuilds it. Without the
+# pass-through a `make ASTRA_BUILD=debug` in sw/kernel was silently undone the
+# moment the ROM was built: the sub-make ran with the default and the image
+# shipped a release kernel under a debug name.
+ASTRA_BUILD ?= release
 
 CFLAGS  = -m68030 -msoft-float -Os -ffreestanding -fno-builtin -nostdlib \
           -Wa,--noexecstack -Wall -Wextra \
@@ -160,7 +165,8 @@ $(KERNEL_BIN): FORCE $(KERNEL_ID_SRCS) ../common/boot_contract.c \
 	$(MAKE) -C $(KERNEL_DIR) all CROSS=$(CROSS) \
 		KERNEL_VERSION=$(KERNEL_VERSION) PANIC_SELFTEST=$(KERNEL_PANIC_SELFTEST) \
 		SCHED_TRACE=$(KERNEL_SCHED_TRACE) SOAK_SELFTEST=$(KERNEL_SOAK_SELFTEST) \
-		K1_QUALIFICATION=$(KERNEL_K1_QUALIFICATION)
+		K1_QUALIFICATION=$(KERNEL_K1_QUALIFICATION) \
+		ASTRA_BUILD=$(ASTRA_BUILD)
 
 $(USER_IMAGE): FORCE $(USER_IMAGE_ID_SRCS)
 	$(MAKE) -C $(USER_IMAGE_DIR) all CROSS=$(CROSS)

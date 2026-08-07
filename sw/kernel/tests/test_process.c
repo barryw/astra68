@@ -3333,8 +3333,16 @@ static void test_real_handle_exhaustion_rolls_back_thread_create(void)
     static const uint8_t image[] = {
         0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u
     };
+    /*
+     * Exactly filling the table takes three kinds of object now. It used to be
+     * syncs and threads alone, which worked while the table was 16 entries and
+     * stopped the moment it grew: there are only KERNEL_THREAD_MAX threads in
+     * the machine, so past a certain table size the test could not fill it and
+     * the "full" it was asserting about never happened.
+     */
+    const uint32_t port_pairs = KERNEL_PORT_OWNER_MAX;
     const uint32_t child_count = KERNEL_HANDLE_MAX_ENTRIES - 2u -
-                                 KERNEL_SYNC_OWNER_MAX;
+                                 KERNEL_SYNC_OWNER_MAX - 2u * port_pairs;
     KernelCpuContext *next;
     KernelMemoryStats baseline;
     KernelMemoryStats before_failure;
@@ -3379,6 +3387,27 @@ static void test_real_handle_exhaustion_rolls_back_thread_create(void)
                    &next) == KERNEL_PROCESS_OK);
         assert(next->data[0] == ASTRA_SYSCALL_OK);
     }
+    /* Ports come in pairs, and are what closes the gap exactly. */
+    for (uint32_t index = 0u; index < port_pairs; ++index) {
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_PORT_CREATE;
+        registers[1] = 1u;
+        registers[2] = 64u;
+        assert(kernel_process_on_syscall(
+                   registers, KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                   &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+    }
+    /*
+     * The three kinds have to add up to the whole table, or this test is
+     * asserting about a table that is merely nearly full -- which is where a
+     * rollback bug hides rather than where it shows.
+     */
+    _Static_assert(KERNEL_HANDLE_MAX_ENTRIES - 2u - KERNEL_SYNC_OWNER_MAX -
+                           2u * KERNEL_PORT_OWNER_MAX <
+                       KERNEL_PROCESS_THREAD_MAX,
+                   "this test can no longer fill the handle table exactly: "
+                   "syncs, ports and threads together fall short of it");
     assert(kernel_process_test_handle_count(process_id) ==
            KERNEL_HANDLE_MAX_ENTRIES);
     assert(kernel_process_snapshot(0u, &before_process));

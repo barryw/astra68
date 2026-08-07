@@ -4,6 +4,8 @@
 
 #include "allocation.h"
 #include "performance.h"
+/* For KERNEL_PROCESS_HANDLE_DEMAND: the budget the table is sized against. */
+#include "process.h"
 
 #include <assert.h>
 #include <stdint.h>
@@ -390,6 +392,115 @@ static void test_receive_capacity_and_destination_full(void)
     assert(kernel_port_pool_valid());
 }
 
+/*
+ * The handle budget, exercised rather than only asserted.
+ *
+ * KERNEL_PROCESS_HANDLE_DEMAND says what one process can be holding at once. A
+ * supervisor hosting services reaches it: its launch grants, its own process
+ * and thread, both endpoints of every port it owns, and a handle to each child
+ * it started. Then a child sends a request carrying a reply channel, and the
+ * receive must install that handle before it can hand it over.
+ *
+ * When the table was sixteen entries this did not fit. The receive answered
+ * RESOURCE_LIMIT, the message stayed queued, the child waited for an answer
+ * nobody could produce, and nothing anywhere said why. The positive half of
+ * this test is that the resident load still leaves room for a full transfer;
+ * the negative half is that when it does not, the refusal is loud, the message
+ * survives it, and closing one handle is enough to let it through.
+ */
+static void test_handle_budget_admits_a_full_transfer(void)
+{
+    KernelHandleTable source;
+    KernelHandleTable destination;
+    KernelPortReceipt receipt;
+    KernelPortSnapshot snapshot;
+    KernelPort *port;
+    TestObject resident[KERNEL_HANDLE_MAX_ENTRIES];
+    KernelHandle resident_handles[KERNEL_HANDLE_MAX_ENTRIES];
+    TestObject carried[KERNEL_HANDLE_TRANSFER_MAX];
+    KernelHandle attached[KERNEL_HANDLE_TRANSFER_MAX];
+    uint8_t message[64];
+    uint32_t required_size;
+    uint32_t required_handles;
+    uint32_t woken;
+    /* Everything the budget covers except the room a receive imports into. */
+    const uint32_t load = KERNEL_PROCESS_HANDLE_DEMAND -
+                          KERNEL_HANDLE_TRANSFER_MAX;
+
+    initialize_test();
+    kernel_handle_table_init(&source);
+    kernel_handle_table_init(&destination);
+    make_message(message, sizeof(message), 0x61u);
+
+    for (uint32_t index = 0u; index < KERNEL_HANDLE_TRANSFER_MAX; ++index) {
+        carried[index].releases = 0u;
+        carried[index].value = index;
+        attached[index] = install_transfer_handle(
+            &source, &carried[index],
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_TRANSFER);
+    }
+    assert(kernel_port_create(1u, 1u, sizeof(message), &port) ==
+           KERNEL_PORT_OK);
+    assert(kernel_port_send(port, &source, message, sizeof(message),
+                            attached, KERNEL_HANDLE_TRANSFER_MAX,
+                            &woken) == KERNEL_PORT_OK);
+
+    /* The resident load a service carries while it is being called. */
+    for (uint32_t index = 0u; index < load; ++index) {
+        resident[index].releases = 0u;
+        resident[index].value = index;
+        resident_handles[index] = install_transfer_handle(
+            &destination, &resident[index], ASTRA_RIGHT_READ);
+    }
+    /*
+     * The positive half: a full message's worth of handles still fits beside
+     * everything the process was already holding.
+     */
+    assert(kernel_port_receive_prepare(
+               port, &destination, sizeof(message),
+               KERNEL_HANDLE_TRANSFER_MAX, &receipt, &required_size,
+               &required_handles) == KERNEL_PORT_OK);
+    assert(required_handles == KERNEL_HANDLE_TRANSFER_MAX);
+    assert(kernel_port_receive_cancel(&receipt, &woken) == KERNEL_PORT_OK);
+
+    /*
+     * The negative half: fill the table the rest of the way and the same
+     * receive must refuse, keep the message, and recover on one close.
+     */
+    for (uint32_t index = load; index < KERNEL_HANDLE_MAX_ENTRIES; ++index) {
+        resident[index].releases = 0u;
+        resident[index].value = index;
+        resident_handles[index] = install_transfer_handle(
+            &destination, &resident[index], ASTRA_RIGHT_READ);
+    }
+    assert(kernel_port_receive_prepare(
+               port, &destination, sizeof(message),
+               KERNEL_HANDLE_TRANSFER_MAX, &receipt, &required_size,
+               &required_handles) == KERNEL_PORT_HANDLE_TABLE_FULL);
+    /* Refused is not consumed: the sender's message is still there to take. */
+    assert(kernel_port_snapshot(0u, &snapshot));
+    assert(snapshot.queued_messages == 1u);
+    for (uint32_t index = 0u; index < KERNEL_HANDLE_TRANSFER_MAX; ++index)
+        assert(carried[index].releases == 0u);
+
+    for (uint32_t index = 0u; index < KERNEL_HANDLE_TRANSFER_MAX; ++index) {
+        assert(kernel_handle_close(&destination,
+                                   resident_handles[load + index]) ==
+               KERNEL_HANDLE_OK);
+    }
+    assert(kernel_port_receive_prepare(
+               port, &destination, sizeof(message),
+               KERNEL_HANDLE_TRANSFER_MAX, &receipt, &required_size,
+               &required_handles) == KERNEL_PORT_OK);
+    assert(kernel_port_receive_commit(&receipt, &woken) == KERNEL_PORT_OK);
+    assert(kernel_handle_close_all(&destination) ==
+           KERNEL_HANDLE_MAX_ENTRIES);
+    for (uint32_t index = 0u; index < KERNEL_HANDLE_TRANSFER_MAX; ++index)
+        assert(carried[index].releases == 1u);
+    release_port(port);
+    assert(kernel_port_pool_valid());
+}
+
 static void test_owner_death_discards_queued_authority(void)
 {
     KernelHandleTable source;
@@ -596,6 +707,7 @@ int main(void)
     test_atomic_handle_move_cancel_and_commit();
     test_failed_send_leaves_source_authority();
     test_receive_capacity_and_destination_full();
+    test_handle_budget_admits_a_full_transfer();
     test_owner_death_discards_queued_authority();
     test_self_send_teardown_is_reentrant_safe();
     test_readable_and_writable_wait_queues();

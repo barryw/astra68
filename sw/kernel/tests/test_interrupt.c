@@ -406,8 +406,14 @@ static void test_timer_and_quarantine_use_common_dispatch(void)
     assert((registers->IRQ_ENABLE &
             IRQ_BIT(IRQ_SRC_ASTRAHOST_MONITOR)) != 0u);
     assert(registers->IRQ_ACK == IRQ_BIT(IRQ_SRC_USB));
+    /*
+     * A quarantine explains a machine that misbehaved and is kept by every
+     * build. Deliveries are the per-interrupt stream, which only a debug build
+     * keeps -- see KERNEL_TRACE_BUILD_LEVEL.
+     */
     assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_QUARANTINE] == 1u);
-    assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_DELIVER] == 2u);
+    assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_DELIVER] ==
+           (KERNEL_TRACE_KEEPS(KERNEL_TRACE_LEVEL_DEBUG) ? 2u : 0u));
     assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_EXIT] == 0u);
     assert(trace_worker_signals == 0u);
 

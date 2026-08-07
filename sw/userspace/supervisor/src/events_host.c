@@ -56,6 +56,15 @@ static uint32_t events_handle;
 static uint32_t events_receive;
 static uint32_t debug_handle;
 static uint32_t drain_cursor;
+/*
+ * Whether the ring is still worth reading. Separate from `events_ready` on
+ * purpose: the drain gives up permanently when the kernel refuses it, and if
+ * that flag also gated answering clients then a service would stop serving
+ * because its own logging failed -- which is the logging subsystem taking the
+ * machine down by exactly the route this file exists to avoid. It was one flag
+ * for a while, and a launched program's first request went unanswered for it.
+ */
+static int drain_ready;
 /* Why the catalog is not loaded, when it is not: the status that refused it. */
 static uint32_t catalog_status;
 static int events_ready;
@@ -173,8 +182,15 @@ supervisor_events_start(uint32_t process_handle)
     }
     debug_handle = process_handle;
     events_ready = 1;
+    drain_ready = 1;
     supervisor_events_pump();
     return 1;
+}
+
+uint32_t
+supervisor_events_stalled(void)
+{
+    return events_port.stalled;
 }
 
 uint32_t
@@ -216,7 +232,7 @@ supervisor_events_pump(void)
     static AstraEventDrained drained[ASTRA_TRACE_READ_BATCH_MAX];
     uint32_t passes = 0u;
 
-    if (!events_ready) {
+    if (!drain_ready) {
         return;
     }
     /*
@@ -235,8 +251,12 @@ supervisor_events_pump(void)
              * No authority, or no ring. Stop trying: a pump that retries a
              * refusal every pass would spend the machine's time saying
              * nothing, and the store already holds whatever arrived before.
+             *
+             * Only the drain stops. The service keeps answering: what it
+             * already holds is still worth reading, and a client asking for it
+             * has nothing to do with the ring being unreadable.
              */
-            events_ready = 0;
+            drain_ready = 0;
             return;
         }
         astra_event_store_lost(&store, lost);

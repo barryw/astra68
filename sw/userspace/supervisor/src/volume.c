@@ -26,6 +26,7 @@
 #include <astra/bytes.h>
 #include <astra/ext4_alloc.h>
 #include <astra/ext4_port.h>
+#include <astra/lease_block.h>
 #include <astra/mbr.h>
 #include <astra/runtime.h>
 #include <astra/supervisor.h>
@@ -152,6 +153,27 @@ int
 supervisor_volume_is_mounted(void)
 {
     return volume_mounted;
+}
+
+uint32_t
+supervisor_volume_device_status(void)
+{
+    return (uint32_t)volume_port.last_status;
+}
+
+uint32_t
+supervisor_volume_device_failure(void)
+{
+    /*
+     * Only the lease backend keeps this. A memory-backed device has no
+     * transfers to refuse, and asking one for a failure site would be reading
+     * a different backend's context as though it were a lease.
+     */
+    if (volume_block == NULL ||
+        volume_block->backend != astra_lease_block_backend()) {
+        return 0u;
+    }
+    return astra_lease_block_last_failure(volume_block->backend_context);
 }
 
 uint32_t

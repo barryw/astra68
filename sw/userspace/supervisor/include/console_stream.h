@@ -49,6 +49,14 @@ int console_stream_pending(void);
  */
 void console_stream_pump(void);
 
+/*
+ * Relays what the sink still holds and returns when it holds nothing, so that
+ * a launcher can finish reporting a child's output before it reports the
+ * child. Bounded: a live writer cannot hold the prompt hostage. Returns how
+ * many messages were relayed.
+ */
+uint32_t console_stream_drain(void);
+
 /* Rendered messages, for the boot report and the tests. */
 uint32_t console_stream_messages(void);
 
