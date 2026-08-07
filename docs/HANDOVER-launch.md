@@ -9,11 +9,11 @@ six capabilities: `STDOUT`, `STDERR`, `STDIN`, `WORK:`, `COMMANDS:` and
 `EVENTS:` — the last three as port handles to services it reaches across a
 process boundary.
 
-**Task 6 works. One fault is left and it is not task 6's.** `events` is a
-program, it is granted `EVENTS:`, and the terminal gate reaches 20 of 20. But
-the gate is **flaky**: roughly half of runs die at the seventh launch of a
-program because the block device's interrupt endpoint quarantines itself and
-never recovers. §2 is that fault, and it is where to start.
+**Milestone 1 is done and the gate is stable.** `events` is a program, it is
+granted `EVENTS:`, and the terminal gate passes 22 of 22 — fourteen consecutive
+clean runs, against a gate that used to fail about half of them. §2 is what
+that flakiness turned out to be, kept because the shape of it is worth
+recognising again.
 
 ---
 
@@ -22,15 +22,15 @@ never recovers. §2 is that fault, and it is where to start.
 | Where | What | State |
 |---|---|---|
 | `main` | tasks 1–5 | **pushed**, `ec75bb4`. Every gate green. |
-| `task6-events-program` | task 6 | `2c14a0a`. Gate green when it passes; **flaky**, §2. |
+| `task6-events-program` | task 6, and the flakiness behind it | `cd8ab39`. Every gate green. |
 
-`main` was pushed to `origin` at `435d530..ec75bb4`, 48 commits. Task 6 is still
-on a branch because of §2, not because of task 6.
+`main` was pushed to `origin` at `435d530..ec75bb4`, 48 commits. The branch is
+ready to go to `main`.
 
-Every gate below is green on the branch: kernel `make test` and
+Every gate is green: kernel `make test` at both trace floors and
 `K1_QUALIFICATION=1`, userspace `make test`, `sanitize` and `analyze`,
-`ext4-test`, and `tools/tests` (38 cases). The terminal gate passes whole when
-§2 does not fire.
+`ext4-test`, `tools/tests` (38 cases), and the terminal gate at 22 of 22 over
+fourteen consecutive runs.
 
 The plan is `docs/superpowers/plans/2026-08-07-launch-milestone-1.md`. Every
 finished task has a **"what the build settled"** block written under it — those
@@ -47,12 +47,20 @@ describe.
 | 5 | the storage protocol over ports | done, `3d66e07` |
 | 6 | `events` becomes `COMMANDS:events`; the builtin goes | done, `2c14a0a` |
 
+And after it, the flakiness that task 6 was the first thing slow enough to
+expose: `4c64949` the interrupt quarantines, `874508d` the release/debug split,
+`cd8ab39` the `devices` surface.
+
 ---
 
-## 2. Resume here: the interrupt endpoint that quarantines itself
+## 2. The flakiness, and what it was
 
-Run the terminal gate two or three times. Roughly half the runs die like this,
-at `events --follow` — the seventh program launched in the run:
+Kept as a worked example rather than as a task: it is fixed, and the way it
+hid is the part worth recognising.
+
+**The symptom.** About half of terminal-gate runs died at the seventh program
+launched, always the same way — the shell could not read the next image off the
+volume, and storage never worked again for the rest of the boot:
 
 ```
 WORK:> events --follow
@@ -60,73 +68,40 @@ events: read stopped at 9600 of 15564, device 9/1292
 events: I/O error
 ```
 
-That is the **shell** failing to read the program's image off the volume, not
-`events` failing. After it happens, storage never works again for the rest of
-the boot: the next read stops at byte 0.
+**Two bugs, both the same mistake.** The kernel was reading "the device has
+nothing for you" as "the device is broken", and the flag it set for that is
+sticky, so one misread ended storage until reboot.
 
-**Read the numbers.** `device 9/1292` is new and is the whole of the progress
-made. `9` is `ASTRA_BLOCK_IO_ERROR`. `1292` is `site * 256 + status`, so site
-**5** = `ASTRA_LEASE_BLOCK_SITE_DRAIN_AFTER_COLLECT` and status **12** =
-`ASTRA_SYSCALL_IO_ERROR`. See `AstraLeaseBlockSite` in
-`sw/userspace/storage/include/astra/lease_block.h`.
+- `endpoint->consecutive` counted **every** interrupt in the storm window and
+  was cleared by nothing but `kernel_irq_recover`. Sixty-four completions that
+  were each read and acknowledged the moment they arrived — a journal flush is
+  enough — quarantined the endpoint as hard as a line nobody was answering. **A
+  busy device is not a storm.** An acknowledgement now clears the run, and the
+  budget moved to interrupts that carry no work, which is what a wedged line
+  actually produces.
+- Every `capture` in `platform.c` returns false for one reason, that the status
+  register shows no work, and not one of them can report a hardware fault.
+  Dispatch read false as a device failure. It is reachable in ordinary
+  operation: a caller polling `astra_block_lease_collect` takes the completion
+  out of the queue itself and can beat the CPU to the interrupt raised for it.
 
-So: a request was submitted and **collected successfully**, and then the drain
-that acknowledges its completion record was refused with `IO_ERROR`.
+**How it was found, which is the reusable part.** The status was narrowed to
+its one possible source, the lease was made to record *where* it gave up
+(`device 9/1292` is site 5, `DRAIN_AFTER_COLLECT`, syscall `IO_ERROR`), and
+then the kernel trace ring named it outright: one `irq_quarantine` record in
+the whole boot, source 4, reason `0x0a` — `KERNEL_IRQ_STORM`. The ring is RAM
+and survives the fault that killed storage, which is exactly when it is worth
+having.
 
-**Why it never recovers.** `kernel_irq_read` (`sw/kernel/irq.c`) returns
-`KERNEL_IRQ_DEVICE_ERROR` whenever the endpoint holds no records *and* the
-`KERNEL_IRQ_EVENT_DEVICE_ERROR` flag is set. **That flag is sticky.** Once set,
-every later drain fails, `run_request` turns it into `ASTRA_BLOCK_IO_ERROR`,
-lwext4 turns that into `EIO`, and the volume is dead until reboot.
+**Three things exist now so that the next one costs less:**
 
-**What is not yet known: which of three paths sets the flag.**
-
-- `kernel_irq_ack` sets it when the route's `complete` callback returns false;
-- `kernel_irq_ack` sets it when a level-triggered `controller_acknowledge`
-  fails;
-- `quarantine_masked` / `quarantine_unclaimed` set it when an interrupt arrives
-  while the endpoint is masked or unowned.
-
-**The next step is already built.** `trace_quarantine` in `sw/kernel/irq.c`
-emits a trace record naming the reason, and `emu/qemu/test-events.py` takes the
-ring off the machine and decodes it — it works even when storage is dead,
-because the ring is RAM. Run the terminal gate until it fails, pull the ring,
-and read which quarantine fired. That names the path in one run.
-
-**Why it is timing-dependent, and why launching is what exposes it.** A launch
-runs another process between the shell's block requests, so completions land at
-different points relative to arm/ack than they do when only the shell runs. The
-onset moves between the fifth and seventh launch across runs. Nothing about
-`events` matters here: 12 consecutive `status` launches fail the same way.
-
-**Do not "fix" this by clearing the flag.** Sticky is the right behaviour for a
-device that misbehaved; the bug is whatever makes a healthy device trip it. The
-lease's arm/ack state machine and the kernel's are two models of one endpoint
-(`lease->armed` in `sw/userspace/storage/src/lease_block.c`), and they are the
-first thing to check for divergence.
-
-**What was fixed getting here** — all of it committed, and none of it the
-above:
-
-- The original refusal. `ASTRA_SYSCALL_PORT_RECEIVE` answers `RESOURCE_LIMIT`
-  from exactly one place, `KERNEL_HANDLE_TABLE_FULL`. The supervisor's table
-  was full at 16 entries. The previous session's widening to 31 was correct and
-  **had never compiled** — a `_Static_assert` on `sizeof(KernelProcess)` still
-  named the old size — so every observation behind "the symptom is unchanged"
-  was made against a 16-entry ROM.
-- `KERNEL_PROCESS_HANDLE_DEMAND` in `sw/kernel/process.h` now sums what one
-  process can hold and asserts it fits the table. At 16 it comes to 27 and the
-  build fails naming the budget.
-- `pump_once` painted a child's output only on a pass where a key arrived, so a
-  program that printed one line and exited printed nothing until somebody
-  typed.
-- `command_launch` reported a child's exit above the child's last words; it
-  drains the sink before it narrates.
-- The port transport answered `ASTRA_VFS_ERR_NOT_FOUND` when a service had
-  died. `test_vfs_port` had been failing on this branch and now asserts a dead
-  peer and a bad handle apart, rather than together.
-
----
+- `devices` at the prompt. An endpoint's state and, in words, the sticky events
+  that say it stopped. The gate reads the table back and fails if anything is
+  quarantined.
+- Two kernel builds. `make ASTRA_BUILD=debug` keeps the per-interrupt stream
+  that solved this; the release build compiles it away.
+- The terminal gate dumps the kernel ring on any failure, so the evidence is in
+  the log of the run that failed rather than in a re-run that may not.
 
 ## 3. The mechanisms, as they now stand
 
