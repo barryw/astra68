@@ -429,8 +429,8 @@ astra_main(const AstraStartupInfo *startup)
     {
         char wire[EVENTS_PATH_MAX];
 
-        status = astra_assign_resolve(&assigns, path, ASTRA_RIGHT_READ, wire,
-                                      sizeof(wire), NULL);
+        status = astra_assign_resolve(&assigns, path, ASTRA_RIGHT_READ, 0u,
+                                      wire, sizeof(wire), NULL);
         if (status != ASTRA_VFS_OK) {
             say("events: no such view");
             return (int)status;

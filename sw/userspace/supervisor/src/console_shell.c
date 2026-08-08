@@ -37,6 +37,7 @@
 #include <astra/vfs_assign.h>
 #include <astra/vfs_client.h>
 #include <astra/vfs_path.h>
+#include <astra/vfs_union.h>
 #include <vfs_host.h>
 
 /* A path the protocol will refuse to carry is not worth building. */
@@ -104,34 +105,139 @@ static int shell_equal(const char *left, const char *right)
 }
 
 /*
- * A word typed at the prompt becomes a path the protocol can carry, or a
- * refusal that says which kind it was. The rights are the command's own, so a
- * write through an assign granted only read is refused here rather than by the
- * disk -- and a name the shell was never given does not resolve at all.
+ * The adapter astra_vfs_assign_open needs. The Kit's union loop takes a
+ * client_for callback carrying a context pointer, because a launched
+ * program's clients and the supervisor's are looked up different ways; this
+ * shell has no context to give it, so the adapter just drops it.
  */
-static uint32_t shell_path(const char *name, uint32_t rights, char *wire,
-                           uint32_t capacity, AstraVfsClient **client)
+static AstraVfsClient *shell_client_for(const AstraAssign *assign,
+                                        void *context)
 {
-    char typed[SHELL_PATH_MAX];
-    const AstraAssign *assign = NULL;
-    uint32_t status;
+    (void)context;
+    return supervisor_vfs_client_for(assign);
+}
 
-    status = astra_path_qualify(shell.assign, shell.directory, name, typed,
-                                sizeof(typed));
-    if (status != ASTRA_VFS_OK)
-        return status;
-    status = astra_assign_resolve(supervisor_assigns(), typed, rights, wire,
-                                  capacity, &assign);
-    if (status != ASTRA_VFS_OK)
-        return status;
-    /*
-     * A name is a binding to a mount, and there are two mounts now. Asking
-     * which service speaks for the assign is what keeps the shell from sending
-     * an EVENTS: path to the volume -- and it is the same question a launched
-     * program will answer with a port handle.
-     */
-    *client = supervisor_vfs_client_for(assign);
-    return *client != NULL ? ASTRA_VFS_OK : ASTRA_VFS_ERR_NOT_FOUND;
+/*
+ * The first member of an already-qualified path that actually carries the
+ * requested rights -- not necessarily member zero, since a union's first
+ * member can be read-only. This is where a name that does not exist yet
+ * belongs: mkdir, and a write to a name that turns out to be on no member at
+ * all, both create through here, so a new file lands on whichever member is
+ * willing to take it rather than wherever join order happened to put a
+ * read-only copy.
+ *
+ * "Not found" is what this returns once every member has said no and none of
+ * them said anything more specific; a member that refused because it does not
+ * carry the right is remembered instead, the same worst-status rule
+ * astra_vfs_assign_open documents (astra/vfs_union.h) -- a namespace with no
+ * writable member at all is an access problem, not an absence, and must not
+ * be reported as one.
+ */
+static uint32_t shell_path_primary(const char *typed, uint32_t rights,
+                                   char *wire, uint32_t capacity,
+                                   AstraVfsClient **client)
+{
+    uint32_t worst = ASTRA_VFS_ERR_NOT_FOUND;
+
+    for (uint32_t member = 0u; ; ++member) {
+        const AstraAssign *assign = NULL;
+        uint32_t status;
+
+        status = astra_assign_resolve(supervisor_assigns(), typed, rights,
+                                      member, wire, capacity, &assign);
+        if (status == ASTRA_VFS_ERR_NOT_FOUND)
+            return worst;
+        if (status != ASTRA_VFS_OK) {
+            if (worst == ASTRA_VFS_ERR_NOT_FOUND)
+                worst = status;
+            continue;
+        }
+        *client = supervisor_vfs_client_for(assign);
+        if (*client != NULL)
+            return ASTRA_VFS_OK;
+    }
+}
+
+/*
+ * Where an already-qualified path already is, walked member by member without
+ * opening a handle: cd only wants its kind and rm is about to remove it, so
+ * neither wants a file left open behind it. Resolution is a string operation
+ * and existence is not (astra/vfs_assign.h), so a stat is what actually
+ * answers "is it on this member" -- the same reason launch_path's own search
+ * stats rather than trusting resolve alone.
+ *
+ * The same worst-status rule as shell_path_primary, and for rm it is not
+ * academic: a name that lives only on a read-only member must come back
+ * "access denied", not "not found" -- the file is right there, and telling a
+ * person it is absent when it is merely untouchable is the wrong refusal.
+ *
+ * Existence and permission are different questions, and resolving with the
+ * *operation's* rights used to ask them as one. astra_assign_resolve refuses
+ * ASTRA_VFS_ERR_ACCESS for a member whose bound rights do not cover what was
+ * requested, and it does that before any I/O -- so that refusal has told
+ * this function nothing about whether the member actually holds the name.
+ * Treating it as this function's own worst status anyway let a member that
+ * merely cannot be written outrun every other member's honest NOT_FOUND, so
+ * a name sitting on no member at all came back "access denied" instead of
+ * "not found": the exact failure this comment is here to keep from coming
+ * back. So every member is now resolved for existence only, with READ -- the
+ * same right `cd` and `cat` already ask for, since a name has to be readable
+ * to be found before anything decides whether it may also be acted on. Only
+ * once a stat confirms the name is really there is the caller's `rights`
+ * checked against the member that holds it; a member that has the name but
+ * not the right is remembered exactly like the read-only-member case above
+ * and the walk moves on, while a member that lacks even READ still refuses
+ * at resolve, unchanged.
+ */
+static uint32_t shell_locate(const char *typed, uint32_t rights, char *wire,
+                             uint32_t capacity, AstraVfsClient **client,
+                             uint16_t *kind)
+{
+    uint32_t worst = ASTRA_VFS_ERR_NOT_FOUND;
+
+    for (uint32_t member = 0u; ; ++member) {
+        const AstraAssign *assign = NULL;
+        uint32_t status;
+
+        status = astra_assign_resolve(supervisor_assigns(), typed,
+                                      ASTRA_RIGHT_READ, member, wire, capacity,
+                                      &assign);
+        if (status == ASTRA_VFS_ERR_NOT_FOUND)
+            return worst;
+        if (status != ASTRA_VFS_OK) {
+            if (worst == ASTRA_VFS_ERR_NOT_FOUND)
+                worst = status;
+            continue;
+        }
+        *client = supervisor_vfs_client_for(assign);
+        if (*client == NULL)
+            continue;
+        status = astra_vfs_stat(*client, wire, NULL, kind);
+        if (status == ASTRA_VFS_OK) {
+            if ((assign->rights & rights) != rights) {
+                /*
+                 * It is here, but not writable (or otherwise usable as asked)
+                 * here -- not the same thing as absent, so this must not let
+                 * a later member's ordinary NOT_FOUND look like the final
+                 * word once none of them turn out to hold the name at all.
+                 */
+                if (worst == ASTRA_VFS_ERR_NOT_FOUND)
+                    worst = ASTRA_VFS_ERR_ACCESS;
+                continue;
+            }
+            return ASTRA_VFS_OK;
+        }
+        /*
+         * Not on this member: the next one still might have it. But the same
+         * worst-status rule applies to a stat that failed for its own reason
+         * as to a resolve that did (astra/vfs_union.h) -- a member whose
+         * device answered ASTRA_VFS_ERR_IO or ASTRA_VFS_ERR_PROTOCOL did not
+         * say "absent", it said "I could not tell you", and a later member's
+         * ordinary NOT_FOUND must not bury that.
+         */
+        if (status != ASTRA_VFS_ERR_NOT_FOUND && worst == ASTRA_VFS_ERR_NOT_FOUND)
+            worst = status;
+    }
 }
 
 /* The one place the shell reaches storage. NULL when no volume is mounted. */
@@ -231,39 +337,98 @@ static void report_status(const char *what, uint32_t status)
 
 static void command_ls(int argc, char *const *argv)
 {
+    char typed[SHELL_PATH_MAX];
     char path[SHELL_PATH_MAX];
     char name[ASTRA_VFS_NAME_MAX];
+    const AstraAssign *assign = NULL;
     AstraVfsClient *client = NULL;
-    uint64_t cursor = 0u;
     uint32_t shown = 0u;
-    uint16_t kind = 0u;
+    uint32_t members = 0u;
+    uint32_t worst = ASTRA_VFS_ERR_NOT_FOUND;
     uint32_t status;
 
     if (storage() == NULL) {
         write_line("ls: no volume");
         return;
     }
-    status = shell_path(argc > 1 ? argv[1] : NULL, ASTRA_RIGHT_READ, path,
-                        sizeof(path), &client);
+    status = astra_path_qualify(shell.assign, shell.directory,
+                                argc > 1 ? argv[1] : NULL, typed,
+                                sizeof(typed));
     if (status != ASTRA_VFS_OK) {
         report_status("ls", status);
         return;
     }
-    for (;;) {
-        status = astra_vfs_readdir(client, path, cursor, name, sizeof(name),
-                                   &kind, &cursor);
-        /* Running past the last entry is how a listing ends, not a failure. */
-        if (status == ASTRA_VFS_ERR_NOT_FOUND)
+    /*
+     * Every member, in order, and nothing is deduplicated: a name on two
+     * members is shown twice with the member it came from. A duplicate-name
+     * set would be memory proportional to the directory, which every
+     * enumeration on this machine refuses -- and hiding the loser would make a
+     * listing disagree with what a lookup would do.
+     */
+    for (uint32_t member = 0u; ; ++member) {
+        uint64_t cursor = 0u;
+        uint16_t kind = 0u;
+
+        status = astra_assign_resolve(supervisor_assigns(), typed,
+                                      ASTRA_RIGHT_READ, member, path,
+                                      sizeof(path), &assign);
+        if (status == ASTRA_VFS_ERR_NOT_FOUND) {
             break;
-        if (status != ASTRA_VFS_OK) {
-            report_status("ls", status);
-            return;
         }
-        astra_terminal_write(&shell.terminal, name);
-        if (kind == ASTRA_VFS_KIND_DIRECTORY)
-            astra_terminal_putc(&shell.terminal, '/');
-        astra_terminal_putc(&shell.terminal, '\n');
-        ++shown;
+        if (status != ASTRA_VFS_OK) {
+            /*
+             * The same worst-status rule as shell_locate and
+             * shell_path_primary (astra/vfs_union.h): a member that refused
+             * for a reason other than plain absence must survive to the
+             * final report, so a name whose only members lack read rights is
+             * told "access denied" rather than the ordinary "not found".
+             */
+            if (worst == ASTRA_VFS_ERR_NOT_FOUND)
+                worst = status;
+            continue;
+        }
+        client = supervisor_vfs_client_for(assign);
+        if (client == NULL) {
+            continue;
+        }
+        ++members;
+        for (;;) {
+            status = astra_vfs_readdir(client, path, cursor, name,
+                                       sizeof(name), &kind, &cursor);
+            if (status == ASTRA_VFS_ERR_NOT_FOUND)
+                break;
+            if (status != ASTRA_VFS_OK) {
+                /*
+                 * This member, not the listing: a device that fails partway
+                 * through a directory has said nothing about any other
+                 * member, and abandoning the whole command over one broken
+                 * member is the same shape of mistake the worst-status rule
+                 * exists to stop elsewhere in this file. Reported here,
+                 * because the caller only sees the worst status when no
+                 * member resolved at all.
+                 */
+                report_status("ls", status);
+                if (worst == ASTRA_VFS_ERR_NOT_FOUND)
+                    worst = status;
+                break;
+            }
+            astra_terminal_write(&shell.terminal, name);
+            if (kind == ASTRA_VFS_KIND_DIRECTORY)
+                astra_terminal_putc(&shell.terminal, '/');
+            /*
+             * The member it came from, so the shadowing a person cannot see in
+             * a name is visible in the listing.
+             */
+            astra_terminal_write(&shell.terminal, "  [");
+            write_number(member);
+            astra_terminal_write(&shell.terminal, "]");
+            astra_terminal_putc(&shell.terminal, '\n');
+            ++shown;
+        }
+    }
+    if (members == 0u) {
+        report_status("ls", worst);
+        return;
     }
     if (shown == 0u)
         write_line("(empty)");
@@ -274,7 +439,6 @@ static void command_cd(int argc, char *const *argv)
     char typed[SHELL_PATH_MAX];
     char wire[SHELL_PATH_MAX];
     char name[ASTRA_CAPABILITY_NAME_MAX];
-    const AstraAssign *assign = NULL;
     AstraVfsClient *client = NULL;
     uint16_t kind = 0u;
     uint32_t status;
@@ -289,21 +453,16 @@ static void command_cd(int argc, char *const *argv)
                                 argc > 1 ? argv[1] : NULL, typed,
                                 sizeof(typed));
     if (status == ASTRA_VFS_OK) {
-        status = astra_assign_resolve(supervisor_assigns(), typed,
-                                      ASTRA_RIGHT_READ, wire, sizeof(wire),
-                                      &assign);
+        /*
+         * A directory on the second member is a directory that exists: cd
+         * used to resolve member zero only, which made a directory that
+         * lived solely on a union's later member impossible to enter even
+         * though `ls` could already show it sitting there. Verified before
+         * it is adopted, so the prompt never lies.
+         */
+        status = shell_locate(typed, ASTRA_RIGHT_READ, wire, sizeof(wire),
+                              &client, &kind);
     }
-    if (status == ASTRA_VFS_OK) {
-        client = supervisor_vfs_client_for(assign);
-        if (client == NULL)
-            status = ASTRA_VFS_ERR_NOT_FOUND;
-    }
-    if (status != ASTRA_VFS_OK) {
-        report_status("cd", status);
-        return;
-    }
-    /* Verified before it is adopted, so the prompt never lies. */
-    status = astra_vfs_stat(client, wire, NULL, &kind);
     if (status != ASTRA_VFS_OK) {
         report_status("cd", status);
         return;
@@ -330,6 +489,7 @@ static void command_cd(int argc, char *const *argv)
 
 static void command_cat(int argc, char *const *argv)
 {
+    char typed[SHELL_PATH_MAX];
     char path[SHELL_PATH_MAX];
     uint8_t chunk[SHELL_READ_CHUNK];
     AstraVfsClient *client = NULL;
@@ -346,14 +506,23 @@ static void command_cat(int argc, char *const *argv)
         write_line("cat: needs a file");
         return;
     }
-    status = shell_path(argv[1], ASTRA_RIGHT_READ, path, sizeof(path),
-                        &client);
-    if (status != ASTRA_VFS_OK) {
-        report_status("cat", status);
-        return;
+    status = astra_path_qualify(shell.assign, shell.directory, argv[1], typed,
+                                sizeof(typed));
+    if (status == ASTRA_VFS_OK) {
+        /*
+         * A file on the second member is a file that exists: cat used to
+         * resolve member zero only, so a name shadowed by nothing on the
+         * first member but present on the second could not be read at all.
+         * The Kit's own union loop is the right tool here, because reading
+         * wants exactly what it hands back -- an open handle on whichever
+         * member answered.
+         */
+        status = astra_vfs_assign_open(supervisor_assigns(), typed,
+                                       ASTRA_RIGHT_READ, ASTRA_VFS_OPEN_READ,
+                                       shell_client_for, NULL, path,
+                                       sizeof(path), &file, NULL, NULL,
+                                       &client, NULL);
     }
-    status = astra_vfs_open(client, path, ASTRA_VFS_OPEN_READ, &file, NULL,
-                            NULL);
     if (status != ASTRA_VFS_OK) {
         report_status("cat", status);
         return;
@@ -377,6 +546,7 @@ static void command_cat(int argc, char *const *argv)
 
 static void command_mkdir(int argc, char *const *argv)
 {
+    char typed[SHELL_PATH_MAX];
     char path[SHELL_PATH_MAX];
     AstraVfsClient *client = NULL;
     uint32_t status;
@@ -389,8 +559,17 @@ static void command_mkdir(int argc, char *const *argv)
         write_line("mkdir: needs a name");
         return;
     }
-    status = shell_path(argv[1], ASTRA_RIGHT_WRITE, path, sizeof(path),
-                        &client);
+    status = astra_path_qualify(shell.assign, shell.directory, argv[1], typed,
+                                sizeof(typed));
+    if (status == ASTRA_VFS_OK) {
+        /*
+         * A new directory is a creation, and creation belongs on the
+         * primary -- the first member willing to take a write -- rather
+         * than on member zero regardless of whether it can.
+         */
+        status = shell_path_primary(typed, ASTRA_RIGHT_WRITE, path,
+                                    sizeof(path), &client);
+    }
     if (status != ASTRA_VFS_OK) {
         report_status("mkdir", status);
         return;
@@ -403,6 +582,7 @@ static void command_mkdir(int argc, char *const *argv)
 /* write NAME TEXT... -- creates or truncates, then writes the rest of the line. */
 static void command_write(int argc, char *const *argv)
 {
+    char typed[SHELL_PATH_MAX];
     char path[SHELL_PATH_MAX];
     AstraVfsClient *client = NULL;
     AstraVfsFile file;
@@ -419,16 +599,52 @@ static void command_write(int argc, char *const *argv)
         write_line("write: needs a name");
         return;
     }
-    status = shell_path(argv[1], ASTRA_RIGHT_WRITE, path, sizeof(path),
-                        &client);
+    status = astra_path_qualify(shell.assign, shell.directory, argv[1], typed,
+                                sizeof(typed));
     if (status != ASTRA_VFS_OK) {
         report_status("write", status);
         return;
     }
-    status = astra_vfs_open(client, path,
-                            ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
-                                ASTRA_VFS_OPEN_TRUNCATE,
-                            &file, NULL, NULL);
+    /*
+     * A name that already exists is written where it already is, not on the
+     * primary: writing through the union at member zero regardless would let
+     * a person "edit" a shipped file on a later member and silently get a
+     * new, shadowing copy on the first one instead of the edit they asked
+     * for.
+     *
+     * This used to open with WRITE|TRUNCATE and no CREATE, on the reasoning
+     * that a truncate-without-create open is an existence probe: a member
+     * that lacks the file would refuse and the walk would move on. That
+     * reasoning does not hold on this machine. The ext4 backend's mode_of()
+     * (vfs_ext4_backend.c) maps ASTRA_VFS_OPEN_TRUNCATE to lwext4's "wb"
+     * whether or not ASTRA_VFS_OPEN_CREATE is set, and "wb" both creates and
+     * truncates -- so the probe at the writable primary always succeeds by
+     * creating an empty file there, and the walk never reaches the member
+     * that actually holds the name. An open is not an existence test here.
+     *
+     * So the name is located first, with no handle opened, exactly as `rm`
+     * already does -- and only once a holder is found, or confirmed absent
+     * everywhere, is anything opened.
+     */
+    status = shell_locate(typed, ASTRA_RIGHT_WRITE, path, sizeof(path),
+                          &client, NULL);
+    if (status == ASTRA_VFS_OK) {
+        /* Found: write in place, on the member that already has it. */
+        status = astra_vfs_open(client, path,
+                                ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_TRUNCATE,
+                                &file, NULL, NULL);
+    } else if (status == ASTRA_VFS_ERR_NOT_FOUND) {
+        /* Not on any member: a name nobody has yet is created on the primary. */
+        status = shell_path_primary(typed, ASTRA_RIGHT_WRITE, path,
+                                    sizeof(path), &client);
+        if (status == ASTRA_VFS_OK) {
+            status = astra_vfs_open(client, path,
+                                    ASTRA_VFS_OPEN_WRITE |
+                                        ASTRA_VFS_OPEN_CREATE |
+                                        ASTRA_VFS_OPEN_TRUNCATE,
+                                    &file, NULL, NULL);
+        }
+    }
     if (status != ASTRA_VFS_OK) {
         report_status("write", status);
         return;
@@ -472,6 +688,7 @@ finish:
 
 static void command_rm(int argc, char *const *argv)
 {
+    char typed[SHELL_PATH_MAX];
     char path[SHELL_PATH_MAX];
     AstraVfsClient *client = NULL;
     uint32_t status;
@@ -484,8 +701,18 @@ static void command_rm(int argc, char *const *argv)
         write_line("rm: needs a name");
         return;
     }
-    status = shell_path(argv[1], ASTRA_RIGHT_WRITE, path, sizeof(path),
-                        &client);
+    status = astra_path_qualify(shell.assign, shell.directory, argv[1], typed,
+                                sizeof(typed));
+    if (status == ASTRA_VFS_OK) {
+        /*
+         * Removing acts on the member that actually holds the name, not on
+         * the primary: unlinking through the union at member zero regardless
+         * would refuse "not found" for a name only a later member has, while
+         * leaving that member's own copy sitting there untouched.
+         */
+        status = shell_locate(typed, ASTRA_RIGHT_WRITE, path, sizeof(path),
+                              &client, NULL);
+    }
     if (status != ASTRA_VFS_OK) {
         report_status("rm", status);
         return;
@@ -495,10 +722,51 @@ static void command_rm(int argc, char *const *argv)
         report_status("rm", status);
 }
 
+/*
+ * What this shell's namespace actually is: every name, its members in order,
+ * and what each member carries.
+ *
+ * It is a builtin rather than a program because it prints the *shell's*
+ * namespace. A launched program holds its own, so a program answering this
+ * question would truthfully answer about itself and be read as answering about
+ * the prompt.
+ *
+ * It is read-only. Joining a member at the prompt is a shell language decision
+ * the layout spec defers, and nothing needs to rebind at runtime yet.
+ */
+static void command_assign(int argc, char *const *argv)
+{
+    const AstraAssignTable *table = supervisor_assigns();
+
+    (void)argc;
+    (void)argv;
+    for (uint32_t index = 0u; index < table->count; ++index) {
+        const AstraAssign *entry = &table->entries[index];
+        uint32_t member = 0u;
+
+        /* Its position among the members of its own name. */
+        for (uint32_t at = 0u; at < index; ++at) {
+            if (astra_capability_name_equal(table->entries[at].name,
+                                            entry->name)) {
+                ++member;
+            }
+        }
+        astra_terminal_write(&shell.terminal, entry->name);
+        astra_terminal_write(&shell.terminal, ": [");
+        write_number(member);
+        astra_terminal_write(&shell.terminal, "] ");
+        astra_terminal_write(&shell.terminal,
+                             (entry->rights & ASTRA_RIGHT_WRITE) != 0u ?
+                                 "rw " : "r  ");
+        astra_terminal_putc(&shell.terminal, '/');
+        astra_terminal_write(&shell.terminal, entry->root);
+        astra_terminal_putc(&shell.terminal, '\n');
+    }
+}
 
 static void command_help(void)
 {
-    write_line("builtins: ls [dir], cd [dir], cat FILE, mkdir DIR,");
+    write_line("builtins: ls [dir], cd [dir], cat FILE, mkdir DIR, assign,");
     write_line("          write FILE TEXT..., rm FILE, pwd, clear, help");
     write_line("paths are ASSIGN:path -- there is no root. try ls SYS:");
     /*
@@ -508,6 +776,7 @@ static void command_help(void)
      * describing itself as it used to be.
      */
     write_line("programs live in COMMANDS:. try status 7, or events");
+    write_line("assign shows every name and its members, in the order tried");
 }
 
 static void prompt(void)
@@ -535,23 +804,76 @@ static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
 {
     static const char *const places[] = {"APPS:", "COMMANDS:"};
     char typed[SHELL_PATH_MAX];
-    const AstraAssign *assign = NULL;
     uint32_t status = ASTRA_VFS_ERR_NOT_FOUND;
 
     for (uint32_t index = 0u; word[index] != '\0'; ++index) {
         if (word[index] != ':') {
             continue;
         }
-        /* Named its own assign: one place, no search, and answerable. */
-        status = astra_assign_resolve(supervisor_assigns(), word,
-                                      ASTRA_RIGHT_READ, wire, capacity,
-                                      &assign);
-        if (status != ASTRA_VFS_OK) {
-            return status;
+        /*
+         * Named its own assign: one place, no search -- but the assign it
+         * names can still be a union, and `COMMANDS:status` typed out is the
+         * same lookup a bare `status` would have done through the COMMANDS:
+         * place, so it walks members the same way.
+         *
+         * The same worst-status rule as shell_locate (astra/vfs_union.h): a
+         * member that refuses for its own reason -- rights it does not
+         * carry, a stat that comes back other than "not found" -- must
+         * survive to the caller rather than being buried by a later
+         * member's ordinary NOT_FOUND, which is what let a device
+         * answering ASTRA_VFS_ERR_IO be reported as a name that does not
+         * exist.
+         */
+        uint32_t worst = ASTRA_VFS_ERR_NOT_FOUND;
+
+        for (uint32_t member = 0u; ; ++member) {
+            const AstraAssign *found = NULL;
+
+            status = astra_assign_resolve(supervisor_assigns(), word,
+                                          ASTRA_RIGHT_READ, member, wire,
+                                          capacity, &found);
+            if (status == ASTRA_VFS_ERR_NOT_FOUND) {
+                return worst;    /* past the last member: nothing named it */
+            }
+            if (status != ASTRA_VFS_OK) {
+                if (worst == ASTRA_VFS_ERR_NOT_FOUND) {
+                    worst = status;
+                }
+                continue;
+            }
+            *client = supervisor_vfs_client_for(found);
+            if (*client == NULL) {
+                continue;
+            }
+            {
+                uint16_t kind = 0u;
+                uint32_t stat_status = astra_vfs_stat(*client, wire, NULL,
+                                                      &kind);
+
+                if (stat_status != ASTRA_VFS_OK) {
+                    if (worst == ASTRA_VFS_ERR_NOT_FOUND) {
+                        worst = stat_status;
+                    }
+                    continue;   /* not on this member: try the next */
+                }
+                if (kind == ASTRA_VFS_KIND_DIRECTORY) {
+                    continue;   /* a directory is not a command */
+                }
+            }
+            ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL,
+                         ASTRA_EVENT_LEVEL_NOTICE,
+                         "launching named directly, member %u", member);
+            return ASTRA_VFS_OK;
         }
-        *client = supervisor_vfs_client_for(assign);
-        return *client != NULL ? ASTRA_VFS_OK : ASTRA_VFS_ERR_NOT_FOUND;
     }
+
+    /*
+     * The same worst-status rule as above, carried across both places rather
+     * than reset between them: a member of APPS: that answers with something
+     * other than NOT_FOUND must not be forgotten just because COMMANDS: goes
+     * on to say NOT_FOUND about every member of its own.
+     */
+    uint32_t worst = ASTRA_VFS_ERR_NOT_FOUND;
 
     for (uint32_t place = 0u; place < 2u; ++place) {
         uint32_t length = 0u;
@@ -566,26 +888,62 @@ static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
             typed[length++] = word[index];
         }
         typed[length] = '\0';
-        status = astra_assign_resolve(supervisor_assigns(), typed,
-                                      ASTRA_RIGHT_READ, wire, capacity,
-                                      &assign);
-        if (status != ASTRA_VFS_OK) {
-            continue;   /* not bound, or not there: try the next place */
-        }
-        *client = supervisor_vfs_client_for(assign);
-        if (*client != NULL) {
+        /*
+         * Every member of the place, in order, and the first that opens wins.
+         * The index is the answer to "which one ran": a path variable cannot
+         * answer that question, and a union is holding it by the time the
+         * child starts.
+         */
+        for (uint32_t member = 0u; ; ++member) {
+            const AstraAssign *found = NULL;
+
+            status = astra_assign_resolve(supervisor_assigns(), typed,
+                                          ASTRA_RIGHT_READ, member, wire,
+                                          capacity, &found);
+            if (status == ASTRA_VFS_ERR_NOT_FOUND) {
+                break;      /* past the last member: try the next place */
+            }
+            if (status != ASTRA_VFS_OK) {
+                if (worst == ASTRA_VFS_ERR_NOT_FOUND) {
+                    worst = status;
+                }
+                continue;
+            }
+            *client = supervisor_vfs_client_for(found);
+            if (*client == NULL) {
+                continue;
+            }
+            {
+                uint16_t kind = 0u;
+                uint32_t stat_status = astra_vfs_stat(*client, wire, NULL,
+                                                      &kind);
+
+                if (stat_status != ASTRA_VFS_OK) {
+                    if (worst == ASTRA_VFS_ERR_NOT_FOUND) {
+                        worst = stat_status;
+                    }
+                    continue;   /* not on this member: try the next */
+                }
+                if (kind == ASTRA_VFS_KIND_DIRECTORY) {
+                    continue;   /* a directory is not a command */
+                }
+            }
+            ASTRA_EVENT2(ASTRA_EVENT_SUBSYSTEM_SHELL,
+                         ASTRA_EVENT_LEVEL_NOTICE,
+                         "launching from place %u member %u", place, member);
             return ASTRA_VFS_OK;
         }
     }
-    return status;
+    return worst;
 }
 
 /*
  * The grants a launched command is handed: three streams, and a namespace.
  *
- * `ASTRA_LAUNCH_GRANT_MAX` is six and this uses all six, which is a fact worth
- * stating rather than discovering. **`SYS:` is the one left out**, deliberately:
- * a command needs somewhere to read its own data, somewhere to write, and its
+ * `ASTRA_LAUNCH_GRANT_MAX` is eight and this uses all seven -- three streams
+ * plus WORK, two COMMANDS members and EVENTS -- which is a fact worth stating
+ * rather than discovering. **`SYS:` is the one left out**, deliberately: a
+ * command needs somewhere to read its own data, somewhere to write, and its
  * history, and it does not need the whole volume. The day something does, the
  * ceiling is what has to move, and moving it is a decision rather than an
  * accident.
@@ -601,17 +959,27 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
     static const char *const stream_names[] = {"STDOUT", "STDERR", "STDIN"};
     static const char *const mount_names[] = {"WORK", "COMMANDS", "EVENTS"};
     uint32_t streams[3];
-    uint32_t mounts[3];
-    uint32_t mount_flags[3];
     uint32_t count = 0u;
+    /*
+     * Whether either loop below ran out of room before it ran out of
+     * grants to make. It is provably 7 of 8 today -- three streams, WORK,
+     * two COMMANDS members and EVENTS -- but a third COMMANDS member, or a
+     * fourth stream, would push something out of a child's namespace with
+     * nothing recorded, the same silence bind_standard_assigns already
+     * guards against on the supervisor's own side.
+     */
+    int dropped = 0;
 
     streams[0] = console_stream_stdout();
     streams[1] = console_stream_stderr();
     streams[2] = console_stream_stdin();
-    for (uint32_t index = 0u; index < 3u && count < ASTRA_LAUNCH_GRANT_MAX;
-         ++index) {
+    for (uint32_t index = 0u; index < 3u; ++index) {
         if (streams[index] == 0u) {
             continue;
+        }
+        if (count >= ASTRA_LAUNCH_GRANT_MAX) {
+            dropped = 1;
+            break;
         }
         astra_capability_name_set(grants[count].name, stream_names[index]);
         grants[count].handle = streams[index];
@@ -622,51 +990,42 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
     }
 
     /*
-     * The namespace. A grant names a service's port and the rights the child
-     * may use it with, and those rights are a copy of what this process holds
-     * on the same binding -- a launch creates no authority, so a child cannot
-     * be given a writable COMMANDS: by a shell that only has a readable one.
+     * The namespace, member by member. A name with two members is granted
+     * twice, in order, because a member is a repeated name on both sides of a
+     * launch -- and a child that was handed only the first member would be a
+     * child whose COMMANDS: quietly means less than the prompt's.
+     *
+     * The root travels now, so a child's COMMANDS: means the directory it was
+     * granted rather than the whole volume.
      */
-    mounts[0] = supervisor_vfs_port();
-    mounts[1] = supervisor_vfs_port();
-    mounts[2] = supervisor_events_port();
     for (uint32_t index = 0u; index < 3u; ++index) {
-        const AstraAssign *assign = astra_assign_lookup(supervisor_assigns(),
-                                                        mount_names[index]);
+        for (uint32_t member = 0u; ; ++member) {
+            const AstraAssign *assign =
+                astra_assign_member(supervisor_assigns(), mount_names[index],
+                                    member);
 
-        /*
-         * A launch creates no authority, so what a child may do with a mount
-         * is a copy of what this process may do with it -- never more. A shell
-         * holding a readable COMMANDS: cannot grant a writable one.
-         */
-        mount_flags[index] = ASTRA_CAPABILITY_FLAG_NAMESPACE;
-        if (assign == NULL) {
-            mounts[index] = 0u;
-            continue;
-        }
-        if ((assign->rights & ASTRA_RIGHT_READ) != 0u) {
-            mount_flags[index] |= ASTRA_CAPABILITY_FLAG_READ;
-        }
-        if ((assign->rights & ASTRA_RIGHT_WRITE) != 0u) {
-            mount_flags[index] |= ASTRA_CAPABILITY_FLAG_WRITE;
+            if (assign == NULL) {
+                break;
+            }
+            if (count >= ASTRA_LAUNCH_GRANT_MAX) {
+                dropped = 1;
+                break;
+            }
+            astra_capability_name_set(grants[count].name, mount_names[index]);
+            grants[count].handle = assign->handle;
+            grants[count].rights = ASTRA_RIGHT_SIGNAL;
+            grants[count].flags = ASTRA_CAPABILITY_FLAG_NAMESPACE |
+                ((assign->rights & ASTRA_RIGHT_READ) != 0u ?
+                     ASTRA_CAPABILITY_FLAG_READ : 0u) |
+                ((assign->rights & ASTRA_RIGHT_WRITE) != 0u ?
+                     ASTRA_CAPABILITY_FLAG_WRITE : 0u);
+            astra_capability_root_set(grants[count].root, assign->root);
+            ++count;
         }
     }
-    for (uint32_t index = 0u; index < 3u && count < ASTRA_LAUNCH_GRANT_MAX;
-         ++index) {
-        if (mounts[index] == 0u) {
-            continue;
-        }
-        astra_capability_name_set(grants[count].name, mount_names[index]);
-        grants[count].handle = mounts[index];
-        /*
-         * SIGNAL and nothing else. What the child may *do* with the mount
-         * travels in the flags, because "may write files" is not an authority
-         * a port carries and asking the kernel for it is refused -- correctly,
-         * since there is no such thing to give.
-         */
-        grants[count].rights = ASTRA_RIGHT_SIGNAL;
-        grants[count].flags = mount_flags[index];
-        ++count;
+    if (dropped) {
+        ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_WARNING,
+                     "launch grant dropped, ASTRA_LAUNCH_GRANT_MAX reached");
     }
     return count;
 }
@@ -725,9 +1084,23 @@ static void command_launch(const char *word, int argc, char *const *argv)
     uint32_t status;
     uint16_t kind = 0u;
 
-    if (launch_path(word, path, sizeof(path), &client) != ASTRA_VFS_OK) {
-        astra_terminal_write(&shell.terminal, word);
-        write_line(": not a command");
+    status = launch_path(word, path, sizeof(path), &client);
+    if (status != ASTRA_VFS_OK) {
+        /*
+         * "Not a command" is what a genuinely absent name says. Anything
+         * else -- a member that refused for its own reason, a device that
+         * answered ASTRA_VFS_ERR_IO -- is reported for what it is, the same
+         * distinction shell_locate already draws: existence is not the only
+         * question a resolve can answer, and burying the other answers under
+         * "not found" is the single most expensive wrong answer this project
+         * has already paid for once.
+         */
+        if (status == ASTRA_VFS_ERR_NOT_FOUND) {
+            astra_terminal_write(&shell.terminal, word);
+            write_line(": not a command");
+        } else {
+            report_status(word, status);
+        }
         return;
     }
     status = astra_vfs_open(client, path, ASTRA_VFS_OPEN_READ, &file, &size,
@@ -898,6 +1271,8 @@ static void run_line(const char *line)
         command_write(words.argc, words.argv);
     else if (shell_equal(words.argv[0], "rm"))
         command_rm(words.argc, words.argv);
+    else if (shell_equal(words.argv[0], "assign"))
+        command_assign(words.argc, words.argv);
     else
         /*
          * Not a builtin, so it is a program. There is no third case: a word
@@ -1094,6 +1469,20 @@ static int pump_once(void)
                                                      status));
         (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
         return 0;
+    }
+    /*
+     * The other invisible input failure. A refused call at least came back
+     * with a status; an overflow comes back with ASTRA_SYSCALL_OK and a flag
+     * nothing here used to look at, so a keystroke the queue had no room for
+     * vanished with no trace anywhere a person or this gate could see. The
+     * line a command produces afterward is not the line that was typed, and
+     * until now nothing said so. There is no count to give: the emulator
+     * knows how many it dropped and no register carries that number out, so
+     * this says only that it happened, which is what can honestly be known.
+     */
+    if ((flags & ASTRA_INPUT_READ_OVERFLOW) != 0u) {
+        ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_WARNING,
+                     "input overflowed, some keystrokes never arrived");
     }
     for (uint32_t index = 0u; index < count; ++index) {
         uint32_t header = events[index].header;

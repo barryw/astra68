@@ -49,6 +49,13 @@ INPUT_COUNT_MASK = 0xFF
 
 BOOT_MARKER = "stage 8"
 
+# The empty prompt this fixture's shell settles on between commands. It is
+# `shell.assign + ":" + shell.directory + "> "` from console_shell.c's
+# `prompt()`, and this script never types `cd` or switches assigns, so it is
+# always exactly this -- `screen()` below rstrips every row, which is why the
+# trailing space here is not part of the constant.
+PROMPT = "WORK:>"
+
 # Typed in order. Each line is followed by Enter, then the screen is polled
 # until `expect` appears, so the check waits on the machine rather than on a
 # guessed settle time -- the emulated CPU is slow enough that a fixed sleep is
@@ -99,17 +106,113 @@ SCRIPT = [
     # COMMANDS: is bound and searched, so a bare name resolves there without
     # the person naming it -- and naming it explicitly is the same file.
     ("commands:status 3", "exited 3"),
+    # A write to a name that exists only on COMMANDS:'s read-only member:
+    # `status` is shipped on `/commands`, and the writable member,
+    # `/local/commands`, is empty in this fixture. Without the fix, `write`
+    # opens with WRITE|TRUNCATE and no CREATE, on the reasoning that a
+    # truncate-without-create open is an existence probe -- but the ext4
+    # backend's "wb" mode creates whether or not CREATE was asked for, so
+    # the probe always succeeds at the writable member by creating an empty
+    # `status` there, and the walk never reaches the member that actually
+    # holds the name. A person editing the shipped file would silently get a
+    # second, shadow copy instead of the edit they typed, and every later
+    # `cat`, `ls` and `write` of `commands:status` would see the shadow, not
+    # the original. The fix locates the holder before opening, so this must
+    # report the refusal the read-only member actually gives.
+    ("write commands:status no", "access denied"),
+    # The mirror case: a name on *no* member of COMMANDS: at all. The line
+    # above proves a name that genuinely exists, on a member that cannot
+    # take a write, is refused; this one proves a name nobody has yet still
+    # gets created -- on member 0, the only member willing to take it --
+    # rather than being refused by the same "access denied" the read-only
+    # member earns further down the walk. Nothing here asserts that,
+    # though: the shell echoes a typed line the instant it is typed, so an
+    # expectation drawn from "brandnew" would already be true before the
+    # write ran, and a write that lands prints nothing of its own to wait
+    # for. What it did is what the listing below proves, so this step
+    # carries only the back pressure every step gets.
+    ("write commands:brandnew text", None),
+    # Both members, from one listing, and where each landed. `devices` --
+    # the gate's shadow copy on member 0 and the shipped one on member 1 --
+    # is already on the volume before this line runs, so this single `ls`
+    # already carries both assertions this fixture needs: `brandnew` on
+    # member 0, the only member a name on nobody could have gone to; and
+    # `devices` still on member 1, undeduplicated, checked by name and
+    # member rather than by the bare "[1]" every other row here would also
+    # satisfy. There is one `ls commands:` in this script, not a second one
+    # later repeating the "devices  [1]" half of this check: wait_for_screen
+    # matches whatever is on the plane right now, not new output, and
+    # nothing forces this listing to have scrolled off 30 rows later --
+    # so a second, identical check could pass off this line's own text
+    # before its own `ls` had even run, which is a check that can never
+    # fail no matter what the second `ls` does.
+    ("ls commands:", ("brandnew  [0]", "devices  [1]")),
+    # And the milder failure the same conflation caused in `rm`: a name on
+    # no member at all must be reported "not found", not "access denied" --
+    # a member refusing on rights alone has said nothing about whether the
+    # name is there, and mistaking that refusal for the answer is exactly
+    # the bug the two lines above also guard against.
+    ("rm commands:doesnotexist", "not found"),
     # And the one that used to be a hang waiting to happen: a name that is not
     # a builtin and is not a file. Two places are looked in, both top level
     # only, and then it says so.
     ("nosuchthing", "not a command"),
-    ("events --boot -1", "the store is RAM"),
     # What the machine's interrupt endpoints are doing, asked from the prompt.
     # Before this existed a device that quarantined itself was invisible: it
     # looked exactly like a device nobody was using, and every call against it
     # came back with an I/O error three layers from its cause.
-    ("devices", "delivered"),
+    #
+    # Read through SYS:, not the bare name: the gate now installs a shadow
+    # under this same name on COMMANDS:'s writable member (below), and a bare
+    # `devices` or a `COMMANDS:devices` walks that union's members in the same
+    # order either way, member 0 first -- so both would now launch the shadow,
+    # not this program. SYS: is one mount of the whole volume, not a union, and
+    # reaches the shipped binary directly, which is what this line is actually
+    # here to run.
+    ("sys:commands/devices", "delivered"),
+    # The namespace printed back, and the whole of the order a lookup uses.
+    # Before this existed the search order was a comment in one function.
+    ("assign", "local/commands"),
+    # A child resolving through a union it was granted. `which` holds COMMANDS:
+    # as two grants with two roots and loops them with the same Kit function
+    # the shell uses -- so this line is the roots-in-grants fix and the union
+    # crossing a process boundary at once. `status` is only on the shipped
+    # member, so member 1 is the honest answer.
+    ("which status", "/commands/status [1]"),
+    # And the shadowing. The gate installed a `devices` into the writable
+    # member, so the person's own copy is what a lookup finds -- member 0,
+    # ahead of the shipped one.
+    ("which devices", "/local/commands/devices [0]"),
+    # Which is also what runs: the shadowing copy is `which`'s image under
+    # another name, so it answers the way `which` does rather than the way the
+    # shipped `devices` does.
+    ("devices status", "/commands/status [1]"),
+    # Last on purpose. `run()` reads the *current* screen after SCRIPT finishes
+    # to check that this line's own output and the shell's report of its exit
+    # are still on it and in order (see the child-order check below) -- the
+    # terminal is 30 rows and five new commands' worth of listings sit between
+    # here and where this line used to be, which was enough to scroll that
+    # output off before the check ever read it. Run last, its output is what
+    # the check finds.
+    ("events --boot -1", "the store is RAM"),
 ]
+
+# The exit-order check near the end of run() rereads the *current* screen
+# after SCRIPT finishes rather than capturing output as it goes, so this
+# line's output -- and the shell's report of its exit, which the check also
+# needs -- is only guaranteed to still be among the 30 rendered rows while
+# this is the last thing SCRIPT types. Anything appended after it pushes
+# both off the top before that check runs, which is the exact scroll-
+# dependent flake that put this line here in the first place (see the
+# comment above it). This assertion turns a future mistake like that into an
+# immediate, named failure instead of a mysterious one at the bottom of a
+# run.
+assert SCRIPT[-1] == ("events --boot -1", "the store is RAM"), (
+    "SCRIPT's last entry must stay (\"events --boot -1\", \"the store is "
+    "RAM\") -- the exit-order check in run() rereads the rendered screen "
+    "right after SCRIPT finishes and needs this command's own output and "
+    "the shell's exit report for it to both still be on screen, which is "
+    "only true while this line is typed last")
 
 QCODE = {" ": "spc", "\n": "ret", "/": "slash", ".": "dot", "-": "minus"}
 # Keys that need a modifier held. Assign names are case-insensitive, so a
@@ -290,14 +393,46 @@ class Machine:
         return rows
 
     def wait_for_screen(self, text, deadline):
+        """Waits until `text` is on the plane. `text` may also be a sequence
+        of strings, in which case this waits until every one of them is on
+        the plane -- not necessarily the same row -- which is how one `ls`
+        listing can carry more than one assertion instead of a second
+        command being typed just to check the rest of the first one's
+        output."""
+        texts = (text,) if isinstance(text, str) else tuple(text)
         end = time.monotonic() + deadline
         while True:
             rows = self.screen()
-            if any(text in row for row in rows):
+            if all(any(needle in row for row in rows) for needle in texts):
                 return rows
             if time.monotonic() >= end:
                 return None
             time.sleep(0.25)
+
+    def wait_for_prompt(self, deadline):
+        """Waits for the shell to be genuinely done with the command it was
+        last given, rather than for some prompt to merely be visible.
+
+        A row *containing* the prompt is not a safe signal: the row a command
+        was typed into still starts with the prompt text once it is history
+        on screen, and it sits there for as long as anything typed after it
+        does not scroll it away. A substring check would call that "ready"
+        the instant it was typed, which is the same race this exists to
+        close -- the harness would go on typing while the shell was still
+        loading an image for the command that row belongs to.
+        What is unique to a prompt nobody has answered yet is that its row is
+        *exactly* the prompt and nothing else: every prompt on screen that
+        already has a command's text following it got that text appended the
+        moment somebody (this script) started typing into it, so only the one
+        the shell just printed, fresh, is bare. That is what this polls for.
+        """
+        end = time.monotonic() + deadline
+        while True:
+            if any(row == PROMPT for row in self.screen()):
+                return True
+            if time.monotonic() >= end:
+                return False
+            time.sleep(0.05)
 
     def close(self):
         try:
@@ -335,17 +470,42 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
 
             for line, expected in SCRIPT:
                 machine.qmp.type_line(line)
-                rows = machine.wait_for_screen(expected, command_deadline)
-                if rows is None:
-                    print("FAIL: %r produced no %r within %.0fs"
-                          % (line, expected, command_deadline))
+                # `expected` is None for a step with nothing of its own to
+                # wait for -- see the "write commands:brandnew text" entry in
+                # SCRIPT for why one exists -- in which case back pressure
+                # below is the whole of this step's check.
+                if expected is not None:
+                    rows = machine.wait_for_screen(expected, command_deadline)
+                    if rows is None:
+                        print("FAIL: %r produced no %r within %.0fs"
+                              % (line, expected, command_deadline))
+                        for row in machine.screen():
+                            if row:
+                                print("    |%s|" % row)
+                        dump_ring(machine)
+                        return 1
+                    if verbose:
+                        print("ok: %r -> %r" % (line, expected))
+                # Back pressure. `expected` appearing is not the same as the
+                # shell being ready for what gets typed next: for a command
+                # that launches a program, `expected` is often the program's
+                # own output, printed while the shell is still waiting on it
+                # -- reading a program image off the volume does not pump
+                # input, so keys arriving before the shell is truly back at
+                # its prompt queue up behind it instead of being consumed as
+                # they arrive, which is the window a stress run reproduces as
+                # a corrupted next line and a step that times out with no
+                # explanation. Waiting for the bare prompt closes that window
+                # by construction: it cannot appear until the shell has come
+                # all the way back.
+                if not machine.wait_for_prompt(command_deadline):
+                    print("FAIL: %r never brought the shell back to %r "
+                          "within %.0fs" % (line, PROMPT, command_deadline))
                     for row in machine.screen():
                         if row:
                             print("    |%s|" % row)
                     dump_ring(machine)
                     return 1
-                if verbose:
-                    print("ok: %r -> %r" % (line, expected))
 
             # And no endpoint is quarantined.
             #
@@ -422,6 +582,39 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
                     return 1
                 if verbose:
                     print("ok: follow -> %r" % expected)
+
+            # And no input overflowed.
+            #
+            # The emulator's input queue is 32 events deep and drops silently
+            # at the hardware level when it is full -- nothing above it in the
+            # kernel or the model can undo a drop once it happens, so this
+            # gate cannot see it through the screen the way it sees everything
+            # else. It can see the shell's account of it: `pump_once` now
+            # reports the overflow flag the kernel already surfaced as a
+            # warning-level shell event, so this reads that back rather than
+            # trusting that this run's timing happened to stay under 32 --
+            # the same reasoning as the quarantine check above, and it must
+            # be typed fresh: the last time this subsystem's warnings were on
+            # screen was SCRIPT's own check of them, long since scrolled off.
+            machine.qmp.type_line("events --subsystem shell --level warning")
+            if not machine.wait_for_prompt(command_deadline):
+                print("FAIL: the overflow check itself produced no prompt "
+                      "within %.0fs" % command_deadline)
+                for row in machine.screen():
+                    if row:
+                        print("    |%s|" % row)
+                dump_ring(machine)
+                return 1
+            overflowed = [row for row in machine.screen()
+                          if "input overflowed" in row]
+            if overflowed:
+                print("FAIL: input overflowed during the run")
+                for row in overflowed:
+                    print("    |%s|" % row)
+                dump_ring(machine)
+                return 1
+            if verbose:
+                print("ok: no input overflowed")
 
             # A count left here means keys are arriving and nobody is taking
             # them, which is how a refused input syscall presents.

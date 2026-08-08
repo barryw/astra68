@@ -21,14 +21,14 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 # accident, so the two are compiled with different flags on purpose.
 CORE_SOURCES := src/vfs_service_core.c src/vfs_client.c \
 	src/vfs_local_transport.c src/vfs_port_transport.c src/vfs_assign.c \
-	src/vfs_path.c
+	src/vfs_path.c src/vfs_union.c
 EXT4_CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
 	-DCONFIG_USE_DEFAULT_CFG=0 -I$(RUNTIME)/freestanding
 
 HEADERS := include/astra/vfs_service_core.h include/astra/vfs_backend.h \
 	include/astra/vfs_client.h include/astra/vfs_local_transport.h \
 	include/astra/vfs_assign.h include/astra/vfs_path.h \
-	include/astra/vfs_port_transport.h \
+	include/astra/vfs_port_transport.h include/astra/vfs_union.h \
 	../../include/astra/vfs_service.h \
 	../../include/astra/syscall.h
 
@@ -36,7 +36,7 @@ TARGET := build/m68k/libastravfs.a
 TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/vfs_assign.o build/m68k/vfs_path.o \
 	build/m68k/vfs_local_transport.o build/m68k/vfs_port_transport.o \
-	build/m68k/vfs_ext4_backend.o
+	build/m68k/vfs_ext4_backend.o build/m68k/vfs_union.o
 HOST_TEST := build/host/test_vfs_service_core
 
 all: $(TARGET)
@@ -77,6 +77,15 @@ $(ASSIGN_TEST): src/vfs_assign.c src/vfs_path.c tests/test_vfs_assign.c \
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/vfs_assign.c src/vfs_path.c tests/test_vfs_assign.c -o $@
 
+UNION_TEST := build/host/test_vfs_union
+
+$(UNION_TEST): src/vfs_union.c src/vfs_assign.c src/vfs_path.c \
+		tests/test_vfs_union.c $(HEADERS)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/vfs_union.c src/vfs_assign.c src/vfs_path.c \
+		tests/test_vfs_union.c -o $@
+
 # The port transport needs the runtime's port wrappers declared, and replaces
 # them in the test: the seam is the three syscalls, so what is under test is
 # the transport, the serve loop and the client above them.
@@ -97,9 +106,10 @@ $(PATH_TEST): src/vfs_path.c tests/test_vfs_path.c $(HEADERS)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/vfs_path.c tests/test_vfs_path.c -o $@
 
-test: $(HOST_TEST) $(ASSIGN_TEST) $(PATH_TEST) $(PORT_TEST)
+test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST)
 	./$(HOST_TEST)
 	./$(ASSIGN_TEST)
+	./$(UNION_TEST)
 	./$(PATH_TEST)
 	./$(PORT_TEST)
 
@@ -120,6 +130,10 @@ sanitize:
 		$(SANITIZER_FLAGS) src/vfs_assign.c src/vfs_path.c \
 		tests/test_vfs_assign.c -o build/host/test_vfs_assign_sanitize
 	./build/host/test_vfs_assign_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) src/vfs_union.c src/vfs_assign.c src/vfs_path.c \
+		tests/test_vfs_union.c -o build/host/test_vfs_union_sanitize
+	./build/host/test_vfs_union_sanitize
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) src/vfs_port_transport.c src/vfs_service_core.c \
 		src/vfs_client.c src/vfs_local_transport.c tests/test_vfs_port.c \
@@ -136,6 +150,8 @@ analyze:
 		-c src/vfs_assign.c -o build/analyzer/vfs_assign.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/vfs_path.c -o build/analyzer/vfs_path.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/vfs_union.c -o build/analyzer/vfs_union.o
 	$(ANALYZER_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/vfs_port_transport.c -o build/analyzer/vfs_port_transport.o
 

@@ -383,6 +383,30 @@ git add sw/include/astra/process.h sw/kernel/process.h sw/kernel/process.c \
 git commit -m "feat(abi): a grant says where in its mount the name begins"
 ```
 
+**Five things the build settled.** (commits `19c8504`..`28c59e1`)
+
+- **`ASTRA_STARTUP_ABI_VERSION` went 1 to 2.** That bump was a coordinator
+  instruction given during execution and is in no plan or spec; `docs/ABI.md`
+  is where it is now traceable.
+- **`astra_boot.bin` measured 256,008 bytes of a 262,144-byte budget** — about
+  6,136 bytes (6 KiB) of ROM headroom after both capability records grew from
+  28 to 92 bytes. No `docs/MEMORY_MAP.md` ceiling change was needed; the
+  headroom absorbed it.
+- **Supervisor stack for `ASTRA_SYSCALL_PROCESS_CREATE`, measured with
+  `-fstack-usage`: 3,436 bytes worst case** (winning branch `prepare_thread`,
+  mapping a new thread's kernel-visible stack pages) **against an 8,192-byte
+  stack**, projected to 3,988 bytes once task 2 raises
+  `ASTRA_LAUNCH_GRANT_MAX` to 8 — 4,204 bytes of headroom either way.
+- **A plain `uint8_t page[]` cast to `AstraStartupCapability *` through
+  `(void *)` silences `-Wcast-align` without making the access safe** on a
+  68030, where a misaligned access faults. Fixed with `_Alignas(4)` on
+  `page`, the same pattern already used in `platform.c`, `vm.c`, `thread.c`
+  and `worker.c` — found in review, not in the plan.
+- **The syscall's inline root validation (no NUL, a leading `/`, a climbing
+  `..`) was reachable only through the raw syscall path and had no test**
+  until review added four rejections and one acceptance on an otherwise
+  valid grant, so a failure can only be the root under test.
+
 ---
 
 ### Task 2: Eight grants, one number
@@ -462,6 +486,21 @@ git add sw/include/astra/process.h sw/kernel/process.h \
         sw/kernel/tests/test_process.c
 git commit -m "feat(launch): eight grants, because a union needs a seventh"
 ```
+
+**Two things the build settled.** (commits `151c5e4`..`6488403`)
+
+- **`KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX` was already a textual alias of
+  `ASTRA_LAUNCH_GRANT_MAX`**, so moving the number was one edit rather than
+  two kept in step by hand.
+- **The plan's own two `assert()` calls could never fail.** Both were
+  runtime checks that only ran if `NDEBUG` was unset and `test_process`
+  happened to execute, and one compared
+  `KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX` to the constant it is `#define`d
+  as — `X == X`, unable to fail regardless of drift. Replaced with a
+  `_Static_assert` beside `ASTRA_LAUNCH_GRANT_MAX` so a drift fails every
+  build; the pre-existing tautological `_Static_assert` in
+  `kernel/process.h` was deleted rather than kept as false reassurance, and
+  its comment now credits the alias with the work, not the assert.
 
 ---
 
@@ -868,6 +907,22 @@ git add sw/userspace/vfs sw/userspace/supervisor/src sw/userspace/commands
 git commit -m "feat(assign): a member is a repeated name, and resolution says which"
 ```
 
+**Two things the build settled.** (commits `c09207c`..`19fdc7c`)
+
+- **`astra_assign_bind` and `astra_assign_unbind` remove every member of a
+  name by a stable shift-down, not by swap-compaction.** The pre-existing
+  algorithm swapped the last entry into a removed slot, which is invisible
+  when order was not yet a property of the table but silently reorders a
+  union's members now that it is. The order test that was meant to prove
+  this passed under both algorithms until it was rearranged so the two
+  actually diverge — a test that cannot fail differently under a
+  deliberately broken implementation is not proving what it claims to.
+- **Six production call sites and roughly two dozen test call sites** needed
+  the new member-index argument to `astra_assign_resolve`; all pass `0u` for
+  now. `console_shell.c`'s own two loop sites (`launch_path`, `command_ls`)
+  stay at `0u` until tasks 6 and 7 replace them with a real loop —
+  deliberately deferred, not an oversight.
+
 ---
 
 ### Task 4: Seeding binds the first and joins the rest
@@ -1005,6 +1060,16 @@ Expected: `ASTRA VFS ASSIGN PASS`, clean sanitize and analyze.
 git add sw/userspace/vfs
 git commit -m "feat(assign): a seeded namespace keeps its roots and its order"
 ```
+
+**One thing the build settled.** (commit `f0a4492`)
+
+- **The shared test helper `capability()` never initialised `entry->root`.**
+  Harmless while `astra_assign_seed` ignored the field; live the moment
+  seeding started reading it, since an uninitialised field would then have
+  been read into a table. Fixed with a second helper, `capability_rooted()`,
+  that delegates to `capability()` and overrides only the root — one line
+  rather than a signature change that would have touched every existing
+  caller.
 
 ---
 
@@ -1392,18 +1457,50 @@ git add sw/userspace/vfs
 git commit -m "feat(vfs): the Kit tries a union's members, because the Kit has the disk"
 ```
 
+**Two things the build settled.** (commits `3fbeeeb`..`5f03d68`)
+
+- **Two of the loop's own branches were unreached by the first test suite**:
+  a rights-deficient member being skipped, and a member no client serves
+  being skipped. The suite's one topology always answered from member 0, and
+  its client stand-in only ever refused on a zero handle, which
+  `astra_assign_bind`/`join` never produce — so a regression that turned
+  either `continue` into a `break` would have passed silently. Three tests
+  closed the branches, and each was mutation-tested: flipping the
+  corresponding `continue` to a `break` fails only its own new test.
+- **The loop kept only the *last* attempt's status, burying a real failure
+  under a later member's ordinary `NOT_FOUND`.** A member whose device is
+  genuinely failing (`ASTRA_VFS_ERR_IO`, `PEER`, `BUSY`, `PROTOCOL`) told a
+  caller "not found" when the truth was "the device failed" — no reason to
+  stop retrying against a machine that can never answer. Fixed by keeping
+  the first non-`NOT_FOUND` status rather than the last status seen: one
+  comparison, not a severity table that has to be kept in step with
+  `status.h`. Every member is still tried; only what the loop *remembers*
+  when nothing answers changed.
+
 ---
 
-### Task 6: The supervisor's two members
+### Task 6: The supervisor's two members, and the walk over them
+
+**Amended during execution (2026-08-07).** This task originally stopped at
+binding the union and granting both members, leaving the shell's member walk to
+task 7. That split does not survive a boot: the moment `COMMANDS:` gains
+`local/commands` as member 0, a `launch_path` that resolves only member 0 finds
+an empty directory, and **every bare command name on the machine becomes "not a
+command"**. The gate caught it at 10 of 22. Binding a union and looking in all
+of it are one deliverable, so task 7's step 1 is folded in here and task 7 keeps
+the listing and the `assign` builtin.
 
 **Files:**
 - Modify: `sw/userspace/supervisor/src/vfs_host.c:59-113` (`bind_standard_assigns`)
 - Modify: `sw/userspace/supervisor/src/console_shell.c:599-...` (`launch_grants`)
+- Modify: `sw/userspace/supervisor/src/console_shell.c:556-579` (`launch_path`,
+  the step moved from task 7)
 
 **Interfaces:**
-- Consumes: `astra_assign_join` (task 3), `AstraLaunchGrant.root` (task 1).
-- Produces: a `COMMANDS:` with two members in the supervisor's table, and a
-  launch that grants both.
+- Consumes: `astra_assign_join`, `astra_assign_member` (task 3),
+  `AstraLaunchGrant.root` (task 1).
+- Produces: a `COMMANDS:` with two members in the supervisor's table, a launch
+  that grants both, and a shell that tries every member of each place.
 
 - [ ] **Step 1: Bind the union**
 
@@ -1530,19 +1627,46 @@ git add sw/userspace/supervisor/src
 git commit -m "feat(supervisor): COMMANDS: is two members, the person's first"
 ```
 
+Landed as `6a0dc70`, actual subject "feat(supervisor): COMMANDS: is two
+members, and the shell walks both" — the fold-in from task 7 changed what
+the commit was about, so its title changed too.
+
+**Three things the build settled.**
+
+- **The plan defect this task's own preamble already names**: binding the
+  union and teaching the shell to walk it were two tasks on paper and are one
+  in practice. The gate caught it at 10 of 22 the moment `COMMANDS:` gained
+  `local/commands` as an empty member 0 and `launch_path` still resolved only
+  that member, turning every bare command name into "not a command" —
+  including `status` and `events`, which had only ever had one member before
+  this. Task 7's step 1 folded in here; this plan document was amended in
+  place to say so.
+- **A second hardcoded member-0 site existed that this direction never
+  named**: `launch_path`'s explicit `NAME:path` branch, alongside the
+  implicit `APPS:`/`COMMANDS:` search branch the plan called out. Found and
+  fixed the same way, in the same commit.
+- Gate 22 of 22. `sw/userspace` `make test`/`sanitize`/`analyze` all clean.
+  Open for task 7: `command_ls` and the file commands (`cat`/`mkdir`/`write`/
+  `rm`) still assume member 0.
+
 ---
 
-### Task 7: The shell — lookup, listing, and `assign`
+### Task 7: The shell — listing, and `assign`
 
 **Files:**
-- Modify: `sw/userspace/supervisor/src/console_shell.c` (`launch_path`,
-  `command_ls`, a new `command_assign`, the builtin table and the help line)
+- Modify: `sw/userspace/supervisor/src/console_shell.c` (`command_ls`, a new
+  `command_assign`, the builtin chain and the help line)
 
 **Interfaces:**
 - Consumes: `astra_assign_member` (task 3), `astra_vfs_assign_open` (task 5).
 - Produces: nothing later tasks call; the gate reads its output.
 
-- [ ] **Step 1: Loop the members in `launch_path`**
+- [ ] ~~**Step 1: Loop the members in `launch_path`**~~ **— moved into task 6.**
+
+A `COMMANDS:` bound with two members and a shell that looks in only the first
+is a machine where no bare name runs at all, so this cannot land a task later
+than the bind. It is task 6's now; the code below is kept as the record of what
+was specified.
 
 Replace the two-place loop in `launch_path` (`console_shell.c:556-579`) with
 one that walks members inside each place, and report which member answered:
@@ -1794,6 +1918,48 @@ substrings like `proto/`, and `proto/  [0]` still contains it.
 git add sw/userspace/supervisor/src/console_shell.c
 git commit -m "feat(shell): a union is looked in, listed, and printed back"
 ```
+
+Landed as three commits, not one — the two Criticals below each got their own
+gate-driven fix commit after `9d8e369`: `a1f997d`, then `58d3327`.
+
+**Four things the build settled.**
+
+- **Critical #1 (`a1f997d`): an open is not an existence test on this
+  machine.** `command_write` probed for an existing name by opening
+  `WRITE|TRUNCATE` with no `CREATE`, reasoning that truncate-without-create
+  refuses when the file is absent. False here: the ext4 backend's
+  `mode_of()` maps `ASTRA_VFS_OPEN_TRUNCATE` to lwext4's `"wb"` whether or
+  not `CREATE` is set, and `"wb"` is `O_CREAT | O_TRUNC` — so the probe
+  always succeeded at the union's writable primary, creating an empty file
+  there and never reaching the member that actually held the name. A person
+  editing a shipped file got a silent shadow copy instead of their edit.
+  Fixed by locating the holder first with `shell_locate`, exactly as `rm`
+  already did, and opening only where found (or on the primary, with
+  `CREATE`, when nothing holds the name at all). Caught by a gate line
+  (`write commands:status`) written red first.
+- **Critical #2 (`58d3327`), introduced by the fix for #1: existence is not
+  permission.** `shell_locate` resolved every member with the *operation's*
+  own rights, so a member whose bound rights merely lacked `WRITE` refused
+  at `astra_assign_resolve` before any I/O happened — telling the walk
+  nothing about whether that member held the name at all. Task 5's
+  worst-status rule then let that `ACCESS` outrun a later member's honest
+  `NOT_FOUND`, so a name sitting on no member anywhere came back "access
+  denied" instead of "not found", and **every write to a new name on
+  `COMMANDS:` was permanently refused**. Fixed by resolving every member for
+  existence only, with `READ` — the same right `cd` and `cat` already use to
+  find a name before deciding what may be done to it — and checking the
+  operation's actual rights only against the member that holds it. Also
+  caught by a gate line written red first.
+- **The flakiness this task's own gate runs exposed** landed in the middle of
+  this task, between the two Criticals (`e7c71a1`, `133354f`) — a dropped
+  keystroke was unreportable by construction, and the gate itself had a
+  timing race independent of that. Both are now fixed; the full story,
+  including what is and is not verified about the original flake, is in
+  `docs/HANDOVER-union-assigns.md` rather than repeated here.
+- Gate 22 → 25. Open, pre-existing, for final review:
+  `ext4_backend_open` calls `ext4_fopen` unconditionally when
+  `ASTRA_VFS_OPEN_DIRECTORY` is not passed, and what lwext4 does when that
+  path is a directory was never verified. Predates this milestone.
 
 ---
 
@@ -2170,6 +2336,49 @@ in the commit message; the last known-good figures are 92,487 and 0.09s of a
 git add sw/userspace/commands emu/qemu/astra_image.py emu/qemu/test-terminal.py
 git commit -m "feat(which): a child resolves a union it was granted"
 ```
+
+Landed as two commits: `a6c5f3a`, then a review fix pass, `cd914c9`.
+
+**Four things the build settled.**
+
+- **Shadowing `devices` broke the pre-existing bare-name gate line.**
+  `launch_path` walks `COMMANDS:`'s members in the same order whether the
+  prefix is explicit or not, member 0 first, so once the gate installs
+  `which`'s image into the writable member under the shipped name
+  `"devices"`, the bare word `devices` (and `COMMANDS:devices`) always
+  launches the shadow. The pre-existing `("devices", "delivered")` line was
+  rerouted through `SYS:` — a single, non-union mount of the same volume —
+  to keep reaching the shipped binary directly, which is what that line was
+  actually there to prove.
+- **Review fix: `which.c`'s own comment was wrong.** It claimed a launched
+  child gets one handle per shared union member, the same as the shell's own
+  table. It does not: `launch_grants` copies one source handle into a
+  separate grant record per `COMMANDS` member, and
+  `kernel_handle_duplicate_into` claims a fresh slot in the child's handle
+  table for each grant with no dedup against an existing entry on the same
+  object — so a launched `which` receives **two distinct handle numbers**
+  for `COMMANDS:`'s two members, even though both name the same VFS session.
+  The comment was corrected to say why the client table needs a slot per
+  member rather than per volume; the working code was not the bug.
+  Confirmed by reading `bind_standard_assigns`, `launch_grants`,
+  `grant_bootstrap_capabilities` and `kernel_handle_duplicate_into` in that
+  order.
+- **Review fix: the exit-order check was scroll-dependent.** It reread the
+  rendered screen right after `SCRIPT` finished, which only found `events
+  --boot -1`'s output because that line happened to be `SCRIPT`'s last entry
+  — true, but nothing enforced it, and a later line had already once
+  scrolled that output off the 30-row plane. A module-level assertion beside
+  `SCRIPT` now fails immediately and by name if a later line displaces it,
+  rather than as a scroll-dependent flake next time someone appends a gate
+  check.
+- **Missing-member evidence (run by hand, task 8 step 7, not in the
+  automated gate — it needs a volume the supervisor cannot repair).**
+  `/local` doctored into a regular file *after* a normal install: `assign`
+  shows `COMMANDS: [0] r /commands` — the name did not vanish with the
+  member that could not be made; `which status` still answers
+  `/commands/status [0]` — a launched child resolves through the survivor;
+  and the supervisor's warning appears exactly once: `COMMANDS: local member
+  skipped, mkdir refused with status 2 (src/vfs_host.c:112)`. Gate 25 → 32.
 
 ---
 

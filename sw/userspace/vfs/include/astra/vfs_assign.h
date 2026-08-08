@@ -16,7 +16,9 @@
  * it correctly -- which is the property the whole namespace design rests on.
  *
  * Sixteen entries, because that is the startup capability table's own limit: a
- * namespace larger than the grant that seeds it cannot arise.
+ * namespace larger than the grant that seeds it cannot arise. It counts
+ * *members* rather than names -- a member is a binding, and a union is two
+ * bindings that share a name.
  *
  * Names are canonicalised to uppercase here and compared exactly afterwards.
  * `work:` and `WORK:` are one binding, because assign names are a small closed
@@ -26,11 +28,11 @@
 #define ASTRA_ASSIGN_MAX 16u
 
 /*
- * Where an assign begins inside its mount. Roots are short by nature -- work,
- * apps, sys/commands -- and this is per entry, so the bound is the difference
- * between a namespace that costs one kilobyte and one that costs three.
+ * Where an assign begins inside its mount. This is the grant's root field and
+ * nothing else: two constants for one limit is the mistake that cost four
+ * tasks the last time, so there is one.
  */
-#define ASTRA_ASSIGN_ROOT_MAX 64u
+#define ASTRA_ASSIGN_ROOT_MAX ASTRA_CAPABILITY_ROOT_MAX
 
 typedef struct AstraAssign {
     char     name[ASTRA_CAPABILITY_NAME_MAX];  /* canonical uppercase */
@@ -61,6 +63,25 @@ uint32_t astra_assign_bind(AstraAssignTable *table, const char *name,
                            uint32_t handle, uint32_t rights, const char *root);
 
 /*
+ * Appends one member to a name that already exists. Order is join order and
+ * nothing else, and it is the order lookup tries.
+ *
+ * A name that is not bound is ASTRA_VFS_ERR_NOT_FOUND: joining is not a way to
+ * create a binding, because a member joined to nothing would be a name whose
+ * first member is an accident of ordering. Everything else it refuses,
+ * `astra_assign_bind` refuses for the same reasons.
+ */
+uint32_t astra_assign_join(AstraAssignTable *table, const char *name,
+                           uint32_t handle, uint32_t rights, const char *root);
+
+/*
+ * The member'th binding of a name, or NULL once the index passes the last one
+ * -- which is what ends a caller's loop. `astra_assign_lookup` is member zero.
+ */
+const AstraAssign *astra_assign_member(const AstraAssignTable *table,
+                                       const char *name, uint32_t member);
+
+/*
  * Builds a namespace out of what a launch handed over.
  *
  * A launched program's capability table *is* its namespace: there is no
@@ -84,10 +105,17 @@ uint32_t astra_assign_bind(AstraAssignTable *table, const char *name,
  * out of room is the one thing reported, because a namespace quietly missing
  * its tail is a program failing later for a reason nothing wrote down.
  *
- * No root travels in the published capability table yet, so every binding is
- * made at its mount's own root. The launch spec's grant has a root offset and
- * the published record has nowhere to put one; that is added when the first
- * grant needs it.
+ * A skipped entry never gets as far as binding anything, so a name whose
+ * *first* record is the one that was skipped is bound -- not joined to
+ * nothing -- by the next valid record of that name: the lookup this function
+ * uses to choose between bind and join still finds no prior member, exactly
+ * as if the bad record had never been in the table. One malformed grant costs
+ * a child nothing more than itself.
+ *
+ * The root travels in the record and is bound with the name, so a child's
+ * COMMANDS: means the directory it was granted rather than the whole volume.
+ * A name granted twice is a union: the first record binds and each later one
+ * joins, in the order the launcher listed them.
  */
 uint32_t astra_assign_seed(AstraAssignTable *table,
                            const AstraStartupCapability *capabilities,
@@ -107,9 +135,15 @@ uint32_t astra_assign_unbind(AstraAssignTable *table, const char *name);
  * reaches a disk. ASTRA_VFS_ERR_NOT_FOUND covers both an unbound name and a
  * `..` that would climb out of a bound one, because from inside the namespace
  * those are the same fact -- there is nothing there.
+ *
+ * `member` selects which member of a union answers, and passing the count of
+ * members is ASTRA_VFS_ERR_NOT_FOUND rather than a failure: that is how a
+ * caller's loop ends. Resolution does no I/O and never will -- the tempting
+ * implementation is to stat each member until one answers, and that drags the
+ * disk into the one layer whose value is having none. The Kit does the trying.
  */
 uint32_t astra_assign_resolve(const AstraAssignTable *table, const char *path,
-                              uint32_t rights, char *wire, uint32_t capacity,
-                              const AstraAssign **assign);
+                              uint32_t rights, uint32_t member, char *wire,
+                              uint32_t capacity, const AstraAssign **assign);
 
 #endif

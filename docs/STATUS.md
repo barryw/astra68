@@ -46,8 +46,11 @@ must not be presented as working software.
 
 ## Userspace runtime foundation
 
-- CURRENT SOURCE: 64-byte versioned startup information and bounded 16-byte
-  initial-capability records in `sw/include/astra/process.h`.
+- CURRENT SOURCE: 64-byte versioned startup information and bounded 92-byte
+  initial-capability records (`ASTRA_STARTUP_ABI_VERSION` 2) in
+  `sw/include/astra/process.h`, each carrying a 64-byte mount-relative root a
+  child's namespace binds at. `docs/ABI.md` and `docs/HANDOVER-union-assigns.md`
+  are current; the rest of this entry predates process launch and a VFS.
 - CURRENT SOURCE: separate MC68030 `crt0`, one C-callable `TRAP #15` veneer,
   typed query/yield/close/exit wrappers, startup validation, and freestanding
   memory/string primitives in `libastrart.a`.

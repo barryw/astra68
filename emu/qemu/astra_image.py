@@ -30,6 +30,10 @@ DEFAULT_CATALOG = os.path.join(
     REPOSITORY, "sw/userspace/supervisor/build/m68k/astra_events.cat")
 
 COMMANDS_DIRECTORY = "commands"
+# The writable member of COMMANDS:, and the reason it exists in this gate: a
+# command installed here shadows the one the system shipped, which is what a
+# union is for and what nothing else on the volume can demonstrate.
+LOCAL_COMMANDS_DIRECTORY = "local/commands"
 DEFAULT_COMMANDS = os.path.join(REPOSITORY, "sw/userspace/commands/build/m68k")
 
 
@@ -145,4 +149,20 @@ def install(image, catalog=None, commands=None):
             target = "/%s/%s" % (COMMANDS_DIRECTORY, name)
             _debugfs(volume, "rm %s" % target, "an old command", optional=True)
             _debugfs(volume, "write %s %s" % (path, target), "command " + name)
+
+        # The shadowing pair. `which` is installed on both members under two
+        # names: the shipped one stays where it is, and a copy goes into the
+        # writable member under the same name as a shipped command, so a
+        # lookup has a real choice to make and the gate can see which it made.
+        _debugfs(volume, "mkdir /local", "the local directory", optional=True)
+        _debugfs(volume, "mkdir /%s" % LOCAL_COMMANDS_DIRECTORY,
+                 "the local commands directory", optional=True)
+        for name, path in built:
+            if name != "which":
+                continue
+            target = "/%s/%s" % (LOCAL_COMMANDS_DIRECTORY, "devices")
+            _debugfs(volume, "rm %s" % target, "the old local command",
+                     optional=True)
+            _debugfs(volume, "write %s %s" % (path, target),
+                     "a shadowing command")
         _splice(image, offset, volume)

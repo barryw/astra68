@@ -6263,6 +6263,80 @@ static void test_bootstrap_capabilities(void)
 }
 
 /*
+ * A grant's root arrives in the child's published record byte for byte.
+ *
+ * Until this existed a child's COMMANDS: meant the whole volume: the record had
+ * nowhere to put a root, so every binding a child made was at its mount's own
+ * root and the first program to open a file by name would have read the wrong
+ * directory. The kernel carries this field and never reads it, which is the
+ * same contract `flags` has.
+ */
+static void test_capability_roots_are_carried(void)
+{
+    KernelProcessBootstrapCapability capabilities[1];
+    AstraStartupCapability table[4];
+    KernelCpuContext *next;
+    uint32_t process_id = 0u;
+    int found = 0;
+
+    loader_build_image();
+    initialize_test();
+    memset(capabilities, 0, sizeof(capabilities));
+    capabilities[0].name = ASTRA_CAPABILITY_BLOCK_DEVICE;
+    capabilities[0].kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+    capabilities[0].device_id = ASTRA_DEVICE_ID_BLOCK0;
+    capabilities[0].rights = KERNEL_DEVICE_RIGHTS;
+    capabilities[0].flags = ASTRA_CAPABILITY_FLAG_NAMESPACE;
+    capabilities[0].root = "local/commands";
+
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            capabilities, 1u, &process_id) ==
+           KERNEL_PROCESS_OK);
+    /* The table is read as the child would read it: through its own
+     * address space, which only `current_user_root` after the process is
+     * scheduled -- the same reason every other reader of a startup block in
+     * this file starts the process before copying out of it. */
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(kernel_user_copy_from_asm(
+               table, KERNEL_VM_USER_MIN + ASTRA_STARTUP_INFO_SIZE,
+               sizeof(table)) == KERNEL_USER_COPY_OK);
+    /* The two the kernel installs for itself begin at their mount's root. */
+    assert(table[0].root[0] == '\0');
+    assert(table[1].root[0] == '\0');
+    for (uint32_t index = 0u; index < 4u; ++index) {
+        if (astra_capability_name_equal(table[index].name,
+                                        ASTRA_CAPABILITY_BLOCK_DEVICE)) {
+            assert(strcmp(table[index].root, "local/commands") == 0);
+            found = 1;
+        }
+    }
+    assert(found);
+}
+
+/* The field is bounded on the way in: a root too long to carry is truncated
+ * at the same place on both sides of a launch, never read past. */
+static void test_capability_roots_are_bounded(void)
+{
+    char field[ASTRA_CAPABILITY_ROOT_MAX];
+    char oversized[ASTRA_CAPABILITY_ROOT_MAX + 8];
+
+    memset(oversized, 'r', sizeof(oversized));
+    oversized[sizeof(oversized) - 1u] = '\0';
+
+    astra_capability_root_set(field, "work");
+    assert(strcmp(field, "work") == 0);
+    /* Padded, so a field never carries bytes of the root before it. */
+    assert(field[ASTRA_CAPABILITY_ROOT_MAX - 1u] == '\0');
+
+    astra_capability_root_set(field, NULL);
+    assert(field[0] == '\0');
+
+    astra_capability_root_set(field, oversized);
+    assert(field[ASTRA_CAPABILITY_ROOT_MAX - 1u] == '\0');
+    assert(strlen(field) == ASTRA_CAPABILITY_ROOT_MAX - 1u);
+}
+
+/*
  * The verdict bit is the system's alone. A program that sets one in its own
  * exit status is claiming the machine killed it, and the value is worth
  * reading only if that claim cannot be made.
@@ -6801,6 +6875,71 @@ static void test_a_program_can_launch_a_program(void)
     assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
 
     /*
+     * The root each grant carries is validated the same way the name and
+     * rights are: before anything is built, and regardless of what else about
+     * the grant is fine. `grant` is otherwise fully valid here -- a handle the
+     * caller holds, a right it actually has -- so a rejection below can only
+     * be the root.
+     */
+    grant.handle = send_handle;
+    grant.rights = ASTRA_RIGHT_READ;
+    grant.flags = 0u;
+
+    /* A root that is nothing but a climb. */
+    memset(grant.root, 0, sizeof(grant.root));
+    memcpy(grant.root, "..", 3u);
+    assert(kernel_user_copy_to_asm(user_grants, &grant, sizeof(grant)) ==
+           KERNEL_USER_COPY_OK);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    /* A `..` component further in is still a climb, not only a leading one. */
+    memset(grant.root, 0, sizeof(grant.root));
+    memcpy(grant.root, "a/../b", 7u);
+    assert(kernel_user_copy_to_asm(user_grants, &grant, sizeof(grant)) ==
+           KERNEL_USER_COPY_OK);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    /*
+     * A leading separator is the mount's own root spelled the wrong way -- the
+     * empty string already says that, and this field does not get a second
+     * spelling for it.
+     */
+    memset(grant.root, 0, sizeof(grant.root));
+    memcpy(grant.root, "/commands", 10u);
+    assert(kernel_user_copy_to_asm(user_grants, &grant, sizeof(grant)) ==
+           KERNEL_USER_COPY_OK);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    /*
+     * A root with no NUL in it is not a C string. The field is exactly
+     * ASTRA_CAPABILITY_ROOT_MAX wide, so filling every byte leaves no room for
+     * a terminator, and reading it as one would run past the record.
+     */
+    memset(grant.root, 'x', sizeof(grant.root));
+    assert(kernel_user_copy_to_asm(user_grants, &grant, sizeof(grant)) ==
+           KERNEL_USER_COPY_OK);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    /*
+     * Restored to the empty root the rest of this test relies on -- nothing
+     * below is exercising this field, and it must keep reaching the results
+     * it already asserts.
+     */
+    memset(grant.root, 0, sizeof(grant.root));
+
+    /*
      * A port, which is how a child is handed a service. The send endpoint is
      * cloneable and the receive one is not: publishing a service is handing out
      * senders, and a second receive handle would be a second service on one
@@ -6861,6 +7000,12 @@ static void test_a_program_can_launch_a_program(void)
 
     /* And a subset of it is granted, which is what a child's namespace is. */
     grant.flags = ASTRA_CAPABILITY_FLAG_NAMESPACE;
+    /*
+     * A legitimate root rides along and changes nothing here -- proving the
+     * refusals above were about the roots that climbed or claimed a mount's
+     * own top, and not that every root is rejected.
+     */
+    memcpy(grant.root, "local/commands", 15u);
     assert(kernel_user_copy_to_asm(user_grants, &grant, sizeof(grant)) ==
            KERNEL_USER_COPY_OK);
     assert(kernel_process_on_syscall(registers,
@@ -7633,6 +7778,8 @@ int main(void)
     test_block_admission();
     test_block_admission_faults();
     test_bootstrap_capabilities();
+    test_capability_roots_are_carried();
+    test_capability_roots_are_bounded();
     test_an_activity_is_the_threads_own();
     test_a_program_can_launch_a_program();
     test_reading_the_stream_is_the_privileged_half();

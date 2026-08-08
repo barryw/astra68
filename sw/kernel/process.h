@@ -287,13 +287,12 @@ KernelProcessStatus kernel_process_create(const void *image,
  * from a depth that says nothing about which grant or why. It stayed latent
  * for four tasks because nothing granted more than three.
  *
- * They are one number now, and the assertion is what keeps them one.
+ * They are one number now: this is defined as `ASTRA_LAUNCH_GRANT_MAX`
+ * itself, textually, rather than a separate constant kept equal to it. The
+ * alias is what makes them one number; there is nothing left for an assert
+ * to check.
  */
 #define KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX ASTRA_LAUNCH_GRANT_MAX
-
-_Static_assert(KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX ==
-                   ASTRA_LAUNCH_GRANT_MAX,
-               "the loader's ceiling and the launch ABI's must be one number");
 
 /*
  * What one process can be holding at once, and why the handle table is the
@@ -360,6 +359,13 @@ typedef struct KernelProcessBootstrapCapability {
      * would be deciding what a name means.
      */
     uint32_t flags;
+    /*
+     * Where the name begins inside its mount, or NULL for the mount's own
+     * root. A pointer for the same reason `name` is one: the firmware builds
+     * these from constants, and the copy into the bounded ABI field happens
+     * where the startup block is written.
+     */
+    const char *root;
     uint32_t device_id;      /* KERNEL_PROCESS_BOOTSTRAP_DEVICE */
     uint32_t source_handle;  /* KERNEL_PROCESS_BOOTSTRAP_HANDLE */
     uint8_t kind;

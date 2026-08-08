@@ -141,9 +141,10 @@ test_unbinding_keeps_the_rest_reachable(void)
     AstraAssignTable table;
 
     /*
-     * Unbinding moves the last entry into the hole, so the entry that moved
-     * has to remain findable. A table that loses a name when a different one
-     * is removed is worse than one that cannot remove at all.
+     * Unbinding shifts the remaining entries down, so the entries that moved
+     * have to remain findable at their new positions. A table that loses a
+     * name when a different one is removed is worse than one that cannot
+     * remove at all.
      */
     astra_assign_table_init(&table);
     assert(astra_assign_bind(&table, "SYS", 1u, 1u, "") == ASTRA_VFS_OK);
@@ -174,34 +175,36 @@ test_resolving(void)
            ASTRA_VFS_OK);
 
     assert(astra_assign_resolve(&table, "WORK:src/main.c", ASTRA_RIGHT_READ,
-                                wire, sizeof(wire), &assign) == ASTRA_VFS_OK);
+                                0u, wire, sizeof(wire), &assign) ==
+           ASTRA_VFS_OK);
     assert(strcmp(wire, "/work/src/main.c") == 0);
     assert(assign != NULL && assign->handle == 5u);
 
     /* An assign alone names its own root, with no trailing separator. */
-    assert(astra_assign_resolve(&table, "WORK:", ASTRA_RIGHT_READ, wire,
+    assert(astra_assign_resolve(&table, "WORK:", ASTRA_RIGHT_READ, 0u, wire,
                                 sizeof(wire), NULL) == ASTRA_VFS_OK);
     assert(strcmp(wire, "/work") == 0);
 
     /* An assign rooted at the mount resolves to the mount. */
-    assert(astra_assign_resolve(&table, "sys:", ASTRA_RIGHT_READ, wire,
+    assert(astra_assign_resolve(&table, "sys:", ASTRA_RIGHT_READ, 0u, wire,
                                 sizeof(wire), NULL) == ASTRA_VFS_OK);
     assert(strcmp(wire, "/") == 0);
     assert(astra_assign_resolve(&table, "SYS:commands/ls", ASTRA_RIGHT_READ,
-                                wire, sizeof(wire), NULL) == ASTRA_VFS_OK);
+                                0u, wire, sizeof(wire), NULL) ==
+           ASTRA_VFS_OK);
     assert(strcmp(wire, "/commands/ls") == 0);
 
     /* The rest is normalised on the way through. */
     assert(astra_assign_resolve(&table, "WORK:src/lib/../main.c",
-                                ASTRA_RIGHT_READ, wire, sizeof(wire), NULL) ==
-           ASTRA_VFS_OK);
+                                ASTRA_RIGHT_READ, 0u, wire, sizeof(wire),
+                                NULL) == ASTRA_VFS_OK);
     assert(strcmp(wire, "/work/src/main.c") == 0);
 
     /* A rest that normalises away names the assign's root. */
-    assert(astra_assign_resolve(&table, "WORK:src/..", ASTRA_RIGHT_READ, wire,
-                                sizeof(wire), NULL) == ASTRA_VFS_OK);
+    assert(astra_assign_resolve(&table, "WORK:src/..", ASTRA_RIGHT_READ, 0u,
+                                wire, sizeof(wire), NULL) == ASTRA_VFS_OK);
     assert(strcmp(wire, "/work") == 0);
-    assert(astra_assign_resolve(&table, "SYS:.", ASTRA_RIGHT_READ, wire,
+    assert(astra_assign_resolve(&table, "SYS:.", ASTRA_RIGHT_READ, 0u, wire,
                                 sizeof(wire), NULL) == ASTRA_VFS_OK);
     assert(strcmp(wire, "/") == 0);
 }
@@ -221,44 +224,49 @@ test_resolution_refusals(void)
            ASTRA_VFS_OK);
 
     /* The point of the whole arrangement: SYS: cannot be written through. */
-    assert(astra_assign_resolve(&table, "SYS:passwd", ASTRA_RIGHT_WRITE, wire,
-                                sizeof(wire), NULL) == ASTRA_VFS_ERR_ACCESS);
+    assert(astra_assign_resolve(&table, "SYS:passwd", ASTRA_RIGHT_WRITE, 0u,
+                                wire, sizeof(wire), NULL) ==
+           ASTRA_VFS_ERR_ACCESS);
     assert(astra_assign_resolve(&table, "SYS:passwd",
-                                ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, wire,
+                                ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, 0u, wire,
                                 sizeof(wire), NULL) == ASTRA_VFS_ERR_ACCESS);
 
     /* A name this process was not given cannot be spelled into existence. */
-    assert(astra_assign_resolve(&table, "APPS:Editor", ASTRA_RIGHT_READ, wire,
-                                sizeof(wire), NULL) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(astra_assign_resolve(&table, "APPS:Editor", ASTRA_RIGHT_READ, 0u,
+                                wire, sizeof(wire), NULL) ==
+           ASTRA_VFS_ERR_NOT_FOUND);
 
     /* Nothing above an assign's root is nameable, from either assign. */
-    assert(astra_assign_resolve(&table, "WORK:..", ASTRA_RIGHT_READ, wire,
+    assert(astra_assign_resolve(&table, "WORK:..", ASTRA_RIGHT_READ, 0u, wire,
                                 sizeof(wire), NULL) == ASTRA_VFS_ERR_NOT_FOUND);
-    assert(astra_assign_resolve(&table, "WORK:../..", ASTRA_RIGHT_READ, wire,
-                                sizeof(wire), NULL) == ASTRA_VFS_ERR_NOT_FOUND);
-    assert(astra_assign_resolve(&table, "WORK:src/../../etc",
-                                ASTRA_RIGHT_READ, wire, sizeof(wire), NULL) ==
+    assert(astra_assign_resolve(&table, "WORK:../..", ASTRA_RIGHT_READ, 0u,
+                                wire, sizeof(wire), NULL) ==
            ASTRA_VFS_ERR_NOT_FOUND);
-    assert(astra_assign_resolve(&table, "SYS:../etc", ASTRA_RIGHT_READ, wire,
-                                sizeof(wire), NULL) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(astra_assign_resolve(&table, "WORK:src/../../etc",
+                                ASTRA_RIGHT_READ, 0u, wire, sizeof(wire),
+                                NULL) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(astra_assign_resolve(&table, "SYS:../etc", ASTRA_RIGHT_READ, 0u,
+                                wire, sizeof(wire), NULL) ==
+           ASTRA_VFS_ERR_NOT_FOUND);
 
     /* Not a path on this machine. */
-    assert(astra_assign_resolve(&table, "/etc/passwd", ASTRA_RIGHT_READ, wire,
+    assert(astra_assign_resolve(&table, "/etc/passwd", ASTRA_RIGHT_READ, 0u,
+                                wire, sizeof(wire), NULL) ==
+           ASTRA_VFS_ERR_INVALID);
+    assert(astra_assign_resolve(&table, "main.c", ASTRA_RIGHT_READ, 0u, wire,
                                 sizeof(wire), NULL) == ASTRA_VFS_ERR_INVALID);
-    assert(astra_assign_resolve(&table, "main.c", ASTRA_RIGHT_READ, wire,
-                                sizeof(wire), NULL) == ASTRA_VFS_ERR_INVALID);
-    assert(astra_assign_resolve(&table, NULL, ASTRA_RIGHT_READ, wire,
+    assert(astra_assign_resolve(&table, NULL, ASTRA_RIGHT_READ, 0u, wire,
                                 sizeof(wire), NULL) == ASTRA_VFS_ERR_INVALID);
     /* An empty namespace holds nothing, which is not the same as refusing. */
-    assert(astra_assign_resolve(NULL, "WORK:x", ASTRA_RIGHT_READ, wire,
+    assert(astra_assign_resolve(NULL, "WORK:x", ASTRA_RIGHT_READ, 0u, wire,
                                 sizeof(wire), NULL) == ASTRA_VFS_ERR_NOT_FOUND);
 
     /* Truncation would name a different file. */
     assert(astra_assign_resolve(&table, "WORK:src/main.c", ASTRA_RIGHT_READ,
-                                tiny, sizeof(tiny), NULL) ==
+                                0u, tiny, sizeof(tiny), NULL) ==
            ASTRA_VFS_ERR_INVALID);
-    assert(astra_assign_resolve(&table, "WORK:x", ASTRA_RIGHT_READ, wire, 1u,
-                                NULL) == ASTRA_VFS_ERR_INVALID);
+    assert(astra_assign_resolve(&table, "WORK:x", ASTRA_RIGHT_READ, 0u, wire,
+                                1u, NULL) == ASTRA_VFS_ERR_INVALID);
 }
 
 /*
@@ -288,6 +296,9 @@ capability(AstraStartupCapability *entry, const char *name, uint32_t handle,
     if ((rights & ASTRA_RIGHT_WRITE) != 0u) {
         entry->flags |= ASTRA_CAPABILITY_FLAG_WRITE;
     }
+    /* Every grant has a root now, so a helper that never mentions one still
+     * has to leave a defined one: the mount's own. */
+    astra_capability_root_set(entry->root, NULL);
 }
 
 /* A capability that is authority without being a name: a stream, a device. */
@@ -297,6 +308,15 @@ capability_unnamed(AstraStartupCapability *entry, const char *name,
 {
     capability(entry, name, handle, rights);
     entry->flags = 0u;
+}
+
+/* Same grant, rooted somewhere other than the mount's own root. */
+static void
+capability_rooted(AstraStartupCapability *entry, const char *name,
+                  uint32_t handle, uint32_t rights, const char *root)
+{
+    capability(entry, name, handle, rights);
+    astra_capability_root_set(entry->root, root);
 }
 
 static void
@@ -334,7 +354,7 @@ test_seeding_from_a_capability_table(void)
     assert(found != NULL);
     assert(found->handle == 9u);
     assert(found->rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE));
-    /* No root travels in the published table yet, so a grant is its mount. */
+    /* This grant carried no root, so it binds at the mount's own root. */
     assert(found->root[0] == '\0');
 
     found = astra_assign_lookup(&table, "EVENTS");
@@ -350,6 +370,42 @@ test_seeding_from_a_capability_table(void)
     /* Seeding replaces a namespace rather than adding to one. */
     assert(astra_assign_seed(&table, capabilities, 2u) == ASTRA_VFS_OK);
     assert(table.count == 0u);
+}
+
+static void
+test_seeding_builds_a_union(void)
+{
+    AstraAssignTable table;
+    AstraStartupCapability capabilities[3];
+    char wire[ASTRA_VFS_PATH_MAX];
+
+    capability_rooted(&capabilities[0], "WORK", 4u,
+                      ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "work");
+    capability_rooted(&capabilities[1], "COMMANDS", 5u,
+                      ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "local/commands");
+    capability_rooted(&capabilities[2], "COMMANDS", 5u, ASTRA_RIGHT_READ,
+                      "commands");
+
+    assert(astra_assign_seed(&table, capabilities, 3u) == ASTRA_VFS_OK);
+    assert(table.count == 3u);
+
+    /*
+     * The root travels now. Before this a child's COMMANDS: was bound at its
+     * mount's own root, so a bare name resolved against the whole volume.
+     */
+    assert(astra_assign_resolve(&table, "WORK:notes", ASTRA_RIGHT_READ, 0u,
+                                wire, sizeof(wire), NULL) == ASTRA_VFS_OK);
+    assert(strcmp(wire, "/work/notes") == 0);
+
+    /* Order in the capability table is order in the namespace. */
+    assert(astra_assign_resolve(&table, "COMMANDS:status", ASTRA_RIGHT_READ,
+                                0u, wire, sizeof(wire), NULL) == ASTRA_VFS_OK);
+    assert(strcmp(wire, "/local/commands/status") == 0);
+    assert(astra_assign_resolve(&table, "COMMANDS:status", ASTRA_RIGHT_READ,
+                                1u, wire, sizeof(wire), NULL) == ASTRA_VFS_OK);
+    assert(strcmp(wire, "/commands/status") == 0);
+    assert(astra_assign_member(&table, "COMMANDS", 1u)->rights ==
+           ASTRA_RIGHT_READ);
 }
 
 static void
@@ -391,8 +447,38 @@ test_seeding_refusals(void)
 }
 
 /*
+ * A first record that is skipped leaves nothing bound, so the next valid
+ * record of the same name binds rather than joining to a member that was
+ * never made -- astra_assign_seed's own lookup cannot tell a name that was
+ * never mentioned from one whose only mention so far was refused. One
+ * malformed grant must not cost the name entirely.
+ */
+static void
+test_seeding_skipped_first_record_still_binds(void)
+{
+    AstraStartupCapability capabilities[2];
+    AstraAssignTable table;
+    const AstraAssign *found;
+
+    /* No rights: skipped, the same as test_seeding_refusals's EVENTS. */
+    capability(&capabilities[0], "EVENTS", 10u, 0u);
+    capability_rooted(&capabilities[1], "EVENTS", 11u, ASTRA_RIGHT_READ,
+                      "activity");
+
+    assert(astra_assign_seed(&table, capabilities, 2u) == ASTRA_VFS_OK);
+    assert(table.count == 1u);
+    found = astra_assign_lookup(&table, "EVENTS");
+    assert(found != NULL);
+    assert(found->handle == 11u);
+    assert(found->rights == ASTRA_RIGHT_READ);
+    assert(strcmp(found->root, "activity") == 0);
+    /* Bound, not joined: there is no member ahead of it. */
+    assert(astra_assign_member(&table, "EVENTS", 1u) == NULL);
+}
+
+/*
  * More grants than a namespace holds. It cannot happen from one launch today --
- * six is the grant ceiling and sixteen the namespace's -- but the startup table
+ * eight is the grant ceiling and sixteen the namespace's -- but the startup table
  * carries thirty-two, so the arithmetic that makes it impossible is somewhere
  * else. A namespace quietly missing the names past the sixteenth is the failure
  * this refuses to have.
@@ -418,6 +504,124 @@ test_seeding_beyond_capacity(void)
     assert(table.count == ASTRA_ASSIGN_MAX);
 }
 
+static void
+test_joining_makes_members(void)
+{
+    AstraAssignTable table;
+    const AstraAssign *member;
+    char wire[ASTRA_VFS_PATH_MAX];
+
+    astra_assign_table_init(&table);
+    assert(astra_assign_bind(&table, "COMMANDS", 9u,
+                             ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE,
+                             "local/commands") == ASTRA_VFS_OK);
+    assert(astra_assign_join(&table, "COMMANDS", 9u, ASTRA_RIGHT_READ,
+                             "commands") == ASTRA_VFS_OK);
+    assert(table.count == 2u);
+
+    /* Order is join order, and lookup is member zero. */
+    member = astra_assign_member(&table, "COMMANDS", 0u);
+    assert(member == astra_assign_lookup(&table, "COMMANDS"));
+    assert(strcmp(member->root, "local/commands") == 0);
+    member = astra_assign_member(&table, "COMMANDS", 1u);
+    assert(strcmp(member->root, "commands") == 0);
+    /* Past the last member there is nothing, which is what ends a loop. */
+    assert(astra_assign_member(&table, "COMMANDS", 2u) == NULL);
+
+    /* Resolution answers per member. */
+    assert(astra_assign_resolve(&table, "COMMANDS:status", ASTRA_RIGHT_READ,
+                                0u, wire, sizeof(wire), NULL) == ASTRA_VFS_OK);
+    assert(strcmp(wire, "/local/commands/status") == 0);
+    assert(astra_assign_resolve(&table, "COMMANDS:status", ASTRA_RIGHT_READ,
+                                1u, wire, sizeof(wire), NULL) == ASTRA_VFS_OK);
+    assert(strcmp(wire, "/commands/status") == 0);
+    assert(astra_assign_resolve(&table, "COMMANDS:status", ASTRA_RIGHT_READ,
+                                2u, wire, sizeof(wire), NULL) ==
+           ASTRA_VFS_ERR_NOT_FOUND);
+
+    /*
+     * Rights are per member. A caller looping for write skips the read-only
+     * member and lands on the first writable one, which is what "creation goes
+     * to the primary" is -- a consequence of a fixed order rather than a
+     * stored field.
+     */
+    assert(astra_assign_resolve(&table, "COMMANDS:new", ASTRA_RIGHT_WRITE, 0u,
+                                wire, sizeof(wire), NULL) == ASTRA_VFS_OK);
+    assert(astra_assign_resolve(&table, "COMMANDS:new", ASTRA_RIGHT_WRITE, 1u,
+                                wire, sizeof(wire), NULL) ==
+           ASTRA_VFS_ERR_ACCESS);
+}
+
+static void
+test_joining_refusals(void)
+{
+    AstraAssignTable table;
+
+    astra_assign_table_init(&table);
+    /* Joining is not a way to create a binding. */
+    assert(astra_assign_join(&table, "COMMANDS", 1u, ASTRA_RIGHT_READ,
+                             "commands") == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(table.count == 0u);
+
+    assert(astra_assign_bind(&table, "COMMANDS", 1u, ASTRA_RIGHT_READ,
+                             "commands") == ASTRA_VFS_OK);
+    assert(astra_assign_join(&table, "COMMANDS", 0u, ASTRA_RIGHT_READ,
+                             "x") == ASTRA_VFS_ERR_INVALID);
+    assert(astra_assign_join(&table, "COMMANDS", 1u, 0u, "x") ==
+           ASTRA_VFS_ERR_INVALID);
+    assert(astra_assign_join(&table, "COMMANDS", 1u, ASTRA_RIGHT_READ,
+                             "../etc") == ASTRA_VFS_ERR_INVALID);
+    assert(table.count == 1u);
+
+    /* Binding replaces every member: a name has one meaning at a time. */
+    assert(astra_assign_join(&table, "COMMANDS", 2u, ASTRA_RIGHT_READ,
+                             "other") == ASTRA_VFS_OK);
+    assert(table.count == 2u);
+    assert(astra_assign_bind(&table, "COMMANDS", 3u, ASTRA_RIGHT_READ,
+                             "only") == ASTRA_VFS_OK);
+    assert(table.count == 1u);
+    assert(astra_assign_member(&table, "COMMANDS", 1u) == NULL);
+    assert(astra_assign_lookup(&table, "COMMANDS")->handle == 3u);
+}
+
+static void
+test_unbinding_a_union_keeps_the_order_of_the_rest(void)
+{
+    AstraAssignTable table;
+
+    astra_assign_table_init(&table);
+    /*
+     * COMMANDS's two members are bound after WORK, so its second member ends
+     * up as the table's last entry. Unbinding WORK opens a hole earlier in
+     * the table than either member: the deleted algorithm compacted a hole
+     * by copying the last entry into it, which would have dropped the
+     * second member into WORK's old slot, ahead of the first member --
+     * inverting the two members' order. Shifting down instead leaves every
+     * survivor, members included, in the order it was bound. (SYS is bound
+     * first only so WORK is not itself the table's last entry.)
+     */
+    assert(astra_assign_bind(&table, "SYS", 4u, ASTRA_RIGHT_READ, "") ==
+           ASTRA_VFS_OK);
+    assert(astra_assign_bind(&table, "WORK", 1u, ASTRA_RIGHT_READ, "work") ==
+           ASTRA_VFS_OK);
+    assert(astra_assign_bind(&table, "COMMANDS", 2u, ASTRA_RIGHT_READ,
+                             "local/commands") == ASTRA_VFS_OK);
+    assert(astra_assign_join(&table, "COMMANDS", 3u, ASTRA_RIGHT_READ,
+                             "commands") == ASTRA_VFS_OK);
+
+    /* Removing a name removes every member of it, and nothing else moves. */
+    assert(astra_assign_unbind(&table, "WORK") == ASTRA_VFS_OK);
+    assert(table.count == 3u);
+    assert(astra_assign_member(&table, "COMMANDS", 0u)->handle == 2u);
+    assert(astra_assign_member(&table, "COMMANDS", 1u)->handle == 3u);
+    assert(astra_assign_lookup(&table, "SYS")->handle == 4u);
+
+    assert(astra_assign_unbind(&table, "COMMANDS") == ASTRA_VFS_OK);
+    assert(table.count == 1u);
+    assert(astra_assign_lookup(&table, "COMMANDS") == NULL);
+    assert(astra_assign_lookup(&table, "SYS")->handle == 4u);
+}
+
 int
 main(void)
 {
@@ -426,10 +630,15 @@ main(void)
     test_roots_are_normalised();
     test_rebinding_and_capacity();
     test_unbinding_keeps_the_rest_reachable();
+    test_joining_makes_members();
+    test_joining_refusals();
+    test_unbinding_a_union_keeps_the_order_of_the_rest();
     test_resolving();
     test_resolution_refusals();
     test_seeding_from_a_capability_table();
+    test_seeding_builds_a_union();
     test_seeding_refusals();
+    test_seeding_skipped_first_record_still_binds();
     test_seeding_beyond_capacity();
     puts("ASTRA VFS ASSIGN PASS");
     return 0;
