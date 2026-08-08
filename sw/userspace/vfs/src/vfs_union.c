@@ -35,9 +35,6 @@ astra_vfs_assign_open(const AstraAssignTable *table, const char *path,
          * climb out of it -- is a member that did not answer, and the next one
          * still might.
          */
-        if (resolved == ASTRA_VFS_ERR_NOT_FOUND && index != 0u) {
-            break;
-        }
         if (resolved != ASTRA_VFS_OK) {
             /*
              * NOT_FOUND is the ordinary case -- a member that simply is not

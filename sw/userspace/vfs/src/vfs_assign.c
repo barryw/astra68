@@ -114,7 +114,6 @@ astra_assign_bind(AstraAssignTable *table, const char *name, uint32_t handle,
 {
     char canonical_name[ASTRA_CAPABILITY_NAME_MAX];
     char canonical_root[ASTRA_ASSIGN_ROOT_MAX];
-    uint32_t index;
 
     /*
      * A handle of zero or rights of zero would bind a name that resolves and
@@ -129,7 +128,8 @@ astra_assign_bind(AstraAssignTable *table, const char *name, uint32_t handle,
      * The root goes through the path parser rather than growing rules of its
      * own. Binding is where authority is handed over, so it is the last place
      * a root that climbs out of its mount can be refused -- everything
-     * downstream of here trusts it.
+     * downstream of here trusts it. Checked before anything is removed: a
+     * bad root must never cost an existing binding its members.
      */
     if (astra_path_normalise(root, canonical_root, sizeof(canonical_root)) !=
         ASTRA_VFS_OK) {
@@ -137,21 +137,13 @@ astra_assign_bind(AstraAssignTable *table, const char *name, uint32_t handle,
     }
     /*
      * A name has one meaning at a time, and that meaning may now be a list --
-     * so binding drops every member of the name before it makes the new one.
-     * Editing the first member in place would leave a union whose head a
-     * caller replaced and whose tail it never mentioned.
+     * so binding drops every member of the name before it makes the new one,
+     * the same removal astra_assign_unbind does on its own behalf and for the
+     * same reason: editing the first member in place would leave a union
+     * whose head a caller replaced and whose tail it never mentioned.
+     * NOT_FOUND just means the name had nothing to drop.
      */
-    index = 0u;
-    while (index < table->count) {
-        if (!same(table->entries[index].name, canonical_name)) {
-            ++index;
-            continue;
-        }
-        for (uint32_t at = index; at + 1u < table->count; ++at) {
-            table->entries[at] = table->entries[at + 1u];
-        }
-        --table->count;
-    }
+    (void)astra_assign_unbind(table, canonical_name);
     if (table->count >= ASTRA_ASSIGN_MAX) {
         return ASTRA_VFS_ERR_LIMIT;
     }
