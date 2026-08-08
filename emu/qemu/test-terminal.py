@@ -125,12 +125,28 @@ SCRIPT = [
     # take a write, is refused; this one proves a name nobody has yet still
     # gets created -- on member 0, the only member willing to take it --
     # rather than being refused by the same "access denied" the read-only
-    # member earns further down the walk.
-    ("write commands:brandnew text", "brandnew"),
-    # Where it landed, not merely that something happened: member 0 is
-    # /local/commands, the writable member, and this is the only place a
-    # name that was on no member could have gone.
-    ("ls commands:", "brandnew  [0]"),
+    # member earns further down the walk. Nothing here asserts that,
+    # though: the shell echoes a typed line the instant it is typed, so an
+    # expectation drawn from "brandnew" would already be true before the
+    # write ran, and a write that lands prints nothing of its own to wait
+    # for. What it did is what the listing below proves, so this step
+    # carries only the back pressure every step gets.
+    ("write commands:brandnew text", None),
+    # Both members, from one listing, and where each landed. `devices` --
+    # the gate's shadow copy on member 0 and the shipped one on member 1 --
+    # is already on the volume before this line runs, so this single `ls`
+    # already carries both assertions this fixture needs: `brandnew` on
+    # member 0, the only member a name on nobody could have gone to; and
+    # `devices` still on member 1, undeduplicated, checked by name and
+    # member rather than by the bare "[1]" every other row here would also
+    # satisfy. There is one `ls commands:` in this script, not a second one
+    # later repeating the "devices  [1]" half of this check: wait_for_screen
+    # matches whatever is on the plane right now, not new output, and
+    # nothing forces this listing to have scrolled off 30 rows later --
+    # so a second, identical check could pass off this line's own text
+    # before its own `ls` had even run, which is a check that can never
+    # fail no matter what the second `ls` does.
+    ("ls commands:", ("brandnew  [0]", "devices  [1]")),
     # And the milder failure the same conflation caused in `rm`: a name on
     # no member at all must be reported "not found", not "access denied" --
     # a member refusing on rights alone has said nothing about whether the
@@ -171,13 +187,6 @@ SCRIPT = [
     # another name, so it answers the way `which` does rather than the way the
     # shipped `devices` does.
     ("devices status", "/commands/status [1]"),
-    # Both members listed, nothing deduplicated. The line above already proves
-    # a lookup finds the writable member's `devices` first; this proves `ls`
-    # still shows the shipped member's `devices` too -- checked by name and
-    # member rather than by the bare "[1]" every other row here would also
-    # satisfy, since a listing that quietly dropped the loser would read no
-    # differently from one that never had it.
-    ("ls commands:", "devices  [1]"),
     # Last on purpose. `run()` reads the *current* screen after SCRIPT finishes
     # to check that this line's own output and the shell's report of its exit
     # are still on it and in order (see the child-order check below) -- the
@@ -384,10 +393,17 @@ class Machine:
         return rows
 
     def wait_for_screen(self, text, deadline):
+        """Waits until `text` is on the plane. `text` may also be a sequence
+        of strings, in which case this waits until every one of them is on
+        the plane -- not necessarily the same row -- which is how one `ls`
+        listing can carry more than one assertion instead of a second
+        command being typed just to check the rest of the first one's
+        output."""
+        texts = (text,) if isinstance(text, str) else tuple(text)
         end = time.monotonic() + deadline
         while True:
             rows = self.screen()
-            if any(text in row for row in rows):
+            if all(any(needle in row for row in rows) for needle in texts):
                 return rows
             if time.monotonic() >= end:
                 return None
@@ -454,17 +470,22 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
 
             for line, expected in SCRIPT:
                 machine.qmp.type_line(line)
-                rows = machine.wait_for_screen(expected, command_deadline)
-                if rows is None:
-                    print("FAIL: %r produced no %r within %.0fs"
-                          % (line, expected, command_deadline))
-                    for row in machine.screen():
-                        if row:
-                            print("    |%s|" % row)
-                    dump_ring(machine)
-                    return 1
-                if verbose:
-                    print("ok: %r -> %r" % (line, expected))
+                # `expected` is None for a step with nothing of its own to
+                # wait for -- see the "write commands:brandnew text" entry in
+                # SCRIPT for why one exists -- in which case back pressure
+                # below is the whole of this step's check.
+                if expected is not None:
+                    rows = machine.wait_for_screen(expected, command_deadline)
+                    if rows is None:
+                        print("FAIL: %r produced no %r within %.0fs"
+                              % (line, expected, command_deadline))
+                        for row in machine.screen():
+                            if row:
+                                print("    |%s|" % row)
+                        dump_ring(machine)
+                        return 1
+                    if verbose:
+                        print("ok: %r -> %r" % (line, expected))
                 # Back pressure. `expected` appearing is not the same as the
                 # shell being ready for what gets typed next: for a command
                 # that launches a program, `expected` is often the program's
@@ -478,9 +499,8 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
                 # by construction: it cannot appear until the shell has come
                 # all the way back.
                 if not machine.wait_for_prompt(command_deadline):
-                    print("FAIL: %r produced %r but the shell never came "
-                          "back to %r within %.0fs"
-                          % (line, expected, PROMPT, command_deadline))
+                    print("FAIL: %r never brought the shell back to %r "
+                          "within %.0fs" % (line, PROMPT, command_deadline))
                     for row in machine.screen():
                         if row:
                             print("    |%s|" % row)
