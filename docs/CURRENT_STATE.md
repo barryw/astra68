@@ -76,7 +76,9 @@ that build remains the gate for the performance budget and the device-IRQ
 report.
 
 lwext4 is qualified big-endian behind three one-line upstream fixes but is
-neither vendored nor adopted. There is no VFS and no terminal.
+neither vendored nor adopted. **A VFS and an interactive terminal now exist**
+— see "Software milestones on the Arty QEMU backend" beneath the override
+below; this paragraph is otherwise unchanged from when neither did.
 
 ## Driver substrate candidate (2026-08-04)
 
@@ -402,6 +404,34 @@ evidence. Statements below that call ULX3S, 32 MiB SDRAM, 16 sprites, 720x480,
 the FPGA TG68K core, NUC attachment, or AstraHost/ESP transport the active
 production boundary are historical unless repeated in this override. They
 must not be used to infer the Arty architecture.
+
+## Software milestones on the Arty QEMU backend (2026-08-07)
+
+Two software milestones landed on top of the unchanged CPU/PL boundary the
+override above establishes, neither yet folded into the "Userspace bring-up
+line" section above: **program launch** (`docs/HANDOVER-launch.md`) and
+**union assigns** (`docs/HANDOVER-union-assigns.md`, the current resume
+point). Together they are what "the shell" now means on this machine.
+
+- A program runs from the interactive prompt: typed by name, found by
+  lookup, loaded through `ASTRA_SYSCALL_PROCESS_CREATE` (48), and its exit
+  status reported. A launched child is handed grants for its three streams,
+  `WORK:`, `COMMANDS:` and `EVENTS:` — the last three as port handles to
+  services the supervisor's own process hosts.
+- `COMMANDS:` is an ordered two-member union: `local/commands` (read-write, a
+  person's own directory) tried first, then `commands` (read-only, shipped).
+  The first member that answers wins, so a name on the writable member
+  shadows the shipped one; a listing shows both, and a launch records which
+  member answered. A launched child resolves through the same union it was
+  granted, at the same roots, because `AstraLaunchGrant` and
+  `AstraStartupCapability` now carry a 64-byte mount-relative root
+  (`docs/ABI.md`, `ASTRA_STARTUP_ABI_VERSION` 2).
+- The events store is RAM only: `EVENTS:boot/-1` does not exist, and the
+  terminal gate asserts the refusal rather than treating it as a missing
+  feature. That durability is the next queued work.
+- The terminal gate (`emu/qemu/test-terminal.py`) is the acceptance evidence
+  for both milestones: 32 checks, run against the exact Astra QEMU backend
+  this whole file is about, not simulated elsewhere.
 
 ## Locked architecture
 

@@ -6,19 +6,49 @@ The ABI is big-endian, 32-bit, naturally aligned, and independent of kernel C
 layouts. Only the user/kernel ABI and versioned service protocols are stable.
 Kernel-internal structures and function calls may change at any time.
 
-## Process startup ABI 1
+## Process startup ABI 2
 
-`sw/include/astra/process.h` defines the 64-byte `AstraStartupInfo` and 16-byte
-`AstraStartupCapability` records. The initial thread enters `_start` with the
-read-only startup-block logical address in `D2`, its process self handle in
-`D4`, and its thread self handle in `D5`. The block carries explicit bounded
-argument, environment, and initial-capability tables. Counts are independent
-of addresses, the capability count is at most 32, and all reserved words are
-zero. `docs/USERSPACE_RUNTIME.md` defines validation, ownership, and exit.
+`sw/include/astra/process.h` defines the 64-byte `AstraStartupInfo` and
+92-byte `AstraStartupCapability` records (`ASTRA_STARTUP_ABI_VERSION` 2, up
+from 1 as of 2026-08-07 — the union-assigns milestone. The bump was a
+coordinator instruction given during that milestone's execution and appears
+in no plan or spec; this is where it becomes traceable). The initial thread
+enters `_start` with the read-only startup-block logical address in `D2`, its
+process self handle in `D4`, and its thread self handle in `D5`. The block
+carries explicit bounded argument, environment, and initial-capability
+tables. Counts are independent of addresses, the capability count is at most
+32, and all reserved words are zero. `docs/USERSPACE_RUNTIME.md` defines
+validation, ownership, and exit.
 
 The boot-supplied supervisor and every later protected loader use this same
 contract. General ELF parsing remains userspace policy; Axiom validates the
 final mappings, entry, stack, handles, and startup block before publication.
+
+`AstraStartupCapability` grew from 28 to 92 bytes to add
+`char root[ASTRA_CAPABILITY_ROOT_MAX]` as its last field.
+`ASTRA_CAPABILITY_ROOT_MAX` is 64, and userspace's `ASTRA_ASSIGN_ROOT_MAX`
+(`sw/userspace/vfs/include/astra/vfs_assign.h`) is defined as that same
+constant — one number, one `_Static_assert`, never two. The root is
+normalised, mount-relative, with no leading separator: `""` for the mount's
+own root, `"local/commands"` for a directory inside it. The kernel copies it
+(`astra_capability_root_set`) into the published startup block and **never
+reads it — the same contract `flags` already has**: what a name means is the
+launcher's statement to the child, not the kernel's business.
+
+`AstraLaunchGrant`, the array a caller passes to
+`ASTRA_SYSCALL_PROCESS_CREATE` (48), is the same 92 bytes and carries the
+same `root` field for the same reason and under the same contract. A grant is
+where a root enters the system from outside, so the syscall refuses
+(`INVALID_ARGUMENT`) a root field with no NUL in it, a leading `/`, or any
+`..` component, before copying it into the record the kernel eventually
+publishes; resolution's own `..` rule is separate and unaffected.
+
+`ASTRA_LAUNCH_GRANT_MAX` is 8, up from 6 — a two-member `COMMANDS:` union is
+a seventh grant, and a shell already used all six. `sw/kernel/process.h`'s
+`KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX` is a **textual alias** of it, not a
+second number: the two disagreeing once already let a launch of more than
+four grants fail with `INVALID_ARGUMENT` from inside the loader, naming
+neither the grant nor the reason, latent for four tasks before it was found.
 
 ## Machine ABI
 
