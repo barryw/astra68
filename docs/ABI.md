@@ -27,8 +27,10 @@ final mappings, entry, stack, handles, and startup block before publication.
 `AstraStartupCapability` grew from 28 to 92 bytes to add
 `char root[ASTRA_CAPABILITY_ROOT_MAX]` as its last field.
 `ASTRA_CAPABILITY_ROOT_MAX` is 64, and userspace's `ASTRA_ASSIGN_ROOT_MAX`
-(`sw/userspace/vfs/include/astra/vfs_assign.h`) is defined as that same
-constant — one number, one `_Static_assert`, never two. The root is
+(`sw/userspace/vfs/include/astra/vfs_assign.h`) is defined *as* that same
+constant, a textual alias rather than a second number tied to the first by a
+`_Static_assert` — there is no second definition, so there is nothing that
+could drift out of sync with the first in the first place. The root is
 normalised, mount-relative, with no leading separator: `""` for the mount's
 own root, `"local/commands"` for a directory inside it. The kernel copies it
 (`astra_capability_root_set`) into the published startup block and **never

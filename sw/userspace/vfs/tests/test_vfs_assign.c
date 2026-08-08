@@ -447,8 +447,38 @@ test_seeding_refusals(void)
 }
 
 /*
+ * A first record that is skipped leaves nothing bound, so the next valid
+ * record of the same name binds rather than joining to a member that was
+ * never made -- astra_assign_seed's own lookup cannot tell a name that was
+ * never mentioned from one whose only mention so far was refused. One
+ * malformed grant must not cost the name entirely.
+ */
+static void
+test_seeding_skipped_first_record_still_binds(void)
+{
+    AstraStartupCapability capabilities[2];
+    AstraAssignTable table;
+    const AstraAssign *found;
+
+    /* No rights: skipped, the same as test_seeding_refusals's EVENTS. */
+    capability(&capabilities[0], "EVENTS", 10u, 0u);
+    capability_rooted(&capabilities[1], "EVENTS", 11u, ASTRA_RIGHT_READ,
+                      "activity");
+
+    assert(astra_assign_seed(&table, capabilities, 2u) == ASTRA_VFS_OK);
+    assert(table.count == 1u);
+    found = astra_assign_lookup(&table, "EVENTS");
+    assert(found != NULL);
+    assert(found->handle == 11u);
+    assert(found->rights == ASTRA_RIGHT_READ);
+    assert(strcmp(found->root, "activity") == 0);
+    /* Bound, not joined: there is no member ahead of it. */
+    assert(astra_assign_member(&table, "EVENTS", 1u) == NULL);
+}
+
+/*
  * More grants than a namespace holds. It cannot happen from one launch today --
- * six is the grant ceiling and sixteen the namespace's -- but the startup table
+ * eight is the grant ceiling and sixteen the namespace's -- but the startup table
  * carries thirty-two, so the arithmetic that makes it impossible is somewhere
  * else. A namespace quietly missing the names past the sixteenth is the failure
  * this refuses to have.
@@ -608,6 +638,7 @@ main(void)
     test_seeding_from_a_capability_table();
     test_seeding_builds_a_union();
     test_seeding_refusals();
+    test_seeding_skipped_first_record_still_binds();
     test_seeding_beyond_capacity();
     puts("ASTRA VFS ASSIGN PASS");
     return 0;

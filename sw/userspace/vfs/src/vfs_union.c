@@ -29,18 +29,24 @@ astra_vfs_assign_open(const AstraAssignTable *table, const char *path,
 
         resolved = astra_assign_resolve(table, path, rights, index, wire,
                                         capacity, &assign);
-        /*
-         * Past the last member, and the loop is over. A member that refused
-         * for its own reasons -- rights it does not carry, a `..` that would
-         * climb out of it -- is a member that did not answer, and the next one
-         * still might.
-         */
         if (resolved != ASTRA_VFS_OK) {
             /*
              * NOT_FOUND is the ordinary case -- a member that simply is not
              * the answer -- so it never displaces a status that already says
              * something more specific. See the comment below for why that
              * matters.
+             *
+             * NOT_FOUND is also what ends the loop, and it means either of
+             * two things: past the last member, or a `..` in `path` that
+             * would climb out of whichever member this was. The two are not
+             * distinguished, and cannot be from here -- astra_assign_resolve
+             * returns the identical status for both (astra/vfs_assign.h) --
+             * but they do not need to be. A `..` escape is a property of
+             * `path` itself, not of any one member's root: astra_path_normalise
+             * refuses it by refusing to backtrack past its own output
+             * buffer's start, before it has even looked at what member is
+             * being tried, so every member would refuse it identically. The
+             * next member was never going to answer differently.
              */
             if (status == ASTRA_VFS_ERR_NOT_FOUND) {
                 status = resolved;

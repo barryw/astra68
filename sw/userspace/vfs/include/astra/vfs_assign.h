@@ -105,6 +105,13 @@ const AstraAssign *astra_assign_member(const AstraAssignTable *table,
  * out of room is the one thing reported, because a namespace quietly missing
  * its tail is a program failing later for a reason nothing wrote down.
  *
+ * A skipped entry never gets as far as binding anything, so a name whose
+ * *first* record is the one that was skipped is bound -- not joined to
+ * nothing -- by the next valid record of that name: the lookup this function
+ * uses to choose between bind and join still finds no prior member, exactly
+ * as if the bad record had never been in the table. One malformed grant costs
+ * a child nothing more than itself.
+ *
  * The root travels in the record and is bound with the name, so a child's
  * COMMANDS: means the directory it was granted rather than the whole volume.
  * A name granted twice is a union: the first record binds and each later one
