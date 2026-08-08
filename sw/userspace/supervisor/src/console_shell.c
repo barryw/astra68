@@ -398,8 +398,19 @@ static void command_ls(int argc, char *const *argv)
             if (status == ASTRA_VFS_ERR_NOT_FOUND)
                 break;
             if (status != ASTRA_VFS_OK) {
+                /*
+                 * This member, not the listing: a device that fails partway
+                 * through a directory has said nothing about any other
+                 * member, and abandoning the whole command over one broken
+                 * member is the same shape of mistake the worst-status rule
+                 * exists to stop elsewhere in this file. Reported here,
+                 * because the caller only sees the worst status when no
+                 * member resolved at all.
+                 */
                 report_status("ls", status);
-                return;
+                if (worst == ASTRA_VFS_ERR_NOT_FOUND)
+                    worst = status;
+                break;
             }
             astra_terminal_write(&shell.terminal, name);
             if (kind == ASTRA_VFS_KIND_DIRECTORY)
@@ -804,7 +815,17 @@ static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
          * names can still be a union, and `COMMANDS:status` typed out is the
          * same lookup a bare `status` would have done through the COMMANDS:
          * place, so it walks members the same way.
+         *
+         * The same worst-status rule as shell_locate (astra/vfs_union.h): a
+         * member that refuses for its own reason -- rights it does not
+         * carry, a stat that comes back other than "not found" -- must
+         * survive to the caller rather than being buried by a later
+         * member's ordinary NOT_FOUND, which is what let a device
+         * answering ASTRA_VFS_ERR_IO be reported as a name that does not
+         * exist.
          */
+        uint32_t worst = ASTRA_VFS_ERR_NOT_FOUND;
+
         for (uint32_t member = 0u; ; ++member) {
             const AstraAssign *found = NULL;
 
@@ -812,9 +833,12 @@ static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
                                           ASTRA_RIGHT_READ, member, wire,
                                           capacity, &found);
             if (status == ASTRA_VFS_ERR_NOT_FOUND) {
-                return status;    /* past the last member: nothing named it */
+                return worst;    /* past the last member: nothing named it */
             }
             if (status != ASTRA_VFS_OK) {
+                if (worst == ASTRA_VFS_ERR_NOT_FOUND) {
+                    worst = status;
+                }
                 continue;
             }
             *client = supervisor_vfs_client_for(found);
@@ -823,9 +847,13 @@ static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
             }
             {
                 uint16_t kind = 0u;
+                uint32_t stat_status = astra_vfs_stat(*client, wire, NULL,
+                                                      &kind);
 
-                if (astra_vfs_stat(*client, wire, NULL, &kind) !=
-                    ASTRA_VFS_OK) {
+                if (stat_status != ASTRA_VFS_OK) {
+                    if (worst == ASTRA_VFS_ERR_NOT_FOUND) {
+                        worst = stat_status;
+                    }
                     continue;   /* not on this member: try the next */
                 }
                 if (kind == ASTRA_VFS_KIND_DIRECTORY) {
@@ -838,6 +866,14 @@ static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
             return ASTRA_VFS_OK;
         }
     }
+
+    /*
+     * The same worst-status rule as above, carried across both places rather
+     * than reset between them: a member of APPS: that answers with something
+     * other than NOT_FOUND must not be forgotten just because COMMANDS: goes
+     * on to say NOT_FOUND about every member of its own.
+     */
+    uint32_t worst = ASTRA_VFS_ERR_NOT_FOUND;
 
     for (uint32_t place = 0u; place < 2u; ++place) {
         uint32_t length = 0u;
@@ -868,6 +904,9 @@ static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
                 break;      /* past the last member: try the next place */
             }
             if (status != ASTRA_VFS_OK) {
+                if (worst == ASTRA_VFS_ERR_NOT_FOUND) {
+                    worst = status;
+                }
                 continue;
             }
             *client = supervisor_vfs_client_for(found);
@@ -876,9 +915,13 @@ static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
             }
             {
                 uint16_t kind = 0u;
+                uint32_t stat_status = astra_vfs_stat(*client, wire, NULL,
+                                                      &kind);
 
-                if (astra_vfs_stat(*client, wire, NULL, &kind) !=
-                    ASTRA_VFS_OK) {
+                if (stat_status != ASTRA_VFS_OK) {
+                    if (worst == ASTRA_VFS_ERR_NOT_FOUND) {
+                        worst = stat_status;
+                    }
                     continue;   /* not on this member: try the next */
                 }
                 if (kind == ASTRA_VFS_KIND_DIRECTORY) {
@@ -891,7 +934,7 @@ static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
             return ASTRA_VFS_OK;
         }
     }
-    return status;
+    return worst;
 }
 
 /*
@@ -917,14 +960,26 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
     static const char *const mount_names[] = {"WORK", "COMMANDS", "EVENTS"};
     uint32_t streams[3];
     uint32_t count = 0u;
+    /*
+     * Whether either loop below ran out of room before it ran out of
+     * grants to make. It is provably 7 of 8 today -- three streams, WORK,
+     * two COMMANDS members and EVENTS -- but a third COMMANDS member, or a
+     * fourth stream, would push something out of a child's namespace with
+     * nothing recorded, the same silence bind_standard_assigns already
+     * guards against on the supervisor's own side.
+     */
+    int dropped = 0;
 
     streams[0] = console_stream_stdout();
     streams[1] = console_stream_stderr();
     streams[2] = console_stream_stdin();
-    for (uint32_t index = 0u; index < 3u && count < ASTRA_LAUNCH_GRANT_MAX;
-         ++index) {
+    for (uint32_t index = 0u; index < 3u; ++index) {
         if (streams[index] == 0u) {
             continue;
+        }
+        if (count >= ASTRA_LAUNCH_GRANT_MAX) {
+            dropped = 1;
+            break;
         }
         astra_capability_name_set(grants[count].name, stream_names[index]);
         grants[count].handle = streams[index];
@@ -943,14 +998,17 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
      * The root travels now, so a child's COMMANDS: means the directory it was
      * granted rather than the whole volume.
      */
-    for (uint32_t index = 0u; index < 3u && count < ASTRA_LAUNCH_GRANT_MAX;
-         ++index) {
-        for (uint32_t member = 0u; count < ASTRA_LAUNCH_GRANT_MAX; ++member) {
+    for (uint32_t index = 0u; index < 3u; ++index) {
+        for (uint32_t member = 0u; ; ++member) {
             const AstraAssign *assign =
                 astra_assign_member(supervisor_assigns(), mount_names[index],
                                     member);
 
             if (assign == NULL) {
+                break;
+            }
+            if (count >= ASTRA_LAUNCH_GRANT_MAX) {
+                dropped = 1;
                 break;
             }
             astra_capability_name_set(grants[count].name, mount_names[index]);
@@ -964,6 +1022,10 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
             astra_capability_root_set(grants[count].root, assign->root);
             ++count;
         }
+    }
+    if (dropped) {
+        ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_WARNING,
+                     "launch grant dropped, ASTRA_LAUNCH_GRANT_MAX reached");
     }
     return count;
 }
@@ -1022,9 +1084,23 @@ static void command_launch(const char *word, int argc, char *const *argv)
     uint32_t status;
     uint16_t kind = 0u;
 
-    if (launch_path(word, path, sizeof(path), &client) != ASTRA_VFS_OK) {
-        astra_terminal_write(&shell.terminal, word);
-        write_line(": not a command");
+    status = launch_path(word, path, sizeof(path), &client);
+    if (status != ASTRA_VFS_OK) {
+        /*
+         * "Not a command" is what a genuinely absent name says. Anything
+         * else -- a member that refused for its own reason, a device that
+         * answered ASTRA_VFS_ERR_IO -- is reported for what it is, the same
+         * distinction shell_locate already draws: existence is not the only
+         * question a resolve can answer, and burying the other answers under
+         * "not found" is the single most expensive wrong answer this project
+         * has already paid for once.
+         */
+        if (status == ASTRA_VFS_ERR_NOT_FOUND) {
+            astra_terminal_write(&shell.terminal, word);
+            write_line(": not a command");
+        } else {
+            report_status(word, status);
+        }
         return;
     }
     status = astra_vfs_open(client, path, ASTRA_VFS_OPEN_READ, &file, &size,

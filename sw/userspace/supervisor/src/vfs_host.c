@@ -135,6 +135,18 @@ bind_standard_assigns(void)
                      "status %u", status);
     }
     /*
+     * Said once more, at the point it becomes true. Two "member skipped"
+     * warnings tell a reader that each attempt failed; neither says the
+     * conclusion that follows from both together -- that COMMANDS: now has
+     * no members at all, and every launch this boot will fail with
+     * "not a command" for a reason no single one of those two lines states.
+     */
+    if (astra_assign_lookup(&vfs_assigns, "COMMANDS") == NULL) {
+        ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
+                     ASTRA_EVENT_LEVEL_WARNING,
+                     "COMMANDS: has no members at all");
+    }
+    /*
      * What namespace this boot actually got. A rare fact recorded once, which
      * every later event is read against: a person asking why a path was
      * refused needs to know what the process was holding, and reconstructing

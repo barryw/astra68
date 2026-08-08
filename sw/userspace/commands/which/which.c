@@ -153,8 +153,19 @@ astra_main(const AstraStartupInfo *startup)
             typed[at] = prefix[at];
             ++at;
         }
-        for (uint32_t index = 0u;
-             word[index] != '\0' && at + 1u < sizeof(typed); ++index) {
+        for (uint32_t index = 0u; word[index] != '\0'; ++index) {
+            /*
+             * Truncation would name a different file, so it is refused --
+             * the same rule astra_path_split enforces on every path this
+             * machine parses, and the one the launch arguments enforce on
+             * the word this came from: a cut argument is a wrong one, and
+             * silently answering about a name shorter than the one typed is
+             * worse than refusing to answer at all.
+             */
+            if (at + 1u >= sizeof(typed)) {
+                say("which: name too long, refused rather than cut\n");
+                return ASTRA_STATUS_INVALID;
+            }
             typed[at++] = word[index];
         }
         typed[at] = '\0';
