@@ -28,9 +28,10 @@ not the pattern shell. The release pipeline is deliberately split into
 auditable stages:
 
 - `../build_fsbl.sh` generates and compiles the Zynq FSBL from the exact XSA.
-- `build_device_tree.sh` removes retired Nova nodes, reserves the 128 MiB
-  graphics arena as `no-map`, and assigns the 100/166.667 MHz fabric clocks
-  used by the geometry-qualified release.
+- `build_device_tree.sh` removes retired Nova nodes, caps Linux System RAM at
+  384 MiB, reserves the remaining 128 MiB graphics arena as `no-map`, and
+  assigns the 100/166.667 MHz fabric clocks used by the geometry-qualified
+  release.
 - `build_fit_image.sh` reuses the unchanged Linux kernel and constructs a new
   verified FIT with the Astra device tree.
 - `make` cross-builds the static ARM graphics loader and live boot-status
@@ -65,8 +66,8 @@ Active release identities are:
 | Artifact | SHA-256 |
 |---|---|
 | `BOOT.BIN` | `9637e1035acb9d1bd6d2bd0eec2e3cf9ca5c13023560af8d2b4f27a546444504` |
-| `image.ub` | `e9ef016f059cb3bc71138edf2a5ae47646a0e11b3dab3b81f7362f592b97b542` |
-| Device tree | `dc04732176732a9fa6fa4bb1293bc64d877308d80f56403c3f5dbf720cd22147` |
+| `image.ub` | `c9a77be0f5085ce048860d12bd88ce7a246b813cf76c20339e8c18b7f9358944` |
+| Device tree | `422c7d48554512f313f19d2e750d19ed2a426b46c53befcbe3e3e4c80ed9cfc4` |
 | Graphics loader | `6be16a2515161a9fe98b316e0ddba3c3c516d8393bf8422201ee76df29eebd43` |
 | Boot-status utility | `1cf76956e6a406d0d05247b97262aecffdf7c4e15e96c03141042358f1254020` |
 | Sprite certifier | `0bad57d1a227137fcffd8d5477c98cc5d06187e4e1329e297929b5a7d7e1b52e` |
@@ -95,6 +96,14 @@ is retained under
 The retained physical HDMI frame is
 `docs/evidence/astra-arty-boot-text6-hdmi-20260730.png`; it confirms all four
 dynamic rows render correctly inside the lower panel.
+
+The 512 MiB DDR budget is deliberate: graphics owns the physical 128 MiB
+`no-map` arena, the Astra QEMU process preallocates 128 MiB of normal cached
+Linux RAM at launch, and the remaining 256 MiB budget belongs to Linux and its
+host services. Linux reports 384 MiB before QEMU starts because guest RAM uses
+the normal cached allocator; after preallocation those pages are resident and,
+with this appliance's no-swap policy, cannot be reclaimed for another process.
+This avoids running the emulated CPU against an uncached `/dev/mem` mapping.
 
 The inherited userspace still emits nonfatal volatile-directory, unclean FAT,
 RTC, resolver, and interface-naming warnings. The retired Nova reservations and

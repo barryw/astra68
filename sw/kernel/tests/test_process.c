@@ -116,6 +116,10 @@ static uint32_t input_overflow_acks;
 
 static uint8_t console_cells[TEST_CONSOLE_COLUMNS * TEST_CONSOLE_ROWS];
 static uint32_t console_writes;
+static uint32_t console_cursor_writes;
+static uint32_t console_cursor_row;
+static uint32_t console_cursor_column;
+static bool console_cursor_visible;
 static bool console_present = true;
 
 bool kernel_platform_post_text_present(void)
@@ -137,6 +141,16 @@ bool kernel_platform_post_text_write(uint32_t cell, uint8_t value)
         return false;
     console_cells[cell] = value;
     ++console_writes;
+    return true;
+}
+
+bool kernel_platform_post_text_cursor(uint32_t row, uint32_t column,
+                                      bool visible)
+{
+    console_cursor_row = row;
+    console_cursor_column = column;
+    console_cursor_visible = visible;
+    ++console_cursor_writes;
     return true;
 }
 
@@ -911,6 +925,10 @@ static void initialize_test(void)
     device_reset_ok = true;
     memset(console_cells, 0, sizeof(console_cells));
     console_writes = 0u;
+    console_cursor_writes = 0u;
+    console_cursor_row = 0u;
+    console_cursor_column = 0u;
+    console_cursor_visible = false;
     console_present = true;
     input_event_head = 0u;
     input_event_count = 0u;
@@ -2388,6 +2406,54 @@ static void test_console_writes_through_a_display_lease(void)
     assert(console_cells[TEST_CONSOLE_COLUMNS + 2u] == 'A');
     assert(console_cells[TEST_CONSOLE_COLUMNS + 5u] == 'D');
     assert(console_cells[TEST_CONSOLE_COLUMNS + 1u] == 0u);
+
+    /* The same display lease publishes the terminal model's cursor. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CONSOLE_CURSOR;
+    registers[1] = read_only_handle;
+    registers[2] = 4u;
+    registers[3] = 7u;
+    registers[4] = 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    assert(console_cursor_writes == 0u);
+
+    registers[1] = display_handle;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(console_cursor_writes == 1u);
+    assert(console_cursor_row == 4u && console_cursor_column == 7u);
+    assert(console_cursor_visible);
+
+    /* One-past-the-row is the terminal model's valid pending-wrap state. */
+    registers[3] = TEST_CONSOLE_COLUMNS;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(console_cursor_column == TEST_CONSOLE_COLUMNS);
+
+    registers[2] = TEST_CONSOLE_ROWS;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    registers[2] = 0u;
+    registers[3] = TEST_CONSOLE_COLUMNS + 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    registers[3] = 0u;
+    registers[4] = 2u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
 
     /*
      * A run that would leave the plane is refused whole. The last cell is
@@ -6401,6 +6467,21 @@ static void test_an_activity_is_the_threads_own(void)
     assert(next->data[1] == first);
     assert(kernel_thread_snapshot(0u, &thread));
     assert(thread.activity == first);
+
+    /* A service restores "no caller story" without consuming another id. */
+    registers[1] = ASTRA_ACTIVITY_NONE;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[1] == 0u);
+    assert(kernel_thread_snapshot(0u, &thread));
+    assert(thread.activity == 0u);
+
+    registers[1] = first;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[1] == first);
 
     /* And the event carries it without anybody saying so. */
     assert(kernel_user_copy_to_asm(user_text, line, sizeof(line) - 1u) ==

@@ -128,6 +128,37 @@ backend_of(void *context)
     return context;
 }
 
+static void
+close_scan(AstraVfsExt4Backend *backend)
+{
+    if (backend->scan_open)
+        (void)ext4_dir_close(&backend->scan);
+    backend->scan_open = 0;
+}
+
+static int
+same_path(const char *left, const char *right)
+{
+    uint32_t index = 0u;
+
+    while (left[index] == right[index]) {
+        if (left[index] == '\0')
+            return 1;
+        ++index;
+    }
+    return 0;
+}
+
+static void
+remember_path(AstraVfsExt4Backend *backend, const char *path)
+{
+    uint32_t index = 0u;
+
+    do {
+        backend->scan_path[index] = path[index];
+    } while (path[index++] != '\0');
+}
+
 static uint32_t
 ext4_backend_open(void *context, const char *path, uint32_t flags,
                   uintptr_t *node, AstraVfsNodeInfo *info)
@@ -140,14 +171,15 @@ ext4_backend_open(void *context, const char *path, uint32_t flags,
     if (!build_path(backend, path, full, sizeof(full))) {
         return ASTRA_VFS_ERR_INVALID;
     }
+    if ((flags & (ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+                  ASTRA_VFS_OPEN_TRUNCATE)) != 0u)
+        close_scan(backend);
 
     if ((flags & ASTRA_VFS_OPEN_DIRECTORY) != 0u) {
         /*
          * A directory handle exists only so the core can answer "is this a
          * directory" and refuse reads against it. lwext4's directory cursor is
-         * not held open: readdir is index-addressed and reopens, which costs a
-         * walk per entry and owes nothing to a cursor that a dying client
-         * would strand.
+         * not this handle: readdir owns its own resumable scan below.
          */
         ext4_dir directory;
 
@@ -302,10 +334,10 @@ ext4_backend_stat(void *context, const char *path, AstraVfsNodeInfo *info)
 
 /*
  * The cookie is lwext4's own iterator offset. `ext4_dir.next_off` is where the
- * next entry begins and `ext4_dir_entry_next` resumes from it, so a scan seeks
- * once and reads one entry instead of walking from the first entry every time.
- * A listing of N entries costs N reads rather than N-squared, which is what
- * EVENTS: needs and what every large directory needed anyway.
+ * next entry begins and `ext4_dir_entry_next` resumes from it. The ordinary
+ * sequential caller keeps that directory open until EOF; an interleaved path
+ * or cursor closes it and resumes from the supplied cookie, preserving the
+ * stateless protocol while avoiding one ext4 open/close per listed entry.
  */
 static uint32_t
 ext4_backend_readdir(void *context, const char *path, uint64_t cookie,
@@ -314,7 +346,6 @@ ext4_backend_readdir(void *context, const char *path, uint64_t cookie,
 {
     AstraVfsExt4Backend *backend = backend_of(context);
     char full[ASTRA_VFS_EXT4_PATH_MAX];
-    ext4_dir directory;
     const ext4_direntry *entry;
     uint32_t copied;
     int rc;
@@ -322,15 +353,20 @@ ext4_backend_readdir(void *context, const char *path, uint64_t cookie,
     if (!build_path(backend, path, full, sizeof(full))) {
         return ASTRA_VFS_ERR_INVALID;
     }
-    rc = ext4_dir_open(&directory, full);
-    if (rc != EOK) {
-        return status_of(rc);
+    if (!backend->scan_open || backend->scan_next != cookie ||
+        !same_path(backend->scan_path, full)) {
+        close_scan(backend);
+        rc = ext4_dir_open(&backend->scan, full);
+        if (rc != EOK)
+            return status_of(rc);
+        backend->scan_open = 1;
+        remember_path(backend, full);
     }
-    directory.next_off = cookie;
+    backend->scan.next_off = cookie;
     for (;;) {
-        entry = ext4_dir_entry_next(&directory);
+        entry = ext4_dir_entry_next(&backend->scan);
         if (entry == NULL) {
-            (void)ext4_dir_close(&directory);
+            close_scan(backend);
             return ASTRA_VFS_ERR_NOT_FOUND; /* past the last entry */
         }
         if (entry->name_length != 0u) {
@@ -338,7 +374,7 @@ ext4_backend_readdir(void *context, const char *path, uint64_t cookie,
         }
     }
     if ((uint32_t)entry->name_length + 1u > capacity) {
-        (void)ext4_dir_close(&directory);
+        close_scan(backend);
         return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
     }
     for (copied = 0u; copied < entry->name_length; ++copied) {
@@ -348,8 +384,8 @@ ext4_backend_readdir(void *context, const char *path, uint64_t cookie,
     info->size = 0u;
     info->kind = entry->inode_type == EXT4_DE_DIR ?
         ASTRA_VFS_KIND_DIRECTORY : ASTRA_VFS_KIND_FILE;
-    *next = directory.next_off;
-    (void)ext4_dir_close(&directory);
+    *next = backend->scan.next_off;
+    backend->scan_next = *next;
     return ASTRA_VFS_OK;
 }
 
@@ -362,6 +398,7 @@ ext4_backend_mkdir(void *context, const char *path)
     if (!build_path(backend, path, full, sizeof(full))) {
         return ASTRA_VFS_ERR_INVALID;
     }
+    close_scan(backend);
     return status_of(ext4_dir_mk(full));
 }
 
@@ -375,6 +412,7 @@ ext4_backend_unlink(void *context, const char *path)
     if (!build_path(backend, path, full, sizeof(full))) {
         return ASTRA_VFS_ERR_INVALID;
     }
+    close_scan(backend);
     rc = ext4_fremove(full);
     if (rc == EOK) {
         return ASTRA_VFS_OK;
@@ -419,6 +457,8 @@ astra_vfs_ext4_init(AstraVfsExt4Backend *backend, const char *mount_point)
         ++index;
     }
     backend->mount_point[index] = '\0';
+    backend->scan_open = 0;
+    backend->scan_next = 0u;
     for (index = 0u; index < ASTRA_VFS_EXT4_FILE_MAX; ++index) {
         backend->open_files[index].used = 0;
     }

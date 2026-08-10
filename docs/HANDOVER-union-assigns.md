@@ -340,15 +340,16 @@ python3 emu/qemu/test-terminal.py /tmp/qemu-final-build/qemu-system-m68k \
 pkill -f qemu-system-m68k
 ```
 
-**The terminal gate is 32 of 32**, up from 22 at the start of this
-milestone (25 after task 7's Criticals, 32 after task 8). It now also
+**The terminal gate was 32 of 32 for this milestone**, up from 22 at the start
+(25 after task 7's Criticals, 32 after task 8). It now also
 asserts that no input overflowed during the boot (§6), and a module-level
 assertion beside `SCRIPT` in `test-terminal.py` pins its own last entry to
-`("events --boot -1", "the store is RAM")` — the exit-order check depends on
+`("events --boot -1", "namespace bound")` — the exit-order check depends on
 that line being last so its output is still on the 30-row screen when the
 check reruns; moving it without updating the assertion now fails immediately
 and by name instead of as a scroll-dependent flake (`cd914c9`, the second
-time this exact thing happened).
+time this exact thing happened). Event durability later made that final line a
+successful read after a warmup boot.
 
 On the Mac: `python3 -m pytest tools/tests/` and
 `python3 -m pytest sw/boot/tests/`. Reap QEMU after every gate.
@@ -367,9 +368,7 @@ On the Mac: `python3 -m pytest tools/tests/` and
 
 ## 11. After this milestone
 
-**The events store is RAM.** `EVENTS:boot/-1` does not exist, and the
-terminal gate's last line (`events --boot -1` → `"the store is RAM"`, §9)
-already asserts the refusal so nobody mistakes it for a missing feature
-rather than a known boundary. Durability is the next queued work — the same
-status `docs/HANDOVER-launch.md` §7 already recorded before this milestone
-started; nothing here changed it.
+Event durability landed next. `EVENTS:boot/-1` is now backed by the newest
+valid alternating snapshot, and the terminal gate boots twice against the same
+scratch ext4 image before reading it. `docs/HANDOVER-events.md` is the current
+event-system continuation point.

@@ -35,6 +35,13 @@ void astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
 
 uint32_t astra_yield(void);
 uint32_t astra_close(uint32_t handle);
+uint32_t astra_handle_duplicate(uint32_t handle, uint32_t rights,
+                                uint32_t *duplicate);
+uint32_t astra_area_create(uint32_t byte_size, uint32_t rights,
+                           uint32_t *handle);
+uint32_t astra_area_map(uint32_t handle, uint32_t permissions,
+                        void **address, uint32_t *byte_size);
+uint32_t astra_area_unmap(void *address);
 uint32_t astra_query_abi(uint32_t *abi_version, uint32_t *process_handle,
                          uint32_t *thread_handle);
 uint32_t astra_process_info(uint32_t handle, AstraProcessInfo *info);
@@ -45,6 +52,7 @@ uint64_t astra_clock_monotonic(void);
 uint32_t astra_wait_one(uint32_t handle, uint64_t deadline_ns,
                         uint32_t *detail);
 uint32_t astra_irq_arm(uint32_t handle);
+uint32_t astra_irq_mask(uint32_t handle);
 uint32_t astra_irq_read(uint32_t handle, AstraIrqRecord *record,
                         uint32_t *events);
 uint32_t astra_irq_ack(uint32_t handle, uint32_t sequence);
@@ -58,6 +66,8 @@ uint32_t astra_console_info(uint32_t device, uint32_t *columns,
                             uint32_t *rows);
 uint32_t astra_console_write(uint32_t device, uint32_t cell,
                              const uint8_t *cells, uint32_t count);
+uint32_t astra_console_cursor(uint32_t device, uint32_t row,
+                              uint32_t column, uint32_t visible);
 uint32_t astra_input_read(uint32_t device, AstraInputEvent *events,
                           uint32_t capacity, uint32_t *count,
                           uint32_t *flags);
@@ -114,6 +124,13 @@ uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
 uint32_t astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
                             uint32_t *handles, uint32_t handle_capacity,
                             uint32_t *size, uint32_t *handle_count);
+
+/* Temporary per-boot event-level control over a dedicated capability. */
+uint32_t astra_event_control_set(uint32_t handle, uint32_t subsystem,
+                                 uint32_t level);
+uint32_t astra_event_control_pump(uint32_t receive, uint32_t budget);
+uint32_t astra_event_control_proxy_pump(uint32_t receive, uint32_t target,
+                                       uint32_t budget);
 
 /*
  * The event channel. No handle, no binding and no capability: emitting is

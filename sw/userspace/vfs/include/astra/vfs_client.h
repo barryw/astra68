@@ -37,6 +37,13 @@ typedef struct AstraVfsClient {
      * Zero until somebody sets it, which reads as no activity.
      */
     uint32_t activity;
+    /* Private state used by astra_vfs_port_connect/transport. */
+    uint32_t port_service;
+    uint32_t port_reply_send;
+    uint32_t port_area;
+    uint32_t port_area_send;
+    void *port_area_address;
+    uint32_t port_area_size;
     /*
      * The in-flight records live here rather than on the caller's stack, and
      * that is a requirement rather than a preference: a user thread gets one

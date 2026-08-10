@@ -1,21 +1,37 @@
 # Axiom kernel memory budget
 
-Status: hardware-qualified K9 release plus measured pre-route K10 candidate
-accounting (2026-07-27)
+Status: dual 32/128 MiB kernel profile implemented and hardware-gated (2026-08-09);
+historical K9/K10 measurements retained below
 
-The machine has exactly 32 MiB of SDRAM. Every static pool, frame, mapping,
-queue, pin, and graphics reservation is reported separately. A budget is not
-permission to allocate dynamically without a quota.
+The physical ULX3S machine has exactly 32 MiB of SDRAM. The active Arty-hosted
+machine has 128 MiB of guest RAM. One kernel image supports both exact profiles;
+its per-frame tables are sized for 32,768 pages, while initialization and
+allocator accounting use the RAM size reported by BootInfo. Every static pool,
+frame, mapping, queue, pin, and graphics reservation is reported separately. A
+budget is not permission to allocate dynamically without a quota.
+
+The Arty's 512 MiB DDR is divided at runtime into 128 MiB of physically reserved
+graphics memory, 128 MiB preallocated as cached QEMU guest RAM, and a 256 MiB
+Linux/host-services budget. Guest RAM deliberately stays in Linux's normal
+cached allocator; an uncached `/dev/mem` reservation would make every emulated
+68030 memory access a device-memory access.
+
+The current release kernel is 123,472 bytes on disk. Its 128 MiB frame metadata
+ends at `0x02140280`, inside the `0x02044000..0x02153fff` kernel reservation,
+with the retained trace address unchanged at `0x020c4000`.
+
+The retained Arty run reports 32,768 guest pages, 32,370 initially free,
+147,892 KiB QEMU RSS, 203,232 KiB Linux `MemAvailable`, and zero swap after the
+terminal reaches `WORK:>`.
 
 ## Physical baseline
 
 | Reservation | Bytes |
 |---|---:|
 | early retained log | 16,384 |
-| kernel bootstrap reservation | 524,288 |
-| K10 retained trace reservation | 65,536 |
+| kernel image, trace, metadata, and stacks | 1,114,112 |
 | ROM backing | 262,144 |
-| remaining in the K10 candidate before future graphics/device carveouts | 32,686,080 |
+| maximum allocator input before the conditional USB DMA carveout | 32,161,792 |
 
 The detailed split and bootstrap BRAM are in `MEMORY_MAP.md`. The kernel starts
 from BootInfo ranges, not the arithmetic above.

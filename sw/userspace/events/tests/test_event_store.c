@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include <astra/event_catalog.h>
+#include <astra/event_persist.h>
 #include <astra/event_store.h>
 
 #define RECORD_COUNT 64u
@@ -13,6 +14,38 @@ static AstraEventStore store;
 static AstraEventDescriptor catalog_records[2];
 static AstraEventCatalog catalog;
 static const uint32_t catalog_base = 0xE0000000u;
+
+#define SNAPSHOT_MAX 20000u
+static uint8_t snapshot[SNAPSHOT_MAX];
+static uint32_t snapshot_size;
+
+static int snapshot_read(void *context, uint32_t offset, void *buffer,
+                         uint32_t length)
+{
+    uint8_t *out = buffer;
+    const uint8_t *bytes = context;
+
+    if (offset > snapshot_size || length > snapshot_size - offset) {
+        return 0;
+    }
+    memcpy(out, bytes + offset, length);
+    return 1;
+}
+
+static int snapshot_write(void *context, uint32_t offset, const void *buffer,
+                          uint32_t length)
+{
+    uint8_t *bytes = context;
+
+    if (offset > SNAPSHOT_MAX || length > SNAPSHOT_MAX - offset) {
+        return 0;
+    }
+    memcpy(bytes + offset, buffer, length);
+    if (offset + length > snapshot_size) {
+        snapshot_size = offset + length;
+    }
+    return 1;
+}
 
 static AstraEventDrained
 event_at(uint32_t sequence, uint16_t flags, uint32_t message)
@@ -177,6 +210,72 @@ static void test_loss_is_never_silent(void)
     assert(store.lost_in_transport == UINT32_MAX);
 }
 
+/* One valid snapshot survives a restart; corruption and truncation do not. */
+static void test_snapshot_round_trip_and_refusal(void)
+{
+    static AstraEventStored restored_records[RECORD_COUNT];
+    AstraEventSnapshotInfo info;
+    AstraEventStore restored;
+    AstraEventCatalog other_catalog;
+    AstraEventDescriptor other_records[2];
+    AstraEventDrained event;
+    uint8_t saved;
+
+    reset();
+    event = event_at(7u, ASTRA_EVENT_LEVEL_WARNING, catalog_base);
+    event.payload_length = 3u;
+    memcpy(event.payload, "bad", 3u);
+    astra_event_store_append(&store, &event);
+    event = event_at(8u, ASTRA_EVENT_LEVEL_INFO, catalog_base + 128u);
+    astra_event_store_append(&store, &event);
+    astra_event_store_lost(&store, 2u);
+
+    memset(snapshot, 0, sizeof(snapshot));
+    snapshot_size = 0u;
+    assert(astra_event_snapshot_save(&store, 3u, 9u, snapshot_write,
+                                     snapshot));
+    assert(astra_event_snapshot_probe(snapshot_read, snapshot, snapshot_size,
+                                      &info));
+    assert(info.boot == 3u && info.generation == 9u);
+
+    memset(restored_records, 0, sizeof(restored_records));
+    assert(astra_event_store_init(&restored, restored_records, RECORD_COUNT,
+                                  &catalog));
+    assert(astra_event_snapshot_load(&restored, snapshot_read, snapshot,
+                                     snapshot_size, &info));
+    assert(restored.stored == store.stored);
+    assert(restored.lost_in_transport == store.lost_in_transport);
+    assert(restored.dropped_debug == store.dropped_debug);
+    assert(restored.evicted_unattributed == store.evicted_unattributed);
+    for (uint32_t tier = 0u; tier < ASTRA_EVENT_TIER_MAX; ++tier) {
+        assert(restored.tiers[tier].count == store.tiers[tier].count);
+        assert(restored.tiers[tier].evicted == store.tiers[tier].evicted);
+        for (uint32_t index = 0u; index < store.tiers[tier].count; ++index) {
+            assert(memcmp(astra_event_store_at(&restored, tier, index),
+                          astra_event_store_at(&store, tier, index),
+                          sizeof(AstraEventStored)) == 0);
+        }
+    }
+
+    memcpy(other_records, catalog_records, sizeof(other_records));
+    other_records[0].format[0] ^= 1;
+    assert(astra_event_catalog_init(&other_catalog, other_records,
+                                    sizeof(other_records), catalog_base));
+    assert(astra_event_store_init(&restored, restored_records, RECORD_COUNT,
+                                  &other_catalog));
+    assert(astra_event_snapshot_load(&restored, snapshot_read, snapshot,
+                                     snapshot_size, NULL));
+    assert(restored.catalog == NULL);
+
+    saved = snapshot[snapshot_size - 1u];
+    snapshot[snapshot_size - 1u] ^= 0x80u;
+    assert(!astra_event_snapshot_probe(snapshot_read, snapshot, snapshot_size,
+                                       &info));
+    snapshot[snapshot_size - 1u] = saved;
+    assert(!astra_event_snapshot_probe(snapshot_read, snapshot,
+                                       snapshot_size - 1u, &info));
+}
+
 /* A budget that cannot give every ring a record is refused, not rounded. */
 static void test_a_budget_too_small_is_refused(void)
 {
@@ -200,6 +299,7 @@ int main(void)
     test_a_loud_tier_cannot_reach_another();
     test_the_boot_ring_keeps_the_earliest();
     test_loss_is_never_silent();
+    test_snapshot_round_trip_and_refusal();
     test_a_budget_too_small_is_refused();
     puts("astra event store: PASS");
     return 0;

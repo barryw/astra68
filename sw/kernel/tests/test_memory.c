@@ -91,8 +91,11 @@ static void test_initial_map(void)
     assert(kernel_memory_stats(&stats));
     assert(stats.ram_base == 0x02000000u);
     assert(stats.total_frames == 8192u);
-    assert(stats.free_frames == 7692u);
-    assert(stats.high_water_frames == 500u);
+    assert(stats.free_frames ==
+           (ASTRA_USER_IMAGE_MAX_SIZE + ASTRA_KERNEL_USABLE_SIZE +
+            0x000c0000u) / KERNEL_PAGE_SIZE -
+               KERNEL_EMERGENCY_RESERVE_FRAMES);
+    assert(stats.high_water_frames == stats.total_frames - stats.free_frames);
     assert(stats.owner_slots_used == 0u);
     assert(stats.owner_release_operations == 0u);
     assert(stats.owner_release_frame_visits == 0u);
@@ -117,6 +120,27 @@ static void test_initial_map(void)
     assert(frame.state == KERNEL_FRAME_EMERGENCY_RESERVED);
     assert(kernel_memory_frame_info(0x03fff000u, &frame));
     assert(frame.state == KERNEL_FRAME_DEVICE);
+}
+
+static void test_arty_guest_map(void)
+{
+    AstraBootInfo info;
+    KernelFrameInfo frame;
+    KernelMemoryStats stats;
+
+    make_valid_info(&info);
+    info.ram_size = ASTRA_RAM_SIZE_ARTY_GUEST;
+    add_range(&info, 0x04000000u, 0x06000000u,
+              ASTRA_MEMORY_RANGE_USABLE,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
+                  ASTRA_MEMORY_CACHEABLE);
+    astra_boot_info_finalize(&info);
+
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&stats));
+    assert(stats.total_frames == KERNEL_MAX_FRAMES);
+    assert(kernel_memory_frame_info(0x09fff000u, &frame));
+    assert(frame.state == KERNEL_FRAME_EMERGENCY_RESERVED);
 }
 
 static void test_rejects_unclassified_and_unaligned_ram(void)
@@ -358,7 +382,7 @@ static void test_scattered_page_allocation_is_atomic(void)
         impossible[index] = UINT32_MAX;
     assert(kernel_memory_stats(&before_failure));
     assert(kernel_memory_alloc_pages_zeroed(
-               KERNEL_MAX_FRAMES, KERNEL_FRAME_SHARED, 43u,
+               before_failure.total_frames, KERNEL_FRAME_SHARED, 43u,
                impossible) == KERNEL_MEMORY_OUT_OF_MEMORY);
     assert(kernel_memory_stats(&after_failure));
     assert(after_failure.free_frames == before_failure.free_frames);
@@ -654,6 +678,7 @@ static void test_retained_log_is_allocation_free_under_pressure(void)
 int main(void)
 {
     test_initial_map();
+    test_arty_guest_map();
     test_rejects_unclassified_and_unaligned_ram();
     test_allocation_references_and_pins();
     test_owner_teardown_is_atomic_while_dma_is_pinned();

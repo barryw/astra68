@@ -8,6 +8,7 @@
 #include <astra/event_catalog.h>
 #include <astra/event_emit.h>
 #include <astra/runtime.h>
+#include <astra/status.h>
 #include <astra/syscall.h>
 
 static uint32_t mock_number;
@@ -49,7 +50,10 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         assert(argument4 == 0u);
     }
     result->status = mock_status;
-    result->value0 = ASTRA_SYSCALL_ABI_VERSION;
+    result->value0 = number == ASTRA_SYSCALL_ACTIVITY ?
+        (argument0 == ASTRA_ACTIVITY_NONE ? 0u :
+         (argument0 == 0u ? 0x1234u : argument0)) :
+        ASTRA_SYSCALL_ABI_VERSION;
     result->value1 = 0x11111111u;
     result->value2 = 0x22222222u;
 }
@@ -244,11 +248,18 @@ test_syscall_wrappers(void)
     assert(astra_close(0x12345678u) == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_CLOSE);
     assert(mock_argument0 == 0x12345678u);
+    assert(astra_irq_mask(0x87654321u) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_IRQ_MASK);
+    assert(mock_argument0 == 0x87654321u);
     assert(astra_query_abi(&abi, &process, &thread) == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_QUERY_ABI);
     assert(abi == ASTRA_SYSCALL_ABI_VERSION);
     assert(process == 0x11111111u);
     assert(thread == 0x22222222u);
+    assert(astra_activity_begin() == 0x1234u);
+    assert(mock_argument0 == 0u);
+    assert(astra_activity_adopt(0u) == 0u);
+    assert(mock_argument0 == ASTRA_ACTIVITY_NONE);
 }
 
 /*
@@ -437,7 +448,8 @@ static void test_event_macro(void)
     uint32_t calls;
 
     for (uint32_t index = 0u; index < ASTRA_EVENT_SUBSYSTEM_MAX; ++index)
-        astra_event_level_set(index, ASTRA_EVENT_LEVEL_INFO);
+        assert(astra_event_level_set(index, ASTRA_EVENT_LEVEL_INFO) ==
+               ASTRA_STATUS_OK);
 
     /* The message id is the descriptor's address, not a number anyone typed. */
     mock_status = ASTRA_SYSCALL_OK;
@@ -491,7 +503,8 @@ static void test_event_macro(void)
     assert(mock_calls == calls);
 
     /* Raising the level opens it, without rebuilding anything. */
-    astra_event_level_set(ASTRA_EVENT_SUBSYSTEM_VFS, ASTRA_EVENT_LEVEL_DEBUG);
+    assert(astra_event_level_set(ASTRA_EVENT_SUBSYSTEM_VFS,
+                                 ASTRA_EVENT_LEVEL_DEBUG) == ASTRA_STATUS_OK);
     ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_VFS, ASTRA_EVENT_LEVEL_DEBUG,
                  "emitted now %u", 1u);
     assert(mock_calls == calls + 1u);
@@ -503,13 +516,30 @@ static void test_event_macro(void)
     assert(mock_calls == calls);
 
     /* A level nobody has is refused rather than stored. */
-    astra_event_level_set(ASTRA_EVENT_SUBSYSTEM_VFS,
-                          ASTRA_EVENT_LEVEL_ERROR + 1u);
+    assert(astra_event_level_set(ASTRA_EVENT_SUBSYSTEM_VFS,
+                                 ASTRA_EVENT_LEVEL_ERROR + 1u) ==
+           ASTRA_STATUS_INVALID);
     assert(astra_event_levels[ASTRA_EVENT_SUBSYSTEM_VFS] ==
            ASTRA_EVENT_LEVEL_DEBUG);
-    astra_event_level_set(ASTRA_EVENT_SUBSYSTEM_MAX, ASTRA_EVENT_LEVEL_ERROR);
+    assert(astra_event_level_set(ASTRA_EVENT_SUBSYSTEM_MAX,
+                                 ASTRA_EVENT_LEVEL_ERROR) ==
+           ASTRA_STATUS_INVALID);
 
-    astra_event_level_set(ASTRA_EVENT_SUBSYSTEM_VFS, ASTRA_EVENT_LEVEL_INFO);
+    assert(astra_event_level_set(ASTRA_EVENT_SUBSYSTEM_VFS,
+                                 ASTRA_EVENT_LEVEL_INFO) == ASTRA_STATUS_OK);
+
+    /* Malformed control requests are refused before a port is touched. */
+    calls = mock_calls;
+    assert(astra_event_control_set(0u, ASTRA_EVENT_SUBSYSTEM_VFS,
+                                   ASTRA_EVENT_LEVEL_INFO) ==
+           ASTRA_STATUS_INVALID);
+    assert(astra_event_control_set(1u, ASTRA_EVENT_SUBSYSTEM_MAX,
+                                   ASTRA_EVENT_LEVEL_INFO) ==
+           ASTRA_STATUS_INVALID);
+    assert(astra_event_control_set(1u, ASTRA_EVENT_SUBSYSTEM_VFS,
+                                   ASTRA_EVENT_LEVEL_ERROR + 1u) ==
+           ASTRA_STATUS_INVALID);
+    assert(mock_calls == calls);
 }
 
 /*

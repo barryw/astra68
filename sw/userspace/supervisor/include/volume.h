@@ -35,6 +35,19 @@ uint32_t supervisor_verify_volume(AstraBlockDevice *block,
  */
 int supervisor_volume_is_mounted(void);
 
+/* Reads one bootstrap file while the supervisor temporarily owns the mount. */
+uint32_t supervisor_volume_read(const char *path, void *buffer,
+                                uint32_t capacity, uint32_t *length);
+
+/* Releases the temporary bootstrap mount before the storage service starts. */
+uint32_t supervisor_volume_unmount(void);
+
+/* Releases bootstrap DMA after the temporary mount is gone. */
+void supervisor_bootstrap_block_release(void);
+
+/* Drops the supervisor's block authority after storage has published. */
+void supervisor_bootstrap_block_close(void);
+
 /*
  * The last status the device gave this volume's block port, as an
  * AstraBlockStatus.

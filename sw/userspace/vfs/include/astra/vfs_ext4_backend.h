@@ -30,6 +30,10 @@ typedef struct AstraVfsExt4File {
 typedef struct AstraVfsExt4Backend {
     char mount_point[ASTRA_VFS_EXT4_MOUNT_MAX];
     AstraVfsExt4File open_files[ASTRA_VFS_EXT4_FILE_MAX];
+    ext4_dir scan;
+    char scan_path[ASTRA_VFS_EXT4_PATH_MAX];
+    uint64_t scan_next;
+    int scan_open;
 } AstraVfsExt4Backend;
 
 /* Returns 0 when the mount point does not fit. The volume must already be

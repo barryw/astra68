@@ -57,7 +57,7 @@ done
 [ -f "$USER_ELF" ] || echo "warning: no user symbols at $USER_ELF" >&2
 [ -f "$BOOT_ELF" ] || echo "warning: no ROM symbols at $BOOT_ELF" >&2
 
-set -- "$QEMU" -M astra68 -m 32M -bios "$ROM" -display none -monitor none \
+set -- "$QEMU" -M astra68 -m "${ASTRA_MEMORY:-128M}" -bios "$ROM" -display none -monitor none \
     -serial mon:stdio -no-reboot -S -gdb "tcp::$PORT"
 [ -n "$IMAGE" ] && set -- "$@" -drive "if=none,format=raw,file=$IMAGE"
 

@@ -4065,13 +4065,14 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         thread->context.data[3] = thread->self_handle;
         break;
     /*
-     * The character plane of the display device. Both calls are gated by a
+     * The character plane of the display device. These calls are gated by a
      * lease on that device with the rights the operation needs, the same way
      * block and input are: the screen has one owner, and saying which process
      * that is belongs in a capability rather than in this switch.
      */
     case ASTRA_SYSCALL_CONSOLE_INFO:
-    case ASTRA_SYSCALL_CONSOLE_WRITE: {
+    case ASTRA_SYSCALL_CONSOLE_WRITE:
+    case ASTRA_SYSCALL_CONSOLE_CURSOR: {
         KernelDeviceLease *lease = NULL;
         KernelDeviceSnapshot snapshot;
         KernelHandleStatus handle_status;
@@ -4122,6 +4123,21 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             thread->context.data[2] = rows;
             break;
         }
+        if (syscall == ASTRA_SYSCALL_CONSOLE_CURSOR) {
+            uint32_t row = thread->context.data[2];
+            uint32_t column = thread->context.data[3];
+            uint32_t visible = thread->context.data[4];
+
+            /* A column at the edge is the terminal's pending wrap state. */
+            if (row >= rows || column > columns || visible > 1u) {
+                result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+                break;
+            }
+            if (!kernel_platform_post_text_cursor(row, column,
+                                                   visible != 0u))
+                result = ASTRA_SYSCALL_IO_ERROR;
+            break;
+        }
         {
             uint8_t cells[ASTRA_CONSOLE_WRITE_MAX];
             uint32_t cell = thread->context.data[2];
@@ -4168,9 +4184,11 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
          */
         uint32_t requested = thread->context.data[1];
 
-        if (requested == 0u) {
+        if (requested == ASTRA_ACTIVITY_NONE) {
+            current_thread->activity = 0u;
+        } else if (requested == 0u) {
             ++next_activity;
-            if (next_activity == 0u)
+            if (next_activity == 0u || next_activity == ASTRA_ACTIVITY_NONE)
                 next_activity = 1u;
             current_thread->activity = next_activity;
         } else {

@@ -7,6 +7,8 @@
 #include "vega.h"
 #include "vesta.h"
 
+#include <astra/display.h>
+
 #include <stddef.h>
 
 #define VESTA_ADDRESS(member) \
@@ -295,6 +297,33 @@ bool kernel_platform_post_text_write(uint32_t cell, uint8_t value)
     if (cell >= VEGA_POST_COLS * VEGA_POST_ROWS)
         return false;
     kernel_mmio_write8(VEGA_POST_TEXT_BASE + cell, value);
+    return true;
+}
+
+bool kernel_platform_post_text_cursor(uint32_t row, uint32_t column,
+                                      bool visible)
+{
+    static uint8_t sequence;
+    uint8_t next = (uint8_t)(sequence + 2u);
+    uint32_t base = VEGA_POST_TEXT_BASE + ASTRA_TEXT_CURSOR_OFFSET;
+
+    kernel_mmio_write8(VEGA_POST_TEXT_BASE +
+                           ASTRA_TEXT_CURSOR_SEQUENCE_OFFSET,
+                       (uint8_t)(next - 1u));
+    kernel_mmio_write8(base + 0u, ASTRA_TEXT_CURSOR_MAGIC_0);
+    kernel_mmio_write8(base + 1u, ASTRA_TEXT_CURSOR_MAGIC_1);
+    kernel_mmio_write8(base + 2u, ASTRA_TEXT_CURSOR_MAGIC_2);
+    kernel_mmio_write8(base + 3u, ASTRA_TEXT_CURSOR_MAGIC_3);
+    kernel_mmio_write8(VEGA_POST_TEXT_BASE + ASTRA_TEXT_CURSOR_ROW_OFFSET,
+                       (uint8_t)row);
+    kernel_mmio_write8(VEGA_POST_TEXT_BASE + ASTRA_TEXT_CURSOR_COLUMN_OFFSET,
+                       (uint8_t)column);
+    kernel_mmio_write8(VEGA_POST_TEXT_BASE + ASTRA_TEXT_CURSOR_FLAGS_OFFSET,
+                       visible ? ASTRA_TEXT_CURSOR_VISIBLE : 0u);
+    kernel_mmio_write8(VEGA_POST_TEXT_BASE +
+                           ASTRA_TEXT_CURSOR_SEQUENCE_OFFSET,
+                       next);
+    sequence = next;
     return true;
 }
 

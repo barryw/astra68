@@ -5,11 +5,10 @@
 #include <astra/vfs_client.h>
 
 /*
- * Stands the storage service up over an already-mounted volume, opens the
- * supervisor's own session, and binds the standard assigns over it. Returns 0
- * when the backend, the service or the protocol handshake refuses.
+ * Connects the protected storage service's published port, opens the
+ * supervisor's session, and binds the standard assigns over it.
  */
-int supervisor_vfs_start(const char *mount_point);
+int supervisor_vfs_start(uint32_t port_handle);
 
 /* NULL until supervisor_vfs_start() has succeeded. */
 AstraVfsClient *supervisor_vfs_client(void);
@@ -39,13 +38,6 @@ AstraVfsClient *supervisor_vfs_client_for(const AstraAssign *assign);
 
 /* The send handle a launch grants for SYS:, WORK: and COMMANDS:. */
 uint32_t supervisor_vfs_port(void);
-
-/*
- * Answers whatever asked, bounded per call. Run from the loop that already
- * pumps everything else: a service that blocked in its own receive would stop
- * the child it is serving.
- */
-void supervisor_vfs_pump(void);
 
 /*
  * Stamps what this thread is doing onto every client, so a request carries the

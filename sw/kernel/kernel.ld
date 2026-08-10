@@ -11,6 +11,7 @@ PHDRS {
 MEMORY {
   KERNEL (rwx) : ORIGIN = 0x02044000, LENGTH = 512K
   TRACE  (rw)  : ORIGIN = 0x020c4000, LENGTH = 64K
+  META   (rw)  : ORIGIN = 0x020d4000, LENGTH = 512K
 }
 
 SECTIONS {
@@ -43,12 +44,6 @@ SECTIONS {
     *(COMMON)
     . = ALIGN(16);
     _bss_end = .;
-  } > KERNEL :data
-
-  .noinit (NOLOAD) : {
-    . = ALIGN(16);
-    *(.noinit .noinit.*)
-    . = ALIGN(16);
   } > KERNEL :data
 
   .kernel_stack (NOLOAD) : {
@@ -88,7 +83,14 @@ SECTIONS {
     _kernel_trace_end = .;
   } > TRACE :data
 
-  _kernel_memory_end = _kernel_trace_end;
+  .noinit ORIGIN(META) (NOLOAD) : {
+    . = ALIGN(16);
+    *(.noinit .noinit.*)
+    . = ALIGN(16);
+    _kernel_metadata_end = .;
+  } > META :data
+
+  _kernel_memory_end = _kernel_metadata_end;
 
   /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) }
 }
@@ -112,3 +114,5 @@ ASSERT(ORIGIN(TRACE) == ORIGIN(KERNEL) + LENGTH(KERNEL),
        "trace must directly follow the bootstrap region")
 ASSERT(_kernel_trace_end - _kernel_trace_start == LENGTH(TRACE),
        "retained trace must occupy exactly 64 KiB")
+ASSERT(_kernel_metadata_end <= ORIGIN(META) + LENGTH(META),
+       "kernel frame metadata exceeds its reserved region")

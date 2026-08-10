@@ -1,6 +1,6 @@
 # Axiom kernel and Astra service ABI
 
-Status: provisional ABI contract, revision 0.6 (2026-08-04)
+Status: provisional ABI contract, revision 0.8 (2026-08-08)
 
 The ABI is big-endian, 32-bit, naturally aligned, and independent of kernel C
 layouts. Only the user/kernel ABI and versioned service protocols are stable.
@@ -87,7 +87,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 
 | Number | Name | State | Contract |
 |---:|---|---|---|
-| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010008`, `D2=process handle`, `D3=calling-thread handle` |
+| 0 | `QUERY_ABI` | CURRENT | `D1=0x0001000e`, `D2=process handle`, `D3=calling-thread handle` |
 | 1 | `PROGRESS` | K1 TEST ONLY | monotonic test progress, not a product ABI |
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `PROCESS_EXIT` (`EXIT` compatibility alias) | CURRENT | terminates the calling process and all of its threads |
@@ -126,9 +126,15 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 41 | `BLOCK_COLLECT` | CURRENT CANDIDATE | `D1=block lease with TRANSFER right`, `D2=aligned AstraBlockCompletion`, `D3=request handle`; `WOULD_BLOCK` until the device answers |
 | 42 | `CONSOLE_INFO` | CURRENT CANDIDATE | `D1=display lease with QUERY right`; returns character-plane `D1=columns`, `D2=rows` |
 | 43 | `CONSOLE_WRITE` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=first cell index`, `D3=cell bytes`, `D4=count` (at most `ASTRA_CONSOLE_WRITE_MAX`); writes one run of character cells |
+| 44 | `LOG_WRITE` | CURRENT CANDIDATE | emits one bounded typed event into the kernel ring |
+| 45 | `ACTIVITY` | CURRENT CANDIDATE | `D1=0` allocates a new activity, a nonzero value adopts it, and `D1=0xffffffff` clears it; returns the current activity in `D1` |
+| 46 | `TRACE_READ` | CURRENT CANDIDATE | drains the caller-authorized kernel event stream with explicit cursor and loss accounting |
+| 47 | `DIAGNOSTIC_CONSOLE_OPEN` | CURRENT CANDIDATE | marks the userspace diagnostic reader active so the boot console stops narrating the same stream |
+| 48 | `PROCESS_CREATE` | CURRENT CANDIDATE | transactionally loads a protected ELF from caller bytes, copies bounded grants and arguments, and returns a waitable process handle plus process ID |
+| 50 | `CONSOLE_CURSOR` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=row`, `D3=column`, `D4=visible`; publishes the terminal cursor, accepting `column=columns` as pending wrap |
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
-not panic. `QUERY_ABI` reports revision `0x00010008`; a later revision may add
+not panic. `QUERY_ABI` reports revision `0x0001000e`; a later revision may add
 feature bits before additional calls freeze.
 
 `AstraDeviceInfo` is 24 bytes and naturally four-byte aligned. It contains
@@ -352,6 +358,37 @@ without reserving or dequeuing. After sufficient capacities are supplied it
 reserves hidden destination slots, copies both outputs, and publishes those
 slots together with FIFO removal. A copy fault cancels the hidden reservation,
 leaves the message queued, and exposes no destination handle.
+
+`sw/include/astra/service.h` defines the common protected-service bootstrap
+protocol `SRVC`, version 1. A service receives the `SERVICE_READY` capability,
+sends one `AstraServiceReady`, and on success attaches the send endpoint
+declared by its manifest `serves` clause. Sending the endpoint moves it to the
+loader. Failure carries no handle and returns the shared or program-specific
+status that kept the service from becoming ready.
+
+`sw/include/astra/event_control.h` defines protocol `EVCT`, version 1. It is a
+control capability separate from the read-only `EVENTS:` namespace. A 32-byte
+`SET` request carries one subsystem (0 through 7), one runtime threshold
+(`debug` through `error`, 0 through 4), and a one-use reply endpoint. Its
+28-byte reply returns a shared status. The events service forwards the request
+to the process that owns the runtime threshold and returns `OK` only after that
+runtime applies it. The change lasts for the current boot; no VFS write or
+kernel ABI change is involved.
+
+The events service attaches two endpoints to its successful `SRVC` ready
+message: `EVENTS:` first and `EVENT_CONTROL` second. Other current services
+attach only their manifest-declared endpoint.
+
+`sw/include/astra/vfs_service.h` defines storage protocol `STOR`, version 3,
+with version 2 as the rolling-update floor. Version 3 transfers one reply send
+endpoint during `HELLO` and reuses the client's receive endpoint for the whole
+session; `BYE` releases the service-side endpoint and any bound area. A client
+may attach one area with `BIND_AREA`, then use `READ_AREA` for at most 16,384
+bytes per request. The service maps the area only for that session and returns
+the moved byte count in the ordinary reply. Version 2 keeps its per-request
+reply endpoints and inline reads. Directory offsets are backend cursors in
+both supported versions, so a scan resumes rather than reopening at entry
+zero.
 
 `AREA_CREATE` accepts 1 through 65,536 bytes, rounds upward to complete 4 KiB
 pages, commits and zeroes every frame before publication, and charges the

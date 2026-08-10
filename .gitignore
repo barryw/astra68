@@ -9,6 +9,8 @@
 *.elf
 *.bin
 *.d
+!fpga/arty/linux/rootfs-overlay/etc/init.d/
+!fpga/arty/linux/rootfs-overlay/etc/init.d/astra-firstboot
 *.dSYM/
 *.o
 *.map

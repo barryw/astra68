@@ -16,7 +16,8 @@ explicitly says otherwise.
 | `0x00000000` | `0x00001FFF` | 8 KiB | Stage 0 reset alias | RO | Active while the reset overlay is selected |
 | `0x00000000` | `0x0003FFFF` | 256 KiB | System ROM low alias | RO | Active after the stage-0 handoff |
 | `0x01FF8000` | `0x01FFFFFF` | 32 KiB | Bootstrap scratch BRAM | RWX | Implemented |
-| `0x02000000` | `0x03FFFFFF` | 32 MiB | SDRAM CPU aperture | RWX | Implemented |
+| `0x02000000` | `0x03FFFFFF` | 32 MiB | SDRAM CPU aperture, ULX3S profile | RWX | Implemented |
+| `0x02000000` | `0x09FFFFFF` | 128 MiB | SDRAM CPU aperture, Arty-hosted profile | RWX | Implemented in QEMU |
 | `0xFFE00000` | `0xFFE3FFFF` | 256 KiB | System ROM aperture | RX | Alias of reserved SDRAM backing storage |
 | `0xFFF00000` | `0xFFF0FFFF` | 64 KiB | Vesta system and I/O | MMIO | Allocated |
 | `0xFFF10000` | `0xFFF1FFFF` | 64 KiB | Astraea DMA/blitter/copper | MMIO | Allocated |
@@ -61,6 +62,14 @@ is capped at `ASTRA_USER_IMAGE_MAX_SIZE` = 48 KiB by the RAM hole between
 the kernel. The ROM budget is therefore not the reason to load the filesystem
 from a file; the user image reservation is.
 
+The current Arty/QEMU software image is close to this same fixed ceiling. The
+2026-08-08 event-durability checkpoint is 249,000 of 262,144 bytes, leaving
+13,144 bytes. Its supervisor image is 106,840 bytes on disk (95,903 text, 12
+data, 377,382 BSS) and compresses to 65,906 bytes. The embedded copy is made
+with `objcopy --strip-all`; the separate linked ELF retains symbols for
+debugging. Keeping symbol and string tables in the ROM copy previously spent
+about 20 KiB of raw payload on bytes the machine never loads.
+
 Measured at ROM v0.3 with boot ABI 0.3 (`astra68.rom` reports this on every
 build):
 
@@ -92,26 +101,34 @@ kernel.
 |---|---|---:|---|---|
 | `0x01FF8000` | `0x01FFFFFF` | 32 KiB | Firmware scratch, `BootInfo`, stack | Firmware until handoff data is copied |
 | `0x02000000` | `0x02003FFF` | 16 KiB | Early ring log | Kernel diagnostics |
-| `0x02004000` | `0x0200FFFF` | 48 KiB | Initial user image, then usable RAM | Firmware for the pages the image fills; allocator for the rest |
-| `0x02010000` | `0x0208FFFF` | 512 KiB | Kernel bootstrap image, BSS, stacks | Kernel |
-| `0x02090000` | `0x0209FFFF` | 64 KiB | Retained kernel trace | Kernel diagnostics |
-| `0x020A0000` | `0x03DFFFFF` | 29.375 MiB | Usable RAM | Physical-page allocator |
+| `0x02004000` | `0x02043FFF` | 256 KiB | Initial user image, then usable RAM | Firmware for the pages the image fills; allocator for the rest |
+| `0x02044000` | `0x020C3FFF` | 512 KiB | Kernel image, BSS, and guarded stacks | Kernel |
+| `0x020C4000` | `0x020D3FFF` | 64 KiB | Retained kernel trace | Kernel diagnostics |
+| `0x020D4000` | `0x02153FFF` | 512 KiB | Frame and ownership metadata for up to 128 MiB | Kernel |
+| `0x02154000` | `0x03DFFFFF` | 28.672 MiB | Usable RAM | Physical-page allocator |
 | `0x03E00000` | `0x03E3FFFF` | 256 KiB | System-ROM backing | Firmware/ROM mapping |
 | `0x03E40000` | `0x03FFFFFF` | 1.75 MiB | Usable RAM | Physical-page allocator |
+| `0x04000000` | `0x09FFFFFF` | 96 MiB | Hosted-profile extension | Physical-page allocator on the 128 MiB profile only |
 
 `AstraBootInfo` itself begins at `0x01FF8000` and is 264 bytes as of boot ABI
 0.3. The linker reserves the first 1 KiB of bootstrap BRAM for the handoff
 structure and ABI growth. The canonical definitions are in
 `sw/include/astra/boot.h`.
 
-The 48 KiB below the kernel is split at boot. Firmware copies the one initial
+The 256 KiB below the kernel is split at boot. Firmware copies the one initial
 user image to `0x02004000`, publishes `user_image_base`/`user_image_size` in
 `AstraBootInfo`, and declares only the page-rounded span it fills as firmware
-memory; the remainder of the 48 KiB is handed to the physical allocator as
+memory; the remainder of the 256 KiB is handed to the physical allocator as
 usual. Firmware memory is the correct class because the kernel reads those
 bytes long after it has taken ownership of the map, and the allocator must
 never hand them out. The image is capped at `ASTRA_USER_IMAGE_MAX_SIZE`
-(48 KiB) and validation rejects any description that escapes a firmware range.
+(256 KiB) and validation rejects any description that escapes a firmware range.
+
+The kernel is linked once for both profiles. Its large per-frame tables live
+after the fixed trace ring, so crash tooling keeps the same address while the
+32 MiB physical profile pays only the static reservation, not a second kernel
+image. Firmware accepts only the exact 32 MiB ULX3S and 128 MiB Arty-hosted
+sizes; arbitrary intermediate layouts are rejected.
 
 Addresses not listed above are unallocated. In particular, the current SoC
 does not yet expose general SDRAM at `0x00040000..0x01FF7FFF`; software must use

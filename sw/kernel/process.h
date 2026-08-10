@@ -33,7 +33,7 @@
 #define ASTRA_KERNEL_DEBUG_SURFACE 1
 #endif
 
-#define KERNEL_PROCESS_MAX 4u
+#define KERNEL_PROCESS_MAX 5u
 #define KERNEL_PROCESS_CODE_BASE 0x00100000u
 #define KERNEL_PROCESS_STACK_BASE KERNEL_THREAD_STACK_BASE
 /* The top of the first slot's reservation: where its stack pointer starts. */
@@ -46,8 +46,8 @@
  * The ceiling on text, data and BSS a single process image may map. 64 pages
  * (256 KiB) was too small for the first service that holds a mounted volume:
  * the filesystem's bounded arena alone is 216 KiB of BSS, and the image needed
- * 78 pages. KERNEL_PROCESS_MAX is 4, so this ceiling bounds image memory at
- * 2 MiB of the 32 MiB machine.
+ * 78 pages. KERNEL_PROCESS_MAX is 5, so this ceiling bounds image memory at
+ * 2.5 MiB of the 32 MiB machine.
  *
  * It lives here rather than in process.c because the loader's test measures a
  * real executable against it. Held in two places it went stale, and the test

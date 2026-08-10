@@ -1736,3 +1736,30 @@ This closes the requested command transport, complete blitter, geometry,
 AFNT, virtual-sprite, and copper graphics implementation gates. Further PL
 graphics work is optimization or a separately specified feature, not an open
 item in this release objective.
+
+### Linux graphics-arena containment checkpoint (2026-08-09)
+
+The retained RTL, routed bitstream, clocks, timing results, resources, and
+failed-cone disposition above are unchanged. Hardware testing exposed a host
+device-tree defect instead: Linux still owned RAM through `0x1fffffff` while
+the renderer wrote the graphics arena beginning at `0x18000000`. The `no-map`
+node alone did not remove that range from System RAM on the deployed kernel.
+
+Beast rebuilt the FIT from source commit
+`381d15306ff6b0077d8042fe975f426b7cf4f173` plus working-tree
+`build_device_tree.sh`
+`f187779708ad0f561c4208dedd3ccfa7e6789d875e06633644f3a03eea0246ee`
+using the pinned `fdtput`, `dtc`, `dumpimage`, and `mkimage` tools. The device
+tree is
+`422c7d48554512f313f19d2e750d19ed2a426b46c53befcbe3e3e4c80ed9cfc4`;
+the FIT is
+`c9a77be0f5085ce048860d12bd88ce7a246b813cf76c20339e8c18b7f9358944`
+with `SOURCE_DATE_EPOCH=1786326984`. The active `BOOT.BIN` remains
+`9637e1035acb9d1bd6d2bd0eec2e3cf9ca5c13023560af8d2b4f27a546444504`.
+
+After atomic FIT deployment and reboot, the Arty reports Normal RAM only
+through `0x17ffffff`, reports `0x18000000..0x1fffffff` as the separate `no-map`
+arena, reaches the terminal `WORK:>` prompt with QEMU and the renderer resident,
+and leaves all three ARM QEMU libraries hash-stable during rendering. This is
+a retained hardware pass with no synthesis, placement, route, timing, or
+capacity change; there is therefore no new timing cone or resource table.

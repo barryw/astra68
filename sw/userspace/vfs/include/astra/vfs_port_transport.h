@@ -17,20 +17,15 @@
 
 #include <stdint.h>
 
+#include <astra/vfs_client.h>
 #include <astra/vfs_service.h>
 #include <astra/vfs_service_core.h>
 
 /*
- * The client half. `context` is a pointer to the send handle the launch
- * granted -- a `uint32_t *`, not a type of its own, because a handle is the
- * whole of what this end knows.
- *
- * A reply port per request. Attaching a handle to a port message *moves* it,
- * so a cached reply handle names nothing after its first use; two syscalls per
- * request is what that costs, against a round trip that already crosses a
- * process. The reply channel being a capability handed over per call is also
- * what lets the service answer exactly the caller that asked and hold no
- * authority afterwards.
+ * The client half. Use astra_vfs_port_connect(): version 3 transfers one reply
+ * send handle during HELLO and reuses the receive handle for the session.
+ * Version 2 remains the per-request fallback for a rolling update against an
+ * older service.
  *
  * The return value is the transport's verdict, never the filesystem's: a peer
  * that has gone is ASTRA_VFS_ERR_PEER, and a request that was answered is
@@ -40,6 +35,10 @@
 uint32_t astra_vfs_port_transport(void *context, uint32_t operation,
                                   const AstraVfsRequest *request,
                                   AstraVfsReply *reply);
+uint32_t astra_vfs_port_connect(AstraVfsClient *client, uint32_t service);
+uint32_t astra_vfs_port_read_bulk(AstraVfsClient *client, AstraVfsFile file,
+                                  uint64_t offset, void *buffer,
+                                  uint32_t length, uint32_t *moved);
 
 /*
  * The service half: a receive-dispatch-reply pump, run from whichever loop
@@ -60,6 +59,11 @@ typedef struct AstraVfsPortService {
      * calling -- which cost an afternoon telling those two apart.
      */
     uint32_t stalled;
+    uint32_t reply_sessions[ASTRA_VFS_SESSION_MAX];
+    uint32_t reply_handles[ASTRA_VFS_SESSION_MAX];
+    uint32_t area_handles[ASTRA_VFS_SESSION_MAX];
+    uint8_t *area_addresses[ASTRA_VFS_SESSION_MAX];
+    uint32_t area_sizes[ASTRA_VFS_SESSION_MAX];
 } AstraVfsPortService;
 
 int astra_vfs_port_service_init(AstraVfsPortService *host, uint32_t receive,

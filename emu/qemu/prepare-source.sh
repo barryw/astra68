@@ -10,6 +10,7 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 REPOSITORY=$(CDPATH='' cd -- "$SCRIPT_DIR/../.." && pwd)
 OVERLAY="$SCRIPT_DIR/qemu-9.2"
 PUBLIC_INPUT="$REPOSITORY/sw/include/astra/input.h"
+PUBLIC_SYSCALL="$REPOSITORY/sw/include/astra/syscall.h"
 
 sha256_file()
 {
@@ -38,6 +39,8 @@ overlay_identity()
         done
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_INPUT")" \
             "sw/include/astra/input.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_SYSCALL")" \
+            "sw/include/astra/syscall.h"
     ) | sha256_stream
 }
 
@@ -107,6 +110,8 @@ cp "$OVERLAY/target/m68k/astra_pmmu030.c" "$STAGED_SOURCE/target/m68k/astra_pmmu
 cp "$OVERLAY/target/m68k/pmmu030.c" "$STAGED_SOURCE/target/m68k/pmmu030.c"
 cp "$OVERLAY/target/m68k/pmmu030.h" "$STAGED_SOURCE/target/m68k/pmmu030.h"
 cp "$PUBLIC_INPUT" "$STAGED_SOURCE/include/hw/m68k/astra_input.h"
+mkdir -p "$STAGED_SOURCE/include/astra"
+cp "$PUBLIC_SYSCALL" "$STAGED_SOURCE/include/astra/syscall.h"
 patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/meson.build.patch" >&2
 patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/target-m68k-pmmu030.patch" >&2
 patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/target-m68k-68030-frames.patch" >&2

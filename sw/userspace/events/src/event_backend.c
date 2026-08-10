@@ -154,7 +154,7 @@ merged_next(const AstraEventStore *store, uint32_t *index)
 }
 
 static int
-matches(const AstraEventsBackend *backend, const AstraEventsNode *node,
+matches(const AstraEventCatalog *catalog, const AstraEventsNode *node,
         const AstraEventStored *record)
 {
     const AstraEventDescriptor *descriptor;
@@ -169,8 +169,7 @@ matches(const AstraEventsBackend *backend, const AstraEventsNode *node,
     if (node->subsystem >= ASTRA_EVENT_SUBSYSTEM_MAX) {
         return 1;
     }
-    descriptor = astra_event_catalog_lookup(backend->catalog,
-                                            record->event.message);
+    descriptor = astra_event_catalog_lookup(catalog, record->event.message);
     return descriptor != NULL && descriptor->subsystem == node->subsystem;
 }
 
@@ -216,7 +215,7 @@ put_number(char *out, uint32_t capacity, uint32_t at, uint32_t value,
  * things to learn for no reason.
  */
 static uint32_t
-render_line(const AstraEventsBackend *backend, const AstraEventStored *record,
+render_line(const AstraEventCatalog *catalog, const AstraEventStored *record,
             char *out, uint32_t capacity)
 {
     const AstraEventDescriptor *descriptor;
@@ -239,15 +238,14 @@ render_line(const AstraEventsBackend *backend, const AstraEventStored *record,
     }
     at = put(out, capacity, at, "  ");
     if (at < capacity) {
-        at += astra_event_catalog_render(backend->catalog,
+        at += astra_event_catalog_render(catalog,
                                          record->event.message,
                                          record->event.flags,
                                          record->event.payload,
                                          record->event.payload_length,
                                          &out[at], capacity - at);
     }
-    descriptor = astra_event_catalog_lookup(backend->catalog,
-                                            record->event.message);
+    descriptor = astra_event_catalog_lookup(catalog, record->event.message);
     if (descriptor != NULL) {
         at = put(out, capacity, at, " (");
         at = put(out, capacity, at, descriptor->file);
@@ -311,7 +309,8 @@ resolve_token(AstraEventsBackend *backend, uintptr_t token)
  * `stat` starts disagreeing with an `open`.
  */
 static uint32_t
-describe(AstraEventsNode *node, const char *path)
+describe(const AstraEventsBackend *backend, AstraEventsNode *node,
+         const char *path)
 {
     const char *rest;
     uint32_t index;
@@ -321,6 +320,7 @@ describe(AstraEventsNode *node, const char *path)
     node->subsystem = ASTRA_EVENT_SUBSYSTEM_MAX;
     node->activity = 0u;
     node->activity_filter = 0u;
+    node->previous_boot = 0u;
 
     if (equal(path, "/") || equal(path, "")) {
         node->kind = KIND_ROOT;
@@ -334,6 +334,14 @@ describe(AstraEventsNode *node, const char *path)
         node->kind = KIND_BOOT_CURRENT;
         return ASTRA_VFS_OK;
     }
+    if (equal(path, "/boot/-1")) {
+        if (backend->previous == NULL) {
+            return ASTRA_VFS_ERR_NOT_FOUND;
+        }
+        node->kind = KIND_BOOT_CURRENT;
+        node->previous_boot = 1u;
+        return ASTRA_VFS_OK;
+    }
     if (equal(path, "/activity")) {
         node->kind = KIND_ACTIVITY_DIR;
         return ASTRA_VFS_OK;
@@ -343,6 +351,10 @@ describe(AstraEventsNode *node, const char *path)
         return ASTRA_VFS_OK;
     }
     rest = after(path, "/boot/current/");
+    if (rest == NULL && backend->previous != NULL) {
+        rest = after(path, "/boot/-1/");
+        node->previous_boot = rest != NULL;
+    }
     if (rest != NULL) {
         for (index = 0u; index < BOOT_LEAF_COUNT; ++index) {
             if (equal(rest, boot_leaf[index].name)) {
@@ -423,7 +435,7 @@ events_open(void *context, const char *path, uint32_t flags, uintptr_t *node,
                   ASTRA_VFS_OPEN_TRUNCATE)) != 0u) {
         return ASTRA_VFS_ERR_ACCESS;
     }
-    status = describe(&described, path);
+    status = describe(backend, &described, path);
     if (status != ASTRA_VFS_OK) {
         return status;
     }
@@ -436,6 +448,7 @@ events_open(void *context, const char *path, uint32_t flags, uintptr_t *node,
     held->subsystem = described.subsystem;
     held->activity = described.activity;
     held->activity_filter = described.activity_filter;
+    held->previous_boot = described.previous_boot;
     /*
      * A leaf has no size until it is read: the text is rendered from records
      * that are still arriving. Reporting zero is the honest answer the handler
@@ -466,6 +479,7 @@ events_read(void *context, uintptr_t token, uint64_t offset, void *buffer,
 {
     AstraEventsBackend *backend = backend_of(context);
     AstraEventsNode *node = resolve_token(backend, token);
+    const AstraEventStore *store;
     uint8_t *out = buffer;
     char line[LINE_MAX];
     uint32_t index[MERGED_TIER_COUNT] = {0u, 0u, 0u};
@@ -480,6 +494,10 @@ events_read(void *context, uintptr_t token, uint64_t offset, void *buffer,
     if (is_directory(node->kind)) {
         return ASTRA_VFS_ERR_INVALID;
     }
+    store = node->previous_boot != 0u ? backend->previous : backend->store;
+    if (store == NULL) {
+        return ASTRA_VFS_ERR_NOT_FOUND;
+    }
     /*
      * Resume from the last line boundary this node reached, when the caller is
      * asking for something at or after it. `cat` reads forwards, and
@@ -492,7 +510,7 @@ events_read(void *context, uintptr_t token, uint64_t offset, void *buffer,
      */
     if (node->memo_offset != 0u && offset >= node->memo_offset) {
         at = node->memo_offset;
-        if (node->kind == KIND_EARLIEST) {
+        if (node->previous_boot != 0u || node->kind == KIND_EARLIEST) {
             boot_index = node->memo_index[0];
         } else {
             index[0] = node->memo_index[0];
@@ -506,22 +524,22 @@ events_read(void *context, uintptr_t token, uint64_t offset, void *buffer,
         uint32_t rendered;
         uint32_t take;
 
-        if (node->kind == KIND_EARLIEST) {
-            record = astra_event_store_at(backend->store,
+        if (node->previous_boot != 0u || node->kind == KIND_EARLIEST) {
+            record = astra_event_store_at(store,
                                           ASTRA_EVENT_TIER_BOOT, boot_index);
             if (record != NULL) {
                 ++boot_index;
             }
         } else {
-            record = merged_next(backend->store, index);
+            record = merged_next(store, index);
         }
         if (record == NULL) {
             break;
         }
-        if (!matches(backend, node, record)) {
+        if (!matches(store->catalog, node, record)) {
             continue;
         }
-        rendered = render_line(backend, record, line, sizeof(line));
+        rendered = render_line(store->catalog, record, line, sizeof(line));
         if (at + rendered <= offset) {
             at += rendered;
             continue;
@@ -548,7 +566,7 @@ events_read(void *context, uintptr_t token, uint64_t offset, void *buffer,
          */
         if (at <= offset + produced) {
             node->memo_offset = (uint32_t)at;
-            if (node->kind == KIND_EARLIEST) {
+            if (node->previous_boot != 0u || node->kind == KIND_EARLIEST) {
                 node->memo_index[0] = boot_index;
             } else {
                 node->memo_index[0] = index[0];
@@ -584,8 +602,7 @@ events_stat(void *context, const char *path, AstraVfsNodeInfo *info)
     AstraEventsNode described;
     uint32_t status;
 
-    (void)context;
-    status = describe(&described, path);
+    status = describe(backend_of(context), &described, path);
     if (status != ASTRA_VFS_OK) {
         return status;
     }
@@ -674,7 +691,7 @@ events_readdir(void *context, const char *path, uint64_t cookie, char *name,
     const char *entry = NULL;
     uint32_t status;
 
-    status = describe(&described, path);
+    status = describe(backend, &described, path);
     if (status != ASTRA_VFS_OK) {
         return status;
     }
@@ -695,13 +712,10 @@ events_readdir(void *context, const char *path, uint64_t cookie, char *name,
         }
         break;
     case KIND_BOOT:
-        /*
-         * Only `current`. The design has -1 and -2 beside it, and they arrive
-         * with the store that survives a reboot; a directory that existed and
-         * was always empty would be a promise the machine cannot keep.
-         */
         if (cookie == 0u) {
             entry = "current";
+        } else if (cookie == 1u && backend->previous != NULL) {
+            entry = "-1";
         }
         break;
     case KIND_BOOT_CURRENT:
@@ -767,6 +781,7 @@ static const AstraVfsBackendOps events_ops = {
 int
 astra_events_backend_init(AstraEventsBackend *backend,
                           const AstraEventStore *store,
+                          const AstraEventStore *previous,
                           const AstraEventCatalog *catalog)
 {
     uint32_t index;
@@ -775,6 +790,7 @@ astra_events_backend_init(AstraEventsBackend *backend,
         return 0;
     }
     backend->store = store;
+    backend->previous = previous;
     backend->catalog = catalog;
     for (index = 0u; index < ASTRA_EVENTS_NODE_MAX; ++index) {
         backend->nodes[index].used = 0u;

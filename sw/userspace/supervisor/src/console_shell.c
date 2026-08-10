@@ -20,11 +20,12 @@
 
 #include <console_shell.h>
 #include <console_stream.h>
-#include <events_host.h>
+#include <loader.h>
 #include <volume.h>
 
 #include <astra/bytes.h>
 #include <astra/display.h>
+#include <astra/event_control.h>
 #include <astra/keymap.h>
 #include <astra/runtime.h>
 #include <astra/shell.h>
@@ -37,6 +38,7 @@
 #include <astra/vfs_assign.h>
 #include <astra/vfs_client.h>
 #include <astra/vfs_path.h>
+#include <astra/vfs_port_transport.h>
 #include <astra/vfs_union.h>
 #include <vfs_host.h>
 
@@ -240,7 +242,7 @@ static uint32_t shell_locate(const char *typed, uint32_t rights, char *wire,
     }
 }
 
-/* The one place the shell reaches storage. NULL when no volume is mounted. */
+/* The one place the shell reaches storage. NULL before the service publishes. */
 static AstraVfsClient *storage(void)
 {
     return supervisor_vfs_client();
@@ -768,7 +770,7 @@ static void command_help(void)
 {
     write_line("builtins: ls [dir], cd [dir], cat FILE, mkdir DIR, assign,");
     write_line("          write FILE TEXT..., rm FILE, pwd, clear, help");
-    write_line("paths are ASSIGN:path -- there is no root. try ls SYS:");
+    write_line("paths are ASSIGN:path -- there is no root. try ls WORK:");
     /*
      * `events` is named here as a file, not a builtin, and that is the whole
      * point of the line. It moved out on the day a program could be launched,
@@ -784,7 +786,8 @@ static void prompt(void)
     astra_terminal_write(&shell.terminal, shell.assign);
     astra_terminal_write(&shell.terminal, ":");
     astra_terminal_write(&shell.terminal, shell.directory);
-    astra_terminal_write(&shell.terminal, "> ");
+    astra_terminal_putc(&shell.terminal, '>');
+    astra_terminal_putc(&shell.terminal, ' ');
 }
 
 static int pump_once(void);
@@ -940,8 +943,8 @@ static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
 /*
  * The grants a launched command is handed: three streams, and a namespace.
  *
- * `ASTRA_LAUNCH_GRANT_MAX` is eight and this uses all seven -- three streams
- * plus WORK, two COMMANDS members and EVENTS -- which is a fact worth stating
+ * `ASTRA_LAUNCH_GRANT_MAX` is eight and this uses all eight -- three streams,
+ * WORK, two COMMANDS members, EVENTS and EVENT_CONTROL -- worth stating
  * rather than discovering. **`SYS:` is the one left out**, deliberately: a
  * command needs somewhere to read its own data, somewhere to write, and its
  * history, and it does not need the whole volume. The day something does, the
@@ -962,9 +965,9 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
     uint32_t count = 0u;
     /*
      * Whether either loop below ran out of room before it ran out of
-     * grants to make. It is provably 7 of 8 today -- three streams, WORK,
-     * two COMMANDS members and EVENTS -- but a third COMMANDS member, or a
-     * fourth stream, would push something out of a child's namespace with
+     * grants to make. It is provably 8 of 8 today -- three streams, WORK,
+     * two COMMANDS members, EVENTS and EVENT_CONTROL -- but a third COMMANDS
+     * member, or a fourth stream, would push something out of a child's namespace with
      * nothing recorded, the same silence bind_standard_assigns already
      * guards against on the supervisor's own side.
      */
@@ -1023,6 +1026,18 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
             ++count;
         }
     }
+    if (supervisor_loader_event_control() != 0u) {
+        if (count < ASTRA_LAUNCH_GRANT_MAX) {
+            astra_capability_name_set(grants[count].name,
+                                      ASTRA_CAPABILITY_EVENT_CONTROL);
+            grants[count].handle = supervisor_loader_event_control();
+            grants[count].rights = ASTRA_RIGHT_SIGNAL;
+            grants[count].flags = 0u;
+            ++count;
+        } else {
+            dropped = 1;
+        }
+    }
     if (dropped) {
         ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_WARNING,
                      "launch grant dropped, ASTRA_LAUNCH_GRANT_MAX reached");
@@ -1060,14 +1075,8 @@ static int launch_arguments(AstraLaunchArguments *arguments, int argc,
 }
 
 /*
- * Reads the whole image in, launches it, and serves it until it is done.
- *
- * **The wait serves.** The events service, the stream sink and the stream
- * source are all in this process, so a wait that stopped pumping them would
- * stop the child that is calling them -- and the shell would be blocked on a
- * child blocked on the shell. That is the deadlock this architecture makes
- * easiest to write, and a poll inside the loop that already pumps everything is
- * what avoids it.
+ * Reads the whole image in, launches it, and serves its terminal streams until
+ * it is done. Storage and events run independently in protected processes.
  */
 static void command_launch(const char *word, int argc, char *const *argv)
 {
@@ -1118,8 +1127,9 @@ static void command_launch(const char *word, int argc, char *const *argv)
     for (;;) {
         uint32_t moved = 0u;
 
-        status = astra_vfs_read(client, file, length, load_buffer + length,
-                                SHELL_LOAD_MAX - length, &moved);
+        status = astra_vfs_port_read_bulk(
+            client, file, length, load_buffer + length,
+            SHELL_LOAD_MAX - length, &moved);
         if (status != ASTRA_VFS_OK) {
             break;
         }
@@ -1216,18 +1226,6 @@ static void command_launch(const char *word, int argc, char *const *argv)
     } else {
         write_line(": did not finish");
     }
-    /*
-     * A service that stopped receiving is indistinguishable from one nobody is
-     * calling, and that ambiguity is what made the launch of the first program
-     * expensive to diagnose. So the stall is reported, and only the stall:
-     * counting what was served says nothing once it works.
-     */
-    if (supervisor_events_stalled() != 0u) {
-        astra_terminal_write(&shell.terminal, "  [events service stalled, "
-                             "status ");
-        write_number(supervisor_events_stalled());
-        write_line("]");
-    }
     ASTRA_EVENT2(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
                  "child %u finished with status %u", child_id, exit_status);
 }
@@ -1303,6 +1301,15 @@ static int render_cells(void *context, uint32_t row, uint32_t column,
     return 1;
 }
 
+static int flush_terminal(void)
+{
+    if (astra_terminal_flush(&shell.terminal) != ASTRA_TERMINAL_OK)
+        return 0;
+    return astra_console_cursor(shell.display, shell.terminal.cursor_row,
+                                shell.terminal.cursor_column, 1u) ==
+           ASTRA_SYSCALL_OK;
+}
+
 static void feed_key(uint32_t code)
 {
     astra_shell_input_t event;
@@ -1332,6 +1339,9 @@ static void feed_key(uint32_t code)
     result = astra_shell_editor_input(&shell.editor, event, NULL, NULL);
     if (result == ASTRA_SHELL_SUBMIT) {
         astra_terminal_putc(&shell.terminal, '\n');
+        /* Show that Enter was accepted before storage or a child can delay us. */
+        if (!flush_terminal())
+            return;
         /*
          * One keyboard, and whoever is in the foreground gets it. A line typed
          * while a child runs is that child's input, not the shell's next
@@ -1380,13 +1390,16 @@ static void feed_key(uint32_t code)
     astra_terminal_putc(&shell.terminal, '\r');
     prompt();
     astra_terminal_write(&shell.terminal, shell.editor.line);
+    /* Erase the old tail, then return to the editor's actual insertion point. */
     astra_terminal_putc(&shell.terminal, ' ');
+    for (size_t index = shell.editor.cursor; index <= shell.editor.length;
+         ++index)
+        astra_terminal_putc(&shell.terminal, '\b');
 }
 
 /*
- * One pass of the terminal's loop: serve everything hosted here, then take
- * whatever was typed. Zero means the terminal cannot go on, and the caller
- * stops.
+ * One pass of the terminal's loop: serve its streams, then take whatever was
+ * typed. Zero means the terminal cannot go on, and the caller stops.
  *
  * It is a function rather than a loop body because it is run from two places
  * -- the prompt, and the wait for a child -- and those two must not drift
@@ -1409,27 +1422,12 @@ static int pump_once(void)
     uint32_t status;
 
     /*
-     * The drain, off the critical path of everything except itself. It is
-     * here because this is the loop the machine already has: the events
-     * service is in this process until there is a launch path, and a
-     * bounded pump per pass is what keeps a burst from becoming a stall.
-     */
-    supervisor_events_pump();
-    /*
-     * And the streams, for the same reason and on the same terms. A launched
+     * The streams remain hosted by the terminal. A launched
      * program's output arrives here and its input leaves from here, so this
      * call is the whole reason a wait for a child can be a wait at all.
      */
+    supervisor_loader_pump_event_control();
     console_stream_pump();
-    /*
-     * And the storage service, which a child reaches by a port now. This is
-     * the call that makes a launched program able to open a file: it is
-     * blocked on a reply that only this loop can produce.
-     *
-     * The events service answers on its own port inside supervisor_events_pump
-     * above, for the same reason.
-     */
-    supervisor_vfs_pump();
     /*
      * A machine with no keyboard still has a screen, and a child still writes
      * to it. This used to return here, which meant the flush at the bottom --
@@ -1507,7 +1505,7 @@ static int pump_once(void)
      * same as "a key arrived": a child's output reaches the model through the
      * sink and nobody typed anything at all.
      */
-    if (astra_terminal_flush(&shell.terminal) != ASTRA_TERMINAL_OK) {
+    if (!flush_terminal()) {
         (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
         return 0;
     }
@@ -1568,11 +1566,11 @@ void console_shell_run(uint32_t display, uint32_t input,
 
     astra_terminal_clear(&shell.terminal);
     write_line("Astra 68");
-    write_line(volume_ready ? "namespace: SYS: read-only, WORK: writable" :
+    write_line(volume_ready ? "namespace: WORK: writable" :
                              "volume: not mounted, file commands will fail");
     command_help();
     prompt();
-    if (astra_terminal_flush(&shell.terminal) != ASTRA_TERMINAL_OK) {
+    if (!flush_terminal()) {
         (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
         return;
     }

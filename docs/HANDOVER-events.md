@@ -50,29 +50,32 @@ at all — `ANALYZER_CC=gcc` is Apple clang, which has no `-fanalyzer`.
 
 ## 2. Resume here
 
-**Persist the store.** It is the one thing the event system promises and does
-not do: the tiers, the budget and the eviction accounting are real, and they
-are all in RAM, so `EVENTS:boot/-1` does not exist and every question about a
-boot that has already ended is unanswerable. Most questions worth asking are
-exactly that. The service already holds a storage client and the state volume
-already has an `events/` directory reserved for it (layout spec §2.2); what is
-missing is the write, the read-back at start, and the boot ring's *last M
-boots*.
+**Measure before adding token buckets or coalescing.** The store now survives a
+reboot: two alternating, versioned CRC-32 snapshots live under the state
+volume's `events/`, startup recovers the newest complete bank, and
+`EVENTS:boot/-1` exposes that boot's first-N ring. The two-boot terminal gate
+proves the read-back. One previous boot is the retained bound; add `boot/-2`
+only when real diagnostic evidence needs it.
 
-Two smaller things, in order of what they unblock:
+The protected-process loader now reads `/startup/system`, hands block authority
+to a standalone storage process, and starts events as a second protected
+process with private `STORE:rw`. The supervisor no longer hosts or pumps either
+service.
+
+Two smaller things remain, in order of what they unblock:
 
 - **The token bucket (§8.4) and coalescing (§8.3).** The spec asks for a
   measured workload and there is now a store to measure one on, with the
   eviction accounting already collecting the evidence.
-- **`events --level-set` (§9.1)** and `--process`, both of which wait on the
-  port transport: per-subsystem levels live in each process's own runtime, so
-  setting another process's level is a control operation on a service and not
-  a write. `OBSERVABILITY.md`'s rule.
+- **`--process`.** `events --level-set <subsystem> <level>` now crosses a
+  distinct `EVENT_CONTROL` capability through the protected events service and
+  changes the supervisor runtime's threshold for this boot. The supervisor is
+  the only current producer; register another target when a protected service
+  gains event call sites.
 
-Beyond the event system, `docs/CURRENT_STATE.md` is the map. The two biggest
-unbuilt pieces it names are the loader — which turns every "the service is in
-the supervisor's process" note in this document into a launch — and the shell
-language.
+Beyond the event system, `docs/CURRENT_STATE.md` is the map. The next large
+boundary is extracting the shell/terminal; the service loader deliberately
+accepts only `service` manifest entries today.
 
 ## 3. What the machine gained
 
@@ -96,7 +99,9 @@ language.
 | One command's story, read on the machine | `emu/qemu/test-terminal.py` |
 | The console stops narrating once a reader exists | `diagnostic_console_open`, `sw/kernel/process.c` |
 | Two dimensions at once, as a path | `EVENTS:subsystem/<name>/<level>` |
-| The last screen, a filter, and a live tail | `events`, `sw/userspace/supervisor/src/console_shell.c` |
+| The last screen, a filter, and a live tail | `sw/userspace/commands/events/events.c` |
+| Protected storage and events services | `sw/userspace/services/` |
+| Ordered startup authority manifest | `/startup/system`, `supervisor/src/loader*.c` |
 
 ## 4. The three design decisions worth not relitigating
 
@@ -131,10 +136,6 @@ Each of these is deliberate and written into the plan that made it.
   the second ring slot pay for its commit sequence and discriminator, without
   which a slot is not self-describing. Four `u32`s or three `u64`s fit; the
   macro refuses a `u64` at compile time. The spec was amended.
-- **Activity adoption across a process boundary is on the wire but not
-  executed.** The storage service runs in the supervisor's own process on the
-  caller's own thread, so adoption is already true. `astra_activity_adopt`
-  belongs to the port transport and arrives with it.
 - **One cached activity per process, not per thread, in the runtime.** The
   kernel holds the truth per thread. Marked `ponytail:` with the upgrade path.
 - **The kernel's own `KernelTraceEvent` enum is not descriptors.** Converting
@@ -142,16 +143,19 @@ Each of these is deliberate and written into the plan that made it.
   delivers by reading the enum out of `trace.h`. Optional, per subsystem, later.
   Until then the drain skips kernel records — they are in the ring, they are not
   in `EVENTS:`.
-- **The store is RAM, so history does not survive a reboot.** `EVENTS:boot/-1`
-  is absent rather than empty, which is the honest shape of a promise the
-  machine cannot yet keep.
+- **One prior boot is retained.** `EVENTS:boot/-1` appears only after a valid
+  snapshot is recovered; `boot/-2` is absent. A catalog mismatch keeps the
+  records readable by numeric message id rather than attaching current-build
+  text to old-build ids.
 - **The boot ring is its own leaf, `boot/current/earliest`.** Merging it into
   `all` would show every early event twice, because it is a copy.
 - **`ls EVENTS:activity` costs a rescan per entry.** Marked `ponytail:` in
   `event_backend.c`; the upgrade is a small ring of distinct activities kept in
   the store. Bounded today by the store's size, which is a few hundred records.
-- **`EVENTS:` is bound by the mounter, not by a manifest.** `serves EVENTS:r`
-  is written into the layout spec's §3.2 and nothing reads a manifest yet.
+- **The startup manifest accepts services only.** The layout spec also shows a
+  `command` entry for the future shell process; accepting it before the loader
+  has command lifetime semantics would make a line that cannot work look
+  valid, so the parser refuses it today.
 
 ## 6. Traps this session found
 
@@ -271,8 +275,6 @@ successor in `GRAPHICS_ARCHITECTURE.md`. Nothing has measured it hot yet.
 
 ## 9. Open decisions, carried forward
 
-- Persisting the store to the state volume's `events/`, which is what makes
-  `EVENTS:boot/-1` mean anything. §2 above.
 - The shell language, which the startup manifest's syntax will want.
 - The bundle manifest: how an application declares the authority it wants.
 - The event system's numbers — tier budgets, token-bucket rates, boot ring size,

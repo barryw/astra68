@@ -81,6 +81,11 @@ remove_property "$work" /__symbols__ novavm_capture_mem
 
 "$fdtput" -t s "$work" / model 'Astra 68 Arty Z7-20'
 
+# Keep Linux out of the graphics arena even on kernels that fail to remove a
+# no-map reservation from System RAM.
+memory=/memory@0
+"$fdtput" -t x "$work" "$memory" reg 00000000 18000000
+
 arena=/reserved-memory/astra-graphics@18000000
 "$fdtput" -p -c "$work" "$arena"
 "$fdtput" -t x "$work" "$arena" reg 18000000 08000000
@@ -105,6 +110,7 @@ clkc_phandle=$("$fdtget" -t u "$work" "$clkc" phandle)
 "$dtc" -q -I dtb -O dtb -o "$out_dir/astra-system.validated.dtb" "$work"
 
 [[ $("$fdtget" -t s "$work" / model) == 'Astra 68 Arty Z7-20' ]]
+[[ $("$fdtget" -t x "$work" "$memory" reg) == '0 18000000' ]]
 [[ $("$fdtget" -t x "$work" "$arena" reg) == '18000000 8000000' ]]
 "$fdtget" -p "$work" "$arena" | grep -Fxq no-map
 [[ $("$fdtget" -t x "$work" "$control" reg) == '43c00000 10000' ]]

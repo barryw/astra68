@@ -1,5 +1,4 @@
-#include <console_shell.h>
-#include <events_host.h>
+#include <loader.h>
 #include <supervisor.h>
 #include <volume.h>
 
@@ -15,20 +14,19 @@
 #include <astra/syscall.h>
 
 /*
- * The first user image firmware hands to the kernel, and the block service
- * until there is a launch path for a separate one.
+ * The first user image firmware hands to the kernel and the protected-service
+ * loader.
  *
  * It proves the bring-up path end to end on every boot: the startup block the
  * loader published, the ABI the syscall layer reports, the process view the
  * kernel renders of the caller, and the block lease and completion endpoint it
  * was granted at launch. Each stage is reported through the progress counter,
  * so the boot log shows how far the service came up rather than only whether
- * it started. The registrar and service lifecycle described in
- * docs/USERSPACE_ARCHITECTURE.md grow from here.
+ * it started. Services publish one port back to this loader and no registrar
+ * exists.
  *
- * This service is resident. It never returns: an exit is a boot failure the
- * kernel turns into a panic, because nothing else can start what it would
- * have started.
+ * This process is resident. It never returns: an exit is a boot failure the
+ * kernel turns into a panic, because nothing else can start the manifest.
  */
 
 /*
@@ -39,12 +37,6 @@
  */
 ASTRA_PROGRAM("supervisor", 0, 1, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
-
-/*
- * Whether a terminal will follow the volume check, which decides if the check
- * unmounts what it proved or leaves it mounted for the shell to use.
- */
-static int want_terminal;
 
 static uint64_t
 supervisor_clock(void *context)
@@ -116,15 +108,31 @@ claim_block_lease(const AstraStartupInfo *startup,
 /*
  * The lease and the device facade have process lifetime, not call lifetime.
  *
- * They were locals until a terminal followed the volume check. A mounted volume
- * keeps a pointer to the device, so when the check started leaving it mounted
- * these two outlived the frame they were declared in: the shell's stack reused
+ * They were locals until boot began leaving the bootstrap volume mounted for
+ * the loader. A mounted volume keeps a pointer to the device, so these two
+ * outlived the frame they were declared in: the shell's stack reused
  * that memory, every filesystem write read a corrupted geometry out of it and
  * was refused as ASTRA_BLOCK_TRANSFER_TOO_LARGE, and reads kept working out of
  * lwext4's cache. That reads as a filesystem defect and is not one.
  */
 static AstraLeaseBlock lease;
 static AstraBlockDevice block;
+
+void
+supervisor_bootstrap_block_release(void)
+{
+    (void)astra_irq_mask(lease.irq);
+    astra_lease_block_detach(&lease);
+}
+
+void
+supervisor_bootstrap_block_close(void)
+{
+    (void)astra_close(lease.device);
+    (void)astra_close(lease.irq);
+    lease.device = 0u;
+    lease.irq = 0u;
+}
 
 static uint32_t
 verify_block_round_trip(uint32_t device, uint32_t irq)
@@ -168,13 +176,14 @@ verify_block_round_trip(uint32_t device, uint32_t irq)
      */
     if (failure == 0u) {
         (void)astra_progress(ASTRA_SUPERVISOR_STAGE_BLOCK_VERIFIED);
-        failure = supervisor_verify_volume(&block, want_terminal);
+        /* The loader reads its manifest and first service before unmounting. */
+        failure = supervisor_verify_volume(&block, 1);
     }
 
     /*
      * The lease is what the mounted volume transfers through, so it may only be
-     * released once nothing holds it. The check unmounts unless a terminal is
-     * following, and it is the check that knows which happened.
+     * released once nothing holds it. The loader unmounts after reading the
+     * manifest and storage image; failures before then are detected here.
      */
     if (!supervisor_volume_is_mounted()) {
         astra_lease_block_detach(&lease);
@@ -234,78 +243,15 @@ astra_main(const AstraStartupInfo *startup)
     }
     (void)astra_progress(ASTRA_SUPERVISOR_STAGE_BLOCK_LEASED);
 
-    {
-        const AstraStartupCapability *screen = find_capability(
-            capabilities, startup->capability_count,
-            ASTRA_CAPABILITY_DISPLAY_DEVICE);
-
-        want_terminal = screen != NULL && screen->handle != 0u;
-    }
-
     status = verify_block_round_trip(block_device, block_irq);
     if (status != 0u) {
         return (int)(ASTRA_SUPERVISOR_STATUS_TAG | status);
     }
 
-    /*
-     * The volume is proven, so the machine has somewhere to put things and a
-     * terminal is worth having. A missing display capability is not a boot
-     * failure: the service stays resident either way, and the progress counter
-     * says which happened.
-     */
-    {
-        const AstraStartupCapability *display = find_capability(
-            capabilities, startup->capability_count,
-            ASTRA_CAPABILITY_DISPLAY_DEVICE);
-        const AstraStartupCapability *keyboard = find_capability(
-            capabilities, startup->capability_count,
-            ASTRA_CAPABILITY_INPUT_DEVICE);
+    status = supervisor_loader_start(startup, capabilities);
+    if (status != ASTRA_STATUS_OK)
+        return (int)status;
+    (void)astra_progress(ASTRA_SUPERVISOR_STAGE_TERMINAL);
 
-        /*
-         * EVENTS: before the terminal, so the first thing a person can ask
-         * about includes the boot they are looking at. Its absence is not a
-         * boot failure: the ring still records everything and the machine
-         * simply cannot be asked from here, which is the layout spec's rule
-         * that a binding which cannot be made is omitted rather than fatal.
-         */
-        if (supervisor_events_start(startup->process_handle)) {
-            ASTRA_EVENT2(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
-                         ASTRA_EVENT_LEVEL_NOTICE,
-                         "EVENTS: bound, catalog %u messages, status %u",
-                         supervisor_events_catalog_count(),
-                         supervisor_events_catalog_status());
-        } else {
-            /*
-             * Said out loud, because silence and nothing-happened are
-             * different facts and a machine that renders them identically is
-             * lying about the more important one.
-             */
-            ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
-                         ASTRA_EVENT_LEVEL_WARNING,
-                         "EVENTS: unavailable, history is in the ring only");
-        }
-
-        if (display != NULL && display->handle != 0u) {
-            /*
-             * The check left the volume mounted for exactly this, so the shell
-             * inherits it rather than mounting a second time -- lwext4 refuses
-             * that. A terminal with no filesystem is still worth having: it
-             * reports the failure rather than refusing to start.
-             */
-            console_shell_run(display->handle,
-                              keyboard != NULL ? keyboard->handle : 0u,
-                              want_terminal);
-        }
-    }
-
-    park();
-    /*
-     * Unreachable -- the service is resident and parks forever -- but it is
-     * still the contract this file states, and success is zero like anything
-     * else on the machine. The tag was standing in for a proof of life back
-     * when a process that never reached user mode also exited zero; the
-     * verdict statuses in astra/status.h carry that now, so success no longer
-     * has to be spelled unusually to be believed.
-     */
-    return ASTRA_STATUS_OK;
+    return (int)supervisor_loader_watch();
 }

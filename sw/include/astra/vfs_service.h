@@ -20,26 +20,25 @@
  * pointers, no bitfields, and no compiler-native enums: the encoding is
  * big-endian MC68030 today and must not acquire a host dependency.
  *
- * Control records only. ASTRA_MESSAGE_INLINE_MAX is 256 bytes, so the payload
- * a read or write can carry inline is deliberately small. Bulk transfer moves
- * to shared areas and bounded rings, which section 5 of the architecture makes
- * LOCKED; until then a large read is many small ones and the service is
- * correct but not fast. That is the right order to build it in.
+ * Control records only. ASTRA_MESSAGE_INLINE_MAX is 256 bytes, so inline I/O
+ * stays small. Version 3 adds bounded shared-area reads; writes remain inline
+ * until a measured workload justifies the second bulk operation.
  */
 
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
-#define ASTRA_VFS_VERSION  UINT16_C(2)
+#define ASTRA_VFS_VERSION  UINT16_C(3)
 
 /*
  * The oldest version this build can still speak. A client asks for a minimum
  * and the service replies with the version it chose; when the ranges do not
  * overlap the session is refused rather than downgraded silently.
  *
- * Version 2 gave READDIR a cursor and the reply the field to return it in.
- * Version 1 is not spoken: a version 1 client would send a directory index
- * where this one reads a cursor, and the two agree on every value that matters
- * except the ones a listing is made of. Refusing the session is the only
- * honest answer, and nothing in this tree speaks version 1 anyway.
+ * Version 3 keeps one reply port for the session instead of creating and
+ * transferring one for every operation. Version 2 remains accepted so a
+ * resident version 2 supervisor can boot a newer storage service and use its
+ * per-request reply ports during a rolling image update. Version 1 is not
+ * spoken: it would send a directory index where version 2 and later read a
+ * backend cursor.
  */
 #define ASTRA_VFS_VERSION_MIN UINT16_C(2)
 
@@ -63,7 +62,12 @@
 #define ASTRA_VFS_OP_READDIR  UINT32_C(8)
 #define ASTRA_VFS_OP_MKDIR    UINT32_C(9)
 #define ASTRA_VFS_OP_UNLINK   UINT32_C(10)
-#define ASTRA_VFS_OP_MAX      ASTRA_VFS_OP_UNLINK
+#define ASTRA_VFS_OP_BIND_AREA UINT32_C(11)
+#define ASTRA_VFS_OP_READ_AREA UINT32_C(12)
+#define ASTRA_VFS_OP_MAX      ASTRA_VFS_OP_READ_AREA
+
+/* One shared-area transfer replaces up to 86 inline READ round trips. */
+#define ASTRA_VFS_BULK_MAX 16384u
 
 /* Open modes. */
 #define ASTRA_VFS_OPEN_READ     (UINT32_C(1) << 0)

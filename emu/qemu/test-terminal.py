@@ -26,6 +26,7 @@ import os
 import queue
 import shutil
 import socket
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -42,6 +43,10 @@ import astra_image
 PLANE = 0xFFF22000
 PLANE_COLUMNS = 90
 PLANE_ROWS = 30
+PLANE_BYTES = 4096
+CURSOR_OFFSET = PLANE_BYTES - 8
+CURSOR_MAGIC = b"ACUR"
+CURSOR_VISIBLE = 1
 
 # Vesta input block; the low byte of the status word is the queued count.
 INPUT_STATUS = 0xFFF0070C
@@ -51,10 +56,10 @@ BOOT_MARKER = "stage 8"
 
 # The empty prompt this fixture's shell settles on between commands. It is
 # `shell.assign + ":" + shell.directory + "> "` from console_shell.c's
-# `prompt()`, and this script never types `cd` or switches assigns, so it is
-# always exactly this -- `screen()` below rstrips every row, which is why the
-# trailing space here is not part of the constant.
+# `prompt()`, and this script never types `cd` or switches assigns. screen()
+# strips the trailing separator, so the visible empty row is exactly this.
 PROMPT = "WORK:>"
+PROMPT_CURSOR_COLUMN = len(PROMPT) + 1
 
 # Typed in order. Each line is followed by Enter, then the screen is polled
 # until `expect` appears, so the check waits on the machine rather than on a
@@ -65,13 +70,10 @@ SCRIPT = [
     ("write hello.txt via the protocol", "hello.txt"),
     ("ls", "proto/"),
     ("cat hello.txt", "via the protocol"),
-    # The namespace, end to end. The shell stands in WORK:, so the four lines
-    # above are relative words inside it. SYS: is the same volume at its root
-    # and shows the work directory the supervisor made, and it was granted read
-    # and nothing else -- so the refusal below comes from the assign rather than
-    # from the filesystem, which would have been happy to write there.
-    ("ls sys:", "work/"),
-    ("write sys:hello.txt no", "access denied"),
+    # The terminal is a least-authority process: WORK: is writable, while the
+    # event tree it can inspect is read-only. The refusal comes from the assign
+    # rather than from the service behind it.
+    ("write events:no no", "access denied"),
     # EVENTS: is a tree, and that is the whole claim: no bespoke client, no
     # query language, just a path. `ls` walks it and `cat` reads it.
     ("ls events:", "activity/"),
@@ -81,11 +83,11 @@ SCRIPT = [
     # starts there every boot -- and that line was `mkdir proto`, so this is
     # the shell's own account of the first thing this test did.
     ("cat events:activity/00000001", "command accepted"),
-    # And the refusal, which is the one that pays for the design: the sixth
-    # line typed was `write sys:hello.txt no`, and its story holds both the
+    # And the refusal, which is the one that pays for the design: the fifth
+    # line typed was `write events:no no`, and its story holds both the
     # line the shell accepted and the refusal it answered with -- neither of
     # which passed an activity to the other.
-    ("cat events:activity/00000006", "command refused"),
+    ("cat events:activity/00000005", "command refused"),
     # The command: the same store, the last screen of it, and two dimensions at
     # once -- which is the one thing a path could not say until subsystem/ grew
     # levels under it.
@@ -106,47 +108,12 @@ SCRIPT = [
     # COMMANDS: is bound and searched, so a bare name resolves there without
     # the person naming it -- and naming it explicitly is the same file.
     ("commands:status 3", "exited 3"),
-    # A write to a name that exists only on COMMANDS:'s read-only member:
-    # `status` is shipped on `/commands`, and the writable member,
-    # `/local/commands`, is empty in this fixture. Without the fix, `write`
-    # opens with WRITE|TRUNCATE and no CREATE, on the reasoning that a
-    # truncate-without-create open is an existence probe -- but the ext4
-    # backend's "wb" mode creates whether or not CREATE was asked for, so
-    # the probe always succeeds at the writable member by creating an empty
-    # `status` there, and the walk never reaches the member that actually
-    # holds the name. A person editing the shipped file would silently get a
-    # second, shadow copy instead of the edit they typed, and every later
-    # `cat`, `ls` and `write` of `commands:status` would see the shadow, not
-    # the original. The fix locates the holder before opening, so this must
-    # report the refusal the read-only member actually gives.
+    # Commands can be loaded but not rewritten by the terminal process.
     ("write commands:status no", "access denied"),
-    # The mirror case: a name on *no* member of COMMANDS: at all. The line
-    # above proves a name that genuinely exists, on a member that cannot
-    # take a write, is refused; this one proves a name nobody has yet still
-    # gets created -- on member 0, the only member willing to take it --
-    # rather than being refused by the same "access denied" the read-only
-    # member earns further down the walk. Nothing here asserts that,
-    # though: the shell echoes a typed line the instant it is typed, so an
-    # expectation drawn from "brandnew" would already be true before the
-    # write ran, and a write that lands prints nothing of its own to wait
-    # for. What it did is what the listing below proves, so this step
-    # carries only the back pressure every step gets.
-    ("write commands:brandnew text", None),
-    # Both members, from one listing, and where each landed. `devices` --
-    # the gate's shadow copy on member 0 and the shipped one on member 1 --
-    # is already on the volume before this line runs, so this single `ls`
-    # already carries both assertions this fixture needs: `brandnew` on
-    # member 0, the only member a name on nobody could have gone to; and
-    # `devices` still on member 1, undeduplicated, checked by name and
-    # member rather than by the bare "[1]" every other row here would also
-    # satisfy. There is one `ls commands:` in this script, not a second one
-    # later repeating the "devices  [1]" half of this check: wait_for_screen
-    # matches whatever is on the plane right now, not new output, and
-    # nothing forces this listing to have scrolled off 30 rows later --
-    # so a second, identical check could pass off this line's own text
-    # before its own `ls` had even run, which is a check that can never
-    # fail no matter what the second `ls` does.
-    ("ls commands:", ("brandnew  [0]", "devices  [1]")),
+    # Both read-only members remain visible and ordered: the fixture's shadow
+    # is member 0, while a shipped command found only in member 1 proves the
+    # union did not collapse while crossing into the terminal process.
+    ("ls commands:", ("devices  [0]", "status  [1]")),
     # And the milder failure the same conflation caused in `rm`: a name on
     # no member at all must be reported "not found", not "access denied" --
     # a member refusing on rights alone has said nothing about whether the
@@ -157,19 +124,6 @@ SCRIPT = [
     # a builtin and is not a file. Two places are looked in, both top level
     # only, and then it says so.
     ("nosuchthing", "not a command"),
-    # What the machine's interrupt endpoints are doing, asked from the prompt.
-    # Before this existed a device that quarantined itself was invisible: it
-    # looked exactly like a device nobody was using, and every call against it
-    # came back with an I/O error three layers from its cause.
-    #
-    # Read through SYS:, not the bare name: the gate now installs a shadow
-    # under this same name on COMMANDS:'s writable member (below), and a bare
-    # `devices` or a `COMMANDS:devices` walks that union's members in the same
-    # order either way, member 0 first -- so both would now launch the shadow,
-    # not this program. SYS: is one mount of the whole volume, not a union, and
-    # reaches the shipped binary directly, which is what this line is actually
-    # here to run.
-    ("sys:commands/devices", "delivered"),
     # The namespace printed back, and the whole of the order a lookup uses.
     # Before this existed the search order was a comment in one function.
     ("assign", "local/commands"),
@@ -194,8 +148,25 @@ SCRIPT = [
     # here and where this line used to be, which was enough to scroll that
     # output off before the check ever read it. Run last, its output is what
     # the check finds.
-    ("events --boot -1", "the store is RAM"),
+    ("events --boot -1", "namespace bound"),
 ]
+
+PERFORMANCE_SCRIPT = [
+    ("status 7", "exited 7"),
+    ("status", "exited 0"),
+    ("commands:status 3", "exited 3"),
+    ("which status", "/commands/status [1]"),
+    ("which devices", "/local/commands/devices [0]"),
+    ("devices status", "/commands/status [1]"),
+]
+PERFORMANCE_BUDGET_SECONDS = {
+    "status 7": 6.0,
+    "status": 4.5,
+    "commands:status 3": 4.5,
+    "which status": 8.0,
+    "which devices": 7.0,
+    "devices status": 7.0,
+}
 
 # The exit-order check near the end of run() rereads the *current* screen
 # after SCRIPT finishes rather than capturing output as it goes, so this
@@ -207,9 +178,9 @@ SCRIPT = [
 # comment above it). This assertion turns a future mistake like that into an
 # immediate, named failure instead of a mysterious one at the bottom of a
 # run.
-assert SCRIPT[-1] == ("events --boot -1", "the store is RAM"), (
-    "SCRIPT's last entry must stay (\"events --boot -1\", \"the store is "
-    "RAM\") -- the exit-order check in run() rereads the rendered screen "
+assert SCRIPT[-1] == ("events --boot -1", "namespace bound"), (
+    "SCRIPT's last entry must stay (\"events --boot -1\", \"namespace "
+    "bound\") -- the exit-order check in run() rereads the rendered screen "
     "right after SCRIPT finishes and needs this command's own output and "
     "the shell's exit report for it to both still be on screen, which is "
     "only true while this line is typed last")
@@ -276,6 +247,10 @@ class Qmp:
         self.send(False, modifier)
 
     def type_line(self, text):
+        self.type_text(text)
+        self.key("ret")
+
+    def type_text(self, text):
         for character in text:
             if character in QCODE:
                 self.key(QCODE[character])
@@ -285,7 +260,6 @@ class Qmp:
                 self.key(character)
             else:
                 raise RuntimeError("no qcode for %r" % character)
-        self.key("ret")
 
 
 # The kernel trace ring, at the fixed address the loader retains it at. It is
@@ -329,14 +303,26 @@ def dump_ring(machine, records=40):
 
 
 class Machine:
-    def __init__(self, qemu, rom, image, socket_directory):
+    def __init__(self, qemu, rom, image, socket_directory,
+                 keyboard_evdev=None, pointer_evdev=None, release_io=False):
         self.qmp_path = os.path.join(socket_directory, "terminal-qmp.sock")
-        command = [qemu, "-M", "astra68", "-m", "32M", "-bios", rom,
-                   "-display", "none", "-monitor", "none", "-serial", "stdio",
-                   "-no-reboot",
+        self.text_path = os.path.join(socket_directory, "post-text.bin")
+        command = [qemu, "-M", "astra68", "-m", "128M", "-bios", rom]
+        command.extend((["-nographic", "-monitor", "none", "-serial", "none"]
+                        if release_io else
+                        ["-display", "none", "-monitor", "none",
+                         "-serial", "stdio"]))
+        command.extend(["-no-reboot",
                    "-qmp", "unix:%s,server=on,wait=off" % self.qmp_path,
-                   "-drive", "if=none,format=raw,file=%s" % image]
+                   "-drive", "if=none,format=raw,file=%s" % image])
+        for identifier, device in (("astra-keyboard", keyboard_evdev),
+                                   ("astra-pointer", pointer_evdev)):
+            if device:
+                command.extend([
+                    "-object", "input-linux,id=%s,evdev=%s,repeat=off" %
+                    (identifier, device)])
         environment = os.environ.copy()
+        environment["ASTRA_TEXT_PLANE_PATH"] = self.text_path
         private_lib = os.path.realpath(
             os.path.join(os.path.dirname(qemu), "..", "lib"))
         if os.path.isdir(private_lib):
@@ -392,6 +378,45 @@ class Machine:
                                 for value in line).rstrip())
         return rows
 
+    def shared_screen(self):
+        """The file-backed plane as rows, read twice to avoid a torn paint."""
+        for _ in range(4):
+            with open(self.text_path, "rb") as handle:
+                first = handle.read(PLANE_COLUMNS * PLANE_ROWS)
+                handle.seek(0)
+                second = handle.read(PLANE_COLUMNS * PLANE_ROWS)
+            if first == second:
+                break
+        if len(second) != PLANE_COLUMNS * PLANE_ROWS:
+            raise RuntimeError("short shared plane read: %d cells" %
+                               len(second))
+        return [
+            "".join(chr(value) if 32 <= value < 127 else " "
+                    for value in second[row * PLANE_COLUMNS:
+                                        (row + 1) * PLANE_COLUMNS]).rstrip()
+            for row in range(PLANE_ROWS)
+        ]
+
+    def shared_cursor(self):
+        """The stable renderer cursor from the end of the shared page."""
+        for _ in range(4):
+            with open(self.text_path, "rb") as handle:
+                handle.seek(CURSOR_OFFSET)
+                first = handle.read(8)
+                handle.seek(CURSOR_OFFSET)
+                second = handle.read(8)
+            if first == second and len(second) == 8 and not second[7] & 1:
+                if second[:4] != CURSOR_MAGIC or not second[6] & CURSOR_VISIBLE:
+                    return None
+                row, column = second[4], second[5]
+                if row >= PLANE_ROWS or column > PLANE_COLUMNS:
+                    raise RuntimeError("invalid shared cursor: %d,%d" %
+                                       (row, column))
+                cell = min(row * PLANE_COLUMNS + column,
+                           PLANE_COLUMNS * PLANE_ROWS - 1)
+                return divmod(cell, PLANE_COLUMNS)
+        raise RuntimeError("torn shared cursor")
+
     def wait_for_screen(self, text, deadline):
         """Waits until `text` is on the plane. `text` may also be a sequence
         of strings, in which case this waits until every one of them is on
@@ -434,6 +459,15 @@ class Machine:
                 return False
             time.sleep(0.05)
 
+    def wait_for_cursor(self, expected, deadline):
+        end = time.monotonic() + deadline
+        while True:
+            if self.shared_cursor() == expected:
+                return True
+            if time.monotonic() >= end:
+                return False
+            time.sleep(0.05)
+
     def close(self):
         try:
             self.qmp.execute("quit")
@@ -445,13 +479,70 @@ class Machine:
             self.process.kill()
 
 
-def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
+def recycle_sessions(machine, deadline):
+    machine.qmp.type_line("clear")
+    end = time.monotonic() + deadline
+    while time.monotonic() < end:
+        if [row for row in machine.screen() if row] == [PROMPT]:
+            break
+        time.sleep(0.05)
+    else:
+        return 0
+    for iteration in range(6):
+        rows = machine.screen()
+        answers = sum("/commands/status [1]" in row for row in rows)
+        exits = sum("which: exited 0" in row for row in rows)
+        machine.qmp.type_line("which status")
+        end = time.monotonic() + deadline
+        while time.monotonic() < end:
+            rows = machine.screen()
+            nonempty = [row for row in rows if row]
+            if (sum("/commands/status [1]" in row for row in rows) >
+                    answers and
+                    sum("which: exited 0" in row for row in rows) > exits and
+                    nonempty and nonempty[-1] == PROMPT):
+                break
+            time.sleep(0.05)
+        else:
+            return iteration + 1
+    return -1
+
+
+def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
+        report_timings, prepared_image, performance_only, keyboard_evdev,
+        pointer_evdev, startup_soak, release_io, session_only):
+    command_timings = []
     with tempfile.TemporaryDirectory(prefix="astra-terminal-") as temporary:
         scratch = os.path.join(temporary, "card.img")
         shutil.copyfile(image, scratch)
         # Into the copy, so the image this gate was pointed at is untouched.
-        astra_image.install(scratch, catalog)
-        machine = Machine(qemu, rom, scratch, temporary)
+        if not prepared_image:
+            astra_image.install(scratch, catalog)
+        if not performance_only:
+            warmup_dir = os.path.join(temporary, "warmup")
+            os.mkdir(warmup_dir)
+            warmup = Machine(qemu, rom, scratch, warmup_dir)
+            try:
+                if not warmup.wait_for_serial(BOOT_MARKER, boot_deadline):
+                    print("FAIL: durability warmup never reached the terminal")
+                    return 1
+                if warmup.wait_for_screen("Astra 68",
+                                          command_deadline) is None:
+                    print("FAIL: durability warmup drew no terminal banner")
+                    return 1
+                for line in ("mkdir priorboot", "events --all"):
+                    warmup.qmp.type_line(line)
+                    if not warmup.wait_for_prompt(command_deadline):
+                        print("FAIL: durability warmup command %r produced no "
+                              "prompt" % line)
+                        return 1
+            finally:
+                warmup.close()
+
+        run_dir = os.path.join(temporary, "run")
+        os.mkdir(run_dir)
+        machine = Machine(qemu, rom, scratch, run_dir, keyboard_evdev,
+                          pointer_evdev, release_io)
         try:
             if not machine.wait_for_serial(BOOT_MARKER, boot_deadline):
                 print("FAIL: never reached the terminal; last serial lines:")
@@ -467,9 +558,84 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
             if machine.wait_for_screen("Astra 68", command_deadline) is None:
                 print("FAIL: the terminal drew no banner")
                 return 1
+            if machine.shared_screen() != machine.screen():
+                print("FAIL: the shared text plane differs from guest memory")
+                return 1
 
-            for line, expected in SCRIPT:
-                machine.qmp.type_line(line)
+            if startup_soak:
+                end = time.monotonic() + startup_soak
+                while time.monotonic() < end:
+                    if machine.process.poll() is not None:
+                        print("FAIL: QEMU exited during startup soak")
+                        return 1
+                    rows = machine.screen()
+                    if any("SYSTEM HALTED" in row for row in rows):
+                        print("FAIL: guest halted during startup soak")
+                        for row in rows:
+                            if row:
+                                print("    |%s|" % row)
+                        return 1
+                    time.sleep(0.1)
+                print("ASTRA TERMINAL STARTUP SOAK PASS")
+                return 0
+
+            # The underline follows the editor insertion point, including
+            # movement that changes no cell bytes, and sits after the prompt's
+            # one intentional separator when the line is empty.
+            machine.qmp.key("a")
+            rows = machine.wait_for_screen(PROMPT + " a", command_deadline)
+            if rows is None:
+                print("FAIL: cursor probe character was not drawn")
+                return 1
+            cursor_row = rows.index(PROMPT + " a")
+            for key, column in (("left", PROMPT_CURSOR_COLUMN),
+                                ("right", PROMPT_CURSOR_COLUMN + 1)):
+                machine.qmp.key(key)
+                if not machine.wait_for_cursor((cursor_row, column),
+                                               command_deadline):
+                    print("FAIL: cursor did not follow editor key %r" % key)
+                    return 1
+            machine.qmp.key("backspace")
+            if (not machine.wait_for_prompt(command_deadline) or
+                    not machine.wait_for_cursor(
+                        (cursor_row, PROMPT_CURSOR_COLUMN),
+                        command_deadline)):
+                print("FAIL: cursor did not return after the prompt separator")
+                return 1
+
+            if session_only:
+                failed = recycle_sessions(machine, command_deadline)
+                if failed != -1:
+                    print("FAIL: session-only iteration %d" % failed)
+                    for row in machine.screen():
+                        if row:
+                            print("    |%s|" % row)
+                    return 1
+                print("ASTRA TERMINAL SESSION RECYCLE PASS")
+                return 0
+
+            steps = PERFORMANCE_SCRIPT if performance_only else SCRIPT
+            for line, expected in steps:
+                machine.qmp.type_text(line)
+                if line == "status 7":
+                    typed = PROMPT + " " + line
+                    rows = machine.wait_for_screen(typed, command_deadline)
+                    if rows is None:
+                        print("FAIL: acceptance probe line was not drawn")
+                        return 1
+                    command_row = max(index for index, row in enumerate(rows)
+                                      if row == typed)
+                    started = time.monotonic()
+                    machine.qmp.key("ret")
+                    accepted_row = min(command_row + 1, PLANE_ROWS - 1)
+                    if not machine.wait_for_cursor((accepted_row, 0),
+                                                   0.25) and not \
+                            machine.wait_for_prompt(command_deadline):
+                        print("FAIL: Enter was not painted before dispatch")
+                        return 1
+                else:
+                    started = time.monotonic()
+                    machine.qmp.key("ret")
                 # `expected` is None for a step with nothing of its own to
                 # wait for -- see the "write commands:brandnew text" entry in
                 # SCRIPT for why one exists -- in which case back pressure
@@ -506,6 +672,33 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
                             print("    |%s|" % row)
                     dump_ring(machine)
                     return 1
+                elapsed = time.monotonic() - started
+                command_timings.append((line, elapsed))
+                if report_timings:
+                    print("timing: %.3fs %s" % (elapsed, line))
+                if (performance_only and
+                        elapsed > PERFORMANCE_BUDGET_SECONDS[line]):
+                    print("FAIL: %r took %.3fs, budget %.3fs" %
+                          (line, elapsed,
+                           PERFORMANCE_BUDGET_SECONDS[line]))
+                    return 1
+                rows = machine.screen()
+                prompt_rows = [index for index, row in enumerate(rows)
+                               if row == PROMPT]
+                expected_cursor = ((prompt_rows[-1], PROMPT_CURSOR_COLUMN)
+                                   if prompt_rows else None)
+                if not machine.wait_for_cursor(expected_cursor,
+                                               command_deadline):
+                    print("FAIL: cursor is not after the live prompt")
+                    return 1
+
+            if performance_only:
+                elapsed = [value for _, value in command_timings]
+                print("ASTRA TERMINAL PERFORMANCE PASS")
+                print("timing: p50 %.3fs max %.3fs commands %d"
+                      % (statistics.median(elapsed), max(elapsed),
+                         len(elapsed)))
+                return 0
 
             # And no endpoint is quarantined.
             #
@@ -547,9 +740,9 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
             # their presence.
             rows = machine.screen()
             said = next((index for index, row in enumerate(rows)
-                         if "the store is RAM" in row), None)
+                         if "namespace bound" in row), None)
             exited = next((index for index, row in enumerate(rows)
-                           if "events: exited 13" in row), None)
+                           if "events: exited 0" in row), None)
             if said is None or exited is None or said >= exited:
                 print("FAIL: the child's line and the shell's report of its "
                       "exit are out of order (line at %r, exit at %r)"
@@ -560,6 +753,21 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
                 return 1
             if verbose:
                 print("ok: the child's last line precedes its exit report")
+
+            # A control capability, not a write to EVENTS:. The command asks
+            # the protected events service, which forwards to the runtime that
+            # owns the current call-site thresholds.
+            machine.qmp.type_line("events --level-set shell warning")
+            if machine.wait_for_screen(
+                    "temporary level set for this boot",
+                    command_deadline) is None or not machine.wait_for_prompt(
+                        command_deadline):
+                print("FAIL: event level control did not complete")
+                for row in machine.screen():
+                    if row:
+                        print("    |%s|" % row)
+                dump_ring(machine)
+                return 1
 
             # A live tail, and the way out of it. Not in SCRIPT because
             # ending it is a bare return rather than a command: `events` is a
@@ -622,9 +830,28 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose):
             if queued != 0:
                 print("FAIL: %d input events left unconsumed" % queued)
                 return 1
+
+            # More short-lived clients than the service has session slots.
+            # Each command must send BYE before its process exits; otherwise
+            # this deterministically exhausts the eight-slot table.
+            failed = recycle_sessions(machine, command_deadline)
+            if failed != -1:
+                print("FAIL: short-lived VFS sessions were not recycled at "
+                      "iteration %d" % failed)
+                for row in machine.screen():
+                    if row:
+                        print("    |%s|" % row)
+                dump_ring(machine)
+                return 1
+            if verbose:
+                print("ok: short-lived VFS sessions are recycled")
         finally:
             machine.close()
     print("ASTRA TERMINAL PASS")
+    if report_timings:
+        elapsed = [value for _, value in command_timings]
+        print("timing: p50 %.3fs max %.3fs commands %d"
+              % (statistics.median(elapsed), max(elapsed), len(elapsed)))
     return 0
 
 
@@ -640,10 +867,30 @@ def main():
     parser.add_argument("--boot-deadline", type=float, default=90.0)
     parser.add_argument("--command-deadline", type=float, default=60.0)
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--report-timings", action="store_true",
+                        help="print Enter-to-next-prompt command latency")
+    parser.add_argument("--prepared-image", action="store_true",
+                        help="use an image that already contains the fixture")
+    parser.add_argument("--performance-only", action="store_true",
+                        help="run the Arty command-latency budget gate")
+    parser.add_argument("--keyboard-evdev",
+                        help="attach the release keyboard input-linux object")
+    parser.add_argument("--pointer-evdev",
+                        help="attach the release pointer input-linux object")
+    parser.add_argument("--startup-soak", type=float, default=0.0,
+                        help="require a live prompt for this many seconds")
+    parser.add_argument("--release-io", action="store_true",
+                        help="use the release launcher's nographic I/O flags")
+    parser.add_argument("--session-only", action="store_true",
+                        help="stress short-lived VFS session recycling")
     arguments = parser.parse_args()
     return run(arguments.qemu, arguments.rom, arguments.image,
                arguments.catalog, arguments.boot_deadline,
-               arguments.command_deadline, arguments.verbose)
+               arguments.command_deadline, arguments.verbose,
+               arguments.report_timings, arguments.prepared_image,
+               arguments.performance_only, arguments.keyboard_evdev,
+               arguments.pointer_evdev, arguments.startup_soak,
+               arguments.release_io, arguments.session_only)
 
 
 if __name__ == "__main__":

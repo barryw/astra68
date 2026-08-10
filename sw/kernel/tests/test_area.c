@@ -114,20 +114,21 @@ static void initialize_test(void)
 
 static void test_same_address_aliases_and_atomic_revoke(void)
 {
-    KernelAddressSpace spaces[5] = {{0}};
+    KernelAddressSpace spaces[KERNEL_VM_SHARED_ALIAS_MAX + 1u] = {{0}};
     KernelAreaPoolStats stats;
     KernelAreaSnapshot snapshot;
     KernelMemoryStats baseline;
     KernelMemoryStats after;
     KernelArea *area;
-    uint32_t bases[5];
-    uint32_t sizes[5];
-    uint32_t physical[4];
+    uint32_t bases[KERNEL_VM_SHARED_ALIAS_MAX + 1u];
+    uint32_t sizes[KERNEL_VM_SHARED_ALIAS_MAX + 1u];
+    uint32_t physical[KERNEL_VM_SHARED_ALIAS_MAX];
     uint8_t bytes[2u * KERNEL_PAGE_SIZE];
 
     initialize_test();
     assert(kernel_memory_stats(&baseline));
-    for (uint32_t index = 0u; index < 5u; ++index)
+    for (uint32_t index = 0u;
+         index < KERNEL_VM_SHARED_ALIAS_MAX + 1u; ++index)
         assert(kernel_vm_create_address_space(100u + index, &spaces[index]) ==
                KERNEL_VM_OK);
     assert(kernel_area_create(7u, sizeof(bytes), &area) == KERNEL_AREA_OK);
@@ -136,7 +137,7 @@ static void test_same_address_aliases_and_atomic_revoke(void)
     for (uint32_t index = 0u; index < sizeof(bytes); ++index)
         assert(bytes[index] == 0u);
 
-    for (uint32_t index = 0u; index < 4u; ++index) {
+    for (uint32_t index = 0u; index < KERNEL_VM_SHARED_ALIAS_MAX; ++index) {
         assert(kernel_area_map(area, 100u + index, &spaces[index],
                                KERNEL_VM_READ | KERNEL_VM_WRITE,
                                &bases[index], &sizes[index]) == KERNEL_AREA_OK);
@@ -150,19 +151,28 @@ static void test_same_address_aliases_and_atomic_revoke(void)
     }
     assert(kernel_area_map(area, 100u, &spaces[0],
                            KERNEL_VM_READ | KERNEL_VM_WRITE,
-                           &bases[4], &sizes[4]) == KERNEL_AREA_OK);
-    assert(bases[4] == bases[0] && sizes[4] == sizes[0]);
+                           &bases[KERNEL_VM_SHARED_ALIAS_MAX],
+                           &sizes[KERNEL_VM_SHARED_ALIAS_MAX]) ==
+           KERNEL_AREA_OK);
+    assert(bases[KERNEL_VM_SHARED_ALIAS_MAX] == bases[0] &&
+           sizes[KERNEL_VM_SHARED_ALIAS_MAX] == sizes[0]);
     assert(kernel_area_map(area, 100u, &spaces[0], KERNEL_VM_READ,
-                           &bases[4], &sizes[4]) ==
+                           &bases[KERNEL_VM_SHARED_ALIAS_MAX],
+                           &sizes[KERNEL_VM_SHARED_ALIAS_MAX]) ==
            KERNEL_AREA_ACCESS_DENIED);
-    assert(kernel_area_map(area, 104u, &spaces[4],
+    assert(kernel_area_map(area, 100u + KERNEL_VM_SHARED_ALIAS_MAX,
+                           &spaces[KERNEL_VM_SHARED_ALIAS_MAX],
                            KERNEL_VM_READ | KERNEL_VM_WRITE,
-                           &bases[4], &sizes[4]) ==
+                           &bases[KERNEL_VM_SHARED_ALIAS_MAX],
+                           &sizes[KERNEL_VM_SHARED_ALIAS_MAX]) ==
            KERNEL_AREA_ACCESS_DENIED);
     assert(kernel_area_unmap(101u, &spaces[1], bases[1]) == KERNEL_AREA_OK);
-    assert(kernel_area_map(area, 104u, &spaces[4],
+    assert(kernel_area_map(area, 100u + KERNEL_VM_SHARED_ALIAS_MAX,
+                           &spaces[KERNEL_VM_SHARED_ALIAS_MAX],
                            KERNEL_VM_READ | KERNEL_VM_WRITE,
-                           &bases[4], &sizes[4]) == KERNEL_AREA_OK);
+                           &bases[KERNEL_VM_SHARED_ALIAS_MAX],
+                           &sizes[KERNEL_VM_SHARED_ALIAS_MAX]) ==
+           KERNEL_AREA_OK);
 
     bytes[0] = 0x5au;
     bytes[sizeof(bytes) - 1u] = 0xc3u;
@@ -184,7 +194,8 @@ static void test_same_address_aliases_and_atomic_revoke(void)
     assert(stats.active_areas == 0u && stats.closing_areas == 0u);
 
     assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
-    for (uint32_t index = 0u; index < 5u; ++index) {
+    for (uint32_t index = 0u;
+         index < KERNEL_VM_SHARED_ALIAS_MAX + 1u; ++index) {
         assert(kernel_vm_destroy_address_space(&spaces[index]) == KERNEL_VM_OK);
         assert(kernel_memory_release_owner(100u + index, NULL) ==
                KERNEL_MEMORY_OK);

@@ -209,14 +209,10 @@ already knows how to fake for the VFS.
 - [x] Step 3: `cd sw/userspace && make test && make sanitize && make analyze`.
 - [x] Step 4: commit.
 
-**The store is RAM, and that is a deferral rather than a design.** The four
-rings, the budget, the fractions and the eviction accounting are the real
-piece and the disk backing slots behind them; what is missing is the write to
-the state volume's `events/` and therefore §8.2's *last M boots*. `EVENTS:boot/
-current` is everything the boot ring can mean today, and `boot/-1` will not
-exist until this lands. **Trigger:** the first time a question needs an event
-from before the last reboot — which is most of the questions worth asking, so
-this is the next thing after plan 6 rather than a someday.
+**Landed 2026-08-08.** The four rings are written through the ordinary storage
+client into alternating, versioned CRC-32 snapshots. Startup recovers the
+newest complete bank and publishes its boot ring at `EVENTS:boot/-1`; a catalog
+mismatch renders numeric ids. One previous boot is the current bounded `M`.
 
 Two smaller things the build settled: an event lands in **exactly one** tier
 (the presented bit wins over the level, and the boot ring is the one deliberate
@@ -270,9 +266,9 @@ every page size from 1 to 40 bytes, which is now the test.
 
 **Two names the plan did not have.** The boot ring is its own leaf,
 `boot/current/earliest`, because merging it into `all` would show every early
-event twice. And `boot/-1` is absent rather than empty, for the same reason the
-store is RAM: a directory that existed and never had anything in it would be a
-promise the machine cannot keep.
+event twice. `boot/-1` remains absent until a valid durable snapshot is
+recovered, so a fresh or damaged store does not advertise history it cannot
+answer for.
 
 ### Task 6: Wired to the machine
 

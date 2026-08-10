@@ -13,6 +13,7 @@ import time
 
 VESTA = 0xFFF00000
 SYS_STATUS = VESTA + 0x010
+RAM_SIZE = VESTA + 0x030
 IRQ_RAW = VESTA + 0x300
 
 BLOCK_ID = VESTA + 0x150
@@ -196,6 +197,7 @@ class AstraBlockTest:
         self.write32(BLOCK_CPL_POP, POP)
 
     def test_identity(self):
+        assert self.read32(RAM_SIZE) == SDRAM_SIZE
         assert self.read32(SYS_STATUS) & SYS_ASTRA_HOST, "SYS_ASTRA_HOST clear"
         assert self.read32(BLOCK_VERSION) == 0x00010000
         assert self.read32(BLOCK_CAPS) == 0x7, "read, write, and flush expected"
@@ -355,9 +357,14 @@ def build_image(path):
 
 
 def main():
+    global SDRAM_SIZE
+
     parser = argparse.ArgumentParser()
     parser.add_argument("qemu", help="Astra QEMU system emulator")
+    parser.add_argument("--memory-mib", type=int, choices=(32, 128),
+                        default=32)
     args = parser.parse_args()
+    SDRAM_SIZE = args.memory_mib * 1024 * 1024
 
     with tempfile.TemporaryDirectory(prefix="astra-block-") as temp:
         rom = os.path.join(temp, "block-test.rom")
@@ -369,7 +376,8 @@ def main():
         build_image(image)
 
         command = [
-            args.qemu, "-machine", "astra68,accel=qtest", "-m", "32M",
+            args.qemu, "-machine", "astra68,accel=qtest", "-m",
+            f"{args.memory_mib}M",
             "-bios", rom, "-S", "-display", "none", "-nodefaults",
             "-drive", f"if=none,format=raw,file={image}",
             "-qtest", f"unix:{qtest_path},server=on,wait=off",

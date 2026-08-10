@@ -3,7 +3,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x0001000c
+#define ASTRA_SYSCALL_ABI_VERSION 0x0001000e
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -62,6 +62,9 @@
  */
 #define ASTRA_SYSCALL_ACTIVITY         45
 
+/* Clears a thread's activity without allocating a new global id. */
+#define ASTRA_ACTIVITY_NONE 0xffffffffu
+
 /*
  * The other half of the reversal: reading the stream back.
  *
@@ -105,6 +108,7 @@
  */
 #define ASTRA_SYSCALL_PROCESS_CREATE   48
 #define ASTRA_SYSCALL_IRQ_ENDPOINT_INFO 49
+#define ASTRA_SYSCALL_CONSOLE_CURSOR   50
 
 /*
  * The most one call copies. Small on purpose: a drain is a bounded page and a

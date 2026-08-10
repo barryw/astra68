@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 /* For ASTRA_ABI_ALIGNMENT: an event batch is copied across the syscall. */
-#include <astra/syscall.h>
+#include "astra/syscall.h"
 
 #define ASTRA_INPUT_VERSION_1_1 UINT32_C(0x00010001)
 

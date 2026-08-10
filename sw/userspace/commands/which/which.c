@@ -28,6 +28,7 @@ ASTRA_PROGRAM("which", 1, 0, 0, "Barry Walker",
 /* Statically allocated, because a user thread gets one 4 KiB stack. */
 static AstraAssignTable assigns;
 static uint32_t out;
+static uint32_t connect_status;
 
 /*
  * One client per distinct handle, made when a member first needs it. That is
@@ -50,6 +51,15 @@ static struct {
     AstraVfsClient client;
     int connected;
 } clients[WHICH_CLIENT_MAX];
+
+static void
+disconnect_clients(void)
+{
+    for (uint32_t index = 0u; index < WHICH_CLIENT_MAX; ++index) {
+        if (clients[index].connected)
+            (void)astra_vfs_disconnect(&clients[index].client);
+    }
+}
 
 static void
 say(const char *text)
@@ -94,9 +104,9 @@ client_for(const AstraAssign *assign, void *context)
             continue;
         }
         clients[index].handle = assign->handle;
-        if (astra_vfs_connect(&clients[index].client,
-                              astra_vfs_port_transport,
-                              &clients[index].handle) != ASTRA_VFS_OK) {
+        connect_status = astra_vfs_port_connect(&clients[index].client,
+                                                clients[index].handle);
+        if (connect_status != ASTRA_VFS_OK) {
             return NULL;
         }
         clients[index].connected = 1;
@@ -171,14 +181,18 @@ astra_main(const AstraStartupInfo *startup)
         typed[at] = '\0';
     }
 
+    connect_status = ASTRA_VFS_OK;
     status = astra_vfs_assign_open(&assigns, typed, ASTRA_RIGHT_READ,
                                    ASTRA_VFS_OPEN_READ, client_for, NULL,
                                    wire, sizeof(wire), &file, NULL, NULL,
                                    &client, &member);
     if (status != ASTRA_VFS_OK) {
+        if (connect_status != ASTRA_VFS_OK)
+            status = connect_status;
         say("which: not on any member, status ");
         say_number(status);
         say("\n");
+        disconnect_clients();
         return (int)status;
     }
     (void)astra_vfs_close(client, file);
@@ -187,5 +201,6 @@ astra_main(const AstraStartupInfo *startup)
     say(" [");
     say_number(member);
     say("]\n");
+    disconnect_clients();
     return ASTRA_STATUS_OK;
 }

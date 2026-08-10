@@ -1,56 +1,27 @@
 /*
- * The storage service, hosted by whoever mounted the volume.
+ * The supervisor's clients of protected VFS services.
  *
- * This is the only file in the supervisor that knows a filesystem exists. It
- * binds lwext4 to the storage protocol's backend interface, stands the service
- * core on top, and hands out a connected client. The terminal above it names
- * no filesystem at all.
- *
- * The service is still in this process, and is now reachable from outside it.
- * It has a port: a launched child is granted a send handle and speaks the same
- * protocol across a process boundary that the shell speaks inside one. Moving
- * the service out is a launch and a mount point away, and no caller changes
- * when it happens -- which was the whole reason resolution lives in the Kit.
- * See docs/DRIVER_AND_SERVICE_ARCHITECTURE.md 9.1.
- *
- * The supervisor's own client keeps the local transport. Not an optimisation:
- * this process is the only thing that pumps the port, so a client here that
- * waited on a reply would be waiting for itself.
+ * Storage and synthetic trees are ports returned by manifest-launched
+ * services. This file connects those ports, binds the supervisor's namespace,
+ * and maps each assign back to its client. It contains no filesystem backend.
  */
 
 #include <vfs_host.h>
 
+#include <loader.h>
+
 #include <astra/event_emit.h>
 #include <astra/runtime.h>
-#include <astra/vfs_ext4_backend.h>
-#include <astra/vfs_local_transport.h>
 #include <astra/vfs_port_transport.h>
-#include <astra/vfs_service_core.h>
 
-/*
- * Two requests deep. One in flight per client and the supervisor is the only
- * thing that answers, so depth beyond a small number buys a child nothing but
- * a longer queue to wait behind.
- */
-#define VFS_PORT_MESSAGES 2u
-#define VFS_PORT_BUDGET 4u
-
-static AstraVfsExt4Backend vfs_backend;
-static AstraVfsService vfs_service;
 static AstraVfsClient vfs_client;
-static AstraVfsPortService vfs_port;
 static AstraAssignTable vfs_assigns;
 static uint32_t vfs_handle;
-static uint32_t vfs_receive;
 static int vfs_ready;
 
 /*
- * The namespace begins at the process that mounted the volume, which today is
- * this one. The layout spec has the startup manifest hand these bindings over
- * as capabilities at launch; userspace has no way to start a process yet, so
- * the mounter binds them for itself. When a loader exists this moves and no
- * client of the Kit changes, which is the reason resolution lives in the Kit
- * rather than in the shell.
+ * The namespace begins once the storage service publishes its port. Resolution
+ * remains in the Kit rather than in the shell.
  *
  * One partition, so SYS: is the whole volume and its read-only-ness is the
  * right it carries rather than the mount it names. See the wiring plan's
@@ -64,6 +35,10 @@ bind_standard_assigns(void)
     astra_assign_table_init(&vfs_assigns);
     (void)astra_assign_bind(&vfs_assigns, "SYS", vfs_handle,
                             ASTRA_RIGHT_READ, "");
+    (void)astra_assign_bind(&vfs_assigns, "SERVICES", vfs_handle,
+                            ASTRA_RIGHT_READ, "services");
+    (void)astra_assign_bind(&vfs_assigns, "STARTUP", vfs_handle,
+                            ASTRA_RIGHT_READ, "startup");
     /*
      * A volume with no work directory on it has not been used yet, so making
      * one is what installs it. A volume that refuses -- full, or read-only --
@@ -158,26 +133,22 @@ bind_standard_assigns(void)
 }
 
 int
-supervisor_vfs_start(const char *mount_point)
+supervisor_vfs_start(uint32_t port_handle)
 {
     if (vfs_ready) {
         return 1;
     }
-    if (!astra_vfs_ext4_init(&vfs_backend, mount_point)) {
+    if (port_handle == 0u) {
         return 0;
     }
-    if (!astra_vfs_service_init(&vfs_service, astra_vfs_ext4_ops(),
-                                &vfs_backend)) {
-        return 0;
-    }
+    vfs_handle = port_handle;
     /*
      * The supervisor's own client is opened here rather than by the terminal,
      * so that a failure to agree a protocol version is a start-up failure with
      * somewhere to report it, instead of the first `ls` returning something
      * unhelpful.
      */
-    if (astra_vfs_connect(&vfs_client, astra_vfs_local_transport,
-                          &vfs_service) != ASTRA_VFS_OK) {
+    if (astra_vfs_port_connect(&vfs_client, vfs_handle) != ASTRA_VFS_OK) {
         return 0;
     }
     /*
@@ -186,19 +157,10 @@ supervisor_vfs_start(const char *mount_point)
      * granted, so binding to anything else would mean handing a child a
      * different number than the one the shell resolves.
      */
-    if (astra_port_create(VFS_PORT_MESSAGES,
-                          VFS_PORT_MESSAGES *
-                              (uint32_t)sizeof(AstraVfsRequestMessage),
-                          &vfs_receive, &vfs_handle) != ASTRA_SYSCALL_OK) {
-        return 0;
-    }
-    if (!astra_vfs_port_service_init(&vfs_port, vfs_receive, &vfs_service)) {
-        return 0;
-    }
-    vfs_ready = 1;
     if (supervisor_vfs_register(&vfs_client, vfs_handle) == 0u) {
         return 0;
     }
+    vfs_ready = 1;
     /* Binding uses the client, so the client has to be usable first. */
     bind_standard_assigns();
     return 1;
@@ -216,14 +178,6 @@ supervisor_vfs_port(void)
     return vfs_ready ? vfs_handle : 0u;
 }
 
-void
-supervisor_vfs_pump(void)
-{
-    if (vfs_ready) {
-        (void)astra_vfs_port_service_pump(&vfs_port, VFS_PORT_BUDGET);
-    }
-}
-
 AstraAssignTable *
 supervisor_assigns(void)
 {
@@ -239,13 +193,10 @@ supervisor_assigns(void)
  * service's port send handle now.** That is what makes a child's namespace
  * possible: the same number the shell routes on is the one a launch hands over.
  *
- * The table stays, and is a shortcut rather than a router: the supervisor's own
- * clients keep the local transport, because a service in this process must not
- * be reached through a port this process is the only thing that pumps. A shell
- * blocked on a reply from a service that only runs when the shell pumps it is
- * a deadlock, and it is one line of code away at all times.
+ * The table maps that authority back to the already-connected remote client;
+ * storage and synthetic trees each have their own session.
  */
-#define VFS_CLIENT_MAX 2u
+#define VFS_CLIENT_MAX SUPERVISOR_MANIFEST_ENTRY_MAX
 
 static struct {
     AstraVfsClient *client;

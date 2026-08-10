@@ -5,9 +5,8 @@ first; this is the continuation map for the launch milestone only.
 
 **A program runs from the prompt.** `status 7` is a file on the volume, found
 by name, loaded, run, and its exit status reported. A launched child is handed
-six capabilities: `STDOUT`, `STDERR`, `STDIN`, `WORK:`, `COMMANDS:` and
-`EVENTS:` — the last three as port handles to services it reaches across a
-process boundary.
+its terminal streams and bounded namespace; storage and events are now
+protected processes reached through the port handles in those grants.
 
 **Milestone 1 is done and the gate is stable.** `events` is a program, it is
 granted `EVENTS:`, and the terminal gate passes 22 of 22 — fourteen consecutive
@@ -121,9 +120,10 @@ returns
   holds, with rights that are a subset. A handle it does not hold is
   `INVALID_HANDLE`; rights wider than its own are `ACCESS_DENIED`. Two
   different mistakes, told apart on purpose.
-- `ASTRA_LAUNCH_GRANT_MAX` is **6** and `launch_grants` uses all six. **`SYS:`
-  is the one left out**, deliberately: a command needs somewhere to read its
-  own data, somewhere to write, and its history — not the whole volume.
+- `ASTRA_LAUNCH_GRANT_MAX` is **8** and `launch_grants` currently uses seven:
+  three streams, `WORK:`, two `COMMANDS:` members, and `EVENTS:`. **`SYS:` is
+  left out** deliberately: a command needs its own data, somewhere to write,
+  and its history — not the whole volume.
 - The image is copied three times; the launch spec's §1.4 says why each one
   exists and how they go away (a page cache and file-backed mapping).
 - `kernel_elf_accept_windowed` bounds the headers to the bytes actually handed
@@ -189,11 +189,9 @@ command hits.
 
 ### 3.6 The serving wait
 
-The services are in the supervisor's process, so **waiting for a child means
-serving it**. `pump_once` in `console_shell.c` is one function called from two
-places — the prompt's loop and the wait for a child — because a serving wait
-that pumped a subset of what the prompt pumps is a child that works until it
-calls the one service the wait forgot.
+Storage and events are independently scheduled protected processes now. The
+shell's wait still calls `pump_once` because the terminal streams remain in the
+supervisor; a child must be able to print and read input while its parent waits.
 
 A line typed while a child runs goes to `console_stream_offer` rather than to
 `run_line`, **with the newline the person pressed**. Without it an empty line
@@ -224,10 +222,10 @@ In addition to the ones in `CLAUDE.md`, which all still apply.
   than four grants failed with `INVALID_ARGUMENT` from inside the loader, which
   names neither the grant nor the reason. It stayed latent for four tasks. They
   are one number with a `_Static_assert` now — **look for the others.**
-- **The supervisor must never reach its own services through a port.** It is
-  the only thing that pumps them, so a client here waiting on a reply would be
-  waiting for itself. `astra_vfs_local_transport` stays for exactly this, and
-  the deadlock is one line of code away at all times.
+- **A service-ready send endpoint moves.** The loader receives the published
+  VFS endpoint once and retains the corresponding process handle. Closing the
+  sender after a successful ready message is correct because it no longer owns
+  that endpoint.
 - **A status the shell prints must carry its number.** "would not start" and
   "I/O error" each cost a round trip before they were made to say which status,
   and how far a read had got. Diagnosis time is the thing being optimised.
@@ -291,12 +289,10 @@ python3 emu/qemu/time-boot.py    ... --runs 5 --budget 1.0
 `--verbose` on the terminal gate prints each line as it passes and dumps the
 screen on failure. It is the fastest debugging surface the machine has.
 
-**`make all` in `sw/userspace` does not build `commands/`.** It builds the
-libraries and the supervisor, and `events` and `status` keep whatever they were.
-The gate installs those files onto the volume at every run, so a stale one is
-invisible: you are debugging a binary you did not build. `cd sw/userspace/commands
-&& make` is a separate step, and `strings build/m68k/events | grep ...` is how
-to be sure. This cost a full run and a wrong conclusion.
+**The gate installs built commands and services onto a scratch volume.** Run
+`make -C sw/userspace all` after any ABI change; otherwise a stale command can
+fail startup while the freshly rebuilt services work, which presents as a
+loader failure even though the loader copied exactly what it was given.
 
 **Keep a clean volume.** `/tmp/part.img` is written by every run and the gate
 kills QEMU rather than shutting it down, so unclean mounts accumulate until
@@ -336,9 +332,6 @@ of a 1.00s budget.
 
 ## 7. After this milestone
 
-Two things are queued and neither is started:
-
-- **Milestone 1.5: union assigns**, approved 2026-08-07, layout spec §1.7.
-- **The events store is RAM**, so `EVENTS:boot/-1` does not exist. Durability
-  is the next thing after 1.5, and the terminal gate already asserts the
-  refusal so nobody mistakes it for a missing feature.
+Both queued successors landed: union assigns are recorded in
+`docs/HANDOVER-union-assigns.md`, and durable `EVENTS:boot/-1` history is
+recorded in `docs/HANDOVER-events.md`.

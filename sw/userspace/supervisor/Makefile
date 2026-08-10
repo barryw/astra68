@@ -9,7 +9,6 @@ RUNTIME := ../runtime
 STORAGE := ../storage
 ALLOC := ../alloc
 VFS := ../vfs
-EVENTS := ../events
 STREAMS := ../streams
 SHELL_DIR := ../shell
 TERMINAL_DIR := ../terminal
@@ -17,7 +16,7 @@ LWEXT4 := ../../../third_party/lwext4
 CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include \
 	-I$(STORAGE)/include -I../metrics/include -I$(ALLOC)/include \
 	-I$(SHELL_DIR)/include -I$(TERMINAL_DIR)/include -I$(VFS)/include \
-	-I$(EVENTS)/include -I$(STREAMS)/include
+	-I$(STREAMS)/include
 # The volume check speaks lwext4 as well as Astra and links freestanding, so it
 # needs the vendored headers, the build profile, and the libc shims.
 EXT4_CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
@@ -36,34 +35,37 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 # firmware carries and pages the loader maps on every boot.
 LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 	-Wl,--build-id=none -Wl,--gc-sections -T $(RUNTIME)/astra_user.ld
-SOURCES := src/supervisor.c src/main.c src/volume.c src/console_shell.c \
-	src/console_stream.c \
-	src/vfs_host.c src/events_host.c
-OBJECTS := build/m68k/supervisor.o build/m68k/main.o build/m68k/vfs_host.o \
+SOURCES := src/supervisor.c src/main.c src/volume.c src/loader.c \
+	src/loader_manifest.c \
+	src/console_shell.c \
+	src/console_stream.c src/vfs_host.c
+OBJECTS := build/m68k/supervisor.o build/m68k/main.o \
+	build/m68k/loader_manifest.o build/m68k/vfs_host.o \
+	build/m68k/loader.o \
 	build/m68k/console_stream.o \
-	build/m68k/volume.o build/m68k/console_shell.o build/m68k/events_host.o
+	build/m68k/volume.o build/m68k/console_shell.o
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 STORAGE_LIB := $(STORAGE)/build/m68k/libastrablock.a
 EXT4_LIB := $(STORAGE)/build/m68k/libastraext4.a
 ALLOC_LIB := $(ALLOC)/build/m68k/libastraalloc.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
-EVENTS_LIB := $(EVENTS)/build/m68k/libastraevents.a
 STREAMS_LIB := $(STREAMS)/build/m68k/libastrastreams.a
 SHELL_LIB := $(SHELL_DIR)/build/m68k/libastrashell.a
 TERMINAL_LIB := $(TERMINAL_DIR)/build/m68k/libastraterminal.a
 RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0.o
 TARGET := build/m68k/astra_supervisor.elf
 # What the ROM carries. Identical to TARGET as far as the loader is concerned
-# -- same segments, same entry -- with the debug information removed, because
-# the payload is compressed into a fixed ROM window and DWARF has no business
-# in it. TARGET keeps the symbols, and that is the file a debugger is pointed
-# at.
+# -- same segments, same entry -- with every non-runtime symbol removed,
+# because the payload is compressed into a fixed ROM window and neither DWARF
+# nor a static symbol table has business in it. TARGET keeps both, and is the
+# file a debugger uses.
 IMAGE := build/m68k/astra_supervisor.image.elf
 # The catalog the machine reads: the .astra_events section's bytes verbatim, so
 # a lookup on the machine is (id - base) / 128 and never a parse. It is a build
 # product and belongs on SYS:, not in git.
 CATALOG := build/m68k/astra_events.cat
 HOST_TEST := build/host/test_supervisor
+LOADER_TEST := build/host/test_loader_manifest
 # log.c comes along because validating a startup block is what binds the
 # diagnostic channel, so the two cannot be linked apart.
 TEST_SOURCES := src/supervisor.c $(RUNTIME)/src/startup.c \
@@ -87,7 +89,6 @@ libraries:
 	$(MAKE) -C $(STORAGE) $(STORAGE_LIB:$(STORAGE)/%=%)
 	$(MAKE) -C $(STORAGE) $(EXT4_LIB:$(STORAGE)/%=%)
 	$(MAKE) -C $(VFS) all
-	$(MAKE) -C $(EVENTS) all
 	$(MAKE) -C $(STREAMS) all
 	$(MAKE) -C $(SHELL_DIR) all
 	$(MAKE) -C $(TERMINAL_DIR) all
@@ -97,17 +98,17 @@ libraries:
 # archives are named as prerequisites so a rebuilt library relinks the image.
 $(TARGET): $(OBJECTS) $(RUNTIME)/astra_user.ld $(RUNTIME_CRT0) $(EXT4_LIB) \
 		$(STORAGE_LIB) $(ALLOC_LIB) $(RUNTIME_LIB) $(SHELL_LIB) \
-		$(TERMINAL_LIB) $(VFS_LIB) $(EVENTS_LIB) $(STREAMS_LIB)
+		$(TERMINAL_LIB) $(VFS_LIB) $(STREAMS_LIB)
 	@mkdir -p $(@D)
 	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(RUNTIME_CRT0) $(OBJECTS) \
-		$(STREAMS_LIB) $(EVENTS_LIB) $(VFS_LIB) $(EXT4_LIB) \
+		$(STREAMS_LIB) $(VFS_LIB) $(EXT4_LIB) \
 		$(STORAGE_LIB) $(ALLOC_LIB) $(TERMINAL_LIB) $(SHELL_LIB) \
 		$(RUNTIME_LIB) -lgcc
 
 # The catalog section goes the way DWARF does: read out at build time, never
 # carried in the window the firmware compresses into ROM.
 $(IMAGE): $(TARGET)
-	$(OBJCOPY) --strip-debug --remove-section=.astra_events $< $@
+	$(OBJCOPY) --strip-all --remove-section=.astra_events $< $@
 
 # --set-section-flags because the section is (INFO) in the linker script and
 # objcopy's binary output emits allocatable sections only; without it this
@@ -121,14 +122,6 @@ build/m68k/%.o: src/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
 
-# vfs_host binds lwext4 to the storage protocol, so it is the only file here
-# besides volume.c that gets the vendored headers. console_shell.c deliberately
-# does not: if a filesystem call reappears in the shell, it fails to compile.
-build/m68k/vfs_host.o: src/vfs_host.c
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(EXT4_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) \
-		$(DEPFLAGS) -c $< -o $@
-
 build/m68k/volume.o: src/volume.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(EXT4_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) \
@@ -138,8 +131,15 @@ $(HOST_TEST): $(TEST_SOURCES)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
-test: $(HOST_TEST)
+$(LOADER_TEST): src/loader_manifest.c tests/test_loader_manifest.c \
+		include/loader.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/loader_manifest.c tests/test_loader_manifest.c -o $@
+
+test: $(HOST_TEST) $(LOADER_TEST)
 	./$(HOST_TEST)
+	./$(LOADER_TEST)
 
 sanitize:
 	@mkdir -p build/host
@@ -147,6 +147,10 @@ sanitize:
 		$(SANITIZER_FLAGS) $(TEST_SOURCES) \
 		-o build/host/test_supervisor_sanitize
 	./build/host/test_supervisor_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) src/loader_manifest.c \
+		tests/test_loader_manifest.c -o build/host/test_loader_manifest_sanitize
+	./build/host/test_loader_manifest_sanitize
 
 analyze:
 	@mkdir -p build/analyzer
@@ -156,6 +160,10 @@ analyze:
 		-c src/main.c -o build/analyzer/main.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/console_stream.c -o build/analyzer/console_stream.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/loader_manifest.c -o build/analyzer/loader_manifest.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/loader.c -o build/analyzer/loader.o
 
 size: $(IMAGE)
 	$(SIZE) $(IMAGE)

@@ -17,6 +17,63 @@ astra_progress(uint32_t value)
 }
 
 uint32_t
+astra_handle_duplicate(uint32_t handle, uint32_t rights, uint32_t *duplicate)
+{
+    AstraSyscallResult result;
+
+    if (duplicate == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_HANDLE_DUPLICATE, handle, rights, 0u, 0u, 0u,
+                   &result);
+    if (result.status == ASTRA_SYSCALL_OK)
+        *duplicate = result.value0;
+    return result.status;
+}
+
+uint32_t
+astra_area_create(uint32_t byte_size, uint32_t rights, uint32_t *handle)
+{
+    AstraSyscallResult result;
+
+    if (handle == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_AREA_CREATE, byte_size, rights, 0u, 0u, 0u,
+                   &result);
+    if (result.status == ASTRA_SYSCALL_OK)
+        *handle = result.value0;
+    return result.status;
+}
+
+uint32_t
+astra_area_map(uint32_t handle, uint32_t permissions, void **address,
+               uint32_t *byte_size)
+{
+    AstraSyscallResult result;
+
+    if (address == NULL || byte_size == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_AREA_MAP, handle, permissions, 0u, 0u, 0u,
+                   &result);
+    if (result.status == ASTRA_SYSCALL_OK) {
+        *address = (void *)(uintptr_t)result.value0;
+        *byte_size = result.value1;
+    }
+    return result.status;
+}
+
+uint32_t
+astra_area_unmap(void *address)
+{
+    AstraSyscallResult result;
+
+    if (address == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_AREA_UNMAP, (uint32_t)(uintptr_t)address,
+                   0u, 0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
 astra_device_query(uint32_t handle, AstraDeviceInfo *info)
 {
     AstraSyscallResult result;
@@ -122,6 +179,12 @@ uint32_t
 astra_irq_arm(uint32_t handle)
 {
     return invoke(ASTRA_SYSCALL_IRQ_ARM, handle).status;
+}
+
+uint32_t
+astra_irq_mask(uint32_t handle)
+{
+    return invoke(ASTRA_SYSCALL_IRQ_MASK, handle).status;
 }
 
 uint32_t
@@ -245,6 +308,17 @@ astra_console_write(uint32_t device, uint32_t cell, const uint8_t *cells,
     }
     astra_syscall5(ASTRA_SYSCALL_CONSOLE_WRITE, device, cell,
                    (uint32_t)(uintptr_t)cells, count, 0u, &result);
+    return result.status;
+}
+
+uint32_t
+astra_console_cursor(uint32_t device, uint32_t row, uint32_t column,
+                     uint32_t visible)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_CONSOLE_CURSOR, device, row, column,
+                   visible, 0u, &result);
     return result.status;
 }
 

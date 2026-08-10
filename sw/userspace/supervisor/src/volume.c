@@ -19,8 +19,6 @@
 
 #include <volume.h>
 
-#include <vfs_host.h>
-
 #include <astra/alloc.h>
 #include <astra/block.h>
 #include <astra/bytes.h>
@@ -30,6 +28,7 @@
 #include <astra/mbr.h>
 #include <astra/runtime.h>
 #include <astra/supervisor.h>
+#include <astra/vfs_service.h>
 
 #include <ext4.h>
 
@@ -48,9 +47,9 @@ static AstraAllocator volume_allocator;
 
 static AstraExt4Port volume_port;
 /*
- * The window the check found. The check deliberately unmounts to prove the
- * volume comes back clean and leaves nothing allocated; a terminal needs it
- * mounted again afterwards, and it must be the same window.
+ * The window the check found. The loader keeps this mount only long enough to
+ * read the manifest and storage image, then the protected service mounts the
+ * same window for normal operation.
  */
 static AstraExt4Partition volume_window;
 static AstraBlockDevice *volume_block;
@@ -156,6 +155,55 @@ supervisor_volume_is_mounted(void)
 }
 
 uint32_t
+supervisor_volume_read(const char *path, void *buffer, uint32_t capacity,
+                       uint32_t *length)
+{
+    ext4_file file;
+    uint8_t *out = buffer;
+    size_t moved = 0u;
+    uint32_t done = 0u;
+
+    if (!volume_mounted || path == NULL || buffer == NULL || length == NULL) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    *length = 0u;
+    if (ext4_fopen(&file, path, "rb") != EOK)
+        return ASTRA_VFS_ERR_NOT_FOUND;
+    if (ext4_fsize(&file) > capacity) {
+        (void)ext4_fclose(&file);
+        return ASTRA_VFS_ERR_LIMIT;
+    }
+    while (done < capacity) {
+        moved = 0u;
+        if (ext4_fread(&file, out + done, capacity - done, &moved) != EOK) {
+            (void)ext4_fclose(&file);
+            return ASTRA_VFS_ERR_IO;
+        }
+        if (moved == 0u)
+            break;
+        done += (uint32_t)moved;
+    }
+    if (ext4_fclose(&file) != EOK)
+        return ASTRA_VFS_ERR_IO;
+    *length = done;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t
+supervisor_volume_unmount(void)
+{
+    if (!volume_mounted)
+        return ASTRA_VFS_ERR_INVALID;
+    (void)ext4_journal_stop(VOLUME_MOUNT_POINT);
+    volume_mounted = 0;
+    if (ext4_umount(VOLUME_MOUNT_POINT) != EOK ||
+        ext4_device_unregister(VOLUME_DEVICE_NAME) != EOK)
+        return ASTRA_VFS_ERR_IO;
+    astra_ext4_alloc_bind(NULL);
+    return ASTRA_VFS_OK;
+}
+
+uint32_t
 supervisor_volume_device_status(void)
 {
     return (uint32_t)volume_port.last_status;
@@ -234,23 +282,8 @@ supervisor_verify_volume(AstraBlockDevice *block, int keep_mounted)
 
     failure = write_and_verify();
 
-    /*
-     * A terminal needs the volume it is about to use, and lwext4 does not
-     * take kindly to the same device being mounted a second time. Leaving it
-     * mounted is also what a real boot does; the price is that the checks
-     * below, which only mean anything once everything is released, are not
-     * run in that case.
-     */
+    /* The loader reads the manifest and first service before handing off. */
     if (keep_mounted && failure == 0u) {
-        /*
-         * The volume stays mounted for the storage service, not for the
-         * terminal: nothing above this line touches lwext4 any more, and the
-         * terminal reaches the volume through the protocol like any other
-         * client would.
-         */
-        if (!supervisor_vfs_start(VOLUME_MOUNT_POINT)) {
-            return ASTRA_SUPERVISOR_FAIL_VOLUME;
-        }
         (void)astra_progress(ASTRA_SUPERVISOR_STAGE_VOLUME_VERIFIED);
         return 0u;
     }

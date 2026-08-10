@@ -20,6 +20,7 @@
 #include <astra/event.h>
 #include <astra/event_emit.h>
 #include <astra/runtime.h>
+#include <astra/status.h>
 #include <astra/syscall.h>
 
 uint32_t
@@ -195,14 +196,15 @@ uint8_t astra_event_levels[ASTRA_EVENT_SUBSYSTEM_MAX] = {
     ASTRA_EVENT_LEVEL_INFO, ASTRA_EVENT_LEVEL_INFO
 };
 
-void
+uint32_t
 astra_event_level_set(uint32_t subsystem, uint32_t level)
 {
     if (subsystem >= ASTRA_EVENT_SUBSYSTEM_MAX ||
         level > ASTRA_EVENT_LEVEL_ERROR) {
-        return;
+        return ASTRA_STATUS_INVALID;
     }
     astra_event_levels[subsystem] = (uint8_t)level;
+    return ASTRA_STATUS_OK;
 }
 
 uint32_t
@@ -275,7 +277,9 @@ astra_activity_adopt(uint32_t activity)
 {
     AstraSyscallResult result;
 
-    astra_syscall5(ASTRA_SYSCALL_ACTIVITY, activity, 0u, 0u, 0u, 0u, &result);
+    astra_syscall5(ASTRA_SYSCALL_ACTIVITY,
+                   activity != 0u ? activity : ASTRA_ACTIVITY_NONE,
+                   0u, 0u, 0u, 0u, &result);
     activity_cached = result.status == ASTRA_SYSCALL_OK ? result.value0 : 0u;
     return activity_cached;
 }

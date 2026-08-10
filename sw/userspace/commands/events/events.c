@@ -19,12 +19,14 @@
 
 #include <astra/program.h>
 #include <astra/runtime.h>
+#include <astra/event.h>
+#include <astra/event_control.h>
 #include <astra/stream.h>
 #include <astra/vfs_assign.h>
 #include <astra/vfs_client.h>
 #include <astra/vfs_port_transport.h>
 
-ASTRA_PROGRAM("events", 1, 0, 0, "Barry Walker",
+ASTRA_PROGRAM("events", 1, 1, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
 /*
@@ -42,6 +44,13 @@ static AstraVfsClient client;
 static uint32_t events_handle;
 static uint32_t out;
 static uint8_t chunk[EVENTS_READ_CHUNK];
+
+static int
+disconnect_with(uint32_t status)
+{
+    (void)astra_vfs_disconnect(&client);
+    return (int)status;
+}
 
 static uint32_t
 equal(const char *left, const char *right)
@@ -257,6 +266,13 @@ astra_main(const AstraStartupInfo *startup)
 {
     static const char *const level_name[] = {"all", "notice", "warning",
                                              "error"};
+    static const char *const set_level_name[] = {
+        "debug", "info", "notice", "warning", "error"
+    };
+    static const char *const subsystem_name[] = {
+        "kernel", "runtime", "supervisor", "storage", "vfs", "shell",
+        "input", "display"
+    };
     const AstraStartupCapability *capabilities;
     const uint32_t *argv = NULL;
     const AstraAssign *assign;
@@ -266,6 +282,7 @@ astra_main(const AstraStartupInfo *startup)
     const char *subsystem = NULL;
     AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
     uint32_t stdin_handle = 0u;
+    uint32_t control_handle = 0u;
     uint32_t columns = 0u;
     uint32_t rows = 0u;
     uint64_t offset;
@@ -273,6 +290,10 @@ astra_main(const AstraStartupInfo *startup)
     uint32_t status;
     int following = 0;
     int by_activity = 0;
+    int previous_boot = 0;
+    int level_set = 0;
+    uint32_t set_subsystem = 0u;
+    uint32_t set_level = 0u;
 
     if (startup == NULL || startup->capabilities_address == 0u) {
         return ASTRA_STATUS_INVALID;
@@ -299,36 +320,16 @@ astra_main(const AstraStartupInfo *startup)
         } else if (astra_capability_name_equal(capabilities[index].name,
                                                "STDIN")) {
             stdin_handle = capabilities[index].handle;
+        } else if (astra_capability_name_equal(
+                       capabilities[index].name,
+                       ASTRA_CAPABILITY_EVENT_CONTROL)) {
+            control_handle = capabilities[index].handle;
         }
     }
     if (out == 0u) {
         /* Nowhere to write is not a failure this program can report. */
         return ASTRA_STATUS_ACCESS;
     }
-    assign = astra_assign_lookup(&assigns, "EVENTS");
-    if (assign == NULL) {
-        say("events: this program was not granted EVENTS:");
-        return ASTRA_STATUS_ACCESS;
-    }
-    events_handle = assign->handle;
-    /*
-     * The same Kit the shell uses, over a transport that crosses a process.
-     * Nothing above this line knows which, which was the point of the
-     * transport being a callback since the day the protocol was written.
-     */
-    status = astra_vfs_connect(&client, astra_vfs_port_transport,
-                               &events_handle);
-    if (status != ASTRA_VFS_OK) {
-        /*
-         * With the number. "did not answer" alone cannot tell a service that
-         * is not there from one whose reply channel could not be made, and
-         * those two call for entirely different things.
-         */
-        say_number("events: the events service did not answer, status ",
-                   status);
-        return (int)status;
-    }
-
     for (uint32_t index = 1u; index < startup->argc; ++index) {
         const char *word = (const char *)(uintptr_t)argv[index];
         const char *value = index + 1u < startup->argc ?
@@ -383,33 +384,89 @@ astra_main(const AstraStartupInfo *startup)
             by_activity = 1;
             ++index;
         } else if (equal(word, "--boot")) {
-            /*
-             * Recognised and refused with the reason, rather than built into a
-             * path that answers `not found` -- which is also what a typo gives,
-             * and the two must not look the same.
-             */
-            say("events: only this boot is kept; the store is RAM");
-            return ASTRA_STATUS_UNSUPPORTED;
+            if (value == NULL || !equal(value, "-1")) {
+                say("events: --boot currently takes -1");
+                return ASTRA_STATUS_INVALID;
+            }
+            previous_boot = 1;
+            ++index;
         } else if (equal(word, "--since")) {
             say("events: no wall clock yet, so no time range");
             return ASTRA_STATUS_UNSUPPORTED;
         } else if (equal(word, "--level-set")) {
-            say("events: setting a level is not a read, so not this command");
-            return ASTRA_STATUS_UNSUPPORTED;
+            if (index != 1u || startup->argc != 4u) {
+                say("events: --level-set takes a subsystem and level alone");
+                return ASTRA_STATUS_INVALID;
+            }
+            level_set = 1;
+            for (set_subsystem = 0u;
+                 set_subsystem < ASTRA_EVENT_SUBSYSTEM_MAX;
+                 ++set_subsystem) {
+                if (equal(value, subsystem_name[set_subsystem]))
+                    break;
+            }
+            for (set_level = 0u; set_level <= ASTRA_EVENT_LEVEL_ERROR;
+                 ++set_level) {
+                if (equal((const char *)(uintptr_t)argv[index + 2u],
+                          set_level_name[set_level]))
+                    break;
+            }
+            if (set_subsystem == ASTRA_EVENT_SUBSYSTEM_MAX ||
+                set_level > ASTRA_EVENT_LEVEL_ERROR) {
+                say("events: unknown subsystem or level");
+                return ASTRA_STATUS_INVALID;
+            }
+            index += 2u;
         } else {
             say("events: unknown option");
             return ASTRA_STATUS_INVALID;
         }
     }
 
+    if (level_set) {
+        if (control_handle == 0u) {
+            say("events: this program was not granted event control");
+            return ASTRA_STATUS_ACCESS;
+        }
+        status = astra_event_control_set(control_handle, set_subsystem,
+                                         set_level);
+        if (status != ASTRA_STATUS_OK) {
+            say_number("events: level change refused, status ", status);
+            return (int)status;
+        }
+        say("events: temporary level set for this boot");
+        return ASTRA_STATUS_OK;
+    }
+
+    assign = astra_assign_lookup(&assigns, "EVENTS");
+    if (assign == NULL) {
+        say("events: this program was not granted EVENTS:");
+        return ASTRA_STATUS_ACCESS;
+    }
+    events_handle = assign->handle;
+    status = astra_vfs_port_connect(&client, events_handle);
+    if (status != ASTRA_VFS_OK) {
+        say_number("events: the events service did not answer, status ",
+                   status);
+        return (int)status;
+    }
+
     if (by_activity && subsystem != NULL) {
         /* An activity is already a slice through every other dimension. */
         say("events: --activity is every subsystem, by definition");
-        return ASTRA_STATUS_INVALID;
+        return disconnect_with(ASTRA_STATUS_INVALID);
+    }
+    if (previous_boot && (by_activity || subsystem != NULL)) {
+        say("events: --boot cannot be combined with another history");
+        return disconnect_with(ASTRA_STATUS_INVALID);
+    }
+    if (previous_boot && following) {
+        say("events: a previous boot cannot grow");
+        return disconnect_with(ASTRA_STATUS_INVALID);
     }
     if (following && stdin_handle == 0u) {
         say("events: no input, so nothing could end a follow");
-        return ASTRA_STATUS_INVALID;
+        return disconnect_with(ASTRA_STATUS_INVALID);
     }
 
     at = append(path, sizeof(path), at, "EVENTS:");
@@ -422,7 +479,8 @@ astra_main(const AstraStartupInfo *startup)
         at = append(path, sizeof(path), at, "/");
         at = append(path, sizeof(path), at, level);
     } else {
-        at = append(path, sizeof(path), at, "boot/current/");
+        at = append(path, sizeof(path), at,
+                    previous_boot ? "boot/-1/" : "boot/current/");
         at = append(path, sizeof(path), at, level);
     }
 
@@ -433,14 +491,15 @@ astra_main(const AstraStartupInfo *startup)
                                       wire, sizeof(wire), NULL);
         if (status != ASTRA_VFS_OK) {
             say("events: no such view");
-            return (int)status;
+            return disconnect_with(status);
         }
         status = astra_vfs_open(&client, wire, ASTRA_VFS_OPEN_READ, &file,
                                 NULL, NULL);
     }
     if (status != ASTRA_VFS_OK) {
-        say("events: no such view");
-        return (int)status;
+        say(previous_boot ? "events: no previous boot is stored" :
+                            "events: no such view");
+        return disconnect_with(status);
     }
 
     /*
@@ -458,5 +517,5 @@ astra_main(const AstraStartupInfo *startup)
         follow(stdin_handle, file, offset);
     }
     (void)astra_vfs_close(&client, file);
-    return 0;
+    return disconnect_with(ASTRA_STATUS_OK);
 }

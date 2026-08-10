@@ -1,0 +1,556 @@
+/*
+ * The protected events service. Every caller goes through the storage
+ * protocol; this process owns the trace drain, bounded store and persistence.
+ *
+ * Nothing here emits an event. An events service that logs about logging is
+ * how a logging subsystem takes a machine down, and the rule has to be
+ * structural rather than careful -- so this file does not include
+ * astra/event_emit.h and must not grow an include of it.
+ */
+
+#include <astra/event_backend.h>
+#include <astra/event_catalog.h>
+#include <astra/event_control.h>
+#include <astra/event_persist.h>
+#include <astra/event_store.h>
+#include <astra/bytes.h>
+#include <astra/program.h>
+#include <astra/runtime.h>
+#include <astra/service.h>
+#include <astra/status.h>
+#include <astra/vfs_assign.h>
+#include <astra/vfs_client.h>
+#include <astra/vfs_port_transport.h>
+#include <astra/vfs_service_core.h>
+
+/* One request deep. Reading history is not a hot path. */
+#define EVENTS_PORT_MESSAGES 1u
+#define EVENTS_PORT_BUDGET 2u
+
+ASTRA_PROGRAM("events-service", 0, 2, 0, "Barry Walker",
+              "Copyright 2026 Barry Walker");
+
+/*
+ * 256 records is 18 KiB of BSS, and the whole store: four tiers and the boot
+ * ring inside one budget, which is the single number the design says a person
+ * configures. It is provisional by design -- §8.4's eviction accounting is
+ * what will correct it against a real workload rather than an opinion.
+ */
+#define EVENTS_RECORD_MAX 256u
+
+/*
+ * Room for 64 descriptors. The catalog is the .astra_events section verbatim,
+ * so this is a ceiling on call sites in the image rather than on events, and
+ * the supervisor has four today. A catalog that does not fit is refused whole:
+ * half a catalog renders the wrong message under the right id.
+ */
+#define EVENTS_CATALOG_MAX (64u * ASTRA_EVENT_DESCRIPTOR_SIZE)
+
+static AstraEventStored event_records[EVENTS_RECORD_MAX];
+static AstraEventStored previous_records[EVENTS_RECORD_MAX];
+/* Aligned by being descriptors: the catalog reader indexes them in place. */
+static AstraEventDescriptor catalog_bytes[EVENTS_CATALOG_MAX /
+                                          ASTRA_EVENT_DESCRIPTOR_SIZE];
+static AstraEventCatalog catalog;
+static AstraEventStore store;
+static AstraEventStore previous_store;
+static AstraEventsBackend backend;
+static AstraVfsService service;
+static AstraVfsClient storage_client;
+static AstraAssignTable assigns;
+static uint32_t storage_handle;
+static AstraVfsPortService events_port;
+static uint32_t events_handle;
+static uint32_t events_receive;
+static uint32_t control_handle;
+static uint32_t control_receive;
+static uint32_t event_target_handle;
+static uint32_t debug_handle;
+static uint32_t drain_cursor;
+static uint32_t snapshot_boot = 1u;
+static uint32_t snapshot_generation;
+static int persistence_ready;
+static int previous_ready;
+/*
+ * Whether the ring is still worth reading. Separate from `events_ready` on
+ * purpose: the drain gives up permanently when the kernel refuses it, and if
+ * that flag also gated answering clients then a service would stop serving
+ * because its own logging failed -- which is the logging subsystem taking the
+ * machine down by exactly the route this file exists to avoid. It was one flag
+ * for a while, and a launched program's first request went unanswered for it.
+ */
+static int drain_ready;
+/* Why the catalog is not loaded, when it is not: the status that refused it. */
+static uint32_t catalog_status;
+static int events_ready;
+
+static const char *const snapshot_path[] = {
+    "STORE:store.0", "STORE:store.1"
+};
+
+static AstraVfsClient *supervisor_vfs_client(void)
+{
+    return &storage_client;
+}
+
+static AstraAssignTable *supervisor_assigns(void)
+{
+    return &assigns;
+}
+
+static int snapshot_wire(uint32_t bank, uint32_t rights, char *path,
+                         uint32_t capacity)
+{
+    return astra_assign_resolve(&assigns, snapshot_path[bank],
+                                rights, 0u, path, capacity,
+                                NULL) == ASTRA_VFS_OK;
+}
+
+typedef struct SnapshotFile {
+    AstraVfsClient *client;
+    AstraVfsFile file;
+} SnapshotFile;
+
+static int
+snapshot_read(void *context, uint32_t offset, void *buffer, uint32_t length)
+{
+    SnapshotFile *snapshot = context;
+    uint8_t *out = buffer;
+    uint32_t done = 0u;
+
+    while (done < length) {
+        uint32_t moved = 0u;
+
+        if (astra_vfs_read(snapshot->client, snapshot->file, offset + done,
+                           out + done, length - done, &moved) !=
+                ASTRA_VFS_OK || moved == 0u) {
+            return 0;
+        }
+        done += moved;
+    }
+    return 1;
+}
+
+static int
+snapshot_write(void *context, uint32_t offset, const void *buffer,
+               uint32_t length)
+{
+    SnapshotFile *snapshot = context;
+    const uint8_t *in = buffer;
+    uint32_t done = 0u;
+
+    while (done < length) {
+        uint32_t moved = 0u;
+
+        if (astra_vfs_write(snapshot->client, snapshot->file, offset + done,
+                            in + done, length - done, &moved) !=
+                ASTRA_VFS_OK || moved == 0u) {
+            return 0;
+        }
+        done += moved;
+    }
+    return 1;
+}
+
+static int
+probe_snapshot(uint32_t bank, AstraEventSnapshotInfo *info)
+{
+    AstraVfsClient *storage = supervisor_vfs_client();
+    SnapshotFile snapshot;
+    uint64_t size = 0u;
+    uint32_t status;
+    char path[ASTRA_VFS_PATH_MAX];
+
+    snapshot.client = storage;
+    if (!snapshot_wire(bank, ASTRA_RIGHT_READ, path, sizeof(path)))
+        return 0;
+    status = astra_vfs_open(storage, path, ASTRA_VFS_OPEN_READ,
+                            &snapshot.file, &size, NULL);
+    if (status != ASTRA_VFS_OK) {
+        return 0;
+    }
+    if (size > UINT32_MAX) {
+        (void)astra_vfs_close(storage, snapshot.file);
+        return 0;
+    }
+    status = astra_event_snapshot_probe(snapshot_read, &snapshot,
+                                        (uint32_t)size, info) ?
+        ASTRA_VFS_OK : ASTRA_VFS_ERR_INVALID;
+    (void)astra_vfs_close(storage, snapshot.file);
+    return status == ASTRA_VFS_OK;
+}
+
+static int
+load_snapshot(uint32_t bank, AstraEventSnapshotInfo *info)
+{
+    AstraVfsClient *storage = supervisor_vfs_client();
+    SnapshotFile snapshot;
+    uint64_t size = 0u;
+    int loaded;
+    char path[ASTRA_VFS_PATH_MAX];
+
+    if (!snapshot_wire(bank, ASTRA_RIGHT_READ, path, sizeof(path)) ||
+        astra_vfs_open(storage, path, ASTRA_VFS_OPEN_READ,
+                       &snapshot.file, &size, NULL) != ASTRA_VFS_OK) {
+        return 0;
+    }
+    if (size > UINT32_MAX) {
+        (void)astra_vfs_close(storage, snapshot.file);
+        return 0;
+    }
+    snapshot.client = storage;
+    loaded = astra_event_snapshot_load(&previous_store, snapshot_read,
+                                       &snapshot, (uint32_t)size, info);
+    (void)astra_vfs_close(storage, snapshot.file);
+    return loaded;
+}
+
+static int
+generation_newer(uint32_t left, uint32_t right)
+{
+    return (int32_t)(left - right) > 0;
+}
+
+static void
+start_persistence(void)
+{
+    AstraEventSnapshotInfo info[2];
+    int valid[2] = {0, 0};
+    uint32_t bank = 0u;
+    uint32_t status;
+    char path[ASTRA_VFS_PATH_MAX];
+
+    status = astra_assign_resolve(&assigns, "STORE:", ASTRA_RIGHT_WRITE, 0u,
+                                  path, sizeof(path), NULL);
+    if (status != ASTRA_VFS_OK)
+        return;
+    status = astra_vfs_mkdir(supervisor_vfs_client(), path);
+    if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_EXISTS) {
+        return;
+    }
+    persistence_ready = 1;
+    valid[0] = probe_snapshot(0u, &info[0]);
+    valid[1] = probe_snapshot(1u, &info[1]);
+    if (!valid[0] && !valid[1]) {
+        return;
+    }
+    if (!valid[0] || (valid[1] &&
+                      generation_newer(info[1].generation,
+                                       info[0].generation))) {
+        bank = 1u;
+    }
+    if (!load_snapshot(bank, &info[bank])) {
+        return;
+    }
+    previous_ready = 1;
+    snapshot_generation = info[bank].generation;
+    snapshot_boot = info[bank].boot + 1u;
+    if (snapshot_boot == 0u) {
+        snapshot_boot = 1u;
+    }
+}
+
+static void
+save_snapshot(void)
+{
+    AstraVfsClient *storage = supervisor_vfs_client();
+    SnapshotFile snapshot;
+    uint32_t next = snapshot_generation + 1u;
+    int saved;
+    char path[ASTRA_VFS_PATH_MAX];
+
+    if (!persistence_ready) {
+        return;
+    }
+    if (next == 0u) {
+        next = 1u;
+    }
+    snapshot.client = storage;
+    if (!snapshot_wire(next & 1u, ASTRA_RIGHT_WRITE, path, sizeof(path)) ||
+        astra_vfs_open(storage, path,
+                       ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+                           ASTRA_VFS_OPEN_TRUNCATE,
+                       &snapshot.file, NULL, NULL) != ASTRA_VFS_OK) {
+        persistence_ready = 0;
+        return;
+    }
+    saved = astra_event_snapshot_save(&store, snapshot_boot, next,
+                                      snapshot_write, &snapshot);
+    if (astra_vfs_close(storage, snapshot.file) != ASTRA_VFS_OK) {
+        saved = 0;
+    }
+    if (saved) {
+        snapshot_generation = next;
+    } else {
+        /* The other bank remains valid; do not hammer a failing volume. */
+        persistence_ready = 0;
+    }
+}
+
+/*
+ * The catalog off SYS:, or nothing. Nothing is survivable: every event still
+ * renders, as its message id, which is honest and still greppable -- and it is
+ * what a machine whose system volume predates the build would otherwise get
+ * wrong by rendering somebody else's text under this build's ids.
+ */
+static void
+load_catalog(void)
+{
+    AstraVfsClient *storage = supervisor_vfs_client();
+    const AstraAssign *assign = NULL;
+    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
+    char wire[ASTRA_VFS_PATH_MAX];
+    uint64_t size = 0u;
+    uint32_t offset = 0u;
+    uint16_t kind = 0u;
+
+    if (storage == NULL || supervisor_assigns() == NULL) {
+        catalog_status = ASTRA_VFS_ERR_NOT_FOUND;
+        return;
+    }
+    catalog_status = astra_assign_resolve(supervisor_assigns(),
+                                          "SYS:astra_events.cat",
+                                          ASTRA_RIGHT_READ, 0u, wire,
+                                          sizeof(wire), &assign);
+    if (catalog_status != ASTRA_VFS_OK) {
+        return;
+    }
+    catalog_status = astra_vfs_open(storage, wire, ASTRA_VFS_OPEN_READ, &file,
+                                    &size, &kind);
+    if (catalog_status != ASTRA_VFS_OK) {
+        return;
+    }
+    while (offset < sizeof(catalog_bytes)) {
+        uint32_t moved = 0u;
+        uint32_t status = astra_vfs_read(
+            storage, file, offset, (uint8_t *)catalog_bytes + offset,
+            sizeof(catalog_bytes) - offset, &moved);
+
+        if (status != ASTRA_VFS_OK) {
+            catalog_status = status;
+            break;
+        }
+        if (moved == 0u) {
+            break;
+        }
+        offset += moved;
+    }
+    (void)astra_vfs_close(storage, file);
+    if (!astra_event_catalog_init(&catalog, catalog_bytes, offset,
+                                     ASTRA_EVENT_CATALOG_BASE)) {
+        /* Read, but not this build's catalog: refused whole rather than half. */
+        catalog_status = ASTRA_VFS_ERR_INVALID;
+    }
+}
+
+static void events_pump(void);
+
+static int
+events_start(uint32_t process_handle)
+{
+    AstraAssignTable *assigns = supervisor_assigns();
+
+    if (events_ready) {
+        return 1;
+    }
+    if (assigns == NULL) {
+        return 0;
+    }
+    load_catalog();
+    if (!astra_event_store_init(&store, event_records, EVENTS_RECORD_MAX,
+                                &catalog)) {
+        return 0;
+    }
+    if (!astra_event_store_init(&previous_store, previous_records,
+                                EVENTS_RECORD_MAX, &catalog)) {
+        return 0;
+    }
+    start_persistence();
+    /*
+     * ponytail: two alternating banks retain one prior boot. Add another
+     * recovered store and bank only when evidence needs boot/-2; boot/-1 is
+     * the queued diagnostic contract and already doubles event-store BSS.
+     */
+    if (!astra_events_backend_init(&backend, &store,
+                                   previous_ready ? &previous_store : NULL,
+                                   &catalog)) {
+        return 0;
+    }
+    if (!astra_vfs_service_init(&service, astra_events_backend_ops(),
+                                &backend)) {
+        return 0;
+    }
+    /*
+     * A port of its own, because EVENTS: is a second service and a child is
+     * granted it separately from the volume. Reading history across a process
+     * boundary is the same protocol as reading a file, which is the point.
+     */
+    if (astra_port_create(EVENTS_PORT_MESSAGES,
+                          EVENTS_PORT_MESSAGES *
+                              (uint32_t)sizeof(AstraVfsRequestMessage),
+                          &events_receive, &events_handle) !=
+        ASTRA_SYSCALL_OK) {
+        return 0;
+    }
+    if (!astra_vfs_port_service_init(&events_port, events_receive,
+                                     &service)) {
+        return 0;
+    }
+    if (astra_port_create(EVENTS_PORT_MESSAGES,
+                          ASTRA_EVENT_CONTROL_REQUEST_SIZE,
+                          &control_receive, &control_handle) !=
+        ASTRA_SYSCALL_OK) {
+        return 0;
+    }
+    debug_handle = process_handle;
+    events_ready = 1;
+    drain_ready = 1;
+    events_pump();
+    return 1;
+}
+
+static void
+events_pump(void)
+{
+    /*
+     * Answering clients comes first and is unconditional: the drain below
+     * gives up permanently when the ring refuses it, and a service that
+     * stopped answering because its own logging failed would be the logging
+     * subsystem taking the machine down by the route this file exists to
+     * avoid.
+     */
+    if (events_ready) {
+        /*
+         * ponytail: control remains boot-global. Add process-aware catalog
+         * routing before making thresholds producer-specific.
+         */
+        (void)astra_event_control_proxy_pump(control_receive,
+                                             event_target_handle, 1u);
+        (void)astra_vfs_port_service_pump(&events_port, EVENTS_PORT_BUDGET);
+    }
+    /*
+     * Static, not automatic: a user thread gets one 4 KiB stack and a batch of
+     * eight drained records is 448 bytes of it. The same reason the shell's
+     * input batch lives outside its frame.
+     */
+    static AstraEventDrained drained[ASTRA_TRACE_READ_BATCH_MAX];
+    uint32_t passes = 0u;
+    int changed = 0;
+
+    if (!drain_ready) {
+        return;
+    }
+    /*
+     * Bounded per call. A burst costs several passes rather than a stall,
+     * because the drain runs on the thread a person is typing at and logging
+     * may never be the reason something else stops.
+     */
+    while (passes < 4u) {
+        uint32_t copied = 0u;
+        uint32_t lost = 0u;
+
+        if (astra_trace_read(debug_handle, &drain_cursor, drained,
+                             ASTRA_TRACE_READ_BATCH_MAX, &copied,
+                             &lost) != ASTRA_SYSCALL_OK) {
+            /*
+             * No authority, or no ring. Stop trying: a pump that retries a
+             * refusal every pass would spend the machine's time saying
+             * nothing, and the store already holds whatever arrived before.
+             *
+             * Only the drain stops. The service keeps answering: what it
+             * already holds is still worth reading, and a client asking for it
+             * has nothing to do with the ring being unreadable.
+             */
+            drain_ready = 0;
+            break;
+        }
+        astra_event_store_lost(&store, lost);
+        changed |= lost != 0u;
+        for (uint32_t index = 0u; index < copied; ++index) {
+            astra_event_store_append(&store, &drained[index]);
+        }
+        changed |= copied != 0u;
+        if (copied < ASTRA_TRACE_READ_BATCH_MAX) {
+            break;
+        }
+        ++passes;
+    }
+    if (changed) {
+        save_snapshot();
+    }
+}
+
+static const AstraStartupCapability *
+capability(const AstraStartupInfo *startup,
+           const AstraStartupCapability *capabilities, const char *name)
+{
+    for (uint32_t index = 0u; index < startup->capability_count; ++index) {
+        if (astra_capability_name_equal(capabilities[index].name, name))
+            return &capabilities[index];
+    }
+    return NULL;
+}
+
+static void ready(uint32_t handle, uint32_t status, uint32_t service_handle,
+                  uint32_t service_control)
+{
+    AstraServiceReady message;
+    uint32_t carried[2];
+
+    (void)memset(&message, 0, sizeof(message));
+    message.header.total_size = sizeof(message);
+    message.header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
+    message.header.protocol = ASTRA_SERVICE_PROTOCOL;
+    message.header.protocol_version = ASTRA_SERVICE_VERSION;
+    message.header.operation = ASTRA_SERVICE_READY;
+    message.status = status;
+    carried[0] = service_handle;
+    carried[1] = service_control;
+    (void)astra_port_send(handle, &message, sizeof(message),
+                          status == ASTRA_STATUS_OK ? carried : NULL,
+                          status == ASTRA_STATUS_OK ? 2u : 0u);
+}
+
+int astra_main(const AstraStartupInfo *startup)
+{
+    const AstraStartupCapability *capabilities;
+    const AstraStartupCapability *bootstrap;
+    const AstraStartupCapability *event_target;
+    const AstraAssign *store;
+    uint32_t status = ASTRA_STATUS_OK;
+
+    if (!astra_startup_validate(startup) ||
+        startup->capabilities_address == 0u)
+        return ASTRA_STATUS_INVALID;
+    capabilities = (const AstraStartupCapability *)(uintptr_t)
+        startup->capabilities_address;
+    bootstrap = capability(startup, capabilities,
+                           ASTRA_CAPABILITY_SERVICE_READY);
+    event_target = capability(startup, capabilities,
+                              ASTRA_CAPABILITY_EVENT_TARGET);
+    if (bootstrap == NULL || event_target == NULL ||
+        astra_assign_seed(&assigns, capabilities, startup->capability_count) !=
+            ASTRA_VFS_OK)
+        return ASTRA_STATUS_BAD_HANDLE;
+    event_target_handle = event_target->handle;
+    store = astra_assign_lookup(&assigns, "STORE");
+    if (store == NULL)
+        status = ASTRA_STATUS_NOT_FOUND;
+    if (status == ASTRA_STATUS_OK) {
+        storage_handle = store->handle;
+        if (astra_vfs_port_connect(&storage_client, storage_handle) !=
+                ASTRA_VFS_OK ||
+            !events_start(startup->process_handle))
+            status = ASTRA_STATUS_PROTOCOL;
+    }
+    ready(bootstrap->handle, status,
+          status == ASTRA_STATUS_OK ? events_handle : 0u,
+          status == ASTRA_STATUS_OK ? control_handle : 0u);
+    (void)astra_close(bootstrap->handle);
+    if (status != ASTRA_STATUS_OK)
+        return (int)status;
+    for (;;) {
+        events_pump();
+        (void)astra_yield();
+    }
+}

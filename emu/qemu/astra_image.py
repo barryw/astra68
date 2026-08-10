@@ -20,6 +20,7 @@ would be a second answer to where these things live.
 
 import os
 import subprocess
+import sys
 import tempfile
 
 REPOSITORY = os.path.dirname(
@@ -35,6 +36,17 @@ COMMANDS_DIRECTORY = "commands"
 # union is for and what nothing else on the volume can demonstrate.
 LOCAL_COMMANDS_DIRECTORY = "local/commands"
 DEFAULT_COMMANDS = os.path.join(REPOSITORY, "sw/userspace/commands/build/m68k")
+SERVICES_DIRECTORY = "services"
+STARTUP_DIRECTORY = "startup"
+STARTUP_NAME = "system"
+DEFAULT_SERVICES = os.path.join(
+    REPOSITORY, "sw/userspace/services")
+STARTUP_MANIFEST = ("service SERVICES:storage grants BLOCK_DEVICE BLOCK_IRQ "
+                    "serves SYS:r required\n"
+                    "service SERVICES:events grants SYS:r STORE:rw "
+                    "serves EVENTS:r required\n"
+                    "service SERVICES:terminal grants DISPLAY INPUT WORK:rw "
+                    "COMMANDS:r EVENTS:r EVENT_CONTROL delegates required\n")
 
 
 def ext4_partition(image):
@@ -106,7 +118,18 @@ def _commands(directory):
     return found
 
 
-def install(image, catalog=None, commands=None):
+def _services(directory):
+    found = []
+    for name in ("storage", "events", "terminal"):
+        path = os.path.join(directory, name, "build", "m68k", name)
+        if not os.path.isfile(path):
+            raise RuntimeError("no service image at %s -- build services "
+                               "first" % path)
+        found.append((name, path))
+    return found
+
+
+def install(image, catalog=None, commands=None, services=None):
     """Writes this build's catalog and commands into the image's volume.
 
     The volume is lifted out of the image, worked on, and put back. Two reasons
@@ -122,10 +145,12 @@ def install(image, catalog=None, commands=None):
     """
     catalog = catalog or DEFAULT_CATALOG
     commands = commands or DEFAULT_COMMANDS
+    services = services or DEFAULT_SERVICES
     if not os.path.exists(catalog):
         raise RuntimeError("no catalog at %s -- build the supervisor first" %
                            catalog)
     built = _commands(commands)
+    service_images = _services(services)
     offset, length = ext4_partition(image)
     with tempfile.TemporaryDirectory(prefix="astra-volume-") as temporary:
         volume = os.path.join(temporary, "volume.img")
@@ -150,6 +175,26 @@ def install(image, catalog=None, commands=None):
             _debugfs(volume, "rm %s" % target, "an old command", optional=True)
             _debugfs(volume, "write %s %s" % (path, target), "command " + name)
 
+        _debugfs(volume, "mkdir /%s" % SERVICES_DIRECTORY,
+                 "the services directory", optional=True)
+        for name, path in service_images:
+            target = "/%s/%s" % (SERVICES_DIRECTORY, name)
+            _debugfs(volume, "rm %s" % target, "an old service",
+                     optional=True)
+            _debugfs(volume, "write %s %s" % (path, target),
+                     "service " + name)
+
+        _debugfs(volume, "mkdir /%s" % STARTUP_DIRECTORY,
+                 "the startup directory", optional=True)
+        manifest = os.path.join(temporary, STARTUP_NAME)
+        with open(manifest, "w", encoding="ascii", newline="\n") as handle:
+            handle.write(STARTUP_MANIFEST)
+        target = "/%s/%s" % (STARTUP_DIRECTORY, STARTUP_NAME)
+        _debugfs(volume, "rm %s" % target, "the old startup manifest",
+                 optional=True)
+        _debugfs(volume, "write %s %s" % (manifest, target),
+                 "the startup manifest")
+
         # The shadowing pair. `which` is installed on both members under two
         # names: the shipped one stays where it is, and a copy goes into the
         # writable member under the same name as a shipped command, so a
@@ -166,3 +211,9 @@ def install(image, catalog=None, commands=None):
             _debugfs(volume, "write %s %s" % (path, target),
                      "a shadowing command")
         _splice(image, offset, volume)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        raise SystemExit("usage: astra_image.py IMAGE")
+    install(sys.argv[1])

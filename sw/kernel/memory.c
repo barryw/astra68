@@ -9,7 +9,7 @@
 #define KERNEL_BITMAP_WORDS ((KERNEL_MAX_FRAMES + 31u) / 32u)
 #define KERNEL_FRAME_INDEX_NONE UINT16_MAX
 
-#if defined(__GNUC__)
+#if defined(__GNUC__) && defined(__ELF__)
 #define KERNEL_NOINIT __attribute__((section(".noinit")))
 #else
 #define KERNEL_NOINIT
@@ -455,7 +455,7 @@ KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info)
 
     stats.ram_base = info->ram_base;
     stats.total_frames = info->ram_size / KERNEL_PAGE_SIZE;
-    for (uint32_t index = 0u; index < KERNEL_MAX_FRAMES; ++index) {
+    for (uint32_t index = 0u; index < stats.total_frames; ++index) {
         owner_next[index] = KERNEL_FRAME_INDEX_NONE;
         owner_previous[index] = KERNEL_FRAME_INDEX_NONE;
         frame_allocation_sites[index] = KERNEL_ALLOCATION_SITE_INVALID;
@@ -465,7 +465,8 @@ KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info)
         owner_ledgers[index].head = KERNEL_FRAME_INDEX_NONE;
         owner_ledgers[index].frame_count = 0u;
     }
-    for (uint32_t word = 0u; word < KERNEL_BITMAP_WORDS; ++word) {
+    for (uint32_t word = 0u;
+         word < (stats.total_frames + 31u) / 32u; ++word) {
         blocked_bitmap[word] = UINT32_MAX;
         dynamic_bitmap[word] = 0u;
         classified_bitmap[word] = 0u;

@@ -35,11 +35,13 @@ typedef struct MockPort {
     int      open;
     /* Attaching a handle to a message moves it: the sender stops holding it. */
     int      given_away;
+    uint32_t target;
 } MockPort;
 
 static MockPort ports[MOCK_PORT_MAX];
 static uint32_t next_port = 1u;
 static uint32_t mock_activity;
+static uint8_t mock_area[ASTRA_VFS_BULK_MAX];
 /* Set while the transport is blocked, so the service runs inside its wait. */
 static AstraVfsPortService *served;
 static int refuse_send;
@@ -63,7 +65,53 @@ mock_open(uint32_t capacity)
     ports[handle].capacity = capacity > MOCK_QUEUE_MAX ? MOCK_QUEUE_MAX :
                                                          capacity;
     ports[handle].open = 1;
+    ports[handle].target = handle;
     return handle;
+}
+
+uint32_t
+astra_handle_duplicate(uint32_t handle, uint32_t rights, uint32_t *duplicate)
+{
+    uint32_t copy;
+
+    (void)rights;
+    if (duplicate == NULL || handle == 0u || handle >= MOCK_PORT_MAX ||
+        !ports[handle].open || ports[handle].given_away)
+        return ASTRA_SYSCALL_INVALID_HANDLE;
+    copy = mock_open(1u);
+    ports[copy].target = ports[handle].target;
+    *duplicate = copy;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
+astra_area_create(uint32_t byte_size, uint32_t rights, uint32_t *handle)
+{
+    (void)rights;
+    if (handle == NULL || byte_size > sizeof(mock_area))
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    *handle = mock_open(1u);
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
+astra_area_map(uint32_t handle, uint32_t permissions, void **address,
+               uint32_t *byte_size)
+{
+    (void)permissions;
+    if (address == NULL || byte_size == NULL || handle == 0u ||
+        handle >= MOCK_PORT_MAX || !ports[handle].open)
+        return ASTRA_SYSCALL_INVALID_HANDLE;
+    *address = mock_area;
+    *byte_size = sizeof(mock_area);
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
+astra_area_unmap(void *address)
+{
+    return address == mock_area ? ASTRA_SYSCALL_OK :
+                                  ASTRA_SYSCALL_INVALID_ARGUMENT;
 }
 
 uint32_t
@@ -92,7 +140,7 @@ astra_port_send(uint32_t handle, const void *message, uint32_t size,
         ports[handle].given_away) {
         return ASTRA_SYSCALL_INVALID_HANDLE;
     }
-    port = &ports[handle];
+    port = &ports[ports[handle].target];
     if (port->count >= port->capacity) {
         return ASTRA_SYSCALL_WOULD_BLOCK;
     }
@@ -122,7 +170,7 @@ astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
     if (handle == 0u || handle >= MOCK_PORT_MAX || !ports[handle].open) {
         return ASTRA_SYSCALL_INVALID_HANDLE;
     }
-    port = &ports[handle];
+    port = &ports[ports[handle].target];
     if (port->count == 0u) {
         return ASTRA_SYSCALL_WOULD_BLOCK;
     }
@@ -367,8 +415,7 @@ test_a_request_crosses_and_the_reply_is_the_same(void)
            ASTRA_VFS_OK);
     /* The handshake itself crosses the port, which is the first thing to work. */
     served = saved;
-    assert(astra_vfs_connect(&remote, astra_vfs_port_transport,
-                             &service_handle) == ASTRA_VFS_OK);
+    assert(astra_vfs_port_connect(&remote, service_handle) == ASTRA_VFS_OK);
     assert(remote.version == local.version);
     /* Two clients, so two sessions: the service numbers them independently. */
     assert(remote.session != ASTRA_VFS_SESSION_INVALID);
@@ -395,6 +442,12 @@ test_a_request_crosses_and_the_reply_is_the_same(void)
     assert(astra_vfs_open(&remote, "", ASTRA_VFS_OPEN_READ, &remote_file, NULL,
                           NULL) == ASTRA_VFS_ERR_INVALID);
 
+    /* One reply port was created at HELLO and reused by every remote call. */
+    assert(next_port == 4u);
+    assert(host.reply_sessions[0] == remote.session);
+    assert(astra_vfs_disconnect(&remote) == ASTRA_VFS_OK);
+    assert(host.reply_sessions[0] == ASTRA_VFS_SESSION_INVALID);
+
     assert(host.requests >= 4u);
     assert(host.refused == 0u && host.dropped == 0u);
     served = NULL;
@@ -413,8 +466,7 @@ test_a_dead_peer_is_reported_and_not_waited_on(void)
     service_handle = mock_open(MOCK_QUEUE_MAX);
     assert(astra_vfs_port_service_init(&host, service_handle, &service));
     served = &host;
-    assert(astra_vfs_connect(&remote, astra_vfs_port_transport,
-                             &service_handle) == ASTRA_VFS_OK);
+    assert(astra_vfs_port_connect(&remote, service_handle) == ASTRA_VFS_OK);
 
     /*
      * The service goes. A caller must be told there is nobody there rather
@@ -440,9 +492,78 @@ test_a_dead_peer_is_reported_and_not_waited_on(void)
         uint32_t nothing = MOCK_PORT_MAX - 1u;
         AstraVfsClient orphan;
 
-        assert(astra_vfs_connect(&orphan, astra_vfs_port_transport,
-                                 &nothing) == ASTRA_VFS_ERR_BAD_HANDLE);
+        assert(astra_vfs_port_connect(&orphan, nothing) ==
+               ASTRA_VFS_ERR_BAD_HANDLE);
     }
+    served = NULL;
+}
+
+static uint32_t
+legacy_transport(void *context, uint32_t operation,
+                 const AstraVfsRequest *request, AstraVfsReply *reply)
+{
+    AstraVfsClient *client = context;
+    AstraVfsRequest legacy = *request;
+
+    legacy.version = UINT16_C(2);
+    client->version = UINT16_C(2);
+    return astra_vfs_port_transport(client, operation, &legacy, reply);
+}
+
+static void
+test_version_two_keeps_per_request_reply_ports(void)
+{
+    AstraVfsPortService host;
+    AstraVfsClient remote;
+    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
+    uint32_t service_handle;
+
+    mock_reset();
+    service_start();
+    service_handle = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_vfs_port_service_init(&host, service_handle, &service));
+    memset(&remote, 0, sizeof(remote));
+    remote.port_service = service_handle;
+    served = &host;
+    assert(astra_vfs_connect(&remote, legacy_transport, &remote) ==
+           ASTRA_VFS_OK);
+    assert(remote.version == UINT16_C(2));
+    assert(astra_vfs_open(&remote, "/a", ASTRA_VFS_OPEN_READ, &file, NULL,
+                          NULL) == ASTRA_VFS_OK);
+    assert(astra_vfs_close(&remote, file) == ASTRA_VFS_OK);
+    assert(astra_vfs_disconnect(&remote) == ASTRA_VFS_OK);
+    /* Service + one reply port and one duplicated send end per operation. */
+    assert(next_port == 7u);
+    for (uint32_t index = 0u; index < ASTRA_VFS_SESSION_MAX; ++index)
+        assert(host.reply_sessions[index] == ASTRA_VFS_SESSION_INVALID);
+    served = NULL;
+}
+
+static void
+test_bulk_read_crosses_once_through_a_shared_area(void)
+{
+    AstraVfsPortService host;
+    AstraVfsClient remote;
+    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
+    uint32_t service_handle;
+    uint32_t moved = 0u;
+    uint8_t bytes[32];
+
+    mock_reset();
+    service_start();
+    service_handle = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_vfs_port_service_init(&host, service_handle, &service));
+    served = &host;
+    assert(astra_vfs_port_connect(&remote, service_handle) == ASTRA_VFS_OK);
+    assert(astra_vfs_open(&remote, "/a", ASTRA_VFS_OPEN_READ, &file, NULL,
+                          NULL) == ASTRA_VFS_OK);
+    assert(astra_vfs_port_read_bulk(&remote, file, 5u, bytes, sizeof(bytes),
+                                    &moved) == ASTRA_VFS_OK);
+    assert(moved == 8u);
+    for (uint32_t index = 0u; index < moved; ++index)
+        assert(bytes[index] == (uint8_t)(5u + index));
+    assert(host.area_addresses[0] == mock_area);
+    assert(astra_vfs_disconnect(&remote) == ASTRA_VFS_OK);
     served = NULL;
 }
 
@@ -459,8 +580,7 @@ test_the_service_adopts_the_callers_activity(void)
     service_handle = mock_open(MOCK_QUEUE_MAX);
     assert(astra_vfs_port_service_init(&host, service_handle, &service));
     served = &host;
-    assert(astra_vfs_connect(&remote, astra_vfs_port_transport,
-                             &service_handle) == ASTRA_VFS_OK);
+    assert(astra_vfs_port_connect(&remote, service_handle) == ASTRA_VFS_OK);
 
     /*
      * One request is one story across every process it touches. The caller
@@ -489,6 +609,14 @@ test_the_service_adopts_the_callers_activity(void)
                           NULL) == ASTRA_VFS_OK);
     assert(backend_activity == 0x22u);
     assert(astra_activity_current() == 0x11u);
+
+    /* Zero means no caller story. It must not allocate one in the service. */
+    mock_activity = 0x33u;
+    remote.activity = 0u;
+    assert(astra_vfs_open(&remote, "/a", ASTRA_VFS_OPEN_READ, &file, NULL,
+                          NULL) == ASTRA_VFS_OK);
+    assert(backend_activity == 0x33u);
+    assert(astra_activity_current() == 0x33u);
     served = NULL;
 }
 
@@ -574,6 +702,8 @@ main(void)
 {
     test_a_request_crosses_and_the_reply_is_the_same();
     test_a_dead_peer_is_reported_and_not_waited_on();
+    test_version_two_keeps_per_request_reply_ports();
+    test_bulk_read_crosses_once_through_a_shared_area();
     test_the_service_adopts_the_callers_activity();
     test_a_message_that_is_not_the_protocol_is_refused();
     test_an_answer_with_nowhere_to_go_is_counted();

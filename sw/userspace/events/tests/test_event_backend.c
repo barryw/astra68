@@ -10,7 +10,9 @@
 #define RECORD_COUNT 64u
 
 static AstraEventStored records[RECORD_COUNT];
+static AstraEventStored previous_records[RECORD_COUNT];
 static AstraEventStore store;
+static AstraEventStore previous;
 static AstraEventDescriptor catalog_records[2];
 static AstraEventCatalog catalog;
 static AstraEventsBackend backend;
@@ -29,7 +31,8 @@ set_text(char *out, uint32_t capacity, const char *text)
 }
 
 static void
-append(uint32_t sequence, uint16_t flags, uint32_t message, uint32_t activity)
+append_to(AstraEventStore *target, uint32_t sequence, uint16_t flags,
+          uint32_t message, uint32_t activity)
 {
     AstraEventDrained event;
 
@@ -40,7 +43,13 @@ append(uint32_t sequence, uint16_t flags, uint32_t message, uint32_t activity)
     event.activity = activity;
     event.process = 0x10000011u;
     event.thread = 16u;
-    astra_event_store_append(&store, &event);
+    astra_event_store_append(target, &event);
+}
+
+static void
+append(uint32_t sequence, uint16_t flags, uint32_t message, uint32_t activity)
+{
+    append_to(&store, sequence, flags, message, activity);
 }
 
 static void
@@ -65,7 +74,7 @@ reset(void)
     assert(astra_event_catalog_init(&catalog, catalog_records,
                                     sizeof(catalog_records), base));
     assert(astra_event_store_init(&store, records, RECORD_COUNT, &catalog));
-    assert(astra_events_backend_init(&backend, &store, &catalog));
+    assert(astra_events_backend_init(&backend, &store, NULL, &catalog));
 }
 
 /* Reads a whole leaf through the ops, one bounded page at a time. */
@@ -92,9 +101,10 @@ read_all(const char *path, char *out, uint32_t capacity)
         assert(ops->read(&backend, node, total, &out[total], chunk, &moved) ==
                ASTRA_VFS_OK);
         total += moved;
-        if (moved == 0u || total + 1u >= capacity) {
+        if (moved == 0u) {
             break;
         }
+        assert(total + 1u < capacity);
     }
     out[total] = '\0';
     assert(ops->close(&backend, node) == ASTRA_VFS_OK);
@@ -301,6 +311,31 @@ static void test_the_tree_lists_itself(void)
     assert(entries == 1u);
 }
 
+static void test_the_previous_boot_is_real_or_absent(void)
+{
+    const AstraVfsBackendOps *ops = astra_events_backend_ops();
+    AstraVfsNodeInfo info;
+    char text[1024];
+    char name[16];
+    uint64_t next = 0u;
+
+    reset();
+    memset(previous_records, 0, sizeof(previous_records));
+    assert(astra_event_store_init(&previous, previous_records, RECORD_COUNT,
+                                  &catalog));
+    append_to(&previous, 3u, ASTRA_EVENT_LEVEL_WARNING, base, 0u);
+    assert(astra_events_backend_init(&backend, &store, &previous, &catalog));
+    (void)read_all("/boot/-1/warning", text, sizeof(text));
+    assert(strstr(text, "command accepted") != NULL);
+
+    assert(ops->readdir(&backend, "/boot", 0u, name, sizeof(name), &info,
+                        &next) == ASTRA_VFS_OK);
+    assert(strcmp(name, "current") == 0 && next == 1u);
+    assert(ops->readdir(&backend, "/boot", next, name, sizeof(name), &info,
+                        &next) == ASTRA_VFS_OK);
+    assert(strcmp(name, "-1") == 0 && next == 2u);
+}
+
 /*
  * Nothing can rm an event. The rights on the binding refuse a write first;
  * this is the second refusal, because a store whose immutability depends on
@@ -357,6 +392,7 @@ int main(void)
     test_every_page_size_reads_the_same_file();
     test_a_path_is_the_filter();
     test_the_tree_lists_itself();
+    test_the_previous_boot_is_real_or_absent();
     test_every_write_verb_is_refused();
     test_the_earliest_events_survive();
     puts("astra events backend: PASS");

@@ -21,12 +21,14 @@
 #include <stddef.h>
 
 /*
- * One reply at a time, one message deep. The protocol is synchronous -- a
- * client has at most one request outstanding, which is why the Kit keeps one
- * request and one reply record -- so a deeper reply port would be capacity
- * nothing can use.
+ * One reply at a time, one message deep. The protocol is synchronous, so a
+ * deeper reply port would be capacity nothing can use.
  */
 #define VFS_PORT_REPLY_MESSAGES 1u
+
+/* One synchronous thread, one in-flight VFS call, one reply channel. */
+static uint32_t reply_receive;
+static uint32_t reply_send;
 
 /*
  * How long a client waits for a reply before deciding there is nobody there.
@@ -54,6 +56,69 @@ fill_header(AstraMessageHeader *header, uint32_t operation, uint32_t size,
     header->transaction_id = transaction;
 }
 
+static void
+port_client_reset(AstraVfsClient *client)
+{
+    if (client->port_reply_send != 0u)
+        (void)astra_close(client->port_reply_send);
+    client->port_reply_send = 0u;
+}
+
+static uint32_t
+reply_channel(void)
+{
+    if (reply_receive != 0u)
+        return ASTRA_SYSCALL_OK;
+    return astra_port_create(VFS_PORT_REPLY_MESSAGES,
+                             (uint32_t)sizeof(AstraVfsReplyMessage),
+                             &reply_receive, &reply_send);
+}
+
+static uint32_t
+duplicate_reply_send(uint32_t *duplicate)
+{
+    uint32_t status = reply_channel();
+
+    if (status != ASTRA_SYSCALL_OK)
+        return status;
+    status = astra_handle_duplicate(reply_send,
+                                    ASTRA_RIGHT_SIGNAL |
+                                        ASTRA_RIGHT_TRANSFER,
+                                    duplicate);
+    if (status != ASTRA_SYSCALL_INVALID_HANDLE)
+        return status;
+
+    /* A test reset or a closed channel: recreate once, then report honestly. */
+    (void)astra_close(reply_send);
+    (void)astra_close(reply_receive);
+    reply_send = 0u;
+    reply_receive = 0u;
+    status = reply_channel();
+    return status == ASTRA_SYSCALL_OK ?
+        astra_handle_duplicate(reply_send,
+                               ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_TRANSFER,
+                               duplicate) : status;
+}
+
+uint32_t
+astra_vfs_port_connect(AstraVfsClient *client, uint32_t service)
+{
+    uint32_t status;
+
+    if (client == NULL || service == 0u)
+        return ASTRA_VFS_ERR_INVALID;
+    client->port_service = service;
+    client->port_reply_send = 0u;
+    client->port_area = 0u;
+    client->port_area_send = 0u;
+    client->port_area_address = NULL;
+    client->port_area_size = 0u;
+    status = astra_vfs_connect(client, astra_vfs_port_transport, client);
+    if (status != ASTRA_VFS_OK)
+        port_client_reset(client);
+    return status;
+}
+
 uint32_t
 astra_vfs_port_transport(void *context, uint32_t operation,
                          const AstraVfsRequest *request, AstraVfsReply *reply)
@@ -67,38 +132,49 @@ astra_vfs_port_transport(void *context, uint32_t operation,
      */
     static AstraVfsRequestMessage outgoing;
     static AstraVfsReplyMessage incoming;
-    const uint32_t *service = context;
-    uint32_t handles[1];
-    uint32_t receive = 0u;
+    AstraVfsClient *client = context;
+    uint32_t handles[1] = {0u};
+    uint32_t handle_count = 0u;
     uint32_t size = 0u;
     uint32_t status;
 
-    if (service == NULL || *service == 0u || request == NULL ||
+    if (client == NULL || client->port_service == 0u || request == NULL ||
         reply == NULL) {
         return ASTRA_VFS_ERR_INVALID;
     }
     /*
-     * A reply port per request, because attaching a handle to a message moves
-     * it: a cached one names nothing after its first use. It is also what
-     * makes the reply channel a capability the service holds for exactly one
-     * answer and not a moment longer.
+     * Version 3 moves the send handle once, during HELLO. If the peer negotiates
+     * version 2, the reply below closes this pair and the next request creates
+     * another one, preserving the old transport during a rolling update.
      */
-    status = astra_port_create(VFS_PORT_REPLY_MESSAGES,
-                               (uint32_t)sizeof(incoming), &receive,
-                               &handles[0]);
-    if (status != ASTRA_SYSCALL_OK) {
-        return ASTRA_VFS_ERR_LIMIT;
+    if (operation == ASTRA_VFS_OP_BIND_AREA) {
+        if (client->port_area_send == 0u)
+            return ASTRA_VFS_ERR_BAD_HANDLE;
+        handles[0] = client->port_area_send;
+        handle_count = 1u;
+    } else if (operation == ASTRA_VFS_OP_HELLO ||
+               client->version < UINT16_C(3)) {
+        status = duplicate_reply_send(&client->port_reply_send);
+        if (status != ASTRA_SYSCALL_OK)
+            return status == ASTRA_SYSCALL_RESOURCE_LIMIT ?
+                ASTRA_VFS_ERR_LIMIT : ASTRA_VFS_ERR_BAD_HANDLE;
+        handles[0] = client->port_reply_send;
+        handle_count = 1u;
     }
     fill_header(&outgoing.header, operation, (uint32_t)sizeof(outgoing),
                 request->activity);
     outgoing.request = *request;
 
-    status = astra_port_send(*service, &outgoing, sizeof(outgoing), handles,
-                             1u);
+    status = astra_port_send(client->port_service, &outgoing,
+                             sizeof(outgoing), handles, handle_count);
     if (status != ASTRA_SYSCALL_OK) {
-        /* The send failed, so the handle did not go: both ends are still ours. */
-        (void)astra_close(handles[0]);
-        (void)astra_close(receive);
+        if (operation == ASTRA_VFS_OP_BIND_AREA) {
+            if (client->port_area_send != 0u)
+                (void)astra_close(client->port_area_send);
+            client->port_area_send = 0u;
+        } else if (handle_count != 0u) {
+            port_client_reset(client);
+        }
         /*
          * Which failure it was, because they call for different things. A full
          * port is a service that is behind and a caller may try again; a
@@ -127,22 +203,30 @@ astra_vfs_port_transport(void *context, uint32_t operation,
          */
         if (status == ASTRA_SYSCALL_PEER_DEAD ||
             status == ASTRA_SYSCALL_CLOSED) {
+            port_client_reset(client);
             return ASTRA_VFS_ERR_PEER;
         }
         return ASTRA_VFS_ERR_NOT_FOUND;
+    }
+    if (handle_count != 0u) {
+        if (operation == ASTRA_VFS_OP_BIND_AREA)
+            client->port_area_send = 0u;
+        else
+            client->port_reply_send = 0u; /* moved into the service message */
     }
     {
         uint64_t deadline = astra_clock_monotonic() +
                             VFS_PORT_REPLY_DEADLINE_NS;
 
         for (;;) {
-            status = astra_port_receive(receive, &incoming, sizeof(incoming),
-                                        NULL, 0u, &size, NULL);
+            status = astra_port_receive(reply_receive, &incoming,
+                                        sizeof(incoming), NULL, 0u, &size,
+                                        NULL);
             if (status == ASTRA_SYSCALL_OK) {
                 break;
             }
             if (status != ASTRA_SYSCALL_WOULD_BLOCK) {
-                (void)astra_close(receive);
+                port_client_reset(client);
                 /*
                  * The service took the request and will not answer. Every way
                  * that happens is the same fact to a caller: nobody is there.
@@ -155,14 +239,13 @@ astra_vfs_port_transport(void *context, uint32_t operation,
              * -- and bounded, because a wait with no end is the hang this
              * return value exists to prevent.
              */
-            status = astra_wait_one(receive, deadline, NULL);
+            status = astra_wait_one(reply_receive, deadline, NULL);
             if (status != ASTRA_SYSCALL_OK) {
-                (void)astra_close(receive);
+                port_client_reset(client);
                 return ASTRA_VFS_ERR_PEER;
             }
         }
     }
-    (void)astra_close(receive);
 
     /*
      * A reply that is not this protocol is not an answer. It cannot be
@@ -173,10 +256,164 @@ astra_vfs_port_transport(void *context, uint32_t operation,
         incoming.header.protocol != ASTRA_VFS_PROTOCOL ||
         incoming.header.operation != operation ||
         incoming.reply.size != ASTRA_VFS_REPLY_SIZE) {
+        port_client_reset(client);
         return ASTRA_VFS_ERR_PROTOCOL;
     }
     *reply = incoming.reply;
     return ASTRA_VFS_OK;
+}
+
+static void
+prepare_request(AstraVfsClient *client, uint32_t operation)
+{
+    uint8_t *bytes = (uint8_t *)&client->request;
+    uint32_t index;
+
+    for (index = 0u; index < sizeof(client->request); ++index)
+        bytes[index] = 0u;
+    client->request.size = ASTRA_VFS_REQUEST_SIZE;
+    client->request.version = client->version;
+    client->request.session = client->session;
+    client->request.activity = client->activity;
+    (void)operation;
+}
+
+static uint32_t
+ensure_area(AstraVfsClient *client)
+{
+    uint32_t status;
+    void *address = NULL;
+    uint32_t size = 0u;
+
+    if (client->port_area_address != NULL)
+        return ASTRA_VFS_OK;
+    status = astra_area_create(
+        ASTRA_VFS_BULK_MAX,
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+            ASTRA_RIGHT_TRANSFER | ASTRA_RIGHT_ADMINISTER,
+        &client->port_area);
+    if (status != ASTRA_SYSCALL_OK)
+        return ASTRA_VFS_ERR_LIMIT;
+    status = astra_area_map(client->port_area,
+                            ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+                            &address, &size);
+    if (status != ASTRA_SYSCALL_OK)
+        goto fail;
+    status = astra_handle_duplicate(
+        client->port_area,
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+            ASTRA_RIGHT_TRANSFER,
+        &client->port_area_send);
+    if (status != ASTRA_SYSCALL_OK)
+        goto fail;
+    client->port_area_address = address;
+    client->port_area_size = size;
+    prepare_request(client, ASTRA_VFS_OP_BIND_AREA);
+    client->request.length = size;
+    status = astra_vfs_port_transport(client, ASTRA_VFS_OP_BIND_AREA,
+                                      &client->request, &client->reply);
+    if (status == ASTRA_VFS_OK)
+        status = client->reply.status;
+    if (status == ASTRA_VFS_OK)
+        return status;
+
+fail:
+    if (client->port_area_send != 0u)
+        (void)astra_close(client->port_area_send);
+    if (address != NULL)
+        (void)astra_area_unmap(address);
+    (void)astra_close(client->port_area);
+    client->port_area = 0u;
+    client->port_area_send = 0u;
+    client->port_area_address = NULL;
+    client->port_area_size = 0u;
+    return status == ASTRA_SYSCALL_RESOURCE_LIMIT ? ASTRA_VFS_ERR_LIMIT :
+                                                    ASTRA_VFS_ERR_IO;
+}
+
+uint32_t
+astra_vfs_port_read_bulk(AstraVfsClient *client, AstraVfsFile file,
+                         uint64_t offset, void *buffer, uint32_t length,
+                         uint32_t *moved)
+{
+    uint8_t *out = buffer;
+    const uint8_t *shared;
+    uint32_t status;
+    uint32_t index;
+
+    if (client == NULL || buffer == NULL || moved == NULL || length == 0u)
+        return ASTRA_VFS_ERR_INVALID;
+    *moved = 0u;
+    if (client->version < UINT16_C(3))
+        return astra_vfs_read(client, file, offset, buffer,
+                              length < ASTRA_VFS_IO_MAX ? length :
+                                                          ASTRA_VFS_IO_MAX,
+                              moved);
+    status = ensure_area(client);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (length > client->port_area_size)
+        length = client->port_area_size;
+    prepare_request(client, ASTRA_VFS_OP_READ_AREA);
+    client->request.file = file;
+    client->request.offset = offset;
+    client->request.length = length;
+    status = astra_vfs_port_transport(client, ASTRA_VFS_OP_READ_AREA,
+                                      &client->request, &client->reply);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (client->reply.status != ASTRA_VFS_OK)
+        return client->reply.status;
+    if (client->reply.count > length)
+        return ASTRA_VFS_ERR_PROTOCOL;
+    shared = client->port_area_address;
+    for (index = 0u; index < client->reply.count; ++index)
+        out[index] = shared[index];
+    *moved = client->reply.count;
+    return ASTRA_VFS_OK;
+}
+
+static int
+reply_slot(const AstraVfsPortService *host, uint32_t session)
+{
+    uint32_t index;
+
+    if (session == ASTRA_VFS_SESSION_INVALID)
+        return -1;
+    for (index = 0u; index < ASTRA_VFS_SESSION_MAX; ++index)
+        if (host->reply_sessions[index] == session)
+            return (int)index;
+    return -1;
+}
+
+static int
+reply_bind(AstraVfsPortService *host, uint32_t session, uint32_t handle)
+{
+    uint32_t index;
+
+    for (index = 0u; index < ASTRA_VFS_SESSION_MAX; ++index) {
+        if (host->reply_sessions[index] == 0u) {
+            host->reply_sessions[index] = session;
+            host->reply_handles[index] = handle;
+            return (int)index;
+        }
+    }
+    return -1;
+}
+
+static void
+reply_release(AstraVfsPortService *host, uint32_t index)
+{
+    if (host->area_addresses[index] != NULL)
+        (void)astra_area_unmap(host->area_addresses[index]);
+    if (host->area_handles[index] != 0u)
+        (void)astra_close(host->area_handles[index]);
+    host->area_addresses[index] = NULL;
+    host->area_handles[index] = 0u;
+    host->area_sizes[index] = 0u;
+    (void)astra_close(host->reply_handles[index]);
+    host->reply_handles[index] = 0u;
+    host->reply_sessions[index] = 0u;
 }
 
 int
@@ -192,6 +429,13 @@ astra_vfs_port_service_init(AstraVfsPortService *host, uint32_t receive,
     host->refused = 0u;
     host->dropped = 0u;
     host->stalled = 0u;
+    for (uint32_t index = 0u; index < ASTRA_VFS_SESSION_MAX; ++index) {
+        host->reply_sessions[index] = 0u;
+        host->reply_handles[index] = 0u;
+        host->area_handles[index] = 0u;
+        host->area_addresses[index] = NULL;
+        host->area_sizes[index] = 0u;
+    }
     return 1;
 }
 
@@ -210,6 +454,8 @@ astra_vfs_port_service_pump(AstraVfsPortService *host, uint32_t budget)
         uint32_t handle_count = 0u;
         uint32_t size = 0u;
         uint32_t previous;
+        uint32_t reply_handle;
+        int sent;
         uint32_t status = astra_port_receive(host->receive, &incoming,
                                              sizeof(incoming), handles, 1u,
                                              &size, &handle_count);
@@ -229,12 +475,43 @@ astra_vfs_port_service_pump(AstraVfsPortService *host, uint32_t budget)
             incoming.header.protocol != ASTRA_VFS_PROTOCOL ||
             incoming.header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
             incoming.request.size != ASTRA_VFS_REQUEST_SIZE ||
-            handle_count != 1u) {
+            handle_count > 1u) {
             ++host->refused;
             if (handle_count == 1u) {
                 (void)astra_close(handles[0]);
             }
             continue;
+        }
+
+        int slot = reply_slot(host, incoming.request.session);
+        int persistent_hello =
+            incoming.header.operation == ASTRA_VFS_OP_HELLO &&
+            incoming.request.version >= UINT16_C(3);
+
+        if (incoming.header.operation == ASTRA_VFS_OP_HELLO) {
+            if (handle_count != 1u) {
+                ++host->refused;
+                continue;
+            }
+            reply_handle = handles[0];
+        } else if (slot >= 0) {
+            uint32_t expected = incoming.header.operation ==
+                ASTRA_VFS_OP_BIND_AREA ? 1u : 0u;
+
+            if (handle_count != expected) {
+                ++host->refused;
+                if (handle_count != 0u)
+                    (void)astra_close(handles[0]);
+                continue;
+            }
+            reply_handle = host->reply_handles[(uint32_t)slot];
+        } else {
+            /* Version 2 transfers a fresh reply handle with every request. */
+            if (handle_count != 1u) {
+                ++host->refused;
+                continue;
+            }
+            reply_handle = handles[0];
         }
 
         /*
@@ -246,21 +523,107 @@ astra_vfs_port_service_pump(AstraVfsPortService *host, uint32_t budget)
          * until now.
          */
         previous = astra_activity_current();
-        (void)astra_activity_adopt(incoming.request.activity);
-        astra_vfs_service_dispatch(host->service, incoming.header.operation,
-                                   &incoming.request, &outgoing.reply);
+        if (incoming.request.activity != 0u)
+            (void)astra_activity_adopt(incoming.request.activity);
+        if (incoming.header.operation == ASTRA_VFS_OP_BIND_AREA && slot >= 0) {
+            void *address = NULL;
+            uint32_t mapped = 0u;
+            uint32_t map_status;
+            uint8_t *bytes = (uint8_t *)&outgoing.reply;
+
+            for (uint32_t index = 0u; index < sizeof(outgoing.reply); ++index)
+                bytes[index] = 0u;
+            outgoing.reply.size = ASTRA_VFS_REPLY_SIZE;
+            outgoing.reply.version = incoming.request.version;
+            outgoing.reply.session = incoming.request.session;
+            if (host->area_addresses[(uint32_t)slot] != NULL) {
+                (void)astra_close(handles[0]);
+                outgoing.reply.status = ASTRA_VFS_ERR_BUSY;
+            } else {
+                map_status = astra_area_map(
+                    handles[0], ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+                    &address, &mapped);
+                if (map_status == ASTRA_SYSCALL_OK &&
+                    mapped >= incoming.request.length &&
+                    incoming.request.length <= ASTRA_VFS_BULK_MAX) {
+                    host->area_handles[(uint32_t)slot] = handles[0];
+                    host->area_addresses[(uint32_t)slot] = address;
+                    host->area_sizes[(uint32_t)slot] =
+                        incoming.request.length;
+                    outgoing.reply.status = ASTRA_VFS_OK;
+                } else {
+                    if (address != NULL)
+                        (void)astra_area_unmap(address);
+                    (void)astra_close(handles[0]);
+                    outgoing.reply.status =
+                        map_status == ASTRA_SYSCALL_RESOURCE_LIMIT ?
+                            ASTRA_VFS_ERR_LIMIT : ASTRA_VFS_ERR_INVALID;
+                }
+            }
+        } else if (incoming.header.operation == ASTRA_VFS_OP_READ_AREA &&
+                   slot >= 0) {
+            AstraVfsRequest piece = incoming.request;
+            uint32_t total = 0u;
+
+            if (host->area_addresses[(uint32_t)slot] == NULL ||
+                incoming.request.length == 0u ||
+                incoming.request.length > host->area_sizes[(uint32_t)slot]) {
+                astra_vfs_service_dispatch(host->service,
+                                           ASTRA_VFS_OP_READ,
+                                           &piece, &outgoing.reply);
+                outgoing.reply.status = ASTRA_VFS_ERR_INVALID;
+                outgoing.reply.count = 0u;
+            } else {
+                while (total < incoming.request.length) {
+                    uint32_t index;
+                    uint32_t chunk = incoming.request.length - total;
+
+                    if (chunk > ASTRA_VFS_IO_MAX)
+                        chunk = ASTRA_VFS_IO_MAX;
+                    piece.offset = incoming.request.offset + total;
+                    piece.length = chunk;
+                    astra_vfs_service_dispatch(host->service,
+                                               ASTRA_VFS_OP_READ,
+                                               &piece, &outgoing.reply);
+                    if (outgoing.reply.status != ASTRA_VFS_OK)
+                        break;
+                    for (index = 0u; index < outgoing.reply.count; ++index)
+                        host->area_addresses[(uint32_t)slot][total + index] =
+                            outgoing.reply.payload[index];
+                    total += outgoing.reply.count;
+                    if (outgoing.reply.count < chunk)
+                        break;
+                }
+                outgoing.reply.count = total;
+            }
+        } else {
+            astra_vfs_service_dispatch(host->service,
+                                       incoming.header.operation,
+                                       &incoming.request, &outgoing.reply);
+        }
         /*
          * Restored before the reply goes out, so the next thing this thread
          * does -- including serving somebody else -- is not still inside the
          * last caller's story.
          */
-        (void)astra_activity_adopt(previous);
+        if (incoming.request.activity != 0u)
+            (void)astra_activity_adopt(previous);
 
         fill_header(&outgoing.header, incoming.header.operation,
                     (uint32_t)sizeof(outgoing),
                     incoming.header.transaction_id);
-        if (astra_port_send(handles[0], &outgoing, sizeof(outgoing), NULL,
-                            0u) == ASTRA_SYSCALL_OK) {
+        if (persistent_hello && outgoing.reply.status == ASTRA_VFS_OK) {
+            slot = reply_bind(host, outgoing.reply.session, reply_handle);
+            if (slot < 0) {
+                astra_vfs_service_release_session(host->service,
+                                                  outgoing.reply.session);
+                outgoing.reply.session = ASTRA_VFS_SESSION_INVALID;
+                outgoing.reply.status = ASTRA_VFS_ERR_LIMIT;
+            }
+        }
+        sent = astra_port_send(reply_handle, &outgoing, sizeof(outgoing),
+                               NULL, 0u) == ASTRA_SYSCALL_OK;
+        if (sent) {
             ++host->requests;
             ++answered;
         } else {
@@ -271,7 +634,15 @@ astra_vfs_port_service_pump(AstraVfsPortService *host, uint32_t budget)
              */
             ++host->dropped;
         }
-        (void)astra_close(handles[0]);
+        if (slot >= 0 &&
+            (incoming.header.operation == ASTRA_VFS_OP_BYE ||
+             !sent)) {
+            uint32_t session = host->reply_sessions[(uint32_t)slot];
+            reply_release(host, (uint32_t)slot);
+            astra_vfs_service_release_session(host->service, session);
+        } else if (slot < 0) {
+            (void)astra_close(reply_handle);
+        }
     }
     return answered;
 }

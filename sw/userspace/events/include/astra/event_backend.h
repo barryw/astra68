@@ -25,9 +25,9 @@
  *     activity/0000001a               one request across every process
  *     subsystem/shell                 one subsystem's events
  *
- * `boot/-1` and `boot/-2` are in the design and are not here: the store is RAM
- * until it is written to the state volume, and a directory that existed and was
- * always empty would be a promise the machine cannot keep.
+ * `boot/-1` is present when a valid durable snapshot was recovered. One prior
+ * boot is retained; see the bounded ceiling beside the supervisor's two-bank
+ * snapshot rotation.
  *
  * Text is rendered at read time from the catalog, so the file has no size until
  * it is read -- which is what the handler contract was written to allow, and
@@ -45,6 +45,7 @@ typedef struct AstraEventsNode {
     uint8_t  kind;
     uint8_t  level_min;
     uint8_t  subsystem;      /* ASTRA_EVENT_SUBSYSTEM_MAX means any */
+    uint8_t  previous_boot;
     uint32_t activity;
     uint8_t  activity_filter;
     /*
@@ -58,12 +59,14 @@ typedef struct AstraEventsNode {
 
 typedef struct AstraEventsBackend {
     const AstraEventStore *store;
+    const AstraEventStore *previous;
     const AstraEventCatalog *catalog;
     AstraEventsNode nodes[ASTRA_EVENTS_NODE_MAX];
 } AstraEventsBackend;
 
 int astra_events_backend_init(AstraEventsBackend *backend,
                               const AstraEventStore *store,
+                              const AstraEventStore *previous,
                               const AstraEventCatalog *catalog);
 
 const AstraVfsBackendOps *astra_events_backend_ops(void);

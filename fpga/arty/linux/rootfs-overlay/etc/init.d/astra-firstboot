@@ -1,0 +1,74 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          astra-firstboot
+# Required-Start:    $local_fs
+# Default-Start:     S
+# Default-Stop:
+# Short-Description: Prepare writable Astra state on a read-only root
+### END INIT INFO
+
+FLAG=/data/.astra-firstboot-done
+
+# /data carries every persistent writable file. Do not let a missing or slow
+# data mount turn an early-boot write into a root-filesystem write.
+n=0
+while ! mountpoint -q /data 2>/dev/null && [ "$n" -lt 120 ]; do
+    n=$((n + 1))
+    sleep 0.25
+done
+if ! mountpoint -q /data 2>/dev/null; then
+    echo "[astra-firstboot] /data unavailable"
+    exit 1
+fi
+
+# Samba and udev require writable state, but the appliance root remains
+# read-only. Rebuild /var/lib in tmpfs on every boot.
+if ! mountpoint -q /var/lib 2>/dev/null &&
+   ! touch /var/lib/.astra-rwtest 2>/dev/null; then
+    mkdir -p /var/volatile/varlib
+    cp -a /var/lib/. /var/volatile/varlib/ 2>/dev/null
+    mount --bind /var/volatile/varlib /var/lib || exit 1
+else
+    rm -f /var/lib/.astra-rwtest 2>/dev/null
+fi
+
+# Keep SSH identity persistent without making /etc or the root writable.
+if [ ! -f /data/ssh/ssh_host_ed25519_key ]; then
+    mkdir -p /data/ssh
+    cp -a /etc/ssh/. /data/ssh/ 2>/dev/null
+    ssh-keygen -q -t rsa -N "" -f /data/ssh/ssh_host_rsa_key || exit 1
+    ssh-keygen -q -t ecdsa -N "" -f /data/ssh/ssh_host_ecdsa_key || exit 1
+    ssh-keygen -q -t ed25519 -N "" \
+        -f /data/ssh/ssh_host_ed25519_key || exit 1
+fi
+mountpoint -q /etc/ssh 2>/dev/null || mount --bind /data/ssh /etc/ssh
+
+mkdir -p /data/astra/log /data/astra/share
+
+graphics_loader=/data/astra/bin/astra-graphics-boot
+graphics_splash=/data/astra/assets/astra_boot_splash.rgb565
+graphics_log=/data/astra/log/graphics-boot.log
+if [ -x "$graphics_loader" ] && [ -r "$graphics_splash" ]; then
+    if "$graphics_loader" "$graphics_splash" >"$graphics_log" 2>&1; then
+        echo "[astra-firstboot] graphics splash ready"
+    else
+        echo "[astra-firstboot] graphics splash failed; see $graphics_log"
+    fi
+else
+    echo "[astra-firstboot] graphics runtime not provisioned"
+fi
+
+# The launcher waits for udev to publish a physical keyboard, so this early
+# init job never races input discovery and never blocks the rest of boot.
+terminal_start=/data/astra/bin/astra-terminal-start
+terminal_log=/data/astra/log/terminal.log
+if [ -x "$terminal_start" ]; then
+    "$terminal_start" >>"$terminal_log" 2>&1 &
+    echo "[astra-firstboot] terminal waiting for keyboard"
+else
+    echo "[astra-firstboot] terminal runtime not provisioned"
+fi
+
+touch "$FLAG"
+sync
+echo "[astra-firstboot] writable state ready"

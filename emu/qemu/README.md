@@ -31,9 +31,14 @@ run in emulation. Attach an image with `if=none`, which is the interface QEMU
 lets a machine claim without a qdev device behind it:
 
 ```sh
-qemu-system-m68k -M astra68 -m 32M -bios astra_boot.bin \
+qemu-system-m68k -M astra68 -m 128M -bios astra_boot.bin \
     -drive if=none,format=raw,file=/data/astra/storage/astra.img
 ```
+
+The machine accepts exactly two RAM profiles: 32 MiB for the physical ULX3S
+contract and 128 MiB for the Arty-hosted guest. The Arty launcher uses a
+preallocated 128 MiB memory backend, so guest RAM is committed when QEMU
+starts instead of competing with Linux on demand.
 
 Sectors are 512 bytes and a request carries at most 16, matching
 `docs/ASTRAHOST.md`. One transfer is active at a time and completes after a

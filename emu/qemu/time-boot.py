@@ -26,10 +26,15 @@ about hardware.
 """
 
 import argparse
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+
+import astra_image
 
 # In the order the boot emits them. Each is matched once, in sequence, so a
 # marker that also appears in later output cannot be picked up twice.
@@ -97,7 +102,9 @@ def main():
     parser.add_argument("qemu", help="qemu-system-m68k carrying the astra68 machine")
     parser.add_argument("rom", help="astra_boot.bin")
     parser.add_argument("--image", help="card image; omit to boot without media")
-    parser.add_argument("--memory", default="32M")
+    parser.add_argument("--catalog", default=astra_image.DEFAULT_CATALOG,
+                        help="catalog installed with commands and services")
+    parser.add_argument("--memory", default="128M")
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--deadline", type=float, default=120.0,
                         help="give up on a run after this many seconds")
@@ -105,9 +112,16 @@ def main():
                         help="fail if 'terminal up' exceeds this many seconds")
     arguments = parser.parse_args()
 
-    runs = [run_once(arguments.qemu, arguments.rom, arguments.image,
-                     arguments.memory, arguments.deadline)
-            for _ in range(arguments.runs)]
+    with tempfile.TemporaryDirectory(prefix="astra-boot-time-") as temporary:
+        image = arguments.image
+        if image is not None:
+            scratch = os.path.join(temporary, "card.img")
+            shutil.copyfile(image, scratch)
+            astra_image.install(scratch, arguments.catalog)
+            image = scratch
+        runs = [run_once(arguments.qemu, arguments.rom, image,
+                         arguments.memory, arguments.deadline)
+                for _ in range(arguments.runs)]
 
     print("%-22s %8s %8s   %s" % ("stage", "median", "delta", "samples"))
     previous = 0.0

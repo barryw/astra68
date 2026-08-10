@@ -1075,8 +1075,9 @@ static int prepare_kernel_handoff(void)
     int usb_dma_present = 0;
 
     if (VESTA->RAM_BASE != ASTRA_EARLY_LOG_ADDRESS ||
-        VESTA->RAM_SIZE != 0x02000000u ||
-        ram_end != 0x04000000u)
+        (VESTA->RAM_SIZE != ASTRA_RAM_SIZE_ULX3S &&
+         VESTA->RAM_SIZE != ASTRA_RAM_SIZE_ARTY_GUEST) ||
+        ram_end < VESTA->RAM_BASE)
         return post_failure_text("unsupported kernel RAM map");
     if ((ASTRAEA->BLIT_STATUS & BLIT_BUSY) != 0u)
         return post_failure_text("DMA active at kernel handoff");

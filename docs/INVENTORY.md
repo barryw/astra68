@@ -167,7 +167,7 @@ Arty Z7 Linux (ARM Cortex-A9)
 | `ASTRA_USER_IMAGE_ADDRESS` | `0x02004000` | **`MAX_SIZE` 256 KiB** (48 KiB before ABI 0.4) |
 | `ASTRA_KERNEL_LOAD_ADDRESS` | `0x02044000` | |
 | `ASTRA_KERNEL_TRACE_ADDRESS` | `0x020c4000` | 64 KiB |
-| `ASTRA_KERNEL_USABLE_ADDRESS` | `0x020d4000` | ~29.2 MiB |
+| `ASTRA_KERNEL_USABLE_ADDRESS` | `0x02154000` | ~28.7 MiB below ROM backing |
 | `ASTRA_ROM_BACKING_ADDRESS` | `0x03e00000` | 256 KiB |
 
 **The user image ceiling is the hole between `0x02004000` and the kernel.** It

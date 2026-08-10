@@ -21,7 +21,8 @@ while [ "$i" -le "$RUNS" ]; do
     /usr/bin/time -f "$i %e %U %S" -a -o "$TIMINGS" \
         env LD_LIBRARY_PATH="$LIBDIR" \
         "$QEMU" \
-        -M astra68 -m 32M -bios "$ROM" \
+        -object memory-backend-ram,id=astra-ram,size=128M,prealloc=on \
+        -M astra68,memory-backend=astra-ram -m 128M -bios "$ROM" \
         -nographic -monitor none -serial none -no-reboot \
         -icount shift=8,align=off,sleep=off \
         >/dev/null 2>"$RUN_ERR"

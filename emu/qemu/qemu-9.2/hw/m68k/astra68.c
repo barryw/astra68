@@ -28,7 +28,8 @@
 #define ASTRA_BRAM_BASE          0x01ff8000u
 #define ASTRA_BRAM_SIZE          (32 * KiB)
 #define ASTRA_SDRAM_BASE         0x02000000u
-#define ASTRA_SDRAM_SIZE         (32 * MiB)
+#define ASTRA_SDRAM_PHYSICAL_SIZE (32 * MiB)
+#define ASTRA_SDRAM_HOSTED_SIZE  (128 * MiB)
 #define ASTRA_ROM_BASE           0xffe00000u
 #define ASTRA_ROM_SIZE           (256 * KiB)
 #define ASTRA_VESTA_BASE         0xfff00000u
@@ -216,6 +217,7 @@ struct Astra68State {
     MemoryRegion astraea_io;
     MemoryRegion vega_io;
     uint8_t *sdram;
+    uint32_t ram_size;
     uint64_t reset_clock_ns;
     uint32_t initial_sp;
     uint32_t initial_pc;
@@ -535,8 +537,8 @@ static uint32_t astra_block_validate(Astra68State *s)
     bytes = (uint64_t)sectors * BLOCK_SECTOR_SIZE;
     if ((block->req_buffer & 3u) != 0 ||
         block->req_buffer < ASTRA_SDRAM_BASE ||
-        block->req_buffer - ASTRA_SDRAM_BASE > ASTRA_SDRAM_SIZE ||
-        ASTRA_SDRAM_SIZE - (block->req_buffer - ASTRA_SDRAM_BASE) < bytes) {
+        block->req_buffer - ASTRA_SDRAM_BASE > s->ram_size ||
+        s->ram_size - (block->req_buffer - ASTRA_SDRAM_BASE) < bytes) {
         error |= BLOCK_ERROR_BAD_BUFFER;
     }
     return error;
@@ -668,7 +670,7 @@ static void astra_bist_materialize(Astra68State *s)
 {
     uint32_t address;
 
-    for (address = 0; address < ASTRA_SDRAM_SIZE; address++) {
+    for (address = 0; address < s->ram_size; address++) {
         uint8_t pattern = (address & 0xff) ^ ((address >> 8) & 0xff) ^
                           ((address >> 16) & 0xff) ^ ((address >> 24) & 1) ^
                           0xa5;
@@ -715,7 +717,7 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
     case 0x024: return 0x0000000d;
     case 0x028: return ASTRA_CPU_HZ;
     case 0x02c: return ASTRA_SDRAM_BASE;
-    case 0x030: return ASTRA_SDRAM_SIZE;
+    case 0x030: return s->ram_size;
     case 0x034: return ASTRA_ROM_BASE;
     case 0x038: return ASTRA_ROM_SIZE;
     case 0x03c: return ASTRA_BUILD_ID;
@@ -734,7 +736,7 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
     case 0x078: return ASTRA_VEGA_BASE;
     case 0x07c: return 0x00010000;
     case 0x0d4: return 0x00000302; /* completed, phase done */
-    case 0x0d8: return ASTRA_SDRAM_SIZE - 4;
+    case 0x0d8: return s->ram_size - 4;
     case 0x0ec:
         cycles = astra_now_cycles(s);
         return cycles;
@@ -988,9 +990,9 @@ static void astra_panel_write32(Astra68State *s, hwaddr offset,
     }
 }
 
-static bool astra_sdram_span(uint32_t offset, uint32_t bytes)
+static bool astra_sdram_span(Astra68State *s, uint32_t offset, uint32_t bytes)
 {
-    return offset <= ASTRA_SDRAM_SIZE && bytes <= ASTRA_SDRAM_SIZE - offset;
+    return offset <= s->ram_size && bytes <= s->ram_size - offset;
 }
 
 static void astra_blit(Astra68State *s)
@@ -1009,8 +1011,8 @@ static void astra_blit(Astra68State *s)
     for (row = 0; row < height; row++) {
         uint32_t dst = a->dst + row * a->dst_pitch;
         uint32_t src = a->src + row * a->src_pitch;
-        if (!astra_sdram_span(dst, row_bytes) ||
-            ((a->op & 0xf) == 0 && !astra_sdram_span(src, row_bytes))) {
+        if (!astra_sdram_span(s, dst, row_bytes) ||
+            ((a->op & 0xf) == 0 && !astra_sdram_span(s, src, row_bytes))) {
             a->status = 2 | (2 << 8);
             goto done;
         }
@@ -1265,14 +1267,17 @@ static void astra68_init(MachineState *machine)
     char *contents;
     gsize firmware_size;
     GError *gerror = NULL;
+    const char *text_plane_path;
     int i;
 
     s->trace_timers = g_getenv("ASTRA_QEMU_TIMER_TRACE") != NULL;
     s->input.host_generation = 0;
     astra_input_machine = s;
 
-    if (machine->ram_size != ASTRA_SDRAM_SIZE) {
-        error_report("Astra68 requires exactly 32 MiB for the K1-K10 profile");
+    if (machine->ram_size != ASTRA_SDRAM_PHYSICAL_SIZE &&
+        machine->ram_size != ASTRA_SDRAM_HOSTED_SIZE) {
+        error_report("Astra68 RAM must be the 32 MiB physical or "
+                     "128 MiB hosted profile");
         exit(EXIT_FAILURE);
     }
     if (!firmware) {
@@ -1280,6 +1285,7 @@ static void astra68_init(MachineState *machine)
         exit(EXIT_FAILURE);
     }
 
+    s->ram_size = machine->ram_size;
     s->cpu = M68K_CPU(cpu_create(machine->cpu_type));
     qemu_register_reset(astra_cpu_reset, s);
 
@@ -1312,8 +1318,22 @@ static void astra68_init(MachineState *machine)
     g_free(contents);
     g_free(filename);
 
-    memory_region_init_ram(&s->text, NULL, "astra68.post-text",
-                           ASTRA_TEXT_SIZE, &error_fatal);
+    text_plane_path = g_getenv("ASTRA_TEXT_PLANE_PATH");
+    if (text_plane_path != NULL && text_plane_path[0] != '\0') {
+#ifdef CONFIG_POSIX
+        if (!memory_region_init_ram_from_file(
+                &s->text, NULL, "astra68.post-text", ASTRA_TEXT_SIZE, 0,
+                RAM_SHARED, text_plane_path, 0, &error_fatal)) {
+            exit(EXIT_FAILURE);
+        }
+#else
+        error_report("ASTRA_TEXT_PLANE_PATH requires a POSIX host");
+        exit(EXIT_FAILURE);
+#endif
+    } else {
+        memory_region_init_ram(&s->text, NULL, "astra68.post-text",
+                               ASTRA_TEXT_SIZE, &error_fatal);
+    }
     memory_region_add_subregion(sysmem, ASTRA_TEXT_BASE, &s->text);
 
     memory_region_init_io(&s->vesta_io, NULL, &astra_vesta_ops, s,
@@ -1384,7 +1404,7 @@ static void astra68_machine_init(MachineClass *mc)
     mc->desc = "Astra 68 reference machine";
     mc->init = astra68_init;
     mc->default_cpu_type = M68K_CPU_TYPE_NAME("m68030");
-    mc->default_ram_size = ASTRA_SDRAM_SIZE;
+    mc->default_ram_size = ASTRA_SDRAM_PHYSICAL_SIZE;
     mc->default_ram_id = "astra68.sdram";
     mc->max_cpus = 1;
     mc->no_floppy = 1;

@@ -27,13 +27,14 @@ personality, zsh, or Vim currently run.
 
 ## Userspace bring-up line (2026-08-05)
 
-`docs/HANDOVER-userspace-bringup.md` is the resume point for the userspace,
-storage, and loader work aimed at a shell on Astra. Implemented and gated: the
+`docs/HANDOVER-userspace-bringup.md` is the historical record for the first
+userspace slice; the current continuation is the Arty software-milestone
+section below. Implemented and gated in that first slice: the
 observability contract (`docs/OBSERVABILITY.md`), a bounded userspace
 allocator, a QEMU Vesta block service that lets `sw/kernel/block.c` run in
 emulation for the first time, a strict big-endian MC68030 ELF acceptance
 profile with a transactional loader, and a capability-gated process-info
-syscall at ABI `0x00010008`.
+syscall at ABI `0x0001000e`.
 
 **Astra runs a real user program at boot.** Boot ABI 0.3 carries
 `user_image_base`/`user_image_size`; firmware embeds the linked supervisor ELF
@@ -140,10 +141,26 @@ not part of the active Arty PL resource budget.
 
 The Arty provides 512 MiB DDR. The active device tree reserves the physically
 contiguous 128 MiB range `0x18000000..0x1fffffff` as `no-map` graphics memory;
-Linux System RAM ends at `0x17ffffff`. The remaining memory is available to
-Linux, QEMU, the Astra guest, and non-graphics services. Read-only `/`, writable
-`/data`, persistent SSH state, DHCP, and the shared Mac-directory service all
+Linux System RAM ends at `0x17ffffff`. The Arty launcher preallocates 128 MiB
+of normal cached RAM for the Astra guest, leaving a 256 MiB Linux/host-services
+budget after QEMU starts. The physical ULX3S profile remains exactly 32 MiB;
+QEMU accepts only that profile or the 128 MiB hosted profile. Read-only `/`,
+writable `/data`, persistent SSH state, DHCP, and the shared Mac-directory service all
 survive the graphics boot-package replacement.
+
+The 128 MiB profile is hardware-retained at
+`/data/astra/deploy/memory128-538563d8`. The active stripped ARM QEMU is
+`538563d84b8e43ffd3e2d9cc149594c3ccd8a3b372bc0b32ef8336818fabc5ca`,
+the ROM is
+`970dd9dae9ddbfc07fa26fa696d76512a2fc2f78be509f347057dc219c5e878f`,
+and the launcher is
+`c8f7fdc36621e14332242b25ad6c300f34f676721c06273d08c4234c5e05f82a`.
+On 2026-08-09 the exact board command line included the preallocated 128 MiB
+backend; QEMU held 147,892 KiB RSS with no swap, POST reported 128 MiB, the
+kernel reported 32,370 free of 32,768 physical pages, storage reached stage 8,
+and the published 90x30 text plane contained a live `WORK:>` prompt. The
+previous 32 MiB QEMU, ROM, and launcher are retained beside the new artifacts
+in that deployment directory.
 
 [`GRAPHICS_ARCHITECTURE.md`](GRAPHICS_ARCHITECTURE.md) is the normative Arty
 Vega/Astraea contract. It locks 1280x720p60, INDEX8/RGB565/XRGB8888 scanout,
@@ -405,19 +422,21 @@ the FPGA TG68K core, NUC attachment, or AstraHost/ESP transport the active
 production boundary are historical unless repeated in this override. They
 must not be used to infer the Arty architecture.
 
-## Software milestones on the Arty QEMU backend (2026-08-07)
+## Software milestones on the Arty QEMU backend (2026-08-09)
 
-Two software milestones landed on top of the unchanged CPU/PL boundary the
-override above establishes, neither yet folded into the "Userspace bring-up
-line" section above: **program launch** (`docs/HANDOVER-launch.md`) and
-**union assigns** (`docs/HANDOVER-union-assigns.md`, the current resume
-point). Together they are what "the shell" now means on this machine.
+Five software milestones landed on top of the unchanged CPU/PL boundary the
+override above establishes, not yet folded into the historical "Userspace
+bring-up line" section above: **program launch** (`docs/HANDOVER-launch.md`),
+**union assigns** (`docs/HANDOVER-union-assigns.md`), durable event history
+(`docs/HANDOVER-events.md`), the protected-service loader, and a protected
+terminal process. Together they are what "the shell" now means on this
+machine.
 
 - A program runs from the interactive prompt: typed by name, found by
   lookup, loaded through `ASTRA_SYSCALL_PROCESS_CREATE` (48), and its exit
   status reported. A launched child is handed grants for its three streams,
   `WORK:`, `COMMANDS:` and `EVENTS:` — the last three as port handles to
-  services the supervisor's own process hosts.
+  protected services.
 - `COMMANDS:` is an ordered two-member union: `local/commands` (read-write, a
   person's own directory) tried first, then `commands` (read-only, shipped).
   The first member that answers wins, so a name on the writable member
@@ -426,12 +445,153 @@ point). Together they are what "the shell" now means on this machine.
   granted, at the same roots, because `AstraLaunchGrant` and
   `AstraStartupCapability` now carry a 64-byte mount-relative root
   (`docs/ABI.md`, `ASTRA_STARTUP_ABI_VERSION` 2).
-- The events store is RAM only: `EVENTS:boot/-1` does not exist, and the
-  terminal gate asserts the refusal rather than treating it as a missing
-  feature. That durability is the next queued work.
+- The four bounded event tiers survive reboot in alternating, versioned CRC-32
+  snapshots under the state volume's `events/`. Startup accepts only a complete
+  valid bank, exposes its boot ring as `EVENTS:boot/-1`, and renders numeric
+  message ids if its catalog identity differs from the running build. One
+  previous boot is retained; `boot/-2` remains deliberately absent.
+- `/startup/system` is now an ordered, three-entry service manifest. The supervisor
+  temporarily mounts the boot volume only to read that file and the first
+  storage image, then masks its IRQ, releases bootstrap DMA, and closes its
+  original block/IRQ handles once storage publishes. Protected
+  `storage` mounts the volume and publishes `SYS:`; protected `events` receives
+  `SYS:r` plus a private `STORE:rw` rooted at `events/` and publishes
+  `EVENTS:r`. Protected `terminal` receives `DISPLAY`, `INPUT`, `WORK:rw`, the
+  two `COMMANDS:r` members, `EVENTS:r`, and `EVENT_CONTROL`, then owns the
+  existing shell and child-stream loop. Its manifest entry is explicitly
+  `delegates`, allowing it to narrow and re-grant those handles to launched
+  commands. All three services are independently scheduled processes; there
+  is no registrar, the supervisor retains only lifecycle monitoring, and it
+  closes its display/input/control copies after the terminal is ready. The
+  fifth process slot is the bounded capacity required for a command alongside
+  supervisor, storage, events, and terminal; shared-area alias accounting was
+  raised to the same five-process ceiling and the configured-ceiling test
+  covers it. The retained
+  Beast build measures storage at 68,050 bytes text/231,500 BSS (73,696-byte
+  image), events at 15,961 text/12 data/49,490 BSS (24,912-byte image), and the
+  terminal at 18,712 text/8 data/96,764 BSS (115,484-byte image). The initial
+  supervisor image is 73,492 text/8 data/322,128 BSS.
+- `events --level-set <subsystem> <level>` is a temporary current-boot control
+  operation, not a write to `EVENTS:`. Launched commands receive a distinct
+  `EVENT_CONTROL` capability; the protected events service validates and
+  forwards `EVCT` v1 to the supervisor runtime, which owns every current event
+  call site. The runtime refuses unknown subsystems and levels before changing
+  its fixed eight-byte threshold table. Add another registered target only
+  when a protected service gains event call sites.
 - The terminal gate (`emu/qemu/test-terminal.py`) is the acceptance evidence
-  for both milestones: 32 checks, run against the exact Astra QEMU backend
-  this whole file is about, not simulated elsewhere.
+  for these milestones: it boots twice against one scratch ext4 image, proves
+  both protected services through ordinary paths and commands, proves
+  `events --boot -1` reads the first boot, and exercises the complete temporary
+  level-control round trip against the exact Astra QEMU backend. It also reads
+  the file-backed 90x30 text plane independently, requires it to equal guest
+  memory, and checks that the published cursor follows Left/Right/Backspace and
+  rests after exactly one prompt separator rather than after an eraser cell.
+  Enter must publish column zero of the next row before a launched program is
+  loaded, proving slow dispatch visibly acknowledges the accepted line.
+  The five-run boot gate measures terminal-ready at a 0.17 s median against the
+  1.00 s budget.
+
+The retained Arty terminal deployment is rooted at commit
+`381d15306ff6b0077d8042fe975f426b7cf4f173` plus the current working-tree
+changes and was built on Beast from `/tmp/astra68-terminal-20260809`. Its exact
+artifacts are ARM QEMU
+`6506f3a1dcf7336a084acd471b6be828b49624cbf3dea3a1708e69a23f0b5f7a`,
+the hardware-stable cursor ROM
+`6c68e95698163bd52b42b763281a92b6a0d143070611a8632bad290ef2b48ed6`,
+prepared terminal storage image
+`7f431e51004b5843cb52c7a28477329d390b14d25f81c3c18a6cda54d2159153`,
+terminal ELF
+`37fa27a45e6c37cdc8bf80ae19810708c1b7c95223fcc11cdc1ecc75aef8ffe4`,
+and ARM text-plane renderer
+`3da485327dfd4f6acf1363835f07d2f1139f57ba9daa0356fa997bb995fdbdf2`.
+The active matched ROM/image pair is staged at
+`/data/astra/deploy/terminal-ack-37fa27a45e6c`; the earlier bundles and
+runtime-modified images remain as hash-named rollbacks. The image changes after
+each guest boot; its first active-boot hash was
+`a5b5832852a310e92948b4900640ad6693b9ca250aac0735ae4db00fc21a9643`.
+At that checkpoint the existing storage image and every FPGA/boot artifact
+remained unchanged.
+
+A rebuilt ROM `98a86a124acc7bf47b55572b008e0b6ade0127e530cc6a7c97586104fca2bd58`
+passed the exact two-boot host gate but is rejected: on the ARM board QEMU
+reached stage 8 and then segfaulted, leaving a torn HDMI frame. Restoring the
+hardware-stable ROM with the exact same fixed terminal image passed the gate,
+reached stage 8 on Arty, and remained resident. The rejected pair is retained
+at `/data/astra/deploy/terminal-cursorfix-98a86a124acc` as failed evidence, not
+as a release candidate.
+
+The retained storage hot-path work uses `STOR` v3: `HELLO` transfers one reply
+endpoint for the session, command loading reads through one 16 KiB shared area,
+and ext4 directory enumeration retains its backend cursor instead of reopening
+the scan. Version 2 remains the per-request/inline rolling-update fallback.
+Short-lived `which` and `events` clients now send `BYE` on every normal exit;
+the terminal gate crosses the complete service-session table repeatedly and
+still launches another command. SD-backed and tmpfs-backed command runs were
+effectively identical, proving the SD card was not the active limit; the
+Cortex-A9-hosted TCG/message round trips were. Against the old image on the
+same board, representative Enter-to-prompt times fell from 7.022 to 3.228 s
+for `status`, 11.894 to 4.584 s for `which status`, and 11.153 to 4.222 s for
+`devices status`. The final six-command hardware gate reports p50 4.375 s and
+max 4.584 s. The exact pre-boot optimized image was
+`82870f9206d063c94b5c4e8a0bc37dd6644f310ce752e07dc44b0c4c7613af16`;
+normal journal and filesystem writes change the active image after boot.
+`astra_image.py` now has a real CLI entry point; earlier successful no-op
+invocations were the reason several nominally rebuilt images retained old
+binaries.
+
+An LTO ARM QEMU candidate
+`b9eeded89fd25f4373e0a2083746ed7c90e6f57fe5a67e721bc4625b22d98a03`
+improved the median by another 16 percent in the controlled timing gate but is
+rejected: a live renderer deployment ended in an initial-user-image panic. The
+active QEMU
+remains `6506f3a1dcf7336a084acd471b6be828b49624cbf3dea3a1708e69a23f0b5f7a`
+with ROM
+`6c68e95698163bd52b42b763281a92b6a0d143070611a8632bad290ef2b48ed6`;
+the build script no longer enables LTO.
+
+The torn display and later QEMU launcher failures had a separate Linux-host
+cause. The deployed device tree described all 512 MiB as System RAM while the
+renderer mapped and cleared the graphics arena at
+`0x18000000..0x1fffffff`; the `no-map` node was reported but its reservation
+failed, so the renderer zeroed live page-cache pages, including its own QEMU
+libraries. `build_device_tree.sh` now also caps `/memory@0` at 384 MiB. Beast
+built device tree
+`422c7d48554512f313f19d2e750d19ed2a426b46c53befcbe3e3e4c80ed9cfc4`
+and FIT
+`c9a77be0f5085ce048860d12bd88ce7a246b813cf76c20339e8c18b7f9358944`
+with `SOURCE_DATE_EPOCH=1786326984`; the prior FIT remains
+`image.ub.rollback-e9ef016f059c`. After atomic installation and reboot, Linux
+reports `0x00000000..0x17ffffff` as its only Normal zone, reports the graphics
+arena separately as `no-map`, boots QEMU and the renderer to a clean `WORK:>`
+prompt, and leaves the three ARM runtime libraries hash-stable while rendering.
+No RTL, routed bitstream, production clock, or graphics resource changed.
+
+On the physical Arty, the renderer maps the 90x30 logical plane across the full
+1280x720 active image at `(0,0)` and draws a three-pixel DOS-style underline
+cursor with an approximately 512 ms blink period. The live shared record was
+`ACUR`, row 7, column 7, visible with an even sequence: the cursor follows the
+six-character empty prompt `WORK:>` and its single separator space. When Enter
+is accepted, the terminal flushes the cursor at column zero of the following
+row before dispatching the command. The guest reaches stage 8, the
+scene reaches generation 2 with zero commit errors or deferrals, and the first
+2 MiB of the live graphics arena hashes to
+`551b0388cb024889b2da8c61b4025b83b94d5fe3ed0392123b2065b7456c7510`
+(not the all-zero hash). QMP-injected manual proof completed `cd`, `pwd`,
+write, list, cat, delete, directory removal, and an external `status 7`
+process. A full board reboot then read `reboot.txt` back as `persisted`, proving
+the guest filesystem survives reboot. BusyBox firstboot starts an asynchronous
+waiter after `/data`; presenting an ephemeral `*-event-kbd` node caused that
+same init-owned process to start the renderer and reach stage 8 after reboot.
+
+An Apple Magic Keyboard with Numeric Keypad is now attached as
+`usb-Apple_Inc._Magic_Keyboard_with_Numeric_Keypad_F0T827700C4HTCYAU-if01-event-kbd`
+beside the Logitech trackball. Direct physical typing and human HDMI inspection
+proved the full-screen terminal, `ls`, and directory navigation. Physical
+create/read/delete/program-launch plus power-cycle persistence remain the final
+manual release proof; QMP coverage of those operations does not replace it.
+
+The next event slice is `events --process`; token-bucket and coalescing policy
+still requires the measured workload named in the event design.
 
 ## Locked architecture
 

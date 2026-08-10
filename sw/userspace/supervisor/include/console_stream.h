@@ -14,8 +14,7 @@
  * that hands out what the line editor has finished with.
  *
  * Both move out of this process the day the terminal service does, and no
- * client changes when they do -- which is the point of them being ports rather
- * than the function pointer the storage service is still reached by.
+ * client changes when they do -- which is the point of them being ports.
  */
 
 /* Creates both ports and binds the sink to `terminal`. Zero on failure. */

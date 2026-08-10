@@ -27,7 +27,7 @@
 /* One byte per subsystem: the lowest level that is emitted. */
 extern uint8_t astra_event_levels[ASTRA_EVENT_SUBSYSTEM_MAX];
 
-void astra_event_level_set(uint32_t subsystem, uint32_t level);
+uint32_t astra_event_level_set(uint32_t subsystem, uint32_t level);
 
 static inline int
 astra_event_enabled(uint32_t subsystem, uint32_t level)
