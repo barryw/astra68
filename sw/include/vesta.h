@@ -121,7 +121,17 @@ typedef volatile struct {
     uint32_t MONITOR_RX_POP;        // 0x1C8 write bit 0
     uint32_t MONITOR_TX_DATA;       // 0x1CC write low byte
     uint32_t MONITOR_ERROR;         // 0x1D0 RW1C
-    uint32_t _r1[(0x200 - 0x1D4) / 4];
+    uint32_t DISPLAY_ID;             // 0x1D4 "DPLY"
+    uint32_t DISPLAY_VERSION;        // 0x1D8
+    uint32_t DISPLAY_CAPS;           // 0x1DC
+    uint32_t DISPLAY_QUEUE;          // 0x1E0
+    uint32_t DISPLAY_REQ_ID;         // 0x1E4
+    uint32_t DISPLAY_REQ_OP;         // 0x1E8
+    uint32_t DISPLAY_REQ_COLOR;      // 0x1EC color or physical frame base
+    uint32_t DISPLAY_REQ_SUBMIT;     // 0x1F0 submit/pop/reset bits
+    uint32_t DISPLAY_CPL_ID;         // 0x1F4
+    uint32_t DISPLAY_CPL_STATUS;     // 0x1F8
+    uint32_t DISPLAY_CPL_GENERATION; // 0x1FC
     // region table 0x200
     VestaRegion REGION[16];  // 0x200..0x2FF
     // interrupt controller 0x300
@@ -389,6 +399,10 @@ _Static_assert(offsetof(VestaRegs, MONITOR_ID) == 0x1b4u,
                "Vesta monitor ABI offset");
 _Static_assert(offsetof(VestaRegs, MONITOR_ERROR) == 0x1d0u,
                "Vesta monitor-error ABI offset");
+_Static_assert(offsetof(VestaRegs, DISPLAY_ID) == 0x1d4u,
+               "Vesta display ABI offset");
+_Static_assert(offsetof(VestaRegs, DISPLAY_CPL_GENERATION) == 0x1fcu,
+               "Vesta display completion ABI offset");
 _Static_assert(offsetof(VestaRegs, IRQ_PENDING) == 0x300u,
                "Vesta IRQ ABI offset");
 _Static_assert(offsetof(VestaRegs, TIMER) == 0x400u,

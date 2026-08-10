@@ -7,7 +7,7 @@
 #define KERNEL_VM_USER_MIN 0x00010000u
 #define KERNEL_VM_USER_MAX 0x7fffffffu
 #define KERNEL_VM_AREA_BASE 0x40000000u
-#define KERNEL_VM_AREA_SLOT_SIZE 0x00010000u
+#define KERNEL_VM_AREA_SLOT_SIZE 0x00200000u
 #define KERNEL_VM_AREA_SLOT_COUNT 8u
 #define KERNEL_VM_SHARED_ALIAS_MAX 5u
 /*
@@ -15,7 +15,7 @@
  * the slot index is per address space rather than global.
  */
 #define KERNEL_VM_DMA_BASE 0x50000000u
-#define KERNEL_VM_DMA_SLOT_SIZE 0x00010000u
+#define KERNEL_VM_DMA_SLOT_SIZE 0x00200000u
 #define KERNEL_VM_DMA_SLOT_COUNT 4u
 
 #define KERNEL_VM_READ  (1u << 0)

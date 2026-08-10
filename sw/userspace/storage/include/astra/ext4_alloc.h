@@ -20,18 +20,18 @@
  */
 
 #define ASTRA_EXT4_ALLOC_CLASS_COUNT 4u
+#define ASTRA_EXT4_ARENA_BYTES (5u * 1024u * 1024u)
 
 /*
  * The measured shape of lwext4's demand, not a guess. The evaluation workload
  * in sw/userspace/storage/lwext4-eval holds 855 live descriptors of 33..64
- * bytes and exactly CONFIG_BLOCK_DEV_CACHE_SIZE + 1 block buffers, and this
- * table is what that measurement produced. Headroom is deliberately small,
+ * bytes and exactly CONFIG_BLOCK_DEV_CACHE_SIZE + 1 block buffers. Headroom
+ * is deliberately small,
  * because the point of a bounded allocator is that exhaustion is reported
  * rather than absorbed.
  *
- * It must be re-measured against the real volume size before a service ships
- * with it: the journal scales with the volume, and this table was measured
- * against a 32 MiB image.
+ * Descriptor demand was measured through 1 TiB and plateaus at the configured
+ * bound below; the block-buffer class follows the configured cache size.
  */
 extern const AstraAllocClass astra_ext4_alloc_classes[ASTRA_EXT4_ALLOC_CLASS_COUNT];
 

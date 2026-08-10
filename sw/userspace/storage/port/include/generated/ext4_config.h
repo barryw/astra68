@@ -40,7 +40,7 @@
 #define CONFIG_EXTENTS_ENABLE 0
 #define CONFIG_XATTR_ENABLE 0
 
-#define CONFIG_BLOCK_DEV_CACHE_SIZE 16
+#define CONFIG_BLOCK_DEV_CACHE_SIZE 1024
 
 /*
  * Astra links -nostdlib and the MC68030 toolchain ships no C library at all,

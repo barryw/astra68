@@ -45,8 +45,9 @@ where a root enters the system from outside, so the syscall refuses
 `..` component, before copying it into the record the kernel eventually
 publishes; resolution's own `..` rule is separate and unaffected.
 
-`ASTRA_LAUNCH_GRANT_MAX` is 8, up from 6 — a two-member `COMMANDS:` union is
-a seventh grant, and a shell already used all six. `sw/kernel/process.h`'s
+`ASTRA_LAUNCH_GRANT_MAX` is 9 — the terminal service uses its ready endpoint,
+display, input, input IRQ, work namespace, two-member `COMMANDS:` union,
+events, and event control. `sw/kernel/process.h`'s
 `KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX` is a **textual alias** of it, not a
 second number: the two disagreeing once already let a launch of more than
 four grants fail with `INVALID_ARGUMENT` from inside the loader, naming
@@ -132,9 +133,11 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 47 | `DIAGNOSTIC_CONSOLE_OPEN` | CURRENT CANDIDATE | marks the userspace diagnostic reader active so the boot console stops narrating the same stream |
 | 48 | `PROCESS_CREATE` | CURRENT CANDIDATE | transactionally loads a protected ELF from caller bytes, copies bounded grants and arguments, and returns a waitable process handle plus process ID |
 | 50 | `CONSOLE_CURSOR` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=row`, `D3=column`, `D4=visible`; publishes the terminal cursor, accepting `column=columns` as pending wrap |
+| 51 | `DISPLAY_SUBMIT` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=aligned AstraDisplayFrameRequest`; submits one nonzero fenced solid or RGB565 DMA-frame request |
+| 52 | `DISPLAY_COLLECT` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=aligned AstraDisplayFrameCompletion`; returns `WOULD_BLOCK` until the submitted fence completes |
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
-not panic. `QUERY_ABI` reports revision `0x0001000e`; a later revision may add
+not panic. `QUERY_ABI` reports revision `0x0001000f`; a later revision may add
 feature bits before additional calls freeze.
 
 `AstraDeviceInfo` is 24 bytes and naturally four-byte aligned. It contains
@@ -379,21 +382,31 @@ The events service attaches two endpoints to its successful `SRVC` ready
 message: `EVENTS:` first and `EVENT_CONTROL` second. Other current services
 attach only their manifest-declared endpoint.
 
-`sw/include/astra/vfs_service.h` defines storage protocol `STOR`, version 3,
+`sw/include/astra/gui.h` defines the userspace `GUI` protocol, version 1. An
+`OPEN_WINDOW` request is 40 bytes and transfers a read-only area plus a reply
+sender. It carries bounded x/y/width/height and RGB565 pitch, with no pointer.
+The 36-byte `WINDOW_OPENED` reply returns status, a server-issued window ID,
+and the presentation generation. The server maps the transferred area
+read-only; the client keeps its separately duplicated writable area handle.
+This protocol is provisional userspace policy, not a kernel syscall ABI.
+
+`sw/include/astra/vfs_service.h` defines storage protocol `STOR`, version 4,
 with version 2 as the rolling-update floor. Version 3 transfers one reply send
 endpoint during `HELLO` and reuses the client's receive endpoint for the whole
 session; `BYE` releases the service-side endpoint and any bound area. A client
 may attach one area with `BIND_AREA`, then use `READ_AREA` for at most 16,384
 bytes per request. The service maps the area only for that session and returns
 the moved byte count in the ordinary reply. Version 2 keeps its per-request
-reply endpoints and inline reads. Directory offsets are backend cursors in
-both supported versions, so a scan resumes rather than reopening at entry
-zero.
+reply endpoints and inline reads. Version 4 adds `READDIR_BATCH`: one reply
+packs bounded `(kind, name-length, name)` records into the existing 192-byte
+payload and returns the next backend cursor. Version 2/3 peers retain the
+single-entry fallback. Directory offsets are backend cursors in every
+supported version, so a scan resumes rather than reopening at entry zero.
 
-`AREA_CREATE` accepts 1 through 65,536 bytes, rounds upward to complete 4 KiB
+`AREA_CREATE` accepts 1 through 2,097,152 bytes, rounds upward to complete 4 KiB
 pages, commits and zeroes every frame before publication, and charges the
 creator's real commit budget. `AREA_MAP` accepts `READ` or `READ|WRITE` and
-chooses a fixed process-local address from `0x40000000..0x4007ffff`; mappings
+chooses a fixed process-local address from `0x40000000..0x40ffffff`; mappings
 of one area use the same logical base in every process. Mapping and unmapping
 are complete transactions. A failed descriptor publication, copy, cache/ATC
 maintenance step, or quota check restores every frame, descriptor, reference,
@@ -440,6 +453,12 @@ and overflow acknowledgement. The 32-slot ring intentionally exposes at most
 31 records. The consumer reads all five words before writing `POP_EVENT`.
 Application-visible events will be copied or normalized into bounded service
 ports; applications never consume this MMIO record directly.
+
+The input IRQ endpoint captures the head record's `device_sequence`, not the
+raw valid bit. Completion succeeds when the queue is empty or its current head
+has a different sequence; this accepts a new key racing an acknowledgement
+without accepting an undrained old key. A consumer drains the device and
+acknowledges that IRQ before invoking code which may re-enter its event loop.
 
 ## Blocking and time
 

@@ -16,13 +16,26 @@ Linux/host-services budget. Guest RAM deliberately stays in Linux's normal
 cached allocator; an uncached `/dev/mem` reservation would make every emulated
 68030 memory access a device-memory access.
 
-The current release kernel is 123,472 bytes on disk. Its 128 MiB frame metadata
+The current release kernel is 124,908 bytes on disk. Its 128 MiB frame metadata
 ends at `0x02140280`, inside the `0x02044000..0x02153fff` kernel reservation,
 with the retained trace address unchanged at `0x020c4000`.
 
 The retained Arty run reports 32,768 guest pages, 32,370 initially free,
 147,892 KiB QEMU RSS, 203,232 KiB Linux `MemAvailable`, and zero swap after the
 terminal reaches `WORK:>`.
+
+The filesystem cache is 1,024 x 4 KiB and lives inside a fixed 5 MiB arena in
+each image that mounts ext4. The supervisor uses its arena only for bootstrap;
+the protected storage service owns the long-lived cache. Process image
+admission is capped at 2,048 pages (8 MiB), raised from 128 pages because the
+old 512 KiB ceiling rejected the bounded arena before its allocator could run.
+Pages remain allocated and charged on demand; the ceiling reserves nothing.
+
+A shared area may contain at most 2 MiB, enough for one 1280x720 RGB565 surface
+(1,843,200 bytes). The current desktop uses a 900x500 client surface (900,000
+bytes); the display service separately owns one 1,843,200-byte contiguous DMA
+scanout. These are charged allocations inside the 128 MiB guest, not static
+reservations taken from Linux or the 128 MiB physical graphics arena.
 
 ## Physical baseline
 

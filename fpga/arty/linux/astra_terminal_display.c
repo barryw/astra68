@@ -6,6 +6,7 @@
 #include "astra_graphics_hw.h"
 
 #include <astra/display.h>
+#include <astra/display_mailbox.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -50,6 +51,59 @@ struct terminal_cursor {
     uint32_t cell;
     bool visible;
 };
+
+struct display_request {
+    uint32_t sequence;
+    uint32_t id;
+    uint32_t operation;
+    uint32_t color_rgb565;
+    uint32_t frame_pitch;
+    uint32_t frame_bytes;
+};
+
+static bool mailbox_take(volatile const AstraDisplayMailbox *mailbox,
+                         uint32_t previous_sequence,
+                         struct display_request *request)
+{
+    uint32_t sequence = mailbox->request_sequence;
+
+    astra_graphics_memory_barrier();
+    if (mailbox->magic != ASTRA_DISPLAY_MAILBOX_MAGIC ||
+        mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_1 ||
+        sequence == 0u || sequence == previous_sequence)
+        return false;
+    request->sequence = sequence;
+    request->id = mailbox->request_id;
+    request->operation = mailbox->operation;
+    request->color_rgb565 = mailbox->color_rgb565;
+    request->frame_pitch = mailbox->frame_pitch;
+    request->frame_bytes = mailbox->frame_bytes;
+    astra_graphics_memory_barrier();
+    return mailbox->request_sequence == sequence;
+}
+
+static void mailbox_complete(volatile AstraDisplayMailbox *mailbox,
+                             const struct display_request *request,
+                             uint32_t status, uint32_t generation)
+{
+    mailbox->completion_id = request->id;
+    mailbox->completion_status = status;
+    mailbox->completion_generation = generation;
+    astra_graphics_memory_barrier();
+    mailbox->completion_sequence = request->sequence;
+}
+
+static void fill_solid(volatile uint8_t *framebuffer, uint16_t color)
+{
+    uint8_t high = (uint8_t)(color >> 8);
+    uint8_t low = (uint8_t)color;
+    size_t offset;
+
+    for (offset = 0u; offset < ASTRA_FRAMEBUFFER_BYTES; offset += 2u) {
+        framebuffer[offset] = high;
+        framebuffer[offset + 1u] = low;
+    }
+}
 
 static uint32_t cell_x(uint32_t column)
 {
@@ -194,6 +248,8 @@ static int self_test(void)
     uint32_t top = cell_y(0u);
     uint32_t bottom = cell_y(1u);
     uint32_t y;
+    AstraDisplayMailbox mailbox;
+    struct display_request request;
 
     (void)memset(framebuffer, 0x5a, sizeof(framebuffer));
     draw_cell(framebuffer, ASTRA_FRAMEBUFFER_PITCH, 0u, 0u, 'A', false);
@@ -247,6 +303,24 @@ static int self_test(void)
     if (copy_cursor(&cursor, plane))
         return EXIT_FAILURE;
 
+    (void)memset(&mailbox, 0, sizeof(mailbox));
+    mailbox.magic = ASTRA_DISPLAY_MAILBOX_MAGIC;
+    mailbox.version = ASTRA_DISPLAY_MAILBOX_VERSION_1_1;
+    mailbox.request_id = 7u;
+    mailbox.operation = ASTRA_DISPLAY_FRAME_PRESENT_SOLID;
+    mailbox.color_rgb565 = 0x135du;
+    mailbox.request_sequence = 4u;
+    if (!mailbox_take(&mailbox, 0u, &request) || request.sequence != 4u ||
+        request.id != 7u || request.color_rgb565 != 0x135du ||
+        mailbox_take(&mailbox, 4u, &request))
+        return EXIT_FAILURE;
+    mailbox_complete(&mailbox, &request, ASTRA_DISPLAY_COMPLETION_OK, 9u);
+    if (mailbox.completion_sequence != 4u ||
+        mailbox.completion_id != 7u ||
+        mailbox.completion_status != ASTRA_DISPLAY_COMPLETION_OK ||
+        mailbox.completion_generation != 9u)
+        return EXIT_FAILURE;
+
     puts("ASTRA_TERMINAL_DISPLAY_SELF_TEST PASS");
     return EXIT_SUCCESS;
 }
@@ -258,19 +332,25 @@ int main(int argc, char **argv)
     struct terminal_cursor cursor = { .cell = 0u, .visible = false };
     struct terminal_cursor previous_cursor;
     volatile uint8_t *plane = MAP_FAILED;
+    volatile AstraDisplayMailbox *mailbox = MAP_FAILED;
     uint8_t current[TEXT_CELLS];
     uint8_t previous[TEXT_CELLS];
     struct stat plane_stat;
+    struct stat mailbox_stat;
     unsigned blink_polls = 0u;
     bool cursor_on = true;
     int plane_fd = -1;
+    int mailbox_fd = -1;
     int result = EXIT_FAILURE;
     uint32_t cell;
+    uint32_t mailbox_sequence = 0u;
+    bool display_owned = false;
 
     if (argc == 2 && strcmp(argv[1], "--self-test") == 0)
         return self_test();
-    if (argc != 2) {
-        fprintf(stderr, "usage: %s <shared-post-text-page>\n", argv[0]);
+    if (argc != 3) {
+        fprintf(stderr, "usage: %s <shared-post-text-page> "
+                "<shared-display-mailbox>\n", argv[0]);
         return EXIT_FAILURE;
     }
 
@@ -291,6 +371,27 @@ int main(int argc, char **argv)
         perror("map shared post-text page");
         goto done;
     }
+    mailbox_fd = open(argv[2], O_RDWR | O_CLOEXEC);
+    if (mailbox_fd < 0) {
+        perror("open shared display mailbox");
+        goto done;
+    }
+    if (fstat(mailbox_fd, &mailbox_stat) != 0 ||
+        mailbox_stat.st_size < (off_t)ASTRA_DISPLAY_MAILBOX_BYTES) {
+        fprintf(stderr, "shared display mailbox must be at least %u bytes\n",
+                ASTRA_DISPLAY_MAILBOX_BYTES);
+        goto done;
+    }
+    mailbox = mmap(NULL, ASTRA_DISPLAY_MAILBOX_BYTES,
+                   PROT_READ | PROT_WRITE, MAP_SHARED, mailbox_fd, 0);
+    if (mailbox == MAP_FAILED) {
+        perror("map shared display mailbox");
+        goto done;
+    }
+    mailbox->magic = ASTRA_DISPLAY_MAILBOX_MAGIC;
+    mailbox->version = ASTRA_DISPLAY_MAILBOX_VERSION_1_1;
+    mailbox->completion_sequence = 0u;
+    astra_graphics_memory_barrier();
     if (astra_graphics_device_open(&device, true) != 0 ||
         astra_graphics_device_validate(&device, true) != 0)
         goto done;
@@ -318,10 +419,60 @@ int main(int argc, char **argv)
            ASTRA_FRAMEBUFFER_HEIGHT);
     fflush(stdout);
     while (running) {
+        struct display_request request;
         struct terminal_cursor sampled;
         bool blink_changed = false;
         bool cursor_changed;
 
+        if (mailbox_take(mailbox, mailbox_sequence, &request)) {
+            uint32_t generation = 0u;
+            uint32_t status = ASTRA_DISPLAY_COMPLETION_BAD_REQUEST;
+
+            mailbox_sequence = request.sequence;
+            if (request.id != 0u &&
+                request.operation == ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
+                (request.color_rgb565 & 0xffff0000u) == 0u) {
+                fill_solid(device.framebuffer,
+                           (uint16_t)request.color_rgb565);
+                astra_graphics_memory_barrier();
+                if (present(&device) == 0 &&
+                    astra_boot_text_commit(&device, 0) == 0) {
+                    generation = astra_mmio_read(&device,
+                                                 ASTRA_REG_GENERATION);
+                    status = ASTRA_DISPLAY_COMPLETION_OK;
+                    display_owned = true;
+                } else {
+                    status = ASTRA_DISPLAY_COMPLETION_IO_ERROR;
+                }
+            } else if (request.id != 0u &&
+                       request.operation ==
+                           ASTRA_DISPLAY_FRAME_PRESENT_RGB565 &&
+                       request.frame_pitch == ASTRA_FRAMEBUFFER_PITCH &&
+                       request.frame_bytes == ASTRA_FRAMEBUFFER_BYTES) {
+                (void)memcpy(
+                    (void *)device.framebuffer,
+                    (const uint8_t *)(const void *)mailbox +
+                        ASTRA_DISPLAY_MAILBOX_HEADER_BYTES,
+                    ASTRA_FRAMEBUFFER_BYTES);
+                astra_graphics_memory_barrier();
+                if (present(&device) == 0 &&
+                    astra_boot_text_commit(&device, 0) == 0) {
+                    generation = astra_mmio_read(&device,
+                                                 ASTRA_REG_GENERATION);
+                    status = ASTRA_DISPLAY_COMPLETION_OK;
+                    display_owned = true;
+                } else {
+                    status = ASTRA_DISPLAY_COMPLETION_IO_ERROR;
+                }
+            }
+            mailbox_complete(mailbox, &request, status, generation);
+        }
+        if (display_owned) {
+            while (nanosleep(&poll_delay, NULL) != 0 && errno == EINTR &&
+                   running) {
+            }
+            continue;
+        }
         copy_cells(current, plane);
         if (copy_cursor(&sampled, plane))
             cursor = sampled;
@@ -371,7 +522,11 @@ done:
     astra_graphics_device_close(&device);
     if (plane != MAP_FAILED)
         (void)munmap((void *)plane, TEXT_PAGE_BYTES);
+    if (mailbox != MAP_FAILED)
+        (void)munmap((void *)mailbox, ASTRA_DISPLAY_MAILBOX_BYTES);
     if (plane_fd >= 0)
         (void)close(plane_fd);
+    if (mailbox_fd >= 0)
+        (void)close(mailbox_fd);
     return result;
 }

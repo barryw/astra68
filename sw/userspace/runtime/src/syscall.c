@@ -176,6 +176,25 @@ astra_wait_one(uint32_t handle, uint64_t deadline_ns, uint32_t *detail)
 }
 
 uint32_t
+astra_wait_multiple(const uint32_t *handles, uint32_t count,
+                    uint64_t deadline_ns, uint32_t *index, uint32_t *detail)
+{
+    AstraSyscallResult result;
+
+    if (handles == NULL || count == 0u || count > ASTRA_WAIT_MULTIPLE_MAX)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_WAIT_MULTIPLE,
+                   (uint32_t)(uintptr_t)handles, count,
+                   (uint32_t)(deadline_ns >> 32), (uint32_t)deadline_ns, 0u,
+                   &result);
+    if (index != NULL)
+        *index = result.value0;
+    if (detail != NULL)
+        *detail = result.value1;
+    return result.status;
+}
+
+uint32_t
 astra_irq_arm(uint32_t handle)
 {
     return invoke(ASTRA_SYSCALL_IRQ_ARM, handle).status;
@@ -319,6 +338,32 @@ astra_console_cursor(uint32_t device, uint32_t row, uint32_t column,
 
     astra_syscall5(ASTRA_SYSCALL_CONSOLE_CURSOR, device, row, column,
                    visible, 0u, &result);
+    return result.status;
+}
+
+uint32_t
+astra_display_submit(uint32_t device,
+                     const AstraDisplayFrameRequest *request)
+{
+    AstraSyscallResult result;
+
+    if (request == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_DISPLAY_SUBMIT, device,
+                   (uint32_t)(uintptr_t)request, 0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
+astra_display_collect(uint32_t device,
+                      AstraDisplayFrameCompletion *completion)
+{
+    AstraSyscallResult result;
+
+    if (completion == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_DISPLAY_COLLECT, device,
+                   (uint32_t)(uintptr_t)completion, 0u, 0u, 0u, &result);
     return result.status;
 }
 

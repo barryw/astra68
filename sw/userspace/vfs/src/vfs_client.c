@@ -299,6 +299,66 @@ astra_vfs_readdir(AstraVfsClient *client, const char *path, uint64_t cursor,
 }
 
 uint32_t
+astra_vfs_readdir_batch(AstraVfsClient *client, const char *path,
+                        uint64_t cursor, AstraVfsDirEntry *entries,
+                        uint32_t capacity, uint32_t *count, uint64_t *next)
+{
+    uint32_t status;
+    uint32_t at = 0u;
+    uint32_t found = 0u;
+
+    if (client == NULL || entries == NULL || capacity == 0u || count == NULL ||
+        next == NULL) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    *count = 0u;
+    *next = cursor;
+    if (client->version < UINT16_C(4)) {
+        status = astra_vfs_readdir(client, path, cursor, entries[0].name,
+                                   sizeof(entries[0].name), &entries[0].kind,
+                                   next);
+        if (status == ASTRA_VFS_OK)
+            *count = 1u;
+        return status;
+    }
+    begin(client);
+    if (!set_path(&client->request, path))
+        return ASTRA_VFS_ERR_INVALID;
+    client->request.offset = cursor;
+    client->request.length = capacity;
+    status = exchange(client, ASTRA_VFS_OP_READDIR_BATCH);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (client->reply.count > ASTRA_VFS_IO_MAX)
+        return ASTRA_VFS_ERR_PROTOCOL;
+    while (at < client->reply.count) {
+        uint32_t length;
+
+        if (found == capacity || client->reply.count - at < 3u)
+            return ASTRA_VFS_ERR_PROTOCOL;
+        entries[found].kind =
+            (uint16_t)(((uint16_t)client->reply.payload[at] << 8) |
+                       client->reply.payload[at + 1u]);
+        length = client->reply.payload[at + 2u];
+        at += 3u;
+        if (length == 0u || length >= ASTRA_VFS_NAME_MAX ||
+            length > client->reply.count - at)
+            return ASTRA_VFS_ERR_PROTOCOL;
+        for (uint32_t index = 0u; index < length; ++index)
+            entries[found].name[index] =
+                (char)client->reply.payload[at + index];
+        entries[found].name[length] = '\0';
+        at += length;
+        ++found;
+    }
+    if (found == 0u)
+        return ASTRA_VFS_ERR_PROTOCOL;
+    *count = found;
+    *next = client->reply.cursor;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t
 astra_vfs_mkdir(AstraVfsClient *client, const char *path)
 {
 

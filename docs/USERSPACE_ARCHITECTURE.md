@@ -141,6 +141,26 @@ WAIT_MULTIPLE(input, commands, timers, fences, peer death, cancellation)
 This is why `WAIT_MULTIPLE`, ports, shared areas, and handle transfer remain the
 kernel prerequisites for real userspace.
 
+The protected storage service and supervisor lifecycle watcher now sleep on
+those kernel waitables instead of yielding in polling loops. The terminal also
+waits indefinitely on its stream, child, and physical-input IRQ handles; the
+10 ms input poll remains only as a compatibility fallback when no IRQ was
+granted. The events service wakes immediately on both request ports and uses a
+one-second maintenance deadline because the kernel trace ring it also drains
+is not itself waitable.
+
+The first GUI boot slice now crosses every required protection boundary. The
+desktop paints a shared RGB565 surface through the userspace graphics library,
+then transfers a read-only duplicate to the named `GUI` service. The protected
+display process owns `DISPLAY` and `DISPLAY_IRQ`, validates the window request,
+composes the client surface into its private DMA scanout, submits one fenced
+frame, validates completion, and remains resident while the physical backend
+replaces boot text. The client retains its writable mapping; it never receives
+the display lease or scanout memory. The current server intentionally retains
+one live window; add a z-ordered list when a second useful GUI client exists.
+Widgets, input routing, damage tracking, and application lifecycle policy are
+the next userspace layers, not kernel ABI.
+
 ## 5. Service lifecycle and failure
 
 Each restartable service follows this conceptual state machine:

@@ -121,6 +121,10 @@ static uint32_t console_cursor_row;
 static uint32_t console_cursor_column;
 static bool console_cursor_visible;
 static bool console_present = true;
+static AstraDisplayFrameRequest display_request;
+static AstraDisplayFrameCompletion display_completion;
+static uint32_t display_submissions;
+static bool display_completion_ready;
 
 bool kernel_platform_post_text_present(void)
 {
@@ -151,6 +155,26 @@ bool kernel_platform_post_text_cursor(uint32_t row, uint32_t column,
     console_cursor_column = column;
     console_cursor_visible = visible;
     ++console_cursor_writes;
+    return true;
+}
+
+bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
+                                    uint32_t source)
+{
+    display_request.size = ASTRA_DISPLAY_FRAME_REQUEST_SIZE;
+    display_request.operation = operation;
+    display_request.fence = id;
+    display_request.source = source;
+    ++display_submissions;
+    return true;
+}
+
+bool kernel_platform_display_collect(AstraDisplayFrameCompletion *completion)
+{
+    if (completion == NULL || !display_completion_ready)
+        return false;
+    *completion = display_completion;
+    display_completion_ready = false;
     return true;
 }
 
@@ -202,6 +226,21 @@ static bool test_input_reset(uint32_t device_id, uint32_t generation,
     input_event_status = 0u;
     input_overflow_acks = 0u;
     return device_id == ASTRA_DEVICE_ID_INPUT0 && generation != 0u;
+}
+
+static bool test_display_quiesce(uint32_t device_id, uint32_t generation,
+                                 void *context)
+{
+    (void)context;
+    return device_id == ASTRA_DEVICE_ID_DISPLAY0 && generation != 0u;
+}
+
+static bool test_display_reset(uint32_t device_id, uint32_t generation,
+                               void *context)
+{
+    (void)context;
+    display_completion_ready = false;
+    return device_id == ASTRA_DEVICE_ID_DISPLAY0 && generation != 0u;
 }
 
 static bool test_device_quiesce(uint32_t device_id, uint32_t generation,
@@ -896,12 +935,14 @@ static void initialize_test(void)
     }
     {
         const KernelDeviceDefinition display = {
-            .quiesce = test_input_quiesce,
-            .reset = test_input_reset,
+            .quiesce = test_display_quiesce,
+            .reset = test_display_reset,
             .context = NULL,
             .device_id = ASTRA_DEVICE_ID_DISPLAY0,
             .class_id = ASTRA_DEVICE_CLASS_DISPLAY,
-            .capabilities = ASTRA_DISPLAY_CAP_TEXT,
+            .capabilities = ASTRA_DISPLAY_CAP_TEXT |
+                            ASTRA_DISPLAY_CAP_SOLID_FRAME |
+                            ASTRA_DISPLAY_CAP_FENCED_PRESENT,
         };
 
         assert(kernel_device_register(&display) == KERNEL_DEVICE_OK);
@@ -930,6 +971,10 @@ static void initialize_test(void)
     console_cursor_column = 0u;
     console_cursor_visible = false;
     console_present = true;
+    memset(&display_request, 0, sizeof(display_request));
+    memset(&display_completion, 0, sizeof(display_completion));
+    display_submissions = 0u;
+    display_completion_ready = false;
     input_event_head = 0u;
     input_event_count = 0u;
     input_event_status = 0u;
@@ -2321,7 +2366,17 @@ static void test_console_writes_through_a_display_lease(void)
     uint32_t read_only_handle;
     uint32_t input_handle;
     uint32_t user_cells = KERNEL_PROCESS_STACK_TOP - 128u;
+    uint32_t dma_handle;
+    const uint32_t screen_bytes =
+        ASTRA_DISPLAY_WIDTH * ASTRA_DISPLAY_HEIGHT * sizeof(uint16_t);
     const uint8_t text[4] = {'A', 'B', 'C', 'D'};
+    AstraDisplayFrameRequest request = {
+        .size = ASTRA_DISPLAY_FRAME_REQUEST_SIZE,
+        .operation = ASTRA_DISPLAY_FRAME_PRESENT_SOLID,
+        .fence = 7u,
+        .source = 0x135du,
+    };
+    AstraDisplayFrameCompletion completion;
 
     initialize_test();
     assert(kernel_process_create(image, sizeof(image), 0u, 0u,
@@ -2497,6 +2552,89 @@ static void test_console_writes_through_a_display_lease(void)
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_BAD_ADDRESS);
     assert(console_writes == 0u);
+
+    assert(kernel_user_copy_to_asm(user_cells, &request, sizeof(request)) ==
+           KERNEL_USER_COPY_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_DISPLAY_SUBMIT;
+    registers[1] = read_only_handle;
+    registers[2] = user_cells;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    registers[1] = display_handle;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(display_submissions == 1u);
+    assert(display_request.fence == 7u);
+    assert(display_request.operation == ASTRA_DISPLAY_FRAME_PRESENT_SOLID);
+    assert(display_request.source == 0x135du);
+
+    display_completion = (AstraDisplayFrameCompletion) {
+        .size = ASTRA_DISPLAY_FRAME_COMPLETION_SIZE,
+        .fence = 7u,
+        .status = ASTRA_DISPLAY_COMPLETION_OK,
+        .generation = 9u,
+    };
+    display_completion_ready = true;
+    registers[0] = ASTRA_SYSCALL_DISPLAY_COLLECT;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&completion, user_cells,
+                                     sizeof(completion)) ==
+           KERNEL_USER_COPY_OK);
+    assert(completion.fence == 7u && completion.generation == 9u);
+    assert(!display_completion_ready);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_DMA_CREATE;
+    registers[1] = screen_bytes;
+    registers[2] = user_cells;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    dma_handle = next->data[1];
+    request = (AstraDisplayFrameRequest) {
+        .size = ASTRA_DISPLAY_FRAME_REQUEST_SIZE,
+        .operation = ASTRA_DISPLAY_FRAME_PRESENT_RGB565,
+        .fence = 8u,
+        .source = dma_handle,
+        .pitch = ASTRA_DISPLAY_WIDTH * sizeof(uint16_t),
+        .byte_size = screen_bytes,
+    };
+    assert(kernel_user_copy_to_asm(user_cells, &request, sizeof(request)) ==
+           KERNEL_USER_COPY_OK);
+    registers[0] = ASTRA_SYSCALL_DISPLAY_SUBMIT;
+    registers[1] = display_handle;
+    registers[2] = user_cells;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(display_submissions == 2u);
+    assert(display_request.operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565);
+    assert(display_request.source >= 0x02000000u);
+    assert(display_request.source - 0x02000000u <=
+           sizeof(physical_memory) - screen_bytes);
+
+    display_completion = (AstraDisplayFrameCompletion) {
+        .size = ASTRA_DISPLAY_FRAME_COMPLETION_SIZE,
+        .fence = 8u,
+        .status = ASTRA_DISPLAY_COMPLETION_OK,
+        .generation = 10u,
+    };
+    display_completion_ready = true;
+    registers[0] = ASTRA_SYSCALL_DISPLAY_COLLECT;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
 }
 
 static void test_input_batch_read_is_bounded_and_fault_atomic(void)

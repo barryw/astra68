@@ -335,6 +335,97 @@ void kernel_platform_post_text_geometry(uint32_t *columns, uint32_t *rows)
         *rows = VEGA_POST_ROWS;
 }
 
+uint32_t kernel_platform_display_capabilities(void)
+{
+    uint32_t capabilities = kernel_platform_post_text_present() ?
+        ASTRA_DISPLAY_CAP_TEXT : 0u;
+
+    if (VESTA_READ(DISPLAY_ID) == ASTRA_DISPLAY_HOST_ID_MAGIC &&
+        VESTA_READ(DISPLAY_VERSION) == ASTRA_DISPLAY_HOST_VERSION_1_0) {
+        uint32_t host = VESTA_READ(DISPLAY_CAPS);
+
+        if ((host & ASTRA_DISPLAY_HOST_CAP_SOLID_FRAME) != 0u)
+            capabilities |= ASTRA_DISPLAY_CAP_SOLID_FRAME;
+        if ((host & ASTRA_DISPLAY_HOST_CAP_FENCED_PRESENT) != 0u)
+            capabilities |= ASTRA_DISPLAY_CAP_FENCED_PRESENT;
+    }
+    return capabilities;
+}
+
+bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
+                                    uint32_t source)
+{
+    uint32_t queue;
+
+    if (id == 0u ||
+        (operation != ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
+         operation != ASTRA_DISPLAY_FRAME_PRESENT_RGB565) ||
+        (operation == ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
+         (source & UINT32_C(0xffff0000)) != 0u) ||
+        (operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 &&
+         (source == 0u || (source & 3u) != 0u)) ||
+        (kernel_platform_display_capabilities() &
+         (ASTRA_DISPLAY_CAP_SOLID_FRAME |
+          ASTRA_DISPLAY_CAP_FENCED_PRESENT)) !=
+            (ASTRA_DISPLAY_CAP_SOLID_FRAME |
+             ASTRA_DISPLAY_CAP_FENCED_PRESENT))
+        return false;
+    queue = VESTA_READ(DISPLAY_QUEUE);
+    if ((queue & ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY) == 0u ||
+        (queue & (ASTRA_DISPLAY_HOST_QUEUE_BUSY |
+                  ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID)) != 0u)
+        return false;
+    VESTA_WRITE(DISPLAY_REQ_ID, id);
+    VESTA_WRITE(DISPLAY_REQ_OP, operation);
+    VESTA_WRITE(DISPLAY_REQ_COLOR, source);
+    ASTRAEA_WRITE(IRQ_STAT, ASTRAEA_IRQ_DRAW_DONE);
+    ASTRAEA_WRITE(IRQ_EN,
+                  ASTRAEA_READ(IRQ_EN) | ASTRAEA_IRQ_DRAW_DONE);
+    VESTA_WRITE(DISPLAY_REQ_SUBMIT, ASTRA_DISPLAY_HOST_SUBMIT);
+#if defined(KERNEL_PLATFORM_HOST_TEST)
+    VESTA_WRITE(DISPLAY_QUEUE, ASTRA_DISPLAY_HOST_QUEUE_BUSY);
+#endif
+    kernel_mmio_cpu_sync();
+    return (VESTA_READ(DISPLAY_QUEUE) &
+            ASTRA_DISPLAY_HOST_QUEUE_BUSY) != 0u;
+}
+
+bool kernel_platform_display_collect(AstraDisplayFrameCompletion *completion)
+{
+    if (completion == NULL ||
+        (VESTA_READ(DISPLAY_QUEUE) &
+         ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID) == 0u)
+        return false;
+    completion->size = ASTRA_DISPLAY_FRAME_COMPLETION_SIZE;
+    completion->fence = VESTA_READ(DISPLAY_CPL_ID);
+    completion->status = VESTA_READ(DISPLAY_CPL_STATUS);
+    completion->generation = VESTA_READ(DISPLAY_CPL_GENERATION);
+    completion->reserved = 0u;
+    VESTA_WRITE(DISPLAY_REQ_SUBMIT, ASTRA_DISPLAY_HOST_POP);
+#if defined(KERNEL_PLATFORM_HOST_TEST)
+    VESTA_WRITE(DISPLAY_QUEUE, ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY);
+#endif
+    ASTRAEA_WRITE(IRQ_STAT, ASTRAEA_IRQ_DRAW_DONE);
+    kernel_mmio_cpu_sync();
+    return (VESTA_READ(DISPLAY_QUEUE) &
+            ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID) == 0u;
+}
+
+bool kernel_platform_display_reset(void)
+{
+    VESTA_WRITE(DISPLAY_REQ_SUBMIT, ASTRA_DISPLAY_HOST_RESET);
+#if defined(KERNEL_PLATFORM_HOST_TEST)
+    VESTA_WRITE(DISPLAY_QUEUE, ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY);
+#endif
+    ASTRAEA_WRITE(IRQ_EN,
+                  ASTRAEA_READ(IRQ_EN) & ~ASTRAEA_IRQ_DRAW_DONE);
+    ASTRAEA_WRITE(IRQ_STAT, ASTRAEA_IRQ_DRAW_DONE);
+    kernel_mmio_cpu_sync();
+    return (VESTA_READ(DISPLAY_QUEUE) &
+            (ASTRA_DISPLAY_HOST_QUEUE_BUSY |
+             ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID)) == 0u;
+}
+
 bool kernel_platform_bus_fault_read(KernelPlatformBusFault *fault)
 {
     uint32_t status;
@@ -564,6 +655,9 @@ bool kernel_platform_device_irq_capture(uint8_t source, uint32_t *status)
         pending = VESTA_READ(INPUT_STATUS);
         if ((pending & INPUT_EVENT_VALID) == 0u)
             return false;
+        /* The head identity lets completion accept a newly arrived event
+         * without mistaking an undrained old one for progress. */
+        pending = VESTA_READ(INPUT_DEVICE_SEQ);
         break;
     case IRQ_SRC_VEGA:
         pending = VEGA_READ(IRQ_STAT) & VEGA_READ(IRQ_EN);
@@ -594,7 +688,8 @@ bool kernel_platform_device_irq_capture(uint8_t source, uint32_t *status)
     return true;
 }
 
-bool kernel_platform_device_irq_complete(uint8_t source)
+bool kernel_platform_device_irq_complete(uint8_t source,
+                                         uint32_t captured_status)
 {
     switch (source) {
     case IRQ_SRC_STORAGE:
@@ -603,7 +698,8 @@ bool kernel_platform_device_irq_complete(uint8_t source)
                (VESTA_READ(BLOCK_STATE_ACK) &
                 BLOCK_STATE_ACK_BIT) == 0u;
     case IRQ_SRC_INPUT:
-        return (VESTA_READ(INPUT_STATUS) & INPUT_EVENT_VALID) == 0u;
+        return (VESTA_READ(INPUT_STATUS) & INPUT_EVENT_VALID) == 0u ||
+               VESTA_READ(INPUT_DEVICE_SEQ) != captured_status;
     case IRQ_SRC_VEGA:
         return (VEGA_READ(IRQ_STAT) & VEGA_READ(IRQ_EN)) == 0u;
     case IRQ_SRC_USB:
@@ -744,8 +840,8 @@ bool kernel_platform_qualification_irq_consume(uint8_t source,
     case IRQ_SRC_INPUT: {
         KernelInputEvent event;
 
-        if ((status & INPUT_EVENT_VALID) == 0u ||
-            !kernel_input_peek(&event) || !kernel_input_consume())
+        if (!kernel_input_peek(&event) ||
+            event.device_sequence != status || !kernel_input_consume())
             return false;
         kernel_mmio_cpu_sync();
         return INPUT_EVENT_CLASS(event.header) ==

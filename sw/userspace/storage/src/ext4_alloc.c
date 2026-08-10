@@ -1,6 +1,7 @@
 #include <astra/ext4_alloc.h>
 
 #include <stddef.h>
+#include <generated/ext4_config.h>
 
 /*
  * Measured on big-endian MC68030 under qemu-m68k, running the storage suite's
@@ -30,9 +31,9 @@
  */
 const AstraAllocClass astra_ext4_alloc_classes[ASTRA_EXT4_ALLOC_CLASS_COUNT] = {
     {64u, 1900u},  /* inode refs, directory contexts, journal descriptors */
-    {128u, 32u},   /* short-lived working structures */
+    {128u, CONFIG_BLOCK_DEV_CACHE_SIZE + 32u}, /* buffers plus workers */
     {2048u, 4u},   /* the superblock copy */
-    {4096u, 20u},  /* CONFIG_BLOCK_DEV_CACHE_SIZE + 1, plus headroom */
+    {4096u, CONFIG_BLOCK_DEV_CACHE_SIZE + 4u},
 };
 
 static AstraAllocator *bound_allocator;

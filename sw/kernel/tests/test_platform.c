@@ -1,6 +1,7 @@
 #include "platform.h"
 #include "qualification.h"
 
+#include <astra/display.h>
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -259,6 +260,53 @@ static void test_monotonic_nanosecond_deadline_conversion(void)
            (uint64_t)INT64_MAX - 1u);
 }
 
+static void test_fenced_display_transport(void)
+{
+    VestaRegs *registers = kernel_platform_test_registers();
+    AstraeaRegs *astraea = kernel_platform_test_astraea_registers();
+    AstraDisplayFrameCompletion completion;
+
+    clear_registers(registers);
+    assert(kernel_platform_display_capabilities() == 0u);
+    registers->DISPLAY_ID = ASTRA_DISPLAY_HOST_ID_MAGIC;
+    registers->DISPLAY_VERSION = ASTRA_DISPLAY_HOST_VERSION_1_0;
+    registers->DISPLAY_CAPS = ASTRA_DISPLAY_HOST_CAP_SOLID_FRAME |
+                              ASTRA_DISPLAY_HOST_CAP_FENCED_PRESENT;
+    registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
+    assert(kernel_platform_display_capabilities() ==
+           (ASTRA_DISPLAY_CAP_SOLID_FRAME |
+            ASTRA_DISPLAY_CAP_FENCED_PRESENT));
+    assert(!kernel_platform_display_submit(0u,
+        ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x135du));
+    assert(kernel_platform_display_submit(7u,
+        ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x135du));
+    assert(registers->DISPLAY_REQ_ID == 7u);
+    assert(registers->DISPLAY_REQ_OP ==
+           ASTRA_DISPLAY_FRAME_PRESENT_SOLID);
+    assert(registers->DISPLAY_REQ_COLOR == 0x135du);
+    registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
+    assert(kernel_platform_display_submit(
+        8u, ASTRA_DISPLAY_FRAME_PRESENT_RGB565, 0x02000000u));
+    assert(registers->DISPLAY_REQ_COLOR == 0x02000000u);
+    assert((astraea->IRQ_EN & ASTRAEA_IRQ_DRAW_DONE) != 0u);
+
+    assert(!kernel_platform_display_collect(NULL));
+    registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID;
+    registers->DISPLAY_CPL_ID = 7u;
+    registers->DISPLAY_CPL_STATUS = ASTRA_DISPLAY_COMPLETION_OK;
+    registers->DISPLAY_CPL_GENERATION = 9u;
+    assert(kernel_platform_display_collect(&completion));
+    assert(completion.size == ASTRA_DISPLAY_FRAME_COMPLETION_SIZE);
+    assert(completion.fence == 7u);
+    assert(completion.status == ASTRA_DISPLAY_COMPLETION_OK);
+    assert(completion.generation == 9u);
+    assert(completion.reserved == 0u);
+    assert(registers->DISPLAY_QUEUE ==
+           ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY);
+    assert(kernel_platform_display_reset());
+    assert((astraea->IRQ_EN & ASTRAEA_IRQ_DRAW_DONE) == 0u);
+}
+
 static void test_production_irq_qualification_controls(void)
 {
     VestaRegs *registers = kernel_platform_test_registers();
@@ -363,6 +411,7 @@ int main(void)
     test_typed_identity_console_and_device_queries();
     test_sticky_bus_fault_snapshot_and_acknowledge();
     test_monotonic_nanosecond_deadline_conversion();
+    test_fenced_display_transport();
     test_production_irq_qualification_controls();
     assert(interrupt_save_count != 0u);
     assert(interrupt_save_count == interrupt_restore_count);

@@ -37,12 +37,9 @@
 #define VOLUME_CHECK_PATH VOLUME_MOUNT_POINT "astra.chk"
 #define VOLUME_CHECK_BYTES 4096u
 
-/*
- * The arena the filesystem allocates from. The measured class table needs
- * 216,060 bytes; see sw/userspace/storage/src/ext4_alloc.c for why that number
- * is what it is, and why it is measured on LP32 rather than on a host.
- */
-static AstraAllocScalar volume_arena[28000];
+/* The bootstrap mount uses the same bounded filesystem profile as storage. */
+static AstraAllocScalar volume_arena[ASTRA_EXT4_ARENA_BYTES /
+                                     sizeof(AstraAllocScalar)];
 static AstraAllocator volume_allocator;
 
 static AstraExt4Port volume_port;

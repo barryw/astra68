@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include <astra/block.h>
+#include <astra/display.h>
 #include <astra/event.h>
 #include <astra/input.h>
 #include <astra/process.h>
@@ -51,6 +52,9 @@ uint32_t astra_device_reset(uint32_t handle);
 uint64_t astra_clock_monotonic(void);
 uint32_t astra_wait_one(uint32_t handle, uint64_t deadline_ns,
                         uint32_t *detail);
+uint32_t astra_wait_multiple(const uint32_t *handles, uint32_t count,
+                             uint64_t deadline_ns, uint32_t *index,
+                             uint32_t *detail);
 uint32_t astra_irq_arm(uint32_t handle);
 uint32_t astra_irq_mask(uint32_t handle);
 uint32_t astra_irq_read(uint32_t handle, AstraIrqRecord *record,
@@ -68,6 +72,10 @@ uint32_t astra_console_write(uint32_t device, uint32_t cell,
                              const uint8_t *cells, uint32_t count);
 uint32_t astra_console_cursor(uint32_t device, uint32_t row,
                               uint32_t column, uint32_t visible);
+uint32_t astra_display_submit(uint32_t device,
+                              const AstraDisplayFrameRequest *request);
+uint32_t astra_display_collect(uint32_t device,
+                               AstraDisplayFrameCompletion *completion);
 uint32_t astra_input_read(uint32_t device, AstraInputEvent *events,
                           uint32_t capacity, uint32_t *count,
                           uint32_t *flags);

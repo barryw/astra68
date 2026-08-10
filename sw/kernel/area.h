@@ -12,8 +12,8 @@
 #define KERNEL_AREA_OWNER_MAX 4u
 #define KERNEL_AREA_PAGE_MAX \
     (KERNEL_VM_AREA_SLOT_SIZE / KERNEL_PAGE_SIZE)
-#define KERNEL_AREA_OWNER_PAGE_MAX 64u
-#define KERNEL_AREA_SYSTEM_PAGE_MAX 128u
+#define KERNEL_AREA_OWNER_PAGE_MAX KERNEL_AREA_PAGE_MAX
+#define KERNEL_AREA_SYSTEM_PAGE_MAX (KERNEL_AREA_MAX * KERNEL_AREA_PAGE_MAX)
 #define KERNEL_AREA_MAPPING_MAX \
     (KERNEL_AREA_MAX * KERNEL_VM_SHARED_ALIAS_MAX)
 #define KERNEL_AREA_PROCESS_MAPPING_MAX 4u
@@ -47,10 +47,9 @@ typedef struct KernelAreaSnapshot {
     uint16_t handle_references;
     uint16_t child_references;
     uint16_t mapping_references;
-    uint8_t page_count;
+    uint16_t page_count;
     uint8_t state;
     uint8_t frames_released;
-    uint8_t reserved;
 } KernelAreaSnapshot;
 
 typedef struct KernelAreaPoolStats {

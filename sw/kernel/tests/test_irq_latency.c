@@ -31,6 +31,15 @@ int main(void)
     assert(kernel_irqoff_latency_stats(&stats));
     assert(stats.samples == 2u);
     assert(stats.maximum_cycles == 362u);
+
+    kernel_irqoff_latency_enter();
+    kernel_irqoff_latency_freeze();
+    kernel_irqoff_latency_exit();
+    kernel_irqoff_latency_enter();
+    assert(kernel_irqoff_latency_stats(&stats));
+    assert(stats.active == 0u);
+    assert(stats.samples == 2u);
+    assert(stats.maximum_cycles == 362u);
     puts("interrupt-disabled latency tests passed");
     return 0;
 }

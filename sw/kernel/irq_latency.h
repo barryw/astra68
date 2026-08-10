@@ -13,6 +13,7 @@ typedef struct KernelIrqOffLatencyStats {
 } KernelIrqOffLatencyStats;
 
 void kernel_irqoff_latency_init(void);
+void kernel_irqoff_latency_freeze(void);
 void kernel_irqoff_latency_enter(void);
 void kernel_irqoff_latency_exit(void);
 bool kernel_irqoff_latency_stats(KernelIrqOffLatencyStats *stats);

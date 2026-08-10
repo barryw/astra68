@@ -114,6 +114,12 @@ console_stream_ready(void)
     return stream_ready;
 }
 
+uint32_t
+console_stream_wait_handle(void)
+{
+    return stream_ready ? sink_receive : 0u;
+}
+
 /*
  * One port, two handles. They are separate grants so a launcher can later point
  * them at different things -- which is what makes redirecting one of them a

@@ -23,6 +23,9 @@ int console_stream_start(AstraTerminal *terminal);
 /* Non-zero once the ports exist and there is something to grant. */
 int console_stream_ready(void);
 
+/* Receive endpoint used to sleep until a child writes terminal output. */
+uint32_t console_stream_wait_handle(void);
+
 /*
  * The send handles a launch grants a child. Both point at the one sink today,
  * granted separately so they can later point at different things.

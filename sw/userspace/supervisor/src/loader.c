@@ -26,6 +26,8 @@ static char manifest_text[LOADER_MANIFEST_MAX];
 static uint8_t image[LOADER_IMAGE_MAX];
 static uint32_t process_handles[SUPERVISOR_MANIFEST_ENTRY_MAX];
 static uint32_t service_handles[SUPERVISOR_MANIFEST_ENTRY_MAX];
+static char service_names[SUPERVISOR_MANIFEST_ENTRY_MAX]
+                         [ASTRA_CAPABILITY_NAME_MAX];
 static AstraVfsClient service_clients[SUPERVISOR_MANIFEST_ENTRY_MAX];
 static uint32_t process_count;
 static uint32_t service_count;
@@ -61,6 +63,14 @@ startup_capability(const AstraStartupInfo *startup,
             return &capabilities[index];
     }
     return NULL;
+}
+
+static uint32_t named_service(const char *name)
+{
+    for (uint32_t index = 0u; index < service_count; ++index)
+        if (astra_capability_name_equal(service_names[index], name))
+            return service_handles[index];
+    return 0u;
 }
 
 static uint32_t load_vfs_image(const char *path, uint32_t *length)
@@ -158,8 +168,18 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
             const AstraStartupCapability *held = startup_capability(
                 startup, capabilities, wanted->name);
 
-            if (held == NULL)
+            if (held == NULL) {
+                uint32_t published = named_service(wanted->name);
+
+                if (published != 0u) {
+                    status = add_grant(out, count, wanted->name, published,
+                                       ASTRA_RIGHT_SIGNAL | delegated,
+                                       0u, NULL);
+                    if (status != ASTRA_STATUS_OK)
+                        return status;
+                }
                 continue;
+            }
             status = add_grant(out, count, wanted->name, held->handle,
                                held->rights, 0u, NULL);
             if (status != ASTRA_STATUS_OK)
@@ -281,6 +301,11 @@ static uint32_t publish(const SupervisorManifestEntry *entry,
     if (service_count == SUPERVISOR_MANIFEST_ENTRY_MAX)
         return ASTRA_STATUS_LIMIT;
     service_handles[service_count] = handle;
+    astra_capability_name_set(service_names[service_count], entry->serves);
+    if (entry->serves_rights == 0u) {
+        ++service_count;
+        return ASTRA_STATUS_OK;
+    }
     client = &service_clients[service_count];
     if (astra_vfs_port_connect(client, service_handles[service_count]) !=
             ASTRA_VFS_OK ||
@@ -394,9 +419,10 @@ uint32_t supervisor_loader_start(
     }
     (void)astra_close(event_target_send);
     event_target_send = 0u;
-    for (uint32_t index = 0u; index < 2u; ++index) {
+    for (uint32_t index = 0u; index < 4u; ++index) {
         static const char *const names[] = {
-            ASTRA_CAPABILITY_DISPLAY_DEVICE, ASTRA_CAPABILITY_INPUT_DEVICE
+            ASTRA_CAPABILITY_DISPLAY_DEVICE, ASTRA_CAPABILITY_INPUT_DEVICE,
+            ASTRA_CAPABILITY_INPUT_IRQ, ASTRA_CAPABILITY_DISPLAY_IRQ
         };
         const AstraStartupCapability *held = startup_capability(
             startup, capabilities, names[index]);
@@ -404,10 +430,11 @@ uint32_t supervisor_loader_start(
         if (held != NULL && held->handle != 0u)
             (void)astra_close(held->handle);
     }
-    if (event_control_handle != 0u) {
-        (void)astra_close(event_control_handle);
-        event_control_handle = 0u;
-    }
+    /*
+     * The supervisor owns the service-control lifetime.  A terminal or GUI is
+     * only a client; closing the last sender here makes the events service die
+     * whenever a boot profile has no such client, or when that client exits.
+     */
     return ASTRA_STATUS_OK;
 }
 
@@ -423,17 +450,32 @@ void supervisor_loader_pump_event_control(void)
 
 uint32_t supervisor_loader_watch(void)
 {
-    for (;;) {
-        supervisor_loader_pump_event_control();
-        for (uint32_t index = 0u; index < process_count; ++index) {
-            uint32_t exit_status = 0u;
-            uint32_t status = astra_process_wait(process_handles[index], 0u,
-                                                 &exit_status);
+    uint32_t waits[SUPERVISOR_MANIFEST_ENTRY_MAX + 1u];
 
-            if (status != ASTRA_SYSCALL_TIMED_OUT)
+    waits[0] = event_target_receive;
+    for (uint32_t index = 0u; index < process_count; ++index)
+        waits[index + 1u] = process_handles[index];
+    for (;;) {
+        uint32_t index = ASTRA_WAIT_INDEX_NONE;
+        uint32_t status = astra_wait_multiple(
+            waits, process_count + 1u, ASTRA_DEADLINE_FOREVER, &index, NULL);
+
+        if (index == 0u) {
+            if (status != ASTRA_SYSCALL_OK)
+                return ASTRA_STATUS_PEER_DEAD;
+            supervisor_loader_pump_event_control();
+            continue;
+        }
+        if (index > 0u && index <= process_count) {
+            uint32_t exit_status = 0u;
+            uint32_t wait_status = astra_process_wait(
+                process_handles[index - 1u], 0u, &exit_status);
+
+            if (wait_status != ASTRA_SYSCALL_TIMED_OUT)
                 return exit_status != 0u ? exit_status :
                                            ASTRA_STATUS_PEER_DEAD;
         }
-        (void)astra_yield();
+        if (status != ASTRA_SYSCALL_OK)
+            return ASTRA_STATUS_PEER_DEAD;
     }
 }

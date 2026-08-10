@@ -118,7 +118,7 @@ static int parse_line(char *line, SupervisorManifestEntry *entry)
     if (at < count && equal(token[at], "serves")) {
         ++at;
         if (at == count || !authority(token[at++], entry->serves,
-                       &entry->serves_rights, 0))
+                       &entry->serves_rights, 1))
             return 0;
     }
     if (at < count && equal(token[at], "delegates")) {

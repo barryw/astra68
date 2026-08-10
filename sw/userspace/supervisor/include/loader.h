@@ -6,8 +6,8 @@
 #include <astra/process.h>
 #include <astra/vfs_service.h>
 
-#define SUPERVISOR_MANIFEST_ENTRY_MAX 3u
-#define SUPERVISOR_MANIFEST_GRANT_MAX 6u
+#define SUPERVISOR_MANIFEST_ENTRY_MAX 4u
+#define SUPERVISOR_MANIFEST_GRANT_MAX ASTRA_LAUNCH_GRANT_MAX
 #define SUPERVISOR_MANIFEST_PATH_MAX 128u
 
 typedef struct SupervisorManifestGrant {

@@ -316,11 +316,25 @@ workload is small; 4 MiB is many transactions' worth.
 
 The class table is deliberately **not** shrunk to match. Sized for the plateau,
 any volume up to 1 TiB mounts whatever journal it was formatted with, so a card
-formatted on Linux with defaults still works. The arena is **216,060 bytes**
-against the 151,936 a pinned-journal-only build would need; 64 KiB out of
-32 MiB is cheap insurance against refusing a perfectly valid ext4 volume.
-`make bigvolume` is the gate for that case and deliberately does not pin the
-journal.
+formatted on Linux with defaults still works. The production profile now adds
+a 1,024-entry, 4 KiB coherent block/file-data cache. Its allocator layout is
+4,476,168 bytes inside one fixed 5 MiB arena; both the bootstrap mount and the
+protected storage service use that same definition. `make bigvolume` is the
+gate for the journal case and deliberately does not pin the journal.
+
+Upstream lwext4 bypassed its block cache for file data. Astra patch 0005 routes
+file reads and partial writes through the existing cache and invalidates cached
+copies after direct full-block writes. The terminal gate observes physical
+device requests below the filesystem: the old 16-entry profile read 10 times
+for each of two consecutive `ls` commands; the retained profile reads zero on
+the repeated command.
+
+`STOR` v4 batches directory records in the protocol's existing 192-byte reply
+payload. The service advances the same backend cursor until the payload is
+full, while v2/v3 clients fall back to one `READDIR` per record. On the cached
+`COMMANDS:` fixture this reduces one `ls` from roughly 22 port round trips and
+cross-address-space switches to four; physical block reads remain zero after
+warmup, so this is transport batching rather than command-output caching.
 
 Measured at 20 GB, which is the realistic Astra volume size:
 

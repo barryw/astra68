@@ -45,8 +45,17 @@ STARTUP_MANIFEST = ("service SERVICES:storage grants BLOCK_DEVICE BLOCK_IRQ "
                     "serves SYS:r required\n"
                     "service SERVICES:events grants SYS:r STORE:rw "
                     "serves EVENTS:r required\n"
-                    "service SERVICES:terminal grants DISPLAY INPUT WORK:rw "
-                    "COMMANDS:r EVENTS:r EVENT_CONTROL delegates required\n")
+                    "service SERVICES:terminal grants DISPLAY INPUT INPUT_IRQ "
+                    "WORK:rw COMMANDS:r EVENTS:r EVENT_CONTROL delegates "
+                    "required\n")
+DISPLAY_STARTUP_MANIFEST = (
+    "service SERVICES:storage grants BLOCK_DEVICE BLOCK_IRQ "
+    "serves SYS:r required\n"
+    "service SERVICES:events grants SYS:r STORE:rw "
+    "serves EVENTS:r required\n"
+    "service SERVICES:display grants DISPLAY DISPLAY_IRQ "
+    "serves GUI required\n"
+    "service SERVICES:desktop grants GUI required\n")
 
 
 def ext4_partition(image):
@@ -118,9 +127,9 @@ def _commands(directory):
     return found
 
 
-def _services(directory):
+def _services(directory, names):
     found = []
-    for name in ("storage", "events", "terminal"):
+    for name in names:
         path = os.path.join(directory, name, "build", "m68k", name)
         if not os.path.isfile(path):
             raise RuntimeError("no service image at %s -- build services "
@@ -129,7 +138,9 @@ def _services(directory):
     return found
 
 
-def install(image, catalog=None, commands=None, services=None):
+def install(image, catalog=None, commands=None, services=None,
+            service_names=("storage", "events", "terminal"),
+            manifest_text=STARTUP_MANIFEST):
     """Writes this build's catalog and commands into the image's volume.
 
     The volume is lifted out of the image, worked on, and put back. Two reasons
@@ -150,7 +161,7 @@ def install(image, catalog=None, commands=None, services=None):
         raise RuntimeError("no catalog at %s -- build the supervisor first" %
                            catalog)
     built = _commands(commands)
-    service_images = _services(services)
+    service_images = _services(services, service_names)
     offset, length = ext4_partition(image)
     with tempfile.TemporaryDirectory(prefix="astra-volume-") as temporary:
         volume = os.path.join(temporary, "volume.img")
@@ -188,7 +199,7 @@ def install(image, catalog=None, commands=None, services=None):
                  "the startup directory", optional=True)
         manifest = os.path.join(temporary, STARTUP_NAME)
         with open(manifest, "w", encoding="ascii", newline="\n") as handle:
-            handle.write(STARTUP_MANIFEST)
+            handle.write(manifest_text)
         target = "/%s/%s" % (STARTUP_DIRECTORY, STARTUP_NAME)
         _debugfs(volume, "rm %s" % target, "the old startup manifest",
                  optional=True)
@@ -214,6 +225,11 @@ def install(image, catalog=None, commands=None, services=None):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        raise SystemExit("usage: astra_image.py IMAGE")
-    install(sys.argv[1])
+    if len(sys.argv) == 2:
+        install(sys.argv[1])
+    elif len(sys.argv) == 3 and sys.argv[1] == "--display":
+        install(sys.argv[2], service_names=("storage", "events", "display",
+                                            "desktop"),
+                manifest_text=DISPLAY_STARTUP_MANIFEST)
+    else:
+        raise SystemExit("usage: astra_image.py [--display] IMAGE")

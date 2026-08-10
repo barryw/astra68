@@ -41,7 +41,10 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
      */
     if (number != ASTRA_SYSCALL_LOG_WRITE &&
         number != ASTRA_SYSCALL_PROCESS_CREATE &&
-        number != ASTRA_SYSCALL_WAIT_ONE) {
+        number != ASTRA_SYSCALL_WAIT_ONE &&
+        number != ASTRA_SYSCALL_WAIT_MULTIPLE &&
+        number != ASTRA_SYSCALL_DISPLAY_SUBMIT &&
+        number != ASTRA_SYSCALL_DISPLAY_COLLECT) {
         assert(argument1 == 0u);
         assert(argument2 == 0u);
         assert(argument3 == 0u);
@@ -239,9 +242,12 @@ test_qsort(void)
 static void
 test_syscall_wrappers(void)
 {
+    AstraDisplayFrameRequest request = {0};
+    AstraDisplayFrameCompletion completion = {0};
     uint32_t abi;
     uint32_t process;
     uint32_t thread;
+    uint32_t calls;
 
     assert(astra_yield() == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_YIELD);
@@ -260,6 +266,20 @@ test_syscall_wrappers(void)
     assert(mock_argument0 == 0u);
     assert(astra_activity_adopt(0u) == 0u);
     assert(mock_argument0 == ASTRA_ACTIVITY_NONE);
+    assert(astra_display_submit(3u, &request) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_DISPLAY_SUBMIT);
+    assert(mock_argument0 == 3u);
+    assert(mock_argument1 == (uint32_t)(uintptr_t)&request);
+    assert(astra_display_collect(3u, &completion) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_DISPLAY_COLLECT);
+    assert(mock_argument0 == 3u);
+    assert(mock_argument1 == (uint32_t)(uintptr_t)&completion);
+    calls = mock_calls;
+    assert(astra_display_submit(3u, NULL) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_display_collect(3u, NULL) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(mock_calls == calls);
 }
 
 /*
@@ -361,6 +381,31 @@ static void test_process_wait(void)
 
     calls = mock_calls;
     assert(astra_process_wait(9u, 0u, NULL) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(mock_calls == calls);
+}
+
+static void test_wait_multiple(void)
+{
+    uint32_t handles[] = {3u, 7u};
+    uint32_t index = ASTRA_WAIT_INDEX_NONE;
+    uint32_t detail = 0u;
+    uint32_t calls;
+
+    assert(astra_wait_multiple(handles, 2u, ASTRA_DEADLINE_FOREVER,
+                               &index, &detail) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_WAIT_MULTIPLE);
+    assert(mock_argument0 == (uint32_t)(uintptr_t)handles);
+    assert(mock_argument1 == 2u);
+    assert(mock_argument2 == ASTRA_DEADLINE_NONE_HI);
+    assert(mock_argument3 == ASTRA_DEADLINE_NONE_LO);
+    assert(index == ASTRA_SYSCALL_ABI_VERSION);
+    assert(detail == 0x11111111u);
+
+    calls = mock_calls;
+    assert(astra_wait_multiple(NULL, 2u, 0u, NULL, NULL) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_wait_multiple(handles, 0u, 0u, NULL, NULL) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(mock_calls == calls);
 }
 
@@ -719,6 +764,7 @@ main(void)
     test_syscall_wrappers();
     test_launch();
     test_process_wait();
+    test_wait_multiple();
     test_event_channel();
     test_event_macro();
     test_event_descriptor_layout();

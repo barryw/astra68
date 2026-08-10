@@ -456,8 +456,8 @@ machine.
   original block/IRQ handles once storage publishes. Protected
   `storage` mounts the volume and publishes `SYS:`; protected `events` receives
   `SYS:r` plus a private `STORE:rw` rooted at `events/` and publishes
-  `EVENTS:r`. Protected `terminal` receives `DISPLAY`, `INPUT`, `WORK:rw`, the
-  two `COMMANDS:r` members, `EVENTS:r`, and `EVENT_CONTROL`, then owns the
+  `EVENTS:r`. Protected `terminal` receives `DISPLAY`, `INPUT`, `INPUT_IRQ`,
+  `WORK:rw`, the two `COMMANDS:r` members, `EVENTS:r`, and `EVENT_CONTROL`, then owns the
   existing shell and child-stream loop. Its manifest entry is explicitly
   `delegates`, allowing it to narrow and re-grant those handles to launched
   commands. All three services are independently scheduled processes; there
@@ -467,10 +467,10 @@ machine.
   supervisor, storage, events, and terminal; shared-area alias accounting was
   raised to the same five-process ceiling and the configured-ceiling test
   covers it. The retained
-  Beast build measures storage at 68,050 bytes text/231,500 BSS (73,696-byte
-  image), events at 15,961 text/12 data/49,490 BSS (24,912-byte image), and the
-  terminal at 18,712 text/8 data/96,764 BSS (115,484-byte image). The initial
-  supervisor image is 73,492 text/8 data/322,128 BSS.
+  Beast build measures storage at 69,310 bytes text/5,251,076 BSS, events at
+  17,341 text/12 data/49,678 BSS, and terminal at 19,872 text/8 data/96,868
+  BSS. The initial supervisor image is 73,956 text/8 data/5,341,100 BSS; both
+  ext4 owners carry the fixed 5 MiB allocator arena.
 - `events --level-set <subsystem> <level>` is a temporary current-boot control
   operation, not a write to `EVENTS:`. Launched commands receive a distinct
   `EVENT_CONTROL` capability; the protected events service validates and
@@ -539,15 +539,175 @@ normal journal and filesystem writes change the active image after boot.
 invocations were the reason several nominally rebuilt images retained old
 binaries.
 
+The filesystem now uses lwext4's existing coherent LRU for metadata and file
+data with 1,024 4 KiB entries. Before the change, two consecutive terminal
+`ls` commands each caused 10 physical block requests; the exact two-boot gate
+now reports `cache: first ls 0 physical reads; repeated ls 0` and passes the
+complete terminal suite. QEMU exposes read-only request/sector counters on the
+machine object so the gate measures beneath VFS and lwext4 rather than caching
+shell output. Mount, partition-window, full-volume, allocator, kernel, and ELF
+acceptance tests pass.
+
+The remaining latency was not storage. The O(1) ready-bitmap scheduler,
+one-shot 5 ms quantum, fixed kernel object pools, and same-address-space MMU
+switch path were already sound, but normal terminal boots kept performance and
+IRQ-off MMIO timing enabled indefinitely. Storage, events, and the supervisor
+lifecycle watcher also stayed runnable in yield/poll loops, forcing needless
+cross-address-space switches, cache invalidations, and ATC flushes. Normal
+stage-8 boots now freeze that instrumentation while K1 qualification retains
+it; services block on `WAIT_ONE`/`WAIT_MULTIPLE`; and VFS waits for its reply
+before receiving instead of first making a guaranteed-empty probe. No command
+or `ls` response is cached.
+
+On the exact prior ROM/image, ten cached `COMMANDS: ls` operations had a
+263,542-cycle median. The gate measures five repeated operations below an
+80,000-cycle budget; after the first scheduling fixes the median was 42,636
+cycles, and `STOR` v4 directory batching now measures 28,426 cycles. One cached
+listing uses four port sends and receives instead of roughly 22, while the
+machine-level block counter remains at zero physical reads after warmup. This
+is a 89 percent reduction from the original path without caching command
+output.
+
+The terminal now blocks indefinitely on its stream, child, and input IRQ
+waitables. The IRQ record captures the input head's device sequence, making a
+new-key race distinguishable from an undrained old key, and the terminal
+acknowledges after draining but before interpreting a key because Enter may
+re-enter the pump while a child runs. The former 10 ms input poll remains only
+for an older manifest with no IRQ grant. The events service's non-waitable
+trace maintenance sweep moved from 100 Hz to 1 Hz; its request and control
+ports still wake immediately. A settled 250 ms idle sample fell from 125
+syscalls, 52 VM flushes and 52 cache invalidations to 5, 2 and 2.
+
+All 30 kernel host tests, all userspace host tests, the complete two-boot
+terminal gate, the events gate, and both normal and K1 release builds pass.
+Generated MC68030 code keeps input capture/completion as direct MMIO reads,
+tests and branches, with no allocator, division, or helper-call path.
+
+The prior Arty cache deployment was `/data/astra/deploy/cache-fc06ead125de`:
+ARM QEMU `8fa55bf02526c24942eace556631bb8d13f8c2dc7a1e439e6eef23916389a3f3`,
+ROM `3efc554b2733e758ef5369ee64d39c01ed666069529654dc9ede244a691f2847`,
+and pre-boot image
+`fc06ead125dea4584c6352a0b2e2fa73a2fe723728d1825fbb9902c3635d1684`.
+The previous matched trio is retained in that directory by hash. The board
+reached stage 8 and the text plane read through `nuc` showed a live `WORK:>`;
+Linux reported 203,260 KiB available with the 128 MiB guest resident. The same
+ROM/image also reached stage 8 under the exact 32 MiB guest profile.
+
+The previous generalized-performance deployment was
+`/data/astra/deploy/perf-5dad00109a58`: unchanged ARM QEMU
+`8fa55bf02526c24942eace556631bb8d13f8c2dc7a1e439e6eef23916389a3f3`,
+ROM `5dad00109a583526b99510201aeb35b89a77c3dc44b970213025495c5044e111`,
+and preserved pre-boot image
+`4f33857e6d56a8948297cc13dd57bb15fd8f9292338bb1b7b4263952f48c866b`.
+The exact prior writable image is recoverable there as
+`storage-before-perf.img` with hash
+`ba432a94aa66cce1660ecba474e5f39fe57288299c64f1308320a4db77dc335d`.
+The board reached stage 8 with the physical keyboard and renderer attached; the
+shared plane showed a live `WORK:>` and `ACUR` at row 7, column 7. Linux
+reported 203,604 KiB available with the 128 MiB guest resident.
+
+The active directory-batch/input-IRQ deployment is
+`/data/astra/deploy/perf-irq-batch-1b92d0114799`. It retains the same ARM QEMU
+and 128 MiB guest, with normal ROM
+`1b92d011479903873de6de104bf113f655db2ddf52fdb25327ddffb0e9890b54`
+and pre-boot image
+`1842880b2a4662d128324b6d0861b6489f155962ef6df54bc501b5da0ff76c57`.
+The exact prior ROM and writable image are recoverable there as
+`rom-before.bin` and `storage-before.img`, hashes
+`5dad00109a583526b99510201aeb35b89a77c3dc44b970213025495c5044e111`
+and `bcec71c83b5022d37744e31d247594ab4997db607754641e2d9384ecc25fc23a`.
+After installation the board reached stage 8, rendered a clean `WORK:>`, and
+published `ACUR` at row 7, column 7 with an even sequence. The first active
+boot changed the writable image to
+`f49558d3c3d10f7c9137b7a9d596cb292bf002d980731868e1088de87413e5db`.
+At a settled prompt Linux was 97.5 percent idle, QEMU used 0.4 percent of the
+dual-core host sample, and 202,876 KiB remained available. Physical typing is
+the remaining manual check for this exact deployment; the same ROM/image
+already passed QMP keyboard input, repeated directory enumeration, and the
+complete two-boot gate on Beast.
+
+The active protected GUI deployment is
+`/data/astra/deploy/gui-border-ca9d0c36e98b`. Its exact QEMU source identity is
+`8305703f2228ed6cfcc8af5582dc4bfda8f03c34fdec17c3bca12dacf5d4c269`;
+the stripped non-LTO ARM binary is
+`a7868b9e8956aed8549960e80cde0f30c6a96077290d3524db382542768e1d3c`,
+the ROM is
+`ba04d60d146518db459081c8163c2657d67e3afd0198c7f8623c8e7d4549b2eb`,
+the active pre-boot image is
+`db7ccdd8cf7a0725c0f91a2b7a2570424dc8b73b2a5852378cf068224845b4a5`,
+and the physical renderer is
+`f5c8ed386d780f84a7bf206a7144c57a135702ea15a7a9351b1e8bef01a90aa6`.
+The display and desktop process images hash to
+`ca9d0c36e98b4535e0799348d5c9d130983c1fdae6db0af0b3ede93cba4d84f7`
+and
+`75b7bedf078823e1cd4c70fbaa0b39f57c02ec91f9d7485180312524cf6484bb`.
+All prior GUI deployments remain intact for rollback.
+
+This profile boots storage, events, the protected display/window server, and
+the desktop process without a keyboard. The desktop creates and paints a
+900x500 shared RGB565 surface, transfers a read-only duplicate to the `GUI`
+service, and receives window ID 1 and a presentation generation. The display
+service composes that surface with desktop chrome into its private 1280x720
+DMA scanout, submits fence 1, validates completion, and remains resident. The
+window shell uses 11-pixel rounded corners; cards use 10-pixel corners; the
+client/header seam is flat. The rounded black shell is the only window
+separation; shadows and general alpha are deliberately deferred. The exact
+host gate reports `ASTRA DISPLAY PASS` in 15,629 of 250,000 cycles. On the
+physical Arty, QMP reports one submit and completion, generation 24, and cycles
+105,586,084 / 106,608,067 / 106,699,026 for submit, completion, and collect:
+1,112,942 cycles end-to-end, about 89.0 ms at 12.5 MHz. The captured
+1,843,200-byte big-endian RGB565 payload hashes to
+`3bdc87db6ee8b63995884da91923f665bd79051b0c5f491d54fe60b1f6735db6`
+and contains the clean composed desktop/window frame. Stage 8 remains live
+with QEMU, renderer, and launcher resident and no panic or halt.
+
+The retained protected-display proof is
+`/data/astra/deploy/display-dba48d8302bc`. QEMU source identity is
+`dba48d8302bcad015866fd78f08f6db993e862cf461d4e5794e89218f4b7ba7f`;
+the stripped non-LTO ARM binary is
+`e49028f4d8433b3bbdd8ea6b3253dd3c040799ee2313bb5a0cd2a9c9c55c5f56`,
+the ROM is
+`e9bfdca4c6e6bb8c9dbe114d921a6bdad19786c91fd3952ad6ca57a1482bc028`,
+the pre-boot image is
+`d3b9ac5611b4e15c5b82faf9e6c306ccec689f2155ee63e8c343651e24704b2e`,
+and the physical renderer is
+`9987b796c596cab99de46f513e14ad4e9dd77a1e656c7a38b0fb812b9dbf1aac`.
+The image was derived from the known-good active terminal image
+`63f047921983103abaad7e44d0c25e938c2a3765ab55c3dadf5e228735d8d4ed`;
+the previous deployment remains intact for rollback. The first successful
+physical boot changed the writable image to
+`9a1832ad76c47aeea546449317b79ae437d4ff650cc8ef6803ba4a08e7b1a5d3`.
+
+That image boots protected storage, events, and display processes without a
+keyboard. The display process owns the exclusive display lease and Astraea
+completion IRQ, submits fence 1 for RGB565 `0x135d`, validates its completion,
+and stays resident. The Linux renderer consumes the shared 4 KiB mailbox,
+fills the physical 1280x720 framebuffer, commits a fenced scene, and disables
+boot text. QMP reports exactly one submit and completion, generation 12, and
+cycles 89,811,134 / 91,613,648 / 91,710,626 for submit, completion, and collect:
+1,899,492 cycles end-to-end, about 152 ms at 12.5 MHz. The live 1,843,200-byte
+graphics mapping hashes to
+`390757c13cec9acb69c955af8b467fbeeba48e11508c4ed280d4fe9e64c4629b`,
+exactly the expected repeated `13 5d` bytes. Stage 8 remains live with QEMU and
+the renderer resident and no panic or halt. The exact host gate measures
+14,738 / 250,000 cycles and now waits past stage 8 so an immediate service
+cascade cannot pass.
+
+Two failed attempts remain useful evidence. The first inherited stale
+Mac-built m68k objects into a Beast build and mixed pointer-return ABIs; a clean
+Beast rebuild removed that false fault. The second reached stage 8 and then
+lost the events service because a display-only profile had no terminal holding
+its control sender. The supervisor now owns that endpoint for the service
+lifetime, so optional terminal and GUI clients cannot kill the event service
+by disconnecting. The display service also relies on the supervisor's single
+10-second startup deadline instead of racing it with a shorter private clock.
+
 An LTO ARM QEMU candidate
 `b9eeded89fd25f4373e0a2083746ed7c90e6f57fe5a67e721bc4625b22d98a03`
 improved the median by another 16 percent in the controlled timing gate but is
 rejected: a live renderer deployment ended in an initial-user-image panic. The
-active QEMU
-remains `6506f3a1dcf7336a084acd471b6be828b49624cbf3dea3a1708e69a23f0b5f7a`
-with ROM
-`6c68e95698163bd52b42b763281a92b6a0d143070611a8632bad290ef2b48ed6`;
-the build script no longer enables LTO.
+active QEMU is the non-LTO build recorded in the deployment above, and the
+build script no longer enables LTO.
 
 The torn display and later QEMU launcher failures had a separate Linux-host
 cause. The deployed device tree described all 512 MiB as System RAM while the

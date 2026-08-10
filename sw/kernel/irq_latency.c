@@ -7,6 +7,7 @@
 
 static KernelIrqOffLatencyStats latency_stats;
 static uint32_t latency_started;
+static uint8_t latency_enabled;
 
 static void increment_saturating(uint32_t *value)
 {
@@ -18,10 +19,19 @@ void kernel_irqoff_latency_init(void)
 {
     kernel_bytes_clear(&latency_stats, sizeof(latency_stats));
     latency_started = 0u;
+    latency_enabled = 1u;
+}
+
+void kernel_irqoff_latency_freeze(void)
+{
+    latency_enabled = 0u;
+    latency_stats.active = 0u;
 }
 
 void kernel_irqoff_latency_enter(void)
 {
+    if (latency_enabled == 0u)
+        return;
     if (latency_stats.active != 0u) {
         increment_saturating(&latency_stats.nested_entries);
         return;
@@ -34,7 +44,7 @@ void kernel_irqoff_latency_exit(void)
 {
     uint32_t elapsed;
 
-    if (latency_stats.active == 0u)
+    if (latency_enabled == 0u || latency_stats.active == 0u)
         return;
     elapsed = kernel_performance_cycles_low() - latency_started;
     if (elapsed > latency_stats.maximum_cycles)

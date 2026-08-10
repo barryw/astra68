@@ -21,12 +21,13 @@
  * big-endian MC68030 today and must not acquire a host dependency.
  *
  * Control records only. ASTRA_MESSAGE_INLINE_MAX is 256 bytes, so inline I/O
- * stays small. Version 3 adds bounded shared-area reads; writes remain inline
- * until a measured workload justifies the second bulk operation.
+ * stays small. Version 3 adds bounded shared-area reads; version 4 adds
+ * batched directory replies. Writes remain inline until a measured workload
+ * justifies the second bulk operation.
  */
 
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
-#define ASTRA_VFS_VERSION  UINT16_C(3)
+#define ASTRA_VFS_VERSION  UINT16_C(4)
 
 /*
  * The oldest version this build can still speak. A client asks for a minimum
@@ -64,7 +65,8 @@
 #define ASTRA_VFS_OP_UNLINK   UINT32_C(10)
 #define ASTRA_VFS_OP_BIND_AREA UINT32_C(11)
 #define ASTRA_VFS_OP_READ_AREA UINT32_C(12)
-#define ASTRA_VFS_OP_MAX      ASTRA_VFS_OP_READ_AREA
+#define ASTRA_VFS_OP_READDIR_BATCH UINT32_C(13)
+#define ASTRA_VFS_OP_MAX      ASTRA_VFS_OP_READDIR_BATCH
 
 /* One shared-area transfer replaces up to 86 inline READ round trips. */
 #define ASTRA_VFS_BULK_MAX 16384u

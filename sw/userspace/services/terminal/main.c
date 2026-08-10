@@ -141,6 +141,7 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *display;
     const AstraStartupCapability *input;
+    const AstraStartupCapability *input_irq;
     const AstraStartupCapability *control;
     uint32_t status;
 
@@ -154,6 +155,7 @@ int astra_main(const AstraStartupInfo *startup)
     display = capability(startup, capabilities,
                          ASTRA_CAPABILITY_DISPLAY_DEVICE);
     input = capability(startup, capabilities, ASTRA_CAPABILITY_INPUT_DEVICE);
+    input_irq = capability(startup, capabilities, ASTRA_CAPABILITY_INPUT_IRQ);
     control = capability(startup, capabilities,
                          ASTRA_CAPABILITY_EVENT_CONTROL);
     if (bootstrap == NULL || display == NULL || input == NULL ||
@@ -169,6 +171,7 @@ int astra_main(const AstraStartupInfo *startup)
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_STATUS_OK)
         return (int)status;
-    console_shell_run(display->handle, input->handle, 1);
+    console_shell_run(display->handle, input->handle,
+                      input_irq != NULL ? input_irq->handle : 0u, 1);
     return ASTRA_STATUS_PEER_DEAD;
 }

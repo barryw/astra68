@@ -467,6 +467,7 @@ static void test_device_endpoints_use_common_dispatch(void)
            KERNEL_THREAD_OK);
     assert(kernel_irq_commit_wait(endpoint) == KERNEL_IRQ_OK);
     registers->INPUT_STATUS = INPUT_EVENT_VALID | 3u;
+    registers->INPUT_DEVICE_SEQ = UINT32_C(0x00010001);
     select_interrupt(registers, IRQ_SRC_INPUT);
     assert(kernel_interrupt_dispatch(&woken) == KERNEL_INTERRUPT_DEVICE);
     assert(woken == 0u);
@@ -480,9 +481,11 @@ static void test_device_endpoints_use_common_dispatch(void)
            KERNEL_PERFORMANCE_BUDGET_HARD_IRQ_WAKE);
     assert((registers->IRQ_ENABLE & IRQ_BIT(IRQ_SRC_INPUT)) == 0u);
     assert(kernel_irq_read(endpoint, &record, &event_flags) == KERNEL_IRQ_OK);
-    assert(record.status == (INPUT_EVENT_VALID | 3u));
+    assert(record.status == UINT32_C(0x00010001));
     assert(event_flags == 0u);
-    registers->INPUT_STATUS = 0u;
+    /* A different head is new work, not failure to drain the captured one. */
+    registers->INPUT_STATUS = INPUT_EVENT_VALID | 1u;
+    registers->INPUT_DEVICE_SEQ = UINT32_C(0x00010002);
     assert(kernel_irq_ack(endpoint, record.sequence) == KERNEL_IRQ_OK);
     assert((registers->IRQ_ENABLE & IRQ_BIT(IRQ_SRC_INPUT)) != 0u);
     assert(registers->IRQ_ACK == IRQ_BIT(IRQ_SRC_INPUT));

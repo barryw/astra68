@@ -12,6 +12,7 @@
 #include "qemu/bswap.h"
 #include "qemu/datadir.h"
 #include "qemu/error-report.h"
+#include "qemu/atomic.h"
 #include "qemu/timer.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
@@ -19,6 +20,8 @@
 #include "hw/boards.h"
 #include "hw/loader.h"
 #include "hw/m68k/astra_input.h"
+#include "hw/m68k/astra_display_mailbox.h"
+#include "astra/display.h"
 #include "sysemu/block-backend.h"
 #include "sysemu/blockdev.h"
 #include "sysemu/reset.h"
@@ -113,6 +116,7 @@
  * transfer before the next instruction retires.
  */
 #define BLOCK_SERVICE_DELAY_NS   20000ull
+#define DISPLAY_SERVICE_DELAY_NS 1000000ull
 
 #define ASTRA_INPUT_QUEUE_SIZE   32u
 #define ASTRA_INPUT_QUEUE_MASK   (ASTRA_INPUT_QUEUE_SIZE - 1u)
@@ -190,6 +194,8 @@ typedef struct AstraBlockState {
     uint32_t host_generation;
     uint32_t media_generation;
     uint64_t media_sectors;
+    uint64_t read_requests;
+    uint64_t read_sectors;
     bool write_enable;
     bool state_change;
 } AstraBlockState;
@@ -205,6 +211,28 @@ typedef struct AstraInputState {
     bool overflow;
     QemuInputHandlerState *handler;
 } AstraInputState;
+
+typedef struct AstraDisplayState {
+    MemoryRegion mailbox_region;
+    AstraDisplayMailbox *mailbox;
+    QEMUTimer *service_timer;
+    uint32_t request_id;
+    uint32_t request_op;
+    uint32_t request_source;
+    uint32_t completion_id;
+    uint32_t completion_status;
+    uint32_t completion_generation;
+    uint32_t mailbox_sequence;
+    uint64_t submissions;
+    uint64_t completions;
+    uint64_t generation;
+    uint64_t submit_cycle;
+    uint64_t completion_cycle;
+    uint64_t collect_cycle;
+    bool mailbox_enabled;
+    bool busy;
+    bool completion_valid;
+} AstraDisplayState;
 
 struct Astra68State {
     M68kCPU *cpu;
@@ -230,6 +258,7 @@ struct Astra68State {
     VegaState vega;
     AstraInputState input;
     AstraBlockState block;
+    AstraDisplayState display;
     uint8_t panel_led_data;
     uint8_t panel_led_ownership;
     bool trace_timers;
@@ -238,6 +267,132 @@ struct Astra68State {
 static Astra68State *astra_input_machine;
 
 static void astra_update_irq(Astra68State *s);
+static uint64_t astra_now_cycles(Astra68State *s);
+
+static uint32_t astra_display_queue(const AstraDisplayState *display)
+{
+    return (display->busy ? ASTRA_DISPLAY_HOST_QUEUE_BUSY : 0u) |
+           (!display->busy && !display->completion_valid ?
+                ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY : 0u) |
+           (display->completion_valid ?
+                ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID : 0u);
+}
+
+static void astra_display_complete(Astra68State *s, uint32_t status,
+                                   uint32_t generation)
+{
+    AstraDisplayState *display = &s->display;
+
+    if (!display->busy)
+        return;
+    display->busy = false;
+    display->completion_valid = true;
+    display->completion_id = display->request_id;
+    display->completion_status = status;
+    display->completion_generation = generation;
+    display->generation = generation;
+    display->completion_cycle = astra_now_cycles(s);
+    ++display->completions;
+    s->astraea.irq_status |= ASTRAEA_IRQ_DRAW_DONE;
+    astra_update_irq(s);
+}
+
+static void astra_display_service(void *opaque)
+{
+    Astra68State *s = opaque;
+    AstraDisplayState *display = &s->display;
+
+    if (!display->busy)
+        return;
+    if (!display->mailbox_enabled) {
+        astra_display_complete(s, ASTRA_DISPLAY_COMPLETION_OK,
+                               (uint32_t)display->generation + 1u);
+        return;
+    }
+    if (qatomic_read(&display->mailbox->completion_sequence) !=
+            display->mailbox_sequence) {
+        timer_mod_ns(display->service_timer,
+                     qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                         DISPLAY_SERVICE_DELAY_NS);
+        return;
+    }
+    smp_rmb();
+    astra_display_complete(
+        s,
+        qatomic_read(&display->mailbox->completion_id) ==
+                display->request_id ?
+            qatomic_read(&display->mailbox->completion_status) :
+            ASTRA_DISPLAY_COMPLETION_BAD_REQUEST,
+        qatomic_read(&display->mailbox->completion_generation));
+}
+
+static void astra_display_submit(Astra68State *s)
+{
+    AstraDisplayState *display = &s->display;
+    uint64_t frame_end = (uint64_t)display->request_source +
+                         ASTRA_DISPLAY_MAILBOX_FRAME_BYTES;
+
+    if (display->busy || display->completion_valid ||
+        display->request_id == 0u ||
+        (display->request_op != ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
+         display->request_op != ASTRA_DISPLAY_FRAME_PRESENT_RGB565) ||
+        (display->request_op == ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
+         (display->request_source & 0xffff0000u) != 0u) ||
+        (display->request_op == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 &&
+         (display->request_source < ASTRA_SDRAM_BASE ||
+          frame_end > (uint64_t)ASTRA_SDRAM_BASE + s->ram_size)))
+        return;
+    display->busy = true;
+    display->submit_cycle = astra_now_cycles(s);
+    ++display->submissions;
+    if (display->mailbox_enabled) {
+        if (++display->mailbox_sequence == 0u)
+            ++display->mailbox_sequence;
+        qatomic_set(&display->mailbox->magic, ASTRA_DISPLAY_MAILBOX_MAGIC);
+        qatomic_set(&display->mailbox->version,
+                    ASTRA_DISPLAY_MAILBOX_VERSION_1_1);
+        qatomic_set(&display->mailbox->request_id, display->request_id);
+        qatomic_set(&display->mailbox->operation, display->request_op);
+        qatomic_set(&display->mailbox->color_rgb565,
+                    display->request_source);
+        qatomic_set(&display->mailbox->frame_pitch,
+                    display->request_op == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ?
+                        ASTRA_DISPLAY_WIDTH * 2u : 0u);
+        qatomic_set(&display->mailbox->frame_bytes,
+                    display->request_op == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ?
+                        ASTRA_DISPLAY_MAILBOX_FRAME_BYTES : 0u);
+        if (display->request_op == ASTRA_DISPLAY_FRAME_PRESENT_RGB565) {
+            memcpy((uint8_t *)display->mailbox +
+                       ASTRA_DISPLAY_MAILBOX_HEADER_BYTES,
+                   s->sdram + (display->request_source - ASTRA_SDRAM_BASE),
+                   ASTRA_DISPLAY_MAILBOX_FRAME_BYTES);
+        }
+        smp_wmb();
+        qatomic_set(&display->mailbox->request_sequence,
+                    display->mailbox_sequence);
+    }
+    timer_mod_ns(display->service_timer,
+                 qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                     DISPLAY_SERVICE_DELAY_NS);
+}
+
+static void astra_display_reset(Astra68State *s)
+{
+    AstraDisplayState *display = &s->display;
+
+    if (display->service_timer)
+        timer_del(display->service_timer);
+    display->busy = false;
+    display->completion_valid = false;
+    display->request_id = 0u;
+    display->request_op = 0u;
+    display->request_source = 0u;
+    display->completion_id = 0u;
+    display->completion_status = 0u;
+    display->completion_generation = 0u;
+    s->astraea.irq_status &= ~ASTRAEA_IRQ_DRAW_DONE;
+    astra_update_irq(s);
+}
 
 static uint32_t astra_input_level(const AstraInputState *input)
 {
@@ -464,6 +619,8 @@ static void astra_block_service(void *opaque)
 
     switch (block->active_op) {
     case BLOCK_OP_READ:
+        ++block->read_requests;
+        block->read_sectors += sectors;
         rc = blk_pread(block->blk,
                        (int64_t)block->active_lba * BLOCK_SECTOR_SIZE,
                        (int64_t)sectors * BLOCK_SECTOR_SIZE, buffer, 0);
@@ -785,6 +942,24 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
     case 0x1ac: return s->block.state_change ? BLOCK_STATE_ACK_BIT : 0;
     case 0x1b0:
         return astra_block_present(s) ? BLOCK_MAX_SECTORS : 0;
+    case 0x1d4: return ASTRA_DISPLAY_HOST_ID_MAGIC;
+    case 0x1d8: return ASTRA_DISPLAY_HOST_VERSION_1_0;
+    case 0x1dc:
+        return ASTRA_DISPLAY_HOST_CAP_SOLID_FRAME |
+               ASTRA_DISPLAY_HOST_CAP_FENCED_PRESENT;
+    case 0x1e0: return astra_display_queue(&s->display);
+    case 0x1e4: return s->display.request_id;
+    case 0x1e8: return s->display.request_op;
+    case 0x1ec: return s->display.request_source;
+    case 0x1f4:
+        return s->display.completion_valid ?
+               s->display.completion_id : 0u;
+    case 0x1f8:
+        return s->display.completion_valid ?
+               s->display.completion_status : 0u;
+    case 0x1fc:
+        return s->display.completion_valid ?
+               s->display.completion_generation : 0u;
     case 0x300: return astra_pending_raw(s);
     case 0x304: return s->irq_enable;
     case 0x308: return s->irq_soft;
@@ -910,6 +1085,22 @@ static void astra_vesta_write32(Astra68State *s, hwaddr offset,
     case 0x1ac:
         if (value & BLOCK_STATE_ACK_BIT) {
             s->block.state_change = false;
+            astra_update_irq(s);
+        }
+        break;
+    case 0x1e4: s->display.request_id = value; break;
+    case 0x1e8: s->display.request_op = value; break;
+    case 0x1ec: s->display.request_source = value; break;
+    case 0x1f0:
+        if (value & ASTRA_DISPLAY_HOST_RESET) {
+            astra_display_reset(s);
+        } else {
+            if (value & ASTRA_DISPLAY_HOST_POP) {
+                s->display.completion_valid = false;
+                s->display.collect_cycle = astra_now_cycles(s);
+            }
+            if (value & ASTRA_DISPLAY_HOST_SUBMIT)
+                astra_display_submit(s);
             astra_update_irq(s);
         }
         break;
@@ -1255,6 +1446,7 @@ static void astra_cpu_reset(void *opaque)
      */
     ++s->block.host_generation;
     s->block.state_change = astra_block_present(s);
+    astra_display_reset(s);
 }
 
 static void astra68_init(MachineState *machine)
@@ -1267,12 +1459,45 @@ static void astra68_init(MachineState *machine)
     char *contents;
     gsize firmware_size;
     GError *gerror = NULL;
+    const char *display_mailbox_path;
     const char *text_plane_path;
     int i;
 
     s->trace_timers = g_getenv("ASTRA_QEMU_TIMER_TRACE") != NULL;
     s->input.host_generation = 0;
     astra_input_machine = s;
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-block-read-requests",
+                                   &s->block.read_requests,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-block-read-sectors",
+                                   &s->block.read_sectors,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-submissions",
+                                   &s->display.submissions,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-completions",
+                                   &s->display.completions,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-generation",
+                                   &s->display.generation,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-submit-cycle",
+                                   &s->display.submit_cycle,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-completion-cycle",
+                                   &s->display.completion_cycle,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-collect-cycle",
+                                   &s->display.collect_cycle,
+                                   OBJ_PROP_FLAG_READ);
 
     if (machine->ram_size != ASTRA_SDRAM_PHYSICAL_SIZE &&
         machine->ram_size != ASTRA_SDRAM_HOSTED_SIZE) {
@@ -1336,6 +1561,24 @@ static void astra68_init(MachineState *machine)
     }
     memory_region_add_subregion(sysmem, ASTRA_TEXT_BASE, &s->text);
 
+    display_mailbox_path = g_getenv("ASTRA_DISPLAY_MAILBOX_PATH");
+    if (display_mailbox_path != NULL && display_mailbox_path[0] != '\0') {
+#ifdef CONFIG_POSIX
+        if (!memory_region_init_ram_from_file(
+                &s->display.mailbox_region, NULL,
+                "astra68.display-mailbox", ASTRA_DISPLAY_MAILBOX_BYTES, 0,
+                RAM_SHARED, display_mailbox_path, 0, &error_fatal)) {
+            exit(EXIT_FAILURE);
+        }
+        s->display.mailbox = memory_region_get_ram_ptr(
+            &s->display.mailbox_region);
+        s->display.mailbox_enabled = true;
+#else
+        error_report("ASTRA_DISPLAY_MAILBOX_PATH requires a POSIX host");
+        exit(EXIT_FAILURE);
+#endif
+    }
+
     memory_region_init_io(&s->vesta_io, NULL, &astra_vesta_ops, s,
                           "astra68.vesta", ASTRA_VESTA_SIZE);
     memory_region_add_subregion(sysmem, ASTRA_VESTA_BASE, &s->vesta_io);
@@ -1357,6 +1600,8 @@ static void astra68_init(MachineState *machine)
                                                &s->timers[i]);
     }
     s->vega.vblank_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, astra_vblank, s);
+    s->display.service_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                            astra_display_service, s);
     timer_mod_ns(s->vega.vblank_timer,
                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
                  NANOSECONDS_PER_SECOND / 60);

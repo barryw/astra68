@@ -67,9 +67,8 @@ static bool device_capture(uint8_t source, uint32_t *status, void *context)
 static bool device_complete(uint8_t source, const KernelIrqRecord *record,
                             void *context)
 {
-    (void)record;
     (void)context;
-    return kernel_platform_device_irq_complete(source);
+    return kernel_platform_device_irq_complete(source, record->status);
 }
 
 static bool device_quiesce(uint8_t source, void *context)

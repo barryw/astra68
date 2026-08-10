@@ -102,13 +102,14 @@ static AstraAllocator allocator;
  * measured; neither is a guess. The target table stays the one thing a service
  * copies.
  */
-#define HOST_CLASS_COUNT 5u
+#define HOST_CLASS_COUNT 6u
 
 static const AstraAllocClass host_classes[HOST_CLASS_COUNT] = {
     {64u, 16u},    /* nothing lands here on LP64; kept so the shape matches */
     {128u, 900u},  /* measured peak_live=838 */
-    {2048u, 24u},  /* measured peak_live=16 */
-    {4096u, 24u},  /* measured peak_live=17 */
+    {256u, CONFIG_BLOCK_DEV_CACHE_SIZE + 8u}, /* LP64 ext4_buf is 144 B */
+    {2048u, 40u},  /* measured peak_live=29 */
+    {4096u, CONFIG_BLOCK_DEV_CACHE_SIZE + 8u},
     {8192u, 2u},   /* the htree sort array, 5,456 bytes on LP64 */
 };
 
@@ -116,7 +117,8 @@ static const AstraAllocClass *classes;
 static uint32_t class_count;
 
 /* Sized for whichever table is larger; the unused tail costs nothing to run. */
-static AstraAllocScalar arena[40000];
+static AstraAllocScalar arena[ASTRA_EXT4_ARENA_BYTES /
+                              sizeof(AstraAllocScalar)];
 
 static int failures;
 

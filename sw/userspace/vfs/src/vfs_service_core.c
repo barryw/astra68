@@ -66,8 +66,66 @@ operation_takes_path(uint32_t operation)
     return operation == ASTRA_VFS_OP_OPEN ||
            operation == ASTRA_VFS_OP_STAT ||
            operation == ASTRA_VFS_OP_READDIR ||
+           operation == ASTRA_VFS_OP_READDIR_BATCH ||
            operation == ASTRA_VFS_OP_MKDIR ||
            operation == ASTRA_VFS_OP_UNLINK;
+}
+
+static void
+handle_readdir_batch(AstraVfsService *service,
+                     const AstraVfsRequest *request, AstraVfsReply *reply)
+{
+    AstraVfsNodeInfo info;
+    char name[ASTRA_VFS_NAME_MAX];
+    uint64_t cursor = request->offset;
+    uint32_t entries = 0u;
+    uint32_t used = 0u;
+
+    if (request->length == 0u) {
+        reply->status = ASTRA_VFS_ERR_INVALID;
+        return;
+    }
+    while (entries < request->length &&
+           used + 3u + ASTRA_VFS_NAME_MAX - 1u <= ASTRA_VFS_IO_MAX) {
+        uint64_t next = 0u;
+        uint32_t length = 0u;
+        uint32_t status;
+
+        info.size = 0u;
+        info.kind = ASTRA_VFS_KIND_UNKNOWN;
+        name[0] = '\0';
+        status = service->backend.ops->readdir(
+            service->backend.context, (const char *)request->body.path,
+            cursor, name, (uint32_t)sizeof(name), &info, &next);
+        if (status == ASTRA_VFS_ERR_NOT_FOUND) {
+            if (entries == 0u) {
+                reply->status = status;
+                return;
+            }
+            cursor = 0u;
+            break;
+        }
+        if (status != ASTRA_VFS_OK) {
+            reply->status = status;
+            return;
+        }
+        while (length < ASTRA_VFS_NAME_MAX && name[length] != '\0')
+            ++length;
+        if (length == 0u || length == ASTRA_VFS_NAME_MAX || next == cursor) {
+            reply->status = ASTRA_VFS_ERR_PROTOCOL;
+            return;
+        }
+        reply->payload[used++] = (uint8_t)(info.kind >> 8);
+        reply->payload[used++] = (uint8_t)info.kind;
+        reply->payload[used++] = (uint8_t)length;
+        for (uint32_t index = 0u; index < length; ++index)
+            reply->payload[used++] = (uint8_t)name[index];
+        cursor = next;
+        ++entries;
+    }
+    reply->status = ASTRA_VFS_OK;
+    reply->count = used;
+    reply->cursor = cursor;
 }
 
 static AstraVfsSessionSlot *
@@ -490,6 +548,13 @@ astra_vfs_service_dispatch(AstraVfsService *service, uint32_t operation,
     }
     case ASTRA_VFS_OP_READDIR:
         handle_readdir(service, request, reply);
+        break;
+    case ASTRA_VFS_OP_READDIR_BATCH:
+        if (slot->version < UINT16_C(4)) {
+            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
+            break;
+        }
+        handle_readdir_batch(service, request, reply);
         break;
     case ASTRA_VFS_OP_MKDIR:
         reply->status = service->backend.ops->mkdir(

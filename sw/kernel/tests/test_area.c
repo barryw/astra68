@@ -316,6 +316,43 @@ static void test_child_lifetime_and_quotas(void)
     assert(kernel_area_pool_valid());
 }
 
+static void test_screen_sized_area_reaches_its_last_pixel(void)
+{
+    KernelAddressSpace space = {0};
+    KernelAreaPoolStats stats;
+    KernelAreaSnapshot snapshot;
+    KernelArea *area;
+    uint8_t pixel[2] = {0x13u, 0x5du};
+    uint8_t readback[2] = {0u, 0u};
+    uint32_t virtual_base = 0u;
+    uint32_t byte_size = 0u;
+    const uint32_t screen_bytes = 1280u * 720u * 2u;
+
+    initialize_test();
+    assert(screen_bytes <= ASTRA_AREA_SIZE_MAX);
+    assert(kernel_area_create(91u, screen_bytes, &area) == KERNEL_AREA_OK);
+    assert(kernel_area_snapshot(0u, &snapshot));
+    assert(snapshot.page_count ==
+           (screen_bytes + KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE);
+    assert(kernel_vm_create_address_space(92u, &space) == KERNEL_VM_OK);
+    assert(kernel_area_map(area, 92u, &space,
+                           KERNEL_VM_READ | KERNEL_VM_WRITE,
+                           &virtual_base, &byte_size) == KERNEL_AREA_OK);
+    assert(byte_size == snapshot.page_count * KERNEL_PAGE_SIZE);
+    assert(kernel_area_write(area, screen_bytes - sizeof(pixel), pixel,
+                             sizeof(pixel)) == KERNEL_AREA_OK);
+    assert(kernel_area_read(area, screen_bytes - sizeof(readback), readback,
+                            sizeof(readback)) == KERNEL_AREA_OK);
+    assert(memcmp(pixel, readback, sizeof(pixel)) == 0);
+    assert(kernel_area_unmap(92u, &space, virtual_base) == KERNEL_AREA_OK);
+    kernel_area_handle_release(area, NULL);
+    assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
+    assert(kernel_memory_release_owner(92u, NULL) == KERNEL_MEMORY_OK);
+    assert(kernel_area_pool_stats(&stats));
+    assert(stats.active_areas == 0u && stats.committed_pages == 0u);
+    assert(kernel_area_pool_valid());
+}
+
 static void test_create_transaction_rolls_back_every_stage(void)
 {
     static const KernelAreaTestFault faults[] = {
@@ -461,6 +498,7 @@ int main(void)
     test_allocation_injection_preserves_mapping_baseline();
     test_same_address_aliases_and_atomic_revoke();
     test_child_lifetime_and_quotas();
+    test_screen_sized_area_reaches_its_last_pixel();
     test_create_transaction_rolls_back_every_stage();
     test_map_transaction_rolls_back_every_stage();
     puts("area tests passed");

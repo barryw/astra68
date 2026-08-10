@@ -1,4 +1,4 @@
-SUBDIRS := runtime metrics alloc storage vfs events input shell terminal \
+SUBDIRS := runtime metrics alloc storage vfs events input shell terminal graphics \
 	streams commands supervisor services
 
 all test sanitize analyze clean:

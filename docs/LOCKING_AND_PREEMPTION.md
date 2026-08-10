@@ -142,9 +142,12 @@ Initial release budgets at 12.5 MHz are:
 | IRQ-safe raw lock | 25 us | 312 cycles |
 | user-fault entry through replacement context | 10 ms | 125,000 cycles |
 
-Debug builds timestamp every enter/leave and panic on nesting underflow or lock
-order violation. Release builds count budget overruns and expose the maximum;
-repeated overruns fail qualification.
+Instrumentation is active during boot. Debug builds panic on nesting underflow
+or lock-order violations, and K1 qualification keeps collecting budget
+overruns and maxima. A normal release freezes performance and IRQ-off sampling
+when the initial supervisor reaches terminal stage, so steady-state syscall,
+interrupt, and scheduler paths do not read the MMIO cycle counter merely for
+instrumentation.
 
 ## Synchronization primitives
 

@@ -26,6 +26,12 @@
 /* One request deep. Reading history is not a hot path. */
 #define EVENTS_PORT_MESSAGES 1u
 #define EVENTS_PORT_BUDGET 2u
+/*
+ * The request and control ports wake this service immediately. The trace ring
+ * is not waitable, so one slow maintenance sweep bounds unattended persistence
+ * latency without forcing process switches and PMMU flushes all day.
+ */
+#define EVENTS_TRACE_POLL_NS 1000000000ull
 
 ASTRA_PROGRAM("events-service", 0, 2, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
@@ -550,7 +556,15 @@ int astra_main(const AstraStartupInfo *startup)
     if (status != ASTRA_STATUS_OK)
         return (int)status;
     for (;;) {
+        uint32_t waits[] = {control_receive, events_receive};
+        uint64_t deadline;
+        uint32_t wait_status;
+
         events_pump();
-        (void)astra_yield();
+        deadline = astra_clock_monotonic() + EVENTS_TRACE_POLL_NS;
+        wait_status = astra_wait_multiple(waits, 2u, deadline, NULL, NULL);
+        if (wait_status != ASTRA_SYSCALL_OK &&
+            wait_status != ASTRA_SYSCALL_TIMED_OUT)
+            return ASTRA_STATUS_PEER_DEAD;
     }
 }

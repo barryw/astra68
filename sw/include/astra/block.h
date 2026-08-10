@@ -54,7 +54,7 @@
 /* Hard per-service ceilings. Exceeding one is a rejection, never a stall. */
 #define ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE 4u
 #define ASTRA_DMA_MAX_BUFFERS_PER_SERVICE    4u
-#define ASTRA_DMA_MAX_PAGES_PER_SERVICE      16u
+#define ASTRA_DMA_MAX_PAGES_PER_SERVICE      512u
 
 #ifndef __ASSEMBLER__
 

@@ -79,7 +79,7 @@ so a future fix has somewhere to land.
 
 ## Astra68 changes to upstream files
 
-Four upstream defect fixes are applied **in-tree**. The patches are retained
+Five upstream defect fixes are applied **in-tree**. The patches are retained
 verbatim under `astra/patches/` as the audit record and as the re-apply path
 for a future upstream bump.
 
@@ -89,6 +89,7 @@ for a future upstream bump.
 | `0002-be-superblock-checksum-type.patch` | `src/ext4_super.c:104` | `s->checksum_type` is a `uint8_t` compared against `to_le32(EXT4_CHECKSUM_CRC32C)`. On big-endian the constant becomes `0x01000000`, so every `metadata_csum` volume fails `ext4_sb_check` and mount returns `ENOTSUP`. |
 | `0003-be-htree-hash-seed.patch` | `src/ext4_hash.c:270` | `s_hash_seed` is an on-disk little-endian array `memcpy`'d straight into the host hash state, so every htree hash is wrong on big-endian. |
 | `0004-fwrite-error-masked-by-inode-ref-release.patch` | `src/ext4.c:2009` | `ext4_fwrite`'s `Finish:` did `r = ext4_fs_put_inode_ref(&ref)`, discarding the write's own error. ENOSPC and device EIO both returned `EOK`, and the failing write took the `ext4_trans_stop` branch, committing a transaction whose write had not happened. |
+| `0005-cache-file-data.patch` | `src/ext4.c:1669` | `ext4_fread` and partial file writes bypassed the block cache, so unchanged file data was reread and partial writes performed uncached read-modify-write cycles. Reads and partial writes now use the coherent cache; direct full-block writes invalidate cached copies. |
 
 Defect 0003 is invisible against lwext4's own `mkfs`, which leaves
 `s_hash_seed` zero. It appears only against an `mke2fs` image, which is the

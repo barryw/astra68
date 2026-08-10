@@ -25,15 +25,31 @@ static void valid_manifest(void)
 
     {
         char terminal[] =
-            "service SERVICES:terminal grants DISPLAY INPUT WORK:rw "
-            "COMMANDS:r EVENTS:r EVENT_CONTROL delegates required\n";
+            "service SERVICES:terminal grants DISPLAY INPUT INPUT_IRQ "
+            "WORK:rw COMMANDS:r EVENTS:r EVENT_CONTROL delegates required\n";
 
         assert(supervisor_manifest_parse(terminal, sizeof(terminal) - 1u,
                                          &manifest));
         assert(manifest.count == 1u);
-        assert(manifest.entries[0].grant_count == 6u);
+        assert(manifest.entries[0].grant_count == 7u);
         assert(manifest.entries[0].delegates == 1u);
         assert(manifest.entries[0].serves[0] == '\0');
+    }
+    {
+        char display[] =
+            "service SERVICES:display grants DISPLAY DISPLAY_IRQ "
+            "serves GUI required\n"
+            "service SERVICES:desktop grants GUI required\n";
+
+        assert(supervisor_manifest_parse(display, sizeof(display) - 1u,
+                                         &manifest));
+        assert(manifest.count == 2u);
+        assert(manifest.entries[0].grant_count == 2u);
+        assert(strcmp(manifest.entries[0].grants[1].name,
+                      "DISPLAY_IRQ") == 0);
+        assert(strcmp(manifest.entries[0].serves, "GUI") == 0);
+        assert(manifest.entries[0].serves_rights == 0u);
+        assert(strcmp(manifest.entries[1].grants[0].name, "GUI") == 0);
     }
 }
 
@@ -49,7 +65,8 @@ static void refuses_whole_file(void)
         "service SERVICES:storage grants BLOCK_DEVICE serves SYS:r required\n"
         "service SERVICES:events grants STORE:rw serves EVENTS:r\n"
         "service SERVICES:input grants SYS:r serves INPUT:r\n"
-        "service SERVICES:display grants SYS:r serves DISPLAY:r\n";
+        "service SERVICES:display grants SYS:r serves DISPLAY:r\n"
+        "service SERVICES:desktop grants GUI\n";
     SupervisorManifest manifest;
 
     assert(!supervisor_manifest_parse(bad_right, sizeof(bad_right) - 1u,

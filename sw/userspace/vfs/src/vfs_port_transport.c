@@ -218,32 +218,21 @@ astra_vfs_port_transport(void *context, uint32_t operation,
         uint64_t deadline = astra_clock_monotonic() +
                             VFS_PORT_REPLY_DEADLINE_NS;
 
-        for (;;) {
+        /*
+         * The request cannot be answered until this thread lets the service
+         * run. Waiting also returns immediately when a reply is already
+         * queued, so probing the empty port first only adds a syscall to every
+         * filesystem operation.
+         */
+        status = astra_wait_one(reply_receive, deadline, NULL);
+        if (status == ASTRA_SYSCALL_OK) {
             status = astra_port_receive(reply_receive, &incoming,
                                         sizeof(incoming), NULL, 0u, &size,
                                         NULL);
-            if (status == ASTRA_SYSCALL_OK) {
-                break;
-            }
-            if (status != ASTRA_SYSCALL_WOULD_BLOCK) {
-                port_client_reset(client);
-                /*
-                 * The service took the request and will not answer. Every way
-                 * that happens is the same fact to a caller: nobody is there.
-                 */
-                return ASTRA_VFS_ERR_PEER;
-            }
-            /*
-             * Blocked on the reply port rather than spinning at it -- a yield
-             * loop would burn a scheduling slot for the whole of a disk read
-             * -- and bounded, because a wait with no end is the hang this
-             * return value exists to prevent.
-             */
-            status = astra_wait_one(reply_receive, deadline, NULL);
-            if (status != ASTRA_SYSCALL_OK) {
-                port_client_reset(client);
-                return ASTRA_VFS_ERR_PEER;
-            }
+        }
+        if (status != ASTRA_SYSCALL_OK) {
+            port_client_reset(client);
+            return ASTRA_VFS_ERR_PEER;
         }
     }
 

@@ -45,6 +45,7 @@ static uint8_t mock_area[ASTRA_VFS_BULK_MAX];
 /* Set while the transport is blocked, so the service runs inside its wait. */
 static AstraVfsPortService *served;
 static int refuse_send;
+static uint32_t mock_empty_receives;
 
 static void
 mock_reset(void)
@@ -54,6 +55,7 @@ mock_reset(void)
     served = NULL;
     refuse_send = 0;
     mock_activity = 0u;
+    mock_empty_receives = 0u;
 }
 
 static uint32_t
@@ -172,6 +174,7 @@ astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
     }
     port = &ports[ports[handle].target];
     if (port->count == 0u) {
+        ++mock_empty_receives;
         return ASTRA_SYSCALL_WOULD_BLOCK;
     }
     moved = port->size[0];
@@ -450,6 +453,8 @@ test_a_request_crosses_and_the_reply_is_the_same(void)
 
     assert(host.requests >= 4u);
     assert(host.refused == 0u && host.dropped == 0u);
+    /* Only the service pump probes its input empty; clients wait for replies. */
+    assert(mock_empty_receives == host.requests);
     served = NULL;
 }
 

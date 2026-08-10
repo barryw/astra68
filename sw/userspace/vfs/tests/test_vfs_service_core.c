@@ -627,6 +627,38 @@ test_client_through_transport(void)
         assert(astra_vfs_readdir(&client, "/", FAKE_NODE_MAX + 1u, name,
                                  sizeof(name), &kind,
                                  &cursor) == ASTRA_VFS_ERR_INVALID);
+
+        {
+            AstraVfsDirEntry entries[FAKE_NODE_MAX];
+            const AstraVfsServiceStats *stats =
+                astra_vfs_service_stats(&service);
+            uint32_t requests = stats->requests;
+            uint32_t count = 0u;
+
+            cursor = 0u;
+            assert(astra_vfs_readdir_batch(
+                       &client, "/", cursor, entries, FAKE_NODE_MAX, &count,
+                       &cursor) == ASTRA_VFS_OK);
+            assert(count == 2u);
+            assert(cursor == 0u);
+            assert(stats->requests == requests + 1u);
+            assert(entries[0].name[0] != '\0');
+            assert(entries[1].name[0] != '\0');
+        }
+
+        /* A negotiated v3 peer keeps the one-entry API without a new op. */
+        client.version = UINT16_C(3);
+        cursor = 0u;
+        {
+            AstraVfsDirEntry entry;
+            uint32_t count = 0u;
+
+            assert(astra_vfs_readdir_batch(&client, "/", cursor, &entry, 1u,
+                                            &count, &cursor) == ASTRA_VFS_OK);
+            assert(count == 1u);
+            assert(cursor != 0u);
+        }
+        client.version = ASTRA_VFS_VERSION;
     }
 
     assert(astra_vfs_unlink(&client, "/dir/note.txt") == ASTRA_VFS_OK);

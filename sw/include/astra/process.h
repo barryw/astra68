@@ -39,12 +39,13 @@
  * to expose as a syscall at all.
  */
 /*
- * Eight, because a shell hands a child three streams, its namespace, and a
- * COMMANDS: that has two members. Six was exactly what a single-member
- * namespace needed, which is how a ceiling becomes a surprise.
+ * Nine, because the terminal service needs its ready endpoint, display,
+ * input, input IRQ, work namespace, two-member COMMANDS: union, events, and
+ * event control. Eight was exactly what that service needed before input IRQ
+ * delivery replaced polling, which is how a ceiling becomes a surprise.
  */
-#define ASTRA_LAUNCH_GRANT_MAX 8u
-_Static_assert(ASTRA_LAUNCH_GRANT_MAX == 8u,
+#define ASTRA_LAUNCH_GRANT_MAX 9u
+_Static_assert(ASTRA_LAUNCH_GRANT_MAX == 9u,
                "the grant ceiling is ABI: a child's capability table and "
                "every array sized by it are laid out from this number");
 #define ASTRA_LAUNCH_ARGUMENT_MAX 8u

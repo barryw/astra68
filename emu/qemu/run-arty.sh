@@ -8,6 +8,7 @@ STORAGE=${STORAGE:-$ASTRA_ROOT/storage-terminal.img}
 LIBDIR=${LIBDIR:-$ASTRA_ROOT/qemu/lib}
 TERMINAL_DISPLAY=${ASTRA_TERMINAL_DISPLAY:-$ASTRA_ROOT/bin/astra-terminal-display}
 TEXT_PLANE=${ASTRA_TEXT_PLANE_PATH:-$ASTRA_ROOT/run/post-text.bin}
+DISPLAY_MAILBOX=${ASTRA_DISPLAY_MAILBOX_PATH:-$ASTRA_ROOT/run/display.bin}
 MEMORY=${ASTRA_MEMORY:-128M}
 
 find_input()
@@ -25,15 +26,12 @@ find_input()
 KEYBOARD=${ASTRA_KEYBOARD_EVDEV:-}
 POINTER=${ASTRA_POINTER_EVDEV:-}
 if [ -z "$KEYBOARD" ]; then
-    KEYBOARD=$(find_input '*-event-kbd') || {
-        echo "Astra keyboard evdev not found" >&2
-        exit 1
-    }
+    KEYBOARD=$(find_input '*-event-kbd') || true
 fi
 if [ -z "$POINTER" ]; then
     POINTER=$(find_input '*-event-mouse') || true
 fi
-if [ ! -c "$KEYBOARD" ]; then
+if [ -n "$KEYBOARD" ] && [ ! -c "$KEYBOARD" ]; then
     echo "Astra keyboard path must identify an evdev character device" >&2
     exit 1
 fi
@@ -50,16 +48,21 @@ if [ ! -r "$STORAGE" ]; then
     exit 1
 fi
 
-echo "Astra keyboard: $KEYBOARD" >&2
+if [ -n "$KEYBOARD" ]; then
+    echo "Astra keyboard: $KEYBOARD" >&2
+    set -- -object input-linux,id=astra-keyboard,evdev="$KEYBOARD",repeat=off "$@"
+else
+    echo "Astra keyboard: not present" >&2
+fi
 if [ -n "$POINTER" ]; then
     echo "Astra pointer:  $POINTER" >&2
     set -- -object input-linux,id=astra-pointer,evdev="$POINTER",repeat=off "$@"
 fi
-set -- -object input-linux,id=astra-keyboard,evdev="$KEYBOARD",repeat=off "$@"
 
 mkdir -p "$(dirname "$TEXT_PLANE")"
 dd if=/dev/zero of="$TEXT_PLANE" bs=4096 count=1 2>/dev/null
-"$TERMINAL_DISPLAY" "$TEXT_PLANE" &
+dd if=/dev/zero of="$DISPLAY_MAILBOX" bs=4096 count=451 2>/dev/null
+"$TERMINAL_DISPLAY" "$TEXT_PLANE" "$DISPLAY_MAILBOX" &
 display_pid=$!
 cleanup()
 {
@@ -68,7 +71,9 @@ cleanup()
 }
 trap cleanup EXIT HUP INT TERM
 
-env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" LD_LIBRARY_PATH="$LIBDIR" "$QEMU" \
+env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
+    ASTRA_DISPLAY_MAILBOX_PATH="$DISPLAY_MAILBOX" \
+    LD_LIBRARY_PATH="$LIBDIR" "$QEMU" \
     -object memory-backend-ram,id=astra-ram,size="$MEMORY",prealloc=on \
     -M astra68,memory-backend=astra-ram -m "$MEMORY" -bios "$ROM" \
     -drive if=none,format=raw,file="$STORAGE" \

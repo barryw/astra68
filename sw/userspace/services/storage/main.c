@@ -19,7 +19,6 @@
 #define MOUNT_POINT "/vol/"
 #define DEVICE_NAME "astra"
 #define PORT_MESSAGES 2u
-#define PORT_BUDGET 4u
 
 enum {
     STORAGE_FAIL_ATTACH = ASTRA_STATUS_PROGRAM_FIRST,
@@ -38,7 +37,8 @@ ASTRA_PROGRAM("storage", 0, 1, 0, "Barry Walker",
 
 static AstraLeaseBlock lease;
 static AstraBlockDevice block;
-static AstraAllocScalar arena[28000];
+static AstraAllocScalar arena[ASTRA_EXT4_ARENA_BYTES /
+                              sizeof(AstraAllocScalar)];
 static AstraAllocator allocator;
 static AstraExt4Port ext4_port;
 static AstraVfsExt4Backend backend;
@@ -165,7 +165,9 @@ int astra_main(const AstraStartupInfo *startup)
         return (int)status;
 
     for (;;) {
-        (void)astra_vfs_port_service_pump(&port, PORT_BUDGET);
-        (void)astra_yield();
+        if (astra_wait_one(receive, ASTRA_DEADLINE_FOREVER, NULL) !=
+            ASTRA_SYSCALL_OK)
+            return ASTRA_STATUS_PEER_DEAD;
+        (void)astra_vfs_port_service_pump(&port, 1u);
     }
 }

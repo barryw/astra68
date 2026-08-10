@@ -51,6 +51,8 @@ CURSOR_VISIBLE = 1
 # Vesta input block; the low byte of the status word is the queued count.
 INPUT_STATUS = 0xFFF0070C
 INPUT_COUNT_MASK = 0xFF
+CPU_CYCLES_LO = 0xFFF000EC
+CACHED_LS_BUDGET_CYCLES = 80000
 
 BOOT_MARKER = "stage 8"
 
@@ -225,6 +227,12 @@ class Qmp:
 
     def monitor(self, line):
         return self.execute("human-monitor-command", {"command-line": line})
+
+    def block_read_requests(self):
+        return self.execute("qom-get", {
+            "path": "/machine",
+            "property": "astra-block-read-requests",
+        })
 
     def send(self, down, qcode):
         self.execute("input-send-event", {"events": [
@@ -508,6 +516,54 @@ def recycle_sessions(machine, deadline):
     return -1
 
 
+def cached_ls_cycle_gate(qemu, rom, image, temporary, boot_deadline,
+                         command_deadline):
+    cycle_image = os.path.join(temporary, "cycle-card.img")
+    cycle_dir = os.path.join(temporary, "cycle")
+    shutil.copyfile(image, cycle_image)
+    os.mkdir(cycle_dir)
+    machine = Machine(qemu, rom, cycle_image, cycle_dir)
+    try:
+        if not machine.wait_for_serial(BOOT_MARKER, boot_deadline) or \
+                machine.wait_for_screen("Astra 68", command_deadline) is None:
+            print("FAIL: cached-ls cycle probe did not boot")
+            return False
+        machine.qmp.type_line("cd commands:")
+        if machine.wait_for_screen("COMMANDS:>", command_deadline) is None:
+            print("FAIL: cached-ls cycle probe could not enter COMMANDS:")
+            return False
+        cycles = []
+        for _ in range(5):
+            machine.qmp.type_text("ls")
+            started = machine.word(CPU_CYCLES_LO)
+            machine.qmp.execute("input-send-event", {"events": [{
+                "type": "key", "data": {"down": True,
+                "key": {"type": "qcode", "data": "ret"}}}]})
+            end = time.monotonic() + command_deadline
+            while time.monotonic() < end:
+                if any(row == "COMMANDS:>" for row in
+                       machine.shared_screen()):
+                    break
+                time.sleep(0.001)
+            else:
+                print("FAIL: cached COMMANDS: ls produced no prompt")
+                return False
+            cycles.append((machine.word(CPU_CYCLES_LO) - started) & 0xffffffff)
+            machine.qmp.execute("input-send-event", {"events": [{
+                "type": "key", "data": {"down": False,
+                "key": {"type": "qcode", "data": "ret"}}}]})
+        cached_ls = statistics.median(cycles)
+        if cached_ls > CACHED_LS_BUDGET_CYCLES:
+            print("FAIL: cached COMMANDS: ls median %d cycles, budget %d" %
+                  (cached_ls, CACHED_LS_BUDGET_CYCLES))
+            return False
+        print("cache: cached COMMANDS: ls median %d cycles, budget %d" %
+              (cached_ls, CACHED_LS_BUDGET_CYCLES))
+        return True
+    finally:
+        machine.close()
+
+
 def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         report_timings, prepared_image, performance_only, keyboard_evdev,
         pointer_evdev, startup_soak, release_io, session_only):
@@ -519,6 +575,9 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         if not prepared_image:
             astra_image.install(scratch, catalog)
         if not performance_only:
+            if not cached_ls_cycle_gate(qemu, rom, scratch, temporary,
+                                        boot_deadline, command_deadline):
+                return 1
             warmup_dir = os.path.join(temporary, "warmup")
             os.mkdir(warmup_dir)
             warmup = Machine(qemu, rom, scratch, warmup_dir)
@@ -536,6 +595,23 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                         print("FAIL: durability warmup command %r produced no "
                               "prompt" % line)
                         return 1
+                before = warmup.qmp.block_read_requests()
+                warmup.qmp.type_line("ls")
+                if not warmup.wait_for_prompt(command_deadline):
+                    print("FAIL: cache warmup ls produced no prompt")
+                    return 1
+                warmed = warmup.qmp.block_read_requests()
+                warmup.qmp.type_line("ls")
+                if not warmup.wait_for_prompt(command_deadline):
+                    print("FAIL: repeated cache-probe ls produced no prompt")
+                    return 1
+                repeated = warmup.qmp.block_read_requests()
+                if repeated != warmed:
+                    print("FAIL: repeated ls caused %d physical block reads" %
+                          (repeated - warmed))
+                    return 1
+                print("cache: first ls %d physical reads; repeated ls 0" %
+                      (warmed - before))
             finally:
                 warmup.close()
 

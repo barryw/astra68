@@ -39,7 +39,7 @@ struct KernelArea {
     uint16_t handle_references;
     uint16_t child_references;
     uint16_t mapping_references;
-    uint8_t page_count;
+    uint16_t page_count;
     uint8_t slot;
     uint8_t state;
     uint8_t frames_released;
@@ -47,8 +47,8 @@ struct KernelArea {
 };
 
 #if defined(__m68k__)
-_Static_assert(sizeof(KernelArea) == 100u,
-               "area record size changed; update the memory budget");
+_Static_assert(sizeof(KernelArea) <= 2088u,
+               "area record exceeds its memory budget");
 _Static_assert(sizeof(KernelAreaMapping) == 24u,
                "area mapping size changed; update the memory budget");
 #endif
@@ -346,7 +346,7 @@ KernelAreaStatus kernel_area_create(uint32_t creator, uint32_t byte_size,
     area->handle_references = 1u;
     area->child_references = 0u;
     area->mapping_references = 0u;
-    area->page_count = (uint8_t)page_count;
+    area->page_count = (uint16_t)page_count;
     area->state = KERNEL_AREA_RESERVED;
     area->frames_released = 1u;
 #if defined(KERNEL_AREA_HOST_TEST)
@@ -735,7 +735,6 @@ bool kernel_area_snapshot(uint32_t slot, KernelAreaSnapshot *snapshot)
     snapshot->page_count = area->page_count;
     snapshot->state = area->state;
     snapshot->frames_released = area->frames_released;
-    snapshot->reserved = 0u;
     return true;
 }
 

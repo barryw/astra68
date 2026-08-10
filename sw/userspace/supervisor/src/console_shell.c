@@ -45,6 +45,7 @@
 /* A path the protocol will refuse to carry is not worth building. */
 #define SHELL_PATH_MAX ASTRA_VFS_PATH_MAX
 #define SHELL_READ_CHUNK 128u
+#define CONSOLE_INPUT_POLL_NS 10000000ull
 
 /*
  * The load buffer, and its written ceiling.
@@ -66,6 +67,7 @@ typedef struct ConsoleShell {
     astra_shell_editor_t editor;
     uint32_t display;
     uint32_t input;
+    uint32_t input_irq;
     uint32_t modifiers;
     char assign[ASTRA_CAPABILITY_NAME_MAX];  /* the assign it is standing in */
     char directory[SHELL_PATH_MAX];          /* normalised, under that assign */
@@ -339,9 +341,9 @@ static void report_status(const char *what, uint32_t status)
 
 static void command_ls(int argc, char *const *argv)
 {
+    static AstraVfsDirEntry entries[16];
     char typed[SHELL_PATH_MAX];
     char path[SHELL_PATH_MAX];
-    char name[ASTRA_VFS_NAME_MAX];
     const AstraAssign *assign = NULL;
     AstraVfsClient *client = NULL;
     uint32_t shown = 0u;
@@ -369,7 +371,6 @@ static void command_ls(int argc, char *const *argv)
      */
     for (uint32_t member = 0u; ; ++member) {
         uint64_t cursor = 0u;
-        uint16_t kind = 0u;
 
         status = astra_assign_resolve(supervisor_assigns(), typed,
                                       ASTRA_RIGHT_READ, member, path,
@@ -395,8 +396,12 @@ static void command_ls(int argc, char *const *argv)
         }
         ++members;
         for (;;) {
-            status = astra_vfs_readdir(client, path, cursor, name,
-                                       sizeof(name), &kind, &cursor);
+            uint32_t count = 0u;
+
+            status = astra_vfs_readdir_batch(
+                client, path, cursor, entries,
+                (uint32_t)(sizeof(entries) / sizeof(entries[0])), &count,
+                &cursor);
             if (status == ASTRA_VFS_ERR_NOT_FOUND)
                 break;
             if (status != ASTRA_VFS_OK) {
@@ -414,18 +419,22 @@ static void command_ls(int argc, char *const *argv)
                     worst = status;
                 break;
             }
-            astra_terminal_write(&shell.terminal, name);
-            if (kind == ASTRA_VFS_KIND_DIRECTORY)
-                astra_terminal_putc(&shell.terminal, '/');
-            /*
-             * The member it came from, so the shadowing a person cannot see in
-             * a name is visible in the listing.
-             */
-            astra_terminal_write(&shell.terminal, "  [");
-            write_number(member);
-            astra_terminal_write(&shell.terminal, "]");
-            astra_terminal_putc(&shell.terminal, '\n');
-            ++shown;
+            for (uint32_t entry = 0u; entry < count; ++entry) {
+                astra_terminal_write(&shell.terminal, entries[entry].name);
+                if (entries[entry].kind == ASTRA_VFS_KIND_DIRECTORY)
+                    astra_terminal_putc(&shell.terminal, '/');
+                /*
+                 * The member it came from, so the shadowing a person cannot
+                 * see in a name is visible in the listing.
+                 */
+                astra_terminal_write(&shell.terminal, "  [");
+                write_number(member);
+                astra_terminal_write(&shell.terminal, "]");
+                astra_terminal_putc(&shell.terminal, '\n');
+                ++shown;
+            }
+            if (cursor == 0u)
+                break;
         }
     }
     if (members == 0u) {
@@ -1420,6 +1429,8 @@ static int pump_once(void)
     uint32_t count = 0u;
     uint32_t flags = 0u;
     uint32_t status;
+    AstraIrqRecord irq_record;
+    uint32_t irq_status = ASTRA_SYSCALL_WOULD_BLOCK;
 
     /*
      * The streams remain hosted by the terminal. A launched
@@ -1433,10 +1444,20 @@ static int pump_once(void)
      * to it. This used to return here, which meant the flush at the bottom --
      * the only thing that paints -- was reachable only by way of a keystroke.
      */
-    status = shell.input != 0u ?
+    if (shell.input_irq != 0u) {
+        (void)memset(&irq_record, 0, sizeof(irq_record));
+        irq_status = astra_irq_read(shell.input_irq, &irq_record, NULL);
+    }
+    status = shell.input != 0u &&
+             (shell.input_irq == 0u || irq_status == ASTRA_SYSCALL_OK) ?
         astra_input_read(shell.input, events, ASTRA_INPUT_READ_BATCH_MAX,
-                         &count, &flags) :
-        ASTRA_SYSCALL_WOULD_BLOCK;
+                         &count, &flags) : ASTRA_SYSCALL_WOULD_BLOCK;
+    if (irq_status != ASTRA_SYSCALL_OK &&
+        irq_status != ASTRA_SYSCALL_WOULD_BLOCK) {
+        ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_WARNING,
+                     "input IRQ read refused, status %u", irq_status);
+        return 0;
+    }
     /*
      * An empty queue is the ordinary case and the only one worth yielding
      * over. Anything else is a refused call, and treating a refusal as
@@ -1482,6 +1503,24 @@ static int pump_once(void)
         ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_WARNING,
                      "input overflowed, some keystrokes never arrived");
     }
+    /*
+     * Retire the interrupt before interpreting the batch. Enter can launch a
+     * child, whose serving wait re-enters pump_once; leaving this record live
+     * lets that nested pass acknowledge it first and makes this pass fail
+     * with WOULD_BLOCK when it returns.
+     */
+    if (irq_status == ASTRA_SYSCALL_OK) {
+        uint32_t ack_status = astra_irq_ack(shell.input_irq,
+                                            irq_record.sequence);
+
+        if (ack_status != ASTRA_SYSCALL_OK) {
+            ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL,
+                         ASTRA_EVENT_LEVEL_WARNING,
+                         "input IRQ acknowledge refused, status %u",
+                         ack_status);
+            return 0;
+        }
+    }
     for (uint32_t index = 0u; index < count; ++index) {
         uint32_t header = events[index].header;
         uint32_t usage = events[index].value;
@@ -1509,12 +1548,40 @@ static int pump_once(void)
         (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
         return 0;
     }
-    if (count == 0u)
-        (void)astra_yield();
+    if (count == 0u) {
+        uint32_t waits[3];
+        uint32_t wait_count = 0u;
+        uint32_t sink = console_stream_wait_handle();
+
+        if (sink != 0u)
+            waits[wait_count++] = sink;
+        if (shell.child != 0u)
+            waits[wait_count++] = shell.child;
+        if (shell.input_irq != 0u)
+            waits[wait_count++] = shell.input_irq;
+        if (wait_count != 0u) {
+            uint64_t deadline = shell.input_irq != 0u ?
+                ASTRA_DEADLINE_FOREVER :
+                astra_clock_monotonic() + CONSOLE_INPUT_POLL_NS;
+            uint32_t wait_status = astra_wait_multiple(
+                waits, wait_count, deadline, NULL, NULL);
+
+            if (wait_status != ASTRA_SYSCALL_OK &&
+                wait_status != ASTRA_SYSCALL_TIMED_OUT) {
+                ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL,
+                             ASTRA_EVENT_LEVEL_WARNING,
+                             "terminal wait refused, status %u", wait_status);
+                return 0;
+            }
+        } else {
+            /* ponytail: only the degraded no-stream boot still polls. */
+            (void)astra_yield();
+        }
+    }
     return 1;
 }
 
-void console_shell_run(uint32_t display, uint32_t input,
+void console_shell_run(uint32_t display, uint32_t input, uint32_t input_irq,
                        int volume_ready)
 {
     uint32_t columns = 0u;
@@ -1529,7 +1596,12 @@ void console_shell_run(uint32_t display, uint32_t input,
     (void)memset(&shell, 0, sizeof(shell));
     shell.display = display;
     shell.input = input;
+    shell.input_irq = input_irq;
     shell.running = 1;
+    if (input_irq != 0u && astra_irq_arm(input_irq) != ASTRA_SYSCALL_OK) {
+        (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
+        return;
+    }
     /*
      * A namespace is granted, so the shell starts wherever it was actually
      * given rather than at a root that does not exist. WORK: first, because a

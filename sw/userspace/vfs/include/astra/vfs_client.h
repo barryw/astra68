@@ -99,6 +99,21 @@ uint32_t astra_vfs_stat(AstraVfsClient *client, const char *path,
 uint32_t astra_vfs_readdir(AstraVfsClient *client, const char *path,
                            uint64_t cursor, char *name, uint32_t capacity,
                            uint16_t *kind, uint64_t *next);
+
+typedef struct AstraVfsDirEntry {
+    char name[ASTRA_VFS_NAME_MAX];
+    uint16_t kind;
+} AstraVfsDirEntry;
+
+/*
+ * Fills up to `capacity` entries in one service exchange. `*next == 0` after
+ * a nonempty result means the service reached the end of the directory.
+ * Version 2/3 peers transparently return one entry at a time.
+ */
+uint32_t astra_vfs_readdir_batch(AstraVfsClient *client, const char *path,
+                                 uint64_t cursor, AstraVfsDirEntry *entries,
+                                 uint32_t capacity, uint32_t *count,
+                                 uint64_t *next);
 uint32_t astra_vfs_mkdir(AstraVfsClient *client, const char *path);
 uint32_t astra_vfs_unlink(AstraVfsClient *client, const char *path);
 

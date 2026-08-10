@@ -86,7 +86,7 @@ typedef struct KernelProcess {
     uint8_t supervisor_guard_pages;
     uint8_t handles_closed;
     uint8_t address_space_destroyed;
-    uint8_t dma_pages;
+    uint16_t dma_pages;
     KernelProcessDmaBuffer dma_buffers[KERNEL_VM_DMA_SLOT_COUNT];
 } KernelProcess;
 
@@ -141,6 +141,11 @@ static uint32_t next_activity;
 static uint32_t initial_image_process_id;
 static uint32_t initial_image_progress;
 static uint8_t initial_image_exited;
+static KernelDmaToken display_dma_token;
+static uint32_t display_dma_owner;
+static uint8_t display_dma_active;
+
+static bool display_dma_abort_owner(uint32_t owner);
 
 /* Whole pages, and the floor of every slot must stay unmapped. */
 _Static_assert(KERNEL_THREAD_STACK_SIZE % KERNEL_PAGE_SIZE == 0u &&
@@ -742,6 +747,8 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
             device_status != KERNEL_DEVICE_QUIESCE_FAILED &&
             device_status != KERNEL_DEVICE_RESET_FAILED)
             return KERNEL_PROCESS_CORRUPT;
+        if (!display_dma_abort_owner(process->owner))
+            return KERNEL_PROCESS_CORRUPT;
         (void)revoked_leases;
         (void)kernel_handle_close_all(&process->handles);
         process->self_handle = KERNEL_HANDLE_INVALID;
@@ -1041,7 +1048,7 @@ static void dma_buffer_release(void *object, void *context)
     }
     (void)kernel_dma_close(buffer->dma, process->owner);
     if (process->dma_pages >= buffer->page_count)
-        process->dma_pages -= (uint8_t)buffer->page_count;
+        process->dma_pages -= buffer->page_count;
     else
         process->dma_pages = 0u;
     buffer->dma = KERNEL_DMA_HANDLE_INVALID;
@@ -1130,7 +1137,7 @@ static KernelProcessStatus create_dma_buffer(KernelProcess *process,
     }
 
     buffer->active = 1u;
-    process->dma_pages += (uint8_t)page_count;
+    process->dma_pages += (uint16_t)page_count;
     if (kernel_handle_install(&process->handles, KERNEL_OBJECT_DMA,
                               ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, buffer,
                               dma_buffer_release, process, &handle) !=
@@ -1320,6 +1327,100 @@ static uint32_t block_syscall(KernelProcess *process, KernelThread *thread,
     }
 }
 
+static bool display_dma_abort_owner(uint32_t owner)
+{
+    if (display_dma_active == 0u || display_dma_owner != owner)
+        return true;
+    if (kernel_dma_abort(&display_dma_token) != KERNEL_DMA_OK)
+        return false;
+    kernel_bytes_clear(&display_dma_token, sizeof(display_dma_token));
+    display_dma_owner = 0u;
+    display_dma_active = 0u;
+    return true;
+}
+
+static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
+                                uint32_t syscall,
+                                uint32_t device_generation)
+{
+    uint32_t user_address = thread->context.data[2];
+    int copy_status;
+
+    if ((user_address & (sizeof(uint32_t) - 1u)) != 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    if (syscall == ASTRA_SYSCALL_DISPLAY_SUBMIT) {
+        AstraDisplayFrameRequest request;
+        uint32_t platform_source;
+
+        copy_status = kernel_copy_from_user(&request, user_address,
+                                            sizeof(request));
+        if (copy_status != KERNEL_USER_COPY_OK)
+            return ASTRA_SYSCALL_BAD_ADDRESS;
+        if (request.size != ASTRA_DISPLAY_FRAME_REQUEST_SIZE ||
+            request.fence == 0u)
+            return ASTRA_SYSCALL_INVALID_ARGUMENT;
+        if (request.operation == ASTRA_DISPLAY_FRAME_PRESENT_SOLID) {
+            if ((request.source & UINT32_C(0xffff0000)) != 0u ||
+                request.pitch != 0u || request.byte_size != 0u)
+                return ASTRA_SYSCALL_INVALID_ARGUMENT;
+            platform_source = request.source;
+        } else if (request.operation ==
+                       ASTRA_DISPLAY_FRAME_PRESENT_RGB565) {
+            KernelProcessDmaBuffer *buffer = NULL;
+            KernelDmaBufferInfo info;
+            KernelHandleStatus handle_status;
+            const uint32_t pitch = ASTRA_DISPLAY_WIDTH * sizeof(uint16_t);
+            const uint32_t bytes = pitch * ASTRA_DISPLAY_HEIGHT;
+
+            if (display_dma_active != 0u || request.pitch != pitch ||
+                request.byte_size != bytes)
+                return ASTRA_SYSCALL_INVALID_ARGUMENT;
+            handle_status = kernel_handle_lookup(
+                &process->handles, request.source, KERNEL_OBJECT_DMA,
+                ASTRA_RIGHT_READ, (void **)&buffer);
+            if (handle_status != KERNEL_HANDLE_OK || buffer == NULL ||
+                buffer->active == 0u ||
+                kernel_dma_buffer_info(buffer->dma, process->owner, &info) !=
+                    KERNEL_DMA_OK || info.byte_size < bytes)
+                return ASTRA_SYSCALL_INVALID_HANDLE;
+            if (kernel_dma_begin(buffer->dma, process->owner, 0u, bytes,
+                                 KERNEL_DMA_TO_DEVICE, device_generation,
+                                 &display_dma_token) != KERNEL_DMA_OK)
+                return ASTRA_SYSCALL_WOULD_BLOCK;
+            display_dma_owner = process->owner;
+            display_dma_active = 1u;
+            platform_source = display_dma_token.physical_address;
+        } else {
+            return ASTRA_SYSCALL_INVALID_ARGUMENT;
+        }
+        if (kernel_platform_display_submit(
+                request.fence, request.operation, platform_source))
+            return ASTRA_SYSCALL_OK;
+        if (!display_dma_abort_owner(process->owner))
+            return ASTRA_SYSCALL_IO_ERROR;
+        return ASTRA_SYSCALL_WOULD_BLOCK;
+    }
+    {
+        AstraDisplayFrameCompletion completion;
+
+        if (!kernel_platform_display_collect(&completion))
+            return ASTRA_SYSCALL_WOULD_BLOCK;
+        if (display_dma_active != 0u) {
+            if (display_dma_owner != process->owner ||
+                kernel_dma_complete(&display_dma_token) != KERNEL_DMA_OK)
+                return ASTRA_SYSCALL_IO_ERROR;
+            kernel_bytes_clear(&display_dma_token,
+                               sizeof(display_dma_token));
+            display_dma_owner = 0u;
+            display_dma_active = 0u;
+        }
+        copy_status = kernel_copy_to_user(user_address, &completion,
+                                          sizeof(completion));
+        return copy_status == KERNEL_USER_COPY_OK ?
+            ASTRA_SYSCALL_OK : ASTRA_SYSCALL_BAD_ADDRESS;
+    }
+}
+
 static KernelProcessStatus retire_current(KernelProcessExitReason reason,
                                           uint32_t exit_status,
                                           KernelCpuContext **next_context)
@@ -1496,6 +1597,9 @@ void kernel_process_init(void)
     initial_image_process_id = 0u;
     initial_image_progress = 0u;
     initial_image_exited = 0u;
+    kernel_bytes_clear(&display_dma_token, sizeof(display_dma_token));
+    display_dma_owner = 0u;
+    display_dma_active = 0u;
     kernel_thread_pool_init();
     kernel_sync_pool_init();
     kernel_handle_transfer_pool_init();
@@ -2425,7 +2529,7 @@ static KernelProcessStatus publish_startup_block(
      * Written straight into the page. A second array of these used to sit on
      * this frame and be copied in whole; at 92 bytes a record that is 920
      * bytes of an 8 KiB supervisor stack, under a syscall frame that is now
-     * carrying eight grants of its own.
+     * carrying nine grants of its own.
      */
     AstraStartupCapability *capability =
         (AstraStartupCapability *)(void *)(page + ASTRA_STARTUP_INFO_SIZE);
@@ -4169,6 +4273,46 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         }
         break;
     }
+    case ASTRA_SYSCALL_DISPLAY_SUBMIT:
+    case ASTRA_SYSCALL_DISPLAY_COLLECT: {
+        KernelDeviceLease *lease = NULL;
+        KernelDeviceSnapshot snapshot;
+        KernelHandleStatus handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1], KERNEL_OBJECT_DEVICE,
+            ASTRA_RIGHT_TRANSFER, (void **)&lease);
+
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || lease == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        if (kernel_device_query(lease, &snapshot) != KERNEL_DEVICE_OK) {
+            result = ASTRA_SYSCALL_PEER_DEAD;
+            break;
+        }
+        if (snapshot.class_id != ASTRA_DEVICE_CLASS_DISPLAY ||
+            snapshot.device_id != ASTRA_DEVICE_ID_DISPLAY0) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if ((snapshot.capabilities &
+             (ASTRA_DISPLAY_CAP_SOLID_FRAME |
+              ASTRA_DISPLAY_CAP_FENCED_PRESENT)) !=
+            (ASTRA_DISPLAY_CAP_SOLID_FRAME |
+             ASTRA_DISPLAY_CAP_FENCED_PRESENT)) {
+            result = ASTRA_SYSCALL_BAD_SYSCALL;
+            break;
+        }
+        result = display_syscall(current, thread, syscall,
+                                 snapshot.generation);
+        break;
+    }
     /*
      * The diagnostic channel: a bounded line of text from a process that holds
      * ASTRA_RIGHT_DEBUG over itself. The right is the whole of the policy --
@@ -5481,6 +5625,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                 return KERNEL_PROCESS_CORRUPT;
         } else if (syscall == ASTRA_SYSCALL_DEVICE_RESET) {
             KernelDeviceSnapshot reset_snapshot;
+            KernelDeviceStatus reset_query;
 
             /*
              * A reset the service asked for must not leave it waiting on
@@ -5488,17 +5633,28 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
              * a status the service can still collect, is what makes a reset
              * recoverable rather than a lost request.
              */
-            if (kernel_device_query(lease, &reset_snapshot) ==
-                    KERNEL_DEVICE_OK &&
-                reset_snapshot.device_id == ASTRA_DEVICE_ID_BLOCK0 &&
-                kernel_block_terminate_owner(
-                    current->owner, KERNEL_BLOCK_COMPLETION_RESET, NULL) !=
-                    KERNEL_BLOCK_OK)
-                return KERNEL_PROCESS_CORRUPT;
+            reset_query = kernel_device_query(lease, &reset_snapshot);
+            if (reset_query == KERNEL_DEVICE_OK) {
+                if (reset_snapshot.device_id == ASTRA_DEVICE_ID_BLOCK0 &&
+                    kernel_block_terminate_owner(
+                        current->owner, KERNEL_BLOCK_COMPLETION_RESET, NULL) !=
+                        KERNEL_BLOCK_OK)
+                    return KERNEL_PROCESS_CORRUPT;
+                if (reset_snapshot.device_id == ASTRA_DEVICE_ID_DISPLAY0 &&
+                    !display_dma_abort_owner(current->owner))
+                    return KERNEL_PROCESS_CORRUPT;
+            }
             device_status = kernel_device_reset(lease);
             if (!device_status_to_syscall(device_status, &result))
                 return KERNEL_PROCESS_CORRUPT;
         } else {
+            KernelDeviceSnapshot revoke_snapshot;
+
+            if (kernel_device_query(lease, &revoke_snapshot) ==
+                    KERNEL_DEVICE_OK &&
+                revoke_snapshot.device_id == ASTRA_DEVICE_ID_DISPLAY0 &&
+                !display_dma_abort_owner(current->owner))
+                return KERNEL_PROCESS_CORRUPT;
             device_status = kernel_device_revoke(lease);
             if (!device_status_to_syscall(device_status, &result))
                 return KERNEL_PROCESS_CORRUPT;
