@@ -535,6 +535,10 @@ module astra_render_blitter #(
             source_pixel_q :
             pack_destination_pixel(destination_format_q,
                                    expanded_registered_source_argb);
+    wire direct_copy = is_blit_q && command_flags_q == 16'd0 &&
+        source_format_q == destination_format_q &&
+        source_command_width_q == command_width_q &&
+        source_command_height_q == command_height_q;
     wire source_key_matches =
         source_format_q == `ASTRA_RENDER_FORMAT_INDEX8 ?
             source_pixel_q[7:0] == options_q[7:0] :
@@ -1347,7 +1351,12 @@ module astra_render_blitter #(
                     end else if (source_cache_valid &&
                                  source_cache_address_q ==
                                  required_source_beat) begin
-                        state <= ST_SOURCE_DECODE;
+                        if (direct_copy) begin
+                            pixel_value <= decoded_source_pixel;
+                            state <= ST_PIXEL;
+                        end else begin
+                            state <= ST_SOURCE_DECODE;
+                        end
                     end else begin
                         state <= ST_SOURCE_REQUEST;
                     end
@@ -1704,7 +1713,11 @@ module astra_render_blitter #(
                             destination_pixel_address_q <=
                                 destination_pixel_address_q +
                                 destination_bpp_q;
-                            if (is_blit_q) begin
+                            if (direct_copy) begin
+                                source_pixel_address_q <=
+                                    source_pixel_address_q + source_bpp_q;
+                                state <= ST_SOURCE;
+                            end else if (is_blit_q) begin
                                 source_phase_x_q <= next_source_phase_x;
                                 state <= ST_NEXT_SOURCE_MAP;
                             end else begin

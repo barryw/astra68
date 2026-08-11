@@ -661,6 +661,31 @@ or MASK1 selection but do not alpha-quantize direct color.
 The CPU builds glyph descriptors; Astraea expands and writes every destination
 pixel. CPU framebuffer glyph loops are not part of the Astra graphics path.
 
+The protected runtime transport preserves that split. A render batch contains
+the hardware's native big-endian command ring, surface descriptors, positioned
+glyph descriptors, masks, and source data. The kernel bounds and pins the DMA
+buffer; QEMU copies only that declared byte range; the Linux display owner
+validates the batch envelope and places it unchanged in the reserved graphics
+arena. Astraea validates each command and performs the pixel work. The NDK and
+font service may decode UTF-8, select strikes, position glyphs, clip, schedule,
+and wait on fences, but production code must not rasterize a UI glyph or shape
+into a framebuffer on the 68030.
+
+Framebuffer output is double-buffered. A batch targets the allocation that is
+not ACTIVE, and the Linux display owner changes `FB_BASE` only after every
+command in that batch completes successfully. The next batch targets the
+other allocation. Both the current ACTIVE range and a pending scanout range
+remain protected from renderer writes.
+
+The current window server gives each live window one fixed graphics-arena
+cache. Chrome or content changes rebuild that cache with Astraea commands.
+Movement, z-order changes, activation, and exposure reuse the cache with
+clipped masked `BLIT`; the MC68030 only updates state and emits commands. A
+bounded union damage rectangle is retained for each alternating scanout, so a
+frame is repaired before it can become ACTIVE. Rounded corners require no
+special CPU repair: the cache mask suppresses corner pixels while lower
+windows and the desktop are repainted through the same damage rectangle.
+
 `GLYPH_RUN` uses the common command header and clip rectangle. Word 8 is the
 write-capable destination surface descriptor; word 9 is the read-capable AFNT
 strike surface descriptor; word 10 is the arena-relative offset of the

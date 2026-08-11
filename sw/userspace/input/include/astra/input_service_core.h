@@ -39,6 +39,7 @@ typedef struct AstraInputClient {
     void *context;
     uint32_t id;
     uint32_t generation;
+    uint32_t subscriptions;
     int32_t pending_dx;
     int32_t pending_dy;
     uint8_t active;
@@ -81,6 +82,10 @@ bool astra_input_service_init(AstraInputService *service,
                               const AstraInputServiceConfig *config);
 bool astra_input_service_attach(AstraInputService *service, uint32_t client_id,
                                 AstraInputDelivery delivery, void *context);
+bool astra_input_service_subscribe(AstraInputService *service,
+                                   uint32_t client_id,
+                                   uint32_t subscriptions,
+                                   uint32_t timestamp_ms);
 bool astra_input_service_detach(AstraInputService *service,
                                 uint32_t client_id);
 bool astra_input_service_set_focus(AstraInputService *service,
@@ -88,8 +93,14 @@ bool astra_input_service_set_focus(AstraInputService *service,
 void astra_input_service_ingest(AstraInputService *service,
                                 const AstraInputEvent *event,
                                 bool physical_overflow);
+void astra_input_service_ingest_batch(AstraInputService *service,
+                                      const AstraInputEvent *events,
+                                      uint32_t count,
+                                      bool physical_overflow);
 void astra_input_service_tick(AstraInputService *service,
                               uint32_t timestamp_ms);
+uint32_t astra_input_service_next_delay(const AstraInputService *service,
+                                        uint32_t timestamp_ms);
 bool astra_input_service_stats(const AstraInputService *service,
                                AstraInputServiceStats *stats);
 

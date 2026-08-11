@@ -206,6 +206,8 @@ module tb_astra_render_blitter;
         .write_transactions(write_transactions)
     );
 
+    integer last_elapsed;
+
     task automatic launch;
         integer elapsed;
         begin
@@ -224,6 +226,7 @@ module tb_astra_render_blitter;
                            memory_i.aw_count, memory_i.w_count,
                            memory_i.b_count, memory_i.write_active);
             end
+            last_elapsed = elapsed;
             @(negedge clk);
         end
     endtask
@@ -378,6 +381,49 @@ module tb_astra_render_blitter;
             for (column = 0; column < 3; column = column + 1)
                 expect_byte(32'h5000 + (row + 1) * 16 + column + 3,
                             (row + 1) * 16 + column + 2);
+
+        // Window movement is dominated by unscaled same-format RGB565 copy.
+        // Keep that hardware hot path below the interactive frame budget.
+        memory_i.clear_memory(8'hee);
+        source_data_offset = 32'h1000;
+        destination_data_offset = 32'h4000;
+        source_pitch = 32'd128;
+        destination_pitch = 32'd128;
+        source_surface_width = 16'd64;
+        source_surface_height = 16'd16;
+        destination_surface_width = 16'd64;
+        destination_surface_height = 16'd16;
+        source_format = `ASTRA_RENDER_FORMAT_RGB565;
+        destination_format = `ASTRA_RENDER_FORMAT_RGB565;
+        source_bpp = 3'd2;
+        destination_bpp = 3'd2;
+        source_x = 16'sd0;
+        source_y = 16'sd0;
+        destination_x = 16'sd0;
+        destination_y = 16'sd0;
+        source_width = 16'd64;
+        source_height = 16'd16;
+        destination_width = 16'd64;
+        destination_height = 16'd16;
+        clip_left = 16'sd0;
+        clip_top = 16'sd0;
+        clip_right = 16'sd64;
+        clip_bottom = 16'sd16;
+        for (row = 0; row < 16; row = row + 1)
+            for (column = 0; column < 128; column = column + 1)
+                memory_i.write_byte(32'h1000 + row * 128 + column,
+                                    row + column);
+        launch();
+        if (status != `ASTRA_RENDER_STATUS_OK ||
+            completed_pixels != 32'd1024 || last_elapsed > 9000)
+            $fatal(1,
+                   "identity RGB565 status=%0d pixels=%0d cycles=%0d/9000",
+                   status, completed_pixels, last_elapsed);
+        $display("identity RGB565 cycles=%0d/9000", last_elapsed);
+        for (row = 0; row < 16; row = row + 1)
+            for (column = 0; column < 128; column = column + 1)
+                expect_byte(32'h4000 + row * 128 + column,
+                            row + column);
 
         // Scaling is sampled in command space before reflection, so clipping
         // cannot change which source texel belongs to a destination pixel.

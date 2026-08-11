@@ -9,7 +9,7 @@
 #define KERNEL_VM_AREA_BASE 0x40000000u
 #define KERNEL_VM_AREA_SLOT_SIZE 0x00200000u
 #define KERNEL_VM_AREA_SLOT_COUNT 8u
-#define KERNEL_VM_SHARED_ALIAS_MAX 5u
+#define KERNEL_VM_SHARED_ALIAS_MAX 7u
 /*
  * Transfer memory lands in its own window. Each buffer is process-private, so
  * the slot index is per address space rather than global.

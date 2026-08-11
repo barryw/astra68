@@ -22,12 +22,15 @@
  * waited for an answer that could not be produced. Nothing was broken and
  * nothing said so.
  *
- * 31 costs 420 bytes per process and 1,680 across the machine, which is
- * nothing against being one handle short of a working service. Thirty-one and
- * not thirty-two because the free-slot bitmap is a single uint32_t and
- * handle.c asserts the range it can represent.
+ * The protected GUI terminal adds the seventh live process needed to launch a
+ * foreground command while storage, events, input, display, terminal, and the
+ * supervisor remain resident. That raises the exact demand to 37. The table
+ * remains a bounded two-word bitmap and the compile-time demand proof below
+ * remains exact.
  */
-#define KERNEL_HANDLE_MAX_ENTRIES 31u
+#define KERNEL_HANDLE_MAX_ENTRIES 37u
+#define KERNEL_HANDLE_BITMAP_WORDS \
+    ((KERNEL_HANDLE_MAX_ENTRIES + 31u) / 32u)
 #define KERNEL_HANDLE_TRANSFER_MAX 8u
 #define KERNEL_HANDLE_DETACHED_MAX 256u
 
@@ -81,7 +84,7 @@ typedef struct KernelHandleEntry {
 typedef struct KernelHandleTable {
     KernelHandleEntry entries[KERNEL_HANDLE_MAX_ENTRIES];
     uint32_t owner;
-    uint32_t free_slots;
+    uint32_t free_slots[KERNEL_HANDLE_BITMAP_WORDS];
 } KernelHandleTable;
 
 typedef struct KernelHandleTransferBatch {

@@ -144,7 +144,7 @@ ask(uint32_t handle, uint32_t operation, uint32_t capacity, void *reply,
     uint32_t size = 0u;
     uint32_t status;
 
-    status = astra_port_create(STREAM_REPLY_MESSAGES, reply_size, &receive,
+    status = astra_rt_port_create(STREAM_REPLY_MESSAGES, reply_size, &receive,
                                &handles[0]);
     if (status != ASTRA_SYSCALL_OK) {
         return status;

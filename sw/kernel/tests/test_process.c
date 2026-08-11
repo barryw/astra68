@@ -10,6 +10,8 @@
 #include "port.h"
 #include "process.h"
 
+#include <astra/render_batch.h>
+
 /*
  * A thread's committed stack in pages. Written out once here rather than at
  * each assertion: the counts below are about how many stacks a process holds,
@@ -159,12 +161,13 @@ bool kernel_platform_post_text_cursor(uint32_t row, uint32_t column,
 }
 
 bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
-                                    uint32_t source)
+                                    uint32_t source, uint32_t byte_size)
 {
     display_request.size = ASTRA_DISPLAY_FRAME_REQUEST_SIZE;
     display_request.operation = operation;
     display_request.fence = id;
     display_request.source = source;
+    display_request.byte_size = byte_size;
     ++display_submissions;
     return true;
 }
@@ -2635,6 +2638,64 @@ static void test_console_writes_through_a_display_lease(void)
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    request = (AstraDisplayFrameRequest) {
+        .size = ASTRA_DISPLAY_FRAME_REQUEST_SIZE,
+        .operation = ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH,
+        .fence = 9u,
+        .source = dma_handle,
+        .byte_size = ASTRA_RENDER_BATCH_MIN_BYTES,
+    };
+    assert(kernel_user_copy_to_asm(user_cells, &request, sizeof(request)) ==
+           KERNEL_USER_COPY_OK);
+    registers[0] = ASTRA_SYSCALL_DISPLAY_SUBMIT;
+    registers[1] = display_handle;
+    registers[2] = user_cells;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(display_submissions == 3u);
+    assert(display_request.operation ==
+           ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH);
+    assert(display_request.byte_size == ASTRA_RENDER_BATCH_MIN_BYTES);
+
+    display_completion = (AstraDisplayFrameCompletion) {
+        .size = ASTRA_DISPLAY_FRAME_COMPLETION_SIZE,
+        .fence = 9u,
+        .status = ASTRA_DISPLAY_COMPLETION_OK,
+        .generation = 11u,
+    };
+    display_completion_ready = true;
+    registers[0] = ASTRA_SYSCALL_DISPLAY_COLLECT;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    request = (AstraDisplayFrameRequest) {
+        .size = ASTRA_DISPLAY_FRAME_REQUEST_SIZE,
+        .operation = ASTRA_DISPLAY_CURSOR_UPDATE,
+        .fence = 10u,
+        .source = 321u,
+        .pitch = 123u,
+        .byte_size = ASTRA_DISPLAY_CURSOR_VISIBLE |
+                     ASTRA_DISPLAY_CURSOR_DEFER_COMMIT,
+    };
+    assert(kernel_user_copy_to_asm(user_cells, &request, sizeof(request)) ==
+           KERNEL_USER_COPY_OK);
+    registers[0] = ASTRA_SYSCALL_DISPLAY_SUBMIT;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(display_submissions == 4u);
+    assert(display_request.operation == ASTRA_DISPLAY_CURSOR_UPDATE);
+    assert(display_request.source ==
+           ASTRA_DISPLAY_HOST_CURSOR_PACK(321u, 123u, true));
+    assert(display_request.byte_size ==
+           (ASTRA_DISPLAY_CURSOR_VISIBLE |
+            ASTRA_DISPLAY_CURSOR_DEFER_COMMIT));
 }
 
 static void test_input_batch_read_is_bounded_and_fault_atomic(void)
@@ -3543,10 +3604,12 @@ static void test_real_handle_exhaustion_rolls_back_thread_create(void)
      * stopped the moment it grew: there are only KERNEL_THREAD_MAX threads in
      * the machine, so past a certain table size the test could not fill it and
      * the "full" it was asserting about never happened.
-     */
+    */
     const uint32_t port_pairs = KERNEL_PORT_OWNER_MAX;
+    const uint32_t area_count = 2u;
     const uint32_t child_count = KERNEL_HANDLE_MAX_ENTRIES - 2u -
-                                 KERNEL_SYNC_OWNER_MAX - 2u * port_pairs;
+                                 KERNEL_SYNC_OWNER_MAX - 2u * port_pairs -
+                                 area_count;
     KernelCpuContext *next;
     KernelMemoryStats baseline;
     KernelMemoryStats before_failure;
@@ -3591,6 +3654,19 @@ static void test_real_handle_exhaustion_rolls_back_thread_create(void)
                    &next) == KERNEL_PROCESS_OK);
         assert(next->data[0] == ASTRA_SYSCALL_OK);
     }
+    /* Fill without consuming the final thread allocation slot. */
+    for (uint32_t index = 0u; index < area_count; ++index) {
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_AREA_CREATE;
+        registers[1] = KERNEL_PAGE_SIZE;
+        registers[2] = ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                       ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER |
+                       ASTRA_RIGHT_ADMINISTER;
+        assert(kernel_process_on_syscall(
+                   registers, KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                   &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+    }
     /* Ports come in pairs, and are what closes the gap exactly. */
     for (uint32_t index = 0u; index < port_pairs; ++index) {
         memset(registers, 0, sizeof(registers));
@@ -3608,7 +3684,7 @@ static void test_real_handle_exhaustion_rolls_back_thread_create(void)
      * rollback bug hides rather than where it shows.
      */
     _Static_assert(KERNEL_HANDLE_MAX_ENTRIES - 2u - KERNEL_SYNC_OWNER_MAX -
-                           2u * KERNEL_PORT_OWNER_MAX <
+                           2u * KERNEL_PORT_OWNER_MAX <=
                        KERNEL_PROCESS_THREAD_MAX,
                    "this test can no longer fill the handle table exactly: "
                    "syncs, ports and threads together fall short of it");

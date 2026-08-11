@@ -286,20 +286,23 @@ when Ctrl, Alt, and GUI modifiers are clear. Games and editors consume key
 events; text widgets and terminals consume Unicode text events while retaining
 key events for commands such as Ctrl-A.
 
-The display or workspace service is the only authority allowed to change input
-focus. A full client port never blocks the input service. Pointer motion is
+The display or workspace service is the only seat owner and the only authority
+allowed to change input focus or capture. It translates logical pointer input
+into per-window messages carrying both screen and client-relative coordinates.
+A windowless process may observe screen-space motion, buttons, and wheel only
+through an explicitly delegated `INPUT_SERVICE` capability; it cannot receive
+keys, text, or focus. A full client port never blocks the input service. Pointer motion is
 coalesced to the newest bounded position. Loss of a critical key, text, button,
 or focus event marks that client desynchronized; its next successful delivery
 begins with `STATE_RESET|LOSS`. Service or client death clears focus and held
 state. One physical overflow indication is applied only to the first record of
 its drained batch, preventing duplicate repair notifications.
 
-The remaining boundary is process integration: the reusable service launcher
-must start this core in a protected process and pass its input-device lease,
-IRQ endpoint, and publication/control ports without fixed handle values. The
-repository does not yet have that production launcher or userspace syscall
-runtime, so the service is cross-built and certified but is not claimed to be
-running inside Astra.
+The production launcher now starts the input core in a protected process,
+grants its input-device lease and IRQ endpoint, and publishes its service port.
+The display process connects as the unique seat owner; application observers
+connect through bounded capability-transferred ports. No fixed handle value or
+physical input capability reaches an application.
 
 ## 8. Storage stack
 

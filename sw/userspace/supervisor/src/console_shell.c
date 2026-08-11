@@ -65,10 +65,7 @@
 typedef struct ConsoleShell {
     AstraTerminal terminal;
     astra_shell_editor_t editor;
-    uint32_t display;
-    uint32_t input;
-    uint32_t input_irq;
-    uint32_t modifiers;
+    ConsoleShellBackend backend;
     char assign[ASTRA_CAPABILITY_NAME_MAX];  /* the assign it is standing in */
     char directory[SHELL_PATH_MAX];          /* normalised, under that assign */
     /*
@@ -80,7 +77,18 @@ typedef struct ConsoleShell {
     int running;
 } ConsoleShell;
 
+typedef struct DirectConsoleBackend {
+    AstraInputEvent events[ASTRA_INPUT_READ_BATCH_MAX];
+    uint32_t display;
+    uint32_t input;
+    uint32_t input_irq;
+    uint32_t modifiers;
+    uint32_t event_count;
+    uint32_t event_index;
+} DirectConsoleBackend;
+
 static ConsoleShell shell;
+static DirectConsoleBackend direct_backend;
 /*
  * Outside the frame for the same reason the input batch is: a user thread gets
  * one 4 KiB stack, and 64 KiB was never going to be on it.
@@ -1290,11 +1298,11 @@ static void run_line(const char *line)
 }
 
 /* The renderer: one run of cells at a time, through the display lease. */
-static int render_cells(void *context, uint32_t row, uint32_t column,
-                        const uint8_t *cells, uint32_t count)
+static int direct_render_cells(void *context, uint32_t row, uint32_t column,
+                               const uint8_t *cells, uint32_t count)
 {
-    ConsoleShell *state = context;
-    uint32_t cell = row * state->terminal.columns + column;
+    DirectConsoleBackend *backend = context;
+    uint32_t cell = row * shell.terminal.columns + column;
     uint32_t written = 0u;
 
     while (written < count) {
@@ -1302,7 +1310,7 @@ static int render_cells(void *context, uint32_t row, uint32_t column,
 
         if (run > ASTRA_CONSOLE_WRITE_MAX)
             run = ASTRA_CONSOLE_WRITE_MAX;
-        if (astra_console_write(state->display, cell + written,
+        if (astra_console_write(backend->display, cell + written,
                                 cells + written, run) != ASTRA_SYSCALL_OK)
             return 0;
         written += run;
@@ -1310,13 +1318,106 @@ static int render_cells(void *context, uint32_t row, uint32_t column,
     return 1;
 }
 
+static int direct_present(void *context, const AstraTerminal *terminal)
+{
+    DirectConsoleBackend *backend = context;
+
+    return astra_console_cursor(backend->display, terminal->cursor_row,
+                                terminal->cursor_column, 1u) ==
+           ASTRA_SYSCALL_OK;
+}
+
+static int direct_next_key(void *context, uint32_t *key)
+{
+    DirectConsoleBackend *backend = context;
+
+    if (backend == NULL || key == NULL)
+        return -1;
+    for (;;) {
+        while (backend->event_index < backend->event_count) {
+            AstraInputEvent *event =
+                &backend->events[backend->event_index++];
+            uint32_t usage = event->value;
+            int pressed =
+                (ASTRA_INPUT_EVENT_FLAGS(event->header) &
+                 ASTRA_INPUT_FLAG_DOWN) != 0u;
+
+            if (ASTRA_INPUT_EVENT_CLASS(event->header) !=
+                ASTRA_INPUT_CLASS_KEYBOARD)
+                continue;
+            if (astra_keymap_is_modifier(usage)) {
+                backend->modifiers = astra_keymap_apply_modifier(
+                    backend->modifiers, usage, pressed);
+                continue;
+            }
+            if (!pressed)
+                continue;
+            *key = astra_keymap_translate(usage, backend->modifiers);
+            return 1;
+        }
+
+        {
+            AstraIrqRecord irq_record;
+            uint32_t irq_status = ASTRA_SYSCALL_WOULD_BLOCK;
+            uint32_t flags = 0u;
+            uint32_t status;
+
+            backend->event_count = 0u;
+            backend->event_index = 0u;
+            if (backend->input_irq != 0u) {
+                (void)memset(&irq_record, 0, sizeof(irq_record));
+                irq_status = astra_irq_read(backend->input_irq,
+                                            &irq_record, NULL);
+                if (irq_status == ASTRA_SYSCALL_WOULD_BLOCK)
+                    return 0;
+                if (irq_status != ASTRA_SYSCALL_OK) {
+                    ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL,
+                                 ASTRA_EVENT_LEVEL_WARNING,
+                                 "input IRQ read refused, status %u",
+                                 irq_status);
+                    return -1;
+                }
+            }
+            if (backend->input == 0u)
+                return 0;
+            status = astra_input_read(backend->input, backend->events,
+                                      ASTRA_INPUT_READ_BATCH_MAX,
+                                      &backend->event_count, &flags);
+            if (status != ASTRA_SYSCALL_OK &&
+                status != ASTRA_SYSCALL_WOULD_BLOCK) {
+                char report[32];
+
+                (void)astra_log_write(
+                    report, describe_input_failure(report, sizeof(report),
+                                                   status));
+                return -1;
+            }
+            if ((flags & ASTRA_INPUT_READ_OVERFLOW) != 0u)
+                ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SHELL,
+                             ASTRA_EVENT_LEVEL_WARNING,
+                             "input overflowed, some keystrokes never "
+                             "arrived");
+            if (irq_status == ASTRA_SYSCALL_OK &&
+                astra_irq_ack(backend->input_irq, irq_record.sequence) !=
+                    ASTRA_SYSCALL_OK) {
+                ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SHELL,
+                             ASTRA_EVENT_LEVEL_WARNING,
+                             "input IRQ acknowledge refused");
+                return -1;
+            }
+            if (status == ASTRA_SYSCALL_WOULD_BLOCK ||
+                backend->event_count == 0u)
+                return 0;
+        }
+    }
+}
+
 static int flush_terminal(void)
 {
     if (astra_terminal_flush(&shell.terminal) != ASTRA_TERMINAL_OK)
         return 0;
-    return astra_console_cursor(shell.display, shell.terminal.cursor_row,
-                                shell.terminal.cursor_column, 1u) ==
-           ASTRA_SYSCALL_OK;
+    return shell.backend.present == NULL ||
+           shell.backend.present(shell.backend.context, &shell.terminal);
 }
 
 static void feed_key(uint32_t code)
@@ -1417,20 +1518,9 @@ static void feed_key(uint32_t code)
  */
 static int pump_once(void)
 {
-    /*
-     * Static, not automatic. A user thread gets one 4 KiB stack, and this
-     * function sits at the bottom of every command's call chain -- shell, Kit,
-     * service, backend, then lwext4's own write path, which is the deepest
-     * thing in the system. A batch buffer here is paid for by every frame
-     * above it. Moving it out of the frame is the difference between `write`
-     * working and faulting.
-     */
-    static AstraInputEvent events[ASTRA_INPUT_READ_BATCH_MAX];
-    uint32_t count = 0u;
-    uint32_t flags = 0u;
-    uint32_t status;
-    AstraIrqRecord irq_record;
-    uint32_t irq_status = ASTRA_SYSCALL_WOULD_BLOCK;
+    uint32_t key = 0u;
+    int input_result;
+    int had_key = 0;
 
     /*
      * The streams remain hosted by the terminal. A launched
@@ -1444,100 +1534,21 @@ static int pump_once(void)
      * to it. This used to return here, which meant the flush at the bottom --
      * the only thing that paints -- was reachable only by way of a keystroke.
      */
-    if (shell.input_irq != 0u) {
-        (void)memset(&irq_record, 0, sizeof(irq_record));
-        irq_status = astra_irq_read(shell.input_irq, &irq_record, NULL);
+    do {
+        input_result = shell.backend.next_key != NULL ?
+            shell.backend.next_key(shell.backend.context, &key) : 0;
+        if (input_result > 0) {
+            had_key = 1;
+            feed_key(key);
+        }
+    } while (input_result > 0);
+    if (input_result == CONSOLE_SHELL_INPUT_STOP) {
+        shell.running = 0;
+        return 1;
     }
-    status = shell.input != 0u &&
-             (shell.input_irq == 0u || irq_status == ASTRA_SYSCALL_OK) ?
-        astra_input_read(shell.input, events, ASTRA_INPUT_READ_BATCH_MAX,
-                         &count, &flags) : ASTRA_SYSCALL_WOULD_BLOCK;
-    if (irq_status != ASTRA_SYSCALL_OK &&
-        irq_status != ASTRA_SYSCALL_WOULD_BLOCK) {
-        ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_WARNING,
-                     "input IRQ read refused, status %u", irq_status);
-        return 0;
-    }
-    /*
-     * An empty queue is the ordinary case and the only one worth yielding
-     * over. Anything else is a refused call, and treating a refusal as
-     * "no input" is what turned a rejected buffer address into a terminal
-     * that looked hung: the loop spun forever and said nothing. A broken
-     * input path is exactly as fatal to a terminal as a broken flush, and
-     * is reported the same way.
-     *
-     * It falls through to the flush rather than returning. **A pass with no
-     * key still has cells to paint**: a launched program's output arrives
-     * through the sink above and nothing typed it. Returning early here left
-     * that output in the model until somebody happened to press a key, so a
-     * program that printed one line and exited printed nothing at all -- and
-     * a person waiting for that line had to type to see it, which is the one
-     * thing they were waiting to be told they could do.
-     */
-    if (status != ASTRA_SYSCALL_OK && status != ASTRA_SYSCALL_WOULD_BLOCK) {
-        /*
-         * The refusal that used to be invisible. A rejected input read
-         * looked exactly like an empty queue for a whole session, and the
-         * terminal sat there saying nothing at all; now it says which
-         * status it was refused with before it goes.
-         */
-        char report[32];
-
-        (void)astra_log_write(report,
-                              describe_input_failure(report, sizeof(report),
-                                                     status));
+    if (input_result < 0) {
         (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
         return 0;
-    }
-    /*
-     * The other invisible input failure. A refused call at least came back
-     * with a status; an overflow comes back with ASTRA_SYSCALL_OK and a flag
-     * nothing here used to look at, so a keystroke the queue had no room for
-     * vanished with no trace anywhere a person or this gate could see. The
-     * line a command produces afterward is not the line that was typed, and
-     * until now nothing said so. There is no count to give: the emulator
-     * knows how many it dropped and no register carries that number out, so
-     * this says only that it happened, which is what can honestly be known.
-     */
-    if ((flags & ASTRA_INPUT_READ_OVERFLOW) != 0u) {
-        ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_WARNING,
-                     "input overflowed, some keystrokes never arrived");
-    }
-    /*
-     * Retire the interrupt before interpreting the batch. Enter can launch a
-     * child, whose serving wait re-enters pump_once; leaving this record live
-     * lets that nested pass acknowledge it first and makes this pass fail
-     * with WOULD_BLOCK when it returns.
-     */
-    if (irq_status == ASTRA_SYSCALL_OK) {
-        uint32_t ack_status = astra_irq_ack(shell.input_irq,
-                                            irq_record.sequence);
-
-        if (ack_status != ASTRA_SYSCALL_OK) {
-            ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL,
-                         ASTRA_EVENT_LEVEL_WARNING,
-                         "input IRQ acknowledge refused, status %u",
-                         ack_status);
-            return 0;
-        }
-    }
-    for (uint32_t index = 0u; index < count; ++index) {
-        uint32_t header = events[index].header;
-        uint32_t usage = events[index].value;
-        int pressed =
-            (ASTRA_INPUT_EVENT_FLAGS(header) & ASTRA_INPUT_FLAG_DOWN) != 0u;
-
-        if (ASTRA_INPUT_EVENT_CLASS(header) != ASTRA_INPUT_CLASS_KEYBOARD)
-            continue;
-        if (astra_keymap_is_modifier(usage)) {
-            shell.modifiers = astra_keymap_apply_modifier(shell.modifiers,
-                                                          usage, pressed);
-            continue;
-        }
-        /* Releases move no cursor and type no character. */
-        if (!pressed)
-            continue;
-        feed_key(astra_keymap_translate(usage, shell.modifiers));
     }
     /*
      * Flushed whenever anything might have changed the cells, which is not the
@@ -1548,7 +1559,7 @@ static int pump_once(void)
         (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
         return 0;
     }
-    if (count == 0u) {
+    if (!had_key) {
         uint32_t waits[3];
         uint32_t wait_count = 0u;
         uint32_t sink = console_stream_wait_handle();
@@ -1557,10 +1568,10 @@ static int pump_once(void)
             waits[wait_count++] = sink;
         if (shell.child != 0u)
             waits[wait_count++] = shell.child;
-        if (shell.input_irq != 0u)
-            waits[wait_count++] = shell.input_irq;
+        if (shell.backend.wait_handle != 0u)
+            waits[wait_count++] = shell.backend.wait_handle;
         if (wait_count != 0u) {
-            uint64_t deadline = shell.input_irq != 0u ?
+            uint64_t deadline = shell.backend.wait_handle != 0u ?
                 ASTRA_DEADLINE_FOREVER :
                 astra_clock_monotonic() + CONSOLE_INPUT_POLL_NS;
             uint32_t wait_status = astra_wait_multiple(
@@ -1584,6 +1595,7 @@ static int pump_once(void)
 void console_shell_run(uint32_t display, uint32_t input, uint32_t input_irq,
                        int volume_ready)
 {
+    ConsoleShellBackend backend;
     uint32_t columns = 0u;
     uint32_t rows = 0u;
 
@@ -1593,15 +1605,36 @@ void console_shell_run(uint32_t display, uint32_t input, uint32_t input_irq,
         return;
     }
 
-    (void)memset(&shell, 0, sizeof(shell));
-    shell.display = display;
-    shell.input = input;
-    shell.input_irq = input_irq;
-    shell.running = 1;
+    (void)memset(&direct_backend, 0, sizeof(direct_backend));
+    direct_backend.display = display;
+    direct_backend.input = input;
+    direct_backend.input_irq = input_irq;
     if (input_irq != 0u && astra_irq_arm(input_irq) != ASTRA_SYSCALL_OK) {
         (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
         return;
     }
+    backend.columns = columns;
+    backend.rows = rows;
+    backend.render = direct_render_cells;
+    backend.context = &direct_backend;
+    backend.present = direct_present;
+    backend.next_key = direct_next_key;
+    backend.wait_handle = input_irq;
+    console_shell_run_backend(&backend, volume_ready);
+}
+
+void console_shell_run_backend(const ConsoleShellBackend *backend,
+                               int volume_ready)
+{
+    if (backend == NULL || backend->columns == 0u || backend->rows == 0u ||
+        backend->render == NULL) {
+        (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
+        return;
+    }
+
+    (void)memset(&shell, 0, sizeof(shell));
+    shell.backend = *backend;
+    shell.running = 1;
     /*
      * A namespace is granted, so the shell starts wherever it was actually
      * given rather than at a root that does not exist. WORK: first, because a
@@ -1613,8 +1646,9 @@ void console_shell_run(uint32_t display, uint32_t input, uint32_t input_irq,
     } else if (astra_assign_lookup(supervisor_assigns(), "SYS") != NULL) {
         (void)memcpy(shell.assign, "SYS", 4u);
     }
-    if (astra_terminal_init(&shell.terminal, columns, rows, render_cells,
-                            &shell) != ASTRA_TERMINAL_OK) {
+    if (astra_terminal_init(&shell.terminal, backend->columns, backend->rows,
+                            backend->render, backend->context) !=
+        ASTRA_TERMINAL_OK) {
         (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
         return;
     }

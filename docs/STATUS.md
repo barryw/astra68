@@ -310,7 +310,7 @@ must not be presented as working software.
 | whole-address-space cache invalidation | CURRENT HOST | destruction invalidates before descriptor removal/frame reuse |
 | format 0/1/2/9/A/B frame decode | CURRENT | byte-exact host tests |
 | SFC/DFC copyin/copyout fault recovery | CURRENT | focused RTL, Musashi, full RTL |
-| typed generation handle table | CURRENT | host tests; current 16 entries/process |
+| typed generation handle table | CURRENT | host tests; current 37 entries/process |
 | process creation and owner teardown | CURRENT HW | host, Musashi, full RTL, and exact 100-cycle ULX3S fault/reap path |
 | separate generation-safe process/thread objects | CURRENT HW | host, Musashi, full RTL, and two exact K2 ULX3S boots; 4 process and 16 thread slots |
 | runtime thread create and caller-only exit | CURRENT HW | bounded transactional create, interruptible prepare plus masked no-allocation publish, timer-boundary race injection, fixed guarded stack, exact rollback, caller-only exit, and last-thread process promotion pass host, Musashi, pin-level RTL, and two ULX3S boots |
@@ -1113,9 +1113,12 @@ hash, and persistent FPGA flash remain the exact qualified `25D9CB8E` values.
 
 ## Partial or transitional current code
 
-- Four process slots, 16 global thread slots, 16 handles/process, and the
+- Seven process slots, 16 global thread slots, 37 handles/process, and the
   resulting 15-thread/process cap are qualification limits, not the stable
   limits in `KERNEL_ARCHITECTURE.md`.
+- The current GUI source profile uses 24 ports and 72 fixed message records,
+  with six ports and 40 records per owner. The qualified K7 rollback remains
+  the 16-port/32-record profile documented above.
 - The fixed-priority queue/bitmap scheduler, 5 ms one-shot quantum, and bounded
   absolute-cycle deadline heap are current. Runtime high-priority signal and
   timeout handoff are proven through the public K4 handle path on host and

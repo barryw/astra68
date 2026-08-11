@@ -122,17 +122,16 @@ and Caps Lock, bounded repeat,
 integer pointer acceleration and clipping, eight-client focus routing,
 generation/overflow reset repair, and bounded 56-byte application-port
   messages. Beast functional, sanitizer, GCC analyzer, MC68030 cross-build, and
-  kernel regression gates pass. The target library is 3,095 bytes of text with a
-  fixed 368-byte state object. It is not yet running as an Astra process: the
-  base syscall runtime now exists, but the production ELF loader, supervisor,
-  and launch-time transfer of its device lease, IRQ endpoint, and ports remain
-  unimplemented. Physical evdev qualification is also still pending because no
-  keyboard or mouse event node was present.
+  kernel regression gates pass. The production launcher now starts the input
+  core as a protected Astra process, transfers the input-device lease and IRQ,
+  and publishes `INPUT_SERVICE`. The display process is its unique seat owner;
+  pointer-only observers require explicit delegation. Physical evdev
+  qualification is tracked by the active GUI pointer checkpoint below.
 
 ## Active Arty migration override (2026-07-30)
 
-The active machine target has moved from ULX3S to the Arty Z7-20 attached to
-`beast`. The Zynq processing system runs Linux and executes the unchanged
+The active machine target has moved from ULX3S to the Arty Z7-20 reached through
+`nuc`. The Zynq processing system runs Linux and executes the unchanged
 big-endian MC68030/PMMU machine through the Astra QEMU backend. The exact Axiom
 K1-K10 image reaches the required markers there, and the accepted current CPU
 performance baseline is approximately 30 MHz equivalent. Musashi and the
@@ -739,11 +738,41 @@ scene reaches generation 2 with zero commit errors or deferrals, and the first
 (not the all-zero hash). QMP-injected manual proof completed `cd`, `pwd`,
 write, list, cat, delete, directory removal, and an external `status 7`
 process. A full board reboot then read `reboot.txt` back as `persisted`, proving
-the guest filesystem survives reboot. BusyBox firstboot starts an asynchronous
-waiter after `/data`; presenting an ephemeral `*-event-kbd` node caused that
-same init-owned process to start the renderer and reach stage 8 after reboot.
+the guest filesystem survives reboot.
 
-An Apple Magic Keyboard with Numeric Keypad is now attached as
+The Arty now starts exactly one QEMU runtime independently of physical input.
+`run-arty.sh` holds an exclusive `flock`, exposes QMP, and starts
+`astra-input-hotplug.py`; that watcher adds and removes QEMU `input-linux`
+objects as stable udev keyboard and pointer paths appear and disappear. It
+connects to QMP only while reconciling a change, leaving the management socket
+available. QEMU, the renderer, and the watcher have bounded shutdown, including
+the renderer's previously observed blocked futex wait.
+
+This replaces a stale deployed firstboot waiter discovered on 2026-08-11. The
+validated GUI runtime had been started manually without a keyboard while that
+waiter still watched for `*-event-kbd`; connecting the keyboard launched a
+second default QEMU and renderer built from an older ROM. That incompatible
+supervisor exited with status 8 (`ASTRA_STATUS_INVALID`), and the kernel
+correctly panicked because its registered initial resident image had died. The
+validated runtime itself never restarted. The default paths now contain ROM
+`a4ccc0915f402d67f8ac36d5500a6967515910440e7d609631a88fa0cc58fad3`,
+QEMU `72dbc394bb7e2d458be3d7a287b3526a50322d52035fbabd9d43225b5fe3aa42`,
+and renderer
+`79bfebbee40881a9fdc5cd3667c36864a3af002cacc087dfba18cda2f6d7026c`.
+The retained rollback is
+`/data/astra/deploy/input-hotplug-a4ccc0915f40/rollback`.
+
+On the live board, a keyboard-class udev-link probe made QMP publish and
+withdraw `astra-keyboard`. A stronger physical-path test then unbound and
+rebound the attached Logitech HID interface: the real pointer evdev node and
+`astra-pointer` object disappeared for ten consecutive samples and returned
+for ten consecutive samples. QEMU PID 2691 retained Linux start time 3731266,
+the guest stayed at stage 8, and the exclusive lock rejected a second
+launcher. Beast passes `test-input-hotplug.py` and `test-run-arty.py`. No QEMU
+source, guest kernel, RTL, routed bitstream, production clock, or graphics
+resource changed.
+
+An Apple Magic Keyboard with Numeric Keypad was previously qualified as
 `usb-Apple_Inc._Magic_Keyboard_with_Numeric_Keypad_F0T827700C4HTCYAU-if01-event-kbd`
 beside the Logitech trackball. Direct physical typing and human HDMI inspection
 proved the full-screen terminal, `ls`, and directory navigation. Physical
@@ -1784,6 +1813,268 @@ still requires the measured workload named in the event design.
   `/ASTRA68.ROM` in its manifest. Blind seed hunting remains unjustified; every
   retained route must record its exact cone in
   [TIMING_CLOSURE.md](../fpga/soc/oss_flow/TIMING_CLOSURE.md).
+
+## Protected Astraea render-batch transport
+
+The retained software boundary now carries native Astraea render batches from
+a display-owner DMA buffer through the kernel and QEMU display mailbox to the
+Arty Linux helper. `DISPLAY_SUBMIT` operation 3 is byte-bounded, requires the
+advertised render capability, and packs the validated byte count into the
+supervisor-only AstraHost request word. Mailbox version 1.2 carries that exact
+range. The Linux helper validates the batch header, fixed ring placement,
+resource generation, command headers, sequences, and completion statuses,
+then copies the bytes unchanged into the graphics arena and submits them to
+Astraea. Kernel host tests, the Linux host validator/self-test, the static ARM
+cross-build, and the rebuilt QEMU machine all pass.
+
+The production gallery path now records bounded client draw lists instead of
+rasterizing RGB565 pixels on the MC68030. The display service resolves the
+shared theme, window chrome, client commands, proportional AFNT text, clipping,
+and z order into native `FILL`, geometry, masked `BLIT`, and `GLYPH_RUN`
+commands. Alternating 1,843,200-byte scanout allocations prevent Astraea from
+writing the protected ACTIVE framebuffer; the helper presents the completed
+allocation only after its fence retires. CPU rendering remains only in the host
+behavioral oracle and recovery path.
+
+Exact QEMU gate `14ad4b79061f` passes four render batches with 413 commands,
+210 fills, 10 blits, and 41 glyph runs in 13,329 of 250,000 MC68030 cycles. The
+same artifacts are resident on the Arty at
+`/data/astra/deploy/hw-render-overlap-14ad4b79061f`: stripped ARM QEMU
+`6554e53ce22b00ce2c4c8cb855cf7907876ebff574efbbe30efb357f39b1d3c2`,
+ROM `884987b6a707d00f3b652001d6d93376676db764603ffc6f504435c807e0bc63`,
+storage image
+`7b40153f620ca4cb0e72daada5d08d372d1709732a12711863e1f42615688757`,
+and Linux display owner
+`4b79f14e8ebe6275a586644703f890d7e9a8e87c4fc9335c71107bc1da2632c3`.
+The board reaches supervisor stage 8 and remains resident. QMP reports four
+submissions/completions, operation 3, four batches, the same command mix, and
+ordered submit/completion/collect cycles. FPGA submitted/completed counters
+advance together from `0x305` to `0x4a2`; the failed counter remains unchanged
+at the development baseline `0x58`, last fault is zero, and backpressure,
+timeout, and reset counters remain zero.
+
+Theme generation 3 makes ACTIVE title chrome visibly brighter than INACTIVE.
+The gallery overlaps all four window types in back-to-front creation order and
+places the active Standard window last, proving existing compositing z order.
+Pointer-driven raise/focus transitions remain future input-service work; no
+parallel focus policy was added for the static acceptance gallery.
+
+## Capability-owned window management checkpoint
+
+The NDK now exposes query, set-frame, move, resize, raise, lower, activate,
+deactivate, minimize, maximize, restore, title, and close operations. A
+successful GUI v5 create transfers private control and event capabilities; the
+display service waits on those endpoints beside the create endpoint, so control
+authority does not come from a guessable window ID. It maintains a dense
+back-to-front stack, one active visible window, saved restore geometry,
+owner-death cleanup, per-window hardware caches, and one bounded union damage
+rectangle for each alternating scanout. Movement and exposure use clipped
+masked Astraea blits; rounded corners do not require MC68030 pixel repair.
+
+The fourth control endpoint exposed the old qualification quota of four ports
+per owner. Control requests are synchronous, so each control port now reserves
+one message rather than four. The owner quota is five ports, and the exact
+worst-case process handle proof rises from 31 to 33. The handle table uses two
+32-bit bitmap words, not 64-bit arithmetic; the change costs 60 bytes per
+process and 300 bytes across the five-process pool. Kernel handle, port, and
+process rollback tests cover the new boundary.
+
+The exact Beast QEMU gate passes 17/17 native batches with 884 commands, 412
+fills, 72 blits, and 68 glyph runs. Its final present takes 13,608 of the
+250,000-cycle simulation budget. The hardware deployment is resident at
+`/data/astra/deploy/window-management-8f23825cc74d`: ROM
+`8f23825cc74d9cae7c5a41e7813a3d3688e409838d9802398fe73920988edbf2`,
+storage image
+`ff15cbeb3620622d68146446fe655470828d286fe1b892f656defaeb61670dae`,
+unchanged stripped ARM QEMU
+`6554e53ce22b00ce2c4c8cb855cf7907876ebff574efbbe30efb357f39b1d3c2`,
+and unchanged Linux display owner
+`4b79f14e8ebe6275a586644703f890d7e9a8e87c4fc9335c71107bc1da2632c3`.
+The Arty reaches stage 8 and remains resident. QMP reports 17 submissions and
+completions with the same command mix. FPGA submitted/completed counters move
+from `0x4a2` to `0x816`, exactly 884 commands; failed remains `0x58`, last fault
+is zero, and backpressure, timeout, and reset counters remain zero. The
+trackball is present; keyboard input and pointer-driven window policy remain
+outside this checkpoint.
+
+## Protected pointer routing checkpoint
+
+The source tree now implements the complete protected path from Vesta input to
+application messages. The supervisor launches a fifth protected service named
+`input`, grants it the physical input lease and IRQ, and publishes
+`INPUT_SERVICE`. The display service connects as the unique seat owner. It
+owns screen position, rounded-window hit testing, focus, z order, left-button
+capture, titlebar dragging, gadget hover/press state, and close requests.
+Applications select bounded per-window event masks; pointer and wheel messages
+carry both screen and client-relative coordinates.
+
+The NDK also exposes `astra_pointer_observer_open` for an explicitly authorized
+process without a window. It accepts motion/button/wheel masks and reports
+screen coordinates only. The service refuses key, text, focus, and seat-owner
+requests from observers. Each client has independent motion coalescing and
+loss-reset state. Port lifetime revokes the subscription without a global
+process ID or invisible window.
+
+Sprite 0 is the hardware pointer. Display mailbox version 1.3 adds one cursor
+request carrying clipped x/y and visibility; the Linux display owner installs
+the 16x24 cursor in reserved graphics memory, updates only sprite descriptor 0,
+and commits the scene. The MC68030 does not redraw the framebuffer to move the
+pointer. Hover damage remains a separate native render batch.
+
+The exact Beast QEMU candidate uses source identity
+`994698f6c51a6d0c8c1742088acf441e6a5784cb4b8d16cf7abe08d400c6563a`.
+Startup consumes 18 requests: 17 native window batches plus the initial cursor.
+A QMP relative-X event then produces one hover-damage batch and one cursor
+request, moves x from 640 to 646 under the integer acceleration policy, and
+retires 20/20 fences. The last startup present costs 13,156 of 250,000 cycles;
+the pointer request costs 13,025 of 250,000. All kernel suites, all userspace
+suites, NDK functional/sanitizer checks, input sanitizer/analyzer checks,
+MC68030 builds, Linux host self-tests, and the static ARM cross-build pass.
+
+The five-service/four-window graph exposed an obsolete IPC capacity, not an
+input-path defect: it reserves 18 ports and 64 fixed message records while the
+qualified K7 rollback provided 16 and 32. The current source profile is 24
+ports, 72 message records, six ports per owner, and 40 records per owner. The
+24,864-byte port/message arrays leave six port objects and one complete
+eight-message queue beyond the measured composition. Byte and authority limits
+and all transactional semantics are unchanged.
+
+The retained board deployment is
+`/data/astra/deploy/protected-pointer-51475076aef0`: ROM
+`51475076aef0e57b76f6cea43f3fa419b1d7c61410df7f13a6d1de0b5e27fb24`,
+storage image
+`fa12f9838cc1ac273ebd3820a00c46430bbf70c6ecdb8f7f316393adb50f6f3f`,
+stripped ARM QEMU
+`71e586aa14daedb5fe2ff9f84bc230d266eeee40d63429e5cc3a39bdadf46c07`,
+and stripped Linux display owner
+`52a2d35263a5c77b8d98eb56d447f551859f35154ae17534327297774033bb78`.
+The Arty reaches stage 8 with the Logitech trackball attached through its stable
+evdev path. QMP retires 18/18 startup requests, including one cursor update,
+then a relative-X event retires 20/20, moves the cursor from 640 to 646, and
+adds one hover batch. FPGA submitted/completed counters advance from `0x816`
+to `0xb8a` for the 884-command startup and to `0xc10` for the 134-command hover
+batch. Failed remains `0x58`; last fault, backpressure, timeout, and reset
+remain zero. Two deliberately rejected intermediate scene commits are retained
+in the commit-error counter; the final owner leaves it at `2` with zero commit
+deferrals. The previous window-management deployment remains intact as the
+rollback.
+
+## Pointer latency and resized-cache repair checkpoint
+
+The protected pointer path now drains the existing eight-record input queue
+before rendering. Cursor state is submitted first, motion is coalesced to the
+newest ordered record, and at most one damage render follows. No queue,
+allocator, transport, or rendering abstraction was added. Exact Beast QEMU
+source identity
+`5a748c61ca128bf2bcc15de85eecca527392d31af92badc5636118486385a6d8`
+retires 20/20 requests: the final present costs 13,266 of 250,000 cycles and
+the pointer path costs 13,365 of 250,000. Cursor completion and collection are
+now explicitly gated before repaint submission.
+
+The workbench-edge corruption was present in the live framebuffer and cached
+surface, so it was not an HDMI artifact. Desktop resized the standard client
+from 550x280 to 580x300 while its draw list retained the original bounds; the
+reused cache exposed uninitialized right and bottom strips. The shared cache
+builder now clears the complete current client through Astraea before replay.
+Direct DDR readback verifies a clean 580x300 cache. The provisional cursor
+mask was also malformed; sprite 0 now contains a conventional 16x16 `left_ptr`
+silhouette with a (3,1) hotspot in the existing 16x24 allocation.
+
+The retained live deployment is
+`/data/astra/deploy/pointer-fast-356415ce33cf`: ROM
+`356415ce33cf0bf5a64bdce2334f94a134b41855f388eba0662827f8854004f2`,
+storage image
+`32ed722c959d2b527072eae8228f8a708a7eaccf85cc30631378f154c1acda3f`,
+stripped ARM QEMU
+`6b31816c8c6aab828238d6fb44864fe4a80de967d4efe993458c283a5da78d09`,
+and stripped Linux display owner
+`3605c5518fd5889eabbe9cf5365be65f82ebb925055670765b6952b4b3f709a1`.
+The Arty reaches stage 8. A six-motion drag burst produces one cursor update
+and one render; cursor submit/completion/collection cycles are
+3,854,629,088/3,854,708,878/3,854,732,066 and repaint submission is
+3,855,282,497. FPGA submitted/completed counters finish together at `0x192d`;
+failed remains the retained `0x58`, last fault, backpressure, timeout, and
+reset remain zero, and scene commit errors/deferrals remain `2`/`0`.
+
+## Window-drag blitter performance checkpoint
+
+Target hardware profiling found that drag input was already coalesced into one
+29-command repaint; the remaining hotspot was the pixel-serial general path for
+unscaled RGB565 window copies. A directed 64x16 identity-copy budget test failed
+before the change at 9,878 cycles and passes after it at 5,822 cycles. The
+retained direct-copy branch applies only to zero-flag, same-format,
+same-dimension blits, leaving scaling, reflection, masks, keys, alpha, ROP,
+conversion, and overlap handling on their existing paths.
+
+The exact Beast production route passes all 152,192 timing endpoints with
+setup/hold/pulse-width slack of `+0.001`/`+0.019`/`+0.538 ns` and all 74,818
+nets routed. Active `BOOT.BIN` is
+`ac4dea6b90b562edf753d18378b9d8e5521cc26e5544b176b4bba1ad5a79df10`;
+the previous `9637e1035acb9d1bd6d2bd0eec2e3cf9ca5c13023560af8d2b4f27a546444504`
+image is retained in `/data/astra/deploy/direct-copy-ac4dea6b`.
+
+On the Arty, warm 29-command drag repaints now spend 25.1--26.1 ms in hardware,
+down from the measured 29--40 ms range. Ten complete renderer runs and three
+each of sprite and copper certification pass. FPGA manager is `operating`, FIT
+hash remains `c9a77be0f5085ce048860d12bd88ce7a246b813cf76c20339e8c18b7f9358944`,
+and Linux Normal RAM remains bounded at `0x17ffffff`.
+
+## Interactive window terminal checkpoint
+
+The terminal is now the first complete interactive windowed application. It
+uses the same shell, editor, VFS, child-stream, and process-launch loop as the
+recovery console through a small backend contract; there is no second shell or
+GUI-only command path. Its standard resizable window receives focus, physical
+key, decoded text, pointer, button, wheel, frame, reset, and close records
+through the NDK's eight-record bounded event port. Content is rebuilt as a
+shared draw list and rendered by Astraea; the MC68030 coordinates cells and
+cursor placement but does not rasterize glyph pixels.
+
+The display service owns rounded hit testing, active-window focus, z order,
+title dragging, left-button capture, all eight resize regions, gadget
+hover/pressed state, and minimize/maximize/restore/close policy. Maximizing
+from the titlebar now toggles back to the saved frame. Geometry-changing
+gadget actions recompute hover against the new frame, so a moved gadget cannot
+retain a stale hover state. Cursor-only motion submits one hardware-cursor
+fence and no render batch; damage-producing interactions still coalesce into
+one native repaint.
+
+The startup manifest now distinguishes a resident `service` from an
+`application`. Both may be required to launch successfully, but only resident
+services are watched as fatal dependencies. Closing the terminal therefore
+retires an ordinary application instead of causing the initial supervisor to
+exit and panic the kernel. The exact graph requires seven process slots:
+supervisor, storage, events, input, display, terminal, and one foreground
+command. The matching limits are 37 handles per process and seven shared-area
+aliases; the handle bitmap remains two 32-bit words.
+
+All 30 kernel host suites and the complete userspace functional, ASan/UBSan,
+and GCC analyzer matrix pass on Beast. The exact QEMU interaction gate types
+`pwd`, exercises hardware cursor motion, maximize/restore, southeast resize,
+and close, then proves the closed window receives no further input. It retires
+26 fences and 19 native batches containing 1,293 commands, 591 fills, 186
+blits, and 180 glyph runs. Initial present and cursor service cost
+13,712/250,000 and 13,202/250,000 simulated cycles respectively.
+
+The retained Arty deployment is
+`/data/astra/deploy/interactive-terminal-a4ccc0915f40`: ROM
+`a4ccc0915f402d67f8ac36d5500a6967515910440e7d609631a88fa0cc58fad3`,
+prepared storage image
+`d1b988c758c158273f7d9d20922c7114d0a58966969ddd51c633f9837df6f286`,
+unchanged stripped ARM QEMU
+`72dbc394bb7e2d458be3d7a287b3526a50322d52035fbabd9d43225b5fe3aa42`,
+and unchanged Linux display owner
+`79bfebbee40881a9fdc5cd3667c36864a3af002cacc087dfba18cda2f6d7026c`.
+The first boot changed the writable image to
+`76009456a847bedc0976cf706df06815a7d9db6930f0a4b69ebf93837f0e2be9`.
+The board reaches stage 8 with FPGA manager `operating`; the trackball is
+attached through its stable evdev path. Hardware injection of `pwd`,
+maximize/restore, and resize advances the settled display from two to nine
+batches and from 12 to 77 glyph commands, ending at 15/15 completed requests
+with generation 1,414. QEMU and the display owner remain resident, the terminal
+remains open for physical use, and Linux reports 200,544 KiB available with
+the 128 MiB guest. No RTL, routed bitstream, production clock, QEMU source, or
+Linux renderer changed in this checkpoint.
 
 ## Release boundary
 

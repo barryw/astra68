@@ -36,13 +36,13 @@ void astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
 
 uint32_t astra_yield(void);
 uint32_t astra_close(uint32_t handle);
-uint32_t astra_handle_duplicate(uint32_t handle, uint32_t rights,
+uint32_t astra_rt_handle_duplicate(uint32_t handle, uint32_t rights,
                                 uint32_t *duplicate);
-uint32_t astra_area_create(uint32_t byte_size, uint32_t rights,
+uint32_t astra_rt_area_create(uint32_t byte_size, uint32_t rights,
                            uint32_t *handle);
-uint32_t astra_area_map(uint32_t handle, uint32_t permissions,
+uint32_t astra_rt_area_map(uint32_t handle, uint32_t permissions,
                         void **address, uint32_t *byte_size);
-uint32_t astra_area_unmap(void *address);
+uint32_t astra_rt_area_unmap(void *address);
 uint32_t astra_query_abi(uint32_t *abi_version, uint32_t *process_handle,
                          uint32_t *thread_handle);
 uint32_t astra_process_info(uint32_t handle, AstraProcessInfo *info);
@@ -125,7 +125,7 @@ uint32_t astra_process_wait(uint32_t handle, uint64_t deadline_ns,
  * `astra_port_receive` reports the size the message needed even when it refused
  * for want of room, because that number is the point of the refusal.
  */
-uint32_t astra_port_create(uint32_t message_max, uint32_t byte_max,
+uint32_t astra_rt_port_create(uint32_t message_max, uint32_t byte_max,
                            uint32_t *receive_handle, uint32_t *send_handle);
 uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
                          const uint32_t *handles, uint32_t handle_count);

@@ -305,6 +305,25 @@ the normal build flow reproduces a timing-clean bitstream. New graphics
 storage must therefore justify BRAM explicitly; large memories belong in DDR
 unless deterministic on-chip access is required.
 
+### Arty direct-copy performance route
+
+The retained direct RGB565 copy path changes logic only; BRAM and DSP use are
+unchanged. Exact Beast Vivado 2024.2 routing at 166,666,672 Hz passes setup at
+`+0.001 ns`, hold at `+0.019 ns`, and pulse width at `+0.538 ns`, with all
+74,818 routable nets complete.
+
+| Resource | Used | Device percent | Physical free |
+|---|---:|---:|---:|
+| Slice LUTs, total | 37,547 | 70.58% | 15,653 |
+| Slice registers | 44,643 | 41.96% | 61,757 |
+| Occupied slices | 13,035 | 98.01% | 265 |
+| BRAM36-equivalent tiles | 118 | 84.29% | 22 |
+| DSP48E1 | 83 | 37.73% | 137 |
+
+This is the active Arty capacity checkpoint. Relative to the preceding copper
+route it uses 13 more LUTs, 12 fewer registers, and one fewer occupied slice.
+BRAM remains the primary limit.
+
 ### Arty tile span checkpoint
 
 The first retained Arty RTL component is the tile span walker at source SHA-256

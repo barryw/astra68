@@ -58,13 +58,13 @@ else
     echo "[astra-firstboot] graphics runtime not provisioned"
 fi
 
-# The launcher waits for udev to publish a physical keyboard, so this early
-# init job never races input discovery and never blocks the rest of boot.
+# QEMU starts exactly once. Its input watcher attaches and detaches evdev
+# devices at runtime, so USB hot-plug cannot restart the guest.
 terminal_start=/data/astra/bin/astra-terminal-start
 terminal_log=/data/astra/log/terminal.log
 if [ -x "$terminal_start" ]; then
     "$terminal_start" >>"$terminal_log" 2>&1 &
-    echo "[astra-firstboot] terminal waiting for keyboard"
+    echo "[astra-firstboot] Astra runtime starting"
 else
     echo "[astra-firstboot] terminal runtime not provisioned"
 fi

@@ -76,13 +76,13 @@ console_stream_start(AstraTerminal *terminal)
     if (terminal == NULL) {
         return 0;
     }
-    if (astra_port_create(CONSOLE_STREAM_SINK_MESSAGES,
+    if (astra_rt_port_create(CONSOLE_STREAM_SINK_MESSAGES,
                           CONSOLE_STREAM_SINK_MESSAGES *
                               ASTRA_STREAM_WRITE_SIZE,
                           &sink_receive, &sink_send) != ASTRA_SYSCALL_OK) {
         return 0;
     }
-    if (astra_port_create(CONSOLE_STREAM_SOURCE_MESSAGES,
+    if (astra_rt_port_create(CONSOLE_STREAM_SOURCE_MESSAGES,
                           CONSOLE_STREAM_SOURCE_MESSAGES *
                               ASTRA_STREAM_READ_SIZE,
                           &source_receive, &source_send) != ASTRA_SYSCALL_OK) {

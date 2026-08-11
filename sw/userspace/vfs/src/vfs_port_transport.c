@@ -69,7 +69,7 @@ reply_channel(void)
 {
     if (reply_receive != 0u)
         return ASTRA_SYSCALL_OK;
-    return astra_port_create(VFS_PORT_REPLY_MESSAGES,
+    return astra_rt_port_create(VFS_PORT_REPLY_MESSAGES,
                              (uint32_t)sizeof(AstraVfsReplyMessage),
                              &reply_receive, &reply_send);
 }
@@ -81,7 +81,7 @@ duplicate_reply_send(uint32_t *duplicate)
 
     if (status != ASTRA_SYSCALL_OK)
         return status;
-    status = astra_handle_duplicate(reply_send,
+    status = astra_rt_handle_duplicate(reply_send,
                                     ASTRA_RIGHT_SIGNAL |
                                         ASTRA_RIGHT_TRANSFER,
                                     duplicate);
@@ -95,7 +95,7 @@ duplicate_reply_send(uint32_t *duplicate)
     reply_receive = 0u;
     status = reply_channel();
     return status == ASTRA_SYSCALL_OK ?
-        astra_handle_duplicate(reply_send,
+        astra_rt_handle_duplicate(reply_send,
                                ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_TRANSFER,
                                duplicate) : status;
 }
@@ -276,19 +276,19 @@ ensure_area(AstraVfsClient *client)
 
     if (client->port_area_address != NULL)
         return ASTRA_VFS_OK;
-    status = astra_area_create(
+    status = astra_rt_area_create(
         ASTRA_VFS_BULK_MAX,
         ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
             ASTRA_RIGHT_TRANSFER | ASTRA_RIGHT_ADMINISTER,
         &client->port_area);
     if (status != ASTRA_SYSCALL_OK)
         return ASTRA_VFS_ERR_LIMIT;
-    status = astra_area_map(client->port_area,
+    status = astra_rt_area_map(client->port_area,
                             ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
                             &address, &size);
     if (status != ASTRA_SYSCALL_OK)
         goto fail;
-    status = astra_handle_duplicate(
+    status = astra_rt_handle_duplicate(
         client->port_area,
         ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
             ASTRA_RIGHT_TRANSFER,
@@ -310,7 +310,7 @@ fail:
     if (client->port_area_send != 0u)
         (void)astra_close(client->port_area_send);
     if (address != NULL)
-        (void)astra_area_unmap(address);
+        (void)astra_rt_area_unmap(address);
     (void)astra_close(client->port_area);
     client->port_area = 0u;
     client->port_area_send = 0u;
@@ -394,7 +394,7 @@ static void
 reply_release(AstraVfsPortService *host, uint32_t index)
 {
     if (host->area_addresses[index] != NULL)
-        (void)astra_area_unmap(host->area_addresses[index]);
+        (void)astra_rt_area_unmap(host->area_addresses[index]);
     if (host->area_handles[index] != 0u)
         (void)astra_close(host->area_handles[index]);
     host->area_addresses[index] = NULL;
@@ -529,7 +529,7 @@ astra_vfs_port_service_pump(AstraVfsPortService *host, uint32_t budget)
                 (void)astra_close(handles[0]);
                 outgoing.reply.status = ASTRA_VFS_ERR_BUSY;
             } else {
-                map_status = astra_area_map(
+                map_status = astra_rt_area_map(
                     handles[0], ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
                     &address, &mapped);
                 if (map_status == ASTRA_SYSCALL_OK &&
@@ -542,7 +542,7 @@ astra_vfs_port_service_pump(AstraVfsPortService *host, uint32_t budget)
                     outgoing.reply.status = ASTRA_VFS_OK;
                 } else {
                     if (address != NULL)
-                        (void)astra_area_unmap(address);
+                        (void)astra_rt_area_unmap(address);
                     (void)astra_close(handles[0]);
                     outgoing.reply.status =
                         map_status == ASTRA_SYSCALL_RESOURCE_LIMIT ?

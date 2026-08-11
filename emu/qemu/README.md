@@ -67,8 +67,8 @@ counts, a flush carrying sectors, unaligned and out-of-range buffers, LBA past
 the media, a transfer crossing the end of the media, a zero request ID, and
 unknown flags.
 
-On the Arty, `run-arty.sh` discovers stable udev keyboard and pointer paths and
-passes both evdev streams directly to QEMU.  Linux autorepeat is suppressed;
-the Astra input service owns repeat policy.  `ASTRA_KEYBOARD_EVDEV` and
-`ASTRA_POINTER_EVDEV` provide explicit overrides for devices without `by-id`
-links.
+On the Arty, `run-arty.sh` starts QEMU once and holds an exclusive runtime
+lock. `astra-input-hotplug.py` watches stable udev keyboard and pointer paths
+and adds or removes QEMU `input-linux` objects through QMP. Linux autorepeat is
+suppressed; the Astra input service owns repeat policy. Attaching or removing a
+USB input device does not restart QEMU or the guest.

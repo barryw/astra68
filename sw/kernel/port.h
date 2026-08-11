@@ -7,10 +7,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define KERNEL_PORT_MAX 16u
-#define KERNEL_PORT_OWNER_MAX 4u
-#define KERNEL_PORT_MESSAGE_MAX 32u
-#define KERNEL_PORT_OWNER_MESSAGE_MAX 16u
+/* GUI profile: 18 live ports and 64 reserved messages; retain one queue spare. */
+#define KERNEL_PORT_MAX 24u
+#define KERNEL_PORT_OWNER_MAX 6u
+#define KERNEL_PORT_MESSAGE_MAX 72u
+#define KERNEL_PORT_OWNER_MESSAGE_MAX 40u
 #define KERNEL_PORT_MESSAGE_BYTES_MAX 8960u
 #define KERNEL_PORT_OWNER_BYTES_MAX 4480u
 #define KERNEL_PORT_MESSAGE_SIZE_MIN 24u

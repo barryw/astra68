@@ -66,7 +66,7 @@ _Static_assert(sizeof(KernelPort) == 64u,
                "message-port object memory budget changed");
 _Static_assert(sizeof(KernelPortMessage) == 324u,
                "message record memory budget changed");
-_Static_assert(sizeof(ports) + sizeof(messages) == 11392u,
+_Static_assert(sizeof(ports) + sizeof(messages) == 24864u,
                "message-port fixed pool memory budget changed");
 
 static uint16_t port_slot(const KernelPort *port)

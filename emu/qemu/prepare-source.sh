@@ -12,6 +12,8 @@ OVERLAY="$SCRIPT_DIR/qemu-9.2"
 PUBLIC_INPUT="$REPOSITORY/sw/include/astra/input.h"
 PUBLIC_DISPLAY="$REPOSITORY/sw/include/astra/display.h"
 PUBLIC_DISPLAY_MAILBOX="$REPOSITORY/sw/include/astra/display_mailbox.h"
+PUBLIC_RENDER_BATCH="$REPOSITORY/sw/include/astra/render_batch.h"
+PUBLIC_RENDER_PROTOCOL="$REPOSITORY/fpga/arty/linux/astra_render_protocol.h"
 PUBLIC_SYSCALL="$REPOSITORY/sw/include/astra/syscall.h"
 
 sha256_file()
@@ -45,6 +47,10 @@ overlay_identity()
             "sw/include/astra/display.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_DISPLAY_MAILBOX")" \
             "sw/include/astra/display_mailbox.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_RENDER_BATCH")" \
+            "sw/include/astra/render_batch.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_RENDER_PROTOCOL")" \
+            "fpga/arty/linux/astra_render_protocol.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_SYSCALL")" \
             "sw/include/astra/syscall.h"
     ) | sha256_stream
@@ -118,6 +124,10 @@ cp "$OVERLAY/target/m68k/pmmu030.h" "$STAGED_SOURCE/target/m68k/pmmu030.h"
 cp "$PUBLIC_INPUT" "$STAGED_SOURCE/include/hw/m68k/astra_input.h"
 cp "$PUBLIC_DISPLAY_MAILBOX" \
     "$STAGED_SOURCE/include/hw/m68k/astra_display_mailbox.h"
+cp "$PUBLIC_RENDER_BATCH" \
+    "$STAGED_SOURCE/include/hw/m68k/astra_render_batch.h"
+cp "$PUBLIC_RENDER_PROTOCOL" \
+    "$STAGED_SOURCE/include/hw/m68k/astra_render_protocol.h"
 mkdir -p "$STAGED_SOURCE/include/astra"
 cp "$PUBLIC_DISPLAY" "$STAGED_SOURCE/include/astra/display.h"
 cp "$PUBLIC_SYSCALL" "$STAGED_SOURCE/include/astra/syscall.h"

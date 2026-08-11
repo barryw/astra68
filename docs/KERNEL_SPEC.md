@@ -524,7 +524,7 @@ the useful Amiga message-port model while making every cross-address-space
 reference explicit and generation safe.
 
 Each port has one bounded FIFO charged to its creator by message count, byte
-count, and attached-handle count. K7 uses these exact development limits:
+count, and attached-handle count. The hardware-qualified K7 rollback uses:
 
 | Resource | System | Per owner | Per port/message |
 |---|---:|---:|---:|
@@ -540,10 +540,17 @@ Every configured limit is reserved from an existing static pool; no send,
 receive, wait, wake, close, timeout, cancellation, or process-death path uses
 the general heap.
 
-The exact MC68030 fixed state is 11,392 bytes for port/message records, 6,144
+The K7 MC68030 fixed state is 11,392 bytes for port/message records, 6,144
 bytes for detached authority, 128 bytes of per-thread failed-probe state, and
 208 bytes of pool statistics/corruption state: 17,872 bytes total against K7's
 20 KiB ceiling.
+
+The current seven-process GUI-terminal profile retains the same protocol and algorithms
+but raises the static capacity to 24 ports, 72 message records, six ports per
+owner, and 40 message records per owner. Its port/message arrays are 24,864
+bytes. The measured GUI composition reserves 18 ports and 64 records, leaving
+six port objects and one complete eight-record queue as headroom. Byte and
+detached-authority limits are unchanged.
 
 An enqueue is atomic:
 

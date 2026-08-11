@@ -45,7 +45,8 @@ STARTUP_MANIFEST = ("service SERVICES:storage grants BLOCK_DEVICE BLOCK_IRQ "
                     "serves SYS:r required\n"
                     "service SERVICES:events grants SYS:r STORE:rw "
                     "serves EVENTS:r required\n"
-                    "service SERVICES:terminal grants DISPLAY INPUT INPUT_IRQ "
+                    "application SERVICES:terminal grants DISPLAY INPUT "
+                    "INPUT_IRQ "
                     "WORK:rw COMMANDS:r EVENTS:r EVENT_CONTROL delegates "
                     "required\n")
 DISPLAY_STARTUP_MANIFEST = (
@@ -53,9 +54,13 @@ DISPLAY_STARTUP_MANIFEST = (
     "serves SYS:r required\n"
     "service SERVICES:events grants SYS:r STORE:rw "
     "serves EVENTS:r required\n"
+    "service SERVICES:input grants INPUT INPUT_IRQ "
+    "serves INPUT_SERVICE required\n"
     "service SERVICES:display grants DISPLAY DISPLAY_IRQ "
-    "serves GUI required\n"
-    "service SERVICES:desktop grants GUI required\n")
+    "INPUT_SERVICE serves GUI required\n"
+    "application SERVICES:terminal grants GUI WORK:rw COMMANDS:r EVENTS:r "
+    "EVENT_CONTROL delegates required\n")
+DISPLAY_SERVICES = ("storage", "events", "input", "display", "terminal")
 
 
 def ext4_partition(image):
@@ -228,8 +233,7 @@ if __name__ == "__main__":
     if len(sys.argv) == 2:
         install(sys.argv[1])
     elif len(sys.argv) == 3 and sys.argv[1] == "--display":
-        install(sys.argv[2], service_names=("storage", "events", "display",
-                                            "desktop"),
+        install(sys.argv[2], service_names=DISPLAY_SERVICES,
                 manifest_text=DISPLAY_STARTUP_MANIFEST)
     else:
         raise SystemExit("usage: astra_image.py [--display] IMAGE")

@@ -133,7 +133,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 47 | `DIAGNOSTIC_CONSOLE_OPEN` | CURRENT CANDIDATE | marks the userspace diagnostic reader active so the boot console stops narrating the same stream |
 | 48 | `PROCESS_CREATE` | CURRENT CANDIDATE | transactionally loads a protected ELF from caller bytes, copies bounded grants and arguments, and returns a waitable process handle plus process ID |
 | 50 | `CONSOLE_CURSOR` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=row`, `D3=column`, `D4=visible`; publishes the terminal cursor, accepting `column=columns` as pending wrap |
-| 51 | `DISPLAY_SUBMIT` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=aligned AstraDisplayFrameRequest`; submits one nonzero fenced solid or RGB565 DMA-frame request |
+| 51 | `DISPLAY_SUBMIT` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=aligned AstraDisplayFrameRequest`; submits one nonzero fenced solid, RGB565 DMA-frame, or bounded native Astraea render-batch request |
 | 52 | `DISPLAY_COLLECT` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=aligned AstraDisplayFrameCompletion`; returns `WOULD_BLOCK` until the submitted fence completes |
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
@@ -160,12 +160,26 @@ values. Event types are physical key, Unicode text, pointer motion, pointer
 button, focus, and state reset. No raw pointer or compiler-dependent enum
 crosses the boundary.
 
-Events use operation `EVENT=1` and are carried as a normal 24-byte
+Clients connect with `CONNECT=1`, receive `CONNECTED=2`, and select motion,
+button, wheel, key, text, and focus classes with an explicit bit mask. Only the
+display service may request the seat-owner flag. Other clients are restricted
+to pointer classes and require an explicitly delegated `INPUT_SERVICE`
+capability.
+
+Events use operation `EVENT=3` and are carried as a normal 24-byte
 `AstraMessageHeader` followed by one logical event. The complete message is 56
 bytes. `transaction_id` equals the logical event sequence. Keyboard `code` is
 a USB HID usage; text `code` is a Unicode scalar value; pointer-button `code`
-is an `ASTRA_INPUT_BUTTON_*` value. Pointer motion carries the current clipped
-X/Y position. Key and text `value_x` carries the modifier mask.
+is an `ASTRA_INPUT_BUTTON_*` value. Pointer motion and pointer buttons carry
+the current clipped screen X/Y position. Key and text `value_x` carries the
+modifier mask.
+
+The GUI protocol is version 5. A successful window create transfers a bounded
+event sender in addition to content and reply capabilities. The create request
+selects a window event mask; `SET_EVENT_MASK` changes it through the private
+window control capability. Each 48-byte pointer event carries both client-local
+and screen coordinates. Focus, frame, close-request, and loss-reset messages
+use the same per-window FIFO.
 
 The flags distinguish down, repeat, synthetic, focused, and loss events.
 Clients must discard held-key/button state on `STATE_RESET`. A focus generation
@@ -382,13 +396,22 @@ The events service attaches two endpoints to its successful `SRVC` ready
 message: `EVENTS:` first and `EVENT_CONTROL` second. Other current services
 attach only their manifest-declared endpoint.
 
-`sw/include/astra/gui.h` defines the userspace `GUI` protocol, version 1. An
-`OPEN_WINDOW` request is 40 bytes and transfers a read-only area plus a reply
-sender. It carries bounded x/y/width/height and RGB565 pitch, with no pointer.
-The 36-byte `WINDOW_OPENED` reply returns status, a server-issued window ID,
-and the presentation generation. The server maps the transferred area
-read-only; the client keeps its separately duplicated writable area handle.
-This protocol is provisional userspace policy, not a kernel syscall ABI.
+`sw/include/astra/gui.h` defines the userspace `GUI` protocol, version 5. A
+104-byte `OPEN_WINDOW` request transfers a read-only content area, a private
+event sender, and a reply sender. It carries bounded frame, content format,
+chrome recipe, flags, gadgets, title, preview states, and an event mask, with
+no pointer. The 36-byte
+`WINDOW_OPENED` reply returns status and an opaque identity; success also
+transfers a private control sender. A 104-byte `WINDOW_COMMAND` sent through
+that capability performs query, frame, z-order, activation, minimize/maximize,
+restore, title, event-mask, or close operations. Its 64-byte `WINDOW_STATE`
+reply returns the resulting frame, state, flags, z-order, and generation. A
+72-byte `WINDOW_EVENT` carries motion, button, wheel, focus, frame, close,
+reset, physical-key, or Unicode text state. Pointer records include both
+screen and content-relative coordinates. Each NDK window owns an eight-record
+bounded event port; overflow is explicit rather than unbounded allocation.
+The server maps content read-only while the client retains its writable
+handle. This protocol is userspace policy, not a kernel syscall ABI.
 
 `sw/include/astra/vfs_service.h` defines storage protocol `STOR`, version 4,
 with version 2 as the rolling-update floor. Version 3 transfers one reply send

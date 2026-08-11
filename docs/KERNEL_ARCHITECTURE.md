@@ -201,13 +201,13 @@ These are measured MC68030 implementation facts, not the final object limits:
 | Structure/pool | Exact current value |
 |---|---:|
 | `KernelCpuContext` | 76 bytes, 4-byte aligned |
-| `KernelProcess` | 472 bytes under the m68k ABI |
-| `KernelThread` | 172 bytes under the m68k ABI |
+| `KernelProcess` | 1,188 bytes under the m68k ABI |
+| `KernelThread` | 184 bytes under the m68k ABI |
 | `KernelThreadWaitQueue` | 12 bytes under the m68k ABI |
 | synchronization object | 36 bytes under the m68k ABI |
-| process slots | 4 (1,888 bytes static) |
-| thread slots | 16 (2,752 bytes static) |
-| handle slots/process | 16 |
+| process slots | 7 (8,316 bytes static) |
+| thread slots | 16 (2,944 bytes static) |
+| handle slots/process | 37 |
 | handle value | 24-bit generation, 8-bit one-based slot |
 | ready queues | 32 FIFO queues, two 16-bit links/thread, 32-bit bitmap |
 | thread priority | process default 16, user ceiling 23, effective priority/thread |

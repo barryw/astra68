@@ -150,16 +150,31 @@ one-second maintenance deadline because the kernel trace ring it also drains
 is not itself waitable.
 
 The first GUI boot slice now crosses every required protection boundary. The
-desktop paints a shared RGB565 surface through the userspace graphics library,
-then transfers a read-only duplicate to the named `GUI` service. The protected
-display process owns `DISPLAY` and `DISPLAY_IRQ`, validates the window request,
-composes the client surface into its private DMA scanout, submits one fenced
-frame, validates completion, and remains resident while the physical backend
-replaces boot text. The client retains its writable mapping; it never receives
-the display lease or scanout memory. The current server intentionally retains
-one live window; add a z-ordered list when a second useful GUI client exists.
-Widgets, input routing, damage tracking, and application lifecycle policy are
-the next userspace layers, not kernel ABI.
+desktop records a bounded shared draw list through the userspace graphics
+library, then transfers a read-only duplicate to the named `GUI` service. The
+protected display process owns `DISPLAY` and `DISPLAY_IRQ`, validates window
+requests, compiles client drawing plus theme-owned chrome into a native Astraea
+batch, submits one fenced frame, validates completion, and remains resident
+while the physical backend presents the completed alternate scanout. The
+client retains its writable command mapping; it never receives the display
+lease, scanout memory, or hardware offsets. The server retains four live
+windows in a dense back-to-front stack. Each successful create transfers a
+private control capability used for movement, sizing, z-order, activation,
+minimize/maximize/restore, title, query, and close. Activation raises the
+selected normal window and updates the single active title state. The
+compositor retains hardware-rendered window caches, unions damage independently
+for both alternating scanouts, and repairs rounded overlap with clipped masked
+  blits. The protected input service publishes normalized events to the display
+  service, which owns hit testing, focus, capture, titlebar dragging, gadget
+  transitions, and per-window event masks. Window events carry screen and
+  client-relative coordinates; explicitly delegated windowless observers use
+  the NDK pointer API and receive screen coordinates only. These remain
+  userspace policy, not kernel ABI.
+
+The startup manifest distinguishes `service` from `application`. Both may be
+required to start successfully, but only resident services are lifecycle-
+watched. A normal close of the terminal application therefore retires that
+process without turning an expected application exit into a supervisor panic.
 
 ## 5. Service lifecycle and failure
 

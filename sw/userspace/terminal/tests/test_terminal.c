@@ -270,6 +270,30 @@ static void test_model_works_without_a_renderer(void)
     assert(astra_terminal_cell(&terminal, 0u, 0u) == 'h');
 }
 
+static void test_resize_preserves_cells_and_clamps_cursor(void)
+{
+    AstraTerminal terminal;
+
+    reset(&terminal);
+    astra_terminal_write(&terminal, "top\nsecond");
+    terminal.cursor_row = TEST_ROWS - 1u;
+    terminal.cursor_column = TEST_COLUMNS - 1u;
+    assert(astra_terminal_resize(&terminal, 10u, 2u) == ASTRA_TERMINAL_OK);
+    assert(terminal.columns == 10u && terminal.rows == 2u);
+    assert(terminal.cursor_row == 1u && terminal.cursor_column == 9u);
+    assert(astra_terminal_cell(&terminal, 0u, 0u) == 't');
+    assert(astra_terminal_cell(&terminal, 1u, 0u) == 's');
+    assert(astra_terminal_flush(&terminal) == ASTRA_TERMINAL_OK);
+    assert(astra_terminal_resize(&terminal, TEST_COLUMNS, TEST_ROWS) ==
+           ASTRA_TERMINAL_OK);
+    assert(astra_terminal_cell(&terminal, 0u, 0u) == 't');
+    assert(astra_terminal_cell(&terminal, 1u, 0u) == 's');
+    assert(astra_terminal_cell(&terminal, 2u, 0u) == ' ');
+    assert(astra_terminal_flush(&terminal) == ASTRA_TERMINAL_OK);
+    assert(astra_terminal_resize(&terminal, 0u, 1u) ==
+           ASTRA_TERMINAL_INVALID_ARGUMENT);
+}
+
 int main(void)
 {
     test_rejects_impossible_geometry();
@@ -283,6 +307,7 @@ int main(void)
     test_flush_reports_only_changes();
     test_render_failure_is_reported();
     test_model_works_without_a_renderer();
+    test_resize_preserves_cells_and_clamps_cursor();
     puts("astra terminal: PASS");
     return 0;
 }

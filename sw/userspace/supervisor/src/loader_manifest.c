@@ -86,7 +86,9 @@ static int parse_line(char *line, SupervisorManifestEntry *entry)
     if (count > sizeof(token) / sizeof(token[0]) || count < 3u)
         return 0;
     (void)memset(entry, 0, sizeof(*entry));
-    if (!equal(token[at], "service"))
+    if (equal(token[at], "service"))
+        entry->resident = 1u;
+    else if (!equal(token[at], "application"))
         return 0;
     ++at;
     if (!copy(entry->path, sizeof(entry->path), token[at++]) ||

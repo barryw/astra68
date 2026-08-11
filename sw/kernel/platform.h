@@ -94,7 +94,7 @@ bool kernel_platform_post_text_cursor(uint32_t row, uint32_t column,
 void kernel_platform_post_text_geometry(uint32_t *columns, uint32_t *rows);
 uint32_t kernel_platform_display_capabilities(void);
 bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
-                                    uint32_t source);
+                                    uint32_t source, uint32_t byte_size);
 bool kernel_platform_display_collect(
     struct AstraDisplayFrameCompletion *completion);
 bool kernel_platform_display_reset(void);

@@ -391,7 +391,7 @@ events_start(uint32_t process_handle)
      * granted it separately from the volume. Reading history across a process
      * boundary is the same protocol as reading a file, which is the point.
      */
-    if (astra_port_create(EVENTS_PORT_MESSAGES,
+    if (astra_rt_port_create(EVENTS_PORT_MESSAGES,
                           EVENTS_PORT_MESSAGES *
                               (uint32_t)sizeof(AstraVfsRequestMessage),
                           &events_receive, &events_handle) !=
@@ -402,7 +402,7 @@ events_start(uint32_t process_handle)
                                      &service)) {
         return 0;
     }
-    if (astra_port_create(EVENTS_PORT_MESSAGES,
+    if (astra_rt_port_create(EVENTS_PORT_MESSAGES,
                           ASTRA_EVENT_CONTROL_REQUEST_SIZE,
                           &control_receive, &control_handle) !=
         ASTRA_SYSCALL_OK) {

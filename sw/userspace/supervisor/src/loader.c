@@ -333,7 +333,7 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
         (equal(entry->serves, "EVENTS") ? 2u : 1u);
     uint32_t status;
 
-    if (astra_port_create(1u, sizeof(AstraServiceReady), &receive, &send) !=
+    if (astra_rt_port_create(1u, sizeof(AstraServiceReady), &receive, &send) !=
         ASTRA_SYSCALL_OK)
         return ASTRA_STATUS_LIMIT;
     status = build_grants(startup, capabilities, entry, send, grants,
@@ -363,7 +363,10 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
     }
     if (expected_handles == 2u)
         event_control_handle = published[1];
-    process_handles[process_count++] = child;
+    if (entry->resident != 0u)
+        process_handles[process_count++] = child;
+    else
+        (void)astra_close(child);
     (void)child_id;
     return ASTRA_STATUS_OK;
 }
@@ -387,7 +390,7 @@ uint32_t supervisor_loader_start(
         return LOADER_FAIL_MANIFEST;
     if (!equal(manifest.entries[0].path, "SERVICES:storage"))
         return LOADER_FAIL_ORDER;
-    if (astra_port_create(1u, ASTRA_EVENT_CONTROL_REQUEST_SIZE,
+    if (astra_rt_port_create(1u, ASTRA_EVENT_CONTROL_REQUEST_SIZE,
                           &event_target_receive, &event_target_send) !=
         ASTRA_SYSCALL_OK)
         return ASTRA_STATUS_LIMIT;

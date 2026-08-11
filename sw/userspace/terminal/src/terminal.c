@@ -83,6 +83,38 @@ AstraTerminalStatus astra_terminal_init(AstraTerminal *terminal,
     return ASTRA_TERMINAL_OK;
 }
 
+AstraTerminalStatus astra_terminal_resize(AstraTerminal *terminal,
+                                          uint32_t columns, uint32_t rows)
+{
+    uint32_t old_columns;
+    uint32_t old_rows;
+
+    if (terminal == NULL || columns == 0u || rows == 0u)
+        return ASTRA_TERMINAL_INVALID_ARGUMENT;
+    if (columns > ASTRA_TERMINAL_COLUMNS_MAX ||
+        rows > ASTRA_TERMINAL_ROWS_MAX)
+        return ASTRA_TERMINAL_TOO_LARGE;
+    old_columns = terminal->columns;
+    old_rows = terminal->rows;
+    if (columns > old_columns)
+        for (uint32_t row = 0u; row < old_rows && row < rows; ++row)
+            for (uint32_t column = old_columns; column < columns; ++column)
+                terminal->cells[row][column] = TERMINAL_BLANK;
+    if (rows > old_rows)
+        for (uint32_t row = old_rows; row < rows; ++row)
+            for (uint32_t column = 0u; column < columns; ++column)
+                terminal->cells[row][column] = TERMINAL_BLANK;
+    terminal->columns = columns;
+    terminal->rows = rows;
+    if (terminal->cursor_row >= rows)
+        terminal->cursor_row = rows - 1u;
+    if (terminal->cursor_column >= columns)
+        terminal->cursor_column = columns - 1u;
+    for (uint32_t row = 0u; row < rows; ++row)
+        mark_row(terminal, row);
+    return ASTRA_TERMINAL_OK;
+}
+
 void astra_terminal_clear(AstraTerminal *terminal)
 {
     uint32_t row;

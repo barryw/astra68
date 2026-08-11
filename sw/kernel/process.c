@@ -5,6 +5,7 @@
 #include <astra/syscall.h>
 #include <astra/input.h>
 #include <astra/process.h>
+#include <astra/render_batch.h>
 #include <astra/event.h>
 #include <astra/status.h>
 
@@ -91,7 +92,7 @@ typedef struct KernelProcess {
 } KernelProcess;
 
 #if defined(__m68k__)
-_Static_assert(sizeof(KernelProcess) == 1016u,
+_Static_assert(sizeof(KernelProcess) == 1188u,
                "process record size changed; update the memory budget");
 #endif
 
@@ -1390,11 +1391,51 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
             display_dma_owner = process->owner;
             display_dma_active = 1u;
             platform_source = display_dma_token.physical_address;
+        } else if (request.operation ==
+                       ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH) {
+            KernelProcessDmaBuffer *buffer = NULL;
+            KernelDmaBufferInfo info;
+            KernelHandleStatus handle_status;
+
+            if (display_dma_active != 0u || request.pitch != 0u ||
+                request.byte_size < ASTRA_RENDER_BATCH_MIN_BYTES ||
+                request.byte_size > ASTRA_RENDER_BATCH_MAX_BYTES)
+                return ASTRA_SYSCALL_INVALID_ARGUMENT;
+            handle_status = kernel_handle_lookup(
+                &process->handles, request.source, KERNEL_OBJECT_DMA,
+                ASTRA_RIGHT_READ, (void **)&buffer);
+            if (handle_status != KERNEL_HANDLE_OK || buffer == NULL ||
+                buffer->active == 0u ||
+                kernel_dma_buffer_info(buffer->dma, process->owner, &info) !=
+                    KERNEL_DMA_OK || info.byte_size < request.byte_size)
+                return ASTRA_SYSCALL_INVALID_HANDLE;
+            if (kernel_dma_begin(buffer->dma, process->owner, 0u,
+                                 request.byte_size, KERNEL_DMA_TO_DEVICE,
+                                 device_generation,
+                                 &display_dma_token) != KERNEL_DMA_OK)
+                return ASTRA_SYSCALL_WOULD_BLOCK;
+            display_dma_owner = process->owner;
+            display_dma_active = 1u;
+            platform_source = display_dma_token.physical_address;
+        } else if (request.operation == ASTRA_DISPLAY_CURSOR_UPDATE) {
+            if (request.source >= ASTRA_DISPLAY_WIDTH ||
+                request.pitch >= ASTRA_DISPLAY_HEIGHT ||
+                (request.byte_size &
+                 ~(ASTRA_DISPLAY_CURSOR_VISIBLE |
+                   ASTRA_DISPLAY_CURSOR_DEFER_COMMIT)) != 0u)
+                return ASTRA_SYSCALL_INVALID_ARGUMENT;
+            platform_source = ASTRA_DISPLAY_HOST_CURSOR_PACK(
+                request.source, request.pitch,
+                (request.byte_size & ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u);
         } else {
             return ASTRA_SYSCALL_INVALID_ARGUMENT;
         }
         if (kernel_platform_display_submit(
-                request.fence, request.operation, platform_source))
+                request.fence, request.operation, platform_source,
+                request.operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ?
+                    request.byte_size :
+                request.operation == ASTRA_DISPLAY_CURSOR_UPDATE ?
+                    request.byte_size : 0u))
             return ASTRA_SYSCALL_OK;
         if (!display_dma_abort_owner(process->owner))
             return ASTRA_SYSCALL_IO_ERROR;

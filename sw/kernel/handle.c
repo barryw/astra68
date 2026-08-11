@@ -9,8 +9,12 @@
 #define KERNEL_HANDLE_SLOT_BITS 8u
 #define KERNEL_HANDLE_SLOT_MASK ((1u << KERNEL_HANDLE_SLOT_BITS) - 1u)
 #define KERNEL_HANDLE_GENERATION_MASK 0x00ffffffu
-#define KERNEL_HANDLE_FREE_SLOT_MASK \
-    ((1u << KERNEL_HANDLE_MAX_ENTRIES) - 1u)
+#define KERNEL_HANDLE_BITMAP_BITS 32u
+#define KERNEL_HANDLE_LAST_WORD_BITS \
+    (((KERNEL_HANDLE_MAX_ENTRIES - 1u) % KERNEL_HANDLE_BITMAP_BITS) + 1u)
+#define KERNEL_HANDLE_LAST_WORD_MASK \
+    (UINT32_MAX >> (KERNEL_HANDLE_BITMAP_BITS - \
+                    KERNEL_HANDLE_LAST_WORD_BITS))
 #define KERNEL_DETACHED_SLOT_BITS 9u
 #define KERNEL_DETACHED_SLOT_MASK \
     ((1u << KERNEL_DETACHED_SLOT_BITS) - 1u)
@@ -21,8 +25,8 @@
 #define KERNEL_HANDLE_BATCH_COMMITTED 2u
 
 _Static_assert(KERNEL_HANDLE_MAX_ENTRIES > 0u &&
-                   KERNEL_HANDLE_MAX_ENTRIES < 32u,
-               "free-slot bitmap requires 1..31 handle entries");
+                   KERNEL_HANDLE_MAX_ENTRIES <= 255u,
+               "eight-bit handle slot requires 1..255 entries");
 
 typedef enum KernelDetachedState {
     KERNEL_DETACHED_FREE = 0,
@@ -38,33 +42,49 @@ typedef struct KernelHandleReleaseRecord {
 
 static uint8_t transfer_pool_corrupt;
 
+static uint32_t handle_slot_word(uint32_t index)
+{
+    return index / KERNEL_HANDLE_BITMAP_BITS;
+}
+
 static uint32_t handle_slot_bit(uint32_t index)
 {
-    return 1u << index;
+    return 1u << (index % KERNEL_HANDLE_BITMAP_BITS);
+}
+
+static bool handle_slot_free(const KernelHandleTable *table, uint32_t index)
+{
+    return (table->free_slots[handle_slot_word(index)] &
+            handle_slot_bit(index)) != 0u;
 }
 
 static bool claim_free_slot(KernelHandleTable *table, uint32_t *index,
                             KernelHandleEntry **entry)
 {
-    uint32_t free_slots;
-    uint32_t selected;
-
     if (table == NULL || index == NULL || entry == NULL)
         return false;
-    free_slots = table->free_slots & KERNEL_HANDLE_FREE_SLOT_MASK;
-    if (free_slots == 0u)
-        return false;
-    selected = (uint32_t)__builtin_ctz(free_slots);
-    if (selected >= KERNEL_HANDLE_MAX_ENTRIES ||
-        table->entries[selected].occupied != 0u ||
-        table->entries[selected].reserved != 0u) {
-        transfer_pool_corrupt = 1u;
-        return false;
+    for (uint32_t word = 0u; word < KERNEL_HANDLE_BITMAP_WORDS; ++word) {
+        uint32_t free_slots = table->free_slots[word];
+        uint32_t selected;
+
+        if (word + 1u == KERNEL_HANDLE_BITMAP_WORDS)
+            free_slots &= KERNEL_HANDLE_LAST_WORD_MASK;
+        if (free_slots == 0u)
+            continue;
+        selected = word * KERNEL_HANDLE_BITMAP_BITS +
+                   (uint32_t)__builtin_ctz(free_slots);
+        if (selected >= KERNEL_HANDLE_MAX_ENTRIES ||
+            table->entries[selected].occupied != 0u ||
+            table->entries[selected].reserved != 0u) {
+            transfer_pool_corrupt = 1u;
+            return false;
+        }
+        table->free_slots[word] &= ~handle_slot_bit(selected);
+        *index = selected;
+        *entry = &table->entries[selected];
+        return true;
     }
-    table->free_slots &= ~handle_slot_bit(selected);
-    *index = selected;
-    *entry = &table->entries[selected];
-    return true;
+    return false;
 }
 
 static bool release_free_slot(KernelHandleTable *table,
@@ -75,6 +95,7 @@ static bool release_free_slot(KernelHandleTable *table,
     uintptr_t limit;
     uint32_t index;
     uint32_t bit;
+    uint32_t word;
 
     if (table == NULL || entry == NULL)
         return false;
@@ -85,11 +106,12 @@ static bool release_free_slot(KernelHandleTable *table,
         (address - first) % sizeof(table->entries[0]) != 0u)
         return false;
     index = (uint32_t)(entry - table->entries);
+    word = handle_slot_word(index);
     bit = handle_slot_bit(index);
     if (entry->occupied != 0u || entry->reserved != 0u ||
-        (table->free_slots & bit) != 0u)
+        (table->free_slots[word] & bit) != 0u)
         return false;
-    table->free_slots |= bit;
+    table->free_slots[word] |= bit;
     return true;
 }
 
@@ -211,7 +233,7 @@ static KernelHandleStatus find_entry(const KernelHandleTable *table,
         return KERNEL_HANDLE_INVALID_HANDLE;
     --slot;
     if (table->entries[slot].occupied != 0u &&
-        (table->free_slots & handle_slot_bit(slot)) != 0u) {
+        handle_slot_free(table, slot)) {
         transfer_pool_corrupt = 1u;
         return KERNEL_HANDLE_CORRUPT;
     }
@@ -315,7 +337,9 @@ void kernel_handle_table_init(KernelHandleTable *table)
         entry->reserved = 0u;
     }
     table->owner = 0u;
-    table->free_slots = KERNEL_HANDLE_FREE_SLOT_MASK;
+    for (uint32_t word = 0u; word < KERNEL_HANDLE_BITMAP_WORDS; ++word)
+        table->free_slots[word] = word + 1u == KERNEL_HANDLE_BITMAP_WORDS ?
+            KERNEL_HANDLE_LAST_WORD_MASK : UINT32_MAX;
 }
 
 bool kernel_handle_table_set_owner(KernelHandleTable *table, uint32_t owner)
@@ -598,24 +622,29 @@ uint32_t kernel_handle_count(const KernelHandleTable *table)
 uint32_t kernel_handle_available(const KernelHandleTable *table)
 {
     uint32_t count = 0u;
-    uint32_t free_slots;
 
     if (table == NULL)
         return 0u;
-    free_slots = table->free_slots & KERNEL_HANDLE_FREE_SLOT_MASK;
-    while (free_slots != 0u) {
-        free_slots &= free_slots - 1u;
-        ++count;
+    for (uint32_t word = 0u; word < KERNEL_HANDLE_BITMAP_WORDS; ++word) {
+        uint32_t free_slots = table->free_slots[word];
+
+        if (word + 1u == KERNEL_HANDLE_BITMAP_WORDS)
+            free_slots &= KERNEL_HANDLE_LAST_WORD_MASK;
+        while (free_slots != 0u) {
+            free_slots &= free_slots - 1u;
+            ++count;
+        }
     }
     return count;
 }
 
 bool kernel_handle_table_valid(const KernelHandleTable *table)
 {
-    uint32_t expected_free = 0u;
+    uint32_t expected_free[KERNEL_HANDLE_BITMAP_WORDS] = {0u};
 
     if (table == NULL ||
-        (table->free_slots & ~KERNEL_HANDLE_FREE_SLOT_MASK) != 0u)
+        (table->free_slots[KERNEL_HANDLE_BITMAP_WORDS - 1u] &
+         ~KERNEL_HANDLE_LAST_WORD_MASK) != 0u)
         return false;
     for (uint32_t index = 0u; index < KERNEL_HANDLE_MAX_ENTRIES; ++index) {
         const KernelHandleEntry *entry = &table->entries[index];
@@ -623,9 +652,12 @@ bool kernel_handle_table_valid(const KernelHandleTable *table)
         if (entry->occupied != 0u && entry->reserved != 0u)
             return false;
         if (entry->occupied == 0u && entry->reserved == 0u)
-            expected_free |= handle_slot_bit(index);
+            expected_free[handle_slot_word(index)] |= handle_slot_bit(index);
     }
-    return table->free_slots == expected_free;
+    for (uint32_t word = 0u; word < KERNEL_HANDLE_BITMAP_WORDS; ++word)
+        if (table->free_slots[word] != expected_free[word])
+            return false;
+    return true;
 }
 
 static void reset_transfer_batch(KernelHandleTransferBatch *batch)
@@ -860,7 +892,7 @@ KernelHandleStatus kernel_handle_import_reserve(
 
         if (entry->occupied != 0u || entry->reserved != 0u)
             continue;
-        if ((destination_table->free_slots & handle_slot_bit(slot)) == 0u) {
+        if (!handle_slot_free(destination_table, slot)) {
             transfer_pool_corrupt = 1u;
             return KERNEL_HANDLE_CORRUPT;
         }
@@ -885,7 +917,8 @@ KernelHandleStatus kernel_handle_import_reserve(
         if (entry->generation == 0u ||
             entry->generation > KERNEL_HANDLE_GENERATION_MASK)
             entry->generation = 1u;
-        destination_table->free_slots &= ~handle_slot_bit(slot);
+        destination_table->free_slots[handle_slot_word(slot)] &=
+            ~handle_slot_bit(slot);
         entry->reserved = 1u;
         if (!kernel_allocation_commit(
                 KERNEL_ALLOCATION_SITE_HANDLE_SLOT, 1u, sizeof(*entry),
@@ -941,7 +974,7 @@ KernelHandleStatus kernel_handle_import_commit(
             return KERNEL_HANDLE_INVALID_STATE;
         destination = &destination_table->entries[slot];
         if (destination->occupied != 0u || destination->reserved != 1u ||
-            (destination_table->free_slots & handle_slot_bit(slot)) != 0u ||
+            handle_slot_free(destination_table, slot) ||
             reservation->handles[index] !=
                 make_handle(slot, destination->generation) ||
             find_detached_entry(detached[index], KERNEL_DETACHED_LIVE,
@@ -988,7 +1021,7 @@ KernelHandleStatus kernel_handle_import_cancel(
         if (slot >= KERNEL_HANDLE_MAX_ENTRIES ||
             destination_table->entries[slot].occupied != 0u ||
             destination_table->entries[slot].reserved != 1u ||
-            (destination_table->free_slots & handle_slot_bit(slot)) != 0u)
+            handle_slot_free(destination_table, slot))
             return KERNEL_HANDLE_INVALID_STATE;
     }
     for (uint32_t index = 0u; index < reservation->count; ++index) {

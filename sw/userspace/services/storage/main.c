@@ -152,7 +152,7 @@ int astra_main(const AstraStartupInfo *startup)
          !astra_vfs_service_init(&service, astra_vfs_ext4_ops(), &backend)))
         status = ASTRA_STATUS_IO;
     if (status == ASTRA_STATUS_OK &&
-        (astra_port_create(PORT_MESSAGES,
+        (astra_rt_port_create(PORT_MESSAGES,
                            PORT_MESSAGES *
                                (uint32_t)sizeof(AstraVfsRequestMessage),
                            &receive, &send) != ASTRA_SYSCALL_OK ||

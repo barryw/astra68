@@ -1,11 +1,13 @@
 # Astra desktop and user-interface model
 
-Status: product and architecture direction; no desktop service is implemented.
+Status: architecture direction with a protected window-service prototype.
 
 This document defines the intended feel and behavioral model of Astra's native
 graphical environment. `GRAPHICS_ARCHITECTURE.md` defines the active Arty
 target. `PRESENTATION.md`, `VEGA.md`, `ASTRAEA.md`, and `FONTS.md` retain the
 implemented ULX3S behavior and contracts carried forward by the new design.
+`INTERFACE_SPECIFICATION.md` is the normative visual language and NDK window
+style contract.
 
 ## 1. Experience target
 
@@ -101,8 +103,9 @@ The desktop is not merely the filesystem. Applications, documents, volumes,
 services, running jobs, and queries are distinct typed objects even when they
 have icons or can be reached by paths.
 
-Exact chrome, color palette, icon language, menu activation behavior, and
-workspace name remain **OPEN** and require real 1920x1080 hardware prototypes.
+Window chrome, its semantic palette, and its geometry are specified in
+`INTERFACE_SPECIFICATION.md`. Icon language, menu activation behavior, and the
+workspace name remain **OPEN** and require real hardware prototypes.
 
 ## 5. Scenes
 
@@ -159,8 +162,11 @@ according to its protocol.
 
 ## 8. Input and focus
 
-- The input service normalizes hardware events and routes them to the display
-  service and focused application.
+- The protected input service normalizes hardware events. The display service
+  is the sole seat owner and routes subscribed window events through bounded
+  per-window message ports.
+- Window pointer events carry both screen and client-relative coordinates.
+  Explicitly authorized windowless observers receive screen coordinates only.
 - Pointer location and system shortcuts remain responsive at ordinary CPU
   saturation.
 - Focus changes are explicit ordered events.

@@ -72,7 +72,7 @@ mock_open(uint32_t capacity)
 }
 
 uint32_t
-astra_handle_duplicate(uint32_t handle, uint32_t rights, uint32_t *duplicate)
+astra_rt_handle_duplicate(uint32_t handle, uint32_t rights, uint32_t *duplicate)
 {
     uint32_t copy;
 
@@ -87,7 +87,7 @@ astra_handle_duplicate(uint32_t handle, uint32_t rights, uint32_t *duplicate)
 }
 
 uint32_t
-astra_area_create(uint32_t byte_size, uint32_t rights, uint32_t *handle)
+astra_rt_area_create(uint32_t byte_size, uint32_t rights, uint32_t *handle)
 {
     (void)rights;
     if (handle == NULL || byte_size > sizeof(mock_area))
@@ -97,7 +97,7 @@ astra_area_create(uint32_t byte_size, uint32_t rights, uint32_t *handle)
 }
 
 uint32_t
-astra_area_map(uint32_t handle, uint32_t permissions, void **address,
+astra_rt_area_map(uint32_t handle, uint32_t permissions, void **address,
                uint32_t *byte_size)
 {
     (void)permissions;
@@ -110,14 +110,14 @@ astra_area_map(uint32_t handle, uint32_t permissions, void **address,
 }
 
 uint32_t
-astra_area_unmap(void *address)
+astra_rt_area_unmap(void *address)
 {
     return address == mock_area ? ASTRA_SYSCALL_OK :
                                   ASTRA_SYSCALL_INVALID_ARGUMENT;
 }
 
 uint32_t
-astra_port_create(uint32_t message_max, uint32_t byte_max,
+astra_rt_port_create(uint32_t message_max, uint32_t byte_max,
                   uint32_t *receive_handle, uint32_t *send_handle)
 {
     (void)byte_max;

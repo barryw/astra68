@@ -679,8 +679,11 @@ static void test_pool_quotas_and_generation_reuse(void)
 
     initialize_test();
     for (uint32_t index = 0u; index < KERNEL_PORT_OWNER_MAX; ++index) {
-        assert(kernel_port_create(1u, 4u, 1120u, &owned[index]) ==
-               KERNEL_PORT_OK);
+        assert(kernel_port_create(
+                   1u,
+                   KERNEL_PORT_OWNER_MESSAGE_MAX / KERNEL_PORT_OWNER_MAX,
+                   KERNEL_PORT_OWNER_BYTES_MAX / KERNEL_PORT_OWNER_MAX,
+                   &owned[index]) == KERNEL_PORT_OK);
     }
     assert(kernel_port_create(1u, 1u, 24u, &extra) ==
            KERNEL_PORT_QUOTA_EXCEEDED);

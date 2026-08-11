@@ -4192,3 +4192,102 @@ route has run yet. The next evidence step is one exact no-waiver production
 route, followed by SRAM-only ULX3S qualification requiring 5/5 K10 sources,
 repeated POST/SDRAM/kernel passes, and physical HDMI. Persistent flash remains
 exact rollback build `25D9CB8E`.
+
+## 2026-08-10 Arty hardware-render runtime checkpoint
+
+This is a software-only hardware checkpoint; it changes no RTL, placement,
+route, constrained clock, or FPGA resource count. Source identity
+`14ad4b79061f` was built on Beast and exercised on the Arty through NUC using
+the retained production PL image. Deployment
+`/data/astra/deploy/hw-render-overlap-14ad4b79061f` reaches supervisor stage 8
+and remains resident. QMP reports four native Astraea batches containing 413
+commands: 210 fills, 10 blits, and 41 glyph runs. The FPGA submitted/completed
+counters both advance by 413; failures do not advance, last fault is zero, and
+backpressure, timeout, and reset counters remain zero.
+
+Disposition: runtime hardware PASS. There is no new timing cone or capacity
+disposition because the PL bitstream is unchanged. Exact ROM, storage, QEMU,
+and Linux display-owner identities are recorded in `docs/CURRENT_STATE.md`.
+
+## 2026-08-10 Arty window-management runtime checkpoint
+
+This is a software-only checkpoint using the unchanged retained production PL
+image and unchanged QEMU/Linux display binaries. Beast host tests, sanitizers,
+analyzers, MC68030 builds, and the exact QEMU gate pass. The Arty deployment
+`/data/astra/deploy/window-management-8f23825cc74d` reaches supervisor stage 8
+and remains resident. QMP consumes 17 native batches containing 884 commands:
+412 fills, 72 blits, and 68 glyph runs. FPGA submitted and completed counters
+advance together from `0x4a2` to `0x816`; failures remain `0x58`, last fault is
+zero, and backpressure, timeout, and reset counters remain zero.
+
+Disposition: runtime hardware PASS. No RTL, synthesis, placement, route,
+constrained clock, failed cone, or FPGA resource count changed. Artifact hashes
+and the retained rollback directory are recorded in `docs/CURRENT_STATE.md`.
+
+## 2026-08-10 protected-pointer runtime checkpoint
+
+This is a software-only change using the unchanged retained production PL
+image. It adds no RTL, placement, route, constrained clock, failed cone, or
+FPGA resource change. Beast passes the complete kernel and userspace suites,
+NDK sanitizers, MC68030 service/ROM builds, Linux display-owner host tests and
+ARM cross-build, and the exact QEMU GUI gate. The injected pointer route
+consumes one hover-damage render batch and one sprite-0 cursor request; all 20
+fences retire in 13,025 of the 250,000-cycle pointer budget.
+
+Two failed Arty checkpoints are retained. Storage image
+`7a86d2df1260d5faeab710408b5e3c254eb5d29c8e7c7553a33766519b136116`
+named the input service in its manifest without installing that image because
+the CLI and QEMU gate carried duplicate display profiles; the supervisor
+returned `NOT_FOUND`. After consolidating the profile, display-owner builds
+`376a6905da89` and `c591d84e818c` reached an invalid early scene commit and
+received the control aperture's intended AXI error. The final owner uses valid
+64-byte sprite pitch and includes cursor setup in the first complete scene
+commit.
+
+Deployment `/data/astra/deploy/protected-pointer-51475076aef0` reaches stage 8
+on the Arty through NUC. QMP retires 18 startup requests, then an injected
+relative-X event retires 20/20, changes cursor X from 640 to 646, and adds one
+hover batch. FPGA submitted/completed counters advance together from `0x816`
+to `0xb8a` for startup and to `0xc10` after the hover; failures remain `0x58`,
+and last fault, backpressure, timeout, and reset remain zero. Exact artifact
+hashes are recorded in `docs/CURRENT_STATE.md`. The two rejected intermediate
+scene commits remain visible as commit errors `2`; the passing owner adds no
+error and commit deferrals remain zero.
+
+Disposition: runtime hardware PASS. The prior window-management release remains
+an intact rollback. No timing or capacity disposition changes.
+
+## 2026-08-10 pointer latency and resized-cache runtime checkpoint
+
+This is a software-only change using the unchanged retained production PL
+image. It adds no RTL, synthesis, placement, route, constrained-clock, failed
+cone, or FPGA resource change. Beast display host and sanitizer tests,
+MC68030 builds, Linux display-owner host tests and ARM cross-build, and the
+exact QEMU GUI gate pass. The gate proves cursor completion and collection
+before repaint submission and stays within the existing 250,000-cycle budget.
+
+Deployment `/data/astra/deploy/pointer-fast-356415ce33cf` reaches supervisor
+stage 8 on the Arty through NUC. Six ordered motion records coalesce into one
+cursor update and one render. Direct DDR readback verifies both a clean resized
+580x300 standard-window cache and the corrected sprite-0 cursor. FPGA
+submitted/completed counters finish together at `0x192d`; failures remain
+`0x58`, and last fault, backpressure, timeout, and reset remain zero. Scene
+commit errors/deferrals remain `2`/`0`.
+
+Disposition: runtime hardware PASS. Exact artifact hashes are recorded in
+`docs/CURRENT_STATE.md`; the protected-pointer deployment remains available as
+rollback. No timing or capacity disposition changes.
+
+## 2026-08-11 Arty direct-copy performance checkpoint
+
+This checkpoint changes only the Arty Z7 graphics blitter; it does not change
+the ULX3S production RTL, clocks, resources, or active blocker recorded here.
+Target profiling isolated unscaled same-format RGB565 window copies. The new
+directed budget gate moves 1,024 pixels in 5,822 cycles versus 9,878 before the
+fix, while the complete graphics suite passes.
+
+The exact Arty production route passes setup/hold/pulse-width at
+`+0.001`/`+0.019`/`+0.538 ns` with every net routed. The deployed hardware,
+artifact hashes, resource delta, repeated renderer/sprite/copper certification,
+and drag measurements are recorded in `fpga/arty/graphics/TIMING_CLOSURE.md`,
+`docs/FPGA_RESOURCE_BUDGET.md`, and `docs/CURRENT_STATE.md`.

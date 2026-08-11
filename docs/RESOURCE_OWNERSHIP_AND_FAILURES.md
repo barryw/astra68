@@ -223,6 +223,12 @@ messages, 4,480 bytes, and 128 detached handles across them. One port may
 configure 1-8 messages and 24-2,240 bytes; one message is 24-280 bytes and
 contains at most eight handles.
 
+The current GUI source profile extends only those static count ceilings to 24
+ports, 72 messages, six ports per owner, and 40 messages per owner. The
+complete five-service/four-window composition reserves 18 ports and 64
+messages, leaving one maximum-size message queue uncommitted. Ownership,
+backpressure, byte limits, transfer rules, and teardown are unchanged.
+
 The receive-endpoint creator owns every queue charge. A send reserves an
 unpublished message slot and detached records, validates the entire source
 set, copies all bytes, then atomically invalidates the source generations and
@@ -309,6 +315,7 @@ permanent filesystem or block policy. Those protocols move to a user service.
 | timeout races completion | one terminal state wins; loser observes it |
 | stale handle/completion | return stale/invalid and increment diagnostic count |
 | physical bus failure | fail request; reset/mask device when required |
+| registered initial resident image exits | panic with its exit reason/status; boot control no longer exists |
 | internal impossible state | panic with retained object/owner trace |
 
 No recoverable external failure returns success, grows a queue, or spins

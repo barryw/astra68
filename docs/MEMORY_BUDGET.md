@@ -416,7 +416,7 @@ Major current static objects are:
 | per-frame owner links | 2 x 8,192 x 2 | 32,768 |
 | owner ledgers | 64 x 8 | 512 |
 | allocator bitmaps | 3 x 1,024 | 3,072 |
-| process slots | 4 x 540 | 2,160 |
+| process slots | 7 x 1,188 | 8,316 |
 | thread records | 16 x 180 | 2,880 |
 | ready queues | 32 x two 16-bit heads/tails plus bitmap/count | 136 |
 | deadline arrays | positions 32 + heap 32 + results 64 + cycles 128 + count 2 | 258 |
@@ -424,8 +424,8 @@ Major current static objects are:
 | waitable-timer ordering | deadlines 256 + heap 32 + positions 32 + count | 321 |
 | guarded thread supervisor-stack arena | 16 x 12 KiB | 196,608 |
 | synchronization objects | 32 x 36 | 1,152 |
-| message-port objects | 16 x 64 | 1,024 |
-| copied message records | 32 x 324 | 10,368 |
+| message-port objects | 24 x 64 | 1,536 |
+| copied message records | 72 x 324 | 23,328 |
 | detached authority records | 256 x 28 | 7,168 |
 | shared-area records | 8 x 100 | 800 |
 | shared-area mapping records | 32 x 24 | 768 |
@@ -439,6 +439,14 @@ Major current static objects are:
 | block slots | 4 x 64 | 256 |
 | cached-user-frame class/count ledger | 8,192 x 1 | 8,192 |
 | boot-info copy | 1 x 256 | 256 |
+
+The interactive GUI profile is the exact reason for the current seven-process
+ceiling: supervisor, storage, events, input, display, terminal, and one
+foreground command. The per-process handle proof is 37 entries and still uses
+two 32-bit bitmap words. Relative to the preceding six-process/36-handle
+profile, the process array grows by 1,356 bytes: one 1,188-byte process record
+plus 28 bytes in each of the six existing records. Shared-area alias capacity
+is seven for the same measured composition.
 
 ## K10 implemented candidate budget
 

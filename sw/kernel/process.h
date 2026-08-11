@@ -33,7 +33,8 @@
 #define ASTRA_KERNEL_DEBUG_SURFACE 1
 #endif
 
-#define KERNEL_PROCESS_MAX 5u
+/* Supervisor plus five GUI services and one foreground command. */
+#define KERNEL_PROCESS_MAX 7u
 #define KERNEL_PROCESS_CODE_BASE 0x00100000u
 #define KERNEL_PROCESS_STACK_BASE KERNEL_THREAD_STACK_BASE
 /* The top of the first slot's reservation: where its stack pointer starts. */

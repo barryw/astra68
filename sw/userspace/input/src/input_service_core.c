@@ -93,20 +93,69 @@ static AstraInputDeliveryResult deliver(
     return raw_deliver(service, client, event);
 }
 
+static uint32_t subscription_for(const AstraLogicalInputEvent *event);
+
 static void deliver_critical(AstraInputService *service,
                              AstraLogicalInputEvent *event)
 {
     AstraInputClient *client = find_client(service, service->focus_id);
 
-    if (client != NULL && deliver(service, client, event) ==
+    if (client != NULL &&
+        (client->subscriptions & subscription_for(event)) != 0u &&
+        deliver(service, client, event) ==
                               ASTRA_INPUT_DELIVERY_FULL)
         client->desynchronized = 1u;
+}
+
+static bool pointer_button_is_wheel(uint32_t code)
+{
+    return code >= ASTRA_INPUT_BUTTON_WHEEL_UP &&
+           code <= ASTRA_INPUT_BUTTON_WHEEL_RIGHT;
+}
+
+static uint32_t subscription_for(const AstraLogicalInputEvent *event)
+{
+    if (event->type == ASTRA_INPUT_EVENT_POINTER_MOTION)
+        return ASTRA_INPUT_SUBSCRIBE_POINTER_MOTION;
+    if (event->type == ASTRA_INPUT_EVENT_POINTER_BUTTON)
+        return pointer_button_is_wheel(event->code) ?
+            ASTRA_INPUT_SUBSCRIBE_POINTER_WHEEL :
+            ASTRA_INPUT_SUBSCRIBE_POINTER_BUTTON;
+    if (event->type == ASTRA_INPUT_EVENT_KEY)
+        return ASTRA_INPUT_SUBSCRIBE_KEY;
+    if (event->type == ASTRA_INPUT_EVENT_TEXT)
+        return ASTRA_INPUT_SUBSCRIBE_TEXT;
+    if (event->type == ASTRA_INPUT_EVENT_FOCUS)
+        return ASTRA_INPUT_SUBSCRIBE_FOCUS;
+    return 0u;
+}
+
+static void deliver_pointer(AstraInputService *service,
+                            AstraLogicalInputEvent *event)
+{
+    uint32_t subscription = subscription_for(event);
+
+    for (uint32_t index = 0u; index < ASTRA_INPUT_CLIENT_MAX; ++index) {
+        AstraInputClient *client = &service->clients[index];
+
+        if (client->active != 0u &&
+            (client->subscriptions & subscription) != 0u &&
+            deliver(service, client, event) == ASTRA_INPUT_DELIVERY_FULL) {
+            if (event->type == ASTRA_INPUT_EVENT_POINTER_MOTION) {
+                client->pending_dx = event->value_x;
+                client->pending_dy = event->value_y;
+                client->motion_pending = 1u;
+                ++service->stats.coalesced_motion;
+            } else {
+                client->desynchronized = 1u;
+            }
+        }
+    }
 }
 
 static void repair_state(AstraInputService *service, uint32_t timestamp_ms,
                          bool generation_change)
 {
-    AstraInputClient *client = find_client(service, service->focus_id);
     AstraLogicalInputEvent reset = make_event(
         service, ASTRA_INPUT_EVENT_STATE_RESET,
         ASTRA_INPUT_LOGICAL_SYNTHETIC | ASTRA_INPUT_LOGICAL_LOSS,
@@ -117,9 +166,13 @@ static void repair_state(AstraInputService *service, uint32_t timestamp_ms,
         ++service->stats.generation_repairs;
     else
         ++service->stats.overflow_repairs;
-    if (client != NULL && deliver(service, client, &reset) ==
-                              ASTRA_INPUT_DELIVERY_FULL)
-        client->desynchronized = 1u;
+    for (uint32_t index = 0u; index < ASTRA_INPUT_CLIENT_MAX; ++index) {
+        AstraInputClient *client = &service->clients[index];
+
+        if (client->active != 0u &&
+            deliver(service, client, &reset) == ASTRA_INPUT_DELIVERY_FULL)
+            client->desynchronized = 1u;
+    }
 }
 
 static uint32_t modifier_for_usage(uint32_t usage)
@@ -247,20 +300,12 @@ static int32_t clamp_coordinate(int64_t value, uint32_t extent)
 
 static void emit_motion(AstraInputService *service, uint32_t timestamp_ms)
 {
-    AstraInputClient *client = find_client(service, service->focus_id);
     AstraLogicalInputEvent motion = make_event(
         service, ASTRA_INPUT_EVENT_POINTER_MOTION, 0u, timestamp_ms);
 
-    if (client == NULL)
-        return;
     motion.value_x = service->pointer_x;
     motion.value_y = service->pointer_y;
-    if (deliver(service, client, &motion) == ASTRA_INPUT_DELIVERY_FULL) {
-        client->pending_dx = service->pointer_x;
-        client->pending_dy = service->pointer_y;
-        client->motion_pending = 1u;
-        ++service->stats.coalesced_motion;
-    }
+    deliver_pointer(service, &motion);
 }
 
 bool astra_input_service_init(AstraInputService *service,
@@ -277,6 +322,8 @@ bool astra_input_service_init(AstraInputService *service,
     service->config = *config;
     service->focus_generation = 1u;
     service->repeat_deadline_ms = ASTRA_INPUT_REPEAT_DISABLED;
+    service->pointer_x = (int32_t)(config->pointer_width / 2u);
+    service->pointer_y = (int32_t)(config->pointer_height / 2u);
     return true;
 }
 
@@ -302,12 +349,42 @@ bool astra_input_service_attach(AstraInputService *service, uint32_t client_id,
     available->deliver = delivery;
     available->context = context;
     available->id = client_id;
+    available->subscriptions = ASTRA_INPUT_SUBSCRIBE_ALL;
     available->pending_dx = 0;
     available->pending_dy = 0;
     available->active = 1u;
     available->desynchronized = 0u;
     available->motion_pending = 0u;
     available->reserved = 0u;
+    return true;
+}
+
+bool astra_input_service_subscribe(AstraInputService *service,
+                                   uint32_t client_id,
+                                   uint32_t subscriptions,
+                                   uint32_t timestamp_ms)
+{
+    AstraInputClient *client;
+
+    if (service == NULL || subscriptions == 0u ||
+        (subscriptions & ~ASTRA_INPUT_SUBSCRIBE_ALL) != 0u ||
+        (client = find_client(service, client_id)) == NULL)
+        return false;
+    client->subscriptions = subscriptions;
+    if ((subscriptions & ASTRA_INPUT_SUBSCRIBE_POINTER_MOTION) != 0u) {
+        AstraLogicalInputEvent motion = make_event(
+            service, ASTRA_INPUT_EVENT_POINTER_MOTION,
+            ASTRA_INPUT_LOGICAL_SYNTHETIC, timestamp_ms);
+
+        motion.value_x = service->pointer_x;
+        motion.value_y = service->pointer_y;
+        if (deliver(service, client, &motion) == ASTRA_INPUT_DELIVERY_FULL) {
+            client->pending_dx = motion.value_x;
+            client->pending_dy = motion.value_y;
+            client->motion_pending = 1u;
+            ++service->stats.coalesced_motion;
+        }
+    }
     return true;
 }
 
@@ -341,7 +418,8 @@ bool astra_input_service_set_focus(AstraInputService *service,
     if (client_id != 0u && new_client == NULL)
         return false;
     old_client = find_client(service, service->focus_id);
-    if (old_client != NULL) {
+    if (old_client != NULL &&
+        (old_client->subscriptions & ASTRA_INPUT_SUBSCRIBE_FOCUS) != 0u) {
         AstraLogicalInputEvent lost = make_event(
             service, ASTRA_INPUT_EVENT_FOCUS,
             ASTRA_INPUT_LOGICAL_SYNTHETIC, timestamp_ms);
@@ -353,7 +431,8 @@ bool astra_input_service_set_focus(AstraInputService *service,
     service->focus_id = client_id;
     ++service->focus_generation;
     ++service->stats.focus_changes;
-    if (new_client != NULL) {
+    if (new_client != NULL &&
+        (new_client->subscriptions & ASTRA_INPUT_SUBSCRIBE_FOCUS) != 0u) {
         AstraLogicalInputEvent gained = make_event(
             service, ASTRA_INPUT_EVENT_FOCUS,
             ASTRA_INPUT_LOGICAL_SYNTHETIC | ASTRA_INPUT_LOGICAL_FOCUSED,
@@ -366,9 +445,21 @@ bool astra_input_service_set_focus(AstraInputService *service,
     return true;
 }
 
-void astra_input_service_ingest(AstraInputService *service,
-                                const AstraInputEvent *event,
-                                bool physical_overflow)
+static bool pointer_motion_event(const AstraInputEvent *event)
+{
+    uint32_t kind;
+
+    if (event == NULL ||
+        ASTRA_INPUT_EVENT_CLASS(event->header) != ASTRA_INPUT_CLASS_POINTER)
+        return false;
+    kind = ASTRA_INPUT_EVENT_KIND(event->header);
+    return kind == ASTRA_INPUT_POINTER_RELATIVE ||
+           kind == ASTRA_INPUT_POINTER_ABSOLUTE;
+}
+
+static void ingest_one(AstraInputService *service,
+                       const AstraInputEvent *event,
+                       bool physical_overflow, bool emit_pointer_motion)
 {
     uint32_t event_class;
     uint32_t kind;
@@ -427,7 +518,8 @@ void astra_input_service_ingest(AstraInputService *service,
             service->pointer_x = clamp_coordinate(
                 (int64_t)service->pointer_x + delta,
                 service->config.pointer_width);
-        emit_motion(service, event->timestamp_ms);
+        if (emit_pointer_motion)
+            emit_motion(service, event->timestamp_ms);
     } else if (kind == ASTRA_INPUT_POINTER_ABSOLUTE) {
         if ((flags & ASTRA_INPUT_FLAG_AXIS_Y) != 0u)
             service->pointer_y = clamp_coordinate(
@@ -435,7 +527,8 @@ void astra_input_service_ingest(AstraInputService *service,
         else
             service->pointer_x = clamp_coordinate(
                 (int32_t)event->value, service->config.pointer_width);
-        emit_motion(service, event->timestamp_ms);
+        if (emit_pointer_motion)
+            emit_motion(service, event->timestamp_ms);
     } else if (kind == ASTRA_INPUT_POINTER_BUTTON) {
         AstraLogicalInputEvent button = make_event(
             service, ASTRA_INPUT_EVENT_POINTER_BUTTON,
@@ -446,8 +539,43 @@ void astra_input_service_ingest(AstraInputService *service,
         button.code = event->value;
         button.value_x = service->pointer_x;
         button.value_y = service->pointer_y;
-        deliver_critical(service, &button);
+        deliver_pointer(service, &button);
     }
+}
+
+void astra_input_service_ingest(AstraInputService *service,
+                                const AstraInputEvent *event,
+                                bool physical_overflow)
+{
+    ingest_one(service, event, physical_overflow, true);
+}
+
+void astra_input_service_ingest_batch(AstraInputService *service,
+                                      const AstraInputEvent *events,
+                                      uint32_t count,
+                                      bool physical_overflow)
+{
+    uint32_t motion_timestamp = 0u;
+    bool motion_pending = false;
+
+    if (service == NULL || events == NULL)
+        return;
+    for (uint32_t index = 0u; index < count; ++index) {
+        bool motion = pointer_motion_event(&events[index]);
+
+        if (!motion && motion_pending) {
+            emit_motion(service, motion_timestamp);
+            motion_pending = false;
+        }
+        ingest_one(service, &events[index], physical_overflow && index == 0u,
+                   !motion);
+        if (motion) {
+            motion_timestamp = events[index].timestamp_ms;
+            motion_pending = true;
+        }
+    }
+    if (motion_pending)
+        emit_motion(service, motion_timestamp);
 }
 
 void astra_input_service_tick(AstraInputService *service,
@@ -472,15 +600,17 @@ void astra_input_service_tick(AstraInputService *service,
                 desynchronized->desynchronized = 0u;
         }
     }
-    client = find_client(service, service->focus_id);
-    if (client != NULL && client->motion_pending != 0u) {
-        AstraLogicalInputEvent motion = make_event(
-            service, ASTRA_INPUT_EVENT_POINTER_MOTION, 0u, timestamp_ms);
+    for (uint32_t index = 0u; index < ASTRA_INPUT_CLIENT_MAX; ++index) {
+        client = &service->clients[index];
+        if (client->active != 0u && client->motion_pending != 0u) {
+            AstraLogicalInputEvent motion = make_event(
+                service, ASTRA_INPUT_EVENT_POINTER_MOTION, 0u, timestamp_ms);
 
-        motion.value_x = client->pending_dx;
-        motion.value_y = client->pending_dy;
-        if (deliver(service, client, &motion) == ASTRA_INPUT_DELIVERY_OK)
-            client->motion_pending = 0u;
+            motion.value_x = client->pending_dx;
+            motion.value_y = client->pending_dy;
+            if (deliver(service, client, &motion) == ASTRA_INPUT_DELIVERY_OK)
+                client->motion_pending = 0u;
+        }
     }
     if (service->repeat_usage != 0u &&
         service->repeat_deadline_ms != ASTRA_INPUT_REPEAT_DISABLED &&
@@ -490,6 +620,18 @@ void astra_input_service_tick(AstraInputService *service,
                                       service->config.repeat_interval_ms;
         ++service->stats.repeat_events;
     }
+}
+
+uint32_t astra_input_service_next_delay(const AstraInputService *service,
+                                        uint32_t timestamp_ms)
+{
+    int32_t remaining;
+
+    if (service == NULL || service->repeat_usage == 0u ||
+        service->repeat_deadline_ms == ASTRA_INPUT_REPEAT_DISABLED)
+        return ASTRA_INPUT_REPEAT_DISABLED;
+    remaining = (int32_t)(service->repeat_deadline_ms - timestamp_ms);
+    return remaining > 0 ? (uint32_t)remaining : 0u;
 }
 
 bool astra_input_service_stats(const AstraInputService *service,

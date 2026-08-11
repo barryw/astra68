@@ -55,7 +55,7 @@ IRQ work.
 
 ## Preemption model
 
-**CURRENT K7 substrate:** four process slots, 16 global thread slots, a
+**CURRENT K7 substrate:** five process slots, 16 global thread slots, a
 transitional limit of 15 threads/process, and a 5 ms one-shot quantum. At
 12.5 MHz the quantum is exactly 62,500 CPU cycles. The scheduler has 32
 intrusive FIFO ready queues and a 32-bit bitmap, selects the highest effective

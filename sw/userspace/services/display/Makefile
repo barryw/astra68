@@ -1,11 +1,13 @@
 include ../../../../mk/m68k-cross.mk
 
 CC := $(CROSS)gcc
+HOST_CC ?= cc
 SIZE := $(CROSS)size
 OBJCOPY := $(CROSS)objcopy
 RUNTIME := ../../runtime
 GRAPHICS := ../../graphics
-CPPFLAGS := -I../../../include -I$(RUNTIME)/include -I$(GRAPHICS)/include
+CPPFLAGS := -I../../../../ndk/include -I../../../include -I$(RUNTIME)/include \
+	-I$(GRAPHICS)/include -I../../../../fpga/arty/linux
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
@@ -16,6 +18,10 @@ IMAGE := build/m68k/display
 OBJECT := build/m68k/main.o
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 GRAPHICS_LIB := $(GRAPHICS)/build/m68k/libastragraphics.a
+GRAPHICS_FONT_HEADERS := $(GRAPHICS)/build/generated/astra_font8x8.inc \
+	$(GRAPHICS)/build/generated/astra_ui_font.inc
+HOST_TEST := build/host/test_display
+HOST_TEST_SANITIZE := build/host/test_display_sanitize
 CRT0 := $(RUNTIME)/build/m68k/crt0.o
 
 all: $(IMAGE) size
@@ -36,7 +42,33 @@ $(OBJECT): main.c
 size: $(IMAGE)
 	$(SIZE) $(IMAGE)
 
-test sanitize analyze:
+$(GRAPHICS_FONT_HEADERS):
+	$(MAKE) -C $(GRAPHICS) $(@:$(GRAPHICS)/%=%)
+
+$(HOST_TEST): main.c tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
+		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/render_builder.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated \
+		$(COMMON_FLAGS) -O2 -ffunction-sections -fdata-sections \
+		-Wl,--gc-sections $(GRAPHICS)/src/surface.c \
+		$(GRAPHICS)/src/render_builder.c tests/test_display.c -o $@
+
+test: $(HOST_TEST)
+	./$(HOST_TEST)
+
+$(HOST_TEST_SANITIZE): main.c tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
+		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/render_builder.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated \
+		$(COMMON_FLAGS) -O1 -fsanitize=address,undefined \
+		-fno-omit-frame-pointer -ffunction-sections -fdata-sections \
+		-Wl,--gc-sections $(GRAPHICS)/src/surface.c \
+		$(GRAPHICS)/src/render_builder.c tests/test_display.c -o $@
+
+sanitize: $(HOST_TEST_SANITIZE)
+	./$(HOST_TEST_SANITIZE)
+
+analyze:
 	@true
 
 clean:

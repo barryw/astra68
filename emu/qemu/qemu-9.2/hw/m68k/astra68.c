@@ -13,6 +13,9 @@
 #include "qemu/datadir.h"
 #include "qemu/error-report.h"
 #include "qemu/atomic.h"
+#ifdef CONFIG_LINUX
+#include "qemu/futex.h"
+#endif
 #include "qemu/timer.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
@@ -21,6 +24,8 @@
 #include "hw/loader.h"
 #include "hw/m68k/astra_input.h"
 #include "hw/m68k/astra_display_mailbox.h"
+#include "hw/m68k/astra_render_batch.h"
+#include "hw/m68k/astra_render_protocol.h"
 #include "astra/display.h"
 #include "sysemu/block-backend.h"
 #include "sysemu/blockdev.h"
@@ -229,6 +234,19 @@ typedef struct AstraDisplayState {
     uint64_t submit_cycle;
     uint64_t completion_cycle;
     uint64_t collect_cycle;
+    uint64_t operation;
+    uint64_t batch_submissions;
+    uint64_t batch_commands;
+    uint64_t fill_commands;
+    uint64_t blit_commands;
+    uint64_t glyph_commands;
+    uint64_t cursor_x;
+    uint64_t cursor_y;
+    uint64_t cursor_visible;
+    uint64_t cursor_updates;
+    uint64_t cursor_submit_cycle;
+    uint64_t cursor_completion_cycle;
+    uint64_t cursor_collect_cycle;
     bool mailbox_enabled;
     bool busy;
     bool completion_valid;
@@ -278,6 +296,38 @@ static uint32_t astra_display_queue(const AstraDisplayState *display)
                 ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID : 0u);
 }
 
+static void astra_display_count_batch(Astra68State *s, uint32_t source,
+                                      uint32_t byte_size)
+{
+    AstraDisplayState *display = &s->display;
+    const uint8_t *batch = s->sdram + (source - ASTRA_SDRAM_BASE);
+    uint32_t count = ldl_be_p(batch + 12u);
+    uint32_t records = ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
+                       ASTRA_RENDER_BATCH_ARENA_OFFSET;
+
+    if (ldl_be_p(batch) != ASTRA_RENDER_BATCH_MAGIC ||
+        ldl_be_p(batch + 4u) != ASTRA_RENDER_BATCH_VERSION_1_0 ||
+        ldl_be_p(batch + 8u) != byte_size ||
+        ldl_be_p(batch + 16u) != ASTRA_RENDER_BATCH_SUBMISSION_OFFSET ||
+        records > byte_size || count > ASTRA_RENDER_RING_ENTRIES ||
+        count > (byte_size - records) / ASTRA_RENDER_COMMAND_BYTES)
+        return;
+    ++display->batch_submissions;
+    display->batch_commands += count;
+    for (uint32_t index = 0; index < count; ++index) {
+        uint32_t opcode = ldl_be_p(batch + records +
+                                   index * ASTRA_RENDER_COMMAND_BYTES + 4u) >>
+                          16;
+
+        if (opcode == ASTRA_RENDER_OP_FILL)
+            ++display->fill_commands;
+        else if (opcode == ASTRA_RENDER_OP_BLIT)
+            ++display->blit_commands;
+        else if (opcode == ASTRA_RENDER_OP_GLYPH_RUN)
+            ++display->glyph_commands;
+    }
+}
+
 static void astra_display_complete(Astra68State *s, uint32_t status,
                                    uint32_t generation)
 {
@@ -292,6 +342,8 @@ static void astra_display_complete(Astra68State *s, uint32_t status,
     display->completion_generation = generation;
     display->generation = generation;
     display->completion_cycle = astra_now_cycles(s);
+    if (display->operation == ASTRA_DISPLAY_CURSOR_UPDATE)
+        display->cursor_completion_cycle = display->completion_cycle;
     ++display->completions;
     s->astraea.irq_status |= ASTRAEA_IRQ_DRAW_DONE;
     astra_update_irq(s);
@@ -329,47 +381,93 @@ static void astra_display_service(void *opaque)
 static void astra_display_submit(Astra68State *s)
 {
     AstraDisplayState *display = &s->display;
+    uint32_t operation = display->request_op &
+                         ASTRA_DISPLAY_HOST_OPERATION_MASK;
+    uint32_t byte_size = display->request_op >>
+                         ASTRA_DISPLAY_HOST_BYTE_SIZE_SHIFT;
     uint64_t frame_end = (uint64_t)display->request_source +
-                         ASTRA_DISPLAY_MAILBOX_FRAME_BYTES;
+        (operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ?
+             ASTRA_DISPLAY_MAILBOX_FRAME_BYTES : byte_size);
 
     if (display->busy || display->completion_valid ||
         display->request_id == 0u ||
-        (display->request_op != ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
-         display->request_op != ASTRA_DISPLAY_FRAME_PRESENT_RGB565) ||
-        (display->request_op == ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
+        (operation != ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
+         operation != ASTRA_DISPLAY_FRAME_PRESENT_RGB565 &&
+         operation != ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
+         operation != ASTRA_DISPLAY_CURSOR_UPDATE) ||
+        (operation == ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
          (display->request_source & 0xffff0000u) != 0u) ||
-        (display->request_op == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 &&
+        (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
+         (byte_size < ASTRA_RENDER_BATCH_MIN_BYTES ||
+          byte_size > ASTRA_RENDER_BATCH_MAX_BYTES)) ||
+        (operation == ASTRA_DISPLAY_CURSOR_UPDATE &&
+         ((byte_size &
+           ~(ASTRA_DISPLAY_CURSOR_VISIBLE |
+             ASTRA_DISPLAY_CURSOR_DEFER_COMMIT)) != 0u ||
+          (display->request_source & ASTRA_DISPLAY_HOST_CURSOR_X_MASK) >=
+              ASTRA_DISPLAY_WIDTH ||
+          ((display->request_source & ASTRA_DISPLAY_HOST_CURSOR_Y_MASK) >>
+               ASTRA_DISPLAY_HOST_CURSOR_Y_SHIFT) >= ASTRA_DISPLAY_HEIGHT)) ||
+        (operation != ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
+         operation != ASTRA_DISPLAY_CURSOR_UPDATE &&
          (display->request_source < ASTRA_SDRAM_BASE ||
           frame_end > (uint64_t)ASTRA_SDRAM_BASE + s->ram_size)))
         return;
     display->busy = true;
+    display->operation = operation;
+    if (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH)
+        astra_display_count_batch(s, display->request_source, byte_size);
+    if (operation == ASTRA_DISPLAY_CURSOR_UPDATE) {
+        display->cursor_x = display->request_source &
+                            ASTRA_DISPLAY_HOST_CURSOR_X_MASK;
+        display->cursor_y = (display->request_source &
+                             ASTRA_DISPLAY_HOST_CURSOR_Y_MASK) >>
+                            ASTRA_DISPLAY_HOST_CURSOR_Y_SHIFT;
+        display->cursor_visible =
+            (display->request_source & ASTRA_DISPLAY_HOST_CURSOR_VISIBLE) != 0u;
+        ++display->cursor_updates;
+    }
     display->submit_cycle = astra_now_cycles(s);
+    if (operation == ASTRA_DISPLAY_CURSOR_UPDATE)
+        display->cursor_submit_cycle = display->submit_cycle;
     ++display->submissions;
     if (display->mailbox_enabled) {
         if (++display->mailbox_sequence == 0u)
             ++display->mailbox_sequence;
         qatomic_set(&display->mailbox->magic, ASTRA_DISPLAY_MAILBOX_MAGIC);
         qatomic_set(&display->mailbox->version,
-                    ASTRA_DISPLAY_MAILBOX_VERSION_1_1);
+#ifdef CONFIG_LINUX
+                    ASTRA_DISPLAY_MAILBOX_VERSION_1_4);
+#else
+                    ASTRA_DISPLAY_MAILBOX_VERSION_1_3);
+#endif
         qatomic_set(&display->mailbox->request_id, display->request_id);
-        qatomic_set(&display->mailbox->operation, display->request_op);
+        qatomic_set(&display->mailbox->operation, operation);
         qatomic_set(&display->mailbox->color_rgb565,
                     display->request_source);
         qatomic_set(&display->mailbox->frame_pitch,
-                    display->request_op == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ?
+                    operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ?
                         ASTRA_DISPLAY_WIDTH * 2u : 0u);
         qatomic_set(&display->mailbox->frame_bytes,
-                    display->request_op == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ?
-                        ASTRA_DISPLAY_MAILBOX_FRAME_BYTES : 0u);
-        if (display->request_op == ASTRA_DISPLAY_FRAME_PRESENT_RGB565) {
+                    operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ?
+                        ASTRA_DISPLAY_MAILBOX_FRAME_BYTES :
+                    operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ?
+                        byte_size :
+                    operation == ASTRA_DISPLAY_CURSOR_UPDATE ? byte_size : 0u);
+        if (operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ||
+            operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH) {
             memcpy((uint8_t *)display->mailbox +
                        ASTRA_DISPLAY_MAILBOX_HEADER_BYTES,
                    s->sdram + (display->request_source - ASTRA_SDRAM_BASE),
-                   ASTRA_DISPLAY_MAILBOX_FRAME_BYTES);
+                   operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ?
+                       ASTRA_DISPLAY_MAILBOX_FRAME_BYTES : byte_size);
         }
         smp_wmb();
         qatomic_set(&display->mailbox->request_sequence,
                     display->mailbox_sequence);
+#ifdef CONFIG_LINUX
+        qemu_futex_wake((void *)&display->mailbox->request_sequence, 1);
+#endif
     }
     timer_mod_ns(display->service_timer,
                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
@@ -429,7 +527,6 @@ static bool astra_input_push(Astra68State *s, uint8_t event_class,
     event->device_sequence = (uint32_t)device << 16 | *sequence;
     event->host_generation = input->host_generation;
     input->tail = next;
-    astra_update_irq(s);
     return true;
 }
 
@@ -516,11 +613,19 @@ static void astra_input_event(DeviceState *device, QemuConsole *console,
     }
 }
 
+static void astra_input_sync(DeviceState *device)
+{
+    (void)device;
+    if (astra_input_machine != NULL)
+        astra_update_irq(astra_input_machine);
+}
+
 static const QemuInputHandler astra_input_handler = {
     .name = "Astra 68 keyboard and pointer",
     .mask = INPUT_EVENT_MASK_KEY | INPUT_EVENT_MASK_BTN |
             INPUT_EVENT_MASK_REL | INPUT_EVENT_MASK_ABS,
     .event = astra_input_event,
+    .sync = astra_input_sync,
 };
 
 static uint64_t astra_now_cycles(Astra68State *s)
@@ -946,7 +1051,9 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
     case 0x1d8: return ASTRA_DISPLAY_HOST_VERSION_1_0;
     case 0x1dc:
         return ASTRA_DISPLAY_HOST_CAP_SOLID_FRAME |
-               ASTRA_DISPLAY_HOST_CAP_FENCED_PRESENT;
+               ASTRA_DISPLAY_HOST_CAP_FENCED_PRESENT |
+               ASTRA_DISPLAY_HOST_CAP_RENDER_BATCH |
+               ASTRA_DISPLAY_HOST_CAP_HARDWARE_CURSOR;
     case 0x1e0: return astra_display_queue(&s->display);
     case 0x1e4: return s->display.request_id;
     case 0x1e8: return s->display.request_op;
@@ -1098,6 +1205,9 @@ static void astra_vesta_write32(Astra68State *s, hwaddr offset,
             if (value & ASTRA_DISPLAY_HOST_POP) {
                 s->display.completion_valid = false;
                 s->display.collect_cycle = astra_now_cycles(s);
+                if (s->display.operation == ASTRA_DISPLAY_CURSOR_UPDATE)
+                    s->display.cursor_collect_cycle =
+                        s->display.collect_cycle;
             }
             if (value & ASTRA_DISPLAY_HOST_SUBMIT)
                 astra_display_submit(s);
@@ -1497,6 +1607,58 @@ static void astra68_init(MachineState *machine)
     object_property_add_uint64_ptr(OBJECT(machine),
                                    "astra-display-collect-cycle",
                                    &s->display.collect_cycle,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-operation",
+                                   &s->display.operation,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-render-batches",
+                                   &s->display.batch_submissions,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-render-commands",
+                                   &s->display.batch_commands,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-fill-commands",
+                                   &s->display.fill_commands,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-blit-commands",
+                                   &s->display.blit_commands,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-glyph-commands",
+                                   &s->display.glyph_commands,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-cursor-x",
+                                   &s->display.cursor_x,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-cursor-y",
+                                   &s->display.cursor_y,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-cursor-visible",
+                                   &s->display.cursor_visible,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-cursor-updates",
+                                   &s->display.cursor_updates,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-cursor-submit-cycle",
+                                   &s->display.cursor_submit_cycle,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-cursor-completion-cycle",
+                                   &s->display.cursor_completion_cycle,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-cursor-collect-cycle",
+                                   &s->display.cursor_collect_cycle,
                                    OBJ_PROP_FLAG_READ);
 
     if (machine->ram_size != ASTRA_SDRAM_PHYSICAL_SIZE &&

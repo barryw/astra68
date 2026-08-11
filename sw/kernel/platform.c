@@ -8,6 +8,7 @@
 #include "vesta.h"
 
 #include <astra/display.h>
+#include <astra/render_batch.h>
 
 #include <stddef.h>
 
@@ -348,22 +349,47 @@ uint32_t kernel_platform_display_capabilities(void)
             capabilities |= ASTRA_DISPLAY_CAP_SOLID_FRAME;
         if ((host & ASTRA_DISPLAY_HOST_CAP_FENCED_PRESENT) != 0u)
             capabilities |= ASTRA_DISPLAY_CAP_FENCED_PRESENT;
+        if ((host & ASTRA_DISPLAY_HOST_CAP_RENDER_BATCH) != 0u)
+            capabilities |= ASTRA_DISPLAY_CAP_RENDER_BATCH;
+        if ((host & ASTRA_DISPLAY_HOST_CAP_HARDWARE_CURSOR) != 0u)
+            capabilities |= ASTRA_DISPLAY_CAP_HARDWARE_CURSOR;
     }
     return capabilities;
 }
 
 bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
-                                    uint32_t source)
+                                    uint32_t source, uint32_t byte_size)
 {
     uint32_t queue;
+    uint32_t host_operation = operation;
 
     if (id == 0u ||
         (operation != ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
-         operation != ASTRA_DISPLAY_FRAME_PRESENT_RGB565) ||
+         operation != ASTRA_DISPLAY_FRAME_PRESENT_RGB565 &&
+         operation != ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
+         operation != ASTRA_DISPLAY_CURSOR_UPDATE) ||
         (operation == ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
-         (source & UINT32_C(0xffff0000)) != 0u) ||
-        (operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 &&
+         ((source & UINT32_C(0xffff0000)) != 0u || byte_size != 0u)) ||
+        (operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 && byte_size != 0u) ||
+        (operation == ASTRA_DISPLAY_CURSOR_UPDATE &&
+         ((byte_size &
+           ~(ASTRA_DISPLAY_CURSOR_VISIBLE |
+             ASTRA_DISPLAY_CURSOR_DEFER_COMMIT)) != 0u ||
+          (source & ASTRA_DISPLAY_HOST_CURSOR_X_MASK) >= ASTRA_DISPLAY_WIDTH ||
+          ((source & ASTRA_DISPLAY_HOST_CURSOR_Y_MASK) >>
+               ASTRA_DISPLAY_HOST_CURSOR_Y_SHIFT) >= ASTRA_DISPLAY_HEIGHT)) ||
+        (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
+         (byte_size < ASTRA_RENDER_BATCH_MIN_BYTES ||
+          byte_size > ASTRA_DISPLAY_HOST_BYTE_SIZE_MAX)) ||
+        (operation != ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
+         operation != ASTRA_DISPLAY_CURSOR_UPDATE &&
          (source == 0u || (source & 3u) != 0u)) ||
+        (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
+         (kernel_platform_display_capabilities() &
+          ASTRA_DISPLAY_CAP_RENDER_BATCH) == 0u) ||
+        (operation == ASTRA_DISPLAY_CURSOR_UPDATE &&
+         (kernel_platform_display_capabilities() &
+          ASTRA_DISPLAY_CAP_HARDWARE_CURSOR) == 0u) ||
         (kernel_platform_display_capabilities() &
          (ASTRA_DISPLAY_CAP_SOLID_FRAME |
           ASTRA_DISPLAY_CAP_FENCED_PRESENT)) !=
@@ -376,7 +402,10 @@ bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
                   ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID)) != 0u)
         return false;
     VESTA_WRITE(DISPLAY_REQ_ID, id);
-    VESTA_WRITE(DISPLAY_REQ_OP, operation);
+    if (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
+        operation == ASTRA_DISPLAY_CURSOR_UPDATE)
+        host_operation |= byte_size << ASTRA_DISPLAY_HOST_BYTE_SIZE_SHIFT;
+    VESTA_WRITE(DISPLAY_REQ_OP, host_operation);
     VESTA_WRITE(DISPLAY_REQ_COLOR, source);
     ASTRAEA_WRITE(IRQ_STAT, ASTRAEA_IRQ_DRAW_DONE);
     ASTRAEA_WRITE(IRQ_EN,

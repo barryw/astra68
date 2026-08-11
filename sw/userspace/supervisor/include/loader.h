@@ -6,7 +6,7 @@
 #include <astra/process.h>
 #include <astra/vfs_service.h>
 
-#define SUPERVISOR_MANIFEST_ENTRY_MAX 4u
+#define SUPERVISOR_MANIFEST_ENTRY_MAX 5u
 #define SUPERVISOR_MANIFEST_GRANT_MAX ASTRA_LAUNCH_GRANT_MAX
 #define SUPERVISOR_MANIFEST_PATH_MAX 128u
 
@@ -24,6 +24,7 @@ typedef struct SupervisorManifestEntry {
     uint32_t serves_rights;
     uint32_t delegates;
     uint32_t required;
+    uint32_t resident;
 } SupervisorManifestEntry;
 
 typedef struct SupervisorManifest {
@@ -43,7 +44,7 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup,
 uint32_t supervisor_loader_event_control(void);
 void supervisor_loader_pump_event_control(void);
 
-/* Keeps required services alive and reports the first one that exits. */
+/* Keeps resident services alive and reports the first one that exits. */
 uint32_t supervisor_loader_watch(void);
 
 #endif

@@ -1,4 +1,4 @@
-SUBDIRS := storage events terminal display desktop
+SUBDIRS := storage events terminal input display desktop
 
 all test sanitize analyze clean:
 	@for dir in $(SUBDIRS); do $(MAKE) -C $$dir $@ || exit $$?; done

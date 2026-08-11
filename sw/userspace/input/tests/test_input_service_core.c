@@ -92,6 +92,7 @@ static void test_keymap_modifiers_and_repeat(void)
     event = key(0x04u, true, 10u, 1u);
     astra_input_service_ingest(&service, &event, false);
     assert(sink.count == 2u);
+    assert(astra_input_service_next_delay(&service, 10u) == 500u);
     assert(sink.events[0].type == ASTRA_INPUT_EVENT_KEY);
     assert(sink.events[0].code == 0x04u);
     assert(sink.events[1].type == ASTRA_INPUT_EVENT_TEXT);
@@ -217,6 +218,29 @@ static void test_caps_focus_and_repairs(void)
     assert(service.stats.overflow_repairs == 1u);
 }
 
+static void test_focus_subscription_mask(void)
+{
+    AstraInputService service = make_service();
+    TestSink pointer_only = {.limit = TEST_EVENT_CAPACITY};
+    TestSink focused = {.limit = TEST_EVENT_CAPACITY};
+
+    assert(astra_input_service_attach(&service, 1u, sink_deliver,
+                                      &pointer_only));
+    assert(astra_input_service_subscribe(
+        &service, 1u, ASTRA_INPUT_SUBSCRIBE_POINTER_MOTION, 0u));
+    pointer_only.count = 0u;
+    assert(astra_input_service_set_focus(&service, 1u, 1u));
+    assert(pointer_only.count == 0u);
+
+    assert(astra_input_service_attach(&service, 2u, sink_deliver, &focused));
+    assert(astra_input_service_subscribe(
+        &service, 2u, ASTRA_INPUT_SUBSCRIBE_FOCUS, 0u));
+    assert(astra_input_service_set_focus(&service, 2u, 2u));
+    assert(pointer_only.count == 0u);
+    assert(focused.count == 1u);
+    assert(focused.events[0].type == ASTRA_INPUT_EVENT_FOCUS);
+}
+
 static void test_pointer_acceleration_clipping_and_coalescing(void)
 {
     AstraInputService service = make_service();
@@ -226,11 +250,11 @@ static void test_pointer_acceleration_clipping_and_coalescing(void)
     focus(&service, &sink);
     event = pointer(ASTRA_INPUT_POINTER_RELATIVE, 0u, 10, 10u);
     astra_input_service_ingest(&service, &event, false);
-    assert(sink.events[0].value_x == 16); /* 4 + (10 - 4) * 2 */
+    assert(sink.events[0].value_x == 656); /* 640 + 4 + (10 - 4) * 2 */
     event = pointer(ASTRA_INPUT_POINTER_RELATIVE,
                     ASTRA_INPUT_FLAG_AXIS_Y, -100, 11u);
     astra_input_service_ingest(&service, &event, false);
-    assert(sink.events[1].value_y == 0);
+    assert(sink.events[1].value_y == 164);
     event = pointer(ASTRA_INPUT_POINTER_ABSOLUTE, 0u, 5000, 12u);
     astra_input_service_ingest(&service, &event, false);
     assert(sink.events[2].value_x == 1279);
@@ -250,6 +274,61 @@ static void test_pointer_acceleration_clipping_and_coalescing(void)
     event = pointer(ASTRA_INPUT_POINTER_RELATIVE, 0u, INT32_MIN, 16u);
     astra_input_service_ingest(&service, &event, false);
     assert(sink.events[sink.count - 1u].value_x == 0);
+}
+
+static void test_pointer_batch_emits_one_motion(void)
+{
+    AstraInputService service = make_service();
+    TestSink sink = {0};
+    AstraInputEvent events[2];
+
+    focus(&service, &sink);
+    events[0] = pointer(ASTRA_INPUT_POINTER_RELATIVE, 0u, 3, 20u);
+    events[1] = pointer(ASTRA_INPUT_POINTER_RELATIVE,
+                        ASTRA_INPUT_FLAG_AXIS_Y, -2, 20u);
+    astra_input_service_ingest_batch(&service, events, 2u, false);
+    assert(sink.count == 1u);
+    assert(sink.events[0].type == ASTRA_INPUT_EVENT_POINTER_MOTION);
+    assert(sink.events[0].value_x == 643);
+    assert(sink.events[0].value_y == 358);
+    assert(service.stats.physical_events == 2u);
+    assert(service.stats.logical_events == 2u); /* Focus plus one motion. */
+}
+
+static void test_windowless_pointer_subscription(void)
+{
+    AstraInputService service = make_service();
+    TestSink focused = {0};
+    TestSink observer = {.limit = TEST_EVENT_CAPACITY};
+    AstraInputEvent event;
+
+    focus(&service, &focused);
+    assert(astra_input_service_attach(&service, 20u,
+                                      sink_deliver, &observer));
+    assert(astra_input_service_subscribe(
+        &service, 20u, ASTRA_INPUT_SUBSCRIBE_POINTER_MOTION |
+                           ASTRA_INPUT_SUBSCRIBE_POINTER_WHEEL, 2u));
+    assert(observer.count == 1u);
+    assert(observer.events[0].type == ASTRA_INPUT_EVENT_POINTER_MOTION);
+    assert(observer.events[0].value_x == 640 &&
+           observer.events[0].value_y == 360);
+
+    event = pointer(ASTRA_INPUT_POINTER_RELATIVE, 0u, 5, 3u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(focused.count == 1u && observer.count == 2u);
+    assert(observer.events[1].value_x == 646 &&
+           observer.events[1].value_y == 360);
+
+    event = pointer(ASTRA_INPUT_POINTER_BUTTON, ASTRA_INPUT_FLAG_DOWN,
+                    ASTRA_INPUT_BUTTON_LEFT, 4u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(focused.count == 2u && observer.count == 2u);
+    event = pointer(ASTRA_INPUT_POINTER_BUTTON, ASTRA_INPUT_FLAG_DOWN,
+                    ASTRA_INPUT_BUTTON_WHEEL_UP, 5u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(focused.count == 3u && observer.count == 3u);
+    assert(observer.events[2].value_x == 646 &&
+           observer.events[2].value_y == 360);
 }
 
 static void test_full_queue_forces_state_reset(void)
@@ -371,7 +450,10 @@ int main(void)
     test_keymap_modifiers_and_repeat();
     test_replaceable_keymap();
     test_caps_focus_and_repairs();
+    test_focus_subscription_mask();
     test_pointer_acceleration_clipping_and_coalescing();
+    test_pointer_batch_emits_one_motion();
+    test_windowless_pointer_subscription();
     test_full_queue_forces_state_reset();
     test_client_limits_and_death();
     test_unfocused_client_gets_loss_retry();

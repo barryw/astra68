@@ -33,7 +33,7 @@ astra_event_control_set(uint32_t handle, uint32_t subsystem, uint32_t level)
     if (handle == 0u || subsystem >= ASTRA_EVENT_SUBSYSTEM_MAX ||
         level > ASTRA_EVENT_LEVEL_ERROR)
         return ASTRA_STATUS_INVALID;
-    status = astra_port_create(1u, sizeof(reply), &receive, &carried);
+    status = astra_rt_port_create(1u, sizeof(reply), &receive, &carried);
     if (status != ASTRA_SYSCALL_OK)
         return ASTRA_STATUS_LIMIT;
     fill_header(&request.header, sizeof(request), astra_activity_current());

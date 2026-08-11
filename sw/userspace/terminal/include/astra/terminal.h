@@ -57,6 +57,8 @@ AstraTerminalStatus astra_terminal_init(AstraTerminal *terminal,
                                         uint32_t columns, uint32_t rows,
                                         AstraTerminalRender render,
                                         void *render_context);
+AstraTerminalStatus astra_terminal_resize(AstraTerminal *terminal,
+                                          uint32_t columns, uint32_t rows);
 
 /* Clears every cell and homes the cursor. */
 void astra_terminal_clear(AstraTerminal *terminal);

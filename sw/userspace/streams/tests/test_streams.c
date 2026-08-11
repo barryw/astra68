@@ -79,7 +79,7 @@ mock_open(uint32_t capacity)
 }
 
 uint32_t
-astra_port_create(uint32_t message_max, uint32_t byte_max,
+astra_rt_port_create(uint32_t message_max, uint32_t byte_max,
                   uint32_t *receive_handle, uint32_t *send_handle)
 {
     (void)byte_max;

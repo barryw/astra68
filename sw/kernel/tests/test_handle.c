@@ -71,18 +71,18 @@ static void test_free_slot_bitmap_invariants(void)
                KERNEL_HANDLE_MAX_ENTRIES - index - 1u);
     }
 
-    saved_free_slots = table.free_slots;
-    table.free_slots |= 1u;
+    saved_free_slots = table.free_slots[0];
+    table.free_slots[0] |= 1u;
     assert(!kernel_handle_table_valid(&table));
-    table.free_slots = saved_free_slots;
+    table.free_slots[0] = saved_free_slots;
     assert(kernel_handle_table_valid(&table));
 
     assert(kernel_handle_close(&table, handles[1]) == KERNEL_HANDLE_OK);
     assert(kernel_handle_table_valid(&table));
-    saved_free_slots = table.free_slots;
-    table.free_slots &= ~(1u << 1);
+    saved_free_slots = table.free_slots[0];
+    table.free_slots[0] &= ~(1u << 1);
     assert(!kernel_handle_table_valid(&table));
-    table.free_slots = saved_free_slots;
+    table.free_slots[0] = saved_free_slots;
     assert(kernel_handle_table_valid(&table));
     assert(kernel_handle_close_all(&table) == 3u);
     assert(kernel_handle_table_valid(&table));

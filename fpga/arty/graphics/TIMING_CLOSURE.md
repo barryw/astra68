@@ -1763,3 +1763,49 @@ arena, reaches the terminal `WORK:>` prompt with QEMU and the renderer resident,
 and leaves all three ARM QEMU libraries hash-stable during rendering. This is
 a retained hardware pass with no synthesis, placement, route, timing, or
 capacity change; there is therefore no new timing cone or resource table.
+
+### Direct RGB565 copy performance checkpoint (2026-08-11)
+
+Hardware profiling of a representative window drag isolated the dominant cost
+to unscaled, same-format RGB565 blits. One 29-command repaint already represented
+the complete coalesced drag update; the largest individual copy moved 185,920
+pixels. The directed 64x16 identity-copy regression first failed at 9,878
+cycles against a 9,000-cycle ceiling. The retained blitter bypasses scaling,
+format conversion, and general dispatch only when flags are zero, formats and
+dimensions match, and the copy is therefore provably direct. The regression
+now passes at 5,822 cycles, a 41% reduction, while the complete directed
+graphics suite passes unchanged.
+
+Exact Beast Vivado 2024.2 build `direct-copy-ded15f7e/full-route-1` uses the
+complete production design at 166,666,672 Hz. It routes all 74,818 nets and
+all 152,192 timing endpoints with zero failures: setup is `+0.001 ns`, hold is
+`+0.019 ns`, and pulse width is `+0.538 ns`.
+
+| Exact full-route resource | Used | Available | Utilization | Physical free |
+|---|---:|---:|---:|---:|
+| Slice LUTs | 37,547 | 53,200 | 70.58% | 15,653 |
+| Slice registers | 44,643 | 106,400 | 41.96% | 61,757 |
+| Physical slices | 13,035 | 13,300 | 98.01% | 265 |
+| BRAM36-equivalent tiles | 118 | 140 | 84.29% | 22 |
+| DSP48E1 | 83 | 220 | 37.73% | 137 |
+
+| Retained source or artifact | SHA-256 |
+|---|---|
+| `astra_render_blitter.sv` | `ded15f7ed765211fbf9838c09e8243cefcf82753ea1a0c6f1896170aebf81448` |
+| `tb_astra_render_blitter.sv` | `2af134e875d1dc1efb1cb119dc87382ae72ab341398966a38425c74258fe094b` |
+| Bitstream | `24dcb07f1641a449930d7c4856f3d10d294e44a10b5494c8741673c6d901c548` |
+| XSA | `65960a0b25b2d24f10aa2351bdcf7d2ecfdc7cadcfc21f8076a2651f56689d31` |
+| Routed DCP | `f50cafa830019eaab3f061eea7038b88234dbcee82969f473076299071503e41` |
+| Timing report | `5508d894633aa44ae0b22ee83b2636977187a363643b79322bcf0c69d24af024` |
+| Utilization report | `d47b0d363d4079c9337069eef1820444fc33ea3c95d6cded04f7ed0cf5dcb2e3` |
+| Route report | `5e0723217bfc774d75d1062e4a1fc2ae99214beb295270798723ff4afa1c1a99` |
+| FSBL | `069b6eba6b71eafc0e03c592f70421378bf5db467f52ce8ea56afb5f8a047866` |
+| Active `BOOT.BIN` | `ac4dea6b90b562edf753d18378b9d8e5521cc26e5544b176b4bba1ad5a79df10` |
+
+After atomic deployment through NUC, FPGA manager reports `operating`, Linux
+Normal RAM remains bounded at `0x17ffffff`, and the FIT remains
+`c9a77be0f5085ce048860d12bd88ce7a246b813cf76c20339e8c18b7f9358944`.
+Warm 29-command drag repaints measure 25.1--26.1 ms in hardware versus the
+previous 29--40 ms range. Ten complete renderer certifications and three each
+of sprite and copper certification pass without dropped work, overflow, AXI,
+or deadline errors.

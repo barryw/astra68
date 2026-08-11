@@ -70,8 +70,10 @@ $(TERMINAL_FONT_HEADER): $(TERMINAL_FONT_SOURCE)
 
 $(TERMINAL_TARGET): astra_terminal_display.c $(COMMON_SOURCES) \
 		$(COMMON_HEADERS) $(TERMINAL_FONT_HEADER) \
+		astra_render_protocol.h \
 		$(ASTRA_INCLUDE)/astra/display.h \
-		$(ASTRA_INCLUDE)/astra/display_mailbox.h
+		$(ASTRA_INCLUDE)/astra/display_mailbox.h \
+		$(ASTRA_INCLUDE)/astra/render_batch.h
 	mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -I$(OUT) -I$(ASTRA_INCLUDE) \
 		-ffunction-sections -fdata-sections \
@@ -103,8 +105,10 @@ $(OUT)/test-astra-boot-text: test_astra_boot_text.c \
 
 $(OUT)/test-astra-terminal-display: astra_terminal_display.c \
 		$(COMMON_SOURCES) $(COMMON_HEADERS) $(TERMINAL_FONT_HEADER) \
+		astra_render_protocol.h \
 		$(ASTRA_INCLUDE)/astra/display.h \
-		$(ASTRA_INCLUDE)/astra/display_mailbox.h
+		$(ASTRA_INCLUDE)/astra/display_mailbox.h \
+		$(ASTRA_INCLUDE)/astra/render_batch.h
 	mkdir -p $(OUT)
 	$(HOSTCC) $(CFLAGS) -I$(OUT) -I$(ASTRA_INCLUDE) astra_terminal_display.c \
 		$(COMMON_SOURCES) -o $@

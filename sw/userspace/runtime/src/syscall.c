@@ -17,7 +17,7 @@ astra_progress(uint32_t value)
 }
 
 uint32_t
-astra_handle_duplicate(uint32_t handle, uint32_t rights, uint32_t *duplicate)
+astra_rt_handle_duplicate(uint32_t handle, uint32_t rights, uint32_t *duplicate)
 {
     AstraSyscallResult result;
 
@@ -31,7 +31,7 @@ astra_handle_duplicate(uint32_t handle, uint32_t rights, uint32_t *duplicate)
 }
 
 uint32_t
-astra_area_create(uint32_t byte_size, uint32_t rights, uint32_t *handle)
+astra_rt_area_create(uint32_t byte_size, uint32_t rights, uint32_t *handle)
 {
     AstraSyscallResult result;
 
@@ -45,7 +45,7 @@ astra_area_create(uint32_t byte_size, uint32_t rights, uint32_t *handle)
 }
 
 uint32_t
-astra_area_map(uint32_t handle, uint32_t permissions, void **address,
+astra_rt_area_map(uint32_t handle, uint32_t permissions, void **address,
                uint32_t *byte_size)
 {
     AstraSyscallResult result;
@@ -62,7 +62,7 @@ astra_area_map(uint32_t handle, uint32_t permissions, void **address,
 }
 
 uint32_t
-astra_area_unmap(void *address)
+astra_rt_area_unmap(void *address)
 {
     AstraSyscallResult result;
 

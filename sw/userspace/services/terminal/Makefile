@@ -10,10 +10,13 @@ STREAMS := ../../streams
 SHELL_DIR := ../../shell
 TERMINAL := ../../terminal
 SUPERVISOR := ../../supervisor
-CPPFLAGS := -I../../../include -I$(RUNTIME)/include -I$(STORAGE)/include \
+GRAPHICS := ../../graphics
+NDK := ../../../../ndk
+CPPFLAGS := -I$(NDK)/include -I../../../include -I$(RUNTIME)/include \
+	-I$(STORAGE)/include \
 	-I$(VFS)/include \
 	-I$(STREAMS)/include -I$(SHELL_DIR)/include -I$(TERMINAL)/include \
-	-I$(SUPERVISOR)/include
+	-I$(SUPERVISOR)/include -I$(GRAPHICS)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
@@ -29,6 +32,8 @@ VFS_LIB := $(VFS)/build/m68k/libastravfs.a
 STREAMS_LIB := $(STREAMS)/build/m68k/libastrastreams.a
 SHELL_LIB := $(SHELL_DIR)/build/m68k/libastrashell.a
 TERMINAL_LIB := $(TERMINAL)/build/m68k/libastraterminal.a
+GRAPHICS_LIB := $(GRAPHICS)/build/m68k/libastragraphics.a
+NDK_LIB := $(NDK)/build/m68k/libastra.a
 CRT0 := $(RUNTIME)/build/m68k/crt0.o
 SUPERVISOR_CATALOG := $(SUPERVISOR)/build/m68k/astra_events.cat
 EVENT_PREFIX_BYTES := 640
@@ -36,11 +41,15 @@ EVENT_PREFIX_BYTES := 640
 all: $(IMAGE) catalog-contract size
 
 $(TARGET): $(OBJECTS) $(CRT0) $(STREAMS_LIB) $(VFS_LIB) $(TERMINAL_LIB) \
-		$(SHELL_LIB) $(RUNTIME_LIB) $(RUNTIME)/astra_user.ld
+		$(SHELL_LIB) $(GRAPHICS_LIB) $(NDK_LIB) $(RUNTIME_LIB) \
+		$(RUNTIME)/astra_user.ld
 	@mkdir -p $(@D)
 	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(CRT0) $(OBJECTS) \
 		$(STREAMS_LIB) $(VFS_LIB) $(TERMINAL_LIB) $(SHELL_LIB) \
-		$(RUNTIME_LIB) -lgcc
+		$(GRAPHICS_LIB) $(NDK_LIB) $(RUNTIME_LIB) -lgcc
+
+$(NDK_LIB):
+	$(MAKE) -C $(NDK) all
 
 $(IMAGE): $(TARGET)
 	$(OBJCOPY) --strip-all --remove-section=.astra_events $< $@
