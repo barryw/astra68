@@ -12,15 +12,16 @@ SPEC.loader.exec_module(HOTPLUG)
 
 
 class FakeQmp:
-    def __init__(self, fail=None):
+    def __init__(self, fail=None, responses=None):
         self.calls = []
         self.fail = fail
+        self.responses = responses or {}
 
     def execute(self, command, arguments=None):
         self.calls.append((command, arguments))
         if command == self.fail:
             raise HOTPLUG.QmpError("injected")
-        return {}
+        return self.responses.get(command, {})
 
     def close(self):
         self.calls.append(("close", None))
@@ -89,6 +90,22 @@ def main():
         assert False, "broken QMP write accepted"
     except HOTPLUG.QmpError:
         pass
+
+    qmp = FakeQmp(responses={
+        "query-cpus-fast": [{"cpu-index": 0, "thread-id": 102}],
+    })
+    affinities = []
+    priorities = []
+    assert HOTPLUG.tune_runtime(
+        qmp, task_ids=[100, 101, 102],
+        set_affinity=lambda task, cpus: affinities.append((task, cpus)),
+        set_priority=lambda which, task, value:
+            priorities.append((which, task, value)), report=report)
+    assert affinities == [(100, {0}), (101, {0}), (102, {1})]
+    assert priorities == [(HOTPLUG.os.PRIO_PROCESS, 102, -10)]
+
+    qmp = FakeQmp(responses={"query-cpus-fast": []})
+    assert not HOTPLUG.tune_runtime(qmp, task_ids=[], report=report)
     print("Astra input hotplug tests passed")
 
 

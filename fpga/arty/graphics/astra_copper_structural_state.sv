@@ -239,21 +239,26 @@ module astra_copper_structural_state #(
     reg running_qq;
     reg validating;
     reg validator_start;
+    reg tile_validator_select_q;
+    reg tile_validator_start_q;
     reg framebuffer_done_seen;
     reg framebuffer_valid_q;
     reg tile0_done_seen;
     reg tile0_valid_q;
     reg tile1_done_seen;
     reg tile1_valid_q;
+    reg validation_result_pending_q;
+    reg validation_result_valid_q;
     wire framebuffer_busy;
     wire framebuffer_done;
     wire framebuffer_valid;
-    wire tile0_busy;
-    wire tile0_done;
-    wire tile0_valid;
-    wire tile1_busy;
-    wire tile1_done;
-    wire tile1_valid;
+    wire tile_validator_busy;
+    wire tile_validator_done;
+    wire tile_validator_valid;
+    wire tile0_done = tile_validator_done && !tile_validator_select_q;
+    wire tile0_valid = tile_validator_valid;
+    wire tile1_done = tile_validator_done && tile_validator_select_q;
+    wire tile1_valid = tile_validator_valid;
     wire validators_done = (framebuffer_done_seen || framebuffer_done) &&
         (tile0_done_seen || tile0_done) && (tile1_done_seen || tile1_done);
     wire validators_valid = !snapshot_scene_enable ||
@@ -264,7 +269,10 @@ module astra_copper_structural_state #(
          (!snapshot_tile1_enable ||
           (tile1_done ? tile1_valid : tile1_valid_q)));
 
-    assign move_ready = !validating && !move_pending_q && move_allowed;
+    // Capacity is independent of the request payload.  The copper snapshots
+    // move_allowed before asserting move_valid, so feeding the target decode
+    // back through ready only lengthens the retirement path.
+    assign move_ready = !validating && !move_pending_q;
 
     astra_framebuffer_config_validator #(
         .OUTPUT_WIDTH(OUTPUT_WIDTH),
@@ -285,30 +293,25 @@ module astra_copper_structural_state #(
         .config_valid(framebuffer_valid), .surface_bytes()
     );
 
-    astra_tile_config_validator tile0_validator_i (
-        .clk(clk), .reset(reset), .start(validator_start),
-        .tile_16(snapshot_tile0_tile_16),
-        .index_8(snapshot_tile0_index_8),
-        .map_width_log2(snapshot_tile0_map_width_log2),
-        .map_height_log2(snapshot_tile0_map_height_log2),
-        .map_base(snapshot_tile0_map_base),
-        .pattern_base(snapshot_tile0_pattern_base),
-        .tile_count(snapshot_tile0_tile_count),
+    astra_tile_config_validator tile_validator_i (
+        .clk(clk), .reset(reset), .start(tile_validator_start_q),
+        .tile_16(tile_validator_select_q ?
+            snapshot_tile1_tile_16 : snapshot_tile0_tile_16),
+        .index_8(tile_validator_select_q ?
+            snapshot_tile1_index_8 : snapshot_tile0_index_8),
+        .map_width_log2(tile_validator_select_q ?
+            snapshot_tile1_map_width_log2 : snapshot_tile0_map_width_log2),
+        .map_height_log2(tile_validator_select_q ?
+            snapshot_tile1_map_height_log2 : snapshot_tile0_map_height_log2),
+        .map_base(tile_validator_select_q ?
+            snapshot_tile1_map_base : snapshot_tile0_map_base),
+        .pattern_base(tile_validator_select_q ?
+            snapshot_tile1_pattern_base : snapshot_tile0_pattern_base),
+        .tile_count(tile_validator_select_q ?
+            snapshot_tile1_tile_count : snapshot_tile0_tile_count),
         .arena_base(ARENA_BASE), .arena_limit(ARENA_LIMIT),
-        .busy(tile0_busy), .done(tile0_done), .config_valid(tile0_valid)
-    );
-
-    astra_tile_config_validator tile1_validator_i (
-        .clk(clk), .reset(reset), .start(validator_start),
-        .tile_16(snapshot_tile1_tile_16),
-        .index_8(snapshot_tile1_index_8),
-        .map_width_log2(snapshot_tile1_map_width_log2),
-        .map_height_log2(snapshot_tile1_map_height_log2),
-        .map_base(snapshot_tile1_map_base),
-        .pattern_base(snapshot_tile1_pattern_base),
-        .tile_count(snapshot_tile1_tile_count),
-        .arena_base(ARENA_BASE), .arena_limit(ARENA_LIMIT),
-        .busy(tile1_busy), .done(tile1_done), .config_valid(tile1_valid)
+        .busy(tile_validator_busy), .done(tile_validator_done),
+        .config_valid(tile_validator_valid)
     );
 
     task automatic load_candidate_baseline;
@@ -396,6 +399,7 @@ module astra_copper_structural_state #(
 
     always @(posedge clk) begin
         validator_start <= 1'b0;
+        tile_validator_start_q <= 1'b0;
         running_q <= copper_running;
         running_qq <= running_q;
         if (reset) begin
@@ -403,12 +407,16 @@ module astra_copper_structural_state #(
             running_qq <= 1'b0;
             validating <= 1'b0;
             validator_start <= 1'b0;
+            tile_validator_select_q <= 1'b0;
+            tile_validator_start_q <= 1'b0;
             framebuffer_done_seen <= 1'b0;
             framebuffer_valid_q <= 1'b0;
             tile0_done_seen <= 1'b0;
             tile0_valid_q <= 1'b0;
             tile1_done_seen <= 1'b0;
             tile1_valid_q <= 1'b0;
+            validation_result_pending_q <= 1'b0;
+            validation_result_valid_q <= 1'b0;
             pending_valid <= 1'b0;
             candidates_accepted <= 32'd0;
             candidates_rejected <= 32'd0;
@@ -531,6 +539,8 @@ module astra_copper_structural_state #(
                         candidate_tile1_pattern_base;
                     snapshot_tile1_tile_count <= candidate_tile1_tile_count;
                     validator_start <= 1'b1;
+                    tile_validator_select_q <= 1'b0;
+                    tile_validator_start_q <= 1'b1;
                     validating <= 1'b1;
                     framebuffer_done_seen <= 1'b0;
                     tile0_done_seen <= 1'b0;
@@ -543,17 +553,25 @@ module astra_copper_structural_state #(
                 framebuffer_done_seen <= 1'b1;
                 framebuffer_valid_q <= framebuffer_valid;
             end
-            if (validating && tile0_done) begin
-                tile0_done_seen <= 1'b1;
-                tile0_valid_q <= tile0_valid;
-            end
-            if (validating && tile1_done) begin
-                tile1_done_seen <= 1'b1;
-                tile1_valid_q <= tile1_valid;
+            if (validating && tile_validator_done) begin
+                if (!tile_validator_select_q) begin
+                    tile0_done_seen <= 1'b1;
+                    tile0_valid_q <= tile_validator_valid;
+                    tile_validator_select_q <= 1'b1;
+                    tile_validator_start_q <= 1'b1;
+                end else begin
+                    tile1_done_seen <= 1'b1;
+                    tile1_valid_q <= tile_validator_valid;
+                end
             end
             if (validating && validators_done) begin
                 validating <= 1'b0;
-                if (validators_valid) begin
+                validation_result_pending_q <= 1'b1;
+                validation_result_valid_q <= validators_valid;
+            end
+            if (validation_result_pending_q) begin
+                validation_result_pending_q <= 1'b0;
+                if (validation_result_valid_q) begin
                     pending_valid <= 1'b1;
                     pending_scene_enable <= snapshot_scene_enable;
                     pending_framebuffer_enable <=
@@ -589,7 +607,7 @@ module astra_copper_structural_state #(
         end
     end
 
-    wire unused_busy = framebuffer_busy | tile0_busy | tile1_busy;
+    wire unused_busy = framebuffer_busy | tile_validator_busy;
 endmodule
 
 `default_nettype wire

@@ -38,6 +38,7 @@ module astra_async_fifo #(
     reg [ADDR_WIDTH:0] rd_gray_wr_2;
     reg [ADDR_WIDTH:0] wr_gray_rd_1;
     reg [ADDR_WIDTH:0] wr_gray_rd_2;
+    reg full_q;
 
     reg [DATA_WIDTH-1:0] rd_data_reg;
     reg                  rd_valid_reg;
@@ -61,18 +62,23 @@ module astra_async_fifo #(
         end
     endfunction
 
-    wire [ADDR_WIDTH:0] wr_binary_next = wr_binary + 1'b1;
-    wire [ADDR_WIDTH:0] wr_gray_next = binary_to_gray(wr_binary_next);
-    wire full = wr_gray == {
+    wire push = wr_valid && !full_q;
+    wire [ADDR_WIDTH:0] wr_binary_incremented = wr_binary + 1'b1;
+    wire [ADDR_WIDTH:0] wr_gray_incremented =
+        binary_to_gray(wr_binary_incremented);
+    wire full_now = wr_gray == {
+        ~rd_gray_wr_2[ADDR_WIDTH:ADDR_WIDTH-1],
+         rd_gray_wr_2[ADDR_WIDTH-2:0]
+    };
+    wire full_after_push = wr_gray_incremented == {
         ~rd_gray_wr_2[ADDR_WIDTH:ADDR_WIDTH-1],
          rd_gray_wr_2[ADDR_WIDTH-2:0]
     };
     wire empty = rd_gray == wr_gray_rd_2;
-    wire push = wr_valid && !full;
     wire pop = rd_valid_reg && rd_ready;
     wire prefetch = (!rd_valid_reg || pop) && !empty;
 
-    assign wr_ready = !full;
+    assign wr_ready = !full_q;
     assign rd_data = rd_data_reg;
     assign rd_valid = rd_valid_reg;
     assign wr_level = wr_binary - gray_to_binary(rd_gray_wr_2);
@@ -90,15 +96,20 @@ module astra_async_fifo #(
             wr_gray <= {ADDR_WIDTH+1{1'b0}};
             rd_gray_wr_1 <= {ADDR_WIDTH+1{1'b0}};
             rd_gray_wr_2 <= {ADDR_WIDTH+1{1'b0}};
+            full_q <= 1'b0;
             overflow <= 1'b0;
         end else begin
             rd_gray_wr_1 <= rd_gray;
             rd_gray_wr_2 <= rd_gray_wr_1;
-            if (wr_valid && full)
+            if (push)
+                full_q <= full_after_push;
+            else if (full_q && !full_now)
+                full_q <= 1'b0;
+            if (wr_valid && full_q)
                 overflow <= 1'b1;
             if (push) begin
-                wr_binary <= wr_binary_next;
-                wr_gray <= wr_gray_next;
+                wr_binary <= wr_binary_incremented;
+                wr_gray <= wr_gray_incremented;
             end
         end
     end

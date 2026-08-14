@@ -181,10 +181,11 @@ module astra_axi_lite_1to2 #(
             if (aw_buffer_valid_q && w_buffer_valid_q && !w_sent_q &&
                 selected_w_ready)
                 w_sent_q <= 1'b1;
+            // Enter response handling only after both downstream handshakes
+            // have been registered.  This keeps slave ready logic out of the
+            // splitter's response-state timing path.
             if (aw_buffer_valid_q && w_buffer_valid_q &&
-                (aw_sent_q || selected_aw_ready) &&
-                (w_sent_q || (aw_buffer_valid_q && w_buffer_valid_q &&
-                              selected_w_ready))) begin
+                aw_sent_q && w_sent_q) begin
                 write_response_q <= 1'b1;
                 aw_buffer_valid_q <= 1'b0;
                 w_buffer_valid_q <= 1'b0;

@@ -165,12 +165,15 @@ module astra_copper_registers (
          move_target <= TARGET_TILE_PALETTE_LAST) ||
         (move_target >= TARGET_SPRITE_PALETTE_FIRST &&
          move_target <= TARGET_SPRITE_PALETTE_LAST);
+    reg move_pending_q;
+    reg [15:0] move_target_q;
+    reg [31:0] move_data_q;
     assign validate_allowed = target_allowed(validate_target, validate_data);
     assign validate_timing_class = target_class(validate_target);
     assign move_allowed = target_allowed(move_target, move_data);
     assign move_timing_class = target_class(move_target);
-    assign move_ready = move_allowed && (!move_is_palette ||
-                                         palette_write_ready);
+    assign move_ready = !reset && !baseline_restore && !move_pending_q &&
+        (!move_is_palette || palette_write_ready);
 
     task automatic restore_baseline;
         begin
@@ -210,6 +213,9 @@ module astra_copper_registers (
         tile_palette_write_enable <= 1'b0;
         sprite_palette_write_enable <= 1'b0;
         if (reset || baseline_restore) begin
+            move_pending_q <= 1'b0;
+            move_target_q <= 16'd0;
+            move_data_q <= 32'd0;
             restore_baseline();
             framebuffer_palette_write_index <= 8'd0;
             framebuffer_palette_write_argb <= 32'd0;
@@ -219,37 +225,49 @@ module astra_copper_registers (
             sprite_palette_write_bank <= 4'd0;
             sprite_palette_write_index <= 8'd0;
             sprite_palette_write_argb <= 32'd0;
-        end else if (move_valid && move_ready) begin
-            case (move_target)
-                TARGET_BACKDROP: backdrop_rgb <= move_data[23:0];
-                TARGET_FB_VIEWPORT_X: framebuffer_viewport_x <= move_data;
-                TARGET_FB_VIEWPORT_Y: framebuffer_viewport_y <= move_data;
+        end else begin
+            if (move_pending_q) begin
+                move_pending_q <= 1'b0;
+                case (move_target_q)
+                TARGET_BACKDROP: backdrop_rgb <= move_data_q[23:0];
+                TARGET_FB_VIEWPORT_X: framebuffer_viewport_x <= move_data_q;
+                TARGET_FB_VIEWPORT_Y: framebuffer_viewport_y <= move_data_q;
                 TARGET_FB_VISUAL_CONTROL: begin
-                    framebuffer_wrap_x <= move_data[3];
-                    framebuffer_wrap_y <= move_data[4];
-                    framebuffer_key_enable <= move_data[5];
+                    framebuffer_wrap_x <= move_data_q[3];
+                    framebuffer_wrap_y <= move_data_q[4];
+                    framebuffer_key_enable <= move_data_q[5];
                 end
-                TARGET_FB_KEY: framebuffer_key <= move_data;
-                TARGET_TILE0_SCROLL_X: tile0_scroll_x <= move_data;
-                TARGET_TILE0_SCROLL_Y: tile0_scroll_y <= move_data;
+                TARGET_FB_KEY: framebuffer_key <= move_data_q;
+                TARGET_TILE0_SCROLL_X: tile0_scroll_x <= move_data_q;
+                TARGET_TILE0_SCROLL_Y: tile0_scroll_y <= move_data_q;
                 TARGET_TILE0_CONTROL: begin
-                    tile0_enable <= move_data[0];
-                    tile0_above <= move_data[1];
-                    tile0_transparent_enable <= move_data[2];
-                    tile0_transparent_index <= move_data[15:8];
-                    tile0_opacity <= move_data[23:16];
+                    tile0_enable <= move_data_q[0];
+                    tile0_above <= move_data_q[1];
+                    tile0_transparent_enable <= move_data_q[2];
+                    tile0_transparent_index <= move_data_q[15:8];
+                    tile0_opacity <= move_data_q[23:16];
                 end
-                TARGET_TILE1_SCROLL_X: tile1_scroll_x <= move_data;
-                TARGET_TILE1_SCROLL_Y: tile1_scroll_y <= move_data;
+                TARGET_TILE1_SCROLL_X: tile1_scroll_x <= move_data_q;
+                TARGET_TILE1_SCROLL_Y: tile1_scroll_y <= move_data_q;
                 TARGET_TILE1_CONTROL: begin
-                    tile1_enable <= move_data[0];
-                    tile1_above <= move_data[1];
-                    tile1_transparent_enable <= move_data[2];
-                    tile1_transparent_index <= move_data[15:8];
-                    tile1_opacity <= move_data[23:16];
+                    tile1_enable <= move_data_q[0];
+                    tile1_above <= move_data_q[1];
+                    tile1_transparent_enable <= move_data_q[2];
+                    tile1_transparent_index <= move_data_q[15:8];
+                    tile1_opacity <= move_data_q[23:16];
                 end
-                TARGET_SPRITE_CONTROL: sprite_enable <= move_data[0];
-                default: begin
+                TARGET_SPRITE_CONTROL: sprite_enable <= move_data_q[0];
+                default: begin end
+                endcase
+            end
+
+            // The active Copper bank was fully validated before promotion.
+            if (move_valid && move_ready) begin
+                if (!move_is_palette) begin
+                    move_pending_q <= 1'b1;
+                    move_target_q <= move_target;
+                    move_data_q <= move_data;
+                end else begin
                     if (move_target >= TARGET_FB_PALETTE_FIRST &&
                         move_target <= TARGET_FB_PALETTE_LAST) begin
                         framebuffer_palette_write_enable <= 1'b1;
@@ -271,7 +289,7 @@ module astra_copper_registers (
                         sprite_palette_write_argb <= move_data;
                     end
                 end
-            endcase
+            end
         end
     end
 endmodule

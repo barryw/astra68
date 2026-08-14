@@ -691,33 +691,67 @@ wire [31:0] sprite_scale_step_x;
 
         copper_dispatch_submission_producer = 11'd8;
         #1;
-        if (!copper_dispatch_allowed || !copper_dispatch_ready)
-            $fatal(1, "forward copper dispatch endpoint was rejected");
+        if (copper_dispatch_allowed || copper_dispatch_ready)
+            $fatal(1, "idle copper dispatch reported a result");
         @(negedge clk);
         copper_dispatch_valid = 1'b1;
         @(posedge clk);
         #1;
+        if (!copper_dispatch_ready || !copper_dispatch_allowed)
+            $fatal(1, "forward copper dispatch endpoint was not validated");
+        @(posedge clk);
+        #1;
         @(negedge clk);
         copper_dispatch_valid = 1'b0;
+        @(posedge clk);
+        #1;
         if (render_submission_producer != 11'd8)
             $fatal(1, "copper dispatch did not publish producer endpoint");
+        if (copper_dispatch_allowed || copper_dispatch_ready)
+            $fatal(1, "completed copper dispatch remained visible");
+
+        @(negedge clk);
+        copper_dispatch_valid = 1'b1;
+        @(posedge clk);
         #1;
         if (!copper_dispatch_allowed || !copper_dispatch_ready)
             $fatal(1, "idempotent copper dispatch replay was rejected");
+        @(posedge clk);
+        @(negedge clk);
+        copper_dispatch_valid = 1'b0;
+        @(posedge clk);
 
         copper_dispatch_submission_producer = 11'd7;
+        @(negedge clk);
+        copper_dispatch_valid = 1'b1;
+        @(posedge clk);
         #1;
-        if (copper_dispatch_allowed || copper_dispatch_ready)
+        if (copper_dispatch_allowed || !copper_dispatch_ready)
             $fatal(1, "backward copper dispatch endpoint was accepted");
+        @(posedge clk);
+        @(negedge clk);
+        copper_dispatch_valid = 1'b0;
         copper_dispatch_submission_producer = 11'd1028;
+        @(negedge clk);
+        copper_dispatch_valid = 1'b1;
+        @(posedge clk);
         #1;
-        if (copper_dispatch_allowed || copper_dispatch_ready)
+        if (copper_dispatch_allowed || !copper_dispatch_ready)
             $fatal(1, "overfull copper dispatch endpoint was accepted");
+        @(posedge clk);
+        @(negedge clk);
+        copper_dispatch_valid = 1'b0;
         copper_dispatch_submission_producer = 11'd8;
         render_configuration_fault = 1'b1;
+        @(negedge clk);
+        copper_dispatch_valid = 1'b1;
+        @(posedge clk);
         #1;
-        if (copper_dispatch_allowed || copper_dispatch_ready)
+        if (copper_dispatch_allowed || !copper_dispatch_ready)
             $fatal(1, "dispatch ignored renderer configuration fault");
+        @(posedge clk);
+        @(negedge clk);
+        copper_dispatch_valid = 1'b0;
         render_configuration_fault = 1'b0;
         $display("copper dispatch ring-boundary pass");
 

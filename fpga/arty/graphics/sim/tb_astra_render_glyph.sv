@@ -221,6 +221,19 @@ module tb_astra_render_glyph;
         reset <= 1'b0;
         memory.clear_memory(8'd0);
 
+        // Source-format classification is command state, not per-pixel work.
+        // Capture it at admission so format decode cannot sit on the sample
+        // classification path for every glyph pixel.
+        source_format = `ASTRA_RENDER_FORMAT_A4;
+        @(posedge clk); start <= 1'b1;
+        @(posedge clk); start <= 1'b0;
+        #1;
+        if (dut.source_apply_kind_q != dut.SOURCE_APPLY_A4)
+            $fatal(1, "glyph source kind was not captured at start");
+        reset <= 1'b1;
+        repeat (2) @(posedge clk);
+        reset <= 1'b0;
+
         // MASK1: foreground then transparent.
         test_stage = 1;
         descriptor(2, 1);

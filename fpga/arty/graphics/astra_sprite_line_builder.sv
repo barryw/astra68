@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Astra68 contributors
 //
 // Four-pixel-per-clock INDEX8 sprite scanline builder. Admission is performed
-// topmost first against the exact 8192-pixel line budget; admitted sprites are
+// topmost first against the sprite-count and pixel budgets; admitted sprites are
 // then rendered bottom-to-top into premultiplied front/behind line planes.
 `timescale 1ns/1ps
 `default_nettype none
@@ -11,7 +11,8 @@ module astra_sprite_line_builder #(
     parameter integer OUTPUT_HEIGHT = 720,
     parameter integer AXI_ID_WIDTH = 6,
     parameter [AXI_ID_WIDTH-1:0] AXI_ID = {AXI_ID_WIDTH{1'b0}},
-    parameter integer PIXEL_BUDGET = 8192,
+    parameter integer PIXEL_BUDGET = 2048,
+    parameter integer MAX_SPRITES_PER_LINE = 16,
     parameter integer MAX_BUILD_CYCLES = 4300
 ) (
     input  wire                         build_clk,
@@ -122,13 +123,15 @@ module astra_sprite_line_builder #(
     localparam [3:0] P_ADDRESS = 4'd2;
     localparam [3:0] P_SETUP = 4'd3;
     localparam [3:0] P_BURST = 4'd4;
-    localparam [3:0] P_RESPONSE = 4'd5;
+    localparam [3:0] P_RECORD = 4'd5;
     localparam [3:0] P_METADATA = 4'd6;
     localparam [3:0] P_ROW_ADDRESS = 4'd7;
     localparam [3:0] P_SOURCE_Y = 4'd8;
     localparam [3:0] P_PUBLISH = 4'd9;
     localparam [3:0] P_LOAD = 4'd10;
     localparam [3:0] P_DIVIDE_LOAD = 4'd11;
+    localparam [3:0] P_METADATA_WAIT = 4'd12;
+    localparam [3:0] P_METADATA_DSP_WAIT = 4'd13;
 
     localparam [2:0] R_IDLE = 3'd0;
     localparam [2:0] R_ISSUE = 3'd1;
@@ -176,7 +179,7 @@ module astra_sprite_line_builder #(
     reg [5:0] admission_sprite_index_q;
     reg admission_candidate_q;
     reg admission_accept_q;
-    (* max_fanout = 128 *) reg admission_write_q;
+    reg admission_write_q;
     reg signed [16:0] admission_x_q;
     reg signed [17:0] admission_right_signed_q;
     reg [10:0] admission_left_q;
@@ -202,10 +205,6 @@ module astra_sprite_line_builder #(
     assign order_read_enable = state == S_ORDER ||
         (state == S_EVALUATE && admission_position_q != 6'd63);
     assign order_read_position = order_position_q;
-    assign descriptor_read_enable = state == S_DESCRIPTOR ||
-        (state == S_ADMIT && admission_position_q != 6'd63);
-    assign descriptor_read_index = order_read_index;
-
     wire signed [16:0] admission_x =
         $signed({descriptor_word1[15], descriptor_word1[15:0]});
     wire signed [16:0] admission_y =
@@ -230,24 +229,22 @@ module astra_sprite_line_builder #(
         $signed({1'b0, admission_left_q}) - admission_x_q;
     wire admission_candidate = admission_enabled_q &&
         admission_line_visible && admission_span_q != 11'd0;
-    wire admission_fits = budget_remaining_q >= admission_span_q;
+    wire admission_fits =
+        admitted_count_q < MAX_SPRITES_PER_LINE &&
+        budget_remaining_q >= admission_span_q;
 
-    (* ram_style = "distributed" *) reg [5:0] list_index [0:63];
-    (* ram_style = "distributed" *) reg [10:0] list_screen_x [0:63];
-    (* ram_style = "distributed" *) reg [10:0] list_span [0:63];
-    (* ram_style = "distributed" *) reg [10:0] list_destination_x [0:63];
-    (* ram_style = "distributed" *) reg [10:0] list_destination_y [0:63];
-    (* ram_style = "distributed" *) reg [31:0] list_base [0:63];
-    (* ram_style = "distributed" *) reg [12:0] list_pitch [0:63];
-    (* ram_style = "distributed" *) reg [7:0] list_source_width [0:63];
-    (* ram_style = "distributed" *) reg [7:0] list_source_height [0:63];
-    (* ram_style = "distributed" *) reg [10:0] list_destination_height [0:63];
-    (* ram_style = "distributed" *) reg [31:0] list_scale_step_x [0:63];
-    (* ram_style = "distributed" *) reg [3:0] list_palette_bank [0:63];
-    (* ram_style = "distributed" *) reg [7:0] list_transparent_index [0:63];
-    (* ram_style = "distributed" *) reg [7:0] list_opacity [0:63];
-    (* ram_style = "distributed" *) reg [3:0] list_flags [0:63];
-    (* ram_style = "distributed" *) reg [63:0] list_compatible [0:63];
+    // The authoritative descriptor already lives in the scene store. Keep
+    // only admission results here and reread the descriptor during preparation
+    // instead of duplicating 214 descriptor bits for every admitted sprite.
+    reg [27:0] list_record_q;
+    wire [27:0] list_write_data = {
+        admission_sprite_index_q,
+        admission_left_q,
+        admission_span_q
+    };
+    wire [5:0] list_record_index = list_record_q[27:22];
+    wire [10:0] list_record_screen_x = list_record_q[21:11];
+    wire [10:0] list_record_span = list_record_q[10:0];
 
     // Four source-row slots let address generation run ahead of DDR response
     // latency. Each 64-bit row memory is replicated four times for four
@@ -274,12 +271,16 @@ module astra_sprite_line_builder #(
     reg [63:0] buffer_compatible [0:3];
 
     reg [3:0] prep_state;
+    reg [5:0] prep_sprite_index_q;
+    assign descriptor_read_enable = state == S_DESCRIPTOR ||
+        (state == S_ADMIT && admission_position_q != 6'd63) ||
+        prep_state == P_METADATA;
+    assign descriptor_read_index = prep_state == P_METADATA ?
+        prep_sprite_index_q : order_read_index;
     reg prep_launch_q;
     reg [6:0] prep_remaining_q;
     reg [5:0] prep_list_position_q;
-    (* keep = "true", max_fanout = 64 *) reg prep_load_q;
     reg [1:0] prep_slot_q;
-    reg [5:0] prep_sprite_index_q;
     reg [10:0] prep_screen_x_q;
     reg [10:0] prep_span_q;
     reg [31:0] prep_base_q;
@@ -304,6 +305,13 @@ module astra_sprite_line_builder #(
     reg [42:0] prep_phase_multiplicand_q;
     reg [42:0] prep_phase_x_q;
     reg [7:0] prep_source_y_q;
+    wire signed [16:0] prep_destination_offset =
+        $signed({1'b0, prep_screen_x_q}) -
+        $signed({descriptor_word1[15], descriptor_word1[15:0]});
+    wire signed [17:0] prep_line_delta =
+        $signed({8'd0, line_y_q}) -
+        $signed({descriptor_word1[31], descriptor_word1[31],
+                 descriptor_word1[31:16]});
     reg [20:0] prep_row_offset_q;
     reg [31:0] prep_row_address_q;
     reg [5:0] prep_beats_remaining_q;
@@ -467,6 +475,55 @@ module astra_sprite_line_builder #(
     wire [7:0] source_stage_index3 = source_stage_reflect_x_q ?
         source_stage_width_q - 8'd1 - source_stage_x3_q :
         source_stage_x3_q;
+
+`ifdef SYNTHESIS
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(6),
+        .ADDR_WIDTH_B(6),
+        .BYTE_WRITE_WIDTH_A(28),
+        .CLOCKING_MODE("common_clock"),
+        .MEMORY_INIT_FILE("none"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(1792),
+        .RAM_DECOMP("area"),
+        .READ_DATA_WIDTH_B(28),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .USE_MEM_INIT(0),
+        .WRITE_DATA_WIDTH_A(28),
+        .WRITE_MODE_B("no_change")
+    ) list_memory_i (
+        .dbiterrb(),
+        .doutb(list_record_q),
+        .sbiterrb(),
+        .addra(admitted_count_q[5:0]),
+        .addrb(prep_list_position_q),
+        .clka(build_clk),
+        .clkb(build_clk),
+        .dina(list_write_data),
+        .ena(admission_write_q),
+        .enb(1'b1),
+        .injectdbiterra(1'b0),
+        .injectsbiterra(1'b0),
+        .regceb(1'b1),
+        .rstb(1'b0),
+        .sleep(1'b0),
+        .wea(admission_write_q)
+    );
+`else
+    reg [27:0] list_memory [0:63];
+
+    always @(posedge build_clk) begin
+        if (admission_write_q)
+            list_memory[admitted_count_q[5:0]] <= list_write_data;
+    end
+
+    always @(posedge build_clk) begin
+        list_record_q <= list_memory[prep_list_position_q];
+    end
+`endif
 
     wire [63:0] row_stage_row_word0 =
         row_rep0[{row_stage_slot_q, row_stage_source_index0_q[6:3]}];
@@ -698,7 +755,8 @@ module astra_sprite_line_builder #(
 
     wire clear_working_line = clear_active_q;
     reg copy_active_q;
-    wire [8:0] working_read_address = copy_active_q ? clear_quad_q :
+    reg [8:0] copy_read_quad_q;
+    wire [8:0] working_read_address = copy_active_q ? copy_read_quad_q :
                                                     palette_stage_quad_q;
 
     wire front0_blend_write = blend_output_valid &&
@@ -1300,7 +1358,6 @@ module astra_sprite_line_builder #(
             buffer_render_busy_q <= 4'd0;
             prep_remaining_q <= 7'd0;
             prep_list_position_q <= 6'd0;
-            prep_load_q <= 1'b0;
             prep_launch_q <= 1'b0;
             prep_slot_q <= 2'd0;
             prep_divider_bit_q <= 5'd0;
@@ -1357,6 +1414,7 @@ module astra_sprite_line_builder #(
             copy_valid_q <= 1'b0;
             copy_quad_q <= 9'd0;
             copy_active_q <= 1'b0;
+            copy_read_quad_q <= 9'd0;
         end else begin
             done <= 1'b0;
             line_complete <= 1'b0;
@@ -1364,7 +1422,6 @@ module astra_sprite_line_builder #(
             copy_valid_q <= 1'b0;
             collision_bank_update_valid_q <= 1'b0;
             admission_write_q <= 1'b0;
-            prep_load_q <= 1'b0;
             row_write_valid_q <= 1'b0;
             response_publish_valid_q <= 1'b0;
             prep_launch_q <= !abort_drain_q && prep_state == P_IDLE &&
@@ -1414,73 +1471,33 @@ module astra_sprite_line_builder #(
                 prep_destination_y_q * prep_source_height_q;
             prep_row_offset_q <= prep_source_y_q * prep_pitch_q;
 
-            if (prep_load_q) begin
-                prep_sprite_index_q <= list_index[prep_list_position_q];
-                prep_screen_x_q <= list_screen_x[prep_list_position_q];
-                prep_span_q <= list_span[prep_list_position_q];
-                prep_base_q <= list_base[prep_list_position_q];
-                prep_pitch_q <= list_pitch[prep_list_position_q];
-                prep_source_width_q <=
-                    list_source_width[prep_list_position_q];
-                prep_source_height_q <=
-                    list_source_height[prep_list_position_q];
-                prep_scale_step_x_q <=
-                    list_scale_step_x[prep_list_position_q];
-                prep_palette_bank_q <=
-                    list_palette_bank[prep_list_position_q];
-                prep_transparent_index_q <=
-                    list_transparent_index[prep_list_position_q];
-                prep_opacity_q <= list_opacity[prep_list_position_q];
-                prep_flags_q <= list_flags[prep_list_position_q];
-                prep_compatible_q <= list_compatible[prep_list_position_q];
-                prep_destination_y_q <=
-                    list_destination_y[prep_list_position_q];
-                prep_phase_multiplier_q <=
-                    list_destination_x[prep_list_position_q];
+            if (prep_state == P_RECORD) begin
+                prep_sprite_index_q <= list_record_index;
+                prep_screen_x_q <= list_record_screen_x;
+                prep_span_q <= list_record_span;
+            end
+
+            if (prep_state == P_METADATA_WAIT) begin
+                prep_base_q <= descriptor_word4;
+                prep_pitch_q <= descriptor_word5[12:0];
+                prep_source_width_q <= descriptor_word2[7:0];
+                prep_source_height_q <= descriptor_word2[15:8];
+                prep_scale_step_x_q <= descriptor_scale_step_x;
+                prep_palette_bank_q <= descriptor_word0[19:16];
+                prep_transparent_index_q <= descriptor_word0[27:20];
+                prep_opacity_q <= descriptor_word2[23:16];
+                prep_flags_q <= descriptor_word0[5:2];
+                prep_compatible_q <= descriptor_collision_compatible;
+                prep_destination_y_q <= prep_line_delta[10:0];
+                prep_phase_multiplier_q <= prep_destination_offset[10:0];
                 prep_phase_multiplicand_q <= {
-                    11'd0, list_scale_step_x[prep_list_position_q]
+                    11'd0, descriptor_scale_step_x
                 };
                 prep_phase_x_q <= 43'd0;
-                prep_y_denominator_q <=
-                    list_destination_height[prep_list_position_q];
+                prep_y_denominator_q <= descriptor_word3[26:16];
                 prep_y_remainder_q <= 12'd0;
                 prep_y_quotient_q <= 18'd0;
                 prep_divider_bit_q <= 5'd17;
-            end
-
-            if (admission_write_q) begin
-                list_index[admitted_count_q[5:0]] <=
-                    admission_sprite_index_q;
-                list_screen_x[admitted_count_q[5:0]] <= admission_left_q;
-                list_span[admitted_count_q[5:0]] <= admission_span_q;
-                list_destination_x[admitted_count_q[5:0]] <=
-                    admission_destination_offset_q;
-                list_destination_y[admitted_count_q[5:0]] <=
-                    admission_line_delta_q;
-                list_base[admitted_count_q[5:0]] <= descriptor_word4;
-                list_pitch[admitted_count_q[5:0]] <= descriptor_word5[12:0];
-                list_source_width[admitted_count_q[5:0]] <=
-                    descriptor_word2[7:0];
-                list_source_height[admitted_count_q[5:0]] <=
-                    descriptor_word2[15:8];
-                list_destination_height[admitted_count_q[5:0]] <=
-                    descriptor_word3[26:16];
-                list_scale_step_x[admitted_count_q[5:0]] <=
-                    descriptor_scale_step_x;
-                list_palette_bank[admitted_count_q[5:0]] <=
-                    descriptor_word0[19:16];
-                list_transparent_index[admitted_count_q[5:0]] <=
-                    descriptor_word0[27:20];
-                list_opacity[admitted_count_q[5:0]] <=
-                    descriptor_word2[23:16];
-                list_flags[admitted_count_q[5:0]] <= {
-                    descriptor_word0[5],
-                    descriptor_word0[4],
-                    descriptor_word0[3],
-                    descriptor_word0[2]
-                };
-                list_compatible[admitted_count_q[5:0]] <=
-                    descriptor_collision_compatible;
             end
 
             // AXI response metadata is staged before accepting data. The
@@ -1577,14 +1594,22 @@ module astra_sprite_line_builder #(
                         prep_arvalid_q <= 1'b0;
                     if (prep_launch_q) begin
                         prep_list_position_q <= prep_remaining_q - 7'd1;
-                        prep_load_q <= 1'b1;
                         prep_state <= P_LOAD;
                     end
                 end
                 P_LOAD: begin
+                    prep_state <= P_RECORD;
+                end
+                P_RECORD: begin
                     prep_state <= P_METADATA;
                 end
                 P_METADATA: begin
+                    prep_state <= P_METADATA_WAIT;
+                end
+                P_METADATA_WAIT: begin
+                    prep_state <= P_METADATA_DSP_WAIT;
+                end
+                P_METADATA_DSP_WAIT: begin
                     prep_state <= P_DIVIDE_LOAD;
                 end
                 P_DIVIDE_LOAD: begin
@@ -1680,34 +1705,37 @@ module astra_sprite_line_builder #(
 
             case (render_state)
                 R_IDLE: begin
+                    // Slot payload may be sampled before its ready bit is
+                    // published; it is not consumed until R_ISSUE. Keeping
+                    // this preload unconditional prevents indexed readiness
+                    // from becoming the payload-register clock enable.
+                    render_sprite_index_q <=
+                        buffer_sprite_index[render_slot_q];
+                    render_screen_x_q <= buffer_screen_x[render_slot_q];
+                    render_pixels_remaining_q <= buffer_span[render_slot_q];
+                    render_source_width_q <=
+                        buffer_source_width[render_slot_q];
+                    render_phase_x_q <= buffer_phase_x[render_slot_q];
+                    render_scale_step1_x_q <=
+                        buffer_scale_step_x[render_slot_q];
+                    render_scale_step2_x_q <=
+                        buffer_scale_step_x[render_slot_q] << 1;
+                    render_scale_step3_x_q <=
+                        buffer_scale_step_x[render_slot_q] +
+                        (buffer_scale_step_x[render_slot_q] << 1);
+                    render_scale_step4_x_q <=
+                        buffer_scale_step_x[render_slot_q] << 2;
+                    render_palette_bank_q <=
+                        buffer_palette_bank[render_slot_q];
+                    render_transparent_index_q <=
+                        buffer_transparent_index[render_slot_q];
+                    render_opacity_q <= buffer_opacity[render_slot_q];
+                    render_flags_q <= buffer_flags[render_slot_q];
                     render_compatible_q <=
                         buffer_compatible[render_slot_q];
+                    render_overlap_q <= 64'd0;
                     if (state == S_RUN && render_remaining_sprites_q != 7'd0 &&
                         buffer_ready_q[render_slot_q]) begin
-                        render_sprite_index_q <=
-                            buffer_sprite_index[render_slot_q];
-                        render_screen_x_q <= buffer_screen_x[render_slot_q];
-                        render_pixels_remaining_q <=
-                            buffer_span[render_slot_q];
-                        render_source_width_q <=
-                            buffer_source_width[render_slot_q];
-                        render_phase_x_q <= buffer_phase_x[render_slot_q];
-                        render_scale_step1_x_q <=
-                            buffer_scale_step_x[render_slot_q];
-                        render_scale_step2_x_q <=
-                            buffer_scale_step_x[render_slot_q] << 1;
-                        render_scale_step3_x_q <=
-                            buffer_scale_step_x[render_slot_q] +
-                            (buffer_scale_step_x[render_slot_q] << 1);
-                        render_scale_step4_x_q <=
-                            buffer_scale_step_x[render_slot_q] << 2;
-                        render_palette_bank_q <=
-                            buffer_palette_bank[render_slot_q];
-                        render_transparent_index_q <=
-                            buffer_transparent_index[render_slot_q];
-                        render_opacity_q <= buffer_opacity[render_slot_q];
-                        render_flags_q <= buffer_flags[render_slot_q];
-                        render_overlap_q <= 64'd0;
                         buffer_ready_q[render_slot_q] <= 1'b0;
                         buffer_render_busy_q[render_slot_q] <= 1'b1;
                         render_state <= R_ISSUE;
@@ -1904,19 +1932,22 @@ module astra_sprite_line_builder #(
                         buffer_fetch_busy_q == 4'd0 &&
                         buffer_render_busy_q == 4'd0 &&
                         !collision_update_busy_q) begin
-                        clear_quad_q <= 9'd0;
                         copy_valid_q <= 1'b0;
-                        copy_active_q <= 1'b1;
                         state <= S_COPY;
                     end
                 end
                 S_COPY: begin
-                    copy_valid_q <= 1'b1;
-                    copy_quad_q <= clear_quad_q;
-                    if (clear_quad_q == QUADS - 1)
-                        state <= S_COPY_DRAIN;
-                    else
-                        clear_quad_q <= clear_quad_q + 9'd1;
+                    if (!copy_active_q) begin
+                        copy_active_q <= 1'b1;
+                        copy_read_quad_q <= 9'd0;
+                    end else begin
+                        copy_valid_q <= 1'b1;
+                        copy_quad_q <= copy_read_quad_q;
+                        if (copy_read_quad_q == QUADS - 1)
+                            state <= S_COPY_DRAIN;
+                        else
+                            copy_read_quad_q <= copy_read_quad_q + 9'd1;
+                    end
                 end
                 S_COPY_DRAIN: begin
                     copy_valid_q <= 1'b0;
@@ -1988,12 +2019,12 @@ module astra_sprite_work_ram #(
     input  wire [ADDRESS_WIDTH-1:0] read_address,
     output reg  [DATA_WIDTH-1:0]    read_data
 );
-    (* ram_style = "block" *) reg [DATA_WIDTH-1:0] memory [0:DEPTH-1];
+    (* ram_style = "block" *) reg [DATA_WIDTH-1:0] working_memory [0:DEPTH-1];
 
     always @(posedge clk) begin
         if (write_enable)
-            memory[write_address] <= write_data;
-        read_data <= memory[read_address];
+            working_memory[write_address] <= write_data;
+        read_data <= working_memory[read_address];
     end
 endmodule
 
@@ -2009,10 +2040,10 @@ module astra_sprite_collision_bank (
     input  wire        rotate_enable,
     input  wire [2:0]  rotate_row,
     input  wire [2:0]  published_read_row,
-    output wire [63:0] published_read_data
+    output reg  [63:0] published_read_data
 );
-    (* ram_style = "distributed" *) reg [63:0] current [0:7];
-    (* ram_style = "distributed" *) reg [63:0] published [0:7];
+    (* ram_style = "block" *) reg [63:0] current [0:7];
+    (* ram_style = "block" *) reg [63:0] published [0:7];
     reg command_valid_q;
     reg command_rotate_q;
     (* keep = "true" *) reg [2:0] command_row_q;
@@ -2027,7 +2058,9 @@ module astra_sprite_collision_bank (
         end
     end
 
-    assign published_read_data = published[published_read_row];
+    always @(posedge clk) begin
+        published_read_data <= published[published_read_row];
+    end
 
     always @(posedge clk) begin
         if (reset) begin

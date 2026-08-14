@@ -36,7 +36,9 @@ _Static_assert(ASTRA_SPRITE_SOURCE_HEIGHT_MAX == 128,
                "sprite source height");
 _Static_assert(ASTRA_SPRITE_DESTINATION_EXTENT_MAX == 1024,
                "sprite destination extent");
-_Static_assert(ASTRA_SPRITE_PIXELS_PER_LINE == 8192,
+_Static_assert(ASTRA_SPRITES_PER_LINE == 16,
+               "sprites per line");
+_Static_assert(ASTRA_SPRITE_PIXELS_PER_LINE == 2048,
                "sprite pixel budget");
 
 static void test_initializers(void)
@@ -66,6 +68,7 @@ static void test_initializers(void)
     CHECK(info.max_sprite_height == 0);
     CHECK(info.max_sprite_pixels_per_line == 0);
     CHECK(info.sprite_palette_bank_count == 0);
+    CHECK(info.max_sprites_per_line == 0);
     CHECK(create_info.size == sizeof(create_info));
     CHECK(surface_info.size == sizeof(surface_info));
     CHECK(paint.size == sizeof(paint) && paint.foreground.alpha == 255);

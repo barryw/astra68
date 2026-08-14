@@ -107,6 +107,8 @@ module astra_render_flood #(
     localparam [5:0] ST_NEIGHBOR_ROW_CLASSIFY = 6'd31;
     localparam [5:0] ST_SEED_ACTIVATE = 6'd32;
     localparam [5:0] ST_ADDRESS_COLUMN = 6'd33;
+    localparam [5:0] ST_NEIGHBOR_CLASSIFY = 6'd34;
+    localparam [5:0] ST_NEIGHBOR_ROW_DECIDE = 6'd35;
 
     localparam [2:0] READ_TARGET = 3'd0;
     localparam [2:0] READ_LEFT = 3'd1;
@@ -127,9 +129,11 @@ module astra_render_flood #(
     (* extract_reset = "no" *) reg signed [16:0] right_bound_q, bottom_bound_q;
     reg signed [16:0] seed_x_q, seed_y_q;
     reg signed [16:0] active_x_q;
+    reg left_scan_exhausted_q;
+    reg right_scan_exhausted_q;
     reg signed [16:0] span_left_q, span_right_q;
     reg signed [16:0] neighbor_x_q, neighbor_y_q;
-    reg neighbor_row_q, neighbor_run_q;
+    reg neighbor_row_q, neighbor_row_in_bounds_q, neighbor_run_q;
     reg seed_admitted_q;
     reg writer_barrier_ready_q;
     reg [31:0] replacement_q, target_q;
@@ -142,11 +146,16 @@ module astra_render_flood #(
     reg [7:0] destination_format_q;
     reg [2:0] destination_bpp_q;
     reg [31:0] workspace_data_offset_q, workspace_capacity_q;
+    reg stack_has_capacity_q;
+    reg stack_nonempty_q;
+    reg neighbor_past_span_q;
     (* extract_reset = "no" *) reg [31:0] stack_count_q;
 
     reg signed [16:0] read_x_q, read_y_q;
     reg [2:0] read_return_q;
-    reg [15:0] row_y_operand_q;
+    // This is an intentional timing boundary. If it is merged back into the
+    // conditionally written read_y_q, Vivado recreates an FSM-driven DSP CE.
+    (* dont_touch = "yes" *) reg [15:0] row_y_operand_q;
     reg [15:0] row_pitch_low_operand_q, row_pitch_high_operand_q;
     reg [31:0] row_low_product_q, row_high_product_q;
     reg [31:0] row_offset_q;
@@ -200,8 +209,7 @@ module astra_render_flood #(
     assign m_axi_arprot = 3'b000;
     assign m_axi_arqos = 4'b0000;
     assign m_axi_arvalid = arvalid_q;
-    assign m_axi_rready = state == ST_READ_RESPONSE ||
-        state == ST_WORKSPACE_RESPONSE;
+    assign m_axi_rready = 1'b1;
 
     task automatic issue_pixel_read;
         input signed [16:0] x;
@@ -215,8 +223,8 @@ module astra_render_flood #(
         end
     endtask
 
-    // Run the arithmetic pipeline unconditionally. Validity advances beside
-    // the data so coordinate and FSM decisions cannot enter DSP enable cones.
+    // Keep the arithmetic pipeline free-running. The registered valid chain
+    // controls when its result is consumed without putting the FSM on DSP CEs.
     always @(posedge clk) begin
         if (reset) begin
             address_valid_q <= 1'b0;
@@ -231,13 +239,16 @@ module astra_render_flood #(
             row_offset_q <= 32'd0;
             column_offset_q <= 32'd0;
         end else begin
+            // Keep the DSP input registers free-running. Gating them lets
+            // synthesis absorb the address FSM into the DSP A/B clock enable.
             row_y_operand_q <= read_y_q[15:0];
             row_pitch_low_operand_q <= destination_pitch_q[15:0];
             row_pitch_high_operand_q <= destination_pitch_q[31:16];
-            row_low_product_q <= row_y_operand_q * row_pitch_low_operand_q;
+            column_offset_q <= read_x_q[15:0] * destination_bpp_q;
+            row_low_product_q <= row_y_operand_q *
+                row_pitch_low_operand_q;
             row_high_product_q <= row_y_operand_q *
                 row_pitch_high_operand_q;
-            column_offset_q <= read_x_q[15:0] * destination_bpp_q;
             row_offset_q <= row_offset_sum;
             address_operand_valid_q <= address_start_q;
             address_valid_q <= address_operand_valid_q;
@@ -269,6 +280,9 @@ module astra_render_flood #(
             target_valid_q <= 1'b0;
             read_is_target_q <= 1'b0;
             read_is_replacement_q <= 1'b0;
+            stack_has_capacity_q <= 1'b0;
+            stack_nonempty_q <= 1'b0;
+            neighbor_past_span_q <= 1'b0;
         end else if (abort && busy && state != ST_ABORT &&
                      state != ST_WRITER_DONE) begin
             pixel_valid <= 1'b0;
@@ -309,6 +323,7 @@ module astra_render_flood #(
                 clip_bottom_q <= clip_bottom;
                 target_valid_q <= 1'b0;
                 stack_count_q <= 32'd0;
+                stack_nonempty_q <= 1'b0;
                 writer_start <= 1'b1;
                 state <= ST_BOUNDS;
             end
@@ -409,22 +424,25 @@ module astra_render_flood #(
                 if (!target_valid_q && read_is_replacement_q) begin
                     state <= ST_FLUSH;
                 end else if (target_valid_q && !read_is_target_q) begin
-                    if (stack_count_q == 32'd0) begin
+                    if (!stack_nonempty_q) begin
                         state <= ST_FLUSH;
                     end else begin
                         stack_count_q <= stack_count_q - 32'd1;
+                        stack_nonempty_q <= stack_count_q != 32'd1;
                         state <= ST_POP;
                     end
                 end else begin
                     span_left_q <= active_x_q;
+                    left_scan_exhausted_q <= active_x_q == left_bound_q;
                     active_x_q <= active_x_q - 17'sd1;
                     state <= ST_LEFT;
                 end
             end
 
             ST_LEFT: begin
-                if (active_x_q < left_bound_q) begin
+                if (left_scan_exhausted_q) begin
                     active_x_q <= seed_x_q;
+                    right_scan_exhausted_q <= seed_x_q >= right_bound_q;
                     state <= ST_RIGHT;
                 end else begin
                     issue_pixel_read(active_x_q, seed_y_q, READ_LEFT);
@@ -434,16 +452,18 @@ module astra_render_flood #(
             ST_LEFT_RESULT: begin
                 if (read_is_target_q) begin
                     span_left_q <= active_x_q;
+                    left_scan_exhausted_q <= active_x_q == left_bound_q;
                     active_x_q <= active_x_q - 17'sd1;
                     state <= ST_LEFT;
                 end else begin
                     active_x_q <= seed_x_q;
+                    right_scan_exhausted_q <= seed_x_q >= right_bound_q;
                     state <= ST_RIGHT;
                 end
             end
 
             ST_RIGHT: begin
-                if (active_x_q >= right_bound_q) begin
+                if (right_scan_exhausted_q) begin
                     span_right_q <= right_bound_q - 17'sd1;
                     neighbor_row_q <= 1'b0;
                     state <= ST_NEIGHBOR_ROW;
@@ -470,6 +490,8 @@ module astra_render_flood #(
                 pixel_valid <= 1'b0;
                 completed_pixels <= completed_pixels + 32'd1;
                 active_x_q <= active_x_q + 17'sd1;
+                right_scan_exhausted_q <=
+                    active_x_q + 17'sd1 >= right_bound_q;
                 state <= ST_RIGHT;
             end
 
@@ -482,8 +504,14 @@ module astra_render_flood #(
             end
 
             ST_NEIGHBOR_ROW_CLASSIFY: begin
-                if (neighbor_y_q < top_bound_q ||
-                    neighbor_y_q >= bottom_bound_q) begin
+                neighbor_row_in_bounds_q <=
+                    neighbor_y_q >= top_bound_q &&
+                    neighbor_y_q < bottom_bound_q;
+                state <= ST_NEIGHBOR_ROW_DECIDE;
+            end
+
+            ST_NEIGHBOR_ROW_DECIDE: begin
+                if (!neighbor_row_in_bounds_q) begin
                     if (neighbor_row_q)
                         state <= ST_BARRIER;
                     else begin
@@ -496,7 +524,14 @@ module astra_render_flood #(
             end
 
             ST_NEIGHBOR: begin
-                if (neighbor_x_q > span_right_q) begin
+                stack_has_capacity_q <=
+                    stack_count_q < workspace_capacity_q;
+                neighbor_past_span_q <= neighbor_x_q > span_right_q;
+                state <= ST_NEIGHBOR_CLASSIFY;
+            end
+
+            ST_NEIGHBOR_CLASSIFY: begin
+                if (neighbor_past_span_q) begin
                     if (neighbor_row_q)
                         state <= ST_BARRIER;
                     else begin
@@ -512,7 +547,7 @@ module astra_render_flood #(
             ST_NEIGHBOR_RESULT: begin
                 if (read_is_target_q && !neighbor_run_q) begin
                     neighbor_run_q <= 1'b1;
-                    if (stack_count_q >= workspace_capacity_q) begin
+                    if (!stack_has_capacity_q) begin
                         state <= ST_OVERFLOW;
                     end else begin
                         state <= ST_PUSH_PREP;
@@ -543,6 +578,7 @@ module astra_render_flood #(
             ST_PUSH: if (pixel_valid && pixel_ready) begin
                 pixel_valid <= 1'b0;
                 stack_count_q <= stack_count_q + 32'd1;
+                stack_nonempty_q <= 1'b1;
                 state <= ST_NEIGHBOR_NEXT;
             end
 
@@ -557,10 +593,11 @@ module astra_render_flood #(
             end
 
             ST_BARRIER_WAIT: if (writer_barrier_done) begin
-                if (stack_count_q == 32'd0) begin
+                if (!stack_nonempty_q) begin
                     state <= ST_FLUSH;
                 end else begin
                     stack_count_q <= stack_count_q - 32'd1;
+                    stack_nonempty_q <= stack_count_q != 32'd1;
                     state <= ST_POP;
                 end
             end
@@ -612,9 +649,12 @@ module astra_render_flood #(
                 state <= ST_SEED;
             end
 
-            ST_FLUSH: if (writer_flush_ready) begin
+            ST_FLUSH: begin
                 writer_flush <= 1'b1;
-                state <= ST_WRITER_DONE;
+                if (writer_flush && writer_flush_ready) begin
+                    writer_flush <= 1'b0;
+                    state <= ST_WRITER_DONE;
+                end
             end
 
             ST_WRITER_DONE: if (writer_done || writer_aborted || writer_error) begin

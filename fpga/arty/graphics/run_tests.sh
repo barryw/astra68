@@ -8,6 +8,23 @@ mkdir -p "$BUILD"
 python3 "$ROOT/fpga/arty/graphics/protocol/generate_protocol.py"
 
 iverilog -g2012 -Wall \
+    -s tb_astra_axi_read_3to1 \
+    -o "$BUILD/tb_astra_axi_read_3to1" \
+    "$ROOT/fpga/arty/graphics/astra_axi_read_3to1.sv" \
+    "$ROOT/fpga/arty/graphics/sim/tb_astra_axi_read_3to1.sv"
+
+vvp "$BUILD/tb_astra_axi_read_3to1"
+
+iverilog -g2012 -Wall \
+    -s tb_astra_front_panel_axi \
+    -o "$BUILD/tb_astra_front_panel_axi" \
+    "$ROOT/fpga/soc/astra_front_panel.sv" \
+    "$ROOT/fpga/arty/rtl/astra_front_panel_axi.sv" \
+    "$ROOT/fpga/arty/rtl/sim/tb_astra_front_panel_axi.sv"
+
+vvp "$BUILD/tb_astra_front_panel_axi"
+
+iverilog -g2012 -Wall \
     -s tb_astra_boot_text_overlay \
     -o "$BUILD/tb_astra_boot_text_overlay" \
     "$ROOT/fpga/arty/graphics/astra_boot_text_overlay.sv" \
@@ -95,9 +112,10 @@ run_sprite_line_builder 1 worst_case
 run_sprite_line_builder 2 overflow
 run_sprite_line_builder 3 slverr
 run_sprite_line_builder 4 deadline
-run_sprite_line_builder 5 collision64
+run_sprite_line_builder 5 collision16
 run_sprite_line_builder 6 split4k
 run_sprite_line_builder 7 variable_dimensions
+run_sprite_line_builder 8 count_limit
 
 iverilog -g2012 -Wall \
     -s tb_astra_pixel_compositor \

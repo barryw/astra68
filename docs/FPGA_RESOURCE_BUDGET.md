@@ -715,6 +715,379 @@ MHz HDMI shift. The bitstream SHA-256 is
 This is retained route and capacity evidence. It becomes a release candidate
 only after repeated SRAM-only ULX3S boots and physical HDMI qualification.
 
+### Arty HDMI audio and front-panel rejected candidate
+
+The complete Route-13 candidate includes every qualified graphics feature,
+true HDMI audio, the 512-frame asynchronous stereo FIFO, and the Arty
+switch/LED front panel. The front panel reuses the shared `PNL0` implementation;
+audio exposes one software-mixed sink rather than speculative per-source RTL.
+
+| Resource | Used | Device percent | Physical free |
+|---|---:|---:|---:|
+| Slice LUTs | 39,839 | 74.89% | 13,361 |
+| Slice registers | 46,308 | 43.52% | 60,092 |
+| Occupied slices | 13,061 | 98.20% | 239 |
+| BRAM36-equivalent tiles | 119 | 85.00% | 21 |
+| DSP48E1 | 83 | 37.73% | 137 |
+
+The design routes every net, but it is rejected at -0.960 ns setup slack
+across 7,239 endpoints. Hold is +0.049 ns and pulse width is +0.538 ns. The
+worst path is the existing copper-to-line-scheduler ready cone; 3.961 ns of
+its 5.649 ns data delay is routing. Route 11 reached -0.011 ns with 214 free
+slices and Route 12 reached -0.042 ns with 210 free slices, confirming that
+the full design has exhausted reliable placement margin.
+
+The audio endpoint itself measures 204 LUTs, 352 registers, and one RAMB36 in
+the routed hierarchy. Product scope now fixes every listed feature; the earlier
+per-engine hierarchy figures are diagnostic evidence, not removal candidates.
+
+### Arty Route-14 AXI fabric reduction
+
+Three one-to-one SmartConnect instances were generic protocol machinery, not
+graphics features. Replacing HP0, HP2, and HP3 with AMD's direct AXI4-to-AXI3
+protocol converter preserves every endpoint and leaves the real three-client
+HP1 arbiter intact. Integrated assertions enforce the converter's 16-beat
+unprotected-mode contract, and the complete graphics regression passes.
+
+| Resource | Route 13 | Route 14 | Delta | Route-14 free |
+|---|---:|---:|---:|---:|
+| Slice LUTs | 39,839 | 37,317 | -2,522 | 15,883 |
+| Slice registers | 46,308 | 43,829 | -2,479 | 62,571 |
+| Occupied slices | 13,061 | 13,004 | -57 | 296 |
+| Unique control sets | 1,236 | 1,076 | -160 | 12,224 |
+| BRAM36-equivalent tiles | 119 | 119 | 0 | 21 |
+| DSP48E1 | 83 | 83 | 0 | 137 |
+
+Route 14 proves a substantial logic reduction but not adequate release margin:
+physical slices remain 97.77% occupied and the exact route fails setup at
+-1.064 ns. The remaining density problem is packing, especially LUTRAM and
+control-set compatibility, rather than raw flip-flop capacity. The candidate
+is retained as measured capacity evidence and is not deployable.
+
+### Arty Route-15 HP1 arbitration reduction
+
+The three scanout clients now share HP1 through a focused Astra read arbiter.
+Distinct rewritten AXI IDs retain independently outstanding and interleaved
+traffic; the PS boundary remains a direct protocol converter and registered
+AXI3 interface. Focused arbitration tests and the complete graphics regression
+pass.
+
+| Resource | Route 14 | Route 15 | Delta | Route-15 free |
+|---|---:|---:|---:|---:|
+| Slice LUTs | 37,317 | 34,528 | -2,789 | 18,672 |
+| Slice registers | 43,829 | 40,121 | -3,708 | 66,279 |
+| Occupied slices | 13,004 | 12,571 | -433 | 729 |
+| Unique control sets | 1,076 | 876 | -200 | 12,424 |
+| BRAM36-equivalent tiles | 119 | 119 | 0 | 21 |
+| DSP48E1 | 83 | 83 | 0 | 137 |
+
+The exact route uses 94.52% of physical slices and connects every net, but it
+is still not deployable: setup fails at -0.967 ns across 7,745 endpoints. The
+worst routed path has moved to the flood renderer, so further timing work must
+target that measured cone rather than AXI arbitration.
+
+Route 16 added `extract_enable="no"` to the flood multiplier pipeline as a
+measured synthesis experiment. Vivado ignored it for the inferred DSP stages:
+resources and routed timing were identical to Route 15. The attribute is not
+retained and creates no resource-budget change.
+
+### Arty Route-17 registered flood arithmetic
+
+The retained structural change drives each inferred flood DSP stage from the
+preceding registered address-valid bit. It removes the prior coordinate/FSM
+enable cone without adding a primitive wrapper or another arithmetic pipeline.
+
+| Resource | Route 15 | Route 17 | Delta | Route-17 free |
+|---|---:|---:|---:|---:|
+| Slice LUTs | 34,528 | 34,522 | -6 | 18,678 |
+| Slice registers | 40,121 | 40,078 | -43 | 66,322 |
+| Occupied slices | 12,571 | 12,496 | -75 | 804 |
+| Unique control sets | 876 | 891 | +15 | 12,409 |
+| BRAM36-equivalent tiles | 119 | 119 | 0 | 21 |
+| DSP48E1 | 83 | 83 | 0 | 137 |
+
+Exact routing uses 93.95% of physical slices and improves WNS by 63 ps, but
+still fails at `-0.904 ns`; the active limiter has moved to HP1 response decode
+and tile-pattern BRAM enable. Route 17 is retained as capacity and timing-path
+evidence, not as a deployable image.
+
+### Arty Route-18 HP1 registered response boundary
+
+HP1's PS-side R channel now uses AMD fully registered mode 1 instead of the
+mode-9 SRL FIFO. AXI throughput and backpressure remain intact; the measured
+SRL clock-to-Q path is removed.
+
+| Resource | Route 17 | Route 18 | Delta | Route-18 free |
+|---|---:|---:|---:|---:|
+| Slice LUTs | 34,522 | 34,279 | -243 | 18,921 |
+| Slice registers | 40,078 | 40,205 | +127 | 66,195 |
+| Occupied slices | 12,496 | 12,584 | +88 | 716 |
+| Unique control sets | 891 | 878 | -13 | 12,422 |
+| BRAM36-equivalent tiles | 119 | 119 | 0 | 21 |
+| DSP48E1 | 83 | 83 | 0 | 137 |
+
+Route 18 cuts aggregate setup debt by 74.7% to `-528.551 ns` and removes the
+HP1 response boundary from critical paths, but still fails WNS at `-0.859 ns`.
+The LUT reduction does not translate into physical-slice savings because the
+fully registered channel changes packing; retain 716 slices as the current
+exact physical headroom and do not count the rejected image as deployable.
+
+### Arty Routes 19-30 measured capacity
+
+Routes 19-28 retain all production features while adding only measured timing
+boundaries. Their exact full-route occupancy stays between 12,497 and 12,646
+of 13,300 slices, with WNS improving as far as `-0.508 ns`; none is
+deployable. Route 29 moves the published sprite-collision history from LUTRAM
+to otherwise-free BRAM and measures:
+
+| Resource | Route 28 | Route 29 | Delta | Route-29 free |
+|---|---:|---:|---:|---:|
+| Slice LUTs | 34,519 | 34,618 | +99 | 18,582 |
+| Slice registers | 40,477 | 40,942 | +465 | 65,458 |
+| Occupied slices | 12,547 | 12,628 | +81 | 672 |
+| Unique control sets | 890 | 882 | -8 | 12,418 |
+| BRAM36-equivalent tiles | 119 | 127 | +8 | 13 |
+| DSP48E1 | 83 | 83 | 0 | 137 |
+
+The BRAM conversion is functionally qualified but Route 29 fails timing at
+`-0.933 ns` because the synchronous BRAM output, bank selector, and AXI read
+decode shared one cycle. Route 30 restores the registered collision-read
+boundary and pipelines collision address/read/commit handling. Its routed
+sprite checkpoint passes 200 MHz at `+0.096 ns`; the exact integrated route
+uses 34,568 LUTs, 41,556 registers, 12,531 slices, 911 control sets, 127
+BRAM36-equivalent tiles, and 83 DSPs. It improves full-route WNS to `-0.438 ns`
+but remains rejected and was not flashed.
+
+Route 31's retained command-engine OOC checkpoint uses 10,650 LUTs, 13,686
+registers, and 29 DSPs and routes at `-0.206 ns`. This is timing-local evidence,
+not an integrated capacity update. The complete graphics regression passes;
+integrated resource authority remains Route 30 until the exact Route 31 full
+route completes.
+
+The exact Route 31 full route uses 34,170 LUTs, 41,714 registers, 12,710 of
+13,300 slices (95.56%), 916 control sets, 127 BRAM36 tiles, and 83 DSPs. It
+connects every net but fails setup at `-0.552 ns`, so these figures replace
+Route 30 as capacity evidence only; they do not describe a deployable image.
+
+The exact Route 32 full route uses 34,199 LUTs, 41,526 registers, 12,540 of
+13,300 slices (94.29%), 895 control sets, 127 BRAM36 tiles, and 83 DSPs. It
+connects every net and reduces setup debt to `-0.298/-64.437 ns` WNS/TNS, but
+remains rejected; these figures are capacity evidence, not a deployable image.
+
+The exact Route 33 full route uses 34,286 LUTs, 41,674 registers, 12,781 of
+13,300 slices (96.10%), 914 control sets, 127 BRAM36 tiles, and 83 DSPs. It
+connects every net and reduces setup debt to `-0.271/-18.549 ns` WNS/TNS, but
+remains rejected. Only 519 physical slices remain, so further timing work must
+prefer removing logic depth or duplicated state over broad register insertion.
+
+The exact Route 34 full route uses 34,390 LUTs, 41,839 registers, 12,749 of
+13,300 slices (95.86%), 911 control sets, 127 BRAM36 tiles, and 83 DSPs. It
+connects every net but regresses setup to `-0.364/-24.525 ns` WNS/TNS and is
+rejected. The 551 free slices remain capacity evidence only; Route 35 keeps
+throughput while adding only the registers required to split the measured
+tile-map validation cone.
+
+The rejected Route 35 route uses 34,433 LUTs, 41,721 registers, 12,634 of
+13,300 slices (94.99%), 918 control sets, 127 BRAM36 tiles, and 83 DSPs. Despite
+more nominal slice headroom, setup regresses to `-0.417/-60.621 ns`; the extra
+response stage is therefore removed rather than counted as retained capacity.
+
+The rejected Route 36 route uses 34,337 LUTs, 41,613 registers, 12,700 of
+13,300 slices (95.49%), 127 BRAM36 tiles, and 83 DSPs. It connects all 69,772
+routable nets, but setup regresses to `-0.480/-385.768 ns` across 3,370
+endpoints. The deleted tile result state is therefore not a timing-closure
+solution; these figures are capacity evidence only and do not describe a
+deployable image.
+
+The rejected Route 37 route uses 33,854 LUTs, 39,917 registers, 12,570 of
+13,300 slices (94.51%), 904 control sets, 128 BRAM36-equivalent tiles, and 83
+DSPs. Removing reset initialization from the pixel FIFO payload eliminates
+1,696 registers and 130 occupied slices relative to Route 36, but synthesis
+spends a whole RAMB36E1 on the 16x64-bit data array. The route improves to
+`-0.396/-39.477 ns` across 477 endpoints but remains rejected; its figures are
+capacity evidence only, not a deployable image.
+
+The rejected Route 38 route directs that 16x64-bit array to distributed RAM.
+It uses 33,914 LUTs, 40,120 registers, 12,609 of 13,300 slices (94.80%), 885
+control sets, 127 BRAM36-equivalent tiles, and 83 DSPs. The exact route reaches
+`-0.368/-84.862 ns` across 1,015 endpoints and remains rejected. Returning the
+BRAM is retained; these figures remain capacity evidence only and do not
+describe a deployable image.
+
+The rejected Route 39 route uses 33,903 LUTs, 40,084 registers, 12,438 of
+13,300 slices (93.52%), 880 control sets, 127 BRAM36-equivalent tiles, and 83
+DSPs. It connects all 68,312 routable nets and reaches `-0.383/-78.332 ns`
+across 722 endpoints. The removed glyph enable cone and 862 free slices are
+retained capacity evidence only; the image is not deployable.
+
+The rejected Route 40 route uses 34,044 LUTs, 40,143 registers, 12,590 of
+13,300 slices (94.66%), 920 control sets, 127 BRAM36-equivalent tiles, and 83
+DSPs. It connects all 68,546 routable nets and improves timing to
+`-0.305/-45.555 ns`, but remains non-deployable. The classification boundary
+is retained; 710 physical slices remain for measured closure work.
+
+The rejected Route 41 no-enable mapping uses 33,999 LUTs, 40,047 registers,
+12,536 of 13,300 slices (94.26%), 907 control sets, 127 BRAM36-equivalent
+tiles, and 83 DSPs. Despite 764 free slices, setup regresses to
+`-0.502/-16.127 ns`; the two mapping attributes are therefore removed and
+these figures are capacity evidence only.
+
+The rejected Route 42 free-running mapping uses 33,998 LUTs, 40,090 registers,
+12,413 of 13,300 slices (93.33%), 895 control sets, 127 BRAM36-equivalent
+tiles, and 83 DSPs. It connects all 68,367 routable nets but reaches only
+`-0.395/-32.417 ns` WNS/TNS. Its 887 free slices are capacity evidence only;
+the free-running glyph change is removed because Route 40 remains 90 ps better.
+
+The rejected Route 43 flood-ready simplification uses 34,024 LUTs, 40,065
+registers, 12,586 of 13,300 slices (94.63%), 896 control sets, 127
+BRAM36-equivalent tiles, and 83 DSPs. It connects all 68,382 routable nets and
+removes the measured HP2 response-enable cone, but remains non-deployable at
+`-0.319/-41.884 ns` WNS/TNS. Its 714 free slices are capacity evidence only.
+
+The rejected Route 44 geometry-classification pipeline uses 33,956 LUTs,
+40,010 registers, 12,511 of 13,300 slices (94.07%), 886 control sets, 127
+BRAM36-equivalent tiles, and 83 DSPs. It connects all 68,253 routable nets and
+improves setup debt to `-0.211/-12.291 ns` across 233 endpoints. The retained
+pipeline simplification returns 75 slices; the 789 free slices are capacity
+evidence only until every production clock closes.
+
+The rejected Route 45 glyph-rounding register bank uses 33,981 LUTs, 40,096
+registers, 12,493 of 13,300 slices (93.93%), 889 control sets, 127
+BRAM36-equivalent tiles, and 83 DSPs. Although it leaves 807 slices free and
+removes the Route 44 glyph critical path, placement regresses to
+`-0.550/-95.201 ns` across 1,131 endpoints. The added registers are removed;
+these figures are capacity evidence only.
+
+The rejected Route 46 shared glyph divide uses 33,969 LUTs, 40,064 registers,
+12,556 of 13,300 slices (94.41%), 883 control sets, 127 BRAM36-equivalent tiles,
+and 83 DSPs. It removes the rounded-divide carry chain without adding storage,
+but reaches only `-0.433/-97.492 ns` across 1,076 endpoints. The change is
+removed. Route 44 remains the best capacity/timing baseline, and further local
+cone edits are not a credible route to production margin.
+
+Route 44 structural analysis explains why nominal LUT/register headroom has not
+translated into routable margin: 2,590 LUTRAMs, 666 SRLs, and 886 control sets
+leave 2,174 register sites unused inside occupied slices while physical slice
+use remains 94.07%. Sprite builder/scene storage accounts for 1,754 LUTRAMs.
+The current capacity target is therefore lower packing pressure with the exact
+feature set, not another isolated timing register. Candidates must demonstrate
+the reduction in exact synthesis reports before entering the five-route maximum
+production campaign.
+
+The retained validator-sharing and tile-metadata checkpoints are the first
+measured reductions under that policy. Exact synthesis after both changes uses
+33,632 LUTs, 39,810 registers, 835 control sets, 129 BRAM36-equivalent tiles,
+and 83 DSPs. Converting the phase-separated tile span/descriptor stores to four
+RAMB18s removes 672 LUTs, including 576 LUTRAMs, while keeping 11 BRAM36 tiles
+free. Each tile builder falls from 1,525 to 1,189 LUTs. Complete regression and
+the 1,347/4,444-cycle worst-case tile deadline pass; those synthesis
+checkpoints spend no production route attempt.
+
+Structural route attempt 1 proves the area gain survives implementation:
+32,874 LUTs and 39,503 registers occupy 12,401/13,300 slices (93.24%), returning
+110 slices relative to Route 44. Timing fails at `-0.680/-141.162 ns` because
+the new span RAMB18 output directly feeds three source-coordinate LUTs. The
+route is rejected, not flashed, and consumes attempt 1/5. The next candidate
+must register the BRAM read data and clear regression/synthesis gates before a
+second route is considered.
+
+The registered-prefetch candidate clears those gates. Exact synthesis uses
+33,624 LUTs, 40,124 registers, 837 control sets, 129 BRAM36-equivalent tiles,
+and 83 DSPs. The added 314 registers and two control sets preserve the 672-LUT
+metadata reduction, and each tile builder remains at 1,185 LUTs. Synthesized
+timing shows the span RAMB18 terminating directly in the prefetch FF bank with
+zero LUT levels and +1.485 ns slack, so structural route attempt 2 is
+authorized without changing the feature set.
+
+Structural route attempt 2 proves the new register boundary and connects all
+67,723 nets, but uses 12,432 slices (93.47%) and fails setup at
+`-0.373/-35.002 ns` across 452 endpoints. The new leader is a routing-dominated
+HP2-response path into the glyph fault-detail clock enable, not the removed
+BRAM cone. The route is rejected and consumes attempt 2/5. No further route is
+authorized until another synthesis checkpoint reduces packing or control
+pressure while preserving the full feature set.
+
+The next synthesis checkpoint clears that gate. Consolidating the sprite
+admission fields into one XPM block-RAM record store yields 33,262 LUTs, 2,457
+LUTRAMs, 40,106 registers, 836 control sets, 132.5 BRAM36-equivalent tiles,
+and 83 DSPs. The XPM maps the exact 64x242 store to one RAMB18 plus three
+RAMB36 primitives; the prior inference attempt was rejected before routing
+because Vivado instead produced 81 RAM64M instances. Full regression passes,
+7.5 BRAM tiles remain free, and structural route attempt 3 is authorized.
+
+Structural route attempt 3 proves that the wide record is the wrong physical
+trade: 32,661 LUTs and 40,079 registers still occupy 12,464 slices (93.71%)
+with 851 control sets and 132.5 BRAM36-equivalent tiles. All nets route, but
+setup regresses to `-0.390/-88.937 ns` across 779 endpoints; hold passes at
+`+0.012 ns`. The route is rejected and consumes attempt 3/5. The next
+candidate must remove duplicated descriptor data from this store and return
+BRAM placement margin before another route is authorized.
+
+The narrow admission-record checkpoint makes that cut. The 64-entry store now
+contains only sprite index, clipped screen X, and span; preparation rereads the
+authoritative descriptor. Exact synthesis uses 33,309 LUTs, 2,457 LUTRAMs,
+40,072 registers, 837 control sets, 129.5 BRAM36-equivalent tiles, and 83
+DSPs. The 64x28 store is exactly one RAMB18, returning three BRAM36-equivalent
+tiles while preserving the LUTRAM reduction. Complete regression passes and
+no production route is spent; campaign use remains 3/5.
+
+The route-4 synthesis gate adds one shared 73-bit elastic register at the
+render-command HP2 response ingress and removes reset wiring from buffered
+payloads whose valid bits are clear. The full design is 33,348 LUTs, 2,457
+LUTRAMs, 40,157 registers, 838 control sets, 129.5 BRAM36-equivalent tiles,
+and 83 DSPs. The boundary adds only 39 LUTs, 85 registers, and one control set
+over the narrow-record checkpoint while isolating all three read engines from
+the routing-dominated raw HP2 metadata cone. Full regression passes; campaign
+use remains 3/5 until route 4 completes.
+
+Structural route attempt 4 uses 32,672 LUTs, including 2,347 LUTRAMs, 40,002
+registers, 12,329/13,300 slices (92.70%), 875 control sets, 129.5
+BRAM36-equivalent tiles, and 83 DSPs. It connects every net but fails setup at
+`-0.639/-476.709 ns` across 3,108 endpoints; hold passes at `+0.012 ns`. The
+new admission RAMB18 output was incorrectly allowed to drive the distributed
+active-descriptor address and scene output register in one cycle. The route is
+rejected, not flashed, and consumes attempt 4/5.
+
+The retained correction adds no storage feature and reuses the existing sprite
+preparation FSM to register that address before the scene read. Full regression
+passes at 3,877/4,300 worst-case build cycles and 3,935 collision cycles. Route
+attempt 5 is authorized by exact synthesis at 33,349 LUTs, 2,457 LUTRAMs,
+40,157 registers, 838 control sets, 129.5 BRAM36-equivalent tiles, and 83 DSPs.
+All six admission-RAM-to-index paths have zero LUT levels and +1.485 ns slack,
+with no direct admission-RAM-to-scene-register path. Consolidating identical
+clone/activation payload capture banks removes duplicated RTL state but no
+net resources because Vivado already merged it. Campaign use remains 4/5 until
+the fifth and final route completes.
+
+Structural route attempt 5 uses 32,657 LUTs, including 2,348 LUTRAMs, 40,049
+registers, 864 control sets, 129.5 BRAM36-equivalent tiles, and 83 DSPs. Every
+net routes, but setup fails at `-0.320/-53.449 ns` across 807 endpoints; hold
+passes at `+0.016 ns`. The admission-memory cone is absent. Render-command
+logic owns 476 failures, led by a replicated command-type-to-writer-flush path
+whose 5.031 ns delay is 82.3% routing. The image is rejected and not flashed.
+Campaign use is 5/5: further routing requires a new measured structural cut,
+not another seed.
+
+The next campaign starts from a measured shared-control cut. Directly combining
+the mutually exclusive render-engine writer pulses removes the Route 5 command-
+type-to-flush path. Complete regression passes. Exact synthesis uses 33,391
+LUTs, 40,140 registers, 838 control sets, 129.5 BRAM36-equivalent tiles, and
+83 DSPs: 17 fewer registers but 42 more LUTs. The relevant netlist gate is
+decisive—zero command-type-to-flush paths remain, and the new worst path into
+that register has +1.572 ns slack. New campaign route use is 0/5.
+
+Writer-control attempt 1 routes every net but fails at `-0.325/-32.435 ns`
+across 409 endpoints. It uses 32,714 LUTs, 40,021 registers, 12,355 slices,
+881 control sets, 129.5 BRAM36-equivalent tiles, and 83 DSPs. That is 37 more
+slices than Route 5, so the candidate is removed after 1/5 rather than rerun.
+
+Removing the five command-classifier `max_fanout=16` attributes reduced exact
+synthesis to 33,289 LUTs, 40,106 registers, and 837 control sets, but exact
+placement regressed to `-0.580/-299.333 ns` across 2,182 endpoints. It used
+12,252 slices and 842 placed control sets; the smaller footprint did not yield
+a viable timing trajectory. The attributes are restored and no route was run,
+so route use remains 0/5.
+
 ## Acceptance rules
 
 1. Architectural behavior and correctness tests pass before area is accepted.
@@ -730,3 +1103,412 @@ only after repeated SRAM-only ULX3S boots and physical HDMI qualification.
    confidence but are not a prerequisite for first hardware bring-up.
 6. Resource reports, timing reports, test provenance, and the exact source
    revision ship together. A successful synthesis alone is not a release gate.
+
+## Compositor structural measurement (2026-08-12)
+
+The global control-set threshold is rejected despite reducing 838 control sets
+to 537: it grows synthesis by 1,106 LUTs, occupies 12,379 slices, and places at
+`-0.492 ns`. A measured hierarchy cut is materially better. The seven-layer
+compositor accounts for 4,217 routed LUTs while using no DSPs. Its full DSP
+mapping reduces the complete design to 29,969 synthesized LUTs and 38,385
+registers and to 11,293 placed slices, but does not pass its timing trajectory
+gate (`-0.718 ns` placement, `-0.716 ns` after Explore physopt), so it is not
+routed.
+
+The initial reset-only measurement's 12 DSPs were stale forced attributes from
+that rejected experiment; its `-0.503 ns` placement is invalid as a zero-DSP
+comparison. Removing them yields 4,378 LUTs, 2,777 registers, 1,550 slices and
+zero DSPs OOC. Full synthesis is 33,493 LUTs, 40,064 registers and 83 DSPs;
+placement is 32,625 LUTs, 39,890 registers and 12,395 slices at
+`-0.311/-203.484 ns`. That saves neither enough area nor timing margin, so the
+reset rewrite is rejected before routing and only the stale-attribute cleanup
+is retained.
+
+## Sprite collision storage measurement (2026-08-13)
+
+Eight 8x64 published collision banks consumed eight RAMB36 tiles. Mapping
+only those banks to distributed RAM passes the full regression and reduces the
+sprite-line OOC block-RAM total from 32.5 to 24.5 tiles. Its exact routed OOC
+cost is 5,091 LUTs and 2,442 slices versus 4,741 and 2,281, with setup/hold
+still passing at `+0.078/+0.028 ns`. The trade is provisional until full
+placement proves that BRAM-column relief outweighs the added slice pressure;
+production route use remains 0/5.
+
+Full placement rejects the LUTRAM trade: 33,695 synthesized LUTs become 32,872
+placed LUTs in 12,425 slices, with `-0.700/-394.231 ns` setup and
+`-0.195/-11.535 ns` hold. The inferred storage also creates collision commit
+nets with roughly 1,200--1,400 loads. The eight banks are restored to block
+RAM; the measured BRAM saving does not justify the timing and routing cost.
+
+The replacement shared only completed-frame publication: eight current-frame
+banks remained parallel, while one 64x64 BRAM absorbed 64 writes during the
+existing 320-cycle clear window. Complete regression passed with unchanged
+collision performance. Sprite-line OOC dropped from 32.5 to 25.5 BRAM tiles,
+kept LUTRAM at 931, used 4,929 LUTs and 2,363 slices, and routed at
+`+0.100/+0.027 ns`.
+
+Full placement rejects that trade too. Synthesis uses 33,509 LUTs, 40,149
+registers, 852 control sets, 122.5 BRAM tiles, and 83 DSPs. Placement uses
+32,577 LUTs, 39,856 registers, 12,420 slices, and 859 control sets, but fails
+at `-1.285/-844.057 ns` across 3,296 setup endpoints and
+`-0.237/-4.229 ns` across 97 hold endpoints. Its leading paths are
+routing-dominated blitter register-to-DSP connections, not collision logic;
+the seven fewer BRAM anchors destabilize DSP locality. The shared publication
+is removed without a production route, leaving campaign use at 0/5.
+
+## Blitter blend-divider measurement (2026-08-13)
+
+The serialized source-over path had one required 8x8 product duplicated into
+a three-DSP multiply/divide chain. Keeping the multiplier in one DSP and
+moving the exact round-to-255 reduction to two 17-bit carry additions reduces
+the routed blitter from 2,668 to 2,644 LUTs, 3,138 to 3,121 registers, and 13
+to 11 DSPs. Setup improves from `+0.010` to `+0.071 ns`; the behavioral test
+remains 5,822 cycles. The collision baseline is also confirmed at 32.5 BRAM
+tiles after restoring its synchronous published-bank read. Integrated
+placement remains the acceptance gate; production route use is 0/5.
+
+## Production integration convergence (2026-08-13)
+
+The current complete feature set uses 81 DSPs after the retained blitter
+divider change. Production route attempt 1/5 connected every net and passed
+hold, but failed setup at `-0.290 ns`; it was not flashed. Subsequent
+structural work removes the measured flood-DSP clock-enable and Copper WAIT
+comparison cones without removing features.
+
+The latest exact placement is `-0.289 ns` with the next leader in framebuffer
+line control. Replacing the counter's wide equality control with two registered
+flags adds two flip-flops, preserves the counter, and passes framebuffer OOC
+route at `+0.244 ns`. Integrated synthesis/placement remains the resource and
+timing admission gate. Production route budget is 1/5.
+
+The registered Copper WAIT candidate was functionally rejected by the
+integrated raster test. Its corrected scheduler/execution split keeps all 16
+Copper RAMB36s and routes Copper OOC at `+0.864 ns`. A direct comparator path
+used the same resources but was rejected at `-0.726 ns` full placement and was
+not routed. No feature or memory has been removed; route use remains 1/5.
+
+The exact split placement was also rejected without routing at
+`-0.460/-0.102 ns`; synthesis had rebuilt the flood bounds-to-DSP-enable cone.
+An intentional operand boundary removes that cone in both OOC and full
+netlists (`AREG=0`, constant `CEA2`) at 33,008 LUTs, 39,122 registers, 129.5
+BRAM tiles, and 81 DSPs. Its placement is `-0.510/-0.193 ns`, led instead by a
+Copper program BRAM output crossing three LUT levels into the held read-data
+register. Removing only that redundant hold mux passes focused tests; Copper
+OOC remains 16 RAMB36s and routes at `+0.762 ns`. It requires a fresh full
+placement gate; route use remains 1/5.
+
+The continuous Copper read does not change full resources and moves exact
+placement setup from `-0.510` to `-0.299 ns`; hold is `-0.261 ns`, so it was
+not routed. Its new leader was duplicated layout validation over render
+command words 12--14. One seven-bit registered word-presence vector now feeds
+that validation, passes the complete command regression, and removes the
+targeted cone in exact OOC routing. Full placement remains the admission gate;
+the feature set is unchanged and route use remains 1/5.
+
+The shared layout facts synthesize at 33,073 LUTs, 39,127 registers, 129.5
+BRAM tiles, and 81 DSPs, but exact placement is `-0.504/-0.186 ns` and is not
+routed. The measured flood active-coordinate comparison is now replaced at
+state decode by one registered exhaustion fact. Behavioral regressions pass
+and the target path is absent from exact OOC routing. Full placement remains
+the admission gate; route use remains 1/5.
+
+The completed five-gate structural campaign retained the full feature set and
+ended without another production route. Its final exact synthesis used 32,843
+LUTs (61.73%), 39,124 registers (36.77%), 129.5 BRAM tiles (92.50%), and 81
+DSPs (36.82%). Placement rejected at `-0.698/-0.393 ns`; 85.5% of the leading
+flood-to-dispatch data delay was routing. The campaign is capped at 5/5, while
+the production route budget remains 1/5.
+
+The new structural cut removes the command processor's redundant two-entry
+pixel dispatch FIFO and reuses the pixel writer's existing registered ingress,
+two-entry staging, and 16-entry write FIFO. Render-command OOC now uses 10,257
+LUTs, 12,014 registers, and 27 DSPs; all 45 command cases pass. Its first OOC
+gate rejects at `-0.285 ns` on an unrelated pre-existing blitter address path,
+so no full placement has been spent. New campaign use is 1/5 OOC and 0/5 full
+placement gates.
+
+The dispatch-removal campaign stopped at 4/5. After removing the measured
+blitter address and glyph-format cones, exact full synthesis used 32,711 LUTs,
+38,971 registers, 129.5 BRAM tiles, and 81 DSPs. Placement improved to
+`-0.404/-0.262 ns` but exposed Copper validation's direct BRAM-output mux, so
+it was not routed.
+
+The following Copper campaign is closed at 5/5. Reusing the existing four-word
+capture stage for validation costs no storage; pipelined program readback adds
+66 registers and 12 LUTs to the exact full synthesis, which measured 32,697
+LUTs, 38,935 registers, 129.5 BRAM tiles, and 81 DSPs. Its intermediate exact
+placement was `-0.285/-0.126 ns`, but is not final-source evidence because
+integration required restoring a post-capture permission state. The retained
+Copper alone uses 595 LUTs, 662 registers, and 16 RAMB36s and routes OOC at
+`+0.838 ns`. No route or flash was produced; the next campaign starts at 0/5.
+
+The closed glyph/ready/blitter campaign's exact full synthesis uses 32,056
+LUTs (60.26%), 38,701 registers (36.37%), 129.5 BRAM tiles (92.50%), and 81
+DSPs (36.82%). Its retained blitter change adds no arithmetic block: both
+blend phases share the existing multiplier and registered `/255` result.
+Placement rejected at `-0.605/-0.184 ns`; the corrected render-command OOC
+block rejects at `-0.227 ns` on completion control. No fifth full gate,
+production route, bitstream, or flash was spent. Production route use remains
+1/5.
+
+The following completion-boundary campaign stopped at 4/5 without a new full
+resource checkpoint. Its retained changes are register/control boundaries,
+not feature cuts. Exact render-command OOC reached `+0.006 ns`; an attempted
+extra DSP operand stage was rejected and reverted when Vivado retained
+`AREG=0`. No capacity, route, bitstream, or hardware claim follows from that
+isolated result.
+
+Capacity work now uses physically constrained reusable checkpoints plus
+incremental full integration. The complete design remains the authority for
+the 129.5-BRAM and 81-DSP placement problem; unconstrained leaf OOC utilization
+and timing are diagnostic only. No feature or reserved resource is removed,
+and production route use remains 1/5.
+
+The closed incremental pilot's final exact route uses 32,115 LUTs (60.37%),
+38,914 registers (36.57%), 129.5 BRAM tiles (92.50%), and 81 DSPs (36.82%).
+All 66,216 routable nets complete with zero errors. The design is therefore
+not rejected for LUT, register, or DSP capacity; BRAM remains the tight static
+resource and local routing remains the timing constraint. Exact timing is
+`-0.283/+0.010 ns`, so the fail-closed build intentionally produced no
+bitstream. No feature or reserved resource was removed.
+
+Zero-slack convergence run 1 retains every feature and measures 32,330 LUTs
+(60.77%), 38,942 registers (36.60%), 129.5 BRAM tiles (92.50%), and 81 DSPs
+(36.82%). All 66,540 routable nets complete, but setup rejects at `-0.582 ns`.
+This is a strategy-control checkpoint, not a capacity failure: plain
+`Performance_Explore` omitted the required post-route physical-optimization
+stage. Campaign use is 1/5 and no bitstream was written.
+
+Zero-slack convergence run 2 retains the full feature set and fully routes
+66,517 nets. Post-route timing is `-0.607/+0.010 ns` with 1,114 failing setup
+endpoints, so the fail-closed gate writes no bitstream. The failure is an HP2
+response-control boundary, not a resource-capacity result. Campaign use is
+2/5.
+
+The run-3 candidate changes only response/control boundaries and adds one
+registered 64-bit spill beat; it removes no feature or reserved resource. Its
+exact OOC diagnostic improves from `-0.303 ns` to `-0.080 ns`, but OOC use is
+not a capacity claim. Full integration campaign use remains 2/5 until run 3
+produces the next exact utilization checkpoint.
+
+Zero-slack convergence run 3 uses 32,325 LUTs (60.76%), 39,001 registers
+(36.66%), 129.5 BRAM tiles (92.50%), and 81 DSPs (36.82%). All 66,760 nets
+route, so capacity is not the rejection cause; setup is `-0.500 ns` while
+hold is `+0.010 ns`. Campaign use is 3/5 and no bitstream was written. The
+run-4 boundary corrections remove no feature or reserved resource.
+
+Zero-slack convergence run 4 retains all features and routes all 66,804 nets
+with zero errors. Setup rejects at `-0.347 ns`; hold passes at `+0.010 ns`.
+BRAM remains 129.5 tiles (92.50%), and Vivado's QoR analysis explicitly marks
+that density as a timing-closure risk while finding no level-5 congestion
+window. Campaign use is 4/5 and no bitstream was written.
+
+Zero-slack convergence run 5 retains every feature while applying Vivado's
+measured QoR resource mapping. BRAM falls to 105 tiles (75.00%); the exact
+synthesis uses 37,471 LUTs (70.43%), 40,547 registers (38.10%), and 81 DSPs
+(36.82%). All 69,178 routable nets complete with zero errors and hold passes at
+`+0.017 ns`, proving that capacity and routing completeness are no longer the
+release blockers. Setup remains `-0.277 ns` across 153 endpoints, dominated by
+sprite clear/copy and working-line memory control, so the fail-closed gate
+writes no bitstream. Campaign use is 5/5. The next campaign begins at 0/5 with
+the full feature and 105-BRAM mapping retained.
+
+Sprite structural gate 1/5 is resource-diagnostic only: the isolated builder
+retains all 37 of its block-RAM primitives and removes no sprite capability.
+It routes completely at `-0.004/+0.028 ns`; its missing top-level clock root
+and the full design's QoR-distributed memory mapping prevent treating that OOC
+count as a new integrated capacity result. No full placement has been spent in
+the new campaign.
+
+Gate 2/5 keeps the same 37 sprite BRAM primitives and passes exact OOC setup at
+`+0.147 ns`. The retained preload change adds no state, storage, or latency;
+the rejected one-cycle load experiment is not in the source. Full regression
+passes, so the next exact full implementation will determine the integrated
+105-BRAM resource checkpoint. Campaign use is 2/5 and no full implementation
+has yet been spent.
+
+Gate 3/5 stopped before synthesis on an incomplete Beast source mirror and
+therefore supplies no resource checkpoint. No feature was removed and no
+bitstream was written. Campaign use is 3/5.
+
+Gate 4/5 retains the complete production feature set and uses 36,664 LUTs
+(68.92%), 40,375 registers (37.95%), 105 BRAM tiles (75.00%), and 81 DSPs
+(36.82%). All 69,166 routable nets complete with zero errors, so capacity and
+route completeness pass; setup alone rejects at `-0.208 ns` while hold passes
+at `+0.010 ns`. The leading measured cost is a long protected blitter register
+net, not feature capacity. Campaign use is 4/5 and no bitstream was written.
+
+Gate 5/5 retains every feature and uses 36,714 LUTs (69.01%), 40,412 registers
+(37.98%), 105 BRAM tiles (75.00%), and 81 DSPs (36.82%). All 69,287 routable
+nets complete with zero errors and hold passes at `+0.013 ns`; setup rejects at
+`-0.191 ns`. The campaign is closed with no bitstream. The next measured
+capacity experiment restores only the eight 512x32 sprite working memories to
+their requested block-RAM mapping. Their expected eight-tile cost leaves 27
+BRAM tiles free; exact synthesis, not that estimate, is the gate.
+
+Working-memory gate 1/5 supplies that exact synthesis result: each of the eight
+320x32 memories uses one RAMB18E1, for four additional BRAM36-equivalent tiles.
+The full design therefore uses 109/140 tiles (77.86%), leaving 31 tiles free.
+The complete feature set and graphics regression remain intact; exact route is
+the next timing and release gate.
+
+Working-memory gate 2/5 confirms the same full routed capacity: 34,303 LUTs
+(64.48%), 40,065 registers (37.66%), 109 BRAM tiles (77.86%), and 81 DSPs
+(36.82%). All 67,466 routable nets complete. Capacity is not the rejection;
+setup is `-0.171 ns` while hold passes at `+0.050 ns`, and no bitstream is
+written.
+
+Working-memory gate 3/5 is diagnostic and changes no reserved memory or feature
+budget. Exact render-command OOC uses 10,461 LUTs, 12,147 registers, and 27
+DSPs; those isolated counts are not a replacement for the gate-2 full-design
+capacity checkpoint.
+
+Working-memory gate 4/5 retains the same 109 BRAM tiles and 81 DSPs, routes all
+67,525 nets, and rejects only setup at `-0.150 ns`; hold is `+0.033 ns`.
+Capacity and route completeness remain passing release gates.
+
+Working-memory gate 5/5 uses 34,390 LUTs (64.64%), 40,108 registers (37.70%),
+109 BRAM tiles (77.86%), and 81 DSPs (36.82%). It routes all 67,539 nets but
+rejects setup at `-0.245 ns`; hold is `+0.005 ns`. The next one-hot glyph-FSM
+experiment changes control encoding, not any reserved feature or memory budget;
+OOC resource deltas are diagnostic until exact full integration.
+
+Glyph-FSM gate 1/5 is OOC-only and supplies no new full capacity claim. Its
+10,306 LUTs, 12,103 registers, and 27 DSPs also prove the one-hot hint had no
+enforceable FSM effect; explicit encoding is the next diagnostic gate.
+
+Glyph-FSM gate 2/5 is also OOC-only and supplies no new full capacity claim.
+Explicit 55-bit one-hot state uses 10,912 LUTs, 12,193 registers, and 27 DSPs,
+but is rejected on timing at `-1.841 ns`. Gate 3 returns to compact RTL and
+tests tool-managed recoding; the last exact full capacity checkpoint remains
+34,390 LUTs, 40,108 registers, 109 BRAM tiles, and 81 DSPs.
+
+Engine-response gate 1/5 is OOC-only and supplies no new full capacity claim.
+It uses 10,311 LUTs, 12,125 registers, and 27 DSPs while proving bounded local
+replication of one response-valid bit. The complete graphics regression passes;
+the last exact full capacity checkpoint remains 34,390 LUTs, 40,108 registers,
+109 BRAM tiles, and 81 DSPs until gate 2 full integration.
+
+Engine-response gate 2/5 supplies the new exact full capacity checkpoint:
+34,294 LUTs (64.46%), 40,168 registers (37.75%), 109 BRAM tiles (77.86%), and
+81 DSPs (36.82%). All 67,615 nets route; capacity is not the rejection cause.
+Setup is `-0.185 ns` while hold passes at `+0.041 ns`. Gate 3 changes enable
+mapping on one existing 32-bit control register and reserves no new feature or
+memory capacity.
+
+Engine-response gate 3/5 is OOC-diagnostic only: 1,544 LUTs, 3,418 registers,
+zero BRAM tiles, and three DSPs. It changes enable mapping on existing control
+registers and supplies no new full capacity claim; gate 2 remains authoritative
+until gate 4 exact integration.
+
+Engine-response gate 4/5 supplies the new exact full capacity checkpoint:
+34,378 LUTs (64.62%), 40,172 registers (37.76%), 109 BRAM tiles (77.86%), and
+81 DSPs (36.82%). All 67,641 nets route and hold passes at `+0.050 ns`; capacity
+is not the rejection cause. Setup regresses to `-0.265 ns`, so the broad
+32-bit enable-mapping experiment is rejected. Gate 5 changes storage mapping
+only for the existing eight-bit tile transparent index and reserves no new
+feature or memory capacity.
+
+Engine-response gate 5/5 OOC uses 1,573 LUTs, 3,418 registers, zero BRAM tiles,
+and three DSPs. This is diagnostic, not a new full capacity claim. It proves
+the eight-bit targeted mapping without reserving memory or removing features;
+gate 4 remains the exact full capacity checkpoint until the authorized final
+production route completes.
+
+Glyph-FSM gate 4/5 was also stopped after synthesis failed its recognition
+gate. It supplies no routed OOC or full-design capacity claim and leaves the
+last exact full capacity checkpoint unchanged.
+
+Glyph-FSM gate 5/5 is stopped after the same synthesis-recognition failure and
+supplies no routed capacity claim. The campaign closes with no bitstream and no
+change to the last exact full checkpoint. The next response-valid replication
+experiment adds no feature or reserved memory and remains OOC-diagnostic until
+full integration.
+
+Glyph-FSM gate 3/5 was stopped after synthesis failed its FSM-recognition gate.
+It supplies no routed OOC or full-design capacity claim and changes no reserved
+feature or memory budget. The last exact full capacity checkpoint remains
+34,390 LUTs, 40,108 registers, 109 BRAM tiles, and 81 DSPs.
+
+Engine-response gate 5/5 exact full use is 34,204 LUTs (64.29%), 40,148
+registers (37.73%), 109 BRAM tiles (77.86%), and 81 DSPs (36.82%). All 67,228
+nets route and hold passes at `+0.012 ns`; capacity is not the rejection cause.
+Setup is `-0.294 ns`, so the split-register experiment is removed and reserves
+no capacity. The retained capacity authority returns to gate 2: 34,294 LUTs,
+40,168 registers, 109 BRAM tiles, and 81 DSPs. The next registered one-bit
+write-select experiment adds no memory or feature reservation and remains
+OOC-diagnostic until exact full integration.
+
+MMIO-predecode gate 1/5 is OOC-diagnostic: 1,517 LUTs, 3,419 registers, zero
+BRAM tiles, and three DSPs. It adds one register while reducing the isolated
+control block by 27 LUTs versus engine-response gate 3 OOC. It reserves no
+memory or feature capacity; engine-response gate 2 remains the authoritative
+full capacity checkpoint until gate 2 exact integration.
+
+MMIO-predecode gate 2/5 is the new exact full capacity checkpoint: 34,141 LUTs
+(64.17%), 40,073 registers (37.66%), 109 BRAM tiles (77.86%), and 81 DSPs
+(36.82%). All 67,080 nets route and hold passes at `+0.017 ns`; capacity and
+route completeness pass. Setup alone rejects at `-0.111 ns`, so no bitstream
+is written. Gate 3 changes only equivalent geometry-opcode decode and reserves
+no feature or memory capacity.
+
+MMIO-predecode gate 3/5 is OOC-diagnostic: 10,374 LUTs, 12,117 registers, zero
+BRAM tiles, and 27 DSPs. It changes no storage or feature budget and proves the
+target geometry path at `+1.821 ns`; gate 2 remains the exact full capacity
+checkpoint until gate 4 integration.
+
+MMIO-predecode gate 4/5 is the new exact full capacity checkpoint: 34,179 LUTs
+(64.25%), 40,159 registers (37.74%), 109 BRAM tiles (77.86%), and 81 DSPs
+(36.82%). All 67,162 nets route and hold passes at `+0.013 ns`; setup alone
+rejects at `-0.101 ns`. Gate 5 reuses the existing Copper validation state and
+adds no storage, feature, or reserved-capacity requirement.
+
+MMIO-predecode gate 5/5 OOC uses 590 LUTs, 662 registers, 16 BRAM tiles, and no
+DSPs. It preserves the established Copper memory allocation and adds no state
+or reserved capacity. Gate 4 remains the exact full capacity checkpoint until
+the final production integration completes.
+
+MMIO-predecode gate 5/5 exact full use is 34,152 LUTs (64.20%), 40,177
+registers (37.76%), 109 BRAM tiles (77.86%), and 81 DSPs (36.82%). All 67,130
+nets route and hold passes at `+0.007 ns`; capacity and route completeness pass.
+Setup rejects at `-0.230 ns`, so no bitstream exists and the campaign closes.
+This becomes the latest exact capacity measurement; gate 4 remains the best
+exact timing checkpoint. The next response-error/glyph-enable experiment adds
+no feature or reserved-memory capacity until exact OOC measurement proves it.
+
+The full-feature 166,666,672 Hz hardware baseline uses 33,409 LUTs (62.80%),
+40,069 registers (37.66%), 109 BRAM tiles (77.86%), and 81 DSPs (36.82%). All
+66,837 nets route with zero errors and both setup (`+0.144 ns`) and hold
+(`+0.019 ns`) pass. No feature or memory reservation changed; the lower LUT
+count is synthesis/placement mapping at the qualified clock point. A valid
+bitstream and XSA exist and are hardware-qualified as build `0x18EBE2E1`.
+
+The retained 16-sprites-per-scanline design keeps all 64 descriptors and caps
+each line at 16 admitted spans plus 2,048 destination pixels. Its final exact
+200 MHz route uses 32,289 LUTs (60.69%), 38,942 registers (36.60%), 129.5 BRAM
+tiles (92.50%), and 81 DSPs (36.82%). All 66,393 nets route with zero errors
+and hold passes at `+0.050 ns`; setup rejects at `-0.152 ns`, so this is a
+capacity measurement only and no bitstream exists. The five-attempt campaign
+is closed. The qualified 166,666,672 Hz checkpoint remains release authority.
+
+## Full-feature 187.5 MHz release candidate (2026-08-14)
+
+The exact 187,500,000 Hz candidate retains the complete production feature
+set and uses the following routed resources:
+
+| Resource | Used | Device percent | Physical free |
+|---|---:|---:|---:|
+| Slice LUTs | 31,957 | 60.07% | 21,243 |
+| Slice registers | 39,070 | 36.72% | 67,330 |
+| Occupied slices | 12,263 | 92.20% | 1,037 |
+| BRAM36-equivalent tiles | 129.5 | 92.50% | 10.5 |
+| DSP48E1 | 81 | 36.82% | 139 |
+
+All 66,520 routable nets connect with zero errors; exact setup/hold slack is
+`+0.173/+0.009 ns` and pulse-width slack is `+0.538 ns`. The implementation
+used a 200 MHz margin target but the shipped PS7 FCLK1, FSBL, device tree, and
+release timing authority are exactly 187.5 MHz. Capacity is therefore closed
+for this candidate. The exact 187.5 MHz image is now the active hardware
+authority after three successful boots and repeated renderer, Copper, sprite,
+and HDMI-audio qualification. No resource figure changed during qualification;
+the two retained fixes affect only ARM-side certification software.

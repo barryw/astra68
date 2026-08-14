@@ -31,6 +31,17 @@ set render_frequency_mhz [format %.6f \
     [expr {$render_frequency_hz / 1000000.0}]]
 set render_frequency_requested_hz $render_frequency_hz
 
+set implementation_frequency_hz $render_frequency_requested_hz
+if {[info exists ::env(ASTRA_ARTY_IMPLEMENT_FREQ_HZ)]} {
+    set implementation_frequency_hz $::env(ASTRA_ARTY_IMPLEMENT_FREQ_HZ)
+}
+if {![string is integer -strict $implementation_frequency_hz] ||
+    $implementation_frequency_hz < $render_frequency_requested_hz ||
+    $implementation_frequency_hz > 200000000} {
+    puts "ASTRA_ARTY_GRAPHICS ERROR invalid implementation frequency: $implementation_frequency_hz"
+    exit 3
+}
+
 file mkdir $out_dir
 create_project -force astra_arty_graphics $project_dir -part $part
 set_property board_part $board [current_project]
@@ -52,6 +63,8 @@ if {[info exists ::env(ASTRA_ARTY_INCREMENTAL_CHECKPOINT)]} {
     }
     set_property INCREMENTAL_CHECKPOINT $incremental_checkpoint \
         [get_runs impl_1]
+    set_property INCREMENTAL_CHECKPOINT.DIRECTIVE TimingClosure \
+        [get_runs impl_1]
 }
 
 set rqs_file ""
@@ -62,7 +75,7 @@ if {[info exists ::env(ASTRA_ARTY_RQS_FILE)]} {
         exit 3
     }
     add_files -fileset utils_1 -norecurse $rqs_file
-    set_property RQS_FILES $rqs_file [get_runs impl_1]
+    set_property RQS_FILES $rqs_file [get_runs {synth_1 impl_1}]
 }
 
 create_bd_design astra_ps
@@ -97,26 +110,29 @@ set_property -dict [list \
 # metadata and timing constraints cannot diverge after quantization.
 set render_frequency_hz [get_property CONFIG.FREQ_HZ \
     [get_bd_pins ps7/FCLK_CLK1]]
+if {$implementation_frequency_hz < $render_frequency_hz} {
+    puts "ASTRA_ARTY_GRAPHICS ERROR implementation frequency is below generated render frequency: $implementation_frequency_hz < $render_frequency_hz"
+    exit 3
+}
+if {$implementation_frequency_hz != $render_frequency_hz} {
+    set_property STEPS.OPT_DESIGN.TCL.PRE \
+        [file join $script_dir apply_implementation_clock.tcl] \
+        [get_runs impl_1]
+}
 
 # UG1145 maps HP0 and HP1 to DDR controller port 3. The 24/8 HPR/LPR
 # partition and 2/15/15 critical levels are AMD's measured low-latency read
 # configuration for that pair; framebuffer and sprite deadlines share it.
 
-# HP0 is reserved for deterministic framebuffer line reads. HP1 accepts one
-# master per tile layer plus the sprite line builder. Each SmartConnect converts
-# the PL AXI4 interface to the PS7 AXI3 HP interface and preserves independent
-# outstanding traffic.
-# A dedicated AXI3 register slice isolates each SmartConnect output from the
-# PS hard boundary. AMD PG247 recommends this when the enabled SmartConnect
-# exit slice alone does not close a residual SI/MI boundary path.
-create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect hp0_smc
+# HP0 is reserved for deterministic framebuffer line reads. A standalone
+# protocol converter is sufficient for each 1x1 HP path; all Astra bursts are
+# at most 16 beats, so unprotected AXI4-to-AXI3 translation needs no splitter.
+create_bd_cell -type ip -vlnv xilinx.com:ip:axi_protocol_converter hp0_conv
 set_property -dict [list \
-    CONFIG.NUM_SI {1} \
-    CONFIG.NUM_MI {1} \
-    CONFIG.ADVANCED_PROPERTIES \
-        {__view__ {timing {M00_Exit {REGSLICE 1}}}} \
-] \
-    [get_bd_cells hp0_smc]
+    CONFIG.SI_PROTOCOL {AXI4} \
+    CONFIG.MI_PROTOCOL {AXI3} \
+    CONFIG.TRANSLATION_MODE {0} \
+] [get_bd_cells hp0_conv]
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_register_slice:2.1 \
     hp0_ps_slice
 set_property -dict [list \
@@ -127,14 +143,12 @@ set_property -dict [list \
     CONFIG.REG_AR {1} \
     CONFIG.REG_R {9} \
 ] [get_bd_cells hp0_ps_slice]
-connect_bd_intf_net [get_bd_intf_pins hp0_smc/M00_AXI] \
+connect_bd_intf_net [get_bd_intf_pins hp0_conv/M_AXI] \
     [get_bd_intf_pins hp0_ps_slice/S_AXI]
 connect_bd_intf_net [get_bd_intf_pins hp0_ps_slice/M_AXI] \
     [get_bd_intf_pins ps7/S_AXI_HP0]
 
-# SmartConnect disables its conditional interface slices in 1x1 mode. Keep an
-# explicit full register slice at the framebuffer-facing edge so response
-# acceptance cannot terminate in SmartConnect's payload FIFO address path.
+# Keep the proven full register slice at the framebuffer-facing edge.
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_register_slice:2.1 \
     hp0_render_slice
 set_property -dict [list \
@@ -147,16 +161,17 @@ set_property -dict [list \
     CONFIG.REG_R {1} \
 ] [get_bd_cells hp0_render_slice]
 connect_bd_intf_net [get_bd_intf_pins hp0_render_slice/M_AXI] \
-    [get_bd_intf_pins hp0_smc/S00_AXI]
+    [get_bd_intf_pins hp0_conv/S_AXI]
 
-create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect hp1_smc
+# Tile and sprite arbitration is implemented by astra_axi_read_3to1 in the
+# top-level RTL. IDs preserve independent outstanding traffic, so this block
+# design only needs the same direct AXI4-to-AXI3 conversion used by HP0.
+create_bd_cell -type ip -vlnv xilinx.com:ip:axi_protocol_converter hp1_conv
 set_property -dict [list \
-    CONFIG.NUM_SI {3} \
-    CONFIG.NUM_MI {1} \
-    CONFIG.ADVANCED_PROPERTIES \
-        {__view__ {timing {M00_Exit {REGSLICE 1}}}} \
-] \
-    [get_bd_cells hp1_smc]
+    CONFIG.SI_PROTOCOL {AXI4} \
+    CONFIG.MI_PROTOCOL {AXI3} \
+    CONFIG.TRANSLATION_MODE {0} \
+] [get_bd_cells hp1_conv]
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_register_slice:2.1 \
     hp1_ps_slice
 set_property -dict [list \
@@ -165,9 +180,9 @@ set_property -dict [list \
     CONFIG.DATA_WIDTH {64} \
     CONFIG.ID_WIDTH {6} \
     CONFIG.REG_AR {1} \
-    CONFIG.REG_R {9} \
+    CONFIG.REG_R {1} \
 ] [get_bd_cells hp1_ps_slice]
-connect_bd_intf_net [get_bd_intf_pins hp1_smc/M00_AXI] \
+connect_bd_intf_net [get_bd_intf_pins hp1_conv/M_AXI] \
     [get_bd_intf_pins hp1_ps_slice/S_AXI]
 connect_bd_intf_net [get_bd_intf_pins hp1_ps_slice/M_AXI] \
     [get_bd_intf_pins ps7/S_AXI_HP1]
@@ -175,14 +190,12 @@ connect_bd_intf_net [get_bd_intf_pins hp1_ps_slice/M_AXI] \
 # HP2 and HP3 are dedicated to the renderer. Keeping reads and writes on
 # separate PS ports avoids coupling command/descriptor/source traffic to
 # destination/completion backpressure.
-create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect hp2_smc
+create_bd_cell -type ip -vlnv xilinx.com:ip:axi_protocol_converter hp2_conv
 set_property -dict [list \
-    CONFIG.NUM_SI {1} \
-    CONFIG.NUM_MI {1} \
-    CONFIG.ADVANCED_PROPERTIES \
-        {__view__ {timing {M00_Exit {REGSLICE 1}}}} \
-] \
-    [get_bd_cells hp2_smc]
+    CONFIG.SI_PROTOCOL {AXI4} \
+    CONFIG.MI_PROTOCOL {AXI3} \
+    CONFIG.TRANSLATION_MODE {0} \
+] [get_bd_cells hp2_conv]
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_register_slice:2.1 \
     hp2_ps_slice
 set_property -dict [list \
@@ -193,14 +206,12 @@ set_property -dict [list \
     CONFIG.REG_AR {1} \
     CONFIG.REG_R {9} \
 ] [get_bd_cells hp2_ps_slice]
-connect_bd_intf_net [get_bd_intf_pins hp2_smc/M00_AXI] \
+connect_bd_intf_net [get_bd_intf_pins hp2_conv/M_AXI] \
     [get_bd_intf_pins hp2_ps_slice/S_AXI]
 connect_bd_intf_net [get_bd_intf_pins hp2_ps_slice/M_AXI] \
     [get_bd_intf_pins ps7/S_AXI_HP2]
 
-# SmartConnect disables its conditional interface slices in 1x1 mode. Keep an
-# explicit full register slice at the renderer-facing edge so command/source
-# request launch cannot terminate in SmartConnect's payload FIFO address path.
+# Keep the proven full register slice at the renderer-facing edge.
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_register_slice:2.1 \
     hp2_render_slice
 set_property -dict [list \
@@ -213,16 +224,14 @@ set_property -dict [list \
     CONFIG.REG_R {1} \
 ] [get_bd_cells hp2_render_slice]
 connect_bd_intf_net [get_bd_intf_pins hp2_render_slice/M_AXI] \
-    [get_bd_intf_pins hp2_smc/S00_AXI]
+    [get_bd_intf_pins hp2_conv/S_AXI]
 
-create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect hp3_smc
+create_bd_cell -type ip -vlnv xilinx.com:ip:axi_protocol_converter hp3_conv
 set_property -dict [list \
-    CONFIG.NUM_SI {1} \
-    CONFIG.NUM_MI {1} \
-    CONFIG.ADVANCED_PROPERTIES \
-        {__view__ {timing {M00_Exit {REGSLICE 1}}}} \
-] \
-    [get_bd_cells hp3_smc]
+    CONFIG.SI_PROTOCOL {AXI4} \
+    CONFIG.MI_PROTOCOL {AXI3} \
+    CONFIG.TRANSLATION_MODE {0} \
+] [get_bd_cells hp3_conv]
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_register_slice:2.1 \
     hp3_ps_slice
 set_property -dict [list \
@@ -234,14 +243,12 @@ set_property -dict [list \
     CONFIG.REG_W {9} \
     CONFIG.REG_B {9} \
 ] [get_bd_cells hp3_ps_slice]
-connect_bd_intf_net [get_bd_intf_pins hp3_smc/M00_AXI] \
+connect_bd_intf_net [get_bd_intf_pins hp3_conv/M_AXI] \
     [get_bd_intf_pins hp3_ps_slice/S_AXI]
 connect_bd_intf_net [get_bd_intf_pins hp3_ps_slice/M_AXI] \
     [get_bd_intf_pins ps7/S_AXI_HP3]
 
-# SmartConnect disables its conditional interface slices in 1x1 mode. Match
-# the HP2 read boundary with a full renderer-facing write slice so response
-# status and write-address paths cannot terminate in SmartConnect internals.
+# Match HP2 with a proven full renderer-facing write slice.
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_register_slice:2.1 \
     hp3_render_slice
 set_property -dict [list \
@@ -255,7 +262,7 @@ set_property -dict [list \
     CONFIG.REG_B {1} \
 ] [get_bd_cells hp3_render_slice]
 connect_bd_intf_net [get_bd_intf_pins hp3_render_slice/M_AXI] \
-    [get_bd_intf_pins hp3_smc/S00_AXI]
+    [get_bd_intf_pins hp3_conv/S_AXI]
 
 # The PS 200 MHz FCLK owns every graphics/control AXI clock. The HP blocks have
 # their own asynchronous bridge into the DDR controller, as specified by UG585.
@@ -265,10 +272,10 @@ foreach pin [list \
     ps7/S_AXI_HP2_ACLK \
     ps7/S_AXI_HP3_ACLK \
     ps7/M_AXI_GP0_ACLK \
-    hp0_smc/aclk \
-    hp1_smc/aclk \
-    hp2_smc/aclk \
-    hp3_smc/aclk \
+    hp0_conv/aclk \
+    hp1_conv/aclk \
+    hp2_conv/aclk \
+    hp3_conv/aclk \
     hp0_ps_slice/aclk \
     hp0_render_slice/aclk \
     hp1_ps_slice/aclk \
@@ -285,13 +292,13 @@ connect_bd_net [get_bd_pins ps7/FCLK_CLK1] \
 connect_bd_net [get_bd_pins ps7/FCLK_RESET1_N] \
     [get_bd_pins graphics_reset/ext_reset_in]
 connect_bd_net [get_bd_pins graphics_reset/interconnect_aresetn] \
-    [get_bd_pins hp0_smc/aresetn]
+    [get_bd_pins hp0_conv/aresetn]
 connect_bd_net [get_bd_pins graphics_reset/interconnect_aresetn] \
-    [get_bd_pins hp1_smc/aresetn]
+    [get_bd_pins hp1_conv/aresetn]
 connect_bd_net [get_bd_pins graphics_reset/interconnect_aresetn] \
-    [get_bd_pins hp2_smc/aresetn]
+    [get_bd_pins hp2_conv/aresetn]
 connect_bd_net [get_bd_pins graphics_reset/interconnect_aresetn] \
-    [get_bd_pins hp3_smc/aresetn]
+    [get_bd_pins hp3_conv/aresetn]
 connect_bd_net [get_bd_pins graphics_reset/interconnect_aresetn] \
     [get_bd_pins hp0_ps_slice/aresetn]
 connect_bd_net [get_bd_pins graphics_reset/interconnect_aresetn] \
@@ -343,12 +350,8 @@ connect_bd_net [get_bd_pins graphics_reset/peripheral_aresetn] \
 
 make_bd_intf_pins_external -name S_AXI_FB \
     [get_bd_intf_pins hp0_render_slice/S_AXI]
-make_bd_intf_pins_external -name S_AXI_TILE0 \
-    [get_bd_intf_pins hp1_smc/S00_AXI]
-make_bd_intf_pins_external -name S_AXI_TILE1 \
-    [get_bd_intf_pins hp1_smc/S01_AXI]
-make_bd_intf_pins_external -name S_AXI_SPRITE \
-    [get_bd_intf_pins hp1_smc/S02_AXI]
+make_bd_intf_pins_external -name S_AXI_SCENE \
+    [get_bd_intf_pins hp1_conv/S_AXI]
 make_bd_intf_pins_external -name S_AXI_RENDER_READ \
     [get_bd_intf_pins hp2_render_slice/S_AXI]
 make_bd_intf_pins_external -name S_AXI_RENDER_WRITE \
@@ -366,7 +369,7 @@ connect_bd_net [get_bd_ports graphics_resetn] \
 create_bd_port -dir I -from 0 -to 0 render_interrupt
 connect_bd_net [get_bd_ports render_interrupt] [get_bd_pins ps7/IRQ_F2P]
 
-set hp_busifs [list S_AXI_FB S_AXI_TILE0 S_AXI_TILE1 S_AXI_SPRITE]
+set hp_busifs [list S_AXI_FB S_AXI_SCENE]
 foreach busif $hp_busifs {
     set_property CONFIG.FREQ_HZ $render_frequency_hz [get_bd_intf_ports $busif]
     set_property CONFIG.DATA_WIDTH {64} [get_bd_intf_ports $busif]
@@ -374,7 +377,7 @@ foreach busif $hp_busifs {
     set_property CONFIG.READ_WRITE_MODE {READ_ONLY} \
         [get_bd_intf_ports $busif]
     # Every scanout engine hard-wires ARSIZE=3 and only emits 64-bit beats.
-    # Accurate endpoint metadata lets SmartConnect omit narrow-burst wrapping.
+    # Accurate endpoint metadata lets the converters omit narrow-burst logic.
     set_property CONFIG.SUPPORTS_NARROW_BURST {0} \
         [get_bd_intf_ports $busif]
 }
@@ -394,7 +397,7 @@ set_property CONFIG.FREQ_HZ $render_frequency_hz [get_bd_intf_ports M_AXI_CTRL]
 set_property CONFIG.FREQ_HZ {100000000} [get_bd_ports fclk_clk0]
 set_property CONFIG.FREQ_HZ $render_frequency_hz [get_bd_ports fclk_clk1]
 set_property CONFIG.ASSOCIATED_BUSIF \
-    {S_AXI_FB:S_AXI_TILE0:S_AXI_TILE1:S_AXI_SPRITE:S_AXI_RENDER_READ:S_AXI_RENDER_WRITE:M_AXI_CTRL} \
+    {S_AXI_FB:S_AXI_SCENE:S_AXI_RENDER_READ:S_AXI_RENDER_WRITE:M_AXI_CTRL} \
     [get_bd_ports fclk_clk1]
 set_property CONFIG.ASSOCIATED_RESET {graphics_resetn} \
     [get_bd_ports fclk_clk1]
@@ -402,12 +405,10 @@ set_property CONFIG.ASSOCIATED_RESET {graphics_resetn} \
 # Both PL readers can address the complete physical DDR aperture. Their RTL
 # independently validates every request against the reserved graphics arena.
 set fb_space [get_bd_addr_spaces -quiet *S_AXI_FB*]
-set tile0_space [get_bd_addr_spaces -quiet *S_AXI_TILE0*]
-set tile1_space [get_bd_addr_spaces -quiet *S_AXI_TILE1*]
-set sprite_space [get_bd_addr_spaces -quiet *S_AXI_SPRITE*]
+set scene_space [get_bd_addr_spaces -quiet *S_AXI_SCENE*]
 set render_read_space [get_bd_addr_spaces -quiet *S_AXI_RENDER_READ*]
 set render_write_space [get_bd_addr_spaces -quiet *S_AXI_RENDER_WRITE*]
-foreach space [list $fb_space $tile0_space $tile1_space $sprite_space \
+foreach space [list $fb_space $scene_space \
                     $render_read_space $render_write_space] {
     if {[llength $space] != 1} {
         puts "ASTRA_ARTY_GRAPHICS ERROR missing external HP address space: $space"
@@ -423,11 +424,9 @@ assign_bd_address -force -target_address_space $render_write_space \
 assign_bd_address -force -target_address_space $fb_space \
     [get_bd_addr_segs ps7/S_AXI_HP0/HP0_DDR_LOWOCM] \
     -range 512M -offset 0x00000000
-foreach space [list $tile0_space $tile1_space $sprite_space] {
-    assign_bd_address -force -target_address_space $space \
-        [get_bd_addr_segs ps7/S_AXI_HP1/HP1_DDR_LOWOCM] \
-        -range 512M -offset 0x00000000
-}
+assign_bd_address -force -target_address_space $scene_space \
+    [get_bd_addr_segs ps7/S_AXI_HP1/HP1_DDR_LOWOCM] \
+    -range 512M -offset 0x00000000
 
 assign_bd_address -target_address_space [get_bd_addr_spaces ps7/Data] \
     [get_bd_addr_segs M_AXI_CTRL/Reg] -range 64K -offset 0x43C00000
@@ -458,6 +457,7 @@ puts $design_report "FCLK0_MHZ=[get_property CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ
 puts $design_report "FCLK1_MHZ=[get_property CONFIG.PCW_FPGA1_PERIPHERAL_FREQMHZ [get_bd_cells ps7]]"
 puts $design_report "RENDER_FREQUENCY_REQUEST_HZ=$render_frequency_requested_hz"
 puts $design_report "RENDER_FREQUENCY_ACTUAL_HZ=$render_frequency_hz"
+puts $design_report "IMPLEMENTATION_FREQUENCY_HZ=$implementation_frequency_hz"
 puts $design_report "DDR_PORT3_HPR=[get_property CONFIG.PCW_DDR_PORT3_HPR_ENABLE [get_bd_cells ps7]]"
 puts $design_report "DDR_HPRLPR_QUEUE=[get_property CONFIG.PCW_DDR_HPRLPR_QUEUE_PARTITION [get_bd_cells ps7]]"
 puts $design_report "DDR_CRITICAL_LEVELS LPR=[get_property CONFIG.PCW_DDR_LPR_TO_CRITICAL_PRIORITY_LEVEL [get_bd_cells ps7]] HPR=[get_property CONFIG.PCW_DDR_HPR_TO_CRITICAL_PRIORITY_LEVEL [get_bd_cells ps7]] WRITE=[get_property CONFIG.PCW_DDR_WRITE_TO_CRITICAL_PRIORITY_LEVEL [get_bd_cells ps7]]"
@@ -465,8 +465,8 @@ puts $design_report "FABRIC_IRQ ENABLE=[get_property CONFIG.PCW_USE_FABRIC_INTER
 puts $design_report "IMPLEMENTATION_STRATEGY=[get_property STRATEGY [get_runs impl_1]]"
 puts $design_report "INCREMENTAL_CHECKPOINT=$incremental_checkpoint"
 puts $design_report "RQS_FILE=$rqs_file"
-foreach smc [list hp0_smc hp1_smc hp2_smc hp3_smc] {
-    puts $design_report "SMARTCONNECT $smc ADVANCED_PROPERTIES=[get_property CONFIG.ADVANCED_PROPERTIES [get_bd_cells $smc]]"
+foreach conv [list hp0_conv hp1_conv hp2_conv hp3_conv] {
+    puts $design_report "PROTOCOL_CONVERTER $conv SI_PROTOCOL=[get_property CONFIG.SI_PROTOCOL [get_bd_cells $conv]] MI_PROTOCOL=[get_property CONFIG.MI_PROTOCOL [get_bd_cells $conv]] TRANSLATION_MODE=[get_property CONFIG.TRANSLATION_MODE [get_bd_cells $conv]]"
 }
 foreach slice [list hp0_ps_slice hp1_ps_slice] {
     puts $design_report "REGISTER_SLICE $slice PROTOCOL=[get_property CONFIG.PROTOCOL [get_bd_cells $slice]] READ_WRITE_MODE=[get_property CONFIG.READ_WRITE_MODE [get_bd_cells $slice]] DATA_WIDTH=[get_property CONFIG.DATA_WIDTH [get_bd_cells $slice]] ID_WIDTH=[get_property CONFIG.ID_WIDTH [get_bd_cells $slice]] REG_AR=[get_property CONFIG.REG_AR [get_bd_cells $slice]] REG_R=[get_property CONFIG.REG_R [get_bd_cells $slice]]"
@@ -483,7 +483,7 @@ foreach port [lsort [get_bd_ports]] {
 foreach intf [lsort [get_bd_intf_ports]] {
     puts $design_report "INTERFACE $intf MODE=[get_property MODE $intf] FREQ_HZ=[get_property CONFIG.FREQ_HZ $intf] SUPPORTS_NARROW_BURST=[get_property CONFIG.SUPPORTS_NARROW_BURST $intf]"
 }
-foreach space [list $fb_space $tile0_space $tile1_space $sprite_space \
+foreach space [list $fb_space $scene_space \
                     $render_read_space $render_write_space] {
     foreach seg [get_bd_addr_segs -of_objects $space] {
         puts $design_report "ADDRESS $space SEG=$seg OFFSET=[get_property OFFSET $seg] RANGE=[get_property RANGE $seg]"
@@ -499,8 +499,12 @@ if {[info exists ::env(ASTRA_ARTY_BD_ONLY)] &&
 }
 
 set graphics_dir [file join $repo_root fpga arty graphics]
+set audio_dir [file join $repo_root fpga arty audio]
 set hdmi_dir [file join $repo_root third_party hdl-util-hdmi]
 add_files -norecurse [list \
+    [file join $audio_dir astra_hdmi_audio.sv] \
+    [file join $repo_root fpga soc astra_front_panel.sv] \
+    [file join $repo_root fpga arty rtl astra_front_panel_axi.sv] \
     [file join $graphics_dir astra_framebuffer_config_validator.sv] \
     [file join $graphics_dir astra_tile_config_validator.sv] \
     [file join $graphics_dir astra_sprite_scene_store.sv] \
@@ -517,6 +521,7 @@ add_files -norecurse [list \
     [file join $graphics_dir astra_pixel_compositor.sv] \
     [file join $graphics_dir astra_boot_text_overlay.sv] \
     [file join $graphics_dir astra_axi_lite_1to2.sv] \
+    [file join $graphics_dir astra_axi_read_3to1.sv] \
     [file join $graphics_dir astra_copper.sv] \
     [file join $graphics_dir astra_copper_control.sv] \
     [file join $graphics_dir astra_copper_beam_scheduler.sv] \
@@ -561,7 +566,36 @@ set_property -name {STEPS.SYNTH_DESIGN.ARGS.MORE OPTIONS} \
 set_property INCREMENTAL_CHECKPOINT "" [get_runs synth_1]
 update_compile_order -fileset sources_1
 
-launch_runs impl_1 -to_step write_bitstream -jobs 8
+if {[info exists ::env(ASTRA_ARTY_SYNTH_ONLY)] &&
+    $::env(ASTRA_ARTY_SYNTH_ONLY) eq "1"} {
+    launch_runs synth_1 -jobs 8
+    wait_on_run synth_1
+    if {[get_property PROGRESS [get_runs synth_1]] ne "100%"} {
+        puts "ASTRA_ARTY_GRAPHICS ERROR synthesis did not complete"
+        puts "STATUS: [get_property STATUS [get_runs synth_1]]"
+        exit 1
+    }
+    open_run synth_1
+    report_utilization -file [file join $out_dir synthesis_utilization.rpt]
+    report_utilization -hierarchical -hierarchical_depth 8 \
+        -file [file join $out_dir synthesis_hierarchical_utilization.rpt]
+    report_control_sets -verbose \
+        -file [file join $out_dir synthesis_control_sets.rpt]
+    write_checkpoint -force \
+        [file join $out_dir astra_arty_graphics_synthesized.dcp]
+    puts "ASTRA_ARTY_GRAPHICS SYNTHESIS PASS"
+    exit 0
+}
+
+# Finish every enabled implementation optimization before creating a
+# bitstream. Strategies with post-route physical optimization expose that as
+# a separate run step; simpler strategies stop at route_design.
+set implementation_gate_step route_design
+if {[get_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.IS_ENABLED \
+        [get_runs impl_1]]} {
+    set implementation_gate_step {phys_opt_design (Post-Route)}
+}
+launch_runs impl_1 -to_step $implementation_gate_step -jobs 8
 wait_on_run impl_1
 if {[get_property PROGRESS [get_runs impl_1]] ne "100%"} {
     puts "ASTRA_ARTY_GRAPHICS ERROR implementation did not complete"
@@ -570,6 +604,14 @@ if {[get_property PROGRESS [get_runs impl_1]] ne "100%"} {
 }
 
 open_run impl_1
+if {$implementation_frequency_hz != $render_frequency_hz} {
+    set render_clock [get_clocks clk_fpga_1]
+    set render_clock_source [get_pins [get_property SOURCE_PINS $render_clock]]
+    set render_period_ns [expr {1000000000.0 / $render_frequency_hz}]
+    create_clock -name clk_fpga_1 -period $render_period_ns \
+        $render_clock_source
+    puts "ASTRA_ARTY_GRAPHICS restored render clock period_ns=[get_property PERIOD [get_clocks clk_fpga_1]]"
+}
 report_timing_summary -delay_type min_max -max_paths 50 \
     -file [file join $out_dir timing_summary.rpt]
 report_utilization -file [file join $out_dir utilization.rpt]
@@ -581,24 +623,56 @@ report_clock_interaction -delay_type min_max \
 report_cdc -details -file [file join $out_dir cdc.rpt]
 write_checkpoint -force [file join $out_dir astra_arty_graphics_routed.dcp]
 
+if {$incremental_checkpoint ne ""} {
+    if {[catch {
+        report_incremental_reuse -file \
+            [file join $out_dir incremental_reuse.rpt]
+    } incremental_error]} {
+        puts "ASTRA_ARTY_GRAPHICS ERROR incremental reuse report failed: $incremental_error"
+        exit 3
+    }
+}
+
+set route_report [report_route_status -return_string]
+if {![regexp {# of routable nets[.]+[[:space:]]*:[[:space:]]*([0-9]+)} \
+        $route_report -> routable_nets] ||
+    ![regexp {# of fully routed nets[.]+[[:space:]]*:[[:space:]]*([0-9]+)} \
+        $route_report -> routed_nets] ||
+    ![regexp {# of nets with routing errors[.]+[[:space:]]*:[[:space:]]*([0-9]+)} \
+        $route_report -> route_errors]} {
+    puts "ASTRA_ARTY_GRAPHICS ERROR unable to parse route status"
+    exit 3
+}
+
+set setup_path [get_timing_paths -quiet -delay_type max -max_paths 1]
+set hold_path [get_timing_paths -quiet -delay_type min -max_paths 1]
+if {[llength $setup_path] != 1 || [llength $hold_path] != 1} {
+    puts "ASTRA_ARTY_GRAPHICS ERROR missing constrained setup/hold paths"
+    exit 3
+}
+set setup_slack [get_property SLACK $setup_path]
+set hold_slack [get_property SLACK $hold_path]
+puts "ASTRA_ARTY_GRAPHICS GATE routable=$routable_nets routed=$routed_nets errors=$route_errors setup_slack_ns=$setup_slack hold_slack_ns=$hold_slack"
+if {$routable_nets != $routed_nets || $route_errors != 0 ||
+    $setup_slack < 0.0 || $hold_slack < 0.0} {
+    puts "ASTRA_ARTY_GRAPHICS REJECTED: no bitstream written"
+    exit 2
+}
+
+close_design
+launch_runs impl_1 -to_step write_bitstream -jobs 8
+wait_on_run impl_1
+if {[get_property PROGRESS [get_runs impl_1]] ne "100%"} {
+    puts "ASTRA_ARTY_GRAPHICS ERROR bitstream generation did not complete"
+    puts "STATUS: [get_property STATUS [get_runs impl_1]]"
+    exit 1
+}
+
 set bit_file [lindex [glob [file join $project_dir astra_arty_graphics.runs impl_1 *.bit]] 0]
 file copy -force $bit_file [file join $out_dir astra_arty_graphics.bit]
 write_hw_platform -fixed -include_bit -force \
     [file join $out_dir astra_arty_graphics.xsa]
 
-set worst_setup [get_timing_paths -quiet -delay_type max -max_paths 1 -nworst 1]
-set worst_hold [get_timing_paths -quiet -delay_type min -max_paths 1 -nworst 1]
-if {[llength $worst_setup] == 0 || [llength $worst_hold] == 0} {
-    puts "ASTRA_ARTY_GRAPHICS ERROR timing paths are missing"
-    exit 2
-}
-set setup_slack [get_property SLACK $worst_setup]
-set hold_slack [get_property SLACK $worst_hold]
 puts "ASTRA_ARTY_GRAPHICS setup_slack_ns=$setup_slack hold_slack_ns=$hold_slack"
-if {$setup_slack < 0.0 || $hold_slack < 0.0} {
-    puts "ASTRA_ARTY_GRAPHICS ERROR routed timing failed"
-    exit 2
-}
-
 puts "ASTRA_ARTY_GRAPHICS PASS bitstream=[file join $out_dir astra_arty_graphics.bit]"
 exit 0

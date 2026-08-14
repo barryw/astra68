@@ -527,6 +527,8 @@ def cached_ls_cycle_gate(qemu, rom, image, temporary, boot_deadline,
         if not machine.wait_for_serial(BOOT_MARKER, boot_deadline) or \
                 machine.wait_for_screen("Astra 68", command_deadline) is None:
             print("FAIL: cached-ls cycle probe did not boot")
+            for line in machine.log[-30:]:
+                print("    %s" % line)
             return False
         machine.qmp.type_line("cd commands:")
         if machine.wait_for_screen("COMMANDS:>", command_deadline) is None:

@@ -89,12 +89,13 @@ module astra_render_pixel_writer #(
     reg [7:0] pixel_stage_strobes [0:1];
     reg [1:0] pixel_stage_count;
     reg ingress_valid;
-    reg [31:0] ingress_address;
-    reg [63:0] ingress_data;
-    reg [7:0] ingress_strobes;
+    reg [31:0] ingress_pixel_address;
+    reg [7:0] ingress_pixel_format;
+    reg [31:0] ingress_pixel_value;
     reg flush_pending;
     reg barrier_pending;
     reg abort_pending;
+    reg start_q;
 
     reg fifo_stage_valid;
     reg [31:0] fifo_stage_address;
@@ -102,6 +103,7 @@ module astra_render_pixel_writer #(
     reg [7:0] fifo_stage_strobes;
 
     reg [31:0] fifo_address [0:FIFO_DEPTH-1];
+    (* ram_style = "distributed" *)
     reg [63:0] fifo_data [0:FIFO_DEPTH-1];
     reg [7:0] fifo_strobes [0:FIFO_DEPTH-1];
     reg [FIFO_POINTER_WIDTH-1:0] fifo_write_pointer;
@@ -116,32 +118,36 @@ module astra_render_pixel_writer #(
     reg [7:0] issue_strobes;
     reg [OUTSTANDING_WIDTH-1:0] outstanding_count;
 
-    reg [7:0] incoming_strobes;
-    reg [63:0] incoming_data;
-    wire [31:0] incoming_beat_address =
-        {pixel_address[31:3], 3'b000};
+    reg [7:0] ingress_strobes;
+    reg [63:0] ingress_data;
+    wire [31:0] ingress_beat_address =
+        {ingress_pixel_address[31:3], 3'b000};
 
     always @* begin
-        incoming_strobes = 8'd0;
-        incoming_data = 64'd0;
-        case (pixel_format)
+        ingress_strobes = 8'd0;
+        ingress_data = 64'd0;
+        case (ingress_pixel_format)
             `ASTRA_RENDER_FORMAT_INDEX8: begin
-                incoming_strobes = 8'b00000001 << pixel_address[2:0];
-                incoming_data = {56'd0, pixel_value[7:0]} <<
-                                (pixel_address[2:0] * 8);
+                ingress_strobes =
+                    8'b00000001 << ingress_pixel_address[2:0];
+                ingress_data = {56'd0, ingress_pixel_value[7:0]} <<
+                               (ingress_pixel_address[2:0] * 8);
             end
             `ASTRA_RENDER_FORMAT_RGB565: begin
-                incoming_strobes = 8'b00000011 << pixel_address[2:0];
-                incoming_data = {48'd0, pixel_value[7:0],
-                                  pixel_value[15:8]} <<
-                                (pixel_address[2:0] * 8);
+                ingress_strobes =
+                    8'b00000011 << ingress_pixel_address[2:0];
+                ingress_data = {48'd0, ingress_pixel_value[7:0],
+                                 ingress_pixel_value[15:8]} <<
+                               (ingress_pixel_address[2:0] * 8);
             end
             default: begin
-                incoming_strobes = 8'b00001111 << pixel_address[2:0];
-                incoming_data = {32'd0, pixel_value[7:0],
-                                  pixel_value[15:8], pixel_value[23:16],
-                                  pixel_value[31:24]} <<
-                                (pixel_address[2:0] * 8);
+                ingress_strobes =
+                    8'b00001111 << ingress_pixel_address[2:0];
+                ingress_data = {32'd0, ingress_pixel_value[7:0],
+                                 ingress_pixel_value[15:8],
+                                 ingress_pixel_value[23:16],
+                                 ingress_pixel_value[31:24]} <<
+                               (ingress_pixel_address[2:0] * 8);
             end
         endcase
     end
@@ -178,9 +184,11 @@ module astra_render_pixel_writer #(
     wire pixel_stage_ready = pixel_stage_count != 2'd2;
     wire ingress_drain = ingress_valid && busy && !flush_pending &&
         !barrier_pending && !abort_pending && pixel_stage_ready;
-    wire ingress_ready = !ingress_valid || ingress_drain;
-    assign pixel_ready = busy && !flush_pending && !barrier_pending &&
-        !abort_pending && ingress_ready;
+    wire ingress_ready = !ingress_valid || (busy && pixel_stage_ready);
+    // Producers stop VALID before flush/barrier/abort. Keep READY describing
+    // only registered ingress capacity so writer policy cannot feed back into
+    // every renderer FSM's state decode.
+    assign pixel_ready = busy && ingress_ready;
     wire ingress_accept = pixel_valid && pixel_ready;
     wire pixel_accept = ingress_drain;
     assign flush_ready = busy && !flush_pending && !barrier_pending &&
@@ -217,7 +225,6 @@ module astra_render_pixel_writer #(
     assign m_axi_wvalid = issue_valid && !issue_w_sent;
     assign m_axi_bready = busy;
 
-    integer index;
     always @(posedge clk) begin
         if (reset) begin
             pack_valid <= 1'b0;
@@ -232,12 +239,13 @@ module astra_render_pixel_writer #(
             pixel_stage_strobes[1] <= 8'd0;
             pixel_stage_count <= 2'd0;
             ingress_valid <= 1'b0;
-            ingress_address <= 32'd0;
-            ingress_data <= 64'd0;
-            ingress_strobes <= 8'd0;
+            ingress_pixel_address <= 32'd0;
+            ingress_pixel_format <= 8'd0;
+            ingress_pixel_value <= 32'd0;
             flush_pending <= 1'b0;
             barrier_pending <= 1'b0;
             abort_pending <= 1'b0;
+            start_q <= 1'b0;
             fifo_stage_valid <= 1'b0;
             fifo_stage_address <= 32'd0;
             fifo_stage_data <= 64'd0;
@@ -260,16 +268,12 @@ module astra_render_pixel_writer #(
             fault_detail <= 32'd0;
             pixels_accepted <= 32'd0;
             bytes_written <= 32'd0;
-            for (index = 0; index < FIFO_DEPTH; index = index + 1) begin
-                fifo_address[index] <= 32'd0;
-                fifo_data[index] <= 64'd0;
-                fifo_strobes[index] <= 8'd0;
-            end
         end else begin
             done <= 1'b0;
             barrier_done <= 1'b0;
+            start_q <= start;
 
-            if (start && !busy) begin
+            if (start_q && !busy) begin
                 pack_valid <= 1'b0;
                 pack_strobes <= 8'd0;
                 pixel_stage_count <= 2'd0;
@@ -344,9 +348,9 @@ module astra_render_pixel_writer #(
 
                     if (ingress_accept) begin
                         ingress_valid <= 1'b1;
-                        ingress_address <= incoming_beat_address;
-                        ingress_data <= incoming_data;
-                        ingress_strobes <= incoming_strobes;
+                        ingress_pixel_address <= pixel_address;
+                        ingress_pixel_format <= pixel_format;
+                        ingress_pixel_value <= pixel_value;
                     end else if (ingress_drain) begin
                         ingress_valid <= 1'b0;
                     end
@@ -355,12 +359,12 @@ module astra_render_pixel_writer #(
                         2'b10: begin
                             if (pixel_stage_count == 2'd0) begin
                                 pixel_stage_address[0] <=
-                                    ingress_address;
+                                    ingress_beat_address;
                                 pixel_stage_data[0] <= ingress_data;
                                 pixel_stage_strobes[0] <= ingress_strobes;
                             end else begin
                                 pixel_stage_address[1] <=
-                                    ingress_address;
+                                    ingress_beat_address;
                                 pixel_stage_data[1] <= ingress_data;
                                 pixel_stage_strobes[1] <= ingress_strobes;
                             end
@@ -379,7 +383,7 @@ module astra_render_pixel_writer #(
                         2'b11: begin
                             if (pixel_stage_count == 2'd1) begin
                                 pixel_stage_address[0] <=
-                                    ingress_address;
+                                    ingress_beat_address;
                                 pixel_stage_data[0] <= ingress_data;
                                 pixel_stage_strobes[0] <= ingress_strobes;
                             end else begin
@@ -389,7 +393,7 @@ module astra_render_pixel_writer #(
                                 pixel_stage_strobes[0] <=
                                     pixel_stage_strobes[1];
                                 pixel_stage_address[1] <=
-                                    ingress_address;
+                                    ingress_beat_address;
                                 pixel_stage_data[1] <= ingress_data;
                                 pixel_stage_strobes[1] <= ingress_strobes;
                             end

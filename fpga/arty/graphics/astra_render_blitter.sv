@@ -170,6 +170,11 @@ module astra_render_blitter #(
     localparam [6:0] ST_NEXT_ROW_SOURCE_OPERANDS = 7'd75;
     localparam [6:0] ST_MASK_DISPATCH = 7'd76;
     localparam [6:0] ST_PLAN_COMMAND_VALIDATE = 7'd77;
+    localparam [6:0] ST_BLEND_OUTPUT = 7'd78;
+    localparam [6:0] ST_PALETTE_OUTPUT = 7'd79;
+    localparam [6:0] ST_NEXT_SOURCE_OFFSET = 7'd80;
+    localparam [6:0] ST_SOURCE_ADDRESS_COMMIT = 7'd81;
+    localparam [6:0] ST_BLEND_DIVIDE_FINISH = 7'd82;
 
     function automatic signed [17:0] signed_max18(
         input signed [17:0] left,
@@ -246,15 +251,6 @@ module astra_render_blitter #(
         end
     endfunction
 
-    function automatic [7:0] divide_255_round16(input [15:0] numerator);
-        reg [16:0] adjusted;
-        begin
-            adjusted = {1'b0, numerator} + 17'd128;
-            divide_255_round16 =
-                (adjusted + (adjusted >> 8)) >> 8;
-        end
-    endfunction
-
     function automatic [7:0] argb_channel(
         input [31:0] argb,
         input [1:0] channel
@@ -311,6 +307,7 @@ module astra_render_blitter #(
     reg abort_pending;
     reg is_fill_q;
     reg is_blit_q;
+    reg direct_copy_q;
     reg same_surface_q;
     reg [31:0] arena_base_q;
     reg signed [15:0] clip_left_q;
@@ -327,6 +324,9 @@ module astra_render_blitter #(
     reg [15:0] command_height_q;
     reg [15:0] command_flags_q;
     reg [31:0] options_q;
+    reg blit_no_flags_q;
+    reg blit_same_format_q;
+    reg blit_same_dimensions_q;
     reg blit_dimensions_valid_q;
     reg [16:0] source_end_x_q;
     reg [16:0] source_end_y_q;
@@ -476,7 +476,7 @@ module astra_render_blitter #(
     reg [47:0] destination_row_address_q;
     reg [47:0] source_row_address_q;
     reg [31:0] destination_pixel_address_q;
-    reg [31:0] source_pixel_address_q;
+    (* extract_enable = "no" *) reg [31:0] source_pixel_address_q;
     reg [15:0] columns_remaining_q;
     reg [15:0] rows_remaining_q;
     reg [17:0] endpoint_byte_offset_q;
@@ -500,6 +500,8 @@ module astra_render_blitter #(
     reg source_arvalid;
     reg [31:0] source_araddr;
     reg [31:0] source_pixel_q;
+    reg [31:0] source_pixel_address_load_q;
+    reg source_address_starts_writer_q;
     reg [31:0] source_argb_q;
     reg source_key_matches_q;
     reg [31:0] destination_pixel_q;
@@ -513,7 +515,11 @@ module astra_render_blitter #(
     (* keep = "true", max_fanout = 1 *) reg [7:0] blend_multiplier_q;
     reg blend_destination_phase_q;
     (* use_dsp = "yes" *) reg [15:0] blend_product_q;
-    (* dont_touch = "yes" *) reg [7:0] blend_divided_q;
+    reg [16:0] blend_divide_adjusted_q;
+    (* keep = "true", max_fanout = 1 *) reg [7:0] blend_divided_q;
+    (* use_dsp = "no" *) wire [16:0] blend_divide_folded =
+        blend_divide_adjusted_q + {9'd0, blend_divide_adjusted_q[16:8]};
+    wire [7:0] blend_product_divided = blend_divide_folded[15:8];
     wire [31:0] required_source_beat =
         {source_pixel_address_q[31:3], 3'b000};
     wire [2:0] source_lane = source_pixel_address_q[2:0];
@@ -535,10 +541,6 @@ module astra_render_blitter #(
             source_pixel_q :
             pack_destination_pixel(destination_format_q,
                                    expanded_registered_source_argb);
-    wire direct_copy = is_blit_q && command_flags_q == 16'd0 &&
-        source_format_q == destination_format_q &&
-        source_command_width_q == command_width_q &&
-        source_command_height_q == command_height_q;
     wire source_key_matches =
         source_format_q == `ASTRA_RENDER_FORMAT_INDEX8 ?
             source_pixel_q[7:0] == options_q[7:0] :
@@ -638,6 +640,7 @@ module astra_render_blitter #(
             abort_pending <= 1'b0;
             is_fill_q <= 1'b0;
             is_blit_q <= 1'b0;
+            direct_copy_q <= 1'b0;
             same_surface_q <= 1'b0;
             arena_base_q <= 32'd0;
             clip_left_q <= 16'sd0;
@@ -654,6 +657,9 @@ module astra_render_blitter #(
             command_height_q <= 16'd0;
             command_flags_q <= 16'd0;
             options_q <= 32'd0;
+            blit_no_flags_q <= 1'b0;
+            blit_same_format_q <= 1'b0;
+            blit_same_dimensions_q <= 1'b0;
             plan_command_valid_q <= 1'b0;
             blit_dimensions_valid_q <= 1'b0;
             source_end_x_q <= 17'd0;
@@ -766,7 +772,6 @@ module astra_render_blitter #(
             destination_row_address_q <= 48'd0;
             source_row_address_q <= 48'd0;
             destination_pixel_address_q <= 32'd0;
-            source_pixel_address_q <= 32'd0;
             columns_remaining_q <= 16'd0;
             rows_remaining_q <= 16'd0;
             endpoint_byte_offset_q <= 18'd0;
@@ -789,6 +794,8 @@ module astra_render_blitter #(
             source_arvalid <= 1'b0;
             source_araddr <= 32'd0;
             source_pixel_q <= 32'd0;
+            source_pixel_address_load_q <= 32'd0;
+            source_address_starts_writer_q <= 1'b0;
             source_argb_q <= 32'd0;
             source_key_matches_q <= 1'b0;
             destination_pixel_q <= 32'd0;
@@ -802,6 +809,7 @@ module astra_render_blitter #(
             blend_multiplier_q <= 8'd0;
             blend_destination_phase_q <= 1'b0;
             blend_product_q <= 16'd0;
+            blend_divide_adjusted_q <= 17'd0;
             blend_divided_q <= 8'd0;
             busy <= 1'b0;
             done <= 1'b0;
@@ -847,6 +855,12 @@ module astra_render_blitter #(
                         command_height_q <= destination_height;
                         command_flags_q <= command_flags;
                         options_q <= options;
+                        blit_no_flags_q <= command_flags == 16'd0;
+                        blit_same_format_q <=
+                            source_format == destination_format;
+                        blit_same_dimensions_q <=
+                            source_width == destination_width &&
+                            source_height == destination_height;
                         destination_data_offset_q <=
                             destination_data_offset;
                         destination_pitch_q <= destination_pitch;
@@ -892,6 +906,8 @@ module astra_render_blitter #(
                     plan_command_valid_q <= (is_fill_q || is_blit_q) &&
                         command_width_q != 16'd0 &&
                         command_height_q != 16'd0;
+                    direct_copy_q <= is_blit_q && blit_no_flags_q &&
+                        blit_same_format_q && blit_same_dimensions_q;
                     state <= ST_PLAN_COMMAND_VALIDATE;
                 end
 
@@ -1007,11 +1023,10 @@ module astra_render_blitter #(
                           auxiliary_surface_height_q == 16'd0);
                     blit_overlap_contract_q <=
                         !same_surface_q ||
-                         (source_format_q == destination_format_q &&
+                         (blit_same_format_q &&
                           source_bpp_q == destination_bpp_q &&
-                          source_command_width_q == command_width_q &&
-                          source_command_height_q == command_height_q &&
-                          command_flags_q == 16'd0);
+                          blit_same_dimensions_q &&
+                          blit_no_flags_q);
                     state <= ST_PLAN_BLIT_FORMAT_DECIDE;
                 end
 
@@ -1324,13 +1339,14 @@ module astra_render_blitter #(
                         destination_row_address_q[31:0] +
                         (reverse_q ? {14'd0, endpoint_byte_offset_q} :
                          32'd0);
-                    source_pixel_address_q <=
+                    source_pixel_address_load_q <=
                         source_row_address_q[31:0] +
                         (reverse_q ? {14'd0, endpoint_byte_offset_q} :
                          32'd0);
+                    source_address_starts_writer_q <= 1'b1;
                     columns_remaining_q <= effective_width_q;
                     rows_remaining_q <= effective_height_q;
-                    state <= ST_WRITER_START;
+                    state <= ST_SOURCE_ADDRESS_COMMIT;
                 end
 
                 ST_WRITER_START: begin
@@ -1351,8 +1367,7 @@ module astra_render_blitter #(
                     end else if (source_cache_valid &&
                                  source_cache_address_q ==
                                  required_source_beat) begin
-                        if (direct_copy) begin
-                            pixel_value <= decoded_source_pixel;
+                        if (direct_copy_q) begin
                             state <= ST_PIXEL;
                         end else begin
                             state <= ST_SOURCE_DECODE;
@@ -1388,7 +1403,6 @@ module astra_render_blitter #(
                                  command_flags_q[4]) begin
                         state <= ST_DESTINATION;
                     end else begin
-                        pixel_value <= source_pixel_q;
                         state <= ST_PIXEL;
                     end
                 end
@@ -1448,7 +1462,6 @@ module astra_render_blitter #(
                                  command_flags_q[4]) begin
                         state <= ST_DESTINATION;
                     end else begin
-                        pixel_value <= source_pixel_q;
                         state <= ST_PIXEL;
                     end
                 end
@@ -1505,10 +1518,12 @@ module astra_render_blitter #(
                     source_argb_q <= decoded_palette_argb;
                     if (command_flags_q[6] || command_flags_q[4])
                         state <= ST_DESTINATION;
-                    else begin
-                        pixel_value <= converted_palette_pixel;
-                        state <= ST_PIXEL;
-                    end
+                    else
+                        state <= ST_PALETTE_OUTPUT;
+                end
+
+                ST_PALETTE_OUTPUT: begin
+                    state <= ST_PIXEL;
                 end
 
                 ST_PALETTE_REQUEST: begin
@@ -1579,7 +1594,7 @@ module astra_render_blitter #(
 
                 ST_COMPOSITE: begin
                     if (command_flags_q[6]) begin
-                        pixel_value <= rop_pixel;
+                        source_pixel_q <= rop_pixel;
                         state <= ST_PIXEL;
                     end else begin
                         blend_source_argb_q <= source_argb_q;
@@ -1602,21 +1617,19 @@ module astra_render_blitter #(
                 ST_BLEND_MULTIPLY: begin
                     blend_product_q <=
                         blend_multiplicand_q * blend_multiplier_q;
-                    state <= blend_destination_phase_q ?
-                        ST_BLEND_DESTINATION_DIVIDE :
-                        ST_BLEND_SOURCE_STORE;
+                    state <= ST_BLEND_DESTINATION_DIVIDE;
                 end
 
                 ST_BLEND_SOURCE_STORE: begin
                     case (blend_channel_q)
                         2'd0: blend_result_argb_q[31:24] <=
-                            divide_255_round16(blend_product_q);
+                            blend_divided_q;
                         2'd1: blend_result_argb_q[23:16] <=
-                            divide_255_round16(blend_product_q);
+                            blend_divided_q;
                         2'd2: blend_result_argb_q[15:8] <=
-                            divide_255_round16(blend_product_q);
+                            blend_divided_q;
                         default: blend_result_argb_q[7:0] <=
-                            divide_255_round16(blend_product_q);
+                            blend_divided_q;
                     endcase
                     if (blend_channel_q == 2'd3) begin
                         blend_inverse_alpha_q <= 8'd255 -
@@ -1639,9 +1652,16 @@ module astra_render_blitter #(
                 end
 
                 ST_BLEND_DESTINATION_DIVIDE: begin
-                    blend_divided_q <=
-                        divide_255_round16(blend_product_q);
-                    state <= ST_BLEND_DESTINATION_STORE;
+                    blend_divide_adjusted_q <=
+                        {1'b0, blend_product_q} + 17'd128;
+                    state <= ST_BLEND_DIVIDE_FINISH;
+                end
+
+                ST_BLEND_DIVIDE_FINISH: begin
+                    blend_divided_q <= blend_product_divided;
+                    state <= blend_destination_phase_q ?
+                        ST_BLEND_DESTINATION_STORE :
+                        ST_BLEND_SOURCE_STORE;
                 end
 
                 ST_BLEND_DESTINATION_STORE: begin
@@ -1672,8 +1692,12 @@ module astra_render_blitter #(
                 end
 
                 ST_BLEND_PACK: begin
-                    pixel_value <= pack_destination_pixel(
+                    source_pixel_q <= pack_destination_pixel(
                         destination_format_q, blend_result_argb_q);
+                    state <= ST_BLEND_OUTPUT;
+                end
+
+                ST_BLEND_OUTPUT: begin
                     state <= ST_PIXEL;
                 end
 
@@ -1691,6 +1715,8 @@ module astra_render_blitter #(
                         pixel_format <= destination_format_q;
                         if (is_fill_q)
                             pixel_value <= options_q;
+                        else
+                            pixel_value <= source_pixel_q;
                         if (pixel_valid && pixel_ready) begin
                             pixel_valid <= 1'b0;
                             completed_pixels <= completed_pixels + 32'd1;
@@ -1713,7 +1739,7 @@ module astra_render_blitter #(
                             destination_pixel_address_q <=
                                 destination_pixel_address_q +
                                 destination_bpp_q;
-                            if (direct_copy) begin
+                            if (direct_copy_q) begin
                                 source_pixel_address_q <=
                                     source_pixel_address_q + source_bpp_q;
                                 state <= ST_SOURCE;
@@ -1734,13 +1760,20 @@ module astra_render_blitter #(
                 ST_NEXT_SOURCE_MAP: begin
                     effective_source_x_q <=
                         mapped_source_x_current[15:0];
+                    state <= ST_NEXT_SOURCE_OFFSET;
+                end
+
+                ST_NEXT_SOURCE_OFFSET: begin
+                    source_x_byte_offset_q <=
+                        {2'd0, effective_source_x_q} << source_shift_q;
                     state <= ST_NEXT_SOURCE_ADDRESS;
                 end
 
                 ST_NEXT_SOURCE_ADDRESS: begin
-                    source_pixel_address_q <= source_row_base_q[31:0] +
-                        ({16'd0, effective_source_x_q} << source_shift_q);
-                    state <= ST_SOURCE;
+                    source_pixel_address_load_q <= source_row_base_q[31:0] +
+                        {14'd0, source_x_byte_offset_q};
+                    source_address_starts_writer_q <= 1'b0;
+                    state <= ST_SOURCE_ADDRESS_COMMIT;
                 end
 
                 ST_NEXT_ROW_ADDRESS: begin
@@ -1824,9 +1857,22 @@ module astra_render_blitter #(
                     destination_pixel_address_q <=
                         destination_row_address_q[31:0] +
                         (reverse_q ? {14'd0, endpoint_byte_offset_q} : 32'd0);
-                    source_pixel_address_q <= source_row_address_q[31:0] +
-                        (reverse_q ? {14'd0, endpoint_byte_offset_q} : 32'd0);
-                    state <= is_fill_q ? ST_PIXEL : ST_SOURCE;
+                    if (is_fill_q) begin
+                        state <= ST_PIXEL;
+                    end else begin
+                        source_pixel_address_load_q <=
+                            source_row_address_q[31:0] +
+                            (reverse_q ? {14'd0, endpoint_byte_offset_q} :
+                             32'd0);
+                        source_address_starts_writer_q <= 1'b0;
+                        state <= ST_SOURCE_ADDRESS_COMMIT;
+                    end
+                end
+
+                ST_SOURCE_ADDRESS_COMMIT: begin
+                    source_pixel_address_q <= source_pixel_address_load_q;
+                    state <= source_address_starts_writer_q ?
+                        ST_WRITER_START : ST_SOURCE;
                 end
 
                 ST_FLUSH: begin

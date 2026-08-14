@@ -497,8 +497,11 @@ module tb_astra_render_command_processor;
                 $fatal(1, "completion header=%08x", actual);
             actual = read_be32(address + 32'd4);
             if (actual !== {expected_opcode, expected_status})
-                $fatal(1, "completion opcode/status=%08x expected=%04x/%04x",
-                       actual, expected_opcode, expected_status);
+                $fatal(1, "completion opcode/status=%08x expected=%04x/%04x sequence=%08x state=%0d blitter=%0d writer=%0d ingress=%0d staged=%0d",
+                       actual, expected_opcode, expected_status,
+                       expected_sequence, dut.state, dut.blitter_i.state,
+                       dut.writer_busy, dut.pixel_writer_i.ingress_valid,
+                       dut.pixel_writer_i.pixel_stage_count);
             actual = read_be32(address + 32'd8);
             if (actual !== expected_sequence)
                 $fatal(1, "completion sequence=%08x expected=%08x",
@@ -568,6 +571,50 @@ module tb_astra_render_command_processor;
         memory_i.clear_memory(8'ha5);
         repeat (8) @(posedge clk);
         reset = 1'b0;
+
+        // The command address is deterministic before admission decides
+        // whether work is available. Preload it at the existing combine
+        // boundary so queue occupancy does not drive a 32-bit register CE.
+        force dut.state = 6'd54;
+        force dut.submission_command_address_q = 32'h02001240;
+        @(posedge clk);
+        #1;
+        if (dut.manager_araddr != 32'h02001240)
+            $fatal(1, "admission address was not preloaded");
+        release dut.submission_command_address_q;
+        release dut.state;
+        reset = 1'b1;
+        repeat (2) @(posedge clk);
+        reset = 1'b0;
+
+        // The shared response boundary must absorb one additional beat even
+        // while the selected engine is stalled. This keeps HP2 RREADY local
+        // to registered storage instead of feeding engine decode back into
+        // the PS-facing slice.
+        force dut.command_dispatched_q = 1'b1;
+        force dut.command_is_geometry_q = 1'b0;
+        force dut.command_is_flood_q = 1'b0;
+        force dut.command_is_glyph_q = 1'b1;
+        force dut.engine_response_valid_q = 1'b1;
+        force dut.glyph_rready = 1'b0;
+        #1;
+        if (!rready)
+            $fatal(1, "engine response boundary did not absorb stalled beat");
+        force dut.engine_response_spill_valid_q = 1'b1;
+        #1;
+        if (rready)
+            $fatal(1, "engine response boundary accepted beyond capacity");
+        release dut.engine_response_spill_valid_q;
+        release dut.glyph_rready;
+        release dut.engine_response_valid_q;
+        release dut.command_is_glyph_q;
+        release dut.command_is_flood_q;
+        release dut.command_is_geometry_q;
+        release dut.command_dispatched_q;
+        reset = 1'b1;
+        repeat (2) @(posedge clk);
+        reset = 1'b0;
+
         pulse_rebase();
         sub_pointer = 0;
         comp_pointer = 0;

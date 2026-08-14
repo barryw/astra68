@@ -144,6 +144,11 @@ module tb_astra_copper_structural_state;
         reset = 1'b0;
         pulse_frame();
 
+        move_target = 16'hffff;
+        #1;
+        if (move_allowed || !move_ready)
+            $fatal(1, "capacity ready depends on request permission");
+
         validate_target = 16'h0048;
         validate_data = {3'd0, 13'd16, 3'd0, 13'd32};
         #1;

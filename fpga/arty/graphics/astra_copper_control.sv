@@ -81,9 +81,14 @@ module astra_copper_control #(
     reg promote_request_q;
     reg fault_clear_q;
     reg irq_pending_q;
+    reg waiting_status_q;
     reg [3:0] dispatch_selector_q;
     reg [10:0] dispatch_producer_q [0:15];
     reg [15:0] dispatch_valid_q;
+    reg dispatch_write_pending_q;
+    reg [3:0] dispatch_write_selector_q;
+    reg [10:0] dispatch_write_producer_q;
+    reg dispatch_write_valid_q;
     integer dispatch_reset_index;
 
     wire validate_busy;
@@ -103,9 +108,6 @@ module astra_copper_control #(
     wire [15:0] core_dispatch_id;
     wire core_dispatch_ready;
     wire core_dispatch_allowed;
-    wire dispatch_id_in_range = core_dispatch_id[15:4] == 12'd0;
-    wire selected_dispatch_valid = dispatch_id_in_range &&
-        dispatch_valid_q[core_dispatch_id[3:0]];
     wire validate_dispatch_id_in_range =
         validate_dispatch_id[15:4] == 12'd0;
     wire selected_validate_dispatch_valid =
@@ -139,8 +141,7 @@ module astra_copper_control #(
     assign dispatch_submission_producer =
         dispatch_submission_producer_q;
     assign core_dispatch_ready = dispatch_completion_q;
-    assign core_dispatch_allowed = dispatch_completion_q ?
-        dispatch_completion_allowed_q : selected_dispatch_valid;
+    assign core_dispatch_allowed = dispatch_completion_allowed_q;
 
     astra_copper #(
         .TOTAL_WIDTH(TOTAL_WIDTH),
@@ -233,8 +234,13 @@ module astra_copper_control #(
             validate_first_q <= 12'd0;
             validate_count_q <= 13'd0;
             irq_pending_q <= 1'b0;
+            waiting_status_q <= 1'b0;
             dispatch_selector_q <= 4'd0;
             dispatch_valid_q <= 16'd0;
+            dispatch_write_pending_q <= 1'b0;
+            dispatch_write_selector_q <= 4'd0;
+            dispatch_write_producer_q <= 11'd0;
+            dispatch_write_valid_q <= 1'b0;
             dispatch_pending_q <= 1'b0;
             dispatch_completion_q <= 1'b0;
             dispatch_completion_allowed_q <= 1'b0;
@@ -258,23 +264,24 @@ module astra_copper_control #(
             s_axi_rresp <= 2'b00;
             s_axi_rvalid <= 1'b0;
         end else begin
+            waiting_status_q <= waiting;
+            if (dispatch_write_pending_q) begin
+                dispatch_producer_q[dispatch_write_selector_q] <=
+                    dispatch_write_producer_q;
+                dispatch_valid_q[dispatch_write_selector_q] <=
+                    dispatch_write_valid_q;
+                dispatch_write_pending_q <= 1'b0;
+            end
             if (dispatch_pending_q) begin
                 if (!core_dispatch_valid) begin
                     dispatch_pending_q <= 1'b0;
-                end else if (!dispatch_allowed) begin
-                    dispatch_pending_q <= 1'b0;
-                    dispatch_completion_q <= 1'b1;
-                    dispatch_completion_allowed_q <= 1'b0;
                 end else if (dispatch_ready) begin
                     dispatch_pending_q <= 1'b0;
                     dispatch_completion_q <= 1'b1;
-                    dispatch_completion_allowed_q <= 1'b1;
+                    dispatch_completion_allowed_q <= dispatch_allowed;
                 end
             end else if (dispatch_completion_q) begin
-                if (core_dispatch_valid)
-                    dispatch_completion_q <= 1'b0;
-                else
-                    dispatch_completion_q <= 1'b0;
+                dispatch_completion_q <= 1'b0;
             end else if (core_dispatch_valid) begin
                 dispatch_pending_q <= 1'b1;
                 dispatch_id_q <= core_dispatch_id;
@@ -361,10 +368,11 @@ module astra_copper_control #(
                                 wdata_q[30:11] != 20'd0)
                                 s_axi_bresp <= 2'b10;
                             else begin
-                                dispatch_producer_q[dispatch_selector_q] <=
-                                    wdata_q[10:0];
-                                dispatch_valid_q[dispatch_selector_q] <=
-                                    wdata_q[31];
+                                dispatch_write_pending_q <= 1'b1;
+                                dispatch_write_selector_q <=
+                                    dispatch_selector_q;
+                                dispatch_write_producer_q <= wdata_q[10:0];
+                                dispatch_write_valid_q <= wdata_q[31];
                             end
                         end
                         default: s_axi_bresp <= 2'b11;
@@ -391,7 +399,8 @@ module astra_copper_control #(
                         16'h4004: s_axi_rdata <= VERSION;
                         16'h4008: s_axi_rdata <= {31'd0, enable_q};
                         16'h400c: s_axi_rdata <= {
-                            21'd0, fault, irq_pending_q, waiting, running,
+                            21'd0, fault, irq_pending_q, waiting_status_q,
+                            running,
                             promoted, promotion_pending, validate_valid,
                             validate_done, validate_busy, ~active_bank,
                             active_bank};

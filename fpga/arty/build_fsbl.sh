@@ -10,10 +10,17 @@ fclk1_hz=${ASTRA_ARTY_FCLK1_HZ:-200000000}
 
 case "$fclk1_hz" in
     200000000)
+        fclk0_maskwrite=0x00200500U
         fclk1_maskwrite=0x00100500U
         ;;
     166666672)
-        fclk1_maskwrite=0x00100600U
+        fclk0_maskwrite=0x00200500U
+        # The current PS7 preset realizes 166.667 MHz as IO PLL / 3 / 2.
+        fclk1_maskwrite=0x00200300U
+        ;;
+    187500000)
+        fclk0_maskwrite=0x00300500U
+        fclk1_maskwrite=0x00200400U
         ;;
     *)
         echo "unsupported FCLK1 rate: $fclk1_hz" >&2
@@ -36,7 +43,7 @@ ps7_init="$out_dir/ps7_init.c"
 test -s "$elf"
 test -s "$ps7_init"
 grep -Fq \
-    'EMIT_MASKWRITE(0XF8000170, 0x03F03F30U ,0x00200500U)' \
+    "EMIT_MASKWRITE(0XF8000170, 0x03F03F30U ,$fclk0_maskwrite)" \
     "$ps7_init"
 grep -Fq \
     "EMIT_MASKWRITE(0XF8000180, 0x03F03F30U ,$fclk1_maskwrite)" \

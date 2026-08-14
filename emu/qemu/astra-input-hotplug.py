@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Attach Linux evdev devices to a running Astra QEMU instance."""
+"""Reconcile Linux host resources with a running Astra QEMU instance."""
 
 import argparse
 import glob
@@ -138,6 +138,51 @@ def synchronize(qmp_path, attached, desired, client=QmpClient, report=print):
         qmp.close()
 
 
+def tune_runtime(qmp, task_ids=None, set_affinity=None,
+                 set_priority=None, report=print):
+    """Keep the single TCG vCPU off the Linux device/IRQ core."""
+    if (os.cpu_count() or 1) < 2:
+        return True
+    try:
+        cpus = qmp.execute("query-cpus-fast")
+        vcpu_tasks = {int(cpu["thread-id"]) for cpu in cpus}
+        if not vcpu_tasks:
+            raise QmpError("QEMU reported no vCPU thread")
+        if set_affinity is None:
+            set_affinity = os.sched_setaffinity
+        if set_priority is None:
+            set_priority = os.setpriority
+        if task_ids is None:
+            first = next(iter(vcpu_tasks))
+            with open(f"/proc/{first}/status", encoding="ascii") as status:
+                tgid = next(int(line.split()[1]) for line in status
+                            if line.startswith("Tgid:"))
+            task_ids = [int(os.path.basename(path)) for path in
+                        glob.glob(f"/proc/{tgid}/task/*")]
+        for task_id in task_ids:
+            set_affinity(task_id, {1} if task_id in vcpu_tasks else {0})
+        for task_id in vcpu_tasks:
+            set_priority(os.PRIO_PROCESS, task_id, -10)
+    except (KeyError, OSError, QmpError, StopIteration, TypeError,
+            ValueError) as error:
+        report(f"Astra runtime tuning unavailable: {error}", file=sys.stderr)
+        return False
+    report("Astra runtime: vCPU on CPU1, host I/O on CPU0")
+    return True
+
+
+def synchronize_runtime(qmp_path, client=QmpClient, report=print):
+    try:
+        qmp = client(qmp_path)
+    except (OSError, QmpError, ValueError) as error:
+        report(f"Astra runtime QMP unavailable: {error}", file=sys.stderr)
+        return False
+    try:
+        return tune_runtime(qmp, report=report)
+    finally:
+        qmp.close()
+
+
 def run(qmp_path, device_directory, interval):
     running = True
 
@@ -148,8 +193,11 @@ def run(qmp_path, device_directory, interval):
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
     attached = {}
+    tuned = False
     try:
         while running:
+            if not tuned:
+                tuned = synchronize_runtime(qmp_path)
             synchronize(qmp_path, attached, discover(device_directory))
             time.sleep(interval)
     finally:

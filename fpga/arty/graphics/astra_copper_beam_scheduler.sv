@@ -33,23 +33,29 @@ module astra_copper_beam_scheduler #(
     reg prepare_active_q;
     reg [9:0] prepared_y_q;
     reg finalize_pending_q;
+    reg copper_settled_q;
 
     wire copper_settled = !copper_enabled || !copper_running ||
                            copper_waiting;
     assign line_prepare_ready = prepare_active_q && baseline_ready &&
         line_prepare_valid && line_prepare_y == prepared_y_q &&
-        copper_settled;
+        copper_settled_q;
 
     always @(posedge clk) begin
         if (reset || frame_start) begin
             prepare_active_q <= 1'b0;
             prepared_y_q <= 10'd0;
             finalize_pending_q <= 1'b0;
+            copper_settled_q <= 1'b0;
             beam_x <= 11'd0;
             beam_y <= 10'd0;
         end else begin
+            copper_settled_q <= copper_settled;
             if (!prepare_active_q && line_prepare_valid) begin
                 prepare_active_q <= 1'b1;
+                // A disabled or stopped copper is already settled. Only a
+                // sampled WAIT can be stale after the beam advances.
+                copper_settled_q <= !copper_enabled || !copper_running;
                 prepared_y_q <= line_prepare_y;
                 if (line_prepare_y == 10'd0) begin
                     beam_x <= 11'd0;
@@ -62,6 +68,9 @@ module astra_copper_beam_scheduler #(
 
             if (line_prepare_ready) begin
                 prepare_active_q <= 1'b0;
+                // Do not let the sampled WAIT state acknowledge the next
+                // line after advancing the virtual beam releases the copper.
+                copper_settled_q <= 1'b0;
                 if (prepared_y_q == LAST_ACTIVE_Y)
                     finalize_pending_q <= 1'b1;
             end

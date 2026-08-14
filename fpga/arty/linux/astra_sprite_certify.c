@@ -5,6 +5,7 @@
 #define _FILE_OFFSET_BITS 64
 
 #include "astra_graphics_hw.h"
+#include <astra/graphics.h>
 
 #include <errno.h>
 #include <inttypes.h>
@@ -15,10 +16,10 @@
 #include <time.h>
 
 enum {
-    SPRITE_COUNT = 64u,
+    SPRITE_COUNT = ASTRA_GRAPHICS_SPRITE_COUNT,
     PALETTE_BANK_COUNT = 16u,
-    SOURCE_WIDTH = 128u,
-    SOURCE_HEIGHT = 128u,
+    SOURCE_WIDTH = ASTRA_SPRITE_SOURCE_WIDTH_MAX,
+    SOURCE_HEIGHT = ASTRA_SPRITE_SOURCE_HEIGHT_MAX,
     SOURCE_PITCH = 128u,
     SHAPE_BYTES = SOURCE_PITCH * SOURCE_HEIGHT,
     MAX_SHAPE_STORAGE_BYTES = SPRITE_COUNT * SHAPE_BYTES,
@@ -51,6 +52,9 @@ _Static_assert(SHAPE_STORAGE_BASE >=
 _Static_assert(SHAPE_STORAGE_BASE + SHAPE_STORAGE_BYTES <=
                    ASTRA_GRAPHICS_ARENA_LIMIT,
                "sprite certification shapes exceed the graphics arena");
+_Static_assert(ASTRA_SPRITES_PER_LINE * SOURCE_WIDTH ==
+                   ASTRA_SPRITE_PIXELS_PER_LINE,
+               "stress scene must saturate the published scanline limits");
 
 static const uint32_t palette_color[PALETTE_BANK_COUNT] = {
     0xffff3b5cu, 0xffff7a32u, 0xffffc43du, 0xffc8f04au,
@@ -473,24 +477,38 @@ static void program_grid_scene(const struct astra_graphics_device *device)
     }
 }
 
-static uint32_t dimension_width_sum(
+static uint32_t dimension_admitted_width_sum(
     const struct sprite_shape shapes[SPRITE_COUNT])
 {
     uint32_t total = 0u;
     unsigned sprite;
 
-    for (sprite = 0; sprite < SPRITE_COUNT; ++sprite)
+    for (sprite = SPRITE_COUNT - ASTRA_SPRITES_PER_LINE;
+         sprite < SPRITE_COUNT; ++sprite)
         total += shapes[sprite].width;
     return total;
 }
 
-static uint32_t dimension_read_sum(
+static uint32_t dimension_dropped_width_sum(
     const struct sprite_shape shapes[SPRITE_COUNT])
 {
     uint32_t total = 0u;
     unsigned sprite;
 
-    for (sprite = 0; sprite < SPRITE_COUNT; ++sprite)
+    for (sprite = 0u;
+         sprite < SPRITE_COUNT - ASTRA_SPRITES_PER_LINE; ++sprite)
+        total += shapes[sprite].width;
+    return total;
+}
+
+static uint32_t dimension_admitted_read_sum(
+    const struct sprite_shape shapes[SPRITE_COUNT])
+{
+    uint32_t total = 0u;
+    unsigned sprite;
+
+    for (sprite = SPRITE_COUNT - ASTRA_SPRITES_PER_LINE;
+         sprite < SPRITE_COUNT; ++sprite)
         total += (shapes[sprite].width + 7u) & ~7u;
     return total;
 }
@@ -625,8 +643,16 @@ static int monitor_phase(const struct astra_graphics_device *device,
 
 static int validate_stress_metrics(const struct phase_metrics *metrics)
 {
-    const uint32_t minimum_admitted =
-        SPRITE_COUNT * STRESS_DEST_WIDTH * ASTRA_FRAMEBUFFER_HEIGHT;
+    const uint32_t complete_frames = metrics->frames == 0u ?
+        0u : metrics->frames - 1u;
+    const uint32_t maximum_frames = metrics->frames + 1u;
+    const uint32_t admitted_per_frame =
+        ASTRA_SPRITE_PIXELS_PER_LINE * ASTRA_FRAMEBUFFER_HEIGHT;
+    const uint32_t dropped_per_frame =
+        (SPRITE_COUNT * STRESS_DEST_WIDTH -
+         ASTRA_SPRITE_PIXELS_PER_LINE) * ASTRA_FRAMEBUFFER_HEIGHT;
+    const uint32_t minimum_overflow =
+        ASTRA_FRAMEBUFFER_HEIGHT * complete_frames;
 
     if ((metrics->status_or & ASTRA_SPRITE_STATUS_SLOT_VALID_MASK) == 0u ||
         (metrics->status_or & (ASTRA_SPRITE_STATUS_FETCH_ERROR |
@@ -634,9 +660,14 @@ static int validate_stress_metrics(const struct phase_metrics *metrics)
         metrics->max_build_cycles == 0u ||
         metrics->max_build_cycles >= BUILD_CYCLE_LIMIT ||
         metrics->hardware_max_build_cycles >= BUILD_CYCLE_LIMIT ||
-        metrics->max_read_bytes != SPRITE_COUNT * SOURCE_WIDTH ||
-        metrics->admitted < minimum_admitted || metrics->dropped != 0u ||
-        metrics->overflow != 0u || metrics->axi_errors != 0u ||
+        metrics->max_read_bytes != ASTRA_SPRITE_PIXELS_PER_LINE ||
+        metrics->admitted < admitted_per_frame * complete_frames ||
+        metrics->admitted > admitted_per_frame * maximum_frames ||
+        metrics->dropped < dropped_per_frame * complete_frames ||
+        metrics->dropped > dropped_per_frame * maximum_frames ||
+        metrics->overflow < minimum_overflow ||
+        metrics->overflow > ASTRA_FRAMEBUFFER_HEIGHT * maximum_frames ||
+        metrics->axi_errors != 0u ||
         metrics->deadline_errors != 0u) {
         fprintf(stderr,
                 "64-way sprite stress failed: frames=%" PRIu32
@@ -690,13 +721,21 @@ static int validate_dimension_metrics(
     const struct phase_metrics *metrics,
     const struct sprite_shape shapes[SPRITE_COUNT])
 {
-    const uint32_t width_sum = dimension_width_sum(shapes);
-    const uint32_t expected_read = dimension_read_sum(shapes);
+    const uint32_t admitted_width =
+        dimension_admitted_width_sum(shapes);
+    const uint32_t dropped_width =
+        dimension_dropped_width_sum(shapes);
+    const uint32_t expected_read = dimension_admitted_read_sum(shapes);
     const uint32_t complete_frames = metrics->frames == 0u ?
         0u : metrics->frames - 1u;
+    const uint32_t maximum_frames = metrics->frames + 1u;
     /* Counter snapshots can bracket partial first and last frames. */
-    const uint32_t minimum_admitted = width_sum *
-        ASTRA_FRAMEBUFFER_HEIGHT * complete_frames;
+    const uint32_t admitted_per_frame = admitted_width *
+        ASTRA_FRAMEBUFFER_HEIGHT;
+    const uint32_t dropped_per_frame = dropped_width *
+        ASTRA_FRAMEBUFFER_HEIGHT;
+    const uint32_t minimum_admitted =
+        admitted_per_frame * complete_frames;
 
     if ((metrics->status_or & ASTRA_SPRITE_STATUS_SLOT_VALID_MASK) == 0u ||
         (metrics->status_or & (ASTRA_SPRITE_STATUS_FETCH_ERROR |
@@ -705,8 +744,13 @@ static int validate_dimension_metrics(
         metrics->max_build_cycles >= BUILD_CYCLE_LIMIT ||
         metrics->hardware_max_build_cycles >= BUILD_CYCLE_LIMIT ||
         metrics->max_read_bytes != expected_read ||
-        metrics->admitted < minimum_admitted || metrics->dropped != 0u ||
-        metrics->overflow != 0u || metrics->axi_errors != 0u ||
+        metrics->admitted < admitted_per_frame * complete_frames ||
+        metrics->admitted > admitted_per_frame * maximum_frames ||
+        metrics->dropped < dropped_per_frame * complete_frames ||
+        metrics->dropped > dropped_per_frame * maximum_frames ||
+        metrics->overflow < ASTRA_FRAMEBUFFER_HEIGHT * complete_frames ||
+        metrics->overflow > ASTRA_FRAMEBUFFER_HEIGHT * maximum_frames ||
+        metrics->axi_errors != 0u ||
         metrics->deadline_errors != 0u) {
         fprintf(stderr,
                 "variable-dimension sprite stress failed: "

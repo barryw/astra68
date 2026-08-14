@@ -1144,39 +1144,38 @@ KernelVmStatus kernel_vm_destroy_address_space(KernelAddressSpace *space)
     return KERNEL_VM_OK;
 }
 
+static KernelVmStatus switch_user_root(uint32_t root_physical)
+{
+    if (current_user_root == root_physical)
+        return KERNEL_VM_OK;
+    invalidate_caches();
+    current_process_root.limit_descriptor = KERNEL_PMMU_ROOT_LIMIT_SHORT;
+    current_process_root.table_address = root_physical;
+    /*
+     * MC68030 PMOVE to CRP with FD clear invalidates the ATC. Issuing
+     * PFLUSHA immediately afterwards repeats that work and makes QEMU flush
+     * its complete software TLB twice on every cross-process switch.
+     */
+    kernel_pmmu_load_crp(&current_process_root);
+    current_user_root = root_physical;
+    ++vm_stats.flushes;
+    ++vm_stats.switches;
+    return KERNEL_VM_OK;
+}
+
 KernelVmStatus kernel_vm_switch(const KernelAddressSpace *space)
 {
     if (!initialized || !enabled || space == NULL ||
         space->initialized == 0u)
         return KERNEL_VM_INVALID_ARGUMENT;
-    if (current_user_root == space->root_physical)
-        return KERNEL_VM_OK;
-    invalidate_caches();
-    current_process_root.limit_descriptor = KERNEL_PMMU_ROOT_LIMIT_SHORT;
-    current_process_root.table_address = space->root_physical;
-    kernel_pmmu_load_crp(&current_process_root);
-    kernel_pmmu_flush_all();
-    current_user_root = space->root_physical;
-    ++vm_stats.flushes;
-    ++vm_stats.switches;
-    return KERNEL_VM_OK;
+    return switch_user_root(space->root_physical);
 }
 
 KernelVmStatus kernel_vm_switch_to_empty(void)
 {
     if (!initialized || !enabled)
         return KERNEL_VM_INVALID_ARGUMENT;
-    if (current_user_root == empty_root_physical)
-        return KERNEL_VM_OK;
-    invalidate_caches();
-    current_process_root.limit_descriptor = KERNEL_PMMU_ROOT_LIMIT_SHORT;
-    current_process_root.table_address = empty_root_physical;
-    kernel_pmmu_load_crp(&current_process_root);
-    kernel_pmmu_flush_all();
-    current_user_root = empty_root_physical;
-    ++vm_stats.flushes;
-    ++vm_stats.switches;
-    return KERNEL_VM_OK;
+    return switch_user_root(empty_root_physical);
 }
 
 KernelVmStatus kernel_vm_sync_shared_aliases(void)

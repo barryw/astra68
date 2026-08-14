@@ -32,6 +32,7 @@ module tb_astra_render_geometry;
     reg [15:0] actual [0:WIDTH*HEIGHT-1];
     reg [15:0] expected [0:WIDTH*HEIGHT-1];
     reg [15:0] lfsr = 16'h1;
+    reg previous_emit_valid = 0;
     integer writes;
     integer i;
 
@@ -60,6 +61,7 @@ module tb_astra_render_geometry;
     );
 
     always @(posedge clk) begin
+        previous_emit_valid <= dut.emit_valid_q;
         lfsr <= {lfsr[14:0], lfsr[15] ^ lfsr[13] ^ lfsr[12] ^ lfsr[10]};
         pixel_ready <= lfsr[0] | lfsr[3];
         writer_done <= writer_flush;
@@ -72,6 +74,10 @@ module tb_astra_render_geometry;
             writes <= writes + 1;
         end
     end
+
+    always @(negedge clk)
+        if (!reset && dut.emit_classified_q !== previous_emit_valid)
+            $fatal(1, "emit classification is not a one-cycle valid pipeline");
 
     task automatic clear_buffers;
         begin

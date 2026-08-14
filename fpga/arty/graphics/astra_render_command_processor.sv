@@ -46,6 +46,7 @@ module astra_render_command_processor #(
     output reg  [31:0]                  backpressure_cycles,
     output reg  [31:0]                  timeout_count,
     output reg  [31:0]                  reset_count,
+    (* extract_enable = "no" *)
     output reg  [31:0]                  last_fault_detail,
 
     output wire [AXI_ID_WIDTH-1:0]      m_axi_arid,
@@ -148,6 +149,7 @@ module astra_render_command_processor #(
     localparam [5:0] ST_DESTINATION_R_DECIDE = 6'd42;
     localparam [5:0] ST_SOURCE_R_DECIDE = 6'd43;
     localparam [5:0] ST_VALIDATE_LAYOUT_RESULT = 6'd44;
+    localparam [5:0] ST_VALIDATE_LAYOUT_WORDS = 6'd55;
     localparam [5:0] ST_AUXILIARY_AR = 6'd45;
     localparam [5:0] ST_AUXILIARY_R = 6'd46;
     localparam [5:0] ST_AUXILIARY_R_DECIDE = 6'd47;
@@ -157,6 +159,8 @@ module astra_render_command_processor #(
     localparam [5:0] ST_SOURCE_VALIDATE_DECIDE = 6'd51;
     localparam [5:0] ST_AUXILIARY_VALIDATE_DECIDE = 6'd52;
     localparam [5:0] ST_VALIDATE_GLYPH_RANGE = 6'd53;
+    localparam [5:0] ST_ADMISSION_COMBINE = 6'd54;
+    localparam [5:0] ST_CAPTURE_ENGINE_COMPLETION = 6'd56;
 
     localparam [2:0] HEADER_OK = 3'd0;
     localparam [2:0] HEADER_BAD_VERSION = 3'd1;
@@ -209,6 +213,15 @@ module astra_render_command_processor #(
     reg [63:0] manager_response_data_q;
     reg [1:0] manager_response_resp_q;
     reg manager_response_last_q;
+    (* max_fanout = 4 *) reg engine_response_valid_q;
+    reg [63:0] engine_response_data_q;
+    reg engine_response_error_q;
+    reg engine_response_last_q;
+    reg engine_response_spill_valid_q;
+    reg [63:0] engine_response_spill_data_q;
+    reg engine_response_spill_error_q;
+    reg engine_response_spill_last_q;
+    reg [AXI_ID_WIDTH-1:0] engine_expected_id_q;
     reg descriptor_capture_enabled_q;
 
     reg [15:0] command_opcode_q;
@@ -287,6 +300,10 @@ module astra_render_command_processor #(
     (* keep = "true" *) reg [10:0] admission_completion_used_q;
     (* keep = "true" *) reg admission_configuration_valid_q;
     (* keep = "true" *) reg admission_completion_available_q;
+    reg admission_ring_alignment_valid_q;
+    reg admission_submission_in_bounds_q;
+    reg admission_completion_in_bounds_q;
+    reg admission_rings_overlap_q;
 
     reg validation_error_q;
     reg [15:0] validation_status_q;
@@ -295,17 +312,25 @@ module astra_render_command_processor #(
     reg layout_bad_flags_q;
     reg layout_bad_fill_q;
     reg layout_bad_geometry_q;
+    reg layout_bad_geometry_line_q;
+    reg layout_bad_geometry_circle_q;
+    reg layout_bad_geometry_ellipse_q;
+    reg layout_bad_geometry_pattern_q;
     reg layout_bad_flood_q;
     reg layout_bad_glyph_q;
+    reg [6:0] layout_word_nonzero_q;
     reg [32:0] glyph_descriptor_end_q;
     reg [2:0] header_result_q;
     reg [1:0] sequence_result_q;
+    reg [31:0] submission_command_address_q;
 
     reg [15:0] completion_status_q;
     reg [31:0] completion_count_q;
     reg [31:0] completion_fault_q;
-reg [31:0] completion_words [0:7];
+    reg completion_failed_q;
 reg [31:0] completion_write_address_q;
+reg [31:0] completion_end_cycle_q;
+reg [63:0] completion_wdata_q;
 reg completion_awvalid;
 reg completion_wvalid;
 reg [1:0] completion_beat_index;
@@ -401,12 +426,17 @@ reg [1:0] completion_beat_index;
     wire blitter_writer_flush;
     wire writer_flush_ready;
     wire engine_writer_flush_ready;
-    reg engine_writer_flush_ready_q;
+    reg engine_writer_abort_q;
+    reg engine_writer_flush_pending_q;
     wire writer_busy;
     wire writer_done;
     wire writer_aborted;
     wire writer_error;
     wire [31:0] writer_fault_detail;
+    reg engine_writer_done_q;
+    reg engine_writer_aborted_q;
+    reg engine_writer_error_q;
+    reg [31:0] engine_writer_fault_detail_q;
     wire blitter_pixel_valid;
     wire blitter_pixel_ready;
     wire [31:0] blitter_pixel_address;
@@ -555,10 +585,10 @@ reg [1:0] completion_beat_index;
         .writer_flush(blitter_writer_flush),
         .writer_flush_ready(engine_writer_flush_ready),
         .writer_busy(writer_busy),
-        .writer_done(writer_done),
-        .writer_aborted(writer_aborted),
-        .writer_error(writer_error),
-        .writer_fault_detail(writer_fault_detail),
+        .writer_done(engine_writer_done_q),
+        .writer_aborted(engine_writer_aborted_q),
+        .writer_error(engine_writer_error_q),
+        .writer_fault_detail(engine_writer_fault_detail_q),
         .pixel_valid(blitter_pixel_valid),
         .pixel_ready(blitter_pixel_ready),
         .pixel_address(blitter_pixel_address),
@@ -618,10 +648,10 @@ reg [1:0] completion_beat_index;
         .writer_abort(geometry_writer_abort),
         .writer_flush(geometry_writer_flush),
         .writer_flush_ready(engine_writer_flush_ready),
-        .writer_done(writer_done),
-        .writer_aborted(writer_aborted),
-        .writer_error(writer_error),
-        .writer_fault_detail(writer_fault_detail),
+        .writer_done(engine_writer_done_q),
+        .writer_aborted(engine_writer_aborted_q),
+        .writer_error(engine_writer_error_q),
+        .writer_fault_detail(engine_writer_fault_detail_q),
         .pixel_valid(geometry_pixel_valid),
         .pixel_ready(geometry_pixel_ready),
         .pixel_address(geometry_pixel_address),
@@ -665,10 +695,10 @@ reg [1:0] completion_beat_index;
         .writer_barrier(flood_writer_barrier),
         .writer_barrier_ready(writer_barrier_ready),
         .writer_barrier_done(writer_barrier_done),
-        .writer_done(writer_done),
-        .writer_aborted(writer_aborted),
-        .writer_error(writer_error),
-        .writer_fault_detail(writer_fault_detail),
+        .writer_done(engine_writer_done_q),
+        .writer_aborted(engine_writer_aborted_q),
+        .writer_error(engine_writer_error_q),
+        .writer_fault_detail(engine_writer_fault_detail_q),
         .pixel_valid(flood_pixel_valid),
         .pixel_ready(flood_pixel_ready),
         .pixel_address(flood_pixel_address),
@@ -684,11 +714,11 @@ reg [1:0] completion_beat_index;
         .m_axi_arqos(flood_arqos),
         .m_axi_arvalid(flood_arvalid),
         .m_axi_arready(flood_arready),
-        .m_axi_rid(m_axi_rid),
-        .m_axi_rdata(m_axi_rdata),
-        .m_axi_rresp(m_axi_rresp),
-        .m_axi_rlast(m_axi_rlast),
-        .m_axi_rvalid(flood_busy && m_axi_rvalid),
+        .m_axi_rid(FLOOD_READ_ID),
+        .m_axi_rdata(engine_response_data_q),
+        .m_axi_rresp(engine_response_error_q ? 2'b10 : 2'b00),
+        .m_axi_rlast(engine_response_last_q),
+        .m_axi_rvalid(flood_busy && engine_response_valid_q),
         .m_axi_rready(flood_rready)
     );
 
@@ -732,11 +762,11 @@ reg [1:0] completion_beat_index;
         .writer_start(glyph_writer_start),
         .writer_abort(glyph_writer_abort),
         .writer_flush(glyph_writer_flush),
-        .writer_flush_ready(engine_writer_flush_ready_q),
-        .writer_done(writer_done),
-        .writer_aborted(writer_aborted),
-        .writer_error(writer_error),
-        .writer_fault_detail(writer_fault_detail),
+        .writer_flush_ready(engine_writer_flush_ready),
+        .writer_done(engine_writer_done_q),
+        .writer_aborted(engine_writer_aborted_q),
+        .writer_error(engine_writer_error_q),
+        .writer_fault_detail(engine_writer_fault_detail_q),
         .pixel_valid(glyph_pixel_valid),
         .pixel_ready(glyph_pixel_ready),
         .pixel_address(glyph_pixel_address),
@@ -752,93 +782,63 @@ reg [1:0] completion_beat_index;
         .m_axi_arqos(glyph_arqos),
         .m_axi_arvalid(glyph_arvalid),
         .m_axi_arready(glyph_arready),
-        .m_axi_rid(m_axi_rid),
-        .m_axi_rdata(m_axi_rdata),
-        .m_axi_rresp(m_axi_rresp),
-        .m_axi_rlast(m_axi_rlast),
-        .m_axi_rvalid(glyph_busy && m_axi_rvalid),
+        .m_axi_rid(GLYPH_READ_ID),
+        .m_axi_rdata(engine_response_data_q),
+        .m_axi_rresp(engine_response_error_q ? 2'b10 : 2'b00),
+        .m_axi_rlast(engine_response_last_q),
+        .m_axi_rvalid(glyph_busy && engine_response_valid_q),
         .m_axi_rready(glyph_rready)
     );
 
-    wire selected_writer_start = command_is_glyph_q ? glyph_writer_start :
-        command_is_flood_q ? flood_writer_start :
-        command_is_geometry_q ? geometry_writer_start : blitter_writer_start;
-    wire selected_writer_abort = command_is_glyph_q ? glyph_writer_abort :
-        command_is_flood_q ? flood_writer_abort :
-        command_is_geometry_q ? geometry_writer_abort : blitter_writer_abort;
-    wire selected_writer_flush = command_is_glyph_q ? glyph_writer_flush :
-        command_is_flood_q ? flood_writer_flush :
-        command_is_geometry_q ? geometry_writer_flush : blitter_writer_flush;
-    wire selected_pixel_valid = command_is_glyph_q ? glyph_pixel_valid :
-        command_is_flood_q ? flood_pixel_valid :
-        command_is_geometry_q ? geometry_pixel_valid : blitter_pixel_valid;
-    wire [31:0] selected_pixel_address = command_is_glyph_q ?
-        glyph_pixel_address : command_is_flood_q ?
-        flood_pixel_address : command_is_geometry_q ?
+    wire selected_writer_start = glyph_writer_start || flood_writer_start ||
+        geometry_writer_start || blitter_writer_start;
+    wire selected_writer_abort = glyph_writer_abort || flood_writer_abort ||
+        geometry_writer_abort || blitter_writer_abort;
+    wire selected_writer_flush = glyph_writer_flush || flood_writer_flush ||
+        geometry_writer_flush || blitter_writer_flush;
+    wire selected_pixel_valid = glyph_pixel_valid || flood_pixel_valid ||
+        geometry_pixel_valid || blitter_pixel_valid;
+    wire [31:0] selected_pixel_address = glyph_pixel_valid ?
+        glyph_pixel_address : flood_pixel_valid ?
+        flood_pixel_address : geometry_pixel_valid ?
         geometry_pixel_address : blitter_pixel_address;
-    wire [7:0] selected_pixel_format = command_is_glyph_q ?
-        glyph_pixel_format : command_is_flood_q ?
-        flood_pixel_format : command_is_geometry_q ?
+    wire [7:0] selected_pixel_format = glyph_pixel_valid ?
+        glyph_pixel_format : flood_pixel_valid ?
+        flood_pixel_format : geometry_pixel_valid ?
         geometry_pixel_format : blitter_pixel_format;
-    wire [31:0] selected_pixel_value = command_is_glyph_q ?
-        glyph_pixel_value : command_is_flood_q ?
-        flood_pixel_value : command_is_geometry_q ?
+    wire [31:0] selected_pixel_value = glyph_pixel_valid ?
+        glyph_pixel_value : flood_pixel_valid ?
+        flood_pixel_value : geometry_pixel_valid ?
         geometry_pixel_value : blitter_pixel_value;
-    reg [31:0] dispatch_address_q [0:1];
-    reg [7:0] dispatch_format_q [0:1];
-    reg [31:0] dispatch_value_q [0:1];
-    reg dispatch_read_pointer_q, dispatch_write_pointer_q;
-    reg [1:0] dispatch_count_q;
     wire writer_pixel_ready;
-    wire dispatch_valid = dispatch_count_q != 2'd0;
-    wire dispatch_ready = dispatch_count_q != 2'd2;
-    wire dispatch_enqueue = selected_pixel_valid && dispatch_ready;
-    wire dispatch_dequeue = dispatch_valid && writer_pixel_ready;
 
+    assign engine_writer_flush_ready = !engine_writer_flush_pending_q;
     always @(posedge clk) begin
-        if (reset || local_engine_reset || selected_writer_abort) begin
-            dispatch_read_pointer_q <= 1'b0;
-            dispatch_write_pointer_q <= 1'b0;
-            dispatch_count_q <= 2'd0;
-            dispatch_address_q[0] <= 32'd0;
-            dispatch_address_q[1] <= 32'd0;
-            dispatch_format_q[0] <= 8'd0;
-            dispatch_format_q[1] <= 8'd0;
-            dispatch_value_q[0] <= 32'd0;
-            dispatch_value_q[1] <= 32'd0;
+        if (reset || local_engine_reset) begin
+            engine_writer_abort_q <= 1'b0;
+            engine_writer_flush_pending_q <= 1'b0;
+            engine_writer_done_q <= 1'b0;
+            engine_writer_aborted_q <= 1'b0;
+            engine_writer_error_q <= 1'b0;
+            engine_writer_fault_detail_q <= 32'd0;
         end else begin
-            if (dispatch_enqueue) begin
-                dispatch_address_q[dispatch_write_pointer_q] <=
-                    selected_pixel_address;
-                dispatch_format_q[dispatch_write_pointer_q] <=
-                    selected_pixel_format;
-                dispatch_value_q[dispatch_write_pointer_q] <=
-                    selected_pixel_value;
-                dispatch_write_pointer_q <= dispatch_write_pointer_q + 1'b1;
-            end
-            if (dispatch_dequeue)
-                dispatch_read_pointer_q <= dispatch_read_pointer_q + 1'b1;
-            case ({dispatch_enqueue, dispatch_dequeue})
-                2'b10: dispatch_count_q <= dispatch_count_q + 2'd1;
-                2'b01: dispatch_count_q <= dispatch_count_q - 2'd1;
-                default: dispatch_count_q <= dispatch_count_q;
-            endcase
+            engine_writer_abort_q <= selected_writer_abort;
+            engine_writer_done_q <= writer_done;
+            engine_writer_aborted_q <= writer_aborted;
+            engine_writer_error_q <= writer_error;
+            engine_writer_fault_detail_q <= writer_fault_detail;
+            if (selected_writer_abort)
+                engine_writer_flush_pending_q <= 1'b0;
+            else if (engine_writer_flush_pending_q && writer_flush_ready)
+                engine_writer_flush_pending_q <= 1'b0;
+            else if (selected_writer_flush)
+                engine_writer_flush_pending_q <= 1'b1;
         end
     end
-
-    assign engine_writer_flush_ready = writer_flush_ready &&
-        !dispatch_valid;
-    always @(posedge clk) begin
-        if (reset || local_engine_reset)
-            engine_writer_flush_ready_q <= 1'b0;
-        else
-            engine_writer_flush_ready_q <= engine_writer_flush_ready;
-    end
-    assign blitter_pixel_ready = !command_is_glyph_q &&
-        !command_is_flood_q && !command_is_geometry_q && dispatch_ready;
-    assign geometry_pixel_ready = command_is_geometry_q && dispatch_ready;
-    assign flood_pixel_ready = command_is_flood_q && dispatch_ready;
-    assign glyph_pixel_ready = command_is_glyph_q && dispatch_ready;
+    assign blitter_pixel_ready = writer_pixel_ready;
+    assign geometry_pixel_ready = writer_pixel_ready;
+    assign flood_pixel_ready = writer_pixel_ready;
+    assign glyph_pixel_ready = writer_pixel_ready;
 
     wire [AXI_ID_WIDTH-1:0] pixel_awid;
     wire [31:0] pixel_awaddr;
@@ -867,17 +867,17 @@ reg [1:0] completion_beat_index;
         .clk(clk),
         .reset(reset || local_engine_reset),
         .start(selected_writer_start),
-        .abort(selected_writer_abort),
-        .flush(selected_writer_flush),
+        .abort(engine_writer_abort_q),
+        .flush(engine_writer_flush_pending_q),
         .flush_ready(writer_flush_ready),
         .barrier(command_is_flood_q && flood_writer_barrier),
         .barrier_ready(writer_barrier_ready),
         .barrier_done(writer_barrier_done),
-        .pixel_valid(dispatch_valid),
+        .pixel_valid(selected_pixel_valid),
         .pixel_ready(writer_pixel_ready),
-        .pixel_address(dispatch_address_q[dispatch_read_pointer_q]),
-        .pixel_format(dispatch_format_q[dispatch_read_pointer_q]),
-        .pixel_value(dispatch_value_q[dispatch_read_pointer_q]),
+        .pixel_address(selected_pixel_address),
+        .pixel_format(selected_pixel_format),
+        .pixel_value(selected_pixel_value),
         .busy(writer_busy),
         .done(writer_done),
         .aborted(writer_aborted),
@@ -906,9 +906,13 @@ reg [1:0] completion_beat_index;
         .m_axi_bready(pixel_bready)
     );
 
-    wire read_owner_glyph = glyph_busy;
-    wire read_owner_flood = flood_busy;
-    wire read_owner_blitter = blitter_busy;
+    // The command manager owns dispatch, so it also owns AXI read routing.
+    // Feeding engine busy outputs back through this mux creates a needless
+    // round trip on every response-valid path.
+    wire read_owner_glyph = command_dispatched_q && command_is_glyph_q;
+    wire read_owner_flood = command_dispatched_q && command_is_flood_q;
+    wire read_owner_blitter = command_dispatched_q &&
+        !command_is_geometry_q && !command_is_flood_q && !command_is_glyph_q;
     assign m_axi_arid = read_owner_glyph ? glyph_arid :
         read_owner_flood ? flood_arid :
         read_owner_blitter ? blitter_arid : MANAGER_READ_ID;
@@ -928,33 +932,37 @@ reg [1:0] completion_beat_index;
     assign m_axi_arvalid = read_owner_glyph ? glyph_arvalid :
         read_owner_flood ? flood_arvalid :
         read_owner_blitter ? blitter_arvalid : manager_arvalid;
-    assign glyph_arready = read_owner_glyph && m_axi_arready;
-    assign flood_arready = read_owner_flood && m_axi_arready;
-    assign blitter_arready = read_owner_blitter && m_axi_arready;
-    assign blitter_rid = m_axi_rid;
-    assign blitter_rdata = m_axi_rdata;
-    assign blitter_rresp = m_axi_rresp;
-    assign blitter_rlast = m_axi_rlast;
-    assign blitter_rvalid = read_owner_blitter && m_axi_rvalid;
+    // Ownership gates the shared ARVALID/address mux. Ready may fan directly
+    // to every idle-or-selected engine because a handshake still requires
+    // that engine's own ARVALID; keeping ownership out of this return path
+    // avoids feeding command classification through each engine FSM.
+    assign glyph_arready = m_axi_arready;
+    assign flood_arready = m_axi_arready;
+    assign blitter_arready = m_axi_arready;
+    assign blitter_rid = BLITTER_READ_ID;
+    assign blitter_rdata = engine_response_data_q;
+    assign blitter_rresp = engine_response_error_q ? 2'b10 : 2'b00;
+    assign blitter_rlast = engine_response_last_q;
+    assign blitter_rvalid = blitter_busy && engine_response_valid_q;
+    wire engine_response_consume = engine_response_valid_q &&
+        ((glyph_busy && glyph_rready) ||
+         (flood_busy && flood_rready) ||
+         (blitter_busy && blitter_rready));
+    // The spill entry keeps HP2 RREADY dependent only on registered local
+    // capacity. Replacing the output on simultaneous consume/capture still
+    // sustains one response beat per clock.
+    wire engine_response_ready = !engine_response_spill_valid_q;
+    wire engine_response_accept = command_dispatched_q &&
+        m_axi_rvalid && engine_response_ready;
     wire manager_rready = !manager_response_valid_q &&
         (state == ST_COMMAND_R || state == ST_DESTINATION_R ||
          state == ST_SOURCE_R || state == ST_AUXILIARY_R);
-    wire manager_response_accept = !read_owner_glyph && !read_owner_flood &&
-        !read_owner_blitter &&
+    wire manager_response_accept = !command_dispatched_q &&
         m_axi_rvalid && manager_rready;
-    assign m_axi_rready = read_owner_glyph ? glyph_rready :
-        read_owner_flood ? flood_rready :
-        read_owner_blitter ? blitter_rready : manager_rready;
+    assign m_axi_rready = command_dispatched_q ?
+        engine_response_ready : manager_rready;
 
     wire write_owner_pixels = writer_busy;
-    wire [63:0] completion_beat_data =
-        completion_beat_index == 2'd0 ?
-            {swap32(completion_words[1]), swap32(completion_words[0])} :
-        completion_beat_index == 2'd1 ?
-            {swap32(completion_words[3]), swap32(completion_words[2])} :
-        completion_beat_index == 2'd2 ?
-            {swap32(completion_words[5]), swap32(completion_words[4])} :
-            {swap32(completion_words[7]), swap32(completion_words[6])};
 assign m_axi_awid = write_owner_pixels ? pixel_awid :
                          COMPLETION_WRITE_ID;
 assign m_axi_awaddr = write_owner_pixels ? pixel_awaddr :
@@ -969,7 +977,7 @@ assign m_axi_awaddr = write_owner_pixels ? pixel_awaddr :
                             completion_awvalid;
     assign pixel_awready = write_owner_pixels && m_axi_awready;
     assign m_axi_wdata = write_owner_pixels ? pixel_wdata :
-                          completion_beat_data;
+                          completion_wdata_q;
     assign m_axi_wstrb = write_owner_pixels ? pixel_wstrb : 8'hff;
     assign m_axi_wlast = write_owner_pixels ? pixel_wlast :
                           completion_beat_index == 2'd3;
@@ -1009,10 +1017,9 @@ assign m_axi_awaddr = write_owner_pixels ? pixel_awaddr :
             manager_araddr <= 32'd0;
             manager_arlen <= 8'd0;
             manager_response_valid_q <= 1'b0;
-            manager_response_id_q <= {AXI_ID_WIDTH{1'b0}};
-            manager_response_data_q <= 64'd0;
-            manager_response_resp_q <= 2'd0;
-            manager_response_last_q <= 1'b0;
+            engine_response_valid_q <= 1'b0;
+            engine_response_spill_valid_q <= 1'b0;
+            engine_expected_id_q <= {AXI_ID_WIDTH{1'b0}};
             descriptor_capture_enabled_q <= 1'b0;
             command_opcode_q <= 16'd0;
             command_is_fill_q <= 1'b0;
@@ -1083,6 +1090,10 @@ assign m_axi_awaddr = write_owner_pixels ? pixel_awaddr :
             admission_completion_used_q <= 11'd0;
             admission_configuration_valid_q <= 1'b0;
             admission_completion_available_q <= 1'b0;
+            admission_ring_alignment_valid_q <= 1'b0;
+            admission_submission_in_bounds_q <= 1'b0;
+            admission_completion_in_bounds_q <= 1'b0;
+            admission_rings_overlap_q <= 1'b0;
             validation_error_q <= 1'b0;
             validation_status_q <= `ASTRA_RENDER_STATUS_OK;
             validation_fault_q <= 32'd0;
@@ -1090,15 +1101,24 @@ assign m_axi_awaddr = write_owner_pixels ? pixel_awaddr :
             layout_bad_flags_q <= 1'b0;
             layout_bad_fill_q <= 1'b0;
             layout_bad_geometry_q <= 1'b0;
+            layout_bad_geometry_line_q <= 1'b0;
+            layout_bad_geometry_circle_q <= 1'b0;
+            layout_bad_geometry_ellipse_q <= 1'b0;
+            layout_bad_geometry_pattern_q <= 1'b0;
             layout_bad_flood_q <= 1'b0;
             layout_bad_glyph_q <= 1'b0;
+            layout_word_nonzero_q <= 7'd0;
             glyph_descriptor_end_q <= 33'd0;
             header_result_q <= HEADER_OK;
             sequence_result_q <= SEQUENCE_OK;
+            submission_command_address_q <= 32'd0;
             completion_status_q <= `ASTRA_RENDER_STATUS_OK;
             completion_count_q <= 32'd0;
             completion_fault_q <= 32'd0;
+            completion_failed_q <= 1'b0;
             completion_write_address_q <= 32'd0;
+            completion_end_cycle_q <= 32'd0;
+            completion_wdata_q <= 64'd0;
             completion_awvalid <= 1'b0;
             completion_wvalid <= 1'b0;
             completion_beat_index <= 2'd0;
@@ -1135,10 +1155,8 @@ assign m_axi_awaddr = write_owner_pixels ? pixel_awaddr :
                  word_index = word_index + 1)
                 command_words[word_index] <= 32'd0;
             for (word_index = 0; word_index < 8;
-                 word_index = word_index + 1) begin
+                 word_index = word_index + 1)
                 descriptor_words[word_index] <= 32'd0;
-                completion_words[word_index] <= 32'd0;
-            end
         end else begin
             cycle_counter <= cycle_counter + 32'd1;
             completion_irq <= 1'b0;
@@ -1159,6 +1177,56 @@ assign m_axi_awaddr = write_owner_pixels ? pixel_awaddr :
                 manager_response_data_q <= m_axi_rdata;
                 manager_response_resp_q <= m_axi_rresp;
                 manager_response_last_q <= m_axi_rlast;
+            end
+
+            if (command_dispatched_q && m_axi_arvalid && m_axi_arready)
+                engine_expected_id_q <= m_axi_arid;
+
+            if (local_engine_reset) begin
+                engine_response_valid_q <= 1'b0;
+                engine_response_spill_valid_q <= 1'b0;
+            end else begin
+                case ({engine_response_accept, engine_response_consume})
+                    2'b10: begin
+                        if (engine_response_valid_q) begin
+                            engine_response_spill_valid_q <= 1'b1;
+                            engine_response_spill_data_q <= m_axi_rdata;
+                            engine_response_spill_error_q <=
+                                m_axi_rid != engine_expected_id_q ||
+                                m_axi_rresp != 2'b00;
+                            engine_response_spill_last_q <= m_axi_rlast;
+                        end else begin
+                            engine_response_valid_q <= 1'b1;
+                            engine_response_data_q <= m_axi_rdata;
+                            engine_response_error_q <=
+                                m_axi_rid != engine_expected_id_q ||
+                                m_axi_rresp != 2'b00;
+                            engine_response_last_q <= m_axi_rlast;
+                        end
+                    end
+                    2'b01: begin
+                        if (engine_response_spill_valid_q) begin
+                            engine_response_data_q <=
+                                engine_response_spill_data_q;
+                            engine_response_error_q <=
+                                engine_response_spill_error_q;
+                            engine_response_last_q <=
+                                engine_response_spill_last_q;
+                            engine_response_spill_valid_q <= 1'b0;
+                        end else begin
+                            engine_response_valid_q <= 1'b0;
+                        end
+                    end
+                    2'b11: begin
+                        engine_response_valid_q <= 1'b1;
+                        engine_response_data_q <= m_axi_rdata;
+                        engine_response_error_q <=
+                            m_axi_rid != engine_expected_id_q ||
+                            m_axi_rresp != 2'b00;
+                        engine_response_last_q <= m_axi_rlast;
+                    end
+                    default: begin end
+                endcase
             end
 
             if (manager_response_valid_q &&
@@ -1190,7 +1258,7 @@ assign m_axi_awaddr = write_owner_pixels ? pixel_awaddr :
                 command_active <= 1'b0;
                 command_dispatched_q <= 1'b0;
                 descriptor_capture_enabled_q <= 1'b0;
-                if (completion_status_q == `ASTRA_RENDER_STATUS_OK) begin
+                if (!completion_failed_q) begin
                     if (retirement_open)
                         retired_fence <= command_sequence_q;
                 end else begin
@@ -1264,26 +1332,43 @@ assign m_axi_awaddr = write_owner_pixels ? pixel_awaddr :
                             active_completion_ring_end_q <=
                                 {1'b0, active_completion_ring_offset_q} +
                                 COMPLETION_RING_BYTES;
+                            submission_command_address_q <= ARENA_BASE +
+                                active_submission_ring_offset_q +
+                                ({21'd0, submission_consumer[9:0]} << 6);
                             state <= ST_ADMISSION_VALIDATE;
                         end
                     end
 
                     ST_ADMISSION_VALIDATE: begin
                         if (!queue_rebase) begin
-                            admission_configuration_valid_q <=
-                                ARENA_LIMIT > ARENA_BASE &&
+                            admission_ring_alignment_valid_q <=
                                 active_submission_ring_offset_q[5:0] ==
                                     6'd0 &&
                                 active_completion_ring_offset_q[4:0] ==
-                                    5'd0 &&
+                                    5'd0;
+                            admission_submission_in_bounds_q <=
                                 active_submission_ring_end_q <=
-                                    {1'b0, ARENA_BYTES} &&
+                                    {1'b0, ARENA_BYTES};
+                            admission_completion_in_bounds_q <=
                                 active_completion_ring_end_q <=
-                                    {1'b0, ARENA_BYTES} &&
-                                !({1'b0, active_submission_ring_offset_q} <
-                                        active_completion_ring_end_q &&
-                                  {1'b0, active_completion_ring_offset_q} <
-                                        active_submission_ring_end_q) &&
+                                    {1'b0, ARENA_BYTES};
+                            admission_rings_overlap_q <=
+                                {1'b0, active_submission_ring_offset_q} <
+                                    active_completion_ring_end_q &&
+                                {1'b0, active_completion_ring_offset_q} <
+                                    active_submission_ring_end_q;
+                            state <= ST_ADMISSION_COMBINE;
+                        end
+                    end
+
+                    ST_ADMISSION_COMBINE: begin
+                        if (!queue_rebase) begin
+                            admission_configuration_valid_q <=
+                                ARENA_LIMIT > ARENA_BASE &&
+                                admission_ring_alignment_valid_q &&
+                                admission_submission_in_bounds_q &&
+                                admission_completion_in_bounds_q &&
+                                !admission_rings_overlap_q &&
                                 active_resource_generation_q != 32'd0 &&
                                 admission_submission_used_q <=
                                     `ASTRA_RENDER_RING_ENTRIES &&
@@ -1292,6 +1377,7 @@ assign m_axi_awaddr = write_owner_pixels ? pixel_awaddr :
                             admission_completion_available_q <=
                                 admission_completion_used_q <
                                     `ASTRA_RENDER_RING_ENTRIES;
+                            manager_araddr <= submission_command_address_q;
                             state <= ST_ADMISSION_DECIDE;
                         end
                     end
@@ -1313,9 +1399,6 @@ assign m_axi_awaddr = write_owner_pixels ? pixel_awaddr :
                             state <= ST_IDLE;
                         end else begin
                             busy <= 1'b1;
-                            manager_araddr <= ARENA_BASE +
-                                active_submission_ring_offset_q +
-                                ({21'd0, submission_consumer[9:0]} << 6);
                             manager_arlen <= 8'd7;
                             manager_arvalid <= 1'b1;
                             read_beat_index <= 5'd0;
@@ -1574,6 +1657,20 @@ assign m_axi_awaddr = write_owner_pixels ? pixel_awaddr :
                     end
 
                     ST_VALIDATE_LAYOUT: begin
+                        layout_word_nonzero_q[0] <=
+                            command_words[9] != 32'd0;
+                        layout_word_nonzero_q[1] <=
+                            command_words[10] != 32'd0;
+                        layout_word_nonzero_q[2] <=
+                            command_words[11] != 32'd0;
+                        layout_word_nonzero_q[3] <=
+                            command_words[12] != 32'd0;
+                        layout_word_nonzero_q[4] <=
+                            command_words[13] != 32'd0;
+                        layout_word_nonzero_q[5] <=
+                            command_words[14] != 32'd0;
+                        layout_word_nonzero_q[6] <=
+                            command_words[15] != 32'd0;
                         layout_bad_clip_q <=
                             $signed(command_clip_left_q) >
                                 $signed(command_clip_right_q) ||
@@ -1588,52 +1685,70 @@ assign m_axi_awaddr = write_owner_pixels ? pixel_awaddr :
                              auxiliary_descriptor_offset_q != 32'd0) ||
                             (command_is_flood_q &&
                              auxiliary_descriptor_offset_q == 32'd0);
-                        layout_bad_fill_q <=
-                            command_is_fill_q &&
+                        glyph_descriptor_end_q <=
+                            {1'b0, command_words[10]} +
+                            ({20'd0, command_words[11][12:0]} << 4);
+                        state <= ST_VALIDATE_LAYOUT_WORDS;
+                    end
+
+                    ST_VALIDATE_LAYOUT_WORDS: begin
+                        layout_bad_fill_q <= command_is_fill_q &&
                             (source_descriptor_offset_q != 32'd0 ||
-                             command_words[11] != 32'd0 ||
-                             command_words[13] != 32'd0);
-                        layout_bad_geometry_q <= command_is_geometry_q &&
-                            (((command_opcode_q == `ASTRA_RENDER_OP_LINE ||
-                               command_opcode_q == `ASTRA_RENDER_OP_RECT) &&
-                              (command_words[9] != 32'd0 ||
-                               command_words[10] != 32'd0 ||
-                               command_words[13] != 32'd0 ||
-                               command_words[14] != 32'd0)) ||
-                             (command_opcode_q == `ASTRA_RENDER_OP_CIRCLE &&
-                              (command_words[9] != 32'd0 ||
-                               command_words[10] != 32'd0 ||
-                               command_words[12] != 32'd0 ||
-                               command_words[13][15:0] != 16'd0 ||
-                               command_words[14] != 32'd0)) ||
-                             (command_opcode_q == `ASTRA_RENDER_OP_ELLIPSE &&
-                              (command_words[9] != 32'd0 ||
-                               command_words[10] != 32'd0 ||
-                               command_words[12] != 32'd0 ||
-                               command_words[14] != 32'd0)) ||
-                             (command_opcode_q ==
-                                  `ASTRA_RENDER_OP_PATTERN_FILL &&
-                              !command_flags_q[1] &&
-                              command_words[14] != 32'd0));
+                             layout_word_nonzero_q[2] ||
+                             layout_word_nonzero_q[4]);
+                        layout_bad_geometry_line_q <=
+                            layout_word_nonzero_q[0] ||
+                            layout_word_nonzero_q[1] ||
+                            layout_word_nonzero_q[4] ||
+                            layout_word_nonzero_q[5];
+                        layout_bad_geometry_circle_q <=
+                            layout_word_nonzero_q[0] ||
+                            layout_word_nonzero_q[1] ||
+                            layout_word_nonzero_q[3] ||
+                            command_words[13][15:0] != 16'd0 ||
+                            layout_word_nonzero_q[5];
+                        layout_bad_geometry_ellipse_q <=
+                            layout_word_nonzero_q[0] ||
+                            layout_word_nonzero_q[1] ||
+                            layout_word_nonzero_q[3] ||
+                            layout_word_nonzero_q[5];
+                        layout_bad_geometry_pattern_q <=
+                            !command_flags_q[1] &&
+                            layout_word_nonzero_q[5];
                         layout_bad_flood_q <= command_is_flood_q &&
                             (source_descriptor_offset_q != 32'd0 ||
-                             command_words[12] != 32'd0 ||
-                             command_words[13] != 32'd0 ||
-                             command_words[14] != 32'd0);
+                             layout_word_nonzero_q[3] ||
+                             layout_word_nonzero_q[4] ||
+                             layout_word_nonzero_q[5]);
                         layout_bad_glyph_q <= command_is_glyph_q &&
                             (command_words[10][3:0] != 4'd0 ||
                              command_words[11] == 32'd0 ||
                              command_words[11] >
                                 `ASTRA_RENDER_MAX_GLYPH_DESCRIPTORS ||
                              command_words[14][31:8] != 24'd0 ||
-                             command_words[15] != 32'd0);
-                        glyph_descriptor_end_q <=
-                            {1'b0, command_words[10]} +
-                            ({20'd0, command_words[11][12:0]} << 4);
+                             layout_word_nonzero_q[6]);
                         state <= ST_VALIDATE_GLYPH_RANGE;
                     end
 
                     ST_VALIDATE_GLYPH_RANGE: begin
+                        case (command_opcode_q[2:0])
+                            3'd0, 3'd1:
+                                layout_bad_geometry_q <=
+                                    command_is_geometry_q &&
+                                    layout_bad_geometry_line_q;
+                            3'd2:
+                                layout_bad_geometry_q <=
+                                    command_is_geometry_q &&
+                                    layout_bad_geometry_circle_q;
+                            3'd3:
+                                layout_bad_geometry_q <=
+                                    command_is_geometry_q &&
+                                    layout_bad_geometry_ellipse_q;
+                            default:
+                                layout_bad_geometry_q <=
+                                    command_is_geometry_q &&
+                                    layout_bad_geometry_pattern_q;
+                        endcase
                         layout_bad_glyph_q <= layout_bad_glyph_q ||
                             (command_is_glyph_q &&
                              glyph_descriptor_end_q >
@@ -2509,38 +2624,39 @@ assign m_axi_awaddr = write_owner_pixels ? pixel_awaddr :
                                      (!command_is_geometry_q &&
                                       !command_is_flood_q &&
                                       !command_is_glyph_q && blitter_done)) begin
-                            completion_status_q <= command_is_glyph_q ?
-                                glyph_status : command_is_flood_q ?
-                                flood_status : command_is_geometry_q ?
-                                geometry_status : blitter_status;
-                            completion_count_q <= command_is_glyph_q ?
-                                glyph_completed_pixels : command_is_flood_q ?
-                                flood_completed_pixels : command_is_geometry_q ?
-                                geometry_completed_pixels :
-                                blitter_completed_pixels;
-                            completion_fault_q <= command_is_glyph_q ?
-                                glyph_fault_detail : command_is_flood_q ?
-                                flood_fault_detail : command_is_geometry_q ?
-                                geometry_fault_detail : blitter_fault_detail;
                             deadline_active <= 1'b0;
-                            state <= ST_PREPARE_COMPLETION;
+                            state <= ST_CAPTURE_ENGINE_COMPLETION;
                         end
+                    end
+
+                    ST_CAPTURE_ENGINE_COMPLETION: begin
+                        completion_status_q <= command_is_glyph_q ?
+                            glyph_status : command_is_flood_q ?
+                            flood_status : command_is_geometry_q ?
+                            geometry_status : blitter_status;
+                        completion_count_q <= command_is_glyph_q ?
+                            glyph_completed_pixels : command_is_flood_q ?
+                            flood_completed_pixels : command_is_geometry_q ?
+                            geometry_completed_pixels :
+                            blitter_completed_pixels;
+                        completion_fault_q <= command_is_glyph_q ?
+                            glyph_fault_detail : command_is_flood_q ?
+                            flood_fault_detail : command_is_geometry_q ?
+                            geometry_fault_detail : blitter_fault_detail;
+                        state <= ST_PREPARE_COMPLETION;
                     end
 
                     ST_PREPARE_COMPLETION: begin
                         deadline_active <= 1'b0;
                         cancel_before_dispatch <= 1'b0;
-                        completion_words[0] <=
-                            {16'(`ASTRA_RENDER_ABI_VERSION),
-                             16'(`ASTRA_RENDER_COMPLETION_BYTES)};
-                        completion_words[1] <=
-                            {command_opcode_q, completion_status_q};
-                        completion_words[2] <= command_sequence_q;
-                        completion_words[3] <= completion_count_q;
-                        completion_words[4] <= command_start_cycle;
-                        completion_words[5] <= cycle_counter;
-                        completion_words[6] <= completion_fault_q;
-                        completion_words[7] <= command_generation_q;
+                        completion_failed_q <=
+                            completion_status_q != `ASTRA_RENDER_STATUS_OK;
+                        completion_end_cycle_q <= cycle_counter;
+                        completion_wdata_q <= {
+                            swap32({command_opcode_q, completion_status_q}),
+                            swap32({16'(`ASTRA_RENDER_ABI_VERSION),
+                                    16'(`ASTRA_RENDER_COMPLETION_BYTES)})
+                        };
                         completion_write_address_q <= ARENA_BASE +
                             active_completion_ring_offset_q +
                             ({21'd0, completion_producer[9:0]} << 5);
@@ -2563,6 +2679,20 @@ assign m_axi_awaddr = write_owner_pixels ? pixel_awaddr :
                                 completion_wvalid <= 1'b0;
                                 state <= ST_COMPLETION_B;
                             end else begin
+                                case (completion_beat_index)
+                                    2'd0: completion_wdata_q <= {
+                                        swap32(completion_count_q),
+                                        swap32(command_sequence_q)
+                                    };
+                                    2'd1: completion_wdata_q <= {
+                                        swap32(completion_end_cycle_q),
+                                        swap32(command_start_cycle)
+                                    };
+                                    default: completion_wdata_q <= {
+                                        swap32(command_generation_q),
+                                        swap32(completion_fault_q)
+                                    };
+                                endcase
                                 completion_beat_index <=
                                     completion_beat_index + 2'd1;
                             end

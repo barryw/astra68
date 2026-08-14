@@ -194,6 +194,8 @@ module astra_framebuffer_line_builder #(
     reg [10:0] right_pixels_q;
     reg [10:0] fill_pixels_q;
     reg [10:0] segment_pixels_remaining;
+    reg segment_pixels_active_q;
+    reg segment_last_pixel_q;
 
     wire [31:0] segment_byte_address =
         row_address_q + ({19'd0, source_x_q} << bytes_shift_q);
@@ -271,7 +273,7 @@ module astra_framebuffer_line_builder #(
     wire [7:0] active_byte3 = beat_byte(active_beat, active_byte + 3'd3);
 
     wire mapped_write = state == ST_SEGMENT && beat_active &&
-                        segment_pixels_remaining != 11'd0;
+                        segment_pixels_active_q;
     wire invalid_write = (state == ST_FILL_LEFT ||
                           state == ST_FILL_RIGHT) && fill_pixels_q != 11'd0;
     wire line_write = mapped_write || invalid_write;
@@ -364,6 +366,8 @@ module astra_framebuffer_line_builder #(
             right_pixels_q <= 11'd0;
             fill_pixels_q <= 11'd0;
             segment_pixels_remaining <= 11'd0;
+            segment_pixels_active_q <= 1'b0;
+            segment_last_pixel_q <= 1'b0;
             issue_address <= 32'd0;
             issue_beats_remaining <= 11'd0;
             first_byte_offset <= 3'd0;
@@ -674,6 +678,8 @@ module astra_framebuffer_line_builder #(
                          {12'd0, first_byte_offset} + 15'd7) >> 3;
                     ar_request_valid <= 1'b0;
                     segment_pixels_remaining <= mapped_pixels_q;
+                    segment_pixels_active_q <= mapped_pixels_q != 11'd0;
+                    segment_last_pixel_q <= mapped_pixels_q == 11'd1;
                     burst_write_ptr <= 3'd0;
                     burst_read_ptr <= 3'd0;
                     burst_count <= 4'd0;
@@ -696,20 +702,25 @@ module astra_framebuffer_line_builder #(
                         active_byte <= first_beat ? first_byte_offset : 3'd0;
                         first_beat <= 1'b0;
                         beat_active <= 1'b1;
-                    end else if (beat_active &&
-                                 segment_pixels_remaining != 11'd0) begin
+                    end else if (beat_active && segment_pixels_active_q) begin
                         output_x_q <= output_x_q + 11'd1;
                         segment_pixels_remaining <=
                             segment_pixels_remaining - 11'd1;
-                        if (segment_pixels_remaining == 11'd1) begin
+                        if (segment_last_pixel_q) begin
+                            segment_pixels_active_q <= 1'b0;
+                            segment_last_pixel_q <= 1'b0;
                             beat_active <= 1'b0;
                             segment_response_enable_q <= 1'b0;
                             state <= ST_SEGMENT_DRAIN;
-                        end else if ({1'b0, active_byte} +
-                                     {1'b0, bytes_per_pixel_q} >= 4'd8) begin
-                            beat_active <= 1'b0;
                         end else begin
-                            active_byte <= active_byte + bytes_per_pixel_q;
+                            segment_last_pixel_q <=
+                                segment_pixels_remaining == 11'd2;
+                            if ({1'b0, active_byte} +
+                                {1'b0, bytes_per_pixel_q} >= 4'd8)
+                                beat_active <= 1'b0;
+                            else
+                                active_byte <= active_byte +
+                                    bytes_per_pixel_q;
                         end
                     end
                 end

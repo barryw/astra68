@@ -502,7 +502,6 @@ module astra_graphics_pipeline #(
     wire [9:0] copper_virtual_beam_y;
     wire graphics_render_interrupt;
     wire copper_register_move_ready;
-    wire copper_register_move_allowed;
     wire copper_move_allowed;
     wire [1:0] copper_move_timing_class;
     wire copper_register_validate_allowed;
@@ -511,6 +510,10 @@ module astra_graphics_pipeline #(
     wire copper_structural_move_allowed;
     wire copper_structural_move_ready;
     wire copper_structural_validate_allowed;
+    reg copper_register_validate_allowed_q;
+    reg [1:0] copper_validate_timing_class_q;
+    reg copper_structural_validate_allowed_q;
+    reg copper_validate_exact_supported_q;
     wire copper_exact_enqueue_ready;
     wire copper_irq_delivery_build;
     wire copper_pixel_event_irq;
@@ -526,18 +529,20 @@ module astra_graphics_pipeline #(
     wire copper_exact_stale;
     wire copper_exact_late;
     wire copper_exact_enqueue_valid;
-    wire copper_frame_start =
-        (frame_boundary_build && !commit_pending_status) || scene_changed_qq;
+    reg copper_frame_start_q;
 
     always @(posedge build_clk) begin
-        if (build_reset)
+        if (build_reset) begin
             scene_changed_q <= 1'b0;
-        else begin
+            scene_changed_qq <= 1'b0;
+            copper_frame_start_q <= 1'b0;
+        end else begin
             scene_changed_q <= scene_changed;
             scene_changed_qq <= scene_changed_q;
+            copper_frame_start_q <=
+                (frame_boundary_build && !commit_pending_status) ||
+                scene_changed_qq;
         end
-        if (build_reset)
-            scene_changed_qq <= 1'b0;
     end
 
     astra_axi_lite_1to2 control_split_i (
@@ -642,7 +647,7 @@ module astra_graphics_pipeline #(
         .validate_timing_class(copper_validate_timing_class),
         .move_target(copper_move_target),
         .move_data(copper_move_data),
-        .move_allowed(copper_register_move_allowed),
+        .move_allowed(),
         .move_timing_class(copper_move_timing_class),
         .move_valid(copper_move_valid && copper_move_class == 2'd1),
         .move_ready(copper_register_move_ready),
@@ -760,22 +765,39 @@ module astra_graphics_pipeline #(
         .candidates_deferred()
     );
 
-    wire copper_move_exact_supported = copper_move_target == 16'h0018 ||
-        (copper_move_target >= 16'h1000 &&
-         copper_move_target <= 16'h5ffc);
     wire copper_validate_exact_supported =
         copper_validate_move_target == 16'h0018 ||
         (copper_validate_move_target >= 16'h1000 &&
          copper_validate_move_target <= 16'h5ffc);
-    assign copper_move_allowed = copper_structural_move_allowed ||
-        (copper_register_move_allowed &&
-         (copper_move_timing_class != 2'd0 ||
-          copper_move_exact_supported));
+    always @(posedge build_clk) begin
+        if (build_reset) begin
+            copper_register_validate_allowed_q <= 1'b0;
+            copper_validate_timing_class_q <= 2'd0;
+            copper_structural_validate_allowed_q <= 1'b0;
+            copper_validate_exact_supported_q <= 1'b0;
+        end else begin
+            copper_register_validate_allowed_q <=
+                copper_register_validate_allowed;
+            copper_validate_timing_class_q <= copper_validate_timing_class;
+            copper_structural_validate_allowed_q <=
+                copper_structural_validate_allowed;
+            copper_validate_exact_supported_q <=
+                copper_validate_exact_supported;
+        end
+    end
+    // Validation already proved the target and payload before promotion.
+    // Only the two permissions that can change with a new scene baseline
+    // remain dynamic at execution time.
+    assign copper_move_allowed =
+        !(copper_move_target == 16'h0098 && copper_move_data[0] &&
+          !tile0_enable_baseline) &&
+        !(copper_move_target == 16'h00d8 && copper_move_data[0] &&
+          !tile1_enable_baseline);
     assign copper_validate_move_allowed =
-        copper_structural_validate_allowed ||
-        (copper_register_validate_allowed &&
-         (copper_validate_timing_class != 2'd0 ||
-          copper_validate_exact_supported));
+        copper_structural_validate_allowed_q ||
+        (copper_register_validate_allowed_q &&
+         (copper_validate_timing_class_q != 2'd0 ||
+          copper_validate_exact_supported_q));
     wire [1:0] copper_effective_move_timing_class =
         copper_structural_move_allowed ? 2'd2 : copper_move_timing_class;
     wire copper_move_ready = copper_move_class == 2'd0 ?
@@ -790,7 +812,7 @@ module astra_graphics_pipeline #(
         .clk(build_clk),
         .reset(build_reset),
         .frame_boundary(frame_boundary_build),
-        .frame_start(copper_frame_start),
+        .frame_start(copper_frame_start_q),
         .beam_x(copper_virtual_beam_x),
         .beam_y(copper_virtual_beam_y),
         .move_valid(copper_move_valid),
@@ -1469,7 +1491,8 @@ module astra_graphics_pipeline #(
         .OUTPUT_HEIGHT(OUTPUT_HEIGHT),
         .AXI_ID_WIDTH(AXI_ID_WIDTH),
         .AXI_ID({AXI_ID_WIDTH{1'b0}}),
-        .PIXEL_BUDGET(8192),
+        .PIXEL_BUDGET(2048),
+        .MAX_SPRITES_PER_LINE(16),
         .MAX_BUILD_CYCLES(4300)
     ) sprite_builder_i (
         .build_clk(build_clk),

@@ -20,7 +20,8 @@ module tb_astra_front_panel;
     astra_front_panel #(
         .CLK_HZ(1000),
         .SAMPLE_HZ(100),
-        .DEBOUNCE_SAMPLES(3)
+        .DEBOUNCE_SAMPLES(3),
+        .ACTIVITY_LED(7)
     ) dut (
         .clk(clk), .rst(rst),
         .buttons(buttons), .switches(switches),
@@ -82,6 +83,14 @@ module tb_astra_front_panel;
         expect_read(6'h06, 32'h00000033);
         write_reg(6'h0a, 32'h00000055, 4'b0001);
         expect_read(6'h06, 32'h00000066);
+
+        write_reg(6'h0c, 32'd2, 4'b0011);
+        write_reg(6'h0b, 32'd1, 4'b0001);
+        if (leds[7] !== 1'b1)
+            $fatal(1, "activity LED did not assert");
+        repeat (24) @(posedge clk);
+        if (leds[7] !== 1'b0)
+            $fatal(1, "activity LED did not expire");
 
         buttons = 6'b100101;
         switches = 4'b1010;

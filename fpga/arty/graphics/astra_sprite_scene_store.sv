@@ -89,10 +89,11 @@ module astra_sprite_scene_store #(
     localparam [4:0] V_SORT_PRIORITY = 5'd11;
     localparam [4:0] V_DIVIDE_WRITE = 5'd12;
     localparam [4:0] V_DIVIDE_SHIFT = 5'd13;
-    localparam [4:0] V_CHECK_RESULT = 5'd14;
+    localparam [4:0] V_ACCEPT = 5'd14;
     localparam [4:0] V_MULTIPLY = 5'd15;
     localparam [4:0] V_DIVIDE_ROUND = 5'd16;
     localparam [4:0] V_READ_PIPE = 5'd17;
+    localparam [4:0] V_REJECT = 5'd18;
 
     localparam [1:0] METADATA_VALIDATION = 2'd0;
     localparam [1:0] METADATA_CLONE = 2'd1;
@@ -167,14 +168,14 @@ module astra_sprite_scene_store #(
     reg [5:0] clone_descriptor_write_index_q;
     reg clone_descriptor_transfer_valid_q;
     reg [5:0] clone_descriptor_transfer_index_q;
-    reg [31:0] clone_descriptor_transfer_bank0_data_q [0:7];
-    reg [31:0] clone_descriptor_transfer_bank1_data_q [0:7];
+    reg [31:0] descriptor_transfer_bank0_data_q [0:7];
+    reg [31:0] descriptor_transfer_bank1_data_q [0:7];
     reg [11:0] clone_palette_index;
     reg clone_palette_read_valid_q;
     reg [11:0] clone_palette_write_index_q;
     reg clone_palette_transfer_valid_q;
     reg [11:0] clone_palette_transfer_index_q;
-    reg [31:0] clone_palette_transfer_data_q;
+    reg [31:0] palette_transfer_data_q;
 
     reg descriptor_host_write_valid_q;
     reg descriptor_host_write_bank_q;
@@ -192,8 +193,6 @@ module astra_sprite_scene_store #(
     reg [5:0] activation_descriptor_write_index_q;
     reg activation_descriptor_transfer_valid_q;
     reg [5:0] activation_descriptor_transfer_index_q;
-    reg [31:0] activation_descriptor_transfer_bank0_data_q [0:7];
-    reg [31:0] activation_descriptor_transfer_bank1_data_q [0:7];
     reg [31:0] activation_descriptor_transfer_scale_step_q;
     reg [5:0] activation_descriptor_transfer_order_q;
     reg [11:0] activation_palette_index;
@@ -201,11 +200,13 @@ module astra_sprite_scene_store #(
     reg [11:0] activation_palette_write_index_q;
     reg activation_palette_transfer_valid_q;
     reg [11:0] activation_palette_transfer_index_q;
-    reg [31:0] activation_palette_transfer_data_q;
     reg [1:0] palette_restore_state;
     reg palette_restore_pending_q;
     reg [11:0] palette_restore_index;
     wire [31:0] palette_baseline_read_data;
+    reg [31:0] palette_restore_data_q;
+    reg [11:0] palette_restore_write_index_q;
+    reg palette_restore_data_valid_q;
 
     reg [5:0] validation_descriptor_index;
     reg [1:0] metadata_read_owner_q;
@@ -256,15 +257,15 @@ module astra_sprite_scene_store #(
 
             assign clone_descriptor_transfer_data[descriptor_ram_word] =
                 pending_bank_q ?
-                    clone_descriptor_transfer_bank1_data_q[
+                    descriptor_transfer_bank1_data_q[
                         descriptor_ram_word] :
-                    clone_descriptor_transfer_bank0_data_q[
+                    descriptor_transfer_bank0_data_q[
                         descriptor_ram_word];
             assign activation_descriptor_transfer_data[
                 descriptor_ram_word] = pending_bank_q ?
-                    activation_descriptor_transfer_bank1_data_q[
+                    descriptor_transfer_bank1_data_q[
                         descriptor_ram_word] :
-                    activation_descriptor_transfer_bank0_data_q[
+                    descriptor_transfer_bank0_data_q[
                         descriptor_ram_word];
 
             astra_sprite_descriptor_ram descriptor_bank0_i (
@@ -301,7 +302,8 @@ module astra_sprite_scene_store #(
     wire activation_palette_write_enable =
         activation_palette_transfer_valid_q;
     wire palette_restore_write_enable =
-        palette_restore_state == R_WRITE;
+        palette_restore_state == R_WRITE &&
+        palette_restore_data_valid_q;
     wire [11:0] copper_palette_write_address = {
         copper_palette_write_bank, copper_palette_write_index
     };
@@ -315,12 +317,12 @@ module astra_sprite_scene_store #(
     wire [11:0] active_palette_write_address =
         activation_palette_write_enable ?
             activation_palette_transfer_index_q :
-        palette_restore_write_enable ? palette_restore_index :
+        palette_restore_write_enable ? palette_restore_write_index_q :
             copper_palette_write_address;
     wire [31:0] active_palette_write_data =
         activation_palette_write_enable ?
-            activation_palette_transfer_data_q :
-        palette_restore_write_enable ? palette_baseline_read_data :
+            palette_transfer_data_q :
+        palette_restore_write_enable ? palette_restore_data_q :
             copper_palette_write_argb;
     wire [11:0] metadata_palette_read_address =
         metadata_read_owner_q == METADATA_CLONE ? clone_palette_index :
@@ -348,7 +350,7 @@ module astra_sprite_scene_store #(
         clone_palette_write_enable ? clone_palette_transfer_index_q :
                                      palette_host_write_address_q;
     wire [31:0] metadata_palette_write_data =
-        clone_palette_write_enable ? clone_palette_transfer_data_q :
+        clone_palette_write_enable ? palette_transfer_data_q :
                                      palette_host_write_data_q;
 
     astra_sprite_palette_ram metadata_palette_bank0 (
@@ -409,7 +411,7 @@ module astra_sprite_scene_store #(
         .clk(clk),
         .write_enable(activation_palette_write_enable),
         .write_address(activation_palette_transfer_index_q),
-        .write_data(activation_palette_transfer_data_q),
+        .write_data(palette_transfer_data_q),
         .read_address(palette_restore_index),
         .read_data(palette_baseline_read_data)
     );
@@ -442,6 +444,8 @@ module astra_sprite_scene_store #(
             palette_restore_state <= R_IDLE;
             palette_restore_pending_q <= 1'b0;
             palette_restore_index <= 12'd0;
+            palette_restore_write_index_q <= 12'd0;
+            palette_restore_data_valid_q <= 1'b0;
             baseline_restore_done <= 1'b0;
         end else begin
             if (baseline_restore_start)
@@ -450,16 +454,29 @@ module astra_sprite_scene_store #(
                 R_IDLE: if (palette_restore_pending_q && !activate_busy) begin
                     palette_restore_pending_q <= 1'b0;
                     palette_restore_index <= 12'd0;
+                    palette_restore_write_index_q <= 12'd0;
+                    palette_restore_data_valid_q <= 1'b0;
                     palette_restore_state <= R_READ;
                 end
-                R_READ: palette_restore_state <= R_WRITE;
+                R_READ: begin
+                    palette_restore_index <= 12'd1;
+                    palette_restore_state <= R_WRITE;
+                end
                 R_WRITE: begin
-                    if (palette_restore_index == 12'd4095) begin
+                    palette_restore_data_q <= palette_baseline_read_data;
+                    if (!palette_restore_data_valid_q) begin
+                        palette_restore_data_valid_q <= 1'b1;
+                        palette_restore_index <= 12'd2;
+                    end else if (palette_restore_write_index_q == 12'd4095) begin
                         baseline_restore_done <= 1'b1;
+                        palette_restore_data_valid_q <= 1'b0;
                         palette_restore_state <= R_IDLE;
                     end else begin
-                        palette_restore_index <= palette_restore_index + 12'd1;
-                        palette_restore_state <= R_READ;
+                        palette_restore_write_index_q <=
+                            palette_restore_write_index_q + 12'd1;
+                        if (palette_restore_index != 12'd4095)
+                            palette_restore_index <=
+                                palette_restore_index + 12'd1;
                     end
                 end
                 default: palette_restore_state <= R_IDLE;
@@ -499,20 +516,15 @@ module astra_sprite_scene_store #(
             order0[activation_descriptor_write_index_q];
         for (transfer_word = 0; transfer_word < 8;
              transfer_word = transfer_word + 1) begin
-            clone_descriptor_transfer_bank0_data_q[transfer_word] <=
+            descriptor_transfer_bank0_data_q[transfer_word] <=
                 descriptor_bank0_read_data[transfer_word];
-            clone_descriptor_transfer_bank1_data_q[transfer_word] <=
-                descriptor_bank1_read_data[transfer_word];
-            activation_descriptor_transfer_bank0_data_q[transfer_word] <=
-                descriptor_bank0_read_data[transfer_word];
-            activation_descriptor_transfer_bank1_data_q[transfer_word] <=
+            descriptor_transfer_bank1_data_q[transfer_word] <=
                 descriptor_bank1_read_data[transfer_word];
         end
         clone_palette_transfer_index_q <= clone_palette_write_index_q;
-        clone_palette_transfer_data_q <= pending_palette_read_data;
+        palette_transfer_data_q <= pending_palette_read_data;
         activation_palette_transfer_index_q <=
             activation_palette_write_index_q;
-        activation_palette_transfer_data_q <= pending_palette_read_data;
     end
 
     always @(posedge clk) begin
@@ -616,7 +628,6 @@ module astra_sprite_scene_store #(
     reg [32:0] validation_end_exclusive_q;
     reg validation_prefix_valid_q;
     reg validation_enabled_q;
-    reg validation_descriptor_valid_q;
     reg [7:0] geometry_multiplier_q;
     reg [20:0] geometry_multiplicand_q;
     reg [2:0] geometry_bit_q;
@@ -719,7 +730,6 @@ module astra_sprite_scene_store #(
             validation_end_exclusive_q <= 33'd0;
             validation_prefix_valid_q <= 1'b0;
             validation_enabled_q <= 1'b0;
-            validation_descriptor_valid_q <= 1'b0;
             geometry_multiplier_q <= 8'd0;
             geometry_multiplicand_q <= 21'd0;
             geometry_bit_q <= 3'd0;
@@ -806,17 +816,16 @@ module astra_sprite_scene_store #(
                         validation_state <= V_CHECK;
                     end
                     V_CHECK: begin
-                        validation_descriptor_valid_q <=
-                            validation_descriptor_valid;
-                        validation_state <= V_CHECK_RESULT;
+                        validation_state <= validation_descriptor_valid ?
+                            V_ACCEPT : V_REJECT;
                     end
-                    V_CHECK_RESULT: begin
-                        if (!validation_descriptor_valid_q) begin
-                            validate_busy <= 1'b0;
-                            validate_valid <= 1'b0;
-                            validate_done <= 1'b1;
-                            validation_state <= V_IDLE;
-                        end else begin
+                    V_REJECT: begin
+                        validate_busy <= 1'b0;
+                        validate_valid <= 1'b0;
+                        validate_done <= 1'b1;
+                        validation_state <= V_IDLE;
+                    end
+                    V_ACCEPT: begin
                             validation_priority_q <= validation_word0_q[15:8];
                             validation_sort_position <= validation_sort_count;
                             if (!editable_bank_q)
@@ -840,7 +849,6 @@ module astra_sprite_scene_store #(
                                 end
                                 validation_state <= V_SORT_INDEX;
                             end
-                        end
                     end
                     V_DIVIDE_SHIFT: begin
                         divider_shifted_q <= {

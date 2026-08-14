@@ -340,6 +340,7 @@ static void test_map_switch_unmap_and_stale_guards(void)
     uint32_t *root;
     uint32_t *table;
     uint32_t table_physical;
+    uint32_t flushes_before_switch;
 
     initialize_test();
     assert(kernel_vm_enable() == KERNEL_VM_OK);
@@ -370,8 +371,10 @@ static void test_map_switch_unmap_and_stale_guards(void)
                               ASTRA_KERNEL_LOAD_ADDRESS,
                               KERNEL_VM_READ) == KERNEL_VM_NOT_OWNED);
 
+    flushes_before_switch = flush_count;
     assert(kernel_vm_switch(&space) == KERNEL_VM_OK);
     assert(loaded_crp.table_address == space.root_physical);
+    assert(flush_count == flushes_before_switch);
     assert(cache_invalidation_count == 3u);
     assert(kernel_vm_probe_current(0x10000000u, false, &translated) ==
            KERNEL_VM_MAPPING_READ_WRITE);
@@ -393,7 +396,9 @@ static void test_map_switch_unmap_and_stale_guards(void)
     assert(kernel_vm_probe_current(0x10001000u, false, &translated) ==
            KERNEL_VM_MAPPING_UNMAPPED);
     assert(cache_invalidation_count == 6u);
+    flushes_before_switch = flush_count;
     assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
+    assert(flush_count == flushes_before_switch);
     assert(cache_invalidation_count == 7u);
     assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
     assert(kernel_memory_release_owner(42u, NULL) == KERNEL_MEMORY_OK);

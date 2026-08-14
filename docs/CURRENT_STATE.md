@@ -130,8 +130,8 @@ generation/overflow reset repair, and bounded 56-byte application-port
 
 ## Active Arty migration override (2026-07-30)
 
-The active machine target has moved from ULX3S to the Arty Z7-20 reached through
-`nuc`. The Zynq processing system runs Linux and executes the unchanged
+The active machine target has moved from ULX3S to the Arty Z7-20 attached to
+`beast`. The Zynq processing system runs Linux and executes the unchanged
 big-endian MC68030/PMMU machine through the Astra QEMU backend. The exact Axiom
 K1-K10 image reaches the required markers there, and the accepted current CPU
 performance baseline is approximately 30 MHz equivalent. Musashi and the
@@ -2076,6 +2076,368 @@ remains open for physical use, and Linux reports 200,544 KiB available with
 the 128 MiB guest. No RTL, routed bitstream, production clock, QEMU source, or
 Linux renderer changed in this checkpoint.
 
+## Arty HDMI audio and front-panel candidate
+
+The working tree contains a stable Linux-to-HDMI audio boundary: one 48 kHz,
+signed 24-bit stereo FIFO consumed by the HDMI packetizer. Linux is the mixer,
+so PCM players, wavetable synthesis, speech synthesis, and later sources can be
+added without changing RTL. The FPGA does not contain one channel per source.
+
+The existing `PNL0` contract now has an Arty AXI wrapper for both board
+switches and all four LEDs. LED 3 is the storage-activity light. QEMU can map
+the physical panel through `/dev/mem`, exposes it at the existing guest address
+`0xfff01000`, and pulses activity for admitted AstraHost requests. The NDK
+front-panel API is unchanged.
+
+Focused audio/front-panel tests, the complete graphics regression, both QEMU
+memory profiles, and the Linux runtime-supervisor test pass. The exact complete
+Route 13 connects every net but fails the 200 MHz domain at -0.960 ns with only
+239 of 13,300 physical slices free. The rejected candidate was not flashed;
+the active direct-copy hardware release and boot package remain unchanged.
+Exact source, route history, artifacts, resources, and the copper-to-scheduler
+limiting cone are recorded in
+`fpga/arty/graphics/TIMING_CLOSURE.md`.
+
+AMD-guided AXI cleanup has since replaced the three one-to-one HP0/HP2/HP3
+SmartConnect blocks with direct AXI4-to-AXI3 protocol converters. Every feature
+remains enabled and the complete graphics regression passes. Exact Route 14
+removes 2,522 LUTs, 2,479 registers, and 160 unique control sets, but frees only
+57 additional physical slices because LUTRAM/control-set packing still leaves
+the device at 97.77% slice occupancy. The route has zero routing errors but
+fails the 200 MHz domain at -1.064 ns, so it is recorded and not flashed. The
+active hardware release remains unchanged.
+
+Route 15 replaces the remaining three-client HP1 SmartConnect with a tested
+full-throughput Astra read arbiter and a direct protocol converter. Independent
+outstanding tile and sprite reads remain supported through rewritten AXI IDs.
+The complete graphics regression passes. Exact routing removes another 2,789
+LUTs, 3,708 registers, 433 occupied slices, and 200 control sets, leaving 729
+of 13,300 slices free. All 68,686 routable nets connect without error, but the
+200 MHz domain still fails at -0.967 ns; the worst cone is now in flood-renderer
+address/control generation. The rejected image was not flashed and the active
+hardware release remains unchanged.
+
+Route 16 tested a synthesis attribute intended to suppress the flood
+renderer DSP clock-enable extraction. Vivado produced the same DSP mapping,
+implementation checksums, resources, and `-0.967 ns` routed setup result as
+Route 15. The ineffective attribute was removed; the next retained change
+uses the existing registered address-valid pipeline to drive each DSP stage
+directly instead of relying on an ignored inference hint.
+
+Route 17 retains that structural fix. The complete graphics regression passes,
+the old flood DSP-enable critical path is gone, and exact routing frees another
+75 physical slices while improving WNS from `-0.967` to `-0.904 ns`. Timing is
+still not releasable; the new worst path crosses the HP1 response-slice RID
+decode into tile 1 pattern BRAM enable. The image was not flashed.
+
+Route 18 replaces that HP1-only SRL response FIFO with AMD's fully registered
+mode. It removes 243 LUTs and the HP1 critical path; exact-route TNS improves
+from `-2089.857` to `-528.551 ns` and failing endpoints fall from 9,317 to
+4,044. WNS is `-0.859 ns`, now in copper execute/retire control, so the image
+is still not releasable or flashed. Packing uses 88 more physical slices even
+with fewer LUTs, leaving 716 of 13,300 slices free.
+
+Routes 19-28 pipeline only measured production hot paths while retaining HDMI
+audio, front-panel MMIO, and every graphics engine. Exact Beast routes improve
+WNS as far as `-0.508 ns`, but none meets the 5.000 ns release constraint and
+none was flashed. Route 29 moves published sprite-collision history from
+LUTRAM to BRAM, but its unregistered BRAM-to-AXI-read path regresses WNS to
+`-0.933 ns`; it is also rejected.
+
+Route 30 restores that existing read boundary and
+pipelines the collision-table address/read/commit path without reducing its
+one-command-per-clock throughput. Functional sprite, exhaustive 64-way
+collision, and integrated graphics tests pass unchanged. The routed sprite
+checkpoint passes 200 MHz at setup/hold `+0.096/+0.027 ns`. The exact full
+production route improves WNS to `-0.438 ns`, with 2,397 failing endpoints,
+but still fails the 5.000 ns constraint and was not flashed. Route 31 targets
+only the measured AXI-Lite completion, Copper runtime validation/frame-start,
+renderer handshake, and geometry line-error paths. Timing closure remains the
+active blocker, and the active board release remains the prior direct-copy
+image until a full route passes and completes hardware qualification.
+
+Route 31's exact synchronized graphics regression now passes. A registered
+flush-ready experiment was removed after the command integration test proved
+it could lose the final writer flush; the live handshake is restored. The
+retained command-engine OOC route is `-0.206 ns`, down from the Route 30 full
+design's `-0.438 ns`; sequential blitter encoding and an extra mask pipeline
+were both measured and rejected as regressions. The exact complete Route 31
+route is the next release gate. No Route 31 image has been flashed.
+
+The exact complete Route 31 subsequently connected every net but failed
+release timing at `-0.552 ns` setup (`-153.474 ns` TNS, 1,358 endpoints);
+hold and pulse width pass at `+0.039` and `+0.538 ns`. Its new authority is the
+writer barrier-to-geometry flush-ready path, followed by sprite validation and
+Copper dispatch-completion boundaries. The rejected image was not flashed;
+Route 32 targets those measured paths.
+
+Route 32's exact Beast graphics regression now passes. Its retained changes
+are a correct one-entry writer-flush request buffer, separate sprite
+validation accept/reject states, and a registered Copper dispatch endpoint
+boundary. These directly cut Route 31's three leading path groups without
+removing features or changing the 200 MHz renderer clock. The exact complete
+Route 32 production route is now the release gate; no Route 32 image has been
+flashed.
+
+The exact Route 32 production route subsequently connected every net and cut
+setup debt to `-0.298 ns` WNS and `-64.437 ns` TNS across 877 endpoints; hold
+passes at `+0.006 ns`. It remains non-releasable and was not flashed. Route 33
+now targets the measured Copper event-FIFO full path, writer-error completion
+path, sprite blend DSP input, and flood neighbor-row range path.
+
+Route 33's complete regression passes and its exact full production route
+connects all 69,743 routable nets. It removes Route 32's four leading cones and
+reduces setup debt to `-0.271 ns` WNS and `-18.549 ns` TNS across 344
+endpoints; hold passes at `+0.019 ns`. The image remains non-releasable and was
+not flashed. The active measured paths are now graphics-control AXI response,
+renderer flush-to-glyph state, and Copper validation/dispatch completion.
+
+Route 34's complete regression also passes and its exact full production route
+connects all 70,210 routable nets, but setup regresses to `-0.364/-24.525 ns`
+WNS/TNS across 372 endpoints; hold passes at `+0.018 ns`. It is rejected and
+was not flashed. The graphics-control response cone is gone; Route 35 now
+targets the measured tile-map response validation cone at the head of the new
+route.
+
+MMIO-predecode gate 1/5 passes graphics-control behavior and exact control OOC
+at `+0.136 ns`; all 3,474 nets route without error. The staged select has
+fanout five and no timing path remains from `awaddr_q` to any of the 32 target
+clock enables. The predecode is retained. Complete graphics regression is the
+last prerequisite before gate 2 performs one exact full production route.
+
+Route 35 removes that tile validation cone with another response stage, and
+its complete regression passes, but the exact route regresses to
+`-0.417/-60.621 ns` WNS/TNS across 667 endpoints. It is rejected and was not
+flashed. The added stage is removed; the next experiment reuses the existing
+capture boundary and deletes redundant result state instead.
+
+Route 36 reuses the existing tile response capture boundary, removes the
+redundant result state, and passes the complete regression at 1,179/4,444 tile
+clocks. Its exact full route connects all 69,772 routable nets but regresses to
+`-0.480/-385.768 ns` WNS/TNS across 3,370 endpoints; hold passes at `+0.016
+ns`. It is rejected and was not flashed. The tile validation cone is gone, but
+the measured route is now led by command-admission-to-AXI-enable, blitter blend,
+graphics-control write-decode, and Copper register-write cones.
+
+Route 37 removes reset initialization from the renderer pixel FIFO payload and
+passes the focused and complete regressions. It cuts the exact route to 33,854
+LUTs, 39,917 registers, and 12,570 slices, but Vivado assigns the shallow
+16x64-bit data array a complete RAMB36E1. The full route connects all 68,221
+nets and improves setup to `-0.396/-39.477 ns` across 477 endpoints; hold
+passes at `+0.014 ns`. It remains rejected and was not flashed. The reset-free
+RAM contract is retained; the next route directs only that data array to
+distributed RAM before changing any measured geometry or flood logic.
+
+Route 38 implements that data array as distributed RAM and returns the
+accidental BRAM36. The exact full route connects all 68,387 nets and reaches
+`-0.368/-84.862 ns` WNS/TNS across 1,015 endpoints with `+0.009 ns` hold. It
+is rejected and was not flashed. Its leading measured cone is now glyph
+range-multiply state into the last-row register enable; the next route removes
+the final-step qualification from that enable without changing the computed
+final value.
+
+Route 39 removes that glyph last-row enable cone and passes the complete
+regression. Its exact full route connects all 68,312 nets and reaches
+`-0.383/-78.332 ns` WNS/TNS across 722 endpoints with `+0.009 ns` hold. It is
+rejected and was not flashed. The active measured leaders are now glyph
+source-sample classification into state, flood pixel-format selection, and
+blitter direct-copy/cache qualification. The next route registers only the
+glyph classifications at the existing source-decode boundary.
+
+Route 40 registers those glyph classifications at the existing boundary and
+passes the complete regression. Its exact full route connects all 68,546 nets
+and improves to `-0.305/-45.555 ns` WNS/TNS with `+0.007 ns` hold. It remains
+rejected and was not flashed. The active leader is now glyph range state into
+step/multiplicand clock enables; the next route applies the existing local
+no-enable extraction pattern only to those registers.
+
+Route 41 removes those CE paths with synthesis attributes and passes the full
+regression, but its exact route regresses to `-0.502/-16.127 ns` WNS/TNS with
+`+0.006 ns` hold. It is rejected and was not flashed. The attributes are
+removed; Route 40 remains the active structural baseline. The next route
+removes the same enable function by free-running only the otherwise-dead glyph
+range step and shifted multiplicand between their mandatory reloads.
+
+Route 42 removes that enable function structurally and passes the complete
+regression, but its exact route reaches only `-0.395/-32.417 ns` WNS/TNS across
+531 endpoints with `+0.005 ns` hold. It connects all 68,367 routable nets but
+is rejected and was not flashed. The free-running change is removed because it
+is 90 ps worse than Route 40; Route 40 remains the active structural baseline.
+The next measured experiment leaves glyph range mapping alone and targets the
+independent flood/HP2 response boundary.
+
+Route 43 preasserts the flood engine's AXI read-response ready signal and adds
+a focused contract check. The complete regression passes and the prior
+flood-state-to-HP2 response-slice cone disappears. Its exact route connects all
+68,382 nets but remains short at `-0.319/-41.884 ns` WNS/TNS across 541
+endpoints; hold passes at `+0.014 ns`. The image is rejected and was not
+flashed. The one-line AXI simplification is retained; the next measured leader
+is geometry state into emit classification.
+
+Route 44 replaces that classification control mux with the direct one-cycle
+valid pipeline it represents. Its fail-first focused assertion and complete
+regression pass, and the measured geometry cone disappears. The exact route
+connects all 68,253 nets and improves setup to `-0.211/-12.291 ns` WNS/TNS
+across 233 endpoints; hold passes at `+0.008 ns`. It remains non-releasable and
+was not flashed. The next measured leader is the glyph rounded divide-by-255
+carry chain.
+
+Route 45 pipelines that glyph rounding through three new 18-bit registers. The
+functional tests pass and the original glyph critical path disappears, but the
+exact route regresses to `-0.550/-95.201 ns` WNS/TNS across 1,131 endpoints;
+hold passes at `+0.011 ns`. The added register bank is removed and the image was
+not flashed. Route 44 remains the best measured baseline; the next experiment
+reuses the glyph's existing divide pipeline without adding registers.
+
+Route 46 reuses that pipeline and passes exhaustive arithmetic checking plus
+the complete graphics regression, but its exact route reaches only
+`-0.433/-97.492 ns` WNS/TNS across 1,076 endpoints; hold passes at `+0.028 ns`.
+It is rejected and was not flashed. The change is removed and Route 44 remains
+the best measured baseline at `-0.211 ns`. Forty-six routes have demonstrated
+that isolated critical-cone edits now move failure among unrelated dense
+subsystems; further full routes require an architectural clock/resource-margin
+decision rather than another local timing experiment.
+
+Post-route hierarchy, control-set, fanout, congestion, and QoR analysis of the
+restored Route 44 checkpoint identifies packing rather than feature capacity as
+the active blocker. Vivado finds no level-5 congestion window, but 2,590
+LUTRAMs, 666 SRLs, and 886 control sets spread 33,956 LUTs and 40,010 registers
+across 94.07% of the physical slices. Sprite storage owns 1,754 LUTRAMs and the
+largest replicated control/address nets. The active campaign therefore removes
+duplicated storage/control machinery before revisiting individual timing cones.
+It has a hard ceiling of five exact full routes; functional and synthesis-only
+gates reject weak candidates without consuming that budget.
+
+The first two retained synthesis-only cuts preserve the complete feature set.
+Host and Copper tile commits now share their off-hot-path validators. Tile span
+and descriptor metadata now uses four RAMB18s instead of distributed RAM. The
+complete graphics regression passes; worst-case tile build is 1,347 of 4,444
+allowed cycles. Exact Beast Vivado 2024.2 synthesis is now 33,632 LUTs, 39,810
+registers, 835 control sets, 129 BRAM36-equivalent tiles, and 83 DSPs. The
+metadata cut alone removes 672 LUTs, including 576 LUTRAMs, plus 30 registers
+and 16 control sets. Those synthesis checkpoints spent no route attempt.
+
+Structural route attempt 1 routes every net and lowers physical use to
+12,401/13,300 slices (93.24%), but fails setup at `-0.680/-141.162 ns` across
+1,609 endpoints; hold passes at `+0.015 ns`. Its exact leader is the newly
+inferred tile-1 span RAMB18 output through three source-coordinate LUTs. The
+image is rejected and was not flashed.
+
+The retained registered-prefetch correction passes the complete graphics
+regression and exact synthesis at 33,624 LUTs, 40,124 registers, 837 control
+sets, 129 BRAM36-equivalent tiles, and 83 DSPs. Netlist timing proves the span
+RAMB18 now terminates directly in the prefetch FF bank with zero intervening
+LUTs and +1.485 ns synthesized setup slack.
+
+Structural route attempt 2 confirms the old BRAM leader is gone and connects
+all 67,723 nets, but remains non-releasable at `-0.373/-35.002 ns` across 452
+setup endpoints; hold passes at `+0.010 ns`. It uses 12,432/13,300 slices
+(93.47%). The new leader is a five-LUT, routing-dominated HP2 response-error
+path into the glyph fault-detail clock enable. The image is rejected and was
+not flashed. A third route requires another measured packing/control cut.
+Campaign route budget used: 2/5.
+
+That cut is now measured. The sprite admission list is one 242-bit record per
+entry and uses an AMD XPM simple-dual-port block RAM because Vivado rejected
+the equivalent inferred 64x242 RAM shape and mapped it to 81 RAM64M instances.
+The complete graphics regression passes with unchanged sprite cycle counts.
+Exact Beast Vivado 2024.2 synthesis `full-synth-sprite-record-xpm-1` uses
+33,262 LUTs, including 2,457 LUTRAMs, 40,106 registers, 836 control sets,
+132.5 BRAM36-equivalent tiles, and 83 DSPs. Relative to the registered-prefetch
+checkpoint it removes 362 LUTs and 135 LUTRAMs while leaving 7.5 BRAM tiles
+free. This authorizes structural route attempt 3; campaign budget remains 2/5
+until that route completes.
+
+Structural route attempt 3 connects every net but is rejected at
+`-0.390/-88.937 ns` across 779 setup endpoints; hold passes at `+0.012 ns`.
+It uses 32,661 LUTs, 40,079 registers, 12,464/13,300 slices (93.71%), 851
+control sets, 132.5 BRAM36-equivalent tiles, and 83 DSPs. Although LUTRAM use
+falls to 2,348, the seven-half-BRAM admission record increases hard-memory
+placement pressure and regresses timing from attempt 2. The image was not
+flashed and will not be rerouted. Campaign route budget used: 3/5.
+
+The retained replacement stores only the 28 admission-result bits that are
+not already authoritative in the scene descriptor: sprite index, clipped
+screen X, and span. Preparation rereads the descriptor instead of duplicating
+its remaining 214 bits. Full regression passes, including every 1..128 sprite
+dimension and 131,072 scaling pairs. Exact Beast Vivado 2024.2 synthesis
+`full-synth-sprite-narrow-record-1` uses 33,309 LUTs, including 2,457 LUTRAMs,
+40,072 registers, 837 control sets, 129.5 BRAM36-equivalent tiles, and 83
+DSPs. The 64x28 XPM maps to one RAMB18, returning three BRAM36-equivalent tiles
+relative to attempt 3. This is a synthesis checkpoint only; route budget
+remains 3/5.
+
+The exact route-4 candidate also places one 73-bit elastic register at the
+existing render-command HP2 boundary. Glyph, flood, and blitter now consume
+registered response ID/data/status/last metadata instead of raw shared HP2
+signals; back-to-back transfers remain supported. Payload registers are not
+reset because their valid bits are. Full regression passes. Exact synthesis
+`full-synth-narrow-record-engine-ingress-1` uses 33,348 LUTs, 2,457 LUTRAMs,
+40,157 registers, 838 control sets, 129.5 BRAM36-equivalent tiles, and 83
+DSPs. This costs 39 LUTs, 85 registers, and one control set over checkpoint 5
+while directly breaking the leader shared by route attempts 2 and 3. Route
+budget remains 3/5 until the single exact route completes.
+
+Structural route attempt 4 connects every net but is rejected at
+`-0.639/-476.709 ns` across 3,108 setup endpoints; hold passes at `+0.012 ns`
+and pulse width at `+0.538 ns`. Physical use is 32,672 LUTs, including 2,347
+LUTRAMs, 40,002 registers, 12,329/13,300 slices (92.70%), 875 control sets,
+129.5 BRAM36-equivalent tiles, and 83 DSPs. The registered HP2 boundary removes
+the prior route leader. The new worst path is the narrow admission RAMB18
+clock-to-output feeding the distributed active-descriptor address and scene
+output registers in the same cycle. That missing boundary also dominates the
+sprite endpoint population. The image was not flashed and will not be rerun.
+Campaign route budget used: 4/5.
+
+The complete graphics regression now passes after reusing the preparation FSM
+to register the admission record's sprite index before issuing the scene-store
+descriptor read. This breaks the measured RAMB18-to-LUTRAM cascade at the cost
+of one preparation cycle per admitted sprite: worst-case build is 3,877 and
+64-way collision is 3,935, both below the 4,300-cycle gate. Exact synthesis is
+33,349 LUTs, 40,157 registers, 838 control sets, 129.5 BRAM36-equivalent tiles,
+and 83 DSPs. All six admission-RAM-to-index paths terminate at the new register
+with zero LUT levels and +1.485 ns slack; no admission-RAM-to-scene-register
+path remains. Identical clone/activation descriptor and palette captures are
+also consolidated in source, although synthesis proves Vivado had already
+merged them and the net resource count is unchanged. The fifth and final exact
+route is authorized; campaign use remains 4/5 until it completes.
+
+Structural route attempt 5 connects every net but is rejected at
+`-0.320/-53.449 ns` across 807 setup endpoints; hold passes at `+0.016 ns`.
+It uses 32,657 LUTs, including 2,348 LUTRAMs, 40,049 registers, 864 control
+sets, 129.5 BRAM36-equivalent tiles, and 83 DSPs. The admission-RAM cascade is
+gone. Of the remaining failures, 476 terminate in render-command logic: 173
+glyph, 125 command-core, 77 flood, 54 blitter, and 47 geometry. The leader is
+a 5.031 ns path from replicated command-type state through blitter abort
+selection to the shared writer flush-pending register; routing contributes
+4.141 ns. The image was not flashed. Campaign use is 5/5, so no Route 6 or
+seed rerun is authorized; the next work must structurally remove that shared
+render control path and clear regression plus synthesis gates first.
+
+That new campaign gate now passes. The four mutually exclusive render engines'
+registered start, abort, and flush pulses are combined directly instead of
+passing through the command-type priority mux. The complete graphics regression
+passes. Exact synthesis is 33,391 LUTs, 40,140 registers, 838 control sets,
+129.5 BRAM36-equivalent tiles, and 83 DSPs. There are zero command-type-to-
+writer-flush timing paths; the new worst input path to that register has
++1.572 ns synthesized slack. One exact route is authorized with a fresh hard
+ceiling of five; new campaign use is 0/5.
+
+Writer-control route attempt 1 is rejected at `-0.325/-32.435 ns` across 409
+setup endpoints; hold passes at `+0.011 ns` and every net routes. Although it
+halves Route 5's failing endpoints, it adds 37 occupied slices and exposes new
+sprite-start and blitter address/control leaders. The direct-OR experiment has
+been removed and no additional route is authorized for it. Campaign use is
+1/5, stopped early by the measured regression rather than consuming the cap.
+
+A five-directive command-classifier `max_fanout=16` removal passed regression
+and reduced exact synthesis by 60 LUTs, 51 registers, and one control set, but
+its placement gate failed decisively: WNS/TNS regressed to
+`-0.580/-299.333 ns` across 2,182 endpoints versus the retained source's
+approximately `-0.337 ns` placement. It was restored without routing, so it
+consumes 0/5 route attempts. Smaller synthesis alone is not acceptance
+evidence.
+
 ## Release boundary
 
 A placement estimate, reduced-feature build, zero build ID, or
@@ -2092,3 +2454,499 @@ exact committed source revision and ROM identity to:
 Record every structural route result immediately in `TIMING_CLOSURE.md`,
 including the failed cone. A failed experiment with a measured reason is part
 of the design record; an unrecorded seed hunt is lost work.
+
+## Active compositor-area campaign (2026-08-12)
+
+The blanket control-set threshold is rejected before routing: it cut control
+sets from 838 to 537 but added 1,106 LUTs and placed at `-0.492 ns` in 12,379
+slices. Hierarchical analysis instead found 4,217 LUTs in the zero-DSP
+compositor. Mapping every blend multiply to DSPs removed 3,380 full-design
+LUTs and 1,025 placed slices, but exact placement/physopt stalled at
+`-0.718/-0.716 ns`; it was not routed.
+
+The first reset-only follow-up unintentionally retained 12 forced compositor
+DSPs and was rejected at `-0.503 ns` placement. With those stale attributes
+removed, the actual zero-DSP reset-only candidate placed at `-0.311 ns`, but
+used 12,395 slices and still failed 1,721 endpoints. Its 0.026 ns WNS movement
+is not convergence, so the reset rewrite is removed without routing. The stale
+DSP attributes stay removed. Production route budget remains 0/5.
+
+The current measured candidate moves only the eight 8x64 sprite-collision
+published banks from RAMB36 to distributed RAM. Full graphics regression
+passes. Sprite-line OOC recovers exactly eight BRAM tiles (32.5 to 24.5),
+routes at `+0.078/+0.028 ns`, and costs 350 LUTs plus 161 slices. It is now at
+the full synthesis/placement gate; no production route has been spent (0/5).
+That gate rejected it at `-0.700/-394.231 ns` across 2,276 endpoints and
+12,425 slices, with new 1,200--1,400-fanout commit nets. The banks are restored
+to block RAM; no production route or physical-optimization run was spent.
+
+The replacement collision-storage candidate kept the eight parallel
+current-frame banks but serialized completed-frame publication into one 64x64
+BRAM during the existing 320-cycle clear window. Full graphics regression and
+OOC routing passed, saving seven BRAM tiles. Full placement rejected it at
+`-1.285/-844.057 ns` across 3,296 setup endpoints and 12,420 slices; the worst
+paths were routing-dominated blitter register-to-DSP connections displaced by
+the changed BRAM anchors. The shared publication is removed. No production
+route or physical-optimization run was spent; campaign use remains 0/5.
+
+The active structural candidate removes the blitter's duplicated
+round-to-255 DSP chain. One multiplier remains; two 17-bit carry additions
+perform the reduction. Exact blitter OOC use falls by 24 LUTs, 17 registers,
+and two DSPs and improves from `+0.010` to `+0.071 ns`. The previous
+collision-bank restore was also corrected so both current and published banks
+are genuinely synchronous BRAM rather than rejected LUTRAM hidden behind an
+ignored attribute. Exact sprite-line OOC is back to 32.5 BRAM tiles at
+`+0.117/+0.027 ns`. Full regression and the uncontaminated integrated
+synthesis/placement gate must pass before any production route; use is 0/5.
+
+## Active production convergence campaign (2026-08-13)
+
+Production route attempt 1/5 routed every net and passed hold at `+0.043 ns`,
+but failed setup at `-0.290/-9.653 ns` across 107 endpoints and was not
+flashed. Structural gates since then removed the flood row-product DSP-enable
+cone. Registering Copper WAIT produced `-0.289/-169.499 ns` placement but
+failed the integrated raster contract by releasing a prepared line one cycle
+early, so it was rejected before routing.
+
+The new leader was local to the framebuffer line builder: its 11-bit remaining
+pixel counter drove the FSM enable through five LUT levels. Registered
+pixels-active and last-pixel flags now carry that control while preserving the
+counter and all behavior. The directed framebuffer regression passes with
+unchanged cycle counts, and its exact OOC route passes at `+0.244 ns`. A full
+graphics regression and exact synthesis/placement gate precede route attempt
+2. No feature has been removed; route budget remains 1/5.
+
+Copper now exposes the current combinational WAIT result only to the line
+scheduler, while internal execution consumes its registered copy and directly
+retires fixed WAIT/SKIP actions. Focused and integrated raster tests pass, and
+Copper OOC routes at `+0.864 ns` with 16 RAMB36s. The intervening direct path
+to execution state was rejected at `-0.726 ns` placement without routing. The
+scheduler/execution split is the active full-placement candidate.
+
+That split placed at `-0.460/-0.102 ns` and was rejected without routing after
+Vivado folded the flood row operand back into a conditionally enabled DSP
+stage. The retained operand boundary now proves `AREG=0` and constant `CEA2`
+on both flood row DSPs in OOC and full synthesis. Its exact full placement is
+still rejected at `-0.510/-0.193 ns`; the measured leader moved to Copper's
+program-bank BRAM output crossing a redundant hold-data mux. The next gate
+loads the already-valid-qualified program result continuously. Focused tests
+pass and Copper OOC routes at `+0.762 ns` with all 16 BRAMs. No additional
+production route has run; campaign use remains 1/5.
+
+That continuous-load candidate is resource-neutral and improves exact full
+placement setup to `-0.299 ns`, removing the Copper program-read cone, but its
+`-0.261 ns` hold result is not route-worthy. The measured successor was a
+duplicated wide zero reduction over render command words 12--14. Validation
+now registers and reuses seven word-presence facts; the complete 45-command
+test passes and the targeted cone is absent from exact render-command OOC
+timing. A fresh exact full placement is the next gate. Route use remains 1/5.
+
+That placement rejects at `-0.504/-0.186 ns` without routing. Its measured
+leader is the flood right-edge comparison crossing three carry levels into
+state decode. A registered right-scan-exhausted fact now updates alongside
+the active coordinate, preserving scan cadence. Focused flood and complete
+command tests pass, and exact render-command OOC routing removes the targeted
+path. Full placement is next; production route use remains 1/5.
+
+The subsequent five-gate structural campaign is closed. A stale Beast copy of
+the flood RTL invalidated one nominal flood measurement; correctly synced
+evidence rejected flood at `-0.719/-0.281 ns`, glyph source-kind at
+`-0.447/-0.120 ns`, geometry direction facts at `-0.500/-0.343 ns`, and the
+final blitter command-fact candidate at `-0.698/-0.393 ns`. Gate 5's leader is
+the centralized pixel dispatch FIFO, with 4.298 ns of its 5.024 ns data path
+spent routing. None was production-routed or flashed; production route use is
+still 1/5, and there will be no sixth placement in that campaign.
+
+The active cut removes that redundant two-entry FIFO because the pixel writer
+already supplies registered ingress, two pixel staging entries, and a 16-entry
+write FIFO. The 45-command regression passes unchanged. Its first exact OOC
+route removes the dispatch path and uses 10,257 LUTs, 12,014 registers, and 27
+DSPs for the command subsystem, but rejects at `-0.285 ns` on the existing
+blitter state-to-source-address path. It is not admitted to full placement.
+New campaign use is 1/5 OOC gates and 0/5 full placements.
+
+That dispatch campaign stopped at 4/5 after successive blitter-address,
+glyph-format, and pixel-ingress cuts. Its best exact full placement was
+`-0.404/-0.262 ns` at 32,711 LUTs, 38,971 registers, 129.5 BRAM tiles, and 81
+DSPs; the leader moved to Copper validation directly selecting a BRAM output.
+No fifth gate or route was spent.
+
+The closed Copper-boundary campaign used the existing execution capture stage
+for validation and split program readback into two registered selections. Both
+direct BRAM mux leaders are absent. An exact intermediate placement reached
+`-0.285/-0.126 ns`, but the full regression caught a missing post-capture
+permission cycle before routing. The final source restores distinct pre- and
+post-capture stages and passes direct Copper, AXI control, and integrated
+pipeline tests. Its gate-5/5 Copper OOC route is `+0.838 ns` with 595 LUTs,
+662 registers, and all 16 RAMB36s. No final-source full placement, production
+route, bitstream, or flash exists. Production route use remains 1/5; the next
+measured blocker is glyph state-to-DSP enable and its campaign starts at 0/5.
+
+The glyph-boundary campaign is closed at 4/5. Glyph operand preservation and
+direct engine `ARREADY` return remove the glyph DSP-enable and ownership
+feedback cones. Exact full placement uses 32,056 LUTs, 38,701 registers,
+129.5 BRAM tiles, and 81 DSPs, but rejects at `-0.605/-0.184 ns` on the
+blitter's unregistered round-to-255 source path. Reusing its existing divide
+register passes the blitter regression and removes that path in exact OOC
+routing. OOC still rejects at `-0.227 ns` on engine completion/fault capture,
+so no fifth full build was spent. No production route or flash followed;
+route use remains 1/5. The next campaign targets only that completion-control
+boundary.
+
+The completion-boundary campaign is also closed at 4/5. Registered completion
+capture and a flood stack-nonempty fact removed their targeted cones; disabling
+glyph FSM reset extraction produced `+0.006 ns` render-command OOC setup. A
+fourth experiment failed to map an added operand stage into the DSP and was
+reverted. No full placement, route, bitstream, or flash followed.
+
+Timing closure is now paused for a build-flow reset. Leaf OOC routes remain
+diagnostic only because they lack final clock roots, Pblocks, contained
+routing, and partition pins. The next gate qualifies the existing Vivado
+incremental-checkpoint path and then pilots physically constrained reusable
+checkpoints at three natural boundaries: the whole render command processor,
+the sprite line builder, and Copper control/events. Stable blocks remain
+closed while one active partition changes; one incremental full route is the
+integration authority. Production route use remains 1/5.
+
+The incremental-checkpoint path is now qualified and the five-invocation pilot
+is closed. The build fails closed before bitstream generation unless routing,
+setup, and hold all pass. A clean exact-current-source route is the new stable
+reference (`-0.397/+0.010 ns`); its measured block footprints overlap, so no
+bad placement was frozen into Pblocks. Registering the shared async FIFO full
+state passes the complete behavioral suite and removes the prior audio FIFO
+leader. The final incremental route reuses 98.71% of cells and 92.60% of nets,
+is fully routed with zero errors and `+0.010 ns` hold, and improves setup to
+`-0.283 ns`, but still fails across 525 endpoints. No bitstream exists and
+nothing was flashed. The next campaign begins from the final DCP and targets
+the measured glyph/blitter/Copper routing clusters with a zero-slack
+timing-closure target; it must not use `RuntimeOptimized`'s inherited negative
+reference WNS as the post-route optimization threshold.
+
+The zero-slack campaign has consumed 1/5 implementation runs. Native Vivado
+`TimingClosure` targeting is now active and the complete graphics regression
+passes after localizing glyph destination decode and blitter response-valid
+ownership. Run 1 fully routed with zero errors and `+0.010 ns` hold, but setup
+rejected at `-0.582 ns`; it intentionally used plain `Performance_Explore`
+and proved that strategy omits the required post-route physical-optimization
+stage. No bitstream was written. Run 2 keeps the same RTL and restores the
+pilot's exact `Performance_ExplorePostRoutePhysOpt` strategy.
+
+Run 2/5 is also rejected. It fully routes all 66,517 nets with zero errors;
+post-route physical optimization improves setup from `-0.671` to `-0.607 ns`,
+while hold remains `+0.010 ns`. No bitstream is written. The measured leader
+is command-kind decoding crossing engine response consumption into the HP2
+response-slice payload enable; the next independent path is response metadata
+into glyph error/state decode. Run 3 is gated on one shared response-boundary
+repair and regression, not another implementation-strategy trial.
+
+The run-3 boundary repair is regression-clean. Registered two-beat engine
+response capacity removes HP2 ready/metadata feedback, and pixel-writer ready
+now reflects registered ingress capacity rather than pending policy. Exact OOC
+timing improves from `-0.303 ns` to `-0.080 ns`; the former response and flush
+families are absent. OOC tuning stops here. Exact full integration run 3/5 is
+the next authority; no bitstream has yet been generated or flashed.
+
+Run 3/5 fully routes 66,760 nets with zero errors and `+0.010 ns` hold but is
+rejected at `-0.500 ns` setup across 1,297 endpoints. No bitstream is written.
+Its full-design census found an incomplete internal READY decoupling, per-pixel
+glyph format classification, and queue-dependent command-address enables.
+Boundary tests prove all three corrections; command-block OOC improves to
+`-0.050 ns`. Full regression and exact run 4/5 are the next gates, using the
+run-3 current-source DCP as reference.
+
+Run 4/5 fully routes 66,804 nets with zero errors and `+0.010 ns` hold,
+but is rejected at `-0.347 ns` setup across 886 endpoints. No bitstream is
+written. Failures are distributed across command, glyph, flood, and blitter
+control, with roughly 75--81% routing delay on the reported critical groups;
+Vivado finds no level-5 congestion window. Its automatic QoR report instead
+identifies 92% BRAM pressure and placement-time replication opportunities.
+Run 5 is gated on applying that measured suggestion file to a clean,
+non-incremental exact build rather than another RTL or seed experiment.
+
+Run 5/5 applied that QoR file to synthesis and implementation. It reduced BRAM
+pressure to 105 tiles (75.00%) and the exact clean full route completed all
+69,178 nets with zero errors and `+0.017 ns` hold. Setup still rejects at
+`-0.277 ns` across 153 endpoints, so no bitstream was written or flashed. The
+closed campaign's residual is 99 sprite clear/copy/working-line endpoints and
+54 other endpoints led by command deadline state. A new structural campaign
+starts at 0/5 and must qualify that sprite boundary in simulation and exact OOC
+before another full implementation. Run-5 artifacts were accidentally placed
+in an ephemeral remote directory and removed after the fail-closed exit; the
+next campaign must retain and hash evidence in a persistent remote path.
+
+Sprite structural gate 1/5 uses a distinct copy address counter so completion
+policy no longer resets and fans out the clear counter. Its exact 200 MHz OOC
+route retains 37 BRAM primitives and removes the integrated clear/copy family,
+but rejects by 4 ps setup (`+0.028 ns` hold) on render-slot-to-phase clock
+enable. One local render-load state removes that measured decode; directed
+tests pass and the eight-mode sprite regression is the next gate before OOC
+gate 2. No full implementation, bitstream, or flash follows from gate 1.
+
+The extra render-load cycle was rejected because it measured 3,927 cycles
+against the 3,900-cycle worst-case budget. Idle payload preload removes the
+same indexed-ready clock-enable cone without latency and measures 3,878 cycles.
+Sprite gate 2/5 passes exact OOC setup at `+0.147 ns`, retains 37 BRAM
+primitives, and the complete graphics regression passes through all 45 render
+commands and exhaustive sprite dimensions. One clean exact full integration
+with the qualified QoR file is now authorized; no bitstream or flash exists
+yet.
+
+Gate 3/5 stopped before synthesis because Beast's partial source mirror lacked
+the HDMI-audio RTL directory. It is not timing or resource evidence and wrote
+no bitstream. A complete Arty/shared-SoC source sync and fresh persistent gate-4
+project are required; the failed invocation is not retried in place.
+
+Gate 4/5 is a complete exact production route after the full source sync. All
+69,166 routable nets complete with zero errors and hold passes at `+0.010 ns`;
+setup improves to `-0.208 ns` (`TNS=-6.098 ns`, 109 endpoints). No bitstream is
+written. The measured leader is a 2.614 ns routed blitter net from the
+`dont_touch` `blend_divided_q` register into result accumulation. Gate 5 is
+reserved for the single existing-pattern correction that permits local
+register replication, after regressions; it is not another seed or strategy
+trial. A flash and board release test are authorized only if that exact gate
+passes setup, hold, route, methodology, and build-identity checks.
+
+Gate 5/5 passes the complete graphics regression and routes all 69,287 nets
+with zero errors. Hold is `+0.013 ns`; setup improves to `-0.191 ns` across
+123 endpoints, so no bitstream is written and the campaign is closed. The
+blitter correction is retained, but the new leader proves the qualified QoR
+file's explicit distributed-RAM override is harmful for the eight 512x32
+sprite working-line memories: their worst synchronous read spends 4.173 ns in
+routing. A fresh campaign starts at 0/5 and first changes only the shared array
+name to exempt those memories from the stale literal QoR target. Full
+synthesis must prove block-RAM mapping and safe capacity before another route.
+
+Working-memory gate 1/5 passes that full synthesis check. The complete graphics
+regression passes, all eight 320x32 sprite working memories map to RAMB18E1,
+and total BRAM use is 109/140 tiles (77.86%). One exact full production route
+with the unchanged qualified QoR file and strategy is now authorized. No
+bitstream or flash exists yet.
+
+Working-memory gate 2/5 routes all 67,466 nets and passes hold at `+0.050 ns`,
+but setup rejects at `-0.171 ns`; no bitstream is written. Exact resources are
+34,303 LUTs, 40,065 registers, 109 BRAM tiles, and 81 DSPs. The repaired sprite
+memory family is no longer the blocker. The measured leader is glyph start
+decode driving 201 extracted clock-enable loads, so gate 3 is a regression and
+OOC cone-removal check using the module's existing no-enable-extraction policy.
+
+Working-memory gate 3/5 passes the complete graphics regression and removes
+the targeted clip-enable family from exact routed render-command OOC. Its
+remaining `-0.075 ns` reset path is the documented missing-context OOC artifact,
+not the full-design gate-2 leader. Gate 4 is authorized as one clean exact full
+route with no strategy, seed, QoR, or feature change.
+
+Working-memory gate 4/5 routes all 67,525 nets and passes hold at `+0.033 ns`,
+but setup rejects at `-0.150 ns` across 112 endpoints; no bitstream is written.
+The residual is 64 glyph state-to-clock-enable endpoints followed by seven
+Copper AXI-decode-to-dispatch-write-enable endpoints. Gate 5 is the bounded
+structural cut of those two measured families, after targeted regression.
+
+Working-memory gate 5/5 routes all 67,539 nets and passes hold at `+0.005 ns`,
+but setup rejects at `-0.245 ns`; no bitstream is written and the campaign is
+closed. Copper staging removed its measured family and is retained. Broad glyph
+enable suppression is rejected because routing lost the positive placement
+result. A new campaign starts at 0/5 with glyph changed from the lone sequential
+render FSM to the one-hot policy already used by every other render engine;
+exact render-command OOC is required before another full route.
+
+Glyph-FSM gate 1/5 is rejected before full integration because Vivado did not
+infer the glyph FSM and ignored the requested encoding. Targeted behavior still
+passes. Gate 2 replaces the unenforced hint with explicit 55-bit one-hot RTL;
+no full timing run is authorized until its netlist shape and OOC paths pass.
+
+Glyph-FSM gate 2/5 is rejected before full integration. Explicit 55-bit
+one-hot state preserves behavior but creates a `-1.841 ns` high-fanout glyph
+state path, so that implementation is not retained. Gate 3 restores the
+compact state register, removes the state write from the shared failure task,
+and requires synthesis-log proof that Vivado infers and one-hot encodes the
+FSM before a full route. Campaign use is 2/5; no bitstream was written.
+
+Glyph-FSM gate 3/5 passes behavior but is rejected immediately after synthesis:
+moving the failure transition out of its task still does not make Vivado infer
+the glyph FSM. Placement was interrupted and no route or bitstream was spent.
+Gate 4 removes only the state register's glyph-only `extract_reset="no"`
+attribute and must prove inference, one-hot encoding, and OOC timing. Campaign
+use is 3/5.
+
+Glyph-FSM gate 4/5 proves `extract_reset="no"` was not the recognition blocker;
+targeted behavior passes, but Vivado still omits glyph from its FSM report, so
+the run is stopped before route. The same log omits flood and infers blitter and
+command, isolating the shared outside-case abort transition. Gate 5 moves that
+glyph priority transition under `case (state)` without changing its behavior.
+Campaign use is 4/5; no bitstream was written.
+
+Glyph-FSM gate 5/5 also fails recognition after targeted behavior passes. The
+run is stopped before route, no bitstream is written, and the campaign closes
+with all FSM experiments rejected. The source returns to the compact baseline.
+A new engine-response locality campaign starts at 0/5 from the retained full
+`-0.245 ns` path: gate 1 limits fanout on its registered response-valid source
+and requires behavioral plus exact OOC locality evidence before a full route.
+
+Engine-response gate 1/5 passes the complete graphics regression. Exact OOC
+routes all 19,215 nets with zero errors and proves seven bounded-fanout valid
+register copies; glyph loads use local replicas and the prior boundary family
+is absent from the top 50. The isolated `-0.320 ns` command fault path is the
+known OOC-context residual. Gate 2 is one clean exact full production route
+with the unchanged clock, strategy, and qualified QoR file.
+
+Engine-response gate 2/5 routes all 67,615 nets and passes hold at `+0.041 ns`,
+but setup rejects at `-0.185 ns`; no bitstream is written. Exact resources are
+34,294 LUTs, 40,168 registers, 109 BRAM tiles, and 81 DSPs. Response locality
+is retained. The new leader is AXI write decode into the eight
+`shadow_tile1_control` clock enables; gate 3 targets only that register and
+requires graphics-control regression plus exact control OOC before another
+full route.
+
+Engine-response gate 3/5 passes graphics-control behavior and exact OOC at
+`+0.331 ns`. All 3,462 nets route with zero errors, and every
+`shadow_tile1_control` CE is tied to VCC, proving the measured family is gone.
+Gate 4 is one clean exact full production route with no other RTL, seed,
+strategy, clock, or QoR change.
+
+Engine-response gate 4/5 routes all 67,641 nets and passes hold at `+0.050 ns`,
+but setup regresses to `-0.265 ns` across 241 endpoints; no bitstream is
+written. The target CE family is gone, but applying no-enable mapping to all 32
+bits disrupts packing and makes 40 blitter product-to-divide endpoints lead.
+That broad attribute is rejected. Gate 5 restores the gate-2 mapping and splits
+out only the eight transparent-index bits that formed the original leader;
+targeted behavior and OOC structural proof are required before the campaign's
+final full route.
+
+Engine-response gate 5/5 passes the complete graphics regression and exact
+control OOC at `+0.018 ns` setup. All 3,477 OOC nets route with zero errors.
+The eight transparent-index registers alone have CE tied to VCC; the remaining
+24 tile-control bits retain their original shared enable. The campaign's one
+final exact full production route is now authorized with no further source,
+seed, strategy, clock, QoR, or feature change.
+
+Engine-response gate 5/5 full integration routes all 67,228 nets and passes
+hold at `+0.012 ns`, but setup rejects at `-0.294 ns` across 149 endpoints; no
+bitstream is written. The target CE is gone, but its `dont_touch` boundary
+globally harms placement, so the entire split-register experiment is rejected
+and removed. Response-valid locality remains retained. The campaign closes
+with gate 2 (`-0.185 ns`) as the authoritative source checkpoint. A new 0/5
+campaign will predecode only the measured tile-control write select beside the
+existing write pipeline; behavior and exact control OOC proof precede any full
+route.
+
+MMIO-predecode gate 1/5 passes graphics-control behavior and exact OOC at
+`+0.136 ns`, proving the staged write select removes every AXI-address-to-tile-
+control CE path. The complete graphics regression also passes. Gate 2/5 routes
+all 67,080 production nets and passes hold at `+0.017 ns`; setup improves from
+the retained `-0.185 ns` checkpoint to `-0.111 ns` across only 23 endpoints.
+No bitstream is written. The predecode is retained, and gate 3 targets only the
+new five-level full-width geometry-opcode selection before another full route.
+
+MMIO-predecode gate 3/5 passes the complete graphics regression and exact
+render-command OOC. The changed geometry endpoint improves to `+1.821 ns` with
+two logic levels; only the three-bit geometry subcode reaches it. The OOC
+block's unrelated blitter path remains `-0.239 ns`. Gate 4 is authorized as one
+unchanged-strategy exact full production route; no bitstream exists yet.
+
+MMIO-predecode gate 4/5 routes all 67,162 nets and passes hold at `+0.013 ns`,
+but setup remains `-0.101 ns` across 15 endpoints; no bitstream is written. The
+geometry family is gone. The new leader is Copper validation computing and
+consuming an unregistered range-end sum despite an existing next-cycle range
+state. Gate 5 moves that decision onto the registered boundary before the
+campaign's final exact route.
+
+MMIO-predecode gate 5/5 passes the complete graphics regression and exact
+Copper OOC at `+0.762 ns`, retaining all 16 Copper RAMB36s. The prior
+validation-count-to-range-result path count is zero; the remaining endpoint is
+`+1.471 ns`. One unchanged-strategy exact full route is now the final campaign
+and release gate. No bitstream has yet been written or flashed.
+
+That final exact route connects all 67,130 nets and passes hold at `+0.007 ns`,
+but setup rejects at `-0.230 ns` across 40 endpoints; no bitstream is written.
+Exact resources are 34,152 LUTs, 40,177 registers, 109 BRAM tiles, and 81 DSPs.
+The Copper target is gone. The new leader is response-error control into glyph
+fault-detail clock enables at `-0.230 ns`; scheduler slot-tag enables follow at
+`-0.131 ns`. The MMIO-predecode campaign is closed at 5/5. Its proved local
+changes remain retained, gate 4 remains the best exact timing checkpoint at
+`-0.101 ns`, and the next bounded campaign begins only with exact OOC analysis
+of the measured response-error/glyph-enable family. Nothing is flashed yet.
+
+A full-feature 166,666,672 Hz baseline now passes exact implementation: all
+66,837 nets route with zero errors, setup is `+0.144 ns`, and hold is
+`+0.019 ns`. Vivado successfully writes a 4,045,683-byte bitstream and an XSA
+containing it. Exact use is 33,409 LUTs, 40,069 registers, 109 BRAM tiles, and
+81 DSPs. The block design proves requested and actual FCLK1 match. A redundant
+wrapper check after `close_design` caused the command to exit 2 after the valid
+artifacts were created; that checker is corrected without rerouting. FSBL,
+device-tree, flash, and repeated board qualification are now the active gate.
+The 200 MHz timing target remains open separately.
+
+The exact 166,666,672 Hz release is now installed on the Arty attached to
+Beast. Cold boot verifies BOOT.BIN
+`98228e7a73f665576cc7855fc0b771b1f7618b57cbce35f57cb71e1a5ed119cf`,
+FIT `a39e9b1e3b9a59742d288063822ee57d0b7f598decf2a02e8369ffe15b80c833`,
+FPGA-manager `operating`, graphics generation 1 with capabilities
+`0x000003ff`, nonzero build identity `0x18EBE2E1`, MC68030/PMMU POST, 128 MiB
+guest RAM, stage 8, and the terminal runtime. Linux sees only the lower 384 MiB
+of DDR; 128 MiB is the no-map graphics arena and QEMU preallocates the 128 MiB
+guest from Linux's cached RAM, leaving the intended 256 MiB host-services
+budget before kernel and process overhead.
+
+The Linux runtime tuner is active and tested rather than merely planned. It
+uses QMP to identify the actual TCG vCPU thread, pins it alone to ARM CPU1 at
+nice -10, and pins QEMU coordination/I/O threads to CPU0, where the board's
+device IRQs already land. The restored production runtime showed three QEMU
+host threads allowed only on CPU0 and the vCPU allowed only on CPU1 with
+priority 10/nice -10. Beast passes the input/runtime-tuning and exclusive-
+launcher regressions.
+
+Five alternating cold-boot pairs on the physical board compared default Linux
+scheduling with that production split using the same ROM, 128 MiB preallocated
+guest, and copied filesystem. The CPU-heavy POST median fell from 0.494 s to
+0.221 s, a 2.236x speedup. Relative to the retained approximate 30 MHz TCG
+reference, this workload is about 67 MHz equivalent; report it as roughly
+65--70 MHz equivalent because TCG has no literal emulated clock rate and later
+boot stages contain fixed waits and storage/service latency. Median terminal-
+ready time was unchanged at 11.838 versus 11.893 s, confirming that its
+remaining delay is not CPU execution. CPU1 remains reserved for MC68030/PMMU
+execution; future host-backed audio synthesis/mixing and fixed-math workers
+belong on CPU0 and communicate through bounded preallocated queues.
+
+The sprite compositor now retains 64 global descriptors while admitting at
+most 16 topmost spans and 2,048 destination pixels per scanline. Overflow is
+deterministic and visible through the existing status/bitmap. Complete graphics
+regression passes; the 16-by-128 case completes in 1,562 renderer clocks versus
+3,865 for the former unrestricted 64-sprite line.
+
+A five-attempt exact 200 MHz campaign did not close timing. The best attempt
+reached `-0.141 ns`; the final route connected all 66,393 nets with zero route
+errors and passed hold at `+0.050 ns`, but setup failed at `-0.152 ns`. It used
+32,289 LUTs, 38,942 registers, 129.5 BRAM tiles, and 81 DSPs. The remaining
+leaders are distributed across glyph/DSP enable, surface validation, sprite
+preparation, glyph range, and AXI/Copper dispatch paths; the old sprite
+scanline-throughput bottleneck is no longer the active blocker. The campaign
+is closed at 5/5 and produced no bitstream. The Arty remains on the qualified
+166,666,672 Hz release with build identity `0x18EBE2E1`.
+
+The complete 187,500,000 Hz release candidate now passes exact implementation
+without a feature cut. Its final route connects all 66,520 nets with zero
+errors and passes setup/hold at `+0.173/+0.009 ns`; use is 31,957 LUTs, 39,070
+registers, 12,263 slices, 129.5 BRAM tiles, and 81 DSPs. Placement and routing
+used a 200 MHz margin target, while the block design, FSBL, device tree, and
+release reports all retain the exact 187.5 MHz runtime clock. A complete
+BOOT.BIN/FIT package and host-tested Linux tools exist on Beast.
+
+This is now the active hardware authority. Hash-verified atomic deployment
+installed BOOT.BIN
+`3010d5f5fe5b19c9ef094823e8fbedd0d87fb8105c9c848c8ff65f6cd64be555`
+and FIT
+`cbf7ce8615c49c6f9d959b48d57326a8de3d3ec4b721a4ca7c5b781a47123679`
+while retaining rollback copies. Three consecutive boots pass FPGA-manager,
+the exact 187.5 MHz device-tree clock, MC68030/PMMU and SDRAM POST, 128 MiB
+guest RAM, filesystem round-trip, terminal display, and stage 8. Linux owns
+only the lower 384 MiB and QEMU preallocates 128 MiB for Astra.
+
+Ten consecutive renderer, Copper, sprite, and HDMI-audio certifications pass,
+plus a final complete sweep after boot three. The sprite certificate was
+corrected to validate the published 16-span/2,048-pixel policy through shared
+NDK constants; the audio certificate was corrected so its 1 ms polling window
+cannot outrun a shorter silence tail. These were software-test defects found
+by physical qualification, not RTL failures. Evidence is retained under
+`docs/evidence/astra-arty-187m5-20260814/`. Beast has no HDMI capture device;
+HDMI evidence is the exact splash readback, terminal-ready state, and repeated
+48 kHz audio certification.

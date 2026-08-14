@@ -45,6 +45,7 @@ module astra_render_glyph #(
     output reg                          busy,
     output reg                          done,
     output reg  [15:0]                  status,
+    (* extract_enable = "no" *)
     output reg  [31:0]                  fault_detail,
     output reg  [31:0]                  completed_pixels,
     output reg                          writer_start,
@@ -119,25 +120,32 @@ module astra_render_glyph #(
     localparam [5:0] ST_PIXEL_MULTIPLY = 6'd39;
     localparam [5:0] ST_PALETTE_REQUEST = 6'd40;
     localparam [5:0] ST_PIXEL_ADDRESS_BASE = 6'd41;
-localparam [5:0] ST_SOURCE_APPLY = 6'd42;
-localparam [5:0] ST_PIXEL_BOUNDS = 6'd43;
-localparam [5:0] ST_DESC_PREPARE = 6'd44;
-localparam [5:0] ST_DESC_RANGE_RESULT = 6'd45;
-localparam [5:0] ST_DESC_VALIDATE = 6'd46;
-localparam [5:0] ST_DESC_VALIDATE_RESULT = 6'd47;
-localparam [5:0] ST_BLEND_DIV_MULTIPLY = 6'd48;
-localparam [5:0] ST_PIXEL_BOUNDS_RESULT = 6'd49;
-localparam [5:0] ST_PIXEL_NEXT_DECIDE = 6'd50;
-localparam [5:0] ST_PALETTE_DECIDE = 6'd51;
-localparam [5:0] ST_BLEND_DIV_PIPE = 6'd52;
-localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
+    localparam [5:0] ST_SOURCE_APPLY = 6'd42;
+    localparam [5:0] ST_PIXEL_BOUNDS = 6'd43;
+    localparam [5:0] ST_DESC_PREPARE = 6'd44;
+    localparam [5:0] ST_DESC_RANGE_RESULT = 6'd45;
+    localparam [5:0] ST_DESC_VALIDATE = 6'd46;
+    localparam [5:0] ST_DESC_VALIDATE_RESULT = 6'd47;
+    localparam [5:0] ST_BLEND_DIV_MULTIPLY = 6'd48;
+    localparam [5:0] ST_PIXEL_BOUNDS_RESULT = 6'd49;
+    localparam [5:0] ST_PIXEL_NEXT_DECIDE = 6'd50;
+    localparam [5:0] ST_PALETTE_DECIDE = 6'd51;
+    localparam [5:0] ST_BLEND_DIV_PIPE = 6'd52;
+    localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
+    localparam [5:0] ST_BLEND_ACCUMULATE_FINISH = 6'd54;
 
     localparam [1:0] READ_DESCRIPTOR = 2'd0;
     localparam [1:0] READ_SOURCE = 2'd1;
     localparam [1:0] READ_PALETTE = 2'd2;
     localparam [1:0] READ_DESTINATION = 2'd3;
+    localparam [1:0] SOURCE_APPLY_MASK = 2'd0;
+    localparam [1:0] SOURCE_APPLY_A4 = 2'd1;
+    localparam [1:0] SOURCE_APPLY_A8 = 2'd2;
+    localparam [1:0] SOURCE_APPLY_INDEX = 2'd3;
 
-    reg [5:0] state;
+    // Keep ordinary next-state decode on D. Extracting it onto replicated
+    // synchronous reset pins imposes the FDRE reset-pin setup penalty.
+    (* extract_reset = "no" *) reg [5:0] state;
     reg prepass_q;
     reg [12:0] descriptor_index_q;
     reg [12:0] descriptor_last_index_q;
@@ -151,12 +159,20 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
     reg [15:0] source_x_q, source_y_q;
     reg signed [15:0] destination_x_q, destination_y_q;
     reg signed [16:0] destination_pixel_x_q, destination_pixel_y_q;
-    reg [15:0] glyph_width_q, glyph_height_q;
-    reg [15:0] glyph_last_x_q, glyph_last_y_q;
-    reg [15:0] pixel_x_q, pixel_y_q;
+    (* extract_enable = "no" *)
+    reg signed [16:0] effective_clip_left_q, effective_clip_top_q;
+    (* extract_enable = "no" *)
+    reg signed [16:0] effective_clip_right_q, effective_clip_bottom_q;
+reg [15:0] glyph_width_q, glyph_height_q;
+reg [15:0] glyph_last_x_q, glyph_last_y_q;
+    (* extract_enable = "no" *) reg [15:0] pixel_x_q, pixel_y_q;
     reg [31:0] source_address_q, destination_address_q, palette_address_q;
     reg [7:0] source_sample_q;
+    reg [1:0] source_apply_kind_q;
+    reg source_sample_zero_q, source_sample_full_q;
+    reg source_sample_transparent_q;
     reg [31:0] source_color_q;
+    reg [31:0] destination_color_q;
     (* extract_enable = "no" *) reg [31:0] output_pixel_q;
     reg source_visible_q;
     reg palette_transparent_q, palette_opaque_q;
@@ -173,8 +189,13 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
     reg [7:0] blend_multiply_destination_g_q;
     reg [7:0] blend_multiply_destination_b_q;
     reg [7:0] blend_multiply_alpha_q, blend_multiply_inverse_alpha_q;
-    reg [16:0] blend_numerator_r_q, blend_numerator_g_q;
-    reg [16:0] blend_numerator_b_q;
+    reg [15:0] blend_source_stage_r_q, blend_source_stage_g_q;
+    reg [15:0] blend_source_stage_b_q;
+    reg [15:0] blend_destination_stage_r_q, blend_destination_stage_g_q;
+    reg [15:0] blend_destination_stage_b_q;
+    (* use_dsp = "no" *) reg [16:0] blend_numerator_r_q;
+    (* use_dsp = "no" *) reg [16:0] blend_numerator_g_q;
+    (* use_dsp = "no" *) reg [16:0] blend_numerator_b_q;
     reg [16:0] blend_div_operand_r_q, blend_div_operand_g_q;
     reg [16:0] blend_div_operand_b_q;
     reg [16:0] blend_div_multiply_operand_r_q;
@@ -201,26 +222,30 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
     reg pixel_last_x_q, pixel_last_y_q;
     (* extract_enable = "no" *)
     reg [47:0] descriptor_range_accumulator_q;
-    reg [47:0] descriptor_range_multiplicand_q;
-    reg [15:0] descriptor_range_multiplier_q;
+reg [47:0] descriptor_range_multiplicand_q;
+reg [15:0] descriptor_range_multiplier_q;
     reg [3:0] descriptor_range_step_q;
     reg [31:0] source_base_q, destination_base_q;
     reg [31:0] command_descriptor_offset_q;
     reg [31:0] command_foreground_q, command_background_q;
     reg [7:0] command_transparent_index_q;
     reg [7:0] command_source_format_q, command_destination_format_q;
-    reg [15:0] source_row_operand_q, destination_row_operand_q;
+    reg command_destination_index8_q, command_destination_rgb565_q;
+reg [15:0] source_row_operand_q, destination_row_operand_q;
     reg [47:0] source_row_product_q, destination_row_product_q;
     reg [31:0] source_row_column_q, destination_row_column_q;
     reg [31:0] source_row_product_low_q, source_row_product_high_q;
     reg [31:0] destination_row_product_low_q;
     reg [31:0] destination_row_product_high_q;
-    reg [15:0] source_row_multiply_operand_q;
-    reg [15:0] destination_row_multiply_operand_q;
+    // These are intentional timing boundaries. If Vivado merges them back
+    // into the conditionally written row operands, it recreates FSM-driven
+    // DSP clock enables on the row multipliers.
+    (* dont_touch = "yes" *) reg [15:0] source_row_multiply_operand_q;
+    (* dont_touch = "yes" *) reg [15:0] destination_row_multiply_operand_q;
     reg [15:0] source_pitch_low_operand_q, source_pitch_high_operand_q;
     reg [15:0] destination_pitch_low_operand_q;
     reg [15:0] destination_pitch_high_operand_q;
-    reg [31:0] source_column_byte_q, destination_column_byte_q;
+reg [31:0] source_column_byte_q, destination_column_byte_q;
     reg abort_pending_q;
     reg writer_started_q;
 
@@ -437,15 +462,25 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
     wire signed [16:0] destination_pixel_y =
         $signed({destination_y_q[15], destination_y_q}) +
         $signed({1'b0, pixel_y_q});
+    wire signed [16:0] effective_clip_left = clip_left < 0 ?
+        17'sd0 : $signed({clip_left[15], clip_left});
+    wire signed [16:0] effective_clip_top = clip_top < 0 ?
+        17'sd0 : $signed({clip_top[15], clip_top});
+    wire signed [16:0] effective_clip_right =
+        $signed({clip_right[15], clip_right}) <
+        $signed({1'b0, destination_width}) ?
+            $signed({clip_right[15], clip_right}) :
+            $signed({1'b0, destination_width});
+    wire signed [16:0] effective_clip_bottom =
+        $signed({clip_bottom[15], clip_bottom}) <
+        $signed({1'b0, destination_height}) ?
+            $signed({clip_bottom[15], clip_bottom}) :
+            $signed({1'b0, destination_height});
     wire destination_inside =
-        destination_pixel_x_q >= $signed({clip_left[15], clip_left}) &&
-        destination_pixel_x_q < $signed({clip_right[15], clip_right}) &&
-        destination_pixel_y_q >= $signed({clip_top[15], clip_top}) &&
-        destination_pixel_y_q < $signed({clip_bottom[15], clip_bottom}) &&
-        destination_pixel_x_q >= 17'sd0 &&
-        destination_pixel_y_q >= 17'sd0 &&
-        destination_pixel_x_q < $signed({1'b0, destination_width}) &&
-        destination_pixel_y_q < $signed({1'b0, destination_height});
+        destination_pixel_x_q >= effective_clip_left_q &&
+        destination_pixel_x_q < effective_clip_right_q &&
+        destination_pixel_y_q >= effective_clip_top_q &&
+        destination_pixel_y_q < effective_clip_bottom_q;
     wire [16:0] current_source_x = {1'b0, source_x_q} + {1'b0, pixel_x_q};
     wire [16:0] current_source_y = {1'b0, source_y_q} + {1'b0, pixel_y_q};
     wire [31:0] source_column_byte =
@@ -469,8 +504,6 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
         command_source_format_q == `ASTRA_RENDER_FORMAT_INDEX4 ?
             {4'd0, source_nibble} : source_byte;
     wire [2:0] destination_lane = destination_address_q[2:0];
-    wire [31:0] decoded_destination = decode_destination(
-        command_destination_format_q, cache_q, destination_lane);
     wire [31:0] palette_address = arena_base + source_palette_offset +
         ({24'd0, source_sample_q} << 2);
     wire [2:0] palette_lane = palette_address[2:0];
@@ -480,28 +513,6 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
         beat_byte(cache_q, palette_lane + 3'd2),
         beat_byte(cache_q, palette_lane + 3'd3)
     };
-
-    reg [31:0] blended_argb;
-    always @* begin
-        blended_argb = source_color_q;
-        if (coverage_max_q == 8'd15) begin
-            blended_argb[23:16] = blend_channel_15(
-                foreground[23:16], decoded_destination[23:16], coverage_q[3:0]);
-            blended_argb[15:8] = blend_channel_15(
-                foreground[15:8], decoded_destination[15:8], coverage_q[3:0]);
-            blended_argb[7:0] = blend_channel_15(
-                foreground[7:0], decoded_destination[7:0], coverage_q[3:0]);
-            blended_argb[31:24] = 8'hff;
-        end else if (coverage_max_q == 8'd255) begin
-            blended_argb[23:16] = blend_channel_255(
-                source_color_q[23:16], decoded_destination[23:16], coverage_q);
-            blended_argb[15:8] = blend_channel_255(
-                source_color_q[15:8], decoded_destination[15:8], coverage_q);
-            blended_argb[7:0] = blend_channel_255(
-                source_color_q[7:0], decoded_destination[7:0], coverage_q);
-            blended_argb[31:24] = 8'hff;
-        end
-    end
 
     task automatic fail(input [15:0] failure_status,
                         input [31:0] detail);
@@ -548,6 +559,10 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
             destination_y_q <= 16'sd0;
             destination_pixel_x_q <= 17'sd0;
             destination_pixel_y_q <= 17'sd0;
+            effective_clip_left_q <= 17'sd0;
+            effective_clip_top_q <= 17'sd0;
+            effective_clip_right_q <= 17'sd0;
+            effective_clip_bottom_q <= 17'sd0;
             glyph_width_q <= 16'd0;
             glyph_height_q <= 16'd0;
             glyph_last_x_q <= 16'd0;
@@ -558,7 +573,9 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
             destination_address_q <= 32'd0;
             palette_address_q <= 32'd0;
             source_sample_q <= 8'd0;
+            source_apply_kind_q <= SOURCE_APPLY_MASK;
             source_color_q <= 32'd0;
+            destination_color_q <= 32'd0;
             output_pixel_q <= 32'd0;
             source_visible_q <= 1'b0;
             palette_transparent_q <= 1'b0;
@@ -582,6 +599,12 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
             blend_multiply_destination_b_q <= 8'd0;
             blend_multiply_alpha_q <= 8'd0;
             blend_multiply_inverse_alpha_q <= 8'd0;
+            blend_source_stage_r_q <= 16'd0;
+            blend_source_stage_g_q <= 16'd0;
+            blend_source_stage_b_q <= 16'd0;
+            blend_destination_stage_r_q <= 16'd0;
+            blend_destination_stage_g_q <= 16'd0;
+            blend_destination_stage_b_q <= 16'd0;
             blend_numerator_r_q <= 17'd0;
             blend_numerator_g_q <= 17'd0;
             blend_numerator_b_q <= 17'd0;
@@ -622,6 +645,8 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
             command_transparent_index_q <= 8'd0;
             command_source_format_q <= 8'd0;
             command_destination_format_q <= 8'd0;
+            command_destination_index8_q <= 1'b0;
+            command_destination_rgb565_q <= 1'b0;
             source_row_product_q <= 48'd0;
             destination_row_product_q <= 48'd0;
             source_row_column_q <= 32'd0;
@@ -706,6 +731,9 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
             blend_div_multiply_operand_r_q <= blend_div_operand_r_q;
             blend_div_multiply_operand_g_q <= blend_div_operand_g_q;
             blend_div_multiply_operand_b_q <= blend_div_operand_b_q;
+            blend_div_operand_r_q <= blend_numerator_r_q + 17'd8;
+            blend_div_operand_g_q <= blend_numerator_g_q + 17'd8;
+            blend_div_operand_b_q <= blend_numerator_b_q + 17'd8;
             blend_div_product_r_q <= blend_div_product_r_next;
             blend_div_product_g_q <= blend_div_product_g_next;
             blend_div_product_b_q <= blend_div_product_b_next;
@@ -736,7 +764,25 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
                     command_background_q <= background;
                     command_transparent_index_q <= transparent_index;
                     command_source_format_q <= source_format;
+                    case (source_format)
+                        `ASTRA_RENDER_FORMAT_MASK1:
+                            source_apply_kind_q <= SOURCE_APPLY_MASK;
+                        `ASTRA_RENDER_FORMAT_A4:
+                            source_apply_kind_q <= SOURCE_APPLY_A4;
+                        `ASTRA_RENDER_FORMAT_A8:
+                            source_apply_kind_q <= SOURCE_APPLY_A8;
+                        default:
+                            source_apply_kind_q <= SOURCE_APPLY_INDEX;
+                    endcase
                     command_destination_format_q <= destination_format;
+                    command_destination_index8_q <=
+                        destination_format == `ASTRA_RENDER_FORMAT_INDEX8;
+                    command_destination_rgb565_q <=
+                        destination_format == `ASTRA_RENDER_FORMAT_RGB565;
+                    effective_clip_left_q <= effective_clip_left;
+                    effective_clip_top_q <= effective_clip_top;
+                    effective_clip_right_q <= effective_clip_right;
+                    effective_clip_bottom_q <= effective_clip_bottom;
                     state <= ST_DESC_PREPARE;
                 end
 
@@ -845,6 +891,10 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
                 end
 
                 ST_DESC_RANGE_MULTIPLY: begin
+                    descriptor_last_row_q <=
+                        descriptor_range_accumulator_q +
+                        (descriptor_range_multiplier_q[0] ?
+                         descriptor_range_multiplicand_q : 48'd0);
                     if (descriptor_range_multiplier_q[0])
                         descriptor_range_accumulator_q <=
                             descriptor_range_accumulator_q +
@@ -854,10 +904,6 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
                     descriptor_range_multiplier_q <=
                         descriptor_range_multiplier_q >> 1;
                     if (descriptor_range_step_q == 4'd15) begin
-                        descriptor_last_row_q <=
-                            descriptor_range_accumulator_q +
-                            (descriptor_range_multiplier_q[0] ?
-                             descriptor_range_multiplicand_q : 48'd0);
                         state <= ST_DESC_RANGE_SUM;
                     end else begin
                         descriptor_range_step_q <=
@@ -976,6 +1022,14 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
 
                 ST_SOURCE_DECODE: begin
                     source_sample_q <= decoded_sample;
+                    source_sample_zero_q <= decoded_sample == 8'd0;
+                    source_sample_full_q <=
+                        (source_apply_kind_q == SOURCE_APPLY_A4 &&
+                         decoded_sample[3:0] == 4'hf) ||
+                        (source_apply_kind_q == SOURCE_APPLY_A8 &&
+                         decoded_sample == 8'hff);
+                    source_sample_transparent_q <=
+                        decoded_sample == command_transparent_index_q;
                     state <= ST_SOURCE_APPLY;
                 end
 
@@ -984,9 +1038,9 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
                     needs_destination_q <= 1'b0;
                     coverage_q <= 8'd0;
                     coverage_max_q <= 8'd0;
-                    case (command_source_format_q)
-                        `ASTRA_RENDER_FORMAT_MASK1: begin
-                            if (source_sample_q[0]) begin
+                    case (source_apply_kind_q)
+                        SOURCE_APPLY_MASK: begin
+                            if (!source_sample_zero_q) begin
                             source_color_q <= command_foreground_q;
                             output_pixel_q <= command_foreground_q;
                         end else if (command_flags[0]) begin
@@ -997,33 +1051,32 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
                             end
                             state <= ST_EMIT;
                         end
-                        `ASTRA_RENDER_FORMAT_A4: begin
+                        SOURCE_APPLY_A4: begin
                         source_color_q <= command_foreground_q;
                         output_pixel_q <= command_foreground_q;
                             coverage_q <= {4'd0, source_sample_q[3:0]};
                             coverage_max_q <= 8'd15;
-                            needs_destination_q <= source_sample_q[3:0] != 4'd15;
-                            source_visible_q <= source_sample_q[3:0] != 4'd0;
-                            state <= source_sample_q[3:0] == 4'd0 ?
-                                ST_PIXEL_NEXT : source_sample_q[3:0] == 4'd15 ?
+                            needs_destination_q <= !source_sample_full_q;
+                            source_visible_q <= !source_sample_zero_q;
+                            state <= source_sample_zero_q ?
+                                ST_PIXEL_NEXT : source_sample_full_q ?
                                 ST_EMIT : ST_DEST_AR;
                         end
-                        `ASTRA_RENDER_FORMAT_A8: begin
+                        SOURCE_APPLY_A8: begin
                         source_color_q <= command_foreground_q;
                         output_pixel_q <= command_foreground_q;
                             coverage_q <= source_sample_q;
                             coverage_max_q <= 8'd255;
-                            needs_destination_q <= source_sample_q != 8'hff;
-                            source_visible_q <= source_sample_q != 8'd0;
-                            state <= source_sample_q == 8'd0 ? ST_PIXEL_NEXT :
-                                source_sample_q == 8'hff ? ST_EMIT : ST_DEST_AR;
+                            needs_destination_q <= !source_sample_full_q;
+                            source_visible_q <= !source_sample_zero_q;
+                            state <= source_sample_zero_q ? ST_PIXEL_NEXT :
+                                source_sample_full_q ? ST_EMIT : ST_DEST_AR;
                         end
                         default: begin
-                        if (source_sample_q == command_transparent_index_q) begin
+                        if (source_sample_transparent_q) begin
                                 source_visible_q <= 1'b0;
                                 state <= ST_PIXEL_NEXT;
-                            end else if (command_destination_format_q ==
-                                     `ASTRA_RENDER_FORMAT_INDEX8) begin
+                            end else if (command_destination_index8_q) begin
                                 source_color_q <= {24'd0, source_sample_q};
                                 output_pixel_q <= {24'd0, source_sample_q};
                                 state <= ST_EMIT;
@@ -1095,36 +1148,37 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
                         !m_axi_rlast) begin
                         fail(`ASTRA_RENDER_STATUS_AXI_READ, 32'h00050005);
                     end else begin
+                        destination_color_q <= decode_destination(
+                            command_destination_format_q, m_axi_rdata,
+                            destination_lane);
                         state <= ST_BLEND;
                     end
                 end
 
                 ST_BLEND: begin
                     blend_component_rgb565_q <=
-                        command_destination_format_q ==
-                            `ASTRA_RENDER_FORMAT_RGB565 &&
-                        (command_source_format_q == `ASTRA_RENDER_FORMAT_A4 ||
-                         command_source_format_q == `ASTRA_RENDER_FORMAT_A8);
-                    if (command_destination_format_q ==
-                            `ASTRA_RENDER_FORMAT_RGB565 &&
-                        (command_source_format_q == `ASTRA_RENDER_FORMAT_A4 ||
-                         command_source_format_q == `ASTRA_RENDER_FORMAT_A8)) begin
+                        command_destination_rgb565_q &&
+                        (source_apply_kind_q == SOURCE_APPLY_A4 ||
+                         source_apply_kind_q == SOURCE_APPLY_A8);
+                    if (command_destination_rgb565_q &&
+                        (source_apply_kind_q == SOURCE_APPLY_A4 ||
+                         source_apply_kind_q == SOURCE_APPLY_A8)) begin
                         blend_source_r_q <= {3'd0, command_foreground_q[15:11]};
                         blend_source_g_q <= {2'd0, command_foreground_q[10:5]};
                         blend_source_b_q <= {3'd0, command_foreground_q[4:0]};
                         blend_destination_r_q <= {3'd0,
-                            decoded_destination[23:19]};
+                            destination_color_q[23:19]};
                         blend_destination_g_q <= {2'd0,
-                            decoded_destination[15:10]};
+                            destination_color_q[15:10]};
                         blend_destination_b_q <= {3'd0,
-                            decoded_destination[7:3]};
+                            destination_color_q[7:3]};
                     end else begin
                         blend_source_r_q <= source_color_q[23:16];
                         blend_source_g_q <= source_color_q[15:8];
                         blend_source_b_q <= source_color_q[7:0];
-                        blend_destination_r_q <= decoded_destination[23:16];
-                        blend_destination_g_q <= decoded_destination[15:8];
-                        blend_destination_b_q <= decoded_destination[7:0];
+                        blend_destination_r_q <= destination_color_q[23:16];
+                        blend_destination_g_q <= destination_color_q[15:8];
+                        blend_destination_b_q <= destination_color_q[7:0];
                     end
                     if (coverage_max_q == 8'd15) begin
                         blend_alpha_q <= {4'd0, coverage_q[3:0]};
@@ -1146,24 +1200,31 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
                 end
 
                 ST_BLEND_ACCUMULATE: begin
-                    blend_numerator_r_q <= blend_source_product_r_q +
-                        blend_destination_product_r_q +
-                        (coverage_max_q == 8'd15 ? 17'd7 : 17'd0);
-                    blend_numerator_g_q <= blend_source_product_g_q +
-                        blend_destination_product_g_q +
-                        (coverage_max_q == 8'd15 ? 17'd7 : 17'd0);
-                    blend_numerator_b_q <= blend_source_product_b_q +
-                        blend_destination_product_b_q +
-                        (coverage_max_q == 8'd15 ? 17'd7 : 17'd0);
+                    blend_source_stage_r_q <= blend_source_product_r_q;
+                    blend_source_stage_g_q <= blend_source_product_g_q;
+                    blend_source_stage_b_q <= blend_source_product_b_q;
+                    blend_destination_stage_r_q <=
+                        blend_destination_product_r_q;
+                    blend_destination_stage_g_q <=
+                        blend_destination_product_g_q;
+                    blend_destination_stage_b_q <=
+                        blend_destination_product_b_q;
+                    state <= ST_BLEND_ACCUMULATE_FINISH;
+                end
+
+                ST_BLEND_ACCUMULATE_FINISH: begin
+                    blend_numerator_r_q <= {1'b0, blend_source_stage_r_q} +
+                        {1'b0, blend_destination_stage_r_q};
+                    blend_numerator_g_q <= {1'b0, blend_source_stage_g_q} +
+                        {1'b0, blend_destination_stage_g_q};
+                    blend_numerator_b_q <= {1'b0, blend_source_stage_b_q} +
+                        {1'b0, blend_destination_stage_b_q};
                     state <= ST_BLEND_NORMALIZE;
                 end
 
                 ST_BLEND_NORMALIZE: begin
                     if (coverage_max_q == 8'd15) begin
                         // Exact floor(n / 15) for the complete 0..3832 range.
-                        blend_div_operand_r_q <= blend_numerator_r_q + 17'd1;
-                        blend_div_operand_g_q <= blend_numerator_g_q + 17'd1;
-                        blend_div_operand_b_q <= blend_numerator_b_q + 17'd1;
                         state <= ST_BLEND_DIV_MULTIPLY;
                     end else begin
                         blend_result_r_q <= divide_255_round(blend_numerator_r_q);
@@ -1246,9 +1307,12 @@ localparam [5:0] ST_BLEND_PRODUCT_PIPE = 6'd53;
                     end
                 end
 
-                ST_FLUSH: if (writer_flush_ready) begin
+                ST_FLUSH: begin
                     writer_flush <= 1'b1;
-                    state <= ST_WAIT_WRITER;
+                    if (writer_flush && writer_flush_ready) begin
+                        writer_flush <= 1'b0;
+                        state <= ST_WAIT_WRITER;
+                    end
                 end
 
                 ST_WAIT_WRITER: if (writer_done) begin

@@ -8,6 +8,7 @@ if {[info exists ::env(ASTRA_OOC_OUT)]} {
 }
 
 file mkdir $output_dir
+read_verilog -sv [file join $graphics_dir astra_premult_blend.sv]
 read_verilog -sv [file join $graphics_dir astra_pixel_compositor.sv]
 read_xdc [file join $script_dir compositor_ooc.xdc]
 synth_design -top astra_pixel_compositor -part xc7z020clg400-1 \

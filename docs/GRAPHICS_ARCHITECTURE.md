@@ -25,7 +25,7 @@ transport defined here.
 
 `ndk/include/astra/graphics.h` now reflects the Arty hardware boundary,
 including two tile layers, 64 sprites, independent 1..128 sprite source
-extents, the 8192-pixel line budget, palette banks, drawing capabilities,
+extents, the 16-sprite/2048-pixel line budget, palette banks, drawing capabilities,
 glyphs, bounded flood fill, raster programs, and fences. It remains a draft
 service API until the display service implementation and ABI tests promote it;
 the RTL register layout is not the application ABI.
@@ -410,12 +410,13 @@ palette alpha multiplied by sprite opacity rounds to a nonzero effective
 alpha. Collision class and mask select eligible sprite pairs; they do not
 provide pixel storage.
 
-All 64 unscaled 128-pixel-wide sprites are guaranteed to be admitted on the
-same scanline. The hardware sprite output budget is therefore 8,192 pixels per
-line. Scaling may make a scene exceed that budget. Sprites are admitted as
-complete line spans in descending priority order; a non-admitted lower-priority
-span is omitted for that line and reported in a 64-bit overflow bitmap. A span
-is never rendered partially because a budget expired.
+The hardware retains 64 global descriptors and admits at most 16 complete
+sprite spans and 2,048 destination pixels on one scanline. Scaling remains
+available, but wider destination spans consume more of the pixel budget.
+Sprites are admitted in descending priority and ascending descriptor order; a
+non-admitted lower-priority span is omitted for that line and reported in a
+64-bit overflow bitmap. A span is never rendered partially because either
+budget expired.
 
 ### Cursor policy
 
@@ -819,11 +820,10 @@ Active-pixel framebuffer payload at 720p60 is:
 | RGB565 | 110,592,000 bytes/s |
 | XRGB8888 | 221,184,000 bytes/s |
 
-Sixty-four unscaled 128x128 INDEX8 sprites add at most 62,914,560 source
-bytes/s over a frame. If all overlap, one scanline requires 8,192 sprite source
-bytes plus framebuffer data and palette/compositor work. The sprite line path
-must process at least four output pixels per fabric clock at its selected clock
-or provide equivalent measured parallelism.
+The 16-sprite/2,048-pixel admission contract bounds one scanline to 2,048
+sprite source bytes plus framebuffer data and palette/compositor work. Across
+all 720 active lines at 60 Hz that is at most 88,473,600 source bytes/s. The
+sprite line path processes four output pixels per fabric clock.
 
 One INDEX8 tile layer contributes 55,296,000 active texel bytes/s; INDEX4
 contributes 27,648,000 bytes/s. Two INDEX8 layers therefore contribute
@@ -833,9 +833,9 @@ descriptors, AXI overhead, rendering, Linux, or QEMU traffic.
 
 At an 8x8 map-row boundary, two unaligned layers add at most 1,288 descriptor
 bytes to one line. Fetching every edge pattern row in full makes the
-corresponding pathological line 5,120 framebuffer bytes, 8,192 sprite bytes,
-2,576 tile texel bytes, and 1,288 map bytes: 17,176 bytes within the 22.222
-microsecond 720p line period, or 772.92 MB/s of instantaneous payload. Reusing
+corresponding pathological line 5,120 framebuffer bytes, 2,048 sprite bytes,
+2,576 tile texel bytes, and 1,288 map bytes: 11,032 bytes within the 22.222
+microsecond 720p line period, or 496.44 MB/s of instantaneous payload. Reusing
 a map row across its eight output lines reduces two-layer map traffic to at
 most 7,032,480 bytes/s. Arbitrary per-scanline copper scroll can defeat that
 reuse and raise it to 55,641,600 bytes/s. Release testing must include both

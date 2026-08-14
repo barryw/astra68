@@ -49,7 +49,7 @@ module tb_astra_copper_control;
     integer dispatch_handshakes = 0;
 
     always @(posedge clk) begin
-        if (!reset && dispatch_valid && dispatch_ready)
+        if (!reset && dispatch_valid && dispatch_ready && dispatch_allowed)
             dispatch_handshakes <= dispatch_handshakes + 1;
     end
 
@@ -286,7 +286,9 @@ module tb_astra_copper_control;
         // A runtime renderer rejection is returned to the core as a
         // registered failed completion.  It must fault without publishing
         // the producer endpoint or hanging in EXEC_DISPATCH.
+        // ready marks validation completion; allowed carries its result.
         dispatch_allowed = 0;
+        dispatch_ready = 1;
         @(negedge clk);
         frame_boundary = 1;
         frame_start = 1;
@@ -299,7 +301,9 @@ module tb_astra_copper_control;
             timeout = timeout + 1;
         end
         if (!faulted || dispatch_handshakes != 1)
-            $fatal(1, "rejected DISPATCH did not fault exactly once");
+            $fatal(1, "rejected DISPATCH fault=%b handshakes=%0d",
+                   faulted, dispatch_handshakes);
+        dispatch_ready = 0;
         axi_read(32'h401c, value);
         if (!value[0] || value[15:8] != 8'd4)
             $fatal(1, "rejected DISPATCH fault mismatch status=%08x",

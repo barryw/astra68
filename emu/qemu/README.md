@@ -40,12 +40,12 @@ contract and 128 MiB for the Arty-hosted guest. The Arty launcher uses a
 preallocated 128 MiB memory backend, so guest RAM is committed when QEMU
 starts instead of competing with Linux on demand.
 
-Sectors are 512 bytes and a request carries at most 16, matching
-`docs/ASTRAHOST.md`. One transfer is active at a time and completes after a
-short virtual delay rather than inside the store to `BLOCK_REQ_SUBMIT`, so the
-guest stays on the interrupt path it uses on hardware. A reset raises a pending
-state change and a new host generation, which the guest clears through
-`BLOCK_STATE_ACK`.
+Sectors are 512 bytes. The hosted backend reports a 128-sector (64 KiB)
+maximum; physical transports report their own limit through the same register.
+One asynchronous host transfer is active at a time and completes through the
+normal interrupt path. A reset cancels an active transfer, raises a pending
+state change, and publishes a new host generation, which the guest clears
+through `BLOCK_STATE_ACK`.
 
 **The block service exists only when an image is attached.** Without one,
 `BLOCK_ID` reads zero and `SYS_ASTRA_HOST` stays clear in `SYS_STATUS`, so the
@@ -71,4 +71,11 @@ On the Arty, `run-arty.sh` starts QEMU once and holds an exclusive runtime
 lock. `astra-input-hotplug.py` watches stable udev keyboard and pointer paths
 and adds or removes QEMU `input-linux` objects through QMP. Linux autorepeat is
 suppressed; the Astra input service owns repeat policy. Attaching or removing a
-USB input device does not restart QEMU or the guest.
+USB input device does not restart QEMU or the guest. The same reconciler pins
+the single TCG vCPU to CPU1 at nice -10 and QEMU's host I/O threads to CPU0;
+failure to apply this optional tuning leaves the guest running.
+
+CPU1 is the MC68030/PMMU execution core. CPU0 owns Linux device IRQs, QEMU
+coordination and I/O, and future host-backed audio and fixed-math workers.
+Those workers use preallocated queues and complete asynchronously; expensive
+mixing, synthesis, or math never executes synchronously on the vCPU thread.

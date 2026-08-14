@@ -4,7 +4,9 @@
 module astra_front_panel #(
     parameter integer CLK_HZ = 12500000,
     parameter integer SAMPLE_HZ = 1000,
-    parameter integer DEBOUNCE_SAMPLES = 5
+    parameter integer DEBOUNCE_SAMPLES = 5,
+    parameter [31:0] CAPABILITIES = 32'h0f040608,
+    parameter integer ACTIVITY_LED = 7
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -41,6 +43,13 @@ module astra_front_panel #(
     localparam [5:0] REG_LED_SET       = 6'h08;
     localparam [5:0] REG_LED_CLEAR     = 6'h09;
     localparam [5:0] REG_LED_TOGGLE    = 6'h0a;
+    localparam [5:0] REG_ACTIVITY      = 6'h0b;
+    localparam [5:0] REG_ACTIVITY_HOLD = 6'h0c;
+    localparam integer DEFAULT_ACTIVITY_HOLD_CALC = SAMPLE_HZ / 10;
+    localparam [15:0] DEFAULT_ACTIVITY_HOLD = 16'(
+        DEFAULT_ACTIVITY_HOLD_CALC < 1 ? 1 :
+        DEFAULT_ACTIVITY_HOLD_CALC > 65535 ? 65535 :
+        DEFAULT_ACTIVITY_HOLD_CALC);
 
     wire [INPUT_COUNT-1:0] input_pins = {switches, buttons};
     (* async_reg = "true" *) reg [INPUT_COUNT-1:0] input_meta = 10'd0;
@@ -108,32 +117,54 @@ module astra_front_panel #(
 
     reg [7:0] led_data = 8'd0;
     reg [7:0] led_ownership = 8'd0;
-    wire led_write = select && write_strobe && byte_enable[0];
+    reg [15:0] activity_hold = DEFAULT_ACTIVITY_HOLD;
+    reg [15:0] activity_count = 16'd0;
+    wire panel_write = select && write_strobe;
+    wire led_write = panel_write && byte_enable[0];
+    wire activity_trigger = panel_write && byte_enable[0] &&
+                            reg_index == REG_ACTIVITY &&
+                            write_data[0];
 
     always @(posedge clk) begin
         if (rst) begin
             led_data <= 8'd0;
             led_ownership <= 8'd0;
-        end else if (led_write) begin
-            case (reg_index)
-                REG_LED_DATA:      led_data <= write_data[7:0];
-                REG_LED_OWNERSHIP: led_ownership <= write_data[7:0];
-                REG_LED_SET:       led_data <= led_data | write_data[7:0];
-                REG_LED_CLEAR:     led_data <= led_data & ~write_data[7:0];
-                REG_LED_TOGGLE:    led_data <= led_data ^ write_data[7:0];
-                default: begin end
-            endcase
+            activity_hold <= DEFAULT_ACTIVITY_HOLD;
+            activity_count <= 16'd0;
+        end else begin
+            if (led_write) begin
+                case (reg_index)
+                    REG_LED_DATA:      led_data <= write_data[7:0];
+                    REG_LED_OWNERSHIP: led_ownership <= write_data[7:0];
+                    REG_LED_SET:       led_data <= led_data | write_data[7:0];
+                    REG_LED_CLEAR:     led_data <= led_data & ~write_data[7:0];
+                    REG_LED_TOGGLE:    led_data <= led_data ^ write_data[7:0];
+                    default: begin end
+                endcase
+            end
+            if (panel_write && reg_index == REG_ACTIVITY_HOLD) begin
+                if (byte_enable[0]) activity_hold[7:0] <= write_data[7:0];
+                if (byte_enable[1]) activity_hold[15:8] <= write_data[15:8];
+            end
+        end
+
+        if (!rst) begin
+            if (activity_trigger)
+                activity_count <= activity_hold;
+            else if (sample_tick && activity_count != 16'd0)
+                activity_count <= activity_count - 16'd1;
         end
     end
 
     assign leds = (led_data & led_ownership) |
-                  (diagnostic_leds & ~led_ownership);
+                  (diagnostic_leds & ~led_ownership) |
+                  ((activity_count != 16'd0) ? (8'b1 << ACTIVITY_LED) : 8'd0);
 
     always @* begin
         case (reg_index)
             REG_ID:            read_data = 32'h504e4c30; // "PNL0"
             REG_VERSION:       read_data = 32'h00010000;
-            REG_CAPS:          read_data = 32'h0f040608;
+            REG_CAPS:          read_data = CAPABILITIES;
             REG_INPUT:         read_data = {20'd0, input_stable[9:6],
                                             2'd0, input_stable[5:0]};
             REG_RAW_INPUT:     read_data = {20'd0, input_sync[9:6],
@@ -142,6 +173,8 @@ module astra_front_panel #(
                                             2'd0, input_changes[5:0]};
             REG_LED_DATA:      read_data = {24'd0, led_data};
             REG_LED_OWNERSHIP: read_data = {24'd0, led_ownership};
+            REG_ACTIVITY:      read_data = {16'd0, activity_count};
+            REG_ACTIVITY_HOLD: read_data = {16'd0, activity_hold};
             default:           read_data = 32'd0;
         endcase
     end

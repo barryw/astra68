@@ -12,7 +12,7 @@ dtc=${DTC:-"$dtc_root/dtc"}
 fclk1_hz=${ASTRA_ARTY_FCLK1_HZ:-200000000}
 
 case "$fclk1_hz" in
-    200000000|166666672) ;;
+    200000000|187500000|166666672) ;;
     *)
         echo "unsupported FCLK1 rate: $fclk1_hz" >&2
         exit 3

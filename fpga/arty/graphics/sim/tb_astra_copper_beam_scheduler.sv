@@ -27,7 +27,7 @@ module tb_astra_copper_beam_scheduler;
             if (line_prepare_ready)
                 $fatal(1, "line %0d acknowledged before copper settled", line);
             copper_waiting = 1'b1;
-            #1;
+            @(negedge clk);
             if (!line_prepare_ready)
                 $fatal(1, "line %0d did not acknowledge at future WAIT", line);
             @(posedge clk);

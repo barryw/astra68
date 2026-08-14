@@ -78,7 +78,7 @@ module astra_tile_line_builder #(
     localparam [3:0] ST_PATTERN_LOAD = 4'd4;
     localparam [3:0] ST_PATTERN_ISSUE = 4'd5;
     localparam [3:0] ST_PATTERN_DRAIN = 4'd6;
-    localparam [3:0] ST_COMPOSE_PRIME0 = 4'd7;
+    localparam [3:0] ST_PATTERN_CAPTURE = 4'd7;
     localparam [3:0] ST_COMPOSE_PRIME1 = 4'd8;
     localparam [3:0] ST_COMPOSE_PRIME2 = 4'd9;
     localparam [3:0] ST_COMPOSE = 4'd10;
@@ -248,15 +248,16 @@ localparam [3:0] ST_VALIDATE = 4'd15;
         .span_map_byte_offset(walker_span_map_byte_offset)
     );
 
-    // Span geometry and decoded descriptors are small, bounded LUT memories.
-    // Pattern rows use block RAM because every slot reserves the 16-byte
-    // INDEX8/16x16 worst case.
-    (* ram_style = "distributed" *) reg [24:0] span_mem [0:255];
-    (* ram_style = "distributed" *) reg [22:0] descriptor_mem [0:255];
+    // Map fetch and pattern/compose are separate phases, so span metadata can
+    // use synchronous block RAM instead of consuming scarce SLICEM capacity.
+    (* ram_style = "block" *) reg [24:0] span_mem [0:255];
+    (* ram_style = "block" *) reg [22:0] descriptor_mem [0:255];
     (* ram_style = "distributed" *) reg        pattern_half_mem [0:255];
     (* ram_style = "block" *) reg [63:0] pattern_low_mem [0:255];
     (* ram_style = "block" *) reg [63:0] pattern_high_mem [0:255];
     reg [8:0] span_count;
+    reg [24:0] metadata_span_q;
+    reg [22:0] metadata_descriptor_q;
 
     // {mapped, screen_x, pixels, tile_x, tile_y}
     wire [24:0] span_write_data = {
@@ -294,14 +295,11 @@ localparam [3:0] ST_VALIDATE = 4'd15;
     reg [15:0] pattern_issue_tile_index;
     reg [3:0] pattern_issue_row;
 
-    wire pattern_load_mapped = span_mem[pattern_issue_slot][24];
-    wire [3:0] pattern_load_tile_y =
-        span_mem[pattern_issue_slot][3:0];
-    wire pattern_load_descriptor_valid =
-        descriptor_mem[pattern_issue_slot][22];
-    wire [15:0] pattern_load_tile_index =
-        descriptor_mem[pattern_issue_slot][21:6];
-    wire pattern_load_flip_y = descriptor_mem[pattern_issue_slot][0];
+    wire pattern_load_mapped = metadata_span_q[24];
+    wire [3:0] pattern_load_tile_y = metadata_span_q[3:0];
+    wire pattern_load_descriptor_valid = metadata_descriptor_q[22];
+    wire [15:0] pattern_load_tile_index = metadata_descriptor_q[21:6];
+    wire pattern_load_flip_y = metadata_descriptor_q[0];
     wire [3:0] pattern_load_row = pattern_load_flip_y ?
         (tile_16_q ? 4'd15 - pattern_load_tile_y :
                      {1'b0, 3'd7 - pattern_load_tile_y[2:0]}) :
@@ -449,6 +447,10 @@ localparam [3:0] ST_VALIDATE = 4'd15;
         map_response_transport_valid_q &&
         map_response_entry_q[9:0] == 10'd0 &&
         {1'b0, map_response_entry_q[31:16]} < tile_count_q;
+    wire map_response_descriptor_error =
+        map_response_transport_valid_q &&
+        (map_response_entry_q[9:0] != 10'd0 ||
+         {1'b0, map_response_entry_q[31:16]} >= tile_count_q);
     wire [22:0] map_response_descriptor = {
         map_response_descriptor_valid,
         map_response_entry_q[31:16],
@@ -458,18 +460,42 @@ localparam [3:0] ST_VALIDATE = 4'd15;
     };
 
     reg [7:0] compose_read_slot;
-    reg [24:0] compose_span_q;
-    reg [22:0] compose_descriptor_q;
+    wire [7:0] metadata_read_slot = state == ST_PATTERN_LOAD ?
+        pattern_issue_slot : (state == ST_PATTERN_DRAIN ? 8'd0 :
+        compose_read_slot);
     reg compose_pattern_half_q;
     reg [63:0] compose_pattern_low_q;
     reg [63:0] compose_pattern_high_q;
+    reg [24:0] compose_prefetch_span_q;
+    reg [22:0] compose_prefetch_descriptor_q;
+    reg compose_prefetch_pattern_half_q;
+    reg [63:0] compose_prefetch_pattern_low_q;
+    reg [63:0] compose_prefetch_pattern_high_q;
+    reg [1:0] compose_prefetch_capture_q;
+    wire compose_prefetch_request;
+    wire compose_advance_span;
 
     always @(posedge build_clk) begin
-        compose_span_q <= span_mem[compose_read_slot];
-        compose_descriptor_q <= descriptor_mem[compose_read_slot];
+        metadata_span_q <= span_mem[metadata_read_slot];
+        metadata_descriptor_q <= descriptor_mem[metadata_read_slot];
         compose_pattern_half_q <= pattern_half_mem[compose_read_slot];
         compose_pattern_low_q <= pattern_low_mem[compose_read_slot];
         compose_pattern_high_q <= pattern_high_mem[compose_read_slot];
+        if (build_reset || (state == ST_IDLE && start)) begin
+            compose_prefetch_capture_q <= 2'b00;
+        end else begin
+            compose_prefetch_capture_q <= {
+                compose_prefetch_capture_q[0], compose_prefetch_request
+            };
+            if (compose_prefetch_capture_q[1] ||
+                (state == ST_COMPOSE && compose_advance_span)) begin
+                compose_prefetch_span_q <= metadata_span_q;
+                compose_prefetch_descriptor_q <= metadata_descriptor_q;
+                compose_prefetch_pattern_half_q <= compose_pattern_half_q;
+                compose_prefetch_pattern_low_q <= compose_pattern_low_q;
+                compose_prefetch_pattern_high_q <= compose_pattern_high_q;
+            end
+        end
     end
 
     reg [24:0] compose_active_span;
@@ -477,6 +503,7 @@ localparam [3:0] ST_VALIDATE = 4'd15;
     reg compose_active_pattern_half;
     reg [63:0] compose_active_pattern_low;
     reg [63:0] compose_active_pattern_high;
+    reg compose_prime_ready_q;
     reg [10:0] compose_x;
     reg [4:0] compose_pixels_left;
 
@@ -536,7 +563,8 @@ localparam [3:0] ST_VALIDATE = 4'd15;
     endfunction
 
     wire [11:0] compose_next_x = {1'b0, compose_x} + 12'd4;
-    wire compose_advance_span = compose_pixels_left <= 5'd4;
+    assign compose_advance_span = compose_pixels_left <= 5'd4;
+    assign compose_prefetch_request = state == ST_COMPOSE_PRIME1;
     wire compose_last_quad = compose_next_x >= OUTPUT_WIDTH;
     wire [10:0] compose_x0 = compose_x;
     wire [10:0] compose_x1 = compose_x + 11'd1;
@@ -547,46 +575,50 @@ localparam [3:0] ST_VALIDATE = 4'd15;
     wire compose_lane2_next = compose_pixels_left <= 5'd2;
     wire compose_lane3_next = compose_pixels_left <= 5'd3;
 
-    wire [24:0] compose_span0 = compose_lane0_next ? compose_span_q :
+    wire [24:0] compose_span0 = compose_lane0_next ?
+        compose_prefetch_span_q :
                                                     compose_active_span;
-    wire [24:0] compose_span1 = compose_lane1_next ? compose_span_q :
+    wire [24:0] compose_span1 = compose_lane1_next ?
+        compose_prefetch_span_q :
                                                     compose_active_span;
-    wire [24:0] compose_span2 = compose_lane2_next ? compose_span_q :
+    wire [24:0] compose_span2 = compose_lane2_next ?
+        compose_prefetch_span_q :
                                                     compose_active_span;
-    wire [24:0] compose_span3 = compose_lane3_next ? compose_span_q :
+    wire [24:0] compose_span3 = compose_lane3_next ?
+        compose_prefetch_span_q :
                                                     compose_active_span;
     wire [22:0] compose_descriptor0 = compose_lane0_next ?
-        compose_descriptor_q : compose_active_descriptor;
+        compose_prefetch_descriptor_q : compose_active_descriptor;
     wire [22:0] compose_descriptor1 = compose_lane1_next ?
-        compose_descriptor_q : compose_active_descriptor;
+        compose_prefetch_descriptor_q : compose_active_descriptor;
     wire [22:0] compose_descriptor2 = compose_lane2_next ?
-        compose_descriptor_q : compose_active_descriptor;
+        compose_prefetch_descriptor_q : compose_active_descriptor;
     wire [22:0] compose_descriptor3 = compose_lane3_next ?
-        compose_descriptor_q : compose_active_descriptor;
+        compose_prefetch_descriptor_q : compose_active_descriptor;
     wire compose_pattern_half0 = compose_lane0_next ?
-        compose_pattern_half_q : compose_active_pattern_half;
+        compose_prefetch_pattern_half_q : compose_active_pattern_half;
     wire compose_pattern_half1 = compose_lane1_next ?
-        compose_pattern_half_q : compose_active_pattern_half;
+        compose_prefetch_pattern_half_q : compose_active_pattern_half;
     wire compose_pattern_half2 = compose_lane2_next ?
-        compose_pattern_half_q : compose_active_pattern_half;
+        compose_prefetch_pattern_half_q : compose_active_pattern_half;
     wire compose_pattern_half3 = compose_lane3_next ?
-        compose_pattern_half_q : compose_active_pattern_half;
+        compose_prefetch_pattern_half_q : compose_active_pattern_half;
     wire [63:0] compose_pattern_low0 = compose_lane0_next ?
-        compose_pattern_low_q : compose_active_pattern_low;
+        compose_prefetch_pattern_low_q : compose_active_pattern_low;
     wire [63:0] compose_pattern_low1 = compose_lane1_next ?
-        compose_pattern_low_q : compose_active_pattern_low;
+        compose_prefetch_pattern_low_q : compose_active_pattern_low;
     wire [63:0] compose_pattern_low2 = compose_lane2_next ?
-        compose_pattern_low_q : compose_active_pattern_low;
+        compose_prefetch_pattern_low_q : compose_active_pattern_low;
     wire [63:0] compose_pattern_low3 = compose_lane3_next ?
-        compose_pattern_low_q : compose_active_pattern_low;
+        compose_prefetch_pattern_low_q : compose_active_pattern_low;
     wire [63:0] compose_pattern_high0 = compose_lane0_next ?
-        compose_pattern_high_q : compose_active_pattern_high;
+        compose_prefetch_pattern_high_q : compose_active_pattern_high;
     wire [63:0] compose_pattern_high1 = compose_lane1_next ?
-        compose_pattern_high_q : compose_active_pattern_high;
+        compose_prefetch_pattern_high_q : compose_active_pattern_high;
     wire [63:0] compose_pattern_high2 = compose_lane2_next ?
-        compose_pattern_high_q : compose_active_pattern_high;
+        compose_prefetch_pattern_high_q : compose_active_pattern_high;
     wire [63:0] compose_pattern_high3 = compose_lane3_next ?
-        compose_pattern_high_q : compose_active_pattern_high;
+        compose_prefetch_pattern_high_q : compose_active_pattern_high;
 
     wire compose_write = state == ST_COMPOSE;
 
@@ -868,6 +900,7 @@ localparam [3:0] ST_VALIDATE = 4'd15;
             compose_active_pattern_half <= 1'b0;
             compose_active_pattern_low <= 64'd0;
             compose_active_pattern_high <= 64'd0;
+            compose_prime_ready_q <= 1'b0;
             compose_x <= 11'd0;
             compose_pixels_left <= 5'd0;
         end else begin
@@ -877,16 +910,13 @@ localparam [3:0] ST_VALIDATE = 4'd15;
             if (busy)
                 build_cycles <= build_cycles + 32'd1;
 
-            // Register map-response selection and transport status before the
-            // descriptor RAM write. This keeps the active response-tag mux
-            // out of the descriptor data/address path while sustaining one
-            // completed map response per build clock.
+            // Validate from the existing registered response capture. This
+            // keeps tag decode out of the bounds-check cone without adding a
+            // third stage or reducing one-response-per-clock throughput.
             if (map_response_pending) begin
                 descriptor_mem[map_response_slot_q] <=
                     map_response_descriptor;
-                if (map_response_transport_valid_q &&
-                    (map_response_entry_q[9:0] != 10'd0 ||
-                     {1'b0, map_response_entry_q[31:16]} >= tile_count_q))
+                if (map_response_descriptor_error)
                     descriptor_error <= 1'b1;
                 map_response_pending <= 1'b0;
             end
@@ -1043,15 +1073,20 @@ localparam [3:0] ST_VALIDATE = 4'd15;
 
                 ST_PATTERN_LOAD: begin
                     if ({1'b0, pattern_issue_slot} >= span_count) begin
+                        compose_read_slot <= 8'd0;
                         state <= ST_PATTERN_DRAIN;
                     end else begin
-                        pattern_issue_needed <= pattern_load_mapped &&
-                            pattern_load_descriptor_valid;
-                        pattern_issue_tile_index <= pattern_load_tile_index;
-                        pattern_issue_row <= pattern_load_row;
-                        pattern_issue_two_beat <= index_8_q && tile_16_q;
-                        state <= ST_PATTERN_ADDRESS;
+                        state <= ST_PATTERN_CAPTURE;
                     end
+                end
+
+                ST_PATTERN_CAPTURE: begin
+                    pattern_issue_needed <= pattern_load_mapped &&
+                        pattern_load_descriptor_valid;
+                    pattern_issue_tile_index <= pattern_load_tile_index;
+                    pattern_issue_row <= pattern_load_row;
+                    pattern_issue_two_beat <= index_8_q && tile_16_q;
+                    state <= ST_PATTERN_ADDRESS;
                 end
 
                 ST_PATTERN_ADDRESS: begin
@@ -1072,25 +1107,31 @@ localparam [3:0] ST_VALIDATE = 4'd15;
                 ST_PATTERN_DRAIN: begin
                     if (request_count_q == 5'd0) begin
                         compose_read_slot <= 8'd0;
-                        state <= ST_COMPOSE_PRIME0;
+                        compose_prime_ready_q <= 1'b0;
+                        state <= ST_COMPOSE_PRIME1;
                     end
                 end
 
-                ST_COMPOSE_PRIME0: state <= ST_COMPOSE_PRIME1;
-
                 ST_COMPOSE_PRIME1: begin
-                    compose_active_span <= compose_span_q;
-                    compose_active_descriptor <= compose_descriptor_q;
-                    compose_active_pattern_half <= compose_pattern_half_q;
-                    compose_active_pattern_low <= compose_pattern_low_q;
-                    compose_active_pattern_high <= compose_pattern_high_q;
-                    compose_x <= 11'd0;
-                    compose_pixels_left <= compose_span_q[12:8];
                     compose_read_slot <= 8'd1;
                     state <= ST_COMPOSE_PRIME2;
                 end
 
-                ST_COMPOSE_PRIME2: state <= ST_COMPOSE;
+                ST_COMPOSE_PRIME2: begin
+                    if (!compose_prime_ready_q) begin
+                        compose_prime_ready_q <= 1'b1;
+                        compose_active_span <= metadata_span_q;
+                        compose_active_descriptor <= metadata_descriptor_q;
+                        compose_active_pattern_half <= compose_pattern_half_q;
+                        compose_active_pattern_low <= compose_pattern_low_q;
+                        compose_active_pattern_high <= compose_pattern_high_q;
+                        compose_x <= 11'd0;
+                        compose_pixels_left <= metadata_span_q[12:8];
+                        compose_read_slot <= 8'd2;
+                    end else begin
+                        state <= ST_COMPOSE;
+                    end
+                end
 
                 ST_COMPOSE: begin
                     if (compose_last_quad) begin
@@ -1098,17 +1139,18 @@ localparam [3:0] ST_VALIDATE = 4'd15;
                     end else begin
                         compose_x <= compose_x + 11'd4;
                         if (compose_advance_span) begin
-                            compose_pixels_left <= compose_span_q[12:8] -
+                            compose_pixels_left <=
+                                compose_prefetch_span_q[12:8] -
                                 (5'd4 - compose_pixels_left);
-                            compose_active_span <= compose_span_q;
+                            compose_active_span <= compose_prefetch_span_q;
                             compose_active_descriptor <=
-                                compose_descriptor_q;
+                                compose_prefetch_descriptor_q;
                             compose_active_pattern_half <=
-                                compose_pattern_half_q;
+                                compose_prefetch_pattern_half_q;
                             compose_active_pattern_low <=
-                                compose_pattern_low_q;
+                                compose_prefetch_pattern_low_q;
                             compose_active_pattern_high <=
-                                compose_pattern_high_q;
+                                compose_prefetch_pattern_high_q;
                             compose_read_slot <= compose_read_slot + 8'd1;
                         end else begin
                             compose_pixels_left <= compose_pixels_left - 5'd4;

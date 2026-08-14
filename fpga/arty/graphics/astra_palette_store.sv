@@ -77,7 +77,7 @@ module astra_palette_store (
         .write_address(framebuffer_write_index),
         .write_data(framebuffer_write_argb),
         .read_enable(framebuffer_restore_read),
-        .read_address(restore_index[7:0]),
+        .read_address(restore_address_q[7:0]),
         .read_data(framebuffer_baseline_read_data)
     );
 
@@ -89,7 +89,7 @@ module astra_palette_store (
         .write_address({tile_write_bank, tile_write_index}),
         .write_data(tile_write_argb),
         .read_enable(tile_restore_read),
-        .read_address(restore_index[11:0] - 12'd256),
+        .read_address(restore_address_q),
         .read_data(tile_baseline_read_data)
     );
 
@@ -159,10 +159,6 @@ module astra_palette_store (
                 end
                 RESTORE_READ_REQUEST: begin
                     restore_tile_q <= restore_index >= 13'd256;
-                    if (restore_index < 13'd256)
-                        restore_address_q <= {4'd0, restore_index[7:0]};
-                    else
-                        restore_address_q <= restore_index - 13'd256;
                     restore_state <= RESTORE_READ_CAPTURE;
                 end
                 RESTORE_READ_CAPTURE: begin
@@ -176,6 +172,8 @@ module astra_palette_store (
                         restore_state <= RESTORE_WAIT_ACK;
                     else begin
                         restore_index <= restore_index + 13'd1;
+                        restore_address_q <= restore_index == 13'd255 ?
+                            12'd0 : restore_address_q + 12'd1;
                         restore_state <= RESTORE_READ_REQUEST;
                     end
                 end

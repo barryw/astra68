@@ -52,11 +52,14 @@ module astra_line_scheduler #(
     localparam [1:0] SCHED_IDLE = 2'd0;
     localparam [1:0] SCHED_PREPARE = 2'd1;
     localparam [1:0] SCHED_WAIT = 2'd2;
+    localparam [1:0] SCHED_LAUNCH = 2'd3;
 
     reg [1:0] scheduler_state;
     reg [3:0] required_clients;
     reg [3:0] completed_clients;
     reg [3:0] successful_clients;
+    reg [3:0] prepared_clients;
+    reg prepared_scene_enable;
 
     reg bootstrap_active;
     reg [2:0] bootstrap_line;
@@ -155,18 +158,22 @@ module astra_line_scheduler #(
         end
     endtask
 
-    task automatic launch_line(input [9:0] line);
+    task automatic launch_line(
+        input [9:0] line,
+        input [3:0] clients,
+        input scene_enabled
+    );
         begin
             client_build_slot <= line[1:0];
             client_line_y <= line;
-            client_enable <= configured_clients;
-            required_clients <= configured_clients;
+            client_enable <= clients;
+            required_clients <= clients;
             completed_clients <= 4'd0;
             successful_clients <= 4'd0;
-            if (configured_clients == 4'd0) begin
+            if (clients == 4'd0) begin
                 scheduler_state <= SCHED_IDLE;
-                publish_slot(line[1:0], line, scene_enable);
-                if (scene_enable)
+                publish_slot(line[1:0], line, scene_enabled);
+                if (scene_enabled)
                     lines_built <= lines_built + 32'd1;
                 else
                     lines_failed <= lines_failed + 32'd1;
@@ -217,6 +224,8 @@ module astra_line_scheduler #(
             required_clients <= 4'd0;
             completed_clients <= 4'd0;
             successful_clients <= 4'd0;
+            prepared_clients <= 4'd0;
+            prepared_scene_enable <= 1'b0;
             bootstrap_active <= 1'b0;
             bootstrap_line <= 3'd0;
             request_write_ptr <= 2'd0;
@@ -273,6 +282,8 @@ module astra_line_scheduler #(
                 required_clients <= 4'd0;
                 completed_clients <= 4'd0;
                 successful_clients <= 4'd0;
+                prepared_clients <= 4'd0;
+                prepared_scene_enable <= 1'b0;
                 bootstrap_active <= scene_enable;
                 bootstrap_line <= 3'd0;
                 request_write_ptr <= 2'd0;
@@ -295,8 +306,13 @@ module astra_line_scheduler #(
                 if (scheduler_state == SCHED_PREPARE) begin
                     if (line_prepare_ready) begin
                         line_prepare_valid <= 1'b0;
-                        launch_line(line_prepare_y);
+                        prepared_clients <= configured_clients;
+                        prepared_scene_enable <= scene_enable;
+                        scheduler_state <= SCHED_LAUNCH;
                     end
+                end else if (scheduler_state == SCHED_LAUNCH) begin
+                    launch_line(line_prepare_y, prepared_clients,
+                                prepared_scene_enable);
                 end else if (scheduler_state == SCHED_WAIT) begin
                     completed_clients <= completed_now;
                     successful_clients <= successful_now;

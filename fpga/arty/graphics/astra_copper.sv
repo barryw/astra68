@@ -103,6 +103,11 @@ module astra_copper #(
     localparam [3:0] EXEC_DISPATCH = 4'd5;
     localparam [3:0] EXEC_IRQ      = 4'd6;
     localparam [3:0] EXEC_RETIRE   = 4'd7;
+localparam [3:0] EXEC_SELECT   = 4'd8;
+localparam [3:0] EXEC_RANGE    = 4'd9;
+localparam [3:0] EXEC_WAIT     = 4'd10;
+localparam [3:0] EXEC_SKIP     = 4'd11;
+localparam [3:0] EXEC_MOVE_COMMIT = 4'd12;
 
     localparam [1:0] RETIRE_BEAM_NONE    = 2'd0;
     localparam [1:0] RETIRE_BEAM_TARGET  = 2'd1;
@@ -112,12 +117,16 @@ module astra_copper #(
     localparam [1:0] RETIRE_PC_PLUS_TWO = 2'd1;
     localparam [1:0] RETIRE_PC_TARGET   = 2'd2;
 
-    localparam [2:0] VALID_IDLE    = 3'd0;
-    localparam [2:0] VALID_FETCH   = 3'd1;
-    localparam [2:0] VALID_CAPTURE = 3'd2;
-    localparam [2:0] VALID_PERMIT  = 3'd3;
-    localparam [2:0] VALID_CHECK   = 3'd4;
-    localparam [2:0] VALID_APPLY   = 3'd5;
+    localparam [3:0] VALID_IDLE        = 4'd0;
+    localparam [3:0] VALID_FETCH       = 4'd1;
+    localparam [3:0] VALID_CAPTURE     = 4'd2;
+    localparam [3:0] VALID_PERMIT      = 4'd3;
+    localparam [3:0] VALID_CHECK       = 4'd4;
+    localparam [3:0] VALID_APPLY       = 4'd5;
+    localparam [3:0] VALID_CAPTURE_PIPE = 4'd6;
+    localparam [3:0] VALID_DECIDE      = 4'd7;
+    localparam [3:0] VALID_RANGE       = 4'd8;
+    localparam [3:0] VALID_PERMIT_PIPE = 4'd9;
 
     localparam [1:0] VALID_ACTION_FAIL    = 2'd0;
     localparam [1:0] VALID_ACTION_ADVANCE = 2'd1;
@@ -151,16 +160,24 @@ module astra_copper #(
     reg [31:0] program_bank0_w1_q;
     reg [31:0] program_bank1_w0_q;
     reg [31:0] program_bank1_w1_q;
+    reg [31:0] program_bank0_capture_q;
+    reg [31:0] program_bank1_capture_q;
     reg program_read_pending_q;
+    reg program_read_select_pending_q;
     reg program_read_bank_q;
     reg program_read_half_q;
+    reg program_read_output_bank_q;
     integer write_lane;
     reg [31:0] bank0_exec_w0_q;
     reg [31:0] bank0_exec_w1_q;
     reg [31:0] bank1_exec_w0_q;
     reg [31:0] bank1_exec_w1_q;
+    reg [31:0] bank0_capture_w0_q;
+    reg [31:0] bank0_capture_w1_q;
+    reg [31:0] bank1_capture_w0_q;
+    reg [31:0] bank1_capture_w1_q;
 
-    reg [2:0] validate_state;
+    reg [3:0] validate_state;
     reg validate_bank_q;
     reg [11:0] validate_first_q;
     reg [11:0] validate_index_q;
@@ -170,6 +187,11 @@ module astra_copper #(
     reg [31:0] validate_w1_q;
     reg validate_move_allowed_q;
     reg validate_dispatch_allowed_q;
+    reg [2:0] validate_opcode_q;
+    reg validate_encoding_ok_q;
+    reg validate_target_ok_q;
+    reg validate_range_ok_q;
+    reg validate_last_q;
     reg [1:0] validate_action_q;
     reg [7:0] validate_action_fault_q;
     reg bank0_valid_q;
@@ -208,9 +230,10 @@ module astra_copper #(
     reg [1:0] retire_beam_action_q;
     reg [10:0] retire_beam_x_q;
     reg [9:0] retire_beam_y_q;
+    reg execute_wait_reached_q;
+    reg pc_in_active_list_q;
     wire pc_in_active_list = {1'b0, pc} >= {1'b0, active_first_q} &&
         {1'b0, pc} < active_end_q;
-    wire [2:0] execute_opcode = execute_w0_q[31:29];
     assign move_target = execute_w0_q[15:0];
     assign move_data = execute_w1_q;
     assign move_beam_x = execution_beam_x_q;
@@ -218,8 +241,9 @@ module astra_copper #(
     assign dispatch_id = execute_w0_q[15:0];
     assign irq_beam_x = execution_beam_x_q;
     assign irq_beam_y = execution_beam_y_q;
-    wire execute_wait_reached = beam_reached(
+    wire execute_wait_reached_now = beam_reached(
         execute_w0_q[9:0], execute_w1_q[10:0], beam_y, beam_x);
+    wire execute_wait_reached = execute_wait_reached_q;
     wire edit_bank_valid = edit_bank ? bank1_valid_q : bank0_valid_q;
     wire promotion_now = promotion_pending ||
         (promote_request && edit_bank_valid &&
@@ -230,8 +254,10 @@ module astra_copper #(
     wire [12:0] frame_end = frame_bank ? bank1_end_q : bank0_end_q;
 
     assign running = exec_state != EXEC_STOPPED;
-    assign waiting = exec_state == EXEC_EVAL &&
-        execute_opcode == OP_WAIT && !execute_wait_reached;
+    // The line scheduler needs the current result before it may release a
+    // prepared line. Execution consumes the registered copy so the wide beam
+    // comparator does not feed the execution-state mux.
+    assign waiting = exec_state == EXEC_WAIT && !execute_wait_reached_now;
 
     task automatic validation_fail(input [7:0] code);
         begin
@@ -305,18 +331,22 @@ module astra_copper #(
             program_read_data <= 32'd0;
             program_read_valid <= 1'b0;
             program_read_pending_q <= 1'b0;
+            program_read_select_pending_q <= 1'b0;
             program_read_bank_q <= 1'b0;
             program_read_half_q <= 1'b0;
+            program_read_output_bank_q <= 1'b0;
+            program_bank0_capture_q <= 32'd0;
+            program_bank1_capture_q <= 32'd0;
         end else begin
-            program_read_valid <= program_read_pending_q;
-            if (program_read_pending_q) begin
-                case ({program_read_bank_q, program_read_half_q})
-                    2'b00: program_read_data <= program_bank0_w0_q;
-                    2'b01: program_read_data <= program_bank0_w1_q;
-                    2'b10: program_read_data <= program_bank1_w0_q;
-                    default: program_read_data <= program_bank1_w1_q;
-                endcase
-            end
+            program_read_valid <= program_read_select_pending_q;
+            program_read_select_pending_q <= program_read_pending_q;
+            program_read_output_bank_q <= program_read_bank_q;
+            program_bank0_capture_q <= program_read_half_q ?
+                program_bank0_w1_q : program_bank0_w0_q;
+            program_bank1_capture_q <= program_read_half_q ?
+                program_bank1_w1_q : program_bank1_w0_q;
+            program_read_data <= program_read_output_bank_q ?
+                program_bank1_capture_q : program_bank0_capture_q;
             program_read_pending_q <= program_read;
             if (program_read) begin
                 program_read_bank_q <= edit_bank;
@@ -386,6 +416,11 @@ module astra_copper #(
             validate_w1_q <= 32'd0;
             validate_move_allowed_q <= 1'b0;
             validate_dispatch_allowed_q <= 1'b0;
+            validate_opcode_q <= 3'd0;
+            validate_encoding_ok_q <= 1'b0;
+            validate_target_ok_q <= 1'b0;
+            validate_range_ok_q <= 1'b0;
+            validate_last_q <= 1'b0;
             validate_action_q <= VALID_ACTION_FAIL;
             validate_action_fault_q <= FAULT_NONE;
             validate_busy <= 1'b0;
@@ -415,29 +450,30 @@ module astra_copper #(
                 validate_valid <= 1'b0;
                 validate_fault <= FAULT_NONE;
                 validate_fault_index <= validate_first;
-                if (validate_count == 13'd0 || validate_count > 13'd4096 ||
-                    {1'b0, validate_first} + validate_count > 13'd4096) begin
-                    validate_busy <= 1'b0;
-                    validate_done <= 1'b1;
-                    validate_fault <= FAULT_BAD_RANGE;
-                    if (!edit_bank)
-                        bank0_valid_q <= 1'b0;
-                    else
-                        bank1_valid_q <= 1'b0;
-                end else begin
-                    validate_busy <= 1'b1;
-                    validate_state <= VALID_FETCH;
-                end
+                validate_busy <= 1'b1;
+                validate_state <= VALID_RANGE;
             end else if (validate_busy) begin
                 case (validate_state)
-                    VALID_FETCH: validate_state <= VALID_CAPTURE;
+                    VALID_RANGE: begin
+                        if (validate_remaining_q != 13'd0 &&
+                            validate_remaining_q <= 13'd4096 &&
+                            validate_end_q <= 13'd4096)
+                            validate_state <= VALID_FETCH;
+                        else
+                            validation_fail(FAULT_BAD_RANGE);
+                    end
+                    VALID_FETCH: validate_state <= VALID_CAPTURE_PIPE;
+                    VALID_CAPTURE_PIPE:
+                        validate_state <= VALID_CAPTURE;
                     VALID_CAPTURE: begin
                         validate_w0_q <= validate_bank_q ?
-                            bank1_exec_w0_q : bank0_exec_w0_q;
+                            bank1_capture_w0_q : bank0_capture_w0_q;
                         validate_w1_q <= validate_bank_q ?
-                            bank1_exec_w1_q : bank0_exec_w1_q;
-                        validate_state <= VALID_PERMIT;
+                            bank1_capture_w1_q : bank0_capture_w1_q;
+                        validate_state <= VALID_PERMIT_PIPE;
                     end
+                    VALID_PERMIT_PIPE:
+                        validate_state <= VALID_PERMIT;
                     VALID_PERMIT: begin
                         validate_move_allowed_q <= validate_move_allowed;
                         validate_dispatch_allowed_q <=
@@ -445,14 +481,53 @@ module astra_copper #(
                         validate_state <= VALID_CHECK;
                     end
                     VALID_CHECK: begin
+                        validate_opcode_q <= validate_opcode;
+                        validate_encoding_ok_q <= 1'b1;
+                        validate_target_ok_q <= 1'b1;
+                        validate_range_ok_q <= 1'b1;
+                        validate_last_q <= validate_remaining_q == 13'd1;
+                        validate_state <= VALID_DECIDE;
+                        case (validate_opcode)
+                            OP_END: validate_encoding_ok_q <=
+                                validate_w0_q[28:0] == 29'd0 &&
+                                validate_w1_q == 32'd0;
+                            OP_MOVE: begin
+                                validate_encoding_ok_q <=
+                                    validate_reserved_zero &&
+                                    validate_w0_q[1:0] == 2'b00;
+                                validate_target_ok_q <=
+                                    validate_move_allowed_q;
+                            end
+                            OP_WAIT: validate_range_ok_q <=
+                                validate_wait_in_range;
+                            OP_SKIP: validate_range_ok_q <=
+                                validate_wait_in_range &&
+                                validate_skip_in_list;
+                            OP_IRQ: validate_encoding_ok_q <=
+                                validate_reserved_zero &&
+                                validate_w1_q == 32'd0;
+                            OP_JUMP: validate_target_ok_q <=
+                                validate_w0_q[28:12] == 17'd0 &&
+                                validate_w1_q == 32'd0 &&
+                                validate_jump_in_list;
+                            OP_DISPATCH: begin
+                                validate_encoding_ok_q <=
+                                    validate_reserved_zero &&
+                                    validate_w1_q == 32'd0;
+                                validate_target_ok_q <=
+                                    validate_dispatch_allowed_q;
+                            end
+                            default: validate_encoding_ok_q <= 1'b0;
+                        endcase
+                    end
+                    VALID_DECIDE: begin
                         validate_action_q <= VALID_ACTION_FAIL;
                         validate_action_fault_q <= FAULT_BAD_OPCODE;
                         validate_state <= VALID_APPLY;
-                        case (validate_opcode)
+                        case (validate_opcode_q)
                             OP_END: begin
-                                if (validate_w0_q[28:0] != 29'd0 ||
-                                    validate_w1_q != 32'd0 ||
-                                    validate_remaining_q != 13'd1)
+                                if (!validate_encoding_ok_q ||
+                                    !validate_last_q)
                                     validate_action_fault_q <=
                                         FAULT_BAD_ENCODING;
                                 else begin
@@ -462,14 +537,13 @@ module astra_copper #(
                                 end
                             end
                             OP_MOVE: begin
-                                if (!validate_reserved_zero ||
-                                    validate_w0_q[1:0] != 2'b00)
+                                if (!validate_encoding_ok_q)
                                     validate_action_fault_q <=
                                         FAULT_BAD_ENCODING;
-                                else if (!validate_move_allowed_q)
+                                else if (!validate_target_ok_q)
                                     validate_action_fault_q <=
                                         FAULT_BAD_TARGET;
-                                else if (validate_remaining_q == 13'd1)
+                                else if (validate_last_q)
                                     validate_action_fault_q <=
                                         FAULT_MISSING_END;
                                 else begin
@@ -479,12 +553,10 @@ module astra_copper #(
                                 end
                             end
                             OP_WAIT, OP_SKIP: begin
-                                if (!validate_wait_in_range ||
-                                    (validate_opcode == OP_SKIP &&
-                                     !validate_skip_in_list))
+                                if (!validate_range_ok_q)
                                     validate_action_fault_q <=
                                         FAULT_BAD_RANGE;
-                                else if (validate_remaining_q == 13'd1)
+                                else if (validate_last_q)
                                     validate_action_fault_q <=
                                         FAULT_MISSING_END;
                                 else begin
@@ -494,11 +566,10 @@ module astra_copper #(
                                 end
                             end
                             OP_IRQ: begin
-                                if (!validate_reserved_zero ||
-                                    validate_w1_q != 32'd0)
+                                if (!validate_encoding_ok_q)
                                     validate_action_fault_q <=
                                         FAULT_BAD_ENCODING;
-                                else if (validate_remaining_q == 13'd1)
+                                else if (validate_last_q)
                                     validate_action_fault_q <=
                                         FAULT_MISSING_END;
                                 else begin
@@ -508,12 +579,10 @@ module astra_copper #(
                                 end
                             end
                             OP_JUMP: begin
-                                if (validate_w0_q[28:12] != 17'd0 ||
-                                    validate_w1_q != 32'd0 ||
-                                    !validate_jump_in_list)
+                                if (!validate_target_ok_q)
                                     validate_action_fault_q <=
                                         FAULT_BAD_TARGET;
-                                else if (validate_remaining_q == 13'd1)
+                                else if (validate_last_q)
                                     validate_action_fault_q <=
                                         FAULT_MISSING_END;
                                 else begin
@@ -523,14 +592,13 @@ module astra_copper #(
                                 end
                             end
                             OP_DISPATCH: begin
-                                if (!validate_reserved_zero ||
-                                    validate_w1_q != 32'd0)
+                                if (!validate_encoding_ok_q)
                                     validate_action_fault_q <=
                                         FAULT_BAD_ENCODING;
-                                else if (!validate_dispatch_allowed_q)
+                                else if (!validate_target_ok_q)
                                     validate_action_fault_q <=
                                         FAULT_BAD_TARGET;
-                                else if (validate_remaining_q == 13'd1)
+                                else if (validate_last_q)
                                     validate_action_fault_q <=
                                         FAULT_MISSING_END;
                                 else begin
@@ -568,6 +636,10 @@ module astra_copper #(
             exec_state <= EXEC_STOPPED;
             execute_w0_q <= 32'd0;
             execute_w1_q <= 32'd0;
+            bank0_capture_w0_q <= 32'd0;
+            bank0_capture_w1_q <= 32'd0;
+            bank1_capture_w0_q <= 32'd0;
+            bank1_capture_w1_q <= 32'd0;
             move_valid <= 1'b0;
             move_class <= 2'd0;
             dispatch_valid <= 1'b0;
@@ -584,8 +656,23 @@ module astra_copper #(
             retire_beam_action_q <= RETIRE_BEAM_NONE;
             retire_beam_x_q <= 11'd0;
             retire_beam_y_q <= 10'd0;
+            execute_wait_reached_q <= 1'b0;
+            pc_in_active_list_q <= 1'b0;
             instructions_retired <= 32'd0;
         end else begin
+            // Keep the shared BRAM-output boundary warm for both concurrent
+            // consumers. Execution and validation select banks only after
+            // this register stage, so neither mux sits on BRAM clock-to-out.
+            bank0_capture_w0_q <= bank0_exec_w0_q;
+            bank0_capture_w1_q <= bank0_exec_w1_q;
+            bank1_capture_w0_q <= bank1_exec_w0_q;
+            bank1_capture_w1_q <= bank1_exec_w1_q;
+            // The target is meaningful only when RETIRE_BEAM_TARGET is
+            // selected. Loading it every cycle avoids a beam comparator on
+            // the clock-enable path of all 21 target flops.
+            retire_beam_x_q <= execute_w1_q[10:0];
+            retire_beam_y_q <= execute_w0_q[9:0];
+            execute_wait_reached_q <= execute_wait_reached_now;
             if (fault_clear) begin
                 fault <= 1'b0;
                 fault_code <= FAULT_NONE;
@@ -652,16 +739,23 @@ module astra_copper #(
                 case (exec_state)
                     EXEC_STOPPED: begin end
                     EXEC_FETCH: begin
-                        if (!pc_in_active_list)
+                        pc_in_active_list_q <= pc_in_active_list;
+                        exec_state <= EXEC_RANGE;
+                    end
+                    EXEC_RANGE: begin
+                        if (!pc_in_active_list_q)
                             execution_fail(FAULT_BAD_RANGE);
                         else
                             exec_state <= EXEC_CAPTURE;
                     end
                     EXEC_CAPTURE: begin
-                        execute_w0_q <= active_bank ? bank1_exec_w0_q :
-                            bank0_exec_w0_q;
-                        execute_w1_q <= active_bank ? bank1_exec_w1_q :
-                            bank0_exec_w1_q;
+                        exec_state <= EXEC_SELECT;
+                    end
+                    EXEC_SELECT: begin
+                        execute_w0_q <= active_bank ? bank1_capture_w0_q :
+                            bank0_capture_w0_q;
+                        execute_w1_q <= active_bank ? bank1_capture_w1_q :
+                            bank0_capture_w1_q;
                         exec_state <= EXEC_EVAL;
                     end
                     EXEC_EVAL: begin
@@ -669,43 +763,29 @@ module astra_copper #(
                             MAX_INSTRUCTIONS_PER_FRAME)
                             execution_fail(FAULT_RUNAWAY);
                         else begin
-                            case (execute_opcode)
+                            case (execute_w0_q[31:29])
                                 OP_END: begin
                                     exec_state <= EXEC_STOPPED;
                                     instructions_retired <=
                                         instructions_retired + 32'd1;
                                 end
                                 OP_MOVE: begin
-                                    // Snapshot dynamic permission and timing
-                                    // class before they feed execution state.
+                                    // Static payload checks happened before
+                                    // promotion. Runtime permission retains
+                                    // only baseline-dependent guards.
                                     execute_move_allowed_q <= move_allowed;
                                     move_class <= move_timing_class;
+                                    retire_pc_action_q <= RETIRE_PC_PLUS_ONE;
+                                    retire_beam_action_q <=
+                                        move_timing_class == 2'd0 ?
+                                        RETIRE_BEAM_ADVANCE : RETIRE_BEAM_NONE;
                                     exec_state <= EXEC_MOVE;
                                 end
                                 OP_WAIT: begin
-                                    if (execute_wait_reached) begin
-                                        retire_pc_action_q <=
-                                            RETIRE_PC_PLUS_ONE;
-                                        retire_beam_action_q <=
-                                            RETIRE_BEAM_TARGET;
-                                        retire_beam_x_q <= execute_w1_q[10:0];
-                                        retire_beam_y_q <= execute_w0_q[9:0];
-                                        exec_state <= EXEC_RETIRE;
-                                    end
+                                    exec_state <= EXEC_WAIT;
                                 end
                                 OP_SKIP: begin
-                                    // Validation guarantees that a taken
-                                    // skip remains inside the active list.
-                                    retire_pc_action_q <=
-                                        execute_wait_reached ?
-                                        RETIRE_PC_PLUS_TWO :
-                                        RETIRE_PC_PLUS_ONE;
-                                    retire_beam_action_q <=
-                                        execute_wait_reached ?
-                                        RETIRE_BEAM_TARGET : RETIRE_BEAM_NONE;
-                                    retire_beam_x_q <= execute_w1_q[10:0];
-                                    retire_beam_y_q <= execute_w0_q[9:0];
-                                    exec_state <= EXEC_RETIRE;
+                                    exec_state <= EXEC_SKIP;
                                 end
                                 OP_IRQ: begin
                                     irq_sources <= execute_w0_q[15:0];
@@ -720,16 +800,37 @@ module astra_copper #(
                                     exec_state <= EXEC_RETIRE;
                                 end
                                 OP_DISPATCH: begin
-                                    if (!dispatch_allowed)
-                                        execution_fail(FAULT_BAD_TARGET);
-                                    else begin
-                                        dispatch_valid <= 1'b1;
-                                        exec_state <= EXEC_DISPATCH;
-                                    end
+                                    dispatch_valid <= 1'b1;
+                                    exec_state <= EXEC_DISPATCH;
                                 end
                                 default: execution_fail(FAULT_BAD_OPCODE);
                             endcase
                         end
+                    end
+                    EXEC_WAIT: begin
+                        if (execute_wait_reached) begin
+                            pc <= pc + 12'd1;
+                            execution_beam_x_q <= retire_beam_x_q;
+                            execution_beam_y_q <= retire_beam_y_q;
+                            frame_instruction_count_q <=
+                                frame_instruction_count_q + 15'd1;
+                            instructions_retired <=
+                                instructions_retired + 32'd1;
+                            exec_state <= EXEC_FETCH;
+                        end
+                    end
+                    EXEC_SKIP: begin
+                        // Validation guarantees that a taken skip remains
+                        // inside the active list.
+                        pc <= pc + (execute_wait_reached ? 12'd2 : 12'd1);
+                        if (execute_wait_reached) begin
+                            execution_beam_x_q <= retire_beam_x_q;
+                            execution_beam_y_q <= retire_beam_y_q;
+                        end
+                        frame_instruction_count_q <=
+                            frame_instruction_count_q + 15'd1;
+                        instructions_retired <= instructions_retired + 32'd1;
+                        exec_state <= EXEC_FETCH;
                     end
                     EXEC_MOVE: begin
                         if (!move_valid) begin
@@ -737,14 +838,14 @@ module astra_copper #(
                                 execution_fail(FAULT_BAD_TARGET);
                             else
                                 move_valid <= 1'b1;
-                        end else if (move_ready) begin
+                        end
+                        else if (move_ready) begin
                             move_valid <= 1'b0;
-                            retire_pc_action_q <= RETIRE_PC_PLUS_ONE;
-                            retire_beam_action_q <= move_class == 2'd0 ?
-                                RETIRE_BEAM_ADVANCE : RETIRE_BEAM_NONE;
-                            exec_state <= EXEC_RETIRE;
+                            exec_state <= move_class == 2'd1 ?
+                                EXEC_MOVE_COMMIT : EXEC_RETIRE;
                         end
                     end
+                    EXEC_MOVE_COMMIT: exec_state <= EXEC_RETIRE;
                     EXEC_IRQ: if (irq_event && irq_ready) begin
                         irq_event <= 1'b0;
                         retire_pc_action_q <= RETIRE_PC_PLUS_ONE;

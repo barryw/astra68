@@ -232,6 +232,24 @@ module tb_astra_render_pixel_writer;
         repeat (6) @(posedge clk);
         reset = 1'b0;
 
+        // Ready advertises input storage, not flush/abort policy. Producers
+        // stop VALID before requesting a flush, so pending control must not
+        // feed back through this hot path into every renderer FSM.
+        force dut.busy = 1'b1;
+        force dut.flush_pending = 1'b1;
+        force dut.ingress_valid = 1'b1;
+        force dut.pixel_stage_count = 2'd0;
+        #1;
+        if (!pixel_ready)
+            $fatal(1, "pixel ready depends on pending flush control");
+        release dut.pixel_stage_count;
+        release dut.ingress_valid;
+        release dut.flush_pending;
+        release dut.busy;
+        reset = 1'b1;
+        repeat (2) @(posedge clk);
+        reset = 1'b0;
+
         begin_stream();
         for (i = 0; i < 10; i = i + 1)
             send_pixel(32'h00000100 + i,

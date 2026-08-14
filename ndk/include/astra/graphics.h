@@ -133,8 +133,10 @@ enum {
     ASTRA_SPRITE_SOURCE_HEIGHT_MAX = 128,
     /** Maximum destination width or height after scaling. */
     ASTRA_SPRITE_DESTINATION_EXTENT_MAX = 1024,
+    /** Maximum complete sprite spans admitted on one scanline. */
+    ASTRA_SPRITES_PER_LINE = 16,
     /** Guaranteed aggregate admitted sprite pixels per scanline. */
-    ASTRA_SPRITE_PIXELS_PER_LINE = 8192,
+    ASTRA_SPRITE_PIXELS_PER_LINE = 2048,
     /** Number of independently selectable 256-entry palette banks. */
     ASTRA_SPRITE_PALETTE_BANK_COUNT = 16
 };
@@ -212,8 +214,8 @@ typedef struct AstraFence {
 #define ASTRA_FENCE_INIT { ASTRA_INVALID_HANDLE }
 /** Initializer for ::AstraGraphicsInfo. */
 #define ASTRA_GRAPHICS_INFO_INIT \
-    { sizeof(AstraGraphicsInfo), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, \
-      { 0, 0, 0, 0 } }
+    { sizeof(AstraGraphicsInfo), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, \
+      { 0, 0, 0 } }
 /** Initializer for ::AstraSurfaceCreateInfo. */
 #define ASTRA_SURFACE_CREATE_INFO_INIT \
     { sizeof(AstraSurfaceCreateInfo), 0, 0, 0, 0, 0, 0, \
@@ -316,8 +318,12 @@ typedef struct AstraGraphicsInfo {
     uint16_t max_sprite_pixels_per_line;
     /** Number of independently selectable sprite palette banks. */
     uint16_t sprite_palette_bank_count;
+    /** Maximum complete sprite spans admitted on one scanline. */
+    uint16_t max_sprites_per_line;
     /** Reserved for compatible growth; initialize to zero. */
-    uint32_t reserved[4];
+    uint16_t _reserved0;
+    /** Reserved for compatible growth; initialize to zero. */
+    uint32_t reserved[3];
 } AstraGraphicsInfo;
 
 /** Parameters for allocating a protected graphics surface. */

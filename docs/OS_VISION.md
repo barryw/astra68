@@ -702,10 +702,10 @@ without exposing register addresses as the application ABI.
 ### 12.2 Audio and media
 
 **DIRECTION:** A protected Astra media service owns application-facing media
-timing, stream/voice allocation, buffer scheduling, and mixing policy. A
-versioned AstraHost audio service on the ESP performs the production audio
-backend work over SPI; no application talks directly to ESP firmware or a
-dormant Lyra proposal.
+timing, stream/voice allocation, buffer scheduling, and mixing policy. On the
+Arty, a Linux host service performs the production backend work through
+bounded, preallocated queues and feeds the single HDMI PCM boundary; no
+application talks directly to the host service or raw audio MMIO.
 
 It should expose both conventional streams and native Astra concepts such as
 PCM voices, wavetable instruments, synchronized triggers, and media clocks.
@@ -714,6 +714,11 @@ unbounded allocation, or ordinary-priority blocking.
 
 Audio continuity while the CPU, UI, storage, and network are busy is a primary
 system acceptance test, not merely an audio-driver test.
+
+The hosted MC68030/PMMU vCPU is isolated on ARM core 1. Linux IRQs, QEMU I/O,
+audio mixing and synthesis, and the fixed-point game-math worker remain on
+core 0. Guest-visible audio and math devices enqueue bounded asynchronous work;
+they do not perform expensive operations synchronously on the vCPU thread.
 
 ## 13. Networking
 

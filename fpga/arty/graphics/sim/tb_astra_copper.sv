@@ -50,11 +50,12 @@ wire [31:0] validate_move_data;
     wire move_valid;
     reg move_ready = 1'b1;
     wire [15:0] move_target;
-wire [31:0] move_data;
-wire [10:0] move_beam_x;
-wire [9:0] move_beam_y;
-    wire move_allowed = move_target == 16'h0100 ||
-        move_target == 16'h0104;
+    wire [31:0] move_data;
+    wire [10:0] move_beam_x;
+    wire [9:0] move_beam_y;
+    reg runtime_move_permission = 1'b1;
+    wire move_allowed = runtime_move_permission &&
+        (move_target == 16'h0100 || move_target == 16'h0104);
     reg [1:0] move_timing_class = 2'd2;
     wire [1:0] move_class;
     wire dispatch_valid;
@@ -202,14 +203,18 @@ wire [9:0] irq_beam_y;
         input [12:0] address,
         input [31:0] expected
     );
+        integer timeout;
         begin
             @(negedge clk);
             program_word_address = address;
             program_read = 1'b1;
             @(negedge clk);
             program_read = 1'b0;
-            @(posedge clk);
-            #1;
+            timeout = 0;
+            while (!program_read_valid && timeout < 8) begin
+                @(negedge clk);
+                timeout = timeout + 1;
+            end
             if (!program_read_valid || program_read_data !== expected)
                 $fatal(1, "program read mismatch address=%0d got=%08x valid=%b expected=%08x",
                     address, program_read_data, program_read_valid, expected);
@@ -405,6 +410,17 @@ wire [9:0] irq_beam_y;
         fault_clear = 1'b0;
         if (fault)
             $fatal(1, "execution fault clear failed");
+
+        // A baseline-dependent permission may change after list validation.
+        write_instruction(12'd40, ins0(OP_MOVE, 16'h0100), 32'h12345678);
+        write_instruction(12'd41, ins0(OP_END, 16'd0), 32'd0);
+        validate_list(12'd40, 13'd2, 1'b1, 8'd0);
+        runtime_move_permission = 1'b0;
+        pulse_frame(1'b1);
+        wait_for(4);
+        if (fault_code != 8'd4 || fault_pc != 12'd40)
+            $fatal(1, "runtime MOVE permission fault mismatch code=%0d pc=%0d",
+                fault_code, fault_pc);
 
         $display("ASTRA COPPER PASS retired=%0d moves=%0d dispatch=%0d irq=%0d",
             instructions_retired, move_count, dispatch_count, irq_count);

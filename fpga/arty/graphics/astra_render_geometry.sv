@@ -104,7 +104,9 @@ module astra_render_geometry (
     reg signed [16:0] line_x1_q, line_y1_q;
     reg signed [16:0] line_setup_x0_q, line_setup_y0_q;
     reg signed [16:0] line_setup_x1_q, line_setup_y1_q;
+    reg line_x_forward_q, line_y_forward_q;
     reg signed [17:0] line_dx_q, line_dy_q, line_error_q;
+    reg signed [17:0] line_error_delta_q;
     reg signed [1:0] line_step_x_q, line_step_y_q;
     (* keep = "true" *) reg line_finished_q;
     reg line_advance_x_q, line_advance_y_q, line_apply_q;
@@ -186,12 +188,16 @@ module astra_render_geometry (
         emit_x_q < $signed({clip_right_q[15], clip_right_q}) &&
         emit_y_q >= $signed({clip_top_q[15], clip_top_q}) &&
         emit_y_q < $signed({clip_bottom_q[15], clip_bottom_q});
-    wire stage1_ready = !stage1_valid_q || pixel_ready;
-    wire offset_ready = !offset_valid_q || stage1_ready;
-    wire sum_ready = !sum_valid_q || offset_ready;
-    wire stage0_ready = !stage0_valid_q || sum_ready;
-    wire operand_ready = !operand_valid_q || stage0_ready;
-    wire coordinate_ready = !coordinate_valid_q || operand_ready;
+    // This is a fixed pipeline: when its output stalls, all stages stall.
+    // A single advance signal replaces the six-stage combinational ready
+    // chain while retaining one-pixel-per-cycle throughput.
+    wire pipeline_advance = !stage1_valid_q || pixel_ready;
+    wire stage1_ready = pipeline_advance;
+    wire offset_ready = pipeline_advance;
+    wire sum_ready = pipeline_advance;
+    wire stage0_ready = pipeline_advance;
+    wire operand_ready = pipeline_advance;
+    wire coordinate_ready = pipeline_advance;
     wire emit_accept = emit_valid_q && emit_classified_q &&
         (!emit_in_clip_q || coordinate_ready);
     assign pixel_valid = stage1_valid_q;
@@ -219,8 +225,8 @@ module astra_render_geometry (
         begin
             emit_x_q <= px;
             emit_y_q <= py;
+            emit_color_q <= foreground_q;
             emit_valid_q <= 1'b1;
-            emit_classified_q <= 1'b0;
         end
     endtask
 
@@ -234,6 +240,8 @@ module astra_render_geometry (
             line_setup_y0_q <= ay;
             line_setup_x1_q <= bx;
             line_setup_y1_q <= by;
+            line_x_forward_q <= ax < bx;
+            line_y_forward_q <= ay < by;
             line_apply_q <= 1'b0;
             state <= ST_LINE_SETUP;
         end
@@ -418,26 +426,21 @@ module astra_render_geometry (
             op_ellipse_q <= 1'b0;
             op_pattern_fill_q <= 1'b0;
         end else begin
-            if (!emit_valid_q)
-                emit_color_q <= foreground_q;
-
+            emit_classified_q <= emit_valid_q;
             if (emit_valid_q && !emit_classified_q) begin
                 emit_in_clip_q <= emit_in_clip_now;
-                emit_classified_q <= 1'b1;
             end
 
             if (emit_accept) begin
                 emit_valid_q <= 1'b0;
-                emit_classified_q <= 1'b0;
             end
 
             if (abort_request) begin
                 emit_valid_q <= 1'b0;
-                emit_classified_q <= 1'b0;
                 abort_active_q <= 1'b1;
                 writer_abort <= 1'b1;
                 state <= ST_ABORT_WRITER;
-            end else case (1'b1)
+            end else unique case (1'b1)
                 state[0]: if (start) begin
                     busy <= 1'b1;
                     status <= `ASTRA_RENDER_STATUS_OK;
@@ -475,7 +478,7 @@ module astra_render_geometry (
                 end
 
                 state[1]: begin
-                    case (1'b1)
+                    unique case (1'b1)
                         op_line_q:
                             setup_line(p0_x_q, p0_y_q, p1_x_q, p1_y_q);
                         op_rect_q: begin
@@ -524,37 +527,37 @@ module astra_render_geometry (
                 end
                 state[15]: begin
                     if (line_apply_q) begin
+                        line_error_delta_q <=
+                            line_advance_x_q && line_advance_y_q ?
+                            line_dy_q + line_dx_q :
+                            line_advance_x_q ? line_dy_q : line_dx_q;
                         if (line_advance_x_q) begin
-                            line_error_q <= line_error_q + line_dy_q;
                             x_q <= x_q + line_step_x_q;
                         end
                         if (line_advance_y_q) begin
-                            line_error_q <= line_error_q + line_dx_q;
                             y_q <= y_q + line_step_y_q;
                         end
-                        if (line_advance_x_q && line_advance_y_q)
-                            line_error_q <= line_error_q + line_dy_q + line_dx_q;
-                        state <= ST_LINE_EMIT;
+                        state <= ST_LINE_ERROR;
                     end else begin
                         x_q <= line_setup_x0_q;
                         y_q <= line_setup_y0_q;
                         line_x1_q <= line_setup_x1_q;
                         line_y1_q <= line_setup_y1_q;
-                        line_dx_q <= line_setup_x0_q >= line_setup_x1_q ?
-                            line_setup_x0_q - line_setup_x1_q :
-                            line_setup_x1_q - line_setup_x0_q;
-                        line_dy_q <= -(line_setup_y0_q >= line_setup_y1_q ?
-                            line_setup_y0_q - line_setup_y1_q :
-                            line_setup_y1_q - line_setup_y0_q);
-                        line_step_x_q <= line_setup_x0_q < line_setup_x1_q ?
-                            2'sd1 : -2'sd1;
-                        line_step_y_q <= line_setup_y0_q < line_setup_y1_q ?
-                            2'sd1 : -2'sd1;
+                        line_dx_q <= line_x_forward_q ?
+                            line_setup_x1_q - line_setup_x0_q :
+                            line_setup_x0_q - line_setup_x1_q;
+                        line_dy_q <= -(line_y_forward_q ?
+                            line_setup_y1_q - line_setup_y0_q :
+                            line_setup_y0_q - line_setup_y1_q);
+                        line_step_x_q <= line_x_forward_q ? 2'sd1 : -2'sd1;
+                        line_step_y_q <= line_y_forward_q ? 2'sd1 : -2'sd1;
                         state <= ST_LINE_ERROR;
                     end
                 end
                 state[16]: begin
-                    line_error_q <= line_dx_q + line_dy_q;
+                    line_error_q <= line_apply_q ?
+                        line_error_q + line_error_delta_q :
+                        line_dx_q + line_dy_q;
                     state <= ST_LINE_EMIT;
                 end
                 state[3]: if (!emit_valid_q) begin
@@ -612,8 +615,8 @@ module astra_render_geometry (
                     if (pattern_selected_q)
                         queue_pixel(x_q, y_q);
                     else if (pattern_opaque_q) begin
-                        emit_color_q <= background_q;
                         queue_pixel(x_q, y_q);
+                        emit_color_q <= background_q;
                     end
                     else
                         state <= ST_SCAN_NEXT;
@@ -736,7 +739,7 @@ module astra_render_geometry (
                     state <= ST_CIRCLE_EMIT;
                 end
 
-                state[10]: case (1'b1)
+                state[10]: unique case (1'b1)
                     ellipse_state[0]: if (multiply_done_q)
                         ellipse_state <= EL_MUL_DONE;
                     ellipse_state[1]: begin
@@ -855,10 +858,12 @@ module astra_render_geometry (
 
                 state[11]: if (!coordinate_valid_q && !operand_valid_q &&
                     !stage0_valid_q &&
-                    !sum_valid_q && !offset_valid_q && !stage1_valid_q &&
-                    writer_flush_ready) begin
+                    !sum_valid_q && !offset_valid_q && !stage1_valid_q) begin
                     writer_flush <= 1'b1;
-                    state <= ST_WAIT_WRITER;
+                    if (writer_flush && writer_flush_ready) begin
+                        writer_flush <= 1'b0;
+                        state <= ST_WAIT_WRITER;
+                    end
                 end
                 state[12]: begin
                     if (writer_done || writer_aborted || writer_error) begin

@@ -12,6 +12,7 @@
 #include <astra/version.h>
 #include <astra/attributes.h>
 #include <astra/types.h>
+#include <astra/fixed.h>
 #include <astra/resource.h>
 #include <astra/area.h>
 #include <astra/port.h>

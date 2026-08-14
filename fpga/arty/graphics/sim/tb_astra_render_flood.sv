@@ -122,21 +122,25 @@ module tb_astra_render_flood;
     integer normal_pixels;
     initial begin
         memory_i.clear_memory(8'd0);
-        // A 9x7 connected region of value 1, with a three-pixel hole.
+        // A 10x7 connected region touching the left clip edge, with a
+        // three-pixel hole.
         for (y = 2; y <= 8; y = y + 1)
-            for (x = 2; x <= 10; x = x + 1)
+            for (x = 1; x <= 10; x = x + 1)
                 memory_i.write_byte(32'h2000 + y * 16 + x, 8'd1);
         memory_i.write_byte(32'h2000 + 4 * 16 + 5, 8'd2);
         memory_i.write_byte(32'h2000 + 4 * 16 + 6, 8'd2);
         memory_i.write_byte(32'h2000 + 5 * 16 + 5, 8'd2);
         repeat (8) @(posedge clk);
         reset = 1'b0;
+        #1;
+        if (!rready)
+            $fatal(1, "flood AXI read response ready is not preasserted");
         @(negedge clk);
         start = 1'b1;
         @(negedge clk);
         start = 1'b0;
         wait (done);
-        expected_count = 60;
+        expected_count = 67;
         if (status != `ASTRA_RENDER_STATUS_OK ||
             completed_pixels != expected_count)
             $fatal(1, "flood status=%0d detail=%08x pixels=%0d expected=%0d",
@@ -144,7 +148,7 @@ module tb_astra_render_flood;
         normal_pixels = completed_pixels;
         for (y = 0; y < 12; y = y + 1)
             for (x = 0; x < 16; x = x + 1) begin
-                if (x >= 2 && x <= 10 && y >= 2 && y <= 8 &&
+                if (x >= 1 && x <= 10 && y >= 2 && y <= 8 &&
                     !((x == 5 && y == 4) || (x == 6 && y == 4) ||
                       (x == 5 && y == 5))) begin
                     if (memory_i.read_byte(32'h2000 + y * 16 + x) != 8'd7)

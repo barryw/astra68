@@ -60,10 +60,11 @@ priority, palette bank, transparency, opacity, and collision policy before
 publishing hardware descriptors. Each sprite independently selects one of
 sixteen 256-entry ARGB palette banks.
 Vega admits complete sprites in descending priority and ascending descriptor
-index until the scanline pixel budget is exhausted. The primary 720-pixel mode
-guarantees 8,192 admitted sprite pixels per line, independent of framebuffer
-format; query {c:member}`AstraGraphicsInfo.max_sprite_pixels_per_line` rather
-than assuming a descriptor count implies unlimited overlapping width.
+index until either 16 spans or the 2,048-pixel scanline budget is exhausted.
+Scaling remains supported, so a wider destination span consumes more of that
+budget. Query {c:member}`AstraGraphicsInfo.max_sprites_per_line` and
+{c:member}`AstraGraphicsInfo.max_sprite_pixels_per_line` rather than assuming
+the 64 global descriptors can all overlap.
 Overflow is reported as
 {c:enumerator}`ASTRA_DISPLAY_STATUS_SPRITE_OVERFLOW` and never becomes a
 scanout underrun.

@@ -16,6 +16,7 @@
 #ifdef CONFIG_LINUX
 #include "qemu/futex.h"
 #endif
+#include "qemu/iov.h"
 #include "qemu/timer.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
@@ -28,6 +29,7 @@
 #include "hw/m68k/astra_render_protocol.h"
 #include "astra/display.h"
 #include "sysemu/block-backend.h"
+#include "sysemu/block-backend-io.h"
 #include "sysemu/blockdev.h"
 #include "sysemu/reset.h"
 #include "sysemu/runstate.h"
@@ -44,6 +46,7 @@
 #define ASTRA_VESTA_SIZE         0x800u
 #define ASTRA_PANEL_BASE         0xfff01000u
 #define ASTRA_PANEL_SIZE         0x100u
+#define ASTRA_PANEL_ACTIVITY     0x2cu
 #define ASTRA_ASTRAEA_BASE       0xfff10000u
 #define ASTRA_ASTRAEA_SIZE       0x8000u
 #define ASTRA_VEGA_BASE          0xfff20000u
@@ -75,14 +78,14 @@
 
 /*
  * AstraHost runtime block service, Vesta offsets 0x150..0x1b0. The register
- * contract, the 512-byte sector, and the 16-sector transfer ceiling are
- * defined by sw/include/vesta.h and docs/ASTRAHOST.md; this model is the
- * emulator implementation of the same contract over a host image.
+ * contract and 512-byte sector are defined by sw/include/vesta.h and
+ * docs/ASTRAHOST.md. The maximum transfer is reported at runtime, allowing
+ * this hosted backend to batch more sectors than the physical SPI service.
  */
 #define BLOCK_ID_MAGIC           0x484f5354u /* "HOST" */
 #define BLOCK_VERSION_1_0        0x00010000u
 #define BLOCK_SECTOR_SIZE        512u
-#define BLOCK_MAX_SECTORS        16u
+#define BLOCK_MAX_SECTORS        128u
 #define BLOCK_CAP_READ           (1u << 0)
 #define BLOCK_CAP_WRITE          (1u << 1)
 #define BLOCK_CAP_FLUSH          (1u << 2)
@@ -175,6 +178,13 @@ typedef struct AstraBlockCompletion {
     uint32_t host_generation;
 } AstraBlockCompletion;
 
+typedef struct AstraBlockRequest {
+    Astra68State *machine;
+    BlockAIOCB *aiocb;
+    QEMUIOVector qiov;
+    bool qiov_initialized;
+} AstraBlockRequest;
+
 typedef struct AstraBlockState {
     BlockBackend *blk;
     QEMUTimer *service_timer;
@@ -194,6 +204,7 @@ typedef struct AstraBlockState {
     uint32_t active_sectors;
     uint32_t active_buffer;
     uint64_t active_lba;
+    AstraBlockRequest *active_request;
     bool busy;
     uint32_t error;
     uint32_t host_generation;
@@ -279,6 +290,9 @@ struct Astra68State {
     AstraDisplayState display;
     uint8_t panel_led_data;
     uint8_t panel_led_ownership;
+#ifdef CONFIG_POSIX
+    volatile uint32_t *host_panel;
+#endif
     bool trace_timers;
 };
 
@@ -286,6 +300,8 @@ static Astra68State *astra_input_machine;
 
 static void astra_update_irq(Astra68State *s);
 static uint64_t astra_now_cycles(Astra68State *s);
+static void astra_panel_write32(Astra68State *s, hwaddr offset,
+                                uint32_t value);
 
 static uint32_t astra_display_queue(const AstraDisplayState *display)
 {
@@ -709,38 +725,24 @@ static void astra_block_push_completion(Astra68State *s, uint32_t status,
     block->tail = (block->tail + 1u) & BLOCK_COMPLETION_QUEUE_MASK;
 }
 
-static void astra_block_service(void *opaque)
+static void astra_block_complete(void *opaque, int rc)
 {
-    Astra68State *s = opaque;
+    AstraBlockRequest *request = opaque;
+    Astra68State *s = request->machine;
     AstraBlockState *block = &s->block;
     uint32_t sectors = block->active_sectors;
-    uint8_t *buffer;
-    int rc;
 
-    if (!block->busy) {
+    if (request->qiov_initialized) {
+        qemu_iovec_destroy(&request->qiov);
+    }
+    if (block->active_request != request) {
+        g_free(request);
         return;
     }
-    buffer = s->sdram + (block->active_buffer - ASTRA_SDRAM_BASE);
-
-    switch (block->active_op) {
-    case BLOCK_OP_READ:
-        ++block->read_requests;
-        block->read_sectors += sectors;
-        rc = blk_pread(block->blk,
-                       (int64_t)block->active_lba * BLOCK_SECTOR_SIZE,
-                       (int64_t)sectors * BLOCK_SECTOR_SIZE, buffer, 0);
-        break;
-    case BLOCK_OP_WRITE:
-        rc = blk_pwrite(block->blk,
-                        (int64_t)block->active_lba * BLOCK_SECTOR_SIZE,
-                        (int64_t)sectors * BLOCK_SECTOR_SIZE, buffer, 0);
-        break;
-    default:
-        rc = blk_flush(block->blk);
+    block->active_request = NULL;
+    if (block->active_op == BLOCK_OP_FLUSH) {
         sectors = 0;
-        break;
     }
-
     if (rc < 0) {
         astra_block_push_completion(s, BLOCK_COMPLETION_IO_ERROR, 0,
                                     (uint32_t)-rc);
@@ -749,6 +751,48 @@ static void astra_block_service(void *opaque)
     }
     block->busy = false;
     astra_update_irq(s);
+    g_free(request);
+}
+
+static void astra_block_service(void *opaque)
+{
+    Astra68State *s = opaque;
+    AstraBlockState *block = &s->block;
+    AstraBlockRequest *request;
+    uint8_t *buffer;
+    size_t bytes;
+
+    if (!block->busy || block->active_request != NULL) {
+        return;
+    }
+    request = g_new0(AstraBlockRequest, 1);
+    request->machine = s;
+    block->active_request = request;
+    bytes = (size_t)block->active_sectors * BLOCK_SECTOR_SIZE;
+    buffer = s->sdram + (block->active_buffer - ASTRA_SDRAM_BASE);
+
+    switch (block->active_op) {
+    case BLOCK_OP_READ:
+        ++block->read_requests;
+        block->read_sectors += block->active_sectors;
+        qemu_iovec_init_buf(&request->qiov, buffer, bytes);
+        request->qiov_initialized = true;
+        request->aiocb = blk_aio_preadv(
+            block->blk, (int64_t)block->active_lba * BLOCK_SECTOR_SIZE,
+            &request->qiov, 0, astra_block_complete, request);
+        break;
+    case BLOCK_OP_WRITE:
+        qemu_iovec_init_buf(&request->qiov, buffer, bytes);
+        request->qiov_initialized = true;
+        request->aiocb = blk_aio_pwritev(
+            block->blk, (int64_t)block->active_lba * BLOCK_SECTOR_SIZE,
+            &request->qiov, 0, astra_block_complete, request);
+        break;
+    default:
+        request->aiocb = blk_aio_flush(block->blk, astra_block_complete,
+                                       request);
+        break;
+    }
 }
 
 static uint32_t astra_block_validate(Astra68State *s)
@@ -823,6 +867,7 @@ static void astra_block_submit(Astra68State *s)
     block->active_lba = ((uint64_t)block->req_lba_hi << 32) |
                         block->req_lba_lo;
     block->busy = true;
+    astra_panel_write32(s, ASTRA_PANEL_ACTIVITY, 1u);
     timer_mod_ns(block->service_timer,
                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
                  BLOCK_SERVICE_DELAY_NS);
@@ -1269,6 +1314,11 @@ static void astra_vesta_write32(Astra68State *s, hwaddr offset,
 
 static uint32_t astra_panel_read32(Astra68State *s, hwaddr offset)
 {
+#ifdef CONFIG_POSIX
+    if (s->host_panel != NULL && offset < ASTRA_PANEL_SIZE) {
+        return le32_to_cpu(s->host_panel[offset / sizeof(uint32_t)]);
+    }
+#endif
     switch (offset) {
     case 0x00: return 0x504e4c30;
     case 0x04: return 0x00010000;
@@ -1282,6 +1332,12 @@ static uint32_t astra_panel_read32(Astra68State *s, hwaddr offset)
 static void astra_panel_write32(Astra68State *s, hwaddr offset,
                                 uint32_t value)
 {
+#ifdef CONFIG_POSIX
+    if (s->host_panel != NULL && offset < ASTRA_PANEL_SIZE) {
+        s->host_panel[offset / sizeof(uint32_t)] = cpu_to_le32(value);
+        return;
+    }
+#endif
     switch (offset) {
     case 0x18: s->panel_led_data = value; break;
     case 0x1c: s->panel_led_ownership = value; break;
@@ -1289,6 +1345,56 @@ static void astra_panel_write32(Astra68State *s, hwaddr offset,
     case 0x24: s->panel_led_data &= ~value; break;
     case 0x28: s->panel_led_data ^= value; break;
     }
+}
+
+static void astra_panel_host_init(Astra68State *s)
+{
+    const char *path = g_getenv("ASTRA_FRONT_PANEL_MMIO_PATH");
+
+    if (path == NULL || path[0] == '\0') {
+        return;
+    }
+#ifdef CONFIG_POSIX
+    const char *offset_text = g_getenv("ASTRA_FRONT_PANEL_MMIO_OFFSET");
+    uint64_t offset = 0;
+    int fd;
+    void *mapping;
+
+    if (offset_text != NULL && offset_text[0] != '\0') {
+        char *end = NULL;
+
+        errno = 0;
+        offset = g_ascii_strtoull(offset_text, &end, 0);
+        if (errno != 0 || end == offset_text || *end != '\0') {
+            error_report("invalid ASTRA_FRONT_PANEL_MMIO_OFFSET '%s'",
+                         offset_text);
+            exit(EXIT_FAILURE);
+        }
+    }
+    if ((offset & (qemu_real_host_page_size() - 1u)) != 0) {
+        error_report("front-panel MMIO offset 0x%" PRIx64
+                     " is not host-page aligned", offset);
+        exit(EXIT_FAILURE);
+    }
+    fd = open(path, O_RDWR | O_SYNC);
+    if (fd < 0) {
+        error_report("cannot open front-panel MMIO '%s': %s",
+                     path, strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    mapping = mmap(NULL, ASTRA_PANEL_SIZE, PROT_READ | PROT_WRITE,
+                   MAP_SHARED, fd, (off_t)offset);
+    close(fd);
+    if (mapping == MAP_FAILED) {
+        error_report("cannot map front-panel MMIO '%s' at 0x%" PRIx64
+                     ": %s", path, offset, strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    s->host_panel = mapping;
+#else
+    error_report("ASTRA_FRONT_PANEL_MMIO_PATH requires a POSIX host");
+    exit(EXIT_FAILURE);
+#endif
 }
 
 static bool astra_sdram_span(Astra68State *s, uint32_t offset, uint32_t bytes)
@@ -1523,6 +1629,7 @@ static const MemoryRegionOps astra_vega_ops = ASTRA_OPS(astra_vega);
 static void astra_cpu_reset(void *opaque)
 {
     Astra68State *s = opaque;
+    AstraBlockRequest *block_request;
 
     cpu_reset(CPU(s->cpu));
     s->cpu->env.aregs[7] = s->initial_sp;
@@ -1538,6 +1645,11 @@ static void astra_cpu_reset(void *opaque)
 
     if (s->block.service_timer) {
         timer_del(s->block.service_timer);
+    }
+    block_request = s->block.active_request;
+    s->block.active_request = NULL;
+    if (block_request != NULL && block_request->aiocb != NULL) {
+        blk_aio_cancel_async(block_request->aiocb);
     }
     s->block.head = 0;
     s->block.tail = 0;
@@ -1740,6 +1852,8 @@ static void astra68_init(MachineState *machine)
         exit(EXIT_FAILURE);
 #endif
     }
+
+    astra_panel_host_init(s);
 
     memory_region_init_io(&s->vesta_io, NULL, &astra_vesta_ops, s,
                           "astra68.vesta", ASTRA_VESTA_SIZE);

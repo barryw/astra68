@@ -86,6 +86,10 @@ module tb_astra_copper_registers;
             while (!move_ready) @(negedge clk);
             @(negedge clk);
             move_valid = 0;
+            if (target < 16'h1000) begin
+                @(posedge clk);
+                #1;
+            end
         end
     endtask
 
@@ -138,19 +142,24 @@ module tb_astra_copper_registers;
         move_target = 16'h00d8;
         move_data = 32'h00000001;
         #1;
-        if (move_allowed || move_ready)
-            $fatal(1, "runtime enabled dormant invalid tile");
+        if (move_allowed || !move_ready)
+            $fatal(1, "runtime permission leaked into MOVE capacity");
 
         palette_write_ready = 0;
         @(negedge clk);
         move_target = 16'h1120;
         move_data = 32'hff123456;
         move_valid = 1;
+        @(posedge clk);
         #1;
         if (move_ready)
             $fatal(1, "palette MOVE ignored backpressure");
         repeat (3) @(negedge clk);
         palette_write_ready = 1;
+        @(posedge clk);
+        #1;
+        if (!move_ready)
+            $fatal(1, "palette MOVE did not register available capacity");
         @(posedge clk);
         #1;
         if (!framebuffer_palette_write_enable ||

@@ -386,6 +386,7 @@ module tb_astra_graphics_pipeline;
             if (fb_axi_arvalid && fb_axi_arready) begin
                 if (fb_axi_arsize != 3'b011 ||
                     fb_axi_arburst != 2'b01 ||
+                    fb_axi_arlen > 8'd15 ||
                     fb_axi_araddr[2:0] != 3'b000 ||
                     fb_axi_araddr < ARENA_BASE ||
                     fb_axi_araddr + ((fb_axi_arlen + 1) << 3) > ARENA_LIMIT)
@@ -425,6 +426,17 @@ module tb_astra_graphics_pipeline;
                     fb_axi_rvalid <= 1'b1;
                 end
             end
+        end
+    end
+
+    always @(posedge build_clk) begin
+        if (!build_reset) begin
+            if (render_axi_arvalid && render_axi_arready &&
+                render_axi_arlen > 8'd15)
+                $fatal(1, "renderer read exceeds AXI3 burst limit");
+            if (render_axi_awvalid && render_axi_awready &&
+                render_axi_awlen > 8'd15)
+                $fatal(1, "renderer write exceeds AXI3 burst limit");
         end
     end
 
@@ -573,8 +585,13 @@ module tb_astra_graphics_pipeline;
                 cycles = cycles + 1;
             end
             if (!status[4])
-                $fatal(1, "integrated copper validation timed out status=%08x",
-                       status);
+                $fatal(1, "integrated copper validation timed out status=%08x state=%0d index=%0d remaining=%0d w0=%08x w1=%08x",
+                       status,
+                       dut.copper_control_i.copper_i.validate_state,
+                       dut.copper_control_i.copper_i.validate_index_q,
+                       dut.copper_control_i.copper_i.validate_remaining_q,
+                       dut.copper_control_i.copper_i.validate_w0_q,
+                       dut.copper_control_i.copper_i.validate_w1_q);
             axi_write(32'h00004008, 32'd3);
         end
     endtask

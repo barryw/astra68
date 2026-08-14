@@ -324,6 +324,7 @@ module astra_graphics_control #(
     reg tile1_validator_result_q;
     reg sprite_validator_done_seen_q;
     reg sprite_validator_result_q;
+    reg sprite_pending_ready_q;
     reg sprite_clone_pending_q;
     reg sprite_activation_pending_q;
 
@@ -355,46 +356,34 @@ module astra_graphics_control #(
         .surface_bytes(framebuffer_validator_surface_bytes)
     );
 
-    wire tile0_validator_busy;
-    wire tile0_validator_done;
-    wire tile0_validator_valid;
-    astra_tile_config_validator tile0_validator_i (
+    reg tile_validator_select_q;
+    reg tile_validator_start_q;
+    wire tile_validator_busy;
+    wire tile_validator_done;
+    wire tile_validator_valid;
+    astra_tile_config_validator tile_validator_i (
         .clk(clk),
         .reset(reset),
-        .start(validator_start_q),
-        .tile_16(shadow_tile0_geometry[8]),
-        .index_8(shadow_tile0_geometry[9]),
-        .map_width_log2(shadow_tile0_geometry[3:0]),
-        .map_height_log2(shadow_tile0_geometry[7:4]),
-        .map_base(shadow_tile0_map_base),
-        .pattern_base(shadow_tile0_pattern_base),
-        .tile_count(shadow_tile0_count[16:0]),
+        .start(tile_validator_start_q),
+        .tile_16(tile_validator_select_q ?
+            shadow_tile1_geometry[8] : shadow_tile0_geometry[8]),
+        .index_8(tile_validator_select_q ?
+            shadow_tile1_geometry[9] : shadow_tile0_geometry[9]),
+        .map_width_log2(tile_validator_select_q ?
+            shadow_tile1_geometry[3:0] : shadow_tile0_geometry[3:0]),
+        .map_height_log2(tile_validator_select_q ?
+            shadow_tile1_geometry[7:4] : shadow_tile0_geometry[7:4]),
+        .map_base(tile_validator_select_q ?
+            shadow_tile1_map_base : shadow_tile0_map_base),
+        .pattern_base(tile_validator_select_q ?
+            shadow_tile1_pattern_base : shadow_tile0_pattern_base),
+        .tile_count(tile_validator_select_q ?
+            shadow_tile1_count[16:0] : shadow_tile0_count[16:0]),
         .arena_base(ARENA_BASE),
         .arena_limit(ARENA_LIMIT),
-        .busy(tile0_validator_busy),
-        .done(tile0_validator_done),
-        .config_valid(tile0_validator_valid)
-    );
-
-    wire tile1_validator_busy;
-    wire tile1_validator_done;
-    wire tile1_validator_valid;
-    astra_tile_config_validator tile1_validator_i (
-        .clk(clk),
-        .reset(reset),
-        .start(validator_start_q),
-        .tile_16(shadow_tile1_geometry[8]),
-        .index_8(shadow_tile1_geometry[9]),
-        .map_width_log2(shadow_tile1_geometry[3:0]),
-        .map_height_log2(shadow_tile1_geometry[7:4]),
-        .map_base(shadow_tile1_map_base),
-        .pattern_base(shadow_tile1_pattern_base),
-        .tile_count(shadow_tile1_count[16:0]),
-        .arena_base(ARENA_BASE),
-        .arena_limit(ARENA_LIMIT),
-        .busy(tile1_validator_busy),
-        .done(tile1_validator_done),
-        .config_valid(tile1_validator_valid)
+        .busy(tile_validator_busy),
+        .done(tile_validator_done),
+        .config_valid(tile_validator_valid)
     );
 
     wire validators_done =
@@ -485,6 +474,9 @@ module astra_graphics_control #(
     reg [31:0] wdata_q;
     reg [3:0] wstrb_q;
     reg write_execute_q;
+    reg write_shadow_tile1_control_q;
+    reg write_response_pending_q;
+    reg [1:0] write_response_q;
     reg write_render_busy_q;
     reg write_alignment_valid_q;
     reg write_prefix_valid_q;
@@ -498,6 +490,7 @@ module astra_graphics_control #(
     reg write_sprite_descriptor_selector_valid_q;
     reg write_sprite_palette_selector_valid_q;
     reg write_collision_row_valid_q;
+    reg write_render_control_valid_q;
     reg ar_pending;
 reg [11:0] araddr_q;
 reg read_decode_pending_q;
@@ -511,30 +504,36 @@ reg [9:0] read_bank_valid_q;
 // the full control block before reaching these registers.
 (* dont_touch = "yes" *) reg [3:0] read_bank_word_q [0:9];
     assign s_axi_awready = !aw_pending && !s_axi_bvalid &&
+                           !write_response_pending_q &&
                            !commit_validation_pending_q && !write_execute_q &&
                            !boot_text_write_busy_q &&
                            !boot_text_commit_busy_q;
     assign s_axi_wready = !w_pending && !s_axi_bvalid &&
+                          !write_response_pending_q &&
                           !commit_validation_pending_q && !write_execute_q &&
                           !boot_text_write_busy_q &&
                           !boot_text_commit_busy_q;
     assign s_axi_arready = !ar_pending && !read_decode_pending_q &&
                            !read_response_pending_q && !s_axi_rvalid;
     wire write_fire = aw_pending && w_pending && !s_axi_bvalid &&
+                      !write_response_pending_q &&
                       !commit_validation_pending_q && !write_execute_q;
     wire [10:0] copper_dispatch_advance =
         copper_dispatch_submission_producer - render_submission_producer;
     wire [10:0] copper_dispatch_submission_used =
         copper_dispatch_submission_producer - render_submission_consumer;
+    reg copper_dispatch_validation_valid_q;
+    reg copper_dispatch_endpoint_allowed_q;
+    reg [10:0] copper_dispatch_submission_producer_q;
     wire copper_dispatch_host_conflict = write_execute_q &&
         awaddr_q[11:0] == 12'h208;
     // Replaying an ACTIVE copper list after its endpoint was already
     // published is an idempotent success, not a frame-to-frame fault.
-    assign copper_dispatch_allowed = render_enable &&
+    assign copper_dispatch_allowed = copper_dispatch_validation_valid_q &&
+        copper_dispatch_endpoint_allowed_q && render_enable &&
         !render_configuration_fault &&
-        copper_dispatch_advance <= 11'd1024 &&
-        copper_dispatch_submission_used <= 11'd1024;
-    assign copper_dispatch_ready = copper_dispatch_allowed &&
+        !copper_dispatch_host_conflict && !render_queue_rebase;
+    assign copper_dispatch_ready = copper_dispatch_validation_valid_q &&
         !copper_dispatch_host_conflict && !render_queue_rebase;
     wire write_changes_scene =
         awaddr_q[11:0] == 12'h00c || awaddr_q[11:0] == 12'h018 ||
@@ -795,6 +794,9 @@ reg [9:0] read_bank_valid_q;
             wdata_q <= 32'd0;
             wstrb_q <= 4'd0;
             write_execute_q <= 1'b0;
+            write_shadow_tile1_control_q <= 1'b0;
+            write_response_pending_q <= 1'b0;
+            write_response_q <= 2'b00;
             write_render_busy_q <= 1'b0;
             write_prefix_valid_q <= 1'b0;
             ar_pending <= 1'b0;
@@ -889,6 +891,8 @@ reg [9:0] read_bank_valid_q;
             commit_quiesce <= 1'b0;
             commit_validation_pending_q <= 1'b0;
             validator_start_q <= 1'b0;
+            tile_validator_select_q <= 1'b0;
+            tile_validator_start_q <= 1'b0;
             shadow_config_dirty_q <= 1'b0;
             shadow_scene_valid_q <= 1'b1;
             framebuffer_validator_done_seen_q <= 1'b0;
@@ -899,6 +903,7 @@ reg [9:0] read_bank_valid_q;
             tile1_validator_result_q <= 1'b0;
             sprite_validator_done_seen_q <= 1'b0;
             sprite_validator_result_q <= 1'b0;
+            sprite_pending_ready_q <= 1'b0;
             sprite_clone_pending_q <= 1'b0;
             sprite_activation_pending_q <= 1'b0;
             scene_changed <= 1'b0;
@@ -943,13 +948,18 @@ reg [9:0] read_bank_valid_q;
 
             render_submission_ring_offset <= 32'd0;
             render_submission_producer <= 11'd0;
+            copper_dispatch_validation_valid_q <= 1'b0;
+            copper_dispatch_endpoint_allowed_q <= 1'b0;
+            copper_dispatch_submission_producer_q <= 11'd0;
             render_completion_ring_offset <= 32'h00010000;
             render_completion_consumer <= 11'd0;
             render_resource_generation <= 32'd0;
             render_irq_pending_q <= 1'b0;
         end else begin
+            sprite_pending_ready_q <= sprite_pending_ready;
             scene_changed <= 1'b0;
             validator_start_q <= 1'b0;
+            tile_validator_start_q <= 1'b0;
             framebuffer_palette_write_enable <= 1'b0;
             tile_palette_write_enable <= 1'b0;
             sprite_descriptor_write_enable <= 1'b0;
@@ -962,9 +972,24 @@ reg [9:0] read_bank_valid_q;
             render_queue_rebase <= 1'b0;
             render_soft_reset <= 1'b0;
 
-            if (copper_dispatch_valid && copper_dispatch_ready)
-                render_submission_producer <=
+            if (!copper_dispatch_valid || copper_dispatch_host_conflict ||
+                render_queue_rebase) begin
+                copper_dispatch_validation_valid_q <= 1'b0;
+            end else if (!copper_dispatch_validation_valid_q) begin
+                copper_dispatch_validation_valid_q <= 1'b1;
+                copper_dispatch_endpoint_allowed_q <=
+                    copper_dispatch_advance <= 11'd1024 &&
+                    copper_dispatch_submission_used <= 11'd1024;
+                copper_dispatch_submission_producer_q <=
                     copper_dispatch_submission_producer;
+            end else if (copper_dispatch_ready) begin
+                copper_dispatch_validation_valid_q <= 1'b0;
+            end
+
+            if (copper_dispatch_valid && copper_dispatch_ready &&
+                copper_dispatch_allowed)
+                render_submission_producer <=
+                    copper_dispatch_submission_producer_q;
 
             if (boot_text_write_busy_q) begin
                 if (!boot_text_write_ready)
@@ -996,11 +1021,18 @@ reg [9:0] read_bank_valid_q;
             end
             if (s_axi_bvalid && s_axi_bready)
                 s_axi_bvalid <= 1'b0;
+            if (write_response_pending_q && !s_axi_bvalid) begin
+                write_response_pending_q <= 1'b0;
+                s_axi_bvalid <= 1'b1;
+                s_axi_bresp <= write_response_q;
+            end
 
             if (write_fire) begin
                 aw_pending <= 1'b0;
                 w_pending <= 1'b0;
                 write_execute_q <= 1'b1;
+                write_shadow_tile1_control_q <=
+                    awaddr_q[11:0] == 12'h0d8;
                 write_render_busy_q <= render_busy;
                 write_alignment_valid_q <= awaddr_q[1:0] == 2'b00;
                 write_prefix_valid_q <= awaddr_q[11:10] == 2'b00;
@@ -1024,34 +1056,41 @@ reg [9:0] read_bank_valid_q;
                     (wdata_q & 32'hfffff000) == 32'd0;
                 write_collision_row_valid_q <= wstrb_q == 4'hf &&
                     (wdata_q & 32'hffffffc0) == 32'd0;
+                write_render_control_valid_q <= wstrb_q == 4'hf &&
+                    wdata_q[31:3] == 29'd0;
             end
 
             if (write_execute_q) begin
                 write_execute_q <= 1'b0;
-                s_axi_bvalid <= 1'b1;
-                s_axi_bresp <= 2'b00;
+                write_response_pending_q <= 1'b1;
+                write_response_q <= 2'b00;
                 if (!write_alignment_valid_q || !write_prefix_valid_q) begin
-                    s_axi_bresp <= 2'b11;
+                    write_response_q <= 2'b11;
                 end else begin
+                    if (write_shadow_tile1_control_q)
+                        shadow_tile1_control <= merge_write(
+                            shadow_tile1_control, wdata_q, wstrb_q);
                     case (awaddr_q[9:0])
                         12'h00c: shadow_global_control <= merge_write(
                             shadow_global_control, wdata_q, wstrb_q);
                         12'h010: begin
                             if (!write_commit_request_valid_q) begin
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             end else if (commit_pending_q ||
                                 sprite_pending_valid ||
                                 sprite_activation_pending_q ||
                                 !sprite_scene_write_ready) begin
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                                 commit_errors <= commit_errors + 32'd1;
                             end else begin
                                 // Hold the response through validation and
                                 // cloning. The acknowledged PENDING snapshot
                                 // is immutable even if EDITABLE changes later.
-                                s_axi_bvalid <= 1'b0;
+                                write_response_pending_q <= 1'b0;
                                 commit_validation_pending_q <= 1'b1;
                                 validator_start_q <= 1'b1;
+                                tile_validator_select_q <= 1'b0;
+                                tile_validator_start_q <= 1'b1;
                                 sprite_validate_start <= 1'b1;
                                 framebuffer_validator_done_seen_q <= 1'b0;
                                 tile0_validator_done_seen_q <= 1'b0;
@@ -1101,15 +1140,14 @@ reg [9:0] read_bank_valid_q;
                             shadow_tile1_geometry, wdata_q, wstrb_q);
                         12'h0d4: shadow_tile1_count <= merge_write(
                             shadow_tile1_count, wdata_q, wstrb_q);
-                        12'h0d8: shadow_tile1_control <= merge_write(
-                            shadow_tile1_control, wdata_q, wstrb_q);
+                        12'h0d8: begin end
                         12'h100: framebuffer_palette_selector <= merge_write(
                             framebuffer_palette_selector, wdata_q, wstrb_q);
                         12'h104: begin
                             if (active_global_control_q[0] ||
                                 commit_pending_q || !write_full_strobe_q ||
                                 !palette_write_ready) begin
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             end else begin
                                 framebuffer_palette_write_enable <= 1'b1;
                                 framebuffer_palette_write_index <=
@@ -1123,7 +1161,7 @@ reg [9:0] read_bank_valid_q;
                             if (active_global_control_q[0] ||
                                 commit_pending_q || !write_full_strobe_q ||
                                 !palette_write_ready) begin
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             end else begin
                                 tile_palette_write_enable <= 1'b1;
                                 tile_palette_write_bank <=
@@ -1136,7 +1174,7 @@ reg [9:0] read_bank_valid_q;
                         12'h140: begin
                             if (!write_boot_control_valid_q ||
                                 !boot_text_commit_available) begin
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             end else begin
                                 shadow_boot_text_control <= wdata_q;
                             end
@@ -1144,7 +1182,7 @@ reg [9:0] read_bank_valid_q;
                         12'h144: begin
                             if (!write_boot_selector_valid_q ||
                                 !boot_text_write_available) begin
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             end else begin
                                 boot_text_selector <= wdata_q[7:0];
                             end
@@ -1152,7 +1190,7 @@ reg [9:0] read_bank_valid_q;
                         12'h148: begin
                             if (!write_boot_cell_valid_q ||
                                 !boot_text_write_available) begin
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             end else begin
                                 boot_text_write_enable <= 1'b1;
                                 boot_text_write_index <=
@@ -1169,7 +1207,7 @@ reg [9:0] read_bank_valid_q;
                         12'h14c: begin
                             if (!write_boot_commit_valid_q ||
                                 !boot_text_commit_available) begin
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             end else begin
                                 boot_text_commit_enable <= 1'b1;
                                 boot_text_commit_busy_q <= 1'b1;
@@ -1178,20 +1216,20 @@ reg [9:0] read_bank_valid_q;
                         end
                         12'h180: begin
                             if (!write_sprite_control_valid_q)
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             else
                                 shadow_sprite_control <= wdata_q;
                         end
                         12'h184: begin
                             if (!write_sprite_descriptor_selector_valid_q)
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             else
                                 sprite_descriptor_selector <= wdata_q[10:0];
                         end
                         12'h188: begin
                             if (!write_full_strobe_q ||
                                 !sprite_scene_write_ready) begin
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             end else begin
                                 sprite_descriptor_write_enable <= 1'b1;
                                 sprite_descriptor_write_index <=
@@ -1203,14 +1241,14 @@ reg [9:0] read_bank_valid_q;
                         end
                         12'h18c: begin
                             if (!write_sprite_palette_selector_valid_q)
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             else
                                 sprite_palette_selector <= wdata_q[11:0];
                         end
                         12'h190: begin
                             if (!write_full_strobe_q ||
                                 !sprite_scene_write_ready) begin
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             end else begin
                                 sprite_palette_write_enable <= 1'b1;
                                 sprite_palette_write_bank <=
@@ -1222,15 +1260,14 @@ reg [9:0] read_bank_valid_q;
                         end
                         12'h1b8: begin
                             if (!write_collision_row_valid_q)
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             else
                                 sprite_collision_read_row <= wdata_q[5:0];
                         end
                         12'h200: begin
-                            if (!write_full_strobe_q ||
-                                wdata_q[31:3] != 29'd0 ||
+                            if (!write_render_control_valid_q ||
                                 (wdata_q[1] && render_busy)) begin
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             end else begin
                                 render_control_q <= {31'd0, wdata_q[0]};
                                 if (wdata_q[1])
@@ -1242,14 +1279,14 @@ reg [9:0] read_bank_valid_q;
                         12'h204: begin
                             if (!write_full_strobe_q || render_enable ||
                                 write_render_busy_q)
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             else
                                 render_submission_ring_offset <= wdata_q;
                         end
                         12'h208: begin
                             if (!write_full_strobe_q ||
                                 wdata_q[31:11] != 21'd0)
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             else
                                 render_submission_producer <=
                                     wdata_q[10:0];
@@ -1257,14 +1294,14 @@ reg [9:0] read_bank_valid_q;
                         12'h210: begin
                             if (!write_full_strobe_q || render_enable ||
                                 write_render_busy_q)
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             else
                                 render_completion_ring_offset <= wdata_q;
                         end
                         12'h218: begin
                             if (!write_full_strobe_q ||
                                 wdata_q[31:11] != 21'd0)
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             else
                                 render_completion_consumer <=
                                     wdata_q[10:0];
@@ -1272,18 +1309,18 @@ reg [9:0] read_bank_valid_q;
                         12'h21c: begin
                             if (!write_full_strobe_q || render_enable ||
                                 write_render_busy_q || wdata_q == 32'd0)
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             else
                                 render_resource_generation <= wdata_q;
                         end
                         12'h244: begin
                             if (!write_full_strobe_q ||
                                 wdata_q[31:1] != 31'd0)
-                                s_axi_bresp <= 2'b10;
+                                write_response_q <= 2'b10;
                             else if (wdata_q[0])
                                 render_irq_pending_q <= 1'b0;
                         end
-                        default: s_axi_bresp <= 2'b11;
+                        default: write_response_q <= 2'b11;
                     endcase
                     if (write_changes_scene)
                         shadow_config_dirty_q <= 1'b1;
@@ -1296,13 +1333,16 @@ reg [9:0] read_bank_valid_q;
                 framebuffer_validator_result_q <=
                     framebuffer_validator_valid;
             end
-            if (commit_validation_pending_q && tile0_validator_done) begin
-                tile0_validator_done_seen_q <= 1'b1;
-                tile0_validator_result_q <= tile0_validator_valid;
-            end
-            if (commit_validation_pending_q && tile1_validator_done) begin
-                tile1_validator_done_seen_q <= 1'b1;
-                tile1_validator_result_q <= tile1_validator_valid;
+            if (commit_validation_pending_q && tile_validator_done) begin
+                if (!tile_validator_select_q) begin
+                    tile0_validator_done_seen_q <= 1'b1;
+                    tile0_validator_result_q <= tile_validator_valid;
+                    tile_validator_select_q <= 1'b1;
+                    tile_validator_start_q <= 1'b1;
+                end else begin
+                    tile1_validator_done_seen_q <= 1'b1;
+                    tile1_validator_result_q <= tile_validator_valid;
+                end
             end
             if (commit_validation_pending_q && sprite_validate_done) begin
                 sprite_validator_done_seen_q <= 1'b1;
@@ -1325,7 +1365,7 @@ reg [9:0] read_bank_valid_q;
             end
 
             if (commit_validation_pending_q && sprite_clone_pending_q &&
-                sprite_pending_ready) begin
+                sprite_pending_ready_q) begin
                 capture_pending_scene();
                 sprite_clone_pending_q <= 1'b0;
                 commit_validation_pending_q <= 1'b0;
@@ -1344,7 +1384,7 @@ reg [9:0] read_bank_valid_q;
 
             if (commit_quiesce && commit_pending_q &&
                 !sprite_activation_pending_q && commit_safe &&
-                sprite_pending_ready) begin
+                sprite_pending_ready_q) begin
                 sprite_activate_start <= 1'b1;
                 sprite_activation_pending_q <= 1'b1;
             end

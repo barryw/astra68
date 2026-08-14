@@ -74,6 +74,10 @@ SDRAM_SIZE = 32 * 1024 * 1024
 SECTOR = 512
 IMAGE_SECTORS = 2048
 BUFFER = SDRAM_BASE + 0x10000
+PANEL = 0xFFF01000
+PANEL_ID = PANEL + 0x00
+PANEL_RAW_INPUT = PANEL + 0x10
+PANEL_LED_DATA = PANEL + 0x18
 
 
 def image_byte(offset):
@@ -129,9 +133,10 @@ class QmpSocket(LineSocket):
 
 
 class AstraBlockTest:
-    def __init__(self, qtest, image_path):
+    def __init__(self, qtest, image_path, panel_path):
         self.qtest = qtest
         self.image_path = image_path
+        self.panel_path = panel_path
         self.swap = False
         self.next_id = 1
 
@@ -177,12 +182,14 @@ class AstraBlockTest:
         return request_id, self.read32(BLOCK_ERROR)
 
     def await_completion(self):
-        for _ in range(16):
+        deadline = time.monotonic() + 5.0
+        while True:
             if self.read32(BLOCK_QUEUE) & QUEUE_COMPLETION_VALID:
                 break
+            if time.monotonic() >= deadline:
+                raise AssertionError("completion never became valid")
             self.qtest.send("clock_step")
-        else:
-            raise AssertionError("completion never became valid")
+            time.sleep(0.001)
         completion = {
             "id": self.read32(BLOCK_CPL_ID),
             "status": self.read32(BLOCK_CPL_STATUS) >> 16,
@@ -201,7 +208,7 @@ class AstraBlockTest:
         assert self.read32(SYS_STATUS) & SYS_ASTRA_HOST, "SYS_ASTRA_HOST clear"
         assert self.read32(BLOCK_VERSION) == 0x00010000
         assert self.read32(BLOCK_CAPS) == 0x7, "read, write, and flush expected"
-        assert self.read32(BLOCK_MAX_SECTORS) == 16
+        assert self.read32(BLOCK_MAX_SECTORS) == 128
         state = self.read32(BLOCK_STATE)
         assert state == (STATE_LINK_UP | STATE_MEDIA_PRESENT |
                          STATE_WRITE_ENABLE), f"state 0x{state:x}"
@@ -210,6 +217,14 @@ class AstraBlockTest:
         assert sectors == IMAGE_SECTORS, sectors
         assert self.read32(BLOCK_MEDIA_GEN) == 1
         assert self.read32(BLOCK_HOST_GEN) != 0
+
+    def test_front_panel_bridge(self):
+        assert self.read32(PANEL_ID) == 0x504E4C30
+        assert self.read32(PANEL_RAW_INPUT) == 0x00000200
+        self.write32(PANEL_LED_DATA, 0x5)
+        with open(self.panel_path, "rb") as panel:
+            panel.seek(0x18)
+            assert struct.unpack("<I", panel.read(4))[0] == 0x5
 
     def test_reset_state_change(self):
         """A reset raises a state change; the storage IRQ holds until acked."""
@@ -242,6 +257,22 @@ class AstraBlockTest:
         want = bytes(image_byte(3 * SECTOR + i) for i in range(4 * SECTOR))
         assert got == want, "read data mismatch"
 
+        self.pop()
+        assert not self.read32(BLOCK_QUEUE) & QUEUE_COMPLETION_VALID
+        assert not self.read32(IRQ_RAW) & IRQ_STORAGE
+
+    def test_maximum_read(self):
+        sectors = self.read32(BLOCK_MAX_SECTORS)
+        request_id, error = self.submit(OP_READ, lba=64, sectors=sectors)
+        assert error == 0, f"maximum read rejected 0x{error:x}"
+        completion = self.await_completion()
+        assert completion["id"] == request_id
+        assert completion["status"] == 0
+        assert completion["sectors"] == sectors
+        got = self.read_memory(BUFFER, sectors * SECTOR)
+        want = bytes(image_byte(64 * SECTOR + i)
+                     for i in range(sectors * SECTOR))
+        assert got == want, "maximum read data mismatch"
         self.pop()
         assert not self.read32(BLOCK_QUEUE) & QUEUE_COMPLETION_VALID
         assert not self.read32(IRQ_RAW) & IRQ_STORAGE
@@ -284,7 +315,7 @@ class AstraBlockTest:
             ("bad op", dict(operation=9, sectors=1), ERROR_BAD_OP),
             ("zero count", dict(operation=OP_READ, sectors=0),
              ERROR_BAD_COUNT),
-            ("oversized count", dict(operation=OP_READ, sectors=17),
+            ("oversized count", dict(operation=OP_READ, sectors=129),
              ERROR_BAD_COUNT),
             ("flush with sectors", dict(operation=OP_FLUSH, sectors=1),
              ERROR_BAD_COUNT),
@@ -342,8 +373,10 @@ class AstraBlockTest:
     def run(self):
         self.detect_endian()
         self.test_identity()
+        self.test_front_panel_bridge()
         self.test_reset_state_change()
         self.test_read()
+        self.test_maximum_read()
         self.test_write_and_flush()
         self.test_read_back_written_data()
         self.test_rejections()
@@ -371,9 +404,16 @@ def main():
         image = os.path.join(temp, "storage.img")
         qtest_path = os.path.join(temp, "qtest.sock")
         qmp_path = os.path.join(temp, "qmp.sock")
+        panel_path = os.path.join(temp, "front-panel.bin")
         with open(rom, "wb") as output:
             output.write(struct.pack(">II", 0x02001000, 0xFFE00008))
         build_image(image)
+        with open(panel_path, "wb") as output:
+            output.truncate(4096)
+            output.seek(0x00)
+            output.write(struct.pack("<I", 0x504E4C30))
+            output.seek(0x10)
+            output.write(struct.pack("<I", 0x00000200))
 
         command = [
             args.qemu, "-machine", "astra68,accel=qtest", "-m",
@@ -384,6 +424,8 @@ def main():
             "-qmp", f"unix:{qmp_path},server=on,wait=off",
         ]
         environment = os.environ.copy()
+        environment["ASTRA_FRONT_PANEL_MMIO_PATH"] = panel_path
+        environment["ASTRA_FRONT_PANEL_MMIO_OFFSET"] = "0"
         private_lib = os.path.realpath(
             os.path.join(os.path.dirname(args.qemu), "..", "lib"))
         if os.path.isdir(private_lib):
@@ -391,15 +433,19 @@ def main():
             environment["LD_LIBRARY_PATH"] = (
                 private_lib if not existing else f"{private_lib}:{existing}"
             )
-        process = subprocess.Popen(command, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, text=True,
+        process = subprocess.Popen(command, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL,
                                    env=environment)
         qtest = qmp = None
         try:
             qtest = LineSocket(qtest_path)
             qmp = QmpSocket(qmp_path)
             qmp.execute("cont")
-            AstraBlockTest(qtest, image).run()
+            AstraBlockTest(qtest, image, panel_path).run()
+            with open(panel_path, "rb") as panel:
+                panel.seek(0x2C)
+                activity = struct.unpack("<I", panel.read(4))[0]
+            assert activity == 1, "block requests did not trigger HDD LED"
             print("ASTRA QEMU BLOCK PASS")
         finally:
             if qmp is not None:

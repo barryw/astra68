@@ -49,6 +49,7 @@ module astra_blend_premult_pipeline (
     reg apply1_q;
 
     reg [7:0] blend_alpha_q;
+    reg [7:0] blend_inverse_alpha_q;
     reg [31:0] blend_destination_q;
     reg [23:0] blend_source_q;
     reg blend_apply_q;
@@ -56,9 +57,9 @@ module astra_blend_premult_pipeline (
     (* use_dsp = "yes" *) reg [15:0] source_red_product_q;
     (* use_dsp = "yes" *) reg [15:0] source_green_product_q;
     (* use_dsp = "yes" *) reg [15:0] source_blue_product_q;
-    (* use_dsp = "yes" *) reg [15:0] destination_red_product_q;
-    (* use_dsp = "yes" *) reg [15:0] destination_green_product_q;
-    (* use_dsp = "yes" *) reg [15:0] destination_blue_product_q;
+    reg [15:0] destination_red_product_q;
+    reg [15:0] destination_green_product_q;
+    reg [15:0] destination_blue_product_q;
     (* use_dsp = "yes" *) reg [15:0] destination_alpha_product_q;
     reg [15:0] source_alpha_product_q;
     reg [31:0] destination2_q;
@@ -107,6 +108,7 @@ module astra_blend_premult_pipeline (
         apply1_q <= apply0_q;
 
         blend_alpha_q <= alpha_q;
+        blend_inverse_alpha_q <= 8'd255 - alpha_q;
         blend_destination_q <= destination1_q;
         blend_source_q <= source1_q;
         blend_apply_q <= apply1_q;
@@ -115,13 +117,13 @@ module astra_blend_premult_pipeline (
         source_green_product_q <= blend_source_q[15:8] * blend_alpha_q;
         source_blue_product_q <= blend_source_q[7:0] * blend_alpha_q;
         destination_red_product_q <=
-            blend_destination_q[23:16] * (8'd255 - blend_alpha_q);
+            blend_destination_q[23:16] * blend_inverse_alpha_q;
         destination_green_product_q <=
-            blend_destination_q[15:8] * (8'd255 - blend_alpha_q);
+            blend_destination_q[15:8] * blend_inverse_alpha_q;
         destination_blue_product_q <=
-            blend_destination_q[7:0] * (8'd255 - blend_alpha_q);
+            blend_destination_q[7:0] * blend_inverse_alpha_q;
         destination_alpha_product_q <=
-            blend_destination_q[31:24] * (8'd255 - blend_alpha_q);
+            blend_destination_q[31:24] * blend_inverse_alpha_q;
         source_alpha_product_q <= {blend_alpha_q, 8'd0} -
                                   {8'd0, blend_alpha_q};
         destination2_q <= blend_destination_q;

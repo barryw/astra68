@@ -8,14 +8,16 @@ STATUS_TARGET := $(OUT)/astra-boot-status
 SPRITE_TARGET := $(OUT)/astra-sprite-certify
 RENDER_TARGET := $(OUT)/astra-render-certify
 COPPER_TARGET := $(OUT)/astra-copper-certify
+AUDIO_TARGET := $(OUT)/astra-audio-certify
 TERMINAL_TARGET := $(OUT)/astra-terminal-display
 TARGETS := $(BOOT_TARGET) $(STATUS_TARGET) $(SPRITE_TARGET) $(RENDER_TARGET) \
-	$(COPPER_TARGET) $(TERMINAL_TARGET)
+	$(COPPER_TARGET) $(AUDIO_TARGET) $(TERMINAL_TARGET)
 COMMON_SOURCES := astra_graphics_hw.c astra_boot_text.c
 COMMON_HEADERS := astra_graphics_hw.h astra_boot_text.h
 TERMINAL_FONT_SOURCE := ../../soc/post_fonts.hex
 TERMINAL_FONT_HEADER := $(OUT)/astra_terminal_font.inc
 ASTRA_INCLUDE := ../../../sw/include
+NDK_INCLUDE := ../../../ndk/include
 PROTOCOL_SPEC := ../graphics/protocol/astra_render_v1.json
 PROTOCOL_GENERATOR := ../graphics/protocol/generate_protocol.py
 CFLAGS := -std=c11 -O2 -pipe -Wall -Wextra -Werror -Wformat=2 \
@@ -42,9 +44,9 @@ $(STATUS_TARGET): astra_boot_status.c $(COMMON_SOURCES) $(COMMON_HEADERS)
 		$(LDFLAGS) -o $@
 
 $(SPRITE_TARGET): astra_sprite_certify.c astra_graphics_hw.c \
-		astra_graphics_hw.h
+		astra_graphics_hw.h $(NDK_INCLUDE)/astra/graphics.h
 	mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections \
+	$(CC) $(CFLAGS) -I$(NDK_INCLUDE) -ffunction-sections -fdata-sections \
 		astra_sprite_certify.c astra_graphics_hw.c \
 		$(LDFLAGS) -o $@
 
@@ -61,6 +63,11 @@ $(COPPER_TARGET): astra_copper_certify.c astra_graphics_hw.c \
 	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections \
 		astra_copper_certify.c astra_graphics_hw.c \
 		$(LDFLAGS) -o $@
+
+$(AUDIO_TARGET): astra_audio_certify.c
+	mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections \
+		astra_audio_certify.c $(LDFLAGS) -o $@
 
 $(TERMINAL_FONT_HEADER): $(TERMINAL_FONT_SOURCE)
 	mkdir -p $(OUT)
@@ -80,23 +87,27 @@ $(TERMINAL_TARGET): astra_terminal_display.c $(COMMON_SOURCES) \
 		astra_terminal_display.c $(COMMON_SOURCES) \
 		$(LDFLAGS) -o $@
 
-analyze: astra_render_protocol.h
+analyze: astra_render_protocol.h $(TERMINAL_FONT_HEADER)
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only \
 		astra_graphics_boot.c $(COMMON_SOURCES)
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only \
 		astra_boot_status.c $(COMMON_SOURCES)
-	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only \
+	$(CC) $(CFLAGS) -I$(NDK_INCLUDE) -fanalyzer -fsyntax-only \
 		astra_sprite_certify.c astra_graphics_hw.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only \
 		astra_render_certify.c astra_graphics_hw.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only \
 		astra_copper_certify.c astra_graphics_hw.c
+	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_audio_certify.c
 	$(CC) $(CFLAGS) -I$(OUT) -I$(ASTRA_INCLUDE) -fanalyzer -fsyntax-only \
 		astra_terminal_display.c $(COMMON_SOURCES)
 
-test-host: $(OUT)/test-astra-boot-text $(OUT)/test-astra-terminal-display
+test-host: $(OUT)/test-astra-boot-text $(OUT)/test-astra-terminal-display \
+		$(OUT)/test-astra-audio
 	$(OUT)/test-astra-boot-text
 	$(OUT)/test-astra-terminal-display --self-test
+	$(OUT)/test-astra-audio --self-test
+	$(PYTHON) test-astra-terminal-start.py
 
 $(OUT)/test-astra-boot-text: test_astra_boot_text.c \
 		$(COMMON_SOURCES) $(COMMON_HEADERS)
@@ -113,6 +124,11 @@ $(OUT)/test-astra-terminal-display: astra_terminal_display.c \
 	$(HOSTCC) $(CFLAGS) -I$(OUT) -I$(ASTRA_INCLUDE) astra_terminal_display.c \
 		$(COMMON_SOURCES) -o $@
 
+$(OUT)/test-astra-audio: astra_audio_certify.c
+	mkdir -p $(OUT)
+	$(HOSTCC) $(CFLAGS) astra_audio_certify.c -o $@
+
 clean:
 	rm -f $(TARGETS) $(OUT)/test-astra-boot-text \
-		$(OUT)/test-astra-terminal-display $(TERMINAL_FONT_HEADER)
+		$(OUT)/test-astra-terminal-display $(OUT)/test-astra-audio \
+		$(TERMINAL_FONT_HEADER)

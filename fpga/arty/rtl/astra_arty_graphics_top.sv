@@ -8,6 +8,7 @@
 
 module astra_arty_graphics_top (
     output wire [3:0]  led,
+    input  wire [1:0]  sw,
 
     output wire        hdmi_tx_clk_p,
     output wire        hdmi_tx_clk_n,
@@ -41,6 +42,26 @@ module astra_arty_graphics_top (
     wire fclk_clk1;
     wire [0:0] graphics_resetn;
 
+    wire [31:0] host_ctrl_araddr;
+    wire [2:0] host_ctrl_arprot;
+    wire host_ctrl_arready;
+    wire host_ctrl_arvalid;
+    wire [31:0] host_ctrl_awaddr;
+    wire [2:0] host_ctrl_awprot;
+    wire host_ctrl_awready;
+    wire host_ctrl_awvalid;
+    wire host_ctrl_bready;
+    wire [1:0] host_ctrl_bresp;
+    wire host_ctrl_bvalid;
+    wire [31:0] host_ctrl_rdata;
+    wire host_ctrl_rready;
+    wire [1:0] host_ctrl_rresp;
+    wire host_ctrl_rvalid;
+    wire [31:0] host_ctrl_wdata;
+    wire host_ctrl_wready;
+    wire [3:0] host_ctrl_wstrb;
+    wire host_ctrl_wvalid;
+
     wire [31:0] ctrl_araddr;
     wire [2:0] ctrl_arprot;
     wire ctrl_arready;
@@ -60,6 +81,66 @@ module astra_arty_graphics_top (
     wire ctrl_wready;
     wire [3:0] ctrl_wstrb;
     wire ctrl_wvalid;
+
+    wire [31:0] audio_ctrl_araddr;
+    wire [2:0] audio_ctrl_arprot;
+    wire audio_ctrl_arready;
+    wire audio_ctrl_arvalid;
+    wire [31:0] audio_ctrl_awaddr;
+    wire [2:0] audio_ctrl_awprot;
+    wire audio_ctrl_awready;
+    wire audio_ctrl_awvalid;
+    wire audio_ctrl_bready;
+    wire [1:0] audio_ctrl_bresp;
+    wire audio_ctrl_bvalid;
+    wire [31:0] audio_ctrl_rdata;
+    wire audio_ctrl_rready;
+    wire [1:0] audio_ctrl_rresp;
+    wire audio_ctrl_rvalid;
+    wire [31:0] audio_ctrl_wdata;
+    wire audio_ctrl_wready;
+    wire [3:0] audio_ctrl_wstrb;
+    wire audio_ctrl_wvalid;
+
+    wire [31:0] peripheral_ctrl_araddr;
+    wire [2:0] peripheral_ctrl_arprot;
+    wire peripheral_ctrl_arready;
+    wire peripheral_ctrl_arvalid;
+    wire [31:0] peripheral_ctrl_awaddr;
+    wire [2:0] peripheral_ctrl_awprot;
+    wire peripheral_ctrl_awready;
+    wire peripheral_ctrl_awvalid;
+    wire peripheral_ctrl_bready;
+    wire [1:0] peripheral_ctrl_bresp;
+    wire peripheral_ctrl_bvalid;
+    wire [31:0] peripheral_ctrl_rdata;
+    wire peripheral_ctrl_rready;
+    wire [1:0] peripheral_ctrl_rresp;
+    wire peripheral_ctrl_rvalid;
+    wire [31:0] peripheral_ctrl_wdata;
+    wire peripheral_ctrl_wready;
+    wire [3:0] peripheral_ctrl_wstrb;
+    wire peripheral_ctrl_wvalid;
+
+    wire [31:0] panel_ctrl_araddr;
+    wire [2:0] panel_ctrl_arprot;
+    wire panel_ctrl_arready;
+    wire panel_ctrl_arvalid;
+    wire [31:0] panel_ctrl_awaddr;
+    wire [2:0] panel_ctrl_awprot;
+    wire panel_ctrl_awready;
+    wire panel_ctrl_awvalid;
+    wire panel_ctrl_bready;
+    wire [1:0] panel_ctrl_bresp;
+    wire panel_ctrl_bvalid;
+    wire [31:0] panel_ctrl_rdata;
+    wire panel_ctrl_rready;
+    wire [1:0] panel_ctrl_rresp;
+    wire panel_ctrl_rvalid;
+    wire [31:0] panel_ctrl_wdata;
+    wire panel_ctrl_wready;
+    wire [3:0] panel_ctrl_wstrb;
+    wire panel_ctrl_wvalid;
 
     wire [5:0] fb_arid;
     wire [31:0] fb_araddr;
@@ -129,6 +210,74 @@ module astra_arty_graphics_top (
     wire sprite_rvalid;
     wire sprite_rready;
 
+    wire [5:0] scene_arid;
+    wire [31:0] scene_araddr;
+    wire [7:0] scene_arlen;
+    wire [2:0] scene_arsize;
+    wire [1:0] scene_arburst;
+    wire [3:0] scene_arcache;
+    wire [2:0] scene_arprot;
+    wire [3:0] scene_arqos;
+    wire scene_arvalid;
+    wire scene_arready;
+    wire [5:0] scene_rid;
+    wire [63:0] scene_rdata;
+    wire [1:0] scene_rresp;
+    wire scene_rlast;
+    wire scene_rvalid;
+    wire scene_rready;
+    wire [2:0] scene_client_arready;
+    wire [17:0] scene_client_rid;
+    wire [191:0] scene_client_rdata;
+    wire [5:0] scene_client_rresp;
+    wire [2:0] scene_client_rlast;
+    wire [2:0] scene_client_rvalid;
+
+    assign {sprite_arready, tile1_arready, tile0_arready} =
+        scene_client_arready;
+    assign {sprite_rid, tile1_rid, tile0_rid} = scene_client_rid;
+    assign {sprite_rdata, tile1_rdata, tile0_rdata} = scene_client_rdata;
+    assign {sprite_rresp, tile1_rresp, tile0_rresp} = scene_client_rresp;
+    assign {sprite_rlast, tile1_rlast, tile0_rlast} = scene_client_rlast;
+    assign {sprite_rvalid, tile1_rvalid, tile0_rvalid} = scene_client_rvalid;
+
+    astra_axi_read_3to1 scene_read_arbiter (
+        .aclk(fclk_clk1),
+        .aresetn(graphics_resetn[0]),
+        .s_axi_arid({sprite_arid, tile1_arid, tile0_arid}),
+        .s_axi_araddr({sprite_araddr, tile1_araddr, tile0_araddr}),
+        .s_axi_arlen({sprite_arlen, tile1_arlen, tile0_arlen}),
+        .s_axi_arsize({sprite_arsize, tile1_arsize, tile0_arsize}),
+        .s_axi_arburst({sprite_arburst, tile1_arburst, tile0_arburst}),
+        .s_axi_arcache({sprite_arcache, tile1_arcache, tile0_arcache}),
+        .s_axi_arprot({sprite_arprot, tile1_arprot, tile0_arprot}),
+        .s_axi_arqos({sprite_arqos, tile1_arqos, tile0_arqos}),
+        .s_axi_arvalid({sprite_arvalid, tile1_arvalid, tile0_arvalid}),
+        .s_axi_arready(scene_client_arready),
+        .s_axi_rid(scene_client_rid),
+        .s_axi_rdata(scene_client_rdata),
+        .s_axi_rresp(scene_client_rresp),
+        .s_axi_rlast(scene_client_rlast),
+        .s_axi_rvalid(scene_client_rvalid),
+        .s_axi_rready({sprite_rready, tile1_rready, tile0_rready}),
+        .m_axi_arid(scene_arid),
+        .m_axi_araddr(scene_araddr),
+        .m_axi_arlen(scene_arlen),
+        .m_axi_arsize(scene_arsize),
+        .m_axi_arburst(scene_arburst),
+        .m_axi_arcache(scene_arcache),
+        .m_axi_arprot(scene_arprot),
+        .m_axi_arqos(scene_arqos),
+        .m_axi_arvalid(scene_arvalid),
+        .m_axi_arready(scene_arready),
+        .m_axi_rid(scene_rid),
+        .m_axi_rdata(scene_rdata),
+        .m_axi_rresp(scene_rresp),
+        .m_axi_rlast(scene_rlast),
+        .m_axi_rvalid(scene_rvalid),
+        .m_axi_rready(scene_rready)
+    );
+
     wire [5:0] render_read_arid;
     wire [31:0] render_read_araddr;
     wire [7:0] render_read_arlen;
@@ -189,25 +338,25 @@ module astra_arty_graphics_top (
         .FIXED_IO_ps_clk(FIXED_IO_ps_clk),
         .FIXED_IO_ps_porb(FIXED_IO_ps_porb),
         .FIXED_IO_ps_srstb(FIXED_IO_ps_srstb),
-        .M_AXI_CTRL_araddr(ctrl_araddr),
-        .M_AXI_CTRL_arprot(ctrl_arprot),
-        .M_AXI_CTRL_arready(ctrl_arready),
-        .M_AXI_CTRL_arvalid(ctrl_arvalid),
-        .M_AXI_CTRL_awaddr(ctrl_awaddr),
-        .M_AXI_CTRL_awprot(ctrl_awprot),
-        .M_AXI_CTRL_awready(ctrl_awready),
-        .M_AXI_CTRL_awvalid(ctrl_awvalid),
-        .M_AXI_CTRL_bready(ctrl_bready),
-        .M_AXI_CTRL_bresp(ctrl_bresp),
-        .M_AXI_CTRL_bvalid(ctrl_bvalid),
-        .M_AXI_CTRL_rdata(ctrl_rdata),
-        .M_AXI_CTRL_rready(ctrl_rready),
-        .M_AXI_CTRL_rresp(ctrl_rresp),
-        .M_AXI_CTRL_rvalid(ctrl_rvalid),
-        .M_AXI_CTRL_wdata(ctrl_wdata),
-        .M_AXI_CTRL_wready(ctrl_wready),
-        .M_AXI_CTRL_wstrb(ctrl_wstrb),
-        .M_AXI_CTRL_wvalid(ctrl_wvalid),
+        .M_AXI_CTRL_araddr(host_ctrl_araddr),
+        .M_AXI_CTRL_arprot(host_ctrl_arprot),
+        .M_AXI_CTRL_arready(host_ctrl_arready),
+        .M_AXI_CTRL_arvalid(host_ctrl_arvalid),
+        .M_AXI_CTRL_awaddr(host_ctrl_awaddr),
+        .M_AXI_CTRL_awprot(host_ctrl_awprot),
+        .M_AXI_CTRL_awready(host_ctrl_awready),
+        .M_AXI_CTRL_awvalid(host_ctrl_awvalid),
+        .M_AXI_CTRL_bready(host_ctrl_bready),
+        .M_AXI_CTRL_bresp(host_ctrl_bresp),
+        .M_AXI_CTRL_bvalid(host_ctrl_bvalid),
+        .M_AXI_CTRL_rdata(host_ctrl_rdata),
+        .M_AXI_CTRL_rready(host_ctrl_rready),
+        .M_AXI_CTRL_rresp(host_ctrl_rresp),
+        .M_AXI_CTRL_rvalid(host_ctrl_rvalid),
+        .M_AXI_CTRL_wdata(host_ctrl_wdata),
+        .M_AXI_CTRL_wready(host_ctrl_wready),
+        .M_AXI_CTRL_wstrb(host_ctrl_wstrb),
+        .M_AXI_CTRL_wvalid(host_ctrl_wvalid),
         .S_AXI_FB_araddr(fb_araddr),
         .S_AXI_FB_arburst(fb_arburst),
         .S_AXI_FB_arcache(fb_arcache),
@@ -225,57 +374,23 @@ module astra_arty_graphics_top (
         .S_AXI_FB_rready(fb_rready),
         .S_AXI_FB_rresp(fb_rresp),
         .S_AXI_FB_rvalid(fb_rvalid),
-        .S_AXI_TILE0_araddr(tile0_araddr),
-        .S_AXI_TILE0_arburst(tile0_arburst),
-        .S_AXI_TILE0_arcache(tile0_arcache),
-        .S_AXI_TILE0_arid(tile0_arid),
-        .S_AXI_TILE0_arlen(tile0_arlen),
-        .S_AXI_TILE0_arlock(1'b0),
-        .S_AXI_TILE0_arprot(tile0_arprot),
-        .S_AXI_TILE0_arqos(tile0_arqos),
-        .S_AXI_TILE0_arready(tile0_arready),
-        .S_AXI_TILE0_arsize(tile0_arsize),
-        .S_AXI_TILE0_arvalid(tile0_arvalid),
-        .S_AXI_TILE0_rdata(tile0_rdata),
-        .S_AXI_TILE0_rid(tile0_rid),
-        .S_AXI_TILE0_rlast(tile0_rlast),
-        .S_AXI_TILE0_rready(tile0_rready),
-        .S_AXI_TILE0_rresp(tile0_rresp),
-        .S_AXI_TILE0_rvalid(tile0_rvalid),
-        .S_AXI_TILE1_araddr(tile1_araddr),
-        .S_AXI_TILE1_arburst(tile1_arburst),
-        .S_AXI_TILE1_arcache(tile1_arcache),
-        .S_AXI_TILE1_arid(tile1_arid),
-        .S_AXI_TILE1_arlen(tile1_arlen),
-        .S_AXI_TILE1_arlock(1'b0),
-        .S_AXI_TILE1_arprot(tile1_arprot),
-        .S_AXI_TILE1_arqos(tile1_arqos),
-        .S_AXI_TILE1_arready(tile1_arready),
-        .S_AXI_TILE1_arsize(tile1_arsize),
-        .S_AXI_TILE1_arvalid(tile1_arvalid),
-        .S_AXI_TILE1_rdata(tile1_rdata),
-        .S_AXI_TILE1_rid(tile1_rid),
-        .S_AXI_TILE1_rlast(tile1_rlast),
-        .S_AXI_TILE1_rready(tile1_rready),
-        .S_AXI_TILE1_rresp(tile1_rresp),
-        .S_AXI_TILE1_rvalid(tile1_rvalid),
-        .S_AXI_SPRITE_araddr(sprite_araddr),
-        .S_AXI_SPRITE_arburst(sprite_arburst),
-        .S_AXI_SPRITE_arcache(sprite_arcache),
-        .S_AXI_SPRITE_arid(sprite_arid),
-        .S_AXI_SPRITE_arlen(sprite_arlen),
-        .S_AXI_SPRITE_arlock(1'b0),
-        .S_AXI_SPRITE_arprot(sprite_arprot),
-        .S_AXI_SPRITE_arqos(sprite_arqos),
-        .S_AXI_SPRITE_arready(sprite_arready),
-        .S_AXI_SPRITE_arsize(sprite_arsize),
-        .S_AXI_SPRITE_arvalid(sprite_arvalid),
-        .S_AXI_SPRITE_rdata(sprite_rdata),
-        .S_AXI_SPRITE_rid(sprite_rid),
-        .S_AXI_SPRITE_rlast(sprite_rlast),
-        .S_AXI_SPRITE_rready(sprite_rready),
-        .S_AXI_SPRITE_rresp(sprite_rresp),
-        .S_AXI_SPRITE_rvalid(sprite_rvalid),
+        .S_AXI_SCENE_araddr(scene_araddr),
+        .S_AXI_SCENE_arburst(scene_arburst),
+        .S_AXI_SCENE_arcache(scene_arcache),
+        .S_AXI_SCENE_arid(scene_arid),
+        .S_AXI_SCENE_arlen(scene_arlen),
+        .S_AXI_SCENE_arlock(1'b0),
+        .S_AXI_SCENE_arprot(scene_arprot),
+        .S_AXI_SCENE_arqos(scene_arqos),
+        .S_AXI_SCENE_arready(scene_arready),
+        .S_AXI_SCENE_arsize(scene_arsize),
+        .S_AXI_SCENE_arvalid(scene_arvalid),
+        .S_AXI_SCENE_rdata(scene_rdata),
+        .S_AXI_SCENE_rid(scene_rid),
+        .S_AXI_SCENE_rlast(scene_rlast),
+        .S_AXI_SCENE_rready(scene_rready),
+        .S_AXI_SCENE_rresp(scene_rresp),
+        .S_AXI_SCENE_rvalid(scene_rvalid),
         .S_AXI_RENDER_READ_araddr(render_read_araddr),
         .S_AXI_RENDER_READ_arburst(render_read_arburst),
         .S_AXI_RENDER_READ_arcache(render_read_arcache),
@@ -317,6 +432,140 @@ module astra_arty_graphics_top (
         .fclk_clk1(fclk_clk1),
         .graphics_resetn(graphics_resetn),
         .render_interrupt(render_interrupt)
+    );
+
+    astra_axi_lite_1to2 #(
+        .SLAVE1_MASK(32'h0000ff00),
+        .SLAVE1_VALUE(32'h00006000),
+        .SLAVE1_ALT_MASK(32'h0000ff00),
+        .SLAVE1_ALT_VALUE(32'h00007000)
+    ) host_control_split_i (
+        .clk(fclk_clk1),
+        .reset(~graphics_resetn[0]),
+        .s_awaddr(host_ctrl_awaddr),
+        .s_awprot(host_ctrl_awprot),
+        .s_awvalid(host_ctrl_awvalid),
+        .s_awready(host_ctrl_awready),
+        .s_wdata(host_ctrl_wdata),
+        .s_wstrb(host_ctrl_wstrb),
+        .s_wvalid(host_ctrl_wvalid),
+        .s_wready(host_ctrl_wready),
+        .s_bresp(host_ctrl_bresp),
+        .s_bvalid(host_ctrl_bvalid),
+        .s_bready(host_ctrl_bready),
+        .s_araddr(host_ctrl_araddr),
+        .s_arprot(host_ctrl_arprot),
+        .s_arvalid(host_ctrl_arvalid),
+        .s_arready(host_ctrl_arready),
+        .s_rdata(host_ctrl_rdata),
+        .s_rresp(host_ctrl_rresp),
+        .s_rvalid(host_ctrl_rvalid),
+        .s_rready(host_ctrl_rready),
+        .m0_awaddr(ctrl_awaddr),
+        .m0_awprot(ctrl_awprot),
+        .m0_awvalid(ctrl_awvalid),
+        .m0_awready(ctrl_awready),
+        .m0_wdata(ctrl_wdata),
+        .m0_wstrb(ctrl_wstrb),
+        .m0_wvalid(ctrl_wvalid),
+        .m0_wready(ctrl_wready),
+        .m0_bresp(ctrl_bresp),
+        .m0_bvalid(ctrl_bvalid),
+        .m0_bready(ctrl_bready),
+        .m0_araddr(ctrl_araddr),
+        .m0_arprot(ctrl_arprot),
+        .m0_arvalid(ctrl_arvalid),
+        .m0_arready(ctrl_arready),
+        .m0_rdata(ctrl_rdata),
+        .m0_rresp(ctrl_rresp),
+        .m0_rvalid(ctrl_rvalid),
+        .m0_rready(ctrl_rready),
+        .m1_awaddr(peripheral_ctrl_awaddr),
+        .m1_awprot(peripheral_ctrl_awprot),
+        .m1_awvalid(peripheral_ctrl_awvalid),
+        .m1_awready(peripheral_ctrl_awready),
+        .m1_wdata(peripheral_ctrl_wdata),
+        .m1_wstrb(peripheral_ctrl_wstrb),
+        .m1_wvalid(peripheral_ctrl_wvalid),
+        .m1_wready(peripheral_ctrl_wready),
+        .m1_bresp(peripheral_ctrl_bresp),
+        .m1_bvalid(peripheral_ctrl_bvalid),
+        .m1_bready(peripheral_ctrl_bready),
+        .m1_araddr(peripheral_ctrl_araddr),
+        .m1_arprot(peripheral_ctrl_arprot),
+        .m1_arvalid(peripheral_ctrl_arvalid),
+        .m1_arready(peripheral_ctrl_arready),
+        .m1_rdata(peripheral_ctrl_rdata),
+        .m1_rresp(peripheral_ctrl_rresp),
+        .m1_rvalid(peripheral_ctrl_rvalid),
+        .m1_rready(peripheral_ctrl_rready)
+    );
+
+    astra_axi_lite_1to2 #(
+        .SLAVE1_MASK(32'h0000ff00),
+        .SLAVE1_VALUE(32'h00007000),
+        .SLAVE1_ALT_MASK(32'hffffffff),
+        .SLAVE1_ALT_VALUE(32'hffffffff)
+    ) peripheral_control_split_i (
+        .clk(fclk_clk1),
+        .reset(~graphics_resetn[0]),
+        .s_awaddr(peripheral_ctrl_awaddr),
+        .s_awprot(peripheral_ctrl_awprot),
+        .s_awvalid(peripheral_ctrl_awvalid),
+        .s_awready(peripheral_ctrl_awready),
+        .s_wdata(peripheral_ctrl_wdata),
+        .s_wstrb(peripheral_ctrl_wstrb),
+        .s_wvalid(peripheral_ctrl_wvalid),
+        .s_wready(peripheral_ctrl_wready),
+        .s_bresp(peripheral_ctrl_bresp),
+        .s_bvalid(peripheral_ctrl_bvalid),
+        .s_bready(peripheral_ctrl_bready),
+        .s_araddr(peripheral_ctrl_araddr),
+        .s_arprot(peripheral_ctrl_arprot),
+        .s_arvalid(peripheral_ctrl_arvalid),
+        .s_arready(peripheral_ctrl_arready),
+        .s_rdata(peripheral_ctrl_rdata),
+        .s_rresp(peripheral_ctrl_rresp),
+        .s_rvalid(peripheral_ctrl_rvalid),
+        .s_rready(peripheral_ctrl_rready),
+        .m0_awaddr(audio_ctrl_awaddr),
+        .m0_awprot(audio_ctrl_awprot),
+        .m0_awvalid(audio_ctrl_awvalid),
+        .m0_awready(audio_ctrl_awready),
+        .m0_wdata(audio_ctrl_wdata),
+        .m0_wstrb(audio_ctrl_wstrb),
+        .m0_wvalid(audio_ctrl_wvalid),
+        .m0_wready(audio_ctrl_wready),
+        .m0_bresp(audio_ctrl_bresp),
+        .m0_bvalid(audio_ctrl_bvalid),
+        .m0_bready(audio_ctrl_bready),
+        .m0_araddr(audio_ctrl_araddr),
+        .m0_arprot(audio_ctrl_arprot),
+        .m0_arvalid(audio_ctrl_arvalid),
+        .m0_arready(audio_ctrl_arready),
+        .m0_rdata(audio_ctrl_rdata),
+        .m0_rresp(audio_ctrl_rresp),
+        .m0_rvalid(audio_ctrl_rvalid),
+        .m0_rready(audio_ctrl_rready),
+        .m1_awaddr(panel_ctrl_awaddr),
+        .m1_awprot(panel_ctrl_awprot),
+        .m1_awvalid(panel_ctrl_awvalid),
+        .m1_awready(panel_ctrl_awready),
+        .m1_wdata(panel_ctrl_wdata),
+        .m1_wstrb(panel_ctrl_wstrb),
+        .m1_wvalid(panel_ctrl_wvalid),
+        .m1_wready(panel_ctrl_wready),
+        .m1_bresp(panel_ctrl_bresp),
+        .m1_bvalid(panel_ctrl_bvalid),
+        .m1_bready(panel_ctrl_bready),
+        .m1_araddr(panel_ctrl_araddr),
+        .m1_arprot(panel_ctrl_arprot),
+        .m1_arvalid(panel_ctrl_arvalid),
+        .m1_arready(panel_ctrl_arready),
+        .m1_rdata(panel_ctrl_rdata),
+        .m1_rresp(panel_ctrl_rresp),
+        .m1_rvalid(panel_ctrl_rvalid),
+        .m1_rready(panel_ctrl_rready)
     );
 
     // Exact 74.25/371.25 MHz clocks from the qualified transport shell.
@@ -366,6 +615,74 @@ module astra_arty_graphics_top (
     BUFG pixel_buf_i    (.I(clk_pixel_raw), .O(clk_pixel));
     BUFG tmds_buf_i     (.I(clk_tmds_raw), .O(clk_tmds_x5));
 
+    // A separate exact 48 MHz MMCM avoids coupling the HDMI audio rate to
+    // either the quantized renderer clock or the 74.25 MHz video clock.
+    wire audio_feedback;
+    wire audio_feedback_buf;
+    wire clk_audio_48m_raw;
+    wire clk_audio_48m;
+    wire audio_locked;
+    MMCME2_BASE #(
+        .BANDWIDTH("OPTIMIZED"),
+        .CLKIN1_PERIOD(10.000),
+        .DIVCLK_DIVIDE(5),
+        .CLKFBOUT_MULT_F(48.000),
+        .CLKOUT0_DIVIDE_F(20.000),
+        .CLKOUT0_DUTY_CYCLE(0.5),
+        .CLKOUT0_PHASE(0.0),
+        .CLKFBOUT_PHASE(0.0),
+        .STARTUP_WAIT("FALSE")
+    ) audio_mmcm_i (
+        .CLKIN1(fclk_clk0),
+        .CLKFBIN(audio_feedback_buf),
+        .CLKFBOUT(audio_feedback),
+        .CLKFBOUTB(),
+        .CLKOUT0(clk_audio_48m_raw),
+        .CLKOUT0B(),
+        .CLKOUT1(),
+        .CLKOUT1B(),
+        .CLKOUT2(),
+        .CLKOUT2B(),
+        .CLKOUT3(),
+        .CLKOUT3B(),
+        .CLKOUT4(),
+        .CLKOUT5(),
+        .CLKOUT6(),
+        .LOCKED(audio_locked),
+        .PWRDWN(1'b0),
+        .RST(~graphics_resetn[0])
+    );
+    BUFG audio_feedback_buf_i (
+        .I(audio_feedback),
+        .O(audio_feedback_buf)
+    );
+    BUFG audio_48m_buf_i (.I(clk_audio_48m_raw), .O(clk_audio_48m));
+
+    reg [8:0] audio_divider_q = 9'd0;
+    reg audio_clock_raw_q = 1'b0;
+    always @(posedge clk_audio_48m or negedge audio_locked) begin
+        if (!audio_locked) begin
+            audio_divider_q <= 9'd0;
+            audio_clock_raw_q <= 1'b0;
+        end else if (audio_divider_q == 9'd499) begin
+            audio_divider_q <= 9'd0;
+            audio_clock_raw_q <= ~audio_clock_raw_q;
+        end else begin
+            audio_divider_q <= audio_divider_q + 9'd1;
+        end
+    end
+    wire clk_audio;
+    BUFG audio_sample_buf_i (.I(audio_clock_raw_q), .O(clk_audio));
+
+    (* ASYNC_REG = "TRUE" *) reg [3:0] audio_reset_sync = 4'hf;
+    always @(posedge clk_audio or negedge audio_locked) begin
+        if (!audio_locked)
+            audio_reset_sync <= 4'hf;
+        else
+            audio_reset_sync <= {audio_reset_sync[2:0], 1'b0};
+    end
+    wire audio_reset = audio_reset_sync[3];
+
     (* ASYNC_REG = "TRUE" *) reg [3:0] reset_sync = 4'hf;
     always @(posedge clk_pixel or negedge video_locked) begin
         if (!video_locked)
@@ -395,6 +712,34 @@ module astra_arty_graphics_top (
     wire [31:0] commit_errors;
     wire [31:0] commit_deferrals;
     wire scene_active;
+    wire [1:0][23:0] audio_sample_word;
+
+    astra_hdmi_audio audio_i (
+        .build_clk(fclk_clk1),
+        .build_reset(build_reset),
+        .audio_clk(clk_audio),
+        .audio_reset(audio_reset),
+        .audio_sample_word(audio_sample_word),
+        .s_axi_awaddr(audio_ctrl_awaddr),
+        .s_axi_awprot(audio_ctrl_awprot),
+        .s_axi_awvalid(audio_ctrl_awvalid),
+        .s_axi_awready(audio_ctrl_awready),
+        .s_axi_wdata(audio_ctrl_wdata),
+        .s_axi_wstrb(audio_ctrl_wstrb),
+        .s_axi_wvalid(audio_ctrl_wvalid),
+        .s_axi_wready(audio_ctrl_wready),
+        .s_axi_bresp(audio_ctrl_bresp),
+        .s_axi_bvalid(audio_ctrl_bvalid),
+        .s_axi_bready(audio_ctrl_bready),
+        .s_axi_araddr(audio_ctrl_araddr),
+        .s_axi_arprot(audio_ctrl_arprot),
+        .s_axi_arvalid(audio_ctrl_arvalid),
+        .s_axi_arready(audio_ctrl_arready),
+        .s_axi_rdata(audio_ctrl_rdata),
+        .s_axi_rresp(audio_ctrl_rresp),
+        .s_axi_rvalid(audio_ctrl_rvalid),
+        .s_axi_rready(audio_ctrl_rready)
+    );
 
     astra_graphics_pipeline pipeline_i (
         .build_clk(fclk_clk1),
@@ -537,17 +882,21 @@ module astra_arty_graphics_top (
     hdmi #(
         .VIDEO_ID_CODE(4),
         .IT_CONTENT(1'b1),
-        .DVI_OUTPUT(1'b1),
+        .DVI_OUTPUT(1'b0),
         .VIDEO_REFRESH_RATE_MILLIHZ(60000),
+        .AUDIO_RATE(48000),
+        .AUDIO_BIT_WIDTH(24),
+        .VENDOR_NAME({"Astra68", 8'd0}),
+        .PRODUCT_DESCRIPTION("Astra68 Computer"),
         .START_X(0),
         .START_Y(0)
     ) hdmi_i (
         .clk_pixel_x5(clk_tmds_x5),
         .clk_pixel(clk_pixel),
-        .clk_audio(1'b0),
+        .clk_audio(clk_audio),
         .reset(video_reset),
         .rgb(raster_rgb),
-        .audio_sample_word(32'd0),
+        .audio_sample_word(audio_sample_word),
         .tmds(tmds),
         .tmds_clock(tmds_clock),
         .cx(cx),
@@ -583,10 +932,39 @@ module astra_arty_graphics_top (
             frame_counter <= frame_counter + 8'd1;
     end
 
-    assign led[0] = video_locked;
-    assign led[1] = ~build_reset;
-    assign led[2] = scene_active;
-    assign led[3] = frame_counter[5];
+    wire [7:0] panel_leds;
+    astra_front_panel_axi #(
+        .CLK_HZ(200000000),
+        .CAPABILITIES(32'h0f020004),
+        .ACTIVITY_LED(3)
+    ) front_panel_i (
+        .clk(fclk_clk1),
+        .reset(build_reset),
+        .buttons(6'd0),
+        .switches({2'd0, sw}),
+        .diagnostic_leds({5'd0, scene_active, ~build_reset, video_locked}),
+        .leds(panel_leds),
+        .s_axi_awaddr(panel_ctrl_awaddr),
+        .s_axi_awprot(panel_ctrl_awprot),
+        .s_axi_awvalid(panel_ctrl_awvalid),
+        .s_axi_awready(panel_ctrl_awready),
+        .s_axi_wdata(panel_ctrl_wdata),
+        .s_axi_wstrb(panel_ctrl_wstrb),
+        .s_axi_wvalid(panel_ctrl_wvalid),
+        .s_axi_wready(panel_ctrl_wready),
+        .s_axi_bresp(panel_ctrl_bresp),
+        .s_axi_bvalid(panel_ctrl_bvalid),
+        .s_axi_bready(panel_ctrl_bready),
+        .s_axi_araddr(panel_ctrl_araddr),
+        .s_axi_arprot(panel_ctrl_arprot),
+        .s_axi_arvalid(panel_ctrl_arvalid),
+        .s_axi_arready(panel_ctrl_arready),
+        .s_axi_rdata(panel_ctrl_rdata),
+        .s_axi_rresp(panel_ctrl_rresp),
+        .s_axi_rvalid(panel_ctrl_rvalid),
+        .s_axi_rready(panel_ctrl_rready)
+    );
+    assign led = panel_leds[3:0];
 
     wire unused_status = &{
         1'b0,
@@ -601,7 +979,8 @@ module astra_arty_graphics_top (
         scheduler_overruns,
         pixel_underruns,
         commit_errors,
-        commit_deferrals
+        commit_deferrals,
+        frame_counter
     };
 endmodule
 

@@ -10,8 +10,8 @@ module tb_astra_sprite_line_builder #(
         PERF_MODE == 6 || PERF_MODE == 7 ? 128 : 64;
     localparam integer OUTPUT_HEIGHT = PERF_MODE == 7 ? 128 : 32;
     localparam integer BUILD_DEADLINE = PERF_MODE == 4 ? 300 : 4300;
-    localparam integer PERF_CYCLE_BUDGET = 3900;
-    localparam integer COLLISION_CYCLE_BUDGET = 4000;
+    localparam integer PERF_CYCLE_BUDGET = 2000;
+    localparam integer COLLISION_CYCLE_BUDGET = 2000;
     localparam [31:0] DIMENSION_BASE = ARENA_BASE + 32'h00004000;
 
     reg build_clk = 1'b0;
@@ -19,7 +19,6 @@ module tb_astra_sprite_line_builder #(
     reg pixel_clk = 1'b0;
     always #6.734 pixel_clk = ~pixel_clk;
     reg reset = 1'b1;
-
     reg descriptor_write_enable = 1'b0;
     reg [5:0] descriptor_write_index = 6'd0;
     reg [2:0] descriptor_write_word = 3'd0;
@@ -149,6 +148,33 @@ wire [31:0] descriptor_scale_step_x;
     wire [31:0] pixel_front_argb;
     wire [31:0] pixel_behind_argb;
 
+    reg clear_was_active = 1'b0;
+    reg clear_completed = 1'b0;
+    reg [8:0] completed_clear_quad = 9'd0;
+
+    // The clear sequencer owns clear_quad for the whole build. Copying the
+    // finished line must not reuse it and reconnect completion policy to the
+    // working-memory clear address.
+    always @(posedge build_clk) begin
+        if (reset || start) begin
+            clear_was_active <= 1'b0;
+            clear_completed <= 1'b0;
+        end else begin
+            if (dut.clear_active_q)
+                clear_was_active <= 1'b1;
+            if (clear_was_active && !dut.clear_active_q) begin
+                completed_clear_quad <= dut.clear_quad_q;
+                clear_completed <= 1'b1;
+            end
+            if (clear_completed && dut.copy_active_q &&
+                dut.clear_quad_q != completed_clear_quad) begin
+                $display("FAIL copy reused clear_quad clear=%0d copy=%0d",
+                         completed_clear_quad, dut.clear_quad_q);
+                $fatal(1);
+            end
+        end
+    end
+
     wire [5:0] arid;
     wire [31:0] araddr;
     wire [7:0] arlen;
@@ -169,7 +195,7 @@ wire [31:0] descriptor_scale_step_x;
     astra_sprite_line_builder #(
         .OUTPUT_WIDTH(OUTPUT_WIDTH),
         .OUTPUT_HEIGHT(OUTPUT_HEIGHT),
-        .PIXEL_BUDGET(PERF_MODE == 2 ? 8 : 8192),
+        .PIXEL_BUDGET(PERF_MODE == 2 ? 8 : 2048),
         .MAX_BUILD_CYCLES(BUILD_DEADLINE)
     ) dut (
         .build_clk(build_clk), .build_reset(reset),
@@ -529,6 +555,14 @@ wire [31:0] descriptor_scale_step_x;
         reset <= 1'b0;
         repeat (3) @(posedge build_clk);
 
+        dut.buffer_phase_x[0] = 32'h12345678;
+        @(posedge build_clk);
+        #1;
+        if (dut.render_phase_x_q != 32'h12345678) begin
+            $display("FAIL idle renderer did not preload slot payload");
+            $fatal(1);
+        end
+
         if (PERF_MODE == 1 || PERF_MODE == 5) begin
             write_palette(4'd1, 8'd1, 32'hff20e080);
             for (memory_index = 0; memory_index < 64;
@@ -551,8 +585,10 @@ wire [31:0] descriptor_scale_step_x;
             end
             promote_scene();
             build_line(2'd0, 10'd0);
-            if (pixels_admitted != 32'd8192 || pixels_dropped != 32'd0 ||
-                overflow_bitmap != 64'd0 || read_bytes != 32'd8192 ||
+            if (pixels_admitted != 32'd2048 ||
+                pixels_dropped != 32'd6144 ||
+                overflow_bitmap != 64'h0000ffffffffffff ||
+                read_bytes != 32'd2048 ||
                 build_cycles > (PERF_MODE == 5 ?
                     COLLISION_CYCLE_BUDGET : PERF_CYCLE_BUDGET) ||
                 max_build_cycles != build_cycles ||
@@ -572,23 +608,46 @@ wire [31:0] descriptor_scale_step_x;
             if (PERF_MODE == 5) begin
                 build_line(2'd1, 10'd0);
                 for (memory_index = 0; memory_index < 64;
-                     memory_index = memory_index + 1) begin
+                    memory_index = memory_index + 1) begin
                     collision_read_row <= memory_index[5:0];
-                    repeat (2) @(posedge build_clk);
+                    repeat (3) @(posedge build_clk);
                     if (collision_read_data !==
-                        ~(64'd1 << memory_index[5:0])) begin
-                        $display("FAIL 64-way collision row=%0d data=%016x expected=%016x",
-                            memory_index, collision_read_data,
-                            ~(64'd1 << memory_index[5:0]));
+                        (memory_index < 48 ? 64'd0 :
+                         (64'hffff000000000000 &
+                          ~(64'd1 << memory_index[5:0])))) begin
+                        $display("FAIL 16-way collision row=%0d data=%016x",
+                            memory_index, collision_read_data);
                         $fatal(1);
                     end
                 end
-                $display("ASTRA SPRITE 64-WAY COLLISION PASS cycles=%0d outstanding=%0d",
+                $display("ASTRA SPRITE 16-WAY COLLISION PASS cycles=%0d outstanding=%0d",
                          build_cycles, max_outstanding_requests);
                 $finish;
             end
-            $display("ASTRA SPRITE 64X128 PERFORMANCE PASS cycles=%0d outstanding=%0d",
+            $display("ASTRA SPRITE 16X128 PERFORMANCE PASS cycles=%0d outstanding=%0d",
                      build_cycles, max_outstanding_requests);
+            $finish;
+        end
+
+        if (PERF_MODE == 8) begin
+            write_palette(4'd1, 8'd1, 32'hffff0000);
+            for (memory_index = 0; memory_index < 17;
+                 memory_index = memory_index + 1)
+                write_standard_sprite(memory_index[5:0],
+                    memory_index[7:0], ARENA_BASE + 32'h00001000);
+            promote_scene();
+            build_line(2'd0, 10'd0);
+            if (pixels_admitted != 32'd128 || pixels_dropped != 32'd8 ||
+                overflow_bitmap != 64'h0000000000000001 ||
+                overflow_line != 10'd0 || overflow_count != 32'd1 ||
+                read_bytes != 32'd128) begin
+                $display("FAIL sprite-count cap admitted=%0d dropped=%0d bitmap=%016x line=%0d count=%0d bytes=%0d",
+                         pixels_admitted, pixels_dropped, overflow_bitmap,
+                         overflow_line, overflow_count, read_bytes);
+                $fatal(1);
+            end
+            $display("ASTRA SPRITE 16-PER-LINE LIMIT PASS cycles=%0d",
+                     build_cycles);
             $finish;
         end
 
