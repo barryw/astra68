@@ -4735,3 +4735,68 @@ rather than a new captured frame.
 | Qualified audio certifier | `3f788469c59e3e115c0131e1f40337b419db467acd394d73537ccb2226a487ce` |
 | Hardware evidence manifest | `a1fba8e644ca5538fed5387279ecb980768beeafb8a56b706b2d3fa3a5e00d5a` |
 | Three-boot summary | `d94434e523e920a19c9166f0523fab0e7cc2cbe87d1ee912da28adfb75731d31` |
+
+### Front-panel and reset-qualified 187.5 MHz release (2026-08-15)
+
+The exact production design retains every graphics and HDMI-audio feature and
+adds the Arty front panel: four mono LEDs, the three channels of the RGB LED,
+four buttons, two switches, software LED ownership, atomic set/clear/toggle,
+and an HDD-activity hold timer. Production run 1/5 routes all 66,515 nets with
+zero errors and passes setup, hold, and pulse width at
+`+0.250/+0.010/+0.538 ns`. Runtime FCLK1 remains exactly 187,500,000 Hz; the
+200 MHz implementation-margin target is not shipped in the PS clock setup.
+Exact use is 31,904 LUTs, 39,006 registers, 12,203 slices, 129.5 BRAM tiles,
+and 81 DSPs.
+
+The front-panel hardware ID/version/capability registers read
+`0x504e4c30`, `0x00010000`, and `0x1f020407`. All seven output channels pass
+ownership and data readback; atomic set, clear, and toggle produce
+`0x57`, `0x56`, and `0x50` from the directed pattern, and the activity timer
+asserts after a combined activity write. The test restores LED data,
+ownership, and the 100-cycle default hold value. Firmware POST now resets and
+probes the panel along with the existing graphics chips. Physical operation of
+all four buttons and both switches produces debounced assert/release samples
+and the exact accumulated change mask `0x030f`.
+
+Hardware qualification found one ordering defect outside RTL. Asserting the
+global FCLK1 fabric reset before Linux's first RTL8211F attach left the PHY's
+ALDPS access timing out; increasing the PHY reset delay to one second did not
+change it. Minimal-init experiments proved that one normal Linux
+`ip link set eth0 up` before the existing chip reset makes every subsequent
+attach reliable. The shared reset helper now performs that idempotent PHY
+prime before asserting reset. The final cold boot negotiates 1 Gbit/s, has no
+ALDPS timeout, reports FPGA manager `operating`, passes full MC68030/PMMU,
+SDRAM, front-panel, filesystem, and terminal POST, and reaches initial-image
+stage 8.
+
+The live QMP reset gate then exposed `-no-reboot` in the existing launcher:
+QEMU correctly emitted a shutdown event but the flag converted reset into
+process exit. The flag is removed with a failing-before/passing-after launcher
+test. On the board, QMP now emits `RESET`, QEMU remains at the same PID, and a
+new POST/stage-8 boot completes. A Linux evdev pointer detach/reattach also
+keeps that PID alive and restores the `astra-pointer` input object. Physical
+Apple-keyboard hotplug creates its evdev node and `astra-keyboard` QMP object
+while the QEMU PID and POST count remain unchanged. Ten
+consecutive renderer, Copper, sprite, and 48 kHz HDMI-audio sweeps pass on the
+exact cold-booted release, followed by another complete sweep after the live
+reset. Linux software `reboot` still reaches `System halted` instead of
+resetting the Zynq; power-cycle and JTAG reset are qualified independently.
+
+| Front-panel/reset release artifact | SHA-256 |
+|---|---|
+| Bitstream | `3fca60ea1af0aca2110633fe21561154e40f48d5d5713c8981b8388ca3c52afc` |
+| XSA | `20eeb703f08feb7e76a96f54cc2934dcedf698be342a9c4d04108b2173ac491e` |
+| Routed DCP | `fa5fde5621acdf59b1abb3ab5bca3acbdeeb832d1eb097eee728e9fb642e7b72` |
+| Timing summary | `ba503c4774f6850dcdf16ec81bb3a2d2afbdacd42803e94d5d2da9a9497fed18` |
+| Route status | `feaaa37cd59bf7b0ea59bd29ea452c6893373c590352dbe185ba2ff97e4b2e76` |
+| Utilization | `e5535ab5568fc7d70b4c2ac7f5a8334b6939e631c7f62fab6ac5c593b134ed41` |
+| Methodology | `0ef947c0a15f9218733a17f7f26b2f3c13e77517dd708494fcfb57b5a015d7db` |
+| Block-design clocks | `bdd200c66f5724b03caa3cbbc3cadfffb7b41801b6d1295e6396ce7e93f38a0d` |
+| FSBL ELF | `63ba80537dc7041f3972e4d9c5730ce4730454a6f5222d84656cf136e3b2a6f9` |
+| FSBL PS initialization | `282766b007cd85e0142ebfba99a04e2ccc9dae4bec925c3246b6d7fe7035c6ab` |
+| Device tree | `2f2066836cefa517e15a75c6f79aca18fe301383135cdb29e4d841b0bd919c8c` |
+| BOOT.BIN | `545f0ccb259972bc7fc26c08f9080dc7033ef7627693ff1ff03085c98a9e3d9c` |
+| FIT image | `74838cdca1f45205bd2d69e6fba51f59b5fae43c2de39fde3e8f9cdc4ed4eb2d` |
+| ARM QEMU | `a534f8f7af75743c3cfd71ef5854a57dc75a4bdfafb6a1f5bedcb668ad768220` |
+| Chip-reset helper | `4ea0c4abca850d339c20d4b5668adde450ac5d59e7eb070f5c413ccd2d8892a6` |
+| Reset-capable launcher | `5a4e35f1929773d27e5d55ed3bbefdf5b9caa8d47a8819c83f355b3d9e1d9400` |

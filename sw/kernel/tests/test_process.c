@@ -3599,14 +3599,14 @@ static void test_real_handle_exhaustion_rolls_back_thread_create(void)
         0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u
     };
     /*
-     * Exactly filling the table takes three kinds of object now. It used to be
+     * Exactly filling the table takes four kinds of object now. It used to be
      * syncs and threads alone, which worked while the table was 16 entries and
      * stopped the moment it grew: there are only KERNEL_THREAD_MAX threads in
      * the machine, so past a certain table size the test could not fill it and
      * the "full" it was asserting about never happened.
     */
     const uint32_t port_pairs = KERNEL_PORT_OWNER_MAX;
-    const uint32_t area_count = 2u;
+    const uint32_t area_count = 3u;
     const uint32_t child_count = KERNEL_HANDLE_MAX_ENTRIES - 2u -
                                  KERNEL_SYNC_OWNER_MAX - 2u * port_pairs -
                                  area_count;
@@ -3679,12 +3679,12 @@ static void test_real_handle_exhaustion_rolls_back_thread_create(void)
         assert(next->data[0] == ASTRA_SYSCALL_OK);
     }
     /*
-     * The three kinds have to add up to the whole table, or this test is
+     * The four kinds have to add up to the whole table, or this test is
      * asserting about a table that is merely nearly full -- which is where a
      * rollback bug hides rather than where it shows.
      */
     _Static_assert(KERNEL_HANDLE_MAX_ENTRIES - 2u - KERNEL_SYNC_OWNER_MAX -
-                           2u * KERNEL_PORT_OWNER_MAX <=
+                           2u * KERNEL_PORT_OWNER_MAX - 3u <=
                        KERNEL_PROCESS_THREAD_MAX,
                    "this test can no longer fill the handle table exactly: "
                    "syncs, ports and threads together fall short of it");
@@ -7028,6 +7028,7 @@ static void test_a_program_can_launch_a_program(void)
     uint32_t user_grants = KERNEL_PROCESS_STACK_TOP - KERNEL_PAGE_SIZE +
                            LAUNCH_IMAGE_BYTES;
     AstraLaunchGrant grant;
+    AstraLaunchGrant duplicate_grants[2];
     uint32_t process_id = 0u;
     uint32_t child_id = 0u;
     uint32_t child_handle = 0u;
@@ -7265,6 +7266,27 @@ static void test_a_program_can_launch_a_program(void)
                                          KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                          &next) == KERNEL_PROCESS_OK);
         assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+        /*
+         * Two namespace names for one service carry one child handle. The
+         * names and roots remain separate startup records, but duplicating the
+         * authority would waste a handle and open a second service session.
+         */
+        duplicate_grants[0] = grant;
+        duplicate_grants[1] = grant;
+        memcpy(duplicate_grants[0].name, "WORK", 5u);
+        memcpy(duplicate_grants[1].name, "LIBS", 5u);
+        memcpy(duplicate_grants[1].root, "libs", 5u);
+        assert(kernel_user_copy_to_asm(user_grants, duplicate_grants,
+                                       sizeof(duplicate_grants)) ==
+               KERNEL_USER_COPY_OK);
+        registers[4] = 2u;
+        assert(kernel_process_on_syscall(registers,
+                                         KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        assert(kernel_process_test_handle_count(next->data[2]) == 3u);
+        registers[4] = 1u;
 
         /* The receiver cannot be copied, so granting one is refused. */
         grant.handle = port_receive;
@@ -8033,8 +8055,15 @@ static void test_fault_report_names_only_what_it_knows(void)
     assert(last_fault_kind == KERNEL_PROCESS_FAULT_STACK_ARENA);
 }
 
+static void test_dead_process_cannot_pin_library_cache(void)
+{
+    initialize_test();
+    assert(kernel_process_test_library_cache_reclaims_after_last_mapping());
+}
+
 int main(void)
 {
+    test_dead_process_cannot_pin_library_cache();
     test_process_allocation_failure_matrix();
     test_process_global_nth_failure_matrix();
     test_preemption_fault_containment_and_teardown();

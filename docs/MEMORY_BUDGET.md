@@ -442,10 +442,10 @@ Major current static objects are:
 
 The interactive GUI profile is the exact reason for the current seven-process
 ceiling: supervisor, storage, events, input, display, terminal, and one
-foreground command. The per-process handle proof is 37 entries and still uses
+foreground command. The per-process handle proof is 38 entries and still uses
 two 32-bit bitmap words. Relative to the preceding six-process/36-handle
-profile, the process array grows by 1,356 bytes: one 1,188-byte process record
-plus 28 bytes in each of the six existing records. Shared-area alias capacity
+profile, the process array grows by 1,552 bytes: one 1,216-byte process record
+plus 56 bytes in each of the six existing records. Shared-area alias capacity
 is seven for the same measured composition.
 
 ## K10 implemented candidate budget

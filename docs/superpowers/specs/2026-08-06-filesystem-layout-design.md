@@ -494,6 +494,15 @@ rule with a stated order as command lookup in §2.5. A bundle can carry a kit
 version the system does not have without asking anyone's permission and without
 affecting anything else.
 
+Both places hold versioned identities, not replaceable unversioned filenames.
+The bundle's dependency record selects an exact version and content digest;
+resolution does not change merely because a newer compatible Kit appears in
+`LIBS:`.
+
+`LIBS:` is writable by the system namespace and by an installer explicitly
+granted `LIBS:rw`. Applications normally receive `LIBS:r`; being able to load a
+shared Kit is not authority to replace it.
+
 The manifest declares the application's name, the authority it wants, whether
 it wants a terminal, and which documents it opens. What that file looks like,
 and how a person sees and answers an authority request, is the bundle spec —

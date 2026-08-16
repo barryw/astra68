@@ -15,6 +15,8 @@
 #define DISPLAY_WORK_BOTTOM 678u
 #define WINDOW_CACHE_BASE UINT32_C(0x01000000)
 #define WINDOW_CACHE_STRIDE UINT32_C(0x00200000)
+#define WINDOW_CONTENT_BASE UINT32_C(0x02000000)
+#define WINDOW_CONTENT_STRIDE UINT32_C(0x00200000)
 #define DISPLAY_IRQ_DRAIN_MAX 8u
 #define DISPLAY_INPUT_QUEUE 8u
 
@@ -42,7 +44,11 @@ typedef struct DisplayWindow {
     uint8_t state;
     uint8_t restore_state;
     uint8_t cache_dirty;
+    uint8_t content_dirty;
+    uint8_t content_initialized;
     uint8_t event_lost;
+    uint8_t reserved8[2];
+    DamageRect content_damage;
 } DisplayWindow;
 
 typedef struct DisplayState {
@@ -242,6 +248,31 @@ static void damage_window(DisplayState *state, const AstraTheme *theme,
 {
     if (window->state != ASTRA_WINDOW_STATE_MINIMIZED)
         damage_both(state, bounds(theme, window));
+}
+
+static void damage_content(DisplayState *state, const AstraTheme *theme,
+                           DisplayWindow *window, DamageRect damage)
+{
+    uint16_t frame = frame_width(theme, window->request.type);
+    uint16_t title = title_height(theme, window->request.type);
+    uint16_t signal = title == 0u ? 0u : theme->signal_height;
+    DamageRect screen = damage;
+
+    damage_add(&window->content_damage, damage);
+    screen.left += window->request.x + frame;
+    screen.right += window->request.x + frame;
+    screen.top += window->request.y + frame + title + signal;
+    screen.bottom += window->request.y + frame + title + signal;
+    damage_both(state, screen);
+}
+
+static void reset_content(DisplayWindow *window)
+{
+    window->content_initialized = 0u;
+    window->content_dirty = 1u;
+    window->content_damage = (DamageRect){
+        0, 0, window->request.width, window->request.height, 1u
+    };
 }
 
 static void damage_scene(DisplayState *state, const AstraTheme *theme)
@@ -708,6 +739,7 @@ static int resize_captured_window(DisplayState *state,
     window->request.width = (uint16_t)width;
     window->request.height = (uint16_t)height;
     window->cache_dirty = 1u;
+    reset_content(window);
     next_generation(window);
     damage_window(state, theme, window);
     return 1;
@@ -860,24 +892,18 @@ static void draw_gadget(AstraRenderBuilder *builder, uint32_t destination,
 }
 
 static int build_cache(AstraRenderBuilder *builder, uint32_t cache,
-                       const AstraTheme *theme, const DisplayWindow *window)
+                       uint32_t content, const AstraTheme *theme,
+                       const DisplayWindow *window)
 {
     const AstraGuiOpenWindow *request = &window->request;
     uint16_t frame = frame_width(theme, request->type);
     uint16_t title = title_height(theme, request->type);
     uint16_t signal = title == 0u ? 0u : theme->signal_height;
     uint16_t radius = window_radius(theme, window);
-    uint32_t content = astra_render_builder_surface(
-        builder, request->width, request->height);
     int32_t client_x = frame;
     int32_t client_y = frame;
 
-    if (content == 0u || !astra_render_builder_fill(
-            builder, content, 0, 0, request->width, request->height,
-            color(theme->client)) || !astra_render_builder_replay(
-            builder, content,
-            (const AstraDrawListHeader *)(const void *)
-                window->surface.view.pixels))
+    if (content == 0u)
         return 0;
     if (request->type == ASTRA_WINDOW_FULLSCREEN)
         return astra_render_builder_blit(
@@ -922,11 +948,13 @@ static int build_cache(AstraRenderBuilder *builder, uint32_t cache,
                         request->width - text_capacity : 0u;
         text_length = astra_surface_ui_text_fit(
             request->title, request->title_length,
-            ASTRA_UI_FONT_TITLE_HEIGHT, text_capacity);
+            ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT, text_capacity);
         (void)astra_render_builder_text(
             builder, cache, client_x + theme->spacing_unit * 2,
-            client_y + ((int32_t)title - ASTRA_UI_FONT_TITLE_HEIGHT) / 2,
-            request->title, text_length, ASTRA_UI_FONT_TITLE_HEIGHT,
+            client_y + ((int32_t)title -
+                        ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT) / 2,
+            request->title, text_length,
+            ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT,
             color(theme->text_primary));
         gadget_x = client_x + request->width - theme->spacing_unit -
                    (int32_t)gadget_count * theme->gadget_extent;
@@ -955,6 +983,36 @@ static int build_cache(AstraRenderBuilder *builder, uint32_t cache,
         radius > frame ? (uint16_t)(radius - frame) : 0u, title == 0u);
 }
 
+static int update_cache_content(AstraRenderBuilder *builder, uint32_t cache,
+                                uint32_t content, const AstraTheme *theme,
+                                const DisplayWindow *window)
+{
+    const DamageRect *damage = &window->content_damage;
+    uint16_t frame = frame_width(theme, window->request.type);
+    uint16_t title = title_height(theme, window->request.type);
+    uint16_t signal = title == 0u ? 0u : theme->signal_height;
+    uint16_t radius = window_radius(theme, window);
+    int32_t client_x = frame;
+    int32_t client_y = frame + title + signal;
+    uint16_t client_radius = radius > frame ?
+        (uint16_t)(radius - frame) : 0u;
+    int touches_rounding = client_radius != 0u &&
+        (damage->bottom > (int32_t)window->request.height - client_radius ||
+         (title == 0u && damage->top < client_radius));
+
+    if (!touches_rounding)
+        return astra_render_builder_blit_region(
+            builder, cache, content, damage->left, damage->top,
+            client_x + damage->left, client_y + damage->top,
+            (uint16_t)(damage->right - damage->left),
+            (uint16_t)(damage->bottom - damage->top));
+    return astra_render_builder_blit_clipped(
+        builder, cache, content, client_x, client_y,
+        window->request.width, window->request.height, client_radius,
+        title == 0u, client_x + damage->left, client_y + damage->top,
+        client_x + damage->right, client_y + damage->bottom);
+}
+
 static void desktop_damage(AstraRenderBuilder *builder, uint32_t framebuffer,
                            const AstraTheme *theme, const DamageRect *damage)
 {
@@ -979,7 +1037,8 @@ static void desktop_damage(AstraRenderBuilder *builder, uint32_t framebuffer,
             builder, framebuffer, 20, 32, 124u, 2u, color(theme->accent));
         (void)astra_render_builder_text(
             builder, framebuffer, 20, 10, "ASTRA", 5u,
-            ASTRA_UI_FONT_TITLE_HEIGHT, color(theme->text_primary));
+            ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT,
+            color(theme->text_primary));
     }
     if (overlaps(damage, &bottom)) {
         int32_t y0 = damage->top > (int32_t)DISPLAY_WORK_BOTTOM ?
@@ -998,6 +1057,7 @@ static uint32_t compose(void *storage, uint32_t fence,
     AstraRenderBuilder builder;
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     uint32_t cache[DISPLAY_WINDOW_MAX] = {0};
+    uint32_t content[DISPLAY_WINDOW_MAX] = {0};
     uint32_t framebuffer;
     uint32_t buffer = (fence & 1u) != 0u ? 1u : 0u;
     DamageRect *damage = &state->damage[buffer];
@@ -1012,7 +1072,7 @@ static uint32_t compose(void *storage, uint32_t fence,
     }
     framebuffer = astra_render_builder_frame(&builder);
     for (uint32_t index = 0u; index < state->count; ++index) {
-        const DisplayWindow *window = &state->windows[index];
+        DisplayWindow *window = &state->windows[index];
 
         cache[index] = astra_render_builder_surface_at(
             &builder, WINDOW_CACHE_BASE +
@@ -1023,8 +1083,34 @@ static uint32_t compose(void *storage, uint32_t fence,
             *error = ASTRA_STATUS_LIMIT;
             return 0u;
         }
+        content[index] = astra_render_builder_surface_at(
+            &builder, WINDOW_CONTENT_BASE +
+                window->cache_slot * WINDOW_CONTENT_STRIDE,
+            window->request.width, window->request.height);
+        if (content[index] == 0u ||
+            (window->content_initialized == 0u &&
+             !astra_render_builder_fill(
+                 &builder, content[index], 0, 0, window->request.width,
+                 window->request.height, color(theme.client))) ||
+            (window->content_dirty != 0u &&
+             !astra_render_builder_replay(
+                 &builder, content[index],
+                 (const AstraDrawListHeader *)(const void *)
+                     window->surface.view.pixels))) {
+            *error = builder.failed != 0u ? ASTRA_STATUS_LIMIT :
+                                             ASTRA_STATUS_PROTOCOL;
+            return 0u;
+        }
         if (window->cache_dirty != 0u &&
-            !build_cache(&builder, cache[index], &theme, window)) {
+            !build_cache(&builder, cache[index], content[index],
+                         &theme, window)) {
+            *error = builder.failed != 0u ? ASTRA_STATUS_LIMIT :
+                                             ASTRA_STATUS_PROTOCOL;
+            return 0u;
+        }
+        if (window->cache_dirty == 0u && window->content_dirty != 0u &&
+            !update_cache_content(&builder, cache[index], content[index],
+                                  &theme, window)) {
             *error = builder.failed != 0u ? ASTRA_STATUS_LIMIT :
                                              ASTRA_STATUS_PROTOCOL;
             return 0u;
@@ -1150,8 +1236,12 @@ static uint32_t render(uint32_t device, uint32_t irq,
     if (status == ASTRA_STATUS_OK) {
         ++*next_fence;
         state->damage[buffer] = (DamageRect){0};
-        for (uint32_t index = 0u; index < state->count; ++index)
+        for (uint32_t index = 0u; index < state->count; ++index) {
             state->windows[index].cache_dirty = 0u;
+            state->windows[index].content_dirty = 0u;
+            state->windows[index].content_initialized = 1u;
+            state->windows[index].content_damage = (DamageRect){0};
+        }
     }
     return status;
 }
@@ -1194,7 +1284,8 @@ static int valid_open(const AstraGuiOpenWindow *request, uint32_t size,
 }
 
 static int valid_command(const AstraGuiWindowCommand *request, uint32_t size,
-                         uint32_t handles, uint32_t id)
+                         uint32_t handles, uint32_t id,
+                         uint16_t content_width, uint16_t content_height)
 {
     int frame_zero = request->x == 0u && request->y == 0u &&
                      request->width == 0u && request->height == 0u;
@@ -1229,6 +1320,12 @@ static int valid_command(const AstraGuiWindowCommand *request, uint32_t size,
     if (request->action == ASTRA_GUI_WINDOW_SET_EVENT_MASK)
         return frame_zero && request->title_length == 0u &&
                (request->flags & ~ASTRA_WINDOW_SUBSCRIBE_ALL) == 0u;
+    if (request->action == ASTRA_GUI_WINDOW_PRESENT)
+        return request->title_length == 0u && request->flags == 0u &&
+               (frame_zero ||
+                (request->width != 0u && request->height != 0u &&
+                 (uint32_t)request->x + request->width <= content_width &&
+                 (uint32_t)request->y + request->height <= content_height));
     return frame_zero && request->title_length == 0u &&
            request->flags == 0u;
 }
@@ -1282,6 +1379,7 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
         window->request.height = command->height;
         window->state = ASTRA_WINDOW_STATE_NORMAL;
         window->cache_dirty = 1u;
+        reset_content(window);
         next_generation(window);
         damage_window(state, theme, window);
         *changed = 1;
@@ -1309,6 +1407,7 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
         window->request.width = command->width;
         window->request.height = command->height;
         window->cache_dirty = 1u;
+        reset_content(window);
         next_generation(window);
         damage_window(state, theme, window);
         *changed = 1;
@@ -1383,6 +1482,7 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
                 frame_width(theme, window->request.type) * 2u;
             window->state = ASTRA_WINDOW_STATE_MAXIMIZED;
             window->cache_dirty = 1u;
+            reset_content(window);
             next_generation(window);
             damage_window(state, theme, window);
             *changed = 1;
@@ -1403,6 +1503,7 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
             window->request.height = window->restore_height;
             window->state = ASTRA_WINDOW_STATE_NORMAL;
             window->cache_dirty = 1u;
+            reset_content(window);
             next_generation(window);
             damage_window(state, theme, window);
             *changed = 1;
@@ -1445,10 +1546,15 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
         window->request.event_mask = command->flags;
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_PRESENT:
-        damage_window(state, theme, window);
-        window->cache_dirty = 1u;
+        window->content_dirty = 1u;
+        damage_content(state, theme, window,
+                       command->width == 0u ?
+                           (DamageRect){0, 0, window->request.width,
+                                        window->request.height, 1u} :
+                           (DamageRect){command->x, command->y,
+                                        command->x + command->width,
+                                        command->y + command->height, 1u});
         next_generation(window);
-        damage_window(state, theme, window);
         *changed = 1;
         return ASTRA_STATUS_OK;
     default:
@@ -1798,6 +1904,7 @@ static void receive_open(uint32_t device, uint32_t irq,
         handles[1] = 0u;
         candidate.cache_slot = cache_slot(state);
         candidate.cache_dirty = 1u;
+        reset_content(&candidate);
         state->windows[state->count++] = candidate;
         added = 1;
         candidate = (DisplayWindow){0};
@@ -1874,7 +1981,9 @@ static void receive_command(uint32_t device, uint32_t irq,
     }
     if (status != ASTRA_SYSCALL_OK)
         return;
-    status = valid_command(&command, size, handle_count, id) ?
+    status = valid_command(&command, size, handle_count, id,
+                           state->windows[window_index].request.width,
+                           state->windows[window_index].request.height) ?
              apply_command(state, &theme, &command, &closed, &changed) :
              DISPLAY_FAIL_PROTOCOL;
     if (status == ASTRA_STATUS_OK && changed &&
@@ -2011,6 +2120,29 @@ static uint32_t receive_input(uint32_t receive,
     return ASTRA_STATUS_OK;
 }
 
+static uint32_t display_wait_handles(const DisplayState *state,
+                                     uint32_t gui_receive,
+                                     uint32_t input_receive,
+                                     uint32_t first,
+                                     uint32_t *waits,
+                                     uint32_t *sources)
+{
+    uint32_t count = state->count + 2u;
+
+    first %= count;
+    for (uint32_t slot = 0u; slot < count; ++slot) {
+        uint32_t source = first + slot;
+
+        if (source >= count)
+            source -= count;
+        sources[slot] = source;
+        waits[slot] = source == 0u ? gui_receive :
+                      source == 1u ? input_receive :
+                      state->windows[source - 2u].control_receive;
+    }
+    return count;
+}
+
 static void serve_windows(uint32_t device, uint32_t irq,
                           AstraDmaBufferInfo *framebuffer,
                           uint32_t gui_receive, uint32_t input_receive)
@@ -2024,21 +2156,23 @@ static void serve_windows(uint32_t device, uint32_t irq,
     uint32_t next_fence = 1u;
     uint32_t cursor_fence = UINT32_C(0x80000001);
     uint32_t armed = 0u;
+    uint32_t first_wait = 0u;
 
     for (;;) {
-        uint32_t waits[DISPLAY_WINDOW_MAX + 2u] = {
-            gui_receive, input_receive
-        };
+        uint32_t waits[DISPLAY_WINDOW_MAX + 2u];
+        uint32_t sources[DISPLAY_WINDOW_MAX + 2u];
+        uint32_t wait_count = display_wait_handles(
+            &state, gui_receive, input_receive, first_wait, waits, sources);
         uint32_t selected = 0u;
         uint32_t status;
 
-        for (uint32_t index = 0u; index < state.count; ++index)
-            waits[index + 2u] = state.windows[index].control_receive;
-        status = astra_wait_multiple(waits, state.count + 2u,
+        status = astra_wait_multiple(waits, wait_count,
                                      ASTRA_DEADLINE_FOREVER,
                                      &selected, NULL);
-        if (status != ASTRA_SYSCALL_OK || selected > state.count + 1u)
+        if (status != ASTRA_SYSCALL_OK || selected >= wait_count)
             astra_process_exit(DISPLAY_FAIL_WAIT);
+        selected = sources[selected];
+        first_wait = (selected + 1u) % wait_count;
         if (selected == 0u)
             receive_open(device, irq, framebuffer, &state, gui_receive,
                          &next_fence, &armed);
@@ -2061,8 +2195,7 @@ static void serve_windows(uint32_t device, uint32_t irq,
             }
             if ((effects & DISPLAY_POINTER_CURSOR) != 0u &&
                 update_cursor(device, irq, state.pointer_x, state.pointer_y,
-                              1u,
-                              effects & DISPLAY_POINTER_RENDER,
+                              1u, 0u,
                               &cursor_fence, &armed) != ASTRA_STATUS_OK)
                 astra_process_exit(DISPLAY_FAIL_COMPLETION);
             if ((effects & DISPLAY_POINTER_RENDER) != 0u &&

@@ -37,28 +37,38 @@ COMMANDS_DIRECTORY = "commands"
 LOCAL_COMMANDS_DIRECTORY = "local/commands"
 DEFAULT_COMMANDS = os.path.join(REPOSITORY, "sw/userspace/commands/build/m68k")
 SERVICES_DIRECTORY = "services"
+LIBS_DIRECTORY = "libs"
 STARTUP_DIRECTORY = "startup"
 STARTUP_NAME = "system"
 DEFAULT_SERVICES = os.path.join(
     REPOSITORY, "sw/userspace/services")
+DEFAULT_LIBRARIES = os.path.join(REPOSITORY, "sw/userspace")
+KIT_LIBRARIES = (
+    ("font.library", "abi-1/1.0.0/m68k-68030",
+     "graphics/build/m68k/libraries/font.library"),
+    ("graphics.library", "abi-1/1.0.0/m68k-68030",
+     "graphics/build/m68k/libraries/graphics.library"),
+    ("filesystem.library", "abi-1/1.0.0/m68k-68030",
+     "vfs/build/m68k/libraries/filesystem.library"),
+)
 STARTUP_MANIFEST = ("service SERVICES:storage grants BLOCK_DEVICE BLOCK_IRQ "
                     "serves SYS:r required\n"
-                    "service SERVICES:events grants SYS:r STORE:rw "
+                    "service SERVICES:events grants SYS:r STORE:rw LIBS:r "
                     "serves EVENTS:r required\n"
                     "application SERVICES:terminal grants DISPLAY INPUT "
                     "INPUT_IRQ "
-                    "WORK:rw COMMANDS:r EVENTS:r EVENT_CONTROL delegates "
+                    "WORK:rw COMMANDS:r LIBS:r EVENTS:r EVENT_CONTROL delegates "
                     "required\n")
 DISPLAY_STARTUP_MANIFEST = (
     "service SERVICES:storage grants BLOCK_DEVICE BLOCK_IRQ "
     "serves SYS:r required\n"
-    "service SERVICES:events grants SYS:r STORE:rw "
+    "service SERVICES:events grants SYS:r STORE:rw LIBS:r "
     "serves EVENTS:r required\n"
     "service SERVICES:input grants INPUT INPUT_IRQ "
     "serves INPUT_SERVICE required\n"
     "service SERVICES:display grants DISPLAY DISPLAY_IRQ "
     "INPUT_SERVICE serves GUI required\n"
-    "application SERVICES:terminal grants GUI WORK:rw COMMANDS:r EVENTS:r "
+    "application SERVICES:terminal grants GUI WORK:rw COMMANDS:r LIBS:r EVENTS:r "
     "EVENT_CONTROL delegates required\n")
 DISPLAY_SERVICES = ("storage", "events", "input", "display", "terminal")
 
@@ -143,7 +153,18 @@ def _services(directory, names):
     return found
 
 
-def install(image, catalog=None, commands=None, services=None,
+def _libraries(directory):
+    found = []
+    for name, version_path, relative_path in KIT_LIBRARIES:
+        path = os.path.join(directory, relative_path)
+        if not os.path.isfile(path):
+            raise RuntimeError("no shared library at %s -- build kits first" %
+                               path)
+        found.append((name, version_path, path))
+    return found
+
+
+def install(image, catalog=None, commands=None, services=None, libraries=None,
             service_names=("storage", "events", "terminal"),
             manifest_text=STARTUP_MANIFEST):
     """Writes this build's catalog and commands into the image's volume.
@@ -162,11 +183,13 @@ def install(image, catalog=None, commands=None, services=None,
     catalog = catalog or DEFAULT_CATALOG
     commands = commands or DEFAULT_COMMANDS
     services = services or DEFAULT_SERVICES
+    libraries = libraries or DEFAULT_LIBRARIES
     if not os.path.exists(catalog):
         raise RuntimeError("no catalog at %s -- build the supervisor first" %
                            catalog)
     built = _commands(commands)
     service_images = _services(services, service_names)
+    library_images = _libraries(libraries)
     offset, length = ext4_partition(image)
     with tempfile.TemporaryDirectory(prefix="astra-volume-") as temporary:
         volume = os.path.join(temporary, "volume.img")
@@ -199,6 +222,22 @@ def install(image, catalog=None, commands=None, services=None,
                      optional=True)
             _debugfs(volume, "write %s %s" % (path, target),
                      "service " + name)
+
+        _debugfs(volume, "mkdir /%s" % LIBS_DIRECTORY,
+                 "the shared Kit directory", optional=True)
+        for name, version_path, path in library_images:
+            parent = "/%s/%s" % (LIBS_DIRECTORY, name)
+            _debugfs(volume, "mkdir %s" % parent,
+                     "the library directory", optional=True)
+            for component in version_path.split("/"):
+                parent += "/" + component
+                _debugfs(volume, "mkdir %s" % parent,
+                         "the library version directory", optional=True)
+            target = parent + "/" + name
+            _debugfs(volume, "rm %s" % target, "an old shared library",
+                     optional=True)
+            _debugfs(volume, "write %s %s" % (path, target),
+                     "shared library " + name)
 
         _debugfs(volume, "mkdir /%s" % STARTUP_DIRECTORY,
                  "the startup directory", optional=True)

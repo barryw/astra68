@@ -81,7 +81,7 @@ env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
     -object memory-backend-ram,id=astra-ram,size="$MEMORY",prealloc=on \
     -M astra68,memory-backend=astra-ram -m "$MEMORY" -bios "$ROM" \
     -drive if=none,format=raw,file="$STORAGE" \
-    -nographic -monitor none -serial none -no-reboot \
+    -nographic -monitor none -serial none \
     -qmp "unix:$QMP_SOCKET,server=on,wait=off" "$@" &
 qemu_pid=$!
 python3 "$INPUT_HOTPLUG" --qmp "$QMP_SOCKET" &

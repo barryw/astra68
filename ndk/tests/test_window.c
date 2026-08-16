@@ -163,6 +163,10 @@ int main(void)
 
     assert(theme.size == sizeof(theme));
     assert(theme.generation == ASTRA_THEME_GENERATION);
+    assert(theme.body_font_height == ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT &&
+           theme.title_font_height == ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT &&
+           theme.mono_font_height == ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT &&
+           theme.mono_cell_width == ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH);
     assert(theme.window_radius == 12 && theme.signal_height == 2);
     assert(theme.title_active.red > theme.title_inactive.red);
     create.width = 320;
@@ -220,6 +224,18 @@ int main(void)
     before = call_count;
     assert(astra_window_present(&window) == ASTRA_OK);
     expect_action(before, ASTRA_GUI_WINDOW_PRESENT);
+    before = call_count;
+    assert(astra_window_present_region(&window, &frame) == ASTRA_OK);
+    expect_action(before, ASTRA_GUI_WINDOW_PRESENT);
+    assert(last_command.x == frame.x && last_command.y == frame.y &&
+           last_command.width == frame.width &&
+           last_command.height == frame.height);
+    frame.width = 0u;
+    before = call_count;
+    assert(astra_window_present_region(&window, &frame) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(call_count == before);
+    frame.width = 400u;
     {
         AstraWindowEvent event = {0};
         uint32_t generation = window._private_generation;

@@ -57,8 +57,9 @@ The immutable system ROM image contains AFNT resources for:
 
 - **Astra Sans**, derived from Atkinson Hyperlegible Next, as the proportional
   UI and reading face.
-- **Astra Mono**, derived from Atkinson Hyperlegible Mono, for code, terminals,
-  tables, and diagnostics.
+- **Astra Mono**, initially the complete Spleen 8x16 bitmap repertoire, for
+  code, terminals, tables, and diagnostics. Atkinson Hyperlegible Mono remains
+  the planned coverage-font family when native A4 strikes land.
 
 Both upstream families use the SIL Open Font License 1.1. Rasterized AFNT data,
 the copyright notices, license, source revision, conversion command, and build

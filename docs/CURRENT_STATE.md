@@ -490,6 +490,23 @@ machine.
   The five-run boot gate measures terminal-ready at a 0.17 s median against the
   1.00 s budget.
 
+The Graphics Kit now has separate `font.library` and `graphics.library`
+ELF32/m68k images installed side by side beneath `LIBS:`. Terminal uses the
+public `OpenLibrary()`/`CloseLibrary()` contract and calls their typed export
+tables; neither implementation is statically linked into Terminal. Axiom
+shares immutable library frames across process address spaces, keeps writable
+pages private, reclaims unused cache entries, and tears mappings down on
+process death. The constrained loader accepts eager `R_68K_RELATIVE`
+relocations and rejects PLTs and unsupported dynamic state. The complete Beast
+QEMU display gate on 2026-08-16 passed with Terminal, keyboard, pointer,
+move/resize/maximize/close, and all fences: 26 submissions, 19 batches, 775
+commands, 371 fills, 166 blits, 42 glyph commands, 13,500 present cycles versus
+250,000 budget, 13,316 pointer cycles versus 250,000, and 0.359 s boot. The
+first integration boot exposed a custom-linker defect that placed
+`_GLOBAL_OFFSET_TABLE_` at `.got.plt`; the linker script now fixes and asserts
+the GOT base at `.got`, preventing PIC libraries from silently reading the
+wrong entries.
+
 The retained Arty terminal deployment is rooted at commit
 `381d15306ff6b0077d8042fe975f426b7cf4f173` plus the current working-tree
 changes and was built on Beast from `/tmp/astra68-terminal-20260809`. Its exact
@@ -2045,7 +2062,7 @@ services are watched as fatal dependencies. Closing the terminal therefore
 retires an ordinary application instead of causing the initial supervisor to
 exit and panic the kernel. The exact graph requires seven process slots:
 supervisor, storage, events, input, display, terminal, and one foreground
-command. The matching limits are 37 handles per process and seven shared-area
+command. The matching limits are 38 handles per process and seven shared-area
 aliases; the handle bitmap remains two 32-bit words.
 
 All 30 kernel host suites and the complete userspace functional, ASan/UBSan,
@@ -2950,3 +2967,187 @@ by physical qualification, not RTL failures. Evidence is retained under
 `docs/evidence/astra-arty-187m5-20260814/`. Beast has no HDMI capture device;
 HDMI evidence is the exact splash readback, terminal-ready state, and repeated
 48 kHz audio certification.
+
+## Active front-panel/reset release (2026-08-15)
+
+The active Arty hardware authority is now the exact full-feature 187.5 MHz
+front-panel/reset release. Its route connects all 66,515 nets with zero errors
+and passes setup/hold/pulse width at `+0.250/+0.010/+0.538 ns`. It uses 31,904
+LUTs, 39,006 registers, 12,203 slices, 129.5 BRAM tiles, and 81 DSPs. The
+bitstream is
+`3fca60ea1af0aca2110633fe21561154e40f48d5d5713c8981b8388ca3c52afc`;
+active BOOT.BIN is
+`545f0ccb259972bc7fc26c08f9080dc7033ef7627693ff1ff03085c98a9e3d9c`
+and active FIT is
+`74838cdca1f45205bd2d69e6fba51f59b5fae43c2de39fde3e8f9cdc4ed4eb2d`.
+
+The PL exposes all Arty controls through the shared `PNL0` MMIO contract: four
+mono LEDs, three RGB channels, four buttons, two switches, software ownership,
+atomic output operations, and HDD activity on mono LED 3. Register-level
+hardware tests pass; all four physical buttons and both physical switches
+assert, release, debounce, and latch as the exact `0x030f` change mask.
+Firmware POST reports `Front panel ....... OK`.
+
+The final physical power cycle passes FPGA manager, exact 187.5 MHz clocks,
+1 Gbit/s Ethernet, MC68030/PMMU and full-range SDRAM POST, 128 MiB Astra RAM,
+filesystem round-trip, terminal startup, and initial-image stage 8. Ten
+consecutive complete renderer/Copper/sprite/HDMI-audio sweeps pass, as does a
+complete sweep after a live QMP reset. QEMU remains the same process across
+QMP reset, Linux evdev pointer detach/reattach, and physical Apple-keyboard
+hotplug; both keyboard and pointer QMP objects are present without another
+POST or panic. The ARM QEMU hash is
+`a534f8f7af75743c3cfd71ef5854a57dc75a4bdfafb6a1f5bedcb668ad768220`;
+the reset-capable launcher hash is
+`5a4e35f1929773d27e5d55ed3bbefdf5b9caa8d47a8819c83f355b3d9e1d9400`.
+
+The cold-boot network fix is sequencing, not a PHY workaround: the shared chip
+reset helper lets Linux attach `eth0` once before asserting the global FCLK1
+reset, preventing the RTL8211F ALDPS timeout reproduced when reset ran first.
+Linux software `reboot` currently halts instead of resetting the Zynq; power
+cycle, JTAG reset, QMP guest reset, and runtime crash handling are qualified.
+Exact artifact identities and experiments are in
+`fpga/arty/graphics/TIMING_CLOSURE.md`.
+
+## Active GUI mono-terminal release (2026-08-15)
+
+The Arty is running the unchanged qualified front-panel/reset bitstream with a
+new Astra ROM and display image; no RTL, synthesis, or flash artifact changed.
+The active ROM is
+`4c4a2b943239f1313415a71ebd43532898495f11ff21cc84f5621c02f3fe3808`.
+The installed display image is
+`5612be150351e8c198c2326ad7900459f89ae3fc0efbd1f4af6ef8757807f473`
+and is retained with rollback artifacts at
+`/data/astra/deploy/terminal-mono-4c4a2b943239`; the exact prior live ROM and
+storage image are retained at
+`/data/astra/deploy/pre-terminal-mono-448d10f35635`.
+
+Window content now lives in persistent hardware-rendered surfaces. Applications
+publish bounded content damage through `astra_window_present_region`; gadget
+chrome rebuilds reuse that content instead of replaying every glyph. Cursor
+position commits immediately even when hover changes require a later chrome
+render. The terminal publishes only changed runs plus a 500 ms,
+full-cell-width underline cursor. The former 13-pixel proportional Workbench
+strike was laid out at the widest-glyph advance, which made narrow letters
+appear widely spaced. It is replaced by the complete Spleen-derived Astra Mono
+8x16 AFNT strike and its native 8-pixel cell. The system height and cell advance
+are published by the NDK theme and the face retains the public
+`ASTRA_FONT_ROLE_MONO` identity; raw AFNT data remains private to the
+font/rendering implementation. The terminal records semantic mono-text draw
+commands and no longer links a private glyph bank: its text image fell from
+99,813 to 27,331 bytes. The display service owns the one complete glyph bank.
+
+The supervisor no longer has a second, arbitrary 80 KiB executable ceiling.
+Its service cache reuses the kernel's established 256 KiB
+`ASTRA_USER_IMAGE_MAX_SIZE` acceptance policy. This admits the 89,858-byte
+display service while retaining the same kernel ELF validation boundary.
+
+On the physical board a typed-cell update fell from 78 commands, 113.1 ms of
+render preparation/hardware work, and 16.2 ms present time to alternating
+10/11-command cursor/cell batches with 4.7--5.5 ms render time; hardware work
+inside those batches is about 1.1 ms. Gadget-hover batches are 13 commands and
+about 5 ms instead of forcing the former roughly 119 ms full-window path. The
+host interaction gate passes at 26/26 fences with 19 batches, 775 commands,
+371 fills, 166 blits, and 42 glyph runs. NDK, graphics, and display contract
+tests and their ASan/UBSan variants pass on Beast. The exact ROM/storage pair
+also boots the physical Arty through MC68030/PMMU POST, filesystem recovery,
+service loading, and initial-image stage 8; QEMU, the display helper, and the
+input hot-plug worker remain resident. Normal non-profiled runtime is active.
+
+## Shared Kit namespace candidate (2026-08-15)
+
+The shared-library resolution contract is locked without choosing an unmeasured
+MC68030 relocation format. Applications resolve an exact immutable identity
+`(name, ABI major, version, architecture, digest)` from their bundle's `libs/`
+first and `LIBS:` second. The system namespace owns `LIBS:` read/write;
+ordinary applications receive it read-only, while an installer must be granted
+`LIBS:rw` explicitly. Updates install beside old
+versions; launch never substitutes a newer file, running mappings remain live,
+and cache/collection are keyed by the complete identity and reference count.
+
+The supervisor now binds `LIBS:` to `/libs`, both startup profiles grant it,
+prepared images create it, and the shell passes it to launched programs. Adding
+the namespace exposed duplicate grants for one VFS service. The shared kernel
+launch path now installs an identical source handle and rights once while
+preserving each namespace name/root in the child's startup table. All 30 kernel
+host suites pass, including the duplicate-authority regression, and the
+protected GUI display gate passes at 26/26 fences (`13501/250000` present cycles
+and `13097/250000` pointer cycles). Candidate ROM SHA-256 is
+`1a155c4b88978b888084f7b6d2e99d90a59d254de0df07347c26123d8655bb02`;
+candidate display image SHA-256 is
+`751c2e6bb3a735704270a4af3347da5827c7098ece229b30c7f3ca1b20d6adcf`.
+Neither candidate is installed on the Arty; the active pair above is unchanged.
+
+## Active shared-library terminal release (2026-08-16)
+
+The Arty now boots the Graphics Kit terminal through versioned
+`graphics.library` and `font.library`. The active ROM is
+`5cf1994e3eec260a29a9003542699d559baa28d22a8f681f2af4f5e1f4cb595a`;
+the cursor-motion update changed only the filesystem image and did not change
+the qualified FPGA bitstream or ROM. Terminal SHA-256 is
+`0989b74dbc3408d16bc5b2dc9a54da5fa6bdf34dcf89f8fa6997963cc0bf79e0`.
+
+Terminal now subscribes only to lifecycle, keyboard, and text window events.
+It no longer receives an unused continuous pointer-motion stream. That cleanup
+was necessary but did not fix the physical symptom: the display server placed
+input ahead of every window control handle, while the kernel's documented
+`wait_multiple` contract selects the lowest ready index. Continuous input could
+therefore starve every pending application present. The server now rotates the
+wait order after every serviced source, giving GUI opens, input, and every
+window control port bounded service without favoring one class.
+
+The display arbitration contract and its ASan/UBSan variant pass on Beast. The
+QEMU interaction gate sustains pointer motion across two blink periods and
+passes at 1,036 fences, 21 render batches, 796 commands, 376 fills, 182 blits,
+and 42 glyph runs. Active display-service SHA-256 is
+`ca161ea26816aa8b909be5af7595fa98db4ae7838cd45c315a3f8a08058fb02d`;
+the exact binary and Terminal hash above were read back from the live Arty
+image after restart. The staged image was
+`8038f5e556c07215499a7d811c08beff6ad9906af0c8bfc2333face33632a63d`;
+the expected mounted-volume journal changes the live image hash after boot.
+The Arty passes POST, filesystem recovery, service loading, and initial-image
+stage 8 with QEMU and the input hot-plug worker resident. The exact prior live
+image is retained at
+`/data/astra/deploy/display-fair-ca161ea26816/rollback/storage-terminal.img`
+with SHA-256
+`5db4c9d94616a440910d5f962ff2ecefb4e59e6d471bb8dea805a91bca156f8e`.
+
+## Filesystem Kit candidate (2026-08-16)
+
+`filesystem.library` ABI 1.0 is now the shared, assign-aware client layer over
+the existing VFS and storage service. It exposes high-level open/close,
+sequential and explicit-offset I/O, 64-bit seek, file information, stat,
+mkdir/unlink, path qualification, and bounded union-directory enumeration. Its
+low-level export table exposes the existing VFS client, assign-resolution, and
+union-open primitives; it does not create another filesystem implementation or
+another service session. The process attachment accepts the existing bulk-read
+entry point explicitly, avoiding invalid cross-library function-identity tests
+and preserving the 16 KiB read path.
+
+The image installer places it at
+`LIBS:filesystem.library/abi-1/1.0.0/m68k-68030/filesystem.library` beside the
+Graphics Kit versions. The MC68030 shared object is 6,768 bytes text, 296 bytes
+data, no BSS, and SHA-256
+`669b3f9d10d843f5912003becfedf481da78dd0889e02e4ea402a9d76c78c5f8`.
+Metadata reports `filesystem.library 1.0.0 ABI 1.0`; all 35 dynamic relocations
+are `R_68K_RELATIVE`, with no PLT or unresolved dynamic imports.
+
+Terminal, the events command and service, and `which` now open one process
+filesystem context and route filesystem operations through the library. The
+loader stages library images in a temporary mapped area instead of reserving a
+256 KiB buffer in every consumer; `which` is 14,920 bytes total. Direct client
+calls remain only in the supervisor bootstrap that must load the library and
+in VFS service/library implementation code.
+
+The complete VFS functional, ASan/UBSan, GCC analyzer, runtime loader, and
+m68k build gates pass on Beast. A protected GUI QEMU boot with all three Kit
+libraries passes at 1,030 fences, 21 batches, 796 commands, 376 fills, 182
+blits, 42 glyph commands, 13,533 present cycles, 13,348 pointer cycles, and
+0.360 s boot. No FPGA source, synthesis, flash artifact, or active Arty image
+changed; candidate ROM SHA-256 is
+`de2a038b1a1cebe91990544ae8be8dbc51234848454d4c5e6279ea61c602496e`.
+
+The native-to-POSIX mapping is fixed in `FILESYSTEM_KIT.md`: the future POSIX
+layer owns descriptors, cwd/root presentation, `errno`, and libc behavior over
+this ABI. The public ABI exposes protocol statuses and generic file/directory
+objects, never lwext4 state or an on-disk format, so RAM drives and future VFS
+services require no application ABI change.

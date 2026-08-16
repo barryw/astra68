@@ -67,7 +67,9 @@ enum {
     /** Hardware enforces LED ownership masks. */
     ASTRA_PANEL_FEATURE_LED_OWNERSHIP = 1u << 2,
     /** Atomic LED set, clear, and toggle operations are available. */
-    ASTRA_PANEL_FEATURE_ATOMIC_LEDS = 1u << 3
+    ASTRA_PANEL_FEATURE_ATOMIC_LEDS = 1u << 3,
+    /** Three consecutive LED bits drive one RGB lamp's red, green, and blue channels. */
+    ASTRA_PANEL_FEATURE_RGB_LED = 1u << 4
 };
 
 /** Change-latch and LED masks. */

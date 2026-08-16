@@ -254,6 +254,27 @@ def run(qemu, rom, image, catalog, deadline):
                 raise RuntimeError(
                     "pointer completion not consumed: queue=0x%08x irq=0x%08x" %
                     (queue, irq))
+            # Pointer traffic must not starve application timers.  Terminal
+            # does not consume pointer events, so its underline must keep
+            # blinking while the hardware cursor is moving.
+            blink_batches = pointer_batches
+            motion_end = time.monotonic() + 1.1
+            motion_x = 700
+            while time.monotonic() < motion_end:
+                qmp.execute("input-send-event", {"events": [{
+                    "type": "abs", "data": {"axis": "x",
+                    "value": motion_x}}, {
+                    "type": "abs", "data": {"axis": "y",
+                    "value": 400}}]})
+                motion_x = 701 if motion_x == 700 else 700
+                time.sleep(0.0005)
+            pointer_batches = qmp.property("astra-display-render-batches")
+            if pointer_batches < blink_batches + 1:
+                raise RuntimeError(
+                    "pointer motion starved terminal cursor blink: "
+                    "batches=%d/%d" % (blink_batches, pointer_batches))
+            pointer_submissions = qmp.property("astra-display-submissions")
+            pointer_completions = qmp.property("astra-display-completions")
             typed_submissions = pointer_submissions
             typed_batches = pointer_batches
             typed_glyphs = qmp.property("astra-display-glyph-commands")

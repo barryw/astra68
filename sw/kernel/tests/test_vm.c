@@ -5,6 +5,8 @@
 #include "thread.h"
 #include "vm.h"
 
+#include <astra/library.h>
+
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -602,6 +604,46 @@ static void test_shared_map_existing_leaf_rollback_and_alias_guards(void)
     assert(final_memory.free_frames == initial_memory.free_frames);
 }
 
+static void test_library_code_page_is_shared_and_executable(void)
+{
+    const uint32_t frame_owner = 0x30000001u;
+    const uint32_t address = ASTRA_LIBRARY_BASE + 0x1000u;
+    KernelAddressSpace first = {0};
+    KernelAddressSpace second = {0};
+    KernelFrameInfo frame;
+    uint32_t physical;
+
+    initialize_test();
+    assert(kernel_vm_create_address_space(61u, &first) == KERNEL_VM_OK);
+    assert(kernel_vm_create_address_space(62u, &second) == KERNEL_VM_OK);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_SHARED, frame_owner,
+                               &physical) == KERNEL_MEMORY_OK);
+    assert(kernel_vm_map_shared_page(&first, address, physical, frame_owner,
+                                     KERNEL_VM_READ | KERNEL_VM_EXEC) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_map_shared_page(&second, address, physical, frame_owner,
+                                     KERNEL_VM_READ | KERNEL_VM_EXEC) ==
+           KERNEL_VM_OK);
+    assert(kernel_memory_frame_info(physical, &frame));
+    assert(frame.references == 3u); /* cache plus two address spaces */
+    assert(kernel_vm_map_shared_page(
+               &second, address + ASTRA_LIBRARY_SLOT_SIZE, physical,
+               frame_owner, KERNEL_VM_READ | KERNEL_VM_EXEC) ==
+           KERNEL_VM_CACHE_ALIAS);
+    assert(kernel_vm_map_shared_page(&second, address + 0x1000u, physical,
+                                     frame_owner,
+                                     KERNEL_VM_READ | KERNEL_VM_WRITE) ==
+           KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_unmap_page(&first, address) == KERNEL_VM_OK);
+    assert(kernel_vm_unmap_page(&second, address) == KERNEL_VM_OK);
+    assert(kernel_memory_frame_info(physical, &frame));
+    assert(frame.references == 1u);
+    assert(kernel_memory_release(physical, 1u, frame_owner) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_vm_destroy_address_space(&first) == KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&second) == KERNEL_VM_OK);
+}
+
 int main(void)
 {
     test_kernel_root_and_enable_sequence();
@@ -610,6 +652,7 @@ int main(void)
     test_destroy_releases_read_only_mapping();
     test_shared_map_transaction_rolls_back_every_stage();
     test_shared_map_existing_leaf_rollback_and_alias_guards();
+    test_library_code_page_is_shared_and_executable();
     puts("KERNEL VM PASS");
     return 0;
 }

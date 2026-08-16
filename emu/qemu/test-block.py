@@ -15,6 +15,16 @@ VESTA = 0xFFF00000
 SYS_STATUS = VESTA + 0x010
 RAM_SIZE = VESTA + 0x030
 IRQ_RAW = VESTA + 0x300
+IRQ_ENABLE = VESTA + 0x304
+IRQ_SOFT = VESTA + 0x308
+IRQ_CONFIG0 = VESTA + 0x380
+TIMER0_LOAD = VESTA + 0x400
+TIMER0_CONTROL = VESTA + 0x408
+
+SCRATCH = VESTA + 0x018
+DISPLAY_REQ_ID = VESTA + 0x1E4
+DISPLAY_REQ_OP = VESTA + 0x1E8
+DISPLAY_REQ_SOURCE = VESTA + 0x1EC
 
 BLOCK_ID = VESTA + 0x150
 BLOCK_VERSION = VESTA + 0x154
@@ -78,6 +88,16 @@ PANEL = 0xFFF01000
 PANEL_ID = PANEL + 0x00
 PANEL_RAW_INPUT = PANEL + 0x10
 PANEL_LED_DATA = PANEL + 0x18
+PANEL_LED_OWNERSHIP = PANEL + 0x1C
+
+ASTRAEA = 0xFFF10000
+ASTRAEA_IRQ_ENABLE = ASTRAEA + 0x010
+ASTRAEA_SOURCE = ASTRAEA + 0x040
+ASTRAEA_COLOR = ASTRAEA + 0x060
+
+VEGA = 0xFFF20000
+VEGA_IRQ_ENABLE = VEGA + 0x010
+VEGA_FRAMEBUFFER_BASE = VEGA + 0x020
 
 
 def image_byte(offset):
@@ -133,8 +153,9 @@ class QmpSocket(LineSocket):
 
 
 class AstraBlockTest:
-    def __init__(self, qtest, image_path, panel_path):
+    def __init__(self, qtest, qmp, image_path, panel_path):
         self.qtest = qtest
+        self.qmp = qmp
         self.image_path = image_path
         self.panel_path = panel_path
         self.swap = False
@@ -225,6 +246,42 @@ class AstraBlockTest:
         with open(self.panel_path, "rb") as panel:
             panel.seek(0x18)
             assert struct.unpack("<I", panel.read(4))[0] == 0x5
+
+    def test_complete_machine_reset(self):
+        """Every guest-visible chip returns to its power-on register state."""
+        host_generation = self.read32(BLOCK_HOST_GEN)
+        dirty_registers = (
+            (SCRATCH, 0x12345678),
+            (IRQ_ENABLE, 0xFFFFFFFF),
+            (IRQ_SOFT, 0xFFFFFFFF),
+            (IRQ_CONFIG0, 0x00010007),
+            (TIMER0_LOAD, 0x1234),
+            (TIMER0_CONTROL, 0x4),
+            (DISPLAY_REQ_ID, 0x42),
+            (DISPLAY_REQ_OP, 0x99),
+            (DISPLAY_REQ_SOURCE, SDRAM_BASE),
+            (PANEL_LED_DATA, 0xA5),
+            (PANEL_LED_OWNERSHIP, 0xFF),
+            (ASTRAEA_IRQ_ENABLE, 0x9),
+            (ASTRAEA_SOURCE, 0x11223344),
+            (ASTRAEA_COLOR, 0x55667788),
+            (VEGA_IRQ_ENABLE, 0x7),
+            (VEGA_FRAMEBUFFER_BASE, 0x18000000),
+        )
+        for address, value in dirty_registers:
+            self.write32(address, value)
+
+        self.qmp.execute("system_reset")
+        deadline = time.monotonic() + 1.0
+        while self.read32(BLOCK_HOST_GEN) == host_generation:
+            if time.monotonic() >= deadline:
+                raise AssertionError("machine reset did not complete")
+            time.sleep(0.001)
+
+        for address, _ in dirty_registers:
+            assert self.read32(address) == 0, \
+                f"register 0x{address:08x} survived reset"
+        assert self.read32(IRQ_RAW) == IRQ_STORAGE
 
     def test_reset_state_change(self):
         """A reset raises a state change; the storage IRQ holds until acked."""
@@ -374,6 +431,7 @@ class AstraBlockTest:
         self.detect_endian()
         self.test_identity()
         self.test_front_panel_bridge()
+        self.test_complete_machine_reset()
         self.test_reset_state_change()
         self.test_read()
         self.test_maximum_read()
@@ -441,7 +499,7 @@ def main():
             qtest = LineSocket(qtest_path)
             qmp = QmpSocket(qmp_path)
             qmp.execute("cont")
-            AstraBlockTest(qtest, image, panel_path).run()
+            AstraBlockTest(qtest, qmp, image, panel_path).run()
             with open(panel_path, "rb") as panel:
                 panel.seek(0x2C)
                 activity = struct.unpack("<I", panel.read(4))[0]

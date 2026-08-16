@@ -25,6 +25,13 @@ static const KernelElfLimits limits = {
     .page_size = PAGE,
 };
 
+static const KernelElfLimits library_limits = {
+    .minimum_address = 0u,
+    .maximum_address = 0x00ffffffu,
+    .maximum_pages = 64u,
+    .page_size = PAGE,
+};
+
 static void put16(uint32_t offset, uint16_t value)
 {
     image[offset] = (uint8_t)(value >> 8);
@@ -445,6 +452,48 @@ static void test_plan_cleared_on_failure(void)
     }
 }
 
+static void build_valid_library(void)
+{
+    build_valid();
+    put16(16u, 3u); /* ET_DYN */
+    put32(24u, 0u); /* libraries are opened through their export table */
+    put32(PHOFF + 8u, 0u);
+    put32(PHOFF + 12u, 0u);
+    put32(PHOFF + 32u + 8u, 0x2000u);
+    put32(PHOFF + 32u + 12u, 0x2000u);
+    put32(PHOFF + 64u + 0u, 2u); /* PT_DYNAMIC inside the RW load */
+}
+
+static void test_library_profile(void)
+{
+    KernelElfImage plan;
+
+    build_valid_library();
+    assert(kernel_elf_accept_library(image, image_size, &library_limits,
+                                     &plan) == KERNEL_ELF_OK);
+    assert(plan.segment_count == 2u);
+    assert(plan.entry == 0u);
+    assert(plan.total_pages == 3u);
+    assert(kernel_elf_accept(image, image_size, &library_limits, &plan) ==
+           KERNEL_ELF_BAD_TYPE);
+
+    build_valid_library();
+    put16(16u, 2u);
+    assert(kernel_elf_accept_library(image, image_size, &library_limits,
+                                     &plan) == KERNEL_ELF_BAD_TYPE);
+
+    build_valid_library();
+    put32(24u, 0x10u);
+    assert(kernel_elf_accept_library(image, image_size, &library_limits,
+                                     &plan) == KERNEL_ELF_BAD_ENTRY);
+
+    build_valid_library();
+    put32(PHOFF + 64u, 3u); /* PT_INTERP remains forbidden */
+    assert(kernel_elf_accept_library(image, image_size, &library_limits,
+                                     &plan) ==
+           KERNEL_ELF_UNSUPPORTED_SEGMENT);
+}
+
 /*
  * Truncating an accepted image at every byte boundary must always either
  * reject it or accept it with a plan that stays inside the bytes provided.
@@ -578,6 +627,7 @@ int main(void)
     test_segment_capacity();
     test_entry_rejections();
     test_plan_cleared_on_failure();
+    test_library_profile();
     test_truncation_sweep();
     test_single_byte_corruption();
     test_real_image();

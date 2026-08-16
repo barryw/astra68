@@ -107,6 +107,7 @@ test-host: $(OUT)/test-astra-boot-text $(OUT)/test-astra-terminal-display \
 	$(OUT)/test-astra-boot-text
 	$(OUT)/test-astra-terminal-display --self-test
 	$(OUT)/test-astra-audio --self-test
+	$(PYTHON) test-astra-chip-reset.py
 	$(PYTHON) test-astra-terminal-start.py
 
 $(OUT)/test-astra-boot-text: test_astra_boot_text.c \

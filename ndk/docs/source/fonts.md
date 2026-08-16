@@ -32,6 +32,11 @@ Applications should prefer semantic system roles over bundled family names:
 - `ASTRA_FONT_ROLE_MONO` for code, terminals, and aligned data.
 - `ASTRA_FONT_ROLE_RESCUE` for the non-replaceable recovery face.
 
+The immutable system theme publishes the native 16-pixel Astra Mono strike
+height and its current 8-pixel cell advance. Applications request the semantic
+role and use returned metrics when the OS font backend is available; they do
+not embed Spleen's family name or private AFNT records.
+
 Role selection lets users replace desktop defaults without requiring
 applications to change. Explicit family and style lookup remains available for
 documents and font-aware tools.

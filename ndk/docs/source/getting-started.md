@@ -6,9 +6,11 @@ Include the umbrella header for the complete public API:
 #include <astra/ndk.h>
 ```
 
-Applications include headers from `include/astra` and link with `libastra.a`.
-The default target is a freestanding Motorola 68030 build with software
-floating point:
+Applications include headers from `include/astra` and currently link with the
+bring-up archive `libastra.a`. The stable source API is also the boundary for
+the planned loader-cached shared Kit: applications do not call private service
+protocols or depend on AFNT and hardware records. The default target is a
+freestanding Motorola 68030 build with software floating point:
 
 ```sh
 make -C ndk

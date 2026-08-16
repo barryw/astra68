@@ -26,12 +26,13 @@ static void valid_manifest(void)
     {
         char terminal[] =
         "application SERVICES:terminal grants DISPLAY INPUT INPUT_IRQ "
-            "WORK:rw COMMANDS:r EVENTS:r EVENT_CONTROL delegates required\n";
+            "WORK:rw COMMANDS:r LIBS:r EVENTS:r EVENT_CONTROL delegates "
+            "required\n";
 
         assert(supervisor_manifest_parse(terminal, sizeof(terminal) - 1u,
                                          &manifest));
         assert(manifest.count == 1u);
-        assert(manifest.entries[0].grant_count == 7u);
+        assert(manifest.entries[0].grant_count == 8u);
         assert(manifest.entries[0].resident == 0u);
         assert(manifest.entries[0].delegates == 1u);
         assert(manifest.entries[0].serves[0] == '\0');
@@ -41,7 +42,7 @@ static void valid_manifest(void)
             "service SERVICES:display grants DISPLAY DISPLAY_IRQ "
             "serves GUI required\n"
             "application SERVICES:terminal grants GUI WORK:rw COMMANDS:r "
-            "EVENTS:r EVENT_CONTROL delegates required\n";
+            "LIBS:r EVENTS:r EVENT_CONTROL delegates required\n";
 
         assert(supervisor_manifest_parse(display, sizeof(display) - 1u,
                                          &manifest));
@@ -52,10 +53,20 @@ static void valid_manifest(void)
                       "DISPLAY_IRQ") == 0);
         assert(strcmp(manifest.entries[0].serves, "GUI") == 0);
         assert(manifest.entries[0].serves_rights == 0u);
-        assert(manifest.entries[1].grant_count == 5u);
+        assert(manifest.entries[1].grant_count == 6u);
         assert(manifest.entries[1].resident == 0u);
         assert(strcmp(manifest.entries[1].grants[0].name, "GUI") == 0);
         assert(manifest.entries[1].delegates == 1u);
+    }
+    {
+        char installer[] =
+            "application SERVICES:installer grants LIBS:rw required\n";
+
+        assert(supervisor_manifest_parse(installer, sizeof(installer) - 1u,
+                                         &manifest));
+        assert(manifest.entries[0].grant_count == 1u);
+        assert(manifest.entries[0].grants[0].rights ==
+               (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE));
     }
 }
 

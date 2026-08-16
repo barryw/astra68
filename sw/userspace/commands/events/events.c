@@ -22,9 +22,7 @@
 #include <astra/event.h>
 #include <astra/event_control.h>
 #include <astra/stream.h>
-#include <astra/vfs_assign.h>
-#include <astra/vfs_client.h>
-#include <astra/vfs_port_transport.h>
+#include <astra/vfs_process.h>
 
 ASTRA_PROGRAM("events", 1, 1, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
@@ -39,16 +37,15 @@ ASTRA_PROGRAM("events", 1, 1, 0, "Barry Walker",
 #define EVENTS_PATH_MAX 128u
 
 /* Statically allocated, because a user thread gets one 4 KiB stack. */
-static AstraAssignTable assigns;
-static AstraVfsClient client;
-static uint32_t events_handle;
+static AstraProcessFilesystem process_filesystem =
+    ASTRA_PROCESS_FILESYSTEM_INIT;
 static uint32_t out;
 static uint8_t chunk[EVENTS_READ_CHUNK];
 
 static int
-disconnect_with(uint32_t status)
+close_with(uint32_t status)
 {
-    (void)astra_vfs_disconnect(&client);
+    astra_process_filesystem_close(&process_filesystem);
     return (int)status;
 }
 
@@ -154,13 +151,14 @@ activity_name(const char *typed, char *out_name)
 
 /* Prints from `offset` to the end, and returns where it stopped. */
 static uint64_t
-print_from(AstraVfsFile file, uint64_t offset)
+print_from(AstraFile *file, uint64_t offset)
 {
     for (;;) {
         uint32_t moved = 0u;
 
-        if (astra_vfs_read(&client, file, offset, chunk, sizeof(chunk),
-                           &moved) != ASTRA_VFS_OK || moved == 0u) {
+        if (process_filesystem.library->read_at(
+                file, offset, chunk, sizeof(chunk), &moved) !=
+                ASTRA_VFS_OK || moved == 0u) {
             break;
         }
         {
@@ -197,7 +195,7 @@ print_from(AstraVfsFile file, uint64_t offset)
  * still appending to it while this runs.
  */
 static uint64_t
-tail_from(AstraVfsFile file, uint32_t lines)
+tail_from(AstraFile *file, uint32_t lines)
 {
     uint64_t starts[EVENTS_TAIL_MAX];
     uint64_t offset = 0u;
@@ -211,8 +209,9 @@ tail_from(AstraVfsFile file, uint32_t lines)
     for (;;) {
         uint32_t moved = 0u;
 
-        if (astra_vfs_read(&client, file, offset, chunk, sizeof(chunk),
-                           &moved) != ASTRA_VFS_OK || moved == 0u) {
+        if (process_filesystem.library->read_at(
+                file, offset, chunk, sizeof(chunk), &moved) !=
+                ASTRA_VFS_OK || moved == 0u) {
             break;
         }
         for (uint32_t index = 0u; index < moved; ++index) {
@@ -239,7 +238,7 @@ tail_from(AstraVfsFile file, uint32_t lines)
  * telling somebody to do something that will not work.
  */
 static void
-follow(uint32_t stdin_handle, AstraVfsFile file, uint64_t offset)
+follow(uint32_t stdin_handle, AstraFile *file, uint64_t offset)
 {
     say("-- following, press return --");
     for (;;) {
@@ -275,12 +274,11 @@ astra_main(const AstraStartupInfo *startup)
     };
     const AstraStartupCapability *capabilities;
     const uint32_t *argv = NULL;
-    const AstraAssign *assign;
     char path[EVENTS_PATH_MAX];
     char activity[9];
     const char *level = "notice";
     const char *subsystem = NULL;
-    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
+    AstraFile file = ASTRA_FILE_INIT;
     uint32_t stdin_handle = 0u;
     uint32_t control_handle = 0u;
     uint32_t columns = 0u;
@@ -305,15 +303,6 @@ astra_main(const AstraStartupInfo *startup)
         argv = (const uint32_t *)(uintptr_t)startup->argv_address;
     }
 
-    /*
-     * The namespace, seeded from the grants and nothing else. There is no
-     * manifest to read and no path to search: the names this program may use
-     * are exactly the ones somebody chose to hand it.
-     */
-    if (astra_assign_seed(&assigns, capabilities,
-                          startup->capability_count) != ASTRA_VFS_OK) {
-        return ASTRA_STATUS_INVALID;
-    }
     for (uint32_t index = 0u; index < startup->capability_count; ++index) {
         if (astra_capability_name_equal(capabilities[index].name, "STDOUT")) {
             out = capabilities[index].handle;
@@ -438,35 +427,28 @@ astra_main(const AstraStartupInfo *startup)
         return ASTRA_STATUS_OK;
     }
 
-    assign = astra_assign_lookup(&assigns, "EVENTS");
-    if (assign == NULL) {
-        say("events: this program was not granted EVENTS:");
-        return ASTRA_STATUS_ACCESS;
-    }
-    events_handle = assign->handle;
-    status = astra_vfs_port_connect(&client, events_handle);
-    if (status != ASTRA_VFS_OK) {
-        say_number("events: the events service did not answer, status ",
-                   status);
-        return (int)status;
-    }
-
     if (by_activity && subsystem != NULL) {
         /* An activity is already a slice through every other dimension. */
         say("events: --activity is every subsystem, by definition");
-        return disconnect_with(ASTRA_STATUS_INVALID);
+        return ASTRA_STATUS_INVALID;
     }
     if (previous_boot && (by_activity || subsystem != NULL)) {
         say("events: --boot cannot be combined with another history");
-        return disconnect_with(ASTRA_STATUS_INVALID);
+        return ASTRA_STATUS_INVALID;
     }
     if (previous_boot && following) {
         say("events: a previous boot cannot grow");
-        return disconnect_with(ASTRA_STATUS_INVALID);
+        return ASTRA_STATUS_INVALID;
     }
     if (following && stdin_handle == 0u) {
         say("events: no input, so nothing could end a follow");
-        return disconnect_with(ASTRA_STATUS_INVALID);
+        return ASTRA_STATUS_INVALID;
+    }
+
+    status = astra_process_filesystem_open(&process_filesystem, startup);
+    if (status != ASTRA_VFS_OK) {
+        say_number("events: filesystem unavailable, status ", status);
+        return (int)status;
     }
 
     at = append(path, sizeof(path), at, "EVENTS:");
@@ -484,22 +466,12 @@ astra_main(const AstraStartupInfo *startup)
         at = append(path, sizeof(path), at, level);
     }
 
-    {
-        char wire[EVENTS_PATH_MAX];
-
-        status = astra_assign_resolve(&assigns, path, ASTRA_RIGHT_READ, 0u,
-                                      wire, sizeof(wire), NULL);
-        if (status != ASTRA_VFS_OK) {
-            say("events: no such view");
-            return disconnect_with(status);
-        }
-        status = astra_vfs_open(&client, wire, ASTRA_VFS_OPEN_READ, &file,
-                                NULL, NULL);
-    }
+    status = process_filesystem.library->open(
+        &process_filesystem.filesystem, path, ASTRA_VFS_OPEN_READ, &file);
     if (status != ASTRA_VFS_OK) {
         say(previous_boot ? "events: no previous boot is stored" :
                             "events: no such view");
-        return disconnect_with(status);
+        return close_with(status);
     }
 
     /*
@@ -508,14 +480,14 @@ astra_main(const AstraStartupInfo *startup)
      * redirected `events` should do.
      */
     (void)astra_stream_size(out, &columns, &rows);
-    offset = rows > 1u ? tail_from(file, rows - 1u) : 0u;
-    offset = print_from(file, offset);
+    offset = rows > 1u ? tail_from(&file, rows - 1u) : 0u;
+    offset = print_from(&file, offset);
     if (offset == 0u) {
         say("(nothing at that level)");
     }
     if (following) {
-        follow(stdin_handle, file, offset);
+        follow(stdin_handle, &file, offset);
     }
-    (void)astra_vfs_close(&client, file);
-    return disconnect_with(ASTRA_STATUS_OK);
+    (void)process_filesystem.library->close(&file);
+    return close_with(ASTRA_STATUS_OK);
 }

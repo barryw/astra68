@@ -30,4 +30,9 @@ const AstraUiGlyph *astra_ui_font_glyph(const AstraUiStrike *strike,
                                         uint32_t scalar);
 const uint8_t *astra_ui_font_bitmap(const AstraUiGlyph *glyph);
 
+const AstraUiStrike *astra_mono_font_strike(uint16_t pixel_height);
+const AstraUiGlyph *astra_mono_font_glyph(const AstraUiStrike *strike,
+                                          uint32_t scalar);
+const uint8_t *astra_mono_font_bitmap(const AstraUiGlyph *glyph);
+
 #endif

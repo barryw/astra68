@@ -253,6 +253,9 @@ ASTRA_NODISCARD AstraResult astra_window_set_event_mask(
     AstraWindow *window, uint32_t event_mask);
 /** Publish the draw-list or pixel content currently in the shared area. */
 ASTRA_NODISCARD AstraResult astra_window_present(AstraWindow *window);
+/** Publish only the changed content rectangle. */
+ASTRA_NODISCARD AstraResult astra_window_present_region(
+    AstraWindow *window, const AstraWindowFrame *damage);
 ASTRA_NODISCARD AstraResult astra_window_close(AstraWindow *window);
 ASTRA_NODISCARD AstraResult astra_window_event_try(
     AstraWindow *window, AstraWindowEvent *event);

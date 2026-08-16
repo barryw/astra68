@@ -45,9 +45,9 @@ where a root enters the system from outside, so the syscall refuses
 `..` component, before copying it into the record the kernel eventually
 publishes; resolution's own `..` rule is separate and unaffected.
 
-`ASTRA_LAUNCH_GRANT_MAX` is 9 — the terminal service uses its ready endpoint,
+`ASTRA_LAUNCH_GRANT_MAX` is 10 — the terminal service uses its ready endpoint,
 display, input, input IRQ, work namespace, two-member `COMMANDS:` union,
-events, and event control. `sw/kernel/process.h`'s
+shared `LIBS:`, events, and event control. `sw/kernel/process.h`'s
 `KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX` is a **textual alias** of it, not a
 second number: the two disagreeing once already let a launch of more than
 four grants fail with `INVALID_ARGUMENT` from inside the loader, naming
@@ -88,7 +88,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 
 | Number | Name | State | Contract |
 |---:|---|---|---|
-| 0 | `QUERY_ABI` | CURRENT | `D1=0x0001000e`, `D2=process handle`, `D3=calling-thread handle` |
+| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010010`, `D2=process handle`, `D3=calling-thread handle` |
 | 1 | `PROGRESS` | K1 TEST ONLY | monotonic test progress, not a product ABI |
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `PROCESS_EXIT` (`EXIT` compatibility alias) | CURRENT | terminates the calling process and all of its threads |
@@ -135,9 +135,10 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 50 | `CONSOLE_CURSOR` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=row`, `D3=column`, `D4=visible`; publishes the terminal cursor, accepting `column=columns` as pending wrap |
 | 51 | `DISPLAY_SUBMIT` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=aligned AstraDisplayFrameRequest`; submits one nonzero fenced solid, RGB565 DMA-frame, or bounded native Astraea render-batch request |
 | 52 | `DISPLAY_COLLECT` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=aligned AstraDisplayFrameCompletion`; returns `WOULD_BLOCK` until the submitted fence completes |
+| 53 | `LIBRARY_MAP` | CURRENT CANDIDATE | `D1=library image`, `D2=image bytes`, `D3:D4=base/span outputs`; validates the constrained ELF image and maps shared R/RX plus process-private RW pages into one versioned library slot |
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
-not panic. `QUERY_ABI` reports revision `0x0001000f`; a later revision may add
+not panic. `QUERY_ABI` reports revision `0x00010010`; a later revision may add
 feature bits before additional calls freeze.
 
 `AstraDeviceInfo` is 24 bytes and naturally four-byte aligned. It contains

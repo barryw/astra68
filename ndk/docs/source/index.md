@@ -14,6 +14,7 @@ message-ports
 shared-memory
 graphics
 fonts
+filesystem
 development
 ```
 

@@ -4,6 +4,7 @@
 #include <astra/display.h>
 #include <astra/syscall.h>
 #include <astra/input.h>
+#include <astra/library.h>
 #include <astra/process.h>
 #include <astra/render_batch.h>
 #include <astra/event.h>
@@ -91,12 +92,25 @@ typedef struct KernelProcess {
     KernelProcessDmaBuffer dma_buffers[KERNEL_VM_DMA_SLOT_COUNT];
 } KernelProcess;
 
+#define LIBRARY_OWNER_PREFIX 0x30000000u
+#define LIBRARY_PAGE_MAX (ASTRA_LIBRARY_IMAGE_MAX / KERNEL_PAGE_SIZE)
+
+typedef struct KernelLibraryCacheEntry {
+    KernelElfImage plan;
+    uint32_t physical_pages[LIBRARY_PAGE_MAX];
+    uint32_t owner;
+    uint32_t span;
+    uint8_t used;
+    uint8_t reserved[3];
+} KernelLibraryCacheEntry;
+
 #if defined(__m68k__)
-_Static_assert(sizeof(KernelProcess) == 1188u,
+_Static_assert(sizeof(KernelProcess) == 1216u,
                "process record size changed; update the memory budget");
 #endif
 
 static KernelProcess processes[KERNEL_PROCESS_MAX];
+static KernelLibraryCacheEntry library_cache[ASTRA_LIBRARY_SLOT_COUNT];
 static KernelObjectCache process_cache;
 static uint32_t process_cache_bitmap[
     KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_PROCESS_MAX)];
@@ -1631,6 +1645,7 @@ void kernel_process_init(void)
         kernel_thread_wait_queue_init(&processes[index].death_waiters);
     }
     kernel_bytes_clear(&scheduler_stats, sizeof(scheduler_stats));
+    kernel_bytes_clear(library_cache, sizeof(library_cache));
     kernel_bytes_clear(&maintenance_diagnostics,
                        sizeof(maintenance_diagnostics));
     kernel_bytes_clear(qualification_clients,
@@ -2355,8 +2370,13 @@ static uint8_t launch_header[KERNEL_PROCESS_LAUNCH_HEADER_BYTES];
 static KernelProcessStatus map_segments(KernelProcess *process,
                                         const KernelElfImage *plan,
                                         const uint8_t *image,
-                                        uint32_t user_image)
+                                        uint32_t user_image,
+                                        uint32_t virtual_base,
+                                        bool rollback)
 {
+    uint32_t mapped = 0u;
+    KernelProcessStatus failure = KERNEL_PROCESS_OK;
+
     for (uint32_t index = 0u; index < plan->segment_count; ++index) {
         const KernelElfSegment *segment = &plan->segment[index];
         uint32_t rights = segment_vm_rights(segment->rights);
@@ -2379,20 +2399,408 @@ static KernelProcessStatus map_segments(KernelProcess *process,
                         launch_page,
                         user_image + segment->file_offset + offset, copy);
 
-                    if (copy_status != KERNEL_USER_COPY_OK)
-                        return KERNEL_PROCESS_INVALID_ARGUMENT;
+                    if (copy_status != KERNEL_USER_COPY_OK) {
+                        failure = KERNEL_PROCESS_INVALID_ARGUMENT;
+                        goto failed;
+                    }
                     source = launch_page;
                 } else {
                     source = image + segment->file_offset + offset;
                 }
             }
-            status = publish_page(process, segment->virtual_address + offset,
+            status = publish_page(process,
+                                  virtual_base + segment->virtual_address +
+                                      offset,
                                   source, copy, rights);
-            if (status != KERNEL_PROCESS_OK)
-                return status;
+            if (status != KERNEL_PROCESS_OK) {
+                failure = status;
+                goto failed;
+            }
+            ++mapped;
         }
     }
     return KERNEL_PROCESS_OK;
+
+failed:
+    if (!rollback)
+        return failure;
+    for (uint32_t index = 0u; index < plan->segment_count && mapped != 0u;
+         ++index) {
+        const KernelElfSegment *segment = &plan->segment[index];
+
+        for (uint32_t page = 0u; page < segment->page_count && mapped != 0u;
+             ++page) {
+            uint32_t address = virtual_base + segment->virtual_address +
+                               (page * KERNEL_PAGE_SIZE);
+
+            if (kernel_vm_unmap_page(&process->address_space, address) !=
+                KERNEL_VM_OK)
+                return KERNEL_PROCESS_CORRUPT;
+            --mapped;
+        }
+    }
+    return failure;
+}
+
+static bool bytes_equal(const void *left, const void *right, uint32_t size)
+{
+    const uint8_t *a = left;
+    const uint8_t *b = right;
+
+    while (size-- != 0u) {
+        if (*a++ != *b++)
+            return false;
+    }
+    return true;
+}
+
+static KernelProcessStatus read_library_page(
+    uint32_t user_image, const KernelElfSegment *segment, uint32_t page,
+    uint32_t *copied)
+{
+    uint32_t offset = page * KERNEL_PAGE_SIZE;
+
+    kernel_bytes_clear(launch_page, sizeof(launch_page));
+    *copied = 0u;
+    if (offset >= segment->file_size)
+        return KERNEL_PROCESS_OK;
+    *copied = segment->file_size - offset;
+    if (*copied > KERNEL_PAGE_SIZE)
+        *copied = KERNEL_PAGE_SIZE;
+    if (kernel_copy_from_user(launch_page,
+                              user_image + segment->file_offset + offset,
+                              *copied) != KERNEL_USER_COPY_OK)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    return KERNEL_PROCESS_OK;
+}
+
+static KernelProcessStatus library_cache_match(
+    const KernelLibraryCacheEntry *entry, const KernelElfImage *plan,
+    uint32_t user_image, bool *matches)
+{
+    uint32_t flattened = 0u;
+
+    *matches = false;
+    if (entry->used == 0u ||
+        !bytes_equal(&entry->plan, plan, sizeof(*plan)))
+        return KERNEL_PROCESS_OK;
+    for (uint32_t index = 0u; index < plan->segment_count; ++index) {
+        const KernelElfSegment *segment = &plan->segment[index];
+
+        for (uint32_t page = 0u; page < segment->page_count;
+             ++page, ++flattened) {
+            uint32_t copied;
+            uint8_t *cached;
+            KernelProcessStatus status;
+
+            if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) != 0u)
+                continue;
+            status = read_library_page(user_image, segment, page, &copied);
+            if (status != KERNEL_PROCESS_OK)
+                return status;
+            (void)copied;
+            cached = physical_bytes(entry->physical_pages[flattened],
+                                    KERNEL_PAGE_SIZE);
+            if (cached == NULL)
+                return KERNEL_PROCESS_CORRUPT;
+            if (!bytes_equal(cached, launch_page, KERNEL_PAGE_SIZE))
+                return KERNEL_PROCESS_OK;
+        }
+    }
+    *matches = true;
+    return KERNEL_PROCESS_OK;
+}
+
+static KernelProcessStatus library_cache_create(
+    KernelLibraryCacheEntry *entry, uint32_t slot,
+    const KernelElfImage *plan, uint32_t user_image, uint32_t span)
+{
+    uint32_t flattened = 0u;
+    KernelProcessStatus result = KERNEL_PROCESS_CORRUPT;
+
+    kernel_bytes_clear(entry, sizeof(*entry));
+    entry->owner = LIBRARY_OWNER_PREFIX | (slot + 1u);
+    entry->span = span;
+    kernel_bytes_copy(&entry->plan, plan, sizeof(*plan));
+    for (uint32_t index = 0u; index < plan->segment_count; ++index) {
+        const KernelElfSegment *segment = &plan->segment[index];
+
+        for (uint32_t page = 0u; page < segment->page_count;
+             ++page, ++flattened) {
+            uint32_t copied;
+            uint32_t physical;
+            uint8_t *target;
+
+            if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) != 0u)
+                continue;
+            result = read_library_page(user_image, segment, page, &copied);
+            if (result != KERNEL_PROCESS_OK)
+                goto failed;
+            (void)copied;
+            if (kernel_memory_alloc_zeroed_tagged(
+                    KERNEL_ALLOCATION_SITE_LIBRARY_PAGE, 1u, 1u,
+                    KERNEL_FRAME_SHARED, entry->owner, &physical) !=
+                KERNEL_MEMORY_OK) {
+                result = KERNEL_PROCESS_OUT_OF_MEMORY;
+                goto failed;
+            }
+            entry->physical_pages[flattened] = physical;
+            target = physical_bytes(physical, KERNEL_PAGE_SIZE);
+            if (target == NULL) {
+                result = KERNEL_PROCESS_CORRUPT;
+                goto failed;
+            }
+#if defined(KERNEL_PROCESS_HOST_TEST)
+            kernel_bytes_clear(target, KERNEL_PAGE_SIZE);
+#endif
+            kernel_bytes_copy(target, launch_page, KERNEL_PAGE_SIZE);
+        }
+    }
+    entry->used = 1u;
+    return KERNEL_PROCESS_OK;
+
+failed:
+    for (uint32_t page = 0u; page < LIBRARY_PAGE_MAX; ++page) {
+        if (entry->physical_pages[page] != 0u &&
+            kernel_memory_release(entry->physical_pages[page], 1u,
+                                  entry->owner) != KERNEL_MEMORY_OK)
+            result = KERNEL_PROCESS_CORRUPT;
+    }
+    kernel_bytes_clear(entry, sizeof(*entry));
+    return result;
+}
+
+static KernelProcessStatus library_cache_reclaim(uint32_t *free_slot)
+{
+    for (uint32_t index = 0u; index < ASTRA_LIBRARY_SLOT_COUNT; ++index) {
+        bool idle = library_cache[index].used != 0u;
+
+        if (!idle)
+            continue;
+        for (uint32_t page = 0u; page < LIBRARY_PAGE_MAX; ++page) {
+            KernelFrameInfo info;
+            uint32_t physical = library_cache[index].physical_pages[page];
+
+            if (physical == 0u)
+                continue;
+            if (!kernel_memory_frame_info(physical, &info))
+                return KERNEL_PROCESS_CORRUPT;
+            if (info.references != 1u) {
+                idle = false;
+                break;
+            }
+        }
+        if (!idle)
+            continue;
+        for (uint32_t page = 0u; page < LIBRARY_PAGE_MAX; ++page) {
+            uint32_t physical = library_cache[index].physical_pages[page];
+
+            if (physical != 0u &&
+                kernel_memory_release(physical, 1u,
+                                      library_cache[index].owner) !=
+                    KERNEL_MEMORY_OK)
+                return KERNEL_PROCESS_CORRUPT;
+        }
+        kernel_bytes_clear(&library_cache[index],
+                           sizeof(library_cache[index]));
+        *free_slot = index;
+        return KERNEL_PROCESS_OK;
+    }
+    return KERNEL_PROCESS_RESOURCE_LIMIT;
+}
+
+#if defined(KERNEL_PROCESS_HOST_TEST)
+bool kernel_process_test_library_cache_reclaims_after_last_mapping(void)
+{
+    KernelFrameInfo info;
+    uint32_t physical;
+    uint32_t slot = ASTRA_LIBRARY_SLOT_COUNT;
+    uint32_t owner = LIBRARY_OWNER_PREFIX | 1u;
+
+    if (kernel_memory_alloc_zeroed_tagged(
+            KERNEL_ALLOCATION_SITE_LIBRARY_PAGE, 1u, 1u,
+            KERNEL_FRAME_SHARED, owner, &physical) != KERNEL_MEMORY_OK)
+        return false;
+    library_cache[0].used = 1u;
+    library_cache[0].owner = owner;
+    library_cache[0].physical_pages[0] = physical;
+    if (kernel_memory_retain(physical, 1u, owner) != KERNEL_MEMORY_OK ||
+        library_cache_reclaim(&slot) != KERNEL_PROCESS_RESOURCE_LIMIT ||
+        slot != ASTRA_LIBRARY_SLOT_COUNT ||
+        kernel_memory_release(physical, 1u, owner) != KERNEL_MEMORY_OK ||
+        library_cache_reclaim(&slot) != KERNEL_PROCESS_OK || slot != 0u ||
+        library_cache[0].used != 0u ||
+        !kernel_memory_frame_info(physical, &info))
+        return false;
+    return info.references == 0u && info.state == KERNEL_FRAME_FREE;
+}
+#endif
+
+static KernelProcessStatus library_cache_get(
+    const KernelElfImage *plan, uint32_t user_image, uint32_t span,
+    KernelLibraryCacheEntry **cached, uint32_t *slot)
+{
+    uint32_t free_slot = ASTRA_LIBRARY_SLOT_COUNT;
+
+    for (uint32_t index = 0u; index < ASTRA_LIBRARY_SLOT_COUNT; ++index) {
+        bool matches;
+        KernelProcessStatus status;
+
+        if (library_cache[index].used == 0u) {
+            if (free_slot == ASTRA_LIBRARY_SLOT_COUNT)
+                free_slot = index;
+            continue;
+        }
+        status = library_cache_match(&library_cache[index], plan, user_image,
+                                     &matches);
+        if (status != KERNEL_PROCESS_OK)
+            return status;
+        if (matches) {
+            *cached = &library_cache[index];
+            *slot = index;
+            return KERNEL_PROCESS_OK;
+        }
+    }
+    if (free_slot == ASTRA_LIBRARY_SLOT_COUNT) {
+        /*
+         * A dead process cannot pin a library forever: its VM teardown drops
+         * every mapping reference, leaving only this cache's reference. First
+         * eligible is enough for fifteen slots; add LRU only if measured churn
+         * makes the choice matter.
+         */
+        KernelProcessStatus reclaim = library_cache_reclaim(&free_slot);
+
+        if (reclaim != KERNEL_PROCESS_OK &&
+            reclaim != KERNEL_PROCESS_RESOURCE_LIMIT)
+            return reclaim;
+    }
+    if (free_slot == ASTRA_LIBRARY_SLOT_COUNT)
+        return KERNEL_PROCESS_RESOURCE_LIMIT;
+    {
+        KernelProcessStatus status = library_cache_create(
+            &library_cache[free_slot], free_slot, plan, user_image, span);
+
+        if (status != KERNEL_PROCESS_OK)
+            return status;
+    }
+    *cached = &library_cache[free_slot];
+    *slot = free_slot;
+    return KERNEL_PROCESS_OK;
+}
+
+static KernelProcessStatus map_library(KernelProcess *process,
+                                       uint32_t user_image,
+                                       uint32_t image_size,
+                                       uint32_t *mapped_base,
+                                       uint32_t *mapped_span)
+{
+    static const KernelElfLimits limits = {
+        .minimum_address = 0u,
+        .maximum_address = ASTRA_LIBRARY_SLOT_SIZE - 1u,
+        .maximum_pages = ASTRA_LIBRARY_IMAGE_MAX / KERNEL_PAGE_SIZE,
+        .page_size = KERNEL_PAGE_SIZE,
+    };
+    KernelElfImage plan;
+    KernelLibraryCacheEntry *cached;
+    uint32_t window;
+    uint32_t span = 0u;
+    uint32_t slot;
+    uint32_t virtual_base;
+    uint32_t flattened = 0u;
+    uint32_t mapped = 0u;
+    KernelProcessStatus failure = KERNEL_PROCESS_CORRUPT;
+
+    if (process == NULL || user_image == 0u || image_size == 0u ||
+        image_size > ASTRA_LIBRARY_IMAGE_MAX ||
+        user_image > 0xffffffffu - image_size || mapped_base == NULL ||
+        mapped_span == NULL)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+
+    window = image_size < KERNEL_PROCESS_LAUNCH_HEADER_BYTES ?
+        image_size : KERNEL_PROCESS_LAUNCH_HEADER_BYTES;
+    kernel_bytes_clear(launch_header, sizeof(launch_header));
+    if (kernel_copy_from_user(launch_header, user_image, window) !=
+        KERNEL_USER_COPY_OK)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    if (kernel_elf_accept_library_windowed(launch_header, image_size, window,
+                                           &limits, &plan) != KERNEL_ELF_OK)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+
+    for (uint32_t index = 0u; index < plan.segment_count; ++index) {
+        uint32_t end = plan.segment[index].virtual_address +
+                       (plan.segment[index].page_count * KERNEL_PAGE_SIZE);
+
+        if (end > span)
+            span = end;
+    }
+    if (span == 0u || span > ASTRA_LIBRARY_SLOT_SIZE)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    failure = library_cache_get(&plan, user_image, span, &cached, &slot);
+    if (failure != KERNEL_PROCESS_OK)
+        return failure;
+    virtual_base = ASTRA_LIBRARY_BASE + (slot * ASTRA_LIBRARY_SLOT_SIZE);
+    failure = KERNEL_PROCESS_CORRUPT;
+
+    for (uint32_t index = 0u; index < plan.segment_count; ++index) {
+        const KernelElfSegment *segment = &plan.segment[index];
+        uint32_t rights = segment_vm_rights(segment->rights);
+
+        for (uint32_t page = 0u; page < segment->page_count;
+             ++page, ++flattened) {
+            uint32_t address = virtual_base + segment->virtual_address +
+                               (page * KERNEL_PAGE_SIZE);
+
+            if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) != 0u) {
+                uint32_t copied;
+
+                failure = read_library_page(user_image, segment, page,
+                                            &copied);
+                if (failure != KERNEL_PROCESS_OK)
+                    goto failed;
+                failure = publish_page(process, address, launch_page, copied,
+                                       rights);
+                if (failure != KERNEL_PROCESS_OK)
+                    goto failed;
+            } else {
+                KernelVmStatus vm_status = kernel_vm_map_shared_page(
+                    &process->address_space, address,
+                    cached->physical_pages[flattened], cached->owner, rights);
+
+                if (vm_status == KERNEL_VM_OUT_OF_MEMORY) {
+                    failure = KERNEL_PROCESS_OUT_OF_MEMORY;
+                    goto failed;
+                }
+                if (vm_status == KERNEL_VM_ALREADY_MAPPED) {
+                    failure = KERNEL_PROCESS_INVALID_ARGUMENT;
+                    goto failed;
+                }
+                if (vm_status != KERNEL_VM_OK)
+                    goto failed;
+            }
+            ++mapped;
+        }
+    }
+    *mapped_base = virtual_base;
+    *mapped_span = span;
+    return KERNEL_PROCESS_OK;
+
+failed:
+    for (uint32_t index = 0u; index < plan.segment_count && mapped != 0u;
+         ++index) {
+        const KernelElfSegment *segment = &plan.segment[index];
+
+        for (uint32_t page = 0u; page < segment->page_count && mapped != 0u;
+             ++page) {
+            uint32_t address = virtual_base + segment->virtual_address +
+                               (page * KERNEL_PAGE_SIZE);
+
+            if (kernel_vm_unmap_page(&process->address_space, address) !=
+                KERNEL_VM_OK)
+                return KERNEL_PROCESS_CORRUPT;
+            --mapped;
+        }
+    }
+    return failure;
 }
 
 /*
@@ -2444,9 +2852,23 @@ static KernelProcessStatus grant_bootstrap_capabilities(
              * only narrowed. A handle it does not hold does not resolve at all.
              */
             KernelHandleStatus handle_status;
+            uint32_t prior;
 
             if (source_table == NULL)
                 return KERNEL_PROCESS_INVALID_ARGUMENT;
+            for (prior = 0u; prior < index; ++prior) {
+                if (requested[prior].kind ==
+                        KERNEL_PROCESS_BOOTSTRAP_HANDLE &&
+                    requested[prior].source_handle == entry->source_handle &&
+                    requested[prior].rights == entry->rights) {
+                    handle = granted[prior].handle;
+                    break;
+                }
+            }
+            if (prior != index) {
+                status = KERNEL_PROCESS_OK;
+                break;
+            }
             handle_status = kernel_handle_duplicate_into(
                 source_table, entry->source_handle, entry->rights,
                 &process->handles, &handle);
@@ -2570,7 +2992,7 @@ static KernelProcessStatus publish_startup_block(
      * Written straight into the page. A second array of these used to sit on
      * this frame and be copied in whole; at 92 bytes a record that is 920
      * bytes of an 8 KiB supervisor stack, under a syscall frame that is now
-     * carrying nine grants of its own.
+     * carrying ten grants of its own.
      */
     AstraStartupCapability *capability =
         (AstraStartupCapability *)(void *)(page + ASTRA_STARTUP_INFO_SIZE);
@@ -2747,7 +3169,7 @@ KernelProcessStatus kernel_process_launch(
         goto failed;
     }
 
-    result = map_segments(process, &plan, image, user_image);
+    result = map_segments(process, &plan, image, user_image, 0u, false);
     if (result != KERNEL_PROCESS_OK)
         goto failed;
 
@@ -4209,6 +4631,31 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         thread->context.data[2] = current->self_handle;
         thread->context.data[3] = thread->self_handle;
         break;
+    case ASTRA_SYSCALL_LIBRARY_MAP: {
+        uint32_t base = 0u;
+        uint32_t span = 0u;
+        KernelProcessStatus library_status = map_library(
+            current, thread->context.data[1], thread->context.data[2],
+            &base, &span);
+
+        if (library_status == KERNEL_PROCESS_INVALID_ARGUMENT) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (library_status == KERNEL_PROCESS_OUT_OF_MEMORY) {
+            result = ASTRA_SYSCALL_OUT_OF_MEMORY;
+            break;
+        }
+        if (library_status == KERNEL_PROCESS_RESOURCE_LIMIT) {
+            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        }
+        if (library_status != KERNEL_PROCESS_OK)
+            return library_status;
+        thread->context.data[1] = base;
+        thread->context.data[2] = span;
+        break;
+    }
     /*
      * The character plane of the display device. These calls are gated by a
      * lease on that device with the rights the operation needs, the same way

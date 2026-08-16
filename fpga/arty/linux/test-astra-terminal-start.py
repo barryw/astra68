@@ -43,6 +43,7 @@ def main():
     assert run([139, 135, 0]) == (0, 3)
     assert run([1, 0]) == (1, 1)
     assert run([139, 139, 139, 139]) == (139, 4)
+    assert "astra-chip-reset" not in START.read_text(encoding="ascii")
     print("Astra runtime supervisor tests passed")
 
 

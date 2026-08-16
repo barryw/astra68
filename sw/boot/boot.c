@@ -339,34 +339,40 @@ static int test_front_panel(void)
     ASTRA_AUTO_FRONT_PANEL_LED_LEASE(lease);
     uint8_t saved_leds;
     uint8_t actual_leds;
+    uint8_t led_mask;
+    uint8_t first_pattern;
 
     if (astra_front_panel_get_info(&info) != ASTRA_OK)
         return post_failure_text("front panel unavailable");
-    if (info.led_count != 8u || info.button_count != 6u ||
-        info.switch_count != 4u ||
+    if (info.led_count == 0u || info.led_count > 8u ||
+        info.button_count > 6u || info.switch_count > 4u ||
         (info.features & (ASTRA_PANEL_FEATURE_RAW_INPUT |
                           ASTRA_PANEL_FEATURE_CHANGE_LATCH |
                           ASTRA_PANEL_FEATURE_LED_OWNERSHIP |
                           ASTRA_PANEL_FEATURE_ATOMIC_LEDS)) !=
                          (ASTRA_PANEL_FEATURE_RAW_INPUT |
                           ASTRA_PANEL_FEATURE_CHANGE_LATCH |
-                          ASTRA_PANEL_FEATURE_LED_OWNERSHIP |
-                          ASTRA_PANEL_FEATURE_ATOMIC_LEDS))
+                         ASTRA_PANEL_FEATURE_LED_OWNERSHIP |
+                         ASTRA_PANEL_FEATURE_ATOMIC_LEDS))
         return post_failure_text("front panel capabilities");
 
+    led_mask = info.led_count == 8u ? 0xffu :
+        (uint8_t)((1u << info.led_count) - 1u);
+    first_pattern = 0x55u & led_mask;
+
     if (astra_front_panel_get_leds(&saved_leds) != ASTRA_OK ||
-        astra_front_panel_acquire_leds(ASTRA_PANEL_LED_ALL, 0, &lease) !=
+        astra_front_panel_acquire_leds(led_mask, 0, &lease) !=
             ASTRA_OK ||
-        astra_front_panel_set_leds(&lease, 0x55u) != ASTRA_OK ||
+        astra_front_panel_set_leds(&lease, first_pattern) != ASTRA_OK ||
         astra_front_panel_get_leds(&actual_leds) != ASTRA_OK ||
-        actual_leds != 0x55u) {
+        (actual_leds & led_mask) != first_pattern) {
         return post_failure_text("front panel LED data");
     }
 
-    if (astra_front_panel_toggle_led_bits(&lease, ASTRA_PANEL_LED_ALL) !=
+    if (astra_front_panel_toggle_led_bits(&lease, led_mask) !=
             ASTRA_OK ||
         astra_front_panel_get_leds(&actual_leds) != ASTRA_OK ||
-        actual_leds != 0xaau) {
+        (actual_leds & led_mask) != (first_pattern ^ led_mask)) {
         return post_failure_text("front panel LED atomic operation");
     }
 

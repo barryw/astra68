@@ -94,7 +94,7 @@ static void text(AstraSurfaceView *surface, int32_t x, int32_t y,
                  const char *utf8, uint32_t length, uint16_t value)
 {
     astra_surface_ui_text(surface, x, y, utf8, length,
-                          ASTRA_UI_FONT_BODY_HEIGHT, value);
+                          ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT, value);
 }
 
 static void centered_text(AstraSurfaceView *surface, int32_t x, int32_t y,
@@ -102,7 +102,7 @@ static void centered_text(AstraSurfaceView *surface, int32_t x, int32_t y,
                           uint16_t value)
 {
     uint32_t text_width = astra_surface_ui_text_width(
-        utf8, length, ASTRA_UI_FONT_BODY_HEIGHT);
+        utf8, length, ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT);
 
     text(surface, x + (int32_t)(width > text_width ?
          (width - text_width) / 2u : 0u), y, utf8, length, value);
@@ -118,7 +118,7 @@ static void paint(AstraSurfaceView *surface, const GallerySpec *spec,
 
     astra_surface_clear(surface, client);
     astra_surface_ui_text(surface, 18, 18, spec->label, spec->label_length,
-                          ASTRA_UI_FONT_BODY_HEIGHT, primary);
+                          ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT, primary);
     astra_surface_fill(surface, 18, 36, surface->width - 36u, 2u, accent);
     if (spec->type == ASTRA_WINDOW_STANDARD) {
         astra_surface_fill_round(surface, 18, 58, 238u, 92u,

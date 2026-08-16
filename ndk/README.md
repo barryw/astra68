@@ -1,8 +1,12 @@
 # Astra 68 Native Developer Kit
 
 The Astra NDK is the supported C interface to Astra 68 hardware and operating
-system services. Applications include public headers from `include/astra` and
-link `libastra.a`; they do not include raw chipset register structures.
+system services. During bring-up applications include public headers from
+`include/astra` and link `libastra.a`; they do not include raw chipset register
+structures. The permanent ABI keeps the same headers behind a small import
+veneer while the loader caches immutable, versioned Kit code and maps its
+read-only pages into each client process. Writable state and service handles
+remain process-local.
 Bounded message ports, absolute-deadline waits, atomic handle movement,
 explicit shared areas, and bounded bulk rings are the native protected-process
 communication plane.
@@ -10,8 +14,9 @@ communication plane.
 This boundary provides source compatibility as the machine evolves. A hardware
 register may move or be replaced without changing application source as long
 as the corresponding NDK contract remains valid. Bare-metal builds currently
-use the direct-MMIO backend. The operating system can later provide the same
-API through libraries or system calls.
+use the direct-MMIO backend. Protected Astra keeps substantial implementations
+in resident services and shared Kits rather than copying them into every
+application.
 
 Shared hardware follows the process-owned handle and lease model in
 [`docs/RESOURCE_MODEL.md`](../docs/RESOURCE_MODEL.md). Public mutating APIs
@@ -60,6 +65,14 @@ through owned surfaces, palettes, tile/sprite sets, raster programs, command
 lists, and fences rather than raw MMIO. The direct backend currently provides
 the contract and validation boundary; services which require the operating
 system return `ASTRA_ERR_UNAVAILABLE` until their resource manager lands.
+`astra/graphics_kit.h` is the umbrella include for graphics and fonts and
+publishes the logical names and minimum ABI versions accepted by
+`OpenLibrary()`. The loader, not the application, resolves their versioned
+files under `LIBS:`.
+
+`astra/filesystem_kit.h` publishes the corresponding Filesystem Kit identity;
+its typed API provides high-level file/directory operations and the existing
+low-level VFS primitives without exposing storage-service internals.
 
 ## Documentation
 

@@ -14,7 +14,7 @@ HOST_FLAGS := -O2 -fno-builtin
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 TARGET_C_SOURCES := src/startup.c src/syscall.c src/launch.c src/port.c \
 	src/event_control.c src/memory.c \
-	src/log.c src/sort.c src/assert.c src/event_catalog.c
+	src/log.c src/sort.c src/assert.c src/event_catalog.c src/library.c
 TARGET_ASM_SOURCES := src/m68k/syscall.S
 TARGET_OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(TARGET_C_SOURCES)) \
 	$(patsubst src/%.S,build/m68k/%.o,$(TARGET_ASM_SOURCES))
@@ -42,12 +42,13 @@ $(CRT0): src/m68k/crt0.S
 
 HOST_TEST_SOURCES := src/startup.c src/syscall.c src/launch.c src/port.c \
 	src/event_control.c src/memory.c \
-	src/sort.c src/log.c src/event_catalog.c \
+	src/sort.c src/log.c src/event_catalog.c src/library.c \
 	tests/test_runtime.c
 
 $(HOST_TEST): $(HOST_TEST_SOURCES)
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		-DASTRA_LIBRARY_LOADER_TEST $^ -o $@
 
 test: $(HOST_TEST)
 	./$(HOST_TEST)
@@ -55,7 +56,7 @@ test: $(HOST_TEST)
 sanitize:
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		$(SANITIZER_FLAGS) $(HOST_TEST_SOURCES) \
+		$(SANITIZER_FLAGS) -DASTRA_LIBRARY_LOADER_TEST $(HOST_TEST_SOURCES) \
 		-o build/host/test_runtime_sanitize
 	./build/host/test_runtime_sanitize
 
@@ -77,6 +78,8 @@ analyze:
 		-c src/sort.c -o build/analyzer/sort.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/event_catalog.c -o build/analyzer/event_catalog.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/library.c -o build/analyzer/library.o
 
 # The rule that every Astra image declares its own provenance, checked where
 # images are made rather than where headers are included. Two links against the

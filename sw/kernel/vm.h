@@ -88,6 +88,11 @@ KernelVmStatus kernel_vm_map_page(KernelAddressSpace *space,
                                   uint32_t virtual_address,
                                   uint32_t physical_address,
                                   uint32_t permissions);
+KernelVmStatus kernel_vm_map_shared_page(KernelAddressSpace *space,
+                                         uint32_t virtual_address,
+                                         uint32_t physical_address,
+                                         uint32_t frame_owner,
+                                         uint32_t permissions);
 KernelVmStatus kernel_vm_unmap_page(KernelAddressSpace *space,
                                     uint32_t virtual_address);
 /*

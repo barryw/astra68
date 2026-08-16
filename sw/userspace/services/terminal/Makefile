@@ -32,21 +32,20 @@ VFS_LIB := $(VFS)/build/m68k/libastravfs.a
 STREAMS_LIB := $(STREAMS)/build/m68k/libastrastreams.a
 SHELL_LIB := $(SHELL_DIR)/build/m68k/libastrashell.a
 TERMINAL_LIB := $(TERMINAL)/build/m68k/libastraterminal.a
-GRAPHICS_LIB := $(GRAPHICS)/build/m68k/libastragraphics.a
 NDK_LIB := $(NDK)/build/m68k/libastra.a
 CRT0 := $(RUNTIME)/build/m68k/crt0.o
 SUPERVISOR_CATALOG := $(SUPERVISOR)/build/m68k/astra_events.cat
-EVENT_PREFIX_BYTES := 640
+EVENT_PREFIX_BYTES := 768
 
 all: $(IMAGE) catalog-contract size
 
 $(TARGET): $(OBJECTS) $(CRT0) $(STREAMS_LIB) $(VFS_LIB) $(TERMINAL_LIB) \
-		$(SHELL_LIB) $(GRAPHICS_LIB) $(NDK_LIB) $(RUNTIME_LIB) \
+		$(SHELL_LIB) $(NDK_LIB) $(RUNTIME_LIB) \
 		$(RUNTIME)/astra_user.ld
 	@mkdir -p $(@D)
 	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(CRT0) $(OBJECTS) \
 		$(STREAMS_LIB) $(VFS_LIB) $(TERMINAL_LIB) $(SHELL_LIB) \
-		$(GRAPHICS_LIB) $(NDK_LIB) $(RUNTIME_LIB) -lgcc
+		$(NDK_LIB) $(RUNTIME_LIB) -lgcc
 
 $(NDK_LIB):
 	$(MAKE) -C $(NDK) all

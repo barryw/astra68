@@ -2,6 +2,7 @@
 #include <astra/render_batch.h>
 #include <astra/render_builder.h>
 #include <astra/surface.h>
+#include <astra/theme.h>
 
 #include <assert.h>
 #include <stdint.h>
@@ -116,24 +117,24 @@ static void test_proportional_utf8_text(void)
     uint16_t pixels[80u * 20u] = {0};
     AstraSurfaceView surface;
     uint32_t narrow = astra_surface_ui_text_width(
-        "III", 3u, ASTRA_UI_FONT_BODY_HEIGHT);
+        "III", 3u, ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT);
     uint32_t wide = astra_surface_ui_text_width(
-        "WWW", 3u, ASTRA_UI_FONT_BODY_HEIGHT);
+        "WWW", 3u, ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT);
     uint32_t first_two = astra_surface_ui_text_width(
-        a_ogonek, 3u, ASTRA_UI_FONT_BODY_HEIGHT);
+        a_ogonek, 3u, ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT);
 
     assert(narrow < wide);
     assert(astra_surface_ui_text_width("\xff", 1u,
-                                      ASTRA_UI_FONT_BODY_HEIGHT) ==
+                                      ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT) ==
            astra_surface_ui_text_width(replacement, 3u,
-                                      ASTRA_UI_FONT_BODY_HEIGHT));
+                                      ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT));
     assert(astra_surface_ui_text_fit(a_ogonek, 4u,
-                                     ASTRA_UI_FONT_BODY_HEIGHT,
+                                     ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT,
                                      first_two) == 3u);
     assert(astra_surface_view_init(&surface, pixels, sizeof(pixels),
                                    80u, 20u, 80u * sizeof(uint16_t)));
     astra_surface_ui_text(&surface, 1, 1, a_ogonek, 4u,
-                          ASTRA_UI_FONT_BODY_HEIGHT, 0x77aau);
+                          ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT, 0x77aau);
     for (uint32_t index = 0u; index < 80u * 20u; ++index)
         if (pixels[index] == 0x77aau)
             return;
@@ -158,7 +159,7 @@ static void test_hardware_draw_list_batch(void)
     astra_surface_clear(&surface, 0x1234u);
     astra_surface_fill_round(&surface, 4, 5, 40u, 30u, 6u, 0x5678u);
     astra_surface_ui_text(&surface, 8, 10, "AÄ", 3u,
-                          ASTRA_UI_FONT_BODY_HEIGHT, 0xffffu);
+                          ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT, 0xffffu);
     header = (const AstraDrawListHeader *)(const void *)draw_storage;
     assert(header->command_count == 3u && header->payload_bytes == 3u);
 
@@ -210,6 +211,29 @@ static void test_hardware_draw_list_batch(void)
            ((uint32_t)120u << 16 | 76u));
 }
 
+static void test_mono_draw_list(void)
+{
+    uint8_t storage[ASTRA_DRAW_LIST_AREA_BYTES];
+    AstraSurfaceView surface;
+    const AstraDrawListHeader *header;
+    const AstraDrawListCommand *command;
+
+    assert(astra_draw_list_view_init(&surface, storage, sizeof(storage),
+                                     80u, 20u));
+    assert(astra_surface_mono_cell_width(
+               ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT) == 8u);
+    astra_draw_list_mono_text(
+        &surface, 2, 3, "IW", 2u, ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT,
+        ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH, 0xffffu);
+    header = (const AstraDrawListHeader *)(const void *)storage;
+    command = (const AstraDrawListCommand *)(const void *)(
+        storage + sizeof(*header));
+    assert(header->command_count == 1u && header->payload_bytes == 2u &&
+           command->operation == ASTRA_DRAW_LIST_MONO_TEXT &&
+           command->font_height == ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT &&
+           command->width == ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH);
+}
+
 int main(void)
 {
     test_clipped_drawing_and_blit();
@@ -217,6 +241,7 @@ int main(void)
     test_text();
     test_proportional_utf8_text();
     test_hardware_draw_list_batch();
+    test_mono_draw_list();
     puts("surface drawing tests passed");
     return 0;
 }

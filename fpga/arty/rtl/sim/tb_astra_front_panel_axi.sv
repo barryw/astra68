@@ -77,14 +77,15 @@ module tb_astra_front_panel_axi;
         repeat (4) @(posedge clk);
         reset = 0;
         read_reg(8'h00, 32'h504e4c30, 2'b00);
-        read_reg(8'h08, 32'h0f020004, 2'b00);
-        write_reg(8'h18, 32'h00000005, 2'b00);
-        write_reg(8'h1c, 32'h0000000f, 2'b00);
-        if (leds[3:0] != 4'h5)
-            $fatal(1, "owned LEDs=%x", leds[3:0]);
+        read_reg(8'h08, 32'h1f020407, 2'b00);
+        write_reg(8'h18, 32'h000000d5, 2'b00);
+        write_reg(8'h1c, 32'h000000ff, 2'b00);
+        if (leds != 8'h55)
+            $fatal(1, "owned LED channels=%x", leds);
+        buttons = 6'b001001;
         switches = 4'b0010;
         repeat (4) @(posedge clk);
-        read_reg(8'h10, 32'h00000200, 2'b00);
+        read_reg(8'h10, 32'h00000209, 2'b00);
         write_reg(8'h30, 32'd1, 2'b00);
         write_reg(8'h2c, 32'd1, 2'b00);
         if (!leds[3])

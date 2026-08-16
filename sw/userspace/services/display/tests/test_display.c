@@ -74,7 +74,7 @@ static void label(AstraSurfaceView *surface, int32_t x, int32_t y,
                   const char *text, uint32_t length, uint16_t color)
 {
     astra_surface_ui_text(surface, x, y, text, length,
-                          ASTRA_UI_FONT_BODY_HEIGHT, color);
+                          ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT, color);
 }
 
 static void paint_gallery(AstraSurfaceView *surface, uint8_t type,
@@ -151,8 +151,17 @@ static void add_window(DisplayState *state, uint32_t index, uint8_t type,
     window->generation = 1u;
     window->cache_slot = index;
     window->cache_dirty = 1u;
+    reset_content(window);
     window->event_send = 0x500u;
     ++state->count;
+}
+
+static void rendered(DisplayWindow *window)
+{
+    window->cache_dirty = 0u;
+    window->content_dirty = 0u;
+    window->content_initialized = 1u;
+    window->content_damage = (DamageRect){0};
 }
 
 int main(void)
@@ -189,22 +198,37 @@ int main(void)
     uint32_t error;
     int changed;
 
+    {
+        DisplayState fair = {.count = 2u};
+        uint32_t waits[DISPLAY_WINDOW_MAX + 2u];
+        uint32_t sources[DISPLAY_WINDOW_MAX + 2u];
+
+        fair.windows[0].control_receive = 0x30u;
+        fair.windows[1].control_receive = 0x40u;
+        assert(display_wait_handles(&fair, 0x10u, 0x20u, 2u,
+                                    waits, sources) == 4u);
+        assert(waits[0] == 0x30u && sources[0] == 2u);
+        assert(waits[1] == 0x40u && sources[1] == 3u);
+        assert(waits[2] == 0x10u && sources[2] == 0u);
+        assert(waits[3] == 0x20u && sources[3] == 1u);
+    }
+
     add_window(&state, 0u, ASTRA_WINDOW_POPOVER, 300u, 380u,
                250u, 125u, 0u, 0u);
     assert(compose(batch, 1u, &state, &error) == ASTRA_RENDER_BUILDER_BYTES);
-    state.windows[0].cache_dirty = 0u;
+    rendered(&state.windows[0]);
     state.damage[1] = (DamageRect){0};
     add_window(&state, 1u, ASTRA_WINDOW_UTILITY, 600u, 80u,
                360u, 145u, 0u, ASTRA_WINDOW_GADGET_CLOSE);
     damage_window(&state, &theme, &state.windows[1]);
     assert(compose(batch, 2u, &state, &error) == ASTRA_RENDER_BUILDER_BYTES);
-    state.windows[1].cache_dirty = 0u;
+    rendered(&state.windows[1]);
     state.damage[0] = (DamageRect){0};
     add_window(&state, 2u, ASTRA_WINDOW_DIALOG, 520u, 300u,
                400u, 190u, ASTRA_WINDOW_MODAL, ASTRA_WINDOW_GADGET_CLOSE);
     damage_window(&state, &theme, &state.windows[2]);
     assert(compose(batch, 3u, &state, &error) == ASTRA_RENDER_BUILDER_BYTES);
-    state.windows[2].cache_dirty = 0u;
+    rendered(&state.windows[2]);
     state.damage[1] = (DamageRect){0};
     add_window(&state, 3u, ASTRA_WINDOW_STANDARD, 100u, 100u,
                550u, 280u, ASTRA_WINDOW_ACTIVE | ASTRA_WINDOW_RESIZABLE,
@@ -212,13 +236,13 @@ int main(void)
                    ASTRA_WINDOW_GADGET_MAXIMIZE);
     damage_window(&state, &theme, &state.windows[3]);
     assert(compose(batch, 4u, &state, &error) == ASTRA_RENDER_BUILDER_BYTES);
-    state.windows[3].cache_dirty = 0u;
+    rendered(&state.windows[3]);
     state.damage[0] = (DamageRect){0};
     assert(apply_command(&state, &theme, &resize, &closed, &changed) ==
            ASTRA_STATUS_OK && changed);
     assert(compose(batch, 5u, &state, &error) == ASTRA_RENDER_BUILDER_BYTES);
     assert(batch_has_surface_fill(580u, 300u, color(theme.client)));
-    state.windows[3].cache_dirty = 0u;
+    rendered(&state.windows[3]);
     assert(apply_command(&state, &theme, &move, &closed, &changed) ==
            ASTRA_STATUS_OK && changed);
     assert(compose(batch, 6u, &state, &error) == ASTRA_RENDER_BUILDER_BYTES);
@@ -390,6 +414,14 @@ int main(void)
     }
     {
         AstraGuiWindowCommand present = {
+            .header = {
+                .total_size = sizeof(AstraGuiWindowCommand),
+                .header_size = ASTRA_MESSAGE_HEADER_SIZE,
+                .protocol = ASTRA_GUI_PROTOCOL,
+                .protocol_version = ASTRA_GUI_VERSION,
+                .operation = ASTRA_GUI_WINDOW_COMMAND,
+                .transaction_id = 1u,
+            },
             .window = state.windows[3].id,
             .generation = state.windows[3].generation,
             .action = ASTRA_GUI_WINDOW_PRESENT,
@@ -399,8 +431,52 @@ int main(void)
         state.windows[3].cache_dirty = 0u;
         assert(apply_command(&state, &theme, &present, &closed, &changed) ==
                ASTRA_STATUS_OK && changed);
-        assert(state.windows[3].cache_dirty != 0u &&
+        assert(state.windows[3].cache_dirty == 0u &&
+               state.windows[3].content_dirty != 0u &&
+               state.windows[3].content_damage.left == 0 &&
+               state.windows[3].content_damage.top == 0 &&
+               state.windows[3].content_damage.right ==
+                   state.windows[3].request.width &&
+               state.windows[3].content_damage.bottom ==
+                   state.windows[3].request.height &&
                state.windows[3].generation == generation + 1u);
+    }
+    {
+        AstraGuiWindowCommand present = {
+            .header = {
+                .total_size = sizeof(AstraGuiWindowCommand),
+                .header_size = ASTRA_MESSAGE_HEADER_SIZE,
+                .protocol = ASTRA_GUI_PROTOCOL,
+                .protocol_version = ASTRA_GUI_VERSION,
+                .operation = ASTRA_GUI_WINDOW_COMMAND,
+                .transaction_id = 1u,
+            },
+            .window = state.windows[3].id,
+            .generation = state.windows[3].generation,
+            .action = ASTRA_GUI_WINDOW_PRESENT,
+            .x = 12u,
+            .y = 18u,
+            .width = 20u,
+            .height = 14u,
+        };
+
+        state.windows[3].content_dirty = 0u;
+        state.windows[3].content_damage = (DamageRect){0};
+        assert(valid_command(&present, sizeof(present), 1u,
+                             state.windows[3].id,
+                             state.windows[3].request.width,
+                             state.windows[3].request.height));
+        assert(apply_command(&state, &theme, &present, &closed, &changed) ==
+               ASTRA_STATUS_OK && changed);
+        assert(state.windows[3].content_damage.left == 12 &&
+               state.windows[3].content_damage.top == 18 &&
+               state.windows[3].content_damage.right == 32 &&
+               state.windows[3].content_damage.bottom == 32);
+        present.x = state.windows[3].request.width - 10u;
+        assert(!valid_command(&present, sizeof(present), 1u,
+                              state.windows[3].id,
+                              state.windows[3].request.width,
+                              state.windows[3].request.height));
     }
     {
         DisplayWindow *window = &state.windows[3];

@@ -10,6 +10,7 @@
 #define ELF_OSABI_SYSV 0u
 
 #define ELF_TYPE_EXEC 2u
+#define ELF_TYPE_DYN 3u
 #define ELF_MACHINE_68K 4u
 
 #define ELF_PT_NULL 0u
@@ -114,11 +115,12 @@ static KernelElfStatus segment_rights(uint32_t flags, uint32_t *rights)
  * executable means the toolchain produced something this profile has not
  * qualified.
  */
-static bool ignorable_segment(uint32_t type)
+static bool ignorable_segment(uint32_t type, bool library)
 {
     return type == ELF_PT_NULL || type == ELF_PT_NOTE ||
            type == ELF_PT_PHDR || type == ELF_PT_GNU_EH_FRAME ||
-           type == ELF_PT_GNU_RELRO || type == ELF_PT_GNU_PROPERTY;
+           type == ELF_PT_GNU_RELRO || type == ELF_PT_GNU_PROPERTY ||
+           (library && type == ELF_PT_DYNAMIC);
 }
 
 static KernelElfStatus accept_load_segment(const uint8_t *header,
@@ -177,11 +179,13 @@ static KernelElfStatus accept_load_segment(const uint8_t *header,
     return KERNEL_ELF_OK;
 }
 
-KernelElfStatus kernel_elf_accept_windowed(const void *image,
-                                           uint32_t image_size,
-                                           uint32_t readable,
-                                           const KernelElfLimits *limits,
-                                           KernelElfImage *plan)
+static KernelElfStatus accept_windowed(const void *image,
+                                       uint32_t image_size,
+                                       uint32_t readable,
+                                       const KernelElfLimits *limits,
+                                       uint16_t expected_type,
+                                       bool library,
+                                       KernelElfImage *plan)
 {
     const uint8_t *bytes = image;
     uint32_t header_offset;
@@ -208,7 +212,7 @@ KernelElfStatus kernel_elf_accept_windowed(const void *image,
     if (status != KERNEL_ELF_OK)
         return status;
 
-    if (read_be16(bytes + 16) != ELF_TYPE_EXEC)
+    if (read_be16(bytes + 16) != expected_type)
         return KERNEL_ELF_BAD_TYPE;
     if (read_be16(bytes + 18) != ELF_MACHINE_68K)
         return KERNEL_ELF_BAD_MACHINE;
@@ -257,7 +261,7 @@ KernelElfStatus kernel_elf_accept_windowed(const void *image,
             continue;
         }
         if (type != ELF_PT_LOAD) {
-            if (ignorable_segment(type))
+            if (ignorable_segment(type, library))
                 continue;
             return KERNEL_ELF_UNSUPPORTED_SEGMENT;
         }
@@ -304,6 +308,15 @@ KernelElfStatus kernel_elf_accept_windowed(const void *image,
     if (plan->segment_count == 0u) {
         kernel_bytes_clear(plan, sizeof(*plan));
         return KERNEL_ELF_NO_SEGMENTS;
+    }
+
+    if (library) {
+        if (entry != 0u) {
+            kernel_bytes_clear(plan, sizeof(*plan));
+            return KERNEL_ELF_BAD_ENTRY;
+        }
+        plan->total_pages = total_pages;
+        return KERNEL_ELF_OK;
     }
 
     /*
@@ -369,4 +382,31 @@ KernelElfStatus kernel_elf_accept(const void *image, uint32_t image_size,
     /* The whole image is readable: the firmware's case, and every test's. */
     return kernel_elf_accept_windowed(image, image_size, image_size, limits,
                                       plan);
+}
+
+KernelElfStatus kernel_elf_accept_windowed(const void *image,
+                                           uint32_t image_size,
+                                           uint32_t readable,
+                                           const KernelElfLimits *limits,
+                                           KernelElfImage *plan)
+{
+    return accept_windowed(image, image_size, readable, limits,
+                           ELF_TYPE_EXEC, false, plan);
+}
+
+KernelElfStatus kernel_elf_accept_library_windowed(
+    const void *image, uint32_t image_size, uint32_t readable,
+    const KernelElfLimits *limits, KernelElfImage *plan)
+{
+    return accept_windowed(image, image_size, readable, limits,
+                           ELF_TYPE_DYN, true, plan);
+}
+
+KernelElfStatus kernel_elf_accept_library(const void *image,
+                                          uint32_t image_size,
+                                          const KernelElfLimits *limits,
+                                          KernelElfImage *plan)
+{
+    return kernel_elf_accept_library_windowed(image, image_size, image_size,
+                                              limits, plan);
 }

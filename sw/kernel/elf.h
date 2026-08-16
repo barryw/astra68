@@ -26,9 +26,10 @@
  *     executable
  *   - an entry point inside an executable segment at an even address
  *
- * Rejected outright: dynamic linking of any kind, shared objects, thread-local
- * storage, an executable stack, and any program header type not listed as
- * ignorable below.
+ * Executables and shared libraries have separate entry points below. Shared
+ * libraries admit ET_DYN plus PT_DYNAMIC, retain the same strict W^X/load
+ * rules, and require a zero ELF entry point. No interpreter or lazy binding is
+ * accepted by either profile.
  */
 
 #define KERNEL_ELF_SEGMENT_MAX 4u
@@ -106,6 +107,15 @@ KernelElfStatus kernel_elf_accept_windowed(const void *image,
 KernelElfStatus kernel_elf_accept(const void *image, uint32_t image_size,
                                   const KernelElfLimits *limits,
                                   KernelElfImage *plan);
+
+KernelElfStatus kernel_elf_accept_library_windowed(
+    const void *image, uint32_t image_size, uint32_t readable,
+    const KernelElfLimits *limits, KernelElfImage *plan);
+
+KernelElfStatus kernel_elf_accept_library(const void *image,
+                                          uint32_t image_size,
+                                          const KernelElfLimits *limits,
+                                          KernelElfImage *plan);
 
 const char *kernel_elf_status_text(KernelElfStatus status);
 

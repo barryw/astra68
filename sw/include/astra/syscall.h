@@ -3,7 +3,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x0001000f
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010010
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -111,6 +111,7 @@
 #define ASTRA_SYSCALL_CONSOLE_CURSOR   50
 #define ASTRA_SYSCALL_DISPLAY_SUBMIT   51
 #define ASTRA_SYSCALL_DISPLAY_COLLECT  52
+#define ASTRA_SYSCALL_LIBRARY_MAP      53
 
 /*
  * The most one call copies. Small on purpose: a drain is a bounded page and a

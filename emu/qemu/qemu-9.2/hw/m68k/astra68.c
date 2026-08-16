@@ -504,6 +504,10 @@ static void astra_display_reset(Astra68State *s)
     display->completion_id = 0u;
     display->completion_status = 0u;
     display->completion_generation = 0u;
+    display->operation = 0u;
+    display->cursor_x = 0u;
+    display->cursor_y = 0u;
+    display->cursor_visible = 0u;
     s->astraea.irq_status &= ~ASTRAEA_IRQ_DRAW_DONE;
     astra_update_irq(s);
 }
@@ -1626,15 +1630,44 @@ static const MemoryRegionOps astra_panel_ops = ASTRA_OPS(astra_panel);
 static const MemoryRegionOps astra_astraea_ops = ASTRA_OPS(astra_astraea);
 static const MemoryRegionOps astra_vega_ops = ASTRA_OPS(astra_vega);
 
-static void astra_cpu_reset(void *opaque)
+/* Every guest-visible chip, including future audio/math devices, resets here. */
+static void astra_machine_reset(void *opaque)
 {
     Astra68State *s = opaque;
     AstraBlockRequest *block_request;
+    int i;
 
     cpu_reset(CPU(s->cpu));
     s->cpu->env.aregs[7] = s->initial_sp;
     s->cpu->env.pc = s->initial_pc;
     s->reset_clock_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    s->scratch = 0u;
+    s->irq_enable = 0u;
+    s->irq_soft = 0u;
+    memset(s->irq_config, 0, sizeof(s->irq_config));
+    for (i = 0; i < 2; ++i) {
+        timer_del(s->timers[i].qemu_timer);
+        s->timers[i].load = 0u;
+        s->timers[i].control = 0u;
+        s->timers[i].status = 0u;
+    }
+
+    memset(&s->astraea, 0, sizeof(s->astraea));
+    timer_del(s->vega.vblank_timer);
+    s->vega.irq_enable = 0u;
+    s->vega.irq_status = 0u;
+    s->vega.frame_counter = 0u;
+    memset(s->vega.regs, 0, sizeof(s->vega.regs));
+    timer_mod_ns(s->vega.vblank_timer,
+                 qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                     NANOSECONDS_PER_SECOND / 60);
+
+    s->panel_led_data = 0u;
+    s->panel_led_ownership = 0u;
+    astra_panel_write32(s, 0x18, 0u);
+    astra_panel_write32(s, 0x1c, 0u);
+    astra_panel_write32(s, ASTRA_PANEL_ACTIVITY, 0u);
+
     s->input.head = 0;
     s->input.tail = 0;
     s->input.keyboard_sequence = 0;
@@ -1661,6 +1694,12 @@ static void astra_cpu_reset(void *opaque)
     s->block.req_lba_lo = 0;
     s->block.req_sectors = 0;
     s->block.req_buffer = 0;
+    s->block.active_id = 0;
+    s->block.active_op = 0;
+    s->block.active_sectors = 0;
+    s->block.active_buffer = 0;
+    s->block.active_lba = 0;
+    memset(s->block.completion, 0, sizeof(s->block.completion));
     /*
      * A reset is a fresh host service generation. The guest must resynchronise
      * before trusting any state it cached, so raise the pending state change
@@ -1669,6 +1708,7 @@ static void astra_cpu_reset(void *opaque)
     ++s->block.host_generation;
     s->block.state_change = astra_block_present(s);
     astra_display_reset(s);
+    astra_update_irq(s);
 }
 
 static void astra68_init(MachineState *machine)
@@ -1786,7 +1826,7 @@ static void astra68_init(MachineState *machine)
 
     s->ram_size = machine->ram_size;
     s->cpu = M68K_CPU(cpu_create(machine->cpu_type));
-    qemu_register_reset(astra_cpu_reset, s);
+    qemu_register_reset(astra_machine_reset, s);
 
     memory_region_add_subregion(sysmem, ASTRA_SDRAM_BASE, machine->ram);
     s->sdram = memory_region_get_ram_ptr(machine->ram);
@@ -1917,7 +1957,7 @@ static void astra68_init(MachineState *machine)
                                               astra_block_service, s);
     }
 
-    astra_cpu_reset(s);
+    astra_machine_reset(s);
 }
 
 static void astra68_machine_init(MachineClass *mc)

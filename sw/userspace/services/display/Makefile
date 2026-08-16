@@ -19,7 +19,8 @@ OBJECT := build/m68k/main.o
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 GRAPHICS_LIB := $(GRAPHICS)/build/m68k/libastragraphics.a
 GRAPHICS_FONT_HEADERS := $(GRAPHICS)/build/generated/astra_font8x8.inc \
-	$(GRAPHICS)/build/generated/astra_ui_font.inc
+	$(GRAPHICS)/build/generated/astra_ui_font.inc \
+	$(GRAPHICS)/build/generated/astra_mono_font.inc
 HOST_TEST := build/host/test_display
 HOST_TEST_SANITIZE := build/host/test_display_sanitize
 CRT0 := $(RUNTIME)/build/m68k/crt0.o

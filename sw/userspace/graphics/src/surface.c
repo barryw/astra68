@@ -9,8 +9,31 @@
 #include "astra_font8x8.inc"
 
 #include "astra_ui_font.inc"
+#include "astra_mono_font.inc"
 
 #define ARRAY_COUNT(values) (sizeof(values) / sizeof((values)[0]))
+
+typedef struct AstraFontBank {
+    const uint32_t *codepoints;
+    const uint16_t *glyph_ids;
+    uint32_t cmap_count;
+    const AstraUiStrike *strikes;
+    uint32_t strike_count;
+    const AstraUiGlyph *glyphs;
+    const uint8_t *bitmap;
+} AstraFontBank;
+
+static const AstraFontBank ui_font = {
+    astra_ui_cmap_codepoints, astra_ui_cmap_glyphs,
+    ARRAY_COUNT(astra_ui_cmap_codepoints), astra_ui_strikes,
+    ARRAY_COUNT(astra_ui_strikes), astra_ui_glyphs, astra_ui_bitmap
+};
+
+static const AstraFontBank mono_font = {
+    astra_mono_cmap_codepoints, astra_mono_cmap_glyphs,
+    ARRAY_COUNT(astra_mono_cmap_codepoints), astra_mono_strikes,
+    ARRAY_COUNT(astra_mono_strikes), astra_mono_glyphs, astra_mono_bitmap
+};
 
 static uint16_t *row(AstraSurfaceView *surface, uint32_t y)
 {
@@ -372,12 +395,23 @@ void astra_surface_text8x8(AstraSurfaceView *surface, int32_t x, int32_t y,
     }
 }
 
+static const AstraUiStrike *font_strike(const AstraFontBank *font,
+                                        uint16_t pixel_height)
+{
+    for (uint32_t index = 0u; index < font->strike_count; ++index)
+        if (font->strikes[index].height == pixel_height)
+            return &font->strikes[index];
+    return NULL;
+}
+
 const AstraUiStrike *astra_ui_font_strike(uint16_t pixel_height)
 {
-    for (uint32_t index = 0u; index < ARRAY_COUNT(astra_ui_strikes); ++index)
-        if (astra_ui_strikes[index].height == pixel_height)
-            return &astra_ui_strikes[index];
-    return NULL;
+    return font_strike(&ui_font, pixel_height);
+}
+
+const AstraUiStrike *astra_mono_font_strike(uint16_t pixel_height)
+{
+    return font_strike(&mono_font, pixel_height);
 }
 
 uint32_t astra_ui_font_scalar(const char *text, uint32_t length,
@@ -418,39 +452,56 @@ uint32_t astra_ui_font_scalar(const char *text, uint32_t length,
     return 0xfffdu;
 }
 
-static uint32_t ui_glyph_id(uint32_t scalar)
+static uint32_t font_glyph_id(const AstraFontBank *font, uint32_t scalar)
 {
     uint32_t low = 0u;
-    uint32_t high = ARRAY_COUNT(astra_ui_cmap_codepoints);
+    uint32_t high = font->cmap_count;
 
     while (low < high) {
         uint32_t middle = low + (high - low) / 2u;
-        uint32_t candidate = astra_ui_cmap_codepoints[middle];
+        uint32_t candidate = font->codepoints[middle];
 
         if (candidate < scalar)
             low = middle + 1u;
         else
             high = middle;
     }
-    if (low < ARRAY_COUNT(astra_ui_cmap_codepoints) &&
-        astra_ui_cmap_codepoints[low] == scalar)
-        return astra_ui_cmap_glyphs[low];
-    return astra_ui_cmap_glyphs[ARRAY_COUNT(astra_ui_cmap_glyphs) - 1u];
+    if (low < font->cmap_count && font->codepoints[low] == scalar)
+        return font->glyph_ids[low];
+    return font->glyph_ids[font->cmap_count - 1u];
+}
+
+static const AstraUiGlyph *font_glyph(const AstraFontBank *font,
+                                      const AstraUiStrike *strike,
+                                      uint32_t scalar)
+{
+    uint32_t glyph_id = font_glyph_id(font, scalar);
+
+    if (glyph_id >= strike->glyph_count)
+        glyph_id = strike->glyph_count - 1u;
+    return &font->glyphs[strike->glyph_first + glyph_id];
 }
 
 const AstraUiGlyph *astra_ui_font_glyph(const AstraUiStrike *strike,
                                         uint32_t scalar)
 {
-    uint32_t glyph_id = ui_glyph_id(scalar);
+    return font_glyph(&ui_font, strike, scalar);
+}
 
-    if (glyph_id >= strike->glyph_count)
-        glyph_id = strike->glyph_count - 1u;
-    return &astra_ui_glyphs[strike->glyph_first + glyph_id];
+const AstraUiGlyph *astra_mono_font_glyph(const AstraUiStrike *strike,
+                                          uint32_t scalar)
+{
+    return font_glyph(&mono_font, strike, scalar);
 }
 
 const uint8_t *astra_ui_font_bitmap(const AstraUiGlyph *glyph)
 {
     return glyph == NULL ? NULL : &astra_ui_bitmap[glyph->bitmap_offset];
+}
+
+const uint8_t *astra_mono_font_bitmap(const AstraUiGlyph *glyph)
+{
+    return glyph == NULL ? NULL : &astra_mono_bitmap[glyph->bitmap_offset];
 }
 
 uint32_t astra_surface_ui_text_width(const char *utf8, uint32_t length,
@@ -497,44 +548,64 @@ uint32_t astra_surface_ui_text_fit(const char *utf8, uint32_t length,
     return at;
 }
 
-void astra_surface_ui_text(AstraSurfaceView *surface, int32_t x, int32_t y,
+static void draw_list_text(AstraSurfaceView *surface, int32_t x, int32_t y,
                            const char *utf8, uint32_t length,
-                           uint16_t pixel_height, uint16_t color)
+                           uint16_t pixel_height, uint16_t cell_width,
+                           uint16_t color, uint16_t operation)
 {
-    const AstraUiStrike *strike = astra_ui_font_strike(pixel_height);
+    AstraDrawListHeader *header;
+    AstraDrawListCommand *command;
+
+    if (surface == NULL || utf8 == NULL ||
+        surface->kind != ASTRA_SURFACE_VIEW_DRAW_LIST)
+        return;
+    header = draw_header(surface);
+    if (length > ASTRA_DRAW_LIST_PAYLOAD_BYTES - header->payload_bytes)
+        return;
+    command = append_command(surface, operation);
+    if (command == NULL)
+        return;
+    command->x = x;
+    command->y = y;
+    command->foreground = color;
+    command->font_height = pixel_height;
+    command->width = cell_width;
+    command->payload_offset = ASTRA_DRAW_LIST_PAYLOAD_OFFSET +
+                              header->payload_bytes;
+    command->payload_bytes = length;
+    memcpy((uint8_t *)(void *)surface->pixels + command->payload_offset,
+           utf8, length);
+    header->payload_bytes += length;
+}
+
+static void font_text(AstraSurfaceView *surface, int32_t x, int32_t y,
+                      const char *utf8, uint32_t length,
+                      uint16_t pixel_height, uint16_t cell_width,
+                      uint16_t color, const AstraFontBank *font)
+{
+    const AstraUiStrike *strike;
     int32_t pen = x;
     uint32_t at = 0u;
 
-    if (surface == NULL || utf8 == NULL || strike == NULL)
+    if (surface == NULL || utf8 == NULL)
         return;
     if (surface->kind == ASTRA_SURFACE_VIEW_DRAW_LIST) {
-        AstraDrawListHeader *header = draw_header(surface);
-        AstraDrawListCommand *command;
-
-        if (length > ASTRA_DRAW_LIST_PAYLOAD_BYTES - header->payload_bytes)
-            return;
-        command = append_command(surface, ASTRA_DRAW_LIST_TEXT);
-        if (command == NULL)
-            return;
-        command->x = x;
-        command->y = y;
-        command->foreground = color;
-        command->font_height = pixel_height;
-        command->payload_offset = ASTRA_DRAW_LIST_PAYLOAD_OFFSET +
-                                  header->payload_bytes;
-        command->payload_bytes = length;
-        memcpy((uint8_t *)(void *)surface->pixels + command->payload_offset,
-               utf8, length);
-        header->payload_bytes += length;
+        draw_list_text(surface, x, y, utf8, length, pixel_height, cell_width,
+                       color, font == &mono_font ? ASTRA_DRAW_LIST_MONO_TEXT :
+                                                  ASTRA_DRAW_LIST_TEXT);
         return;
     }
+    strike = font_strike(font, pixel_height);
+    if (strike == NULL)
+        return;
     while (at < length) {
         uint32_t consumed;
-        const AstraUiGlyph *glyph = astra_ui_font_glyph(
-            strike, astra_ui_font_scalar(utf8 + at, length - at, &consumed));
+        const AstraUiGlyph *glyph = font_glyph(
+            font, strike,
+            astra_ui_font_scalar(utf8 + at, length - at, &consumed));
         int32_t glyph_x = pen + glyph->bearing_x / 64;
         int32_t glyph_y = y + strike->ascent - glyph->bearing_y / 64;
-        const uint8_t *bitmap = &astra_ui_bitmap[glyph->bitmap_offset];
+        const uint8_t *bitmap = &font->bitmap[glyph->bitmap_offset];
 
         for (uint32_t row_index = 0u; row_index < glyph->height; ++row_index)
             for (uint32_t column = 0u; column < glyph->width; ++column)
@@ -544,7 +615,46 @@ void astra_surface_ui_text(AstraSurfaceView *surface, int32_t x, int32_t y,
                                        glyph_x + (int32_t)column,
                                        glyph_y + (int32_t)row_index,
                                        1u, 1u, color);
-        pen += glyph->advance_x / 64;
+        pen += cell_width != 0u ? cell_width : glyph->advance_x / 64;
         at += consumed;
     }
+}
+
+void astra_surface_ui_text(AstraSurfaceView *surface, int32_t x, int32_t y,
+                           const char *utf8, uint32_t length,
+                           uint16_t pixel_height, uint16_t color)
+{
+    font_text(surface, x, y, utf8, length, pixel_height, 0u, color,
+              &ui_font);
+}
+
+uint16_t astra_surface_mono_cell_width(uint16_t pixel_height)
+{
+    const AstraUiStrike *strike = astra_mono_font_strike(pixel_height);
+    const AstraUiGlyph *space;
+
+    if (strike == NULL)
+        return 0u;
+    space = astra_mono_font_glyph(strike, ' ');
+    return (uint16_t)(space->advance_x / 64);
+}
+
+void astra_surface_mono_text(AstraSurfaceView *surface, int32_t x, int32_t y,
+                             const char *utf8, uint32_t length,
+                             uint16_t pixel_height, uint16_t cell_width,
+                             uint16_t color)
+{
+    if (cell_width != 0u)
+        font_text(surface, x, y, utf8, length, pixel_height, cell_width,
+                  color, &mono_font);
+}
+
+void astra_draw_list_mono_text(AstraSurfaceView *surface, int32_t x, int32_t y,
+                               const char *utf8, uint32_t length,
+                               uint16_t pixel_height, uint16_t cell_width,
+                               uint16_t color)
+{
+    if (cell_width != 0u)
+        draw_list_text(surface, x, y, utf8, length, pixel_height, cell_width,
+                       color, ASTRA_DRAW_LIST_MONO_TEXT);
 }

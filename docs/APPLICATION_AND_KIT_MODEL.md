@@ -1,7 +1,8 @@
 # Astra application, bundle, and Kit model
 
-Status: design direction; no loader, bundle manager, dynamic linker, or shared
-Kit ABI described here is implemented or stable.
+Status: the protected-process loader and first versioned shared Kit ABI are
+implemented. Application bundles, their registrar, private-library resolution,
+and transactional installation remain design direction.
 
 ## 1. Native application identity
 
@@ -80,7 +81,7 @@ Candidate Kits are:
 - Application: launch, lifecycle, commands, messaging and settings;
 - Interface: windows, views, controls, layout, clipboard and drag/drop;
 - Graphics: surfaces, draw lists, sprites, raster resources and fences;
-- Storage: files, directories, attributes, queries and notifications;
+- Filesystem: files, directories, assigns, attributes and notifications;
 - Media: audio streams, voices, clocks and synchronization;
 - Network: asynchronous endpoints and name resolution;
 - POSIX: libc, file descriptors, paths, PTYs, jobs and compatibility.
@@ -92,8 +93,12 @@ exceptions, RTTI, or name mangling across a process or Kit boundary.
 
 ## 5. Shared code direction
 
-Static linking is acceptable during bring-up. It is not the desired permanent
-answer for dozens of small applications on a 32 MiB machine.
+Static linking remains available for small runtime veneers. Graphics and font
+implementations are now loaded separately rather than copied into each client.
+The Filesystem Kit follows the same rule: `filesystem.library` is the shared,
+assign-aware client layer over the existing VFS rather than another storage
+implementation. Its native-to-POSIX boundary is recorded in
+`FILESYSTEM_KIT.md`.
 
 **DIRECTION:** After the native ABI is stable enough to deserve sharing, the
 loader maps immutable versioned Kit text and read-only data into each process.
@@ -110,10 +115,44 @@ process-local.
 - A small import veneer is preferred over embedding large generated stubs in
   every binary.
 
-The exact ELF dynamic-linking model, relocation set, PLT/GOT design, and
-function-table alternative are **OPEN** and require m68k size/startup
-benchmarks. Shared libraries are not a prerequisite for the first protected
-userspace service.
+**IMPLEMENTED:** `OpenLibrary(name, ABI)` resolves the newest compatible file
+under `LIBS:`, and `CloseLibrary()` releases the process reference. Axiom maps
+immutable pages at a common process-local address and shares their physical
+frames; writable pages remain private. Libraries are constrained big-endian
+ELF32/m68k images with fixed metadata and export-table offsets, eager
+`R_68K_RELATIVE` relocation, and no PLT or lazy binding. Process teardown is the
+hard cleanup boundary, so a missed `CloseLibrary()` cannot pin mappings after
+the process dies. The bounded global cache reclaims entries with no process
+mapping.
+
+### 5.1 Version identity and resolution
+
+**DIRECTION:** Final bundle resolution cannot depend on whichever compatible
+file happens to be installed when an application starts. A bundle records each resolved Kit
+by name, ABI major, exact version, target architecture, and content digest.
+Launch either maps that identity or fails with the missing identity; it never
+silently substitutes another version.
+
+Shared Kits already live side by side beneath `LIBS:`. An application may eventually carry
+the exact Kit in its own `libs/` directory. Resolution checks the bundle first
+and then `LIBS:`; it never checks the working directory, an environment search
+path, or an unversioned global alias. Private bundle lookup is not implemented
+yet. A private Kit will affect only its bundle.
+The system namespace owns `LIBS:` with read/write authority so an installer can
+publish and retire versions. Ordinary applications receive a read-only grant;
+installation is an explicit capability, not an ambient right of every process.
+
+The loader cache key is the complete resolved identity, including the content
+digest. The same immutable read-only pages may therefore be shared even when
+identical Kit bytes came from separate bundles, while different versions or
+different digests remain distinct. Reusing a name and version for different
+bytes is an installation conflict, not an update.
+
+Updates install a new version beside the old one and atomically replace only
+the dependency records that opt into it. Running processes retain their old
+mappings. A version may be collected only when no running process maps it and
+no installed bundle records it. This is the rule that permits multiple Kit
+versions without a process-wide or machine-wide DLL conflict.
 
 ## 6. Small-binary rules
 

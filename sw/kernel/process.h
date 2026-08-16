@@ -526,6 +526,7 @@ void kernel_process_test_bind_physical_memory(uint8_t *memory, uint32_t base,
 void kernel_process_test_fail_next_thread_create(
     KernelProcessThreadCreateFault fault);
 uint32_t kernel_process_test_handle_count(uint32_t process_id);
+bool kernel_process_test_library_cache_reclaims_after_last_mapping(void);
 #endif
 
 #endif

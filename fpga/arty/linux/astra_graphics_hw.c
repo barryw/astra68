@@ -10,6 +10,7 @@
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/file.h>
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
@@ -37,6 +38,14 @@ int astra_graphics_device_open(struct astra_graphics_device *device,
     device->memory_fd = open("/dev/mem", O_RDWR | O_SYNC | O_CLOEXEC);
     if (device->memory_fd < 0) {
         perror("open /dev/mem");
+        return -1;
+    }
+    if (flock(device->memory_fd, LOCK_EX | LOCK_NB) != 0) {
+        if (errno == EWOULDBLOCK)
+            fprintf(stderr, "Astra graphics device is already owned\n");
+        else
+            perror("lock graphics device");
+        astra_graphics_device_close(device);
         return -1;
     }
 

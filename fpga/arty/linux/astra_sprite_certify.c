@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Exercise the complete 64-sprite DDR fetch path, then leave a visible scene.
+// Exercise the complete 64-sprite DDR fetch path and leave it quiescent.
 
 #define _POSIX_C_SOURCE 200809L
 #define _FILE_OFFSET_BITS 64
@@ -1012,9 +1012,10 @@ int main(int argc, char **argv)
     result = EXIT_SUCCESS;
 
 done:
-    if (result != EXIT_SUCCESS && sprites_accessible &&
-        quiesce_sprites(&device, &generation) != 0)
+    if (sprites_accessible && quiesce_sprites(&device, &generation) != 0) {
         fprintf(stderr, "failed to restore the quiescent sprite scene\n");
+        result = EXIT_FAILURE;
+    }
     astra_graphics_memory_map_close(&shape_map);
     astra_graphics_device_close(&device);
     return result;

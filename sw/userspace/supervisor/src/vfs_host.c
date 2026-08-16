@@ -39,6 +39,15 @@ bind_standard_assigns(void)
                             ASTRA_RIGHT_READ, "services");
     (void)astra_assign_bind(&vfs_assigns, "STARTUP", vfs_handle,
                             ASTRA_RIGHT_READ, "startup");
+    status = astra_vfs_mkdir(&vfs_client, "/libs");
+    if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
+        (void)astra_assign_bind(&vfs_assigns, "LIBS", vfs_handle,
+                                ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "libs");
+    } else {
+        ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
+                     ASTRA_EVENT_LEVEL_WARNING,
+                     "LIBS: unbound, mkdir refused with status %u", status);
+    }
     /*
      * A volume with no work directory on it has not been used yet, so making
      * one is what installs it. A volume that refuses -- full, or read-only --

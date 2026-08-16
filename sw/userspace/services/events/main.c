@@ -18,8 +18,7 @@
 #include <astra/runtime.h>
 #include <astra/service.h>
 #include <astra/status.h>
-#include <astra/vfs_assign.h>
-#include <astra/vfs_client.h>
+#include <astra/vfs_process.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_service_core.h>
 
@@ -62,9 +61,8 @@ static AstraEventStore store;
 static AstraEventStore previous_store;
 static AstraEventsBackend backend;
 static AstraVfsService service;
-static AstraVfsClient storage_client;
-static AstraAssignTable assigns;
-static uint32_t storage_handle;
+static AstraProcessFilesystem process_filesystem =
+    ASTRA_PROCESS_FILESYSTEM_INIT;
 static AstraVfsPortService events_port;
 static uint32_t events_handle;
 static uint32_t events_receive;
@@ -90,31 +88,22 @@ static int drain_ready;
 static uint32_t catalog_status;
 static int events_ready;
 
+enum {
+    EVENTS_FAIL_STORE = ASTRA_STATUS_PROGRAM_FIRST,
+    EVENTS_FAIL_PREVIOUS_STORE,
+    EVENTS_FAIL_BACKEND,
+    EVENTS_FAIL_SERVICE,
+    EVENTS_FAIL_PORT,
+    EVENTS_FAIL_TRANSPORT,
+    EVENTS_FAIL_CONTROL_PORT
+};
+
 static const char *const snapshot_path[] = {
     "STORE:store.0", "STORE:store.1"
 };
 
-static AstraVfsClient *supervisor_vfs_client(void)
-{
-    return &storage_client;
-}
-
-static AstraAssignTable *supervisor_assigns(void)
-{
-    return &assigns;
-}
-
-static int snapshot_wire(uint32_t bank, uint32_t rights, char *path,
-                         uint32_t capacity)
-{
-    return astra_assign_resolve(&assigns, snapshot_path[bank],
-                                rights, 0u, path, capacity,
-                                NULL) == ASTRA_VFS_OK;
-}
-
 typedef struct SnapshotFile {
-    AstraVfsClient *client;
-    AstraVfsFile file;
+    AstraFile file;
 } SnapshotFile;
 
 static int
@@ -127,8 +116,9 @@ snapshot_read(void *context, uint32_t offset, void *buffer, uint32_t length)
     while (done < length) {
         uint32_t moved = 0u;
 
-        if (astra_vfs_read(snapshot->client, snapshot->file, offset + done,
-                           out + done, length - done, &moved) !=
+        if (process_filesystem.library->read_at(
+                &snapshot->file, offset + done, out + done, length - done,
+                &moved) !=
                 ASTRA_VFS_OK || moved == 0u) {
             return 0;
         }
@@ -148,8 +138,9 @@ snapshot_write(void *context, uint32_t offset, const void *buffer,
     while (done < length) {
         uint32_t moved = 0u;
 
-        if (astra_vfs_write(snapshot->client, snapshot->file, offset + done,
-                            in + done, length - done, &moved) !=
+        if (process_filesystem.library->write_at(
+                &snapshot->file, offset + done, in + done, length - done,
+                &moved) !=
                 ASTRA_VFS_OK || moved == 0u) {
             return 0;
         }
@@ -161,53 +152,48 @@ snapshot_write(void *context, uint32_t offset, const void *buffer,
 static int
 probe_snapshot(uint32_t bank, AstraEventSnapshotInfo *info)
 {
-    AstraVfsClient *storage = supervisor_vfs_client();
-    SnapshotFile snapshot;
-    uint64_t size = 0u;
+    SnapshotFile snapshot = {ASTRA_FILE_INIT};
+    AstraFileInfo file_info = ASTRA_FILE_INFO_INIT;
     uint32_t status;
-    char path[ASTRA_VFS_PATH_MAX];
 
-    snapshot.client = storage;
-    if (!snapshot_wire(bank, ASTRA_RIGHT_READ, path, sizeof(path)))
+    status = process_filesystem.library->open(
+        &process_filesystem.filesystem, snapshot_path[bank],
+        ASTRA_VFS_OPEN_READ, &snapshot.file);
+    if (status != ASTRA_VFS_OK)
         return 0;
-    status = astra_vfs_open(storage, path, ASTRA_VFS_OPEN_READ,
-                            &snapshot.file, &size, NULL);
-    if (status != ASTRA_VFS_OK) {
-        return 0;
-    }
-    if (size > UINT32_MAX) {
-        (void)astra_vfs_close(storage, snapshot.file);
+    status = process_filesystem.library->file_info(&snapshot.file,
+                                                   &file_info);
+    if (status != ASTRA_VFS_OK || file_info.byte_size > UINT32_MAX) {
+        (void)process_filesystem.library->close(&snapshot.file);
         return 0;
     }
     status = astra_event_snapshot_probe(snapshot_read, &snapshot,
-                                        (uint32_t)size, info) ?
+                                        (uint32_t)file_info.byte_size, info) ?
         ASTRA_VFS_OK : ASTRA_VFS_ERR_INVALID;
-    (void)astra_vfs_close(storage, snapshot.file);
+    (void)process_filesystem.library->close(&snapshot.file);
     return status == ASTRA_VFS_OK;
 }
 
 static int
 load_snapshot(uint32_t bank, AstraEventSnapshotInfo *info)
 {
-    AstraVfsClient *storage = supervisor_vfs_client();
-    SnapshotFile snapshot;
-    uint64_t size = 0u;
+    SnapshotFile snapshot = {ASTRA_FILE_INIT};
+    AstraFileInfo file_info = ASTRA_FILE_INFO_INIT;
     int loaded;
-    char path[ASTRA_VFS_PATH_MAX];
 
-    if (!snapshot_wire(bank, ASTRA_RIGHT_READ, path, sizeof(path)) ||
-        astra_vfs_open(storage, path, ASTRA_VFS_OPEN_READ,
-                       &snapshot.file, &size, NULL) != ASTRA_VFS_OK) {
+    if (process_filesystem.library->open(
+            &process_filesystem.filesystem, snapshot_path[bank],
+            ASTRA_VFS_OPEN_READ, &snapshot.file) != ASTRA_VFS_OK)
+        return 0;
+    if (process_filesystem.library->file_info(&snapshot.file, &file_info) !=
+            ASTRA_VFS_OK || file_info.byte_size > UINT32_MAX) {
+        (void)process_filesystem.library->close(&snapshot.file);
         return 0;
     }
-    if (size > UINT32_MAX) {
-        (void)astra_vfs_close(storage, snapshot.file);
-        return 0;
-    }
-    snapshot.client = storage;
     loaded = astra_event_snapshot_load(&previous_store, snapshot_read,
-                                       &snapshot, (uint32_t)size, info);
-    (void)astra_vfs_close(storage, snapshot.file);
+                                       &snapshot,
+                                       (uint32_t)file_info.byte_size, info);
+    (void)process_filesystem.library->close(&snapshot.file);
     return loaded;
 }
 
@@ -223,14 +209,9 @@ start_persistence(void)
     AstraEventSnapshotInfo info[2];
     int valid[2] = {0, 0};
     uint32_t bank = 0u;
-    uint32_t status;
-    char path[ASTRA_VFS_PATH_MAX];
+    uint32_t status = process_filesystem.library->mkdir(
+        &process_filesystem.filesystem, "STORE:");
 
-    status = astra_assign_resolve(&assigns, "STORE:", ASTRA_RIGHT_WRITE, 0u,
-                                  path, sizeof(path), NULL);
-    if (status != ASTRA_VFS_OK)
-        return;
-    status = astra_vfs_mkdir(supervisor_vfs_client(), path);
     if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_EXISTS) {
         return;
     }
@@ -259,11 +240,9 @@ start_persistence(void)
 static void
 save_snapshot(void)
 {
-    AstraVfsClient *storage = supervisor_vfs_client();
-    SnapshotFile snapshot;
+    SnapshotFile snapshot = {ASTRA_FILE_INIT};
     uint32_t next = snapshot_generation + 1u;
     int saved;
-    char path[ASTRA_VFS_PATH_MAX];
 
     if (!persistence_ready) {
         return;
@@ -271,18 +250,17 @@ save_snapshot(void)
     if (next == 0u) {
         next = 1u;
     }
-    snapshot.client = storage;
-    if (!snapshot_wire(next & 1u, ASTRA_RIGHT_WRITE, path, sizeof(path)) ||
-        astra_vfs_open(storage, path,
-                       ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
-                           ASTRA_VFS_OPEN_TRUNCATE,
-                       &snapshot.file, NULL, NULL) != ASTRA_VFS_OK) {
+    if (process_filesystem.library->open(
+            &process_filesystem.filesystem, snapshot_path[next & 1u],
+            ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+                ASTRA_VFS_OPEN_TRUNCATE,
+            &snapshot.file) != ASTRA_VFS_OK) {
         persistence_ready = 0;
         return;
     }
     saved = astra_event_snapshot_save(&store, snapshot_boot, next,
                                       snapshot_write, &snapshot);
-    if (astra_vfs_close(storage, snapshot.file) != ASTRA_VFS_OK) {
+    if (process_filesystem.library->close(&snapshot.file) != ASTRA_VFS_OK) {
         saved = 0;
     }
     if (saved) {
@@ -302,34 +280,23 @@ save_snapshot(void)
 static void
 load_catalog(void)
 {
-    AstraVfsClient *storage = supervisor_vfs_client();
-    const AstraAssign *assign = NULL;
-    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
-    char wire[ASTRA_VFS_PATH_MAX];
-    uint64_t size = 0u;
+    AstraFile file = ASTRA_FILE_INIT;
     uint32_t offset = 0u;
-    uint16_t kind = 0u;
 
-    if (storage == NULL || supervisor_assigns() == NULL) {
+    if (process_filesystem.library == NULL) {
         catalog_status = ASTRA_VFS_ERR_NOT_FOUND;
         return;
     }
-    catalog_status = astra_assign_resolve(supervisor_assigns(),
-                                          "SYS:astra_events.cat",
-                                          ASTRA_RIGHT_READ, 0u, wire,
-                                          sizeof(wire), &assign);
-    if (catalog_status != ASTRA_VFS_OK) {
-        return;
-    }
-    catalog_status = astra_vfs_open(storage, wire, ASTRA_VFS_OPEN_READ, &file,
-                                    &size, &kind);
+    catalog_status = process_filesystem.library->open(
+        &process_filesystem.filesystem, "SYS:astra_events.cat",
+        ASTRA_VFS_OPEN_READ, &file);
     if (catalog_status != ASTRA_VFS_OK) {
         return;
     }
     while (offset < sizeof(catalog_bytes)) {
         uint32_t moved = 0u;
-        uint32_t status = astra_vfs_read(
-            storage, file, offset, (uint8_t *)catalog_bytes + offset,
+        uint32_t status = process_filesystem.library->read_at(
+            &file, offset, (uint8_t *)catalog_bytes + offset,
             sizeof(catalog_bytes) - offset, &moved);
 
         if (status != ASTRA_VFS_OK) {
@@ -341,7 +308,7 @@ load_catalog(void)
         }
         offset += moved;
     }
-    (void)astra_vfs_close(storage, file);
+    (void)process_filesystem.library->close(&file);
     if (!astra_event_catalog_init(&catalog, catalog_bytes, offset,
                                      ASTRA_EVENT_CATALOG_BASE)) {
         /* Read, but not this build's catalog: refused whole rather than half. */
@@ -351,25 +318,23 @@ load_catalog(void)
 
 static void events_pump(void);
 
-static int
+static uint32_t
 events_start(uint32_t process_handle)
 {
-    AstraAssignTable *assigns = supervisor_assigns();
-
     if (events_ready) {
-        return 1;
+        return ASTRA_STATUS_OK;
     }
-    if (assigns == NULL) {
-        return 0;
+    if (process_filesystem.library == NULL) {
+        return ASTRA_STATUS_PROTOCOL;
     }
     load_catalog();
     if (!astra_event_store_init(&store, event_records, EVENTS_RECORD_MAX,
                                 &catalog)) {
-        return 0;
+        return EVENTS_FAIL_STORE;
     }
     if (!astra_event_store_init(&previous_store, previous_records,
                                 EVENTS_RECORD_MAX, &catalog)) {
-        return 0;
+        return EVENTS_FAIL_PREVIOUS_STORE;
     }
     start_persistence();
     /*
@@ -380,11 +345,11 @@ events_start(uint32_t process_handle)
     if (!astra_events_backend_init(&backend, &store,
                                    previous_ready ? &previous_store : NULL,
                                    &catalog)) {
-        return 0;
+        return EVENTS_FAIL_BACKEND;
     }
     if (!astra_vfs_service_init(&service, astra_events_backend_ops(),
                                 &backend)) {
-        return 0;
+        return EVENTS_FAIL_SERVICE;
     }
     /*
      * A port of its own, because EVENTS: is a second service and a child is
@@ -393,26 +358,26 @@ events_start(uint32_t process_handle)
      */
     if (astra_rt_port_create(EVENTS_PORT_MESSAGES,
                           EVENTS_PORT_MESSAGES *
-                              (uint32_t)sizeof(AstraVfsRequestMessage),
+                          (uint32_t)sizeof(AstraVfsRequestMessage),
                           &events_receive, &events_handle) !=
         ASTRA_SYSCALL_OK) {
-        return 0;
+        return EVENTS_FAIL_PORT;
     }
     if (!astra_vfs_port_service_init(&events_port, events_receive,
                                      &service)) {
-        return 0;
+        return EVENTS_FAIL_TRANSPORT;
     }
     if (astra_rt_port_create(EVENTS_PORT_MESSAGES,
                           ASTRA_EVENT_CONTROL_REQUEST_SIZE,
                           &control_receive, &control_handle) !=
         ASTRA_SYSCALL_OK) {
-        return 0;
+        return EVENTS_FAIL_CONTROL_PORT;
     }
     debug_handle = process_handle;
     events_ready = 1;
     drain_ready = 1;
     events_pump();
-    return 1;
+    return ASTRA_STATUS_OK;
 }
 
 static void
@@ -522,7 +487,6 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *capabilities;
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *event_target;
-    const AstraAssign *store;
     uint32_t status = ASTRA_STATUS_OK;
 
     if (!astra_startup_validate(startup) ||
@@ -534,21 +498,12 @@ int astra_main(const AstraStartupInfo *startup)
                            ASTRA_CAPABILITY_SERVICE_READY);
     event_target = capability(startup, capabilities,
                               ASTRA_CAPABILITY_EVENT_TARGET);
-    if (bootstrap == NULL || event_target == NULL ||
-        astra_assign_seed(&assigns, capabilities, startup->capability_count) !=
-            ASTRA_VFS_OK)
+    if (bootstrap == NULL || event_target == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     event_target_handle = event_target->handle;
-    store = astra_assign_lookup(&assigns, "STORE");
-    if (store == NULL)
-        status = ASTRA_STATUS_NOT_FOUND;
-    if (status == ASTRA_STATUS_OK) {
-        storage_handle = store->handle;
-        if (astra_vfs_port_connect(&storage_client, storage_handle) !=
-                ASTRA_VFS_OK ||
-            !events_start(startup->process_handle))
-            status = ASTRA_STATUS_PROTOCOL;
-    }
+    status = astra_process_filesystem_open(&process_filesystem, startup);
+    if (status == ASTRA_VFS_OK)
+        status = events_start(startup->process_handle);
     ready(bootstrap->handle, status,
           status == ASTRA_STATUS_OK ? events_handle : 0u,
           status == ASTRA_STATUS_OK ? control_handle : 0u);

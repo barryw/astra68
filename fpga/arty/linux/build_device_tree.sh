@@ -81,6 +81,33 @@ remove_property "$work" /__symbols__ novavm_capture_mem
 
 "$fdtput" -t s "$work" / model 'Astra 68 Arty Z7-20'
 
+# Keep the appliance network scripts on their existing eth0 contract and give
+# Linux ownership of the Arty Z7 RTL8211F reset line.  The inherited
+# "enet-reset" property is not a Linux binding and leaves a wedged PHY stuck
+# across warm boots.
+chosen=/chosen
+bootargs=$("$fdtget" -t s "$work" "$chosen" bootargs)
+case " $bootargs " in
+    *' net.ifnames=0 '*) ;;
+    *) bootargs="$bootargs net.ifnames=0" ;;
+esac
+"$fdtput" -t s "$work" "$chosen" bootargs "$bootargs"
+
+ethernet=$("$fdtget" -t s "$work" /__symbols__ gem0)
+gpio=$("$fdtget" -t s "$work" /__symbols__ gpio0)
+gpio_phandle=$("$fdtget" -t u "$work" "$gpio" phandle)
+phy=$ethernet/ethernet-phy@0
+phy_phandle=256
+remove_property "$work" "$ethernet" enet-reset
+"$fdtput" -p -c "$work" "$phy"
+"$fdtput" -t s "$work" "$phy" compatible ethernet-phy-id001c.c916
+"$fdtput" -t u "$work" "$phy" reg 0
+"$fdtput" -t u "$work" "$phy" phandle "$phy_phandle"
+"$fdtput" -t u "$work" "$phy" reset-gpios "$gpio_phandle" 9 1
+"$fdtput" -t u "$work" "$phy" reset-assert-us 10000
+"$fdtput" -t u "$work" "$phy" reset-deassert-us 1000000
+"$fdtput" -t u "$work" "$ethernet" phy-handle "$phy_phandle"
+
 # Keep Linux out of the graphics arena even on kernels that fail to remove a
 # no-map reservation from System RAM.
 memory=/memory@0
@@ -110,6 +137,16 @@ clkc_phandle=$("$fdtget" -t u "$work" "$clkc" phandle)
 "$dtc" -q -I dtb -O dtb -o "$out_dir/astra-system.validated.dtb" "$work"
 
 [[ $("$fdtget" -t s "$work" / model) == 'Astra 68 Arty Z7-20' ]]
+[[ $("$fdtget" -t s "$work" "$chosen" bootargs) == *' net.ifnames=0' ]]
+[[ $("$fdtget" -t s "$work" "$phy" compatible) == 'ethernet-phy-id001c.c916' ]]
+[[ $("$fdtget" -t u "$work" "$phy" reset-gpios) == "$gpio_phandle 9 1" ]]
+[[ $("$fdtget" -t u "$work" "$phy" reset-assert-us) == '10000' ]]
+[[ $("$fdtget" -t u "$work" "$phy" reset-deassert-us) == '1000000' ]]
+[[ $("$fdtget" -t u "$work" "$ethernet" phy-handle) == "$phy_phandle" ]]
+if "$fdtget" "$work" "$ethernet" enet-reset >/dev/null 2>&1; then
+    echo "obsolete enet-reset property remains" >&2
+    exit 1
+fi
 [[ $("$fdtget" -t x "$work" "$memory" reg) == '0 18000000' ]]
 [[ $("$fdtget" -t x "$work" "$arena" reg) == '18000000 8000000' ]]
 "$fdtget" -p "$work" "$arena" | grep -Fxq no-map

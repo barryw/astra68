@@ -4,6 +4,7 @@
 #include <volume.h>
 
 #include <astra/bytes.h>
+#include <astra/boot.h>
 #include <astra/display.h>
 #include <astra/event_control.h>
 #include <astra/runtime.h>
@@ -15,7 +16,6 @@
 #define MANIFEST_PATH "/vol/startup/system"
 #define STORAGE_IMAGE_PATH "/vol/services/storage"
 #define LOADER_MANIFEST_MAX 2048u
-#define LOADER_IMAGE_MAX (80u * 1024u)
 #define READY_DEADLINE_NS 10000000000ull
 
 #define LOADER_FAIL_MANIFEST 32u
@@ -23,7 +23,7 @@
 #define LOADER_FAIL_PUBLISH 35u
 
 static char manifest_text[LOADER_MANIFEST_MAX];
-static uint8_t image[LOADER_IMAGE_MAX];
+static uint8_t image[ASTRA_USER_IMAGE_MAX_SIZE];
 static uint32_t process_handles[SUPERVISOR_MANIFEST_ENTRY_MAX];
 static uint32_t service_handles[SUPERVISOR_MANIFEST_ENTRY_MAX];
 static char service_names[SUPERVISOR_MANIFEST_ENTRY_MAX]
@@ -71,52 +71,6 @@ static uint32_t named_service(const char *name)
         if (astra_capability_name_equal(service_names[index], name))
             return service_handles[index];
     return 0u;
-}
-
-static uint32_t load_vfs_image(const char *path, uint32_t *length)
-{
-    AstraVfsFile file;
-    uint64_t size = 0u;
-    uint32_t status = ASTRA_VFS_ERR_NOT_FOUND;
-    uint16_t kind = 0u;
-
-    *length = 0u;
-    for (uint32_t member = 0u; ; ++member) {
-        const AstraAssign *assign = NULL;
-        AstraVfsClient *client;
-        char wire[ASTRA_VFS_PATH_MAX];
-
-        status = astra_assign_resolve(supervisor_assigns(), path,
-                                      ASTRA_RIGHT_READ, member, wire,
-                                      sizeof(wire), &assign);
-        if (status == ASTRA_VFS_ERR_NOT_FOUND)
-            return status;
-        if (status != ASTRA_VFS_OK)
-            continue;
-        client = supervisor_vfs_client_for(assign);
-        if (client == NULL)
-            continue;
-        status = astra_vfs_open(client, wire, ASTRA_VFS_OPEN_READ, &file,
-                                &size, &kind);
-        if (status != ASTRA_VFS_OK)
-            continue;
-        if (kind == ASTRA_VFS_KIND_DIRECTORY || size > sizeof(image)) {
-            (void)astra_vfs_close(client, file);
-            return ASTRA_VFS_ERR_LIMIT;
-        }
-        while (*length < (uint32_t)size) {
-            uint32_t moved = 0u;
-
-            status = astra_vfs_read(client, file, *length, image + *length,
-                                    (uint32_t)size - *length, &moved);
-            if (status != ASTRA_VFS_OK || moved == 0u)
-                break;
-            *length += moved;
-        }
-        (void)astra_vfs_close(client, file);
-        return status == ASTRA_VFS_OK && *length == (uint32_t)size ?
-            ASTRA_VFS_OK : ASTRA_VFS_ERR_IO;
-    }
 }
 
 static uint32_t add_grant(AstraLaunchGrant *out, uint32_t *count,
@@ -411,7 +365,8 @@ uint32_t supervisor_loader_start(
     for (uint32_t index = 1u; index < manifest.count; ++index) {
         const SupervisorManifestEntry *entry = &manifest.entries[index];
 
-        status = load_vfs_image(entry->path, &image_length);
+        status = supervisor_vfs_read(entry->path, image, sizeof(image),
+                                     &image_length);
         if (status == ASTRA_VFS_OK)
             status = launch_entry(startup, capabilities, entry, image_length);
         else

@@ -327,6 +327,14 @@ WINDOW_ACTION(astra_window_maximize, ASTRA_GUI_WINDOW_MAXIMIZE)
 WINDOW_ACTION(astra_window_restore, ASTRA_GUI_WINDOW_RESTORE)
 WINDOW_ACTION(astra_window_present, ASTRA_GUI_WINDOW_PRESENT)
 
+AstraResult astra_window_present_region(AstraWindow *window,
+                                        const AstraWindowFrame *damage)
+{
+    if (damage == 0 || damage->width == 0u || damage->height == 0u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return command(window, ASTRA_GUI_WINDOW_PRESENT, damage, 0, 0u, 0u, 0);
+}
+
 AstraResult astra_window_set_title(AstraWindow *window, const char *title,
                                    uint16_t title_length)
 {

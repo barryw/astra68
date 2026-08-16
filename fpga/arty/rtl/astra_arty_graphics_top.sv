@@ -8,6 +8,10 @@
 
 module astra_arty_graphics_top (
     output wire [3:0]  led,
+    output wire        led4_r,
+    output wire        led4_g,
+    output wire        led4_b,
+    input  wire [3:0]  btn,
     input  wire [1:0]  sw,
 
     output wire        hdmi_tx_clk_p,
@@ -934,13 +938,13 @@ module astra_arty_graphics_top (
 
     wire [7:0] panel_leds;
     astra_front_panel_axi #(
-        .CLK_HZ(200000000),
-        .CAPABILITIES(32'h0f020004),
+        .CLK_HZ(187500000),
+        .CAPABILITIES(32'h1f020407),
         .ACTIVITY_LED(3)
     ) front_panel_i (
         .clk(fclk_clk1),
         .reset(build_reset),
-        .buttons(6'd0),
+        .buttons({2'd0, btn}),
         .switches({2'd0, sw}),
         .diagnostic_leds({5'd0, scene_active, ~build_reset, video_locked}),
         .leds(panel_leds),
@@ -965,6 +969,9 @@ module astra_arty_graphics_top (
         .s_axi_rready(panel_ctrl_rready)
     );
     assign led = panel_leds[3:0];
+    assign led4_r = panel_leds[4];
+    assign led4_g = panel_leds[5];
+    assign led4_b = panel_leds[6];
 
     wire unused_status = &{
         1'b0,

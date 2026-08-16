@@ -27,6 +27,8 @@ module astra_front_panel #(
     localparam integer SAMPLE_COUNTER_WIDTH = SAMPLE_DIV <= 1 ? 1 : $clog2(SAMPLE_DIV);
     localparam integer DEBOUNCE_COUNTER_WIDTH = DEBOUNCE_SAMPLES <= 1 ?
                                                 1 : $clog2(DEBOUNCE_SAMPLES);
+    localparam [7:0] LED_MASK = CAPABILITIES[7:0] >= 8 ? 8'hff :
+        (8'h01 << CAPABILITIES[7:0]) - 1'b1;
     localparam [SAMPLE_COUNTER_WIDTH-1:0] SAMPLE_COUNT_MAX =
                                               SAMPLE_COUNTER_WIDTH'(SAMPLE_DIV - 1);
     localparam [DEBOUNCE_COUNTER_WIDTH-1:0] DEBOUNCE_COUNT_MAX =
@@ -134,11 +136,15 @@ module astra_front_panel #(
         end else begin
             if (led_write) begin
                 case (reg_index)
-                    REG_LED_DATA:      led_data <= write_data[7:0];
-                    REG_LED_OWNERSHIP: led_ownership <= write_data[7:0];
-                    REG_LED_SET:       led_data <= led_data | write_data[7:0];
-                    REG_LED_CLEAR:     led_data <= led_data & ~write_data[7:0];
-                    REG_LED_TOGGLE:    led_data <= led_data ^ write_data[7:0];
+                    REG_LED_DATA:      led_data <= write_data[7:0] & LED_MASK;
+                    REG_LED_OWNERSHIP: led_ownership <=
+                        write_data[7:0] & LED_MASK;
+                    REG_LED_SET:       led_data <=
+                        led_data | (write_data[7:0] & LED_MASK);
+                    REG_LED_CLEAR:     led_data <=
+                        led_data & ~(write_data[7:0] & LED_MASK);
+                    REG_LED_TOGGLE:    led_data <=
+                        led_data ^ (write_data[7:0] & LED_MASK);
                     default: begin end
                 endcase
             end

@@ -310,7 +310,7 @@ must not be presented as working software.
 | whole-address-space cache invalidation | CURRENT HOST | destruction invalidates before descriptor removal/frame reuse |
 | format 0/1/2/9/A/B frame decode | CURRENT | byte-exact host tests |
 | SFC/DFC copyin/copyout fault recovery | CURRENT | focused RTL, Musashi, full RTL |
-| typed generation handle table | CURRENT | host tests; current 37 entries/process |
+| typed generation handle table | CURRENT | host tests; current 38 entries/process |
 | process creation and owner teardown | CURRENT HW | host, Musashi, full RTL, and exact 100-cycle ULX3S fault/reap path |
 | separate generation-safe process/thread objects | CURRENT HW | host, Musashi, full RTL, and two exact K2 ULX3S boots; 4 process and 16 thread slots |
 | runtime thread create and caller-only exit | CURRENT HW | bounded transactional create, interruptible prepare plus masked no-allocation publish, timer-boundary race injection, fixed guarded stack, exact rollback, caller-only exit, and last-thread process promotion pass host, Musashi, pin-level RTL, and two ULX3S boots |
@@ -1113,7 +1113,7 @@ hash, and persistent FPGA flash remain the exact qualified `25D9CB8E` values.
 
 ## Partial or transitional current code
 
-- Seven process slots, 16 global thread slots, 37 handles/process, and the
+- Seven process slots, 16 global thread slots, 38 handles/process, and the
   resulting 15-thread/process cap are qualification limits, not the stable
   limits in `KERNEL_ARCHITECTURE.md`.
 - The current GUI source profile uses 24 ports and 72 fixed message records,

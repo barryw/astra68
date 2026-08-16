@@ -42,6 +42,11 @@ int astra_render_builder_text(AstraRenderBuilder *builder,
                               uint32_t destination, int32_t x, int32_t y,
                               const char *utf8, uint32_t length,
                               uint16_t pixel_height, uint16_t color);
+int astra_render_builder_mono_text(AstraRenderBuilder *builder,
+                                   uint32_t destination, int32_t x,
+                                   int32_t y, const char *utf8,
+                                   uint32_t length, uint16_t pixel_height,
+                                   uint16_t cell_width, uint16_t color);
 int astra_render_builder_replay(AstraRenderBuilder *builder,
                                 uint32_t destination,
                                 const AstraDrawListHeader *draw_list);
@@ -55,6 +60,10 @@ int astra_render_builder_blit_clipped(
     int32_t x, int32_t y, uint16_t width, uint16_t height, uint16_t radius,
     int round_top, int32_t clip_left, int32_t clip_top,
     int32_t clip_right, int32_t clip_bottom);
+int astra_render_builder_blit_region(
+    AstraRenderBuilder *builder, uint32_t destination, uint32_t source,
+    int32_t source_x, int32_t source_y, int32_t destination_x,
+    int32_t destination_y, uint16_t width, uint16_t height);
 uint32_t astra_render_builder_finish(AstraRenderBuilder *builder);
 
 #endif

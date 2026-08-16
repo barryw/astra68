@@ -128,7 +128,7 @@ SCRIPT = [
     ("nosuchthing", "not a command"),
     # The namespace printed back, and the whole of the order a lookup uses.
     # Before this existed the search order was a comment in one function.
-    ("assign", "local/commands"),
+    ("assign", ("local/commands", "LIBS: [0] r  /libs")),
     # A child resolving through a union it was granted. `which` holds COMMANDS:
     # as two grants with two roots and loops them with the same Kit function
     # the shell uses -- so this line is the roots-in-grants fix and the union

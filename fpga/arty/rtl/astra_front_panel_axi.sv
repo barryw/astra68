@@ -6,7 +6,7 @@
 
 module astra_front_panel_axi #(
     parameter integer CLK_HZ = 200000000,
-    parameter [31:0] CAPABILITIES = 32'h0f020004,
+    parameter [31:0] CAPABILITIES = 32'h1f020407,
     parameter integer ACTIVITY_LED = 3
 ) (
     input  wire        clk,

@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+#include <astra/filesystem_library.h>
 #include <astra/terminal.h>
 
 typedef struct ConsoleShellBackend {
@@ -13,6 +14,9 @@ typedef struct ConsoleShellBackend {
     int (*present)(void *context, const AstraTerminal *terminal);
     int (*next_key)(void *context, uint32_t *key);
     uint32_t wait_handle;
+    uint64_t idle_poll_ns;
+    AstraFilesystem *filesystem;
+    const AstraFilesystemLibraryV1 *filesystem_library;
 } ConsoleShellBackend;
 
 enum {
@@ -27,8 +31,6 @@ enum {
  * the status halfword has no bits left, so how far it got is reported through
  * the progress counter and the caller parks either way.
  */
-void console_shell_run(uint32_t display, uint32_t input, uint32_t input_irq,
-                       int volume_ready);
 void console_shell_run_backend(const ConsoleShellBackend *backend,
                                int volume_ready);
 

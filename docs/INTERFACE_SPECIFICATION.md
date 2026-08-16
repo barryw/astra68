@@ -159,6 +159,11 @@ tables. Titles use the primary text role and are vertically centered. The
 current gallery exercises the proportional AROS ISOHelvetica-derived AFNT
 face; the 8x8 ROM font remains the recovery-console face.
 
+The initial terminal uses the complete Spleen-derived Astra Mono 8x16 AFNT
+strike through the NDK `ASTRA_FONT_ROLE_MONO` role on its native 8-pixel cell
+grid. Its insertion point is a full-cell-width, 2-pixel underline that toggles
+every 500 ms and becomes visible immediately after text or cursor movement.
+
 Icons use crisp designed sizes and the semantic palette. System gadgets use
 simple line glyphs rather than text labels. Applications provide content icons
 but never replace system window gadgets.
@@ -173,6 +178,10 @@ crosses into the display service. A successful create returns an opaque
 capability for query, set-frame, move, resize, raise, lower, activate,
 deactivate, minimize, maximize, restore, title, and close operations. The
 server validates every request and resolves theme roles into hardware commands.
+Applications may publish either their whole draw list or one bounded changed
+content rectangle. The server retains the last completed content surface, so
+chrome-only changes and small content damage do not replay unaffected glyphs
+or primitives.
 
 The initial visual acceptance gallery contains four real service windows:
 
@@ -211,6 +220,6 @@ lifetime; no invisible window or global process identifier is involved.
 
 Sprite 0 is the desktop pointer. The MC68030 submits only clipped position and
 visibility; the Arty display owner updates the Astraea sprite descriptor and
-commits the scene. Pointer movement never redraws the framebuffer merely to
-move the pointer. Hover or pressed chrome damage remains an independent native
-render batch.
+commits the scene. Pointer position commits before any hover or pressed chrome
+repaint and never redraws the framebuffer merely to move the pointer. Chrome
+damage remains an independent native render batch.

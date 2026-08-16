@@ -74,6 +74,25 @@ astra_rt_area_unmap(void *address)
 }
 
 uint32_t
+astra_rt_library_map(const void *image, uint32_t length, uint32_t *base,
+                     uint32_t *span)
+{
+    AstraSyscallResult result;
+
+    if (image == NULL || length == 0u || base == NULL || span == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    *base = 0u;
+    *span = 0u;
+    astra_syscall5(ASTRA_SYSCALL_LIBRARY_MAP, (uint32_t)(uintptr_t)image,
+                   length, 0u, 0u, 0u, &result);
+    if (result.status == ASTRA_SYSCALL_OK) {
+        *base = result.value0;
+        *span = result.value1;
+    }
+    return result.status;
+}
+
+uint32_t
 astra_device_query(uint32_t handle, AstraDeviceInfo *info)
 {
     AstraSyscallResult result;

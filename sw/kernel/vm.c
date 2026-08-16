@@ -4,6 +4,8 @@
 #include "pmmu.h"
 #include "thread.h"
 
+#include <astra/library.h>
+
 #include <stddef.h>
 
 #define VM_ROOT_ENTRIES 1024u
@@ -225,7 +227,18 @@ static bool shared_mapping_class(uint32_t virtual_address,
 {
     uint32_t offset;
 
-    if (mapping_class == NULL || virtual_address < KERNEL_VM_AREA_BASE)
+    if (mapping_class == NULL)
+        return false;
+    if (virtual_address >= ASTRA_LIBRARY_BASE &&
+        virtual_address < ASTRA_LIBRARY_BASE +
+                              (ASTRA_LIBRARY_SLOT_COUNT *
+                               ASTRA_LIBRARY_SLOT_SIZE)) {
+        /* Library frames always keep one globally assigned virtual slot. */
+        *mapping_class = (uint8_t)((virtual_address - ASTRA_LIBRARY_BASE) /
+                                  ASTRA_LIBRARY_SLOT_SIZE);
+        return true;
+    }
+    if (virtual_address < KERNEL_VM_AREA_BASE)
         return false;
     offset = virtual_address - KERNEL_VM_AREA_BASE;
     if (offset >= KERNEL_VM_AREA_SLOT_COUNT * KERNEL_VM_AREA_SLOT_SIZE)
@@ -604,7 +617,8 @@ static KernelVmStatus map_owned_page(KernelAddressSpace *space,
                                      uint32_t physical_address,
                                      uint32_t permissions,
                                      KernelFrameState required_state,
-                                     bool cache_inhibit)
+                                     bool cache_inhibit,
+                                     uint32_t frame_owner)
 {
     volatile uint32_t *root;
     volatile uint32_t *table;
@@ -624,7 +638,7 @@ static KernelVmStatus map_owned_page(KernelAddressSpace *space,
                          KERNEL_VM_EXEC)) != 0u)
         return KERNEL_VM_INVALID_ARGUMENT;
     if (!kernel_memory_frame_info(physical_address, &frame) ||
-        frame.owner != space->owner || frame.state != required_state ||
+        frame.owner != frame_owner || frame.state != required_state ||
         frame.references == 0u)
         return KERNEL_VM_NOT_OWNED;
 
@@ -667,7 +681,7 @@ static KernelVmStatus map_owned_page(KernelAddressSpace *space,
         }
         return KERNEL_VM_ALREADY_MAPPED;
     }
-    if (!frame_mapping_can_add(physical_address, KERNEL_FRAME_PROCESS,
+    if (!frame_mapping_can_add(physical_address, required_state,
                                virtual_address)) {
         if (allocated_table) {
             root[root_index] = VM_DESC_INVALID;
@@ -677,7 +691,7 @@ static KernelVmStatus map_owned_page(KernelAddressSpace *space,
         }
         return KERNEL_VM_CACHE_ALIAS;
     }
-    if (kernel_memory_retain(physical_address, 1u, space->owner) !=
+    if (kernel_memory_retain(physical_address, 1u, frame_owner) !=
         KERNEL_MEMORY_OK) {
         if (allocated_table) {
             root[root_index] = VM_DESC_INVALID;
@@ -690,7 +704,7 @@ static KernelVmStatus map_owned_page(KernelAddressSpace *space,
 
     if (!frame_mapping_add(physical_address, required_state,
                            virtual_address)) {
-        (void)kernel_memory_release(physical_address, 1u, space->owner);
+        (void)kernel_memory_release(physical_address, 1u, frame_owner);
         if (allocated_table) {
             root[root_index] = VM_DESC_INVALID;
             (void)kernel_memory_release(table_physical, 1u, space->owner);
@@ -716,7 +730,8 @@ KernelVmStatus kernel_vm_map_page(KernelAddressSpace *space,
                                   uint32_t permissions)
 {
     return map_owned_page(space, virtual_address, physical_address,
-                          permissions, KERNEL_FRAME_PROCESS, false);
+                          permissions, KERNEL_FRAME_PROCESS, false,
+                          space->owner);
 }
 
 KernelVmStatus kernel_vm_map_transfer_page(KernelAddressSpace *space,
@@ -727,7 +742,21 @@ KernelVmStatus kernel_vm_map_transfer_page(KernelAddressSpace *space,
     if ((permissions & KERNEL_VM_EXEC) != 0u)
         return KERNEL_VM_INVALID_ARGUMENT;
     return map_owned_page(space, virtual_address, physical_address,
-                          permissions, KERNEL_FRAME_DMA, true);
+                          permissions, KERNEL_FRAME_DMA, true, space->owner);
+}
+
+KernelVmStatus kernel_vm_map_shared_page(KernelAddressSpace *space,
+                                         uint32_t virtual_address,
+                                         uint32_t physical_address,
+                                         uint32_t frame_owner,
+                                         uint32_t permissions)
+{
+    if (frame_owner == KERNEL_OWNER_NONE ||
+        (permissions & KERNEL_VM_WRITE) != 0u)
+        return KERNEL_VM_INVALID_ARGUMENT;
+    return map_owned_page(space, virtual_address, physical_address,
+                          permissions, KERNEL_FRAME_SHARED, false,
+                          frame_owner);
 }
 
 KernelVmStatus kernel_vm_unmap_page(KernelAddressSpace *space,

@@ -6,10 +6,9 @@
  * and pushes the resulting cells at the display lease. The parts worth keeping
  * are underneath it -- the cell model, the keymap, the line editor.
  *
- * It names no filesystem. Every command reaches storage through the protocol
- * in astra/vfs_client.h, like any other client would, and this file is built
- * without lwext4 on its include path so a filesystem call reappearing here
- * fails to compile rather than being noticed in review.
+ * It names no filesystem implementation. Every command reaches storage
+ * through filesystem.library, whether the serving backend is a disk, RAM, or
+ * something added later.
  *
  * It also builds no paths. There is no root on this machine: a path is
  * ASSIGN:rest, the shell stands in an assign and a directory under it, and
@@ -24,7 +23,6 @@
 #include <volume.h>
 
 #include <astra/bytes.h>
-#include <astra/display.h>
 #include <astra/event_control.h>
 #include <astra/keymap.h>
 #include <astra/runtime.h>
@@ -36,10 +34,6 @@
 
 #include <astra/event_emit.h>
 #include <astra/vfs_assign.h>
-#include <astra/vfs_client.h>
-#include <astra/vfs_path.h>
-#include <astra/vfs_port_transport.h>
-#include <astra/vfs_union.h>
 #include <vfs_host.h>
 
 /* A path the protocol will refuse to carry is not worth building. */
@@ -77,18 +71,7 @@ typedef struct ConsoleShell {
     int running;
 } ConsoleShell;
 
-typedef struct DirectConsoleBackend {
-    AstraInputEvent events[ASTRA_INPUT_READ_BATCH_MAX];
-    uint32_t display;
-    uint32_t input;
-    uint32_t input_irq;
-    uint32_t modifiers;
-    uint32_t event_count;
-    uint32_t event_index;
-} DirectConsoleBackend;
-
 static ConsoleShell shell;
-static DirectConsoleBackend direct_backend;
 /*
  * Outside the frame for the same reason the input batch is: a user thread gets
  * one 4 KiB stack, and 64 KiB was never going to be on it.
@@ -116,173 +99,14 @@ static int shell_equal(const char *left, const char *right)
     return left[index] == right[index];
 }
 
-/*
- * The adapter astra_vfs_assign_open needs. The Kit's union loop takes a
- * client_for callback carrying a context pointer, because a launched
- * program's clients and the supervisor's are looked up different ways; this
- * shell has no context to give it, so the adapter just drops it.
- */
-static AstraVfsClient *shell_client_for(const AstraAssign *assign,
-                                        void *context)
+static AstraFilesystem *filesystem(void)
 {
-    (void)context;
-    return supervisor_vfs_client_for(assign);
+    return shell.backend.filesystem;
 }
 
-/*
- * The first member of an already-qualified path that actually carries the
- * requested rights -- not necessarily member zero, since a union's first
- * member can be read-only. This is where a name that does not exist yet
- * belongs: mkdir, and a write to a name that turns out to be on no member at
- * all, both create through here, so a new file lands on whichever member is
- * willing to take it rather than wherever join order happened to put a
- * read-only copy.
- *
- * "Not found" is what this returns once every member has said no and none of
- * them said anything more specific; a member that refused because it does not
- * carry the right is remembered instead, the same worst-status rule
- * astra_vfs_assign_open documents (astra/vfs_union.h) -- a namespace with no
- * writable member at all is an access problem, not an absence, and must not
- * be reported as one.
- */
-static uint32_t shell_path_primary(const char *typed, uint32_t rights,
-                                   char *wire, uint32_t capacity,
-                                   AstraVfsClient **client)
+static const AstraFilesystemLibraryV1 *filesystem_library(void)
 {
-    uint32_t worst = ASTRA_VFS_ERR_NOT_FOUND;
-
-    for (uint32_t member = 0u; ; ++member) {
-        const AstraAssign *assign = NULL;
-        uint32_t status;
-
-        status = astra_assign_resolve(supervisor_assigns(), typed, rights,
-                                      member, wire, capacity, &assign);
-        if (status == ASTRA_VFS_ERR_NOT_FOUND)
-            return worst;
-        if (status != ASTRA_VFS_OK) {
-            if (worst == ASTRA_VFS_ERR_NOT_FOUND)
-                worst = status;
-            continue;
-        }
-        *client = supervisor_vfs_client_for(assign);
-        if (*client != NULL)
-            return ASTRA_VFS_OK;
-    }
-}
-
-/*
- * Where an already-qualified path already is, walked member by member without
- * opening a handle: cd only wants its kind and rm is about to remove it, so
- * neither wants a file left open behind it. Resolution is a string operation
- * and existence is not (astra/vfs_assign.h), so a stat is what actually
- * answers "is it on this member" -- the same reason launch_path's own search
- * stats rather than trusting resolve alone.
- *
- * The same worst-status rule as shell_path_primary, and for rm it is not
- * academic: a name that lives only on a read-only member must come back
- * "access denied", not "not found" -- the file is right there, and telling a
- * person it is absent when it is merely untouchable is the wrong refusal.
- *
- * Existence and permission are different questions, and resolving with the
- * *operation's* rights used to ask them as one. astra_assign_resolve refuses
- * ASTRA_VFS_ERR_ACCESS for a member whose bound rights do not cover what was
- * requested, and it does that before any I/O -- so that refusal has told
- * this function nothing about whether the member actually holds the name.
- * Treating it as this function's own worst status anyway let a member that
- * merely cannot be written outrun every other member's honest NOT_FOUND, so
- * a name sitting on no member at all came back "access denied" instead of
- * "not found": the exact failure this comment is here to keep from coming
- * back. So every member is now resolved for existence only, with READ -- the
- * same right `cd` and `cat` already ask for, since a name has to be readable
- * to be found before anything decides whether it may also be acted on. Only
- * once a stat confirms the name is really there is the caller's `rights`
- * checked against the member that holds it; a member that has the name but
- * not the right is remembered exactly like the read-only-member case above
- * and the walk moves on, while a member that lacks even READ still refuses
- * at resolve, unchanged.
- */
-static uint32_t shell_locate(const char *typed, uint32_t rights, char *wire,
-                             uint32_t capacity, AstraVfsClient **client,
-                             uint16_t *kind)
-{
-    uint32_t worst = ASTRA_VFS_ERR_NOT_FOUND;
-
-    for (uint32_t member = 0u; ; ++member) {
-        const AstraAssign *assign = NULL;
-        uint32_t status;
-
-        status = astra_assign_resolve(supervisor_assigns(), typed,
-                                      ASTRA_RIGHT_READ, member, wire, capacity,
-                                      &assign);
-        if (status == ASTRA_VFS_ERR_NOT_FOUND)
-            return worst;
-        if (status != ASTRA_VFS_OK) {
-            if (worst == ASTRA_VFS_ERR_NOT_FOUND)
-                worst = status;
-            continue;
-        }
-        *client = supervisor_vfs_client_for(assign);
-        if (*client == NULL)
-            continue;
-        status = astra_vfs_stat(*client, wire, NULL, kind);
-        if (status == ASTRA_VFS_OK) {
-            if ((assign->rights & rights) != rights) {
-                /*
-                 * It is here, but not writable (or otherwise usable as asked)
-                 * here -- not the same thing as absent, so this must not let
-                 * a later member's ordinary NOT_FOUND look like the final
-                 * word once none of them turn out to hold the name at all.
-                 */
-                if (worst == ASTRA_VFS_ERR_NOT_FOUND)
-                    worst = ASTRA_VFS_ERR_ACCESS;
-                continue;
-            }
-            return ASTRA_VFS_OK;
-        }
-        /*
-         * Not on this member: the next one still might have it. But the same
-         * worst-status rule applies to a stat that failed for its own reason
-         * as to a resolve that did (astra/vfs_union.h) -- a member whose
-         * device answered ASTRA_VFS_ERR_IO or ASTRA_VFS_ERR_PROTOCOL did not
-         * say "absent", it said "I could not tell you", and a later member's
-         * ordinary NOT_FOUND must not bury that.
-         */
-        if (status != ASTRA_VFS_ERR_NOT_FOUND && worst == ASTRA_VFS_ERR_NOT_FOUND)
-            worst = status;
-    }
-}
-
-/* The one place the shell reaches storage. NULL before the service publishes. */
-static AstraVfsClient *storage(void)
-{
-    return supervisor_vfs_client();
-}
-
-/* "input read refused, status N" without a formatter, since there is none. */
-static uint32_t describe_input_failure(char *out, uint32_t capacity,
-                                       uint32_t status)
-{
-    static const char prefix[] = "input read refused, status ";
-    uint32_t length = 0u;
-    char digits[10];
-    uint32_t count = 0u;
-
-    while (prefix[length] != '\0' && length + 1u < capacity) {
-        out[length] = prefix[length];
-        ++length;
-    }
-    if (status == 0u && length + 1u < capacity) {
-        out[length++] = '0';
-    }
-    while (status != 0u && count < sizeof(digits)) {
-        digits[count++] = (char)('0' + (status % 10u));
-        status /= 10u;
-    }
-    while (count != 0u && length + 1u < capacity) {
-        out[length++] = digits[--count];
-    }
-    out[length] = '\0';
-    return length;
+    return shell.backend.filesystem_library;
 }
 
 static void write_line(const char *text)
@@ -349,104 +173,46 @@ static void report_status(const char *what, uint32_t status)
 
 static void command_ls(int argc, char *const *argv)
 {
-    static AstraVfsDirEntry entries[16];
+    AstraDirectory directory = ASTRA_DIRECTORY_INIT;
+    AstraDirectoryEntry entries[ASTRA_FILESYSTEM_DIRECTORY_BATCH_MAX];
     char typed[SHELL_PATH_MAX];
-    char path[SHELL_PATH_MAX];
-    const AstraAssign *assign = NULL;
-    AstraVfsClient *client = NULL;
     uint32_t shown = 0u;
-    uint32_t members = 0u;
-    uint32_t worst = ASTRA_VFS_ERR_NOT_FOUND;
     uint32_t status;
 
-    if (storage() == NULL) {
-        write_line("ls: no volume");
-        return;
-    }
-    status = astra_path_qualify(shell.assign, shell.directory,
-                                argc > 1 ? argv[1] : NULL, typed,
-                                sizeof(typed));
+    status = filesystem_library()->qualify(
+        shell.assign, shell.directory, argc > 1 ? argv[1] : NULL, typed,
+        sizeof(typed));
     if (status != ASTRA_VFS_OK) {
         report_status("ls", status);
         return;
     }
-    /*
-     * Every member, in order, and nothing is deduplicated: a name on two
-     * members is shown twice with the member it came from. A duplicate-name
-     * set would be memory proportional to the directory, which every
-     * enumeration on this machine refuses -- and hiding the loser would make a
-     * listing disagree with what a lookup would do.
-     */
-    for (uint32_t member = 0u; ; ++member) {
-        uint64_t cursor = 0u;
+    status = filesystem_library()->directory_open(filesystem(), typed,
+                                                  &directory);
+    if (status != ASTRA_VFS_OK) {
+        report_status("ls", status);
+        return;
+    }
+    for (;;) {
+        uint32_t count = 0u;
 
-        status = astra_assign_resolve(supervisor_assigns(), typed,
-                                      ASTRA_RIGHT_READ, member, path,
-                                      sizeof(path), &assign);
-        if (status == ASTRA_VFS_ERR_NOT_FOUND) {
+        status = filesystem_library()->directory_read(
+            &directory, entries,
+            (uint32_t)(sizeof(entries) / sizeof(entries[0])), &count);
+        if (status != ASTRA_VFS_OK || count == 0u)
             break;
-        }
-        if (status != ASTRA_VFS_OK) {
-            /*
-             * The same worst-status rule as shell_locate and
-             * shell_path_primary (astra/vfs_union.h): a member that refused
-             * for a reason other than plain absence must survive to the
-             * final report, so a name whose only members lack read rights is
-             * told "access denied" rather than the ordinary "not found".
-             */
-            if (worst == ASTRA_VFS_ERR_NOT_FOUND)
-                worst = status;
-            continue;
-        }
-        client = supervisor_vfs_client_for(assign);
-        if (client == NULL) {
-            continue;
-        }
-        ++members;
-        for (;;) {
-            uint32_t count = 0u;
-
-            status = astra_vfs_readdir_batch(
-                client, path, cursor, entries,
-                (uint32_t)(sizeof(entries) / sizeof(entries[0])), &count,
-                &cursor);
-            if (status == ASTRA_VFS_ERR_NOT_FOUND)
-                break;
-            if (status != ASTRA_VFS_OK) {
-                /*
-                 * This member, not the listing: a device that fails partway
-                 * through a directory has said nothing about any other
-                 * member, and abandoning the whole command over one broken
-                 * member is the same shape of mistake the worst-status rule
-                 * exists to stop elsewhere in this file. Reported here,
-                 * because the caller only sees the worst status when no
-                 * member resolved at all.
-                 */
-                report_status("ls", status);
-                if (worst == ASTRA_VFS_ERR_NOT_FOUND)
-                    worst = status;
-                break;
-            }
-            for (uint32_t entry = 0u; entry < count; ++entry) {
-                astra_terminal_write(&shell.terminal, entries[entry].name);
-                if (entries[entry].kind == ASTRA_VFS_KIND_DIRECTORY)
-                    astra_terminal_putc(&shell.terminal, '/');
-                /*
-                 * The member it came from, so the shadowing a person cannot
-                 * see in a name is visible in the listing.
-                 */
-                astra_terminal_write(&shell.terminal, "  [");
-                write_number(member);
-                astra_terminal_write(&shell.terminal, "]");
-                astra_terminal_putc(&shell.terminal, '\n');
-                ++shown;
-            }
-            if (cursor == 0u)
-                break;
+        for (uint32_t entry = 0u; entry < count; ++entry) {
+            astra_terminal_write(&shell.terminal, entries[entry].name);
+            if (entries[entry].kind == ASTRA_VFS_KIND_DIRECTORY)
+                astra_terminal_putc(&shell.terminal, '/');
+            astra_terminal_write(&shell.terminal, "  [");
+            write_number(entries[entry].member);
+            astra_terminal_write(&shell.terminal, "]\n");
+            ++shown;
         }
     }
-    if (members == 0u) {
-        report_status("ls", worst);
+    filesystem_library()->directory_close(&directory);
+    if (status != ASTRA_VFS_OK) {
+        report_status("ls", status);
         return;
     }
     if (shown == 0u)
@@ -458,47 +224,32 @@ static void command_cd(int argc, char *const *argv)
     char typed[SHELL_PATH_MAX];
     char wire[SHELL_PATH_MAX];
     char name[ASTRA_CAPABILITY_NAME_MAX];
-    AstraVfsClient *client = NULL;
-    uint16_t kind = 0u;
+    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
     uint32_t status;
 
-    if (storage() == NULL) {
-        write_line("cd: no volume");
-        return;
-    }
     /* `cd` alone goes to the assign's root, not to where it already is. */
-    status = astra_path_qualify(shell.assign,
-                                argc > 1 ? shell.directory : "",
-                                argc > 1 ? argv[1] : NULL, typed,
-                                sizeof(typed));
-    if (status == ASTRA_VFS_OK) {
-        /*
-         * A directory on the second member is a directory that exists: cd
-         * used to resolve member zero only, which made a directory that
-         * lived solely on a union's later member impossible to enter even
-         * though `ls` could already show it sitting there. Verified before
-         * it is adopted, so the prompt never lies.
-         */
-        status = shell_locate(typed, ASTRA_RIGHT_READ, wire, sizeof(wire),
-                              &client, &kind);
-    }
+    status = filesystem_library()->qualify(
+        shell.assign, argc > 1 ? shell.directory : "",
+        argc > 1 ? argv[1] : NULL, typed, sizeof(typed));
+    if (status == ASTRA_VFS_OK)
+        status = filesystem_library()->stat(filesystem(), typed, &info);
     if (status != ASTRA_VFS_OK) {
         report_status("cd", status);
         return;
     }
-    if (kind != ASTRA_VFS_KIND_DIRECTORY) {
+    if (info.kind != ASTRA_VFS_KIND_DIRECTORY) {
         write_line("cd: not a directory");
         return;
     }
     /*
      * Adopted only now, and taken apart by the same parser that resolved it.
      * `wire` is finished with, so it is the scratch the split needs rather
-     * than a fourth buffer on a stack that has lwext4 underneath it.
+     * than a fourth buffer on a small user stack.
      */
-    if (astra_path_split(typed, name, sizeof(name), wire, sizeof(wire)) !=
-            ASTRA_VFS_OK ||
-        astra_path_normalise(wire, shell.directory,
-                             sizeof(shell.directory)) != ASTRA_VFS_OK) {
+    if (filesystem_library()->path_split(
+            typed, name, sizeof(name), wire, sizeof(wire)) != ASTRA_VFS_OK ||
+        filesystem_library()->path_normalise(
+            wire, shell.directory, sizeof(shell.directory)) != ASTRA_VFS_OK) {
         shell.directory[0] = '\0';
         write_line("cd: path too long");
         return;
@@ -509,46 +260,27 @@ static void command_cd(int argc, char *const *argv)
 static void command_cat(int argc, char *const *argv)
 {
     char typed[SHELL_PATH_MAX];
-    char path[SHELL_PATH_MAX];
     uint8_t chunk[SHELL_READ_CHUNK];
-    AstraVfsClient *client = NULL;
-    AstraVfsFile file;
-    uint64_t offset = 0u;
+    AstraFile file = ASTRA_FILE_INIT;
     uint32_t moved = 0u;
     uint32_t status;
 
-    if (storage() == NULL) {
-        write_line("cat: no volume");
-        return;
-    }
     if (argc < 2) {
         write_line("cat: needs a file");
         return;
     }
-    status = astra_path_qualify(shell.assign, shell.directory, argv[1], typed,
-                                sizeof(typed));
-    if (status == ASTRA_VFS_OK) {
-        /*
-         * A file on the second member is a file that exists: cat used to
-         * resolve member zero only, so a name shadowed by nothing on the
-         * first member but present on the second could not be read at all.
-         * The Kit's own union loop is the right tool here, because reading
-         * wants exactly what it hands back -- an open handle on whichever
-         * member answered.
-         */
-        status = astra_vfs_assign_open(supervisor_assigns(), typed,
-                                       ASTRA_RIGHT_READ, ASTRA_VFS_OPEN_READ,
-                                       shell_client_for, NULL, path,
-                                       sizeof(path), &file, NULL, NULL,
-                                       &client, NULL);
-    }
+    status = filesystem_library()->qualify(
+        shell.assign, shell.directory, argv[1], typed, sizeof(typed));
+    if (status == ASTRA_VFS_OK)
+        status = filesystem_library()->open(
+            filesystem(), typed, ASTRA_VFS_OPEN_READ, &file);
     if (status != ASTRA_VFS_OK) {
         report_status("cat", status);
         return;
     }
     for (;;) {
-        status = astra_vfs_read(client, file, offset, chunk, sizeof(chunk),
-                                &moved);
+        status = filesystem_library()->read(&file, chunk, sizeof(chunk),
+                                            &moved);
         if (status != ASTRA_VFS_OK) {
             report_status("cat", status);
             break;
@@ -557,43 +289,27 @@ static void command_cat(int argc, char *const *argv)
         if (moved == 0u)
             break;
         astra_terminal_write_bytes(&shell.terminal, chunk, moved);
-        offset += moved;
     }
-    (void)astra_vfs_close(client, file);
+    (void)filesystem_library()->close(&file);
     astra_terminal_putc(&shell.terminal, '\n');
 }
 
 static void command_mkdir(int argc, char *const *argv)
 {
     char typed[SHELL_PATH_MAX];
-    char path[SHELL_PATH_MAX];
-    AstraVfsClient *client = NULL;
     uint32_t status;
 
-    if (storage() == NULL) {
-        write_line("mkdir: no volume");
-        return;
-    }
     if (argc < 2) {
         write_line("mkdir: needs a name");
         return;
     }
-    status = astra_path_qualify(shell.assign, shell.directory, argv[1], typed,
-                                sizeof(typed));
-    if (status == ASTRA_VFS_OK) {
-        /*
-         * A new directory is a creation, and creation belongs on the
-         * primary -- the first member willing to take a write -- rather
-         * than on member zero regardless of whether it can.
-         */
-        status = shell_path_primary(typed, ASTRA_RIGHT_WRITE, path,
-                                    sizeof(path), &client);
-    }
+    status = filesystem_library()->qualify(
+        shell.assign, shell.directory, argv[1], typed, sizeof(typed));
     if (status != ASTRA_VFS_OK) {
         report_status("mkdir", status);
         return;
     }
-    status = astra_vfs_mkdir(client, path);
+    status = filesystem_library()->mkdir(filesystem(), typed);
     if (status != ASTRA_VFS_OK)
         report_status("mkdir", status);
 }
@@ -602,68 +318,25 @@ static void command_mkdir(int argc, char *const *argv)
 static void command_write(int argc, char *const *argv)
 {
     char typed[SHELL_PATH_MAX];
-    char path[SHELL_PATH_MAX];
-    AstraVfsClient *client = NULL;
-    AstraVfsFile file;
-    uint64_t offset = 0u;
+    AstraFile file = ASTRA_FILE_INIT;
     uint32_t moved = 0u;
     uint32_t status;
     int index;
 
-    if (storage() == NULL) {
-        write_line("write: no volume");
-        return;
-    }
     if (argc < 2) {
         write_line("write: needs a name");
         return;
     }
-    status = astra_path_qualify(shell.assign, shell.directory, argv[1], typed,
-                                sizeof(typed));
+    status = filesystem_library()->qualify(
+        shell.assign, shell.directory, argv[1], typed, sizeof(typed));
     if (status != ASTRA_VFS_OK) {
         report_status("write", status);
         return;
     }
-    /*
-     * A name that already exists is written where it already is, not on the
-     * primary: writing through the union at member zero regardless would let
-     * a person "edit" a shipped file on a later member and silently get a
-     * new, shadowing copy on the first one instead of the edit they asked
-     * for.
-     *
-     * This used to open with WRITE|TRUNCATE and no CREATE, on the reasoning
-     * that a truncate-without-create open is an existence probe: a member
-     * that lacks the file would refuse and the walk would move on. That
-     * reasoning does not hold on this machine. The ext4 backend's mode_of()
-     * (vfs_ext4_backend.c) maps ASTRA_VFS_OPEN_TRUNCATE to lwext4's "wb"
-     * whether or not ASTRA_VFS_OPEN_CREATE is set, and "wb" both creates and
-     * truncates -- so the probe at the writable primary always succeeds by
-     * creating an empty file there, and the walk never reaches the member
-     * that actually holds the name. An open is not an existence test here.
-     *
-     * So the name is located first, with no handle opened, exactly as `rm`
-     * already does -- and only once a holder is found, or confirmed absent
-     * everywhere, is anything opened.
-     */
-    status = shell_locate(typed, ASTRA_RIGHT_WRITE, path, sizeof(path),
-                          &client, NULL);
-    if (status == ASTRA_VFS_OK) {
-        /* Found: write in place, on the member that already has it. */
-        status = astra_vfs_open(client, path,
-                                ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_TRUNCATE,
-                                &file, NULL, NULL);
-    } else if (status == ASTRA_VFS_ERR_NOT_FOUND) {
-        /* Not on any member: a name nobody has yet is created on the primary. */
-        status = shell_path_primary(typed, ASTRA_RIGHT_WRITE, path,
-                                    sizeof(path), &client);
-        if (status == ASTRA_VFS_OK) {
-            status = astra_vfs_open(client, path,
-                                    ASTRA_VFS_OPEN_WRITE |
-                                        ASTRA_VFS_OPEN_CREATE |
-                                        ASTRA_VFS_OPEN_TRUNCATE,
-                                    &file, NULL, NULL);
-        }
-    }
+    status = filesystem_library()->open(
+        filesystem(), typed, ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+                                 ASTRA_VFS_OPEN_TRUNCATE,
+        &file);
     if (status != ASTRA_VFS_OK) {
         report_status("write", status);
         return;
@@ -671,72 +344,41 @@ static void command_write(int argc, char *const *argv)
     for (index = 2; index < argc; ++index) {
         const char *word = argv[index];
         uint32_t length = shell_strlen(word);
-        uint32_t sent = 0u;
-
-        /*
-         * Looping over a short write rather than treating one as an error.
-         * A message carries a bounded payload today and a ring will still
-         * transfer short later, so the caller has to be written this way
-         * regardless.
-         */
-        while (sent < length) {
-            status = astra_vfs_write(client, file, offset + sent,
-                                     word + sent, length - sent, &moved);
-            if (status != ASTRA_VFS_OK) {
+        status = filesystem_library()->write(&file, word, length, &moved);
+        if (status != ASTRA_VFS_OK || moved != length) {
+            if (status != ASTRA_VFS_OK)
                 report_status("write", status);
-                goto finish;
-            }
-            if (moved == 0u) {
+            else
                 write_line("write: stalled");
-                goto finish;
-            }
-            sent += moved;
+            goto finish;
         }
-        offset += sent;
-        status = astra_vfs_write(client, file, offset,
-                                 index + 1 < argc ? " " : "\n", 1u, &moved);
+        status = filesystem_library()->write(
+            &file, index + 1 < argc ? " " : "\n", 1u, &moved);
         if (status != ASTRA_VFS_OK) {
             report_status("write", status);
             goto finish;
         }
-        offset += moved;
     }
 finish:
-    (void)astra_vfs_close(client, file);
+    (void)filesystem_library()->close(&file);
 }
 
 static void command_rm(int argc, char *const *argv)
 {
     char typed[SHELL_PATH_MAX];
-    char path[SHELL_PATH_MAX];
-    AstraVfsClient *client = NULL;
     uint32_t status;
 
-    if (storage() == NULL) {
-        write_line("rm: no volume");
-        return;
-    }
     if (argc < 2) {
         write_line("rm: needs a name");
         return;
     }
-    status = astra_path_qualify(shell.assign, shell.directory, argv[1], typed,
-                                sizeof(typed));
-    if (status == ASTRA_VFS_OK) {
-        /*
-         * Removing acts on the member that actually holds the name, not on
-         * the primary: unlinking through the union at member zero regardless
-         * would refuse "not found" for a name only a later member has, while
-         * leaving that member's own copy sitting there untouched.
-         */
-        status = shell_locate(typed, ASTRA_RIGHT_WRITE, path, sizeof(path),
-                              &client, NULL);
-    }
+    status = filesystem_library()->qualify(
+        shell.assign, shell.directory, argv[1], typed, sizeof(typed));
     if (status != ASTRA_VFS_OK) {
         report_status("rm", status);
         return;
     }
-    status = astra_vfs_unlink(client, path);
+    status = filesystem_library()->unlink(filesystem(), typed);
     if (status != ASTRA_VFS_OK)
         report_status("rm", status);
 }
@@ -819,140 +461,53 @@ static int pump_once(void);
  * where the machine looks -- is an assign, so a word carrying a `:` is taken as
  * the name of one and resolved directly.
  */
-static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
-                            AstraVfsClient **client)
+static uint32_t launch_path(const char *word, AstraFile *file,
+                            AstraFileInfo *info)
 {
-    static const char *const places[] = {"APPS:", "COMMANDS:"};
+    static const char *const places[] = {"APPS", "COMMANDS"};
     char typed[SHELL_PATH_MAX];
-    uint32_t status = ASTRA_VFS_ERR_NOT_FOUND;
-
-    for (uint32_t index = 0u; word[index] != '\0'; ++index) {
-        if (word[index] != ':') {
-            continue;
-        }
-        /*
-         * Named its own assign: one place, no search -- but the assign it
-         * names can still be a union, and `COMMANDS:status` typed out is the
-         * same lookup a bare `status` would have done through the COMMANDS:
-         * place, so it walks members the same way.
-         *
-         * The same worst-status rule as shell_locate (astra/vfs_union.h): a
-         * member that refuses for its own reason -- rights it does not
-         * carry, a stat that comes back other than "not found" -- must
-         * survive to the caller rather than being buried by a later
-         * member's ordinary NOT_FOUND, which is what let a device
-         * answering ASTRA_VFS_ERR_IO be reported as a name that does not
-         * exist.
-         */
-        uint32_t worst = ASTRA_VFS_ERR_NOT_FOUND;
-
-        for (uint32_t member = 0u; ; ++member) {
-            const AstraAssign *found = NULL;
-
-            status = astra_assign_resolve(supervisor_assigns(), word,
-                                          ASTRA_RIGHT_READ, member, wire,
-                                          capacity, &found);
-            if (status == ASTRA_VFS_ERR_NOT_FOUND) {
-                return worst;    /* past the last member: nothing named it */
-            }
-            if (status != ASTRA_VFS_OK) {
-                if (worst == ASTRA_VFS_ERR_NOT_FOUND) {
-                    worst = status;
-                }
-                continue;
-            }
-            *client = supervisor_vfs_client_for(found);
-            if (*client == NULL) {
-                continue;
-            }
-            {
-                uint16_t kind = 0u;
-                uint32_t stat_status = astra_vfs_stat(*client, wire, NULL,
-                                                      &kind);
-
-                if (stat_status != ASTRA_VFS_OK) {
-                    if (worst == ASTRA_VFS_ERR_NOT_FOUND) {
-                        worst = stat_status;
-                    }
-                    continue;   /* not on this member: try the next */
-                }
-                if (kind == ASTRA_VFS_KIND_DIRECTORY) {
-                    continue;   /* a directory is not a command */
-                }
-            }
-            ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL,
-                         ASTRA_EVENT_LEVEL_NOTICE,
-                         "launching named directly, member %u", member);
-            return ASTRA_VFS_OK;
-        }
-    }
-
-    /*
-     * The same worst-status rule as above, carried across both places rather
-     * than reset between them: a member of APPS: that answers with something
-     * other than NOT_FOUND must not be forgotten just because COMMANDS: goes
-     * on to say NOT_FOUND about every member of its own.
-     */
     uint32_t worst = ASTRA_VFS_ERR_NOT_FOUND;
 
+    for (uint32_t index = 0u; word[index] != '\0'; ++index) {
+        if (word[index] == ':') {
+            uint32_t status = filesystem_library()->open(
+                filesystem(), word, ASTRA_VFS_OPEN_READ, file);
+
+            if (status != ASTRA_VFS_OK)
+                return status;
+            status = filesystem_library()->file_info(file, info);
+            if (status == ASTRA_VFS_OK &&
+                info->kind != ASTRA_VFS_KIND_DIRECTORY)
+                return ASTRA_VFS_OK;
+            (void)filesystem_library()->close(file);
+            return status == ASTRA_VFS_OK ? ASTRA_VFS_ERR_NOT_FOUND : status;
+        }
+    }
     for (uint32_t place = 0u; place < 2u; ++place) {
-        uint32_t length = 0u;
+        uint32_t status = filesystem_library()->qualify(
+            places[place], "", word, typed, sizeof(typed));
 
-        while (places[place][length] != '\0' &&
-               length + 1u < sizeof(typed)) {
-            typed[length] = places[place][length];
-            ++length;
+        if (status != ASTRA_VFS_OK)
+            return status;
+        status = filesystem_library()->open(
+            filesystem(), typed, ASTRA_VFS_OPEN_READ, file);
+        if (status != ASTRA_VFS_OK) {
+            if (status != ASTRA_VFS_ERR_NOT_FOUND &&
+                worst == ASTRA_VFS_ERR_NOT_FOUND)
+                worst = status;
+            continue;
         }
-        for (uint32_t index = 0u;
-             word[index] != '\0' && length + 1u < sizeof(typed); ++index) {
-            typed[length++] = word[index];
-        }
-        typed[length] = '\0';
-        /*
-         * Every member of the place, in order, and the first that opens wins.
-         * The index is the answer to "which one ran": a path variable cannot
-         * answer that question, and a union is holding it by the time the
-         * child starts.
-         */
-        for (uint32_t member = 0u; ; ++member) {
-            const AstraAssign *found = NULL;
-
-            status = astra_assign_resolve(supervisor_assigns(), typed,
-                                          ASTRA_RIGHT_READ, member, wire,
-                                          capacity, &found);
-            if (status == ASTRA_VFS_ERR_NOT_FOUND) {
-                break;      /* past the last member: try the next place */
-            }
-            if (status != ASTRA_VFS_OK) {
-                if (worst == ASTRA_VFS_ERR_NOT_FOUND) {
-                    worst = status;
-                }
-                continue;
-            }
-            *client = supervisor_vfs_client_for(found);
-            if (*client == NULL) {
-                continue;
-            }
-            {
-                uint16_t kind = 0u;
-                uint32_t stat_status = astra_vfs_stat(*client, wire, NULL,
-                                                      &kind);
-
-                if (stat_status != ASTRA_VFS_OK) {
-                    if (worst == ASTRA_VFS_ERR_NOT_FOUND) {
-                        worst = stat_status;
-                    }
-                    continue;   /* not on this member: try the next */
-                }
-                if (kind == ASTRA_VFS_KIND_DIRECTORY) {
-                    continue;   /* a directory is not a command */
-                }
-            }
+        status = filesystem_library()->file_info(file, info);
+        if (status == ASTRA_VFS_OK && info->kind != ASTRA_VFS_KIND_DIRECTORY) {
             ASTRA_EVENT2(ASTRA_EVENT_SUBSYSTEM_SHELL,
                          ASTRA_EVENT_LEVEL_NOTICE,
-                         "launching from place %u member %u", place, member);
+                         "launching from place %u member %u", place,
+                         info->member);
             return ASTRA_VFS_OK;
         }
+        (void)filesystem_library()->close(file);
+        if (status != ASTRA_VFS_OK && worst == ASTRA_VFS_ERR_NOT_FOUND)
+            worst = status;
     }
     return worst;
 }
@@ -960,8 +515,8 @@ static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
 /*
  * The grants a launched command is handed: three streams, and a namespace.
  *
- * `ASTRA_LAUNCH_GRANT_MAX` is eight and this uses all eight -- three streams,
- * WORK, two COMMANDS members, EVENTS and EVENT_CONTROL -- worth stating
+ * This uses nine grants -- three streams, WORK, two COMMANDS members, LIBS,
+ * EVENTS and EVENT_CONTROL -- worth stating
  * rather than discovering. **`SYS:` is the one left out**, deliberately: a
  * command needs somewhere to read its own data, somewhere to write, and its
  * history, and it does not need the whole volume. The day something does, the
@@ -977,23 +532,29 @@ static uint32_t launch_path(const char *word, char *wire, uint32_t capacity,
 static uint32_t launch_grants(AstraLaunchGrant *grants)
 {
     static const char *const stream_names[] = {"STDOUT", "STDERR", "STDIN"};
-    static const char *const mount_names[] = {"WORK", "COMMANDS", "EVENTS"};
+    static const char *const mount_names[] = {
+        "WORK", "COMMANDS", "LIBS", "EVENTS"
+    };
     uint32_t streams[3];
     uint32_t count = 0u;
+    _Static_assert(sizeof(stream_names) / sizeof(stream_names[0]) ==
+                       sizeof(streams) / sizeof(streams[0]),
+                   "stream names and handles must stay paired");
     /*
      * Whether either loop below ran out of room before it ran out of
-     * grants to make. It is provably 8 of 8 today -- three streams, WORK,
-     * two COMMANDS members, EVENTS and EVENT_CONTROL -- but a third COMMANDS
-     * member, or a fourth stream, would push something out of a child's namespace with
-     * nothing recorded, the same silence bind_standard_assigns already
-     * guards against on the supervisor's own side.
+     * grants to make. It is provably 9 of 10 today -- three streams, WORK,
+     * two COMMANDS members, LIBS, EVENTS and EVENT_CONTROL -- but a third
+     * COMMANDS member, or a fourth stream, would push something out of a
+     * child's namespace with nothing recorded, the same silence
+     * bind_standard_assigns already guards against on the supervisor's side.
      */
     int dropped = 0;
 
     streams[0] = console_stream_stdout();
     streams[1] = console_stream_stderr();
     streams[2] = console_stream_stdin();
-    for (uint32_t index = 0u; index < 3u; ++index) {
+    for (uint32_t index = 0u;
+         index < sizeof(streams) / sizeof(streams[0]); ++index) {
         if (streams[index] == 0u) {
             continue;
         }
@@ -1018,11 +579,13 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
      * The root travels now, so a child's COMMANDS: means the directory it was
      * granted rather than the whole volume.
      */
-    for (uint32_t index = 0u; index < 3u; ++index) {
+    for (uint32_t index = 0u;
+         index < sizeof(mount_names) / sizeof(mount_names[0]); ++index) {
         for (uint32_t member = 0u; ; ++member) {
             const AstraAssign *assign =
-                astra_assign_member(supervisor_assigns(), mount_names[index],
-                                    member);
+                filesystem_library()->assign_member(
+                    supervisor_assigns(), mount_names[index], member);
+            uint32_t namespace_rights;
 
             if (assign == NULL) {
                 break;
@@ -1034,10 +597,13 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
             astra_capability_name_set(grants[count].name, mount_names[index]);
             grants[count].handle = assign->handle;
             grants[count].rights = ASTRA_RIGHT_SIGNAL;
+            namespace_rights = assign->rights;
+            if (shell_equal(mount_names[index], "LIBS"))
+                namespace_rights &= ~ASTRA_RIGHT_WRITE;
             grants[count].flags = ASTRA_CAPABILITY_FLAG_NAMESPACE |
-                ((assign->rights & ASTRA_RIGHT_READ) != 0u ?
+                ((namespace_rights & ASTRA_RIGHT_READ) != 0u ?
                      ASTRA_CAPABILITY_FLAG_READ : 0u) |
-                ((assign->rights & ASTRA_RIGHT_WRITE) != 0u ?
+                ((namespace_rights & ASTRA_RIGHT_WRITE) != 0u ?
                      ASTRA_CAPABILITY_FLAG_WRITE : 0u);
             astra_capability_root_set(grants[count].root, assign->root);
             ++count;
@@ -1097,29 +663,24 @@ static int launch_arguments(AstraLaunchArguments *arguments, int argc,
  */
 static void command_launch(const char *word, int argc, char *const *argv)
 {
-    char path[SHELL_PATH_MAX];
     AstraLaunchGrant grants[ASTRA_LAUNCH_GRANT_MAX];
     AstraLaunchArguments arguments;
-    AstraVfsClient *client = NULL;
-    AstraVfsFile file;
-    uint64_t size = 0u;
+    AstraFile file = ASTRA_FILE_INIT;
+    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
     uint32_t length = 0u;
     uint32_t handle = 0u;
     uint32_t child_id = 0u;
     uint32_t exit_status = 0u;
     uint32_t status;
-    uint16_t kind = 0u;
 
-    status = launch_path(word, path, sizeof(path), &client);
+    status = launch_path(word, &file, &info);
     if (status != ASTRA_VFS_OK) {
         /*
          * "Not a command" is what a genuinely absent name says. Anything
          * else -- a member that refused for its own reason, a device that
          * answered ASTRA_VFS_ERR_IO -- is reported for what it is, the same
-         * distinction shell_locate already draws: existence is not the only
-         * question a resolve can answer, and burying the other answers under
-         * "not found" is the single most expensive wrong answer this project
-         * has already paid for once.
+         * distinction the Filesystem Kit preserves: absence is not the only
+         * reason a lookup can fail.
          */
         if (status == ASTRA_VFS_ERR_NOT_FOUND) {
             astra_terminal_write(&shell.terminal, word);
@@ -1129,34 +690,15 @@ static void command_launch(const char *word, int argc, char *const *argv)
         }
         return;
     }
-    status = astra_vfs_open(client, path, ASTRA_VFS_OPEN_READ, &file, &size,
-                            &kind);
-    if (status != ASTRA_VFS_OK) {
-        astra_terminal_write(&shell.terminal, word);
-        write_line(": not a command");
-        return;
-    }
-    if (size > SHELL_LOAD_MAX) {
-        (void)astra_vfs_close(client, file);
+    if (info.byte_size > SHELL_LOAD_MAX) {
+        (void)filesystem_library()->close(&file);
         report_status(word, ASTRA_VFS_ERR_LIMIT);
         return;
     }
-    for (;;) {
-        uint32_t moved = 0u;
-
-        status = astra_vfs_port_read_bulk(
-            client, file, length, load_buffer + length,
-            SHELL_LOAD_MAX - length, &moved);
-        if (status != ASTRA_VFS_OK) {
-            break;
-        }
-        if (moved == 0u) {
-            break;
-        }
-        length += moved;
-    }
-    (void)astra_vfs_close(client, file);
-    if (status != ASTRA_VFS_OK || length == 0u) {
+    status = filesystem_library()->read(
+        &file, load_buffer, (uint32_t)info.byte_size, &length);
+    (void)filesystem_library()->close(&file);
+    if (status != ASTRA_VFS_OK || length != info.byte_size || length == 0u) {
         /*
          * With how far it got. A read that fails partway through an image says
          * something quite different from one that fails at the first byte, and
@@ -1169,11 +711,10 @@ static void command_launch(const char *word, int argc, char *const *argv)
         astra_terminal_write(&shell.terminal, ": read stopped at ");
         write_number(length);
         astra_terminal_write(&shell.terminal, " of ");
-        write_number((uint32_t)size);
+        write_number((uint32_t)info.byte_size);
         /*
-         * And what the device said, because "I/O error" is lwext4's one errno
-         * for a timeout, a cancellation, a short transfer and a corrupt reply.
-         * Which of those it was decides whether retrying is worth anything.
+         * And what the device said, because a generic I/O status does not say
+         * whether retrying is useful.
          */
         astra_terminal_write(&shell.terminal, ", device ");
         write_number(supervisor_volume_device_status());
@@ -1295,121 +836,6 @@ static void run_line(const char *line)
          * that is the whole of the answer.
          */
         command_launch(words.argv[0], words.argc, words.argv);
-}
-
-/* The renderer: one run of cells at a time, through the display lease. */
-static int direct_render_cells(void *context, uint32_t row, uint32_t column,
-                               const uint8_t *cells, uint32_t count)
-{
-    DirectConsoleBackend *backend = context;
-    uint32_t cell = row * shell.terminal.columns + column;
-    uint32_t written = 0u;
-
-    while (written < count) {
-        uint32_t run = count - written;
-
-        if (run > ASTRA_CONSOLE_WRITE_MAX)
-            run = ASTRA_CONSOLE_WRITE_MAX;
-        if (astra_console_write(backend->display, cell + written,
-                                cells + written, run) != ASTRA_SYSCALL_OK)
-            return 0;
-        written += run;
-    }
-    return 1;
-}
-
-static int direct_present(void *context, const AstraTerminal *terminal)
-{
-    DirectConsoleBackend *backend = context;
-
-    return astra_console_cursor(backend->display, terminal->cursor_row,
-                                terminal->cursor_column, 1u) ==
-           ASTRA_SYSCALL_OK;
-}
-
-static int direct_next_key(void *context, uint32_t *key)
-{
-    DirectConsoleBackend *backend = context;
-
-    if (backend == NULL || key == NULL)
-        return -1;
-    for (;;) {
-        while (backend->event_index < backend->event_count) {
-            AstraInputEvent *event =
-                &backend->events[backend->event_index++];
-            uint32_t usage = event->value;
-            int pressed =
-                (ASTRA_INPUT_EVENT_FLAGS(event->header) &
-                 ASTRA_INPUT_FLAG_DOWN) != 0u;
-
-            if (ASTRA_INPUT_EVENT_CLASS(event->header) !=
-                ASTRA_INPUT_CLASS_KEYBOARD)
-                continue;
-            if (astra_keymap_is_modifier(usage)) {
-                backend->modifiers = astra_keymap_apply_modifier(
-                    backend->modifiers, usage, pressed);
-                continue;
-            }
-            if (!pressed)
-                continue;
-            *key = astra_keymap_translate(usage, backend->modifiers);
-            return 1;
-        }
-
-        {
-            AstraIrqRecord irq_record;
-            uint32_t irq_status = ASTRA_SYSCALL_WOULD_BLOCK;
-            uint32_t flags = 0u;
-            uint32_t status;
-
-            backend->event_count = 0u;
-            backend->event_index = 0u;
-            if (backend->input_irq != 0u) {
-                (void)memset(&irq_record, 0, sizeof(irq_record));
-                irq_status = astra_irq_read(backend->input_irq,
-                                            &irq_record, NULL);
-                if (irq_status == ASTRA_SYSCALL_WOULD_BLOCK)
-                    return 0;
-                if (irq_status != ASTRA_SYSCALL_OK) {
-                    ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL,
-                                 ASTRA_EVENT_LEVEL_WARNING,
-                                 "input IRQ read refused, status %u",
-                                 irq_status);
-                    return -1;
-                }
-            }
-            if (backend->input == 0u)
-                return 0;
-            status = astra_input_read(backend->input, backend->events,
-                                      ASTRA_INPUT_READ_BATCH_MAX,
-                                      &backend->event_count, &flags);
-            if (status != ASTRA_SYSCALL_OK &&
-                status != ASTRA_SYSCALL_WOULD_BLOCK) {
-                char report[32];
-
-                (void)astra_log_write(
-                    report, describe_input_failure(report, sizeof(report),
-                                                   status));
-                return -1;
-            }
-            if ((flags & ASTRA_INPUT_READ_OVERFLOW) != 0u)
-                ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SHELL,
-                             ASTRA_EVENT_LEVEL_WARNING,
-                             "input overflowed, some keystrokes never "
-                             "arrived");
-            if (irq_status == ASTRA_SYSCALL_OK &&
-                astra_irq_ack(backend->input_irq, irq_record.sequence) !=
-                    ASTRA_SYSCALL_OK) {
-                ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SHELL,
-                             ASTRA_EVENT_LEVEL_WARNING,
-                             "input IRQ acknowledge refused");
-                return -1;
-            }
-            if (status == ASTRA_SYSCALL_WOULD_BLOCK ||
-                backend->event_count == 0u)
-                return 0;
-        }
-    }
 }
 
 static int flush_terminal(void)
@@ -1571,9 +997,11 @@ static int pump_once(void)
         if (shell.backend.wait_handle != 0u)
             waits[wait_count++] = shell.backend.wait_handle;
         if (wait_count != 0u) {
-            uint64_t deadline = shell.backend.wait_handle != 0u ?
-                ASTRA_DEADLINE_FOREVER :
-                astra_clock_monotonic() + CONSOLE_INPUT_POLL_NS;
+            uint64_t deadline = shell.backend.idle_poll_ns != 0u ?
+                astra_clock_monotonic() + shell.backend.idle_poll_ns :
+                (shell.backend.wait_handle != 0u ?
+                     ASTRA_DEADLINE_FOREVER :
+                     astra_clock_monotonic() + CONSOLE_INPUT_POLL_NS);
             uint32_t wait_status = astra_wait_multiple(
                 waits, wait_count, deadline, NULL, NULL);
 
@@ -1592,42 +1020,12 @@ static int pump_once(void)
     return 1;
 }
 
-void console_shell_run(uint32_t display, uint32_t input, uint32_t input_irq,
-                       int volume_ready)
-{
-    ConsoleShellBackend backend;
-    uint32_t columns = 0u;
-    uint32_t rows = 0u;
-
-    if (display == 0u ||
-        astra_console_info(display, &columns, &rows) != ASTRA_SYSCALL_OK) {
-        (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
-        return;
-    }
-
-    (void)memset(&direct_backend, 0, sizeof(direct_backend));
-    direct_backend.display = display;
-    direct_backend.input = input;
-    direct_backend.input_irq = input_irq;
-    if (input_irq != 0u && astra_irq_arm(input_irq) != ASTRA_SYSCALL_OK) {
-        (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
-        return;
-    }
-    backend.columns = columns;
-    backend.rows = rows;
-    backend.render = direct_render_cells;
-    backend.context = &direct_backend;
-    backend.present = direct_present;
-    backend.next_key = direct_next_key;
-    backend.wait_handle = input_irq;
-    console_shell_run_backend(&backend, volume_ready);
-}
-
 void console_shell_run_backend(const ConsoleShellBackend *backend,
                                int volume_ready)
 {
     if (backend == NULL || backend->columns == 0u || backend->rows == 0u ||
-        backend->render == NULL) {
+        backend->render == NULL || backend->filesystem == NULL ||
+        backend->filesystem_library == NULL) {
         (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
         return;
     }
@@ -1641,9 +1039,11 @@ void console_shell_run_backend(const ConsoleShellBackend *backend,
      * person's files are what a terminal is for; SYS: is the fallback on a
      * volume that would not take a work directory.
      */
-    if (astra_assign_lookup(supervisor_assigns(), "WORK") != NULL) {
+    if (filesystem_library()->assign_lookup(supervisor_assigns(), "WORK") !=
+        NULL) {
         (void)memcpy(shell.assign, "WORK", 5u);
-    } else if (astra_assign_lookup(supervisor_assigns(), "SYS") != NULL) {
+    } else if (filesystem_library()->assign_lookup(
+                   supervisor_assigns(), "SYS") != NULL) {
         (void)memcpy(shell.assign, "SYS", 4u);
     }
     if (astra_terminal_init(&shell.terminal, backend->columns, backend->rows,

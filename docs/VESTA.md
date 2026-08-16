@@ -425,10 +425,17 @@ privileged client without exposing other Vesta controls.
 | 0x1028 | `PANEL_LED_TOGGLE` | WO | - | atomically toggle `PANEL_LED_DATA` bits |
 
 Feature bits are `[0]RAW_INPUT`, `[1]CHANGE_LATCH`, `[2]LED_OWNERSHIP`, and
-`[3]ATOMIC_LEDS`.
+`[3]ATOMIC_LEDS`. Bit `[4]RGB_LED` means three consecutive LED output bits
+drive the red, green, and blue channels of one physical RGB lamp.
 
 Button bits are `0=FIRE1`, `1=FIRE2`, `2=UP`, `3=DOWN`, `4=LEFT`, and
 `5=RIGHT`. Switch bits are `0=SW1` through `3=SW4`.
+
+The Arty profile reports `PANEL_CAPS=0x1F020407`: four button inputs, two
+switch inputs, and seven controllable LED channels. LED bits 0--3 drive the
+four single-color lamps; bits 4--6 drive red, green, and blue on the fifth,
+RGB lamp. LED bit 3 remains the storage-activity output. Unsupported bits are
+ignored by the hardware.
 
 `PANEL_LED_OWNERSHIP` resets to zero, preserving the hardware liveness and hang
 diagnostics. The NDK leases individual bits and masks writes to the caller's

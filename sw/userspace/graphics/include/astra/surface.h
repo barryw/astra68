@@ -55,9 +55,6 @@ void astra_surface_text8x8(AstraSurfaceView *surface, int32_t x, int32_t y,
                            const char *text, uint32_t length, uint8_t scale,
                            uint16_t color);
 
-#define ASTRA_UI_FONT_BODY_HEIGHT 11u
-#define ASTRA_UI_FONT_TITLE_HEIGHT 13u
-
 uint32_t astra_surface_ui_text_width(const char *utf8, uint32_t length,
                                      uint16_t pixel_height);
 uint32_t astra_surface_ui_text_fit(const char *utf8, uint32_t length,
@@ -66,6 +63,15 @@ uint32_t astra_surface_ui_text_fit(const char *utf8, uint32_t length,
 void astra_surface_ui_text(AstraSurfaceView *surface, int32_t x, int32_t y,
                            const char *utf8, uint32_t length,
                            uint16_t pixel_height, uint16_t color);
+uint16_t astra_surface_mono_cell_width(uint16_t pixel_height);
+void astra_surface_mono_text(AstraSurfaceView *surface, int32_t x, int32_t y,
+                             const char *utf8, uint32_t length,
+                             uint16_t pixel_height, uint16_t cell_width,
+                             uint16_t color);
+void astra_draw_list_mono_text(AstraSurfaceView *surface, int32_t x, int32_t y,
+                               const char *utf8, uint32_t length,
+                               uint16_t pixel_height, uint16_t cell_width,
+                               uint16_t color);
 
 uint32_t astra_shared_surface_create(AstraSharedSurface *surface,
                                      uint16_t width, uint16_t height);

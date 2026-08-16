@@ -14,12 +14,15 @@
 #include <astra/types.h>
 #include <astra/fixed.h>
 #include <astra/resource.h>
+#include <astra/shared_library.h>
 #include <astra/area.h>
 #include <astra/port.h>
 #include <astra/bulk_ring.h>
 #include <astra/front_panel.h>
+#include <astra/filesystem_kit.h>
 #include <astra/font.h>
 #include <astra/graphics.h>
+#include <astra/graphics_kit.h>
 #include <astra/theme.h>
 #include <astra/pointer.h>
 #include <astra/window.h>

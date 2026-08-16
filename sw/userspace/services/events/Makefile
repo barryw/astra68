@@ -6,8 +6,10 @@ OBJCOPY := $(CROSS)objcopy
 RUNTIME := ../../runtime
 EVENTS := ../../events
 VFS := ../../vfs
+NDK := ../../../../ndk
 CPPFLAGS := -I../../../include \
-	-I$(RUNTIME)/include -I$(EVENTS)/include -I$(VFS)/include
+	-I$(RUNTIME)/include -I$(EVENTS)/include -I$(VFS)/include \
+	-I$(NDK)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)

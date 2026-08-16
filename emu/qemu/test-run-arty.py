@@ -55,6 +55,7 @@ def main():
         assert result.returncode == 0, result.stderr
         qemu_args = (root / "qemu.args").read_text().splitlines()
         assert qemu_args.count("-qmp") == 1
+        assert "-no-reboot" not in qemu_args
         assert not any("input-linux" in argument for argument in qemu_args)
         hotplug_args = (root / "hotplug.args").read_text().splitlines()
         assert hotplug_args == ["--qmp", str(root / "run/qmp.sock")]

@@ -4,6 +4,8 @@
 #include <string.h>
 
 #include <astra/process.h>
+#include <astra/library.h>
+#include <astra/library_loader.h>
 #include <astra/event.h>
 #include <astra/event_catalog.h>
 #include <astra/event_emit.h>
@@ -19,6 +21,25 @@ static uint32_t mock_argument3;
 static uint32_t mock_argument4;
 static uint32_t mock_calls;
 static uint32_t mock_status = ASTRA_SYSCALL_OK;
+
+uint32_t astra_library_test_prepare(
+    void *mapping, uint32_t logical_base, uint32_t span,
+    const char *expected_name, uint16_t abi_major,
+    uint16_t minimum_abi_minor, AstraLoadedLibrary *library);
+
+static void put_be16(uint8_t *bytes, uint32_t offset, uint16_t value)
+{
+    bytes[offset] = (uint8_t)(value >> 8);
+    bytes[offset + 1u] = (uint8_t)value;
+}
+
+static void put_be32(uint8_t *bytes, uint32_t offset, uint32_t value)
+{
+    bytes[offset] = (uint8_t)(value >> 24);
+    bytes[offset + 1u] = (uint8_t)(value >> 16);
+    bytes[offset + 2u] = (uint8_t)(value >> 8);
+    bytes[offset + 3u] = (uint8_t)value;
+}
 
 void
 astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
@@ -44,7 +65,8 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_WAIT_ONE &&
         number != ASTRA_SYSCALL_WAIT_MULTIPLE &&
         number != ASTRA_SYSCALL_DISPLAY_SUBMIT &&
-        number != ASTRA_SYSCALL_DISPLAY_COLLECT) {
+        number != ASTRA_SYSCALL_DISPLAY_COLLECT &&
+        number != ASTRA_SYSCALL_LIBRARY_MAP) {
         assert(argument1 == 0u);
         assert(argument2 == 0u);
         assert(argument3 == 0u);
@@ -248,6 +270,7 @@ test_syscall_wrappers(void)
     uint32_t process;
     uint32_t thread;
     uint32_t calls;
+    uint32_t span;
 
     assert(astra_yield() == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_YIELD);
@@ -280,6 +303,92 @@ test_syscall_wrappers(void)
     assert(astra_display_collect(3u, NULL) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(mock_calls == calls);
+
+    assert(astra_rt_library_map(&request, sizeof(request), &abi, &span) ==
+           ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_LIBRARY_MAP);
+    assert(mock_argument0 == (uint32_t)(uintptr_t)&request);
+    assert(mock_argument1 == sizeof(request));
+    assert(mock_argument2 == 0u);
+    assert(abi == ASTRA_SYSCALL_ABI_VERSION);
+    assert(span == 0x11111111u);
+}
+
+static void test_library_relocation(void)
+{
+    const uint32_t span = ASTRA_LIBRARY_EXPORTS_OFFSET + 0x1000u;
+    uint8_t *mapping = calloc(1u, span);
+    AstraLoadedLibrary library;
+    uint32_t ph = 52u;
+    uint32_t dynamic = ASTRA_LIBRARY_EXPORTS_OFFSET + 0x80u;
+
+    assert(mapping != NULL);
+    mapping[0] = 0x7fu;
+    mapping[1] = 'E';
+    mapping[2] = 'L';
+    mapping[3] = 'F';
+    mapping[4] = 1u;
+    mapping[5] = 2u;
+    put_be16(mapping, 16u, 3u);
+    put_be16(mapping, 18u, 4u);
+    put_be32(mapping, 20u, 1u);
+    put_be32(mapping, 28u, ph);
+    put_be16(mapping, 42u, 32u);
+    put_be16(mapping, 44u, 4u);
+
+    put_be32(mapping, ph, 1u);
+    put_be32(mapping, ph + 20u, 0x1000u);
+    put_be32(mapping, ph + 24u, 4u);
+    put_be32(mapping, ph + 28u, 0x1000u);
+    ph += 32u;
+    put_be32(mapping, ph, 1u);
+    put_be32(mapping, ph + 8u, 0x1000u);
+    put_be32(mapping, ph + 20u, 0x1000u);
+    put_be32(mapping, ph + 24u, 5u);
+    put_be32(mapping, ph + 28u, 0x1000u);
+    ph += 32u;
+    put_be32(mapping, ph, 1u);
+    put_be32(mapping, ph + 8u, ASTRA_LIBRARY_EXPORTS_OFFSET);
+    put_be32(mapping, ph + 20u, 0x1000u);
+    put_be32(mapping, ph + 24u, 6u);
+    put_be32(mapping, ph + 28u, 0x1000u);
+    ph += 32u;
+    put_be32(mapping, ph, 2u);
+    put_be32(mapping, ph + 8u, dynamic);
+    put_be32(mapping, ph + 20u, 32u);
+    put_be32(mapping, ph + 24u, 6u);
+
+    put_be32(mapping, ASTRA_LIBRARY_FILE_OFFSET, ASTRA_LIBRARY_MAGIC);
+    put_be16(mapping, ASTRA_LIBRARY_FILE_OFFSET + 4u,
+             ASTRA_LIBRARY_RECORD_VERSION);
+    put_be16(mapping, ASTRA_LIBRARY_FILE_OFFSET + 6u, ASTRA_LIBRARY_SIZE);
+    put_be16(mapping, ASTRA_LIBRARY_FILE_OFFSET + 14u, 1u);
+    put_be16(mapping, ASTRA_LIBRARY_FILE_OFFSET + 16u, 0u);
+    put_be32(mapping, ASTRA_LIBRARY_FILE_OFFSET + 20u,
+             ASTRA_LIBRARY_TARGET_M68030);
+    put_be32(mapping, ASTRA_LIBRARY_FILE_OFFSET + 28u,
+             ASTRA_LIBRARY_EXPORTS_OFFSET);
+    memcpy(mapping + ASTRA_LIBRARY_FILE_OFFSET + 32u, "font.library", 13u);
+
+    put_be32(mapping, 0x300u, ASTRA_LIBRARY_EXPORTS_OFFSET + 8u);
+    put_be32(mapping, 0x304u, 22u);
+    put_be32(mapping, 0x308u, 0x1000u);
+    put_be32(mapping, dynamic, 7u);
+    put_be32(mapping, dynamic + 4u, 0x300u);
+    put_be32(mapping, dynamic + 8u, 8u);
+    put_be32(mapping, dynamic + 12u, 12u);
+    put_be32(mapping, dynamic + 16u, 9u);
+    put_be32(mapping, dynamic + 20u, 12u);
+
+    assert(astra_library_test_prepare(mapping, ASTRA_LIBRARY_BASE, span,
+                                      "font.library", 1u, 0u, &library) ==
+           ASTRA_SYSCALL_OK);
+    assert(library.exports == mapping + ASTRA_LIBRARY_EXPORTS_OFFSET);
+    assert(mapping[ASTRA_LIBRARY_EXPORTS_OFFSET + 8u] == 0x20u);
+    assert(mapping[ASTRA_LIBRARY_EXPORTS_OFFSET + 9u] == 0x00u);
+    assert(mapping[ASTRA_LIBRARY_EXPORTS_OFFSET + 10u] == 0x10u);
+    assert(mapping[ASTRA_LIBRARY_EXPORTS_OFFSET + 11u] == 0x00u);
+    free(mapping);
 }
 
 /*
@@ -762,6 +871,7 @@ main(void)
     test_memory_primitives();
     test_qsort();
     test_syscall_wrappers();
+    test_library_relocation();
     test_launch();
     test_process_wait();
     test_wait_multiple();

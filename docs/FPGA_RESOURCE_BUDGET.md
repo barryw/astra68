@@ -1512,3 +1512,22 @@ for this candidate. The exact 187.5 MHz image is now the active hardware
 authority after three successful boots and repeated renderer, Copper, sprite,
 and HDMI-audio qualification. No resource figure changed during qualification;
 the two retained fixes affect only ARM-side certification software.
+
+## Active front-panel/reset 187.5 MHz release (2026-08-15)
+
+The active exact production route adds the complete Arty front panel without
+removing any graphics or HDMI-audio feature:
+
+| Resource | Used | Device percent | Physical free |
+|---|---:|---:|---:|
+| Slice LUTs | 31,904 | 59.97% | 21,296 |
+| Slice registers | 39,006 | 36.66% | 67,394 |
+| Occupied slices | 12,203 | 91.75% | 1,097 |
+| BRAM36-equivalent tiles | 129.5 | 92.50% | 10.5 |
+| DSP48E1 | 81 | 36.82% | 139 |
+
+All 66,515 nets route with zero errors; setup, hold, and pulse-width slack are
+`+0.250/+0.010/+0.538 ns`. This supersedes the prior 187.5 MHz candidate as
+the current capacity authority. The front panel changes no BRAM or DSP budget;
+its seven output channels, six inputs, ownership/atomic control, and activity
+timer fit within the slightly lower routed LUT, register, and slice totals.

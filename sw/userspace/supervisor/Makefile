@@ -12,11 +12,12 @@ VFS := ../vfs
 STREAMS := ../streams
 SHELL_DIR := ../shell
 TERMINAL_DIR := ../terminal
+NDK := ../../../ndk
 LWEXT4 := ../../../third_party/lwext4
 CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include \
 	-I$(STORAGE)/include -I../metrics/include -I$(ALLOC)/include \
 	-I$(SHELL_DIR)/include -I$(TERMINAL_DIR)/include -I$(VFS)/include \
-	-I$(STREAMS)/include
+	-I$(STREAMS)/include -I$(NDK)/include
 # The volume check speaks lwext4 as well as Astra and links freestanding, so it
 # needs the vendored headers, the build profile, and the libc shims.
 EXT4_CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
@@ -38,9 +39,10 @@ LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 SOURCES := src/supervisor.c src/main.c src/volume.c src/loader.c \
 	src/loader_manifest.c \
 	src/console_shell.c \
-	src/console_stream.c src/vfs_host.c
+	src/console_stream.c src/vfs_host.c src/vfs_read.c
 OBJECTS := build/m68k/supervisor.o build/m68k/main.o \
 	build/m68k/loader_manifest.o build/m68k/vfs_host.o \
+	build/m68k/vfs_read.o \
 	build/m68k/loader.o \
 	build/m68k/console_stream.o \
 	build/m68k/volume.o build/m68k/console_shell.o
@@ -92,6 +94,7 @@ libraries:
 	$(MAKE) -C $(STREAMS) all
 	$(MAKE) -C $(SHELL_DIR) all
 	$(MAKE) -C $(TERMINAL_DIR) all
+	$(MAKE) -C ../graphics all
 
 # The image is the deliverable, so the link contract is part of the build:
 # astra_user.ld produces exactly the shape kernel_elf_accept() takes. The

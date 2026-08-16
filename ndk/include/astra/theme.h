@@ -13,7 +13,13 @@
 ASTRA_EXTERN_C_BEGIN
 
 /** Version of the immutable system theme snapshot. */
-#define ASTRA_THEME_GENERATION UINT32_C(3)
+#define ASTRA_THEME_GENERATION UINT32_C(4)
+
+/** Native strike sizes selected by the immutable Astra 0.1 theme. */
+#define ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT UINT16_C(11)
+#define ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT UINT16_C(13)
+#define ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT UINT16_C(16)
+#define ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH UINT16_C(8)
 
 /**
  * Semantic colors and geometry shared by applications and the window server.
@@ -37,6 +43,10 @@ typedef struct AstraTheme {
     AstraColorRGBA8 accent;
     AstraColorRGBA8 warning;
     AstraColorRGBA8 fault;
+    uint16_t body_font_height;
+    uint16_t title_font_height;
+    uint16_t mono_font_height;
+    uint16_t mono_cell_width;
     uint16_t spacing_unit;
     uint16_t window_radius;
     uint16_t frame_width;
@@ -62,6 +72,10 @@ typedef struct AstraTheme {
     { 45, 54, 61, 255 }, { 239, 244, 246, 255 }, \
     { 151, 163, 169, 255 }, { 45, 174, 184, 255 }, \
     { 211, 154, 57, 255 }, { 177, 73, 73, 255 }, \
+    ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT, \
+    ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT, \
+    ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT, \
+    ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH, \
     4, 12, 2, 26, 22, 2, 20, 10, 8, 8, 6, 0, { 0, 0, 0, 0 } \
 }
 

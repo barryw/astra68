@@ -39,13 +39,13 @@
  * to expose as a syscall at all.
  */
 /*
- * Nine, because the terminal service needs its ready endpoint, display,
- * input, input IRQ, work namespace, two-member COMMANDS: union, events, and
- * event control. Eight was exactly what that service needed before input IRQ
- * delivery replaced polling, which is how a ceiling becomes a surprise.
+ * Ten, because the terminal service needs its ready endpoint, display, input,
+ * input IRQ, work namespace, two-member COMMANDS: union, shared LIBS:, events,
+ * and event control. Keep this one public ceiling tied to the kernel alias;
+ * separate limits already failed once by drifting apart.
  */
-#define ASTRA_LAUNCH_GRANT_MAX 9u
-_Static_assert(ASTRA_LAUNCH_GRANT_MAX == 9u,
+#define ASTRA_LAUNCH_GRANT_MAX 10u
+_Static_assert(ASTRA_LAUNCH_GRANT_MAX == 10u,
                "the grant ceiling is ABI: a child's capability table and "
                "every array sized by it are laid out from this number");
 #define ASTRA_LAUNCH_ARGUMENT_MAX 8u

@@ -43,6 +43,8 @@ uint32_t astra_rt_area_create(uint32_t byte_size, uint32_t rights,
 uint32_t astra_rt_area_map(uint32_t handle, uint32_t permissions,
                         void **address, uint32_t *byte_size);
 uint32_t astra_rt_area_unmap(void *address);
+uint32_t astra_rt_library_map(const void *image, uint32_t length,
+                              uint32_t *base, uint32_t *span);
 uint32_t astra_query_abi(uint32_t *abi_version, uint32_t *process_handle,
                          uint32_t *thread_handle);
 uint32_t astra_process_info(uint32_t handle, AstraProcessInfo *info);
