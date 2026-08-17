@@ -84,6 +84,7 @@ static void refuses_whole_file(void)
         "service SERVICES:input grants SYS:r serves INPUT:r\n"
         "service SERVICES:display grants SYS:r serves DISPLAY:r\n"
         "service SERVICES:desktop grants GUI\n"
+        "service SERVICES:terminal grants GUI\n"
         "service SERVICES:extra grants SYS:r\n";
     SupervisorManifest manifest;
 
@@ -99,9 +100,23 @@ static void refuses_whole_file(void)
     assert(manifest.count == 0u);
 }
 
+static void parses_bundle_grants(void)
+{
+    SupervisorManifestGrant grant;
+    char raw[] = "GUI";
+    char namespaced[] = "WORK:rw";
+
+    assert(supervisor_manifest_grant(raw, &grant));
+    assert(strcmp(grant.name, "GUI") == 0 && grant.is_namespace == 0u);
+    assert(supervisor_manifest_grant(namespaced, &grant));
+    assert(strcmp(grant.name, "WORK") == 0 && grant.is_namespace == 1u);
+    assert(grant.rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE));
+}
+
 int main(void)
 {
     valid_manifest();
     refuses_whole_file();
+    parses_bundle_grants();
     return 0;
 }

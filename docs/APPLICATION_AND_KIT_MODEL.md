@@ -1,29 +1,32 @@
 # Astra application, bundle, and Kit model
 
-Status: the protected-process loader and first versioned shared Kit ABI are
-implemented. Application bundles, their registrar, private-library resolution,
-and transactional installation remain design direction.
+Status: the protected-process loader, versioned shared Kit ABI, version-1
+bundle format, `Terminal.app`, and the Graphics, Filesystem, Interface, Events,
+and Messaging Kits are implemented. Private-library resolution and
+transactional installation remain design direction; discovery deliberately
+needs no registrar.
 
 ## 1. Native application identity
 
-**DIRECTION:** A native application is an inspectable bundle containing code,
+A native application is an inspectable bundle containing code,
 resources, metadata, protocol declarations, and requested capabilities. The
 workspace presents the bundle as one application while the shell and developer
 tools can inspect its ordinary contents.
 
-A candidate layout is:
+The version-1 layout is:
 
 ```text
 Example.app/
-  Manifest
-  bin/m68k-astra/Example
+  manifest
+  bin/m68k-68030/Example
   resources/
   icons/
   locales/
   licenses/
 ```
 
-The exact names and manifest encoding remain **OPEN**. The manifest eventually
+The exact names and manifest encoding are now locked by
+`docs/BUNDLE_FORMAT.md`. The manifest
 records at least:
 
 - application identity, version, display name, and executable;
@@ -33,8 +36,8 @@ records at least:
 - immutable resource hashes and package provenance;
 - launch policy, single/multiple-instance behavior, and update identity.
 
-Installation scripts do not receive ambient privilege. Package installation is
-transactional and rollback-capable.
+Installation scripts do not receive ambient privilege. Transactional package
+installation and rollback are not implemented yet.
 
 ## 2. Launch contract
 
@@ -71,17 +74,23 @@ settings, and quit requests. Window endpoints receive bounded UI events.
 
 ## 4. Kits
 
-**DIRECTION:** Astra Kits provide the small, coherent developer surface that
+Astra Kits provide the small, coherent developer surface that
 Amiga libraries and well-designed application frameworks made possible, while
 keeping process boundaries and service protocols explicit.
 
-Candidate Kits are:
+Implemented Kits are:
+
+- Graphics: `graphics.library` and `font.library`;
+- Filesystem: `filesystem.library`;
+- Interface: `interface.library` and `input.library`;
+- Events: `events.library`;
+- Messaging: `messaging.library`.
+
+The remaining planned Kits are:
 
 - Core: handles, errors, time, waits, memory and process operations;
-- Application: launch, lifecycle, commands, messaging and settings;
-- Interface: windows, views, controls, layout, clipboard and drag/drop;
-- Graphics: surfaces, draw lists, sprites, raster resources and fences;
-- Filesystem: files, directories, assigns, attributes and notifications;
+- Application: launch, lifecycle, commands and settings;
+- Interface extensions: views, controls, layout, clipboard and drag/drop;
 - Media: audio streams, voices, clocks and synchronization;
 - Network: asynchronous endpoints and name resolution;
 - POSIX: libc, file descriptors, paths, PTYs, jobs and compatibility.
@@ -90,6 +99,16 @@ The durable boundary remains a C-compatible ABI plus versioned service
 messages. C++ and other language wrappers may provide move-only ownership,
 RAII, containers, and UI classes without exposing compiler object layouts,
 exceptions, RTTI, or name mangling across a process or Kit boundary.
+
+`messaging.library` ABI 1.0 exposes the existing bounded ports, timed send and
+receive, handle duplication, and capability-transfer primitives. It is direct
+process messaging, not an in-process substitute for system event publication.
+A future event broker can build pub/sub on these primitives when there is a
+real system service to own subscriptions, filtering, and backpressure.
+
+`events.library` ABI 1.0 exposes the existing diagnostic event emitter, log,
+trace reader, and event catalog. It records observable system events; it does
+not replace interprocess messaging.
 
 ## 5. Shared code direction
 
@@ -115,8 +134,9 @@ process-local.
 - A small import veneer is preferred over embedding large generated stubs in
   every binary.
 
-**IMPLEMENTED:** `OpenLibrary(name, ABI)` resolves the newest compatible file
-under `LIBS:`, and `CloseLibrary()` releases the process reference. Axiom maps
+**IMPLEMENTED:** `OpenLibrary(name, ABI)` scans `.kit` manifests under `LIBS:`,
+selects the newest compatible provider, and opens its canonical versioned
+payload. `CloseLibrary()` releases the process reference. Axiom maps
 immutable pages at a common process-local address and shares their physical
 frames; writable pages remain private. Libraries are constrained big-endian
 ELF32/m68k images with fixed metadata and export-table offsets, eager
@@ -133,7 +153,7 @@ by name, ABI major, exact version, target architecture, and content digest.
 Launch either maps that identity or fails with the missing identity; it never
 silently substitutes another version.
 
-Shared Kits already live side by side beneath `LIBS:`. An application may eventually carry
+Shared Kit bundles already live side by side beneath `LIBS:`. An application may eventually carry
 the exact Kit in its own `libs/` directory. Resolution checks the bundle first
 and then `LIBS:`; it never checks the working directory, an environment search
 path, or an unversioned global alias. Private bundle lookup is not implemented

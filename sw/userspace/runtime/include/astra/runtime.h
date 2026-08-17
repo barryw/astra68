@@ -29,6 +29,10 @@ _Static_assert(sizeof(AstraSyscallResult) == 16u,
                "syscall-result layout changed");
 
 int astra_startup_validate(const AstraStartupInfo *startup);
+AstraLaunchSource astra_startup_launch_source(
+    const AstraStartupInfo *startup);
+const char *astra_startup_argument(const AstraStartupInfo *startup,
+                                   uint32_t index);
 
 void astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
                     uint32_t argument2, uint32_t argument3,
@@ -102,6 +106,10 @@ uint32_t astra_launch(const void *image, uint32_t length,
                       const AstraLaunchGrant *grants, uint32_t count,
                       const AstraLaunchArguments *arguments,
                       uint32_t *process_handle, uint32_t *process_id);
+uint32_t astra_launch_arguments_pack(AstraLaunchArguments *arguments,
+                                     AstraLaunchSource source,
+                                     uint32_t count,
+                                     const char *const *values);
 
 /*
  * Waiting for a child, which is the machine's ordinary wait named for what a

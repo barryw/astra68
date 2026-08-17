@@ -110,7 +110,7 @@ kernel.
 | `0x03E40000` | `0x03FFFFFF` | 1.75 MiB | Usable RAM | Physical-page allocator |
 | `0x04000000` | `0x09FFFFFF` | 96 MiB | Hosted-profile extension | Physical-page allocator on the 128 MiB profile only |
 
-`AstraBootInfo` itself begins at `0x01FF8000` and is 264 bytes as of boot ABI
+`AstraBootInfo` itself begins at `0x01FF8000` and is 268 bytes as of boot ABI
 0.3. The linker reserves the first 1 KiB of bootstrap BRAM for the handoff
 structure and ABI growth. The canonical definitions are in
 `sw/include/astra/boot.h`.

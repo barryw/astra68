@@ -122,6 +122,23 @@ where a hung thread's state is. `mem` and `pages` are where a leak shows.
 
 This is the surface that closes with `ASTRA_KERNEL_DEBUG_SURFACE`.
 
+## 6. Panic display and retained report
+
+The final 90x30 panic screen is deliberately a summary, not the raw trace
+stream. It keeps the reason, build and hardware identity, last supervisor IRQ,
+the faulting process/thread/PC/address when present, and six recent trace
+records visible without scrolling. The complete serial report remains at
+`/data/astra/log/panic-latest.log`; use the matching unstripped ELF with the PC
+shown on screen:
+
+```sh
+m68k-linux-gnu-addr2line -f -e <program.elf> 0x001064F0
+```
+
+Userspace programs share a virtual address range, so the matching program ELF
+matters. Do not symbolize a service fault against the supervisor ELF merely
+because both use addresses beginning at `0x00100000`.
+
 ---
 
 ## The rest of the kit

@@ -2,7 +2,7 @@
 #define ASTRA_PROCESS_H
 
 #define ASTRA_STARTUP_MAGIC 0x41535452u
-#define ASTRA_STARTUP_ABI_VERSION 2u
+#define ASTRA_STARTUP_ABI_VERSION 3u
 #define ASTRA_STARTUP_INFO_SIZE 64u
 #define ASTRA_STARTUP_CAPABILITY_SIZE 92u
 /*
@@ -50,6 +50,12 @@ _Static_assert(ASTRA_LAUNCH_GRANT_MAX == 10u,
                "every array sized by it are laid out from this number");
 #define ASTRA_LAUNCH_ARGUMENT_MAX 8u
 #define ASTRA_LAUNCH_ARGUMENT_BYTES 192u
+
+typedef enum AstraLaunchSource {
+    ASTRA_LAUNCH_SOURCE_SYSTEM = 0u,
+    ASTRA_LAUNCH_SOURCE_SHELL = 1u,
+    ASTRA_LAUNCH_SOURCE_DESKTOP = 2u
+} AstraLaunchSource;
 
 /*
  * What a grant is *for*, which is not the same question as what it confers.
@@ -121,6 +127,8 @@ _Static_assert(sizeof(AstraLaunchGrant) == ASTRA_LAUNCH_GRANT_SIZE,
 typedef struct AstraLaunchArguments {
     uint16_t count;
     uint16_t length;
+    uint16_t source;
+    uint16_t reserved;
     char     bytes[ASTRA_LAUNCH_ARGUMENT_BYTES];
 } AstraLaunchArguments;
 
@@ -148,7 +156,8 @@ typedef struct AstraStartupInfo {
     uint32_t environment_address;
     uint32_t capability_count;
     uint32_t capabilities_address;
-    uint32_t reserved[3];
+    uint32_t launch_source;
+    uint32_t reserved[2];
 } AstraStartupInfo;
 
 /*

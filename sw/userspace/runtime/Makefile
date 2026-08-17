@@ -12,7 +12,7 @@ TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 HOST_FLAGS := -O2 -fno-builtin
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
-TARGET_C_SOURCES := src/startup.c src/syscall.c src/launch.c src/port.c \
+TARGET_C_SOURCES := src/startup.c src/arguments.c src/syscall.c src/launch.c src/port.c \
 	src/event_control.c src/memory.c \
 	src/log.c src/sort.c src/assert.c src/event_catalog.c src/library.c
 TARGET_ASM_SOURCES := src/m68k/syscall.S
@@ -40,7 +40,7 @@ $(CRT0): src/m68k/crt0.S
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -m68030 -msoft-float $(DEPFLAGS) -c $< -o $@
 
-HOST_TEST_SOURCES := src/startup.c src/syscall.c src/launch.c src/port.c \
+HOST_TEST_SOURCES := src/startup.c src/arguments.c src/syscall.c src/launch.c src/port.c \
 	src/event_control.c src/memory.c \
 	src/sort.c src/log.c src/event_catalog.c src/library.c \
 	tests/test_runtime.c

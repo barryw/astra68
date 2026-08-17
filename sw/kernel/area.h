@@ -16,7 +16,8 @@
 #define KERNEL_AREA_SYSTEM_PAGE_MAX (KERNEL_AREA_MAX * KERNEL_AREA_PAGE_MAX)
 #define KERNEL_AREA_MAPPING_MAX \
     (KERNEL_AREA_MAX * KERNEL_VM_SHARED_ALIAS_MAX)
-#define KERNEL_AREA_PROCESS_MAPPING_MAX 4u
+/* One address space can use every area slot; the VM layout is the quota. */
+#define KERNEL_AREA_PROCESS_MAPPING_MAX KERNEL_AREA_MAX
 
 #define KERNEL_AREA_RIGHTS \
     ((1u << 0) | (1u << 1) | (1u << 2) | (1u << 5) | (1u << 6))

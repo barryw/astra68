@@ -9,7 +9,7 @@
 #define ASTRA_CAPABILITY_GUI "GUI"
 
 #define ASTRA_GUI_PROTOCOL UINT32_C(0x47554920) /* GUI  */
-#define ASTRA_GUI_VERSION 6u
+#define ASTRA_GUI_VERSION 7u
 
 #define ASTRA_GUI_CONTENT_RGB565   1u
 #define ASTRA_GUI_CONTENT_DRAW_LIST 2u
@@ -55,6 +55,7 @@ typedef struct AstraGuiOpenWindow {
     uint16_t content_format;
     char title[ASTRA_WINDOW_TITLE_MAX];
     uint32_t event_mask;
+    uint32_t title_icon_length;
 } AstraGuiOpenWindow;
 
 typedef struct AstraGuiWindowOpened {
@@ -100,7 +101,7 @@ typedef struct AstraGuiWindowEvent {
     AstraWindowEvent event;
 } AstraGuiWindowEvent;
 
-#define ASTRA_GUI_OPEN_WINDOW_SIZE   104u
+#define ASTRA_GUI_OPEN_WINDOW_SIZE   108u
 #define ASTRA_GUI_WINDOW_OPENED_SIZE 36u
 #define ASTRA_GUI_WINDOW_COMMAND_SIZE 104u
 #define ASTRA_GUI_WINDOW_STATE_SIZE   64u

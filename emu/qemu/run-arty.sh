@@ -11,6 +11,8 @@ INPUT_HOTPLUG=${ASTRA_INPUT_HOTPLUG:-$ASTRA_ROOT/bin/astra-input-hotplug.py}
 TEXT_PLANE=${ASTRA_TEXT_PLANE_PATH:-$ASTRA_ROOT/run/post-text.bin}
 DISPLAY_MAILBOX=${ASTRA_DISPLAY_MAILBOX_PATH:-$ASTRA_ROOT/run/display.bin}
 QMP_SOCKET=${ASTRA_QMP_SOCKET:-$ASTRA_ROOT/run/qmp.sock}
+CONSOLE_LOG=${ASTRA_CONSOLE_LOG:-$ASTRA_ROOT/run/qemu-console.log}
+PANIC_LOG=${ASTRA_PANIC_LOG:-$ASTRA_ROOT/log/panic-latest.log}
 MEMORY=${ASTRA_MEMORY:-128M}
 if [ ! -x "$TERMINAL_DISPLAY" ]; then
     echo "Astra terminal display not found: $TERMINAL_DISPLAY" >&2
@@ -25,7 +27,8 @@ if [ ! -r "$INPUT_HOTPLUG" ]; then
     exit 1
 fi
 
-mkdir -p "$(dirname "$TEXT_PLANE")" "$(dirname "$QMP_SOCKET")"
+mkdir -p "$(dirname "$TEXT_PLANE")" "$(dirname "$QMP_SOCKET")" \
+    "$(dirname "$PANIC_LOG")"
 exec 9>"$(dirname "$QMP_SOCKET")/runtime.lock"
 if ! flock -n 9; then
     echo "Astra runtime is already active" >&2
@@ -38,6 +41,8 @@ dd if=/dev/zero of="$DISPLAY_MAILBOX" bs=4096 count=451 2>/dev/null
 display_pid=$!
 input_pid=
 qemu_pid=
+log_pid=
+console_pipe="$(dirname "$QMP_SOCKET")/qemu-console.pipe"
 stop_process()
 {
     pid=$1
@@ -66,23 +71,30 @@ cleanup()
     input_pid=
     stop_process "$qemu_pid"
     qemu_pid=
+    stop_process "$log_pid"
+    log_pid=
     stop_process "$display_pid"
     display_pid=
-    rm -f "$QMP_SOCKET"
+    rm -f "$QMP_SOCKET" "$console_pipe"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+rm -f "$console_pipe"
+mkfifo "$console_pipe"
+tee "$CONSOLE_LOG" <"$console_pipe" &
+log_pid=$!
 env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
     ASTRA_DISPLAY_MAILBOX_PATH="$DISPLAY_MAILBOX" \
     LD_LIBRARY_PATH="$LIBDIR" "$QEMU" \
     -object memory-backend-ram,id=astra-ram,size="$MEMORY",prealloc=on \
     -M astra68,memory-backend=astra-ram -m "$MEMORY" -bios "$ROM" \
     -drive if=none,format=raw,file="$STORAGE" \
-    -nographic -monitor none -serial none \
-    -qmp "unix:$QMP_SOCKET,server=on,wait=off" "$@" &
+    -display none -monitor none -serial stdio \
+    -qmp "unix:$QMP_SOCKET,server=on,wait=off" "$@" \
+    >"$console_pipe" 2>&1 &
 qemu_pid=$!
 python3 "$INPUT_HOTPLUG" --qmp "$QMP_SOCKET" &
 input_pid=$!
@@ -91,4 +103,12 @@ wait "$qemu_pid"
 status=$?
 set -e
 qemu_pid=
+wait "$log_pid" 2>/dev/null || true
+log_pid=
+if grep -q "\*\*\* AXIOM KERNEL PANIC \*\*\*" "$CONSOLE_LOG"; then
+    cp "$CONSOLE_LOG" "$PANIC_LOG"
+    sleep 0.1
+fi
+trap - EXIT
+cleanup
 exit "$status"

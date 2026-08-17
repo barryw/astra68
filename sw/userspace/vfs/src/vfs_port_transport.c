@@ -61,7 +61,17 @@ port_client_reset(AstraVfsClient *client)
 {
     if (client->port_reply_send != 0u)
         (void)astra_close(client->port_reply_send);
+    if (client->port_area_send != 0u)
+        (void)astra_close(client->port_area_send);
+    if (client->port_area_address != NULL)
+        (void)astra_rt_area_unmap(client->port_area_address);
+    if (client->port_area != 0u)
+        (void)astra_close(client->port_area);
     client->port_reply_send = 0u;
+    client->port_area = 0u;
+    client->port_area_send = 0u;
+    client->port_area_address = NULL;
+    client->port_area_size = 0u;
 }
 
 static uint32_t
@@ -249,6 +259,8 @@ astra_vfs_port_transport(void *context, uint32_t operation,
         return ASTRA_VFS_ERR_PROTOCOL;
     }
     *reply = incoming.reply;
+    if (operation == ASTRA_VFS_OP_BYE)
+        port_client_reset(client);
     return ASTRA_VFS_OK;
 }
 

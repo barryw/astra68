@@ -280,8 +280,11 @@ static int execute_render_batch(const struct astra_graphics_device *device,
     uint32_t generation;
     int result = -1;
 
-    if (!render_batch_valid(batch, bytes))
+    if (!render_batch_valid(batch, bytes)) {
+        fprintf(stderr, "render batch rejected before submission (%u bytes)\n",
+                bytes);
         return -1;
+    }
     *scanout_offset = load_be32(batch + 28u);
     command_count = load_be32(batch + 12u);
     generation = load_be32(batch + 24u);
@@ -289,8 +292,10 @@ static int execute_render_batch(const struct astra_graphics_device *device,
     if (astra_graphics_memory_map_open(
             device, &mapping,
             ASTRA_GRAPHICS_ARENA_BASE + ASTRA_RENDER_BATCH_ARENA_OFFSET,
-            bytes) != 0)
+            bytes) != 0) {
+        fprintf(stderr, "render batch graphics mapping failed\n");
         return -1;
+    }
     (void)memcpy((void *)mapping.data, (const void *)batch, bytes);
     astra_graphics_memory_barrier();
     profile_copied = astra_monotonic_nanoseconds();
@@ -308,14 +313,23 @@ static int execute_render_batch(const struct astra_graphics_device *device,
     astra_mmio_write(device, ASTRA_REG_RENDER_CONTROL,
                      ASTRA_RENDER_CONTROL_REBASE);
     if (astra_mmio_read(device, ASTRA_REG_RENDER_SUBMISSION_CONSUMER) != 0u ||
-        astra_mmio_read(device, ASTRA_REG_RENDER_COMPLETION_PRODUCER) != 0u)
+        astra_mmio_read(device, ASTRA_REG_RENDER_COMPLETION_PRODUCER) != 0u) {
+        fprintf(stderr, "render batch rebase failed\n");
         goto done;
+    }
     astra_mmio_write(device, ASTRA_REG_RENDER_CONTROL,
                      ASTRA_RENDER_CONTROL_ENABLE);
     astra_mmio_write(device, ASTRA_REG_RENDER_SUBMISSION_PRODUCER,
                      command_count);
-    if (wait_render(device, command_count) != 0)
+    if (wait_render(device, command_count) != 0) {
+        fprintf(stderr,
+                "render batch stalled: commands=%u completed=%u status=0x%08x\n",
+                command_count,
+                astra_mmio_read(device,
+                                ASTRA_REG_RENDER_COMPLETION_PRODUCER),
+                astra_mmio_read(device, ASTRA_REG_RENDER_STATUS));
         goto done;
+    }
     profile_rendered = astra_monotonic_nanoseconds();
     if (getenv("ASTRA_DISPLAY_PROFILE") != NULL)
         fprintf(stderr,
@@ -335,8 +349,20 @@ static int execute_render_batch(const struct astra_graphics_device *device,
                  ASTRA_RENDER_COMPLETION_BYTES) ||
             (load_be32(completion + 4u) & UINT32_C(0xffff)) !=
                 ASTRA_RENDER_STATUS_OK ||
-            load_be32(completion + 28u) != generation)
+            load_be32(completion + 28u) != generation) {
+            uint32_t command_offset = ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
+                ASTRA_RENDER_BATCH_ARENA_OFFSET +
+                index * ASTRA_RENDER_COMMAND_BYTES;
+
+            fprintf(stderr,
+                    "render command %u failed: op=%u completion=0x%08x "
+                    "status=0x%08x fault=0x%08x generation=%u/%u\n",
+                    index, load_be32(batch + command_offset + 4u) >> 16,
+                    load_be32(completion), load_be32(completion + 4u),
+                    load_be32(completion + 24u),
+                    load_be32(completion + 28u), generation);
             goto done;
+        }
     }
     result = 0;
 
@@ -367,6 +393,13 @@ static bool mailbox_take(volatile const AstraDisplayMailbox *mailbox,
     request->frame_bytes = mailbox->frame_bytes;
     astra_graphics_memory_barrier();
     return mailbox->request_sequence == sequence;
+}
+
+static bool request_sequence_restarted(uint32_t request_id,
+                                       uint32_t previous_id)
+{
+    return request_id != 0u && previous_id != 0u &&
+           request_id <= previous_id;
 }
 
 static void mailbox_complete(volatile AstraDisplayMailbox *mailbox,
@@ -473,6 +506,17 @@ static void copy_cells(uint8_t out[TEXT_CELLS],
             break;
     }
     (void)memcpy(out, second, sizeof(second));
+}
+
+static void draw_text_frame(volatile uint8_t *framebuffer,
+                            uint8_t cells[TEXT_CELLS],
+                            volatile const uint8_t *plane)
+{
+    copy_cells(cells, plane);
+    for (uint32_t cell = 0u; cell < TEXT_CELLS; ++cell)
+        draw_cell(framebuffer, ASTRA_FRAMEBUFFER_PITCH,
+                  cell / TEXT_COLUMNS, cell % TEXT_COLUMNS,
+                  cells[cell], false);
 }
 
 static bool copy_cursor(struct terminal_cursor *out,
@@ -632,11 +676,23 @@ static int self_test(void)
         request.id != 7u || request.color_rgb565 != 0x135du ||
         mailbox_take(&mailbox, 4u, &request))
         return EXIT_FAILURE;
+    if (request_sequence_restarted(8u, 7u) ||
+        !request_sequence_restarted(1u, 7u))
+        return EXIT_FAILURE;
     mailbox_complete(&mailbox, &request, ASTRA_DISPLAY_COMPLETION_OK, 9u);
     if (mailbox.completion_sequence != 4u ||
         mailbox.completion_id != 7u ||
         mailbox.completion_status != ASTRA_DISPLAY_COMPLETION_OK ||
         mailbox.completion_generation != 9u)
+        return EXIT_FAILURE;
+    mailbox.request_sequence = 5u;
+    mailbox.request_id = UINT32_MAX;
+    mailbox.operation = ASTRA_DISPLAY_PANIC_TEXT;
+    mailbox.frame_pitch = 0u;
+    mailbox.frame_bytes = 0u;
+    if (!mailbox_take(&mailbox, 4u, &request) || request.sequence != 5u ||
+        request.id != UINT32_MAX ||
+        request.operation != ASTRA_DISPLAY_PANIC_TEXT)
         return EXIT_FAILURE;
 
     shared = mmap(NULL, sizeof(*shared), PROT_READ | PROT_WRITE,
@@ -721,6 +777,8 @@ int main(int argc, char **argv)
     int result = EXIT_FAILURE;
     uint32_t cell;
     uint32_t mailbox_sequence = 0u;
+    uint32_t previous_request_id = 0u;
+    bool guest_restarted = false;
     bool display_owned = false;
 
     if (argc == 2 && strcmp(argv[1], "--self-test") == 0)
@@ -809,6 +867,10 @@ int main(int argc, char **argv)
             uint32_t status = ASTRA_DISPLAY_COMPLETION_BAD_REQUEST;
 
             mailbox_sequence = request.sequence;
+            if (request_sequence_restarted(request.id, previous_request_id))
+                guest_restarted = true;
+            if (request.id != 0u)
+                previous_request_id = request.id;
             if (request.id != 0u &&
                 request.operation == ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
                 (request.color_rgb565 & 0xffff0000u) == 0u) {
@@ -857,11 +919,22 @@ int main(int argc, char **argv)
                 int render_status;
                 int present_status;
 
-                render_status = execute_render_batch(
-                    &device,
+                scanout_offset = load_be32(
                     (const uint8_t *)(const void *)mailbox +
-                        ASTRA_DISPLAY_MAILBOX_HEADER_BYTES,
-                    request.frame_bytes, &scanout_offset);
+                    ASTRA_DISPLAY_MAILBOX_HEADER_BYTES + 28u);
+                render_status = guest_restarted ? present(
+                    &device,
+                    scanout_offset == ASTRA_RENDER_BATCH_SCANOUT0_OFFSET ?
+                        ASTRA_RENDER_BATCH_SCANOUT1_OFFSET :
+                        ASTRA_RENDER_BATCH_SCANOUT0_OFFSET) : 0;
+                if (render_status == 0) {
+                    guest_restarted = false;
+                    render_status = execute_render_batch(
+                        &device,
+                        (const uint8_t *)(const void *)mailbox +
+                            ASTRA_DISPLAY_MAILBOX_HEADER_BYTES,
+                        request.frame_bytes, &scanout_offset);
+                }
                 profile_rendered = astra_monotonic_nanoseconds();
                 present_status = render_status == 0 ?
                     present(&device, scanout_offset) : -1;
@@ -898,6 +971,26 @@ int main(int argc, char **argv)
                     generation = astra_mmio_read(&device,
                                                  ASTRA_REG_GENERATION);
                     status = ASTRA_DISPLAY_COMPLETION_OK;
+                } else {
+                    status = ASTRA_DISPLAY_COMPLETION_IO_ERROR;
+                }
+            } else if (request.id != 0u &&
+                       request.operation == ASTRA_DISPLAY_PANIC_TEXT &&
+                       request.frame_pitch == 0u &&
+                       request.frame_bytes == 0u) {
+                draw_text_frame(device.framebuffer, current, plane);
+                (void)memcpy(previous, current, sizeof(previous));
+                cursor = (struct terminal_cursor){0};
+                previous_cursor = cursor;
+                astra_graphics_memory_barrier();
+                if (pointer_update(&device, 0u, true) == 0 &&
+                    present(&device,
+                            ASTRA_RENDER_BATCH_SCANOUT0_OFFSET) == 0 &&
+                    astra_boot_text_commit(&device, 0) == 0) {
+                    generation = astra_mmio_read(&device,
+                                                 ASTRA_REG_GENERATION);
+                    status = ASTRA_DISPLAY_COMPLETION_OK;
+                    display_owned = false;
                 } else {
                     status = ASTRA_DISPLAY_COMPLETION_IO_ERROR;
                 }

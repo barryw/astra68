@@ -50,7 +50,7 @@ Block map (VESTA_BASE +):
 | 0x0018 | `SCRATCH` | RW | 0 | persists across soft reset (boot handoff) |
 | 0x001C | `CPU_MODEL` | RO | `0x00068030` | MC68030 architectural target |
 | 0x0020 | `CPU_IMPL` | RO | `TGM2` | repaired TG68K.C 68030/PMMU implementation |
-| 0x0024 | `CPU_FEATURES` | RO | `0x0000000D` | `[0]PMMU [1]FPU [2]DATA32 [3]ADDR32` |
+| 0x0024 | `CPU_FEATURES` | RO | varies | `[0]PMMU [1]FPU [2]DATA32 [3]ADDR32 [4]HOST_TIME` |
 | 0x0028 | `CPU_HZ` | RO | — | configured CPU/bus clock in Hz |
 | 0x002C | `RAM_BASE` | RO | — | physical SDRAM base advertised to boot software |
 | 0x0030 | `RAM_SIZE` | RO | — | usable SDRAM bytes |
@@ -60,6 +60,20 @@ Block map (VESTA_BASE +):
 | 0x0040 | `PERSONALITY_COUNT` | RO | — | valid hardware descriptors at `0x0050` |
 | 0x0044 | `PERSONALITY_STRIDE` | RO | 16 | bytes per descriptor |
 | 0x0048 | `NVRAM_CAPS` | RO | 0 | persistent-settings backend capabilities |
+
+Hosted implementations that set `HOST_TIME` expose the low 32 bits of a
+monotonic microsecond counter at `0x012C`. Firmware uses it only to benchmark
+emulated MC68030 instruction throughput; `CPU_HZ` remains the timer and device
+clock contract. Physical implementations leave the feature clear.
+
+The hosted boot estimate warms the production kernel decompressor, measures five
+more verified decodes, and uses the fastest uncontended sample against the
+retained 30 MHz reference. This is a steady-state workload-equivalent rate, not
+a claim that TCG has a literal clock signal. The raw best-sample time is printed
+beside the estimate so performance changes remain directly comparable. The
+Arty reference is 39.6 ms for the same verified kernel decode; it replaces the
+unstable whole-POST estimate, which included display, DMA, startup scheduling,
+and cold TCG translation.
 
 `SYS_STATUS` currently reports `[0]SDRAM_PRESENT [1]SDRAM_READY
 [2]BOOT_OVERLAY [3]VIDEO_PLL_LOCKED [4]SD_CONTROLLER [5]ASTRA_HOST`.

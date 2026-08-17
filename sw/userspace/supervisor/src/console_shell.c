@@ -628,35 +628,6 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
     return count;
 }
 
-/* argv, packed the way the ABI carries it: the words back to back, each NUL. */
-static int launch_arguments(AstraLaunchArguments *arguments, int argc,
-                            char *const *argv)
-{
-    uint32_t length = 0u;
-    uint32_t count = 0u;
-
-    (void)memset(arguments, 0, sizeof(*arguments));
-    while ((int)count < argc && count < ASTRA_LAUNCH_ARGUMENT_MAX) {
-        const char *word = argv[count];
-        uint32_t index = 0u;
-
-        while (word[index] != '\0') {
-            if (length + 2u > ASTRA_LAUNCH_ARGUMENT_BYTES) {
-                return 0;   /* refused whole: a cut argument is a wrong one */
-            }
-            arguments->bytes[length++] = word[index++];
-        }
-        arguments->bytes[length++] = '\0';
-        ++count;
-    }
-    if ((int)count != argc) {
-        return 0;
-    }
-    arguments->count = (uint16_t)count;
-    arguments->length = (uint16_t)length;
-    return 1;
-}
-
 /*
  * Reads the whole image in, launches it, and serves its terminal streams until
  * it is done. Storage and events run independently in protected processes.
@@ -725,7 +696,9 @@ static void command_launch(const char *word, int argc, char *const *argv)
                                                      ASTRA_VFS_ERR_INVALID);
         return;
     }
-    if (!launch_arguments(&arguments, argc, argv)) {
+    if (astra_launch_arguments_pack(
+            &arguments, ASTRA_LAUNCH_SOURCE_SHELL, (uint32_t)argc,
+            (const char *const *)argv) != ASTRA_SYSCALL_OK) {
         write_line("too many arguments");
         return;
     }

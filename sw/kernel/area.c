@@ -608,7 +608,7 @@ KernelAreaStatus kernel_area_process_died(uint32_t process_id,
                                           uint32_t *closed_areas,
                                           uint32_t *revoked_mappings)
 {
-    uint32_t closed = 0u;
+    uint32_t survived = 0u;
     uint32_t revoked = 0u;
 
     if (process_id == 0u)
@@ -616,14 +616,8 @@ KernelAreaStatus kernel_area_process_died(uint32_t process_id,
     for (uint32_t slot = 0u; slot < KERNEL_AREA_MAX; ++slot) {
         KernelArea *area = &areas[slot];
 
-        if (area->state == KERNEL_AREA_LIVE && area->creator == process_id) {
-            uint32_t before = pool_stats.revoked_mappings;
-
-            if (close_area(area, ASTRA_SYSCALL_PEER_DEAD) != KERNEL_AREA_OK)
-                return KERNEL_AREA_CORRUPT;
-            revoked += pool_stats.revoked_mappings - before;
-            ++closed;
-        }
+        if (area->state == KERNEL_AREA_LIVE && area->creator == process_id)
+            ++survived;
     }
     for (uint32_t slot = 0u; slot < KERNEL_AREA_MAPPING_MAX; ++slot) {
         if (mappings[slot].active != 0u &&
@@ -633,10 +627,10 @@ KernelAreaStatus kernel_area_process_died(uint32_t process_id,
             ++revoked;
         }
     }
-    if (closed != 0u)
+    if (survived != 0u)
         ++pool_stats.owner_deaths;
     if (closed_areas != NULL)
-        *closed_areas = closed;
+        *closed_areas = 0u;
     if (revoked_mappings != NULL)
         *revoked_mappings = revoked;
     return KERNEL_AREA_OK;

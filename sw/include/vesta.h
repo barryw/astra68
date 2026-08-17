@@ -79,7 +79,7 @@ typedef volatile struct {
     uint32_t SDRAM_LINE_HITS;      // 0x120 external 16-byte line-buffer hits
     uint32_t SDRAM_LINE_MISSES;    // 0x124 external 16-byte line fills
     uint32_t SDRAM_POSTED_WRITES;  // 0x128 writes acknowledged before SDRAM completion
-    uint32_t _perf_r0;             // 0x12C
+    uint32_t HOST_TIME_US;          // 0x12C hosted monotonic microseconds
     uint32_t HOST_CTRL;            // 0x130 AstraHost boot request
     uint32_t HOST_STATUS;          // 0x134 HOST_* status bits
     uint32_t HOST_ROM_SIZE;        // 0x138 validated payload bytes
@@ -196,6 +196,7 @@ typedef volatile struct {
 #define CPU_FEAT_FPU    (1u << 1)
 #define CPU_FEAT_DATA32 (1u << 2)
 #define CPU_FEAT_ADDR32 (1u << 3)
+#define CPU_FEAT_HOST_TIME (1u << 4)
 
 // ---- SYS_STATUS ----
 #define SYS_SDRAM_PRESENT (1u << 0)

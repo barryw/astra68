@@ -1,6 +1,7 @@
 #include <loader.h>
 
 #include <astra/bytes.h>
+#include <astra/manifest.h>
 
 static int equal(const char *left, const char *right)
 {
@@ -50,35 +51,22 @@ static int authority(char *token, char *name, uint32_t *rights,
     return 0;
 }
 
-static uint32_t words(char *line, char **out, uint32_t capacity)
+int supervisor_manifest_grant(char *text, SupervisorManifestGrant *grant)
 {
-    uint32_t count = 0u;
-
-    while (*line != '\0') {
-        while (*line == ' ' || *line == '\t')
-            ++line;
-        if (*line == '\0' || *line == '#')
-            break;
-        if (count == capacity)
-            return capacity + 1u;
-        out[count++] = line;
-        while (*line != '\0' && *line != ' ' && *line != '\t' &&
-               *line != '#')
-            ++line;
-        if (*line == '#') {
-            *line = '\0';
-            break;
-        }
-        if (*line != '\0')
-            *line++ = '\0';
-    }
-    return count;
+    if (text == NULL || grant == NULL)
+        return 0;
+    (void)memset(grant, 0, sizeof(*grant));
+    if (!authority(text, grant->name, &grant->rights, 1))
+        return 0;
+    grant->is_namespace = grant->rights != 0u;
+    return 1;
 }
 
 static int parse_line(char *line, SupervisorManifestEntry *entry)
 {
     char *token[3u + SUPERVISOR_MANIFEST_GRANT_MAX + 4u];
-    uint32_t count = words(line, token, sizeof(token) / sizeof(token[0]));
+    uint32_t count = astra_manifest_words(
+        line, token, sizeof(token) / sizeof(token[0]));
     uint32_t at = 0u;
 
     if (count == 0u)
@@ -111,9 +99,8 @@ static int parse_line(char *line, SupervisorManifestEntry *entry)
         if (entry->grant_count == SUPERVISOR_MANIFEST_GRANT_MAX)
             return 0;
         grant = &entry->grants[entry->grant_count];
-        if (!authority(token[at], grant->name, &grant->rights, 1))
+        if (!supervisor_manifest_grant(token[at], grant))
             return 0;
-        grant->is_namespace = grant->rights != 0u;
         ++entry->grant_count;
         ++at;
     }

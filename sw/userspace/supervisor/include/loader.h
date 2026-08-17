@@ -6,7 +6,7 @@
 #include <astra/process.h>
 #include <astra/vfs_service.h>
 
-#define SUPERVISOR_MANIFEST_ENTRY_MAX 5u
+#define SUPERVISOR_MANIFEST_ENTRY_MAX 6u
 #define SUPERVISOR_MANIFEST_GRANT_MAX ASTRA_LAUNCH_GRANT_MAX
 #define SUPERVISOR_MANIFEST_PATH_MAX 128u
 
@@ -35,6 +35,7 @@ typedef struct SupervisorManifest {
 /* Parses a mutable, NUL-terminated file whole. Zero retains no entry. */
 int supervisor_manifest_parse(char *text, uint32_t length,
                               SupervisorManifest *manifest);
+int supervisor_manifest_grant(char *text, SupervisorManifestGrant *grant);
 
 /* Launches the shipped manifest from the temporary bootstrap mount. */
 uint32_t supervisor_loader_start(const AstraStartupInfo *startup,
@@ -44,7 +45,9 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup,
 uint32_t supervisor_loader_event_control(void);
 void supervisor_loader_pump_event_control(void);
 
-/* Keeps resident services alive and reports the first one that exits. */
-uint32_t supervisor_loader_watch(void);
+/* Keeps supervising after a resident service exits; the kernel's init lives. */
+uint32_t supervisor_loader_watch(
+    const AstraStartupInfo *startup,
+    const AstraStartupCapability *capabilities);
 
 #endif

@@ -37,6 +37,7 @@
 #define KERNEL_SELFTEST_OWNER 0xfffffff0u
 #define KERNEL_SELFTEST_USER_ADDRESS 0x10000000u
 #define KERNEL_SOAK_REPORT_INTERVAL 1000u
+#define PANIC_SCREEN_TRACE_RECORDS 6u
 
 extern uint8_t _kernel_entry[];
 extern uint8_t _kernel_image_start[];
@@ -65,6 +66,23 @@ static int screen_enabled;
 static uint32_t process_bootstrap_irqoff_cycles;
 static uint32_t process_init_cycles;
 static uint32_t trace_init_cycles;
+static const char *panic_reason;
+static struct {
+    uint32_t process_id;
+    uint32_t thread_id;
+    uint32_t program_counter;
+    uint32_t fault_address;
+    uint32_t vector;
+    uint8_t present;
+} panic_user_fault;
+static struct {
+    uint32_t program_counter;
+    uint32_t fault_address;
+    uint32_t status_register;
+    uint32_t vector;
+    uint8_t present;
+    uint8_t access_fault;
+} panic_exception;
 #if ASTRA_KERNEL_K1_QUALIFICATION
 static uint32_t qualification_survivor_process_id;
 #endif
@@ -270,6 +288,20 @@ static void console_puts(const char *text)
     while (*text != '\0') console_putc(*text++);
 }
 
+static void console_puts_limit(const char *text, uint32_t limit)
+{
+    uint32_t length = 0u;
+
+    if (text == NULL)
+        return;
+    while (text[length] != '\0' && length < limit) {
+        console_putc(text[length]);
+        ++length;
+    }
+    if (text[length] != '\0')
+        console_puts("...");
+}
+
 static void console_hex32(uint32_t value)
 {
     for (int shift = 28; shift >= 0; shift -= 4) {
@@ -426,6 +458,8 @@ static void panic_begin(const char *reason)
         kernel_dispatch_last_supervisor_irq_pc(),
         kernel_dispatch_last_supervisor_irq_sr(),
         kernel_platform_build_id());
+    panic_reason = reason;
+    panic_exception.present = 0u;
     screen_clear();
     early_log->flags |= ASTRA_EARLY_LOG_FLAG_PANIC;
     ++early_log->sequence;
@@ -450,10 +484,98 @@ static void panic_begin(const char *reason)
     panic_trace_records();
 }
 
+static const char *panic_vector_name(uint32_t vector)
+{
+    switch (vector) {
+    case 2u: return "bus error";
+    case 3u: return "address error";
+    case 4u: return "illegal instruction";
+    case 5u: return "division by zero";
+    case 8u: return "privilege violation";
+    case 10u: return "line-A emulator";
+    case 11u: return "line-F emulator";
+    default: return "processor exception";
+    }
+}
+
+static void panic_screen_trace(void)
+{
+    KernelTraceRecord records[PANIC_SCREEN_TRACE_RECORDS];
+    uint32_t count = kernel_trace_copy_recent(
+        records, PANIC_SCREEN_TRACE_RECORDS);
+
+    console_puts("Recent kernel trace (newest first):\n");
+    for (uint32_t index = 0u; index < count; ++index) {
+        const KernelTraceRecord *record = &records[index];
+
+        console_puts(" T ");
+        console_hex32(record->commit_sequence);
+        console_puts(" e=");
+        console_hex32(record->event);
+        console_puts(" f=");
+        console_hex32(record->flags);
+        console_puts(" a0=");
+        console_hex32(record->argument[0]);
+        console_puts(" a1=");
+        console_hex32(record->argument[1]);
+        console_putc('\n');
+    }
+}
+
+static void panic_screen_summary(void)
+{
+    screen_clear();
+    console_puts("*** ASTRA 68 SYSTEM HALTED ***\n\nReason: ");
+    console_puts_limit(panic_reason, 68u);
+    console_puts("\nKernel: v" ASTRA_KERNEL_VERSION "  Built: "
+                 ASTRA_KERNEL_BUILD_UTC "\nHardware: 0x");
+    console_hex32(kernel_platform_build_id());
+    console_puts("  Last IRQ SR=0x");
+    console_hex32(kernel_dispatch_last_supervisor_irq_sr());
+    console_puts(" PC=0x");
+    console_hex32(kernel_dispatch_last_supervisor_irq_pc());
+    console_puts("\n\n");
+    if (panic_exception.present != 0u) {
+        console_puts("Processor fault: ");
+        console_puts(panic_vector_name(panic_exception.vector));
+        console_puts(" (vector ");
+        console_dec32(panic_exception.vector);
+        console_puts(")\n PC=0x");
+        console_hex32(panic_exception.program_counter);
+        console_puts(" SR=0x");
+        console_hex32(panic_exception.status_register);
+        if (panic_exception.access_fault != 0u) {
+            console_puts(" Address=0x");
+            console_hex32(panic_exception.fault_address);
+        }
+        console_puts("\n\n");
+    } else if (panic_user_fault.present != 0u) {
+        console_puts("Last user fault: ");
+        console_puts(panic_vector_name(panic_user_fault.vector));
+        console_puts(" (vector ");
+        console_dec32(panic_user_fault.vector);
+        console_puts(")\n Process=0x");
+        console_hex32(panic_user_fault.process_id);
+        console_puts(" Thread=0x");
+        console_hex32(panic_user_fault.thread_id);
+        console_puts("\n PC=0x");
+        console_hex32(panic_user_fault.program_counter);
+        console_puts(" Address=0x");
+        console_hex32(panic_user_fault.fault_address);
+        console_puts("\n Symbolize: m68k-linux-gnu-addr2line -f -e <ELF> 0x");
+        console_hex32(panic_user_fault.program_counter);
+        console_puts("\n\n");
+    }
+    panic_screen_trace();
+    console_puts("\nFull report: /data/astra/log/panic-latest.log\n"
+                 "SYSTEM HALTED");
+}
+
 static void panic_finish(void) __attribute__((noreturn));
 static void panic_finish(void)
 {
     console_puts("\nSYSTEM HALTED\n");
+    panic_screen_summary();
     kernel_platform_debug_marker(ASTRA_KERNEL_STATUS_PANIC);
     halt_forever();
 }
@@ -530,6 +652,12 @@ static void exception_panic(const void *raw_frame,
         console_putc('\n');
         panic_finish();
     }
+    panic_exception.program_counter = frame.program_counter;
+    panic_exception.fault_address = frame.fault_address;
+    panic_exception.status_register = frame.status_register;
+    panic_exception.vector = frame.vector_offset >> 2;
+    panic_exception.present = 1u;
+    panic_exception.access_fault = frame.access_fault;
     console_puts("Vector: ");
     console_dec32(frame.vector_offset >> 2);
     console_puts("  Format: 0x");
@@ -1127,6 +1255,12 @@ void kernel_process_fault_report(uint32_t process_id, uint32_t thread_id,
                                  uint32_t fault_address, uint32_t vector,
                                  uint32_t kind)
 {
+    panic_user_fault.process_id = process_id;
+    panic_user_fault.thread_id = thread_id;
+    panic_user_fault.program_counter = program_counter;
+    panic_user_fault.fault_address = fault_address;
+    panic_user_fault.vector = vector;
+    panic_user_fault.present = 1u;
     console_puts("*** user fault: process 0x");
     console_hex32(process_id);
     console_puts(" thread 0x");
@@ -1597,7 +1731,11 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     console_puts(" bytes @ 0x");
     console_hex32(boot_info.kernel_base);
     console_putc('\n');
-    console_puts("CPU ................ MC68030 @ ");
+    console_puts("CPU ................ MC68030, ");
+    console_dec32(boot_info.cpu_effective_hz != 0u ?
+                  boot_info.cpu_effective_hz : boot_info.cpu_hz);
+    console_puts(" Hz equivalent\n");
+    console_puts("Timer .............. ");
     console_dec32(boot_info.cpu_hz);
     console_puts(" Hz\n");
     console_puts("PMMU ............... enabled, SRP 0x");

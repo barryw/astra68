@@ -48,6 +48,25 @@ bind_standard_assigns(void)
                      ASTRA_EVENT_LEVEL_WARNING,
                      "LIBS: unbound, mkdir refused with status %u", status);
     }
+    status = astra_vfs_mkdir(&vfs_client, "/apps");
+    if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
+        (void)astra_assign_bind(&vfs_assigns, "APPS", vfs_handle,
+                                ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "apps");
+    } else {
+        ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
+                     ASTRA_EVENT_LEVEL_WARNING,
+                     "APPS: unbound, mkdir refused with status %u", status);
+    }
+    status = astra_vfs_mkdir(&vfs_client, "/trash");
+    if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
+        (void)astra_assign_bind(&vfs_assigns, "TRASH", vfs_handle,
+                                ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE,
+                                "trash");
+    } else {
+        ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
+                     ASTRA_EVENT_LEVEL_WARNING,
+                     "TRASH: unbound, mkdir refused with status %u", status);
+    }
     /*
      * A volume with no work directory on it has not been used yet, so making
      * one is what installs it. A volume that refuses -- full, or read-only --

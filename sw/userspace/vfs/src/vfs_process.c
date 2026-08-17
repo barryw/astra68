@@ -1,4 +1,5 @@
 #include <astra/bytes.h>
+#include <astra/bundle.h>
 #include <astra/library_loader.h>
 #include <astra/runtime.h>
 #include <astra/shared_library.h>
@@ -29,6 +30,15 @@ static struct {
 } clients[PROCESS_VFS_CLIENT_MAX];
 static uint32_t client_count;
 static OpenLibraryRecord open_libraries[ASTRA_LIBRARY_SLOT_COUNT];
+
+void astra_process_vfs_close(void)
+{
+    while (client_count != 0u) {
+        --client_count;
+        (void)astra_vfs_disconnect(&clients[client_count].client);
+        clients[client_count].handle = 0u;
+    }
+}
 
 static int same(const char *left, const char *right)
 {
@@ -94,29 +104,6 @@ static int append_number(char *path, uint32_t capacity, uint16_t value)
     return 1;
 }
 
-static int parse_version(const char *name, uint16_t minimum,
-                         uint16_t version[3])
-{
-    uint32_t index = 0u;
-
-    for (uint32_t part = 0u; part < 3u; ++part) {
-        uint32_t value = 0u;
-        uint32_t digits = 0u;
-
-        while (name[index] >= '0' && name[index] <= '9') {
-            value = value * 10u + (uint32_t)(name[index++] - '0');
-            if (value > UINT16_MAX)
-                return 0;
-            ++digits;
-        }
-        if (digits == 0u || (part != 2u && name[index++] != '.') ||
-            (part == 2u && name[index] != '\0'))
-            return 0;
-        version[part] = (uint16_t)value;
-    }
-    return version[0] >= minimum;
-}
-
 static int newer(const uint16_t candidate[3], const uint16_t current[3])
 {
     for (uint32_t part = 0u; part < 3u; ++part) {
@@ -125,14 +112,6 @@ static int newer(const uint16_t candidate[3], const uint16_t current[3])
     }
     return 0;
 }
-
-#if defined(ASTRA_VFS_PROCESS_TEST)
-int astra_vfs_process_test_parse_version(const char *name, uint16_t minimum,
-                                         uint16_t version[3])
-{
-    return parse_version(name, minimum, version);
-}
-#endif
 
 static void release_library_image(LibraryImage *image)
 {
@@ -167,22 +146,23 @@ static uint32_t read_file(const char *path, LibraryImage *image)
             continue;
         status = astra_vfs_open(client, wire, ASTRA_VFS_OPEN_READ, &file,
                                 &size, &kind);
-        if (status != ASTRA_VFS_OK)
+        if (status != ASTRA_VFS_OK) {
             continue;
+        }
         if (kind == ASTRA_VFS_KIND_DIRECTORY || size == 0u ||
             size > ASTRA_LIBRARY_IMAGE_MAX) {
             (void)astra_vfs_close(client, file);
             return ASTRA_VFS_ERR_LIMIT;
         }
         status = astra_rt_area_create(
-            (uint32_t)size,
+            (uint32_t)size + 1u,
             ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP,
             &image->area);
         if (status == ASTRA_SYSCALL_OK)
             status = astra_rt_area_map(
                 image->area, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
                 (void **)&image->bytes, &mapped_size);
-        if (status != ASTRA_SYSCALL_OK || mapped_size < size) {
+        if (status != ASTRA_SYSCALL_OK || mapped_size < size + 1u) {
             (void)astra_vfs_close(client, file);
             release_library_image(image);
             return ASTRA_VFS_ERR_NO_SPACE;
@@ -198,23 +178,64 @@ static uint32_t read_file(const char *path, LibraryImage *image)
             image->length += moved;
         }
         (void)astra_vfs_close(client, file);
-        if (status == ASTRA_VFS_OK && image->length == (uint32_t)size)
+        if (status == ASTRA_VFS_OK && image->length == (uint32_t)size) {
+            image->bytes[image->length] = 0u;
             return ASTRA_VFS_OK;
+        }
         release_library_image(image);
         return ASTRA_VFS_ERR_IO;
     }
 }
 
+static int ends_with(const char *text, const char *ending)
+{
+    uint32_t length = (uint32_t)strlen(text);
+    uint32_t suffix = (uint32_t)strlen(ending);
+
+    return length >= suffix &&
+           memcmp(text + length - suffix, ending, suffix) == 0;
+}
+
+static int provider_version(const AstraBundleManifest *manifest,
+                            const char *name, uint16_t abi,
+                            uint16_t version[3])
+{
+    int found = 0;
+
+    if (manifest->kind != ASTRA_BUNDLE_KIT) return 0;
+    for (uint32_t at = 0u; at < manifest->provide_count; ++at) {
+        const AstraBundleLibrary *provider = &manifest->provides[at];
+        uint16_t candidate[3] = {provider->version.major,
+                                 provider->version.minor,
+                                 provider->version.patch};
+
+        if (provider->abi != abi || !same(provider->name, name) ||
+            (found && !newer(candidate, version))) continue;
+        for (uint32_t part = 0u; part < 3u; ++part)
+            version[part] = candidate[part];
+        found = 1;
+    }
+    return found;
+}
+
+#if defined(ASTRA_VFS_PROCESS_TEST)
+int astra_vfs_process_test_provider(const AstraBundleManifest *manifest,
+                                    const char *name, uint16_t abi,
+                                    uint16_t version[3])
+{
+    return provider_version(manifest, name, abi, version);
+}
+#endif
+
 static int resolve_library(const char *name, uint16_t minimum,
                            char *path, uint32_t capacity)
 {
     uint16_t selected[3] = {0u, 0u, 0u};
+    char selected_kit[ASTRA_VFS_NAME_MAX] = {0};
     int found = 0;
 
     path[0] = '\0';
-    if (!append(path, capacity, "LIBS:") || !append(path, capacity, name) ||
-        !append(path, capacity, "/abi-") ||
-        !append_number(path, capacity, minimum))
+    if (!append(path, capacity, "LIBS:"))
         return 0;
     for (uint32_t member = 0u; ; ++member) {
         const AstraAssign *assign = NULL;
@@ -235,7 +256,7 @@ static int resolve_library(const char *name, uint16_t minimum,
         for (;;) {
             char entry[ASTRA_VFS_NAME_MAX];
             uint16_t kind;
-            uint16_t candidate[3];
+            uint16_t candidate[3] = {0u, 0u, 0u};
             uint64_t next;
 
             status = astra_vfs_readdir(client, wire, cursor, entry,
@@ -243,18 +264,45 @@ static int resolve_library(const char *name, uint16_t minimum,
             if (status != ASTRA_VFS_OK)
                 break;
             if (kind == ASTRA_VFS_KIND_DIRECTORY &&
-                parse_version(entry, minimum, candidate) &&
-                (!found || newer(candidate, selected))) {
-                for (uint32_t part = 0u; part < 3u; ++part)
-                    selected[part] = candidate[part];
-                found = 1;
+                ends_with(entry, ".kit")) {
+                LibraryImage image;
+                AstraBundleManifest manifest;
+                char manifest_path[ASTRA_VFS_PATH_MAX] = "LIBS:";
+                uint32_t line = 0u;
+
+                if (append(manifest_path, sizeof(manifest_path), entry) &&
+                    append(manifest_path, sizeof(manifest_path), "/manifest") &&
+                    read_file(manifest_path, &image) == ASTRA_VFS_OK) {
+                    if (astra_bundle_manifest_parse(
+                            (char *)image.bytes, image.length, &manifest,
+                            &line) == ASTRA_BUNDLE_OK &&
+                        provider_version(&manifest, name, minimum, candidate) &&
+                        (!found || newer(candidate, selected))) {
+                        for (uint32_t part = 0u; part < 3u; ++part)
+                            selected[part] = candidate[part];
+                        selected_kit[0] = '\0';
+                        if (!append(selected_kit, sizeof(selected_kit), entry)) {
+                            release_library_image(&image);
+                            return 0;
+                        }
+                        found = 1;
+                    }
+                    release_library_image(&image);
+                }
             }
             if (next == 0u)
                 break;
             cursor = next;
         }
     }
-    if (!found || !append(path, capacity, "/") ||
+    path[0] = '\0';
+    if (!found || !append(path, capacity, "LIBS:") ||
+        !append(path, capacity, selected_kit) ||
+        !append(path, capacity, "/libraries/") ||
+        !append(path, capacity, name) ||
+        !append(path, capacity, "/abi-") ||
+        !append_number(path, capacity, minimum) ||
+        !append(path, capacity, "/") ||
         !append_number(path, capacity, selected[0]) ||
         !append(path, capacity, ".") ||
         !append_number(path, capacity, selected[1]) ||
@@ -278,7 +326,7 @@ uint32_t astra_process_vfs_init(const AstraStartupInfo *startup)
     if (astra_assign_seed(&assigns, capabilities,
                           startup->capability_count) != ASTRA_VFS_OK)
         return ASTRA_VFS_ERR_INVALID;
-    client_count = 0u;
+    astra_process_vfs_close();
     (void)memset(clients, 0, sizeof(clients));
     (void)memset(open_libraries, 0, sizeof(open_libraries));
     for (uint32_t index = 0u; index < assigns.count; ++index) {
@@ -289,13 +337,18 @@ uint32_t astra_process_vfs_init(const AstraStartupInfo *startup)
                 break;
         if (slot != client_count)
             continue;
-        if (client_count == PROCESS_VFS_CLIENT_MAX)
+        if (client_count == PROCESS_VFS_CLIENT_MAX) {
+            astra_process_vfs_close();
             return ASTRA_VFS_ERR_LIMIT;
+        }
         clients[client_count].handle = assigns.entries[index].handle;
         if (astra_vfs_port_connect(&clients[client_count].client,
                                    clients[client_count].handle) !=
-            ASTRA_VFS_OK)
+            ASTRA_VFS_OK) {
+            clients[client_count].handle = 0u;
+            astra_process_vfs_close();
             return ASTRA_VFS_ERR_IO;
+        }
         ++client_count;
     }
     return client_count != 0u ? ASTRA_VFS_OK : ASTRA_VFS_ERR_NOT_FOUND;
@@ -358,6 +411,39 @@ uint32_t astra_process_filesystem_open(AstraProcessFilesystem *filesystem,
     return status;
 }
 
+uint32_t astra_process_read_file(AstraProcessFilesystem *filesystem,
+                                 const char *path, void *bytes,
+                                 uint32_t capacity, uint32_t *length)
+{
+    AstraFile file = ASTRA_FILE_INIT;
+    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+    uint32_t status;
+
+    if (filesystem == NULL || filesystem->library == NULL || path == NULL ||
+        bytes == NULL || length == NULL) return ASTRA_VFS_ERR_INVALID;
+    *length = 0u;
+    status = filesystem->library->open(&filesystem->filesystem, path,
+                                       ASTRA_VFS_OPEN_READ, &file);
+    if (status == ASTRA_VFS_OK)
+        status = filesystem->library->file_info(&file, &info);
+    if (status == ASTRA_VFS_OK && info.byte_size > capacity)
+        status = ASTRA_VFS_ERR_LIMIT;
+    while (status == ASTRA_VFS_OK && *length < info.byte_size) {
+        uint32_t moved = 0u;
+
+        status = filesystem->library->read(
+            &file, (uint8_t *)bytes + *length,
+            (uint32_t)info.byte_size - *length, &moved);
+        if (status != ASTRA_VFS_OK || moved == 0u)
+            break;
+        *length += moved;
+    }
+    if (file._private_file != ASTRA_VFS_FILE_INVALID)
+        (void)filesystem->library->close(&file);
+    return status == ASTRA_VFS_OK && *length == info.byte_size ?
+        ASTRA_VFS_OK : (status == ASTRA_VFS_OK ? ASTRA_VFS_ERR_IO : status);
+}
+
 void astra_process_filesystem_close(AstraProcessFilesystem *filesystem)
 {
     if (filesystem == NULL)
@@ -365,6 +451,7 @@ void astra_process_filesystem_close(AstraProcessFilesystem *filesystem)
     if (filesystem->library != NULL)
         filesystem->library->detach(&filesystem->filesystem);
     CloseLibrary(filesystem->handle);
+    astra_process_vfs_close();
     *filesystem = (AstraProcessFilesystem)ASTRA_PROCESS_FILESYSTEM_INIT;
 }
 
@@ -386,14 +473,18 @@ AstraLibraryHandle *OpenLibrary(const char *name, uint16_t version)
             return &open_libraries[index].handle;
         }
     }
-    if (!resolve_library(name, version, path, sizeof(path)) ||
-        read_file(path, &image) != ASTRA_VFS_OK)
+    if (!resolve_library(name, version, path, sizeof(path))) {
         return NULL;
+    }
+    if (read_file(path, &image) != ASTRA_VFS_OK) {
+        return NULL;
+    }
     status = astra_library_load(image.bytes, image.length, name, version, 0u,
                                 &loaded);
     release_library_image(&image);
-    if (status != ASTRA_SYSCALL_OK)
+    if (status != ASTRA_SYSCALL_OK) {
         return NULL;
+    }
     for (uint32_t index = 0u; index < ASTRA_LIBRARY_SLOT_COUNT; ++index) {
         if (open_libraries[index].used != 0u)
             continue;

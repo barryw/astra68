@@ -7,7 +7,7 @@
 #define ASTRA_BOOT_HANDOFF_MAGIC 0x4136384bu /* "A68K" */
 #define ASTRA_BOOT_INFO_MAGIC    0x41363842u /* "A68B" */
 #define ASTRA_BOOT_ABI_MAJOR     0u
-#define ASTRA_BOOT_ABI_MINOR     4u
+#define ASTRA_BOOT_ABI_MINOR     5u
 
 #define ASTRA_BOOT_INFO_ADDRESS       0x01ff8000u
 #define ASTRA_BOOT_SCRATCH_ADDRESS    0x01ff8000u
@@ -101,6 +101,7 @@ typedef struct {
     uint32_t cpu_implementation;
     uint32_t cpu_features;
     uint32_t cpu_hz;
+    uint32_t cpu_effective_hz;
     uint32_t ram_base;
     uint32_t ram_size;
     uint32_t rom_base;
@@ -162,7 +163,7 @@ void astra_early_log_puts(AstraEarlyLog *log, const char *text);
 
 _Static_assert(sizeof(AstraBootMemoryRange) == 16u,
                "AstraBootMemoryRange ABI size");
-_Static_assert(sizeof(AstraBootInfo) == 264u, "AstraBootInfo ABI size");
+_Static_assert(sizeof(AstraBootInfo) == 268u, "AstraBootInfo ABI size");
 _Static_assert(sizeof(AstraEarlyLog) == 32u, "AstraEarlyLog ABI size");
 
 #endif

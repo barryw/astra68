@@ -36,6 +36,7 @@ FONT_LIBRARY := build/m68k/libraries/font.library
 GRAPHICS_LIBRARY_OBJECTS := build/m68k/library/graphics_library.o \
 	build/m68k/library/graphics_surface.o \
 	build/m68k/library/graphics_shared_surface.o \
+	build/m68k/library/graphics_bundle.o \
 	build/m68k/library/runtime_syscall.o \
 	build/m68k/library/runtime_memory.o \
 	build/m68k/library/runtime_syscall_asm.o
@@ -100,6 +101,11 @@ build/m68k/library/graphics_shared_surface.o: src/shared_surface.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) -c $< -o $@
 
+build/m68k/library/graphics_bundle.o: ../../../ndk/src/bundle.c \
+		../../../ndk/include/astra/bundle.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) -c $< -o $@
+
 build/m68k/library/runtime_syscall.o: ../runtime/src/syscall.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) -c $< -o $@
@@ -125,7 +131,7 @@ $(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(LIBRARY_LD)
 
 library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@python3 ../../../tools/library_info.py $(GRAPHICS_LIBRARY) | \
-		grep -q '^graphics.library 1.0.0 ABI 1.0$$'
+		grep -q '^graphics.library 1.1.0 ABI 1.1$$'
 	@python3 ../../../tools/library_info.py $(FONT_LIBRARY) | \
 		grep -q '^font.library 1.0.0 ABI 1.0$$'
 	@! $(READELF) -r $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) | \

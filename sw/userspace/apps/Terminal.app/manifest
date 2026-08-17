@@ -1,0 +1,16 @@
+astra-bundle 1
+kind application
+id org.astra.terminal
+name "Terminal"
+version 0.1.0
+executable bin/m68k-68030/Terminal
+icon resources/Terminal.aicon
+capability GUI
+capability WORK:rw
+capability COMMANDS:r
+capability LIBS:r
+capability EVENTS:r
+capability EVENT_CONTROL
+requires graphics.library 1 1.1.0
+requires font.library 1 1.0.0
+requires filesystem.library 1 1.0.0

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Boot the managed window gallery and require every consumed fence."""
+"""Boot a clear desktop, launch Terminal by double-click, and verify GUI I/O."""
 
 import argparse
 import json
@@ -24,8 +24,9 @@ QUEUE_REQUEST_READY = 1 << 8
 DRAW_DONE = 1 << 3
 PRESENT_BUDGET_CYCLES = 250000
 POINTER_BUDGET_CYCLES = 250000
-EXPECTED_SUBMISSIONS = 3
-EXPECTED_BATCHES = 2
+NOMINAL_CPU_HZ = 12500000
+EXPECTED_SUBMISSIONS = 2
+EXPECTED_BATCHES = 1
 EXPECTED_POINTER_SUBMISSIONS = 1
 EXPECTED_POINTER_BATCHES = 0
 RENDER_OPERATION = 3
@@ -141,12 +142,32 @@ def run(qemu, rom, image, catalog, deadline):
                     break
                 time.sleep(0.05)
             if not booted.is_set():
-                registers = qmp.monitor("info registers")
+                registers = "unavailable"
+                if machine.poll() is None:
+                    try:
+                        registers = qmp.monitor("info registers").strip()
+                    except (BrokenPipeError, ConnectionError):
+                        pass
+                time.sleep(0.05)
                 raise RuntimeError(
                     "no %r; exit=%s display requests=%d completions=%d "
                     "generation=%d; registers: %s; last serial: %s" %
                     (BOOT_MARKER, machine.poll(), *last_counts,
-                     registers.strip(), serial[-40:]))
+                     registers, serial[-40:]))
+            benchmark = next((line for line in serial
+                              if line.startswith("CPU benchmark ...... ")), "")
+            try:
+                measured_hz = int(benchmark.split()[3])
+                benchmark_us = int(benchmark.split()[8])
+            except (IndexError, ValueError):
+                raise RuntimeError("missing CPU throughput measurement: %s" %
+                                   serial[-40:])
+            if measured_hz <= NOMINAL_CPU_HZ:
+                raise RuntimeError("CPU throughput did not exceed timer rate: "
+                                   "%d Hz" % measured_hz)
+            if benchmark_us <= 0 or benchmark_us > 10000000:
+                raise RuntimeError("invalid CPU benchmark time: %d us" %
+                                   benchmark_us)
             settle_deadline = time.monotonic() + 2.0
             while (qmp.property("astra-display-submissions") <
                    EXPECTED_SUBMISSIONS or
@@ -200,13 +221,61 @@ def run(qemu, rom, image, catalog, deadline):
                 raise RuntimeError(
                     "initial cursor updates=%d position=%d,%d visible=%d" %
                     (cursor_updates, cursor_x, cursor_y, cursor_visible))
+            desktop_commands = commands
+            desktop_fills = fills
+            desktop_blits = blits
+            desktop_glyphs = glyphs
+            try:
+                qmp.move(70, 90)
+                launch_started = time.monotonic()
+                qmp.click()
+                time.sleep(0.08)
+                qmp.click()
+            except ConnectionError as error:
+                raise RuntimeError(
+                    "Terminal launch terminated machine exit=%s serial=%s" %
+                    (machine.poll(), serial[-40:])) from error
+            launch_deadline = time.monotonic() + 5.0
+            while (qmp.property("astra-display-render-batches") <
+                   EXPECTED_BATCHES + 2 or
+                   qmp.property("astra-display-submissions") !=
+                   qmp.property("astra-display-completions")) and \
+                    time.monotonic() < launch_deadline:
+                time.sleep(0.01)
+            launched_submissions = qmp.property(
+                "astra-display-submissions")
+            launched_batches = qmp.property("astra-display-render-batches")
+            launched_commands = qmp.property("astra-display-render-commands")
+            launched_fills = qmp.property("astra-display-fill-commands")
+            launched_blits = qmp.property("astra-display-blit-commands")
+            launched_glyphs = qmp.property("astra-display-glyph-commands")
+            launch_elapsed = time.monotonic() - launch_started
+            if launched_batches < EXPECTED_BATCHES + 2 or \
+                    launched_submissions != qmp.property(
+                        "astra-display-completions") or \
+                    launched_commands <= desktop_commands or \
+                    launched_fills <= desktop_fills or \
+                    launched_blits <= desktop_blits or \
+                    launched_glyphs <= desktop_glyphs:
+                raise RuntimeError(
+                    "Terminal double-click launch failed: requests=%d/%d "
+                    "batches=%d commands=%d fills=%d blits=%d glyphs=%d" %
+                    (launched_submissions,
+                     qmp.property("astra-display-completions"),
+                     launched_batches, launched_commands, launched_fills,
+                     launched_blits, launched_glyphs))
+            cursor_updates_before = qmp.property(
+                "astra-display-cursor-updates")
+            cursor_x_before = qmp.property("astra-display-cursor-x")
+            cursor_y_before = qmp.property("astra-display-cursor-y")
             qmp.execute("input-send-event", {"events": [{
                 "type": "rel", "data": {"axis": "x", "value": 5}}, {
                 "type": "rel", "data": {"axis": "y", "value": 3}}]})
             pointer_deadline = time.monotonic() + 2.0
-            while (qmp.property("astra-display-cursor-updates") == 1 or
+            while (qmp.property("astra-display-cursor-updates") ==
+                       cursor_updates_before or
                    qmp.property("astra-display-completions") ==
-                       EXPECTED_SUBMISSIONS) and \
+                       launched_submissions) and \
                     time.monotonic() < pointer_deadline:
                 time.sleep(0.01)
             cursor_updates = qmp.property("astra-display-cursor-updates")
@@ -216,12 +285,14 @@ def run(qemu, rom, image, catalog, deadline):
             pointer_completions = qmp.property("astra-display-completions")
             pointer_operation = qmp.property("astra-display-operation")
             pointer_batches = qmp.property("astra-display-render-batches")
-            if cursor_updates != 2 or cursor_x != 646 or cursor_y != 363 or \
-                    pointer_submissions != (EXPECTED_SUBMISSIONS +
+            if cursor_updates != cursor_updates_before + 1 or \
+                    cursor_x != cursor_x_before + 6 or \
+                    cursor_y != cursor_y_before + 3 or \
+                    pointer_submissions != (launched_submissions +
                                             EXPECTED_POINTER_SUBMISSIONS) or \
-                    pointer_completions != (EXPECTED_SUBMISSIONS +
+                    pointer_completions != (launched_submissions +
                                             EXPECTED_POINTER_SUBMISSIONS) or \
-                    pointer_batches != EXPECTED_BATCHES + \
+                    pointer_batches != launched_batches + \
                         EXPECTED_POINTER_BATCHES or \
                     pointer_operation != CURSOR_OPERATION:
                 raise RuntimeError(
@@ -348,61 +419,79 @@ def run(qemu, rom, image, catalog, deadline):
                      qmp.property("astra-display-cursor-y"),
                      qmp.property("astra-display-submissions"),
                      qmp.property("astra-display-completions")))
-            resize_batches = restored_batches
-            qmp.move(1020, 578)
-            qmp.button(True)
-            qmp.move(1040, 590)
-            qmp.button(False)
-            resize_deadline = time.monotonic() + 3.0
+            second_batches = restored_batches
+            second_glyphs = qmp.property("astra-display-glyph-commands")
+            qmp.move(70, 90)
+            qmp.click()
+            time.sleep(0.08)
+            qmp.click()
+            second_deadline = time.monotonic() + 5.0
             while (qmp.property("astra-display-render-batches") <
-                   resize_batches + 2 or
+                   second_batches + 2 or
                    qmp.property("astra-display-submissions") !=
                    qmp.property("astra-display-completions")) and \
-                    time.monotonic() < resize_deadline:
+                    time.monotonic() < second_deadline:
                 time.sleep(0.01)
-            resized_batches = qmp.property("astra-display-render-batches")
-            if resized_batches < resize_batches + 2 or \
-                    qmp.property("astra-display-submissions") != \
-                    qmp.property("astra-display-completions"):
+            if qmp.property("astra-display-render-batches") < \
+                    second_batches + 2 or \
+                    qmp.property("astra-display-glyph-commands") <= \
+                    second_glyphs:
                 raise RuntimeError(
-                    "resize route batches=%d requests=%d/%d" %
-                    (resized_batches,
-                     qmp.property("astra-display-submissions"),
-                     qmp.property("astra-display-completions")))
-            qmp.move(1028, 105)
-            qmp.click()
-            close_deadline = time.monotonic() + 3.0
-            try:
-                while (qmp.property("astra-display-render-batches") <
-                       resized_batches + 2 or
-                       qmp.property("astra-display-submissions") !=
-                       qmp.property("astra-display-completions")) and \
-                        time.monotonic() < close_deadline:
-                    time.sleep(0.01)
-            except ConnectionError as error:
-                raise RuntimeError(
-                    "close terminated machine exit=%s serial=%s" %
-                    (machine.poll(), serial[-40:])) from error
-            closed_batches = qmp.property("astra-display-render-batches")
-            if closed_batches < resized_batches + 2 or \
-                    qmp.property("astra-display-submissions") != \
-                    qmp.property("astra-display-completions"):
-                raise RuntimeError(
-                    "close route batches=%d requests=%d/%d" %
-                    (closed_batches,
-                     qmp.property("astra-display-submissions"),
-                     qmp.property("astra-display-completions")))
-            qmp.key("x")
-            time.sleep(0.2)
-            if qmp.property("astra-display-render-batches") != \
-                    closed_batches or \
-                    (qmp.word(INPUT_STATUS) & INPUT_COUNT_MASK) != 0:
-                raise RuntimeError(
-                    "closed window still received input: batches=%d/%d "
-                    "input=0x%08x" %
-                    (closed_batches,
+                    "concurrent Terminal launch failed: batches=%d/%d "
+                    "glyphs=%d/%d" %
+                    (second_batches,
                      qmp.property("astra-display-render-batches"),
-                     qmp.word(INPUT_STATUS)))
+                     second_glyphs,
+                     qmp.property("astra-display-glyph-commands")))
+            second_batches = qmp.property("astra-display-render-batches")
+            qmp.move(1008, 105)
+            time.sleep(0.1)
+            close_hover_batches = qmp.property(
+                "astra-display-render-batches")
+            if close_hover_batches <= second_batches:
+                raise RuntimeError("close gadget did not enter hover state")
+            qmp.click()
+            time.sleep(0.2)
+            second_close_deadline = time.monotonic() + 3.0
+            while (qmp.property("astra-display-render-batches") <
+                   close_hover_batches + 2 or
+                   qmp.property("astra-display-submissions") !=
+                   qmp.property("astra-display-completions")) and \
+                    time.monotonic() < second_close_deadline:
+                time.sleep(0.01)
+            if qmp.property("astra-display-render-batches") < \
+                    close_hover_batches + 2:
+                raise RuntimeError("second Terminal did not close")
+            closed_batches = qmp.property("astra-display-render-batches")
+            relaunch_batches = closed_batches
+            relaunch_glyphs = qmp.property("astra-display-glyph-commands")
+            qmp.move(70, 90)
+            qmp.click()
+            time.sleep(0.08)
+            qmp.click()
+            relaunch_deadline = time.monotonic() + 5.0
+            while (qmp.property("astra-display-render-batches") <
+                   relaunch_batches + 1 or
+                   qmp.property("astra-display-glyph-commands") <=
+                   relaunch_glyphs or
+                   qmp.property("astra-display-submissions") !=
+                   qmp.property("astra-display-completions")) and \
+                    time.monotonic() < relaunch_deadline:
+                time.sleep(0.01)
+            if qmp.property("astra-display-render-batches") <= \
+                    relaunch_batches or \
+                    qmp.property("astra-display-glyph-commands") <= \
+                    relaunch_glyphs or \
+                    qmp.property("astra-display-submissions") != \
+                    qmp.property("astra-display-completions"):
+                raise RuntimeError(
+                    "Terminal did not relaunch after close: batches=%d/%d "
+                    "glyphs=%d/%d serial=%s" %
+                    (relaunch_batches,
+                     qmp.property("astra-display-render-batches"),
+                     relaunch_glyphs,
+                     qmp.property("astra-display-glyph-commands"),
+                     serial[-100:]))
             commands = qmp.property("astra-display-render-commands")
             fills = qmp.property("astra-display-fill-commands")
             blits = qmp.property("astra-display-blit-commands")
@@ -423,11 +512,12 @@ def run(qemu, rom, image, catalog, deadline):
                                    serial[-8:])
             print("ASTRA DISPLAY PASS fences=%d batches=%d commands=%d "
                   "fills=%d blits=%d glyphs=%d generation=%d cycles=%d/%d "
-                  "pointer=%d/%d boot=%.3fs" %
+                  "pointer=%d/%d cpu=%.3fMHz boot=%.3fs launch=%.3fs" %
                   (submissions,
                    batches, commands, fills, blits, glyphs, generation,
                    present_cycles, PRESENT_BUDGET_CYCLES, pointer_cycles,
-                   POINTER_BUDGET_CYCLES, elapsed))
+                   POINTER_BUDGET_CYCLES, measured_hz / 1000000.0,
+                   elapsed, launch_elapsed))
             return 0
         finally:
             machine.kill()

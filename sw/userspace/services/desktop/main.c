@@ -1,63 +1,60 @@
+#include <astra/application.h>
+#include <astra/bundle.h>
 #include <astra/gui.h>
+#include <astra/graphics_kit.h>
+#include <astra/graphics_library.h>
+#include <astra/interface_kit.h>
+#include <astra/interface_library.h>
+#include <astra/input.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/service.h>
 #include <astra/status.h>
 #include <astra/surface.h>
 #include <astra/theme.h>
+#include <astra/vfs_process.h>
 #include <astra/window.h>
 
-#define GALLERY_WINDOW_COUNT 4u
+#define DESKTOP_WIDTH 1280u
+#define DESKTOP_TOP 34u
+#define DESKTOP_BOTTOM 678u
+#define DESKTOP_HEIGHT (DESKTOP_BOTTOM - DESKTOP_TOP)
+#define TERMINAL_BUNDLE "APPS:Terminal.app"
+#define ICON_BYTES_MAX 8192u
+#define TERMINAL_ICON_LEFT 32
+#define TERMINAL_ICON_TOP 28
+#define TERMINAL_ICON_RIGHT 112
+#define TERMINAL_ICON_BOTTOM 132
 
 enum {
-    DESKTOP_FAIL_SURFACE_FIRST = ASTRA_STATUS_PROGRAM_FIRST,
-    DESKTOP_FAIL_WINDOW_FIRST =
-        ASTRA_STATUS_PROGRAM_FIRST + GALLERY_WINDOW_COUNT,
-    DESKTOP_FAIL_MANAGE = ASTRA_STATUS_PROGRAM_FIRST + 0x80u
+    DESKTOP_FAIL_FILESYSTEM = ASTRA_STATUS_PROGRAM_FIRST,
+    DESKTOP_FAIL_INTERFACE,
+    DESKTOP_FAIL_GRAPHICS,
+    DESKTOP_FAIL_MANIFEST,
+    DESKTOP_FAIL_ICON,
+    DESKTOP_FAIL_SURFACE,
+    DESKTOP_FAIL_WINDOW
 };
 
-typedef struct GalleryWindow {
-    AstraSharedSurface surface;
-    AstraWindow window;
-} GalleryWindow;
-
-typedef struct GallerySpec {
+typedef struct IconRun {
     uint16_t x;
     uint16_t y;
     uint16_t width;
     uint16_t height;
-    uint32_t flags;
-    uint32_t gadgets;
-    uint8_t type;
-    uint8_t close_state;
-    uint8_t minimize_state;
-    uint8_t maximize_state;
-    const char *title;
-    uint16_t title_length;
-    const char *label;
-    uint16_t label_length;
-} GallerySpec;
+    uint8_t matched;
+} IconRun;
 
-static const GallerySpec gallery[GALLERY_WINDOW_COUNT] = {
-    { 300, 380, 250, 125, 0, 0, ASTRA_WINDOW_POPOVER,
-      ASTRA_GADGET_NORMAL, ASTRA_GADGET_NORMAL, ASTRA_GADGET_NORMAL,
-      0, 0, "POPOVER / BORDER ONLY", 21 },
-    { 600, 80, 360, 145, 0, ASTRA_WINDOW_GADGET_CLOSE,
-      ASTRA_WINDOW_UTILITY, ASTRA_GADGET_FOCUSED, ASTRA_GADGET_NORMAL,
-      ASTRA_GADGET_NORMAL, "INSPECTOR", 9, "UTILITY / FOCUSED", 17 },
-    { 520, 300, 400, 190, ASTRA_WINDOW_MODAL,
-      ASTRA_WINDOW_GADGET_CLOSE, ASTRA_WINDOW_DIALOG,
-      ASTRA_GADGET_DISABLED, ASTRA_GADGET_NORMAL, ASTRA_GADGET_NORMAL,
-      "SAVE CHANGES?", 13, "DIALOG / DISABLED", 17 },
-    { 100, 100, 550, 280, ASTRA_WINDOW_ACTIVE | ASTRA_WINDOW_RESIZABLE,
-      ASTRA_WINDOW_GADGET_CLOSE | ASTRA_WINDOW_GADGET_MINIMIZE |
-          ASTRA_WINDOW_GADGET_MAXIMIZE,
-      ASTRA_WINDOW_STANDARD, ASTRA_GADGET_PRESSED, ASTRA_GADGET_NORMAL,
-      ASTRA_GADGET_HOVER, "WINDOW GALLERY", 14, "STANDARD / ACTIVE", 17 }
-};
-
-ASTRA_PROGRAM("desktop", 0, 2, 0, "Barry Walker",
+ASTRA_PROGRAM("desktop", 0, 3, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
+
+static AstraProcessFilesystem process_filesystem =
+    ASTRA_PROCESS_FILESYSTEM_INIT;
+static AstraLibraryHandle *graphics_handle;
+static AstraLibraryHandle *interface_handle;
+static const AstraGraphicsLibraryV1 *graphics_library;
+static const AstraInterfaceLibraryV1 *interface_library;
+static char manifest_text[ASTRA_BUNDLE_MANIFEST_MAX + 1u];
+static uint8_t icon_bytes[ICON_BYTES_MAX];
 
 static const AstraStartupCapability *
 capability(const AstraStartupInfo *startup, const char *name)
@@ -85,199 +82,254 @@ static void ready(uint32_t bootstrap, uint32_t status)
     (void)astra_port_send(bootstrap, &message, sizeof(message), NULL, 0u);
 }
 
-static uint16_t color(AstraColorRGBA8 value)
+static int append(char *path, uint32_t capacity, const char *text)
 {
-    return astra_surface_rgb565(value.red, value.green, value.blue);
-}
+    uint32_t at = 0u;
 
-static void text(AstraSurfaceView *surface, int32_t x, int32_t y,
-                 const char *utf8, uint32_t length, uint16_t value)
-{
-    astra_surface_ui_text(surface, x, y, utf8, length,
-                          ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT, value);
-}
-
-static void centered_text(AstraSurfaceView *surface, int32_t x, int32_t y,
-                          uint32_t width, const char *utf8, uint32_t length,
-                          uint16_t value)
-{
-    uint32_t text_width = astra_surface_ui_text_width(
-        utf8, length, ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT);
-
-    text(surface, x + (int32_t)(width > text_width ?
-         (width - text_width) / 2u : 0u), y, utf8, length, value);
-}
-
-static void paint(AstraSurfaceView *surface, const GallerySpec *spec,
-                  const AstraTheme *theme)
-{
-    uint16_t client = color(theme->client);
-    uint16_t primary = color(theme->title_active);
-    uint16_t muted = color(theme->text_muted);
-    uint16_t accent = color(theme->accent);
-
-    astra_surface_clear(surface, client);
-    astra_surface_ui_text(surface, 18, 18, spec->label, spec->label_length,
-                          ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT, primary);
-    astra_surface_fill(surface, 18, 36, surface->width - 36u, 2u, accent);
-    if (spec->type == ASTRA_WINDOW_STANDARD) {
-        astra_surface_fill_round(surface, 18, 58, 238u, 92u,
-                                 theme->card_radius, 0xffffu);
-        astra_surface_fill_round(surface, 276, 58, 256u, 92u,
-                                 theme->card_radius, 0xffffu);
-        text(surface, 34, 76, "NORMAL", 6u, muted);
-        text(surface, 292, 76, "HOVER / PRESSED", 15u, muted);
-        astra_surface_fill_round(surface, 18, 174, 118u, 34u,
-                                 theme->control_radius, accent);
-        astra_surface_fill_round(surface, 148, 174, 118u, 34u,
-                                 theme->control_radius,
-                                 color(theme->control));
-        centered_text(surface, 18, 186, 118u, "PRIMARY", 7u, 0xffffu);
-        centered_text(surface, 148, 186, 118u, "SECONDARY", 9u, primary);
-    } else if (spec->type == ASTRA_WINDOW_UTILITY) {
-        astra_surface_fill_round(surface, 18, 58, surface->width - 36u, 48u,
-                                 theme->control_radius, 0xffffu);
-        text(surface, 34, 77, "COMPACT TOOL WINDOW", 19u, muted);
-    } else if (spec->type == ASTRA_WINDOW_DIALOG) {
-        text(surface, 18, 62, "CHANGES ARE READY TO SAVE.", 26u, muted);
-        astra_surface_fill_round(surface, 128, 116, 112u, 34u,
-                                 theme->control_radius, accent);
-        astra_surface_fill_round(surface, 252, 116, 112u, 34u,
-                                 theme->control_radius,
-                                 color(theme->control));
-        centered_text(surface, 128, 128, 112u, "SAVE", 4u, 0xffffu);
-        centered_text(surface, 252, 128, 112u, "CANCEL", 6u, primary);
-    } else {
-        text(surface, 18, 58, "NO TITLEBAR", 11u, primary);
-        text(surface, 18, 78, "CONTEXTUAL CHROME", 17u, muted);
+    while (at < capacity && path[at] != '\0') ++at;
+    while (*text != '\0') {
+        if (at + 1u >= capacity) return 0;
+        path[at++] = *text++;
     }
+    path[at] = '\0';
+    return 1;
 }
 
-static uint32_t management_status(AstraResult result, uint32_t step)
+static uint32_t text_length(const char *text)
 {
-    return result == ASTRA_OK ? ASTRA_STATUS_OK :
-           DESKTOP_FAIL_MANAGE + step * 16u + (uint32_t)(-result);
+    uint32_t length = 0u;
+    while (text[length] != '\0') ++length;
+    return length;
+}
+
+static void launch_error(uint32_t gui, AstraResult failure)
+{
+    AstraAlertInfo info = ASTRA_ALERT_INFO_INIT;
+    const char *message = failure == ASTRA_ERROR_NO_RESOURCES ?
+        "There are not enough resources to start Terminal." :
+        "Terminal could not be started.";
+
+    if (interface_library == NULL) return;
+    (void)astra_log(failure == ASTRA_ERROR_NO_RESOURCES ?
+                    "Terminal launch: no resources" :
+                    "Terminal launch: request failed");
+    info.kind = ASTRA_ALERT_ERROR;
+    info.title = "Application Error";
+    info.title_length = 17u;
+    info.message = message;
+    info.message_length = (uint16_t)text_length(message);
+    info.button = "OK";
+    info.button_length = 2u;
+    (void)interface_library->show_alert(gui, &info);
+}
+
+static uint16_t icon_color(const AstraAicon *icon, uint16_t index)
+{
+    uint8_t rgba[4];
+
+    if (graphics_library->aicon_palette(icon, index, rgba) != ASTRA_BUNDLE_OK)
+        return 0u;
+    return astra_surface_rgb565(rgba[0], rgba[1], rgba[2]);
+}
+
+static void flush_run(AstraSurfaceView *surface, const AstraAicon *icon,
+                      uint16_t color_index, const IconRun *run)
+{
+    astra_surface_fill(surface, 38 + run->x, 34 + run->y,
+                       run->width, run->height,
+                       icon_color(icon, color_index));
+}
+
+/* Vertical coalescing keeps the 64px indexed icon inside 128 draw commands. */
+static int draw_strike(AstraSurfaceView *surface, const AstraAicon *icon,
+                       const AstraAiconStrike *strike)
+{
+    for (uint16_t color = 1u; color < icon->palette_count; ++color) {
+        IconRun active[32];
+        uint32_t active_count = 0u;
+
+        for (uint16_t y = 0u; y < strike->height; ++y) {
+            IconRun current[32];
+            uint32_t current_count = 0u;
+            uint16_t x = 0u;
+
+            for (uint32_t at = 0u; at < active_count; ++at)
+                active[at].matched = 0u;
+            while (x < strike->width) {
+                uint16_t start;
+                uint32_t match = active_count;
+
+                while (x < strike->width &&
+                       strike->pixels[(uint32_t)y * strike->width + x] != color)
+                    ++x;
+                start = x;
+                while (x < strike->width &&
+                       strike->pixels[(uint32_t)y * strike->width + x] == color)
+                    ++x;
+                if (start == x) break;
+                for (uint32_t at = 0u; at < active_count; ++at)
+                    if (active[at].x == start &&
+                        active[at].width == x - start &&
+                        active[at].matched == 0u) {
+                        match = at;
+                        break;
+                    }
+                if (current_count == sizeof(current) / sizeof(current[0]))
+                    return 0;
+                if (match != active_count) {
+                    active[match].matched = 1u;
+                    ++active[match].height;
+                    current[current_count++] = active[match];
+                } else {
+                    current[current_count++] = (IconRun){
+                        start, y, (uint16_t)(x - start), 1u, 1u};
+                }
+            }
+            for (uint32_t at = 0u; at < active_count; ++at)
+                if (active[at].matched == 0u)
+                    flush_run(surface, icon, color, &active[at]);
+            active_count = current_count;
+            for (uint32_t at = 0u; at < current_count; ++at)
+                active[at] = current[at];
+        }
+        for (uint32_t at = 0u; at < active_count; ++at)
+            flush_run(surface, icon, color, &active[at]);
+    }
+    return 1;
+}
+
+static uint32_t paint(AstraSurfaceView *surface)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    AstraBundleManifest manifest;
+    AstraAicon icon;
+    AstraAiconStrike strike;
+    char icon_path[ASTRA_VFS_PATH_MAX] = TERMINAL_BUNDLE "/";
+    uint32_t length = 0u;
+    uint32_t line = 0u;
+
+    astra_surface_clear(surface, astra_surface_rgb565(
+        theme.canvas.red, theme.canvas.green, theme.canvas.blue));
+    if (astra_process_read_file(
+            &process_filesystem, TERMINAL_BUNDLE "/manifest", manifest_text,
+            ASTRA_BUNDLE_MANIFEST_MAX, &length) != ASTRA_VFS_OK)
+        return DESKTOP_FAIL_MANIFEST;
+    manifest_text[length] = '\0';
+    if (astra_bundle_manifest_parse(manifest_text, length, &manifest, &line) !=
+            ASTRA_BUNDLE_OK || !append(icon_path, sizeof(icon_path),
+                                      manifest.icon))
+        return DESKTOP_FAIL_MANIFEST;
+    if (astra_process_read_file(&process_filesystem, icon_path, icon_bytes,
+                                sizeof(icon_bytes), &length) !=
+            ASTRA_VFS_OK || graphics_library->aicon_open(
+                icon_bytes, length, &icon) != ASTRA_BUNDLE_OK ||
+            graphics_library->aicon_strike(&icon, 64u, &strike) !=
+                ASTRA_BUNDLE_OK)
+        return DESKTOP_FAIL_ICON;
+    if (!draw_strike(surface, &icon, &strike)) return DESKTOP_FAIL_ICON;
+    astra_surface_ui_text(surface, 40, 104, manifest.name,
+                          text_length(manifest.name),
+                          ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT,
+                          astra_surface_rgb565(theme.text_primary.red,
+                                               theme.text_primary.green,
+                                               theme.text_primary.blue));
+    return ASTRA_STATUS_OK;
 }
 
 int astra_main(const AstraStartupInfo *startup)
 {
-    GalleryWindow windows[GALLERY_WINDOW_COUNT] = {0};
-    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    AstraSharedSurface surface = {0};
+    AstraWindow window = ASTRA_WINDOW_INIT;
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *gui;
-    uint32_t idle_receive = 0u;
-    uint32_t idle_send = 0u;
-    uint32_t status = ASTRA_STATUS_OK;
+    const AstraStartupCapability *launcher;
+    uint32_t status;
 
-    if (!astra_startup_validate(startup) ||
-        startup->capabilities_address == 0u)
+    if (!astra_startup_validate(startup) || startup->capabilities_address == 0u)
         return ASTRA_STATUS_INVALID;
     bootstrap = capability(startup, ASTRA_CAPABILITY_SERVICE_READY);
     gui = capability(startup, ASTRA_CAPABILITY_GUI);
-    if (bootstrap == NULL || gui == NULL)
+    launcher = capability(startup, ASTRA_CAPABILITY_APPLICATION_LAUNCH);
+    if (bootstrap == NULL || gui == NULL || launcher == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
-    for (uint32_t index = 0u;
-         index < GALLERY_WINDOW_COUNT && status == ASTRA_STATUS_OK; ++index) {
-        const GallerySpec *spec = &gallery[index];
-        AstraWindowCreateInfo info = ASTRA_WINDOW_CREATE_INFO_INIT;
-
-        status = astra_shared_draw_list_create(&windows[index].surface,
-                                               spec->width, spec->height);
-        if (status != ASTRA_SYSCALL_OK) {
-            status = DESKTOP_FAIL_SURFACE_FIRST + index;
-            break;
-        }
-        paint(&windows[index].surface.view, spec, &theme);
-        info.flags = spec->flags;
-        info.x = spec->x;
-        info.y = spec->y;
-        info.width = spec->width;
-        info.height = spec->height;
-        info.pitch = 0u;
-        info.content_format = ASTRA_WINDOW_CONTENT_DRAW_LIST;
-        info.gadgets = spec->gadgets;
-        info.type = spec->type;
-        info.close_state = spec->close_state;
-        info.minimize_state = spec->minimize_state;
-        info.maximize_state = spec->maximize_state;
-        info.title = spec->title;
-        info.title_length = spec->title_length;
-        {
-            AstraResult window_status = astra_window_create(
-                gui->handle, windows[index].surface.area, &info,
-                &windows[index].window);
-
-            if (window_status != ASTRA_OK)
-                status = DESKTOP_FAIL_WINDOW_FIRST + index * 16u +
-                         (uint32_t)(-window_status);
-        }
-    }
-    if (status == ASTRA_STATUS_OK)
-        status = management_status(
-            astra_window_move(&windows[3].window, 120u, 110u), 0u);
-    if (status == ASTRA_STATUS_OK)
-        status = management_status(
-            astra_window_resize(&windows[3].window, 580u, 300u), 1u);
-    if (status == ASTRA_STATUS_OK)
-        status = management_status(
-            astra_window_lower(&windows[3].window), 2u);
-    if (status == ASTRA_STATUS_OK)
-        status = management_status(
-            astra_window_raise(&windows[3].window), 3u);
-    if (status == ASTRA_STATUS_OK)
-        status = management_status(
-            astra_window_activate(&windows[2].window), 4u);
-    if (status == ASTRA_STATUS_OK)
-        status = management_status(
-            astra_window_move(&windows[2].window, 540u, 320u), 5u);
-    if (status == ASTRA_STATUS_OK)
-        status = management_status(
-            astra_window_minimize(&windows[0].window), 6u);
-    if (status == ASTRA_STATUS_OK)
-        status = management_status(
-            astra_window_restore(&windows[0].window), 7u);
-    if (status == ASTRA_STATUS_OK)
-        status = management_status(
-            astra_window_maximize(&windows[3].window), 8u);
-    if (status == ASTRA_STATUS_OK)
-        status = management_status(
-            astra_window_restore(&windows[3].window), 9u);
-    if (status == ASTRA_STATUS_OK)
-        status = management_status(astra_window_set_title(
-            &windows[3].window, "ASTRA WORKBENCH", 15u), 10u);
-    if (status == ASTRA_STATUS_OK)
-        status = management_status(
-            astra_window_deactivate(&windows[2].window), 11u);
-    if (status == ASTRA_STATUS_OK)
-        status = management_status(
-            astra_window_activate(&windows[3].window), 12u);
+    status = astra_process_filesystem_open(&process_filesystem, startup);
+    if (status != ASTRA_STATUS_OK) status = DESKTOP_FAIL_FILESYSTEM;
     if (status == ASTRA_STATUS_OK) {
-        AstraWindowInfo info = ASTRA_WINDOW_INFO_INIT;
-
-        status = management_status(
-            astra_window_get_info(&windows[3].window, &info), 13u);
-        if (status == ASTRA_STATUS_OK &&
-            (info.frame.x != 120u || info.frame.y != 110u ||
-             info.frame.width != 580u || info.frame.height != 300u ||
-             info.state != ASTRA_WINDOW_STATE_NORMAL ||
-             (info.flags & ASTRA_WINDOW_ACTIVE) == 0u ||
-             info.z_order != GALLERY_WINDOW_COUNT - 1u))
-            status = DESKTOP_FAIL_MANAGE + 14u * 16u;
+        interface_handle = OpenLibrary(ASTRA_INTERFACE_LIBRARY_NAME,
+                                       ASTRA_INTERFACE_LIBRARY_VERSION);
+        if (interface_handle == NULL) status = DESKTOP_FAIL_INTERFACE;
+        else {
+            interface_library = interface_handle->exports;
+            if (interface_library->abi_major !=
+                    ASTRA_INTERFACE_LIBRARY_ABI_MAJOR ||
+                interface_library->structure_size <
+                    sizeof(*interface_library))
+                status = DESKTOP_FAIL_INTERFACE;
+        }
     }
-    if (status == ASTRA_STATUS_OK)
-        status = astra_rt_port_create(1u, ASTRA_MESSAGE_HEADER_SIZE,
-                                   &idle_receive, &idle_send);
+    if (status == ASTRA_STATUS_OK) {
+        graphics_handle = OpenLibrary(ASTRA_GRAPHICS_LIBRARY_NAME,
+                                      ASTRA_GRAPHICS_LIBRARY_VERSION);
+        if (graphics_handle == NULL)
+            status = DESKTOP_FAIL_GRAPHICS;
+        else {
+            graphics_library = graphics_handle->exports;
+            if (graphics_library->abi_major !=
+                    ASTRA_GRAPHICS_LIBRARY_ABI_MAJOR ||
+                graphics_library->abi_minor <
+                    ASTRA_GRAPHICS_LIBRARY_ABI_MINOR ||
+                graphics_library->structure_size < sizeof(*graphics_library))
+                status = DESKTOP_FAIL_GRAPHICS;
+        }
+    }
+    if (status == ASTRA_STATUS_OK &&
+        astra_shared_draw_list_create(&surface, DESKTOP_WIDTH,
+                                      DESKTOP_HEIGHT) != ASTRA_SYSCALL_OK)
+        status = DESKTOP_FAIL_SURFACE;
+    if (status == ASTRA_STATUS_OK) status = paint(&surface.view);
+    if (status == ASTRA_STATUS_OK) {
+        AstraWindowCreateInfo info = ASTRA_WINDOW_CREATE_INFO_INIT;
+        AstraResult result;
+
+        info.x = 0u;
+        info.y = DESKTOP_TOP;
+        info.width = DESKTOP_WIDTH;
+        info.height = DESKTOP_HEIGHT;
+        info.flags = 0u;
+        info.gadgets = 0u;
+        info.content_format = ASTRA_WINDOW_CONTENT_DRAW_LIST;
+        info.type = ASTRA_WINDOW_DESKTOP;
+        info.event_mask = ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON;
+        result = astra_window_create(gui->handle, surface.area, &info, &window);
+        if (result != ASTRA_OK)
+            status = DESKTOP_FAIL_WINDOW + (uint32_t)(-result);
+    }
     ready(bootstrap->handle, status);
     (void)astra_close(bootstrap->handle);
-    if (status != ASTRA_STATUS_OK) {
-        for (uint32_t index = 0u; index < GALLERY_WINDOW_COUNT; ++index)
-            if (windows[index].surface.area != 0u)
-                (void)astra_shared_surface_close(&windows[index].surface);
-        return (int)status;
-    }
+    if (status != ASTRA_STATUS_OK) return (int)status;
     for (;;) {
-        status = astra_wait_one(idle_receive, ASTRA_DEADLINE_FOREVER, NULL);
-        if (status != ASTRA_SYSCALL_OK)
-            return (int)status;
+        AstraWindowEvent event = {0};
+        AstraResult result = astra_window_event_wait(
+            &window, &event, ASTRA_DEADLINE_INFINITE);
+
+        if (result != ASTRA_OK) return (int)(-result);
+        if (event.type == ASTRA_WINDOW_EVENT_POINTER_BUTTON &&
+            (event.flags & ASTRA_WINDOW_EVENT_DOWN) != 0u &&
+            event.data.pointer.button == ASTRA_INPUT_BUTTON_LEFT &&
+            event.data.pointer.click_count == 2u &&
+            event.data.pointer.x >= TERMINAL_ICON_LEFT &&
+            event.data.pointer.x < TERMINAL_ICON_RIGHT &&
+            event.data.pointer.y >= TERMINAL_ICON_TOP &&
+            event.data.pointer.y < TERMINAL_ICON_BOTTOM) {
+            uint32_t process_id;
+            AstraResult launch_result;
+
+            launch_result = astra_application_launch(
+                launcher->handle, TERMINAL_BUNDLE,
+                (uint16_t)(sizeof(TERMINAL_BUNDLE) - 1u), &process_id);
+            if (launch_result != ASTRA_OK) {
+                launch_error(gui->handle, launch_result);
+            }
+        }
     }
 }

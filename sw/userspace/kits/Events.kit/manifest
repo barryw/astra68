@@ -1,0 +1,6 @@
+astra-bundle 1
+kind kit
+id org.astra.events
+name "Astra Events Kit"
+version 1.0.0
+provides events.library 1 1.0.0

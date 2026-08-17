@@ -14,6 +14,8 @@
 
 static AstraGuiWindowEvent delivered;
 static uint32_t delivered_count;
+static uint32_t send_would_block;
+static uint32_t yield_count;
 
 uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
                          const uint32_t *handles, uint32_t handle_count)
@@ -21,8 +23,18 @@ uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
     (void)handles;
     assert(handle == 0x500u && size == sizeof(delivered) &&
            handle_count == 0u);
+    if (send_would_block != 0u) {
+        --send_would_block;
+        return ASTRA_SYSCALL_WOULD_BLOCK;
+    }
     memcpy(&delivered, message, sizeof(delivered));
     ++delivered_count;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t astra_yield(void)
+{
+    ++yield_count;
     return ASTRA_SYSCALL_OK;
 }
 
@@ -62,6 +74,28 @@ static int batch_has_surface_fill(uint16_t width, uint16_t height,
         if (read_be32(batch + descriptor_offset + 20u) ==
                 ((uint32_t)width << 16 | height) &&
             read_be32(command + 48u) == 0u &&
+            read_be32(command + 56u) ==
+                ((uint32_t)width << 16 | height) &&
+            (uint16_t)read_be32(command + 60u) == value)
+            return 1;
+    }
+    return 0;
+}
+
+static int batch_has_fill(int16_t x, int16_t y, uint16_t width,
+                          uint16_t height, uint16_t value)
+{
+    uint32_t count = read_be32(batch + 12u);
+    uint32_t commands = ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
+                        ASTRA_RENDER_BATCH_ARENA_OFFSET;
+
+    for (uint32_t index = 0u; index < count; ++index) {
+        const uint8_t *command = batch + commands +
+                                 index * ASTRA_RENDER_COMMAND_BYTES;
+
+        if ((read_be32(command + 4u) >> 16) == ASTRA_RENDER_OP_FILL &&
+            read_be32(command + 48u) ==
+                ((uint32_t)(uint16_t)x << 16 | (uint16_t)y) &&
             read_be32(command + 56u) ==
                 ((uint32_t)width << 16 | height) &&
             (uint16_t)read_be32(command + 60u) == value)
@@ -199,6 +233,99 @@ int main(void)
     int changed;
 
     {
+        AstraRenderBuilder builder;
+        DisplayWindow icon_window = {0};
+        uint8_t palette[8] = {0, 0, 0, 0, 0x20, 0xc0, 0x40, 0xff};
+        uint8_t pixels[16u * 16u];
+        uint16_t icon_color = astra_surface_rgb565(0x20, 0xc0, 0x40);
+        uint32_t destination;
+
+        memset(pixels, 1, sizeof(pixels));
+        icon_window.title_icon = (AstraAicon){
+            palette, sizeof(palette), 2u, 0u, 0u, 0u, 0u};
+        icon_window.title_icon_strike = (AstraAiconStrike){
+            16u, 16u, pixels, sizeof(pixels)};
+        assert(astra_render_builder_init(&builder, batch, sizeof(batch), 1u));
+        destination = astra_render_builder_surface_at(
+            &builder, WINDOW_CACHE_BASE, 64u, 32u);
+        assert(destination != 0u);
+        assert(draw_title_icon(&builder, destination, &icon_window, 13, 7));
+        assert(astra_render_builder_finish(&builder) != 0u);
+        assert(batch_has_fill(13, 7, 16u, 16u, icon_color));
+    }
+
+    {
+        DisplayState desktop = {
+            .damage = {
+                { 0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u },
+                { 0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u }
+            }
+        };
+        AstraGuiOpenWindow open = {
+            .header = {
+                .total_size = sizeof(AstraGuiOpenWindow),
+                .header_size = ASTRA_MESSAGE_HEADER_SIZE,
+                .protocol = ASTRA_GUI_PROTOCOL,
+                .protocol_version = ASTRA_GUI_VERSION,
+                .operation = ASTRA_GUI_OPEN_WINDOW,
+                .transaction_id = 1u,
+            },
+            .y = DISPLAY_WORK_TOP,
+            .width = ASTRA_DISPLAY_WIDTH,
+            .height = DISPLAY_WORK_BOTTOM - DISPLAY_WORK_TOP,
+            .type = ASTRA_WINDOW_DESKTOP,
+            .content_format = ASTRA_GUI_CONTENT_DRAW_LIST,
+        };
+
+        assert(valid_open(&open, sizeof(open), 3u));
+        add_window(&desktop, 0u, ASTRA_WINDOW_DESKTOP, 0u,
+                   DISPLAY_WORK_TOP, ASTRA_DISPLAY_WIDTH,
+                   DISPLAY_WORK_BOTTOM - DISPLAY_WORK_TOP, 0u, 0u);
+        desktop.windows[0].request.title_length = 0u;
+        desktop.windows[0].request.event_mask = 0u;
+        assert(astra_draw_list_view_init(
+            &desktop.windows[0].surface.view, lists[0], sizeof(lists[0]),
+            ASTRA_DISPLAY_WIDTH, DISPLAY_WORK_BOTTOM - DISPLAY_WORK_TOP));
+        astra_surface_clear(&desktop.windows[0].surface.view,
+                            color(theme.canvas));
+        for (uint32_t index = 0u; index < 126u; ++index)
+            astra_surface_fill(&desktop.windows[0].surface.view,
+                               20 + (int32_t)(index % 32u),
+                               20 + (int32_t)(index / 32u), 1u, 1u,
+                               color(theme.accent));
+        label(&desktop.windows[0].surface.view, 40, 104,
+              "Terminal", 8u, color(theme.text_primary));
+        assert(compose(batch, 1u, &desktop, &error) ==
+               ASTRA_RENDER_BUILDER_BYTES);
+        assert(error == ASTRA_STATUS_OK);
+    }
+
+    {
+        DisplayState desktop = {0};
+        AstraLogicalInputEvent down = {
+            .type = ASTRA_INPUT_EVENT_POINTER_BUTTON,
+            .flags = ASTRA_INPUT_LOGICAL_DOWN,
+            .timestamp_ms = 1u,
+            .code = ASTRA_INPUT_BUTTON_LEFT,
+        };
+        uint32_t desktop_effects = 0u;
+        uint32_t desktop_frame = 0u;
+        uint32_t desktop_timestamp = 0u;
+
+        add_window(&desktop, 0u, ASTRA_WINDOW_DESKTOP, 0u,
+                   DISPLAY_WORK_TOP, ASTRA_DISPLAY_WIDTH,
+                   DISPLAY_WORK_BOTTOM - DISPLAY_WORK_TOP, 0u, 0u);
+        desktop.damage[0] = (DamageRect){0};
+        desktop.damage[1] = (DamageRect){0};
+        desktop.pointer_x = 70;
+        desktop.pointer_y = 90;
+        assert(handle_pointer(&desktop, &down, &desktop_effects,
+                              &desktop_frame, &desktop_timestamp) ==
+               ASTRA_STATUS_OK);
+        assert((desktop_effects & DISPLAY_POINTER_RENDER) == 0u);
+    }
+
+    {
         DisplayState fair = {.count = 2u};
         uint32_t waits[DISPLAY_WINDOW_MAX + 2u];
         uint32_t sources[DISPLAY_WINDOW_MAX + 2u];
@@ -270,7 +397,7 @@ int main(void)
     state.capture_region = HIT_NONE;
     pointer_event(&state.windows[3], &theme,
                   ASTRA_WINDOW_EVENT_POINTER_MOTION, 0u, 77u,
-                  180, 190, 0u);
+                  180, 190, 0u, 2u);
     assert(delivered.event.type == ASTRA_WINDOW_EVENT_POINTER_MOTION);
     assert(delivered.event.data.pointer.screen_x == 180 &&
            delivered.event.data.pointer.screen_y == 190);
@@ -282,6 +409,14 @@ int main(void)
                  frame_width(&theme, state.windows[3].request.type) -
                  title_height(&theme, state.windows[3].request.type) -
                  theme.signal_height);
+    assert(delivered.event.data.pointer.click_count == 2u);
+    state.pointer_x = 100;
+    state.pointer_y = 100;
+    assert(register_click(&state, 4u, ASTRA_INPUT_BUTTON_LEFT, 1000u) == 1u);
+    state.pointer_x = 104;
+    state.pointer_y = 97;
+    assert(register_click(&state, 4u, ASTRA_INPUT_BUTTON_LEFT, 1499u) == 2u);
+    assert(register_click(&state, 4u, ASTRA_INPUT_BUTTON_LEFT, 2000u) == 1u);
 
     {
         DisplayWindow *window = &state.windows[3];
@@ -479,6 +614,30 @@ int main(void)
                               state.windows[3].request.height));
     }
     {
+        AstraGuiWindowCommand close = {
+            .header = {
+                .total_size = sizeof(AstraGuiWindowCommand),
+                .header_size = ASTRA_MESSAGE_HEADER_SIZE,
+                .protocol = ASTRA_GUI_PROTOCOL,
+                .protocol_version = ASTRA_GUI_VERSION,
+                .operation = ASTRA_GUI_WINDOW_COMMAND,
+                .transaction_id = 1u,
+            },
+            .window = state.windows[3].id,
+            .generation = state.windows[3].generation,
+            .action = ASTRA_GUI_WINDOW_CLOSE,
+        };
+
+        assert(valid_command(&close, sizeof(close), 0u,
+                             state.windows[3].id,
+                             state.windows[3].request.width,
+                             state.windows[3].request.height));
+        assert(!valid_command(&close, sizeof(close), 1u,
+                              state.windows[3].id,
+                              state.windows[3].request.width,
+                              state.windows[3].request.height));
+    }
+    {
         DisplayWindow *window = &state.windows[3];
         AstraLogicalInputEvent button_down = {
             .type = ASTRA_INPUT_EVENT_POINTER_BUTTON,
@@ -568,6 +727,8 @@ int main(void)
         {
             uint32_t before = delivered_count;
 
+            send_would_block = 2u;
+            yield_count = 0u;
             assert(handle_pointer(&state, &button_down, &effects,
                                   &frame_window, &frame_timestamp) ==
                    ASTRA_STATUS_OK);
@@ -576,7 +737,8 @@ int main(void)
                    ASTRA_STATUS_OK);
             assert(delivered_count == before + 1u &&
                    delivered.event.type ==
-                       ASTRA_WINDOW_EVENT_CLOSE_REQUEST);
+                       ASTRA_WINDOW_EVENT_CLOSE_REQUEST &&
+                   yield_count == 2u);
         }
     }
     {

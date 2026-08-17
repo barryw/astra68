@@ -33,8 +33,8 @@
 #define ASTRA_KERNEL_DEBUG_SURFACE 1
 #endif
 
-/* Supervisor plus five GUI services and one foreground command. */
-#define KERNEL_PROCESS_MAX 7u
+/* Six resident system processes plus nine concurrent application processes. */
+#define KERNEL_PROCESS_MAX 15u
 #define KERNEL_PROCESS_CODE_BASE 0x00100000u
 #define KERNEL_PROCESS_STACK_BASE KERNEL_THREAD_STACK_BASE
 /* The top of the first slot's reservation: where its stack pointer starts. */
@@ -162,6 +162,8 @@ typedef struct KernelSchedulerStats {
     uint32_t created_processes;
     uint32_t live_processes;
     uint32_t dead_processes;
+    uint32_t launch_failures;
+    uint32_t last_launch_failure;
     uint32_t context_switches;
     uint32_t timer_preemptions;
     uint32_t voluntary_switches;

@@ -18,6 +18,7 @@ typedef struct AstraProcessFilesystem {
 #define ASTRA_PROCESS_FILESYSTEM_INIT { ASTRA_FILESYSTEM_INIT, 0, 0 }
 
 uint32_t astra_process_vfs_init(const AstraStartupInfo *startup);
+void astra_process_vfs_close(void);
 AstraAssignTable *astra_process_vfs_assigns(void);
 AstraVfsClient *astra_process_vfs_client(void);
 AstraVfsClient *astra_process_vfs_client_for(const AstraAssign *assign);
@@ -25,6 +26,9 @@ AstraVfsClient *astra_process_vfs_assign_client(const AstraAssign *assign,
                                                 void *context);
 uint32_t astra_process_filesystem_open(AstraProcessFilesystem *filesystem,
                                        const AstraStartupInfo *startup);
+uint32_t astra_process_read_file(AstraProcessFilesystem *filesystem,
+                                 const char *path, void *bytes,
+                                 uint32_t capacity, uint32_t *length);
 void astra_process_filesystem_close(AstraProcessFilesystem *filesystem);
 
 #endif

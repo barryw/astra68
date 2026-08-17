@@ -35,11 +35,16 @@
 #define SCREEN_LEFT_MARGIN 2u
 #define SCREEN_RIGHT_MARGIN 2u
 #define SCREEN_BOTTOM_MARGIN 2u
+#define CPU_BENCHMARK_SAMPLES 5u
+#define CPU_REFERENCE_DECODE_US 39600u
+#define CPU_REFERENCE_KHZ 30000u
 
 static uint32_t screen_row;
 static uint32_t screen_col;
 static int screen_enabled;
 static uint32_t kernel_load_cycles;
+static uint32_t cpu_effective_hz;
+static uint32_t cpu_benchmark_us;
 static const char *last_failure_phase;
 static uint32_t last_failure_address;
 static uint32_t last_failure_expected;
@@ -221,6 +226,18 @@ static const char *cpu_name(uint32_t model, uint32_t implementation)
     if (implementation == CPU_IMPL_TGM2) return "TG68K.C 68030 MMU2";
     if (model == CPU_MODEL_68030) return "68030-compatible";
     return "unknown";
+}
+
+static uint32_t cpu_effective_hz_from_us(uint32_t elapsed_us)
+{
+    uint32_t kilohertz;
+
+    if (elapsed_us == 0u || elapsed_us > 10000000u)
+        return VESTA->CPU_HZ;
+    kilohertz = (CPU_REFERENCE_KHZ * CPU_REFERENCE_DECODE_US) / elapsed_us;
+    if (kilohertz == 0u || kilohertz > UINT32_MAX / 1000u)
+        return VESTA->CPU_HZ;
+    return kilohertz * 1000u;
 }
 
 static void print_inventory(void)
@@ -1043,6 +1060,32 @@ static int load_kernel_image(uint32_t *image_size)
     return 1;
 }
 
+static int benchmark_cpu(void)
+{
+    uint32_t ignored_size;
+    uint32_t best = UINT32_MAX;
+
+    if ((VESTA->CPU_FEATURES & CPU_FEAT_HOST_TIME) == 0u) {
+        cpu_benchmark_us = 0u;
+        cpu_effective_hz = VESTA->CPU_HZ;
+        return 1;
+    }
+    /* Warm translation and host scheduling can only make a sample slower.
+     * The fastest verified decode is the uncontended throughput result. */
+    for (uint32_t sample = 0u; sample < CPU_BENCHMARK_SAMPLES; ++sample) {
+        uint32_t started = VESTA->HOST_TIME_US;
+        uint32_t elapsed;
+
+        if (!load_kernel_image(&ignored_size)) return 0;
+        elapsed = VESTA->HOST_TIME_US - started;
+        if (elapsed != 0u && elapsed < best) best = elapsed;
+    }
+    if (best == UINT32_MAX) return post_failure_text("CPU benchmark timer");
+    cpu_benchmark_us = best;
+    cpu_effective_hz = cpu_effective_hz_from_us(best);
+    return 1;
+}
+
 /*
  * The one initial user image. Firmware does not parse it: the kernel owns the
  * ELF acceptance profile. Firmware only places it where the kernel can read it
@@ -1097,6 +1140,7 @@ static int prepare_kernel_handoff(void)
     load_started = VESTA->CPU_CYCLES_LO;
     if (!load_kernel_image(&image_size)) return 0;
     kernel_load_cycles = VESTA->CPU_CYCLES_LO - load_started;
+    if (!benchmark_cpu()) return 0;
     if (!load_user_image(&user_image_size, &user_image_reservation)) return 0;
 
     astra_early_log_init(log, ASTRA_EARLY_LOG_SIZE);
@@ -1119,6 +1163,7 @@ static int prepare_kernel_handoff(void)
     kernel_boot_info.cpu_implementation = VESTA->CPU_IMPL;
     kernel_boot_info.cpu_features = VESTA->CPU_FEATURES;
     kernel_boot_info.cpu_hz = VESTA->CPU_HZ;
+    kernel_boot_info.cpu_effective_hz = cpu_effective_hz;
     kernel_boot_info.ram_base = VESTA->RAM_BASE;
     kernel_boot_info.ram_size = VESTA->RAM_SIZE;
     kernel_boot_info.rom_base = VESTA->ROM_BASE;
@@ -1232,6 +1277,15 @@ void kmain(void)
     uart_puts("OK, ");
     uart_dec32(kernel_load_cycles);
     uart_puts(" cycles\n");
+    uart_puts("CPU benchmark ...... ");
+    uart_dec32(cpu_effective_hz);
+    uart_puts(" Hz 68030 equivalent");
+    if (cpu_benchmark_us != 0u) {
+        uart_puts(" (best ");
+        uart_dec32(cpu_benchmark_us);
+        uart_puts(" us kernel decode)");
+    }
+    uart_putc('\n');
     uart_puts("Starting Axiom kernel\n");
     if (!astra_boot_splash_stop())
         idle_forever("HALTED: DISPLAY HANDOFF FAILURE\n",

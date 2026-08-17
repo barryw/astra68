@@ -3606,10 +3606,11 @@ static void test_real_handle_exhaustion_rolls_back_thread_create(void)
      * the "full" it was asserting about never happened.
     */
     const uint32_t port_pairs = KERNEL_PORT_OWNER_MAX;
-    const uint32_t area_count = 3u;
+    const uint32_t area_count = KERNEL_AREA_OWNER_MAX;
+    const uint32_t ring_count = KERNEL_RING_OWNER_MAX;
     const uint32_t child_count = KERNEL_HANDLE_MAX_ENTRIES - 2u -
                                  KERNEL_SYNC_OWNER_MAX - 2u * port_pairs -
-                                 area_count;
+                                 area_count - 2u * ring_count - 1u;
     KernelCpuContext *next;
     KernelMemoryStats baseline;
     KernelMemoryStats before_failure;
@@ -3623,6 +3624,7 @@ static void test_real_handle_exhaustion_rolls_back_thread_create(void)
     KernelVmStats after_vm;
     uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT];
     uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t area_handles[KERNEL_AREA_OWNER_MAX];
     uint32_t process_id;
 
     initialize_test();
@@ -3666,6 +3668,27 @@ static void test_real_handle_exhaustion_rolls_back_thread_create(void)
                    registers, KERNEL_PROCESS_STACK_TOP - 8u, frame,
                    &next) == KERNEL_PROCESS_OK);
         assert(next->data[0] == ASTRA_SYSCALL_OK);
+        area_handles[index] = next->data[1];
+    }
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_HANDLE_DUPLICATE;
+    registers[1] = area_handles[0];
+    registers[2] = ASTRA_RIGHT_READ;
+    assert(kernel_process_on_syscall(
+               registers, KERNEL_PROCESS_STACK_TOP - 8u, frame,
+               &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    for (uint32_t index = 0u; index < ring_count; ++index) {
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_RING_CREATE;
+        registers[1] = area_handles[index];
+        registers[2] = 0u;
+        registers[3] = 16u;
+        registers[4] = 4u;
+        assert(kernel_process_on_syscall(
+                   registers, KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                   &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
     }
     /* Ports come in pairs, and are what closes the gap exactly. */
     for (uint32_t index = 0u; index < port_pairs; ++index) {
@@ -3684,7 +3707,9 @@ static void test_real_handle_exhaustion_rolls_back_thread_create(void)
      * rollback bug hides rather than where it shows.
      */
     _Static_assert(KERNEL_HANDLE_MAX_ENTRIES - 2u - KERNEL_SYNC_OWNER_MAX -
-                           2u * KERNEL_PORT_OWNER_MAX - 3u <=
+                           2u * KERNEL_PORT_OWNER_MAX -
+                           KERNEL_AREA_OWNER_MAX -
+                           2u * KERNEL_RING_OWNER_MAX - 1u <=
                        KERNEL_PROCESS_THREAD_MAX,
                    "this test can no longer fill the handle table exactly: "
                    "syncs, ports and threads together fall short of it");
@@ -7103,6 +7128,8 @@ static void test_a_program_can_launch_a_program(void)
         assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
         assert(kernel_process_stats(&after));
         assert(after.live_processes == before.live_processes);
+        assert(after.launch_failures == before.launch_failures + 1u);
+        assert(after.last_launch_failure == KERNEL_PROCESS_INVALID_ARGUMENT);
         assert(kernel_user_copy_to_asm(user_image, launch_image,
                                        sizeof(launch_image)) ==
                KERNEL_USER_COPY_OK);

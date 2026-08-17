@@ -380,7 +380,7 @@ static void astra_display_service(void *opaque)
     if (qatomic_read(&display->mailbox->completion_sequence) !=
             display->mailbox_sequence) {
         timer_mod_ns(display->service_timer,
-                     qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                     qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL_RT) +
                          DISPLAY_SERVICE_DELAY_NS);
         return;
     }
@@ -486,7 +486,7 @@ static void astra_display_submit(Astra68State *s)
 #endif
     }
     timer_mod_ns(display->service_timer,
-                 qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                 qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL_RT) +
                      DISPLAY_SERVICE_DELAY_NS);
 }
 
@@ -510,6 +510,30 @@ static void astra_display_reset(Astra68State *s)
     display->cursor_visible = 0u;
     s->astraea.irq_status &= ~ASTRAEA_IRQ_DRAW_DONE;
     astra_update_irq(s);
+}
+
+static void astra_display_panic_text(Astra68State *s)
+{
+    AstraDisplayState *display = &s->display;
+
+    if (!display->mailbox_enabled)
+        return;
+    if (++display->mailbox_sequence == 0u)
+        ++display->mailbox_sequence;
+    qatomic_set(&display->mailbox->magic, ASTRA_DISPLAY_MAILBOX_MAGIC);
+    qatomic_set(&display->mailbox->version,
+                ASTRA_DISPLAY_MAILBOX_VERSION_1_4);
+    qatomic_set(&display->mailbox->request_id, UINT32_MAX);
+    qatomic_set(&display->mailbox->operation, ASTRA_DISPLAY_PANIC_TEXT);
+    qatomic_set(&display->mailbox->color_rgb565, 0u);
+    qatomic_set(&display->mailbox->frame_pitch, 0u);
+    qatomic_set(&display->mailbox->frame_bytes, 0u);
+    smp_wmb();
+    qatomic_set(&display->mailbox->request_sequence,
+                display->mailbox_sequence);
+#ifdef CONFIG_LINUX
+    qemu_futex_wake((void *)&display->mailbox->request_sequence, 1);
+#endif
 }
 
 static uint32_t astra_input_level(const AstraInputState *input)
@@ -1025,7 +1049,7 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
     case 0x018: return s->scratch;
     case 0x01c: return 0x00068030;
     case 0x020: return 0x54474d32;
-    case 0x024: return 0x0000000d;
+    case 0x024: return 0x0000001d;
     case 0x028: return ASTRA_CPU_HZ;
     case 0x02c: return ASTRA_SDRAM_BASE;
     case 0x030: return s->ram_size;
@@ -1054,6 +1078,8 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
     case 0x0f0:
         cycles = astra_now_cycles(s);
         return cycles >> 32;
+    case 0x12c:
+        return qemu_clock_get_ns(QEMU_CLOCK_REALTIME) / 1000u;
     case 0x150:
         return astra_block_present(s) ? BLOCK_ID_MAGIC : 0;
     case 0x154:
@@ -1174,6 +1200,7 @@ static void astra_finish(Astra68State *s, uint32_t value)
 
     if (value == ASTRA_KERNEL_PANIC) {
         result = "PANIC";
+        astra_display_panic_text(s);
     } else if (value == ASTRA_KERNEL_SOAK) {
         result = "SOAK";
     } else {
@@ -1916,8 +1943,8 @@ static void astra68_init(MachineState *machine)
                                                &s->timers[i]);
     }
     s->vega.vblank_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, astra_vblank, s);
-    s->display.service_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
-                                            astra_display_service, s);
+    s->display.service_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL_RT,
+                                             astra_display_service, s);
     timer_mod_ns(s->vega.vblank_timer,
                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
                  NANOSECONDS_PER_SECOND / 60);

@@ -4,6 +4,8 @@
 #include <volume.h>
 
 #include <astra/bytes.h>
+#include <astra/area.h>
+#include <astra/bundle.h>
 #include <astra/event.h>
 #include <astra/event_control.h>
 #include <astra/event_descriptor.h>
@@ -13,6 +15,7 @@
 #include <astra/input_service.h>
 #include <astra/keymap.h>
 #include <astra/font_library.h>
+#include <astra/port.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/service.h>
@@ -25,7 +28,7 @@
 #include <astra/vfs_process.h>
 #include <astra/window.h>
 
-#define TERMINAL_EVENT_PREFIX_RECORDS 6u
+#define TERMINAL_EVENT_PREFIX_RECORDS 8u
 #define TERMINAL_MARGIN_X 10u
 #define TERMINAL_MARGIN_Y 8u
 #define TERMINAL_FONT_HEIGHT ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT
@@ -37,7 +40,8 @@ enum {
     TERMINAL_FAIL_SURFACE = ASTRA_STATUS_PROGRAM_FIRST,
     TERMINAL_FAIL_WINDOW = ASTRA_STATUS_PROGRAM_FIRST + 0x10u,
     TERMINAL_FAIL_FONT = ASTRA_STATUS_PROGRAM_FIRST + 0x20u,
-    TERMINAL_FAIL_LIBRARY = ASTRA_STATUS_PROGRAM_FIRST + 0x30u
+    TERMINAL_FAIL_LIBRARY = ASTRA_STATUS_PROGRAM_FIRST + 0x30u,
+    TERMINAL_FAIL_ICON = ASTRA_STATUS_PROGRAM_FIRST + 0x40u
 };
 
 ASTRA_PROGRAM("terminal", 0, 1, 0, "Barry Walker",
@@ -45,7 +49,7 @@ ASTRA_PROGRAM("terminal", 0, 1, 0, "Barry Walker",
 
 /*
  * Message ids are descriptor addresses and the installed catalog is still the
- * supervisor catalog. Six supervisor descriptors precede console_shell.c in
+ * supervisor catalog. Eight supervisor descriptors precede console_shell.c in
  * that catalog, so reserve their addresses here. The Makefile compares the
  * remaining bytes and refuses a build if either layout drifts.
  *
@@ -84,6 +88,64 @@ typedef struct WindowTerminal {
 
 static WindowTerminal window_terminal;
 static char terminal_line[ASTRA_TERMINAL_COLUMNS_MAX];
+static char bundle_manifest_text[ASTRA_BUNDLE_MANIFEST_MAX + 1u];
+
+static void close_area(AstraArea *area)
+{
+    AstraResult ignored = astra_area_close(area);
+
+    (void)ignored;
+}
+
+static int append(char *path, uint32_t capacity, const char *text)
+{
+    uint32_t at = 0u;
+
+    while (at < capacity && path[at] != '\0') ++at;
+    while (*text != '\0') {
+        if (at + 1u >= capacity) return 0;
+        path[at++] = *text++;
+    }
+    path[at] = '\0';
+    return 1;
+}
+
+static uint32_t load_title_icon(AstraArea *area, uint32_t *length)
+{
+    AstraBundleManifest manifest;
+    char path[ASTRA_VFS_PATH_MAX] = "APP:";
+    uint32_t manifest_length = 0u;
+    uint32_t line = 0u;
+    AstraResult result;
+
+    if (astra_process_read_file(&process_filesystem, "APP:manifest",
+                                bundle_manifest_text,
+                                ASTRA_BUNDLE_MANIFEST_MAX,
+                                &manifest_length) != ASTRA_VFS_OK)
+        return TERMINAL_FAIL_ICON;
+    bundle_manifest_text[manifest_length] = '\0';
+    if (astra_bundle_manifest_parse(bundle_manifest_text, manifest_length,
+                                    &manifest, &line) != ASTRA_BUNDLE_OK ||
+        !append(path, sizeof(path), manifest.icon))
+        return TERMINAL_FAIL_ICON;
+    result = astra_area_create(
+        ASTRA_WINDOW_TITLE_ICON_BYTES_MAX,
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+            ASTRA_RIGHT_TRANSFER,
+        area);
+    if (result == ASTRA_OK)
+        result = astra_area_map(area,
+                                ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE);
+    if (result != ASTRA_OK ||
+        astra_process_read_file(&process_filesystem, path, area->address,
+                                area->size, length) != ASTRA_VFS_OK ||
+        *length == 0u) {
+        if (area->handle != ASTRA_INVALID_HANDLE)
+            close_area(area);
+        return TERMINAL_FAIL_ICON;
+    }
+    return ASTRA_STATUS_OK;
+}
 
 static const AstraStartupCapability *
 capability(const AstraStartupInfo *startup,
@@ -174,6 +236,7 @@ static uint32_t load_graphics_kit(void)
         return TERMINAL_FAIL_LIBRARY;
     graphics_library = graphics_handle->exports;
     if (graphics_library->abi_major != ASTRA_GRAPHICS_LIBRARY_ABI_MAJOR ||
+        graphics_library->abi_minor < ASTRA_GRAPHICS_LIBRARY_ABI_MINOR ||
         graphics_library->structure_size < sizeof(*graphics_library))
         return TERMINAL_FAIL_LIBRARY;
     return ASTRA_STATUS_OK;
@@ -442,12 +505,14 @@ static int window_next_key(void *context, uint32_t *key)
 
 int astra_main(const AstraStartupInfo *startup)
 {
+    AstraArea title_icon = ASTRA_AREA_INIT;
     const AstraStartupCapability *capabilities;
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *gui;
     const AstraStartupCapability *control;
     ConsoleShellBackend backend;
     uint32_t status;
+    uint32_t title_icon_length = 0u;
 
     if (!astra_startup_validate(startup) ||
         startup->capabilities_address == 0u)
@@ -466,6 +531,8 @@ int astra_main(const AstraStartupInfo *startup)
     event_control = control->handle;
     if (status == ASTRA_STATUS_OK)
         status = load_graphics_kit();
+    if (status == ASTRA_STATUS_OK)
+        status = load_title_icon(&title_icon, &title_icon_length);
 
     (void)memset(&window_terminal, 0, sizeof(window_terminal));
     window_terminal.width = 840u;
@@ -507,13 +574,19 @@ int astra_main(const AstraStartupInfo *startup)
         info.event_mask = ASTRA_WINDOW_SUBSCRIBE_DEFAULT |
                           ASTRA_WINDOW_SUBSCRIBE_KEY |
                           ASTRA_WINDOW_SUBSCRIBE_TEXT;
-        result = astra_window_create(gui->handle, window_terminal.surface.area,
+        info.title_icon_area = title_icon.handle;
+        info.title_icon_length = title_icon_length;
+        result = astra_window_create(gui->handle,
+                                     window_terminal.surface.area,
                                      &info, &window_terminal.window);
+        close_area(&title_icon);
         if (result != ASTRA_OK)
             status = TERMINAL_FAIL_WINDOW + (uint32_t)(-result);
         else
             window_terminal.live = 1u;
     }
+    if (title_icon.handle != ASTRA_INVALID_HANDLE)
+        close_area(&title_icon);
 
     ready(bootstrap->handle, status);
     (void)astra_close(bootstrap->handle);

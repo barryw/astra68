@@ -284,7 +284,7 @@ static void test_ring_injection_releases_child_authority(void)
     assert(kernel_allocation_valid());
 }
 
-static void test_overlap_corruption_and_creator_death(void)
+static void test_overlap_corruption_and_creator_death_survival(void)
 {
     KernelAreaPoolStats area_stats;
     KernelRingPoolStats ring_stats;
@@ -315,8 +315,8 @@ static void test_overlap_corruption_and_creator_death(void)
     assert(snapshot.producer_terminal == ASTRA_SYSCALL_IO_ERROR);
     assert(kernel_area_process_died(55u, NULL, NULL) == KERNEL_AREA_OK);
     assert(kernel_area_pool_stats(&area_stats));
-    assert(area_stats.active_areas == 1u && area_stats.closing_areas == 1u);
-    assert(area_stats.committed_pages == 0u);
+    assert(area_stats.active_areas == 1u && area_stats.closing_areas == 0u);
+    assert(area_stats.committed_pages == 2u);
     kernel_ring_handle_release(
         first, (void *)(uintptr_t)KERNEL_RING_ENDPOINT_PRODUCER);
     kernel_ring_handle_release(
@@ -578,7 +578,7 @@ int main(void)
                    "bulk-ring consumer offset");
     test_ring_injection_releases_child_authority();
     test_header_batching_waits_and_wrap();
-    test_overlap_corruption_and_creator_death();
+    test_overlap_corruption_and_creator_death_survival();
     test_validation_no_advance_and_consumer_death();
     test_missed_wakeup_and_wait_multiple();
     test_owner_death_wakes_waiters();

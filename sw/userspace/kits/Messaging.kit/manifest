@@ -1,0 +1,6 @@
+astra-bundle 1
+kind kit
+id org.astra.messaging
+name "Astra Messaging Kit"
+version 1.0.0
+provides messaging.library 1 1.0.0

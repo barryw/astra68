@@ -38,19 +38,16 @@ LOCAL_COMMANDS_DIRECTORY = "local/commands"
 DEFAULT_COMMANDS = os.path.join(REPOSITORY, "sw/userspace/commands/build/m68k")
 SERVICES_DIRECTORY = "services"
 LIBS_DIRECTORY = "libs"
+APPS_DIRECTORY = "apps"
 STARTUP_DIRECTORY = "startup"
 STARTUP_NAME = "system"
 DEFAULT_SERVICES = os.path.join(
     REPOSITORY, "sw/userspace/services")
-DEFAULT_LIBRARIES = os.path.join(REPOSITORY, "sw/userspace")
-KIT_LIBRARIES = (
-    ("font.library", "abi-1/1.0.0/m68k-68030",
-     "graphics/build/m68k/libraries/font.library"),
-    ("graphics.library", "abi-1/1.0.0/m68k-68030",
-     "graphics/build/m68k/libraries/graphics.library"),
-    ("filesystem.library", "abi-1/1.0.0/m68k-68030",
-     "vfs/build/m68k/libraries/filesystem.library"),
-)
+DEFAULT_KITS = os.path.join(REPOSITORY, "sw/userspace/kits/build")
+DEFAULT_APPS = os.path.join(REPOSITORY, "sw/userspace/apps/build")
+KIT_BUNDLES = ("Graphics.kit", "Filesystem.kit", "Interface.kit",
+               "Events.kit", "Messaging.kit")
+APPLICATION_BUNDLES = ("Terminal.app",)
 STARTUP_MANIFEST = ("service SERVICES:storage grants BLOCK_DEVICE BLOCK_IRQ "
                     "serves SYS:r required\n"
                     "service SERVICES:events grants SYS:r STORE:rw LIBS:r "
@@ -68,9 +65,9 @@ DISPLAY_STARTUP_MANIFEST = (
     "serves INPUT_SERVICE required\n"
     "service SERVICES:display grants DISPLAY DISPLAY_IRQ "
     "INPUT_SERVICE serves GUI required\n"
-    "application SERVICES:terminal grants GUI WORK:rw COMMANDS:r LIBS:r EVENTS:r "
-    "EVENT_CONTROL delegates required\n")
-DISPLAY_SERVICES = ("storage", "events", "input", "display", "terminal")
+    "application SERVICES:desktop grants GUI APP_LAUNCH APPS:r LIBS:r "
+    "required\n")
+DISPLAY_SERVICES = ("storage", "events", "input", "display", "desktop")
 
 
 def ext4_partition(image):
@@ -153,18 +150,38 @@ def _services(directory, names):
     return found
 
 
-def _libraries(directory):
+def _bundles(directory, names):
     found = []
-    for name, version_path, relative_path in KIT_LIBRARIES:
-        path = os.path.join(directory, relative_path)
-        if not os.path.isfile(path):
-            raise RuntimeError("no shared library at %s -- build kits first" %
-                               path)
-        found.append((name, version_path, path))
+    for name in names:
+        path = os.path.join(directory, name)
+        if not os.path.isdir(path) or not os.path.isfile(
+                os.path.join(path, "manifest")):
+            raise RuntimeError("no complete bundle at %s -- build bundles "
+                               "first" % path)
+        found.append(path)
     return found
 
 
-def install(image, catalog=None, commands=None, services=None, libraries=None,
+def _install_bundle(volume, source, destination):
+    for root, directories, files in os.walk(source):
+        if any(os.path.islink(os.path.join(root, name))
+               for name in directories + files):
+            raise RuntimeError("bundle contains a symbolic link: %s" % source)
+        relative = os.path.relpath(root, source)
+        target = destination if relative == "." else \
+            destination + "/" + relative
+        _debugfs(volume, "mkdir %s" % target, "bundle directory",
+                 optional=True)
+        for name in files:
+            host = os.path.join(root, name)
+            guest = target + "/" + name
+            _debugfs(volume, "rm %s" % guest, "old bundle file",
+                     optional=True)
+            _debugfs(volume, "write %s %s" % (host, guest), "bundle file")
+
+
+def install(image, catalog=None, commands=None, services=None, kits=None,
+            apps=None,
             service_names=("storage", "events", "terminal"),
             manifest_text=STARTUP_MANIFEST):
     """Writes this build's catalog and commands into the image's volume.
@@ -183,13 +200,15 @@ def install(image, catalog=None, commands=None, services=None, libraries=None,
     catalog = catalog or DEFAULT_CATALOG
     commands = commands or DEFAULT_COMMANDS
     services = services or DEFAULT_SERVICES
-    libraries = libraries or DEFAULT_LIBRARIES
+    kits = kits or DEFAULT_KITS
+    apps = apps or DEFAULT_APPS
     if not os.path.exists(catalog):
         raise RuntimeError("no catalog at %s -- build the supervisor first" %
                            catalog)
     built = _commands(commands)
     service_images = _services(services, service_names)
-    library_images = _libraries(libraries)
+    kit_bundles = _bundles(kits, KIT_BUNDLES)
+    application_bundles = _bundles(apps, APPLICATION_BUNDLES)
     offset, length = ext4_partition(image)
     with tempfile.TemporaryDirectory(prefix="astra-volume-") as temporary:
         volume = os.path.join(temporary, "volume.img")
@@ -225,19 +244,17 @@ def install(image, catalog=None, commands=None, services=None, libraries=None,
 
         _debugfs(volume, "mkdir /%s" % LIBS_DIRECTORY,
                  "the shared Kit directory", optional=True)
-        for name, version_path, path in library_images:
-            parent = "/%s/%s" % (LIBS_DIRECTORY, name)
-            _debugfs(volume, "mkdir %s" % parent,
-                     "the library directory", optional=True)
-            for component in version_path.split("/"):
-                parent += "/" + component
-                _debugfs(volume, "mkdir %s" % parent,
-                         "the library version directory", optional=True)
-            target = parent + "/" + name
-            _debugfs(volume, "rm %s" % target, "an old shared library",
-                     optional=True)
-            _debugfs(volume, "write %s %s" % (path, target),
-                     "shared library " + name)
+        for bundle in kit_bundles:
+            _install_bundle(volume, bundle,
+                            "/%s/%s" % (LIBS_DIRECTORY,
+                                         os.path.basename(bundle)))
+
+        _debugfs(volume, "mkdir /%s" % APPS_DIRECTORY,
+                 "the application directory", optional=True)
+        for bundle in application_bundles:
+            _install_bundle(volume, bundle,
+                            "/%s/%s" % (APPS_DIRECTORY,
+                                         os.path.basename(bundle)))
 
         _debugfs(volume, "mkdir /%s" % STARTUP_DIRECTORY,
                  "the startup directory", optional=True)

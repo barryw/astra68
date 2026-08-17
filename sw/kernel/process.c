@@ -105,7 +105,7 @@ typedef struct KernelLibraryCacheEntry {
 } KernelLibraryCacheEntry;
 
 #if defined(__m68k__)
-_Static_assert(sizeof(KernelProcess) == 1216u,
+_Static_assert(sizeof(KernelProcess) == 1496u,
                "process record size changed; update the memory budget");
 #endif
 
@@ -3013,6 +3013,8 @@ static KernelProcessStatus publish_startup_block(
     info.syscall_abi_version = ASTRA_SYSCALL_ABI_VERSION;
     info.process_handle = process_handle;
     info.thread_handle = thread_handle;
+    info.launch_source = arguments != NULL ? arguments->source :
+                                             ASTRA_LAUNCH_SOURCE_SYSTEM;
     info.capability_count = count;
     info.capabilities_address =
         KERNEL_PROCESS_STARTUP_BASE + ASTRA_STARTUP_INFO_SIZE;
@@ -4963,7 +4965,11 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             }
             if (arguments.count > ASTRA_LAUNCH_ARGUMENT_MAX ||
                 arguments.length > ASTRA_LAUNCH_ARGUMENT_BYTES ||
-                (arguments.count != 0u) != (arguments.length != 0u)) {
+                (arguments.count != 0u) != (arguments.length != 0u) ||
+                arguments.source > ASTRA_LAUNCH_SOURCE_DESKTOP ||
+                arguments.reserved != 0u ||
+                (arguments.count == 0u &&
+                 arguments.source != ASTRA_LAUNCH_SOURCE_SYSTEM)) {
                 result = ASTRA_SYSCALL_INVALID_ARGUMENT;
                 break;
             }
@@ -5043,6 +5049,10 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         launch_status = kernel_process_launch(
             NULL, image_size, image, &current->handles, requested, grant_count,
             arguments.count != 0u ? &arguments : NULL, &child_id);
+        if (launch_status != KERNEL_PROCESS_OK) {
+            ++scheduler_stats.launch_failures;
+            scheduler_stats.last_launch_failure = (uint32_t)launch_status;
+        }
         if (launch_status == KERNEL_PROCESS_INVALID_ARGUMENT) {
             result = ASTRA_SYSCALL_INVALID_ARGUMENT;
             break;
@@ -6812,6 +6822,8 @@ bool kernel_process_stats(KernelSchedulerStats *stats)
     stats->created_processes = scheduler_stats.created_processes;
     stats->live_processes = scheduler_stats.live_processes;
     stats->dead_processes = scheduler_stats.dead_processes;
+    stats->launch_failures = scheduler_stats.launch_failures;
+    stats->last_launch_failure = scheduler_stats.last_launch_failure;
     stats->context_switches = scheduler_stats.context_switches;
     stats->timer_preemptions = scheduler_stats.timer_preemptions;
     stats->voluntary_switches = scheduler_stats.voluntary_switches;

@@ -22,13 +22,11 @@
  * waited for an answer that could not be produced. Nothing was broken and
  * nothing said so.
  *
- * The protected GUI terminal adds the seventh live process needed to launch a
- * foreground command while storage, events, input, display, terminal, and the
- * supervisor remain resident. Adding the read-only LIBS: namespace raises the
- * exact demand to 38. The table remains a bounded two-word bitmap and the
- * compile-time demand proof below remains exact.
+ * Concurrent application launches increase the supervisor's live process and
+ * reply handles. Forty-eight keeps that measured demand bounded, with explicit
+ * headroom, while retaining the existing two-word bitmap.
  */
-#define KERNEL_HANDLE_MAX_ENTRIES 38u
+#define KERNEL_HANDLE_MAX_ENTRIES 48u
 #define KERNEL_HANDLE_BITMAP_WORDS \
     ((KERNEL_HANDLE_MAX_ENTRIES + 31u) / 32u)
 #define KERNEL_HANDLE_TRANSFER_MAX 8u

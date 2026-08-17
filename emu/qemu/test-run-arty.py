@@ -17,7 +17,7 @@ def write_executable(path, text):
     path.chmod(0o755)
 
 
-def fixture(directory, delay):
+def fixture(directory, delay, output="", status=0):
     root = pathlib.Path(directory)
     (root / "qemu/bin").mkdir(parents=True)
     (root / "qemu/lib").mkdir()
@@ -33,6 +33,8 @@ while :; do sleep 1; done
     write_executable(root / "qemu/bin/qemu-system-m68k-astra", f"""#!/bin/sh
 printf '%s\\n' "$@" >"{root}/qemu.args"
 sleep {delay}
+printf '%s' {output!r}
+exit {status}
 """)
     write_executable(root / "bin/astra-input-hotplug.py", f"""#!/usr/bin/env python3
 import pathlib, signal, sys, time
@@ -56,6 +58,9 @@ def main():
         qemu_args = (root / "qemu.args").read_text().splitlines()
         assert qemu_args.count("-qmp") == 1
         assert "-no-reboot" not in qemu_args
+        assert qemu_args[qemu_args.index("-display") + 1] == "none"
+        assert qemu_args[qemu_args.index("-serial") + 1] == "stdio"
+        assert "-nographic" not in qemu_args
         assert not any("input-linux" in argument for argument in qemu_args)
         hotplug_args = (root / "hotplug.args").read_text().splitlines()
         assert hotplug_args == ["--qmp", str(root / "run/qmp.sock")]
@@ -79,6 +84,17 @@ def main():
         finally:
             first.terminate()
             first.wait(timeout=2.0)
+    with tempfile.TemporaryDirectory() as directory:
+        root = fixture(directory, 0, "*** AXIOM KERNEL PANIC ***\n"
+                       "Fault:  0x40A00024\nSYSTEM HALTED\n", 1)
+        environment = dict(os.environ, ASTRA_ROOT=str(root))
+        result = subprocess.run([str(RUN_ARTY)], env=environment,
+                                text=True, capture_output=True, check=False)
+        assert result.returncode == 1
+        report = (root / "log/panic-latest.log").read_text()
+        assert "AXIOM KERNEL PANIC" in report
+        assert "Fault:  0x40A00024" in report
+        assert "SYSTEM HALTED" in report
     print("Astra Arty launcher tests passed")
 
 

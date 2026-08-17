@@ -46,7 +46,7 @@ TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/vfs_assign.o build/m68k/vfs_path.o \
 	build/m68k/vfs_local_transport.o build/m68k/vfs_port_transport.o \
 	build/m68k/vfs_ext4_backend.o build/m68k/vfs_union.o \
-	build/m68k/vfs_process.o
+	build/m68k/vfs_process.o build/m68k/vfs_bundle.o
 FILESYSTEM_LIBRARY := build/m68k/libraries/filesystem.library
 FILESYSTEM_LIBRARY_OBJECTS := build/m68k/library/filesystem_library.o \
 	build/m68k/library/vfs_client.o build/m68k/library/vfs_assign.o \
@@ -73,6 +73,12 @@ build/m68k/vfs_port_transport.o: src/vfs_port_transport.c $(HEADERS)
 		-c $< -o $@
 
 build/m68k/vfs_process.o: src/vfs_process.c $(HEADERS)
+	@mkdir -p $(@D)
+	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
+
+build/m68k/vfs_bundle.o: $(NDK)/src/bundle.c \
+		$(NDK)/include/astra/bundle.h $(NDK)/include/astra/manifest.h
 	@mkdir -p $(@D)
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@

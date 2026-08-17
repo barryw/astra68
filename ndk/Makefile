@@ -5,7 +5,7 @@ HOST_CC ?= cc
 ANALYZER_CC ?= gcc
 CPU_FLAGS ?= -m68030 -msoft-float
 
-CPPFLAGS := -Iinclude -I../sw/include
+CPPFLAGS := -Iinclude -I../sw/include -I../sw/userspace/runtime/include
 TARGET_CFLAGS := $(CPU_FLAGS) -Os -ffreestanding -fno-builtin -std=c11 \
 	-Wall -Wextra -Werror
 HOST_CFLAGS := -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST \
@@ -17,18 +17,22 @@ TARGET_OBJECTS := build/m68k/resource.o build/m68k/area.o \
 	build/m68k/port.o build/m68k/bulk_ring.o \
 	build/m68k/front_panel.o build/m68k/font.o build/m68k/graphics.o
 TARGET_OBJECTS += build/m68k/pointer.o build/m68k/window.o
-TARGET_OBJECTS += build/m68k/fixed.o
+TARGET_OBJECTS += build/m68k/application.o
+TARGET_OBJECTS += build/m68k/fixed.o build/m68k/bundle.o
 HOST_TESTS := build/host/test_front_panel build/host/test_font \
 	build/host/test_graphics build/host/test_port \
 	build/host/test_area build/host/test_bulk_ring
 HOST_TESTS += build/host/test_pointer build/host/test_window
-HOST_TESTS += build/host/test_fixed
+HOST_TESTS += build/host/test_application
+HOST_TESTS += build/host/test_fixed build/host/test_bundle
 SANITIZER_TESTS := build/host/test_front_panel_sanitize \
 	build/host/test_font_sanitize build/host/test_graphics_sanitize \
 	build/host/test_port_sanitize build/host/test_area_sanitize \
 	build/host/test_bulk_ring_sanitize
 SANITIZER_TESTS += build/host/test_pointer_sanitize \
-	build/host/test_window_sanitize build/host/test_fixed_sanitize
+	build/host/test_window_sanitize build/host/test_fixed_sanitize \
+	build/host/test_bundle_sanitize
+SANITIZER_TESTS += build/host/test_application_sanitize
 EXAMPLE_OBJECTS := build/m68k/front_panel_example.o \
 	build/m68k/font_layout_example.o build/m68k/graphics_frame_example.o \
 	build/m68k/port_message_example.o build/m68k/bulk_ring_example.o
@@ -37,7 +41,8 @@ ANALYZER_OBJECTS := build/analyzer/resource.o build/analyzer/area.o \
 	build/analyzer/front_panel.o build/analyzer/font.o \
 	build/analyzer/graphics.o
 ANALYZER_OBJECTS += build/analyzer/pointer.o build/analyzer/window.o
-ANALYZER_OBJECTS += build/analyzer/fixed.o
+ANALYZER_OBJECTS += build/analyzer/application.o
+ANALYZER_OBJECTS += build/analyzer/fixed.o build/analyzer/bundle.o
 
 all: $(LIB)
 
@@ -71,6 +76,11 @@ build/host/test_pointer: src/resource.c src/port.c src/pointer.c \
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
 
+build/host/test_application: src/resource.c src/port.c src/application.c \
+		../sw/userspace/runtime/src/arguments.c tests/test_application.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
+
 build/host/test_port: src/resource.c src/port.c tests/test_port.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
@@ -88,6 +98,10 @@ build/host/test_fixed: src/fixed.c tests/test_fixed.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
 
+build/host/test_bundle: src/bundle.c tests/test_bundle.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
+
 test: $(HOST_TESTS)
 	./build/host/test_front_panel
 	./build/host/test_font
@@ -96,8 +110,10 @@ test: $(HOST_TESTS)
 	./build/host/test_area
 	./build/host/test_bulk_ring
 	./build/host/test_pointer
+	./build/host/test_application
 	./build/host/test_window
 	./build/host/test_fixed
+	./build/host/test_bundle
 
 build/host/test_front_panel_sanitize: src/front_panel.c tests/test_front_panel.c
 	@mkdir -p $(@D)
@@ -121,6 +137,12 @@ build/host/test_pointer_sanitize: src/resource.c src/port.c src/pointer.c \
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
 
+build/host/test_application_sanitize: src/resource.c src/port.c \
+		src/application.c ../sw/userspace/runtime/src/arguments.c \
+		tests/test_application.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
+
 build/host/test_port_sanitize: src/resource.c src/port.c tests/test_port.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
@@ -138,6 +160,10 @@ build/host/test_fixed_sanitize: src/fixed.c tests/test_fixed.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
 
+build/host/test_bundle_sanitize: src/bundle.c tests/test_bundle.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
+
 sanitize: $(SANITIZER_TESTS)
 	./build/host/test_front_panel_sanitize
 	./build/host/test_font_sanitize
@@ -146,8 +172,10 @@ sanitize: $(SANITIZER_TESTS)
 	./build/host/test_area_sanitize
 	./build/host/test_bulk_ring_sanitize
 	./build/host/test_pointer_sanitize
+	./build/host/test_application_sanitize
 	./build/host/test_window_sanitize
 	./build/host/test_fixed_sanitize
+	./build/host/test_bundle_sanitize
 
 check: test sanitize
 

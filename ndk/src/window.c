@@ -134,7 +134,8 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
     AstraGuiWindowOpened reply = {0};
     AstraPort reply_port = ASTRA_PORT_INIT;
     AstraPort event_port = ASTRA_PORT_INIT;
-    AstraHandle transferred[3] = { ASTRA_INVALID_HANDLE,
+    AstraHandle transferred[4] = { ASTRA_INVALID_HANDLE,
+                                   ASTRA_INVALID_HANDLE,
                                    ASTRA_INVALID_HANDLE,
                                    ASTRA_INVALID_HANDLE };
     AstraHandle control = ASTRA_INVALID_HANDLE;
@@ -159,7 +160,7 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
          (info->content_format != ASTRA_WINDOW_CONTENT_RGB565 &&
           info->content_format != ASTRA_WINDOW_CONTENT_DRAW_LIST)) ||
         info->type < ASTRA_WINDOW_STANDARD ||
-        info->type > ASTRA_WINDOW_FULLSCREEN ||
+        info->type > ASTRA_WINDOW_DESKTOP ||
         (info->flags & ~known_flags) != 0 ||
         (info->gadgets & ~known_gadgets) != 0 ||
         !state_valid(info->close_state) ||
@@ -168,7 +169,10 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
         info->title_length > ASTRA_WINDOW_TITLE_MAX ||
         (info->title_length != 0 && info->title == 0) ||
         (info->event_mask & ~known_events) != 0u ||
-        !words_are_zero(info->reserved, 3) || window_live(window) ||
+        ((info->title_icon_area == ASTRA_INVALID_HANDLE) !=
+         (info->title_icon_length == 0u)) ||
+        info->title_icon_length > ASTRA_WINDOW_TITLE_ICON_BYTES_MAX ||
+        info->reserved != 0u || window_live(window) ||
         window->_private_control != ASTRA_INVALID_HANDLE ||
         window->_private_events != ASTRA_INVALID_HANDLE ||
         window->_private_id != 0u || window->_private_generation != 0u)
@@ -207,10 +211,20 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
     request.title_length = info->title_length;
     request.content_format = info->content_format;
     request.event_mask = info->event_mask;
+    request.title_icon_length = info->title_icon_length;
     for (uint32_t index = 0u; index < info->title_length; ++index)
         request.title[index] = info->title[index];
+    if (info->title_icon_length != 0u) {
+        result = astra_handle_duplicate(
+            info->title_icon_area,
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
+            &transferred[3]);
+        if (result != ASTRA_OK)
+            goto done;
+    }
     result = astra_port_send_until(gui_endpoint, &request, sizeof(request),
-                                   transferred, 3u,
+                                   transferred,
+                                   info->title_icon_length != 0u ? 4u : 3u,
                                    ASTRA_DEADLINE_INFINITE);
     event_port.send = transferred[1];
     reply_port.send = transferred[2];
@@ -255,7 +269,7 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
     }
 
 done:
-    for (uint32_t index = 0u; index < 3u; ++index)
+    for (uint32_t index = 0u; index < 4u; ++index)
         if (transferred[index] != ASTRA_INVALID_HANDLE) {
             AstraResult ignored = astra_handle_close(&transferred[index]);
             (void)ignored;
@@ -353,8 +367,23 @@ AstraResult astra_window_set_event_mask(AstraWindow *window,
 
 AstraResult astra_window_close(AstraWindow *window)
 {
-    AstraResult result = command(window, ASTRA_GUI_WINDOW_CLOSE,
-                                 0, 0, 0u, 0u, 0);
+    AstraGuiWindowCommand request = {0};
+    AstraResult result;
+
+    if (!window_live(window))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_message_header_init(
+        &request.header, sizeof(request), ASTRA_GUI_PROTOCOL,
+        ASTRA_GUI_VERSION, ASTRA_GUI_WINDOW_COMMAND,
+        window->_private_generation);
+    if (result == ASTRA_OK) {
+        request.window = window->_private_id;
+        request.generation = window->_private_generation;
+        request.action = ASTRA_GUI_WINDOW_CLOSE;
+        result = astra_port_send_until(
+            window->_private_control, &request, sizeof(request), 0, 0u,
+            ASTRA_DEADLINE_INFINITE);
+    }
 
     if (result == ASTRA_OK) {
         AstraResult event_result =

@@ -3,10 +3,11 @@
 
 #include <stdint.h>
 
+#include <astra/bundle.h>
 #include <astra/surface.h>
 
 #define ASTRA_GRAPHICS_LIBRARY_ABI_MAJOR 1u
-#define ASTRA_GRAPHICS_LIBRARY_ABI_MINOR 0u
+#define ASTRA_GRAPHICS_LIBRARY_ABI_MINOR 1u
 
 typedef struct AstraGraphicsLibraryV1 {
     uint16_t abi_major;
@@ -27,6 +28,10 @@ typedef struct AstraGraphicsLibraryV1 {
     uint32_t (*shared_draw_list_create)(AstraSharedSurface *, uint16_t,
                                         uint16_t);
     uint32_t (*shared_surface_close)(AstraSharedSurface *);
+    uint32_t (*aicon_open)(const void *, uint32_t, AstraAicon *);
+    uint32_t (*aicon_strike)(const AstraAicon *, uint16_t,
+                             AstraAiconStrike *);
+    uint32_t (*aicon_palette)(const AstraAicon *, uint16_t, uint8_t[4]);
 } AstraGraphicsLibraryV1;
 
 #endif

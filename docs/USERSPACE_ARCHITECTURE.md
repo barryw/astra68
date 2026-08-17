@@ -1,7 +1,7 @@
 # Astra OS userspace architecture
 
-Status: design direction; runtime, shell, and input-service foundations exist,
-but no protected userspace service is launched yet.
+Status: design direction; the protected storage, events, input, and display
+services and the desktop and terminal applications now launch.
 
 This document refines `OS_VISION.md` into a coherent userspace shape. It does
 not change the kernel boundary in `KERNEL_SPEC.md` or imply that the current
@@ -107,6 +107,74 @@ clients never mistake a restarted service for the dead instance.
 
 **LOCKED:** All services use the kernel's common handle, wait, deadline,
 cancellation, and peer-death model.
+
+**LOCKED:** Astra uses actor-style ownership as its default concurrency model.
+One event loop owns each service or application's mutable model and changes it
+in response to messages. Cross-process control occurs only through typed
+messages; processes never communicate by sharing mutable state or passing raw
+pointers. This prevents an implementation detail in one process from becoming
+another process's locking, lifetime, or reentrancy problem.
+
+The rule does not require bulk data to be copied through message queues.
+Shared areas and bounded rings remain the data plane for graphics, audio,
+storage, network traffic, and other large or continuous transfers. Their
+protocol defines exactly which participant may mutate each buffer and when
+ownership changes; messages carry the handles and coordinate submission,
+completion, cancellation, and failure.
+
+### 4.1 Shared state and thread safety
+
+**LOCKED:** Sharing is an opt-in property of an object, never a mode selected
+for an entire thread or process. Every process-private object is exactly one of:
+
+1. thread-confined and mutable only by its owner;
+2. immutable after publication;
+3. ownership-transferred, after which the sender may no longer access it; or
+4. shared-and-guarded by one named synchronization object.
+
+The first three are preferred. The fourth requires a measured reason and an
+explicit synchronization contract beside the type. Unclassified mutable data
+may not be accessed by more than one thread.
+
+**LOCKED:** Ordinary application threads have structured lifetimes. A parent
+creates them in a scope or thread group, cancellation is cooperative, and the
+scope joins every child before storage captured by a child can disappear.
+Detached threads are not part of the ordinary application API. A resident
+service may use an internal detached entry point only when the thread's
+lifetime is intentionally the lifetime of its process.
+
+**LOCKED:** The NDK will supply non-recursive, priority-inheriting mutexes with
+absolute deadlines and scope cleanup. Debug builds record owner, acquisition
+site, and lock rank, and stop on recursive acquisition, non-owner release,
+rank inversion, destruction while held, or a blocking IPC/service call while a
+lock is held. Code releases locks before callbacks, waits, or calls into an
+unrelated subsystem. A condition is always rechecked after wakeup.
+
+Shared-state declarations will use portable NDK annotation macros. A host
+Clang build will enable capability analysis for guarded data, required locks,
+excluded locks, and lock order. Target GCC builds retain the declarations with
+no code cost. Every component containing shared mutable state must also have a
+host-native ThreadSanitizer gate and a deterministic shutdown/cancellation
+test. A target debug lock validator checks behavior that host analysis cannot
+observe.
+
+The NDK will expose atomics only through typed wrappers for simple flags,
+counters, and publication, with sequential consistency as the default. Custom
+lock-free structures, relaxed ordering, and suppression of a concurrency check
+require a documented invariant, target measurement, and focused regression
+test. An atomic access does not make surrounding non-atomic state safe.
+
+These requirements reduce risk; C cannot prove the absence of every data race.
+Code that needs that guarantee remains actor-owned instead of sharing mutable
+memory. This exception never crosses a process boundary. Kernel calls remain
+the mechanism for manipulating kernel objects and are not application-level
+communication.
+
+Brokered publish/subscribe is a messaging facility for state changes such as
+media, network, application, and configuration notifications. Topics are
+capability-controlled, bounded, sequence-numbered, and report lost delivery.
+The observability event stream is separate: programs may emit and inspect
+diagnostic records, but logging is never used as an application IPC bus.
 
 Astra's ports are the protected descendant of the Amiga message-port idea:
 they retain explicit endpoints, queued delivery, replies, and composability,

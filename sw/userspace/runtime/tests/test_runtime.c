@@ -113,6 +113,14 @@ test_startup_contract(void)
     assert(!astra_startup_validate(&startup));
     startup.argv_address = 0x1000u;
     assert(astra_startup_validate(&startup));
+    startup.launch_source = ASTRA_LAUNCH_SOURCE_DESKTOP;
+    assert(astra_startup_validate(&startup));
+    assert(astra_startup_launch_source(&startup) ==
+           ASTRA_LAUNCH_SOURCE_DESKTOP);
+    startup.launch_source = ASTRA_LAUNCH_SOURCE_DESKTOP + 1u;
+    assert(!astra_startup_validate(&startup));
+    startup.launch_source = ASTRA_LAUNCH_SOURCE_SYSTEM;
+    assert(astra_startup_argument(&startup, 1u) == NULL);
     startup.reserved[1] = 1u;
     assert(!astra_startup_validate(&startup));
 }
@@ -404,6 +412,7 @@ static void test_library_relocation(void)
 static void test_launch(void)
 {
     static const uint8_t image[64] = {0u};
+    static const char *const words[] = {"paint", "WORK:picture.ast"};
     AstraLaunchGrant grants[2];
     AstraLaunchArguments arguments;
     uint32_t handle = 0xdeadbeefu;
@@ -411,7 +420,22 @@ static void test_launch(void)
     uint32_t calls;
 
     memset(grants, 0, sizeof(grants));
-    memset(&arguments, 0, sizeof(arguments));
+    assert(astra_launch_arguments_pack(
+               &arguments, ASTRA_LAUNCH_SOURCE_SHELL, 2u, words) ==
+           ASTRA_SYSCALL_OK);
+    assert(arguments.count == 2u && arguments.source ==
+           ASTRA_LAUNCH_SOURCE_SHELL);
+    assert(strcmp(arguments.bytes, words[0]) == 0);
+    assert(strcmp(arguments.bytes + strlen(words[0]) + 1u, words[1]) == 0);
+    assert(astra_launch_arguments_pack(
+               &arguments, ASTRA_LAUNCH_SOURCE_DESKTOP + 1u, 0u, NULL) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_launch_arguments_pack(
+               &arguments, ASTRA_LAUNCH_SOURCE_DESKTOP, 1u, NULL) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_launch_arguments_pack(
+               &arguments, ASTRA_LAUNCH_SOURCE_SHELL, 2u, words) ==
+           ASTRA_SYSCALL_OK);
 
     mock_status = ASTRA_SYSCALL_OK;
     assert(astra_launch(image, (uint32_t)sizeof(image), grants, 2u, &arguments,

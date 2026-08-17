@@ -112,11 +112,13 @@ static void initialize_test(void)
                                           sizeof(physical_memory));
 }
 
-static void test_same_address_aliases_and_atomic_revoke(void)
+static void test_same_address_aliases_survive_creator_death(void)
 {
     KernelAddressSpace spaces[KERNEL_VM_SHARED_ALIAS_MAX + 1u] = {{0}};
     KernelAreaPoolStats stats;
     KernelAreaSnapshot snapshot;
+    uint32_t rejected_base;
+    uint32_t rejected_size;
     KernelMemoryStats baseline;
     KernelMemoryStats after;
     KernelArea *area;
@@ -132,6 +134,7 @@ static void test_same_address_aliases_and_atomic_revoke(void)
         assert(kernel_vm_create_address_space(100u + index, &spaces[index]) ==
                KERNEL_VM_OK);
     assert(kernel_area_create(7u, sizeof(bytes), &area) == KERNEL_AREA_OK);
+    assert(kernel_area_handle_retain(area, NULL));
     memset(bytes, 0, sizeof(bytes));
     assert(kernel_area_read(area, 0u, bytes, sizeof(bytes)) == KERNEL_AREA_OK);
     for (uint32_t index = 0u; index < sizeof(bytes); ++index)
@@ -181,14 +184,26 @@ static void test_same_address_aliases_and_atomic_revoke(void)
 
     assert(kernel_area_process_died(7u, NULL, NULL) == KERNEL_AREA_OK);
     assert(kernel_area_snapshot(0u, &snapshot));
-    assert(snapshot.terminal_result == ASTRA_SYSCALL_PEER_DEAD);
-    assert(snapshot.mapping_references == 0u);
-    assert(snapshot.frames_released == 1u);
+    assert(snapshot.creator == 7u);
+    assert(snapshot.terminal_result == 0u);
+    assert(snapshot.mapping_references == KERNEL_VM_SHARED_ALIAS_MAX);
+    assert(snapshot.frames_released == 0u);
     assert(kernel_area_map(area, 100u, &spaces[0], KERNEL_VM_READ,
-                           &bases[0], &sizes[0]) == KERNEL_AREA_PEER_DEAD);
+                           &rejected_base, &rejected_size) ==
+           KERNEL_AREA_ACCESS_DENIED);
     assert(kernel_area_pool_stats(&stats));
-    assert(stats.active_areas == 1u && stats.closing_areas == 1u);
-    assert(stats.active_mappings == 0u && stats.committed_pages == 0u);
+    assert(stats.active_areas == 1u && stats.closing_areas == 0u);
+    assert(stats.active_mappings == KERNEL_VM_SHARED_ALIAS_MAX);
+    kernel_area_handle_release(area, NULL);
+    assert(kernel_area_live(area));
+    for (uint32_t index = 0u; index < KERNEL_VM_SHARED_ALIAS_MAX; ++index)
+        if (index != 1u)
+            assert(kernel_area_unmap(100u + index, &spaces[index],
+                                     bases[index]) == KERNEL_AREA_OK);
+    assert(kernel_area_unmap(100u + KERNEL_VM_SHARED_ALIAS_MAX,
+                             &spaces[KERNEL_VM_SHARED_ALIAS_MAX],
+                             bases[KERNEL_VM_SHARED_ALIAS_MAX]) ==
+           KERNEL_AREA_OK);
     kernel_area_handle_release(area, NULL);
     assert(kernel_area_pool_stats(&stats));
     assert(stats.active_areas == 0u && stats.closing_areas == 0u);
@@ -313,6 +328,43 @@ static void test_child_lifetime_and_quotas(void)
     assert(kernel_area_pool_stats(&stats));
     assert(stats.active_areas == 0u && stats.committed_pages == 0u);
     assert(stats.quota_failures == 1u);
+    assert(kernel_area_pool_valid());
+}
+
+static void test_service_can_map_every_area_slot(void)
+{
+    KernelAddressSpace service = {0};
+    KernelArea *areas[KERNEL_AREA_MAX];
+    uint32_t bases[KERNEL_AREA_MAX];
+    uint32_t sizes[KERNEL_AREA_MAX];
+
+    initialize_test();
+    assert(kernel_vm_create_address_space(200u, &service) == KERNEL_VM_OK);
+    for (uint32_t index = 0u; index < KERNEL_AREA_MAX; ++index) {
+        uint32_t owner = 201u + index / KERNEL_AREA_OWNER_MAX;
+
+        assert(kernel_area_create(owner, KERNEL_PAGE_SIZE, &areas[index]) ==
+               KERNEL_AREA_OK);
+        assert(kernel_area_map(areas[index], 200u, &service,
+                               KERNEL_VM_READ | KERNEL_VM_WRITE,
+                               &bases[index], &sizes[index]) ==
+               KERNEL_AREA_OK);
+        assert(bases[index] == KERNEL_VM_AREA_BASE +
+               index * KERNEL_VM_AREA_SLOT_SIZE);
+        assert(sizes[index] == KERNEL_PAGE_SIZE);
+    }
+    for (uint32_t index = 0u; index < KERNEL_AREA_MAX; ++index) {
+        uint32_t owner = 201u + index / KERNEL_AREA_OWNER_MAX;
+
+        assert(kernel_area_unmap(200u, &service, bases[index]) ==
+               KERNEL_AREA_OK);
+        kernel_area_handle_release(areas[index], NULL);
+        if ((index + 1u) % KERNEL_AREA_OWNER_MAX == 0u)
+            assert(kernel_memory_release_owner(owner, NULL) ==
+                   KERNEL_MEMORY_OK);
+    }
+    assert(kernel_vm_destroy_address_space(&service) == KERNEL_VM_OK);
+    assert(kernel_memory_release_owner(200u, NULL) == KERNEL_MEMORY_OK);
     assert(kernel_area_pool_valid());
 }
 
@@ -496,8 +548,9 @@ static void test_map_transaction_rolls_back_every_stage(void)
 int main(void)
 {
     test_allocation_injection_preserves_mapping_baseline();
-    test_same_address_aliases_and_atomic_revoke();
+    test_same_address_aliases_survive_creator_death();
     test_child_lifetime_and_quotas();
+    test_service_can_map_every_area_slot();
     test_screen_sized_area_reaches_its_last_pixel();
     test_create_transaction_rolls_back_every_stage();
     test_map_transaction_rolls_back_every_stage();

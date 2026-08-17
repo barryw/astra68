@@ -1,0 +1,7 @@
+astra-bundle 1
+kind kit
+id org.astra.interface
+name "Astra Interface Kit"
+version 1.1.0
+provides interface.library 1 1.1.0
+provides input.library 1 1.0.0

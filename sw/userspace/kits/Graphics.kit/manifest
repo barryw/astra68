@@ -1,0 +1,7 @@
+astra-bundle 1
+kind kit
+id org.astra.graphics
+name "Astra Graphics Kit"
+version 1.1.0
+provides graphics.library 1 1.1.0
+provides font.library 1 1.0.0

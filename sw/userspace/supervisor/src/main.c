@@ -253,5 +253,5 @@ astra_main(const AstraStartupInfo *startup)
         return (int)status;
     (void)astra_progress(ASTRA_SUPERVISOR_STAGE_TERMINAL);
 
-    return (int)supervisor_loader_watch();
+    return (int)supervisor_loader_watch(startup, capabilities);
 }

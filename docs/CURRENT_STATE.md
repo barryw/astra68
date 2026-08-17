@@ -490,8 +490,8 @@ machine.
   The five-run boot gate measures terminal-ready at a 0.17 s median against the
   1.00 s budget.
 
-The Graphics Kit now has separate `font.library` and `graphics.library`
-ELF32/m68k images installed side by side beneath `LIBS:`. Terminal uses the
+The `Graphics.kit` bundle now carries separate `font.library` and
+`graphics.library` ELF32/m68k images beneath `LIBS:`. Terminal uses the
 public `OpenLibrary()`/`CloseLibrary()` contract and calls their typed export
 tables; neither implementation is statically linked into Terminal. Axiom
 shares immutable library frames across process address spaces, keeps writable
@@ -506,6 +506,35 @@ first integration boot exposed a custom-linker defect that placed
 `_GLOBAL_OFFSET_TABLE_` at `.got.plt`; the linker script now fixes and asserts
 the GOT base at `.got`, preventing PIC libraries from silently reading the
 wrong entries.
+
+The version-1 application, Kit, manifest, and `.aicon` contracts are locked in
+`BUNDLE_FORMAT.md`. `Terminal.app` is installed beneath `APPS:`, launched by
+resolving its manifest rather than a hard-coded executable path, and receives
+a read-only `APP:` binding to its own root. The startup manifest launches the
+desktop alone; a double-click on its factory Terminal pin asks the supervisor's
+capability-gated application-launch port to start `APPS:Terminal.app`. The
+resulting standard window renders the required 16x16 strike at the left of its
+title, while the desktop uses the separately designed 64x64 strike. All three
+16x16, 32x32, and 64x64 strikes are generated deterministically. The NDK owns
+the shared bounded manifest and icon parser. The host `astra-bundle` tool
+validates and atomically copies, moves, trashes, or permanently deletes whole
+bundle directories; it refuses overwrites and refuses a permanent Kit deletion
+that would leave a declared library dependency unsatisfied. The filesystem
+remains authoritative: there is no registry or uninstall database, and any
+future discovery index must be rebuildable from manifests. The final Beast
+QEMU gate booted the clear desktop, double-clicked its Terminal pin, launched
+the manifest-resolved application and Kit libraries, and exercised pointer,
+keyboard, blink, maximize, restore, resize, and close with 1,031 completed
+fences, 22 batches, 1,101 commands, 657 fills, 205 blits, 43 glyph commands,
+13,537 present cycles and 13,056 pointer cycles against 250,000-cycle budgets
+in 0.359 s. A regression also proves that clicking the deliberately inactive
+desktop does not request an undamaged frame. Independent
+extraction of the generated ext4 image passed `astra-bundle check` for
+`Terminal.app`, `Graphics.kit`, and `Filesystem.kit`; the application contains
+its 41,300-byte MC68030 executable and 5,484-byte multi-strike icon.
+`graphics.library` ABI 1.1 owns the shared `.aicon` parser/accessors, so
+applications do not duplicate icon decoding. There is no separate
+`icon.library` until icon policy needs an independently versioned ABI.
 
 The retained Arty terminal deployment is rooted at commit
 `381d15306ff6b0077d8042fe975f426b7cf4f173` plus the current working-tree
@@ -3124,8 +3153,9 @@ entry point explicitly, avoiding invalid cross-library function-identity tests
 and preserving the 16 KiB read path.
 
 The image installer places it at
-`LIBS:filesystem.library/abi-1/1.0.0/m68k-68030/filesystem.library` beside the
-Graphics Kit versions. The MC68030 shared object is 6,768 bytes text, 296 bytes
+`LIBS:Filesystem.kit/libraries/filesystem.library/abi-1/1.0.0/m68k-68030/filesystem.library`
+beside the Graphics Kit bundle. The MC68030 shared object is 6,768 bytes text,
+296 bytes
 data, no BSS, and SHA-256
 `669b3f9d10d843f5912003becfedf481da78dd0889e02e4ea402a9d76c78c5f8`.
 Metadata reports `filesystem.library 1.0.0 ABI 1.0`; all 35 dynamic relocations
@@ -3151,3 +3181,135 @@ layer owns descriptors, cwd/root presentation, `errno`, and libc behavior over
 this ABI. The public ABI exposes protocol statuses and generic file/directory
 objects, never lwext4 state or an on-disk format, so RAM drives and future VFS
 services require no application ABI change.
+
+## Active desktop bundle release (2026-08-16)
+
+The Arty now boots to a clear desktop containing the installed Terminal bundle
+icon. A left-button double-click launches `APPS:Terminal.app`; Terminal obtains
+its filesystem, graphics, and font services through the installed Kits and
+transfers the bundle's 16x16 `.aicon` strike with its window-open request. The
+display server owns titlebar composition and draws that icon to the left of the
+Terminal title. Startup no longer creates Terminal directly.
+
+The active ROM SHA-256 is
+`edcf1388eccf1690cccb7978671c71ff2c778c5004e999b3a46fde9e2131ab49`.
+The staged storage image SHA-256 was
+`66900ca7910f4081bb914fd901db8184aa34d8e4b2f09812cef673c466b56047`;
+the mounted journal changes the live image hash after boot. The active ARM
+display bridge SHA-256 is
+`a54e74d5f304bd33794cb00defbb84ce680537ab0b0ac0bd32b37c347c69b63b`.
+The active ARM QEMU SHA-256 is
+`63750eb5012e5f59d0199afdee2a2633d13983f2c6b6291fb71156a634415467`.
+The exact prior ROM, image, display bridge, and QEMU remain under
+`/data/astra/deploy/desktop-edcf1388eccf/rollback`. No FPGA source, synthesis,
+or flash artifact changed.
+
+The physical release exposed a reset boundary absent from host QEMU: the FPGA
+correctly protects the active scanout from render writes, but after a QMP guest
+reset the first desktop frame could select the scanout left active by the prior
+guest. The ARM bridge now detects a restarted display request-ID sequence and
+presents the opposite buffer before submitting that first render batch. Error
+logs identify the failed command, status, and hardware fault detail. The bridge
+self-test covers request-sequence restart detection. QEMU polls the external
+display completion mailbox on its virtual-realtime clock so a completed host
+request is collected even when the emulated CPU sleeps awaiting that interrupt.
+
+On the live Arty, desktop idle is 2/2 completed display submissions with one
+57-command hardware batch. An injected icon double-click advances rendering to
+three batches and 172 commands while increasing fills, blits, and glyph runs,
+which proves bundle launch and Terminal composition. A subsequent QMP reset
+passes POST, filesystem recovery, and initial-image stage 8 and leaves the
+desktop clear with QEMU, the display bridge, and input hot-plug worker resident.
+The complete host interaction gate also passes at 1,026 fences, 22 batches,
+1,101 commands, 657 fills, 205 blits, and 43 glyph runs.
+
+## Interface, Events, and Messaging Kits (2026-08-16)
+
+The shared-library surface now includes `interface.library` ABI 1.1 for alerts
+and complete window lifecycle management, `input.library` ABI 1.0 for pointer
+observers, `events.library` ABI 1.0 for diagnostic emission/log/trace/catalog
+access, and `messaging.library` ABI 1.0 for bounded ports, timed messaging, and
+capability transfer. These reuse the existing NDK and runtime implementations;
+they do not add parallel window, input, event, or IPC mechanisms. Pub/sub is
+reserved for a future broker service rather than faked inside the client Kit.
+
+`Interface.kit`, `Events.kit`, and `Messaging.kit` pass their metadata,
+relocation, host-unit, and bundle checks on Beast. The full userspace target and
+NDK checks pass, including ASan/UBSan; VFS functional and sanitizer checks also
+remain green. Their MC68030 library file sizes are 82,428 bytes
+(`interface.library`), 10,508 bytes (`input.library`), 26,248 bytes
+(`events.library`), and 10,312 bytes (`messaging.library`). A generated Astra
+volume contains all three bundles under `LIBS:` with those exact payload sizes.
+No FPGA source, synthesis, flash artifact, or active Arty image changed.
+
+## Active crash-report and CPU-benchmark release (2026-08-17)
+
+The Arty now boots with a stable hosted-MC68030 throughput measurement rather
+than displaying the 12.5 MHz timer/device contract as CPU performance. Firmware
+warms the production kernel decompressor, performs five more verified decodes,
+and reports the fastest uncontended sample together with its calibrated 68030
+equivalent. Four physical-board control samples were 39,565--39,694 us; the
+active cold boot measured 39,677 us and reports 29.941 MHz equivalent. The
+kernel displays that value separately from the unchanged 12.5 MHz timer clock.
+QEMU does not model literal MC68030 cycle timing, so this is explicitly a
+repeatable workload-equivalent result. It replaces the whole-POST estimate,
+which varied from 51 to 136 MHz as cold TCG translation, display/DMA waits, and
+Linux startup scheduling moved through the timing window.
+
+A kernel panic now publishes the existing 90x30 text plane to the ARM display
+bridge before QEMU exits. The bridge rasterizes it into the hardware scanout,
+hides the pointer, disables the GUI overlay, and leaves the fault screen
+visible. The launcher captures the complete serial panic report at
+`/data/astra/log/panic-latest.log`. A controlled panic-selftest on the physical
+Arty recorded the deliberate reason, build identity, supervisor SR/PC, worker
+and IRQ state, six trace records, and `SYSTEM HALTED`; the persisted report has
+SHA-256 `5fc7aa465b4838488ceac032021eaf57ceaf8356a3d3f3a0c8f82fe4c37bde3b`.
+The normal ROM was then restored and passed POST, filesystem recovery, initial
+image stage 8, and the Terminal concurrent-launch/close/relaunch lifecycle.
+
+The active ROM is
+`b93c2564b537f2b7a74e9ec1d5741210e8b8f67120484ee5ba210acf0b72db43`.
+The staged storage image is
+`075b1916e2bbf6137613e0451583f8381b49fdb35cb532f5b076808f7024c342`;
+its live hash changes after journal recovery. The matching stripped ARM QEMU is
+`3b922c4a61248b2ba3c6082f1da378c1fdd111aae9d9ccc58d97311ebf047981`,
+the display bridge is
+`04db9b9a49d4cd2b46b45d34ad8211cdb356d6f4347e983b9092f4fde2622471`,
+and the launcher is
+`09b0e24a76a694332d3a488ff2dd44ce4ce13315535189285bef56c9814ff4b6`.
+The exact prior stack and all test candidates remain under
+`/data/astra/deploy/cpu-panic-v1`. No FPGA source, synthesis, or flash artifact
+changed.
+
+## Active process-isolation hardening release (2026-08-17)
+
+The launch-pressure crash was a shared-area lifetime defect, not an
+uncontainable kernel fault. When an area's creator exited, the kernel revoked
+every mapping even if another process still held a transferred area
+capability. Display consequently dereferenced a surface mapping the kernel had
+removed, its resident-process death made Supervisor exit, and only then did
+the kernel correctly halt because its initial image was gone. Area lifetime is
+now reference-controlled: creator death revokes only that process's mappings;
+the area remains live until the final transferred handle or child reference is
+released. The area and ring regression suites cover survival and final
+reclamation.
+
+Supervisor now logs and removes a dead resident process from its wait set
+instead of exiting itself, so a service failure leaves init alive. The final
+panic framebuffer is also rebuilt from a bounded summary after the verbose
+serial report, keeping the reason, build/hardware identity, fault coordinates,
+six trace records, and retained-log path visible within 90x30 characters.
+
+All kernel and Supervisor host tests pass on Beast, and the full MC68030 ROM
+build passes. On the physical Arty, twelve repeated Terminal launch-pressure
+cycles completed with matched display submissions/completions and no user
+fault, Display death, Supervisor exit, or kernel panic. A controlled panic ROM
+produced the readable 15-line framebuffer summary and retained the complete
+report with SHA-256
+`cd786de82f75a974a2509850fecd3c22234acf09ff48f2461c013637a8dce5ca`.
+The normal hardened ROM was restored and passed POST, filesystem recovery, and
+initial-image stage 8 at 29.571 MHz equivalent. Its active SHA-256 is
+`614a0ca4b77dcc7221882fbcda0b930f2fb418520ff8239e71369429e3626d76`;
+the rollback ROM is under
+`/data/astra/deploy/kernel-hardening-614a0ca4b77d/rollback`. No FPGA source,
+synthesis, or flash artifact changed.

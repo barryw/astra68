@@ -67,7 +67,7 @@ from silently disagreeing.
 The image builder installs the MC68030 library at:
 
 ```text
-LIBS:filesystem.library/abi-1/1.0.0/m68k-68030/filesystem.library
+LIBS:Filesystem.kit/libraries/filesystem.library/abi-1/1.0.0/m68k-68030/filesystem.library
 ```
 
 Other ABI majors and versions live beside it. Applications request the minimum

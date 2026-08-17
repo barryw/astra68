@@ -35,7 +35,7 @@ TERMINAL_LIB := $(TERMINAL)/build/m68k/libastraterminal.a
 NDK_LIB := $(NDK)/build/m68k/libastra.a
 CRT0 := $(RUNTIME)/build/m68k/crt0.o
 SUPERVISOR_CATALOG := $(SUPERVISOR)/build/m68k/astra_events.cat
-EVENT_PREFIX_BYTES := 768
+EVENT_PREFIX_BYTES := 1024
 
 all: $(IMAGE) catalog-contract size
 

@@ -14,6 +14,8 @@ static uint32_t pending_operation;
 static uint32_t pending_transaction;
 static uint32_t pending_action;
 static uint32_t next_open_status;
+static uint32_t expected_icon_area;
+static uint8_t expected_type = ASTRA_WINDOW_STANDARD;
 static AstraGuiWindowCommand last_command;
 
 static void header(AstraMessageHeader *value, uint32_t size,
@@ -35,9 +37,10 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
     *out_d1 = 0u;
     *out_d2 = 0u;
     if (number == ASTRA_SYSCALL_HANDLE_DUPLICATE) {
-        assert(d1 == 2u && d2 == (ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP |
-                                  ASTRA_RIGHT_TRANSFER));
-        *out_d1 = 0x101u;
+        assert((d1 == 2u || d1 == expected_icon_area) &&
+               d2 == (ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP |
+                      ASTRA_RIGHT_TRANSFER));
+        *out_d1 = d1 == 2u ? 0x101u : 0x102u;
     } else if (number == ASTRA_SYSCALL_PORT_CREATE) {
         assert((d1 == 1u &&
                 (d2 == sizeof(AstraGuiWindowOpened) ||
@@ -53,16 +56,24 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
     } else if (number == ASTRA_SYSCALL_PORT_SEND_TRY) {
         uint32_t *handles = (uint32_t *)d4;
 
-        assert(d5 == (d1 == 1u ? 3u : 1u));
-        assert(handles[d5 - 1u] == reply_receive + 1u);
         if (d1 == 1u) {
             const AstraGuiOpenWindow *request =
                 (const AstraGuiOpenWindow *)d2;
 
+            assert(d5 == (expected_icon_area != 0u ? 4u : 3u));
+            assert(handles[2] == reply_receive + 1u);
             assert(d3 == sizeof(*request) && handles[0] == 0x101u &&
                    handles[1] == event_receive + 1u);
-            assert(request->type == ASTRA_WINDOW_STANDARD);
-            assert(request->title_length == 7u && request->title[0] == 'G');
+            assert(request->title_icon_length ==
+                   (expected_icon_area != 0u ? 64u : 0u));
+            if (expected_icon_area != 0u)
+                assert(handles[3] == 0x102u);
+            assert(request->type == expected_type);
+            if (expected_type == ASTRA_WINDOW_STANDARD)
+                assert(request->title_length == 7u && request->title[0] == 'G');
+            else
+                assert(request->flags == 0u && request->gadgets == 0u &&
+                       request->event_mask == 0u);
             pending_operation = ASTRA_GUI_WINDOW_OPENED;
             pending_transaction = request->header.transaction_id;
         } else {
@@ -71,12 +82,18 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
 
             assert(d1 == 0x303u && d3 == sizeof(*request));
             assert(request->window == 7u && request->generation != 0u);
-        assert(request->action >= ASTRA_GUI_WINDOW_QUERY &&
-               request->action <= ASTRA_GUI_WINDOW_PRESENT);
+            assert(request->action >= ASTRA_GUI_WINDOW_QUERY &&
+                   request->action <= ASTRA_GUI_WINDOW_PRESENT);
+            if (request->action == ASTRA_GUI_WINDOW_CLOSE)
+                assert(handles == 0 && d5 == 0u);
+            else
+                assert(d5 == 1u && handles[0] == reply_receive + 1u);
             last_command = *request;
-            pending_action = request->action;
-            pending_operation = ASTRA_GUI_WINDOW_STATE;
-            pending_transaction = request->header.transaction_id;
+            if (request->action != ASTRA_GUI_WINDOW_CLOSE) {
+                pending_action = request->action;
+                pending_operation = ASTRA_GUI_WINDOW_STATE;
+                pending_transaction = request->header.transaction_id;
+            }
         }
     } else if (number == ASTRA_SYSCALL_PORT_RECEIVE_TRY) {
         assert(d1 == reply_receive || d1 == event_receive);
@@ -250,12 +267,51 @@ int main(void)
         assert(window._private_generation == generation);
     }
     before = call_count;
-    assert(astra_window_close(&window) == ASTRA_OK);
-    assert(call_count == before + 6u);
+    {
+        uint32_t before_ports = port_sequence;
+
+        assert(astra_window_close(&window) == ASTRA_OK);
+        assert(call_count == before + 3u);
+        assert(port_sequence == before_ports);
+    }
     assert(last_command.action == ASTRA_GUI_WINDOW_CLOSE);
     assert(window._private_control == 0u && window._private_events == 0u &&
            window._private_id == 0u);
     assert(astra_window_event_wait_handle(&window) == ASTRA_INVALID_HANDLE);
+
+    window = (AstraWindow)ASTRA_WINDOW_INIT;
+    create.title_icon_area = 9u;
+    create.title_icon_length = 64u;
+    expected_icon_area = 9u;
+    assert(astra_window_create(1u, 2u, &create, &window) == ASTRA_OK);
+    assert(astra_window_close(&window) == ASTRA_OK);
+    create.title_icon_area = ASTRA_INVALID_HANDLE;
+    create.title_icon_length = 0u;
+    expected_icon_area = 0u;
+
+    window = (AstraWindow)ASTRA_WINDOW_INIT;
+    create.type = ASTRA_WINDOW_DESKTOP;
+    create.content_format = ASTRA_WINDOW_CONTENT_DRAW_LIST;
+    create.pitch = 0u;
+    create.flags = 0u;
+    create.gadgets = 0u;
+    create.title = NULL;
+    create.title_length = 0u;
+    create.event_mask = 0u;
+    expected_type = ASTRA_WINDOW_DESKTOP;
+    assert(astra_window_create(1, 2, &create, &window) == ASTRA_OK);
+    assert(astra_window_close(&window) == ASTRA_OK);
+    create.type = ASTRA_WINDOW_STANDARD;
+    create.content_format = ASTRA_WINDOW_CONTENT_RGB565;
+    create.pitch = 640u;
+    create.flags = ASTRA_WINDOW_RESIZABLE;
+    create.gadgets = ASTRA_WINDOW_GADGET_CLOSE |
+                     ASTRA_WINDOW_GADGET_MINIMIZE |
+                     ASTRA_WINDOW_GADGET_MAXIMIZE;
+    create.title = title;
+    create.title_length = sizeof(title) - 1u;
+    create.event_mask = ASTRA_WINDOW_SUBSCRIBE_DEFAULT;
+    expected_type = ASTRA_WINDOW_STANDARD;
 
     before = call_count;
     assert(astra_window_move(&window, 1u, 2u) ==

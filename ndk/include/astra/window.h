@@ -16,6 +16,7 @@
 ASTRA_EXTERN_C_BEGIN
 
 #define ASTRA_WINDOW_TITLE_MAX UINT32_C(48)
+#define ASTRA_WINDOW_TITLE_ICON_BYTES_MAX UINT32_C(8192)
 
 /** Window chrome recipes. */
 enum {
@@ -23,7 +24,9 @@ enum {
     ASTRA_WINDOW_UTILITY = 2,
     ASTRA_WINDOW_DIALOG = 3,
     ASTRA_WINDOW_POPOVER = 4,
-    ASTRA_WINDOW_FULLSCREEN = 5
+    ASTRA_WINDOW_FULLSCREEN = 5,
+    /** Workspace-owned, frameless, permanently bottommost desktop surface. */
+    ASTRA_WINDOW_DESKTOP = 6
 };
 
 /** Workspace state owned by the window server. */
@@ -91,7 +94,7 @@ typedef struct AstraWindowInfo {
     uint32_t reserved[4];
 } AstraWindowInfo;
 
-#define ASTRA_WINDOW_EVENT_VERSION 2u
+#define ASTRA_WINDOW_EVENT_VERSION 3u
 
 /** Events delivered by the compositor to the window owner. */
 enum {
@@ -152,7 +155,7 @@ typedef struct AstraWindowEvent {
             int32_t screen_x;
             int32_t screen_y;
             uint32_t button;
-            uint32_t reserved;
+            uint32_t click_count;
         } pointer;
         struct {
             int32_t x;
@@ -208,7 +211,9 @@ typedef struct AstraWindowCreateInfo {
     uint16_t title_length;
     uint16_t content_format;
     uint32_t event_mask;
-    uint32_t reserved[3];
+    AstraHandle title_icon_area;
+    uint32_t title_icon_length;
+    uint32_t reserved;
 } AstraWindowCreateInfo;
 
 #define ASTRA_WINDOW_CREATE_INFO_INIT { \
@@ -218,7 +223,7 @@ typedef struct AstraWindowCreateInfo {
         ASTRA_WINDOW_GADGET_MAXIMIZE, \
     ASTRA_WINDOW_STANDARD, ASTRA_GADGET_NORMAL, ASTRA_GADGET_NORMAL, \
     ASTRA_GADGET_NORMAL, 0, 0, ASTRA_WINDOW_CONTENT_RGB565, \
-    ASTRA_WINDOW_SUBSCRIBE_DEFAULT, { 0, 0, 0 } \
+    ASTRA_WINDOW_SUBSCRIBE_DEFAULT, ASTRA_INVALID_HANDLE, 0, 0 \
 }
 
 /**

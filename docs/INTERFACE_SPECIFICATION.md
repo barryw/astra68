@@ -86,7 +86,8 @@ A normal window is composed in this order:
 3. a flat, square seam between titlebar and client content;
 4. a 2-pixel ion-cyan rail below the active titlebar;
 5. client content whose bottom corners follow the frame;
-6. a left-aligned title and right-aligned gadgets.
+6. an optional 16x16 bundle icon, a left-aligned title, and right-aligned
+   gadgets.
 
 The title must remain the dominant titlebar label. Gadget order from left to
 right is minimize, maximize, close. Their 20-pixel hit areas are larger than
@@ -171,7 +172,9 @@ but never replace system window gadgets.
 ## 9. NDK contract and acceptance
 
 `AstraWindowCreateInfo` supplies frame position, draw-list content geometry,
-window type, behavior flags, gadget presence, title, and preview gadget states.
+window type, behavior flags, gadget presence, title, optional transferred
+`.aicon` area, and preview gadget states. The display service validates the
+icon and selects its 16x16 strike; applications do not paint titlebar icons.
 The shared command area is transferred by capability; no application pointer
 crosses into the display service. A successful create returns an opaque
 `AstraWindow` containing a private control capability. The NDK uses that

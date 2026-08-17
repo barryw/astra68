@@ -13,6 +13,7 @@ STREAMS := ../streams
 SHELL_DIR := ../shell
 TERMINAL_DIR := ../terminal
 NDK := ../../../ndk
+NDK_LIB := $(NDK)/build/m68k/libastra.a
 LWEXT4 := ../../../third_party/lwext4
 CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include \
 	-I$(STORAGE)/include -I../metrics/include -I$(ALLOC)/include \
@@ -95,18 +96,19 @@ libraries:
 	$(MAKE) -C $(SHELL_DIR) all
 	$(MAKE) -C $(TERMINAL_DIR) all
 	$(MAKE) -C ../graphics all
+	$(MAKE) -C $(NDK) all
 
 # The image is the deliverable, so the link contract is part of the build:
 # astra_user.ld produces exactly the shape kernel_elf_accept() takes. The
 # archives are named as prerequisites so a rebuilt library relinks the image.
 $(TARGET): $(OBJECTS) $(RUNTIME)/astra_user.ld $(RUNTIME_CRT0) $(EXT4_LIB) \
 		$(STORAGE_LIB) $(ALLOC_LIB) $(RUNTIME_LIB) $(SHELL_LIB) \
-		$(TERMINAL_LIB) $(VFS_LIB) $(STREAMS_LIB)
+		$(TERMINAL_LIB) $(VFS_LIB) $(STREAMS_LIB) $(NDK_LIB)
 	@mkdir -p $(@D)
 	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(RUNTIME_CRT0) $(OBJECTS) \
 		$(STREAMS_LIB) $(VFS_LIB) $(EXT4_LIB) \
 		$(STORAGE_LIB) $(ALLOC_LIB) $(TERMINAL_LIB) $(SHELL_LIB) \
-		$(RUNTIME_LIB) -lgcc
+		$(NDK_LIB) $(RUNTIME_LIB) -lgcc
 
 # The catalog section goes the way DWARF does: read out at build time, never
 # carried in the window the firmware compresses into ROM.
@@ -134,11 +136,13 @@ $(HOST_TEST): $(TEST_SOURCES)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
-$(LOADER_TEST): src/loader_manifest.c tests/test_loader_manifest.c \
+$(LOADER_TEST): src/loader_manifest.c $(NDK)/src/bundle.c \
+		tests/test_loader_manifest.c \
 		include/loader.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		src/loader_manifest.c tests/test_loader_manifest.c -o $@
+		src/loader_manifest.c $(NDK)/src/bundle.c \
+		tests/test_loader_manifest.c -o $@
 
 test: $(HOST_TEST) $(LOADER_TEST)
 	./$(HOST_TEST)
@@ -151,7 +155,7 @@ sanitize:
 		-o build/host/test_supervisor_sanitize
 	./build/host/test_supervisor_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		$(SANITIZER_FLAGS) src/loader_manifest.c \
+		$(SANITIZER_FLAGS) src/loader_manifest.c $(NDK)/src/bundle.c \
 		tests/test_loader_manifest.c -o build/host/test_loader_manifest_sanitize
 	./build/host/test_loader_manifest_sanitize
 
