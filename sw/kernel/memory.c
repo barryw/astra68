@@ -42,6 +42,15 @@ static KernelSavedRange saved_ranges[ASTRA_BOOT_MAX_MEMORY_RANGES]
     KERNEL_NOINIT;
 static uint32_t saved_range_count;
 static uint32_t contiguous_search_hint;
+/*
+ * The DMA zone: a contiguous run reserved at boot that only DMA allocations
+ * may search. See KERNEL_DMA_ZONE_FRAMES in memory.h for why it exists and
+ * why a buddy allocator would not have answered the same question.
+ */
+static uint32_t dma_zone_first;
+static uint32_t dma_zone_frames;
+
+static bool find_high_contiguous(uint32_t frame_count, uint32_t *found);
 static KernelMemoryStats stats;
 static bool initialized;
 
@@ -443,6 +452,8 @@ KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info)
     initialized = false;
     saved_range_count = 0u;
     contiguous_search_hint = 0u;
+    dma_zone_first = 0u;
+    dma_zone_frames = 0u;
     reset_stats();
 
     if (info == NULL || astra_boot_info_validate(info) != ASTRA_BOOT_VALID)
@@ -532,6 +543,22 @@ KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info)
             KERNEL_ALLOCATION_SITE_EMERGENCY_RESERVE;
         ++reserved;
     }
+    /*
+     * The DMA zone, claimed after the emergency reserve so it sits below it
+     * and above everything that grows upward. It is not marked blocked --
+     * blocking would keep DMA out of it too -- it is simply a range that the
+     * general search is not allowed to enter.
+     */
+    if (find_high_contiguous(KERNEL_DMA_ZONE_FRAMES, &dma_zone_first)) {
+        dma_zone_frames = KERNEL_DMA_ZONE_FRAMES;
+    } else {
+        /* A machine too small for a zone keeps the old undivided pool. */
+        dma_zone_first = 0u;
+        dma_zone_frames = 0u;
+    }
+    stats.dma_zone_first = dma_zone_first;
+    stats.dma_zone_frames = dma_zone_frames;
+
     if (reserved != KERNEL_EMERGENCY_RESERVE_FRAMES ||
         stats.free_frames < reserved ||
         !kernel_allocation_seed(KERNEL_ALLOCATION_SITE_EMERGENCY_RESERVE,
@@ -586,6 +613,46 @@ static bool find_contiguous_frames(uint32_t begin, uint32_t end,
     return false;
 }
 
+/*
+ * The highest contiguous free run of the requested size, scanned downward so
+ * the zone lands at the top of memory out of the way of everything that grows
+ * upward. One pass, because it runs once at boot on a 30 MHz machine.
+ */
+static bool find_high_contiguous(uint32_t frame_count, uint32_t *found)
+{
+    uint32_t run = 0u;
+    uint32_t ceiling = stats.total_frames;
+
+    if (frame_count == 0u || frame_count > stats.total_frames)
+        return false;
+    /*
+     * Below the direct map, because the kernel has to be able to write these
+     * frames -- zeroing a DMA buffer is the kernel touching it. See
+     * KERNEL_DIRECT_MAP_LIMIT.
+     */
+    if (stats.ram_base < KERNEL_DIRECT_MAP_LIMIT) {
+        uint32_t reachable =
+            (KERNEL_DIRECT_MAP_LIMIT - stats.ram_base) / KERNEL_PAGE_SIZE;
+
+        if (reachable < ceiling)
+            ceiling = reachable;
+    }
+    if (frame_count > ceiling)
+        return false;
+    for (uint32_t index = ceiling; index-- > 0u;) {
+        if (bitmap_test(blocked_bitmap, index)) {
+            run = 0u;
+            continue;
+        }
+        ++run;
+        if (run == frame_count) {
+            *found = index;
+            return true;
+        }
+    }
+    return false;
+}
+
 static KernelMemoryStatus allocate_frames(uint32_t frame_count,
                                           uint32_t alignment_frames,
                                           KernelFrameState state,
@@ -618,9 +685,33 @@ static KernelMemoryStatus allocate_frames(uint32_t frame_count,
     }
 
     last = stats.total_frames - frame_count;
-    available = contiguous_search_hint <= last &&
-        find_contiguous_frames(contiguous_search_hint, last, frame_count,
-                               alignment_frames, &first);
+    /*
+     * DMA looks in its own zone first, and falls back to the general pool if
+     * the request is larger than the zone or the zone is spoken for -- so
+     * nothing that works today stops working. Everything else is kept out of
+     * the zone entirely, which is the whole point: frames that general
+     * allocation can never take are frames it can never comb.
+     */
+    available = false;
+    if (dma_zone_frames != 0u) {
+        if (state == KERNEL_FRAME_DMA) {
+            if (frame_count <= dma_zone_frames)
+                available = find_contiguous_frames(
+                    dma_zone_first, dma_zone_first + dma_zone_frames -
+                                        frame_count,
+                    frame_count, alignment_frames, &first);
+        } else if (last > dma_zone_first) {
+            /* Runs must end before the zone begins. */
+            last = dma_zone_first >= frame_count ?
+                dma_zone_first - frame_count : 0u;
+            if (dma_zone_first < frame_count)
+                last = 0u;
+        }
+    }
+    if (!available)
+        available = contiguous_search_hint <= last &&
+            find_contiguous_frames(contiguous_search_hint, last, frame_count,
+                                   alignment_frames, &first);
     if (!available && contiguous_search_hint != 0u) {
         uint32_t wrap_last = contiguous_search_hint - 1u;
 
@@ -739,6 +830,16 @@ KernelMemoryStatus kernel_memory_alloc_pages_zeroed_tagged(
     for (uint32_t index = 0u;
          index < stats.total_frames && found < frame_count; ++index) {
         if (bitmap_test(blocked_bitmap, index))
+            continue;
+        /*
+         * Never the DMA zone. This is the scattered path -- every area page,
+         * every stack page, every code page -- and it is precisely what combs
+         * the frame map. Letting it in here would leave the zone reserved in
+         * name only, which is worse than not having one, because it would
+         * look like the contiguous case was handled.
+         */
+        if (dma_zone_frames != 0u && index >= dma_zone_first &&
+            index < dma_zone_first + dma_zone_frames)
             continue;
         physical_pages[found] = stats.ram_base + index * KERNEL_PAGE_SIZE;
         ++found;
@@ -1112,5 +1213,7 @@ bool kernel_memory_stats(KernelMemoryStats *result)
     result->emergency_available_frames = stats.emergency_available_frames;
     result->emergency_acquisitions = stats.emergency_acquisitions;
     result->emergency_failures = stats.emergency_failures;
+    result->dma_zone_first = stats.dma_zone_first;
+    result->dma_zone_frames = stats.dma_zone_frames;
     return true;
 }

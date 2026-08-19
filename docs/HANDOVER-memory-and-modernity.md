@@ -218,10 +218,125 @@ is the next step after §3, not a deferral.
 2. ~~**Decommit.**~~ **Done.** See §5.1.
 3. ~~**Rewrite `heap.c` on top of them**, and delete `astra_heap_bytes`.~~
    **Done.** See §5.1.
-4. **Measure the allocator.** §4. Then replace it or write down why not.
-   Not started.
-5. **The frame allocator's contiguous path.** §4 — buddy, or a DMA zone, decided
-   by what the display and storage drivers actually ask for. Not started.
+4. ~~**Measure the allocator.**~~ **Done, and it was replaced.** See §5.2.
+5. ~~**The frame allocator's contiguous path.**~~ **Done: a reserved DMA zone,
+   and not a buddy allocator.** See §5.3.
+
+Nothing in §5 is outstanding. What is left is in §6 and §6.2.
+
+### 5.2 Item 4: the allocator was measured, and it was replaced
+
+`sw/userspace/commands/heapbench` is the instrument, and it answers in counts
+rather than times on purpose: QEMU's cycle counter is TCG bookkeeping, and the
+Arty's m68k is emulated on its ARM cores, so a time from either is not 68030
+time. Bytes, pages and faults are as true here as on hardware.
+
+It runs the editor-shaped trace §4 asks for — 20,000 operations, 85% objects
+under 512 bytes, 12% up to 4 KiB, 3% between 8 and 64 KiB, freed in an order
+unrelated to the order taken, from a fixed seed so two runs compare.
+
+| allocator | peak live | peak footprint | ratio |
+|---|---|---|---|
+| picolibc first-fit | 403,491 B | 688,416 B | **1.70** |
+| segregated fit (`posix/src/alloc.c`) | 403,491 B | 552,960 B | **1.37** |
+
+§4's bar was 1.5. First-fit was over it, so the replacement was the answer the
+number gave rather than the one taste preferred. Peak live is identical across
+the two, which is what makes it a like-for-like comparison rather than two
+different workloads.
+
+The replacement is segregated fit: 20 size classes to 2 KiB, each served from
+runs of pages holding nothing else, so a freed 32-byte block can only be reused
+by another 32-byte request and external fragmentation is prevented by
+construction rather than repaired. Larger requests take whole pages and are
+returned exactly on free. Runs that empty are decommitted, which is §4's third
+point and what makes a long-running program's footprint follow its live set
+back down. None of jemalloc's threading machinery is present, because there is
+one core — dropping what does not apply is most of what makes it the right
+size. The run is found from a pointer through a page-index table rather than a
+per-block header, because on a 16-byte class a header is not overhead, it is
+the allocation.
+
+**The cluster size is 16, and now for a reason.** `sbrk` is a bump pointer, so
+the heap's pages are touched in address order and both terms follow from the
+footprint alone: `ceil(N/C)` faults, and `C·ceil(N/C) − N` pages committed but
+never touched, which averages `(C−1)/2`. At the measured N of 135 pages the
+table is:
+
+| cluster | faults | wasted pages |
+|---|---|---|
+| 4 | 34 | 1 |
+| 8 | 17 | 1 |
+| 16 | 9 | 9 |
+| 32 | 5 | 25 |
+| 64 | 3 | 57 |
+
+Minimising `(N/C)·F + ((C−1)/2)·Z` — F the per-fault overhead, Z the cost of
+clearing a page — gives `C ≈ sqrt(2N/(F/Z))`, and at F≈Z that is `sqrt(270)`,
+about 16. F and Z are within an order of magnitude of each other by
+inspection: a page clear is ~1024 longword writes, a fault is a frame push, a
+handler entry, a table walk and an ATC fill. So 16 stands, and it is flat
+enough nearby that 8 would also be defensible; 32 and above clearly are not,
+because the waste grows linearly while the faults saved do not. Pinning F/Z
+exactly needs a real 68030 and is the one thing here a clock would settle.
+
+### 5.3 Item 5: a reserved DMA zone, and explicitly not a buddy allocator
+
+The decision was made from what the drivers actually ask for, which turned out
+to be a very short list. Every allocation in the kernel asks for **one frame at
+alignment one** — stacks, code pages, page tables, library pages, and every
+page of every area — except one caller:
+
+| caller | frames | alignment |
+|---|---|---|
+| display framebuffer (`ASTRA_RENDER_BUILDER_BYTES`) | 64 | 1 |
+| block transfer (16 sectors x 512) | 2 | 1 |
+
+`test_memory.c` then establishes that the risk is real rather than theoretical:
+comb the frame map by freeing every other frame and half the machine is free
+while the largest run in it is one frame, at which point a two-frame transfer
+is refused and a framebuffer certainly is. That is §4's "a display driver must
+not fail at hour six because the frame map got shredded", reproduced.
+
+**A buddy allocator would have failed that same test.** It turns finding a run
+into a list pop and coalesces on free, but it cannot manufacture contiguity
+while the alternating frames are still held. It also has exactly one customer
+making a handful of requests. So it would have been machinery bought for a
+problem it does not solve.
+
+The zone does solve it: 128 frames, 512 KiB, 0.4% of the machine, sized as the
+measured demand rather than a round number — 64 for the framebuffer and two for
+each of the 32 block transfer slots. DMA searches it first and falls back to
+the general pool, so nothing that works today stops working. The test now shows
+both requests succeeding on a combed map, from inside the zone; setting
+`KERNEL_DMA_ZONE_FRAMES` to zero makes it fail again, which is how the test was
+checked.
+
+The part that mattered most was the least visible: the **scattered** allocation
+path — every area page, every stack page, every code page, and precisely what
+combs the map — checked only the blocked bitmap and walked straight through the
+zone. Reserved in name only is worse than not reserving at all, because it
+looks handled.
+
+### 5.4 A latent limit this uncovered
+
+Placing the zone at the top of memory panicked the machine at boot with
+`Class: PMMU translation, Fault: 0x09F60000` — the top of RAM less the
+emergency reserve less the zone, exactly.
+
+**The kernel can only directly address the low 32 MiB.** The supervisor
+identity-maps SDRAM from `0x02000000` through root index 15 and nothing above
+it has a supervisor translation. A frame beyond that can be given to a process,
+which reaches it through its own page tables, but the kernel cannot zero it,
+poison it, or copy through it — and zeroing a freshly allocated frame is the
+kernel touching it. The general allocator never meets this because it searches
+upward from the bottom and a 128 MB machine never gets that far, so it has been
+latent.
+
+It is written down as `KERNEL_DIRECT_MAP_LIMIT` in `memory.h` and the zone is
+placed below it. **That the machine believes it has 128 MB while the kernel can
+directly reach 32 MB of it is a real limit and the next thing in this area
+worth fixing** — see §6.2.
 
 ### 5.1 What items 1 to 3 actually did
 
@@ -313,6 +428,39 @@ whatever was in it. Every in-tree caller sets it now and
 `ASTRA_SYSCALL_ABI_VERSION` went to `0x00010011`, which is what makes a stale
 binary say so instead of failing strangely. Unknown flag bits are rejected
 rather than ignored, which is what lets flags be added later.
+
+## 6.2 What is now the open question
+
+The kernel's 32 MiB direct map, from §5.4. Ninety-six of the machine's 128 MB
+can only ever be reached by a process through its own page tables, and anything
+the kernel must touch -- a DMA buffer it zeroes, a page it copies through, an
+area it writes on a caller's behalf -- has to come from the low quarter. Every
+such allocation competes for it while three quarters of the machine looks free.
+
+The modern answer is a temporary mapping window: reserve one or two page slots
+in the supervisor space and map a frame into them for the duration of the
+access, rather than requiring every frame the kernel touches to be permanently
+mapped. Linux called it kmap for the same reason on 32-bit machines with more
+RAM than address space, and it is the same shape of problem -- 2 GB of user
+space and 128 MB of RAM does not need it, but a supervisor window of 32 MiB
+over 128 MB of RAM does.
+
+The alternative -- extending the identity map to cover all 128 MB -- costs 32
+root descriptors of 4 MiB pages, which is nearly free, and is worth checking
+first. It was not done here because it is a change to the supervisor's address
+space made while chasing a different item, and that is how latent faults get
+introduced rather than removed.
+
+Also raised while measuring, and not acted on:
+
+- `heapbench` is a real instrument and is now a command, but it is not in any
+  gate. Twenty thousand allocations is too slow to run on every build, and its
+  output is a number rather than a pass. Run it by hand when the allocator or
+  the cluster size changes.
+- The allocator returns empty runs immediately rather than on a decay timer.
+  jemalloc purges lazily so a program that allocates and frees in a loop does
+  not thrash the fault path. Nothing on this machine does that yet; the place
+  to put the timer is `give_pages`.
 
 ## 6. The other debts from the same session
 
