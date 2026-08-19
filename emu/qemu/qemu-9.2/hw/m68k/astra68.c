@@ -105,6 +105,14 @@
 #define OHCI_CONTROL_HCFS_MASK   (3u << 6)
 #define OHCI_CONTROL_HCFS_SUSPEND (3u << 6)
 #define OHCI_ASTRA_DMA_FAULT     (1u << 0)
+#define OHCI_ASTRA_IRQ           (1u << 1)
+#define OHCI_INT_SF              (1u << 2)
+#define OHCI_INT_MIE             (1u << 31)
+#define OHCI_CONTROL_HCFS_OPERATIONAL (2u << 6)
+/* OHCI frames are a millisecond; start-of-frame is the tick that proves the
+ * controller is live without a device attached. */
+#define OHCI_FRAME_INTERVAL_NS   (NANOSECONDS_PER_SECOND / 1000)
+#define IRQ_SOURCE_USB           7
 
 /*
  * AstraHost runtime block service, Vesta offsets 0x150..0x1b0. The register
@@ -314,6 +322,8 @@ struct Astra68State {
         uint32_t astra_status;
         uint32_t pool_base;
         uint32_t pool_size;
+        uint32_t frame_number;
+        QEMUTimer *sof_timer;
     } ohci;
     uint8_t *sdram;
     uint32_t ram_size;
@@ -341,6 +351,7 @@ struct Astra68State {
 static Astra68State *astra_input_machine;
 
 static void astra_update_irq(Astra68State *s);
+static uint32_t astra_ohci_astra_status(Astra68State *s);
 static uint64_t astra_now_cycles(Astra68State *s);
 static void astra_panel_write32(Astra68State *s, hwaddr offset,
                                 uint32_t value);
@@ -970,6 +981,11 @@ static uint32_t astra_pending_raw(Astra68State *s)
     }
     if (s->astraea.irq_status & s->astraea.irq_enable) {
         pending |= 1u << IRQ_SOURCE_ASTRAEA;
+    }
+    if (s->ohci.present &&
+        (astra_ohci_astra_status(s) &
+         (OHCI_ASTRA_IRQ | OHCI_ASTRA_DMA_FAULT)) != 0) {
+        pending |= 1u << IRQ_SOURCE_USB;
     }
     if (astra_input_level(&s->input) != 0) {
         pending |= 1u << IRQ_SOURCE_INPUT;
@@ -1654,6 +1670,29 @@ static void astra_mmio_write(void *opaque, hwaddr offset, uint64_t value,
  * plain register array cannot imitate, which is why platform.c carries a
  * host-test branch that fakes it. Here it happens for real.
  */
+/*
+ * OHCI signals an interrupt when master enable is set and some enabled source
+ * is pending. The Astra wrapper's IRQ bit is that condition rather than a
+ * separate latch, which is what makes clearing the source clear the line --
+ * the kernel acknowledges by writing the status bit back and expects the
+ * controller to go quiet, and a latch it had to clear separately would leave
+ * the qualification's quiesce check failing forever.
+ */
+static bool astra_ohci_asserting(Astra68State *s)
+{
+    if ((s->ohci.interrupt_enable & OHCI_INT_MIE) == 0) {
+        return false;
+    }
+    return (s->ohci.interrupt_status & s->ohci.interrupt_enable &
+            ~OHCI_INT_MIE) != 0;
+}
+
+static uint32_t astra_ohci_astra_status(Astra68State *s)
+{
+    return s->ohci.astra_status |
+           (astra_ohci_asserting(s) ? OHCI_ASTRA_IRQ : 0);
+}
+
 static void astra_ohci_reset_controller(Astra68State *s)
 {
     s->ohci.control = OHCI_CONTROL_HCFS_SUSPEND;
@@ -1662,6 +1701,49 @@ static void astra_ohci_reset_controller(Astra68State *s)
     s->ohci.interrupt_enable = 0;
     s->ohci.hcca = 0;
     s->ohci.astra_status = 0;
+    s->ohci.frame_number = 0;
+    if (s->ohci.sof_timer) {
+        timer_del(s->ohci.sof_timer);
+    }
+}
+
+/*
+ * The frame tick. A real controller counts frames whenever it is operational,
+ * whether or not anything is plugged in, and raises start-of-frame if that
+ * interrupt is enabled -- so this is the one piece of controller behaviour
+ * that is observable with no device attached, and it is exactly what the
+ * kernel's IRQ qualification waits for.
+ */
+static void astra_ohci_sof(void *opaque)
+{
+    Astra68State *s = opaque;
+
+    if ((s->ohci.control & OHCI_CONTROL_HCFS_MASK) !=
+        OHCI_CONTROL_HCFS_OPERATIONAL) {
+        return;
+    }
+    s->ohci.frame_number++;
+    s->ohci.interrupt_status |= OHCI_INT_SF;
+    timer_mod_ns(s->ohci.sof_timer,
+                 qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                 OHCI_FRAME_INTERVAL_NS);
+    astra_update_irq(s);
+}
+
+/* Frames run while the controller is operational and stop when it is not. */
+static void astra_ohci_sync_frames(Astra68State *s)
+{
+    if (!s->ohci.sof_timer) {
+        return;
+    }
+    if ((s->ohci.control & OHCI_CONTROL_HCFS_MASK) ==
+        OHCI_CONTROL_HCFS_OPERATIONAL) {
+        timer_mod_ns(s->ohci.sof_timer,
+                     qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                     OHCI_FRAME_INTERVAL_NS);
+    } else {
+        timer_del(s->ohci.sof_timer);
+    }
 }
 
 static uint32_t astra_ohci_read32(Astra68State *s, hwaddr offset)
@@ -1674,9 +1756,10 @@ static uint32_t astra_ohci_read32(Astra68State *s, hwaddr offset)
     case 0x010: return s->ohci.interrupt_enable;
     case 0x014: return s->ohci.interrupt_enable;
     case 0x018: return s->ohci.hcca;
+    case 0x03c: return s->ohci.frame_number & 0xffffu;
     case 0xf00: return OHCI_ASTRA_ID_MAGIC;
     case 0xf04: return OHCI_ASTRA_VERSION_1_0;
-    case 0xf08: return s->ohci.astra_status;
+    case 0xf08: return astra_ohci_astra_status(s);
     case 0xf0c: return 0;
     case 0xf10: return s->ohci.pool_base;
     case 0xf14: return s->ohci.pool_size;
@@ -1689,23 +1772,29 @@ static void astra_ohci_write32(Astra68State *s, hwaddr offset, uint32_t value)
     switch (offset) {
     case 0x004:
         s->ohci.control = value;
+        astra_ohci_sync_frames(s);
+        astra_update_irq(s);
         break;
     case 0x008:
         /* HCR is self-clearing: the reset is complete before the write is. */
         if ((value & OHCI_COMMAND_HCR) != 0) {
             astra_ohci_reset_controller(s);
+            astra_update_irq(s);
         } else {
             s->ohci.command_status = value;
         }
         break;
     case 0x00c:
         s->ohci.interrupt_status &= ~value;
+        astra_update_irq(s);
         break;
     case 0x010:
         s->ohci.interrupt_enable |= value;
+        astra_update_irq(s);
         break;
     case 0x014:
         s->ohci.interrupt_enable &= ~value;
+        astra_update_irq(s);
         break;
     case 0x018:
         s->ohci.hcca = value;
@@ -2103,6 +2192,7 @@ static void astra68_init(MachineState *machine)
                                                &s->timers[i]);
     }
     s->vega.vblank_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, astra_vblank, s);
+    s->ohci.sof_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, astra_ohci_sof, s);
     s->display.service_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL_RT,
                                              astra_display_service, s);
     timer_mod_ns(s->vega.vblank_timer,

@@ -565,7 +565,36 @@ that leaves 96 MiB of RAM *above* the pool, which is precisely the case §6.4's
 three-piece map exists for, so the gates now cover the shape that used to be
 wrong.
 
-**How it was proved rather than assumed.** All five gates passing does not by
+**The controller ticks.** A real host controller counts frames whenever it is
+operational, whether or not anything is plugged in, and raises start-of-frame
+if that interrupt is enabled -- so start-of-frame is the one piece of
+controller behaviour observable with no device attached, and it is exactly what
+the kernel's IRQ qualification waits for. The model runs a millisecond frame
+timer while HCFS is operational, latches SF, and drives IRQ source 7. The
+Astra wrapper's IRQ bit is *derived* from "master enable set and some enabled
+source pending" rather than being a second latch, so acknowledging the source
+clears the line -- a latch the kernel had to clear separately would leave the
+qualification's quiesce check failing forever.
+
+Proved with a throwaway probe: arming the USB source and reading back gave
+`ASTRA_STATUS=0x02` (the wrapper asserting) and `INTERRUPT_STATUS=0x04` (SF
+latched), which is what `platform.c` composes into bit 29 | bit 2 --
+`0x20000004`, exactly `KERNEL_QUALIFICATION_IRQ_USB_EXPECTED`.
+
+**What still does not run, and why it is not this model's fault.** Nothing in a
+normal boot arms the USB source, so the frame timer stays idle there: the
+kernel only brings the controller up for a process that binds that IRQ, and the
+desktop binds storage, input and display. The code that *would* exercise it is
+the K1-K10 qualification in `kernel.c`, which is compiled out unless
+`ASTRA_KERNEL_K1_QUALIFICATION=1`. Building that ROM and booting it panics with
+`interrupt controller initialization failed`, `registered=0x00000039` -- and it
+does so **identically on the emulator build that has no OHCI at all**, so it is
+a pre-existing condition of that build under QEMU and has nothing to do with
+USB. Making the qualification kernel boot in the emulator is its own piece of
+work and is the thing standing between here and USB interrupts being covered by
+a gate rather than by a probe.
+
+**How the aperture was proved rather than assumed.** All five gates passing does not by
 itself show the branch was taken -- it could equally mean nothing changed. So
 the aperture was deliberately broken in the model, by reporting a size that is
 not page aligned, and the machine answered `POST FAIL: USB DMA aperture`. The
