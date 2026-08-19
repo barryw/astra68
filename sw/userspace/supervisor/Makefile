@@ -46,7 +46,8 @@ OBJECTS := build/m68k/supervisor.o build/m68k/main.o \
 	build/m68k/vfs_read.o \
 	build/m68k/loader.o \
 	build/m68k/console_stream.o \
-	build/m68k/volume.o build/m68k/console_shell.o
+	build/m68k/volume.o build/m68k/console_shell.o \
+	build/m68k/proc_tree.o
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 STORAGE_LIB := $(STORAGE)/build/m68k/libastrablock.a
 EXT4_LIB := $(STORAGE)/build/m68k/libastraext4.a
@@ -124,6 +125,10 @@ $(CATALOG): $(TARGET)
 		--set-section-flags .astra_events=alloc,load,contents $< $@
 
 build/m68k/%.o: src/%.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
+
+build/m68k/proc_tree.o: src/proc_tree.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
 

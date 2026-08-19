@@ -94,6 +94,7 @@ typedef struct pmmu030_state {
     uint8_t atc_hints[PMMU030_ATC_HINTS];
 } pmmu030_state;
 
+
 static inline bool pmmu030_translation_active_inline(const pmmu030_state *state)
 {
     return (state->tc & PMMU030_TC_ENABLE) != 0u ||

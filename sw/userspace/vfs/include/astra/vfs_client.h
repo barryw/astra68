@@ -102,7 +102,14 @@ uint32_t astra_vfs_readdir(AstraVfsClient *client, const char *path,
 
 typedef struct AstraVfsDirEntry {
     char name[ASTRA_VFS_NAME_MAX];
+    uint64_t size;
+    int64_t mtime;
+    uint32_t uid;
+    uint32_t gid;
     uint16_t kind;
+    uint16_t mode;
+    uint16_t nlink;
+    uint16_t reserved;
 } AstraVfsDirEntry;
 
 /*
@@ -110,6 +117,9 @@ typedef struct AstraVfsDirEntry {
  * a nonempty result means the service reached the end of the directory.
  * Version 2/3 peers transparently return one entry at a time.
  */
+uint32_t astra_vfs_stat_meta(AstraVfsClient *client, const char *path,
+                             AstraVfsDirEntry *meta);
+
 uint32_t astra_vfs_readdir_batch(AstraVfsClient *client, const char *path,
                                  uint64_t cursor, AstraVfsDirEntry *entries,
                                  uint32_t capacity, uint32_t *count,

@@ -29,9 +29,26 @@
 
 typedef struct AstraVfsBackend AstraVfsBackend;
 
+/*
+ * What a listing has to show and an editor has to preserve. `kind` and `size`
+ * were enough while every caller was a program that read a whole file; `ls -l`
+ * and any ported Unix tool need the rest, and a backend that has them and a
+ * protocol that drops them is the same as not having them.
+ *
+ * A backend that cannot answer a field leaves it zero. Zero is a real answer
+ * here -- mode 0 means "this filesystem has no permission bits" rather than
+ * "no permissions" -- so a caller formats what it was given and does not
+ * invent a default that looks authoritative.
+ */
 typedef struct AstraVfsNodeInfo {
     uint64_t size;
+    int64_t mtime;          /* seconds since the epoch, 0 when unknown */
+    uint32_t uid;
+    uint32_t gid;
     uint16_t kind;
+    uint16_t mode;          /* POSIX permission and type bits */
+    uint16_t nlink;
+    uint16_t reserved;
 } AstraVfsNodeInfo;
 
 typedef struct AstraVfsBackendOps {

@@ -26,7 +26,14 @@
  * reply handles. Forty-eight keeps that measured demand bounded, with explicit
  * headroom, while retaining the existing two-word bitmap.
  */
-#define KERNEL_HANDLE_MAX_ENTRIES 48u
+/*
+ * Every process embeds one of these, so this multiplies by KERNEL_PROCESS_MAX
+ * and is the largest single term in a process record. Sized against
+ * KERNEL_PROCESS_HANDLE_DEMAND, which is 99 for 32 processes and 24 ports per
+ * owner -- generous, not arbitrary, and the assert beside that macro fails at
+ * compile time if a new grant outgrows it.
+ */
+#define KERNEL_HANDLE_MAX_ENTRIES 128u
 #define KERNEL_HANDLE_BITMAP_WORDS \
     ((KERNEL_HANDLE_MAX_ENTRIES + 31u) / 32u)
 #define KERNEL_HANDLE_TRANSFER_MAX 8u

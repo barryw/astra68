@@ -9,6 +9,19 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/*
+ * Object tables live in their own region above the frame metadata, not beside
+ * the kernel image. Raising a limit then costs address space there and moves
+ * no address anything else reads -- the trace ring especially, which crash
+ * tooling finds at a fixed address. kernel.ld names this region if it fills.
+ */
+#if defined(__m68k__)
+#define KERNEL_TABLES __attribute__((section(".tables")))
+#else
+#define KERNEL_TABLES
+#endif
+
+
 #define KERNEL_PORT_SLOT_NONE UINT16_MAX
 
 typedef enum KernelPortMessageState {
@@ -51,8 +64,8 @@ struct KernelPort {
     uint8_t reserved;
 };
 
-static KernelPort ports[KERNEL_PORT_MAX];
-static KernelPortMessage messages[KERNEL_PORT_MESSAGE_MAX];
+static KernelPort ports[KERNEL_PORT_MAX] KERNEL_TABLES;
+static KernelPortMessage messages[KERNEL_PORT_MESSAGE_MAX] KERNEL_TABLES;
 static KernelObjectCache port_cache;
 static KernelObjectCache message_cache;
 static uint32_t port_cache_bitmap[
@@ -64,10 +77,19 @@ static uint8_t pool_corrupt;
 
 _Static_assert(sizeof(KernelPort) == 64u,
                "message-port object memory budget changed");
-_Static_assert(sizeof(KernelPortMessage) == 324u,
-               "message record memory budget changed");
-_Static_assert(sizeof(ports) + sizeof(messages) == 24864u,
-               "message-port fixed pool memory budget changed");
+/*
+ * A record is the largest message it can hold plus its bookkeeping, so an exact
+ * number here would have to be edited every time the inline limit moves and
+ * would say nothing about whether the result still fits. These bound it
+ * instead: the record may not grow slack beyond its payload, and the pool may
+ * not take more than half the object-table region -- kernel.ld catches the
+ * overflow, this catches it earlier and says which pool did it.
+ */
+_Static_assert(sizeof(KernelPortMessage) <=
+                   KERNEL_PORT_MESSAGE_SIZE_MAX + 64u,
+               "message record overhead grew beyond its payload");
+_Static_assert(sizeof(ports) + sizeof(messages) <= 1024u * 1024u,
+               "message-port fixed pool exceeds its share of TABLES");
 
 static uint16_t port_slot(const KernelPort *port)
 {

@@ -84,6 +84,31 @@ void astra_vfs_service_dispatch(AstraVfsService *service, uint32_t operation,
                                 AstraVfsReply *reply);
 
 /*
+ * Open, read whole, close -- as one call. `node_size` is filled even when the
+ * file does not fit `capacity`, so a caller that guessed too small learns what
+ * to allocate without a second round trip.
+ */
+uint32_t astra_vfs_service_read_path(AstraVfsService *service,
+                                     const char *path, void *buffer,
+                                     uint32_t capacity, uint32_t *moved,
+                                     uint64_t *node_size);
+
+/*
+ * A read that answers into the caller's buffer rather than into a reply record.
+ *
+ * ASTRA_VFS_IO_MAX is 192 bytes because a reply carries its payload inline.
+ * Nothing about a filesystem needs that bound -- a backend read takes a length
+ * -- but every read in the system went through the inline path, so the
+ * shared-area transfer was 86 backend calls and two byte-loop copies of every
+ * byte per 16 KiB. This is the same read, with the same session, access and
+ * kind checks, and without the clamp. `moved` is short at end of file.
+ */
+uint32_t astra_vfs_service_read_into(AstraVfsService *service,
+                                     uint32_t session, AstraVfsFile file,
+                                     uint64_t offset, void *buffer,
+                                     uint32_t length, uint32_t *moved);
+
+/*
  * Releases everything a session held. Called when a client dies; the port
  * layer learns that from peer-dead and the core does not need to know how.
  */

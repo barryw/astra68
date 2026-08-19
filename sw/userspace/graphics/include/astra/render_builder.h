@@ -47,6 +47,8 @@ int astra_render_builder_mono_text(AstraRenderBuilder *builder,
                                    int32_t y, const char *utf8,
                                    uint32_t length, uint16_t pixel_height,
                                    uint16_t cell_width, uint16_t color);
+int astra_draw_list_covers(const AstraDrawListHeader *header,
+                           uint16_t width, uint16_t height);
 int astra_render_builder_replay(AstraRenderBuilder *builder,
                                 uint32_t destination,
                                 const AstraDrawListHeader *draw_list);

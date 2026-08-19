@@ -39,6 +39,18 @@ typedef int (*AstraTerminalRender)(void *context, uint32_t row,
                                    uint32_t column, const uint8_t *cells,
                                    uint32_t count);
 
+/*
+ * Receives each completed line as it is written, before anything draws it.
+ * A terminal on a screen is only observable by looking at the screen, and
+ * once the renderer is glyphs in a window there is no longer any text for a
+ * harness, a serial line or a log to read. The model already sees every byte
+ * exactly once, so this is where that text comes from. A line is delivered on
+ * a newline or when it fills the width; `length` counts printable bytes only
+ * and the buffer is not terminated by this call's contract.
+ */
+typedef void (*AstraTerminalEcho)(void *context, const char *line,
+                                  uint32_t length);
+
 typedef struct AstraTerminal {
     uint8_t cells[ASTRA_TERMINAL_ROWS_MAX][ASTRA_TERMINAL_COLUMNS_MAX];
     /* Inclusive range of columns changed since the last flush, per row. */
@@ -51,6 +63,11 @@ typedef struct AstraTerminal {
     uint32_t scrolls;
     AstraTerminalRender render;
     void *render_context;
+    AstraTerminalEcho echo;
+    void *echo_context;
+    /* One line being assembled for `echo`; never read by the model itself. */
+    char echo_line[ASTRA_TERMINAL_COLUMNS_MAX];
+    uint32_t echo_length;
 } AstraTerminal;
 
 AstraTerminalStatus astra_terminal_init(AstraTerminal *terminal,
@@ -69,6 +86,14 @@ void astra_terminal_clear(AstraTerminal *terminal);
  * dropped, so a bad read is visible instead of invisible.
  */
 void astra_terminal_putc(AstraTerminal *terminal, uint8_t value);
+
+/*
+ * Installs the echo, or clears it with a NULL callback. Independent of the
+ * renderer on purpose: what draws a terminal and what records it are two
+ * different jobs, and a headless machine wants the second without the first.
+ */
+void astra_terminal_set_echo(AstraTerminal *terminal, AstraTerminalEcho echo,
+                             void *context);
 
 void astra_terminal_write(AstraTerminal *terminal, const char *text);
 void astra_terminal_write_bytes(AstraTerminal *terminal, const uint8_t *bytes,

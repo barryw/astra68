@@ -44,6 +44,12 @@ uint32_t astra_rt_handle_duplicate(uint32_t handle, uint32_t rights,
                                 uint32_t *duplicate);
 uint32_t astra_rt_area_create(uint32_t byte_size, uint32_t rights,
                            uint32_t *handle);
+/* As above, with ASTRA_AREA_CREATE_* -- reserved rather than committed. */
+uint32_t astra_rt_area_create_flagged(uint32_t byte_size, uint32_t rights,
+                                   uint32_t flags, uint32_t *handle);
+/* Hands back the pages of a reserved area; the reservation stays. */
+uint32_t astra_rt_area_decommit(void *address, uint32_t byte_size,
+                             uint32_t *released_pages);
 uint32_t astra_rt_area_map(uint32_t handle, uint32_t permissions,
                         void **address, uint32_t *byte_size);
 uint32_t astra_rt_area_unmap(void *address);
@@ -194,6 +200,8 @@ uint32_t astra_trace_read(uint32_t process_handle, uint32_t *cursor,
 
 /* A line of text, as a chain of ASTRA_EVENT_MESSAGE_UNSTRUCTURED events. */
 uint32_t astra_log_write(const void *bytes, uint32_t length);
+/* Ring only: the event store drops debug records at drain, never storing. */
+uint32_t astra_log_debug(const void *bytes, uint32_t length);
 uint32_t astra_log(const char *text);
 uint32_t astra_assert_message(char *out, uint32_t capacity, const char *file,
                               uint32_t line, const char *expression);

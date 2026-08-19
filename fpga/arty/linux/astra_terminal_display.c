@@ -279,7 +279,10 @@ static int execute_render_batch(const struct astra_graphics_device *device,
     uint32_t command_count;
     uint32_t generation;
     int result = -1;
+    static int profile_commands = -1;
 
+    if (profile_commands < 0)
+        profile_commands = getenv("ASTRA_DISPLAY_PROFILE_COMMANDS") != NULL;
     if (!render_batch_valid(batch, bytes)) {
         fprintf(stderr, "render batch rejected before submission (%u bytes)\n",
                 bytes);
@@ -342,18 +345,29 @@ static int execute_render_batch(const struct astra_graphics_device *device,
         uint32_t offset = ASTRA_RENDER_BATCH_COMPLETION_OFFSET -
             ASTRA_RENDER_BATCH_ARENA_OFFSET +
             index * ASTRA_RENDER_COMPLETION_BYTES;
+        uint32_t command_offset = ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
+            ASTRA_RENDER_BATCH_ARENA_OFFSET +
+            index * ASTRA_RENDER_COMMAND_BYTES;
         volatile uint8_t *completion = mapping.data + offset;
 
+        if (profile_commands)
+            fprintf(stderr,
+                    "render cmd %u op=%u dst=%u src=%u "
+                    "size=%ux%u pixels=%u cycles=%u\n",
+                    index, load_be32(completion + 4u) >> 16,
+                    load_be32(batch + command_offset + 32u),
+                    load_be32(batch + command_offset + 36u),
+                    load_be32(batch + command_offset + 56u) >> 16,
+                    load_be32(batch + command_offset + 56u) & 0xffffu,
+                    load_be32(completion + 12u),
+                    load_be32(completion + 20u) -
+                        load_be32(completion + 16u));
         if (load_be32(completion) !=
                 ((uint32_t)ASTRA_RENDER_ABI_VERSION << 16 |
                  ASTRA_RENDER_COMPLETION_BYTES) ||
             (load_be32(completion + 4u) & UINT32_C(0xffff)) !=
                 ASTRA_RENDER_STATUS_OK ||
             load_be32(completion + 28u) != generation) {
-            uint32_t command_offset = ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
-                ASTRA_RENDER_BATCH_ARENA_OFFSET +
-                index * ASTRA_RENDER_COMMAND_BYTES;
-
             fprintf(stderr,
                     "render command %u failed: op=%u completion=0x%08x "
                     "status=0x%08x fault=0x%08x generation=%u/%u\n",

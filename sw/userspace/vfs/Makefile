@@ -29,7 +29,7 @@ LIBRARY_LINK_FLAGS := -nostdlib -shared -Wl,-Bsymbolic \
 # accident, so the two are compiled with different flags on purpose.
 CORE_SOURCES := src/vfs_service_core.c src/vfs_client.c \
 	src/vfs_local_transport.c src/vfs_port_transport.c src/vfs_assign.c \
-	src/vfs_path.c src/vfs_union.c src/vfs_process.c
+	src/vfs_path.c src/vfs_union.c src/vfs_process.c src/vfs_status.c
 EXT4_CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
 	-DCONFIG_USE_DEFAULT_CFG=0 -I$(RUNTIME)/freestanding
 
@@ -46,7 +46,8 @@ TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/vfs_assign.o build/m68k/vfs_path.o \
 	build/m68k/vfs_local_transport.o build/m68k/vfs_port_transport.o \
 	build/m68k/vfs_ext4_backend.o build/m68k/vfs_union.o \
-	build/m68k/vfs_process.o build/m68k/vfs_bundle.o
+	build/m68k/vfs_process.o build/m68k/vfs_bundle.o \
+	build/m68k/vfs_status.o
 FILESYSTEM_LIBRARY := build/m68k/libraries/filesystem.library
 FILESYSTEM_LIBRARY_OBJECTS := build/m68k/library/filesystem_library.o \
 	build/m68k/library/vfs_client.o build/m68k/library/vfs_assign.o \

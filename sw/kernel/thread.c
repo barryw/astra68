@@ -48,8 +48,26 @@ static uint16_t deadline_heap[KERNEL_THREAD_MAX];
 static uint16_t deadline_positions[KERNEL_THREAD_MAX];
 static uint16_t deadline_count;
 static uint16_t wait_registration_count;
-static uint16_t reap_pending_bitmap;
-static uint16_t irq_wake_bitmap;
+/*
+ * One bit per thread slot. These were sixteen bits wide, which is what held
+ * KERNEL_THREAD_MAX at sixteen and, through it, the number of processes the
+ * machine could run. Sixty-four bits costs twelve bytes and takes that off.
+ */
+
+/*
+ * One bit for a slot, without a variable 64-bit shift. The kernel links no
+ * libgcc, and `1ull << slot` with a runtime `slot` calls __ashldi3; splitting
+ * at the word boundary leaves a constant shift, which the compiler does inline
+ * as a word move.
+ */
+static uint64_t slot_bit(uint32_t slot)
+{
+    return slot < 32u ? (uint64_t)((uint32_t)1u << slot)
+                      : (uint64_t)((uint32_t)1u << (slot - 32u)) << 32;
+}
+
+static uint64_t reap_pending_bitmap;
+static uint64_t irq_wake_bitmap;
 static uint32_t irq_wake_cycles[KERNEL_THREAD_MAX];
 static KernelThreadPoolStats pool_stats;
 static uint8_t pool_corrupt;
@@ -60,20 +78,20 @@ static void clear_irq_wake(uint16_t slot)
 {
     if (slot >= KERNEL_THREAD_MAX)
         return;
-    irq_wake_bitmap &= (uint16_t)~(uint16_t)(1u << slot);
+    irq_wake_bitmap &= ~slot_bit(slot);
     irq_wake_cycles[slot] = 0u;
 }
 
 static void mark_reap_pending(KernelThread *thread)
 {
     thread->reap_pending = 1u;
-    reap_pending_bitmap |= (uint16_t)(1u << thread->slot);
+    reap_pending_bitmap |= slot_bit(thread->slot);
 }
 
 static void clear_reap_pending(KernelThread *thread)
 {
     thread->reap_pending = 0u;
-    reap_pending_bitmap &= (uint16_t)~(uint16_t)(1u << thread->slot);
+    reap_pending_bitmap &= ~slot_bit(thread->slot);
 }
 
 _Static_assert(offsetof(KernelThread, context) == 0u,
@@ -97,8 +115,10 @@ _Static_assert(sizeof(KernelThreadWaitRegistration) == 8u,
 _Static_assert(sizeof(KernelThread) <= 200u,
                "host thread record exceeds the test memory budget");
 #endif
-_Static_assert(KERNEL_THREAD_MAX <= 16u,
+_Static_assert(KERNEL_THREAD_MAX <= 64u,
                "reap bitmap cannot represent every thread slot");
+_Static_assert(KERNEL_THREAD_MAX <= 64u,
+               "thread identifiers carry the slot in six bits");
 _Static_assert(THREAD_WAIT_REGISTRATION_COUNT < UINT16_MAX,
                "wait registration identifiers must fit in 16 bits");
 /*
@@ -913,8 +933,15 @@ KernelThreadStatus kernel_thread_allocate(uint16_t process_slot,
     kernel_bytes_clear(candidate, sizeof(*candidate));
     candidate->generation = generation;
     candidate->slot = candidate_slot;
+    /*
+     * Prefix, generation, slot. The slot had four bits, which is what held
+     * KERNEL_THREAD_MAX at sixteen -- a seventeenth thread would have carried a
+     * slot number into the generation field and produced an identifier that
+     * repeated. Six bits of slot leaves eighteen of generation, so a slot is
+     * reused a quarter of a million times before an identifier can recur.
+     */
     candidate->id = THREAD_ID_PREFIX |
-                    ((generation & 0x000fffffu) << 4) |
+                    ((generation & 0x0003ffffu) << 6) |
                     (uint32_t)candidate->slot;
     candidate->process_id = process_id;
     candidate->process_slot = process_slot;
@@ -1128,7 +1155,7 @@ KernelThreadStatus kernel_thread_finish_reap(KernelThread *thread,
 {
     if (!valid_thread(thread) || thread->state != KERNEL_THREAD_DEAD ||
         thread->reap_pending == 0u ||
-        (reap_pending_bitmap & (uint16_t)(1u << thread->slot)) == 0u ||
+        (reap_pending_bitmap & slot_bit(thread->slot)) == 0u ||
         released == NULL ||
         thread->wait_member_count != 0u || !wait_row_clear(thread->slot) ||
         kernel_thread_wait_queue_count(&thread->death_waiters) != 0u)
@@ -1157,7 +1184,7 @@ bool kernel_thread_reap_pending(void)
     return reap_pending_bitmap != 0u;
 }
 
-uint16_t kernel_thread_reap_slots(void)
+uint64_t kernel_thread_reap_slots(void)
 {
     return reap_pending_bitmap;
 }
@@ -1200,7 +1227,7 @@ KernelThreadStatus take_next_fast(KernelThread **thread)
     if (status != KERNEL_THREAD_OK)
         return status;
     next->state = KERNEL_THREAD_RUNNING;
-    if ((irq_wake_bitmap & (uint16_t)(1u << slot)) != 0u) {
+    if ((irq_wake_bitmap & slot_bit(slot)) != 0u) {
         uint32_t elapsed = kernel_performance_cycles_low() -
                            irq_wake_cycles[slot];
 
@@ -1499,7 +1526,7 @@ KernelThreadStatus wake_all_fast(KernelThreadWaitQueue *queue,
             return KERNEL_THREAD_CORRUPT;
         if (irq_wake) {
             irq_wake_cycles[waiter->slot] = wake_cycle;
-            irq_wake_bitmap |= (uint16_t)(1u << waiter->slot);
+            irq_wake_bitmap |= slot_bit(waiter->slot);
         }
         ++woken;
     }

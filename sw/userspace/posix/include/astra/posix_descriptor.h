@@ -1,0 +1,48 @@
+#ifndef ASTRA_POSIX_DESCRIPTOR_H
+#define ASTRA_POSIX_DESCRIPTOR_H
+
+#include <stddef.h>
+#include <stdint.h>
+#include <sys/types.h>
+
+#include <astra/process.h>
+
+/*
+ * The descriptor table, and the seam that keeps printf cheap.
+ *
+ * One table, because a descriptor has to be able to change what it is: a shell
+ * redirecting output makes fd 1 a file while stdio goes on writing to fd 1, and
+ * a table that kept streams and files apart could not express that.
+ *
+ * But a program that only prints must not drag the VFS client in behind
+ * printf -- `hello` is 23 KiB and `ls` is 43 KiB, and the difference is the
+ * filesystem. So the table knows nothing about files: it holds a kind and a
+ * number, and a file's operations arrive as a vector that the file half
+ * registers when something actually opens one. `status`, which prints nothing
+ * and opens nothing, links neither.
+ */
+
+typedef struct AstraPosixFileOps {
+    ssize_t (*read)(uint32_t slot, void *bytes, size_t length);
+    ssize_t (*write)(uint32_t slot, const void *bytes, size_t length);
+    int (*close)(uint32_t slot);
+    off_t (*seek)(uint32_t slot, off_t offset, int whence);
+} AstraPosixFileOps;
+
+/* Installed by the file half the first time a program opens something. */
+void astra_posix_file_bind(const AstraPosixFileOps *ops);
+
+/*
+ * Claims the lowest free descriptor for a file slot, or -1 with errno set.
+ * POSIX promises "lowest available", and a shell about to dup2 onto fd 1
+ * depends on it.
+ */
+int astra_posix_descriptor_file(uint32_t slot);
+
+/* The file slot behind a descriptor, or -1 if it is not a file at all. */
+int astra_posix_descriptor_slot(int fd);
+
+/* The startup block `astra_posix_start` was given, for the file half's use. */
+const AstraStartupInfo *astra_posix_startup(void);
+
+#endif

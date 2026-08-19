@@ -31,6 +31,7 @@ void kernel_pmmu_read_tc(uint32_t *value) { *value = 0u; }
 void kernel_pmmu_read_srp(KernelPmmuRootPointer *root) { *root = (KernelPmmuRootPointer){0}; }
 void kernel_pmmu_read_crp(KernelPmmuRootPointer *root) { *root = (KernelPmmuRootPointer){0}; }
 void kernel_pmmu_flush_all(void) { }
+void kernel_pmmu_flush_page(uint32_t virtual_address) { (void)virtual_address; }
 void kernel_pmmu_set_user_function_codes(void) { }
 void kernel_cache_invalidate_all(void) { }
 uint32_t kernel_cache_read_control(void) { return 0u; }
@@ -164,7 +165,7 @@ static void test_header_batching_waits_and_wrap(void)
     uint32_t woken;
 
     initialize_test();
-    assert(kernel_area_create(1u, KERNEL_PAGE_SIZE, &area) == KERNEL_AREA_OK);
+    assert(kernel_area_create(1u, KERNEL_PAGE_SIZE, 0u, &area) == KERNEL_AREA_OK);
     assert(kernel_ring_create(1u, area, 0u, 16u, 4u, &ring) ==
            KERNEL_RING_OK);
     assert(kernel_area_read(area, 0u, &header, sizeof(header)) ==
@@ -256,7 +257,7 @@ static void test_ring_injection_releases_child_authority(void)
 
     initialize_test();
     assert(kernel_memory_stats(&baseline));
-    assert(kernel_area_create(41u, KERNEL_PAGE_SIZE, &area) ==
+    assert(kernel_area_create(41u, KERNEL_PAGE_SIZE, 0u, &area) ==
            KERNEL_AREA_OK);
     kernel_allocation_test_fail_site(
         KERNEL_ALLOCATION_SITE_RING_OBJECT, 1u);
@@ -297,7 +298,7 @@ static void test_overlap_corruption_and_creator_death_survival(void)
     uint32_t woken;
 
     initialize_test();
-    assert(kernel_area_create(55u, 2u * KERNEL_PAGE_SIZE, &area) ==
+    assert(kernel_area_create(55u, 2u * KERNEL_PAGE_SIZE, 0u, &area) ==
            KERNEL_AREA_OK);
     assert(kernel_ring_create(77u, area, 0u, 32u, 8u, &first) ==
            KERNEL_RING_OK);
@@ -343,7 +344,7 @@ static void test_validation_no_advance_and_consumer_death(void)
     uint32_t woken;
 
     initialize_test();
-    assert(kernel_area_create(61u, 2u * KERNEL_PAGE_SIZE, &area) ==
+    assert(kernel_area_create(61u, 2u * KERNEL_PAGE_SIZE, 0u, &area) ==
            KERNEL_AREA_OK);
     assert(kernel_ring_create(61u, area, 1u, 16u, 4u, &ring) ==
            KERNEL_RING_INVALID_ARGUMENT);
@@ -413,7 +414,7 @@ static void test_missed_wakeup_and_wait_multiple(void)
     uint32_t woken;
 
     initialize_test();
-    assert(kernel_area_create(62u, 2u * KERNEL_PAGE_SIZE, &area) ==
+    assert(kernel_area_create(62u, 2u * KERNEL_PAGE_SIZE, 0u, &area) ==
            KERNEL_AREA_OK);
     assert(kernel_ring_create(62u, area, 0u, 16u, 4u, &first) ==
            KERNEL_RING_OK);
@@ -482,7 +483,7 @@ static void test_owner_death_wakes_waiters(void)
     uint32_t woken;
 
     initialize_test();
-    assert(kernel_area_create(63u, KERNEL_PAGE_SIZE, &area) ==
+    assert(kernel_area_create(63u, KERNEL_PAGE_SIZE, 0u, &area) ==
            KERNEL_AREA_OK);
     assert(kernel_ring_create(64u, area, 0u, 16u, 4u, &ring) ==
            KERNEL_RING_OK);
@@ -529,7 +530,7 @@ static void test_repeated_lifecycle_returns_exact_baseline(void)
         uint32_t virtual_base;
         uint32_t byte_size;
 
-        assert(kernel_area_create(66u, KERNEL_PAGE_SIZE, &area) ==
+        assert(kernel_area_create(66u, KERNEL_PAGE_SIZE, 0u, &area) ==
                KERNEL_AREA_OK);
         assert(kernel_area_map(
                    area, 65u, &space,

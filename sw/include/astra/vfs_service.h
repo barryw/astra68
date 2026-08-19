@@ -27,7 +27,7 @@
  */
 
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
-#define ASTRA_VFS_VERSION  UINT16_C(4)
+#define ASTRA_VFS_VERSION  UINT16_C(6)
 
 /*
  * The oldest version this build can still speak. A client asks for a minimum
@@ -52,6 +52,38 @@
  */
 #define ASTRA_VFS_IO_MAX 192u
 
+/*
+ * One READDIR_BATCH entry on the wire: a fixed record, then the name.
+ *
+ * The metadata travels with the name because the alternative is a stat per
+ * entry, and a cross-process round trip costs about 7.5 ms on this machine --
+ * a forty-name `ls -l` would spend a third of a second doing nothing but
+ * switching address spaces. Fewer entries fit in a batch than when an entry
+ * was three bytes and a name; that trade is the right way round, because the
+ * batch is bounded by one message and the stats would have been bounded by
+ * nothing.
+ *
+ * Big-endian, field by field, so the record does not depend on how a compiler
+ * lays a struct out:
+ *
+ *   0   u16  kind
+ *   2   u16  mode
+ *   4   u16  nlink
+ *   6   u8   name length, 1..ASTRA_VFS_NAME_MAX-1
+ *   7   u8   reserved, zero
+ *   8   u32  uid
+ *   12  u32  gid
+ *   16  u64  size
+ *   24  i64  mtime, seconds since the epoch
+ *   32  ..   name, not terminated
+ *
+ * ponytail: an entry is 32 bytes plus a name, so a 192-byte payload carries
+ * about four of them. When a listing of a large directory measures badly, the
+ * fix is READDIR into the bound transfer area the way READ_PATH already does,
+ * not a smaller record.
+ */
+#define ASTRA_VFS_DIRENT_HEADER 32u
+
 /* Operations. Values are frozen once published; new ones append. */
 #define ASTRA_VFS_OP_HELLO    UINT32_C(1)  /* open a session, agree a version */
 #define ASTRA_VFS_OP_BYE      UINT32_C(2)  /* close a session */
@@ -66,10 +98,27 @@
 #define ASTRA_VFS_OP_BIND_AREA UINT32_C(11)
 #define ASTRA_VFS_OP_READ_AREA UINT32_C(12)
 #define ASTRA_VFS_OP_READDIR_BATCH UINT32_C(13)
-#define ASTRA_VFS_OP_MAX      ASTRA_VFS_OP_READDIR_BATCH
+/*
+ * Whole-file read by path, into the bound area. Opening, reading and closing
+ * are three round trips for what is almost always one intent, and a round trip
+ * to a service costs milliseconds -- reading a 5 KiB icon cost more in round
+ * trips than in bytes. A program start is mostly small whole-file reads, so
+ * this is the shape that matters.
+ */
+#define ASTRA_VFS_OP_READ_PATH UINT32_C(14)
+#define ASTRA_VFS_OP_MAX      ASTRA_VFS_OP_READ_PATH
 
-/* One shared-area transfer replaces up to 86 inline READ round trips. */
-#define ASTRA_VFS_BULK_MAX 16384u
+/*
+ * One shared-area transfer, and the unit the whole read path is sized around.
+ *
+ * This was 16 KiB, which meant a 100 KiB program image cost seven round trips
+ * to the storage service and seven device transfers. Neither the area window
+ * (16 slots of 2 MiB) nor the DMA budget (512 pages) was anywhere near that
+ * bound -- it was simply a small number. 128 KiB carries every library and
+ * program the system ships in a single transfer, and a client only commits
+ * what it binds.
+ */
+#define ASTRA_VFS_BULK_MAX 131072u
 
 /* Open modes. */
 #define ASTRA_VFS_OPEN_READ     (UINT32_C(1) << 0)
@@ -121,6 +170,13 @@
 #define ASTRA_VFS_ERR_PEER        ((uint32_t)ASTRA_STATUS_PEER_DEAD)
 
 /*
+ * A protocol status as a word, or NULL for a number nothing has named yet.
+ * One table, because four copies is four chances for a machine to call the
+ * same refusal two different things.
+ */
+const char *astra_vfs_status_text(uint32_t status);
+
+/*
  * A file handle is a slot index plus a generation, so a stale handle is
  * refused rather than reused. Same rule the kernel applies to its own handles;
  * a service that skipped it would let a client reach whatever now occupies
@@ -133,7 +189,7 @@ typedef uint32_t AstraVfsSession;
 #define ASTRA_VFS_SESSION_INVALID UINT32_C(0)
 
 #define ASTRA_VFS_REQUEST_SIZE 224u
-#define ASTRA_VFS_REPLY_SIZE   232u
+#define ASTRA_VFS_REPLY_SIZE   256u
 
 /*
  * One request record covers every operation. A union of per-operation records
@@ -206,9 +262,25 @@ typedef struct AstraVfsReply {
      * fields mean two things.
      */
     uint64_t cursor;
+    /*
+     * Node metadata, version 6. A listing that can only show a name and a size
+     * is not a listing, and an editor that writes a file back has to be able to
+     * put the mode and the times back the way it found them.
+     *
+     * Zero means the backend does not have the field rather than that the field
+     * is zero. The distinction matters for `mode`: a filesystem with no
+     * permission bits and a file with none are not the same thing, and a client
+     * that cannot tell them apart prints a confident lie.
+     */
+    int64_t mtime;          /* seconds since the epoch */
     uint32_t count;         /* bytes moved, or the entry name's length */
+    uint32_t uid;
+    uint32_t gid;
     uint16_t kind;
+    uint16_t mode;          /* POSIX permission and type bits */
+    uint16_t nlink;
     uint16_t reserved;      /* must be zero */
+    uint32_t reserved2;     /* must be zero */
     uint8_t payload[ASTRA_VFS_IO_MAX];
 } AstraVfsReply;
 

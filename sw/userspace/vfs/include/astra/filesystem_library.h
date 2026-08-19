@@ -45,15 +45,36 @@ typedef struct AstraFileInfo {
     uint32_t open_flags;
     uint64_t byte_size;
     uint64_t offset;
+    /*
+     * Node metadata. Zero means the filesystem does not carry the field, not
+     * that its value is zero -- a caller that cannot tell those apart prints a
+     * confident lie about a filesystem that never claimed to know.
+     */
+    int64_t mtime;          /* seconds since the epoch */
+    uint32_t uid;
+    uint32_t gid;
     uint16_t kind;
     uint16_t member;
-    uint32_t reserved[3];
+    uint16_t mode;          /* POSIX permission and type bits */
+    uint16_t nlink;
 } AstraFileInfo;
 
+/*
+ * A directory entry carries the same metadata as a stat, and it carries it
+ * because the alternative is a stat per entry. A cross-process round trip is
+ * about 7.5 ms on this machine, so a forty-entry `ls -l` that stats each name
+ * costs a third of a second doing nothing but switching address spaces.
+ */
 typedef struct AstraDirectoryEntry {
     char name[ASTRA_VFS_NAME_MAX];
+    uint64_t byte_size;
+    int64_t mtime;
+    uint32_t uid;
+    uint32_t gid;
     uint16_t kind;
     uint16_t member;
+    uint16_t mode;
+    uint16_t nlink;
 } AstraDirectoryEntry;
 
 typedef struct AstraDirectory {
@@ -69,8 +90,8 @@ typedef struct AstraDirectory {
 
 #define ASTRA_FILESYSTEM_INIT { 0, 0, 0, 0 }
 #define ASTRA_FILE_INIT { 0, 0, ASTRA_VFS_FILE_INVALID, 0, 0, 0, 0, 0 }
-#define ASTRA_FILE_INFO_INIT { sizeof(AstraFileInfo), 0, 0, 0, 0, 0, \
-                               { 0, 0, 0 } }
+#define ASTRA_FILE_INFO_INIT { sizeof(AstraFileInfo), 0, 0, 0, 0, 0, 0, \
+                               0, 0, 0, 0 }
 #define ASTRA_DIRECTORY_INIT { 0, { 0 }, 0, 0, ASTRA_VFS_ERR_NOT_FOUND, \
                                0, 0, 0 }
 

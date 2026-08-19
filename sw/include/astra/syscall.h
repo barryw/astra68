@@ -3,7 +3,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010010
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010011
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -112,6 +112,15 @@
 #define ASTRA_SYSCALL_DISPLAY_SUBMIT   51
 #define ASTRA_SYSCALL_DISPLAY_COLLECT  52
 #define ASTRA_SYSCALL_LIBRARY_MAP      53
+/*
+ * Hands the committed pages of a reserved area back, keeping the reservation.
+ * data[1] is the address and data[2] the length; it answers with the number of
+ * pages actually released in data[1].
+ *
+ * Only whole pages inside the range go, so an allocator may pass the block it
+ * just freed without first working out which pages it has entirely to itself.
+ */
+#define ASTRA_SYSCALL_AREA_DECOMMIT    54
 
 /*
  * The most one call copies. Small on purpose: a drain is a bounded page and a
@@ -233,6 +242,12 @@
 #define ASTRA_AREA_SIZE_MAX 0x00200000u
 #define ASTRA_AREA_MAP_READ  (1u << 0)
 #define ASTRA_AREA_MAP_WRITE (1u << 1)
+/*
+ * Take the address range and commit nothing. Pages arrive as they are
+ * touched, a cluster at a time, and are charged to the owner then. What the
+ * program never reads, the machine never spends a frame on.
+ */
+#define ASTRA_AREA_CREATE_RESERVED (1u << 0)
 #endif
 
 #ifndef ASTRA_BULK_RING_ABI_CONSTANTS_DEFINED
@@ -252,10 +267,12 @@
 
 #ifndef ASTRA_MESSAGE_ABI_CONSTANTS_DEFINED
 #define ASTRA_MESSAGE_ABI_CONSTANTS_DEFINED 1
-#define ASTRA_PORT_MESSAGES_MAX 8u
-#define ASTRA_PORT_BYTES_MAX 2240u
+#define ASTRA_PORT_MESSAGES_MAX 16u
 #define ASTRA_MESSAGE_HEADER_SIZE 24u
-#define ASTRA_MESSAGE_INLINE_MAX 256u
+#define ASTRA_MESSAGE_INLINE_MAX 1024u
+#define ASTRA_PORT_BYTES_MAX \
+    (ASTRA_PORT_MESSAGES_MAX * \
+     (ASTRA_MESSAGE_HEADER_SIZE + ASTRA_MESSAGE_INLINE_MAX))
 #define ASTRA_MESSAGE_SIZE_MAX \
     (ASTRA_MESSAGE_HEADER_SIZE + ASTRA_MESSAGE_INLINE_MAX)
 #define ASTRA_MESSAGE_HANDLES_MAX 8u

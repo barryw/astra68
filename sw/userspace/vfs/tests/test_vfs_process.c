@@ -34,6 +34,29 @@ uint32_t astra_assign_seed(AstraAssignTable *table,
     return ASTRA_VFS_OK;
 }
 
+/*
+ * astra_process_read_file takes the one-round-trip path when the service can
+ * offer it. This suite exercises the resolver, not the transport, so both
+ * refuse and the caller falls back to the library path it already covers.
+ */
+uint32_t astra_assign_resolve(const AstraAssignTable *table,
+                              const char *path,
+                              uint32_t rights, uint32_t member, char *wire,
+                              uint32_t capacity, const AstraAssign **assign)
+{
+    (void)table; (void)path; (void)rights; (void)member; (void)wire;
+    (void)capacity; (void)assign;
+    return ASTRA_VFS_ERR_NOT_FOUND;
+}
+
+uint32_t astra_vfs_port_read_path(AstraVfsClient *client, const char *path,
+                                  const uint8_t **bytes, uint32_t *moved,
+                                  uint64_t *node_size)
+{
+    (void)client; (void)path; (void)bytes; (void)moved; (void)node_size;
+    return ASTRA_VFS_ERR_UNSUPPORTED;
+}
+
 uint32_t astra_vfs_port_connect(AstraVfsClient *client, uint32_t service)
 {
     ++connects;

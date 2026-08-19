@@ -36,6 +36,41 @@ uint32_t astra_vfs_port_transport(void *context, uint32_t operation,
                                   const AstraVfsRequest *request,
                                   AstraVfsReply *reply);
 uint32_t astra_vfs_port_connect(AstraVfsClient *client, uint32_t service);
+/*
+ * Open, read whole, close -- one round trip -- answered in the transfer area.
+ *
+ * This is the shape almost every read in the system actually wants: a manifest,
+ * an icon, a library image, a program. Doing it as three operations cost three
+ * round trips, and a round trip is milliseconds. Same borrow lifetime as
+ * astra_vfs_port_read_borrow: valid until the next operation on this client.
+ *
+ * Answers ASTRA_VFS_ERR_UNSUPPORTED against a peer older than version 5, and
+ * ASTRA_VFS_ERR_LIMIT for a file larger than the area, filling `node_size` so
+ * the caller can fall back knowing the size.
+ */
+uint32_t astra_vfs_port_read_path(AstraVfsClient *client, const char *path,
+                                  const uint8_t **bytes, uint32_t *moved,
+                                  uint64_t *node_size);
+
+/*
+ * A bulk read that hands back the transfer area instead of copying out of it.
+ *
+ * `astra_vfs_port_read_bulk` reads into the shared area and then copies every
+ * byte into the caller's buffer, which for a program image or a library is a
+ * second full pass over the data and was measured at about a third of the cost
+ * of reading one. A caller that only needs to look at the bytes -- parse a
+ * manifest, hand an image to the library loader -- can read them where they
+ * already are.
+ *
+ * The pointer is valid until the next operation on this client, because the
+ * next one reuses the area. Copy anything that has to outlive that.
+ *
+ * Refuses a length the area cannot hold; the caller falls back to read_bulk.
+ */
+uint32_t astra_vfs_port_read_borrow(AstraVfsClient *client, AstraVfsFile file,
+                                    uint64_t offset, uint32_t length,
+                                    const uint8_t **bytes, uint32_t *moved);
+
 uint32_t astra_vfs_port_read_bulk(AstraVfsClient *client, AstraVfsFile file,
                                   uint64_t offset, void *buffer,
                                   uint32_t length, uint32_t *moved);

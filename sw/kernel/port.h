@@ -7,19 +7,35 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* GUI profile: 18 live ports and 64 reserved messages; retain one queue spare. */
-#define KERNEL_PORT_MAX 24u
-#define KERNEL_PORT_OWNER_MAX 6u
-#define KERNEL_PORT_MESSAGE_MAX 72u
-#define KERNEL_PORT_OWNER_MESSAGE_MAX 40u
-#define KERNEL_PORT_MESSAGE_BYTES_MAX 8960u
-#define KERNEL_PORT_OWNER_BYTES_MAX 4480u
+/*
+ * These are budgets, not guesses, and they are static on purpose: a process
+ * that could make the kernel allocate could exhaust the kernel, and a kernel
+ * out of memory is not a failed allocation, it is the machine. Every resource
+ * below therefore comes in a pair -- a global budget and a per-owner quota --
+ * so one process cannot spend another's share.
+ *
+ * The numbers were sized for a GUI profile of 18 live ports and grew when a
+ * protocol record reached the message ceiling with no headroom left. They are
+ * now sized against the 2 MiB object-table region rather than against what
+ * would fit beside the kernel image; the region is the thing to raise when
+ * these are not enough, and the linker says so by name if they overflow it.
+ */
+#define KERNEL_PORT_MAX 128u
+#define KERNEL_PORT_OWNER_MAX 24u
+#define KERNEL_PORT_MESSAGE_MAX 256u
+#define KERNEL_PORT_OWNER_MESSAGE_MAX 64u
 #define KERNEL_PORT_MESSAGE_SIZE_MIN 24u
-#define KERNEL_PORT_MESSAGE_SIZE_MAX 280u
-#define KERNEL_PORT_INLINE_SIZE_MAX 256u
+#define KERNEL_PORT_INLINE_SIZE_MAX 1024u
+#define KERNEL_PORT_MESSAGE_SIZE_MAX \
+    (KERNEL_PORT_MESSAGE_SIZE_MIN + KERNEL_PORT_INLINE_SIZE_MAX)
+#define KERNEL_PORT_MESSAGE_BYTES_MAX \
+    (KERNEL_PORT_MESSAGE_MAX * KERNEL_PORT_MESSAGE_SIZE_MAX)
+#define KERNEL_PORT_OWNER_BYTES_MAX \
+    (KERNEL_PORT_OWNER_MESSAGE_MAX * KERNEL_PORT_MESSAGE_SIZE_MAX)
 #define KERNEL_PORT_MESSAGE_HANDLE_MAX KERNEL_HANDLE_TRANSFER_MAX
-#define KERNEL_PORT_QUEUE_MESSAGES_MAX 8u
-#define KERNEL_PORT_QUEUE_BYTES_MAX 2240u
+#define KERNEL_PORT_QUEUE_MESSAGES_MAX 16u
+#define KERNEL_PORT_QUEUE_BYTES_MAX \
+    (KERNEL_PORT_QUEUE_MESSAGES_MAX * KERNEL_PORT_MESSAGE_SIZE_MAX)
 #define KERNEL_PORT_WAITER_MAX KERNEL_THREAD_MAX
 
 #define KERNEL_PORT_SEND_RIGHTS \

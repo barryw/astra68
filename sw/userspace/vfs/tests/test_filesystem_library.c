@@ -106,6 +106,30 @@ uint32_t astra_vfs_write(AstraVfsClient *value, AstraVfsFile file,
     return ASTRA_VFS_OK;
 }
 
+/*
+ * The metadata arm answers through the size/kind arm rather than repeating the
+ * fixture, and stamps values a caller could not have guessed so a library that
+ * dropped a field shows up as a zero rather than as a plausible default.
+ */
+uint32_t astra_vfs_stat_meta(AstraVfsClient *value, const char *path,
+                             AstraVfsDirEntry *meta)
+{
+    uint32_t status;
+
+    if (meta == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    *meta = (AstraVfsDirEntry){0};
+    status = astra_vfs_stat(value, path, &meta->size, &meta->kind);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    meta->mode = 0644u;
+    meta->uid = 501u;
+    meta->gid = 20u;
+    meta->nlink = 1u;
+    meta->mtime = 1600000000;
+    return ASTRA_VFS_OK;
+}
+
 uint32_t astra_vfs_stat(AstraVfsClient *value, const char *path,
                         uint64_t *size, uint16_t *kind)
 {

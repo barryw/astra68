@@ -9,6 +9,19 @@
 
 #include <stddef.h>
 
+/*
+ * Object tables live in their own region above the frame metadata, not beside
+ * the kernel image. Raising a limit then costs address space there and moves
+ * no address anything else reads -- the trace ring especially, which crash
+ * tooling finds at a fixed address. kernel.ld names this region if it fills.
+ */
+#if defined(__m68k__)
+#define KERNEL_TABLES __attribute__((section(".tables")))
+#else
+#define KERNEL_TABLES
+#endif
+
+
 #define RING_GENERATION_MASK 0x00ffffffu
 
 typedef enum KernelRingState {
@@ -45,7 +58,7 @@ _Static_assert(sizeof(KernelRing) == 80u,
                "ring record size changed; update the memory budget");
 #endif
 
-static KernelRing rings[KERNEL_RING_MAX];
+static KernelRing rings[KERNEL_RING_MAX] KERNEL_TABLES;
 static KernelObjectCache ring_cache;
 static uint32_t ring_cache_bitmap[
     KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_RING_MAX)];

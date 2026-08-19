@@ -8,6 +8,13 @@
 
 #include <stddef.h>
 
+/* Object tables live above the frame metadata; see kernel.ld. */
+#if defined(__m68k__)
+#define KERNEL_TABLES __attribute__((section(".tables")))
+#else
+#define KERNEL_TABLES
+#endif
+
 #define VM_ROOT_ENTRIES 1024u
 #define VM_TABLE_ENTRIES 1024u
 #define VM_ROOT_INDEX(address) ((address) >> 22)
@@ -27,18 +34,32 @@
 #define VM_SDRAM_ROOT_INDEX VM_ROOT_INDEX(VM_SDRAM_BASE)
 #define VM_SDRAM_TOP_ROOT_INDEX 15u
 #define VM_SDRAM_TOP_BASE (VM_SDRAM_TOP_ROOT_INDEX << 22)
-#define VM_MAPPING_COUNT_SHIFT 4u
-#define VM_MAPPING_CLASS_MASK 0x0fu
+/*
+ * One entry per physical frame: the alias count above, the mapping class
+ * below. It was a byte split four and four, which capped a shared frame at
+ * fifteen aliases and therefore capped the whole machine at fifteen processes.
+ * Sixteen bits split eight and eight costs one more byte per frame -- 32 KiB
+ * across 128 MiB -- and takes the ceiling off.
+ */
+#define VM_MAPPING_COUNT_SHIFT 8u
+#define VM_MAPPING_CLASS_MASK 0x00ffu
 #define VM_MAPPING_PRIVATE_CLASS 0x0fu
 
 #if defined(KERNEL_VM_HOST_TEST)
-#define VM_KERNEL_STACK_GUARD 0x02080000u
-#define VM_KERNEL_WORKER_STACK_GUARD 0x02083000u
 #define VM_KERNEL_THREAD_STACKS_START \
     KERNEL_THREAD_SUPERVISOR_HOST_ARENA_BASE
 #define VM_KERNEL_THREAD_STACKS_END \
     (VM_KERNEL_THREAD_STACKS_START + \
      KERNEL_THREAD_MAX * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE)
+/*
+ * Above the arena, and derived from its end rather than written out. They were
+ * fixed addresses that happened to sit just past sixteen slots; raising the
+ * thread count moved the arena over them, and vm_init answered CORRUPT because
+ * a guard that is inside the thread arena is a guard for one of its slots.
+ */
+#define VM_KERNEL_STACK_GUARD VM_KERNEL_THREAD_STACKS_END
+#define VM_KERNEL_WORKER_STACK_GUARD \
+    (VM_KERNEL_THREAD_STACKS_END + KERNEL_PAGE_SIZE)
 #else
 extern uint8_t _kernel_stack_guard[];
 extern uint8_t _kernel_worker_stack_guard[];
@@ -59,7 +80,7 @@ static uint32_t kernel_top_table_physical;
 static uint32_t kernel_high_table_physical;
 static uint32_t empty_root_physical;
 static uint32_t current_user_root;
-static uint8_t mapped_user_frames[KERNEL_MAX_FRAMES];
+static uint16_t mapped_user_frames[KERNEL_MAX_FRAMES] KERNEL_TABLES;
 static KernelVmStats vm_stats;
 static bool initialized;
 static bool enabled;
@@ -247,12 +268,32 @@ static bool shared_mapping_class(uint32_t virtual_address,
     return true;
 }
 
+/*
+ * A shared run is published through a single page table, which is what lets
+ * the two range functions resolve the root descriptor once and then index the
+ * table directly. Slot alignment used to stand in for that statement, and the
+ * two stopped being the same thing when an area began committing a cluster at
+ * a time rather than all of itself at creation. So the invariant is written
+ * out instead of implied: page aligned, and both ends under one root entry.
+ *
+ * Callers check page_count for zero and for the range ceiling before this, so
+ * the last address cannot wrap.
+ */
+static bool shared_range_single_table(uint32_t virtual_address,
+                                      uint32_t page_count)
+{
+    uint32_t last = virtual_address + (page_count - 1u) * KERNEL_PAGE_SIZE;
+
+    return (virtual_address & (KERNEL_PAGE_SIZE - 1u)) == 0u &&
+           VM_ROOT_INDEX(virtual_address) == VM_ROOT_INDEX(last);
+}
+
 static bool frame_mapping_can_add(uint32_t physical_address,
                                   KernelFrameState state,
                                   uint32_t virtual_address)
 {
-    uint8_t encoded = mapped_user_frames[frame_index(physical_address)];
-    uint8_t count = encoded >> VM_MAPPING_COUNT_SHIFT;
+    uint16_t encoded = mapped_user_frames[frame_index(physical_address)];
+    uint16_t count = (uint16_t)(encoded >> VM_MAPPING_COUNT_SHIFT);
     uint8_t mapping_class;
 
     if (private_mapping_state(state))
@@ -270,22 +311,22 @@ static bool frame_mapping_add(uint32_t physical_address,
                               uint32_t virtual_address)
 {
     uint32_t index = frame_index(physical_address);
-    uint8_t encoded = mapped_user_frames[index];
-    uint8_t count = encoded >> VM_MAPPING_COUNT_SHIFT;
+    uint16_t encoded = mapped_user_frames[index];
+    uint16_t count = (uint16_t)(encoded >> VM_MAPPING_COUNT_SHIFT);
     uint8_t mapping_class;
 
     if (!frame_mapping_can_add(physical_address, state, virtual_address))
         return false;
     if (private_mapping_state(state)) {
         mapped_user_frames[index] =
-            (uint8_t)((1u << VM_MAPPING_COUNT_SHIFT) |
-                      VM_MAPPING_PRIVATE_CLASS);
+            (uint16_t)((1u << VM_MAPPING_COUNT_SHIFT) |
+                       VM_MAPPING_PRIVATE_CLASS);
         return true;
     }
     if (!shared_mapping_class(virtual_address, &mapping_class))
         return false;
     mapped_user_frames[index] =
-        (uint8_t)(((count + 1u) << VM_MAPPING_COUNT_SHIFT) | mapping_class);
+        (uint16_t)(((count + 1u) << VM_MAPPING_COUNT_SHIFT) | mapping_class);
     return true;
 }
 
@@ -294,8 +335,8 @@ static bool frame_mapping_remove(uint32_t physical_address,
                                  uint32_t virtual_address)
 {
     uint32_t index = frame_index(physical_address);
-    uint8_t encoded = mapped_user_frames[index];
-    uint8_t count = encoded >> VM_MAPPING_COUNT_SHIFT;
+    uint16_t encoded = mapped_user_frames[index];
+    uint16_t count = (uint16_t)(encoded >> VM_MAPPING_COUNT_SHIFT);
     uint8_t mapping_class;
 
     if (private_mapping_state(state)) {
@@ -311,7 +352,7 @@ static bool frame_mapping_remove(uint32_t physical_address,
         return false;
     --count;
     mapped_user_frames[index] = count == 0u ? 0u :
-        (uint8_t)((count << VM_MAPPING_COUNT_SHIFT) | mapping_class);
+        (uint16_t)((count << VM_MAPPING_COUNT_SHIFT) | mapping_class);
     return true;
 }
 
@@ -331,6 +372,19 @@ static void flush_all(void)
 {
     if (enabled) {
         kernel_pmmu_flush_all();
+        ++vm_stats.flushes;
+    }
+}
+
+/*
+ * The flush for a change that touched one page. Everything else still goes
+ * through flush_all: a range change of many pages is cheaper as one flush than
+ * as many, and dropping a table descriptor invalidates a whole region.
+ */
+static void flush_page(uint32_t virtual_address)
+{
+    if (enabled) {
+        kernel_pmmu_flush_page(virtual_address);
         ++vm_stats.flushes;
     }
 }
@@ -718,7 +772,7 @@ static KernelVmStatus map_owned_page(KernelAddressSpace *space,
          VM_DESC_WRITE_PROTECT) |
         (cache_inhibit ? VM_DESC_CACHE_INHIBIT : 0u);
     invalidate_caches();
-    flush_all();
+    flush_page(virtual_address);
     ++space->mapped_pages;
     ++vm_stats.user_mappings;
     return KERNEL_VM_OK;
@@ -797,7 +851,7 @@ KernelVmStatus kernel_vm_unmap_page(KernelAddressSpace *space,
     frame_owner = frame.owner;
     table[table_index] = VM_DESC_INVALID;
     invalidate_caches();
-    flush_all();
+    flush_page(virtual_address);
     if (!frame_mapping_remove(page_physical,
                               (KernelFrameState)frame.state,
                               virtual_address) ||
@@ -841,7 +895,7 @@ KernelVmStatus kernel_vm_map_shared_range(
         physical_pages == NULL || page_count == 0u ||
         page_count > KERNEL_VM_AREA_SLOT_SIZE / KERNEL_PAGE_SIZE ||
         frame_owner == KERNEL_OWNER_NONE ||
-        (virtual_address & (KERNEL_VM_AREA_SLOT_SIZE - 1u)) != 0u ||
+        !shared_range_single_table(virtual_address, page_count) ||
         !shared_mapping_class(virtual_address, &mapping_class) ||
         (permissions & KERNEL_VM_READ) == 0u ||
         (permissions & KERNEL_VM_EXEC) != 0u ||
@@ -1036,7 +1090,7 @@ KernelVmStatus kernel_vm_unmap_shared_range(
         physical_pages == NULL || page_count == 0u ||
         page_count > KERNEL_VM_AREA_SLOT_SIZE / KERNEL_PAGE_SIZE ||
         frame_owner == KERNEL_OWNER_NONE ||
-        (virtual_address & (KERNEL_VM_AREA_SLOT_SIZE - 1u)) != 0u ||
+        !shared_range_single_table(virtual_address, page_count) ||
         !shared_mapping_class(virtual_address, &mapping_class))
         return KERNEL_VM_INVALID_ARGUMENT;
     (void)mapping_class;

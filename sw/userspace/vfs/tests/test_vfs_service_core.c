@@ -187,6 +187,16 @@ fake_readdir(void *context, const char *path, uint64_t cookie, char *name,
         snprintf(name, capacity, "%s", fake.nodes[slot].path);
         info->size = fake.nodes[slot].size;
         info->kind = fake.nodes[slot].kind;
+        /*
+         * Values a decoder could not have guessed, and each one a different
+         * width, so a field packed at the wrong offset or in the wrong byte
+         * order shows up as a wrong number rather than as a plausible zero.
+         */
+        info->mode = (uint16_t)(0100644u + slot);
+        info->nlink = (uint16_t)(slot + 3u);
+        info->uid = 0x11223344u + slot;
+        info->gid = 0x55667788u + slot;
+        info->mtime = (int64_t)0x0000000123456789 + slot;
         *next = slot + 1u;
         return ASTRA_VFS_OK;
     }
@@ -644,6 +654,19 @@ test_client_through_transport(void)
             assert(stats->requests == requests + 1u);
             assert(entries[0].name[0] != '\0');
             assert(entries[1].name[0] != '\0');
+            /*
+             * The metadata a listing needs, through the wire record and back.
+             * A directory entry that arrives without it makes `ls -l` a stat
+             * per name, which is a round trip per name.
+             */
+            for (uint32_t index = 0u; index < count; ++index) {
+                assert(entries[index].mode >= 0100644u);
+                assert(entries[index].nlink >= 3u);
+                assert((entries[index].uid & 0xffffff00u) == 0x11223300u);
+                assert((entries[index].gid & 0xffffff00u) == 0x55667700u);
+                assert(entries[index].mtime >= (int64_t)0x0000000123456789);
+            }
+            assert(entries[0].uid != entries[1].uid);
         }
 
         /* A negotiated v3 peer keeps the one-entry API without a new op. */

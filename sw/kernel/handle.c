@@ -6,6 +6,19 @@
 
 #include <stddef.h>
 
+/*
+ * Object tables live in their own region above the frame metadata, not beside
+ * the kernel image. Raising a limit then costs address space there and moves
+ * no address anything else reads -- the trace ring especially, which crash
+ * tooling finds at a fixed address. kernel.ld names this region if it fills.
+ */
+#if defined(__m68k__)
+#define KERNEL_TABLES __attribute__((section(".tables")))
+#else
+#define KERNEL_TABLES
+#endif
+
+
 #define KERNEL_HANDLE_SLOT_BITS 8u
 #define KERNEL_HANDLE_SLOT_MASK ((1u << KERNEL_HANDLE_SLOT_BITS) - 1u)
 #define KERNEL_HANDLE_GENERATION_MASK 0x00ffffffu
@@ -127,7 +140,7 @@ typedef struct KernelDetachedEntry {
     uint8_t reserved;
 } KernelDetachedEntry;
 
-static KernelDetachedEntry detached_entries[KERNEL_HANDLE_DETACHED_MAX];
+static KernelDetachedEntry detached_entries[KERNEL_HANDLE_DETACHED_MAX] KERNEL_TABLES;
 static KernelObjectCache detached_cache;
 static uint32_t detached_cache_bitmap[
     KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_HANDLE_DETACHED_MAX)];
@@ -337,9 +350,16 @@ void kernel_handle_table_init(KernelHandleTable *table)
         entry->reserved = 0u;
     }
     table->owner = 0u;
-    for (uint32_t word = 0u; word < KERNEL_HANDLE_BITMAP_WORDS; ++word)
-        table->free_slots[word] = word + 1u == KERNEL_HANDLE_BITMAP_WORDS ?
-            KERNEL_HANDLE_LAST_WORD_MASK : UINT32_MAX;
+    /*
+     * Whole words, then the tail. Not a conditional inside the loop: the mask
+     * is all ones when the entry count is a multiple of the word size, and the
+     * compiler calls that a branch with identical arms. Not a fill of every
+     * word either, which it turns into a memset the kernel does not link.
+     */
+    for (uint32_t word = 0u; word + 1u < KERNEL_HANDLE_BITMAP_WORDS; ++word)
+        table->free_slots[word] = UINT32_MAX;
+    table->free_slots[KERNEL_HANDLE_BITMAP_WORDS - 1u] =
+        KERNEL_HANDLE_LAST_WORD_MASK;
 }
 
 bool kernel_handle_table_set_owner(KernelHandleTable *table, uint32_t owner)
@@ -640,8 +660,14 @@ uint32_t kernel_handle_available(const KernelHandleTable *table)
 
 bool kernel_handle_table_valid(const KernelHandleTable *table)
 {
-    uint32_t expected_free[KERNEL_HANDLE_BITMAP_WORDS] = {0u};
+    /*
+     * Cleared by the kernel's own helper rather than an initialiser: at four
+     * words the compiler turns `= {0}` into a memset, and the kernel links no
+     * C library to provide one.
+     */
+    uint32_t expected_free[KERNEL_HANDLE_BITMAP_WORDS];
 
+    kernel_bytes_clear(expected_free, (uint32_t)sizeof(expected_free));
     if (table == NULL ||
         (table->free_slots[KERNEL_HANDLE_BITMAP_WORDS - 1u] &
          ~KERNEL_HANDLE_LAST_WORD_MASK) != 0u)

@@ -32,6 +32,13 @@
 
 #include <stddef.h>
 
+/* Object tables live above the frame metadata; see kernel.ld. */
+#if defined(__m68k__)
+#define KERNEL_TABLES __attribute__((section(".tables")))
+#else
+#define KERNEL_TABLES
+#endif
+
 #define PROCESS_OWNER_PREFIX 0x10000000u
 #define PROCESS_QUALIFICATION_CLIENT_MAX 2u
 
@@ -74,7 +81,11 @@ typedef struct KernelProcess {
     uint32_t terminal_result;
     KernelHandle self_handle;
     uint16_t fault_vector;
-    uint16_t stack_slots;
+    /*
+     * One bit per thread stack slot. Sixteen bits was the ceiling on
+     * KERNEL_PROCESS_THREAD_MAX; sixty-four costs six bytes a process.
+     */
+    uint64_t stack_slots;
     uint16_t handle_references;
     uint8_t process_state;
     uint8_t exit_reason;
@@ -105,11 +116,32 @@ typedef struct KernelLibraryCacheEntry {
 } KernelLibraryCacheEntry;
 
 #if defined(__m68k__)
-_Static_assert(sizeof(KernelProcess) == 1496u,
-               "process record size changed; update the memory budget");
+/*
+ * A ceiling rather than an exact size. The exact number had to be edited every
+ * time a field changed and said nothing about whether the result still fit;
+ * this catches a record that grows by a field nobody costed, and the pool
+ * assert below catches the thing that actually matters.
+ */
+_Static_assert(sizeof(KernelProcess) <= 4608u,
+               "process record grew past its memory budget");
+_Static_assert(sizeof(KernelProcess) * KERNEL_PROCESS_MAX <= 256u * 1024u,
+               "process pool exceeds its share of TABLES");
 #endif
 
-static KernelProcess processes[KERNEL_PROCESS_MAX];
+
+/*
+ * One bit for a slot, without a variable 64-bit shift. The kernel links no
+ * libgcc, and `1ull << slot` with a runtime `slot` calls __ashldi3; splitting
+ * at the word boundary leaves a constant shift, which the compiler does inline
+ * as a word move.
+ */
+static uint64_t slot_bit(uint32_t slot)
+{
+    return slot < 32u ? (uint64_t)((uint32_t)1u << slot)
+                      : (uint64_t)((uint32_t)1u << (slot - 32u)) << 32;
+}
+
+static KernelProcess processes[KERNEL_PROCESS_MAX] KERNEL_TABLES;
 static KernelLibraryCacheEntry library_cache[ASTRA_LIBRARY_SLOT_COUNT];
 static KernelObjectCache process_cache;
 static uint32_t process_cache_bitmap[
@@ -190,9 +222,9 @@ _Static_assert(
     "user_stack_pages cannot count this many stack pages");
 _Static_assert(KERNEL_THREAD_STACK_PAGES_MAX <= 255u,
                "a thread's committed page count must fit its uint8_t");
-_Static_assert(KERNEL_PROCESS_THREAD_MAX <= 16u,
+_Static_assert(KERNEL_PROCESS_THREAD_MAX <= 64u,
                "stack slot bitmap exceeds its storage");
-_Static_assert(KERNEL_PROCESS_MAX == KERNEL_VM_SHARED_ALIAS_MAX,
+_Static_assert(KERNEL_PROCESS_MAX <= KERNEL_VM_SHARED_ALIAS_MAX,
                "shared-area VM alias accounting must cover every process");
 _Static_assert(ASTRA_EVENT_MANUAL_RESET ==
                    KERNEL_SYNC_EVENT_MANUAL_RESET,
@@ -828,12 +860,12 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
 
 static KernelProcessStatus finish_thread_reaps(void)
 {
-    uint16_t pending = kernel_thread_reap_slots();
+    uint64_t pending = kernel_thread_reap_slots();
 
     for (uint16_t slot = 0u; pending != 0u; ++slot, pending >>= 1u) {
         KernelThread *thread = kernel_thread_at(slot);
         KernelProcess *process;
-        uint16_t stack_bit;
+        uint64_t stack_bit;
         bool released = false;
         KernelPerformanceToken performance;
 
@@ -854,7 +886,7 @@ static KernelProcessStatus finish_thread_reaps(void)
             return KERNEL_PROCESS_CORRUPT;
         performance = kernel_performance_begin(
             KERNEL_PERFORMANCE_THREAD_REAP);
-        stack_bit = (uint16_t)(1u << thread->stack_slot);
+        stack_bit = slot_bit(thread->stack_slot);
         if (thread->stack_released == 0u) {
             /*
              * What this thread grew to, not what every thread starts with.
@@ -883,7 +915,7 @@ static KernelProcessStatus finish_thread_reaps(void)
                     return KERNEL_PROCESS_CORRUPT;
                 }
             }
-            process->stack_slots &= (uint16_t)~stack_bit;
+            process->stack_slots &= ~stack_bit;
             process->user_stack_pages =
                 (uint8_t)(process->user_stack_pages - committed);
             --process->user_guard_pages;
@@ -1746,7 +1778,7 @@ static uint32_t self_handle_rights(void)
 static int32_t find_stack_slot(const KernelProcess *process)
 {
     for (uint32_t slot = 0u; slot < KERNEL_PROCESS_THREAD_MAX; ++slot) {
-        if ((process->stack_slots & (uint16_t)(1u << slot)) == 0u)
+        if ((process->stack_slots & slot_bit(slot)) == 0u)
             return (int32_t)slot;
     }
     return -1;
@@ -2109,8 +2141,7 @@ static KernelProcessStatus commit_thread(KernelPreparedThread *prepared,
         prepared->handle == KERNEL_HANDLE_INVALID ||
         prepared->stack_slot >= KERNEL_PROCESS_THREAD_MAX ||
         process->thread_count >= KERNEL_PROCESS_THREAD_MAX ||
-        (process->stack_slots &
-         (uint16_t)(1u << prepared->stack_slot)) != 0u ||
+        (process->stack_slots & slot_bit(prepared->stack_slot)) != 0u ||
         thread->process_id != process->id ||
         thread->process_slot != (uint16_t)(process - processes) ||
         thread->stack_slot != prepared->stack_slot ||
@@ -2119,7 +2150,7 @@ static KernelProcessStatus commit_thread(KernelPreparedThread *prepared,
     if (kernel_thread_publish(thread) != KERNEL_THREAD_OK)
         return KERNEL_PROCESS_CORRUPT;
 
-    process->stack_slots |= (uint16_t)(1u << prepared->stack_slot);
+    process->stack_slots |= slot_bit(prepared->stack_slot);
     ++process->thread_count;
     ++process->live_threads;
     process->user_stack_pages =
@@ -5508,14 +5539,19 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         KernelHandle handle = KERNEL_HANDLE_INVALID;
         KernelHandleStatus handle_status;
         uint32_t rights = thread->context.data[2];
+        uint32_t area_flags = thread->context.data[3];
 
-        if (rights == 0u || (rights & ~KERNEL_AREA_RIGHTS) != 0u) {
+        if (rights == 0u || (rights & ~KERNEL_AREA_RIGHTS) != 0u ||
+            (area_flags & ~(uint32_t)ASTRA_AREA_CREATE_RESERVED) != 0u) {
             result = ASTRA_SYSCALL_INVALID_ARGUMENT;
             break;
         }
         kernel_enable_interrupts();
         area_status = kernel_area_create(
-            current->id, thread->context.data[1], &area);
+            current->id, thread->context.data[1],
+            (area_flags & ASTRA_AREA_CREATE_RESERVED) != 0u ?
+                KERNEL_AREA_CREATE_RESERVED : 0u,
+            &area);
         kernel_disable_interrupts();
         if (area_status != KERNEL_AREA_OK) {
             if (!area_status_to_syscall(area_status, &result))
@@ -5600,6 +5636,29 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         kernel_disable_interrupts();
         if (area_status != KERNEL_AREA_OK &&
             !area_status_to_syscall(area_status, &result))
+            return KERNEL_PROCESS_CORRUPT;
+        break;
+    }
+    case ASTRA_SYSCALL_AREA_DECOMMIT: {
+        KernelAreaStatus area_status;
+        uint32_t released = 0u;
+
+        kernel_enable_interrupts();
+        area_status = kernel_area_decommit(
+            current->id, &current->address_space, thread->context.data[1],
+            thread->context.data[2], &released);
+        kernel_disable_interrupts();
+        if (area_status != KERNEL_AREA_OK) {
+            if (!area_status_to_syscall(area_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        thread->context.data[1] = released;
+#if defined(KERNEL_PROCESS_HOST_TEST)
+        if (!kernel_area_pool_valid())
+#else
+        if (!kernel_area_pool_healthy())
+#endif
             return KERNEL_PROCESS_CORRUPT;
         break;
     }
@@ -6476,6 +6535,10 @@ static uint32_t classify_fault_address(const KernelThread *thread,
     }
     if (address >= KERNEL_THREAD_STACK_BASE && address < arena_end)
         return KERNEL_PROCESS_FAULT_STACK_ARENA;
+    if (address >= KERNEL_VM_AREA_BASE &&
+        address < KERNEL_VM_AREA_BASE +
+                      (KERNEL_VM_AREA_SLOT_COUNT * KERNEL_VM_AREA_SLOT_SIZE))
+        return KERNEL_PROCESS_FAULT_AREA_WINDOW;
     return KERNEL_PROCESS_FAULT_OTHER;
 }
 
@@ -6533,7 +6596,9 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
      * the instruction would need the frame returned intact rather than this.
      */
     if (frame.access_fault != 0u &&
-        grow_user_stack(current, thread, frame.fault_address)) {
+        (grow_user_stack(current, thread, frame.fault_address) ||
+         kernel_area_fault(current->id, &current->address_space,
+                           frame.fault_address))) {
         *next_context = &thread->context;
         return KERNEL_PROCESS_OK;
     }

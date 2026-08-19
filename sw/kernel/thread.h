@@ -3,7 +3,7 @@
 
 #define KERNEL_THREAD_KERNEL_STACK_TOP_OFFSET 76
 
-#define KERNEL_THREAD_MAX 16
+#define KERNEL_THREAD_MAX 32
 #define KERNEL_THREAD_PRIORITY_LEVELS 32
 #define KERNEL_THREAD_PRIORITY_IDLE 0
 #define KERNEL_THREAD_PRIORITY_USER_MIN 1
@@ -259,7 +259,7 @@ KernelThreadStatus kernel_thread_commit_death_wait(KernelThread *target);
 KernelThreadStatus kernel_thread_finish_reap(KernelThread *thread,
                                               bool *released);
 bool kernel_thread_reap_pending(void);
-uint16_t kernel_thread_reap_slots(void);
+uint64_t kernel_thread_reap_slots(void);
 KernelThreadStatus kernel_thread_make_ready(KernelThread *thread);
 KernelThreadStatus kernel_thread_take_next(KernelThread **thread);
 void kernel_thread_wait_queue_init(KernelThreadWaitQueue *queue);

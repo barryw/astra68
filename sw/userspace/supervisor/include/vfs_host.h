@@ -48,6 +48,18 @@ uint32_t supervisor_vfs_port(void);
 void supervisor_vfs_set_activity(uint32_t activity);
 
 /* Reads one resolved regular file completely into a caller-owned buffer. */
+/*
+ * The same read, answered in the transfer area rather than copied into a
+ * buffer of the caller's. A program image is the largest thing this system
+ * reads and it is read on every launch; copying it here and again into the new
+ * process made two full passes where one will do. The bytes are valid until
+ * the next read on the same assign, which is after the launch that consumes
+ * them. Refuses anything larger than the area and leaves the caller to fall
+ * back to supervisor_vfs_read.
+ */
+uint32_t supervisor_vfs_read_borrow(const char *path, const uint8_t **bytes,
+                                    uint32_t *length);
+
 uint32_t supervisor_vfs_read(const char *path, void *buffer,
                              uint32_t capacity, uint32_t *length);
 

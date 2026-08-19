@@ -1775,22 +1775,82 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
 		iblock_idx++;
 	}
 
+	/*
+	 * ASTRA: read whole blocks in contiguous runs, one device transfer per
+	 * run, the way ext4_fwrite() already writes them.
+	 *
+	 * Upstream reads one block per iteration through the buffer cache, so a
+	 * file read costs one device transfer per block however contiguous the
+	 * file is. On a target where a transfer is a submit, an interrupt and a
+	 * wake, that is milliseconds per 4 KiB -- reading a 100 KiB program cost
+	 * twenty-five of them. Coalescing makes it one.
+	 *
+	 * A run stops at a hole, because a hole is zero-filled and not read, and
+	 * at a non-contiguous block. Cached blocks in the run are flushed first:
+	 * a direct read bypasses the cache, and a dirty block that had not
+	 * reached the device yet would otherwise be read back stale.
+	 */
 	while (size >= block_size) {
+		ext4_fsblk_t run_start = 0;
+		uint32_t run_count = 0;
+		uint32_t run_max = (uint32_t)(size / block_size);
+
 		r = ext4_fs_get_inode_dblk_idx(&ref, iblock_idx, &fblock, true);
 		if (r != EOK)
 			goto Finish;
-		r = ext4_fread_block(file->mp->fs.bdev, fblock, 0, u8_buf,
-					     block_size);
+
+		if (fblock == 0) {
+			/* A hole: no device transfer, and it ends the run. */
+			memset(u8_buf, 0, block_size);
+			iblock_idx++;
+			size -= block_size;
+			u8_buf += block_size;
+			file->fpos += block_size;
+			if (rcnt)
+				*rcnt += block_size;
+			continue;
+		}
+
+		run_start = fblock;
+		run_count = 1;
+		while (run_count < run_max) {
+			ext4_fsblk_t next = 0;
+
+			r = ext4_fs_get_inode_dblk_idx(&ref,
+						       iblock_idx + run_count,
+						       &next, true);
+			if (r != EOK)
+				goto Finish;
+			if (next == 0 || next != run_start + run_count)
+				break;
+			run_count++;
+		}
+
+		if (run_count == 1) {
+			r = ext4_fread_block(file->mp->fs.bdev, run_start, 0,
+					     u8_buf, block_size);
+		} else {
+			uint32_t at;
+
+			for (at = 0; at < run_count; at++) {
+				r = ext4_block_flush_lba(file->mp->fs.bdev,
+							 run_start + at);
+				if (r != EOK)
+					goto Finish;
+			}
+			r = ext4_blocks_get_direct(file->mp->fs.bdev, u8_buf,
+						   run_start, run_count);
+		}
 		if (r != EOK)
 			goto Finish;
 
-		iblock_idx++;
-		size -= block_size;
-		u8_buf += block_size;
-		file->fpos += block_size;
+		iblock_idx += run_count;
+		size -= block_size * run_count;
+		u8_buf += block_size * run_count;
+		file->fpos += block_size * run_count;
 
 		if (rcnt)
-			*rcnt += block_size;
+			*rcnt += block_size * run_count;
 	}
 
 	if (size) {
@@ -2215,6 +2275,58 @@ int ext4_owner_set(const char *path, uint32_t uid, uint32_t gid)
 
 	inode_ref.dirty = true;
 	r = ext4_trans_put_inode_ref(mp, &inode_ref);
+
+	Finish:
+	EXT4_MP_UNLOCK(mp);
+
+	return r;
+}
+
+/*
+ * ASTRA: every field a listing needs, from one path resolution.
+ *
+ * ext4_mode_get, ext4_owner_get and ext4_mtime_get each open the path, so a
+ * caller that wants all of them pays four lookups per file and `ls -l` pays
+ * four per entry. This returns them together, and adds the link count and the
+ * size, which the inode carries and no public getter exposed -- the size
+ * matters because the alternative is opening every entry of a directory just
+ * to ask how big it is. Any pointer may be NULL.
+ */
+int ext4_meta_get(const char *path, uint32_t *mode, uint32_t *uid,
+		  uint32_t *gid, uint32_t *mtime, uint32_t *nlink,
+		  uint64_t *size)
+{
+	struct ext4_inode_ref inode_ref;
+	struct ext4_mountpoint *mp = ext4_get_mount(path);
+	ext4_file f;
+	int r;
+
+	if (!mp)
+		return ENOENT;
+
+	EXT4_MP_LOCK(mp);
+
+	r = ext4_generic_open2(&f, path, O_RDONLY, EXT4_DE_UNKNOWN, NULL, NULL);
+	if (r != EOK)
+		goto Finish;
+
+	r = ext4_fs_get_inode_ref(&mp->fs, f.inode, &inode_ref);
+	if (r != EOK)
+		goto Finish;
+
+	if (mode)
+		*mode = ext4_inode_get_mode(&mp->fs.sb, inode_ref.inode);
+	if (uid)
+		*uid = ext4_inode_get_uid(inode_ref.inode);
+	if (gid)
+		*gid = ext4_inode_get_gid(inode_ref.inode);
+	if (mtime)
+		*mtime = ext4_inode_get_modif_time(inode_ref.inode);
+	if (nlink)
+		*nlink = ext4_inode_get_links_cnt(inode_ref.inode);
+	if (size)
+		*size = ext4_inode_get_size(&mp->fs.sb, inode_ref.inode);
+	r = ext4_fs_put_inode_ref(&inode_ref);
 
 	Finish:
 	EXT4_MP_UNLOCK(mp);

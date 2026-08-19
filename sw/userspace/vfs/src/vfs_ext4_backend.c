@@ -159,6 +159,34 @@ remember_path(AstraVfsExt4Backend *backend, const char *path)
     } while (path[index++] != '\0');
 }
 
+/*
+ * The metadata a listing shows, from one lookup. Failure is not an error: a
+ * node whose metadata cannot be read is still a node with a name and a size,
+ * and the fields stay zero, which is this protocol's word for "not known"
+ * rather than for a real zero.
+ */
+static void
+fill_metadata(const char *full, AstraVfsNodeInfo *info, int with_size)
+{
+    uint32_t mode = 0u;
+    uint32_t uid = 0u;
+    uint32_t gid = 0u;
+    uint32_t mtime = 0u;
+    uint32_t nlink = 0u;
+    uint64_t size = 0u;
+
+    if (ext4_meta_get(full, &mode, &uid, &gid, &mtime, &nlink,
+                      with_size ? &size : NULL) != EOK)
+        return;
+    info->mode = (uint16_t)mode;
+    info->uid = uid;
+    info->gid = gid;
+    info->mtime = (int64_t)(uint64_t)mtime;
+    info->nlink = (uint16_t)nlink;
+    if (with_size)
+        info->size = size;
+}
+
 static uint32_t
 ext4_backend_open(void *context, const char *path, uint32_t flags,
                   uintptr_t *node, AstraVfsNodeInfo *info)
@@ -191,6 +219,7 @@ ext4_backend_open(void *context, const char *path, uint32_t flags,
         *node = 0u;
         info->size = 0u;
         info->kind = ASTRA_VFS_KIND_DIRECTORY;
+        fill_metadata(full, info, 0);
         return ASTRA_VFS_OK;
     }
 
@@ -215,6 +244,7 @@ ext4_backend_open(void *context, const char *path, uint32_t flags,
     *node = (uintptr_t)(index + 1u);
     info->size = ext4_fsize(&backend->open_files[index].file);
     info->kind = ASTRA_VFS_KIND_FILE;
+    fill_metadata(full, info, 0);
     return ASTRA_VFS_OK;
 }
 
@@ -320,6 +350,7 @@ ext4_backend_stat(void *context, const char *path, AstraVfsNodeInfo *info)
         (void)ext4_dir_close(&directory);
         info->size = 0u;
         info->kind = ASTRA_VFS_KIND_DIRECTORY;
+        fill_metadata(full, info, 0);
         return ASTRA_VFS_OK;
     }
     rc = ext4_fopen(&file, full, "rb");
@@ -329,6 +360,7 @@ ext4_backend_stat(void *context, const char *path, AstraVfsNodeInfo *info)
     info->size = ext4_fsize(&file);
     info->kind = ASTRA_VFS_KIND_FILE;
     (void)ext4_fclose(&file);
+    fill_metadata(full, info, 0);
     return ASTRA_VFS_OK;
 }
 
@@ -384,6 +416,28 @@ ext4_backend_readdir(void *context, const char *path, uint64_t cookie,
     info->size = 0u;
     info->kind = entry->inode_type == EXT4_DE_DIR ?
         ASTRA_VFS_KIND_DIRECTORY : ASTRA_VFS_KIND_FILE;
+    /*
+     * The entry itself carries a name and a type and nothing else, so the
+     * metadata comes from the inode behind it. One lookup per entry, in this
+     * process -- the alternative is a stat per entry from the client, which is
+     * a cross-process round trip each and three orders of magnitude worse.
+     */
+    {
+        char child[ASTRA_VFS_EXT4_PATH_MAX];
+        uint32_t at = 0u;
+
+        while (at < sizeof(child) - 1u && full[at] != '\0') {
+            child[at] = full[at];
+            ++at;
+        }
+        if (at != 0u && child[at - 1u] != '/' && at < sizeof(child) - 1u)
+            child[at++] = '/';
+        for (uint32_t index = 0u;
+             at < sizeof(child) - 1u && name[index] != '\0'; ++index)
+            child[at++] = name[index];
+        child[at] = '\0';
+        fill_metadata(child, info, 1);
+    }
     *next = backend->scan.next_off;
     backend->scan_next = *next;
     return ASTRA_VFS_OK;
