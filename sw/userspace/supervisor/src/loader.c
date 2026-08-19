@@ -1,4 +1,5 @@
 #include <loader.h>
+#include <proc_tree.h>
 
 #include <vfs_host.h>
 #include <volume.h>
@@ -14,6 +15,7 @@
 #include <astra/status.h>
 #include <astra/vfs_path.h>
 #include <astra/vfs_port_transport.h>
+#include <astra/vfs_service_core.h>
 
 #define MANIFEST_PATH "/vol/startup/system"
 #define STORAGE_IMAGE_PATH "/vol/services/storage"
@@ -28,6 +30,13 @@ static char manifest_text[LOADER_MANIFEST_MAX];
 static char bundle_text[ASTRA_BUNDLE_MANIFEST_MAX + 1u];
 static uint8_t image[ASTRA_USER_IMAGE_MAX_SIZE];
 static uint32_t process_handles[SUPERVISOR_MANIFEST_ENTRY_MAX];
+/*
+ * What each resident process was launched from, so PROC: can name it. A pid
+ * with no name is a number, and `ps` that prints numbers is a worse `ps` than
+ * the one nobody wrote.
+ */
+static char process_paths[SUPERVISOR_MANIFEST_ENTRY_MAX]
+                         [SUPERVISOR_PROCESS_NAME_MAX];
 static uint32_t service_handles[SUPERVISOR_MANIFEST_ENTRY_MAX];
 static char service_names[SUPERVISOR_MANIFEST_ENTRY_MAX]
                          [ASTRA_CAPABILITY_NAME_MAX];
@@ -38,6 +47,15 @@ static uint32_t event_target_receive;
 static uint32_t event_target_send;
 static uint32_t event_control_handle;
 static uint32_t launch_receive;
+/*
+ * PROC: is served by this process because this process holds the handles. A
+ * port of its own, the same shape the events service uses for EVENTS:, so a
+ * child reads process state with the protocol it already reads files with.
+ */
+static AstraVfsService proc_service;
+static AstraVfsPortService proc_port;
+static uint32_t proc_receive;
+static uint32_t proc_send;
 static uint32_t launch_send;
 
 static void log_failure(const char *operation, uint32_t status)
@@ -344,9 +362,24 @@ static uint32_t receive_ready(uint32_t receive, uint32_t child,
             ASTRA_SYSCALL_TIMED_OUT)
             return exit_status != 0u ? exit_status : ASTRA_STATUS_PEER_DEAD;
         status = astra_wait_one(receive, deadline, NULL);
-        if (status != ASTRA_SYSCALL_OK)
+        if (status != ASTRA_SYSCALL_OK) {
+            uint32_t child_status = 0u;
+
+            /*
+             * The child dying is the usual reason this wait ends, and its exit
+             * status is the only thing that says why it died. Ask before
+             * answering: PEER_DEAD on its own says a service is gone and
+             * nothing about which check it failed, and a boot that stops with
+             * that alone sends the next person to the port rather than to the
+             * service. The loop's other exit already prefers the child's
+             * status; this one threw it away.
+             */
+            if (astra_process_wait(child, 0u, &child_status) !=
+                    ASTRA_SYSCALL_TIMED_OUT && child_status != 0u)
+                return child_status;
             return status == ASTRA_SYSCALL_TIMED_OUT ? ASTRA_STATUS_BUSY :
                                                        ASTRA_STATUS_PEER_DEAD;
+        }
     }
     if (size != sizeof(message) ||
         message.header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
@@ -401,11 +434,76 @@ static uint32_t publish(const SupervisorManifestEntry *entry,
     return ASTRA_STATUS_OK;
 }
 
+
+/*
+ * What a launch cost, one line per program.
+ *
+ * Kept in the shipped build rather than behind the debug split, because the
+ * question it answers -- "which stage of starting this program got slower" --
+ * is the one asked after a change has already shipped, and a launch that has
+ * to be reproduced under a different build to be measured is a launch nobody
+ * measures. The four clock reads cost about 230 us against a launch budget in
+ * the tens of milliseconds.
+ *
+ *   read   the image off the volume, through the VFS
+ *   spawn  ASTRA_SYSCALL_PROCESS_CREATE: address space, image, first thread
+ *   ready  the child's own start-up, until it reports itself ready
+ */
+static uint32_t launch_text(char *out, uint32_t at, uint32_t capacity,
+                            const char *text)
+{
+    while (*text != '\0' && at + 1u < capacity) out[at++] = *text++;
+    out[at] = '\0';
+    return at;
+}
+
+static uint32_t launch_number(char *out, uint32_t at, uint32_t capacity,
+                              uint32_t value)
+{
+    char digits[12];
+    uint32_t count = 0u;
+
+    do { digits[count++] = (char)('0' + value % 10u); value /= 10u; }
+    while (value != 0u);
+    while (count != 0u && at + 1u < capacity) out[at++] = digits[--count];
+    out[at] = '\0';
+    return at;
+}
+
+static uint32_t launch_micros(uint64_t from, uint64_t to)
+{
+    return to > from ? (uint32_t)((to - from) / 1000u) : 0u;
+}
+
+static void launch_report(const char *path, uint32_t bytes, uint32_t read_us,
+                          uint32_t spawn_us, uint32_t ready_us)
+{
+    char line[120];
+    uint32_t at = 0u;
+
+    at = launch_text(line, at, sizeof(line), "launch ");
+    at = launch_text(line, at, sizeof(line), path);
+    at = launch_text(line, at, sizeof(line), " bytes=");
+    at = launch_number(line, at, sizeof(line), bytes);
+    at = launch_text(line, at, sizeof(line), " read=");
+    at = launch_number(line, at, sizeof(line), read_us);
+    at = launch_text(line, at, sizeof(line), " spawn=");
+    at = launch_number(line, at, sizeof(line), spawn_us);
+    at = launch_text(line, at, sizeof(line), " ready=");
+    at = launch_number(line, at, sizeof(line), ready_us);
+    (void)launch_text(line, at, sizeof(line), "us");
+    (void)astra_log(line);
+}
+
+/* Set by whichever call site read the image; consumed by the next launch. */
+static uint32_t launch_read_us;
+
 static uint32_t launch_entry(const AstraStartupInfo *startup,
                              const AstraStartupCapability *capabilities,
                              const SupervisorManifestEntry *entry,
                              const char *bundle_root,
                              const AstraLaunchArguments *arguments,
+                             const uint8_t *image_bytes,
                              uint32_t image_length,
                              uint32_t *process_id)
 {
@@ -425,9 +523,13 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
         return ASTRA_STATUS_LIMIT;
     status = build_grants(startup, capabilities, entry, bundle_root, send, grants,
                           &grant_count);
+    uint64_t spawn_start = astra_clock_monotonic();
+    uint32_t spawn_us;
+    uint64_t ready_start;
+
     if (status == ASTRA_STATUS_OK) {
         uint32_t launch_status = astra_launch(
-            image, image_length, grants, grant_count, arguments,
+            image_bytes, image_length, grants, grant_count, arguments,
             &child, &child_id);
 
         if (launch_status == ASTRA_SYSCALL_OK)
@@ -437,12 +539,16 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
             status = ASTRA_STATUS_INVALID;
         }
     }
+    spawn_us = launch_micros(spawn_start, astra_clock_monotonic());
     (void)astra_close(send);
     if (status != ASTRA_STATUS_OK) {
         (void)astra_close(receive);
         return status;
     }
+    ready_start = astra_clock_monotonic();
     status = receive_ready(receive, child, expected_handles, published);
+    launch_report(entry->path, image_length, launch_read_us, spawn_us,
+                  launch_micros(ready_start, astra_clock_monotonic()));
     (void)astra_close(receive);
     if (status != ASTRA_STATUS_OK) {
         (void)astra_close(child);
@@ -458,13 +564,74 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
     }
     if (expected_handles == 2u)
         event_control_handle = published[1];
-    if (entry->resident != 0u)
+    if (entry->resident != 0u) {
+        uint32_t at = 0u;
+
+        while (at < SUPERVISOR_PROCESS_NAME_MAX - 1u &&
+               entry->path[at] != '\0') {
+            process_paths[process_count][at] = entry->path[at];
+            ++at;
+        }
+        process_paths[process_count][at] = '\0';
         process_handles[process_count++] = child;
-    else
+    } else
         (void)astra_close(child);
     if (process_id != NULL)
         *process_id = child_id;
     return ASTRA_STATUS_OK;
+}
+
+/*
+ * Brings PROC: up. Failure is not fatal: a machine that cannot show its own
+ * process list is worse than one that can, and much better than one that
+ * refuses to boot over it. The send handle stays zero and children are granted
+ * nothing, which is what a child then sees.
+ */
+static void proc_tree_start(void)
+{
+    if (proc_send != 0u)
+        return;
+    if (!astra_vfs_service_init(&proc_service, supervisor_proc_ops(), NULL))
+        return;
+    if (astra_rt_port_create(SUPERVISOR_PROC_PORT_MESSAGES,
+                             (uint32_t)sizeof(AstraVfsRequestMessage),
+                             &proc_receive, &proc_send) != ASTRA_SYSCALL_OK) {
+        proc_send = 0u;
+        return;
+    }
+    if (!astra_vfs_port_service_init(&proc_port, proc_receive,
+                                     &proc_service)) {
+        (void)astra_close(proc_receive);
+        (void)astra_close(proc_send);
+        proc_receive = 0u;
+        proc_send = 0u;
+        return;
+    }
+    /*
+     * Bound into this process's own namespace, not special-cased at the point
+     * of a launch. A child inherits PROC: the way it inherits COMMANDS:, and a
+     * terminal that was granted it can pass it on to what it launches without
+     * knowing it is served from here.
+     */
+    if (astra_assign_bind(supervisor_assigns(), "PROC", proc_send,
+                          ASTRA_RIGHT_READ, "") != ASTRA_VFS_OK) {
+        (void)astra_close(proc_receive);
+        (void)astra_close(proc_send);
+        proc_receive = 0u;
+        proc_send = 0u;
+    }
+}
+
+uint32_t supervisor_loader_proc_mount(void)
+{
+    return proc_send;
+}
+
+void supervisor_loader_pump_proc(void)
+{
+    if (proc_send != 0u)
+        (void)astra_vfs_port_service_pump(&proc_port,
+                                          SUPERVISOR_PROC_PORT_BUDGET);
 }
 
 static void launch_reply(uint32_t reply_send, uint32_t transaction,
@@ -493,6 +660,7 @@ static void pump_launch(const AstraStartupInfo *startup,
     uint32_t reply_send = 0u;
     uint32_t size = 0u;
     uint32_t handles = 0u;
+    const uint8_t *image_bytes = image;
     uint32_t image_length = 0u;
     uint32_t process_id = 0u;
     uint32_t status;
@@ -591,12 +759,23 @@ static void pump_launch(const AstraStartupInfo *startup,
         ++entry.grant_count;
     }
     if (status == ASTRA_STATUS_OK) {
-        status = supervisor_vfs_read(entry_path, image, sizeof(image),
-                                     &image_length);
+        {
+            uint64_t read_start = astra_clock_monotonic();
+
+            status = supervisor_vfs_read_borrow(entry_path, &image_bytes,
+                                                &image_length);
+            if (status != ASTRA_VFS_OK) {
+                image_bytes = image;
+                status = supervisor_vfs_read(entry_path, image, sizeof(image),
+                                             &image_length);
+            }
+            launch_read_us = launch_micros(read_start,
+                                           astra_clock_monotonic());
+        }
         if (status == ASTRA_VFS_OK) {
             status = launch_entry(startup, capabilities, &entry, bundle_root,
-                                  &request.arguments, image_length,
-                                  &process_id);
+                                  &request.arguments, image_bytes,
+                                  image_length, &process_id);
         } else {
             status = status == ASTRA_VFS_ERR_LIMIT ? ASTRA_STATUS_LIMIT :
                                                      ASTRA_STATUS_NOT_FOUND;
@@ -613,6 +792,7 @@ uint32_t supervisor_loader_start(
     const AstraStartupCapability *capabilities)
 {
     SupervisorManifest manifest;
+    const uint8_t *boot_bytes = image;
     uint32_t manifest_length = 0u;
     uint32_t image_length = 0u;
     uint32_t status;
@@ -645,7 +825,7 @@ uint32_t supervisor_loader_start(
     supervisor_bootstrap_block_release();
 
     status = launch_entry(startup, capabilities, &manifest.entries[0], NULL,
-                          NULL, image_length, NULL);
+                          NULL, image, image_length, NULL);
     if (status != ASTRA_STATUS_OK)
         return status;
     supervisor_bootstrap_block_close();
@@ -657,11 +837,23 @@ uint32_t supervisor_loader_start(
         status = resolve_entry_image(entry, entry_path, sizeof(entry_path),
                                      bundle_root, sizeof(bundle_root), NULL);
         if (status == ASTRA_STATUS_OK) {
-            status = supervisor_vfs_read(entry_path, image, sizeof(image),
-                                         &image_length);
+            {
+                uint64_t read_start = astra_clock_monotonic();
+
+                status = supervisor_vfs_read_borrow(entry_path, &boot_bytes,
+                                                    &image_length);
+                if (status != ASTRA_VFS_OK) {
+                    boot_bytes = image;
+                    status = supervisor_vfs_read(entry_path, image,
+                                                 sizeof(image), &image_length);
+                }
+                launch_read_us = launch_micros(read_start,
+                                               astra_clock_monotonic());
+            }
             if (status == ASTRA_VFS_OK)
                 status = launch_entry(startup, capabilities, entry,
-                                      bundle_root, NULL, image_length, NULL);
+                                      bundle_root, NULL, boot_bytes,
+                                      image_length, NULL);
             else
                 status = status == ASTRA_VFS_ERR_LIMIT ? ASTRA_STATUS_LIMIT :
                                                          ASTRA_STATUS_NOT_FOUND;
@@ -669,6 +861,7 @@ uint32_t supervisor_loader_start(
         if (status != ASTRA_STATUS_OK && entry->required)
             return status;
     }
+    proc_tree_start();
     (void)astra_close(event_target_send);
     event_target_send = 0u;
     (void)astra_close(launch_send);
@@ -692,6 +885,26 @@ uint32_t supervisor_loader_start(
     return ASTRA_STATUS_OK;
 }
 
+/*
+ * The resident process table, for the PROC: tree to render. An accessor rather
+ * than a shared array because the table is the loader's: it decides what is
+ * resident and it compacts the list when something exits, and a second file
+ * indexing into it directly would be a second place that has to know both.
+ */
+uint32_t supervisor_loader_process_count(void)
+{
+    return process_count;
+}
+
+uint32_t supervisor_loader_process_at(uint32_t index, const char **path)
+{
+    if (index >= process_count)
+        return 0u;
+    if (path != NULL)
+        *path = process_paths[index];
+    return process_handles[index];
+}
+
 uint32_t supervisor_loader_event_control(void)
 {
     return event_control_handle;
@@ -706,7 +919,7 @@ uint32_t supervisor_loader_watch(
     const AstraStartupInfo *startup,
     const AstraStartupCapability *capabilities)
 {
-    uint32_t waits[SUPERVISOR_MANIFEST_ENTRY_MAX + 2u];
+    uint32_t waits[SUPERVISOR_MANIFEST_ENTRY_MAX + 3u];
 
     for (;;) {
         uint32_t index = ASTRA_WAIT_INDEX_NONE;
@@ -714,9 +927,10 @@ uint32_t supervisor_loader_watch(
 
         waits[0] = event_target_receive;
         waits[1] = launch_receive;
+        waits[2] = proc_receive;
         for (uint32_t at = 0u; at < process_count; ++at)
-            waits[at + 2u] = process_handles[at];
-        status = astra_wait_multiple(waits, process_count + 2u,
+            waits[at + 3u] = process_handles[at];
+        status = astra_wait_multiple(waits, process_count + 3u,
                                      ASTRA_DEADLINE_FOREVER, &index, NULL);
 
         if (index == 0u) {
@@ -731,9 +945,15 @@ uint32_t supervisor_loader_watch(
             pump_launch(startup, capabilities);
             continue;
         }
-        if (index > 1u && index <= process_count + 1u) {
+        if (index == 2u) {
+            if (status != ASTRA_SYSCALL_OK)
+                return ASTRA_STATUS_PEER_DEAD;
+            supervisor_loader_pump_proc();
+            continue;
+        }
+        if (index > 2u && index <= process_count + 2u) {
             uint32_t exit_status = 0u;
-            uint32_t slot = index - 2u;
+            uint32_t slot = index - 3u;
             uint32_t wait_status = astra_process_wait(process_handles[slot],
                                                       0u, &exit_status);
 
@@ -742,7 +962,10 @@ uint32_t supervisor_loader_watch(
                             exit_status != 0u ? exit_status :
                                                 ASTRA_STATUS_PEER_DEAD);
                 (void)astra_close(process_handles[slot]);
-                process_handles[slot] = process_handles[--process_count];
+                --process_count;
+                process_handles[slot] = process_handles[process_count];
+                for (uint32_t at = 0u; at < SUPERVISOR_PROCESS_NAME_MAX; ++at)
+                    process_paths[slot][at] = process_paths[process_count][at];
                 continue;
             }
         }

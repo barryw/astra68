@@ -38,7 +38,6 @@
 
 /* A path the protocol will refuse to carry is not worth building. */
 #define SHELL_PATH_MAX ASTRA_VFS_PATH_MAX
-#define SHELL_READ_CHUNK 128u
 #define CONSOLE_INPUT_POLL_NS 10000000ull
 
 /*
@@ -85,6 +84,23 @@ static uint32_t shell_strlen(const char *text)
     while (text[length] != '\0')
         ++length;
     return length;
+}
+
+/*
+ * Every line the shell prints, into the machine's own record.
+ *
+ * The screen used to be readable from outside -- the terminal owned a
+ * character plane and a harness could read the cells out of it. It draws
+ * glyphs into a window now, so the screen says nothing to anything but an
+ * eye, and a machine with no eye on it had no way to show what its shell
+ * answered. This is that way: the same text, in the ring the debugger, the
+ * gates and a panic report all already read -- at debug level, so it is live
+ * commentary and never displaces the machine's own record of what happened.
+ */
+static void echo_line(void *context, const char *line, uint32_t length)
+{
+    (void)context;
+    (void)astra_log_debug(line, length);
 }
 
 static int shell_equal(const char *left, const char *right)
@@ -135,23 +151,12 @@ static void write_number(uint32_t value)
 /*
  * Protocol statuses, not errno. The shell cannot know what filesystem answered
  * and has no business printing its error numbers; these are the same values
- * any client of the storage protocol sees.
+ * any client of the storage protocol sees, and the words for them are shared
+ * with the programs that have to say the same things.
  */
 static void report_status(const char *what, uint32_t status)
 {
-    static const char *const text[] = {
-        "ok", "protocol error", "not found", "already exists",
-        "not a directory", "is a directory", "access denied", "no space",
-        "invalid", "bad handle", "limit reached", "I/O error", "not empty",
-        "unsupported", "busy", "buffer too small",
-        /*
-         * 16, and the first status here that a transport produces rather than
-         * a filesystem. "not found" is a volume answering; this is nobody
-         * answering, and a person needs to be able to tell those apart at the
-         * prompt because only one of them is worth retrying.
-         */
-        "the service is gone"
-    };
+    const char *text = astra_vfs_status_text(status);
 
     /*
      * The screen tells the person; the event tells the machine. A refused
@@ -162,8 +167,8 @@ static void report_status(const char *what, uint32_t status)
                  "command refused, status %u", status);
     astra_terminal_write(&shell.terminal, what);
     astra_terminal_write(&shell.terminal, ": ");
-    if (status < (uint32_t)(sizeof(text) / sizeof(text[0]))) {
-        astra_terminal_write(&shell.terminal, text[status]);
+    if (text != NULL) {
+        astra_terminal_write(&shell.terminal, text);
     } else {
         astra_terminal_write(&shell.terminal, "status ");
         write_number(status);
@@ -171,53 +176,26 @@ static void report_status(const char *what, uint32_t status)
     astra_terminal_putc(&shell.terminal, '\n');
 }
 
-static void command_ls(int argc, char *const *argv)
-{
-    AstraDirectory directory = ASTRA_DIRECTORY_INIT;
-    AstraDirectoryEntry entries[ASTRA_FILESYSTEM_DIRECTORY_BATCH_MAX];
-    char typed[SHELL_PATH_MAX];
-    uint32_t shown = 0u;
-    uint32_t status;
-
-    status = filesystem_library()->qualify(
-        shell.assign, shell.directory, argc > 1 ? argv[1] : NULL, typed,
-        sizeof(typed));
-    if (status != ASTRA_VFS_OK) {
-        report_status("ls", status);
-        return;
-    }
-    status = filesystem_library()->directory_open(filesystem(), typed,
-                                                  &directory);
-    if (status != ASTRA_VFS_OK) {
-        report_status("ls", status);
-        return;
-    }
-    for (;;) {
-        uint32_t count = 0u;
-
-        status = filesystem_library()->directory_read(
-            &directory, entries,
-            (uint32_t)(sizeof(entries) / sizeof(entries[0])), &count);
-        if (status != ASTRA_VFS_OK || count == 0u)
-            break;
-        for (uint32_t entry = 0u; entry < count; ++entry) {
-            astra_terminal_write(&shell.terminal, entries[entry].name);
-            if (entries[entry].kind == ASTRA_VFS_KIND_DIRECTORY)
-                astra_terminal_putc(&shell.terminal, '/');
-            astra_terminal_write(&shell.terminal, "  [");
-            write_number(entries[entry].member);
-            astra_terminal_write(&shell.terminal, "]\n");
-            ++shown;
-        }
-    }
-    filesystem_library()->directory_close(&directory);
-    if (status != ASTRA_VFS_OK) {
-        report_status("ls", status);
-        return;
-    }
-    if (shown == 0u)
-        write_line("(empty)");
-}
+/*
+ * `ls`, `cat`, `mkdir` and `rm` were builtins here and are COMMANDS: programs
+ * now. They moved out for the reason anything moves out of a shell: a builtin
+ * cannot be replaced, cannot be run by anything but the shell carrying it, is
+ * not available to a script, and can only ever do what this file happens to
+ * know how to do -- `ls` showing mode, owner, link count and time is what that
+ * cost, and it would have been a second implementation of a listing to keep in
+ * step with the first.
+ *
+ * `rm` gained something the others did not. A builtin runs holding everything
+ * the shell holds, so a builtin `rm` declining to touch a read-only member was
+ * the shell being careful; the program holds only what it was granted, so the
+ * refusal comes from the member. That is the difference between a rule and a
+ * guarantee.
+ *
+ * `write` stays, for now. It exists because there is no other way to put bytes
+ * in a file, and the answer to that is a stream pointed somewhere other than
+ * the terminal -- `cat` into a redirect, and eventually an editor -- not a
+ * better builtin.
+ */
 
 static void command_cd(int argc, char *const *argv)
 {
@@ -255,63 +233,6 @@ static void command_cd(int argc, char *const *argv)
         return;
     }
     (void)memcpy(shell.assign, name, sizeof(shell.assign));
-}
-
-static void command_cat(int argc, char *const *argv)
-{
-    char typed[SHELL_PATH_MAX];
-    uint8_t chunk[SHELL_READ_CHUNK];
-    AstraFile file = ASTRA_FILE_INIT;
-    uint32_t moved = 0u;
-    uint32_t status;
-
-    if (argc < 2) {
-        write_line("cat: needs a file");
-        return;
-    }
-    status = filesystem_library()->qualify(
-        shell.assign, shell.directory, argv[1], typed, sizeof(typed));
-    if (status == ASTRA_VFS_OK)
-        status = filesystem_library()->open(
-            filesystem(), typed, ASTRA_VFS_OPEN_READ, &file);
-    if (status != ASTRA_VFS_OK) {
-        report_status("cat", status);
-        return;
-    }
-    for (;;) {
-        status = filesystem_library()->read(&file, chunk, sizeof(chunk),
-                                            &moved);
-        if (status != ASTRA_VFS_OK) {
-            report_status("cat", status);
-            break;
-        }
-        /* A short read is normal: one message carries a bounded payload. */
-        if (moved == 0u)
-            break;
-        astra_terminal_write_bytes(&shell.terminal, chunk, moved);
-    }
-    (void)filesystem_library()->close(&file);
-    astra_terminal_putc(&shell.terminal, '\n');
-}
-
-static void command_mkdir(int argc, char *const *argv)
-{
-    char typed[SHELL_PATH_MAX];
-    uint32_t status;
-
-    if (argc < 2) {
-        write_line("mkdir: needs a name");
-        return;
-    }
-    status = filesystem_library()->qualify(
-        shell.assign, shell.directory, argv[1], typed, sizeof(typed));
-    if (status != ASTRA_VFS_OK) {
-        report_status("mkdir", status);
-        return;
-    }
-    status = filesystem_library()->mkdir(filesystem(), typed);
-    if (status != ASTRA_VFS_OK)
-        report_status("mkdir", status);
 }
 
 /* write NAME TEXT... -- creates or truncates, then writes the rest of the line. */
@@ -363,26 +284,6 @@ finish:
     (void)filesystem_library()->close(&file);
 }
 
-static void command_rm(int argc, char *const *argv)
-{
-    char typed[SHELL_PATH_MAX];
-    uint32_t status;
-
-    if (argc < 2) {
-        write_line("rm: needs a name");
-        return;
-    }
-    status = filesystem_library()->qualify(
-        shell.assign, shell.directory, argv[1], typed, sizeof(typed));
-    if (status != ASTRA_VFS_OK) {
-        report_status("rm", status);
-        return;
-    }
-    status = filesystem_library()->unlink(filesystem(), typed);
-    if (status != ASTRA_VFS_OK)
-        report_status("rm", status);
-}
-
 /*
  * What this shell's namespace actually is: every name, its members in order,
  * and what each member carries.
@@ -427,8 +328,8 @@ static void command_assign(int argc, char *const *argv)
 
 static void command_help(void)
 {
-    write_line("builtins: ls [dir], cd [dir], cat FILE, mkdir DIR, assign,");
-    write_line("          write FILE TEXT..., rm FILE, pwd, clear, help");
+    write_line("builtins: cd [dir], write FILE TEXT..., assign,");
+    write_line("          pwd, clear, help");
     write_line("paths are ASSIGN:path -- there is no root. try ls WORK:");
     /*
      * `events` is named here as a file, not a builtin, and that is the whole
@@ -436,7 +337,8 @@ static void command_help(void)
      * and a help text that still listed it as a builtin would be the machine
      * describing itself as it used to be.
      */
-    write_line("programs live in COMMANDS:. try status 7, or events");
+    write_line("programs live in COMMANDS:. try ls -l, cat FILE, mkdir DIR,");
+    write_line("          rm FILE, status 7, or events");
     write_line("assign shows every name and its members, in the order tried");
 }
 
@@ -529,11 +431,32 @@ static uint32_t launch_path(const char *word, AstraFile *file,
  * own assign table, seeded from these grants -- which is why the namespace
  * entries carry their read and write rights in `rights` as well.
  */
+/* Bounded append into a root buffer; false the moment it would not fit. */
+static int root_append(char *root, uint32_t capacity, uint32_t *at,
+                       const char *text)
+{
+    while (*text != '\0') {
+        if (*at + 1u >= capacity)
+            return 0;
+        root[(*at)++] = *text++;
+    }
+    root[*at] = '\0';
+    return 1;
+}
+
 static uint32_t launch_grants(AstraLaunchGrant *grants)
 {
     static const char *const stream_names[] = {"STDOUT", "STDERR", "STDIN"};
+    /*
+     * PROC: is a mount like any other from here, and that is the point: `ps`
+     * reads process state with the protocol `cat` reads a file with, and this
+     * shell passes on what it was granted without knowing the supervisor
+     * renders it. Read-only, because looking at a process list is not
+     * authority to change one -- killing needs process-control authority and
+     * does not travel down this path.
+     */
     static const char *const mount_names[] = {
-        "WORK", "COMMANDS", "LIBS", "EVENTS"
+        "WORK", "COMMANDS", "LIBS", "EVENTS", "PROC"
     };
     uint32_t streams[3];
     uint32_t count = 0u;
@@ -542,11 +465,12 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
                    "stream names and handles must stay paired");
     /*
      * Whether either loop below ran out of room before it ran out of
-     * grants to make. It is provably 9 of 10 today -- three streams, WORK,
-     * two COMMANDS members, LIBS, EVENTS and EVENT_CONTROL -- but a third
-     * COMMANDS member, or a fourth stream, would push something out of a
-     * child's namespace with nothing recorded, the same silence
-     * bind_standard_assigns already guards against on the supervisor's side.
+     * grants to make. It is 10 of 10 today -- three streams, WORK, two
+     * COMMANDS members, LIBS, EVENTS, PROC and EVENT_CONTROL -- so the next
+     * grant added here needs ASTRA_LAUNCH_GRANT_MAX raised with it. Until
+     * then a third COMMANDS member would push something out of a child's
+     * namespace, which is why the drop is counted and logged rather than
+     * silent, the same guard bind_standard_assigns has on the other side.
      */
     int dropped = 0;
 
@@ -608,6 +532,59 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
             astra_capability_root_set(grants[count].root, assign->root);
             ++count;
         }
+    }
+    /*
+     * Where the prompt is standing, as a name the child can use.
+     *
+     * A program has no current directory and the machine has no root: a path
+     * is ASSIGN:path and nothing else. That was invisible while `cat`, `mkdir`
+     * and `rm` were builtins qualifying against `shell.directory` before they
+     * touched anything -- and it would have become a silent regression the
+     * moment they became programs, because `cat foo` after `cd proto` has
+     * nothing to resolve `foo` against. So the shell says where it is, the
+     * only way this machine says anything: as a grant. The directory is folded
+     * into the root, so CWD: names the place and cannot walk above it.
+     */
+    for (uint32_t member = 0u; ; ++member) {
+        const AstraAssign *assign = filesystem_library()->assign_member(
+            supervisor_assigns(), shell.assign, member);
+        char root[ASTRA_CAPABILITY_ROOT_MAX];
+        uint32_t at = 0u;
+        uint32_t namespace_rights;
+
+        if (assign == NULL)
+            break;
+        if (count >= ASTRA_LAUNCH_GRANT_MAX) {
+            dropped = 1;
+            break;
+        }
+        /*
+         * Composed here rather than trusted to the setter, which truncates.
+         * A truncated root is a child pointed at a different directory and
+         * told nothing about it; no CWD: at all is a child that says it does
+         * not know where it is, which is the answer a person can act on.
+         */
+        if (!root_append(root, sizeof(root), &at, assign->root) ||
+            (shell.directory[0] != '\0' &&
+             ((assign->root[0] != '\0' &&
+               !root_append(root, sizeof(root), &at, "/")) ||
+              !root_append(root, sizeof(root), &at, shell.directory)))) {
+            ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SHELL,
+                         ASTRA_EVENT_LEVEL_WARNING,
+                         "no CWD: granted, the prompt's path is too long");
+            break;
+        }
+        astra_capability_name_set(grants[count].name, "CWD");
+        grants[count].handle = assign->handle;
+        grants[count].rights = ASTRA_RIGHT_SIGNAL;
+        namespace_rights = assign->rights;
+        grants[count].flags = ASTRA_CAPABILITY_FLAG_NAMESPACE |
+            ((namespace_rights & ASTRA_RIGHT_READ) != 0u ?
+                 ASTRA_CAPABILITY_FLAG_READ : 0u) |
+            ((namespace_rights & ASTRA_RIGHT_WRITE) != 0u ?
+                 ASTRA_CAPABILITY_FLAG_WRITE : 0u);
+        astra_capability_root_set(grants[count].root, root);
+        ++count;
     }
     if (supervisor_loader_event_control() != 0u) {
         if (count < ASTRA_LAUNCH_GRANT_MAX) {
@@ -788,18 +765,10 @@ static void run_line(const char *line)
         astra_terminal_write(&shell.terminal, shell.assign);
         astra_terminal_putc(&shell.terminal, ':');
         write_line(shell.directory);
-    } else if (shell_equal(words.argv[0], "ls"))
-        command_ls(words.argc, words.argv);
-    else if (shell_equal(words.argv[0], "cd"))
+    } else if (shell_equal(words.argv[0], "cd"))
         command_cd(words.argc, words.argv);
-    else if (shell_equal(words.argv[0], "cat"))
-        command_cat(words.argc, words.argv);
-    else if (shell_equal(words.argv[0], "mkdir"))
-        command_mkdir(words.argc, words.argv);
     else if (shell_equal(words.argv[0], "write"))
         command_write(words.argc, words.argv);
-    else if (shell_equal(words.argv[0], "rm"))
-        command_rm(words.argc, words.argv);
     else if (shell_equal(words.argv[0], "assign"))
         command_assign(words.argc, words.argv);
     else
@@ -1025,6 +994,7 @@ void console_shell_run_backend(const ConsoleShellBackend *backend,
         (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
         return;
     }
+    astra_terminal_set_echo(&shell.terminal, echo_line, NULL);
     astra_shell_editor_init(&shell.editor);
     /*
      * The streams a launched program will be granted. They exist before the

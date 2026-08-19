@@ -15,6 +15,8 @@
 
 #include <astra/vfs_port_transport.h>
 
+#include <astra/bytes.h>
+
 #include <astra/runtime.h>
 #include <astra/syscall.h>
 
@@ -279,17 +281,55 @@ prepare_request(AstraVfsClient *client, uint32_t operation)
     (void)operation;
 }
 
+/*
+ * The transfer area, sized to what has actually been asked for.
+ *
+ * A client that only ever reads manifests should not commit -- and the kernel
+ * should not zero -- the largest transfer the protocol allows. Most clients
+ * never grow past the first step; the ones that load a library pay one
+ * rebind. Growth is one-way, because shrinking would trade a rebind for
+ * nothing.
+ */
+/*
+ * Measured: starting small and growing on first large read cost more than it
+ * saved -- the grow is a rebind plus a repeated request, and it lands on
+ * exactly the large reads that matter. One commit up front wins.
+ */
+#define VFS_PORT_AREA_MIN ASTRA_VFS_BULK_MAX
+
+static void release_area(AstraVfsClient *client)
+{
+    if (client->port_area_send != 0u)
+        (void)astra_close(client->port_area_send);
+    if (client->port_area_address != NULL)
+        (void)astra_rt_area_unmap(client->port_area_address);
+    if (client->port_area != 0u)
+        (void)astra_close(client->port_area);
+    client->port_area = 0u;
+    client->port_area_send = 0u;
+    client->port_area_address = NULL;
+    client->port_area_size = 0u;
+}
+
 static uint32_t
-ensure_area(AstraVfsClient *client)
+ensure_area_size(AstraVfsClient *client, uint32_t needed)
 {
     uint32_t status;
     void *address = NULL;
     uint32_t size = 0u;
+    uint32_t wanted = VFS_PORT_AREA_MIN;
 
-    if (client->port_area_address != NULL)
-        return ASTRA_VFS_OK;
+    if (needed > ASTRA_VFS_BULK_MAX)
+        needed = ASTRA_VFS_BULK_MAX;
+    while (wanted < needed)
+        wanted <<= 1;
+    if (client->port_area_address != NULL) {
+        if (client->port_area_size >= wanted)
+            return ASTRA_VFS_OK;
+        release_area(client);
+    }
     status = astra_rt_area_create(
-        ASTRA_VFS_BULK_MAX,
+        wanted,
         ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
             ASTRA_RIGHT_TRANSFER | ASTRA_RIGHT_ADMINISTER,
         &client->port_area);
@@ -332,6 +372,110 @@ fail:
                                                     ASTRA_VFS_ERR_IO;
 }
 
+/* The client's own path copy; vfs_client.c keeps its set_path to itself. */
+static int port_set_path(AstraVfsRequest *request, const char *path)
+{
+    uint32_t at = 0u;
+
+    while (path[at] != '\0') {
+        if (at + 1u >= ASTRA_VFS_PATH_MAX)
+            return 0;
+        request->body.path[at] = (uint8_t)path[at];
+        ++at;
+    }
+    request->body.path[at] = 0u;
+    return 1;
+}
+
+uint32_t
+astra_vfs_port_read_path(AstraVfsClient *client, const char *path,
+                         const uint8_t **bytes, uint32_t *moved,
+                         uint64_t *node_size)
+{
+    uint32_t status;
+
+    if (client == NULL || path == NULL || bytes == NULL || moved == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    *bytes = NULL;
+    *moved = 0u;
+    if (node_size != NULL)
+        *node_size = 0u;
+    if (client->version < UINT16_C(5))
+        return ASTRA_VFS_ERR_UNSUPPORTED;
+    status = ensure_area_size(client, VFS_PORT_AREA_MIN);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    /*
+     * Two attempts at most. The first asks with whatever the area already is;
+     * a file too big for it is answered with its size and nothing read, and
+     * the second asks again with the area grown to fit. That costs a round
+     * trip only for a file bigger than this client has ever read.
+     */
+    for (uint32_t attempt = 0u; attempt < 2u; ++attempt) {
+        prepare_request(client, ASTRA_VFS_OP_READ_PATH);
+        if (!port_set_path(&client->request, path))
+            return ASTRA_VFS_ERR_INVALID;
+        client->request.length = client->port_area_size;
+        status = astra_vfs_port_transport(client, ASTRA_VFS_OP_READ_PATH,
+                                          &client->request, &client->reply);
+        if (status != ASTRA_VFS_OK)
+            return status;
+        if (node_size != NULL)
+            *node_size = client->reply.node_size;
+        if (client->reply.status != ASTRA_VFS_ERR_LIMIT ||
+            attempt != 0u ||
+            client->reply.node_size <= client->port_area_size ||
+            client->reply.node_size > ASTRA_VFS_BULK_MAX)
+            break;
+        status = ensure_area_size(client,
+                                  (uint32_t)client->reply.node_size);
+        if (status != ASTRA_VFS_OK)
+            return status;
+    }
+    if (client->reply.status != ASTRA_VFS_OK)
+        return client->reply.status;
+    if (client->reply.count > client->port_area_size)
+        return ASTRA_VFS_ERR_PROTOCOL;
+    *bytes = client->port_area_address;
+    *moved = client->reply.count;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t
+astra_vfs_port_read_borrow(AstraVfsClient *client, AstraVfsFile file,
+                           uint64_t offset, uint32_t length,
+                           const uint8_t **bytes, uint32_t *moved)
+{
+    uint32_t status;
+
+    if (client == NULL || bytes == NULL || moved == NULL || length == 0u)
+        return ASTRA_VFS_ERR_INVALID;
+    *bytes = NULL;
+    *moved = 0u;
+    if (client->version < UINT16_C(3))
+        return ASTRA_VFS_ERR_UNSUPPORTED;
+    status = ensure_area_size(client, length);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (length > client->port_area_size)
+        return ASTRA_VFS_ERR_LIMIT;
+    prepare_request(client, ASTRA_VFS_OP_READ_AREA);
+    client->request.file = file;
+    client->request.offset = offset;
+    client->request.length = length;
+    status = astra_vfs_port_transport(client, ASTRA_VFS_OP_READ_AREA,
+                                      &client->request, &client->reply);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (client->reply.status != ASTRA_VFS_OK)
+        return client->reply.status;
+    if (client->reply.count > length)
+        return ASTRA_VFS_ERR_PROTOCOL;
+    *bytes = client->port_area_address;
+    *moved = client->reply.count;
+    return ASTRA_VFS_OK;
+}
+
 uint32_t
 astra_vfs_port_read_bulk(AstraVfsClient *client, AstraVfsFile file,
                          uint64_t offset, void *buffer, uint32_t length,
@@ -350,7 +494,7 @@ astra_vfs_port_read_bulk(AstraVfsClient *client, AstraVfsFile file,
                               length < ASTRA_VFS_IO_MAX ? length :
                                                           ASTRA_VFS_IO_MAX,
                               moved);
-    status = ensure_area(client);
+    status = ensure_area_size(client, length);
     if (status != ASTRA_VFS_OK)
         return status;
     if (length > client->port_area_size)
@@ -368,8 +512,8 @@ astra_vfs_port_read_bulk(AstraVfsClient *client, AstraVfsFile file,
     if (client->reply.count > length)
         return ASTRA_VFS_ERR_PROTOCOL;
     shared = client->port_area_address;
-    for (index = 0u; index < client->reply.count; ++index)
-        out[index] = shared[index];
+    (void)index;
+    memcpy(out, shared, client->reply.count);
     *moved = client->reply.count;
     return ASTRA_VFS_OK;
 }
@@ -537,10 +681,19 @@ astra_vfs_port_service_pump(AstraVfsPortService *host, uint32_t budget)
             outgoing.reply.size = ASTRA_VFS_REPLY_SIZE;
             outgoing.reply.version = incoming.request.version;
             outgoing.reply.session = incoming.request.session;
+            /*
+             * A rebind replaces what was there. A client grows its transfer
+             * area when it first reads something large, and refusing the
+             * second bind left it able only to fail.
+             */
             if (host->area_addresses[(uint32_t)slot] != NULL) {
-                (void)astra_close(handles[0]);
-                outgoing.reply.status = ASTRA_VFS_ERR_BUSY;
-            } else {
+                (void)astra_rt_area_unmap(host->area_addresses[(uint32_t)slot]);
+                (void)astra_close(host->area_handles[(uint32_t)slot]);
+                host->area_addresses[(uint32_t)slot] = NULL;
+                host->area_handles[(uint32_t)slot] = 0u;
+                host->area_sizes[(uint32_t)slot] = 0u;
+            }
+            {
                 map_status = astra_rt_area_map(
                     handles[0], ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
                     &address, &mapped);
@@ -561,6 +714,23 @@ astra_vfs_port_service_pump(AstraVfsPortService *host, uint32_t budget)
                             ASTRA_VFS_ERR_LIMIT : ASTRA_VFS_ERR_INVALID;
                 }
             }
+        } else if (incoming.header.operation == ASTRA_VFS_OP_READ_PATH &&
+                   slot >= 0) {
+            uint64_t node_size = 0u;
+            uint32_t got = 0u;
+
+            if (host->area_addresses[(uint32_t)slot] == NULL) {
+                outgoing.reply.status = ASTRA_VFS_ERR_INVALID;
+                outgoing.reply.count = 0u;
+            } else {
+                outgoing.reply.status = astra_vfs_service_read_path(
+                    host->service, (const char *)incoming.request.body.path,
+                    host->area_addresses[(uint32_t)slot],
+                    host->area_sizes[(uint32_t)slot], &got, &node_size);
+                outgoing.reply.count =
+                    outgoing.reply.status == ASTRA_VFS_OK ? got : 0u;
+                outgoing.reply.node_size = node_size;
+            }
         } else if (incoming.header.operation == ASTRA_VFS_OP_READ_AREA &&
                    slot >= 0) {
             AstraVfsRequest piece = incoming.request;
@@ -575,27 +745,20 @@ astra_vfs_port_service_pump(AstraVfsPortService *host, uint32_t budget)
                 outgoing.reply.status = ASTRA_VFS_ERR_INVALID;
                 outgoing.reply.count = 0u;
             } else {
-                while (total < incoming.request.length) {
-                    uint32_t index;
-                    uint32_t chunk = incoming.request.length - total;
-
-                    if (chunk > ASTRA_VFS_IO_MAX)
-                        chunk = ASTRA_VFS_IO_MAX;
-                    piece.offset = incoming.request.offset + total;
-                    piece.length = chunk;
-                    astra_vfs_service_dispatch(host->service,
-                                               ASTRA_VFS_OP_READ,
-                                               &piece, &outgoing.reply);
-                    if (outgoing.reply.status != ASTRA_VFS_OK)
-                        break;
-                    for (index = 0u; index < outgoing.reply.count; ++index)
-                        host->area_addresses[(uint32_t)slot][total + index] =
-                            outgoing.reply.payload[index];
-                    total += outgoing.reply.count;
-                    if (outgoing.reply.count < chunk)
-                        break;
-                }
-                outgoing.reply.count = total;
+                /*
+                 * Straight into the shared area, in one backend read. This
+                 * loop used to drive the inline path, so a 16 KiB transfer was
+                 * 86 dispatches and 32 KiB of byte-at-a-time copying; the area
+                 * saved the messages and none of the work underneath them.
+                 */
+                outgoing.reply.status = astra_vfs_service_read_into(
+                    host->service, incoming.request.session,
+                    incoming.request.file, incoming.request.offset,
+                    host->area_addresses[(uint32_t)slot],
+                    incoming.request.length, &total);
+                outgoing.reply.count =
+                    outgoing.reply.status == ASTRA_VFS_OK ? total : 0u;
+                (void)piece;
             }
         } else {
             astra_vfs_service_dispatch(host->service,

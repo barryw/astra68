@@ -31,16 +31,36 @@ astra_rt_handle_duplicate(uint32_t handle, uint32_t rights, uint32_t *duplicate)
 }
 
 uint32_t
-astra_rt_area_create(uint32_t byte_size, uint32_t rights, uint32_t *handle)
+astra_rt_area_create_flagged(uint32_t byte_size, uint32_t rights,
+                             uint32_t flags, uint32_t *handle)
 {
     AstraSyscallResult result;
 
     if (handle == NULL)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    astra_syscall5(ASTRA_SYSCALL_AREA_CREATE, byte_size, rights, 0u, 0u, 0u,
-                   &result);
+    astra_syscall5(ASTRA_SYSCALL_AREA_CREATE, byte_size, rights, flags, 0u,
+                   0u, &result);
     if (result.status == ASTRA_SYSCALL_OK)
         *handle = result.value0;
+    return result.status;
+}
+
+uint32_t
+astra_rt_area_create(uint32_t byte_size, uint32_t rights, uint32_t *handle)
+{
+    return astra_rt_area_create_flagged(byte_size, rights, 0u, handle);
+}
+
+uint32_t
+astra_rt_area_decommit(void *address, uint32_t byte_size,
+                    uint32_t *released_pages)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_AREA_DECOMMIT, (uint32_t)(uintptr_t)address,
+                   byte_size, 0u, 0u, 0u, &result);
+    if (result.status == ASTRA_SYSCALL_OK && released_pages != NULL)
+        *released_pages = result.value0;
     return result.status;
 }
 

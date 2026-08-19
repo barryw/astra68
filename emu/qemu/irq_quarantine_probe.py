@@ -33,7 +33,9 @@ RING_ADDRESS = 0x020C4000
 RING_SIZE = 0x10000
 BOOT_MARKER = "stage 8"
 # Where the shell says a transfer was refused, and how it says the device is
-# gone for good. Either one ends the run.
+# gone for good. Either one ends the run. Read out of the trace ring, which is
+# where the shell's output goes now that it draws glyphs into a window -- see
+# the gate's own docstring.
 DEAD = ("read stopped at", "I/O error")
 
 
@@ -65,15 +67,17 @@ def main():
     import shutil
     shutil.copyfile(arguments.image, scratch)
     astra_image.install(scratch, arguments.catalog)
+    # The same boot-before-the-run the gate does, because the last line of its
+    # script reads the previous boot back and there has to be one. This probe
+    # exists to reproduce the gate's timing, so it does what the gate does.
+    if not gate.warm_the_store(arguments.qemu, arguments.rom, scratch,
+                               directory, arguments.boot_deadline, 60.0):
+        return 1
 
     machine = gate.Machine(arguments.qemu, arguments.rom, scratch, directory)
     died_at = None
     try:
-        if not machine.wait_for_serial(BOOT_MARKER, arguments.boot_deadline):
-            print("FAIL: never reached the terminal")
-            return 1
-        if machine.wait_for_screen("Astra 68", 30.0) is None:
-            print("FAIL: no banner")
+        if not gate.open_terminal(machine, arguments.boot_deadline, 60.0):
             return 1
 
         # The gate's own script first. Launching alone does not do it: 24
@@ -81,41 +85,46 @@ def main():
         # so whatever arms this is in what the gate does before it -- the
         # writes, the journal behind them, and the events reads.
         for line, expected in gate.SCRIPT:
+            machine.settle()
+            before = machine.sequence()
             machine.qmp.type_line(line)
-            if machine.wait_for_screen(expected, 60.0) is None:
+            said, _ = machine.wait_for_text(expected, 60.0, before)
+            if said is None:
                 died_at = "script: %r" % line
                 break
-            rows = machine.screen()
-            if any(any(mark in row for mark in DEAD) for row in rows):
+            if any(any(mark in text for mark in DEAD) for text in said):
                 died_at = "script: %r" % line
                 break
 
         # The step the gate actually dies on, which SCRIPT does not carry.
         if died_at is None:
+            machine.settle()
+            before = machine.sequence()
             machine.qmp.type_line("events --follow")
-            if machine.wait_for_screen("-- following", 60.0) is None:
+            if machine.wait_for_text("-- following", 60.0, before)[0] is None:
                 died_at = "events --follow"
             else:
                 machine.qmp.key("ret")
-                machine.wait_for_screen("WORK:>", 30.0)
+                machine.settle()
 
         if died_at is None:
             for index in range(1, arguments.launches + 1):
+                machine.settle()
+                before = machine.sequence()
                 machine.qmp.type_line("status %d" % (index % 10))
-                if machine.wait_for_screen("exited %d" % (index % 10),
-                                           20.0) is None:
+                said, _ = machine.wait_for_text("exited %d" % (index % 10),
+                                                20.0, before)
+                if said is None:
                     died_at = index
                     break
-                rows = machine.screen()
-                if any(any(mark in row for mark in DEAD) for row in rows):
+                if any(any(mark in text for mark in DEAD) for text in said):
                     died_at = index
                     break
 
-        rows = machine.screen()
         print("=== launches before the device died: %s ===" % died_at)
-        for row in rows:
-            if row.strip():
-                print("    |%s|" % row)
+        for text in machine.said()[0][-30:]:
+            if text.strip():
+                print("    |%s|" % text)
 
         time.sleep(1.0)
         reply = machine.qmp.monitor('pmemsave 0x%08x %d "%s"'

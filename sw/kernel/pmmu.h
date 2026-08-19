@@ -21,6 +21,13 @@ void kernel_pmmu_read_tc(uint32_t *value);
 void kernel_pmmu_read_srp(KernelPmmuRootPointer *root);
 void kernel_pmmu_read_crp(KernelPmmuRootPointer *root);
 void kernel_pmmu_flush_all(void);
+/*
+ * One ATC entry, by address, for every function code. PFLUSHA discards all 22
+ * entries the 68030 holds, so using it for a one-page change makes every other
+ * translation in the machine pay a table walk again -- and on an emulated
+ * target it discards the host's translation cache too, which is milliseconds.
+ */
+void kernel_pmmu_flush_page(uint32_t virtual_address);
 void kernel_pmmu_set_user_function_codes(void);
 void kernel_cache_invalidate_all(void);
 uint32_t kernel_cache_read_control(void);

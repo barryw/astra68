@@ -314,10 +314,16 @@ int astra_render_builder_rounded(AstraRenderBuilder *builder,
         horizontal = astra_render_builder_fill(
             builder, destination, x + (int32_t)bounded, y,
             width - bounded * 2u, height, color);
+    /* Side bands, not a full-width one: a full-width band would repaint every
+       pixel the horizontal band already covered, and fill costs real time. */
     if (height > bounded * 2u)
         vertical = astra_render_builder_fill(
-            builder, destination, x, y + (int32_t)bounded,
-            width, height - bounded * 2u, color);
+                       builder, destination, x, y + (int32_t)bounded,
+                       bounded, height - bounded * 2u, color) &&
+                   astra_render_builder_fill(
+                       builder, destination, right - (int32_t)bounded,
+                       y + (int32_t)bounded, bounded,
+                       height - bounded * 2u, color);
     return horizontal && vertical &&
            circle(builder, destination, x + bounded, y + bounded,
                   bounded, x, y, right, bottom, color) &&
@@ -468,6 +474,28 @@ static int command_valid(const AstraDrawListHeader *header,
                end <= (uint64_t)ASTRA_DRAW_LIST_PAYLOAD_OFFSET +
                          header->payload_bytes;
     return 0;
+}
+
+int astra_draw_list_covers(const AstraDrawListHeader *header,
+                           uint16_t width, uint16_t height)
+{
+    const AstraDrawListCommand *first;
+
+    if (header == NULL || header->magic != ASTRA_DRAW_LIST_MAGIC ||
+        header->version != ASTRA_DRAW_LIST_VERSION_1_0 ||
+        header->total_bytes != ASTRA_DRAW_LIST_AREA_BYTES ||
+        header->command_count == 0u ||
+        header->command_count > ASTRA_DRAW_LIST_COMMAND_MAX ||
+        header->payload_bytes > ASTRA_DRAW_LIST_PAYLOAD_BYTES ||
+        !words_zero(header->reserved, 10u))
+        return 0;
+    first = (const AstraDrawListCommand *)(header + 1);
+    if (!command_valid(header, first) ||
+        first->operation != ASTRA_DRAW_LIST_FILL)
+        return 0;
+    return first->x <= 0 && first->y <= 0 &&
+           (int64_t)first->x + first->width >= (int64_t)width &&
+           (int64_t)first->y + first->height >= (int64_t)height;
 }
 
 int astra_render_builder_replay(AstraRenderBuilder *builder,

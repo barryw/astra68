@@ -78,6 +78,9 @@ AstraTerminalStatus astra_terminal_init(AstraTerminal *terminal,
     terminal->rows = rows;
     terminal->render = render;
     terminal->render_context = render_context;
+    terminal->echo = NULL;
+    terminal->echo_context = NULL;
+    terminal->echo_length = 0u;
     terminal->scrolls = 0u;
     astra_terminal_clear(terminal);
     return ASTRA_TERMINAL_OK;
@@ -131,18 +134,59 @@ void astra_terminal_clear(AstraTerminal *terminal)
     terminal->cursor_column = 0u;
 }
 
+/* Hands the assembled line to the echo and starts the next one. */
+static void echo_flush(AstraTerminal *terminal)
+{
+    uint32_t length = terminal->echo_length;
+
+    terminal->echo_length = 0u;
+    if (terminal->echo != NULL && length != 0u)
+        terminal->echo(terminal->echo_context, terminal->echo_line, length);
+}
+
+static void echo_putc(AstraTerminal *terminal, uint8_t value)
+{
+    if (terminal->echo == NULL)
+        return;
+    if (terminal->echo_length >= sizeof(terminal->echo_line))
+        echo_flush(terminal);
+    terminal->echo_line[terminal->echo_length++] = (char)value;
+}
+
+void astra_terminal_set_echo(AstraTerminal *terminal, AstraTerminalEcho echo,
+                             void *context)
+{
+    if (terminal == NULL)
+        return;
+    echo_flush(terminal);
+    terminal->echo = echo;
+    terminal->echo_context = context;
+}
+
 void astra_terminal_putc(AstraTerminal *terminal, uint8_t value)
 {
     if (terminal == NULL)
         return;
     switch (value) {
     case '\n':
+        echo_flush(terminal);
         newline(terminal);
         return;
     case '\r':
+        /*
+         * The line being echoed is discarded, not delivered: a carriage
+         * return means what was written is about to be written over, and a
+         * line editor redrawing its line after every keystroke would
+         * otherwise record every prefix of it. What reaches the echo is the
+         * last version -- which is what the screen shows.
+         */
+        terminal->echo_length = 0u;
         terminal->cursor_column = 0u;
         return;
     case '\b':
+        /* The line being echoed loses the byte the cursor is leaving. */
+        if (terminal->echo_length != 0u)
+            --terminal->echo_length;
         /*
          * Moves back without erasing. A shell that wants the character gone
          * writes space and backs up again, which is what a real terminal
@@ -175,6 +219,7 @@ void astra_terminal_putc(AstraTerminal *terminal, uint8_t value)
     if (value < 0x20u || value > 0x7eu)
         value = (uint8_t)'.';
 
+    echo_putc(terminal, value);
     if (terminal->cursor_column >= terminal->columns)
         newline(terminal);
     terminal->cells[terminal->cursor_row][terminal->cursor_column] = value;

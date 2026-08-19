@@ -237,6 +237,37 @@ astra_vfs_write(AstraVfsClient *client, AstraVfsFile file, uint64_t offset,
     return ASTRA_VFS_OK;
 }
 
+/*
+ * Everything a stat knows, in one exchange. `astra_vfs_stat` stays as it was
+ * because most callers only ever wanted a size and a kind, and a listing that
+ * needs the rest should not make every existing caller carry a struct.
+ */
+uint32_t
+astra_vfs_stat_meta(AstraVfsClient *client, const char *path,
+                    AstraVfsDirEntry *meta)
+{
+    uint32_t status;
+
+    if (client == NULL || meta == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    begin(client);
+    if (!set_path(&client->request, path))
+        return ASTRA_VFS_ERR_INVALID;
+    status = exchange(client, ASTRA_VFS_OP_STAT);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    meta->name[0] = '\0';
+    meta->size = client->reply.node_size;
+    meta->mtime = client->reply.mtime;
+    meta->uid = client->reply.uid;
+    meta->gid = client->reply.gid;
+    meta->kind = client->reply.kind;
+    meta->mode = client->reply.mode;
+    meta->nlink = client->reply.nlink;
+    meta->reserved = 0u;
+    return ASTRA_VFS_OK;
+}
+
 uint32_t
 astra_vfs_stat(AstraVfsClient *client, const char *path, uint64_t *size,
                uint16_t *kind)
@@ -298,6 +329,25 @@ astra_vfs_readdir(AstraVfsClient *client, const char *path, uint64_t cursor,
     return ASTRA_VFS_OK;
 }
 
+static uint16_t
+take_be16(const uint8_t *bytes)
+{
+    return (uint16_t)(((uint16_t)bytes[0] << 8) | bytes[1]);
+}
+
+static uint32_t
+take_be32(const uint8_t *bytes)
+{
+    return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
+           ((uint32_t)bytes[2] << 8) | bytes[3];
+}
+
+static uint64_t
+take_be64(const uint8_t *bytes)
+{
+    return ((uint64_t)take_be32(bytes) << 32) | take_be32(bytes + 4u);
+}
+
 uint32_t
 astra_vfs_readdir_batch(AstraVfsClient *client, const char *path,
                         uint64_t cursor, AstraVfsDirEntry *entries,
@@ -334,13 +384,23 @@ astra_vfs_readdir_batch(AstraVfsClient *client, const char *path,
     while (at < client->reply.count) {
         uint32_t length;
 
-        if (found == capacity || client->reply.count - at < 3u)
+        const uint8_t *record = &client->reply.payload[at];
+
+        if (found == capacity ||
+            client->reply.count - at < ASTRA_VFS_DIRENT_HEADER)
             return ASTRA_VFS_ERR_PROTOCOL;
-        entries[found].kind =
-            (uint16_t)(((uint16_t)client->reply.payload[at] << 8) |
-                       client->reply.payload[at + 1u]);
-        length = client->reply.payload[at + 2u];
-        at += 3u;
+        entries[found].kind = take_be16(record + 0u);
+        entries[found].mode = take_be16(record + 2u);
+        entries[found].nlink = take_be16(record + 4u);
+        length = record[6];
+        if (record[7] != 0u)
+            return ASTRA_VFS_ERR_PROTOCOL;
+        entries[found].uid = take_be32(record + 8u);
+        entries[found].gid = take_be32(record + 12u);
+        entries[found].size = take_be64(record + 16u);
+        entries[found].mtime = (int64_t)take_be64(record + 24u);
+        entries[found].reserved = 0u;
+        at += ASTRA_VFS_DIRENT_HEADER;
         if (length == 0u || length >= ASTRA_VFS_NAME_MAX ||
             length > client->reply.count - at)
             return ASTRA_VFS_ERR_PROTOCOL;

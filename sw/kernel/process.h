@@ -8,6 +8,7 @@
 #include "port.h"
 #include "thread.h"
 #include "trace.h"
+#include "vm.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -33,15 +34,20 @@
 #define ASTRA_KERNEL_DEBUG_SURFACE 1
 #endif
 
-/* Six resident system processes plus nine concurrent application processes. */
-#define KERNEL_PROCESS_MAX 15u
+/*
+ * A dozen services and a dozen programs at once, with room over. This was
+ * fifteen because a shared frame's alias count had four bits; the ledger is
+ * sixteen bits wide now and the number is chosen for the workload instead of
+ * for a field width.
+ */
+#define KERNEL_PROCESS_MAX KERNEL_VM_ADDRESS_SPACE_MAX
 #define KERNEL_PROCESS_CODE_BASE 0x00100000u
 #define KERNEL_PROCESS_STACK_BASE KERNEL_THREAD_STACK_BASE
 /* The top of the first slot's reservation: where its stack pointer starts. */
 #define KERNEL_PROCESS_STACK_TOP \
     (KERNEL_PROCESS_STACK_BASE + KERNEL_THREAD_STACK_STRIDE)
 #define KERNEL_PROCESS_PROGRESS_GOAL 64u
-#define KERNEL_PROCESS_THREAD_MAX 15u
+#define KERNEL_PROCESS_THREAD_MAX 16u
 
 /*
  * The ceiling on text, data and BSS a single process image may map. The storage
@@ -486,7 +492,14 @@ void kernel_process_diagnostic_log(const KernelTraceUserRecord *record,
 typedef enum KernelProcessFaultKind {
     KERNEL_PROCESS_FAULT_OTHER = 0,
     KERNEL_PROCESS_FAULT_STACK_GUARD,
-    KERNEL_PROCESS_FAULT_STACK_ARENA
+    KERNEL_PROCESS_FAULT_STACK_ARENA,
+    /*
+     * The area window. Reaching here means the commit path already refused --
+     * out of quota, out of frames, or an address in a window the process was
+     * never given -- and saying so beats leaving a reader to recognise the
+     * range by eye.
+     */
+    KERNEL_PROCESS_FAULT_AREA_WINDOW
 } KernelProcessFaultKind;
 
 /*

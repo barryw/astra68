@@ -64,11 +64,65 @@ static int
 operation_takes_path(uint32_t operation)
 {
     return operation == ASTRA_VFS_OP_OPEN ||
+           operation == ASTRA_VFS_OP_READ_PATH ||
            operation == ASTRA_VFS_OP_STAT ||
            operation == ASTRA_VFS_OP_READDIR ||
            operation == ASTRA_VFS_OP_READDIR_BATCH ||
            operation == ASTRA_VFS_OP_MKDIR ||
            operation == ASTRA_VFS_OP_UNLINK;
+}
+
+static void
+put_be16(uint8_t *bytes, uint16_t value)
+{
+    bytes[0] = (uint8_t)(value >> 8);
+    bytes[1] = (uint8_t)value;
+}
+
+static void
+put_be32(uint8_t *bytes, uint32_t value)
+{
+    bytes[0] = (uint8_t)(value >> 24);
+    bytes[1] = (uint8_t)(value >> 16);
+    bytes[2] = (uint8_t)(value >> 8);
+    bytes[3] = (uint8_t)value;
+}
+
+static void
+put_be64(uint8_t *bytes, uint64_t value)
+{
+    put_be32(bytes, (uint32_t)(value >> 32));
+    put_be32(bytes + 4u, (uint32_t)value);
+}
+
+/*
+ * A node's metadata, cleared and copied in one place each. Five call sites
+ * cleared two fields by hand, and a sixth field added later would have been
+ * zeroed in three of them.
+ */
+static void
+node_info_clear(AstraVfsNodeInfo *info)
+{
+    info->size = 0u;
+    info->mtime = 0;
+    info->uid = 0u;
+    info->gid = 0u;
+    info->kind = ASTRA_VFS_KIND_UNKNOWN;
+    info->mode = 0u;
+    info->nlink = 0u;
+    info->reserved = 0u;
+}
+
+static void
+node_info_publish(AstraVfsReply *reply, const AstraVfsNodeInfo *info)
+{
+    reply->node_size = info->size;
+    reply->mtime = info->mtime;
+    reply->uid = info->uid;
+    reply->gid = info->gid;
+    reply->kind = info->kind;
+    reply->mode = info->mode;
+    reply->nlink = info->nlink;
 }
 
 static void
@@ -86,13 +140,13 @@ handle_readdir_batch(AstraVfsService *service,
         return;
     }
     while (entries < request->length &&
-           used + 3u + ASTRA_VFS_NAME_MAX - 1u <= ASTRA_VFS_IO_MAX) {
+           used + ASTRA_VFS_DIRENT_HEADER + ASTRA_VFS_NAME_MAX - 1u <=
+               ASTRA_VFS_IO_MAX) {
         uint64_t next = 0u;
         uint32_t length = 0u;
         uint32_t status;
 
-        info.size = 0u;
-        info.kind = ASTRA_VFS_KIND_UNKNOWN;
+        node_info_clear(&info);
         name[0] = '\0';
         status = service->backend.ops->readdir(
             service->backend.context, (const char *)request->body.path,
@@ -115,9 +169,16 @@ handle_readdir_batch(AstraVfsService *service,
             reply->status = ASTRA_VFS_ERR_PROTOCOL;
             return;
         }
-        reply->payload[used++] = (uint8_t)(info.kind >> 8);
-        reply->payload[used++] = (uint8_t)info.kind;
-        reply->payload[used++] = (uint8_t)length;
+        put_be16(&reply->payload[used + 0u], info.kind);
+        put_be16(&reply->payload[used + 2u], info.mode);
+        put_be16(&reply->payload[used + 4u], info.nlink);
+        reply->payload[used + 6u] = (uint8_t)length;
+        reply->payload[used + 7u] = 0u;
+        put_be32(&reply->payload[used + 8u], info.uid);
+        put_be32(&reply->payload[used + 12u], info.gid);
+        put_be64(&reply->payload[used + 16u], info.size);
+        put_be64(&reply->payload[used + 24u], (uint64_t)info.mtime);
+        used += ASTRA_VFS_DIRENT_HEADER;
         for (uint32_t index = 0u; index < length; ++index)
             reply->payload[used++] = (uint8_t)name[index];
         cursor = next;
@@ -328,8 +389,7 @@ handle_open(AstraVfsService *service, uint32_t session,
         return;
     }
 
-    info.size = 0u;
-    info.kind = ASTRA_VFS_KIND_UNKNOWN;
+    node_info_clear(&info);
     status = service->backend.ops->open(service->backend.context,
                                         (const char *)request->body.path,
                                         request->flags, &node, &info);
@@ -342,8 +402,7 @@ handle_open(AstraVfsService *service, uint32_t session,
     service->files[index].flags = request->flags;
     service->files[index].kind = info.kind;
     reply->file = HANDLE_MAKE(index, service->files[index].generation);
-    reply->node_size = info.size;
-    reply->kind = info.kind;
+    node_info_publish(reply, &info);
     reply->status = ASTRA_VFS_OK;
     ++service->open_files;
     ++service->stats.files_opened;
@@ -382,6 +441,92 @@ handle_read(AstraVfsService *service, AstraVfsOpenFile *file,
     if (reply->status == ASTRA_VFS_OK) {
         reply->count = moved > length ? length : moved;
     }
+}
+
+uint32_t
+astra_vfs_service_read_path(AstraVfsService *service, const char *path,
+                            void *buffer, uint32_t capacity, uint32_t *moved,
+                            uint64_t *node_size)
+{
+    AstraVfsNodeInfo info;
+    uintptr_t node = 0u;
+    uint32_t status;
+
+    if (service == NULL || path == NULL || buffer == NULL || moved == NULL ||
+        node_size == NULL || capacity == 0u) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    *moved = 0u;
+    *node_size = 0u;
+    node_info_clear(&info);
+    status = service->backend.ops->open(service->backend.context, path,
+                                        ASTRA_VFS_OPEN_READ, &node, &info);
+    if (status != ASTRA_VFS_OK) {
+        return status;
+    }
+    *node_size = info.size;
+    if (info.kind == ASTRA_VFS_KIND_DIRECTORY) {
+        status = ASTRA_VFS_ERR_IS_DIR;
+    } else if (info.size > capacity) {
+        status = ASTRA_VFS_ERR_LIMIT;
+    } else {
+        uint32_t total = 0u;
+
+        while (total < (uint32_t)info.size) {
+            uint32_t chunk = 0u;
+
+            status = service->backend.ops->read(
+                service->backend.context, node, total,
+                (uint8_t *)buffer + total, (uint32_t)info.size - total,
+                &chunk);
+            if (status != ASTRA_VFS_OK || chunk == 0u) {
+                break;
+            }
+            total += chunk;
+        }
+        if (status == ASTRA_VFS_OK && total != (uint32_t)info.size) {
+            status = ASTRA_VFS_ERR_IO;
+        }
+        *moved = total;
+    }
+    (void)service->backend.ops->close(service->backend.context, node);
+    return status;
+}
+
+uint32_t
+astra_vfs_service_read_into(AstraVfsService *service, uint32_t session,
+                            AstraVfsFile handle, uint64_t offset,
+                            void *buffer, uint32_t length, uint32_t *moved)
+{
+    AstraVfsSessionSlot *slot;
+    AstraVfsOpenFile *file;
+    uint32_t status;
+
+    if (service == NULL || buffer == NULL || moved == NULL || length == 0u) {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    *moved = 0u;
+    slot = find_session(service, session);
+    if (slot == NULL) {
+        ++service->stats.protocol_rejects;
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    }
+    file = find_file(service, slot->id, handle, &status);
+    if (file == NULL) {
+        return status;
+    }
+    if ((file->flags & ASTRA_VFS_OPEN_READ) == 0u) {
+        return ASTRA_VFS_ERR_ACCESS;
+    }
+    if (file->kind == ASTRA_VFS_KIND_DIRECTORY) {
+        return ASTRA_VFS_ERR_IS_DIR;
+    }
+    status = service->backend.ops->read(service->backend.context, file->node,
+                                        offset, buffer, length, moved);
+    if (status == ASTRA_VFS_OK && *moved > length) {
+        *moved = length;
+    }
+    return status;
 }
 
 static void
@@ -424,8 +569,7 @@ handle_readdir(AstraVfsService *service, const AstraVfsRequest *request,
     uint64_t next = 0u;
     uint32_t index;
 
-    info.size = 0u;
-    info.kind = ASTRA_VFS_KIND_UNKNOWN;
+    node_info_clear(&info);
     name[0] = '\0';
     reply->status = service->backend.ops->readdir(
         service->backend.context, (const char *)request->body.path,
@@ -445,8 +589,7 @@ handle_readdir(AstraVfsService *service, const AstraVfsRequest *request,
     }
     reply->payload[index] = 0u;
     reply->count = index;
-    reply->kind = info.kind;
-    reply->node_size = info.size;
+    node_info_publish(reply, &info);
 }
 
 void
@@ -536,8 +679,7 @@ astra_vfs_service_dispatch(AstraVfsService *service, uint32_t operation,
     case ASTRA_VFS_OP_STAT: {
         AstraVfsNodeInfo info;
 
-        info.size = 0u;
-        info.kind = ASTRA_VFS_KIND_UNKNOWN;
+        node_info_clear(&info);
         reply->status = service->backend.ops->stat(
             service->backend.context, (const char *)request->body.path, &info);
         if (reply->status == ASTRA_VFS_OK) {

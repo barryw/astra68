@@ -291,6 +291,21 @@ static void qemu_pmmu_pmove_root_or_tc(CPUM68KState *env, uint32_t address,
         valid = preg == 2u ?
                 pmmu030_write_srp(&env->pmmu030, high, low, flush_disabled) :
                 pmmu030_write_crp(&env->pmmu030, high, low, flush_disabled);
+        if (valid && preg != 2u) {
+            /*
+             * A process switch. CRP selects the user address space; the
+             * kernel's own translations hang off SRP and do not change, so
+             * only the user index goes. Flushing everything here meant the
+             * kernel re-walked its page tables in C after every switch, and a
+             * microkernel switches on every IPC round trip -- it was most of
+             * the cost of creating a process.
+             */
+            tlb_flush_by_mmuidx(env_cpu(env), 1u << MMU_USER_IDX);
+            if (!valid) {
+                qemu_pmmu_raise(env, EXCP_MMU_CONF, retaddr);
+            }
+            return;
+        }
     }
     tlb_flush(env_cpu(env));
     if (!valid) {
@@ -367,6 +382,17 @@ static void qemu_pmmu_pflush(CPUM68KState *env, uint32_t address,
             qemu_pmmu_raise(env, EXCP_LINEF, retaddr);
         }
         pmmu030_flush(&env->pmmu030, function_code, mask, &address);
+        /*
+         * One ATC entry was discarded, so one page needs re-translating.
+         * Flushing the whole softMMU TLB here made the addressed form of
+         * PFLUSH cost the same as PFLUSHA -- a complete refill, every guest
+         * access re-walking the page tables in C. That is milliseconds on this
+         * host, and a kernel that unmaps one page pays it. tlb_flush_page
+         * covers every mmu index for the address, which is a superset of the
+         * function codes `mask` can select, so this is never too narrow.
+         */
+        tlb_flush_page(env_cpu(env), address & TARGET_PAGE_MASK);
+        return;
     }
     tlb_flush(env_cpu(env));
 }

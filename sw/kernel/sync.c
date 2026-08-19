@@ -9,6 +9,19 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/*
+ * Object tables live in their own region above the frame metadata, not beside
+ * the kernel image. Raising a limit then costs address space there and moves
+ * no address anything else reads -- the trace ring especially, which crash
+ * tooling finds at a fixed address. kernel.ld names this region if it fills.
+ */
+#if defined(__m68k__)
+#define KERNEL_TABLES __attribute__((section(".tables")))
+#else
+#define KERNEL_TABLES
+#endif
+
+
 struct KernelSyncObject {
     KernelThreadWaitQueue waiters;
     uint32_t owner;
@@ -23,7 +36,7 @@ struct KernelSyncObject {
 
 #define KERNEL_SYNC_TIMER_SLOT_NONE UINT8_MAX
 
-static KernelSyncObject objects[KERNEL_SYNC_OBJECT_MAX];
+static KernelSyncObject objects[KERNEL_SYNC_OBJECT_MAX] KERNEL_TABLES;
 static KernelObjectCache object_cache;
 static uint32_t object_cache_bitmap[
     KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_SYNC_OBJECT_MAX)];

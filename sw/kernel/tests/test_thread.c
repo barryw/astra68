@@ -197,10 +197,21 @@ static void test_all_priority_levels_select_highest_first(void)
     KernelThread *thread;
     KernelThread *selected;
 
+    /*
+     * One thread per other priority level, not one per thread slot. The two
+     * were the same number when there were sixteen slots and thirty-two
+     * levels; they are not now, and a slot-driven loop asks for priorities
+     * that do not exist.
+     */
+    const uint32_t covered = KERNEL_THREAD_PRIORITY_LEVELS / 2u <
+                                     (uint32_t)KERNEL_THREAD_MAX ?
+                                 KERNEL_THREAD_PRIORITY_LEVELS / 2u :
+                                 (uint32_t)KERNEL_THREAD_MAX;
+
     for (uint32_t parity = 0u; parity < 2u; ++parity) {
         kernel_performance_init();
         kernel_thread_pool_init();
-        for (uint32_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+        for (uint32_t slot = 0u; slot < covered; ++slot) {
             uint8_t priority = (uint8_t)(slot * 2u + parity);
 
             assert(kernel_thread_allocate(
@@ -210,7 +221,7 @@ static void test_all_priority_levels_select_highest_first(void)
                        priority, priority, &thread) == KERNEL_THREAD_OK);
             publish_thread(thread);
         }
-        for (uint32_t expected = KERNEL_THREAD_MAX; expected-- != 0u;) {
+        for (uint32_t expected = covered; expected-- != 0u;) {
             assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
             assert(selected->effective_priority ==
                    (uint8_t)(expected * 2u + parity));

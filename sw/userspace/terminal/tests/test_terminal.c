@@ -294,6 +294,49 @@ static void test_resize_preserves_cells_and_clamps_cursor(void)
            ASTRA_TERMINAL_INVALID_ARGUMENT);
 }
 
+static char echoed[8][64];
+static uint32_t echoed_lines;
+
+static void record_echo(void *context, const char *line, uint32_t length)
+{
+    (void)context;
+    assert(echoed_lines < 8u);
+    assert(length < sizeof(echoed[0]));
+    memcpy(echoed[echoed_lines], line, length);
+    echoed[echoed_lines][length] = '\0';
+    ++echoed_lines;
+}
+
+static void test_echo_reports_each_line_once(void)
+{
+    AstraTerminal terminal;
+
+    reset(&terminal);
+    echoed_lines = 0u;
+    astra_terminal_set_echo(&terminal, record_echo, NULL);
+    /* A line arrives on its newline, and never before. */
+    astra_terminal_write(&terminal, "first");
+    assert(echoed_lines == 0u);
+    astra_terminal_write(&terminal, "\n");
+    assert(echoed_lines == 1u && strcmp(echoed[0], "first") == 0);
+    /* A backspace takes the byte back out of the line it is assembling. */
+    astra_terminal_write(&terminal, "abc\bd\n");
+    assert(echoed_lines == 2u && strcmp(echoed[1], "abd") == 0);
+    /* A redraw replaces the line rather than recording every prefix of it. */
+    astra_terminal_write(&terminal, "WORK:> l\rWORK:> ls\n");
+    assert(echoed_lines == 3u && strcmp(echoed[2], "WORK:> ls") == 0);
+    /* A blank line is not a line: nothing to record and nothing to read. */
+    astra_terminal_write(&terminal, "\n");
+    assert(echoed_lines == 3u);
+    /* Installing another echo hands the partial line to the old one first. */
+    astra_terminal_write(&terminal, "partial");
+    astra_terminal_set_echo(&terminal, NULL, NULL);
+    assert(echoed_lines == 4u && strcmp(echoed[3], "partial") == 0);
+    /* And with no echo installed the model does not collect anything. */
+    astra_terminal_write(&terminal, "silent\n");
+    assert(echoed_lines == 4u);
+}
+
 int main(void)
 {
     test_rejects_impossible_geometry();
@@ -308,6 +351,7 @@ int main(void)
     test_render_failure_is_reported();
     test_model_works_without_a_renderer();
     test_resize_preserves_cells_and_clamps_cursor();
+    test_echo_reports_each_line_once();
     puts("astra terminal: PASS");
     return 0;
 }

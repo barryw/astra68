@@ -90,6 +90,22 @@ itself stays, as a conformance oracle only — see above.
   guarding `INSN(pmmu030, ...)` in `target/m68k/translate.c`.
 - **`pytest` is not installed on `beast`**, so `sw/boot`'s Python half only runs
   on the Mac.
+- **A storage image killed mid-run will not boot again until it is fsck'd.**
+  No clean shutdown leaves a dirty ext4 journal; lwext4 replays it and returns
+  bad bytes. It surfaces as `astra_launch:2: failed` on the next service read,
+  supervisor exit `8`, and a kernel panic saying *initial user image exited* —
+  nothing points at storage. The file on the volume is byte-identical; only the
+  metadata is wrong. `e2fsck -fy` the sliced-out volume, or splice a fresh image.
+- **`.tables` is a `NOLOAD` region and the ROM does not zero it.** `entry.S`
+  clears it now, right after BSS, because every pool that moved out of BSS was
+  written against BSS's zeros — POST leaves `0x5AA55A5C` there otherwise and
+  the first pool validity check fails, which surfaces as `initial user image
+  rejected, status 9` and points at nothing. Anything added to `KERNEL_TABLES`
+  inherits that clear; a *new* NOLOAD region would not.
+- **The kernel links no libgcc and no C library.** A variable 64-bit shift calls
+  `__ashldi3`; GCC turns `= {0}` on a four-word array, and a loop that fills
+  every word of one, into `memset`. Split shifts at the word boundary and clear
+  with `kernel_bytes_clear`.
 - Stale objects are indistinguishable from kernel bugs. Exit status 127 from a
   user image means a stale object first, not a kernel fault.
 
@@ -100,7 +116,11 @@ itself stays, as a conformance oracle only — see above.
 | Complete inventory of everything | `docs/INVENTORY.md` |
 | Project-wide continuation map | `docs/CURRENT_STATE.md` (mind the override) |
 | Storage / filesystem line of work | `docs/HANDOVER-userspace-bringup.md` |
-| **Current resume point** | `docs/HANDOVER-union-assigns.md` |
+| **Current resume point** | `docs/HANDOVER-memory-and-modernity.md` — reserved areas, then the heap rewrite |
+| Boot fix, the shell gate, commands and the POSIX half | `docs/HANDOVER-boot-and-shell-gate.md` — every gate green |
+| The libc, the commands, and the kernel limits | `docs/HANDOVER-libc-and-limits.md` — its §10.1 and §10.2 are done |
+| Compositor and launch latency | `docs/HANDOVER-launch-latency.md` — the blitter's `arlen` is the item left |
+| Storage/VFS resume point before that | `docs/HANDOVER-union-assigns.md` |
 | Debug surface, and how the namespace got started | `docs/HANDOVER-debug-and-namespace.md` |
 | Service protocols and thread stacks | `docs/HANDOVER-vfs-and-stacks.md` |
 | ROM budget and memory layout | `docs/MEMORY_MAP.md`, `sw/include/astra/boot.h` |
@@ -111,6 +131,13 @@ itself stays, as a conformance oracle only — see above.
 ## Standing instructions
 
 - **No throwaway code.** Build the real long-term piece even if incomplete.
+- **Modern methods, sized for this machine.** A 68030 with an MMU, 128 MB and
+  one core. Take the *idea* a modern system expresses, not its implementation —
+  and drop what does not apply, because no SMP deletes most of an allocator's
+  complexity. Never the 1980s answer: no fixed partitions, no ceilings compiled
+  into an image, no handle-and-lock discipline pushed onto every caller. Where
+  the capability model can do better than Unix, do better. See
+  `docs/HANDOVER-memory-and-modernity.md` §1.
 - Profile everything; regressions must be visible.
 - Broken tests are an emergency. Never commit with failing tests.
 - Git holds source, authored docs and deterministic generators — never build

@@ -8,9 +8,29 @@
 #define KERNEL_VM_USER_MAX 0x7fffffffu
 #define KERNEL_VM_AREA_BASE 0x40000000u
 #define KERNEL_VM_AREA_SLOT_SIZE 0x00200000u
-#define KERNEL_VM_AREA_SLOT_COUNT 16u
-/* Four high bits encode every process alias without widening the ledger. */
-#define KERNEL_VM_SHARED_ALIAS_MAX 15u
+/*
+ * Sixteen was a machine whose graphical half was one program. A desktop is
+ * seven: every window is a surface its client created, and every mount a
+ * program reads through wants a transfer area of its own. The window is 64 MiB
+ * of user address space at KERNEL_VM_AREA_BASE and the DMA window starts at
+ * 0x50000000, so this has room to double again before the two would meet.
+ */
+#define KERNEL_VM_AREA_SLOT_COUNT 32u
+/*
+ * How many address spaces exist at once. It lives here rather than beside
+ * KERNEL_PROCESS_MAX because the VM is what is sized from it -- the area
+ * mapping table and the alias accounting both -- and area.h must be able to
+ * read it without depending on the whole process header.
+ */
+#define KERNEL_VM_ADDRESS_SPACE_MAX 32u
+/*
+ * How many address spaces may alias one shared frame: all of them, and no
+ * more, because an alias is an address space that has it mapped. This was 15
+ * because the per-frame ledger gave the count four bits and the process count
+ * was cut to fit; the ledger is sixteen bits now and the count follows the
+ * address spaces instead of the field.
+ */
+#define KERNEL_VM_SHARED_ALIAS_MAX KERNEL_VM_ADDRESS_SPACE_MAX
 /*
  * Transfer memory lands in its own window. Each buffer is process-private, so
  * the slot index is per address space rather than global.

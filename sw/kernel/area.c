@@ -8,8 +8,24 @@
 
 #include <stddef.h>
 
+/* Object tables live above the frame metadata; see kernel.ld. */
+#if defined(__m68k__)
+#define KERNEL_TABLES __attribute__((section(".tables")))
+#else
+#define KERNEL_TABLES
+#endif
+
 #define AREA_FRAME_OWNER_PREFIX 0x40000000u
 #define AREA_GENERATION_MASK 0x000fffffu
+
+/*
+ * What an uncommitted page holds. Zero would have been the obvious marker and
+ * it is the wrong one: the frame allocator's addresses are relative to a RAM
+ * base the boot info supplies, so whether physical zero can ever be a real
+ * frame is a property of the machine rather than of this file. A value with
+ * its low bits set can never be a page-aligned frame on any of them.
+ */
+#define AREA_PAGE_ABSENT 0xffffffffu
 
 typedef enum KernelAreaState {
     KERNEL_AREA_FREE = 0,
@@ -40,10 +56,11 @@ struct KernelArea {
     uint16_t child_references;
     uint16_t mapping_references;
     uint16_t page_count;
+    uint16_t committed_pages;
     uint8_t slot;
     uint8_t state;
     uint8_t frames_released;
-    uint8_t reserved[2];
+    uint8_t reserved_form;
 };
 
 #if defined(__m68k__)
@@ -53,8 +70,8 @@ _Static_assert(sizeof(KernelAreaMapping) == 24u,
                "area mapping size changed; update the memory budget");
 #endif
 
-static KernelArea areas[KERNEL_AREA_MAX];
-static KernelAreaMapping mappings[KERNEL_AREA_MAPPING_MAX];
+static KernelArea areas[KERNEL_AREA_MAX] KERNEL_TABLES;
+static KernelAreaMapping mappings[KERNEL_AREA_MAPPING_MAX] KERNEL_TABLES;
 static KernelObjectCache area_cache;
 static KernelObjectCache mapping_cache;
 static uint32_t area_cache_bitmap[
@@ -124,6 +141,89 @@ static void reset_area(KernelArea *area, uint8_t slot)
     area->slot = slot;
     area->state = KERNEL_AREA_FREE;
     area->frames_released = 1u;
+    for (uint32_t page = 0u; page < KERNEL_AREA_PAGE_MAX; ++page)
+        area->physical_pages[page] = AREA_PAGE_ABSENT;
+}
+
+static bool page_committed(const KernelArea *area, uint32_t page)
+{
+    return page < area->page_count &&
+           area->physical_pages[page] != AREA_PAGE_ABSENT;
+}
+
+static uint32_t area_page_address(const KernelArea *area, uint32_t page)
+{
+    return area->virtual_base + page * KERNEL_PAGE_SIZE;
+}
+
+/*
+ * Publishes an area's committed pages into one address space. They are an
+ * arbitrary set rather than a prefix -- a program may touch the far end of a
+ * reserved area first -- so the set is walked as maximal contiguous runs and
+ * each run is one call. An area with nothing committed maps nothing and
+ * succeeds, which is what makes mapping a fresh reserved area free.
+ */
+static KernelVmStatus map_committed_runs(const KernelArea *area,
+                                         KernelAddressSpace *space,
+                                         uint32_t permissions,
+                                         uint32_t *mapped_pages)
+{
+    uint32_t page = 0u;
+
+    *mapped_pages = 0u;
+    while (page < area->page_count) {
+        uint32_t run;
+        KernelVmStatus status;
+
+        if (!page_committed(area, page)) {
+            ++page;
+            continue;
+        }
+        run = 0u;
+        while (page_committed(area, page + run))
+            ++run;
+        status = kernel_vm_map_shared_range(
+            space, area_page_address(area, page), &area->physical_pages[page],
+            run, area->frame_owner, permissions);
+        if (status != KERNEL_VM_OK)
+            return status;
+        *mapped_pages += run;
+        page += run;
+    }
+    return KERNEL_VM_OK;
+}
+
+/*
+ * The inverse, and it takes a page ceiling so that a failed map can withdraw
+ * exactly the runs it published rather than every run the area has.
+ */
+static KernelVmStatus unmap_committed_runs(const KernelArea *area,
+                                           KernelAddressSpace *space,
+                                           uint32_t page_limit)
+{
+    uint32_t page = 0u;
+    uint32_t unmapped = 0u;
+
+    while (page < area->page_count && unmapped < page_limit) {
+        uint32_t run;
+        KernelVmStatus status;
+
+        if (!page_committed(area, page)) {
+            ++page;
+            continue;
+        }
+        run = 0u;
+        while (page_committed(area, page + run) && unmapped + run < page_limit)
+            ++run;
+        status = kernel_vm_unmap_shared_range(
+            space, area_page_address(area, page), &area->physical_pages[page],
+            run, area->frame_owner);
+        if (status != KERNEL_VM_OK)
+            return status;
+        unmapped += run;
+        page += run;
+    }
+    return KERNEL_VM_OK;
 }
 
 static uint32_t make_frame_owner(uint32_t generation, uint32_t slot)
@@ -144,7 +244,7 @@ static void creator_usage(uint32_t creator, uint32_t *area_count,
             continue;
         ++objects;
         if (area->frames_released == 0u)
-            pages += area->page_count;
+            pages += area->committed_pages;
     }
     *area_count = objects;
     *page_count = pages;
@@ -186,9 +286,8 @@ static KernelAreaStatus unmap_record(KernelAreaMapping *mapping,
         !valid_area(mapping->area) || mapping->space == NULL)
         return KERNEL_AREA_CORRUPT;
     area = mapping->area;
-    if (kernel_vm_unmap_shared_range(
-            mapping->space, mapping->virtual_base, area->physical_pages,
-            area->page_count, area->frame_owner) != KERNEL_VM_OK)
+    if (unmap_committed_runs(area, mapping->space, area->page_count) !=
+        KERNEL_VM_OK)
         return KERNEL_AREA_CORRUPT;
     if (area->mapping_references == 0u || pool_stats.active_mappings == 0u)
         return KERNEL_AREA_CORRUPT;
@@ -242,19 +341,22 @@ static KernelAreaStatus close_area(KernelArea *area, uint32_t terminal_result)
         }
     }
     if (area->mapping_references != 0u || area->frames_released != 0u ||
-        pool_stats.committed_pages < area->page_count) {
+        pool_stats.committed_pages < area->committed_pages) {
         pool_corrupt = 1u;
         return KERNEL_AREA_CORRUPT;
     }
     for (uint32_t page = 0u; page < area->page_count; ++page) {
+        if (!page_committed(area, page))
+            continue;
         if (kernel_memory_release(area->physical_pages[page], 1u,
                                   area->frame_owner) != KERNEL_MEMORY_OK) {
             pool_corrupt = 1u;
             return KERNEL_AREA_CORRUPT;
         }
-        area->physical_pages[page] = 0u;
+        area->physical_pages[page] = AREA_PAGE_ABSENT;
     }
-    pool_stats.committed_pages -= area->page_count;
+    pool_stats.committed_pages -= area->committed_pages;
+    area->committed_pages = 0u;
     area->frames_released = 1u;
     maybe_free(area);
     return pool_corrupt == 0u ? KERNEL_AREA_OK : KERNEL_AREA_CORRUPT;
@@ -294,7 +396,7 @@ void kernel_area_pool_init(void)
 }
 
 KernelAreaStatus kernel_area_create(uint32_t creator, uint32_t byte_size,
-                                    KernelArea **result)
+                                    uint32_t flags, KernelArea **result)
 {
     KernelArea *area = NULL;
     void *raw_area;
@@ -303,18 +405,29 @@ KernelAreaStatus kernel_area_create(uint32_t creator, uint32_t byte_size,
     uint32_t creator_areas;
     uint32_t creator_pages;
     uint32_t page_count;
+    bool reserved_form;
 
-    if (creator == 0u || byte_size == 0u || result == NULL)
+    if (creator == 0u || byte_size == 0u || result == NULL ||
+        (flags & ~KERNEL_AREA_CREATE_FLAGS) != 0u)
         return KERNEL_AREA_INVALID_ARGUMENT;
     *result = NULL;
     if (byte_size > KERNEL_AREA_PAGE_MAX * KERNEL_PAGE_SIZE)
         return KERNEL_AREA_INVALID_ARGUMENT;
+    reserved_form = (flags & KERNEL_AREA_CREATE_RESERVED) != 0u;
     page_count = (byte_size + KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE;
     creator_usage(creator, &creator_areas, &creator_pages);
+    /*
+     * A reservation is charged for the slot it occupies and for nothing else,
+     * because the page quota exists to ration frames and a reserved area holds
+     * none yet. Its pages are charged one cluster at a time, at the fault that
+     * commits them, which is the only moment the owner has actually spent
+     * anything.
+     */
     if (creator_areas >= KERNEL_AREA_OWNER_MAX ||
-        page_count > KERNEL_AREA_OWNER_PAGE_MAX - creator_pages ||
-        page_count > KERNEL_AREA_SYSTEM_PAGE_MAX -
-                         pool_stats.committed_pages) {
+        (!reserved_form &&
+         (page_count > KERNEL_AREA_OWNER_PAGE_MAX - creator_pages ||
+          page_count > KERNEL_AREA_SYSTEM_PAGE_MAX -
+                           pool_stats.committed_pages))) {
         ++pool_stats.quota_failures;
         return KERNEL_AREA_QUOTA_EXCEEDED;
     }
@@ -347,8 +460,12 @@ KernelAreaStatus kernel_area_create(uint32_t creator, uint32_t byte_size,
     area->child_references = 0u;
     area->mapping_references = 0u;
     area->page_count = (uint16_t)page_count;
+    area->committed_pages = 0u;
+    area->reserved_form = reserved_form ? 1u : 0u;
     area->state = KERNEL_AREA_RESERVED;
     area->frames_released = 1u;
+    for (uint32_t page = 0u; page < KERNEL_AREA_PAGE_MAX; ++page)
+        area->physical_pages[page] = AREA_PAGE_ABSENT;
 #if defined(KERNEL_AREA_HOST_TEST)
     if (consume_test_fault(KERNEL_AREA_TEST_FAULT_CREATE_AFTER_RESERVE)) {
         reset_area(area, area->slot);
@@ -359,29 +476,31 @@ KernelAreaStatus kernel_area_create(uint32_t creator, uint32_t byte_size,
         return KERNEL_AREA_OUT_OF_MEMORY;
     }
 #endif
-    if (kernel_memory_alloc_pages_zeroed_tagged(
-            KERNEL_ALLOCATION_SITE_AREA_PAGES, page_count,
-            KERNEL_FRAME_SHARED, area->frame_owner,
-            area->physical_pages) != KERNEL_MEMORY_OK) {
-        reset_area(area, area->slot);
-        if (kernel_object_cache_release(&area_cache, area) !=
-            KERNEL_OBJECT_CACHE_OK)
-            pool_corrupt = 1u;
-        ++pool_stats.allocation_failures;
-        return KERNEL_AREA_OUT_OF_MEMORY;
+    if (!reserved_form) {
+        if (kernel_memory_alloc_pages_zeroed_tagged(
+                KERNEL_ALLOCATION_SITE_AREA_PAGES, page_count,
+                KERNEL_FRAME_SHARED, area->frame_owner,
+                area->physical_pages) != KERNEL_MEMORY_OK) {
+            reset_area(area, area->slot);
+            if (kernel_object_cache_release(&area_cache, area) !=
+                KERNEL_OBJECT_CACHE_OK)
+                pool_corrupt = 1u;
+            ++pool_stats.allocation_failures;
+            return KERNEL_AREA_OUT_OF_MEMORY;
+        }
+        area->committed_pages = (uint16_t)page_count;
     }
-    area->frames_released = 0u;
 #if defined(KERNEL_AREA_HOST_TEST)
     if (consume_test_fault(
             KERNEL_AREA_TEST_FAULT_CREATE_AFTER_FRAME_ALLOCATE)) {
         bool cleanup_failed = false;
 
-        for (uint32_t page = 0u; page < page_count; ++page) {
+        for (uint32_t page = 0u; page < area->committed_pages; ++page) {
             if (kernel_memory_release(area->physical_pages[page], 1u,
                                       area->frame_owner) !=
                 KERNEL_MEMORY_OK)
                 cleanup_failed = true;
-            area->physical_pages[page] = 0u;
+            area->physical_pages[page] = AREA_PAGE_ABSENT;
         }
         reset_area(area, area->slot);
         if (kernel_object_cache_release(&area_cache, area) !=
@@ -396,9 +515,15 @@ KernelAreaStatus kernel_area_create(uint32_t creator, uint32_t byte_size,
     }
 #endif
     area->state = KERNEL_AREA_LIVE;
+    /*
+     * Zero from here on means "close_area still owes this area's frames back",
+     * not "it holds at least one". A reserved area owes nothing yet and will
+     * still be walked on close, which is what lets it be closed at all.
+     */
+    area->frames_released = 0u;
     ++pool_stats.created_areas;
     ++pool_stats.active_areas;
-    pool_stats.committed_pages += page_count;
+    pool_stats.committed_pages += area->committed_pages;
     if (pool_stats.active_areas > pool_stats.max_active_areas)
         pool_stats.max_active_areas = pool_stats.active_areas;
     if (pool_stats.committed_pages > pool_stats.max_committed_pages)
@@ -484,6 +609,7 @@ KernelAreaStatus kernel_area_map(KernelArea *area, uint32_t process_id,
     uint16_t mapping_slot;
     KernelObjectCacheStatus cache_status;
     uint32_t process_mappings = 0u;
+    uint32_t mapped_pages = 0u;
     KernelVmStatus vm_status;
 
     if (!valid_area(area) || process_id == 0u || space == NULL ||
@@ -529,10 +655,13 @@ KernelAreaStatus kernel_area_map(KernelArea *area, uint32_t process_id,
         return KERNEL_AREA_CORRUPT;
     }
 
-    vm_status = kernel_vm_map_shared_range(
-        space, area->virtual_base, area->physical_pages, area->page_count,
-        area->frame_owner, permissions);
+    vm_status = map_committed_runs(area, space, permissions, &mapped_pages);
     if (vm_status != KERNEL_VM_OK) {
+        if (mapped_pages != 0u &&
+            unmap_committed_runs(area, space, mapped_pages) != KERNEL_VM_OK) {
+            pool_corrupt = 1u;
+            return KERNEL_AREA_CORRUPT;
+        }
         ++pool_stats.map_rollbacks;
         reset_mapping(free_mapping);
         if (kernel_object_cache_release(&mapping_cache, free_mapping) !=
@@ -552,9 +681,8 @@ KernelAreaStatus kernel_area_map(KernelArea *area, uint32_t process_id,
     if (consume_test_fault(
             KERNEL_AREA_TEST_FAULT_MAP_AFTER_VM_PUBLISH)) {
         ++pool_stats.map_rollbacks;
-        if (kernel_vm_unmap_shared_range(
-                space, area->virtual_base, area->physical_pages,
-                area->page_count, area->frame_owner) != KERNEL_VM_OK) {
+        if (unmap_committed_runs(area, space, area->page_count) !=
+            KERNEL_VM_OK) {
             pool_corrupt = 1u;
             return KERNEL_AREA_CORRUPT;
         }
@@ -580,6 +708,271 @@ KernelAreaStatus kernel_area_map(KernelArea *area, uint32_t process_id,
         pool_stats.max_active_mappings = pool_stats.active_mappings;
     *virtual_base = area->virtual_base;
     *byte_size = area->byte_size;
+    return KERNEL_AREA_OK;
+}
+
+/*
+ * Finds the area a user address falls in, and proves the caller holds it.
+ * Both the fault path and the decommit path need exactly this, and needing it
+ * twice is what makes it a function rather than two copies that drift.
+ */
+static KernelArea *authorised_area(uint32_t process_id,
+                                   const KernelAddressSpace *space,
+                                   uint32_t address)
+{
+    uint32_t slot;
+    KernelArea *area;
+
+    if (process_id == 0u || space == NULL || address < KERNEL_VM_AREA_BASE)
+        return NULL;
+    slot = (address - KERNEL_VM_AREA_BASE) / KERNEL_VM_AREA_SLOT_SIZE;
+    if (slot >= KERNEL_AREA_MAX)
+        return NULL;
+    area = &areas[slot];
+    if (!valid_area(area) || area->state != KERNEL_AREA_LIVE)
+        return NULL;
+    for (uint32_t index = 0u; index < KERNEL_AREA_MAPPING_MAX; ++index) {
+        const KernelAreaMapping *mapping = &mappings[index];
+
+        if (mapping->active != 0u && mapping->area == area &&
+            mapping->process_id == process_id && mapping->space == space)
+            return area;
+    }
+    return NULL;
+}
+
+/*
+ * Commits one cluster of a reserved area and publishes it everywhere the area
+ * is already mapped.
+ *
+ * Publishing into every mapping rather than only the faulting one is what
+ * keeps an area a single object: two processes sharing one have to see the
+ * same bytes at the same offset, so a page that exists for one of them exists
+ * for all of them. The alternative -- letting each address space fault its own
+ * pages in -- would need per-mapping page state and would buy nothing, because
+ * the frame is committed either way the moment anybody touches it.
+ *
+ * Everything is checked before anything is published, and a failure withdraws
+ * what it managed, so a refused commit leaves the area exactly as it was.
+ */
+static bool commit_cluster(KernelArea *area, uint32_t page)
+{
+    uint32_t aligned;
+    uint32_t limit;
+    uint32_t first;
+    uint32_t count = 0u;
+    uint32_t allocated = 0u;
+    uint32_t published = 0u;
+    uint32_t creator_areas;
+    uint32_t creator_pages;
+    uint32_t frames[KERNEL_AREA_COMMIT_CLUSTER_PAGES];
+
+    /*
+     * The run is grown outward from the faulting page rather than forward
+     * from the cluster's first page, and the difference is not cosmetic:
+     * decommit can punch a hole into the middle of a committed cluster, and
+     * scanning from the base would find the base occupied, commit nothing,
+     * and leave the fault unanswered -- which retires the process for
+     * touching an address the reservation says is its own.
+     *
+     * It stops at the cluster's bounds, at the end of the area, and at any
+     * page somebody already committed, so a fault always gets the maximal
+     * absent run containing its own address and never re-does work.
+     */
+    aligned = page - (page % KERNEL_AREA_COMMIT_CLUSTER_PAGES);
+    limit = aligned + KERNEL_AREA_COMMIT_CLUSTER_PAGES;
+    if (limit > area->page_count)
+        limit = area->page_count;
+    if (page >= limit || page_committed(area, page))
+        return false;
+    first = page;
+    while (first > aligned && !page_committed(area, first - 1u))
+        --first;
+    while (first + count < limit && !page_committed(area, first + count))
+        ++count;
+    if (count == 0u)
+        return false;
+    creator_usage(area->creator, &creator_areas, &creator_pages);
+    if (count > KERNEL_AREA_OWNER_PAGE_MAX - creator_pages ||
+        count > KERNEL_AREA_SYSTEM_PAGE_MAX - pool_stats.committed_pages) {
+        ++pool_stats.quota_failures;
+        ++pool_stats.commit_failures;
+        return false;
+    }
+    while (allocated < count) {
+        if (kernel_memory_alloc_pages_zeroed_tagged(
+                KERNEL_ALLOCATION_SITE_AREA_PAGES, 1u, KERNEL_FRAME_SHARED,
+                area->frame_owner, &frames[allocated]) != KERNEL_MEMORY_OK)
+            break;
+        ++allocated;
+    }
+    if (allocated != count) {
+        while (allocated != 0u) {
+            --allocated;
+            (void)kernel_memory_release(frames[allocated], 1u,
+                                        area->frame_owner);
+        }
+        ++pool_stats.allocation_failures;
+        ++pool_stats.commit_failures;
+        return false;
+    }
+    for (uint32_t index = 0u; index < count; ++index)
+        area->physical_pages[first + index] = frames[index];
+
+    for (uint32_t slot = 0u; slot < KERNEL_AREA_MAPPING_MAX; ++slot) {
+        KernelAreaMapping *mapping = &mappings[slot];
+
+        if (mapping->active == 0u || mapping->area != area)
+            continue;
+        if (kernel_vm_map_shared_range(
+                mapping->space, area_page_address(area, first),
+                &area->physical_pages[first], count, area->frame_owner,
+                mapping->permissions) != KERNEL_VM_OK)
+            break;
+        ++published;
+    }
+    if (published != area->mapping_references) {
+        uint32_t withdrawn = 0u;
+
+        for (uint32_t slot = 0u;
+             slot < KERNEL_AREA_MAPPING_MAX && withdrawn < published; ++slot) {
+            KernelAreaMapping *mapping = &mappings[slot];
+
+            if (mapping->active == 0u || mapping->area != area)
+                continue;
+            if (kernel_vm_unmap_shared_range(
+                    mapping->space, area_page_address(area, first),
+                    &area->physical_pages[first], count,
+                    area->frame_owner) != KERNEL_VM_OK) {
+                pool_corrupt = 1u;
+                return false;
+            }
+            ++withdrawn;
+        }
+        for (uint32_t index = 0u; index < count; ++index) {
+            if (kernel_memory_release(frames[index], 1u, area->frame_owner) !=
+                KERNEL_MEMORY_OK)
+                pool_corrupt = 1u;
+            area->physical_pages[first + index] = AREA_PAGE_ABSENT;
+        }
+        ++pool_stats.commit_failures;
+        return false;
+    }
+    area->committed_pages = (uint16_t)(area->committed_pages + count);
+    pool_stats.committed_pages += count;
+    if (pool_stats.committed_pages > pool_stats.max_committed_pages)
+        pool_stats.max_committed_pages = pool_stats.committed_pages;
+    ++pool_stats.commit_faults;
+    pool_stats.commit_pages += count;
+    return true;
+}
+
+bool kernel_area_fault(uint32_t process_id, KernelAddressSpace *space,
+                       uint32_t address)
+{
+    uint32_t page;
+    /*
+     * Authority, and the reason this is not simply an address test: the
+     * faulting process must already hold a mapping of this area. Without the
+     * check any process could spend an area owner's frames by reading into a
+     * window it was never given.
+     */
+    KernelArea *area = authorised_area(process_id, space, address);
+
+    if (area == NULL || area->reserved_form == 0u)
+        return false;
+    page = (address - area->virtual_base) / KERNEL_PAGE_SIZE;
+    if (page >= area->page_count || page_committed(area, page))
+        return false;
+    return commit_cluster(area, page);
+}
+
+
+/*
+ * Withdraws one page from every address space holding the area, then releases
+ * the frame. The order matters: a frame released while a descriptor still
+ * pointed at it would be a page the owner could read after it belonged to
+ * somebody else.
+ */
+static bool drop_page(KernelArea *area, uint32_t page)
+{
+    uint32_t withdrawn = 0u;
+
+    for (uint32_t slot = 0u; slot < KERNEL_AREA_MAPPING_MAX; ++slot) {
+        KernelAreaMapping *mapping = &mappings[slot];
+
+        if (mapping->active == 0u || mapping->area != area)
+            continue;
+        if (kernel_vm_unmap_shared_range(
+                mapping->space, area_page_address(area, page),
+                &area->physical_pages[page], 1u,
+                area->frame_owner) != KERNEL_VM_OK) {
+            pool_corrupt = 1u;
+            return false;
+        }
+        ++withdrawn;
+    }
+    if (withdrawn != area->mapping_references) {
+        pool_corrupt = 1u;
+        return false;
+    }
+    if (kernel_memory_release(area->physical_pages[page], 1u,
+                              area->frame_owner) != KERNEL_MEMORY_OK) {
+        pool_corrupt = 1u;
+        return false;
+    }
+    area->physical_pages[page] = AREA_PAGE_ABSENT;
+    if (area->committed_pages == 0u || pool_stats.committed_pages == 0u) {
+        pool_corrupt = 1u;
+        return false;
+    }
+    --area->committed_pages;
+    --pool_stats.committed_pages;
+    return true;
+}
+
+KernelAreaStatus kernel_area_decommit(uint32_t process_id,
+                                      KernelAddressSpace *space,
+                                      uint32_t address, uint32_t byte_size,
+                                      uint32_t *released_pages)
+{
+    KernelArea *area;
+    uint32_t first;
+    uint32_t last;
+    uint32_t offset;
+    uint32_t released = 0u;
+
+    if (released_pages == NULL || byte_size == 0u)
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    *released_pages = 0u;
+    area = authorised_area(process_id, space, address);
+    if (area == NULL)
+        return KERNEL_AREA_NOT_MAPPED;
+    /*
+     * An ordinary area is committed by definition -- its whole extent is its
+     * identity, and something is reading it. Only a reserved one has pages
+     * that were always going to come and go.
+     */
+    if (area->reserved_form == 0u)
+        return KERNEL_AREA_INVALID_STATE;
+    if (address < area->virtual_base)
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    offset = address - area->virtual_base;
+    if (byte_size > area->byte_size || offset > area->byte_size - byte_size)
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    /* Round inward: a partly covered page keeps whatever else is in it. */
+    first = (offset + KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE;
+    last = (offset + byte_size) / KERNEL_PAGE_SIZE;
+    for (uint32_t page = first; page < last; ++page) {
+        if (!page_committed(area, page))
+            continue;
+        if (!drop_page(area, page))
+            return KERNEL_AREA_CORRUPT;
+        ++released;
+    }
+    pool_stats.decommit_operations += released != 0u ? 1u : 0u;
+    pool_stats.decommit_pages += released;
+    *released_pages = released;
     return KERNEL_AREA_OK;
 }
 
@@ -651,6 +1044,14 @@ KernelAreaStatus kernel_area_write(KernelArea *area, uint32_t offset,
 
         if (chunk > size)
             chunk = size;
+        /*
+         * The kernel reached this page before the owner's own access did, so
+         * the commit that access would have caused has to happen here instead
+         * -- the same reversal the user stack's copy path makes. Refusing
+         * would fail a write to a perfectly good offset of a reserved area.
+         */
+        if (!page_committed(area, page) && !commit_cluster(area, page))
+            return KERNEL_AREA_OUT_OF_MEMORY;
         if (!physical_pointer(area->physical_pages[page] + page_offset,
                               &output))
             return KERNEL_AREA_CORRUPT;
@@ -678,6 +1079,20 @@ KernelAreaStatus kernel_area_read(const KernelArea *area, uint32_t offset,
 
         if (chunk > size)
             chunk = size;
+        /*
+         * An uncommitted page reads as zeros, because that is what it would
+         * read as the instant it were committed -- every area frame is handed
+         * out zeroed. Spending a frame to say so would be paying for the one
+         * access that does not need the memory to exist.
+         */
+        if (!page_committed(area, page)) {
+            for (uint32_t index = 0u; index < chunk; ++index)
+                output[index] = 0u;
+            output += chunk;
+            offset += chunk;
+            size -= chunk;
+            continue;
+        }
         if (!physical_pointer(area->physical_pages[page] + page_offset,
                               &input))
             return KERNEL_AREA_CORRUPT;
@@ -727,8 +1142,10 @@ bool kernel_area_snapshot(uint32_t slot, KernelAreaSnapshot *snapshot)
     snapshot->child_references = area->child_references;
     snapshot->mapping_references = area->mapping_references;
     snapshot->page_count = area->page_count;
+    snapshot->committed_pages = area->committed_pages;
     snapshot->state = area->state;
     snapshot->frames_released = area->frames_released;
+    snapshot->reserved_form = area->reserved_form;
     return true;
 }
 
@@ -776,8 +1193,24 @@ bool kernel_area_pool_valid(void)
         ++active;
         if (area->state == KERNEL_AREA_CLOSING)
             ++closing;
-        if (area->frames_released == 0u)
-            committed += area->page_count;
+        /*
+         * The committed count and the page array have to agree, or every
+         * quota answer derived from the count is fiction.
+         */
+        {
+            uint32_t present = 0u;
+
+            for (uint32_t page = 0u; page < area->page_count; ++page) {
+                if (page_committed(area, page))
+                    ++present;
+            }
+            if (present != area->committed_pages ||
+                area->committed_pages > area->page_count ||
+                (area->reserved_form == 0u && area->frames_released == 0u &&
+                 area->committed_pages != area->page_count))
+                return false;
+        }
+        committed += area->committed_pages;
         for (uint32_t map = 0u; map < KERNEL_AREA_MAPPING_MAX; ++map) {
             if (mappings[map].active != 0u && mappings[map].area == area)
                 ++mapping_count;

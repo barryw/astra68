@@ -555,6 +555,11 @@ void kernel_pmmu_flush_all(void)
 {
 }
 
+void kernel_pmmu_flush_page(uint32_t virtual_address)
+{
+    (void)virtual_address;
+}
+
 void kernel_pmmu_set_user_function_codes(void)
 {
 }
@@ -3598,19 +3603,23 @@ static void test_real_handle_exhaustion_rolls_back_thread_create(void)
     static const uint8_t image[] = {
         0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u
     };
+    const uint32_t area_rights =
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+        ASTRA_RIGHT_TRANSFER | ASTRA_RIGHT_ADMINISTER;
     /*
-     * Exactly filling the table takes four kinds of object now. It used to be
-     * syncs and threads alone, which worked while the table was 16 entries and
-     * stopped the moment it grew: there are only KERNEL_THREAD_MAX threads in
-     * the machine, so past a certain table size the test could not fill it and
-     * the "full" it was asserting about never happened.
-    */
-    const uint32_t port_pairs = KERNEL_PORT_OWNER_MAX;
-    const uint32_t area_count = KERNEL_AREA_OWNER_MAX;
-    const uint32_t ring_count = KERNEL_RING_OWNER_MAX;
-    const uint32_t child_count = KERNEL_HANDLE_MAX_ENTRIES - 2u -
-                                 KERNEL_SYNC_OWNER_MAX - 2u * port_pairs -
-                                 area_count - 2u * ring_count - 1u;
+     * The table is filled deliberately, by duplicating one handle, rather than
+     * as a by-product of creating one of every kind of object until the owner
+     * quotas run dry. It used to be written the second way and that stopped
+     * working the moment the table grew: syncs, ports, areas, rings and a
+     * process's own threads together reach 110 of 128 entries, so the quotas
+     * cannot fill the table at all, and the loop that tried asked for a
+     * seventeenth thread in a sixteen-thread process and failed for a reason
+     * this test is not about.
+     *
+     * Duplicating also leaves the thread pool untouched, which is the point:
+     * THREAD_CREATE then fails on the handle install rather than on a thread
+     * slot, and the install is the failure whose rollback is under test.
+     */
     KernelCpuContext *next;
     KernelMemoryStats baseline;
     KernelMemoryStats before_failure;
@@ -3624,8 +3633,8 @@ static void test_real_handle_exhaustion_rolls_back_thread_create(void)
     KernelVmStats after_vm;
     uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT];
     uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
-    uint32_t area_handles[KERNEL_AREA_OWNER_MAX];
     uint32_t process_id;
+    uint32_t area_handle;
 
     initialize_test();
     assert(kernel_memory_stats(&baseline));
@@ -3635,88 +3644,32 @@ static void test_real_handle_exhaustion_rolls_back_thread_create(void)
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
                KERNEL_PROCESS_CODE_BASE, 0u);
 
-    for (uint32_t index = 0u; index < KERNEL_SYNC_OWNER_MAX; ++index) {
-        memset(registers, 0, sizeof(registers));
-        registers[0] = ASTRA_SYSCALL_EVENT_CREATE;
-        registers[2] = TEST_SYNC_RIGHTS;
-        assert(kernel_process_on_syscall(
-                   registers, KERNEL_PROCESS_STACK_TOP - 8u, frame,
-                   &next) == KERNEL_PROCESS_OK);
-        assert(next->data[0] == ASTRA_SYSCALL_OK);
-    }
-    for (uint32_t index = 0u; index < child_count; ++index) {
-        memset(registers, 0, sizeof(registers));
-        registers[0] = ASTRA_SYSCALL_THREAD_CREATE;
-        registers[1] = KERNEL_PROCESS_CODE_BASE + 2u;
-        registers[2] = index;
-        registers[3] = KERNEL_THREAD_PRIORITY_NORMAL;
-        registers[4] = KERNEL_THREAD_RIGHTS;
-        assert(kernel_process_on_syscall(
-                   registers, KERNEL_PROCESS_STACK_TOP - 8u, frame,
-                   &next) == KERNEL_PROCESS_OK);
-        assert(next->data[0] == ASTRA_SYSCALL_OK);
-    }
-    /* Fill without consuming the final thread allocation slot. */
-    for (uint32_t index = 0u; index < area_count; ++index) {
-        memset(registers, 0, sizeof(registers));
-        registers[0] = ASTRA_SYSCALL_AREA_CREATE;
-        registers[1] = KERNEL_PAGE_SIZE;
-        registers[2] = ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
-                       ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER |
-                       ASTRA_RIGHT_ADMINISTER;
-        assert(kernel_process_on_syscall(
-                   registers, KERNEL_PROCESS_STACK_TOP - 8u, frame,
-                   &next) == KERNEL_PROCESS_OK);
-        assert(next->data[0] == ASTRA_SYSCALL_OK);
-        area_handles[index] = next->data[1];
-    }
     memset(registers, 0, sizeof(registers));
-    registers[0] = ASTRA_SYSCALL_HANDLE_DUPLICATE;
-    registers[1] = area_handles[0];
-    registers[2] = ASTRA_RIGHT_READ;
+    registers[0] = ASTRA_SYSCALL_AREA_CREATE;
+    registers[1] = KERNEL_PAGE_SIZE;
+    registers[2] = area_rights;
     assert(kernel_process_on_syscall(
                registers, KERNEL_PROCESS_STACK_TOP - 8u, frame,
                &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
-    for (uint32_t index = 0u; index < ring_count; ++index) {
+    area_handle = next->data[1];
+    while (kernel_process_test_handle_count(process_id) <
+           KERNEL_HANDLE_MAX_ENTRIES) {
         memset(registers, 0, sizeof(registers));
-        registers[0] = ASTRA_SYSCALL_RING_CREATE;
-        registers[1] = area_handles[index];
-        registers[2] = 0u;
-        registers[3] = 16u;
-        registers[4] = 4u;
+        registers[0] = ASTRA_SYSCALL_HANDLE_DUPLICATE;
+        registers[1] = area_handle;
+        registers[2] = ASTRA_RIGHT_READ;
         assert(kernel_process_on_syscall(
                    registers, KERNEL_PROCESS_STACK_TOP - 8u, frame,
                    &next) == KERNEL_PROCESS_OK);
         assert(next->data[0] == ASTRA_SYSCALL_OK);
     }
-    /* Ports come in pairs, and are what closes the gap exactly. */
-    for (uint32_t index = 0u; index < port_pairs; ++index) {
-        memset(registers, 0, sizeof(registers));
-        registers[0] = ASTRA_SYSCALL_PORT_CREATE;
-        registers[1] = 1u;
-        registers[2] = 64u;
-        assert(kernel_process_on_syscall(
-                   registers, KERNEL_PROCESS_STACK_TOP - 8u, frame,
-                   &next) == KERNEL_PROCESS_OK);
-        assert(next->data[0] == ASTRA_SYSCALL_OK);
-    }
-    /*
-     * The four kinds have to add up to the whole table, or this test is
-     * asserting about a table that is merely nearly full -- which is where a
-     * rollback bug hides rather than where it shows.
-     */
-    _Static_assert(KERNEL_HANDLE_MAX_ENTRIES - 2u - KERNEL_SYNC_OWNER_MAX -
-                           2u * KERNEL_PORT_OWNER_MAX -
-                           KERNEL_AREA_OWNER_MAX -
-                           2u * KERNEL_RING_OWNER_MAX - 1u <=
-                       KERNEL_PROCESS_THREAD_MAX,
-                   "this test can no longer fill the handle table exactly: "
-                   "syncs, ports and threads together fall short of it");
     assert(kernel_process_test_handle_count(process_id) ==
            KERNEL_HANDLE_MAX_ENTRIES);
     assert(kernel_process_snapshot(0u, &before_process));
-    assert(before_process.thread_count == child_count + 1u);
+    /* Room for the thread the failing create asks for; no room to name it. */
+    assert(before_process.thread_count == 1u);
+    assert(before_process.thread_count < KERNEL_PROCESS_THREAD_MAX);
     assert(kernel_memory_stats(&before_failure));
     assert(kernel_vm_stats(&before_vm));
     assert(kernel_thread_pool_stats(&before_threads));
@@ -8088,6 +8041,131 @@ static void test_dead_process_cannot_pin_library_cache(void)
     assert(kernel_process_test_library_cache_reclaims_after_last_mapping());
 }
 
+/*
+ * The reserved area from the outside: created through the syscall, faulted in
+ * through the exception path, and handed back through the decommit call. The
+ * unit tests in test_area.c drive the area layer directly, which leaves the
+ * seams -- argument decoding, the fault hook, the classification -- unproven,
+ * and those are exactly where a wiring mistake is silent.
+ */
+static void test_reserved_area_faults_in_through_the_exception_path(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    const uint32_t area_rights = ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                                 ASTRA_RIGHT_MAP;
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 8u;
+    const uint32_t fault_pc = KERNEL_PROCESS_CODE_BASE + 4u;
+    KernelCpuContext *next;
+    KernelMemoryStats baseline;
+    KernelMemoryStats after;
+    KernelProcessSnapshot process;
+    KernelAreaSnapshot snapshot;
+    KernelSchedulerStats stats;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+    uint32_t area_handle;
+    uint32_t area_base;
+
+    initialize_test();
+    fault_reports = 0u;
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, KERNEL_PROCESS_CODE_BASE, 0u);
+
+    /* A flag bit the kernel does not know is refused, not ignored. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_AREA_CREATE;
+    registers[1] = KERNEL_AREA_PAGE_MAX * KERNEL_PAGE_SIZE;
+    registers[2] = area_rights;
+    registers[3] = ASTRA_AREA_CREATE_RESERVED | 0x80000000u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    /* Reserving 2 MiB costs nothing, which is the whole point. */
+    assert(kernel_memory_stats(&baseline));
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_AREA_CREATE;
+    registers[1] = KERNEL_AREA_PAGE_MAX * KERNEL_PAGE_SIZE;
+    registers[2] = area_rights;
+    registers[3] = ASTRA_AREA_CREATE_RESERVED;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    area_handle = next->data[1];
+    assert(kernel_memory_stats(&after));
+    assert(after.free_frames == baseline.free_frames);
+    assert(kernel_area_snapshot(0u, &snapshot));
+    assert(snapshot.reserved_form == 1u);
+    assert(snapshot.committed_pages == 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_AREA_MAP;
+    registers[1] = area_handle;
+    registers[2] = ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    area_base = next->data[1];
+    assert(area_base >= KERNEL_VM_AREA_BASE);
+
+    /*
+     * The fault the reservation exists to answer. Resumed at the faulting
+     * instruction, not retired, and not reported -- an answered fault is not
+     * news, the same rule the growing stack keeps.
+     */
+    assert(kernel_memory_stats(&baseline));
+    memset(registers, 0, sizeof(registers));
+    make_frame(frame, 0xau, 2u, fault_pc,
+               area_base + 40u * KERNEL_PAGE_SIZE);
+    assert(kernel_process_on_fault(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next == kernel_process_current_context());
+    assert(next->program_counter == fault_pc);
+    assert(kernel_process_snapshot(0u, &process));
+    assert(process.process_state == KERNEL_PROCESS_RUNNING);
+    assert(fault_reports == 0u);
+    assert(kernel_process_stats(&stats));
+    assert(stats.user_faults == 0u);
+    assert(kernel_area_snapshot(0u, &snapshot));
+    assert(snapshot.committed_pages == KERNEL_AREA_COMMIT_CLUSTER_PAGES);
+    assert(kernel_memory_stats(&after));
+    assert(baseline.free_frames - after.free_frames ==
+           KERNEL_AREA_COMMIT_CLUSTER_PAGES + 1u);
+
+    /* Handing it back, through the syscall this time. */
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, KERNEL_PROCESS_CODE_BASE, 0u);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_AREA_DECOMMIT;
+    registers[1] = area_base + 32u * KERNEL_PAGE_SIZE;
+    registers[2] = KERNEL_AREA_COMMIT_CLUSTER_PAGES * KERNEL_PAGE_SIZE;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == KERNEL_AREA_COMMIT_CLUSTER_PAGES);
+    assert(kernel_area_snapshot(0u, &snapshot));
+    assert(snapshot.committed_pages == 0u);
+    /* The reservation survives it. */
+    assert(snapshot.page_count == KERNEL_AREA_PAGE_MAX);
+
+    /*
+     * An address in the area window that belongs to no area this process
+     * holds is a wild pointer, and it dies -- named for the window it landed
+     * in, because reading hex will not tell anybody that.
+     */
+    memset(registers, 0, sizeof(registers));
+    make_frame(frame, 0xau, 2u, fault_pc,
+               KERNEL_VM_AREA_BASE +
+                   (KERNEL_VM_AREA_SLOT_COUNT - 1u) *
+                       KERNEL_VM_AREA_SLOT_SIZE);
+    assert(kernel_process_on_fault(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_NO_RUNNABLE);
+    assert(fault_reports == 1u);
+    assert(last_fault_kind == KERNEL_PROCESS_FAULT_AREA_WINDOW);
+}
+
 int main(void)
 {
     test_dead_process_cannot_pin_library_cache();
@@ -8138,6 +8216,7 @@ int main(void)
     test_a_program_cannot_forge_a_verdict();
     test_initial_image_exit_is_reported();
     test_user_stack_grows_on_fault_and_guards_the_floor();
+    test_reserved_area_faults_in_through_the_exception_path();
     test_any_process_may_emit_an_event();
     test_no_debug_surface_closes_only_the_console();
     test_fault_report_names_only_what_it_knows();

@@ -22,7 +22,25 @@ _kernel_entry:
 	clr.l   (%a0)+
 	bra     1b
 
-2:	lea     _kernel_stack_top, %sp
+	| The object tables are NOLOAD in a region of their own, so neither the
+	| ROM nor the loop above touches them -- and POST leaves its own patterns
+	| in RAM, so what a pool finds there is 0x5AA55A5C rather than zero. Every
+	| pool that moved out of BSS was written against BSS's guarantee: an area
+	| whose generation survives initialisation as a memory-test pattern fails
+	| the pool's first validity check, and the initial image is refused with
+	| nothing pointing at the cause. Same 16-byte aligned burst as above; the
+	| linker aligns both bounds.
+2:	lea     _kernel_tables_start, %a0
+	lea     _kernel_tables_end, %a1
+4:	cmpa.l  %a1, %a0
+	beq     5f
+	clr.l   (%a0)+
+	clr.l   (%a0)+
+	clr.l   (%a0)+
+	clr.l   (%a0)+
+	bra     4b
+
+5:	lea     _kernel_stack_top, %sp
 	lea     _kernel_vectors, %a0
 	movec   %a0, %vbr
 

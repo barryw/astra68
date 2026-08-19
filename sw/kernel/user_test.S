@@ -555,6 +555,9 @@ _k1_survivor_image_entry:
 	| consumer must block before this thread can publish the payload.
 	move.l  #KERNEL_QUALIFICATION_K8_AREA_SIZE, %d1
 	moveq   #KERNEL_QUALIFICATION_K8_AREA_RIGHTS, %d2
+	| d3 carries the create flags and the kernel rejects bits it does not
+	| know, so an unset register is a refused call rather than a stale one.
+	moveq   #0, %d3
 	moveq   #ASTRA_SYSCALL_AREA_CREATE, %d0
 	trap    #ASTRA_SYSCALL_TRAP
 	tst.l   %d0

@@ -48,14 +48,15 @@ DEFAULT_APPS = os.path.join(REPOSITORY, "sw/userspace/apps/build")
 KIT_BUNDLES = ("Graphics.kit", "Filesystem.kit", "Interface.kit",
                "Events.kit", "Messaging.kit")
 APPLICATION_BUNDLES = ("Terminal.app",)
-STARTUP_MANIFEST = ("service SERVICES:storage grants BLOCK_DEVICE BLOCK_IRQ "
-                    "serves SYS:r required\n"
-                    "service SERVICES:events grants SYS:r STORE:rw LIBS:r "
-                    "serves EVENTS:r required\n"
-                    "application SERVICES:terminal grants DISPLAY INPUT "
-                    "INPUT_IRQ "
-                    "WORK:rw COMMANDS:r LIBS:r EVENTS:r EVENT_CONTROL delegates "
-                    "required\n")
+# One startup profile, not two. The terminal stopped being a program that owns
+# the screen and the keyboard when the window runtime landed: it is a window
+# client now, so a profile that runs it has to run the display service that
+# serves GUI, and the supervisor's own launch port has to have a holder --
+# without APP_LAUNCH in somebody's grants the last sender is the supervisor's
+# own, closing it leaves the port with no peer, and the watch loop exits
+# PEER_DEAD as soon as the machine is up. The desktop is what holds it. So the
+# desktop profile is the profile, and a gate that wants a terminal opens one
+# from the desktop the way a person does.
 DISPLAY_STARTUP_MANIFEST = (
     "service SERVICES:storage grants BLOCK_DEVICE BLOCK_IRQ "
     "serves SYS:r required\n"
@@ -67,6 +68,7 @@ DISPLAY_STARTUP_MANIFEST = (
     "INPUT_SERVICE serves GUI required\n"
     "application SERVICES:desktop grants GUI APP_LAUNCH APPS:r LIBS:r "
     "required\n")
+STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("storage", "events", "input", "display", "desktop")
 
 
@@ -182,7 +184,7 @@ def _install_bundle(volume, source, destination):
 
 def install(image, catalog=None, commands=None, services=None, kits=None,
             apps=None,
-            service_names=("storage", "events", "terminal"),
+            service_names=DISPLAY_SERVICES,
             manifest_text=STARTUP_MANIFEST):
     """Writes this build's catalog and commands into the image's volume.
 

@@ -24,16 +24,12 @@ It asserts three properties in one pass:
 """
 
 import argparse
-import json
+import importlib.util
 import os
 import re
 import shutil
-import socket
-import subprocess
 import sys
 import tempfile
-import threading
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import astra_image
@@ -46,65 +42,25 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 
 
-class Qmp:
-    def __init__(self, path, deadline=20.0):
-        self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        end = time.monotonic() + deadline
-        while True:
-            try:
-                self.socket.connect(path)
-                break
-            except (FileNotFoundError, ConnectionRefusedError):
-                if time.monotonic() >= end:
-                    raise
-                time.sleep(0.05)
-        self.file = self.socket.makefile("rwb", buffering=0)
-        self.file.readline()
-        self.execute("qmp_capabilities")
-
-    def execute(self, command, arguments=None):
-        request = {"execute": command}
-        if arguments is not None:
-            request["arguments"] = arguments
-        self.file.write((json.dumps(request) + "\n").encode())
-        while True:
-            reply = json.loads(self.file.readline())
-            if "return" in reply or "error" in reply:
-                return reply
-
-    def monitor(self, line):
-        return self.execute("human-monitor-command", {"command-line": line})
-
-    def send(self, down, qcode):
-        self.execute("input-send-event", {"events": [
-            {"type": "key",
-             "data": {"down": down, "key": {"type": "qcode", "data": qcode}}}]})
-        time.sleep(0.02)
-
-    def key(self, qcode):
-        for down in (True, False):
-            self.send(down, qcode)
-
-    def type_line(self, text):
-        """A colon is shift and semicolon; assign names are case-insensitive,
-        so it is the only shifted key a command line here needs."""
-        codes = {" ": "spc", ".": "dot", "/": "slash", "-": "minus"}
-        for character in text:
-            if character in codes:
-                self.key(codes[character])
-            elif character == ":":
-                self.send(True, "shift")
-                self.key("semicolon")
-                self.send(False, "shift")
-            else:
-                self.key(character)
-        self.key("ret")
+def load_terminal_module():
+    """test-terminal.py by path: its name is not an identifier."""
+    path = os.path.join(HERE, "test-terminal.py")
+    spec = importlib.util.spec_from_file_location("astra_terminal_gate", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def run(qemu, rom, image, catalog, deadline):
-    """Boots, waits for the terminal, and returns the ring as bytes."""
+    """Boots, types one refused command, and returns the ring as bytes.
+
+    The typing goes through the desktop: a terminal is a window client now, so
+    it is opened by double-clicking its icon rather than started by a manifest
+    entry. The gate module owns that, and owns reading the shell back, so this
+    borrows both rather than keeping a second copy that would rot separately.
+    """
+    gate = load_terminal_module()
     directory = tempfile.mkdtemp()
-    socket_path = os.path.join(directory, "events-qmp.sock")
     ring_path = os.path.join(directory, "ring.bin")
     # A copy, with this build's catalog on it: the machine resolves ids from
     # SYS: and the gate must boot what a built machine actually has, not an
@@ -112,54 +68,32 @@ def run(qemu, rom, image, catalog, deadline):
     scratch = os.path.join(directory, "card.img")
     shutil.copyfile(image, scratch)
     astra_image.install(scratch, catalog)
-    image = scratch
-    machine = subprocess.Popen(
-        [qemu, "-M", "astra68", "-m", "32M", "-bios", rom,
-         "-display", "none", "-monitor", "none", "-serial", "stdio",
-         "-no-reboot", "-qmp", "unix:%s,server=on,wait=off" % socket_path,
-         "-drive", "if=none,format=raw,file=%s" % image],
-        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT)
-
-    # Drained on a thread rather than left in the pipe: a full pipe stops the
-    # machine, and a machine stopped before it emitted anything would look
-    # exactly like an event system that did not work.
-    serial = []
-    booted = threading.Event()
-
-    def drain():
-        for line in machine.stdout:
-            text = line.decode("utf-8", "replace").rstrip()
-            serial.append(text)
-            if BOOT_MARKER in text:
-                booted.set()
-
-    threading.Thread(target=drain, daemon=True).start()
-
+    machine = gate.Machine(qemu, rom, scratch, directory)
     try:
-        qmp = Qmp(socket_path)
-        if not booted.wait(deadline):
-            raise RuntimeError("no %r within %.0fs" % (BOOT_MARKER, deadline))
-        # The terminal is up, so everything the boot path emits has been
-        # emitted. The ring is retained RAM at a fixed address; the quotes
-        # around the path are required, and their absence is one line of
-        # "invalid char" from the monitor.
-        # A command that fails, so the shell emits both halves of a story:
-        # the line it accepted and the refusal it answered with.
-        qmp.type_line(COMMAND)
-        time.sleep(8)
-        reply = qmp.monitor('pmemsave 0x%08x %d "%s"' %
-                            (RING_ADDRESS, RING_SIZE, ring_path))
-        if reply.get("return"):
-            raise RuntimeError("pmemsave: %s" % reply["return"].strip())
+        if not gate.open_terminal(machine, deadline, 60.0):
+            raise RuntimeError("no terminal within %.0fs" % deadline)
+        # A command that fails, so the shell emits both halves of a story: the
+        # line it accepted and the refusal it answered with.
+        machine.settle()
+        before = machine.sequence()
+        machine.qmp.type_line(COMMAND)
+        # `write: ` is how report_status prefixes the answer, whatever the
+        # refusal turns out to be -- the terminal holds no SYS: at all here,
+        # so it is "not found" rather than "access denied".
+        if machine.wait_for_text("write:", 60.0, before)[0] is None:
+            raise RuntimeError("the shell never refused %r" % COMMAND)
+        machine.settle()
+        # The ring is retained RAM at a fixed address; the quotes around the
+        # path are required, and their absence is one line of "invalid char"
+        # from the monitor.
+        reply = machine.qmp.monitor('pmemsave 0x%08x %d "%s"' %
+                                    (RING_ADDRESS, RING_SIZE, ring_path))
+        if reply and reply.strip():
+            raise RuntimeError("pmemsave: %s" % reply.strip())
         with open(ring_path, "rb") as handle:
-            return handle.read(), serial
+            return handle.read(), machine.log
     finally:
-        # Reaped, not just signalled. A lingering emulator competes with
-        # whatever gate runs next, and a boot deadline missed for that reason
-        # looks exactly like a machine that would not boot.
-        machine.kill()
-        machine.wait()
+        machine.close()
 
 
 def main():

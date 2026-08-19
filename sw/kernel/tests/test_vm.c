@@ -12,6 +12,17 @@
 #include <stdio.h>
 #include <string.h>
 
+/*
+ * The guards sit just above the thread-stack arena and move with it, so the
+ * test derives them the way vm.c does. They used to be written out, and
+ * raising KERNEL_THREAD_MAX moved the arena over the literals.
+ */
+#define TEST_THREAD_ARENA_END \
+    (KERNEL_THREAD_SUPERVISOR_HOST_ARENA_BASE + \
+     KERNEL_THREAD_MAX * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE)
+#define TEST_KERNEL_STACK_GUARD TEST_THREAD_ARENA_END
+#define TEST_WORKER_STACK_GUARD (TEST_THREAD_ARENA_END + KERNEL_PAGE_SIZE)
+
 static uint8_t physical_memory[32u * 1024u * 1024u];
 static KernelPmmuRootPointer loaded_srp;
 static KernelPmmuRootPointer loaded_crp;
@@ -19,6 +30,7 @@ static uint32_t loaded_tc;
 static uint32_t loaded_tt0;
 static uint32_t loaded_tt1;
 static uint32_t flush_count;
+static uint32_t flush_page_count;
 static uint32_t cache_invalidation_count;
 static uint32_t function_code_sets;
 
@@ -67,6 +79,12 @@ void kernel_pmmu_read_crp(KernelPmmuRootPointer *root)
 void kernel_pmmu_flush_all(void)
 {
     ++flush_count;
+}
+
+void kernel_pmmu_flush_page(uint32_t virtual_address)
+{
+    (void)virtual_address;
+    ++flush_page_count;
 }
 
 void kernel_pmmu_set_user_function_codes(void)
@@ -168,6 +186,7 @@ static void initialize_test(void)
     loaded_tt0 = 0xffffffffu;
     loaded_tt1 = 0xffffffffu;
     flush_count = 0u;
+    flush_page_count = 0u;
     cache_invalidation_count = 0u;
     function_code_sets = 0u;
     assert(kernel_vm_init() == KERNEL_VM_OK);
@@ -194,8 +213,8 @@ static void test_kernel_root_and_enable_sequence(void)
     low_physical = root[8] & 0xfffffff0u;
     low = physical_words(low_physical);
     assert(low[0] == 0x02000001u);
-    assert(low[(0x02080000u - 0x02000000u) >> 12] == 0u);
-    assert(low[(0x02083000u - 0x02000000u) >> 12] == 0u);
+    assert(low[(TEST_KERNEL_STACK_GUARD - 0x02000000u) >> 12] == 0u);
+    assert(low[(TEST_WORKER_STACK_GUARD - 0x02000000u) >> 12] == 0u);
     for (uint32_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
         uint32_t guard = KERNEL_THREAD_SUPERVISOR_HOST_ARENA_BASE +
                          slot * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE;
@@ -220,8 +239,8 @@ static void test_kernel_root_and_enable_sequence(void)
     assert(top[(OHCI_DMA_POOL_BASE - 0x03c00000u) >> 12] ==
            (OHCI_DMA_POOL_BASE | 0x41u));
     assert(top[0x3ffu] == 0x03fff041u);
-    assert(stats.kernel_stack_guard == 0x02080000u);
-    assert(stats.kernel_worker_stack_guard == 0x02083000u);
+    assert(stats.kernel_stack_guard == TEST_KERNEL_STACK_GUARD);
+    assert(stats.kernel_worker_stack_guard == TEST_WORKER_STACK_GUARD);
     assert(stats.kernel_thread_stack_arena ==
            KERNEL_THREAD_SUPERVISOR_HOST_ARENA_BASE);
     assert(stats.kernel_thread_stack_arena_end ==
@@ -239,7 +258,7 @@ static void test_kernel_root_and_enable_sequence(void)
     assert(kernel_vm_probe_current(0x02010004u, true, &translated) ==
            KERNEL_VM_MAPPING_READ_WRITE);
     assert(translated == 0x02010004u);
-    assert(kernel_vm_probe_current(0x02080000u, true, &translated) ==
+    assert(kernel_vm_probe_current(TEST_KERNEL_STACK_GUARD, true, &translated) ==
            KERNEL_VM_MAPPING_UNMAPPED);
     assert(kernel_vm_probe_current(0x02401234u, true, &translated) ==
            KERNEL_VM_MAPPING_READ_WRITE);
@@ -570,6 +589,36 @@ static void test_shared_map_existing_leaf_rollback_and_alias_guards(void)
         &first, &baseline_space, physical_pages, 2u, &baseline_memory,
         &baseline_vm, root_descriptor);
     assert(table[0] == 0u && table[1] == 0u);
+
+    /*
+     * A shared run no longer has to start at a slot boundary -- an area
+     * commits a cluster at a time, at whatever page offset the fault landed
+     * on. What it still may not do is straddle two page tables, because both
+     * of these functions resolve the root descriptor once, and it must be
+     * page aligned. Those are the invariants that replaced slot alignment.
+     */
+    assert(kernel_vm_map_shared_range(
+               &first, KERNEL_VM_AREA_BASE + KERNEL_PAGE_SIZE,
+               physical_pages, 1u, frame_owner,
+               KERNEL_VM_READ | KERNEL_VM_WRITE) == KERNEL_VM_OK);
+    assert(kernel_vm_unmap_shared_range(
+               &first, KERNEL_VM_AREA_BASE + KERNEL_PAGE_SIZE,
+               physical_pages, 1u, frame_owner) == KERNEL_VM_OK);
+    assert(kernel_vm_map_shared_range(
+               &first, KERNEL_VM_AREA_BASE + 1u, physical_pages, 1u,
+               frame_owner, KERNEL_VM_READ) == KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_unmap_shared_range(
+               &first, KERNEL_VM_AREA_BASE + 1u, physical_pages, 1u,
+               frame_owner) == KERNEL_VM_INVALID_ARGUMENT);
+    /*
+     * One page below a 4 MiB boundary, two pages long: the second page is
+     * under the next root descriptor, which the single-table walk would not
+     * have reached.
+     */
+    assert(kernel_vm_map_shared_range(
+               &first, KERNEL_VM_AREA_BASE + 0x00400000u - KERNEL_PAGE_SIZE,
+               physical_pages, 2u, frame_owner, KERNEL_VM_READ) ==
+           KERNEL_VM_INVALID_ARGUMENT);
 
     assert(kernel_vm_map_shared_range(
                &first, KERNEL_VM_AREA_BASE, physical_pages, 2u, frame_owner,

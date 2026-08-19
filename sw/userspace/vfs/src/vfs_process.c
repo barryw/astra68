@@ -21,6 +21,12 @@ typedef struct LibraryImage {
     uint8_t *bytes;
     uint32_t length;
     uint32_t area;
+    /*
+     * Borrowed images live in the client's transfer area rather than in an
+     * area of their own: nothing was copied, so there is nothing to release,
+     * and the bytes stay valid only until the next read on that client.
+     */
+    uint8_t borrowed;
 } LibraryImage;
 
 static AstraAssignTable assigns;
@@ -115,10 +121,12 @@ static int newer(const uint16_t candidate[3], const uint16_t current[3])
 
 static void release_library_image(LibraryImage *image)
 {
-    if (image->bytes != NULL)
-        (void)astra_rt_area_unmap(image->bytes);
-    if (image->area != 0u)
-        (void)astra_close(image->area);
+    if (image->borrowed == 0u) {
+        if (image->bytes != NULL)
+            (void)astra_rt_area_unmap(image->bytes);
+        if (image->area != 0u)
+            (void)astra_close(image->area);
+    }
     *image = (LibraryImage){0};
 }
 
@@ -144,6 +152,31 @@ static uint32_t read_file(const char *path, LibraryImage *image)
         client = astra_process_vfs_client_for(assign);
         if (client == NULL)
             continue;
+        /*
+         * Whole file, one round trip, read where it lands. Open, read and
+         * close were three exchanges with a service for what is one intent,
+         * and this path runs for every kit manifest and every library a
+         * program opens.
+         */
+        {
+            const uint8_t *whole = NULL;
+            uint32_t got = 0u;
+            uint64_t whole_size = 0u;
+
+            status = astra_vfs_port_read_path(client, wire, &whole, &got,
+                                              &whole_size);
+            if (status == ASTRA_VFS_OK && got != 0u &&
+                got == (uint32_t)whole_size &&
+                got + 1u <= ASTRA_VFS_BULK_MAX) {
+                image->bytes = (uint8_t *)(uintptr_t)whole;
+                image->length = got;
+                image->borrowed = 1u;
+                image->bytes[image->length] = 0u;
+                return ASTRA_VFS_OK;
+            }
+            if (status == ASTRA_VFS_ERR_NOT_FOUND)
+                continue;
+        }
         status = astra_vfs_open(client, wire, ASTRA_VFS_OPEN_READ, &file,
                                 &size, &kind);
         if (status != ASTRA_VFS_OK) {
@@ -153,6 +186,30 @@ static uint32_t read_file(const char *path, LibraryImage *image)
             size > ASTRA_LIBRARY_IMAGE_MAX) {
             (void)astra_vfs_close(client, file);
             return ASTRA_VFS_ERR_LIMIT;
+        }
+        /*
+         * Read it where it lands. A file that fits the transfer area needs no
+         * area of its own and no copy out of it -- and every caller here looks
+         * at the bytes and releases them before the next read, which is the
+         * lifetime a borrow gives. The area create, map and unmap this skips
+         * cost a full ATC flush each on top of the copy.
+         */
+        if ((uint32_t)size + 1u <= ASTRA_VFS_BULK_MAX) {
+            const uint8_t *borrowed = NULL;
+            uint32_t moved = 0u;
+
+            status = astra_vfs_port_read_borrow(client, file, 0u,
+                                                (uint32_t)size, &borrowed,
+                                                &moved);
+            if (status == ASTRA_VFS_OK && moved == (uint32_t)size) {
+                (void)astra_vfs_close(client, file);
+                image->bytes = (uint8_t *)(uintptr_t)borrowed;
+                image->length = moved;
+                image->borrowed = 1u;
+                image->bytes[image->length] = 0u;
+                return ASTRA_VFS_OK;
+            }
+            /* Anything else falls through to the copying path below. */
         }
         status = astra_rt_area_create(
             (uint32_t)size + 1u,
@@ -227,14 +284,110 @@ int astra_vfs_process_test_provider(const AstraBundleManifest *manifest,
 }
 #endif
 
+/*
+ * What one sweep of LIBS: found.
+ *
+ * resolve_library used to sweep LIBS: and parse every kit manifest on each
+ * call, keeping only the one provider it had been asked about. A process that
+ * opens three libraries -- which the Terminal does, and every GUI program will
+ * -- therefore paid for three sweeps, and a sweep is a readdir round trip per
+ * entry plus an open/read/close per kit manifest. Every one of those is a
+ * synchronous message to the storage service and back, and a round trip costs
+ * milliseconds, so the repeated sweeps were most of a program's startup.
+ *
+ * A sweep sees every provider in every kit whether or not it was asked about
+ * them, so recording them all makes the second and later resolutions free.
+ */
+#define PROCESS_KIT_MAX 8u
+#define PROCESS_KIT_PROVIDER_MAX 32u
+
+typedef struct KitProvider {
+    char name[ASTRA_BUNDLE_LIBRARY_NAME_MAX];
+    uint16_t version[3];
+    uint16_t abi;
+    uint8_t kit;
+} KitProvider;
+
+static char kit_names[PROCESS_KIT_MAX][ASTRA_VFS_NAME_MAX];
+static KitProvider kit_providers[PROCESS_KIT_PROVIDER_MAX];
+static uint32_t kit_count;
+static uint32_t kit_provider_count;
+/* Set only when the table holds everything the sweep saw. A partial table
+ * would resolve a library to the wrong kit or miss it entirely, so an overflow
+ * is not cached and the next call sweeps again -- slow, and still correct. */
+static uint8_t kit_table_complete;
+
+static int kit_record(const char *kit, const AstraBundleManifest *manifest)
+{
+    uint32_t slot = kit_count;
+
+    if (manifest->kind != ASTRA_BUNDLE_KIT || manifest->provide_count == 0u)
+        return 1;
+    if (slot == PROCESS_KIT_MAX)
+        return 0;
+    kit_names[slot][0] = '\0';
+    if (!append(kit_names[slot], sizeof(kit_names[slot]), kit))
+        return 0;
+    for (uint32_t at = 0u; at < manifest->provide_count; ++at) {
+        const AstraBundleLibrary *provider = &manifest->provides[at];
+        KitProvider *entry;
+
+        if (kit_provider_count == PROCESS_KIT_PROVIDER_MAX)
+            return 0;
+        entry = &kit_providers[kit_provider_count];
+        entry->name[0] = '\0';
+        if (!append(entry->name, sizeof(entry->name), provider->name))
+            return 0;
+        entry->version[0] = provider->version.major;
+        entry->version[1] = provider->version.minor;
+        entry->version[2] = provider->version.patch;
+        entry->abi = provider->abi;
+        entry->kit = (uint8_t)slot;
+        ++kit_provider_count;
+    }
+    ++kit_count;
+    return 1;
+}
+
+static int resolve_cached(const char *name, uint16_t minimum,
+                          uint16_t selected[3], char *selected_kit,
+                          uint32_t capacity)
+{
+    int found = 0;
+
+    for (uint32_t at = 0u; at < kit_provider_count; ++at) {
+        const KitProvider *provider = &kit_providers[at];
+        uint16_t candidate[3] = {provider->version[0], provider->version[1],
+                                 provider->version[2]};
+
+        if (provider->abi != minimum || !same(provider->name, name) ||
+            (found && !newer(candidate, selected))) continue;
+        for (uint32_t part = 0u; part < 3u; ++part)
+            selected[part] = candidate[part];
+        selected_kit[0] = '\0';
+        if (!append(selected_kit, capacity, kit_names[provider->kit]))
+            return 0;
+        found = 1;
+    }
+    return found;
+}
+
 static int resolve_library(const char *name, uint16_t minimum,
                            char *path, uint32_t capacity)
 {
     uint16_t selected[3] = {0u, 0u, 0u};
     char selected_kit[ASTRA_VFS_NAME_MAX] = {0};
     int found = 0;
+    int complete = 1;
 
     path[0] = '\0';
+    if (kit_table_complete != 0u) {
+        found = resolve_cached(name, minimum, selected, selected_kit,
+                               sizeof(selected_kit));
+        goto build;
+    }
+    kit_count = 0u;
+    kit_provider_count = 0u;
     if (!append(path, capacity, "LIBS:"))
         return 0;
     for (uint32_t member = 0u; ; ++member) {
@@ -254,16 +407,27 @@ static int resolve_library(const char *name, uint16_t minimum,
         if (client == NULL)
             continue;
         for (;;) {
-            char entry[ASTRA_VFS_NAME_MAX];
-            uint16_t kind;
-            uint16_t candidate[3] = {0u, 0u, 0u};
-            uint64_t next;
+            /*
+             * Batched, and static rather than automatic: a user thread gets one
+             * 4 KiB stack, and this is 528 bytes. One entry per exchange made a
+             * directory scan cost a round trip per name, and a round trip to a
+             * service is milliseconds -- the sweep of LIBS: was most of it.
+             * A peer too old to batch answers one entry at a time by itself.
+             */
+            static AstraVfsDirEntry batch[8];
+            uint32_t count = 0u;
+            uint64_t next = 0u;
 
-            status = astra_vfs_readdir(client, wire, cursor, entry,
-                                       sizeof(entry), &kind, &next);
-            if (status != ASTRA_VFS_OK)
+            status = astra_vfs_readdir_batch(
+                client, wire, cursor, batch,
+                (uint32_t)(sizeof(batch) / sizeof(batch[0])), &count, &next);
+            if (status != ASTRA_VFS_OK || count == 0u)
                 break;
-            if (kind == ASTRA_VFS_KIND_DIRECTORY &&
+            for (uint32_t item = 0u; item < count; ++item) {
+            const char *entry = batch[item].name;
+            uint16_t candidate[3] = {0u, 0u, 0u};
+
+            if (batch[item].kind == ASTRA_VFS_KIND_DIRECTORY &&
                 ends_with(entry, ".kit")) {
                 LibraryImage image;
                 AstraBundleManifest manifest;
@@ -275,26 +439,35 @@ static int resolve_library(const char *name, uint16_t minimum,
                     read_file(manifest_path, &image) == ASTRA_VFS_OK) {
                     if (astra_bundle_manifest_parse(
                             (char *)image.bytes, image.length, &manifest,
-                            &line) == ASTRA_BUNDLE_OK &&
-                        provider_version(&manifest, name, minimum, candidate) &&
-                        (!found || newer(candidate, selected))) {
-                        for (uint32_t part = 0u; part < 3u; ++part)
-                            selected[part] = candidate[part];
-                        selected_kit[0] = '\0';
-                        if (!append(selected_kit, sizeof(selected_kit), entry)) {
-                            release_library_image(&image);
-                            return 0;
+                            &line) == ASTRA_BUNDLE_OK) {
+                        if (!kit_record(entry, &manifest))
+                            complete = 0;
+                        if (provider_version(&manifest, name, minimum,
+                                             candidate) &&
+                            (!found || newer(candidate, selected))) {
+                            for (uint32_t part = 0u; part < 3u; ++part)
+                                selected[part] = candidate[part];
+                            selected_kit[0] = '\0';
+                            if (!append(selected_kit, sizeof(selected_kit),
+                                        entry)) {
+                                release_library_image(&image);
+                                return 0;
+                            }
+                            found = 1;
                         }
-                        found = 1;
                     }
                     release_library_image(&image);
                 }
+            }
             }
             if (next == 0u)
                 break;
             cursor = next;
         }
     }
+    kit_table_complete = complete != 0 ? 1u : 0u;
+
+build:
     path[0] = '\0';
     if (!found || !append(path, capacity, "LIBS:") ||
         !append(path, capacity, selected_kit) ||
@@ -329,6 +502,10 @@ uint32_t astra_process_vfs_init(const AstraStartupInfo *startup)
     astra_process_vfs_close();
     (void)memset(clients, 0, sizeof(clients));
     (void)memset(open_libraries, 0, sizeof(open_libraries));
+    /* The table describes the namespace this seeding just replaced. */
+    kit_table_complete = 0u;
+    kit_count = 0u;
+    kit_provider_count = 0u;
     for (uint32_t index = 0u; index < assigns.count; ++index) {
         uint32_t slot;
 
@@ -381,6 +558,20 @@ AstraVfsClient *astra_process_vfs_assign_client(const AstraAssign *assign,
     return astra_process_vfs_client_for(assign);
 }
 
+/*
+ * How many callers hold one open.
+ *
+ * The namespace, its clients and their transfer areas are per *process*, not
+ * per caller: `astra_process_vfs_init` re-seeds file-scope state, so a second
+ * caller opening one would tear the first one's clients out from under it in
+ * the middle of a read. That never happened while a command was the only
+ * thing asking, and it is exactly what the POSIX layer does the moment a
+ * program calls `open()` in a command that also uses the Astra API directly.
+ * So the seeding happens once and the teardown happens when the last holder
+ * lets go.
+ */
+static uint32_t filesystem_opens;
+
 uint32_t astra_process_filesystem_open(AstraProcessFilesystem *filesystem,
                                        const AstraStartupInfo *startup)
 {
@@ -389,13 +580,22 @@ uint32_t astra_process_filesystem_open(AstraProcessFilesystem *filesystem,
     if (filesystem == NULL || filesystem->handle != NULL ||
         filesystem->library != NULL)
         return ASTRA_VFS_ERR_INVALID;
-    status = astra_process_vfs_init(startup);
+    status = filesystem_opens != 0u ? ASTRA_VFS_OK :
+                                      astra_process_vfs_init(startup);
     if (status != ASTRA_VFS_OK)
         return status;
+    /*
+     * Counted from here, not after the last step: every failure below unwinds
+     * through `close`, and it can only take the namespace down at the right
+     * moment if it is already counted as up.
+     */
+    ++filesystem_opens;
     filesystem->handle = OpenLibrary(ASTRA_FILESYSTEM_LIBRARY_NAME,
                                      ASTRA_FILESYSTEM_LIBRARY_VERSION);
-    if (filesystem->handle == NULL)
+    if (filesystem->handle == NULL) {
+        astra_process_filesystem_close(filesystem);
         return ASTRA_VFS_ERR_NOT_FOUND;
+    }
     filesystem->library = filesystem->handle->exports;
     if (filesystem->library->abi_major !=
             ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR ||
@@ -406,8 +606,10 @@ uint32_t astra_process_filesystem_open(AstraProcessFilesystem *filesystem,
     status = filesystem->library->attach(
         &filesystem->filesystem, astra_process_vfs_assigns(),
         astra_process_vfs_assign_client, astra_vfs_port_read_bulk, NULL);
-    if (status != ASTRA_VFS_OK)
+    if (status != ASTRA_VFS_OK) {
         astra_process_filesystem_close(filesystem);
+        return status;
+    }
     return status;
 }
 
@@ -422,6 +624,32 @@ uint32_t astra_process_read_file(AstraProcessFilesystem *filesystem,
     if (filesystem == NULL || filesystem->library == NULL || path == NULL ||
         bytes == NULL || length == NULL) return ASTRA_VFS_ERR_INVALID;
     *length = 0u;
+    /*
+     * One round trip when the service can do it. This is the read every
+     * program uses -- a manifest, an icon, a data file -- and open, size,
+     * read, close was four exchanges for one intent.
+     */
+    {
+        const AstraAssign *assign = NULL;
+        char wire[ASTRA_VFS_PATH_MAX];
+
+        if (astra_assign_resolve(&assigns, path, ASTRA_RIGHT_READ, 0u, wire,
+                                 sizeof(wire), &assign) == ASTRA_VFS_OK) {
+            AstraVfsClient *client = astra_process_vfs_client_for(assign);
+            const uint8_t *whole = NULL;
+            uint32_t moved = 0u;
+            uint64_t node_size = 0u;
+
+            if (client != NULL &&
+                astra_vfs_port_read_path(client, wire, &whole, &moved,
+                                         &node_size) == ASTRA_VFS_OK &&
+                moved == (uint32_t)node_size && moved <= capacity) {
+                memcpy(bytes, whole, moved);
+                *length = moved;
+                return ASTRA_VFS_OK;
+            }
+        }
+    }
     status = filesystem->library->open(&filesystem->filesystem, path,
                                        ASTRA_VFS_OPEN_READ, &file);
     if (status == ASTRA_VFS_OK)
@@ -451,7 +679,9 @@ void astra_process_filesystem_close(AstraProcessFilesystem *filesystem)
     if (filesystem->library != NULL)
         filesystem->library->detach(&filesystem->filesystem);
     CloseLibrary(filesystem->handle);
-    astra_process_vfs_close();
+    /* The last holder takes the namespace down; an earlier one must not. */
+    if (filesystem_opens != 0u && --filesystem_opens == 0u)
+        astra_process_vfs_close();
     *filesystem = (AstraProcessFilesystem)ASTRA_PROCESS_FILESYSTEM_INIT;
 }
 

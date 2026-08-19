@@ -9,18 +9,56 @@
 #include <stdint.h>
 
 #define KERNEL_AREA_MAX KERNEL_VM_AREA_SLOT_COUNT
-#define KERNEL_AREA_OWNER_MAX 4u
+/*
+ * Four was one short of what a terminal in a window needs: its own surface,
+ * and a transfer area for each mount it reads through. It ran out between
+ * WORK: and EVENTS:, and what a person saw was `cat: limit reached` on a file
+ * that was there. Kept at a quarter of the pool, so the quota still means
+ * that no one process can spend everybody else's share.
+ */
+#define KERNEL_AREA_OWNER_MAX 8u
 #define KERNEL_AREA_PAGE_MAX \
     (KERNEL_VM_AREA_SLOT_SIZE / KERNEL_PAGE_SIZE)
 #define KERNEL_AREA_OWNER_PAGE_MAX KERNEL_AREA_PAGE_MAX
 #define KERNEL_AREA_SYSTEM_PAGE_MAX (KERNEL_AREA_MAX * KERNEL_AREA_PAGE_MAX)
+/*
+ * Every area slot, aliased into every process. Bounded by the process count
+ * rather than by the frame ledger's alias ceiling: the ledger says what one
+ * frame can bear, this says how many mappings can exist at once.
+ */
 #define KERNEL_AREA_MAPPING_MAX \
-    (KERNEL_AREA_MAX * KERNEL_VM_SHARED_ALIAS_MAX)
+    (KERNEL_AREA_MAX * KERNEL_VM_ADDRESS_SPACE_MAX)
 /* One address space can use every area slot; the VM layout is the quota. */
 #define KERNEL_AREA_PROCESS_MAPPING_MAX KERNEL_AREA_MAX
 
 #define KERNEL_AREA_RIGHTS \
     ((1u << 0) | (1u << 1) | (1u << 2) | (1u << 5) | (1u << 6))
+
+/*
+ * Naming memory and owning it are different operations. An ordinary area
+ * commits every frame at creation, which is right for something whose whole
+ * extent is about to be written -- a surface, a ring. A reserved area takes
+ * the address range and commits nothing; its pages arrive when they are
+ * touched. A 2 MiB window that half of a program ever reads then costs half
+ * of 2 MiB, and the address space it did not use costs nothing at all,
+ * because there is 2 GB of that and 128 MB of the other.
+ */
+#define KERNEL_AREA_CREATE_RESERVED (1u << 0)
+#define KERNEL_AREA_CREATE_FLAGS KERNEL_AREA_CREATE_RESERVED
+
+/*
+ * How much a fault commits. One page would be correct and slow: on a 30 MHz
+ * 68030 the frame push, the handler entry, the table walk and the ATC fill
+ * around a fault cost far more than clearing the pages themselves, so the
+ * fault is the expensive part and it should be amortised. Sixteen pages is
+ * 64 KiB, which is the order of magnitude the argument gives rather than a
+ * measured optimum -- it is a knob, and it wants a number from the allocator
+ * trace in HANDOVER-memory-and-modernity.md §4.
+ *
+ * Clusters are aligned to their own size inside the area, so repeated faults
+ * walking upward land on distinct clusters and a fault never re-does work.
+ */
+#define KERNEL_AREA_COMMIT_CLUSTER_PAGES 16u
 
 typedef enum KernelAreaStatus {
     KERNEL_AREA_OK = 0,
@@ -49,8 +87,10 @@ typedef struct KernelAreaSnapshot {
     uint16_t child_references;
     uint16_t mapping_references;
     uint16_t page_count;
+    uint16_t committed_pages;
     uint8_t state;
     uint8_t frames_released;
+    uint8_t reserved_form;
 } KernelAreaSnapshot;
 
 typedef struct KernelAreaPoolStats {
@@ -70,11 +110,43 @@ typedef struct KernelAreaPoolStats {
     uint32_t revoked_mappings;
     uint32_t owner_deaths;
     uint32_t stale_operations;
+    uint32_t commit_faults;
+    uint32_t commit_pages;
+    uint32_t commit_failures;
+    uint32_t decommit_operations;
+    uint32_t decommit_pages;
 } KernelAreaPoolStats;
 
 void kernel_area_pool_init(void);
 KernelAreaStatus kernel_area_create(uint32_t creator, uint32_t byte_size,
-                                    KernelArea **area);
+                                    uint32_t flags, KernelArea **area);
+/*
+ * Answers a fault inside the area window: commits the cluster containing the
+ * address and publishes it into every address space that already has the area
+ * mapped. True means the access may be retried.
+ *
+ * The process must already hold a mapping. A fault from someone who does not
+ * is not an area growing, it is a wild pointer that happened to land in the
+ * window, and committing memory to it would be answering a bug with a frame.
+ */
+bool kernel_area_fault(uint32_t process_id, KernelAddressSpace *space,
+                       uint32_t address);
+/*
+ * Drops the committed pages of a reserved area that lie wholly inside the
+ * range, and keeps the reservation. This is what makes freeing memory mean
+ * something: without it "returns memory to the system" is a sentence rather
+ * than a behaviour, and a long-running program ratchets upward until it dies.
+ *
+ * Only whole pages entirely inside the range go, because a page half of which
+ * is still live is a page that is still live. Touching the address again
+ * re-faults and gets a fresh zeroed page, which is the same contract
+ * MADV_DONTNEED offers and the only one that can be honoured without knowing
+ * what the owner meant to keep.
+ */
+KernelAreaStatus kernel_area_decommit(uint32_t process_id,
+                                      KernelAddressSpace *space,
+                                      uint32_t address, uint32_t byte_size,
+                                      uint32_t *released_pages);
 void kernel_area_abandon_unpublished(KernelArea *area);
 bool kernel_area_handle_retain(void *object, void *context);
 void kernel_area_handle_release(void *object, void *context);

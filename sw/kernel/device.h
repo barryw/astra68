@@ -4,8 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define KERNEL_DEVICE_MAX 8u
-#define KERNEL_DEVICE_LEASE_MAX 8u
+#define KERNEL_DEVICE_MAX 16u
+#define KERNEL_DEVICE_LEASE_MAX 16u
 /*
  * Leases one process may hold at once. Two was enough while a service owned a
  * single device; the initial image holds the block device, the keyboard and

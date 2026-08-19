@@ -62,6 +62,13 @@ kernel_pmmu_flush_all:
 	pflusha
 	rts
 
+	.globl kernel_pmmu_flush_page
+	.type kernel_pmmu_flush_page, @function
+kernel_pmmu_flush_page:
+	movea.l 4(%sp), %a0
+	pflush  #0,#0,(%a0)
+	rts
+
 	.globl kernel_pmmu_set_user_function_codes
 	.type kernel_pmmu_set_user_function_codes, @function
 kernel_pmmu_set_user_function_codes:

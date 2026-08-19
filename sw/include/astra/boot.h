@@ -33,9 +33,18 @@
 #define ASTRA_KERNEL_LOAD_ADDRESS     0x02044000u
 #define ASTRA_KERNEL_TRACE_ADDRESS    0x020c4000u
 #define ASTRA_KERNEL_TRACE_SIZE       0x00010000u
-#define ASTRA_KERNEL_RESERVED_SIZE    0x00110000u
-#define ASTRA_KERNEL_USABLE_ADDRESS   0x02154000u
-#define ASTRA_KERNEL_USABLE_SIZE      0x01cac000u
+/*
+ * Kernel image and stacks (512 KiB), trace ring (64 KiB), frame metadata
+ * (512 KiB) and object tables (2 MiB). The tables were added when raising the
+ * port and message limits ran the kernel region out of room: they live above
+ * the metadata so no address below them moves, and the only boundary that
+ * shifts is where usable RAM begins.
+ */
+#define ASTRA_KERNEL_TABLES_ADDRESS   0x02154000u
+#define ASTRA_KERNEL_TABLES_SIZE      0x00200000u
+#define ASTRA_KERNEL_RESERVED_SIZE    0x00310000u
+#define ASTRA_KERNEL_USABLE_ADDRESS   0x02354000u
+#define ASTRA_KERNEL_USABLE_SIZE      0x01aac000u
 #define ASTRA_ROM_BACKING_ADDRESS     0x03e00000u
 #define ASTRA_ROM_BACKING_SIZE        0x00040000u
 

@@ -80,8 +80,8 @@ astra_irq_endpoint_info(uint32_t process_handle, uint32_t slot,
     return result.status;
 }
 
-uint32_t
-astra_log_write(const void *bytes, uint32_t length)
+static uint32_t
+log_write_level(const void *bytes, uint32_t length, uint32_t level)
 {
     const uint8_t *text = bytes;
     uint32_t sent = 0u;
@@ -91,8 +91,7 @@ astra_log_write(const void *bytes, uint32_t length)
     }
     while (sent < length) {
         uint32_t chunk = length - sent;
-        uint32_t flags = ASTRA_EVENT_LEVEL_NOTICE |
-                         ASTRA_EVENT_FLAG_INLINE_STRING;
+        uint32_t flags = level | ASTRA_EVENT_FLAG_INLINE_STRING;
         uint32_t status;
 
         if (chunk > ASTRA_EVENT_ARGUMENT_MAX) {
@@ -112,6 +111,27 @@ astra_log_write(const void *bytes, uint32_t length)
         sent += chunk;
     }
     return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
+astra_log_write(const void *bytes, uint32_t length)
+{
+    return log_write_level(bytes, length, ASTRA_EVENT_LEVEL_NOTICE);
+}
+
+/*
+ * The same line, into the ring and no further.
+ *
+ * The event store drops debug at drain -- live subscription only, counted and
+ * never kept -- which is exactly the difference between a machine's account of
+ * itself and a running commentary on it. A terminal echoing every line it
+ * prints is the second: worth reading while it happens, and not worth
+ * evicting a refusal from the record to keep.
+ */
+uint32_t
+astra_log_debug(const void *bytes, uint32_t length)
+{
+    return log_write_level(bytes, length, ASTRA_EVENT_LEVEL_DEBUG);
 }
 
 uint32_t

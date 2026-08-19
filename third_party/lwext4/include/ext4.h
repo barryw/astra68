@@ -426,6 +426,14 @@ int ext4_mode_set(const char *path, uint32_t mode);
  * @param mode New mode bits (for example 0777).
  *
  * @return  Standard error code.*/
+/**@brief ASTRA: mode, owner, modification time and link count in one lookup.
+ * @param   path to file/directory
+ * @param   mode, uid, gid, mtime, nlink, size outputs; any may be NULL
+ * @return  standard error code */
+int ext4_meta_get(const char *path, uint32_t *mode, uint32_t *uid,
+		  uint32_t *gid, uint32_t *mtime, uint32_t *nlink,
+		  uint64_t *size);
+
 int ext4_mode_get(const char *path, uint32_t *mode);
 
 /**@brief Change file owner and group.

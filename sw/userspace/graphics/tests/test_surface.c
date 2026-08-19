@@ -203,11 +203,11 @@ static void test_hardware_draw_list_batch(void)
            1u);
     assert(be32(batch_storage +
                 ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
-                ASTRA_RENDER_BATCH_ARENA_OFFSET + 12u * 64u + 24u) ==
+                ASTRA_RENDER_BATCH_ARENA_OFFSET + 13u * 64u + 24u) ==
            ((uint32_t)17u << 16 | 24u));
     assert(be32(batch_storage +
                 ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
-                ASTRA_RENDER_BATCH_ARENA_OFFSET + 12u * 64u + 28u) ==
+                ASTRA_RENDER_BATCH_ARENA_OFFSET + 13u * 64u + 28u) ==
            ((uint32_t)120u << 16 | 76u));
 }
 
@@ -234,6 +234,36 @@ static void test_mono_draw_list(void)
            command->width == ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH);
 }
 
+static void test_rounded_fill_has_no_overlap(void)
+{
+    /* A rounded fill must not cover any pixel twice: its bands used to
+       overlap, and one repainted band is milliseconds on real hardware. */
+    static uint8_t batch_storage[ASTRA_RENDER_BUILDER_BYTES];
+    AstraRenderBuilder solid;
+    uint32_t surface;
+    uint32_t filled = 0u;
+
+    assert(astra_render_builder_init(&solid, batch_storage,
+                                     sizeof(batch_storage), 9u));
+    surface = astra_render_builder_surface(&solid, 100u, 60u);
+    assert(surface != 0u);
+    assert(astra_render_builder_rounded(&solid, surface, 0, 0,
+                                        100u, 60u, 12u, 0x1234u));
+    assert(astra_render_builder_finish(&solid) ==
+           ASTRA_RENDER_BUILDER_BYTES);
+    for (uint32_t index = 0u; index < be32(batch_storage + 12u); ++index) {
+        const uint8_t *item = batch_storage +
+            ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
+            ASTRA_RENDER_BATCH_ARENA_OFFSET +
+            index * ASTRA_RENDER_COMMAND_BYTES;
+        uint32_t extent = be32(item + 56u);
+
+        if ((be32(item + 4u) >> 16) == ASTRA_RENDER_OP_FILL)
+            filled += (extent >> 16) * (extent & 0xffffu);
+    }
+    assert(filled == 100u * 60u - 4u * 12u * 12u);
+}
+
 int main(void)
 {
     test_clipped_drawing_and_blit();
@@ -242,6 +272,7 @@ int main(void)
     test_proportional_utf8_text();
     test_hardware_draw_list_batch();
     test_mono_draw_list();
+    test_rounded_fill_has_no_overlap();
     puts("surface drawing tests passed");
     return 0;
 }
