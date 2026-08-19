@@ -15,6 +15,7 @@ static uint32_t trace_event_count[KERNEL_TRACE_EVENT_MONITOR_DROP + 1u];
 static uint32_t monitor_irq_services;
 static uint32_t monitor_spi_irq_services;
 static bool monitor_spi_binding_available = true;
+static bool monitor_ready = true;
 static bool staged_trace_pending;
 static uint32_t trace_worker_signals;
 static uint32_t device_worker_signals;
@@ -50,9 +51,14 @@ static bool monitor_irq_service(uint8_t source, uint64_t timestamp,
     return true;
 }
 
+bool kernel_monitor_ready(void)
+{
+    return monitor_ready;
+}
+
 bool kernel_monitor_uart_binding(KernelIrqInternalBinding *binding)
 {
-    if (binding == NULL)
+    if (binding == NULL || !monitor_ready)
         return false;
     binding->service = monitor_irq_service;
     binding->context = NULL;
@@ -75,7 +81,8 @@ static bool monitor_spi_irq_service(uint8_t source, uint64_t timestamp,
 
 bool kernel_monitor_spi_binding(KernelIrqInternalBinding *binding)
 {
-    if (binding == NULL || !monitor_spi_binding_available)
+    if (binding == NULL || !monitor_ready ||
+        !monitor_spi_binding_available)
         return false;
     binding->service = monitor_spi_irq_service;
     binding->context = NULL;
@@ -328,6 +335,32 @@ static void test_init_profiles_optional_spi(void)
     assert(registers->IRQ_ENABLE == 0u);
     assert(registers->TIMER[0].CTRL == 0u);
     monitor_spi_binding_available = true;
+}
+
+/*
+ * A build with no debug surface -- the K1/K10 qualification harness -- never
+ * stands the monitor up, and the machine still has to come up. Binding the
+ * monitor's sources unconditionally made kernel_interrupt_init refuse, which
+ * panicked that kernel before it reached the qualification it exists to run.
+ */
+static void test_init_without_monitor(void)
+{
+    VestaRegs *registers = kernel_platform_test_registers();
+    KernelIrqPoolStats stats;
+
+    assert(registers != NULL);
+    clear_registers(registers);
+    advertise_monitor_spi(registers);
+    kernel_allocation_test_clear_failure();
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    monitor_ready = false;
+    assert(kernel_interrupt_init(KERNEL_PLATFORM_CPU_HZ));
+    assert(registers->IRQ_ENABLE == IRQ_BIT(IRQ_SRC_TIMER0));
+    assert(registers->TIMER[0].CTRL == (TMR_ENABLE | TMR_IRQ_EN));
+    assert(kernel_irq_pool_stats(&stats));
+    assert(stats.internal_routes == 1u);
+    monitor_ready = true;
 }
 
 static void test_timer_and_quarantine_use_common_dispatch(void)
@@ -673,6 +706,7 @@ static void test_device_service_death_quiesces_source(void)
 int main(void)
 {
     test_init_profiles_optional_spi();
+    test_init_without_monitor();
     test_timer_and_quarantine_use_common_dispatch();
     test_device_endpoints_use_common_dispatch();
     test_device_service_death_quiesces_source();

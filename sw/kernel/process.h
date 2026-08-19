@@ -5,6 +5,7 @@
 #include "device.h"
 #include "handle.h"
 #include "irq.h"
+#include "memory.h"
 #include "port.h"
 #include "thread.h"
 #include "trace.h"
@@ -42,6 +43,27 @@
  */
 #define KERNEL_PROCESS_MAX KERNEL_VM_ADDRESS_SPACE_MAX
 #define KERNEL_PROCESS_CODE_BASE 0x00100000u
+/*
+ * A raw image is read-execute pages at the code base and one writable page
+ * here. The page exists because a program needs somewhere to put a word that
+ * is not its stack: the qualification harness's threads coordinate through
+ * it, and until it existed they used the bottom of the first thread's stack
+ * -- which became a guard page the moment stacks grew, and killed them on
+ * their first instruction. An ELF image gets its data from its segments and
+ * never reaches this.
+ *
+ * The address is fixed rather than derived from the image size, because the
+ * image addresses it as a constant and would move every time it grew.
+ */
+#define KERNEL_PROCESS_DATA_BASE 0x00200000u
+/*
+ * How far a raw image may run. It is not an ELF and has no segments, so the
+ * whole blob is mapped read-execute from the code base; the ceiling is here
+ * so that a blob which outgrows it is refused with a reason rather than
+ * truncated. The qualification harness, the only raw image, is one page over
+ * four thousand bytes.
+ */
+#define KERNEL_PROCESS_RAW_IMAGE_MAX (4u * KERNEL_PAGE_SIZE)
 #define KERNEL_PROCESS_STACK_BASE KERNEL_THREAD_STACK_BASE
 /* The top of the first slot's reservation: where its stack pointer starts. */
 #define KERNEL_PROCESS_STACK_TOP \

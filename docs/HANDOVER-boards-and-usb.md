@@ -3,10 +3,14 @@
 Date: 2026-08-19, later than `HANDOVER-memory-and-modernity.md`, which this
 continues. Written to be read cold. Read `CLAUDE.md` first.
 
-**Everything described here is committed and pushed.** `origin/main` is at
-`98e32c4`, the working tree is clean, and the session's eight commits sit on
-top of `c17cd1a`. That is a change from the previous handover, which opened by
-saying nothing was committed — it is all in now.
+**Everything described here is committed.** The board-agnostic work is at
+`311e924`; the K1-K10 qualification work in §3.1 is the single commit on top
+of it, committed locally and not yet pushed.
+
+**The short version of the second half:** the K1-K10 qualification kernel boots
+again, runs every phase, and has a gate — `emu/qemu/test-qualification.py`. The
+USB interrupt is inside it. Storage and input are present and deliberately not
+claimed; §3.2 says what finishing them takes.
 
 ---
 
@@ -58,47 +62,84 @@ evidence of the thing it looked like evidence of.
 
 ## 3. The resume point
 
-### 3.1 The qualification kernel does not boot under QEMU
+### 3.1 The qualification kernel boots, and its verdict is a gate
 
-**This is the first item, because it blocks the second.**
-
-The K1–K10 device qualification in `kernel.c` is compiled out unless
-`ASTRA_KERNEL_K1_QUALIFICATION=1`. Build it and boot it:
+**Done.** `emu/qemu/test-qualification.py` boots the K1-K10 harness and reads
+its verdict; it passes in under a second:
 
 ```
 ssh beast 'cd ~/astra68-verify/sw/boot && make -j8 KERNEL_K1_QUALIFICATION=1'
+python3 emu/qemu/test-qualification.py $QEMU sw/boot/astra_boot.bin \
+    --image /tmp/storage-cmds.img
+K10 partial, mask=0x00000380 in 0.2s
+ASTRA QUALIFICATION PASS 12 markers
 ```
 
-and the machine panics before reaching it:
+Five separate things were wrong, each hidden behind the last, and every one of
+them was the same shape as the five in §1: **something the harness or the
+kernel had compiled in about a machine that no longer exists.**
 
-```
-Reason: interrupt controller initialization failed
-Worker: ... registered=0x00000039 ...
-```
+| what was wrong | where | what it did |
+|---|---|---|
+| the monitor's two IRQ sources were bound unconditionally | `interrupt.c` | the qualification build has no debug surface, so `kernel_monitor_init` never ran and the UART binding refused: `interrupt controller initialization failed` |
+| `KERNEL_QUALIFICATION_SHARED_BASE` was `0x70000000` | `qualification.h` | that was the bottom of the first thread's stack when a stack was one page at the base of its slot. It is the **guard page** now, so both harness processes died on their first instruction |
+| the harness was one page and had outgrown it | `process.c` | a raw image was refused above 4096 bytes: `survivor process creation failed` |
+| the initial user image ran alongside the harness | `kernel.c` | with no capabilities it polls at NORMAL priority and starves the K6 thread at 15; the harness waited forever on a thread that was ready and never scheduled |
+| the harness asserted a faulted process reports exit status 0 | `user_test.S` | it reports `ASTRA_STATUS_FAULTED` deliberately -- zero is what a program says when it *succeeded* -- so the sibling failed its own check and killed the process |
 
-It panics **identically on an emulator build with no OHCI at all**, so this is
-not a consequence of the USB work — it is a pre-existing condition of that
-build under QEMU. Nobody has run it in the emulator for long enough to notice.
+What each fix was:
 
-It matters because that program is the only thing that binds the USB IRQ, and
-therefore the only thing that would put the interrupt path under a gate. Until
-it boots, USB interrupts are covered by the probe in §2 and nothing else.
+- **The monitor is asked whether it exists.** `kernel_monitor_ready()`, and
+  `kernel_interrupt_init` binds and arms its internal sources as one group
+  through a loop, so the unwind is one loop rather than a ladder that grew a
+  rung per source.
+- **A raw process gets a data page**, `KERNEL_PROCESS_DATA_BASE`, at a fixed
+  `0x00200000` -- fixed rather than after the image, because the image
+  addresses it as a constant and would move every time it grew. The shared
+  block is that page. A raw image is also mapped a page at a time now, up to
+  `KERNEL_PROCESS_RAW_IMAGE_MAX`, so it is no longer confined to one page.
+- **The qualification build does not start the initial image at all.** The
+  harness is the whole workload; the special case that used to launch it
+  without block capabilities is gone with it.
+- **The harness produces its own quantum preemption.** The milestone asserts
+  one happened, which needs two runnable threads of equal priority, which used
+  to come from whatever else the machine was running. The survivor and the
+  offender now both burn `KERNEL_QUALIFICATION_QUANTUM_SPIN_NS` -- 12 ms, two
+  quanta and a margin -- reading the clock rather than counting iterations,
+  because the 32768 iterations that lasted a quantum on a 30 MHz 68030 last a
+  fraction of one under the emulator and the preemption never happened.
 
-Start at `registered=0x00000039` — bits 0, 3, 4 and 5 — against what
-`kernel_platform_qualification_irq_sources()` returns for this machine, and at
-`kernel_interrupt_init`.
+### 3.2 What the mask means, and what is still not proved
 
-### 3.2 The USB interrupt path, once §3.1 boots
+`mask=0x00000380` is USB, Vega and Astraea. **The USB interrupt is now under a
+gate**: armed, delivered, read, checked against
+`KERNEL_QUALIFICATION_IRQ_USB_EXPECTED`, consumed, acknowledged, and its
+endpoint closed. Breaking that expected value deliberately produces no `K1
+PROTECTED ENTRY PASS`, so the check is real and not decorative.
 
-Nothing in a normal boot arms the USB source: the kernel brings the controller
-up only for a process that binds that IRQ, and the desktop binds storage, input
-and display. So the model's frame timer is idle in every gate today. With the
-qualification kernel booting, `K10_QUALIFY_IRQ` arms it, waits, and checks the
-record — and the model already produces what it expects.
+Storage and input are **present and not qualified here**, and that is now said
+rather than claimed. Their `prepare` asks the device for an interrupt that is
+already pending: a storage state change, or an input event. On the ULX3S the
+AstraHost link's host end produced both on demand; under the emulator nothing
+plays that part, so `prepare` answers `IO_ERROR`, the harness closes the
+endpoint and leaves the source out of the mask it reports. `COMPLETE_IRQS`
+takes a subset of what was authorized, and the kernel prints what was proved.
 
-Note the shape of the failure if it goes wrong: `K10_QUALIFY_IRQ` waits with
-`ASTRA_DEADLINE_NONE`. An interrupt that never arrives is a boot that never
-finishes, not a test that fails.
+Two ways to finish those two, for whoever picks this up:
+
+1. **Give the emulator the host end.** Media change for storage (the model
+   already has `state_change`, set once at reset and consumed at boot by
+   `refresh_device_state`), and an injected input event for input. The input
+   check also asserts an event identity -- class `0x7e`, value `"ASTR"` --
+   that only that link ever produced; a real keypress would not match it, so
+   the check has to become "the event the interrupt announced is the event I
+   consumed" or the injection has to carry those fields.
+2. **Provoke storage from inside.** A completion interrupt from a benign read
+   is what the device does in normal traffic and needs no host at all -- but
+   the qualification's `consume` currently demands a state change and refuses
+   a completion, so that is a contract change, not a patch.
+
+On the DE25 with a real host, neither is in the way of the other three.
 
 ### 3.3 The DE25 Nano
 
@@ -148,6 +189,21 @@ Each of these looked like a bug in the thing being changed and was not.
 - **Passing gates are not evidence a new path is taken.** Adding the OHCI made
   all five pass, and they would have passed just as well if nothing had changed.
   Both USB claims in §2 needed a deliberate perturbation to become evidence.
+- **`sw/kernel/build/` holds host objects and m68k objects in turn.** Build the
+  ROM, then run `make test` in the same tree, and the host binaries are linked
+  from m68k objects: `./build/test_mmio: cannot execute binary file`, which
+  reads as a broken test and is a stale tree. `make clean` between the two.
+- **A gate that is not the whole answer will happily pass.** The qualification
+  boots for two seconds and then idles; every intermediate state in §3.1 --
+  harness dead, harness deadlocked, harness silently exited -- looked identical
+  from the serial log, which said nothing after the last boot line. What broke
+  it open was `qemu -S -s` and `gdb-multiarch` on `astra_kernel.elf`: breakpoints
+  on `retire_current`, `retire_current_thread` and `complete_wait` name the
+  thread that died and where, and `kernel_process_stats` can be *called* from
+  gdb into scratch RAM to see which milestone counter is still zero. Attach at
+  2 s and it is already over -- use `-S`.
+- **`-serial file:` writes nothing here.** Redirect `-serial stdio` to a file
+  instead, or a gdb run looks like a machine that never booted.
 - **`test_memory` builds without `KERNEL_MEMORY_HOST_TEST`** — it uses
   `KERNEL_MEMORY_NO_POISON`. Keying host-versus-kernel behaviour on the wrong
   macro made the host binary take the kernel path and write through a raw
@@ -189,6 +245,16 @@ for gate in test-display time-boot test-events test-terminal irq_quarantine_prob
   echo "$gate=$?"
 done
 ```
+
+The qualification gate is a **different ROM** and runs on its own:
+
+```
+ssh beast 'cd ~/astra68-verify/sw/boot && make -j8 KERNEL_K1_QUALIFICATION=1'
+python3 emu/qemu/test-qualification.py $QEMU sw/boot/astra_boot.bin \
+    --image /tmp/storage-cmds.img          # --mask 0x380 is the default
+```
+
+Rebuild the normal ROM afterwards -- both write `sw/boot/astra_boot.bin`.
 
 **Check the status, not the tail** — `... | tail` reports `tail`'s status.
 

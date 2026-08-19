@@ -197,11 +197,10 @@ bool kernel_interrupt_device_binding(uint8_t source,
 
 bool kernel_interrupt_init(uint32_t cpu_hz)
 {
+    /* Timer, and the monitor's UART and SPI when the build has a monitor. */
+    KernelIrqInternalBinding internal[3];
     KernelIrqControllerOps controller;
-    KernelIrqInternalBinding monitor_spi;
-    KernelIrqInternalBinding monitor_uart;
-    KernelIrqInternalBinding timer;
-    bool monitor_spi_present;
+    uint32_t count = 0u;
 
     kernel_platform_interrupt_init(cpu_hz);
     clear_deferred_interrupts();
@@ -220,38 +219,43 @@ bool kernel_interrupt_init(uint32_t cpu_hz)
                                service_deferred_interrupts, NULL) !=
         KERNEL_WORKER_OK)
         return false;
-    monitor_spi_present = kernel_platform_monitor_spi_present();
 
-    timer.service = kernel_platform_timer_irq_service;
-    timer.context = NULL;
-    timer.source = IRQ_SRC_TIMER0;
-    timer.trigger = KERNEL_IRQ_TRIGGER_EDGE;
-    timer.ipl = 4u;
-    timer.vector = KERNEL_IRQ_COMMON_VECTOR;
-    if (kernel_irq_bind_internal(&timer) != KERNEL_IRQ_OK)
-        return false;
-    if (!kernel_monitor_uart_binding(&monitor_uart) ||
-        kernel_irq_bind_internal(&monitor_uart) != KERNEL_IRQ_OK)
-        return false;
-    if (monitor_spi_present &&
-        (!kernel_monitor_spi_binding(&monitor_spi) ||
-         kernel_irq_bind_internal(&monitor_spi) != KERNEL_IRQ_OK))
-        return false;
+    internal[count].service = kernel_platform_timer_irq_service;
+    internal[count].context = NULL;
+    internal[count].source = IRQ_SRC_TIMER0;
+    internal[count].trigger = KERNEL_IRQ_TRIGGER_EDGE;
+    internal[count].ipl = 4u;
+    internal[count].vector = KERNEL_IRQ_COMMON_VECTOR;
+    ++count;
+    /*
+     * The monitor is compiled out of a build with no debug surface -- the
+     * qualification harness is one -- and then there is nothing behind either
+     * of these sources to bind.
+     */
+    if (kernel_monitor_ready()) {
+        if (!kernel_monitor_uart_binding(&internal[count]))
+            return false;
+        ++count;
+        if (kernel_platform_monitor_spi_present()) {
+            if (!kernel_monitor_spi_binding(&internal[count]))
+                return false;
+            ++count;
+        }
+    }
+    for (uint32_t index = 0u; index < count; ++index)
+        if (kernel_irq_bind_internal(&internal[index]) != KERNEL_IRQ_OK)
+            return false;
+
+    /*
+     * Armed as one group so the unwind is one loop: a source that refuses
+     * leaves the machine with nothing armed rather than a partial set.
+     */
     kernel_platform_timer_arm(kernel_platform_quantum_cycles());
-    if (kernel_irq_arm_internal(IRQ_SRC_TIMER0) != KERNEL_IRQ_OK) {
-        kernel_platform_timer_disarm();
-        return false;
-    }
-    if (kernel_irq_arm_internal(IRQ_SRC_UART_RX) != KERNEL_IRQ_OK) {
-        (void)kernel_irq_mask_internal(IRQ_SRC_TIMER0);
-        kernel_platform_timer_disarm();
-        return false;
-    }
-    if (monitor_spi_present &&
-        kernel_irq_arm_internal(IRQ_SRC_ASTRAHOST_MONITOR) !=
-            KERNEL_IRQ_OK) {
-        (void)kernel_irq_mask_internal(IRQ_SRC_UART_RX);
-        (void)kernel_irq_mask_internal(IRQ_SRC_TIMER0);
+    for (uint32_t index = 0u; index < count; ++index) {
+        if (kernel_irq_arm_internal(internal[index].source) == KERNEL_IRQ_OK)
+            continue;
+        while (index-- > 0u)
+            (void)kernel_irq_mask_internal(internal[index].source);
         kernel_platform_timer_disarm();
         return false;
     }

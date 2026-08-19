@@ -787,6 +787,17 @@ bool kernel_monitor_init(const KernelMonitorBuildInfo *build_info)
     return true;
 }
 
+/*
+ * A build without a debug surface never calls kernel_monitor_init, so the
+ * monitor's two IRQ sources have nobody to service them. The interrupt
+ * controller asks this before it binds them rather than discovering it as a
+ * binding that refuses.
+ */
+bool kernel_monitor_ready(void)
+{
+    return monitor_initialized != 0u;
+}
+
 bool kernel_monitor_uart_binding(KernelIrqInternalBinding *binding)
 {
     if (!monitor_initialized || binding == NULL)

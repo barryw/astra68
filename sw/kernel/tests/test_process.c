@@ -1934,11 +1934,46 @@ static void test_invalid_creation_does_not_allocate(void)
     assert(kernel_process_create(image, sizeof(image), sizeof(image), 0u,
                                  &process_id) ==
            KERNEL_PROCESS_INVALID_ARGUMENT);
-    assert(kernel_process_create(image, KERNEL_PAGE_SIZE + 1u, 0u, 0u,
-                                 &process_id) ==
+    assert(kernel_process_create(image, KERNEL_PROCESS_RAW_IMAGE_MAX + 1u,
+                                 0u, 0u, &process_id) ==
            KERNEL_PROCESS_INVALID_ARGUMENT);
     assert(kernel_memory_stats(&after));
     assert(after.free_frames == before.free_frames);
+}
+
+/*
+ * A raw image longer than a page. The qualification harness crossed 4096
+ * bytes and was refused outright, which reads as a broken harness rather
+ * than an image that outgrew a mapping done one page at a time.
+ */
+static void test_multi_page_raw_image_maps_every_page(void)
+{
+    static uint8_t image[KERNEL_PAGE_SIZE + 64u];
+    KernelCpuContext *next;
+    uint32_t process_id = 0u;
+    uint32_t physical = 0u;
+
+    initialize_test();
+    for (uint32_t index = 0u; index < sizeof(image); index += 2u) {
+        image[index] = 0x4eu;
+        image[index + 1u] = 0x71u;
+    }
+    image[KERNEL_PAGE_SIZE] = 0x60u;
+    image[KERNEL_PAGE_SIZE + 1u] = 0xfeu;
+    assert(kernel_process_create(image, sizeof(image), KERNEL_PAGE_SIZE,
+                                 0u, &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(next != NULL);
+    assert(next->program_counter == KERNEL_PROCESS_CODE_BASE +
+                                        KERNEL_PAGE_SIZE);
+    /* The second page is mapped, and carries the second page of the blob. */
+    assert(kernel_vm_test_translate_current(
+        KERNEL_PROCESS_CODE_BASE + KERNEL_PAGE_SIZE, false, &physical));
+    assert(physical_memory[physical - 0x02000000u] == 0x60u);
+    assert(physical_memory[physical - 0x02000000u + 1u] == 0xfeu);
+    /* And the data page is writable wherever the image ended. */
+    assert(kernel_vm_test_translate_current(KERNEL_PROCESS_DATA_BASE, true,
+                                            &physical));
 }
 
 static void test_sync_syscall_rights_and_stale_handles(void)
@@ -2874,6 +2909,15 @@ static void test_private_irq_qualification_control(void)
     registers[0] = ASTRA_SYSCALL_PROGRESS;
     registers[1] = KERNEL_QUALIFICATION_COMMAND_COMPLETE_IRQS;
     registers[2] = 0u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    /*
+     * A source outside the authorized set is still a refusal: completion
+     * narrows what was proved, it does not widen it.
+     */
+    registers[2] = source_mask | (1u << 9);
     assert(kernel_process_on_syscall(registers,
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);
@@ -8180,6 +8224,7 @@ int main(void)
     test_soak_relaunches_only_after_exact_teardown();
     test_soak_rejects_unexplained_frame_loss();
     test_invalid_creation_does_not_allocate();
+    test_multi_page_raw_image_maps_every_page();
     test_sync_syscall_rights_and_stale_handles();
     test_irq_syscalls_waits_rights_and_owner_cleanup();
     test_device_lease_syscalls_rights_and_owner_cleanup();

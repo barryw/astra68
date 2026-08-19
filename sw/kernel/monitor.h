@@ -48,6 +48,7 @@ typedef struct KernelMonitorStats {
 } KernelMonitorStats;
 
 bool kernel_monitor_init(const KernelMonitorBuildInfo *build_info);
+bool kernel_monitor_ready(void);
 bool kernel_monitor_uart_binding(KernelIrqInternalBinding *binding);
 bool kernel_monitor_spi_binding(KernelIrqInternalBinding *binding);
 bool kernel_monitor_uart_irq_service(uint8_t source, uint64_t timestamp,

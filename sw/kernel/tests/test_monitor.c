@@ -558,7 +558,9 @@ int main(void)
 
     kernel_performance_init();
     kernel_performance_test_set_cycles(1000u, 97u);
+    assert(!kernel_monitor_ready());
     assert(kernel_monitor_init(&build));
+    assert(kernel_monitor_ready());
     assert(!kernel_monitor_init(&build));
     assert((registered_work & KERNEL_WORKER_MONITOR_RX) != 0u);
     assert((registered_work & KERNEL_WORKER_MONITOR_SPI) != 0u);

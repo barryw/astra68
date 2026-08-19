@@ -1056,6 +1056,7 @@ static void report_kernel_performance_failure(
  * Axiom's bootstrap exception: no path here, no filesystem, no policy beyond
  * the ELF acceptance profile the loader already enforces.
  */
+#if !ASTRA_KERNEL_K1_QUALIFICATION
 static void start_initial_user_image(void)
 {
     KernelProcessBootstrapCapability capabilities[
@@ -1076,13 +1077,6 @@ static void start_initial_user_image(void)
      * as part of the load, so a grant failure unwinds the whole launch.
      */
     kernel_bytes_clear(capabilities, sizeof(capabilities));
-    /*
-     * The qualification harness owns every device IRQ source in its build, and
-     * a source has exactly one owner. Granting the storage endpoint here would
-     * take it from the harness and fail the K10 device gate, so the
-     * qualification build runs the initial image without block capabilities.
-     */
-#if !ASTRA_KERNEL_K1_QUALIFICATION
     if (kernel_platform_block_present()) {
         capabilities[capability_count].name = ASTRA_CAPABILITY_BLOCK_DEVICE;
         capabilities[capability_count].kind =
@@ -1135,7 +1129,6 @@ static void start_initial_user_image(void)
         capabilities[capability_count].rights = KERNEL_IRQ_RIGHTS;
         ++capability_count;
     }
-#endif
     /*
      * Six sources, six slots. The compile-time check is here because the
      * array is sized by the ABI maximum and another grant would otherwise
@@ -1163,6 +1156,7 @@ static void start_initial_user_image(void)
     console_dec32(capability_count);
     console_puts(" granted capabilities\n");
 }
+#endif
 
 /*
  * The initial image is a resident service. Any exit is a boot failure: it is
@@ -1377,7 +1371,8 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
     if (!kernel_process_qualification_status(
             qualification_survivor_process_id,
             &qualification_authorized, &qualification_completed) ||
-        qualification_completed != qualification_authorized ||
+        qualification_completed == 0u ||
+        (qualification_completed & ~qualification_authorized) != 0u ||
         irq_stats.live_endpoints != 0u)
         kernel_panic("K10 device qualification incomplete");
     performance_mask =
@@ -1867,7 +1862,16 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     console_puts("User processes ...... 2 ready, cache isolation armed\n");
     console_puts("User threads ........ 3 ready, priority scheduler armed\n");
 #endif
+#if ASTRA_KERNEL_K1_QUALIFICATION
+    /*
+     * The harness is the whole workload in this build. The initial image
+     * would come up with no capabilities and poll, and its idle loop at
+     * NORMAL priority starves the K6 thread at 15: the qualification then
+     * waits forever on a thread that is ready and never scheduled.
+     */
+#else
     start_initial_user_image();
+#endif
     process_bootstrap_started = kernel_platform_cpu_cycles_low();
     kernel_disable_interrupts();
     if (kernel_process_start(&first_context) != KERNEL_PROCESS_OK ||

@@ -119,6 +119,14 @@ itself stays, as a conformance oracle only — see above.
 - **The emulator is not rebuilt by the gates.** After editing
   `emu/qemu/qemu-9.2/hw/m68k/astra68.c`, run `emu/qemu/build.sh host` or you
   are testing the previous binary.
+- **`sw/kernel/build/` is shared by the host tests and the m68k build.** Build
+  the ROM and then run `make test` in the same tree and the host binaries are
+  linked from m68k objects: `./build/test_mmio: cannot execute binary file`.
+  `make clean` between the two.
+- **The qualification kernel is a second ROM**, built with
+  `make KERNEL_K1_QUALIFICATION=1` in `sw/boot`, with no debug surface and no
+  initial user image. `emu/qemu/test-qualification.py` is its gate. It
+  overwrites `sw/boot/astra_boot.bin`, so rebuild the normal ROM afterwards.
 
 ## Where to read next
 
@@ -127,7 +135,7 @@ itself stays, as a conformance oracle only — see above.
 | Complete inventory of everything | `docs/INVENTORY.md` |
 | Project-wide continuation map | `docs/CURRENT_STATE.md` (mind the override) |
 | Storage / filesystem line of work | `docs/HANDOVER-userspace-bringup.md` |
-| **Current resume point** | `docs/HANDOVER-boards-and-usb.md` — the qualification kernel under QEMU, then the DE25 Nano |
+| **Current resume point** | `docs/HANDOVER-boards-and-usb.md` — the qualification gate is green (USB included); storage/input provocation and the DE25 Nano are what is left |
 | The memory work in full, with its numbers | `docs/HANDOVER-memory-and-modernity.md` — §5 is done; §6.2 onward is the record |
 | Boot fix, the shell gate, commands and the POSIX half | `docs/HANDOVER-boot-and-shell-gate.md` — every gate green |
 | The libc, the commands, and the kernel limits | `docs/HANDOVER-libc-and-limits.md` — its §10.1 and §10.2 are done |

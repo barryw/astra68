@@ -1,8 +1,14 @@
 #ifndef ASTRA_KERNEL_QUALIFICATION_H
 #define ASTRA_KERNEL_QUALIFICATION_H
 
-/* Fixed inputs and shared-memory protocol for the packaged user image. */
-#define KERNEL_QUALIFICATION_SHARED_BASE 0x70000000
+/*
+ * Fixed inputs and shared-memory protocol for the packaged user image.
+ *
+ * The shared block is the process's data page, KERNEL_PROCESS_DATA_BASE,
+ * spelled as a literal because the image is assembled and process.h is not
+ * assembly. process.c asserts the two agree.
+ */
+#define KERNEL_QUALIFICATION_SHARED_BASE 0x00200000
 #define KERNEL_QUALIFICATION_PHASE_OFFSET 4
 #define KERNEL_QUALIFICATION_THREAD_HANDLE_OFFSET 8
 #define KERNEL_QUALIFICATION_EVENT_HANDLE_OFFSET 12
@@ -33,6 +39,8 @@
 #define KERNEL_QUALIFICATION_K10_ASTRAEA_RESULT_OFFSET 128
 #define KERNEL_QUALIFICATION_K10_RESULT_OFFSET 132
 #define KERNEL_QUALIFICATION_K10_SOURCE_MASK_OFFSET 136
+/* The sources actually qualified, which is a subset of the mask above. */
+#define KERNEL_QUALIFICATION_K10_QUALIFIED_MASK_OFFSET 140
 
 #define KERNEL_QUALIFICATION_PHASE_READY  0x52454144
 #define KERNEL_QUALIFICATION_PHASE_CANCEL 0x43414e43
@@ -93,6 +101,14 @@
 #define KERNEL_QUALIFICATION_IRQ_USB_EXPECTED 0x20000004
 #define KERNEL_QUALIFICATION_IRQ_VEGA_EXPECTED 0x00000001
 #define KERNEL_QUALIFICATION_IRQ_ASTRAEA_EXPECTED 0x00000001
+/*
+ * What a process killed by its own fault reports to a death waiter. It is
+ * ASTRA_STATUS_FAULTED, not zero: the kernel substitutes the verdict at the
+ * one point every process leaves through, because zero is what a program says
+ * when it succeeded. The harness asserted zero here and died on it.
+ * process.c asserts this literal still matches the header.
+ */
+#define KERNEL_QUALIFICATION_OFFENDER_EXIT_STATUS 0x80000001
 #define KERNEL_QUALIFICATION_K10_SOURCE_RESULT 0x4b104f4b
 #define KERNEL_QUALIFICATION_K10_RESULT 0x4b31304b
 
@@ -105,6 +121,15 @@
 #define KERNEL_QUALIFICATION_TIMEOUT_NS 1000000
 #define KERNEL_QUALIFICATION_K6_TIMEOUT_NS 20000000
 #define KERNEL_QUALIFICATION_K6_TIMER_NS 2000000
-#define KERNEL_QUALIFICATION_QUANTUM_SPIN_ITERATIONS 32768
+/*
+ * How long the survivor and the offender stay runnable together, doing
+ * nothing but burning time at the same priority. The milestone asserts a
+ * quantum preemption happened, and only two co-runnable threads of equal
+ * priority can produce one; the quantum is 5 ms, so this is two of them and a
+ * margin. It is a duration rather than an iteration count because the count
+ * that lasted a quantum on a 30 MHz 68030 lasts a fraction of one under an
+ * emulator, and the preemption then never happens.
+ */
+#define KERNEL_QUALIFICATION_QUANTUM_SPIN_NS 12000000
 
 #endif

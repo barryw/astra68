@@ -16,6 +16,26 @@ _k1_survivor_image_entry:
 	movea.l #KERNEL_QUALIFICATION_SHARED_BASE, %a0
 	move.l  #0x53555256, (%a0)
 
+	| Two runnable threads of equal priority, neither yielding: the quantum
+	| is the only thing that can separate them, and the milestone asserts a
+	| quantum preemption happened. The offender burns the same span for the
+	| same reason. This used to come from whatever else the machine happened
+	| to be running -- the initial image -- which is not something a device
+	| qualification should depend on.
+	moveq   #ASTRA_SYSCALL_CLOCK_MONOTONIC, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %d2, %d5
+.Lmain_quantum_spin:
+	moveq   #ASTRA_SYSCALL_CLOCK_MONOTONIC, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	sub.l   %d5, %d2
+	cmpi.l  #KERNEL_QUALIFICATION_QUANTUM_SPIN_NS, %d2
+	blo     .Lmain_quantum_spin
+
 .Lmain_wait_ready:
 	cmpi.l  #KERNEL_QUALIFICATION_PHASE_READY, KERNEL_QUALIFICATION_PHASE_OFFSET(%a0)
 	beq     .Lmain_signal_event
@@ -756,7 +776,19 @@ _k1_survivor_image_entry:
 	moveq   #ASTRA_SYSCALL_PROGRESS, %d0
 	trap    #ASTRA_SYSCALL_TRAP
 	tst.l   %d0
+	beq     .Lk10_armed_\@
+	| The source is present and cannot be provoked from here: no host plays
+	| the part the AstraHost link played for storage and input. It is left
+	| out of the qualified mask rather than claimed or treated as a fault.
+	cmpi.l  #ASTRA_SYSCALL_IO_ERROR, %d0
 	bne     .Lmain_fail
+	move.l  %d7, %d1
+	moveq   #ASTRA_SYSCALL_CLOSE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	bra     .Lk10_skip_\@
+.Lk10_armed_\@:
 
 	move.l  %d7, %d1
 	moveq   #ASTRA_SYSCALL_IRQ_ARM, %d0
@@ -813,6 +845,9 @@ _k1_survivor_image_entry:
 	cmpi.l  #ASTRA_SYSCALL_INVALID_HANDLE, %d0
 	bne     .Lmain_fail
 	move.l  #KERNEL_QUALIFICATION_K10_SOURCE_RESULT, \result_offset(%a0)
+	move.l  KERNEL_QUALIFICATION_K10_QUALIFIED_MASK_OFFSET(%a0), %d1
+	ori.l   #\bit, %d1
+	move.l  %d1, KERNEL_QUALIFICATION_K10_QUALIFIED_MASK_OFFSET(%a0)
 .Lk10_skip_\@:
 	.endm
 
@@ -838,7 +873,7 @@ _k1_survivor_image_entry:
 		KERNEL_QUALIFICATION_K10_ASTRAEA_RESULT_OFFSET
 
 	move.l  #KERNEL_QUALIFICATION_COMMAND_COMPLETE_IRQS, %d1
-	move.l  %d6, %d2
+	move.l  KERNEL_QUALIFICATION_K10_QUALIFIED_MASK_OFFSET(%a0), %d2
 	moveq   #ASTRA_SYSCALL_PROGRESS, %d0
 	trap    #ASTRA_SYSCALL_TRAP
 	tst.l   %d0
@@ -1078,7 +1113,7 @@ _k2_sibling_image_entry:
 	bne     .Lsibling_fail
 	tst.l   %d1
 	bne     .Lsibling_fail
-	tst.l   %d2
+	cmpi.l  #KERNEL_QUALIFICATION_OFFENDER_EXIT_STATUS, %d2
 	bne     .Lsibling_fail
 	move.l  %d6, %d1
 	moveq   #ASTRA_SYSCALL_CLOSE, %d0
@@ -1141,9 +1176,18 @@ _k1_offender_image_entry:
 	| The internal thread bootstrap argument was saved from D2 in D6.
 	tst.l   %d6
 	bne     7f
-	move.l  #KERNEL_QUALIFICATION_QUANTUM_SPIN_ITERATIONS, %d5
-9:	subq.l  #1, %d5
-	bne     9b
+	moveq   #ASTRA_SYSCALL_CLOCK_MONOTONIC, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     6f
+	move.l  %d2, %d5
+9:	moveq   #ASTRA_SYSCALL_CLOCK_MONOTONIC, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     6f
+	sub.l   %d5, %d2
+	cmpi.l  #KERNEL_QUALIFICATION_QUANTUM_SPIN_NS, %d2
+	blo     9b
 7:
 4:	cmpi.l  #0x4f464644, (%a0)
 	bne     5f

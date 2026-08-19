@@ -42,6 +42,11 @@
 #define PROCESS_OWNER_PREFIX 0x10000000u
 #define PROCESS_QUALIFICATION_CLIENT_MAX 2u
 
+_Static_assert(KERNEL_QUALIFICATION_SHARED_BASE == KERNEL_PROCESS_DATA_BASE,
+               "the qualification image's shared block is the data page");
+_Static_assert(KERNEL_QUALIFICATION_OFFENDER_EXIT_STATUS ==
+                   (uint32_t)ASTRA_STATUS_FAULTED,
+               "the qualification image reads the fault verdict");
 _Static_assert(sizeof(KernelInputEvent) == sizeof(AstraInputEvent),
                "kernel and public input event layouts differ");
 
@@ -2183,17 +2188,20 @@ static KernelProcessStatus create_process(const void *image,
     KernelVmStatus vm_status;
     uint32_t generation;
     uint32_t code_physical = 0u;
+    uint32_t data_physical = 0u;
     uint32_t initial_thread_id;
     KernelHandle initial_thread_handle;
     uint16_t saved_status;
     bool code_held = false;
+    bool data_held = false;
     void *raw_process;
     uint16_t slot;
     KernelObjectCacheStatus cache_status;
     /* See prepare_thread: hoisted so no `goto failed` jumps over it. */
     uint8_t *code = NULL;
 
-    if (image == NULL || image_size == 0u || image_size > KERNEL_PAGE_SIZE ||
+    if (image == NULL || image_size == 0u ||
+        image_size > KERNEL_PROCESS_RAW_IMAGE_MAX ||
         entry_offset >= image_size || process_id == NULL)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     *process_id = 0u;
@@ -2235,34 +2243,66 @@ static KernelProcessStatus create_process(const void *image,
             result = KERNEL_PROCESS_OUT_OF_MEMORY;
         goto failed;
     }
+    /*
+     * One page at a time: the blob is copied into the frame that will hold it
+     * and mapped read-execute, so the image may be larger than a page without
+     * anything else in here knowing how large.
+     */
+    for (uint32_t offset = 0u; offset < image_size;
+         offset += KERNEL_PAGE_SIZE) {
+        uint32_t chunk = image_size - offset;
+
+        if (chunk > KERNEL_PAGE_SIZE)
+            chunk = KERNEL_PAGE_SIZE;
+        if (kernel_memory_alloc_zeroed_tagged(
+                KERNEL_ALLOCATION_SITE_PROCESS_CODE_PAGE, 1u, 1u,
+                KERNEL_FRAME_PROCESS, process->owner, &code_physical) !=
+            KERNEL_MEMORY_OK) {
+            result = KERNEL_PROCESS_OUT_OF_MEMORY;
+            goto failed;
+        }
+        code_held = true;
+        code = physical_bytes(code_physical, KERNEL_PAGE_SIZE);
+        if (code == NULL)
+            goto failed;
+#if defined(KERNEL_PROCESS_HOST_TEST)
+        /* Host memory tests disable allocator writes to synthetic addresses. */
+        kernel_bytes_clear(code, KERNEL_PAGE_SIZE);
+#endif
+        kernel_bytes_copy(code, (const uint8_t *)image + offset, chunk);
+        vm_status = kernel_vm_map_page(
+            &process->address_space, KERNEL_PROCESS_CODE_BASE + offset,
+            code_physical, KERNEL_VM_READ | KERNEL_VM_EXEC);
+        if (vm_status != KERNEL_VM_OK) {
+            if (vm_status == KERNEL_VM_OUT_OF_MEMORY)
+                result = KERNEL_PROCESS_OUT_OF_MEMORY;
+            goto failed;
+        }
+        if (kernel_memory_release(code_physical, 1u, process->owner) !=
+            KERNEL_MEMORY_OK)
+            goto failed;
+        code_held = false;
+    }
     if (kernel_memory_alloc_zeroed_tagged(
             KERNEL_ALLOCATION_SITE_PROCESS_CODE_PAGE, 1u, 1u,
-            KERNEL_FRAME_PROCESS, process->owner, &code_physical) !=
+            KERNEL_FRAME_PROCESS, process->owner, &data_physical) !=
         KERNEL_MEMORY_OK) {
         result = KERNEL_PROCESS_OUT_OF_MEMORY;
         goto failed;
     }
-    code_held = true;
-    code = physical_bytes(code_physical, KERNEL_PAGE_SIZE);
-    if (code == NULL)
-        goto failed;
-#if defined(KERNEL_PROCESS_HOST_TEST)
-    /* Host memory tests disable allocator writes to synthetic addresses. */
-    kernel_bytes_clear(code, KERNEL_PAGE_SIZE);
-#endif
-    kernel_bytes_copy(code, image, image_size);
+    data_held = true;
     vm_status = kernel_vm_map_page(
-        &process->address_space, KERNEL_PROCESS_CODE_BASE, code_physical,
-        KERNEL_VM_READ | KERNEL_VM_EXEC);
+        &process->address_space, KERNEL_PROCESS_DATA_BASE, data_physical,
+        KERNEL_VM_READ | KERNEL_VM_WRITE);
     if (vm_status != KERNEL_VM_OK) {
         if (vm_status == KERNEL_VM_OUT_OF_MEMORY)
             result = KERNEL_PROCESS_OUT_OF_MEMORY;
         goto failed;
     }
-    if (kernel_memory_release(code_physical, 1u, process->owner) !=
+    if (kernel_memory_release(data_physical, 1u, process->owner) !=
         KERNEL_MEMORY_OK)
         goto failed;
-    code_held = false;
+    data_held = false;
 
     process->process_state = KERNEL_PROCESS_CREATED;
     process->handle_references = 1u;
@@ -2300,6 +2340,8 @@ static KernelProcessStatus create_process(const void *image,
 failed:
     if (code_held)
         (void)kernel_memory_release(code_physical, 1u, process->owner);
+    if (data_held)
+        (void)kernel_memory_release(data_physical, 1u, process->owner);
     (void)kernel_handle_close_all(&process->handles);
     if (process->address_space.initialized != 0u)
         (void)kernel_vm_destroy_address_space(&process->address_space);
@@ -3586,7 +3628,14 @@ static KernelProcessStatus qualification_command(
             *syscall_result = ASTRA_SYSCALL_IO_ERROR;
         return KERNEL_PROCESS_OK;
     case KERNEL_QUALIFICATION_COMMAND_COMPLETE_IRQS:
-        if (source != client->authorized_sources) {
+        /*
+         * A subset, not the whole set. A source that is present but cannot be
+         * provoked on this machine -- storage and input under the emulator,
+         * where nothing plays the part the AstraHost link played -- is
+         * reported as not qualified rather than claimed. What was proved is
+         * the mask, and the kernel prints it.
+         */
+        if (source == 0u || (source & ~client->authorized_sources) != 0u) {
             *syscall_result = ASTRA_SYSCALL_INVALID_ARGUMENT;
             return KERNEL_PROCESS_OK;
         }
