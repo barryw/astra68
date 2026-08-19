@@ -457,8 +457,24 @@ int ext4_dir_find_entry(struct ext4_dir_search_result *result,
 	result->dentry = NULL;
 
 #if CONFIG_DIR_INDEX_ENABLE
+	/*
+	 * ASTRA: `.` and `..` are never in the hash tree.
+	 *
+	 * They are the first two entries of block 0, and in an indexed
+	 * directory block 0 is the index root -- never a leaf the hash walk
+	 * descends to -- so a dx lookup for either answers ENOENT. Linux never
+	 * asks: its path walk resolves both above the filesystem. A caller
+	 * that resolves one path component at a time does ask, and then every
+	 * directory lwext4 created refuses `.` and `..` -- it indexes every
+	 * directory it makes -- while a directory mke2fs wrote answers them.
+	 * The linear walk below reads block 0 first and finds them there.
+	 */
+	bool dot_entry = (name_len == 1u && name[0] == '.') ||
+			 (name_len == 2u && name[0] == '.' && name[1] == '.');
+
 	/* Index search */
-	if ((ext4_sb_feature_com(sb, EXT4_FCOM_DIR_INDEX)) &&
+	if (!dot_entry &&
+	    (ext4_sb_feature_com(sb, EXT4_FCOM_DIR_INDEX)) &&
 	    (ext4_inode_has_flag(parent->inode, EXT4_INODE_FLAG_INDEX))) {
 		r = ext4_dir_dx_find_entry(result, parent, name_len, name);
 		/* Check if index is not corrupted */

@@ -54,7 +54,7 @@ emit(AstraProcessFilesystem *process, const char *path)
      * directory is already folded into the root the grant carries, so this
      * qualifies a bare name and leaves an ASSIGN:path one alone.
      */
-    status = process->library->qualify("CWD", "", path, typed, sizeof(typed));
+    status = astra_process_path(process, path, typed, sizeof(typed));
     if (status == ASTRA_VFS_OK)
         status = process->library->open(&process->filesystem, typed,
                                         ASTRA_VFS_OPEN_READ, &file);

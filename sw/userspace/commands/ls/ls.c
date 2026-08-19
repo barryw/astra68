@@ -17,6 +17,10 @@
  * affordable: a cross-process round trip costs about 7.5 ms here, so a listing
  * that stat'd each name would spend a third of a second on a forty-entry
  * directory doing nothing but switching address spaces.
+ *
+ * `-l` long, `-a` including the dot entries, and a path that is either
+ * `ASSIGN:path` or a name relative to where the launcher says the prompt is
+ * standing.
  */
 
 #include <astra/posix.h>
@@ -104,7 +108,7 @@ date_string(int64_t seconds, char *out, size_t capacity)
 
 static int
 list(AstraFilesystem *filesystem, const AstraFilesystemLibraryV1 *library,
-     const char *path, int long_form)
+     const char *path, int long_form, int all)
 {
     AstraDirectory directory = ASTRA_DIRECTORY_INIT;
     AstraDirectoryEntry entries[LS_BATCH];
@@ -125,6 +129,14 @@ list(AstraFilesystem *filesystem, const AstraFilesystemLibraryV1 *library,
         for (uint32_t index = 0u; index < count; ++index) {
             const AstraDirectoryEntry *entry = &entries[index];
 
+            /*
+             * `.` and `..` are entries like any other and the protocol carries
+             * them, but a listing that opens with two of them every time is
+             * two lines of noise. -a is how a person asks for them, which is
+             * what every other ls means by it.
+             */
+            if (!all && entry->name[0] == '.')
+                continue;
             if (!long_form) {
                 printf("%s%s\n", entry->name,
                        entry->kind == ASTRA_VFS_KIND_DIRECTORY ? "/" : "");
@@ -156,8 +168,10 @@ astra_main(const AstraStartupInfo *startup)
 {
     AstraProcessFilesystem process_filesystem =
         ASTRA_PROCESS_FILESYSTEM_INIT;
+    char typed[ASTRA_VFS_PATH_MAX];
     const uint32_t *argv = NULL;
     const char *path = NULL;
+    int all = 0;
     int long_form = 0;
     int result;
     uint32_t status;
@@ -177,6 +191,8 @@ astra_main(const AstraStartupInfo *startup)
             for (uint32_t at = 1u; word[at] != '\0'; ++at) {
                 if (word[at] == 'l') {
                     long_form = 1;
+                } else if (word[at] == 'a') {
+                    all = 1;
                 } else {
                     (void)fprintf(stderr, "ls: unknown option -%c\n",
                                   word[at]);
@@ -193,20 +209,23 @@ astra_main(const AstraStartupInfo *startup)
         return (int)status;
     }
     /*
-     * There is no root and no current directory, so a bare `ls` has no
-     * defensible default of its own to invent -- but its launcher has one.
-     * CWD: is where the shell says the prompt is standing, and listing that is
-     * what a person typing `ls` after `cd` means. Before that grant existed
-     * this said WORK: unconditionally, which made `cd proto` followed by `ls`
-     * quietly list the wrong directory. WORK: is still the answer for a
-     * launcher that says nothing about where it is.
+     * There is no root and no current directory, so neither a bare `ls` nor a
+     * bare name has a defensible default of its own -- but the launcher has
+     * one. CWD: is where the shell says the prompt is standing; WORK: is the
+     * answer for a launcher that says nothing about where it is. Listing a
+     * name typed without an assign used to answer INVALID, which is how `ls
+     * proto` refused a directory `mkdir proto` had just made.
      */
-    if (path == NULL)
-        path = process_filesystem.library->assign_lookup(
-                   astra_process_vfs_assigns(), "CWD") != NULL ?
-            "CWD:" : "WORK:";
+    status = astra_process_path(&process_filesystem, path, typed,
+                                sizeof(typed));
+    if (status != ASTRA_VFS_OK) {
+        (void)fprintf(stderr, "ls: %s: status %u\n",
+                      path != NULL ? path : "", status);
+        astra_process_filesystem_close(&process_filesystem);
+        return (int)status;
+    }
     result = list(&process_filesystem.filesystem,
-                  process_filesystem.library, path, long_form);
+                  process_filesystem.library, typed, long_form, all);
     astra_process_filesystem_close(&process_filesystem);
     (void)fflush(stdout);
     return result;

@@ -34,7 +34,7 @@ remove_name(AstraProcessFilesystem *process, const char *name)
     const char *text;
     uint32_t status;
 
-    status = process->library->qualify("CWD", "", name, typed, sizeof(typed));
+    status = astra_process_path(process, name, typed, sizeof(typed));
     if (status == ASTRA_VFS_OK)
         status = process->library->unlink(&process->filesystem, typed);
     if (status == ASTRA_VFS_OK)

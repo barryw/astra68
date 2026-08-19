@@ -694,6 +694,35 @@ verify(void)
         return fail("ext4_fopen(case probe)", rc);
     }
 
+    /*
+     * `.` and `..` resolve by name, in a directory this library indexed.
+     *
+     * `many` holds enough names to carry an htree, and every directory lwext4
+     * creates is indexed from the start. The dot entries are not in the hash
+     * tree -- they are the first two entries of block 0, which is the index
+     * root -- so a lookup that only asked the tree answered ENOENT for both,
+     * and a caller resolving one path component at a time could not name the
+     * directory it was standing in. `ls -l` showed `d?????????` for `.` and
+     * `..` on every directory the machine itself had made, and only on those.
+     */
+    for (index = 0u; index < 2u; ++index) {
+        uint32_t mode = 0u;
+        const char *dot = index == 0u ? MOUNT_POINT "many/." :
+                                        MOUNT_POINT "many/..";
+
+        rc = ext4_mode_get(dot, &mode);
+        if (rc != EOK) {
+            return fail(dot, rc);
+        }
+        if ((mode & EXT4_INODE_MODE_TYPE_MASK) !=
+            EXT4_INODE_MODE_DIRECTORY) {
+            printf("FAIL %s is mode 0%o, not a directory\n", dot,
+                   (unsigned)mode);
+            ++failures;
+            return 1;
+        }
+    }
+
     rc = ext4_dir_open(&dir, MOUNT_POINT "many");
     if (rc != EOK) {
         return fail("ext4_dir_open", rc);

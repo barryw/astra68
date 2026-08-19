@@ -613,6 +613,30 @@ uint32_t astra_process_filesystem_open(AstraProcessFilesystem *filesystem,
     return status;
 }
 
+/*
+ * A word somebody typed, to a path this process can resolve.
+ *
+ * `ASSIGN:path` is already absolute and comes back unchanged. A bare name is
+ * relative to CWD:, which is where the launcher says the prompt is standing,
+ * and to WORK: when nothing granted a CWD: -- a launcher that says nothing
+ * about where it is still gets the writable volume rather than a refusal.
+ *
+ * Every command that takes a path needs exactly this, and each one that grew
+ * its own copy grew a slightly different one: `ls` did not qualify at all, so
+ * `ls probe` answered INVALID for a directory `mkdir probe` had just made.
+ */
+uint32_t astra_process_path(const AstraProcessFilesystem *filesystem,
+                            const char *typed, char *out, uint32_t capacity)
+{
+    const char *assign;
+
+    if (filesystem == NULL || filesystem->library == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    assign = filesystem->library->assign_lookup(
+                 astra_process_vfs_assigns(), "CWD") != NULL ? "CWD" : "WORK";
+    return filesystem->library->qualify(assign, "", typed, out, capacity);
+}
+
 uint32_t astra_process_read_file(AstraProcessFilesystem *filesystem,
                                  const char *path, void *bytes,
                                  uint32_t capacity, uint32_t *length)
