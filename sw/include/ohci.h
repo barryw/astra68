@@ -8,6 +8,16 @@
 #include <stdint.h>
 
 #define OHCI_BASE 0xFFF40000u
+/*
+ * The reference aperture, and only that.
+ *
+ * The controller reports its own pool through ASTRA_DMA_POOL_BASE and
+ * ASTRA_DMA_POOL_SIZE, and both the firmware and the kernel read it from
+ * there. These values describe the top of a 32 MiB ULX3S, which is where the
+ * pool sat on the board this was written for; they survive as the default a
+ * model or a test builds when it has no reason to choose anything else, not
+ * as an address anything is required to use.
+ */
 #define OHCI_DMA_POOL_BASE 0x03F00000u
 #define OHCI_DMA_POOL_SIZE 0x00100000u
 

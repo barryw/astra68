@@ -503,6 +503,51 @@ and 512 MiB, and the full terminal gate passes at 256 MiB --
 65536 frames, the exact point the old `uint16_t` links would have failed.
 `test-terminal.py` takes `--memory` now so that stays checkable.
 
+## 6.4 The USB DMA pool is where the controller says it is
+
+The last of the ULX3S archaeology in the memory path, and the one that would
+have been found on hardware rather than here.
+
+`OHCI_DMA_POOL_BASE` was `0x03F00000` -- the top of a 32 MiB board -- and three
+places treated it as truth. The firmware required the controller's reported
+aperture to *equal* it, so a design that placed its pool anywhere else failed
+POST. The kernel wrote the same constant into `HCCA`. And the firmware's memory
+map, with USB present, described the tail as "splash to pool base" and "pool",
+which is a complete map exactly while the pool ends at the top of RAM -- true
+of a 32 MiB board and of nothing else. On anything larger everything above the
+pool went undescribed, and the kernel refuses a map it cannot account for every
+frame of.
+
+The controller reports its own aperture through `ASTRA_DMA_POOL_BASE` and
+`ASTRA_DMA_POOL_SIZE`. Both the firmware and the kernel read it from there now
+and check that it is *usable* -- page aligned, non-empty, inside RAM, above the
+fixed reservations -- rather than that it is where it used to be. The map has
+three pieces, any of which may be empty: what is below the pool, the pool, and
+what is above it.
+
+**And a fault this introduced, caught before it shipped.** Extending the
+supervisor map (§5.4) covers RAM beyond the low region in 4 MiB
+early-termination pages. That is right for RAM and wrong for a device
+aperture: while the pool was pinned inside root index 15 it got a page table
+and per-page cache bits, but a pool free to sit anywhere could land under a
+cacheable 4 MiB page, and the kernel would then read its own stale copy of
+whatever the controller wrote. `kernel_memory_span_has_device` answers from the
+saved ranges and any span holding an aperture is mapped cache-inhibited whole.
+It costs cacheability on the RAM sharing those 4 MiB for *supervisor* accesses
+only -- user mappings carry their own cache bits -- which is the cheap side of
+that trade.
+
+`test_device_aperture_above_the_low_region_is_uncached` builds a 64 MiB machine
+with an aperture at `0x05F00000`, root index 23, which the old layout could not
+express at all, and checks that span is uncached while its neighbour is not. It
+fails if the device check is removed.
+
+**Not gate-tested, and it cannot be.** The QEMU machine has no OHCI block and
+never raises `SYS_USB_READY`, so `usb_dma_present` is always zero there and the
+whole USB branch of the firmware map is reachable only on hardware. The kernel
+half is covered by the test above; the firmware half is reviewed, not run. It
+is the first thing to watch when a board with USB comes up.
+
 ## 6.2 What was the open question, and is not any more
 
 Both items here are closed: the direct map in the commit that extended it to

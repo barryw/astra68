@@ -585,8 +585,23 @@ static KernelVmStatus build_supervisor_root(void)
         if (last_index > 1022u)
             last_index = 1022u;
         for (uint32_t index = VM_SDRAM_TOP_ROOT_INDEX + 1u;
-             index <= last_index; ++index)
-            root[index] = (index << 22) | VM_DESC_PAGE;
+             index <= last_index; ++index) {
+            uint32_t descriptor = (index << 22) | VM_DESC_PAGE;
+
+            /*
+             * A span holding a device aperture -- the USB DMA pool, wherever
+             * the controller reports it -- must not be cacheable, or the
+             * kernel reads its own stale copy of what the controller wrote.
+             * The whole 4 MiB goes uncached rather than a page table being
+             * built for the span: it costs cacheability on the RAM sharing
+             * those 4 MiB for supervisor accesses only, since user mappings
+             * carry their own cache bits, and it cannot be got wrong.
+             */
+            if (kernel_memory_span_has_device(index << 22,
+                                              1u << 22))
+                descriptor |= VM_DESC_CACHE_INHIBIT;
+            root[index] = descriptor;
+        }
     }
     root[1023] = kernel_high_table_physical | VM_DESC_TABLE;
 

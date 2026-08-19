@@ -98,12 +98,18 @@ OhciHcca *kernel_platform_test_ohci_hcca(void)
 static volatile uint32_t tick_count;
 static uint32_t quantum_cycles;
 
+/*
+ * The HCCA sits at the base of the controller's own DMA pool, wherever the
+ * block reports it. It used to be OHCI_DMA_POOL_BASE, which described the top
+ * of a 32 MiB ULX3S and stopped being true the moment a design placed its pool
+ * anywhere else.
+ */
 static volatile OhciHcca *ohci_hcca(void)
 {
 #if defined(KERNEL_PLATFORM_HOST_TEST)
     return &platform_test_ohci_hcca;
 #else
-    return (volatile OhciHcca *)(uintptr_t)OHCI_DMA_POOL_BASE;
+    return (volatile OhciHcca *)(uintptr_t)OHCI_READ(ASTRA_DMA_POOL_BASE);
 #endif
 }
 
@@ -817,8 +823,16 @@ bool kernel_platform_qualification_irq_prepare(uint8_t source)
     case IRQ_SRC_USB: {
         uint32_t control;
 
-        if (OHCI_READ(ASTRA_DMA_POOL_BASE) != OHCI_DMA_POOL_BASE ||
-            OHCI_READ(ASTRA_DMA_POOL_SIZE) != OHCI_DMA_POOL_SIZE)
+        uint32_t pool_base = OHCI_READ(ASTRA_DMA_POOL_BASE);
+        uint32_t pool_size = OHCI_READ(ASTRA_DMA_POOL_SIZE);
+
+        /*
+         * Sanity, not a remembered address: the firmware already checked the
+         * aperture against this machine's RAM and described it in the boot
+         * info, so all that is left here is that it is a usable pool.
+         */
+        if (pool_base == 0u || (pool_base & 0xfffu) != 0u ||
+            pool_size < sizeof(OhciHcca))
             return false;
         if (!ohci_controller_soft_reset())
             return false;
@@ -826,12 +840,11 @@ bool kernel_platform_qualification_irq_prepare(uint8_t source)
         control = OHCI_READ(CONTROL);
         control &= ~OHCI_CONTROL_HCFS_MASK;
         control |= OHCI_CONTROL_HCFS_OPERATIONAL;
-        OHCI_WRITE(HCCA, OHCI_DMA_POOL_BASE);
+        OHCI_WRITE(HCCA, pool_base);
         OHCI_WRITE(CONTROL, control);
         OHCI_WRITE(INTERRUPT_ENABLE, OHCI_INT_MIE | OHCI_INT_SF);
         kernel_mmio_cpu_sync();
-        return kernel_mmio_fence32(OHCI_ADDRESS(HCCA)) ==
-                   OHCI_DMA_POOL_BASE &&
+        return kernel_mmio_fence32(OHCI_ADDRESS(HCCA)) == pool_base &&
                (kernel_mmio_fence32(OHCI_ADDRESS(CONTROL)) &
                 OHCI_CONTROL_HCFS_MASK) ==
                    OHCI_CONTROL_HCFS_OPERATIONAL &&

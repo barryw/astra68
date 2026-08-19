@@ -169,6 +169,8 @@ bool kernel_memory_frame_allocation_site(uint32_t physical_address,
 bool kernel_memory_owner_frames(uint32_t owner, uint32_t *frame_count);
 /* What the per-frame bookkeeping costs for a machine of this many frames. */
 uint32_t kernel_memory_metadata_bytes(uint32_t frame_count);
+/* Whether a physical span overlaps any device aperture. */
+bool kernel_memory_span_has_device(uint32_t base, uint32_t size);
 bool kernel_memory_stats(KernelMemoryStats *stats);
 
 #if defined(KERNEL_MEMORY_HOST_TEST)

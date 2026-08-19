@@ -1334,6 +1334,33 @@ bool kernel_memory_frame_allocation_site(uint32_t physical_address,
     return true;
 }
 
+/*
+ * Whether any frame in a physical span is device memory.
+ *
+ * The supervisor map needs this: it covers RAM in 4 MiB early-termination
+ * pages, and a span holding a device aperture -- the USB DMA pool -- must not
+ * be mapped cacheable behind the controller's back. Answered from the saved
+ * ranges rather than by walking a million frames, because it is asked once per
+ * span at boot and a gigabyte is 240 spans.
+ */
+bool kernel_memory_span_has_device(uint32_t base, uint32_t size)
+{
+    uint64_t end = (uint64_t)base + size;
+
+    if (!initialized || size == 0u)
+        return false;
+    for (uint32_t index = 0u; index < saved_range_count; ++index) {
+        const KernelSavedRange *range = &saved_ranges[index];
+        uint64_t range_end = (uint64_t)range->base + range->size;
+
+        if (range->state != (uint8_t)KERNEL_FRAME_DEVICE)
+            continue;
+        if (range->base < end && base < range_end)
+            return true;
+    }
+    return false;
+}
+
 bool kernel_memory_owner_frames(uint32_t owner, uint32_t *frame_count)
 {
     uint32_t owner_slot;

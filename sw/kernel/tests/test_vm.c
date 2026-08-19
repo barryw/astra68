@@ -119,62 +119,68 @@ static void add_range(AstraBootInfo *info, uint32_t base, uint32_t size,
     range->flags = flags;
 }
 
+/* The standard machine, so a test wanting a different one can start here. */
+static void fill_info(AstraBootInfo *info)
+{
+    memset(info, 0, sizeof(*info));
+    info->magic = ASTRA_BOOT_INFO_MAGIC;
+    info->abi_major = ASTRA_BOOT_ABI_MAJOR;
+    info->abi_minor = ASTRA_BOOT_ABI_MINOR;
+    info->total_size = sizeof(*info);
+    info->flags = ASTRA_BOOT_REQUIRED_FLAGS;
+    info->machine_id = 0x41363801u;
+    info->hardware_build_id = 0x12345678u;
+    info->cpu_model = 0x00068030u;
+    info->cpu_implementation = 0x54474d32u;
+    info->cpu_features = 0x0000000du;
+    info->cpu_hz = 12500000u;
+    info->ram_base = 0x02000000u;
+    info->ram_size = 0x02000000u;
+    info->rom_base = 0xffe00000u;
+    info->rom_size = ASTRA_ROM_BACKING_SIZE;
+    info->kernel_base = ASTRA_KERNEL_LOAD_ADDRESS;
+    info->kernel_image_size = 0x00010000u;
+    info->kernel_memory_size = ASTRA_KERNEL_RESERVED_SIZE;
+    info->kernel_entry = ASTRA_KERNEL_LOAD_ADDRESS;
+    info->early_log_base = ASTRA_EARLY_LOG_ADDRESS;
+    info->early_log_size = ASTRA_EARLY_LOG_SIZE;
+    info->memory_range_entry_size = sizeof(AstraBootMemoryRange);
+    add_range(info, ASTRA_BOOT_SCRATCH_ADDRESS, ASTRA_BOOT_SCRATCH_SIZE,
+              ASTRA_MEMORY_RANGE_FIRMWARE,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
+    add_range(info, ASTRA_EARLY_LOG_ADDRESS, ASTRA_EARLY_LOG_SIZE,
+              ASTRA_MEMORY_RANGE_EARLY_LOG,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
+    add_range(info, ASTRA_USER_IMAGE_ADDRESS, ASTRA_USER_IMAGE_MAX_SIZE,
+              ASTRA_MEMORY_RANGE_USABLE,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
+                  ASTRA_MEMORY_CACHEABLE);
+    add_range(info, ASTRA_KERNEL_LOAD_ADDRESS, ASTRA_KERNEL_RESERVED_SIZE,
+              ASTRA_MEMORY_RANGE_KERNEL,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
+                  ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
+    add_range(info, ASTRA_KERNEL_USABLE_ADDRESS, ASTRA_KERNEL_USABLE_SIZE,
+              ASTRA_MEMORY_RANGE_USABLE,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
+                  ASTRA_MEMORY_CACHEABLE);
+    add_range(info, ASTRA_ROM_BACKING_ADDRESS, ASTRA_ROM_BACKING_SIZE,
+              ASTRA_MEMORY_RANGE_ROM_BACKING,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_EXECUTE |
+                  ASTRA_MEMORY_CACHEABLE);
+    add_range(info, 0x03e40000u, 0x000c0000u,
+              ASTRA_MEMORY_RANGE_USABLE,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
+                  ASTRA_MEMORY_CACHEABLE);
+    add_range(info, OHCI_DMA_POOL_BASE, OHCI_DMA_POOL_SIZE,
+              ASTRA_MEMORY_RANGE_DEVICE,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
+}
+
 static void initialize_test(void)
 {
     AstraBootInfo info;
 
-    memset(&info, 0, sizeof(info));
-    info.magic = ASTRA_BOOT_INFO_MAGIC;
-    info.abi_major = ASTRA_BOOT_ABI_MAJOR;
-    info.abi_minor = ASTRA_BOOT_ABI_MINOR;
-    info.total_size = sizeof(info);
-    info.flags = ASTRA_BOOT_REQUIRED_FLAGS;
-    info.machine_id = 0x41363801u;
-    info.hardware_build_id = 0x12345678u;
-    info.cpu_model = 0x00068030u;
-    info.cpu_implementation = 0x54474d32u;
-    info.cpu_features = 0x0000000du;
-    info.cpu_hz = 12500000u;
-    info.ram_base = 0x02000000u;
-    info.ram_size = 0x02000000u;
-    info.rom_base = 0xffe00000u;
-    info.rom_size = ASTRA_ROM_BACKING_SIZE;
-    info.kernel_base = ASTRA_KERNEL_LOAD_ADDRESS;
-    info.kernel_image_size = 0x00010000u;
-    info.kernel_memory_size = ASTRA_KERNEL_RESERVED_SIZE;
-    info.kernel_entry = ASTRA_KERNEL_LOAD_ADDRESS;
-    info.early_log_base = ASTRA_EARLY_LOG_ADDRESS;
-    info.early_log_size = ASTRA_EARLY_LOG_SIZE;
-    info.memory_range_entry_size = sizeof(AstraBootMemoryRange);
-    add_range(&info, ASTRA_BOOT_SCRATCH_ADDRESS, ASTRA_BOOT_SCRATCH_SIZE,
-              ASTRA_MEMORY_RANGE_FIRMWARE,
-              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
-    add_range(&info, ASTRA_EARLY_LOG_ADDRESS, ASTRA_EARLY_LOG_SIZE,
-              ASTRA_MEMORY_RANGE_EARLY_LOG,
-              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
-    add_range(&info, ASTRA_USER_IMAGE_ADDRESS, ASTRA_USER_IMAGE_MAX_SIZE,
-              ASTRA_MEMORY_RANGE_USABLE,
-              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
-                  ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, ASTRA_KERNEL_LOAD_ADDRESS, ASTRA_KERNEL_RESERVED_SIZE,
-              ASTRA_MEMORY_RANGE_KERNEL,
-              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
-                  ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, ASTRA_KERNEL_USABLE_ADDRESS, ASTRA_KERNEL_USABLE_SIZE,
-              ASTRA_MEMORY_RANGE_USABLE,
-              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
-                  ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, ASTRA_ROM_BACKING_ADDRESS, ASTRA_ROM_BACKING_SIZE,
-              ASTRA_MEMORY_RANGE_ROM_BACKING,
-              ASTRA_MEMORY_READ | ASTRA_MEMORY_EXECUTE |
-                  ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, 0x03e40000u, 0x000c0000u,
-              ASTRA_MEMORY_RANGE_USABLE,
-              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
-                  ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, OHCI_DMA_POOL_BASE, OHCI_DMA_POOL_SIZE,
-              ASTRA_MEMORY_RANGE_DEVICE,
-              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
+    fill_info(&info);
     astra_boot_info_finalize(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
     memset(physical_memory, 0xa5, sizeof(physical_memory));
@@ -693,6 +699,57 @@ static void test_library_code_page_is_shared_and_executable(void)
     assert(kernel_vm_destroy_address_space(&second) == KERNEL_VM_OK);
 }
 
+/*
+ * A device aperture above the first 32 MiB must not be mapped cacheable.
+ *
+ * The supervisor map covers RAM beyond the low region in 4 MiB
+ * early-termination pages. That is fine for RAM and wrong for a DMA pool: the
+ * USB controller's aperture used to be pinned to 0x03F00000, inside the one
+ * span that gets a page table and per-page cache bits, and the moment the pool
+ * is allowed to sit anywhere the board puts it, a cacheable 4 MiB page could
+ * cover it and the kernel would read its own stale copy of what the controller
+ * wrote.
+ *
+ * The machine here is 64 MiB with a device range at 0x05F00000 -- root index
+ * 23 -- which the old layout could not express at all.
+ */
+static void test_device_aperture_above_the_low_region_is_uncached(void)
+{
+    AstraBootInfo info;
+    KernelVmStats stats;
+    uint32_t *root;
+
+    fill_info(&info);
+    info.ram_size = 0x04000000u;
+    /*
+     * The tail of the machine, ending in a device aperture. Two ranges rather
+     * than three because the boot info holds ten and the standard machine has
+     * already spent eight.
+     */
+    add_range(&info, 0x04000000u, 0x01f00000u,
+              ASTRA_MEMORY_RANGE_USABLE,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
+                  ASTRA_MEMORY_CACHEABLE);
+    add_range(&info, 0x05f00000u, 0x00100000u,
+              ASTRA_MEMORY_RANGE_DEVICE,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
+    astra_boot_info_finalize(&info);
+    assert(astra_boot_info_validate(&info) == ASTRA_BOOT_VALID);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    kernel_vm_test_bind_physical_memory(physical_memory, 0x02000000u,
+                                        sizeof(physical_memory));
+    assert(kernel_vm_init() == KERNEL_VM_OK);
+    assert(kernel_vm_stats(&stats));
+    root = physical_words(stats.kernel_root_physical);
+
+    /* The span holding the aperture is a 4 MiB page, and uncached. */
+    assert(root[23] == ((23u << 22) | 0x41u));
+    /* Its neighbour is ordinary cacheable RAM. */
+    assert(root[22] == ((22u << 22) | 1u));
+    /* And the machine really is larger than the low region. */
+    assert(root[16] == ((16u << 22) | 1u));
+}
+
 int main(void)
 {
     test_kernel_root_and_enable_sequence();
@@ -702,6 +759,7 @@ int main(void)
     test_shared_map_transaction_rolls_back_every_stage();
     test_shared_map_existing_leaf_rollback_and_alias_guards();
     test_library_code_page_is_shared_and_executable();
+    test_device_aperture_above_the_low_region_is_uncached();
     puts("KERNEL VM PASS");
     return 0;
 }

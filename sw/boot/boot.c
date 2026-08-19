@@ -1122,6 +1122,8 @@ static int prepare_kernel_handoff(void)
     uint32_t ram_end = VESTA->RAM_BASE + VESTA->RAM_SIZE;
     uint32_t load_started;
     int usb_dma_present = 0;
+    uint32_t usb_pool_base = 0u;
+    uint32_t usb_pool_size = 0u;
 
     /*
      * RAM is whatever the board reports, not one of two remembered boards.
@@ -1145,9 +1147,21 @@ static int prepare_kernel_handoff(void)
     if ((ASTRAEA->BLIT_STATUS & BLIT_BUSY) != 0u)
         return post_failure_text("DMA active at kernel handoff");
     if ((VESTA->SYS_STATUS & SYS_USB_READY) != 0u) {
+        /*
+         * Where the DMA pool is, from the controller that owns it. This used
+         * to require it to equal OHCI_DMA_POOL_BASE, a constant describing the
+         * top of a 32 MiB ULX3S, so a design that placed its pool anywhere
+         * else failed POST. The block reports its own aperture; the firmware's
+         * job is to check it is usable, not to remember where it used to be.
+         */
+        usb_pool_base = OHCI->ASTRA_DMA_POOL_BASE;
+        usb_pool_size = OHCI->ASTRA_DMA_POOL_SIZE;
         if (OHCI->ASTRA_ID != OHCI_ASTRA_ID_MAGIC ||
-            OHCI->ASTRA_DMA_POOL_BASE != OHCI_DMA_POOL_BASE ||
-            OHCI->ASTRA_DMA_POOL_SIZE != OHCI_DMA_POOL_SIZE)
+            usb_pool_size == 0u ||
+            (usb_pool_base & 0xfffu) != 0u ||
+            (usb_pool_size & 0xfffu) != 0u ||
+            usb_pool_base < ASTRA_BOOT_SPLASH_ADDRESS ||
+            usb_pool_size > ram_end - usb_pool_base)
             return post_failure_text("USB DMA aperture");
         usb_dma_present = 1;
     }
@@ -1225,14 +1239,29 @@ static int prepare_kernel_handoff(void)
     // and uncached when that engine is present; return the remainder to the
     // physical allocator.
     if (usb_dma_present) {
-        add_boot_range(ASTRA_BOOT_SPLASH_ADDRESS,
-                       OHCI_DMA_POOL_BASE - ASTRA_BOOT_SPLASH_ADDRESS,
-                       ASTRA_MEMORY_RANGE_USABLE,
-                       ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
-                       ASTRA_MEMORY_CACHEABLE);
-        add_boot_range(OHCI_DMA_POOL_BASE, OHCI_DMA_POOL_SIZE,
+        /*
+         * Three pieces, any of which may be empty: what is below the pool,
+         * the pool, and what is above it. The old shape had only the first
+         * two, which was correct exactly while the pool ended at the top of
+         * RAM -- true of a 32 MiB board and of nothing else. On anything
+         * larger everything above the pool went undescribed, and the kernel
+         * refused a map it could not account for every frame of.
+         */
+        if (usb_pool_base > ASTRA_BOOT_SPLASH_ADDRESS)
+            add_boot_range(ASTRA_BOOT_SPLASH_ADDRESS,
+                           usb_pool_base - ASTRA_BOOT_SPLASH_ADDRESS,
+                           ASTRA_MEMORY_RANGE_USABLE,
+                           ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
+                           ASTRA_MEMORY_CACHEABLE);
+        add_boot_range(usb_pool_base, usb_pool_size,
                        ASTRA_MEMORY_RANGE_DEVICE,
                        ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
+        if (usb_pool_base + usb_pool_size < ram_end)
+            add_boot_range(usb_pool_base + usb_pool_size,
+                           ram_end - (usb_pool_base + usb_pool_size),
+                           ASTRA_MEMORY_RANGE_USABLE,
+                           ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
+                           ASTRA_MEMORY_CACHEABLE);
     } else {
         add_boot_range(ASTRA_BOOT_SPLASH_ADDRESS,
                        ram_end - ASTRA_BOOT_SPLASH_ADDRESS,
