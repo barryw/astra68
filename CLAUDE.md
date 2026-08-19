@@ -107,7 +107,18 @@ itself stays, as a conformance oracle only — see above.
   every word of one, into `memset`. Split shifts at the word boundary and clear
   with `kernel_bytes_clear`.
 - Stale objects are indistinguishable from kernel bugs. Exit status 127 from a
-  user image means a stale object first, not a kernel fault.
+  user image means a stale object first, not a kernel fault. **`rsync -a`
+  preserves mtimes**, so restoring a file on `beast` can hand `make` a source
+  older than an object built from something else, and it keeps the stale
+  object. `make clean` before believing a result you have gone back and forth
+  on.
+- **Passing gates are not evidence that a new path is taken.** A change can
+  leave all five green and still be inert. Perturb the thing deliberately --
+  break the value, revert the fix -- and see the failure you expect, or you
+  have measured nothing.
+- **The emulator is not rebuilt by the gates.** After editing
+  `emu/qemu/qemu-9.2/hw/m68k/astra68.c`, run `emu/qemu/build.sh host` or you
+  are testing the previous binary.
 
 ## Where to read next
 
@@ -116,7 +127,8 @@ itself stays, as a conformance oracle only — see above.
 | Complete inventory of everything | `docs/INVENTORY.md` |
 | Project-wide continuation map | `docs/CURRENT_STATE.md` (mind the override) |
 | Storage / filesystem line of work | `docs/HANDOVER-userspace-bringup.md` |
-| **Current resume point** | `docs/HANDOVER-memory-and-modernity.md` — reserved areas, then the heap rewrite |
+| **Current resume point** | `docs/HANDOVER-boards-and-usb.md` — the qualification kernel under QEMU, then the DE25 Nano |
+| The memory work in full, with its numbers | `docs/HANDOVER-memory-and-modernity.md` — §5 is done; §6.2 onward is the record |
 | Boot fix, the shell gate, commands and the POSIX half | `docs/HANDOVER-boot-and-shell-gate.md` — every gate green |
 | The libc, the commands, and the kernel limits | `docs/HANDOVER-libc-and-limits.md` — its §10.1 and §10.2 are done |
 | Compositor and launch latency | `docs/HANDOVER-launch-latency.md` — the blitter's `arlen` is the item left |
