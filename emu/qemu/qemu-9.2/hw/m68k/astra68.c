@@ -1840,10 +1840,30 @@ static void astra68_init(MachineState *machine)
                                    &s->display.cursor_collect_cycle,
                                    OBJ_PROP_FLAG_READ);
 
-    if (machine->ram_size != ASTRA_SDRAM_PHYSICAL_SIZE &&
-        machine->ram_size != ASTRA_SDRAM_HOSTED_SIZE) {
-        error_report("Astra68 RAM must be the 32 MiB physical or "
-                     "128 MiB hosted profile");
+    /*
+     * RAM is whatever the board has, not one of two blessed profiles.
+     *
+     * This used to accept only 32 MiB or 128 MiB, which matched the two boards
+     * that existed when it was written. Nothing in this model depends on
+     * either number -- every other use reads s->ram_size -- so the check was
+     * describing the hardware that happened to exist rather than anything the
+     * emulator requires. The guest kernel sizes its frame tables from the boot
+     * info now, so modelling a board with a different amount of memory should
+     * be a command line rather than a patch.
+     *
+     * What is left are the constraints that are real: the firmware's POST
+     * wants at least a megabyte, the guest's page tables want page alignment,
+     * and SDRAM must not run into the ROM aperture above it.
+     */
+    if (machine->ram_size < MiB ||
+        (machine->ram_size & (4 * KiB - 1)) != 0 ||
+        (uint64_t)ASTRA_SDRAM_BASE + machine->ram_size > ASTRA_ROM_BASE) {
+        error_report("Astra68 RAM must be at least 1 MiB, a multiple of 4 KiB,"
+                     " and must fit below the ROM aperture at 0x%08x"
+                     " (reference profiles: %u MiB physical, %u MiB hosted)",
+                     ASTRA_ROM_BASE,
+                     (unsigned)(ASTRA_SDRAM_PHYSICAL_SIZE / MiB),
+                     (unsigned)(ASTRA_SDRAM_HOSTED_SIZE / MiB));
         exit(EXIT_FAILURE);
     }
     if (!firmware) {

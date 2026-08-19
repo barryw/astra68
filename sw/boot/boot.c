@@ -1123,9 +1123,23 @@ static int prepare_kernel_handoff(void)
     uint32_t load_started;
     int usb_dma_present = 0;
 
+    /*
+     * RAM is whatever the board reports, not one of two remembered boards.
+     *
+     * This used to name ASTRA_RAM_SIZE_ULX3S and ASTRA_RAM_SIZE_ARTY_GUEST and
+     * refuse everything else, which meant a new board could not boot until
+     * this line learned about it -- and the kernel it hands off to now sizes
+     * its frame tables from what is reported here, so the firmware was the
+     * only thing left insisting.
+     *
+     * What the map actually requires: the layout is anchored at the early log,
+     * so RAM must start there; the fixed reservations run up to the splash
+     * buffer, so RAM must extend past it or the usable tail below is empty;
+     * and the kernel's page tables want the size page aligned.
+     */
     if (VESTA->RAM_BASE != ASTRA_EARLY_LOG_ADDRESS ||
-        (VESTA->RAM_SIZE != ASTRA_RAM_SIZE_ULX3S &&
-         VESTA->RAM_SIZE != ASTRA_RAM_SIZE_ARTY_GUEST) ||
+        (VESTA->RAM_SIZE & 0xfffu) != 0u ||
+        ram_end <= ASTRA_BOOT_SPLASH_ADDRESS ||
         ram_end < VESTA->RAM_BASE)
         return post_failure_text("unsupported kernel RAM map");
     if ((ASTRAEA->BLIT_STATUS & BLIT_BUSY) != 0u)

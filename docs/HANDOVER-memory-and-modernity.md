@@ -479,12 +479,29 @@ that index, and then returns to a 32 MB board in the same run to show nothing
 is sticky. On the machine, the same ROM boots at both RAM sizes the emulator
 offers, 32 MiB and 128 MiB, with the tables sized to each.
 
-**What now limits the sizes we can test.** The QEMU machine model refuses
-anything that is not its 32 MiB physical or 128 MiB hosted profile --
-`Astra68 RAM must be the 32 MiB physical or 128 MiB hosted profile`. That is an
-emulator-side constant, not a kernel one, and it is the next thing to widen
-when a board with a third memory size arrives. The kernel side is not waiting
-on it.
+**Two more whitelists, both removed.** Proving the kernel scaled meant booting
+it at a size nobody had booted before, and that turned up the same pattern one
+layer down, twice:
+
+- the QEMU machine refused anything that was not its 32 MiB or 128 MiB
+  profile, although nothing in the model depended on either number -- every
+  other use reads `s->ram_size`;
+- the boot ROM refused anything that was not `ASTRA_RAM_SIZE_ULX3S` or
+  `ASTRA_RAM_SIZE_ARTY_GUEST`, answering `POST FAIL: unsupported kernel RAM
+  map`.
+
+Both now check what is actually required instead of naming the boards that
+happened to exist. The machine wants at least a megabyte, page alignment, and
+to fit below the ROM aperture. The firmware wants RAM to start at the early log
+-- the layout is anchored there -- to extend past the splash buffer at
+`0x03e40000`, which is the top of the fixed reservations, and to be page
+aligned. Nothing else was ever true.
+
+**Measured, on the machine.** The same ROM boots at 32, 64, 96, 128, 192, 256
+and 512 MiB, and the full terminal gate passes at 256 MiB --
+`ASTRA TERMINAL PASS 33 commands` -- which is double the old hard ceiling and
+65536 frames, the exact point the old `uint16_t` links would have failed.
+`test-terminal.py` takes `--memory` now so that stays checkable.
 
 ## 6.2 What was the open question, and is not any more
 

@@ -54,6 +54,10 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import astra_image
+
+# RAM the gate boots with. A module global so --memory can prove that the
+# machine works at a size other than the one it was written against.
+MEMORY = "128M"
 import trace_decode
 
 # Vesta input block; the low byte of the status word is the queued count.
@@ -349,7 +353,7 @@ class Machine:
     def __init__(self, qemu, rom, image, socket_directory):
         self.qmp_path = os.path.join(socket_directory, "terminal-qmp.sock")
         self.ring_path = os.path.join(socket_directory, "ring.bin")
-        command = [qemu, "-M", "astra68", "-m", "128M", "-bios", rom,
+        command = [qemu, "-M", "astra68", "-m", MEMORY, "-bios", rom,
                    "-display", "none", "-monitor", "none", "-serial", "stdio",
                    "-no-reboot",
                    "-qmp", "unix:%s,server=on,wait=off" % self.qmp_path,
@@ -623,6 +627,8 @@ def main():
     parser.add_argument("--boot-deadline", type=float, default=90.0)
     parser.add_argument("--command-deadline", type=float, default=60.0)
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--memory", default="128M",
+                        help="RAM to boot with, e.g. 256M")
     parser.add_argument("--report-timings", action="store_true",
                         help="print Enter-to-answer command latency")
     parser.add_argument("--prepared-image", action="store_true",
@@ -630,6 +636,8 @@ def main():
     parser.add_argument("--performance-only", action="store_true",
                         help="run the command-latency budget gate")
     arguments = parser.parse_args()
+    global MEMORY
+    MEMORY = arguments.memory
     return run(arguments.qemu, arguments.rom, arguments.image,
                arguments.catalog, arguments.boot_deadline,
                arguments.command_deadline, arguments.verbose,
