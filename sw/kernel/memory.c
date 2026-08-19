@@ -625,18 +625,6 @@ static bool find_high_contiguous(uint32_t frame_count, uint32_t *found)
 
     if (frame_count == 0u || frame_count > stats.total_frames)
         return false;
-    /*
-     * Below the direct map, because the kernel has to be able to write these
-     * frames -- zeroing a DMA buffer is the kernel touching it. See
-     * KERNEL_DIRECT_MAP_LIMIT.
-     */
-    if (stats.ram_base < KERNEL_DIRECT_MAP_LIMIT) {
-        uint32_t reachable =
-            (KERNEL_DIRECT_MAP_LIMIT - stats.ram_base) / KERNEL_PAGE_SIZE;
-
-        if (reachable < ceiling)
-            ceiling = reachable;
-    }
     if (frame_count > ceiling)
         return false;
     for (uint32_t index = ceiling; index-- > 0u;) {

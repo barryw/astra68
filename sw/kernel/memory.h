@@ -42,27 +42,13 @@
 #define KERNEL_DMA_ZONE_FRAMES 128u
 
 /*
- * The top of what the kernel can touch directly.
- *
- * The supervisor identity-maps SDRAM from 0x02000000 through root index 15,
- * which is 32 MiB, and nothing above that has a supervisor translation. A
- * frame beyond it can still be handed to a process -- the process reaches it
- * through its own page tables -- but the kernel cannot zero it, poison it or
- * copy through it, and trying is a PMMU translation fault in supervisor mode,
- * which is a panic.
- *
- * The general allocator never meets this, because it searches upward from the
- * bottom and a 128 MB machine never gets that far. The DMA zone did meet it
- * immediately, by deliberately taking the highest frames it could find, and
- * booted straight into `Class: PMMU translation, Fault: 0x09F60000` -- which
- * is exactly the top of RAM less the emergency reserve less this zone.
- *
- * So the zone is placed below this, and the limit is written down here rather
- * than left as a fact about vm.c that the next person rediscovers the same
- * way. That the machine believes it has 128 MB while the kernel can directly
- * reach 32 MB of it is a real limit and not this file's to fix.
+ * The supervisor identity-maps all of RAM, whatever the boot info says there
+ * is -- see the root descriptor loop in vm.c. It used to stop at 32 MiB, the
+ * ULX3S's SDRAM, which made every frame above that a landmine: still
+ * classified usable, still handed out, and a supervisor bus error on the
+ * write that zeroed it. There is no direct-map limit to respect any more,
+ * which is why nothing here caps where the zone may sit.
  */
-#define KERNEL_DIRECT_MAP_LIMIT 0x04000000u
 
 typedef enum KernelFrameState {
     KERNEL_FRAME_UNCLASSIFIED = 0,

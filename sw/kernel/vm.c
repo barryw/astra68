@@ -536,6 +536,47 @@ static KernelVmStatus build_supervisor_root(void)
     }
     root[VM_SDRAM_TOP_ROOT_INDEX] =
         kernel_top_table_physical | VM_DESC_TABLE;
+
+    /*
+     * The rest of RAM, however much of it there is.
+     *
+     * VM_SDRAM_TOP_ROOT_INDEX is 15, which is 32 MiB, which is exactly the
+     * ULX3S's SDRAM -- the map was sized for the board this project used to
+     * run on and never grew when the target became a 128 MB Arty guest. The
+     * consequence was not a smaller machine but a landmine: every frame above
+     * 32 MiB was still classified usable and still handed out, and the first
+     * write to one -- zeroing it on allocation -- was a supervisor bus error.
+     * Only the allocator's habit of searching upward from frame zero kept the
+     * machine away from it.
+     *
+     * These are early-termination 4 MiB page descriptors in the root itself,
+     * the same form indices 9 through 14 already use, so covering another
+     * 96 MB costs 24 descriptors in a table that is already allocated and not
+     * one byte more. The bound comes from the boot info's RAM size rather
+     * than a constant, because the next board will not have 128 MB either.
+     *
+     * Index 1023 is the MMIO window and is claimed below, so the scan stops
+     * short of it; a machine with 4 GB of RAM would need that window moved,
+     * which is a problem worth having.
+     */
+    {
+        KernelMemoryStats memory;
+        uint64_t ram_end;
+        uint32_t last_index;
+
+        if (!kernel_memory_stats(&memory)) {
+            status = KERNEL_VM_CORRUPT;
+            goto fail;
+        }
+        ram_end = (uint64_t)memory.ram_base +
+                  (uint64_t)memory.total_frames * KERNEL_PAGE_SIZE;
+        last_index = (uint32_t)((ram_end - 1u) >> 22);
+        if (last_index > 1022u)
+            last_index = 1022u;
+        for (uint32_t index = VM_SDRAM_TOP_ROOT_INDEX + 1u;
+             index <= last_index; ++index)
+            root[index] = (index << 22) | VM_DESC_PAGE;
+    }
     root[1023] = kernel_high_table_physical | VM_DESC_TABLE;
 
     set_mmio_range(high_table, 0xfff00000u, 16u);
