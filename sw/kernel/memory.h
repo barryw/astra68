@@ -10,7 +10,25 @@
 
 #define KERNEL_PAGE_SHIFT 12u
 #define KERNEL_PAGE_SIZE  (1u << KERNEL_PAGE_SHIFT)
-#define KERNEL_MAX_FRAMES (ASTRA_RAM_SIZE_ARTY_GUEST / KERNEL_PAGE_SIZE)
+/*
+ * There is no maximum frame count, and that is deliberate.
+ *
+ * This used to be ASTRA_RAM_SIZE_ARTY_GUEST / KERNEL_PAGE_SIZE -- 32768 -- and
+ * every per-frame table was a static array of that length. It made the size of
+ * the machine a property of the image: a board with more RAM than the constant
+ * was refused outright at `kernel_memory_init`, and a board with less carried
+ * the tables for one it was not. The frame links were `uint16_t` besides, so
+ * even raising the constant would have hit a wall at 65535 frames, 256 MB.
+ *
+ * The boot ROM already discovers RAM from a hardware register and reports it,
+ * so the number was always known at run time and thrown away at compile time.
+ * The tables are now carved from RAM at init, sized from the count the board
+ * actually reports, and the frame links are 32-bit. A DE25 Nano, or anything
+ * else, is a boot-info value rather than a rebuild.
+ *
+ * `kernel_memory_metadata_bytes` is what that costs, and it is available for
+ * anything that needs to reason about it.
+ */
 #define KERNEL_MAX_FRAME_OWNERS 64u
 #define KERNEL_OWNER_NONE 0u
 #define KERNEL_EMERGENCY_RESERVE_FRAMES 32u
@@ -149,6 +167,8 @@ bool kernel_memory_frame_info(uint32_t physical_address,
 bool kernel_memory_frame_allocation_site(uint32_t physical_address,
                                          KernelAllocationSite *site);
 bool kernel_memory_owner_frames(uint32_t owner, uint32_t *frame_count);
+/* What the per-frame bookkeeping costs for a machine of this many frames. */
+uint32_t kernel_memory_metadata_bytes(uint32_t frame_count);
 bool kernel_memory_stats(KernelMemoryStats *stats);
 
 #if defined(KERNEL_MEMORY_HOST_TEST)

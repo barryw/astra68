@@ -6,6 +6,13 @@
 #include <stdio.h>
 #include <string.h>
 
+/*
+ * The largest machine these tests build. There is no kernel-side frame ceiling
+ * any more -- the tables are carved from RAM at init -- so a test that wants a
+ * scratch array per frame states the size of its own synthetic machine.
+ */
+#define TEST_MAX_FRAMES (ASTRA_RAM_SIZE_ARTY_GUEST / KERNEL_PAGE_SIZE)
+
 static void add_range(AstraBootInfo *info, uint32_t base, uint32_t size,
                       uint32_t type, uint32_t flags)
 {
@@ -138,7 +145,7 @@ static void test_arty_guest_map(void)
 
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
     assert(kernel_memory_stats(&stats));
-    assert(stats.total_frames == KERNEL_MAX_FRAMES);
+    assert(stats.total_frames == TEST_MAX_FRAMES);
     assert(kernel_memory_frame_info(0x09fff000u, &frame));
     assert(frame.state == KERNEL_FRAME_EMERGENCY_RESERVED);
 }
@@ -356,7 +363,7 @@ static void test_reinit_discards_stale_dynamic_metadata(void)
 
 static void test_scattered_page_allocation_is_atomic(void)
 {
-    static uint32_t impossible[KERNEL_MAX_FRAMES];
+    static uint32_t impossible[TEST_MAX_FRAMES];
     AstraBootInfo info;
     KernelMemoryStats before_failure;
     KernelMemoryStats after_failure;
@@ -378,7 +385,7 @@ static void test_scattered_page_allocation_is_atomic(void)
     assert(kernel_memory_release_owner(41u, NULL) == KERNEL_MEMORY_OK);
     assert(kernel_memory_release_owner(42u, NULL) == KERNEL_MEMORY_OK);
 
-    for (uint32_t index = 0u; index < KERNEL_MAX_FRAMES; ++index)
+    for (uint32_t index = 0u; index < TEST_MAX_FRAMES; ++index)
         impossible[index] = UINT32_MAX;
     assert(kernel_memory_stats(&before_failure));
     assert(kernel_memory_alloc_pages_zeroed(
@@ -714,7 +721,7 @@ static void test_retained_log_is_allocation_free_under_pressure(void)
  */
 static void test_contiguous_demand_survives_a_combed_frame_map(void)
 {
-    static uint32_t every_frame[KERNEL_MAX_FRAMES];
+    static uint32_t every_frame[TEST_MAX_FRAMES];
     AstraBootInfo info;
     KernelMemoryStats before;
     KernelMemoryStats after_comb;
@@ -772,6 +779,68 @@ static void test_contiguous_demand_survives_a_combed_frame_map(void)
     assert(kernel_memory_release_owner(71u, NULL) == KERNEL_MEMORY_OK);
 }
 
+/*
+ * A board larger than the constant this used to be compiled against.
+ *
+ * KERNEL_MAX_FRAMES was ASTRA_RAM_SIZE_ARTY_GUEST / 4096 -- 32768 -- and
+ * `kernel_memory_init` refused any map larger than it outright, so a board
+ * with more RAM than the image was built for did not boot. Behind that sat a
+ * second, quieter ceiling: the owner frame links were `uint16_t`, so even
+ * raising the constant would have stopped at 65535 frames, 256 MB.
+ *
+ * This builds a gigabyte and expects a working machine, not merely one that
+ * initialised. The DMA zone is the useful witness -- it is placed at the top
+ * of memory, so on this machine it sits at a frame index the old build could
+ * not represent, and allocating from it and giving it back walks the owner
+ * links at that index.
+ */
+static void test_frame_tables_scale_past_the_old_ceiling(void)
+{
+    AstraBootInfo info;
+    KernelMemoryStats stats;
+    const uint32_t gigabyte = 0x40000000u;
+    uint32_t transfer = 0u;
+    uint32_t frame;
+
+    make_valid_info(&info);
+    info.ram_size = gigabyte;
+    add_range(&info, 0x04000000u,
+              (info.ram_base + gigabyte) - 0x04000000u,
+              ASTRA_MEMORY_RANGE_USABLE,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
+                  ASTRA_MEMORY_CACHEABLE);
+    astra_boot_info_finalize(&info);
+    assert(astra_boot_info_validate(&info) == ASTRA_BOOT_VALID);
+
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&stats));
+    assert(stats.total_frames == gigabyte / KERNEL_PAGE_SIZE);
+    /* Four times what the old links could address, eight times the old cap. */
+    assert(stats.total_frames > (uint32_t)UINT16_MAX);
+    /* The bookkeeping is proportional and stated rather than guessed at. */
+    assert(kernel_memory_metadata_bytes(stats.total_frames) >
+           stats.total_frames * 16u);
+
+    /* The zone is at the top, which is a frame index the old build lacked. */
+    assert(stats.dma_zone_frames == KERNEL_DMA_ZONE_FRAMES);
+    assert(stats.dma_zone_first > (uint32_t)UINT16_MAX);
+    assert(kernel_memory_alloc(2u, 1u, KERNEL_FRAME_DMA, 11u, &transfer) ==
+           KERNEL_MEMORY_OK);
+    frame = (transfer - stats.ram_base) / KERNEL_PAGE_SIZE;
+    assert(frame > (uint32_t)UINT16_MAX);
+    /* Owning and releasing at that index is what exercises the wide links. */
+    assert(kernel_memory_release_owner(11u, NULL) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&stats));
+    assert(kernel_allocation_valid());
+
+    /* And back to a small board in the same run: nothing is sticky. */
+    make_valid_info(&info);
+    astra_boot_info_finalize(&info);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&stats));
+    assert(stats.total_frames == 0x02000000u / KERNEL_PAGE_SIZE);
+}
+
 int main(void)
 {
     test_initial_map();
@@ -789,6 +858,7 @@ int main(void)
     test_emergency_site_injection_is_atomic();
     test_retained_log_is_allocation_free_under_pressure();
     test_contiguous_demand_survives_a_combed_frame_map();
+    test_frame_tables_scale_past_the_old_ceiling();
     test_tagged_failure_injection_and_boot_retirement();
     puts("KERNEL MEMORY PASS");
     return 0;

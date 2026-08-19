@@ -3,11 +3,13 @@
 #include "bytes.h"
 
 #include <stddef.h>
+#if !defined(__m68k__)
+#include <stdlib.h>
+#endif
 
 #define KERNEL_ALLOC_POISON 0xa110ca7eu
 #define KERNEL_FREE_POISON  0xfee1deadu
-#define KERNEL_BITMAP_WORDS ((KERNEL_MAX_FRAMES + 31u) / 32u)
-#define KERNEL_FRAME_INDEX_NONE UINT16_MAX
+#define KERNEL_FRAME_INDEX_NONE UINT32_MAX
 
 #if defined(__GNUC__) && defined(__ELF__)
 #define KERNEL_NOINIT __attribute__((section(".noinit")))
@@ -24,20 +26,37 @@ typedef struct KernelSavedRange {
 
 typedef struct KernelOwnerLedger {
     uint32_t owner;
-    uint16_t head;
-    uint16_t frame_count;
+    /*
+     * Both are frame quantities and both were 16-bit, which put a 65535-frame
+     * ceiling on the machine independently of any array length.
+     */
+    uint32_t head;
+    uint32_t frame_count;
 } KernelOwnerLedger;
 
-/* Metadata is valid only when the matching dynamic bit is set. */
-static KernelFrameInfo frames[KERNEL_MAX_FRAMES] KERNEL_NOINIT;
-static uint16_t owner_next[KERNEL_MAX_FRAMES] KERNEL_NOINIT;
-static uint16_t owner_previous[KERNEL_MAX_FRAMES] KERNEL_NOINIT;
+/*
+ * Metadata is valid only when the matching dynamic bit is set.
+ *
+ * These are pointers into an arena carved at init rather than arrays sized by
+ * a constant, which is what lets the machine be as large as the board says it
+ * is. Every accessor still writes `frames[index]`, so the shape of the code
+ * did not change -- only where the storage comes from.
+ */
+static KernelFrameInfo *frames;
+static uint32_t *owner_next;
+static uint32_t *owner_previous;
 static KernelOwnerLedger owner_ledgers[KERNEL_MAX_FRAME_OWNERS] KERNEL_NOINIT;
-static uint32_t blocked_bitmap[KERNEL_BITMAP_WORDS] KERNEL_NOINIT;
-static uint32_t dynamic_bitmap[KERNEL_BITMAP_WORDS] KERNEL_NOINIT;
-static uint32_t classified_bitmap[KERNEL_BITMAP_WORDS] KERNEL_NOINIT;
-static uint32_t emergency_bitmap[KERNEL_BITMAP_WORDS] KERNEL_NOINIT;
-static uint8_t frame_allocation_sites[KERNEL_MAX_FRAMES] KERNEL_NOINIT;
+static uint32_t *blocked_bitmap;
+static uint32_t *dynamic_bitmap;
+static uint32_t *classified_bitmap;
+static uint32_t *emergency_bitmap;
+static uint8_t *frame_allocation_sites;
+/* Where the arena lives, and how many frames of RAM it consumed. */
+static uint32_t metadata_base;
+static uint32_t metadata_frames;
+#if !defined(__m68k__)
+static uint8_t *host_arena;
+#endif
 static KernelSavedRange saved_ranges[ASTRA_BOOT_MAX_MEMORY_RANGES]
     KERNEL_NOINIT;
 static uint32_t saved_range_count;
@@ -51,6 +70,87 @@ static uint32_t dma_zone_first;
 static uint32_t dma_zone_frames;
 
 static bool find_high_contiguous(uint32_t frame_count, uint32_t *found);
+static KernelFrameState boot_state(uint32_t type);
+
+static uint32_t align_up_word(uint32_t value)
+{
+    return (value + 3u) & ~3u;
+}
+
+/*
+ * What the per-frame metadata costs for a machine of this many frames. Public
+ * because the size of the bookkeeping is a thing worth being able to state,
+ * and because the placement below and the tests both need the same answer.
+ */
+uint32_t kernel_memory_metadata_bytes(uint32_t frame_count)
+{
+    uint32_t words = (frame_count + 31u) / 32u;
+    uint32_t total = 0u;
+
+    total += align_up_word(frame_count * (uint32_t)sizeof(KernelFrameInfo));
+    total += align_up_word(frame_count * (uint32_t)sizeof(uint32_t));
+    total += align_up_word(frame_count * (uint32_t)sizeof(uint32_t));
+    total += align_up_word(words * (uint32_t)sizeof(uint32_t)) * 4u;
+    total += align_up_word(frame_count);
+    return total;
+}
+
+/*
+ * Where to put it. The largest range the firmware calls usable, because the
+ * arena has to exist before a single frame can be allocated -- the allocator's
+ * own bitmaps are in it -- so it cannot come from the allocator.
+ *
+ * Kept a pure function of the boot info so it can be tested directly. Nothing
+ * it looks at depends on anything this file has initialised yet.
+ */
+static bool select_metadata_base(const AstraBootInfo *info, uint32_t bytes,
+                                 uint32_t *base)
+{
+    uint32_t best_base = 0u;
+    uint32_t best_size = 0u;
+
+    if (info == NULL || base == NULL || bytes == 0u)
+        return false;
+    for (uint32_t index = 0u; index < info->memory_range_count; ++index) {
+        const AstraBootMemoryRange *range = &info->memory_ranges[index];
+
+        if (boot_state(range->type) != KERNEL_FRAME_FREE)
+            continue;
+        if ((range->base & (KERNEL_PAGE_SIZE - 1u)) != 0u)
+            continue;
+        if (range->size >= bytes && range->size > best_size) {
+            best_base = range->base;
+            best_size = range->size;
+        }
+    }
+    if (best_size == 0u)
+        return false;
+    *base = best_base;
+    return true;
+}
+
+/* Points the tables at the arena, in one fixed order. */
+static void place_metadata(uint8_t *arena, uint32_t frame_count)
+{
+    uint32_t words = (frame_count + 31u) / 32u;
+    uint8_t *cursor = arena;
+
+    frames = (KernelFrameInfo *)(void *)cursor;
+    cursor += align_up_word(frame_count * (uint32_t)sizeof(KernelFrameInfo));
+    owner_next = (uint32_t *)(void *)cursor;
+    cursor += align_up_word(frame_count * (uint32_t)sizeof(uint32_t));
+    owner_previous = (uint32_t *)(void *)cursor;
+    cursor += align_up_word(frame_count * (uint32_t)sizeof(uint32_t));
+    blocked_bitmap = (uint32_t *)(void *)cursor;
+    cursor += align_up_word(words * (uint32_t)sizeof(uint32_t));
+    dynamic_bitmap = (uint32_t *)(void *)cursor;
+    cursor += align_up_word(words * (uint32_t)sizeof(uint32_t));
+    classified_bitmap = (uint32_t *)(void *)cursor;
+    cursor += align_up_word(words * (uint32_t)sizeof(uint32_t));
+    emergency_bitmap = (uint32_t *)(void *)cursor;
+    cursor += align_up_word(words * (uint32_t)sizeof(uint32_t));
+    frame_allocation_sites = cursor;
+}
 static KernelMemoryStats stats;
 static bool initialized;
 
@@ -70,10 +170,8 @@ void kernel_memory_test_bind_physical_memory(uint8_t *memory, uint32_t base,
 
 _Static_assert(sizeof(KernelFrameInfo) == 8u,
                "frame metadata must remain compact");
-_Static_assert(sizeof(KernelOwnerLedger) == 8u,
+_Static_assert(sizeof(KernelOwnerLedger) == 12u,
                "owner ledger must remain compact");
-_Static_assert(KERNEL_MAX_FRAMES <= UINT16_MAX,
-               "owner frame links must represent every frame");
 
 static bool is_power_of_two(uint32_t value)
 {
@@ -170,7 +268,7 @@ static bool owner_slot_for_allocation(uint32_t owner, uint32_t frame_count,
     for (uint32_t index = 0u; index < KERNEL_MAX_FRAME_OWNERS; ++index) {
         if (owner_ledgers[index].owner == owner) {
             uint32_t available =
-                (uint32_t)UINT16_MAX - owner_ledgers[index].frame_count;
+                stats.total_frames - owner_ledgers[index].frame_count;
 
             if (frame_count > available)
                 return false;
@@ -191,7 +289,7 @@ static void link_owner_frame(uint32_t slot, uint32_t frame_index,
                              uint32_t owner)
 {
     KernelOwnerLedger *ledger = &owner_ledgers[slot];
-    uint16_t old_head;
+    uint32_t old_head;
 
     if (ledger->owner == KERNEL_OWNER_NONE) {
         ledger->owner = owner;
@@ -203,16 +301,16 @@ static void link_owner_frame(uint32_t slot, uint32_t frame_index,
     owner_previous[frame_index] = KERNEL_FRAME_INDEX_NONE;
     owner_next[frame_index] = old_head;
     if (old_head != KERNEL_FRAME_INDEX_NONE)
-        owner_previous[old_head] = (uint16_t)frame_index;
-    ledger->head = (uint16_t)frame_index;
+        owner_previous[old_head] = frame_index;
+    ledger->head = frame_index;
     ++ledger->frame_count;
 }
 
 static bool unlink_owner_frame(uint32_t slot, uint32_t frame_index)
 {
     KernelOwnerLedger *ledger = &owner_ledgers[slot];
-    uint16_t previous;
-    uint16_t next;
+    uint32_t previous;
+    uint32_t next;
 
     if (frame_index >= stats.total_frames || ledger->frame_count == 0u ||
         ledger->owner == KERNEL_OWNER_NONE)
@@ -447,6 +545,7 @@ static bool range_has_state(uint32_t base, uint32_t size,
 KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info)
 {
     uint64_t ram_end;
+    uint32_t metadata_bytes;
 
     kernel_allocation_init();
     initialized = false;
@@ -461,11 +560,49 @@ KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info)
     if ((info->ram_base & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
         (info->ram_size & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
         info->ram_size == 0u ||
-        info->ram_size / KERNEL_PAGE_SIZE > KERNEL_MAX_FRAMES)
+        info->ram_size / KERNEL_PAGE_SIZE == 0u)
         return KERNEL_MEMORY_INVALID_MAP;
 
     stats.ram_base = info->ram_base;
     stats.total_frames = info->ram_size / KERNEL_PAGE_SIZE;
+    /*
+     * The arena comes first, because everything below writes into it -- the
+     * bitmaps the classifier sets are themselves part of it. It cannot come
+     * from the frame allocator for the same reason, so it is carved from the
+     * largest range the firmware called usable and the frames it covers are
+     * taken out of circulation afterwards, once there is a bitmap to say so.
+     */
+    metadata_bytes = kernel_memory_metadata_bytes(stats.total_frames);
+    /*
+     * Where it would go is decided the same way everywhere, so the arithmetic
+     * is exercised by every host test even though only the kernel proper puts
+     * the arena there. A host binary has no RAM at those addresses -- it would
+     * be writing through a raw physical pointer into its own address space --
+     * so it keeps the tables on the heap and leaves the machine's frames
+     * alone. The kernel is only ever built for m68k, which is why that is the
+     * condition rather than any test macro: a target that forgets to define
+     * one is exactly how this went wrong the first time.
+     */
+    if (!select_metadata_base(info, metadata_bytes, &metadata_base)) {
+#if defined(__m68k__)
+        return KERNEL_MEMORY_INVALID_MAP;
+#else
+        metadata_base = 0u;
+#endif
+    }
+#if defined(__m68k__)
+    metadata_frames =
+        (metadata_bytes + KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE;
+    place_metadata((uint8_t *)(uintptr_t)metadata_base, stats.total_frames);
+#else
+    free(host_arena);
+    host_arena = malloc(metadata_bytes);
+    if (host_arena == NULL)
+        return KERNEL_MEMORY_INVALID_MAP;
+    metadata_base = 0u;
+    metadata_frames = 0u;
+    place_metadata(host_arena, stats.total_frames);
+#endif
     for (uint32_t index = 0u; index < stats.total_frames; ++index) {
         owner_next[index] = KERNEL_FRAME_INDEX_NONE;
         owner_previous[index] = KERNEL_FRAME_INDEX_NONE;
@@ -543,6 +680,32 @@ KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info)
             KERNEL_ALLOCATION_SITE_EMERGENCY_RESERVE;
         ++reserved;
     }
+    /*
+     * The arena's own frames, taken out of circulation now that there is a
+     * bitmap to record it in. They were classified usable a moment ago --
+     * they had to be, the arena was placed in a usable range -- so this is
+     * the point where the machine stops being able to allocate its own
+     * bookkeeping out from under itself.
+     */
+    for (uint32_t index = 0u; index < metadata_frames; ++index) {
+        uint32_t frame = (metadata_base - stats.ram_base) / KERNEL_PAGE_SIZE +
+                         index;
+
+        if (frame >= stats.total_frames || bitmap_test(blocked_bitmap, frame)) {
+            initialized = false;
+            return KERNEL_MEMORY_INVALID_MAP;
+        }
+        bitmap_set(blocked_bitmap, frame, true);
+        bitmap_set(dynamic_bitmap, frame, false);
+        reset_frame(&frames[frame], KERNEL_FRAME_KERNEL);
+        frame_allocation_sites[frame] = KERNEL_ALLOCATION_SITE_INVALID;
+        if (stats.free_frames == 0u) {
+            initialized = false;
+            return KERNEL_MEMORY_INVALID_MAP;
+        }
+        --stats.free_frames;
+    }
+
     /*
      * The DMA zone, claimed after the emergency reserve so it sits below it
      * and above everything that grows upward. It is not marked blocked --
@@ -870,7 +1033,7 @@ KernelMemoryStatus kernel_memory_emergency_acquire(
     uint32_t *physical_base)
 {
     uint32_t owner_slot;
-    uint32_t selected = KERNEL_MAX_FRAMES;
+    uint32_t selected = UINT32_MAX;
 
     if (!initialized || !emergency_site(site) ||
         !is_dynamic_state(state) || owner == KERNEL_OWNER_NONE ||
@@ -898,7 +1061,7 @@ KernelMemoryStatus kernel_memory_emergency_acquire(
             break;
         }
     }
-    if (selected == KERNEL_MAX_FRAMES) {
+    if (selected == UINT32_MAX) {
         ++stats.allocation_failures;
         ++stats.emergency_failures;
         kernel_allocation_fail(site, owner);
@@ -1075,7 +1238,7 @@ KernelMemoryStatus kernel_memory_release_owner(uint32_t owner,
     uint32_t released = 0u;
     uint32_t owner_slot;
     uint32_t visited = 0u;
-    uint16_t index;
+    uint32_t index;
 
     if (!initialized || owner == KERNEL_OWNER_NONE)
         return KERNEL_MEMORY_INVALID_ARGUMENT;

@@ -80,7 +80,18 @@ static uint32_t kernel_top_table_physical;
 static uint32_t kernel_high_table_physical;
 static uint32_t empty_root_physical;
 static uint32_t current_user_root;
-static uint16_t mapped_user_frames[KERNEL_MAX_FRAMES] KERNEL_TABLES;
+/*
+ * One alias count per frame of RAM, sized from the machine rather than from a
+ * constant. It was a static array of KERNEL_MAX_FRAMES entries in `.tables`,
+ * which made it another place the size of the board was compiled in.
+ */
+/*
+ * Volatile because it is reached through the same physical-address
+ * translation as the page tables, and casting that qualifier away to keep a
+ * plain pointer would be lying about where the storage is.
+ */
+static volatile uint16_t *mapped_user_frames;
+static uint32_t mapped_user_frame_count;
 static KernelVmStats vm_stats;
 static bool initialized;
 static bool enabled;
@@ -227,7 +238,7 @@ static bool frame_is_user_mapped(uint32_t physical_address)
     if ((physical_address & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
         physical_address < VM_SDRAM_BASE ||
         physical_address - VM_SDRAM_BASE >=
-            KERNEL_MAX_FRAMES * KERNEL_PAGE_SIZE)
+            (uint64_t)mapped_user_frame_count * KERNEL_PAGE_SIZE)
         return false;
     return (mapped_user_frames[frame_index(physical_address)] >>
             VM_MAPPING_COUNT_SHIFT) != 0u;
@@ -621,8 +632,41 @@ KernelVmStatus kernel_vm_init(void)
 #if defined(KERNEL_VM_HOST_TEST)
     next_shared_map_fault = KERNEL_VM_SHARED_MAP_FAULT_NONE;
 #endif
-    for (uint32_t index = 0u; index < KERNEL_MAX_FRAMES; ++index)
-        mapped_user_frames[index] = 0u;
+    /*
+     * The alias table comes from the frame allocator, which is running by now,
+     * rather than from a static array sized for a board this may not be.
+     */
+    {
+        KernelMemoryStats memory;
+        uint32_t bytes;
+        uint32_t table_frames;
+        uint32_t physical = 0u;
+
+        if (!kernel_memory_stats(&memory))
+            return KERNEL_VM_CORRUPT;
+        mapped_user_frame_count = memory.total_frames;
+        bytes = mapped_user_frame_count * (uint32_t)sizeof(uint16_t);
+        table_frames = (bytes + KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE;
+        if (kernel_memory_alloc_zeroed_tagged(
+                KERNEL_ALLOCATION_SITE_VM_PAGE_TABLE, table_frames, 1u,
+                KERNEL_FRAME_PAGE_TABLE, VM_KERNEL_OWNER, &physical) !=
+            KERNEL_MEMORY_OK)
+            return KERNEL_VM_OUT_OF_MEMORY;
+        /*
+         * Through the same translation every other physical access here uses,
+         * so a host test reaches its bound backing store rather than the raw
+         * address, which on a host is somebody else's memory.
+         */
+        mapped_user_frames =
+            (volatile uint16_t *)(volatile void *)physical_words(physical);
+        if (mapped_user_frames == NULL) {
+            (void)kernel_memory_release(physical, table_frames,
+                                        VM_KERNEL_OWNER);
+            return KERNEL_VM_CORRUPT;
+        }
+        for (uint32_t index = 0u; index < mapped_user_frame_count; ++index)
+            mapped_user_frames[index] = 0u;
+    }
     reset_stats();
 
     status = build_supervisor_root();

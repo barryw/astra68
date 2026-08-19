@@ -182,8 +182,17 @@ KernelDmaStatus kernel_dma_create(uint32_t owner, uint32_t byte_size,
     *handle = KERNEL_DMA_HANDLE_INVALID;
     rounded_size = (uint64_t)byte_size + KERNEL_PAGE_SIZE - 1u;
     frame_count = (uint32_t)(rounded_size >> KERNEL_PAGE_SHIFT);
-    if (frame_count == 0u || frame_count > KERNEL_MAX_FRAMES)
-        return KERNEL_DMA_INVALID_ARGUMENT;
+    /*
+     * Bounded by the machine rather than by a constant; the allocator refuses
+     * anything it cannot serve anyway, this only catches the absurd early.
+     */
+    {
+        KernelMemoryStats memory;
+
+        if (!kernel_memory_stats(&memory) || frame_count == 0u ||
+            frame_count > memory.total_frames)
+            return KERNEL_DMA_INVALID_ARGUMENT;
+    }
 
     cache_status = kernel_object_cache_claim(
         &dma_cache, owner, &raw_slot, &slot_index);

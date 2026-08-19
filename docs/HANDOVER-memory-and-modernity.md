@@ -429,7 +429,67 @@ whatever was in it. Every in-tree caller sets it now and
 binary say so instead of failing strangely. Unknown flag bits are rejected
 rather than ignored, which is what lets flags be added later.
 
-## 6.2 What is now the open question
+## 6.3 The frame tables are sized by the board, not by the image
+
+Done, and it is the thing §6.2 said was worth fixing before more code bound
+itself to the old constant.
+
+`KERNEL_MAX_FRAMES` is gone. It was `ASTRA_RAM_SIZE_ARTY_GUEST / 4096`, 32768,
+and every per-frame table was a static array of that length, so the size of the
+machine was a property of the image:
+
+- a board with **more** RAM than the constant was refused at
+  `kernel_memory_init` and did not boot at all;
+- a board with less carried the tables for one it was not;
+- and behind both sat a quieter ceiling -- the owner frame links and the owner
+  ledger's head and count were `uint16_t`, so raising the constant would have
+  stopped at 65535 frames, 256 MB.
+
+The boot ROM already reads RAM size from a hardware register and reports it, so
+the number was always known at run time and thrown away at compile time.
+
+The tables are now carved from RAM at init, sized from the count the board
+reports, and the links are 32-bit. The arena holds the frame records, the two
+owner link arrays, the four bitmaps and the allocation sites --
+`kernel_memory_metadata_bytes` states the cost, about 17.5 bytes per frame,
+0.4% of the machine. It is placed in the largest range the firmware calls
+usable, because the allocator's own bitmaps are inside it and it therefore
+cannot come from the allocator; its frames are taken out of circulation
+immediately afterwards, once there is a bitmap to record that in. `vm.c`'s
+per-frame alias table is allocated the same way, from the frame allocator,
+which is running by then.
+
+Every accessor still reads `frames[index]`. The tables became pointers rather
+than arrays, so the shape of the code did not change -- only where the storage
+comes from.
+
+**A trap worth naming.** The first version keyed the host-versus-kernel arena
+on `KERNEL_MEMORY_HOST_TEST`, and `test_memory` does not define it -- it builds
+with `KERNEL_MEMORY_NO_POISON` instead. So the host binary took the kernel path
+and wrote the arena through a raw physical pointer into its own address space.
+It is keyed on `defined(__m68k__)` now, because the kernel is only ever built
+for m68k and a target that forgets to define a test macro is exactly how that
+went wrong.
+
+**Evidence.** `test_frame_tables_scale_past_the_old_ceiling` builds a gigabyte
+-- eight times the old constant, four times what the old links could address --
+initialises it, checks the DMA zone lands at a frame index above `UINT16_MAX`,
+allocates from it and releases the owner, which is what walks the wide links at
+that index, and then returns to a 32 MB board in the same run to show nothing
+is sticky. On the machine, the same ROM boots at both RAM sizes the emulator
+offers, 32 MiB and 128 MiB, with the tables sized to each.
+
+**What now limits the sizes we can test.** The QEMU machine model refuses
+anything that is not its 32 MiB physical or 128 MiB hosted profile --
+`Astra68 RAM must be the 32 MiB physical or 128 MiB hosted profile`. That is an
+emulator-side constant, not a kernel one, and it is the next thing to widen
+when a board with a third memory size arrives. The kernel side is not waiting
+on it.
+
+## 6.2 What was the open question, and is not any more
+
+Both items here are closed: the direct map in the commit that extended it to
+all of RAM, and the static frame tables in §6.3.
 
 The kernel's 32 MiB direct map, from §5.4. Ninety-six of the machine's 128 MB
 can only ever be reached by a process through its own page tables, and anything
