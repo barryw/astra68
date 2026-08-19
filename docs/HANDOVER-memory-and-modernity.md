@@ -542,11 +542,35 @@ with an aperture at `0x05F00000`, root index 23, which the old layout could not
 express at all, and checks that span is uncached while its neighbour is not. It
 fails if the device check is removed.
 
-**Not gate-tested, and it cannot be.** The QEMU machine has no OHCI block and
-never raises `SYS_USB_READY`, so `usb_dma_present` is always zero there and the
-whole USB branch of the firmware map is reachable only on hardware. The kernel
-half is covered by the test above; the firmware half is reviewed, not run. It
-is the first thing to watch when a board with USB comes up.
+**Now gate-tested, because the emulator models the controller.** The QEMU
+machine used to have no OHCI block at all, so `SYS_USB_READY` was never raised,
+`usb_dma_present` was always zero, and the whole USB branch was reachable only
+on hardware. `astra68.c` now models the register file and the reset handshake:
+the Astra identity and version, the reported DMA aperture, `CONTROL` with its
+HCFS field, a self-clearing `HCR` that really does drop the controller to
+SUSPEND and zero its HCCA, and the interrupt enable/disable/status trio.
+
+It models no transfers and attaches no device, and that is the point rather
+than a shortcut. What was untestable was never the data path -- it was
+everything before one: the firmware reading the aperture the controller
+reports, validating it against this machine's RAM, and building a map with a
+device range in the middle of it, then the kernel resetting the controller and
+pointing it at an HCCA. That is exactly where the board-specific assumptions
+were, and it now runs on every gate.
+
+The aperture is the reference one, `0x03F00000` for a megabyte, and the
+controller only claims readiness if that fits the machine's RAM -- a design
+advertising USB it cannot back would be a broken board. On the 128 MiB default
+that leaves 96 MiB of RAM *above* the pool, which is precisely the case §6.4's
+three-piece map exists for, so the gates now cover the shape that used to be
+wrong.
+
+**How it was proved rather than assumed.** All five gates passing does not by
+itself show the branch was taken -- it could equally mean nothing changed. So
+the aperture was deliberately broken in the model, by reporting a size that is
+not page aligned, and the machine answered `POST FAIL: USB DMA aperture`. The
+firmware is reading those registers and refusing a bad one, which is the
+statement the gates could not make before.
 
 ## 6.2 What was the open question, and is not any more
 

@@ -75,6 +75,36 @@
 
 #define SYS_STATUS_BASE          0x0000000fu
 #define SYS_STATUS_ASTRA_HOST    (1u << 5)
+#define SYS_STATUS_USB_READY     (1u << 6)
+
+/*
+ * The USB host controller, enough of it to be brought up.
+ *
+ * This models the register file and the reset handshake, not the wire: no
+ * transfer descriptors are walked and no device is attached, so nothing is
+ * ever transferred. That is deliberate and it is still worth having, because
+ * the thing that was untestable was never the data path -- it was everything
+ * that happens *before* one: the firmware validating the DMA aperture the
+ * controller reports, building a memory map with a device range in the middle
+ * of RAM, and the kernel resetting the controller and pointing it at an HCCA.
+ * All of that ran only on hardware until now, and all of it is where the
+ * board-specific assumptions were hiding.
+ *
+ * The aperture matches the guest's reference constants in sw/include/ohci.h.
+ * On a 32 MiB machine it is the top megabyte; on anything larger there is RAM
+ * above it, which is the case the firmware's map used to get wrong.
+ */
+#define ASTRA_OHCI_BASE          0xfff40000u
+#define ASTRA_OHCI_SIZE          0x1000u
+#define OHCI_ASTRA_ID_MAGIC      0x41555342u /* "AUSB" */
+#define OHCI_ASTRA_VERSION_1_0   0x00010000u
+#define OHCI_REVISION_1_0        0x10u
+#define OHCI_DMA_POOL_BASE       0x03f00000u
+#define OHCI_DMA_POOL_SIZE       0x00100000u
+#define OHCI_COMMAND_HCR         (1u << 0)
+#define OHCI_CONTROL_HCFS_MASK   (3u << 6)
+#define OHCI_CONTROL_HCFS_SUSPEND (3u << 6)
+#define OHCI_ASTRA_DMA_FAULT     (1u << 0)
 
 /*
  * AstraHost runtime block service, Vesta offsets 0x150..0x1b0. The register
@@ -273,6 +303,18 @@ struct Astra68State {
     MemoryRegion panel_io;
     MemoryRegion astraea_io;
     MemoryRegion vega_io;
+    MemoryRegion ohci_io;
+    struct {
+        bool present;
+        uint32_t control;
+        uint32_t command_status;
+        uint32_t interrupt_status;
+        uint32_t interrupt_enable;
+        uint32_t hcca;
+        uint32_t astra_status;
+        uint32_t pool_base;
+        uint32_t pool_size;
+    } ohci;
     uint8_t *sdram;
     uint32_t ram_size;
     uint64_t reset_clock_ns;
@@ -1045,7 +1087,8 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
     case 0x008: return 0x41363801;
     case 0x010:
         return SYS_STATUS_BASE |
-               (astra_block_present(s) ? SYS_STATUS_ASTRA_HOST : 0);
+               (astra_block_present(s) ? SYS_STATUS_ASTRA_HOST : 0) |
+               (s->ohci.present ? SYS_STATUS_USB_READY : 0);
     case 0x018: return s->scratch;
     case 0x01c: return 0x00068030;
     case 0x020: return 0x54474d32;
@@ -1604,6 +1647,79 @@ static void astra_mmio_write(void *opaque, hwaddr offset, uint64_t value,
                              unsigned size)                                  \
     { astra_mmio_write(opaque, offset, value, size, name##_write32); }
 
+/*
+ * Bringing the controller out of reset is the whole of what this models. The
+ * kernel writes HCR and then requires the controller to have cleared it, gone
+ * to SUSPEND, and dropped its HCCA pointer -- a self-clearing reset, which a
+ * plain register array cannot imitate, which is why platform.c carries a
+ * host-test branch that fakes it. Here it happens for real.
+ */
+static void astra_ohci_reset_controller(Astra68State *s)
+{
+    s->ohci.control = OHCI_CONTROL_HCFS_SUSPEND;
+    s->ohci.command_status = 0;
+    s->ohci.interrupt_status = 0;
+    s->ohci.interrupt_enable = 0;
+    s->ohci.hcca = 0;
+    s->ohci.astra_status = 0;
+}
+
+static uint32_t astra_ohci_read32(Astra68State *s, hwaddr offset)
+{
+    switch (offset) {
+    case 0x000: return OHCI_REVISION_1_0;
+    case 0x004: return s->ohci.control;
+    case 0x008: return s->ohci.command_status;
+    case 0x00c: return s->ohci.interrupt_status;
+    case 0x010: return s->ohci.interrupt_enable;
+    case 0x014: return s->ohci.interrupt_enable;
+    case 0x018: return s->ohci.hcca;
+    case 0xf00: return OHCI_ASTRA_ID_MAGIC;
+    case 0xf04: return OHCI_ASTRA_VERSION_1_0;
+    case 0xf08: return s->ohci.astra_status;
+    case 0xf0c: return 0;
+    case 0xf10: return s->ohci.pool_base;
+    case 0xf14: return s->ohci.pool_size;
+    default: return 0;
+    }
+}
+
+static void astra_ohci_write32(Astra68State *s, hwaddr offset, uint32_t value)
+{
+    switch (offset) {
+    case 0x004:
+        s->ohci.control = value;
+        break;
+    case 0x008:
+        /* HCR is self-clearing: the reset is complete before the write is. */
+        if ((value & OHCI_COMMAND_HCR) != 0) {
+            astra_ohci_reset_controller(s);
+        } else {
+            s->ohci.command_status = value;
+        }
+        break;
+    case 0x00c:
+        s->ohci.interrupt_status &= ~value;
+        break;
+    case 0x010:
+        s->ohci.interrupt_enable |= value;
+        break;
+    case 0x014:
+        s->ohci.interrupt_enable &= ~value;
+        break;
+    case 0x018:
+        s->ohci.hcca = value;
+        break;
+    case 0xf08:
+        if ((value & OHCI_ASTRA_DMA_FAULT) != 0) {
+            s->ohci.astra_status &= ~OHCI_ASTRA_DMA_FAULT;
+        }
+        break;
+    default:
+        break;
+    }
+}
+
 static uint32_t astra_vesta_read32_wrap(Astra68State *s, hwaddr o)
 { return astra_vesta_read32(s, o); }
 static void astra_vesta_write32_wrap(Astra68State *s, hwaddr o, uint32_t v)
@@ -1620,6 +1736,10 @@ static uint32_t astra_vega_read32_wrap(Astra68State *s, hwaddr o)
 { return astra_vega_read32(s, o); }
 static void astra_vega_write32_wrap(Astra68State *s, hwaddr o, uint32_t v)
 { astra_vega_write32(s, o, v); }
+static uint32_t astra_ohci_read32_wrap(Astra68State *s, hwaddr o)
+{ return astra_ohci_read32(s, o); }
+static void astra_ohci_write32_wrap(Astra68State *s, hwaddr o, uint32_t v)
+{ astra_ohci_write32(s, o, v); }
 
 #define astra_vesta_read32 astra_vesta_read32_wrap
 #define astra_vesta_write32 astra_vesta_write32_wrap
@@ -1641,6 +1761,11 @@ ASTRA_MMIO_WRAPPERS(astra_astraea)
 ASTRA_MMIO_WRAPPERS(astra_vega)
 #undef astra_vega_read32
 #undef astra_vega_write32
+#define astra_ohci_read32 astra_ohci_read32_wrap
+#define astra_ohci_write32 astra_ohci_write32_wrap
+ASTRA_MMIO_WRAPPERS(astra_ohci)
+#undef astra_ohci_read32
+#undef astra_ohci_write32
 
 #define ASTRA_OPS(name) {                         \
     .read = name##_read,                          \
@@ -1656,6 +1781,7 @@ static const MemoryRegionOps astra_vesta_ops = ASTRA_OPS(astra_vesta);
 static const MemoryRegionOps astra_panel_ops = ASTRA_OPS(astra_panel);
 static const MemoryRegionOps astra_astraea_ops = ASTRA_OPS(astra_astraea);
 static const MemoryRegionOps astra_vega_ops = ASTRA_OPS(astra_vega);
+static const MemoryRegionOps astra_ohci_ops = ASTRA_OPS(astra_ohci);
 
 /* Every guest-visible chip, including future audio/math devices, resets here. */
 static void astra_machine_reset(void *opaque)
@@ -1954,6 +2080,20 @@ static void astra68_init(MachineState *machine)
     memory_region_init_io(&s->vega_io, NULL, &astra_vega_ops, s,
                           "astra68.vega", ASTRA_VEGA_SIZE);
     memory_region_add_subregion(sysmem, ASTRA_VEGA_BASE, &s->vega_io);
+    /*
+     * The controller only claims to be ready if its aperture actually fits in
+     * this machine's RAM. A design that advertised USB it could not back would
+     * be a broken board, and the firmware would rightly refuse to boot on it.
+     */
+    s->ohci.pool_base = OHCI_DMA_POOL_BASE;
+    s->ohci.pool_size = OHCI_DMA_POOL_SIZE;
+    s->ohci.present =
+        (uint64_t)OHCI_DMA_POOL_BASE + OHCI_DMA_POOL_SIZE <=
+        (uint64_t)ASTRA_SDRAM_BASE + machine->ram_size;
+    astra_ohci_reset_controller(s);
+    memory_region_init_io(&s->ohci_io, NULL, &astra_ohci_ops, s,
+                          "astra68.ohci", ASTRA_OHCI_SIZE);
+    memory_region_add_subregion(sysmem, ASTRA_OHCI_BASE, &s->ohci_io);
 
     for (i = 0; i < 2; i++) {
         s->timers[i].machine = s;
