@@ -38,7 +38,8 @@ POSIX_LIB := $(POSIX)/build/m68k/libastraposix.a
 PICOLIBC_LIB := $(PICOLIBC)/lib/libc.a
 RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0.o
 
-COMMANDS := status events devices which hello ls ps cat mkdir rm posix
+COMMANDS := status events devices which hello ls ps cat mkdir rm posix \
+            heapbench
 # What the gate installs on the volume: stripped, the way the ROM's own image
 # is, because a command carries no more DWARF onto a card than the supervisor
 # carries into ROM. The unstripped ELF stays beside it for a debugger.

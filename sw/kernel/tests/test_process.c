@@ -3761,7 +3761,12 @@ static void test_real_stack_oom_rolls_back_thread_create(void)
     }
     assert(pressure_frames != 0u);
     assert(kernel_memory_stats(&exhausted));
-    assert(exhausted.free_frames == 0u);
+    /*
+     * The DMA zone stays free through this: it is reserved for contiguous
+     * device buffers and a scattered process allocation can never enter it,
+     * so "exhausted" means the general pool rather than the machine.
+     */
+    assert(exhausted.free_frames == exhausted.dma_zone_frames);
 
     registers[0] = ASTRA_SYSCALL_THREAD_CREATE;
     registers[1] = KERNEL_PROCESS_CODE_BASE + 2u;
@@ -3784,7 +3789,7 @@ static void test_real_stack_oom_rolls_back_thread_create(void)
     assert(after_process.supervisor_guard_pages ==
            before_process.supervisor_guard_pages);
     assert(kernel_memory_stats(&after_failure));
-    assert(after_failure.free_frames == 0u);
+    assert(after_failure.free_frames == after_failure.dma_zone_frames);
     assert(kernel_vm_stats(&after_vm));
     assert(after_vm.user_mappings == before_vm.user_mappings);
     assert(after_vm.user_table_pages == before_vm.user_table_pages);

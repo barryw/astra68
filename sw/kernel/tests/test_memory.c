@@ -413,7 +413,17 @@ static void test_exhaustion_and_checked_ranges(void)
     assert(kernel_memory_alloc(ASTRA_KERNEL_USABLE_SIZE / 0x1000u, 1u,
                                KERNEL_FRAME_PROCESS, 1u, &second) ==
            KERNEL_MEMORY_OK);
-    assert(kernel_memory_alloc(160u, 1u, KERNEL_FRAME_PROCESS, 1u, &third) ==
+    /*
+     * The tail region, less the two reservations that live at the top of
+     * memory: the emergency frames and the DMA zone. Derived rather than
+     * written out, because both are policy numbers and a literal here would
+     * have to be found and changed every time one of them moved.
+     */
+    assert(kernel_memory_stats(&stats));
+    assert(kernel_memory_alloc((0xc0000u / 0x1000u) -
+                                   KERNEL_EMERGENCY_RESERVE_FRAMES -
+                                   stats.dma_zone_frames,
+                               1u, KERNEL_FRAME_PROCESS, 1u, &third) ==
            KERNEL_MEMORY_OK);
     assert(first == ASTRA_USER_IMAGE_ADDRESS);
     assert(second == ASTRA_KERNEL_USABLE_ADDRESS);
@@ -421,7 +431,12 @@ static void test_exhaustion_and_checked_ranges(void)
     assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 1u, &extra) ==
            KERNEL_MEMORY_OUT_OF_MEMORY);
     assert(kernel_memory_stats(&stats));
-    assert(stats.free_frames == 0u);
+    /*
+     * The zone's frames are still free -- they are unspent, not blocked --
+     * they are simply not free to *this* kind of allocation, which is the
+     * whole of what reserving them means.
+     */
+    assert(stats.free_frames == stats.dma_zone_frames);
     assert(stats.allocation_failures == 1u);
     assert(kernel_memory_alloc(1u, 3u, KERNEL_FRAME_PROCESS, 1u, &extra) ==
            KERNEL_MEMORY_INVALID_ARGUMENT);
@@ -459,10 +474,14 @@ static void test_emergency_reserve_isolated_and_replenished(void)
     assert(kernel_memory_alloc(ASTRA_KERNEL_USABLE_SIZE / 0x1000u, 1u,
                                KERNEL_FRAME_PROCESS, 1u,
                                &second) == KERNEL_MEMORY_OK);
-    assert(kernel_memory_alloc(160u, 1u, KERNEL_FRAME_PROCESS, 1u, &third) ==
+    /* The tail, less the emergency frames and the DMA zone above it. */
+    assert(kernel_memory_alloc((0xc0000u / 0x1000u) -
+                                   KERNEL_EMERGENCY_RESERVE_FRAMES -
+                                   baseline.dma_zone_frames,
+                               1u, KERNEL_FRAME_PROCESS, 1u, &third) ==
            KERNEL_MEMORY_OK);
     assert(kernel_memory_stats(&exhausted));
-    assert(exhausted.free_frames == 0u);
+    assert(exhausted.free_frames == baseline.dma_zone_frames);
     assert(exhausted.emergency_available_frames ==
            KERNEL_EMERGENCY_RESERVE_FRAMES);
 
@@ -484,7 +503,8 @@ static void test_emergency_reserve_isolated_and_replenished(void)
                KERNEL_FRAME_PROCESS, 2u, &extra) ==
            KERNEL_MEMORY_OUT_OF_MEMORY);
     assert(kernel_memory_stats(&borrowed));
-    assert(borrowed.free_frames == 0u);
+    /* The DMA zone is untouched by any of this; it is not general memory. */
+    assert(borrowed.free_frames == baseline.dma_zone_frames);
     assert(borrowed.emergency_available_frames == 0u);
     assert(borrowed.emergency_acquisitions ==
            KERNEL_EMERGENCY_RESERVE_FRAMES);
@@ -499,7 +519,7 @@ static void test_emergency_reserve_isolated_and_replenished(void)
     assert(kernel_memory_release_owner(2u, &released) == KERNEL_MEMORY_OK);
     assert(released == KERNEL_EMERGENCY_RESERVE_FRAMES);
     assert(kernel_memory_stats(&restored));
-    assert(restored.free_frames == 0u);
+    assert(restored.free_frames == baseline.dma_zone_frames);
     assert(restored.emergency_available_frames ==
            KERNEL_EMERGENCY_RESERVE_FRAMES);
     assert(kernel_allocation_site_stats(
@@ -510,7 +530,8 @@ static void test_emergency_reserve_isolated_and_replenished(void)
     assert(cleanup_stats.current_units == 0u);
 
     assert(kernel_memory_release_owner(1u, &released) == KERNEL_MEMORY_OK);
-    assert(released == baseline.free_frames);
+    /* Owner 1 never held the zone, so it cannot give it back. */
+    assert(released == baseline.free_frames - baseline.dma_zone_frames);
     assert(kernel_memory_stats(&restored));
     assert(restored.free_frames == baseline.free_frames);
     assert(restored.emergency_available_frames ==
@@ -675,6 +696,82 @@ static void test_retained_log_is_allocation_free_under_pressure(void)
     assert(kernel_allocation_valid());
 }
 
+/*
+ * Whether physical fragmentation is a real risk on this machine or only a
+ * theoretical one, which is the question section 5 item 5 of
+ * HANDOVER-memory-and-modernity.md has to answer before choosing between a
+ * buddy allocator, a reserved zone, and doing nothing.
+ *
+ * The whole kernel asks for exactly one contiguous multi-frame run: DMA. The
+ * display's framebuffer is ASTRA_RENDER_BUILDER_BYTES, 256 KiB, which is 64
+ * frames at alignment one, and a block transfer is two. Everything else --
+ * stacks, code pages, page tables, library pages, and every page of an area --
+ * asks for one frame at a time and does not care where it lands.
+ *
+ * So this combs the frame map and then asks for the display's 64. If that can
+ * fail, a display service restarting at hour six can fail, and the answer is
+ * worth building. If it cannot, the whole item is theatre.
+ */
+static void test_contiguous_demand_survives_a_combed_frame_map(void)
+{
+    static uint32_t every_frame[KERNEL_MAX_FRAMES];
+    AstraBootInfo info;
+    KernelMemoryStats before;
+    KernelMemoryStats after_comb;
+    KernelMemoryStats stats;
+    uint32_t taken;
+    uint32_t framebuffer = 0u;
+    uint32_t transfer = 0u;
+
+    make_valid_info(&info);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&before));
+    assert(kernel_memory_stats(&stats));
+    /* Everything the general pool can reach -- the zone is not part of it. */
+    taken = before.free_frames - before.dma_zone_frames;
+    /*
+     * Every free frame, one at a time, the way every non-DMA allocation on
+     * this machine takes them.
+     */
+    assert(kernel_memory_alloc_pages_zeroed(
+               taken, KERNEL_FRAME_PROCESS, 70u, every_frame) ==
+           KERNEL_MEMORY_OK);
+    /* Then half of them back, alternating: the worst case, and a reachable
+     * one -- it is what a long run of processes starting and exiting tends
+     * toward. */
+    for (uint32_t index = 0u; index < taken; index += 2u)
+        assert(kernel_memory_release(every_frame[index], 1u, 70u) ==
+               KERNEL_MEMORY_OK);
+
+    /*
+     * Half the machine is free and, outside the zone, the largest run in it is
+     * one frame -- so this is the hour-six state the zone exists for.
+     *
+     * Both still succeed, and that is the whole result: the frames come from
+     * the reserved zone, which the comb above could never reach because the
+     * scattered path is not allowed into it. Without the zone this same test
+     * refused a two-frame transfer.
+     */
+    assert(kernel_memory_stats(&after_comb));
+    assert(after_comb.dma_zone_frames == KERNEL_DMA_ZONE_FRAMES);
+    assert(kernel_memory_alloc(2u, 1u, KERNEL_FRAME_DMA, 71u, &transfer) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc(64u, 1u, KERNEL_FRAME_DMA, 71u,
+                               &framebuffer) == KERNEL_MEMORY_OK);
+    /* Both landed inside the zone rather than in the combed general pool. */
+    {
+        uint32_t zone_base = stats.ram_base +
+            after_comb.dma_zone_first * KERNEL_PAGE_SIZE;
+        uint32_t zone_end = zone_base +
+            after_comb.dma_zone_frames * KERNEL_PAGE_SIZE;
+
+        assert(transfer >= zone_base && transfer < zone_end);
+        assert(framebuffer >= zone_base && framebuffer < zone_end);
+    }
+    assert(kernel_memory_release_owner(70u, NULL) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_release_owner(71u, NULL) == KERNEL_MEMORY_OK);
+}
+
 int main(void)
 {
     test_initial_map();
@@ -691,6 +788,7 @@ int main(void)
     test_emergency_reserve_isolated_and_replenished();
     test_emergency_site_injection_is_atomic();
     test_retained_log_is_allocation_free_under_pressure();
+    test_contiguous_demand_survives_a_combed_frame_map();
     test_tagged_failure_injection_and_boot_retirement();
     puts("KERNEL MEMORY PASS");
     return 0;

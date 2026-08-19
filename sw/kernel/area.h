@@ -19,7 +19,30 @@
 #define KERNEL_AREA_OWNER_MAX 8u
 #define KERNEL_AREA_PAGE_MAX \
     (KERNEL_VM_AREA_SLOT_SIZE / KERNEL_PAGE_SIZE)
-#define KERNEL_AREA_OWNER_PAGE_MAX KERNEL_AREA_PAGE_MAX
+/*
+ * What one owner may have *committed* across all of its areas.
+ *
+ * This was one slot's worth -- 512 pages -- from when creating an area
+ * committed it, so reserving and spending were the same act and one number
+ * could bound both. They are different acts now, and the number that bounds
+ * reservations is KERNEL_AREA_OWNER_MAX: eight slots of address space, which
+ * is free. So this bounds only frames, and it is the owner's whole allowance
+ * rather than one slot of it, because a program with a large heap should not
+ * thereby lose its ability to hold a surface.
+ *
+ * Sized against a measurement rather than a feeling. `heapbench` runs
+ * editor-shaped churn -- many small objects, mixed lifetimes, occasional
+ * large buffers -- and its peak footprint is 169 pages, 688 KiB, for 403 KiB
+ * live. At the old 512 that left 343 pages for everything else a program
+ * holds, and a 640x480 surface is 75 of them; two windows and a couple of
+ * transfer areas and an editor is refused a buffer it should have had. At
+ * 4096 the owner's frames are bounded by the address space it was already
+ * allowed to name, and what actually refuses is
+ * KERNEL_AREA_SYSTEM_PAGE_MAX -- 16384 pages, half the machine -- and then
+ * the free frame count, which are the honest limits.
+ */
+#define KERNEL_AREA_OWNER_PAGE_MAX \
+    (KERNEL_AREA_OWNER_MAX * KERNEL_AREA_PAGE_MAX)
 #define KERNEL_AREA_SYSTEM_PAGE_MAX (KERNEL_AREA_MAX * KERNEL_AREA_PAGE_MAX)
 /*
  * Every area slot, aliased into every process. Bounded by the process count
