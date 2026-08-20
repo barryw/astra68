@@ -1,0 +1,141 @@
+ext4 timestamps: stamp inodes from a port-supplied clock
+
+Upstream writes zero into every timestamp of every inode it creates, and the
+code that would set them is a comment saying "TODO ... when we have wall-clock
+time". A machine that does have one then cannot tell a file written this
+minute from one written last year: `ls -l` shows no date at all for everything
+the machine itself wrote, and only for those, because a volume populated by
+mke2fs carries the dates mke2fs wrote.
+
+Add the hook the TODO was waiting for -- CONFIG_USE_USER_TIME and
+ext4_user_now(), the same shape the allocator hooks already have -- and stamp
+at the four points that matter: inode creation, a successful write, and the
+directory on both sides of a link and an unlink. A port that supplies no clock
+gets upstream's behaviour exactly, zero, which is honest: a listing with no
+date says nothing, and a listing dated 1970 says something false.
+
+Covered by sw/userspace/storage's `make ext4-test`, which binds the host's
+clock and requires a written file and its directory to carry a time near now;
+against unpatched upstream it fails with `FAIL mtime 0 is not near now`.
+
+diff --git a/include/ext4_config.h b/include/ext4_config.h
+--- a/include/ext4_config.h
++++ b/include/ext4_config.h
+@@ -169,6 +169,18 @@ extern "C" {
+ 
+ /**@brief Switches use of malloc/free functions family
+  *        from standard library to user provided*/
++/*
++ * ASTRA: where the wall clock comes from.
++ *
++ * Upstream stamps nothing -- every inode it creates carries zero for all three
++ * times, and the code that would set them is a comment saying "when we have
++ * wall-clock time". A port that does have one sets this and supplies
++ * ext4_user_now(); one that does not gets upstream's behaviour exactly.
++ */
++#ifndef CONFIG_USE_USER_TIME
++#define CONFIG_USE_USER_TIME 0
++#endif
++
+ #ifndef CONFIG_USE_USER_MALLOC
+ #define CONFIG_USE_USER_MALLOC 0
+ #endif
+diff --git a/include/ext4_types.h b/include/ext4_types.h
+--- a/include/ext4_types.h
++++ b/include/ext4_types.h
+@@ -820,6 +820,18 @@ struct jbd_sb {
+ #endif
+ 
+ 
++/*
++ * ASTRA: seconds since the epoch, or zero on a machine that does not know.
++ * Zero is what upstream wrote into every timestamp, so a build without a clock
++ * keeps writing exactly that -- and a listing showing no date is the truth
++ * rather than a claim that everything was made in 1970.
++ */
++#if CONFIG_USE_USER_TIME
++#define ext4_now() ext4_user_now()
++#else
++#define ext4_now() ((uint32_t)0)
++#endif
++
+ #if CONFIG_USE_USER_MALLOC
+ 
+ #define ext4_malloc  ext4_user_malloc
+diff --git a/src/ext4.c b/src/ext4.c
+--- a/src/ext4.c
++++ b/src/ext4.c
+@@ -227,6 +227,11 @@ static int ext4_link(struct ext4_mountpoint *mp, struct ext4_inode_ref *parent,
+ 	if (r != EOK)
+ 		return r;
+ 
++	/* ASTRA: the directory just changed, so it carries the time it did. */
++	ext4_inode_set_change_inode_time(parent->inode, ext4_now());
++	ext4_inode_set_modif_time(parent->inode, ext4_now());
++	parent->dirty = true;
++
+ 	/* Fill new dir -> add '.' and '..' entries.
+ 	 * Also newly allocated inode should have 0 link count.
+ 	 */
+@@ -336,20 +341,15 @@ static int ext4_unlink(struct ext4_mountpoint *mp,
+ 	}
+ 
+ 	/*
+-	 * TODO: Update timestamps of the parent
+-	 * (when we have wall-clock time).
+-	 *
+-	 * ext4_inode_set_change_inode_time(parent->inode, (uint32_t) now);
+-	 * ext4_inode_set_modification_time(parent->inode, (uint32_t) now);
+-	 * parent->dirty = true;
++	 * ASTRA: the directory changed, so it is stamped. This was upstream's
++	 * "when we have wall-clock time" TODO; the machine has one now.
+ 	 */
++	ext4_inode_set_change_inode_time(parent->inode, ext4_now());
++	ext4_inode_set_modif_time(parent->inode, ext4_now());
++	parent->dirty = true;
+ 
+-	/*
+-	 * TODO: Update timestamp for inode.
+-	 *
+-	 * ext4_inode_set_change_inode_time(child->inode,
+-	 *     (uint32_t) now);
+-	 */
++	ext4_inode_set_change_inode_time(child->inode, ext4_now());
++	child->dirty = true;
+ 	if (ext4_inode_get_links_cnt(child->inode)) {
+ 		ext4_fs_inode_links_count_dec(child);
+ 		child->dirty = true;
+@@ -2071,6 +2071,16 @@ out_fsize:
+ 	}
+ 
+ Finish:
++	/*
++	 * Astra patch 0007: a write is what mtime means. Stamped here rather
++	 * than per block, so one write costs one inode update whatever it
++	 * covered, and only when the write actually succeeded.
++	 */
++	if (r == EOK) {
++		ext4_inode_set_modif_time(ref.inode, ext4_now());
++		ext4_inode_set_change_inode_time(ref.inode, ext4_now());
++		ref.dirty = true;
++	}
+ 	/*
+ 	 * Astra patch 0004: do not let the inode-ref release overwrite the
+ 	 * error the write itself produced. ext4_fread already keeps them
+diff --git a/src/ext4_fs.c b/src/ext4_fs.c
+--- a/src/ext4_fs.c
++++ b/src/ext4_fs.c
+@@ -912,9 +912,10 @@ int ext4_fs_alloc_inode(struct ext4_fs *fs, struct ext4_inode_ref *inode_ref,
+ 	ext4_inode_set_uid(inode, 0);
+ 	ext4_inode_set_gid(inode, 0);
+ 	ext4_inode_set_size(inode, 0);
+-	ext4_inode_set_access_time(inode, 0);
+-	ext4_inode_set_change_inode_time(inode, 0);
+-	ext4_inode_set_modif_time(inode, 0);
++	/* ASTRA: a new inode is stamped with now, not with the epoch. */
++	ext4_inode_set_access_time(inode, ext4_now());
++	ext4_inode_set_change_inode_time(inode, ext4_now());
++	ext4_inode_set_modif_time(inode, ext4_now());
+ 	ext4_inode_set_del_time(inode, 0);
+ 	ext4_inode_set_blocks_count(&fs->sb, inode, 0);
+ 	ext4_inode_set_flags(inode, 0);

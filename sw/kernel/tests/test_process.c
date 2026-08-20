@@ -488,6 +488,17 @@ uint64_t kernel_platform_monotonic_ns(void)
     return scheduler_test_cycles * KERNEL_PLATFORM_NS_PER_CPU_CYCLE;
 }
 
+static bool wall_clock_valid;
+static uint64_t wall_clock_ns;
+
+bool kernel_platform_wall_clock_ns(uint64_t *nanoseconds)
+{
+    if (nanoseconds == NULL || !wall_clock_valid)
+        return false;
+    *nanoseconds = wall_clock_ns;
+    return true;
+}
+
 bool kernel_platform_deadline_to_cycles(int64_t deadline_ns,
                                         uint64_t *deadline_cycles)
 {
@@ -1974,6 +1985,58 @@ static void test_multi_page_raw_image_maps_every_page(void)
     /* And the data page is writable wherever the image ended. */
     assert(kernel_vm_test_translate_current(KERNEL_PROCESS_DATA_BASE, true,
                                             &physical));
+}
+
+/*
+ * The two clocks a program can ask for, and what a machine without one says.
+ *
+ * Monotonic and realtime answer in the same shape and mean different things.
+ * The refusal is the part worth pinning: a machine with no date must not
+ * answer zero, because a program that writes that into a file has recorded
+ * midnight in 1970 as though it were a fact.
+ */
+static void test_clock_syscalls_report_time_and_its_absence(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, KERNEL_PROCESS_CODE_BASE, 0u);
+
+    scheduler_test_cycles = 12500000u;
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CLOCK_MONOTONIC;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(((uint64_t)next->data[1] << 32 | next->data[2]) ==
+           (uint64_t)scheduler_test_cycles * KERNEL_PLATFORM_NS_PER_CPU_CYCLE);
+
+    wall_clock_valid = false;
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CLOCK_REALTIME;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_UNSUPPORTED);
+
+    wall_clock_valid = true;
+    wall_clock_ns = UINT64_C(1755648000) * 1000000000u + 123u;
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CLOCK_REALTIME;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(((uint64_t)next->data[1] << 32 | next->data[2]) == wall_clock_ns);
+    wall_clock_valid = false;
 }
 
 static void test_sync_syscall_rights_and_stale_handles(void)
@@ -8225,6 +8288,7 @@ int main(void)
     test_soak_rejects_unexplained_frame_loss();
     test_invalid_creation_does_not_allocate();
     test_multi_page_raw_image_maps_every_page();
+    test_clock_syscalls_report_time_and_its_absence();
     test_sync_syscall_rights_and_stale_handles();
     test_irq_syscalls_waits_rights_and_owner_cleanup();
     test_device_lease_syscalls_rights_and_owner_cleanup();

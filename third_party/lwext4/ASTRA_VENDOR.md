@@ -79,7 +79,7 @@ so a future fix has somewhere to land.
 
 ## Astra68 changes to upstream files
 
-Six upstream defect fixes are applied **in-tree**. The patches are retained
+Seven upstream defect fixes are applied **in-tree**. The patches are retained
 verbatim under `astra/patches/` as the audit record and as the re-apply path
 for a future upstream bump.
 
@@ -90,6 +90,7 @@ for a future upstream bump.
 | `0003-be-htree-hash-seed.patch` | `src/ext4_hash.c:270` | `s_hash_seed` is an on-disk little-endian array `memcpy`'d straight into the host hash state, so every htree hash is wrong on big-endian. |
 | `0004-fwrite-error-masked-by-inode-ref-release.patch` | `src/ext4.c:2009` | `ext4_fwrite`'s `Finish:` did `r = ext4_fs_put_inode_ref(&ref)`, discarding the write's own error. ENOSPC and device EIO both returned `EOK`, and the failing write took the `ext4_trans_stop` branch, committing a transaction whose write had not happened. |
 | `0005-cache-file-data.patch` | `src/ext4.c:1669` | `ext4_fread` and partial file writes bypassed the block cache, so unchanged file data was reread and partial writes performed uncached read-modify-write cycles. Reads and partial writes now use the coherent cache; direct full-block writes invalidate cached copies. |
+| `0007-inode-timestamps.patch` | `src/ext4_fs.c:915`, `src/ext4.c:230`, `src/ext4.c:2070` | Every inode upstream creates carries zero for access, change and modification time, and the code that would set them is a `TODO ... when we have wall-clock time`. Astra has one, so `CONFIG_USE_USER_TIME` and `ext4_user_now()` -- the shape the allocator hooks already use -- and stamps at creation, on a successful write, and on the directory either side of a link or unlink. A port with no clock still gets zero. |
 | `0006-dx-lookup-dot-entries.patch` | `src/ext4_dir.c:459` | `ext4_dir_find_entry` answered ENOENT for `.` and `..` in an indexed directory: neither is in the hash tree, and block 0 -- where both live -- is the index root rather than a leaf the hash walk reaches. Every directory lwext4 created was affected, because it indexes every directory it makes; a directory `mke2fs` wrote was not. The two dot names take the linear walk. |
 
 Defect 0003 is invisible against lwext4's own `mkfs`, which leaves
@@ -100,6 +101,10 @@ Defect 0004 is the first of these that is not endian-specific: it is wrong
 everywhere, and `ext4_fread` in the same file already does it correctly. It is
 covered by `make ext4-test` mode `full`, which fills a volume and fails against
 unpatched upstream with `ext4_fwrite returned EOK having moved 0 of 4096`.
+
+Patch 0007 is a feature rather than a defect fix, and it is the only one of
+these that upstream would recognise as its own plan: the TODO naming the
+missing clock is upstream's.
 
 Defect 0006 is also endian-independent, and it is invisible to a caller that
 resolves paths the way Linux does -- the VFS answers `.` and `..` itself and

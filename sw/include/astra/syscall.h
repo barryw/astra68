@@ -123,6 +123,22 @@
 #define ASTRA_SYSCALL_AREA_DECOMMIT    54
 
 /*
+ * The date: nanoseconds since the Unix epoch, high half in data[1] and low in
+ * data[2], the same shape ASTRA_SYSCALL_CLOCK_MONOTONIC answers in.
+ *
+ * The two clocks are different things and both are needed. Monotonic never
+ * goes backwards and is what a timeout is measured against; this one is what
+ * a file's timestamp and a person's question are about, and it moves whenever
+ * the machine's clock is corrected.
+ *
+ * A machine that does not know the date answers ASTRA_SYSCALL_UNSUPPORTED
+ * rather than zero, because zero is a real instant -- and a program that
+ * cannot tell "midnight in 1970" from "no idea" writes the first one into a
+ * file and calls it a timestamp.
+ */
+#define ASTRA_SYSCALL_CLOCK_REALTIME   55
+
+/*
  * The most one call copies. Small on purpose: a drain is a bounded page and a
  * cursor like every other enumeration here, and the batch is what a kernel
  * stack can hold without asking anyone's permission -- 8 * 56 bytes.
@@ -185,6 +201,12 @@
 #define ASTRA_SYSCALL_IO_ERROR         12
 #define ASTRA_SYSCALL_CLOSED           13
 #define ASTRA_SYSCALL_BUFFER_TOO_SMALL 14
+/*
+ * The machine cannot answer this at all -- not a refusal, not a failure, and
+ * not something a retry changes. A machine with no wall clock says this to
+ * ASTRA_SYSCALL_CLOCK_REALTIME.
+ */
+#define ASTRA_SYSCALL_UNSUPPORTED      15
 
 #ifndef ASTRA_RIGHTS_DEFINED
 #define ASTRA_RIGHTS_DEFINED 1

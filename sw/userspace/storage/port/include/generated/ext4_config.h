@@ -86,6 +86,16 @@ void *ext4_user_calloc(size_t count, size_t size);
 void ext4_user_free(void *pointer);
 
 /*
+ * The machine knows what day it is, so the filesystem stamps what it writes.
+ * ext4_user_now is bound by whoever stands the filesystem up; see
+ * astra/ext4_time.h. Declared here for the same reason the allocator is:
+ * lwext4 defines the macro and never the function.
+ */
+#define CONFIG_USE_USER_TIME 1
+#include <stdint.h>
+uint32_t ext4_user_now(void);
+
+/*
  * lwext4's own errno set has no EBUSY, and the port needs one to report a
  * re-entrant block-device lock. The value matches every platform Astra builds
  * on, so the host and target builds agree.

@@ -62,6 +62,7 @@ uint32_t astra_progress(uint32_t value);
 uint32_t astra_device_query(uint32_t handle, AstraDeviceInfo *info);
 uint32_t astra_device_reset(uint32_t handle);
 uint64_t astra_clock_monotonic(void);
+uint32_t astra_clock_realtime(uint64_t *nanoseconds);
 uint32_t astra_wait_one(uint32_t handle, uint64_t deadline_ns,
                         uint32_t *detail);
 uint32_t astra_wait_multiple(const uint32_t *handles, uint32_t count,

@@ -144,7 +144,11 @@ typedef volatile struct {
     uint32_t IRQ_CFG[32];    // 0x380..0x3FF
     // timers 0x400
     VestaTimer TIMER[2];     // 0x400..0x41F
-    uint32_t _r3[(0x500 - 0x420) / 4];
+    // wall clock 0x420
+    uint32_t RTC_STATUS;     // 0x420 RTC_VALID when the date is known
+    uint32_t RTC_NS_LO;      // 0x424 read latches the coherent 64-bit value
+    uint32_t RTC_NS_HI;      // 0x428 upper half of the LO-read snapshot
+    uint32_t _r3[(0x500 - 0x42C) / 4];
     // UART 0x500
     uint32_t UART_DATA;      // 0x500
     uint32_t UART_STATUS;    // 0x504
@@ -334,6 +338,21 @@ typedef volatile struct {
 #define TMR_PRESCALE(n) (((n) & 0xF) << 4)
 #define TMR_EXPIRED     (1u << 0)
 
+/*
+ * ---- RTC_STATUS ----
+ *
+ * The date, in nanoseconds since the Unix epoch, from whatever keeps time for
+ * this machine: a host clock disciplined by NTP under the emulator and on the
+ * board, a battery-backed part on hardware that has one. RTC_VALID is the
+ * difference between a machine that knows what day it is and one that does
+ * not, and zero is not the answer to that question -- an unset clock reads as
+ * invalid rather than as 1970.
+ *
+ * Reading RTC_NS_LO latches the pair, the same contract CPU_CYCLES uses, so a
+ * 64-bit value cannot be torn across the two halves.
+ */
+#define RTC_VALID       (1u << 0)
+
 // ---- Generic input queue ----
 #define INPUT_ID_MAGIC 0x494E5054u // "INPT"
 #define INPUT_VERSION_1_0 0x00010000u
@@ -408,6 +427,10 @@ _Static_assert(offsetof(VestaRegs, IRQ_PENDING) == 0x300u,
                "Vesta IRQ ABI offset");
 _Static_assert(offsetof(VestaRegs, TIMER) == 0x400u,
                "Vesta timer ABI offset");
+_Static_assert(offsetof(VestaRegs, RTC_STATUS) == 0x420u,
+               "Vesta wall-clock ABI offset");
+_Static_assert(offsetof(VestaRegs, RTC_NS_HI) == 0x428u,
+               "Vesta wall-clock upper-half ABI offset");
 _Static_assert(offsetof(VestaRegs, INPUT_ID) == 0x700u,
                "Vesta input ABI offset");
 _Static_assert(offsetof(VestaRegs, INPUT_POP) == 0x724u,

@@ -261,6 +261,31 @@ static void test_monotonic_nanosecond_deadline_conversion(void)
            (uint64_t)INT64_MAX - 1u);
 }
 
+/*
+ * The date, and the difference between not knowing it and 1970.
+ *
+ * A machine whose clock is not running answers false, and the caller is
+ * expected to say so rather than stamp a file with the epoch. The two halves
+ * are read separately, so the composition is worth pinning: a swap here is a
+ * date 136 years out and nothing else notices.
+ */
+static void test_wall_clock_read_and_absence(void)
+{
+    VestaRegs *registers = kernel_platform_test_registers();
+    uint64_t nanoseconds = 0x5a5a5a5au;
+
+    clear_registers(registers);
+    assert(!kernel_platform_wall_clock_ns(&nanoseconds));
+    assert(nanoseconds == 0x5a5a5a5au);
+
+    registers->RTC_STATUS = RTC_VALID;
+    registers->RTC_NS_LO = 0x89abcdefu;
+    registers->RTC_NS_HI = 0x01234567u;
+    assert(kernel_platform_wall_clock_ns(&nanoseconds));
+    assert(nanoseconds == UINT64_C(0x0123456789abcdef));
+    assert(!kernel_platform_wall_clock_ns(NULL));
+}
+
 static void test_fenced_display_transport(void)
 {
     VestaRegs *registers = kernel_platform_test_registers();
@@ -439,6 +464,7 @@ int main(void)
     test_typed_identity_console_and_device_queries();
     test_sticky_bus_fault_snapshot_and_acknowledge();
     test_monotonic_nanosecond_deadline_conversion();
+    test_wall_clock_read_and_absence();
     test_fenced_display_transport();
     test_production_irq_qualification_controls();
     assert(interrupt_save_count != 0u);

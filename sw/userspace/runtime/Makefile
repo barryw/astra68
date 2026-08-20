@@ -16,7 +16,12 @@ TARGET_C_SOURCES := src/startup.c src/arguments.c src/syscall.c src/launch.c src
 	src/event_control.c src/memory.c \
 	src/log.c src/sort.c src/assert.c src/event_catalog.c src/library.c
 TARGET_ASM_SOURCES := src/m68k/syscall.S
+# The calendar is shared with the kernel rather than copied into userspace:
+# `ls -l`, `date` and the boot line render the same instant, and two
+# implementations of a leap year is one too many.
+COMMON_C_SOURCES := ../../common/civil.c
 TARGET_OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(TARGET_C_SOURCES)) \
+	$(patsubst ../../common/%.c,build/m68k/common_%.o,$(COMMON_C_SOURCES)) \
 	$(patsubst src/%.S,build/m68k/%.o,$(TARGET_ASM_SOURCES))
 TARGET := build/m68k/libastrart.a
 CRT0 := build/m68k/crt0.o
@@ -29,6 +34,10 @@ $(TARGET): $(TARGET_OBJECTS)
 	$(AR) rcs $@ $^
 
 build/m68k/%.o: src/%.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
+
+build/m68k/common_%.o: ../../common/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
 

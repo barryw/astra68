@@ -109,7 +109,8 @@ OBJECTS = $(BUILD_DIR)/entry.o $(BUILD_DIR)/vectors.o \
           $(BUILD_DIR)/exception.o \
           $(BUILD_DIR)/user_copy.o \
           $(BUILD_DIR)/user_copy_asm.o \
-          $(BUILD_DIR)/boot_contract.o
+          $(BUILD_DIR)/boot_contract.o \
+          $(BUILD_DIR)/civil.o
 
 all: astra_kernel.elf astra_kernel.bin
 
@@ -283,6 +284,9 @@ $(BUILD_DIR)/user_copy_asm.o: user_copy.S user_copy.h | $(BUILD_DIR)
 $(BUILD_DIR)/boot_contract.o: ../common/boot_contract.c ../include/astra/boot.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
+$(BUILD_DIR)/civil.o: ../common/civil.c ../include/astra/civil.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
 astra_kernel.elf: $(OBJECTS) kernel.ld
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS)
 
@@ -298,7 +302,8 @@ verify: astra_kernel.elf astra_kernel.bin
 	  test $$bytes -le $$((0x80000)); \
 	  printf 'kernel payload: %s bytes\n' "$$bytes"
 
-test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_allocation \
+test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_civil \
+      $(BUILD_DIR)/test_allocation \
       $(BUILD_DIR)/test_memory \
       $(BUILD_DIR)/test_mmio $(BUILD_DIR)/test_trace $(BUILD_DIR)/test_irq \
       $(BUILD_DIR)/test_platform $(BUILD_DIR)/test_interrupt \
@@ -315,6 +320,7 @@ test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_allocation \
       $(BUILD_DIR)/test_process $(BUILD_DIR)/test_worker \
       $(BUILD_DIR)/test_dispatch $(BUILD_DIR)/test_elf
 	./$(BUILD_DIR)/test_boot_contract
+	./$(BUILD_DIR)/test_civil
 	./$(BUILD_DIR)/test_allocation
 	./$(BUILD_DIR)/test_memory
 	./$(BUILD_DIR)/test_mmio
@@ -349,6 +355,11 @@ $(BUILD_DIR)/test_elf: tests/test_elf.c elf.c elf.h bytes.c bytes.h \
                        memory.h process.h vm.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I. \
 		-I../include bytes.c elf.c tests/test_elf.c -o $@
+
+$(BUILD_DIR)/test_civil: tests/test_civil.c ../common/civil.c \
+                         ../include/astra/civil.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I../include \
+		../common/civil.c tests/test_civil.c -o $@
 
 $(BUILD_DIR)/test_boot_contract: tests/test_boot_contract.c \
                                   ../common/boot_contract.c \

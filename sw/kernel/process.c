@@ -5488,6 +5488,24 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         thread->context.data[2] = (uint32_t)nanoseconds;
         break;
     }
+    case ASTRA_SYSCALL_CLOCK_REALTIME: {
+        uint64_t nanoseconds = 0u;
+
+        /*
+         * Read at the moment it is asked for, not derived from a boot-time
+         * sample and the monotonic counter. The clock this machine reads is
+         * kept right by something else -- NTP, one layer down -- and a value
+         * carried forward from boot would answer with this machine's own
+         * drift rather than with the correction.
+         */
+        if (!kernel_platform_wall_clock_ns(&nanoseconds)) {
+            result = ASTRA_SYSCALL_UNSUPPORTED;
+            break;
+        }
+        thread->context.data[1] = (uint32_t)(nanoseconds >> 32);
+        thread->context.data[2] = (uint32_t)nanoseconds;
+        break;
+    }
     case ASTRA_SYSCALL_EVENT_CREATE:
     case ASTRA_SYSCALL_SEMAPHORE_CREATE: {
         KernelSyncObject *object = NULL;

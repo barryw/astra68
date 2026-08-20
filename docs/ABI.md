@@ -136,6 +136,8 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 51 | `DISPLAY_SUBMIT` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=aligned AstraDisplayFrameRequest`; submits one nonzero fenced solid, RGB565 DMA-frame, or bounded native Astraea render-batch request |
 | 52 | `DISPLAY_COLLECT` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=aligned AstraDisplayFrameCompletion`; returns `WOULD_BLOCK` until the submitted fence completes |
 | 53 | `LIBRARY_MAP` | CURRENT CANDIDATE | `D1=library image`, `D2=image bytes`, `D3:D4=base/span outputs`; validates the constrained ELF image and maps shared R/RX plus process-private RW pages into one versioned library slot |
+| 54 | `AREA_DECOMMIT` | CURRENT CANDIDATE | `D1=address`, `D2=length`; releases the committed pages inside a reservation and returns how many went |
+| 55 | `CLOCK_REALTIME` | CURRENT CANDIDATE | returns the date as nanoseconds since the Unix epoch in `D1:D2` (high:low); `UNSUPPORTED` when the machine's wall clock is not valid, never zero |
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
 not panic. `QUERY_ABI` reports revision `0x00010010`; a later revision may add
@@ -269,6 +271,7 @@ values. The initial common set is:
 | 12 | I/O or physical bus failure |
 | 13 | object closed while an operation was pending |
 | 14 | output message or handle capacity is too small |
+| 15 | the machine cannot answer at all: no clock, no such device |
 
 Subsystem detail is returned in an output record, not encoded into ad hoc
 negative values.

@@ -55,9 +55,11 @@ EXT4_CPPFLAGS := -I$(LWEXT4)/include -Iport/include -DCONFIG_USE_DEFAULT_CFG=0
 # job and pressures the next porter to patch upstream for style.
 EXT4_VENDOR_FLAGS := -std=gnu11 -Wall
 
-PORT_SOURCES := src/ext4_port.c src/ext4_alloc.c src/ext4_xattr_stub.c
+PORT_SOURCES := src/ext4_port.c src/ext4_alloc.c src/ext4_xattr_stub.c \
+	src/ext4_time.c src/ext4_clock_machine.c
 PORT_OBJECTS := build/m68k/ext4_port.o build/m68k/ext4_alloc.o \
-	build/m68k/ext4_xattr_stub.o
+	build/m68k/ext4_xattr_stub.o build/m68k/ext4_time.o \
+	build/m68k/ext4_clock_machine.o
 EXT4_TARGET := build/m68k/libastraext4.a
 
 # Freestanding libc shims, target only: the host has a real C library and must
@@ -91,6 +93,18 @@ build/m68k/ext4_alloc.o: src/ext4_alloc.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(ALLOC_CPPFLAGS) $(EXT4_CPPFLAGS) $(FREESTANDING) \
 		$(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
+
+build/m68k/ext4_time.o: src/ext4_time.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(EXT4_CPPFLAGS) $(FREESTANDING) $(COMMON_FLAGS) \
+		$(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
+
+# The machine's clock: the runtime, not lwext4, so it needs the runtime headers
+# and never reaches a host build.
+build/m68k/ext4_clock_machine.o: src/ext4_clock_machine.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -I$(RUNTIME)/include $(COMMON_FLAGS) \
+		$(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
 
 build/m68k/ext4_xattr_stub.o: src/ext4_xattr_stub.c
 	@mkdir -p $(@D)
@@ -149,7 +163,7 @@ test: $(HOST_TEST) build/host/test_lease_block build/host/test_ext4_port \
 # silently skips when a tool is missing reports success it did not earn, so
 # this is a target you have to ask for, and it fails loudly when it cannot run.
 EXT4_MOUNT_TEST_SOURCES := src/block_device.c src/memory_block.c src/mbr.c \
-	src/ext4_port.c src/ext4_alloc.c src/ext4_xattr_stub.c \
+	src/ext4_port.c src/ext4_alloc.c src/ext4_xattr_stub.c src/ext4_time.c \
 	$(ALLOC)/src/alloc.c $(LWEXT4_SOURCES) tests/test_ext4_mount.c \
 	tests/file_block.c
 

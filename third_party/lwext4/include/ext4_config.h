@@ -169,6 +169,18 @@ extern "C" {
 
 /**@brief Switches use of malloc/free functions family
  *        from standard library to user provided*/
+/*
+ * ASTRA: where the wall clock comes from.
+ *
+ * Upstream stamps nothing -- every inode it creates carries zero for all three
+ * times, and the code that would set them is a comment saying "when we have
+ * wall-clock time". A port that does have one sets this and supplies
+ * ext4_user_now(); one that does not gets upstream's behaviour exactly.
+ */
+#ifndef CONFIG_USE_USER_TIME
+#define CONFIG_USE_USER_TIME 0
+#endif
+
 #ifndef CONFIG_USE_USER_MALLOC
 #define CONFIG_USE_USER_MALLOC 0
 #endif

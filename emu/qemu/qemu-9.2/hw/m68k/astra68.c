@@ -64,6 +64,7 @@
 #define TIMER_PERIODIC           (1u << 1)
 #define TIMER_IRQ_ENABLE         (1u << 2)
 #define TIMER_EXPIRED            (1u << 0)
+#define RTC_VALID                (1u << 0)
 #define VEGA_IRQ_VBLANK          (1u << 0)
 #define ASTRAEA_IRQ_BLIT_DONE    (1u << 0)
 #define ASTRAEA_IRQ_DRAW_DONE    (1u << 3)
@@ -328,6 +329,7 @@ struct Astra68State {
     uint8_t *sdram;
     uint32_t ram_size;
     uint64_t reset_clock_ns;
+    uint64_t rtc_latch;
     uint32_t initial_sp;
     uint32_t initial_pc;
     uint32_t scratch;
@@ -1139,6 +1141,23 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
         return cycles >> 32;
     case 0x12c:
         return qemu_clock_get_ns(QEMU_CLOCK_REALTIME) / 1000u;
+    /*
+     * The date. QEMU_CLOCK_HOST is the host's wall clock in nanoseconds since
+     * the epoch, which on this machine and on the board is a Linux clock that
+     * NTP keeps honest -- so the guest's idea of the time is the host's, with
+     * no synchronisation protocol of its own to drift or to get wrong.
+     *
+     * Latched on the low read, as the contract says: the two halves are read
+     * by separate bus cycles and a value that ticked between them would be a
+     * second off once per second.
+     */
+    case 0x420:
+        return RTC_VALID;
+    case 0x424:
+        s->rtc_latch = (uint64_t)qemu_clock_get_ns(QEMU_CLOCK_HOST);
+        return (uint32_t)s->rtc_latch;
+    case 0x428:
+        return (uint32_t)(s->rtc_latch >> 32);
     case 0x150:
         return astra_block_present(s) ? BLOCK_ID_MAGIC : 0;
     case 0x154:

@@ -820,6 +820,18 @@ struct jbd_sb {
 #endif
 
 
+/*
+ * ASTRA: seconds since the epoch, or zero on a machine that does not know.
+ * Zero is what upstream wrote into every timestamp, so a build without a clock
+ * keeps writing exactly that -- and a listing showing no date is the truth
+ * rather than a claim that everything was made in 1970.
+ */
+#if CONFIG_USE_USER_TIME
+#define ext4_now() ext4_user_now()
+#else
+#define ext4_now() ((uint32_t)0)
+#endif
+
 #if CONFIG_USE_USER_MALLOC
 
 #define ext4_malloc  ext4_user_malloc

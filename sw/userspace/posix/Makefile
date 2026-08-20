@@ -21,7 +21,7 @@ DEPFLAGS := -MMD -MP
 TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 
-SOURCES := src/console.c src/file.c src/heap.c src/alloc.c
+SOURCES := src/console.c src/file.c src/heap.c src/alloc.c src/time.c
 OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(SOURCES))
 LIB := build/m68k/libastraposix.a
 

@@ -24,6 +24,7 @@
 #include <astra/bytes.h>
 #include <astra/ext4_alloc.h>
 #include <astra/ext4_port.h>
+#include <astra/ext4_time.h>
 #include <astra/lease_block.h>
 #include <astra/mbr.h>
 #include <astra/runtime.h>
@@ -245,6 +246,12 @@ supervisor_verify_volume(AstraBlockDevice *block, int keep_mounted)
         return ASTRA_SUPERVISOR_FAIL_VOLUME;
     }
     astra_ext4_alloc_bind(&volume_allocator);
+    /*
+     * The filesystem's clock. Bound beside the allocator because it is the
+     * same kind of thing: lwext4 asks the port for both, and a volume mounted
+     * without one writes files with no date on them.
+     */
+    astra_ext4_clock_bind(astra_ext4_clock_machine);
 
     if (astra_ext4_port_init(&volume_port, block, &window, volume_sector,
                              sizeof(volume_sector), 0u) != ASTRA_EXT4_OK) {

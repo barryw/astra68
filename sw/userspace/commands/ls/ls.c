@@ -23,6 +23,7 @@
  * standing.
  */
 
+#include <astra/civil.h>
 #include <astra/posix.h>
 #include <astra/vfs_process.h>
 #include <astra/program.h>
@@ -57,53 +58,27 @@ mode_string(uint16_t mode, uint16_t kind, char *out)
 }
 
 /*
- * Days into a year, and then a date. There is no `localtime` to call and no
- * timezone to call it with, so this is UTC and says so in the header rather
- * than pretending to know where the machine is.
+ * The mtime column. UTC, because the machine has no timezone and saying so is
+ * better than implying one; and `-` for a file whose filesystem never stamped
+ * it, which is not the same as a file stamped at midnight in 1970.
+ *
+ * The calendar itself is shared with `date` and with the kernel's boot line --
+ * see astra/civil.h. This used to be a second implementation of leap years,
+ * living here because there was nowhere else to put it.
  */
 static void
 date_string(int64_t seconds, char *out, size_t capacity)
 {
-    static const uint16_t cumulative[12] = {
-        0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334
-    };
-    static const char *const months[12] = {
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-    };
-    int64_t days;
-    int64_t rest;
-    int64_t year = 1970;
-    uint32_t month = 0u;
-    int leap;
+    AstraCivilTime civil;
 
-    if (seconds <= 0) {
+    if (seconds <= 0 ||
+        !astra_civil_from_unix_seconds((uint64_t)seconds, &civil)) {
         (void)snprintf(out, capacity, "%12s", "-");
         return;
     }
-    days = seconds / 86400;
-    rest = seconds % 86400;
-    for (;;) {
-        int64_t length = ((year % 4 == 0 && year % 100 != 0) ||
-                          year % 400 == 0) ? 366 : 365;
-
-        if (days < length)
-            break;
-        days -= length;
-        ++year;
-    }
-    leap = ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0) ? 1 : 0;
-    for (uint32_t index = 0u; index < 12u; ++index) {
-        int64_t start = cumulative[index] +
-            ((leap != 0 && index >= 2u) ? 1 : 0);
-
-        if (days >= start)
-            month = index;
-    }
-    days -= cumulative[month] + ((leap != 0 && month >= 2u) ? 1 : 0);
-    (void)snprintf(out, capacity, "%s %2ld %02ld:%02ld", months[month],
-                   (long)(days + 1), (long)(rest / 3600),
-                   (long)((rest % 3600) / 60));
+    (void)snprintf(out, capacity, "%s %2u %02u:%02u",
+                   astra_civil_month_name(civil.month), (unsigned)civil.day,
+                   (unsigned)civil.hour, (unsigned)civil.minute);
 }
 
 static int

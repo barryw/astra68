@@ -123,6 +123,15 @@ itself stays, as a conformance oracle only — see above.
   the ROM and then run `make test` in the same tree and the host binaries are
   linked from m68k objects: `./build/test_mmio: cannot execute binary file`.
   `make clean` between the two.
+- **The machine's date comes from the host**, through a Vesta register the
+  emulator fills from `QEMU_CLOCK_HOST`. There is no software clock and no
+  synchronisation protocol here: fix the host's clock, and Astra's is fixed.
+  `docs/TIME.md` is the whole chain. A machine whose `RTC_STATUS` is invalid
+  says so at every layer rather than answering 1970.
+- **`emu/qemu/build.sh` puts its work under `/mnt/Documents` (the NAS) by
+  default, and the NAS clock runs ahead of `beast`'s.** meson then refuses with
+  `Clock skew detected ... 0.03s in the future` and the build never starts. Set
+  `ASTRA_QEMU_WORK_ROOT=$HOME/.cache/astra68/qemu-9.2.4` to build on local disk.
 - **The qualification kernel is a second ROM**, built with
   `make KERNEL_K1_QUALIFICATION=1` in `sw/boot`, with no debug surface and no
   initial user image. `emu/qemu/test-qualification.py` is its gate. It
@@ -144,6 +153,7 @@ itself stays, as a conformance oracle only — see above.
 | Debug surface, and how the namespace got started | `docs/HANDOVER-debug-and-namespace.md` |
 | Service protocols and thread stacks | `docs/HANDOVER-vfs-and-stacks.md` |
 | ROM budget and memory layout | `docs/MEMORY_MAP.md`, `sw/include/astra/boot.h` |
+| The wall clock, and what has a date | `docs/TIME.md` |
 | Debugging a program on the machine | `docs/DEBUGGING.md` |
 | What is implemented vs planned | `docs/STATUS.md` |
 | FPGA timing closure | `fpga/soc/oss_flow/TIMING_CLOSURE.md` |

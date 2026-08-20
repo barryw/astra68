@@ -10,6 +10,7 @@
 #include <astra/runtime.h>
 #include <astra/service.h>
 #include <astra/status.h>
+#include <astra/ext4_time.h>
 #include <astra/vfs_ext4_backend.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_service_core.h>
@@ -113,6 +114,11 @@ static uint32_t mount_volume(uint32_t device, uint32_t irq)
                          sizeof(arena)) != ASTRA_ALLOC_OK)
         return STORAGE_FAIL_ALLOCATOR;
     astra_ext4_alloc_bind(&allocator);
+    /*
+     * The clock, beside the allocator: this is the mount a program's writes
+     * reach, so this is the binding that decides whether a file has a date.
+     */
+    astra_ext4_clock_bind(astra_ext4_clock_machine);
     if (astra_ext4_port_init(&ext4_port, &block, &window, sector,
                              sizeof(sector), 0u) != ASTRA_EXT4_OK)
         return STORAGE_FAIL_PORT;

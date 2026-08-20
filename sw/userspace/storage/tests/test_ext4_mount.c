@@ -28,6 +28,7 @@
 #include <astra/block_device.h>
 #include <astra/ext4_alloc.h>
 #include <astra/ext4_port.h>
+#include <astra/ext4_time.h>
 #include <astra/mbr.h>
 #include <astra/memory_block.h>
 
@@ -45,6 +46,12 @@
 static uint8_t *storage;
 static size_t storage_bytes;
 static uint8_t sector_buffer[SECTOR_SIZE];
+
+static uint32_t
+host_clock_seconds(void)
+{
+    return (uint32_t)time(NULL);
+}
 
 /*
  * Partitioned mode wraps the plain ext4 image in the layout a real card
@@ -356,6 +363,11 @@ bring_up(void)
         return 1;
     }
     astra_ext4_alloc_bind(&allocator);
+    /*
+     * The host's clock, so the timestamps this test writes are real ones and
+     * the checks below can say what a plausible date looks like.
+     */
+    astra_ext4_clock_bind(host_clock_seconds);
 
     if (on_file) {
         astra_block_device_init(&device, &astra_file_block_backend,
@@ -718,6 +730,42 @@ verify(void)
             EXT4_INODE_MODE_DIRECTORY) {
             printf("FAIL %s is mode 0%o, not a directory\n", dot,
                    (unsigned)mode);
+            ++failures;
+            return 1;
+        }
+    }
+
+    /*
+     * The timestamps are real ones.
+     *
+     * lwext4 stamped nothing until the port gave it a clock: every inode it
+     * created carried zero, so `ls -l` on a machine-written file showed no
+     * date at all and there was no way to tell a file written this minute
+     * from one written last year. The window is wide because this test can be
+     * slow under a sanitizer, and narrow enough that a zero, an epoch, or a
+     * clock running in seconds-since-boot all fail it.
+     */
+    {
+        uint32_t mtime = 0u;
+        uint32_t now = host_clock_seconds();
+
+        rc = ext4_mtime_get(MOUNT_POINT "dir/renamed.txt", &mtime);
+        if (rc != EOK) {
+            return fail("ext4_mtime_get(renamed.txt)", rc);
+        }
+        if (mtime + 3600u < now || mtime > now + 60u) {
+            printf("FAIL mtime %lu is not near now %lu\n",
+                   (unsigned long)mtime, (unsigned long)now);
+            ++failures;
+            return 1;
+        }
+        rc = ext4_mtime_get(MOUNT_POINT "dir", &mtime);
+        if (rc != EOK) {
+            return fail("ext4_mtime_get(dir)", rc);
+        }
+        if (mtime + 3600u < now || mtime > now + 60u) {
+            printf("FAIL directory mtime %lu is not near now %lu\n",
+                   (unsigned long)mtime, (unsigned long)now);
             ++failures;
             return 1;
         }

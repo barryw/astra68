@@ -23,6 +23,8 @@
 #include "platform.h"
 #include "process.h"
 #include "qualification.h"
+
+#include <astra/civil.h>
 #include "trace.h"
 #include "user_copy.h"
 #include "vm.h"
@@ -1733,6 +1735,26 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     console_puts("Timer .............. ");
     console_dec32(boot_info.cpu_hz);
     console_puts(" Hz\n");
+    console_puts("Wall clock ......... ");
+    {
+        /*
+         * What day the machine thinks it is, said once at boot. It is the
+         * cheapest possible check on the whole chain -- the register, the
+         * calendar, and whatever keeps the host's clock right -- and a
+         * machine that has been up for a week with the wrong year has been
+         * saying so on every boot.
+         */
+        uint64_t wall_ns = 0u;
+        char stamp[24];
+
+        if (kernel_platform_wall_clock_ns(&wall_ns) &&
+            astra_civil_iso8601(wall_ns, stamp, sizeof(stamp)) != 0u) {
+            console_puts(stamp);
+            console_puts(", from the host\n");
+        } else {
+            console_puts("not set; files will have no dates\n");
+        }
+    }
     console_puts("PMMU ............... enabled, SRP 0x");
     console_hex32(vm_stats.kernel_root_physical);
     console_putc('\n');

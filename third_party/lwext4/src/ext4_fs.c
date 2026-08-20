@@ -912,9 +912,10 @@ int ext4_fs_alloc_inode(struct ext4_fs *fs, struct ext4_inode_ref *inode_ref,
 	ext4_inode_set_uid(inode, 0);
 	ext4_inode_set_gid(inode, 0);
 	ext4_inode_set_size(inode, 0);
-	ext4_inode_set_access_time(inode, 0);
-	ext4_inode_set_change_inode_time(inode, 0);
-	ext4_inode_set_modif_time(inode, 0);
+	/* ASTRA: a new inode is stamped with now, not with the epoch. */
+	ext4_inode_set_access_time(inode, ext4_now());
+	ext4_inode_set_change_inode_time(inode, ext4_now());
+	ext4_inode_set_modif_time(inode, ext4_now());
 	ext4_inode_set_del_time(inode, 0);
 	ext4_inode_set_blocks_count(&fs->sb, inode, 0);
 	ext4_inode_set_flags(inode, 0);

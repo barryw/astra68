@@ -227,6 +227,11 @@ static int ext4_link(struct ext4_mountpoint *mp, struct ext4_inode_ref *parent,
 	if (r != EOK)
 		return r;
 
+	/* ASTRA: the directory just changed, so it carries the time it did. */
+	ext4_inode_set_change_inode_time(parent->inode, ext4_now());
+	ext4_inode_set_modif_time(parent->inode, ext4_now());
+	parent->dirty = true;
+
 	/* Fill new dir -> add '.' and '..' entries.
 	 * Also newly allocated inode should have 0 link count.
 	 */
@@ -336,20 +341,15 @@ static int ext4_unlink(struct ext4_mountpoint *mp,
 	}
 
 	/*
-	 * TODO: Update timestamps of the parent
-	 * (when we have wall-clock time).
-	 *
-	 * ext4_inode_set_change_inode_time(parent->inode, (uint32_t) now);
-	 * ext4_inode_set_modification_time(parent->inode, (uint32_t) now);
-	 * parent->dirty = true;
+	 * ASTRA: the directory changed, so it is stamped. This was upstream's
+	 * "when we have wall-clock time" TODO; the machine has one now.
 	 */
+	ext4_inode_set_change_inode_time(parent->inode, ext4_now());
+	ext4_inode_set_modif_time(parent->inode, ext4_now());
+	parent->dirty = true;
 
-	/*
-	 * TODO: Update timestamp for inode.
-	 *
-	 * ext4_inode_set_change_inode_time(child->inode,
-	 *     (uint32_t) now);
-	 */
+	ext4_inode_set_change_inode_time(child->inode, ext4_now());
+	child->dirty = true;
 	if (ext4_inode_get_links_cnt(child->inode)) {
 		ext4_fs_inode_links_count_dec(child);
 		child->dirty = true;
@@ -2071,6 +2071,16 @@ out_fsize:
 	}
 
 Finish:
+	/*
+	 * Astra patch 0007: a write is what mtime means. Stamped here rather
+	 * than per block, so one write costs one inode update whatever it
+	 * covered, and only when the write actually succeeded.
+	 */
+	if (r == EOK) {
+		ext4_inode_set_modif_time(ref.inode, ext4_now());
+		ext4_inode_set_change_inode_time(ref.inode, ext4_now());
+		ref.dirty = true;
+	}
 	/*
 	 * Astra patch 0004: do not let the inode-ref release overwrite the
 	 * error the write itself produced. ext4_fread already keeps them

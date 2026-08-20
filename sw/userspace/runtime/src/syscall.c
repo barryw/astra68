@@ -197,6 +197,29 @@ astra_clock_monotonic(void)
 }
 
 /*
+ * The date, and whether the machine has one. Zero is a real instant, so the
+ * answer to "what time is it" cannot be a number alone: a caller that ignores
+ * the status and stamps a file has written midnight in 1970 and called it a
+ * fact.
+ */
+uint32_t
+astra_clock_realtime(uint64_t *nanoseconds)
+{
+    AstraSyscallResult result;
+
+    if (nanoseconds == NULL) {
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    astra_syscall5(ASTRA_SYSCALL_CLOCK_REALTIME, 0u, 0u, 0u, 0u, 0u,
+                   &result);
+    if (result.status != ASTRA_SYSCALL_OK) {
+        return result.status;
+    }
+    *nanoseconds = ((uint64_t)result.value0 << 32) | result.value1;
+    return ASTRA_SYSCALL_OK;
+}
+
+/*
  * Deadlines are absolute monotonic nanoseconds. ASTRA_DEADLINE_NONE waits
  * forever, which a service may do but a boot check may not.
  */

@@ -250,6 +250,34 @@ uint64_t kernel_platform_cycles_to_ns(uint64_t cycles)
     return cycles * KERNEL_PLATFORM_NS_PER_CPU_CYCLE;
 }
 
+/*
+ * The date, or the honest absence of one.
+ *
+ * Nanoseconds since the Unix epoch, read from the machine's wall clock. The
+ * clock is somebody else's problem by design: under the emulator and on the
+ * board it is a Linux clock that NTP keeps right, so there is no protocol
+ * here to drift, to skew, or to get the leap seconds wrong.
+ *
+ * A machine with no clock answers false rather than answering 1970. Every
+ * caller above has to decide what to do without a date, and a filesystem that
+ * stamps a file with the epoch has made that decision silently and wrongly.
+ */
+bool kernel_platform_wall_clock_ns(uint64_t *nanoseconds)
+{
+    uint32_t low;
+    uint32_t high;
+
+    if (nanoseconds == NULL)
+        return false;
+    if ((VESTA_READ(RTC_STATUS) & RTC_VALID) == 0u)
+        return false;
+    /* Reading LO latches the coherent HI half for the read that follows. */
+    low = VESTA_READ(RTC_NS_LO);
+    high = VESTA_READ(RTC_NS_HI);
+    *nanoseconds = ((uint64_t)high << 32) | low;
+    return true;
+}
+
 uint64_t kernel_platform_monotonic_ns(void)
 {
     KernelPlatformCycleCount snapshot;
