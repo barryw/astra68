@@ -60,17 +60,19 @@ def load_gate():
 def ask(machine, gate, command, deadline, needle=None):
     """Types one command and returns the lines it answered with.
 
-    The needle is what says the command finished. A launched program reports
-    its exit status through the shell, which is a needle nothing else produces;
-    a builtin like `write` reports nothing, so the caller names what to wait
-    for instead.
+    What says the command finished used to be the shell's own report of its
+    exit status. The shell answers a status into `$?` now and prints nothing,
+    so there is no such line: silence is the marker instead, which is what
+    `settle` already means everywhere else in these gates. A caller that has a
+    better one -- a word only this command can produce -- passes it.
     """
     machine.settle()
     before = machine.sequence()
     machine.qmp.type_line(command)
-    said, _ = machine.wait_for_text(
-        needle if needle is not None else "%s: exited" % command.split()[0],
-        deadline, before)
+    if needle is not None:
+        said, _ = machine.wait_for_text(needle, deadline, before)
+    else:
+        said = machine.said(before)[0] if machine.settle(deadline) else None
     if said is None:
         raise RuntimeError("%r never finished" % command)
     return said

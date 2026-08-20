@@ -111,8 +111,17 @@ def main():
             for index in range(1, arguments.launches + 1):
                 machine.settle()
                 before = machine.sequence()
+                # `echo $?` rather than the shell's own report of the exit
+                # status: the shell answers a status into `$?` now and prints
+                # nothing, so the number has to be asked for. Two launches per
+                # iteration instead of one, which is if anything a better
+                # provocation for what this probe is looking for.
                 machine.qmp.type_line("status %d" % (index % 10))
-                said, _ = machine.wait_for_text("exited %d" % (index % 10),
+                if not machine.settle():
+                    died_at = index
+                    break
+                machine.qmp.type_line("echo $?")
+                said, _ = machine.wait_for_text("%d" % (index % 10),
                                                 20.0, before)
                 if said is None:
                     died_at = index
