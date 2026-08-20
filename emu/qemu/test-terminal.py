@@ -91,7 +91,7 @@ SCRIPT = [
     # back: `mkdir` is a program now and says nothing when it works, so a
     # needle that matched the typed line would have passed whether the
     # directory was made or not. `ls` on the next line is what proves it was.
-    ("mkdir proto", "mkdir: exited 0"),
+    ("mkdir proto", "mkdir proto"),
     ("write hello.txt via the protocol", "hello.txt"),
     ("ls", "proto/"),
     # `cd` and then bare names, which is the whole reason a launched program
@@ -106,11 +106,12 @@ SCRIPT = [
     # back. `pwd` and the four after it are what prove it moved.
     ("cd proto", "cd proto"),
     ("pwd", "WORK:proto"),
-    ("mkdir inner", "mkdir: exited 0"),
+    ("mkdir inner", "mkdir inner"),
     ("ls", "inner/"),
     ("write scratch.txt hi", "scratch.txt"),
     ("cat scratch.txt", "hi"),
-    ("rm scratch.txt", "rm: exited 0"),
+    ("rm scratch.txt", "rm scratch.txt"),
+    ("echo $?", "0"),
     # And back, by the same door: `cd` with no name is the assign's root, and
     # `proto/` is only in the root -- so this is the check that it returned
     # rather than the check that it is somewhere.
@@ -134,10 +135,11 @@ SCRIPT = [
     # holds both the line the shell accepted and the refusal it answered
     # with, and neither passed an activity to the other. The name is the
     # activity in hex, activities are numbered from one in the order the shell
-    # accepted them, and `write events:no no` is the fourteenth line typed --
-    # so 0x0e. Inserting a line above it moves this, which is what the
-    # assertions below the script turn into a named failure.
-    ("cat events:activity/0000000e", "command refused"),
+    # accepted them, and `write events:no no` is the fifteenth line typed --
+    # so 0x0f. Inserting a line above it moves this, which is what the
+    # assertions below the script turn into a named failure. Every `echo $?`
+    # is a line too: asking for the status costs an activity.
+    ("cat events:activity/0000000f", "command refused"),
     # The command: the same store, the last screen of it, and two dimensions at
     # once -- which is the one thing a path could not say until subsystem/ grew
     # levels under it.
@@ -157,14 +159,16 @@ SCRIPT = [
     # It prints nothing, on purpose -- what is on the screen is the shell
     # reporting what the child exited with, so the number proves the argument
     # vector arrived and the status came back through the wait.
-    ("status 7", "exited 7"),
+    ("status 7", "status 7"),
+    ("echo $?", "7"),
     # No argument is zero, which is what a program that did what it was asked
     # says. It also proves argc reaches the child correctly rather than the
     # child reading whatever was after the vector.
-    ("status", "exited 0"),
+    ("status", "status"),
     # COMMANDS: is bound and searched, so a bare name resolves there without
     # the person naming it -- and naming it explicitly is the same file.
-    ("commands:status 3", "exited 3"),
+    ("commands:status 3", "commands:status 3"),
+    ("echo $?", "3"),
     # Commands can be loaded but not rewritten by the terminal process.
     ("write commands:status no", "access denied"),
     # Both read-only members remain visible: `devices` is the fixture's own
@@ -189,6 +193,9 @@ SCRIPT = [
     # a builtin and is not a file. Two places are looked in, both top level
     # only, and then it says so.
     ("nosuchthing", "not a command"),
+    # 127 is what every shell answers for a name it could not find, and
+    # the only way to see it is `$?` -- the shell prints no status now.
+    ("echo $?", "127"),
     # The namespace printed back, and the whole of the order a lookup uses.
     # Before this existed the search order was a comment in one function.
     ("assign", ("local/commands", "LIBS: [0] r  /libs")),
@@ -218,28 +225,51 @@ SCRIPT = [
     # getcwd, and a heap. It reports by exit status rather than by text, so a
     # zero here is thirty-odd separate checks and a non-zero one names the step
     # -- see the enum at the top of `commands/posix/posix.c`.
-    ("posix", "posix: exited 0"),
+    ("posix", "posix"),
+    ("echo $?", "0"),
     # Quoting, proved by a name that could not exist without it. Two words
     # arriving as two arguments makes `two/`, and one word makes `two words/`
     # -- so the listing is the whole assertion and no message has to be
     # believed.
-    ("mkdir \"two words\"", "mkdir: exited 0"),
+    ("mkdir \"two words\"", "two words"),
     ("ls", "two words/"),
     # Redirection, and the only honest way to check it: the answer must *not*
     # be on the screen after the first line -- the shell echoes what the
     # terminal renders into the ring, and a redirected child renders nothing --
     # and must be in the file on the second.
-    ("which status > out.txt", "which: exited 0"),
+    ("which status > out.txt", "out.txt"),
     ("cat out.txt", "/commands/status [1]"),
     # `>>` keeps what is there, so both answers are in one file. A truncating
     # append would leave only the second, which is why the needle is both.
-    ("which devices >> out.txt", "which: exited 0"),
+    ("which devices >> out.txt", "out.txt"),
     ("cat out.txt", ("/commands/status [1]",
                      "/local/commands/devices [0]")),
     # The two refusals. A builtin has no stream to move, and a redirect with
     # no name is not a command -- both said rather than done quietly.
     ("pwd > out.txt", "cannot be redirected"),
     ("ls >", "syntax"),
+    # Names. A line that is only `NAME=VALUE` sets one in this shell; `$NAME`
+    # is how it comes back, and `set` is the whole list.
+    ("GREETING=hello", "GREETING=hello"),
+    ("echo $GREETING", "hello"),
+    ("set", "GREETING=hello"),
+    # `?` is there and marked as never crossing a launch, which is the one
+    # thing about it a person has to know.
+    ("set", "this shell only"),
+    ("set GREETING", "set GREETING"),
+    # An unset name expands to nothing rather than to its own spelling, so the
+    # dash is the whole of the output and proves the expansion ran.
+    ("echo $GREETING-", "-"),
+    # A value with a space in it survives, which is quoting and expansion in
+    # one line -- and `echo` is a program, so it also proves the vector.
+    ("PHRASE=\"two words\"", "PHRASE="),
+    ("echo -$PHRASE-", "-two words-"),
+    # And a redirect on a program whose output is a value.
+    ("echo $PHRASE > phrase.txt", "phrase.txt"),
+    ("cat phrase.txt", "two words"),
+    # A builtin still refuses an environment, and says so rather than dropping
+    # the name.
+    ("A=1 pwd", "cannot be handed an environment"),
 ]
 
 PERFORMANCE_SCRIPT = [
@@ -266,9 +296,9 @@ PERFORMANCE_BUDGET_SECONDS = {
 assert SCRIPT[0][0] == "mkdir proto", (
     "SCRIPT's first line is activity 1, which "
     "(\"cat events:activity/00000001\", \"command accepted\") reads back")
-assert SCRIPT[13][0] == "write events:no no", (
-    "SCRIPT's fourteenth line is activity 0x0e, which "
-    "(\"cat events:activity/0000000e\", \"command refused\") reads back")
+assert SCRIPT[14][0] == "write events:no no", (
+    "SCRIPT's fifteenth line is activity 0x0f, which "
+    "(\"cat events:activity/0000000f\", \"command refused\") reads back")
 
 QCODE = {" ": "spc", "\n": "ret", "/": "slash", ".": "dot", "-": "minus",
          "=": "equal", ",": "comma", ";": "semicolon", "'": "apostrophe"}
@@ -276,7 +306,8 @@ QCODE = {" ": "spc", "\n": "ret", "/": "slash", ".": "dot", "-": "minus",
 # shift chord over its lowercase key; these are the punctuation that only
 # exists shifted, and `+` is here because `date +FORMAT` needs it.
 SHIFTED = {":": "semicolon", "+": "equal", "%": "5", "_": "minus",
-           "?": "slash", "\"": "apostrophe", ">": "dot", "<": "comma"}
+           "?": "slash", "\"": "apostrophe", ">": "dot", "<": "comma",
+           "$": "4"}
 
 # A user record the decoder rendered. The body is what the shell wrote; a
 # record whose text did not fit one record ends in a backslash and continues
@@ -622,8 +653,12 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
             machine.settle()
             before = machine.sequence()
             machine.qmp.type_line("which devices > out.txt")
-            if machine.wait_for_text("which: exited 0", command_deadline,
-                                     before)[0] is None:
+            # The status, because a redirected command prints nothing at all
+            # and the shell no longer narrates one.
+            machine.settle()
+            before = machine.sequence()
+            machine.qmp.type_line("echo $?")
+            if machine.wait_for_text("0", command_deadline, before)[0] is None:
                 print("FAIL: the truncating redirect never finished")
                 return 1
             machine.settle()

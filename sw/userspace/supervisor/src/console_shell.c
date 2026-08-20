@@ -55,9 +55,23 @@
  */
 #define SHELL_LOAD_MAX (64u * 1024u)
 
+/*
+ * The two numbers every shell answers with when it never got as far as the
+ * program. They are conventions rather than anything this kernel defines, and
+ * they are here because `$?` is worth nothing if a shell invents its own.
+ */
+#define SHELL_STATUS_NOT_RUN 126u
+#define SHELL_STATUS_NOT_FOUND 127u
+
 typedef struct ConsoleShell {
     AstraTerminal terminal;
     astra_shell_editor_t editor;
+    /*
+     * The shell's variables, and what a child's environment is built from.
+     * `?` is one of them, set after every command, which is why nothing here
+     * carries a "last status" field of its own.
+     */
+    astra_shell_variables_t variables;
     ConsoleShellBackend backend;
     char assign[ASTRA_CAPABILITY_NAME_MAX];  /* the assign it is standing in */
     char directory[SHELL_PATH_MAX];          /* normalised, under that assign */
@@ -197,7 +211,7 @@ static void report_status(const char *what, uint32_t status)
  * better builtin.
  */
 
-static void command_cd(int argc, char *const *argv)
+static uint32_t command_cd(int argc, char *const *argv)
 {
     char typed[SHELL_PATH_MAX];
     char wire[SHELL_PATH_MAX];
@@ -213,11 +227,11 @@ static void command_cd(int argc, char *const *argv)
         status = filesystem_library()->stat(filesystem(), typed, &info);
     if (status != ASTRA_VFS_OK) {
         report_status("cd", status);
-        return;
+        return status;
     }
     if (info.kind != ASTRA_VFS_KIND_DIRECTORY) {
         write_line("cd: not a directory");
-        return;
+        return ASTRA_VFS_ERR_NOT_DIR;
     }
     /*
      * Adopted only now, and taken apart by the same parser that resolved it.
@@ -230,13 +244,14 @@ static void command_cd(int argc, char *const *argv)
             wire, shell.directory, sizeof(shell.directory)) != ASTRA_VFS_OK) {
         shell.directory[0] = '\0';
         write_line("cd: path too long");
-        return;
+        return ASTRA_VFS_ERR_LIMIT;
     }
     (void)memcpy(shell.assign, name, sizeof(shell.assign));
+    return ASTRA_VFS_OK;
 }
 
 /* write NAME TEXT... -- creates or truncates, then writes the rest of the line. */
-static void command_write(int argc, char *const *argv)
+static uint32_t command_write(int argc, char *const *argv)
 {
     char typed[SHELL_PATH_MAX];
     AstraFile file = ASTRA_FILE_INIT;
@@ -246,13 +261,13 @@ static void command_write(int argc, char *const *argv)
 
     if (argc < 2) {
         write_line("write: needs a name");
-        return;
+        return ASTRA_VFS_ERR_INVALID;
     }
     status = filesystem_library()->qualify(
         shell.assign, shell.directory, argv[1], typed, sizeof(typed));
     if (status != ASTRA_VFS_OK) {
         report_status("write", status);
-        return;
+        return status;
     }
     status = filesystem_library()->open(
         filesystem(), typed, ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
@@ -260,7 +275,7 @@ static void command_write(int argc, char *const *argv)
         &file);
     if (status != ASTRA_VFS_OK) {
         report_status("write", status);
-        return;
+        return status;
     }
     for (index = 2; index < argc; ++index) {
         const char *word = argv[index];
@@ -282,6 +297,7 @@ static void command_write(int argc, char *const *argv)
     }
 finish:
     (void)filesystem_library()->close(&file);
+    return status;
 }
 
 /*
@@ -296,7 +312,7 @@ finish:
  * It is read-only. Joining a member at the prompt is a shell language decision
  * the layout spec defers, and nothing needs to rebind at runtime yet.
  */
-static void command_assign(int argc, char *const *argv)
+static uint32_t command_assign(int argc, char *const *argv)
 {
     const AstraAssignTable *table = supervisor_assigns();
 
@@ -324,8 +340,8 @@ static void command_assign(int argc, char *const *argv)
         astra_terminal_write(&shell.terminal, entry->root);
         astra_terminal_putc(&shell.terminal, '\n');
     }
+    return ASTRA_VFS_OK;
 }
-
 static void command_help(void)
 {
     write_line("builtins: cd [dir], write FILE TEXT..., assign,");
@@ -348,6 +364,12 @@ static void command_help(void)
     write_line("quote with ' or \" -- date +\"%H %M\" is one argument");
     write_line("redirect a program with > FILE, or >> FILE to keep what is");
     write_line("          there. builtins write to the terminal only");
+    /*
+     * The status is not printed any more, so where it went has to be said
+     * somewhere a person will look. This is that place.
+     */
+    write_line("NAME=VALUE sets a name; set lists them, set NAME forgets one");
+    write_line("$? is the last command's status -- try echo $?");
 }
 
 static void prompt(void)
@@ -617,7 +639,8 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
  * Reads the whole image in, launches it, and serves its terminal streams until
  * it is done. Storage and events run independently in protected processes.
  */
-static void command_launch(const char *word, int argc, char *const *argv)
+static uint32_t command_launch(const char *word, int argc,
+                               char *const *argv)
 {
     AstraLaunchGrant grants[ASTRA_LAUNCH_GRANT_MAX];
     AstraLaunchArguments arguments;
@@ -641,15 +664,15 @@ static void command_launch(const char *word, int argc, char *const *argv)
         if (status == ASTRA_VFS_ERR_NOT_FOUND) {
             astra_terminal_write(&shell.terminal, word);
             write_line(": not a command");
-        } else {
-            report_status(word, status);
+            return SHELL_STATUS_NOT_FOUND;
         }
-        return;
+        report_status(word, status);
+        return SHELL_STATUS_NOT_RUN;
     }
     if (info.byte_size > SHELL_LOAD_MAX) {
         (void)filesystem_library()->close(&file);
         report_status(word, ASTRA_VFS_ERR_LIMIT);
-        return;
+        return SHELL_STATUS_NOT_RUN;
     }
     status = filesystem_library()->read(
         &file, load_buffer, (uint32_t)info.byte_size, &length);
@@ -679,13 +702,13 @@ static void command_launch(const char *word, int argc, char *const *argv)
         astra_terminal_putc(&shell.terminal, '\n');
         report_status(word, status != ASTRA_VFS_OK ? status :
                                                      ASTRA_VFS_ERR_INVALID);
-        return;
+        return SHELL_STATUS_NOT_RUN;
     }
     if (astra_launch_arguments_pack(
             &arguments, ASTRA_LAUNCH_SOURCE_SHELL, (uint32_t)argc,
             (const char *const *)argv) != ASTRA_SYSCALL_OK) {
         write_line("too many arguments");
-        return;
+        return SHELL_STATUS_NOT_RUN;
     }
 
     ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
@@ -705,7 +728,7 @@ static void command_launch(const char *word, int argc, char *const *argv)
         astra_terminal_putc(&shell.terminal, '\n');
         ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_WARNING,
                      "launch refused, status %u", status);
-        return;
+        return SHELL_STATUS_NOT_RUN;
     }
 
     shell.child = handle;
@@ -734,16 +757,65 @@ static void command_launch(const char *word, int argc, char *const *argv)
      */
     (void)console_stream_drain();
 
-    astra_terminal_write(&shell.terminal, word);
-    if (status == ASTRA_SYSCALL_OK) {
-        astra_terminal_write(&shell.terminal, ": exited ");
-        write_number(exit_status);
-        astra_terminal_putc(&shell.terminal, '\n');
-    } else {
+    /*
+     * **The status is answered, not narrated.** A shell that printed
+     * "ls: exited 0" after every line was telling a person something they did
+     * not ask for and could not use; `$?` is where a status belongs, and it is
+     * a value a later command can act on rather than a line on a screen. What
+     * a *failing* command has to say, it says itself on STDERR.
+     *
+     * A child that did not finish leaves no status at all, so `$?` gets the
+     * shell's own -- 126, the number every shell uses for "found it, could not
+     * run it" -- rather than a stale zero.
+     */
+    if (status != ASTRA_SYSCALL_OK) {
+        astra_terminal_write(&shell.terminal, word);
         write_line(": did not finish");
+        exit_status = SHELL_STATUS_NOT_RUN;
     }
     ASTRA_EVENT2(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
                  "child %u finished with status %u", child_id, exit_status);
+    return exit_status;
+}
+
+/* What `$?` expands to, after every command, builtin or program alike. */
+static void shell_set_status(uint32_t status)
+{
+    char digits[12];
+    uint32_t index = (uint32_t)sizeof(digits) - 1u;
+
+    digits[index] = '\0';
+    do {
+        digits[--index] = (char)('0' + (status % 10u));
+        status /= 10u;
+    } while (status != 0u && index != 0u);
+    (void)astra_shell_variable_set(&shell.variables, "?", &digits[index]);
+}
+
+static const char *shell_value(void *context, const char *name, size_t length)
+{
+    (void)context;
+    return astra_shell_variable_get(&shell.variables, name, length);
+}
+
+/*
+ * `NAME=VALUE` in one buffer. The parser left it whole because the split is
+ * the same one a child's environment makes, and doing it twice is two places
+ * to disagree about where a name ends.
+ */
+static uint32_t shell_assign(char *pair)
+{
+    char *value = pair;
+
+    while (*value != '\0' && *value != '=')
+        ++value;
+    if (*value == '\0')
+        return ASTRA_VFS_ERR_INVALID;
+    *value++ = '\0';
+    return astra_shell_variable_set(&shell.variables, pair, value) ==
+                   ASTRA_SHELL_OK ?
+               ASTRA_VFS_OK :
+               ASTRA_VFS_ERR_LIMIT;
 }
 
 /*
@@ -781,25 +853,64 @@ static int builtin_pwd(void *context, int argc, char *const argv[])
 static int builtin_cd(void *context, int argc, char *const argv[])
 {
     (void)context;
-    command_cd(argc, argv);
-    return 0;
+    return (int)command_cd(argc, argv);
 }
 
 static int builtin_write(void *context, int argc, char *const argv[])
 {
     (void)context;
-    command_write(argc, argv);
-    return 0;
+    return (int)command_write(argc, argv);
 }
 
 static int builtin_assign(void *context, int argc, char *const argv[])
 {
     (void)context;
-    command_assign(argc, argv);
+    return (int)command_assign(argc, argv);
+}
+
+/*
+ * `set` with no argument lists what the shell holds; `set NAME` forgets one.
+ * There is no `set NAME=VALUE`, because `NAME=VALUE` on its own line already
+ * is that -- and a second spelling of one thing is a second thing to keep
+ * right.
+ */
+static int builtin_set(void *context, int argc, char *const argv[])
+{
+    const char *name;
+    const char *value;
+
+    (void)context;
+    if (argc > 1) {
+        for (int index = 1; index < argc; ++index) {
+            if (astra_shell_variable_unset(&shell.variables, argv[index]) !=
+                ASTRA_SHELL_OK) {
+                astra_terminal_write(&shell.terminal, argv[index]);
+                write_line(": no such name");
+                return (int)ASTRA_VFS_ERR_NOT_FOUND;
+            }
+        }
+        return 0;
+    }
+    for (size_t index = 0u;
+         astra_shell_variable_at(&shell.variables, index, &name, &value);
+         ++index) {
+        astra_terminal_write(&shell.terminal, name);
+        astra_terminal_putc(&shell.terminal, '=');
+        astra_terminal_write(&shell.terminal, value);
+        /*
+         * Which of them a program would see. `?` is the shell's own answer and
+         * never crosses a launch, and saying so beside it is cheaper than a
+         * person discovering it from a child that did not get it.
+         */
+        if (!astra_shell_variable_exportable(name))
+            astra_terminal_write(&shell.terminal, "   (this shell only)");
+        astra_terminal_putc(&shell.terminal, '\n');
+    }
     return 0;
 }
 
 static const astra_shell_builtin_t shell_builtins[] = {
+    {"set", builtin_set},
     {"help", builtin_help},
     {"clear", builtin_clear},
     {"pwd", builtin_pwd},
@@ -933,8 +1044,9 @@ static void run_line(const char *line)
     astra_shell_words_t words;
     astra_shell_result_t parsed;
     const astra_shell_builtin_t *builtin;
+    uint32_t status = ASTRA_VFS_OK;
 
-    parsed = astra_shell_parse(line, &words);
+    parsed = astra_shell_parse(line, &words, shell_value, NULL);
     /*
      * Said, rather than swallowed. A line the parser refused used to leave no
      * mark at all, so an unclosed quote looked exactly like a machine that had
@@ -942,9 +1054,12 @@ static void run_line(const char *line)
      */
     if (parsed == ASTRA_SHELL_ERR_SYNTAX) {
         write_line("syntax: close the quote, and give a redirect one name");
+        shell_set_status(SHELL_STATUS_NOT_RUN);
         return;
     }
-    if (parsed != ASTRA_SHELL_OK || words.argc == 0)
+    if (parsed != ASTRA_SHELL_OK)
+        return;
+    if (words.argc == 0 && words.assignments == 0)
         return;
 
     /*
@@ -959,34 +1074,70 @@ static void run_line(const char *line)
     ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
                  "command accepted, %u words", (uint32_t)words.argc);
 
+    /*
+     * Assignments with nothing after them are this shell's own. Assignments
+     * *ahead of a command* are that command's environment and never this
+     * shell's, which is what `TZ=... date` has to mean: the difference is the
+     * whole reason a shell has the form at all.
+     */
+    if (words.argc == 0) {
+        for (int index = 0; index < words.assignments; ++index) {
+            status = shell_assign(words.assignment[index]);
+            if (status != ASTRA_VFS_OK) {
+                report_status(words.assignment[index], status);
+                break;
+            }
+        }
+        shell_set_status(status);
+        return;
+    }
+
+    /*
+     * ponytail: a child's environment is not carried yet. The startup block
+     * has `environment_count` and `environment_address` and the kernel fills
+     * neither, so `TZ=... date` is refused rather than run with the
+     * assignment quietly dropped -- a command that ran without the name it was
+     * given is worse than one that did not run.
+     */
+    if (words.assignments != 0) {
+        write_line("a command cannot be handed an environment yet -- set the "
+                   "name on its own line");
+        shell_set_status(SHELL_STATUS_NOT_RUN);
+        return;
+    }
+
     builtin = shell_builtin(words.argv[0]);
     /*
-     * A builtin writes to the terminal directly and has no stream to move, so
-     * a redirect on one is refused before it runs rather than ignored after.
-     * The builtins left here are on their way out for exactly this reason:
-     * `ls > out.txt` works because `ls` is a program.
+     * A builtin writes to the terminal directly and has no stream to move and
+     * no environment to be handed, so a redirect or an assignment on one is
+     * refused before it runs rather than ignored after. The builtins left here
+     * are on their way out for exactly this reason: `ls > out.txt` works
+     * because `ls` is a program.
      */
     if (builtin != NULL && words.redirect != NULL) {
         astra_terminal_write(&shell.terminal, words.argv[0]);
         write_line(": a builtin writes to the terminal and cannot be redirected");
+        status = SHELL_STATUS_NOT_RUN;
     } else if (builtin != NULL)
-        (void)builtin->function(NULL, words.argc, words.argv);
+        status = (uint32_t)builtin->function(NULL, words.argc, words.argv);
     else if (words.redirect == NULL)
         /*
          * Not a builtin, so it is a program. There is no third case: a word
          * the machine does not recognise is a file it has not got, and saying
          * that is the whole of the answer.
          */
-        command_launch(words.argv[0], words.argc, words.argv);
+        status = command_launch(words.argv[0], words.argc, words.argv);
     else if (redirect_begin(words.redirect, words.redirect_append)) {
         /*
          * The order is the whole of it: STDOUT is pointed at the file before
          * the launch, because the grant is read there, and it is put back only
          * after `command_launch` has drained what the child left queued.
          */
-        command_launch(words.argv[0], words.argc, words.argv);
+        status = command_launch(words.argv[0], words.argc, words.argv);
         redirect_end(words.redirect);
-    }
+    } else
+        status = SHELL_STATUS_NOT_RUN;
+    shell_set_status(status);
 }
 
 static int flush_terminal(void)
@@ -1214,6 +1365,13 @@ void console_shell_run_backend(const ConsoleShellBackend *backend,
     }
     astra_terminal_set_echo(&shell.terminal, echo_line, NULL);
     astra_shell_editor_init(&shell.editor);
+    astra_shell_variables_init(&shell.variables);
+    /*
+     * `?` exists from the first prompt. A shell whose `$?` was empty until
+     * something had run would make `echo $?` a different thing on line one
+     * than on line two, and nothing about a fresh shell has failed.
+     */
+    (void)astra_shell_variable_set(&shell.variables, "?", "0");
     /*
      * The streams a launched program will be granted. They exist before the
      * first prompt because a launch cannot create them -- a child is handed
