@@ -59,6 +59,19 @@ typedef size_t (*astra_shell_complete_fn)(
 typedef struct astra_shell_words {
     int argc;
     char *argv[ASTRA_SHELL_ARG_CAPACITY];
+    /*
+     * Where the command's output goes, when the line said so. `>` truncates
+     * and `>>` keeps what is there; NULL is the ordinary case and means the
+     * terminal. It is one name, not a list: a second `>` on a line is a
+     * syntax error rather than a silent winner, because a reader cannot tell
+     * from the text which of two names the bytes went to.
+     *
+     * Only the output. `2>` and `<` are not parsed, so those characters are
+     * still ordinary text -- an omission that says so rather than one that
+     * half-works.
+     */
+    char *redirect;
+    int redirect_append;
     char storage[ASTRA_SHELL_LINE_CAPACITY];
 } astra_shell_words_t;
 

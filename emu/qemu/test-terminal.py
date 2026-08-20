@@ -219,6 +219,27 @@ SCRIPT = [
     # zero here is thirty-odd separate checks and a non-zero one names the step
     # -- see the enum at the top of `commands/posix/posix.c`.
     ("posix", "posix: exited 0"),
+    # Quoting, proved by a name that could not exist without it. Two words
+    # arriving as two arguments makes `two/`, and one word makes `two words/`
+    # -- so the listing is the whole assertion and no message has to be
+    # believed.
+    ("mkdir \"two words\"", "mkdir: exited 0"),
+    ("ls", "two words/"),
+    # Redirection, and the only honest way to check it: the answer must *not*
+    # be on the screen after the first line -- the shell echoes what the
+    # terminal renders into the ring, and a redirected child renders nothing --
+    # and must be in the file on the second.
+    ("which status > out.txt", "which: exited 0"),
+    ("cat out.txt", "/commands/status [1]"),
+    # `>>` keeps what is there, so both answers are in one file. A truncating
+    # append would leave only the second, which is why the needle is both.
+    ("which devices >> out.txt", "which: exited 0"),
+    ("cat out.txt", ("/commands/status [1]",
+                     "/local/commands/devices [0]")),
+    # The two refusals. A builtin has no stream to move, and a redirect with
+    # no name is not a command -- both said rather than done quietly.
+    ("pwd > out.txt", "cannot be redirected"),
+    ("ls >", "syntax"),
 ]
 
 PERFORMANCE_SCRIPT = [
@@ -255,7 +276,7 @@ QCODE = {" ": "spc", "\n": "ret", "/": "slash", ".": "dot", "-": "minus",
 # shift chord over its lowercase key; these are the punctuation that only
 # exists shifted, and `+` is here because `date +FORMAT` needs it.
 SHIFTED = {":": "semicolon", "+": "equal", "%": "5", "_": "minus",
-           "?": "slash", "\"": "apostrophe"}
+           "?": "slash", "\"": "apostrophe", ">": "dot", "<": "comma"}
 
 # A user record the decoder rendered. The body is what the shell wrote; a
 # record whose text did not fit one record ends in a backslash and continues
@@ -593,6 +614,31 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                     return 1
                 print("ASTRA TERMINAL PERFORMANCE PASS")
                 return 0
+
+            # `>` truncates, and that is a claim about what is *not* in the
+            # file -- which no needle in SCRIPT can make, because every needle
+            # there has to be found. The file holds two answers by now; one
+            # `>` and it must hold only the newer one.
+            machine.settle()
+            before = machine.sequence()
+            machine.qmp.type_line("which devices > out.txt")
+            if machine.wait_for_text("which: exited 0", command_deadline,
+                                     before)[0] is None:
+                print("FAIL: the truncating redirect never finished")
+                return 1
+            machine.settle()
+            before = machine.sequence()
+            machine.qmp.type_line("cat out.txt")
+            said, _ = machine.wait_for_text("/local/commands/devices [0]",
+                                            command_deadline, before)
+            if said is None:
+                print("FAIL: the truncated file did not hold the new answer")
+                return 1
+            if any("/commands/status [1]" in line for line in said):
+                print("FAIL: `>` kept what was in the file; it must truncate")
+                for text in said[-20:]:
+                    print("    |%s|" % text)
+                return 1
 
             # Nobody consuming keys is what a silently refused input read
             # looks like from out here, and it is invisible on the serial

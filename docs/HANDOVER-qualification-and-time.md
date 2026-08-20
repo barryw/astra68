@@ -73,14 +73,18 @@ that is already pending, and under the emulator nothing plays the part the
 AstraHost link's host end played. `HANDOVER-boards-and-usb.md` §3.2 has the two
 ways to finish them, and neither is in the way of the other three.
 
-### 3.2 The shell cannot quote
+### 3.2 The shell cannot quote — **wrong, and done**
 
-`date +"%H %M"` is impossible today: every word is its own argument, so a
-format with a space arrives as two. `date` says so rather than rendering half
-of it. This is the shell's gap, not `date`'s, and it is the same gap that makes
-`write path words...` the odd verb it is — a builtin that swallows the rest of
-the line because there is no way to say "this is one string". Quoting and
-redirection are one piece of work in `sw/userspace/shell`.
+**This section was false when it was written.** The shell has always quoted:
+`astra_shell_parse` handles `'`, `"` and `\`, `run_line` calls it, and
+`date +"%H %M"` prints `01 26` on the real ROM. `date` carried the same false
+claim in its error text and no longer does.
+
+Redirection was the half that was genuinely missing, and it is done —
+`ls > out.txt`, `date >> log`, both gated. See
+`docs/HANDOVER-shell-redirection.md`, which also has the filesystem bug this
+uncovered: every append on the machine silently truncated. What is left there
+is `<`, `2>` and pipes.
 
 ### 3.3 The rest of `console_printf`
 

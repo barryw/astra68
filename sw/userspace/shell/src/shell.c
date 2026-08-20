@@ -244,14 +244,35 @@ void astra_shell_editor_commit(astra_shell_editor_t *editor)
     editor->history_offset = 0u;
 }
 
+/*
+ * Where the next word belongs. A word ordinarily becomes an argument; the one
+ * after a `>` becomes the redirect's name instead, which is the only reason
+ * this is a function rather than two lines inline.
+ */
+static astra_shell_result_t words_begin(astra_shell_words_t *words,
+                                        size_t output, int *target)
+{
+    if (*target != 0) {
+        words->redirect = &words->storage[output];
+        *target = 0;
+        return ASTRA_SHELL_OK;
+    }
+    if (words->argc >= (int)ASTRA_SHELL_ARG_CAPACITY) return ASTRA_SHELL_ERR_LIMIT;
+    words->argv[words->argc++] = &words->storage[output];
+    return ASTRA_SHELL_OK;
+}
+
 astra_shell_result_t astra_shell_parse(const char *line, astra_shell_words_t *words)
 {
     size_t input = 0u;
     size_t output = 0u;
     char quote = '\0';
     int in_word = 0;
+    int target = 0;   /* a `>` has been seen and its name has not */
     if (line == NULL || words == NULL) return ASTRA_SHELL_ERR_INVALID;
     words->argc = 0;
+    words->redirect = NULL;
+    words->redirect_append = 0;
     while (line[input] != '\0') {
         char ch = line[input++];
         if (quote == '\0' && (ch == ' ' || ch == '\t')) {
@@ -266,10 +287,11 @@ astra_shell_result_t astra_shell_parse(const char *line, astra_shell_words_t *wo
             ch = line[input++];
         } else if (ch == '\'' || ch == '"') {
             if (quote == '\0') {
+                astra_shell_result_t begun;
                 quote = ch;
                 if (in_word == 0) {
-                    if (words->argc >= (int)ASTRA_SHELL_ARG_CAPACITY) return ASTRA_SHELL_ERR_LIMIT;
-                    words->argv[words->argc++] = &words->storage[output];
+                    begun = words_begin(words, output, &target);
+                    if (begun != ASTRA_SHELL_OK) return begun;
                     in_word = 1;
                 }
                 continue;
@@ -278,16 +300,36 @@ astra_shell_result_t astra_shell_parse(const char *line, astra_shell_words_t *wo
                 quote = '\0';
                 continue;
             }
+        } else if (quote == '\0' && ch == '>') {
+            /*
+             * It ends the word it touches, so `ls>out` is `ls` and `out` the
+             * way every other shell reads it. A redirect already named, or one
+             * still waiting for its name, is the line saying two things about
+             * one stream.
+             */
+            if (in_word != 0) {
+                words->storage[output++] = '\0';
+                in_word = 0;
+            }
+            if (words->redirect != NULL || target != 0) return ASTRA_SHELL_ERR_SYNTAX;
+            if (line[input] == '>') {
+                words->redirect_append = 1;
+                ++input;
+            }
+            target = 1;
+            continue;
         }
         if (in_word == 0) {
-            if (words->argc >= (int)ASTRA_SHELL_ARG_CAPACITY) return ASTRA_SHELL_ERR_LIMIT;
-            words->argv[words->argc++] = &words->storage[output];
+            astra_shell_result_t begun = words_begin(words, output, &target);
+            if (begun != ASTRA_SHELL_OK) return begun;
             in_word = 1;
         }
         if (output + 1u >= ASTRA_SHELL_LINE_CAPACITY) return ASTRA_SHELL_ERR_LIMIT;
         words->storage[output++] = ch;
     }
     if (quote != '\0') return ASTRA_SHELL_ERR_SYNTAX;
+    /* `ls >` named nothing, and a redirect with no name is not a command. */
+    if (target != 0) return ASTRA_SHELL_ERR_SYNTAX;
     if (in_word != 0) words->storage[output++] = '\0';
     words->argv[words->argc] = NULL;
     return ASTRA_SHELL_OK;

@@ -102,23 +102,31 @@ build_path(const AstraVfsExt4Backend *backend, const char *path, char *out,
     return 1;
 }
 
-/* lwext4's mode strings, chosen from the protocol's open flags. */
+/*
+ * lwext4's mode strings, chosen from the protocol's open flags.
+ *
+ * The protocol has four states and lwext4 has three modes, so one of ours has
+ * no single mode: **create without truncate** -- what `>>` opens with, and what
+ * anything that adds to a file opens with. `"wb"` creates and truncates, and
+ * `"r+b"` keeps but refuses an absent name, so that state is two attempts
+ * rather than one mode, which is why this returns a first choice and a
+ * fallback rather than a string.
+ *
+ * It used to return `"wb"` for it and say so in a comment. Every append on the
+ * machine silently truncated, and the file that came back was the right length
+ * for the last write and the wrong length for the file -- which reads like a
+ * short write and not like an open flag.
+ */
 static const char *
 mode_of(uint32_t flags)
 {
     if ((flags & ASTRA_VFS_OPEN_WRITE) == 0u) {
         return "rb";
     }
-    if ((flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u ||
-        (flags & ASTRA_VFS_OPEN_CREATE) != 0u) {
-        /*
-         * "wb" truncates and creates. The protocol can ask for create without
-         * truncate, which lwext4's mode strings cannot express; "r+b" is the
-         * closest and fails when the file is absent, so create-without-truncate
-         * falls back to "wb" rather than silently doing nothing.
-         */
+    if ((flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u) {
         return "wb";
     }
+    /* Keeps what is there; the caller falls back to "wb" when it is absent. */
     return "r+b";
 }
 
@@ -232,6 +240,17 @@ ext4_backend_open(void *context, const char *path, uint32_t flags,
         return ASTRA_VFS_ERR_LIMIT;
     }
     rc = ext4_fopen(&backend->open_files[index].file, full, mode_of(flags));
+    /*
+     * Create without truncate, on a name that is not there yet. Only that
+     * one refusal: a mode that failed for any other reason has said something
+     * about the file, and retrying with the mode that truncates would answer
+     * it by destroying what it was refusing to open.
+     */
+    if (rc == ENOENT && (flags & ASTRA_VFS_OPEN_CREATE) != 0u &&
+        (flags & ASTRA_VFS_OPEN_TRUNCATE) == 0u &&
+        (flags & ASTRA_VFS_OPEN_WRITE) != 0u) {
+        rc = ext4_fopen(&backend->open_files[index].file, full, "wb");
+    }
     if (rc != EOK) {
         return status_of(rc);
     }

@@ -76,6 +76,51 @@ static void test_completion(void)
     assert(strcmp(editor.line, "mo") == 0);
 }
 
+/*
+ * Redirection is parsing, so it is proved here rather than on the machine.
+ * The cases that matter are the ones a shell gets wrong: a `>` with no space
+ * around it, a quoted `>` that is text, and a name that never arrives.
+ */
+static void test_parse_redirect(void)
+{
+    astra_shell_words_t words;
+
+    assert(astra_shell_parse("ls -l > out.txt", &words) == ASTRA_SHELL_OK);
+    assert(words.argc == 2);
+    assert(strcmp(words.argv[0], "ls") == 0);
+    assert(strcmp(words.argv[1], "-l") == 0);
+    assert(words.redirect != NULL && strcmp(words.redirect, "out.txt") == 0);
+    assert(words.redirect_append == 0);
+
+    /* No space is the same line. */
+    assert(astra_shell_parse("ls>out.txt", &words) == ASTRA_SHELL_OK);
+    assert(words.argc == 1 && strcmp(words.argv[0], "ls") == 0);
+    assert(words.redirect != NULL && strcmp(words.redirect, "out.txt") == 0);
+
+    assert(astra_shell_parse("date >> log", &words) == ASTRA_SHELL_OK);
+    assert(words.argc == 1);
+    assert(words.redirect != NULL && strcmp(words.redirect, "log") == 0);
+    assert(words.redirect_append == 1);
+
+    /* A name may be quoted, and a quoted `>` is text. */
+    assert(astra_shell_parse("ls > \"a b\"", &words) == ASTRA_SHELL_OK);
+    assert(words.redirect != NULL && strcmp(words.redirect, "a b") == 0);
+    assert(astra_shell_parse("echo \">\" x", &words) == ASTRA_SHELL_OK);
+    assert(words.redirect == NULL);
+    assert(words.argc == 3 && strcmp(words.argv[1], ">") == 0);
+    assert(astra_shell_parse("echo \\> x", &words) == ASTRA_SHELL_OK);
+    assert(words.redirect == NULL && words.argc == 3);
+
+    /* And the line that says nothing complete. */
+    assert(astra_shell_parse("ls >", &words) == ASTRA_SHELL_ERR_SYNTAX);
+    assert(astra_shell_parse("ls > a > b", &words) == ASTRA_SHELL_ERR_SYNTAX);
+    assert(astra_shell_parse("ls > > b", &words) == ASTRA_SHELL_ERR_SYNTAX);
+
+    /* An ordinary line still says it redirects nowhere. */
+    assert(astra_shell_parse("ls -l", &words) == ASTRA_SHELL_OK);
+    assert(words.redirect == NULL && words.redirect_append == 0);
+}
+
 static void test_parse_prompt_dispatch(void)
 {
     astra_shell_words_t words;
@@ -102,6 +147,7 @@ int main(void)
     test_editor();
     test_completion();
     test_parse_prompt_dispatch();
+    test_parse_redirect();
     puts("astra shell core: PASS");
     return 0;
 }

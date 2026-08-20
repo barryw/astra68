@@ -142,14 +142,13 @@ astra_main(const AstraStartupInfo *startup)
         }
         if (word[0] != '-' || word[1] == '\0') {
             /*
-             * GNU date takes no operand either, and the reason a format with
-             * a space lands here is that the shell has no quoting yet: every
-             * word after the first is its own argument. A format without
-             * spaces is the way to ask for one today.
+             * GNU date takes no operand either. A format with a space is
+             * `date +"%H %M"`, which the shell quotes into one word -- so a
+             * second word arriving here is a typo and not a limitation.
              */
             (void)fprintf(stderr,
-                          "date: %s: not an option or a +FORMAT. The shell "
-                          "cannot quote yet, so a format must be one word.\n",
+                          "date: %s: not an option or a +FORMAT. A format "
+                          "with a space in it needs quoting.\n",
                           word);
             return ASTRA_STATUS_INVALID;
         }

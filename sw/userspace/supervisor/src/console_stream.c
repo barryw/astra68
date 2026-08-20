@@ -47,6 +47,15 @@ static uint32_t sink_receive;
 static uint32_t source_send;
 static uint32_t source_receive;
 static int stream_ready;
+/*
+ * The other place STDOUT can point. One port, made the first time something
+ * asks and kept afterwards, because a shell redirects often and a port per
+ * command is handle churn for nothing. `redirect_sink.render` being NULL is
+ * what says nothing is redirected right now.
+ */
+static AstraStreamSink redirect_sink;
+static uint32_t redirect_send;
+static uint32_t redirect_receive;
 
 /*
  * Straight into the cell model, which is where the shell's own output goes.
@@ -129,7 +138,56 @@ console_stream_wait_handle(void)
 uint32_t
 console_stream_stdout(void)
 {
-    return stream_ready ? sink_send : 0u;
+    if (!stream_ready) {
+        return 0u;
+    }
+    return redirect_sink.render != NULL ? redirect_send : sink_send;
+}
+
+int
+console_stream_redirect(AstraStreamRender render, void *context)
+{
+    if (!stream_ready) {
+        return 0;
+    }
+    if (render == NULL) {
+        redirect_sink.render = NULL;
+        redirect_sink.context = NULL;
+        return 1;
+    }
+    if (redirect_receive == 0u &&
+        astra_rt_port_create(CONSOLE_STREAM_SINK_MESSAGES,
+                             CONSOLE_STREAM_SINK_MESSAGES *
+                                 ASTRA_STREAM_WRITE_SIZE,
+                             &redirect_receive, &redirect_send) !=
+            ASTRA_SYSCALL_OK) {
+        redirect_receive = 0u;
+        redirect_send = 0u;
+        return 0;
+    }
+    /*
+     * Re-initialised each time rather than kept, so the counters a redirect
+     * reports are that redirect's and not every redirect since boot. The
+     * geometry stays zero on purpose: a file has none, and a program that asks
+     * is told so and does not page.
+     */
+    if (!astra_stream_sink_init(&redirect_sink, redirect_receive, render,
+                                context)) {
+        return 0;
+    }
+    return 1;
+}
+
+int
+console_stream_redirected(void)
+{
+    return stream_ready && redirect_sink.render != NULL;
+}
+
+uint32_t
+console_stream_redirect_wait_handle(void)
+{
+    return redirect_sink.render != NULL ? redirect_receive : 0u;
 }
 
 uint32_t
@@ -166,6 +224,10 @@ console_stream_pump(void)
         return;
     }
     (void)astra_stream_sink_pump(&sink, CONSOLE_STREAM_PUMP_BUDGET);
+    if (redirect_sink.render != NULL) {
+        (void)astra_stream_sink_pump(&redirect_sink,
+                                     CONSOLE_STREAM_PUMP_BUDGET);
+    }
     (void)astra_stream_source_pump(&source, CONSOLE_STREAM_PUMP_BUDGET);
 }
 
@@ -191,6 +253,17 @@ console_stream_drain(void)
         uint32_t moved = astra_stream_sink_pump(&sink,
                                                 CONSOLE_STREAM_PUMP_BUDGET);
 
+        if (redirect_sink.render != NULL) {
+            /*
+             * The redirected sink drains on the same passes. A child's last
+             * write is queued on its port when its process record goes,
+             * exactly as it is on the terminal's -- and there it costs a line
+             * printed out of order, while here it costs a line missing from
+             * the file.
+             */
+            moved += astra_stream_sink_pump(&redirect_sink,
+                                            CONSOLE_STREAM_PUMP_BUDGET);
+        }
         if (moved == 0u) {
             break;
         }

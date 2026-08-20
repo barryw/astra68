@@ -90,6 +90,12 @@ itself stays, as a conformance oracle only — see above.
   guarding `INSN(pmmu030, ...)` in `target/m68k/translate.c`.
 - **`pytest` is not installed on `beast`**, so `sw/boot`'s Python half only runs
   on the Mac.
+- **`ASTRA_VFS_OPEN_CREATE` without `ASTRA_VFS_OPEN_TRUNCATE` used to
+  truncate.** lwext4 has three mode strings and the protocol has four states,
+  so `ext4_backend_open` now tries `"r+b"` and falls back to `"wb"` only on
+  `ENOENT`. It surfaces as a file that is the right length for the last write
+  and the wrong length for the file -- which reads like a short write and not
+  like an open flag.
 - **A storage image killed mid-run will not boot again until it is fsck'd.**
   No clean shutdown leaves a dirty ext4 journal; lwext4 replays it and returns
   bad bytes. It surfaces as `astra_launch:2: failed` on the next service read,
@@ -129,6 +135,10 @@ itself stays, as a conformance oracle only — see above.
   the ROM and then run `make test` in the same tree and the host binaries are
   linked from m68k objects: `./build/test_mmio: cannot execute binary file`.
   `make clean` between the two.
+- **`make clean && make test` in `sw/userspace` does not work**: the test
+  target does not build the runtime it links against, so it stops at
+  `No rule to make target '../../runtime/build/m68k/crt0.o'`. Run `make -j8`
+  first, then `make test`.
 - **The machine's date comes from the host**, through a Vesta register the
   emulator fills from `QEMU_CLOCK_HOST`. There is no software clock and no
   synchronisation protocol here: fix the host's clock, and Astra's is fixed.
@@ -153,7 +163,8 @@ itself stays, as a conformance oracle only — see above.
 | Complete inventory of everything | `docs/INVENTORY.md` |
 | Project-wide continuation map | `docs/CURRENT_STATE.md` (mind the override) |
 | Storage / filesystem line of work | `docs/HANDOVER-userspace-bringup.md` |
-| **Current resume point** | `docs/HANDOVER-qualification-and-time.md` — the qualification gate, the listing, and the clock; what is left is storage/input provocation, shell quoting, and the DE25 Nano |
+| **Current resume point** | `docs/HANDOVER-shell-redirection.md` — quoting was already there, redirection now is; what is left is `<`, `2>` and pipes |
+| The gate, the listing, and the clock before that | `docs/HANDOVER-qualification-and-time.md` — its §3.1, §3.3–§3.5 still stand: storage/input provocation, `console_printf`, and the DE25 Nano |
 | Boards, USB, and the qualification's history | `docs/HANDOVER-boards-and-usb.md` |
 | The memory work in full, with its numbers | `docs/HANDOVER-memory-and-modernity.md` — §5 is done; §6.2 onward is the record |
 | Boot fix, the shell gate, commands and the POSIX half | `docs/HANDOVER-boot-and-shell-gate.md` — every gate green |

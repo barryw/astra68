@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+#include <astra/stream.h>
 #include <astra/terminal.h>
 
 /*
@@ -33,6 +34,37 @@ uint32_t console_stream_wait_handle(void);
 uint32_t console_stream_stdout(void);
 uint32_t console_stream_stderr(void);
 uint32_t console_stream_stdin(void);
+
+/*
+ * Points a launched program's STDOUT somewhere other than the terminal.
+ *
+ * `render` is handed each chunk the child writes, on the same loop that pumps
+ * everything else here; NULL puts STDOUT back on the terminal and is the
+ * ordinary state. This is what makes `ls > out.txt` a capability operation
+ * rather than a shell trick: the child is granted a send handle to a different
+ * port and never learns that anything is unusual about it.
+ *
+ * The port is made once and kept. Zero on failure, which leaves STDOUT where
+ * it was -- a redirect that could not be made is a command that must not run,
+ * and the caller is the one that knows how to say so.
+ *
+ * **STDERR is not moved.** A program whose output is in a file still has to be
+ * able to say it failed somewhere a person is looking.
+ */
+int console_stream_redirect(AstraStreamRender render, void *context);
+
+/* Non-zero while STDOUT points somewhere other than the terminal. */
+int console_stream_redirected(void);
+
+/*
+ * The redirected sink's receive endpoint, or zero while nothing is redirected.
+ *
+ * A caller that sleeps on `console_stream_wait_handle` alone would sleep
+ * through a redirected child filling its port -- STDERR still arrives on the
+ * terminal's sink, so neither handle stands in for the other, and both have to
+ * be in the wait.
+ */
+uint32_t console_stream_redirect_wait_handle(void);
 
 /*
  * Offers a finished line to whatever is reading STDIN, and returns how many

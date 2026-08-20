@@ -340,6 +340,14 @@ static void command_help(void)
     write_line("programs live in COMMANDS:. try ls -l, cat FILE, mkdir DIR,");
     write_line("          rm FILE, status 7, or events");
     write_line("assign shows every name and its members, in the order tried");
+    /*
+     * Both halves, because a person who knows one and not the other has half a
+     * shell: quoting is what makes one argument out of two words, redirection
+     * is what makes a file out of what a program said.
+     */
+    write_line("quote with ' or \" -- date +\"%H %M\" is one argument");
+    write_line("redirect a program with > FILE, or >> FILE to keep what is");
+    write_line("          there. builtins write to the terminal only");
 }
 
 static void prompt(void)
@@ -738,11 +746,205 @@ static void command_launch(const char *word, int argc, char *const *argv)
                  "child %u finished with status %u", child_id, exit_status);
 }
 
+/*
+ * The words this file answers itself, as one list.
+ *
+ * It was a chain of `shell_equal` until a redirect had to be refused on a
+ * builtin, which needs the question asked *before* the answer runs -- and two
+ * places naming the same six words is one place for them to drift apart. The
+ * type is the shell library's, so a builtin here has the shape a builtin
+ * anywhere on this machine has.
+ */
+static int builtin_help(void *context, int argc, char *const argv[])
+{
+    (void)context; (void)argc; (void)argv;
+    command_help();
+    return 0;
+}
+
+static int builtin_clear(void *context, int argc, char *const argv[])
+{
+    (void)context; (void)argc; (void)argv;
+    astra_terminal_clear(&shell.terminal);
+    return 0;
+}
+
+static int builtin_pwd(void *context, int argc, char *const argv[])
+{
+    (void)context; (void)argc; (void)argv;
+    astra_terminal_write(&shell.terminal, shell.assign);
+    astra_terminal_putc(&shell.terminal, ':');
+    write_line(shell.directory);
+    return 0;
+}
+
+static int builtin_cd(void *context, int argc, char *const argv[])
+{
+    (void)context;
+    command_cd(argc, argv);
+    return 0;
+}
+
+static int builtin_write(void *context, int argc, char *const argv[])
+{
+    (void)context;
+    command_write(argc, argv);
+    return 0;
+}
+
+static int builtin_assign(void *context, int argc, char *const argv[])
+{
+    (void)context;
+    command_assign(argc, argv);
+    return 0;
+}
+
+static const astra_shell_builtin_t shell_builtins[] = {
+    {"help", builtin_help},
+    {"clear", builtin_clear},
+    {"pwd", builtin_pwd},
+    {"cd", builtin_cd},
+    {"write", builtin_write},
+    {"assign", builtin_assign}
+};
+
+static const astra_shell_builtin_t *shell_builtin(const char *word)
+{
+    for (uint32_t index = 0u;
+         index < sizeof(shell_builtins) / sizeof(shell_builtins[0]); ++index) {
+        if (shell_equal(shell_builtins[index].name, word))
+            return &shell_builtins[index];
+    }
+    return NULL;
+}
+
+/*
+ * A redirected command's output, on its way into a file.
+ *
+ * The sink calls `redirect_render` on the loop that pumps everything else, so
+ * the write happens on the same thread that renders the terminal -- which is
+ * the arrangement every other part of this shell already has. A write that
+ * fails is remembered rather than reported: the sink has nowhere to say it,
+ * and one report when the command finishes is worth more than one per chunk.
+ *
+ * The activity is kept, unlike the terminal's sink which drops it. A file is
+ * read later by somebody who was not here, and the number is the only way back
+ * to the events the command emitted while it wrote.
+ */
+static struct {
+    AstraFile file;
+    uint32_t status;     /* the first write that refused */
+    int stalled;         /* a write that took less than it was given */
+    uint32_t bytes;
+    uint32_t activity;
+} redirect;
+
+static void redirect_render(void *context, const uint8_t *bytes,
+                            uint32_t length, uint32_t activity)
+{
+    uint32_t moved = 0u;
+    uint32_t status;
+
+    (void)context;
+    redirect.activity = activity;
+    if (redirect.status != ASTRA_VFS_OK || redirect.stalled)
+        return;
+    status = filesystem_library()->write(&redirect.file, bytes, length, &moved);
+    if (status != ASTRA_VFS_OK)
+        redirect.status = status;
+    else if (moved != length)
+        redirect.stalled = 1;
+    else
+        redirect.bytes += moved;
+}
+
+/*
+ * Opens the name the line gave and points STDOUT at it. Zero if it could not,
+ * having said why -- a redirect that failed is a command that must not run,
+ * because a program whose output was meant for a file must never quietly get
+ * the screen instead.
+ */
+static int redirect_begin(const char *name, int append)
+{
+    static const AstraFile closed = ASTRA_FILE_INIT;
+    char typed[SHELL_PATH_MAX];
+    uint64_t position = 0u;
+    uint32_t status;
+
+    redirect.file = closed;
+    redirect.status = ASTRA_VFS_OK;
+    redirect.stalled = 0;
+    redirect.bytes = 0u;
+    redirect.activity = 0u;
+    status = filesystem_library()->qualify(
+        shell.assign, shell.directory, name, typed, sizeof(typed));
+    if (status != ASTRA_VFS_OK) {
+        report_status(name, status);
+        return 0;
+    }
+    status = filesystem_library()->open(
+        filesystem(), typed,
+        ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+            (append ? 0u : ASTRA_VFS_OPEN_TRUNCATE),
+        &redirect.file);
+    if (status != ASTRA_VFS_OK) {
+        report_status(name, status);
+        return 0;
+    }
+    /*
+     * `>>` is a seek and not an open flag. The protocol has no append bit, and
+     * adding one to carry what a seek to the end already says would be a
+     * second way to say one thing -- and the one that races, because a flag is
+     * evaluated once at open and a seek is where the writing starts.
+     */
+    if (append) {
+        status = filesystem_library()->seek(
+            &redirect.file, 0, ASTRA_FILE_SEEK_END, &position);
+        if (status != ASTRA_VFS_OK) {
+            (void)filesystem_library()->close(&redirect.file);
+            report_status(name, status);
+            return 0;
+        }
+    }
+    if (!console_stream_redirect(redirect_render, NULL)) {
+        (void)filesystem_library()->close(&redirect.file);
+        write_line("redirect: no stream to point");
+        return 0;
+    }
+    return 1;
+}
+
+/* Puts STDOUT back, closes the file, and reports a write that did not land. */
+static void redirect_end(const char *name)
+{
+    (void)console_stream_redirect(NULL, NULL);
+    (void)filesystem_library()->close(&redirect.file);
+    ASTRA_EVENT2(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
+                 "redirect wrote %u bytes for activity %u", redirect.bytes,
+                 redirect.activity);
+    if (redirect.status != ASTRA_VFS_OK)
+        report_status(name, redirect.status);
+    else if (redirect.stalled)
+        write_line("redirect: the file took less than was written");
+}
+
 static void run_line(const char *line)
 {
     astra_shell_words_t words;
+    astra_shell_result_t parsed;
+    const astra_shell_builtin_t *builtin;
 
-    if (astra_shell_parse(line, &words) != ASTRA_SHELL_OK || words.argc == 0)
+    parsed = astra_shell_parse(line, &words);
+    /*
+     * Said, rather than swallowed. A line the parser refused used to leave no
+     * mark at all, so an unclosed quote looked exactly like a machine that had
+     * stopped taking input.
+     */
+    if (parsed == ASTRA_SHELL_ERR_SYNTAX) {
+        write_line("syntax: close the quote, and give a redirect one name");
+        return;
+    }
+    if (parsed != ASTRA_SHELL_OK || words.argc == 0)
         return;
 
     /*
@@ -757,27 +959,34 @@ static void run_line(const char *line)
     ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
                  "command accepted, %u words", (uint32_t)words.argc);
 
-    if (shell_equal(words.argv[0], "help"))
-        command_help();
-    else if (shell_equal(words.argv[0], "clear"))
-        astra_terminal_clear(&shell.terminal);
-    else if (shell_equal(words.argv[0], "pwd")) {
-        astra_terminal_write(&shell.terminal, shell.assign);
-        astra_terminal_putc(&shell.terminal, ':');
-        write_line(shell.directory);
-    } else if (shell_equal(words.argv[0], "cd"))
-        command_cd(words.argc, words.argv);
-    else if (shell_equal(words.argv[0], "write"))
-        command_write(words.argc, words.argv);
-    else if (shell_equal(words.argv[0], "assign"))
-        command_assign(words.argc, words.argv);
-    else
+    builtin = shell_builtin(words.argv[0]);
+    /*
+     * A builtin writes to the terminal directly and has no stream to move, so
+     * a redirect on one is refused before it runs rather than ignored after.
+     * The builtins left here are on their way out for exactly this reason:
+     * `ls > out.txt` works because `ls` is a program.
+     */
+    if (builtin != NULL && words.redirect != NULL) {
+        astra_terminal_write(&shell.terminal, words.argv[0]);
+        write_line(": a builtin writes to the terminal and cannot be redirected");
+    } else if (builtin != NULL)
+        (void)builtin->function(NULL, words.argc, words.argv);
+    else if (words.redirect == NULL)
         /*
          * Not a builtin, so it is a program. There is no third case: a word
          * the machine does not recognise is a file it has not got, and saying
          * that is the whole of the answer.
          */
         command_launch(words.argv[0], words.argc, words.argv);
+    else if (redirect_begin(words.redirect, words.redirect_append)) {
+        /*
+         * The order is the whole of it: STDOUT is pointed at the file before
+         * the launch, because the grant is read there, and it is put back only
+         * after `command_launch` has drained what the child left queued.
+         */
+        command_launch(words.argv[0], words.argc, words.argv);
+        redirect_end(words.redirect);
+    }
 }
 
 static int flush_terminal(void)
@@ -928,12 +1137,21 @@ static int pump_once(void)
         return 0;
     }
     if (!had_key) {
-        uint32_t waits[3];
+        uint32_t waits[4];
         uint32_t wait_count = 0u;
         uint32_t sink = console_stream_wait_handle();
+        uint32_t redirected = console_stream_redirect_wait_handle();
 
         if (sink != 0u)
             waits[wait_count++] = sink;
+        /*
+         * And the file's port, while a child is writing into one. STDERR still
+         * arrives on the terminal's sink, so this is a second port and not the
+         * same one moved -- and a wait that named only the first would sleep
+         * through a child that had filled the second and stopped.
+         */
+        if (redirected != 0u)
+            waits[wait_count++] = redirected;
         if (shell.child != 0u)
             waits[wait_count++] = shell.child;
         if (shell.backend.wait_handle != 0u)
