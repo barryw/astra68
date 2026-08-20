@@ -143,7 +143,65 @@ All of it is application-generic — none of it is a Terminal special case.
 Measured: program image read **313 → 76.6 ms for 100 KB**. A 16 KiB read went
 31.2 → 15.3 ms, of which the copy fell 22.7 → 6.1 ms.
 
-## 5. Two things that did not work, so nobody repeats them
+## 5. Things that did not work, so nobody repeats them
+
+**Per-address-space MMU indices — built, measured, reverted (2026-08-20).**
+§2 attributes the 7.5 ms round trip to the address-space switch, and §5 below
+names the honest fix: address-space indices in TB flags. It was built. It
+works, and it does not help.
+
+What was built: `MMU_KERNEL_IDX` and `MMU_USER_IDX` kept, fourteen tagged
+indices above them, a CRP-value-to-index LRU in `CPUM68KState`, the index in TB
+flags bits 17-20, and the 43 `IS_USER(s)` sites in `translate.c` that were
+*indices* split from the 22 that are *privilege tests* -- the two meanings the
+one macro carried because `MMU_USER_IDX` happened to equal 1. `MMU_USER_IDX`
+became the supervisor's window onto user memory for MOVES, flushed per switch;
+the tagged indices are never flushed on a switch. It is sound because the
+kernel flushes at every table edit and PFLUSH/PFLUSHA reach every index --
+`sw/kernel/vm.c` flushes on every map and unmap regardless of which space it
+edited.
+
+What it measured, on one boot, same ROM and image:
+
+| | untagged | tagged |
+|---|---:|---:|
+| guest page-table walks | 63,000 | 46,000 |
+| TB count | 17,103 | 17,109 |
+| TLB partial flushes | 885 | 911 |
+| `SERVICES:storage` spawn, beast | 11.0-12.2 ms | 11.1-11.9 ms |
+| the same, on `astra-arty` | 287-294 ms | 289-299 ms |
+
+27% fewer page-table walks and **no wall-clock change on either machine**. The
+tag table itself behaves perfectly -- 1,500 switches, 1,491 hits, 8 spaces
+claimed, zero evictions -- so the mechanism is not the problem. The premise is:
+**the ATC flush is not what a round trip costs.** A walk is cheap and there are
+not many of them.
+
+The patch is not in the tree. Rebuild it from this description only with a
+measurement in hand that says the flush matters.
+
+**Two more hypotheses killed the same day, so they are not re-run:**
+
+- **The translation cache is not thrashing.** `info jit` after a boot:
+  `TB flush count 0`, `TB invalidate count 2`, 17k TBs in 10 MB of a 1 GB
+  buffer. Codegen is ~13% of a profile and TB lookup ~10%, but nothing is being
+  thrown away -- only 65% of TBs are directly chained, which is where the
+  lookup time goes.
+- **The library cache's byte-for-byte compare is not the cost of a service
+  launch.** `library_cache_match` re-reads every read-only page out of the
+  launcher and compares 4096 bytes a page before it will use the cache, which
+  looks exactly like the culprit. Short-circuiting it entirely changed
+  `SERVICES:storage` spawn and ready by nothing at all -- that service maps no
+  libraries, so the path never runs. It remains worth fixing for `fsopen`,
+  which does open one, but it must be measured on a *Terminal* launch and not
+  on a service.
+
+**What is still unexplained:** `spawn=288737us` on the board to create a
+process from a 77 KB image is ~113 cycles a byte at the 30 MHz baseline, where
+a copy is 2-4. That number is the next thing to take apart, and it wants the
+guest's own stage probes rather than another inference from the outside.
+
+## 5a. Two things that did not work, so nobody repeats them
 
 **Per-address-space MMU indices in the emulator were dead code.** m68k takes the
 mmu index from TB flags (`IS_USER(s)` in `translate.c` yields 0 or 1), never
