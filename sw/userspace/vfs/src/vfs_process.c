@@ -30,9 +30,24 @@ typedef struct LibraryImage {
 } LibraryImage;
 
 static AstraAssignTable assigns;
+/*
+ * One client per distinct mount handle, connected the first time something
+ * asks for it.
+ *
+ * **It used to connect all of them at startup.** A connect is a HELLO and a
+ * BIND_AREA -- two cross-process round trips, and a round trip on this machine
+ * is ~7.5 ms because the 68030 has no address-space tag and every switch
+ * flushes the ATC. A command is granted WORK, COMMANDS twice, LIBS, EVENTS and
+ * PROC, so six handles were connected before `main` and most programs use two.
+ * `ls` never touches EVENTS: or PROC:; `status` touches nothing at all.
+ *
+ * Lazy costs one branch per lookup and nothing else: the handle is known at
+ * seeding, and only the two round trips move.
+ */
 static struct {
     AstraVfsClient client;
     uint32_t handle;
+    uint8_t connected;
 } clients[PROCESS_VFS_CLIENT_MAX];
 static uint32_t client_count;
 static OpenLibraryRecord open_libraries[ASTRA_LIBRARY_SLOT_COUNT];
@@ -41,9 +56,30 @@ void astra_process_vfs_close(void)
 {
     while (client_count != 0u) {
         --client_count;
-        (void)astra_vfs_disconnect(&clients[client_count].client);
+        if (clients[client_count].connected != 0u)
+            (void)astra_vfs_disconnect(&clients[client_count].client);
         clients[client_count].handle = 0u;
+        clients[client_count].connected = 0u;
     }
+}
+
+/*
+ * The connect, at the moment of first use. A slot that cannot connect stays
+ * unconnected and answers NULL, which is the same answer a handle nobody
+ * granted gives -- a caller that could not reach a mount cannot tell the two
+ * apart and does not need to.
+ */
+static AstraVfsClient *client_ready(uint32_t slot)
+{
+    if (slot >= client_count)
+        return NULL;
+    if (clients[slot].connected == 0u) {
+        if (astra_vfs_port_connect(&clients[slot].client,
+                                   clients[slot].handle) != ASTRA_VFS_OK)
+            return NULL;
+        clients[slot].connected = 1u;
+    }
+    return &clients[slot].client;
 }
 
 static int same(const char *left, const char *right)
@@ -519,13 +555,7 @@ uint32_t astra_process_vfs_init(const AstraStartupInfo *startup)
             return ASTRA_VFS_ERR_LIMIT;
         }
         clients[client_count].handle = assigns.entries[index].handle;
-        if (astra_vfs_port_connect(&clients[client_count].client,
-                                   clients[client_count].handle) !=
-            ASTRA_VFS_OK) {
-            clients[client_count].handle = 0u;
-            astra_process_vfs_close();
-            return ASTRA_VFS_ERR_IO;
-        }
+        clients[client_count].connected = 0u;
         ++client_count;
     }
     return client_count != 0u ? ASTRA_VFS_OK : ASTRA_VFS_ERR_NOT_FOUND;
@@ -538,7 +568,7 @@ AstraAssignTable *astra_process_vfs_assigns(void)
 
 AstraVfsClient *astra_process_vfs_client(void)
 {
-    return client_count != 0u ? &clients[0].client : NULL;
+    return client_ready(0u);
 }
 
 AstraVfsClient *astra_process_vfs_client_for(const AstraAssign *assign)
@@ -547,7 +577,7 @@ AstraVfsClient *astra_process_vfs_client_for(const AstraAssign *assign)
         return astra_process_vfs_client();
     for (uint32_t index = 0u; index < client_count; ++index)
         if (clients[index].handle == assign->handle)
-            return &clients[index].client;
+            return client_ready(index);
     return NULL;
 }
 

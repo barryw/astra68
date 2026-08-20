@@ -272,18 +272,23 @@ SCRIPT = [
     ("A=1 pwd", "cannot be handed an environment"),
 ]
 
+# What a person waits for: Enter, to the answer on the screen.
+#
+# It used to time `status`, whose whole output was the shell's "exited 0" line.
+# The shell does not print that any more -- a status is `$?` -- so a command
+# with no output has nothing to wait for, and the baseline was reset here on
+# commands that answer. The numbers below are therefore not comparable with
+# the ones in HANDOVER-launch-latency.md before 2026-08-19.
 PERFORMANCE_SCRIPT = [
-    ("status 7", "exited 7"),
-    ("status", "exited 0"),
-    ("commands:status 3", "exited 3"),
+    ("hello", "hello from picolibc"),
+    ("echo one", "one"),
     ("which status", "/commands/status [1]"),
     ("which devices", "/local/commands/devices [0]"),
     ("devices status", "/commands/status [1]"),
 ]
 PERFORMANCE_BUDGET_SECONDS = {
-    "status 7": 6.0,
-    "status": 4.5,
-    "commands:status 3": 4.5,
+    "hello": 8.0,
+    "echo one": 8.0,
     "which status": 8.0,
     "which devices": 7.0,
     "devices status": 7.0,

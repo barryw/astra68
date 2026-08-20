@@ -118,16 +118,43 @@ int main(void)
     {
         AstraStartupInfo startup = { .capabilities_address = 1u };
 
+        /*
+         * Seeding connects nothing. A connect is two cross-process round trips
+         * and a program that never names a mount must never pay for it -- so
+         * this counter staying at zero here is the whole of that claim.
+         */
         assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
-        assert(connects == 2u);
+        assert(connects == 0u);
+        /* First use is what connects, and only once however often it is asked. */
+        assert(astra_process_vfs_client() != NULL);
+        assert(connects == 1u);
+        assert(astra_process_vfs_client() != NULL);
+        assert(connects == 1u);
         astra_process_vfs_close();
-        assert(disconnects == 2u);
+        assert(disconnects == 1u);
 
+        /* A mount nobody named is a mount nobody disconnects either. */
         connects = 0u;
         disconnects = 0u;
-        fail_connect = 2u;
-        assert(astra_process_vfs_init(&startup) == ASTRA_VFS_ERR_IO);
-        assert(connects == 2u && disconnects == 1u);
+        assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+        astra_process_vfs_close();
+        assert(connects == 0u && disconnects == 0u);
+
+        /*
+         * A connect that refuses answers NULL and is retried by the next
+         * caller rather than remembered as fatal: seeding no longer has an
+         * opinion about whether a mount is reachable, because seeding no
+         * longer talks to one.
+         */
+        connects = 0u;
+        disconnects = 0u;
+        fail_connect = 1u;
+        assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+        assert(astra_process_vfs_client() == NULL);
+        assert(connects == 1u);
+        fail_connect = 0u;
+        assert(astra_process_vfs_client() != NULL);
+        assert(connects == 2u);
         astra_process_vfs_close();
         assert(disconnects == 1u);
     }
