@@ -8,6 +8,7 @@
 #include <astra/display.h>
 #include <astra/event.h>
 #include <astra/input.h>
+#include <astra/civil.h>
 #include <astra/process.h>
 #include <astra/syscall.h>
 
@@ -18,14 +19,21 @@
  */
 #define ASTRA_ASSERT_STATUS_TAG 0x41530000u
 
+/*
+ * Four answers and a status. D4 joined the set when the clock started
+ * returning the zone with the instant: a call that has to answer two things
+ * about one moment cannot be split into two calls without straddling the
+ * moment.
+ */
 typedef struct AstraSyscallResult {
     uint32_t status;
     uint32_t value0;
     uint32_t value1;
     uint32_t value2;
+    uint32_t value3;
 } AstraSyscallResult;
 
-_Static_assert(sizeof(AstraSyscallResult) == 16u,
+_Static_assert(sizeof(AstraSyscallResult) == 20u,
                "syscall-result layout changed");
 
 int astra_startup_validate(const AstraStartupInfo *startup);
@@ -63,6 +71,8 @@ uint32_t astra_device_query(uint32_t handle, AstraDeviceInfo *info);
 uint32_t astra_device_reset(uint32_t handle);
 uint64_t astra_clock_monotonic(void);
 uint32_t astra_clock_realtime(uint64_t *nanoseconds);
+uint32_t astra_clock_realtime_zone(uint64_t *nanoseconds,
+                                   AstraTimeZone *zone);
 uint32_t astra_wait_one(uint32_t handle, uint64_t deadline_ns,
                         uint32_t *detail);
 uint32_t astra_wait_multiple(const uint32_t *handles, uint32_t count,

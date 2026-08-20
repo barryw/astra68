@@ -127,7 +127,10 @@ itself stays, as a conformance oracle only — see above.
   emulator fills from `QEMU_CLOCK_HOST`. There is no software clock and no
   synchronisation protocol here: fix the host's clock, and Astra's is fixed.
   `docs/TIME.md` is the whole chain. A machine whose `RTC_STATUS` is invalid
-  says so at every layer rather than answering 1970.
+  says so at every layer rather than answering 1970. The **timezone** comes the
+  same way -- an offset and a name, not a rule set, because the host already
+  applied the rules. Under the emulator that is the QEMU process's own `TZ`:
+  `TZ=America/New_York` and the machine is in EDT.
 - **`emu/qemu/build.sh` puts its work under `/mnt/Documents` (the NAS) by
   default, and the NAS clock runs ahead of `beast`'s.** meson then refuses with
   `Clock skew detected ... 0.03s in the future` and the build never starts. Set

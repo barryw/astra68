@@ -264,17 +264,39 @@ uint64_t kernel_platform_cycles_to_ns(uint64_t cycles)
  */
 bool kernel_platform_wall_clock_ns(uint64_t *nanoseconds)
 {
+    return kernel_platform_wall_clock(nanoseconds, NULL, NULL);
+}
+
+/*
+ * The instant, and where the machine is standing when it reads it.
+ *
+ * The offset is seconds east of UTC with summer time already decided, and the
+ * zone is its four-character name packed one per byte, most significant first.
+ * Both come from the layer that keeps the clock, because that layer already
+ * has the rules: recomputing them here from a timezone database would be a
+ * second answer that can disagree with the first.
+ */
+bool kernel_platform_wall_clock(uint64_t *nanoseconds, int32_t *utc_offset,
+                                uint32_t *zone)
+{
+    uint32_t status = VESTA_READ(RTC_STATUS);
     uint32_t low;
     uint32_t high;
 
-    if (nanoseconds == NULL)
-        return false;
-    if ((VESTA_READ(RTC_STATUS) & RTC_VALID) == 0u)
+    if (nanoseconds == NULL || (status & RTC_VALID) == 0u)
         return false;
     /* Reading LO latches the coherent HI half for the read that follows. */
     low = VESTA_READ(RTC_NS_LO);
     high = VESTA_READ(RTC_NS_HI);
     *nanoseconds = ((uint64_t)high << 32) | low;
+    if (utc_offset != NULL) {
+        *utc_offset = (status & RTC_ZONE_VALID) != 0u ?
+            (int32_t)VESTA_READ(RTC_UTC_OFFSET) : 0;
+    }
+    if (zone != NULL) {
+        *zone = (status & RTC_ZONE_VALID) != 0u ?
+            VESTA_READ(RTC_ZONE) : 0u;
+    }
     return true;
 }
 

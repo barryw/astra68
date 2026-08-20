@@ -249,10 +249,13 @@ assert SCRIPT[13][0] == "write events:no no", (
     "SCRIPT's fourteenth line is activity 0x0e, which "
     "(\"cat events:activity/0000000e\", \"command refused\") reads back")
 
-QCODE = {" ": "spc", "\n": "ret", "/": "slash", ".": "dot", "-": "minus"}
-# Keys that need a modifier held. Assign names are case-insensitive, so a
-# colon is the only shifted character the script needs.
-SHIFTED = {":": "semicolon"}
+QCODE = {" ": "spc", "\n": "ret", "/": "slash", ".": "dot", "-": "minus",
+         "=": "equal", ",": "comma", ";": "semicolon", "'": "apostrophe"}
+# Keys that need a modifier held. A capital is handled in type_text as the
+# shift chord over its lowercase key; these are the punctuation that only
+# exists shifted, and `+` is here because `date +FORMAT` needs it.
+SHIFTED = {":": "semicolon", "+": "equal", "%": "5", "_": "minus",
+           "?": "slash", "\"": "apostrophe"}
 
 # A user record the decoder rendered. The body is what the shell wrote; a
 # record whose text did not fit one record ends in a backslash and continues
@@ -326,6 +329,10 @@ class Qmp:
                 self.key(QCODE[character])
             elif character in SHIFTED:
                 self.chord("shift", SHIFTED[character])
+            elif character.isupper() and character.isalpha():
+                # QMP's qcodes are the unshifted key names, so a capital is
+                # the shift chord rather than a code of its own.
+                self.chord("shift", character.lower())
             elif character.isalnum():
                 self.key(character)
             else:

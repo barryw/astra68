@@ -82,6 +82,8 @@ uint32_t kernel_platform_cpu_cycles_low(void);
 void kernel_platform_cpu_cycles(KernelPlatformCycleCount *cycles);
 uint64_t kernel_platform_monotonic_ns(void);
 bool kernel_platform_wall_clock_ns(uint64_t *nanoseconds);
+bool kernel_platform_wall_clock(uint64_t *nanoseconds, int32_t *utc_offset,
+                                uint32_t *zone);
 uint64_t kernel_platform_cycles_to_ns(uint64_t cycles);
 bool kernel_platform_deadline_to_cycles(int64_t deadline_ns,
                                         uint64_t *deadline_cycles);

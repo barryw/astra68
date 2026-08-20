@@ -18,6 +18,7 @@ astra_syscall5:
 	move.l  %d1, 4(%a0)
 	move.l  %d2, 8(%a0)
 	move.l  %d3, 12(%a0)
+	move.l  %d4, 16(%a0)
 	movem.l (%sp)+, %d2-%d5
 	rts
 	.size astra_syscall5, .-astra_syscall5

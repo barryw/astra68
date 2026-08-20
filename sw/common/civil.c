@@ -19,6 +19,8 @@
 #define SECONDS_PER_DAY 86400u
 #define NANOSECONDS_PER_SECOND 1000000000u
 
+static uint32_t two_digits(char *out, uint32_t value);
+
 /*
  * 64 by 32, without libgcc.
  *
@@ -118,6 +120,78 @@ bool astra_civil_from_unix_seconds(uint64_t seconds, AstraCivilTime *civil)
     civil->year_day = (uint16_t)(cumulative[month - 1u] +
                                  ((leap != 0 && month > 2u) ? 1u : 0u) + day);
     civil->nanosecond = 0u;
+    civil->utc_offset = 0;
+    civil->zone[0] = 'U';
+    civil->zone[1] = 'T';
+    civil->zone[2] = 'C';
+    civil->zone[3] = '\0';
+    civil->zone[4] = '\0';
+    return true;
+}
+
+void astra_civil_zone_unpack(int32_t utc_offset, uint32_t packed_name,
+                             AstraTimeZone *zone)
+{
+    uint32_t index;
+
+    if (zone == NULL)
+        return;
+    zone->utc_offset = utc_offset;
+    for (index = 0u; index < 4u; ++index)
+        zone->name[index] = (char)((packed_name >> (24u - 8u * index)) & 0xffu);
+    zone->name[4] = '\0';
+    /*
+     * A machine that has a clock and no location is in UTC and says so. An
+     * empty name beside a nonzero offset would print as a time nobody could
+     * place.
+     */
+    if (zone->name[0] == '\0') {
+        zone->name[0] = 'U';
+        zone->name[1] = 'T';
+        zone->name[2] = 'C';
+        zone->name[3] = '\0';
+        zone->utc_offset = 0;
+    }
+}
+
+bool astra_civil_from_unix_ns_zone(uint64_t nanoseconds,
+                                   const AstraTimeZone *zone,
+                                   AstraCivilTime *civil)
+{
+    int32_t offset = zone != NULL ? zone->utc_offset : 0;
+    uint64_t shifted = nanoseconds;
+    uint32_t index;
+
+    if (civil == NULL)
+        return false;
+    /*
+     * The shift is applied to the instant rather than to the rendered fields,
+     * so an offset that crosses midnight, a month or a year needs no special
+     * case: the calendar below has already been proved against 200,000 of
+     * them. West of Greenwich before 1970-01-01 is the one instant this
+     * refuses, and it refuses rather than wrapping.
+     */
+    if (offset >= 0) {
+        shifted += (uint64_t)offset * NANOSECONDS_PER_SECOND;
+    } else {
+        uint64_t back = (uint64_t)(-(int64_t)offset) * NANOSECONDS_PER_SECOND;
+
+        if (back > nanoseconds)
+            return false;
+        shifted -= back;
+    }
+    if (!astra_civil_from_unix_ns(shifted, civil))
+        return false;
+    civil->utc_offset = offset;
+    for (index = 0u; index < 5u; ++index)
+        civil->zone[index] = zone != NULL ? zone->name[index] : '\0';
+    if (zone == NULL) {
+        civil->zone[0] = 'U';
+        civil->zone[1] = 'T';
+        civil->zone[2] = 'C';
+        civil->zone[3] = '\0';
+    }
+    civil->zone[4] = '\0';
     return true;
 }
 
@@ -140,6 +214,61 @@ const char *astra_civil_month_name(uint8_t month)
     };
 
     return month >= 1u && month <= 12u ? names[month - 1u] : NULL;
+}
+
+uint32_t astra_civil_expand_zone(const char *format,
+                                 const AstraCivilTime *civil, char *out,
+                                 uint32_t capacity)
+{
+    uint32_t written = 0u;
+    uint32_t index = 0u;
+
+    if (format == NULL || civil == NULL || out == NULL || capacity == 0u)
+        return 0u;
+    while (format[index] != '\0') {
+        char literal[8];
+        const char *insert = NULL;
+        uint32_t length = 0u;
+
+        if (format[index] == '%' && format[index + 1u] == 'Z') {
+            insert = civil->zone;
+            while (insert[length] != '\0')
+                ++length;
+            index += 2u;
+        } else if (format[index] == '%' && format[index + 1u] == 'z') {
+            int32_t total = civil->utc_offset;
+            uint32_t hours;
+            uint32_t minutes;
+
+            literal[length++] = total < 0 ? '-' : '+';
+            if (total < 0)
+                total = -total;
+            hours = (uint32_t)total / 3600u;
+            minutes = ((uint32_t)total % 3600u) / 60u;
+            length += two_digits(&literal[length], hours);
+            length += two_digits(&literal[length], minutes);
+            literal[length] = '\0';
+            insert = literal;
+            index += 2u;
+        } else {
+            /*
+             * `%%` moves as a pair, so a literal percent before a Z is not
+             * mistaken for a zone.
+             */
+            literal[0] = format[index++];
+            length = 1u;
+            if (literal[0] == '%' && format[index] != '\0')
+                literal[length++] = format[index++];
+            literal[length] = '\0';
+            insert = literal;
+        }
+        if (written + length + 1u > capacity)
+            return 0u;
+        for (uint32_t at = 0u; at < length; ++at)
+            out[written++] = insert[at];
+    }
+    out[written] = '\0';
+    return written;
 }
 
 static uint32_t two_digits(char *out, uint32_t value)

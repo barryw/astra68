@@ -58,21 +58,24 @@ mode_string(uint16_t mode, uint16_t kind, char *out)
 }
 
 /*
- * The mtime column. UTC, because the machine has no timezone and saying so is
- * better than implying one; and `-` for a file whose filesystem never stamped
- * it, which is not the same as a file stamped at midnight in 1970.
+ * The mtime column, in the zone the machine is standing in -- which is what a
+ * person reading a listing means by "when". `-` for a file whose filesystem
+ * never stamped it, which is not the same as a file stamped at midnight in
+ * 1970.
  *
  * The calendar itself is shared with `date` and with the kernel's boot line --
  * see astra/civil.h. This used to be a second implementation of leap years,
  * living here because there was nowhere else to put it.
  */
 static void
-date_string(int64_t seconds, char *out, size_t capacity)
+date_string(int64_t seconds, const AstraTimeZone *zone, char *out,
+            size_t capacity)
 {
     AstraCivilTime civil;
 
     if (seconds <= 0 ||
-        !astra_civil_from_unix_seconds((uint64_t)seconds, &civil)) {
+        !astra_civil_from_unix_ns_zone((uint64_t)seconds * 1000000000u, zone,
+                                       &civil)) {
         (void)snprintf(out, capacity, "%12s", "-");
         return;
     }
@@ -83,7 +86,7 @@ date_string(int64_t seconds, char *out, size_t capacity)
 
 static int
 list(AstraFilesystem *filesystem, const AstraFilesystemLibraryV1 *library,
-     const char *path, int long_form, int all)
+     const char *path, int long_form, int all, const AstraTimeZone *zone)
 {
     AstraDirectory directory = ASTRA_DIRECTORY_INIT;
     AstraDirectoryEntry entries[LS_BATCH];
@@ -120,7 +123,7 @@ list(AstraFilesystem *filesystem, const AstraFilesystemLibraryV1 *library,
                 char when[16];
 
                 mode_string(entry->mode, entry->kind, mode);
-                date_string(entry->mtime, when, sizeof(when));
+                date_string(entry->mtime, zone, when, sizeof(when));
                 printf("%s %3u %5u %5u %9lu %s %s\n", mode,
                        (unsigned)entry->nlink, (unsigned)entry->uid,
                        (unsigned)entry->gid,
@@ -143,7 +146,9 @@ astra_main(const AstraStartupInfo *startup)
 {
     AstraProcessFilesystem process_filesystem =
         ASTRA_PROCESS_FILESYSTEM_INIT;
+    AstraTimeZone zone = ASTRA_TIME_ZONE_UTC;
     char typed[ASTRA_VFS_PATH_MAX];
+    uint64_t now_ns = 0u;
     const uint32_t *argv = NULL;
     const char *path = NULL;
     int all = 0;
@@ -199,8 +204,15 @@ astra_main(const AstraStartupInfo *startup)
         astra_process_filesystem_close(&process_filesystem);
         return (int)status;
     }
+    /*
+     * One reading of the clock for the whole listing, so every line is in the
+     * same zone even if the listing spans a summer-time change. A machine with
+     * no clock lists in UTC, and every date it has to show is a dash anyway.
+     */
+    if (astra_clock_realtime_zone(&now_ns, &zone) != ASTRA_SYSCALL_OK)
+        zone = (AstraTimeZone)ASTRA_TIME_ZONE_UTC;
     result = list(&process_filesystem.filesystem,
-                  process_filesystem.library, typed, long_form, all);
+                  process_filesystem.library, typed, long_form, all, &zone);
     astra_process_filesystem_close(&process_filesystem);
     (void)fflush(stdout);
     return result;

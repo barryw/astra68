@@ -491,12 +491,25 @@ uint64_t kernel_platform_monotonic_ns(void)
 static bool wall_clock_valid;
 static uint64_t wall_clock_ns;
 
-bool kernel_platform_wall_clock_ns(uint64_t *nanoseconds)
+static int32_t wall_clock_offset;
+static uint32_t wall_clock_zone;
+
+bool kernel_platform_wall_clock(uint64_t *nanoseconds, int32_t *utc_offset,
+                                uint32_t *zone)
 {
     if (nanoseconds == NULL || !wall_clock_valid)
         return false;
     *nanoseconds = wall_clock_ns;
+    if (utc_offset != NULL)
+        *utc_offset = wall_clock_offset;
+    if (zone != NULL)
+        *zone = wall_clock_zone;
     return true;
+}
+
+bool kernel_platform_wall_clock_ns(uint64_t *nanoseconds)
+{
+    return kernel_platform_wall_clock(nanoseconds, NULL, NULL);
 }
 
 bool kernel_platform_deadline_to_cycles(int64_t deadline_ns,
@@ -2036,6 +2049,20 @@ static void test_clock_syscalls_report_time_and_its_absence(void)
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(((uint64_t)next->data[1] << 32 | next->data[2]) == wall_clock_ns);
+    /*
+     * The zone rides with the instant. A program that had to ask twice could
+     * straddle a summer-time change and render an hour that never happened.
+     */
+    wall_clock_offset = -4 * 3600;
+    wall_clock_zone = 0x45445400u; /* "EDT" */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CLOCK_REALTIME;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert((int32_t)next->data[3] == -4 * 3600);
+    assert(next->data[4] == 0x45445400u);
     wall_clock_valid = false;
 }
 

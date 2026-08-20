@@ -5490,6 +5490,8 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
     }
     case ASTRA_SYSCALL_CLOCK_REALTIME: {
         uint64_t nanoseconds = 0u;
+        int32_t utc_offset = 0;
+        uint32_t zone = 0u;
 
         /*
          * Read at the moment it is asked for, not derived from a boot-time
@@ -5498,12 +5500,19 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
          * carried forward from boot would answer with this machine's own
          * drift rather than with the correction.
          */
-        if (!kernel_platform_wall_clock_ns(&nanoseconds)) {
+        if (!kernel_platform_wall_clock(&nanoseconds, &utc_offset, &zone)) {
             result = ASTRA_SYSCALL_UNSUPPORTED;
             break;
         }
         thread->context.data[1] = (uint32_t)(nanoseconds >> 32);
         thread->context.data[2] = (uint32_t)nanoseconds;
+        /*
+         * The zone rides with the instant rather than being a second call: a
+         * program that asked twice could straddle a summer-time change and
+         * render an hour that never happened.
+         */
+        thread->context.data[3] = (uint32_t)utc_offset;
+        thread->context.data[4] = zone;
         break;
     }
     case ASTRA_SYSCALL_EVENT_CREATE:

@@ -148,7 +148,9 @@ typedef volatile struct {
     uint32_t RTC_STATUS;     // 0x420 RTC_VALID when the date is known
     uint32_t RTC_NS_LO;      // 0x424 read latches the coherent 64-bit value
     uint32_t RTC_NS_HI;      // 0x428 upper half of the LO-read snapshot
-    uint32_t _r3[(0x500 - 0x42C) / 4];
+    uint32_t RTC_UTC_OFFSET; // 0x42C signed seconds east of UTC, DST applied
+    uint32_t RTC_ZONE;       // 0x430 four characters, first in the high byte
+    uint32_t _r3[(0x500 - 0x434) / 4];
     // UART 0x500
     uint32_t UART_DATA;      // 0x500
     uint32_t UART_STATUS;    // 0x504
@@ -352,6 +354,19 @@ typedef volatile struct {
  * 64-bit value cannot be torn across the two halves.
  */
 #define RTC_VALID       (1u << 0)
+/*
+ * The zone is offset-and-name, not a rule set. What Astra needs to print a
+ * local time is the offset in force *now*, and the machine that keeps the
+ * clock already computes that from the real rules -- including whether summer
+ * time is in effect today. Carrying tzdata here to recompute what the layer
+ * below already knows would be a second answer that can disagree with the
+ * first.
+ *
+ * RTC_ZONE is four characters, first in the high byte, NUL-padded: "UTC",
+ * "EDT", "CEST". Zero means the machine has a clock but nothing has told it
+ * where it is, and UTC is then the only defensible thing to say.
+ */
+#define RTC_ZONE_VALID  (1u << 1)
 
 // ---- Generic input queue ----
 #define INPUT_ID_MAGIC 0x494E5054u // "INPT"
@@ -431,6 +446,8 @@ _Static_assert(offsetof(VestaRegs, RTC_STATUS) == 0x420u,
                "Vesta wall-clock ABI offset");
 _Static_assert(offsetof(VestaRegs, RTC_NS_HI) == 0x428u,
                "Vesta wall-clock upper-half ABI offset");
+_Static_assert(offsetof(VestaRegs, RTC_ZONE) == 0x430u,
+               "Vesta wall-clock zone ABI offset");
 _Static_assert(offsetof(VestaRegs, INPUT_ID) == 0x700u,
                "Vesta input ABI offset");
 _Static_assert(offsetof(VestaRegs, INPUT_POP) == 0x724u,

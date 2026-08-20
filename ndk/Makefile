@@ -19,6 +19,7 @@ TARGET_OBJECTS := build/m68k/resource.o build/m68k/area.o \
 TARGET_OBJECTS += build/m68k/pointer.o build/m68k/window.o
 TARGET_OBJECTS += build/m68k/application.o
 TARGET_OBJECTS += build/m68k/fixed.o build/m68k/bundle.o
+TARGET_OBJECTS += build/m68k/datetime.o
 HOST_TESTS := build/host/test_front_panel build/host/test_font \
 	build/host/test_graphics build/host/test_port \
 	build/host/test_area build/host/test_bulk_ring

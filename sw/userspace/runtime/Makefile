@@ -52,6 +52,7 @@ $(CRT0): src/m68k/crt0.S
 HOST_TEST_SOURCES := src/startup.c src/arguments.c src/syscall.c src/launch.c src/port.c \
 	src/event_control.c src/memory.c \
 	src/sort.c src/log.c src/event_catalog.c src/library.c \
+	$(COMMON_C_SOURCES) \
 	tests/test_runtime.c
 
 $(HOST_TEST): $(HOST_TEST_SOURCES)

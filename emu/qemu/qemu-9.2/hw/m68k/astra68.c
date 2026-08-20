@@ -65,6 +65,7 @@
 #define TIMER_IRQ_ENABLE         (1u << 2)
 #define TIMER_EXPIRED            (1u << 0)
 #define RTC_VALID                (1u << 0)
+#define RTC_ZONE_VALID           (1u << 1)
 #define VEGA_IRQ_VBLANK          (1u << 0)
 #define ASTRAEA_IRQ_BLIT_DONE    (1u << 0)
 #define ASTRAEA_IRQ_DRAW_DONE    (1u << 3)
@@ -727,6 +728,34 @@ static const QemuInputHandler astra_input_handler = {
     .sync = astra_input_sync,
 };
 
+/*
+ * The host's local offset and zone abbreviation, from the host's own tzdata.
+ * `name`, when given, receives up to four characters plus a NUL.
+ */
+static long astra_host_utc_offset(char *name)
+{
+    time_t now = (time_t)(qemu_clock_get_ns(QEMU_CLOCK_HOST) /
+                          NANOSECONDS_PER_SECOND);
+    struct tm local;
+
+    if (name) {
+        name[0] = '\0';
+    }
+    if (localtime_r(&now, &local) == NULL) {
+        return 0;
+    }
+    if (name && local.tm_zone) {
+        int index = 0;
+
+        while (index < 4 && local.tm_zone[index] != '\0') {
+            name[index] = local.tm_zone[index];
+            ++index;
+        }
+        name[index] = '\0';
+    }
+    return local.tm_gmtoff;
+}
+
 static uint64_t astra_now_cycles(Astra68State *s)
 {
     uint64_t elapsed = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - s->reset_clock_ns;
@@ -1152,12 +1181,30 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
      * second off once per second.
      */
     case 0x420:
-        return RTC_VALID;
+        return RTC_VALID | RTC_ZONE_VALID;
     case 0x424:
         s->rtc_latch = (uint64_t)qemu_clock_get_ns(QEMU_CLOCK_HOST);
         return (uint32_t)s->rtc_latch;
     case 0x428:
         return (uint32_t)(s->rtc_latch >> 32);
+    /*
+     * Where the machine is, as the host understands it: the offset in force
+     * right now, with summer time already decided by the host's own rules, and
+     * the abbreviation it prints. The guest gets a local time without carrying
+     * a timezone database to recompute what this side already knows.
+     */
+    case 0x42c:
+        return (uint32_t)(int32_t)astra_host_utc_offset(NULL);
+    case 0x430: {
+        char zone[8] = {0};
+        uint32_t packed = 0;
+
+        (void)astra_host_utc_offset(zone);
+        for (int index = 0; index < 4; ++index) {
+            packed = (packed << 8) | (uint8_t)zone[index];
+        }
+        return packed;
+    }
     case 0x150:
         return astra_block_present(s) ? BLOCK_ID_MAGIC : 0;
     case 0x154:

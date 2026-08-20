@@ -17,6 +17,7 @@
 #include <astra/shared_library.h>
 #include <astra/application.h>
 #include <astra/area.h>
+#include <astra/datetime.h>
 #include <astra/port.h>
 #include <astra/bulk_ring.h>
 #include <astra/front_panel.h>

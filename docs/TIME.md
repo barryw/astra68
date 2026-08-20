@@ -10,12 +10,14 @@ from either side.
         │  QEMU_CLOCK_HOST
         ▼
   Vesta RTC_STATUS / RTC_NS_LO / RTC_NS_HI      emu/qemu/.../astra68.c
-        │                                       sw/include/vesta.h
-        │  kernel_platform_wall_clock_ns()      sw/kernel/platform.c
+        RTC_UTC_OFFSET / RTC_ZONE                sw/include/vesta.h
+        │
+        │  kernel_platform_wall_clock()         sw/kernel/platform.c
         ▼
   ASTRA_SYSCALL_CLOCK_REALTIME (55)             sw/kernel/process.c
         │
-        ├── astra_clock_realtime()              sw/userspace/runtime
+        ├── astra_clock_realtime_zone()         sw/userspace/runtime
+        │       ├── astra_datetime_now()            ndk/src/datetime.c
         │       ├── gettimeofday / clock_gettime    sw/userspace/posix/src/time.c
         │       ├── `date`                          sw/userspace/commands/date
         │       └── ext4_user_now()                 sw/userspace/storage
@@ -23,6 +25,51 @@ from either side.
         └── astra_civil_*()                     sw/common/civil.c
                 └── the boot line, `ls -l`, `date`
 ```
+
+## What a person types
+
+```
+date                    Wed Aug 19 20:52:41 EDT 2026      the machine's zone
+date -u                 Thu Aug 20 00:52:41 UTC 2026
+date -I                 2026-08-19
+date -Is                2026-08-19T20:52:41-04:00
+date -uIs               2026-08-20T00:52:41+00:00
+date -R                 Wed, 19 Aug 2026 20:52:41 -0400
+date +%H:%M             20:52
+date +%Y-%m-%dT%H:%M:%S%Z
+date -e / date +%s      1787187161
+```
+
+`+FORMAT` is strftime's, because that is what the person typing already knows.
+Two specifiers are substituted before strftime sees them: picolibc's `struct
+tm` carries no zone at all -- its `%Z` reads a global that only `tzset()` and a
+`TZ` environment variable can fill, and this machine has neither -- so `%Z` and
+`%z` come from the instant, which knows its own zone.
+
+A format containing a space has to wait for the shell to learn quoting: every
+word is its own argument today, and `date` says so rather than silently
+rendering the first word.
+
+`date -s` is refused. The clock is read-only here by design.
+
+## What an application asks
+
+```c
+#include <astra/datetime.h>
+
+AstraDateTime now;
+
+if (astra_datetime_now(&now)) {
+    char text[64];
+
+    astra_datetime_format(&now.local, "%H:%M %Z", text, sizeof(text));
+}
+```
+
+One reading gives the instant, the zone, and both renderings -- `now.local`
+and `now.utc` -- so a window showing a clock and a log recording UTC never
+disagree about which second they meant. `false` means the machine has no clock;
+an application should show nothing rather than a wrong time.
 
 ## The decisions, and why
 
@@ -57,9 +104,17 @@ Zero is a real instant. A program that cannot tell "midnight in 1970" from "no
 idea" writes the first one into a file and calls it a timestamp, and a listing
 full of 1970 is worse than a listing full of dashes because it looks like data.
 
-**UTC, and it says so.** There is no timezone database on this machine and
-nothing has told it where it is. `date` prints `UTC` rather than implying a
-local time it cannot support.
+**The zone is an offset and a name, not a rule set.** `RTC_UTC_OFFSET` and
+`RTC_ZONE` carry the offset in force *now* -- summer time already decided -- and
+the abbreviation to print beside it, both from the layer that keeps the clock.
+That layer has tzdata and already applies it; a second copy on this side would
+be a second answer that can disagree with the first, and it would need updating
+every time a government moves a date. Under the emulator the zone is the host
+process's: `TZ=America/New_York qemu-system-m68k ...` and the machine is in
+EDT, offset and abbreviation and all.
+
+A machine with a clock and no location reports `RTC_ZONE_VALID` clear, and
+everything above it renders UTC and says `UTC` rather than implying a place.
 
 **One calendar.** `sw/common/civil.c` is compiled into the kernel and into the
 userspace runtime, so the boot line, `ls -l` and `date` render an instant the
@@ -83,7 +138,7 @@ upstream did: zeros.
 | `sw/kernel` `make test` → `platform tests passed` | the register read and the invalid case |
 | `sw/kernel` `make test` → `process tests passed` | the syscall, including `UNSUPPORTED` |
 | `sw/userspace/storage` `make ext4-test` | a written file and its directory carry a time near now |
-| `emu/qemu/test-clock.py` | the whole chain: `date` against the host's clock, the three renderings agreeing, and a file written now listed with today's date |
+| `emu/qemu/test-clock.py` | the whole chain: `date` against the host's clock, `-u`, `-uIs` and `+FORMAT` agreeing, `%Z` rendering a real zone, and a file written now listed with today's *local* date. Run it under `TZ=America/New_York` as well as UTC -- both pass, and the second is the one that proves the zone is not decoration |
 
 The gate is the one that matters, and it fails four ways on a machine whose
 `RTC_STATUS` reports invalid — which is how it was proved to be a gate rather
@@ -94,8 +149,14 @@ than a decoration.
 - **Setting the time from Astra.** The register is read-only. The clock belongs
   to the layer below, which has NTP; a machine that could set it would be a
   machine that could disagree with the thing keeping it right.
-- **Timezones and local time.** UTC everywhere. A timezone database is a real
-  piece of work and nothing on this machine needs one yet.
+- **A timezone database.** Deliberately absent -- see above. What that costs is
+  historical conversion: the machine can render *now* in its zone, but not "what
+  was the offset here in 1997", because nothing on this side knows the rules.
+  Rendering an old file's timestamp uses today's offset.
+- **`TZ` for POSIX code.** picolibc's `localtime` and `%Z` read a `TZ`
+  environment variable this machine does not have, so C code that wants local
+  time uses `astra/civil.h` or `astra/datetime.h` rather than `localtime`.
+  `gettimeofday` and `clock_gettime` are UTC, which is what they are for.
 - **`atime` on read.** lwext4 stamps access time at creation and nothing
   updates it afterwards. Relatime semantics would mean a metadata write per
   read, which on an SD card behind a 12.5 MHz bus is not a trade this machine

@@ -38,9 +38,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # the only drift is how long the machine takes to answer.
 SKEW_SECONDS = 600.0
 EPOCH = re.compile(r"^(\d{10})$")
-ISO = re.compile(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z")
-HUMAN = re.compile(r"(Mon|Tue|Wed|Thu|Fri|Sat|Sun) "
-                   r"(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}) UTC")
+# `date -uIs`: an ISO instant with the offset it was rendered in.
+ISO = re.compile(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})"
+                 r"([+-]\d{2}:\d{2})")
+# GNU date's default, which is what `date` with no argument prints:
+# `Wed Aug 19 20:50:55 EDT 2026`.
+HUMAN = re.compile(r"(Mon|Tue|Wed|Thu|Fri|Sat|Sun) (\w{3}) ([ \d]\d) "
+                   r"(\d{2}):(\d{2}):(\d{2}) (\w{2,5}) (\d{4})")
 LISTING = re.compile(r"-rw.*\s(\w{3}) ([ \d]\d) (\d{2}):(\d{2}) stamped\.txt")
 
 
@@ -100,9 +104,9 @@ def main():
             host_before = time.time()
             epoch_said = ask(machine, gate, "date -e",
                              arguments.command_deadline)
-            iso_said = ask(machine, gate, "date -i",
+            iso_said = ask(machine, gate, "date -uIs",
                            arguments.command_deadline)
-            human_said = ask(machine, gate, "date",
+            human_said = ask(machine, gate, "date -u",
                              arguments.command_deadline)
             host_after = time.time()
 
@@ -127,7 +131,7 @@ def main():
                 if match is not None:
                     iso = match
             if iso is None:
-                failures.append("`date -i` printed no ISO instant: %r"
+                failures.append("`date -uIs` printed no ISO instant: %r"
                                 % iso_said)
             human = None
             for line in human_said:
@@ -140,9 +144,41 @@ def main():
             # The same instant said three ways. Minutes rather than seconds,
             # because the three commands are three launches apart.
             if iso is not None and human is not None:
-                if iso.group(1, 2, 3, 4, 5) != human.group(2, 3, 4, 5, 6):
-                    failures.append("`date` and `date -i` disagree: %s vs %s"
+                # Both are UTC here -- `-i` always is, and `date -u` was asked
+                # for one -- so the day and the hour have to be the same.
+                months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+                same = (human.group(8) == iso.group(1) and
+                        months[int(iso.group(2)) - 1] == human.group(2) and
+                        int(human.group(3)) == int(iso.group(3)) and
+                        human.group(4) == iso.group(4))
+                if not same:
+                    failures.append("`date -u` and `date -uIs` disagree: %s vs %s"
                                     % (human.group(0), iso.group(0)))
+                if human.group(7) != "UTC":
+                    failures.append("`date -u` printed zone %r, not UTC"
+                                    % human.group(7))
+
+            # The format specifiers, which is what a person actually types.
+            # `+%s` is the same instant as `date -e`, and `%Z` is the zone the
+            # machine reported rather than a global nobody set.
+            custom = ask(machine, gate, "date +%Y-%m-%dT%H:%M:%S%Z",
+                         arguments.command_deadline)
+            stamped_custom = None
+            for line in custom:
+                match = re.search(r"(\d{4})-(\d{2})-(\d{2})T"
+                                  r"(\d{2}):(\d{2}):(\d{2})(\w{2,5})", line)
+                if match is not None:
+                    stamped_custom = match
+            if stamped_custom is None:
+                failures.append("`date +FORMAT` rendered nothing: %r" % custom)
+            elif iso is not None:
+                # The custom form is local and `-i` is UTC, so only the date
+                # part is comparable, and only when the offset is zero.
+                print("date +FORMAT = %s, zone %s"
+                      % (stamped_custom.group(0), stamped_custom.group(7)))
+                if stamped_custom.group(7) == "":
+                    failures.append("`%Z` rendered an empty zone")
 
             # A file written now, listed with the date it was written.
             ask(machine, gate, "write stamped.txt from the gate",
@@ -156,15 +192,19 @@ def main():
             if stamped is None:
                 failures.append("no dated listing for the file just written: "
                                 "%r" % listed)
-            elif iso is not None:
-                month = int(iso.group(2))
+            elif stamped_custom is not None:
+                # A listing is local time, because that is what a person
+                # reading it means by "when" -- so it is compared against the
+                # local rendering rather than against the UTC one, which is a
+                # different day for most of the world for part of every day.
+                month = int(stamped_custom.group(2))
                 names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
                 if stamped.group(1) != names[month - 1] or \
-                        int(stamped.group(2)) != int(iso.group(3)):
+                        int(stamped.group(2)) != int(stamped_custom.group(3)):
                     failures.append("the file's date %s %s is not today (%s)"
                                     % (stamped.group(1), stamped.group(2),
-                                       iso.group(0)))
+                                       stamped_custom.group(0)))
                 else:
                     print("listing: %s %s %s:%s" % stamped.group(1, 2, 3, 4))
         finally:

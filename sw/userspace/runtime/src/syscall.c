@@ -205,6 +205,17 @@ astra_clock_monotonic(void)
 uint32_t
 astra_clock_realtime(uint64_t *nanoseconds)
 {
+    return astra_clock_realtime_zone(nanoseconds, NULL);
+}
+
+/*
+ * The instant and the zone in one call, because they belong to one moment: a
+ * program that asked for them separately could straddle a summer-time change
+ * and render an hour that never happened.
+ */
+uint32_t
+astra_clock_realtime_zone(uint64_t *nanoseconds, AstraTimeZone *zone)
+{
     AstraSyscallResult result;
 
     if (nanoseconds == NULL) {
@@ -216,6 +227,9 @@ astra_clock_realtime(uint64_t *nanoseconds)
         return result.status;
     }
     *nanoseconds = ((uint64_t)result.value0 << 32) | result.value1;
+    if (zone != NULL) {
+        astra_civil_zone_unpack((int32_t)result.value2, result.value3, zone);
+    }
     return ASTRA_SYSCALL_OK;
 }
 

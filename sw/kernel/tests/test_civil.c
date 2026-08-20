@@ -76,6 +76,85 @@ int main(void)
     assert(astra_civil_month_name(0u) == NULL);
     assert(astra_civil_month_name(13u) == NULL);
 
+    /*
+     * A zone is an offset applied to the instant, not to the rendered fields,
+     * so the cases that matter are the ones that cross something: a day, a
+     * month, a year, and a half-hour zone that is nobody's round number.
+     */
+    {
+        static const AstraTimeZone eastern = { -4 * 3600, "EDT" };
+        static const AstraTimeZone kolkata = { 5 * 3600 + 1800, "IST" };
+        static const AstraTimeZone utc_zone = ASTRA_TIME_ZONE_UTC;
+        AstraCivilTime local;
+
+        /* 2026-01-01T02:30:00Z is still 2025 in New York. */
+        assert(astra_civil_from_unix_ns_zone(
+            UINT64_C(1767234600) * 1000000000ull, &eastern, &local));
+        assert(local.year == 2025 && local.month == 12 && local.day == 31);
+        assert(local.hour == 22 && local.minute == 30);
+        assert(local.utc_offset == -4 * 3600);
+        assert(strcmp(local.zone, "EDT") == 0);
+
+        /* The same instant in Kolkata is the next morning, on the half hour. */
+        assert(astra_civil_from_unix_ns_zone(
+            UINT64_C(1767234600) * 1000000000ull, &kolkata, &local));
+        assert(local.year == 2026 && local.month == 1 && local.day == 1);
+        assert(local.hour == 8 && local.minute == 0);
+
+        /* No zone is UTC, and says so rather than leaving the name empty. */
+        assert(astra_civil_from_unix_ns_zone(
+            UINT64_C(1767234600) * 1000000000ull, NULL, &local));
+        assert(local.hour == 2 && local.minute == 30);
+        assert(strcmp(local.zone, "UTC") == 0);
+        assert(astra_civil_from_unix_ns_zone(0u, &utc_zone, &local));
+        assert(local.year == 1970);
+        /* West of Greenwich at the epoch is before it, and is refused. */
+        assert(!astra_civil_from_unix_ns_zone(0u, &eastern, &local));
+    }
+
+    /* The packed name the machine reports, and what an empty one means. */
+    {
+        AstraTimeZone zone;
+
+        astra_civil_zone_unpack(-18000, 0x45535400u, &zone); /* "EST" */
+        assert(strcmp(zone.name, "EST") == 0);
+        assert(zone.utc_offset == -18000);
+        astra_civil_zone_unpack(0x43455354u, 0x43455354u, &zone); /* "CEST" */
+        assert(strcmp(zone.name, "CEST") == 0);
+        /* Nothing reported is UTC, and the offset goes with the name. */
+        astra_civil_zone_unpack(3600, 0u, &zone);
+        assert(strcmp(zone.name, "UTC") == 0 && zone.utc_offset == 0);
+    }
+
+    /*
+     * %Z and %z are substituted here because picolibc's tm carries no zone.
+     * Everything else has to pass through untouched, including a literal
+     * percent in front of a Z.
+     */
+    {
+        static const AstraTimeZone eastern = { -4 * 3600, "EDT" };
+        static const AstraTimeZone kolkata = { 5 * 3600 + 1800, "IST" };
+        AstraCivilTime local;
+        char expanded[64];
+
+        assert(astra_civil_from_unix_ns_zone(
+            UINT64_C(1767234600) * 1000000000ull, &eastern, &local));
+        assert(astra_civil_expand_zone("%Y-%m-%d %H:%M %Z %z", &local,
+                                       expanded, sizeof(expanded)) != 0u);
+        assert(strcmp(expanded, "%Y-%m-%d %H:%M EDT -0400") == 0);
+        assert(astra_civil_from_unix_ns_zone(
+            UINT64_C(1767234600) * 1000000000ull, &kolkata, &local));
+        assert(astra_civil_expand_zone("%z", &local, expanded,
+                                       sizeof(expanded)) != 0u);
+        assert(strcmp(expanded, "+0530") == 0);
+        /* A literal percent is not a specifier, and neither is what follows. */
+        assert(astra_civil_expand_zone("100%%Z", &local, expanded,
+                                       sizeof(expanded)) != 0u);
+        assert(strcmp(expanded, "100%%Z") == 0);
+        /* A buffer that cannot hold the result writes nothing. */
+        assert(astra_civil_expand_zone("%Z", &local, expanded, 3u) == 0u);
+    }
+
     puts("CIVIL TIME PASS");
     return 0;
 }

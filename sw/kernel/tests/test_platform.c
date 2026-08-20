@@ -281,9 +281,28 @@ static void test_wall_clock_read_and_absence(void)
     registers->RTC_STATUS = RTC_VALID;
     registers->RTC_NS_LO = 0x89abcdefu;
     registers->RTC_NS_HI = 0x01234567u;
+    registers->RTC_UTC_OFFSET = (uint32_t)(int32_t)(-4 * 3600);
+    registers->RTC_ZONE = 0x45445400u; /* "EDT" */
     assert(kernel_platform_wall_clock_ns(&nanoseconds));
     assert(nanoseconds == UINT64_C(0x0123456789abcdef));
     assert(!kernel_platform_wall_clock_ns(NULL));
+
+    /*
+     * A machine with a clock and no location reports no zone, and the offset
+     * beside it must not be believed: an offset with no name prints as a time
+     * nobody can place.
+     */
+    {
+        int32_t offset = 0x5a5a5a5a;
+        uint32_t zone = 0x5a5a5a5au;
+
+        assert(kernel_platform_wall_clock(&nanoseconds, &offset, &zone));
+        assert(offset == 0 && zone == 0u);
+        registers->RTC_STATUS = RTC_VALID | RTC_ZONE_VALID;
+        assert(kernel_platform_wall_clock(&nanoseconds, &offset, &zone));
+        assert(offset == -4 * 3600);
+        assert(zone == 0x45445400u);
+    }
 }
 
 static void test_fenced_display_transport(void)
