@@ -102,10 +102,16 @@ itself stays, as a conformance oracle only — see above.
   the first pool validity check fails, which surfaces as `initial user image
   rejected, status 9` and points at nothing. Anything added to `KERNEL_TABLES`
   inherits that clear; a *new* NOLOAD region would not.
-- **The kernel links no libgcc and no C library.** A variable 64-bit shift calls
-  `__ashldi3`; GCC turns `= {0}` on a four-word array, and a loop that fills
-  every word of one, into `memset`. Split shifts at the word boundary and clear
-  with `kernel_bytes_clear`.
+- **The kernel links no libgcc and no C library**, which is normal for a
+  freestanding kernel and means it carries its own subset, the way Linux keeps
+  `lib/string.c`, `lib/vsprintf.c` and `lib/div64.c`. Astra's is
+  `kernel_bytes_*` for memory, `kernel_format`/`console_printf` for output, and
+  `astra_divide_u64` for 64-bit division -- use them rather than the operator
+  or the libc name. A variable 64-bit shift calls `__ashldi3`, a 64-bit divide
+  calls `__udivdi3`, and GCC turns `= {0}` on a four-word array, and a loop
+  that fills every word of one, into `memset`. All three link as undefined
+  references, which reads like a missing linker script rather than an
+  arithmetic choice.
 - Stale objects are indistinguishable from kernel bugs. Exit status 127 from a
   user image means a stale object first, not a kernel fault. **`rsync -a`
   preserves mtimes**, so restoring a file on `beast` can hand `make` a source

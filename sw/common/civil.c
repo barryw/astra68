@@ -14,56 +14,14 @@
 
 #include <astra/civil.h>
 
+#include <astra/divide.h>
+
 #include <stddef.h>
 
 #define SECONDS_PER_DAY 86400u
 #define NANOSECONDS_PER_SECOND 1000000000u
 
 static uint32_t two_digits(char *out, uint32_t value);
-
-/*
- * 64 by 32, without libgcc.
- *
- * The kernel links no libgcc and no C library, so `value / 86400` on a 64-bit
- * value is an undefined reference to `__udivdi3` rather than an instruction --
- * and a variable-count 64-bit shift is `__lshrdi3` for the same reason, which
- * rules out the obvious long division too. This is the same long division done
- * on two 32-bit halves with constant shifts only.
- *
- * The carry is the whole subtlety: the running remainder is always smaller
- * than the divisor, so doubling it can leave 33 bits. The bit that falls off
- * the top says the true value is at least 2^32, which is larger than any
- * divisor, so the subtraction happens -- and in wrapping 32-bit arithmetic it
- * lands on the right answer, because the 2^32 that was dropped and the 2^32
- * the subtraction borrows are the same one.
- */
-static uint64_t divide_u64(uint64_t value, uint32_t divisor,
-                           uint32_t *remainder)
-{
-    uint32_t high = (uint32_t)(value >> 32);
-    uint32_t low = (uint32_t)value;
-    uint32_t quotient_high = 0u;
-    uint32_t quotient_low = 0u;
-    uint32_t rest = 0u;
-
-    for (uint32_t index = 0u; index < 64u; ++index) {
-        uint32_t carry = rest >> 31;
-        uint32_t bit = high >> 31;
-
-        rest = (rest << 1) | bit;
-        high = (high << 1) | (low >> 31);
-        low <<= 1;
-        quotient_high = (quotient_high << 1) | (quotient_low >> 31);
-        quotient_low <<= 1;
-        if (carry != 0u || rest >= divisor) {
-            rest -= divisor;
-            quotient_low |= 1u;
-        }
-    }
-    if (remainder != NULL)
-        *remainder = rest;
-    return ((uint64_t)quotient_high << 32) | quotient_low;
-}
 
 bool astra_civil_from_unix_seconds(uint64_t seconds, AstraCivilTime *civil)
 {
@@ -87,10 +45,12 @@ bool astra_civil_from_unix_seconds(uint64_t seconds, AstraCivilTime *civil)
     if (civil == NULL)
         return false;
     /*
-     * The one 64-bit division. Everything after it is 32-bit: a day number
-     * has room for two hundred thousand years.
+     * The one 64-bit division, and it is a helper rather than an operator
+     * because this file is compiled into the kernel too -- see astra/divide.h.
+     * Everything after it is 32-bit: a day number has room for two hundred
+     * thousand years.
      */
-    epoch_days = (uint32_t)divide_u64(seconds, SECONDS_PER_DAY, &rest);
+    epoch_days = (uint32_t)astra_divide_u64(seconds, SECONDS_PER_DAY, &rest);
 
     /* Days since 0000-03-01, which is what makes the arithmetic uniform. */
     days = epoch_days + 719468u;
@@ -198,7 +158,7 @@ bool astra_civil_from_unix_ns_zone(uint64_t nanoseconds,
 bool astra_civil_from_unix_ns(uint64_t nanoseconds, AstraCivilTime *civil)
 {
     uint32_t rest = 0u;
-    uint64_t seconds = divide_u64(nanoseconds, NANOSECONDS_PER_SECOND, &rest);
+    uint64_t seconds = astra_divide_u64(nanoseconds, NANOSECONDS_PER_SECOND, &rest);
 
     if (!astra_civil_from_unix_seconds(seconds, civil))
         return false;

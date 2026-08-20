@@ -25,6 +25,8 @@
 #include "qualification.h"
 
 #include <astra/civil.h>
+
+#include "format.h"
 #include "trace.h"
 #include "user_copy.h"
 #include "vm.h"
@@ -304,6 +306,30 @@ static void console_puts_limit(const char *text, uint32_t limit)
         console_puts("...");
 }
 
+/*
+ * One formatted line, which is what almost every caller wanted.
+ *
+ * The three-call `console_puts("x "); console_dec32(n); console_puts("\n")`
+ * shape was the whole of this file's reporting, and it hid its own bugs: a
+ * missing newline or a value printed in the wrong base reads as ordinary code.
+ * The buffer is on the stack and bounded -- 128 bytes against an 8 KiB
+ * supervisor stack whose measured high water is 68 -- because a panic path
+ * that allocates is a panic path that can fail.
+ */
+static void console_printf(const char *format, ...)
+    __attribute__((format(printf, 1, 2)));
+
+static void console_printf(const char *format, ...)
+{
+    char line[128];
+    va_list arguments;
+
+    va_start(arguments, format);
+    (void)kernel_format_list(line, sizeof(line), format, arguments);
+    va_end(arguments);
+    console_puts(line);
+}
+
 static void console_hex32(uint32_t value)
 {
     for (int shift = 28; shift >= 0; shift -= 4) {
@@ -364,39 +390,18 @@ static void panic_worker_state(void)
 
     if (!kernel_worker_stats(&stats))
         return;
-    console_puts("Worker: state=");
-    console_dec32(stats.state);
-    console_puts(" pending=0x");
-    console_hex32(stats.pending_work);
-    console_puts(" retry=0x");
-    console_hex32(stats.retry_work);
-    console_puts(" registered=0x");
-    console_hex32(stats.registered_work);
-    console_puts(" signals=");
-    console_dec32(stats.signals);
-    console_puts(" dispatches=");
-    console_dec32(stats.dispatches);
-    console_puts(" passes=");
-    console_dec32(stats.service_passes);
-    console_puts(" yields=");
-    console_dec32(stats.user_yields);
-    console_puts(" restores=");
-    console_dec32(stats.restore_entries);
-    console_puts(" entries=");
-    console_dec32(stats.main_entries);
-    console_putc('\n');
+    console_printf("Worker: state=%u pending=0x%08X retry=0x%08X "
+                   "registered=0x%08X\n", stats.state, stats.pending_work,
+                   stats.retry_work, stats.registered_work);
+    console_printf("        signals=%u dispatches=%u passes=%u yields=%u "
+                   "restores=%u entries=%u\n", stats.signals,
+                   stats.dispatches, stats.service_passes, stats.user_yields,
+                   stats.restore_entries, stats.main_entries);
     if (kernel_interrupt_stats(&interrupt_stats)) {
-        console_puts("Deferred IRQ: pending=");
-        console_dec32(interrupt_stats.pending);
-        console_puts(" max=");
-        console_dec32(interrupt_stats.maximum_pending);
-        console_puts(" queued=");
-        console_dec32(interrupt_stats.queued);
-        console_puts(" dispatched=");
-        console_dec32(interrupt_stats.dispatched);
-        console_puts(" dropped=");
-        console_dec32(interrupt_stats.dropped);
-        console_putc('\n');
+        console_printf("Deferred IRQ: pending=%u max=%u queued=%u "
+                       "dispatched=%u dropped=%u\n", interrupt_stats.pending,
+                       interrupt_stats.maximum_pending, interrupt_stats.queued,
+                       interrupt_stats.dispatched, interrupt_stats.dropped);
     }
     if (kernel_irq_pool_stats(&irq_stats)) {
         console_puts("IRQ errors: vector=");
@@ -552,21 +557,16 @@ static void panic_screen_summary(void)
         }
         console_puts("\n\n");
     } else if (panic_user_fault.present != 0u) {
-        console_puts("Last user fault: ");
-        console_puts(panic_vector_name(panic_user_fault.vector));
-        console_puts(" (vector ");
-        console_dec32(panic_user_fault.vector);
-        console_puts(")\n Process=0x");
-        console_hex32(panic_user_fault.process_id);
-        console_puts(" Thread=0x");
-        console_hex32(panic_user_fault.thread_id);
-        console_puts("\n PC=0x");
-        console_hex32(panic_user_fault.program_counter);
-        console_puts(" Address=0x");
-        console_hex32(panic_user_fault.fault_address);
-        console_puts("\n Symbolize: m68k-linux-gnu-addr2line -f -e <ELF> 0x");
-        console_hex32(panic_user_fault.program_counter);
-        console_puts("\n\n");
+        console_printf("Last user fault: %s (vector %u)\n"
+                       " Process=0x%08X Thread=0x%08X\n"
+                       " PC=0x%08X Address=0x%08X\n",
+                       panic_vector_name(panic_user_fault.vector),
+                       panic_user_fault.vector, panic_user_fault.process_id,
+                       panic_user_fault.thread_id,
+                       panic_user_fault.program_counter,
+                       panic_user_fault.fault_address);
+        console_printf(" Symbolize: m68k-linux-gnu-addr2line -f -e <ELF> "
+                       "0x%08X\n\n", panic_user_fault.program_counter);
     }
     panic_screen_trace();
     console_puts("\nFull report: /data/astra/log/panic-latest.log\n"
@@ -1257,16 +1257,10 @@ void kernel_process_fault_report(uint32_t process_id, uint32_t thread_id,
     panic_user_fault.fault_address = fault_address;
     panic_user_fault.vector = vector;
     panic_user_fault.present = 1u;
-    console_puts("*** user fault: process 0x");
-    console_hex32(process_id);
-    console_puts(" thread 0x");
-    console_hex32(thread_id);
-    console_puts("\n    pc 0x");
-    console_hex32(program_counter);
-    console_puts("  address 0x");
-    console_hex32(fault_address);
-    console_puts("  vector ");
-    console_dec32(vector);
+    console_printf("*** user fault: process 0x%08X thread 0x%08X\n"
+                   "    pc 0x%08X  address 0x%08X  vector %u",
+                   process_id, thread_id, program_counter, fault_address,
+                   vector);
     switch (kind) {
     case KERNEL_PROCESS_FAULT_STACK_GUARD:
         console_puts("\n    the address is this thread's stack guard page: "
@@ -1717,25 +1711,15 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         kernel_panic("runtime allocator validation failed");
 
     console_puts("BootInfo ........... OK\n");
-    console_puts("Early log .......... OK @ 0x");
-    console_hex32(boot_info.early_log_base);
-    console_putc('\n');
-    console_puts("VBR ................ OK @ 0x");
-    console_hex32(kernel_read_vbr());
-    console_putc('\n');
-    console_puts("Kernel image ....... ");
-    console_dec32(boot_info.kernel_image_size);
-    console_puts(" bytes @ 0x");
-    console_hex32(boot_info.kernel_base);
-    console_putc('\n');
-    console_puts("CPU ................ MC68030, ");
-    console_dec32(boot_info.cpu_effective_hz != 0u ?
-                  boot_info.cpu_effective_hz : boot_info.cpu_hz);
-    console_puts(" Hz equivalent\n");
-    console_puts("Timer .............. ");
-    console_dec32(boot_info.cpu_hz);
-    console_puts(" Hz\n");
-    console_puts("Wall clock ......... ");
+    console_printf("Early log .......... OK @ 0x%08X\n",
+                   boot_info.early_log_base);
+    console_printf("VBR ................ OK @ 0x%08X\n", kernel_read_vbr());
+    console_printf("Kernel image ....... %u bytes @ 0x%08X\n",
+                   boot_info.kernel_image_size, boot_info.kernel_base);
+    console_printf("CPU ................ MC68030, %u Hz equivalent\n",
+                   boot_info.cpu_effective_hz != 0u ?
+                   boot_info.cpu_effective_hz : boot_info.cpu_hz);
+    console_printf("Timer .............. %u Hz\n", boot_info.cpu_hz);
     {
         /*
          * What day the machine thinks it is, said once at boot. It is the
@@ -1748,32 +1732,24 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         char stamp[24];
 
         if (kernel_platform_wall_clock_ns(&wall_ns) &&
-            astra_civil_iso8601(wall_ns, stamp, sizeof(stamp)) != 0u) {
-            console_puts(stamp);
-            console_puts(", from the host\n");
-        } else {
-            console_puts("not set; files will have no dates\n");
-        }
+            astra_civil_iso8601(wall_ns, stamp, sizeof(stamp)) != 0u)
+            console_printf("Wall clock ......... %s, from the host\n", stamp);
+        else
+            console_puts("Wall clock ......... not set; files will have no "
+                         "dates\n");
     }
-    console_puts("PMMU ............... enabled, SRP 0x");
-    console_hex32(vm_stats.kernel_root_physical);
-    console_putc('\n');
-    console_puts("Physical pages ..... ");
-    console_dec32(memory_stats.free_frames);
-    console_puts(" free / ");
-    console_dec32(memory_stats.total_frames);
-    console_puts(" total\n");
-    console_puts("Emergency reserve .. ");
-    console_dec32(memory_stats.emergency_available_frames);
-    console_puts(" / ");
-    console_dec32(memory_stats.emergency_total_frames);
-    console_puts(" pages\n");
+    console_printf("PMMU ............... enabled, SRP 0x%08X\n",
+                   vm_stats.kernel_root_physical);
+    console_printf("Physical pages ..... %u free / %u total\n",
+                   memory_stats.free_frames, memory_stats.total_frames);
+    console_printf("Emergency reserve .. %u / %u pages\n",
+                   memory_stats.emergency_available_frames,
+                   memory_stats.emergency_total_frames);
     console_puts("Allocators ......... runtime, ledger OK\n");
     console_puts("User copy .......... OK, fault recovery verified\n");
     console_puts("Kernel worker ...... OK, guarded MSP\n");
-    console_puts("Thread ISPs ........ ");
-    console_dec32(vm_stats.kernel_thread_stack_guards);
-    console_puts(" guarded, 8 KiB each\n");
+    console_printf("Thread ISPs ........ %u guarded, 8 KiB each\n",
+                   vm_stats.kernel_thread_stack_guards);
 
     if (!kernel_interrupt_init(boot_info.cpu_hz))
         kernel_panic("interrupt controller initialization failed");

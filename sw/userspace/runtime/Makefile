@@ -19,7 +19,7 @@ TARGET_ASM_SOURCES := src/m68k/syscall.S
 # The calendar is shared with the kernel rather than copied into userspace:
 # `ls -l`, `date` and the boot line render the same instant, and two
 # implementations of a leap year is one too many.
-COMMON_C_SOURCES := ../../common/civil.c
+COMMON_C_SOURCES := ../../common/civil.c ../../common/divide.c
 TARGET_OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(TARGET_C_SOURCES)) \
 	$(patsubst ../../common/%.c,build/m68k/common_%.o,$(COMMON_C_SOURCES)) \
 	$(patsubst src/%.S,build/m68k/%.o,$(TARGET_ASM_SOURCES))

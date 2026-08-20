@@ -110,7 +110,8 @@ OBJECTS = $(BUILD_DIR)/entry.o $(BUILD_DIR)/vectors.o \
           $(BUILD_DIR)/user_copy.o \
           $(BUILD_DIR)/user_copy_asm.o \
           $(BUILD_DIR)/boot_contract.o \
-          $(BUILD_DIR)/civil.o
+          $(BUILD_DIR)/civil.o $(BUILD_DIR)/divide.o \
+          $(BUILD_DIR)/format.o
 
 all: astra_kernel.elf astra_kernel.bin
 
@@ -134,7 +135,7 @@ $(BUILD_DIR)/vectors.o: vectors.S context.h dispatch.h thread.h user_copy.h \
                         irq_latency.h kernel.ld | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/kernel.o: kernel.c $(BUILD_INFO) allocation.h bytes.h device.h dispatch.h fault.h interrupt.h irq_latency.h monitor.h process.h thread.h trace.h \
+$(BUILD_DIR)/kernel.o: kernel.c $(BUILD_INFO) allocation.h bytes.h device.h dispatch.h fault.h format.h interrupt.h irq_latency.h monitor.h process.h thread.h trace.h \
                        ../include/astra/boot.h ../include/astra/supervisor.h \
                        | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
@@ -284,7 +285,13 @@ $(BUILD_DIR)/user_copy_asm.o: user_copy.S user_copy.h | $(BUILD_DIR)
 $(BUILD_DIR)/boot_contract.o: ../common/boot_contract.c ../include/astra/boot.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
+$(BUILD_DIR)/format.o: format.c format.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
 $(BUILD_DIR)/civil.o: ../common/civil.c ../include/astra/civil.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/divide.o: ../common/divide.c ../include/astra/divide.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 astra_kernel.elf: $(OBJECTS) kernel.ld
@@ -303,6 +310,7 @@ verify: astra_kernel.elf astra_kernel.bin
 	  printf 'kernel payload: %s bytes\n' "$$bytes"
 
 test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_civil \
+      $(BUILD_DIR)/test_divide $(BUILD_DIR)/test_format \
       $(BUILD_DIR)/test_allocation \
       $(BUILD_DIR)/test_memory \
       $(BUILD_DIR)/test_mmio $(BUILD_DIR)/test_trace $(BUILD_DIR)/test_irq \
@@ -321,6 +329,8 @@ test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_civil \
       $(BUILD_DIR)/test_dispatch $(BUILD_DIR)/test_elf
 	./$(BUILD_DIR)/test_boot_contract
 	./$(BUILD_DIR)/test_civil
+	./$(BUILD_DIR)/test_divide
+	./$(BUILD_DIR)/test_format
 	./$(BUILD_DIR)/test_allocation
 	./$(BUILD_DIR)/test_memory
 	./$(BUILD_DIR)/test_mmio
@@ -357,9 +367,19 @@ $(BUILD_DIR)/test_elf: tests/test_elf.c elf.c elf.h bytes.c bytes.h \
 		-I../include bytes.c elf.c tests/test_elf.c -o $@
 
 $(BUILD_DIR)/test_civil: tests/test_civil.c ../common/civil.c \
-                         ../include/astra/civil.h | $(BUILD_DIR)
+                         ../common/divide.c ../include/astra/civil.h \
+                         ../include/astra/divide.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I../include \
-		../common/civil.c tests/test_civil.c -o $@
+		../common/civil.c ../common/divide.c tests/test_civil.c -o $@
+
+$(BUILD_DIR)/test_divide: tests/test_divide.c ../common/divide.c \
+                          ../include/astra/divide.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I../include \
+		../common/divide.c tests/test_divide.c -o $@
+
+$(BUILD_DIR)/test_format: tests/test_format.c format.c format.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I. \
+		format.c tests/test_format.c -o $@
 
 $(BUILD_DIR)/test_boot_contract: tests/test_boot_contract.c \
                                   ../common/boot_contract.c \
