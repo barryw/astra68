@@ -88,7 +88,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 
 | Number | Name | State | Contract |
 |---:|---|---|---|
-| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010010`, `D2=process handle`, `D3=calling-thread handle` |
+| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010012`, `D2=process handle`, `D3=calling-thread handle` |
 | 1 | `PROGRESS` | K1 TEST ONLY | monotonic test progress, not a product ABI |
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `PROCESS_EXIT` (`EXIT` compatibility alias) | CURRENT | terminates the calling process and all of its threads |
@@ -138,9 +138,10 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 53 | `LIBRARY_MAP` | CURRENT CANDIDATE | `D1=library image`, `D2=image bytes`, `D3:D4=base/span outputs`; validates the constrained ELF image and maps shared R/RX plus process-private RW pages into one versioned library slot |
 | 54 | `AREA_DECOMMIT` | CURRENT CANDIDATE | `D1=address`, `D2=length`; releases the committed pages inside a reservation and returns how many went |
 | 55 | `CLOCK_REALTIME` | CURRENT CANDIDATE | returns the date as nanoseconds since the Unix epoch in `D1:D2` (high:low); `UNSUPPORTED` when the machine's wall clock is not valid, never zero |
+| 56 | `LIBRARY_ATTACH` | CURRENT CANDIDATE | `D1=aligned 44-byte AstraLibraryReference`, `D2:D3=AstraLoadedLibrary output`; maps an exact resident identity, or the newest resident compatible ABI when `LATEST` is requested; returns `WOULD_BLOCK` on a cache miss |
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
-not panic. `QUERY_ABI` reports revision `0x00010010`; a later revision may add
+not panic. `QUERY_ABI` reports revision `0x00010012`; a later revision may add
 feature bits before additional calls freeze.
 
 `AstraDeviceInfo` is 24 bytes and naturally four-byte aligned. It contains
@@ -417,7 +418,7 @@ bounded event port; overflow is explicit rather than unbounded allocation.
 The server maps content read-only while the client retains its writable
 handle. This protocol is userspace policy, not a kernel syscall ABI.
 
-`sw/include/astra/vfs_service.h` defines storage protocol `STOR`, version 4,
+`sw/include/astra/vfs_service.h` defines storage protocol `STOR`, version 8,
 with version 2 as the rolling-update floor. Version 3 transfers one reply send
 endpoint during `HELLO` and reuses the client's receive endpoint for the whole
 session; `BYE` releases the service-side endpoint and any bound area. A client
@@ -429,6 +430,12 @@ packs bounded `(kind, name-length, name)` records into the existing 192-byte
 payload and returns the next backend cursor. Version 2/3 peers retain the
 single-entry fallback. Directory offsets are backend cursors in every
 supported version, so a scan resumes rather than reopening at entry zero.
+Version 5 adds whole-file `READ_PATH`; version 6 adds full node metadata;
+version 7 permits small `READ_PATH` replies inline without a shared-area bind.
+Version 8 permits `HELLO` to carry the first path operation, removing one
+round trip for a short-lived process. Older services answer the ordinary
+`HELLO`, after which the client retries the operation under the negotiated
+session.
 
 `AREA_CREATE` accepts 1 through 2,097,152 bytes, rounds upward to complete 4 KiB
 pages, commits and zeroes every frame before publication, and charges the

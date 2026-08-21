@@ -43,7 +43,8 @@ set hdmi_dir [file join $repo_root third_party hdl-util-hdmi]
 add_files -norecurse [list \
     [file join $repo_root fpga arty rtl astra_720p_pattern.sv] \
     [file join $repo_root fpga arty rtl astra_arty_720p_top.sv] \
-    [file join $hdmi_dir hdmi.sv] \
+[file join $hdmi_dir hdmi.sv] \
+[file join $hdmi_dir hdmi_mode_control.sv] \
     [file join $hdmi_dir tmds_channel.sv] \
     [file join $hdmi_dir serializer.sv] \
     [file join $hdmi_dir packet_assembler.sv] \

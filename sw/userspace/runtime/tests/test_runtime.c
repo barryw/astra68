@@ -279,6 +279,12 @@ test_syscall_wrappers(void)
     uint32_t thread;
     uint32_t calls;
     uint32_t span;
+    AstraLibraryReference reference = {
+        .size = ASTRA_LIBRARY_REFERENCE_SIZE,
+        .name = "filesystem.library",
+        .major = 1u,
+        .abi_major = 1u,
+    };
 
     assert(astra_yield() == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_YIELD);
@@ -318,6 +324,12 @@ test_syscall_wrappers(void)
     assert(mock_argument0 == (uint32_t)(uintptr_t)&request);
     assert(mock_argument1 == sizeof(request));
     assert(mock_argument2 == 0u);
+    assert(abi == ASTRA_SYSCALL_ABI_VERSION);
+    assert(span == 0x11111111u);
+    assert(astra_rt_library_attach(&reference, &abi, &span) ==
+           ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_LIBRARY_ATTACH);
+    assert(mock_argument0 == (uint32_t)(uintptr_t)&reference);
     assert(abi == ASTRA_SYSCALL_ABI_VERSION);
     assert(span == 0x11111111u);
 }

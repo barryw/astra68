@@ -19,6 +19,8 @@ would be a second answer to where these things live.
 """
 
 import os
+import shlex
+import struct
 import subprocess
 import sys
 import tempfile
@@ -48,6 +50,10 @@ DEFAULT_APPS = os.path.join(REPOSITORY, "sw/userspace/apps/build")
 KIT_BUNDLES = ("Graphics.kit", "Filesystem.kit", "Interface.kit",
                "Events.kit", "Messaging.kit")
 APPLICATION_BUNDLES = ("Terminal.app",)
+PROVIDER_INDEX_MAGIC = 0x41505256  # "APRV"
+PROVIDER_INDEX_HEADER = struct.Struct(">IHHHHHHHHI")
+LIBRARY_IDENTITY_HEADER = struct.Struct(">IHHHHHHHHIII")
+PROVIDER_INDEX_MAX = 192
 # One startup profile, not two. The terminal stopped being a program that owns
 # the screen and the keyboard when the window runtime landed: it is a window
 # client now, so a profile that runs it has to run the display service that
@@ -164,6 +170,56 @@ def _bundles(directory, names):
     return found
 
 
+def _providers(bundles):
+    """Latest provider path for each (library, ABI), rebuilt from manifests."""
+    found = {}
+    for bundle in bundles:
+        manifest = os.path.join(bundle, "manifest")
+        with open(manifest, "r", encoding="ascii") as handle:
+            for line in handle:
+                fields = shlex.split(line, comments=True)
+                if not fields or fields[0] != "provides":
+                    continue
+                if len(fields) != 4 or not fields[2].isdigit():
+                    raise RuntimeError("invalid provider in %s: %s" %
+                                       (manifest, line.strip()))
+                name = fields[1]
+                abi = int(fields[2])
+                try:
+                    version = tuple(int(part) for part in fields[3].split("."))
+                except ValueError as error:
+                    raise RuntimeError("invalid provider version in %s" %
+                                       manifest) from error
+                if (len(version) != 3 or abi <= 0 or
+                        any(part < 0 or part > 65535 for part in version) or
+                        not name or any(not (character.isalnum() or
+                            character in "._-") for character in name)):
+                    raise RuntimeError("invalid provider in %s: %s" %
+                                       (manifest, line.strip()))
+                key = (name, abi)
+                if key not in found or version > found[key][0]:
+                    relative = "libraries/%s/abi-%u/%s/m68k-68030/%s" % (
+                        name, abi, fields[3], name)
+                    image = os.path.join(bundle, relative)
+                    with open(image, "rb") as library:
+                        library.seek(0x200)
+                        identity = library.read(128)
+                    if len(identity) != 128:
+                        raise RuntimeError("short library identity: %s" % image)
+                    header = LIBRARY_IDENTITY_HEADER.unpack_from(identity)
+                    actual_name = identity[32:56].split(b"\0", 1)[0].decode(
+                        "ascii")
+                    if (header[0] != 0x414c4942 or header[1:3] != (1, 128) or
+                            header[3:6] != version or header[6] != abi or
+                            header[8] != 0 or header[9] != 0x4d303330 or
+                            header[11] != 0x00f00000 or actual_name != name):
+                        raise RuntimeError("library identity disagrees with %s" %
+                                           manifest)
+                    found[key] = (version, header[7], header[10],
+                        "LIBS:%s/%s" % (os.path.basename(bundle), relative))
+    return found
+
+
 def _install_bundle(volume, source, destination):
     for root, directories, files in os.walk(source):
         if any(os.path.islink(os.path.join(root, name))
@@ -250,6 +306,31 @@ def install(image, catalog=None, commands=None, services=None, kits=None,
             _install_bundle(volume, bundle,
                             "/%s/%s" % (LIBS_DIRECTORY,
                                          os.path.basename(bundle)))
+
+        # One tiny lookup replaces a directory sweep and every Kit manifest
+        # read in each new process. The manifests remain authoritative; these
+        # entries are overwritten from them on every image installation.
+        provider_directory = "/%s/.providers" % LIBS_DIRECTORY
+        _debugfs(volume, "mkdir %s" % provider_directory,
+                 "the provider index directory", optional=True)
+        for (name, abi), (version, abi_minor, build_id, path) in sorted(
+                _providers(kit_bundles).items()):
+            host = os.path.join(temporary, "%s.abi-%u" % (name, abi))
+            encoded = path.encode("ascii")
+            record = PROVIDER_INDEX_HEADER.pack(
+                PROVIDER_INDEX_MAGIC, 1, PROVIDER_INDEX_HEADER.size,
+                version[0], version[1], version[2], abi, abi_minor, 0,
+                build_id) + \
+                encoded
+            if len(record) > PROVIDER_INDEX_MAX:
+                raise RuntimeError("provider index path is too long: %s" % path)
+            with open(host, "wb") as handle:
+                handle.write(record)
+            target = "%s/%s.abi-%u" % (provider_directory, name, abi)
+            _debugfs(volume, "rm %s" % target, "the old provider index",
+                     optional=True)
+            _debugfs(volume, "write %s %s" % (host, target),
+                     "provider index")
 
         _debugfs(volume, "mkdir /%s" % APPS_DIRECTORY,
                  "the application directory", optional=True)

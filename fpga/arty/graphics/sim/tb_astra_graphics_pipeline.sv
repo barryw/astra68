@@ -3,31 +3,35 @@
 
 `include "astra_render_protocol.vh"
 
-module tb_astra_graphics_pipeline;
+module tb_astra_graphics_pipeline #(
+    parameter integer OUTPUT_WIDTH = 64,
+    parameter integer OUTPUT_HEIGHT = 4,
+    parameter integer TOTAL_WIDTH = 128,
+    parameter integer TOTAL_HEIGHT = 48,
+    parameter [31:0] FRAMEBUFFER_PITCH = OUTPUT_WIDTH * 2
+);
     localparam [2:0] COPPER_OP_END = 3'd0;
     localparam [2:0] COPPER_OP_MOVE = 3'd1;
     localparam [2:0] COPPER_OP_WAIT = 3'd2;
     localparam [2:0] COPPER_OP_IRQ = 3'd4;
     localparam [2:0] COPPER_OP_DISPATCH = 3'd6;
-    localparam integer OUTPUT_WIDTH = 64;
-    localparam integer OUTPUT_HEIGHT = 4;
-    localparam integer TOTAL_WIDTH = 128;
     // Keep vblank longer than concurrent scene activation and the 4,352-entry
     // active-palette baseline restore. Production 720p provides about 667 us;
     // this reduced mode provides about 76 us at the same clock ratio.
-    localparam integer TOTAL_HEIGHT = 48;
     localparam integer AXI_ID_WIDTH = 6;
     localparam [31:0] ARENA_BASE = 32'h00001000;
     localparam [31:0] ARENA_LIMIT = 32'h00101000;
     localparam [31:0] FRAMEBUFFER_BASE = 32'h00001000;
-    localparam [31:0] FRAMEBUFFER_PITCH = 32'd128;
-    localparam [31:0] SPRITE_BASE = 32'h00002000;
+    localparam integer FRAME_MEMORY_BYTES = 65536;
+    localparam [31:0] SPRITE_BASE = 32'h00008000;
     localparam [31:0] SPRITE_ARGB = 32'h80ff4000;
     localparam [31:0] RENDER_SUBMISSION_OFFSET = 32'h00010000;
     localparam [31:0] RENDER_COMPLETION_OFFSET = 32'h00020000;
     localparam [31:0] RENDER_DESCRIPTOR_OFFSET = 32'h00030000;
     localparam [31:0] RENDER_DATA_OFFSET = 32'h00031000;
     localparam [31:0] RENDER_GENERATION = 32'h00000017;
+    localparam integer FRAME_TIMEOUT_CYCLES =
+        100000 + TOTAL_WIDTH * TOTAL_HEIGHT * 4;
 
     reg build_clk = 1'b0;
     reg pixel_clk = 1'b0;
@@ -195,7 +199,7 @@ module tb_astra_graphics_pipeline;
 
     astra_render_axi_memory_model #(
         .AXI_ID_WIDTH(AXI_ID_WIDTH),
-        .MEMORY_BYTES(1048576),
+        .MEMORY_BYTES(262144),
         .BASE_ADDRESS(ARENA_BASE)
     ) render_memory_i (
         .clk(build_clk),
@@ -250,20 +254,17 @@ module tb_astra_graphics_pipeline;
         end
     end
 
-    reg [7:0] memory [0:12287];
+    reg [7:0] memory [0:FRAME_MEMORY_BYTES-1];
 
     function automatic [15:0] source_rgb565(
         input integer x,
         input integer y
     );
-        reg [4:0] red;
-        reg [5:0] green;
-        reg [4:0] blue;
+        reg [31:0] value;
         begin
-            red = x + 1;
-            green = x + y * 7;
-            blue = x * 3 + y;
-            source_rgb565 = {red, green, blue};
+            value = x * 32'h0421 + y * 32'h1f3d +
+                    (x >> 8) * 32'h0101;
+            source_rgb565 = value ^ (x << 7) ^ (y << 11);
         end
     endfunction
 
@@ -358,20 +359,25 @@ module tb_astra_graphics_pipeline;
 
     reg [31:0] command_address [0:31];
     reg [7:0] command_length [0:31];
-    integer command_write = 0;
-    integer command_read = 0;
+    reg [4:0] command_write = 5'd0;
+    reg [4:0] command_read = 5'd0;
+    reg [5:0] command_count = 6'd0;
     reg response_active = 1'b0;
     reg [31:0] response_address = 32'd0;
     reg [7:0] response_length = 8'd0;
     reg [7:0] response_index = 8'd0;
     integer response_delay = 0;
 
-    assign fb_axi_arready = command_write < 31;
+    wire command_push = fb_axi_arvalid && fb_axi_arready;
+    wire command_pop = !response_active && !fb_axi_rvalid &&
+        command_count != 0;
+    assign fb_axi_arready = command_count != 32;
 
     always @(posedge build_clk) begin
         if (build_reset) begin
-            command_write <= 0;
-            command_read <= 0;
+            command_write <= 5'd0;
+            command_read <= 5'd0;
+            command_count <= 6'd0;
             response_active <= 1'b0;
             response_address <= 32'd0;
             response_length <= 8'd0;
@@ -383,7 +389,7 @@ module tb_astra_graphics_pipeline;
             fb_axi_rlast <= 1'b0;
             fb_axi_rvalid <= 1'b0;
         end else begin
-            if (fb_axi_arvalid && fb_axi_arready) begin
+            if (command_push) begin
                 if (fb_axi_arsize != 3'b011 ||
                     fb_axi_arburst != 2'b01 ||
                     fb_axi_arlen > 8'd15 ||
@@ -393,8 +399,14 @@ module tb_astra_graphics_pipeline;
                     $fatal(1, "invalid integrated framebuffer AXI request");
                 command_address[command_write] <= fb_axi_araddr;
                 command_length[command_write] <= fb_axi_arlen;
-                command_write <= command_write + 1;
+                command_write <= command_write + 5'd1;
             end
+
+            case ({command_push, command_pop})
+                2'b10: command_count <= command_count + 6'd1;
+                2'b01: command_count <= command_count - 6'd1;
+                default: begin end
+            endcase
 
             if (fb_axi_rvalid && fb_axi_rready) begin
                 fb_axi_rvalid <= 1'b0;
@@ -407,14 +419,13 @@ module tb_astra_graphics_pipeline;
                 end
             end
 
-            if (!response_active && !fb_axi_rvalid &&
-                command_read < command_write) begin
+            if (command_pop) begin
                 response_active <= 1'b1;
                 response_address <= command_address[command_read];
                 response_length <= command_length[command_read];
                 response_index <= 8'd0;
                 response_delay <= 2;
-                command_read <= command_read + 1;
+                command_read <= command_read + 5'd1;
             end else if (response_active && !fb_axi_rvalid) begin
                 if (response_delay != 0) begin
                     response_delay <= response_delay - 1;
@@ -773,7 +784,8 @@ module tb_astra_graphics_pipeline;
         begin
             cycles = 0;
             while ((active_generation != generation ||
-                    lines_built < minimum_lines) && cycles < 100000) begin
+                    lines_built < minimum_lines) &&
+                   cycles < FRAME_TIMEOUT_CYCLES) begin
                 @(posedge build_clk);
                 cycles = cycles + 1;
             end
@@ -858,6 +870,10 @@ module tb_astra_graphics_pipeline;
                         "ASTRA GRAPHICS PIPELINE PASS pixels=%0d lines=%0d underruns=%0d deferrals=%0d",
                         checked_pixels + 1, lines_built,
                         pixel_underruns, commit_deferrals);
+                    if (OUTPUT_WIDTH == 1280)
+                        $display(
+                            "ASTRA SCREEN OFFSET PASS pixels=%0d width=%0d height=%0d",
+                            checked_pixels + 1, OUTPUT_WIDTH, OUTPUT_HEIGHT);
                     $finish;
                 end
             end
@@ -869,7 +885,11 @@ module tb_astra_graphics_pipeline;
     integer address;
     reg [15:0] source;
     initial begin
-        for (address = 0; address < 12288; address = address + 1)
+        if (OUTPUT_WIDTH >= 1280 &&
+            source_rgb565(0, 0) == source_rgb565(640, 0))
+            $fatal(1, "screen-offset oracle repeats at 640 pixels");
+        for (address = 0; address < FRAME_MEMORY_BYTES;
+             address = address + 1)
             memory[address] = 8'd0;
         render_memory_i.clear_memory(8'ha5);
         for (y = 0; y < OUTPUT_HEIGHT; y = y + 1) begin
@@ -935,7 +955,7 @@ module tb_astra_graphics_pipeline;
         axi_write(32'h00000010, 32'h00000001);
         wait_generation_and_lines(32'd2, 32'd8);
 
-        repeat (100000) @(posedge pixel_clk);
+        repeat (FRAME_TIMEOUT_CYCLES) @(posedge pixel_clk);
         $fatal(1,
             "integrated pipeline timed out gen=%0d built=%0d failed=%0d accepted=%0d rejected=%0d deferred=%0d validating=%0d dirty=%0d pending=%0d copper_run=%0d fault=%0d render_sub=%0d complete=%0d failed=%0d prod=%0d cons=%0d dispatch=%0d/%0d/%0d id=%0d",
             active_generation, lines_built, lines_failed,

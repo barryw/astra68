@@ -26,7 +26,7 @@ TARGET := build/m68k/terminal.elf
 IMAGE := build/m68k/terminal
 CATALOG := build/m68k/astra_events.cat
 OBJECTS := build/m68k/main.o build/m68k/console_shell.o \
-	build/m68k/console_stream.o
+	build/m68k/console_stream.o build/m68k/vfs_read.o
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
 STREAMS_LIB := $(STREAMS)/build/m68k/libastrastreams.a
@@ -72,6 +72,10 @@ build/m68k/console_shell.o: $(SUPERVISOR)/src/console_shell.c
 		-ffile-prefix-map=$(SUPERVISOR)/= -MMD -MP -c $< -o $@
 
 build/m68k/console_stream.o: $(SUPERVISOR)/src/console_stream.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
+
+build/m68k/vfs_read.o: $(SUPERVISOR)/src/vfs_read.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 

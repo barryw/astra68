@@ -1531,3 +1531,50 @@ All 66,515 nets route with zero errors; setup, hold, and pulse-width slack are
 the current capacity authority. The front panel changes no BRAM or DSP budget;
 its seven output channels, six inputs, ownership/atomic control, and activity
 timer fit within the slightly lower routed LUT, register, and slice totals.
+
+## Rejected cached-RGB565 copy stream (2026-08-20)
+
+The exact experimental full route used 32,123 LUTs, 39,069 registers, 12,346
+slices, 129.5 BRAM tiles, and 81 DSPs. It connected all 66,652 nets and passed
+setup/hold/pulse width at `+0.122/+0.048/+0.538 ns` after post-route physical
+optimization. The isolated blitter used 2,906 LUTs, 3,215 registers, zero BRAM
+tiles, and 11 DSPs at `+0.090/+0.110 ns`.
+
+These figures are rejection evidence, not reserved capacity. The physical
+desktop exhibited a visible mid-screen wrap on its full-width compositor BLIT,
+so the stream was removed and no candidate resource is retained. The active
+capacity authority remains the front-panel/reset release above.
+
+## Rejected final-pixel signature (2026-08-20)
+
+Six bounded final-pixel signature forms fully routed but failed setup timing.
+The final CRC16 form used 32,287 LUTs, 39,070 registers, 12,423
+slices, 129.5 BRAM tiles, and 81 DSPs, with `-0.229/+0.021/+0.538 ns`
+setup/hold/pulse-width slack. It was not converted to a bitstream. All signature
+RTL and MMIO state were removed, so the active resource budget remains the
+qualified front-panel/reset release above.
+
+## HDMI startup 200 MHz over-target checkpoint (2026-08-21)
+
+The full standards-based HDMI startup candidate at an actual 200 MHz FCLK1
+uses 32,245 LUTs (60.61%), 39,004 registers (36.66%), 12,299 slices (92.47%),
+129.5 BRAM36-equivalent tiles (92.50%), and 81 DSPs. All 66,445 nets route with
+zero errors, hold passes at `+0.033 ns`, and setup rejects at `-0.185 ns`.
+No bitstream exists. This is the latest exact capacity measurement; the active
+capacity/release authority remains the timing-clean 187.5 MHz front-panel
+release until the exact HDMI-startup production configuration closes and is
+qualified on hardware.
+
+## HDMI startup production-clock candidate (2026-08-21)
+
+The exact 187.5 MHz production candidate uses 31,951 LUTs (60.06%), 39,064
+registers (36.71%), 12,249 slices (92.10%), 129.5 BRAM36-equivalent tiles
+(92.50%), and 81 DSPs (36.82%). All 66,591 routable nets connect with zero
+errors; release-clock setup/hold/pulse-width slack is
+`+0.055/+0.034/+0.538 ns`. It retains the complete graphics, front-panel, and
+HDMI-audio feature set and adds the native PS7 I2C0/GPIO HDMI startup path.
+
+The optional 200 MHz implementation margin misses setup by `0.278 ns`; the
+actual generated and shipped FCLK1 remains exactly 187.5 MHz. This candidate
+supersedes the rejected 200 MHz capacity checkpoint, but it does not become
+active release authority until physical board qualification passes.

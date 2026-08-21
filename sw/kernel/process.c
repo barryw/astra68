@@ -113,6 +113,7 @@ typedef struct KernelProcess {
 
 typedef struct KernelLibraryCacheEntry {
     KernelElfImage plan;
+    AstraLibraryReference reference;
     uint32_t physical_pages[LIBRARY_PAGE_MAX];
     uint32_t owner;
     uint32_t span;
@@ -2527,6 +2528,145 @@ static bool bytes_equal(const void *left, const void *right, uint32_t size)
     return true;
 }
 
+static uint16_t library_be16(const uint8_t *bytes)
+{
+    return (uint16_t)(((uint16_t)bytes[0] << 8) | bytes[1]);
+}
+
+static uint32_t library_be32(const uint8_t *bytes)
+{
+    return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
+           ((uint32_t)bytes[2] << 8) | bytes[3];
+}
+
+static bool library_name_valid(const char name[ASTRA_LIBRARY_NAME_MAX])
+{
+    for (uint32_t index = 0u; index < ASTRA_LIBRARY_NAME_MAX; ++index) {
+        char value = name[index];
+
+        if (value == '\0')
+            return index != 0u;
+        if (!((value >= 'a' && value <= 'z') ||
+              (value >= 'A' && value <= 'Z') ||
+              (value >= '0' && value <= '9') || value == '.' ||
+              value == '_' || value == '-'))
+            return false;
+    }
+    return false;
+}
+
+static bool library_reference_valid(const AstraLibraryReference *reference)
+{
+    bool has_version;
+
+    if (reference == NULL ||
+        reference->size != ASTRA_LIBRARY_REFERENCE_SIZE ||
+        reference->abi_major == 0u || !library_name_valid(reference->name))
+        return false;
+    has_version = reference->major != 0u || reference->minor != 0u ||
+                  reference->patch != 0u;
+    if (reference->flags == ASTRA_LIBRARY_REFERENCE_EXACT)
+        return has_version;
+    return reference->flags == ASTRA_LIBRARY_REFERENCE_LATEST &&
+           !has_version && reference->build_id == 0u;
+}
+
+static bool library_reference_equal(const AstraLibraryReference *left,
+                                    const AstraLibraryReference *right)
+{
+    return left->build_id == right->build_id &&
+           left->major == right->major && left->minor == right->minor &&
+           left->patch == right->patch &&
+           left->abi_major == right->abi_major &&
+           left->abi_minor == right->abi_minor &&
+           bytes_equal(left->name, right->name, ASTRA_LIBRARY_NAME_MAX);
+}
+
+static bool library_reference_newer(const AstraLibraryReference *left,
+                                    const AstraLibraryReference *right)
+{
+    if (left->major != right->major)
+        return left->major > right->major;
+    if (left->minor != right->minor)
+        return left->minor > right->minor;
+    if (left->patch != right->patch)
+        return left->patch > right->patch;
+    return left->abi_minor > right->abi_minor;
+}
+
+static bool library_reference_matches_request(
+    const AstraLibraryReference *cached, const AstraLibraryReference *request)
+{
+    /*
+     * ponytail: installed Kits are immutable for one boot. Add an installer
+     * generation/invalidation message when live Kit replacement exists.
+     */
+    if (request->flags == ASTRA_LIBRARY_REFERENCE_EXACT)
+        return library_reference_equal(cached, request);
+    return cached->abi_major == request->abi_major &&
+           cached->abi_minor >= request->abi_minor &&
+           bytes_equal(cached->name, request->name, ASTRA_LIBRARY_NAME_MAX);
+}
+
+#if defined(KERNEL_PROCESS_HOST_TEST)
+bool kernel_process_test_library_reference_selection(void)
+{
+    AstraLibraryReference older = {
+        .size = ASTRA_LIBRARY_REFERENCE_SIZE,
+        .build_id = 1u,
+        .name = "filesystem.library",
+        .major = 1u,
+        .abi_major = 1u,
+    };
+    AstraLibraryReference newer = older;
+    AstraLibraryReference request = {
+        .size = ASTRA_LIBRARY_REFERENCE_SIZE,
+        .name = "filesystem.library",
+        .abi_major = 1u,
+        .flags = ASTRA_LIBRARY_REFERENCE_LATEST,
+    };
+
+    newer.minor = 1u;
+    newer.build_id = 2u;
+    return library_reference_valid(&request) &&
+           library_reference_matches_request(&older, &request) &&
+           library_reference_matches_request(&newer, &request) &&
+           library_reference_newer(&newer, &older) &&
+           !library_reference_newer(&older, &newer) &&
+           library_reference_valid(&older);
+}
+#endif
+
+static bool library_reference_from_image(const uint8_t *image,
+                                         uint32_t readable,
+                                         AstraLibraryReference *reference)
+{
+    const uint8_t *record;
+
+    if (image == NULL || reference == NULL ||
+        readable < ASTRA_LIBRARY_FILE_OFFSET + ASTRA_LIBRARY_SIZE)
+        return false;
+    record = image + ASTRA_LIBRARY_FILE_OFFSET;
+    if (library_be32(record) != ASTRA_LIBRARY_MAGIC ||
+        library_be16(record + 4u) != ASTRA_LIBRARY_RECORD_VERSION ||
+        library_be16(record + 6u) != ASTRA_LIBRARY_SIZE ||
+        library_be16(record + 18u) != 0u ||
+        library_be32(record + 20u) != ASTRA_LIBRARY_TARGET_M68030 ||
+        library_be32(record + 28u) != ASTRA_LIBRARY_EXPORTS_OFFSET)
+        return false;
+    kernel_bytes_clear(reference, sizeof(*reference));
+    reference->size = ASTRA_LIBRARY_REFERENCE_SIZE;
+    reference->major = library_be16(record + 8u);
+    reference->minor = library_be16(record + 10u);
+    reference->patch = library_be16(record + 12u);
+    reference->abi_major = library_be16(record + 14u);
+    reference->abi_minor = library_be16(record + 16u);
+    reference->build_id = library_be32(record + 24u);
+    kernel_bytes_copy(reference->name, record + 32u,
+                      ASTRA_LIBRARY_NAME_MAX);
+    return library_reference_valid(reference);
+}
+
 static KernelProcessStatus read_library_page(
     uint32_t user_image, const KernelElfSegment *segment, uint32_t page,
     uint32_t *copied)
@@ -2549,12 +2689,13 @@ static KernelProcessStatus read_library_page(
 
 static KernelProcessStatus library_cache_match(
     const KernelLibraryCacheEntry *entry, const KernelElfImage *plan,
-    uint32_t user_image, bool *matches)
+    const AstraLibraryReference *reference, uint32_t user_image, bool *matches)
 {
     uint32_t flattened = 0u;
 
     *matches = false;
-    if (entry->used == 0u ||
+    if (entry->used == 0u || !library_reference_equal(&entry->reference,
+                                                       reference) ||
         !bytes_equal(&entry->plan, plan, sizeof(*plan)))
         return KERNEL_PROCESS_OK;
     for (uint32_t index = 0u; index < plan->segment_count; ++index) {
@@ -2566,8 +2707,6 @@ static KernelProcessStatus library_cache_match(
             uint8_t *cached;
             KernelProcessStatus status;
 
-            if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) != 0u)
-                continue;
             status = read_library_page(user_image, segment, page, &copied);
             if (status != KERNEL_PROCESS_OK)
                 return status;
@@ -2586,7 +2725,8 @@ static KernelProcessStatus library_cache_match(
 
 static KernelProcessStatus library_cache_create(
     KernelLibraryCacheEntry *entry, uint32_t slot,
-    const KernelElfImage *plan, uint32_t user_image, uint32_t span)
+    const KernelElfImage *plan, const AstraLibraryReference *reference,
+    uint32_t user_image, uint32_t span)
 {
     uint32_t flattened = 0u;
     KernelProcessStatus result = KERNEL_PROCESS_CORRUPT;
@@ -2595,6 +2735,7 @@ static KernelProcessStatus library_cache_create(
     entry->owner = LIBRARY_OWNER_PREFIX | (slot + 1u);
     entry->span = span;
     kernel_bytes_copy(&entry->plan, plan, sizeof(*plan));
+    kernel_bytes_copy(&entry->reference, reference, sizeof(*reference));
     for (uint32_t index = 0u; index < plan->segment_count; ++index) {
         const KernelElfSegment *segment = &plan->segment[index];
 
@@ -2604,8 +2745,6 @@ static KernelProcessStatus library_cache_create(
             uint32_t physical;
             uint8_t *target;
 
-            if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) != 0u)
-                continue;
             result = read_library_page(user_image, segment, page, &copied);
             if (result != KERNEL_PROCESS_OK)
                 goto failed;
@@ -2710,8 +2849,9 @@ bool kernel_process_test_library_cache_reclaims_after_last_mapping(void)
 #endif
 
 static KernelProcessStatus library_cache_get(
-    const KernelElfImage *plan, uint32_t user_image, uint32_t span,
-    KernelLibraryCacheEntry **cached, uint32_t *slot)
+    const KernelElfImage *plan, const AstraLibraryReference *reference,
+    uint32_t user_image, uint32_t span, KernelLibraryCacheEntry **cached,
+    uint32_t *slot)
 {
     uint32_t free_slot = ASTRA_LIBRARY_SLOT_COUNT;
 
@@ -2724,8 +2864,8 @@ static KernelProcessStatus library_cache_get(
                 free_slot = index;
             continue;
         }
-        status = library_cache_match(&library_cache[index], plan, user_image,
-                                     &matches);
+        status = library_cache_match(&library_cache[index], plan, reference,
+                                     user_image, &matches);
         if (status != KERNEL_PROCESS_OK)
             return status;
         if (matches) {
@@ -2751,7 +2891,8 @@ static KernelProcessStatus library_cache_get(
         return KERNEL_PROCESS_RESOURCE_LIMIT;
     {
         KernelProcessStatus status = library_cache_create(
-            &library_cache[free_slot], free_slot, plan, user_image, span);
+            &library_cache[free_slot], free_slot, plan, reference, user_image,
+            span);
 
         if (status != KERNEL_PROCESS_OK)
             return status;
@@ -2761,61 +2902,19 @@ static KernelProcessStatus library_cache_get(
     return KERNEL_PROCESS_OK;
 }
 
-static KernelProcessStatus map_library(KernelProcess *process,
-                                       uint32_t user_image,
-                                       uint32_t image_size,
-                                       uint32_t *mapped_base,
-                                       uint32_t *mapped_span)
+static KernelProcessStatus map_cached_library(
+    KernelProcess *process, KernelLibraryCacheEntry *cached, uint32_t slot,
+    uint32_t *mapped_base, uint32_t *mapped_span)
 {
-    static const KernelElfLimits limits = {
-        .minimum_address = 0u,
-        .maximum_address = ASTRA_LIBRARY_SLOT_SIZE - 1u,
-        .maximum_pages = ASTRA_LIBRARY_IMAGE_MAX / KERNEL_PAGE_SIZE,
-        .page_size = KERNEL_PAGE_SIZE,
-    };
-    KernelElfImage plan;
-    KernelLibraryCacheEntry *cached;
-    uint32_t window;
-    uint32_t span = 0u;
-    uint32_t slot;
-    uint32_t virtual_base;
+    const KernelElfImage *plan = &cached->plan;
+    uint32_t virtual_base = ASTRA_LIBRARY_BASE +
+                            (slot * ASTRA_LIBRARY_SLOT_SIZE);
     uint32_t flattened = 0u;
     uint32_t mapped = 0u;
     KernelProcessStatus failure = KERNEL_PROCESS_CORRUPT;
 
-    if (process == NULL || user_image == 0u || image_size == 0u ||
-        image_size > ASTRA_LIBRARY_IMAGE_MAX ||
-        user_image > 0xffffffffu - image_size || mapped_base == NULL ||
-        mapped_span == NULL)
-        return KERNEL_PROCESS_INVALID_ARGUMENT;
-
-    window = image_size < KERNEL_PROCESS_LAUNCH_HEADER_BYTES ?
-        image_size : KERNEL_PROCESS_LAUNCH_HEADER_BYTES;
-    kernel_bytes_clear(launch_header, sizeof(launch_header));
-    if (kernel_copy_from_user(launch_header, user_image, window) !=
-        KERNEL_USER_COPY_OK)
-        return KERNEL_PROCESS_INVALID_ARGUMENT;
-    if (kernel_elf_accept_library_windowed(launch_header, image_size, window,
-                                           &limits, &plan) != KERNEL_ELF_OK)
-        return KERNEL_PROCESS_INVALID_ARGUMENT;
-
-    for (uint32_t index = 0u; index < plan.segment_count; ++index) {
-        uint32_t end = plan.segment[index].virtual_address +
-                       (plan.segment[index].page_count * KERNEL_PAGE_SIZE);
-
-        if (end > span)
-            span = end;
-    }
-    if (span == 0u || span > ASTRA_LIBRARY_SLOT_SIZE)
-        return KERNEL_PROCESS_INVALID_ARGUMENT;
-    failure = library_cache_get(&plan, user_image, span, &cached, &slot);
-    if (failure != KERNEL_PROCESS_OK)
-        return failure;
-    virtual_base = ASTRA_LIBRARY_BASE + (slot * ASTRA_LIBRARY_SLOT_SIZE);
-    failure = KERNEL_PROCESS_CORRUPT;
-
-    for (uint32_t index = 0u; index < plan.segment_count; ++index) {
-        const KernelElfSegment *segment = &plan.segment[index];
+    for (uint32_t index = 0u; index < plan->segment_count; ++index) {
+        const KernelElfSegment *segment = &plan->segment[index];
         uint32_t rights = segment_vm_rights(segment->rights);
 
         for (uint32_t page = 0u; page < segment->page_count;
@@ -2824,14 +2923,13 @@ static KernelProcessStatus map_library(KernelProcess *process,
                                (page * KERNEL_PAGE_SIZE);
 
             if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) != 0u) {
-                uint32_t copied;
+                const uint8_t *source = physical_bytes(
+                    cached->physical_pages[flattened], KERNEL_PAGE_SIZE);
 
-                failure = read_library_page(user_image, segment, page,
-                                            &copied);
-                if (failure != KERNEL_PROCESS_OK)
+                if (source == NULL)
                     goto failed;
-                failure = publish_page(process, address, launch_page, copied,
-                                       rights);
+                failure = publish_page(process, address, source,
+                                       KERNEL_PAGE_SIZE, rights);
                 if (failure != KERNEL_PROCESS_OK)
                     goto failed;
             } else {
@@ -2854,13 +2952,13 @@ static KernelProcessStatus map_library(KernelProcess *process,
         }
     }
     *mapped_base = virtual_base;
-    *mapped_span = span;
+    *mapped_span = cached->span;
     return KERNEL_PROCESS_OK;
 
 failed:
-    for (uint32_t index = 0u; index < plan.segment_count && mapped != 0u;
+    for (uint32_t index = 0u; index < plan->segment_count && mapped != 0u;
          ++index) {
-        const KernelElfSegment *segment = &plan.segment[index];
+        const KernelElfSegment *segment = &plan->segment[index];
 
         for (uint32_t page = 0u; page < segment->page_count && mapped != 0u;
              ++page) {
@@ -2874,6 +2972,60 @@ failed:
         }
     }
     return failure;
+}
+
+static KernelProcessStatus map_library(KernelProcess *process,
+                                       uint32_t user_image,
+                                       uint32_t image_size,
+                                       uint32_t *mapped_base,
+                                       uint32_t *mapped_span)
+{
+    static const KernelElfLimits limits = {
+        .minimum_address = 0u,
+        .maximum_address = ASTRA_LIBRARY_SLOT_SIZE - 1u,
+        .maximum_pages = ASTRA_LIBRARY_IMAGE_MAX / KERNEL_PAGE_SIZE,
+        .page_size = KERNEL_PAGE_SIZE,
+    };
+    KernelElfImage plan;
+    AstraLibraryReference reference;
+    KernelLibraryCacheEntry *cached;
+    uint32_t window;
+    uint32_t span = 0u;
+    uint32_t slot;
+    KernelProcessStatus failure;
+
+    if (process == NULL || user_image == 0u || image_size == 0u ||
+        image_size > ASTRA_LIBRARY_IMAGE_MAX ||
+        user_image > 0xffffffffu - image_size || mapped_base == NULL ||
+        mapped_span == NULL)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+
+    window = image_size < KERNEL_PROCESS_LAUNCH_HEADER_BYTES ?
+        image_size : KERNEL_PROCESS_LAUNCH_HEADER_BYTES;
+    kernel_bytes_clear(launch_header, sizeof(launch_header));
+    if (kernel_copy_from_user(launch_header, user_image, window) !=
+        KERNEL_USER_COPY_OK)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    if (kernel_elf_accept_library_windowed(launch_header, image_size, window,
+                                           &limits, &plan) != KERNEL_ELF_OK)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    if (!library_reference_from_image(launch_header, window, &reference))
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+
+    for (uint32_t index = 0u; index < plan.segment_count; ++index) {
+        uint32_t end = plan.segment[index].virtual_address +
+                       (plan.segment[index].page_count * KERNEL_PAGE_SIZE);
+
+        if (end > span)
+            span = end;
+    }
+    if (span == 0u || span > ASTRA_LIBRARY_SLOT_SIZE)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    failure = library_cache_get(&plan, &reference, user_image, span, &cached,
+                                &slot);
+    if (failure != KERNEL_PROCESS_OK)
+        return failure;
+    return map_cached_library(process, cached, slot, mapped_base, mapped_span);
 }
 
 /*
@@ -4730,6 +4882,53 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         }
         if (library_status == KERNEL_PROCESS_RESOURCE_LIMIT) {
             result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        }
+        if (library_status != KERNEL_PROCESS_OK)
+            return library_status;
+        thread->context.data[1] = base;
+        thread->context.data[2] = span;
+        break;
+    }
+    case ASTRA_SYSCALL_LIBRARY_ATTACH: {
+        AstraLibraryReference reference;
+        KernelLibraryCacheEntry *cached = NULL;
+        uint32_t slot = 0u;
+        uint32_t base = 0u;
+        uint32_t span = 0u;
+        KernelProcessStatus library_status;
+
+        if (kernel_copy_from_user(&reference, thread->context.data[1],
+                                  sizeof(reference)) != KERNEL_USER_COPY_OK ||
+            !library_reference_valid(&reference)) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        for (slot = 0u; slot < ASTRA_LIBRARY_SLOT_COUNT; ++slot) {
+            KernelLibraryCacheEntry *candidate = &library_cache[slot];
+
+            if (candidate->used == 0u ||
+                !library_reference_matches_request(&candidate->reference,
+                                                   &reference))
+                continue;
+            if (cached == NULL ||
+                library_reference_newer(&candidate->reference,
+                                        &cached->reference))
+                cached = candidate;
+        }
+        if (cached == NULL) {
+            result = ASTRA_SYSCALL_WOULD_BLOCK;
+            break;
+        }
+        slot = (uint32_t)(cached - library_cache);
+        library_status = map_cached_library(current, cached, slot, &base,
+                                            &span);
+        if (library_status == KERNEL_PROCESS_INVALID_ARGUMENT) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (library_status == KERNEL_PROCESS_OUT_OF_MEMORY) {
+            result = ASTRA_SYSCALL_OUT_OF_MEMORY;
             break;
         }
         if (library_status != KERNEL_PROCESS_OK)

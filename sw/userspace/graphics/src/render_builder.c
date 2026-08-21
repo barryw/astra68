@@ -473,6 +473,19 @@ static int command_valid(const AstraDrawListHeader *header,
                item->payload_offset >= ASTRA_DRAW_LIST_PAYLOAD_OFFSET &&
                end <= (uint64_t)ASTRA_DRAW_LIST_PAYLOAD_OFFSET +
                          header->payload_bytes;
+    if (item->operation == ASTRA_DRAW_LIST_COPY)
+        return item->x >= 0 && item->y >= 0 && item->width != 0u &&
+               item->height != 0u && item->radius == 0u &&
+               item->payload_offset == 0u && item->payload_bytes == 0u &&
+               item->font_height == 0u &&
+               item->foreground <= header->width &&
+               item->width <= header->width - item->foreground &&
+               item->background <= header->height &&
+               item->height <= header->height - item->background &&
+               (uint32_t)item->x <= header->width &&
+               item->width <= header->width - (uint32_t)item->x &&
+               (uint32_t)item->y <= header->height &&
+               item->height <= header->height - (uint32_t)item->y;
     return 0;
 }
 
@@ -534,12 +547,18 @@ int astra_render_builder_replay(AstraRenderBuilder *builder,
                 (const char *)header + item->payload_offset,
                 item->payload_bytes, item->font_height,
                 (uint16_t)item->foreground);
-        else
+        else if (item->operation == ASTRA_DRAW_LIST_MONO_TEXT)
             ok = astra_render_builder_mono_text(
                 builder, destination, item->x, item->y,
                 (const char *)header + item->payload_offset,
                 item->payload_bytes, item->font_height,
                 (uint16_t)item->width, (uint16_t)item->foreground);
+        else
+            ok = astra_render_builder_blit_region(
+                builder, destination, destination,
+                (int32_t)item->foreground, (int32_t)item->background,
+                item->x, item->y, (uint16_t)item->width,
+                (uint16_t)item->height);
         if (!ok)
             return 0;
     }

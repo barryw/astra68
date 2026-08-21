@@ -27,7 +27,7 @@
  */
 
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
-#define ASTRA_VFS_VERSION  UINT16_C(6)
+#define ASTRA_VFS_VERSION  UINT16_C(8)
 
 /*
  * The oldest version this build can still speak. A client asks for a minimum
@@ -40,6 +40,11 @@
  * per-request reply ports during a rolling image update. Version 1 is not
  * spoken: it would send a directory index where version 2 and later read a
  * backend cursor.
+ *
+ * Version 8 lets HELLO carry the first path operation in `file`. A version 8
+ * service opens the session and performs that operation in the same exchange;
+ * an older service answers the ordinary HELLO and the client retries the
+ * operation with the negotiated session.
  */
 #define ASTRA_VFS_VERSION_MIN UINT16_C(2)
 

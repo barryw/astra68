@@ -36,6 +36,9 @@ uint32_t astra_vfs_port_transport(void *context, uint32_t operation,
                                   const AstraVfsRequest *request,
                                   AstraVfsReply *reply);
 uint32_t astra_vfs_port_connect(AstraVfsClient *client, uint32_t service);
+/* Version 8: defer HELLO and fuse it with the first path operation. */
+uint32_t astra_vfs_port_connect_lazy(AstraVfsClient *client,
+                                     uint32_t service);
 /*
  * Open, read whole, close -- one round trip -- answered in the transfer area.
  *
@@ -51,6 +54,12 @@ uint32_t astra_vfs_port_connect(AstraVfsClient *client, uint32_t service);
 uint32_t astra_vfs_port_read_path(AstraVfsClient *client, const char *path,
                                   const uint8_t **bytes, uint32_t *moved,
                                   uint64_t *node_size);
+/* Version 7: whole files up to ASTRA_VFS_IO_MAX in the normal reply. */
+uint32_t astra_vfs_port_read_path_inline(AstraVfsClient *client,
+                                         const char *path,
+                                         const uint8_t **bytes,
+                                         uint32_t *moved,
+                                         uint64_t *node_size);
 
 /*
  * A bulk read that hands back the transfer area instead of copying out of it.

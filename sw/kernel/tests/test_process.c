@@ -8178,6 +8178,7 @@ static void test_dead_process_cannot_pin_library_cache(void)
 {
     initialize_test();
     assert(kernel_process_test_library_cache_reclaims_after_last_mapping());
+    assert(kernel_process_test_library_reference_selection());
 }
 
 /*

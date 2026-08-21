@@ -6,7 +6,6 @@ set -eu
 DEVMEM=${ASTRA_DEVMEM:-devmem}
 IP=${ASTRA_IP:-ip}
 ETHERNET_PATH=${ASTRA_ETHERNET_PATH:-/sys/class/net/eth0}
-SLCR_LOCK=0xF8000004
 SLCR_UNLOCK=0xF8000008
 FPGA_RST_CTRL=0xF8000240
 FCLK1_RESET=0x00000002
@@ -42,26 +41,22 @@ check32()
 
 original=$(read32 "$FPGA_RST_CTRL")
 released=$((original & ~FCLK1_RESET))
-unlocked=1
 asserted=0
 restore()
 {
     if [ "$asserted" -eq 1 ]; then
         write32 "$FPGA_RST_CTRL" "$released" || true
     fi
-    if [ "$unlocked" -eq 1 ]; then
-        write32 "$SLCR_LOCK" 0x0000767B || true
-    fi
 }
 trap restore 0 1 2 15
 
+# Linux unlocks SLCR during early Zynq initialization and its clock drivers
+# require continued write access. Do not relock this process-global register.
 write32 "$SLCR_UNLOCK" 0x0000DF0D
 asserted=1
 write32 "$FPGA_RST_CTRL" "$((released | FCLK1_RESET))"
 write32 "$FPGA_RST_CTRL" "$released"
 asserted=0
-write32 "$SLCR_LOCK" 0x0000767B
-unlocked=0
 trap - 0 1 2 15
 
 check32 "$FPGA_RST_CTRL" "$released" "fabric"
@@ -73,3 +68,11 @@ check32 0x43C07000 0x504E4C30 "front panel"
 check32 0x43C07018 0 "front-panel LEDs"
 check32 0x43C0701C 0 "front-panel ownership"
 check32 0x43C0702C 0 "disk activity"
+
+# A fabric reload resets the HDMI source to the required DVI-safe state while
+# Linux and the PS I2C controller remain alive. Ask the persistent manager to
+# re-read E-EDID before it re-enables HDMI and audio packets.
+if [ -r /run/astra-hdmi-link.pid ]; then
+    read -r hdmi_link_pid </run/astra-hdmi-link.pid
+    kill -HUP "$hdmi_link_pid"
+fi

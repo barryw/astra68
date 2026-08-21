@@ -40,9 +40,12 @@ Every `provides NAME ABI VERSION` payload has one canonical location:
 libraries/NAME/abi-ABI/VERSION/m68k-68030/NAME
 ```
 
-`OpenLibrary()` discovers providers by scanning `.kit` manifests and then
-opens that exact bundle-relative payload. There are no flattened compatibility
-copies beside the Kit and no installation records outside the filesystem.
+The image builder validates providers against their embedded library identity
+and derives `LIBS:.providers/NAME.abi-ABI`, a bounded exact-identity record for
+the newest compatible payload. `OpenLibrary()` reads that record and opens the
+canonical bundle-relative payload; older images fall back to scanning the same
+authoritative manifests. There are no flattened compatibility copies beside
+the Kit and no installation records outside the filesystem.
 
 ## 2. Manifest grammar
 

@@ -283,7 +283,7 @@ backend_open(void *context, const char *path, uint32_t flags,
     /* Recorded so a test can ask what the service's activity was mid-call. */
     backend_activity = astra_activity_current();
     *node = 0x1234u;
-    info->size = 0xAABBCCDDu;
+    info->size = strcmp(path, "/small") == 0 ? 8u : 0xAABBCCDDu;
     info->kind = ASTRA_VFS_KIND_FILE;
     return ASTRA_VFS_OK;
 }
@@ -508,6 +508,29 @@ test_a_dead_peer_is_reported_and_not_waited_on(void)
     served = NULL;
 }
 
+static void
+test_first_operation_shares_the_hello_round_trip(void)
+{
+    AstraVfsPortService host;
+    AstraVfsClient remote;
+    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
+    uint32_t service_handle;
+
+    mock_reset();
+    service_start();
+    service_handle = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_vfs_port_service_init(&host, service_handle, &service));
+    served = &host;
+    assert(astra_vfs_port_connect_lazy(&remote, service_handle) ==
+           ASTRA_VFS_OK);
+    assert(remote.session == ASTRA_VFS_SESSION_INVALID && host.requests == 0u);
+    assert(astra_vfs_open(&remote, "/a", ASTRA_VFS_OPEN_READ, &file, NULL,
+                          NULL) == ASTRA_VFS_OK);
+    assert(remote.session != ASTRA_VFS_SESSION_INVALID && host.requests == 1u);
+    assert(astra_vfs_disconnect(&remote) == ASTRA_VFS_OK);
+    served = NULL;
+}
+
 static uint32_t
 legacy_transport(void *context, uint32_t operation,
                  const AstraVfsRequest *request, AstraVfsReply *reply)
@@ -577,6 +600,32 @@ test_bulk_read_crosses_once_through_a_shared_area(void)
     assert(remote.port_area == 0u);
     assert(remote.port_area_address == NULL);
     assert(mock_area_maps == 0u);
+    served = NULL;
+}
+
+static void
+test_small_path_read_needs_no_shared_area(void)
+{
+    AstraVfsPortService host;
+    AstraVfsClient remote;
+    const uint8_t *bytes = NULL;
+    uint32_t service_handle;
+    uint32_t moved = 0u;
+    uint64_t size = 0u;
+
+    mock_reset();
+    service_start();
+    service_handle = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_vfs_port_service_init(&host, service_handle, &service));
+    served = &host;
+    assert(astra_vfs_port_connect(&remote, service_handle) == ASTRA_VFS_OK);
+    assert(astra_vfs_port_read_path_inline(&remote, "/small", &bytes, &moved,
+                                           &size) == ASTRA_VFS_OK);
+    assert(moved == 8u && size == 8u && bytes != NULL);
+    for (uint32_t index = 0u; index < moved; ++index)
+        assert(bytes[index] == (uint8_t)index);
+    assert(remote.port_area == 0u && mock_area_maps == 0u);
+    assert(astra_vfs_disconnect(&remote) == ASTRA_VFS_OK);
     served = NULL;
 }
 
@@ -749,8 +798,10 @@ main(void)
 {
     test_a_request_crosses_and_the_reply_is_the_same();
     test_a_dead_peer_is_reported_and_not_waited_on();
+    test_first_operation_shares_the_hello_round_trip();
     test_version_two_keeps_per_request_reply_ports();
     test_bulk_read_crosses_once_through_a_shared_area();
+    test_small_path_read_needs_no_shared_area();
     test_bulk_resources_are_reusable_after_disconnect();
     test_the_service_adopts_the_callers_activity();
     test_a_message_that_is_not_the_protocol_is_refused();

@@ -60,6 +60,21 @@ static int name_equal(const char *left, const char *right)
     return 0;
 }
 
+static int reference_matches(const AstraLibraryReference *reference,
+                             const AstraLibrary *identity)
+{
+    return reference != NULL && identity != NULL &&
+           reference->size == ASTRA_LIBRARY_REFERENCE_SIZE &&
+           reference->flags == ASTRA_LIBRARY_REFERENCE_EXACT &&
+           reference->major == identity->major &&
+           reference->minor == identity->minor &&
+           reference->patch == identity->patch &&
+           reference->abi_major == identity->abi_major &&
+           reference->abi_minor == identity->abi_minor &&
+           reference->build_id == identity->build_id &&
+           name_equal(reference->name, identity->name);
+}
+
 static int identity_valid(const uint8_t *record, const char *expected_name,
                           uint16_t abi_major, uint16_t minimum_abi_minor)
 {
@@ -228,6 +243,102 @@ uint32_t astra_library_find(const char *name, uint16_t abi_major,
         }
     }
     return ASTRA_SYSCALL_WOULD_BLOCK;
+}
+
+static uint32_t unused_slot(void)
+{
+    for (uint32_t index = 0u; index < ASTRA_LIBRARY_SLOT_COUNT; ++index)
+        if (cache[index].used == 0u)
+            return index;
+    return ASTRA_LIBRARY_SLOT_COUNT;
+}
+
+static uint32_t accept_attached(uint32_t index, uint32_t base, uint32_t span,
+                                const char *name, uint16_t abi_major,
+                                uint16_t minimum_abi_minor,
+                                const AstraLibraryReference *exact,
+                                const AstraLoadedLibrary **library)
+{
+    uint32_t status = prepare_library((uint8_t *)(uintptr_t)base, base, span,
+                                      name, abi_major, minimum_abi_minor,
+                                      &cache[index].library);
+
+    if (status != ASTRA_SYSCALL_OK ||
+        (exact != NULL &&
+         !reference_matches(exact, cache[index].library.identity)))
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    cache[index].abi_major = abi_major;
+    cache[index].abi_minor = cache[index].library.identity->abi_minor;
+    cache[index].used = 1u;
+    *library = &cache[index].library;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t astra_library_attach(const AstraLibraryReference *reference,
+                              const AstraLoadedLibrary **library)
+{
+    uint32_t base;
+    uint32_t span;
+    uint32_t status;
+    uint32_t index;
+
+    if (reference == NULL || library == NULL || reference->abi_major == 0u ||
+        (reference->major == 0u && reference->minor == 0u &&
+         reference->patch == 0u) || reference->size !=
+            ASTRA_LIBRARY_REFERENCE_SIZE ||
+        reference->flags != ASTRA_LIBRARY_REFERENCE_EXACT)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    for (index = 0u; index < ASTRA_LIBRARY_SLOT_COUNT; ++index) {
+        if (cache[index].used != 0u &&
+            reference_matches(reference, cache[index].library.identity)) {
+            *library = &cache[index].library;
+            return ASTRA_SYSCALL_OK;
+        }
+    }
+    index = unused_slot();
+    if (index == ASTRA_LIBRARY_SLOT_COUNT)
+        return ASTRA_SYSCALL_RESOURCE_LIMIT;
+    status = astra_rt_library_attach(reference, &base, &span);
+    if (status != ASTRA_SYSCALL_OK)
+        return status;
+    return accept_attached(index, base, span, reference->name,
+                           reference->abi_major, reference->abi_minor,
+                           reference, library);
+}
+
+uint32_t astra_library_attach_cached(const char *name, uint16_t abi_major,
+                                     uint16_t minimum_abi_minor,
+                                     const AstraLoadedLibrary **library)
+{
+    AstraLibraryReference request = {
+        .size = ASTRA_LIBRARY_REFERENCE_SIZE,
+        .abi_major = abi_major,
+        .abi_minor = minimum_abi_minor,
+        .flags = ASTRA_LIBRARY_REFERENCE_LATEST,
+    };
+    uint32_t base;
+    uint32_t span;
+    uint32_t status;
+    uint32_t index;
+
+    if (name == NULL || library == NULL || abi_major == 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    status = astra_library_find(name, abi_major, minimum_abi_minor, library);
+    if (status == ASTRA_SYSCALL_OK)
+        return status;
+    for (index = 0u; index + 1u < ASTRA_LIBRARY_NAME_MAX &&
+                     name[index] != '\0'; ++index)
+        request.name[index] = name[index];
+    if (index == 0u || name[index] != '\0')
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    index = unused_slot();
+    if (index == ASTRA_LIBRARY_SLOT_COUNT)
+        return ASTRA_SYSCALL_RESOURCE_LIMIT;
+    status = astra_rt_library_attach(&request, &base, &span);
+    if (status != ASTRA_SYSCALL_OK)
+        return status;
+    return accept_attached(index, base, span, name, abi_major,
+                           minimum_abi_minor, NULL, library);
 }
 
 uint32_t astra_library_load(const void *image, uint32_t length,

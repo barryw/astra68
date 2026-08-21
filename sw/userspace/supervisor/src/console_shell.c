@@ -40,19 +40,7 @@
 #define SHELL_PATH_MAX ASTRA_VFS_PATH_MAX
 #define CONSOLE_INPUT_POLL_NS 10000000ull
 
-/*
- * The load buffer, and its written ceiling.
- *
- * A launch takes an image in the launcher's memory, so somebody has to hold
- * the whole program while the kernel copies it out. One buffer, one launch at
- * a time: the alternative is an allocation whose failure mode is a shell that
- * cannot start anything when memory is tight, which is exactly when a person
- * needs to start something.
- *
- * 64 KiB is generous for a command and cheap against 29 MiB of usable RAM.
- * Anything larger is an application, and applications are bundles in APPS:,
- * which is a different mechanism and a later milestone.
- */
+/* Commands larger than this belong in application bundles. */
 #define SHELL_LOAD_MAX (64u * 1024u)
 
 /*
@@ -85,10 +73,6 @@ typedef struct ConsoleShell {
 } ConsoleShell;
 
 static ConsoleShell shell;
-/*
- * Outside the frame for the same reason the input batch is: a user thread gets
- * one 4 KiB stack, and 64 KiB was never going to be on it.
- */
 static uint8_t load_buffer[SHELL_LOAD_MAX];
 
 static uint32_t shell_strlen(const char *text)
@@ -98,6 +82,11 @@ static uint32_t shell_strlen(const char *text)
     while (text[length] != '\0')
         ++length;
     return length;
+}
+
+static uint32_t elapsed_us(uint64_t from, uint64_t to)
+{
+    return to > from ? (uint32_t)((to - from) / 1000u) : 0u;
 }
 
 /*
@@ -383,6 +372,19 @@ static void prompt(void)
 
 static int pump_once(void);
 
+static uint32_t read_launch_image(const char *path, const uint8_t **image,
+                                  uint32_t *length)
+{
+    uint32_t status = supervisor_vfs_read_borrow(path, image, length);
+
+    if (status != ASTRA_VFS_ERR_LIMIT && status != ASTRA_VFS_ERR_UNSUPPORTED)
+        return status;
+    status = supervisor_vfs_read(path, load_buffer, sizeof(load_buffer), length);
+    if (status == ASTRA_VFS_OK)
+        *image = load_buffer;
+    return status;
+}
+
 /*
  * Where a bare word is looked for, and the whole of the order.
  *
@@ -393,8 +395,8 @@ static int pump_once(void);
  * where the machine looks -- is an assign, so a word carrying a `:` is taken as
  * the name of one and resolved directly.
  */
-static uint32_t launch_path(const char *word, AstraFile *file,
-                            AstraFileInfo *info)
+static uint32_t launch_image(const char *word, const uint8_t **image,
+                             uint32_t *length)
 {
     static const char *const places[] = {"APPS", "COMMANDS"};
     char typed[SHELL_PATH_MAX];
@@ -402,17 +404,10 @@ static uint32_t launch_path(const char *word, AstraFile *file,
 
     for (uint32_t index = 0u; word[index] != '\0'; ++index) {
         if (word[index] == ':') {
-            uint32_t status = filesystem_library()->open(
-                filesystem(), word, ASTRA_VFS_OPEN_READ, file);
+            uint32_t status = read_launch_image(word, image, length);
 
-            if (status != ASTRA_VFS_OK)
-                return status;
-            status = filesystem_library()->file_info(file, info);
-            if (status == ASTRA_VFS_OK &&
-                info->kind != ASTRA_VFS_KIND_DIRECTORY)
-                return ASTRA_VFS_OK;
-            (void)filesystem_library()->close(file);
-            return status == ASTRA_VFS_OK ? ASTRA_VFS_ERR_NOT_FOUND : status;
+            return status == ASTRA_VFS_OK && *length > SHELL_LOAD_MAX ?
+                ASTRA_VFS_ERR_LIMIT : status;
         }
     }
     for (uint32_t place = 0u; place < 2u; ++place) {
@@ -421,25 +416,18 @@ static uint32_t launch_path(const char *word, AstraFile *file,
 
         if (status != ASTRA_VFS_OK)
             return status;
-        status = filesystem_library()->open(
-            filesystem(), typed, ASTRA_VFS_OPEN_READ, file);
+        status = read_launch_image(typed, image, length);
         if (status != ASTRA_VFS_OK) {
             if (status != ASTRA_VFS_ERR_NOT_FOUND &&
                 worst == ASTRA_VFS_ERR_NOT_FOUND)
                 worst = status;
             continue;
         }
-        status = filesystem_library()->file_info(file, info);
-        if (status == ASTRA_VFS_OK && info->kind != ASTRA_VFS_KIND_DIRECTORY) {
-            ASTRA_EVENT2(ASTRA_EVENT_SUBSYSTEM_SHELL,
-                         ASTRA_EVENT_LEVEL_NOTICE,
-                         "launching from place %u member %u", place,
-                         info->member);
-            return ASTRA_VFS_OK;
-        }
-        (void)filesystem_library()->close(file);
-        if (status != ASTRA_VFS_OK && worst == ASTRA_VFS_ERR_NOT_FOUND)
-            worst = status;
+        if (*length > SHELL_LOAD_MAX)
+            return ASTRA_VFS_ERR_LIMIT;
+        ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_NOTICE,
+                     "launching from place %u", place);
+        return ASTRA_VFS_OK;
     }
     return worst;
 }
@@ -644,15 +632,18 @@ static uint32_t command_launch(const char *word, int argc,
 {
     AstraLaunchGrant grants[ASTRA_LAUNCH_GRANT_MAX];
     AstraLaunchArguments arguments;
-    AstraFile file = ASTRA_FILE_INIT;
-    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+    const uint8_t *image = NULL;
     uint32_t length = 0u;
     uint32_t handle = 0u;
     uint32_t child_id = 0u;
     uint32_t exit_status = 0u;
     uint32_t status;
+    uint64_t started = astra_clock_monotonic();
+    uint64_t read;
+    uint64_t spawned;
 
-    status = launch_path(word, &file, &info);
+    status = launch_image(word, &image, &length);
+    read = astra_clock_monotonic();
     if (status != ASTRA_VFS_OK) {
         /*
          * "Not a command" is what a genuinely absent name says. Anything
@@ -669,41 +660,6 @@ static uint32_t command_launch(const char *word, int argc,
         report_status(word, status);
         return SHELL_STATUS_NOT_RUN;
     }
-    if (info.byte_size > SHELL_LOAD_MAX) {
-        (void)filesystem_library()->close(&file);
-        report_status(word, ASTRA_VFS_ERR_LIMIT);
-        return SHELL_STATUS_NOT_RUN;
-    }
-    status = filesystem_library()->read(
-        &file, load_buffer, (uint32_t)info.byte_size, &length);
-    (void)filesystem_library()->close(&file);
-    if (status != ASTRA_VFS_OK || length != info.byte_size || length == 0u) {
-        /*
-         * With how far it got. A read that fails partway through an image says
-         * something quite different from one that fails at the first byte, and
-         * the status alone cannot tell them apart.
-         */
-        ASTRA_EVENT2(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_WARNING,
-                     "image read stopped at %u bytes, status %u", length,
-                     status);
-        astra_terminal_write(&shell.terminal, word);
-        astra_terminal_write(&shell.terminal, ": read stopped at ");
-        write_number(length);
-        astra_terminal_write(&shell.terminal, " of ");
-        write_number((uint32_t)info.byte_size);
-        /*
-         * And what the device said, because a generic I/O status does not say
-         * whether retrying is useful.
-         */
-        astra_terminal_write(&shell.terminal, ", device ");
-        write_number(supervisor_volume_device_status());
-        astra_terminal_write(&shell.terminal, "/");
-        write_number(supervisor_volume_device_failure());
-        astra_terminal_putc(&shell.terminal, '\n');
-        report_status(word, status != ASTRA_VFS_OK ? status :
-                                                     ASTRA_VFS_ERR_INVALID);
-        return SHELL_STATUS_NOT_RUN;
-    }
     if (astra_launch_arguments_pack(
             &arguments, ASTRA_LAUNCH_SOURCE_SHELL, (uint32_t)argc,
             (const char *const *)argv) != ASTRA_SYSCALL_OK) {
@@ -713,9 +669,10 @@ static uint32_t command_launch(const char *word, int argc,
 
     ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
                  "launching, %u bytes of image", length);
-    status = astra_launch(load_buffer, length, grants,
+    status = astra_launch(image, length, grants,
                           launch_grants(grants), &arguments, &handle,
                           &child_id);
+    spawned = astra_clock_monotonic();
     if (status != ASTRA_SYSCALL_OK) {
         /*
          * With the number. "would not start" on its own says nothing a person
@@ -775,6 +732,10 @@ static uint32_t command_launch(const char *word, int argc,
     }
     ASTRA_EVENT2(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
                  "child %u finished with status %u", child_id, exit_status);
+    ASTRA_EVENT3(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_NOTICE,
+                 "command stages: image %u spawn %u run %u us",
+                 elapsed_us(started, read), elapsed_us(read, spawned),
+                 elapsed_us(spawned, astra_clock_monotonic()));
     return exit_status;
 }
 
@@ -1363,6 +1324,7 @@ void console_shell_run_backend(const ConsoleShellBackend *backend,
         (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
         return;
     }
+    astra_terminal_set_scroll(&shell.terminal, backend->scroll);
     astra_terminal_set_echo(&shell.terminal, echo_line, NULL);
     astra_shell_editor_init(&shell.editor);
     astra_shell_variables_init(&shell.variables);

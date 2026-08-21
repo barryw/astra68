@@ -9,6 +9,84 @@ The platform is **Astra 68**, its kernel is **Axiom**, and the complete
 user-facing system is **Astra OS**. The Astra NDK is the stable developer
 surface; Axiom's internal interfaces are not a module ABI.
 
+## Systemic command/filesystem latency fix (2026-08-20)
+
+The former `ls` symptom was process-wide startup work, not directory rendering.
+Every fresh filesystem client searched all Kit manifests for
+`filesystem.library`, read and mapped the library again, and then paid a VFS
+`HELLO` before its first real operation. The retained fix is shared by commands
+and applications; `ls` itself is unchanged.
+
+- `astra_image.py` derives bounded `LIBS:.providers/` records from validated
+  Kit manifests and embedded library identities. Old images retain the manifest
+  sweep fallback.
+- Syscall ABI `0x00010012` adds `LIBRARY_ATTACH` (56). Axiom caches exact
+  library identities and initial pages; later processes share R/RX pages and
+  receive private copies of initial writable pages without filesystem lookup or
+  library-file I/O.
+- `STOR` v7 returns small `READ_PATH` files inline. `STOR` v8 fuses session
+  creation with the first path operation; older services negotiate normally and
+  receive the operation in a second exchange.
+- The common Terminal launcher uses the supervisor's existing one-request
+  whole-image read path for every external command. Its permanent trace event
+  is `command stages: image/spawn/run`; there is no command-output cache.
+
+On `astra-arty`, the stock warm `filesystem.library` open was 794 ms. Cached
+identity attachment reduced the best warm sample to 149 ms; the v8 fused first
+operation reduced two consecutive no-output `ls -l` filesystem opens to 61 ms
+and listings to 86/51 ms. The focused transport regression proves that lazy
+connect plus the first `OPEN` is one service request. Repeated `which` and
+`mkdir` runs exercise the same shared path. The disposable board candidate is
+not the stock runtime; restore and final gate status are recorded in
+`HANDOVER-launch-latency.md`.
+
+The clean candidate ROM
+`b5fabd384b1b5a8ab82aed8d064b22da0ea32b30a12cc94412a045898b39049a`
+and pre-boot image
+`ff7540bebc34bccd7a82a93426e1fd381c1359ea05dd3f56456b00fc673618f3`
+passed POST, stage 8, and `ls`/`which`/`mkdir`/`rm`/missing-`cat` on the
+physical board without panic. The board was then restored to the untouched
+stock `astra_boot.bin` and `storage-terminal.img`; that pair also passed POST
+and stage 8.
+
+## Shared retained-text control and rejected blitter stream (2026-08-20)
+
+Graphics Kit draw lists now include a validated same-surface rectangular copy.
+It reuses the ordinary overlap-safe Astraea BLIT and is available to any
+retained text control, including editors and word processors. Terminal uses a
+renderer-independent scroll callback, coalesces consecutive scrolls, copies
+preserved rows in hardware, and redraws only exposed or damaged cells. Glyph
+runs remain hardware commands; the MC68030 updates cell state and submits the
+bounded draw list rather than rasterizing pixels.
+
+On the physical Arty, clean `help` display latency fell from 616.034 to
+400.276 ms (`-35.0%`), with render commands falling from 116 to 58 and glyph
+runs from 43 to 12. Exact `ls -l COMMANDS:` latency fell from 2778.107 to
+1898.428 ms (`-31.7%`); commands fell from 366 to 141 and glyph runs from 127
+to 16. The candidate ROM/image pair is
+`588b239643bc45685e11ac97ffad23ce9f2409ffd15a221fc54966a951dd648e`.
+
+A follow-on cached-RGB565 blitter stream measured 5,822 to 3,470 cycles for
+64x16 copy and 20,734 to 11,782 cycles for the real 1280-pixel compositor
+width. It closed a complete production route at `+0.122/+0.048 ns`, but the
+board displayed a mid-screen compositor wrap on the exact 1280x644 desktop
+BLIT. That physical correctness failure rejects the RTL regardless of speed.
+The 33-line stream was removed, the live PL and SD boot were restored to the
+qualified front-panel release, and only the real-width simulation regression
+was retained. Active BOOT.BIN is again
+`545f0ccb259972bc7fc26c08f9080dc7033ef7627693ff1ff03085c98a9e3d9c`;
+FIT remains `74838cdca1f45205bd2d69e6fba51f59b5fae43c2de39fde3e8f9cdc4ed4eb2d`.
+
+The permanent screen-offset gate runs at the real 1,280-pixel width. Its
+coordinate-unique pattern cannot hide the recurring 640-pixel wrap; it checks
+production-width final pre-HDMI RGB lines and
+separately verifies the exact 1280x644 overlapping compositor copy across the
+whole 1280x720 surface in simulation and on the board. Qualified hardware
+passed the board copy in 11,917,253 cycles; the final pre-HDMI gate passed all
+5,120 pixels in four production-width lines. Six production final-pixel
+signature forms fully routed but failed setup timing, so no checker RTL, MMIO
+register, ABI bump, or resource cost is retained.
+
 The kernel's normative implementation contracts are
 `KERNEL_ARCHITECTURE.md`, `MEMORY_MAP_AND_PMMU.md`, `ABI.md`,
 `LOCKING_AND_PREEMPTION.md`, `RESOURCE_OWNERSHIP_AND_FAILURES.md`,
@@ -3313,3 +3391,76 @@ initial-image stage 8 at 29.571 MHz equivalent. Its active SHA-256 is
 the rollback ROM is under
 `/data/astra/deploy/kernel-hardening-614a0ca4b77d/rollback`. No FPGA source,
 synthesis, or flash artifact changed.
+
+## HDMI startup and warm-reload repair (2026-08-21)
+
+The horizontal screen shift is pinned to a source-startup contract defect: the
+HDMI-audio image entered HDMI mode without first processing HPD and EDID, while
+HDMI 1.3a requires reset/new-sink operation to begin DVI-compatible and permits
+HDMI packets only after the sink is identified as HDMI. Cold power cycling
+cleared the receiver state, explaining why the same image recovered. The
+candidate now remains correctly aligned through cold boot and cable hot-plug;
+physical confirmation of the final corrected warm sequence remains open.
+
+The retained candidate uses the Arty Z7-20's documented R19 HPDN and M17/M18
+DDC pins, Zynq PS7 I2C0 through EMIO at 100 kHz, and active-low PS GPIO events.
+RTL resets to DVI and changes HDMI mode only at vertical blank; 48 kHz 24-bit
+stereo audio remains present. A synthesis preflight and RTL test now fail if
+this startup contract, pin wiring, or warm-reset behavior is removed.
+
+All graphics simulations, the exact 1,280-pixel offset regression, audio RTL,
+EDID parser, ARM static analysis/build, and device-tree validation pass. The
+first full 200 MHz over-target route connected all nets but was rejected at
+`-0.185/+0.033 ns`; no bitstream was written and the board was not changed.
+The exact production build now routes all 66,591 nets and passes the real
+187.5 MHz release clock at `+0.055/+0.034/+0.538 ns` setup/hold/pulse-width.
+Its optional 200 MHz implementation margin misses setup by `0.278 ns`; that
+margin failure is recorded and is not shipped as the PS clock. The exact XSA
+has produced a fresh FSBL, 100 kHz I2C/187.5 MHz device tree, byte-verified FIT,
+BOOT.BIN, and strictly built/tested ARM HDMI manager. BOOT.BIN is
+`67d03fb4f1205236bad2bf870083d289fee135f428831bcaf21a1b0553dcb3fc`
+and FIT is
+`3fee66d1d33080b238509169ce459bbcae853d895a192b20de89d4f25df85dea`.
+Cold boot now passes HPD/E-EDID and reports HDMI status `3` (requested and
+active). A controlled full FPGA-manager reload proved that reconfiguration
+preserves the healthy Cadence I2C state (`CR=0x310e`, timeout `0xff`). The
+subsequent `astra-chip-reset` helper was the warm-reload failure: it re-locked
+the Zynq SLCR after pulsing FCLK1 reset. AMD UG585 says that lock blocks writes
+to every SLCR register, while the exact Xilinx Linux kernel unlocks SLCR during
+early boot and leaves it unlocked for its clock framework. Consequently Linux
+reported I2C0 active but could not set `APER_CLK_CTRL[18]`; the controller read
+all zeroes and E-EDID timed out.
+
+The retained helper still performs the documented unlock and fabric-reset
+pulse but no longer takes Linux's global SLCR ownership away. On the board,
+the unchanged HDMI manager then resumed I2C0, read E-EDID, and restored HDMI
+status `3`; the audio certifier passed 48,064 frames at 48 kHz with a 440 Hz
+tone. The installed helper SHA-256 is
+`6ad793945c05d5c49c720e5d185f9ca1f612c78e82c07c7fe667e9c4de258395`.
+The existing mocked reset test now requires exactly unlock, reset assert, and
+reset release, and the pre-synthesis HDMI source contract runs it before
+Vivado. The complete Beast graphics suite, production-width 1,280-pixel
+screen-offset gate, 1,280x644 overlap blit, Linux host tests, and ARM static
+analysis pass. Final release blockers are visible warm-screen confirmation,
+physical HDMI hot-plug after the fix, and audible-tone confirmation.
+
+Those physical gates now pass. The operator confirmed correct alignment after
+warm recovery and cold power cycles, HDMI unplug/replug remained aligned, and
+the 440 Hz tone was audible with the playback path enabled.
+
+A later narrow dark column at the left edge was not an Astra defect. The same
+column followed the Cam Link capture device when its HDMI input was moved to an
+unrelated C64 Ultimate. Resetting only the Cam Link USB connection cleared it.
+After that reset, the current Astra image stayed clean in DVI mode, after a
+manual switch to true HDMI with link status `3`, after the production manager's
+E-EDID sequence, through an Arty cold power cycle, and through HDMI
+unplug/replug. A speculative five-pixel source-coordinate compensation was
+rejected and removed; its dedicated test was also removed because it encoded a
+false diagnosis. The existing production-width screen-offset and full overlap
+blit regressions remain the correct Astra gates and both pass on Beast. HDMI
+hot-plug, DVI-safe startup, and audio remain unchanged.
+
+The candidate package is installed atomically on the Arty SD card through NUC.
+The prior qualified BOOT/FIT hashes remain in their rollback files, `/` is
+read-only, and the exact production PL is active. The live HDMI manager SHA-256
+is `f4c4ab81b9a90e95748bc0896ddcbeb14e81bbc450ecbec5c64de2b853b8a6f3`.

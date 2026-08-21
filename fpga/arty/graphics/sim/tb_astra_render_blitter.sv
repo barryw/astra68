@@ -181,7 +181,7 @@ module tb_astra_render_blitter;
     );
 
     astra_render_axi_memory_model #(
-        .MEMORY_BYTES(65536)
+        .MEMORY_BYTES(4194304)
     ) memory_i (
         .clk(clk), .reset(reset), .stall_reads(stall_reads),
         .stall_writes(stall_writes),
@@ -219,7 +219,7 @@ module tb_astra_render_blitter;
             while (!done) begin
                 @(posedge clk);
                 elapsed = elapsed + 1;
-                if (elapsed > 100000)
+                if (elapsed > 6000000)
                     $fatal(1, "blitter timeout state=%0d writer_busy=%0d fifo=%0d issue=%0d outstanding=%0d aw=%0d w=%0d b=%0d active=%0d",
                            blitter_i.state, writer_busy, writer_i.fifo_count,
                            writer_i.issue_valid, writer_i.outstanding_count,
@@ -275,6 +275,13 @@ module tb_astra_render_blitter;
                 ({8{rop[1]}} & ~source_pixel &  destination_pixel) |
                 ({8{rop[2]}} &  source_pixel & ~destination_pixel) |
                 ({8{rop[3]}} &  source_pixel &  destination_pixel);
+        end
+    endfunction
+
+    function automatic [15:0] screen_pixel(input integer x, input integer y);
+        begin
+            screen_pixel = (x * 16'h0421 + y * 16'h1f3d +
+                            (x >> 8) * 16'h0101) ^ (x << 7) ^ (y << 11);
         end
     endfunction
 
@@ -424,6 +431,50 @@ module tb_astra_render_blitter;
             for (column = 0; column < 128; column = column + 1)
                 expect_byte(32'h4000 + row * 128 + column,
                             row + column);
+
+        // Exact desktop presentation from the captured broken batch: copy a
+        // separate 1280x644 RGB565 surface into scanout at y=34.  The pattern
+        // is unique across the 512-pixel boundary seen on HDMI.
+        memory_i.clear_memory(8'hee);
+        source_data_offset = 32'h10000;
+        destination_data_offset = 32'h200000;
+        source_pitch = 32'd2560;
+        destination_pitch = 32'd2560;
+        source_surface_width = 16'd1280;
+        source_surface_height = 16'd644;
+        destination_surface_width = 16'd1280;
+        destination_surface_height = 16'd720;
+        source_y = 16'sd0;
+        destination_y = 16'sd34;
+        source_width = 16'd1280;
+        source_height = 16'd644;
+        destination_width = 16'd1280;
+        destination_height = 16'd644;
+        clip_right = 16'sd1280;
+        clip_bottom = 16'sd720;
+        same_surface = 1'b0;
+        for (row = 0; row < 644; row = row + 1)
+            for (column = 0; column < 1280; column = column + 1) begin
+                memory_i.write_byte(32'h10000 + row * 2560 + column * 2,
+                                    screen_pixel(column, row) >> 8);
+                memory_i.write_byte(32'h10001 + row * 2560 + column * 2,
+                                    screen_pixel(column, row));
+            end
+        launch();
+        if (status != `ASTRA_RENDER_STATUS_OK ||
+            completed_pixels != 32'd824320)
+            $fatal(1, "desktop RGB565 status=%0d pixels=%0d cycles=%0d",
+                   status, completed_pixels, last_elapsed);
+        $display("desktop RGB565 cycles=%0d", last_elapsed);
+        for (row = 0; row < 720; row = row + 1)
+            for (column = 0; column < 1280; column = column + 1) begin
+                expect_byte(32'h200000 + row * 2560 + column * 2,
+                            row >= 34 && row < 678 ?
+                                screen_pixel(column, row - 34) >> 8 : 8'hee);
+                expect_byte(32'h200001 + row * 2560 + column * 2,
+                            row >= 34 && row < 678 ?
+                                screen_pixel(column, row - 34) : 8'hee);
+            end
 
         // Scaling is sampled in command space before reflection, so clipping
         // cannot change which source texel belongs to a destination pixel.

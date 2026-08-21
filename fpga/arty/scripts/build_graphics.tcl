@@ -97,6 +97,10 @@ set_property -dict [list \
     CONFIG.PCW_USE_FABRIC_INTERRUPT {1} \
     CONFIG.PCW_IRQ_F2P_INTR {1} \
     CONFIG.PCW_IRQ_F2P_MODE {DIRECT} \
+    CONFIG.PCW_I2C0_PERIPHERAL_ENABLE {1} \
+    CONFIG.PCW_I2C0_I2C0_IO {EMIO} \
+    CONFIG.PCW_GPIO_EMIO_GPIO_ENABLE {1} \
+    CONFIG.PCW_GPIO_EMIO_GPIO_IO {1} \
     CONFIG.PCW_UIPARAM_DDR_ADV_ENABLE {1} \
     CONFIG.PCW_DDR_PORT3_HPR_ENABLE {1} \
     CONFIG.PCW_DDR_HPRLPR_QUEUE_PARTITION {HPR(24)/LPR(8)} \
@@ -369,6 +373,11 @@ connect_bd_net [get_bd_ports graphics_resetn] \
 create_bd_port -dir I -from 0 -to 0 render_interrupt
 connect_bd_net [get_bd_ports render_interrupt] [get_bd_pins ps7/IRQ_F2P]
 
+# UG585 routes the hardened PS I2C controller and one PS GPIO through EMIO.
+# Preserve their native interfaces so Vivado creates the required I/O buffers.
+make_bd_intf_pins_external -name IIC_0 [get_bd_intf_pins ps7/IIC_0]
+make_bd_intf_pins_external -name GPIO_0 [get_bd_intf_pins ps7/GPIO_0]
+
 set hp_busifs [list S_AXI_FB S_AXI_SCENE]
 foreach busif $hp_busifs {
     set_property CONFIG.FREQ_HZ $render_frequency_hz [get_bd_intf_ports $busif]
@@ -462,6 +471,8 @@ puts $design_report "DDR_PORT3_HPR=[get_property CONFIG.PCW_DDR_PORT3_HPR_ENABLE
 puts $design_report "DDR_HPRLPR_QUEUE=[get_property CONFIG.PCW_DDR_HPRLPR_QUEUE_PARTITION [get_bd_cells ps7]]"
 puts $design_report "DDR_CRITICAL_LEVELS LPR=[get_property CONFIG.PCW_DDR_LPR_TO_CRITICAL_PRIORITY_LEVEL [get_bd_cells ps7]] HPR=[get_property CONFIG.PCW_DDR_HPR_TO_CRITICAL_PRIORITY_LEVEL [get_bd_cells ps7]] WRITE=[get_property CONFIG.PCW_DDR_WRITE_TO_CRITICAL_PRIORITY_LEVEL [get_bd_cells ps7]]"
 puts $design_report "FABRIC_IRQ ENABLE=[get_property CONFIG.PCW_USE_FABRIC_INTERRUPT [get_bd_cells ps7]] F2P=[get_property CONFIG.PCW_IRQ_F2P_INTR [get_bd_cells ps7]] MODE=[get_property CONFIG.PCW_IRQ_F2P_MODE [get_bd_cells ps7]] INPUTS=[get_property CONFIG.PCW_NUM_F2P_INTR_INPUTS [get_bd_cells ps7]]"
+puts $design_report "I2C0 ENABLE=[get_property CONFIG.PCW_I2C0_PERIPHERAL_ENABLE [get_bd_cells ps7]] IO=[get_property CONFIG.PCW_I2C0_I2C0_IO [get_bd_cells ps7]]"
+puts $design_report "GPIO_EMIO ENABLE=[get_property CONFIG.PCW_GPIO_EMIO_GPIO_ENABLE [get_bd_cells ps7]] WIDTH=[get_property CONFIG.PCW_GPIO_EMIO_GPIO_IO [get_bd_cells ps7]]"
 puts $design_report "IMPLEMENTATION_STRATEGY=[get_property STRATEGY [get_runs impl_1]]"
 puts $design_report "INCREMENTAL_CHECKPOINT=$incremental_checkpoint"
 puts $design_report "RQS_FILE=$rqs_file"
@@ -541,6 +552,7 @@ add_files -norecurse [list \
     [file join $graphics_dir astra_graphics_pipeline.sv] \
     [file join $repo_root fpga arty rtl astra_arty_graphics_top.sv] \
     [file join $hdmi_dir hdmi.sv] \
+    [file join $hdmi_dir hdmi_mode_control.sv] \
     [file join $hdmi_dir tmds_channel.sv] \
     [file join $hdmi_dir serializer.sv] \
     [file join $hdmi_dir packet_assembler.sv] \

@@ -107,6 +107,10 @@ enum {
     GLYPH_COMMAND_END = GLYPH_FAILURE_COMMAND + 1u,
     FLOOD_OVERFLOW_COMMAND = GLYPH_COMMAND_END,
     CERTIFICATION_COMMAND_END = FLOOD_OVERFLOW_COMMAND + 1u,
+    SCREEN_OFFSET_COMMAND = CERTIFICATION_COMMAND_END,
+    SCREEN_OFFSET_COMMAND_END = SCREEN_OFFSET_COMMAND + 1u,
+    SCREEN_OFFSET_SOURCE_Y = 76u,
+    SCREEN_OFFSET_HEIGHT = 644u,
     VIRTUAL_SPRITE_WIDTH = 16u,
     VIRTUAL_SPRITE_HEIGHT = 16u,
     VIRTUAL_SPRITE_COLUMNS = 16u,
@@ -132,6 +136,9 @@ _Static_assert(TOTAL_COMMAND_COUNT <=
 _Static_assert(CERTIFICATION_COMMAND_END <=
                    (unsigned)ASTRA_RENDER_RING_ENTRIES,
                "geometry commands exceed the bounded ring");
+_Static_assert(SCREEN_OFFSET_COMMAND_END <=
+                   (unsigned)ASTRA_RENDER_RING_ENTRIES,
+               "screen-offset command exceeds the bounded ring");
 _Static_assert(GLYPH_DESCRIPTOR_RECORDS >=
                    GLYPH_SUCCESS_COMMAND_COUNT + 2u,
                "glyph certification needs success and malformed records");
@@ -313,6 +320,12 @@ static uint32_t load_be32(volatile const uint8_t *source)
 static uint16_t load_be16(volatile const uint8_t *source)
 {
     return ((uint16_t)source[0] << 8) | source[1];
+}
+
+static void store_be16(volatile uint8_t *destination, uint16_t value)
+{
+    destination[0] = (uint8_t)(value >> 8);
+    destination[1] = (uint8_t)value;
 }
 
 static uint32_t pair_u16(uint16_t high, uint16_t low)
@@ -926,6 +939,7 @@ static int prepare_workload(struct render_maps *maps)
                       ASTRA_FRAMEBUFFER_PITCH,
                       ASTRA_FRAMEBUFFER_WIDTH, ASTRA_FRAMEBUFFER_HEIGHT,
                       ASTRA_RENDER_FORMAT_RGB565,
+                      ASTRA_RENDER_SURFACE_READ |
                       ASTRA_RENDER_SURFACE_WRITE, 0u) != 0 ||
         write_surface(maps, INDEX_SOURCE_DESCRIPTOR_OFFSET,
                       INDEX_SOURCE_DATA_OFFSET,
@@ -1622,6 +1636,79 @@ static int verify_frame(const struct render_maps *maps)
     return 0;
 }
 
+static uint16_t screen_offset_pixel(unsigned x, unsigned y)
+{
+    uint32_t value = x * 0x0421u + y * 0x1f3du + (x >> 8) * 0x0101u;
+
+    return (uint16_t)(value ^ (x << 7) ^ (y << 11));
+}
+
+static int prepare_screen_offset_workload(struct render_maps *maps)
+{
+    unsigned y;
+
+    for (y = 0u; y < ASTRA_FRAMEBUFFER_HEIGHT; ++y) {
+        unsigned x;
+
+        for (x = 0u; x < ASTRA_FRAMEBUFFER_WIDTH; ++x) {
+            size_t offset = (size_t)y * ASTRA_FRAMEBUFFER_PITCH + x * 2u;
+
+            store_be16(maps->frame.data + offset, screen_offset_pixel(x, y));
+        }
+    }
+    if (write_blit(maps, SCREEN_OFFSET_COMMAND, 0u,
+                   0, 0, ASTRA_FRAMEBUFFER_WIDTH, ASTRA_FRAMEBUFFER_HEIGHT,
+                   FRAME_DESCRIPTOR_OFFSET, FRAME_DESCRIPTOR_OFFSET, 0u,
+                   0, SCREEN_OFFSET_SOURCE_Y, 0, 0,
+                   ASTRA_FRAMEBUFFER_WIDTH, SCREEN_OFFSET_HEIGHT,
+                   ASTRA_FRAMEBUFFER_WIDTH, SCREEN_OFFSET_HEIGHT, 0u) != 0)
+        return -1;
+    astra_graphics_memory_barrier();
+    return 0;
+}
+
+static int verify_screen_offset(const struct render_maps *maps,
+                                uint32_t *cycles_out)
+{
+    uint32_t offset = COMPLETION_RING_OFFSET +
+        SCREEN_OFFSET_COMMAND * ASTRA_RENDER_COMPLETION_BYTES;
+    volatile const uint8_t *completion = queue_address(
+        maps, offset, ASTRA_RENDER_COMPLETION_BYTES);
+    unsigned y;
+
+    if (completion == NULL ||
+        load_be32(completion + 4u) !=
+            pair_u16(ASTRA_RENDER_OP_BLIT, ASTRA_RENDER_STATUS_OK) ||
+        load_be32(completion + 8u) != SCREEN_OFFSET_COMMAND_END ||
+        load_be32(completion + 12u) !=
+            ASTRA_FRAMEBUFFER_WIDTH * SCREEN_OFFSET_HEIGHT ||
+        load_be32(completion + 24u) != 0u) {
+        fprintf(stderr, "screen-offset completion is invalid\n");
+        return -1;
+    }
+    *cycles_out = load_be32(completion + 20u) -
+        load_be32(completion + 16u);
+    for (y = 0u; y < ASTRA_FRAMEBUFFER_HEIGHT; ++y) {
+        unsigned source_y = y < SCREEN_OFFSET_HEIGHT ?
+            y + SCREEN_OFFSET_SOURCE_Y : y;
+        unsigned x;
+
+        for (x = 0u; x < ASTRA_FRAMEBUFFER_WIDTH; ++x) {
+            size_t pixel_offset = (size_t)y * ASTRA_FRAMEBUFFER_PITCH + x * 2u;
+            uint16_t expected = screen_offset_pixel(x, source_y);
+            uint16_t actual = load_be16(maps->frame.data + pixel_offset);
+
+            if (actual != expected) {
+                fprintf(stderr,
+                        "screen offset x=%u y=%u expected=%04x actual=%04x\n",
+                        x, y, expected, actual);
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
 static int verify_virtual_sprite_group(const struct render_maps *maps)
 {
     unsigned item;
@@ -1800,6 +1887,7 @@ int main(int argc, char **argv)
     uint64_t geometry_cycles;
     uint64_t glyph_cycles;
     uint32_t overflow_cycles;
+    uint32_t screen_offset_cycles;
     unsigned present_milliseconds;
     uint32_t capabilities;
     uint32_t status;
@@ -2119,6 +2207,36 @@ int main(int argc, char **argv)
     printf("ASTRA_FLOOD_BOUNDED PASS status=%u fence=%u cycles=%" PRIu32
            "\n", ASTRA_RENDER_STATUS_WORK_OVERFLOW,
            GLYPH_FAILURE_COMMAND, overflow_cycles);
+    if (prepare_screen_offset_workload(&maps) != 0) {
+        fprintf(stderr, "screen-offset workload layout is invalid\n");
+        goto stop_engine;
+    }
+    astra_mmio_write(&device, ASTRA_REG_RENDER_SUBMISSION_PRODUCER,
+                     SCREEN_OFFSET_COMMAND_END);
+    if (wait_for_completions(&device, SCREEN_OFFSET_COMMAND_END) != 0 ||
+        wait_for_idle(&device, ENGINE_TIMEOUT_NS) != 0 ||
+        verify_screen_offset(&maps, &screen_offset_cycles) != 0)
+        goto stop_engine;
+    if (astra_mmio_read(&device, ASTRA_REG_RENDER_SUBMISSION_CONSUMER) !=
+            SCREEN_OFFSET_COMMAND_END ||
+        astra_mmio_read(&device, ASTRA_REG_RENDER_RETIRED_FENCE) !=
+            GLYPH_FAILURE_COMMAND) {
+        fprintf(stderr,
+                "screen-offset accounting failed: consumer=%" PRIu32
+                " fence=%" PRIu32 " expected=%u\n",
+                astra_mmio_read(&device,
+                    ASTRA_REG_RENDER_SUBMISSION_CONSUMER),
+                astra_mmio_read(&device, ASTRA_REG_RENDER_RETIRED_FENCE),
+                GLYPH_FAILURE_COMMAND);
+        goto stop_engine;
+    }
+    astra_mmio_write(&device, ASTRA_REG_RENDER_COMPLETION_CONSUMER,
+                     SCREEN_OFFSET_COMMAND_END);
+    astra_mmio_write(&device, ASTRA_REG_RENDER_IRQ_PENDING, 1u);
+    printf("ASTRA_SCREEN_OFFSET PASS width=%u height=%u source_y=%u"
+           " cycles=%" PRIu32 "\n",
+           ASTRA_FRAMEBUFFER_WIDTH, SCREEN_OFFSET_HEIGHT,
+           SCREEN_OFFSET_SOURCE_Y, screen_offset_cycles);
     if (present_milliseconds != 0u &&
         present_result(&device, present_milliseconds) != 0)
         goto stop_engine;

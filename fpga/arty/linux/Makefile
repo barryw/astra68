@@ -9,9 +9,10 @@ SPRITE_TARGET := $(OUT)/astra-sprite-certify
 RENDER_TARGET := $(OUT)/astra-render-certify
 COPPER_TARGET := $(OUT)/astra-copper-certify
 AUDIO_TARGET := $(OUT)/astra-audio-certify
+HDMI_LINK_TARGET := $(OUT)/astra-hdmi-link
 TERMINAL_TARGET := $(OUT)/astra-terminal-display
 TARGETS := $(BOOT_TARGET) $(STATUS_TARGET) $(SPRITE_TARGET) $(RENDER_TARGET) \
-	$(COPPER_TARGET) $(AUDIO_TARGET) $(TERMINAL_TARGET)
+	$(COPPER_TARGET) $(AUDIO_TARGET) $(HDMI_LINK_TARGET) $(TERMINAL_TARGET)
 COMMON_SOURCES := astra_graphics_hw.c astra_boot_text.c
 COMMON_HEADERS := astra_graphics_hw.h astra_boot_text.h
 TERMINAL_FONT_SOURCE := ../../soc/post_fonts.hex
@@ -69,6 +70,11 @@ $(AUDIO_TARGET): astra_audio_certify.c
 	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections \
 		astra_audio_certify.c $(LDFLAGS) -o $@
 
+$(HDMI_LINK_TARGET): astra_hdmi_link.c
+	mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections \
+		astra_hdmi_link.c $(LDFLAGS) -o $@
+
 $(TERMINAL_FONT_HEADER): $(TERMINAL_FONT_SOURCE)
 	mkdir -p $(OUT)
 	{ printf 'static const uint8_t terminal_font[] = {\n'; \
@@ -99,14 +105,16 @@ analyze: astra_render_protocol.h $(TERMINAL_FONT_HEADER)
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only \
 		astra_copper_certify.c astra_graphics_hw.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_audio_certify.c
+	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_hdmi_link.c
 	$(CC) $(CFLAGS) -I$(OUT) -I$(ASTRA_INCLUDE) -fanalyzer -fsyntax-only \
 		astra_terminal_display.c $(COMMON_SOURCES)
 
 test-host: $(OUT)/test-astra-boot-text $(OUT)/test-astra-terminal-display \
-		$(OUT)/test-astra-audio
+		$(OUT)/test-astra-audio $(OUT)/test-astra-hdmi-link
 	$(OUT)/test-astra-boot-text
 	$(OUT)/test-astra-terminal-display --self-test
 	$(OUT)/test-astra-audio --self-test
+	$(OUT)/test-astra-hdmi-link --self-test
 	$(PYTHON) test-astra-chip-reset.py
 	$(PYTHON) test-astra-terminal-start.py
 
@@ -129,7 +137,12 @@ $(OUT)/test-astra-audio: astra_audio_certify.c
 	mkdir -p $(OUT)
 	$(HOSTCC) $(CFLAGS) astra_audio_certify.c -o $@
 
+$(OUT)/test-astra-hdmi-link: astra_hdmi_link.c
+	mkdir -p $(OUT)
+	$(HOSTCC) $(CFLAGS) astra_hdmi_link.c -o $@
+
 clean:
 	rm -f $(TARGETS) $(OUT)/test-astra-boot-text \
 		$(OUT)/test-astra-terminal-display $(OUT)/test-astra-audio \
+		$(OUT)/test-astra-hdmi-link \
 		$(TERMINAL_FONT_HEADER)

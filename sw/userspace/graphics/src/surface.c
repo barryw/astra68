@@ -206,6 +206,34 @@ void astra_surface_clear(AstraSurfaceView *surface, uint16_t color)
                            color);
 }
 
+int astra_draw_list_copy(AstraSurfaceView *surface, uint32_t source_x,
+                         uint32_t source_y, uint32_t destination_x,
+                         uint32_t destination_y, uint32_t width,
+                         uint32_t height)
+{
+    AstraDrawListCommand *command;
+
+    if (surface == NULL || surface->kind != ASTRA_SURFACE_VIEW_DRAW_LIST ||
+        width == 0u || height == 0u ||
+        source_x > surface->width || width > surface->width - source_x ||
+        source_y > surface->height || height > surface->height - source_y ||
+        destination_x > surface->width ||
+        width > surface->width - destination_x ||
+        destination_y > surface->height ||
+        height > surface->height - destination_y)
+        return 0;
+    command = append_command(surface, ASTRA_DRAW_LIST_COPY);
+    if (command == NULL)
+        return 0;
+    command->x = (int32_t)destination_x;
+    command->y = (int32_t)destination_y;
+    command->width = width;
+    command->height = height;
+    command->foreground = source_x;
+    command->background = source_y;
+    return 1;
+}
+
 static uint32_t rounded_inset(uint32_t at_y, uint32_t height,
                               uint32_t radius)
 {

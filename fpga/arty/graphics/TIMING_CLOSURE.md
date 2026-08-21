@@ -4800,3 +4800,284 @@ resetting the Zynq; power-cycle and JTAG reset are qualified independently.
 | ARM QEMU | `a534f8f7af75743c3cfd71ef5854a57dc75a4bdfafb6a1f5bedcb668ad768220` |
 | Chip-reset helper | `4ea0c4abca850d339c20d4b5668adde450ac5d59e7eb070f5c413ccd2d8892a6` |
 | Reset-capable launcher | `5a4e35f1929773d27e5d55ed3bbefdf5b9caa8d47a8819c83f355b3d9e1d9400` |
+
+### Rejected cached-RGB565 copy stream (2026-08-20)
+
+The bounded experiment reused the blitter's existing 64-bit source cache and
+pixel writer; it added no text engine, FIFO, memory, or application-specific
+registers. Three forms were rejected before the final candidate:
+
+| Form | Local result | Full result | Disposition |
+|---|---:|---:|---|
+| all-format stream | 3,470 cycles | OOC `-1.289 ns` | Removed |
+| RGB565 stream in `ST_PIXEL` | 3,470 cycles, OOC `+0.002 ns` | `-0.262/+0.017 ns`; post-route `-0.130/+0.017 ns` | Removed |
+| dedicated stream state | 3,470 cycles | OOC `-0.220 ns` | Removed |
+| output-register RGB565 stream | 3,470 cycles, OOC `+0.090/+0.110 ns` | Initial `-0.021/+0.048 ns`; recovered `+0.122/+0.048 ns` | Routed, hardware-rejected |
+
+The output-register form's exact full route connects all 66,652 nets with zero
+errors and passes pulse width at `+0.538 ns`. Post-route
+`AggressiveExplore` added no cells and improved setup from `-0.021` to
+`+0.122 ns`; the fail-closed recovery flow then wrote the bitstream. Exact use
+is 32,123 LUTs, 39,069 registers, 12,346 slices, 129.5 BRAM36-equivalent tiles,
+and 81 DSPs. The isolated blitter uses 2,906 LUTs, 3,215 registers, and 11 DSPs.
+
+The original 64x16 RGB565 copy moved 1,024 pixels in 5,822 cycles. The stream
+moved them in 3,470 cycles (`-40.4%`). A retained test derived from the live
+desktop batch covers 1280x3 pixels at 2,560-byte pitch: qualified RTL takes
+20,734 cycles and the stream took 11,782 (`-43.2%`). Both forms are bit-exact
+in simulation.
+
+The candidate was packaged with the unchanged qualified FSBL, U-Boot, DTB,
+and FIT, loaded through the Zynq FPGA manager, reset through the shared fabric
+reset, and initialized by `astra-graphics-boot`. Renderer, Copper, sprite, and
+48 kHz HDMI-audio certification passed. The live desktop then exposed a
+release-blocking visual failure: its valid, single 1280x644 RGB565 compositor
+BLIT wrapped near mid-screen. Live scanout readback still reported base
+`0x18200000`, pitch 2,560, and 1280x720 dimensions, so the submitted software
+stride was not the fault. Physical correctness overrides the simulated speed
+and timing-clean route.
+
+The candidate RTL was removed. Atomic rollback restored BOOT.BIN
+`545f0ccb259972bc7fc26c08f9080dc7033ef7627693ff1ff03085c98a9e3d9c`
+and unchanged FIT
+`74838cdca1f45205bd2d69e6fba51f59b5fae43c2de39fde3e8f9cdc4ed4eb2d`;
+the live qualified PL binary is
+`1c5b715f45af007946fe7e087027480d6c9578d644263ae8ec1612c762ca80ec`
+and FPGA manager reports `operating`.
+
+| Rejected candidate artifact | SHA-256 |
+|---|---|
+| RTL source | `c06f5052bb245d07a36f29f71ecc06248e553450b8175249eeb6c9f80b9a7a36` |
+| Bitstream | `cc1ad8a7092ff757582eb9fac10c28b8bfad1600c4248485ac324337493ebcf9` |
+| FPGA-manager binary | `53151de8970d156cee283be3372066031a9e5eb3c98d6e669f537d030b183ba2` |
+| Routed DCP | `c53d8f547c04b6f886808064b1ee7e8b053b9b768d0b129c133e357ccb17eca0` |
+| Timing summary | `3d224a321fb871cee256f3cad4e5c22bde008ae75ead7fb40537c1a9b0a04b4d` |
+| Utilization | `e7fb4285bd690da5c1a159b77aaeb4fa65393dd668eb07958cc11b206a400267` |
+| Route status | `398d7af809eae63a64ff7e260720d98c447b25b66157e942c36d7afc083c92c8` |
+| Methodology | `dff1daca3f7c006b89a4d1cb665fb4f64c597dc223df3390e584b38cb5e9aab0` |
+| Candidate BOOT.BIN | `194f8381c42ea6cf738fd209b2c9adee2fb3b1ce6916a0d40ea6edabca8b761d` |
+
+### Screen-offset regression and rejected live signature (2026-08-20)
+
+The retained regression covers the two paths involved in the observed failure
+without adding production logic:
+
+- `tb_astra_render_blitter.sv` performs the exact 1280x644 overlapping RGB565
+  desktop copy at 2,560-byte pitch in a 1280x720 surface. Its coordinate-unique
+  pattern does not repeat at 640 pixels; all 921,600 destination and untouched
+  pixels are checked. Qualified RTL completes the copy in 4,401,758 cycles.
+- `tb_astra_graphics_pipeline.sv` now has a second production-width run at
+  1,280 active pixels and 1,650 total pixels. It compares every final pre-HDMI
+  RGB pixel across four lines and fails if its oracle ever repeats at the known
+  640-pixel wrap distance. The separate blitter gate covers all 720 rows.
+- The hardware render certifier runs the same 1280x644 copy and reads back the
+  complete 1280x720 surface. The qualified PL passed in 11,917,253 cycles. The
+  rejected stream candidate also passed readback in 9,406,057 cycles, proving
+  that framebuffer readback alone cannot certify a downstream scanout fault.
+
+The final Beast run reported `ASTRA SCREEN OFFSET PASS pixels=5120 width=1280
+height=4` after checking all four production-width lines; wall time was about
+81 seconds. The ordinary 64x4 integrated pipeline test also passed unchanged.
+The exact blitter regression remains 4,401,758 cycles, and the complete graphics
+suite passed around these focused reruns.
+
+A final-pixel signature was evaluated as a physical diagnostic, but every form
+consumed timing margin that the release does not have:
+
+| Form | Route directory | Final setup/hold (ns) | Disposition |
+|---|---|---:|---|
+| CRC32 | `screen-signature-20260820/release-1` | `-0.208/+0.009` | Rejected |
+| 32-bit one-adder hash | `screen-signature-20260820/release-2` | `-0.101/+0.025` | Rejected |
+| 32-bit one-bit LFSR | `screen-signature-20260820/release-3` | `-0.241/+0.039`; post-route `-0.113/+0.039` | Rejected |
+| incremental LFSR | `screen-signature-20260820/release-4` | `-0.363/+0.010` | Rejected |
+| compact LFSR | `screen-signature-20260820/release-5` | `-0.169/+0.015`; post-route `-0.055/+0.015` | Rejected |
+| CRC16 | `screen-signature-20260820/release-6` | `-0.229/+0.021` | Rejected |
+
+All runs used Vivado 2024.2 on Beast and fully routed the production design;
+none wrote a release bitstream. The final CRC16 route connected all 66,345
+nets, passed pulse width at `+0.538 ns`, and used 32,287 LUTs, 39,070 registers,
+12,423 slices, 129.5 BRAM tiles, and 81 DSPs. The checker RTL, MMIO registers,
+and proposed version 1.0.6 were removed. Production remains ABI 1.0.5 and the
+qualified front-panel/reset bitstream remains the release authority.
+
+### Standards-based HDMI startup: rejected 200 MHz checkpoint (2026-08-21)
+
+The first full route after adding the Arty Z7 native PS7 I2C0/EMIO DDC path,
+active-low EMIO GPIO HPD path, DVI-safe reset state, vertical-blank HDMI mode
+transition, and retained 48 kHz stereo audio was deliberately run at an actual
+200,000,000 Hz FCLK1. Vivado 2024.2 on Beast routed all 66,445 nets with zero
+routing errors, but the fail-closed gate rejected setup/hold at
+`-0.185/+0.033 ns`; pulse width passed at `+0.538 ns`. No bitstream was written
+and the board was not changed.
+
+The worst setup cone is the existing glyph blend divide-by-255 carry path,
+`blend_numerator_b_q_reg[7]` to `blend_result_b_q_reg[5]`, at eight logic
+levels and 5.175 ns data delay. The remaining failures are existing glyph
+sample-decode and render-engine reset fanout paths. HDMI startup/control is not
+in the failing set. Exact use is 32,245 LUTs, 39,004 registers, 12,299 slices,
+129.5 BRAM36-equivalent tiles, and 81 DSPs.
+
+This is an over-target timing experiment, not a release candidate. The current
+production architecture remains an exact 187,500,000 Hz runtime FCLK1 with the
+documented 200 MHz implementation-margin target. The next checkpoint uses that
+exact production configuration and retains every feature.
+
+Source identity is base `22c1656cdde8365f554a22033786e04a90d9bc5b` plus
+workspace binary diff SHA-256
+`3ce2e1f7fe7711d9b11bf8db53486bae753f2224847ac195124ce7e7880b67b5`.
+
+| Rejected 200 MHz artifact | SHA-256 |
+|---|---|
+| Routed DCP | `4618549937fe4e5ef05afffd44719c9df684423b2b1af11477eab52e8b283fa9` |
+| Timing summary | `0cd4a5f213a4e467dfb649c76019587125995a31f178e3d799536668f7dbfcdb` |
+| Utilization | `404070aa0738f3f836007ce47e885187b4bb0a1361a6387113cbb3f13df7b34d` |
+| Route status | `727ffbc4668ee6be671cfe1c22c72e0bbd66fea2039ad5b1d254fed9e6397df0` |
+| Methodology | `69428fd5371b213ab3ea36bcf32d20912a80c94286f638b729a47794afecc458` |
+| Block design | `d5c1ceaa4a375fa91df1e3ea4d5daca3c67479ea123a5149c7c1fcbfdf4ecf84` |
+
+### Standards-based HDMI startup: production-clock route (2026-08-21)
+
+The exact production candidate keeps the complete graphics, front-panel, and
+48 kHz 24-bit stereo HDMI-audio feature set. Vivado 2024.2 on Beast generated
+the PS7 fabric clock at exactly 187,500,000 Hz and routed all 66,591 routable
+nets with zero routing errors. The release-clock gate passes setup, hold, and
+pulse width at `+0.055/+0.034/+0.538 ns`; a bitstream and XSA were written.
+
+The same placement and route were deliberately driven with the established
+200 MHz implementation-margin constraint. That optional margin missed setup at
+`-0.278 ns` while hold and pulse width passed at `+0.034/+0.538 ns`. This is
+recorded as margin evidence, not as permission to run FCLK1 at 200 MHz. The
+shipped clock remains exactly 187.5 MHz.
+
+Exact use is 31,951 LUTs (60.06%), 39,064 registers (36.71%), 12,249 slices
+(92.10%), 129.5 BRAM36-equivalent tiles (92.50%), and 81 DSPs (36.82%). Source
+identity is base `22c1656cdde8365f554a22033786e04a90d9bc5b` plus workspace
+binary diff SHA-256
+`e61e90766cbd72f74c8c3f9f0d64375f44a3df57adc4c87886ea4e9414b6c5d6`.
+Fresh packaging from the exact XSA passes: the FSBL contains the documented
+187.5 MHz PS7 mask, the device tree enables I2C0 at 100 kHz and assigns
+100/187.5 MHz fabric clocks, the FIT extraction compares byte-for-byte, and
+all ARM tools pass strict compilation, static analysis, and host self-tests.
+The fresh ARM build found and removed one dead register-read helper left by the
+discarded fabric-HPD experiment; it had no caller or runtime behavior. The
+board has not yet been changed; physical HPD, EDID, warm-load, visible-screen,
+and audible-audio qualification remain release blockers.
+
+| Production-clock candidate artifact | SHA-256 |
+|---|---|
+| Bitstream | `2864ce9049d3e581ebe5d68cb8fc2e8519623f66705d44eae24f3b80549d6384` |
+| XSA | `1a074aae5f55f3a61d6c900b6947568382a47260e49f64619974da358c124bcb` |
+| Routed DCP | `9be666dc8697bfc81d37fb339d984d7f1053da2866c7e54c357b54207e6b7eb7` |
+| Release timing summary | `4fbedaad91109023343c7fe3f0994682997f2df01c7f6619cdefe82e83b2e4d3` |
+| 200 MHz margin timing summary | `be9563217dd234b89c9fe9b3c7e365d2136b0f5988484c9d0716f0ac1f1256ef` |
+| Utilization | `86335252aec5a5e60a0837c34043d29861e518e092b67ba87200fa6f5619b56d` |
+| Route status | `62f8fbb8b69d4caf06cf65fb66517256ed76b08e2e23235cfa920131852c6c1a` |
+| Methodology | `ae95b1737f63e513ccde7dfd8e3ae9cb97e46e6ff33a5221a8e2fb0511066df1` |
+| Block design | `53d9bbaf2381629666b1c4db172aea954e4d433b26632e2d7c49f47e75477b9b` |
+| CDC report | `4c3d983c2225b1268ec4cb8b0b14690f4e606766d31e78fda462bc9a1c455749` |
+| FSBL ELF | `b47d97d551d276934cb6b4b7fbc3e9ed429f3ea08b5ab46d1a3efd723717dfad` |
+| FSBL PS initialization | `282766b007cd85e0142ebfba99a04e2ccc9dae4bec925c3246b6d7fe7035c6ab` |
+| Device tree | `d60c82c0a0cdccfab49adf03cda541d115a2f81de23ab36b9fe2a977949bfb98` |
+| FIT image | `3fee66d1d33080b238509169ce459bbcae853d895a192b20de89d4f25df85dea` |
+| BOOT.BIN | `67d03fb4f1205236bad2bf870083d289fee135f428831bcaf21a1b0553dcb3fc` |
+| HDMI link manager | `134a1a2041c4679fc52204a69b3879bad419316852a8423e1608d68b3c535870` |
+| HDMI link manager source | `a78374e4041df24adc751a56317eea387fb30c2a327b80ca5b99386024d243a7` |
+
+Hash-verified atomic deployment through NUC installed the candidate BOOT/FIT,
+manager, and first-boot script on the Arty SD card. The prior qualified
+BOOT/FIT remain byte-exact at
+`BOOT.BIN.rollback-545f0ccb2599` and
+`image.ub.rollback-74838cdca1f4`; the immutable root was restored read-only.
+The running PL is still the prior qualified image. NUC has no installed
+XSDB/JTAG reset tool or board USB power-control path, and Linux software reboot
+is not a qualified Zynq reset on this appliance, so a physical power cycle is
+required before the candidate can be tested.
+
+### Warm-reload SLCR ownership repair (2026-08-21)
+
+The candidate cold-booted on the Arty with HDMI request `1`, active status `3`,
+and successful 720p60 E-EDID negotiation. With Linux runtime power forced on,
+the Cadence I2C0 controller matched the exact Xilinx driver initialization:
+control `0x0000310e`, timeout `0x000000ff`. A hash-verified full reload through
+the Linux FPGA manager preserved those values, proving that FPGA programming
+itself did not damage the PS I2C controller.
+
+The following `astra-chip-reset` pulse reproduced the warm failure. Its final
+write to `SLCR_LOCK` prevented Linux from setting documented
+`APER_CLK_CTRL.I2C0_CPU_1XCLKACT` bit 18. Linux runtime PM reported `active`,
+but `APER_CLK_CTRL` remained `0x00d00444` rather than `0x00d40444`; I2C control
+and timeout both read zero and E-EDID timed out. AMD UG585 states that
+`SLCR_LOCK` blocks writes to all SLCR registers. The exact deployed Xilinx
+Linux source, commit `2b7f6f70a62a`, unlocks SLCR in
+`zynq_early_slcr_init()` and does not relock it because the clock framework
+continues to update those registers.
+
+The retained helper removes only the incorrect lock write. It still unlocks
+SLCR, asserts FCLK1 reset, releases FCLK1 reset, verifies every Astra hardware
+identity/reset register, and asks the HDMI manager to revalidate E-EDID. The
+mocked helper test requires that exact three-write sequence, and the graphics
+build's pre-synthesis HDMI contract runs the test before invoking Vivado.
+
+On the physical board, the unchanged manager resumed I2C0 after the corrected
+helper, read E-EDID, reported `HDMI 720p60 audio=2ch-LPCM-48k-24bit`, and
+restored link status `3`. The hardware audio certifier passed 48,064 frames at
+48 kHz with a 440 Hz tone. Visible alignment and audible output await operator
+confirmation. The complete Beast graphics regression passed, including
+`ASTRA SCREEN OFFSET PASS pixels=5120 width=1280 height=4` and the exact
+1280x644 overlap blit in 4,401,758 cycles. Linux host tests and ARM GCC
+`-fanalyzer` also pass.
+
+| Warm-reload repair source | SHA-256 |
+|---|---|
+| Installed `astra-chip-reset` | `6ad793945c05d5c49c720e5d185f9ca1f612c78e82c07c7fe667e9c4de258395` |
+| Reset-helper behavioral test | `ebc882b8a829eac53c72960c1ae3a286582d5598bc0e48537cff2751a38be7b9` |
+| Pre-synthesis HDMI contract | `10cc69d3a8495d67c4790ba627407362bf229d5938d060c5c87c18ea57828e5b` |
+
+No RTL, constraints, clocks, placement, or route changed in this repair. The
+production-clock route and its `+0.055/+0.034/+0.538 ns` release timing remain
+the implementation authority; rerouting would provide no evidence for this
+Linux SLCR-ownership defect.
+
+### Rejected capture-line compensation (2026-08-21)
+
+A narrow dark column observed at the left edge of Cam Link captures was first
+misidentified as a fixed Astra source-coordinate delay. A temporary candidate
+advanced the RGB source coordinates by five pixel clocks. The focused RTL
+tests passed. A fresh full route connected every net but failed the release
+gate at `-0.148/+0.016 ns`; an incremental route passed at
+`+0.061/+0.034/+0.538 ns` and produced bitstream SHA-256
+`e8be8634d3d8fcfd6775fdb7cac939ea4e564fbd4d9877b0562d3d08f3e16522`
+and binary SHA-256
+`21a0515f468f34a3f31f9c711f82537958046d746896462f7f7c6d56b6780935`.
+It used 32,020 LUTs, 39,064 registers, 129.5 BRAM36-equivalent tiles, and 81
+DSPs. A live FPGA-manager load did not complete cleanly and the board required
+a physical power cycle. The candidate was never promoted and its temporary
+board, NUC, and Mac deployment copies were removed.
+
+The physical diagnosis then disproved the coordinate hypothesis. The same
+column remained in the Cam Link output after the HDMI source was changed from
+the Arty to an unrelated C64 Ultimate. Resetting only the Cam Link USB device,
+while leaving the C64 connected, cleared the column. With the receiver reset,
+the current production Astra image remained clean through all of these
+separate checks:
+
+- DVI video with the HDMI manager stopped and link control `0`;
+- true HDMI enabled manually, with requested/active link status `3`;
+- the manager's disable, E-EDID read, and HDMI-enable sequence;
+- a physical Arty power cycle with HDMI and Cam Link USB left connected; and
+- a physical HDMI unplug/replug with Cam Link USB left connected.
+
+Therefore the dark column was retained Cam Link receiver state, not an Astra
+framebuffer, blitter, raster-coordinate, HDMI-mode, cold-start, or hot-plug
+fault. The exact earlier event that put the Cam Link into that state was not
+reproduced, so no narrower cause is claimed. The five-pixel compensation and
+its dedicated source-coordinate test were removed. HDMI HPD/E-EDID handling,
+DVI-safe reset, vertical-blank HDMI mode changes, and audio were retained.
+
+The complete Beast graphics regression after removal passed, including the
+HDMI source contract, HDMI mode transition, `ASTRA SCREEN OFFSET PASS` over
+5,120 pixels at 1,280-pixel width, and the exact 1,280x644 overlap blit in
+4,401,758 cycles. No new route is required because the rejected compensation
+was removed and the source returned to the already-routed production HDMI
+implementation. The `+0.055/+0.034/+0.538 ns` production-clock route remains
+the release authority.

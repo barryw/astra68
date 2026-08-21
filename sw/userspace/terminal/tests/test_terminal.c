@@ -20,6 +20,9 @@ static uint8_t rendered[TEST_ROWS][TEST_COLUMNS];
 static uint32_t render_calls;
 static uint32_t rendered_cells;
 static int render_should_fail;
+static uint32_t scroll_calls;
+static uint32_t scrolled_rows;
+static uint32_t preserved_rows;
 
 static int record(void *context, uint32_t row, uint32_t column,
                   const uint8_t *cells, uint32_t count)
@@ -43,12 +46,27 @@ static int record(void *context, uint32_t row, uint32_t column,
     return 1;
 }
 
+static int record_scroll(void *context, uint32_t rows, uint32_t preserved)
+{
+    (void)context;
+    assert(rows != 0u && rows + preserved == TEST_ROWS);
+    ++scroll_calls;
+    scrolled_rows = rows;
+    preserved_rows = preserved;
+    memmove(rendered[0], rendered[rows], preserved * TEST_COLUMNS);
+    memset(rendered[preserved], ' ', rows * TEST_COLUMNS);
+    return 1;
+}
+
 static void reset(AstraTerminal *terminal)
 {
     memset(rendered, 0, sizeof(rendered));
     render_calls = 0u;
     rendered_cells = 0u;
     render_should_fail = 0;
+    scroll_calls = 0u;
+    scrolled_rows = 0u;
+    preserved_rows = 0u;
     assert(astra_terminal_init(terminal, TEST_COLUMNS, TEST_ROWS, record,
                                NULL) == ASTRA_TERMINAL_OK);
     assert(astra_terminal_flush(terminal) == ASTRA_TERMINAL_OK);
@@ -240,6 +258,24 @@ static void test_flush_reports_only_changes(void)
     assert_matches(&terminal);
 }
 
+static void test_scroll_moves_rendered_rows_once(void)
+{
+    AstraTerminal terminal;
+
+    reset(&terminal);
+    astra_terminal_set_scroll(&terminal, record_scroll);
+    astra_terminal_write(&terminal, "one\ntwo\nthree\nfour");
+    assert(astra_terminal_flush(&terminal) == ASTRA_TERMINAL_OK);
+    render_calls = 0u;
+    rendered_cells = 0u;
+
+    astra_terminal_write(&terminal, "\nfive\nsix");
+    assert(astra_terminal_flush(&terminal) == ASTRA_TERMINAL_OK);
+    assert(scroll_calls == 1u && scrolled_rows == 2u && preserved_rows == 2u);
+    assert(render_calls == 2u && rendered_cells == 2u * TEST_COLUMNS);
+    assert_matches(&terminal);
+}
+
 static void test_render_failure_is_reported(void)
 {
     AstraTerminal terminal;
@@ -348,6 +384,7 @@ int main(void)
     test_scroll_preserves_content_and_redraws();
     test_unprintable_bytes_are_visible();
     test_flush_reports_only_changes();
+    test_scroll_moves_rendered_rows_once();
     test_render_failure_is_reported();
     test_model_works_without_a_renderer();
     test_resize_preserves_cells_and_clamps_cursor();

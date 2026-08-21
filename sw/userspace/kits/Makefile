@@ -40,11 +40,11 @@ $(BUNDLE_TOOL):
 
 $(GRAPHICS_STAMP): Graphics.kit/manifest $(GRAPHICS_LIBRARY) \
 		$(FONT_LIBRARY) $(BUNDLE_TOOL)
-	@mkdir -p $(GRAPHICS)/libraries/graphics.library/abi-1/1.1.0/m68k-68030
+	@mkdir -p $(GRAPHICS)/libraries/graphics.library/abi-1/1.2.0/m68k-68030
 	@mkdir -p $(GRAPHICS)/libraries/font.library/abi-1/1.0.0/m68k-68030
 	cp Graphics.kit/manifest $(GRAPHICS)/manifest
 	cp $(GRAPHICS_LIBRARY) \
-		$(GRAPHICS)/libraries/graphics.library/abi-1/1.1.0/m68k-68030/graphics.library
+		$(GRAPHICS)/libraries/graphics.library/abi-1/1.2.0/m68k-68030/graphics.library
 	cp $(FONT_LIBRARY) \
 		$(GRAPHICS)/libraries/font.library/abi-1/1.0.0/m68k-68030/font.library
 	$(BUNDLE_TOOL) check $(GRAPHICS)

@@ -1,8 +1,7 @@
 // Copyright (c) 2026 Astra68 contributors
 //
-// Bounded Linux-to-HDMI PCM queue. Linux supplies signed 24-bit stereo
-// samples through AXI4-Lite; the HDMI sample clock consumes exactly one frame
-// per edge. Policy and mixing stay on the ARM.
+// Bounded Linux-to-HDMI PCM queue and HDMI/DVI link control. Linux supplies
+// signed 24-bit stereo samples and enables HDMI only after validating E-EDID.
 `timescale 1ns/1ps
 `default_nettype none
 
@@ -12,6 +11,8 @@ module astra_hdmi_audio (
     input  wire        audio_clk,
     input  wire        audio_reset,
     output wire [1:0][23:0] audio_sample_word,
+    input  wire        hdmi_output_active,
+    output reg         hdmi_output_requested,
 
     input  wire [31:0] s_axi_awaddr,
     input  wire [2:0]  s_axi_awprot,
@@ -86,6 +87,8 @@ module astra_hdmi_audio (
                           underflow_gray_sync2_q != 32'd0,
                           overflow_count_q != 32'd0, 6'd0,
                           fifo_wr_level_status_q};
+    wire [31:0] link_status = {30'd0, hdmi_output_active,
+                               hdmi_output_requested};
 
     astra_async_fifo #(
         .DATA_WIDTH(64),
@@ -136,6 +139,7 @@ module astra_hdmi_audio (
     always @(posedge build_clk) begin
         if (build_reset) begin
             control_q <= 2'd0;
+            hdmi_output_requested <= 1'b0;
             left_q <= 24'd0;
             overflow_count_q <= 32'd0;
             aw_pending_q <= 1'b0;
@@ -194,6 +198,12 @@ module astra_hdmi_audio (
                             overflow_count_q <= overflow_count_q + 32'd1;
                         end
                     end
+                    8'h2c: begin
+                        if (wstrb_q != 4'hf || wdata_q[31:1] != 31'd0)
+                            s_axi_bresp <= 2'b10;
+                        else
+                            hdmi_output_requested <= wdata_q[0];
+                    end
                     default: s_axi_bresp <= 2'b11;
                 endcase
             end
@@ -214,6 +224,9 @@ module astra_hdmi_audio (
                     8'h20: s_axi_rdata <= overflow_count_q;
                     8'h24: s_axi_rdata <= 32'd48000;
                     8'h28: s_axi_rdata <= 32'd512;
+                    8'h2c: s_axi_rdata <= {31'd0,
+                                            hdmi_output_requested};
+                    8'h30: s_axi_rdata <= link_status;
                     default: begin
                         s_axi_rdata <= 32'd0;
                         s_axi_rresp <= 2'b11;

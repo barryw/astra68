@@ -574,6 +574,13 @@ out-of-range source DMA. Same-surface overlap is supported only for the
 same-format, unscaled, unreflected source-copy case, where traversal has
 `memmove` semantics. Other aliased operations reject before DMA.
 
+Application draw lists expose that operation as a same-surface rectangular
+copy. It is the shared retained-pixel primitive for terminals, editors, word
+processors, and other text controls: software moves the preserved pixels once,
+then emits glyph runs and fills only for newly exposed or otherwise damaged
+cells. The draw-list replay path lowers it to the ordinary overlap-safe BLIT;
+there is no terminal-only renderer or text-specific copy engine.
+
 A virtual sprite is a blitter command or command group rendered into a hidden
 surface. It has no descriptor-count limit. Its practical limits are the
 bounded command ring, destination clip, graphics memory, and render fence

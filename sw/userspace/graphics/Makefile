@@ -131,7 +131,7 @@ $(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(LIBRARY_LD)
 
 library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@python3 ../../../tools/library_info.py $(GRAPHICS_LIBRARY) | \
-		grep -q '^graphics.library 1.1.0 ABI 1.1$$'
+		grep -q '^graphics.library 1.2.0 ABI 1.2$$'
 	@python3 ../../../tools/library_info.py $(FONT_LIBRARY) | \
 		grep -q '^font.library 1.0.0 ABI 1.0$$'
 	@! $(READELF) -r $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) | \

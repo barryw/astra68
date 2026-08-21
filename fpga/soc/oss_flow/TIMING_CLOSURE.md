@@ -4291,3 +4291,21 @@ The exact Arty production route passes setup/hold/pulse-width at
 artifact hashes, resource delta, repeated renderer/sprite/copper certification,
 and drag measurements are recorded in `fpga/arty/graphics/TIMING_CLOSURE.md`,
 `docs/FPGA_RESOURCE_BUDGET.md`, and `docs/CURRENT_STATE.md`.
+
+## 2026-08-20 Arty cached-copy stream rejection
+
+This Arty-only experiment reused the existing blitter source cache to sustain
+adjacent RGB565 pixels. The 64x16 oracle improved from 5,822 to 3,470 cycles;
+the exact 1280x3 desktop-width oracle improved from 20,734 to 11,782 cycles.
+The final OOC block passed at `+0.090/+0.110 ns`. A complete production route
+connected all 66,652 nets and, after post-route physical optimization without
+cell additions, passed setup/hold/pulse width at
+`+0.122/+0.048/+0.538 ns`.
+
+The candidate passed renderer, Copper, sprite, and HDMI-audio certification
+after the normal graphics initialization sequence, but the physical desktop's
+single 1280x644 RGB565 compositor BLIT wrapped visibly near mid-screen. The
+candidate is therefore rejected and its 33 RTL lines are removed. The Arty's
+live PL and SD BOOT.BIN were restored to the qualified front-panel release;
+the ULX3S blocker, timing authority, resource budget, and bitstream are
+unchanged. The retained test now exercises a 1280-pixel-wide RGB565 copy.

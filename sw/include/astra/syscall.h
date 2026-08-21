@@ -3,7 +3,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010011
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010012
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -137,6 +137,8 @@
  * file and calls it a timestamp.
  */
 #define ASTRA_SYSCALL_CLOCK_REALTIME   55
+/* Maps an exact library identity already resident in the kernel cache. */
+#define ASTRA_SYSCALL_LIBRARY_ATTACH   56
 
 /*
  * The most one call copies. Small on purpose: a drain is a bounded page and a

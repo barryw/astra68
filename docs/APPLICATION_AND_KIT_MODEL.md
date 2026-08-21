@@ -134,11 +134,14 @@ process-local.
 - A small import veneer is preferred over embedding large generated stubs in
   every binary.
 
-**IMPLEMENTED:** `OpenLibrary(name, ABI)` scans `.kit` manifests under `LIBS:`,
-selects the newest compatible provider, and opens its canonical versioned
-payload. `CloseLibrary()` releases the process reference. Axiom maps
-immutable pages at a common process-local address and shares their physical
-frames; writable pages remain private. Libraries are constrained big-endian
+**IMPLEMENTED:** the image builder validates `.kit` manifests and library
+identities, then writes the newest compatible provider for each `(name, ABI)`
+under `LIBS:.providers/`. `OpenLibrary(name, ABI)` first asks Axiom to attach a
+compatible resident identity; on a miss it reads that bounded provider record,
+with a manifest sweep retained for older images. `CloseLibrary()` releases the
+process reference. Axiom maps immutable pages at a common process-local address
+and shares their physical frames; writable pages are copied privately from the
+cached initial image. Libraries are constrained big-endian
 ELF32/m68k images with fixed metadata and export-table offsets, eager
 `R_68K_RELATIVE` relocation, and no PLT or lazy binding. Process teardown is the
 hard cleanup boundary, so a missed `CloseLibrary()` cannot pin mappings after

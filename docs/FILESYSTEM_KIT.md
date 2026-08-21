@@ -74,6 +74,12 @@ Other ABI majors and versions live beside it. Applications request the minimum
 compatible ABI through `OpenLibrary()`; they do not construct or search these
 paths themselves.
 
+The image builder also derives `LIBS:.providers/filesystem.library.abi-1` from
+the authoritative Kit manifest and embedded library identity. After the first
+successful load Axiom retains the exact identity and initial pages, so later
+processes attach without searching or reading the library file. Read-only
+pages are shared and writable pages remain process-private.
+
 Terminal, `events`, and `which` now use this interface for filesystem work.
 Only the supervisor's bootstrap loader talks to the VFS client directly,
 because it must read `filesystem.library` before that library can be opened;

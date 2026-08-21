@@ -17,6 +17,13 @@ uint32_t astra_library_find(const char *name, uint16_t abi_major,
                             uint16_t minimum_abi_minor,
                             const AstraLoadedLibrary **library);
 
+/* A miss returns WOULD_BLOCK; no filesystem bytes are needed on a hit. */
+uint32_t astra_library_attach(const AstraLibraryReference *reference,
+                              const AstraLoadedLibrary **library);
+uint32_t astra_library_attach_cached(const char *name, uint16_t abi_major,
+                                     uint16_t minimum_abi_minor,
+                                     const AstraLoadedLibrary **library);
+
 /* Maps, eagerly relocates, and caches one self-contained Astra library. */
 uint32_t astra_library_load(const void *image, uint32_t length,
                             const char *expected_name, uint16_t abi_major,

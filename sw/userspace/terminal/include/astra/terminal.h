@@ -39,6 +39,10 @@ typedef int (*AstraTerminalRender)(void *context, uint32_t row,
                                    uint32_t column, const uint8_t *cells,
                                    uint32_t count);
 
+/* Moves already-rendered rows upward before changed rows are redrawn. */
+typedef int (*AstraTerminalScroll)(void *context, uint32_t rows,
+                                   uint32_t preserved_rows);
+
 /*
  * Receives each completed line as it is written, before anything draws it.
  * A terminal on a screen is only observable by looking at the screen, and
@@ -61,7 +65,10 @@ typedef struct AstraTerminal {
     uint32_t cursor_row;
     uint32_t cursor_column;
     uint32_t scrolls;
+    uint32_t pending_scrolls;
+    uint32_t scroll_redraw_from;
     AstraTerminalRender render;
+    AstraTerminalScroll scroll;
     void *render_context;
     AstraTerminalEcho echo;
     void *echo_context;
@@ -94,6 +101,8 @@ void astra_terminal_putc(AstraTerminal *terminal, uint8_t value);
  */
 void astra_terminal_set_echo(AstraTerminal *terminal, AstraTerminalEcho echo,
                              void *context);
+void astra_terminal_set_scroll(AstraTerminal *terminal,
+                               AstraTerminalScroll scroll);
 
 void astra_terminal_write(AstraTerminal *terminal, const char *text);
 void astra_terminal_write_bytes(AstraTerminal *terminal, const uint8_t *bytes,

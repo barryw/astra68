@@ -4,11 +4,16 @@
 #include <string.h>
 
 #include <astra/bundle.h>
+#include <astra/library.h>
 #include <astra/vfs_process.h>
 
 int astra_vfs_process_test_provider(const AstraBundleManifest *manifest,
                                     const char *name, uint16_t abi,
                                     uint16_t version[3]);
+int astra_vfs_process_test_index(const uint8_t *bytes, uint32_t length,
+                                 const char *name, uint16_t abi, char *path,
+                                 uint32_t capacity,
+                                 AstraLibraryReference *reference);
 
 static uint32_t closes;
 static uint32_t connects;
@@ -66,6 +71,12 @@ uint32_t astra_vfs_port_connect(AstraVfsClient *client, uint32_t service)
     return ASTRA_VFS_OK;
 }
 
+uint32_t astra_vfs_port_connect_lazy(AstraVfsClient *client,
+                                     uint32_t service)
+{
+    return astra_vfs_port_connect(client, service);
+}
+
 uint32_t astra_vfs_disconnect(AstraVfsClient *client)
 {
     assert(client->session != ASTRA_VFS_SESSION_INVALID);
@@ -113,7 +124,36 @@ static uint32_t file_close(AstraFile *file)
 
 int main(void)
 {
+    static const uint8_t indexed[] = {
+        'A', 'P', 'R', 'V', 0, 1, 0, 24,
+        0, 1, 0, 2, 0, 3, 0, 1, 0, 4, 0, 0,
+        0x12, 0x34, 0x56, 0x78,
+        'L', 'I', 'B', 'S', ':', 'F', 'i', 'l', 'e'
+    };
     uint16_t version[3];
+    char path[128];
+    AstraLibraryReference reference;
+
+    assert(astra_vfs_process_test_index(
+        (const uint8_t *)"LIBS:Filesystem.kit/library", 27u,
+        "filesystem.library", 1u, path, sizeof(path), &reference));
+    assert(strcmp(path, "LIBS:Filesystem.kit/library") == 0);
+    assert(reference.size == 0u);
+    assert(astra_vfs_process_test_index(
+        indexed, sizeof(indexed), "filesystem.library", 1u, path,
+        sizeof(path), &reference));
+    assert(strcmp(path, "LIBS:File") == 0);
+    assert(reference.size == ASTRA_LIBRARY_REFERENCE_SIZE);
+    assert(reference.major == 1u && reference.minor == 2u &&
+           reference.patch == 3u && reference.abi_major == 1u &&
+           reference.abi_minor == 4u &&
+           reference.build_id == 0x12345678u);
+    assert(!astra_vfs_process_test_index(
+        (const uint8_t *)"SYS:Filesystem.kit/library", 26u,
+        "filesystem.library", 1u, path, sizeof(path), &reference));
+    assert(!astra_vfs_process_test_index(
+        (const uint8_t *)"LIBS:Filesystem kit/library", 27u,
+        "filesystem.library", 1u, path, sizeof(path), &reference));
 
     {
         AstraStartupInfo startup = { .capabilities_address = 1u };

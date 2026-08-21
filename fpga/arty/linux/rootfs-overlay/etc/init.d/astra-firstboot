@@ -45,6 +45,15 @@ mountpoint -q /etc/ssh 2>/dev/null || mount --bind /data/ssh /etc/ssh
 
 mkdir -p /data/astra/log /data/astra/share
 
+hdmi_link=/data/astra/bin/astra-hdmi-link
+hdmi_log=/data/astra/log/hdmi-link.log
+if [ -x "$hdmi_link" ]; then
+    "$hdmi_link" >>"$hdmi_log" 2>&1 &
+    echo "[astra-firstboot] HDMI link manager starting"
+else
+    echo "[astra-firstboot] HDMI link manager not provisioned"
+fi
+
 graphics_loader=/data/astra/bin/astra-graphics-boot
 graphics_splash=/data/astra/assets/astra_boot_splash.rgb565
 graphics_log=/data/astra/log/graphics-boot.log

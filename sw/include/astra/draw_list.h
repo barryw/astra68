@@ -16,6 +16,7 @@ enum {
     ASTRA_DRAW_LIST_FILL_ROUNDED = 2u,
     ASTRA_DRAW_LIST_TEXT = 3u,
     ASTRA_DRAW_LIST_MONO_TEXT = 4u,
+    ASTRA_DRAW_LIST_COPY = 5u,
 };
 
 typedef struct AstraDrawListHeader {

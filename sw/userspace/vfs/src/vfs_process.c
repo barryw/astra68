@@ -64,18 +64,17 @@ void astra_process_vfs_close(void)
 }
 
 /*
- * The connect, at the moment of first use. A slot that cannot connect stays
- * unconnected and answers NULL, which is the same answer a handle nobody
- * granted gives -- a caller that could not reach a mount cannot tell the two
- * apart and does not need to.
+ * Initialise the client at first use. STOR v8 defers the actual HELLO so the
+ * transport can fuse it with the first path operation; older peers complete
+ * HELLO and retry that operation inside the transport.
  */
 static AstraVfsClient *client_ready(uint32_t slot)
 {
     if (slot >= client_count)
         return NULL;
     if (clients[slot].connected == 0u) {
-        if (astra_vfs_port_connect(&clients[slot].client,
-                                   clients[slot].handle) != ASTRA_VFS_OK)
+        if (astra_vfs_port_connect_lazy(&clients[slot].client,
+                                        clients[slot].handle) != ASTRA_VFS_OK)
             return NULL;
         clients[slot].connected = 1u;
     }
@@ -280,6 +279,42 @@ static uint32_t read_file(const char *path, LibraryImage *image)
     }
 }
 
+static uint32_t read_inline_file(const char *path, LibraryImage *image)
+{
+    *image = (LibraryImage){0};
+    for (uint32_t member = 0u; ; ++member) {
+        const AstraAssign *assign = NULL;
+        AstraVfsClient *client;
+        const uint8_t *bytes = NULL;
+        uint32_t moved = 0u;
+        uint64_t size = 0u;
+        uint32_t status;
+        char wire[ASTRA_VFS_PATH_MAX];
+
+        status = astra_assign_resolve(&assigns, path, ASTRA_RIGHT_READ,
+                                      member, wire, sizeof(wire), &assign);
+        if (status == ASTRA_VFS_ERR_NOT_FOUND)
+            return status;
+        if (status != ASTRA_VFS_OK)
+            continue;
+        client = astra_process_vfs_client_for(assign);
+        if (client == NULL)
+            continue;
+        status = astra_vfs_port_read_path_inline(client, wire, &bytes, &moved,
+                                                 &size);
+        if (status == ASTRA_VFS_ERR_NOT_FOUND)
+            continue;
+        if (status != ASTRA_VFS_OK)
+            return status;
+        if (moved == 0u || moved != size)
+            return ASTRA_VFS_ERR_IO;
+        image->bytes = (uint8_t *)(uintptr_t)bytes;
+        image->length = moved;
+        image->borrowed = 1u;
+        return ASTRA_VFS_OK;
+    }
+}
+
 static int ends_with(const char *text, const char *ending)
 {
     uint32_t length = (uint32_t)strlen(text);
@@ -408,8 +443,98 @@ static int resolve_cached(const char *name, uint16_t minimum,
     return found;
 }
 
+#define PROVIDER_INDEX_MAGIC 0x41505256u /* "APRV" */
+#define PROVIDER_INDEX_HEADER 24u
+
+static uint16_t index_be16(const uint8_t *bytes)
+{
+    return (uint16_t)(((uint16_t)bytes[0] << 8) | bytes[1]);
+}
+
+static uint32_t index_be32(const uint8_t *bytes)
+{
+    return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
+           ((uint32_t)bytes[2] << 8) | bytes[3];
+}
+
+static int copy_index_path(const uint8_t *bytes, uint32_t length,
+                           const char *name, uint16_t abi, char *path,
+                           uint32_t capacity,
+                           AstraLibraryReference *reference)
+{
+    uint32_t start = 0u;
+    int valid;
+
+    *reference = (AstraLibraryReference){0};
+    if (length >= PROVIDER_INDEX_HEADER + 6u &&
+        index_be32(bytes) == PROVIDER_INDEX_MAGIC &&
+        index_be16(bytes + 4u) == 1u &&
+        index_be16(bytes + 6u) == PROVIDER_INDEX_HEADER &&
+        index_be16(bytes + 14u) == abi && index_be16(bytes + 18u) == 0u) {
+        reference->size = ASTRA_LIBRARY_REFERENCE_SIZE;
+        reference->major = index_be16(bytes + 8u);
+        reference->minor = index_be16(bytes + 10u);
+        reference->patch = index_be16(bytes + 12u);
+        reference->abi_major = abi;
+        reference->abi_minor = index_be16(bytes + 16u);
+        reference->build_id = index_be32(bytes + 20u);
+        (void)memset(reference->name, 0, sizeof(reference->name));
+        if (!append(reference->name, sizeof(reference->name), name))
+            return 0;
+        start = PROVIDER_INDEX_HEADER;
+    }
+    valid = length - start >= 6u && length - start < capacity &&
+            memcmp(bytes + start, "LIBS:", 5u) == 0;
+
+    for (uint32_t at = start; valid && at < length; ++at) {
+        uint8_t value = bytes[at];
+
+        valid = (value >= 'a' && value <= 'z') ||
+                (value >= 'A' && value <= 'Z') ||
+                (value >= '0' && value <= '9') ||
+                value == ':' || value == '/' || value == '.' ||
+                value == '_' || value == '-';
+        if (valid) path[at - start] = (char)value;
+    }
+    if (valid) path[length - start] = '\0';
+    else *reference = (AstraLibraryReference){0};
+    return valid;
+}
+
+#if defined(ASTRA_VFS_PROCESS_TEST)
+int astra_vfs_process_test_index(const uint8_t *bytes, uint32_t length,
+                                 const char *name, uint16_t abi, char *path,
+                                 uint32_t capacity,
+                                 AstraLibraryReference *reference)
+{
+    return copy_index_path(bytes, length, name, abi, path, capacity,
+                           reference);
+}
+#endif
+
+static int resolve_indexed(const char *name, uint16_t minimum,
+                           char *path, uint32_t capacity,
+                           AstraLibraryReference *reference)
+{
+    LibraryImage image = {0};
+    char index[ASTRA_VFS_PATH_MAX] = "LIBS:.providers/";
+    int valid;
+
+    if (!append(index, sizeof(index), name) ||
+        !append(index, sizeof(index), ".abi-") ||
+        !append_number(index, sizeof(index), minimum) ||
+        (read_inline_file(index, &image) != ASTRA_VFS_OK &&
+         read_file(index, &image) != ASTRA_VFS_OK))
+        return 0;
+    valid = copy_index_path(image.bytes, image.length, name, minimum, path,
+                            capacity, reference);
+    release_library_image(&image);
+    return valid;
+}
+
 static int resolve_library(const char *name, uint16_t minimum,
-                           char *path, uint32_t capacity)
+                           char *path, uint32_t capacity,
+                           AstraLibraryReference *reference)
 {
     uint16_t selected[3] = {0u, 0u, 0u};
     char selected_kit[ASTRA_VFS_NAME_MAX] = {0};
@@ -417,6 +542,9 @@ static int resolve_library(const char *name, uint16_t minimum,
     int complete = 1;
 
     path[0] = '\0';
+    *reference = (AstraLibraryReference){0};
+    if (resolve_indexed(name, minimum, path, capacity, reference))
+        return 1;
     if (kit_table_complete != 0u) {
         found = resolve_cached(name, minimum, selected, selected_kit,
                                sizeof(selected_kit));
@@ -742,7 +870,8 @@ void astra_process_filesystem_close(AstraProcessFilesystem *filesystem)
 AstraLibraryHandle *OpenLibrary(const char *name, uint16_t version)
 {
     const AstraLoadedLibrary *loaded;
-    LibraryImage image;
+    LibraryImage image = {0};
+    AstraLibraryReference reference;
     char path[ASTRA_VFS_PATH_MAX];
     uint32_t status;
 
@@ -757,14 +886,29 @@ AstraLibraryHandle *OpenLibrary(const char *name, uint16_t version)
             return &open_libraries[index].handle;
         }
     }
-    if (!resolve_library(name, version, path, sizeof(path))) {
+    status = astra_library_attach_cached(name, version, 0u, &loaded);
+    if (status == ASTRA_SYSCALL_OK)
+        goto loaded;
+    if (status != ASTRA_SYSCALL_WOULD_BLOCK &&
+        status != ASTRA_SYSCALL_BAD_SYSCALL)
         return NULL;
+    if (!resolve_library(name, version, path, sizeof(path), &reference)) {
+        return NULL;
+    }
+    if (reference.size == ASTRA_LIBRARY_REFERENCE_SIZE) {
+        status = astra_library_attach(&reference, &loaded);
+        if (status == ASTRA_SYSCALL_OK)
+            goto loaded;
+        if (status != ASTRA_SYSCALL_WOULD_BLOCK &&
+            status != ASTRA_SYSCALL_BAD_SYSCALL)
+            return NULL;
     }
     if (read_file(path, &image) != ASTRA_VFS_OK) {
         return NULL;
     }
     status = astra_library_load(image.bytes, image.length, name, version, 0u,
                                 &loaded);
+loaded:
     release_library_image(&image);
     if (status != ASTRA_SYSCALL_OK) {
         return NULL;

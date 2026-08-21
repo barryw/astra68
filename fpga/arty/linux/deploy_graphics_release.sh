@@ -17,13 +17,14 @@ sprite_tool="$release_dir/astra-sprite-certify"
 render_tool="$release_dir/astra-render-certify"
 copper_tool="$release_dir/astra-copper-certify"
 audio_tool="$release_dir/astra-audio-certify"
+hdmi_link="$release_dir/astra-hdmi-link"
 splash="$release_dir/astra_boot_splash.rgb565"
 chip_reset="$script_dir/astra_chip_reset.sh"
 terminal_start="$script_dir/astra_terminal_start.sh"
 firstboot="$script_dir/rootfs-overlay/etc/init.d/astra-firstboot"
 
 for file in "$boot" "$fit" "$loader" "$status_tool" "$sprite_tool" \
-    "$render_tool" "$copper_tool" "$audio_tool" "$splash" \
+    "$render_tool" "$copper_tool" "$audio_tool" "$hdmi_link" "$splash" \
     "$chip_reset" "$terminal_start" "$firstboot"; do
     test -s "$file"
 done
@@ -40,6 +41,7 @@ sprite_tool_hash=$(sha256 "$sprite_tool")
 render_tool_hash=$(sha256 "$render_tool")
 copper_tool_hash=$(sha256 "$copper_tool")
 audio_tool_hash=$(sha256 "$audio_tool")
+hdmi_link_hash=$(sha256 "$hdmi_link")
 splash_hash=$(sha256 "$splash")
 chip_reset_hash=$(sha256 "$chip_reset")
 terminal_start_hash=$(sha256 "$terminal_start")
@@ -55,6 +57,7 @@ stage="/data/astra/deploy/graphics-$release_id"
 "$scp" "$render_tool" "$board:$stage/astra-render-certify"
 "$scp" "$copper_tool" "$board:$stage/astra-copper-certify"
 "$scp" "$audio_tool" "$board:$stage/astra-audio-certify"
+"$scp" "$hdmi_link" "$board:$stage/astra-hdmi-link"
 "$scp" "$splash" "$board:$stage/astra_boot_splash.rgb565"
 "$scp" "$chip_reset" "$board:$stage/astra-chip-reset"
 "$scp" "$terminal_start" "$board:$stage/astra-terminal-start"
@@ -65,7 +68,7 @@ stage="/data/astra/deploy/graphics-$release_id"
     "$expected_active_boot" "$expected_active_fit" \
     "$boot_hash" "$fit_hash" "$loader_hash" "$status_tool_hash" \
     "$sprite_tool_hash" "$render_tool_hash" "$copper_tool_hash" \
-    "$audio_tool_hash" "$splash_hash" "$chip_reset_hash" \
+    "$audio_tool_hash" "$hdmi_link_hash" "$splash_hash" "$chip_reset_hash" \
     "$terminal_start_hash" <<'REMOTE'
 set -eu
 
@@ -80,9 +83,10 @@ sprite_tool_hash=$8
 render_tool_hash=$9
 copper_tool_hash=${10}
 audio_tool_hash=${11}
-splash_hash=${12}
-chip_reset_hash=${13}
-terminal_start_hash=${14}
+hdmi_link_hash=${12}
+splash_hash=${13}
+chip_reset_hash=${14}
+terminal_start_hash=${15}
 fat=/run/media/boot-mmcblk0p1
 root_writable=0
 
@@ -114,6 +118,7 @@ check_hash "$sprite_tool_hash" "$stage/astra-sprite-certify"
 check_hash "$render_tool_hash" "$stage/astra-render-certify"
 check_hash "$copper_tool_hash" "$stage/astra-copper-certify"
 check_hash "$audio_tool_hash" "$stage/astra-audio-certify"
+check_hash "$hdmi_link_hash" "$stage/astra-hdmi-link"
 check_hash "$splash_hash" "$stage/astra_boot_splash.rgb565"
 check_hash "$chip_reset_hash" "$stage/astra-chip-reset"
 check_hash "$terminal_start_hash" "$stage/astra-terminal-start"
@@ -145,6 +150,9 @@ cp "$stage/astra-audio-certify" /data/astra/bin/astra-audio-certify.new
 chmod 0755 /data/astra/bin/astra-audio-certify.new
 mv /data/astra/bin/astra-audio-certify.new \
    /data/astra/bin/astra-audio-certify
+cp "$stage/astra-hdmi-link" /data/astra/bin/astra-hdmi-link.new
+chmod 0755 /data/astra/bin/astra-hdmi-link.new
+mv /data/astra/bin/astra-hdmi-link.new /data/astra/bin/astra-hdmi-link
 cp "$stage/astra_boot_splash.rgb565" \
    /data/astra/assets/astra_boot_splash.rgb565.new
 mv /data/astra/assets/astra_boot_splash.rgb565.new \
@@ -162,6 +170,7 @@ check_hash "$sprite_tool_hash" /data/astra/bin/astra-sprite-certify
 check_hash "$render_tool_hash" /data/astra/bin/astra-render-certify
 check_hash "$copper_tool_hash" /data/astra/bin/astra-copper-certify
 check_hash "$audio_tool_hash" /data/astra/bin/astra-audio-certify
+check_hash "$hdmi_link_hash" /data/astra/bin/astra-hdmi-link
 check_hash "$splash_hash" /data/astra/assets/astra_boot_splash.rgb565
 check_hash "$chip_reset_hash" /data/astra/bin/astra-chip-reset
 check_hash "$terminal_start_hash" /data/astra/bin/astra-terminal-start

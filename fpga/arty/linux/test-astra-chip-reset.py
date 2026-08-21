@@ -52,11 +52,10 @@ esac
         assert lines[0] == "ip link set eth0 up"
         writes = [line for line in lines
                   if len(line.split()) == 3]
-        assert writes[:4] == [
+        assert writes == [
             "0xF8000008 32 0x0000DF0D",
             "0xF8000240 32 2",
             "0xF8000240 32 0",
-            "0xF8000004 32 0x0000767B",
         ]
         assert state.read_text(encoding="ascii").strip() == "0"
     print("Astra chip reset tests passed")

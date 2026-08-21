@@ -25,6 +25,9 @@
 #define ASTRA_LIBRARY_SLOT_SIZE 0x01000000u
 #define ASTRA_LIBRARY_SLOT_COUNT 15u
 #define ASTRA_LIBRARY_IMAGE_MAX 0x00040000u
+#define ASTRA_LIBRARY_REFERENCE_SIZE 44u
+#define ASTRA_LIBRARY_REFERENCE_EXACT 0u
+#define ASTRA_LIBRARY_REFERENCE_LATEST 1u
 
 #ifndef __ASSEMBLER__
 
@@ -48,8 +51,23 @@ typedef struct AstraLibrary {
     char copyright[ASTRA_LIBRARY_COPYRIGHT_MAX];
 } AstraLibrary;
 
+/* Exact resolved identity used to attach an already-resident Kit library. */
+typedef struct AstraLibraryReference {
+    uint32_t size;
+    uint32_t build_id;
+    char name[ASTRA_LIBRARY_NAME_MAX];
+    uint16_t major;
+    uint16_t minor;
+    uint16_t patch;
+    uint16_t abi_major;
+    uint16_t abi_minor;
+    uint16_t flags;
+} AstraLibraryReference;
+
 _Static_assert(sizeof(AstraLibrary) == ASTRA_LIBRARY_SIZE,
                "library metadata layout changed");
+_Static_assert(sizeof(AstraLibraryReference) == ASTRA_LIBRARY_REFERENCE_SIZE,
+               "library reference layout changed");
 
 #if defined(__ELF__)
 #define ASTRA_LIBRARY_SECTION \

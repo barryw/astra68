@@ -158,6 +158,7 @@ module astra_arty_720p_top (
         .clk_pixel(clk_pixel),
         .clk_audio(1'b0),
         .reset(video_reset),
+        .hdmi_output_enable(1'b0),
         .rgb(raster_rgb),
         .audio_sample_word(32'd0),
         .tmds(tmds),
@@ -167,7 +168,8 @@ module astra_arty_720p_top (
         .frame_width(frame_width),
         .frame_height(frame_height),
         .screen_width(screen_width),
-        .screen_height(screen_height)
+        .screen_height(screen_height),
+        .hdmi_output_active()
     );
 
     OBUFDS hdmi_clock_buf_i (

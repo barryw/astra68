@@ -7,6 +7,8 @@ module tb_astra_hdmi_audio;
     reg audio_clk = 0;
     reg build_reset = 1;
     reg audio_reset = 1;
+    reg hdmi_output_active = 0;
+    wire hdmi_output_requested;
     always #3 build_clk = ~build_clk;
     always #11 audio_clk = ~audio_clk;
 
@@ -98,6 +100,15 @@ module tb_astra_hdmi_audio;
         read_reg(8'h04, 32'h00010000);
         read_reg(8'h24, 32'd48000);
         read_reg(8'h28, 32'd512);
+        read_reg(8'h2c, 32'd0);
+        read_reg(8'h30, 32'd0);
+        write_reg(8'h2c, 32'd1, 2'b00);
+        read_reg(8'h2c, 32'd1);
+        hdmi_output_active = 1;
+        read_reg(8'h30, 32'd3);
+        write_reg(8'h2c, 32'd0, 2'b00);
+        read_reg(8'h2c, 32'd0);
+        hdmi_output_active = 0;
         write_reg(8'h14, 32'h00112233, 2'b00);
         write_reg(8'h18, 32'h00445566, 2'b00);
         write_reg(8'h14, 32'h00778899, 2'b00);
@@ -121,7 +132,7 @@ module tb_astra_hdmi_audio;
         write_reg(8'h18, 32'h00000001, 2'b10);
         read_reg(8'h20, 32'd1);
         write_reg(8'h0c, 32'd4, 2'b10);
-        write_reg(8'h2c, 32'd0, 2'b11);
+        write_reg(8'h34, 32'd0, 2'b11);
 
         $display("ASTRA HDMI AUDIO PASS underflows=%0d",
                  dut.underflow_count_q);

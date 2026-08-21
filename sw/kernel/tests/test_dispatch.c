@@ -781,6 +781,7 @@ static void test_shared_ipc_uses_dedicated_metrics(void)
         { ASTRA_SYSCALL_AREA_MAP, KERNEL_PERFORMANCE_AREA_MAP },
         { ASTRA_SYSCALL_AREA_UNMAP, KERNEL_PERFORMANCE_AREA_UNMAP },
         { ASTRA_SYSCALL_RING_NOTIFY, KERNEL_PERFORMANCE_RING_NOTIFY },
+        { ASTRA_SYSCALL_LIBRARY_ATTACH, KERNEL_PERFORMANCE_LIBRARY_ATTACH },
     };
     uint32_t registers[15] = {0u};
     uint8_t frame[8];

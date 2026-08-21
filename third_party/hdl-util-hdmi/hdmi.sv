@@ -69,6 +69,10 @@ module hdmi
     input logic clk_audio,
     // synchronous reset back to 0,0
     input logic reset,
+    // Request true HDMI only after the sink's E-EDID identifies it as HDMI.
+    // The request is applied during vertical blank so a complete HDMI
+    // preamble and guard band precede the next active video field.
+    input logic hdmi_output_enable,
     input logic [23:0] rgb,
     input logic [1:0][AUDIO_BIT_WIDTH-1:0] audio_sample_word,
 
@@ -88,7 +92,8 @@ module hdmi
     output logic [BIT_WIDTH-1:0] frame_width,
     output logic [BIT_HEIGHT-1:0] frame_height,
     output logic [BIT_WIDTH-1:0] screen_width,
-    output logic [BIT_HEIGHT-1:0] screen_height
+    output logic [BIT_HEIGHT-1:0] screen_height,
+    output logic hdmi_output_active
 );
 
 localparam int NUM_CHANNELS = 3;
@@ -98,7 +103,6 @@ logic vsync;
 logic [BIT_WIDTH-1:0] hsync_pulse_start, hsync_pulse_size;
 logic [BIT_HEIGHT-1:0] vsync_pulse_start, vsync_pulse_size;
 logic invert;
-
 // See CEA-861-D for more specifics formats described below.
 generate
     case (VIDEO_ID_CODE)
@@ -244,6 +248,19 @@ logic [11:0] data_island_data = 12'd0;
 generate
     if (!DVI_OUTPUT)
     begin: true_hdmi_output
+        hdmi_mode_control #(
+            .BIT_WIDTH(BIT_WIDTH),
+            .BIT_HEIGHT(BIT_HEIGHT)
+        ) mode_control (
+            .clk_pixel(clk_pixel),
+            .reset(reset),
+            .hdmi_output_enable(hdmi_output_enable),
+            .cx(cx),
+            .cy(cy),
+            .screen_height(screen_height),
+            .hdmi_output_active(hdmi_output_active)
+        );
+
         logic video_guard = 1;
         logic video_preamble = 0;
         always_ff @(posedge clk_pixel)
@@ -255,8 +272,8 @@ generate
             end
             else
             begin
-                video_guard <= cx >= frame_width - 2 && cx < frame_width && (cy == frame_height - 1 || cy < screen_height - 1 /* no VG at end of last line */);
-                video_preamble <= cx >= frame_width - 10 && cx < frame_width - 2 && (cy == frame_height - 1 || cy < screen_height - 1 /* no VP at end of last line */);
+                video_guard <= hdmi_output_active && cx >= frame_width - 2 && cx < frame_width && (cy == frame_height - 1 || cy < screen_height - 1 /* no VG at end of last line */);
+                video_preamble <= hdmi_output_active && cx >= frame_width - 10 && cx < frame_width - 2 && (cy == frame_height - 1 || cy < screen_height - 1 /* no VP at end of last line */);
             end
         end
 
@@ -265,7 +282,7 @@ generate
         logic [4:0] num_packets_alongside;
         always_comb
         begin
-            max_num_packets_alongside = (frame_width - screen_width  /* VD period */ - 2 /* V guard */ - 8 /* V preamble */ - 4 /* Min V control period */ - 2 /* DI trailing guard */ - 2 /* DI leading guard */ - 8 /* DI premable */ - 4 /* Min DI control period */) / 32;
+            max_num_packets_alongside = hdmi_output_active ? (frame_width - screen_width  /* VD period */ - 2 /* V guard */ - 8 /* V preamble */ - 4 /* Min V control period */ - 2 /* DI trailing guard */ - 2 /* DI leading guard */ - 8 /* DI premable */ - 4 /* Min DI control period */) / 32 : 0;
             if (max_num_packets_alongside > 18)
                 num_packets_alongside = 5'd18;
             else
@@ -314,7 +331,7 @@ generate
             .VENDOR_NAME(VENDOR_NAME),
             .PRODUCT_DESCRIPTION(PRODUCT_DESCRIPTION),
             .SOURCE_DEVICE_INFORMATION(SOURCE_DEVICE_INFORMATION)
-        ) packet_picker (.clk_pixel(clk_pixel), .clk_audio(clk_audio), .reset(reset), .video_field_end(video_field_end), .packet_enable(packet_enable), .packet_pixel_counter(packet_pixel_counter), .audio_sample_word(audio_sample_word), .header(header), .sub(sub));
+        ) packet_picker (.clk_pixel(clk_pixel), .clk_audio(clk_audio), .reset(reset || !hdmi_output_active), .video_field_end(video_field_end), .packet_enable(packet_enable), .packet_pixel_counter(packet_pixel_counter), .audio_sample_word(audio_sample_word), .header(header), .sub(sub));
         logic [8:0] packet_data;
         packet_assembler packet_assembler (.clk_pixel(clk_pixel), .reset(reset), .data_island_period(data_island_period), .header(header), .sub(sub), .packet_data(packet_data), .counter(packet_pixel_counter));
 
@@ -330,7 +347,9 @@ generate
             end
             else
             begin
-                mode <= data_island_guard ? 3'd4 : data_island_period ? 3'd3 : video_guard ? 3'd2 : video_data_period ? 3'd1 : 3'd0;
+                mode <= hdmi_output_active ?
+                    (data_island_guard ? 3'd4 : data_island_period ? 3'd3 : video_guard ? 3'd2 : video_data_period ? 3'd1 : 3'd0) :
+                    (video_data_period ? 3'd1 : 3'd0);
                 video_data <= rgb;
                 control_data <= {{1'b0, data_island_preamble}, {1'b0, video_preamble || data_island_preamble}, {vsync, hsync}}; // ctrl3, ctrl2, ctrl1, ctrl0, vsync, hsync
                 data_island_data[11:4] <= packet_data[8:1];
@@ -342,6 +361,7 @@ generate
     end
     else // DVI_OUTPUT = 1
     begin
+        assign hdmi_output_active = 1'b0;
         always_ff @(posedge clk_pixel)
         begin
             if (reset)

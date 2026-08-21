@@ -124,6 +124,12 @@ control=/astra-graphics@43c00000
 "$fdtput" -t x "$work" "$control" reg 43c00000 00010000
 "$fdtput" -t s "$work" "$control" status okay
 
+# The PS7 routes I2C0 through EMIO to the Arty HDMI TX DDC pins. HDMI 1.3a
+# section 8.4 limits DDC to I2C Standard Mode (100 kHz).
+i2c0=$("$fdtget" -t s "$work" /__symbols__ i2c0)
+"$fdtput" -t s "$work" "$i2c0" status okay
+"$fdtput" -t u "$work" "$i2c0" clock-frequency 100000
+
 clkc=$("$fdtget" -t s "$work" /__symbols__ clkc)
 clkc_phandle=$("$fdtget" -t u "$work" "$clkc" phandle)
 "$fdtput" -t u "$work" "$clkc" fclk-enable 3
@@ -151,6 +157,8 @@ fi
 [[ $("$fdtget" -t x "$work" "$arena" reg) == '18000000 8000000' ]]
 "$fdtget" -p "$work" "$arena" | grep -Fxq no-map
 [[ $("$fdtget" -t x "$work" "$control" reg) == '43c00000 10000' ]]
+[[ $("$fdtget" -t s "$work" "$i2c0" status) == 'okay' ]]
+[[ $("$fdtget" -t u "$work" "$i2c0" clock-frequency) == '100000' ]]
 [[ $("$fdtget" -t u "$work" "$clkc" fclk-enable) == '3' ]]
 [[ $("$fdtget" -t u "$work" "$clkc" assigned-clocks) == \
    "$clkc_phandle 15 $clkc_phandle 16" ]]

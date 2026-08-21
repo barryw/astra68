@@ -38,10 +38,19 @@ static void clear_damage(AstraTerminal *terminal)
     }
 }
 
+static uint32_t first_dirty_row(const AstraTerminal *terminal)
+{
+    for (uint32_t row = 0u; row < terminal->rows; ++row)
+        if (terminal->dirty_first[row] <= terminal->dirty_last[row])
+            return row;
+    return terminal->rows;
+}
+
 static void scroll(AstraTerminal *terminal)
 {
     uint32_t row;
     uint32_t column;
+    uint32_t dirty = first_dirty_row(terminal);
 
     for (row = 1u; row < terminal->rows; ++row) {
         for (column = 0u; column < terminal->columns; ++column)
@@ -49,8 +58,21 @@ static void scroll(AstraTerminal *terminal)
     }
     for (column = 0u; column < terminal->columns; ++column)
         terminal->cells[terminal->rows - 1u][column] = TERMINAL_BLANK;
-    for (row = 0u; row < terminal->rows; ++row)
-        mark_row(terminal, row);
+    if (terminal->scroll != NULL) {
+        if (terminal->pending_scrolls < terminal->rows)
+            ++terminal->pending_scrolls;
+        if (terminal->pending_scrolls >= terminal->rows || dirty == 0u)
+            terminal->scroll_redraw_from = 0u;
+        else
+            terminal->scroll_redraw_from = dirty == terminal->rows ?
+                terminal->rows - 1u : dirty - 1u;
+        clear_damage(terminal);
+        for (row = terminal->scroll_redraw_from; row < terminal->rows; ++row)
+            mark_row(terminal, row);
+    } else {
+        for (row = 0u; row < terminal->rows; ++row)
+            mark_row(terminal, row);
+    }
     ++terminal->scrolls;
 }
 
@@ -77,11 +99,14 @@ AstraTerminalStatus astra_terminal_init(AstraTerminal *terminal,
     terminal->columns = columns;
     terminal->rows = rows;
     terminal->render = render;
+    terminal->scroll = NULL;
     terminal->render_context = render_context;
     terminal->echo = NULL;
     terminal->echo_context = NULL;
     terminal->echo_length = 0u;
     terminal->scrolls = 0u;
+    terminal->pending_scrolls = 0u;
+    terminal->scroll_redraw_from = 0u;
     astra_terminal_clear(terminal);
     return ASTRA_TERMINAL_OK;
 }
@@ -115,6 +140,7 @@ AstraTerminalStatus astra_terminal_resize(AstraTerminal *terminal,
         terminal->cursor_column = columns - 1u;
     for (uint32_t row = 0u; row < rows; ++row)
         mark_row(terminal, row);
+    terminal->pending_scrolls = 0u;
     return ASTRA_TERMINAL_OK;
 }
 
@@ -132,6 +158,7 @@ void astra_terminal_clear(AstraTerminal *terminal)
     }
     terminal->cursor_row = 0u;
     terminal->cursor_column = 0u;
+    terminal->pending_scrolls = 0u;
 }
 
 /* Hands the assembled line to the echo and starts the next one. */
@@ -161,6 +188,15 @@ void astra_terminal_set_echo(AstraTerminal *terminal, AstraTerminalEcho echo,
     echo_flush(terminal);
     terminal->echo = echo;
     terminal->echo_context = context;
+}
+
+void astra_terminal_set_scroll(AstraTerminal *terminal,
+                               AstraTerminalScroll scroll_callback)
+{
+    if (terminal == NULL)
+        return;
+    terminal->scroll = scroll_callback;
+    terminal->pending_scrolls = 0u;
 }
 
 void astra_terminal_putc(AstraTerminal *terminal, uint8_t value)
@@ -254,7 +290,20 @@ AstraTerminalStatus astra_terminal_flush(AstraTerminal *terminal)
         return ASTRA_TERMINAL_INVALID_ARGUMENT;
     if (terminal->render == NULL) {
         clear_damage(terminal);
+        terminal->pending_scrolls = 0u;
         return ASTRA_TERMINAL_OK;
+    }
+    if (terminal->pending_scrolls != 0u) {
+        if (terminal->scroll_redraw_from != 0u &&
+            !terminal->scroll(terminal->render_context,
+                              terminal->pending_scrolls,
+                              terminal->rows - terminal->pending_scrolls)) {
+            terminal->pending_scrolls = 0u;
+            for (row = 0u; row < terminal->rows; ++row)
+                mark_row(terminal, row);
+            return ASTRA_TERMINAL_RENDER_FAILED;
+        }
+        terminal->pending_scrolls = 0u;
     }
     for (row = 0u; row < terminal->rows; ++row) {
         uint32_t first = terminal->dirty_first[row];
@@ -278,6 +327,7 @@ AstraTerminalStatus astra_terminal_redraw(AstraTerminal *terminal)
 
     if (terminal == NULL)
         return ASTRA_TERMINAL_INVALID_ARGUMENT;
+    terminal->pending_scrolls = 0u;
     for (row = 0u; row < terminal->rows; ++row)
         mark_row(terminal, row);
     return astra_terminal_flush(terminal);

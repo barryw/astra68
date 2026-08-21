@@ -2234,6 +2234,7 @@ module astra_soc #(
                 .clk_pixel(video_pixel_clk),
                 .clk_audio(1'b0),
                 .reset(video_rst),
+                .hdmi_output_enable(1'b0),
                 .rgb(vega_rgb),
                 .audio_sample_word(32'd0),
                 .tmds(hdmi_tmds),
@@ -2243,7 +2244,8 @@ module astra_soc #(
                 .frame_width(),
                 .frame_height(),
                 .screen_width(),
-                .screen_height()
+                .screen_height(),
+                .hdmi_output_active()
             );
 
             assign gpdi_dp = {hdmi_tmds_clock, hdmi_tmds};

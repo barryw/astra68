@@ -18,7 +18,9 @@ module astra_arty_graphics_top (
     output wire        hdmi_tx_clk_n,
     output wire [2:0]  hdmi_tx_d_p,
     output wire [2:0]  hdmi_tx_d_n,
-    input  wire        hdmi_tx_hpdn,
+    inout  wire        hdmi_tx_hpdn,
+    inout  wire        hdmi_tx_scl,
+    inout  wire        hdmi_tx_sda,
 
     inout  wire [14:0] DDR_addr,
     inout  wire [2:0]  DDR_ba,
@@ -342,6 +344,9 @@ module astra_arty_graphics_top (
         .FIXED_IO_ps_clk(FIXED_IO_ps_clk),
         .FIXED_IO_ps_porb(FIXED_IO_ps_porb),
         .FIXED_IO_ps_srstb(FIXED_IO_ps_srstb),
+        .GPIO_0_tri_io(hdmi_tx_hpdn),
+        .IIC_0_scl_io(hdmi_tx_scl),
+        .IIC_0_sda_io(hdmi_tx_sda),
         .M_AXI_CTRL_araddr(host_ctrl_araddr),
         .M_AXI_CTRL_arprot(host_ctrl_arprot),
         .M_AXI_CTRL_arready(host_ctrl_arready),
@@ -717,6 +722,26 @@ module astra_arty_graphics_top (
     wire [31:0] commit_deferrals;
     wire scene_active;
     wire [1:0][23:0] audio_sample_word;
+    wire hdmi_output_requested;
+    wire hdmi_output_active;
+
+    (* ASYNC_REG = "TRUE" *) reg [1:0] hdmi_request_pixel_sync_q = 2'd0;
+    (* ASYNC_REG = "TRUE" *) reg [1:0] hdmi_active_build_sync_q = 2'd0;
+    always @(posedge fclk_clk1) begin
+        if (build_reset) begin
+            hdmi_active_build_sync_q <= 2'd0;
+        end else begin
+            hdmi_active_build_sync_q <= {hdmi_active_build_sync_q[0],
+                                         hdmi_output_active};
+        end
+    end
+    always @(posedge clk_pixel) begin
+        if (video_reset)
+            hdmi_request_pixel_sync_q <= 2'd0;
+        else
+            hdmi_request_pixel_sync_q <=
+                {hdmi_request_pixel_sync_q[0], hdmi_output_requested};
+    end
 
     astra_hdmi_audio audio_i (
         .build_clk(fclk_clk1),
@@ -724,6 +749,8 @@ module astra_arty_graphics_top (
         .audio_clk(clk_audio),
         .audio_reset(audio_reset),
         .audio_sample_word(audio_sample_word),
+        .hdmi_output_active(hdmi_active_build_sync_q[1]),
+        .hdmi_output_requested(hdmi_output_requested),
         .s_axi_awaddr(audio_ctrl_awaddr),
         .s_axi_awprot(audio_ctrl_awprot),
         .s_axi_awvalid(audio_ctrl_awvalid),
@@ -899,6 +926,7 @@ module astra_arty_graphics_top (
         .clk_pixel(clk_pixel),
         .clk_audio(clk_audio),
         .reset(video_reset),
+        .hdmi_output_enable(hdmi_request_pixel_sync_q[1]),
         .rgb(raster_rgb),
         .audio_sample_word(audio_sample_word),
         .tmds(tmds),
@@ -908,7 +936,8 @@ module astra_arty_graphics_top (
         .frame_width(frame_width),
         .frame_height(frame_height),
         .screen_width(screen_width),
-        .screen_height(screen_height)
+        .screen_height(screen_height),
+        .hdmi_output_active(hdmi_output_active)
     );
 
     OBUFDS hdmi_clock_buf_i (
@@ -975,7 +1004,6 @@ module astra_arty_graphics_top (
 
     wire unused_status = &{
         1'b0,
-        hdmi_tx_hpdn,
         frame_width,
         frame_height,
         screen_width,

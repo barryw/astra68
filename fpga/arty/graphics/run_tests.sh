@@ -6,6 +6,15 @@ BUILD=${BUILD:-"$ROOT/build/arty-graphics"}
 
 mkdir -p "$BUILD"
 python3 "$ROOT/fpga/arty/graphics/protocol/generate_protocol.py"
+python3 "$ROOT/fpga/arty/graphics/test_hdmi_source_contract.py"
+
+iverilog -g2012 -Wall \
+    -s tb_hdmi_source_mode \
+    -o "$BUILD/tb_hdmi_source_mode" \
+    "$ROOT/third_party/hdl-util-hdmi/hdmi_mode_control.sv" \
+    "$ROOT/fpga/arty/graphics/sim/tb_hdmi_source_mode.sv"
+
+vvp "$BUILD/tb_hdmi_source_mode"
 
 iverilog -g2012 -Wall \
     -s tb_astra_axi_read_3to1 \
@@ -216,46 +225,57 @@ iverilog -g2012 -Wall \
 
 vvp "$BUILD/tb_astra_graphics_control"
 
-iverilog -g2012 -Wall \
-    -I "$ROOT/fpga/arty/graphics" \
-    -s tb_astra_graphics_pipeline \
-    -o "$BUILD/tb_astra_graphics_pipeline" \
-    "$ROOT/fpga/arty/graphics/astra_framebuffer_config_validator.sv" \
-    "$ROOT/fpga/arty/graphics/astra_tile_config_validator.sv" \
-    "$ROOT/fpga/arty/graphics/astra_sprite_scene_store.sv" \
-    "$ROOT/fpga/arty/graphics/astra_framebuffer_line_store.sv" \
-    "$ROOT/fpga/arty/graphics/astra_framebuffer_line_builder.sv" \
-    "$ROOT/fpga/arty/graphics/astra_tile_span_walker.sv" \
-    "$ROOT/fpga/arty/graphics/astra_tile_line_store.sv" \
-    "$ROOT/fpga/arty/graphics/astra_tile_line_builder.sv" \
-    "$ROOT/fpga/arty/graphics/astra_sprite_line_store.sv" \
-    "$ROOT/fpga/arty/graphics/astra_sprite_line_builder.sv" \
-    "$ROOT/fpga/arty/graphics/astra_line_scheduler.sv" \
-    "$ROOT/fpga/arty/graphics/astra_palette_store.sv" \
-    "$ROOT/fpga/arty/graphics/astra_premult_blend.sv" \
-    "$ROOT/fpga/arty/graphics/astra_pixel_compositor.sv" \
-    "$ROOT/fpga/arty/graphics/astra_boot_text_overlay.sv" \
-    "$ROOT/fpga/arty/graphics/astra_axi_lite_1to2.sv" \
-    "$ROOT/fpga/arty/graphics/astra_copper.sv" \
-    "$ROOT/fpga/arty/graphics/astra_copper_control.sv" \
-    "$ROOT/fpga/arty/graphics/astra_copper_beam_scheduler.sv" \
-    "$ROOT/fpga/arty/graphics/astra_copper_registers.sv" \
-    "$ROOT/fpga/arty/graphics/astra_copper_structural_state.sv" \
-    "$ROOT/fpga/soc/astra_async_fifo.sv" \
-    "$ROOT/fpga/arty/graphics/astra_copper_pixel_events.sv" \
-    "$ROOT/fpga/arty/graphics/astra_graphics_control.sv" \
-    "$ROOT/fpga/arty/graphics/astra_render_surface_validator.sv" \
-    "$ROOT/fpga/arty/graphics/astra_render_pixel_writer.sv" \
-    "$ROOT/fpga/arty/graphics/astra_render_blitter.sv" \
-    "$ROOT/fpga/arty/graphics/astra_render_geometry.sv" \
-    "$ROOT/fpga/arty/graphics/astra_render_flood.sv" \
-    "$ROOT/fpga/arty/graphics/astra_render_glyph.sv" \
-    "$ROOT/fpga/arty/graphics/astra_render_command_processor.sv" \
-    "$ROOT/fpga/arty/graphics/astra_graphics_pipeline.sv" \
-    "$ROOT/fpga/arty/graphics/sim/astra_render_axi_memory_model.sv" \
+PIPELINE_SOURCES=(
+    "$ROOT/fpga/arty/graphics/astra_framebuffer_config_validator.sv"
+    "$ROOT/fpga/arty/graphics/astra_tile_config_validator.sv"
+    "$ROOT/fpga/arty/graphics/astra_sprite_scene_store.sv"
+    "$ROOT/fpga/arty/graphics/astra_framebuffer_line_store.sv"
+    "$ROOT/fpga/arty/graphics/astra_framebuffer_line_builder.sv"
+    "$ROOT/fpga/arty/graphics/astra_tile_span_walker.sv"
+    "$ROOT/fpga/arty/graphics/astra_tile_line_store.sv"
+    "$ROOT/fpga/arty/graphics/astra_tile_line_builder.sv"
+    "$ROOT/fpga/arty/graphics/astra_sprite_line_store.sv"
+    "$ROOT/fpga/arty/graphics/astra_sprite_line_builder.sv"
+    "$ROOT/fpga/arty/graphics/astra_line_scheduler.sv"
+    "$ROOT/fpga/arty/graphics/astra_palette_store.sv"
+    "$ROOT/fpga/arty/graphics/astra_premult_blend.sv"
+    "$ROOT/fpga/arty/graphics/astra_pixel_compositor.sv"
+    "$ROOT/fpga/arty/graphics/astra_boot_text_overlay.sv"
+    "$ROOT/fpga/arty/graphics/astra_axi_lite_1to2.sv"
+    "$ROOT/fpga/arty/graphics/astra_copper.sv"
+    "$ROOT/fpga/arty/graphics/astra_copper_control.sv"
+    "$ROOT/fpga/arty/graphics/astra_copper_beam_scheduler.sv"
+    "$ROOT/fpga/arty/graphics/astra_copper_registers.sv"
+    "$ROOT/fpga/arty/graphics/astra_copper_structural_state.sv"
+    "$ROOT/fpga/soc/astra_async_fifo.sv"
+    "$ROOT/fpga/arty/graphics/astra_copper_pixel_events.sv"
+    "$ROOT/fpga/arty/graphics/astra_graphics_control.sv"
+    "$ROOT/fpga/arty/graphics/astra_render_surface_validator.sv"
+    "$ROOT/fpga/arty/graphics/astra_render_pixel_writer.sv"
+    "$ROOT/fpga/arty/graphics/astra_render_blitter.sv"
+    "$ROOT/fpga/arty/graphics/astra_render_geometry.sv"
+    "$ROOT/fpga/arty/graphics/astra_render_flood.sv"
+    "$ROOT/fpga/arty/graphics/astra_render_glyph.sv"
+    "$ROOT/fpga/arty/graphics/astra_render_command_processor.sv"
+    "$ROOT/fpga/arty/graphics/astra_graphics_pipeline.sv"
+    "$ROOT/fpga/arty/graphics/sim/astra_render_axi_memory_model.sv"
     "$ROOT/fpga/arty/graphics/sim/tb_astra_graphics_pipeline.sv"
+)
+
+iverilog -g2012 -Wall -I "$ROOT/fpga/arty/graphics" \
+    -s tb_astra_graphics_pipeline \
+    -o "$BUILD/tb_astra_graphics_pipeline" "${PIPELINE_SOURCES[@]}"
 
 (cd "$ROOT" && vvp "$BUILD/tb_astra_graphics_pipeline")
+
+iverilog -g2012 -Wall -I "$ROOT/fpga/arty/graphics" \
+    -s tb_astra_graphics_pipeline \
+    -Ptb_astra_graphics_pipeline.OUTPUT_WIDTH=1280 \
+    -Ptb_astra_graphics_pipeline.TOTAL_WIDTH=1650 \
+    -o "$BUILD/tb_astra_graphics_pipeline_screen_width" \
+    "${PIPELINE_SOURCES[@]}"
+
+(cd "$ROOT" && vvp "$BUILD/tb_astra_graphics_pipeline_screen_width")
 
 iverilog -g2012 -Wall -Wno-timescale \
     -I "$ROOT/fpga/arty/graphics" \

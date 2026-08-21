@@ -10,6 +10,7 @@ typedef struct ConsoleShellBackend {
     uint32_t columns;
     uint32_t rows;
     AstraTerminalRender render;
+    AstraTerminalScroll scroll;
     void *context;
     int (*present)(void *context, const AstraTerminal *terminal);
     int (*next_key)(void *context, uint32_t *key);

@@ -72,6 +72,10 @@ void astra_draw_list_mono_text(AstraSurfaceView *surface, int32_t x, int32_t y,
                                const char *utf8, uint32_t length,
                                uint16_t pixel_height, uint16_t cell_width,
                                uint16_t color);
+int astra_draw_list_copy(AstraSurfaceView *surface, uint32_t source_x,
+                         uint32_t source_y, uint32_t destination_x,
+                         uint32_t destination_y, uint32_t width,
+                         uint32_t height);
 
 uint32_t astra_shared_surface_create(AstraSharedSurface *surface,
                                      uint16_t width, uint16_t height);

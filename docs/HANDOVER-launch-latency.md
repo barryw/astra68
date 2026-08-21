@@ -11,6 +11,48 @@ is roughly halved. What is left is not software — it is the blitter, §3.
 
 Everything below was measured on `astra-arty`, not estimated.
 
+## 2026-08-20 continuation: the filesystem floor is now systemic
+
+The `fsopen` item and cross-process library work in §7 are implemented at the
+shared boundaries, not in `ls`:
+
+- the image builder writes validated, exact provider records under
+  `LIBS:.providers/`, with the old manifest sweep as compatibility fallback;
+- Axiom syscall 56 attaches an already-resident exact/compatible library
+  identity, sharing read-only pages and privately copying cached initial
+  writable pages;
+- `STOR` v7 reads small provider records inline, without an area bind;
+- `STOR` v8 carries a client's first path operation in `HELLO`, saving one
+  service round trip for every short-lived filesystem client; and
+- the shared Terminal launcher reads every command image through the existing
+  one-request supervisor VFS path before `PROCESS_CREATE`.
+
+Real-board progression for warm `filesystem.library` open was 794 ms on the
+stock path, 149 ms after resident identity attachment, and 61 ms in two
+consecutive v8 samples. Those two no-output `ls -l` listings were 86 and 51 ms,
+down from the prior 174--258 ms range. The common launcher image stage measured
+39 ms warm (92 ms before the fused VFS build). `which status` and `mkdir`
+completed repeatedly through the same code; scheduler and terminal-output
+variance remains large, so their end-to-end times are not used as a filesystem
+microbenchmark.
+
+The runnable protocol check is
+`sw/userspace/vfs/tests/test_vfs_port.c:test_first_operation_shares_the_hello_round_trip`:
+after lazy connect, the first `OPEN` has both a live session and a result after
+one service request. No `ls` instrumentation or command-specific cache remains.
+
+Sections below are the historical pre-fix measurements and failed experiments;
+their ranked `fsopen`/library next steps are superseded by this continuation.
+
+The exact clean candidate was ROM
+`b5fabd384b1b5a8ab82aed8d064b22da0ea32b30a12cc94412a045898b39049a`
+and pre-boot storage image
+`ff7540bebc34bccd7a82a93426e1fd381c1359ea05dd3f56456b00fc673618f3`.
+It passed POST, stage 8, and a final `ls`/`which`/`mkdir`/`rm`/missing-`cat`
+sweep on `astra-arty` with no panic. The board now runs the untouched stock
+`/data/astra/rom/astra_boot.bin` and `/data/astra/storage-terminal.img`, which
+were restarted and independently passed POST and stage 8.
+
 ---
 
 ## 1. The launch, stage by stage

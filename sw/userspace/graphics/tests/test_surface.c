@@ -234,6 +234,43 @@ static void test_mono_draw_list(void)
            command->width == ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH);
 }
 
+static void test_draw_list_copy_is_a_hardware_self_blit(void)
+{
+    uint8_t draw_storage[ASTRA_DRAW_LIST_AREA_BYTES];
+    uint8_t batch_storage[ASTRA_RENDER_BUILDER_BYTES];
+    AstraSurfaceView surface;
+    AstraRenderBuilder builder;
+    const AstraDrawListHeader *header;
+    const AstraDrawListCommand *command;
+    uint32_t destination;
+    const uint8_t *render;
+
+    assert(astra_draw_list_view_init(&surface, draw_storage,
+                                     sizeof(draw_storage), 80u, 40u));
+    assert(!astra_draw_list_copy(&surface, 0u, 1u, 0u, 0u, 81u, 20u));
+    assert(astra_draw_list_copy(&surface, 0u, 10u, 0u, 0u, 80u, 30u));
+    header = (const AstraDrawListHeader *)(const void *)draw_storage;
+    command = (const AstraDrawListCommand *)(const void *)(header + 1);
+    assert(header->command_count == 1u &&
+           command->operation == ASTRA_DRAW_LIST_COPY &&
+           command->foreground == 0u && command->background == 10u &&
+           command->x == 0 && command->y == 0 &&
+           command->width == 80u && command->height == 30u);
+
+    assert(astra_render_builder_init(&builder, batch_storage,
+                                     sizeof(batch_storage), 11u));
+    destination = astra_render_builder_surface(&builder, 80u, 40u);
+    assert(destination != 0u);
+    assert(astra_render_builder_replay(&builder, destination, header));
+    assert(astra_render_builder_finish(&builder) ==
+           ASTRA_RENDER_BUILDER_BYTES);
+    render = batch_storage + ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
+             ASTRA_RENDER_BATCH_ARENA_OFFSET;
+    assert(be32(render + 4u) >> 16 == ASTRA_RENDER_OP_BLIT);
+    assert(be32(render + 32u) == destination);
+    assert(be32(render + 36u) == destination);
+}
+
 static void test_rounded_fill_has_no_overlap(void)
 {
     /* A rounded fill must not cover any pixel twice: its bands used to
@@ -272,6 +309,7 @@ int main(void)
     test_proportional_utf8_text();
     test_hardware_draw_list_batch();
     test_mono_draw_list();
+    test_draw_list_copy_is_a_hardware_self_blit();
     test_rounded_fill_has_no_overlap();
     puts("surface drawing tests passed");
     return 0;

@@ -90,6 +90,9 @@ static WindowTerminal window_terminal;
 static char terminal_line[ASTRA_TERMINAL_COLUMNS_MAX];
 static char bundle_manifest_text[ASTRA_BUNDLE_MANIFEST_MAX + 1u];
 
+static void draw_cursor(WindowTerminal *window, uint32_t row, uint32_t column,
+                        uint16_t color);
+
 static void close_area(AstraArea *area)
 {
     AstraResult ignored = astra_area_close(area);
@@ -326,6 +329,33 @@ static int window_render(void *context, uint32_t row, uint32_t column,
             TERMINAL_FONT_HEIGHT, window->cell_width,
             rgb565(theme.text_primary));
     window_damage(window, x, y, width, TERMINAL_LINE_HEIGHT);
+    window->dirty = 1u;
+    return 1;
+}
+
+static int window_scroll(void *context, uint32_t rows,
+                         uint32_t preserved_rows)
+{
+    WindowTerminal *window = context;
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    uint32_t width = terminal_columns(window) * window->cell_width;
+    uint32_t height = preserved_rows * TERMINAL_LINE_HEIGHT;
+
+    if (preserved_rows == 0u ||
+        (!window->dirty && !graphics_library->draw_list_view_init(
+            &window->surface.view, window->surface.mapping,
+            window->surface.view.byte_size, window->width, window->height)))
+        return 0;
+    if (window->cursor_row != UINT32_MAX)
+        draw_cursor(window, window->cursor_row, window->cursor_column,
+                    rgb565(theme.system_bar));
+    if (!graphics_library->draw_list_copy(
+            &window->surface.view, TERMINAL_MARGIN_X,
+            TERMINAL_MARGIN_Y + rows * TERMINAL_LINE_HEIGHT,
+            TERMINAL_MARGIN_X, TERMINAL_MARGIN_Y, width, height))
+        return 0;
+    window_damage(window, TERMINAL_MARGIN_X, TERMINAL_MARGIN_Y, width,
+                  (rows + preserved_rows) * TERMINAL_LINE_HEIGHT);
     window->dirty = 1u;
     return 1;
 }
@@ -599,6 +629,7 @@ int astra_main(const AstraStartupInfo *startup)
     backend.columns = terminal_columns(&window_terminal);
     backend.rows = terminal_rows(&window_terminal);
     backend.render = window_render;
+    backend.scroll = window_scroll;
     backend.context = &window_terminal;
     backend.present = window_present;
     backend.next_key = window_next_key;
