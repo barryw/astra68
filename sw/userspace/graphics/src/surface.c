@@ -234,6 +234,35 @@ int astra_draw_list_copy(AstraSurfaceView *surface, uint32_t source_x,
     return 1;
 }
 
+int astra_text_box_scroll(AstraTextBox *text_box, int32_t pixels)
+{
+    AstraSurfaceView *surface;
+    uint32_t distance;
+
+    if (text_box == NULL || (surface = text_box->surface) == NULL ||
+        text_box->width == 0u || text_box->height == 0u ||
+        text_box->x > surface->width ||
+        text_box->width > surface->width - text_box->x ||
+        text_box->y > surface->height ||
+        text_box->height > surface->height - text_box->y)
+        return 0;
+    if (pixels == 0)
+        return 1;
+    distance = pixels > 0 ? (uint32_t)pixels :
+        (uint32_t)(-(int64_t)pixels);
+    if (distance >= text_box->height)
+        return 1;
+    if (pixels > 0)
+        return astra_draw_list_copy(
+            surface, text_box->x, text_box->y + distance,
+            text_box->x, text_box->y, text_box->width,
+            text_box->height - distance);
+    return astra_draw_list_copy(
+        surface, text_box->x, text_box->y,
+        text_box->x, text_box->y + distance, text_box->width,
+        text_box->height - distance);
+}
+
 static uint32_t rounded_inset(uint32_t at_y, uint32_t height,
                               uint32_t radius)
 {

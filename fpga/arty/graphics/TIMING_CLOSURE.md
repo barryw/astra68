@@ -5081,3 +5081,99 @@ HDMI source contract, HDMI mode transition, `ASTRA SCREEN OFFSET PASS` over
 was removed and the source returned to the already-routed production HDMI
 implementation. The `+0.055/+0.034/+0.538 ns` production-clock route remains
 the release authority.
+
+## Generic AXI framebuffer copy timing campaign (2026-08-21)
+
+The retained renderer path is a 64-bit, 16-beat overlap-safe AXI memory mover
+behind the existing BLIT command. Transactions are INCR bursts, never cross a
+4 KiB boundary, and complete all accepted beats. Same-format direct copies
+with eight-byte-aligned pitches and matching byte lanes use the mover; every
+other BLIT retains the established per-pixel implementation. This preserves a
+single public command and adds no Terminal-specific RTL.
+
+The exact production-width simulation changed as follows:
+
+| Copy | Previous clocks | Retained clocks | Change |
+|---|---:|---:|---:|
+| 64x16 identity RGB565 | 5,822 | 1,254 | 4.64x faster |
+| 1280x644 overlap RGB565 | 4,401,758 | 824,550 | 5.34x faster |
+
+The AXI memory oracle fails any renderer burst that crosses 4 KiB. The full
+graphics suite passes the exact 1280x644 overlap copy, all 921,600 destination
+and untouched pixels, and `ASTRA SCREEN OFFSET PASS pixels=5120 width=1280
+height=4`.
+
+All production builds used the full HDMI, 48 kHz stereo audio, front-panel,
+and renderer feature set with Vivado 2024.2 on Beast. The implementation
+target remained 200 MHz and the fail-closed release gate rechecked the routed
+design at the actual 187.5 MHz clock.
+
+| Checkpoint | Exact result | Worst evidence | Disposition |
+|---|---|---|---|
+| `production-route` | setup/hold `-1.701/+0.012 ns` | new chunk setup/strobe cone | Rejected; no bitstream |
+| `production-route-rowbytes-registered` | `-0.109/+0.011 ns`; 32,596 LUTs, 39,579 registers, 12,344 slices | existing flood/glyph enables after mover controls were registered | Rejected; no bitstream |
+| `production-route-incremental-qualified` | `-0.716/+0.022 ns` | displaced global reset/build-reset fanout | Rejected; incremental flow |
+| beat-counter planner | OOC 3,578 LUTs, 3,637 registers, 1,252 slices versus 3,473/3,614/1,221 | larger despite identical 824,550-clock behavior | Reverted before integration |
+| `production-route-extra-timing-opt` | placement could not place more than 5% of movable instances | dense 92% slice design | Rejected; no route |
+| `production-route-explore-postroute` | 67,514/67,514 nets, `-0.205/+0.011 ns` | surface validator combined two 32-bit compares and all flags in one cycle | Rejected; no bitstream |
+| `production-route-validator-pipelined` | 67,294/67,294 nets, `+0.070/+0.011 ns` | prior validator path absent from tight-path list | Retained candidate |
+
+The retained timing repair reuses the surface validator's unused eighth state
+to register palette-range and pitch comparisons before combining validation
+flags. It adds one 187.5 MHz setup clock per surface descriptor, does not add a
+module, and leaves block-copy clocks unchanged at 824,550. The focused
+command-processor route uses five fewer LUTs and fifteen fewer slices, while
+the full route improves the comparable release result from `-0.109` to
+`+0.070 ns`.
+
+Exact retained resources are 32,548 LUTs, 39,402 registers, 12,253 slices,
+129.5 BRAM36-equivalent tiles, and 81 DSPs. Source identity is base
+`f9f36db7cadf598e9f071a20012dee7215d3bea8` plus implementation diff SHA-256
+`a9de1584e1c639863eae98b38ba87b4df605ee3108a2a3190aa74cccb6d9dab3`.
+
+| Retained candidate artifact | SHA-256 |
+|---|---|
+| Bitstream | `f3ccce904124714d77b3f936debdad195a29c5f089ffb0c0783c195397369bb4` |
+| XSA | `106742e55da35f47cb60011317fb2af5bbbcee3d17577ab30c23cb6961ee4ad8` |
+| Routed DCP | `e0aa57ce8c681f7d8beef3357adfbe72180f1aa69c773ee8604dca98ed20bcc1` |
+| Timing summary | `44e33debace96ca5ea204a245f37d21be63355d3aa6ff36433f1af6c904fcd3e` |
+| Utilization | `d4b5964e33e828ba51c821ea38231cc06866ba1b8313f99da61c2275021de4c8` |
+| Route status | `1816ba97dc54306b8f8186084c3f2f9e51a65176f50efb458d1c420f7d42d10f` |
+| Methodology | `b28d7c3db535a653599168320be00fce57cc6477c9388fc76deea3757f662e1e` |
+| CDC report | `e703e8a7ba444e09710fe4089190e25f93a4c7e47832f4a1a1930915e887278e` |
+
+### Physical framebuffer and Terminal qualification (2026-08-21)
+
+The exact routed bitstream above is active on the Arty through NUC. The board
+completed the 1280x644 overlapping RGB565 copy in 1,431,536 clocks versus
+11,917,253 clocks on the prior implementation (`8.32x`), or 7.63 ms at the
+187.5 MHz production memory clock. The production-width screen-offset gate,
+framebuffer checks, repeated cold boots, HDMI unplug/replug, and audible
+48 kHz stereo output pass. The HDMI manager reports
+`HDMI 720p60 audio=2ch-LPCM-48k-24bit`.
+
+The retained application-side change uses the existing Terminal event loop to
+defer child-output presentation for no more than 16,666,667 ns. Keyboard input
+and child completion still present immediately, and the stream capacities
+remain 4/2 messages with a four-message pump budget. Beast built a matching
+ROM and storage pair from base `f9f36db7cadf598e9f071a20012dee7215d3bea8`
+plus Supervisor diff SHA-256
+`892f20c8d4463ef1fcf12d1e66f8e15903cd753bf6c1207dfbf07030971e2c9c`.
+The installed ROM is
+`e07e648f347e2a522ce8297f67af213a2281ff4f6cecb504ec1ad19e7670b07e`;
+its clean storage image is
+`b033561aeb0b3728301a6ada6fdf84aef7d32e499a1e848462ed79d197ab2352`.
+
+A controlled physical 10-run A/B of `ls -l COMMANDS:` measured the old pair at
+1,848.384 ms and eight median presentation batches, and the retained pair at
+1,594.976 ms and six batches: `13.7%` lower latency and `25%` fewer
+presentations. A second 10-run retained gate passed at 1,668.367 ms and six
+batches. Twenty-five measured candidate runs completed at stage 8 with the
+runtime processes alive and no new panic. `tools/measure-terminal-text.py`
+now accepts `--max-batches`; the hardware regression uses six. No RTL,
+constraints, route, resources, HDMI, or audio configuration changed during
+the application experiment, so the `+0.070/+0.011 ns` route and resource table
+above remain exact. A physical cold boot of the exact installed application
+pair subsequently passed full POST, initial-image stage 8, and a fresh
+five-run `ls -l COMMANDS:` gate at 1,622.439 ms and six median presentations.
+The physical framebuffer and application release gates are closed.

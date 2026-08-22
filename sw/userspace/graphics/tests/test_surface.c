@@ -271,6 +271,37 @@ static void test_draw_list_copy_is_a_hardware_self_blit(void)
     assert(be32(render + 36u) == destination);
 }
 
+static void test_text_box_scroll_uses_overlap_safe_copy(void)
+{
+    uint8_t storage[ASTRA_DRAW_LIST_AREA_BYTES];
+    AstraSurfaceView surface;
+    AstraTextBox text_box;
+    const AstraDrawListHeader *header;
+    const AstraDrawListCommand *command;
+
+    assert(astra_draw_list_view_init(&surface, storage, sizeof(storage),
+                                     100u, 80u));
+    text_box = (AstraTextBox){&surface, 10u, 12u, 70u, 50u};
+    assert(astra_text_box_scroll(&text_box, 8));
+    header = (const AstraDrawListHeader *)(const void *)storage;
+    command = (const AstraDrawListCommand *)(const void *)(header + 1);
+    assert(header->command_count == 1u &&
+           command->operation == ASTRA_DRAW_LIST_COPY &&
+           command->foreground == 10u && command->background == 20u &&
+           command->x == 10 && command->y == 12 &&
+           command->width == 70u && command->height == 42u);
+
+    assert(astra_draw_list_view_init(&surface, storage, sizeof(storage),
+                                     100u, 80u));
+    assert(astra_text_box_scroll(&text_box, -8));
+    header = (const AstraDrawListHeader *)(const void *)storage;
+    command = (const AstraDrawListCommand *)(const void *)(header + 1);
+    assert(header->command_count == 1u && command->foreground == 10u &&
+           command->background == 12u && command->x == 10 &&
+           command->y == 20 && command->width == 70u &&
+           command->height == 42u);
+}
+
 static void test_rounded_fill_has_no_overlap(void)
 {
     /* A rounded fill must not cover any pixel twice: its bands used to
@@ -310,6 +341,7 @@ int main(void)
     test_hardware_draw_list_batch();
     test_mono_draw_list();
     test_draw_list_copy_is_a_hardware_self_blit();
+    test_text_box_scroll_uses_overlap_safe_copy();
     test_rounded_fill_has_no_overlap();
     puts("surface drawing tests passed");
     return 0;

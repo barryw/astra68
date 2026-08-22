@@ -217,18 +217,21 @@ console_stream_pending(void)
     return stream_ready && astra_stream_source_ready(&source);
 }
 
-void
+uint32_t
 console_stream_pump(void)
 {
+    uint32_t rendered;
+
     if (!stream_ready) {
-        return;
+        return 0u;
     }
-    (void)astra_stream_sink_pump(&sink, CONSOLE_STREAM_PUMP_BUDGET);
+    rendered = astra_stream_sink_pump(&sink, CONSOLE_STREAM_PUMP_BUDGET);
     if (redirect_sink.render != NULL) {
         (void)astra_stream_sink_pump(&redirect_sink,
                                      CONSOLE_STREAM_PUMP_BUDGET);
     }
     (void)astra_stream_source_pump(&source, CONSOLE_STREAM_PUMP_BUDGET);
+    return rendered;
 }
 
 /*

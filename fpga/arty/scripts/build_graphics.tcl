@@ -544,6 +544,7 @@ add_files -norecurse [list \
     [file join $graphics_dir astra_render_protocol.vh] \
     [file join $graphics_dir astra_render_surface_validator.sv] \
     [file join $graphics_dir astra_render_pixel_writer.sv] \
+    [file join $graphics_dir astra_render_copy_burst.sv] \
     [file join $graphics_dir astra_render_blitter.sv] \
     [file join $graphics_dir astra_render_geometry.sv] \
     [file join $graphics_dir astra_render_flood.sv] \

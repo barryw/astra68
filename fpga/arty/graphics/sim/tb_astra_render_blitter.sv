@@ -81,6 +81,22 @@ module tb_astra_render_blitter;
     wire read_rvalid;
     wire read_rready;
 
+    wire copy_write_active;
+    wire [5:0] copy_awid;
+    wire [31:0] copy_awaddr;
+    wire [7:0] copy_awlen;
+    wire [2:0] copy_awsize;
+    wire [1:0] copy_awburst;
+    wire [3:0] copy_awcache;
+    wire [2:0] copy_awprot;
+    wire [3:0] copy_awqos;
+    wire copy_awvalid;
+    wire [63:0] copy_wdata;
+    wire [7:0] copy_wstrb;
+    wire copy_wlast;
+    wire copy_wvalid;
+    wire copy_bready;
+
     wire [5:0] write_awid;
     wire [31:0] write_awaddr;
     wire [7:0] write_awlen;
@@ -108,7 +124,10 @@ module tb_astra_render_blitter;
     wire [31:0] read_transactions;
     wire [31:0] write_transactions;
 
-    astra_render_blitter blitter_i (
+    astra_render_blitter #(
+        .AXI_ID(6'd1),
+        .WRITE_ID(6'd6)
+    ) blitter_i (
         .clk(clk), .reset(reset), .start(start), .abort(abort),
         .is_fill(opcode == `ASTRA_RENDER_OP_FILL),
         .is_blit(opcode == `ASTRA_RENDER_OP_BLIT), .arena_base(32'd0),
@@ -155,7 +174,20 @@ module tb_astra_render_blitter;
         .m_axi_arvalid(read_arvalid), .m_axi_arready(read_arready),
         .m_axi_rid(read_rid), .m_axi_rdata(read_rdata),
         .m_axi_rresp(read_rresp), .m_axi_rlast(read_rlast),
-        .m_axi_rvalid(read_rvalid), .m_axi_rready(read_rready)
+        .m_axi_rvalid(read_rvalid), .m_axi_rready(read_rready),
+        .copy_write_active(copy_write_active),
+        .m_axi_awid(copy_awid), .m_axi_awaddr(copy_awaddr),
+        .m_axi_awlen(copy_awlen), .m_axi_awsize(copy_awsize),
+        .m_axi_awburst(copy_awburst), .m_axi_awcache(copy_awcache),
+        .m_axi_awprot(copy_awprot), .m_axi_awqos(copy_awqos),
+        .m_axi_awvalid(copy_awvalid),
+        .m_axi_awready(copy_write_active && write_awready),
+        .m_axi_wdata(copy_wdata), .m_axi_wstrb(copy_wstrb),
+        .m_axi_wlast(copy_wlast), .m_axi_wvalid(copy_wvalid),
+        .m_axi_wready(copy_write_active && write_wready),
+        .m_axi_bid(write_bid), .m_axi_bresp(write_bresp),
+        .m_axi_bvalid(copy_write_active && write_bvalid),
+        .m_axi_bready(copy_bready)
     );
 
     astra_render_pixel_writer writer_i (
@@ -173,11 +205,14 @@ module tb_astra_render_blitter;
         .m_axi_awsize(write_awsize), .m_axi_awburst(write_awburst),
         .m_axi_awcache(write_awcache), .m_axi_awprot(write_awprot),
         .m_axi_awqos(write_awqos), .m_axi_awvalid(write_awvalid),
-        .m_axi_awready(write_awready), .m_axi_wdata(write_wdata),
+        .m_axi_awready(!copy_write_active && write_awready),
+        .m_axi_wdata(write_wdata),
         .m_axi_wstrb(write_wstrb), .m_axi_wlast(write_wlast),
-        .m_axi_wvalid(write_wvalid), .m_axi_wready(write_wready),
+        .m_axi_wvalid(write_wvalid),
+        .m_axi_wready(!copy_write_active && write_wready),
         .m_axi_bid(write_bid), .m_axi_bresp(write_bresp),
-        .m_axi_bvalid(write_bvalid), .m_axi_bready(write_bready)
+        .m_axi_bvalid(!copy_write_active && write_bvalid),
+        .m_axi_bready(write_bready)
     );
 
     astra_render_axi_memory_model #(
@@ -193,15 +228,21 @@ module tb_astra_render_blitter;
         .s_axi_arready(read_arready), .s_axi_rid(read_rid),
         .s_axi_rdata(read_rdata), .s_axi_rresp(read_rresp),
         .s_axi_rlast(read_rlast), .s_axi_rvalid(read_rvalid),
-        .s_axi_rready(read_rready), .s_axi_awid(write_awid),
-        .s_axi_awaddr(write_awaddr), .s_axi_awlen(write_awlen),
-        .s_axi_awsize(write_awsize), .s_axi_awburst(write_awburst),
-        .s_axi_awvalid(write_awvalid), .s_axi_awready(write_awready),
-        .s_axi_wdata(write_wdata), .s_axi_wstrb(write_wstrb),
-        .s_axi_wlast(write_wlast), .s_axi_wvalid(write_wvalid),
+        .s_axi_rready(read_rready),
+        .s_axi_awid(copy_write_active ? copy_awid : write_awid),
+        .s_axi_awaddr(copy_write_active ? copy_awaddr : write_awaddr),
+        .s_axi_awlen(copy_write_active ? copy_awlen : write_awlen),
+        .s_axi_awsize(copy_write_active ? copy_awsize : write_awsize),
+        .s_axi_awburst(copy_write_active ? copy_awburst : write_awburst),
+        .s_axi_awvalid(copy_write_active ? copy_awvalid : write_awvalid),
+        .s_axi_awready(write_awready),
+        .s_axi_wdata(copy_write_active ? copy_wdata : write_wdata),
+        .s_axi_wstrb(copy_write_active ? copy_wstrb : write_wstrb),
+        .s_axi_wlast(copy_write_active ? copy_wlast : write_wlast),
+        .s_axi_wvalid(copy_write_active ? copy_wvalid : write_wvalid),
         .s_axi_wready(write_wready), .s_axi_bid(write_bid),
         .s_axi_bresp(write_bresp), .s_axi_bvalid(write_bvalid),
-        .s_axi_bready(write_bready),
+        .s_axi_bready(copy_write_active ? copy_bready : write_bready),
         .read_transactions(read_transactions),
         .write_transactions(write_transactions)
     );
@@ -420,17 +461,61 @@ module tb_astra_render_blitter;
             for (column = 0; column < 128; column = column + 1)
                 memory_i.write_byte(32'h1000 + row * 128 + column,
                                     row + column);
+        before_reads = read_transactions;
+        before_writes = write_transactions;
         launch();
         if (status != `ASTRA_RENDER_STATUS_OK ||
-            completed_pixels != 32'd1024 || last_elapsed > 9000)
+            completed_pixels != 32'd1024 || last_elapsed > 1500 ||
+            read_transactions - before_reads != 16 ||
+            write_transactions - before_writes != 16)
             $fatal(1,
-                   "identity RGB565 status=%0d pixels=%0d cycles=%0d/9000",
-                   status, completed_pixels, last_elapsed);
-        $display("identity RGB565 cycles=%0d/9000", last_elapsed);
+                   "identity RGB565 status=%0d pixels=%0d cycles=%0d/1500 reads=%0d writes=%0d",
+                   status, completed_pixels, last_elapsed,
+                   read_transactions - before_reads,
+                   write_transactions - before_writes);
+        $display("identity RGB565 cycles=%0d/1500 bursts=%0d",
+                 last_elapsed, read_transactions - before_reads);
         for (row = 0; row < 16; row = row + 1)
             for (column = 0; column < 128; column = column + 1)
                 expect_byte(32'h4000 + row * 128 + column,
                             row + column);
+
+        // An unaligned row that straddles a 4KiB boundary must preserve the
+        // neighboring bytes and split both AXI bursts at that boundary.
+        memory_i.clear_memory(8'hee);
+        set_index_surface(32'h0ffb, 32'h4ffb, 16'd32, 16'd2, 32'd4096);
+        source_x = 16'sd0;
+        source_y = 16'sd0;
+        destination_x = 16'sd0;
+        destination_y = 16'sd0;
+        source_width = 16'd32;
+        source_height = 16'd2;
+        destination_width = 16'd32;
+        destination_height = 16'd2;
+        clip_right = 16'sd32;
+        clip_bottom = 16'sd2;
+        for (row = 0; row < 2; row = row + 1)
+            for (column = 0; column < 32; column = column + 1)
+                memory_i.write_byte(32'h0ffb + row * 4096 + column,
+                                    row * 64 + column);
+        before_reads = read_transactions;
+        before_writes = write_transactions;
+        launch();
+        if (status != `ASTRA_RENDER_STATUS_OK ||
+            completed_pixels != 32'd64 ||
+            read_transactions - before_reads != 4 ||
+            write_transactions - before_writes != 4)
+            $fatal(1, "4KiB split status=%0d pixels=%0d reads=%0d writes=%0d",
+                   status, completed_pixels,
+                   read_transactions - before_reads,
+                   write_transactions - before_writes);
+        for (row = 0; row < 2; row = row + 1) begin
+            expect_byte(32'h4ffa + row * 4096, 8'hee);
+            for (column = 0; column < 32; column = column + 1)
+                expect_byte(32'h4ffb + row * 4096 + column,
+                            row * 64 + column);
+            expect_byte(32'h501b + row * 4096, 8'hee);
+        end
 
         // Exact desktop presentation from the captured broken batch: copy a
         // separate 1280x644 RGB565 surface into scanout at y=34.  The pattern
@@ -440,6 +525,10 @@ module tb_astra_render_blitter;
         destination_data_offset = 32'h200000;
         source_pitch = 32'd2560;
         destination_pitch = 32'd2560;
+        source_format = `ASTRA_RENDER_FORMAT_RGB565;
+        destination_format = `ASTRA_RENDER_FORMAT_RGB565;
+        source_bpp = 3'd2;
+        destination_bpp = 3'd2;
         source_surface_width = 16'd1280;
         source_surface_height = 16'd644;
         destination_surface_width = 16'd1280;
@@ -460,12 +549,20 @@ module tb_astra_render_blitter;
                 memory_i.write_byte(32'h10001 + row * 2560 + column * 2,
                                     screen_pixel(column, row));
             end
+        before_reads = read_transactions;
+        before_writes = write_transactions;
         launch();
         if (status != `ASTRA_RENDER_STATUS_OK ||
-            completed_pixels != 32'd824320)
-            $fatal(1, "desktop RGB565 status=%0d pixels=%0d cycles=%0d",
-                   status, completed_pixels, last_elapsed);
-        $display("desktop RGB565 cycles=%0d", last_elapsed);
+            completed_pixels != 32'd824320 || last_elapsed > 900000 ||
+            read_transactions - before_reads != 12880 ||
+            write_transactions - before_writes != 12880)
+            $fatal(1,
+                   "desktop RGB565 status=%0d pixels=%0d cycles=%0d/900000 reads=%0d writes=%0d",
+                   status, completed_pixels, last_elapsed,
+                   read_transactions - before_reads,
+                   write_transactions - before_writes);
+        $display("desktop RGB565 cycles=%0d/900000 bursts=%0d",
+                 last_elapsed, read_transactions - before_reads);
         for (row = 0; row < 720; row = row + 1)
             for (column = 0; column < 1280; column = column + 1) begin
                 expect_byte(32'h200000 + row * 2560 + column * 2,

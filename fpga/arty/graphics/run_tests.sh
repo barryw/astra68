@@ -252,6 +252,7 @@ PIPELINE_SOURCES=(
     "$ROOT/fpga/arty/graphics/astra_graphics_control.sv"
     "$ROOT/fpga/arty/graphics/astra_render_surface_validator.sv"
     "$ROOT/fpga/arty/graphics/astra_render_pixel_writer.sv"
+    "$ROOT/fpga/arty/graphics/astra_render_copy_burst.sv"
     "$ROOT/fpga/arty/graphics/astra_render_blitter.sv"
     "$ROOT/fpga/arty/graphics/astra_render_geometry.sv"
     "$ROOT/fpga/arty/graphics/astra_render_flood.sv"
@@ -300,6 +301,7 @@ iverilog -g2012 -Wall -Wno-timescale \
     -s tb_astra_render_blitter \
     -o "$BUILD/tb_astra_render_blitter" \
     "$ROOT/fpga/arty/graphics/astra_render_pixel_writer.sv" \
+    "$ROOT/fpga/arty/graphics/astra_render_copy_burst.sv" \
     "$ROOT/fpga/arty/graphics/astra_render_blitter.sv" \
     "$ROOT/fpga/arty/graphics/sim/astra_render_axi_memory_model.sv" \
     "$ROOT/fpga/arty/graphics/sim/tb_astra_render_blitter.sv"
@@ -343,6 +345,7 @@ iverilog -g2012 -Wall -Wno-timescale \
     -o "$BUILD/tb_astra_render_command_processor" \
     "$ROOT/fpga/arty/graphics/astra_render_surface_validator.sv" \
     "$ROOT/fpga/arty/graphics/astra_render_pixel_writer.sv" \
+    "$ROOT/fpga/arty/graphics/astra_render_copy_burst.sv" \
     "$ROOT/fpga/arty/graphics/astra_render_blitter.sv" \
     "$ROOT/fpga/arty/graphics/astra_render_geometry.sv" \
     "$ROOT/fpga/arty/graphics/astra_render_flood.sv" \

@@ -49,6 +49,48 @@ physical board without panic. The board was then restored to the untouched
 stock `astra_boot.bin` and `storage-terminal.img`; that pair also passed POST
 and stage 8.
 
+## Generic hardware framebuffer copy and text presentation (2026-08-21)
+
+The renderer now has one generic overlap-safe 64-bit AXI block-copy path. It
+uses legal AXI INCR bursts of at most 16 beats, splits every transaction at a
+4 KiB boundary, and handles both copy directions. Unsupported formats and
+alignments retain the established pixel blitter. The API is not Terminal
+specific: Graphics Kit exposes `AstraTextBox` and
+`astra_text_box_scroll()`, and Terminal is its first caller.
+
+The exact 1280x644 RGB565 desktop copy improved from 4,401,758 to 824,550
+renderer clocks (`5.34x`); the smaller identity copy improved from 5,822 to
+1,254 clocks (`4.64x`). The complete graphics regression passes, including
+the coordinate-unique 1,280-pixel screen-offset gate. A clean Vivado 2024.2
+production route on Beast connects all 67,294 nets and passes the actual
+187.5 MHz setup/hold gate at `+0.070/+0.011 ns`. It uses 32,548 LUTs, 39,402
+registers, 12,253 slices, 129.5 BRAM tiles, and 81 DSPs.
+
+The exact production bitstream is active on the Arty. Its 1280x644 overlapping
+copy improved from 11,917,253 to 1,431,536 clocks (`8.32x`), or 7.63 ms at
+187.5 MHz. Repeated cold boots, HDMI unplug/replug, the production-width offset
+gate, framebuffer checks, and 48 kHz stereo audio all pass; the HDMI manager
+reports `HDMI 720p60 audio=2ch-LPCM-48k-24bit`.
+
+Terminal now coalesces child-output presentation for at most one 60 Hz frame.
+It does not enlarge the stream queues, delay keyboard repaint, or change the
+generic Graphics Kit/renderer path. On the physical board, a controlled
+10-run A/B of `ls -l COMMANDS:` changed the median from 1,848.384 ms and eight
+presentation batches to 1,594.976 ms and six batches (`13.7%` faster, `25%`
+fewer presentations). A second 10-run candidate gate passed at 1,668.367 ms
+and six batches. Twenty-five measured candidate runs completed without a new
+panic. The measurement tool can now fail on a caller-selected maximum median
+batch count; the retained hardware invocation uses six.
+
+The installed matching pair is ROM SHA-256
+`e07e648f347e2a522ce8297f67af213a2281ff4f6cecb504ec1ad19e7670b07e`
+and pre-boot storage SHA-256
+`b033561aeb0b3728301a6ada6fdf84aef7d32e499a1e848462ed79d197ab2352`.
+A physical cold boot of this exact application pair passed full POST, stage 8,
+and a fresh five-run `ls -l COMMANDS:` gate at 1,622.439 ms and six median
+presentations. The framebuffer-copy and Terminal-presentation release gates
+are closed.
+
 ## Shared retained-text control and rejected blitter stream (2026-08-20)
 
 Graphics Kit draw lists now include a validated same-surface rectangular copy.

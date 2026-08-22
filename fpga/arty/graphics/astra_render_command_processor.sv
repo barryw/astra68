@@ -98,6 +98,8 @@ module astra_render_command_processor #(
         {{(AXI_ID_WIDTH-2){1'b0}}, 2'b10};
     localparam [AXI_ID_WIDTH-1:0] COMPLETION_WRITE_ID =
         {{(AXI_ID_WIDTH-2){1'b0}}, 2'b11};
+    localparam [AXI_ID_WIDTH-1:0] BLITTER_WRITE_ID =
+        {{(AXI_ID_WIDTH-3){1'b0}}, 3'b110};
     localparam [31:0] ARENA_BYTES = ARENA_LIMIT - ARENA_BASE;
     localparam [31:0] SUBMISSION_RING_BYTES =
         `ASTRA_RENDER_COMMAND_BYTES * `ASTRA_RENDER_RING_ENTRIES;
@@ -458,6 +460,26 @@ reg [1:0] completion_beat_index;
     wire blitter_rlast;
     wire blitter_rvalid;
     wire blitter_rready;
+    wire blitter_copy_write_active;
+    wire [AXI_ID_WIDTH-1:0] blitter_awid;
+    wire [31:0] blitter_awaddr;
+    wire [7:0] blitter_awlen;
+    wire [2:0] blitter_awsize;
+    wire [1:0] blitter_awburst;
+    wire [3:0] blitter_awcache;
+    wire [2:0] blitter_awprot;
+    wire [3:0] blitter_awqos;
+    wire blitter_awvalid;
+    wire blitter_awready;
+    wire [63:0] blitter_wdata;
+    wire [7:0] blitter_wstrb;
+    wire blitter_wlast;
+    wire blitter_wvalid;
+    wire blitter_wready;
+    wire [AXI_ID_WIDTH-1:0] blitter_bid;
+    wire [1:0] blitter_bresp;
+    wire blitter_bvalid;
+    wire blitter_bready;
 
     reg geometry_start;
     reg geometry_abort;
@@ -534,7 +556,8 @@ reg [1:0] completion_beat_index;
 
     astra_render_blitter #(
         .AXI_ID_WIDTH(AXI_ID_WIDTH),
-        .AXI_ID(BLITTER_READ_ID)
+        .AXI_ID(BLITTER_READ_ID),
+        .WRITE_ID(BLITTER_WRITE_ID)
     ) blitter_i (
         .clk(clk),
         .reset(reset || local_engine_reset),
@@ -609,7 +632,27 @@ reg [1:0] completion_beat_index;
         .m_axi_rresp(blitter_rresp),
         .m_axi_rlast(blitter_rlast),
         .m_axi_rvalid(blitter_rvalid),
-        .m_axi_rready(blitter_rready)
+        .m_axi_rready(blitter_rready),
+        .copy_write_active(blitter_copy_write_active),
+        .m_axi_awid(blitter_awid),
+        .m_axi_awaddr(blitter_awaddr),
+        .m_axi_awlen(blitter_awlen),
+        .m_axi_awsize(blitter_awsize),
+        .m_axi_awburst(blitter_awburst),
+        .m_axi_awcache(blitter_awcache),
+        .m_axi_awprot(blitter_awprot),
+        .m_axi_awqos(blitter_awqos),
+        .m_axi_awvalid(blitter_awvalid),
+        .m_axi_awready(blitter_awready),
+        .m_axi_wdata(blitter_wdata),
+        .m_axi_wstrb(blitter_wstrb),
+        .m_axi_wlast(blitter_wlast),
+        .m_axi_wvalid(blitter_wvalid),
+        .m_axi_wready(blitter_wready),
+        .m_axi_bid(blitter_bid),
+        .m_axi_bresp(blitter_bresp),
+        .m_axi_bvalid(blitter_bvalid),
+        .m_axi_bready(blitter_bready)
     );
 
     astra_render_geometry geometry_i (
@@ -962,33 +1005,41 @@ reg [1:0] completion_beat_index;
     assign m_axi_rready = command_dispatched_q ?
         engine_response_ready : manager_rready;
 
+    wire write_owner_blitter = blitter_copy_write_active;
     wire write_owner_pixels = writer_busy;
-assign m_axi_awid = write_owner_pixels ? pixel_awid :
-                         COMPLETION_WRITE_ID;
-assign m_axi_awaddr = write_owner_pixels ? pixel_awaddr :
-                           completion_write_address_q;
-    assign m_axi_awlen = write_owner_pixels ? pixel_awlen : 8'd3;
+    assign m_axi_awid = write_owner_blitter ? blitter_awid :
+        write_owner_pixels ? pixel_awid : COMPLETION_WRITE_ID;
+    assign m_axi_awaddr = write_owner_blitter ? blitter_awaddr :
+        write_owner_pixels ? pixel_awaddr : completion_write_address_q;
+    assign m_axi_awlen = write_owner_blitter ? blitter_awlen :
+        write_owner_pixels ? pixel_awlen : 8'd3;
     assign m_axi_awsize = 3'b011;
     assign m_axi_awburst = 2'b01;
     assign m_axi_awcache = 4'b0011;
     assign m_axi_awprot = 3'b000;
     assign m_axi_awqos = 4'b0000;
-    assign m_axi_awvalid = write_owner_pixels ? pixel_awvalid :
-                            completion_awvalid;
+    assign m_axi_awvalid = write_owner_blitter ? blitter_awvalid :
+        write_owner_pixels ? pixel_awvalid : completion_awvalid;
+    assign blitter_awready = write_owner_blitter && m_axi_awready;
     assign pixel_awready = write_owner_pixels && m_axi_awready;
-    assign m_axi_wdata = write_owner_pixels ? pixel_wdata :
-                          completion_wdata_q;
-    assign m_axi_wstrb = write_owner_pixels ? pixel_wstrb : 8'hff;
-    assign m_axi_wlast = write_owner_pixels ? pixel_wlast :
-                          completion_beat_index == 2'd3;
-    assign m_axi_wvalid = write_owner_pixels ? pixel_wvalid :
-                           completion_wvalid;
+    assign m_axi_wdata = write_owner_blitter ? blitter_wdata :
+        write_owner_pixels ? pixel_wdata : completion_wdata_q;
+    assign m_axi_wstrb = write_owner_blitter ? blitter_wstrb :
+        write_owner_pixels ? pixel_wstrb : 8'hff;
+    assign m_axi_wlast = write_owner_blitter ? blitter_wlast :
+        write_owner_pixels ? pixel_wlast : completion_beat_index == 2'd3;
+    assign m_axi_wvalid = write_owner_blitter ? blitter_wvalid :
+        write_owner_pixels ? pixel_wvalid : completion_wvalid;
+    assign blitter_wready = write_owner_blitter && m_axi_wready;
     assign pixel_wready = write_owner_pixels && m_axi_wready;
+    assign blitter_bid = m_axi_bid;
+    assign blitter_bresp = m_axi_bresp;
+    assign blitter_bvalid = write_owner_blitter && m_axi_bvalid;
     assign pixel_bid = m_axi_bid;
     assign pixel_bresp = m_axi_bresp;
     assign pixel_bvalid = write_owner_pixels && m_axi_bvalid;
-    assign m_axi_bready = write_owner_pixels ? pixel_bready :
-                          state == ST_COMPLETION_B;
+    assign m_axi_bready = write_owner_blitter ? blitter_bready :
+        write_owner_pixels ? pixel_bready : state == ST_COMPLETION_B;
 
     integer word_index;
     always @(posedge clk) begin

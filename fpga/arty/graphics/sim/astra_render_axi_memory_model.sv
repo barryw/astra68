@@ -179,6 +179,10 @@ module astra_render_axi_memory_model #(
                     BASE_ADDRESS + MEMORY_BYTES)
                     $fatal(1, "renderer AXI read outside memory: %08x",
                            s_axi_araddr);
+                if ({1'b0, s_axi_araddr[11:0]} +
+                    ({5'd0, s_axi_arlen} + 13'd1) * 13'd8 > 13'd4096)
+                    $fatal(1, "renderer AXI read crossed 4KiB: %08x len=%0d",
+                           s_axi_araddr, s_axi_arlen);
                 read_active <= 1'b1;
                 read_address <= s_axi_araddr;
                 read_beats_remaining <= {1'b0, s_axi_arlen} + 9'd1;
@@ -213,6 +217,10 @@ module astra_render_axi_memory_model #(
                     BASE_ADDRESS + MEMORY_BYTES)
                     $fatal(1, "renderer AXI write outside memory: %08x",
                            s_axi_awaddr);
+                if ({1'b0, s_axi_awaddr[11:0]} +
+                    ({5'd0, s_axi_awlen} + 13'd1) * 13'd8 > 13'd4096)
+                    $fatal(1, "renderer AXI write crossed 4KiB: %08x len=%0d",
+                           s_axi_awaddr, s_axi_awlen);
                 aw_address_fifo[aw_write_pointer] <= s_axi_awaddr;
                 aw_beats_fifo[aw_write_pointer] <=
                     {1'b0, s_axi_awlen} + 9'd1;

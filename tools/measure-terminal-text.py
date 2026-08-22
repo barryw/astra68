@@ -117,22 +117,26 @@ def run(qmp, command, quiet_seconds):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", nargs="?", default="help")
+    parser.add_argument("command", nargs="*", default=["help"])
     parser.add_argument("--qmp", default="/data/astra/run/qmp.sock")
     parser.add_argument("--runs", type=int, default=5)
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--quiet", type=float, default=0.75)
+    parser.add_argument("--max-batches", type=float)
     arguments = parser.parse_args()
+    command = " ".join(arguments.command)
     qmp = Qmp(arguments.qmp)
     for _ in range(arguments.warmups):
-        run(qmp, arguments.command, arguments.quiet)
+        run(qmp, command, arguments.quiet)
     samples = []
     for index in range(arguments.runs):
-        elapsed, counters = run(qmp, arguments.command, arguments.quiet)
+        elapsed, counters = run(qmp, command, arguments.quiet)
         sample = {"run": index + 1, "milliseconds": round(elapsed * 1000, 3),
                   **counters}
         samples.append(sample)
         print(json.dumps(sample, sort_keys=True), flush=True)
+    batches_median = statistics.median(
+        sample["astra-display-render-batches"] for sample in samples)
     print(json.dumps({
         "runs": len(samples),
         "milliseconds_median": round(statistics.median(
@@ -141,9 +145,12 @@ def main():
             sample["astra-display-glyph-commands"] for sample in samples),
         "commands_median": statistics.median(
             sample["astra-display-render-commands"] for sample in samples),
-        "batches_median": statistics.median(
-            sample["astra-display-render-batches"] for sample in samples),
+        "batches_median": batches_median,
     }, sort_keys=True))
+    if arguments.max_batches is not None and \
+            batches_median > arguments.max_batches:
+        raise SystemExit("median render batches %.1f exceeds %.1f" %
+                         (batches_median, arguments.max_batches))
 
 
 if __name__ == "__main__":

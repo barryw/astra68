@@ -39,6 +39,7 @@
 /* A path the protocol will refuse to carry is not worth building. */
 #define SHELL_PATH_MAX ASTRA_VFS_PATH_MAX
 #define CONSOLE_INPUT_POLL_NS 10000000ull
+#define CONSOLE_PRESENT_NS 16666667ull
 
 /* Commands larger than this belong in application bundles. */
 #define SHELL_LOAD_MAX (64u * 1024u)
@@ -69,6 +70,7 @@ typedef struct ConsoleShell {
      * keyboard, and whoever is in the foreground gets it.
      */
     uint32_t child;
+    uint64_t present_deadline;
     int running;
 } ConsoleShell;
 
@@ -1208,6 +1210,7 @@ static void feed_key(uint32_t code)
 static int pump_once(void)
 {
     uint32_t key = 0u;
+    uint32_t rendered;
     int input_result;
     int had_key = 0;
 
@@ -1217,7 +1220,7 @@ static int pump_once(void)
      * call is the whole reason a wait for a child can be a wait at all.
      */
     supervisor_loader_pump_event_control();
-    console_stream_pump();
+    rendered = console_stream_pump();
     /*
      * A machine with no keyboard still has a screen, and a child still writes
      * to it. This used to return here, which meant the flush at the bottom --
@@ -1244,9 +1247,20 @@ static int pump_once(void)
      * same as "a key arrived": a child's output reaches the model through the
      * sink and nobody typed anything at all.
      */
-    if (!flush_terminal()) {
-        (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
-        return 0;
+    {
+        uint64_t now = astra_clock_monotonic();
+
+        if (rendered != 0u && shell.child != 0u &&
+            shell.present_deadline == 0u)
+            shell.present_deadline = now + CONSOLE_PRESENT_NS;
+        if (shell.present_deadline == 0u || shell.child == 0u || had_key ||
+            now >= shell.present_deadline) {
+            if (!flush_terminal()) {
+                (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
+                return 0;
+            }
+            shell.present_deadline = 0u;
+        }
     }
     if (!had_key) {
         uint32_t waits[4];
@@ -1274,6 +1288,9 @@ static int pump_once(void)
                 (shell.backend.wait_handle != 0u ?
                      ASTRA_DEADLINE_FOREVER :
                      astra_clock_monotonic() + CONSOLE_INPUT_POLL_NS);
+            if (shell.present_deadline != 0u &&
+                shell.present_deadline < deadline)
+                deadline = shell.present_deadline;
             uint32_t wait_status = astra_wait_multiple(
                 waits, wait_count, deadline, NULL, NULL);
 

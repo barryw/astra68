@@ -13,6 +13,14 @@ typedef struct AstraSurfaceView {
     uint16_t reserved;
 } AstraSurfaceView;
 
+typedef struct AstraTextBox {
+    AstraSurfaceView *surface;
+    uint32_t x;
+    uint32_t y;
+    uint32_t width;
+    uint32_t height;
+} AstraTextBox;
+
 enum {
     ASTRA_SURFACE_VIEW_RGB565 = 1u,
     ASTRA_SURFACE_VIEW_DRAW_LIST = 2u,
@@ -76,6 +84,8 @@ int astra_draw_list_copy(AstraSurfaceView *surface, uint32_t source_x,
                          uint32_t source_y, uint32_t destination_x,
                          uint32_t destination_y, uint32_t width,
                          uint32_t height);
+/* Positive pixels move retained content up; negative pixels move it down. */
+int astra_text_box_scroll(AstraTextBox *text_box, int32_t pixels);
 
 uint32_t astra_shared_surface_create(AstraSharedSurface *surface,
                                      uint16_t width, uint16_t height);

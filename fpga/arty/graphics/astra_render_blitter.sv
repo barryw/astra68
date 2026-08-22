@@ -10,7 +10,8 @@
 
 module astra_render_blitter #(
     parameter integer AXI_ID_WIDTH = 6,
-    parameter [AXI_ID_WIDTH-1:0] AXI_ID = {AXI_ID_WIDTH{1'b0}}
+    parameter [AXI_ID_WIDTH-1:0] AXI_ID = {AXI_ID_WIDTH{1'b0}},
+    parameter [AXI_ID_WIDTH-1:0] WRITE_ID = {AXI_ID_WIDTH{1'b0}}
 ) (
     input  wire                         clk,
     input  wire                         reset,
@@ -90,7 +91,28 @@ module astra_render_blitter #(
     input  wire [1:0]                   m_axi_rresp,
     input  wire                         m_axi_rlast,
     input  wire                         m_axi_rvalid,
-    output wire                         m_axi_rready
+    output wire                         m_axi_rready,
+
+    output wire                         copy_write_active,
+    output wire [AXI_ID_WIDTH-1:0]      m_axi_awid,
+    output wire [31:0]                  m_axi_awaddr,
+    output wire [7:0]                   m_axi_awlen,
+    output wire [2:0]                   m_axi_awsize,
+    output wire [1:0]                   m_axi_awburst,
+    output wire [3:0]                   m_axi_awcache,
+    output wire [2:0]                   m_axi_awprot,
+    output wire [3:0]                   m_axi_awqos,
+    output wire                         m_axi_awvalid,
+    input  wire                         m_axi_awready,
+    output wire [63:0]                  m_axi_wdata,
+    output wire [7:0]                   m_axi_wstrb,
+    output wire                         m_axi_wlast,
+    output wire                         m_axi_wvalid,
+    input  wire                         m_axi_wready,
+    input  wire [AXI_ID_WIDTH-1:0]      m_axi_bid,
+    input  wire [1:0]                   m_axi_bresp,
+    input  wire                         m_axi_bvalid,
+    output wire                         m_axi_bready
 );
     localparam [5:0] ST_IDLE = 6'd0;
     localparam [5:0] ST_PLAN = 6'd1;
@@ -175,6 +197,7 @@ module astra_render_blitter #(
     localparam [6:0] ST_NEXT_SOURCE_OFFSET = 7'd80;
     localparam [6:0] ST_SOURCE_ADDRESS_COMMIT = 7'd81;
     localparam [6:0] ST_BLEND_DIVIDE_FINISH = 7'd82;
+    localparam [6:0] ST_FAST_WAIT = 7'd83;
 
     function automatic signed [17:0] signed_max18(
         input signed [17:0] left,
@@ -308,6 +331,7 @@ module astra_render_blitter #(
     reg is_fill_q;
     reg is_blit_q;
     reg direct_copy_q;
+    reg fast_copy_q;
     reg same_surface_q;
     reg [31:0] arena_base_q;
     reg signed [15:0] clip_left_q;
@@ -517,6 +541,25 @@ module astra_render_blitter #(
     (* use_dsp = "yes" *) reg [15:0] blend_product_q;
     reg [16:0] blend_divide_adjusted_q;
     (* keep = "true", max_fanout = 1 *) reg [7:0] blend_divided_q;
+    reg fast_copy_start;
+    wire fast_copy_busy;
+    wire fast_copy_done;
+    wire fast_copy_aborted;
+    wire fast_copy_read_error;
+    wire fast_copy_write_error;
+    wire [31:0] fast_copy_fault_detail;
+    wire [31:0] fast_copy_bytes;
+    wire [AXI_ID_WIDTH-1:0] fast_arid;
+    wire [31:0] fast_araddr;
+    wire [7:0] fast_arlen;
+    wire [2:0] fast_arsize;
+    wire [1:0] fast_arburst;
+    wire [3:0] fast_arcache;
+    wire [2:0] fast_arprot;
+    wire [3:0] fast_arqos;
+    wire fast_arvalid;
+    wire fast_rready;
+    reg [17:0] fast_row_bytes_q;
     (* use_dsp = "no" *) wire [16:0] blend_divide_folded =
         blend_divide_adjusted_q + {9'd0, blend_divide_adjusted_q[16:8]};
     wire [7:0] blend_product_divided = blend_divide_folded[15:8];
@@ -620,19 +663,80 @@ module astra_render_blitter #(
     wire mask_pixel_enabled =
         decoded_mask_byte[3'd7 - effective_source_x_q[2:0]];
 
-    assign m_axi_arid = AXI_ID;
-    assign m_axi_araddr = source_araddr;
-    assign m_axi_arlen = 8'd0;
-    assign m_axi_arsize = 3'b011;
-    assign m_axi_arburst = 2'b01;
-    assign m_axi_arcache = 4'b0011;
-    assign m_axi_arprot = 3'b000;
-    assign m_axi_arqos = 4'b0000;
-    assign m_axi_arvalid = source_arvalid;
-    assign m_axi_rready = state == ST_SOURCE_RESPONSE ||
-                          state == ST_DESTINATION_RESPONSE ||
-                          state == ST_PALETTE_RESPONSE ||
-                          state == ST_MASK_RESPONSE;
+    assign copy_write_active = state == ST_FAST_WAIT || fast_copy_busy;
+
+    astra_render_copy_burst #(
+        .AXI_ID_WIDTH(AXI_ID_WIDTH),
+        .READ_ID(AXI_ID),
+        .WRITE_ID(WRITE_ID)
+    ) fast_copy_i (
+        .clk(clk),
+        .reset(reset),
+        .start(fast_copy_start),
+        .abort(abort || abort_pending),
+        .reverse(reverse_q),
+        .source_address(source_row_address_q[31:0]),
+        .destination_address(destination_row_address_q[31:0]),
+        .source_pitch(source_pitch_q),
+        .destination_pitch(destination_pitch_q),
+        .row_bytes(fast_row_bytes_q),
+        .row_count(effective_height_q),
+        .busy(fast_copy_busy),
+        .done(fast_copy_done),
+        .aborted(fast_copy_aborted),
+        .read_error(fast_copy_read_error),
+        .write_error(fast_copy_write_error),
+        .fault_detail(fast_copy_fault_detail),
+        .bytes_copied(fast_copy_bytes),
+        .m_axi_arid(fast_arid),
+        .m_axi_araddr(fast_araddr),
+        .m_axi_arlen(fast_arlen),
+        .m_axi_arsize(fast_arsize),
+        .m_axi_arburst(fast_arburst),
+        .m_axi_arcache(fast_arcache),
+        .m_axi_arprot(fast_arprot),
+        .m_axi_arqos(fast_arqos),
+        .m_axi_arvalid(fast_arvalid),
+        .m_axi_arready(m_axi_arready),
+        .m_axi_rid(m_axi_rid),
+        .m_axi_rdata(m_axi_rdata),
+        .m_axi_rresp(m_axi_rresp),
+        .m_axi_rlast(m_axi_rlast),
+        .m_axi_rvalid(m_axi_rvalid),
+        .m_axi_rready(fast_rready),
+        .m_axi_awid(m_axi_awid),
+        .m_axi_awaddr(m_axi_awaddr),
+        .m_axi_awlen(m_axi_awlen),
+        .m_axi_awsize(m_axi_awsize),
+        .m_axi_awburst(m_axi_awburst),
+        .m_axi_awcache(m_axi_awcache),
+        .m_axi_awprot(m_axi_awprot),
+        .m_axi_awqos(m_axi_awqos),
+        .m_axi_awvalid(m_axi_awvalid),
+        .m_axi_awready(m_axi_awready),
+        .m_axi_wdata(m_axi_wdata),
+        .m_axi_wstrb(m_axi_wstrb),
+        .m_axi_wlast(m_axi_wlast),
+        .m_axi_wvalid(m_axi_wvalid),
+        .m_axi_wready(m_axi_wready),
+        .m_axi_bid(m_axi_bid),
+        .m_axi_bresp(m_axi_bresp),
+        .m_axi_bvalid(m_axi_bvalid),
+        .m_axi_bready(m_axi_bready)
+    );
+
+    assign m_axi_arid = copy_write_active ? fast_arid : AXI_ID;
+    assign m_axi_araddr = copy_write_active ? fast_araddr : source_araddr;
+    assign m_axi_arlen = copy_write_active ? fast_arlen : 8'd0;
+    assign m_axi_arsize = copy_write_active ? fast_arsize : 3'b011;
+    assign m_axi_arburst = copy_write_active ? fast_arburst : 2'b01;
+    assign m_axi_arcache = copy_write_active ? fast_arcache : 4'b0011;
+    assign m_axi_arprot = copy_write_active ? fast_arprot : 3'b000;
+    assign m_axi_arqos = copy_write_active ? fast_arqos : 4'b0000;
+    assign m_axi_arvalid = copy_write_active ? fast_arvalid : source_arvalid;
+    assign m_axi_rready = copy_write_active ? fast_rready :
+        state == ST_SOURCE_RESPONSE || state == ST_DESTINATION_RESPONSE ||
+        state == ST_PALETTE_RESPONSE || state == ST_MASK_RESPONSE;
 
     always @(posedge clk) begin
         if (reset) begin
@@ -641,6 +745,7 @@ module astra_render_blitter #(
             is_fill_q <= 1'b0;
             is_blit_q <= 1'b0;
             direct_copy_q <= 1'b0;
+            fast_copy_q <= 1'b0;
             same_surface_q <= 1'b0;
             arena_base_q <= 32'd0;
             clip_left_q <= 16'sd0;
@@ -811,6 +916,8 @@ module astra_render_blitter #(
             blend_product_q <= 16'd0;
             blend_divide_adjusted_q <= 17'd0;
             blend_divided_q <= 8'd0;
+            fast_copy_start <= 1'b0;
+            fast_row_bytes_q <= 18'd0;
             busy <= 1'b0;
             done <= 1'b0;
             status <= `ASTRA_RENDER_STATUS_OK;
@@ -827,6 +934,7 @@ module astra_render_blitter #(
             done <= 1'b0;
             writer_start <= 1'b0;
             writer_abort <= 1'b0;
+            fast_copy_start <= 1'b0;
 
             if (abort && busy)
                 abort_pending <= 1'b1;
@@ -1290,6 +1398,11 @@ module astra_render_blitter #(
                 end
 
                 ST_LAST_MULTIPLY: begin
+                    fast_copy_q <= direct_copy_q &&
+                        source_pitch_q[2:0] == 3'd0 &&
+                        destination_pitch_q[2:0] == 3'd0 &&
+                        source_first_row_address_q[2:0] ==
+                            destination_first_row_address_q[2:0];
                     destination_prefix_greater_q <=
                         destination_first_row_address_q[47:12] >
                         source_first_row_address_q[47:12];
@@ -1335,18 +1448,41 @@ module astra_render_blitter #(
                 end
 
                 ST_EXECUTION_PIXEL: begin
-                    destination_pixel_address_q <=
-                        destination_row_address_q[31:0] +
-                        (reverse_q ? {14'd0, endpoint_byte_offset_q} :
-                         32'd0);
-                    source_pixel_address_load_q <=
-                        source_row_address_q[31:0] +
-                        (reverse_q ? {14'd0, endpoint_byte_offset_q} :
-                         32'd0);
-                    source_address_starts_writer_q <= 1'b1;
-                    columns_remaining_q <= effective_width_q;
-                    rows_remaining_q <= effective_height_q;
-                    state <= ST_SOURCE_ADDRESS_COMMIT;
+                    if (fast_copy_q) begin
+                        fast_row_bytes_q <=
+                            {2'd0, effective_width_q} << destination_shift_q;
+                        fast_copy_start <= 1'b1;
+                        state <= ST_FAST_WAIT;
+                    end else begin
+                        destination_pixel_address_q <=
+                            destination_row_address_q[31:0] +
+                            (reverse_q ? {14'd0, endpoint_byte_offset_q} :
+                             32'd0);
+                        source_pixel_address_load_q <=
+                            source_row_address_q[31:0] +
+                            (reverse_q ? {14'd0, endpoint_byte_offset_q} :
+                             32'd0);
+                        source_address_starts_writer_q <= 1'b1;
+                        columns_remaining_q <= effective_width_q;
+                        rows_remaining_q <= effective_height_q;
+                        state <= ST_SOURCE_ADDRESS_COMMIT;
+                    end
+                end
+
+                ST_FAST_WAIT: begin
+                    if (fast_copy_done) begin
+                        fault_detail <= fast_copy_fault_detail;
+                        if (fast_copy_read_error)
+                            status <= `ASTRA_RENDER_STATUS_AXI_READ;
+                        else if (fast_copy_write_error)
+                            status <= `ASTRA_RENDER_STATUS_AXI_WRITE;
+                        else if (fast_copy_aborted)
+                            status <= `ASTRA_RENDER_STATUS_RESET;
+                        else
+                            completed_pixels <=
+                                fast_copy_bytes >> destination_shift_q;
+                        state <= ST_FINISH;
+                    end
                 end
 
                 ST_WRITER_START: begin

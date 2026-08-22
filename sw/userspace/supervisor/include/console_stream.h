@@ -79,9 +79,10 @@ int console_stream_pending(void);
 /*
  * Renders whatever arrived and answers whatever asked, bounded per call. This
  * runs on the loop a person is typing at, so a burst costs several passes
- * rather than a stall -- the same rule as the event drain beside it.
+ * rather than a stall -- the same rule as the event drain beside it. Returns
+ * the number of terminal-output messages rendered by this pass.
  */
-void console_stream_pump(void);
+uint32_t console_stream_pump(void);
 
 /*
  * Relays what the sink still holds and returns when it holds nothing, so that

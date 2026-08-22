@@ -10,6 +10,7 @@ if {[info exists ::env(ASTRA_OOC_OUT)]} {
 file mkdir $output_dir
 read_verilog -sv [file join $graphics_dir astra_render_surface_validator.sv]
 read_verilog -sv [file join $graphics_dir astra_render_pixel_writer.sv]
+read_verilog -sv [file join $graphics_dir astra_render_copy_burst.sv]
 read_verilog -sv [file join $graphics_dir astra_render_blitter.sv]
 read_verilog -sv [file join $graphics_dir astra_render_geometry.sv]
 read_verilog -sv [file join $graphics_dir astra_render_flood.sv]

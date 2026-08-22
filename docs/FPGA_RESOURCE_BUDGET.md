@@ -1578,3 +1578,24 @@ The optional 200 MHz implementation margin misses setup by `0.278 ns`; the
 actual generated and shipped FCLK1 remains exactly 187.5 MHz. This candidate
 supersedes the rejected 200 MHz capacity checkpoint, but it does not become
 active release authority until physical board qualification passes.
+
+## Generic framebuffer-copy candidate (2026-08-21)
+
+The exact full-feature route with the generic 64-bit AXI block-copy engine uses:
+
+| Resource | Used | Device percent | Physical free |
+|---|---:|---:|---:|
+| Slice LUTs | 32,548 | 61.18% | 20,652 |
+| Slice registers | 39,402 | 37.03% | 66,998 |
+| Occupied slices | 12,253 | 92.13% | 1,047 |
+| BRAM36-equivalent tiles | 129.5 | 92.50% | 10.5 |
+| DSP48E1 | 81 | 36.82% | 139 |
+
+All 67,294 routable nets connect with zero errors. Actual 187.5 MHz
+setup/hold slack passes at `+0.070/+0.011 ns`; the 200 MHz implementation
+target is `-0.263 ns` and remains margin evidence, not the shipped clock.
+Compared with the qualified HDMI-startup route, the candidate adds 597 LUTs,
+338 registers, and four occupied slices while changing no BRAM or DSP
+allocation. Physical board qualification now passes the exact overlap copy,
+production-width offset check, cold boot, HDMI hot-plug, and 48 kHz stereo
+audio gates, so this is the active capacity authority.

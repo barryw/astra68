@@ -339,7 +339,15 @@ static int window_scroll(void *context, uint32_t rows,
     WindowTerminal *window = context;
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     uint32_t width = terminal_columns(window) * window->cell_width;
+    uint32_t scroll_pixels = rows * TERMINAL_LINE_HEIGHT;
     uint32_t height = preserved_rows * TERMINAL_LINE_HEIGHT;
+    AstraTextBox text_box = {
+        &window->surface.view,
+        TERMINAL_MARGIN_X,
+        TERMINAL_MARGIN_Y,
+        width,
+        scroll_pixels + height,
+    };
 
     if (preserved_rows == 0u ||
         (!window->dirty && !graphics_library->draw_list_view_init(
@@ -349,10 +357,8 @@ static int window_scroll(void *context, uint32_t rows,
     if (window->cursor_row != UINT32_MAX)
         draw_cursor(window, window->cursor_row, window->cursor_column,
                     rgb565(theme.system_bar));
-    if (!graphics_library->draw_list_copy(
-            &window->surface.view, TERMINAL_MARGIN_X,
-            TERMINAL_MARGIN_Y + rows * TERMINAL_LINE_HEIGHT,
-            TERMINAL_MARGIN_X, TERMINAL_MARGIN_Y, width, height))
+    if (!graphics_library->text_box_scroll(&text_box,
+                                            (int32_t)scroll_pixels))
         return 0;
     window_damage(window, TERMINAL_MARGIN_X, TERMINAL_MARGIN_Y, width,
                   (rows + preserved_rows) * TERMINAL_LINE_HEIGHT);

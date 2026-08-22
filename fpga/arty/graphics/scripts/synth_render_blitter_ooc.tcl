@@ -8,6 +8,7 @@ if {[info exists ::env(ASTRA_OOC_OUT)]} {
 }
 
 file mkdir $output_dir
+read_verilog -sv [file join $graphics_dir astra_render_copy_burst.sv]
 read_verilog -sv [file join $graphics_dir astra_render_blitter.sv]
 read_xdc [file join $script_dir render_blitter_ooc.xdc]
 synth_design -top astra_render_blitter -part xc7z020clg400-1 \

@@ -43,12 +43,15 @@ module astra_render_surface_validator (
     localparam [2:0] ST_RANGE = 3'd4;
     localparam [2:0] ST_FINISH = 3'd5;
     localparam [2:0] ST_LAYOUT = 3'd6;
+    localparam [2:0] ST_SIMPLE = 3'd7;
 
     reg [2:0] state;
     reg header_valid_q;
     reg geometry_valid_q;
     reg access_valid_q;
     reg storage_valid_q;
+    reg palette_range_valid_q;
+    reg pitch_valid_q;
     reg simple_valid_q;
     reg [15:0] pitch_low_q;
     reg [15:0] pitch_high_q;
@@ -114,6 +117,8 @@ module astra_render_surface_validator (
             geometry_valid_q <= 1'b0;
             access_valid_q <= 1'b0;
             storage_valid_q <= 1'b0;
+            palette_range_valid_q <= 1'b0;
+            pitch_valid_q <= 1'b0;
             simple_valid_q <= 1'b0;
             pitch_low_q <= 16'd0;
             pitch_high_q <= 16'd0;
@@ -198,13 +203,19 @@ module astra_render_surface_validator (
 
                 ST_LAYOUT: begin
                     rows_before_last_q <= input_height_q - 16'd1;
+                    palette_range_valid_q <= !palette_required_q ||
+                        palette_end_q <= {1'b0, arena_bytes_q};
+                    pitch_valid_q <=
+                        {pitch_high_q, pitch_low_q} >= row_bytes_q;
+                    state <= ST_SIMPLE;
+                end
+
+                ST_SIMPLE: begin
                     simple_valid_q <= header_valid_q &&
                         geometry_valid_q &&
                         access_valid_q &&
                         storage_valid_q &&
-                        (!palette_required_q ||
-                         palette_end_q <= {1'b0, arena_bytes_q}) &&
-                        ({pitch_high_q, pitch_low_q} >= row_bytes_q);
+                        palette_range_valid_q && pitch_valid_q;
                     state <= ST_MULTIPLY;
                 end
 
