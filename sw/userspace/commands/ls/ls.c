@@ -24,20 +24,69 @@
  */
 
 #include <astra/civil.h>
-#include <astra/posix.h>
 #include <astra/vfs_process.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
-
-#include <stdio.h>
-#include <string.h>
+#include <astra/stream.h>
+#include <astra/vfs_union.h>
 
 ASTRA_PROGRAM("ls", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
 enum {
-    LS_BATCH = 8u,
+    LS_BATCH = 32u,
+    LS_OUTPUT_BYTES = 2048u,
 };
+
+static char output_buffer[LS_OUTPUT_BYTES];
+static char output_line[ASTRA_VFS_NAME_MAX + 64u];
+static AstraVfsDirEntry entries[LS_BATCH];
+static size_t output_used;
+static int output_failed;
+static uint32_t stdout_handle;
+static uint32_t stderr_handle;
+
+static void
+copy_bytes(char *out, const char *bytes, size_t length)
+{
+    for (size_t index = 0u; index < length; ++index)
+        out[index] = bytes[index];
+}
+
+static int
+write_all(uint32_t handle, const char *bytes, size_t length)
+{
+    return astra_stream_write_all(handle, bytes, (uint32_t)length) ==
+           ASTRA_SYSCALL_OK;
+}
+
+static int
+flush_output(void)
+{
+    if (!output_failed && output_used != 0u &&
+        !write_all(stdout_handle, output_buffer, output_used))
+        output_failed = 1;
+    output_used = 0u;
+    return !output_failed;
+}
+
+static int
+append_output(const char *bytes, size_t length)
+{
+    if (length > sizeof(output_buffer) - output_used && !flush_output())
+        return 0;
+    copy_bytes(&output_buffer[output_used], bytes, length);
+    output_used += length;
+    return 1;
+}
+
+static size_t
+append_text(char *out, size_t at, const char *text)
+{
+    while (*text != '\0')
+        out[at++] = *text++;
+    return at;
+}
 
 static void
 mode_string(uint16_t mode, uint16_t kind, char *out)
@@ -68,44 +117,153 @@ mode_string(uint16_t mode, uint16_t kind, char *out)
  * living here because there was nowhere else to put it.
  */
 static void
-date_string(int64_t seconds, const AstraTimeZone *zone, char *out,
-            size_t capacity)
+date_string(int64_t seconds, const AstraTimeZone *zone, char *out)
 {
     AstraCivilTime civil;
+    const char *month;
 
     if (seconds <= 0 ||
-        !astra_civil_from_unix_ns_zone((uint64_t)seconds * 1000000000u, zone,
-                                       &civil)) {
-        (void)snprintf(out, capacity, "%12s", "-");
+        !astra_civil_from_unix_seconds_zone((uint64_t)seconds, zone,
+                                            &civil)) {
+        copy_bytes(out, "           -", 13u);
         return;
     }
-    (void)snprintf(out, capacity, "%s %2u %02u:%02u",
-                   astra_civil_month_name(civil.month), (unsigned)civil.day,
-                   (unsigned)civil.hour, (unsigned)civil.minute);
+    month = astra_civil_month_name(civil.month);
+    out[0] = month[0];
+    out[1] = month[1];
+    out[2] = month[2];
+    out[3] = ' ';
+    out[4] = civil.day >= 10u ? (char)('0' + civil.day / 10u) : ' ';
+    out[5] = (char)('0' + civil.day % 10u);
+    out[6] = ' ';
+    out[7] = (char)('0' + civil.hour / 10u);
+    out[8] = (char)('0' + civil.hour % 10u);
+    out[9] = ':';
+    out[10] = (char)('0' + civil.minute / 10u);
+    out[11] = (char)('0' + civil.minute % 10u);
+    out[12] = '\0';
+}
+
+static size_t
+append_unsigned32(char *out, size_t at, uint32_t value, size_t width)
+{
+    char reversed[10];
+    size_t count = 0u;
+
+    do {
+        uint32_t quotient = value / 10u;
+
+        reversed[count++] = (char)('0' + value - quotient * 10u);
+        value = quotient;
+    } while (value != 0u);
+    while (width > count) {
+        out[at++] = ' ';
+        --width;
+    }
+    while (count != 0u)
+        out[at++] = reversed[--count];
+    return at;
+}
+
+static size_t
+append_unsigned64(char *out, size_t at, uint64_t value, size_t width)
+{
+    char reversed[20];
+    size_t count = 0u;
+
+    if (value <= UINT32_MAX)
+        return append_unsigned32(out, at, (uint32_t)value, width);
+
+    do {
+        uint64_t quotient = value / 10u;
+
+        reversed[count++] = (char)('0' + value - quotient * 10u);
+        value = quotient;
+    } while (value != 0u);
+    while (width > count) {
+        out[at++] = ' ';
+        --width;
+    }
+    while (count != 0u)
+        out[at++] = reversed[--count];
+    return at;
+}
+
+static size_t
+append_member(char *out, size_t at, uint32_t member)
+{
+    at = append_text(out, at, "  [");
+    at = append_unsigned32(out, at, member, 0u);
+    return append_text(out, at, "]");
 }
 
 static int
-list(AstraFilesystem *filesystem, const AstraFilesystemLibraryV1 *library,
-     const char *path, int long_form, int all, const AstraTimeZone *zone)
+write_long_entry(const AstraVfsDirEntry *entry, uint32_t member,
+                 const AstraTimeZone *zone)
 {
-    AstraDirectory directory = ASTRA_DIRECTORY_INIT;
-    AstraDirectoryEntry entries[LS_BATCH];
-    uint32_t status = library->directory_open(filesystem, path, &directory);
+    size_t at = 10u;
+
+    mode_string(entry->mode, entry->kind, output_line);
+    output_line[at++] = ' ';
+    at = append_unsigned32(output_line, at, entry->nlink, 3u);
+    output_line[at++] = ' ';
+    at = append_unsigned32(output_line, at, entry->uid, 5u);
+    output_line[at++] = ' ';
+    at = append_unsigned32(output_line, at, entry->gid, 5u);
+    output_line[at++] = ' ';
+    at = append_unsigned64(output_line, at, entry->size, 9u);
+    output_line[at++] = ' ';
+    date_string(entry->mtime, zone, &output_line[at]);
+    at += 12u;
+    output_line[at++] = ' ';
+    at = append_text(output_line, at, entry->name);
+    at = append_member(output_line, at, member);
+    output_line[at++] = '\n';
+    return append_output(output_line, at);
+}
+
+static int
+report_status(const char *path, uint32_t status, uint32_t after)
+{
+    const char *text = astra_vfs_status_text(status);
+    size_t at = append_text(output_line, 0u, "ls: ");
+
+    at = append_text(output_line, at, path);
+    at = append_text(output_line, at, ": ");
+    at = append_text(output_line, at,
+                     text != NULL ? text : "operation failed");
+    if (after != UINT32_MAX) {
+        at = append_text(output_line, at, " after ");
+        at = append_unsigned32(output_line, at, after, 0u);
+        at = append_text(output_line, at, " entries");
+    }
+    output_line[at++] = '\n';
+    return write_all(stderr_handle, output_line, at);
+}
+
+static int
+list(const char *path, int long_form, int all, const AstraTimeZone *zone)
+{
+    AstraVfsUnionDirectory directory = ASTRA_VFS_UNION_DIRECTORY_INIT;
+    uint32_t status = astra_vfs_union_directory_open(
+        astra_process_vfs_assigns(), path, astra_process_vfs_assign_client,
+        NULL, &directory);
     uint32_t total = 0u;
 
     if (status != ASTRA_VFS_OK) {
-        (void)fprintf(stderr, "ls: %s: status %u\n", path, status);
+        (void)report_status(path, status, UINT32_MAX);
         return (int)status;
     }
     for (;;) {
         uint32_t count = 0u;
+        uint32_t member = 0u;
 
-        status = library->directory_read(&directory, entries, LS_BATCH,
-                                         &count);
+        status = astra_vfs_union_directory_read(&directory, entries, LS_BATCH,
+                                                &count, &member);
         if (status != ASTRA_VFS_OK || count == 0u)
             break;
         for (uint32_t index = 0u; index < count; ++index) {
-            const AstraDirectoryEntry *entry = &entries[index];
+            const AstraVfsDirEntry *entry = &entries[index];
 
             /*
              * `.` and `..` are entries like any other and the protocol carries
@@ -116,26 +274,26 @@ list(AstraFilesystem *filesystem, const AstraFilesystemLibraryV1 *library,
             if (!all && entry->name[0] == '.')
                 continue;
             if (!long_form) {
-                printf("%s%s\n", entry->name,
-                       entry->kind == ASTRA_VFS_KIND_DIRECTORY ? "/" : "");
-            } else {
-                char mode[11];
-                char when[16];
+                size_t length = append_text(output_line, 0u, entry->name);
 
-                mode_string(entry->mode, entry->kind, mode);
-                date_string(entry->mtime, zone, when, sizeof(when));
-                printf("%s %3u %5u %5u %9lu %s %s\n", mode,
-                       (unsigned)entry->nlink, (unsigned)entry->uid,
-                       (unsigned)entry->gid,
-                       (unsigned long)entry->byte_size, when, entry->name);
+                if (entry->kind == ASTRA_VFS_KIND_DIRECTORY)
+                    output_line[length++] = '/';
+                length = append_member(output_line, length, member);
+                output_line[length++] = '\n';
+                if (!append_output(output_line, length))
+                    status = ASTRA_VFS_ERR_IO;
+            } else {
+                if (!write_long_entry(entry, member, zone))
+                    status = ASTRA_VFS_ERR_IO;
             }
             ++total;
         }
+        if (status != ASTRA_VFS_OK)
+            break;
     }
-    library->directory_close(&directory);
-    if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_NOT_FOUND) {
-        (void)fprintf(stderr, "ls: %s: status %u after %u entries\n", path,
-                      status, total);
+    astra_vfs_union_directory_close(&directory);
+    if (status != ASTRA_VFS_OK) {
+        (void)report_status(path, status, total);
         return (int)status;
     }
     return 0;
@@ -144,8 +302,7 @@ list(AstraFilesystem *filesystem, const AstraFilesystemLibraryV1 *library,
 int
 astra_main(const AstraStartupInfo *startup)
 {
-    AstraProcessFilesystem process_filesystem =
-        ASTRA_PROCESS_FILESYSTEM_INIT;
+    const AstraStartupCapability *capabilities;
     AstraTimeZone zone = ASTRA_TIME_ZONE_UTC;
     char typed[ASTRA_VFS_PATH_MAX];
     uint64_t now_ns = 0u;
@@ -156,9 +313,21 @@ astra_main(const AstraStartupInfo *startup)
     int result;
     uint32_t status;
 
-    astra_posix_start(startup);
-    if (startup == NULL)
+    if (startup == NULL || startup->capabilities_address == 0u)
         return ASTRA_STATUS_INVALID;
+    capabilities = (const AstraStartupCapability *)(uintptr_t)
+        startup->capabilities_address;
+    for (uint32_t index = 0u; index < startup->capability_count; ++index) {
+        if (astra_capability_name_equal(capabilities[index].name, "STDOUT"))
+            stdout_handle = capabilities[index].handle;
+        else if (astra_capability_name_equal(capabilities[index].name,
+                                             "STDERR"))
+            stderr_handle = capabilities[index].handle;
+    }
+    if (stdout_handle == 0u)
+        return ASTRA_STATUS_ACCESS;
+    if (stderr_handle == 0u)
+        stderr_handle = stdout_handle;
     if (startup->argc != 0u && startup->argv_address != 0u)
         argv = (const uint32_t *)(uintptr_t)startup->argv_address;
     for (uint32_t index = 1u; argv != NULL && index < startup->argc;
@@ -174,8 +343,11 @@ astra_main(const AstraStartupInfo *startup)
                 } else if (word[at] == 'a') {
                     all = 1;
                 } else {
-                    (void)fprintf(stderr, "ls: unknown option -%c\n",
-                                  word[at]);
+                    char error[] = "ls: unknown option -?\n";
+
+                    error[20] = word[at];
+                    (void)write_all(stderr_handle, error,
+                                    sizeof(error) - 1u);
                     return ASTRA_STATUS_INVALID;
                 }
             }
@@ -183,9 +355,9 @@ astra_main(const AstraStartupInfo *startup)
             path = word;
         }
     }
-    status = astra_process_filesystem_open(&process_filesystem, startup);
+    status = astra_process_vfs_init(startup);
     if (status != ASTRA_VFS_OK) {
-        (void)fprintf(stderr, "ls: no filesystem: status %u\n", status);
+        (void)report_status("no filesystem", status, UINT32_MAX);
         return (int)status;
     }
     /*
@@ -196,12 +368,10 @@ astra_main(const AstraStartupInfo *startup)
      * name typed without an assign used to answer INVALID, which is how `ls
      * proto` refused a directory `mkdir proto` had just made.
      */
-    status = astra_process_path(&process_filesystem, path, typed,
-                                sizeof(typed));
+    status = astra_process_path(path, typed, sizeof(typed));
     if (status != ASTRA_VFS_OK) {
-        (void)fprintf(stderr, "ls: %s: status %u\n",
-                      path != NULL ? path : "", status);
-        astra_process_filesystem_close(&process_filesystem);
+        (void)report_status(path != NULL ? path : "", status, UINT32_MAX);
+        astra_process_vfs_close();
         return (int)status;
     }
     /*
@@ -211,9 +381,9 @@ astra_main(const AstraStartupInfo *startup)
      */
     if (astra_clock_realtime_zone(&now_ns, &zone) != ASTRA_SYSCALL_OK)
         zone = (AstraTimeZone)ASTRA_TIME_ZONE_UTC;
-    result = list(&process_filesystem.filesystem,
-                  process_filesystem.library, typed, long_form, all, &zone);
-    astra_process_filesystem_close(&process_filesystem);
-    (void)fflush(stdout);
+    result = list(typed, long_form, all, &zone);
+    astra_process_vfs_close();
+    if (!flush_output() && result == 0)
+        result = ASTRA_STATUS_IO;
     return result;
 }

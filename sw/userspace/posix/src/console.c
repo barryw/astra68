@@ -60,6 +60,8 @@ typedef struct PosixDescriptor {
 static PosixDescriptor descriptors[POSIX_DESCRIPTOR_MAX];
 static const AstraPosixFileOps *file_ops;
 static const AstraStartupInfo *startup_block;
+static char *empty_environment[] = { NULL };
+extern char **environ;
 
 /*
  * Keeps this library's `sbrk` in the link, ahead of picolibc's.
@@ -123,6 +125,15 @@ astra_posix_descriptor_slot(int fd)
     return (int)slot->value;
 }
 
+uint32_t
+astra_posix_descriptor_handle(int fd)
+{
+    PosixDescriptor *slot = entry(fd);
+
+    return slot != NULL && slot->kind == POSIX_DESCRIPTOR_STREAM ?
+        slot->value : 0u;
+}
+
 void
 astra_posix_start(const AstraStartupInfo *startup)
 {
@@ -133,6 +144,10 @@ astra_posix_start(const AstraStartupInfo *startup)
         descriptors[index].value = 0u;
     }
     startup_block = startup;
+    environ = empty_environment;
+    if (startup != NULL && startup->environment_count != 0u &&
+        startup->environment_address != 0u)
+        environ = (char **)(uintptr_t)startup->environment_address;
     if (startup == NULL || startup->capabilities_address == 0u)
         return;
     capabilities = (const AstraStartupCapability *)(uintptr_t)

@@ -1,23 +1,23 @@
 # Axiom kernel and Astra service ABI
 
-Status: provisional ABI contract, revision 0.8 (2026-08-08)
+Status: provisional ABI contract, revision 0.9 (2026-08-24)
 
 The ABI is big-endian, 32-bit, naturally aligned, and independent of kernel C
 layouts. Only the user/kernel ABI and versioned service protocols are stable.
 Kernel-internal structures and function calls may change at any time.
 
-## Process startup ABI 2
+## Process startup ABI 3
 
 `sw/include/astra/process.h` defines the 64-byte `AstraStartupInfo` and
-92-byte `AstraStartupCapability` records (`ASTRA_STARTUP_ABI_VERSION` 2, up
-from 1 as of 2026-08-07 — the union-assigns milestone. The bump was a
-coordinator instruction given during that milestone's execution and appears
-in no plan or spec; this is where it becomes traceable). The initial thread
+92-byte `AstraStartupCapability` records (`ASTRA_STARTUP_ABI_VERSION` 3). ABI
+3 adds the conventional null-terminated environment vector. The initial thread
 enters `_start` with the read-only startup-block logical address in `D2`, its
 process self handle in `D4`, and its thread self handle in `D5`. The block
 carries explicit bounded argument, environment, and initial-capability
-tables. Counts are independent of addresses, the capability count is at most
-32, and all reserved words are zero. `docs/USERSPACE_RUNTIME.md` defines
+tables. Arguments, environment pointers, strings, and capabilities must fit
+the actual 4 KiB startup page; there is no smaller environment quota. Counts
+are independent of addresses, the capability count is at most 32, and all
+reserved words are zero. `docs/USERSPACE_RUNTIME.md` defines
 validation, ownership, and exit.
 
 The boot-supplied supervisor and every later protected loader use this same
@@ -45,9 +45,8 @@ where a root enters the system from outside, so the syscall refuses
 `..` component, before copying it into the record the kernel eventually
 publishes; resolution's own `..` rule is separate and unaffected.
 
-`ASTRA_LAUNCH_GRANT_MAX` is 10 — the terminal service uses its ready endpoint,
-display, input, input IRQ, work namespace, two-member `COMMANDS:` union,
-shared `LIBS:`, events, and event control. `sw/kernel/process.h`'s
+`ASTRA_LAUNCH_GRANT_MAX` is 12 — the terminal service also passes its current
+directory and read-only `PROC:` process view. `sw/kernel/process.h`'s
 `KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX` is a **textual alias** of it, not a
 second number: the two disagreeing once already let a launch of more than
 four grants fail with `INVALID_ARGUMENT` from inside the loader, naming
@@ -88,7 +87,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 
 | Number | Name | State | Contract |
 |---:|---|---|---|
-| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010012`, `D2=process handle`, `D3=calling-thread handle` |
+| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010016`, `D2=process handle`, `D3=calling-thread handle` |
 | 1 | `PROGRESS` | K1 TEST ONLY | monotonic test progress, not a product ABI |
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `PROCESS_EXIT` (`EXIT` compatibility alias) | CURRENT | terminates the calling process and all of its threads |
@@ -120,7 +119,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 34 | `DEVICE_RESET` | CURRENT CANDIDATE | `D1=device handle`; requires administer and advances generation |
 | 35 | `DEVICE_REVOKE` | CURRENT CANDIDATE | `D1=device handle`; requires administer; quiesces and resets |
 | 36 | `INPUT_READ_TRY` | CURRENT CANDIDATE | `D1=input-device lease`, `D2=aligned AstraInputEvent array`, `D3=capacity 1-16`; returns count in `D1` and overflow flags in `D2` |
-| 37 | `PROCESS_INFO` | CURRENT CANDIDATE | `D1=process handle with QUERY right`, `D2=aligned AstraProcessInfo`; copies one 48-byte record |
+| 37 | `PROCESS_INFO` | CURRENT CANDIDATE | `D1=process handle with QUERY right`, `D2=aligned AstraProcessInfo`; copies one 80-byte record including runtime, elapsed nanoseconds, and the last fault PC/address/vector/status |
 | 38 | `DMA_CREATE` | CURRENT CANDIDATE | `D1=byte size`, `D2=aligned AstraDmaBufferInfo`; allocates owner-charged contiguous transfer memory, maps it cache-inhibited, and returns a handle closed by `CLOSE` |
 | 39 | `BLOCK_QUERY` | CURRENT CANDIDATE | `D1=block lease with QUERY right`, `D2=aligned AstraBlockLeaseInfo` |
 | 40 | `BLOCK_SUBMIT` | CURRENT CANDIDATE | `D1=block lease with TRANSFER right`, `D2=aligned AstraBlockRequest`; returns the request handle in `D1` |
@@ -131,7 +130,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 45 | `ACTIVITY` | CURRENT CANDIDATE | `D1=0` allocates a new activity, a nonzero value adopts it, and `D1=0xffffffff` clears it; returns the current activity in `D1` |
 | 46 | `TRACE_READ` | CURRENT CANDIDATE | drains the caller-authorized kernel event stream with explicit cursor and loss accounting |
 | 47 | `DIAGNOSTIC_CONSOLE_OPEN` | CURRENT CANDIDATE | marks the userspace diagnostic reader active so the boot console stops narrating the same stream |
-| 48 | `PROCESS_CREATE` | CURRENT CANDIDATE | transactionally loads a protected ELF from caller bytes, copies bounded grants and arguments, and returns a waitable process handle plus process ID |
+| 48 | `PROCESS_CREATE` | CURRENT CANDIDATE | transactionally loads a protected ELF from caller bytes, copies bounded grants and arguments, and returns a QUERY/WAIT/TERMINATE/ADMINISTER process handle plus process ID; ADMINISTER covers ordinary priority, not DEBUG |
 | 50 | `CONSOLE_CURSOR` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=row`, `D3=column`, `D4=visible`; publishes the terminal cursor, accepting `column=columns` as pending wrap |
 | 51 | `DISPLAY_SUBMIT` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=aligned AstraDisplayFrameRequest`; submits one nonzero fenced solid, RGB565 DMA-frame, or bounded native Astraea render-batch request |
 | 52 | `DISPLAY_COLLECT` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=aligned AstraDisplayFrameCompletion`; returns `WOULD_BLOCK` until the submitted fence completes |
@@ -139,10 +138,22 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 54 | `AREA_DECOMMIT` | CURRENT CANDIDATE | `D1=address`, `D2=length`; releases the committed pages inside a reservation and returns how many went |
 | 55 | `CLOCK_REALTIME` | CURRENT CANDIDATE | returns the date as nanoseconds since the Unix epoch in `D1:D2` (high:low); `UNSUPPORTED` when the machine's wall clock is not valid, never zero |
 | 56 | `LIBRARY_ATTACH` | CURRENT CANDIDATE | `D1=aligned 44-byte AstraLibraryReference`, `D2:D3=AstraLoadedLibrary output`; maps an exact resident identity, or the newest resident compatible ABI when `LATEST` is requested; returns `WOULD_BLOCK` on a cache miss |
+| 57 | `PROCESS_PRIORITY` | CURRENT CANDIDATE | `D1=process handle with ADMINISTER right`, `D2=priority 1-23`; atomically changes the process default and requeues every live thread, returning the previous priority in `D1` |
+
+Areas are at most 4 MiB. This is one complete 1,024-entry MC68030 page table,
+not an application-size policy; larger shared mappings require a multi-table
+transaction or a streaming protocol. VFS bulk transfers use this same bound
+instead of imposing a smaller protocol limit.
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
-not panic. `QUERY_ABI` reports revision `0x00010012`; a later revision may add
+not panic. `QUERY_ABI` reports revision `0x00010016`; a later revision may add
 feature bits before additional calls freeze.
+
+Ordinary process priorities are 1 through 23, with 16 as normal; larger values
+run first. POSIX `nice`, `getpriority`, and `setpriority` translate that exact
+band to nice values -7 through 15, so there is no second scheduling policy or
+unrepresentable nice level. Ready and blocked threads are reinserted into their
+existing priority/FIFO queues when a process priority changes.
 
 `AstraDeviceInfo` is 24 bytes and naturally four-byte aligned. It contains
 size, device ID, class ID, capabilities, generation, device state, lease

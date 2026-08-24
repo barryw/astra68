@@ -5,6 +5,8 @@
 
 #include <astra/event_store.h>
 
+#define ASTRA_EVENT_SNAPSHOT_HEADER_SIZE 108u
+
 /*
  * The durable form of one bounded store. I/O is supplied by the owner because
  * the target writes through an Astra VFS client while the host test writes to

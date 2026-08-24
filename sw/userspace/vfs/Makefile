@@ -102,7 +102,7 @@ $(FILESYSTEM_LIBRARY): $(FILESYSTEM_LIBRARY_OBJECTS) $(LIBRARY_LD)
 
 library-contract: $(FILESYSTEM_LIBRARY)
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
-		grep -q '^filesystem.library 1.0.0 ABI 1.0$$'
+		grep -q '^filesystem.library 1.1.0 ABI 1.1$$'
 	@! $(READELF) -r $(FILESYSTEM_LIBRARY) | \
 		grep -E 'R_68K_(GLOB_DAT|JMP_SLOT|32|PC32)'
 

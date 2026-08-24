@@ -96,6 +96,7 @@ astra_vfs_connect(AstraVfsClient *client, AstraVfsTransport transport,
     client->context = context;
     client->session = ASTRA_VFS_SESSION_INVALID;
     client->version = ASTRA_VFS_VERSION;
+    client->port_area_capable = 0u;
 
     begin(client);
     status = exchange(client, ASTRA_VFS_OP_HELLO);
@@ -353,6 +354,8 @@ astra_vfs_readdir_batch(AstraVfsClient *client, const char *path,
                         uint64_t cursor, AstraVfsDirEntry *entries,
                         uint32_t capacity, uint32_t *count, uint64_t *next)
 {
+    const uint8_t *payload;
+    uint32_t operation = ASTRA_VFS_OP_READDIR_BATCH;
     uint32_t status;
     uint32_t at = 0u;
     uint32_t found = 0u;
@@ -371,20 +374,30 @@ astra_vfs_readdir_batch(AstraVfsClient *client, const char *path,
             *count = 1u;
         return status;
     }
+    if (client->version >= UINT16_C(10) && client->port_area_capable != 0u)
+        operation = ASTRA_VFS_OP_READDIR_AREA;
     begin(client);
     if (!set_path(&client->request, path))
         return ASTRA_VFS_ERR_INVALID;
     client->request.offset = cursor;
     client->request.length = capacity;
-    status = exchange(client, ASTRA_VFS_OP_READDIR_BATCH);
+    status = exchange(client, operation);
     if (status != ASTRA_VFS_OK)
         return status;
-    if (client->reply.count > ASTRA_VFS_IO_MAX)
-        return ASTRA_VFS_ERR_PROTOCOL;
+    if (operation == ASTRA_VFS_OP_READDIR_AREA) {
+        if (client->port_area_address == NULL ||
+            client->reply.count > client->port_area_size)
+            return ASTRA_VFS_ERR_PROTOCOL;
+        payload = client->port_area_address;
+    } else {
+        if (client->reply.count > ASTRA_VFS_IO_MAX)
+            return ASTRA_VFS_ERR_PROTOCOL;
+        payload = client->reply.payload;
+    }
     while (at < client->reply.count) {
         uint32_t length;
 
-        const uint8_t *record = &client->reply.payload[at];
+        const uint8_t *record = &payload[at];
 
         if (found == capacity ||
             client->reply.count - at < ASTRA_VFS_DIRENT_HEADER)
@@ -406,7 +419,7 @@ astra_vfs_readdir_batch(AstraVfsClient *client, const char *path,
             return ASTRA_VFS_ERR_PROTOCOL;
         for (uint32_t index = 0u; index < length; ++index)
             entries[found].name[index] =
-                (char)client->reply.payload[at + index];
+                (char)payload[at + index];
         entries[found].name[length] = '\0';
         at += length;
         ++found;
@@ -444,4 +457,24 @@ astra_vfs_unlink(AstraVfsClient *client, const char *path)
         return ASTRA_VFS_ERR_INVALID;
     }
     return exchange(client, ASTRA_VFS_OP_UNLINK);
+}
+
+uint32_t
+astra_vfs_rename(AstraVfsClient *client, const char *from, const char *to)
+{
+    uint32_t status;
+
+    if (client == NULL || client->version < UINT16_C(11))
+        return client == NULL ? ASTRA_VFS_ERR_INVALID :
+                                ASTRA_VFS_ERR_UNSUPPORTED;
+    begin(client);
+    if (!set_path(&client->request, from))
+        return ASTRA_VFS_ERR_INVALID;
+    status = exchange(client, ASTRA_VFS_OP_RENAME_FROM);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    begin(client);
+    if (!set_path(&client->request, to))
+        return ASTRA_VFS_ERR_INVALID;
+    return exchange(client, ASTRA_VFS_OP_RENAME_TO);
 }

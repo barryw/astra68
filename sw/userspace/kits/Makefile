@@ -52,10 +52,10 @@ $(GRAPHICS_STAMP): Graphics.kit/manifest $(GRAPHICS_LIBRARY) \
 
 $(FILESYSTEM_STAMP): Filesystem.kit/manifest $(FILESYSTEM_LIBRARY) \
 		$(BUNDLE_TOOL)
-	@mkdir -p $(FILESYSTEM)/libraries/filesystem.library/abi-1/1.0.0/m68k-68030
+	@mkdir -p $(FILESYSTEM)/libraries/filesystem.library/abi-1/1.1.0/m68k-68030
 	cp Filesystem.kit/manifest $(FILESYSTEM)/manifest
 	cp $(FILESYSTEM_LIBRARY) \
-		$(FILESYSTEM)/libraries/filesystem.library/abi-1/1.0.0/m68k-68030/filesystem.library
+		$(FILESYSTEM)/libraries/filesystem.library/abi-1/1.1.0/m68k-68030/filesystem.library
 	$(BUNDLE_TOOL) check $(FILESYSTEM)
 	@touch $@
 

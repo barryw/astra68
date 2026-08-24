@@ -10,6 +10,7 @@ capability WORK:rw
 capability COMMANDS:r
 capability LIBS:r
 capability EVENTS:r
+capability PROC:r
 capability EVENT_CONTROL
 requires graphics.library 1 1.1.0
 requires font.library 1 1.0.0

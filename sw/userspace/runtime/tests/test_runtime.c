@@ -66,7 +66,8 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_WAIT_MULTIPLE &&
         number != ASTRA_SYSCALL_DISPLAY_SUBMIT &&
         number != ASTRA_SYSCALL_DISPLAY_COLLECT &&
-        number != ASTRA_SYSCALL_LIBRARY_MAP) {
+        number != ASTRA_SYSCALL_LIBRARY_MAP &&
+        number != ASTRA_SYSCALL_PROCESS_PRIORITY) {
         assert(argument1 == 0u);
         assert(argument2 == 0u);
         assert(argument3 == 0u);
@@ -299,6 +300,11 @@ test_syscall_wrappers(void)
     assert(abi == ASTRA_SYSCALL_ABI_VERSION);
     assert(process == 0x11111111u);
     assert(thread == 0x22222222u);
+    assert(astra_process_priority(process, 12u, &abi) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_PROCESS_PRIORITY);
+    assert(mock_argument0 == process);
+    assert(mock_argument1 == 12u);
+    assert(abi == ASTRA_SYSCALL_ABI_VERSION);
     assert(astra_activity_begin() == 0x1234u);
     assert(mock_argument0 == 0u);
     assert(astra_activity_adopt(0u) == 0u);
@@ -425,11 +431,29 @@ static void test_launch(void)
 {
     static const uint8_t image[64] = {0u};
     static const char *const words[] = {"paint", "WORK:picture.ast"};
+    static const char *const environment_names[] = {"HOME", "TZ"};
+    static const char *const environment_values[] = {"WORK:", "UTC"};
     AstraLaunchGrant grants[2];
     AstraLaunchArguments arguments;
+    char environment[64];
     uint32_t handle = 0xdeadbeefu;
     uint32_t id = 0xdeadbeefu;
     uint32_t calls;
+
+    {
+        static char large_value[1537];
+        static char large_environment[1600];
+        static const char *large_names[] = {"LARGE"};
+        const char *large_values[] = {large_value};
+
+        memset(large_value, 'x', sizeof(large_value) - 1u);
+        large_value[sizeof(large_value) - 1u] = '\0';
+        memset(&arguments, 0, sizeof(arguments));
+        assert(astra_launch_environment_pack(
+                   &arguments, large_environment, sizeof(large_environment),
+                   1u, large_names, large_values) == ASTRA_SYSCALL_OK);
+        assert(arguments.environment_length > 1024u);
+    }
 
     memset(grants, 0, sizeof(grants));
     assert(astra_launch_arguments_pack(
@@ -439,6 +463,14 @@ static void test_launch(void)
            ASTRA_LAUNCH_SOURCE_SHELL);
     assert(strcmp(arguments.bytes, words[0]) == 0);
     assert(strcmp(arguments.bytes + strlen(words[0]) + 1u, words[1]) == 0);
+    assert(astra_launch_environment_pack(
+               &arguments, environment, sizeof(environment), 2u,
+               environment_names, environment_values) == ASTRA_SYSCALL_OK);
+    assert(arguments.environment_count == 2u);
+    assert(arguments.environment_length == 18u);
+    assert(arguments.environment_address == (uint32_t)(uintptr_t)environment);
+    assert(strcmp(environment, "HOME=WORK:") == 0);
+    assert(strcmp(environment + 11u, "TZ=UTC") == 0);
     assert(astra_launch_arguments_pack(
                &arguments, ASTRA_LAUNCH_SOURCE_DESKTOP + 1u, 0u, NULL) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);
@@ -448,6 +480,9 @@ static void test_launch(void)
     assert(astra_launch_arguments_pack(
                &arguments, ASTRA_LAUNCH_SOURCE_SHELL, 2u, words) ==
            ASTRA_SYSCALL_OK);
+    assert(astra_launch_environment_pack(
+               &arguments, environment, sizeof(environment), 2u,
+               environment_names, environment_values) == ASTRA_SYSCALL_OK);
 
     mock_status = ASTRA_SYSCALL_OK;
     assert(astra_launch(image, (uint32_t)sizeof(image), grants, 2u, &arguments,

@@ -1490,7 +1490,7 @@ int ext4_fremove(const char *path)
 		ext4_fs_put_inode_ref(&child);
 		ext4_trans_abort(mp);
 		EXT4_MP_UNLOCK(mp);
-		return r;
+		return EISDIR;
 	}
 
 	/*Link count will be zero, the inode should be freed. */
@@ -2341,6 +2341,40 @@ int ext4_meta_get(const char *path, uint32_t *mode, uint32_t *uid,
 	Finish:
 	EXT4_MP_UNLOCK(mp);
 
+	return r;
+}
+
+int ext4_dir_entry_meta(const ext4_dir *dir, const ext4_direntry *entry,
+			uint32_t *mode, uint32_t *uid, uint32_t *gid,
+			uint32_t *mtime, uint32_t *nlink, uint64_t *size)
+{
+	struct ext4_inode_ref inode_ref;
+	struct ext4_mountpoint *mp;
+	int r;
+
+	if (!dir || !entry || !dir->f.mp || !entry->inode)
+		return EINVAL;
+	mp = dir->f.mp;
+	EXT4_MP_LOCK(mp);
+	r = ext4_fs_get_inode_ref(&mp->fs, entry->inode, &inode_ref);
+	if (r != EOK)
+		goto Finish;
+	if (mode)
+		*mode = ext4_inode_get_mode(&mp->fs.sb, inode_ref.inode);
+	if (uid)
+		*uid = ext4_inode_get_uid(inode_ref.inode);
+	if (gid)
+		*gid = ext4_inode_get_gid(inode_ref.inode);
+	if (mtime)
+		*mtime = ext4_inode_get_modif_time(inode_ref.inode);
+	if (nlink)
+		*nlink = ext4_inode_get_links_cnt(inode_ref.inode);
+	if (size)
+		*size = ext4_inode_get_size(&mp->fs.sb, inode_ref.inode);
+	r = ext4_fs_put_inode_ref(&inode_ref);
+
+Finish:
+	EXT4_MP_UNLOCK(mp);
 	return r;
 }
 
@@ -3301,6 +3335,7 @@ int ext4_dir_open(ext4_dir *dir, const char *path)
 	if (!mp)
 		return ENOENT;
 
+	dir->iterator_open = 0;
 	EXT4_MP_LOCK(mp);
 	r = ext4_generic_open(&dir->f, path, "r", false, 0, 0);
 	dir->next_off = 0;
@@ -3308,9 +3343,23 @@ int ext4_dir_open(ext4_dir *dir, const char *path)
 	return r;
 }
 
+static void ext4_dir_iterator_release(ext4_dir *dir)
+{
+	if (!dir->iterator_open)
+		return;
+	ext4_dir_iterator_fini(&dir->iterator);
+	ext4_fs_put_inode_ref(&dir->inode_ref);
+	dir->iterator_open = 0;
+}
+
 int ext4_dir_close(ext4_dir *dir)
 {
-    return ext4_fclose(&dir->f);
+	if (dir->f.mp) {
+		EXT4_MP_LOCK(dir->f.mp);
+		ext4_dir_iterator_release(dir);
+		EXT4_MP_UNLOCK(dir->f.mp);
+	}
+	return ext4_fclose(&dir->f);
 }
 
 const ext4_direntry *ext4_dir_entry_next(ext4_dir *dir)
@@ -3320,8 +3369,7 @@ const ext4_direntry *ext4_dir_entry_next(ext4_dir *dir)
 	int r;
 	uint16_t name_length;
 	ext4_direntry *de = 0;
-	struct ext4_inode_ref dir_inode;
-	struct ext4_dir_iter it;
+	struct ext4_dir_iter *it = &dir->iterator;
 
 	EXT4_MP_LOCK(dir->f.mp);
 
@@ -3330,37 +3378,39 @@ const ext4_direntry *ext4_dir_entry_next(ext4_dir *dir)
 		return 0;
 	}
 
-	r = ext4_fs_get_inode_ref(&dir->f.mp->fs, dir->f.inode, &dir_inode);
-	if (r != EOK) {
-		goto Finish;
-	}
-
-	r = ext4_dir_iterator_init(&it, &dir_inode, dir->next_off);
-	if (r != EOK) {
-		ext4_fs_put_inode_ref(&dir_inode);
-		goto Finish;
+	if (!dir->iterator_open || it->curr_off != dir->next_off) {
+		ext4_dir_iterator_release(dir);
+		r = ext4_fs_get_inode_ref(&dir->f.mp->fs, dir->f.inode,
+					     &dir->inode_ref);
+		if (r != EOK)
+			goto Finish;
+		r = ext4_dir_iterator_init(it, &dir->inode_ref, dir->next_off);
+		if (r != EOK) {
+			ext4_fs_put_inode_ref(&dir->inode_ref);
+			goto Finish;
+		}
+		dir->iterator_open = 1;
 	}
 
 	memset(&dir->de.name, 0, sizeof(dir->de.name));
 	name_length = ext4_dir_en_get_name_len(&dir->f.mp->fs.sb,
-					       it.curr);
-	memcpy(&dir->de.name, it.curr->name, name_length);
+					       it->curr);
+	memcpy(&dir->de.name, it->curr->name, name_length);
 
 	/* Directly copying the content isn't safe for Big-endian targets*/
-	dir->de.inode = ext4_dir_en_get_inode(it.curr);
-	dir->de.entry_length = ext4_dir_en_get_entry_len(it.curr);
+	dir->de.inode = ext4_dir_en_get_inode(it->curr);
+	dir->de.entry_length = ext4_dir_en_get_entry_len(it->curr);
 	dir->de.name_length = name_length;
 	dir->de.inode_type = ext4_dir_en_get_inode_type(&dir->f.mp->fs.sb,
-						      it.curr);
+						      it->curr);
 
 	de = &dir->de;
 
-	ext4_dir_iterator_next(&it);
+	ext4_dir_iterator_next(it);
 
-	dir->next_off = it.curr ? it.curr_off : EXT4_DIR_ENTRY_OFFSET_TERM;
-
-	ext4_dir_iterator_fini(&it);
-	ext4_fs_put_inode_ref(&dir_inode);
+	dir->next_off = it->curr ? it->curr_off : EXT4_DIR_ENTRY_OFFSET_TERM;
+	if (!it->curr)
+		ext4_dir_iterator_release(dir);
 
 Finish:
 	EXT4_MP_UNLOCK(dir->f.mp);
@@ -3369,7 +3419,10 @@ Finish:
 
 void ext4_dir_entry_rewind(ext4_dir *dir)
 {
+	EXT4_MP_LOCK(dir->f.mp);
+	ext4_dir_iterator_release(dir);
 	dir->next_off = 0;
+	EXT4_MP_UNLOCK(dir->f.mp);
 }
 
 /**

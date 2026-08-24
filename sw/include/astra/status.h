@@ -52,7 +52,8 @@
  * 16, because 1..15 are on the storage wire and are not renumbered.
  */
 #define ASTRA_STATUS_PEER_DEAD       16
-/* 17..31 are unassigned, and are the system's to spend. */
+#define ASTRA_STATUS_CROSS_DEVICE    17
+/* 18..31 are unassigned, and are the system's to spend. */
 #define ASTRA_STATUS_SYSTEM_MAX      31
 
 /*

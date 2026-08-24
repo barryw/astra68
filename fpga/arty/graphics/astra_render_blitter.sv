@@ -1400,9 +1400,7 @@ module astra_render_blitter #(
                 ST_LAST_MULTIPLY: begin
                     fast_copy_q <= direct_copy_q &&
                         source_pitch_q[2:0] == 3'd0 &&
-                        destination_pitch_q[2:0] == 3'd0 &&
-                        source_first_row_address_q[2:0] ==
-                            destination_first_row_address_q[2:0];
+                        destination_pitch_q[2:0] == 3'd0;
                     destination_prefix_greater_q <=
                         destination_first_row_address_q[47:12] >
                         source_first_row_address_q[47:12];

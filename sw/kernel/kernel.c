@@ -1664,6 +1664,12 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     }
     kernel_bytes_copy(&boot_info, firmware_info, sizeof(boot_info));
     validate_image_contract();
+    {
+        uint64_t wall_ns;
+
+        if (!kernel_platform_wall_clock_ns(&wall_ns))
+            kernel_panic("valid host wall clock required");
+    }
     if (kernel_memory_init(&boot_info) != KERNEL_MEMORY_OK)
         kernel_panic("physical memory map rejected");
     if (kernel_vm_init() != KERNEL_VM_OK)

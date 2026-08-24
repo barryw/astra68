@@ -212,18 +212,26 @@ static void serve(uint32_t receive, uint32_t input, uint32_t irq,
         } else {
             AstraInputEvent events[ASTRA_INPUT_READ_BATCH_MAX];
             AstraIrqRecord record;
-            uint32_t count = 0u;
-            uint32_t flags = 0u;
 
             status = astra_irq_read(irq, &record, NULL);
-            if (status != ASTRA_SYSCALL_OK ||
-                astra_input_read(input, events, ASTRA_INPUT_READ_BATCH_MAX,
-                                 &count, &flags) != ASTRA_SYSCALL_OK ||
-                astra_irq_ack(irq, record.sequence) != ASTRA_SYSCALL_OK)
+            if (status != ASTRA_SYSCALL_OK)
                 astra_process_exit(ASTRA_STATUS_IO);
-            astra_input_service_ingest_batch(
-                service, events, count,
-                (flags & ASTRA_INPUT_READ_OVERFLOW) != 0u);
+            for (;;) {
+                uint32_t count = 0u;
+                uint32_t flags = 0u;
+
+                status = astra_input_read(
+                    input, events, ASTRA_INPUT_READ_BATCH_MAX, &count, &flags);
+                if (status == ASTRA_SYSCALL_WOULD_BLOCK)
+                    break;
+                if (status != ASTRA_SYSCALL_OK)
+                    astra_process_exit(ASTRA_STATUS_IO);
+                astra_input_service_ingest_batch(
+                    service, events, count,
+                    (flags & ASTRA_INPUT_READ_OVERFLOW) != 0u);
+            }
+            if (astra_irq_ack(irq, record.sequence) != ASTRA_SYSCALL_OK)
+                astra_process_exit(ASTRA_STATUS_IO);
         }
     }
 }

@@ -347,6 +347,19 @@ astra_process_info(uint32_t handle, AstraProcessInfo *info)
 }
 
 uint32_t
+astra_process_priority(uint32_t handle, uint32_t priority,
+                       uint32_t *previous_priority)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_PROCESS_PRIORITY, handle, priority,
+                   0u, 0u, 0u, &result);
+    if (result.status == ASTRA_SYSCALL_OK && previous_priority != NULL)
+        *previous_priority = result.value0;
+    return result.status;
+}
+
+uint32_t
 astra_yield(void)
 {
     return invoke(ASTRA_SYSCALL_YIELD, 0u).status;

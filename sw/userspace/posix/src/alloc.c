@@ -40,7 +40,7 @@
  * ratcheting.
  *
  * Finding the run from a pointer is a page-index table rather than a header on
- * every block. 512 pages of heap is a 1 KiB table, which buys back the 8 or 16
+ * every block. 1024 pages of heap is a 2 KiB table, which buys back the 8 or 16
  * bytes a header would have cost on every one of the many small objects this
  * is built for -- and on a 16-byte class a header is not overhead, it is the
  * allocation.
@@ -89,6 +89,8 @@ typedef struct AstraRun {
     uint16_t pages;
 } AstraRun;
 
+_Static_assert(sizeof(AstraRun) <= RUN_HEADER_BYTES, "run header size");
+
 static uint8_t *heap_base;
 static uint32_t heap_pages_taken;
 /*
@@ -134,7 +136,7 @@ heap_ready(void)
     if (base == (void *)-1)
         return 0;
     /*
-     * The heap area starts on a 2 MiB slot boundary and nothing has taken
+     * The heap area starts on a 4 MiB slot boundary and nothing has taken
      * anything from it yet, so this is page aligned; every request below is a
      * whole number of pages, which keeps it that way.
      */

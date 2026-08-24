@@ -112,6 +112,10 @@ uint32_t astra_stream_write_one(uint32_t handle, const void *bytes,
 uint32_t astra_stream_write(uint32_t handle, const void *bytes,
                             uint32_t length, uint32_t *written);
 
+/* Any length, retried through back pressure until all bytes arrive. */
+uint32_t astra_stream_write_all(uint32_t handle, const void *bytes,
+                                uint32_t length);
+
 /*
  * A line, the way a program wants to write one: it yields and retries until the
  * text is gone or the sink is. Every program will want this, and a print that
@@ -119,6 +123,9 @@ uint32_t astra_stream_write(uint32_t handle, const void *bytes,
  * how loaded the machine was.
  */
 uint32_t astra_print(uint32_t handle, const char *text);
+
+/* An unsigned decimal value, without padding or a newline. */
+uint32_t astra_print_u32(uint32_t handle, uint32_t value);
 
 /*
  * How big the far end is. Zero and zero is a successful answer meaning "no

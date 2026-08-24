@@ -17,8 +17,12 @@ PROPERTIES = (
     "astra-display-submissions",
     "astra-display-completions",
 )
-QCODES = {" ": "spc", "-": "minus", ".": "dot", "/": "slash"}
-SHIFTED = {":": "semicolon"}
+QCODES = {" ": "spc", "-": "minus", ".": "dot", "/": "slash",
+          "=": "equal", ",": "comma", ";": "semicolon",
+          "'": "apostrophe"}
+SHIFTED = {":": "semicolon", "+": "equal", "%": "5", "_": "minus",
+           "?": "slash", "\"": "apostrophe", ">": "dot", "<": "comma",
+           "$": "4", "(": "9", ")": "0", "*": "8", "!": "1"}
 
 
 class Qmp:
@@ -79,6 +83,17 @@ class Qmp:
             else:
                 raise RuntimeError("no qcode for %r" % character)
 
+    def double_click(self, x, y):
+        self.execute("input-send-event", {"events": [
+            {"type": "abs", "data": {"axis": "x", "value": x}},
+            {"type": "abs", "data": {"axis": "y", "value": y}}]})
+        for _ in range(2):
+            for down in (True, False):
+                self.execute("input-send-event", {"events": [{
+                    "type": "btn", "data": {"button": "left",
+                    "down": down}}]})
+                time.sleep(0.05)
+
     def counters(self):
         return {name: self.property(name) for name in PROPERTIES}
 
@@ -87,18 +102,28 @@ def settled(qmp, quiet_seconds):
     glyph_property = "astra-display-glyph-commands"
     last_glyphs = qmp.property(glyph_property)
     changed = time.monotonic()
-    while time.monotonic() - changed < quiet_seconds:
-        time.sleep(0.02)
-        glyphs = qmp.property(glyph_property)
-        if glyphs != last_glyphs:
-            changed = time.monotonic()
-            last_glyphs = glyphs
-    return qmp.counters()
+    while True:
+        while time.monotonic() - changed < quiet_seconds:
+            time.sleep(0.02)
+            glyphs = qmp.property(glyph_property)
+            if glyphs != last_glyphs:
+                changed = time.monotonic()
+                last_glyphs = glyphs
+        settled_at = time.monotonic()
+        counters = qmp.counters()
+        following = qmp.counters()
+        while following != counters:
+            counters = following
+            following = qmp.counters()
+        if following[glyph_property] == last_glyphs:
+            return following, settled_at
+        last_glyphs = following[glyph_property]
+        changed = time.monotonic()
 
 
 def run(qmp, command, quiet_seconds):
     qmp.type_without_enter(command)
-    before = settled(qmp, quiet_seconds)
+    before, _ = settled(qmp, quiet_seconds)
     started = time.monotonic()
     qmp.key("ret")
     deadline = started + 5.0
@@ -107,8 +132,8 @@ def run(qmp, command, quiet_seconds):
         if time.monotonic() >= deadline:
             raise RuntimeError("command produced no rendered text")
         time.sleep(0.02)
-    after = settled(qmp, quiet_seconds)
-    elapsed = time.monotonic() - started - quiet_seconds
+    after, settled_at = settled(qmp, quiet_seconds)
+    elapsed = settled_at - started - quiet_seconds
     if after["astra-display-submissions"] != \
             after["astra-display-completions"]:
         raise RuntimeError("display queue did not drain")
@@ -123,9 +148,15 @@ def main():
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--quiet", type=float, default=0.75)
     parser.add_argument("--max-batches", type=float)
+    parser.add_argument("--open-terminal", action="store_true",
+                        help="open Terminal from a freshly booted desktop")
     arguments = parser.parse_args()
     command = " ".join(arguments.command)
     qmp = Qmp(arguments.qmp)
+    if arguments.open_terminal:
+        time.sleep(2.0)
+        qmp.double_click(70, 90)
+        time.sleep(2.0)
     for _ in range(arguments.warmups):
         run(qmp, command, arguments.quiet)
     samples = []

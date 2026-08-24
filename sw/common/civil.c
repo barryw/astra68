@@ -114,12 +114,12 @@ void astra_civil_zone_unpack(int32_t utc_offset, uint32_t packed_name,
     }
 }
 
-bool astra_civil_from_unix_ns_zone(uint64_t nanoseconds,
-                                   const AstraTimeZone *zone,
-                                   AstraCivilTime *civil)
+bool astra_civil_from_unix_seconds_zone(uint64_t seconds,
+                                        const AstraTimeZone *zone,
+                                        AstraCivilTime *civil)
 {
     int32_t offset = zone != NULL ? zone->utc_offset : 0;
-    uint64_t shifted = nanoseconds;
+    uint64_t shifted = seconds;
     uint32_t index;
 
     if (civil == NULL)
@@ -132,15 +132,17 @@ bool astra_civil_from_unix_ns_zone(uint64_t nanoseconds,
      * refuses, and it refuses rather than wrapping.
      */
     if (offset >= 0) {
-        shifted += (uint64_t)offset * NANOSECONDS_PER_SECOND;
+        if ((uint64_t)offset > UINT64_MAX - shifted)
+            return false;
+        shifted += (uint64_t)offset;
     } else {
-        uint64_t back = (uint64_t)(-(int64_t)offset) * NANOSECONDS_PER_SECOND;
+        uint64_t back = (uint64_t)(-(int64_t)offset);
 
-        if (back > nanoseconds)
+        if (back > seconds)
             return false;
         shifted -= back;
     }
-    if (!astra_civil_from_unix_ns(shifted, civil))
+    if (!astra_civil_from_unix_seconds(shifted, civil))
         return false;
     civil->utc_offset = offset;
     for (index = 0u; index < 5u; ++index)
@@ -152,6 +154,20 @@ bool astra_civil_from_unix_ns_zone(uint64_t nanoseconds,
         civil->zone[3] = '\0';
     }
     civil->zone[4] = '\0';
+    return true;
+}
+
+bool astra_civil_from_unix_ns_zone(uint64_t nanoseconds,
+                                   const AstraTimeZone *zone,
+                                   AstraCivilTime *civil)
+{
+    uint32_t rest = 0u;
+    uint64_t seconds = astra_divide_u64(nanoseconds,
+                                        NANOSECONDS_PER_SECOND, &rest);
+
+    if (!astra_civil_from_unix_seconds_zone(seconds, zone, civil))
+        return false;
+    civil->nanosecond = rest;
     return true;
 }
 

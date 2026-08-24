@@ -31,13 +31,12 @@
  */
 
 #include <astra/civil.h>
-#include <astra/posix.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/status.h>
+#include <astra/stream.h>
 #include <astra/syscall.h>
 
-#include <stdio.h>
 #include <string.h>
 #include <time.h>
 
@@ -59,6 +58,50 @@ typedef enum DateForm {
     DATE_FORM_EPOCH,
     DATE_FORM_CUSTOM
 } DateForm;
+
+static uint32_t stdout_handle;
+static uint32_t error_handle;
+
+/* No TZ environment exists; the instant already carries its resolved zone. */
+void
+tzset(void)
+{
+}
+
+static void
+say_error(const char *text)
+{
+    (void)astra_print(error_handle, text);
+}
+
+static uint32_t
+append_number(char *out, uint32_t at, uint64_t value, uint32_t width)
+{
+    char digits[20];
+    uint32_t count = 0u;
+
+    do {
+        uint64_t quotient = value / 10u;
+
+        digits[count++] = (char)('0' + value - quotient * 10u);
+        value = quotient;
+    } while (value != 0u);
+    while (width > count) {
+        out[at++] = '0';
+        --width;
+    }
+    while (count != 0u)
+        out[at++] = digits[--count];
+    return at;
+}
+
+static int
+emit_line(char *out, uint32_t length)
+{
+    out[length++] = '\n';
+    return astra_stream_write_all(stdout_handle, out, length) ==
+           ASTRA_SYSCALL_OK ? 0 : (int)ASTRA_STATUS_IO;
+}
 
 /*
  * picolibc renders %Z and %z from the fields of `struct tm` on this build, so
@@ -92,7 +135,7 @@ fill_tm(const AstraCivilTime *civil, struct tm *out, const char *zone_name)
  * with no offset is a claim about a place it does not name.
  */
 static void
-offset_string(int32_t offset, char *out, size_t capacity)
+offset_string(int32_t offset, char *out)
 {
     long total = (long)offset;
     char sign = total < 0 ? '-' : '+';
@@ -104,12 +147,19 @@ offset_string(int32_t offset, char *out, size_t capacity)
     /* Bounded before printing: no zone is further than a day from UTC. */
     hours = (unsigned)((total / 3600L) % 100L);
     minutes = (unsigned)((total % 3600L) / 60L);
-    (void)snprintf(out, capacity, "%c%02u:%02u", sign, hours, minutes);
+    out[0] = sign;
+    out[1] = (char)('0' + hours / 10u);
+    out[2] = (char)('0' + hours % 10u);
+    out[3] = ':';
+    out[4] = (char)('0' + minutes / 10u);
+    out[5] = (char)('0' + minutes % 10u);
+    out[6] = '\0';
 }
 
 int
 astra_main(const AstraStartupInfo *startup)
 {
+    const AstraStartupCapability *capabilities;
     AstraCivilTime civil;
     AstraTimeZone zone = ASTRA_TIME_ZONE_UTC;
     AstraTimeZone utc = ASTRA_TIME_ZONE_UTC;
@@ -124,9 +174,21 @@ astra_main(const AstraStartupInfo *startup)
     int universal = 0;
     uint32_t status;
 
-    astra_posix_start(startup);
-    if (startup == NULL)
+    if (startup == NULL || startup->capabilities_address == 0u)
         return ASTRA_STATUS_INVALID;
+    capabilities = (const AstraStartupCapability *)(uintptr_t)
+        startup->capabilities_address;
+    for (uint32_t index = 0u; index < startup->capability_count; ++index) {
+        if (astra_capability_name_equal(capabilities[index].name, "STDOUT"))
+            stdout_handle = capabilities[index].handle;
+        else if (astra_capability_name_equal(capabilities[index].name,
+                                             "STDERR"))
+            error_handle = capabilities[index].handle;
+    }
+    if (stdout_handle == 0u)
+        return ASTRA_STATUS_ACCESS;
+    if (error_handle == 0u)
+        error_handle = stdout_handle;
     if (startup->argc != 0u && startup->argv_address != 0u)
         argv = (const uint32_t *)(uintptr_t)startup->argv_address;
     for (uint32_t index = 1u; argv != NULL && index < startup->argc;
@@ -146,10 +208,10 @@ astra_main(const AstraStartupInfo *startup)
              * `date +"%H %M"`, which the shell quotes into one word -- so a
              * second word arriving here is a typo and not a limitation.
              */
-            (void)fprintf(stderr,
-                          "date: %s: not an option or a +FORMAT. A format "
-                          "with a space in it needs quoting.\n",
-                          word);
+            say_error("date: ");
+            say_error(word);
+            say_error(": not an option or a +FORMAT. A format with a space "
+                      "in it needs quoting.\n");
             return ASTRA_STATUS_INVALID;
         }
         for (uint32_t at = 1u; word[at] != '\0'; ++at) {
@@ -172,12 +234,13 @@ astra_main(const AstraStartupInfo *startup)
                 form = DATE_FORM_EPOCH;
                 break;
             case 's':
-                (void)fprintf(stderr,
-                              "date: the clock is read-only: it comes from the "
-                              "host, which keeps it with NTP\n");
+                say_error("date: the clock is read-only: it comes from the "
+                          "host, which keeps it with NTP\n");
                 return ASTRA_STATUS_UNSUPPORTED;
             default:
-                (void)fprintf(stderr, "date: unknown option -%c\n", word[at]);
+                say_error("date: unknown option -");
+                (void)astra_stream_write_all(error_handle, &word[at], 1u);
+                say_error("\n");
                 return ASTRA_STATUS_INVALID;
             }
         }
@@ -185,71 +248,84 @@ astra_main(const AstraStartupInfo *startup)
 
     status = astra_clock_realtime_zone(&nanoseconds, &zone);
     if (status != ASTRA_SYSCALL_OK) {
-        (void)fprintf(stderr, "date: this machine has no clock\n");
+        say_error("date: this machine has no clock\n");
         return ASTRA_STATUS_UNSUPPORTED;
     }
     if (form == DATE_FORM_EPOCH) {
-        printf("%lu\n",
-               (unsigned long)(nanoseconds / NANOSECONDS_PER_SECOND));
-        (void)fflush(stdout);
-        return 0;
+        uint32_t length = append_number(output, 0u,
+            nanoseconds / NANOSECONDS_PER_SECOND, 0u);
+
+        return emit_line(output, length);
     }
     if (universal)
         zone = utc;
     if (!astra_civil_from_unix_ns_zone(nanoseconds, &zone, &civil)) {
-        (void)fprintf(stderr, "date: the clock reads before the epoch\n");
+        say_error("date: the clock reads before the epoch\n");
         return ASTRA_STATUS_INVALID;
     }
     fill_tm(&civil, &rendered, zone.name);
-    offset_string(civil.utc_offset, offset, sizeof(offset));
+    offset_string(civil.utc_offset, offset);
 
     switch (form) {
     case DATE_FORM_ISO_DATE:
-        printf("%04ld-%02u-%02u\n", (long)civil.year, (unsigned)civil.month,
-               (unsigned)civil.day);
-        break;
-    case DATE_FORM_ISO_SECONDS:
-        printf("%04ld-%02u-%02uT%02u:%02u:%02u%s\n", (long)civil.year,
-               (unsigned)civil.month, (unsigned)civil.day,
-               (unsigned)civil.hour, (unsigned)civil.minute,
-               (unsigned)civil.second,
-               universal || civil.utc_offset == 0 ? "+00:00" : offset);
-        break;
+    case DATE_FORM_ISO_SECONDS: {
+        uint32_t length = append_number(output, 0u, (uint32_t)civil.year, 4u);
+
+        output[length++] = '-';
+        length = append_number(output, length, civil.month, 2u);
+        output[length++] = '-';
+        length = append_number(output, length, civil.day, 2u);
+        if (form == DATE_FORM_ISO_SECONDS) {
+            const char *zone_text = universal || civil.utc_offset == 0 ?
+                "+00:00" : offset;
+
+            output[length++] = 'T';
+            length = append_number(output, length, civil.hour, 2u);
+            output[length++] = ':';
+            length = append_number(output, length, civil.minute, 2u);
+            output[length++] = ':';
+            length = append_number(output, length, civil.second, 2u);
+            for (uint32_t index = 0u; zone_text[index] != '\0'; ++index)
+                output[length++] = zone_text[index];
+        }
+        return emit_line(output, length);
+    }
     case DATE_FORM_RFC_2822:
     case DATE_FORM_DEFAULT:
     case DATE_FORM_CUSTOM: {
         const char *chosen = format;
+        size_t length;
 
         if (form == DATE_FORM_RFC_2822)
             chosen = RFC_2822_FORMAT;
         else if (form == DATE_FORM_DEFAULT)
             chosen = DEFAULT_FORMAT;
         if (chosen[0] == '\0') {
-            printf("\n");
-            break;
+            return emit_line(output, 0u);
         }
         if (astra_civil_expand_zone(chosen, &civil, expanded,
                                     sizeof(expanded)) == 0u) {
-            (void)fprintf(stderr, "date: the format does not fit in %u bytes\n",
-                          (unsigned)sizeof(expanded));
+            say_error("date: the format does not fit in ");
+            (void)astra_print_u32(error_handle, sizeof(expanded));
+            say_error(" bytes\n");
             return ASTRA_STATUS_INVALID;
         }
-        if (strftime(output, sizeof(output), expanded, &rendered) == 0u) {
+        length = strftime(output, sizeof(output), expanded, &rendered);
+        if (length == 0u) {
             /*
              * strftime answers zero for "did not fit" and for "produced
              * nothing", and a format that legitimately produces nothing is a
              * format nobody typed by accident.
              */
-            (void)fprintf(stderr, "date: the result does not fit in %u bytes\n",
-                          (unsigned)sizeof(output));
+            say_error("date: the result does not fit in ");
+            (void)astra_print_u32(error_handle, sizeof(output));
+            say_error(" bytes\n");
             return ASTRA_STATUS_INVALID;
         }
-        printf("%s\n", output);
-        break;
+        return emit_line(output, (uint32_t)length);
     }
     case DATE_FORM_EPOCH:
         break;
     }
-    (void)fflush(stdout);
     return 0;
 }

@@ -262,6 +262,8 @@ bool kernel_thread_reap_pending(void);
 uint64_t kernel_thread_reap_slots(void);
 KernelThreadStatus kernel_thread_make_ready(KernelThread *thread);
 KernelThreadStatus kernel_thread_take_next(KernelThread **thread);
+KernelThreadStatus kernel_thread_set_process_priority(uint16_t process_slot,
+                                                      uint8_t priority);
 void kernel_thread_wait_queue_init(KernelThreadWaitQueue *queue);
 uint32_t kernel_thread_wait_queue_sequence(
     const KernelThreadWaitQueue *queue);

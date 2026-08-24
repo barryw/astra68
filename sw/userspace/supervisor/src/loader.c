@@ -29,19 +29,21 @@
 static char manifest_text[LOADER_MANIFEST_MAX];
 static char bundle_text[ASTRA_BUNDLE_MANIFEST_MAX + 1u];
 static uint8_t image[ASTRA_USER_IMAGE_MAX_SIZE];
-static uint32_t process_handles[SUPERVISOR_MANIFEST_ENTRY_MAX];
+static uint32_t process_handles[SUPERVISOR_PROCESS_MAX];
 /*
- * What each resident process was launched from, so PROC: can name it. A pid
+ * What each process was launched from, so PROC: can name it. A pid
  * with no name is a number, and `ps` that prints numbers is a worse `ps` than
  * the one nobody wrote.
  */
-static char process_paths[SUPERVISOR_MANIFEST_ENTRY_MAX]
+static char process_paths[SUPERVISOR_PROCESS_MAX]
                          [SUPERVISOR_PROCESS_NAME_MAX];
+static uint32_t process_resident[SUPERVISOR_PROCESS_MAX];
 static uint32_t service_handles[SUPERVISOR_MANIFEST_ENTRY_MAX];
 static char service_names[SUPERVISOR_MANIFEST_ENTRY_MAX]
                          [ASTRA_CAPABILITY_NAME_MAX];
 static AstraVfsClient service_clients[SUPERVISOR_MANIFEST_ENTRY_MAX];
 static uint32_t process_count;
+static uint32_t supervisor_process_handle;
 static uint32_t service_count;
 static uint32_t event_target_receive;
 static uint32_t event_target_send;
@@ -518,6 +520,8 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
         (equal(entry->serves, "EVENTS") ? 2u : 1u);
     uint32_t status;
 
+    if (process_count == SUPERVISOR_PROCESS_MAX)
+        return ASTRA_STATUS_LIMIT;
     if (astra_rt_port_create(1u, sizeof(AstraServiceReady), &receive, &send) !=
         ASTRA_SYSCALL_OK)
         return ASTRA_STATUS_LIMIT;
@@ -564,7 +568,7 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
     }
     if (expected_handles == 2u)
         event_control_handle = published[1];
-    if (entry->resident != 0u) {
+    {
         uint32_t at = 0u;
 
         while (at < SUPERVISOR_PROCESS_NAME_MAX - 1u &&
@@ -573,9 +577,9 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
             ++at;
         }
         process_paths[process_count][at] = '\0';
+        process_resident[process_count] = entry->resident;
         process_handles[process_count++] = child;
-    } else
-        (void)astra_close(child);
+    }
     if (process_id != NULL)
         *process_id = child_id;
     return ASTRA_STATUS_OK;
@@ -685,6 +689,9 @@ static void pump_launch(const AstraStartupInfo *startup,
         request.arguments.length == 0u ||
         request.arguments.length > ASTRA_LAUNCH_ARGUMENT_BYTES ||
         request.arguments.reserved != 0u ||
+        request.arguments.environment_count != 0u ||
+        request.arguments.environment_length != 0u ||
+        request.arguments.environment_address != 0u ||
         (request.arguments.source != ASTRA_LAUNCH_SOURCE_SHELL &&
          request.arguments.source != ASTRA_LAUNCH_SOURCE_DESKTOP)) {
         if (reply_send != 0u)
@@ -797,6 +804,7 @@ uint32_t supervisor_loader_start(
     uint32_t image_length = 0u;
     uint32_t status;
 
+    supervisor_process_handle = startup->process_handle;
     status = supervisor_volume_read(MANIFEST_PATH, manifest_text,
                                     sizeof(manifest_text) - 1u,
                                     &manifest_length);
@@ -886,18 +894,26 @@ uint32_t supervisor_loader_start(
 }
 
 /*
- * The resident process table, for the PROC: tree to render. An accessor rather
+ * The process table, for the PROC: tree to render. An accessor rather
  * than a shared array because the table is the loader's: it decides what is
- * resident and it compacts the list when something exits, and a second file
+ * tracked and it compacts the list when something exits, and a second file
  * indexing into it directly would be a second place that has to know both.
  */
 uint32_t supervisor_loader_process_count(void)
 {
-    return process_count;
+    return process_count + (supervisor_process_handle != 0u ? 1u : 0u);
 }
 
 uint32_t supervisor_loader_process_at(uint32_t index, const char **path)
 {
+    if (supervisor_process_handle != 0u) {
+        if (index == 0u) {
+            if (path != NULL)
+                *path = "ROM:supervisor";
+            return supervisor_process_handle;
+        }
+        --index;
+    }
     if (index >= process_count)
         return 0u;
     if (path != NULL)
@@ -919,7 +935,7 @@ uint32_t supervisor_loader_watch(
     const AstraStartupInfo *startup,
     const AstraStartupCapability *capabilities)
 {
-    uint32_t waits[SUPERVISOR_MANIFEST_ENTRY_MAX + 3u];
+    uint32_t waits[SUPERVISOR_PROCESS_MAX + 3u];
 
     for (;;) {
         uint32_t index = ASTRA_WAIT_INDEX_NONE;
@@ -958,12 +974,14 @@ uint32_t supervisor_loader_watch(
                                                       0u, &exit_status);
 
             if (wait_status != ASTRA_SYSCALL_TIMED_OUT) {
-                log_failure("resident process exited",
-                            exit_status != 0u ? exit_status :
-                                                ASTRA_STATUS_PEER_DEAD);
+                if (process_resident[slot] != 0u)
+                    log_failure("resident process exited",
+                                exit_status != 0u ? exit_status :
+                                                    ASTRA_STATUS_PEER_DEAD);
                 (void)astra_close(process_handles[slot]);
                 --process_count;
                 process_handles[slot] = process_handles[process_count];
+                process_resident[slot] = process_resident[process_count];
                 for (uint32_t at = 0u; at < SUPERVISOR_PROCESS_NAME_MAX; ++at)
                     process_paths[slot][at] = process_paths[process_count][at];
                 continue;

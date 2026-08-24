@@ -69,6 +69,8 @@ uint32_t astra_rt_library_attach(const AstraLibraryReference *reference,
 uint32_t astra_query_abi(uint32_t *abi_version, uint32_t *process_handle,
                          uint32_t *thread_handle);
 uint32_t astra_process_info(uint32_t handle, AstraProcessInfo *info);
+uint32_t astra_process_priority(uint32_t handle, uint32_t priority,
+                                uint32_t *previous_priority);
 uint32_t astra_progress(uint32_t value);
 uint32_t astra_device_query(uint32_t handle, AstraDeviceInfo *info);
 uint32_t astra_device_reset(uint32_t handle);
@@ -130,6 +132,9 @@ uint32_t astra_launch_arguments_pack(AstraLaunchArguments *arguments,
                                      AstraLaunchSource source,
                                      uint32_t count,
                                      const char *const *values);
+uint32_t astra_launch_environment_pack(
+    AstraLaunchArguments *arguments, char *storage, uint32_t capacity,
+    uint32_t count, const char *const *names, const char *const *values);
 
 /*
  * Waiting for a child, which is the machine's ordinary wait named for what a

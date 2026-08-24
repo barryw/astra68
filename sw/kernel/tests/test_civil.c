@@ -94,6 +94,11 @@ int main(void)
         assert(local.hour == 22 && local.minute == 30);
         assert(local.utc_offset == -4 * 3600);
         assert(strcmp(local.zone, "EDT") == 0);
+        assert(astra_civil_from_unix_seconds_zone(
+            UINT64_C(1767234600), &eastern, &local));
+        assert(local.year == 2025 && local.month == 12 && local.day == 31);
+        assert(local.hour == 22 && local.minute == 30);
+        assert(local.nanosecond == 0u && strcmp(local.zone, "EDT") == 0);
 
         /* The same instant in Kolkata is the next morning, on the half hour. */
         assert(astra_civil_from_unix_ns_zone(
@@ -110,6 +115,7 @@ int main(void)
         assert(local.year == 1970);
         /* West of Greenwich at the epoch is before it, and is refused. */
         assert(!astra_civil_from_unix_ns_zone(0u, &eastern, &local));
+        assert(!astra_civil_from_unix_seconds_zone(0u, &eastern, &local));
     }
 
     /* The packed name the machine reports, and what an empty one means. */

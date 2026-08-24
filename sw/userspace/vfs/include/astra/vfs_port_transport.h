@@ -84,6 +84,11 @@ uint32_t astra_vfs_port_read_bulk(AstraVfsClient *client, AstraVfsFile file,
                                   uint64_t offset, void *buffer,
                                   uint32_t length, uint32_t *moved);
 
+/* Version 9: one write from the caller's bound transfer area. */
+uint32_t astra_vfs_port_write_bulk(AstraVfsClient *client, AstraVfsFile file,
+                                   uint64_t offset, const void *buffer,
+                                   uint32_t length, uint32_t *moved);
+
 /*
  * The service half: a receive-dispatch-reply pump, run from whichever loop
  * hosts the service. A pump rather than a loop for the same reason everything

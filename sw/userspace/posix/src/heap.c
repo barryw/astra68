@@ -24,7 +24,7 @@
  *     program never allocates, the machine never spends a frame on.
  *
  * Reserving is free, so the reservation is the whole of what the VM will give
- * one area -- ASTRA_AREA_SIZE_MAX, 2 MiB -- rather than a guess at what this
+ * one area -- ASTRA_AREA_SIZE_MAX, 4 MiB -- rather than a guess at what this
  * program will want. There is 2 GB of user address space and 128 MB of RAM;
  * naming memory and owning it are different operations, and only the second
  * one is scarce. The ceiling that finally refuses is the owner's frame quota,

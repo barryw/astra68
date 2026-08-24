@@ -163,11 +163,7 @@ astra_main(const AstraStartupInfo *startup)
     status = astra_irq_endpoint_info(startup->process_handle, 0u, &info,
                                      &slots);
     if (status != ASTRA_SYSCALL_OK) {
-        say("devices: refused, status ");
-        say_number(status, 0u);
-        say_line("");
-        say_line("this build carries no diagnostic capability on its own "
-                 "process");
+        say_line("devices: diagnostic capability unavailable");
         return (int)ASTRA_STATUS_ACCESS;
     }
 

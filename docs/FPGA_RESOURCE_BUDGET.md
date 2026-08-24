@@ -1599,3 +1599,28 @@ Compared with the qualified HDMI-startup route, the candidate adds 597 LUTs,
 allocation. Physical board qualification now passes the exact overlap copy,
 production-width offset check, cold boot, HDMI hot-plug, and 48 kHz stereo
 audio gates, so this is the active capacity authority.
+
+## Qualified AXI lane-realignment candidate (2026-08-23)
+
+The exact full-feature, non-incremental route with byte-lane realignment and
+the local sprite-start pipeline uses:
+
+| Resource | Used | Device percent | Physical free |
+|---|---:|---:|---:|
+| Slice LUTs | 33,176 | 62.36% | 20,024 |
+| Slice registers | 39,686 | 37.30% | 66,714 |
+| Occupied slices | 12,296 | 92.45% | 1,004 |
+| BRAM36-equivalent tiles | 129.5 | 92.50% | 10.5 |
+| DSP48E1 | 81 | 36.82% | 139 |
+
+All 68,015 routable nets connect with zero errors. The actual 187.5 MHz
+setup/hold/pulse-width result is `+0.022/+0.018/+1.416 ns`; the 200 MHz stress
+setup result is `-0.311 ns`. This is the latest exact capacity authority. The
+combined STOR v9 and output-packing image closes the former application blocker
+at a 779.731 ms median and exactly three presentation batches across 20/20
+physical runs. Renderer, all 64 lanes, exact compositor, screen offset, sprite,
+Copper, POST/SDRAM, stage 8, event-snapshot recovery, and 48 kHz audio pass on
+the Arty attached to Beast. The route remains a volatile FPGA-manager load;
+the generic framebuffer-copy route remains the persistent rollback authority
+until HDMI hot-plug and visual inspection can be repeated with a sink attached
+to Beast.

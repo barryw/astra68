@@ -78,6 +78,7 @@ posix_errno(uint32_t status)
     case ASTRA_VFS_ERR_UNSUPPORTED: return ENOSYS;
     case ASTRA_VFS_ERR_BUSY:      return EBUSY;
     case ASTRA_VFS_ERR_BUFFER_TOO_SMALL: return ERANGE;
+    case ASTRA_VFS_ERR_CROSS_DEVICE: return EXDEV;
     default:                      return EIO;
     }
 }
@@ -432,6 +433,26 @@ unlink(const char *path)
     return status == ASTRA_VFS_OK ? 0 : fail(status);
 }
 
+int
+rename(const char *from, const char *to)
+{
+    char from_typed[ASTRA_VFS_PATH_MAX];
+    char to_typed[ASTRA_VFS_PATH_MAX];
+    uint32_t status;
+
+    if (!resolve(from, from_typed, sizeof(from_typed)) ||
+        !resolve(to, to_typed, sizeof(to_typed)))
+        return -1;
+    if (filesystem.library->abi_minor < 1u ||
+        filesystem.library->structure_size < sizeof(*filesystem.library)) {
+        errno = ENOSYS;
+        return -1;
+    }
+    status = filesystem.library->rename(&filesystem.filesystem, from_typed,
+                                        to_typed);
+    return status == ASTRA_VFS_OK ? 0 : fail(status);
+}
+
 /*
  * One removal, and the filesystem decides whether the name was the right kind
  * for it. Refusing a directory here on POSIX's behalf would be this layer
@@ -575,7 +596,7 @@ opendir(const char *path)
     dir->fd = -1;
     state = (PosixDir *)(void *)dir->buf;
     status = filesystem.library->directory_open(&filesystem.filesystem, typed,
-                                                &state->directory);
+                                                 &state->directory);
     if (status != ASTRA_VFS_OK) {
         errno = posix_errno(status);
         return NULL;

@@ -659,41 +659,63 @@ static void test_shared_map_existing_leaf_rollback_and_alias_guards(void)
     assert(final_memory.free_frames == initial_memory.free_frames);
 }
 
-static void test_library_code_page_is_shared_and_executable(void)
+static void test_library_code_range_is_shared_and_executable(void)
 {
     const uint32_t frame_owner = 0x30000001u;
     const uint32_t address = ASTRA_LIBRARY_BASE + 0x1000u;
     KernelAddressSpace first = {0};
     KernelAddressSpace second = {0};
     KernelFrameInfo frame;
-    uint32_t physical;
+    uint32_t physical_pages[2];
+    uint32_t flushes_before;
+    uint32_t invalidations_before;
 
     initialize_test();
+    assert(kernel_vm_enable() == KERNEL_VM_OK);
     assert(kernel_vm_create_address_space(61u, &first) == KERNEL_VM_OK);
     assert(kernel_vm_create_address_space(62u, &second) == KERNEL_VM_OK);
-    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_SHARED, frame_owner,
-                               &physical) == KERNEL_MEMORY_OK);
-    assert(kernel_vm_map_shared_page(&first, address, physical, frame_owner,
-                                     KERNEL_VM_READ | KERNEL_VM_EXEC) ==
-           KERNEL_VM_OK);
-    assert(kernel_vm_map_shared_page(&second, address, physical, frame_owner,
-                                     KERNEL_VM_READ | KERNEL_VM_EXEC) ==
-           KERNEL_VM_OK);
-    assert(kernel_memory_frame_info(physical, &frame));
+    assert(kernel_memory_alloc_pages_zeroed(
+               2u, KERNEL_FRAME_SHARED, frame_owner, physical_pages) ==
+           KERNEL_MEMORY_OK);
+    flushes_before = flush_count;
+    invalidations_before = cache_invalidation_count;
+    assert(kernel_vm_map_shared_range(
+               &first, address, physical_pages, 2u, frame_owner,
+               KERNEL_VM_READ | KERNEL_VM_EXEC) == KERNEL_VM_OK);
+    assert(flush_count == flushes_before + 1u);
+    assert(cache_invalidation_count == invalidations_before + 1u);
+    assert(kernel_vm_map_shared_range(
+               &second, address, physical_pages, 2u, frame_owner,
+               KERNEL_VM_READ | KERNEL_VM_EXEC) == KERNEL_VM_OK);
+    assert(kernel_memory_frame_info(physical_pages[0], &frame));
     assert(frame.references == 3u); /* cache plus two address spaces */
-    assert(kernel_vm_map_shared_page(
-               &second, address + ASTRA_LIBRARY_SLOT_SIZE, physical,
-               frame_owner, KERNEL_VM_READ | KERNEL_VM_EXEC) ==
+    assert(kernel_memory_frame_info(physical_pages[1], &frame));
+    assert(frame.references == 3u);
+    assert(kernel_vm_map_shared_range(
+               &second, address + ASTRA_LIBRARY_SLOT_SIZE, physical_pages,
+               2u, frame_owner, KERNEL_VM_READ | KERNEL_VM_EXEC) ==
            KERNEL_VM_CACHE_ALIAS);
-    assert(kernel_vm_map_shared_page(&second, address + 0x1000u, physical,
-                                     frame_owner,
-                                     KERNEL_VM_READ | KERNEL_VM_WRITE) ==
+    assert(kernel_vm_map_shared_range(
+               &second, address + 0x2000u, physical_pages, 2u, frame_owner,
+               KERNEL_VM_READ | KERNEL_VM_WRITE | KERNEL_VM_EXEC) ==
            KERNEL_VM_INVALID_ARGUMENT);
-    assert(kernel_vm_unmap_page(&first, address) == KERNEL_VM_OK);
-    assert(kernel_vm_unmap_page(&second, address) == KERNEL_VM_OK);
-    assert(kernel_memory_frame_info(physical, &frame));
+    assert(kernel_vm_map_shared_range(
+               &second, KERNEL_VM_AREA_BASE + 0x2000u, physical_pages, 2u,
+               frame_owner, KERNEL_VM_READ | KERNEL_VM_EXEC) ==
+           KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_unmap_shared_range(
+               &first, address, physical_pages, 2u, frame_owner) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_unmap_shared_range(
+               &second, address, physical_pages, 2u, frame_owner) ==
+           KERNEL_VM_OK);
+    assert(kernel_memory_frame_info(physical_pages[0], &frame));
     assert(frame.references == 1u);
-    assert(kernel_memory_release(physical, 1u, frame_owner) ==
+    assert(kernel_memory_frame_info(physical_pages[1], &frame));
+    assert(frame.references == 1u);
+    assert(kernel_memory_release(physical_pages[0], 1u, frame_owner) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_memory_release(physical_pages[1], 1u, frame_owner) ==
            KERNEL_MEMORY_OK);
     assert(kernel_vm_destroy_address_space(&first) == KERNEL_VM_OK);
     assert(kernel_vm_destroy_address_space(&second) == KERNEL_VM_OK);
@@ -758,7 +780,7 @@ int main(void)
     test_destroy_releases_read_only_mapping();
     test_shared_map_transaction_rolls_back_every_stage();
     test_shared_map_existing_leaf_rollback_and_alias_guards();
-    test_library_code_page_is_shared_and_executable();
+    test_library_code_range_is_shared_and_executable();
     test_device_aperture_above_the_low_region_is_uncached();
     puts("KERNEL VM PASS");
     return 0;

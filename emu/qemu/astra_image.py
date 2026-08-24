@@ -131,6 +131,15 @@ def _debugfs(volume, request, what, optional=False):
         raise RuntimeError("debugfs refused %s: %s" % (what, output or request))
 
 
+def _mkdir(volume, path, what):
+    result = subprocess.run(["debugfs", "-R", "stat %s" % path, volume],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT)
+    if "Inode:" in result.stdout.decode("utf-8", "replace"):
+        return
+    _debugfs(volume, "mkdir %s" % path, what)
+
+
 def _commands(directory):
     """The built command images: every regular file that is not an ELF kept
     for a debugger. `make` in sw/userspace/commands produces `status` beside
@@ -228,8 +237,7 @@ def _install_bundle(volume, source, destination):
         relative = os.path.relpath(root, source)
         target = destination if relative == "." else \
             destination + "/" + relative
-        _debugfs(volume, "mkdir %s" % target, "bundle directory",
-                 optional=True)
+        _mkdir(volume, target, "bundle directory")
         for name in files:
             host = os.path.join(root, name)
             guest = target + "/" + name
@@ -284,15 +292,15 @@ def install(image, catalog=None, commands=None, services=None, kits=None,
 
         # The supervisor makes this directory at boot if it is missing, but the
         # commands have to be here before the boot that runs them.
-        _debugfs(volume, "mkdir /%s" % COMMANDS_DIRECTORY, "the commands "
-                 "directory", optional=True)
+        _mkdir(volume, "/%s" % COMMANDS_DIRECTORY,
+               "the commands directory")
         for name, path in built:
             target = "/%s/%s" % (COMMANDS_DIRECTORY, name)
             _debugfs(volume, "rm %s" % target, "an old command", optional=True)
             _debugfs(volume, "write %s %s" % (path, target), "command " + name)
 
-        _debugfs(volume, "mkdir /%s" % SERVICES_DIRECTORY,
-                 "the services directory", optional=True)
+        _mkdir(volume, "/%s" % SERVICES_DIRECTORY,
+               "the services directory")
         for name, path in service_images:
             target = "/%s/%s" % (SERVICES_DIRECTORY, name)
             _debugfs(volume, "rm %s" % target, "an old service",
@@ -300,8 +308,8 @@ def install(image, catalog=None, commands=None, services=None, kits=None,
             _debugfs(volume, "write %s %s" % (path, target),
                      "service " + name)
 
-        _debugfs(volume, "mkdir /%s" % LIBS_DIRECTORY,
-                 "the shared Kit directory", optional=True)
+        _mkdir(volume, "/%s" % LIBS_DIRECTORY,
+               "the shared Kit directory")
         for bundle in kit_bundles:
             _install_bundle(volume, bundle,
                             "/%s/%s" % (LIBS_DIRECTORY,
@@ -311,8 +319,7 @@ def install(image, catalog=None, commands=None, services=None, kits=None,
         # read in each new process. The manifests remain authoritative; these
         # entries are overwritten from them on every image installation.
         provider_directory = "/%s/.providers" % LIBS_DIRECTORY
-        _debugfs(volume, "mkdir %s" % provider_directory,
-                 "the provider index directory", optional=True)
+        _mkdir(volume, provider_directory, "the provider index directory")
         for (name, abi), (version, abi_minor, build_id, path) in sorted(
                 _providers(kit_bundles).items()):
             host = os.path.join(temporary, "%s.abi-%u" % (name, abi))
@@ -332,15 +339,15 @@ def install(image, catalog=None, commands=None, services=None, kits=None,
             _debugfs(volume, "write %s %s" % (host, target),
                      "provider index")
 
-        _debugfs(volume, "mkdir /%s" % APPS_DIRECTORY,
-                 "the application directory", optional=True)
+        _mkdir(volume, "/%s" % APPS_DIRECTORY,
+               "the application directory")
         for bundle in application_bundles:
             _install_bundle(volume, bundle,
                             "/%s/%s" % (APPS_DIRECTORY,
                                          os.path.basename(bundle)))
 
-        _debugfs(volume, "mkdir /%s" % STARTUP_DIRECTORY,
-                 "the startup directory", optional=True)
+        _mkdir(volume, "/%s" % STARTUP_DIRECTORY,
+               "the startup directory")
         manifest = os.path.join(temporary, STARTUP_NAME)
         with open(manifest, "w", encoding="ascii", newline="\n") as handle:
             handle.write(manifest_text)
@@ -354,9 +361,9 @@ def install(image, catalog=None, commands=None, services=None, kits=None,
         # names: the shipped one stays where it is, and a copy goes into the
         # writable member under the same name as a shipped command, so a
         # lookup has a real choice to make and the gate can see which it made.
-        _debugfs(volume, "mkdir /local", "the local directory", optional=True)
-        _debugfs(volume, "mkdir /%s" % LOCAL_COMMANDS_DIRECTORY,
-                 "the local commands directory", optional=True)
+        _mkdir(volume, "/local", "the local directory")
+        _mkdir(volume, "/%s" % LOCAL_COMMANDS_DIRECTORY,
+               "the local commands directory")
         for name, path in built:
             if name != "which":
                 continue

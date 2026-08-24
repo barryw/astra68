@@ -767,6 +767,15 @@ events_unlink(void *context, const char *path)
     return ASTRA_VFS_ERR_ACCESS;
 }
 
+static uint32_t
+events_rename(void *context, const char *from, const char *to)
+{
+    (void)context;
+    (void)from;
+    (void)to;
+    return ASTRA_VFS_ERR_ACCESS;
+}
+
 static const AstraVfsBackendOps events_ops = {
     events_open,
     events_close,
@@ -775,7 +784,8 @@ static const AstraVfsBackendOps events_ops = {
     events_stat,
     events_readdir,
     events_mkdir,
-    events_unlink
+    events_unlink,
+    events_rename
 };
 
 int

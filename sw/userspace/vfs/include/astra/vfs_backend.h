@@ -85,6 +85,7 @@ typedef struct AstraVfsBackendOps {
                         AstraVfsNodeInfo *info, uint64_t *next);
     uint32_t (*mkdir)(void *context, const char *path);
     uint32_t (*unlink)(void *context, const char *path);
+    uint32_t (*rename)(void *context, const char *from, const char *to);
 } AstraVfsBackendOps;
 
 struct AstraVfsBackend {

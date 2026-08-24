@@ -165,6 +165,9 @@ module astra_sprite_line_builder #(
     endfunction
 
     reg [3:0] state;
+    reg start_q;
+    reg [1:0] start_build_slot_q;
+    reg [9:0] start_line_y_q;
     reg [BUILD_COUNTER_WIDTH-1:0] build_cycles_q;
     reg [BUILD_COUNTER_WIDTH-1:0] max_build_cycles_q;
     reg [1:0] build_slot_q;
@@ -1306,6 +1309,9 @@ module astra_sprite_line_builder #(
     always @(posedge build_clk) begin
         if (build_reset) begin
             state <= S_IDLE;
+            start_q <= 1'b0;
+            start_build_slot_q <= 2'd0;
+            start_line_y_q <= 10'd0;
             prep_state <= P_IDLE;
             render_state <= R_IDLE;
             busy <= 1'b0;
@@ -1416,6 +1422,9 @@ module astra_sprite_line_builder #(
             copy_active_q <= 1'b0;
             copy_read_quad_q <= 9'd0;
         end else begin
+            start_q <= start;
+            start_build_slot_q <= build_slot;
+            start_line_y_q <= line_y;
             done <= 1'b0;
             line_complete <= 1'b0;
             collision_event <= 1'b0;
@@ -1803,7 +1812,7 @@ module astra_sprite_line_builder #(
 
             case (state)
                 S_IDLE: begin
-                    if (start) begin
+                    if (start_q) begin
                         if (abort_drain_q || request_count_q != 4'd0 ||
                             response_active_q || row_write_valid_q ||
                             response_publish_valid_q || prep_arvalid_q) begin
@@ -1811,19 +1820,20 @@ module astra_sprite_line_builder #(
                             line_complete <= 1'b0;
                             fetch_error <= 1'b1;
                             deadline_error <= 1'b1;
-                            completed_slot <= build_slot;
-                            slot_valid[build_slot] <= 1'b0;
+                            completed_slot <= start_build_slot_q;
+                            slot_valid[start_build_slot_q] <= 1'b0;
                         end else begin
                             busy <= 1'b1;
                             fetch_error <= 1'b0;
                             deadline_error <= 1'b0;
                             build_cycles_q <= {BUILD_COUNTER_WIDTH{1'b0}};
                             read_bytes <= 32'd0;
-                            build_slot_q <= build_slot;
-                            completed_slot <= build_slot;
-                            slot_valid[build_slot] <= 1'b0;
-                            line_y_q <= line_y;
-                            collision_rotate_frame_q <= line_y == 10'd0;
+                            build_slot_q <= start_build_slot_q;
+                            completed_slot <= start_build_slot_q;
+                            slot_valid[start_build_slot_q] <= 1'b0;
+                            line_y_q <= start_line_y_q;
+                            collision_rotate_frame_q <=
+                                start_line_y_q == 10'd0;
                             clear_quad_q <= 9'd0;
                             clear_active_q <= 1'b1;
                             admission_position_q <= 6'd0;
@@ -1838,7 +1848,7 @@ module astra_sprite_line_builder #(
                             prep_state <= P_IDLE;
                             render_state <= R_IDLE;
                             state <= S_ORDER;
-                            if (line_y == 10'd0) begin
+                            if (start_line_y_q == 10'd0) begin
                                 collision_frame <= collision_current_frame_q;
                                 collision_current_frame_q <=
                                     collision_current_frame_q + 32'd1;

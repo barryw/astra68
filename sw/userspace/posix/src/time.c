@@ -24,6 +24,7 @@
 #define _POSIX_MONOTONIC_CLOCK 200809L
 
 #include <astra/posix.h>
+#include <astra/posix_descriptor.h>
 
 #include <astra/runtime.h>
 #include <astra/syscall.h>
@@ -32,6 +33,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/time.h>
+#include <sys/times.h>
 #include <time.h>
 
 #define NANOSECONDS_PER_SECOND 1000000000u
@@ -105,4 +107,29 @@ clock_gettime(clockid_t clock, struct timespec *value)
     value->tv_sec = (time_t)seconds;
     value->tv_nsec = (long)rest;
     return 0;
+}
+
+clock_t
+times(struct tms *value)
+{
+    const AstraStartupInfo *startup = astra_posix_startup();
+    AstraProcessInfo info = {0};
+    uint64_t monotonic;
+
+    if (value == NULL || startup == NULL || startup->process_handle == 0u) {
+        errno = EFAULT;
+        return (clock_t)-1;
+    }
+    info.size = sizeof(info);
+    if (astra_process_info(startup->process_handle, &info) !=
+        ASTRA_SYSCALL_OK) {
+        errno = EIO;
+        return (clock_t)-1;
+    }
+    value->tms_utime = (clock_t)(info.runtime_ns / 1000u);
+    value->tms_stime = 0;
+    value->tms_cutime = 0;
+    value->tms_cstime = 0;
+    monotonic = astra_clock_monotonic();
+    return (clock_t)(monotonic / 1000u);
 }

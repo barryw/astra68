@@ -7,13 +7,13 @@
 #define KERNEL_VM_USER_MIN 0x00010000u
 #define KERNEL_VM_USER_MAX 0x7fffffffu
 #define KERNEL_VM_AREA_BASE 0x40000000u
-#define KERNEL_VM_AREA_SLOT_SIZE 0x00200000u
+#define KERNEL_VM_AREA_SLOT_SIZE 0x00400000u
 /*
  * Sixteen was a machine whose graphical half was one program. A desktop is
  * seven: every window is a surface its client created, and every mount a
- * program reads through wants a transfer area of its own. The window is 64 MiB
- * of user address space at KERNEL_VM_AREA_BASE and the DMA window starts at
- * 0x50000000, so this has room to double again before the two would meet.
+ * program reads through wants a transfer area of its own. A 4 MiB slot is one
+ * complete MC68030 page table, so mapping it is atomic without another level
+ * of rollback state. Reserved areas commit no RAM until touched.
  */
 #define KERNEL_VM_AREA_SLOT_COUNT 32u
 /*

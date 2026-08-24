@@ -63,6 +63,8 @@ import trace_decode
 # Vesta input block; the low byte of the status word is the queued count.
 INPUT_STATUS = 0xFFF0070C
 INPUT_COUNT_MASK = 0xFF
+RTC_STATUS = 0xFFF00420
+RTC_VALID = 1 << 0
 
 # The kernel trace ring, at the fixed address the loader retains it at.
 RING_ADDRESS = 0x020C4000
@@ -171,18 +173,14 @@ SCRIPT = [
     ("echo $?", "3"),
     # Commands can be loaded but not rewritten by the terminal process.
     ("write commands:status no", "access denied"),
-    # Both read-only members remain visible: `devices` is the fixture's own
+    # Both members remain visible: `devices` is the fixture's own
     # shadow copy and `which` is only on the shipped member, so a listing
     # holding them both is a union that did not collapse while crossing into
     # the terminal process.
     #
-    # This used to assert `devices  [0]` and `status  [1]` -- the member each
-    # name came from, printed beside it. That annotation went when `ls` stopped
-    # being a shell builtin and became a program, and nothing replaced it: the
-    # listing shows the names and not which member answered for them. `which`
-    # below still says it, which is why the ordering claim is still tested at
-    # all. Worth putting back in `ls`.
-    ("ls commands:", ("devices", "which")),
+    # The tag is part of the union contract: duplicates are intentionally
+    # visible, and the member says which binding supplied each row.
+    ("ls commands:", ("devices  [0]", "devices  [1]", "which  [1]")),
     # And the milder failure the same conflation caused in `rm`: a name on
     # no member at all must be reported "not found", not "access denied" --
     # a member refusing on rights alone has said nothing about whether the
@@ -213,6 +211,10 @@ SCRIPT = [
     # another name, so it answers the way `which` does rather than the way the
     # shipped `devices` does.
     ("devices status", "/commands/status [1]"),
+    # PROC: is the whole running machine, not only boot services. It includes
+    # init, the desktop, this dynamically launched Terminal, and ps itself.
+    ("ps", ("ROM:supervisor", "SERVICES:desktop", "APPS:Terminal.app",
+            "COMMANDS:ps")),
     # This used to have to be last, because the check that followed SCRIPT
     # reread the rendered screen and needed this line's output to still be on
     # it -- thirty rows of terminal, and five commands' worth of listings were
@@ -227,6 +229,24 @@ SCRIPT = [
     # -- see the enum at the top of `commands/posix/posix.c`.
     ("posix", "posix"),
     ("echo $?", "0"),
+    # Stock Lua, including the shared POSIX paths it depends on rather than a
+    # command-private compatibility layer.
+    ("lua -v", "Lua 5.5.1"),
+    ("lua -e \"print(6*7)\"", "42"),
+    # The expected fraction is absent from the echoed command, so a crash
+    # cannot pass by merely rendering what was typed.
+    ("lua -e \"print(1/2)\"", "0.5"),
+    ("write luafile.lua \"print(6*7)\"", "luafile.lua"),
+    ("lua luafile.lua", "42"),
+    ("rm luafile.lua", "rm luafile.lua"),
+    ("FOO=bar lua -e \"print(os.getenv('FOO'))\"", "bar"),
+    ("lua -e \"local a,b,c=os.execute('status 23');print(a,b,c)\"",
+     "exit"),
+    ("lua -e \"print(os.date('!%Y'))\"", "2026"),
+    ("lua -e \"local f=assert(io.open('luatest','w'));"
+     "f:write('ok');f:close();assert(os.rename('luatest','luanew'));"
+     "print(assert(io.open('luanew')):read('*a'));os.remove('luanew')\"",
+     "ok"),
     # Quoting, proved by a name that could not exist without it. Two words
     # arriving as two arguments makes `two/`, and one word makes `two words/`
     # -- so the listing is the whole assertion and no message has to be
@@ -269,7 +289,7 @@ SCRIPT = [
     ("cat phrase.txt", "two words"),
     # A builtin still refuses an environment, and says so rather than dropping
     # the name.
-    ("A=1 pwd", "cannot be handed an environment"),
+    ("A=1 pwd", "cannot be redirected or given an environment"),
 ]
 
 # What a person waits for: Enter, to the answer on the screen.
@@ -312,7 +332,7 @@ QCODE = {" ": "spc", "\n": "ret", "/": "slash", ".": "dot", "-": "minus",
 # exists shifted, and `+` is here because `date +FORMAT` needs it.
 SHIFTED = {":": "semicolon", "+": "equal", "%": "5", "_": "minus",
            "?": "slash", "\"": "apostrophe", ">": "dot", "<": "comma",
-           "$": "4"}
+           "$": "4", "(": "9", ")": "0", "*": "8", "!": "1"}
 
 # A user record the decoder rendered. The body is what the shell wrote; a
 # record whose text did not fit one record ends in a backslash and continues
@@ -557,6 +577,9 @@ class Machine:
 
 def open_terminal(machine, boot_deadline, command_deadline):
     """Boots to the desktop and opens a terminal the way a person does."""
+    if (machine.word(RTC_STATUS) & RTC_VALID) == 0:
+        print("FAIL: machine model does not provide the required host clock")
+        return False
     if not machine.wait_for_serial(BOOT_MARKER, boot_deadline):
         print("FAIL: never reached the desktop; last serial lines:")
         for line in machine.log[-8:]:

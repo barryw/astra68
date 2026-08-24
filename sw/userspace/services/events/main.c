@@ -53,6 +53,10 @@ ASTRA_PROGRAM("events-service", 0, 2, 0, "Barry Walker",
 
 static AstraEventStored event_records[EVENTS_RECORD_MAX];
 static AstraEventStored previous_records[EVENTS_RECORD_MAX];
+static struct {
+    uint8_t bytes[ASTRA_EVENT_SNAPSHOT_HEADER_SIZE + sizeof(event_records)];
+    uint32_t length;
+} snapshot_buffer;
 /* Aligned by being descriptors: the catalog reader indexes them in place. */
 static AstraEventDescriptor catalog_bytes[EVENTS_CATALOG_MAX /
                                           ASTRA_EVENT_DESCRIPTOR_SIZE];
@@ -73,6 +77,8 @@ static uint32_t debug_handle;
 static uint32_t drain_cursor;
 static uint32_t snapshot_boot = 1u;
 static uint32_t snapshot_generation;
+static uint32_t snapshot_length[2];
+static uint8_t snapshot_written[2];
 static int persistence_ready;
 static int previous_ready;
 /*
@@ -128,19 +134,32 @@ snapshot_read(void *context, uint32_t offset, void *buffer, uint32_t length)
 }
 
 static int
-snapshot_write(void *context, uint32_t offset, const void *buffer,
-               uint32_t length)
+snapshot_buffer_write(void *context, uint32_t offset, const void *buffer,
+                      uint32_t length)
 {
-    SnapshotFile *snapshot = context;
+    (void)context;
+    if (offset > sizeof(snapshot_buffer.bytes) ||
+        length > sizeof(snapshot_buffer.bytes) - offset) {
+        return 0;
+    }
+    (void)memcpy(snapshot_buffer.bytes + offset, buffer, length);
+    if (offset + length > snapshot_buffer.length)
+        snapshot_buffer.length = offset + length;
+    return 1;
+}
+
+static int
+snapshot_write(SnapshotFile *snapshot, const void *buffer, uint32_t length)
+{
     const uint8_t *in = buffer;
     uint32_t done = 0u;
 
     while (done < length) {
         uint32_t moved = 0u;
 
-        if (process_filesystem.library->write_at(
-                &snapshot->file, offset + done, in + done, length - done,
-                &moved) !=
+        if (astra_vfs_port_write_bulk(snapshot->file._private_client,
+                snapshot->file._private_file, done, in + done,
+                length - done, &moved) !=
                 ASTRA_VFS_OK || moved == 0u) {
             return 0;
         }
@@ -242,6 +261,8 @@ save_snapshot(void)
 {
     SnapshotFile snapshot = {ASTRA_FILE_INIT};
     uint32_t next = snapshot_generation + 1u;
+    uint32_t bank;
+    uint32_t flags = ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE;
     int saved;
 
     if (!persistence_ready) {
@@ -250,21 +271,35 @@ save_snapshot(void)
     if (next == 0u) {
         next = 1u;
     }
+    bank = next & 1u;
+    snapshot_buffer.length = 0u;
+    saved = astra_event_snapshot_save(&store, snapshot_boot, next,
+                                      snapshot_buffer_write, NULL);
+    if (!saved) {
+        persistence_ready = 0;
+        return;
+    }
+    /* Each bank only grows during a boot. Keep its allocated blocks unless
+     * the serialized state actually became shorter. */
+    if (snapshot_written[bank] == 0u ||
+        snapshot_buffer.length < snapshot_length[bank]) {
+        flags |= ASTRA_VFS_OPEN_TRUNCATE;
+    }
     if (process_filesystem.library->open(
-            &process_filesystem.filesystem, snapshot_path[next & 1u],
-            ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
-                ASTRA_VFS_OPEN_TRUNCATE,
+            &process_filesystem.filesystem, snapshot_path[bank], flags,
             &snapshot.file) != ASTRA_VFS_OK) {
         persistence_ready = 0;
         return;
     }
-    saved = astra_event_snapshot_save(&store, snapshot_boot, next,
-                                      snapshot_write, &snapshot);
+    saved = snapshot_write(&snapshot, snapshot_buffer.bytes,
+                           snapshot_buffer.length);
     if (process_filesystem.library->close(&snapshot.file) != ASTRA_VFS_OK) {
         saved = 0;
     }
     if (saved) {
         snapshot_generation = next;
+        snapshot_length[bank] = snapshot_buffer.length;
+        snapshot_written[bank] = 1u;
     } else {
         /* The other bank remains valid; do not hammer a failing volume. */
         persistence_ready = 0;
@@ -501,7 +536,9 @@ int astra_main(const AstraStartupInfo *startup)
     if (bootstrap == NULL || event_target == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     event_target_handle = event_target->handle;
-    status = astra_process_filesystem_open(&process_filesystem, startup);
+    /* First dynamic-library consumer on a cold boot seeds the kernel cache. */
+    status = astra_process_filesystem_open_bootstrap(&process_filesystem,
+                                                     startup);
     if (status == ASTRA_VFS_OK)
         status = events_start(startup->process_handle);
     ready(bootstrap->handle, status,

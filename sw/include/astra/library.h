@@ -1,6 +1,8 @@
 #ifndef ASTRA_LIBRARY_H
 #define ASTRA_LIBRARY_H
 
+#include <astra/syscall.h>
+
 /*
  * Identity carried by every Astra shared library.
  *
@@ -24,7 +26,8 @@
 #define ASTRA_LIBRARY_BASE 0x20000000u
 #define ASTRA_LIBRARY_SLOT_SIZE 0x01000000u
 #define ASTRA_LIBRARY_SLOT_COUNT 15u
-#define ASTRA_LIBRARY_IMAGE_MAX 0x00040000u
+/* One library image is transferred through one VM area slot. */
+#define ASTRA_LIBRARY_IMAGE_MAX ASTRA_AREA_SIZE_MAX
 #define ASTRA_LIBRARY_REFERENCE_SIZE 44u
 #define ASTRA_LIBRARY_REFERENCE_EXACT 0u
 #define ASTRA_LIBRARY_REFERENCE_LATEST 1u

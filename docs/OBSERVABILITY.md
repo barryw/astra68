@@ -1,7 +1,7 @@
 # Astra observability and namespace rules
 
-Status: metrics contract implemented; log transport and introspection handler
-are specified here and not yet built
+Status: metrics, user logging, and process introspection implemented;
+additional introspection trees remain planned
 
 This document exists because three requirements are architectural rather than
 features. Logging, introspection, and networking all fail the same way: if the
@@ -57,11 +57,13 @@ ABI version, monotonic sequence numbers, and an event enum that already covers
 syscall entry and exit, context switches, IRQ delivery, and allocation
 failures.
 
-The remaining work is a bounded user record type and a syscall that appends to
-that ring, so a service's log lines and the kernel's own events share one
-ordered stream with one set of sequence numbers. A userspace log service drains
-it; the introspection filesystem exposes it. Two ring buffers with two
-timestamps and two orderings is the failure this avoids.
+Userspace emits bounded structured or inline records through `LOG_WRITE`, and
+`TRACE_READ` drains generation-checked process views under debug authority.
+User records and kernel events therefore share the ring's sequence numbers and
+ordering. The events service persists the records it accepts; a future
+introspection tree can expose that existing stream without creating another
+ring. Two buffers with two timestamps and two orderings is the failure this
+avoids.
 
 The kernel monitor in `sw/kernel/monitor.c` stays what it is: the kernel's own
 debug console over FTDI and AstraHost SPI. It is not the user terminal, in the
@@ -69,7 +71,7 @@ same way that a kernel console is not a tty.
 
 ## Introspection filesystem
 
-Astra will expose live system state as a filesystem, in the spirit of `/proc`.
+Astra exposes live process state as a filesystem, in the spirit of `/proc`.
 
 It is not a special mechanism. `docs/STORAGE_AND_VFS.md` already defines one
 node-oriented handler contract with FAT/exFAT, a native writable volume, and
@@ -87,34 +89,38 @@ honoured when the contract is written rather than retrofitted:
 
 ### PROC:
 
-The first tree is process state, mounted at the `PROC:` assign. A process is a
-directory named by its identifier; the leaves inside it are generated at read
-time:
+The first tree is process state, mounted at the `PROC:` assign. Its current
+layout is generated at read time:
 
 ```text
 PROC:
+  snapshot      fixed AstraProcSnapshot records for the bounded live table
   42/
-    status      identity, state, priorities, exit reason
-    mem         resident frames, stacks and guards, handle references
-    cpu         run count, timer ticks, syscalls, waits
-    threads     one line per thread
+    status      identity, state, memory, CPU, handles, and exit information
 ```
 
-Most of this is already tracked. `KernelProcessSnapshot` carries identity,
-generation, owner, process and thread state, priorities, thread and live-thread
-counts, run count, timer ticks, syscall count, fault vector and address, exit
-status and reason, user and supervisor stack and guard pages, handle
-references, and death waiters. `kernel_memory_owner_frames()` returns a
-process's resident frame count from a maintained owner ledger in constant time.
-Rendering `status`, `mem`, and `threads` therefore costs a query and no new
-accounting.
+`status` contains the live `AstraProcessInfo` fields, including resident frames
+from the maintained owner ledger, thread and process state, run count, timer
+ticks, syscalls, handle references, accumulated runtime, and elapsed lifetime.
+Separate `mem`, `cpu`, and `threads` leaves remain optional presentation work;
+the accounting they would expose is not duplicated to create them.
 
-`cpu` is the exception and must not pretend otherwise. Timer ticks and run
-counts are schedule counts, not CPU time. Reporting occupancy in cycles
-requires reading the cycle counter on every context switch, and that path
-carries published budgets and automated regression gates. Until that cost is
-measured against those gates, `cpu` reports what is actually counted and does
-not report a cycle figure it cannot substantiate.
+`snapshot` is the list fast path. Each 96-byte `AstraProcSnapshot` contains the
+80-byte process information record and a bounded 32-byte command name. The
+supervisor renders it directly from the process handles it already owns, and
+`ps` reads the complete bounded table with the existing fused `READ_PATH`
+operation rather than attaching the filesystem library or opening and parsing
+one text leaf per process. A disappearing process is skipped, so the view never
+fabricates a stale row.
+
+CPU time is measured, not inferred from schedule counts. Axiom timestamps the
+common user-resume and kernel-entry boundaries with the low cycle counter and
+accumulates a 64-bit runtime per process. Elapsed time starts at process
+creation; both values are converted through the platform cycle-to-nanosecond
+contract. The physical regression gate compares complete rendered output and
+records presentation counts as well as wall time. `ps` reports lifetime CPU
+percentage as runtime divided by elapsed time and reports resident memory as
+ledger frames times the 4 KiB page size.
 
 ### Identifiers are generation-checked
 

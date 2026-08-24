@@ -1,6 +1,6 @@
 # Filesystem Kit
 
-Status: `filesystem.library` ABI 1.0 is implemented as the shared client layer
+Status: `filesystem.library` ABI 1.1 is implemented as the shared client layer
 over Astra's existing VFS, assign, union, and service protocols. It does not
 create a second filesystem stack.
 
@@ -22,7 +22,7 @@ The high-level API provides:
 - assign-aware open and close;
 - sequential and explicit-offset reads and writes;
 - 64-bit seek and file information;
-- path stat, directory creation, and unlink;
+- path stat, directory creation, unlink, and atomic rename;
 - bounded directory batches across every member of an assign union, retaining
   the member number for each entry; and
 - path qualification for shell- and application-style current directories.
@@ -50,14 +50,17 @@ layer process-local state over it:
 | `lseek` | 64-bit `seek` |
 | `stat` / `fstat` | `stat` / `file_info` |
 | `mkdir` / `unlink` | `mkdir` / `unlink` |
+| `rename` | atomic `rename` |
 | `opendir` / `readdir` | `directory_open` / bounded `directory_read` |
 
 That layer will own integer file-descriptor tables, current-directory rules,
 POSIX path presentation, `errno` translation, and libc cancellation behavior.
 Those policies do not belong in the native filesystem library.
 
-ABI 1.0 does not pretend the service already supports rename, links, metadata
-mutation, timestamps, locking, truncate, or durable-sync operations. Each lands
+ABI 1.1 adds rename once through VFS protocol 11 and the ext4 backend; native
+and POSIX callers share that implementation. It does not pretend the service
+already supports links, metadata mutation, locking, truncate, or durable-sync
+operations. Each lands
 once in the VFS protocol and backend first, then appears in this export table,
 then receives its POSIX mapping. This keeps native and compatibility behavior
 from silently disagreeing.
@@ -67,7 +70,7 @@ from silently disagreeing.
 The image builder installs the MC68030 library at:
 
 ```text
-LIBS:Filesystem.kit/libraries/filesystem.library/abi-1/1.0.0/m68k-68030/filesystem.library
+LIBS:Filesystem.kit/libraries/filesystem.library/abi-1/1.1.0/m68k-68030/filesystem.library
 ```
 
 Other ABI majors and versions live beside it. Applications request the minimum

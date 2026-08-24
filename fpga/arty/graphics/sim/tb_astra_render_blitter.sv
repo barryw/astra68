@@ -331,6 +331,8 @@ module tb_astra_render_blitter;
     integer before_reads;
     integer before_writes;
     integer rop_index;
+    integer source_lane;
+    integer destination_lane;
     reg [7:0] expected;
     initial begin
         repeat (6) @(posedge clk);
@@ -479,6 +481,103 @@ module tb_astra_render_blitter;
             for (column = 0; column < 128; column = column + 1)
                 expect_byte(32'h4000 + row * 128 + column,
                             row + column);
+
+        // Every possible source/destination byte-lane pair must realign
+        // exactly while preserving bytes outside the copied rectangle.
+        memory_i.clear_memory(8'hee);
+        set_index_surface(32'h8000, 32'ha000, 16'd37, 16'd1, 32'd64);
+        source_x = 16'sd0;
+        source_y = 16'sd0;
+        destination_x = 16'sd0;
+        destination_y = 16'sd0;
+        source_width = 16'd37;
+        source_height = 16'd1;
+        destination_width = 16'd37;
+        destination_height = 16'd1;
+        clip_right = 16'sd37;
+        clip_bottom = 16'sd1;
+        for (source_lane = 0; source_lane < 8;
+             source_lane = source_lane + 1)
+            for (destination_lane = 0; destination_lane < 8;
+                 destination_lane = destination_lane + 1) begin
+                source_data_offset = 32'h8000 + source_lane;
+                destination_data_offset = 32'ha000 + destination_lane;
+                for (column = 0; column < 64; column = column + 1)
+                    memory_i.write_byte(32'ha000 + column, 8'hee);
+                for (column = 0; column < 37; column = column + 1)
+                    memory_i.write_byte(32'h8000 + source_lane + column,
+                                        source_lane * 8 + column);
+                launch();
+                if (status != `ASTRA_RENDER_STATUS_OK ||
+                    completed_pixels != 32'd37)
+                    $fatal(1, "lane %0d->%0d status=%0d pixels=%0d",
+                           source_lane, destination_lane, status,
+                           completed_pixels);
+                if (destination_lane != 0)
+                    expect_byte(32'h9fff + destination_lane, 8'hee);
+                for (column = 0; column < 37; column = column + 1)
+                    expect_byte(32'ha000 + destination_lane + column,
+                                source_lane * 8 + column);
+                expect_byte(32'ha000 + destination_lane + 37, 8'hee);
+            end
+
+        // Exact compositor cache update: an 816-pixel RGB565 client is
+        // copied two pixels into an 820-pixel decorated window.  The four-byte
+        // lane shift must use the burst mover, preserve the frame bytes, and
+        // remain comfortably inside one 60 Hz frame.
+        memory_i.clear_memory(8'hee);
+        source_data_offset = 32'h00010000;
+        destination_data_offset = 32'h00100000;
+        source_pitch = 32'd1632;
+        destination_pitch = 32'd1640;
+        source_surface_width = 16'd816;
+        source_surface_height = 16'd440;
+        destination_surface_width = 16'd820;
+        destination_surface_height = 16'd440;
+        source_format = `ASTRA_RENDER_FORMAT_RGB565;
+        destination_format = `ASTRA_RENDER_FORMAT_RGB565;
+        source_bpp = 3'd2;
+        destination_bpp = 3'd2;
+        source_x = 16'sd0;
+        source_y = 16'sd0;
+        destination_x = 16'sd2;
+        destination_y = 16'sd0;
+        source_width = 16'd816;
+        source_height = 16'd440;
+        destination_width = 16'd816;
+        destination_height = 16'd440;
+        clip_left = 16'sd0;
+        clip_top = 16'sd0;
+        clip_right = 16'sd820;
+        clip_bottom = 16'sd440;
+        same_surface = 1'b0;
+        for (row = 0; row < 440; row = row + 1)
+            for (column = 0; column < 1632; column = column + 1)
+                memory_i.write_byte(32'h00010000 + row * 1632 + column,
+                                    row + column);
+        before_reads = read_transactions;
+        before_writes = write_transactions;
+        launch();
+        if (status != `ASTRA_RENDER_STATUS_OK ||
+            completed_pixels != 32'd359040 || last_elapsed > 450000 ||
+            read_transactions - before_reads != 6224 ||
+            write_transactions - before_writes != 6224)
+            $fatal(1,
+                   "offset RGB565 status=%0d pixels=%0d cycles=%0d/450000 reads=%0d writes=%0d",
+                   status, completed_pixels, last_elapsed,
+                   read_transactions - before_reads,
+                   write_transactions - before_writes);
+        $display("offset RGB565 cycles=%0d bursts=%0d",
+                 last_elapsed, read_transactions - before_reads);
+        for (row = 0; row < 440; row = row + 1) begin
+            for (column = 0; column < 4; column = column + 1)
+                expect_byte(32'h00100000 + row * 1640 + column, 8'hee);
+            for (column = 0; column < 1632; column = column + 1)
+                expect_byte(32'h00100004 + row * 1640 + column,
+                            row + column);
+            for (column = 1636; column < 1640; column = column + 1)
+                expect_byte(32'h00100000 + row * 1640 + column, 8'hee);
+        end
 
         // An unaligned row that straddles a 4KiB boundary must preserve the
         // neighboring bytes and split both AXI bursts at that boundary.

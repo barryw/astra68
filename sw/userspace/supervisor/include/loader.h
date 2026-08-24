@@ -4,11 +4,15 @@
 #include <stdint.h>
 
 #include <astra/process.h>
+#include <astra/proc.h>
+#include <astra/syscall.h>
 #include <astra/vfs_service.h>
 
 #define SUPERVISOR_MANIFEST_ENTRY_MAX 6u
+/* Three watch slots are control ports; the rest can track child processes. */
+#define SUPERVISOR_PROCESS_MAX (ASTRA_WAIT_MULTIPLE_MAX - 3u)
 /* Long enough for "SERVICES:display" and an application bundle name. */
-#define SUPERVISOR_PROCESS_NAME_MAX 32u
+#define SUPERVISOR_PROCESS_NAME_MAX ASTRA_PROC_NAME_MAX
 /* One reader at a time is the shape of `ps`; a queue of one is enough. */
 #define SUPERVISOR_PROC_PORT_MESSAGES 4u
 #define SUPERVISOR_PROC_PORT_BUDGET 8u
@@ -48,7 +52,7 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup,
 
 /* The supervisor's local event target and the client capability it publishes. */
 /*
- * The resident process table, for the PROC: tree. `supervisor_loader_process_at`
+ * The process table, for the PROC: tree. `supervisor_loader_process_at`
  * yields the handle and, if asked, the path it was launched from; index is
  * dense and shifts when a process exits, so a reader walks it in one pass.
  */

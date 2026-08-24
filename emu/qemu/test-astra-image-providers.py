@@ -8,6 +8,40 @@ import tempfile
 import astra_image
 
 
+class Result:
+    def __init__(self, output=b""):
+        self.returncode = 0
+        self.stdout = output
+
+
+original_run = astra_image.subprocess.run
+commands = []
+
+
+def existing_run(command, **_kwargs):
+    commands.append(command)
+    return Result(b"Inode: 12\n")
+
+
+astra_image.subprocess.run = existing_run
+astra_image._mkdir("volume", "/existing", "test directory")
+assert len(commands) == 1 and commands[0][2] == "stat /existing"
+
+commands.clear()
+
+
+def missing_run(command, **_kwargs):
+    commands.append(command)
+    return Result(b"File not found\n" if command[2].startswith("stat ") else b"")
+
+
+astra_image.subprocess.run = missing_run
+astra_image._mkdir("volume", "/missing", "test directory")
+assert [command[2] if command[2] != "-R" else command[3]
+        for command in commands] == ["stat /missing", "mkdir /missing"]
+astra_image.subprocess.run = original_run
+
+
 with tempfile.TemporaryDirectory() as directory:
     bundles = []
     for kit, version in (("Old.kit", "1.2.0"), ("New.kit", "1.10.0")):

@@ -57,6 +57,11 @@ bool astra_civil_from_unix_ns_zone(uint64_t nanoseconds,
                                    const AstraTimeZone *zone,
                                    AstraCivilTime *civil);
 
+/* The same zoned conversion when the caller already has whole seconds. */
+bool astra_civil_from_unix_seconds_zone(uint64_t seconds,
+                                        const AstraTimeZone *zone,
+                                        AstraCivilTime *civil);
+
 /*
  * Splits nanoseconds since the epoch into the fields above. False for an
  * instant before the epoch, which this machine has no way to hold and no

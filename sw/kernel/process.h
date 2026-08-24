@@ -72,21 +72,17 @@
 #define KERNEL_PROCESS_THREAD_MAX 16u
 
 /*
- * The ceiling on text, data and BSS a single process image may map. The storage
- * service owns a 5 MiB bounded filesystem arena, so the old 512 KiB ceiling
- * rejected it before the allocator could enforce its own tighter budget.
- * Eight MiB leaves room for service code and growth while physical allocation
- * remains charged page by page to the process owner.
- *
- * It lives here rather than in process.c because the loader's test measures a
- * real executable against it. Held in two places it went stale, and the test
- * kept refusing an image the kernel had been loading happily for weeks.
+ * ELF acceptance is bounded by the process virtual-address region. Mapping is
+ * charged page by page, so installed RAM and the frame allocator are the real
+ * resident-image limit instead of a smaller policy number.
  */
-#define KERNEL_PROCESS_IMAGE_PAGES_MAX 2048u
+#define KERNEL_PROCESS_IMAGE_PAGES_MAX \
+    ((KERNEL_VM_AREA_BASE - KERNEL_VM_USER_MIN) / KERNEL_PAGE_SIZE)
 
 #define KERNEL_PROCESS_RIGHT_QUERY     (1u << 0)
 #define KERNEL_PROCESS_RIGHT_TERMINATE (1u << 1)
 #define KERNEL_PROCESS_RIGHT_WAIT      (1u << 4)
+#define KERNEL_PROCESS_RIGHT_PRIORITY  (1u << 6)
 /*
  * ASTRA_RIGHT_DEBUG in the same bit. Deliberately outside
  * KERNEL_PROCESS_RIGHTS: it is granted to a process over itself when the build
@@ -96,7 +92,7 @@
 #define KERNEL_PROCESS_RIGHT_DEBUG     (1u << 7)
 #define KERNEL_PROCESS_RIGHTS \
     (KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_TERMINATE | \
-     KERNEL_PROCESS_RIGHT_WAIT)
+     KERNEL_PROCESS_RIGHT_WAIT | KERNEL_PROCESS_RIGHT_PRIORITY)
 
 typedef enum KernelProcessState {
     KERNEL_PROCESS_UNUSED = 0,
@@ -165,11 +161,13 @@ typedef struct KernelProcessSnapshot {
     uint32_t timer_ticks;
     uint32_t run_count;
     uint32_t syscall_count;
+    uint32_t fault_pc;
     uint32_t fault_address;
     uint32_t exit_status;
     uint32_t terminal_result;
     KernelHandle self_handle;
     uint16_t fault_vector;
+    uint16_t fault_status;
     uint8_t process_state;
     uint8_t thread_state;
     uint8_t exit_reason;
@@ -435,7 +433,7 @@ KernelProcessStatus kernel_process_launch(
     const KernelHandleTable *source_table,
     const KernelProcessBootstrapCapability *capabilities,
     uint32_t capability_count, const AstraLaunchArguments *arguments,
-    uint32_t *process_id);
+    const char *environment, uint32_t *process_id);
 /* Names the process loaded from the firmware-supplied image. */
 void kernel_process_register_initial_image(uint32_t process_id);
 KernelProcessStatus kernel_process_create_thread(uint32_t process_id,

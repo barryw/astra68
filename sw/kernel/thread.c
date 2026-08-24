@@ -1204,6 +1204,60 @@ KernelThreadStatus kernel_thread_make_ready(KernelThread *thread)
     return status;
 }
 
+KernelThreadStatus
+kernel_thread_set_process_priority(uint16_t process_slot, uint8_t priority)
+{
+    if (priority >= KERNEL_THREAD_PRIORITY_LEVELS)
+        return KERNEL_THREAD_INVALID_ARGUMENT;
+
+    /* Validate the complete process before moving anything between queues. */
+    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+        KernelThread *thread = &threads[slot];
+
+        if (thread->occupied == 0u || thread->process_slot != process_slot ||
+            thread->state == KERNEL_THREAD_DEAD)
+            continue;
+        if (thread->state < KERNEL_THREAD_CREATED ||
+            thread->state > KERNEL_THREAD_BLOCKED ||
+            thread->base_priority != thread->effective_priority)
+            return KERNEL_THREAD_CORRUPT;
+    }
+
+    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+        KernelThreadWaitQueue *queues[KERNEL_THREAD_WAIT_MEMBER_MAX];
+        KernelThread *thread = &threads[slot];
+        uint8_t members;
+
+        if (thread->occupied == 0u || thread->process_slot != process_slot ||
+            thread->state == KERNEL_THREAD_DEAD ||
+            thread->base_priority == priority)
+            continue;
+        if (thread->state == KERNEL_THREAD_READY &&
+            remove_ready(thread) != KERNEL_THREAD_OK)
+            return KERNEL_THREAD_CORRUPT;
+        members = thread->state == KERNEL_THREAD_BLOCKED ?
+            thread->wait_member_count : 0u;
+        for (uint16_t member = 0u; member < members; ++member) {
+            queues[member] = wait_registrations[slot][member].queue;
+            if (queues[member] == NULL ||
+                remove_wait_registration(
+                    &wait_registrations[slot][member]) != KERNEL_THREAD_OK)
+                return KERNEL_THREAD_CORRUPT;
+        }
+        thread->base_priority = priority;
+        thread->effective_priority = priority;
+        if (thread->state == KERNEL_THREAD_READY &&
+            enqueue_ready(thread) != KERNEL_THREAD_OK)
+            return KERNEL_THREAD_CORRUPT;
+        for (uint16_t member = 0u; member < members; ++member) {
+            if (enqueue_wait_registration(thread, member, queues[member]) !=
+                KERNEL_THREAD_OK)
+                return KERNEL_THREAD_CORRUPT;
+        }
+    }
+    return KERNEL_THREAD_OK;
+}
+
 static __attribute__((noinline))
 KernelThreadStatus take_next_fast(KernelThread **thread)
 {

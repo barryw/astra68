@@ -64,7 +64,7 @@ void astra_process_vfs_close(void)
 }
 
 /*
- * Initialise the client at first use. STOR v8 defers the actual HELLO so the
+ * Initialise the client at first use. STOR v8+ defers the actual HELLO so the
  * transport can fuse it with the first path operation; older peers complete
  * HELLO and retry that operation inside the transport.
  */
@@ -730,8 +730,61 @@ AstraVfsClient *astra_process_vfs_assign_client(const AstraAssign *assign,
  */
 static uint32_t filesystem_opens;
 
-uint32_t astra_process_filesystem_open(AstraProcessFilesystem *filesystem,
-                                       const AstraStartupInfo *startup)
+static AstraLibraryHandle *
+register_library(const AstraLoadedLibrary *loaded)
+{
+    for (uint32_t index = 0u; index < ASTRA_LIBRARY_SLOT_COUNT; ++index) {
+        if (open_libraries[index].used != 0u)
+            continue;
+        open_libraries[index].loaded = loaded;
+        open_libraries[index].references = 1u;
+        open_libraries[index].used = 1u;
+        open_libraries[index].handle.exports = loaded->exports;
+        open_libraries[index].handle.version = loaded->identity->major;
+        open_libraries[index].handle.revision = loaded->identity->minor;
+        open_libraries[index].handle.abi_major = loaded->identity->abi_major;
+        open_libraries[index].handle.abi_minor = loaded->identity->abi_minor;
+        open_libraries[index].handle._private_slot = index + 1u;
+        return &open_libraries[index].handle;
+    }
+    return NULL;
+}
+
+static AstraLibraryHandle *
+open_cached_library(const char *name, uint16_t version, uint32_t *status)
+{
+    const AstraLoadedLibrary *loaded;
+
+    if (!library_name_valid(name) || version == 0u) {
+        *status = ASTRA_SYSCALL_INVALID_ARGUMENT;
+        return NULL;
+    }
+    for (uint32_t index = 0u; index < ASTRA_LIBRARY_SLOT_COUNT; ++index) {
+        if (open_libraries[index].used != 0u &&
+            same(open_libraries[index].loaded->identity->name, name) &&
+            open_libraries[index].handle.abi_major == version &&
+            open_libraries[index].references != UINT32_MAX) {
+            ++open_libraries[index].references;
+            *status = ASTRA_SYSCALL_OK;
+            return &open_libraries[index].handle;
+        }
+    }
+    *status = astra_library_attach_cached(name, version, 0u, &loaded);
+    return *status == ASTRA_SYSCALL_OK ? register_library(loaded) : NULL;
+}
+
+static AstraLibraryHandle *
+open_loadable_library(const char *name, uint16_t version, uint32_t *status)
+{
+    AstraLibraryHandle *handle = OpenLibrary(name, version);
+
+    *status = handle != NULL ? ASTRA_SYSCALL_OK : ASTRA_SYSCALL_WOULD_BLOCK;
+    return handle;
+}
+
+static uint32_t open_process_filesystem(
+    AstraProcessFilesystem *filesystem, const AstraStartupInfo *startup,
+    AstraLibraryHandle *(*open_library)(const char *, uint16_t, uint32_t *))
 {
     uint32_t status;
 
@@ -748,8 +801,9 @@ uint32_t astra_process_filesystem_open(AstraProcessFilesystem *filesystem,
      * moment if it is already counted as up.
      */
     ++filesystem_opens;
-    filesystem->handle = OpenLibrary(ASTRA_FILESYSTEM_LIBRARY_NAME,
-                                     ASTRA_FILESYSTEM_LIBRARY_VERSION);
+    filesystem->handle = open_library(
+        ASTRA_FILESYSTEM_LIBRARY_NAME, ASTRA_FILESYSTEM_LIBRARY_VERSION,
+        &status);
     if (filesystem->handle == NULL) {
         astra_process_filesystem_close(filesystem);
         return ASTRA_VFS_ERR_NOT_FOUND;
@@ -771,6 +825,18 @@ uint32_t astra_process_filesystem_open(AstraProcessFilesystem *filesystem,
     return status;
 }
 
+uint32_t astra_process_filesystem_open(AstraProcessFilesystem *filesystem,
+                                       const AstraStartupInfo *startup)
+{
+    return open_process_filesystem(filesystem, startup, open_cached_library);
+}
+
+uint32_t astra_process_filesystem_open_bootstrap(
+    AstraProcessFilesystem *filesystem, const AstraStartupInfo *startup)
+{
+    return open_process_filesystem(filesystem, startup, open_loadable_library);
+}
+
 /*
  * A word somebody typed, to a path this process can resolve.
  *
@@ -783,16 +849,12 @@ uint32_t astra_process_filesystem_open(AstraProcessFilesystem *filesystem,
  * its own copy grew a slightly different one: `ls` did not qualify at all, so
  * `ls probe` answered INVALID for a directory `mkdir probe` had just made.
  */
-uint32_t astra_process_path(const AstraProcessFilesystem *filesystem,
-                            const char *typed, char *out, uint32_t capacity)
+uint32_t astra_process_path(const char *typed, char *out, uint32_t capacity)
 {
     const char *assign;
 
-    if (filesystem == NULL || filesystem->library == NULL)
-        return ASTRA_VFS_ERR_INVALID;
-    assign = filesystem->library->assign_lookup(
-                 astra_process_vfs_assigns(), "CWD") != NULL ? "CWD" : "WORK";
-    return filesystem->library->qualify(assign, "", typed, out, capacity);
+    assign = astra_assign_lookup(&assigns, "CWD") != NULL ? "CWD" : "WORK";
+    return astra_path_qualify(assign, "", typed, out, capacity);
 }
 
 uint32_t astra_process_read_file(AstraProcessFilesystem *filesystem,
@@ -870,25 +932,15 @@ void astra_process_filesystem_close(AstraProcessFilesystem *filesystem)
 AstraLibraryHandle *OpenLibrary(const char *name, uint16_t version)
 {
     const AstraLoadedLibrary *loaded;
+    AstraLibraryHandle *handle;
     LibraryImage image = {0};
     AstraLibraryReference reference;
     char path[ASTRA_VFS_PATH_MAX];
     uint32_t status;
 
-    if (!library_name_valid(name) || version == 0u)
-        return NULL;
-    for (uint32_t index = 0u; index < ASTRA_LIBRARY_SLOT_COUNT; ++index) {
-        if (open_libraries[index].used != 0u &&
-            same(open_libraries[index].loaded->identity->name, name) &&
-            open_libraries[index].handle.abi_major == version &&
-            open_libraries[index].references != UINT32_MAX) {
-            ++open_libraries[index].references;
-            return &open_libraries[index].handle;
-        }
-    }
-    status = astra_library_attach_cached(name, version, 0u, &loaded);
-    if (status == ASTRA_SYSCALL_OK)
-        goto loaded;
+    handle = open_cached_library(name, version, &status);
+    if (handle != NULL || status == ASTRA_SYSCALL_OK)
+        return handle;
     if (status != ASTRA_SYSCALL_WOULD_BLOCK &&
         status != ASTRA_SYSCALL_BAD_SYSCALL)
         return NULL;
@@ -913,21 +965,7 @@ loaded:
     if (status != ASTRA_SYSCALL_OK) {
         return NULL;
     }
-    for (uint32_t index = 0u; index < ASTRA_LIBRARY_SLOT_COUNT; ++index) {
-        if (open_libraries[index].used != 0u)
-            continue;
-        open_libraries[index].loaded = loaded;
-        open_libraries[index].references = 1u;
-        open_libraries[index].used = 1u;
-        open_libraries[index].handle.exports = loaded->exports;
-        open_libraries[index].handle.version = loaded->identity->major;
-        open_libraries[index].handle.revision = loaded->identity->minor;
-        open_libraries[index].handle.abi_major = loaded->identity->abi_major;
-        open_libraries[index].handle.abi_minor = loaded->identity->abi_minor;
-        open_libraries[index].handle._private_slot = index + 1u;
-        return &open_libraries[index].handle;
-    }
-    return NULL;
+    return register_library(loaded);
 }
 
 void CloseLibrary(AstraLibraryHandle *library)

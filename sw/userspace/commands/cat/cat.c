@@ -15,13 +15,12 @@
  * would otherwise name nothing at all.
  */
 
-#include <astra/posix.h>
 #include <astra/vfs_process.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
-
-#include <stdio.h>
-#include <string.h>
+#include <astra/stream.h>
+#include <astra/vfs_port_transport.h>
+#include <astra/vfs_union.h>
 
 ASTRA_PROGRAM("cat", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
@@ -30,23 +29,42 @@ enum {
     CAT_CHUNK = 512u,
 };
 
+static uint32_t stdout_handle;
+static uint32_t error_handle;
+
+static void
+say(const char *text)
+{
+    (void)astra_print(error_handle, text);
+}
+
 static void
 complain(const char *path, uint32_t status)
 {
     const char *text = astra_vfs_status_text(status);
 
-    if (text != NULL)
-        (void)fprintf(stderr, "cat: %s: %s\n", path, text);
-    else
-        (void)fprintf(stderr, "cat: %s: status %u\n", path, status);
+    say("cat: ");
+    say(path);
+    say(": ");
+    if (text != NULL) {
+        say(text);
+    } else {
+        say("operation failed");
+    }
+    say("\n");
 }
 
 static int
-emit(AstraProcessFilesystem *process, const char *path)
+emit(const char *path)
 {
     static uint8_t chunk[CAT_CHUNK];
+    AstraVfsClient *client = NULL;
+    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
+    uint64_t offset = 0u;
+    uint64_t size = 0u;
+    uint16_t kind = 0u;
     char typed[ASTRA_VFS_PATH_MAX];
-    AstraFile file = ASTRA_FILE_INIT;
+    char wire[ASTRA_VFS_PATH_MAX];
     uint32_t status;
 
     /*
@@ -54,10 +72,12 @@ emit(AstraProcessFilesystem *process, const char *path)
      * directory is already folded into the root the grant carries, so this
      * qualifies a bare name and leaves an ASSIGN:path one alone.
      */
-    status = astra_process_path(process, path, typed, sizeof(typed));
+    status = astra_process_path(path, typed, sizeof(typed));
     if (status == ASTRA_VFS_OK)
-        status = process->library->open(&process->filesystem, typed,
-                                        ASTRA_VFS_OPEN_READ, &file);
+        status = astra_vfs_assign_open(
+            astra_process_vfs_assigns(), typed, ASTRA_RIGHT_READ,
+            ASTRA_VFS_OPEN_READ, astra_process_vfs_assign_client, NULL,
+            wire, sizeof(wire), &file, &size, &kind, &client, NULL);
     if (status != ASTRA_VFS_OK) {
         complain(path, status);
         return (int)status;
@@ -65,7 +85,8 @@ emit(AstraProcessFilesystem *process, const char *path)
     for (;;) {
         uint32_t moved = 0u;
 
-        status = process->library->read(&file, chunk, sizeof(chunk), &moved);
+        status = astra_vfs_port_read_bulk(client, file, offset, chunk,
+                                          sizeof(chunk), &moved);
         if (status != ASTRA_VFS_OK) {
             complain(path, status);
             break;
@@ -73,29 +94,44 @@ emit(AstraProcessFilesystem *process, const char *path)
         /* A short read is normal: one message carries a bounded payload. */
         if (moved == 0u)
             break;
-        if (fwrite(chunk, 1u, moved, stdout) != moved) {
-            (void)fprintf(stderr, "cat: %s: output stopped\n", path);
+        offset += moved;
+        if (astra_stream_write_all(stdout_handle, chunk, moved) !=
+            ASTRA_SYSCALL_OK) {
+            say("cat: ");
+            say(path);
+            say(": output stopped\n");
             status = ASTRA_VFS_ERR_IO;
             break;
         }
     }
-    (void)process->library->close(&file);
+    (void)astra_vfs_close(client, file);
     return status == ASTRA_VFS_OK ? 0 : (int)status;
 }
 
 int
 astra_main(const AstraStartupInfo *startup)
 {
-    AstraProcessFilesystem process_filesystem =
-        ASTRA_PROCESS_FILESYSTEM_INIT;
+    const AstraStartupCapability *capabilities;
     const uint32_t *argv = NULL;
     int result = 0;
     int named = 0;
     uint32_t status;
 
-    astra_posix_start(startup);
-    if (startup == NULL)
+    if (startup == NULL || startup->capabilities_address == 0u)
         return ASTRA_STATUS_INVALID;
+    capabilities = (const AstraStartupCapability *)(uintptr_t)
+        startup->capabilities_address;
+    for (uint32_t index = 0u; index < startup->capability_count; ++index) {
+        if (astra_capability_name_equal(capabilities[index].name, "STDOUT"))
+            stdout_handle = capabilities[index].handle;
+        else if (astra_capability_name_equal(capabilities[index].name,
+                                             "STDERR"))
+            error_handle = capabilities[index].handle;
+    }
+    if (stdout_handle == 0u)
+        return ASTRA_STATUS_ACCESS;
+    if (error_handle == 0u)
+        error_handle = stdout_handle;
     if (startup->argc != 0u && startup->argv_address != 0u)
         argv = (const uint32_t *)(uintptr_t)startup->argv_address;
     if (argv == NULL || startup->argc < 2u) {
@@ -103,12 +139,12 @@ astra_main(const AstraStartupInfo *startup)
          * No standard input to fall back on yet, so this says what it needs
          * rather than waiting on a stream nothing will write.
          */
-        (void)fprintf(stderr, "cat: needs a file\n");
+        say("cat: needs a file\n");
         return ASTRA_STATUS_INVALID;
     }
-    status = astra_process_filesystem_open(&process_filesystem, startup);
+    status = astra_process_vfs_init(startup);
     if (status != ASTRA_VFS_OK) {
-        (void)fprintf(stderr, "cat: no filesystem: status %u\n", status);
+        say("cat: filesystem unavailable\n");
         return (int)status;
     }
     for (uint32_t index = 1u; index < startup->argc; ++index) {
@@ -119,15 +155,14 @@ astra_main(const AstraStartupInfo *startup)
             continue;
         named = 1;
         /* Every file is attempted; the first refusal is what is returned. */
-        one = emit(&process_filesystem, word);
+        one = emit(word);
         if (one != 0 && result == 0)
             result = one;
     }
     if (!named) {
-        (void)fprintf(stderr, "cat: needs a file\n");
+        say("cat: needs a file\n");
         result = ASTRA_STATUS_INVALID;
     }
-    astra_process_filesystem_close(&process_filesystem);
-    (void)fflush(stdout);
+    astra_process_vfs_close();
     return result;
 }

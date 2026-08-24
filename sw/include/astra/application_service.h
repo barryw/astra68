@@ -26,7 +26,7 @@ typedef struct AstraApplicationLaunchReply {
     uint32_t process_id;
 } AstraApplicationLaunchReply;
 
-#define ASTRA_APPLICATION_LAUNCH_REQUEST_SIZE 224u
+#define ASTRA_APPLICATION_LAUNCH_REQUEST_SIZE 232u
 #define ASTRA_APPLICATION_LAUNCH_REPLY_SIZE 32u
 
 _Static_assert(sizeof(AstraApplicationLaunchRequest) ==

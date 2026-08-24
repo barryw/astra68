@@ -38,6 +38,7 @@ typedef struct AstraVfsClient {
      */
     uint32_t activity;
     /* Private state used by astra_vfs_port_connect/transport. */
+    uint8_t port_area_capable;
     uint32_t port_service;
     uint32_t port_reply_send;
     uint32_t port_area;
@@ -126,5 +127,7 @@ uint32_t astra_vfs_readdir_batch(AstraVfsClient *client, const char *path,
                                  uint64_t *next);
 uint32_t astra_vfs_mkdir(AstraVfsClient *client, const char *path);
 uint32_t astra_vfs_unlink(AstraVfsClient *client, const char *path);
+uint32_t astra_vfs_rename(AstraVfsClient *client, const char *from,
+                          const char *to);
 
 #endif

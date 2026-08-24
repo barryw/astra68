@@ -442,20 +442,22 @@ ext4_backend_readdir(void *context, const char *path, uint64_t cookie,
      * a cross-process round trip each and three orders of magnitude worse.
      */
     {
-        char child[ASTRA_VFS_EXT4_PATH_MAX];
-        uint32_t at = 0u;
+        uint32_t mode = 0u;
+        uint32_t uid = 0u;
+        uint32_t gid = 0u;
+        uint32_t mtime = 0u;
+        uint32_t nlink = 0u;
+        uint64_t size = 0u;
 
-        while (at < sizeof(child) - 1u && full[at] != '\0') {
-            child[at] = full[at];
-            ++at;
+        if (ext4_dir_entry_meta(&backend->scan, entry, &mode, &uid, &gid,
+                                &mtime, &nlink, &size) == EOK) {
+            info->mode = (uint16_t)mode;
+            info->uid = uid;
+            info->gid = gid;
+            info->mtime = (int64_t)(uint64_t)mtime;
+            info->nlink = (uint16_t)nlink;
+            info->size = size;
         }
-        if (at != 0u && child[at - 1u] != '/' && at < sizeof(child) - 1u)
-            child[at++] = '/';
-        for (uint32_t index = 0u;
-             at < sizeof(child) - 1u && name[index] != '\0'; ++index)
-            child[at++] = name[index];
-        child[at] = '\0';
-        fill_metadata(child, info, 1);
     }
     *next = backend->scan.next_off;
     backend->scan_next = *next;
@@ -497,6 +499,20 @@ ext4_backend_unlink(void *context, const char *path)
     return status_of(rc);
 }
 
+static uint32_t
+ext4_backend_rename(void *context, const char *from, const char *to)
+{
+    AstraVfsExt4Backend *backend = backend_of(context);
+    char old_path[ASTRA_VFS_EXT4_PATH_MAX];
+    char new_path[ASTRA_VFS_EXT4_PATH_MAX];
+
+    if (!build_path(backend, from, old_path, sizeof(old_path)) ||
+        !build_path(backend, to, new_path, sizeof(new_path)))
+        return ASTRA_VFS_ERR_INVALID;
+    close_scan(backend);
+    return status_of(ext4_frename(old_path, new_path));
+}
+
 static const AstraVfsBackendOps ext4_ops = {
     ext4_backend_open,
     ext4_backend_close,
@@ -505,7 +521,8 @@ static const AstraVfsBackendOps ext4_ops = {
     ext4_backend_stat,
     ext4_backend_readdir,
     ext4_backend_mkdir,
-    ext4_backend_unlink
+    ext4_backend_unlink,
+    ext4_backend_rename
 };
 
 const AstraVfsBackendOps *

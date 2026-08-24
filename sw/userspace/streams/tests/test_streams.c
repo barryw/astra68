@@ -368,6 +368,14 @@ test_a_print_retries_until_the_text_is_gone(void)
     assert(astra_stream_sink_pump(&sink, 4u) == 1u);
     terminal_row(row, 0u, 48u);
     assert(strcmp(row, "a line") == 0);
+    assert(astra_stream_write_all(handle, "!", 1u) == ASTRA_SYSCALL_OK);
+    assert(astra_stream_sink_pump(&sink, 4u) == 1u);
+    terminal_row(row, 0u, 48u);
+    assert(strcmp(row, "a line!") == 0);
+    assert(astra_print_u32(handle, 4294967295u) == ASTRA_SYSCALL_OK);
+    assert(astra_stream_sink_pump(&sink, 4u) == 1u);
+    terminal_row(row, 0u, 48u);
+    assert(strcmp(row, "a line!4294967295") == 0);
 
     /* An empty string is nothing to say, not a refusal. */
     assert(astra_print(handle, "") == ASTRA_SYSCALL_OK);

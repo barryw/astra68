@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <astra/process.h>
+
 #define ASTRA_SHELL_LINE_CAPACITY 512u
 #define ASTRA_SHELL_HISTORY_CAPACITY 32u
 #define ASTRA_SHELL_ARG_CAPACITY 32u
@@ -15,7 +17,7 @@
  * them. It is also the shape a launch wants, so exporting is a copy and not a
  * second representation.
  */
-#define ASTRA_SHELL_VARIABLE_BYTES 1024u
+#define ASTRA_SHELL_VARIABLE_BYTES ASTRA_LAUNCH_ENVIRONMENT_BYTES
 
 typedef enum astra_shell_result {
     ASTRA_SHELL_OK = 0,

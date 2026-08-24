@@ -38,6 +38,13 @@ uint64_t astra_divide_u64(uint64_t value, uint32_t divisor,
             *remainder = 0u;
         return UINT64_MAX;
     }
+    if (high == 0u) {
+        quotient_low = low / divisor;
+        rest = low - quotient_low * divisor;
+        if (remainder != NULL)
+            *remainder = rest;
+        return quotient_low;
+    }
     for (uint32_t index = 0u; index < 64u; ++index) {
         uint32_t carry = rest >> 31;
         uint32_t bit = high >> 31;

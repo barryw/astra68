@@ -227,9 +227,24 @@ fake_unlink(void *context, const char *path)
     return ASTRA_VFS_OK;
 }
 
+static uint32_t
+fake_rename(void *context, const char *from, const char *to)
+{
+    FakeNode *source = fake_find(from);
+    FakeNode *target = fake_find(to);
+
+    (void)context;
+    if (source == NULL)
+        return ASTRA_VFS_ERR_NOT_FOUND;
+    if (target != NULL && target != source)
+        target->used = 0;
+    (void)snprintf(source->path, sizeof(source->path), "%s", to);
+    return ASTRA_VFS_OK;
+}
+
 static const AstraVfsBackendOps fake_ops = {
     fake_open, fake_close, fake_read, fake_write,
-    fake_stat, fake_readdir, fake_mkdir, fake_unlink
+    fake_stat, fake_readdir, fake_mkdir, fake_unlink, fake_rename
 };
 
 static AstraVfsService service;
@@ -593,6 +608,19 @@ test_client_through_transport(void)
            ASTRA_VFS_OK);
     assert(size == sizeof(text) - 1u);
     assert(kind == ASTRA_VFS_KIND_FILE);
+    client.version = UINT16_C(10);
+    assert(astra_vfs_rename(&client, "/dir/note.txt", "/dir/renamed.txt") ==
+           ASTRA_VFS_ERR_UNSUPPORTED);
+    client.version = ASTRA_VFS_VERSION;
+    assert(astra_vfs_rename(&client, "/dir/note.txt", "/dir/renamed.txt") ==
+           ASTRA_VFS_OK);
+    assert(astra_vfs_stat(&client, "/dir/note.txt", &size, &kind) ==
+           ASTRA_VFS_ERR_NOT_FOUND);
+    assert(astra_vfs_stat(&client, "/dir/renamed.txt", &size, &kind) ==
+           ASTRA_VFS_OK);
+    assert(fake_create("/a", ASTRA_VFS_KIND_FILE) != NULL);
+    assert(fake_create("/b", ASTRA_VFS_KIND_FILE) != NULL);
+    assert(fake_create("/c", ASTRA_VFS_KIND_FILE) != NULL);
 
     {
         /*
@@ -649,7 +677,8 @@ test_client_through_transport(void)
             assert(astra_vfs_readdir_batch(
                        &client, "/", cursor, entries, FAKE_NODE_MAX, &count,
                        &cursor) == ASTRA_VFS_OK);
-            assert(count == 2u);
+            /* Five short names fit; worst-case reservation used to stop at 2. */
+            assert(count == 5u);
             assert(cursor == 0u);
             assert(stats->requests == requests + 1u);
             assert(entries[0].name[0] != '\0');
@@ -684,8 +713,8 @@ test_client_through_transport(void)
         client.version = ASTRA_VFS_VERSION;
     }
 
-    assert(astra_vfs_unlink(&client, "/dir/note.txt") == ASTRA_VFS_OK);
-    assert(astra_vfs_stat(&client, "/dir/note.txt", &size, &kind) ==
+    assert(astra_vfs_unlink(&client, "/dir/renamed.txt") == ASTRA_VFS_OK);
+    assert(astra_vfs_stat(&client, "/dir/renamed.txt", &size, &kind) ==
            ASTRA_VFS_ERR_NOT_FOUND);
 
     /* A path that cannot fit the record is refused, never truncated: a

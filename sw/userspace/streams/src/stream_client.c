@@ -93,16 +93,12 @@ astra_stream_write(uint32_t handle, const void *bytes, uint32_t length,
 }
 
 uint32_t
-astra_print(uint32_t handle, const char *text)
+astra_stream_write_all(uint32_t handle, const void *bytes, uint32_t length)
 {
-    uint32_t length = 0u;
     uint32_t sent = 0u;
 
-    if (handle == 0u || text == NULL) {
+    if (handle == 0u || bytes == NULL) {
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    }
-    while (text[length] != '\0') {
-        ++length;
     }
     if (length == 0u) {
         return ASTRA_SYSCALL_OK;
@@ -115,7 +111,7 @@ astra_print(uint32_t handle, const char *text)
      */
     for (;;) {
         uint32_t moved = 0u;
-        uint32_t status = astra_stream_write(handle, (const uint8_t *)text +
+        uint32_t status = astra_stream_write(handle, (const uint8_t *)bytes +
                                              sent, length - sent, &moved);
 
         sent += moved;
@@ -127,6 +123,36 @@ astra_print(uint32_t handle, const char *text)
         }
         (void)astra_yield();
     }
+}
+
+uint32_t
+astra_print(uint32_t handle, const char *text)
+{
+    uint32_t length = 0u;
+
+    if (handle == 0u || text == NULL) {
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    while (text[length] != '\0') {
+        ++length;
+    }
+    return astra_stream_write_all(handle, text, length);
+}
+
+uint32_t
+astra_print_u32(uint32_t handle, uint32_t value)
+{
+    char digits[10];
+    uint32_t at = sizeof(digits);
+
+    do {
+        uint32_t quotient = value / 10u;
+
+        digits[--at] = (char)('0' + value - quotient * 10u);
+        value = quotient;
+    } while (value != 0u);
+    return astra_stream_write_all(handle, &digits[at],
+                                  (uint32_t)sizeof(digits) - at);
 }
 
 /*

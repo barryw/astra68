@@ -44,6 +44,8 @@ typedef struct AstraVfsSessionSlot {
     uint32_t id;            /* 0 when free */
     uint16_t generation;
     uint16_t version;       /* the version agreed at HELLO */
+    char rename_from[ASTRA_VFS_PATH_MAX];
+    uint8_t rename_pending;
 } AstraVfsSessionSlot;
 
 typedef struct AstraVfsServiceStats {
@@ -107,6 +109,18 @@ uint32_t astra_vfs_service_read_into(AstraVfsService *service,
                                      uint32_t session, AstraVfsFile file,
                                      uint64_t offset, void *buffer,
                                      uint32_t length, uint32_t *moved);
+
+/* The write-side twin: bytes come from the session's bound transfer area. */
+uint32_t astra_vfs_service_write_from(AstraVfsService *service,
+                                      uint32_t session, AstraVfsFile file,
+                                      uint64_t offset, const void *buffer,
+                                      uint32_t length, uint32_t *moved);
+
+/* Packs directory records into an arbitrary bounded buffer. */
+uint32_t astra_vfs_service_readdir_into(
+    AstraVfsService *service, const char *path, uint64_t cursor,
+    uint32_t entry_limit, uint8_t *buffer, uint32_t capacity,
+    uint32_t *used, uint64_t *next);
 
 /*
  * Releases everything a session held. Called when a client dies; the port

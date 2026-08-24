@@ -70,6 +70,7 @@ IMAGE := build/m68k/astra_supervisor.image.elf
 CATALOG := build/m68k/astra_events.cat
 HOST_TEST := build/host/test_supervisor
 LOADER_TEST := build/host/test_loader_manifest
+PROC_TREE_ROOT_TEST := build/host/test_proc_tree_root
 # log.c comes along because validating a startup block is what binds the
 # diagnostic channel, so the two cannot be linked apart.
 TEST_SOURCES := src/supervisor.c $(RUNTIME)/src/startup.c \
@@ -149,9 +150,14 @@ $(LOADER_TEST): src/loader_manifest.c $(NDK)/src/bundle.c \
 		src/loader_manifest.c $(NDK)/src/bundle.c \
 		tests/test_loader_manifest.c -o $@
 
-test: $(HOST_TEST) $(LOADER_TEST)
+$(PROC_TREE_ROOT_TEST): tests/test_proc_tree_root.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $< -o $@
+
+test: $(HOST_TEST) $(LOADER_TEST) $(PROC_TREE_ROOT_TEST)
 	./$(HOST_TEST)
 	./$(LOADER_TEST)
+	./$(PROC_TREE_ROOT_TEST)
 
 sanitize:
 	@mkdir -p build/host

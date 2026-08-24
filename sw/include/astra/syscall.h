@@ -3,7 +3,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010012
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010016
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -92,10 +92,13 @@
  *
  * data[1] is the ELF image in the caller's own memory and data[2] its length;
  * data[3] is an AstraLaunchGrant array and data[4] how many; data[5] is an
- * AstraLaunchArguments block, or zero for none. It returns a handle to the new
- * process in data[1] -- carrying QUERY, WAIT and TERMINATE, and never DEBUG,
- * because having launched something is not authority to inspect it -- and the
- * new process id in data[2].
+ * AstraLaunchArguments block, or zero for none. The record may point at one
+ * bounded packed environment block; the kernel copies it before launching and
+ * publishes a conventional null-terminated `environ` vector. It returns a
+ * handle to the new process in data[1] -- carrying QUERY, WAIT, TERMINATE and
+ * ADMINISTER for priority, and never DEBUG, because having launched something
+ * is not authority to inspect its event stream -- and the new process id in
+ * data[2].
  *
  * Every grant names a handle the caller already holds, with rights that are a
  * subset of the caller's. A handle it does not hold, or rights wider than its
@@ -139,6 +142,13 @@
 #define ASTRA_SYSCALL_CLOCK_REALTIME   55
 /* Maps an exact library identity already resident in the kernel cache. */
 #define ASTRA_SYSCALL_LIBRARY_ATTACH   56
+/*
+ * Changes the scheduling priority of a process and all its live threads.
+ * data[1] is a process handle carrying ASTRA_RIGHT_ADMINISTER; data[2] is a
+ * user priority from 1 through 23. The previous priority is returned in
+ * data[1]. New threads inherit the new process default.
+ */
+#define ASTRA_SYSCALL_PROCESS_PRIORITY 57
 
 /*
  * The most one call copies. Small on purpose: a drain is a bounded page and a
@@ -263,7 +273,7 @@
 
 #ifndef ASTRA_AREA_ABI_CONSTANTS_DEFINED
 #define ASTRA_AREA_ABI_CONSTANTS_DEFINED 1
-#define ASTRA_AREA_SIZE_MAX 0x00200000u
+#define ASTRA_AREA_SIZE_MAX 0x00400000u
 #define ASTRA_AREA_MAP_READ  (1u << 0)
 #define ASTRA_AREA_MAP_WRITE (1u << 1)
 /*

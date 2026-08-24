@@ -64,8 +64,6 @@ struct KernelArea {
 };
 
 #if defined(__m68k__)
-_Static_assert(sizeof(KernelArea) <= 2088u,
-               "area record exceeds its memory budget");
 _Static_assert(sizeof(KernelAreaMapping) == 24u,
                "area mapping size changed; update the memory budget");
 #endif

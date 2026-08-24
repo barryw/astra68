@@ -81,34 +81,6 @@ say(const char *text)
     (void)astra_print(out, "\n");
 }
 
-/* A number, because a program that reports a failure should say which. */
-static void
-say_number(const char *text, uint32_t value)
-{
-    char digits[12];
-    uint32_t index = 0u;
-
-    (void)astra_print(out, text);
-    if (value == 0u) {
-        digits[index++] = '0';
-    }
-    while (value != 0u && index < sizeof(digits) - 1u) {
-        digits[index++] = (char)('0' + (value % 10u));
-        value /= 10u;
-    }
-    {
-        char out_digits[13];
-        uint32_t at = 0u;
-
-        while (index != 0u) {
-            out_digits[at++] = digits[--index];
-        }
-        out_digits[at] = '\0';
-        (void)astra_print(out, out_digits);
-    }
-    (void)astra_print(out, "\n");
-}
-
 /*
  * Eight hex digits, lowercase, because that is what the tree's activity
  * directory names its entries and a path is byte-exact after the colon.
@@ -420,7 +392,7 @@ astra_main(const AstraStartupInfo *startup)
         status = astra_event_control_set(control_handle, set_subsystem,
                                          set_level);
         if (status != ASTRA_STATUS_OK) {
-            say_number("events: level change refused, status ", status);
+            say("events: level change refused");
             return (int)status;
         }
         say("events: temporary level set for this boot");
@@ -447,7 +419,7 @@ astra_main(const AstraStartupInfo *startup)
 
     status = astra_process_filesystem_open(&process_filesystem, startup);
     if (status != ASTRA_VFS_OK) {
-        say_number("events: filesystem unavailable, status ", status);
+        say("events: filesystem unavailable");
         return (int)status;
     }
 

@@ -100,6 +100,42 @@ static void test_priority_fifo_and_process_retirement(void)
     assert(kernel_thread_process_count(2u, true) == 1u);
 }
 
+static void test_process_priority_reorders_ready_and_blocked_threads(void)
+{
+    KernelThreadWaitQueue queue;
+    KernelThread *first;
+    KernelThread *second;
+    KernelThread *selected;
+    uint32_t sequence;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    kernel_thread_wait_queue_init(&queue);
+    sequence = kernel_thread_wait_queue_sequence(&queue);
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u, 10u,
+                                  &first) == KERNEL_THREAD_OK);
+    assert(kernel_thread_allocate(2u, 0x10000002u, 1u, 0x00100002u,
+                                  0x70011000u, 0u, 20u,
+                                  &second) == KERNEL_THREAD_OK);
+    publish_thread(first);
+    publish_thread(second);
+
+    assert(kernel_thread_set_process_priority(1u, 22u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == first && selected->base_priority == 22u);
+    assert(kernel_thread_block(selected, &queue, sequence) == KERNEL_THREAD_OK);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == second);
+    assert(kernel_thread_block(selected, &queue, sequence) == KERNEL_THREAD_OK);
+
+    assert(kernel_thread_set_process_priority(2u, 23u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_wake_one(&queue, ASTRA_SYSCALL_OK, &selected) ==
+           KERNEL_THREAD_OK);
+    assert(selected == second && selected->base_priority == 23u);
+    assert(kernel_thread_pool_valid());
+}
+
 static void test_record_injection_preserves_pool(void)
 {
     KernelAllocationStats allocation_stats;
@@ -915,6 +951,7 @@ int main(void)
 {
     test_record_injection_preserves_pool();
     test_priority_fifo_and_process_retirement();
+    test_process_priority_reorders_ready_and_blocked_threads();
     test_slot_fifteen_generation_ids_do_not_repeat();
     test_invalid_inputs_do_not_consume_slots();
     test_all_priority_levels_select_highest_first();

@@ -14,6 +14,15 @@ QMP_SOCKET=${ASTRA_QMP_SOCKET:-$ASTRA_ROOT/run/qmp.sock}
 CONSOLE_LOG=${ASTRA_CONSOLE_LOG:-$ASTRA_ROOT/run/qemu-console.log}
 PANIC_LOG=${ASTRA_PANIC_LOG:-$ASTRA_ROOT/log/panic-latest.log}
 MEMORY=${ASTRA_MEMORY:-128M}
+HOST_TIME_MIN=${ASTRA_HOST_TIME_MIN:-1735689600}
+host_epoch=$(date -u +%s)
+case "$host_epoch:$HOST_TIME_MIN" in
+    *[!0-9:]*|:*|*:) echo "Astra host clock check is invalid" >&2; exit 1 ;;
+esac
+if [ "$host_epoch" -lt "$HOST_TIME_MIN" ]; then
+    echo "Astra host clock is stale; synchronize Linux before starting" >&2
+    exit 1
+fi
 if [ ! -x "$TERMINAL_DISPLAY" ]; then
     echo "Astra terminal display not found: $TERMINAL_DISPLAY" >&2
     exit 1

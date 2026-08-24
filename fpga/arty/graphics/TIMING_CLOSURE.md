@@ -1802,7 +1802,7 @@ all 152,192 timing endpoints with zero failures: setup is `+0.001 ns`, hold is
 | FSBL | `069b6eba6b71eafc0e03c592f70421378bf5db467f52ce8ea56afb5f8a047866` |
 | Active `BOOT.BIN` | `ac4dea6b90b562edf753d18378b9d8e5521cc26e5544b176b4bba1ad5a79df10` |
 
-After atomic deployment through NUC, FPGA manager reports `operating`, Linux
+After atomic deployment through Beast, FPGA manager reports `operating`, Linux
 Normal RAM remains bounded at `0x17ffffff`, and the FIT remains
 `c9a77be0f5085ce048860d12bd88ce7a246b813cf76c20339e8c18b7f9358944`.
 Warm 29-command drag repaints measure 25.1--26.1 ms in hardware versus the
@@ -4983,14 +4983,12 @@ and audible-audio qualification remain release blockers.
 | HDMI link manager | `134a1a2041c4679fc52204a69b3879bad419316852a8423e1608d68b3c535870` |
 | HDMI link manager source | `a78374e4041df24adc751a56317eea387fb30c2a327b80ca5b99386024d243a7` |
 
-Hash-verified atomic deployment through NUC installed the candidate BOOT/FIT,
+Hash-verified atomic deployment through Beast installed the candidate BOOT/FIT,
 manager, and first-boot script on the Arty SD card. The prior qualified
 BOOT/FIT remain byte-exact at
 `BOOT.BIN.rollback-545f0ccb2599` and
 `image.ub.rollback-74838cdca1f4`; the immutable root was restored read-only.
-The running PL is still the prior qualified image. NUC has no installed
-XSDB/JTAG reset tool or board USB power-control path, and Linux software reboot
-is not a qualified Zynq reset on this appliance, so a physical power cycle is
+The running PL is still the prior qualified image. A physical power cycle is
 required before the candidate can be tested.
 
 ### Warm-reload SLCR ownership repair (2026-08-21)
@@ -5144,7 +5142,7 @@ Exact retained resources are 32,548 LUTs, 39,402 registers, 12,253 slices,
 
 ### Physical framebuffer and Terminal qualification (2026-08-21)
 
-The exact routed bitstream above is active on the Arty through NUC. The board
+The exact routed bitstream above is active on the Arty through Beast. The board
 completed the 1280x644 overlapping RGB565 copy in 1,431,536 clocks versus
 11,917,253 clocks on the prior implementation (`8.32x`), or 7.63 ms at the
 187.5 MHz production memory clock. The production-width screen-offset gate,
@@ -5177,3 +5175,287 @@ above remain exact. A physical cold boot of the exact installed application
 pair subsequently passed full POST, initial-image stage 8, and a fresh
 five-run `ls -l COMMANDS:` gate at 1,622.439 ms and six median presentations.
 The physical framebuffer and application release gates are closed.
+
+## AXI lane-realignment campaign (2026-08-22--23; rejected physically)
+
+Per-command board profiling isolated the next framebuffer bottleneck. The
+Terminal text-box self-scroll is already a hardware copy: 816x420 pixels in
+about 658,818 render clocks. The following compositor cache update copies
+816x440 RGB565 pixels from a 1,632-byte pitch on byte lane 0 to a 1,640-byte
+pitch at a two-pixel inset on byte lane 4. The released mover's equal-lane gate
+rejects this case, producing about 5,465,036--5,513,144 board clocks per copy
+through the pixel fallback. The update occurs about six times during the
+measured listing. A physical four-to-sixteen-message Terminal queue experiment
+did not improve the release median and was reverted, so no queue change is in
+this candidate.
+
+The candidate removes only the equal-lane restriction from the shared direct
+same-format BLIT admission and extends `astra_render_copy_burst.sv` to realign
+source bytes onto destination lanes. AXI transactions remain aligned,
+full-width, at most 16 beats, INCR, and split at 4 KiB. The mover captures the
+complete source chunk before writing, retains forward/reverse memmove order,
+and uses WSTRB for destination edge bytes. The focused regression covers all
+64 source/destination lane pairs, outside-byte preservation, the existing
+same-surface right shift, and the exact 816x440 compositor geometry.
+
+| Simulation checkpoint | Identity | Exact mismatch | Desktop overlap | Transactions | Disposition |
+|---|---:|---:|---:|---:|---|
+| Released equal-lane gate | 1,254 | 1,918,638 | 824,550 | 89,760 mismatch | Baseline |
+| uniform 120-byte chunks | 1,518 | 423,574 | 927,582 | not retained | Rejected: regressed aligned copies |
+| lane-aware chunks | 1,254 | 378,974 | 824,550 | 6,224 mismatch | Functionally retained before timing repair |
+| pair-register pipeline | 1,254 | 423,950 | 824,550 | 6,224 mismatch | Retained candidate; focused and complete suites pass |
+
+Planner timing experiments were measured rather than accumulated. The initial
+200 MHz out-of-context route failed at `-0.574 ns` from the byte cursor into
+the remaining-limit register. Adding an explicit remaining-byte register moved
+but did not fix the path (`-0.618 ns`). Registering the lane-dependent forward
+chunk capacity passed the 200 MHz out-of-context route at `+0.081 ns`, using
+3,981 LUTs, 3,732 registers, 1,362 slices, 128 LUT-memory bits, and 11 DSPs.
+
+A fresh full-feature Vivado 2024.2 production implementation on Beast used no
+incremental checkpoint and routed 67,779/67,779 nets. At the build's default
+200 MHz stress clock it failed setup/hold at `-1.539/+0.051 ns`, with 7,233
+failing setup endpoints and -1,949.722 ns total setup violation. The worst
+path was
+`fast_copy_i/write_index_q_reg[0]_replica/C` through the realignment network to
+`hp3_render_slice/.../skid_buffer_reg[9]/D`: 6.384 ns data delay, six logic
+levels, and 5.184 ns of routing. Resources were 33,533 LUTs, 39,553 registers,
+129.5 BRAM tiles, and 81 DSPs. Output directory:
+`/mnt/Documents/astra68/work/buttery-scroll-20260821/repo/build/arty-graphics/production-route-dre-capacity`.
+The gate rejected the build and wrote no bitstream.
+
+The retained local mover revision inserts a 128-bit source-pair register
+between the distributed-RAM word selection and the lane-dependent byte shift.
+Equal-lane copies retain their original data path. Mismatched copies add one
+setup clock per chunk and preload the next pair only after an accepted AXI
+write beat, so W-channel backpressure holds data and strobes stable. The
+focused blitter regression completed with exit status zero at 1,254, 423,950,
+and 824,550 clocks for the identity, exact mismatch, and desktop cases. The
+complete graphics suite then completed with exit status zero and the same
+counts, including HDMI, AXI, tile, sprite, compositor, screen-offset, and all
+blitter tests.
+
+The exact candidate is based on
+`d27d6be762cd6335ae366a597b49c2092b6e1bd5`; its source hashes are:
+
+| File | SHA-256 |
+|---|---|
+| `astra_render_blitter.sv` | `cd1e035e1abd6ca757845c7e627e314ef6457f0a31d706c3c011f29a036b09d9` |
+| `astra_render_copy_burst.sv` | `b4d167a3399b73f7b0acf7263d71f0f0ed95929a19b5338f3a6af447dc7e825a` |
+| `astra_sprite_line_builder.sv` | `f6043926c47b290137f78fb920619984006ce89e029d32524a8bab993a7b4963` |
+| `sim/tb_astra_render_blitter.sv` | `c23c58b7893a5d55d46996a7e7313207b34c0434e927b0548e3b1aaa9c9318c8` |
+
+Four successive Vivado 2024.2 OOC routes on Beast measured the realignment
+cone rather than accepting simulation alone:
+
+| Revision | 200 MHz WNS | Worst cone | Disposition |
+|---|---:|---|---|
+| state-selected shift | -1.644 ns | mover state to realigned write data | Rejected |
+| write-index preload | -0.328 ns | mover write index to realigned write data | Rejected |
+| dedicated realignment index | -0.300 ns | realignment index to realigned write data | Rejected |
+| source-pair pipeline | -0.005 ns | existing blitter mask-cache address to source ARVALID | Mover cone closed; retained |
+
+The retained OOC output is
+`build/arty-graphics/render-blitter-ooc-pair-pipeline`. Its isolated clock has
+no final `HD.CLK_SRC`, so the unrelated five-picosecond placement estimate is
+not accepted as a reason to alter mask-cache RTL.
+
+Two clean full-feature production implementations used a 200 MHz
+implementation target, restored the exact 187.5 MHz release constraint before
+the gate, and used no incremental checkpoint:
+
+| Strategy | Stress WNS | Release setup / hold | Failing setup endpoints | Route | Disposition |
+|---|---:|---:|---:|---:|---|
+| `Performance_Explore` | -0.392 ns | -0.059 / +0.046 ns | 4 | 68,062 / 68,062, 0 errors | Rejected; no bitstream |
+| `Performance_ExplorePostRoutePhysOpt` | -0.363 ns | -0.030 / +0.013 ns | 3 | 68,062 / 68,062, 0 errors | Rejected; no bitstream |
+
+The default output is
+`build/arty-graphics/production-route-lane-realign-pair`; the bounded retry is
+`build/arty-graphics/production-route-lane-realign-pair-postroute`. The latter
+has `-0.066 ns` total setup violation. Its worst path is
+`pipeline_i/scheduler_i/client_start_reg/C` to
+`pipeline_i/sprite_builder_i/prep_state_reg[1]/CE`: 4.930 ns data delay,
+0.952 ns logic, 3.978 ns route (80.689%), and four LUT levels. The remaining
+two `-0.018 ns` paths end at
+`sprite_builder_i/admission_position_q_reg[1]/CE` and `[3]/CE`. The mover is
+absent from all failing endpoints. Post-route physical optimization attempted
+the exact cone and made no timing change.
+
+Resources for the best full route are 33,202 LUTs, 39,741 registers, 12,435
+slices, 129.5 BRAM tiles, and 81 DSPs. Evidence hashes are:
+
+| Artifact | SHA-256 |
+|---|---|
+| Routed DCP | `52cb936058af96a0664b51c4a654fad62df4375b0779205fba01ad94d4889316` |
+| Timing summary | `fd2d69c09e5bf65f1f528c373f8ba3030eadbb9c5745e550087d66551fa9bf5d` |
+| Utilization | `b38c520ef7b716254e2038e4c1d31a30d41c9be4bc803a8ad8584581f6cabecb` |
+| Route status | `4b4ea8a0170ffa4b470e2ee9d116ea127a0a0fc7afb80bc6fb2360e0b5808aa4` |
+
+The retained timing repair adds a local one-cycle input pipeline for the sprite
+builder's start pulse, build slot, and line number. It breaks the exact
+scheduler-to-sprite route cone without changing scheduler policy. All nine
+focused sprite modes pass with exit status zero: functional 342 clocks,
+16x128 worst case 1,562, overflow 398, SLVERR 398, deadline 300, 16-way
+collision 1,584, 4 KiB split 472, variable dimensions 1..128, and the
+16-sprite count limit 863. The complete graphics suite also passes with exit
+status zero, including the 5,120-pixel screen-offset gate and the unchanged
+blitter counts of 1,254, 423,950, and 824,550 clocks.
+
+The clean full production route uses Vivado 2024.2 on Beast, no incremental
+checkpoint, `Performance_ExplorePostRoutePhysOpt`, a 200 MHz implementation
+target, and the restored 187.5 MHz release constraint. It routes
+68,015/68,015 nets with zero errors and passes setup/hold at
+`+0.022/+0.018 ns`; pulse-width slack is `+1.416 ns` and there are no failing
+endpoints. The 200 MHz stress result is `-0.311/+0.018 ns`. The worst release
+setup path is now the existing glyph destination-row operand register to its
+DSP input: 1.363 ns data delay, 0.419 ns logic, and 0.944 ns route. The former
+scheduler-to-sprite cone and the mover are absent from the limiting paths.
+
+Output directory:
+`build/arty-graphics/production-route-lane-realign-sprite-start`. Resources
+are 33,176 LUTs, 39,686 registers, 12,296 slices, 129.5 BRAM tiles, and 81
+DSPs. The build wrote the timing-clean candidate bitstream and XSA:
+
+| Artifact | SHA-256 |
+|---|---|
+| Bitstream | `baf8a6d9524125409ef0d0004272cb06dfa22d6144f1ad444e798b07c8e93b70` |
+| XSA | `07d831107976d478ce651f8bd81931db3a1650689917d8b8b787930f9fef055f` |
+| Routed DCP | `3bb79de79c6d598a17e800d49775e429a39e775be97fe9513a51e56c1fd3a607` |
+| Timing summary | `3fa37371cfd26e63eab42c1d2de6d89d785dc517d80daf70978f0ea220531782` |
+| Utilization | `bdd79d6be99b8a0d38451130126f9e1f6934d8d9953944cf3ba1f78ca0f2a4d2` |
+| Route status | `2316ad9da5839272aca8865480398383916e3734d59079f8e1a39a93329b115a` |
+| Methodology | `e265e2c68ace83cc250d2ad835bc39249a6625cc95cae6319c6104554554371e` |
+| CDC | `1bc42c13a9af3ae05728f0430616f72a24e1837badf1742bc8adfb16f466d29e` |
+
+### Physical lane-realignment qualification and rejection (2026-08-23)
+
+The raw bitstream was converted for Linux FPGA Manager by the exact operation
+proven against the prior production pair: strip the 119-byte `.bit` header,
+reverse every 32-bit payload word, and append the final NOOP word. Raw input
+remains
+`baf8a6d9524125409ef0d0004272cb06dfa22d6144f1ad444e798b07c8e93b70`;
+the 4,045,568-byte manager image is
+`63b3a8e158ede638245be470fdacb6ef78ffab01700bf96af5e73268a89c42b9`.
+The board verified that hash before the volatile load and reported FPGA
+manager `operating`, flags `0`, plus graphics/audio/front-panel identities
+`0x41535452`, `0x41554430`, and `0x504e4c30` after the installed
+`astra-chip-reset` helper ran.
+
+The existing `astra-render-certify` was extended with 64 one-byte-format
+source/destination lane pairs and the exact compositor geometry instead of
+creating a separate test tool. Its source SHA-256 is
+`b5b8f54f4eb63801ba533c787b4c92b8bfe8ff11d20e6906902b0f8065530f90`;
+the strict-warning, `-fanalyzer`, host-test, and static ARM build passes, and
+the deployed binary is
+`0f74fd2bf9a9a5d758dcd6bd93a748eac8f27b02fc11227188a4f41b4d45e828`.
+Physical results are:
+
+| Gate | Result |
+|---|---|
+| Complete renderer | PASS, 29 commands, 1,196,651 pixels, zero backpressure |
+| 64 lane pairs | PASS, 37 bytes each, 40,940 total clocks, neighbor bytes preserved |
+| Exact compositor | PASS, 816x440, 1,632-byte source pitch to 1,640-byte destination pitch, 705,006 / 3,125,000 clocks |
+| Screen offset | PASS, 1280x644, 1,432,002 clocks |
+| Sprite | PASS, 64 sprites, 1,564-clock hardware maximum, zero AXI/deadline errors |
+| Copper | PASS, two banks, eight instructions, invalid target contained |
+| Audio | PASS, 48,000 Hz, 48,064 frames, 440 Hz tone |
+
+The clean application pair was restored before testing: ROM
+`e07e648f347e2a522ce8297f67af213a2281ff4f6cecb504ec1ad19e7670b07e`
+and pre-boot storage
+`b033561aeb0b3728301a6ada6fdf84aef7d32e499a1e848462ed79d197ab2352`.
+Two independent candidate boots pass POST, full-range SDRAM BIST, and
+initial-image stage 8 without a panic. Terminal was opened through the
+canonical desktop double-click before measurement.
+
+Application qualification rejects the candidate. The five-run
+`ls -l COMMANDS:` gate measured 1,612.009 ms and seven median presentation
+batches. A ten-run repeat measured 1,562.989 ms and 6.5 batches. Both fail the
+retained six-batch maximum. A controlled ten-run A/B after volatile reload of
+the prior production manager image
+`e5f8a45e0010be57b409bc8157f7fef493cb94f9edd7bc9e404b90677bff9851`
+(raw bitstream
+`f3ccce904124714d77b3f936debdad195a29c5f089ffb0c0783c195397369bb4`)
+passes at 1,676.396 ms and six batches. The lane candidate lowers median
+latency by 6.8%, but its extra presentation work is repeatable and is not
+waived.
+
+HDMI hot-plug was not run: the Arty is attached to Beast, whose local JTAG scan
+sees the Cortex-A9 and XC7Z020, but Beast enumerated no `/dev/video` capture
+device during this checkpoint. The board's manager correctly held link status
+`0` with no sink. The prior production manager image is active again, state
+`operating`, flags `0`; persistent boot files were not changed. Candidate and
+control log SHA-256 values are:
+
+| Log | SHA-256 |
+|---|---|
+| Renderer certification | `d176ea22637381949c0f3285949891d3920dba4525bbb647bddbb7b7649e2909` |
+| Sprite/Copper/audio certification | `1e3258efff1d134785b0d054cb15dc9cebfc9e38ebdef5b44c90cd0865f5516b` |
+| Candidate five-run Terminal | `183683d4745df1b8d7b30fb63065599ab9cf6d6bd66fc5720b9cc5cf1030fce4` |
+| Candidate ten-run Terminal | `ba24fe51076f555172aef8bfd3c7fe53767e4af92ec52929d726a4cd24f2ae83` |
+| Prior-route ten-run control | `d98081b596a6cd549f5a242c81193111b97f893e8d4b77937163d08071b9f6d8` |
+
+The active blocker is the candidate-specific 6.5-batch Terminal median. Fix it
+without weakening the one-frame presentation contract, then repeat all
+physical gates with an HDMI sink present.
+
+A corrective Beast-local checkpoint confirmed the physical topology directly:
+the Digilent FT2232H exposes `/dev/ttyUSB0` and `/dev/ttyUSB1`, and the local
+JTAG chain contains the Cortex-A9 and XC7Z020. A fresh candidate FPGA-manager
+reload from a Beast-to-`astra-arty` session dropped Ethernet before any
+certifier produced a result; this aborted run adds no qualification evidence.
+Beast then programmed the exact prior raw bitstream
+`f3ccce904124714d77b3f936debdad195a29c5f089ffb0c0783c195397369bb4`
+through the physical Digilent JTAG link and issued a scoped XSDB APU system
+reset. The board returned after a clean persistent boot with FPGA manager
+`operating`, flags `0`, graphics/audio/front-panel identities
+`0x41535452`/`0x41554430`/`0x504e4c30`, the clean ROM hash above, and the HDMI
+manager, display bridge, and QEMU resident. All further Arty programming,
+UART, capture, and board qualification must originate on Beast.
+
+### Combined lane-realignment qualification (2026-08-23)
+
+No RTL or route changed after the timing-clean lane-realignment checkpoint.
+The exact source remains base
+`d27d6be762cd6335ae366a597b49c2092b6e1bd5`, raw bitstream
+`baf8a6d9524125409ef0d0004272cb06dfa22d6144f1ad444e798b07c8e93b70`,
+and FPGA-manager image
+`63b3a8e158ede638245be470fdacb6ef78ffab01700bf96af5e73268a89c42b9`.
+Beast's full non-incremental implementation routed 68,015/68,015 nets and used
+33,176 LUTs, 39,686 registers, 12,296 slices, 129.5 BRAM36-equivalent tiles,
+and 81 DSPs. The exact 187.5 MHz setup/hold/pulse-width result remains
+`+0.022/+0.018/+1.416 ns`.
+
+The prior 6.5-batch application rejection is superseded by the minimum
+software root-cause fix. STOR v9 writes the existing bounded alternating-bank
+event snapshot through one shared-area request instead of one request per
+record; `ls` uses one stdio buffer; and `readdir_batch` packs actual name
+lengths. Host tests, strict warnings, static analysis, and the complete
+MC68030 userspace build pass on Beast. The exact pre-boot storage image is
+`e6d6f7379bf53303065bf954f44c359e96ba62bf71affd741bf55c9c0bf5c3e2`.
+
+The physical Arty completed 20/20 exact `ls -l COMMANDS:` runs at a
+779.731 ms median with exactly three renderer submissions/completions, 66
+commands, and 16 glyph commands in every run. Evidence SHA-256 is
+`1831c03c759864f4b1e04b8e3917410e0481018a71e43a4aea9f906d0cd52f49`.
+The directory-list phase separately improved from 311.339 to 267.310 ms. A
+4-to-16 message/pump experiment retained three batches but regressed the
+20-run median to 843.464 ms; it was reverted, with rejected evidence
+`b93d1fd30d3d582d9fe4cf7ed48d4de277e0162705cb8e183a998fb42847670`.
+
+The exact expanded certifier
+`0f74fd2bf9a9a5d758dcd6bd93a748eac8f27b02fc11227188a4f41b4d45e828`
+passes 29 commands, 1,196,651 pixels, and zero backpressure; all 64 lane pairs;
+the 1280x644 offset copy in 1,431,179 clocks; and the exact 816x440 compositor
+copy in 703,962 of 3,125,000 clocks. Sprite passes with a 1,564-clock hardware
+maximum and zero AXI/deadline errors; Copper passes two banks and invalid-target
+containment; audio passes 48,064 frames at 48 kHz. Repeated POST, full-range
+SDRAM BIST, and initial-image stage 8 pass. A storage restart followed by
+`events --boot -1` recovered the previous boot; ring and decoded-trace hashes
+are `765995b39389ef4e0744e79686a118d5c0156a7a8cae2c4e18790ea334ad8491`
+and `7a594a3790e3a0e8971aef1aa5f92a226ca37882171f8e5922d6af319238396a`.
+
+The candidate remains a volatile FPGA-manager load with state `operating` and
+flags `0`; persistent boot files were not changed. The active application and
+hardware blocker is closed. Beast has no `/dev/video` HDMI sink, so repeat
+hot-plug and visual inspection remain the only physical release gate.

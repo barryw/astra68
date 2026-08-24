@@ -14,24 +14,20 @@
  * The layout, per that document:
  *
  *     PROC:
+ *       snapshot     fixed AstraProcSnapshot records
  *       <id>/
  *         status      identity, state, priorities, exit reason
  *
- * `mem`, `cpu` and `threads` are named there too and are not here yet. What is
- * here is what `AstraProcessInfo` can substantiate today, and it is rendered at
- * read time from a live query -- nothing is cached, so a listing cannot show a
- * process that has already gone.
- *
- * On `cpu`, the document is explicit and this file keeps to it: run counts and
- * timer ticks are schedule counts, not CPU time, and are reported under names
- * that say so. There is no cycle figure because nothing counts cycles per
- * process, and inventing one would be worse than the gap.
+ * `mem`, `cpu` and `threads` are named there too and are not separate leaves
+ * yet. Their live counters are included in status so one query provides the
+ * process list without caching or racing several reads.
  */
 
 #include <loader.h>
 #include <proc_tree.h>
 
 #include <astra/process.h>
+#include <astra/proc.h>
 #include <astra/runtime.h>
 #include <astra/syscall.h>
 #include <astra/vfs_backend.h>
@@ -72,6 +68,25 @@ append_field(char *out, uint32_t used, const char *name, uint32_t value)
     used = append_text(out, used, name);
     used = append_text(out, used, " ");
     used = append_number(out, used, value);
+    return append_text(out, used, "\n");
+}
+
+static uint32_t
+append_field64(char *out, uint32_t used, const char *name, uint64_t value)
+{
+    char digits[20];
+    uint32_t count = 0u;
+
+    used = append_text(out, used, name);
+    used = append_text(out, used, " ");
+    do {
+        uint64_t quotient = value / 10u;
+
+        digits[count++] = (char)('0' + value - quotient * 10u);
+        value = quotient;
+    } while (value != 0u && count < sizeof(digits));
+    while (count != 0u && used < PROC_RENDER_MAX - 1u)
+        out[used++] = digits[--count];
     return append_text(out, used, "\n");
 }
 
@@ -149,6 +164,7 @@ render_status(uint32_t index, uint32_t *length)
     used = append_field(render, used, "generation", info.generation);
     used = append_field(render, used, "owner", info.owner);
     used = append_field(render, used, "state", info.process_state);
+    used = append_field(render, used, "thread_state", info.thread_state);
     used = append_field(render, used, "threads", info.thread_count);
     used = append_field(render, used, "live", info.live_threads);
     used = append_field(render, used, "priority", info.default_priority);
@@ -159,10 +175,46 @@ render_status(uint32_t index, uint32_t *length)
     used = append_field(render, used, "ticks", info.timer_ticks);
     used = append_field(render, used, "syscalls", info.syscall_count);
     used = append_field(render, used, "handles", info.handle_references);
+    used = append_field64(render, used, "runtime_ns", info.runtime_ns);
+    used = append_field64(render, used, "elapsed_ns", info.elapsed_ns);
     used = append_field(render, used, "exit_reason", info.exit_reason);
     used = append_field(render, used, "exit_status", info.exit_status);
     render[used] = '\0';
     *length = used;
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t
+read_snapshot(uint64_t offset, uint8_t *out, uint32_t length, uint32_t *moved)
+{
+    uint64_t position = 0u;
+
+    *moved = 0u;
+    for (uint32_t index = 0u; index < supervisor_loader_process_count();
+         ++index) {
+        AstraProcSnapshot record = {0};
+        const char *path = NULL;
+        const uint8_t *bytes = (const uint8_t *)&record;
+        uint32_t handle = supervisor_loader_process_at(index, &path);
+        uint32_t name = 0u;
+
+        record.process.size = sizeof(record.process);
+        if (handle == 0u || astra_process_info(handle, &record.process) !=
+                                ASTRA_SYSCALL_OK)
+            continue;
+        while (path != NULL && path[name] != '\0' &&
+               name + 1u < sizeof(record.name)) {
+            record.name[name] = path[name];
+            ++name;
+        }
+        for (uint32_t at = 0u; at < sizeof(record); ++at, ++position) {
+            if (position < offset)
+                continue;
+            if (*moved == length)
+                return ASTRA_VFS_OK;
+            out[(*moved)++] = bytes[at];
+        }
+    }
     return ASTRA_VFS_OK;
 }
 
@@ -178,12 +230,22 @@ proc_open(void *context, const char *path, uint32_t flags, uintptr_t *node,
     if ((flags & ASTRA_VFS_OPEN_WRITE) != 0u ||
         (flags & ASTRA_VFS_OPEN_CREATE) != 0u)
         return ASTRA_VFS_ERR_ACCESS;
-    if (path == NULL || path[0] == '\0') {
+    if (supervisor_proc_path_is_root(path)) {
         *node = 0u;
         info->size = 0u;
         info->kind = ASTRA_VFS_KIND_DIRECTORY;
         info->mode = 0500u;
         info->nlink = 2u;
+        return ASTRA_VFS_OK;
+    }
+    if (supervisor_proc_path_is_snapshot(path)) {
+        *node = UINTPTR_MAX;
+        /* READ_PATH consumes this immediately; a later read may still shorten. */
+        info->size = supervisor_loader_process_count() *
+                     sizeof(AstraProcSnapshot);
+        info->kind = ASTRA_VFS_KIND_FILE;
+        info->mode = 0400u;
+        info->nlink = 1u;
         return ASTRA_VFS_OK;
     }
     index = parse_path(path, &leaf);
@@ -231,6 +293,8 @@ proc_read(void *context, uintptr_t node, uint64_t offset, void *buffer,
 
     (void)context;
     *moved = 0u;
+    if (node == UINTPTR_MAX)
+        return read_snapshot(offset, out, length, moved);
     if (node == 0u)
         return ASTRA_VFS_ERR_IS_DIR;
     index = (uint32_t)node - 1u;
@@ -285,7 +349,7 @@ proc_readdir(void *context, const char *path, uint64_t cookie, char *name,
     int leaf = 0;
 
     (void)context;
-    if (path != NULL && path[0] != '\0') {
+    if (!supervisor_proc_path_is_root(path)) {
         uint32_t index = parse_path(path, &leaf);
 
         if (leaf || index >= supervisor_loader_process_count())
@@ -303,7 +367,19 @@ proc_readdir(void *context, const char *path, uint64_t cookie, char *name,
         *next = 1u;
         return ASTRA_VFS_OK;
     }
-    for (uint32_t index = (uint32_t)cookie;
+    if (cookie == 0u) {
+        if (capacity < sizeof("snapshot"))
+            return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
+        for (uint32_t at = 0u; at < sizeof("snapshot"); ++at)
+            name[at] = "snapshot"[at];
+        info->size = 0u;
+        info->kind = ASTRA_VFS_KIND_FILE;
+        info->mode = 0400u;
+        info->nlink = 1u;
+        *next = 1u;
+        return ASTRA_VFS_OK;
+    }
+    for (uint32_t index = (uint32_t)cookie - 1u;
          index < supervisor_loader_process_count(); ++index) {
         AstraProcessInfo process = {0};
         uint32_t handle = supervisor_loader_process_at(index, NULL);
@@ -321,7 +397,7 @@ proc_readdir(void *context, const char *path, uint64_t cookie, char *name,
         info->kind = ASTRA_VFS_KIND_DIRECTORY;
         info->mode = 0500u;
         info->nlink = 2u;
-        *next = index + 1u;
+        *next = index + 2u;
         return ASTRA_VFS_OK;
     }
     return ASTRA_VFS_ERR_NOT_FOUND;
@@ -343,6 +419,15 @@ proc_unlink(void *context, const char *path)
     return ASTRA_VFS_ERR_ACCESS;
 }
 
+static uint32_t
+proc_rename(void *context, const char *from, const char *to)
+{
+    (void)context;
+    (void)from;
+    (void)to;
+    return ASTRA_VFS_ERR_ACCESS;
+}
+
 static const AstraVfsBackendOps proc_ops = {
     .open = proc_open,
     .close = proc_close,
@@ -352,6 +437,7 @@ static const AstraVfsBackendOps proc_ops = {
     .readdir = proc_readdir,
     .mkdir = proc_mkdir,
     .unlink = proc_unlink,
+    .rename = proc_rename,
 };
 
 const AstraVfsBackendOps *

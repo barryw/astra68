@@ -29,7 +29,7 @@ ASTRA_PROGRAM_SIZE = 120;
 
 PHDRS
 {
-    text PT_LOAD FLAGS(5);      /* R + X */
+    text PT_LOAD FILEHDR PHDRS FLAGS(5); /* ELF headers + R + X text */
     rodata PT_LOAD FLAGS(4);    /* R */
     data PT_LOAD FLAGS(6);      /* R + W */
     stack PT_GNU_STACK FLAGS(6);
@@ -37,7 +37,7 @@ PHDRS
 
 SECTIONS
 {
-    . = ASTRA_TEXT_BASE;
+    . = ASTRA_TEXT_BASE + SIZEOF_HEADERS;
 
     /*
      * The first segment carries the ELF and program headers, so its file
@@ -73,6 +73,18 @@ SECTIONS
     } :rodata
 
     . = ALIGN(ASTRA_PAGE_SIZE);
+
+    /*
+     * GNU m68k libgcc addresses its floating-point control word through the
+     * GOT. Keep the toolchain's required order: _GLOBAL_OFFSET_TABLE_ names
+     * the .got.plt prefix and ordinary GOT entries follow it. Leaving these
+     * as separate orphan sections put .got first, so libgcc loaded a zero
+     * .got.plt word and faulted at address 6 while formatting a fraction.
+     */
+    .got : {
+        *(.got.plt .igot.plt)
+        *(.got .igot)
+    } :data
 
     .data : {
         *(.data .data.*)

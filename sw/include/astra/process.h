@@ -1,10 +1,17 @@
 #ifndef ASTRA_PROCESS_H
 #define ASTRA_PROCESS_H
 
+#ifndef __ASSEMBLER__
+#include <stddef.h>
+#include <stdint.h>
+#endif
+
 #define ASTRA_STARTUP_MAGIC 0x41535452u
 #define ASTRA_STARTUP_ABI_VERSION 3u
 #define ASTRA_STARTUP_INFO_SIZE 64u
 #define ASTRA_STARTUP_CAPABILITY_SIZE 92u
+/* The kernel publishes startup state in the machine's one 4 KiB VM page. */
+#define ASTRA_STARTUP_BLOCK_SIZE 4096u
 /*
  * Where a granted name begins inside its mount, and the one number for it.
  *
@@ -20,7 +27,16 @@
 
 #define ASTRA_STARTUP_FLAG_SUPERVISOR (1u << 0)
 
-#define ASTRA_PROCESS_INFO_SIZE 48u
+#define ASTRA_PROCESS_INFO_SIZE 80u
+
+/* The scheduler's complete ordinary-user band. Larger values run first. */
+#define ASTRA_PROCESS_PRIORITY_MIN 1u
+#define ASTRA_PROCESS_PRIORITY_NORMAL 16u
+#define ASTRA_PROCESS_PRIORITY_MAX 23u
+#define ASTRA_PROCESS_NICE_MIN \
+    ((int)ASTRA_PROCESS_PRIORITY_NORMAL - (int)ASTRA_PROCESS_PRIORITY_MAX)
+#define ASTRA_PROCESS_NICE_MAX \
+    ((int)ASTRA_PROCESS_PRIORITY_NORMAL - (int)ASTRA_PROCESS_PRIORITY_MIN)
 
 /*
  * Capability names a process always receives: itself and its first thread.
@@ -53,6 +69,14 @@ _Static_assert(ASTRA_LAUNCH_GRANT_MAX == 12u,
                "every array sized by it are laid out from this number");
 #define ASTRA_LAUNCH_ARGUMENT_MAX 8u
 #define ASTRA_LAUNCH_ARGUMENT_BYTES 192u
+/*
+ * Environment space is the startup page, not a smaller policy quota. The
+ * kernel accepts the combination of capabilities, argv, pointers and strings
+ * only when the actual packed block fits that page. Seven is the minimum cost
+ * of one valid entry: "A=\0" plus its four-byte vector slot.
+ */
+#define ASTRA_LAUNCH_ENVIRONMENT_BYTES ASTRA_STARTUP_BLOCK_SIZE
+#define ASTRA_LAUNCH_ENVIRONMENT_MAX (ASTRA_STARTUP_BLOCK_SIZE / 7u)
 
 typedef enum AstraLaunchSource {
     ASTRA_LAUNCH_SOURCE_SYSTEM = 0u,
@@ -133,15 +157,15 @@ typedef struct AstraLaunchArguments {
     uint16_t source;
     uint16_t reserved;
     char     bytes[ASTRA_LAUNCH_ARGUMENT_BYTES];
+    uint16_t environment_count;
+    uint16_t environment_length;
+    uint32_t environment_address;
 } AstraLaunchArguments;
 
 #define ASTRA_CAPABILITY_PROCESS "PROCESS"
 #define ASTRA_CAPABILITY_THREAD  "THREAD"
 
 #ifndef __ASSEMBLER__
-
-#include <stddef.h>
-#include <stdint.h>
 
 /* Logical addresses are represented as integers at the process ABI boundary. */
 typedef struct AstraStartupInfo {
@@ -186,7 +210,15 @@ typedef struct AstraProcessInfo {
     uint8_t default_priority;
     uint8_t priority_ceiling;
     uint8_t exit_reason;
-    uint32_t reserved;
+    uint8_t thread_state;
+    uint8_t reserved[3];
+    uint64_t runtime_ns;
+    uint64_t elapsed_ns;
+    uint32_t fault_pc;
+    uint32_t fault_address;
+    uint16_t fault_vector;
+    uint16_t fault_status;
+    uint32_t fault_reserved;
 } AstraProcessInfo;
 
 typedef struct AstraStartupCapability {

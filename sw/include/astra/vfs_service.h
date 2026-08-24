@@ -22,12 +22,12 @@
  *
  * Control records only. ASTRA_MESSAGE_INLINE_MAX is 256 bytes, so inline I/O
  * stays small. Version 3 adds bounded shared-area reads; version 4 adds
- * batched directory replies. Writes remain inline until a measured workload
- * justifies the second bulk operation.
+ * batched directory replies. Version 9 adds shared-area writes after event
+ * persistence measured one service round trip per 72-byte stored record.
  */
 
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
-#define ASTRA_VFS_VERSION  UINT16_C(8)
+#define ASTRA_VFS_VERSION  UINT16_C(11)
 
 /*
  * The oldest version this build can still speak. A client asks for a minimum
@@ -45,6 +45,9 @@
  * service opens the session and performs that operation in the same exchange;
  * an older service answers the ordinary HELLO and the client retries the
  * operation with the negotiated session.
+ *
+ * Version 9 writes from the session's bound transfer area. Version 10 packs a
+ * directory batch into that area. Older peers retain bounded inline replies.
  */
 #define ASTRA_VFS_VERSION_MIN UINT16_C(2)
 
@@ -111,19 +114,19 @@
  * this is the shape that matters.
  */
 #define ASTRA_VFS_OP_READ_PATH UINT32_C(14)
-#define ASTRA_VFS_OP_MAX      ASTRA_VFS_OP_READ_PATH
+#define ASTRA_VFS_OP_WRITE_AREA UINT32_C(15)
+#define ASTRA_VFS_OP_READDIR_AREA UINT32_C(16)
+#define ASTRA_VFS_OP_RENAME_FROM UINT32_C(17)
+#define ASTRA_VFS_OP_RENAME_TO   UINT32_C(18)
+#define ASTRA_VFS_OP_MAX      ASTRA_VFS_OP_RENAME_TO
 
 /*
  * One shared-area transfer, and the unit the whole read path is sized around.
  *
- * This was 16 KiB, which meant a 100 KiB program image cost seven round trips
- * to the storage service and seven device transfers. Neither the area window
- * (16 slots of 2 MiB) nor the DMA budget (512 pages) was anywhere near that
- * bound -- it was simply a small number. 128 KiB carries every library and
- * program the system ships in a single transfer, and a client only commits
- * what it binds.
+ * One complete VM area is the transport boundary. Clients choose and grow
+ * their actual area size; the protocol does not impose a smaller file quota.
  */
-#define ASTRA_VFS_BULK_MAX 131072u
+#define ASTRA_VFS_BULK_MAX ASTRA_AREA_SIZE_MAX
 
 /* Open modes. */
 #define ASTRA_VFS_OPEN_READ     (UINT32_C(1) << 0)
@@ -173,6 +176,7 @@
  * a caller needs from a transport that it cannot get from a reply.
  */
 #define ASTRA_VFS_ERR_PEER        ((uint32_t)ASTRA_STATUS_PEER_DEAD)
+#define ASTRA_VFS_ERR_CROSS_DEVICE ((uint32_t)ASTRA_STATUS_CROSS_DEVICE)
 
 /*
  * A protocol status as a word, or NULL for a number nothing has named yet.

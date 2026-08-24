@@ -41,6 +41,8 @@ enum {
     GLYPH_RGB_DEST_DESCRIPTOR_OFFSET = 0x00418240u,
     GLYPH_XRGB_DEST_DESCRIPTOR_OFFSET = 0x00418260u,
     GLYPH_INDEX_DEST_DESCRIPTOR_OFFSET = 0x00418280u,
+    LANE_SOURCE_DESCRIPTOR_OFFSET = 0x004182a0u,
+    LANE_DEST_DESCRIPTOR_OFFSET = 0x004182c0u,
     GLYPH_DESCRIPTOR_ARRAY_OFFSET = 0x00418300u,
     GLYPH_DESCRIPTOR_RECORDS = 7u,
     QUEUE_REGION_BYTES = GLYPH_DESCRIPTOR_ARRAY_OFFSET +
@@ -73,6 +75,10 @@ enum {
     GLYPH_INDEX_DEST_DATA_OFFSET = 0x0060d200u,
     GLYPH_INDEX4_PALETTE_OFFSET = 0x0060e000u,
     GLYPH_INDEX8_PALETTE_OFFSET = 0x0060f000u,
+    LANE_SOURCE_DATA_OFFSET = 0x0060f800u,
+    LANE_DEST_DATA_OFFSET = 0x0060f900u,
+    LANE_COPY_BYTES = 37u,
+    LANE_SURFACE_BYTES = 64u,
     GEOMETRY_SURFACE_BYTES = 16u * 16u,
     FLOOD_WORKSPACE_BYTES = 16u * 16u * 4u,
     FEATURE_WIDTH = 16u,
@@ -109,8 +115,23 @@ enum {
     CERTIFICATION_COMMAND_END = FLOOD_OVERFLOW_COMMAND + 1u,
     SCREEN_OFFSET_COMMAND = CERTIFICATION_COMMAND_END,
     SCREEN_OFFSET_COMMAND_END = SCREEN_OFFSET_COMMAND + 1u,
+    LANE_COMMAND_FIRST = SCREEN_OFFSET_COMMAND_END,
+    LANE_COMMAND_COUNT = 64u,
+    LANE_COMMAND_END = LANE_COMMAND_FIRST + LANE_COMMAND_COUNT,
+    COMPOSITOR_COMMAND = LANE_COMMAND_END,
+    COMPOSITOR_COMMAND_END = COMPOSITOR_COMMAND + 1u,
     SCREEN_OFFSET_SOURCE_Y = 76u,
     SCREEN_OFFSET_HEIGHT = 644u,
+    COMPOSITOR_SOURCE_WIDTH = 816u,
+    COMPOSITOR_DESTINATION_WIDTH = 820u,
+    COMPOSITOR_HEIGHT = 440u,
+    COMPOSITOR_SOURCE_PITCH = COMPOSITOR_SOURCE_WIDTH * 2u,
+    COMPOSITOR_DESTINATION_PITCH = COMPOSITOR_DESTINATION_WIDTH * 2u,
+    COMPOSITOR_SOURCE_BYTES = COMPOSITOR_SOURCE_PITCH * COMPOSITOR_HEIGHT,
+    COMPOSITOR_DESTINATION_BYTES =
+        COMPOSITOR_DESTINATION_PITCH * COMPOSITOR_HEIGHT,
+    COMPOSITOR_DESTINATION_OFFSET = 0x00100000u,
+    COMPOSITOR_CYCLE_BUDGET = 3125000u,
     VIRTUAL_SPRITE_WIDTH = 16u,
     VIRTUAL_SPRITE_HEIGHT = 16u,
     VIRTUAL_SPRITE_COLUMNS = 16u,
@@ -139,6 +160,9 @@ _Static_assert(CERTIFICATION_COMMAND_END <=
 _Static_assert(SCREEN_OFFSET_COMMAND_END <=
                    (unsigned)ASTRA_RENDER_RING_ENTRIES,
                "screen-offset command exceeds the bounded ring");
+_Static_assert(COMPOSITOR_COMMAND_END <=
+                   (unsigned)ASTRA_RENDER_RING_ENTRIES,
+               "lane certification commands exceed the bounded ring");
 _Static_assert(GLYPH_DESCRIPTOR_RECORDS >=
                    GLYPH_SUCCESS_COMMAND_COUNT + 2u,
                "glyph certification needs success and malformed records");
@@ -159,6 +183,13 @@ _Static_assert(SCRATCH_REGION_BYTES >=
                    GLYPH_INDEX8_PALETTE_OFFSET + 256u * 4u -
                        SCRATCH_DATA_OFFSET,
                "glyph fixtures exceed the scratch mapping");
+_Static_assert(SCRATCH_REGION_BYTES >=
+                   LANE_DEST_DATA_OFFSET + LANE_SURFACE_BYTES -
+                       SCRATCH_DATA_OFFSET,
+               "lane fixtures exceed the scratch mapping");
+_Static_assert(COMPOSITOR_DESTINATION_OFFSET +
+                   COMPOSITOR_DESTINATION_BYTES <= ASTRA_FRAMEBUFFER_BYTES,
+               "compositor fixture exceeds the frame mapping");
 
 struct render_maps {
     struct astra_graphics_memory_map queues;
@@ -1709,6 +1740,194 @@ static int verify_screen_offset(const struct render_maps *maps,
     return 0;
 }
 
+static int verify_blit_completion(const struct render_maps *maps,
+                                  unsigned command, uint32_t pixels,
+                                  uint32_t *cycles_out)
+{
+    uint32_t offset = COMPLETION_RING_OFFSET +
+        (command & (ASTRA_RENDER_RING_ENTRIES - 1u)) *
+            ASTRA_RENDER_COMPLETION_BYTES;
+    volatile const uint8_t *completion = queue_address(
+        maps, offset, ASTRA_RENDER_COMPLETION_BYTES);
+
+    if (completion == NULL ||
+        load_be32(completion + 4u) !=
+            pair_u16(ASTRA_RENDER_OP_BLIT, ASTRA_RENDER_STATUS_OK) ||
+        load_be32(completion + 8u) != command + 1u ||
+        load_be32(completion + 12u) != pixels ||
+        load_be32(completion + 24u) != 0u) {
+        fprintf(stderr, "blit completion %u is invalid\n", command);
+        return -1;
+    }
+    *cycles_out = load_be32(completion + 20u) -
+        load_be32(completion + 16u);
+    return 0;
+}
+
+static int certify_lane_realignment(
+    const struct astra_graphics_device *device, struct render_maps *maps,
+    uint64_t *cycles_out)
+{
+    volatile uint8_t *source = scratch_address(
+        maps, LANE_SOURCE_DATA_OFFSET, LANE_SURFACE_BYTES);
+    volatile uint8_t *destination = scratch_address(
+        maps, LANE_DEST_DATA_OFFSET, LANE_SURFACE_BYTES);
+    uint64_t cycles = 0u;
+    unsigned source_lane;
+
+    if (source == NULL || destination == NULL)
+        return -1;
+    for (source_lane = 0u; source_lane < 8u; ++source_lane) {
+        unsigned destination_lane;
+
+        for (destination_lane = 0u; destination_lane < 8u;
+             ++destination_lane) {
+            unsigned command = LANE_COMMAND_FIRST + source_lane * 8u +
+                destination_lane;
+            uint32_t command_cycles;
+            unsigned index;
+
+            for (index = 0u; index < LANE_SURFACE_BYTES; ++index) {
+                source[index] = 0xeeu;
+                destination[index] = 0xeeu;
+            }
+            for (index = 0u; index < LANE_COPY_BYTES; ++index)
+                source[source_lane + index] =
+                    (uint8_t)(source_lane * 8u + index);
+            if (write_surface(maps, LANE_SOURCE_DESCRIPTOR_OFFSET,
+                              LANE_SOURCE_DATA_OFFSET + source_lane,
+                              LANE_COPY_BYTES, LANE_SURFACE_BYTES,
+                              LANE_COPY_BYTES, 1u,
+                              ASTRA_RENDER_FORMAT_INDEX8,
+                              ASTRA_RENDER_SURFACE_READ, 0u) != 0 ||
+                write_surface(maps, LANE_DEST_DESCRIPTOR_OFFSET,
+                              LANE_DEST_DATA_OFFSET + destination_lane,
+                              LANE_COPY_BYTES, LANE_SURFACE_BYTES,
+                              LANE_COPY_BYTES, 1u,
+                              ASTRA_RENDER_FORMAT_INDEX8,
+                              ASTRA_RENDER_SURFACE_WRITE, 0u) != 0 ||
+                write_blit(maps, command, 0u,
+                           0, 0, LANE_COPY_BYTES, 1,
+                           LANE_DEST_DESCRIPTOR_OFFSET,
+                           LANE_SOURCE_DESCRIPTOR_OFFSET, 0u,
+                           0, 0, 0, 0,
+                           LANE_COPY_BYTES, 1u,
+                           LANE_COPY_BYTES, 1u, 0u) != 0)
+                return -1;
+            astra_graphics_memory_barrier();
+            astra_mmio_write(device, ASTRA_REG_RENDER_SUBMISSION_PRODUCER,
+                             command + 1u);
+            if (wait_for_completions(device, command + 1u) != 0 ||
+                wait_for_idle(device, ENGINE_TIMEOUT_NS) != 0 ||
+                verify_blit_completion(maps, command, LANE_COPY_BYTES,
+                                       &command_cycles) != 0)
+                return -1;
+            cycles += command_cycles;
+            for (index = 0u; index < LANE_SURFACE_BYTES; ++index) {
+                uint8_t expected = index >= destination_lane &&
+                        index < destination_lane + LANE_COPY_BYTES ?
+                    (uint8_t)(source_lane * 8u +
+                              index - destination_lane) :
+                    0xeeu;
+
+                if (destination[index] != expected) {
+                    fprintf(stderr,
+                            "lane %u->%u byte %u expected=%02x actual=%02x\n",
+                            source_lane, destination_lane, index, expected,
+                            destination[index]);
+                    return -1;
+                }
+            }
+            astra_mmio_write(device, ASTRA_REG_RENDER_COMPLETION_CONSUMER,
+                             command + 1u);
+            astra_mmio_write(device, ASTRA_REG_RENDER_IRQ_PENDING, 1u);
+        }
+    }
+    *cycles_out = cycles;
+    return 0;
+}
+
+static int certify_compositor_copy(
+    const struct astra_graphics_device *device, struct render_maps *maps,
+    uint32_t *cycles_out)
+{
+    volatile uint8_t *source = maps->frame.data;
+    volatile uint8_t *destination =
+        maps->frame.data + COMPOSITOR_DESTINATION_OFFSET;
+    uint32_t cycles;
+    unsigned row;
+
+    for (row = 0u; row < COMPOSITOR_HEIGHT; ++row) {
+        unsigned byte;
+
+        for (byte = 0u; byte < COMPOSITOR_SOURCE_PITCH; ++byte)
+            source[(size_t)row * COMPOSITOR_SOURCE_PITCH + byte] =
+                (uint8_t)(row + byte);
+        for (byte = 0u; byte < COMPOSITOR_DESTINATION_PITCH; ++byte)
+            destination[(size_t)row * COMPOSITOR_DESTINATION_PITCH + byte] =
+                0xeeu;
+    }
+    if (write_surface(maps, LANE_SOURCE_DESCRIPTOR_OFFSET,
+                      FRAME_DATA_OFFSET, COMPOSITOR_SOURCE_BYTES,
+                      COMPOSITOR_SOURCE_PITCH, COMPOSITOR_SOURCE_WIDTH,
+                      COMPOSITOR_HEIGHT, ASTRA_RENDER_FORMAT_RGB565,
+                      ASTRA_RENDER_SURFACE_READ, 0u) != 0 ||
+        write_surface(maps, LANE_DEST_DESCRIPTOR_OFFSET,
+                      FRAME_DATA_OFFSET + COMPOSITOR_DESTINATION_OFFSET,
+                      COMPOSITOR_DESTINATION_BYTES,
+                      COMPOSITOR_DESTINATION_PITCH,
+                      COMPOSITOR_DESTINATION_WIDTH, COMPOSITOR_HEIGHT,
+                      ASTRA_RENDER_FORMAT_RGB565,
+                      ASTRA_RENDER_SURFACE_READ |
+                          ASTRA_RENDER_SURFACE_WRITE, 0u) != 0 ||
+        write_blit(maps, COMPOSITOR_COMMAND, 0u,
+                   0, 0, COMPOSITOR_DESTINATION_WIDTH, COMPOSITOR_HEIGHT,
+                   LANE_DEST_DESCRIPTOR_OFFSET,
+                   LANE_SOURCE_DESCRIPTOR_OFFSET, 0u,
+                   0, 0, 2, 0,
+                   COMPOSITOR_SOURCE_WIDTH, COMPOSITOR_HEIGHT,
+                   COMPOSITOR_SOURCE_WIDTH, COMPOSITOR_HEIGHT, 0u) != 0)
+        return -1;
+    astra_graphics_memory_barrier();
+    astra_mmio_write(device, ASTRA_REG_RENDER_SUBMISSION_PRODUCER,
+                     COMPOSITOR_COMMAND_END);
+    if (wait_for_completions(device, COMPOSITOR_COMMAND_END) != 0 ||
+        wait_for_idle(device, ENGINE_TIMEOUT_NS) != 0 ||
+        verify_blit_completion(maps, COMPOSITOR_COMMAND,
+                               COMPOSITOR_SOURCE_WIDTH * COMPOSITOR_HEIGHT,
+                               &cycles) != 0)
+        return -1;
+    if (cycles > COMPOSITOR_CYCLE_BUDGET) {
+        fprintf(stderr, "compositor copy exceeded one frame: %" PRIu32
+                        "/%u cycles\n",
+                cycles, COMPOSITOR_CYCLE_BUDGET);
+        return -1;
+    }
+    for (row = 0u; row < COMPOSITOR_HEIGHT; ++row) {
+        unsigned byte;
+
+        for (byte = 0u; byte < COMPOSITOR_DESTINATION_PITCH; ++byte) {
+            uint8_t expected = byte >= 4u &&
+                    byte < 4u + COMPOSITOR_SOURCE_PITCH ?
+                (uint8_t)(row + byte - 4u) : 0xeeu;
+            uint8_t actual =
+                destination[(size_t)row * COMPOSITOR_DESTINATION_PITCH + byte];
+
+            if (actual != expected) {
+                fprintf(stderr,
+                        "compositor row=%u byte=%u expected=%02x actual=%02x\n",
+                        row, byte, expected, actual);
+                return -1;
+            }
+        }
+    }
+    astra_mmio_write(device, ASTRA_REG_RENDER_COMPLETION_CONSUMER,
+                     COMPOSITOR_COMMAND_END);
+    astra_mmio_write(device, ASTRA_REG_RENDER_IRQ_PENDING, 1u);
+    *cycles_out = cycles;
+    return 0;
+}
+
 static int verify_virtual_sprite_group(const struct render_maps *maps)
 {
     unsigned item;
@@ -1886,8 +2105,10 @@ int main(int argc, char **argv)
     uint64_t group_cycles;
     uint64_t geometry_cycles;
     uint64_t glyph_cycles;
+    uint64_t lane_cycles;
     uint32_t overflow_cycles;
     uint32_t screen_offset_cycles;
+    uint32_t compositor_cycles;
     unsigned present_milliseconds;
     uint32_t capabilities;
     uint32_t status;
@@ -2240,6 +2461,18 @@ int main(int argc, char **argv)
     if (present_milliseconds != 0u &&
         present_result(&device, present_milliseconds) != 0)
         goto stop_engine;
+    if (certify_lane_realignment(&device, &maps, &lane_cycles) != 0)
+        goto stop_engine;
+    printf("ASTRA_RENDER_LANES PASS pairs=%u bytes=%u cycles=%" PRIu64
+           "\n", LANE_COMMAND_COUNT, LANE_COPY_BYTES, lane_cycles);
+    if (certify_compositor_copy(&device, &maps, &compositor_cycles) != 0)
+        goto stop_engine;
+    printf("ASTRA_RENDER_COMPOSITOR PASS width=%u height=%u"
+           " source_pitch=%u destination_pitch=%u cycles=%" PRIu32
+           " budget=%u\n",
+           COMPOSITOR_SOURCE_WIDTH, COMPOSITOR_HEIGHT,
+           COMPOSITOR_SOURCE_PITCH, COMPOSITOR_DESTINATION_PITCH,
+           compositor_cycles, COMPOSITOR_CYCLE_BUDGET);
     result = EXIT_SUCCESS;
 
 stop_engine:

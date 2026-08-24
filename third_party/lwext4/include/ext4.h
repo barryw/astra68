@@ -52,6 +52,8 @@ extern "C" {
 #include <ext4_debug.h>
 
 #include <ext4_blockdev.h>
+#include <ext4_dir.h>
+#include <ext4_fs.h>
 
 /********************************OS LOCK INFERFACE***************************/
 
@@ -105,6 +107,11 @@ typedef struct ext4_dir {
 	ext4_direntry de;
 	/**@brief   Next entry offset.*/
 	uint64_t next_off;
+
+	/**@brief   Iterator retained while reading consecutive entries.*/
+	struct ext4_inode_ref inode_ref;
+	struct ext4_dir_iter iterator;
+	uint8_t iterator_open;
 } ext4_dir;
 
 /********************************MOUNT OPERATIONS****************************/
@@ -433,6 +440,15 @@ int ext4_mode_set(const char *path, uint32_t mode);
 int ext4_meta_get(const char *path, uint32_t *mode, uint32_t *uid,
 		  uint32_t *gid, uint32_t *mtime, uint32_t *nlink,
 		  uint64_t *size);
+
+/**@brief ASTRA: metadata for an entry returned by ext4_dir_entry_next.
+ * @param   dir open directory that returned entry
+ * @param   entry directory entry carrying the inode number
+ * @param   mode, uid, gid, mtime, nlink, size outputs; any may be NULL
+ * @return  standard error code */
+int ext4_dir_entry_meta(const ext4_dir *dir, const ext4_direntry *entry,
+			uint32_t *mode, uint32_t *uid, uint32_t *gid,
+			uint32_t *mtime, uint32_t *nlink, uint64_t *size);
 
 int ext4_mode_get(const char *path, uint32_t *mode);
 

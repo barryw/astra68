@@ -477,6 +477,19 @@ void kernel_platform_cpu_cycles(KernelPlatformCycleCount *cycles)
     cycles->low = (uint32_t)scheduler_test_cycles;
 }
 
+uint32_t kernel_platform_cpu_cycles_low(void)
+{
+    return (uint32_t)scheduler_test_cycles;
+}
+
+uint64_t kernel_platform_cycles_to_ns(uint64_t cycles)
+{
+    const uint64_t maximum = (uint64_t)INT64_MAX - 1u;
+
+    return cycles > maximum / KERNEL_PLATFORM_NS_PER_CPU_CYCLE ? maximum :
+        cycles * KERNEL_PLATFORM_NS_PER_CPU_CYCLE;
+}
+
 /*
  * The real ring, not a stub. Emitting is a copy into it now, so a test that
  * stubbed the ring out could not tell an event that was recorded from one that
@@ -4660,7 +4673,9 @@ static void test_process_fault_death_reports_peer_dead(void)
         0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u
     };
     const uint32_t wait_array_address = KERNEL_PROCESS_STACK_TOP - 256u;
+    const uint32_t info_address = KERNEL_PROCESS_STACK_TOP - 384u;
     const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
+    AstraProcessInfo info;
     KernelHandle handle;
     KernelMemoryStats baseline;
     KernelMemoryStats final;
@@ -4707,6 +4722,23 @@ static void test_process_fault_death_reports_peer_dead(void)
      * process which had crashed had finished cleanly.
      */
     assert(next->data[2] == (uint32_t)ASTRA_STATUS_FAULTED);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_INFO;
+    registers[1] = handle;
+    registers[2] = info_address;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&info, info_address, sizeof(info)) ==
+           KERNEL_USER_COPY_OK);
+    assert(info.exit_status == (uint32_t)ASTRA_STATUS_FAULTED);
+    assert(info.fault_pc == KERNEL_PROCESS_CODE_BASE);
+    assert(info.fault_address == 0x60000000u);
+    assert(info.fault_vector == 2u);
+    assert(info.fault_status == 0u);
+    assert(info.fault_reserved == 0u);
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
                KERNEL_PROCESS_CODE_BASE, 0u);
     memset(registers, 0, sizeof(registers));
@@ -6710,6 +6742,66 @@ static void test_capability_roots_are_carried(void)
     assert(found);
 }
 
+static uint32_t startup_be32(const uint8_t *bytes)
+{
+    return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
+           ((uint32_t)bytes[2] << 8) | (uint32_t)bytes[3];
+}
+
+static void test_arguments_and_environment_are_published(void)
+{
+    AstraLaunchArguments launch;
+    AstraStartupInfo startup;
+    KernelCpuContext *next;
+    uint8_t vector[12];
+    char text[16];
+    static const char environment[] = "HOME=WORK:\0TZ=UTC\0";
+    uint32_t process_id = 0u;
+
+    loader_build_image();
+    initialize_test();
+    memset(&launch, 0, sizeof(launch));
+    memcpy(launch.bytes, "lua\0script.lua\0", 15u);
+    launch.count = 2u;
+    launch.length = 15u;
+    launch.source = ASTRA_LAUNCH_SOURCE_SHELL;
+    launch.environment_count = 2u;
+    launch.environment_length = sizeof(environment) - 1u;
+    assert(kernel_process_launch(
+               loader_image, loader_image_size, 0u, NULL, NULL, 0u, &launch,
+               environment, &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(kernel_user_copy_from_asm(&startup, KERNEL_VM_USER_MIN,
+                                     sizeof(startup)) == KERNEL_USER_COPY_OK);
+    assert(startup.argc == 2u);
+    assert(startup.environment_count == 2u);
+
+    assert(kernel_user_copy_from_asm(vector, startup.argv_address,
+                                     sizeof(vector)) == KERNEL_USER_COPY_OK);
+    assert(startup_be32(&vector[0]) != 0u);
+    assert(startup_be32(&vector[4]) != 0u);
+    assert(startup_be32(&vector[8]) == 0u);
+    assert(kernel_user_copy_from_asm(text, startup_be32(&vector[0]), 4u) ==
+           KERNEL_USER_COPY_OK);
+    assert(strcmp(text, "lua") == 0);
+    assert(kernel_user_copy_from_asm(text, startup_be32(&vector[4]), 11u) ==
+           KERNEL_USER_COPY_OK);
+    assert(strcmp(text, "script.lua") == 0);
+
+    assert(kernel_user_copy_from_asm(
+               vector, startup.environment_address, sizeof(vector)) ==
+           KERNEL_USER_COPY_OK);
+    assert(startup_be32(&vector[0]) != 0u);
+    assert(startup_be32(&vector[4]) != 0u);
+    assert(startup_be32(&vector[8]) == 0u);
+    assert(kernel_user_copy_from_asm(text, startup_be32(&vector[0]), 11u) ==
+           KERNEL_USER_COPY_OK);
+    assert(strcmp(text, "HOME=WORK:") == 0);
+    assert(kernel_user_copy_from_asm(text, startup_be32(&vector[4]), 7u) ==
+           KERNEL_USER_COPY_OK);
+    assert(strcmp(text, "TZ=UTC") == 0);
+}
+
 /* The field is bounded on the way in: a root too long to carry is truncated
  * at the same place on both sides of a launch, never read past. */
 static void test_capability_roots_are_bounded(void)
@@ -7678,7 +7770,7 @@ static void test_process_info_syscall(void)
     KernelCpuContext *next;
     uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0};
     uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
-    uint32_t user_info = KERNEL_PROCESS_STACK_TOP - 64u;
+    uint32_t user_info = KERNEL_PROCESS_STACK_TOP - 128u;
     AstraProcessInfo info;
     uint32_t process_id;
     uint32_t self_handle;
@@ -7687,6 +7779,7 @@ static void test_process_info_syscall(void)
     assert(kernel_process_create(image, sizeof(image), 0u, 0u,
                                  &process_id) == KERNEL_PROCESS_OK);
     assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    scheduler_test_cycles += 100u;
 
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_QUERY_ABI;
@@ -7699,6 +7792,7 @@ static void test_process_info_syscall(void)
     assert(next->data[1] == ASTRA_SYSCALL_ABI_VERSION);
     self_handle = next->data[2];
     assert(self_handle != 0u);
+    scheduler_test_cycles += 250u;
 
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_PROCESS_INFO;
@@ -7718,9 +7812,52 @@ static void test_process_info_syscall(void)
     assert(info.owner == process_id);
     assert(info.live_threads == 1u && info.thread_count == 1u);
     assert(info.handle_references != 0u);
-    assert(info.reserved == 0u);
+    assert(info.reserved[0] == 0u && info.reserved[1] == 0u &&
+           info.reserved[2] == 0u);
+    assert(info.run_count == 1u);
+    assert(info.timer_ticks == 0u);
+    assert(info.syscall_count == 2u);
+    assert(info.thread_state == KERNEL_THREAD_RUNNING);
+    assert(info.fault_pc == 0u);
+    assert(info.fault_address == 0u);
+    assert(info.fault_vector == 0u);
+    assert(info.fault_status == 0u);
+    assert(info.fault_reserved == 0u);
+    assert(info.runtime_ns == 350u * KERNEL_PLATFORM_NS_PER_CPU_CYCLE);
+    assert(info.elapsed_ns == 350u * KERNEL_PLATFORM_NS_PER_CPU_CYCLE);
     /* The owner ledger already charges this process for its own pages. */
     assert(info.resident_frames != 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_PRIORITY;
+    registers[1] = self_handle;
+    registers[2] = 12u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == KERNEL_THREAD_PRIORITY_NORMAL);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_INFO;
+    registers[1] = self_handle;
+    registers[2] = user_info;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&info, user_info, sizeof(info)) ==
+           KERNEL_USER_COPY_OK);
+    assert(info.default_priority == 12u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_PRIORITY;
+    registers[1] = self_handle;
+    registers[2] = KERNEL_THREAD_PRIORITY_USER_MAX + 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
 
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_PROCESS_INFO;
@@ -7866,7 +8003,10 @@ static void test_user_stack_grows_on_fault_and_guards_the_floor(void)
     assert(process.process_state == KERNEL_PROCESS_EXITING);
     assert(process.exit_reason == KERNEL_PROCESS_EXIT_USER_FAULT);
     assert(process.exit_status == (uint32_t)ASTRA_STATUS_FAULTED);
+    assert(process.fault_pc == fault_pc);
     assert(process.fault_address == TEST_STACK_FLOOR(0) - 4u);
+    assert(process.fault_vector == 2u);
+    assert(process.fault_status == 0u);
     assert(kernel_process_stats(&stats));
     assert(stats.user_faults == 1u);
     assert(stats.user_stack_growths == 3u);
@@ -8350,6 +8490,7 @@ int main(void)
     test_block_admission_faults();
     test_bootstrap_capabilities();
     test_capability_roots_are_carried();
+    test_arguments_and_environment_are_published();
     test_capability_roots_are_bounded();
     test_an_activity_is_the_threads_own();
     test_a_program_can_launch_a_program();

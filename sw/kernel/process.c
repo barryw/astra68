@@ -81,11 +81,15 @@ typedef struct KernelProcess {
     uint32_t image_size;
     uint32_t entry_base;
     uint32_t progress;
+    uint32_t fault_pc;
     uint32_t fault_address;
     uint32_t exit_status;
     uint32_t terminal_result;
+    uint64_t runtime_cycles;
+    uint64_t started_cycles;
     KernelHandle self_handle;
     uint16_t fault_vector;
+    uint16_t fault_status;
     /*
      * One bit per thread stack slot. Sixteen bits was the ceiling on
      * KERNEL_PROCESS_THREAD_MAX; sixty-four costs six bytes a process.
@@ -177,6 +181,8 @@ static KernelProcessQualificationClient
 static KernelThread *current_thread;
 static uint64_t quantum_deadline;
 static uint32_t scheduler_quantum_cycles;
+static uint32_t runtime_started_cycles;
+static uint8_t runtime_active;
 static uint8_t scheduler_initialized;
 static uint8_t scheduler_started;
 static uint8_t quantum_active;
@@ -204,6 +210,11 @@ static bool display_dma_abort_owner(uint32_t owner);
 _Static_assert(KERNEL_THREAD_STACK_SIZE % KERNEL_PAGE_SIZE == 0u &&
                    KERNEL_THREAD_STACK_SIZE != 0u,
                "a user stack must be a whole number of VM pages");
+_Static_assert(ASTRA_PROCESS_PRIORITY_MIN == KERNEL_THREAD_PRIORITY_USER_MIN &&
+                   ASTRA_PROCESS_PRIORITY_NORMAL ==
+                       KERNEL_THREAD_PRIORITY_NORMAL &&
+                   ASTRA_PROCESS_PRIORITY_MAX == KERNEL_THREAD_PRIORITY_USER_MAX,
+               "public and kernel process priorities differ");
 _Static_assert(KERNEL_THREAD_STACK_STRIDE % KERNEL_PAGE_SIZE == 0u,
                "a stack reservation must be a whole number of VM pages");
 _Static_assert(KERNEL_THREAD_STACK_STRIDE >=
@@ -275,7 +286,8 @@ _Static_assert(ASTRA_RIGHT_READ == KERNEL_THREAD_RIGHT_QUERY &&
                        KERNEL_THREAD_RIGHT_CANCEL_WAIT,
                "thread-right ABI mismatch");
 _Static_assert(ASTRA_RIGHT_READ == KERNEL_PROCESS_RIGHT_QUERY &&
-                   ASTRA_RIGHT_WAIT == KERNEL_PROCESS_RIGHT_WAIT,
+                   ASTRA_RIGHT_WAIT == KERNEL_PROCESS_RIGHT_WAIT &&
+                   ASTRA_RIGHT_ADMINISTER == KERNEL_PROCESS_RIGHT_PRIORITY,
                "process-right ABI mismatch");
 _Static_assert(KERNEL_AREA_RIGHTS ==
                    (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
@@ -526,6 +538,24 @@ static uint64_t scheduler_cycles(void)
     return ((uint64_t)cycles.high << 32) | cycles.low;
 }
 
+static void runtime_stop(KernelProcess *process)
+{
+    uint32_t now;
+
+    if (runtime_active == 0u || process == NULL)
+        return;
+    now = kernel_platform_cpu_cycles_low();
+    process->runtime_cycles += (uint32_t)(now - runtime_started_cycles);
+    runtime_active = 0u;
+}
+
+static KernelCpuContext *runtime_resume(KernelThread *thread)
+{
+    runtime_started_cycles = kernel_platform_cpu_cycles_low();
+    runtime_active = 1u;
+    return &thread->context;
+}
+
 static void scheduler_timer_rearm_at(uint64_t now)
 {
     uint64_t target = KERNEL_THREAD_DEADLINE_NEVER;
@@ -647,11 +677,11 @@ KernelProcessStatus activate_fast(KernelThread *next,
     current_thread = next;
     scheduler_stats.current_process_id = next_process->id;
     scheduler_stats.current_thread_id = next->id;
-    *next_context = &next->context;
     if (worker_active == 0u)
         scheduler_start_quantum();
     else
         scheduler_timer_rearm();
+    *next_context = runtime_resume(next);
     return KERNEL_PROCESS_OK;
 }
 
@@ -712,6 +742,7 @@ static KernelProcessStatus capture_current(const uint32_t *registers,
     if (kernel_context_capture(&current_thread->context, registers, user_stack,
                                raw_frame) != KERNEL_CONTEXT_OK)
         return KERNEL_PROCESS_INVALID_CONTEXT;
+    runtime_stop(current);
     *process = current;
     *thread = current_thread;
     return KERNEL_PROCESS_OK;
@@ -730,6 +761,7 @@ static KernelProcessStatus schedule_next(KernelCpuContext **next_context)
         if (kernel_vm_switch_to_empty() != KERNEL_VM_OK)
             return KERNEL_PROCESS_CORRUPT;
         current_thread = NULL;
+        runtime_active = 0u;
         quantum_active = 0u;
         quantum_preempt_pending = 0u;
         deadline_preempt_pending = 0u;
@@ -762,11 +794,12 @@ static KernelProcessStatus schedule_pending(KernelCpuContext **next_context)
     if (next_context == NULL || process_for_thread(previous) == NULL ||
         previous->state != KERNEL_THREAD_RUNNING)
         return KERNEL_PROCESS_INVALID_STATE;
-    *next_context = &previous->context;
     if (quantum_preempt_pending == 0u &&
         deadline_preempt_pending == 0u &&
-        !ready_thread_outranks(previous))
+        !ready_thread_outranks(previous)) {
+        *next_context = runtime_resume(previous);
         return KERNEL_PROCESS_OK;
+    }
 
     quantum_preemption = quantum_preempt_pending != 0u;
     deadline_preemption = deadline_preempt_pending != 0u;
@@ -1708,6 +1741,8 @@ void kernel_process_init(void)
     kernel_bytes_clear(&soak_state, sizeof(soak_state));
 #endif
     current_thread = NULL;
+    runtime_started_cycles = 0u;
+    runtime_active = 0u;
     quantum_deadline = 0u;
     scheduler_quantum_cycles = kernel_platform_quantum_cycles();
     if (scheduler_quantum_cycles == 0u)
@@ -1777,7 +1812,7 @@ bool kernel_process_debug_surface(void)
  */
 static uint32_t self_handle_rights(void)
 {
-    return KERNEL_PROCESS_RIGHT_QUERY |
+    return KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_PRIORITY |
            (kernel_process_debug_surface() ? KERNEL_PROCESS_RIGHT_DEBUG : 0u);
 }
 
@@ -2229,6 +2264,7 @@ static KernelProcessStatus create_process(const void *image,
                   ((generation & 0x000fffffu) << 4) |
                   ((uint32_t)slot + 1u);
     process->owner = process->id;
+    process->started_cycles = scheduler_cycles();
     process->image_size = image_size;
     process->entry_base = KERNEL_PROCESS_CODE_BASE;
     process->default_priority = KERNEL_THREAD_PRIORITY_NORMAL;
@@ -2440,6 +2476,8 @@ static uint8_t launch_page[KERNEL_PAGE_SIZE];
  */
 #define KERNEL_PROCESS_LAUNCH_HEADER_BYTES 1024u
 static uint8_t launch_header[KERNEL_PROCESS_LAUNCH_HEADER_BYTES];
+/* One syscall scratch page; the child cannot publish more startup data. */
+static char launch_environment[ASTRA_STARTUP_BLOCK_SIZE];
 
 static KernelProcessStatus map_segments(KernelProcess *process,
                                         const KernelElfImage *plan,
@@ -2917,37 +2955,39 @@ static KernelProcessStatus map_cached_library(
         const KernelElfSegment *segment = &plan->segment[index];
         uint32_t rights = segment_vm_rights(segment->rights);
 
+        if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) == 0u) {
+            KernelVmStatus vm_status = kernel_vm_map_shared_range(
+                &process->address_space,
+                virtual_base + segment->virtual_address,
+                &cached->physical_pages[flattened], segment->page_count,
+                cached->owner, rights);
+
+            if (vm_status == KERNEL_VM_OUT_OF_MEMORY)
+                failure = KERNEL_PROCESS_OUT_OF_MEMORY;
+            else if (vm_status == KERNEL_VM_ALREADY_MAPPED)
+                failure = KERNEL_PROCESS_INVALID_ARGUMENT;
+            else if (vm_status != KERNEL_VM_OK)
+                failure = KERNEL_PROCESS_CORRUPT;
+            if (vm_status != KERNEL_VM_OK)
+                goto failed;
+            flattened += segment->page_count;
+            mapped += segment->page_count;
+            continue;
+        }
         for (uint32_t page = 0u; page < segment->page_count;
              ++page, ++flattened) {
             uint32_t address = virtual_base + segment->virtual_address +
                                (page * KERNEL_PAGE_SIZE);
 
-            if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) != 0u) {
-                const uint8_t *source = physical_bytes(
-                    cached->physical_pages[flattened], KERNEL_PAGE_SIZE);
+            const uint8_t *source = physical_bytes(
+                cached->physical_pages[flattened], KERNEL_PAGE_SIZE);
 
-                if (source == NULL)
-                    goto failed;
-                failure = publish_page(process, address, source,
-                                       KERNEL_PAGE_SIZE, rights);
-                if (failure != KERNEL_PROCESS_OK)
-                    goto failed;
-            } else {
-                KernelVmStatus vm_status = kernel_vm_map_shared_page(
-                    &process->address_space, address,
-                    cached->physical_pages[flattened], cached->owner, rights);
-
-                if (vm_status == KERNEL_VM_OUT_OF_MEMORY) {
-                    failure = KERNEL_PROCESS_OUT_OF_MEMORY;
-                    goto failed;
-                }
-                if (vm_status == KERNEL_VM_ALREADY_MAPPED) {
-                    failure = KERNEL_PROCESS_INVALID_ARGUMENT;
-                    goto failed;
-                }
-                if (vm_status != KERNEL_VM_OK)
-                    goto failed;
-            }
+            if (source == NULL)
+                goto failed;
+            failure = publish_page(process, address, source,
+                                   KERNEL_PAGE_SIZE, rights);
+            if (failure != KERNEL_PROCESS_OK)
+                goto failed;
             ++mapped;
         }
     }
@@ -3149,9 +3189,10 @@ static KernelProcessStatus grant_bootstrap_capabilities(
  * Returns the bytes appended, or 0 when there is nothing to append. `*vector`
  * is where the child will find the addresses.
  */
-static uint32_t append_arguments(uint8_t *page, uint32_t at, uint32_t capacity,
-                                 const AstraLaunchArguments *arguments,
-                                 uint32_t *vector, uint32_t *count)
+static uint32_t append_vector(uint8_t *page, uint32_t at, uint32_t capacity,
+                              const char *bytes, uint32_t byte_count,
+                              uint32_t word_count, int environment,
+                              uint32_t *vector, uint32_t *count)
 {
     uint32_t vector_at = at;
     uint32_t text_at;
@@ -3160,22 +3201,24 @@ static uint32_t append_arguments(uint8_t *page, uint32_t at, uint32_t capacity,
 
     *vector = 0u;
     *count = 0u;
-    if (arguments == NULL || arguments->count == 0u) {
+    if (word_count == 0u)
         return 0u;
-    }
-    text_at = vector_at + (arguments->count * 4u);
-    if (text_at + arguments->length > capacity) {
+    text_at = vector_at + ((word_count + 1u) * 4u);
+    if (text_at + byte_count > capacity)
         return 0u;
-    }
-    for (uint32_t index = 0u; index < arguments->count; ++index) {
+    for (uint32_t index = 0u; index < word_count; ++index) {
         uint32_t address = KERNEL_PROCESS_STARTUP_BASE + text_at + written;
         uint32_t length = 0u;
+        uint32_t equals = UINT32_MAX;
 
-        while (consumed + length < arguments->length &&
-               arguments->bytes[consumed + length] != '\0') {
+        while (consumed + length < byte_count &&
+               bytes[consumed + length] != '\0') {
+            if (bytes[consumed + length] == '=' && equals == UINT32_MAX)
+                equals = length;
             ++length;
         }
-        if (consumed + length >= arguments->length) {
+        if (consumed + length >= byte_count ||
+            (environment && (equals == UINT32_MAX || equals == 0u))) {
             /* A count that promises more words than the bytes hold. */
             return 0u;
         }
@@ -3183,21 +3226,23 @@ static uint32_t append_arguments(uint8_t *page, uint32_t at, uint32_t capacity,
         page[vector_at + (index * 4u) + 1u] = (uint8_t)(address >> 16);
         page[vector_at + (index * 4u) + 2u] = (uint8_t)(address >> 8);
         page[vector_at + (index * 4u) + 3u] = (uint8_t)address;
-        for (uint32_t byte = 0u; byte <= length; ++byte) {
-            page[text_at + written + byte] = (uint8_t)arguments->bytes[consumed + byte];
-        }
+        for (uint32_t byte = 0u; byte <= length; ++byte)
+            page[text_at + written + byte] = (uint8_t)bytes[consumed + byte];
         written += length + 1u;
         consumed += length + 1u;
     }
+    if (consumed != byte_count)
+        return 0u;
     *vector = KERNEL_PROCESS_STARTUP_BASE + vector_at;
-    *count = arguments->count;
-    return (arguments->count * 4u) + written;
+    *count = word_count;
+    return ((word_count + 1u) * 4u) + written;
 }
 
 static KernelProcessStatus publish_startup_block(
     KernelProcess *process, KernelHandle process_handle,
     KernelHandle thread_handle, const AstraStartupCapability *bootstrap,
-    uint32_t bootstrap_count, const AstraLaunchArguments *arguments)
+    uint32_t bootstrap_count, const AstraLaunchArguments *arguments,
+    const char *environment)
 {
     /*
      * _Alignas(4): AstraStartupCapability's widest member is a uint32_t, and
@@ -3207,11 +3252,7 @@ static KernelProcessStatus publish_startup_block(
      * would silence -Wcast-align without making the access safe -- on a
      * 68030 a misaligned access faults rather than merely costing cycles.
      */
-    _Alignas(4) uint8_t page[ASTRA_STARTUP_INFO_SIZE +
-                 (STARTUP_CAPABILITY_TOTAL_MAX *
-                  ASTRA_STARTUP_CAPABILITY_SIZE) +
-                 (ASTRA_LAUNCH_ARGUMENT_MAX * 4u) +
-                 ASTRA_LAUNCH_ARGUMENT_BYTES];
+    _Alignas(4) uint8_t page[ASTRA_STARTUP_BLOCK_SIZE];
     AstraStartupInfo info;
     /*
      * Written straight into the page. A second array of these used to sit on
@@ -3247,7 +3288,7 @@ static KernelProcessStatus publish_startup_block(
     astra_capability_name_set(capability[0].name,
                               ASTRA_CAPABILITY_PROCESS);
     capability[0].handle = process_handle;
-    capability[0].rights = KERNEL_PROCESS_RIGHT_QUERY;
+    capability[0].rights = self_handle_rights();
     astra_capability_name_set(capability[1].name,
                               ASTRA_CAPABILITY_THREAD);
     capability[1].handle = thread_handle;
@@ -3258,9 +3299,21 @@ static KernelProcessStatus publish_startup_block(
                           bootstrap_count * sizeof(capability[0]));
 
     if (arguments != NULL && arguments->count != 0u) {
-        uint32_t appended = append_arguments(page, published_bytes,
-                                             (uint32_t)sizeof(page), arguments,
-                                             &info.argv_address, &info.argc);
+        uint32_t appended = append_vector(
+            page, published_bytes, (uint32_t)sizeof(page), arguments->bytes,
+            arguments->length, arguments->count, 0, &info.argv_address,
+            &info.argc);
+
+        if (appended == 0u)
+            return KERNEL_PROCESS_INVALID_ARGUMENT;
+        published_bytes += appended;
+        info.total_size = published_bytes;
+    }
+    if (arguments != NULL && arguments->environment_count != 0u) {
+        uint32_t appended = append_vector(
+            page, published_bytes, (uint32_t)sizeof(page), environment,
+            arguments->environment_length, arguments->environment_count, 1,
+            &info.environment_address, &info.environment_count);
 
         if (appended == 0u)
             return KERNEL_PROCESS_INVALID_ARGUMENT;
@@ -3280,7 +3333,7 @@ KernelProcessStatus kernel_process_create_executable(
 {
     /* The firmware's case: no launcher, so no handle to copy and no argv. */
     return kernel_process_launch(image, image_size, 0u, NULL, capabilities,
-                                 capability_count, NULL, process_id);
+                                 capability_count, NULL, NULL, process_id);
 }
 
 KernelProcessStatus kernel_process_launch(
@@ -3288,7 +3341,7 @@ KernelProcessStatus kernel_process_launch(
     const KernelHandleTable *source_table,
     const KernelProcessBootstrapCapability *capabilities,
     uint32_t capability_count, const AstraLaunchArguments *arguments,
-    uint32_t *process_id)
+    const char *environment, uint32_t *process_id)
 {
     AstraStartupCapability granted[KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX];
     /* Static so the initialiser is not copied through a libc memcpy. */
@@ -3315,7 +3368,9 @@ KernelProcessStatus kernel_process_launch(
 
     if ((image == NULL) == (user_image == 0u) || process_id == NULL ||
         capability_count > KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX ||
-        (capability_count != 0u && capabilities == NULL))
+        (capability_count != 0u && capabilities == NULL) ||
+        (arguments != NULL && arguments->environment_count != 0u &&
+         environment == NULL))
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     kernel_bytes_clear(granted, sizeof(granted));
     *process_id = 0u;
@@ -3363,6 +3418,7 @@ KernelProcessStatus kernel_process_launch(
     process->id = PROCESS_OWNER_PREFIX |
                   ((generation & 0x000fffffu) << 4) | ((uint32_t)slot + 1u);
     process->owner = process->id;
+    process->started_cycles = scheduler_cycles();
     process->default_priority = KERNEL_THREAD_PRIORITY_NORMAL;
     process->priority_ceiling = KERNEL_THREAD_PRIORITY_USER_MAX;
 
@@ -3434,7 +3490,7 @@ KernelProcessStatus kernel_process_launch(
 
     result = publish_startup_block(process, self_handle,
                                    prepared_thread.handle, granted,
-                                   capability_count, arguments);
+                                   capability_count, arguments, environment);
     if (result != KERNEL_PROCESS_OK) {
         (void)abort_prepared_thread(&prepared_thread);
         goto failed;
@@ -3844,7 +3900,7 @@ KernelCpuContext *kernel_process_current_context(void)
          ready_thread_outranks(current_thread)) &&
         schedule_pending(&next) != KERNEL_PROCESS_OK)
         return NULL;
-    return &current_thread->context;
+    return runtime_resume(current_thread);
 }
 
 bool kernel_process_worker_enter(void)
@@ -3853,6 +3909,7 @@ bool kernel_process_worker_enter(void)
         return false;
 
     worker_active = 1u;
+    runtime_stop(process_for_thread(current_thread));
     quantum_active = 0u;
     scheduler_timer_rearm();
     return true;
@@ -3892,7 +3949,7 @@ KernelCpuContext *kernel_process_worker_resume(void)
             return NULL;
         worker_active = 0u;
         scheduler_start_quantum();
-        return &current_thread->context;
+        return runtime_resume(current_thread);
     }
     if (process_for_thread(current_thread) == NULL ||
         current_thread->state != KERNEL_THREAD_RUNNING ||
@@ -3906,7 +3963,7 @@ KernelCpuContext *kernel_process_worker_resume(void)
 
     worker_active = 0u;
     scheduler_start_quantum();
-    return &current_thread->context;
+    return runtime_resume(current_thread);
 }
 
 KernelProcessStatus kernel_process_on_timer(const uint32_t *registers,
@@ -3942,7 +3999,7 @@ KernelProcessStatus kernel_process_on_timer(const uint32_t *registers,
         ready_thread_outranks(previous))
         return schedule_pending(next_context);
 
-    *next_context = &previous->context;
+    *next_context = runtime_resume(previous);
     scheduler_timer_rearm();
     return KERNEL_PROCESS_OK;
 }
@@ -3970,7 +4027,7 @@ KernelProcessStatus kernel_process_on_interrupt_wakeup(
             ++scheduler_stats.wake_preemptions;
         return status;
     }
-    *next_context = &previous->context;
+    *next_context = runtime_resume(previous);
     return KERNEL_PROCESS_OK;
 }
 
@@ -5225,6 +5282,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             break;
         }
         kernel_bytes_clear(&arguments, sizeof(arguments));
+        kernel_bytes_clear(launch_environment, sizeof(launch_environment));
         kernel_bytes_clear(requested, sizeof(requested));
         if (grant_count != 0u) {
             copy_status = kernel_copy_from_user(
@@ -5245,12 +5303,30 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             if (arguments.count > ASTRA_LAUNCH_ARGUMENT_MAX ||
                 arguments.length > ASTRA_LAUNCH_ARGUMENT_BYTES ||
                 (arguments.count != 0u) != (arguments.length != 0u) ||
+                arguments.environment_count >
+                    ASTRA_LAUNCH_ENVIRONMENT_MAX ||
+                arguments.environment_length >
+                    ASTRA_LAUNCH_ENVIRONMENT_BYTES ||
+                (arguments.environment_count != 0u) !=
+                    (arguments.environment_length != 0u) ||
+                (arguments.environment_count != 0u) !=
+                    (arguments.environment_address != 0u) ||
                 arguments.source > ASTRA_LAUNCH_SOURCE_DESKTOP ||
                 arguments.reserved != 0u ||
                 (arguments.count == 0u &&
+                 arguments.environment_count == 0u &&
                  arguments.source != ASTRA_LAUNCH_SOURCE_SYSTEM)) {
                 result = ASTRA_SYSCALL_INVALID_ARGUMENT;
                 break;
+            }
+            if (arguments.environment_count != 0u) {
+                copy_status = kernel_copy_from_user(
+                    launch_environment, arguments.environment_address,
+                    arguments.environment_length);
+                if (copy_status != KERNEL_USER_COPY_OK) {
+                    result = ASTRA_SYSCALL_BAD_ADDRESS;
+                    break;
+                }
             }
         }
         for (uint32_t index = 0u; index < grant_count; ++index) {
@@ -5327,7 +5403,10 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
 
         launch_status = kernel_process_launch(
             NULL, image_size, image, &current->handles, requested, grant_count,
-            arguments.count != 0u ? &arguments : NULL, &child_id);
+            arguments.count != 0u || arguments.environment_count != 0u ?
+                &arguments : NULL,
+            arguments.environment_count != 0u ? launch_environment : NULL,
+            &child_id);
         if (launch_status != KERNEL_PROCESS_OK) {
             ++scheduler_stats.launch_failures;
             scheduler_stats.last_launch_failure = (uint32_t)launch_status;
@@ -5354,15 +5433,16 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             return KERNEL_PROCESS_CORRUPT;
 
         /*
-         * What the launcher gets back: enough to watch it, wait for it and end
-         * it, and nothing else. DEBUG is not implied by having started
-         * something -- reading another process's account of itself is a
-         * separate grant, and it has to stay one.
+         * What the launcher gets back: enough to watch it, wait for it, end it
+         * and set its ordinary priority. DEBUG is not implied by having
+         * started something -- reading another process's account of itself is
+         * a separate grant, and it has to stay one.
          */
         launch_status = kernel_process_grant_handle(
             current->id, child_id,
             KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_WAIT |
-                KERNEL_PROCESS_RIGHT_TERMINATE,
+                KERNEL_PROCESS_RIGHT_TERMINATE |
+                KERNEL_PROCESS_RIGHT_PRIORITY,
             &child_handle);
         /* The slot was reserved above, so a failure here is not a shortage. */
         if (launch_status != KERNEL_PROCESS_OK)
@@ -6378,7 +6458,12 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         /* Constant-time owner ledger lookup; this is the PROC: mem leaf. */
         if (kernel_memory_owner_frames(target->owner, &frames))
             info.resident_frames = frames;
-        info.run_count = target->progress;
+        info.run_count = kernel_thread_process_run_count(
+            (uint16_t)(target - processes));
+        info.timer_ticks = kernel_thread_process_timer_ticks(
+            (uint16_t)(target - processes));
+        info.syscall_count = kernel_thread_process_syscalls(
+            (uint16_t)(target - processes));
         info.exit_status = target->exit_status;
         info.handle_references = target->handle_references;
         info.process_state = target->process_state;
@@ -6387,6 +6472,17 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         info.default_priority = target->default_priority;
         info.priority_ceiling = target->priority_ceiling;
         info.exit_reason = target->exit_reason;
+        info.thread_state = (uint8_t)
+            kernel_thread_process_representative_state(
+                (uint16_t)(target - processes));
+        info.runtime_ns = kernel_platform_cycles_to_ns(
+            target->runtime_cycles);
+        info.elapsed_ns = kernel_platform_cycles_to_ns(
+            scheduler_cycles() - target->started_cycles);
+        info.fault_pc = target->fault_pc;
+        info.fault_address = target->fault_address;
+        info.fault_vector = target->fault_vector;
+        info.fault_status = target->fault_status;
 
         copy_status = kernel_copy_to_user(user_info, &info, sizeof(info));
         if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
@@ -6397,6 +6493,46 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         if (copy_status != KERNEL_USER_COPY_OK)
             return KERNEL_PROCESS_CORRUPT;
         result = ASTRA_SYSCALL_OK;
+        break;
+    }
+
+    case ASTRA_SYSCALL_PROCESS_PRIORITY: {
+        KernelProcess *target = NULL;
+        KernelHandleStatus handle_status;
+        uint32_t priority = thread->context.data[2];
+        uint32_t previous;
+
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1], KERNEL_OBJECT_PROCESS,
+            KERNEL_PROCESS_RIGHT_PRIORITY, (void **)&target);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || target == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        if (priority < KERNEL_THREAD_PRIORITY_USER_MIN ||
+            priority > target->priority_ceiling) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (target->process_state != KERNEL_PROCESS_CREATED &&
+            target->process_state != KERNEL_PROCESS_RUNNING) {
+            result = ASTRA_SYSCALL_PEER_DEAD;
+            break;
+        }
+        previous = target->default_priority;
+        if (kernel_thread_set_process_priority(
+                (uint16_t)(target - processes), (uint8_t)priority) !=
+            KERNEL_THREAD_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        target->default_priority = (uint8_t)priority;
+        thread->context.data[1] = previous;
         break;
     }
 
@@ -6782,7 +6918,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         if (status != KERNEL_PROCESS_OK)
             return status;
     } else {
-        *next_context = &thread->context;
+        *next_context = runtime_resume(thread);
     }
     if (syscall == ASTRA_SYSCALL_PROGRESS && !qualification_progress)
         check_milestone();
@@ -6874,10 +7010,12 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
         (grow_user_stack(current, thread, frame.fault_address) ||
          kernel_area_fault(current->id, &current->address_space,
                            frame.fault_address))) {
-        *next_context = &thread->context;
+        *next_context = runtime_resume(thread);
         return KERNEL_PROCESS_OK;
     }
+    current->fault_pc = frame.program_counter;
     current->fault_vector = (uint16_t)(frame.vector_offset >> 2);
+    current->fault_status = frame.special_status;
     current->fault_address = frame.fault_address;
     ++scheduler_stats.user_faults;
     kernel_process_fault_report(current->id, thread->id,
@@ -7114,11 +7252,13 @@ bool kernel_process_snapshot(uint32_t slot, KernelProcessSnapshot *snapshot)
     snapshot->run_count = kernel_thread_process_run_count((uint16_t)slot);
     snapshot->syscall_count =
         kernel_thread_process_syscalls((uint16_t)slot);
+    snapshot->fault_pc = process->fault_pc;
     snapshot->fault_address = process->fault_address;
     snapshot->exit_status = process->exit_status;
     snapshot->terminal_result = process->terminal_result;
     snapshot->self_handle = process->self_handle;
     snapshot->fault_vector = process->fault_vector;
+    snapshot->fault_status = process->fault_status;
     snapshot->process_state = process->process_state;
     snapshot->thread_state = (uint8_t)
         kernel_thread_process_representative_state((uint16_t)slot);

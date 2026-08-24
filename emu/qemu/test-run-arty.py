@@ -65,6 +65,12 @@ def main():
         hotplug_args = (root / "hotplug.args").read_text().splitlines()
         assert hotplug_args == ["--qmp", str(root / "run/qmp.sock")]
 
+        environment["ASTRA_HOST_TIME_MIN"] = str(int(time.time()) + 60)
+        result = subprocess.run([str(RUN_ARTY)], env=environment,
+                                text=True, capture_output=True, check=False)
+        assert result.returncode != 0
+        assert "host clock is stale" in result.stderr
+
     with tempfile.TemporaryDirectory() as directory:
         root = fixture(directory, 1.0)
         environment = dict(os.environ, ASTRA_ROOT=str(root))

@@ -16,8 +16,11 @@ static uint32_t read_calls;
 static uint32_t write_calls;
 static uint32_t made_directory;
 static uint32_t removed_file;
+static uint32_t renamed_file;
 static AstraVfsClient *last_open_client;
 static char last_open_path[ASTRA_VFS_PATH_MAX];
+static char last_rename_from[ASTRA_VFS_PATH_MAX];
+static char last_rename_to[ASTRA_VFS_PATH_MAX];
 
 static int same(const char *left, const char *right)
 {
@@ -188,6 +191,16 @@ uint32_t astra_vfs_unlink(AstraVfsClient *value, const char *path)
     return removed_file != 0u ? ASTRA_VFS_OK : ASTRA_VFS_ERR_INVALID;
 }
 
+uint32_t astra_vfs_rename(AstraVfsClient *value, const char *from,
+                          const char *to)
+{
+    (void)value;
+    snprintf(last_rename_from, sizeof(last_rename_from), "%s", from);
+    snprintf(last_rename_to, sizeof(last_rename_to), "%s", to);
+    renamed_file = same(from, "/work/note") && same(to, "/work/renamed");
+    return renamed_file != 0u ? ASTRA_VFS_OK : ASTRA_VFS_ERR_INVALID;
+}
+
 uint32_t astra_vfs_port_transport(void *context, uint32_t operation,
                                   const AstraVfsRequest *request,
                                   AstraVfsReply *reply)
@@ -316,6 +329,12 @@ int main(void)
     library->directory_close(&directory);
     assert(library->mkdir(&filesystem, "WORK:new") == ASTRA_VFS_OK &&
            made_directory != 0u);
+    assert(library->rename(&filesystem, "WORK:note", "WORK:renamed") ==
+           ASTRA_VFS_OK);
+    assert(renamed_file != 0u && same(last_rename_from, "/work/note") &&
+           same(last_rename_to, "/work/renamed"));
+    assert(library->rename(&filesystem, "WORK:note", "WORK:tool") ==
+           ASTRA_VFS_ERR_CROSS_DEVICE);
     assert(library->unlink(&filesystem, "WORK:note") == ASTRA_VFS_OK &&
            removed_file != 0u);
     library->detach(&filesystem);

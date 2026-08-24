@@ -68,8 +68,7 @@ if (astra_datetime_now(&now)) {
 
 One reading gives the instant, the zone, and both renderings -- `now.local`
 and `now.utc` -- so a window showing a clock and a log recording UTC never
-disagree about which second they meant. `false` means the machine has no clock;
-an application should show nothing rather than a wrong time.
+disagree about which second they meant.
 
 ## The decisions, and why
 
@@ -86,9 +85,13 @@ seconds register is the 2038 problem compiled into the hardware contract, and
 this project has spent enough of its life pulling ceilings back out of images.
 Reading `RTC_NS_LO` latches both halves, so the pair cannot tear.
 
-**Not knowing is an answer.** `RTC_VALID` distinguishes a machine whose clock
-is running from one whose is not, and everything above it carries that
-distinction rather than flattening it into a number:
+**Host time is a boot contract.** `RTC_VALID` distinguishes a machine whose
+clock is running from one whose is not. The platform primitive and syscall
+retain an explicit failure result for testability, but a production kernel now
+panics during boot with `valid host wall clock required` if the bit is absent.
+The QEMU terminal gate checks the register independently before opening a
+Terminal, and the Arty launcher refuses a stale Linux clock. Astra therefore
+never reaches userspace with an invented epoch or a silently missing date:
 
 | layer | no clock |
 |---|---|
@@ -98,7 +101,7 @@ distinction rather than flattening it into a number:
 | `date` | *this machine has no clock*, exit 13 |
 | lwext4 | writes 0, which is what it wrote before it had a clock |
 | `ls -l` | `-` in the date column |
-| boot line | `Wall clock ......... not set; files will have no dates` |
+| production boot | kernel panic before userspace |
 
 Zero is a real instant. A program that cannot tell "midnight in 1970" from "no
 idea" writes the first one into a file and calls it a timestamp, and a listing
@@ -140,9 +143,11 @@ upstream did: zeros.
 | `sw/userspace/storage` `make ext4-test` | a written file and its directory carry a time near now |
 | `emu/qemu/test-clock.py` | the whole chain: `date` against the host's clock, `-u`, `-uIs` and `+FORMAT` agreeing, `%Z` rendering a real zone, and a file written now listed with today's *local* date. Run it under `TZ=America/New_York` as well as UTC -- both pass, and the second is the one that proves the zone is not decoration |
 
-The gate is the one that matters, and it fails four ways on a machine whose
-`RTC_STATUS` reports invalid — which is how it was proved to be a gate rather
-than a decoration.
+The gate is the one that matters. On 2026-08-24 it measured guest epoch
+`1787595485` against host epoch `1787595484` with zero-second rounded drift;
+the active event-overwrite candidate's second physical Arty boot reported
+`2026-08-24T19:59:32Z, from the host`; a live `date -e` completed successfully
+after that reboot.
 
 ## What is not here
 
@@ -161,5 +166,5 @@ than a decoration.
   updates it afterwards. Relatime semantics would mean a metadata write per
   read, which on an SD card behind a 12.5 MHz bus is not a trade this machine
   should make silently.
-- **A clock on hardware with no host.** `RTC_VALID` is what such a machine
-  would report zero for, and everything above it already handles that.
+- **A clock on hardware with no host.** That is not an Astra production
+  configuration; it fails the boot contract instead of running with bad time.

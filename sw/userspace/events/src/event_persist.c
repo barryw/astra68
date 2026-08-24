@@ -8,7 +8,7 @@
 
 #define SNAPSHOT_MAGIC       0x41455654u /* "AEVT" */
 #define SNAPSHOT_VERSION     1u
-#define SNAPSHOT_HEADER_SIZE 108u
+#define SNAPSHOT_HEADER_SIZE ASTRA_EVENT_SNAPSHOT_HEADER_SIZE
 #define SNAPSHOT_CRC_OFFSET  104u
 
 _Static_assert(sizeof(AstraEventStored) == 72u,

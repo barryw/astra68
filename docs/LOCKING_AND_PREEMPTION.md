@@ -66,6 +66,12 @@ priorities. Effective priority currently equals base priority because
 inheritance and donation are not implemented. Each thread has an 8 KiB
 supervisor stack behind its own 4 KiB unmapped guard.
 
+`PROCESS_PRIORITY` changes a process's default and every live thread under the
+scheduler lock. Ready threads move between the existing bitmap queues; blocked
+threads are removed and reinserted in each existing priority/FIFO wait queue.
+The user band is 1-23 with normal 16. POSIX nice values are the exact derived
+range -7 through 15 (`nice = 16 - priority`), not a second scheduler scale.
+
 All registers, USP, PC, and SR are thread state. CRP is process state. A switch
 between threads in one process does not reload CRP or flush caches/ATC; host,
 Musashi, full pin-level, and ULX3S tests count that path separately from a

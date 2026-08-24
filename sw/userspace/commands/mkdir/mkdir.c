@@ -11,57 +11,84 @@
  * prompt is standing.
  */
 
-#include <astra/posix.h>
 #include <astra/vfs_process.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
-
-#include <stdio.h>
+#include <astra/stream.h>
+#include <astra/vfs_union.h>
 
 ASTRA_PROGRAM("mkdir", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
-static int
-make(AstraProcessFilesystem *process, const char *name)
+static uint32_t error_handle;
+
+static void say(const char *text)
 {
+    (void)astra_print(error_handle, text);
+}
+
+static int make(const char *name)
+{
+    AstraVfsClient *client = NULL;
     char typed[ASTRA_VFS_PATH_MAX];
+    char wire[ASTRA_VFS_PATH_MAX];
     const char *text;
     uint32_t status;
 
-    status = astra_process_path(process, name, typed, sizeof(typed));
+    status = astra_process_path(name, typed, sizeof(typed));
     if (status == ASTRA_VFS_OK)
-        status = process->library->mkdir(&process->filesystem, typed);
+        status = astra_vfs_assign_primary(
+            astra_process_vfs_assigns(), typed, ASTRA_RIGHT_WRITE,
+            astra_process_vfs_assign_client, NULL, wire, sizeof(wire),
+            &client, NULL);
+    if (status == ASTRA_VFS_OK)
+        status = astra_vfs_mkdir(client, wire);
     if (status == ASTRA_VFS_OK)
         return 0;
     text = astra_vfs_status_text(status);
-    if (text != NULL)
-        (void)fprintf(stderr, "mkdir: %s: %s\n", name, text);
-    else
-        (void)fprintf(stderr, "mkdir: %s: status %u\n", name, status);
+    say("mkdir: ");
+    say(name);
+    say(": ");
+    if (text != NULL) {
+        say(text);
+    } else {
+        say("operation failed");
+    }
+    say("\n");
     return (int)status;
 }
 
 int
 astra_main(const AstraStartupInfo *startup)
 {
-    AstraProcessFilesystem process_filesystem =
-        ASTRA_PROCESS_FILESYSTEM_INIT;
+    const AstraStartupCapability *capabilities;
     const uint32_t *argv = NULL;
     int result = 0;
     uint32_t status;
 
-    astra_posix_start(startup);
-    if (startup == NULL)
+    if (startup == NULL || startup->capabilities_address == 0u)
         return ASTRA_STATUS_INVALID;
+    capabilities = (const AstraStartupCapability *)(uintptr_t)
+        startup->capabilities_address;
+    for (uint32_t index = 0u; index < startup->capability_count; ++index) {
+        if (astra_capability_name_equal(capabilities[index].name, "STDERR"))
+            error_handle = capabilities[index].handle;
+        else if (error_handle == 0u &&
+                 astra_capability_name_equal(capabilities[index].name,
+                                             "STDOUT"))
+            error_handle = capabilities[index].handle;
+    }
+    if (error_handle == 0u)
+        return ASTRA_STATUS_ACCESS;
     if (startup->argc != 0u && startup->argv_address != 0u)
         argv = (const uint32_t *)(uintptr_t)startup->argv_address;
     if (argv == NULL || startup->argc < 2u) {
-        (void)fprintf(stderr, "mkdir: needs a name\n");
+        say("mkdir: needs a name\n");
         return ASTRA_STATUS_INVALID;
     }
-    status = astra_process_filesystem_open(&process_filesystem, startup);
+    status = astra_process_vfs_init(startup);
     if (status != ASTRA_VFS_OK) {
-        (void)fprintf(stderr, "mkdir: no filesystem: status %u\n", status);
+        say("mkdir: filesystem unavailable\n");
         return (int)status;
     }
     for (uint32_t index = 1u; index < startup->argc; ++index) {
@@ -71,11 +98,10 @@ astra_main(const AstraStartupInfo *startup)
         if (word == NULL || word[0] == '\0')
             continue;
         /* Every name is attempted; the first refusal is what is returned. */
-        one = make(&process_filesystem, word);
+        one = make(word);
         if (one != 0 && result == 0)
             result = one;
     }
-    astra_process_filesystem_close(&process_filesystem);
-    (void)fflush(stdout);
+    astra_process_vfs_close();
     return result;
 }

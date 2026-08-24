@@ -23,6 +23,47 @@
 typedef AstraVfsClient *(*AstraVfsAssignClientFn)(const AstraAssign *assign,
                                                   void *context);
 
+typedef struct AstraVfsUnionDirectory {
+    const AstraAssignTable *table;
+    AstraVfsAssignClientFn client_for;
+    void *context;
+    char path[ASTRA_VFS_PATH_MAX];
+    uint64_t cursor;
+    uint32_t member;
+    uint32_t worst;
+    uint8_t active;
+    uint8_t done;
+} AstraVfsUnionDirectory;
+
+#define ASTRA_VFS_UNION_DIRECTORY_INIT \
+    { 0, 0, 0, { 0 }, 0, 0, ASTRA_VFS_ERR_NOT_FOUND, 0, 0 }
+
+uint32_t astra_vfs_assign_primary(
+    const AstraAssignTable *table, const char *path, uint32_t rights,
+    AstraVfsAssignClientFn client_for, void *context, char *wire,
+    uint32_t capacity, AstraVfsClient **client, uint32_t *member);
+
+uint32_t astra_vfs_assign_stat(
+    const AstraAssignTable *table, const char *path, uint32_t rights,
+    AstraVfsAssignClientFn client_for, void *context, char *wire,
+    uint32_t capacity, AstraVfsDirEntry *entry, AstraVfsClient **client,
+    const AstraAssign **found_assign, uint32_t *member);
+
+/*
+ * One directory walk for every caller. filesystem.library keeps its ABI by
+ * adapting this state, while direct clients such as ls use it unchanged.
+ */
+uint32_t astra_vfs_union_directory_open(
+    const AstraAssignTable *table, const char *path,
+    AstraVfsAssignClientFn client_for, void *context,
+    AstraVfsUnionDirectory *directory);
+
+uint32_t astra_vfs_union_directory_read(
+    AstraVfsUnionDirectory *directory, AstraVfsDirEntry *entries,
+    uint32_t capacity, uint32_t *count, uint32_t *member);
+
+void astra_vfs_union_directory_close(AstraVfsUnionDirectory *directory);
+
 /*
  * Tries each member in order and stops at the first that opens. `wire` receives
  * the path that answered and `*member` its index -- which is the answer to

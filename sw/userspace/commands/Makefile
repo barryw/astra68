@@ -12,6 +12,7 @@ include ../../../mk/m68k-cross.mk
 # and what is not is proved by the terminal gate running them on the machine.
 
 CC := $(CROSS)gcc
+AR := $(CROSS)ar
 SIZE := $(CROSS)size
 OBJCOPY := $(CROSS)objcopy
 RUNTIME := ../runtime
@@ -19,6 +20,7 @@ STREAMS := ../streams
 VFS := ../vfs
 POSIX := ../posix
 NDK := ../../../ndk
+LUA := ../../../third_party/lua/src
 # picolibc, built out of tree: see third_party/picolibc/ASTRA_VENDOR.md.
 PICOLIBC ?= $(HOME)/picolibc-astra
 CPPFLAGS := -I../../include -I$(RUNTIME)/include -I$(STREAMS)/include \
@@ -39,7 +41,7 @@ PICOLIBC_LIB := $(PICOLIBC)/lib/libc.a
 RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0.o
 
 COMMANDS := status events devices which hello ls ps cat mkdir rm posix \
-            heapbench date echo
+            heapbench date echo lua
 # What the gate installs on the volume: stripped, the way the ROM's own image
 # is, because a command carries no more DWARF onto a card than the supervisor
 # carries into ROM. The unstripped ELF stays beside it for a debugger.
@@ -60,21 +62,58 @@ libraries:
 # .SECONDEXPANSION so a command's source is <name>/<name>.c rather than a
 # second list to keep in step with the first.
 .SECONDEXPANSION:
+# Picolibc's own archive also defines this symbol. Make the shared POSIX
+# integer formatter unresolved before archive scanning so date selects the
+# small implementation without carrying a command-private copy.
+build/m68k/date: LINK_FLAGS += -Wl,--undefined=__d_snprintf
+LUA_SOURCES := $(filter-out $(LUA)/lua.c $(LUA)/luac.c,$(wildcard $(LUA)/*.c))
+LUA_OBJECTS := $(patsubst $(LUA)/%.c,build/m68k/lua-obj/%.o,$(LUA_SOURCES))
+LUA_LIBRARY := build/m68k/liblua.a
+LUA_CPPFLAGS := -I$(LUA) \
+	-DLUA_PATH_DEFAULT='"?.lua;?/init.lua;LIBS:Lua.kit/share/lua/5.5/?.lua;LIBS:Lua.kit/share/lua/5.5/?/init.lua"' \
+	-DLUA_CPATH_DEFAULT='""'
+LUA_FLAGS := -std=gnu11 -Wall -Wextra -Werror
+
+$(LUA_LIBRARY): $(LUA_OBJECTS)
+	$(AR) rcs $@ $^
+
+build/m68k/lua-obj/%.o: $(LUA)/%.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(LUA_CPPFLAGS) $(LUA_FLAGS) $(TARGET_FLAGS) \
+		$(DEPFLAGS) -c $< -o $@
+
+build/m68k/lua-obj/interpreter.o: $(LUA)/lua.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(LUA_CPPFLAGS) $(LUA_FLAGS) $(TARGET_FLAGS) \
+		$(DEPFLAGS) -Dmain=astra_lua_main -c $< -o $@
+
+build/m68k/lua: lua/lua.c $(LUA_LIBRARY) build/m68k/lua-obj/interpreter.o \
+		$(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) $(POSIX_LIB) $(RUNTIME_CRT0) \
+		$(RUNTIME)/astra_user.ld
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(LUA_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) \
+		$(DEPFLAGS) $(LINK_FLAGS) -o $@.elf $(RUNTIME_CRT0) $< \
+		build/m68k/lua-obj/interpreter.o \
+		-Wl,--start-group $(LUA_LIBRARY) $(VFS_LIB) $(STREAMS_LIB) \
+		$(POSIX_LIB) $(RUNTIME_LIB) $(PICOLIBC_LIB) \
+		$(PICOLIBC)/lib/libm.a -lgcc -Wl,--end-group
+	$(OBJCOPY) --strip-all --remove-section=.astra_events $@.elf $@
+
 build/m68k/%: $$*/$$*.c $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) \
 		$(POSIX_LIB) $(RUNTIME_CRT0) $(RUNTIME)/astra_user.ld
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
 		$(LINK_FLAGS) -o $@.elf $(RUNTIME_CRT0) $< \
 		-Wl,--start-group $(VFS_LIB) $(STREAMS_LIB) $(POSIX_LIB) \
-		$(RUNTIME_LIB) $(PICOLIBC_LIB) -Wl,--end-group -lgcc
-	$(OBJCOPY) --strip-debug --remove-section=.astra_events $@.elf $@
+		$(RUNTIME_LIB) $(PICOLIBC_LIB) -lgcc -Wl,--end-group
+	$(OBJCOPY) --strip-all --remove-section=.astra_events $@.elf $@
 
 size: $(IMAGES)
 	$(SIZE) $(IMAGES)
 
 # Header dependencies: a stale object compiled against an older ABI
 # constant is indistinguishable from a working one until it runs.
--include $(wildcard build/m68k/*.d)
+-include $(wildcard build/m68k/*.d build/m68k/lua-obj/*.d)
 
 clean:
 	rm -rf build

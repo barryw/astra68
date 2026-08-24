@@ -1,3 +1,5 @@
+#define _XOPEN_SOURCE 700
+
 /*
  * `posix` -- the POSIX file and directory layer, checked against itself.
  *
@@ -27,6 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <stdint.h>
 #include <unistd.h>
@@ -73,10 +76,19 @@ enum {
     FAIL_SBRK_USABLE = 37,
     FAIL_SBRK_SHRINK = 38,
     FAIL_SBRK_BREAK = 39,
+    FAIL_RENAME = 40,
+    FAIL_RENAME_SOURCE = 41,
+    FAIL_RENAME_TARGET = 42,
+    FAIL_SYSTEM_MISSING = 43,
+    FAIL_SYSTEM_STATUS = 44,
+    FAIL_GETPRIORITY = 45,
+    FAIL_NICE = 46,
+    FAIL_SETPRIORITY = 47,
 };
 
 #define DIRECTORY "posixcheck"
 #define NAME "notes.txt"
+#define RENAMED "renamed.txt"
 #define BODY "astra posix layer\n"
 /* Where the tail check seeks to, and what it must find from there. */
 #define TAIL_AT 6
@@ -165,6 +177,12 @@ astra_main(const AstraStartupInfo *startup)
     (void)closedir(directory);
     if (!found)
         return FAIL_READDIR;
+    if (rename(DIRECTORY "/" NAME, DIRECTORY "/" RENAMED) != 0)
+        return complain(FAIL_RENAME, "rename");
+    if (stat(DIRECTORY "/" NAME, &about) == 0 || errno != ENOENT)
+        return FAIL_RENAME_SOURCE;
+    if (stat(DIRECTORY "/" RENAMED, &about) != 0)
+        return complain(FAIL_RENAME_TARGET, "renamed target");
 
     /*
      * Into the directory, and then the same file by a bare name. This is the
@@ -175,12 +193,12 @@ astra_main(const AstraStartupInfo *startup)
         return complain(FAIL_CHDIR, "chdir");
     if (getcwd(after, sizeof(after)) == NULL || strcmp(after, before) == 0)
         return FAIL_CWD_MOVED;
-    if (stat(NAME, &about) != 0)
+    if (stat(RENAMED, &about) != 0)
         return complain(FAIL_BARE_STAT, "stat of a bare name");
 
-    if (unlink(NAME) != 0)
+    if (unlink(RENAMED) != 0)
         return complain(FAIL_UNLINK, "unlink");
-    if (stat(NAME, &about) == 0)
+    if (stat(RENAMED, &about) == 0)
         return FAIL_GONE;
     /* And the errno for a name that is not there, which callers branch on. */
     if (errno != ENOENT)
@@ -256,6 +274,26 @@ astra_main(const AstraStartupInfo *startup)
                 return FAIL_SBRK_USABLE;
         if (sbrk(-(intptr_t)span) == (void *)-1)
             return complain(FAIL_SBRK_SHRINK, "sbrk shrink again");
+    }
+
+    if (system(NULL) == 0)
+        return FAIL_SYSTEM_MISSING;
+    if (system("status 23") != (23 << 8))
+        return complain(FAIL_SYSTEM_STATUS, "system");
+
+    {
+        int old_nice;
+
+        errno = 0;
+        old_nice = getpriority(PRIO_PROCESS, 0);
+        if (old_nice == -1 && errno != 0)
+            return complain(FAIL_GETPRIORITY, "getpriority");
+        if (nice(1) != old_nice + 1 ||
+            getpriority(PRIO_PROCESS, 0) != old_nice + 1)
+            return complain(FAIL_NICE, "nice");
+        if (setpriority(PRIO_PROCESS, 0, old_nice) != 0 ||
+            getpriority(PRIO_PROCESS, 0) != old_nice)
+            return complain(FAIL_SETPRIORITY, "setpriority");
     }
 
     printf("posix: %s\n", before);

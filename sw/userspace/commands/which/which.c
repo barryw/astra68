@@ -4,6 +4,7 @@
 #include <astra/runtime.h>
 #include <astra/stream.h>
 #include <astra/vfs_process.h>
+#include <astra/vfs_union.h>
 
 ASTRA_PROGRAM("which", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
@@ -58,13 +59,13 @@ int astra_main(const AstraStartupInfo *startup)
 {
     const AstraStartupCapability *capabilities;
     const uint32_t *argv = NULL;
-    AstraProcessFilesystem process_filesystem =
-        ASTRA_PROCESS_FILESYSTEM_INIT;
-    AstraFile file = ASTRA_FILE_INIT;
-    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+    AstraVfsClient *client = NULL;
+    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
+    uint64_t size = 0u;
+    uint16_t kind = 0u;
     char typed[ASTRA_VFS_PATH_MAX];
     char wire[ASTRA_VFS_PATH_MAX];
-    int opened = 0;
+    uint32_t member = 0u;
     uint32_t status;
 
     if (startup == NULL || startup->capabilities_address == 0u)
@@ -88,30 +89,22 @@ int astra_main(const AstraStartupInfo *startup)
         say("which: name too long, refused rather than cut\n");
         return (int)status;
     }
-    status = astra_process_filesystem_open(&process_filesystem, startup);
+    status = astra_process_vfs_init(startup);
     if (status == ASTRA_VFS_OK)
-        status = process_filesystem.library->open(
-            &process_filesystem.filesystem, typed, ASTRA_VFS_OPEN_READ, &file);
-    if (status == ASTRA_VFS_OK)
-        opened = 1;
-    if (status == ASTRA_VFS_OK)
-        status = process_filesystem.library->file_info(&file, &info);
-    if (status == ASTRA_VFS_OK)
-        status = process_filesystem.library->assign_resolve(
+        status = astra_vfs_assign_open(
             astra_process_vfs_assigns(), typed, ASTRA_RIGHT_READ,
-            info.member, wire, sizeof(wire), NULL);
-    if (opened)
-        (void)process_filesystem.library->close(&file);
-    astra_process_filesystem_close(&process_filesystem);
+            ASTRA_VFS_OPEN_READ, astra_process_vfs_assign_client, NULL,
+            wire, sizeof(wire), &file, &size, &kind, &client, &member);
+    if (status == ASTRA_VFS_OK)
+        (void)astra_vfs_close(client, file);
+    astra_process_vfs_close();
     if (status != ASTRA_VFS_OK) {
-        say("which: not on any member, status ");
-        say_number(status);
-        say("\n");
+        say("which: not on any member\n");
         return (int)status;
     }
     say(wire);
     say(" [");
-    say_number(info.member);
+    say_number(member);
     say("]\n");
     return ASTRA_STATUS_OK;
 }

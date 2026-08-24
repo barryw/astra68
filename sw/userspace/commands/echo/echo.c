@@ -11,11 +11,9 @@
  * anything but the shell carrying it. `echo hello > file` has to work.
  */
 
-#include <astra/posix.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
-
-#include <stdio.h>
+#include <astra/stream.h>
 
 ASTRA_PROGRAM("echo", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
@@ -23,12 +21,22 @@ ASTRA_PROGRAM("echo", 1, 0, 0, "Barry Walker",
 int
 astra_main(const AstraStartupInfo *startup)
 {
+    const AstraStartupCapability *capabilities;
     const uint32_t *argv = NULL;
+    char output[ASTRA_LAUNCH_ARGUMENT_BYTES + ASTRA_LAUNCH_ARGUMENT_MAX + 1u];
+    uint32_t out = 0u;
+    uint32_t stdout_handle = 0u;
     uint32_t first = 1u;
     int newline = 1;
 
-    astra_posix_start(startup);
-    if (startup == NULL)
+    if (startup == NULL || startup->capabilities_address == 0u)
+        return 1;
+    capabilities = (const AstraStartupCapability *)(uintptr_t)
+        startup->capabilities_address;
+    for (uint32_t index = 0u; index < startup->capability_count; ++index)
+        if (astra_capability_name_equal(capabilities[index].name, "STDOUT"))
+            stdout_handle = capabilities[index].handle;
+    if (stdout_handle == 0u)
         return 1;
     if (startup->argc != 0u && startup->argv_address != 0u)
         argv = (const uint32_t *)(uintptr_t)startup->argv_address;
@@ -52,12 +60,13 @@ astra_main(const AstraStartupInfo *startup)
         const char *word = (const char *)(uintptr_t)argv[index];
 
         if (index != first)
-            (void)fputc(' ', stdout);
-        (void)fputs(word != NULL ? word : "", stdout);
+            output[out++] = ' ';
+        if (word != NULL)
+            while (*word != '\0')
+                output[out++] = *word++;
     }
     if (newline)
-        (void)fputc('\n', stdout);
-    if (fflush(stdout) != 0)
-        return 1;
-    return 0;
+        output[out++] = '\n';
+    return astra_stream_write_all(stdout_handle, output, out) ==
+           ASTRA_SYSCALL_OK ? 0 : 1;
 }

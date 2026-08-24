@@ -618,6 +618,18 @@ populate(void)
     if (rc != EOK) {
         return fail("ext4_dir_mk many", rc);
     }
+    rc = ext4_dir_mk(MOUNT_POINT "remove-me");
+    if (rc != EOK) {
+        return fail("ext4_dir_mk remove-me", rc);
+    }
+    rc = ext4_fremove(MOUNT_POINT "remove-me");
+    if (rc != EISDIR) {
+        return fail("ext4_fremove directory", rc);
+    }
+    rc = ext4_dir_rm(MOUNT_POINT "remove-me");
+    if (rc != EOK) {
+        return fail("ext4_dir_rm remove-me", rc);
+    }
 
     if (write_file(MOUNT_POINT "hello.txt", 1u, 37u)) {
         return 1;
@@ -666,6 +678,7 @@ verify(void)
     ext4_dir dir;
     const ext4_direntry *entry;
     unsigned counted = 0u;
+    unsigned metadata_checked = 0u;
     unsigned index;
     ext4_file probe;
     int rc;
@@ -783,11 +796,37 @@ verify(void)
             entry->name[1] == '.') {
             continue;
         }
+        if (entry->name_length == 13u &&
+            memcmp(entry->name, "entry_008.dat", 13u) == 0) {
+            uint32_t direct[5] = {0u};
+            uint32_t path_meta[5] = {0u};
+            uint64_t direct_size = 0u;
+            uint64_t path_size = 0u;
+
+            rc = ext4_dir_entry_meta(&dir, entry, &direct[0], &direct[1],
+                                     &direct[2], &direct[3], &direct[4],
+                                     &direct_size);
+            if (rc != EOK)
+                return fail("ext4_dir_entry_meta", rc);
+            many_path(path, sizeof(path), 8u);
+            rc = ext4_meta_get(path, &path_meta[0], &path_meta[1],
+                               &path_meta[2], &path_meta[3], &path_meta[4],
+                               &path_size);
+            if (rc != EOK)
+                return fail("ext4_meta_get(entry_008.dat)", rc);
+            if (memcmp(direct, path_meta, sizeof(direct)) != 0 ||
+                direct_size != path_size || direct_size != 72u) {
+                printf("FAIL direct directory metadata\n");
+                ++failures;
+                return 1;
+            }
+            metadata_checked = 1u;
+        }
         ++counted;
     }
     ext4_dir_close(&dir);
 
-    if (counted != MANY_FILES - 1u) {
+    if (counted != MANY_FILES - 1u || metadata_checked == 0u) {
         printf("FAIL dir count got=%u want=%u\n", counted, MANY_FILES - 1u);
         ++failures;
         return 1;

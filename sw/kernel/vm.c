@@ -279,6 +279,14 @@ static bool shared_mapping_class(uint32_t virtual_address,
     return true;
 }
 
+static bool library_mapping_address(uint32_t virtual_address)
+{
+    return virtual_address >= ASTRA_LIBRARY_BASE &&
+           virtual_address < ASTRA_LIBRARY_BASE +
+                                 (ASTRA_LIBRARY_SLOT_COUNT *
+                                  ASTRA_LIBRARY_SLOT_SIZE);
+}
+
 /*
  * A shared run is published through a single page table, which is what lets
  * the two range functions resolve the root descriptor once and then index the
@@ -998,8 +1006,12 @@ KernelVmStatus kernel_vm_map_shared_range(
         !shared_range_single_table(virtual_address, page_count) ||
         !shared_mapping_class(virtual_address, &mapping_class) ||
         (permissions & KERNEL_VM_READ) == 0u ||
-        (permissions & KERNEL_VM_EXEC) != 0u ||
-        (permissions & ~(KERNEL_VM_READ | KERNEL_VM_WRITE)) != 0u)
+        ((permissions & KERNEL_VM_WRITE) != 0u &&
+         (permissions & KERNEL_VM_EXEC) != 0u) ||
+        ((permissions & KERNEL_VM_EXEC) != 0u &&
+         !library_mapping_address(virtual_address)) ||
+        (permissions &
+         ~(KERNEL_VM_READ | KERNEL_VM_WRITE | KERNEL_VM_EXEC)) != 0u)
         return KERNEL_VM_INVALID_ARGUMENT;
     (void)mapping_class;
 

@@ -9,6 +9,314 @@ The platform is **Astra 68**, its kernel is **Axiom**, and the complete
 user-facing system is **Astra OS**. The Astra NDK is the stable developer
 surface; Axiom's internal interfaces are not a module ABI.
 
+## Lua, host-time enforcement, and 4 MiB application transport (2026-08-24)
+
+Stock Lua 5.5.1 is now a normal `COMMANDS:lua` program built from the unchanged
+vendored upstream sources. The stripped MC68030 file is 238,272 bytes; its
+text, data, and BSS occupy 248,324 bytes at load time (234,538 text, 328 data,
+13,458 BSS), proving the retired 64 KiB executable ceiling is gone. It uses the shared Astra POSIX/VFS/runtime paths for
+environment, files, rename, time, and `os.execute`; no Lua-private fast path or
+compatibility layer exists.
+
+The syscall ABI is `0x00010016`, startup ABI is 3, the complete environment is
+packed into the actual 4 KiB startup page, and shared areas/VFS bulk transfers
+are 4 MiB. Four MiB is one complete MC68030 page table and is the largest
+atomic range handled by the current shared-map primitive. Process images are
+otherwise charged page by page against their address space and physical RAM;
+the old 8 MiB kernel image-policy ceiling is gone. The release kernel links
+with `_kernel_tables_start=0x021b4000` and `_kernel_tables_end=0x02242180`,
+leaving about 1 MiB in the reserved table region.
+
+Correct host time is mandatory. Axiom panics before userspace when `RTC_VALID`
+is absent, the QEMU terminal gate independently rejects a machine model without
+the RTC contract, and the Arty launcher already rejects a stale Linux clock.
+The source-identified x86 QEMU clock gate measured guest epoch `1787595485`
+against host `1787595484` with zero-second rounded drift. The complete
+68-command Terminal/POSIX/Lua gate passes, including Lua arithmetic,
+environment inheritance, nested `os.execute`, UTC year 2026, and file
+create/rename/read/remove.
+
+An allocator experiment replaced eager per-run free-list construction with a
+lazy virgin-block pointer. It passed the complete gate and did not change Lua's
+238,324-byte image, but a clean ten-run physical Arty control measured
+1,241.530 ms for `lua -v` against 1,251.390 ms for the experiment with the same
+four render batches and 49 median render commands. The 0.79% regression was
+rejected, the eager shared allocator was restored, and no Lua-private path was
+added.
+
+A second shared-allocator experiment retained one empty run, bounded to eight
+pages and reclaimed before allocation failure. It reduced Lua shutdown from
+four allocator PMMU faults to three, but added 116 text bytes and 4 BSS bytes
+to programs using `malloc`. More importantly, the physical `lua -v` median
+regressed from 1,241.530 to 1,397.826 ms (`+12.6%`) and lost the control's
+alternating roughly 0.80-second child-run samples. It was rejected and the
+fully decommitting allocator was restored; the remaining bimodal cost is in
+shared scheduling/event cadence, not a missing allocator fast path.
+
+The retained fix removes that event cadence at its source. The events service
+still writes the same complete CRC-protected snapshot to alternating banks at
+the same one-second maintenance deadline, but it no longer truncates and
+reallocates a bank on every save. Each bank is truncated on its first write of
+a boot or an actual shrink; otherwise the monotonically growing current-boot
+snapshot overwrites or extends the existing file. The service remains 37,208
+bytes and no command image changed. Focused event-store tests, ASan/UBSan, the
+GCC analyzer, the complete 64-command QEMU gate, and a physical two-boot gate
+pass.
+
+On a clean physical Arty A/B, ten `lua -v` runs improved from 1,241.530 to
+1,203.421 ms (`3.1%`) with the same four render batches and 49 median render
+commands. The child run-stage median improved from 886,799 to 874,230 us and
+lost the former roughly 0.80/1.00-second oscillation. The exact final source,
+including its fail-closed serialization path, measured 1,209.641 ms (`2.57%`
+faster than baseline) with the same render counts. An in-place second boot
+recovered the ext4 journal and the prior event bank, rendered 27 glyph runs of
+previous-boot records through `events --boot -1`, ran stock Lua, and reached
+stage 8.
+
+Process priority is now a real public control rather than scheduler-internal
+state. `PROCESS_PRIORITY` changes the process default and all live threads in
+the existing 1-23 user band, reordering both ready and blocked wait queues;
+future threads inherit it. The NDK runtime exposes the syscall, the shared
+POSIX library implements `nice`, `getpriority`, and `setpriority`, and `ps`
+shows `PRI` plus the derived `NI`. Kernel queue, syscall, runtime, POSIX, full
+MC68030, and 64-command QEMU gates pass on Beast. The `posix` target diagnostic
+also performs a real `nice(1)`/query/restore round trip, so the QEMU and
+physical gates exercise the control instead of merely linking it.
+
+The final Lua correctness pass fixed two shared root causes. The userspace
+linker script now places `.got.plt` before `.got`, preserving the MC68030 GOT
+base expected by generated code; `print(1/2)` therefore prints `0.5` instead
+of faulting. The VFS port transport reclaims retained reply sessions whose
+client process died and gives duplicated reply handles wait rights. The
+shared console shell also distinguishes a dead child from a dead I/O peer, so
+real faults report the process, PC, address, and vector instead of the
+misleading `wait failed`. An intentional physical fault now prints
+`crash: crashed: pc 0x001000f0, address 0x60000000, vector 2`, returns
+`ASTRA_STATUS_FAULTED` (`2147483649`) through `$?`, and leaves Terminal usable.
+
+The complete 68-command x86 QEMU gate passes. Runtime, VFS, supervisor,
+sanitizer, GCC analyzer, and full kernel test targets pass on Beast. On the
+physical Arty, four stock Lua workloads completed a warmup and three measured
+runs each with the expected output and status zero. Median Enter-to-quiet
+times were 1,959.245 ms for a 10,000-iteration sum, 2,173.244 ms for recursive
+`fib(20)`, 2,812.829 ms for table allocation/sort, and 2,343.624 ms for string
+concatenation. The retained ring contains 506 records with zero wraps and zero
+drops. A final clean `print(1/2)` run took 1,771.950 ms and its one-shot trace
+contains `0.5` with zero wraps and drops.
+
+Do not poll the retained ring while measuring the hosted Arty machine. A
+diagnostic-only 20 Hz `pmemsave` loop starved hosted display completions and
+caused display service status 36; Lua had already printed its correct result.
+Performance runs use the normal QMP display counters and take at most one
+trace snapshot after the command has finished.
+
+The active physical Arty candidate is
+`/data/astra/deploy/lua-final-dcccd0ba9121`: ROM SHA-256
+`dcccd0ba91213c839c71d348e5a2c48d777a255c42cb5751d2c6d5b524f5f254`,
+pristine installed storage
+`4530bd86becad0aadf7c214562503c38400c28f0cac6bddb679b141126499fa5`,
+and ARM QEMU
+`34c901e50ee0be4b9a58c20ebcae95f5ee0992e13bac0f6cfd028c89887dc526`.
+The clean candidate passed POST and stage 8 with wall clock
+`2026-08-24T21:57:09Z, from the host`; it remains running from a fresh copy of
+the pristine image. The installed Lua SHA-256 is
+`9deb02795b7de072d513ee7da0a29abe55e9471f99f0d92257ce494a23a143df`.
+
+The priority checkpoint remains at
+`/data/astra/deploy/priority-370c2b702633`: ROM SHA-256
+`370c2b70263327fae0a21a00973484c15480bfe9368c0b8c2df49d567ba9646e`
+and pristine storage SHA-256
+`0679e10b14cfb20ab38164cbb7abd0faae20d424c783da5d4cda1e85bc44e742`.
+Its physical priority round-trip exited zero and decoded `ps` output showed
+aligned `PRI`/`NI` values for every process.
+
+The earlier Lua/4 MiB physical checkpoint is retained at
+`/data/astra/deploy/lua-area4m-315908e63b2b`: ROM SHA-256
+`315908e63b2b39c676a55e4619ce0a98d25f58cbadee1b54e9ab5d08f12656a3`,
+pristine storage
+`f25275e29d3b526051c22e6509948bfb6f2bb5dbf1cc56ec474e099995902337`,
+and ARM QEMU
+`34c901e50ee0be4b9a58c20ebcae95f5ee0992e13bac0f6cfd028c89887dc526`
+from overlay identity
+`3359ee1a25c8181dc5e4df31666c443a96f34407925d5d3b018674798327d1bc`.
+Its boot reported `2026-08-24T18:24:47Z, from the host` and reached stage 8.
+Decoded physical trace proves Lua 5.5.1, epoch `1787596639`, year `2026`,
+environment `bar`, file result `ok`, arithmetic `42`, and complete aligned
+`ps` output. Measured Enter-to-quiet times were 506 ms for `lua -v`, 1.65 s
+for arithmetic including rendering, 1.82 s for the year, 1.78 s for file I/O,
+and 592 ms for `ps`. That image was active for the checkpoint; an
+attempted restore of the older reused ps-v7 image reproduced its documented
+service-startup failure, so that dirty image was not left running.
+
+## Complete process view and `ps` latency (2026-08-24)
+
+`ps` now lists every live process visible through the granted `PROC:` view,
+including `APPS:Terminal.app` and the running `COMMANDS:ps`. Its aligned
+output reports PID, generation, thread state, priority, nice level, live-thread count,
+resident KiB, lifetime CPU percentage, accumulated running time, dispatches,
+syscalls, handle references, and command name. The kernel query now returns
+the existing thread aggregates instead of incorrectly using boot progress as
+the run count, and it accounts process user-dispatch cycles at the common
+kernel-entry and user-resume boundaries. The wall clock remains host-seeded;
+the retained physical boot reported `2026-08-24T14:04:59Z`.
+
+The supervisor exposes one fixed-record binary `PROC:snapshot` generated from
+live process handles. This replaces `ps`'s per-process status-file opens and
+text parsing without adding another process registry. The snapshot ABI is a
+96-byte `AstraProcSnapshot`: the 64-byte `AstraProcessInfo` plus a bounded
+32-byte command name. `ps` reads the complete bounded process table in one
+fused `READ_PATH` request and appends its own row because the supervisor cannot
+track a child until after that child has finished launching. This path uses the
+existing VFS client directly instead of attaching `filesystem.library` and
+issuing separate open, read, and close requests.
+
+The hardware profiler now records the quiet-completion timestamp before its
+seven QMP counter reads and accepts a counter snapshot only after two complete
+reads agree. The old profiler charged roughly 45--50 ms of observer work to
+the command and could straddle a render update. With that bias removed and
+both images cold-booted from pristine storage, the first binary-snapshot image
+measured 504.475 ms, down from the 799.067 ms text implementation (`36.9%`).
+The retained fused-snapshot image then measured 501.589 ms in a clean 20-run
+A/B against 548.380 ms for the pristine prior image, an additional `8.5%`.
+Both sides rendered exactly three presentation batches, 54 commands, and ten
+glyph runs in that control, so neither comparison bought speed by omitting
+output. The trace shows the `ps` child falling from 23 to 18 syscalls and a
+228 ms median run stage instead of the prior typical 245--250 ms.
+
+The retained `ps` is 12,952 bytes with 9,402 bytes of text and 6,760 bytes of
+BSS: 20 file bytes, 1,952 text bytes, and 334 BSS bytes smaller than the prior
+binary-snapshot image. The ROM is 255,648 of 262,144 bytes, leaving 6,496
+bytes. Shared-path controls did not materially move: `ls COMMANDS:` measured
+439.197 ms with exactly three batches, 66 render commands, and 16 glyph runs;
+`echo x` measured 205.394 ms with three batches, 38 commands, and two glyph
+runs.
+All command images are now packaged with `--strip-all`; `ls` is 13,164 bytes,
+not 49 KiB, and the ordinary command images range from 4,408 to 16,796 bytes.
+The larger `heapbench` (20,896) and `posix` (37,356) images are diagnostic
+workloads containing their tests, not shell primitives.
+
+The retained pristine artifacts on Beast are
+`ps-stats-v7/astra_boot-ps-stats-v7.bin` (SHA-256
+`eec4cf0b1864ba143db494f00f70ca867252caac7c7da094382dbd23ba3012b4`)
+and `ps-stats-v7/storage-ps-stats-v7.img` (SHA-256
+`2882e4cb78b58e574931ae1b7271f0c472dfad14b468b20a14a706fbe3a9fa8b`).
+The exact pair passes POST, stage 8, process/unit tests, and a decoded terminal
+trace containing the header, supervisor, all services, Terminal, and the live
+`ps` row; every measured invocation exits with status zero. The retained Arty
+runner uses a fresh copy at `/data/astra/deploy/ps-stats-v7-retained`; a reused
+v5 work copy that had seen interrupted test boots was excluded after failing
+during service startup, while the pristine v5 control passed.
+
+Three other measured alternatives were rejected. A text summary saved no measurable
+time and added 304 supervisor text bytes. A shortened 64-bit divide loop passed
+the arithmetic oracle but expanded its common MC68030 path from 148 to 210
+text bytes, grew each linked command by 60--64 bytes, and left physical `ps`
+latency unchanged. Directly copying executable pages from the launcher's user
+mapping into their destination frames removed one logical copy, but moved the
+physical spawn median only from 46.696 to 46.514 ms and `echo` from 203.895 to
+203.548 ms while adding 52 kernel bytes; it was reverted. The generated code
+therefore does not justify assembly or a larger launch fast path. The remaining
+spread is dominated by shared scheduling and presentation, not a safe
+command-local hot path to hand-code.
+
+## Direct command paths and bounded Terminal input (2026-08-24)
+
+`which` and `cat` now use the existing direct VFS client instead of attaching
+`filesystem.library` for one path operation. On the physical Arty, `which`
+improved from 613.865 to 516.374 ms (`15.9%`) and `cat` from 484.002 to
+434.490 ms (`10.2%`). Their stripped MC68030 text sizes are 7,402 and 8,646
+bytes. Shell-facing numeric `status N` diagnostics were removed; the numeric
+result remains in `?`, while structured trace events retain internal status
+values. The clean v9 ROM is SHA-256
+`3aca9853c7ceb4dd3c4ee3fd7931987d1ac946bf55fe27f9b2b9cf992d214f57`;
+its pristine storage image is
+`ef909b22c0f875aa68dcd2ecd5268449d887b795665aab1177d684dc1b22e0da`.
+
+The interactive command buffer remains 512 bytes: 511 characters plus its
+terminating zero. This is the command-length limit; the smaller transport
+queues are event buffers and do not reduce it. The limit was not enlarged.
+Terminal now appends and erases at the end of a line in O(1) work instead of
+redrawing the growing line, and its fallback repaint correctly handles wrapped
+lines and erases the complete old tail. Keyboard repaint is coalesced for at
+most 50 ms. The input service drains every available physical-input batch
+before acknowledging the IRQ, so a burst cannot leave an asserted FIFO behind
+after servicing only its first 16 records.
+
+The exact v12 pair was cold-booted from pristine storage on Arty and Terminal
+was launched through the canonical desktop double-click before input testing.
+An exact 511-character `echo` line completed in 215.141 ms with two render
+batches. A 600-character probe was bounded at 511, completed in 266.494 ms
+with two batches, and the following `echo alive` completed in 267.253 ms.
+The physical FIFO was empty afterward, submissions equaled completions, QEMU
+remained live, and the console contained no kernel panic. Focused input-core
+and supervisor host tests pass. The retained Terminal has 41,952 text bytes,
+8 data bytes, and 106,448 BSS bytes; the input service has 7,109 text bytes.
+The exact ROM is SHA-256
+`e9c768974a42e7e27b5c333e8764bd340f33f96773adad15ec0ca5636c66e3ae`;
+the pristine storage image is
+`0c5440196cc099fe2ff72ebb08afd738d283cbc18468d3d27c841e6d073b3bf2`.
+
+`mkdir` and `rm` now use that same direct VFS path rather than loading
+`filesystem.library`. Their union-member selection is the existing VFS policy,
+factored once and also used by the library instead of copied into each command.
+The stripped images fell from 13,092 to 8,976 bytes for `mkdir` and from 13,080
+to 8,968 bytes for `rm`; text fell by 2,016 and 1,722 bytes respectively, and
+each lost 334 BSS bytes. A pristine five-run Arty control measured successful
+v12 operations at 558.531 ms (`mkdir`) and 589.326 ms (`rm`). The v14 `mkdir`
+median was 505.888 ms. `rm` wall time varied with journal service from 545.655
+to 716.203 ms across two five-run boots, so no wall-time gain is claimed for
+it; the decoded command trace nevertheless shows its image shrinking from
+13,080 to 8,968 bytes and a successful run stage falling from 381,063 to
+321,664 us in the matched status probe. Both images return zero for successful
+create/delete, and a second delete reports `not found` and returns 2 through
+`$?` without a numeric shell narration.
+
+The complete VFS functional, ASan/UBSan, and GCC analyzer gates pass on Beast,
+including the shared union-selection regression, and the local and Beast source
+hashes match. The exact v14 ROM is SHA-256
+`0ac51c452d52dca70d0ba090e7d493e8d0dcd073cfe2ff3e7932be7bd30bf3d3`;
+its pristine storage image is
+`f04c682a60a8d40b8aa25e8613ffbecaccd3be843dc3f5fbab39e1ab3551f8fb`.
+
+Directory traversal now follows the same rule: `vfs_union` owns the one union
+open/read/close implementation, `filesystem.library` adapts that state to its
+stable ABI, and direct clients such as `ls` call it unchanged. The shared
+reader continues to a later member when an earlier member returns a successful
+empty batch; its focused regression and the complete VFS functional,
+ASan/UBSan, and analyzer gates pass on Beast. No command has a private member
+loop or an alternate fast-path policy.
+
+The physical v16 gate also restores the union listing contract: rows remain
+intentionally undeduplicated and `ls` prints the shared reader's `[member]`
+result, so the two shadowed `devices` entries are visibly `[0]` and `[1]`.
+Short and long listings, missing and empty directories, create/delete, and
+their shell-visible return codes all pass. The stripped `ls` is 13,440 bytes
+with 12,638 bytes of text and 9,964 bytes of BSS. Restoring the labels added
+only four file bytes over the unlabelled shared-reader image. Its matched trace
+changed the short-list run stage from 313,843 to 315,914 us (`+0.66%`) while
+restoring the missing information. A ten-run physical gate measured a
+504.533 ms median with exactly two presentation batches, 57 render commands,
+and 16 glyph runs; persistent-event writes still create the known slower
+samples. POST, full-range BIST, stage 8, and the host-seeded
+`2026-08-24T16:43:08Z` wall clock pass. The exact v16 ROM is SHA-256
+`31f8a9b27a98165030547e8852295fca4e93c5fcc28174ee4f289d054a0fd26f`;
+its pristine storage image is
+`97d9607282b61ddbdb095c72c61d648fc14dd7f9094554aedddf5949bbb96512`.
+
+The integer-only `__d_snprintf` implementation used by picolibc's `strftime`
+is now shared POSIX code rather than a private `date` implementation. A
+date-only linker selection flag pulls that archive member before picolibc's
+floating formatter; other commands pay nothing, and there is no wrapper or
+second formatter. `date` remains exactly 16,740 file bytes with 11,118 text
+bytes, 24 data bytes, and 96 BSS bytes. Its focused functional, ASan/UBSan, and
+analyzer gates pass. The exact v18 image passed every supported physical form:
+default, UTC, ISO date, ISO seconds, RFC 2822, custom `%H:%M`, and epoch
+seconds; all exited zero and the trace had zero wraps or drops. The retained
+ROM remains SHA-256
+`31f8a9b27a98165030547e8852295fca4e93c5fcc28174ee4f289d054a0fd26f`;
+the v18 pristine storage image is
+`174b5d1ac0ccba95807835ce91860c6f666df38aa575c828a4e8c6188ef0e343`.
+
 ## Systemic command/filesystem latency fix (2026-08-20)
 
 The former `ls` symptom was process-wide startup work, not directory rendering.
@@ -90,6 +398,174 @@ A physical cold boot of this exact application pair passed full POST, stage 8,
 and a fresh five-run `ls -l COMMANDS:` gate at 1,622.439 ms and six median
 presentations. The framebuffer-copy and Terminal-presentation release gates
 are closed.
+
+### Lane-realignment acceleration (2026-08-22)
+
+This is the active continuation point. Board profiling found that Terminal's
+own 816x420 hardware scroll takes about 658,818 render clocks (3.51 ms), but
+the compositor then copies the 816x440 content into its decorated cache about
+six times per listing at 5.46--5.51 million clocks (about 29 ms) per copy. The
+source pitch is 1,632 bytes on byte lane 0; the destination pitch is 1,640
+bytes and the two-pixel content inset starts on byte lane 4. The released burst
+mover accepts only equal source and destination byte lanes, so this ordinary
+case falls back to one pixel per AXI transaction. The four-message Terminal
+stream queue is not the bottleneck: a physical 16-message experiment changed
+the `ls -l COMMANDS:` median only from 1.622 to 1.643 seconds and was reverted.
+
+The uncommitted candidate fixes the shared BLIT path, not Terminal. It keeps
+aligned, full-width 64-bit AXI bursts, captures each source chunk, realigns its
+bytes in hardware, writes only valid edge lanes, splits at 4 KiB, and preserves
+both overlap directions. The final focused simulation covers all 64
+source/destination lane pairs, W-channel backpressure, outside-byte
+preservation, overlap, and the exact compositor geometry. It passes at 1,254
+clocks for the aligned identity copy, 423,950 clocks and 6,224 bursts for the
+816x440 lane-mismatched copy, and 824,550 clocks for the desktop overlap. The
+complete graphics regression passes with the same counts.
+
+Four measured 200 MHz out-of-context revisions reduced the mover's realignment
+cone from `-1.644 ns`, through `-0.328 ns` and `-0.300 ns`, to no failing mover
+path. The retained revision inserts a 128-bit source-pair register between the
+distributed-RAM word selection and byte shift. Its OOC route misses by only
+`-0.005 ns` on the pre-existing blitter mask-cache-to-ARVALID path; the OOC
+clock lacks final `HD.CLK_SRC`, so the five-picosecond estimate is not used as
+an unrelated RTL-edit trigger.
+
+Two clean full-feature Vivado 2024.2 implementations on Beast routed every net
+without an incremental checkpoint, but the fail-closed 187.5 MHz release gate
+rejected both and wrote no bitstream. Default `Performance_Explore` routed
+68,062/68,062 nets and failed setup/hold at `-0.059/+0.046 ns`.
+`Performance_ExplorePostRoutePhysOpt` routed the same 68,062 nets and improved
+the gate to `-0.030/+0.013 ns`, with three failing setup endpoints and
+`-0.066 ns` total violation. The worst path is
+`scheduler_i/client_start_reg/C` to
+`sprite_builder_i/prep_state_reg[1]/CE`: 4.930 ns data delay, four LUT levels,
+and 80.7% routing. The other two failures end at sprite admission-position
+clock enables. The mover is absent from all failing endpoints. Resources are
+33,202 LUTs, 39,741 registers, 12,435 slices, 129.5 BRAM tiles, and 81 DSPs.
+
+The local sprite-start pipeline breaks that exact route cone. A third clean
+`Performance_ExplorePostRoutePhysOpt` implementation routes 68,015/68,015
+nets with zero errors and passes the actual 187.5 MHz setup/hold gate at
+`+0.022/+0.018 ns`; the worst setup path is now an existing glyph-input
+register to DSP path. It uses 33,176 LUTs, 39,686 registers, 12,296 slices,
+129.5 BRAM tiles, and 81 DSPs. Timing-clean candidate bitstream SHA-256 is
+`baf8a6d9524125409ef0d0004272cb06dfa22d6144f1ad444e798b07c8e93b70`.
+
+The candidate is based on `d27d6be762cd6335ae366a597b49c2092b6e1bd5`
+and its implementation/test changes are:
+
+- `fpga/arty/graphics/astra_render_blitter.sv`;
+- `fpga/arty/graphics/astra_render_copy_burst.sv`;
+- `fpga/arty/graphics/astra_sprite_line_builder.sv`; and
+- `fpga/arty/graphics/sim/tb_astra_render_blitter.sv`;
+- `fpga/arty/linux/astra_render_certify.c`.
+
+The synchronized Beast snapshot is
+`/mnt/Documents/astra68/work/buttery-scroll-20260821/repo`. The local
+sprite-start pipeline is now implemented. All nine focused sprite modes pass,
+including the 16x128 worst case in 1,562 clocks, and the complete graphics
+suite passes with the lane-realignment counts above and all 5,120
+production-width screen-offset pixels. The production route passes timing,
+but physical application qualification now rejects the candidate.
+
+The routed `.bit` was converted for Linux FPGA Manager and verified against
+the known predecessor conversion. The exact manager binary is
+`63b3a8e158ede638245be470fdacb6ef78ffab01700bf96af5e73268a89c42b9`.
+The existing renderer certifier was extended rather than adding another tool;
+source SHA-256 is
+`b5b8f54f4eb63801ba533c787b4c92b8bfe8ff11d20e6906902b0f8065530f90`
+and the static ARM binary is
+`0f74fd2bf9a9a5d758dcd6bd93a748eac8f27b02fc11227188a4f41b4d45e828`.
+It passes all 64 source/destination byte-lane pairs, exact neighbor-byte
+preservation, the 1,280x644 screen-offset copy in 1,432,002 clocks, and the
+exact 816x440 compositor copy in 705,006 clocks against a 3,125,000-clock
+one-frame budget. The full renderer, sprite, Copper, and 48 kHz audio
+certifiers pass; sprite hardware worst case is 1,564 clocks with zero AXI or
+deadline errors. Two clean boots of ROM
+`e07e648f347e2a522ce8297f67af213a2281ff4f6cecb504ec1ad19e7670b07e`
+and pre-boot storage
+`b033561aeb0b3728301a6ada6fdf84aef7d32e499a1e848462ed79d197ab2352`
+each pass full POST, full-range SDRAM BIST, and initial-image stage 8 without a
+panic.
+
+The exact Terminal gate fails, so the candidate is not a release. After the
+canonical desktop double-click, its five-run median is 1,612.009 ms and seven
+presentation batches; a ten-run repeat is 1,562.989 ms and 6.5 batches. Both
+exceed the retained maximum of six. A controlled ten-run reload of prior
+production bitstream
+`f3ccce904124714d77b3f936debdad195a29c5f089ffb0c0783c195397369bb4`
+passes at 1,676.396 ms and six batches. The lane candidate is faster, but the
+batch regression is repeatable and is not waived. The Arty is attached to
+Beast; a Beast-local JTAG scan sees the Cortex-A9 and XC7Z020, and Beast reaches
+`astra-arty` directly. Beast exposed no `/dev/video` capture device during this
+checkpoint, so HDMI hot-plug was not rerun; the board correctly reported no
+sink.
+
+The final recovery ran from Beast, the Arty's physical host. A direct
+FPGA-manager reload dropped the board's Ethernet before the certifiers could
+run, so Beast restored the exact prior raw bitstream
+`f3ccce904124714d77b3f936debdad195a29c5f089ffb0c0783c195397369bb4`
+over the local Digilent JTAG link and reset the Zynq APU through XSDB. The
+persistent production image booted, FPGA manager reports `operating` with
+flags `0`, all three PL identities read correctly, and the clean ROM remains
+installed. The writable storage image has the expected post-test hash
+`2ac835b9887269b9ede05944e04e65eb05acca73243d2155c3d73841e8a36c9b`.
+The next step is to remove the candidate's extra presentation batch without
+weakening the one-frame Terminal contract, then repeat physical qualification
+with an HDMI sink present. Candidate and control logs are retained under
+`/mnt/Documents/astra68/work/buttery-scroll-20260821/lane-realign-sprite-start/hardware`.
+
+### Combined lane-realignment and storage qualification (2026-08-23)
+
+The application rejection above is superseded. Measurement isolated the
+latency variance to the events service rewriting its persisted snapshot as one
+cross-process storage request per 72-byte record. STOR protocol v9 adds one
+bounded shared-area write operation, and the events service now serializes the
+same alternating-bank snapshot into one static buffer before writing it. The
+one-second persistence cadence and recovery format are unchanged. `ls` also
+uses one existing stdio output buffer, and directory batches now reserve each
+entry's actual name length instead of the 63-byte maximum.
+
+On the physical Arty attached to Beast, a ten-run empty-`ls` probe with
+persistence enabled completed nine runs in 214--229 ms; the remaining 367 ms
+run coincided with a real snapshot write. The former slow mode was 578--709
+ms. Packing actual directory-name lengths reduced the traced listing phase
+from a 311.339 ms median to 267.310 ms (`-14.1%`). The exact final
+`ls -l COMMANDS:` gate then completed 20/20 runs with exactly three
+presentation batches, 66 commands, and 16 glyph commands; median latency was
+779.731 ms. Evidence SHA-256 is
+`1831c03c759864f4b1e04b8e3917410e0481018a71e43a4aea9f906d0cd52f49`.
+
+Rebooting the exact final storage image preserved the previous boot's event
+records, and `events --boot -1` recovered them. The clean pre-boot image is
+`e6d6f7379bf53303065bf954f44c359e96ba62bf71affd741bf55c9c0bf5c3e2`;
+the reboot ring and decoded trace are
+`765995b39389ef4e0744e79686a118d5c0156a7a8cae2c4e18790ea334ad8491`
+and
+`7a594a3790e3a0e8971aef1aa5f92a226ca37882171f8e5922d6af319238396a`.
+A measured 4-to-16 message/pump expansion was rejected: its 20-run median was
+843.464 ms with the same three batches, so the original four-message limits
+were restored. Rejected-run evidence is
+`b93d1fd30d3d582d9fe4cf7ed48d4de277e0162705cb8e183a998fb42847670`.
+
+The exact expanded renderer certifier binary
+`0f74fd2bf9a9a5d758dcd6bd93a748eac8f27b02fc11227188a4f41b4d45e828`
+passes the complete 29-command renderer test with 1,196,651 pixels and zero
+backpressure, all 64 lane pairs, the 1280x644 offset copy in 1,431,179 clocks,
+and the exact 816x440 compositor copy in 703,962 of the 3,125,000-clock frame
+budget. Sprite, Copper, and 48 kHz audio certification also pass; sprite
+hardware maximum remains 1,564 clocks with zero AXI or deadline errors.
+Repeated POST, full-range SDRAM BIST, and stage 8 pass.
+
+The timing-clean lane candidate is therefore the latest qualified capacity
+authority. It is active only as a volatile FPGA-manager load; manager state is
+`operating`, flags are `0`, and persistent boot files remain unchanged as the
+rollback authority. The three-presentation result did not improve when queue
+depth quadrupled, and the exact hardware compositor already finishes in
+703,962 clocks. Remaining latency is bounded by the current serialized
+process/storage path and the 60 Hz presentation contract rather than the lane
+mover. Beast exposed no HDMI capture sink, so repeated HDMI hot-plug and
+visual inspection are the sole remaining physical release gate.
 
 ## Shared retained-text control and rejected blitter stream (2026-08-20)
 
@@ -563,7 +1039,7 @@ machine.
   member answered. A launched child resolves through the same union it was
   granted, at the same roots, because `AstraLaunchGrant` and
   `AstraStartupCapability` now carry a 64-byte mount-relative root
-  (`docs/ABI.md`, `ASTRA_STARTUP_ABI_VERSION` 2).
+  (`docs/ABI.md`, now `ASTRA_STARTUP_ABI_VERSION` 3 after environment support).
 - The four bounded event tiers survive reboot in alternating, versioned CRC-32
   snapshots under the state volume's `events/`. Startup accepts only a complete
   valid bank, exposes its boot ring as `EVENTS:boot/-1`, and renders numeric
@@ -2614,7 +3090,7 @@ exact committed source revision and ROM identity to:
    SDRAM gates;
 2. synthesize with zero SCCs and pass the enforced resource profile;
 3. route every constrained clock with the complete feature set;
-4. be packaged and flashed through NUC; and
+4. be packaged and flashed through Beast; and
 5. pass repeated POST, SDRAM, kernel-entry, and HDMI checks on the board.
 
 Record every structural route result immediately in `TIMING_CLOSURE.md`,
@@ -3502,7 +3978,7 @@ false diagnosis. The existing production-width screen-offset and full overlap
 blit regressions remain the correct Astra gates and both pass on Beast. HDMI
 hot-plug, DVI-safe startup, and audio remain unchanged.
 
-The candidate package is installed atomically on the Arty SD card through NUC.
+The candidate package is installed atomically on the Arty SD card through Beast.
 The prior qualified BOOT/FIT hashes remain in their rollback files, `/` is
 read-only, and the exact production PL is active. The live HDMI manager SHA-256
 is `f4c4ab81b9a90e95748bc0896ddcbeb14e81bbc450ecbec5c64de2b853b8a6f3`.

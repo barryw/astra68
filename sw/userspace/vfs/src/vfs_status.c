@@ -28,7 +28,7 @@ astra_vfs_status_text(uint32_t status)
          * answering, and a person needs to be able to tell those apart at the
          * prompt because only one of them is worth retrying.
          */
-        "the service is gone"
+        "the service is gone", "cross-device operation"
     };
 
     if (status >= (uint32_t)(sizeof(text) / sizeof(text[0])))

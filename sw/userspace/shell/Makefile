@@ -4,7 +4,7 @@ CC := $(CROSS)gcc
 AR := $(CROSS)ar
 HOST_CC ?= cc
 ANALYZER_CC ?= gcc
-CPPFLAGS := -Iinclude
+CPPFLAGS := -Iinclude -I../../include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror
 DEPFLAGS := -MMD -MP
 TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin $(ASTRA_DEBUG_FLAGS)

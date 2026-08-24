@@ -41,6 +41,8 @@ int astra_posix_descriptor_file(uint32_t slot);
 
 /* The file slot behind a descriptor, or -1 if it is not a file at all. */
 int astra_posix_descriptor_slot(int fd);
+/* The kernel handle behind a stream descriptor, or zero for files/closed. */
+uint32_t astra_posix_descriptor_handle(int fd);
 
 /* The startup block `astra_posix_start` was given, for the file half's use. */
 const AstraStartupInfo *astra_posix_startup(void);
