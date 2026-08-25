@@ -212,6 +212,8 @@ sdk: all check analyze example docs
 install: $(LIB)
 	install -d $(DESTDIR)$(PREFIX)/include/astra $(DESTDIR)$(PREFIX)/lib
 	install -m 0644 include/astra/*.h $(DESTDIR)$(PREFIX)/include/astra/
+	install -m 0644 ../sw/include/astra/message_abi.h \
+		$(DESTDIR)$(PREFIX)/include/astra/
 	install -m 0644 $(LIB) $(DESTDIR)$(PREFIX)/lib/
 
 clean:

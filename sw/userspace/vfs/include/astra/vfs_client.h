@@ -88,6 +88,13 @@ uint32_t astra_vfs_read(AstraVfsClient *client, AstraVfsFile file,
 uint32_t astra_vfs_write(AstraVfsClient *client, AstraVfsFile file,
                          uint64_t offset, const void *buffer, uint32_t length,
                          uint32_t *moved);
+uint32_t astra_vfs_write_position(AstraVfsClient *client, AstraVfsFile file,
+                                  uint64_t offset, const void *buffer,
+                                  uint32_t length, uint32_t *moved,
+                                  uint64_t *position);
+uint32_t astra_vfs_sync(AstraVfsClient *client, AstraVfsFile file);
+uint32_t astra_vfs_truncate(AstraVfsClient *client, AstraVfsFile file,
+                            uint64_t size);
 
 uint32_t astra_vfs_stat(AstraVfsClient *client, const char *path,
                         uint64_t *size, uint16_t *kind);

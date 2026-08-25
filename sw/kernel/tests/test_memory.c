@@ -112,6 +112,10 @@ static void test_initial_map(void)
            KERNEL_EMERGENCY_RESERVE_FRAMES);
     assert(stats.emergency_acquisitions == 0u);
     assert(stats.emergency_failures == 0u);
+    assert(stats.protected_reserve_frames ==
+           stats.total_frames / ASTRA_PROCESS_COUNT_MAX);
+    assert(stats.protected_reserve_denials == 0u);
+    assert(stats.protected_owners == 0u);
 
     assert(kernel_memory_frame_info(ASTRA_EARLY_LOG_ADDRESS, &frame));
     assert(frame.state == KERNEL_FRAME_EARLY_LOG);
@@ -409,6 +413,7 @@ static void test_exhaustion_and_checked_ranges(void)
 
     make_valid_info(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_protect_owner(1u));
     /*
      * Drains the three usable regions exactly, so the sizes are derived from
      * the layout rather than written out: ABI 0.4 moved 52 frames from the tail
@@ -450,6 +455,7 @@ static void test_exhaustion_and_checked_ranges(void)
     assert(!kernel_memory_range_owned(0x03fffff0u, 32u, 1u,
                                       KERNEL_FRAME_PROCESS, false));
     assert(kernel_memory_release(first, 12u, 1u) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_protect_owner(2u));
     assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 2u, &extra) ==
            KERNEL_MEMORY_OK);
     assert(extra == first);
@@ -474,6 +480,7 @@ static void test_emergency_reserve_isolated_and_replenished(void)
 
     make_valid_info(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_protect_owner(1u));
     assert(kernel_memory_stats(&baseline));
     assert(kernel_memory_alloc(ASTRA_USER_IMAGE_MAX_SIZE / 0x1000u, 1u,
                                KERNEL_FRAME_PROCESS, 1u, &first) ==
@@ -547,6 +554,42 @@ static void test_emergency_reserve_isolated_and_replenished(void)
     (void)first;
     (void)second;
     (void)third;
+}
+
+static void test_protected_reserve_survives_ordinary_exhaustion(void)
+{
+    AstraBootInfo info;
+    KernelMemoryStats baseline;
+    KernelMemoryStats exhausted;
+    uint32_t pages[TEST_MAX_FRAMES];
+    uint32_t protected_page = 0u;
+    uint32_t extra = 0u;
+    uint32_t ordinary;
+
+    make_valid_info(&info);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&baseline));
+    ordinary = baseline.free_frames - baseline.dma_zone_frames -
+               baseline.protected_reserve_frames;
+    assert(kernel_memory_alloc_pages_zeroed(
+               ordinary, KERNEL_FRAME_PROCESS, 10u, pages) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 10u, &extra) ==
+           KERNEL_MEMORY_OUT_OF_MEMORY);
+    assert(kernel_memory_stats(&exhausted));
+    assert(exhausted.free_frames == baseline.dma_zone_frames +
+                                      baseline.protected_reserve_frames);
+    assert(exhausted.protected_reserve_denials == 1u);
+
+    assert(kernel_memory_protect_owner(11u));
+    assert(kernel_memory_owner_protected(11u));
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 11u,
+                               &protected_page) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_release(protected_page, 1u, 11u) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_memory_unprotect_owner(11u));
+    assert(!kernel_memory_owner_protected(11u));
+    assert(kernel_memory_release_owner(10u, NULL) == KERNEL_MEMORY_OK);
 }
 
 static void test_tagged_failure_injection_and_boot_retirement(void)
@@ -732,6 +775,7 @@ static void test_contiguous_demand_survives_a_combed_frame_map(void)
 
     make_valid_info(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_protect_owner(70u));
     assert(kernel_memory_stats(&before));
     assert(kernel_memory_stats(&stats));
     /* Everything the general pool can reach -- the zone is not part of it. */
@@ -855,6 +899,7 @@ int main(void)
     test_scattered_page_allocation_is_atomic();
     test_exhaustion_and_checked_ranges();
     test_emergency_reserve_isolated_and_replenished();
+    test_protected_reserve_survives_ordinary_exhaustion();
     test_emergency_site_injection_is_atomic();
     test_retained_log_is_allocation_free_under_pressure();
     test_contiguous_demand_survives_a_combed_frame_map();

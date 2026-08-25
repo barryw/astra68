@@ -585,14 +585,32 @@ events_read(void *context, uintptr_t token, uint64_t offset, void *buffer,
 
 static uint32_t
 events_write(void *context, uintptr_t node, uint64_t offset,
-             const void *buffer, uint32_t length, uint32_t *moved)
+             uint32_t flags, const void *buffer, uint32_t length,
+             uint32_t *moved, uint64_t *position)
 {
     (void)context;
     (void)node;
     (void)offset;
+    (void)flags;
     (void)buffer;
     (void)length;
     *moved = 0u;
+    *position = offset;
+    return ASTRA_VFS_ERR_ACCESS;
+}
+
+static uint32_t events_sync(void *context, uintptr_t node)
+{
+    (void)context;
+    (void)node;
+    return ASTRA_VFS_ERR_ACCESS;
+}
+
+static uint32_t events_truncate(void *context, uintptr_t node, uint64_t size)
+{
+    (void)context;
+    (void)node;
+    (void)size;
     return ASTRA_VFS_ERR_ACCESS;
 }
 
@@ -781,6 +799,8 @@ static const AstraVfsBackendOps events_ops = {
     events_close,
     events_read,
     events_write,
+    events_sync,
+    events_truncate,
     events_stat,
     events_readdir,
     events_mkdir,

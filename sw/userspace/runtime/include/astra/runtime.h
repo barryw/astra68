@@ -167,6 +167,11 @@ uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
 uint32_t astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
                             uint32_t *handles, uint32_t handle_capacity,
                             uint32_t *size, uint32_t *handle_count);
+/* As above, also returning the kernel-authenticated sender process id. */
+uint32_t astra_port_receive_from(
+    uint32_t handle, void *message, uint32_t capacity, uint32_t *handles,
+    uint32_t handle_capacity, uint32_t *size, uint32_t *handle_count,
+    uint32_t *sender);
 
 /* Temporary per-boot event-level control over a dedicated capability. */
 uint32_t astra_event_control_set(uint32_t handle, uint32_t subsystem,

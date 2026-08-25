@@ -603,6 +603,7 @@ static int
 populate(void)
 {
     char path[64];
+    ext4_file exclusive;
     unsigned index;
     int rc;
 
@@ -634,6 +635,20 @@ populate(void)
     if (write_file(MOUNT_POINT "hello.txt", 1u, 37u)) {
         return 1;
     }
+    rc = ext4_fopen2(&exclusive, MOUNT_POINT "exclusive.tmp",
+                     O_WRONLY | O_CREAT | O_EXCL);
+    if (rc != EOK)
+        return fail("ext4_fopen2(exclusive create)", rc);
+    rc = ext4_fclose(&exclusive);
+    if (rc != EOK)
+        return fail("ext4_fclose(exclusive)", rc);
+    rc = ext4_fopen2(&exclusive, MOUNT_POINT "exclusive.tmp",
+                     O_WRONLY | O_CREAT | O_EXCL);
+    if (rc != EEXIST)
+        return fail("ext4_fopen2(exclusive existing)", rc);
+    rc = ext4_fremove(MOUNT_POINT "exclusive.tmp");
+    if (rc != EOK)
+        return fail("ext4_fremove(exclusive)", rc);
     if (write_file(MOUNT_POINT "dir/nested/big.bin", 2u, BIG_FILE_BYTES)) {
         return 1;
     }

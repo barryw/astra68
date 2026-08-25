@@ -23,13 +23,14 @@
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_service_core.h>
 
-#define MOCK_PORT_MAX 64u
+#define MOCK_PORT_MAX (ASTRA_VFS_SESSION_MAX * 4u + 32u)
 #define MOCK_QUEUE_MAX 4u
 
 typedef struct MockPort {
     uint8_t  message[MOCK_QUEUE_MAX][ASTRA_MESSAGE_SIZE_MAX];
     uint32_t size[MOCK_QUEUE_MAX];
     uint32_t attached[MOCK_QUEUE_MAX];
+    uint32_t sender[MOCK_QUEUE_MAX];
     uint32_t count;
     uint32_t capacity;
     int      open;
@@ -49,6 +50,7 @@ static int refuse_send;
 static uint32_t dead_reply_handle;
 static uint32_t mock_empty_receives;
 static uint32_t mock_area_maps;
+static uint32_t mock_sender;
 static uint8_t backend_written[64];
 static uint64_t backend_write_offset;
 static uint32_t backend_write_length;
@@ -64,6 +66,7 @@ mock_reset(void)
     mock_activity = 0u;
     mock_empty_receives = 0u;
     mock_area_maps = 0u;
+    mock_sender = 0x10000001u;
     memset(backend_written, 0, sizeof(backend_written));
     backend_write_offset = 0u;
     backend_write_length = 0u;
@@ -107,6 +110,14 @@ astra_rt_area_create(uint32_t byte_size, uint32_t rights, uint32_t *handle)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     *handle = mock_open(1u);
     return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
+astra_rt_area_create_flagged(uint32_t byte_size, uint32_t rights,
+                             uint32_t flags, uint32_t *handle)
+{
+    (void)flags;
+    return astra_rt_area_create(byte_size, rights, handle);
 }
 
 uint32_t
@@ -166,6 +177,7 @@ astra_port_send(uint32_t handle, const void *message, uint32_t size,
     memcpy(port->message[port->count], message, size);
     port->size[port->count] = size;
     port->attached[port->count] = handle_count == 1u ? handles[0] : 0u;
+    port->sender[port->count] = mock_sender;
     if (handle_count == 1u) {
         ports[handles[0]].given_away = 1;
     }
@@ -174,9 +186,10 @@ astra_port_send(uint32_t handle, const void *message, uint32_t size,
 }
 
 uint32_t
-astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
-                   uint32_t *handles, uint32_t handle_capacity, uint32_t *size,
-                   uint32_t *handle_count)
+astra_port_receive_from(uint32_t handle, void *message, uint32_t capacity,
+                        uint32_t *handles, uint32_t handle_capacity,
+                        uint32_t *size, uint32_t *handle_count,
+                        uint32_t *sender)
 {
     MockPort *port;
     uint32_t moved;
@@ -193,6 +206,8 @@ astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
         ++mock_empty_receives;
         return ASTRA_SYSCALL_WOULD_BLOCK;
     }
+    if (sender != NULL)
+        *sender = port->sender[0];
     moved = port->size[0];
     if (moved > capacity) {
         *size = moved;
@@ -212,9 +227,19 @@ astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
                port->size[index]);
         port->size[index - 1u] = port->size[index];
         port->attached[index - 1u] = port->attached[index];
+        port->sender[index - 1u] = port->sender[index];
     }
     --port->count;
     return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
+astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
+                   uint32_t *handles, uint32_t handle_capacity, uint32_t *size,
+                   uint32_t *handle_count)
+{
+    return astra_port_receive_from(handle, message, capacity, handles,
+                                   handle_capacity, size, handle_count, NULL);
 }
 
 uint32_t
@@ -335,16 +360,34 @@ backend_read(void *context, uintptr_t node, uint64_t offset, void *buffer,
  */
 static uint32_t
 backend_write(void *context, uintptr_t node, uint64_t offset,
-              const void *buffer, uint32_t length, uint32_t *moved)
+              uint32_t flags, const void *buffer, uint32_t length,
+              uint32_t *moved, uint64_t *position)
 {
     (void)context;
     (void)node;
+    (void)flags;
     if (length > sizeof(backend_written))
         return ASTRA_VFS_ERR_LIMIT;
     memcpy(backend_written, buffer, length);
     backend_write_offset = offset;
     backend_write_length = length;
     *moved = length;
+    *position = offset + length;
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t backend_sync(void *context, uintptr_t node)
+{
+    (void)context;
+    (void)node;
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t backend_truncate(void *context, uintptr_t node, uint64_t size)
+{
+    (void)context;
+    (void)node;
+    (void)size;
     return ASTRA_VFS_OK;
 }
 
@@ -410,6 +453,8 @@ static const AstraVfsBackendOps backend_ops = {
     .close = backend_close,
     .read = backend_read,
     .write = backend_write,
+    .sync = backend_sync,
+    .truncate = backend_truncate,
     .stat = backend_stat,
     .readdir = backend_readdir,
     .mkdir = backend_mkdir,
@@ -418,11 +463,14 @@ static const AstraVfsBackendOps backend_ops = {
 };
 
 static AstraVfsService service;
+static AstraVfsOpenFile service_files[128];
 
 static void
 service_start(void)
 {
-    assert(astra_vfs_service_init(&service, &backend_ops, NULL));
+    assert(astra_vfs_service_init(
+        &service, &backend_ops, NULL, service_files,
+        (uint32_t)(sizeof(service_files) / sizeof(service_files[0]))));
 }
 
 /*
@@ -799,6 +847,7 @@ test_a_dead_client_is_reaped_when_the_session_table_is_full(void)
     for (uint32_t index = 0u; index < ASTRA_VFS_SESSION_MAX; ++index) {
         uint32_t handles[1];
 
+        mock_sender = index + 1u;
         replies[index] = mock_open(1u);
         handles[0] = replies[index];
         assert(astra_port_send(service_handle, &hello, sizeof(hello),
@@ -807,6 +856,7 @@ test_a_dead_client_is_reaped_when_the_session_table_is_full(void)
     }
     assert(service.open_sessions == ASTRA_VFS_SESSION_MAX);
     dead_reply_handle = replies[0];
+    mock_sender = ASTRA_VFS_SESSION_MAX + 1u;
     replies[ASTRA_VFS_SESSION_MAX] = mock_open(1u);
     {
         uint32_t handles[1] = {replies[ASTRA_VFS_SESSION_MAX]};

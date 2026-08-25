@@ -32,6 +32,46 @@
 static uint32_t reply_receive;
 static uint32_t reply_send;
 
+int
+astra_vfs_port_quota_storage(uint32_t element_size, void **storage,
+                             uint32_t *capacity)
+{
+    uint32_t handle = 0u;
+    uint32_t span = 0u;
+    uint32_t count;
+    void *address = NULL;
+
+    if (element_size == 0u || storage == NULL || capacity == NULL)
+        return 0;
+    *storage = NULL;
+    *capacity = 0u;
+    if (astra_rt_area_create_flagged(
+            ASTRA_AREA_SIZE_MAX,
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP,
+            ASTRA_AREA_CREATE_RESERVED, &handle) != ASTRA_SYSCALL_OK)
+        return 0;
+    if (astra_rt_area_map(handle,
+                          ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+                          &address, &span) != ASTRA_SYSCALL_OK ||
+        address == NULL) {
+        (void)astra_close(handle);
+        return 0;
+    }
+    count = span / element_size;
+    if (count > ASTRA_VFS_FILE_HANDLE_MAX)
+        count = ASTRA_VFS_FILE_HANDLE_MAX;
+    if (count == 0u) {
+        (void)astra_rt_area_unmap(address);
+        (void)astra_close(handle);
+        return 0;
+    }
+    /* The service owns the mapping for its lifetime; process teardown closes
+     * the retained capability and mapping together. */
+    *storage = address;
+    *capacity = count;
+    return 1;
+}
+
 /*
  * How long a client waits for a reply before deciding there is nobody there.
  *
@@ -779,15 +819,16 @@ astra_vfs_port_service_pump(AstraVfsPortService *host, uint32_t budget)
         uint32_t handles[1] = {0u};
         uint32_t handle_count = 0u;
         uint32_t size = 0u;
+        uint32_t sender = 0u;
         uint32_t previous;
         uint32_t reply_handle;
         uint32_t operation;
         uint32_t wire_operation;
         int fused_hello;
         int sent;
-        uint32_t status = astra_port_receive(host->receive, &incoming,
-                                             sizeof(incoming), handles, 1u,
-                                             &size, &handle_count);
+        uint32_t status = astra_port_receive_from(
+            host->receive, &incoming, sizeof(incoming), handles, 1u,
+            &size, &handle_count, &sender);
 
         if (status != ASTRA_SYSCALL_OK) {
             /* WOULD_BLOCK is an empty port and the ordinary way out. */
@@ -821,6 +862,16 @@ astra_vfs_port_service_pump(AstraVfsPortService *host, uint32_t budget)
         int persistent_hello =
             wire_operation == ASTRA_VFS_OP_HELLO && !fused_hello &&
             incoming.request.version >= UINT16_C(3);
+        int session_owned = wire_operation == ASTRA_VFS_OP_HELLO ||
+            astra_vfs_service_session_owned(
+                host->service, incoming.request.session, sender);
+
+        if (!session_owned) {
+            ++host->refused;
+            if (handle_count != 0u)
+                (void)astra_close(handles[0]);
+            continue;
+        }
 
         if (wire_operation == ASTRA_VFS_OP_HELLO) {
             if (handle_count != 1u) {
@@ -865,8 +916,9 @@ astra_vfs_port_service_pump(AstraVfsPortService *host, uint32_t budget)
             AstraVfsRequest hello = incoming.request;
 
             hello.file = ASTRA_VFS_FILE_INVALID;
-            astra_vfs_service_dispatch(host->service, ASTRA_VFS_OP_HELLO,
-                                       &hello, &outgoing.reply);
+            astra_vfs_service_dispatch_from(
+                host->service, sender, ASTRA_VFS_OP_HELLO, &hello,
+                &outgoing.reply);
             if (outgoing.reply.status == ASTRA_VFS_OK) {
                 slot = reply_bind(host, outgoing.reply.session, reply_handle);
                 if (slot < 0) {
@@ -1027,9 +1079,9 @@ astra_vfs_port_service_pump(AstraVfsPortService *host, uint32_t budget)
                     outgoing.reply.status == ASTRA_VFS_OK ? total : 0u;
             }
         } else {
-            astra_vfs_service_dispatch(host->service,
-                                       operation,
-                                       &incoming.request, &outgoing.reply);
+            astra_vfs_service_dispatch_from(
+                host->service, sender, operation, &incoming.request,
+                &outgoing.reply);
         }
         /*
          * Restored before the reply goes out, so the next thing this thread

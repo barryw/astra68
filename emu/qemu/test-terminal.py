@@ -525,7 +525,7 @@ class Machine:
     def sequence(self):
         return self.said()[1]
 
-    def wait_for_text(self, text, deadline, after=0):
+    def wait_for_text(self, text, deadline, after=0, exact=False):
         """Waits until every needle has been printed since `after`.
 
         `after` is what keeps a command from being judged by an earlier one's
@@ -536,7 +536,8 @@ class Machine:
         end = time.monotonic() + deadline
         while True:
             lines, highest = self.said(after)
-            if all(any(needle in line for line in lines)
+            if all(any(line == needle if exact else needle in line
+                       for line in lines)
                    for needle in needles):
                 return lines, highest
             if time.monotonic() >= end:
@@ -650,7 +651,8 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                 started = time.monotonic()
                 machine.qmp.type_line(line)
                 said, _ = machine.wait_for_text(expected, command_deadline,
-                                                before)
+                                                before,
+                                                exact=line == "echo $?")
                 elapsed = time.monotonic() - started
                 if said is None:
                     print("FAIL: %r never answered with %r" % (line, expected))
@@ -686,7 +688,8 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
             machine.settle()
             before = machine.sequence()
             machine.qmp.type_line("echo $?")
-            if machine.wait_for_text("0", command_deadline, before)[0] is None:
+            if machine.wait_for_text("0", command_deadline, before,
+                                     exact=True)[0] is None:
                 print("FAIL: the truncating redirect never finished")
                 return 1
             machine.settle()

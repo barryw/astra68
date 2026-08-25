@@ -9,7 +9,7 @@
 #include <astra/vfs_union.h>
 
 #define ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR 1u
-#define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 1u
+#define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 2u
 #define ASTRA_FILESYSTEM_DIRECTORY_BATCH_MAX 32u
 
 enum {
@@ -155,6 +155,10 @@ typedef struct AstraFilesystemLibraryV1 {
                             AstraVfsClient **, uint32_t *);
     uint32_t (*rename)(AstraFilesystem *, const char *, const char *);
     uint32_t (*client_rename)(AstraVfsClient *, const char *, const char *);
+    uint32_t (*sync)(AstraFile *);
+    uint32_t (*truncate)(AstraFile *, uint64_t);
+    uint32_t (*client_sync)(AstraVfsClient *, AstraVfsFile);
+    uint32_t (*client_truncate)(AstraVfsClient *, AstraVfsFile, uint64_t);
 } AstraFilesystemLibraryV1;
 
 #endif

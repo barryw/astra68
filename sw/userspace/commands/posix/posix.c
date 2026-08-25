@@ -6,9 +6,9 @@
  * `hello` proved picolibc's stdio reaches a stream capability. This proves the
  * other half: that `open`, `read`, `write`, `lseek`, `stat`, `fstat`,
  * `opendir`, `readdir`, `mkdir`, `unlink`, `chdir` and `getcwd` do what a
- * ported program will assume they do, over a machine that has none of the
- * things they are defined in terms of -- no root, no current directory, and a
- * descriptor that is an index into a table this process owns.
+ * ported program will assume they do. The slash root is the process's granted
+ * assign table, the current directory is a slash path through that table, and
+ * a descriptor is an index into a table this process owns.
  *
  * The verdict is the exit status, not the text. Text lands on a screen where
  * nothing reads it back; a status lands in the trace ring, so a boot with no
@@ -84,11 +84,23 @@ enum {
     FAIL_GETPRIORITY = 45,
     FAIL_NICE = 46,
     FAIL_SETPRIORITY = 47,
+    FAIL_CWD_SPELLING = 48,
+    FAIL_ROOT_STAT = 49,
+    FAIL_ROOT_OPEN = 50,
+    FAIL_ROOT_READ = 51,
+    FAIL_EXCLUSIVE_EXISTING = 52,
+    FAIL_EXCLUSIVE_CREATE = 53,
+    FAIL_FSYNC = 54,
+    FAIL_FTRUNCATE = 55,
+    FAIL_APPEND = 56,
+    FAIL_OPEN_BUDGET = 57,
 };
 
 #define DIRECTORY "posixcheck"
 #define NAME "notes.txt"
 #define RENAMED "renamed.txt"
+#define EXCLUSIVE "exclusive.tmp"
+#define DURABLE "durable.tmp"
 #define BODY "astra posix layer\n"
 /* Where the tail check seeks to, and what it must find from there. */
 #define TAIL_AT 6
@@ -116,13 +128,35 @@ astra_main(const AstraStartupInfo *startup)
     astra_posix_start(startup);
 
     /*
-     * Where a bare name resolves. `CWD:` when a shell launched this, because a
-     * shell says where it is standing; `WORK:` when whatever launched it did
-     * not. Either way it comes back in the machine's own terms, and what comes
-     * out of getcwd has to be something open() would accept.
+     * Where a bare name resolves. The first component is an assign granted by
+     * the launcher, viewed through the POSIX slash namespace.
      */
     if (getcwd(before, sizeof(before)) == NULL || before[0] == '\0')
         return complain(FAIL_GETCWD, "getcwd");
+    if (before[0] != '/')
+        return FAIL_CWD_SPELLING;
+    if (stat("/", &about) != 0 || !S_ISDIR(about.st_mode))
+        return complain(FAIL_ROOT_STAT, "stat root");
+    directory = opendir("/");
+    if (directory == NULL)
+        return complain(FAIL_ROOT_OPEN, "opendir root");
+    if (before[1] != '\0') {
+        size_t name_length = 0u;
+
+        while (before[name_length + 1u] != '\0' &&
+               before[name_length + 1u] != '/')
+            ++name_length;
+        while ((entry = readdir(directory)) != NULL)
+            if (strlen(entry->d_name) == name_length &&
+                strncmp(entry->d_name, before + 1, name_length) == 0)
+                found = 1;
+        if (!found) {
+            (void)closedir(directory);
+            return FAIL_ROOT_READ;
+        }
+    }
+    (void)closedir(directory);
+    found = 0;
 
     if (mkdir(DIRECTORY, 0755) != 0 && errno != EEXIST)
         return complain(FAIL_MKDIR, "mkdir");
@@ -134,6 +168,39 @@ astra_main(const AstraStartupInfo *startup)
         return complain(FAIL_WRITE, "write");
     if (close(fd) != 0)
         return complain(FAIL_CLOSE, "close");
+
+    errno = 0;
+    fd = open(DIRECTORY "/" NAME, O_WRONLY | O_CREAT | O_EXCL, 0644);
+    if (fd >= 0 || errno != EEXIST) {
+        if (fd >= 0)
+            (void)close(fd);
+        return FAIL_EXCLUSIVE_EXISTING;
+    }
+    fd = open(DIRECTORY "/" EXCLUSIVE,
+              O_WRONLY | O_CREAT | O_EXCL, 0644);
+    if (fd < 0)
+        return complain(FAIL_EXCLUSIVE_CREATE, "exclusive create");
+    if (close(fd) != 0 || unlink(DIRECTORY "/" EXCLUSIVE) != 0)
+        return complain(FAIL_EXCLUSIVE_CREATE, "exclusive cleanup");
+
+    fd = open(DIRECTORY "/" DURABLE, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0 || write(fd, "abc", 3u) != 3 || fsync(fd) != 0)
+        return complain(FAIL_FSYNC, "fsync");
+    if (ftruncate(fd, 1) != 0 || lseek(fd, 0, SEEK_CUR) != 3 ||
+        ftruncate(fd, 5) != 0 || lseek(fd, 0, SEEK_CUR) != 3 || close(fd) != 0 ||
+        stat(DIRECTORY "/" DURABLE, &about) != 0 || about.st_size != 5)
+        return complain(FAIL_FTRUNCATE, "ftruncate");
+    fd = open(DIRECTORY "/" DURABLE, O_RDONLY);
+    (void)memset(buffer, 0xff, sizeof(buffer));
+    if (fd < 0 || read(fd, buffer, 5u) != 5 || close(fd) != 0 ||
+        buffer[0] != 'a' || buffer[1] != 0 || buffer[2] != 0 ||
+        buffer[3] != 0 || buffer[4] != 0)
+        return complain(FAIL_FTRUNCATE, "ftruncate extension");
+    fd = open(DIRECTORY "/" DURABLE, O_WRONLY | O_APPEND);
+    if (fd < 0 || lseek(fd, 0, SEEK_SET) != 0 || write(fd, "z", 1u) != 1 ||
+        close(fd) != 0 || stat(DIRECTORY "/" DURABLE, &about) != 0 ||
+        about.st_size != 6 || unlink(DIRECTORY "/" DURABLE) != 0)
+        return complain(FAIL_APPEND, "append");
 
     fd = open(DIRECTORY "/" NAME, O_RDONLY);
     if (fd < 0)
@@ -167,6 +234,25 @@ astra_main(const AstraStartupInfo *startup)
     if (about.st_size != (off_t)(sizeof(BODY) - 1u) ||
         !S_ISREG(about.st_mode))
         return FAIL_STAT_SIZE;
+
+    /* Cross every retired 8/16-entry table through the complete target path. */
+    {
+        int open_files[64];
+
+        for (uint32_t index = 0u; index < 64u; ++index) {
+            open_files[index] = open(DIRECTORY "/" NAME, O_RDONLY);
+            if (open_files[index] < 0) {
+                while (index != 0u) {
+                    --index;
+                    (void)close(open_files[index]);
+                }
+                return complain(FAIL_OPEN_BUDGET, "simultaneous opens");
+            }
+        }
+        for (uint32_t index = 0u; index < 64u; ++index)
+            if (close(open_files[index]) != 0)
+                return complain(FAIL_OPEN_BUDGET, "simultaneous closes");
+    }
 
     directory = opendir(DIRECTORY);
     if (directory == NULL)

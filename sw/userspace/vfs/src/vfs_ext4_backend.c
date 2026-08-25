@@ -102,34 +102,6 @@ build_path(const AstraVfsExt4Backend *backend, const char *path, char *out,
     return 1;
 }
 
-/*
- * lwext4's mode strings, chosen from the protocol's open flags.
- *
- * The protocol has four states and lwext4 has three modes, so one of ours has
- * no single mode: **create without truncate** -- what `>>` opens with, and what
- * anything that adds to a file opens with. `"wb"` creates and truncates, and
- * `"r+b"` keeps but refuses an absent name, so that state is two attempts
- * rather than one mode, which is why this returns a first choice and a
- * fallback rather than a string.
- *
- * It used to return `"wb"` for it and say so in a comment. Every append on the
- * machine silently truncated, and the file that came back was the right length
- * for the last write and the wrong length for the file -- which reads like a
- * short write and not like an open flag.
- */
-static const char *
-mode_of(uint32_t flags)
-{
-    if ((flags & ASTRA_VFS_OPEN_WRITE) == 0u) {
-        return "rb";
-    }
-    if ((flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u) {
-        return "wb";
-    }
-    /* Keeps what is there; the caller falls back to "wb" when it is absent. */
-    return "r+b";
-}
-
 static AstraVfsExt4Backend *
 backend_of(void *context)
 {
@@ -202,6 +174,7 @@ ext4_backend_open(void *context, const char *path, uint32_t flags,
     AstraVfsExt4Backend *backend = backend_of(context);
     char full[ASTRA_VFS_EXT4_PATH_MAX];
     uint32_t index;
+    int native_flags;
     int rc;
 
     if (!build_path(backend, path, full, sizeof(full))) {
@@ -231,26 +204,28 @@ ext4_backend_open(void *context, const char *path, uint32_t flags,
         return ASTRA_VFS_OK;
     }
 
-    for (index = 0u; index < ASTRA_VFS_EXT4_FILE_MAX; ++index) {
+    for (index = 0u; index < backend->file_high_water; ++index) {
         if (!backend->open_files[index].used) {
             break;
         }
     }
-    if (index == ASTRA_VFS_EXT4_FILE_MAX) {
-        return ASTRA_VFS_ERR_LIMIT;
+    if (index == backend->file_high_water) {
+        if (backend->file_high_water == backend->file_capacity)
+            return ASTRA_VFS_ERR_LIMIT;
+        ++backend->file_high_water;
+        backend->open_files[index].used = 0;
     }
-    rc = ext4_fopen(&backend->open_files[index].file, full, mode_of(flags));
-    /*
-     * Create without truncate, on a name that is not there yet. Only that
-     * one refusal: a mode that failed for any other reason has said something
-     * about the file, and retrying with the mode that truncates would answer
-     * it by destroying what it was refusing to open.
-     */
-    if (rc == ENOENT && (flags & ASTRA_VFS_OPEN_CREATE) != 0u &&
-        (flags & ASTRA_VFS_OPEN_TRUNCATE) == 0u &&
-        (flags & ASTRA_VFS_OPEN_WRITE) != 0u) {
-        rc = ext4_fopen(&backend->open_files[index].file, full, "wb");
-    }
+    native_flags = (flags & ASTRA_VFS_OPEN_WRITE) == 0u ? O_RDONLY :
+                   (flags & ASTRA_VFS_OPEN_READ) != 0u ? O_RDWR : O_WRONLY;
+    if ((flags & ASTRA_VFS_OPEN_CREATE) != 0u)
+        native_flags |= O_CREAT;
+    if ((flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u)
+        native_flags |= O_TRUNC;
+    if ((flags & ASTRA_VFS_OPEN_EXCLUSIVE) != 0u)
+        native_flags |= O_EXCL;
+    if ((flags & ASTRA_VFS_OPEN_APPEND) != 0u)
+        native_flags |= O_APPEND;
+    rc = ext4_fopen2(&backend->open_files[index].file, full, native_flags);
     if (rc != EOK) {
         return status_of(rc);
     }
@@ -276,7 +251,8 @@ file_of(AstraVfsExt4Backend *backend, uintptr_t node)
         return NULL; /* a directory handle holds no lwext4 file */
     }
     index = (uint32_t)node - 1u;
-    if (index >= ASTRA_VFS_EXT4_FILE_MAX || !backend->open_files[index].used) {
+    if (index >= backend->file_high_water ||
+        !backend->open_files[index].used) {
         return NULL;
     }
     return &backend->open_files[index].file;
@@ -323,7 +299,8 @@ ext4_backend_read(void *context, uintptr_t node, uint64_t offset,
 
 static uint32_t
 ext4_backend_write(void *context, uintptr_t node, uint64_t offset,
-                   const void *buffer, uint32_t length, uint32_t *moved)
+                   uint32_t flags, const void *buffer, uint32_t length,
+                   uint32_t *moved, uint64_t *position)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
     ext4_file *file = file_of(backend, node);
@@ -331,12 +308,14 @@ ext4_backend_write(void *context, uintptr_t node, uint64_t offset,
     int rc;
 
     *moved = 0u;
+    *position = offset;
     if (file == NULL) {
         return ASTRA_VFS_ERR_BAD_HANDLE;
     }
-    rc = ext4_fseek(file, (int64_t)offset, SEEK_SET);
-    if (rc != EOK) {
-        return status_of(rc);
+    if ((flags & ASTRA_VFS_OPEN_APPEND) == 0u) {
+        rc = ext4_fseek(file, (int64_t)offset, SEEK_SET);
+        if (rc != EOK)
+            return status_of(rc);
     }
     rc = ext4_fwrite(file, buffer, length, &count);
     if (rc != EOK) {
@@ -346,9 +325,50 @@ ext4_backend_write(void *context, uintptr_t node, uint64_t offset,
      * A short write with EOK used to be how lwext4 reported a failure it had
      * discarded; see third_party/lwext4 patch 0004. The status is honest now,
      * and reporting the true count keeps it honest for the caller too.
-     */
+    */
     *moved = (uint32_t)count;
+    *position = ext4_ftell(file);
     return ASTRA_VFS_OK;
+}
+
+static uint32_t
+ext4_backend_sync(void *context, uintptr_t node)
+{
+    AstraVfsExt4Backend *backend = backend_of(context);
+
+    if (file_of(backend, node) == NULL)
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    return status_of(ext4_cache_flush(backend->mount_point));
+}
+
+static uint32_t
+ext4_backend_truncate(void *context, uintptr_t node, uint64_t size)
+{
+    AstraVfsExt4Backend *backend = backend_of(context);
+    ext4_file *file = file_of(backend, node);
+    uint64_t original;
+    uint8_t zeros[64] = {0};
+    int rc;
+
+    if (file == NULL)
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    original = ext4_ftell(file);
+    rc = ext4_ftruncate(file, size);
+    if (rc == EOK && ext4_fsize(file) < size) {
+        rc = ext4_fseek(file, 0, SEEK_END);
+        while (rc == EOK && ext4_fsize(file) < size) {
+            uint64_t remaining = size - ext4_fsize(file);
+            size_t count = 0u;
+            size_t part = remaining < sizeof(zeros) ? (size_t)remaining :
+                                                        sizeof(zeros);
+
+            rc = ext4_fwrite(file, zeros, part, &count);
+            if (rc == EOK && count != part)
+                rc = EIO;
+        }
+    }
+    file->fpos = original;
+    return status_of(rc);
 }
 
 static uint32_t
@@ -518,6 +538,8 @@ static const AstraVfsBackendOps ext4_ops = {
     ext4_backend_close,
     ext4_backend_read,
     ext4_backend_write,
+    ext4_backend_sync,
+    ext4_backend_truncate,
     ext4_backend_stat,
     ext4_backend_readdir,
     ext4_backend_mkdir,
@@ -532,11 +554,13 @@ astra_vfs_ext4_ops(void)
 }
 
 int
-astra_vfs_ext4_init(AstraVfsExt4Backend *backend, const char *mount_point)
+astra_vfs_ext4_init(AstraVfsExt4Backend *backend, const char *mount_point,
+                    AstraVfsExt4File *files, uint32_t file_capacity)
 {
     uint32_t index = 0u;
 
-    if (backend == NULL || mount_point == NULL) {
+    if (backend == NULL || mount_point == NULL || files == NULL ||
+        file_capacity == 0u || file_capacity > ASTRA_VFS_FILE_HANDLE_MAX) {
         return 0;
     }
     while (mount_point[index] != '\0') {
@@ -547,10 +571,10 @@ astra_vfs_ext4_init(AstraVfsExt4Backend *backend, const char *mount_point)
         ++index;
     }
     backend->mount_point[index] = '\0';
+    backend->open_files = files;
+    backend->file_capacity = file_capacity;
+    backend->file_high_water = 0u;
     backend->scan_open = 0;
     backend->scan_next = 0u;
-    for (index = 0u; index < ASTRA_VFS_EXT4_FILE_MAX; ++index) {
-        backend->open_files[index].used = 0;
-    }
     return 1;
 }

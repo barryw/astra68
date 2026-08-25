@@ -22,22 +22,17 @@
 #include <astra/syscall.h>
 
 #include <errno.h>
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
 
 enum {
     POSIX_STDIN = 0,
     POSIX_STDOUT = 1,
-    POSIX_STDERR = 2,
-    /*
-     * Sixteen. A Unix program expects to open a few files at once; this is not
-     * a resource the kernel is spending, only the table, and an entry is eight
-     * bytes. The real ceiling is further down in the VFS client, and this
-     * being generous means a program meets the honest limit rather than this
-     * one.
-     */
-    POSIX_DESCRIPTOR_MAX = 16,
+    POSIX_STDERR = 2
 };
 
 typedef enum PosixDescriptorKind {
@@ -57,7 +52,9 @@ typedef struct PosixDescriptor {
  * opened anything there. It is not an error to lack one -- `status` is granted
  * none -- so the failure surfaces at the write rather than at startup.
  */
-static PosixDescriptor descriptors[POSIX_DESCRIPTOR_MAX];
+static PosixDescriptor initial_descriptors[3];
+static PosixDescriptor *descriptors = initial_descriptors;
+static uint32_t descriptor_capacity = 3u;
 static const AstraPosixFileOps *file_ops;
 static const AstraStartupInfo *startup_block;
 static char *empty_environment[] = { NULL };
@@ -82,10 +79,37 @@ static const PosixBreakFn posix_keep_heap __attribute__((used)) = sbrk;
 static PosixDescriptor *
 entry(int fd)
 {
-    if (fd < 0 || fd >= POSIX_DESCRIPTOR_MAX ||
+    if (fd < 0 || (uint32_t)fd >= descriptor_capacity ||
         descriptors[fd].kind == POSIX_DESCRIPTOR_FREE)
         return NULL;
     return &descriptors[fd];
+}
+
+static int
+grow_descriptors(uint32_t wanted)
+{
+    PosixDescriptor *grown;
+    uint32_t capacity = descriptor_capacity;
+
+    while (capacity < wanted) {
+        if (capacity > (uint32_t)INT_MAX / 2u) {
+            errno = EMFILE;
+            return 0;
+        }
+        capacity *= 2u;
+    }
+    grown = calloc(capacity, sizeof(*grown));
+    if (grown == NULL) {
+        errno = ENOMEM;
+        return 0;
+    }
+    (void)memcpy(grown, descriptors,
+                 (size_t)descriptor_capacity * sizeof(*grown));
+    if (descriptors != initial_descriptors)
+        free(descriptors);
+    descriptors = grown;
+    descriptor_capacity = capacity;
+    return 1;
 }
 
 void
@@ -104,15 +128,22 @@ int
 astra_posix_descriptor_file(uint32_t slot)
 {
     /* Lowest free, because POSIX promises it and a redirect depends on it. */
-    for (int fd = 0; fd < POSIX_DESCRIPTOR_MAX; ++fd) {
+    for (uint32_t fd = 0u; fd < descriptor_capacity; ++fd) {
         if (descriptors[fd].kind != POSIX_DESCRIPTOR_FREE)
             continue;
         descriptors[fd].kind = POSIX_DESCRIPTOR_FILE;
         descriptors[fd].value = slot;
-        return fd;
+        return (int)fd;
     }
-    errno = EMFILE;
-    return -1;
+    {
+        uint32_t fd = descriptor_capacity;
+
+        if (!grow_descriptors(fd + 1u))
+            return -1;
+        descriptors[fd].kind = POSIX_DESCRIPTOR_FILE;
+        descriptors[fd].value = slot;
+        return (int)fd;
+    }
 }
 
 int
@@ -139,10 +170,11 @@ astra_posix_start(const AstraStartupInfo *startup)
 {
     const AstraStartupCapability *capabilities;
 
-    for (uint32_t index = 0u; index < POSIX_DESCRIPTOR_MAX; ++index) {
-        descriptors[index].kind = POSIX_DESCRIPTOR_FREE;
-        descriptors[index].value = 0u;
-    }
+    if (descriptors != initial_descriptors)
+        free(descriptors);
+    descriptors = initial_descriptors;
+    descriptor_capacity = 3u;
+    (void)memset(descriptors, 0, sizeof(initial_descriptors));
     startup_block = startup;
     environ = empty_environment;
     if (startup != NULL && startup->environment_count != 0u &&

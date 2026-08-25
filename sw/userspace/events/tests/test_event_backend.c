@@ -358,8 +358,12 @@ static void test_every_write_verb_is_refused(void)
            ASTRA_VFS_ERR_ACCESS);
     assert(ops->open(&backend, "/boot/current/all", ASTRA_VFS_OPEN_READ, &node,
                      &info) == ASTRA_VFS_OK);
-    assert(ops->write(&backend, node, 0u, "x", 1u, &moved) ==
-           ASTRA_VFS_ERR_ACCESS);
+    {
+        uint64_t position = 0u;
+
+        assert(ops->write(&backend, node, 0u, 0u, "x", 1u, &moved,
+                          &position) == ASTRA_VFS_ERR_ACCESS);
+    }
     assert(moved == 0u);
     assert(ops->close(&backend, node) == ASTRA_VFS_OK);
 }

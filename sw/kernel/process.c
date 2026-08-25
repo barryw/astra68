@@ -875,6 +875,8 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
     default:
         return KERNEL_PROCESS_CORRUPT;
     }
+    if (!kernel_memory_unprotect_owner(process->owner))
+        return KERNEL_PROCESS_CORRUPT;
     scheduler_stats.forced_frame_releases += released_frames;
     if (kernel_thread_release_process(
             (uint16_t)(process - processes)) != KERNEL_THREAD_OK)
@@ -2272,6 +2274,8 @@ static KernelProcessStatus create_process(const void *image,
     kernel_handle_table_init(&process->handles);
     if (!kernel_handle_table_set_owner(&process->handles, process->owner))
         goto failed;
+    if (!kernel_memory_protect_owner(process->owner))
+        goto failed;
 
     vm_status = kernel_vm_create_address_space(process->owner,
                                                &process->address_space);
@@ -2383,6 +2387,7 @@ failed:
     if (process->address_space.initialized != 0u)
         (void)kernel_vm_destroy_address_space(&process->address_space);
     (void)kernel_memory_release_owner(process->owner, NULL);
+    (void)kernel_memory_unprotect_owner(process->owner);
     process->process_state = KERNEL_PROCESS_DEAD;
     maybe_release_process_record(process);
     return result;
@@ -3420,7 +3425,12 @@ KernelProcessStatus kernel_process_launch(
     process->owner = process->id;
     process->started_cycles = scheduler_cycles();
     process->default_priority = KERNEL_THREAD_PRIORITY_NORMAL;
-    process->priority_ceiling = KERNEL_THREAD_PRIORITY_USER_MAX;
+    process->priority_ceiling =
+        source_table == NULL ||
+                (arguments != NULL &&
+                 (arguments->flags & ASTRA_LAUNCH_FLAG_ESSENTIAL) != 0u) ?
+            KERNEL_THREAD_PRIORITY_USER_MAX :
+            KERNEL_THREAD_PRIORITY_NORMAL;
 
     /* The executable span is the segment the validated entry point lands in. */
     for (index = 0u; index < plan.segment_count; ++index) {
@@ -3442,6 +3452,9 @@ KernelProcessStatus kernel_process_launch(
 
     kernel_handle_table_init(&process->handles);
     if (!kernel_handle_table_set_owner(&process->handles, process->owner))
+        goto failed;
+    if (process->priority_ceiling == KERNEL_THREAD_PRIORITY_USER_MAX &&
+        !kernel_memory_protect_owner(process->owner))
         goto failed;
 
     vm_status = kernel_vm_create_address_space(process->owner,
@@ -3517,6 +3530,7 @@ failed:
     if (process->address_space.initialized != 0u)
         (void)kernel_vm_destroy_address_space(&process->address_space);
     (void)kernel_memory_release_owner(process->owner, NULL);
+    (void)kernel_memory_unprotect_owner(process->owner);
     process->process_state = KERNEL_PROCESS_DEAD;
     maybe_release_process_record(process);
     return result;
@@ -4828,6 +4842,8 @@ static KernelProcessStatus port_syscall(KernelProcess *current,
         uint32_t woken = 0u;
         int copy_status;
 
+        thread->context.data[3] = 0u;
+
         if (message_capacity > ASTRA_MESSAGE_SIZE_MAX ||
             handle_capacity > ASTRA_MESSAGE_HANDLES_MAX ||
             (handle_capacity != 0u &&
@@ -4848,6 +4864,7 @@ static KernelProcessStatus port_syscall(KernelProcess *current,
                 return KERNEL_PROCESS_CORRUPT;
             return KERNEL_PROCESS_OK;
         }
+        thread->context.data[3] = receipt.sender;
         copy_status = kernel_copy_to_user(
             user_message, receipt.message, receipt.message_size);
         if (copy_status == KERNEL_USER_COPY_OK &&
@@ -5312,11 +5329,16 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                 (arguments.environment_count != 0u) !=
                     (arguments.environment_address != 0u) ||
                 arguments.source > ASTRA_LAUNCH_SOURCE_DESKTOP ||
-                arguments.reserved != 0u ||
+                (arguments.flags & ~ASTRA_LAUNCH_FLAG_MASK) != 0u ||
                 (arguments.count == 0u &&
                  arguments.environment_count == 0u &&
                  arguments.source != ASTRA_LAUNCH_SOURCE_SYSTEM)) {
                 result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+                break;
+            }
+            if ((arguments.flags & ASTRA_LAUNCH_FLAG_ESSENTIAL) != 0u &&
+                current->id != initial_image_process_id) {
+                result = ASTRA_SYSCALL_ACCESS_DENIED;
                 break;
             }
             if (arguments.environment_count != 0u) {
@@ -5403,7 +5425,8 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
 
         launch_status = kernel_process_launch(
             NULL, image_size, image, &current->handles, requested, grant_count,
-            arguments.count != 0u || arguments.environment_count != 0u ?
+            arguments.count != 0u || arguments.environment_count != 0u ||
+                    arguments.flags != 0u ?
                 &arguments : NULL,
             arguments.environment_count != 0u ? launch_environment : NULL,
             &child_id);
@@ -6517,8 +6540,12 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         if (handle_status != KERNEL_HANDLE_OK || target == NULL)
             return KERNEL_PROCESS_CORRUPT;
         if (priority < KERNEL_THREAD_PRIORITY_USER_MIN ||
-            priority > target->priority_ceiling) {
+            priority > KERNEL_THREAD_PRIORITY_USER_MAX) {
             result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (priority > target->priority_ceiling) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
             break;
         }
         if (target->process_state != KERNEL_PROCESS_CREATED &&

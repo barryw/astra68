@@ -153,10 +153,27 @@ int astra_main(const AstraStartupInfo *startup)
         return ASTRA_STATUS_BAD_HANDLE;
 
     status = mount_volume(device->handle, irq->handle);
-    if (status == ASTRA_STATUS_OK &&
-        (!astra_vfs_ext4_init(&backend, MOUNT_POINT) ||
-         !astra_vfs_service_init(&service, astra_vfs_ext4_ops(), &backend)))
-        status = ASTRA_STATUS_IO;
+    if (status == ASTRA_STATUS_OK) {
+        void *service_storage = NULL;
+        void *backend_storage = NULL;
+        uint32_t service_capacity = 0u;
+        uint32_t backend_capacity = 0u;
+
+        if (!astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile),
+                                           &service_storage,
+                                           &service_capacity) ||
+            !astra_vfs_port_quota_storage(sizeof(AstraVfsExt4File),
+                                           &backend_storage,
+                                           &backend_capacity)) {
+            status = ASTRA_STATUS_LIMIT;
+        } else if (!astra_vfs_ext4_init(&backend, MOUNT_POINT,
+                                        backend_storage, backend_capacity) ||
+                   !astra_vfs_service_init(
+                       &service, astra_vfs_ext4_ops(), &backend,
+                       service_storage, service_capacity)) {
+            status = ASTRA_STATUS_IO;
+        }
+    }
     if (status == ASTRA_STATUS_OK &&
         (astra_rt_port_create(PORT_MESSAGES,
                            PORT_MESSAGES *

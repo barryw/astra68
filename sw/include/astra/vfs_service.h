@@ -20,14 +20,15 @@
  * pointers, no bitfields, and no compiler-native enums: the encoding is
  * big-endian MC68030 today and must not acquire a host dependency.
  *
- * Control records only. ASTRA_MESSAGE_INLINE_MAX is 256 bytes, so inline I/O
+ * Control records only. Inline I/O is deliberately smaller than the complete
+ * message payload; bulk data uses shared areas.
  * stays small. Version 3 adds bounded shared-area reads; version 4 adds
  * batched directory replies. Version 9 adds shared-area writes after event
  * persistence measured one service round trip per 72-byte stored record.
  */
 
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
-#define ASTRA_VFS_VERSION  UINT16_C(11)
+#define ASTRA_VFS_VERSION  UINT16_C(13)
 
 /*
  * The oldest version this build can still speak. A client asks for a minimum
@@ -48,6 +49,9 @@
  *
  * Version 9 writes from the session's bound transfer area. Version 10 packs a
  * directory batch into that area. Older peers retain bounded inline replies.
+ * Version 12 adds atomic exclusive create; clients must not emulate it with a
+ * separate stat because that loses the only guarantee the flag exists for.
+ * Version 13 adds append-at-write, file sync and open-file truncation.
  */
 #define ASTRA_VFS_VERSION_MIN UINT16_C(2)
 
@@ -118,7 +122,9 @@
 #define ASTRA_VFS_OP_READDIR_AREA UINT32_C(16)
 #define ASTRA_VFS_OP_RENAME_FROM UINT32_C(17)
 #define ASTRA_VFS_OP_RENAME_TO   UINT32_C(18)
-#define ASTRA_VFS_OP_MAX      ASTRA_VFS_OP_RENAME_TO
+#define ASTRA_VFS_OP_SYNC        UINT32_C(19)
+#define ASTRA_VFS_OP_TRUNCATE    UINT32_C(20)
+#define ASTRA_VFS_OP_MAX         ASTRA_VFS_OP_TRUNCATE
 
 /*
  * One shared-area transfer, and the unit the whole read path is sized around.
@@ -134,6 +140,8 @@
 #define ASTRA_VFS_OPEN_CREATE   (UINT32_C(1) << 2)
 #define ASTRA_VFS_OPEN_TRUNCATE (UINT32_C(1) << 3)
 #define ASTRA_VFS_OPEN_DIRECTORY (UINT32_C(1) << 4)
+#define ASTRA_VFS_OPEN_EXCLUSIVE (UINT32_C(1) << 5)
+#define ASTRA_VFS_OPEN_APPEND    (UINT32_C(1) << 6)
 
 /* Node kinds. */
 #define ASTRA_VFS_KIND_UNKNOWN   UINT16_C(0)
@@ -193,6 +201,8 @@ const char *astra_vfs_status_text(uint32_t status);
  */
 typedef uint32_t AstraVfsFile;
 #define ASTRA_VFS_FILE_INVALID UINT32_C(0)
+/* Low half of a generation-safe file handle is its one-based slot. */
+#define ASTRA_VFS_FILE_HANDLE_MAX UINT32_C(65535)
 
 typedef uint32_t AstraVfsSession;
 #define ASTRA_VFS_SESSION_INVALID UINT32_C(0)

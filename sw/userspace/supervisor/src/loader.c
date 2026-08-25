@@ -509,6 +509,8 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
                              uint32_t image_length,
                              uint32_t *process_id)
 {
+    AstraLaunchArguments essential_arguments = {0};
+    const AstraLaunchArguments *launch_arguments = arguments;
     AstraLaunchGrant grants[ASTRA_LAUNCH_GRANT_MAX];
     uint32_t grant_count = 0u;
     uint32_t receive = 0u;
@@ -519,6 +521,13 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
     uint32_t expected_handles = entry->serves[0] == '\0' ? 0u :
         (equal(entry->serves, "EVENTS") ? 2u : 1u);
     uint32_t status;
+
+    if (entry->resident != 0u) {
+        if (arguments != NULL)
+            essential_arguments = *arguments;
+        essential_arguments.flags |= ASTRA_LAUNCH_FLAG_ESSENTIAL;
+        launch_arguments = &essential_arguments;
+    }
 
     if (process_count == SUPERVISOR_PROCESS_MAX)
         return ASTRA_STATUS_LIMIT;
@@ -533,7 +542,7 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
 
     if (status == ASTRA_STATUS_OK) {
         uint32_t launch_status = astra_launch(
-            image_bytes, image_length, grants, grant_count, arguments,
+            image_bytes, image_length, grants, grant_count, launch_arguments,
             &child, &child_id);
 
         if (launch_status == ASTRA_SYSCALL_OK)
@@ -593,9 +602,15 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
  */
 static void proc_tree_start(void)
 {
+    void *file_storage = NULL;
+    uint32_t file_capacity = 0u;
+
     if (proc_send != 0u)
         return;
-    if (!astra_vfs_service_init(&proc_service, supervisor_proc_ops(), NULL))
+    if (!astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile),
+                                       &file_storage, &file_capacity) ||
+        !astra_vfs_service_init(&proc_service, supervisor_proc_ops(), NULL,
+                                file_storage, file_capacity))
         return;
     if (astra_rt_port_create(SUPERVISOR_PROC_PORT_MESSAGES,
                              (uint32_t)sizeof(AstraVfsRequestMessage),
@@ -688,7 +703,7 @@ static void pump_launch(const AstraStartupInfo *startup,
         request.arguments.count > ASTRA_LAUNCH_ARGUMENT_MAX ||
         request.arguments.length == 0u ||
         request.arguments.length > ASTRA_LAUNCH_ARGUMENT_BYTES ||
-        request.arguments.reserved != 0u ||
+        request.arguments.flags != 0u ||
         request.arguments.environment_count != 0u ||
         request.arguments.environment_length != 0u ||
         request.arguments.environment_address != 0u ||

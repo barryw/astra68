@@ -17,7 +17,6 @@
  * containment checkable rather than merely intended.
  */
 
-#define ASTRA_VFS_EXT4_FILE_MAX 16u
 #define ASTRA_VFS_EXT4_MOUNT_MAX 32u
 /* The protocol's path plus the mount point prefix, with room for a separator. */
 #define ASTRA_VFS_EXT4_PATH_MAX (ASTRA_VFS_PATH_MAX + ASTRA_VFS_EXT4_MOUNT_MAX)
@@ -29,7 +28,9 @@ typedef struct AstraVfsExt4File {
 
 typedef struct AstraVfsExt4Backend {
     char mount_point[ASTRA_VFS_EXT4_MOUNT_MAX];
-    AstraVfsExt4File open_files[ASTRA_VFS_EXT4_FILE_MAX];
+    AstraVfsExt4File *open_files;
+    uint32_t file_capacity;
+    uint32_t file_high_water;
     ext4_dir scan;
     char scan_path[ASTRA_VFS_EXT4_PATH_MAX];
     uint64_t scan_next;
@@ -39,7 +40,8 @@ typedef struct AstraVfsExt4Backend {
 /* Returns 0 when the mount point does not fit. The volume must already be
  * mounted at it; this layer never mounts, because mounting needs a device
  * lease and an arena that belong to the service holding them. */
-int astra_vfs_ext4_init(AstraVfsExt4Backend *backend, const char *mount_point);
+int astra_vfs_ext4_init(AstraVfsExt4Backend *backend, const char *mount_point,
+                        AstraVfsExt4File *files, uint32_t file_capacity);
 
 const AstraVfsBackendOps *astra_vfs_ext4_ops(void);
 

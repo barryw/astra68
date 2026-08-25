@@ -2,6 +2,8 @@
 #define ASTRA_KERNEL_MEMORY_H
 
 #include <astra/boot.h>
+#include <astra/process.h>
+#include <astra/syscall.h>
 
 #include "allocation.h"
 
@@ -32,6 +34,15 @@
 #define KERNEL_MAX_FRAME_OWNERS 64u
 #define KERNEL_OWNER_NONE 0u
 #define KERNEL_EMERGENCY_RESERVE_FRAMES 32u
+/*
+ * Ordinary owners may not consume the last equal process share of RAM, capped
+ * at one complete shared area. The reserve therefore scales with the machine
+ * instead of being another board-sized constant. Firmware-selected essential
+ * processes and their areas may use it; the kernel's separate emergency pool
+ * remains unavailable to every normal allocation.
+ */
+#define KERNEL_PROTECTED_RESERVE_FRAME_MAX \
+    (ASTRA_AREA_SIZE_MAX / KERNEL_PAGE_SIZE)
 /*
  * Frames set aside at boot that only DMA may take.
  *
@@ -113,6 +124,9 @@ typedef struct KernelMemoryStats {
     uint32_t emergency_available_frames;
     uint32_t emergency_acquisitions;
     uint32_t emergency_failures;
+    uint32_t protected_reserve_frames;
+    uint32_t protected_reserve_denials;
+    uint32_t protected_owners;
     uint32_t dma_zone_first;
     uint32_t dma_zone_frames;
 } KernelMemoryStats;
@@ -145,6 +159,9 @@ KernelMemoryStatus kernel_memory_alloc_pages_zeroed_tagged(
 KernelMemoryStatus kernel_memory_emergency_acquire(
     KernelAllocationSite site, KernelFrameState state, uint32_t owner,
     uint32_t *physical_base);
+bool kernel_memory_protect_owner(uint32_t owner);
+bool kernel_memory_unprotect_owner(uint32_t owner);
+bool kernel_memory_owner_protected(uint32_t owner);
 KernelMemoryStatus kernel_memory_retain(uint32_t physical_base,
                                         uint32_t frame_count,
                                         uint32_t owner);

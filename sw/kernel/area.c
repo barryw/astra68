@@ -355,6 +355,10 @@ static KernelAreaStatus close_area(KernelArea *area, uint32_t terminal_result)
     }
     pool_stats.committed_pages -= area->committed_pages;
     area->committed_pages = 0u;
+    if (!kernel_memory_unprotect_owner(area->frame_owner)) {
+        pool_corrupt = 1u;
+        return KERNEL_AREA_CORRUPT;
+    }
     area->frames_released = 1u;
     maybe_free(area);
     return pool_corrupt == 0u ? KERNEL_AREA_OK : KERNEL_AREA_CORRUPT;
@@ -450,6 +454,15 @@ KernelAreaStatus kernel_area_create(uint32_t creator, uint32_t byte_size,
         area->generation, AREA_GENERATION_MASK);
     area->creator = creator;
     area->frame_owner = make_frame_owner(area->generation, area->slot);
+    if (kernel_memory_owner_protected(creator) &&
+        !kernel_memory_protect_owner(area->frame_owner)) {
+        reset_area(area, area->slot);
+        if (kernel_object_cache_release(&area_cache, area) !=
+                KERNEL_OBJECT_CACHE_OK)
+            pool_corrupt = 1u;
+        ++pool_stats.allocation_failures;
+        return KERNEL_AREA_NO_SLOT;
+    }
     area->byte_size = page_count * KERNEL_PAGE_SIZE;
     area->virtual_base = KERNEL_VM_AREA_BASE +
                          (uint32_t)area->slot * KERNEL_VM_AREA_SLOT_SIZE;
@@ -466,6 +479,7 @@ KernelAreaStatus kernel_area_create(uint32_t creator, uint32_t byte_size,
         area->physical_pages[page] = AREA_PAGE_ABSENT;
 #if defined(KERNEL_AREA_HOST_TEST)
     if (consume_test_fault(KERNEL_AREA_TEST_FAULT_CREATE_AFTER_RESERVE)) {
+        (void)kernel_memory_unprotect_owner(area->frame_owner);
         reset_area(area, area->slot);
         if (kernel_object_cache_release(&area_cache, area) !=
             KERNEL_OBJECT_CACHE_OK)
@@ -479,6 +493,7 @@ KernelAreaStatus kernel_area_create(uint32_t creator, uint32_t byte_size,
                 KERNEL_ALLOCATION_SITE_AREA_PAGES, page_count,
                 KERNEL_FRAME_SHARED, area->frame_owner,
                 area->physical_pages) != KERNEL_MEMORY_OK) {
+            (void)kernel_memory_unprotect_owner(area->frame_owner);
             reset_area(area, area->slot);
             if (kernel_object_cache_release(&area_cache, area) !=
                 KERNEL_OBJECT_CACHE_OK)
@@ -500,6 +515,8 @@ KernelAreaStatus kernel_area_create(uint32_t creator, uint32_t byte_size,
                 cleanup_failed = true;
             area->physical_pages[page] = AREA_PAGE_ABSENT;
         }
+        if (!kernel_memory_unprotect_owner(area->frame_owner))
+            cleanup_failed = true;
         reset_area(area, area->slot);
         if (kernel_object_cache_release(&area_cache, area) !=
             KERNEL_OBJECT_CACHE_OK)

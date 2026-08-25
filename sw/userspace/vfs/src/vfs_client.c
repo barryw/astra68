@@ -140,6 +140,14 @@ astra_vfs_open(AstraVfsClient *client, const char *path, uint32_t flags,
     if (client == NULL || file == NULL) {
         return ASTRA_VFS_ERR_INVALID;
     }
+    if ((flags & ASTRA_VFS_OPEN_EXCLUSIVE) != 0u &&
+        client->version < UINT16_C(12)) {
+        return ASTRA_VFS_ERR_UNSUPPORTED;
+    }
+    if ((flags & ASTRA_VFS_OPEN_APPEND) != 0u &&
+        client->version < UINT16_C(13)) {
+        return ASTRA_VFS_ERR_UNSUPPORTED;
+    }
     *file = ASTRA_VFS_FILE_INVALID;
     begin(client);
     if (!set_path(&client->request, path)) {
@@ -206,17 +214,19 @@ astra_vfs_read(AstraVfsClient *client, AstraVfsFile file, uint64_t offset,
 }
 
 uint32_t
-astra_vfs_write(AstraVfsClient *client, AstraVfsFile file, uint64_t offset,
-                const void *buffer, uint32_t length, uint32_t *moved)
+astra_vfs_write_position(AstraVfsClient *client, AstraVfsFile file,
+                         uint64_t offset, const void *buffer, uint32_t length,
+                         uint32_t *moved, uint64_t *position)
 {
     const uint8_t *in = buffer;
     uint32_t status;
     uint32_t index;
 
-    if (client == NULL || buffer == NULL || moved == NULL) {
+    if (client == NULL || buffer == NULL || moved == NULL || position == NULL) {
         return ASTRA_VFS_ERR_INVALID;
     }
     *moved = 0u;
+    *position = offset;
     if (length > ASTRA_VFS_IO_MAX) {
         length = ASTRA_VFS_IO_MAX;
     }
@@ -235,7 +245,44 @@ astra_vfs_write(AstraVfsClient *client, AstraVfsFile file, uint64_t offset,
         return ASTRA_VFS_ERR_PROTOCOL;
     }
     *moved = client->reply.count;
+    *position = client->version >= UINT16_C(13) ? client->reply.node_size :
+                                                  offset + *moved;
     return ASTRA_VFS_OK;
+}
+
+uint32_t
+astra_vfs_write(AstraVfsClient *client, AstraVfsFile file, uint64_t offset,
+                const void *buffer, uint32_t length, uint32_t *moved)
+{
+    uint64_t position;
+
+    return astra_vfs_write_position(client, file, offset, buffer, length,
+                                    moved, &position);
+}
+
+uint32_t
+astra_vfs_sync(AstraVfsClient *client, AstraVfsFile file)
+{
+    if (client == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    if (client->version < UINT16_C(13))
+        return ASTRA_VFS_ERR_UNSUPPORTED;
+    begin(client);
+    client->request.file = file;
+    return exchange(client, ASTRA_VFS_OP_SYNC);
+}
+
+uint32_t
+astra_vfs_truncate(AstraVfsClient *client, AstraVfsFile file, uint64_t size)
+{
+    if (client == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    if (client->version < UINT16_C(13))
+        return ASTRA_VFS_ERR_UNSUPPORTED;
+    begin(client);
+    client->request.file = file;
+    client->request.offset = size;
+    return exchange(client, ASTRA_VFS_OP_TRUNCATE);
 }
 
 /*

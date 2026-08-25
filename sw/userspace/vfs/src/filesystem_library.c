@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <string.h>
 
-ASTRA_LIBRARY("filesystem.library", 1, 1, 0,
+ASTRA_LIBRARY("filesystem.library", 1, 2, 0,
               ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR,
               ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR,
               "Barry Walker", "Copyright 2026 Barry Walker");
@@ -65,7 +65,9 @@ static uint32_t filesystem_open(AstraFilesystem *filesystem, const char *path,
     const uint32_t known = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE |
                            ASTRA_VFS_OPEN_CREATE |
                            ASTRA_VFS_OPEN_TRUNCATE |
-                           ASTRA_VFS_OPEN_DIRECTORY;
+                           ASTRA_VFS_OPEN_DIRECTORY |
+                           ASTRA_VFS_OPEN_EXCLUSIVE |
+                           ASTRA_VFS_OPEN_APPEND;
     AstraVfsClient *client = NULL;
     AstraVfsFile opened = ASTRA_VFS_FILE_INVALID;
     uint64_t size = 0u;
@@ -77,6 +79,8 @@ static uint32_t filesystem_open(AstraFilesystem *filesystem, const char *path,
 
     if (!filesystem_valid(filesystem) || path == NULL || file == NULL ||
         (flags & ~known) != 0u ||
+        ((flags & ASTRA_VFS_OPEN_EXCLUSIVE) != 0u &&
+         (flags & ASTRA_VFS_OPEN_CREATE) == 0u) ||
         (flags & (ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE)) == 0u)
         return ASTRA_VFS_ERR_INVALID;
     *file = (AstraFile)ASTRA_FILE_INIT;
@@ -124,6 +128,26 @@ static uint32_t filesystem_close(AstraFile *file)
     return status;
 }
 
+static uint32_t filesystem_sync(AstraFile *file)
+{
+    return !file_valid(file) ? ASTRA_VFS_ERR_BAD_HANDLE :
+                               astra_vfs_sync(file->_private_client,
+                                              file->_private_file);
+}
+
+static uint32_t filesystem_truncate(AstraFile *file, uint64_t size)
+{
+    uint32_t status;
+
+    if (!file_valid(file))
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    status = astra_vfs_truncate(file->_private_client, file->_private_file,
+                                size);
+    if (status == ASTRA_VFS_OK)
+        file->_private_size = size;
+    return status;
+}
+
 static uint32_t filesystem_read_at(AstraFile *file, uint64_t offset,
                                    void *buffer, uint32_t length,
                                    uint32_t *moved)
@@ -161,37 +185,51 @@ static uint32_t filesystem_read_at(AstraFile *file, uint64_t offset,
     return status;
 }
 
-static uint32_t filesystem_write_at(AstraFile *file, uint64_t offset,
-                                    const void *buffer, uint32_t length,
-                                    uint32_t *moved)
+static uint32_t filesystem_write_from(AstraFile *file, uint64_t offset,
+                                      const void *buffer, uint32_t length,
+                                      uint32_t *moved, uint64_t *position)
 {
     const uint8_t *bytes = buffer;
     uint32_t total = 0u;
     uint32_t status = ASTRA_VFS_OK;
+    uint64_t last = offset;
 
     if (!file_valid(file) || buffer == NULL || moved == NULL ||
+        position == NULL ||
         (file->_private_flags & ASTRA_VFS_OPEN_WRITE) == 0u ||
         (uint64_t)length > UINT64_MAX - offset)
         return ASTRA_VFS_ERR_INVALID;
     *moved = 0u;
+    *position = offset;
     while (total < length) {
         uint32_t part = 0u;
         uint32_t chunk = length - total;
 
         if (chunk > ASTRA_VFS_IO_MAX)
             chunk = ASTRA_VFS_IO_MAX;
-        status = astra_vfs_write(
+        status = astra_vfs_write_position(
             file->_private_client, file->_private_file, offset + total,
-            bytes + total, chunk, &part);
+            bytes + total, chunk, &part, &last);
         total += part;
-        if (status != ASTRA_VFS_OK || part < chunk)
+        if (status != ASTRA_VFS_OK || part < chunk ||
+            (file->_private_flags & ASTRA_VFS_OPEN_APPEND) != 0u)
             break;
     }
-    if (offset <= UINT64_MAX - total &&
-        offset + total > file->_private_size)
-        file->_private_size = offset + total;
+    if (last > file->_private_size)
+        file->_private_size = last;
     *moved = total;
+    *position = last;
     return status;
+}
+
+static uint32_t filesystem_write_at(AstraFile *file, uint64_t offset,
+                                    const void *buffer, uint32_t length,
+                                    uint32_t *moved)
+{
+    uint64_t position;
+
+    return filesystem_write_from(file, offset, buffer, length, moved,
+                                 &position);
 }
 
 static uint32_t filesystem_read(AstraFile *file, void *buffer,
@@ -212,13 +250,14 @@ static uint32_t filesystem_write(AstraFile *file, const void *buffer,
                                  uint32_t length, uint32_t *moved)
 {
     uint32_t status;
+    uint64_t position;
 
     if (!file_valid(file))
         return ASTRA_VFS_ERR_BAD_HANDLE;
-    status = filesystem_write_at(file, file->_private_offset, buffer, length,
-                                 moved);
+    status = filesystem_write_from(file, file->_private_offset, buffer, length,
+                                   moved, &position);
     if (moved != NULL)
-        file->_private_offset += *moved;
+        file->_private_offset = position;
     return status;
 }
 
@@ -519,4 +558,8 @@ const AstraFilesystemLibraryV1 astra_library_exports ASTRA_LIBRARY_EXPORTS = {
     astra_vfs_assign_open,
     filesystem_rename,
     astra_vfs_rename,
+    filesystem_sync,
+    filesystem_truncate,
+    astra_vfs_sync,
+    astra_vfs_truncate,
 };

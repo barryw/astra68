@@ -82,6 +82,7 @@ typedef struct KernelPortReceipt {
     const uint8_t *message;
     uint32_t message_size;
     uint32_t message_generation;
+    uint32_t sender;
     uint16_t message_slot;
     uint8_t handle_count;
     uint8_t active;

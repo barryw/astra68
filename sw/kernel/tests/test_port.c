@@ -673,6 +673,7 @@ static void test_failed_large_send_waits_for_queue_change(void)
 static void test_pool_quotas_and_generation_reuse(void)
 {
     KernelPort *owned[KERNEL_PORT_OWNER_MAX];
+    KernelPort *peer;
     KernelPort *extra;
     KernelPortSnapshot before;
     KernelPortSnapshot after;
@@ -687,6 +688,8 @@ static void test_pool_quotas_and_generation_reuse(void)
     }
     assert(kernel_port_create(1u, 1u, 24u, &extra) ==
            KERNEL_PORT_QUOTA_EXCEEDED);
+    assert(kernel_port_create(2u, 1u, 24u, &peer) == KERNEL_PORT_OK);
+    kernel_port_abandon_unpublished(peer);
     assert(kernel_port_snapshot(0u, &before));
     for (uint32_t index = 0u; index < KERNEL_PORT_OWNER_MAX; ++index)
         kernel_port_abandon_unpublished(owned[index]);

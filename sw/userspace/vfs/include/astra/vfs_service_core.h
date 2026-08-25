@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+#include <astra/process.h>
 #include <astra/vfs_backend.h>
 #include <astra/vfs_service.h>
 
@@ -15,10 +16,9 @@
  * real ports is a separate file, the way sw/userspace/input separates its core
  * from its port sink.
  *
- * Allocation-free. Sessions and open files live in fixed tables sized here, so
- * a service that runs out says ASTRA_VFS_ERR_LIMIT instead of failing an
- * allocation it cannot report. Same reasoning as the bounded allocator the
- * filesystem itself runs on.
+ * Allocation-free. The caller supplies zero-filled file storage charged to
+ * the service's own memory budget. The core grows into that storage lazily and
+ * reports ASTRA_VFS_ERR_LIMIT when the budget is exhausted.
  *
  * Two properties this core exists to enforce, which no backend should have to
  * think about:
@@ -29,8 +29,9 @@
  *    read another's file by guessing a number.
  */
 
-#define ASTRA_VFS_SESSION_MAX 8u
-#define ASTRA_VFS_FILE_MAX 16u
+/* One service session for every grant a full process table can legally hold. */
+#define ASTRA_VFS_SESSION_MAX \
+    (ASTRA_PROCESS_COUNT_MAX * ASTRA_LAUNCH_GRANT_MAX)
 
 typedef struct AstraVfsOpenFile {
     uintptr_t node;
@@ -42,6 +43,8 @@ typedef struct AstraVfsOpenFile {
 
 typedef struct AstraVfsSessionSlot {
     uint32_t id;            /* 0 when free */
+    uint32_t owner;         /* authenticated transport owner, 0 for local */
+    uint32_t open_files;
     uint16_t generation;
     uint16_t version;       /* the version agreed at HELLO */
     char rename_from[ASTRA_VFS_PATH_MAX];
@@ -58,6 +61,9 @@ typedef struct AstraVfsServiceStats {
     uint32_t files_closed;
     uint32_t stale_handles;       /* generation mismatches, i.e. real misuse */
     uint32_t cross_session_denied;
+    uint32_t cross_owner_denied;
+    uint32_t owner_session_quota_denied;
+    uint32_t owner_quota_denied;
     uint32_t peak_open_files;
     uint32_t peak_sessions;
 } AstraVfsServiceStats;
@@ -65,16 +71,19 @@ typedef struct AstraVfsServiceStats {
 typedef struct AstraVfsService {
     AstraVfsBackend backend;
     AstraVfsSessionSlot sessions[ASTRA_VFS_SESSION_MAX];
-    AstraVfsOpenFile files[ASTRA_VFS_FILE_MAX];
+    AstraVfsOpenFile *files;
+    uint32_t file_capacity;
+    uint32_t file_high_water;
     AstraVfsServiceStats stats;
     uint32_t next_session;
     uint16_t open_sessions;
-    uint16_t open_files;
+    uint32_t open_files;
 } AstraVfsService;
 
-/* Returns 0 when `backend` or its op table is incomplete. */
+/* Returns 0 when the backend or caller-owned file storage is invalid. */
 int astra_vfs_service_init(AstraVfsService *service,
-                           const AstraVfsBackendOps *ops, void *context);
+                           const AstraVfsBackendOps *ops, void *context,
+                           AstraVfsOpenFile *files, uint32_t file_capacity);
 
 /*
  * One request in, one reply out. Always writes a complete reply, including for
@@ -84,6 +93,11 @@ int astra_vfs_service_init(AstraVfsService *service,
 void astra_vfs_service_dispatch(AstraVfsService *service, uint32_t operation,
                                 const AstraVfsRequest *request,
                                 AstraVfsReply *reply);
+void astra_vfs_service_dispatch_from(
+    AstraVfsService *service, uint32_t owner, uint32_t operation,
+    const AstraVfsRequest *request, AstraVfsReply *reply);
+int astra_vfs_service_session_owned(const AstraVfsService *service,
+                                    uint32_t session, uint32_t owner);
 
 /*
  * Open, read whole, close -- as one call. `node_size` is filled even when the

@@ -63,7 +63,10 @@ typedef struct AstraVfsBackendOps {
     uint32_t (*read)(void *context, uintptr_t node, uint64_t offset,
                      void *buffer, uint32_t length, uint32_t *moved);
     uint32_t (*write)(void *context, uintptr_t node, uint64_t offset,
-                      const void *buffer, uint32_t length, uint32_t *moved);
+                      uint32_t flags, const void *buffer, uint32_t length,
+                      uint32_t *moved, uint64_t *position);
+    uint32_t (*sync)(void *context, uintptr_t node);
+    uint32_t (*truncate)(void *context, uintptr_t node, uint64_t size);
     uint32_t (*stat)(void *context, const char *path, AstraVfsNodeInfo *info);
     /*
      * Returns one entry of the directory at `path`, resuming from `cookie`,

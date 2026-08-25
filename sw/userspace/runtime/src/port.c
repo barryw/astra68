@@ -62,6 +62,16 @@ astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
                    uint32_t *handles, uint32_t handle_capacity,
                    uint32_t *size, uint32_t *handle_count)
 {
+    return astra_port_receive_from(handle, message, capacity, handles,
+                                   handle_capacity, size, handle_count, NULL);
+}
+
+uint32_t
+astra_port_receive_from(uint32_t handle, void *message, uint32_t capacity,
+                        uint32_t *handles, uint32_t handle_capacity,
+                        uint32_t *size, uint32_t *handle_count,
+                        uint32_t *sender)
+{
     AstraSyscallResult result;
 
     /*
@@ -76,6 +86,8 @@ astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
     if (handle_count != NULL) {
         *handle_count = 0u;
     }
+    if (sender != NULL)
+        *sender = 0u;
     if (message == NULL || size == NULL) {
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     }
@@ -86,5 +98,7 @@ astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
     if (handle_count != NULL) {
         *handle_count = result.value1;
     }
+    if (sender != NULL)
+        *sender = result.value2;
     return result.status;
 }

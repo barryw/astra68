@@ -8,6 +8,8 @@
 
 #include <stdint.h>
 
+#include <astra/message_abi.h>
+
 #include <astra/attributes.h>
 #include <astra/resource.h>
 #include <astra/types.h>
@@ -19,7 +21,7 @@ ASTRA_EXTERN_C_BEGIN
  * @brief Bounded datagrams, waitable endpoints, and move-only handles.
  *
  * A port has one nontransferable receive endpoint and one transferable send
- * endpoint. Messages are FIFO and contain a fixed header, up to 256 inline
+ * endpoint. Messages are FIFO and contain a fixed header, up to 1024 inline
  * payload bytes, and up to eight transferred capabilities. Bulk data belongs
  * in shared areas rather than copied messages.
  *
@@ -32,61 +34,10 @@ ASTRA_EXTERN_C_BEGIN
  * @{
  */
 
-#ifndef ASTRA_MESSAGE_ABI_CONSTANTS_DEFINED
-/** Internal one-definition guard shared with the raw trap ABI header. */
-#define ASTRA_MESSAGE_ABI_CONSTANTS_DEFINED 1
-/** Maximum number of datagrams reserved by one port. */
-#define ASTRA_PORT_MESSAGES_MAX UINT32_C(8)
-/** Maximum queued bytes reserved by one port. */
-#define ASTRA_PORT_BYTES_MAX UINT32_C(2240)
-/** Fixed size of ::AstraMessageHeader. */
-#define ASTRA_MESSAGE_HEADER_SIZE UINT32_C(24)
-/** Maximum inline payload following the header. */
-#define ASTRA_MESSAGE_INLINE_MAX UINT32_C(256)
-/** Maximum complete inline message size. */
-#define ASTRA_MESSAGE_SIZE_MAX \
-    (ASTRA_MESSAGE_HEADER_SIZE + ASTRA_MESSAGE_INLINE_MAX)
-/** Maximum transferred capabilities in one message. */
-#define ASTRA_MESSAGE_HANDLES_MAX UINT32_C(8)
-#endif
-
 /** Message flags accepted by ABI revision 0.1. */
 enum {
     ASTRA_MESSAGE_FLAGS_NONE = 0
 };
-
-#ifndef ASTRA_MESSAGE_HEADER_DEFINED
-/** Internal one-definition guard shared with the raw trap ABI header. */
-#define ASTRA_MESSAGE_HEADER_DEFINED 1
-/**
- * Common prefix of every Astra message protocol.
- *
- * The structure is naturally four-byte aligned and represented in native
- * big-endian byte order. Set @ref flags, @ref reserved, and every protocol
- * field not used by the receiver to zero. The sender retains no pointer after
- * the syscall returns.
- *
- * @since 0.1.0
- */
-typedef struct AstraMessageHeader {
-    /** Complete header-plus-payload size in bytes. */
-    uint32_t total_size;
-    /** Header size, currently ::ASTRA_MESSAGE_HEADER_SIZE. */
-    uint16_t header_size;
-    /** Message flags; currently zero. */
-    uint16_t flags;
-    /** Service or protocol identifier. */
-    uint32_t protocol;
-    /** Protocol revision interpreted by the receiving service. */
-    uint16_t protocol_version;
-    /** Must be zero. */
-    uint16_t reserved;
-    /** Protocol-defined operation code. */
-    uint32_t operation;
-    /** Caller-selected request/reply correlation value. */
-    uint32_t transaction_id;
-} AstraMessageHeader;
-#endif
 
 /** Owned pair returned by ::astra_port_create. @since 0.1.0 */
 typedef struct AstraPort {
@@ -104,7 +55,7 @@ typedef struct AstraPort {
  * Initialize a message header and clear every reserved field.
  *
  * @param[out] header Header to initialize.
- * @param total_size Complete message size from 24 through 280 bytes.
+ * @param total_size Complete message size from 24 through 1048 bytes.
  * @param protocol Protocol identifier.
  * @param protocol_version Protocol revision.
  * @param operation Protocol operation code.
@@ -126,8 +77,9 @@ ASTRA_NODISCARD AstraResult astra_message_header_init(
  * Capacity is reserved at creation, so later sends never allocate queue
  * storage. The caller must pass an empty ::AstraPort.
  *
- * @param maximum_messages Queue limit from 1 through 8 datagrams.
- * @param maximum_bytes Queue byte limit from 24 through 2240 bytes.
+ * @param maximum_messages Queue limit from 1 through 16 datagrams.
+ * @param maximum_bytes Queue byte limit from 24 through
+ *        ::ASTRA_PORT_BYTES_MAX bytes.
  * @param[out] port Receives both owned endpoints atomically.
  * @return ::ASTRA_OK or a documented argument/resource error.
  * @since 0.1.0
@@ -217,7 +169,7 @@ ASTRA_NODISCARD AstraResult astra_port_send_until(
  * @param receive_endpoint Receive capability with read rights.
  * @param[out] message Naturally aligned output bytes, or NULL when capacity is
  *        zero.
- * @param message_capacity Available output bytes, at most 280.
+ * @param message_capacity Available output bytes, at most 1048.
  * @param[out] handles Capability output, or NULL when capacity is zero.
  * @param handle_capacity Available handle entries, at most 8.
  * @param[out] message_size Actual or required complete message size.

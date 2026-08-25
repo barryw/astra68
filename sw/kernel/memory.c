@@ -46,6 +46,7 @@ static KernelFrameInfo *frames;
 static uint32_t *owner_next;
 static uint32_t *owner_previous;
 static KernelOwnerLedger owner_ledgers[KERNEL_MAX_FRAME_OWNERS] KERNEL_NOINIT;
+static uint32_t protected_owners[KERNEL_MAX_FRAME_OWNERS] KERNEL_NOINIT;
 static uint32_t *blocked_bitmap;
 static uint32_t *dynamic_bitmap;
 static uint32_t *classified_bitmap;
@@ -226,6 +227,67 @@ static void reset_stats(void)
     stats.emergency_available_frames = 0u;
     stats.emergency_acquisitions = 0u;
     stats.emergency_failures = 0u;
+    stats.protected_reserve_frames = 0u;
+    stats.protected_reserve_denials = 0u;
+    stats.protected_owners = 0u;
+}
+
+bool kernel_memory_owner_protected(uint32_t owner)
+{
+    if (!initialized || owner == KERNEL_OWNER_NONE)
+        return false;
+    for (uint32_t index = 0u; index < KERNEL_MAX_FRAME_OWNERS; ++index)
+        if (protected_owners[index] == owner)
+            return true;
+    return false;
+}
+
+bool kernel_memory_protect_owner(uint32_t owner)
+{
+    uint32_t empty = KERNEL_MAX_FRAME_OWNERS;
+
+    if (!initialized || owner == KERNEL_OWNER_NONE)
+        return false;
+    for (uint32_t index = 0u; index < KERNEL_MAX_FRAME_OWNERS; ++index) {
+        if (protected_owners[index] == owner)
+            return true;
+        if (empty == KERNEL_MAX_FRAME_OWNERS &&
+            protected_owners[index] == KERNEL_OWNER_NONE)
+            empty = index;
+    }
+    if (empty == KERNEL_MAX_FRAME_OWNERS)
+        return false;
+    protected_owners[empty] = owner;
+    ++stats.protected_owners;
+    return true;
+}
+
+bool kernel_memory_unprotect_owner(uint32_t owner)
+{
+    if (!initialized || owner == KERNEL_OWNER_NONE)
+        return false;
+    for (uint32_t index = 0u; index < KERNEL_MAX_FRAME_OWNERS; ++index) {
+        if (protected_owners[index] != owner)
+            continue;
+        protected_owners[index] = KERNEL_OWNER_NONE;
+        if (stats.protected_owners == 0u)
+            return false;
+        --stats.protected_owners;
+        return true;
+    }
+    return true;
+}
+
+static bool protected_reserve_admits(uint32_t owner, uint32_t frame_count)
+{
+    uint32_t floor;
+
+    if (kernel_memory_owner_protected(owner))
+        return true;
+    /* The DMA zone is never available to an ordinary scattered allocation. */
+    floor = stats.protected_reserve_frames + dma_zone_frames;
+    return stats.free_frames >= floor &&
+           frame_count <= stats.free_frames - floor;
 }
 
 static bool bitmap_test(const uint32_t *bitmap, uint32_t index)
@@ -565,6 +627,12 @@ KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info)
 
     stats.ram_base = info->ram_base;
     stats.total_frames = info->ram_size / KERNEL_PAGE_SIZE;
+    stats.protected_reserve_frames =
+        stats.total_frames / ASTRA_PROCESS_COUNT_MAX;
+    if (stats.protected_reserve_frames >
+            KERNEL_PROTECTED_RESERVE_FRAME_MAX)
+        stats.protected_reserve_frames =
+            KERNEL_PROTECTED_RESERVE_FRAME_MAX;
     /*
      * The arena comes first, because everything below writes into it -- the
      * bitmaps the classifier sets are themselves part of it. It cannot come
@@ -612,6 +680,7 @@ KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info)
         owner_ledgers[index].owner = KERNEL_OWNER_NONE;
         owner_ledgers[index].head = KERNEL_FRAME_INDEX_NONE;
         owner_ledgers[index].frame_count = 0u;
+        protected_owners[index] = KERNEL_OWNER_NONE;
     }
     for (uint32_t word = 0u;
          word < (stats.total_frames + 31u) / 32u; ++word) {
@@ -829,6 +898,12 @@ static KernelMemoryStatus allocate_frames(uint32_t frame_count,
         ++stats.allocation_failures;
         return KERNEL_MEMORY_OUT_OF_MEMORY;
     }
+    if (!protected_reserve_admits(owner, frame_count)) {
+        ++stats.allocation_failures;
+        ++stats.protected_reserve_denials;
+        kernel_allocation_fail(site, owner);
+        return KERNEL_MEMORY_OUT_OF_MEMORY;
+    }
     if (!owner_slot_for_allocation(owner, frame_count, &owner_slot)) {
         ++stats.allocation_failures;
         kernel_allocation_fail(site, owner);
@@ -970,6 +1045,12 @@ KernelMemoryStatus kernel_memory_alloc_pages_zeroed_tagged(
         physical_pages[page] = 0u;
     if (!kernel_allocation_attempt(site, owner)) {
         ++stats.allocation_failures;
+        return KERNEL_MEMORY_OUT_OF_MEMORY;
+    }
+    if (!protected_reserve_admits(owner, frame_count)) {
+        ++stats.allocation_failures;
+        ++stats.protected_reserve_denials;
+        kernel_allocation_fail(site, owner);
         return KERNEL_MEMORY_OUT_OF_MEMORY;
     }
     if (!owner_slot_for_allocation(owner, frame_count, &owner_slot)) {
@@ -1391,6 +1472,9 @@ bool kernel_memory_stats(KernelMemoryStats *result)
     result->emergency_available_frames = stats.emergency_available_frames;
     result->emergency_acquisitions = stats.emergency_acquisitions;
     result->emergency_failures = stats.emergency_failures;
+    result->protected_reserve_frames = stats.protected_reserve_frames;
+    result->protected_reserve_denials = stats.protected_reserve_denials;
+    result->protected_owners = stats.protected_owners;
     result->dma_zone_first = stats.dma_zone_first;
     result->dma_zone_frames = stats.dma_zone_frames;
     return true;

@@ -90,6 +90,14 @@ uint32_t astra_vfs_port_write_bulk(AstraVfsClient *client, AstraVfsFile file,
                                    uint32_t length, uint32_t *moved);
 
 /*
+ * Maps one reserved area as a lazily committed service table. Physical pages
+ * are charged to the service owner only when records are touched; the owner's
+ * area quota and the VFS handle width are the only ceilings.
+ */
+int astra_vfs_port_quota_storage(uint32_t element_size, void **storage,
+                                 uint32_t *capacity);
+
+/*
  * The service half: a receive-dispatch-reply pump, run from whichever loop
  * hosts the service. A pump rather than a loop for the same reason everything
  * else here is one -- the supervisor serves its own children, so a service that

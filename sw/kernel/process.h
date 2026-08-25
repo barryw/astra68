@@ -41,7 +41,9 @@
  * sixteen bits wide now and the number is chosen for the workload instead of
  * for a field width.
  */
-#define KERNEL_PROCESS_MAX KERNEL_VM_ADDRESS_SPACE_MAX
+#define KERNEL_PROCESS_MAX ASTRA_PROCESS_COUNT_MAX
+_Static_assert(KERNEL_PROCESS_MAX == KERNEL_VM_ADDRESS_SPACE_MAX,
+               "process budget and address-space budget differ");
 #define KERNEL_PROCESS_CODE_BASE 0x00100000u
 /*
  * A raw image is read-execute pages at the code base and one writable page

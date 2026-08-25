@@ -32,7 +32,7 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
         assert(request->header.operation == ASTRA_APPLICATION_LAUNCH);
         assert(request->arguments.count == expected_count);
         assert(request->arguments.source == expected_source);
-        assert(request->arguments.reserved == 0u);
+        assert(request->arguments.flags == 0u);
         assert(__builtin_strcmp(request->arguments.bytes,
                                 "APPS:Terminal.app") == 0);
         if (expected_count == 3u) {

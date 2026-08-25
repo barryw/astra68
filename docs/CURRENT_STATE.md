@@ -9,6 +9,64 @@ The platform is **Astra 68**, its kernel is **Axiom**, and the complete
 user-facing system is **Astra OS**. The Astra NDK is the stable developer
 surface; Axiom's internal interfaces are not a module ABI.
 
+## Resource isolation and POSIX/VFS capacity (2026-08-25)
+
+A badly behaved application can no longer spend the machine's recovery
+headroom. On the 128 MiB Arty profile, ordinary frame owners are refused before
+the last 4 MiB of general RAM; the existing 512 KiB contiguous DMA zone and
+32-page kernel emergency reserve remain separate. The 4 MiB protected floor is
+one equal share of the 32-process machine, capped at one complete shared area,
+so it follows the discovered RAM size instead of encoding another board limit.
+Only the initial supervisor can mark resident services essential, and their
+process and shared-area frame owners may enter that floor. Host exhaustion
+tests consume every ordinary page up to the floor and prove a protected owner
+can still allocate afterward.
+
+CPU authority is enforced at launch. Ordinary processes have a priority
+ceiling of normal (16), while firmware and supervisor-selected essential
+services retain the existing 1..23 band. Timer preemption, the 16-thread
+per-process budget and the 32-thread global scheduler budget remain unchanged; an
+application can neither raise itself above services nor mint essential
+children. Kernel syscall tests exercise both refusals.
+
+Port delivery now records the authenticated sending process and returns it to
+the receiver; a wire-supplied identity is never trusted. Existing global,
+per-owner and per-port message/byte budgets continue to protect the static
+kernel I/O tables, and tests prove one exhausted owner does not consume a
+peer's capacity. VFS sessions and files are additionally charged to that
+authenticated owner. Session capacity is not a guessed small number: every one
+of the 32 processes may consume all 12 launch-grant views, for 384 service
+sessions total and 12 per owner. Open-file tables grow lazily in a service-owned
+4 MiB area and give each process an equal share of the actual resulting
+capacity. Repeated HELLOs and multiple sessions cannot bypass either account.
+
+The syscall ABI is `0x00010017`. Port-message limits now come from one canonical
+header in both the kernel and NDK (16 queued messages, 1,024 inline bytes), and
+the NDK's shared-area contract matches the kernel's 4 MiB range. POSIX file and
+directory tables and the VFS/ext4 open tables grow from caller/service-owned
+storage rather than stopping at the former 8/16-entry constants. A real target
+diagnostic holds 64 simultaneous files through POSIX, VFS and ext4.
+
+The retained shared lwext4 fix makes `O_CREAT|O_EXCL` distinguish an inode
+created by the current open from one that existed beforehand; `O_APPEND`,
+`fsync`, and `ftruncate` use the same common backend. The whole-library mount,
+partition, full-volume and cleanup tests pass. The Terminal gate now requires
+an exact output line for every `echo $?`, preventing unrelated zero-bearing
+trace text from producing a false pass.
+
+Kernel, runtime, NDK, POSIX, VFS, sanitizer, GCC analyzer, whole-lwext4, full
+MC68030 userspace and ROM builds pass on Beast. The stricter integrated QEMU
+gate passes all 68 commands. The physical Arty candidate at
+`/data/astra/deploy/resource-isolation-8a016904c297` has ROM SHA-256
+`8a016904c2974646098e8b18bcb2fc5e496a60e9e5af46c0af770ca5713faf8b`
+and pristine installed storage SHA-256
+`f4ffc70142717d0dcc00e876b90646c6701b6ab8e5ab43aa020a0a1533af1ce5`.
+It passed POST and stage 8 with host time `2026-08-25T00:02:59Z`, then the
+complete POSIX diagnostic with exact status zero, `ps` in 558.196 ms, and stock
+`lua -v` in 1,217.591 ms. Display submissions drained and the retained trace
+had zero wraps and zero drops. This candidate supersedes the earlier active Lua
+directory recorded below; that directory remains the rollback image.
+
 ## Lua, host-time enforcement, and 4 MiB application transport (2026-08-24)
 
 Stock Lua 5.5.1 is now a normal `COMMANDS:lua` program built from the unchanged
@@ -18,7 +76,7 @@ text, data, and BSS occupy 248,324 bytes at load time (234,538 text, 328 data,
 environment, files, rename, time, and `os.execute`; no Lua-private fast path or
 compatibility layer exists.
 
-The syscall ABI is `0x00010016`, startup ABI is 3, the complete environment is
+The syscall ABI is `0x00010017`, startup ABI is 3, the complete environment is
 packed into the actual 4 KiB startup page, and shared areas/VFS bulk transfers
 are 4 MiB. Four MiB is one complete MC68030 page table and is the largest
 atomic range handled by the current shared-map primitive. Process images are

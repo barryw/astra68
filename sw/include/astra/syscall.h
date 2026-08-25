@@ -1,9 +1,11 @@
 #ifndef ASTRA_SYSCALL_H
 #define ASTRA_SYSCALL_H
 
+#include <astra/message_abi.h>
+
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010016
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010017
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -108,6 +110,11 @@
  *
  * There is no fork. Nothing is inherited implicitly, so what a program may
  * touch is what somebody wrote down.
+ *
+ * AstraLaunchArguments.flags may request ASTRA_LAUNCH_FLAG_ESSENTIAL only
+ * when the caller is the firmware-selected initial supervisor. Essential
+ * processes retain access to protected memory headroom and the complete
+ * priority band. Every ordinary child is capped at NORMAL priority.
  */
 #define ASTRA_SYSCALL_PROCESS_CREATE   48
 #define ASTRA_SYSCALL_IRQ_ENDPOINT_INFO 49
@@ -299,19 +306,6 @@
 #define ASTRA_BULK_RING_CONSUMER 2u
 #endif
 
-#ifndef ASTRA_MESSAGE_ABI_CONSTANTS_DEFINED
-#define ASTRA_MESSAGE_ABI_CONSTANTS_DEFINED 1
-#define ASTRA_PORT_MESSAGES_MAX 16u
-#define ASTRA_MESSAGE_HEADER_SIZE 24u
-#define ASTRA_MESSAGE_INLINE_MAX 1024u
-#define ASTRA_PORT_BYTES_MAX \
-    (ASTRA_PORT_MESSAGES_MAX * \
-     (ASTRA_MESSAGE_HEADER_SIZE + ASTRA_MESSAGE_INLINE_MAX))
-#define ASTRA_MESSAGE_SIZE_MAX \
-    (ASTRA_MESSAGE_HEADER_SIZE + ASTRA_MESSAGE_INLINE_MAX)
-#define ASTRA_MESSAGE_HANDLES_MAX 8u
-#endif
-
 #ifndef __ASSEMBLER__
 
 #include <stdint.h>
@@ -413,23 +407,6 @@ _Static_assert(_Alignof(AstraDmaBufferInfo) % ASTRA_ABI_ALIGNMENT == 0u,
                "dma-buffer-info must satisfy the syscall alignment rule");
 _Static_assert(_Alignof(AstraIrqRecord) % ASTRA_ABI_ALIGNMENT == 0u,
                "IRQ record must satisfy the syscall alignment rule");
-
-#ifndef ASTRA_MESSAGE_HEADER_DEFINED
-#define ASTRA_MESSAGE_HEADER_DEFINED 1
-typedef struct AstraMessageHeader {
-    uint32_t total_size;
-    uint16_t header_size;
-    uint16_t flags;
-    uint32_t protocol;
-    uint16_t protocol_version;
-    uint16_t reserved;
-    uint32_t operation;
-    uint32_t transaction_id;
-} AstraMessageHeader;
-#endif
-
-_Static_assert(sizeof(AstraMessageHeader) == ASTRA_MESSAGE_HEADER_SIZE,
-               "message ABI header size changed");
 
 #ifndef ASTRA_BULK_RING_HEADER_DEFINED
 #define ASTRA_BULK_RING_HEADER_DEFINED 1

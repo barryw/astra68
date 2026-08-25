@@ -929,6 +929,7 @@ static int ext4_generic_open2(ext4_file *f, const char *path, int flags,
 			      uint32_t *name_off)
 {
 	bool is_goal = false;
+	bool created_goal = false;
 	uint32_t imode = EXT4_INODE_MODE_DIRECTORY;
 	uint32_t next_inode;
 
@@ -1013,6 +1014,8 @@ static int ext4_generic_open2(ext4_file *f, const char *path, int flags,
 			}
 
 			ext4_fs_put_inode_ref(&child_ref);
+			if (is_goal)
+				created_goal = true;
 			continue;
 		}
 
@@ -1074,6 +1077,11 @@ static int ext4_generic_open2(ext4_file *f, const char *path, int flags,
 	}
 
 	if (is_goal) {
+		if (!created_goal &&
+		    (f->flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) {
+			ext4_fs_put_inode_ref(&ref);
+			return EEXIST;
+		}
 
 		if ((f->flags & O_TRUNC) && (imode == EXT4_INODE_MODE_FILE)) {
 			r = ext4_trunc_inode(mp, ref.index, 0);
@@ -1937,6 +1945,8 @@ int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
 
 	/*Sync file size*/
 	file->fsize = ext4_inode_get_size(sb, ref.inode);
+	if (file->flags & O_APPEND)
+		file->fpos = file->fsize;
 	block_size = ext4_sb_get_block_size(sb);
 
 	iblock_last = (uint32_t)((file->fpos + size) / block_size);

@@ -382,9 +382,16 @@ events_start(uint32_t process_handle)
                                    &catalog)) {
         return EVENTS_FAIL_BACKEND;
     }
-    if (!astra_vfs_service_init(&service, astra_events_backend_ops(),
-                                &backend)) {
-        return EVENTS_FAIL_SERVICE;
+    {
+        void *file_storage = NULL;
+        uint32_t file_capacity = 0u;
+
+        if (!astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile),
+                                           &file_storage, &file_capacity) ||
+            !astra_vfs_service_init(&service, astra_events_backend_ops(),
+                                    &backend, file_storage, file_capacity)) {
+            return EVENTS_FAIL_SERVICE;
+        }
     }
     /*
      * A port of its own, because EVENTS: is a second service and a child is

@@ -24,6 +24,8 @@
 #define ASTRA_CAPABILITY_ROOT_MAX 64u
 #define ASTRA_CAPABILITY_NAME_MAX 16u
 #define ASTRA_STARTUP_CAPABILITY_MAX 32u
+/* Global process budget; Axiom has one address space for every entry. */
+#define ASTRA_PROCESS_COUNT_MAX 32u
 
 #define ASTRA_STARTUP_FLAG_SUPERVISOR (1u << 0)
 
@@ -69,6 +71,8 @@ _Static_assert(ASTRA_LAUNCH_GRANT_MAX == 12u,
                "every array sized by it are laid out from this number");
 #define ASTRA_LAUNCH_ARGUMENT_MAX 8u
 #define ASTRA_LAUNCH_ARGUMENT_BYTES 192u
+#define ASTRA_LAUNCH_FLAG_ESSENTIAL (1u << 0)
+#define ASTRA_LAUNCH_FLAG_MASK ASTRA_LAUNCH_FLAG_ESSENTIAL
 /*
  * Environment space is the startup page, not a smaller policy quota. The
  * kernel accepts the combination of capabilities, argv, pointers and strings
@@ -155,7 +159,12 @@ typedef struct AstraLaunchArguments {
     uint16_t count;
     uint16_t length;
     uint16_t source;
-    uint16_t reserved;
+    /*
+     * Resource authority, not an application preference. Only the trusted
+     * initial supervisor may launch an essential child; the kernel refuses
+     * this bit from every other launcher.
+     */
+    uint16_t flags;
     char     bytes[ASTRA_LAUNCH_ARGUMENT_BYTES];
     uint16_t environment_count;
     uint16_t environment_length;

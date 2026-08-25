@@ -35,6 +35,7 @@ typedef struct KernelPortMessage {
     uint8_t data[KERNEL_PORT_MESSAGE_SIZE_MAX];
     KernelDetachedHandle detached[KERNEL_PORT_MESSAGE_HANDLE_MAX];
     uint32_t generation;
+    uint32_t sender;
     uint16_t next;
     uint16_t size;
     uint16_t port_slot;
@@ -715,6 +716,7 @@ KernelPortStatus kernel_port_send(
         return message_status;
     kernel_bytes_copy(message->data, raw_message, message_size);
     message->size = (uint16_t)message_size;
+    message->sender = source_table->owner;
     message->port_slot = port_slot(port);
     message->handle_count = (uint8_t)handle_count;
 
@@ -824,6 +826,7 @@ KernelPortStatus kernel_port_receive_prepare(
     receipt->message = message->data;
     receipt->message_size = message->size;
     receipt->message_generation = message->generation;
+    receipt->sender = message->sender;
     receipt->message_slot = slot;
     receipt->handle_count = message->handle_count;
     receipt->active = 1u;
@@ -842,6 +845,7 @@ static bool valid_receipt(const KernelPortReceipt *receipt,
     *message = &messages[receipt->message_slot];
     return (*message)->state == KERNEL_PORT_MESSAGE_RECEIVING &&
            (*message)->generation == receipt->message_generation &&
+           (*message)->sender == receipt->sender &&
            (*message)->port_slot == port_slot(receipt->port) &&
            (*message)->size == receipt->message_size &&
            (*message)->handle_count == receipt->handle_count &&

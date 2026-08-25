@@ -109,6 +109,35 @@ uint32_t astra_vfs_write(AstraVfsClient *value, AstraVfsFile file,
     return ASTRA_VFS_OK;
 }
 
+uint32_t astra_vfs_write_position(AstraVfsClient *value, AstraVfsFile file,
+                                  uint64_t offset, const void *buffer,
+                                  uint32_t length, uint32_t *moved,
+                                  uint64_t *position)
+{
+    uint32_t status = astra_vfs_write(value, file, offset, buffer, length,
+                                      moved);
+
+    if (status == ASTRA_VFS_OK)
+        *position = offset + *moved;
+    return status;
+}
+
+uint32_t astra_vfs_sync(AstraVfsClient *value, AstraVfsFile file)
+{
+    (void)value;
+    return file == 1u ? ASTRA_VFS_OK : ASTRA_VFS_ERR_BAD_HANDLE;
+}
+
+uint32_t astra_vfs_truncate(AstraVfsClient *value, AstraVfsFile file,
+                            uint64_t size)
+{
+    (void)value;
+    if (file != 1u || size > sizeof(contents))
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    content_size = size;
+    return ASTRA_VFS_OK;
+}
+
 /*
  * The metadata arm answers through the size/kind arm rather than repeating the
  * fixture, and stamps values a caller could not have guessed so a library that

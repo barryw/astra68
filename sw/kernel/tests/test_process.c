@@ -3889,6 +3889,8 @@ static void test_real_stack_oom_rolls_back_thread_create(void)
     uint32_t attempts_before_fault;
 
     initialize_test();
+    /* This test needs physical exhaustion, beyond ordinary admission. */
+    assert(kernel_memory_protect_owner(pressure_owner));
     assert(kernel_memory_stats(&baseline));
     assert(kernel_process_create(image, sizeof(image), 0u, 0u,
                                  &process_id) == KERNEL_PROCESS_OK);
@@ -4819,6 +4821,7 @@ static void test_message_port_syscall_atomicity_and_cleanup(void)
     assert(next->data[0] == ASTRA_SYSCALL_WOULD_BLOCK);
     assert(next->data[1] == 0u);
     assert(next->data[2] == 0u);
+    assert(next->data[3] == 0u);
 
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_EVENT_CREATE;
@@ -4875,6 +4878,7 @@ static void test_message_port_syscall_atomicity_and_cleanup(void)
     assert(next->data[0] == ASTRA_SYSCALL_BUFFER_TOO_SMALL);
     assert(next->data[1] == sizeof(message));
     assert(next->data[2] == 1u);
+    assert(next->data[3] == 0u);
     assert(kernel_process_test_handle_count(process_id) == 4u);
 
     /* Either copy may fault; neither publishes the queued authority. */
@@ -4923,6 +4927,7 @@ static void test_message_port_syscall_atomicity_and_cleanup(void)
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(next->data[1] == sizeof(message));
     assert(next->data[2] == 1u);
+    assert(next->data[3] == process_id);
     assert(kernel_process_test_handle_count(process_id) == 5u);
     assert(kernel_user_copy_from_asm(&received, output_message_address,
                                      sizeof(received)) ==
@@ -7236,6 +7241,7 @@ static void test_a_program_can_launch_a_program(void)
     uint32_t user_image = KERNEL_PROCESS_STACK_TOP - KERNEL_PAGE_SIZE;
     uint32_t user_grants = KERNEL_PROCESS_STACK_TOP - KERNEL_PAGE_SIZE +
                            LAUNCH_IMAGE_BYTES;
+    uint32_t user_arguments = user_grants + sizeof(AstraLaunchGrant) * 2u;
     AstraLaunchGrant grant;
     AstraLaunchGrant duplicate_grants[2];
     uint32_t process_id = 0u;
@@ -7267,6 +7273,22 @@ static void test_a_program_can_launch_a_program(void)
     assert(child_handle != KERNEL_HANDLE_INVALID);
     assert(child_id != 0u && child_id != process_id);
 
+    /* Resource authority is not a flag an ordinary launcher may self-issue. */
+    {
+        AstraLaunchArguments arguments = {0};
+
+        arguments.flags = ASTRA_LAUNCH_FLAG_ESSENTIAL;
+        assert(kernel_user_copy_to_asm(user_arguments, &arguments,
+                                       sizeof(arguments)) ==
+               KERNEL_USER_COPY_OK);
+        registers[5] = user_arguments;
+        assert(kernel_process_on_syscall(registers,
+                                         KERNEL_PROCESS_STACK_TOP - 8u,
+                                         frame, &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+        registers[5] = 0u;
+    }
+
     /*
      * What the launcher was handed back: enough to wait for the child and end
      * it, and not the authority to read its account of itself. Having started
@@ -7275,6 +7297,7 @@ static void test_a_program_can_launch_a_program(void)
     {
         uint32_t registers_query[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
         uint32_t user_info = KERNEL_PROCESS_STACK_TOP - 512u;
+        AstraProcessInfo child_info;
 
         /* QUERY: the launcher can ask what its child is doing. */
         registers_query[0] = ASTRA_SYSCALL_PROCESS_INFO;
@@ -7284,6 +7307,22 @@ static void test_a_program_can_launch_a_program(void)
                                          KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                          &next) == KERNEL_PROCESS_OK);
         assert(next->data[0] == ASTRA_SYSCALL_OK);
+        assert(kernel_user_copy_from_asm(&child_info, user_info,
+                                         sizeof(child_info)) ==
+               KERNEL_USER_COPY_OK);
+        assert(child_info.default_priority ==
+               KERNEL_THREAD_PRIORITY_NORMAL);
+        assert(child_info.priority_ceiling ==
+               KERNEL_THREAD_PRIORITY_NORMAL);
+
+        memset(registers_query, 0, sizeof(registers_query));
+        registers_query[0] = ASTRA_SYSCALL_PROCESS_PRIORITY;
+        registers_query[1] = child_handle;
+        registers_query[2] = KERNEL_THREAD_PRIORITY_NORMAL + 1u;
+        assert(kernel_process_on_syscall(registers_query,
+                                         KERNEL_PROCESS_STACK_TOP - 8u,
+                                         frame, &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
 
         /* DEBUG: it cannot read the child's account of itself. */
         memset(registers_query, 0, sizeof(registers_query));
