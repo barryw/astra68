@@ -5,6 +5,7 @@ OVERLAY_ROOT=${1:-/data/astra/rootfs-overlay}
 ASTRA_FIRSTBOOT="$OVERLAY_ROOT/etc/init.d/astra-firstboot"
 ASTRA_HOSTNAME="$OVERLAY_ROOT/etc/hostname"
 ASTRA_HOSTS="$OVERLAY_ROOT/etc/hosts"
+ASTRA_RESOLV="$OVERLAY_ROOT/etc/resolv.conf"
 ASTRA_SAMBA="$OVERLAY_ROOT/etc/samba/smb.conf"
 ASTRA_MODULE_BLACKLIST="$OVERLAY_ROOT/etc/modprobe.d/astra-blacklist.conf"
 
@@ -12,6 +13,7 @@ for required_file in \
     "$ASTRA_FIRSTBOOT" \
     "$ASTRA_HOSTNAME" \
     "$ASTRA_HOSTS" \
+    "$ASTRA_RESOLV" \
     "$ASTRA_SAMBA" \
     "$ASTRA_MODULE_BLACKLIST"; do
     if [ ! -f "$required_file" ]; then
@@ -67,12 +69,14 @@ cp "$ASTRA_FIRSTBOOT" /etc/init.d/astra-firstboot
 chmod 0755 /etc/init.d/astra-firstboot
 cp "$ASTRA_HOSTNAME" /etc/hostname
 cp "$ASTRA_HOSTS" /etc/hosts
+cp "$ASTRA_RESOLV" /etc/resolv.conf
 cp "$ASTRA_SAMBA" /etc/samba/smb.conf
 mkdir -p /etc/modprobe.d
 cp "$ASTRA_MODULE_BLACKLIST" /etc/modprobe.d/astra-blacklist.conf
-ln -sf ../init.d/astra-firstboot /etc/rcS.d/S04astra-firstboot
+ln -sf ../init.d/astra-firstboot /etc/rc5.d/S02astra-firstboot
 rm -f \
     /etc/rcS.d/S03astra-firstboot \
+    /etc/rcS.d/S04astra-firstboot \
     /etc/rcS.d/S03nova-firstboot \
     /etc/rcS.d/S04novavm
 rm -f /etc/init.d/nova-firstboot /etc/init.d/novavm /usr/bin/novavm

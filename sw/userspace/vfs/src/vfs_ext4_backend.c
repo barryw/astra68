@@ -19,6 +19,41 @@
 
 #include <stddef.h>
 
+enum {
+    EXT4_FILE_FREE = 0,
+    EXT4_FILE_OPENING,
+    EXT4_FILE_OPEN,
+    EXT4_FILE_CLOSING
+};
+
+static int
+table_lock(AstraVfsExt4Backend *backend)
+{
+    return backend->table_lock == NULL ||
+           backend->table_lock(backend->table_lock_context);
+}
+
+static void
+table_unlock(AstraVfsExt4Backend *backend)
+{
+    if (backend->table_unlock != NULL)
+        backend->table_unlock(backend->table_lock_context);
+}
+
+static int
+scan_lock(AstraVfsExt4Backend *backend)
+{
+    return backend->scan_lock == NULL ||
+           backend->scan_lock(backend->scan_lock_context);
+}
+
+static void
+scan_unlock(AstraVfsExt4Backend *backend)
+{
+    if (backend->scan_unlock != NULL)
+        backend->scan_unlock(backend->scan_lock_context);
+}
+
 /*
  * lwext4 speaks errno; the protocol does not. Mapping here rather than letting
  * an errno reach the wire is what stops a client learning which filesystem is
@@ -169,7 +204,8 @@ fill_metadata(const char *full, AstraVfsNodeInfo *info, int with_size)
 
 static uint32_t
 ext4_backend_open(void *context, const char *path, uint32_t flags,
-                  uintptr_t *node, AstraVfsNodeInfo *info)
+                  uint16_t create_mode, uintptr_t *node,
+                  AstraVfsNodeInfo *info)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
     char full[ASTRA_VFS_EXT4_PATH_MAX];
@@ -181,8 +217,12 @@ ext4_backend_open(void *context, const char *path, uint32_t flags,
         return ASTRA_VFS_ERR_INVALID;
     }
     if ((flags & (ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
-                  ASTRA_VFS_OPEN_TRUNCATE)) != 0u)
+                  ASTRA_VFS_OPEN_TRUNCATE)) != 0u) {
+        if (!scan_lock(backend))
+            return ASTRA_VFS_ERR_IO;
         close_scan(backend);
+        scan_unlock(backend);
+    }
 
     if ((flags & ASTRA_VFS_OPEN_DIRECTORY) != 0u) {
         /*
@@ -204,17 +244,23 @@ ext4_backend_open(void *context, const char *path, uint32_t flags,
         return ASTRA_VFS_OK;
     }
 
+    if (!table_lock(backend))
+        return ASTRA_VFS_ERR_IO;
     for (index = 0u; index < backend->file_high_water; ++index) {
-        if (!backend->open_files[index].used) {
+        if (backend->open_files[index].state == EXT4_FILE_FREE) {
             break;
         }
     }
     if (index == backend->file_high_water) {
-        if (backend->file_high_water == backend->file_capacity)
+        if (backend->file_high_water == backend->file_capacity) {
+            table_unlock(backend);
             return ASTRA_VFS_ERR_LIMIT;
+        }
         ++backend->file_high_water;
-        backend->open_files[index].used = 0;
+        backend->open_files[index].state = EXT4_FILE_FREE;
     }
+    backend->open_files[index].state = EXT4_FILE_OPENING;
+    table_unlock(backend);
     native_flags = (flags & ASTRA_VFS_OPEN_WRITE) == 0u ? O_RDONLY :
                    (flags & ASTRA_VFS_OPEN_READ) != 0u ? O_RDWR : O_WRONLY;
     if ((flags & ASTRA_VFS_OPEN_CREATE) != 0u)
@@ -225,11 +271,23 @@ ext4_backend_open(void *context, const char *path, uint32_t flags,
         native_flags |= O_EXCL;
     if ((flags & ASTRA_VFS_OPEN_APPEND) != 0u)
         native_flags |= O_APPEND;
-    rc = ext4_fopen2(&backend->open_files[index].file, full, native_flags);
+    rc = ext4_fopen2_mode(&backend->open_files[index].file, full,
+                          native_flags,
+                          create_mode == ASTRA_VFS_MODE_DEFAULT ?
+                              UINT32_MAX : create_mode);
     if (rc != EOK) {
+        if (table_lock(backend)) {
+            backend->open_files[index].state = EXT4_FILE_FREE;
+            table_unlock(backend);
+        }
         return status_of(rc);
     }
-    backend->open_files[index].used = 1;
+    if (!table_lock(backend)) {
+        (void)ext4_fclose(&backend->open_files[index].file);
+        return ASTRA_VFS_ERR_IO;
+    }
+    backend->open_files[index].state = EXT4_FILE_OPEN;
+    table_unlock(backend);
     /*
      * The node is the slot index plus one, never a pointer. The core stores it
      * opaquely and hands it back, and a value that is only an index cannot be
@@ -251,10 +309,14 @@ file_of(AstraVfsExt4Backend *backend, uintptr_t node)
         return NULL; /* a directory handle holds no lwext4 file */
     }
     index = (uint32_t)node - 1u;
+    if (index >= backend->file_capacity || !table_lock(backend))
+        return NULL;
     if (index >= backend->file_high_water ||
-        !backend->open_files[index].used) {
+        backend->open_files[index].state != EXT4_FILE_OPEN) {
+        table_unlock(backend);
         return NULL;
     }
+    table_unlock(backend);
     return &backend->open_files[index].file;
 }
 
@@ -267,8 +329,15 @@ ext4_backend_close(void *context, uintptr_t node)
     if (file == NULL) {
         return ASTRA_VFS_OK; /* directory handles have nothing to release */
     }
+    if (!table_lock(backend))
+        return ASTRA_VFS_ERR_IO;
+    backend->open_files[(uint32_t)node - 1u].state = EXT4_FILE_CLOSING;
+    table_unlock(backend);
     (void)ext4_fclose(file);
-    backend->open_files[(uint32_t)node - 1u].used = 0;
+    if (!table_lock(backend))
+        return ASTRA_VFS_ERR_IO;
+    backend->open_files[(uint32_t)node - 1u].state = EXT4_FILE_FREE;
+    table_unlock(backend);
     return ASTRA_VFS_OK;
 }
 
@@ -424,12 +493,16 @@ ext4_backend_readdir(void *context, const char *path, uint64_t cookie,
     if (!build_path(backend, path, full, sizeof(full))) {
         return ASTRA_VFS_ERR_INVALID;
     }
+    if (!scan_lock(backend))
+        return ASTRA_VFS_ERR_IO;
     if (!backend->scan_open || backend->scan_next != cookie ||
         !same_path(backend->scan_path, full)) {
         close_scan(backend);
         rc = ext4_dir_open(&backend->scan, full);
-        if (rc != EOK)
+        if (rc != EOK) {
+            scan_unlock(backend);
             return status_of(rc);
+        }
         backend->scan_open = 1;
         remember_path(backend, full);
     }
@@ -438,6 +511,7 @@ ext4_backend_readdir(void *context, const char *path, uint64_t cookie,
         entry = ext4_dir_entry_next(&backend->scan);
         if (entry == NULL) {
             close_scan(backend);
+            scan_unlock(backend);
             return ASTRA_VFS_ERR_NOT_FOUND; /* past the last entry */
         }
         if (entry->name_length != 0u) {
@@ -446,6 +520,7 @@ ext4_backend_readdir(void *context, const char *path, uint64_t cookie,
     }
     if ((uint32_t)entry->name_length + 1u > capacity) {
         close_scan(backend);
+        scan_unlock(backend);
         return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
     }
     for (copied = 0u; copied < entry->name_length; ++copied) {
@@ -481,11 +556,12 @@ ext4_backend_readdir(void *context, const char *path, uint64_t cookie,
     }
     *next = backend->scan.next_off;
     backend->scan_next = *next;
+    scan_unlock(backend);
     return ASTRA_VFS_OK;
 }
 
 static uint32_t
-ext4_backend_mkdir(void *context, const char *path)
+ext4_backend_mkdir(void *context, const char *path, uint16_t create_mode)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
     char full[ASTRA_VFS_EXT4_PATH_MAX];
@@ -493,8 +569,13 @@ ext4_backend_mkdir(void *context, const char *path)
     if (!build_path(backend, path, full, sizeof(full))) {
         return ASTRA_VFS_ERR_INVALID;
     }
+    if (!scan_lock(backend))
+        return ASTRA_VFS_ERR_IO;
     close_scan(backend);
-    return status_of(ext4_dir_mk(full));
+    scan_unlock(backend);
+    return status_of(ext4_dir_mk_mode(
+        full, create_mode == ASTRA_VFS_MODE_DEFAULT ? UINT32_MAX :
+                                                        create_mode));
 }
 
 static uint32_t
@@ -507,7 +588,10 @@ ext4_backend_unlink(void *context, const char *path)
     if (!build_path(backend, path, full, sizeof(full))) {
         return ASTRA_VFS_ERR_INVALID;
     }
+    if (!scan_lock(backend))
+        return ASTRA_VFS_ERR_IO;
     close_scan(backend);
+    scan_unlock(backend);
     rc = ext4_fremove(full);
     if (rc == EOK) {
         return ASTRA_VFS_OK;
@@ -529,8 +613,44 @@ ext4_backend_rename(void *context, const char *from, const char *to)
     if (!build_path(backend, from, old_path, sizeof(old_path)) ||
         !build_path(backend, to, new_path, sizeof(new_path)))
         return ASTRA_VFS_ERR_INVALID;
+    if (!scan_lock(backend))
+        return ASTRA_VFS_ERR_IO;
     close_scan(backend);
+    scan_unlock(backend);
     return status_of(ext4_frename(old_path, new_path));
+}
+
+static uint32_t
+ext4_backend_chmod(void *context, const char *path, uint16_t mode)
+{
+    AstraVfsExt4Backend *backend = backend_of(context);
+    char full[ASTRA_VFS_EXT4_PATH_MAX];
+
+    if (!build_path(backend, path, full, sizeof(full)))
+        return ASTRA_VFS_ERR_INVALID;
+    if (!scan_lock(backend))
+        return ASTRA_VFS_ERR_IO;
+    close_scan(backend);
+    scan_unlock(backend);
+    return status_of(ext4_mode_set(full, mode));
+}
+
+static uint32_t
+ext4_backend_readlink(void *context, const char *path, void *buffer,
+                      uint32_t capacity, uint32_t *length)
+{
+    AstraVfsExt4Backend *backend = backend_of(context);
+    char full[ASTRA_VFS_EXT4_PATH_MAX];
+    size_t moved = 0u;
+    int rc;
+
+    if (buffer == NULL || length == NULL || capacity == 0u ||
+        !build_path(backend, path, full, sizeof(full)))
+        return ASTRA_VFS_ERR_INVALID;
+    rc = ext4_readlink(full, buffer, capacity, &moved);
+    if (rc == EOK)
+        *length = (uint32_t)moved;
+    return status_of(rc);
 }
 
 static const AstraVfsBackendOps ext4_ops = {
@@ -544,7 +664,9 @@ static const AstraVfsBackendOps ext4_ops = {
     ext4_backend_readdir,
     ext4_backend_mkdir,
     ext4_backend_unlink,
-    ext4_backend_rename
+    ext4_backend_rename,
+    ext4_backend_chmod,
+    ext4_backend_readlink
 };
 
 const AstraVfsBackendOps *
@@ -576,5 +698,33 @@ astra_vfs_ext4_init(AstraVfsExt4Backend *backend, const char *mount_point,
     backend->file_high_water = 0u;
     backend->scan_open = 0;
     backend->scan_next = 0u;
+    backend->table_lock = NULL;
+    backend->table_unlock = NULL;
+    backend->table_lock_context = NULL;
+    backend->scan_lock = NULL;
+    backend->scan_unlock = NULL;
+    backend->scan_lock_context = NULL;
+    return 1;
+}
+
+int
+astra_vfs_ext4_set_locks(AstraVfsExt4Backend *backend,
+                         AstraVfsExt4Lock table_lock_fn,
+                         AstraVfsExt4Unlock table_unlock_fn,
+                         void *table_context,
+                         AstraVfsExt4Lock scan_lock_fn,
+                         AstraVfsExt4Unlock scan_unlock_fn,
+                         void *scan_context)
+{
+    if (backend == NULL || table_lock_fn == NULL || table_unlock_fn == NULL ||
+        scan_lock_fn == NULL || scan_unlock_fn == NULL ||
+        backend->table_lock != NULL || backend->scan_lock != NULL)
+        return 0;
+    backend->table_lock = table_lock_fn;
+    backend->table_unlock = table_unlock_fn;
+    backend->table_lock_context = table_context;
+    backend->scan_lock = scan_lock_fn;
+    backend->scan_unlock = scan_unlock_fn;
+    backend->scan_lock_context = scan_context;
     return 1;
 }

@@ -88,6 +88,8 @@ typedef enum KernelFrameState {
     KERNEL_FRAME_ROM_BACKING,
     KERNEL_FRAME_PAGE_TABLE,
     KERNEL_FRAME_PROCESS,
+    KERNEL_FRAME_COW_READ_ONLY,
+    KERNEL_FRAME_COW_WRITE,
     KERNEL_FRAME_SHARED,
     KERNEL_FRAME_DMA,
     KERNEL_FRAME_DEVICE,
@@ -176,6 +178,13 @@ KernelMemoryStatus kernel_memory_unpin(uint32_t physical_base,
                                        uint32_t owner);
 KernelMemoryStatus kernel_memory_release_owner(uint32_t owner,
                                                uint32_t *released_frames);
+KernelMemoryStatus kernel_memory_transfer_owner(uint32_t physical_address,
+                                                uint32_t old_owner,
+                                                uint32_t new_owner);
+KernelMemoryStatus kernel_memory_reclassify(uint32_t physical_address,
+                                            uint32_t owner,
+                                            KernelFrameState old_state,
+                                            KernelFrameState new_state);
 bool kernel_memory_range_owned(uint32_t physical_base, uint32_t byte_count,
                                uint32_t owner, KernelFrameState state,
                                bool require_pinned);

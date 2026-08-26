@@ -66,6 +66,9 @@ struct ext4_blockdev_iface {
 	int (*bwrite)(struct ext4_blockdev *bdev, const void *buf,
 		      uint64_t blk_id, uint32_t blk_cnt);
 
+	/**@brief   Make every preceding write durable. Not mandatory. */
+	int (*flush)(struct ext4_blockdev *bdev);
+
 	/**@brief   Close device function.
 	 * @param   bdev block device.*/
 	int (*close)(struct ext4_blockdev *bdev);
@@ -168,6 +171,11 @@ int ext4_block_bind_bcache(struct ext4_blockdev *bdev, struct ext4_bcache *bc);
  * @return  standard error code*/
 int ext4_block_fini(struct ext4_blockdev *bdev);
 
+/**@brief   Make every preceding physical write durable.
+ * @param   bdev block device descriptor
+ * @return  standard error code*/
+int ext4_block_flush(struct ext4_blockdev *bdev);
+
 /**@brief   Flush data in given buffer to disk.
  * @param   bdev block device descriptor
  * @param   buf buffer
@@ -214,6 +222,15 @@ int ext4_block_set(struct ext4_blockdev *bdev, struct ext4_block *b);
  * @param   lba logical block address
  * @return  standard error code*/
 int ext4_blocks_get_direct(struct ext4_blockdev *bdev, void *buf, uint64_t lba,
+			   uint32_t cnt);
+
+/**@brief   Read a contiguous run through the coherent block cache.
+ * @param   bdev block device descriptor
+ * @param   buf output buffer
+ * @param   lba first logical block address
+ * @param   cnt logical block count
+ * @return  standard error code*/
+int ext4_blocks_get_cached(struct ext4_blockdev *bdev, void *buf, uint64_t lba,
 			   uint32_t cnt);
 
 /**@brief   Block write procedure (without cache)

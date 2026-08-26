@@ -16,7 +16,9 @@
 #define TEST_COLUMNS 20u
 #define TEST_ROWS 4u
 
-static uint8_t rendered[TEST_ROWS][TEST_COLUMNS];
+static AstraTerminalCell rendered[TEST_ROWS][TEST_COLUMNS];
+static uint8_t terminal_storage[
+    ASTRA_TERMINAL_STORAGE_BYTES(TEST_COLUMNS, TEST_ROWS)];
 static uint32_t render_calls;
 static uint32_t rendered_cells;
 static int render_should_fail;
@@ -25,7 +27,7 @@ static uint32_t scrolled_rows;
 static uint32_t preserved_rows;
 
 static int record(void *context, uint32_t row, uint32_t column,
-                  const uint8_t *cells, uint32_t count)
+                  const AstraTerminalCell *cells, uint32_t count)
 {
     uint32_t index;
 
@@ -53,8 +55,11 @@ static int record_scroll(void *context, uint32_t rows, uint32_t preserved)
     ++scroll_calls;
     scrolled_rows = rows;
     preserved_rows = preserved;
-    memmove(rendered[0], rendered[rows], preserved * TEST_COLUMNS);
-    memset(rendered[preserved], ' ', rows * TEST_COLUMNS);
+    memmove(rendered[0], rendered[rows],
+            preserved * TEST_COLUMNS * sizeof(rendered[0][0]));
+    for (uint32_t row = preserved; row < TEST_ROWS; ++row)
+        for (uint32_t column = 0u; column < TEST_COLUMNS; ++column)
+            rendered[row][column].codepoint = ' ';
     return 1;
 }
 
@@ -67,8 +72,9 @@ static void reset(AstraTerminal *terminal)
     scroll_calls = 0u;
     scrolled_rows = 0u;
     preserved_rows = 0u;
-    assert(astra_terminal_init(terminal, TEST_COLUMNS, TEST_ROWS, record,
-                               NULL) == ASTRA_TERMINAL_OK);
+    assert(astra_terminal_init(terminal, TEST_COLUMNS, TEST_ROWS,
+                               terminal_storage, sizeof(terminal_storage),
+                               record, NULL) == ASTRA_TERMINAL_OK);
     assert(astra_terminal_flush(terminal) == ASTRA_TERMINAL_OK);
     render_calls = 0u;
     rendered_cells = 0u;
@@ -82,7 +88,7 @@ static void assert_matches(const AstraTerminal *terminal)
 
     for (row = 0u; row < TEST_ROWS; ++row) {
         for (column = 0u; column < TEST_COLUMNS; ++column) {
-            assert(rendered[row][column] ==
+            assert(rendered[row][column].codepoint ==
                    astra_terminal_cell(terminal, row, column));
         }
     }
@@ -91,20 +97,28 @@ static void assert_matches(const AstraTerminal *terminal)
 static void test_rejects_impossible_geometry(void)
 {
     AstraTerminal terminal;
+    size_t bytes;
 
-    assert(astra_terminal_init(NULL, TEST_COLUMNS, TEST_ROWS, record, NULL) ==
+    assert(astra_terminal_storage_size(TEST_COLUMNS, TEST_ROWS, &bytes) ==
+           ASTRA_TERMINAL_OK);
+    assert(bytes == sizeof(terminal_storage));
+    assert(astra_terminal_init(NULL, TEST_COLUMNS, TEST_ROWS,
+                               terminal_storage, sizeof(terminal_storage),
+                               record, NULL) ==
            ASTRA_TERMINAL_INVALID_ARGUMENT);
-    assert(astra_terminal_init(&terminal, 0u, TEST_ROWS, record, NULL) ==
+    assert(astra_terminal_init(&terminal, 0u, TEST_ROWS, terminal_storage,
+                               sizeof(terminal_storage), record, NULL) ==
            ASTRA_TERMINAL_INVALID_ARGUMENT);
-    assert(astra_terminal_init(&terminal, TEST_COLUMNS, 0u, record, NULL) ==
+    assert(astra_terminal_init(&terminal, TEST_COLUMNS, 0u,
+                               terminal_storage, sizeof(terminal_storage),
+                               record, NULL) ==
            ASTRA_TERMINAL_INVALID_ARGUMENT);
-    /* Beyond its own storage it refuses rather than overruns. */
-    assert(astra_terminal_init(&terminal, ASTRA_TERMINAL_COLUMNS_MAX + 1u,
-                               TEST_ROWS, record, NULL) ==
-           ASTRA_TERMINAL_TOO_LARGE);
-    assert(astra_terminal_init(&terminal, TEST_COLUMNS,
-                               ASTRA_TERMINAL_ROWS_MAX + 1u, record, NULL) ==
-           ASTRA_TERMINAL_TOO_LARGE);
+    assert(astra_terminal_init(&terminal, TEST_COLUMNS, TEST_ROWS,
+                               terminal_storage,
+                               sizeof(terminal_storage) -
+                                   ASTRA_TERMINAL_STORAGE_ALIGNMENT,
+                               record, NULL) ==
+           ASTRA_TERMINAL_STORAGE_TOO_SMALL);
 }
 
 static void test_writes_land_where_the_cursor_is(void)
@@ -221,7 +235,7 @@ static void test_scroll_preserves_content_and_redraws(void)
     assert_matches(&terminal);
 }
 
-static void test_unprintable_bytes_are_visible(void)
+static void test_controls_and_invalid_utf8(void)
 {
     AstraTerminal terminal;
 
@@ -230,10 +244,62 @@ static void test_unprintable_bytes_are_visible(void)
     astra_terminal_putc(&terminal, 0x1fu);
     astra_terminal_putc(&terminal, 0x7fu);
     astra_terminal_putc(&terminal, 0xffu);
-    assert(astra_terminal_cell(&terminal, 0u, 0u) == '.');
-    assert(astra_terminal_cell(&terminal, 0u, 1u) == '.');
-    assert(astra_terminal_cell(&terminal, 0u, 2u) == '.');
-    assert(astra_terminal_cell(&terminal, 0u, 3u) == '.');
+    assert(astra_terminal_cell(&terminal, 0u, 0u) == 0xfffdu);
+    assert(astra_terminal_cell(&terminal, 0u, 1u) == ' ');
+}
+
+static void test_utf8_attributes_and_truecolor(void)
+{
+    AstraTerminal terminal;
+    const AstraTerminalCell *styled;
+
+    reset(&terminal);
+    astra_terminal_write(&terminal, "A\xc3\xa9\xf0\x9f\x98\x80");
+    assert(astra_terminal_cell(&terminal, 0u, 0u) == 'A');
+    assert(astra_terminal_cell(&terminal, 0u, 1u) == 0xe9u);
+    assert(astra_terminal_cell(&terminal, 0u, 2u) == 0x1f600u);
+    astra_terminal_write(
+        &terminal, "\x1b[1;3;4;38;5;196;48;2;1;2;3mX");
+    styled = astra_terminal_cell_at(&terminal, 0u, 3u);
+    assert(styled != NULL && styled->codepoint == 'X');
+    assert((styled->attributes & (ASTRA_TERMINAL_BOLD |
+                                  ASTRA_TERMINAL_ITALIC |
+                                  ASTRA_TERMINAL_UNDERLINE)) ==
+           (ASTRA_TERMINAL_BOLD | ASTRA_TERMINAL_ITALIC |
+            ASTRA_TERMINAL_UNDERLINE));
+    assert(styled->foreground == 196u);
+    assert(styled->background == ASTRA_TERMINAL_COLOR_RGB(1u, 2u, 3u));
+}
+
+static void test_cursor_erase_and_alternate_screen(void)
+{
+    AstraTerminal terminal;
+
+    reset(&terminal);
+    astra_terminal_write(&terminal, "primary");
+    astra_terminal_write(&terminal, "\x1b[2;3HXY\x1b[1K");
+    assert(terminal.cursor_row == 1u && terminal.cursor_column == 4u);
+    assert(astra_terminal_cell(&terminal, 1u, 2u) == ' ');
+    astra_terminal_write(&terminal, "\x1b[?1049halt");
+    assert(terminal.alternate_screen &&
+           astra_terminal_cell(&terminal, 0u, 0u) == 'a');
+    astra_terminal_write(&terminal, "\x1b[?1049l");
+    assert(!terminal.alternate_screen &&
+           astra_terminal_cell(&terminal, 0u, 0u) == 'p');
+}
+
+static void test_scroll_region_and_osc_are_bounded(void)
+{
+    AstraTerminal terminal;
+
+    reset(&terminal);
+    astra_terminal_write(&terminal, "top\nA\nB\nbottom");
+    astra_terminal_write(&terminal, "\x1b[2;3r\x1b[3;1H\n");
+    assert(astra_terminal_cell(&terminal, 0u, 0u) == 't');
+    assert(astra_terminal_cell(&terminal, 1u, 0u) == 'B');
+    assert(astra_terminal_cell(&terminal, 2u, 0u) == ' ');
+    astra_terminal_write(&terminal, "\x1b]0;ignored title\x07Z");
+    assert(astra_terminal_cell(&terminal, 2u, 0u) == 'Z');
 }
 
 static void test_flush_reports_only_changes(void)
@@ -299,8 +365,9 @@ static void test_model_works_without_a_renderer(void)
 {
     AstraTerminal terminal;
 
-    assert(astra_terminal_init(&terminal, TEST_COLUMNS, TEST_ROWS, NULL,
-                               NULL) == ASTRA_TERMINAL_OK);
+    assert(astra_terminal_init(&terminal, TEST_COLUMNS, TEST_ROWS,
+                               terminal_storage, sizeof(terminal_storage),
+                               NULL, NULL) == ASTRA_TERMINAL_OK);
     astra_terminal_write(&terminal, "headless");
     assert(astra_terminal_flush(&terminal) == ASTRA_TERMINAL_OK);
     assert(astra_terminal_cell(&terminal, 0u, 0u) == 'h');
@@ -314,24 +381,73 @@ static void test_resize_preserves_cells_and_clamps_cursor(void)
     astra_terminal_write(&terminal, "top\nsecond");
     terminal.cursor_row = TEST_ROWS - 1u;
     terminal.cursor_column = TEST_COLUMNS - 1u;
-    assert(astra_terminal_resize(&terminal, 10u, 2u) == ASTRA_TERMINAL_OK);
+    assert(astra_terminal_resize(&terminal, 10u, 2u, NULL, 0u) ==
+           ASTRA_TERMINAL_OK);
     assert(terminal.columns == 10u && terminal.rows == 2u);
     assert(terminal.cursor_row == 1u && terminal.cursor_column == 9u);
     assert(astra_terminal_cell(&terminal, 0u, 0u) == 't');
     assert(astra_terminal_cell(&terminal, 1u, 0u) == 's');
     assert(astra_terminal_flush(&terminal) == ASTRA_TERMINAL_OK);
-    assert(astra_terminal_resize(&terminal, TEST_COLUMNS, TEST_ROWS) ==
+    assert(astra_terminal_resize(&terminal, TEST_COLUMNS, TEST_ROWS, NULL,
+                                 0u) ==
            ASTRA_TERMINAL_OK);
     assert(astra_terminal_cell(&terminal, 0u, 0u) == 't');
     assert(astra_terminal_cell(&terminal, 1u, 0u) == 's');
     assert(astra_terminal_cell(&terminal, 2u, 0u) == ' ');
     assert(astra_terminal_flush(&terminal) == ASTRA_TERMINAL_OK);
-    assert(astra_terminal_resize(&terminal, 0u, 1u) ==
+    assert(astra_terminal_resize(&terminal, 0u, 1u, NULL, 0u) ==
            ASTRA_TERMINAL_INVALID_ARGUMENT);
+}
+
+static void test_growth_rebinds_caller_storage(void)
+{
+    enum { GROWN_COLUMNS = 257, GROWN_ROWS = 65 };
+    static uint8_t grown_storage[
+        ASTRA_TERMINAL_STORAGE_BYTES(GROWN_COLUMNS, GROWN_ROWS)];
+    AstraTerminal terminal;
+
+    assert(astra_terminal_init(&terminal, TEST_COLUMNS, TEST_ROWS,
+                               terminal_storage, sizeof(terminal_storage),
+                               NULL, NULL) == ASTRA_TERMINAL_OK);
+    astra_terminal_write(&terminal, "preserved");
+    assert(astra_terminal_resize(&terminal, GROWN_COLUMNS, GROWN_ROWS,
+                                 NULL, 0u) ==
+           ASTRA_TERMINAL_STORAGE_TOO_SMALL);
+    assert(astra_terminal_resize(&terminal, GROWN_COLUMNS, GROWN_ROWS,
+                                 grown_storage, sizeof(grown_storage)) ==
+           ASTRA_TERMINAL_OK);
+    assert(terminal.columns == GROWN_COLUMNS && terminal.rows == GROWN_ROWS);
+    assert(astra_terminal_cell(&terminal, 0u, 0u) == 'p');
+    assert(astra_terminal_cell(&terminal, 0u, 8u) == 'd');
+    assert(astra_terminal_cell(&terminal, GROWN_ROWS - 1u,
+                               GROWN_COLUMNS - 1u) == ' ');
+}
+
+static void test_preallocated_resize(void)
+{
+    enum {
+        CAPACITY_COLUMNS = TEST_COLUMNS + 20u,
+        CAPACITY_ROWS = TEST_ROWS + 10u
+    };
+    uint8_t storage[
+        ASTRA_TERMINAL_STORAGE_BYTES(CAPACITY_COLUMNS, CAPACITY_ROWS)];
+    AstraTerminal terminal;
+
+    assert(astra_terminal_init_capacity(
+               &terminal, TEST_COLUMNS, TEST_ROWS,
+               CAPACITY_COLUMNS, CAPACITY_ROWS, storage, sizeof(storage),
+               record, NULL) == ASTRA_TERMINAL_OK);
+    assert(astra_terminal_resize(&terminal, CAPACITY_COLUMNS, CAPACITY_ROWS,
+                                 NULL, 0u) == ASTRA_TERMINAL_OK);
+    assert(terminal.storage == storage &&
+           terminal.capacity_columns == CAPACITY_COLUMNS &&
+           terminal.capacity_rows == CAPACITY_ROWS);
 }
 
 static char echoed[8][64];
 static uint32_t echoed_lines;
+static char replies[8][32];
+static uint32_t reply_count;
 
 static void record_echo(void *context, const char *line, uint32_t length)
 {
@@ -341,6 +457,46 @@ static void record_echo(void *context, const char *line, uint32_t length)
     memcpy(echoed[echoed_lines], line, length);
     echoed[echoed_lines][length] = '\0';
     ++echoed_lines;
+}
+
+static int record_reply(void *context, const uint8_t *bytes, uint32_t length)
+{
+    (void)context;
+    assert(reply_count < 8u && length < sizeof(replies[0]));
+    memcpy(replies[reply_count], bytes, length);
+    replies[reply_count][length] = '\0';
+    ++reply_count;
+    return 1;
+}
+
+static int refuse_reply(void *context, const uint8_t *bytes, uint32_t length)
+{
+    (void)context;
+    (void)bytes;
+    (void)length;
+    return 0;
+}
+
+static void test_terminal_queries_reply_on_the_input_path(void)
+{
+    AstraTerminal terminal;
+
+    reset(&terminal);
+    reply_count = 0u;
+    astra_terminal_set_reply(&terminal, record_reply, NULL);
+    astra_terminal_write(&terminal, "abc\x1b[5n\x1b[6n\x1b[?6n"
+                                      "\x1b[c\x1b[>c");
+    assert(reply_count == 5u);
+    assert(strcmp(replies[0], "\x1b[0n") == 0);
+    assert(strcmp(replies[1], "\x1b[1;4R") == 0);
+    assert(strcmp(replies[2], "\x1b[?1;4R") == 0);
+    assert(strcmp(replies[3], "\x1b[?1;2c") == 0);
+    assert(strcmp(replies[4], "\x1b[>0;1;0c") == 0);
+    assert(terminal.reply_failures == 0u);
+
+    astra_terminal_set_reply(&terminal, refuse_reply, NULL);
+    astra_terminal_write(&terminal, "\x1b[5n");
+    assert(terminal.reply_failures == 1u);
 }
 
 static void test_echo_reports_each_line_once(void)
@@ -361,16 +517,19 @@ static void test_echo_reports_each_line_once(void)
     /* A redraw replaces the line rather than recording every prefix of it. */
     astra_terminal_write(&terminal, "WORK:> l\rWORK:> ls\n");
     assert(echoed_lines == 3u && strcmp(echoed[2], "WORK:> ls") == 0);
+    /* ONLCR's CR must not erase the completed line before LF records it. */
+    astra_terminal_write(&terminal, "child output\r\n");
+    assert(echoed_lines == 4u && strcmp(echoed[3], "child output") == 0);
     /* A blank line is not a line: nothing to record and nothing to read. */
     astra_terminal_write(&terminal, "\n");
-    assert(echoed_lines == 3u);
+    assert(echoed_lines == 4u);
     /* Installing another echo hands the partial line to the old one first. */
     astra_terminal_write(&terminal, "partial");
     astra_terminal_set_echo(&terminal, NULL, NULL);
-    assert(echoed_lines == 4u && strcmp(echoed[3], "partial") == 0);
+    assert(echoed_lines == 5u && strcmp(echoed[4], "partial") == 0);
     /* And with no echo installed the model does not collect anything. */
     astra_terminal_write(&terminal, "silent\n");
-    assert(echoed_lines == 4u);
+    assert(echoed_lines == 5u);
 }
 
 int main(void)
@@ -382,13 +541,19 @@ int main(void)
     test_tab_stops();
     test_wrap_at_the_right_edge();
     test_scroll_preserves_content_and_redraws();
-    test_unprintable_bytes_are_visible();
+    test_controls_and_invalid_utf8();
+    test_utf8_attributes_and_truecolor();
+    test_cursor_erase_and_alternate_screen();
+    test_scroll_region_and_osc_are_bounded();
     test_flush_reports_only_changes();
     test_scroll_moves_rendered_rows_once();
     test_render_failure_is_reported();
     test_model_works_without_a_renderer();
     test_resize_preserves_cells_and_clamps_cursor();
+    test_growth_rebinds_caller_storage();
+    test_preallocated_resize();
     test_echo_reports_each_line_once();
+    test_terminal_queries_reply_on_the_input_path();
     puts("astra terminal: PASS");
     return 0;
 }

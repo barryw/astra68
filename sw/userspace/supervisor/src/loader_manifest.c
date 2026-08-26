@@ -3,15 +3,6 @@
 #include <astra/bytes.h>
 #include <astra/manifest.h>
 
-static int equal(const char *left, const char *right)
-{
-    while (*left != '\0' && *left == *right) {
-        ++left;
-        ++right;
-    }
-    return *left == '\0' && *right == '\0';
-}
-
 static int copy(char *out, uint32_t capacity, const char *text)
 {
     uint32_t at = 0u;
@@ -40,11 +31,11 @@ static int authority(char *token, char *name, uint32_t *rights,
     *colon++ = '\0';
     if (!copy(name, ASTRA_CAPABILITY_NAME_MAX, token))
         return 0;
-    if (equal(colon, "r")) {
+    if (strcmp(colon, "r") == 0) {
         *rights = ASTRA_RIGHT_READ;
         return 1;
     }
-    if (equal(colon, "rw")) {
+    if (strcmp(colon, "rw") == 0) {
         *rights = ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE;
         return 1;
     }
@@ -74,13 +65,13 @@ static int parse_line(char *line, SupervisorManifestEntry *entry)
     if (count > sizeof(token) / sizeof(token[0]) || count < 3u)
         return 0;
     (void)memset(entry, 0, sizeof(*entry));
-    if (equal(token[at], "service"))
+    if (strcmp(token[at], "service") == 0)
         entry->resident = 1u;
-    else if (!equal(token[at], "application"))
+    else if (strcmp(token[at], "application") != 0)
         return 0;
     ++at;
     if (!copy(entry->path, sizeof(entry->path), token[at++]) ||
-        equal(entry->path, "") || equal(token[at++], "grants") == 0)
+        strcmp(entry->path, "") == 0 || strcmp(token[at++], "grants") != 0)
         return 0;
     {
         char *colon = entry->path;
@@ -91,9 +82,9 @@ static int parse_line(char *line, SupervisorManifestEntry *entry)
             return 0;
     }
 
-    while (at < count && !equal(token[at], "serves") &&
-           !equal(token[at], "delegates") &&
-           !equal(token[at], "required")) {
+    while (at < count && strcmp(token[at], "serves") != 0 &&
+           strcmp(token[at], "delegates") != 0 &&
+           strcmp(token[at], "required") != 0) {
         SupervisorManifestGrant *grant;
 
         if (entry->grant_count == SUPERVISOR_MANIFEST_GRANT_MAX)
@@ -104,17 +95,17 @@ static int parse_line(char *line, SupervisorManifestEntry *entry)
         ++entry->grant_count;
         ++at;
     }
-    if (at < count && equal(token[at], "serves")) {
+    if (at < count && strcmp(token[at], "serves") == 0) {
         ++at;
         if (at == count || !authority(token[at++], entry->serves,
                        &entry->serves_rights, 1))
             return 0;
     }
-    if (at < count && equal(token[at], "delegates")) {
+    if (at < count && strcmp(token[at], "delegates") == 0) {
         entry->delegates = 1u;
         ++at;
     }
-    if (at < count && equal(token[at], "required")) {
+    if (at < count && strcmp(token[at], "required") == 0) {
         entry->required = 1u;
         ++at;
     }

@@ -8,6 +8,7 @@ ANALYZER_CC ?= gcc
 RUNTIME := ../runtime
 LWEXT4 := ../../../third_party/lwext4
 MKE2FS ?= mke2fs
+E2FSCK ?= e2fsck
 CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
@@ -27,6 +28,7 @@ HOST_HEADERS := $(wildcard include/astra/*.h ../../include/astra/*.h \
 	$(RUNTIME)/include/astra/*.h $(ALLOC)/include/astra/*.h \
 	port/include/generated/*.h tests/*.h)
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
+THREAD_SANITIZER_FLAGS := -fsanitize=thread -fno-omit-frame-pointer -g
 SOURCES := src/block_device.c src/memory_block.c src/mbr.c
 # The lease backend calls syscalls, so it is target-only.
 OBJECTS := build/m68k/block_device.o build/m68k/memory_block.o \
@@ -60,6 +62,8 @@ PORT_SOURCES := src/ext4_port.c src/ext4_alloc.c src/ext4_xattr_stub.c \
 PORT_OBJECTS := build/m68k/ext4_port.o build/m68k/ext4_alloc.o \
 	build/m68k/ext4_xattr_stub.o build/m68k/ext4_time.o \
 	build/m68k/ext4_clock_machine.o
+ANALYZER_SOURCES := $(SOURCES) src/lease_block.c $(PORT_SOURCES)
+ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,$(ANALYZER_SOURCES))
 EXT4_TARGET := build/m68k/libastraext4.a
 
 # Freestanding libc shims, target only: the host has a real C library and must
@@ -170,8 +174,21 @@ EXT4_MOUNT_TEST_SOURCES := src/block_device.c src/memory_block.c src/mbr.c \
 build/host/test_ext4_mount: $(EXT4_MOUNT_TEST_SOURCES) $(HOST_HEADERS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(ALLOC_CPPFLAGS) $(EXT4_CPPFLAGS) \
-		$(EXT4_VENDOR_FLAGS) $(HOST_FLAGS) $(EXT4_MOUNT_TEST_SOURCES) \
+		$(EXT4_VENDOR_FLAGS) $(HOST_FLAGS) -pthread \
+		$(EXT4_MOUNT_TEST_SOURCES) \
 		-o $@
+
+build/host/test_ext4_mount_sanitize: $(EXT4_MOUNT_TEST_SOURCES) $(HOST_HEADERS)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(ALLOC_CPPFLAGS) $(EXT4_CPPFLAGS) \
+		$(EXT4_VENDOR_FLAGS) $(SANITIZER_FLAGS) -pthread \
+		$(EXT4_MOUNT_TEST_SOURCES) -o $@
+
+build/host/test_ext4_mount_tsan: $(EXT4_MOUNT_TEST_SOURCES) $(HOST_HEADERS)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(ALLOC_CPPFLAGS) $(EXT4_CPPFLAGS) \
+		$(EXT4_VENDOR_FLAGS) $(THREAD_SANITIZER_FLAGS) -pthread \
+		$(EXT4_MOUNT_TEST_SOURCES) -o $@
 
 # The frozen profile: 4 KiB blocks, 256-byte inodes, no 64bit, no casefold,
 # and no extents or xattr because those two implementations are GPLv2 and are
@@ -214,16 +231,51 @@ ext4-test: build/host/test_ext4_mount
 	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) \
 		$(EXT4_MKFS_JOURNAL) -F build/host/ext4-test.img
 	./build/host/test_ext4_mount build/host/ext4-test.img
+	$(E2FSCK) -fn build/host/ext4-test.img
+	./build/host/test_ext4_mount build/host/ext4-test.img verify-only
 	@echo "--- partitioned: the volume must not touch the boot partition"
 	dd if=/dev/zero of=build/host/ext4-part.img bs=1048576 count=16 status=none
 	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) \
 		$(EXT4_MKFS_JOURNAL) -F build/host/ext4-part.img
 	./build/host/test_ext4_mount build/host/ext4-part.img partitioned
+	$(E2FSCK) -fn build/host/ext4-part.img
 	@echo "--- full: a volume with no space left must say so"
 	dd if=/dev/zero of=build/host/ext4-full.img bs=1048576 count=16 status=none
 	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) \
 		$(EXT4_MKFS_JOURNAL) -F build/host/ext4-full.img
 	./build/host/test_ext4_mount build/host/ext4-full.img full
+	$(E2FSCK) -fn build/host/ext4-full.img
+	@echo "--- power cut: only explicit barriers survive, journal must recover"
+	dd if=/dev/zero of=build/host/ext4-powercut.img bs=1048576 count=16 \
+		status=none
+	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) \
+		$(EXT4_MKFS_JOURNAL) -F build/host/ext4-powercut.img
+	@for pass in 1 2 3; do \
+		echo "power-cut pass $$pass"; \
+		./build/host/test_ext4_mount build/host/ext4-powercut.img \
+			powercut-write || exit 1; \
+		./build/host/test_ext4_mount build/host/ext4-powercut.img \
+			powercut-recover || exit 1; \
+		$(E2FSCK) -fn build/host/ext4-powercut.img || exit 1; \
+	done
+
+ext4-sanitize: build/host/test_ext4_mount_sanitize
+	dd if=/dev/zero of=build/host/ext4-sanitize.img bs=1048576 count=16 \
+		status=none
+	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) \
+		$(EXT4_MKFS_JOURNAL) -F build/host/ext4-sanitize.img
+	./build/host/test_ext4_mount_sanitize build/host/ext4-sanitize.img
+	$(E2FSCK) -fn build/host/ext4-sanitize.img
+
+# Ubuntu's TSan runtime cannot reserve its shadow with normal ASLR on Beast.
+ext4-tsan: build/host/test_ext4_mount_tsan
+	dd if=/dev/zero of=build/host/ext4-tsan.img bs=1048576 count=16 \
+		status=none
+	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) \
+		$(EXT4_MKFS_JOURNAL) -F build/host/ext4-tsan.img
+	setarch x86_64 -R ./build/host/test_ext4_mount_tsan \
+		build/host/ext4-tsan.img
+	$(E2FSCK) -fn build/host/ext4-tsan.img
 
 sanitize:
 	@mkdir -p build/host
@@ -244,22 +296,22 @@ sanitize:
 		-o build/host/test_mbr_sanitize
 	./build/host/test_mbr_sanitize
 
-analyze:
-	@mkdir -p build/analyzer
-	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
-		-c src/block_device.c -o build/analyzer/block_device.o
-	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
-		-c src/memory_block.c -o build/analyzer/memory_block.o
-	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
-		-c src/lease_block.c -o build/analyzer/lease_block.o
-	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
-		-c src/mbr.c -o build/analyzer/mbr.o
-	$(ANALYZER_CC) $(CPPFLAGS) $(EXT4_CPPFLAGS) $(COMMON_FLAGS) \
-		$(HOST_FLAGS) -fanalyzer \
-		-c src/ext4_port.c -o build/analyzer/ext4_port.o
-	$(ANALYZER_CC) $(CPPFLAGS) $(ALLOC_CPPFLAGS) $(EXT4_CPPFLAGS) \
-		$(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
-		-c src/ext4_alloc.c -o build/analyzer/ext4_alloc.o
+analyze: $(ANALYZER_OBJECTS)
+
+build/analyzer/ext4_port.o build/analyzer/ext4_time.o: \
+	ANALYZER_CPPFLAGS := $(EXT4_CPPFLAGS) $(FREESTANDING)
+build/analyzer/ext4_alloc.o: ANALYZER_CPPFLAGS := \
+	$(ALLOC_CPPFLAGS) $(EXT4_CPPFLAGS) $(FREESTANDING)
+build/analyzer/ext4_xattr_stub.o: ANALYZER_CPPFLAGS := \
+	$(EXT4_CPPFLAGS) $(FREESTANDING)
+build/analyzer/ext4_xattr_stub.o: ANALYZER_CFLAGS := \
+	$(EXT4_VENDOR_FLAGS) -Werror
+build/analyzer/%.o: ANALYZER_CFLAGS ?= $(COMMON_FLAGS)
+
+build/analyzer/%.o: src/%.c
+	@mkdir -p $(@D)
+	$(ANALYZER_CC) $(CPPFLAGS) $(ANALYZER_CPPFLAGS) $(ANALYZER_CFLAGS) \
+		$(HOST_FLAGS) -fanalyzer -c $< -o $@
 
 # ---------------------------------------------------------------------------
 # Freestanding link proof.
@@ -298,4 +350,5 @@ size: $(OBJECTS) $(PORT_OBJECTS) $(LWEXT4_OBJECTS)
 clean:
 	rm -rf build
 
-.PHONY: all test ext4-test linkcheck sanitize analyze size clean
+.PHONY: all test ext4-test ext4-sanitize ext4-tsan linkcheck sanitize \
+	analyze size clean

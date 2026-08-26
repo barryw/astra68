@@ -42,6 +42,11 @@ AstraLaunchSource astra_startup_launch_source(
     const AstraStartupInfo *startup);
 const char *astra_startup_argument(const AstraStartupInfo *startup,
                                    uint32_t index);
+const AstraStartupCapability *astra_startup_capability(
+    const AstraStartupInfo *startup, const char *name);
+uint32_t astra_service_ready(uint32_t bootstrap, uint32_t status,
+                             const uint32_t *handles,
+                             uint32_t handle_count);
 
 void astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
                     uint32_t argument2, uint32_t argument3,
@@ -51,6 +56,20 @@ uint32_t astra_yield(void);
 uint32_t astra_close(uint32_t handle);
 uint32_t astra_rt_handle_duplicate(uint32_t handle, uint32_t rights,
                                 uint32_t *duplicate);
+uint32_t astra_rt_event_create(uint32_t flags, uint32_t rights,
+                               uint32_t *handle);
+uint32_t astra_rt_semaphore_create(uint32_t initial, uint32_t maximum,
+                                   uint32_t rights, uint32_t *handle);
+uint32_t astra_rt_signal(uint32_t handle, uint32_t count,
+                         uint32_t *woken);
+uint32_t astra_rt_event_reset(uint32_t handle);
+typedef struct AstraThreadStart {
+    void (*entry)(uint32_t argument);
+    uint32_t argument;
+} AstraThreadStart;
+uint32_t astra_rt_thread_create(const AstraThreadStart *start,
+                                uint32_t priority, uint32_t rights,
+                                uint32_t *handle, uint32_t *thread_id);
 uint32_t astra_rt_area_create(uint32_t byte_size, uint32_t rights,
                            uint32_t *handle);
 /* As above, with ASTRA_AREA_CREATE_* -- reserved rather than committed. */
@@ -62,6 +81,28 @@ uint32_t astra_rt_area_decommit(void *address, uint32_t byte_size,
 uint32_t astra_rt_area_map(uint32_t handle, uint32_t permissions,
                         void **address, uint32_t *byte_size);
 uint32_t astra_rt_area_unmap(void *address);
+uint32_t astra_rt_private_reserve(uint32_t byte_size, uint32_t permissions,
+                                 void **address, uint32_t *mapped_span);
+uint32_t astra_rt_private_decommit(void *address, uint32_t byte_size,
+                                  uint32_t *released_pages);
+uint32_t astra_rt_signal_configure(void (*trampoline)(int), void *stack_top,
+                                   uint32_t blocked, uint32_t *pending,
+                                   uint32_t *previous_blocked);
+uint32_t astra_rt_interval_timer(uint64_t delay_ns, uint64_t interval_ns,
+                                 uint64_t *old_delay_ns,
+                                 uint64_t *old_interval_ns);
+uint32_t astra_rt_interval_timer_get(uint64_t *delay_ns,
+                                     uint64_t *interval_ns);
+uint32_t astra_rt_signal_return(void);
+uint32_t astra_rt_ring_create(uint32_t area, uint32_t offset,
+                              uint32_t element_size, uint32_t capacity,
+                              uint32_t flags, uint32_t *producer,
+                              uint32_t *consumer);
+uint32_t astra_rt_ring_read_try(uint32_t consumer, void *bytes,
+                               uint32_t capacity, uint32_t *copied);
+uint32_t astra_rt_ring_write_try(uint32_t producer, const void *bytes,
+                                uint32_t length, uint32_t flags,
+                                uint32_t *written);
 uint32_t astra_rt_library_map(const void *image, uint32_t length,
                               uint32_t *base, uint32_t *span);
 uint32_t astra_rt_library_attach(const AstraLibraryReference *reference,
@@ -75,6 +116,16 @@ uint32_t astra_progress(uint32_t value);
 uint32_t astra_device_query(uint32_t handle, AstraDeviceInfo *info);
 uint32_t astra_device_reset(uint32_t handle);
 uint64_t astra_clock_monotonic(void);
+static inline uint32_t
+astra_elapsed_microseconds(uint64_t from, uint64_t to)
+{
+    uint64_t elapsed;
+
+    if (to <= from)
+        return 0u;
+    elapsed = (to - from) / 1000u;
+    return elapsed > UINT32_MAX ? UINT32_MAX : (uint32_t)elapsed;
+}
 uint32_t astra_clock_realtime(uint64_t *nanoseconds);
 uint32_t astra_clock_realtime_zone(uint64_t *nanoseconds,
                                    AstraTimeZone *zone);
@@ -108,6 +159,7 @@ uint32_t astra_input_read(uint32_t device, AstraInputEvent *events,
                           uint32_t capacity, uint32_t *count,
                           uint32_t *flags);
 void astra_process_exit(uint32_t status) __attribute__((noreturn));
+void astra_thread_exit(uint32_t status) __attribute__((noreturn));
 
 /*
  * Starting a program.
@@ -128,13 +180,19 @@ uint32_t astra_launch(const void *image, uint32_t length,
                       const AstraLaunchGrant *grants, uint32_t count,
                       const AstraLaunchArguments *arguments,
                       uint32_t *process_handle, uint32_t *process_id);
-uint32_t astra_launch_arguments_pack(AstraLaunchArguments *arguments,
-                                     AstraLaunchSource source,
-                                     uint32_t count,
-                                     const char *const *values);
+uint32_t astra_launch_arguments_pack(
+    AstraLaunchArguments *arguments, char *storage, uint32_t capacity,
+    AstraLaunchSource source, uint32_t count, const char *const *values);
 uint32_t astra_launch_environment_pack(
     AstraLaunchArguments *arguments, char *storage, uint32_t capacity,
     uint32_t count, const char *const *names, const char *const *values);
+uint32_t astra_exec_request_pack(AstraExecRequest *request, char *storage,
+                                 uint32_t capacity,
+                                 AstraLaunchSource source,
+                                 char *const argv[], char *const envp[]);
+uint32_t astra_process_clone(uint32_t *process_handle, uint32_t *process_id);
+uint32_t astra_process_exec(const void *image, uint32_t length,
+                            const AstraExecRequest *request);
 
 /*
  * Waiting for a child, which is the machine's ordinary wait named for what a
@@ -204,6 +262,7 @@ uint32_t astra_event_emit(uint32_t message, uint32_t flags,
 uint32_t astra_activity_begin(void);
 uint32_t astra_activity_adopt(uint32_t activity);
 uint32_t astra_activity_current(void);
+uint32_t astra_activity_exchange(uint32_t activity, uint32_t *previous);
 /*
  * Reading the stream back: the other half of the reversal above. `cursor` is
  * the sequence already seen and is updated to what to pass next; `lost` counts
@@ -227,6 +286,7 @@ uint32_t astra_log_write(const void *bytes, uint32_t length);
 /* Ring only: the event store drops debug records at drain, never storing. */
 uint32_t astra_log_debug(const void *bytes, uint32_t length);
 uint32_t astra_log(const char *text);
+uint32_t astra_log_failure(const char *operation, uint32_t status);
 uint32_t astra_assert_message(char *out, uint32_t capacity, const char *file,
                               uint32_t line, const char *expression);
 

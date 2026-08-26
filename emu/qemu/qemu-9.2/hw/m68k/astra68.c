@@ -41,7 +41,7 @@
 #define ASTRA_SDRAM_PHYSICAL_SIZE (32 * MiB)
 #define ASTRA_SDRAM_HOSTED_SIZE  (128 * MiB)
 #define ASTRA_ROM_BASE           0xffe00000u
-#define ASTRA_ROM_SIZE           (256 * KiB)
+#define ASTRA_ROM_SIZE           (512 * KiB)
 #define ASTRA_VESTA_BASE         0xfff00000u
 #define ASTRA_VESTA_SIZE         0x800u
 #define ASTRA_PANEL_BASE         0xfff01000u

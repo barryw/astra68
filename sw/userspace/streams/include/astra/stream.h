@@ -28,6 +28,8 @@
 typedef void (*AstraStreamRender)(void *context, const uint8_t *bytes,
                                   uint32_t length, uint32_t activity);
 
+typedef struct AstraStreamSource AstraStreamSource;
+
 /*
  * A text sink. It has no queue of its own: the port *is* the queue, so a writer
  * that finds it full is told ASTRA_SYSCALL_WOULD_BLOCK by the kernel and
@@ -45,10 +47,15 @@ typedef struct AstraStreamSink {
      */
     uint16_t columns;
     uint16_t rows;
+    uint16_t pixel_width;
+    uint16_t pixel_height;
     uint32_t messages;   /* rendered */
     uint32_t bytes;
     uint32_t refused;    /* received, and not this protocol */
     uint32_t dropped;    /* answered nobody: the reply had nowhere to go */
+    AstraTtyState *tty;
+    AstraStreamSource *input;
+    uint8_t idle;
 } AstraStreamSink;
 
 int astra_stream_sink_init(AstraStreamSink *sink, uint32_t receive,
@@ -56,7 +63,8 @@ int astra_stream_sink_init(AstraStreamSink *sink, uint32_t receive,
 
 /* What this sink tells a program that asks. Zero and zero until it is set. */
 void astra_stream_sink_size(AstraStreamSink *sink, uint32_t columns,
-                            uint32_t rows);
+                            uint32_t rows, uint32_t pixel_width,
+                            uint32_t pixel_height);
 
 /*
  * Drains at most `budget` messages and returns how many it rendered. Bounded
@@ -66,34 +74,57 @@ void astra_stream_sink_size(AstraStreamSink *sink, uint32_t columns,
 uint32_t astra_stream_sink_pump(AstraStreamSink *sink, uint32_t budget);
 
 /*
- * A text source. Whoever owns the keyboard offers bytes into it and a reader
- * takes what is there -- possibly none, which is ordinary. There is one buffer
- * and it holds one message's worth, because a source that buffered more would
- * be deciding how far behind a reader may fall, which is the reader's business.
+ * A text source. Whoever owns the keyboard offers bytes into its caller-owned
+ * circular buffer and a reader takes what is there -- possibly none, which is
+ * ordinary. The owner chooses and pays for the capacity; the protocol adds no
+ * second, arbitrary input ceiling.
  */
-typedef struct AstraStreamSource {
+struct AstraStreamSource {
     uint32_t receive;
     uint8_t  pending[ASTRA_STREAM_WRITE_MAX];
-    uint16_t length;
-    uint16_t taken;
+    uint8_t *buffer;
+    uint32_t capacity;
+    uint32_t head;
+    uint32_t length;
+    /* Readable prefix; canonical input after it remains private until EOL. */
+    uint32_t committed;
+    uint8_t eof_pending;
     uint32_t requests;
     uint32_t refused;
-} AstraStreamSource;
+    uint32_t readable_event;
+    uint32_t readiness_failures;
+    AstraTtyState *tty;
+    AstraStreamSink *output;
+};
 
 int astra_stream_source_init(AstraStreamSource *source, uint32_t receive);
+int astra_stream_source_init_storage(AstraStreamSource *source,
+                                     uint32_t receive, void *storage,
+                                     uint32_t capacity);
 
 /*
- * Offers bytes to whoever reads next, and returns how many were taken. A source
- * still holding text takes none: the offerer keeps what did not fit, because a
- * source that overwrote unread bytes would lose a line somebody typed.
+ * Offers bytes to whoever reads next, and returns how many fit. Unread bytes
+ * remain ahead of new bytes; the offerer keeps any remainder rather than
+ * overwriting input a reader has not collected.
  */
 uint32_t astra_stream_source_offer(AstraStreamSource *source,
                                    const uint8_t *bytes, uint32_t length);
 
+/* Master-to-slave input through the shared terminal line discipline. */
+uint32_t astra_stream_tty_input(AstraStreamSource *source,
+                                const uint8_t *bytes, uint32_t length);
+
 /* Non-zero while a reader has something waiting for it. */
 int astra_stream_source_ready(const AstraStreamSource *source);
+uint32_t astra_stream_source_space(const AstraStreamSource *source);
 
 uint32_t astra_stream_source_pump(AstraStreamSource *source, uint32_t budget);
+void astra_stream_source_destroy(AstraStreamSource *source);
+
+/* Binds both stream directions to one terminal-control state. */
+void astra_stream_tty_state_init(AstraTtyState *state);
+void astra_stream_tty_bind(AstraStreamSink *output, AstraStreamSource *input,
+                           AstraTtyState *state);
 
 /*
  * One message of text, and never part of one. A length past
@@ -151,5 +182,16 @@ uint32_t astra_stream_size(uint32_t handle, uint32_t *columns,
  */
 uint32_t astra_stream_read(uint32_t source, void *bytes, uint32_t capacity,
                            uint32_t *length);
+uint32_t astra_stream_read_ex(uint32_t source, void *bytes, uint32_t capacity,
+                              uint32_t *length, uint32_t *flags);
+
+/* Returns a caller-owned wait handle whose signalled state tracks readable
+ * input, plus an atomic current-state sample. */
+uint32_t astra_stream_read_wait(uint32_t source, uint32_t *wait_handle,
+                                uint32_t *events);
+
+uint32_t astra_stream_tty_get(uint32_t handle, AstraTtyState *state);
+uint32_t astra_stream_tty_set(uint32_t handle, uint32_t action,
+                              const AstraTtyState *state);
 
 #endif

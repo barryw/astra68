@@ -9,6 +9,8 @@ import time
 
 
 PROPERTIES = (
+    "astra-block-read-requests",
+    "astra-block-read-sectors",
     "astra-display-render-batches",
     "astra-display-render-commands",
     "astra-display-fill-commands",
@@ -126,18 +128,18 @@ def run(qmp, command, quiet_seconds):
     before, _ = settled(qmp, quiet_seconds)
     started = time.monotonic()
     qmp.key("ret")
-    deadline = started + 5.0
     while qmp.property("astra-display-glyph-commands") == \
             before["astra-display-glyph-commands"]:
-        if time.monotonic() >= deadline:
-            raise RuntimeError("command produced no rendered text")
         time.sleep(0.02)
+    first_output_ms = round((time.monotonic() - started) * 1000, 3)
     after, settled_at = settled(qmp, quiet_seconds)
     elapsed = settled_at - started - quiet_seconds
     if after["astra-display-submissions"] != \
             after["astra-display-completions"]:
         raise RuntimeError("display queue did not drain")
-    return elapsed, {name: after[name] - before[name] for name in PROPERTIES}
+    counters = {name: after[name] - before[name] for name in PROPERTIES}
+    counters["first-output-milliseconds"] = first_output_ms
+    return elapsed, counters
 
 
 def main():

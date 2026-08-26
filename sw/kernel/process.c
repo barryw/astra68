@@ -2,8 +2,11 @@
 
 #include <astra/block.h>
 #include <astra/display.h>
+#include <astra/divide.h>
+#include <astra/endian.h>
 #include <astra/syscall.h>
 #include <astra/input.h>
+#include <astra/integer.h>
 #include <astra/library.h>
 #include <astra/process.h>
 #include <astra/render_batch.h>
@@ -41,6 +44,9 @@
 
 #define PROCESS_OWNER_PREFIX 0x10000000u
 #define PROCESS_QUALIFICATION_CLIENT_MAX 2u
+#define M68K_SSW_READ 0x0040u
+#define KERNEL_SIGNAL_ALARM 14u
+#define KERNEL_SIGNAL_ALARM_BIT (1u << KERNEL_SIGNAL_ALARM)
 
 _Static_assert(KERNEL_QUALIFICATION_SHARED_BASE == KERNEL_PROCESS_DATA_BASE,
                "the qualification image's shared block is the data page");
@@ -87,6 +93,13 @@ typedef struct KernelProcess {
     uint32_t terminal_result;
     uint64_t runtime_cycles;
     uint64_t started_cycles;
+    uint64_t interval_deadline;
+    uint64_t interval_period;
+    uint32_t signal_trampoline;
+    uint32_t signal_stack_top;
+    uint32_t signal_pending;
+    uint32_t signal_blocked;
+    uint32_t signal_target_thread;
     KernelHandle self_handle;
     uint16_t fault_vector;
     uint16_t fault_status;
@@ -139,18 +152,6 @@ _Static_assert(sizeof(KernelProcess) * KERNEL_PROCESS_MAX <= 256u * 1024u,
 #endif
 
 
-/*
- * One bit for a slot, without a variable 64-bit shift. The kernel links no
- * libgcc, and `1ull << slot` with a runtime `slot` calls __ashldi3; splitting
- * at the word boundary leaves a constant shift, which the compiler does inline
- * as a word move.
- */
-static uint64_t slot_bit(uint32_t slot)
-{
-    return slot < 32u ? (uint64_t)((uint32_t)1u << slot)
-                      : (uint64_t)((uint32_t)1u << (slot - 32u)) << 32;
-}
-
 static KernelProcess processes[KERNEL_PROCESS_MAX] KERNEL_TABLES;
 static KernelLibraryCacheEntry library_cache[ASTRA_LIBRARY_SLOT_COUNT];
 static KernelObjectCache process_cache;
@@ -188,6 +189,8 @@ static uint8_t scheduler_started;
 static uint8_t quantum_active;
 static uint8_t quantum_preempt_pending;
 static uint8_t deadline_preempt_pending;
+static KernelCpuContext signal_saved_context[KERNEL_THREAD_MAX];
+static uint8_t signal_context_active[KERNEL_THREAD_MAX];
 static uint8_t worker_active;
 static uint8_t milestone_progress_ready;
 static uint8_t process_pool_corrupt;
@@ -549,8 +552,40 @@ static void runtime_stop(KernelProcess *process)
     runtime_active = 0u;
 }
 
+static void signal_deliver(KernelThread *thread)
+{
+    KernelProcess *process = process_for_thread(thread);
+    uint32_t pending;
+    uint32_t signal;
+    uint32_t frame[2];
+    uint32_t stack;
+
+    if (process == NULL || thread->slot >= KERNEL_THREAD_MAX ||
+        signal_context_active[thread->slot] != 0u ||
+        process->signal_trampoline == 0u ||
+        process->signal_stack_top < 8u)
+        return;
+    pending = process->signal_pending & ~process->signal_blocked;
+    if (pending == 0u)
+        return;
+    signal = (uint32_t)__builtin_ctz(pending);
+    stack = process->signal_stack_top - sizeof(frame);
+    frame[0] = 0u;
+    frame[1] = signal;
+    if (kernel_copy_to_user(stack, frame, sizeof(frame)) !=
+        KERNEL_USER_COPY_OK)
+        return;
+    kernel_bytes_copy(&signal_saved_context[thread->slot], &thread->context,
+                      sizeof(thread->context));
+    signal_context_active[thread->slot] = 1u;
+    process->signal_pending &= ~(1u << signal);
+    thread->context.usp = stack;
+    thread->context.program_counter = process->signal_trampoline;
+}
+
 static KernelCpuContext *runtime_resume(KernelThread *thread)
 {
+    signal_deliver(thread);
     runtime_started_cycles = kernel_platform_cpu_cycles_low();
     runtime_active = 1u;
     return &thread->context;
@@ -570,6 +605,15 @@ static void scheduler_timer_rearm_at(uint64_t now)
         target = deadline;
     if (kernel_sync_next_timer_deadline(&deadline) && deadline < target)
         target = deadline;
+    for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
+        const KernelProcess *process = &processes[index];
+
+        if ((process->process_state == KERNEL_PROCESS_CREATED ||
+             process->process_state == KERNEL_PROCESS_RUNNING) &&
+            process->interval_deadline != 0u &&
+            process->interval_deadline < target)
+            target = process->interval_deadline;
+    }
     if (target == KERNEL_THREAD_DEADLINE_NEVER) {
         delta = scheduler_quantum_cycles;
     } else if (target <= now) {
@@ -640,6 +684,54 @@ static KernelProcessStatus scheduler_expire_due(
         scheduler_stats.timer_expirations += expired_timers;
         scheduler_stats.sync_wakeups += timer_wakeups;
         expired += timer_wakeups;
+    }
+    for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
+        KernelProcess *process = &processes[index];
+        KernelThread *target = NULL;
+
+        if ((process->process_state != KERNEL_PROCESS_CREATED &&
+             process->process_state != KERNEL_PROCESS_RUNNING) ||
+            process->interval_deadline == 0u ||
+            process->interval_deadline > now)
+            continue;
+        process->signal_pending |= KERNEL_SIGNAL_ALARM_BIT;
+        if (process->interval_period == 0u) {
+            process->interval_deadline = 0u;
+        } else {
+            uint64_t remainder;
+            uint64_t increment;
+
+            (void)astra_divide_u64_u64(
+                now - process->interval_deadline,
+                process->interval_period, &remainder);
+            increment = process->interval_period - remainder;
+            if (UINT64_MAX - now < increment)
+                process->interval_deadline = 0u;
+            else
+                process->interval_deadline = now + increment;
+        }
+        for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+            KernelThread *candidate = kernel_thread_at(slot);
+
+            if (candidate != NULL && candidate->process_id == process->id &&
+                candidate->state != KERNEL_THREAD_DEAD &&
+                (candidate->id == process->signal_target_thread ||
+                 target == NULL)) {
+                target = candidate;
+                if (candidate->id == process->signal_target_thread)
+                    break;
+            }
+        }
+        if (target != NULL && target->state == KERNEL_THREAD_BLOCKED) {
+            KernelThreadStatus cancel = kernel_thread_cancel_wait(
+                target, ASTRA_SYSCALL_CANCELLED);
+
+            if (cancel != KERNEL_THREAD_OK)
+                return KERNEL_PROCESS_CORRUPT;
+            ++expired;
+            if (target->effective_priority > highest)
+                highest = target->effective_priority;
+        }
     }
     if (expired_threads != NULL)
         *expired_threads = expired;
@@ -927,7 +1019,7 @@ static KernelProcessStatus finish_thread_reaps(void)
             return KERNEL_PROCESS_CORRUPT;
         performance = kernel_performance_begin(
             KERNEL_PERFORMANCE_THREAD_REAP);
-        stack_bit = slot_bit(thread->stack_slot);
+        stack_bit = astra_u64_bit(thread->stack_slot);
         if (thread->stack_released == 0u) {
             /*
              * What this thread grew to, not what every thread starts with.
@@ -1050,6 +1142,7 @@ static void check_milestone(void)
         stats.ring_wait_wakeups == 0u ||
         stats.ring_peer_closures == 0u ||
 #endif
+        stats.ring_copy_cycle_overruns != 0u ||
         stats.sync_created_events < 3u ||
         stats.sync_created_semaphores == 0u ||
         stats.sync_blocked_waits < 5u ||
@@ -1264,6 +1357,7 @@ static uint32_t block_lease_info(AstraBlockLeaseInfo *geometry)
     geometry->state_flags = state.state_flags;
     geometry->media_generation = state.media_generation;
     geometry->host_generation = state.host_generation;
+    geometry->queue_depth = 1u;
     geometry->sector_count = state.media_sectors;
     return ASTRA_SYSCALL_OK;
 }
@@ -1718,6 +1812,8 @@ void kernel_process_init(void)
         kernel_thread_wait_queue_init(&processes[index].death_waiters);
     }
     kernel_bytes_clear(&scheduler_stats, sizeof(scheduler_stats));
+    kernel_bytes_clear(signal_saved_context, sizeof(signal_saved_context));
+    kernel_bytes_clear(signal_context_active, sizeof(signal_context_active));
     kernel_bytes_clear(library_cache, sizeof(library_cache));
     kernel_bytes_clear(&maintenance_diagnostics,
                        sizeof(maintenance_diagnostics));
@@ -1821,7 +1917,7 @@ static uint32_t self_handle_rights(void)
 static int32_t find_stack_slot(const KernelProcess *process)
 {
     for (uint32_t slot = 0u; slot < KERNEL_PROCESS_THREAD_MAX; ++slot) {
-        if ((process->stack_slots & slot_bit(slot)) == 0u)
+        if ((process->stack_slots & astra_u64_bit(slot)) == 0u)
             return (int32_t)slot;
     }
     return -1;
@@ -2016,6 +2112,7 @@ static KernelProcessStatus prepare_thread(KernelProcess *process,
         return KERNEL_PROCESS_RESOURCE_LIMIT;
     if (thread_status != KERNEL_THREAD_OK)
         return KERNEL_PROCESS_CORRUPT;
+    signal_context_active[thread->slot] = 0u;
 
 #if defined(KERNEL_PROCESS_HOST_TEST)
     if (consume_thread_create_fault(
@@ -2184,7 +2281,7 @@ static KernelProcessStatus commit_thread(KernelPreparedThread *prepared,
         prepared->handle == KERNEL_HANDLE_INVALID ||
         prepared->stack_slot >= KERNEL_PROCESS_THREAD_MAX ||
         process->thread_count >= KERNEL_PROCESS_THREAD_MAX ||
-        (process->stack_slots & slot_bit(prepared->stack_slot)) != 0u ||
+        (process->stack_slots & astra_u64_bit(prepared->stack_slot)) != 0u ||
         thread->process_id != process->id ||
         thread->process_slot != (uint16_t)(process - processes) ||
         thread->stack_slot != prepared->stack_slot ||
@@ -2193,11 +2290,11 @@ static KernelProcessStatus commit_thread(KernelPreparedThread *prepared,
     if (kernel_thread_publish(thread) != KERNEL_THREAD_OK)
         return KERNEL_PROCESS_CORRUPT;
 
-    process->stack_slots |= slot_bit(prepared->stack_slot);
+    process->stack_slots |= astra_u64_bit(prepared->stack_slot);
     ++process->thread_count;
     ++process->live_threads;
     process->user_stack_pages =
-        (uint8_t)(process->user_stack_pages + KERNEL_THREAD_STACK_PAGES);
+        (uint8_t)(process->user_stack_pages + thread->stack_pages);
     ++process->user_guard_pages;
     process->supervisor_stack_pages +=
         KERNEL_THREAD_SUPERVISOR_STACK_SIZE / KERNEL_PAGE_SIZE;
@@ -2211,6 +2308,220 @@ static KernelProcessStatus commit_thread(KernelPreparedThread *prepared,
     prepared->thread = NULL;
     prepared->handle = KERNEL_HANDLE_INVALID;
     return KERNEL_PROCESS_OK;
+}
+
+static KernelProcessStatus prepare_cloned_thread(
+    KernelProcess *process, const KernelThread *source,
+    KernelPreparedThread *prepared)
+{
+    KernelThread *thread = NULL;
+    KernelHandle handle = KERNEL_HANDLE_INVALID;
+    KernelThreadStatus thread_status;
+
+    if (process == NULL || source == NULL || prepared == NULL ||
+        source->stack_slot >= KERNEL_PROCESS_THREAD_MAX ||
+        source->stack_pages == 0u || source->stack_pages >
+                                              KERNEL_THREAD_STACK_PAGES_MAX)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    prepared->process = NULL;
+    prepared->thread = NULL;
+    prepared->handle = KERNEL_HANDLE_INVALID;
+    prepared->stack_slot = 0u;
+    thread_status = kernel_thread_allocate(
+        (uint16_t)(process - processes), process->id, source->stack_slot,
+        source->context.program_counter, source->user_stack_top, 0u,
+        source->base_priority, &thread);
+    if (thread_status == KERNEL_THREAD_NO_SLOT)
+        return KERNEL_PROCESS_RESOURCE_LIMIT;
+    if (thread_status != KERNEL_THREAD_OK || thread == NULL)
+        return KERNEL_PROCESS_CORRUPT;
+    if (signal_context_active[source->slot] != 0u) {
+        kernel_bytes_copy(&signal_saved_context[thread->slot],
+                          &signal_saved_context[source->slot],
+                          sizeof(signal_saved_context[thread->slot]));
+        signal_context_active[thread->slot] = 1u;
+    } else {
+        signal_context_active[thread->slot] = 0u;
+    }
+    thread->user_stack_base = source->user_stack_base;
+    thread->stack_pages = source->stack_pages;
+    kernel_bytes_copy(&thread->context, &source->context,
+                      sizeof(thread->context));
+    thread->context.data[0] = ASTRA_SYSCALL_OK;
+    thread->context.data[1] = 0u;
+    thread->context.data[2] = 0u;
+    if (kernel_handle_install(&process->handles, KERNEL_OBJECT_THREAD,
+                              KERNEL_THREAD_RIGHTS, thread,
+                              kernel_thread_handle_release, NULL,
+                              &handle) != KERNEL_HANDLE_OK ||
+        kernel_thread_attach_handle(thread, handle) != KERNEL_THREAD_OK) {
+        if (handle != KERNEL_HANDLE_INVALID)
+            (void)kernel_handle_close(&process->handles, handle);
+        (void)kernel_thread_abort(thread);
+        return KERNEL_PROCESS_RESOURCE_LIMIT;
+    }
+    thread->context.data[4] = process->self_handle;
+    thread->context.data[5] = handle;
+    prepared->process = process;
+    prepared->thread = thread;
+    prepared->handle = handle;
+    prepared->stack_slot = source->stack_slot;
+    return KERNEL_PROCESS_OK;
+}
+
+static KernelProcessStatus abort_cloned_thread(KernelPreparedThread *prepared)
+{
+    bool failed = false;
+
+    if (prepared == NULL || prepared->process == NULL ||
+        prepared->thread == NULL ||
+        prepared->handle == KERNEL_HANDLE_INVALID)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    if (kernel_handle_close(&prepared->process->handles,
+                            prepared->handle) != KERNEL_HANDLE_OK)
+        failed = true;
+    if (kernel_thread_abort(prepared->thread) != KERNEL_THREAD_OK)
+        failed = true;
+    signal_context_active[prepared->thread->slot] = 0u;
+    prepared->process = NULL;
+    prepared->thread = NULL;
+    prepared->handle = KERNEL_HANDLE_INVALID;
+    return failed ? KERNEL_PROCESS_CORRUPT : KERNEL_PROCESS_OK;
+}
+
+static KernelProcessStatus clone_current_process(
+    KernelProcess *source, KernelThread *source_thread,
+    uint32_t *process_id, KernelHandle *process_handle)
+{
+    KernelProcess *child;
+    KernelPreparedThread prepared;
+    KernelProcessStatus result = KERNEL_PROCESS_CORRUPT;
+    KernelHandle self_handle = KERNEL_HANDLE_INVALID;
+    KernelHandle parent_handle = KERNEL_HANDLE_INVALID;
+    KernelHandle child_thread_handle;
+    KernelHandleStatus handle_status;
+    KernelObjectCacheStatus cache_status;
+    KernelVmStatus vm_status;
+    void *raw_child;
+    uint32_t generation;
+    uint32_t child_thread_id;
+    uint16_t slot;
+    uint16_t saved_status;
+    bool owner_protected = false;
+
+    if (source == NULL || source_thread == NULL || process_id == NULL ||
+        process_handle == NULL || process_for_thread(source_thread) != source)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    kernel_bytes_clear(&prepared, sizeof(prepared));
+    *process_id = 0u;
+    *process_handle = KERNEL_HANDLE_INVALID;
+    cache_status = kernel_object_cache_claim(&process_cache, 0u, &raw_child,
+                                             &slot);
+    if (cache_status == KERNEL_OBJECT_CACHE_UNAVAILABLE)
+        return KERNEL_PROCESS_NO_SLOT;
+    if (cache_status != KERNEL_OBJECT_CACHE_OK || slot >= KERNEL_PROCESS_MAX)
+        return KERNEL_PROCESS_CORRUPT;
+    child = raw_child;
+    if (child->process_state != KERNEL_PROCESS_UNUSED &&
+        child->process_state != KERNEL_PROCESS_DEAD)
+        return KERNEL_PROCESS_CORRUPT;
+
+    generation = kernel_generation_next(child->generation);
+    kernel_bytes_clear(child, sizeof(*child));
+    kernel_thread_wait_queue_init(&child->death_waiters);
+    child->generation = generation;
+    child->id = PROCESS_OWNER_PREFIX |
+                ((generation & 0x000fffffu) << 4) | ((uint32_t)slot + 1u);
+    child->owner = child->id;
+    child->image_size = source->image_size;
+    child->entry_base = source->entry_base;
+    child->started_cycles = scheduler_cycles();
+    child->default_priority = source->default_priority;
+    child->priority_ceiling = source->priority_ceiling;
+    child->signal_trampoline = source->signal_trampoline;
+    child->signal_stack_top = source->signal_stack_top;
+    child->signal_blocked = source->signal_blocked;
+    kernel_handle_table_init(&child->handles);
+    if (!kernel_handle_table_set_owner(&child->handles, child->owner))
+        goto failed;
+    if (child->priority_ceiling == KERNEL_THREAD_PRIORITY_USER_MAX) {
+        if (!kernel_memory_protect_owner(child->owner))
+            goto failed;
+        owner_protected = true;
+    }
+    vm_status = kernel_vm_clone_address_space(
+        &source->address_space, child->owner, &child->address_space);
+    if (vm_status != KERNEL_VM_OK) {
+        result = vm_status == KERNEL_VM_OUT_OF_MEMORY ?
+            KERNEL_PROCESS_OUT_OF_MEMORY : KERNEL_PROCESS_CORRUPT;
+        goto failed;
+    }
+    handle_status = kernel_handle_clone_table(&source->handles,
+                                              &child->handles);
+    if (handle_status != KERNEL_HANDLE_OK) {
+        result = handle_status == KERNEL_HANDLE_TABLE_FULL ||
+                         handle_status == KERNEL_HANDLE_INVALID_STATE ?
+            KERNEL_PROCESS_RESOURCE_LIMIT : KERNEL_PROCESS_CORRUPT;
+        goto failed;
+    }
+    child->process_state = KERNEL_PROCESS_CREATED;
+    child->handle_references = 1u;
+    if (kernel_handle_install(&child->handles, KERNEL_OBJECT_PROCESS,
+                              self_handle_rights(), child,
+                              process_handle_release, NULL,
+                              &self_handle) != KERNEL_HANDLE_OK) {
+        child->handle_references = 0u;
+        result = KERNEL_PROCESS_RESOURCE_LIMIT;
+        goto failed;
+    }
+    child->self_handle = self_handle;
+    result = prepare_cloned_thread(child, source_thread, &prepared);
+    if (result != KERNEL_PROCESS_OK)
+        goto failed;
+    result = retain_process_handle(child);
+    if (result != KERNEL_PROCESS_OK)
+        goto failed;
+    handle_status = kernel_handle_install(
+        &source->handles, KERNEL_OBJECT_PROCESS,
+        KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_WAIT, child,
+        process_handle_release, NULL, &parent_handle);
+    if (handle_status != KERNEL_HANDLE_OK) {
+        process_handle_release(child, NULL);
+        result = handle_status == KERNEL_HANDLE_TABLE_FULL ?
+            KERNEL_PROCESS_RESOURCE_LIMIT : KERNEL_PROCESS_CORRUPT;
+        goto failed;
+    }
+
+    saved_status = kernel_interrupt_save_disable();
+    result = commit_thread(&prepared, &child_thread_id,
+                           &child_thread_handle);
+    if (result == KERNEL_PROCESS_OK) {
+        ++scheduler_stats.created_processes;
+        ++scheduler_stats.live_processes;
+        *process_id = child->id;
+        *process_handle = parent_handle;
+    }
+    kernel_interrupt_restore(saved_status);
+    if (result != KERNEL_PROCESS_OK)
+        goto failed;
+    (void)child_thread_id;
+    (void)child_thread_handle;
+    return KERNEL_PROCESS_OK;
+
+failed:
+    if (parent_handle != KERNEL_HANDLE_INVALID)
+        (void)kernel_handle_close(&source->handles, parent_handle);
+    if (prepared.thread != NULL)
+        (void)abort_cloned_thread(&prepared);
+    (void)kernel_handle_close_all(&child->handles);
+    if (child->address_space.initialized != 0u)
+        (void)kernel_vm_destroy_address_space(&child->address_space);
+    (void)kernel_memory_release_owner(child->owner, NULL);
+    if (owner_protected)
+        (void)kernel_memory_unprotect_owner(child->owner);
+    child->process_state = KERNEL_PROCESS_DEAD;
+    maybe_release_process_record(child);
+    return result;
 }
 
 static KernelProcessStatus create_process(const void *image,
@@ -2393,6 +2704,261 @@ failed:
     return result;
 }
 
+#define KERNEL_PROCESS_STARTUP_BASE KERNEL_VM_USER_MIN
+#define KERNEL_PROCESS_LAUNCH_HEADER_BYTES 1024u
+static uint8_t launch_page[KERNEL_PAGE_SIZE];
+static uint8_t launch_header[KERNEL_PROCESS_LAUNCH_HEADER_BYTES];
+static char syscall_data[ASTRA_STARTUP_BLOCK_SIZE];
+static AstraStartupCapability
+    exec_capabilities[ASTRA_STARTUP_CAPABILITY_MAX];
+
+static KernelProcessStatus publish_page(KernelAddressSpace *space,
+                                        uint32_t owner,
+                                        uint32_t virtual_address,
+                                        const uint8_t *source,
+                                        uint32_t source_size,
+                                        uint32_t rights);
+static KernelProcessStatus map_segments(KernelAddressSpace *space,
+                                        uint32_t owner,
+                                        const KernelElfImage *plan,
+                                        const uint8_t *image,
+                                        uint32_t user_image,
+                                        uint32_t virtual_base,
+                                        bool rollback);
+static KernelProcessStatus publish_startup_block(
+    KernelAddressSpace *space, uint32_t owner, KernelHandle process_handle,
+    KernelHandle thread_handle, const AstraStartupCapability *bootstrap,
+    uint32_t bootstrap_count, const AstraLaunchArguments *arguments,
+    const char *argument_bytes, const char *environment,
+    uint32_t handoff_address, uint32_t handoff_size);
+static KernelProcessStatus accept_executable(const void *image,
+                                             uint32_t image_size,
+                                             uint32_t user_image,
+                                             KernelElfImage *plan);
+static bool executable_span(const KernelElfImage *plan, uint32_t *base,
+                            uint32_t *size);
+
+static KernelProcessStatus read_exec_startup(
+    const KernelProcess *process, AstraStartupInfo *info,
+    uint32_t *bootstrap_count)
+{
+    uint32_t capability_bytes;
+
+    if (process == NULL || info == NULL || bootstrap_count == NULL ||
+        kernel_copy_from_user(info, KERNEL_PROCESS_STARTUP_BASE,
+                              sizeof(*info)) != KERNEL_USER_COPY_OK ||
+        info->magic != ASTRA_STARTUP_MAGIC ||
+        info->abi_version != ASTRA_STARTUP_ABI_VERSION ||
+        info->header_size != ASTRA_STARTUP_INFO_SIZE ||
+        info->syscall_abi_version != ASTRA_SYSCALL_ABI_VERSION ||
+        info->process_handle != process->self_handle ||
+        info->capability_count < 2u ||
+        info->capability_count > ASTRA_STARTUP_CAPABILITY_MAX ||
+        info->capabilities_address !=
+            KERNEL_PROCESS_STARTUP_BASE + ASTRA_STARTUP_INFO_SIZE ||
+        info->launch_source > ASTRA_LAUNCH_SOURCE_DESKTOP)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    capability_bytes =
+        info->capability_count * ASTRA_STARTUP_CAPABILITY_SIZE;
+    if (ASTRA_STARTUP_INFO_SIZE + capability_bytes >
+            ASTRA_STARTUP_BLOCK_SIZE ||
+        kernel_copy_from_user(exec_capabilities,
+                              info->capabilities_address,
+                              capability_bytes) != KERNEL_USER_COPY_OK)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    *bootstrap_count = info->capability_count - 2u;
+    return KERNEL_PROCESS_OK;
+}
+
+static KernelProcessStatus publish_exec_handoff(
+    KernelAddressSpace *space, uint32_t owner, uint32_t source,
+    uint32_t size, const KernelElfImage *plan, uint32_t *address)
+{
+    const uint32_t base = KERNEL_PROCESS_STARTUP_BASE + KERNEL_PAGE_SIZE;
+    uint32_t first_segment = UINT32_MAX;
+    uint32_t rounded;
+
+    if (space == NULL || plan == NULL || address == NULL ||
+        (source == 0u) != (size == 0u))
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    *address = 0u;
+    if (size == 0u)
+        return KERNEL_PROCESS_OK;
+    if (source < KERNEL_VM_USER_MIN || source > KERNEL_VM_USER_MAX ||
+        size - 1u > KERNEL_VM_USER_MAX - source)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    for (uint32_t index = 0u; index < plan->segment_count; ++index)
+        if (plan->segment[index].virtual_address < first_segment)
+            first_segment = plan->segment[index].virtual_address;
+    if (size > UINT32_MAX - (KERNEL_PAGE_SIZE - 1u))
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    rounded = (size + KERNEL_PAGE_SIZE - 1u) & ~(KERNEL_PAGE_SIZE - 1u);
+    if (first_segment <= base || rounded > first_segment - base)
+        return KERNEL_PROCESS_RESOURCE_LIMIT;
+    for (uint32_t offset = 0u; offset < rounded; offset += KERNEL_PAGE_SIZE) {
+        uint32_t copied = size - offset;
+        KernelProcessStatus status;
+
+        if (copied > KERNEL_PAGE_SIZE)
+            copied = KERNEL_PAGE_SIZE;
+        kernel_bytes_clear(launch_page, sizeof(launch_page));
+        if (kernel_copy_from_user(launch_page, source + offset, copied) !=
+            KERNEL_USER_COPY_OK)
+            return KERNEL_PROCESS_INVALID_ARGUMENT;
+        status = publish_page(space, owner, base + offset, launch_page,
+                              copied, KERNEL_VM_READ);
+        if (status != KERNEL_PROCESS_OK)
+            return status;
+    }
+    *address = base;
+    return KERNEL_PROCESS_OK;
+}
+
+static KernelProcessStatus replace_process_image(
+    KernelProcess *process, KernelThread *thread, uint32_t user_image,
+    uint32_t image_size, AstraExecRequest *request,
+    KernelCpuContext **next_context)
+{
+    KernelAddressSpace replacement;
+    KernelElfImage plan;
+    AstraStartupInfo prior_startup;
+    KernelProcessStatus status;
+    uint32_t bootstrap_count = 0u;
+    uint32_t handoff_address = 0u;
+    uint32_t entry_base;
+    uint32_t entry_size;
+    uint32_t retired = 0u;
+    uint32_t released_buffers = 0u;
+    uint32_t deferred_buffers = 0u;
+    uint32_t unmapped_areas = 0u;
+
+    if (process == NULL || thread == NULL || request == NULL ||
+        next_context == NULL || user_image == 0u || image_size == 0u ||
+        request->size != ASTRA_EXEC_REQUEST_SIZE ||
+        request->arguments.flags != 0u ||
+        (request->handoff_address == 0u) !=
+            (request->handoff_size == 0u))
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    status = accept_executable(NULL, image_size, user_image, &plan);
+    if (status != KERNEL_PROCESS_OK ||
+        !executable_span(&plan, &entry_base, &entry_size))
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    status = read_exec_startup(process, &prior_startup, &bootstrap_count);
+    if (status != KERNEL_PROCESS_OK)
+        return status;
+    request->arguments.source = (uint16_t)prior_startup.launch_source;
+
+    kernel_bytes_clear(&replacement, sizeof(replacement));
+    if (kernel_vm_create_address_space(process->owner, &replacement) !=
+        KERNEL_VM_OK)
+        return KERNEL_PROCESS_OUT_OF_MEMORY;
+    status = map_segments(&replacement, process->owner, &plan, NULL,
+                          user_image, 0u, false);
+    if (status != KERNEL_PROCESS_OK)
+        goto failed;
+    status = publish_exec_handoff(
+        &replacement, process->owner, request->handoff_address,
+        request->handoff_size, &plan, &handoff_address);
+    if (status != KERNEL_PROCESS_OK)
+        goto failed;
+    status = publish_startup_block(
+        &replacement, process->owner, process->self_handle,
+        thread->self_handle, &exec_capabilities[2], bootstrap_count,
+        &request->arguments,
+        request->arguments.count != 0u ? syscall_data : NULL,
+        request->arguments.environment_count != 0u ?
+            syscall_data + request->arguments.length : NULL,
+        handoff_address, request->handoff_size);
+    if (status != KERNEL_PROCESS_OK)
+        goto failed;
+    status = publish_page(
+        &replacement, process->owner,
+        thread->user_stack_top - KERNEL_THREAD_STACK_SIZE, NULL, 0u,
+        KERNEL_VM_READ | KERNEL_VM_WRITE);
+    if (status != KERNEL_PROCESS_OK)
+        goto failed;
+
+    /* Everything below is the no-allocation commit. */
+    if (!display_dma_abort_owner(process->owner) ||
+        kernel_block_revoke_owner(process->owner, &released_buffers,
+                                  &deferred_buffers) != KERNEL_BLOCK_OK ||
+        deferred_buffers != 0u) {
+        status = KERNEL_PROCESS_CORRUPT;
+        goto failed;
+    }
+    (void)kernel_handle_close_type(&process->handles, KERNEL_OBJECT_DMA);
+    if (process->dma_pages != 0u ||
+        kernel_area_unmap_process(process->id, &unmapped_areas) !=
+            KERNEL_AREA_OK ||
+        kernel_thread_exec_retire_others(
+            (uint16_t)(process - processes), thread,
+            ASTRA_SYSCALL_PEER_DEAD, &retired) != KERNEL_THREAD_OK) {
+        status = KERNEL_PROCESS_CORRUPT;
+        goto failed;
+    }
+    (void)released_buffers;
+    (void)unmapped_areas;
+    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+        KernelThread *other = kernel_thread_at(slot);
+
+        if (other == NULL || other == thread ||
+            other->process_slot != (uint16_t)(process - processes))
+            continue;
+        signal_context_active[slot] = 0u;
+        if (other->self_handle != KERNEL_HANDLE_INVALID &&
+            kernel_handle_close(&process->handles, other->self_handle) !=
+                KERNEL_HANDLE_OK) {
+            status = KERNEL_PROCESS_CORRUPT;
+            goto failed;
+        }
+    }
+    if (retired > process->live_threads ||
+        retired > scheduler_stats.live_threads ||
+        kernel_vm_exchange_address_spaces(&process->address_space,
+                                           &replacement) != KERNEL_VM_OK ||
+        kernel_vm_switch(&process->address_space) != KERNEL_VM_OK ||
+        kernel_vm_destroy_address_space(&replacement) != KERNEL_VM_OK)
+        return KERNEL_PROCESS_CORRUPT;
+
+    process->live_threads = (uint8_t)(process->live_threads - retired);
+    scheduler_stats.live_threads -= retired;
+    scheduler_stats.dead_threads += retired;
+    process->stack_slots = astra_u64_bit(thread->stack_slot);
+    process->user_stack_pages = 1u;
+    process->user_guard_pages = 1u;
+    thread->user_stack_base = thread->user_stack_top - KERNEL_THREAD_STACK_SIZE;
+    thread->stack_pages = 1u;
+    thread->activity = 0u;
+    kernel_context_initialize(&thread->context, plan.entry,
+                              thread->user_stack_top);
+    thread->context.data[2] = KERNEL_PROCESS_STARTUP_BASE;
+    thread->context.data[4] = process->self_handle;
+    thread->context.data[5] = thread->self_handle;
+    process->entry_base = entry_base;
+    process->image_size = entry_size;
+    process->progress = 0u;
+    process->fault_pc = 0u;
+    process->fault_address = 0u;
+    process->fault_vector = 0u;
+    process->fault_status = 0u;
+    process->signal_trampoline = 0u;
+    process->signal_stack_top = 0u;
+    process->signal_pending = 0u;
+    process->signal_target_thread = 0u;
+    process->interval_deadline = 0u;
+    process->interval_period = 0u;
+    signal_context_active[thread->slot] = 0u;
+    scheduler_timer_rearm();
+    *next_context = runtime_resume(thread);
+    return KERNEL_PROCESS_OK;
+
+failed:
+    if (replacement.initialized != 0u &&
+        kernel_vm_destroy_address_space(&replacement) != KERNEL_VM_OK)
+        return KERNEL_PROCESS_CORRUPT;
+    return status;
+}
+
 /*
  * Executable loading.
  *
@@ -2400,7 +2966,6 @@ failed:
  * script places an image, and is mapped read-only: a process may read what it
  * was launched with but cannot rewrite its own provenance.
  */
-#define KERNEL_PROCESS_STARTUP_BASE KERNEL_VM_USER_MIN
 /*
  * The ceiling on text, data and BSS a single process image may map is
  * KERNEL_PROCESS_IMAGE_PAGES_MAX, declared in process.h beside the rest of the
@@ -2424,7 +2989,8 @@ static uint32_t segment_vm_rights(uint32_t elf_rights)
  * carries the process owner tag so a failure anywhere unwinds through
  * kernel_memory_release_owner() with the rest of the address space.
  */
-static KernelProcessStatus publish_page(KernelProcess *process,
+static KernelProcessStatus publish_page(KernelAddressSpace *space,
+                                        uint32_t owner,
                                         uint32_t virtual_address,
                                         const uint8_t *source,
                                         uint32_t source_size,
@@ -2435,13 +3001,13 @@ static KernelProcessStatus publish_page(KernelProcess *process,
 
     if (kernel_memory_alloc_zeroed_tagged(
             KERNEL_ALLOCATION_SITE_PROCESS_CODE_PAGE, 1u, 1u,
-            KERNEL_FRAME_PROCESS, process->owner, &physical) !=
+            KERNEL_FRAME_PROCESS, owner, &physical) !=
         KERNEL_MEMORY_OK)
         return KERNEL_PROCESS_OUT_OF_MEMORY;
 
     bytes = physical_bytes(physical, KERNEL_PAGE_SIZE);
     if (bytes == NULL) {
-        (void)kernel_memory_release(physical, 1u, process->owner);
+        (void)kernel_memory_release(physical, 1u, owner);
         return KERNEL_PROCESS_CORRUPT;
     }
 #if defined(KERNEL_PROCESS_HOST_TEST)
@@ -2450,12 +3016,12 @@ static KernelProcessStatus publish_page(KernelProcess *process,
     if (source != NULL && source_size != 0u)
         kernel_bytes_copy(bytes, source, source_size);
 
-    if (kernel_vm_map_page(&process->address_space, virtual_address, physical,
-                           rights) != KERNEL_VM_OK) {
-        (void)kernel_memory_release(physical, 1u, process->owner);
+    if (kernel_vm_map_page(space, virtual_address, physical, rights) !=
+        KERNEL_VM_OK) {
+        (void)kernel_memory_release(physical, 1u, owner);
         return KERNEL_PROCESS_OUT_OF_MEMORY;
     }
-    if (kernel_memory_release(physical, 1u, process->owner) !=
+    if (kernel_memory_release(physical, 1u, owner) !=
         KERNEL_MEMORY_OK)
         return KERNEL_PROCESS_CORRUPT;
     return KERNEL_PROCESS_OK;
@@ -2473,18 +3039,67 @@ static KernelProcessStatus publish_page(KernelProcess *process,
  * this, and the frame -- and it is the one that is bounded rather than
  * proportional to the program.
  */
-static uint8_t launch_page[KERNEL_PAGE_SIZE];
 /*
  * The window the acceptance profile is allowed to read of a launched image. It
  * holds the ELF header and a program header table that follows it, which is
  * what every image this machine links produces.
  */
-#define KERNEL_PROCESS_LAUNCH_HEADER_BYTES 1024u
-static uint8_t launch_header[KERNEL_PROCESS_LAUNCH_HEADER_BYTES];
-/* One syscall scratch page; the child cannot publish more startup data. */
-static char launch_environment[ASTRA_STARTUP_BLOCK_SIZE];
+/* One syscall scratch page. Launch data and byte-ring transfers are serialized
+ * on one CPU and each is bounded by this physical copy window. */
 
-static KernelProcessStatus map_segments(KernelProcess *process,
+static uint32_t copy_launch_arguments(uint32_t user_address,
+                                      AstraLaunchArguments *arguments)
+{
+    int copy_status;
+
+    if (arguments == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    kernel_bytes_clear(arguments, sizeof(*arguments));
+    kernel_bytes_clear(syscall_data, sizeof(syscall_data));
+    if (user_address == 0u)
+        return ASTRA_SYSCALL_OK;
+    copy_status = kernel_copy_from_user(arguments, user_address,
+                                        (uint32_t)sizeof(*arguments));
+    if (copy_status != KERNEL_USER_COPY_OK)
+        return ASTRA_SYSCALL_BAD_ADDRESS;
+    if (arguments->count > ASTRA_LAUNCH_ARGUMENT_MAX ||
+        arguments->length > ASTRA_LAUNCH_ARGUMENT_BYTES ||
+        (arguments->count != 0u) != (arguments->length != 0u) ||
+        (arguments->count != 0u) !=
+            (arguments->argument_address != 0u) ||
+        arguments->environment_count > ASTRA_LAUNCH_ENVIRONMENT_MAX ||
+        arguments->environment_length > ASTRA_LAUNCH_ENVIRONMENT_BYTES ||
+        (arguments->environment_count != 0u) !=
+            (arguments->environment_length != 0u) ||
+        (arguments->environment_count != 0u) !=
+            (arguments->environment_address != 0u) ||
+        arguments->source > ASTRA_LAUNCH_SOURCE_DESKTOP ||
+        (arguments->flags & ~ASTRA_LAUNCH_FLAG_MASK) != 0u ||
+        arguments->length + arguments->environment_length >
+            (uint32_t)sizeof(syscall_data) ||
+        (arguments->count == 0u &&
+         arguments->environment_count == 0u &&
+         arguments->source != ASTRA_LAUNCH_SOURCE_SYSTEM))
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    if (arguments->count != 0u) {
+        copy_status = kernel_copy_from_user(
+            syscall_data, arguments->argument_address, arguments->length);
+        if (copy_status != KERNEL_USER_COPY_OK)
+            return ASTRA_SYSCALL_BAD_ADDRESS;
+    }
+    if (arguments->environment_count != 0u) {
+        copy_status = kernel_copy_from_user(
+            syscall_data + arguments->length,
+            arguments->environment_address,
+            arguments->environment_length);
+        if (copy_status != KERNEL_USER_COPY_OK)
+            return ASTRA_SYSCALL_BAD_ADDRESS;
+    }
+    return ASTRA_SYSCALL_OK;
+}
+
+static KernelProcessStatus map_segments(KernelAddressSpace *space,
+                                        uint32_t owner,
                                         const KernelElfImage *plan,
                                         const uint8_t *image,
                                         uint32_t user_image,
@@ -2525,7 +3140,7 @@ static KernelProcessStatus map_segments(KernelProcess *process,
                     source = image + segment->file_offset + offset;
                 }
             }
-            status = publish_page(process,
+            status = publish_page(space, owner,
                                   virtual_base + segment->virtual_address +
                                       offset,
                                   source, copy, rights);
@@ -2550,36 +3165,13 @@ failed:
             uint32_t address = virtual_base + segment->virtual_address +
                                (page * KERNEL_PAGE_SIZE);
 
-            if (kernel_vm_unmap_page(&process->address_space, address) !=
+            if (kernel_vm_unmap_page(space, address) !=
                 KERNEL_VM_OK)
                 return KERNEL_PROCESS_CORRUPT;
             --mapped;
         }
     }
     return failure;
-}
-
-static bool bytes_equal(const void *left, const void *right, uint32_t size)
-{
-    const uint8_t *a = left;
-    const uint8_t *b = right;
-
-    while (size-- != 0u) {
-        if (*a++ != *b++)
-            return false;
-    }
-    return true;
-}
-
-static uint16_t library_be16(const uint8_t *bytes)
-{
-    return (uint16_t)(((uint16_t)bytes[0] << 8) | bytes[1]);
-}
-
-static uint32_t library_be32(const uint8_t *bytes)
-{
-    return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
-           ((uint32_t)bytes[2] << 8) | bytes[3];
 }
 
 static bool library_name_valid(const char name[ASTRA_LIBRARY_NAME_MAX])
@@ -2622,7 +3214,8 @@ static bool library_reference_equal(const AstraLibraryReference *left,
            left->patch == right->patch &&
            left->abi_major == right->abi_major &&
            left->abi_minor == right->abi_minor &&
-           bytes_equal(left->name, right->name, ASTRA_LIBRARY_NAME_MAX);
+           kernel_bytes_equal(left->name, right->name,
+                              ASTRA_LIBRARY_NAME_MAX);
 }
 
 static bool library_reference_newer(const AstraLibraryReference *left,
@@ -2648,7 +3241,8 @@ static bool library_reference_matches_request(
         return library_reference_equal(cached, request);
     return cached->abi_major == request->abi_major &&
            cached->abi_minor >= request->abi_minor &&
-           bytes_equal(cached->name, request->name, ASTRA_LIBRARY_NAME_MAX);
+           kernel_bytes_equal(cached->name, request->name,
+                              ASTRA_LIBRARY_NAME_MAX);
 }
 
 #if defined(KERNEL_PROCESS_HOST_TEST)
@@ -2690,21 +3284,21 @@ static bool library_reference_from_image(const uint8_t *image,
         readable < ASTRA_LIBRARY_FILE_OFFSET + ASTRA_LIBRARY_SIZE)
         return false;
     record = image + ASTRA_LIBRARY_FILE_OFFSET;
-    if (library_be32(record) != ASTRA_LIBRARY_MAGIC ||
-        library_be16(record + 4u) != ASTRA_LIBRARY_RECORD_VERSION ||
-        library_be16(record + 6u) != ASTRA_LIBRARY_SIZE ||
-        library_be16(record + 18u) != 0u ||
-        library_be32(record + 20u) != ASTRA_LIBRARY_TARGET_M68030 ||
-        library_be32(record + 28u) != ASTRA_LIBRARY_EXPORTS_OFFSET)
+    if (astra_load_be32(record) != ASTRA_LIBRARY_MAGIC ||
+        astra_load_be16(record + 4u) != ASTRA_LIBRARY_RECORD_VERSION ||
+        astra_load_be16(record + 6u) != ASTRA_LIBRARY_SIZE ||
+        astra_load_be16(record + 18u) != 0u ||
+        astra_load_be32(record + 20u) != ASTRA_LIBRARY_TARGET_M68030 ||
+        astra_load_be32(record + 28u) != ASTRA_LIBRARY_EXPORTS_OFFSET)
         return false;
     kernel_bytes_clear(reference, sizeof(*reference));
     reference->size = ASTRA_LIBRARY_REFERENCE_SIZE;
-    reference->major = library_be16(record + 8u);
-    reference->minor = library_be16(record + 10u);
-    reference->patch = library_be16(record + 12u);
-    reference->abi_major = library_be16(record + 14u);
-    reference->abi_minor = library_be16(record + 16u);
-    reference->build_id = library_be32(record + 24u);
+    reference->major = astra_load_be16(record + 8u);
+    reference->minor = astra_load_be16(record + 10u);
+    reference->patch = astra_load_be16(record + 12u);
+    reference->abi_major = astra_load_be16(record + 14u);
+    reference->abi_minor = astra_load_be16(record + 16u);
+    reference->build_id = astra_load_be32(record + 24u);
     kernel_bytes_copy(reference->name, record + 32u,
                       ASTRA_LIBRARY_NAME_MAX);
     return library_reference_valid(reference);
@@ -2739,7 +3333,7 @@ static KernelProcessStatus library_cache_match(
     *matches = false;
     if (entry->used == 0u || !library_reference_equal(&entry->reference,
                                                        reference) ||
-        !bytes_equal(&entry->plan, plan, sizeof(*plan)))
+        !kernel_bytes_equal(&entry->plan, plan, sizeof(*plan)))
         return KERNEL_PROCESS_OK;
     for (uint32_t index = 0u; index < plan->segment_count; ++index) {
         const KernelElfSegment *segment = &plan->segment[index];
@@ -2758,7 +3352,7 @@ static KernelProcessStatus library_cache_match(
                                     KERNEL_PAGE_SIZE);
             if (cached == NULL)
                 return KERNEL_PROCESS_CORRUPT;
-            if (!bytes_equal(cached, launch_page, KERNEL_PAGE_SIZE))
+            if (!kernel_bytes_equal(cached, launch_page, KERNEL_PAGE_SIZE))
                 return KERNEL_PROCESS_OK;
         }
     }
@@ -2989,7 +3583,8 @@ static KernelProcessStatus map_cached_library(
 
             if (source == NULL)
                 goto failed;
-            failure = publish_page(process, address, source,
+            failure = publish_page(&process->address_space, process->owner,
+                                   address, source,
                                    KERNEL_PAGE_SIZE, rights);
             if (failure != KERNEL_PROCESS_OK)
                 goto failed;
@@ -3244,10 +3839,11 @@ static uint32_t append_vector(uint8_t *page, uint32_t at, uint32_t capacity,
 }
 
 static KernelProcessStatus publish_startup_block(
-    KernelProcess *process, KernelHandle process_handle,
+    KernelAddressSpace *space, uint32_t owner, KernelHandle process_handle,
     KernelHandle thread_handle, const AstraStartupCapability *bootstrap,
     uint32_t bootstrap_count, const AstraLaunchArguments *arguments,
-    const char *environment)
+    const char *argument_bytes, const char *environment,
+    uint32_t handoff_address, uint32_t handoff_size)
 {
     /*
      * _Alignas(4): AstraStartupCapability's widest member is a uint32_t, and
@@ -3289,6 +3885,8 @@ static KernelProcessStatus publish_startup_block(
     info.capability_count = count;
     info.capabilities_address =
         KERNEL_PROCESS_STARTUP_BASE + ASTRA_STARTUP_INFO_SIZE;
+    info.handoff_address = handoff_address;
+    info.handoff_size = handoff_size;
 
     astra_capability_name_set(capability[0].name,
                               ASTRA_CAPABILITY_PROCESS);
@@ -3305,7 +3903,7 @@ static KernelProcessStatus publish_startup_block(
 
     if (arguments != NULL && arguments->count != 0u) {
         uint32_t appended = append_vector(
-            page, published_bytes, (uint32_t)sizeof(page), arguments->bytes,
+            page, published_bytes, (uint32_t)sizeof(page), argument_bytes,
             arguments->length, arguments->count, 0, &info.argv_address,
             &info.argc);
 
@@ -3327,8 +3925,62 @@ static KernelProcessStatus publish_startup_block(
     }
     kernel_bytes_copy(page, &info, sizeof(info));
 
-    return publish_page(process, KERNEL_PROCESS_STARTUP_BASE, page,
+    return publish_page(space, owner, KERNEL_PROCESS_STARTUP_BASE, page,
                         published_bytes, KERNEL_VM_READ);
+}
+
+static const KernelElfLimits executable_limits = {
+    .minimum_address = KERNEL_VM_USER_MIN + KERNEL_PAGE_SIZE,
+    .maximum_address = KERNEL_PROCESS_STACK_BASE - 1u,
+    .maximum_pages = KERNEL_PROCESS_IMAGE_PAGES_MAX,
+    .page_size = KERNEL_PAGE_SIZE,
+};
+
+static KernelProcessStatus accept_executable(const void *image,
+                                             uint32_t image_size,
+                                             uint32_t user_image,
+                                             KernelElfImage *plan)
+{
+    if (plan == NULL || (image == NULL) == (user_image == 0u) ||
+        image_size == 0u)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    if (user_image != 0u) {
+        uint32_t window = image_size < KERNEL_PROCESS_LAUNCH_HEADER_BYTES ?
+            image_size : KERNEL_PROCESS_LAUNCH_HEADER_BYTES;
+
+        kernel_bytes_clear(launch_header, sizeof(launch_header));
+        if (kernel_copy_from_user(launch_header, user_image, window) !=
+                KERNEL_USER_COPY_OK ||
+            kernel_elf_accept_windowed(launch_header, image_size, window,
+                                       &executable_limits, plan) !=
+                KERNEL_ELF_OK)
+            return KERNEL_PROCESS_INVALID_ARGUMENT;
+        return KERNEL_PROCESS_OK;
+    }
+    return kernel_elf_accept(image, image_size, &executable_limits, plan) ==
+               KERNEL_ELF_OK ?
+        KERNEL_PROCESS_OK : KERNEL_PROCESS_INVALID_ARGUMENT;
+}
+
+static bool executable_span(const KernelElfImage *plan, uint32_t *base,
+                            uint32_t *size)
+{
+    if (plan == NULL || base == NULL || size == NULL)
+        return false;
+    *base = 0u;
+    *size = 0u;
+    for (uint32_t index = 0u; index < plan->segment_count; ++index) {
+        const KernelElfSegment *segment = &plan->segment[index];
+
+        if ((segment->rights & KERNEL_ELF_SEGMENT_EXEC) != 0u &&
+            plan->entry >= segment->virtual_address &&
+            plan->entry < segment->virtual_address + segment->memory_size) {
+            *base = segment->virtual_address;
+            *size = segment->memory_size;
+            return true;
+        }
+    }
+    return false;
 }
 
 KernelProcessStatus kernel_process_create_executable(
@@ -3338,7 +3990,8 @@ KernelProcessStatus kernel_process_create_executable(
 {
     /* The firmware's case: no launcher, so no handle to copy and no argv. */
     return kernel_process_launch(image, image_size, 0u, NULL, capabilities,
-                                 capability_count, NULL, NULL, process_id);
+                                 capability_count, NULL, NULL, NULL,
+                                 process_id);
 }
 
 KernelProcessStatus kernel_process_launch(
@@ -3346,16 +3999,10 @@ KernelProcessStatus kernel_process_launch(
     const KernelHandleTable *source_table,
     const KernelProcessBootstrapCapability *capabilities,
     uint32_t capability_count, const AstraLaunchArguments *arguments,
-    const char *environment, uint32_t *process_id)
+    const char *argument_bytes, const char *environment,
+    uint32_t *process_id)
 {
     AstraStartupCapability granted[KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX];
-    /* Static so the initialiser is not copied through a libc memcpy. */
-    static const KernelElfLimits limits = {
-        .minimum_address = KERNEL_VM_USER_MIN + KERNEL_PAGE_SIZE,
-        .maximum_address = KERNEL_PROCESS_STACK_BASE - 1u,
-        .maximum_pages = KERNEL_PROCESS_IMAGE_PAGES_MAX,
-        .page_size = KERNEL_PAGE_SIZE,
-    };
     KernelElfImage plan;
     KernelProcess *process;
     KernelPreparedThread prepared_thread;
@@ -3369,35 +4016,18 @@ KernelProcessStatus kernel_process_launch(
     void *raw_process;
     uint16_t slot;
     KernelObjectCacheStatus cache_status;
-    uint32_t index;
 
     if ((image == NULL) == (user_image == 0u) || process_id == NULL ||
         capability_count > KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX ||
         (capability_count != 0u && capabilities == NULL) ||
-        (arguments != NULL && arguments->environment_count != 0u &&
-         environment == NULL))
+        (arguments != NULL &&
+         ((arguments->count != 0u && argument_bytes == NULL) ||
+          (arguments->environment_count != 0u && environment == NULL))))
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     kernel_bytes_clear(granted, sizeof(granted));
     *process_id = 0u;
-    if (user_image != 0u) {
-        /*
-         * The headers, out of the launcher's memory and into a window the
-         * kernel owns. Everything the acceptance profile reads is in here, and
-         * a file whose program header table is not is refused rather than
-         * followed out of the window.
-         */
-        uint32_t window = image_size < KERNEL_PROCESS_LAUNCH_HEADER_BYTES ?
-            image_size : KERNEL_PROCESS_LAUNCH_HEADER_BYTES;
-
-        kernel_bytes_clear(launch_header, sizeof(launch_header));
-        if (kernel_copy_from_user(launch_header, user_image, window) !=
-            KERNEL_USER_COPY_OK)
-            return KERNEL_PROCESS_INVALID_ARGUMENT;
-        if (kernel_elf_accept_windowed(launch_header, image_size, window,
-                                       &limits, &plan) != KERNEL_ELF_OK)
-            return KERNEL_PROCESS_INVALID_ARGUMENT;
-    } else if (kernel_elf_accept(image, image_size, &limits, &plan) !=
-               KERNEL_ELF_OK) {
+    if (accept_executable(image, image_size, user_image, &plan) !=
+        KERNEL_PROCESS_OK) {
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     }
 
@@ -3432,20 +4062,7 @@ KernelProcessStatus kernel_process_launch(
             KERNEL_THREAD_PRIORITY_USER_MAX :
             KERNEL_THREAD_PRIORITY_NORMAL;
 
-    /* The executable span is the segment the validated entry point lands in. */
-    for (index = 0u; index < plan.segment_count; ++index) {
-        const KernelElfSegment *segment = &plan.segment[index];
-
-        if ((segment->rights & KERNEL_ELF_SEGMENT_EXEC) == 0u)
-            continue;
-        if (plan.entry >= segment->virtual_address &&
-            plan.entry < segment->virtual_address + segment->memory_size) {
-            process->entry_base = segment->virtual_address;
-            process->image_size = segment->memory_size;
-            break;
-        }
-    }
-    if (process->image_size == 0u) {
+    if (!executable_span(&plan, &process->entry_base, &process->image_size)) {
         result = KERNEL_PROCESS_INVALID_ARGUMENT;
         goto failed;
     }
@@ -3465,7 +4082,8 @@ KernelProcessStatus kernel_process_launch(
         goto failed;
     }
 
-    result = map_segments(process, &plan, image, user_image, 0u, false);
+    result = map_segments(&process->address_space, process->owner, &plan,
+                          image, user_image, 0u, false);
     if (result != KERNEL_PROCESS_OK)
         goto failed;
 
@@ -3501,9 +4119,11 @@ KernelProcessStatus kernel_process_launch(
         goto failed;
     }
 
-    result = publish_startup_block(process, self_handle,
+    result = publish_startup_block(&process->address_space, process->owner,
+                                   self_handle,
                                    prepared_thread.handle, granted,
-                                   capability_count, arguments, environment);
+                                   capability_count, arguments, argument_bytes,
+                                   environment, 0u, 0u);
     if (result != KERNEL_PROCESS_OK) {
         (void)abort_prepared_thread(&prepared_thread);
         goto failed;
@@ -4225,6 +4845,35 @@ static bool area_status_to_syscall(KernelAreaStatus status,
         *result = ASTRA_SYSCALL_PEER_DEAD;
         return true;
     case KERNEL_AREA_CORRUPT:
+    default:
+        return false;
+    }
+}
+
+static bool vm_status_to_syscall(KernelVmStatus status, uint32_t *result)
+{
+    if (result == NULL)
+        return false;
+    switch (status) {
+    case KERNEL_VM_OK:
+        *result = ASTRA_SYSCALL_OK;
+        return true;
+    case KERNEL_VM_INVALID_ARGUMENT:
+    case KERNEL_VM_ALREADY_MAPPED:
+    case KERNEL_VM_NOT_MAPPED:
+    case KERNEL_VM_CACHE_ALIAS:
+        *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+        return true;
+    case KERNEL_VM_NOT_OWNED:
+        *result = ASTRA_SYSCALL_ACCESS_DENIED;
+        return true;
+    case KERNEL_VM_OUT_OF_MEMORY:
+        *result = ASTRA_SYSCALL_OUT_OF_MEMORY;
+        return true;
+    case KERNEL_VM_BUSY:
+        *result = ASTRA_SYSCALL_WOULD_BLOCK;
+        return true;
+    case KERNEL_VM_CORRUPT:
     default:
         return false;
     }
@@ -5170,18 +5819,24 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
          * would make the two indistinguishable.
          */
         uint32_t requested = thread->context.data[1];
+        uint32_t previous = current_thread->activity;
 
-        if (requested == ASTRA_ACTIVITY_NONE) {
+        if (requested == ASTRA_ACTIVITY_CURRENT) {
+            /* Query only. */
+        } else if (requested == ASTRA_ACTIVITY_NONE) {
             current_thread->activity = 0u;
         } else if (requested == 0u) {
             ++next_activity;
-            if (next_activity == 0u || next_activity == ASTRA_ACTIVITY_NONE)
+            if (next_activity == 0u ||
+                next_activity == ASTRA_ACTIVITY_CURRENT ||
+                next_activity == ASTRA_ACTIVITY_NONE)
                 next_activity = 1u;
             current_thread->activity = next_activity;
         } else {
             current_thread->activity = requested;
         }
         thread->context.data[1] = current_thread->activity;
+        thread->context.data[2] = previous;
         break;
     }
     case ASTRA_SYSCALL_LOG_WRITE: {
@@ -5298,8 +5953,6 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             result = ASTRA_SYSCALL_RESOURCE_LIMIT;
             break;
         }
-        kernel_bytes_clear(&arguments, sizeof(arguments));
-        kernel_bytes_clear(launch_environment, sizeof(launch_environment));
         kernel_bytes_clear(requested, sizeof(requested));
         if (grant_count != 0u) {
             copy_status = kernel_copy_from_user(
@@ -5310,45 +5963,14 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                 break;
             }
         }
+        result = copy_launch_arguments(argument_address, &arguments);
+        if (result != ASTRA_SYSCALL_OK)
+            break;
         if (argument_address != 0u) {
-            copy_status = kernel_copy_from_user(&arguments, argument_address,
-                                                (uint32_t)sizeof(arguments));
-            if (copy_status != KERNEL_USER_COPY_OK) {
-                result = ASTRA_SYSCALL_BAD_ADDRESS;
-                break;
-            }
-            if (arguments.count > ASTRA_LAUNCH_ARGUMENT_MAX ||
-                arguments.length > ASTRA_LAUNCH_ARGUMENT_BYTES ||
-                (arguments.count != 0u) != (arguments.length != 0u) ||
-                arguments.environment_count >
-                    ASTRA_LAUNCH_ENVIRONMENT_MAX ||
-                arguments.environment_length >
-                    ASTRA_LAUNCH_ENVIRONMENT_BYTES ||
-                (arguments.environment_count != 0u) !=
-                    (arguments.environment_length != 0u) ||
-                (arguments.environment_count != 0u) !=
-                    (arguments.environment_address != 0u) ||
-                arguments.source > ASTRA_LAUNCH_SOURCE_DESKTOP ||
-                (arguments.flags & ~ASTRA_LAUNCH_FLAG_MASK) != 0u ||
-                (arguments.count == 0u &&
-                 arguments.environment_count == 0u &&
-                 arguments.source != ASTRA_LAUNCH_SOURCE_SYSTEM)) {
-                result = ASTRA_SYSCALL_INVALID_ARGUMENT;
-                break;
-            }
             if ((arguments.flags & ASTRA_LAUNCH_FLAG_ESSENTIAL) != 0u &&
                 current->id != initial_image_process_id) {
                 result = ASTRA_SYSCALL_ACCESS_DENIED;
                 break;
-            }
-            if (arguments.environment_count != 0u) {
-                copy_status = kernel_copy_from_user(
-                    launch_environment, arguments.environment_address,
-                    arguments.environment_length);
-                if (copy_status != KERNEL_USER_COPY_OK) {
-                    result = ASTRA_SYSCALL_BAD_ADDRESS;
-                    break;
-                }
             }
         }
         for (uint32_t index = 0u; index < grant_count; ++index) {
@@ -5428,7 +6050,9 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             arguments.count != 0u || arguments.environment_count != 0u ||
                     arguments.flags != 0u ?
                 &arguments : NULL,
-            arguments.environment_count != 0u ? launch_environment : NULL,
+            arguments.count != 0u ? syscall_data : NULL,
+            arguments.environment_count != 0u ?
+                syscall_data + arguments.length : NULL,
             &child_id);
         if (launch_status != KERNEL_PROCESS_OK) {
             ++scheduler_stats.launch_failures;
@@ -5473,6 +6097,69 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         thread->context.data[1] = child_handle;
         thread->context.data[2] = child_id;
         break;
+    }
+    case ASTRA_SYSCALL_PROCESS_CLONE: {
+        KernelHandle child_handle = KERNEL_HANDLE_INVALID;
+        uint32_t child_id = 0u;
+        KernelProcessStatus clone_status = clone_current_process(
+            current, thread, &child_id, &child_handle);
+
+        if (clone_status == KERNEL_PROCESS_OUT_OF_MEMORY) {
+            result = ASTRA_SYSCALL_OUT_OF_MEMORY;
+            break;
+        }
+        if (clone_status == KERNEL_PROCESS_NO_SLOT ||
+            clone_status == KERNEL_PROCESS_RESOURCE_LIMIT) {
+            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        }
+        if (clone_status != KERNEL_PROCESS_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        thread->context.data[1] = child_handle;
+        thread->context.data[2] = child_id;
+        break;
+    }
+    case ASTRA_SYSCALL_PROCESS_EXEC: {
+        AstraExecRequest request;
+        uint32_t request_address = thread->context.data[3];
+        KernelProcessStatus exec_status;
+
+        if (thread->context.data[1] == 0u ||
+            thread->context.data[2] == 0u ||
+            request_address < KERNEL_VM_USER_MIN ||
+            request_address > UINT32_MAX -
+                (uint32_t)offsetof(AstraExecRequest, arguments) ||
+            kernel_copy_from_user(&request, request_address,
+                                  sizeof(request)) != KERNEL_USER_COPY_OK) {
+            result = ASTRA_SYSCALL_BAD_ADDRESS;
+            break;
+        }
+        result = copy_launch_arguments(
+            request_address + (uint32_t)offsetof(AstraExecRequest, arguments),
+            &request.arguments);
+        if (result != ASTRA_SYSCALL_OK)
+            break;
+        exec_status = replace_process_image(
+            current, thread, thread->context.data[1],
+            thread->context.data[2], &request, next_context);
+        if (exec_status == KERNEL_PROCESS_OK) {
+            if (*next_context == NULL)
+                return KERNEL_PROCESS_CORRUPT;
+            return KERNEL_PROCESS_OK;
+        }
+        if (exec_status == KERNEL_PROCESS_INVALID_ARGUMENT) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (exec_status == KERNEL_PROCESS_OUT_OF_MEMORY) {
+            result = ASTRA_SYSCALL_OUT_OF_MEMORY;
+            break;
+        }
+        if (exec_status == KERNEL_PROCESS_RESOURCE_LIMIT) {
+            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        }
+        return exec_status;
     }
     case ASTRA_SYSCALL_TRACE_READ: {
         /*
@@ -5848,9 +6535,10 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         }
         if (sync_status != KERNEL_SYNC_OK || object == NULL)
             return KERNEL_PROCESS_CORRUPT;
-        switch (kernel_handle_install(
+        switch (kernel_handle_install_cloneable(
             &current->handles, KERNEL_OBJECT_SYNC, rights, object,
-            kernel_sync_handle_release, NULL, &handle)) {
+            kernel_sync_handle_retain, kernel_sync_handle_release, NULL,
+            &handle)) {
         case KERNEL_HANDLE_OK:
             thread->context.data[1] = handle;
             break;
@@ -5888,9 +6576,10 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         }
         if (sync_status != KERNEL_SYNC_OK || object == NULL)
             return KERNEL_PROCESS_CORRUPT;
-        switch (kernel_handle_install(
+        switch (kernel_handle_install_cloneable(
             &current->handles, KERNEL_OBJECT_TIMER, rights, object,
-            kernel_sync_handle_release, NULL, &handle)) {
+            kernel_sync_handle_retain, kernel_sync_handle_release, NULL,
+            &handle)) {
         case KERNEL_HANDLE_OK:
             thread->context.data[1] = handle;
             ++scheduler_stats.timer_created;
@@ -6040,6 +6729,113 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             return KERNEL_PROCESS_CORRUPT;
         break;
     }
+    case ASTRA_SYSCALL_VM_PRIVATE_RESERVE: {
+        uint32_t virtual_base = 0u;
+        uint32_t mapped_span = 0u;
+        KernelVmStatus vm_status = kernel_vm_private_reserve(
+            &current->address_space, thread->context.data[1],
+            thread->context.data[2], &virtual_base, &mapped_span);
+
+        if (vm_status != KERNEL_VM_OK) {
+            if (!vm_status_to_syscall(vm_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        thread->context.data[1] = virtual_base;
+        thread->context.data[2] = mapped_span;
+        break;
+    }
+    case ASTRA_SYSCALL_VM_PRIVATE_DECOMMIT: {
+        uint32_t released = 0u;
+        KernelVmStatus vm_status = kernel_vm_private_decommit(
+            &current->address_space, thread->context.data[1],
+            thread->context.data[2], &released);
+
+        if (vm_status != KERNEL_VM_OK) {
+            if (!vm_status_to_syscall(vm_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        thread->context.data[1] = released;
+        break;
+    }
+    case ASTRA_SYSCALL_SIGNAL_CONFIGURE: {
+        uint32_t trampoline = thread->context.data[1];
+        uint32_t stack_top = thread->context.data[2];
+        uint32_t blocked = thread->context.data[3];
+
+        if (trampoline < KERNEL_VM_USER_MIN ||
+            trampoline > KERNEL_VM_USER_MAX || stack_top < 8u ||
+            (stack_top & 3u) != 0u ||
+            kernel_vm_probe_current(trampoline, false, NULL) ==
+                KERNEL_VM_MAPPING_UNMAPPED ||
+            kernel_vm_probe_current(stack_top - 8u, false, NULL) !=
+                KERNEL_VM_MAPPING_READ_WRITE) {
+            result = ASTRA_SYSCALL_BAD_ADDRESS;
+            break;
+        }
+        thread->context.data[1] = current->signal_pending;
+        thread->context.data[2] = current->signal_blocked;
+        current->signal_trampoline = trampoline;
+        current->signal_stack_top = stack_top;
+        current->signal_blocked =
+            blocked & ~((1u << 9u) | (1u << 19u));
+        break;
+    }
+    case ASTRA_SYSCALL_INTERVAL_TIMER: {
+        uint64_t delay_ns = ((uint64_t)thread->context.data[1] << 32) |
+                            thread->context.data[2];
+        uint64_t period_ns = ((uint64_t)thread->context.data[3] << 32) |
+                             thread->context.data[4];
+        uint64_t now = scheduler_cycles();
+        uint64_t old_remaining =
+            current->interval_deadline > now ?
+                kernel_platform_cycles_to_ns(
+                    current->interval_deadline - now) : 0u;
+        uint64_t old_period =
+            kernel_platform_cycles_to_ns(current->interval_period);
+        uint64_t delay_cycles = 0u;
+        uint64_t period_cycles = 0u;
+        bool query = delay_ns == UINT64_MAX && period_ns == UINT64_MAX;
+
+        if (!query && ((delay_ns & (1ull << 63)) != 0u ||
+            (period_ns & (1ull << 63)) != 0u ||
+            (delay_ns != 0u &&
+             !kernel_platform_deadline_to_cycles((int64_t)delay_ns,
+                                                  &delay_cycles)) ||
+            (period_ns != 0u &&
+             !kernel_platform_deadline_to_cycles((int64_t)period_ns,
+                                                  &period_cycles)) ||
+            (delay_cycles != 0u && UINT64_MAX - now < delay_cycles))) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (!query) {
+            current->interval_deadline =
+                delay_cycles == 0u ? 0u : now + delay_cycles;
+            current->interval_period = period_cycles;
+            current->signal_target_thread = thread->id;
+        }
+        thread->context.data[1] = (uint32_t)(old_remaining >> 32);
+        thread->context.data[2] = (uint32_t)old_remaining;
+        thread->context.data[3] = (uint32_t)(old_period >> 32);
+        thread->context.data[4] = (uint32_t)old_period;
+        if (!query)
+            scheduler_timer_rearm_at(now);
+        break;
+    }
+    case ASTRA_SYSCALL_SIGNAL_RETURN:
+        if (thread->slot >= KERNEL_THREAD_MAX ||
+            signal_context_active[thread->slot] == 0u) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        kernel_bytes_copy(&thread->context,
+                          &signal_saved_context[thread->slot],
+                          sizeof(thread->context));
+        signal_context_active[thread->slot] = 0u;
+        *next_context = runtime_resume(thread);
+        return KERNEL_PROCESS_OK;
     case ASTRA_SYSCALL_RING_CREATE: {
         KernelArea *area = NULL;
         KernelRing *ring = NULL;
@@ -6047,6 +6843,9 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         KernelHandle consumer = KERNEL_HANDLE_INVALID;
         KernelHandleStatus handle_status;
         KernelRingStatus ring_status;
+        bool cloneable =
+            (thread->context.data[5] &
+             ASTRA_BULK_RING_CREATE_KERNEL_COPY) != 0u;
 
         if (kernel_handle_available(&current->handles) < 2u) {
             result = ASTRA_SYSCALL_RESOURCE_LIMIT;
@@ -6066,9 +6865,10 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         }
         if (handle_status != KERNEL_HANDLE_OK || area == NULL)
             return KERNEL_PROCESS_CORRUPT;
-        ring_status = kernel_ring_create(
+        ring_status = kernel_ring_create_flagged(
             current->id, area, thread->context.data[2],
-            thread->context.data[3], thread->context.data[4], &ring);
+            thread->context.data[3], thread->context.data[4],
+            thread->context.data[5], &ring);
         if (ring_status != KERNEL_RING_OK) {
             if (!ring_status_to_syscall(ring_status, &result))
                 return KERNEL_PROCESS_CORRUPT;
@@ -6076,10 +6876,16 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         }
         if (ring == NULL)
             return KERNEL_PROCESS_CORRUPT;
-        handle_status = kernel_handle_install(
-            &current->handles, KERNEL_OBJECT_RING_PRODUCER,
-            KERNEL_RING_PRODUCER_RIGHTS, ring, kernel_ring_handle_release,
-            (void *)(uintptr_t)KERNEL_RING_ENDPOINT_PRODUCER, &producer);
+        handle_status = cloneable ?
+            kernel_handle_install_cloneable(
+                &current->handles, KERNEL_OBJECT_RING_PRODUCER,
+                KERNEL_RING_PRODUCER_RIGHTS, ring, kernel_ring_handle_retain,
+                kernel_ring_handle_release,
+                (void *)(uintptr_t)KERNEL_RING_ENDPOINT_PRODUCER, &producer) :
+            kernel_handle_install(
+                &current->handles, KERNEL_OBJECT_RING_PRODUCER,
+                KERNEL_RING_PRODUCER_RIGHTS, ring, kernel_ring_handle_release,
+                (void *)(uintptr_t)KERNEL_RING_ENDPOINT_PRODUCER, &producer);
         if (handle_status != KERNEL_HANDLE_OK) {
             kernel_ring_abandon_unpublished(ring);
             if (handle_status == KERNEL_HANDLE_TABLE_FULL) {
@@ -6088,10 +6894,16 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             }
             return KERNEL_PROCESS_CORRUPT;
         }
-        handle_status = kernel_handle_install(
-            &current->handles, KERNEL_OBJECT_RING_CONSUMER,
-            KERNEL_RING_CONSUMER_RIGHTS, ring, kernel_ring_handle_release,
-            (void *)(uintptr_t)KERNEL_RING_ENDPOINT_CONSUMER, &consumer);
+        handle_status = cloneable ?
+            kernel_handle_install_cloneable(
+                &current->handles, KERNEL_OBJECT_RING_CONSUMER,
+                KERNEL_RING_CONSUMER_RIGHTS, ring, kernel_ring_handle_retain,
+                kernel_ring_handle_release,
+                (void *)(uintptr_t)KERNEL_RING_ENDPOINT_CONSUMER, &consumer) :
+            kernel_handle_install(
+                &current->handles, KERNEL_OBJECT_RING_CONSUMER,
+                KERNEL_RING_CONSUMER_RIGHTS, ring, kernel_ring_handle_release,
+                (void *)(uintptr_t)KERNEL_RING_ENDPOINT_CONSUMER, &consumer);
         if (handle_status != KERNEL_HANDLE_OK) {
             if (kernel_handle_close(&current->handles, producer) !=
                 KERNEL_HANDLE_OK)
@@ -6170,6 +6982,136 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         if (!kernel_ring_pool_healthy() || !kernel_area_pool_healthy())
 #endif
             return KERNEL_PROCESS_CORRUPT;
+        break;
+    }
+    case ASTRA_SYSCALL_RING_READ_TRY: {
+        KernelRing *ring = NULL;
+        KernelHandleStatus handle_status;
+        KernelRingStatus ring_status;
+        uint32_t copied = 0u;
+        uint32_t woken = 0u;
+        uint32_t started;
+        int copy_status;
+
+        if (thread->context.data[3] == 0u ||
+            thread->context.data[3] > ASTRA_BULK_RING_TRANSFER_MAX) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1],
+            KERNEL_OBJECT_RING_CONSUMER, ASTRA_RIGHT_READ, (void **)&ring);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || ring == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        started = kernel_performance_cycles_low();
+        ring_status = kernel_ring_copy_peek(
+            ring, syscall_data, thread->context.data[3], &copied);
+        if (ring_status != KERNEL_RING_OK) {
+            kernel_ring_record_copy_cycles(
+                kernel_performance_cycles_low() - started, 0u);
+            if (!ring_status_to_syscall(ring_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        copy_status = kernel_copy_to_user(thread->context.data[2],
+                                          syscall_data, copied);
+        if (copy_status != KERNEL_USER_COPY_OK) {
+            kernel_ring_record_copy_cycles(
+                kernel_performance_cycles_low() - started, 0u);
+            result = copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+                             copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT ?
+                         ASTRA_SYSCALL_BAD_ADDRESS :
+                         ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        ring_status = kernel_ring_copy_consume(ring, copied, &woken);
+        if (ring_status != KERNEL_RING_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        kernel_ring_record_copy_cycles(
+            kernel_performance_cycles_low() - started, copied);
+        thread->context.data[1] = copied;
+        if (woken != 0u) {
+            wake_preemption_pending = ready_thread_outranks(thread);
+            if (wake_preemption_pending)
+                ++scheduler_stats.wake_preemptions;
+            else
+                scheduler_timer_rearm();
+        }
+        break;
+    }
+    case ASTRA_SYSCALL_RING_WRITE_TRY: {
+        KernelRing *ring = NULL;
+        KernelHandleStatus handle_status;
+        KernelRingStatus ring_status;
+        uint32_t written = 0u;
+        uint32_t woken = 0u;
+        uint32_t started;
+        int copy_status;
+
+        if (thread->context.data[3] == 0u ||
+            thread->context.data[3] > ASTRA_BULK_RING_TRANSFER_MAX ||
+            (thread->context.data[4] &
+             ~ASTRA_BULK_RING_WRITE_FLAG_MASK) != 0u) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1],
+            KERNEL_OBJECT_RING_PRODUCER, ASTRA_RIGHT_WRITE, (void **)&ring);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || ring == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        started = kernel_performance_cycles_low();
+        copy_status = kernel_copy_from_user(syscall_data,
+                                            thread->context.data[2],
+                                            thread->context.data[3]);
+        if (copy_status != KERNEL_USER_COPY_OK) {
+            kernel_ring_record_copy_cycles(
+                kernel_performance_cycles_low() - started, 0u);
+            result = copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+                             copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT ?
+                         ASTRA_SYSCALL_BAD_ADDRESS :
+                         ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        ring_status = kernel_ring_copy_write(
+            ring, syscall_data, thread->context.data[3],
+            (thread->context.data[4] & ASTRA_BULK_RING_WRITE_ATOMIC) != 0u,
+            &written, &woken);
+        if (ring_status != KERNEL_RING_OK) {
+            kernel_ring_record_copy_cycles(
+                kernel_performance_cycles_low() - started, 0u);
+            if (!ring_status_to_syscall(ring_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            break;
+        }
+        kernel_ring_record_copy_cycles(
+            kernel_performance_cycles_low() - started, written);
+        thread->context.data[1] = written;
+        if (woken != 0u) {
+            wake_preemption_pending = ready_thread_outranks(thread);
+            if (wake_preemption_pending)
+                ++scheduler_stats.wake_preemptions;
+            else
+                scheduler_timer_rearm();
+        }
         break;
     }
     case ASTRA_SYSCALL_PORT_CREATE:
@@ -6977,6 +7919,9 @@ static uint32_t classify_fault_address(const KernelThread *thread,
         address < KERNEL_VM_AREA_BASE +
                       (KERNEL_VM_AREA_SLOT_COUNT * KERNEL_VM_AREA_SLOT_SIZE))
         return KERNEL_PROCESS_FAULT_AREA_WINDOW;
+    if (address >= KERNEL_VM_PRIVATE_BASE &&
+        address < KERNEL_VM_PRIVATE_END)
+        return KERNEL_PROCESS_FAULT_PRIVATE_WINDOW;
     return KERNEL_PROCESS_FAULT_OTHER;
 }
 
@@ -6991,16 +7936,49 @@ static uint32_t classify_fault_address(const KernelThread *thread,
  * between it and what the thread already holds, so the rest of the range is
  * covered by the same call.
  */
-bool kernel_process_commit_user_stack(uint32_t address, uint32_t size)
+bool kernel_process_prepare_user_copy(uint32_t address, uint32_t size,
+                                      bool write)
 {
     KernelProcess *process;
+    KernelVmStatus vm_status;
 
     if (size == 0u || current_thread == NULL)
         return false;
     process = process_for_thread(current_thread);
     if (process == NULL || process->process_state != KERNEL_PROCESS_RUNNING)
         return false;
-    return grow_user_stack(process, current_thread, address);
+    vm_status = kernel_vm_private_commit_range(
+        &process->address_space, address, size, write);
+    if (vm_status == KERNEL_VM_OK)
+        return true;
+    if (vm_status != KERNEL_VM_NOT_MAPPED)
+        return false;
+    if (grow_user_stack(process, current_thread, address))
+        return true;
+    if (write) {
+        uint32_t last;
+        uint32_t page;
+        bool cow_resolved = false;
+
+        if (address > UINT32_MAX - (size - 1u))
+            return false;
+        last = (address + size - 1u) & ~(KERNEL_PAGE_SIZE - 1u);
+        page = address & ~(KERNEL_PAGE_SIZE - 1u);
+        for (;;) {
+            vm_status = kernel_vm_cow_fault(&process->address_space, page);
+            if (vm_status == KERNEL_VM_OK) {
+                cow_resolved = true;
+            } else if (!(vm_status == KERNEL_VM_NOT_OWNED &&
+                         kernel_vm_probe_current(page, false, NULL) ==
+                             KERNEL_VM_MAPPING_READ_WRITE)) {
+                return false;
+            }
+            if (page == last)
+                return cow_resolved;
+            page += KERNEL_PAGE_SIZE;
+        }
+    }
+    return false;
 }
 
 KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
@@ -7035,8 +8013,14 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
      */
     if (frame.access_fault != 0u &&
         (grow_user_stack(current, thread, frame.fault_address) ||
+         ((frame.special_status & M68K_SSW_READ) == 0u &&
+          kernel_vm_cow_fault(&current->address_space,
+                              frame.fault_address) == KERNEL_VM_OK) ||
          kernel_area_fault(current->id, &current->address_space,
-                           frame.fault_address))) {
+                           frame.fault_address) ||
+         kernel_vm_private_fault(
+             &current->address_space, frame.fault_address,
+             (frame.special_status & M68K_SSW_READ) == 0u) == KERNEL_VM_OK)) {
         *next_context = runtime_resume(thread);
         return KERNEL_PROCESS_OK;
     }
@@ -7439,6 +8423,12 @@ bool kernel_process_stats(KernelSchedulerStats *stats)
     stats->ring_consumer_notifications = ring_stats.consumer_notifications;
     stats->ring_wait_wakeups = ring_stats.wait_wakeups;
     stats->ring_peer_closures = ring_stats.peer_closures;
+    stats->ring_copy_reads = ring_stats.copied_reads;
+    stats->ring_copy_writes = ring_stats.copied_writes;
+    stats->ring_copy_read_bytes = ring_stats.copied_read_bytes;
+    stats->ring_copy_write_bytes = ring_stats.copied_write_bytes;
+    stats->ring_copy_max_cycles = ring_stats.copied_max_cycles;
+    stats->ring_copy_cycle_overruns = ring_stats.copied_cycle_overruns;
     stats->irq_wake_to_run_max_cycles =
         thread_stats.irq_wake_to_run_max_cycles;
     stats->milestone_complete = scheduler_stats.milestone_complete;

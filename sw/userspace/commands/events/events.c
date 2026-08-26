@@ -244,8 +244,7 @@ astra_main(const AstraStartupInfo *startup)
         "kernel", "runtime", "supervisor", "storage", "vfs", "shell",
         "input", "display"
     };
-    const AstraStartupCapability *capabilities;
-    const uint32_t *argv = NULL;
+    const AstraStartupCapability *capability;
     char path[EVENTS_PATH_MAX];
     char activity[9];
     const char *level = "notice";
@@ -265,36 +264,27 @@ astra_main(const AstraStartupInfo *startup)
     uint32_t set_subsystem = 0u;
     uint32_t set_level = 0u;
 
-    if (startup == NULL || startup->capabilities_address == 0u) {
+    if (!astra_startup_validate(startup)) {
         return ASTRA_STATUS_INVALID;
     }
-    capabilities =
-        (const AstraStartupCapability *)(uintptr_t)
-            startup->capabilities_address;
-    if (startup->argc != 0u && startup->argv_address != 0u) {
-        argv = (const uint32_t *)(uintptr_t)startup->argv_address;
-    }
-
-    for (uint32_t index = 0u; index < startup->capability_count; ++index) {
-        if (astra_capability_name_equal(capabilities[index].name, "STDOUT")) {
-            out = capabilities[index].handle;
-        } else if (astra_capability_name_equal(capabilities[index].name,
-                                               "STDIN")) {
-            stdin_handle = capabilities[index].handle;
-        } else if (astra_capability_name_equal(
-                       capabilities[index].name,
-                       ASTRA_CAPABILITY_EVENT_CONTROL)) {
-            control_handle = capabilities[index].handle;
-        }
-    }
+    capability = astra_startup_capability(startup, "STDOUT");
+    if (capability != NULL)
+        out = capability->handle;
+    capability = astra_startup_capability(startup, "STDIN");
+    if (capability != NULL)
+        stdin_handle = capability->handle;
+    capability = astra_startup_capability(startup,
+                                          ASTRA_CAPABILITY_EVENT_CONTROL);
+    if (capability != NULL)
+        control_handle = capability->handle;
     if (out == 0u) {
         /* Nowhere to write is not a failure this program can report. */
         return ASTRA_STATUS_ACCESS;
     }
     for (uint32_t index = 1u; index < startup->argc; ++index) {
-        const char *word = (const char *)(uintptr_t)argv[index];
+        const char *word = astra_startup_argument(startup, index);
         const char *value = index + 1u < startup->argc ?
-            (const char *)(uintptr_t)argv[index + 1u] : NULL;
+            astra_startup_argument(startup, index + 1u) : NULL;
 
         if (equal(word, "--all")) {
             level = "all";
@@ -368,7 +358,7 @@ astra_main(const AstraStartupInfo *startup)
             }
             for (set_level = 0u; set_level <= ASTRA_EVENT_LEVEL_ERROR;
                  ++set_level) {
-                if (equal((const char *)(uintptr_t)argv[index + 2u],
+                if (equal(astra_startup_argument(startup, index + 2u),
                           set_level_name[set_level]))
                     break;
             }

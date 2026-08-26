@@ -1,5 +1,6 @@
 #include "path.h"
 
+#include <astra/ascii.h>
 #include <astra/vfs_service.h>
 
 #include <stddef.h>
@@ -18,12 +19,6 @@ static int assign_character(char value)
     return (value >= 'A' && value <= 'Z') ||
            (value >= 'a' && value <= 'z') ||
            (value >= '0' && value <= '9') || value == '_';
-}
-
-static char upper(char value)
-{
-    return value >= 'a' && value <= 'z' ?
-        (char)(value - ('a' - 'A')) : value;
 }
 
 static int native_spelling(const char *path, uint32_t *colon)
@@ -131,7 +126,7 @@ int astra_posix_path_resolve(const char *cwd, const char *path,
     while (normal[at] != '\0' && normal[at] != '/') {
         if (!assign_character(normal[at]) || out + 2u >= native_capacity)
             return -1;
-        native[out++] = upper(normal[at++]);
+        native[out++] = astra_ascii_upper(normal[at++]);
     }
     if (out == 0u || out + 2u > native_capacity)
         return -1;

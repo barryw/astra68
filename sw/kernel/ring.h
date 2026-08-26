@@ -22,6 +22,10 @@
 #define KERNEL_RING_ABI_VERSION ASTRA_BULK_RING_ABI_VERSION
 
 #define KERNEL_RING_NOTIFY_CORRUPT ASTRA_BULK_RING_NOTIFY_CORRUPT
+#define KERNEL_RING_CREATE_KERNEL_COPY \
+    ASTRA_BULK_RING_CREATE_KERNEL_COPY
+#define KERNEL_RING_COPY_FIXED_BUDGET_CYCLES 30000u
+#define KERNEL_RING_COPY_PER_BYTE_BUDGET_CYCLES 100u
 
 #define KERNEL_RING_PRODUCER_RIGHTS \
     ((1u << 1) | (1u << 3) | (1u << 4) | (1u << 5))
@@ -86,13 +90,24 @@ typedef struct KernelRingPoolStats {
     uint32_t peer_closures;
     uint32_t owner_deaths;
     uint32_t corruption_failures;
+    uint32_t copied_reads;
+    uint32_t copied_writes;
+    uint32_t copied_read_bytes;
+    uint32_t copied_write_bytes;
+    uint32_t copied_would_blocks;
+    uint32_t copied_max_cycles;
+    uint32_t copied_cycle_overruns;
 } KernelRingPoolStats;
 
 void kernel_ring_pool_init(void);
 KernelRingStatus kernel_ring_create(uint32_t owner, KernelArea *area,
                                     uint32_t offset, uint32_t element_size,
                                     uint32_t capacity, KernelRing **ring);
+KernelRingStatus kernel_ring_create_flagged(
+    uint32_t owner, KernelArea *area, uint32_t offset, uint32_t element_size,
+    uint32_t capacity, uint32_t flags, KernelRing **ring);
 void kernel_ring_abandon_unpublished(KernelRing *ring);
+bool kernel_ring_handle_retain(void *object, void *context);
 void kernel_ring_handle_release(void *object, void *context);
 KernelRingStatus kernel_ring_notify(KernelRing *ring,
                                     KernelRingEndpoint endpoint,
@@ -105,6 +120,16 @@ KernelRingStatus kernel_ring_prepare_wait(KernelRing *ring,
                                           KernelThreadWaitSpec *spec);
 KernelRingStatus kernel_ring_commit_wait(KernelRing *ring,
                                          KernelRingEndpoint endpoint);
+KernelRingStatus kernel_ring_copy_peek(KernelRing *ring, void *bytes,
+                                       uint32_t capacity,
+                                       uint32_t *copied);
+KernelRingStatus kernel_ring_copy_consume(KernelRing *ring, uint32_t count,
+                                          uint32_t *woken_threads);
+KernelRingStatus kernel_ring_copy_write(KernelRing *ring, const void *bytes,
+                                        uint32_t length, bool atomic,
+                                        uint32_t *written,
+                                        uint32_t *woken_threads);
+void kernel_ring_record_copy_cycles(uint32_t cycles, uint32_t bytes);
 KernelRingStatus kernel_ring_process_died(uint32_t process_id,
                                           uint32_t *closed_rings,
                                           uint32_t *woken_threads);

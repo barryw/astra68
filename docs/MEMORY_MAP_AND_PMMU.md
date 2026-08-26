@@ -16,7 +16,8 @@ document defines how the kernel translates, owns, and changes those ranges.
 | `0x020A0000..0x03DFFFFF` | 29.375 MiB | allocatable |
 | `0x03E00000..0x03E3FFFF` | 256 KiB | wired ROM backing |
 | `0x03E40000..0x03FFFFFF` | 1.75 MiB | allocatable |
-| `0xFFE00000..0xFFE3FFFF` | 256 KiB | read/execute ROM alias |
+| `0xFFE00000..0xFFE3FFFF` | 256 KiB | ULX3S read/execute ROM alias |
+| `0xFFE00000..0xFFE7FFFF` | 512 KiB | Arty-hosted read/execute ROM; not guest SDRAM |
 | `0xFFF00000..0xFFF4FFFF` | device pages | supervisor, cache-inhibited |
 
 Boot ranges come only from validated `AstraBootInfo`; the allocator does not

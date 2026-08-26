@@ -1,0 +1,133 @@
+--- a/include/ext4_blockdev.h
++++ b/include/ext4_blockdev.h
+@@ -224,6 +224,15 @@
+ int ext4_blocks_get_direct(struct ext4_blockdev *bdev, void *buf, uint64_t lba,
+ 			   uint32_t cnt);
+ 
++/**@brief   Read a contiguous run through the coherent block cache.
++ * @param   bdev block device descriptor
++ * @param   buf output buffer
++ * @param   lba first logical block address
++ * @param   cnt logical block count
++ * @return  standard error code*/
++int ext4_blocks_get_cached(struct ext4_blockdev *bdev, void *buf, uint64_t lba,
++			   uint32_t cnt);
++
+ /**@brief   Block write procedure (without cache)
+  * @param   bdev block device descriptor
+  * @param   buf output buffer
+--- a/src/ext4_blockdev.c
++++ b/src/ext4_blockdev.c
+@@ -383,12 +383,88 @@
+ }
+ 
+ int ext4_blocks_get_direct(struct ext4_blockdev *bdev, void *buf, uint64_t lba,
++			   uint32_t cnt)
++{
++	int r;
++
++	ext4_fill_lock(bdev);
++	r = ext4_blocks_get_direct_raw(bdev, buf, lba, cnt);
++	ext4_fill_unlock(bdev);
++	return r;
++}
++
++static bool ext4_block_copy_cached(struct ext4_blockdev *bdev, void *buf,
++				   uint64_t lba)
++{
++	struct ext4_block block = EXT4_BLOCK_ZERO();
++	bool found = false;
++
++	ext4_cache_lock(bdev);
++	if (ext4_bcache_find_get(bdev->bc, &block, lba)) {
++		if (ext4_bcache_test_flag(block.buf, BC_UPTODATE)) {
++			memcpy(buf, block.data, bdev->lg_bsize);
++			found = true;
++		}
++		ext4_bcache_free(bdev->bc, &block);
++	}
++	ext4_cache_unlock(bdev);
++	return found;
++}
++
++static int ext4_block_publish_cached(struct ext4_blockdev *bdev, void *buf,
++				     uint64_t lba)
++{
++	struct ext4_block block = EXT4_BLOCK_ZERO();
++	int r = ext4_block_get_noread(bdev, &block, lba);
++
++	if (r != EOK)
++		return r;
++	ext4_cache_lock(bdev);
++	if (ext4_bcache_test_flag(block.buf, BC_UPTODATE))
++		memcpy(buf, block.data, bdev->lg_bsize);
++	else {
++		memcpy(block.data, buf, bdev->lg_bsize);
++		ext4_bcache_set_flag(block.buf, BC_UPTODATE);
++	}
++	ext4_cache_unlock(bdev);
++	return ext4_block_set(bdev, &block);
++}
++
++int ext4_blocks_get_cached(struct ext4_blockdev *bdev, void *buf, uint64_t lba,
+ 			   uint32_t cnt)
+ {
++	uint8_t *bytes = buf;
++	uint8_t *block;
++	uint32_t at;
+ 	int r;
+ 
++	ext4_assert(bdev && buf && cnt);
++	if (!bdev->bc || cnt > bdev->bc->cnt)
++		return ext4_blocks_get_direct(bdev, buf, lba, cnt);
++
++	/* One lane makes the cache scan, fill and publication one operation. */
+ 	ext4_fill_lock(bdev);
++	block = bytes;
++	for (at = 0; at < cnt; ++at) {
++		if (!ext4_block_copy_cached(bdev, block, lba + at))
++			break;
++		block += bdev->lg_bsize;
++	}
++	if (at == cnt) {
++		ext4_fill_unlock(bdev);
++		return EOK;
++	}
++
+ 	r = ext4_blocks_get_direct_raw(bdev, buf, lba, cnt);
++	if (r == EOK) {
++		block = bytes;
++		for (at = 0; at < cnt; ++at) {
++			r = ext4_block_publish_cached(bdev, block, lba + at);
++			if (r != EOK)
++				break;
++			block += bdev->lg_bsize;
++		}
++	}
+ 	ext4_fill_unlock(bdev);
+ 	return r;
+ }
+--- a/src/ext4.c
++++ b/src/ext4.c
+@@ -1899,18 +1899,9 @@
+ 		if (run_count == 1) {
+ 			r = ext4_fread_block(file->mp->fs.bdev, run_start, 0,
+ 					     u8_buf, block_size);
+-		} else {
+-			uint32_t at;
+-
+-			for (at = 0; at < run_count; at++) {
+-				r = ext4_block_flush_lba(file->mp->fs.bdev,
+-							 run_start + at);
+-				if (r != EOK)
+-					goto Finish;
+-			}
+-			r = ext4_blocks_get_direct(file->mp->fs.bdev, u8_buf,
+-						   run_start, run_count);
+-		}
++		} else
++			r = ext4_blocks_get_cached(file->mp->fs.bdev, u8_buf,
++						  run_start, run_count);
+ 		if (r != EOK)
+ 			goto Finish;
+ 

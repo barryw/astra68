@@ -1,5 +1,7 @@
 #include "irq_latency.h"
 
+#include <astra/integer.h>
+
 #include "bytes.h"
 #include "performance.h"
 
@@ -8,12 +10,6 @@
 static KernelIrqOffLatencyStats latency_stats;
 static uint32_t latency_started;
 static uint8_t latency_enabled;
-
-static void increment_saturating(uint32_t *value)
-{
-    if (*value != UINT32_MAX)
-        ++*value;
-}
 
 void kernel_irqoff_latency_init(void)
 {
@@ -33,7 +29,7 @@ void kernel_irqoff_latency_enter(void)
     if (latency_enabled == 0u)
         return;
     if (latency_stats.active != 0u) {
-        increment_saturating(&latency_stats.nested_entries);
+        astra_u32_increment_saturating(&latency_stats.nested_entries);
         return;
     }
     latency_started = kernel_performance_cycles_low();
@@ -49,7 +45,7 @@ void kernel_irqoff_latency_exit(void)
     elapsed = kernel_performance_cycles_low() - latency_started;
     if (elapsed > latency_stats.maximum_cycles)
         latency_stats.maximum_cycles = elapsed;
-    increment_saturating(&latency_stats.samples);
+    astra_u32_increment_saturating(&latency_stats.samples);
     latency_stats.active = 0u;
 }
 

@@ -24,6 +24,7 @@ QUEUE_REQUEST_READY = 1 << 8
 DRAW_DONE = 1 << 3
 PRESENT_BUDGET_CYCLES = 250000
 POINTER_BUDGET_CYCLES = 250000
+RESIZE_BUDGET_CYCLES = 250000
 NOMINAL_CPU_HZ = 12500000
 EXPECTED_SUBMISSIONS = 2
 EXPECTED_BATCHES = 1
@@ -375,10 +376,60 @@ def run(qemu, rom, image, catalog, deadline):
                      keyboard_batches, keyboard_glyphs,
                      qmp.word(INPUT_STATUS),
                      qmp.property("astra-display-operation")))
+            resize_batches = keyboard_batches
+            resize_glyphs = keyboard_glyphs
+            resize_started = time.monotonic()
+            try:
+                qmp.move(1020, 578)
+                qmp.button(True)
+                qmp.move(1120, 658)
+                qmp.button(False)
+                resize_deadline = time.monotonic() + 3.0
+                while (qmp.property("astra-display-render-batches") <=
+                       resize_batches or
+                       qmp.property("astra-display-glyph-commands") <=
+                       resize_glyphs or
+                       qmp.property("astra-display-submissions") !=
+                       qmp.property("astra-display-completions")) and \
+                        time.monotonic() < resize_deadline:
+                    time.sleep(0.01)
+            except (BrokenPipeError, ConnectionError) as error:
+                time.sleep(0.05)
+                raise RuntimeError(
+                    "Terminal resize terminated machine exit=%s serial=%s" %
+                    (machine.poll(), serial[-100:])) from error
+            resized_batches = qmp.property(
+                "astra-display-render-batches")
+            resized_glyphs = qmp.property("astra-display-glyph-commands")
+            resize_submit_cycle = qmp.property(
+                "astra-display-submit-cycle")
+            resize_completion_cycle = qmp.property(
+                "astra-display-completion-cycle")
+            resize_collect_cycle = qmp.property(
+                "astra-display-collect-cycle")
+            resize_cycles = resize_collect_cycle - resize_submit_cycle
+            resize_elapsed = time.monotonic() - resize_started
+            if resized_batches <= resize_batches or \
+                    resized_glyphs <= resize_glyphs or \
+                    qmp.property("astra-display-submissions") != \
+                    qmp.property("astra-display-completions"):
+                raise RuntimeError(
+                    "Terminal southeast resize failed: batches=%d/%d "
+                    "glyphs=%d/%d requests=%d/%d" %
+                    (resize_batches, resized_batches, resize_glyphs,
+                     resized_glyphs,
+                     qmp.property("astra-display-submissions"),
+                     qmp.property("astra-display-completions")))
+            if not (resize_submit_cycle < resize_completion_cycle <=
+                    resize_collect_cycle) or \
+                    resize_cycles > RESIZE_BUDGET_CYCLES:
+                raise RuntimeError(
+                    "Terminal resize render took %d cycles; budget %d" %
+                    (resize_cycles, RESIZE_BUDGET_CYCLES))
             # The fixture opens at (180,90), 840 pixels wide, with the system
             # theme's 2-pixel frame, 4-pixel spacing and 20-pixel gadgets.
-            maximize_batches = keyboard_batches
-            qmp.move(988, 105)
+            maximize_batches = resized_batches
+            qmp.move(1088, 105)
             qmp.click()
             maximize_deadline = time.monotonic() + 3.0
             while (qmp.property("astra-display-render-batches") <
@@ -512,12 +563,14 @@ def run(qemu, rom, image, catalog, deadline):
                                    serial[-8:])
             print("ASTRA DISPLAY PASS fences=%d batches=%d commands=%d "
                   "fills=%d blits=%d glyphs=%d generation=%d cycles=%d/%d "
-                  "pointer=%d/%d cpu=%.3fMHz boot=%.3fs launch=%.3fs" %
+                  "pointer=%d/%d cpu=%.3fMHz boot=%.3fs launch=%.3fs "
+                  "resize=%d/%dcycles %.3fs" %
                   (submissions,
                    batches, commands, fills, blits, glyphs, generation,
                    present_cycles, PRESENT_BUDGET_CYCLES, pointer_cycles,
                    POINTER_BUDGET_CYCLES, measured_hz / 1000000.0,
-                   elapsed, launch_elapsed))
+                   elapsed, launch_elapsed, resize_cycles,
+                   RESIZE_BUDGET_CYCLES, resize_elapsed))
             return 0
         finally:
             machine.kill()

@@ -63,3 +63,30 @@ uint64_t astra_divide_u64(uint64_t value, uint32_t divisor,
         *remainder = rest;
     return ((uint64_t)quotient_high << 32) | quotient_low;
 }
+
+uint64_t astra_divide_u64_u64(uint64_t value, uint64_t divisor,
+                              uint64_t *remainder)
+{
+    uint64_t quotient = 0u;
+    uint64_t rest = 0u;
+
+    if (divisor == 0u) {
+        if (remainder != NULL)
+            *remainder = 0u;
+        return UINT64_MAX;
+    }
+    for (uint32_t index = 0u; index < 64u; ++index) {
+        uint64_t carry = rest >> 63;
+
+        rest = (rest << 1) | (value >> 63);
+        value <<= 1;
+        quotient <<= 1;
+        if (carry != 0u || rest >= divisor) {
+            rest -= divisor;
+            quotient |= 1u;
+        }
+    }
+    if (remainder != NULL)
+        *remainder = rest;
+    return quotient;
+}

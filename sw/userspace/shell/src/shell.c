@@ -1,25 +1,5 @@
 #include <astra/shell.h>
-
-static size_t shell_strlen(const char *text)
-{
-    size_t length = 0u;
-    while (text[length] != '\0') {
-        ++length;
-    }
-    return length;
-}
-
-static int shell_equal(const char *left, const char *right)
-{
-    size_t index = 0u;
-    while (left[index] != '\0' && right[index] != '\0') {
-        if (left[index] != right[index]) {
-            return 0;
-        }
-        ++index;
-    }
-    return left[index] == right[index];
-}
+#include <astra/bytes.h>
 
 static void shell_copy(char *output, const char *input, size_t length)
 {
@@ -51,7 +31,7 @@ void astra_shell_editor_init(astra_shell_editor_t *editor)
 
 static void editor_replace(astra_shell_editor_t *editor, const char *line)
 {
-    size_t length = shell_strlen(line);
+    size_t length = strlen(line);
     if (length >= ASTRA_SHELL_LINE_CAPACITY) {
         length = ASTRA_SHELL_LINE_CAPACITY - 1u;
     }
@@ -115,7 +95,7 @@ static astra_shell_result_t editor_complete(
     if (count == 0u || count > ASTRA_SHELL_COMPLETION_CAPACITY) {
         return ASTRA_SHELL_NO_CHANGE;
     }
-    common = shell_strlen(matches[0]);
+    common = strlen(matches[0]);
     for (index = 1u; index < count; ++index) {
         size_t match_index = 0u;
         while (match_index < common && matches[index][match_index] != '\0'
@@ -226,7 +206,7 @@ void astra_shell_editor_commit(astra_shell_editor_t *editor)
     if (editor->history_count != 0u) {
         previous = (editor->history_head + ASTRA_SHELL_HISTORY_CAPACITY - 1u)
                    % ASTRA_SHELL_HISTORY_CAPACITY;
-        if (shell_equal(editor->history[previous], editor->line)) {
+        if (strcmp(editor->history[previous], editor->line) == 0) {
             editor->line[0] = '\0';
             editor->length = 0u;
             editor->cursor = 0u;
@@ -288,9 +268,9 @@ int astra_shell_variable_at(const astra_shell_variables_t *variables,
         const char *pair_name = &variables->storage[at];
         const char *pair_value;
 
-        at += shell_strlen(pair_name) + 1u;
+        at += strlen(pair_name) + 1u;
         pair_value = &variables->storage[at];
-        at += shell_strlen(pair_value) + 1u;
+        at += strlen(pair_value) + 1u;
         if (seen == index) {
             *name = pair_name;
             *value = pair_value;
@@ -311,13 +291,13 @@ const char *astra_shell_variable_get(const astra_shell_variables_t *variables,
     }
     while (at < variables->length) {
         const char *pair_name = &variables->storage[at];
-        size_t name_length = shell_strlen(pair_name);
+        size_t name_length = strlen(pair_name);
 
         if (name_equal(pair_name, name, length)) {
             return &variables->storage[at + name_length + 1u];
         }
         at += name_length + 1u;
-        at += shell_strlen(&variables->storage[at]) + 1u;
+        at += strlen(&variables->storage[at]) + 1u;
     }
     return NULL;
 }
@@ -332,11 +312,11 @@ astra_shell_result_t astra_shell_variable_unset(
     }
     while (at < variables->length) {
         const char *pair_name = &variables->storage[at];
-        size_t name_length = shell_strlen(pair_name);
+        size_t name_length = strlen(pair_name);
         size_t pair = name_length + 1u;
 
-        pair += shell_strlen(&variables->storage[at + pair]) + 1u;
-        if (name_equal(pair_name, name, shell_strlen(name))) {
+        pair += strlen(&variables->storage[at + pair]) + 1u;
+        if (name_equal(pair_name, name, strlen(name))) {
             size_t index;
 
             for (index = at + pair; index < variables->length; ++index) {
@@ -372,8 +352,8 @@ astra_shell_result_t astra_shell_variable_set(
             return ASTRA_SHELL_ERR_INVALID;
         }
     }
-    name_length = shell_strlen(name);
-    value_length = shell_strlen(value);
+    name_length = strlen(name);
+    value_length = strlen(value);
     (void)astra_shell_variable_unset(variables, name);
     if (variables->length + name_length + value_length + 2u >
         ASTRA_SHELL_VARIABLE_BYTES) {
@@ -703,7 +683,7 @@ astra_shell_result_t astra_shell_dispatch(
         return ASTRA_SHELL_OK;
     }
     for (index = 0u; index < builtin_count; ++index) {
-        if (shell_equal(builtins[index].name, words->argv[0])) {
+        if (strcmp(builtins[index].name, words->argv[0]) == 0) {
             *command_result = builtins[index].function(context, words->argc, words->argv);
             return ASTRA_SHELL_OK;
         }

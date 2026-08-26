@@ -65,6 +65,33 @@ static void ext4_bdif_unlock(struct ext4_blockdev *bdev)
 	ext4_assert(r == EOK);
 }
 
+static void ext4_cache_lock(struct ext4_blockdev *bdev)
+{
+	if (bdev->bc && bdev->bc->lock)
+		bdev->bc->lock();
+}
+
+static void ext4_cache_unlock(struct ext4_blockdev *bdev)
+{
+	if (bdev->bc && bdev->bc->unlock)
+		bdev->bc->unlock();
+}
+
+static void ext4_fill_lock(struct ext4_blockdev *bdev)
+{
+	if (bdev->bc && bdev->bc->fill_lock)
+		bdev->bc->fill_lock();
+}
+
+static void ext4_fill_unlock(struct ext4_blockdev *bdev)
+{
+	if (bdev->bc && bdev->bc->fill_unlock)
+		bdev->bc->fill_unlock();
+}
+
+static int ext4_blocks_get_direct_raw(struct ext4_blockdev *bdev, void *buf,
+				      uint64_t lba, uint32_t cnt);
+
 static int ext4_bdif_bread(struct ext4_blockdev *bdev, void *buf,
 			   uint64_t blk_id, uint32_t blk_cnt)
 {
@@ -81,6 +108,20 @@ static int ext4_bdif_bwrite(struct ext4_blockdev *bdev, const void *buf,
 	ext4_bdif_lock(bdev);
 	int r = bdev->bdif->bwrite(bdev, buf, blk_id, blk_cnt);
 	bdev->bdif->bwrite_ctr++;
+	ext4_bdif_unlock(bdev);
+	return r;
+}
+
+int ext4_block_flush(struct ext4_blockdev *bdev)
+{
+	int r;
+
+	ext4_assert(bdev && bdev->bdif);
+	if (!bdev->bdif->flush)
+		return EOK;
+
+	ext4_bdif_lock(bdev);
+	r = bdev->bdif->flush(bdev);
 	ext4_bdif_unlock(bdev);
 	return r;
 }
@@ -175,10 +216,14 @@ int ext4_block_flush_lba(struct ext4_blockdev *bdev, uint64_t lba)
 	int r = EOK;
 	struct ext4_buf *buf;
 	struct ext4_block b;
+	ext4_cache_lock(bdev);
 	buf = ext4_bcache_find_get(bdev->bc, &b, lba);
+	ext4_cache_unlock(bdev);
 	if (buf) {
 		r = ext4_block_flush_buf(bdev, buf);
+		ext4_cache_lock(bdev);
 		ext4_bcache_free(bdev->bc, &b);
+		ext4_cache_unlock(bdev);
 	}
 	return r;
 }
@@ -187,8 +232,13 @@ int ext4_block_cache_shake(struct ext4_blockdev *bdev)
 {
 	int r = EOK;
 	struct ext4_buf *buf;
-	if (bdev->bc->dont_shake)
+	struct ext4_block pinned = EXT4_BLOCK_ZERO();
+
+	ext4_cache_lock(bdev);
+	if (bdev->bc->dont_shake) {
+		ext4_cache_unlock(bdev);
 		return EOK;
+	}
 
 	bdev->bc->dont_shake = true;
 
@@ -198,15 +248,23 @@ int ext4_block_cache_shake(struct ext4_blockdev *bdev)
 		buf = ext4_buf_lowest_lru(bdev->bc);
 		ext4_assert(buf);
 		if (ext4_bcache_test_flag(buf, BC_DIRTY)) {
+			/* Pin it before dropping the metadata lock for device I/O. */
+			buf = ext4_bcache_find_get(bdev->bc, &pinned,
+						   buf->lba);
+			ext4_assert(buf);
+			ext4_cache_unlock(bdev);
 			r = ext4_block_flush_buf(bdev, buf);
+			ext4_cache_lock(bdev);
+			ext4_bcache_free(bdev->bc, &pinned);
 			if (r != EOK)
 				break;
-
+			continue;
 		}
 
 		ext4_bcache_drop_buf(bdev->bc, buf);
 	}
 	bdev->bc->dont_shake = false;
+	ext4_cache_unlock(bdev);
 	return r;
 }
 
@@ -231,12 +289,19 @@ int ext4_block_get_noread(struct ext4_blockdev *bdev, struct ext4_block *b,
 	if (r != EOK)
 		return r;
 
+	/* Cache metadata is shared by concurrent readers; device I/O is not. */
+	ext4_cache_lock(bdev);
 	r = ext4_bcache_alloc(bdev->bc, b, &is_new);
-	if (r != EOK)
+	if (r != EOK) {
+		ext4_cache_unlock(bdev);
 		return r;
+	}
 
-	if (!b->data)
+	if (!b->data) {
+		ext4_cache_unlock(bdev);
 		return ENOMEM;
+	}
+	ext4_cache_unlock(bdev);
 
 	return EOK;
 }
@@ -248,15 +313,35 @@ int ext4_block_get(struct ext4_blockdev *bdev, struct ext4_block *b,
 	if (r != EOK)
 		return r;
 
+	ext4_cache_lock(bdev);
 	if (ext4_bcache_test_flag(b->buf, BC_UPTODATE)) {
 		/* Data in the cache is up-to-date.
 		 * Reading from physical device is not required */
+		ext4_cache_unlock(bdev);
 		return EOK;
 	}
+	ext4_cache_unlock(bdev);
 
-	r = ext4_blocks_get_direct(bdev, b->data, lba, 1);
+	/*
+	 * One fill lane matches Astra's current queue-depth-one device. A second
+	 * miss for this block sleeps here, then observes BC_UPTODATE instead of
+	 * issuing a duplicate read. Cache hits never take this lane.
+	 */
+	ext4_fill_lock(bdev);
+	ext4_cache_lock(bdev);
+	if (ext4_bcache_test_flag(b->buf, BC_UPTODATE)) {
+		ext4_cache_unlock(bdev);
+		ext4_fill_unlock(bdev);
+		return EOK;
+	}
+	ext4_cache_unlock(bdev);
+
+	r = ext4_blocks_get_direct_raw(bdev, b->data, lba, 1);
+	ext4_cache_lock(bdev);
 	if (r != EOK) {
 		ext4_bcache_free(bdev->bc, b);
+		ext4_cache_unlock(bdev);
+		ext4_fill_unlock(bdev);
 		b->lb_id = 0;
 		return r;
 	}
@@ -264,6 +349,8 @@ int ext4_block_get(struct ext4_blockdev *bdev, struct ext4_block *b,
 	/* Mark buffer up-to-date, since
 	 * fresh data is read from physical device just now. */
 	ext4_bcache_set_flag(b->buf, BC_UPTODATE);
+	ext4_cache_unlock(bdev);
+	ext4_fill_unlock(bdev);
 	return EOK;
 }
 
@@ -275,11 +362,14 @@ int ext4_block_set(struct ext4_blockdev *bdev, struct ext4_block *b)
 	if (!bdev->bdif->ph_refctr)
 		return EIO;
 
-	return ext4_bcache_free(bdev->bc, b);
+	ext4_cache_lock(bdev);
+	int r = ext4_bcache_free(bdev->bc, b);
+	ext4_cache_unlock(bdev);
+	return r;
 }
 
-int ext4_blocks_get_direct(struct ext4_blockdev *bdev, void *buf, uint64_t lba,
-			   uint32_t cnt)
+static int ext4_blocks_get_direct_raw(struct ext4_blockdev *bdev, void *buf,
+				      uint64_t lba, uint32_t cnt)
 {
 	uint64_t pba;
 	uint32_t pb_cnt;
@@ -290,6 +380,93 @@ int ext4_blocks_get_direct(struct ext4_blockdev *bdev, void *buf, uint64_t lba,
 	pb_cnt = bdev->lg_bsize / bdev->bdif->ph_bsize;
 
 	return ext4_bdif_bread(bdev, buf, pba, pb_cnt * cnt);
+}
+
+int ext4_blocks_get_direct(struct ext4_blockdev *bdev, void *buf, uint64_t lba,
+			   uint32_t cnt)
+{
+	int r;
+
+	ext4_fill_lock(bdev);
+	r = ext4_blocks_get_direct_raw(bdev, buf, lba, cnt);
+	ext4_fill_unlock(bdev);
+	return r;
+}
+
+static bool ext4_block_copy_cached(struct ext4_blockdev *bdev, void *buf,
+				   uint64_t lba)
+{
+	struct ext4_block block = EXT4_BLOCK_ZERO();
+	bool found = false;
+
+	ext4_cache_lock(bdev);
+	if (ext4_bcache_find_get(bdev->bc, &block, lba)) {
+		if (ext4_bcache_test_flag(block.buf, BC_UPTODATE)) {
+			memcpy(buf, block.data, bdev->lg_bsize);
+			found = true;
+		}
+		ext4_bcache_free(bdev->bc, &block);
+	}
+	ext4_cache_unlock(bdev);
+	return found;
+}
+
+static int ext4_block_publish_cached(struct ext4_blockdev *bdev, void *buf,
+				     uint64_t lba)
+{
+	struct ext4_block block = EXT4_BLOCK_ZERO();
+	int r = ext4_block_get_noread(bdev, &block, lba);
+
+	if (r != EOK)
+		return r;
+	ext4_cache_lock(bdev);
+	if (ext4_bcache_test_flag(block.buf, BC_UPTODATE))
+		memcpy(buf, block.data, bdev->lg_bsize);
+	else {
+		memcpy(block.data, buf, bdev->lg_bsize);
+		ext4_bcache_set_flag(block.buf, BC_UPTODATE);
+	}
+	ext4_cache_unlock(bdev);
+	return ext4_block_set(bdev, &block);
+}
+
+int ext4_blocks_get_cached(struct ext4_blockdev *bdev, void *buf, uint64_t lba,
+			   uint32_t cnt)
+{
+	uint8_t *bytes = buf;
+	uint8_t *block;
+	uint32_t at;
+	int r;
+
+	ext4_assert(bdev && buf && cnt);
+	if (!bdev->bc || cnt > bdev->bc->cnt)
+		return ext4_blocks_get_direct(bdev, buf, lba, cnt);
+
+	/* One lane makes the cache scan, fill and publication one operation. */
+	ext4_fill_lock(bdev);
+	block = bytes;
+	for (at = 0; at < cnt; ++at) {
+		if (!ext4_block_copy_cached(bdev, block, lba + at))
+			break;
+		block += bdev->lg_bsize;
+	}
+	if (at == cnt) {
+		ext4_fill_unlock(bdev);
+		return EOK;
+	}
+
+	r = ext4_blocks_get_direct_raw(bdev, buf, lba, cnt);
+	if (r == EOK) {
+		block = bytes;
+		for (at = 0; at < cnt; ++at) {
+			r = ext4_block_publish_cached(bdev, block, lba + at);
+			if (r != EOK)
+				break;
+			block += bdev->lg_bsize;
+		}
+	}
+	ext4_fill_unlock(bdev);
+	return r;
 }
 
 int ext4_blocks_set_direct(struct ext4_blockdev *bdev, const void *buf,
@@ -452,7 +629,7 @@ int ext4_block_cache_flush(struct ext4_blockdev *bdev)
 			return r;
 
 	}
-	return EOK;
+	return ext4_block_flush(bdev);
 }
 
 int ext4_block_cache_write_back(struct ext4_blockdev *bdev, uint8_t on_off)

@@ -114,6 +114,7 @@ KernelSyncStatus kernel_sync_create_semaphore(uint32_t owner,
 KernelSyncStatus kernel_sync_create_timer(uint32_t owner,
                                           KernelSyncObject **object);
 KernelSyncStatus kernel_sync_retain(KernelSyncObject *object);
+bool kernel_sync_handle_retain(void *object, void *context);
 void kernel_sync_handle_release(void *object, void *context);
 void kernel_sync_abandon_unpublished(KernelSyncObject *object);
 KernelSyncStatus kernel_sync_prepare_wait(KernelSyncObject *object,

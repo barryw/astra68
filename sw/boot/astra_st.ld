@@ -2,7 +2,7 @@
  *
  * Physical decode AS IMPLEMENTED (astra_soc.sv / tb_soc.sv):
  *   RAM   0x01FF8000..0x01FFFFFF (32 KB block RAM)  — sel_ram = cpu_adr[31:15] == 0x3FF
- *   ROM   0xFFE00000..0xFFE3FFFF (256 KB)           — boot ROM
+ *   ROM   0xFFE00000..0xFFE7FFFF (512 KB)           — hosted boot ROM
  *   SDRAM 0x02000000..0x03FFFFFF (32 MB high alias) — destructive POST target
  *   MMIO  0xFFF00000..                              — Vesta identity + UART
  * NOTE: RAM base is 0x01FF8000, NOT 0x03FF8000 — the sel_ram field value 0x3FF is
@@ -19,7 +19,7 @@ OUTPUT_ARCH(m68k)
 ENTRY(_start)
 
 MEMORY {
-  ROM (rx)  : ORIGIN = 0xFFE00000, LENGTH = 256K
+  ROM (rx)  : ORIGIN = 0xFFE00000, LENGTH = 512K
   RAM (rwx) : ORIGIN = 0x01FF8000, LENGTH = 32K
 }
 

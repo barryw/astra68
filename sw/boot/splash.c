@@ -275,7 +275,6 @@ int astra_boot_splash_start(void)
         splash_error = ASTRA_SPLASH_ERROR_DECODE;
         return 0;
     }
-
     for (uint32_t index = 0u; index < 256u; ++index) {
         uint32_t offset = index * 4u;
         VEGA->PAL[index] = VEGA_RGB(palette[offset + 2u],

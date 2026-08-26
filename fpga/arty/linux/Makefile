@@ -11,12 +11,17 @@ COPPER_TARGET := $(OUT)/astra-copper-certify
 AUDIO_TARGET := $(OUT)/astra-audio-certify
 HDMI_LINK_TARGET := $(OUT)/astra-hdmi-link
 TERMINAL_TARGET := $(OUT)/astra-terminal-display
+TIME_SYNC_TARGET := $(OUT)/astra-time-sync
+SPLASH_TARGET := $(OUT)/astra_boot_splash.rgb565
 TARGETS := $(BOOT_TARGET) $(STATUS_TARGET) $(SPRITE_TARGET) $(RENDER_TARGET) \
-	$(COPPER_TARGET) $(AUDIO_TARGET) $(HDMI_LINK_TARGET) $(TERMINAL_TARGET)
+	$(COPPER_TARGET) $(AUDIO_TARGET) $(HDMI_LINK_TARGET) $(TERMINAL_TARGET) \
+	$(TIME_SYNC_TARGET) $(SPLASH_TARGET)
 COMMON_SOURCES := astra_graphics_hw.c astra_boot_text.c
 COMMON_HEADERS := astra_graphics_hw.h astra_boot_text.h
 TERMINAL_FONT_SOURCE := ../../soc/post_fonts.hex
 TERMINAL_FONT_HEADER := $(OUT)/astra_terminal_font.inc
+SPLASH_PACKER := ../../../sw/boot/pack_arty_splash.py
+SPLASH_SOURCE := ../../../sw/boot/assets/astra_boot_splash_1280x720_blank.png
 ASTRA_INCLUDE := ../../../sw/include
 NDK_INCLUDE := ../../../ndk/include
 PROTOCOL_SPEC := ../graphics/protocol/astra_render_v1.json
@@ -31,6 +36,13 @@ all: $(TARGETS)
 
 astra_render_protocol.h: $(PROTOCOL_SPEC) $(PROTOCOL_GENERATOR)
 	$(PYTHON) $(PROTOCOL_GENERATOR)
+
+$(SPLASH_TARGET): $(SPLASH_SOURCE) $(SPLASH_PACKER)
+	$(PYTHON) $(SPLASH_PACKER) --image $(SPLASH_SOURCE) --output $@
+
+$(TIME_SYNC_TARGET): astra_time_sync.c
+	mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections $< $(LDFLAGS) -o $@
 
 $(BOOT_TARGET): astra_graphics_boot.c $(COMMON_SOURCES) $(COMMON_HEADERS)
 	mkdir -p $(OUT)
@@ -106,6 +118,7 @@ analyze: astra_render_protocol.h $(TERMINAL_FONT_HEADER)
 		astra_copper_certify.c astra_graphics_hw.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_audio_certify.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_hdmi_link.c
+	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_time_sync.c
 	$(CC) $(CFLAGS) -I$(OUT) -I$(ASTRA_INCLUDE) -fanalyzer -fsyntax-only \
 		astra_terminal_display.c $(COMMON_SOURCES)
 

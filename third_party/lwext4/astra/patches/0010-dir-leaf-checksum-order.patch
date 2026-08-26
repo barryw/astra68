@@ -1,0 +1,29 @@
+ext4 dir: initialize inode before leaf checksum
+
+The first data block of every indexed directory was checksummed and then
+modified by writing its empty entry's inode field. e2fsck therefore reported
+the otherwise valid leaf as having a bad checksum immediately after creation.
+
+Set every checksummed byte first. Covered by `make ext4-test`, whose raw,
+partitioned, full-volume, and fresh-remount images now pass `e2fsck -fn`.
+
+diff --git a/src/ext4_dir_idx.c b/src/ext4_dir_idx.c
+--- a/src/ext4_dir_idx.c
++++ b/src/ext4_dir_idx.c
+@@ -387,6 +387,7 @@ int ext4_dir_dx_init(struct ext4_inode_ref *dir, struct ext4_inode_ref *parent)
+ 
+ 	/* Fill the whole block with empty entry */
+ 	struct ext4_dir_en *be = (void *)new_block.data;
++	ext4_dir_en_set_inode(be, 0);
+ 
+ 	if (ext4_sb_feature_ro_com(sb, EXT4_FRO_COM_METADATA_CSUM)) {
+ 		uint16_t len = block_size - sizeof(struct ext4_dir_entry_tail);
+@@ -399,8 +400,6 @@ int ext4_dir_dx_init(struct ext4_inode_ref *dir, struct ext4_inode_ref *parent)
+ 		ext4_dir_en_set_entry_len(be, block_size);
+ 	}
+ 
+-	ext4_dir_en_set_inode(be, 0);
+-
+ 	ext4_trans_set_block_dirty(new_block.buf);
+ 	rc = ext4_block_set(dir->fs->bdev, &new_block);
+ 	if (rc != EOK) {

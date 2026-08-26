@@ -1,5 +1,7 @@
 #include "bytes.h"
 
+#include <astra/endian.h>
+
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -67,6 +69,17 @@ static void test_copy(void)
     }
 }
 
+static void test_equal(void)
+{
+    const uint8_t left[] = {0u, 1u, 2u, 3u, 4u};
+    const uint8_t same[] = {9u, 1u, 2u, 3u, 8u};
+    const uint8_t different[] = {9u, 1u, 7u, 3u, 8u};
+
+    assert(kernel_bytes_equal(left + 1u, same + 1u, 3u));
+    assert(!kernel_bytes_equal(left + 1u, different + 1u, 3u));
+    assert(kernel_bytes_equal(NULL, NULL, 0u));
+}
+
 static void test_word_fill(void)
 {
     uint32_t storage[24];
@@ -84,11 +97,28 @@ static void test_word_fill(void)
     }
 }
 
+static void test_unaligned_big_endian(void)
+{
+    uint8_t storage[12] = {0xa5u};
+
+    astra_store_be16(&storage[1], 0x1234u);
+    astra_store_be32(&storage[3], 0x89abcdefu);
+    astra_store_be64(&storage[2], UINT64_C(0x0123456789abcdef));
+    assert(astra_load_be64(&storage[2]) == UINT64_C(0x0123456789abcdef));
+    astra_store_be16(&storage[1], 0x1234u);
+    astra_store_be32(&storage[3], 0x89abcdefu);
+    assert(astra_load_be16(&storage[1]) == 0x1234u);
+    assert(astra_load_be32(&storage[3]) == 0x89abcdefu);
+    assert(storage[0] == 0xa5u && storage[10] == 0u && storage[11] == 0u);
+}
+
 int main(void)
 {
     test_clear();
     test_word_fill();
     test_copy();
+    test_equal();
+    test_unaligned_big_endian();
     puts("byte primitive tests passed");
     return 0;
 }

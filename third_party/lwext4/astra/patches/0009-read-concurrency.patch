@@ -1,0 +1,329 @@
+ext4 read: split cache hits from physical waits
+
+lwext4's mount lock spans every public operation and every block wait. Keep
+writes, journal state and lifecycle exclusive, but give file reads a shared
+side. Protect cache metadata briefly and serialize fills through the physical
+device lane; a peer rechecks the completed buffer instead of reading twice.
+
+Covered by sw/userspace/storage's `make ext4-test`, `make ext4-sanitize`, and
+`make ext4-tsan`. The controlled backend holds A in a cold read, requires warm
+B to finish without I/O, and requires a second cold A to reuse the first fill.
+
+diff --git a/include/ext4.h b/include/ext4.h
+--- a/include/ext4.h
++++ b/include/ext4.h
+@@ -65,6 +65,24 @@
+ 
+ 	/**@brief   Unlock access to mount point.*/
+ 	void (*unlock)(void);
++
++	/**@brief   Shared lock for read-only file I/O. Optional.*/
++	void (*read_lock)(void);
++
++	/**@brief   Unlock shared read-only file I/O. Optional.*/
++	void (*read_unlock)(void);
++
++	/**@brief   Protect block-cache bookkeeping. Optional.*/
++	void (*cache_lock)(void);
++
++	/**@brief   Unlock block-cache bookkeeping. Optional.*/
++	void (*cache_unlock)(void);
++
++	/**@brief   Serialize cache fills and direct I/O. Optional.*/
++	void (*fill_lock)(void);
++
++	/**@brief   Unlock cache fills and direct I/O. Optional.*/
++	void (*fill_unlock)(void);
+ };
+ 
+ /********************************FILE DESCRIPTOR*****************************/
+diff --git a/include/ext4_bcache.h b/include/ext4_bcache.h
+--- a/include/ext4_bcache.h
++++ b/include/ext4_bcache.h
+@@ -134,6 +134,14 @@
+ 
+ 	/**@brief   The blockdev binded to this block cache*/
+ 	struct ext4_blockdev *bdev;
++
++	/**@brief   Short-held cache bookkeeping lock.*/
++	void (*lock)(void);
++	void (*unlock)(void);
++
++	/**@brief   Cache-fill/direct-I/O lane lock.*/
++	void (*fill_lock)(void);
++	void (*fill_unlock)(void);
+ 
+ 	/**@brief   The cache should not be shaked */
+ 	bool dont_shake;
+diff --git a/src/ext4.c b/src/ext4.c
+--- a/src/ext4.c
++++ b/src/ext4.c
+@@ -69,6 +69,26 @@
+ 	do {                                                                   \
+ 		if ((_m)->os_locks)                                            \
+ 			(_m)->os_locks->unlock();                              \
++	} while (0)
++
++#define EXT4_MP_READ_LOCK(_m)                                                  \
++	do {                                                                   \
++		if ((_m)->os_locks) {                                          \
++			if ((_m)->os_locks->read_lock)                           \
++				(_m)->os_locks->read_lock();                        \
++			else                                                       \
++				(_m)->os_locks->lock();                             \
++		}                                                              \
++	} while (0)
++
++#define EXT4_MP_READ_UNLOCK(_m)                                                \
++	do {                                                                   \
++		if ((_m)->os_locks) {                                          \
++			if ((_m)->os_locks->read_unlock)                         \
++				(_m)->os_locks->read_unlock();                      \
++			else                                                       \
++				(_m)->os_locks->unlock();                           \
++		}                                                              \
+ 	} while (0)
+ 
+ /**@brief   Mount point descriptor.*/
+@@ -748,8 +768,18 @@
+ 	}
+ 	if (!mp)
+ 		return ENOENT;
++	if (!locks || !locks->lock || !locks->unlock ||
++	    (!!locks->read_lock != !!locks->read_unlock) ||
++	    (!!locks->cache_lock != !!locks->cache_unlock) ||
++	    (!!locks->fill_lock != !!locks->fill_unlock) ||
++	    (locks->read_lock && (!locks->cache_lock || !locks->fill_lock)))
++		return EINVAL;
+ 
+ 	mp->os_locks = locks;
++	mp->bc.lock = locks->cache_lock;
++	mp->bc.unlock = locks->cache_unlock;
++	mp->bc.fill_lock = locks->fill_lock;
++	mp->bc.fill_unlock = locks->fill_unlock;
+ 	return EOK;
+ }
+ 
+@@ -1746,7 +1776,7 @@
+ 	if (!size)
+ 		return EOK;
+ 
+-	EXT4_MP_LOCK(file->mp);
++	EXT4_MP_READ_LOCK(file->mp);
+ 
+ 	struct ext4_fs *const fs = &file->mp->fs;
+ 	struct ext4_sblock *const sb = &file->mp->fs.sb;
+@@ -1756,7 +1786,7 @@
+ 
+ 	r = ext4_fs_get_inode_ref(fs, file->inode, &ref);
+ 	if (r != EOK) {
+-		EXT4_MP_UNLOCK(file->mp);
++		EXT4_MP_READ_UNLOCK(file->mp);
+ 		return r;
+ 	}
+ 
+@@ -1910,7 +1940,7 @@
+ 
+ Finish:
+ 	ext4_fs_put_inode_ref(&ref);
+-	EXT4_MP_UNLOCK(file->mp);
++	EXT4_MP_READ_UNLOCK(file->mp);
+ 	return r;
+ }
+ 
+diff --git a/src/ext4_blockdev.c b/src/ext4_blockdev.c
+--- a/src/ext4_blockdev.c
++++ b/src/ext4_blockdev.c
+@@ -65,6 +65,33 @@
+ 	ext4_assert(r == EOK);
+ }
+ 
++static void ext4_cache_lock(struct ext4_blockdev *bdev)
++{
++	if (bdev->bc && bdev->bc->lock)
++		bdev->bc->lock();
++}
++
++static void ext4_cache_unlock(struct ext4_blockdev *bdev)
++{
++	if (bdev->bc && bdev->bc->unlock)
++		bdev->bc->unlock();
++}
++
++static void ext4_fill_lock(struct ext4_blockdev *bdev)
++{
++	if (bdev->bc && bdev->bc->fill_lock)
++		bdev->bc->fill_lock();
++}
++
++static void ext4_fill_unlock(struct ext4_blockdev *bdev)
++{
++	if (bdev->bc && bdev->bc->fill_unlock)
++		bdev->bc->fill_unlock();
++}
++
++static int ext4_blocks_get_direct_raw(struct ext4_blockdev *bdev, void *buf,
++				      uint64_t lba, uint32_t cnt);
++
+ static int ext4_bdif_bread(struct ext4_blockdev *bdev, void *buf,
+ 			   uint64_t blk_id, uint32_t blk_cnt)
+ {
+@@ -175,10 +202,14 @@
+ 	int r = EOK;
+ 	struct ext4_buf *buf;
+ 	struct ext4_block b;
++	ext4_cache_lock(bdev);
+ 	buf = ext4_bcache_find_get(bdev->bc, &b, lba);
++	ext4_cache_unlock(bdev);
+ 	if (buf) {
+ 		r = ext4_block_flush_buf(bdev, buf);
++		ext4_cache_lock(bdev);
+ 		ext4_bcache_free(bdev->bc, &b);
++		ext4_cache_unlock(bdev);
+ 	}
+ 	return r;
+ }
+@@ -187,8 +218,13 @@
+ {
+ 	int r = EOK;
+ 	struct ext4_buf *buf;
+-	if (bdev->bc->dont_shake)
++	struct ext4_block pinned = EXT4_BLOCK_ZERO();
++
++	ext4_cache_lock(bdev);
++	if (bdev->bc->dont_shake) {
++		ext4_cache_unlock(bdev);
+ 		return EOK;
++	}
+ 
+ 	bdev->bc->dont_shake = true;
+ 
+@@ -198,15 +234,23 @@
+ 		buf = ext4_buf_lowest_lru(bdev->bc);
+ 		ext4_assert(buf);
+ 		if (ext4_bcache_test_flag(buf, BC_DIRTY)) {
++			/* Pin it before dropping the metadata lock for device I/O. */
++			buf = ext4_bcache_find_get(bdev->bc, &pinned,
++						   buf->lba);
++			ext4_assert(buf);
++			ext4_cache_unlock(bdev);
+ 			r = ext4_block_flush_buf(bdev, buf);
++			ext4_cache_lock(bdev);
++			ext4_bcache_free(bdev->bc, &pinned);
+ 			if (r != EOK)
+ 				break;
+-
++			continue;
+ 		}
+ 
+ 		ext4_bcache_drop_buf(bdev->bc, buf);
+ 	}
+ 	bdev->bc->dont_shake = false;
++	ext4_cache_unlock(bdev);
+ 	return r;
+ }
+ 
+@@ -231,12 +275,19 @@
+ 	if (r != EOK)
+ 		return r;
+ 
++	/* Cache metadata is shared by concurrent readers; device I/O is not. */
++	ext4_cache_lock(bdev);
+ 	r = ext4_bcache_alloc(bdev->bc, b, &is_new);
+-	if (r != EOK)
++	if (r != EOK) {
++		ext4_cache_unlock(bdev);
+ 		return r;
++	}
+ 
+-	if (!b->data)
++	if (!b->data) {
++		ext4_cache_unlock(bdev);
+ 		return ENOMEM;
++	}
++	ext4_cache_unlock(bdev);
+ 
+ 	return EOK;
+ }
+@@ -248,15 +299,35 @@
+ 	if (r != EOK)
+ 		return r;
+ 
++	ext4_cache_lock(bdev);
+ 	if (ext4_bcache_test_flag(b->buf, BC_UPTODATE)) {
+ 		/* Data in the cache is up-to-date.
+ 		 * Reading from physical device is not required */
++		ext4_cache_unlock(bdev);
+ 		return EOK;
+ 	}
++	ext4_cache_unlock(bdev);
+ 
+-	r = ext4_blocks_get_direct(bdev, b->data, lba, 1);
++	/*
++	 * One fill lane matches Astra's current queue-depth-one device. A second
++	 * miss for this block sleeps here, then observes BC_UPTODATE instead of
++	 * issuing a duplicate read. Cache hits never take this lane.
++	 */
++	ext4_fill_lock(bdev);
++	ext4_cache_lock(bdev);
++	if (ext4_bcache_test_flag(b->buf, BC_UPTODATE)) {
++		ext4_cache_unlock(bdev);
++		ext4_fill_unlock(bdev);
++		return EOK;
++	}
++	ext4_cache_unlock(bdev);
++
++	r = ext4_blocks_get_direct_raw(bdev, b->data, lba, 1);
++	ext4_cache_lock(bdev);
+ 	if (r != EOK) {
+ 		ext4_bcache_free(bdev->bc, b);
++		ext4_cache_unlock(bdev);
++		ext4_fill_unlock(bdev);
+ 		b->lb_id = 0;
+ 		return r;
+ 	}
+@@ -264,6 +335,8 @@
+ 	/* Mark buffer up-to-date, since
+ 	 * fresh data is read from physical device just now. */
+ 	ext4_bcache_set_flag(b->buf, BC_UPTODATE);
++	ext4_cache_unlock(bdev);
++	ext4_fill_unlock(bdev);
+ 	return EOK;
+ }
+ 
+@@ -275,11 +348,14 @@
+ 	if (!bdev->bdif->ph_refctr)
+ 		return EIO;
+ 
+-	return ext4_bcache_free(bdev->bc, b);
++	ext4_cache_lock(bdev);
++	int r = ext4_bcache_free(bdev->bc, b);
++	ext4_cache_unlock(bdev);
++	return r;
+ }
+ 
+-int ext4_blocks_get_direct(struct ext4_blockdev *bdev, void *buf, uint64_t lba,
+-			   uint32_t cnt)
++static int ext4_blocks_get_direct_raw(struct ext4_blockdev *bdev, void *buf,
++				      uint64_t lba, uint32_t cnt)
+ {
+ 	uint64_t pba;
+ 	uint32_t pb_cnt;
+@@ -292,6 +368,17 @@
+ 	return ext4_bdif_bread(bdev, buf, pba, pb_cnt * cnt);
+ }
+ 
++int ext4_blocks_get_direct(struct ext4_blockdev *bdev, void *buf, uint64_t lba,
++			   uint32_t cnt)
++{
++	int r;
++
++	ext4_fill_lock(bdev);
++	r = ext4_blocks_get_direct_raw(bdev, buf, lba, cnt);
++	ext4_fill_unlock(bdev);
++	return r;
++}
++
+ int ext4_blocks_set_direct(struct ext4_blockdev *bdev, const void *buf,
+ 			   uint64_t lba, uint32_t cnt)
+ {

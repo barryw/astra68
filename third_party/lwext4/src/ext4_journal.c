@@ -2180,7 +2180,17 @@ static int __jbd_journal_commit_trans(struct jbd_journal *journal,
 		goto Finish;
 	}
 
+	/* Journal records must reach media before the commit record can. */
+	rc = ext4_block_flush(journal->jbd_fs->bdev);
+	if (rc != EOK)
+		goto Finish;
+
 	rc = jbd_trans_write_commit_block(trans);
+	if (rc != EOK)
+		goto Finish;
+
+	/* Success means the commit record itself is durable. */
+	rc = ext4_block_flush(journal->jbd_fs->bdev);
 	if (rc != EOK)
 		goto Finish;
 

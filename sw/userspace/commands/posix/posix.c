@@ -30,8 +30,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <stdint.h>
+#include <termios.h>
 #include <unistd.h>
 
 /*
@@ -94,6 +96,26 @@ enum {
     FAIL_FTRUNCATE = 55,
     FAIL_APPEND = 56,
     FAIL_OPEN_BUDGET = 57,
+    FAIL_ISATTY = 58,
+    FAIL_TCGETATTR = 59,
+    FAIL_TIOCGWINSZ = 60,
+    FAIL_TCSETATTR_RAW = 61,
+    FAIL_TCGETATTR_RAW = 62,
+    FAIL_TCSETATTR_FLAGS = 63,
+    FAIL_TCSETATTR_RESTORE = 64,
+    FAIL_TTY_RAW_READ = 65,
+    FAIL_TTY_RAW_SEQUENCE = 66,
+    FAIL_TTY_QUERY_WRITE = 67,
+    FAIL_TTY_QUERY_REPLY = 68,
+    FAIL_ARGUMENT_COUNT = 69,
+    FAIL_ARGUMENT_VALUE = 70,
+    FAIL_PIPE_CREATE = 71,
+    FAIL_PIPE_WRITE = 72,
+    FAIL_PIPE_DUP = 73,
+    FAIL_PIPE_READ = 74,
+    FAIL_PIPE_CONTENT = 75,
+    FAIL_PIPE_CLOSE = 76,
+    FAIL_PIPE_EOF = 77,
 };
 
 #define DIRECTORY "posixcheck"
@@ -109,13 +131,39 @@ enum {
 static int
 complain(int code, const char *what)
 {
+    char report[160];
+
     (void)fprintf(stderr, "posix: %s failed: %s\n", what, strerror(errno));
+    (void)fflush(stderr);
+    (void)snprintf(report, sizeof(report), "posix: %s failed: %s",
+                   what, strerror(errno));
+    (void)astra_log(report);
     return code;
 }
 
-int
-astra_main(const AstraStartupInfo *startup)
+static int
+read_terminal_reply(uint8_t *reply, size_t capacity, uint8_t terminator,
+                    size_t *length)
 {
+    *length = 0u;
+    while (*length < capacity) {
+        ssize_t count = read(STDIN_FILENO, reply + *length, 1u);
+
+        if (count != 1)
+            return 0;
+        if (reply[(*length)++] == terminator)
+            return 1;
+    }
+    return 0;
+}
+
+int
+main(int argc, char **argv)
+{
+    static const char *const expected_arguments[] = {
+        "posix", "-R", "+42", "--cmd", "set number", "--",
+        "WORK:notes.txt"
+    };
     char before[128];
     char after[128];
     char buffer[64];
@@ -125,7 +173,107 @@ astra_main(const AstraStartupInfo *startup)
     int found = 0;
     int fd;
 
-    astra_posix_start(startup);
+    if (argc != 1 &&
+        argc != (int)(sizeof(expected_arguments) /
+                      sizeof(expected_arguments[0]))) {
+        errno = EINVAL;
+        return complain(FAIL_ARGUMENT_COUNT, "startup argument count");
+    }
+    for (int index = 0; argc != 1 && index < argc; ++index) {
+        if (strcmp(argv[index], expected_arguments[index]) != 0) {
+            errno = EINVAL;
+            return complain(FAIL_ARGUMENT_VALUE, "startup argument value");
+        }
+    }
+
+    {
+        struct termios original;
+        struct termios raw;
+        struct termios observed;
+        struct winsize by_function;
+        struct winsize by_ioctl;
+        static const char ready[] = "POSIX RAW READY\n";
+        static const uint8_t cursor_query[] = "\x1b[6n";
+        static const uint8_t attributes_query[] = "\x1b[c";
+        static const uint8_t attributes_reply[] = "\x1b[?1;2c";
+        uint8_t sequence[3];
+        uint8_t reply[32];
+        size_t reply_length;
+        size_t received = 0u;
+
+        if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))
+            return complain(FAIL_ISATTY, "isatty");
+        if (tcgetattr(STDIN_FILENO, &original) != 0 ||
+            (original.c_lflag & (ICANON | ECHO)) != (ICANON | ECHO))
+            return complain(FAIL_TCGETATTR, "tcgetattr");
+        if (tcgetwinsize(STDIN_FILENO, &by_function) != 0 ||
+            ioctl(STDOUT_FILENO, TIOCGWINSZ, &by_ioctl) != 0 ||
+            by_function.ws_col == 0u || by_function.ws_row == 0u ||
+            by_function.ws_col != by_ioctl.ws_col ||
+            by_function.ws_row != by_ioctl.ws_row)
+            return complain(FAIL_TIOCGWINSZ, "terminal window size");
+        raw = original;
+        raw.c_iflag &= (tcflag_t)~(ICRNL | IXON);
+        raw.c_oflag &= (tcflag_t)~OPOST;
+        raw.c_lflag &= (tcflag_t)~(ECHO | ICANON | IEXTEN | ISIG);
+        raw.c_cflag = (raw.c_cflag & (tcflag_t)~CSIZE) | CS8;
+        raw.c_cc[VMIN] = 1u;
+        raw.c_cc[VTIME] = 0u;
+        if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0)
+            return complain(FAIL_TCSETATTR_RAW, "tcsetattr raw");
+        if (tcgetattr(STDIN_FILENO, &observed) != 0)
+            return complain(FAIL_TCGETATTR_RAW, "tcgetattr raw");
+        if ((observed.c_lflag & (ECHO | ICANON | IEXTEN | ISIG)) != 0u) {
+            errno = EINVAL;
+            return complain(FAIL_TCSETATTR_FLAGS, "termios raw flags");
+        }
+        if (write(STDOUT_FILENO, cursor_query,
+                  sizeof(cursor_query) - 1u) !=
+                (ssize_t)(sizeof(cursor_query) - 1u) ||
+            !read_terminal_reply(reply, sizeof(reply), 'R', &reply_length))
+            return complain(FAIL_TTY_QUERY_WRITE, "cursor query");
+        if (reply_length < 6u || reply[0] != 0x1bu || reply[1] != '[' ||
+            reply[reply_length - 1u] != 'R')
+            return complain(FAIL_TTY_QUERY_REPLY, "cursor reply");
+        {
+            size_t separator = 2u;
+
+            while (separator + 1u < reply_length &&
+                   reply[separator] >= '0' && reply[separator] <= '9')
+                ++separator;
+            if (separator == 2u || reply[separator] != ';' ||
+                separator + 2u >= reply_length)
+                return complain(FAIL_TTY_QUERY_REPLY, "cursor reply");
+            for (size_t index = separator + 1u;
+                 index + 1u < reply_length; ++index)
+                if (reply[index] < '0' || reply[index] > '9')
+                    return complain(FAIL_TTY_QUERY_REPLY, "cursor reply");
+        }
+        if (write(STDOUT_FILENO, attributes_query,
+                  sizeof(attributes_query) - 1u) !=
+                (ssize_t)(sizeof(attributes_query) - 1u) ||
+            !read_terminal_reply(reply, sizeof(reply), 'c', &reply_length))
+            return complain(FAIL_TTY_QUERY_WRITE, "attributes query");
+        if (reply_length != sizeof(attributes_reply) - 1u ||
+            memcmp(reply, attributes_reply, reply_length) != 0)
+            return complain(FAIL_TTY_QUERY_REPLY, "attributes reply");
+        if (write(STDOUT_FILENO, ready, sizeof(ready) - 1u) !=
+            (ssize_t)(sizeof(ready) - 1u))
+            return complain(FAIL_TTY_RAW_READ, "raw-mode ready");
+        while (received < sizeof(sequence)) {
+            ssize_t count = read(STDIN_FILENO, sequence + received,
+                                 sizeof(sequence) - received);
+
+            if (count <= 0)
+                return complain(FAIL_TTY_RAW_READ, "raw terminal read");
+            received += (size_t)count;
+        }
+        if (sequence[0] != 0x1bu || sequence[1] != '[' ||
+            sequence[2] != 'A')
+            return complain(FAIL_TTY_RAW_SEQUENCE, "raw cursor sequence");
+        if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &original) != 0)
+            return complain(FAIL_TCSETATTR_RESTORE, "tcsetattr restore");
+    }
 
     /*
      * Where a bare name resolves. The first component is an assign granted by
@@ -368,6 +516,35 @@ astra_main(const AstraStartupInfo *startup)
         return complain(FAIL_SYSTEM_STATUS, "system");
 
     {
+        static const char payload[] = "astra pipe";
+        int ends[2];
+        int writer;
+
+        if (pipe(ends) != 0)
+            return complain(FAIL_PIPE_CREATE, "pipe");
+        writer = dup(ends[1]);
+        if (writer < 0)
+            return complain(FAIL_PIPE_DUP, "pipe writer dup");
+        if (close(ends[1]) != 0)
+            return complain(FAIL_PIPE_CLOSE, "pipe writer close");
+        if (write(writer, payload, sizeof(payload) - 1u) !=
+            (ssize_t)(sizeof(payload) - 1u))
+            return complain(FAIL_PIPE_WRITE, "pipe write");
+        if (read(ends[0], buffer, 3u) != 3 ||
+            read(ends[0], buffer + 3, sizeof(payload) - 4u) !=
+                (ssize_t)(sizeof(payload) - 4u))
+            return complain(FAIL_PIPE_READ, "pipe read");
+        if (memcmp(buffer, payload, sizeof(payload) - 1u) != 0)
+            return FAIL_PIPE_CONTENT;
+        if (close(writer) != 0)
+            return complain(FAIL_PIPE_CLOSE, "last pipe writer close");
+        if (read(ends[0], buffer, sizeof(buffer)) != 0)
+            return complain(FAIL_PIPE_EOF, "pipe eof");
+        if (close(ends[0]) != 0)
+            return complain(FAIL_PIPE_CLOSE, "pipe reader close");
+    }
+
+    {
         int old_nice;
 
         errno = 0;
@@ -382,7 +559,7 @@ astra_main(const AstraStartupInfo *startup)
             return complain(FAIL_SETPRIORITY, "setpriority");
     }
 
-    printf("posix: %s\n", before);
+    printf("POSIX RAW PASS: %s\n", before);
     (void)fflush(stdout);
     return 0;
 }

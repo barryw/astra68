@@ -10,6 +10,7 @@
 #include "user_copy.h"
 #include "worker.h"
 
+#include <astra/endian.h>
 #include <astra/syscall.h>
 #include <vesta.h>
 
@@ -71,26 +72,12 @@ typedef struct ObservedTrace {
 static ObservedTrace observed_trace[4];
 static uint32_t observed_trace_count;
 
-static void write_be16(uint8_t *bytes, uint32_t offset, uint16_t value)
-{
-    bytes[offset] = (uint8_t)(value >> 8);
-    bytes[offset + 1u] = (uint8_t)value;
-}
-
-static void write_be32(uint8_t *bytes, uint32_t offset, uint32_t value)
-{
-    bytes[offset] = (uint8_t)(value >> 24);
-    bytes[offset + 1u] = (uint8_t)(value >> 16);
-    bytes[offset + 2u] = (uint8_t)(value >> 8);
-    bytes[offset + 3u] = (uint8_t)value;
-}
-
 static void make_frame(uint8_t frame[8], uint16_t status_register,
                        uint16_t vector_offset)
 {
-    write_be16(frame, 0u, status_register);
-    write_be32(frame, 2u, 0x00101234u);
-    write_be16(frame, 6u, vector_offset);
+    astra_store_be16(frame, status_register);
+    astra_store_be32(frame + 2u, 0x00101234u);
+    astra_store_be16(frame + 6u, vector_offset);
 }
 
 static void make_access_frame(uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE],
@@ -99,11 +86,11 @@ static void make_access_frame(uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE],
                               uint32_t fault_address)
 {
     memset(frame, 0, KERNEL_EXCEPTION_FRAME_MAX_SIZE);
-    write_be16(frame, 0u, status_register);
-    write_be32(frame, 2u, 0x02011000u);
-    write_be16(frame, 6u, 0xb008u);
-    write_be16(frame, 10u, special_status);
-    write_be32(frame, 16u, fault_address);
+    astra_store_be16(frame, status_register);
+    astra_store_be32(frame + 2u, 0x02011000u);
+    astra_store_be16(frame + 6u, 0xb008u);
+    astra_store_be16(frame + 10u, special_status);
+    astra_store_be32(frame + 16u, fault_address);
 }
 
 static void reset_fakes(void)

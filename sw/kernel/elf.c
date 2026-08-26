@@ -2,6 +2,9 @@
 
 #include "bytes.h"
 
+#include <astra/endian.h>
+#include <astra/integer.h>
+
 /* e_ident */
 #define ELF_IDENT_SIZE 16u
 #define ELF_CLASS_32 1u
@@ -35,36 +38,11 @@
  * unaligned, and the host test build is little-endian, so a struct overlay
  * would be both a fault risk and wrong.
  */
-static uint16_t read_be16(const uint8_t *bytes)
-{
-    return (uint16_t)(((uint16_t)bytes[0] << 8) | bytes[1]);
-}
-
-static uint32_t read_be32(const uint8_t *bytes)
-{
-    return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
-           ((uint32_t)bytes[2] << 8) | (uint32_t)bytes[3];
-}
-
-static bool is_power_of_two(uint32_t value)
-{
-    return value != 0u && (value & (value - 1u)) == 0u;
-}
-
-/* Sum without wrapping; false means the addition would overflow. */
-static bool add_checked(uint32_t left, uint32_t right, uint32_t *result)
-{
-    if (left > 0xffffffffu - right)
-        return false;
-    *result = left + right;
-    return true;
-}
-
 static bool range_within(uint32_t offset, uint32_t length, uint32_t limit)
 {
     uint32_t end;
 
-    if (!add_checked(offset, length, &end))
+    if (!astra_u32_add_checked(offset, length, &end))
         return false;
     return end <= limit;
 }
@@ -129,17 +107,17 @@ static KernelElfStatus accept_load_segment(const uint8_t *header,
                                            KernelElfSegment *segment)
 {
     uint32_t page_mask = limits->page_size - 1u;
-    uint32_t file_offset = read_be32(header + 4);
-    uint32_t virtual_address = read_be32(header + 8);
-    uint32_t file_size = read_be32(header + 16);
-    uint32_t memory_size = read_be32(header + 20);
-    uint32_t alignment = read_be32(header + 28);
+    uint32_t file_offset = astra_load_be32(header + 4);
+    uint32_t virtual_address = astra_load_be32(header + 8);
+    uint32_t file_size = astra_load_be32(header + 16);
+    uint32_t memory_size = astra_load_be32(header + 20);
+    uint32_t alignment = astra_load_be32(header + 28);
     uint32_t rights;
     uint32_t span;
     uint32_t last;
     KernelElfStatus status;
 
-    status = segment_rights(read_be32(header + 24), &rights);
+    status = segment_rights(astra_load_be32(header + 24), &rights);
     if (status != KERNEL_ELF_OK)
         return status;
 
@@ -158,13 +136,14 @@ static KernelElfStatus accept_load_segment(const uint8_t *header,
     if ((file_offset & page_mask) != 0u || (virtual_address & page_mask) != 0u)
         return KERNEL_ELF_BAD_ALIGNMENT;
     if (alignment != 0u &&
-        (!is_power_of_two(alignment) || alignment < limits->page_size))
+        (!astra_u32_is_power_of_two(alignment) ||
+         alignment < limits->page_size))
         return KERNEL_ELF_BAD_ALIGNMENT;
 
-    if (!add_checked(memory_size, page_mask, &span))
+    if (!astra_u32_add_checked(memory_size, page_mask, &span))
         return KERNEL_ELF_BAD_RANGE;
     span &= ~page_mask;
-    if (!add_checked(virtual_address, span - 1u, &last))
+    if (!astra_u32_add_checked(virtual_address, span - 1u, &last))
         return KERNEL_ELF_BAD_RANGE;
     if (virtual_address < limits->minimum_address ||
         last > limits->maximum_address)
@@ -198,7 +177,8 @@ static KernelElfStatus accept_windowed(const void *image,
     KernelElfStatus status;
 
     if (image == NULL || limits == NULL || plan == NULL ||
-        !is_power_of_two(limits->page_size) || limits->maximum_pages == 0u ||
+        !astra_u32_is_power_of_two(limits->page_size) ||
+        limits->maximum_pages == 0u ||
         limits->minimum_address > limits->maximum_address)
         return KERNEL_ELF_INVALID_ARGUMENT;
 
@@ -212,21 +192,21 @@ static KernelElfStatus accept_windowed(const void *image,
     if (status != KERNEL_ELF_OK)
         return status;
 
-    if (read_be16(bytes + 16) != expected_type)
+    if (astra_load_be16(bytes + 16) != expected_type)
         return KERNEL_ELF_BAD_TYPE;
-    if (read_be16(bytes + 18) != ELF_MACHINE_68K)
+    if (astra_load_be16(bytes + 18) != ELF_MACHINE_68K)
         return KERNEL_ELF_BAD_MACHINE;
-    if (read_be32(bytes + 20) != ELF_VERSION_CURRENT)
+    if (astra_load_be32(bytes + 20) != ELF_VERSION_CURRENT)
         return KERNEL_ELF_BAD_VERSION;
-    if (read_be32(bytes + 36) != 0u)
+    if (astra_load_be32(bytes + 36) != 0u)
         return KERNEL_ELF_BAD_FLAGS;
-    if (read_be16(bytes + 40) != KERNEL_ELF_HEADER_SIZE)
+    if (astra_load_be16(bytes + 40) != KERNEL_ELF_HEADER_SIZE)
         return KERNEL_ELF_BAD_HEADER_TABLE;
 
-    entry = read_be32(bytes + 24);
-    header_offset = read_be32(bytes + 28);
-    header_size = read_be16(bytes + 42);
-    header_count = read_be16(bytes + 44);
+    entry = astra_load_be32(bytes + 24);
+    header_offset = astra_load_be32(bytes + 28);
+    header_size = astra_load_be16(bytes + 42);
+    header_count = astra_load_be16(bytes + 44);
 
     if (header_size != KERNEL_ELF_PHENTSIZE)
         return KERNEL_ELF_BAD_HEADER_TABLE;
@@ -252,11 +232,11 @@ static KernelElfStatus accept_windowed(const void *image,
     for (index = 0u; index < header_count; ++index) {
         const uint8_t *header =
             bytes + header_offset + (index * KERNEL_ELF_PHENTSIZE);
-        uint32_t type = read_be32(header);
+        uint32_t type = astra_load_be32(header);
         KernelElfSegment segment;
 
         if (type == ELF_PT_GNU_STACK) {
-            if ((read_be32(header + 24) & ELF_PF_X) != 0u)
+            if ((astra_load_be32(header + 24) & ELF_PF_X) != 0u)
                 return KERNEL_ELF_EXECUTABLE_STACK;
             continue;
         }
@@ -271,8 +251,8 @@ static KernelElfStatus accept_windowed(const void *image,
          * it is skipped rather than rejected; an empty segment that still
          * claims file content is malformed and is not skipped.
          */
-        if (read_be32(header + 20) == 0u) {
-            if (read_be32(header + 16) != 0u)
+        if (astra_load_be32(header + 20) == 0u) {
+            if (astra_load_be32(header + 16) != 0u)
                 return KERNEL_ELF_BAD_RANGE;
             continue;
         }
@@ -296,7 +276,8 @@ static KernelElfStatus accept_windowed(const void *image,
                 return KERNEL_ELF_OVERLAP;
         }
 
-        if (!add_checked(total_pages, segment.page_count, &total_pages))
+        if (!astra_u32_add_checked(total_pages, segment.page_count,
+                                   &total_pages))
             return KERNEL_ELF_TOO_LARGE;
         if (total_pages > limits->maximum_pages)
             return KERNEL_ELF_TOO_LARGE;

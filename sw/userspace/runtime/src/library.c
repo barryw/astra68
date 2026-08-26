@@ -1,3 +1,4 @@
+#include <astra/endian.h>
 #include <astra/library_loader.h>
 #include <astra/runtime.h>
 #include <astra/syscall.h>
@@ -25,25 +26,6 @@ typedef struct LibraryCacheEntry {
 } LibraryCacheEntry;
 
 static LibraryCacheEntry cache[ASTRA_LIBRARY_SLOT_COUNT];
-
-static uint16_t read_be16(const uint8_t *bytes)
-{
-    return (uint16_t)(((uint16_t)bytes[0] << 8) | bytes[1]);
-}
-
-static uint32_t read_be32(const uint8_t *bytes)
-{
-    return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
-           ((uint32_t)bytes[2] << 8) | bytes[3];
-}
-
-static void write_be32(uint8_t *bytes, uint32_t value)
-{
-    bytes[0] = (uint8_t)(value >> 24);
-    bytes[1] = (uint8_t)(value >> 16);
-    bytes[2] = (uint8_t)(value >> 8);
-    bytes[3] = (uint8_t)value;
-}
 
 static int name_equal(const char *left, const char *right)
 {
@@ -80,14 +62,14 @@ static int identity_valid(const uint8_t *record, const char *expected_name,
 {
     const char *name = (const char *)(record + 32u);
 
-    return read_be32(record) == ASTRA_LIBRARY_MAGIC &&
-           read_be16(record + 4u) == ASTRA_LIBRARY_RECORD_VERSION &&
-           read_be16(record + 6u) == ASTRA_LIBRARY_SIZE &&
-           read_be16(record + 14u) == abi_major &&
-           read_be16(record + 16u) >= minimum_abi_minor &&
-           read_be16(record + 18u) == 0u &&
-           read_be32(record + 20u) == ASTRA_LIBRARY_TARGET_M68030 &&
-           read_be32(record + 28u) == ASTRA_LIBRARY_EXPORTS_OFFSET &&
+    return astra_load_be32(record) == ASTRA_LIBRARY_MAGIC &&
+           astra_load_be16(record + 4u) == ASTRA_LIBRARY_RECORD_VERSION &&
+           astra_load_be16(record + 6u) == ASTRA_LIBRARY_SIZE &&
+           astra_load_be16(record + 14u) == abi_major &&
+           astra_load_be16(record + 16u) >= minimum_abi_minor &&
+           astra_load_be16(record + 18u) == 0u &&
+           astra_load_be32(record + 20u) == ASTRA_LIBRARY_TARGET_M68030 &&
+           astra_load_be32(record + 28u) == ASTRA_LIBRARY_EXPORTS_OFFSET &&
            name_equal(name, expected_name);
 }
 
@@ -109,11 +91,11 @@ static int segment_contains(const uint8_t *mapping, uint32_t header_offset,
         uint32_t start;
         uint32_t span;
 
-        if (read_be32(header) != ELF_PT_LOAD ||
-            (writable && (read_be32(header + 24u) & ELF_PF_W) == 0u))
+        if (astra_load_be32(header) != ELF_PT_LOAD ||
+            (writable && (astra_load_be32(header + 24u) & ELF_PF_W) == 0u))
             continue;
-        start = read_be32(header + 8u);
-        span = read_be32(header + 20u);
+        start = astra_load_be32(header + 8u);
+        span = astra_load_be32(header + 20u);
         if (range_inside(at, size, start, span))
             return 1;
     }
@@ -139,15 +121,17 @@ static uint32_t prepare_library(uint8_t *mapping, uint32_t logical_base,
         span <= ASTRA_LIBRARY_FILE_OFFSET + ASTRA_LIBRARY_SIZE ||
         mapping[0] != 0x7fu || mapping[1] != 'E' || mapping[2] != 'L' ||
         mapping[3] != 'F' || mapping[4] != 1u || mapping[5] != 2u ||
-        read_be16(mapping + 16u) != 3u ||
-        read_be16(mapping + 18u) != 4u || read_be32(mapping + 24u) != 0u ||
+        astra_load_be16(mapping + 16u) != 3u ||
+        astra_load_be16(mapping + 18u) != 4u ||
+        astra_load_be32(mapping + 24u) != 0u ||
         !identity_valid(mapping + ASTRA_LIBRARY_FILE_OFFSET, expected_name,
                         abi_major, minimum_abi_minor))
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
 
-    header_offset = read_be32(mapping + 28u);
-    header_count = read_be16(mapping + 44u);
-    if (read_be16(mapping + 42u) != ELF_PHENT_SIZE || header_count == 0u ||
+    header_offset = astra_load_be32(mapping + 28u);
+    header_count = astra_load_be16(mapping + 44u);
+    if (astra_load_be16(mapping + 42u) != ELF_PHENT_SIZE ||
+        header_count == 0u ||
         !range_inside(header_offset,
                       (uint32_t)header_count * ELF_PHENT_SIZE, 0u, span))
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
@@ -156,11 +140,11 @@ static uint32_t prepare_library(uint8_t *mapping, uint32_t logical_base,
         const uint8_t *header = mapping + header_offset +
                                 ((uint32_t)index * ELF_PHENT_SIZE);
 
-        if (read_be32(header) == ELF_PT_DYNAMIC) {
+        if (astra_load_be32(header) == ELF_PT_DYNAMIC) {
             if (dynamic_at != 0u)
                 return ASTRA_SYSCALL_INVALID_ARGUMENT;
-            dynamic_at = read_be32(header + 8u);
-            dynamic_size = read_be32(header + 20u);
+            dynamic_at = astra_load_be32(header + 8u);
+            dynamic_size = astra_load_be32(header + 20u);
         }
     }
     if (dynamic_at == 0u || dynamic_size < 8u ||
@@ -170,8 +154,8 @@ static uint32_t prepare_library(uint8_t *mapping, uint32_t logical_base,
 
     for (uint32_t at = 0u; at + 8u <= dynamic_size; at += 8u) {
         const uint8_t *entry = mapping + dynamic_at + at;
-        uint32_t tag = read_be32(entry);
-        uint32_t value = read_be32(entry + 4u);
+        uint32_t tag = astra_load_be32(entry);
+        uint32_t value = astra_load_be32(entry + 4u);
 
         if (tag == ELF_DT_NULL)
             break;
@@ -190,9 +174,9 @@ static uint32_t prepare_library(uint8_t *mapping, uint32_t logical_base,
 
     for (uint32_t at = 0u; at < rela_size; at += ELF_RELA_SIZE) {
         const uint8_t *relocation = mapping + rela_at + at;
-        uint32_t target = read_be32(relocation);
-        uint32_t info = read_be32(relocation + 4u);
-        uint32_t addend = read_be32(relocation + 8u);
+        uint32_t target = astra_load_be32(relocation);
+        uint32_t info = astra_load_be32(relocation + 4u);
+        uint32_t addend = astra_load_be32(relocation + 8u);
 
         if ((info & 0xffu) != ELF_R_68K_RELATIVE || (info >> 8) != 0u ||
             !segment_contains(mapping, header_offset, header_count, target,
@@ -200,7 +184,7 @@ static uint32_t prepare_library(uint8_t *mapping, uint32_t logical_base,
             !segment_contains(mapping, header_offset, header_count, addend,
                               1u, 0))
             return ASTRA_SYSCALL_INVALID_ARGUMENT;
-        write_be32(mapping + target, logical_base + addend);
+        astra_store_be32(mapping + target, logical_base + addend);
     }
 
     if (!segment_contains(mapping, header_offset, header_count,

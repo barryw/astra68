@@ -8,18 +8,19 @@ CPU_FLAGS ?= -m68030 -msoft-float
 CPPFLAGS := -Iinclude -I../sw/include -I../sw/userspace/runtime/include
 TARGET_CFLAGS := $(CPU_FLAGS) -Os -ffreestanding -fno-builtin -std=c11 \
 	-Wall -Wextra -Werror
+PIC_CFLAGS := $(TARGET_CFLAGS) -ffunction-sections -fdata-sections -fPIC \
+	-fvisibility=hidden
 HOST_CFLAGS := -O2 -std=c11 -Wall -Wextra -Werror -DASTRA_NDK_TEST \
 	$(CPPFLAGS) -Isrc/internal
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 
 LIB := build/m68k/libastra.a
-TARGET_OBJECTS := build/m68k/resource.o build/m68k/area.o \
-	build/m68k/port.o build/m68k/bulk_ring.o \
-	build/m68k/front_panel.o build/m68k/font.o build/m68k/graphics.o
-TARGET_OBJECTS += build/m68k/pointer.o build/m68k/window.o
-TARGET_OBJECTS += build/m68k/application.o
-TARGET_OBJECTS += build/m68k/fixed.o build/m68k/bundle.o
-TARGET_OBJECTS += build/m68k/datetime.o
+PIC_LIB := build/m68k/libastra-pic.a
+SOURCES := src/resource.c src/area.c src/port.c src/bulk_ring.c \
+	src/front_panel.c src/font.c src/graphics.c src/pointer.c src/window.c \
+	src/application.c src/fixed.c src/bundle.c src/datetime.c
+TARGET_OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(SOURCES))
+PIC_OBJECTS := $(patsubst build/m68k/%,build/m68k/pic/%,$(TARGET_OBJECTS))
 HOST_TESTS := build/host/test_front_panel build/host/test_font \
 	build/host/test_graphics build/host/test_port \
 	build/host/test_area build/host/test_bulk_ring
@@ -37,19 +38,23 @@ SANITIZER_TESTS += build/host/test_application_sanitize
 EXAMPLE_OBJECTS := build/m68k/front_panel_example.o \
 	build/m68k/font_layout_example.o build/m68k/graphics_frame_example.o \
 	build/m68k/port_message_example.o build/m68k/bulk_ring_example.o
-ANALYZER_OBJECTS := build/analyzer/resource.o build/analyzer/area.o \
-	build/analyzer/port.o build/analyzer/bulk_ring.o \
-	build/analyzer/front_panel.o build/analyzer/font.o \
-	build/analyzer/graphics.o
-ANALYZER_OBJECTS += build/analyzer/pointer.o build/analyzer/window.o
-ANALYZER_OBJECTS += build/analyzer/application.o
-ANALYZER_OBJECTS += build/analyzer/fixed.o build/analyzer/bundle.o
+ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,$(SOURCES))
 
 all: $(LIB)
+
+pic: $(PIC_LIB)
 
 $(LIB): $(TARGET_OBJECTS)
 	@mkdir -p $(@D)
 	$(AR) rcs $@ $^
+
+$(PIC_LIB): $(PIC_OBJECTS)
+	@mkdir -p $(@D)
+	$(AR) rcs $@ $^
+
+build/m68k/pic/%.o: src/%.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(PIC_CFLAGS) -MMD -MP -c $< -o $@
 
 build/m68k/%.o: src/%.c
 	@mkdir -p $(@D)
@@ -219,7 +224,7 @@ install: $(LIB)
 clean:
 	rm -rf build
 
--include $(TARGET_OBJECTS:.o=.d)
+-include $(TARGET_OBJECTS:.o=.d) $(PIC_OBJECTS:.o=.d)
 
-.PHONY: all test sanitize check analyze example docs docs-html docs-pdf \
+.PHONY: all pic test sanitize check analyze example docs docs-html docs-pdf \
 	docs-check docs-clean sdk install clean

@@ -1,5 +1,8 @@
 #include "irq.h"
 
+#define ASTRA_INTEGER_FORCE_INLINE 1
+#include <astra/integer.h>
+#undef ASTRA_INTEGER_FORCE_INLINE
 #include <astra/syscall.h>
 
 #include "bytes.h"
@@ -72,13 +75,6 @@ _Static_assert(sizeof(KernelIrqEndpoint) == 128u,
 #endif
 _Static_assert(sizeof(KernelIrqRecord) == 16u,
                "IRQ record ABI size changed");
-
-static inline __attribute__((always_inline)) void
-increment_saturating(uint32_t *value)
-{
-    if (*value != UINT32_MAX)
-        ++*value;
-}
 
 static uint16_t endpoint_trace_flags(const KernelIrqEndpoint *endpoint)
 {
@@ -227,7 +223,7 @@ static inline __attribute__((always_inline)) bool
 controller_mask(uint8_t source)
 {
     if (!controller.mask(source, controller.context)) {
-        increment_saturating(&pool_stats.controller_failures);
+        astra_u32_increment_saturating(&pool_stats.controller_failures);
         return false;
     }
     return true;
@@ -239,7 +235,7 @@ controller_configure(uint8_t source, uint8_t trigger, uint8_t ipl,
 {
     if (!controller.configure(source, trigger, ipl, vector,
                               controller.context)) {
-        increment_saturating(&pool_stats.controller_failures);
+        astra_u32_increment_saturating(&pool_stats.controller_failures);
         return false;
     }
     return true;
@@ -249,7 +245,7 @@ static inline __attribute__((always_inline)) bool
 controller_enable(uint8_t source)
 {
     if (!controller.enable(source, controller.context)) {
-        increment_saturating(&pool_stats.controller_failures);
+        astra_u32_increment_saturating(&pool_stats.controller_failures);
         return false;
     }
     return true;
@@ -259,7 +255,7 @@ static inline __attribute__((always_inline)) bool
 controller_acknowledge(uint8_t source)
 {
     if (!controller.acknowledge(source, controller.context)) {
-        increment_saturating(&pool_stats.controller_failures);
+        astra_u32_increment_saturating(&pool_stats.controller_failures);
         return false;
     }
     return true;
@@ -297,7 +293,7 @@ static bool finish_quiesce(KernelIrqEndpoint *endpoint)
     endpoint->flags |= KERNEL_IRQ_FLAG_MASKED;
     if (route->quiesce != NULL &&
         !route->quiesce(endpoint->source, route->context)) {
-        increment_saturating(&pool_stats.device_failures);
+        astra_u32_increment_saturating(&pool_stats.device_failures);
         return false;
     }
     if (!controller_acknowledge(endpoint->source))
@@ -394,7 +390,7 @@ KernelIrqStatus kernel_irq_bind_internal(
     if (pool_initialized == 0u || pool_corrupt != 0u)
         return KERNEL_IRQ_CORRUPT;
     if (route_in_use(binding->source)) {
-        increment_saturating(&pool_stats.source_busy_failures);
+        astra_u32_increment_saturating(&pool_stats.source_busy_failures);
         return KERNEL_IRQ_SOURCE_BUSY;
     }
     configured = controller_configure(
@@ -409,7 +405,7 @@ KernelIrqStatus kernel_irq_bind_internal(
     route->ipl = binding->ipl;
     route->vector = binding->vector;
     route->internal_armed = 0u;
-    increment_saturating(&pool_stats.internal_routes);
+    astra_u32_increment_saturating(&pool_stats.internal_routes);
     KERNEL_TRACE(
         KERNEL_TRACE_LEVEL_NOTICE, KERNEL_TRACE_EVENT_IRQ_BIND,
         KERNEL_IRQ_TRACE_INTERNAL |
@@ -480,17 +476,17 @@ KernelIrqStatus kernel_irq_bind(uint32_t owner,
     if (pool_initialized == 0u || pool_corrupt != 0u)
         return KERNEL_IRQ_CORRUPT;
     if (route_in_use(binding->source)) {
-        increment_saturating(&pool_stats.source_busy_failures);
+        astra_u32_increment_saturating(&pool_stats.source_busy_failures);
         return KERNEL_IRQ_SOURCE_BUSY;
     }
     if (owner_endpoint_count(owner) >= KERNEL_IRQ_OWNER_MAX) {
-        increment_saturating(&pool_stats.quota_failures);
+        astra_u32_increment_saturating(&pool_stats.quota_failures);
         return KERNEL_IRQ_QUOTA_EXCEEDED;
     }
     cache_status = kernel_object_cache_claim(
         &endpoint_cache, owner, &raw_endpoint, &slot);
     if (cache_status == KERNEL_OBJECT_CACHE_UNAVAILABLE) {
-        increment_saturating(&pool_stats.allocation_failures);
+        astra_u32_increment_saturating(&pool_stats.allocation_failures);
         return KERNEL_IRQ_NO_SLOT;
     }
     if (cache_status != KERNEL_OBJECT_CACHE_OK ||
@@ -538,7 +534,7 @@ KernelIrqStatus kernel_irq_bind(uint32_t owner,
     routes[binding->source].complete = binding->complete;
     routes[binding->source].quiesce = binding->quiesce;
     routes[binding->source].context = binding->context;
-    increment_saturating(&pool_stats.created_endpoints);
+    astra_u32_increment_saturating(&pool_stats.created_endpoints);
     ++pool_stats.live_endpoints;
     live = endpoint_live_count();
     if (live > pool_stats.max_live_endpoints)
@@ -602,7 +598,7 @@ void kernel_irq_abandon_unpublished(KernelIrqEndpoint *endpoint)
         pool_corrupt = 1u;
         return;
     }
-    increment_saturating(&pool_stats.publication_rollbacks);
+    astra_u32_increment_saturating(&pool_stats.publication_rollbacks);
     kernel_irq_handle_release(endpoint, NULL);
 }
 
@@ -673,7 +669,7 @@ static KernelIrqStatus quarantine_unclaimed(uint8_t source,
     KernelIrqStatus status = masked && acknowledged ?
         KERNEL_IRQ_UNCLAIMED : KERNEL_IRQ_DEVICE_ERROR;
 
-    increment_saturating(&pool_stats.unclaimed_interrupts);
+    astra_u32_increment_saturating(&pool_stats.unclaimed_interrupts);
     trace_quarantine(source, status, NULL, trace);
     return status;
 }
@@ -687,9 +683,9 @@ static KernelIrqStatus quarantine_masked(KernelIrqEndpoint *endpoint,
     KernelIrqStatus status;
 
     if (revoking)
-        increment_saturating(&pool_stats.revoking_interrupts);
+        astra_u32_increment_saturating(&pool_stats.revoking_interrupts);
     else
-        increment_saturating(&pool_stats.masked_interrupts);
+        astra_u32_increment_saturating(&pool_stats.masked_interrupts);
     if (!masked || !acknowledged)
         status = KERNEL_IRQ_DEVICE_ERROR;
     else
@@ -723,7 +719,7 @@ static __attribute__((noinline)) KernelIrqStatus dispatch_internal(
     bool masked = true;
 
     if (route->vector != vector) {
-        increment_saturating(&pool_stats.bad_vector_interrupts);
+        astra_u32_increment_saturating(&pool_stats.bad_vector_interrupts);
         route->internal_armed = 0u;
         masked = controller_mask(source);
         if (!controller_acknowledge(source) || !masked) {
@@ -734,7 +730,7 @@ static __attribute__((noinline)) KernelIrqStatus dispatch_internal(
         return KERNEL_IRQ_DEVICE_ERROR;
     }
     if (route->internal_armed == 0u) {
-        increment_saturating(&pool_stats.masked_interrupts);
+        astra_u32_increment_saturating(&pool_stats.masked_interrupts);
         masked = controller_mask(source);
         if (!controller_acknowledge(source) || !masked) {
             trace_quarantine(source, KERNEL_IRQ_DEVICE_ERROR, NULL, trace);
@@ -753,7 +749,7 @@ static __attribute__((noinline)) KernelIrqStatus dispatch_internal(
         route->internal_armed = 0u;
         (void)controller_mask(source);
         (void)controller_acknowledge(source);
-        increment_saturating(&pool_stats.device_failures);
+        astra_u32_increment_saturating(&pool_stats.device_failures);
         trace_quarantine(source, KERNEL_IRQ_DEVICE_ERROR, NULL, trace);
         return KERNEL_IRQ_DEVICE_ERROR;
     }
@@ -767,7 +763,7 @@ static __attribute__((noinline)) KernelIrqStatus dispatch_internal(
             return KERNEL_IRQ_DEVICE_ERROR;
     }
     route->internal_armed = 1u;
-    increment_saturating(&pool_stats.internal_deliveries);
+    astra_u32_increment_saturating(&pool_stats.internal_deliveries);
     set_dispatch_trace(
         trace, KERNEL_TRACE_LEVEL_DEBUG, KERNEL_TRACE_EVENT_IRQ_DELIVER,
         KERNEL_IRQ_TRACE_INTERNAL |
@@ -792,7 +788,7 @@ static __attribute__((noinline)) KernelIrqStatus dispatch_endpoint(
         return KERNEL_IRQ_CORRUPT;
     }
     if (vector != endpoint->vector) {
-        increment_saturating(&pool_stats.bad_vector_interrupts);
+        astra_u32_increment_saturating(&pool_stats.bad_vector_interrupts);
         endpoint->flags |= KERNEL_IRQ_EVENT_DEVICE_ERROR |
                            KERNEL_IRQ_FLAG_MASKED;
         endpoint->state = KERNEL_IRQ_PENDING;
@@ -854,12 +850,12 @@ static __attribute__((noinline)) KernelIrqStatus dispatch_endpoint(
                                KERNEL_IRQ_FLAG_MASKED;
             endpoint->state = KERNEL_IRQ_PENDING;
             (void)controller_mask(source);
-            increment_saturating(&pool_stats.device_failures);
+            astra_u32_increment_saturating(&pool_stats.device_failures);
             trace_quarantine(source, KERNEL_IRQ_DEVICE_ERROR, endpoint,
                              trace);
             return KERNEL_IRQ_DEVICE_ERROR;
         }
-        increment_saturating(&pool_stats.unclaimed_interrupts);
+        astra_u32_increment_saturating(&pool_stats.unclaimed_interrupts);
         /*
          * One of these is ordinary; a flood of them is the storm.
          *
@@ -876,7 +872,7 @@ static __attribute__((noinline)) KernelIrqStatus dispatch_endpoint(
             endpoint->flags |= KERNEL_IRQ_EVENT_STORM |
                                KERNEL_IRQ_FLAG_MASKED;
             (void)controller_mask(source);
-            increment_saturating(&pool_stats.storm_quarantines);
+            astra_u32_increment_saturating(&pool_stats.storm_quarantines);
             trace_quarantine(source, KERNEL_IRQ_STORM, endpoint, trace);
             return KERNEL_IRQ_STORM;
         }
@@ -892,9 +888,9 @@ static __attribute__((noinline)) KernelIrqStatus dispatch_endpoint(
         return KERNEL_IRQ_DEVICE_ERROR;
     }
     if (endpoint->record_count == KERNEL_IRQ_RECORD_DEPTH) {
-        increment_saturating(&endpoint->dropped);
-        increment_saturating(&pool_stats.dropped_records);
-        increment_saturating(&pool_stats.overflow_quarantines);
+        astra_u32_increment_saturating(&endpoint->dropped);
+        astra_u32_increment_saturating(&pool_stats.dropped_records);
+        astra_u32_increment_saturating(&pool_stats.overflow_quarantines);
         endpoint->flags |= KERNEL_IRQ_EVENT_OVERFLOW |
                            KERNEL_IRQ_FLAG_MASKED;
         endpoint->state = KERNEL_IRQ_PENDING;
@@ -919,8 +915,8 @@ static __attribute__((noinline)) KernelIrqStatus dispatch_endpoint(
     endpoint->tail = (uint8_t)((endpoint->tail + 1u) %
                                KERNEL_IRQ_RECORD_DEPTH);
     ++endpoint->record_count;
-    increment_saturating(&endpoint->delivered);
-    increment_saturating(&pool_stats.deliveries);
+    astra_u32_increment_saturating(&endpoint->delivered);
+    astra_u32_increment_saturating(&pool_stats.deliveries);
     note_storm_delivery(endpoint, timestamp);
     endpoint->state = KERNEL_IRQ_PENDING;
     if (endpoint->record_count > pool_stats.max_pending_records)
@@ -929,7 +925,7 @@ static __attribute__((noinline)) KernelIrqStatus dispatch_endpoint(
         endpoint->flags |= KERNEL_IRQ_EVENT_STORM |
                            KERNEL_IRQ_FLAG_MASKED;
         (void)controller_mask(source);
-        increment_saturating(&pool_stats.storm_quarantines);
+        astra_u32_increment_saturating(&pool_stats.storm_quarantines);
         trace_quarantine(source, KERNEL_IRQ_STORM, endpoint, trace);
     }
     if (kernel_thread_wake_all_irq(&endpoint->waiters, ASTRA_SYSCALL_OK,
@@ -1095,7 +1091,7 @@ KernelIrqStatus kernel_irq_ack(KernelIrqEndpoint *endpoint,
             endpoint->flags |= KERNEL_IRQ_EVENT_DEVICE_ERROR |
                                KERNEL_IRQ_FLAG_MASKED;
             (void)controller_mask(endpoint->source);
-            increment_saturating(&pool_stats.device_failures);
+            astra_u32_increment_saturating(&pool_stats.device_failures);
             /*
              * Said out loud. These three are the only places that set the
              * sticky DEVICE_ERROR flag without leaving a record of doing it,
@@ -1145,8 +1141,8 @@ KernelIrqStatus kernel_irq_ack(KernelIrqEndpoint *endpoint,
      * recognised, in dispatch_endpoint.
      */
     endpoint->consecutive = 0u;
-    increment_saturating(&endpoint->acknowledged);
-    increment_saturating(&pool_stats.acknowledgements);
+    astra_u32_increment_saturating(&endpoint->acknowledged);
+    astra_u32_increment_saturating(&pool_stats.acknowledgements);
     trace_endpoint(KERNEL_TRACE_LEVEL_DEBUG,
                    KERNEL_TRACE_EVENT_IRQ_ACK, endpoint,
                    acknowledged_sequence, endpoint->record_count);
@@ -1252,7 +1248,7 @@ KernelIrqStatus kernel_irq_revoke(KernelIrqEndpoint *endpoint,
         endpoint->head = 0u;
         endpoint->tail = 0u;
         endpoint->flags |= KERNEL_IRQ_FLAG_MASKED;
-        increment_saturating(&pool_stats.revocations);
+        astra_u32_increment_saturating(&pool_stats.revocations);
         ++pool_stats.revoking_endpoints;
         masked = controller_mask(endpoint->source);
         if (kernel_thread_wake_all(&endpoint->waiters,
@@ -1301,7 +1297,7 @@ KernelIrqStatus kernel_irq_owner_died(uint32_t owner,
         woken += endpoint_woken;
     }
     if (revoked != 0u)
-        increment_saturating(&pool_stats.owner_deaths);
+        astra_u32_increment_saturating(&pool_stats.owner_deaths);
     *revoked_endpoints = revoked;
     *woken_threads = woken;
     return result;
@@ -1324,7 +1320,7 @@ KernelIrqStatus kernel_irq_service_revocations(uint32_t batch_limit,
             (endpoint->flags & KERNEL_IRQ_FLAG_QUIESCED) != 0u)
             continue;
         ++serviced;
-        increment_saturating(&pool_stats.quiesce_retries);
+        astra_u32_increment_saturating(&pool_stats.quiesce_retries);
         KernelIrqStatus status = finalize_if_possible(endpoint);
 
         if (status == KERNEL_IRQ_CORRUPT)

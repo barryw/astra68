@@ -19,18 +19,8 @@ extern char **environ;
 static const AstraStartupCapability *
 shell_capability(void)
 {
-    const AstraStartupInfo *startup = astra_posix_startup();
-    const AstraStartupCapability *capabilities;
-
-    if (startup == NULL || startup->capabilities_address == 0u)
-        return NULL;
-    capabilities = (const AstraStartupCapability *)(uintptr_t)
-        startup->capabilities_address;
-    for (uint32_t index = 0u; index < startup->capability_count; ++index)
-        if (astra_capability_name_equal(capabilities[index].name,
-                                        ASTRA_CAPABILITY_SHELL))
-            return &capabilities[index];
-    return NULL;
+    return astra_startup_capability(astra_posix_startup(),
+                                    ASTRA_CAPABILITY_SHELL);
 }
 
 static int
@@ -185,12 +175,11 @@ system(const char *command)
         !duplicate_stream(2, handles, &handle_count, &request.stderr_index))
         goto cleanup;
 
-    request.header.total_size = sizeof(request);
-    request.header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
-    request.header.protocol = ASTRA_SHELL_SERVICE_PROTOCOL;
-    request.header.protocol_version = ASTRA_SHELL_SERVICE_VERSION;
-    request.header.operation = ASTRA_SHELL_EXECUTE;
-    request.header.transaction_id = astra_activity_current();
+    astra_message_header_set(&request.header, sizeof(request),
+                             ASTRA_SHELL_SERVICE_PROTOCOL,
+                             ASTRA_SHELL_SERVICE_VERSION,
+                             ASTRA_SHELL_EXECUTE,
+                             astra_activity_current());
     request.command_length = command_length;
     request.environment_length = environment_length;
     request.environment_count = environment_count;

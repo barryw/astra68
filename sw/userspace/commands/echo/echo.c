@@ -21,33 +21,28 @@ ASTRA_PROGRAM("echo", 1, 0, 0, "Barry Walker",
 int
 astra_main(const AstraStartupInfo *startup)
 {
-    const AstraStartupCapability *capabilities;
-    const uint32_t *argv = NULL;
+    const AstraStartupCapability *standard_output;
     char output[ASTRA_LAUNCH_ARGUMENT_BYTES + ASTRA_LAUNCH_ARGUMENT_MAX + 1u];
     uint32_t out = 0u;
     uint32_t stdout_handle = 0u;
     uint32_t first = 1u;
     int newline = 1;
 
-    if (startup == NULL || startup->capabilities_address == 0u)
+    if (!astra_startup_validate(startup))
         return 1;
-    capabilities = (const AstraStartupCapability *)(uintptr_t)
-        startup->capabilities_address;
-    for (uint32_t index = 0u; index < startup->capability_count; ++index)
-        if (astra_capability_name_equal(capabilities[index].name, "STDOUT"))
-            stdout_handle = capabilities[index].handle;
+    standard_output = astra_startup_capability(startup, "STDOUT");
+    if (standard_output != NULL)
+        stdout_handle = standard_output->handle;
     if (stdout_handle == 0u)
         return 1;
-    if (startup->argc != 0u && startup->argv_address != 0u)
-        argv = (const uint32_t *)(uintptr_t)startup->argv_address;
     /*
      * `-n` and nothing else. The shell does the quoting and the expansion, so
      * by the time a word arrives here it is already exactly what it should
      * print -- there is nothing left for this program to interpret, and every
      * escape sequence `echo` grew elsewhere is a thing it interprets wrongly.
      */
-    if (argv != NULL && startup->argc > 1u) {
-        const char *word = (const char *)(uintptr_t)argv[1];
+    if (startup->argc > 1u) {
+        const char *word = astra_startup_argument(startup, 1u);
 
         if (word != NULL && word[0] == '-' && word[1] == 'n' &&
             word[2] == '\0') {
@@ -55,9 +50,8 @@ astra_main(const AstraStartupInfo *startup)
             first = 2u;
         }
     }
-    for (uint32_t index = first; argv != NULL && index < startup->argc;
-         ++index) {
-        const char *word = (const char *)(uintptr_t)argv[index];
+    for (uint32_t index = first; index < startup->argc; ++index) {
+        const char *word = astra_startup_argument(startup, index);
 
         if (index != first)
             output[out++] = ' ';

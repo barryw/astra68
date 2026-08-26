@@ -19,6 +19,8 @@
 
 #include <astra/event.h>
 #include <astra/event_emit.h>
+
+#include <astra/endian.h>
 #include <astra/runtime.h>
 #include <astra/status.h>
 #include <astra/syscall.h>
@@ -151,6 +153,16 @@ astra_log(const char *text)
     return astra_log_write(text, length);
 }
 
+uint32_t
+astra_log_failure(const char *operation, uint32_t status)
+{
+    char message[64];
+    uint32_t length = astra_assert_message(
+        message, sizeof(message), operation, status, "failed");
+
+    return astra_log_write(message, length);
+}
+
 static uint32_t
 append(char *out, uint32_t capacity, uint32_t length, const char *text)
 {
@@ -237,17 +249,9 @@ astra_event_pack(uint8_t *out, uint32_t capacity, const uint32_t *values,
         count * 4u > capacity) {
         return 0u;
     }
-    /*
-     * Big-endian by hand rather than by memcpy. These bytes are a wire format
-     * that a reader on another machine has to decode, and depending on this
-     * one's byte order is how a log becomes unreadable the day something else
-     * reads it.
-     */
     for (uint32_t index = 0u; index < count; ++index) {
-        out[at++] = (uint8_t)(values[index] >> 24);
-        out[at++] = (uint8_t)(values[index] >> 16);
-        out[at++] = (uint8_t)(values[index] >> 8);
-        out[at++] = (uint8_t)values[index];
+        astra_store_be32(out + at, values[index]);
+        at += 4u;
     }
     return at;
 }
@@ -272,24 +276,13 @@ astra_event_emit_packed(const AstraEventDescriptor *descriptor, uint32_t level,
                             length != 0u ? payload : NULL, length);
 }
 
-/*
- * ponytail: one cached activity per process, not per thread. The kernel holds
- * the truth per thread; this is what the Kit reads to marshal an activity into
- * a request without a syscall per call. Correct while a process has one thread
- * doing one thing at a time, which is the shell and the storage service today;
- * per-thread storage is the upgrade when a process has two units of work at
- * once.
- */
-static uint32_t activity_cached;
-
 uint32_t
 astra_activity_begin(void)
 {
     AstraSyscallResult result;
 
     astra_syscall5(ASTRA_SYSCALL_ACTIVITY, 0u, 0u, 0u, 0u, 0u, &result);
-    activity_cached = result.status == ASTRA_SYSCALL_OK ? result.value0 : 0u;
-    return activity_cached;
+    return result.status == ASTRA_SYSCALL_OK ? result.value0 : 0u;
 }
 
 uint32_t
@@ -300,12 +293,28 @@ astra_activity_adopt(uint32_t activity)
     astra_syscall5(ASTRA_SYSCALL_ACTIVITY,
                    activity != 0u ? activity : ASTRA_ACTIVITY_NONE,
                    0u, 0u, 0u, 0u, &result);
-    activity_cached = result.status == ASTRA_SYSCALL_OK ? result.value0 : 0u;
-    return activity_cached;
+    return result.status == ASTRA_SYSCALL_OK ? result.value0 : 0u;
 }
 
 uint32_t
 astra_activity_current(void)
 {
-    return activity_cached;
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_ACTIVITY, ASTRA_ACTIVITY_CURRENT,
+                   0u, 0u, 0u, 0u, &result);
+    return result.status == ASTRA_SYSCALL_OK ? result.value0 : 0u;
+}
+
+uint32_t
+astra_activity_exchange(uint32_t activity, uint32_t *previous)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_ACTIVITY,
+                   activity != 0u ? activity : ASTRA_ACTIVITY_NONE,
+                   0u, 0u, 0u, 0u, &result);
+    if (previous != NULL)
+        *previous = result.status == ASTRA_SYSCALL_OK ? result.value1 : 0u;
+    return result.status == ASTRA_SYSCALL_OK ? result.value0 : 0u;
 }

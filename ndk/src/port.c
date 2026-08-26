@@ -114,14 +114,8 @@ AstraResult astra_message_header_init(AstraMessageHeader *header,
         total_size < ASTRA_MESSAGE_HEADER_SIZE ||
         total_size > ASTRA_MESSAGE_SIZE_MAX)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    header->total_size = total_size;
-    header->header_size = ASTRA_MESSAGE_HEADER_SIZE;
-    header->flags = ASTRA_MESSAGE_FLAGS_NONE;
-    header->protocol = protocol;
-    header->protocol_version = protocol_version;
-    header->reserved = 0u;
-    header->operation = operation;
-    header->transaction_id = transaction_id;
+    astra_message_header_set(header, total_size, protocol, protocol_version,
+                             operation, transaction_id);
     return ASTRA_OK;
 }
 

@@ -54,25 +54,21 @@ static void clear_slot(KernelDmaSlot *slot)
     slot->direction = 0u;
 }
 
-static KernelDmaHandle make_handle(uint32_t index, uint16_t generation)
-{
-    return ((uint32_t)generation << 16) | (index + 1u);
-}
-
 static KernelDmaSlot *lookup_slot(KernelDmaHandle handle, uint32_t *index)
 {
-    uint32_t encoded_index = handle & 0xffffu;
-    uint16_t generation = (uint16_t)(handle >> 16);
+    uint32_t slot_index;
+    uint16_t generation;
     KernelDmaSlot *slot;
 
-    if (!initialized || encoded_index == 0u ||
-        encoded_index > KERNEL_DMA_MAX_BUFFERS || generation == 0u)
+    if (!initialized ||
+        !kernel_handle16_decode(handle, KERNEL_DMA_MAX_BUFFERS,
+                                &slot_index, &generation))
         return NULL;
-    slot = &slots[encoded_index - 1u];
+    slot = &slots[slot_index];
     if (slot->state == KERNEL_DMA_FREE || slot->generation != generation)
         return NULL;
     if (index != NULL)
-        *index = encoded_index - 1u;
+        *index = slot_index;
     return slot;
 }
 
@@ -231,7 +227,8 @@ KernelDmaStatus kernel_dma_create(uint32_t owner, uint32_t byte_size,
     slot->transfer_bytes = 0u;
     slot->state = KERNEL_DMA_CPU_OWNED;
     slot->direction = 0u;
-    *handle = make_handle((uint32_t)(slot - slots), slot->generation);
+    *handle = kernel_handle16_make((uint32_t)(slot - slots),
+                                   slot->generation);
     ++dma_stats.buffers_created;
     ++dma_stats.live_buffers;
     return KERNEL_DMA_OK;

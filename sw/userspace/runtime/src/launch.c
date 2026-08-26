@@ -48,6 +48,38 @@ astra_launch(const void *image, uint32_t length,
 }
 
 uint32_t
+astra_process_clone(uint32_t *process_handle, uint32_t *process_id)
+{
+    AstraSyscallResult result;
+
+    if (process_handle == NULL || process_id == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    *process_handle = 0u;
+    *process_id = 0u;
+    astra_syscall5(ASTRA_SYSCALL_PROCESS_CLONE, 0u, 0u, 0u, 0u, 0u,
+                   &result);
+    if (result.status == ASTRA_SYSCALL_OK) {
+        *process_handle = result.value0;
+        *process_id = result.value1;
+    }
+    return result.status;
+}
+
+uint32_t
+astra_process_exec(const void *image, uint32_t length,
+                   const AstraExecRequest *request)
+{
+    AstraSyscallResult result;
+
+    if (image == NULL || length == 0u || request == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_PROCESS_EXEC,
+                   (uint32_t)(uintptr_t)image, length,
+                   (uint32_t)(uintptr_t)request, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
 astra_process_wait(uint32_t handle, uint64_t deadline_ns, uint32_t *exit_status)
 {
     uint32_t detail = 0u;

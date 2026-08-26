@@ -403,6 +403,12 @@ KernelSyncStatus kernel_sync_retain(KernelSyncObject *object)
     return KERNEL_SYNC_OK;
 }
 
+bool kernel_sync_handle_retain(void *raw_object, void *context)
+{
+    (void)context;
+    return kernel_sync_retain(raw_object) == KERNEL_SYNC_OK;
+}
+
 void kernel_sync_handle_release(void *raw_object, void *context)
 {
     KernelSyncObject *object = raw_object;

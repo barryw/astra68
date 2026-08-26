@@ -1,10 +1,13 @@
 #include <astra/surface.h>
+#include <astra/utf8.h>
 
 #include <astra/draw_list.h>
 #include <astra/ui_font.h>
 
 #include <stddef.h>
 #include <string.h>
+
+#include "rounded.h"
 
 #include "astra_font8x8.inc"
 
@@ -263,28 +266,6 @@ int astra_text_box_scroll(AstraTextBox *text_box, int32_t pixels)
         text_box->height - distance);
 }
 
-static uint32_t rounded_inset(uint32_t at_y, uint32_t height,
-                              uint32_t radius)
-{
-    uint32_t corner_y;
-    uint32_t diameter;
-    uint32_t inset = 0u;
-
-    if (radius == 0u || (at_y >= radius && at_y < height - radius))
-        return 0u;
-    corner_y = at_y < radius ? at_y : height - at_y - 1u;
-    diameter = radius * 2u;
-    while (inset < radius) {
-        uint32_t dx = diameter - inset * 2u - 1u;
-        uint32_t dy = diameter - corner_y * 2u - 1u;
-
-        if (dx * dx + dy * dy <= diameter * diameter)
-            break;
-        ++inset;
-    }
-    return inset;
-}
-
 void astra_surface_fill_round(AstraSurfaceView *surface, int32_t x, int32_t y,
                               uint32_t width, uint32_t height,
                               uint16_t radius, uint16_t color)
@@ -311,7 +292,8 @@ void astra_surface_fill_round(AstraSurfaceView *surface, int32_t x, int32_t y,
         return;
     }
     for (uint32_t at_y = 0u; at_y < height; ++at_y) {
-        uint32_t inset = rounded_inset(at_y, height, bounded_radius);
+        uint32_t inset = astra_graphics_rounded_inset(
+            at_y, height, bounded_radius);
 
         astra_surface_fill(surface, x + (int32_t)inset, y + (int32_t)at_y,
                            width - inset * 2u, 1u, color);
@@ -363,8 +345,8 @@ void astra_surface_blit_round(AstraSurfaceView *destination, int32_t x,
         bounded_radius = source->height / 2u;
     for (uint32_t source_y = 0u; source_y < source->height; ++source_y) {
         int64_t destination_y = (int64_t)y + source_y;
-        uint32_t inset = rounded_inset(source_y, source->height,
-                                       bounded_radius);
+        uint32_t inset = astra_graphics_rounded_inset(
+            source_y, source->height, bounded_radius);
         const uint16_t *in = const_row(source, source_y);
         uint16_t *out;
 
@@ -398,8 +380,8 @@ void astra_surface_blit_round_bottom(AstraSurfaceView *destination, int32_t x,
     for (uint32_t source_y = 0u; source_y < source->height; ++source_y) {
         int64_t destination_y = (int64_t)y + source_y;
         uint32_t inset = source_y < source->height - bounded_radius ? 0u :
-                         rounded_inset(source_y, source->height,
-                                       bounded_radius);
+                         astra_graphics_rounded_inset(
+                             source_y, source->height, bounded_radius);
         const uint16_t *in = const_row(source, source_y);
         uint16_t *out;
 
@@ -474,39 +456,7 @@ const AstraUiStrike *astra_mono_font_strike(uint16_t pixel_height)
 uint32_t astra_ui_font_scalar(const char *text, uint32_t length,
                               uint32_t *consumed)
 {
-    const uint8_t *bytes = (const uint8_t *)text;
-    uint8_t first = bytes[0];
-
-    *consumed = 1u;
-    if (first < 0x80u)
-        return first;
-    if (first >= 0xc2u && first <= 0xdfu && length >= 2u &&
-        (bytes[1] & 0xc0u) == 0x80u) {
-        *consumed = 2u;
-        return ((uint32_t)(first & 0x1fu) << 6u) |
-               (bytes[1] & 0x3fu);
-    }
-    if (first >= 0xe0u && first <= 0xefu && length >= 3u &&
-        (bytes[1] & 0xc0u) == 0x80u && (bytes[2] & 0xc0u) == 0x80u &&
-        !(first == 0xe0u && bytes[1] < 0xa0u) &&
-        !(first == 0xedu && bytes[1] >= 0xa0u)) {
-        *consumed = 3u;
-        return ((uint32_t)(first & 0x0fu) << 12u) |
-               ((uint32_t)(bytes[1] & 0x3fu) << 6u) |
-               (bytes[2] & 0x3fu);
-    }
-    if (first >= 0xf0u && first <= 0xf4u && length >= 4u &&
-        (bytes[1] & 0xc0u) == 0x80u && (bytes[2] & 0xc0u) == 0x80u &&
-        (bytes[3] & 0xc0u) == 0x80u &&
-        !(first == 0xf0u && bytes[1] < 0x90u) &&
-        !(first == 0xf4u && bytes[1] >= 0x90u)) {
-        *consumed = 4u;
-        return ((uint32_t)(first & 0x07u) << 18u) |
-               ((uint32_t)(bytes[1] & 0x3fu) << 12u) |
-               ((uint32_t)(bytes[2] & 0x3fu) << 6u) |
-               (bytes[3] & 0x3fu);
-    }
-    return 0xfffdu;
+    return astra_utf8_decode(text, length, consumed);
 }
 
 static uint32_t font_glyph_id(const AstraFontBank *font, uint32_t scalar)

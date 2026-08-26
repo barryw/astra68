@@ -1,5 +1,7 @@
 #include "allocation.h"
 
+#include <astra/integer.h>
+
 #include <stddef.h>
 
 typedef struct KernelAllocationFailureSelector {
@@ -95,6 +97,9 @@ static const KernelAllocationSiteInfo site_info[KERNEL_ALLOCATION_SITE_COUNT] = 
     },
     [KERNEL_ALLOCATION_SITE_LIBRARY_PAGE] = {
         "library-page", KERNEL_ALLOCATION_TAG_PROCESS, 0u, 1u, 0u
+    },
+    [KERNEL_ALLOCATION_SITE_PROCESS_PRIVATE_PAGE] = {
+        "process-private-page", KERNEL_ALLOCATION_TAG_PROCESS, 0u, 1u, 0u
     }
 };
 
@@ -146,20 +151,6 @@ static void copy_stats(KernelAllocationStats *destination,
     destination->current_bytes = source->current_bytes;
     destination->peak_bytes = source->peak_bytes;
     destination->last_owner = source->last_owner;
-}
-
-static void increment_saturating(uint32_t *value)
-{
-    if (*value != UINT32_MAX)
-        ++*value;
-}
-
-static bool add_checked(uint32_t left, uint32_t right, uint32_t *result)
-{
-    if (result == NULL || right > UINT32_MAX - left)
-        return false;
-    *result = left + right;
-    return true;
 }
 
 static void ensure_initialized(void)
@@ -224,11 +215,11 @@ bool kernel_allocation_attempt(KernelAllocationSite site, uint32_t owner)
     if (!valid_site(site) || site_info[site].injectable == 0u)
         return false;
     stats = &site_stats[site];
-    increment_saturating(&stats->attempts);
+    astra_u32_increment_saturating(&stats->attempts);
     stats->last_owner = owner;
     if (site_info[site].boot_only != 0u &&
         phase != KERNEL_ALLOCATION_PHASE_BOOT) {
-        increment_saturating(&stats->failures);
+        astra_u32_increment_saturating(&stats->failures);
         return false;
     }
     selected = failure_selector.enabled != 0u &&
@@ -236,12 +227,12 @@ bool kernel_allocation_attempt(KernelAllocationSite site, uint32_t owner)
          failure_selector.site == (uint8_t)site);
     if (!selected)
         return true;
-    increment_saturating(&failure_selector.observed);
+    astra_u32_increment_saturating(&failure_selector.observed);
     if (failure_selector.observed != failure_selector.target)
         return true;
     failure_selector.enabled = 0u;
-    increment_saturating(&stats->failures);
-    increment_saturating(&stats->injected_failures);
+    astra_u32_increment_saturating(&stats->failures);
+    astra_u32_increment_saturating(&stats->injected_failures);
     return false;
 }
 
@@ -257,14 +248,18 @@ bool kernel_allocation_commit(KernelAllocationSite site, uint32_t units,
 
     ensure_initialized();
     if (!valid_site(site) || units == 0u || bytes == 0u ||
-        !add_checked(site_stats[site].current_units, units, &next_units) ||
-        !add_checked(site_stats[site].current_bytes, bytes, &next_bytes)) {
+        !astra_u32_add_checked(site_stats[site].current_units, units,
+                               &next_units) ||
+        !astra_u32_add_checked(site_stats[site].current_bytes, bytes,
+                               &next_bytes)) {
         corrupt = 1u;
         return false;
     }
     tag = (KernelAllocationTag)site_info[site].tag;
-    if (!add_checked(tag_current_units[tag], units, &next_tag_units) ||
-        !add_checked(tag_current_bytes[tag], bytes, &next_tag_bytes)) {
+    if (!astra_u32_add_checked(tag_current_units[tag], units,
+                               &next_tag_units) ||
+        !astra_u32_add_checked(tag_current_bytes[tag], bytes,
+                               &next_tag_bytes)) {
         corrupt = 1u;
         return false;
     }
@@ -272,7 +267,7 @@ bool kernel_allocation_commit(KernelAllocationSite site, uint32_t units,
     stats->current_units = next_units;
     stats->current_bytes = next_bytes;
     stats->last_owner = owner;
-    increment_saturating(&stats->successes);
+    astra_u32_increment_saturating(&stats->successes);
     if (stats->current_units > stats->peak_units)
         stats->peak_units = stats->current_units;
     if (stats->current_bytes > stats->peak_bytes)
@@ -294,7 +289,7 @@ void kernel_allocation_fail(KernelAllocationSite site, uint32_t owner)
         return;
     }
     site_stats[site].last_owner = owner;
-    increment_saturating(&site_stats[site].failures);
+    astra_u32_increment_saturating(&site_stats[site].failures);
 }
 
 bool kernel_allocation_release(KernelAllocationSite site, uint32_t units,
@@ -319,7 +314,7 @@ bool kernel_allocation_release(KernelAllocationSite site, uint32_t units,
     stats->current_bytes -= bytes;
     tag_current_units[tag] -= units;
     tag_current_bytes[tag] -= bytes;
-    increment_saturating(&stats->releases);
+    astra_u32_increment_saturating(&stats->releases);
     return true;
 }
 
@@ -370,20 +365,20 @@ bool kernel_allocation_tag_stats(KernelAllocationTag tag,
 
         if (site_info[site].tag != tag)
             continue;
-        if (!add_checked(total.attempts, source->attempts,
+        if (!astra_u32_add_checked(total.attempts, source->attempts,
                          &total.attempts) ||
-            !add_checked(total.successes, source->successes,
+            !astra_u32_add_checked(total.successes, source->successes,
                          &total.successes) ||
-            !add_checked(total.failures, source->failures,
+            !astra_u32_add_checked(total.failures, source->failures,
                          &total.failures) ||
-            !add_checked(total.injected_failures,
+            !astra_u32_add_checked(total.injected_failures,
                          source->injected_failures,
                          &total.injected_failures) ||
-            !add_checked(total.releases, source->releases,
+            !astra_u32_add_checked(total.releases, source->releases,
                          &total.releases) ||
-            !add_checked(total.current_units, source->current_units,
+            !astra_u32_add_checked(total.current_units, source->current_units,
                          &total.current_units) ||
-            !add_checked(total.current_bytes, source->current_bytes,
+            !astra_u32_add_checked(total.current_bytes, source->current_bytes,
                          &total.current_bytes))
             return false;
         if (source->last_owner != 0u)
@@ -419,9 +414,9 @@ bool kernel_allocation_valid(void)
             return false;
         KernelAllocationTag tag =
             (KernelAllocationTag)site_info[site].tag;
-        if (!add_checked(observed_units[tag], stats->current_units,
+        if (!astra_u32_add_checked(observed_units[tag], stats->current_units,
                          &observed_units[tag]) ||
-            !add_checked(observed_bytes[tag], stats->current_bytes,
+            !astra_u32_add_checked(observed_bytes[tag], stats->current_bytes,
                          &observed_bytes[tag]))
             return false;
     }

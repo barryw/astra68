@@ -65,6 +65,24 @@ struct ext4_lock {
 
 	/**@brief   Unlock access to mount point.*/
 	void (*unlock)(void);
+
+	/**@brief   Shared lock for read-only file I/O. Optional.*/
+	void (*read_lock)(void);
+
+	/**@brief   Unlock shared read-only file I/O. Optional.*/
+	void (*read_unlock)(void);
+
+	/**@brief   Protect block-cache bookkeeping. Optional.*/
+	void (*cache_lock)(void);
+
+	/**@brief   Unlock block-cache bookkeeping. Optional.*/
+	void (*cache_unlock)(void);
+
+	/**@brief   Serialize cache fills and direct I/O. Optional.*/
+	void (*fill_lock)(void);
+
+	/**@brief   Unlock cache fills and direct I/O. Optional.*/
+	void (*fill_unlock)(void);
 };
 
 /********************************FILE DESCRIPTOR*****************************/
@@ -328,6 +346,17 @@ int ext4_fopen(ext4_file *file, const char *path, const char *flags);
  *
  * @return  Standard error code.*/
 int ext4_fopen2(ext4_file *file, const char *path, int flags);
+
+/**@brief   File open with a mode applied only when the final inode is created.
+ *
+ * @param   file  File handle.
+ * @param   path  File path.
+ * @param   flags File open flags.
+ * @param   mode  Creation mode bits, or UINT32_MAX for the filesystem default.
+ *
+ * @return  Standard error code.*/
+int ext4_fopen2_mode(ext4_file *file, const char *path, int flags,
+		     uint32_t mode);
 
 /**@brief   File close function.
  *
@@ -612,6 +641,7 @@ int ext4_dir_mv(const char *path, const char *new_path);
  *
  * @return  Standard error code.*/
 int ext4_dir_mk(const char *path);
+int ext4_dir_mk_mode(const char *path, uint32_t mode);
 
 /**@brief   Directory open.
  *

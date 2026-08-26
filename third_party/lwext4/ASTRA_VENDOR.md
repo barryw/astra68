@@ -79,7 +79,7 @@ so a future fix has somewhere to land.
 
 ## Astra68 changes to upstream files
 
-Seven upstream defect fixes are applied **in-tree**. The patches are retained
+Thirteen upstream changes are applied **in-tree**. The patches are retained
 verbatim under `astra/patches/` as the audit record and as the re-apply path
 for a future upstream bump.
 
@@ -92,6 +92,12 @@ for a future upstream bump.
 | `0005-cache-file-data.patch` | `src/ext4.c:1669` | `ext4_fread` and partial file writes bypassed the block cache, so unchanged file data was reread and partial writes performed uncached read-modify-write cycles. Reads and partial writes now use the coherent cache; direct full-block writes invalidate cached copies. |
 | `0007-inode-timestamps.patch` | `src/ext4_fs.c:915`, `src/ext4.c:230`, `src/ext4.c:2070` | Every inode upstream creates carries zero for access, change and modification time, and the code that would set them is a `TODO ... when we have wall-clock time`. Astra has one, so `CONFIG_USE_USER_TIME` and `ext4_user_now()` -- the shape the allocator hooks already use -- and stamps at creation, on a successful write, and on the directory either side of a link or unlink. A port with no clock still gets zero. |
 | `0006-dx-lookup-dot-entries.patch` | `src/ext4_dir.c:459` | `ext4_dir_find_entry` answered ENOENT for `.` and `..` in an indexed directory: neither is in the hash tree, and block 0 -- where both live -- is the index root rather than a leaf the hash walk reaches. Every directory lwext4 created was affected, because it indexes every directory it makes; a directory `mke2fs` wrote was not. The two dot names take the linear walk. |
+| `0008-creation-modes.patch` | `src/ext4.c:924`, `include/ext4.h:329` | Adds mode-aware file and directory creation entry points while preserving the old APIs as default-mode wrappers. Permission bits are installed before the inode is linked, avoiding a create-then-chmod race. |
+| `0009-read-concurrency.patch` | `src/ext4.c:71`, `src/ext4_blockdev.c:65` | Splits read-only file I/O from the exclusive mount/write lock, protects cache metadata with a short-held lock, and coalesces cache misses through the physical fill lane. The cache lock is released before a device wait. |
+| `0010-dir-leaf-checksum-order.patch` | `src/ext4_dir_idx.c:387` | Indexed-directory initialization computed the first leaf checksum before zeroing the entry inode, invalidating the checksum immediately. All bytes are now initialized before the checksum. |
+| `0011-durable-write-barriers.patch` | `include/ext4_blockdev.h:67`, `src/ext4_blockdev.c:113`, `src/ext4_journal.c:2181` | The block interface had no durability callback, so journal commit and `fsync` could return after writes reached only volatile device state. Adds an optional flush operation, orders journal records before the commit record with device barriers, and makes cache flush finish with a device barrier. |
+| `0012-coalesced-read-cache.patch` | `src/ext4.c:1899`, `src/ext4_blockdev.c:383` | Contiguous full-block file reads bypassed the coherent cache, so every external command launch reread its executable blocks. Keeps one coalesced device read on a cold miss, publishes the run into the existing cache, and returns warm runs without device I/O. |
+| `0013-extent-guard-local.patch` | `src/ext4_fs.c:805` | The no-extents Astra profile left an extent-only local outside its feature guard, producing an unused-variable warning on every target build. The declaration now has the same feature lifetime as its only uses. |
 
 Defect 0003 is invisible against lwext4's own `mkfs`, which leaves
 `s_hash_seed` zero. It appears only against an `mke2fs` image, which is the
@@ -104,7 +110,28 @@ unpatched upstream with `ext4_fwrite returned EOK having moved 0 of 4096`.
 
 Patch 0007 is a feature rather than a defect fix, and it is the only one of
 these that upstream would recognise as its own plan: the TODO naming the
-missing clock is upstream's.
+missing clock is upstream's. Patch 0008 is the POSIX creation-mode extension;
+the raw and partitioned image tests read back a 0600 file and 0710 directory.
+Patch 0009 is covered by a deterministic held-read gate: an unrelated cached
+read completes without physical I/O, while a same-block peer sleeps and reuses
+the first fill. The same gate runs under ASan/UBSan and TSan.
+
+Patch 0010 became visible when the mount gate finally invoked the independent
+checker it had always claimed to invoke: `e2fsck -fn` rejected directory inode
+15 block 1 before the fix. Raw, partitioned, full-volume, and fresh-remount
+images now pass.
+
+Patch 0011 is covered by a volatile-media crash oracle. The backend keeps
+writes separate from its durable image and publishes them only when lwext4
+issues the block flush callback. After an unclean process exit, a fresh mount
+recovers the journal and verifies the committed file byte-for-byte; three
+successive crash/recovery cycles remain `e2fsck -fn` clean. The Astra port maps
+that callback to the existing block `FLUSH` request rather than inventing a
+second durability path.
+
+Patch 0012 is covered by a contiguous 12 KiB file oracle. Its cold read must
+perform physical I/O, while an immediate seek and reread must return identical
+bytes with zero physical reads. Raw, partitioned, sanitizer, and TSan runs pass.
 
 Defect 0006 is also endian-independent, and it is invisible to a caller that
 resolves paths the way Linux does -- the VFS answers `.` and `..` itself and

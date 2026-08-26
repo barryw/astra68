@@ -1,54 +1,4 @@
-/*
- * The heap, and why it is a reserved area.
- *
- * `malloc` needs somewhere to allocate from, and on a machine with no root and
- * no mmap the only question is what that somewhere *is*. Three answers were
- * available and two of them are wrong:
- *
- *   - a region reserved in the linker script, between `__heap_start` and
- *     `__heap_end`, which is what picolibc's fallback `sbrk` uses. It costs
- *     nothing to write and it is part of the image's writable segment, so the
- *     loader maps every page of it at launch. A megabyte of heap is then a
- *     megabyte of frames committed by `status`, which allocates nothing, on
- *     every launch. The machine pays for the largest program's appetite in
- *     every program.
- *   - an area of a **fixed size**, created on first allocation. That is what
- *     stood here, and it was a fixed partition with a ceiling compiled into
- *     the image: a program needing 300 KiB failed at 256, a long-running one
- *     ratcheted upward and never gave a page back, and the limit was a
- *     constant chosen by whoever wrote this file rather than a budget. It
- *     worked, and it was the wrong shape.
- *   - a **reserved** area, which is this one. Creation takes the address
- *     range and commits nothing; a page arrives when it is first touched, a
- *     cluster at a time, and is charged to this process then. What the
- *     program never allocates, the machine never spends a frame on.
- *
- * Reserving is free, so the reservation is the whole of what the VM will give
- * one area -- ASTRA_AREA_SIZE_MAX, 4 MiB -- rather than a guess at what this
- * program will want. There is 2 GB of user address space and 128 MB of RAM;
- * naming memory and owning it are different operations, and only the second
- * one is scarce. The ceiling that finally refuses is the owner's frame quota,
- * which the kernel already tracks, rather than a second and smaller invisible
- * one declared here.
- *
- * `astra_heap_bytes` is gone with it. A knob whose only correct setting is
- * "as much as I turn out to need" is not a knob, and every program that had
- * to define one was working around this file.
- *
- * A heap larger than one area slot would need a second area and an `sbrk`
- * handing out a discontiguous chunk -- and a `malloc` checked against one.
- * picolibc's has not been, so that stays undone rather than half done.
- *
- * `free` is picolibc's. This is only where the memory comes from, and where
- * it goes back to: shrinking the break decommits the pages it passes, which
- * is what makes releasing memory a behaviour rather than a phrase.
- *
- * It lives in the POSIX library rather than the runtime because that is whose
- * problem it is: `sbrk` exists for a C library's allocator, and a program
- * written against the NDK that never links picolibc has no use for one. The
- * runtime stays free of libc headers, which is also what lets it be built for
- * the host tests.
- */
+/* Clone-private, demand-paged storage behind picolibc's contiguous sbrk. */
 
 #include <astra/runtime.h>
 #include <astra/syscall.h>
@@ -57,12 +7,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "heap_internal.h"
+
 #define ASTRA_HEAP_ALIGNMENT 8u
 #define ASTRA_HEAP_PAGE_SIZE 4096u
 
 static uint8_t *heap_base;
 static uint32_t heap_span;
 static uint32_t heap_used;
+static AstraPosixHeapLayout heap_layout;
 /*
  * The high-water mark of committed pages, which is not the same as the break:
  * shrinking hands pages back, so the next growth has to be able to tell the
@@ -74,38 +27,56 @@ static uint32_t heap_used;
 static int
 heap_start(void)
 {
-    uint32_t handle = 0u;
     void *address = NULL;
     uint32_t span = 0u;
+    uint32_t total_pages;
+    uint32_t heap_pages;
+    uint32_t metadata_pages;
 
     if (heap_base != NULL)
         return 1;
-    /*
-     * READ and WRITE and nothing else. A heap is not transferred, not mapped
-     * by anybody else and not administered, and a capability that carried
-     * those rights would be handing them to whatever the program is running.
-     */
-    if (astra_rt_area_create_flagged(ASTRA_AREA_SIZE_MAX,
-                                     ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
-                                         ASTRA_RIGHT_MAP,
-                                     ASTRA_AREA_CREATE_RESERVED,
-                                     &handle) != ASTRA_SYSCALL_OK)
+    if (astra_rt_private_reserve(
+            ASTRA_VM_PRIVATE_ADDRESS_SPACE_MAX,
+            ASTRA_VM_PRIVATE_READ | ASTRA_VM_PRIVATE_WRITE,
+            &address, &span) != ASTRA_SYSCALL_OK || address == NULL)
         return 0;
-    if (astra_rt_area_map(handle, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
-                          &address, &span) != ASTRA_SYSCALL_OK ||
-        address == NULL || span == 0u) {
-        (void)astra_close(handle);
-        return 0;
+    total_pages = span / ASTRA_HEAP_PAGE_SIZE;
+    heap_pages = total_pages;
+    for (;;) {
+        uint64_t metadata_bytes =
+            (uint64_t)heap_pages * 3u * sizeof(uint32_t);
+        uint32_t next;
+
+        metadata_pages = (uint32_t)((metadata_bytes +
+                                     ASTRA_HEAP_PAGE_SIZE - 1u) /
+                                    ASTRA_HEAP_PAGE_SIZE);
+        if (metadata_pages >= total_pages)
+            return 0;
+        next = total_pages - metadata_pages;
+        if (next == heap_pages)
+            break;
+        heap_pages = next;
     }
-    /*
-     * The handle is deliberately not kept. Nothing may unmap the heap while
-     * the program is running, and a handle nobody holds is one nobody can
-     * close by mistake; the process exiting is what releases it, which is the
-     * only moment it is safe to.
-     */
-    heap_base = address;
-    heap_span = span;
+    if (heap_pages == 0u)
+        return 0;
+    heap_layout.page_count = heap_pages;
+    heap_layout.page_run = address;
+    heap_layout.extent_next = heap_layout.page_run + heap_pages;
+    heap_layout.extent_pages = heap_layout.extent_next + heap_pages;
+    heap_layout.base = (uint8_t *)address +
+                       metadata_pages * ASTRA_HEAP_PAGE_SIZE;
+    heap_base = heap_layout.base;
+    heap_span = heap_pages * ASTRA_HEAP_PAGE_SIZE;
     heap_used = 0u;
+    return 1;
+}
+
+int
+astra_posix_heap_layout(AstraPosixHeapLayout *layout)
+{
+    if (layout == NULL || !heap_start())
+        return 0;
+    *layout = heap_layout;
     return 1;
 }
 
@@ -148,9 +119,9 @@ sbrk(intptr_t increment)
         first = (heap_used + ASTRA_HEAP_PAGE_SIZE - 1u) &
                 ~(uint32_t)(ASTRA_HEAP_PAGE_SIZE - 1u);
         if (first < heap_used + amount)
-            (void)astra_rt_area_decommit(heap_base + first,
-                                         (heap_used + amount) - first,
-                                         &released);
+            (void)astra_rt_private_decommit(heap_base + first,
+                                            (heap_used + amount) - first,
+                                            &released);
         return heap_base + heap_used;
     }
     wanted = (uint32_t)increment;

@@ -9,7 +9,7 @@
 #include <astra/vfs_union.h>
 
 #define ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR 1u
-#define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 2u
+#define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 4u
 #define ASTRA_FILESYSTEM_DIRECTORY_BATCH_MAX 32u
 
 enum {
@@ -21,17 +21,22 @@ enum {
 typedef uint32_t (*AstraFilesystemReadAtFn)(AstraVfsClient *, AstraVfsFile,
                                             uint64_t, void *, uint32_t,
                                             uint32_t *);
+typedef uint32_t (*AstraFilesystemWriteAtFn)(AstraVfsClient *, AstraVfsFile,
+                                             uint64_t, const void *, uint32_t,
+                                             uint32_t *);
 
 typedef struct AstraFilesystem {
     const AstraAssignTable *_private_assigns;
     AstraVfsAssignClientFn _private_client_for;
     AstraFilesystemReadAtFn _private_read_at;
+    AstraFilesystemWriteAtFn _private_write_at;
     void *_private_context;
 } AstraFilesystem;
 
 typedef struct AstraFile {
     AstraVfsClient *_private_client;
     AstraFilesystemReadAtFn _private_read_at;
+    AstraFilesystemWriteAtFn _private_write_at;
     AstraVfsFile _private_file;
     uint32_t _private_flags;
     uint64_t _private_offset;
@@ -88,8 +93,8 @@ typedef struct AstraDirectory {
     uint16_t _private_reserved;
 } AstraDirectory;
 
-#define ASTRA_FILESYSTEM_INIT { 0, 0, 0, 0 }
-#define ASTRA_FILE_INIT { 0, 0, ASTRA_VFS_FILE_INVALID, 0, 0, 0, 0, 0 }
+#define ASTRA_FILESYSTEM_INIT { 0, 0, 0, 0, 0 }
+#define ASTRA_FILE_INIT { 0, 0, 0, ASTRA_VFS_FILE_INVALID, 0, 0, 0, 0, 0 }
 #define ASTRA_FILE_INFO_INIT { sizeof(AstraFileInfo), 0, 0, 0, 0, 0, 0, \
                                0, 0, 0, 0 }
 #define ASTRA_DIRECTORY_INIT { 0, { 0 }, 0, 0, ASTRA_VFS_ERR_NOT_FOUND, \
@@ -159,6 +164,23 @@ typedef struct AstraFilesystemLibraryV1 {
     uint32_t (*truncate)(AstraFile *, uint64_t);
     uint32_t (*client_sync)(AstraVfsClient *, AstraVfsFile);
     uint32_t (*client_truncate)(AstraVfsClient *, AstraVfsFile, uint64_t);
+    uint32_t (*open_mode)(AstraFilesystem *, const char *, uint32_t, uint16_t,
+                          AstraFile *);
+    uint32_t (*mkdir_mode)(AstraFilesystem *, const char *, uint16_t);
+    uint32_t (*chmod)(AstraFilesystem *, const char *, uint16_t);
+    uint32_t (*readlink)(AstraFilesystem *, const char *, void *, uint32_t,
+                         uint32_t *);
+    uint32_t (*client_open_mode)(AstraVfsClient *, const char *, uint32_t,
+                                 uint16_t, AstraVfsFile *, uint64_t *,
+                                 uint16_t *);
+    uint32_t (*client_mkdir_mode)(AstraVfsClient *, const char *, uint16_t);
+    uint32_t (*client_chmod)(AstraVfsClient *, const char *, uint16_t);
+    uint32_t (*client_readlink)(AstraVfsClient *, const char *, void *,
+                                uint32_t, uint32_t *);
+    /* ABI 1.4: keeps the original attach slot callable by older consumers. */
+    uint32_t (*attach_io)(AstraFilesystem *, const AstraAssignTable *,
+                          AstraVfsAssignClientFn, AstraFilesystemReadAtFn,
+                          AstraFilesystemWriteAtFn, void *);
 } AstraFilesystemLibraryV1;
 
 #endif

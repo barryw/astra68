@@ -17,8 +17,8 @@ OBJECT := build/m68k/main.o
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 INPUT_LIB := $(INPUT)/build/m68k/libastrainput.a
 CRT0 := $(RUNTIME)/build/m68k/crt0.o
-
-all: $(IMAGE) size
+ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(INPUT)
+include ../../program.mk
 
 $(TARGET): $(OBJECT) $(CRT0) $(INPUT_LIB) $(RUNTIME_LIB) \
 		$(RUNTIME)/astra_user.ld
@@ -36,8 +36,13 @@ $(OBJECT): main.c
 size: $(IMAGE)
 	$(SIZE) $(IMAGE)
 
-test sanitize analyze:
+test sanitize:
 	@true
+
+analyze:
+	@mkdir -p build/analyzer
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
+		-c main.c -o build/analyzer/main.o
 
 clean:
 	rm -rf build

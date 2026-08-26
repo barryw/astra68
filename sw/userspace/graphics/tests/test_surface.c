@@ -151,8 +151,7 @@ static void test_hardware_draw_list_batch(void)
     uint32_t frame;
     uint32_t offscreen;
     uint32_t cached;
-    uint32_t masked_commands = 0u;
-    uint32_t masked_pixels = 0u;
+    uint32_t clipped_blits = 0u;
 
     assert(astra_draw_list_view_init(&surface, draw_storage,
                                      sizeof(draw_storage), 160u, 80u));
@@ -186,29 +185,38 @@ static void test_hardware_draw_list_batch(void)
             index * ASTRA_RENDER_COMMAND_BYTES;
 
         if ((be32(command + 4u) >> 16) == ASTRA_RENDER_OP_BLIT &&
-            (be32(command + 4u) & ASTRA_RENDER_FLAG_BLIT_MASK1) != 0u) {
-            uint32_t extent = be32(command + 52u);
-
-            ++masked_commands;
-            masked_pixels += (extent >> 16) * (extent & 0xffffu);
+            be32(command + 32u) == frame) {
+            assert((be32(command + 4u) &
+                    ASTRA_RENDER_FLAG_BLIT_MASK1) == 0u);
+            assert(be32(command + 24u) == ((uint32_t)17u << 16 | 24u));
+            assert(be32(command + 28u) == ((uint32_t)120u << 16 | 76u));
+            ++clipped_blits;
         }
     }
-    assert(masked_commands == 4u);
-    assert(masked_pixels <= 4u * 8u * 8u);
+    assert(clipped_blits != 0u);
     assert(be32(batch_storage + 28u) ==
            ASTRA_RENDER_BATCH_SCANOUT1_OFFSET);
     assert(be32(batch_storage +
                 ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
                 ASTRA_RENDER_BATCH_ARENA_OFFSET + 4u) >> 16 ==
            1u);
-    assert(be32(batch_storage +
-                ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
-                ASTRA_RENDER_BATCH_ARENA_OFFSET + 13u * 64u + 24u) ==
-           ((uint32_t)17u << 16 | 24u));
-    assert(be32(batch_storage +
-                ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
-                ASTRA_RENDER_BATCH_ARENA_OFFSET + 13u * 64u + 28u) ==
-           ((uint32_t)120u << 16 | 76u));
+
+    assert(astra_render_builder_init(&builder, batch_storage,
+                                     sizeof(batch_storage), 8u));
+    frame = astra_render_builder_frame(&builder);
+    cached = astra_render_builder_surface_at(
+        &builder, 0x01000000u, 1280u, 720u);
+    {
+        uint32_t data_cursor = builder.data_cursor;
+
+        assert(astra_render_builder_blit(&builder, frame, cached,
+                                         0, 0, 944u, 578u, 12u, 1));
+        assert(astra_render_builder_blit(&builder, frame, cached,
+                                         2, 30, 940u, 548u, 10u, 0));
+        assert(builder.data_cursor == data_cursor);
+    }
+    assert(astra_render_builder_finish(&builder) ==
+           ASTRA_RENDER_BUILDER_BYTES);
 }
 
 static void test_mono_draw_list(void)

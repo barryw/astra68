@@ -9,6 +9,184 @@ The platform is **Astra 68**, its kernel is **Axiom**, and the complete
 user-facing system is **Astra OS**. The Astra NDK is the stable developer
 surface; Axiom's internal interfaces are not a module ABI.
 
+## Software ownership and reuse audit (2026-08-25)
+
+The complete target-software ownership pass is recorded in
+`docs/SOFTWARE_BOUNDARY_AUDIT.md`. Kernel-private headers no longer cross into
+user mode; NDK-private headers stay in the NDK; GUI wire types are
+protocol-owned; Terminal is independent of Supervisor implementation; and
+production programs consume owner-built archives rather than recompiling
+another library's source. A 26-rule executable architecture gate retains those
+boundaries and the shared primitives extracted during the pass.
+
+Program build ordering is now shared by commands, Supervisor, and all six
+services. Each declares its library owners, those owners build first, and a
+second make invocation restats and links the program. The clean userspace gate
+had exposed the old accidental ordering when Terminal could not build its own
+library from an empty tree; clean standalone command and service builds now
+pass, including Lua and the 2,157,012-byte stripped Vim file.
+
+The complete userspace behavior, sanitizer, analyzer, and MC68030 matrices;
+NDK normal/PIC matrices; Axiom host and target verification; and firmware
+tests/build pass on Beast. The final kernel payload is 150,604 bytes. lwext4
+patch 0013 also removes an extent-only unused local from the no-extents build.
+The audit deliberately leaves visible the next architectural work: replace
+Terminal's 64 KiB legacy load fallback and the 4 MiB whole-area executable
+ceiling with one tested streaming loader, and add structured catalogs for the
+remaining resident services.
+
+## Arty hosted ROM aperture (2026-08-25)
+
+The active Arty machine no longer inherits the ULX3S stage-2 loader's 256 KiB
+ROM limit. Its ROM is ordinary QEMU host memory on the Zynq ARM, so the hosted
+aperture is now 512 KiB with no PL BRAM or timing cost. The independent
+`astra68.rom` AstraHost package remains an explicit legacy target and retains
+its real 256 KiB validator.
+
+The exact Beast and installed Arty image is 263,532 bytes, leaving 260,756
+bytes free, with SHA-256
+`3a3a7305459122d39cc94217f62bafc2cde16d3afb3c58d08d1b1c685b733162`.
+QEMU source identity
+`19b577a4ef305eb9ca639b006c09ee03f9c7a0666b5cb77427b716d80ea1eeab`
+passes the complete 73-command gate, including the named-file Vim edit. The
+legacy 256 KiB image remains a separate physical target; increasing it would
+require its own RTL, stage-0, AstraHost, route, and hardware qualification.
+
+## Filesystem read concurrency (2026-08-25)
+
+The storage service now runs the device-derived worker count on its existing
+receive port. VFS transport scratch is worker-owned; session/file/reply state
+uses short reserve/pin/commit locks; ext4 backend file and directory-scan tables
+own their locks. Writes, namespace mutation, journal state, and mount lifecycle
+remain exclusive.
+
+lwext4 Astra patch 0009 gives `ext4_fread` a shared mount side, protects cache
+bookkeeping briefly, and serializes cache fills/direct reads through the one
+lane advertised by the current depth-one block device. A miss pins its buffer
+and releases the cache lock before waiting for the device. A same-block peer
+sleeps, rechecks `BC_UPTODATE`, and reuses the completed fill.
+
+The original serialized oracle held A in a physical read and kept cached B
+blocked past 100 ms. The retained gate holds the same A, completes warm B before
+A is released with zero device traffic, and keeps a second cold A asleep; after
+release both A readers return identical bytes and the peer adds no physical
+read. Raw and partitioned whole-library tests, ASan/UBSan, TSan with Beast ASLR
+disabled, MC68030 lwext4, and the storage service build pass. Making the
+independent `e2fsck` promise executable exposed an older indexed-directory
+checksum bug: lwext4 checksummed the first leaf and then changed its inode
+field. Patch 0010 fixes the shared initializer. Raw, partitioned, full-volume,
+sanitizer, and fresh-remount images are now `e2fsck -fn` clean, including two
+concurrent disjoint-writer files verified byte-for-byte after remount.
+
+The filesystem block interface previously had no way to reach Astra's existing
+device `FLUSH`, so journal commit and `fsync` could report success while data
+was still volatile. Patch 0011 adds the shared durability callback, barriers
+journal records before and after the commit record, and ends cache flush with a
+device barrier. A volatile-media oracle persists only bytes exposed by those
+barriers; three successive unclean exits recover the committed file in a fresh
+process, pass byte verification, and remain `e2fsck -fn` clean.
+
+Patch 0012 closes a shared read-cache bypass in `ext4_fread`: contiguous
+full-block runs kept their one coalesced cold device request but were never
+published into the coherent cache. Every external command launch therefore
+reread the same executable blocks. The common block helper now serves a fully
+warm run without device I/O and publishes a cold coalesced run while preserving
+newer cached or dirty bytes. A 12 KiB cold/read-seek/reread oracle requires the
+second read to issue zero physical I/O; raw, partitioned, ASan/UBSan, TSan, and
+MC68030 builds pass.
+
+The physical Arty checkpoint now passes. `fsphys/barrier.txt` was written and
+read through the real Terminal, then the exact QEMU process was killed while
+the volume was mounted. The 64 MiB dirty image has SHA-256
+`6580c1fa178cb4df8e05bd568297c1a11b16643191814f295e9f50feadbc1362`.
+Astra replayed its journal on the TG68K.C MC68030 and the physical framebuffer
+returned the exact 19 bytes `durable-data-68030`. Independently, e2fsck replayed
+a copy of that same journal, a second `e2fsck -fn` was clean, and debugfs read
+the same bytes from `/work/fsphys/barrier.txt`.
+
+That recovery exposed an unrelated 10-second supervisor readiness deadline:
+the events service crossed it by about 20 ms after storage replay. Required
+service readiness, VFS replies, and event-control replies now wait for success
+or actual peer closure instead of guessing that elapsed time means peer death.
+The lease block backend also no longer replaces a caller's explicit no-deadline
+request with a private two-second timeout; it honors the caller's absolute
+deadline or waits indefinitely when the caller supplied zero.
+
+The exact 263,532-byte ROM (SHA-256
+`3a3a7305459122d39cc94217f62bafc2cde16d3afb3c58d08d1b1c685b733162`)
+passes the complete 73-command QEMU gate and is installed on Arty. Its physical
+boot reports the correct host time, 512 KiB ROM aperture, POST PASS, journal
+recovery, and stage 8. A cold `which status` issued two requests / 24 sectors;
+its immediate warm launch issued none. The earlier reported warm `cat` median
+is withdrawn: its named file was absent, so it measured the error path rather
+than a successful file read.
+
+Longer physical command stress then exposed a capacity-ordering bug. VFS could
+retain sessions up to its process-derived session capacity while the storage
+process exhausted its smaller kernel handle table first. Dead sessions were
+reaped only at the unreachable session ceiling. The shared port transport now
+reacts to the kernel's actual `RESOURCE_LIMIT`: it reaps every dead idle session
+and retries the same queued receive; if nothing is reclaimable, the real limit
+remains visible. The focused regression, complete VFS tests, ASan/UBSan,
+analyzer, MC68030 storage build, and complete 73-command QEMU gate pass. The
+qualified image SHA-256 is
+`94954d8f25320ce1ce6ca96c4293b4b1a53e99e8ef0ca758b1cd400b52b6d292`;
+physical pressure qualification is pending because Arty went offline before
+the image transfer. No cache performance claim is accepted until that gate
+passes with successful file output and a live storage service afterward.
+
+## Arty cold-boot NTP and blank splash (2026-08-25)
+
+An Arty power cycle exposed that the Linux host returned to its March 2018
+build epoch. The launcher correctly rejected that stale clock, but the old
+`S04astra-firstboot` path had already presented the splash and exited after
+starting the one-shot launcher, leaving the machine apparently hung. The Arty
+image also lacked an NTP client and `/etc/resolv.conf`.
+
+The ARM runtime now includes a small SNTP client that validates the selected
+server, NTP version/mode/stratum, leap state, and echoed request timestamp,
+accounts for half the measured round trip, and handles the 2036 NTP era. Astra
+firstboot moved from pre-network `rcS` to runlevel 5 immediately after
+networking. It retries NTP indefinitely with a bounded one-record diagnostic
+log and starts HDMI, the blank splash, and QEMU only after the Linux epoch is
+valid. The release build now always produces the RGB565 splash from the
+canonical text-free source, and deployment rejects any other splash hash.
+
+The physical reboot gate forced Linux to `2018-03-10T00:00:00Z` before reset.
+After reboot it synchronized from `pool.ntp.org` at epoch `1787628422`, started
+all four HDMI/Terminal/QEMU processes without intervention, and Axiom reported
+`2026-08-25T03:27:06Z, from the host`. The installed blank splash is SHA-256
+`86eb30739db77b85f4deb1915fb9cb9263ab4755ae318ffb1b7a4a95b7017ba4`
+(CRC32 `611029ee`), and the root filesystem returned read-only.
+
+## Resizable Terminal storage and rounded-blit capacity (2026-08-25)
+
+The display service already supported all eight window resize edges and
+corners, but the Terminal model still had a compiled 128-by-64 cell array and
+the integrated display gate exercised only maximize/restore. The shared cell
+model now binds caller-owned, resource-accounted storage, preserves cells when
+it is rebound, and has no compiled geometry ceiling. Terminal preallocates the
+largest cell grid the physical display can expose, so an ordinary drag changes
+logical rows and columns without allocating on each crossed cell boundary; a
+larger future display can still grow through the same charged-area path.
+
+The first real southeast-corner gate exposed a shared compositor failure at
+940x540: two rounded blits allocated full-window one-bit masks and exhausted
+the render batch data arena, killing the resident display service. The common
+rounded blitter now groups equal corner scanlines into unmasked spans. It uses
+zero batch data for rounded clipping and retains the same geometric contract.
+Render-builder failures also retain a specific reason, so a future crash names
+the exhausted arena, descriptor table, command/clip, destination, surface, or
+glyph table instead of reporting only a service status.
+
+Terminal, streams, supervisor, graphics, display, ASan/UBSan, GCC analyzer,
+and MC68030 builds pass on Beast. The integrated QEMU display gate now drags
+the live Terminal from 840x460 to 940x540, requires the terminal glyph redraw,
+and continues through maximize, restore, input, concurrent launch, close, and
+relaunch. The retained run passed with 28 render batches and a 13,058-cycle
+resize render against a 250,000-cycle budget. Physical Arty validation remains
+pending until the terminal escape/PTY checkpoint is ready for a board image.
+
 ## Resource isolation and POSIX/VFS capacity (2026-08-25)
 
 A badly behaved application can no longer spend the machine's recovery
@@ -40,7 +218,7 @@ sessions total and 12 per owner. Open-file tables grow lazily in a service-owned
 4 MiB area and give each process an equal share of the actual resulting
 capacity. Repeated HELLOs and multiple sessions cannot bypass either account.
 
-The syscall ABI is `0x00010017`. Port-message limits now come from one canonical
+The syscall ABI is `0x0001001d`. Port-message limits now come from one canonical
 header in both the kernel and NDK (16 queued messages, 1,024 inline bytes), and
 the NDK's shared-area contract matches the kernel's 4 MiB range. POSIX file and
 directory tables and the VFS/ext4 open tables grow from caller/service-owned
@@ -61,11 +239,88 @@ gate passes all 68 commands. The physical Arty candidate at
 `8a016904c2974646098e8b18bcb2fc5e496a60e9e5af46c0af770ca5713faf8b`
 and pristine installed storage SHA-256
 `f4ffc70142717d0dcc00e876b90646c6701b6ab8e5ab43aa020a0a1533af1ce5`.
+
+The POSIX heap is now a clone-private anonymous reservation rather than a
+shared area. Reserving the complete 504 MiB architectural window commits no
+frames; data and 32-bit allocator metadata commit on first touch through the
+ordinary owner quota, and decommit returns whole pages. The 2026-08-25 Beast
+QEMU checkpoint passes all 68 terminal commands with POSIX at 2.74 seconds and
+`heapbench` at the unchanged 1.37 footprint ratio in 0.67 seconds. The POSIX
+diagnostic fell from 53,436 linked bytes (12,484 BSS) to 47,648 (6,380 BSS).
+ROM SHA-256 is `557d1c14ea96ede30ea714142c5cffef8fe54eae7e91a9fea069a17f02f2a0fc`;
+the stripped POSIX diagnostic is
+`912aadc077b7814a25a22c3c146b2f8469cbe483d53f032d551689c4a178d436`.
+The shared VM layer now publishes `PROCESS_CLONE` as one rollback-safe COW
+transaction. It preserves exact clone-safe handle values, copies only the
+calling thread record, resolves the first child write one page at a time, and
+automatically transfers frame ownership when the original owner exits. Kernel
+and POSIX host gates prove waitable exit, status translation, nested-child
+cleanup, byte isolation, exact teardown, and no compiled child-count limit.
 It passed POST and stage 8 with host time `2026-08-25T00:02:59Z`, then the
 complete POSIX diagnostic with exact status zero, `ps` in 558.196 ms, and stock
 `lua -v` in 1,217.591 ms. Display submissions drained and the retained trace
 had zero wraps and zero drops. This candidate supersedes the earlier active Lua
 directory recorded below; that directory remains the rollback image.
+
+## POSIX startup, terminal readiness, and Vim baseline (2026-08-25)
+
+Ordinary POSIX programs now enter through `main(argc, argv, envp)` while native
+Astra programs retain `astra_main(startup)`. The same shell launch path packs
+both forms. The QEMU terminal gate launches the standard-main POSIX diagnostic
+as `posix -R +42 --cmd "set number" -- WORK:notes.txt`; the program verifies all
+seven strings and the terminating vector before entering raw terminal mode.
+The complete 68-command gate passes on Beast.
+
+Stream protocol 3 supplies canonical/raw input, echo, control-character state,
+EOF, and a transferable readable event used by `read`, `poll`, and `select`.
+The first integrated raw-mode read failed because event and timer handles
+advertised `TRANSFER` but had no retain callback. Event, semaphore, and timer
+handles now use the existing synchronization-object retain/release contract;
+the kernel regression closes the original handle and waits successfully on its
+rights-reduced duplicate. All kernel suites pass, and ROM SHA-256
+`681c93f1ec44231f8de09f45d11655517432b39756776a0faf391ab82ed2fd0d`
+passes the terminal gate.
+
+Upstream Vim 9.2.1001 is pinned at
+`1c32cede0afdc9351d5887e2f25977d4fb964d9f` with no source changes. Its normal,
+terminal-only configuration cross-compiles every object against Astra and the
+cross-built ncurses 6.6 terminfo library. VFS protocol 14 and
+filesystem.library ABI 1.3 now carry atomic file and directory creation modes
+plus `chmod` and `readlink`. POSIX `umask` applies at creation rather than
+racing a second metadata update. Raw and partitioned ext4 image tests read back
+a 0600 file and 0710 directory; the full-volume ENOSPC test passes. Relinking
+the unchanged Vim tree removes `umask`, `chmod`, and `readlink` from the
+unresolved set. A shared POSIX `pipe` now uses the existing charged-area ring,
+wait queue, readiness, and descriptor machinery in kernel-copy byte mode. Its
+endpoints are clone-safe, several readers/writers remain serialized correctly,
+and the 64 KiB POSIX allocation is a default rather than a kernel ceiling. The
+target diagnostic proves transfer, partial reads, duplicated-writer lifetime,
+last-writer EOF, and cleanup. The complete 68-command QEMU gate passes on
+Beast, including the exact Vim-shaped argument vector and pipe path. The ROM
+is SHA-256 `ffa4b3bcee0d3bedf64fa34c4571a29163bf88acf11589a1dbc051dde91083e6`;
+the stripped POSIX diagnostic is
+`dacef7f73da452330e0aecb839d312455656782f310789da55ecfe9a3c5457f1`.
+
+Relinking unchanged Vim now has no unresolved Astra/POSIX symbol. Atomic
+`execve` uses the same ELF acceptance and startup publisher as launch, prepares
+the replacement address space before commit, and preserves POSIX descriptors,
+duplicate open-description sharing, `FD_CLOEXEC`, VFS sessions, cwd, umask,
+environment, and exact argv without any Vim-local replacement. `sigaction`, `sigpending`,
+`sigprocmask`, `setitimer`, and `getitimer` now use a kernel-scheduled signal
+upcall on a registered writable stack. Timer expiry wakes a blocked wait,
+delivers `SIGALRM`, and `SIGNAL_RETURN` restores the exact interrupted context.
+The full kernel, runtime, POSIX, sanitizer, and analyzer gates pass on Beast;
+relinking unchanged Vim proves every signal/timer reference is resolved.
+
+The retained Beast checkpoint links pristine Vim at 2,209,042 loaded bytes
+(2,014,622 text, 137,308 data, 57,112 BSS) and installs a 2.1 MiB stripped
+image. The 73-command QEMU gate invokes it as
+`vim -Nu NONE -n -es -c "call setline(1,'after')" -c wq -- WORK:vim-args.txt`,
+requires exit status zero, and reads the edited named file back as `after`.
+The complete kernel suite, runtime and POSIX host gates, MC68030 cross-build,
+two-boot terminal gate, and boot payload checks pass. Maximum existing LZ4
+compression reduced the splash without changing a decoded byte; the fixed
+256 KiB ROM now has 260 bytes free.
 
 ## Lua, host-time enforcement, and 4 MiB application transport (2026-08-24)
 
@@ -76,7 +331,7 @@ text, data, and BSS occupy 248,324 bytes at load time (234,538 text, 328 data,
 environment, files, rename, time, and `os.execute`; no Lua-private fast path or
 compatibility layer exists.
 
-The syscall ABI is `0x00010017`, startup ABI is 3, the complete environment is
+The syscall ABI is `0x0001001d`, startup ABI is 4, the complete environment is
 packed into the actual 4 KiB startup page, and shared areas/VFS bulk transfers
 are 4 MiB. Four MiB is one complete MC68030 page table and is the largest
 atomic range handled by the current shared-map primitive. Process images are

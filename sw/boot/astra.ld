@@ -2,7 +2,7 @@
  *
  * Physical decode:
  *   SDRAM 0x00000000..0x01FFFFFF (32 MB)     — general RAM
- *   ROM   0xFFE00000..0xFFE3FFFF (256 KB)    — boot ROM
+ *   ROM   0xFFE00000..0xFFE7FFFF (512 KB)    — hosted boot ROM
  *   MMIO  0xFFF00000..0xFFFFFFFF             — chipset (Vesta/Astraea/Vega/Lyra)
  *
  * At reset the ROM overlay maps this ROM to $0 so the CPU fetches the initial
@@ -15,7 +15,7 @@ OUTPUT_ARCH(m68k)
 ENTRY(_start)
 
 MEMORY {
-  ROM (rx)  : ORIGIN = 0xFFE00000, LENGTH = 256K
+  ROM (rx)  : ORIGIN = 0xFFE00000, LENGTH = 512K
   RAM (rwx) : ORIGIN = 0x00000000, LENGTH = 32M
 }
 

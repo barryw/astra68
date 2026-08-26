@@ -93,7 +93,7 @@ SCRIPT = [
     # back: `mkdir` is a program now and says nothing when it works, so a
     # needle that matched the typed line would have passed whether the
     # directory was made or not. `ls` on the next line is what proves it was.
-    ("mkdir proto", "mkdir proto"),
+    ("mkdir proto", "finished with status 0"),
     ("write hello.txt via the protocol", "hello.txt"),
     ("ls", "proto/"),
     # `cd` and then bare names, which is the whole reason a launched program
@@ -227,7 +227,7 @@ SCRIPT = [
     # getcwd, and a heap. It reports by exit status rather than by text, so a
     # zero here is thirty-odd separate checks and a non-zero one names the step
     # -- see the enum at the top of `commands/posix/posix.c`.
-    ("posix", "posix"),
+    ('posix -R +42 --cmd "set number" -- WORK:notes.txt', "POSIX RAW PASS"),
     ("echo $?", "0"),
     # Stock Lua, including the shared POSIX paths it depends on rather than a
     # command-private compatibility layer.
@@ -290,6 +290,15 @@ SCRIPT = [
     # A builtin still refuses an environment, and says so rather than dropping
     # the name.
     ("A=1 pwd", "cannot be redirected or given an environment"),
+]
+
+VIM_SCRIPT = [
+    ("write vim-args.txt before", "vim-args.txt"),
+    ("vim -Nu NONE -n -es -c \"call setline(1,'after')\" -c wq -- "
+     "WORK:vim-args.txt", "finished with status 0"),
+    ("echo $?", "0"),
+    ("cat vim-args.txt", "after"),
+    ("rm vim-args.txt", "rm vim-args.txt"),
 ]
 
 # What a person waits for: Enter, to the answer on the screen.
@@ -459,6 +468,9 @@ class Machine:
         self.qmp = Qmp(self.qmp_path)
         self.names = trace_decode.kernel_event_names(
             os.path.join(ROOT, "sw/kernel/trace.h"))
+        self.catalog = trace_decode.load_catalogs([os.path.join(
+            ROOT, "sw/userspace", "supervisor", "build", "m68k",
+            "astra_supervisor.elf")])
 
     def _pump(self):
         for line in self.process.stdout:
@@ -478,6 +490,16 @@ class Machine:
             if marker in line:
                 return True
         return False
+
+    def recent_serial(self):
+        while True:
+            try:
+                line = self.serial.get_nowait()
+            except queue.Empty:
+                break
+            if line is not None:
+                self.log.append(line)
+        return self.log[-20:]
 
     def word(self, address):
         for token in self.qmp.monitor("xp /1xw 0x%x" % address).split():
@@ -499,7 +521,8 @@ class Machine:
         if reply and reply.strip():
             raise RuntimeError("ring unavailable: %s" % reply.strip())
         with open(self.ring_path, "rb") as handle:
-            _, rendered = trace_decode.decode(handle.read(), {}, self.names)
+            _, rendered = trace_decode.decode(handle.read(), self.catalog,
+                                               self.names)
         lines = []
         pending = ""
         highest = after
@@ -615,7 +638,7 @@ def warm_the_store(qemu, rom, image, temporary, boot_deadline,
             return False
         before = machine.sequence()
         machine.qmp.type_line("mkdir priorboot")
-        if machine.wait_for_text("priorboot", command_deadline,
+        if machine.wait_for_text("finished with status 0", command_deadline,
                                  before)[0] is None:
             print("FAIL: the boot before the run answered no command")
             return False
@@ -626,7 +649,7 @@ def warm_the_store(qemu, rom, image, temporary, boot_deadline,
 
 
 def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
-        report_timings, prepared_image, performance_only):
+        report_timings, prepared_image, performance_only, vim_gate):
     timings = []
     with tempfile.TemporaryDirectory(prefix="astra-terminal-") as temporary:
         scratch = os.path.join(temporary, "card.img")
@@ -644,12 +667,20 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         try:
             if not open_terminal(machine, boot_deadline, command_deadline):
                 return 1
-            script = PERFORMANCE_SCRIPT if performance_only else SCRIPT
+            script = (PERFORMANCE_SCRIPT if performance_only else
+                      SCRIPT + VIM_SCRIPT if vim_gate else SCRIPT)
             for line, expected in script:
                 machine.settle()
                 before = machine.sequence()
                 started = time.monotonic()
                 machine.qmp.type_line(line)
+                if line == 'posix -R +42 --cmd "set number" -- WORK:notes.txt':
+                    ready, _ = machine.wait_for_text(
+                        "POSIX RAW READY", command_deadline, before)
+                    if ready is None:
+                        print("FAIL: posix never entered raw terminal mode")
+                        return 1
+                    machine.qmp.key("up")
                 said, _ = machine.wait_for_text(expected, command_deadline,
                                                 before,
                                                 exact=line == "echo $?")
@@ -658,6 +689,9 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                     print("FAIL: %r never answered with %r" % (line, expected))
                     for text in machine.said(before)[0][-80:]:
                         print("    |%s|" % text)
+                    print("last serial lines:")
+                    for text in machine.recent_serial():
+                        print("    %s" % text)
                     return 1
                 timings.append((line, elapsed))
                 if verbose:
@@ -730,6 +764,14 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                     print("  %-38s %6.2fs" % (line, elapsed))
             print("ASTRA TERMINAL PASS %d commands" % len(timings))
             return 0
+        except (BrokenPipeError, ConnectionError, EOFError, OSError) as error:
+            status = machine.process.poll()
+            print("FAIL: QEMU exited during terminal gate: %s (status %s)" %
+                  (error, "running" if status is None else status))
+            print("last serial lines:")
+            for text in machine.recent_serial():
+                print("    %s" % text)
+            return 1
         finally:
             machine.close()
 
@@ -754,6 +796,8 @@ def main():
                         help="use an image that already contains the fixture")
     parser.add_argument("--performance-only", action="store_true",
                         help="run the command-latency budget gate")
+    parser.add_argument("--vim-gate", action="store_true",
+                        help="also run the installed Vim argument gate")
     arguments = parser.parse_args()
     global MEMORY
     MEMORY = arguments.memory
@@ -761,7 +805,7 @@ def main():
                arguments.catalog, arguments.boot_deadline,
                arguments.command_deadline, arguments.verbose,
                arguments.report_timings, arguments.prepared_image,
-               arguments.performance_only)
+               arguments.performance_only, arguments.vim_gate)
 
 
 if __name__ == "__main__":

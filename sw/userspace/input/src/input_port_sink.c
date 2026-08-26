@@ -12,14 +12,10 @@ AstraInputDeliveryResult astra_input_port_deliver(
     if (sink == NULL || sink->send == NULL || sink->send_handle == 0u ||
         event == NULL)
         return ASTRA_INPUT_DELIVERY_DEAD;
-    message.header.total_size = sizeof(message);
-    message.header.header_size = sizeof(message.header);
-    message.header.flags = 0u;
-    message.header.protocol = ASTRA_INPUT_SERVICE_PROTOCOL;
-    message.header.protocol_version = ASTRA_INPUT_SERVICE_VERSION;
-    message.header.reserved = 0u;
-    message.header.operation = ASTRA_INPUT_OPERATION_EVENT;
-    message.header.transaction_id = event->sequence;
+    astra_message_header_set(&message.header, sizeof(message),
+                             ASTRA_INPUT_SERVICE_PROTOCOL,
+                             ASTRA_INPUT_SERVICE_VERSION,
+                             ASTRA_INPUT_OPERATION_EVENT, event->sequence);
     message.event = *event;
     result = sink->send(sink->context, sink->send_handle, &message,
                         sizeof(message));

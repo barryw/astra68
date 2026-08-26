@@ -24,14 +24,10 @@ ASTRA_PROGRAM("hello", 1, 0, 0, "Barry Walker",
 int
 astra_main(const AstraStartupInfo *startup)
 {
-    const uint32_t *argv = NULL;
     char formatted[64];
     int printed;
 
     astra_posix_start(startup);
-    if (startup != NULL && startup->argc != 0u &&
-        startup->argv_address != 0u)
-        argv = (const uint32_t *)(uintptr_t)startup->argv_address;
 
     /*
      * The verdict is the exit status, not the text, because the text lands on
@@ -55,10 +51,10 @@ astra_main(const AstraStartupInfo *startup)
     printf("hello from picolibc on m68030\n");
     /* The three things hand-rolled formatting cannot do, in one line. */
     printf("width %s\n", formatted);
-    if (argv != NULL)
+    if (astra_startup_validate(startup))
         for (uint32_t index = 0u; index < startup->argc; ++index)
             printf("argv[%u] = %s\n", index,
-                   (const char *)(uintptr_t)argv[index]);
+                   astra_startup_argument(startup, index));
     if (fflush(stdout) != 0)
         return 12;
     return 0;

@@ -39,11 +39,9 @@
  * long-running program's footprint follow its live set back down instead of
  * ratcheting.
  *
- * Finding the run from a pointer is a page-index table rather than a header on
- * every block. 1024 pages of heap is a 2 KiB table, which buys back the 8 or 16
- * bytes a header would have cost on every one of the many small objects this
- * is built for -- and on a 16-byte class a header is not overhead, it is the
- * allocation.
+ * Finding the run from a pointer uses page-index metadata stored at the front
+ * of the private reservation. Its pages commit on demand with the heap, so
+ * the table follows the address space rather than bloating every executable.
  */
 
 #include <astra/runtime.h>
@@ -53,12 +51,12 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "heap_internal.h"
+
 extern void *sbrk(intptr_t increment);
 
 #define PAGE_BYTES 4096u
 #define PAGE_SHIFT 12u
-#define HEAP_PAGES (ASTRA_AREA_SIZE_MAX / PAGE_BYTES)
-#define RUN_HEADER_BYTES 32u
 /* Above this a request takes whole pages of its own. */
 #define LARGE_THRESHOLD 2048u
 #define RUN_PAGES_MAX 8u
@@ -86,19 +84,21 @@ typedef struct AstraRun {
     uint16_t class_index;
     uint16_t capacity;
     uint16_t free_count;
-    uint16_t pages;
+    uint32_t pages;
 } AstraRun;
 
-_Static_assert(sizeof(AstraRun) <= RUN_HEADER_BYTES, "run header size");
+#define RUN_HEADER_BYTES \
+    ((uint32_t)((sizeof(AstraRun) + 7u) & ~(size_t)7u))
 
 static uint8_t *heap_base;
 static uint32_t heap_pages_taken;
+static uint32_t heap_page_count;
 /*
  * page_run[p] is one more than the index of the first page of the run that
  * page p belongs to; zero means the page belongs to no run. The bias is what
  * lets zero mean absent without a second array.
  */
-static uint16_t page_run[HEAP_PAGES];
+static uint32_t *page_run;
 static AstraRun *class_runs[CLASS_COUNT];
 /*
  * The free extents, which are how released runs come back.
@@ -106,8 +106,8 @@ static AstraRun *class_runs[CLASS_COUNT];
  * Rounding a run up to a power of two pages was the first shape here and it
  * was wrong twice: it refused anything over eight pages outright, and it
  * would have spent 128 KiB of a 512-page reservation on a 64 KiB buffer.
- * Address space is the scarce thing inside one area -- the frames are already
- * handled, because an untouched page of a reservation costs none -- so
+ * Address space is the scarce thing inside the reservation -- frames are
+ * already handled, because an untouched page costs none -- so
  * extents are exact, and adjacent ones coalesce on release so a long-running
  * program does not saw its own reservation into unusable pieces.
  *
@@ -115,9 +115,9 @@ static AstraRun *class_runs[CLASS_COUNT];
  * because a free extent has been decommitted: reading a link out of it would
  * fault a frame back in to find out where the next free one is.
  */
-static uint16_t extent_next[HEAP_PAGES];
-static uint16_t extent_pages[HEAP_PAGES];
-static uint16_t free_extent_head;
+static uint32_t *extent_next;
+static uint32_t *extent_pages;
+static uint32_t free_extent_head;
 
 static AstraRun *
 run_at_page(uint32_t page)
@@ -128,21 +128,23 @@ run_at_page(uint32_t page)
 static int
 heap_ready(void)
 {
-    void *base;
+    AstraPosixHeapLayout layout;
 
     if (heap_base != NULL)
         return 1;
-    base = sbrk(0);
-    if (base == (void *)-1)
+    if (!astra_posix_heap_layout(&layout))
         return 0;
     /*
-     * The heap area starts on a 4 MiB slot boundary and nothing has taken
-     * anything from it yet, so this is page aligned; every request below is a
-     * whole number of pages, which keeps it that way.
+     * The VM reservation is root-slot aligned; every request below is a whole
+     * number of pages, which keeps it page aligned.
      */
-    if (((uintptr_t)base & (PAGE_BYTES - 1u)) != 0u)
+    if (((uintptr_t)layout.base & (PAGE_BYTES - 1u)) != 0u)
         return 0;
-    heap_base = base;
+    heap_base = layout.base;
+    heap_page_count = layout.page_count;
+    page_run = layout.page_run;
+    extent_next = layout.extent_next;
+    extent_pages = layout.extent_pages;
     free_extent_head = 0u;
     return 1;
 }
@@ -151,8 +153,8 @@ heap_ready(void)
 static AstraRun *
 take_pages(uint32_t pages)
 {
-    uint16_t previous = 0u;
-    uint16_t current = free_extent_head;
+    uint32_t previous = 0u;
+    uint32_t current = free_extent_head;
     void *fresh;
 
     while (current != 0u) {
@@ -160,15 +162,15 @@ take_pages(uint32_t pages)
 
         if (extent_pages[page] >= pages) {
             uint32_t remainder = extent_pages[page] - pages;
-            uint16_t next = extent_next[page];
+            uint32_t next = extent_next[page];
 
             /* Split, and leave the tail free rather than handing it over. */
             if (remainder != 0u) {
                 uint32_t rest = page + pages;
 
-                extent_pages[rest] = (uint16_t)remainder;
+                extent_pages[rest] = remainder;
                 extent_next[rest] = next;
-                next = (uint16_t)(rest + 1u);
+                next = rest + 1u;
             }
             if (previous == 0u)
                 free_extent_head = next;
@@ -179,7 +181,7 @@ take_pages(uint32_t pages)
         previous = current;
         current = extent_next[page];
     }
-    if (heap_pages_taken + pages > HEAP_PAGES)
+    if (pages > heap_page_count - heap_pages_taken)
         return NULL;
     fresh = sbrk((intptr_t)(pages * PAGE_BYTES));
     if (fresh == (void *)-1)
@@ -199,8 +201,8 @@ give_pages(AstraRun *run)
      */
     uint32_t pages = run->pages;
     uint32_t released = 0u;
-    uint16_t previous = 0u;
-    uint16_t current = free_extent_head;
+    uint32_t previous = 0u;
+    uint32_t current = free_extent_head;
 
     for (uint32_t index = 0u; index < pages; ++index)
         page_run[page + index] = 0u;
@@ -210,30 +212,28 @@ give_pages(AstraRun *run)
      * wants. A failure here is not fatal -- the pages simply stay committed
      * and the extent is still reusable -- so it is not worth a branch.
      */
-    (void)astra_rt_area_decommit(run, pages * PAGE_BYTES, &released);
+    (void)astra_rt_private_decommit(run, pages * PAGE_BYTES, &released);
 
     /* Sorted by page, so the two neighbours are the two this can join. */
     while (current != 0u && (uint32_t)current - 1u < page) {
         previous = current;
         current = extent_next[(uint32_t)current - 1u];
     }
-    extent_pages[page] = (uint16_t)pages;
+    extent_pages[page] = pages;
     extent_next[page] = current;
     if (previous == 0u)
-        free_extent_head = (uint16_t)(page + 1u);
+        free_extent_head = page + 1u;
     else
-        extent_next[(uint32_t)previous - 1u] = (uint16_t)(page + 1u);
+        extent_next[(uint32_t)previous - 1u] = page + 1u;
     if (current != 0u && page + pages == (uint32_t)current - 1u) {
-        extent_pages[page] =
-            (uint16_t)(extent_pages[page] + extent_pages[(uint32_t)current - 1u]);
+        extent_pages[page] += extent_pages[(uint32_t)current - 1u];
         extent_next[page] = extent_next[(uint32_t)current - 1u];
     }
     if (previous != 0u) {
         uint32_t before = (uint32_t)previous - 1u;
 
         if (before + extent_pages[before] == page) {
-            extent_pages[before] =
-                (uint16_t)(extent_pages[before] + extent_pages[page]);
+            extent_pages[before] += extent_pages[page];
             extent_next[before] = extent_next[page];
         }
     }
@@ -260,7 +260,7 @@ new_run(uint32_t class_index)
     run->class_index = (uint16_t)class_index;
     run->capacity = (uint16_t)capacity;
     run->free_count = (uint16_t)capacity;
-    run->pages = (uint16_t)pages;
+    run->pages = pages;
     run->free_head = NULL;
     /*
      * Threaded back to front so the list hands out ascending addresses, which
@@ -275,7 +275,7 @@ new_run(uint32_t class_index)
     }
     page = (uint32_t)(((uint8_t *)run - heap_base) >> PAGE_SHIFT);
     for (uint32_t index = 0u; index < pages; ++index)
-        page_run[page + index] = (uint16_t)(page + 1u);
+        page_run[page + index] = page + 1u;
     run->next = class_runs[class_index];
     run->previous = NULL;
     if (run->next != NULL)
@@ -301,12 +301,12 @@ static AstraRun *
 run_for(const void *pointer)
 {
     uint32_t page;
-    uint16_t first;
+    uint32_t first;
 
     if (heap_base == NULL || (const uint8_t *)pointer < heap_base)
         return NULL;
     page = (uint32_t)(((const uint8_t *)pointer - heap_base) >> PAGE_SHIFT);
-    if (page >= HEAP_PAGES)
+    if (page >= heap_page_count)
         return NULL;
     first = page_run[page];
     if (first == 0u)
@@ -341,7 +341,7 @@ malloc(size_t size)
         uint32_t pages;
         uint32_t page;
 
-        if (wanted > (uint64_t)HEAP_PAGES * PAGE_BYTES)
+        if (wanted > (uint64_t)heap_page_count * PAGE_BYTES)
             return NULL;
         pages = (uint32_t)((wanted + PAGE_BYTES - 1u) >> PAGE_SHIFT);
         run = take_pages(pages);
@@ -350,13 +350,13 @@ malloc(size_t size)
         run->class_index = CLASS_LARGE;
         run->capacity = 0u;
         run->free_count = 0u;
-        run->pages = (uint16_t)pages;
+        run->pages = pages;
         run->free_head = NULL;
         run->next = NULL;
         run->previous = NULL;
         page = (uint32_t)(((uint8_t *)run - heap_base) >> PAGE_SHIFT);
         for (uint32_t index = 0u; index < pages; ++index)
-            page_run[page + index] = (uint16_t)(page + 1u);
+            page_run[page + index] = page + 1u;
         return (uint8_t *)run + RUN_HEADER_BYTES;
     }
     class_index = class_for(size);

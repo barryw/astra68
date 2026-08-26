@@ -138,6 +138,43 @@ static void test_cloneable_rights_reduction_and_lifetime(void)
            KERNEL_HANDLE_INVALID_ARGUMENT);
 }
 
+static void test_table_clone_preserves_handle_values(void)
+{
+    KernelHandleTable source_table;
+    KernelHandleTable destination_table;
+    CloneState state = {1u, 0u, 0u, false};
+    ReleaseState released = {0u, 0u};
+    KernelHandle private_handle;
+    KernelHandle shared_handle;
+    void *object;
+
+    kernel_handle_table_init(&source_table);
+    kernel_handle_table_init(&destination_table);
+    assert(kernel_handle_table_set_owner(&source_table, 71u));
+    assert(kernel_handle_table_set_owner(&destination_table, 72u));
+    assert(kernel_handle_install(
+               &source_table, KERNEL_OBJECT_DEVICE, RIGHT_QUERY,
+               (void *)(uintptr_t)0x1111u, release_object, &released,
+               &private_handle) == KERNEL_HANDLE_OK);
+    assert(kernel_handle_install_cloneable(
+               &source_table, KERNEL_OBJECT_AREA, RIGHT_QUERY,
+               (void *)(uintptr_t)0x2222u, retain_clone, release_clone,
+               &state, &shared_handle) == KERNEL_HANDLE_OK);
+    assert(kernel_handle_clone_table(&source_table, &destination_table) ==
+           KERNEL_HANDLE_OK);
+    assert(kernel_handle_lookup(&destination_table, shared_handle,
+                                KERNEL_OBJECT_AREA, RIGHT_QUERY,
+                                &object) == KERNEL_HANDLE_OK);
+    assert((uintptr_t)object == 0x2222u);
+    assert(kernel_handle_lookup_any(&destination_table, private_handle, 0u,
+                                    &(KernelObjectType){0}, &object) ==
+           KERNEL_HANDLE_INVALID_HANDLE);
+    assert(state.references == 2u && state.retain_calls == 1u);
+    assert(kernel_handle_close_all(&destination_table) == 1u);
+    assert(kernel_handle_close_all(&source_table) == 2u);
+    assert(state.references == 0u && released.calls == 1u);
+}
+
 static void test_allocation_injection_preserves_authority(void)
 {
     KernelAllocationStats detached_stats;
@@ -616,6 +653,7 @@ int main(void)
     test_capacity_and_close_all();
     test_invalid_arguments();
     test_cloneable_rights_reduction_and_lifetime();
+    test_table_clone_preserves_handle_values();
     test_atomic_export_import_and_cancel();
     test_export_validation_and_rollback();
     test_destination_full_and_detached_release();

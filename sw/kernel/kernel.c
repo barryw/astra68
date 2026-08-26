@@ -140,15 +140,6 @@ static bool input_device_reset(uint32_t device_id, uint32_t generation,
            kernel_platform_input_reset();
 }
 
-static bool display_device_quiesce(uint32_t device_id, uint32_t generation,
-                                   void *context)
-{
-    (void)generation;
-    (void)context;
-    return device_id == ASTRA_DEVICE_ID_DISPLAY0 &&
-           kernel_platform_display_reset();
-}
-
 static bool display_device_reset(uint32_t device_id, uint32_t generation,
                                  void *context)
 {
@@ -180,7 +171,7 @@ static bool register_physical_devices(void)
         ASTRA_BLOCK_CAP_READ | ASTRA_BLOCK_CAP_WRITE | ASTRA_BLOCK_CAP_FLUSH
     };
 
-    display.quiesce = display_device_quiesce;
+    display.quiesce = display_device_reset;
     display.reset = display_device_reset;
     display.context = NULL;
     display.device_id = ASTRA_DEVICE_ID_DISPLAY0;
@@ -690,16 +681,6 @@ void kernel_exception_panic_classified(const void *raw_frame,
     exception_panic(raw_frame, fault);
 }
 
-static bool bytes_equal(const uint8_t *left, const uint8_t *right,
-                        uint32_t size)
-{
-    while (size-- != 0u) {
-        if (*left++ != *right++)
-            return false;
-    }
-    return true;
-}
-
 static void kernel_user_copy_selftest(void)
 {
     KernelAddressSpace *space = &user_copy_selftest_space;
@@ -731,7 +712,7 @@ static void kernel_user_copy_selftest(void)
 
     if (kernel_copy_from_user(observed, KERNEL_SELFTEST_USER_ADDRESS,
                               sizeof(observed)) != KERNEL_USER_COPY_OK ||
-        !bytes_equal(observed, expected, sizeof(observed)))
+        !kernel_bytes_equal(observed, expected, sizeof(observed)))
         kernel_panic("copy-from-user self-test failed");
 
     for (uint32_t index = 0u; index < sizeof(expected); ++index)
@@ -741,7 +722,7 @@ static void kernel_user_copy_selftest(void)
         kernel_copy_from_user(observed,
                               KERNEL_SELFTEST_USER_ADDRESS + 64u,
                               sizeof(observed)) != KERNEL_USER_COPY_OK ||
-        !bytes_equal(observed, expected, sizeof(observed)))
+        !kernel_bytes_equal(observed, expected, sizeof(observed)))
         kernel_panic("copy-to-user self-test failed");
 
     if (kernel_copy_from_user(observed,

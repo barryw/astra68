@@ -22,8 +22,8 @@ RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 EVENTS_LIB := $(EVENTS)/build/m68k/libastraevents.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
 CRT0 := $(RUNTIME)/build/m68k/crt0.o
-
-all: $(IMAGE) size
+ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(EVENTS) $(VFS)
+include ../../program.mk
 
 $(TARGET): $(OBJECT) $(CRT0) $(EVENTS_LIB) $(VFS_LIB) $(RUNTIME_LIB) \
 		$(RUNTIME)/astra_user.ld
@@ -41,8 +41,13 @@ $(OBJECT): main.c
 size: $(IMAGE)
 	$(SIZE) $(IMAGE)
 
-test sanitize analyze:
+test sanitize:
 	@true
+
+analyze:
+	@mkdir -p build/analyzer
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
+		-c main.c -o build/analyzer/main.o
 
 clean:
 	rm -rf build

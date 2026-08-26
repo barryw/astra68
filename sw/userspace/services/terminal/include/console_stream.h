@@ -1,5 +1,5 @@
-#ifndef ASTRA_SUPERVISOR_CONSOLE_STREAM_H
-#define ASTRA_SUPERVISOR_CONSOLE_STREAM_H
+#ifndef ASTRA_TERMINAL_CONSOLE_STREAM_H
+#define ASTRA_TERMINAL_CONSOLE_STREAM_H
 
 #include <stdint.h>
 
@@ -12,7 +12,7 @@
  * The supervisor owns the screen and the keyboard, so it is where a launched
  * program's STDOUT arrives and where its STDIN comes from. Two ports: one that
  * takes text and renders it into the terminal the shell already owns, and one
- * that hands out what the line editor has finished with.
+ * that hands out canonical lines or lossless raw key bytes.
  *
  * Both move out of this process the day the terminal service does, and no
  * client changes when they do -- which is the point of them being ports.
@@ -26,6 +26,7 @@ int console_stream_ready(void);
 
 /* Receive endpoint used to sleep until a child writes terminal output. */
 uint32_t console_stream_wait_handle(void);
+uint32_t console_stream_input_wait_handle(void);
 
 /*
  * The send handles a launch grants a child. Both point at the one sink today,
@@ -34,6 +35,19 @@ uint32_t console_stream_wait_handle(void);
 uint32_t console_stream_stdout(void);
 uint32_t console_stream_stderr(void);
 uint32_t console_stream_stdin(void);
+
+/* Publishes a live window-size change through the same terminal endpoint. */
+void console_stream_resize(uint32_t columns, uint32_t rows,
+                           uint32_t pixel_width, uint32_t pixel_height);
+
+/* Saves/restores the controlling terminal around a foreground child. */
+void console_stream_tty_state(AstraTtyState *state);
+void console_stream_tty_restore(const AstraTtyState *state);
+
+/* Feeds one translated key through the terminal's shared line discipline. */
+int console_stream_key(uint32_t key);
+int console_stream_terminal_reply(void *context, const uint8_t *bytes,
+                                  uint32_t length);
 
 /*
  * Points a launched program's STDOUT somewhere other than the terminal.
@@ -66,14 +80,7 @@ int console_stream_redirected(void);
  */
 uint32_t console_stream_redirect_wait_handle(void);
 
-/*
- * Offers a finished line to whatever is reading STDIN, and returns how many
- * bytes were taken. None is the ordinary answer while nothing is reading or
- * while the previous line has not been collected.
- */
-uint32_t console_stream_offer(const uint8_t *bytes, uint32_t length);
-
-/* Non-zero while a line is waiting to be read. */
+/* Non-zero while input is waiting to be read. */
 int console_stream_pending(void);
 
 /*

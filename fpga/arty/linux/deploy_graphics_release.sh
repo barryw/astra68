@@ -8,6 +8,7 @@ ssh=${SSH:-ssh}
 scp=${SCP:-scp}
 expected_active_boot=${ASTRA_ACTIVE_BOOT_SHA256:-b88b142cc4624ea70dafc65b0aec900d506bcf17f90fc1c7ea6f5f834d8098a5}
 expected_active_fit=${ASTRA_ACTIVE_FIT_SHA256:-e9ef016f059cb3bc71138edf2a5ae47646a0e11b3dab3b81f7362f592b97b542}
+expected_splash=${ASTRA_SPLASH_SHA256:-86eb30739db77b85f4deb1915fb9cb9263ab4755ae318ffb1b7a4a95b7017ba4}
 
 boot="$release_dir/BOOT.BIN"
 fit="$release_dir/image.ub"
@@ -22,10 +23,13 @@ splash="$release_dir/astra_boot_splash.rgb565"
 chip_reset="$script_dir/astra_chip_reset.sh"
 terminal_start="$script_dir/astra_terminal_start.sh"
 firstboot="$script_dir/rootfs-overlay/etc/init.d/astra-firstboot"
+time_sync="$release_dir/astra-time-sync"
+resolv="$script_dir/rootfs-overlay/etc/resolv.conf"
 
 for file in "$boot" "$fit" "$loader" "$status_tool" "$sprite_tool" \
     "$render_tool" "$copper_tool" "$audio_tool" "$hdmi_link" "$splash" \
-    "$chip_reset" "$terminal_start" "$firstboot"; do
+    "$chip_reset" "$terminal_start" "$firstboot" "$time_sync" \
+    "$resolv"; do
     test -s "$file"
 done
 
@@ -43,8 +47,16 @@ copper_tool_hash=$(sha256 "$copper_tool")
 audio_tool_hash=$(sha256 "$audio_tool")
 hdmi_link_hash=$(sha256 "$hdmi_link")
 splash_hash=$(sha256 "$splash")
+if [ "$splash_hash" != "$expected_splash" ]; then
+    echo "refusing nonblank or unqualified boot splash: $splash" >&2
+    echo "expected $expected_splash" >&2
+    echo "actual   $splash_hash" >&2
+    exit 1
+fi
 chip_reset_hash=$(sha256 "$chip_reset")
 terminal_start_hash=$(sha256 "$terminal_start")
+time_sync_hash=$(sha256 "$time_sync")
+resolv_hash=$(sha256 "$resolv")
 release_id=${boot_hash:0:12}
 stage="/data/astra/deploy/graphics-$release_id"
 
@@ -62,6 +74,8 @@ stage="/data/astra/deploy/graphics-$release_id"
 "$scp" "$chip_reset" "$board:$stage/astra-chip-reset"
 "$scp" "$terminal_start" "$board:$stage/astra-terminal-start"
 "$scp" "$firstboot" "$board:$stage/astra-firstboot"
+"$scp" "$time_sync" "$board:$stage/astra-time-sync"
+"$scp" "$resolv" "$board:$stage/resolv.conf"
 
 "$ssh" "$board" sh -s -- \
     "$stage" \
@@ -69,7 +83,7 @@ stage="/data/astra/deploy/graphics-$release_id"
     "$boot_hash" "$fit_hash" "$loader_hash" "$status_tool_hash" \
     "$sprite_tool_hash" "$render_tool_hash" "$copper_tool_hash" \
     "$audio_tool_hash" "$hdmi_link_hash" "$splash_hash" "$chip_reset_hash" \
-    "$terminal_start_hash" <<'REMOTE'
+    "$terminal_start_hash" "$time_sync_hash" "$resolv_hash" <<'REMOTE'
 set -eu
 
 stage=$1
@@ -87,6 +101,8 @@ hdmi_link_hash=${12}
 splash_hash=${13}
 chip_reset_hash=${14}
 terminal_start_hash=${15}
+time_sync_hash=${16}
+resolv_hash=${17}
 fat=/run/media/boot-mmcblk0p1
 root_writable=0
 
@@ -122,6 +138,8 @@ check_hash "$hdmi_link_hash" "$stage/astra-hdmi-link"
 check_hash "$splash_hash" "$stage/astra_boot_splash.rgb565"
 check_hash "$chip_reset_hash" "$stage/astra-chip-reset"
 check_hash "$terminal_start_hash" "$stage/astra-terminal-start"
+check_hash "$time_sync_hash" "$stage/astra-time-sync"
+check_hash "$resolv_hash" "$stage/resolv.conf"
 check_hash "$expected_active_boot" "$fat/BOOT.BIN"
 check_hash "$expected_active_fit" "$fat/image.ub"
 
@@ -164,6 +182,9 @@ cp "$stage/astra-terminal-start" /data/astra/bin/astra-terminal-start.new
 chmod 0755 /data/astra/bin/astra-terminal-start.new
 mv /data/astra/bin/astra-terminal-start.new \
    /data/astra/bin/astra-terminal-start
+cp "$stage/astra-time-sync" /data/astra/bin/astra-time-sync.new
+chmod 0755 /data/astra/bin/astra-time-sync.new
+mv /data/astra/bin/astra-time-sync.new /data/astra/bin/astra-time-sync
 check_hash "$loader_hash" /data/astra/bin/astra-graphics-boot
 check_hash "$status_tool_hash" /data/astra/bin/astra-boot-status
 check_hash "$sprite_tool_hash" /data/astra/bin/astra-sprite-certify
@@ -174,12 +195,17 @@ check_hash "$hdmi_link_hash" /data/astra/bin/astra-hdmi-link
 check_hash "$splash_hash" /data/astra/assets/astra_boot_splash.rgb565
 check_hash "$chip_reset_hash" /data/astra/bin/astra-chip-reset
 check_hash "$terminal_start_hash" /data/astra/bin/astra-terminal-start
+check_hash "$time_sync_hash" /data/astra/bin/astra-time-sync
 
 mount -o remount,rw /
 root_writable=1
 cp "$stage/astra-firstboot" /etc/init.d/astra-firstboot.new
 chmod 0755 /etc/init.d/astra-firstboot.new
 mv /etc/init.d/astra-firstboot.new /etc/init.d/astra-firstboot
+cp "$stage/resolv.conf" /etc/resolv.conf
+check_hash "$resolv_hash" /etc/resolv.conf
+ln -sf ../init.d/astra-firstboot /etc/rc5.d/S02astra-firstboot
+rm -f /etc/rcS.d/S03astra-firstboot /etc/rcS.d/S04astra-firstboot
 sync
 mount -o remount,ro /
 root_writable=0

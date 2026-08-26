@@ -103,6 +103,11 @@ int astra_vfs_port_quota_storage(uint32_t element_size, void **storage,
  * else here is one -- the supervisor serves its own children, so a service that
  * blocked in its own receive would stop the child it is serving.
  */
+typedef struct AstraVfsPortWorker {
+    AstraVfsRequestMessage incoming;
+    AstraVfsReplyMessage outgoing;
+} AstraVfsPortWorker;
+
 typedef struct AstraVfsPortService {
     uint32_t receive;
     AstraVfsService *service;
@@ -121,13 +126,27 @@ typedef struct AstraVfsPortService {
     uint32_t area_handles[ASTRA_VFS_SESSION_MAX];
     uint8_t *area_addresses[ASTRA_VFS_SESSION_MAX];
     uint32_t area_sizes[ASTRA_VFS_SESSION_MAX];
+    uint16_t reply_references[ASTRA_VFS_SESSION_MAX];
+    uint8_t reply_closing[ASTRA_VFS_SESSION_MAX];
+    /* Scratch for the single-thread pump adapter. Real workers own theirs. */
+    AstraVfsPortWorker adapter_worker;
+    AstraVfsStateAcquire state_acquire;
+    AstraVfsStateRelease state_release;
+    void *state_lock_context;
 } AstraVfsPortService;
 
 int astra_vfs_port_service_init(AstraVfsPortService *host, uint32_t receive,
                                 AstraVfsService *service);
+int astra_vfs_port_service_set_state_lock(AstraVfsPortService *host,
+                                          AstraVfsStateAcquire acquire,
+                                          AstraVfsStateRelease release,
+                                          void *context);
 
 /* Handles at most `budget` requests and returns how many it answered. */
 uint32_t astra_vfs_port_service_pump(AstraVfsPortService *host,
                                      uint32_t budget);
+uint32_t astra_vfs_port_service_worker_pump(AstraVfsPortService *host,
+                                            AstraVfsPortWorker *worker,
+                                            uint32_t budget);
 
 #endif

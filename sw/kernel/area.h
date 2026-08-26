@@ -186,6 +186,8 @@ KernelAreaStatus kernel_area_unmap(uint32_t process_id,
 KernelAreaStatus kernel_area_process_died(uint32_t process_id,
                                           uint32_t *closed_areas,
                                           uint32_t *revoked_mappings);
+KernelAreaStatus kernel_area_unmap_process(uint32_t process_id,
+                                           uint32_t *unmapped);
 KernelAreaStatus kernel_area_write(KernelArea *area, uint32_t offset,
                                    const void *source, uint32_t size);
 KernelAreaStatus kernel_area_read(const KernelArea *area, uint32_t offset,

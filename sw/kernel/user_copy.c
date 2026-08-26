@@ -64,26 +64,39 @@ static void end_copy(void)
 }
 
 /*
- * A stack page the thread has not reached yet is the one bad address that is
- * not an error: the user never faulted on it, because the kernel touched it
- * first on the user's behalf. Growing and running the copy again is what the
- * user's own access would have got from the fault handler.
+ * A grow-on-touch page the thread has not reached yet is the one bad address
+ * that is not an error: the kernel touched it first on the user's behalf.
+ * Committing and running the copy again is what the user's own access would
+ * have got from the fault handler.
  *
  * The copy restarts from the beginning rather than resuming. Both directions
  * are idempotent over the same bytes, and one attempt is enough because growth
- * commits the whole span below the address at once, so a second failure is a
- * real bad address.
+ * commits the complete range, so a second failure is a real bad address.
  */
-static bool grew_for_copy(int status, uint32_t user_address, uint32_t size)
+static bool grew_for_copy(int status, uint32_t user_address, uint32_t size,
+                          bool write)
 {
 #if defined(KERNEL_USER_COPY_HOST_TEST)
     (void)status;
     (void)user_address;
     (void)size;
+    (void)write;
     return false;
 #else
     return status == KERNEL_USER_COPY_BAD_ADDRESS &&
-           kernel_process_commit_user_stack(user_address, size);
+           kernel_process_prepare_user_copy(user_address, size, write);
+#endif
+}
+
+static void prepare_growable_range(uint32_t user_address, uint32_t size,
+                                   bool write)
+{
+#if defined(KERNEL_USER_COPY_HOST_TEST)
+    (void)user_address;
+    (void)size;
+    (void)write;
+#else
+    (void)kernel_process_prepare_user_copy(user_address, size, write);
 #endif
 }
 
@@ -97,11 +110,12 @@ int kernel_copy_from_user(void *kernel_destination, uint32_t user_source,
         return KERNEL_USER_COPY_OK;
     if (kernel_destination == NULL)
         return KERNEL_USER_COPY_INVALID_ARGUMENT;
+    prepare_growable_range(user_source, size, false);
     status = begin_copy(user_source, size, KERNEL_USER_COPY_FROM_USER, &end);
     if (status != KERNEL_USER_COPY_OK)
         return status;
     status = kernel_user_copy_from_asm(kernel_destination, user_source, size);
-    if (grew_for_copy(status, user_source, size))
+    if (grew_for_copy(status, user_source, size, false))
         status = kernel_user_copy_from_asm(kernel_destination, user_source,
                                            size);
     end_copy();
@@ -118,11 +132,12 @@ int kernel_copy_to_user(uint32_t user_destination, const void *kernel_source,
         return KERNEL_USER_COPY_OK;
     if (kernel_source == NULL)
         return KERNEL_USER_COPY_INVALID_ARGUMENT;
+    prepare_growable_range(user_destination, size, true);
     status = begin_copy(user_destination, size, KERNEL_USER_COPY_TO_USER, &end);
     if (status != KERNEL_USER_COPY_OK)
         return status;
     status = kernel_user_copy_to_asm(user_destination, kernel_source, size);
-    if (grew_for_copy(status, user_destination, size))
+    if (grew_for_copy(status, user_destination, size, true))
         status = kernel_user_copy_to_asm(user_destination, kernel_source,
                                          size);
     end_copy();

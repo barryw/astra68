@@ -28,7 +28,7 @@
  */
 
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
-#define ASTRA_VFS_VERSION  UINT16_C(13)
+#define ASTRA_VFS_VERSION  UINT16_C(14)
 
 /*
  * The oldest version this build can still speak. A client asks for a minimum
@@ -52,6 +52,9 @@
  * Version 12 adds atomic exclusive create; clients must not emulate it with a
  * separate stat because that loses the only guarantee the flag exists for.
  * Version 13 adds append-at-write, file sync and open-file truncation.
+ * Version 14 adds creation modes, chmod and symlink reads. Creation mode is
+ * carried in `offset` for OPEN and MKDIR; those operations otherwise have no
+ * byte offset, so the wire record does not grow or overload the open flags.
  */
 #define ASTRA_VFS_VERSION_MIN UINT16_C(2)
 
@@ -124,7 +127,9 @@
 #define ASTRA_VFS_OP_RENAME_TO   UINT32_C(18)
 #define ASTRA_VFS_OP_SYNC        UINT32_C(19)
 #define ASTRA_VFS_OP_TRUNCATE    UINT32_C(20)
-#define ASTRA_VFS_OP_MAX         ASTRA_VFS_OP_TRUNCATE
+#define ASTRA_VFS_OP_CHMOD       UINT32_C(21)
+#define ASTRA_VFS_OP_READLINK    UINT32_C(22)
+#define ASTRA_VFS_OP_MAX         ASTRA_VFS_OP_READLINK
 
 /*
  * One shared-area transfer, and the unit the whole read path is sized around.
@@ -142,6 +147,10 @@
 #define ASTRA_VFS_OPEN_DIRECTORY (UINT32_C(1) << 4)
 #define ASTRA_VFS_OPEN_EXCLUSIVE (UINT32_C(1) << 5)
 #define ASTRA_VFS_OPEN_APPEND    (UINT32_C(1) << 6)
+
+/* No caller-supplied creation mode. Every real mode is confined to 07777. */
+#define ASTRA_VFS_MODE_DEFAULT UINT16_C(0xffff)
+#define ASTRA_VFS_MODE_MASK    UINT16_C(07777)
 
 /* Node kinds. */
 #define ASTRA_VFS_KIND_UNKNOWN   UINT16_C(0)

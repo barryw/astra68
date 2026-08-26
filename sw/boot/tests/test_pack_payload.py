@@ -1,7 +1,7 @@
 """The ROM refuses a payload that carries debug information.
 
 Every m68k object is built with -g now, so the only thing standing between
-DWARF and a fixed 256 KiB ROM window is the strip step in the user image's
+DWARF and a bounded ROM image is the strip step in the user image's
 build. A rule nothing checks is a rule that lasts until someone reorders a
 Makefile, and the failure it would produce -- a payload that no longer fits --
 says nothing about its cause.

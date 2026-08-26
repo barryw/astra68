@@ -375,6 +375,67 @@ bool kernel_handle_table_set_owner(KernelHandleTable *table, uint32_t owner)
     return true;
 }
 
+KernelHandleStatus kernel_handle_clone_table(
+    const KernelHandleTable *source, KernelHandleTable *destination)
+{
+    if (source == NULL || destination == NULL ||
+        !kernel_handle_table_valid(source) ||
+        !kernel_handle_table_valid(destination) ||
+        destination->owner == 0u || kernel_handle_count(destination) != 0u)
+        return KERNEL_HANDLE_INVALID_ARGUMENT;
+    for (uint32_t index = 0u; index < KERNEL_HANDLE_MAX_ENTRIES; ++index) {
+        const KernelHandleEntry *from = &source->entries[index];
+        KernelHandleEntry *to = &destination->entries[index];
+
+        if (from->occupied == 0u || from->retain == NULL)
+            continue;
+        if (!handle_slot_free(destination, index) || to->occupied != 0u ||
+            to->reserved != 0u ||
+            !kernel_allocation_attempt(KERNEL_ALLOCATION_SITE_HANDLE_SLOT,
+                                       destination->owner))
+            goto full;
+        destination->free_slots[handle_slot_word(index)] &=
+            ~handle_slot_bit(index);
+        if (!from->retain(from->object, from->release_context)) {
+            destination->free_slots[handle_slot_word(index)] |=
+                handle_slot_bit(index);
+            kernel_allocation_fail(KERNEL_ALLOCATION_SITE_HANDLE_SLOT,
+                                   destination->owner);
+            goto invalid;
+        }
+        to->object = from->object;
+        to->retain = from->retain;
+        to->release = from->release;
+        to->release_context = from->release_context;
+        to->rights = from->rights;
+        to->generation = from->generation;
+        to->type = from->type;
+        to->occupied = 1u;
+        to->reserved = 0u;
+        if (!kernel_allocation_commit(KERNEL_ALLOCATION_SITE_HANDLE_SLOT,
+                                      1u, sizeof(*to),
+                                      destination->owner)) {
+            to->occupied = 0u;
+            destination->free_slots[handle_slot_word(index)] |=
+                handle_slot_bit(index);
+            if (from->release != NULL)
+                from->release(from->object, from->release_context);
+            goto corrupt;
+        }
+    }
+    return KERNEL_HANDLE_OK;
+
+full:
+    (void)kernel_handle_close_all(destination);
+    return KERNEL_HANDLE_TABLE_FULL;
+invalid:
+    (void)kernel_handle_close_all(destination);
+    return KERNEL_HANDLE_INVALID_STATE;
+corrupt:
+    (void)kernel_handle_close_all(destination);
+    return KERNEL_HANDLE_CORRUPT;
+}
+
 static KernelHandleStatus install(KernelHandleTable *table,
                                   KernelObjectType type, uint32_t rights,
                                   void *object, KernelHandleRetain retain,
@@ -624,6 +685,27 @@ uint32_t kernel_handle_close_all(KernelHandleTable *table)
                                    records[index].context);
     }
     return count;
+}
+
+uint32_t kernel_handle_close_type(KernelHandleTable *table,
+                                  KernelObjectType type)
+{
+    uint32_t closed = 0u;
+
+    if (table == NULL || type == KERNEL_OBJECT_NONE)
+        return 0u;
+    for (uint32_t slot = 0u; slot < KERNEL_HANDLE_MAX_ENTRIES; ++slot) {
+        KernelHandleEntry *entry = &table->entries[slot];
+        KernelHandle handle;
+
+        if (entry->occupied == 0u || entry->type != (uint16_t)type)
+            continue;
+        handle = make_handle(slot, entry->generation);
+        if (kernel_handle_close(table, handle) != KERNEL_HANDLE_OK)
+            break;
+        ++closed;
+    }
+    return closed;
 }
 
 uint32_t kernel_handle_count(const KernelHandleTable *table)

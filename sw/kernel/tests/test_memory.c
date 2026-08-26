@@ -885,6 +885,34 @@ static void test_frame_tables_scale_past_the_old_ceiling(void)
     assert(stats.total_frames == 0x02000000u / KERNEL_PAGE_SIZE);
 }
 
+static void test_cow_frame_changes_owner_without_changing_charge(void)
+{
+    AstraBootInfo info;
+    KernelFrameInfo frame;
+    uint32_t physical;
+    uint32_t old_frames;
+    uint32_t new_frames;
+
+    make_valid_info(&info);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 81u,
+                               &physical) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_owner_frames(81u, &old_frames) && old_frames == 1u);
+    assert(kernel_memory_reclassify(physical, 81u, KERNEL_FRAME_PROCESS,
+                                    KERNEL_FRAME_COW_WRITE) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_memory_transfer_owner(physical, 81u, 82u) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_memory_owner_frames(81u, &old_frames) && old_frames == 0u);
+    assert(kernel_memory_owner_frames(82u, &new_frames) && new_frames == 1u);
+    assert(kernel_memory_frame_info(physical, &frame));
+    assert(frame.owner == 82u && frame.state == KERNEL_FRAME_COW_WRITE);
+    assert(kernel_memory_reclassify(physical, 82u, KERNEL_FRAME_COW_WRITE,
+                                    KERNEL_FRAME_PROCESS) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_memory_release_owner(82u, NULL) == KERNEL_MEMORY_OK);
+}
+
 int main(void)
 {
     test_initial_map();
@@ -904,6 +932,7 @@ int main(void)
     test_retained_log_is_allocation_free_under_pressure();
     test_contiguous_demand_survives_a_combed_frame_map();
     test_frame_tables_scale_past_the_old_ceiling();
+    test_cow_frame_changes_owner_without_changing_charge();
     test_tagged_failure_injection_and_boot_retirement();
     puts("KERNEL MEMORY PASS");
     return 0;

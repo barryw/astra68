@@ -71,7 +71,8 @@ typedef struct AstraBlockLeaseInfo {
     uint32_t state_flags;
     uint32_t media_generation;
     uint32_t host_generation;
-    uint32_t reserved;
+    /* Simultaneous requests the physical backend can actually keep active. */
+    uint32_t queue_depth;
     uint64_t sector_count;
 } AstraBlockLeaseInfo;
 

@@ -1,0 +1,168 @@
+ext4 create: accept a caller-supplied final inode mode
+
+The upstream create paths hard-code their default permission bits. That makes
+POSIX open(O_CREAT, mode), mkdir(mode), and umask impossible to implement at
+the shared filesystem boundary without a racy create-then-chmod sequence.
+
+Add mode-aware entry points while keeping the existing APIs as exact wrappers
+for the upstream default. The requested low twelve bits are written before the
+new inode is linked, so another observer can never see the wrong permissions.
+
+Covered by sw/userspace/storage's `make ext4-test`, which creates a 0600 file
+and a 0710 directory and reads both inode modes back from raw and partitioned
+volumes.
+
+diff --git a/include/ext4.h b/include/ext4.h
+--- a/include/ext4.h
++++ b/include/ext4.h
+@@ -329,6 +329,17 @@ int ext4_fopen(ext4_file *file, const char *path, const char *flags);
+  * @return  Standard error code.*/
+ int ext4_fopen2(ext4_file *file, const char *path, int flags);
+ 
++/**@brief   File open with a mode applied only when the final inode is created.
++ *
++ * @param   file  File handle.
++ * @param   path  File path.
++ * @param   flags File open flags.
++ * @param   mode  Creation mode bits, or UINT32_MAX for the filesystem default.
++ *
++ * @return  Standard error code.*/
++int ext4_fopen2_mode(ext4_file *file, const char *path, int flags,
++		     uint32_t mode);
++
+ /**@brief   File close function.
+  *
+  * @param   file File handle.
+@@ -612,6 +623,7 @@ int ext4_dir_mv(const char *path, const char *new_path);
+  *
+  * @return  Standard error code.*/
+ int ext4_dir_mk(const char *path);
++int ext4_dir_mk_mode(const char *path, uint32_t mode);
+ 
+ /**@brief   Directory open.
+  *
+diff --git a/src/ext4.c b/src/ext4.c
+--- a/src/ext4.c
++++ b/src/ext4.c
+@@ -924,9 +924,9 @@ static int ext4_trunc_dir(struct ext4_mountpoint *mp,
+  * NOTICE: if filetype is equal to EXT4_DIRENTRY_UNKNOWN,
+  * any filetype of the target dir entry will be accepted.
+  */
+-static int ext4_generic_open2(ext4_file *f, const char *path, int flags,
+-			      int ftype, uint32_t *parent_inode,
+-			      uint32_t *name_off)
++static int ext4_generic_open2_mode(ext4_file *f, const char *path, int flags,
++				   int ftype, uint32_t *parent_inode,
++				   uint32_t *name_off, uint32_t create_mode)
+ {
+ 	bool is_goal = false;
+ 	bool created_goal = false;
+@@ -1000,6 +1000,14 @@ static int ext4_generic_open2(ext4_file *f, const char *path, int flags,
+ 				break;
+ 
+ 			ext4_fs_inode_blocks_init(fs, &child_ref);
++			if (is_goal && create_mode != UINT32_MAX) {
++				uint32_t mode = ext4_inode_get_mode(sb,
++								 child_ref.inode);
++
++				mode = (mode & ~0xFFFu) | (create_mode & 0xFFFu);
++				ext4_inode_set_mode(sb, child_ref.inode, mode);
++				child_ref.dirty = true;
++			}
+ 
+ 			/*Link with root dir.*/
+ 			r = ext4_link(mp, &ref, &child_ref, path, len, false);
+@@ -1103,11 +1111,20 @@ static int ext4_generic_open2(ext4_file *f, const char *path, int flags,
+ 	return ext4_fs_put_inode_ref(&ref);
+ }
+ 
++static int ext4_generic_open2(ext4_file *f, const char *path, int flags,
++			      int ftype, uint32_t *parent_inode,
++			      uint32_t *name_off)
++{
++	return ext4_generic_open2_mode(f, path, flags, ftype, parent_inode,
++				       name_off, UINT32_MAX);
++}
++
+ /****************************************************************************/
+ 
+-static int ext4_generic_open(ext4_file *f, const char *path, const char *flags,
+-			     bool file_expect, uint32_t *parent_inode,
+-			     uint32_t *name_off)
++static int ext4_generic_open_mode(ext4_file *f, const char *path,
++				  const char *flags, bool file_expect,
++				  uint32_t *parent_inode, uint32_t *name_off,
++				  uint32_t create_mode)
+ {
+ 	uint32_t iflags;
+ 	int filetype;
+@@ -1125,8 +1142,8 @@ static int ext4_generic_open(ext4_file *f, const char *path, const char *flags,
+ 	if (iflags & O_CREAT)
+ 		ext4_trans_start(mp);
+ 
+-	r = ext4_generic_open2(f, path, iflags, filetype, parent_inode,
+-				name_off);
++	r = ext4_generic_open2_mode(f, path, iflags, filetype, parent_inode,
++				     name_off, create_mode);
+ 
+ 	if (iflags & O_CREAT) {
+ 		if (r == EOK)
+@@ -1138,6 +1155,14 @@ static int ext4_generic_open(ext4_file *f, const char *path, const char *flags,
+ 	return r;
+ }
+ 
++static int ext4_generic_open(ext4_file *f, const char *path, const char *flags,
++			     bool file_expect, uint32_t *parent_inode,
++			     uint32_t *name_off)
++{
++	return ext4_generic_open_mode(f, path, flags, file_expect, parent_inode,
++				      name_off, UINT32_MAX);
++}
++
+ static int ext4_create_hardlink(const char *path,
+ 		struct ext4_inode_ref *child_ref, bool rename)
+ {
+@@ -1566,6 +1591,12 @@ int ext4_fopen(ext4_file *file, const char *path, const char *flags)
+ }
+ 
+ int ext4_fopen2(ext4_file *file, const char *path, int flags)
++{
++	return ext4_fopen2_mode(file, path, flags, UINT32_MAX);
++}
++
++int ext4_fopen2_mode(ext4_file *file, const char *path, int flags,
++		     uint32_t mode)
+ {
+ 	struct ext4_mountpoint *mp = ext4_get_mount(path);
+ 	int r;
+@@ -1582,7 +1613,8 @@ int ext4_fopen2(ext4_file *file, const char *path, int flags)
+ 	if (flags & O_CREAT)
+ 		ext4_trans_start(mp);
+ 
+-	r = ext4_generic_open2(file, path, flags, filetype, NULL, NULL);
++	r = ext4_generic_open2_mode(file, path, flags, filetype, NULL, NULL,
++				    mode);
+ 
+ 	if (flags & O_CREAT) {
+ 		if (r == EOK)
+@@ -3311,6 +3343,11 @@ int ext4_dir_mv(const char *path, const char *new_path)
+ }
+ 
+ int ext4_dir_mk(const char *path)
++{
++	return ext4_dir_mk_mode(path, UINT32_MAX);
++}
++
++int ext4_dir_mk_mode(const char *path, uint32_t mode)
+ {
+ 	int r;
+ 	ext4_file f;
+@@ -3330,7 +3367,7 @@ int ext4_dir_mk(const char *path)
+ 		goto Finish;
+ 
+ 	/*Create new directory.*/
+-	r = ext4_generic_open(&f, path, "w", false, 0, 0);
++	r = ext4_generic_open_mode(&f, path, "w", false, 0, 0, mode);
+ 
+ Finish:
+ 	EXT4_MP_UNLOCK(mp);

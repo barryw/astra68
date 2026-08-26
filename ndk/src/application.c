@@ -23,7 +23,6 @@ AstraResult astra_application_launch_with_arguments(
     AstraApplicationLaunchRequest request = {0};
     AstraApplicationLaunchReply reply = {0};
     AstraPort reply_port = ASTRA_PORT_INIT;
-    const char *values[ASTRA_LAUNCH_ARGUMENT_MAX];
     char path[ASTRA_APPLICATION_PATH_MAX];
     AstraHandle transferred;
     uint32_t reply_size = 0u;
@@ -33,7 +32,7 @@ AstraResult astra_application_launch_with_arguments(
     if (launcher == ASTRA_INVALID_HANDLE || bundle_path == 0 ||
         process_id == 0 || path_length == 0u ||
         path_length >= ASTRA_APPLICATION_PATH_MAX ||
-        argument_count + 1u > ASTRA_LAUNCH_ARGUMENT_MAX ||
+        argument_count + 1u > ASTRA_APPLICATION_ARGUMENT_MAX ||
         (argument_count != 0u && arguments == NULL) ||
         (source != ASTRA_LAUNCH_SOURCE_SHELL &&
          source != ASTRA_LAUNCH_SOURCE_DESKTOP))
@@ -42,16 +41,25 @@ AstraResult astra_application_launch_with_arguments(
     for (uint32_t at = 0u; at < path_length; ++at)
         path[at] = bundle_path[at];
     path[path_length] = '\0';
-    values[0] = path;
-    for (uint32_t at = 0u; at < argument_count; ++at)
-        values[at + 1u] = arguments[at];
     {
-        uint32_t status = astra_launch_arguments_pack(
-            &request.arguments, source, argument_count + 1u, values);
+        uint32_t length = 0u;
 
-        if (status != ASTRA_SYSCALL_OK)
-            return status == ASTRA_SYSCALL_RESOURCE_LIMIT ?
-                ASTRA_ERROR_NO_RESOURCES : ASTRA_ERROR_INVALID_ARGUMENT;
+        for (uint32_t index = 0u; index <= argument_count; ++index) {
+            const char *value = index == 0u ? path : arguments[index - 1u];
+            uint32_t at = 0u;
+
+            if (value == NULL)
+                return ASTRA_ERROR_INVALID_ARGUMENT;
+            while (value[at] != '\0') {
+                if (length + 2u > sizeof(request.arguments.bytes))
+                    return ASTRA_ERROR_NO_RESOURCES;
+                request.arguments.bytes[length++] = value[at++];
+            }
+            request.arguments.bytes[length++] = '\0';
+        }
+        request.arguments.count = argument_count + 1u;
+        request.arguments.length = (uint16_t)length;
+        request.arguments.source = (uint16_t)source;
     }
     result = astra_port_create(1u, sizeof(reply), &reply_port);
     if (result != ASTRA_OK)

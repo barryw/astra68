@@ -40,6 +40,7 @@ typedef struct AstraBlockGeometry {
     uint64_t sector_count;
     uint32_t sector_size;
     uint32_t max_transfer_sectors;
+    uint32_t queue_depth;
     uint32_t media_generation;
     uint32_t flags;
 } AstraBlockGeometry;

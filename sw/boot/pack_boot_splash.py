@@ -190,7 +190,7 @@ def compress_legacy_lz4(payload: bytes, output: Path) -> bytes:
         verified_path = Path(directory) / "verified.pal8"
         raw_path.write_bytes(payload)
         subprocess.run(
-            [executable, "-l", "-9", "-f", str(raw_path), str(compressed_path)],
+            [executable, "-l", "-12", "-f", str(raw_path), str(compressed_path)],
             check=True,
         )
         subprocess.run(

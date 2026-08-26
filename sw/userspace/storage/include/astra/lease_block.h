@@ -28,7 +28,6 @@ typedef struct AstraLeaseBlock {
     uint32_t sector_bytes;
     uint32_t max_transfer_sectors;
     uint32_t media_generation;
-    uint32_t timeout_ns;    /* per-request deadline, 0 for the default */
     /*
      * Whether the completion endpoint is currently armed. A granted endpoint
      * starts masked and must be armed before a request is submitted, but

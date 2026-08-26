@@ -70,7 +70,8 @@ The userspace admission work must provide:
 4. collection that commits read bytes exactly once and reports late,
    cancelled, reset, and media-changed completions distinctly;
 5. teardown that revokes every in-flight request and returns all pinned pages;
-6. hard per-service request, byte, pinned-page, and timeout limits.
+6. hard per-service request, byte, and pinned-page budgets, with deadlines
+   selected explicitly by the caller.
 
 The API must be fault-injected before use by a filesystem. No temporary polling
 syscall or unrestricted physical-address argument is acceptable.
@@ -95,8 +96,8 @@ with a status it can still collect, so a reset cannot leave it waiting for a
 completion the device will never send.
 
 The service waits on the completion endpoint it was granted rather than
-polling, and the wait carries a deadline. Three rules came out of making that
-work:
+polling. The wait carries the caller's absolute deadline, or no deadline when
+the caller supplied zero. Three rules came out of making that work:
 
 - **Arm before submitting.** A granted endpoint starts masked, so the
   interrupt source is disabled until its first arm. Arming after submission
@@ -113,11 +114,11 @@ work:
   device error. Services still learn about media changes through the
   generations in geometry and completions.
 
-A device that never answers is now bounded rather than a hang: the wait
-deadline expires, the service resets the device, and the reset ends every
-in-flight request with a status it can still collect. The kernel does not
-enforce a deadline of its own — the waiter's deadline is the timeout, which
-means a service that chooses to wait forever still can.
+A caller that requires bounded device recovery supplies an absolute deadline.
+If that deadline expires, the service resets the device, and the reset ends
+every in-flight request with a status it can still collect. The kernel and
+lease backend do not invent deadlines of their own, so a caller that chooses
+to wait forever really does.
 
 In a `K1_QUALIFICATION=1` build the initial image receives no block
 capabilities: that harness owns every device IRQ source, and a source has
@@ -375,9 +376,9 @@ The adoption gate, and where each item stands:
 | license and source-publication policy explicit | **met** — BSD-3-Clause only, GPLv2 files not imported, recorded in `ASTRA_VENDOR.md` |
 | every supported feature frozen in an exact mkfs profile | **met** — `-b 4096 -I 256 -O ^64bit,^casefold,^extent,^ext_attr,^metadata_csum_seed -J size=4`, held identically by the storage and qualification Makefiles |
 | the same images pass native host, m68k emulator, Linux mount and `e2fsck` | **met** for host, m68k emulator and `e2fsck`; Linux loop-mount of an image written by the shipped port is not re-run since adoption |
-| power cut after every block write/flush transition, recovery passes | **not done** |
+| power cut after every block write/flush transition, recovery passes | **partly** — shared durability barriers and three deterministic volatile-media crash/recovery cycles pass byte verification and `e2fsck`; one physical Arty abrupt-stop checkpoint passes Astra and independent e2fsck replay; exhaustive physical cut points remain |
 | malformed-image fuzzing cannot escape the service | **not done** |
-| performance and memory fit the published budgets | **partly** — memory measured and inside the arena; performance not measured on hardware |
+| performance and memory fit the published budgets | **partly** — memory is measured and inside the arena; a physical warm executable launch issued zero device I/O, but the earlier `cat` timing measured an absent-file error path and is withdrawn; successful-file and handle-pressure hardware qualification remains |
 
 The last three are what stands between the current state and a volume Astra
 would trust with a user's data.

@@ -13,13 +13,9 @@
 
 #include <astra/vfs_assign.h>
 
-#include <stddef.h>
+#include <astra/ascii.h>
 
-static char
-upper(char value)
-{
-    return (value >= 'a' && value <= 'z') ? (char)(value - ('a' - 'A')) : value;
-}
+#include <stddef.h>
 
 /*
  * A name is A-Z, 0-9 and underscore. The colon is the separator, so it cannot
@@ -47,7 +43,7 @@ canonical(const char *name, char *out)
         if (index + 1u >= ASTRA_CAPABILITY_NAME_MAX) {
             return 0;
         }
-        value = upper(name[index]);
+        value = astra_ascii_upper(name[index]);
         if (!name_character(value)) {
             return 0;
         }

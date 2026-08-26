@@ -1,5 +1,6 @@
 #include "ring.h"
 
+#include <astra/integer.h>
 #include <astra/syscall.h>
 
 #include "bytes.h"
@@ -50,7 +51,7 @@ struct KernelRing {
     uint8_t slot;
     uint8_t state;
     uint8_t child_released;
-    uint8_t reserved;
+    uint8_t flags;
 };
 
 #if defined(__m68k__)
@@ -72,16 +73,12 @@ _Static_assert(offsetof(AstraBulkRingHeader, producer_position) == 0x20u,
 _Static_assert(offsetof(AstraBulkRingHeader, consumer_position) == 0x30u,
                "bulk-ring consumer position moved");
 
-static bool is_power_of_two(uint32_t value)
-{
-    return value != 0u && (value & (value - 1u)) == 0u;
-}
-
 static bool valid_ring(const KernelRing *ring)
 {
     return ring != NULL && ring >= &rings[0] && ring < &rings[KERNEL_RING_MAX] &&
            ring->slot == (uint8_t)(ring - rings) && ring->generation != 0u &&
            ring->generation <= RING_GENERATION_MASK &&
+           (ring->flags & ~ASTRA_BULK_RING_CREATE_FLAG_MASK) == 0u &&
            ring->state >= KERNEL_RING_OPEN && ring->state <= KERNEL_RING_CLOSING;
 }
 
@@ -240,21 +237,35 @@ KernelRingStatus kernel_ring_create(uint32_t owner, KernelArea *area,
                                     uint32_t offset, uint32_t element_size,
                                     uint32_t capacity, KernelRing **result)
 {
+    return kernel_ring_create_flagged(owner, area, offset, element_size,
+                                      capacity, 0u, result);
+}
+
+KernelRingStatus kernel_ring_create_flagged(
+    uint32_t owner, KernelArea *area, uint32_t offset, uint32_t element_size,
+    uint32_t capacity, uint32_t flags, KernelRing **result)
+{
     KernelRing *ring = NULL;
     void *raw_ring;
     uint16_t ring_slot;
     KernelObjectCacheStatus cache_status;
     AstraBulkRingHeader header;
     uint64_t total_size;
+    bool kernel_copy =
+        (flags & KERNEL_RING_CREATE_KERNEL_COPY) != 0u;
 
     if (owner == 0u || area == NULL || result == NULL ||
         !kernel_area_live(area) ||
+        (flags & ~ASTRA_BULK_RING_CREATE_FLAG_MASK) != 0u ||
         (offset & (KERNEL_RING_OFFSET_ALIGNMENT - 1u)) != 0u ||
-        element_size < KERNEL_RING_ELEMENT_SIZE_MIN ||
-        element_size > KERNEL_RING_ELEMENT_SIZE_MAX ||
-        (element_size & 3u) != 0u ||
+        (kernel_copy ? element_size != 1u :
+                       (element_size < KERNEL_RING_ELEMENT_SIZE_MIN ||
+                        element_size > KERNEL_RING_ELEMENT_SIZE_MAX ||
+                        (element_size & 3u) != 0u)) ||
         capacity < KERNEL_RING_CAPACITY_MIN ||
-        capacity > KERNEL_RING_CAPACITY_MAX || !is_power_of_two(capacity))
+        (!kernel_copy && capacity > KERNEL_RING_CAPACITY_MAX) ||
+        capacity >= 0x80000000u ||
+        !astra_u32_is_power_of_two(capacity))
         return KERNEL_RING_INVALID_ARGUMENT;
     *result = NULL;
     total_size = (uint64_t)KERNEL_RING_HEADER_SIZE +
@@ -316,6 +327,7 @@ KernelRingStatus kernel_ring_create(uint32_t owner, KernelArea *area,
     ring->consumer_references = 1u;
     ring->state = KERNEL_RING_OPEN;
     ring->child_released = 0u;
+    ring->flags = (uint8_t)flags;
     kernel_thread_wait_queue_init(&ring->producer_waiters);
     kernel_thread_wait_queue_init(&ring->consumer_waiters);
 
@@ -323,6 +335,7 @@ KernelRingStatus kernel_ring_create(uint32_t owner, KernelArea *area,
     header.magic = KERNEL_RING_MAGIC;
     header.version = KERNEL_RING_ABI_VERSION;
     header.header_size = KERNEL_RING_HEADER_SIZE;
+    header.flags = flags;
     header.element_size = element_size;
     header.capacity = capacity;
     header.data_offset = KERNEL_RING_HEADER_SIZE;
@@ -362,6 +375,24 @@ void kernel_ring_abandon_unpublished(KernelRing *ring)
     ring->producer_references = 0u;
     ring->consumer_references = 0u;
     maybe_free(ring);
+}
+
+bool kernel_ring_handle_retain(void *object, void *context)
+{
+    KernelRing *ring = object;
+    KernelRingEndpoint endpoint = (KernelRingEndpoint)(uintptr_t)context;
+    uint16_t *references;
+
+    if (!valid_ring(ring) || !valid_endpoint(endpoint) ||
+        ring->state != KERNEL_RING_OPEN ||
+        (ring->flags & KERNEL_RING_CREATE_KERNEL_COPY) == 0u)
+        return false;
+    references = endpoint == KERNEL_RING_ENDPOINT_PRODUCER ?
+        &ring->producer_references : &ring->consumer_references;
+    if (*references == 0u || *references == UINT16_MAX)
+        return false;
+    ++*references;
+    return true;
 }
 
 void kernel_ring_handle_release(void *object, void *context)
@@ -423,6 +454,7 @@ KernelRingStatus kernel_ring_notify(KernelRing *ring,
     uint32_t used;
 
     if (!valid_ring(ring) || !valid_endpoint(endpoint) ||
+        (ring->flags & KERNEL_RING_CREATE_KERNEL_COPY) != 0u ||
         (flags & ~KERNEL_RING_NOTIFY_CORRUPT) != 0u)
         return KERNEL_RING_INVALID_ARGUMENT;
     if (woken_threads != NULL)
@@ -552,6 +584,177 @@ KernelRingStatus kernel_ring_commit_wait(KernelRing *ring,
                                                            KERNEL_RING_INVALID_STATE;
 }
 
+static KernelRingStatus copy_range(KernelRing *ring, uint32_t position,
+                                   void *read_bytes,
+                                   const void *write_bytes,
+                                   uint32_t length, bool write)
+{
+    uint32_t index = position & (ring->capacity - 1u);
+    uint32_t first = ring->capacity - index;
+    uint8_t *output = read_bytes;
+    const uint8_t *input = write_bytes;
+    KernelAreaStatus status;
+
+    if (first > length)
+        first = length;
+    if (kernel_vm_sync_shared_aliases() != KERNEL_VM_OK)
+        return KERNEL_RING_CORRUPT;
+    status = write ?
+        kernel_area_write(ring->area,
+                          ring->offset + KERNEL_RING_HEADER_SIZE + index,
+                          input, first) :
+        kernel_area_read(ring->area,
+                         ring->offset + KERNEL_RING_HEADER_SIZE + index,
+                         output, first);
+    if (status != KERNEL_AREA_OK)
+        return status == KERNEL_AREA_OUT_OF_MEMORY ? KERNEL_RING_NO_SLOT :
+                                                     KERNEL_RING_CORRUPT;
+    if (first != length) {
+        status = write ?
+            kernel_area_write(ring->area,
+                              ring->offset + KERNEL_RING_HEADER_SIZE,
+                              input + first, length - first) :
+            kernel_area_read(ring->area,
+                             ring->offset + KERNEL_RING_HEADER_SIZE,
+                             output + first, length - first);
+        if (status != KERNEL_AREA_OK)
+            return status == KERNEL_AREA_OUT_OF_MEMORY ? KERNEL_RING_NO_SLOT :
+                                                         KERNEL_RING_CORRUPT;
+    }
+    return KERNEL_RING_OK;
+}
+
+static KernelRingStatus publish_position(KernelRing *ring, uint32_t offset,
+                                         uint32_t position)
+{
+    if (kernel_area_write(ring->area, ring->offset + offset, &position,
+                          sizeof(position)) != KERNEL_AREA_OK ||
+        kernel_vm_sync_shared_aliases() != KERNEL_VM_OK)
+        return KERNEL_RING_CORRUPT;
+    return KERNEL_RING_OK;
+}
+
+KernelRingStatus kernel_ring_copy_peek(KernelRing *ring, void *bytes,
+                                       uint32_t capacity, uint32_t *copied)
+{
+    uint32_t used;
+    KernelRingStatus status;
+
+    if (!valid_ring(ring) || bytes == NULL || copied == NULL ||
+        capacity == 0u || capacity > ASTRA_BULK_RING_TRANSFER_MAX ||
+        (ring->flags & KERNEL_RING_CREATE_KERNEL_COPY) == 0u)
+        return KERNEL_RING_INVALID_ARGUMENT;
+    *copied = 0u;
+    if (ring->state == KERNEL_RING_CLOSING)
+        return ring->consumer_terminal == ASTRA_SYSCALL_IO_ERROR ?
+            KERNEL_RING_IO_ERROR : KERNEL_RING_PEER_DEAD;
+    if (ring->consumer_references == 0u)
+        return KERNEL_RING_CLOSED;
+    used = ring_used(ring);
+    if (used > ring->capacity)
+        return KERNEL_RING_CORRUPT;
+    if (used == 0u) {
+        ++pool_stats.copied_would_blocks;
+        return ring->producer_references == 0u ? KERNEL_RING_PEER_DEAD :
+                                                KERNEL_RING_WOULD_BLOCK;
+    }
+    if (capacity > used)
+        capacity = used;
+    status = copy_range(ring, ring->consumer_position, bytes, NULL, capacity,
+                        false);
+    if (status != KERNEL_RING_OK)
+        return status;
+    *copied = capacity;
+    return KERNEL_RING_OK;
+}
+
+KernelRingStatus kernel_ring_copy_consume(KernelRing *ring, uint32_t count,
+                                          uint32_t *woken_threads)
+{
+    uint32_t woken = 0u;
+    uint32_t position;
+
+    if (!valid_ring(ring) || count == 0u ||
+        count > ASTRA_BULK_RING_TRANSFER_MAX ||
+        (ring->flags & KERNEL_RING_CREATE_KERNEL_COPY) == 0u ||
+        ring->state != KERNEL_RING_OPEN ||
+        ring->consumer_references == 0u || count > ring_used(ring))
+        return KERNEL_RING_INVALID_ARGUMENT;
+    position = ring->consumer_position + count;
+    if (publish_position(ring,
+                         (uint32_t)offsetof(AstraBulkRingHeader,
+                                            consumer_position),
+                         position) != KERNEL_RING_OK)
+        return KERNEL_RING_CORRUPT;
+    ring->consumer_position = position;
+    ++pool_stats.consumer_notifications;
+    ++pool_stats.copied_reads;
+    pool_stats.copied_read_bytes += count;
+    if (ring->producer_references != 0u && ring_used(ring) < ring->capacity &&
+        wake_queue(&ring->producer_waiters, ASTRA_SYSCALL_OK, &woken) !=
+            KERNEL_RING_OK)
+        return KERNEL_RING_CORRUPT;
+    if (woken_threads != NULL)
+        *woken_threads = woken;
+    return KERNEL_RING_OK;
+}
+
+KernelRingStatus kernel_ring_copy_write(KernelRing *ring, const void *bytes,
+                                        uint32_t length, bool atomic,
+                                        uint32_t *written,
+                                        uint32_t *woken_threads)
+{
+    uint32_t available;
+    uint32_t used;
+    uint32_t woken = 0u;
+    uint32_t position;
+    KernelRingStatus status;
+
+    if (!valid_ring(ring) || bytes == NULL || written == NULL || length == 0u ||
+        length > ASTRA_BULK_RING_TRANSFER_MAX ||
+        (ring->flags & KERNEL_RING_CREATE_KERNEL_COPY) == 0u)
+        return KERNEL_RING_INVALID_ARGUMENT;
+    *written = 0u;
+    if (ring->state == KERNEL_RING_CLOSING)
+        return ring->producer_terminal == ASTRA_SYSCALL_IO_ERROR ?
+            KERNEL_RING_IO_ERROR : KERNEL_RING_PEER_DEAD;
+    if (ring->producer_references == 0u)
+        return KERNEL_RING_CLOSED;
+    if (ring->consumer_references == 0u)
+        return KERNEL_RING_PEER_DEAD;
+    used = ring_used(ring);
+    if (used > ring->capacity)
+        return KERNEL_RING_CORRUPT;
+    available = ring->capacity - used;
+    if (available == 0u || (atomic && available < length)) {
+        ++pool_stats.copied_would_blocks;
+        return KERNEL_RING_WOULD_BLOCK;
+    }
+    if (length > available)
+        length = available;
+    status = copy_range(ring, ring->producer_position, NULL, bytes, length,
+                        true);
+    if (status != KERNEL_RING_OK)
+        return status;
+    position = ring->producer_position + length;
+    if (publish_position(ring,
+                         (uint32_t)offsetof(AstraBulkRingHeader,
+                                            producer_position),
+                         position) != KERNEL_RING_OK)
+        return KERNEL_RING_CORRUPT;
+    ring->producer_position = position;
+    ++pool_stats.producer_notifications;
+    ++pool_stats.copied_writes;
+    pool_stats.copied_write_bytes += length;
+    if (wake_queue(&ring->consumer_waiters, ASTRA_SYSCALL_OK, &woken) !=
+        KERNEL_RING_OK)
+        return KERNEL_RING_CORRUPT;
+    *written = length;
+    if (woken_threads != NULL)
+        *woken_threads = woken;
+    return KERNEL_RING_OK;
+}
+
 KernelRingStatus kernel_ring_process_died(uint32_t process_id,
                                           uint32_t *closed_rings,
                                           uint32_t *woken_threads)
@@ -566,6 +769,7 @@ KernelRingStatus kernel_ring_process_died(uint32_t process_id,
         uint32_t ring_woken = 0u;
 
         if (ring->state != KERNEL_RING_OPEN ||
+            (ring->flags & KERNEL_RING_CREATE_KERNEL_COPY) != 0u ||
             (ring->owner != process_id &&
              kernel_area_creator(ring->area) != process_id))
             continue;
@@ -660,7 +864,7 @@ bool kernel_ring_pool_valid(void)
                 ring->producer_references != 0u ||
                 ring->consumer_references != 0u ||
                 producer_waiters != 0u || consumer_waiters != 0u ||
-                ring->child_released == 0u)
+                ring->child_released == 0u || ring->flags != 0u)
                 return false;
             continue;
         }
@@ -668,6 +872,12 @@ bool kernel_ring_pool_valid(void)
             return false;
         if (!valid_ring(ring) || ring->area == NULL || ring->owner == 0u ||
             ring->area_generation == 0u || ring->capacity == 0u ||
+            ((ring->flags & KERNEL_RING_CREATE_KERNEL_COPY) != 0u ?
+                 ring->element_size != 1u :
+                 (ring->element_size < KERNEL_RING_ELEMENT_SIZE_MIN ||
+                  ring->element_size > KERNEL_RING_ELEMENT_SIZE_MAX ||
+                  (ring->element_size & 3u) != 0u ||
+                  ring->capacity > KERNEL_RING_CAPACITY_MAX)) ||
             ring->total_size != KERNEL_RING_HEADER_SIZE +
                                     ring->element_size * ring->capacity ||
             ring_used(ring) > ring->capacity)
@@ -696,6 +906,22 @@ bool kernel_ring_pool_stats(KernelRingPoolStats *stats)
         return false;
     kernel_bytes_copy(stats, &pool_stats, sizeof(*stats));
     return true;
+}
+
+void kernel_ring_record_copy_cycles(uint32_t cycles, uint32_t bytes)
+{
+    uint32_t budget;
+
+    if (bytes > ASTRA_BULK_RING_TRANSFER_MAX) {
+        pool_corrupt = 1u;
+        return;
+    }
+    budget = KERNEL_RING_COPY_FIXED_BUDGET_CYCLES +
+             bytes * KERNEL_RING_COPY_PER_BYTE_BUDGET_CYCLES;
+    if (cycles > pool_stats.copied_max_cycles)
+        pool_stats.copied_max_cycles = cycles;
+    if (cycles > budget)
+        ++pool_stats.copied_cycle_overruns;
 }
 
 #if defined(KERNEL_RING_HOST_TEST)

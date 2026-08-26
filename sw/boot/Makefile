@@ -150,7 +150,11 @@ ID_SRCS = Makefile ../../mk/m68k-cross.mk gen_build_info.py pack_payload.py \
           $(KERNEL_ID_SRCS) $(USER_IMAGE_ID_SRCS) \
           $(SOC_ID_SRCS) $(CPU_ID_SRCS) $(STAGE0_ID_SRCS)
 
-all: astra_boot.bin astra68.rom
+# Arty loads this image into QEMU host memory. The SDRAM-backed ULX3S package
+# remains explicit because its independent stage-0 contract is still 256 KiB.
+all: astra_boot.bin
+
+legacy-rom: astra68.rom
 
 $(SPLASH_PAYLOAD): $(SPLASH_SOURCE) $(SPLASH_FONT) $(SPLASH_PACKER)
 	python3 $(SPLASH_PACKER) --image $(SPLASH_SOURCE) \
@@ -171,9 +175,9 @@ $(KERNEL_BIN): FORCE $(KERNEL_ID_SRCS) ../common/boot_contract.c \
 $(USER_IMAGE): FORCE $(USER_IMAGE_ID_SRCS)
 	$(MAKE) -C $(USER_IMAGE_DIR) all CROSS=$(CROSS)
 
-# The ROM window is 256 KiB decoded in RTL, so both images ship compressed and
-# firmware decodes them into their load addresses. Sizes and CRCs are built in
-# as constants rather than a parsed container header.
+# Both images ship compressed and firmware decodes them into their load
+# addresses. Sizes and CRCs are built in as constants rather than a parsed
+# container header.
 $(ROM_PAYLOADS) $(KERNEL_PAYLOAD) $(USER_PAYLOAD) &: pack_payload.py \
                 pack_boot_splash.py $(KERNEL_BIN) $(USER_IMAGE)
 	@mkdir -p build
@@ -234,4 +238,4 @@ clean:
 
 FORCE:
 
-.PHONY: all verify id config test clean FORCE
+.PHONY: all legacy-rom verify id config test clean FORCE

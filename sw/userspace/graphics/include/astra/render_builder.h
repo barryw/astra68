@@ -8,6 +8,16 @@
 
 #define ASTRA_RENDER_BUILDER_BYTES 0x00040000u
 
+typedef enum AstraRenderBuilderFailure {
+    ASTRA_RENDER_BUILDER_FAILURE_NONE = 0u,
+    ASTRA_RENDER_BUILDER_FAILURE_DATA,
+    ASTRA_RENDER_BUILDER_FAILURE_DESCRIPTOR,
+    ASTRA_RENDER_BUILDER_FAILURE_DESTINATION,
+    ASTRA_RENDER_BUILDER_FAILURE_COMMAND,
+    ASTRA_RENDER_BUILDER_FAILURE_SURFACE,
+    ASTRA_RENDER_BUILDER_FAILURE_GLYPH,
+} AstraRenderBuilderFailure;
+
 typedef struct AstraRenderBuilder {
     uint8_t *bytes;
     uint32_t capacity;
@@ -17,7 +27,7 @@ typedef struct AstraRenderBuilder {
     uint32_t glyph_count;
     uint32_t data_cursor;
     uint32_t surface_cursor;
-    uint32_t failed;
+    uint32_t failed; /* AstraRenderBuilderFailure */
     uint16_t descriptor_width[128];
     uint16_t descriptor_height[128];
 } AstraRenderBuilder;

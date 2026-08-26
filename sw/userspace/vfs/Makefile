@@ -16,6 +16,7 @@ DEPFLAGS := -MMD -MP
 TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 HOST_FLAGS := -O2
+HOST_THREAD_FLAGS := -pthread
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 LIBRARY_LD := ../runtime/astra_library.ld
 LIBRARY_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
@@ -46,13 +47,14 @@ TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/vfs_assign.o build/m68k/vfs_path.o \
 	build/m68k/vfs_local_transport.o build/m68k/vfs_port_transport.o \
 	build/m68k/vfs_ext4_backend.o build/m68k/vfs_union.o \
-	build/m68k/vfs_process.o build/m68k/vfs_bundle.o \
+	build/m68k/vfs_process.o $(NDK)/build/m68k/bundle.o \
 	build/m68k/vfs_status.o
 FILESYSTEM_LIBRARY := build/m68k/libraries/filesystem.library
 FILESYSTEM_LIBRARY_OBJECTS := build/m68k/library/filesystem_library.o \
 	build/m68k/library/vfs_client.o build/m68k/library/vfs_assign.o \
-	build/m68k/library/vfs_path.o build/m68k/library/vfs_union.o \
-	build/m68k/library/runtime_memory.o
+	build/m68k/library/vfs_path.o build/m68k/library/vfs_union.o
+
+RUNTIME_PIC_LIB := $(RUNTIME)/build/m68k/libastrart-pic.a
 HOST_TEST := build/host/test_vfs_service_core
 
 all: $(TARGET) $(FILESYSTEM_LIBRARY) library-contract
@@ -78,11 +80,8 @@ build/m68k/vfs_process.o: src/vfs_process.c $(HEADERS)
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
 
-build/m68k/vfs_bundle.o: $(NDK)/src/bundle.c \
-		$(NDK)/include/astra/bundle.h $(NDK)/include/astra/manifest.h
-	@mkdir -p $(@D)
-	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
-		-c $< -o $@
+$(NDK)/build/m68k/bundle.o:
+	$(MAKE) -C $(NDK) $(@:$(NDK)/%=%)
 
 build/m68k/library/%.o: src/%.c $(HEADERS) \
 		include/astra/filesystem_library.h
@@ -90,19 +89,19 @@ build/m68k/library/%.o: src/%.c $(HEADERS) \
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
 
-build/m68k/library/runtime_memory.o: $(RUNTIME)/src/memory.c
-	@mkdir -p $(@D)
-	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) -c $< -o $@
+$(RUNTIME_PIC_LIB):
+	$(MAKE) -C $(RUNTIME) pic
 
-$(FILESYSTEM_LIBRARY): $(FILESYSTEM_LIBRARY_OBJECTS) $(LIBRARY_LD)
+$(FILESYSTEM_LIBRARY): $(FILESYSTEM_LIBRARY_OBJECTS) $(RUNTIME_PIC_LIB) \
+		$(LIBRARY_LD)
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(LIBRARY_LINK_FLAGS) \
 		-Wl,-soname,filesystem.library.1 -o $@ \
-		$(FILESYSTEM_LIBRARY_OBJECTS) -lgcc
+		$(FILESYSTEM_LIBRARY_OBJECTS) $(RUNTIME_PIC_LIB) -lgcc
 
 library-contract: $(FILESYSTEM_LIBRARY)
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
-		grep -q '^filesystem.library 1.2.0 ABI 1.2$$'
+		grep -q '^filesystem.library 1.4.0 ABI 1.4$$'
 	@! $(READELF) -r $(FILESYSTEM_LIBRARY) | \
 		grep -E 'R_68K_(GLOB_DAT|JMP_SLOT|32|PC32)'
 
@@ -115,6 +114,7 @@ build/m68k/vfs_ext4_backend.o: src/vfs_ext4_backend.c $(HEADERS)
 $(HOST_TEST): $(CORE_SOURCES) tests/test_vfs_service_core.c $(HEADERS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(HOST_THREAD_FLAGS) \
 		src/vfs_service_core.c src/vfs_client.c \
 		src/vfs_local_transport.c tests/test_vfs_service_core.c -o $@
 
@@ -186,7 +186,8 @@ test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
 sanitize:
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		$(SANITIZER_FLAGS) src/vfs_service_core.c src/vfs_client.c \
+		$(HOST_THREAD_FLAGS) $(SANITIZER_FLAGS) \
+		src/vfs_service_core.c src/vfs_client.c \
 		src/vfs_local_transport.c tests/test_vfs_service_core.c \
 		-o build/host/test_vfs_service_core_sanitize
 	./build/host/test_vfs_service_core_sanitize
@@ -220,6 +221,8 @@ analyze:
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/vfs_client.c -o build/analyzer/vfs_client.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/vfs_local_transport.c -o build/analyzer/vfs_local_transport.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/vfs_assign.c -o build/analyzer/vfs_assign.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/vfs_path.c -o build/analyzer/vfs_path.o
@@ -227,6 +230,13 @@ analyze:
 		-c src/vfs_union.c -o build/analyzer/vfs_union.o
 	$(ANALYZER_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/vfs_port_transport.c -o build/analyzer/vfs_port_transport.o
+	$(ANALYZER_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/vfs_process.c -o build/analyzer/vfs_process.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/vfs_status.c -o build/analyzer/vfs_status.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(EXT4_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		-fanalyzer -c src/vfs_ext4_backend.c \
+		-o build/analyzer/vfs_ext4_backend.o
 	$(ANALYZER_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/filesystem_library.c -o build/analyzer/filesystem_library.o
 

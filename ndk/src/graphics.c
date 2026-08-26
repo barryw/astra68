@@ -1,4 +1,5 @@
 #include <astra/graphics.h>
+#include <astra/bytes.h>
 
 /* The direct-MMIO NDK deliberately does not expose unsafe graphics MMIO. */
 
@@ -13,17 +14,6 @@
 #define TILE_FLAGS (ASTRA_TILE_LAYER_VISIBLE | \
                     ASTRA_TILE_LAYER_ABOVE_FRAMEBUFFER | \
                     ASTRA_TILE_LAYER_WRAP_X | ASTRA_TILE_LAYER_WRAP_Y)
-
-static int words_are_zero(const uint32_t *words, unsigned count)
-{
-    unsigned index;
-
-    for (index = 0; index < count; ++index) {
-        if (words[index] != 0)
-            return 0;
-    }
-    return 1;
-}
 
 static int pixel_format_valid(uint16_t format)
 {
@@ -63,7 +53,7 @@ static int paint_valid(const AstraDrawPaint *paint)
 {
     return paint != 0 && paint->size >= sizeof(*paint) &&
            (paint->flags & ~DRAW_FLAGS) == 0 &&
-           words_are_zero(paint->reserved, 4);
+           astra_words_zero(paint->reserved, 4);
 }
 
 static int text_paint_valid(const AstraTextPaint *paint)
@@ -71,7 +61,7 @@ static int text_paint_valid(const AstraTextPaint *paint)
     return paint != 0 && paint->size >= sizeof(*paint) &&
            (paint->flags & ~ASTRA_TEXT_PAINT_OPAQUE_BACKGROUND) == 0 &&
            paint->embedded_color_policy <= ASTRA_TEXT_EMBEDDED_COLOR_REJECT &&
-           paint->reserved16 == 0 && words_are_zero(paint->reserved, 5);
+           paint->reserved16 == 0 && astra_words_zero(paint->reserved, 5);
 }
 
 static int empty_handle(AstraHandle handle)
@@ -117,7 +107,7 @@ AstraResult astra_surface_create(const AstraDisplay *display,
         !surface_usage_valid(create_info) ||
         (create_info->flags & ~SURFACE_FLAGS) != 0 ||
         create_info->flags == 0 || create_info->reserved16 != 0 ||
-        !words_are_zero(create_info->reserved, 5) || surface == 0 ||
+        !astra_words_zero(create_info->reserved, 5) || surface == 0 ||
         !empty_handle(surface->_private_handle))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     return ASTRA_ERROR_INVALID_HANDLE;
@@ -316,7 +306,7 @@ AstraResult astra_tile_layers_update(AstraTileLayers *tile_layers,
          update->transparent_index > 15u || update->reserved8 != 0 ||
          update->scroll_x < -32768 || update->scroll_x > 32767 ||
          update->scroll_y < -32768 || update->scroll_y > 32767 ||
-         !words_are_zero(update->reserved, 4)))
+         !astra_words_zero(update->reserved, 4)))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     return ASTRA_ERROR_INVALID_HANDLE;
 }
@@ -356,7 +346,7 @@ AstraResult astra_sprite_set_update(AstraSpriteSet *sprite_set,
          update->destination_height > ASTRA_SPRITE_DESTINATION_EXTENT_MAX ||
          (update->flags & ~SPRITE_FLAGS) != 0 ||
          update->palette_bank >= ASTRA_SPRITE_PALETTE_BANK_COUNT ||
-         !words_are_zero(update->reserved, 2)))
+         !astra_words_zero(update->reserved, 2)))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     return ASTRA_ERROR_INVALID_HANDLE;
 }
@@ -409,7 +399,7 @@ AstraResult astra_display_present_surface(const AstraDisplay *display,
         !empty_handle(fence->_private_handle) ||
         (options != 0 &&
          (options->size < sizeof(*options) || options->flags != 0 ||
-          !words_are_zero(options->reserved, 4))))
+          !astra_words_zero(options->reserved, 4))))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     return ASTRA_ERROR_INVALID_HANDLE;
 }

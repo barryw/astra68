@@ -2,10 +2,11 @@
 #define ASTRA_SYSCALL_H
 
 #include <astra/message_abi.h>
+#include <astra/limits.h>
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010017
+#define ASTRA_SYSCALL_ABI_VERSION 0x0001001e
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -54,9 +55,9 @@
 #define ASTRA_SYSCALL_LOG_WRITE        44
 /*
  * The calling thread's activity: what it is currently doing, for correlation.
- * data[1] of zero begins a fresh one; anything else adopts that value, which
- * is how a service joins the story it was called from. Both return the
- * thread's current activity.
+ * data[1] of zero begins a fresh one; CURRENT reads it, NONE clears it, and
+ * anything else adopts that value. The call returns the current activity in
+ * data[1] and the previous activity in data[2].
  *
  * The kernel holds it, per thread, so that every event is stamped without any
  * call site passing one. A machine where correlation is a parameter is a
@@ -64,7 +65,8 @@
  */
 #define ASTRA_SYSCALL_ACTIVITY         45
 
-/* Clears a thread's activity without allocating a new global id. */
+/* Reads or clears a thread's activity without allocating a new global id. */
+#define ASTRA_ACTIVITY_CURRENT 0xfffffffeu
 #define ASTRA_ACTIVITY_NONE 0xffffffffu
 
 /*
@@ -156,6 +158,34 @@
  * data[1]. New threads inherit the new process default.
  */
 #define ASTRA_SYSCALL_PROCESS_PRIORITY 57
+/* COW clone: D1=child handle and D2=child id in the parent, both zero child. */
+#define ASTRA_SYSCALL_PROCESS_CLONE    58
+/* Kernel-serialized transfers for clone-safe byte-mode bulk rings. */
+#define ASTRA_SYSCALL_RING_READ_TRY    59
+#define ASTRA_SYSCALL_RING_WRITE_TRY   60
+/*
+ * Reserves clone-private anonymous address space for the calling process.
+ * data[1] is the requested size and data[2] is ASTRA_VM_PRIVATE_*; the result
+ * is a root-slot-aligned base in data[1] and the rounded span in data[2]. No
+ * RAM is committed until first touch, and every committed page is charged to
+ * the process through the ordinary frame quota.
+ */
+#define ASTRA_SYSCALL_VM_PRIVATE_RESERVE  61
+/* Decommits the whole pages inside a private reservation range. */
+#define ASTRA_SYSCALL_VM_PRIVATE_DECOMMIT 62
+/* Registers the POSIX signal trampoline/stack/mask and returns pending/mask. */
+#define ASTRA_SYSCALL_SIGNAL_CONFIGURE 63
+/* Arms ITIMER_REAL from relative delay/interval nanoseconds in D1:D2/D3:D4. */
+#define ASTRA_SYSCALL_INTERVAL_TIMER 64
+/* Restores the context saved by the active signal upcall. */
+#define ASTRA_SYSCALL_SIGNAL_RETURN 65
+/* Atomically replaces the calling process image; success never returns. */
+#define ASTRA_SYSCALL_PROCESS_EXEC 66
+
+#define ASTRA_VM_PRIVATE_READ  (1u << 0)
+#define ASTRA_VM_PRIVATE_WRITE (1u << 1)
+/* Complete anonymous window in the 32-bit Astra process address map. */
+#define ASTRA_VM_PRIVATE_ADDRESS_SPACE_MAX 0x1f800000u
 
 /*
  * The most one call copies. Small on purpose: a drain is a bounded page and a
@@ -248,7 +278,8 @@
 #define ASTRA_DEADLINE_FOREVER \
     ((((uint64_t)ASTRA_DEADLINE_NONE_HI) << 32) | ASTRA_DEADLINE_NONE_LO)
 
-#define ASTRA_WAIT_MULTIPLE_MAX 16
+/* A process cannot hold more waitable objects than handles. */
+#define ASTRA_WAIT_MULTIPLE_MAX ASTRA_HANDLE_COUNT_MAX
 #define ASTRA_WAIT_INDEX_NONE 0xffffffff
 
 #define ASTRA_IRQ_RECORD_SIZE 16u
@@ -302,6 +333,11 @@
 #define ASTRA_BULK_RING_CAPACITY_MIN 2u
 #define ASTRA_BULK_RING_CAPACITY_MAX 1024u
 #define ASTRA_BULK_RING_NOTIFY_CORRUPT (1u << 0)
+#define ASTRA_BULK_RING_CREATE_KERNEL_COPY (1u << 0)
+#define ASTRA_BULK_RING_CREATE_FLAG_MASK ASTRA_BULK_RING_CREATE_KERNEL_COPY
+#define ASTRA_BULK_RING_TRANSFER_MAX 4096u
+#define ASTRA_BULK_RING_WRITE_ATOMIC (1u << 0)
+#define ASTRA_BULK_RING_WRITE_FLAG_MASK ASTRA_BULK_RING_WRITE_ATOMIC
 #define ASTRA_BULK_RING_PRODUCER 1u
 #define ASTRA_BULK_RING_CONSUMER 2u
 #endif

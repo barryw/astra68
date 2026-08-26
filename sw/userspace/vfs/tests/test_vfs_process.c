@@ -19,6 +19,8 @@ static uint32_t closes;
 static uint32_t connects;
 static uint32_t disconnects;
 static uint32_t fail_connect;
+static uint32_t borrow_enabled;
+static const uint8_t borrowed_file[] = "program";
 
 int astra_startup_validate(const AstraStartupInfo *startup)
 {
@@ -49,8 +51,14 @@ uint32_t astra_assign_resolve(const AstraAssignTable *table,
                               uint32_t rights, uint32_t member, char *wire,
                               uint32_t capacity, const AstraAssign **assign)
 {
-    (void)table; (void)path; (void)rights; (void)member; (void)wire;
-    (void)capacity; (void)assign;
+    if (borrow_enabled != 0u && table != NULL && path != NULL &&
+        strcmp(path, "COMMANDS:test") == 0 &&
+        rights == ASTRA_RIGHT_READ && member == 0u && capacity >= 5u &&
+        wire != NULL && assign != NULL) {
+        memcpy(wire, "test", 5u);
+        *assign = &table->entries[0];
+        return ASTRA_VFS_OK;
+    }
     return ASTRA_VFS_ERR_NOT_FOUND;
 }
 
@@ -58,7 +66,32 @@ uint32_t astra_vfs_port_read_path(AstraVfsClient *client, const char *path,
                                   const uint8_t **bytes, uint32_t *moved,
                                   uint64_t *node_size)
 {
-    (void)client; (void)path; (void)bytes; (void)moved; (void)node_size;
+    if (borrow_enabled != 0u && client != NULL && path != NULL &&
+        strcmp(path, "test") == 0 && bytes != NULL && moved != NULL &&
+        node_size != NULL) {
+        *bytes = borrowed_file;
+        *moved = sizeof(borrowed_file) - 1u;
+        *node_size = sizeof(borrowed_file) - 1u;
+        return ASTRA_VFS_OK;
+    }
+    return ASTRA_VFS_ERR_UNSUPPORTED;
+}
+
+uint32_t astra_vfs_port_read_bulk(AstraVfsClient *client, AstraVfsFile file,
+                                  uint64_t offset, void *buffer,
+                                  uint32_t length, uint32_t *moved)
+{
+    (void)client; (void)file; (void)offset; (void)buffer; (void)length;
+    (void)moved;
+    return ASTRA_VFS_ERR_UNSUPPORTED;
+}
+
+uint32_t astra_vfs_port_write_bulk(AstraVfsClient *client, AstraVfsFile file,
+                                   uint64_t offset, const void *buffer,
+                                   uint32_t length, uint32_t *moved)
+{
+    (void)client; (void)file; (void)offset; (void)buffer; (void)length;
+    (void)moved;
     return ASTRA_VFS_ERR_UNSUPPORTED;
 }
 
@@ -168,10 +201,59 @@ int main(void)
         /* First use is what connects, and only once however often it is asked. */
         assert(astra_process_vfs_client() != NULL);
         assert(connects == 1u);
+        {
+            AstraFile original = ASTRA_FILE_INIT;
+            AstraFile restored = ASTRA_FILE_INIT;
+            AstraProcessFileState state;
+
+            original._private_client = astra_process_vfs_client();
+            original._private_read_at = astra_vfs_port_read_bulk;
+            original._private_file = 0x1234u;
+            original._private_flags = ASTRA_VFS_OPEN_READ |
+                                      ASTRA_VFS_OPEN_WRITE;
+            original._private_offset = UINT64_C(0x123456789);
+            original._private_size = UINT64_C(0x223456789);
+            original._private_kind = ASTRA_VFS_KIND_FILE;
+            original._private_member = 2u;
+            assert(astra_process_file_export(&original, &state) ==
+                   ASTRA_VFS_OK);
+            assert(astra_process_file_import(&state, &restored) ==
+                   ASTRA_VFS_OK);
+            assert(restored._private_client == original._private_client);
+            assert(restored._private_read_at == astra_vfs_port_read_bulk);
+            assert(restored._private_write_at == astra_vfs_port_write_bulk);
+            assert(restored._private_file == original._private_file);
+            assert(restored._private_flags == original._private_flags);
+            assert(restored._private_offset == original._private_offset);
+            assert(restored._private_size == original._private_size);
+            assert(restored._private_kind == original._private_kind);
+            assert(restored._private_member == original._private_member);
+            state.service = 0xdeadbeefu;
+            assert(astra_process_file_import(&state, &restored) ==
+                   ASTRA_VFS_ERR_BAD_HANDLE);
+        }
         assert(astra_process_vfs_client() != NULL);
         assert(connects == 1u);
+        {
+            const uint8_t *bytes = NULL;
+            uint32_t length = 0u;
+
+            borrow_enabled = 1u;
+            assert(astra_process_read_file_borrow(
+                       "COMMANDS:test", &bytes, &length) == ASTRA_VFS_OK);
+            assert(bytes == borrowed_file &&
+                   length == sizeof(borrowed_file) - 1u);
+            astra_process_vfs_set_activity(0x12345678u);
+            assert(astra_process_vfs_client_for(
+                       &astra_process_vfs_assigns()->entries[0])->activity ==
+                   0x12345678u);
+            assert(astra_process_vfs_client_for(
+                       &astra_process_vfs_assigns()->entries[2])->activity ==
+                   0x12345678u);
+            borrow_enabled = 0u;
+        }
         astra_process_vfs_close();
-        assert(disconnects == 1u);
+        assert(disconnects == 2u);
 
         /* A mount nobody named is a mount nobody disconnects either. */
         connects = 0u;

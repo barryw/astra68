@@ -49,6 +49,7 @@ static AstraVfsPortService *served;
 static int refuse_send;
 static uint32_t dead_reply_handle;
 static uint32_t mock_empty_receives;
+static uint32_t mock_receive_resource_limits;
 static uint32_t mock_area_maps;
 static uint32_t mock_sender;
 static uint8_t backend_written[64];
@@ -65,6 +66,7 @@ mock_reset(void)
     dead_reply_handle = 0u;
     mock_activity = 0u;
     mock_empty_receives = 0u;
+    mock_receive_resource_limits = 0u;
     mock_area_maps = 0u;
     mock_sender = 0x10000001u;
     memset(backend_written, 0, sizeof(backend_written));
@@ -201,6 +203,10 @@ astra_port_receive_from(uint32_t handle, void *message, uint32_t capacity,
     if (handle == 0u || handle >= MOCK_PORT_MAX || !ports[handle].open) {
         return ASTRA_SYSCALL_INVALID_HANDLE;
     }
+    if (mock_receive_resource_limits != 0u) {
+        --mock_receive_resource_limits;
+        return ASTRA_SYSCALL_RESOURCE_LIMIT;
+    }
     port = &ports[ports[handle].target];
     if (port->count == 0u) {
         ++mock_empty_receives;
@@ -275,7 +281,16 @@ uint32_t
 astra_activity_adopt(uint32_t activity)
 {
     mock_activity = activity;
-    return ASTRA_SYSCALL_OK;
+    return mock_activity;
+}
+
+uint32_t
+astra_activity_exchange(uint32_t activity, uint32_t *previous)
+{
+    if (previous != NULL)
+        *previous = mock_activity;
+    mock_activity = activity;
+    return mock_activity;
 }
 
 /*
@@ -313,10 +328,11 @@ static uint32_t backend_activity;
 
 static uint32_t
 backend_open(void *context, const char *path, uint32_t flags,
-             uintptr_t *node, AstraVfsNodeInfo *info)
+             uint16_t create_mode, uintptr_t *node, AstraVfsNodeInfo *info)
 {
     (void)context;
     (void)flags;
+    (void)create_mode;
     if (path == NULL || path[0] == '\0') {
         return ASTRA_VFS_ERR_INVALID;
     }
@@ -424,10 +440,11 @@ backend_readdir(void *context, const char *path, uint64_t cookie, char *name,
 }
 
 static uint32_t
-backend_mkdir(void *context, const char *path)
+backend_mkdir(void *context, const char *path, uint16_t create_mode)
 {
     (void)context;
     (void)path;
+    (void)create_mode;
     return ASTRA_VFS_ERR_UNSUPPORTED;
 }
 
@@ -448,6 +465,27 @@ backend_rename(void *context, const char *from, const char *to)
     return ASTRA_VFS_ERR_UNSUPPORTED;
 }
 
+static uint32_t
+backend_chmod(void *context, const char *path, uint16_t mode)
+{
+    (void)context;
+    (void)path;
+    (void)mode;
+    return ASTRA_VFS_ERR_UNSUPPORTED;
+}
+
+static uint32_t
+backend_readlink(void *context, const char *path, void *buffer,
+                 uint32_t capacity, uint32_t *length)
+{
+    (void)context;
+    (void)path;
+    (void)buffer;
+    (void)capacity;
+    (void)length;
+    return ASTRA_VFS_ERR_UNSUPPORTED;
+}
+
 static const AstraVfsBackendOps backend_ops = {
     .open = backend_open,
     .close = backend_close,
@@ -460,6 +498,8 @@ static const AstraVfsBackendOps backend_ops = {
     .mkdir = backend_mkdir,
     .unlink = backend_unlink,
     .rename = backend_rename,
+    .chmod = backend_chmod,
+    .readlink = backend_readlink,
 };
 
 static AstraVfsService service;
@@ -588,6 +628,28 @@ test_a_dead_peer_is_reported_and_not_waited_on(void)
         assert(astra_vfs_port_connect(&orphan, nothing) ==
                ASTRA_VFS_ERR_BAD_HANDLE);
     }
+    served = NULL;
+}
+
+static void
+test_clients_own_independent_reply_channels(void)
+{
+    AstraVfsPortService host;
+    AstraVfsClient first;
+    AstraVfsClient second;
+    uint32_t service_handle;
+
+    mock_reset();
+    service_start();
+    service_handle = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_vfs_port_service_init(&host, service_handle, &service));
+    served = &host;
+    assert(astra_vfs_port_connect(&first, service_handle) == ASTRA_VFS_OK);
+    assert(astra_vfs_port_connect(&second, service_handle) == ASTRA_VFS_OK);
+    assert(first.port_reply_receive != second.port_reply_receive);
+    assert(first.port_reply_source != second.port_reply_source);
+    assert(astra_vfs_disconnect(&first) == ASTRA_VFS_OK);
+    assert(astra_vfs_disconnect(&second) == ASTRA_VFS_OK);
     served = NULL;
 }
 
@@ -872,6 +934,52 @@ test_a_dead_client_is_reaped_when_the_session_table_is_full(void)
 }
 
 static void
+test_handle_pressure_reaps_a_dead_client_and_retries_receive(void)
+{
+    AstraVfsPortService host;
+    AstraVfsRequestMessage hello;
+    uint32_t service_handle;
+    uint32_t reply_handle;
+
+    mock_reset();
+    service_start();
+    service_handle = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_vfs_port_service_init(&host, service_handle, &service));
+    memset(&hello, 0, sizeof(hello));
+    hello.header.total_size = sizeof(hello);
+    hello.header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
+    hello.header.protocol = ASTRA_VFS_PROTOCOL;
+    hello.header.protocol_version = ASTRA_VFS_VERSION;
+    hello.header.operation = ASTRA_VFS_OP_HELLO;
+    hello.request.size = ASTRA_VFS_REQUEST_SIZE;
+    hello.request.version = ASTRA_VFS_VERSION;
+
+    reply_handle = mock_open(1u);
+    {
+        uint32_t handles[1] = {reply_handle};
+
+        assert(astra_port_send(service_handle, &hello, sizeof(hello),
+                               handles, 1u) == ASTRA_SYSCALL_OK);
+    }
+    assert(astra_vfs_port_service_pump(&host, 1u) == 1u);
+    dead_reply_handle = host.reply_handles[0];
+
+    reply_handle = mock_open(1u);
+    {
+        uint32_t handles[1] = {reply_handle};
+
+        mock_sender = 2u;
+        assert(astra_port_send(service_handle, &hello, sizeof(hello),
+                               handles, 1u) == ASTRA_SYSCALL_OK);
+    }
+    mock_receive_resource_limits = 1u;
+    assert(astra_vfs_port_service_pump(&host, 1u) == 1u);
+    assert(service.stats.sessions_opened == 2u);
+    assert(service.stats.sessions_closed == 1u);
+    assert(host.stalled == 0u);
+}
+
+static void
 test_the_service_adopts_the_callers_activity(void)
 {
     AstraVfsPortService host;
@@ -1006,6 +1114,7 @@ main(void)
 {
     test_a_request_crosses_and_the_reply_is_the_same();
     test_a_dead_peer_is_reported_and_not_waited_on();
+    test_clients_own_independent_reply_channels();
     test_first_operation_shares_the_hello_round_trip();
     test_version_two_keeps_per_request_reply_ports();
     test_bulk_read_crosses_once_through_a_shared_area();
@@ -1014,6 +1123,7 @@ main(void)
     test_small_path_read_needs_no_shared_area();
     test_bulk_resources_are_reusable_after_disconnect();
     test_a_dead_client_is_reaped_when_the_session_table_is_full();
+    test_handle_pressure_reaps_a_dead_client_and_retries_receive();
     test_the_service_adopts_the_callers_activity();
     test_a_message_that_is_not_the_protocol_is_refused();
     test_an_answer_with_nowhere_to_go_is_counted();

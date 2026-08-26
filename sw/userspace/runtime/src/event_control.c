@@ -4,21 +4,6 @@
 #include <astra/runtime.h>
 #include <astra/status.h>
 
-#define EVENT_CONTROL_DEADLINE_NS 10000000000ull
-
-static void
-fill_header(AstraMessageHeader *header, uint32_t size, uint32_t transaction)
-{
-    header->total_size = size;
-    header->header_size = ASTRA_MESSAGE_HEADER_SIZE;
-    header->flags = 0u;
-    header->protocol = ASTRA_EVENT_CONTROL_PROTOCOL;
-    header->protocol_version = ASTRA_EVENT_CONTROL_VERSION;
-    header->reserved = 0u;
-    header->operation = ASTRA_EVENT_CONTROL_SET;
-    header->transaction_id = transaction;
-}
-
 uint32_t
 astra_event_control_set(uint32_t handle, uint32_t subsystem, uint32_t level)
 {
@@ -28,7 +13,6 @@ astra_event_control_set(uint32_t handle, uint32_t subsystem, uint32_t level)
     uint32_t receive = 0u;
     uint32_t size = 0u;
     uint32_t status;
-    uint64_t deadline;
 
     if (handle == 0u || subsystem >= ASTRA_EVENT_SUBSYSTEM_MAX ||
         level > ASTRA_EVENT_LEVEL_ERROR)
@@ -36,7 +20,10 @@ astra_event_control_set(uint32_t handle, uint32_t subsystem, uint32_t level)
     status = astra_rt_port_create(1u, sizeof(reply), &receive, &carried);
     if (status != ASTRA_SYSCALL_OK)
         return ASTRA_STATUS_LIMIT;
-    fill_header(&request.header, sizeof(request), astra_activity_current());
+    astra_message_header_set(
+        &request.header, sizeof(request), ASTRA_EVENT_CONTROL_PROTOCOL,
+        ASTRA_EVENT_CONTROL_VERSION, ASTRA_EVENT_CONTROL_SET,
+        astra_activity_current());
     request.subsystem = subsystem;
     request.level = level;
     status = astra_port_send(handle, &request, sizeof(request), &carried, 1u);
@@ -47,14 +34,14 @@ astra_event_control_set(uint32_t handle, uint32_t subsystem, uint32_t level)
                status == ASTRA_SYSCALL_INVALID_HANDLE ?
                    ASTRA_STATUS_BAD_HANDLE : ASTRA_STATUS_PEER_DEAD;
     }
-    deadline = astra_clock_monotonic() + EVENT_CONTROL_DEADLINE_NS;
     for (;;) {
         status = astra_port_receive(receive, &reply, sizeof(reply), NULL, 0u,
                                     &size, NULL);
         if (status == ASTRA_SYSCALL_OK)
             break;
         if (status != ASTRA_SYSCALL_WOULD_BLOCK ||
-            astra_wait_one(receive, deadline, NULL) != ASTRA_SYSCALL_OK) {
+            astra_wait_one(receive, ASTRA_DEADLINE_FOREVER, NULL) !=
+                ASTRA_SYSCALL_OK) {
             (void)astra_close(receive);
             return ASTRA_STATUS_PEER_DEAD;
         }
@@ -104,7 +91,10 @@ pump(uint32_t receive, uint32_t target, uint32_t budget)
                 astra_event_level_set(request.subsystem, request.level);
         }
         if (handle_count == 1u) {
-            fill_header(&reply.header, sizeof(reply), transaction);
+            astra_message_header_set(
+                &reply.header, sizeof(reply), ASTRA_EVENT_CONTROL_PROTOCOL,
+                ASTRA_EVENT_CONTROL_VERSION, ASTRA_EVENT_CONTROL_SET,
+                transaction);
             reply.status = status;
             (void)astra_port_send(carried, &reply, sizeof(reply), NULL, 0u);
             (void)astra_close(carried);

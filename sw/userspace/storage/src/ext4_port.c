@@ -223,6 +223,22 @@ port_bwrite(struct ext4_blockdev *blockdev, const void *buffer, uint64_t block,
 }
 
 static int
+port_flush(struct ext4_blockdev *blockdev)
+{
+    AstraExt4Port *port = port_of(blockdev);
+    AstraBlockStatus status;
+
+    if (port == NULL) {
+        return EINVAL;
+    }
+    status = astra_block_flush(port->device, transfer_deadline(port));
+    if (status != ASTRA_BLOCK_OK) {
+        port->last_status = status;
+    }
+    return astra_ext4_errno(status);
+}
+
+static int
 port_lock(struct ext4_blockdev *blockdev)
 {
     AstraExt4Port *port = port_of(blockdev);
@@ -317,6 +333,7 @@ astra_ext4_port_init(AstraExt4Port *port, AstraBlockDevice *device,
     port->interface.open = port_open;
     port->interface.bread = port_bread;
     port->interface.bwrite = port_bwrite;
+    port->interface.flush = port_flush;
     port->interface.close = port_close;
     port->interface.lock = port_lock;
     port->interface.unlock = port_unlock;

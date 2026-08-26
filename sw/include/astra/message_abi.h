@@ -29,6 +29,21 @@ typedef struct AstraMessageHeader {
 
 _Static_assert(sizeof(AstraMessageHeader) == ASTRA_MESSAGE_HEADER_SIZE,
                "message ABI header size changed");
+
+static inline void
+astra_message_header_set(AstraMessageHeader *header, uint32_t total_size,
+                         uint32_t protocol, uint16_t protocol_version,
+                         uint32_t operation, uint32_t transaction_id)
+{
+    header->total_size = total_size;
+    header->header_size = ASTRA_MESSAGE_HEADER_SIZE;
+    header->flags = 0u;
+    header->protocol = protocol;
+    header->protocol_version = protocol_version;
+    header->reserved = 0u;
+    header->operation = operation;
+    header->transaction_id = transaction_id;
+}
 #endif
 
 #endif

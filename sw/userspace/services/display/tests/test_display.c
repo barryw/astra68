@@ -314,7 +314,7 @@ int main(void)
             .width = ASTRA_DISPLAY_WIDTH,
             .height = DISPLAY_WORK_BOTTOM - DISPLAY_WORK_TOP,
             .type = ASTRA_WINDOW_DESKTOP,
-            .content_format = ASTRA_GUI_CONTENT_DRAW_LIST,
+            .content_format = ASTRA_WINDOW_CONTENT_DRAW_LIST,
         };
 
         assert(valid_open(&open, sizeof(open), 3u));
@@ -335,7 +335,7 @@ int main(void)
                                color(theme.accent));
         label(&desktop.windows[0].surface.view, 40, 104,
               "Terminal", 8u, color(theme.text_primary));
-        assert(compose(batch, 1u, &desktop, &error) ==
+        assert(compose(batch, 1u, &desktop, &error, NULL) ==
                ASTRA_RENDER_BUILDER_BYTES);
         assert(error == ASTRA_STATUS_OK);
     }
@@ -382,19 +382,19 @@ int main(void)
 
     add_window(&state, 0u, ASTRA_WINDOW_POPOVER, 300u, 380u,
                250u, 125u, 0u, 0u);
-    assert(compose(batch, 1u, &state, &error) == ASTRA_RENDER_BUILDER_BYTES);
+    assert(compose(batch, 1u, &state, &error, NULL) == ASTRA_RENDER_BUILDER_BYTES);
     rendered(&state.windows[0]);
     state.damage[1] = (DamageRect){0};
     add_window(&state, 1u, ASTRA_WINDOW_UTILITY, 600u, 80u,
                360u, 145u, 0u, ASTRA_WINDOW_GADGET_CLOSE);
     damage_window(&state, &theme, &state.windows[1]);
-    assert(compose(batch, 2u, &state, &error) == ASTRA_RENDER_BUILDER_BYTES);
+    assert(compose(batch, 2u, &state, &error, NULL) == ASTRA_RENDER_BUILDER_BYTES);
     rendered(&state.windows[1]);
     state.damage[0] = (DamageRect){0};
     add_window(&state, 2u, ASTRA_WINDOW_DIALOG, 520u, 300u,
                400u, 190u, ASTRA_WINDOW_MODAL, ASTRA_WINDOW_GADGET_CLOSE);
     damage_window(&state, &theme, &state.windows[2]);
-    assert(compose(batch, 3u, &state, &error) == ASTRA_RENDER_BUILDER_BYTES);
+    assert(compose(batch, 3u, &state, &error, NULL) == ASTRA_RENDER_BUILDER_BYTES);
     rendered(&state.windows[2]);
     state.damage[1] = (DamageRect){0};
     add_window(&state, 3u, ASTRA_WINDOW_STANDARD, 100u, 100u,
@@ -402,17 +402,17 @@ int main(void)
                ASTRA_WINDOW_GADGET_CLOSE | ASTRA_WINDOW_GADGET_MINIMIZE |
                    ASTRA_WINDOW_GADGET_MAXIMIZE);
     damage_window(&state, &theme, &state.windows[3]);
-    assert(compose(batch, 4u, &state, &error) == ASTRA_RENDER_BUILDER_BYTES);
+    assert(compose(batch, 4u, &state, &error, NULL) == ASTRA_RENDER_BUILDER_BYTES);
     rendered(&state.windows[3]);
     state.damage[0] = (DamageRect){0};
     assert(apply_command(&state, &theme, &resize, &closed, &changed) ==
            ASTRA_STATUS_OK && changed);
-    assert(compose(batch, 5u, &state, &error) == ASTRA_RENDER_BUILDER_BYTES);
+    assert(compose(batch, 5u, &state, &error, NULL) == ASTRA_RENDER_BUILDER_BYTES);
     assert(batch_has_surface_fill(580u, 300u, color(theme.client)));
     rendered(&state.windows[3]);
     assert(apply_command(&state, &theme, &move, &closed, &changed) ==
            ASTRA_STATUS_OK && changed);
-    assert(compose(batch, 6u, &state, &error) == ASTRA_RENDER_BUILDER_BYTES);
+    assert(compose(batch, 6u, &state, &error, NULL) == ASTRA_RENDER_BUILDER_BYTES);
     state.capture_window = 4u;
     state.capture_region = HIT_TITLE;
     state.capture_dx = 10;
@@ -828,7 +828,7 @@ int main(void)
         assert(visible_region(&stack, &theme, &stack.damage[0], 2u,
                               region) == 1u);
 
-        bytes = compose(batch, 2u, &stack, &error);
+        bytes = compose(batch, 2u, &stack, &error, NULL);
         assert(bytes != 0u && error == ASTRA_STATUS_OK);
         assert(!batch_has_fill(100, 100, 200u, 200u, color(theme.canvas)));
         assert(batch_fill_count(0, 0, 200u, 200u, color(theme.client)) == 1u);

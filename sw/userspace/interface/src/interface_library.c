@@ -1,13 +1,12 @@
 #include <astra/interface_library.h>
 
+#include <astra/bytes.h>
 #include <astra/library.h>
+#include <astra/result.h>
 #include <astra/runtime.h>
 #include <astra/surface.h>
 #include <astra/theme.h>
 #include <astra/window.h>
-
-#include "internal/status.h"
-#include "internal/syscall.h"
 
 #define ALERT_WIDTH 420u
 #define ALERT_HEIGHT 150u
@@ -21,13 +20,6 @@ ASTRA_LIBRARY("interface.library", 1, 1, 0,
               ASTRA_INTERFACE_LIBRARY_ABI_MINOR,
               "Barry Walker", "Copyright 2026 Barry Walker");
 
-static int words_zero(const uint32_t *words, uint32_t count)
-{
-    for (uint32_t at = 0u; at < count; ++at)
-        if (words[at] != 0u) return 0;
-    return 1;
-}
-
 static int valid(const AstraAlertInfo *info)
 {
     return info != NULL && info->size >= sizeof(*info) &&
@@ -39,7 +31,7 @@ static int valid(const AstraAlertInfo *info)
            info->button != NULL && info->button_length != 0u &&
            info->button_length <= 16u && info->reserved16 == 0u &&
            info->reserved16_2 == 0u && info->reserved16_3 == 0u &&
-           words_zero(info->reserved, 4u);
+           astra_words_zero(info->reserved, 4u);
 }
 
 #if defined(ASTRA_INTERFACE_TEST)
@@ -99,7 +91,7 @@ static AstraResult show_alert(AstraHandle gui, const AstraAlertInfo *info)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     status = astra_shared_draw_list_create(&surface, ALERT_WIDTH, ALERT_HEIGHT);
     if (status != ASTRA_SYSCALL_OK)
-        return astra_internal_result(status);
+        return astra_result_from_syscall(status);
     paint(&surface.view, info);
     create.flags = ASTRA_WINDOW_MODAL | ASTRA_WINDOW_ACTIVE;
     create.x = 430u;
@@ -140,7 +132,7 @@ static AstraResult show_alert(AstraHandle gui, const AstraAlertInfo *info)
     }
     status = astra_shared_surface_close(&surface);
     if (result == ASTRA_OK && status != ASTRA_SYSCALL_OK)
-        result = astra_internal_result(status);
+        result = astra_result_from_syscall(status);
     return result;
 }
 

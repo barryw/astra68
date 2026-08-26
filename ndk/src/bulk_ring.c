@@ -1,5 +1,8 @@
 #include <astra/bulk_ring.h>
 
+#include <astra/compiler.h>
+#include <astra/integer.h>
+
 #include "internal/syscall.h"
 
 #include <stddef.h>
@@ -10,11 +13,6 @@ _Static_assert(offsetof(AstraBulkRingHeader, producer_position) == 0x20u,
                "AstraBulkRingHeader producer offset");
 _Static_assert(offsetof(AstraBulkRingHeader, consumer_position) == 0x30u,
                "AstraBulkRingHeader consumer offset");
-
-static int power_of_two(uint32_t value)
-{
-    return value != 0u && (value & (value - 1u)) == 0u;
-}
 
 static int valid_role(uint8_t role)
 {
@@ -53,17 +51,12 @@ static void clear_ring(AstraBulkRing *ring)
     ring->reserved = 0u;
 }
 
-static void acquire_fence(void)
-{
-    __asm__ volatile("" : : : "memory");
-}
-
 static void release_fence(void)
 {
 #if defined(__m68k__)
     __asm__ volatile("nop" : : : "memory");
 #else
-    __asm__ volatile("" : : : "memory");
+    astra_compiler_barrier();
 #endif
 }
 
@@ -86,7 +79,8 @@ static int header_valid(const AstraBulkRing *ring)
         (ring->element_size & 3u) != 0u ||
         ring->capacity < ASTRA_BULK_RING_CAPACITY_MIN ||
         ring->capacity > ASTRA_BULK_RING_CAPACITY_MAX ||
-        !power_of_two(ring->capacity) || ring->generation == 0u)
+        !astra_u32_is_power_of_two(ring->capacity) ||
+        ring->generation == 0u)
         return 0;
     header = ring->header;
     total = ASTRA_BULK_RING_HEADER_SIZE +
@@ -181,7 +175,8 @@ AstraResult astra_bulk_ring_create(AstraHandle area, uint32_t offset,
         element_size > ASTRA_BULK_RING_ELEMENT_SIZE_MAX ||
         (element_size & 3u) != 0u ||
         capacity < ASTRA_BULK_RING_CAPACITY_MIN ||
-        capacity > ASTRA_BULK_RING_CAPACITY_MAX || !power_of_two(capacity))
+        capacity > ASTRA_BULK_RING_CAPACITY_MAX ||
+        !astra_u32_is_power_of_two(capacity))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     result = astra_internal_result(astra_internal_syscall(
         ASTRA_SYSCALL_RING_CREATE, area, offset, element_size, capacity, 0,
@@ -252,7 +247,7 @@ AstraResult astra_bulk_ring_attach(AstraBulkRing *ring,
         (header->element_size & 3u) != 0u ||
         header->capacity < ASTRA_BULK_RING_CAPACITY_MIN ||
         header->capacity > ASTRA_BULK_RING_CAPACITY_MAX ||
-        !power_of_two(header->capacity)) {
+        !astra_u32_is_power_of_two(header->capacity)) {
         prepared.endpoint = *endpoint;
         prepared.role = role;
         return report_corruption(&prepared);
@@ -377,7 +372,7 @@ AstraResult astra_bulk_ring_read_reserve(AstraBulkRing *ring,
     if (!endpoint_ready(ring))
         return ASTRA_ERROR_WOULD_BLOCK;
     slot = ring->local_position & (ring->capacity - 1u);
-    acquire_fence();
+    astra_compiler_barrier();
     ring->reservation_position = ring->local_position;
     ring->reservation_active = 1u;
     *element = (const void *)(uintptr_t)

@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <astra/endian.h>
+
 #include "elf.h"
 #include "memory.h"
 #include "process.h"
@@ -34,16 +36,12 @@ static const KernelElfLimits library_limits = {
 
 static void put16(uint32_t offset, uint16_t value)
 {
-    image[offset] = (uint8_t)(value >> 8);
-    image[offset + 1u] = (uint8_t)value;
+    astra_store_be16(image + offset, value);
 }
 
 static void put32(uint32_t offset, uint32_t value)
 {
-    image[offset] = (uint8_t)(value >> 24);
-    image[offset + 1u] = (uint8_t)(value >> 16);
-    image[offset + 2u] = (uint8_t)(value >> 8);
-    image[offset + 3u] = (uint8_t)value;
+    astra_store_be32(image + offset, value);
 }
 
 /*

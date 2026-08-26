@@ -24,6 +24,7 @@ esp32/astrahost/build/
 esp32/astrahost/build-provision/
 esp32/astrahost/sdkconfig
 /sw/stage0/test_fat_loader
+/sw/boot/test_lz4_legacy
 
 # HDL sim
 work/

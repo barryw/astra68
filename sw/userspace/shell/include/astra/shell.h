@@ -8,7 +8,8 @@
 
 #define ASTRA_SHELL_LINE_CAPACITY 512u
 #define ASTRA_SHELL_HISTORY_CAPACITY 32u
-#define ASTRA_SHELL_ARG_CAPACITY 32u
+/* A one-character word plus its separator is the densest possible line. */
+#define ASTRA_SHELL_ARG_CAPACITY ((ASTRA_SHELL_LINE_CAPACITY + 1u) / 2u)
 #define ASTRA_SHELL_COMPLETION_CAPACITY 32u
 /*
  * The variable arena. One block of `NAME\0VALUE\0` pairs rather than a table

@@ -11,34 +11,6 @@
 ASTRA_PROGRAM("input", 0, 1, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
-static const AstraStartupCapability *
-capability(const AstraStartupInfo *startup, const char *name)
-{
-    const AstraStartupCapability *entries =
-        (const AstraStartupCapability *)(uintptr_t)
-            startup->capabilities_address;
-
-    for (uint32_t index = 0u; index < startup->capability_count; ++index)
-        if (astra_capability_name_equal(entries[index].name, name))
-            return &entries[index];
-    return NULL;
-}
-
-static uint32_t ready(uint32_t bootstrap, uint32_t status, uint32_t service)
-{
-    AstraServiceReady message = {0};
-
-    message.header.total_size = sizeof(message);
-    message.header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
-    message.header.protocol = ASTRA_SERVICE_PROTOCOL;
-    message.header.protocol_version = ASTRA_SERVICE_VERSION;
-    message.header.operation = ASTRA_SERVICE_READY;
-    message.status = status;
-    return astra_port_send(bootstrap, &message, sizeof(message),
-                           status == ASTRA_STATUS_OK ? &service : NULL,
-                           status == ASTRA_STATUS_OK ? 1u : 0u);
-}
-
 static AstraInputPortSendResult send_event(void *context,
                                            uint32_t send_handle,
                                            const void *message,
@@ -63,12 +35,10 @@ static void connected_reply(uint32_t handle, uint32_t transaction,
 {
     AstraInputConnected reply = {0};
 
-    reply.header.total_size = sizeof(reply);
-    reply.header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
-    reply.header.protocol = ASTRA_INPUT_SERVICE_PROTOCOL;
-    reply.header.protocol_version = ASTRA_INPUT_SERVICE_VERSION;
-    reply.header.operation = ASTRA_INPUT_OPERATION_CONNECTED;
-    reply.header.transaction_id = transaction;
+    astra_message_header_set(&reply.header, sizeof(reply),
+                             ASTRA_INPUT_SERVICE_PROTOCOL,
+                             ASTRA_INPUT_SERVICE_VERSION,
+                             ASTRA_INPUT_OPERATION_CONNECTED, transaction);
     reply.status = status;
     if (status == ASTRA_STATUS_OK) {
         reply.client = client;
@@ -258,18 +228,22 @@ int astra_main(const AstraStartupInfo *startup)
     if (!astra_startup_validate(startup) ||
         startup->capabilities_address == 0u)
         return ASTRA_STATUS_INVALID;
-    bootstrap = capability(startup, ASTRA_CAPABILITY_SERVICE_READY);
-    input = capability(startup, ASTRA_CAPABILITY_INPUT_DEVICE);
-    irq = capability(startup, ASTRA_CAPABILITY_INPUT_IRQ);
+    bootstrap = astra_startup_capability(startup,
+                                         ASTRA_CAPABILITY_SERVICE_READY);
+    input = astra_startup_capability(startup,
+                                     ASTRA_CAPABILITY_INPUT_DEVICE);
+    irq = astra_startup_capability(startup, ASTRA_CAPABILITY_INPUT_IRQ);
     if (bootstrap == NULL || input == NULL || irq == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     status = astra_input_service_init(&service, &config) ?
         astra_rt_port_create(8u, 8u * sizeof(AstraInputConnect),
                             &receive, &send) : ASTRA_SYSCALL_INVALID_ARGUMENT;
     if (status == ASTRA_SYSCALL_OK)
-        status = ready(bootstrap->handle, ASTRA_STATUS_OK, send);
+        status = astra_service_ready(bootstrap->handle, ASTRA_STATUS_OK,
+                                     &send, 1u);
     else
-        (void)ready(bootstrap->handle, ASTRA_STATUS_IO, 0u);
+        (void)astra_service_ready(bootstrap->handle, ASTRA_STATUS_IO,
+                                  NULL, 0u);
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_SYSCALL_OK)
         return ASTRA_STATUS_IO;

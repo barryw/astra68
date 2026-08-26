@@ -126,34 +126,6 @@ enum {
 ASTRA_PROGRAM("display", 0, 3, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
-static const AstraStartupCapability *
-capability(const AstraStartupInfo *startup, const char *name)
-{
-    const AstraStartupCapability *entries =
-        (const AstraStartupCapability *)(uintptr_t)
-            startup->capabilities_address;
-
-    for (uint32_t index = 0u; index < startup->capability_count; ++index)
-        if (astra_capability_name_equal(entries[index].name, name))
-            return &entries[index];
-    return NULL;
-}
-
-static uint32_t ready(uint32_t bootstrap, uint32_t status, uint32_t gui)
-{
-    AstraServiceReady message = {0};
-
-    message.header.total_size = sizeof(message);
-    message.header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
-    message.header.protocol = ASTRA_SERVICE_PROTOCOL;
-    message.header.protocol_version = ASTRA_SERVICE_VERSION;
-    message.header.operation = ASTRA_SERVICE_READY;
-    message.status = status;
-    return astra_port_send(bootstrap, &message, sizeof(message),
-                           status == ASTRA_STATUS_OK ? &gui : NULL,
-                           status == ASTRA_STATUS_OK ? 1u : 0u);
-}
-
 static uint16_t color(AstraColorRGBA8 value)
 {
     return astra_surface_rgb565(value.red, value.green, value.blue);
@@ -432,12 +404,9 @@ static uint32_t send_event(DisplayWindow *window, AstraWindowEvent *event)
     event->generation = window->generation;
     if (window->event_lost != 0u)
         event->flags |= ASTRA_WINDOW_EVENT_LOSS;
-    message.header.total_size = sizeof(message);
-    message.header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
-    message.header.protocol = ASTRA_GUI_PROTOCOL;
-    message.header.protocol_version = ASTRA_GUI_VERSION;
-    message.header.operation = ASTRA_GUI_WINDOW_EVENT;
-    message.header.transaction_id = event->sequence;
+    astra_message_header_set(&message.header, sizeof(message),
+                             ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
+                             ASTRA_GUI_WINDOW_EVENT, event->sequence);
     message.event = *event;
     status = astra_port_send(window->event_send, &message, sizeof(message),
                              NULL, 0u);
@@ -1308,10 +1277,21 @@ static void desktop_damage(AstraRenderBuilder *builder, uint32_t framebuffer,
     }
 }
 
-static uint32_t compose(void *storage, uint32_t fence,
-                        DisplayState *state, uint32_t *error)
+static uint32_t compose_failed(const AstraRenderBuilder *builder,
+                               uint32_t *error, uint32_t *failure,
+                               uint32_t status)
 {
-    AstraRenderBuilder builder;
+    *error = status;
+    if (failure != NULL)
+        *failure = builder->failed;
+    return 0u;
+}
+
+static uint32_t compose(void *storage, uint32_t fence,
+                        DisplayState *state, uint32_t *error,
+                        uint32_t *failure)
+{
+    AstraRenderBuilder builder = {0};
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     uint32_t cache[DISPLAY_WINDOW_MAX] = {0};
     uint32_t content[DISPLAY_WINDOW_MAX] = {0};
@@ -1324,10 +1304,12 @@ static uint32_t compose(void *storage, uint32_t fence,
     if (error == NULL)
         return 0u;
     *error = ASTRA_STATUS_OK;
+    if (failure != NULL)
+        *failure = ASTRA_RENDER_BUILDER_FAILURE_NONE;
     if (damage->valid == 0u || !astra_render_builder_init(
             &builder, storage, ASTRA_RENDER_BUILDER_BYTES, fence)) {
-        *error = ASTRA_STATUS_INVALID;
-        return 0u;
+        return compose_failed(&builder, error, failure,
+                              ASTRA_STATUS_INVALID);
     }
     framebuffer = astra_render_builder_frame(&builder);
     for (uint32_t index = 0u; index < state->count; ++index) {
@@ -1346,8 +1328,8 @@ static uint32_t compose(void *storage, uint32_t fence,
                 (uint16_t)outer_width(&theme, window),
                 (uint16_t)outer_height(&theme, window));
             if (cache[index] == 0u) {
-                *error = ASTRA_STATUS_LIMIT;
-                return 0u;
+                return compose_failed(&builder, error, failure,
+                                      ASTRA_STATUS_LIMIT);
             }
         }
         content[index] = astra_render_builder_surface_at(
@@ -1364,25 +1346,28 @@ static uint32_t compose(void *storage, uint32_t fence,
                  window->request.height, color(theme.client))) ||
             (window->content_dirty != 0u &&
              !astra_render_builder_replay(&builder, content[index], list))) {
-            *error = builder.failed != 0u ? ASTRA_STATUS_LIMIT :
-                                             ASTRA_STATUS_PROTOCOL;
-            return 0u;
+            return compose_failed(
+                &builder, error, failure,
+                builder.failed != 0u ? ASTRA_STATUS_LIMIT :
+                                       ASTRA_STATUS_PROTOCOL);
         }
         if (!decorated(window))
             continue;
         if (window->cache_dirty != 0u &&
             !build_cache(&builder, cache[index], content[index],
                          &theme, window)) {
-            *error = builder.failed != 0u ? ASTRA_STATUS_LIMIT :
-                                             ASTRA_STATUS_PROTOCOL;
-            return 0u;
+            return compose_failed(
+                &builder, error, failure,
+                builder.failed != 0u ? ASTRA_STATUS_LIMIT :
+                                       ASTRA_STATUS_PROTOCOL);
         }
         if (window->cache_dirty == 0u && window->content_dirty != 0u &&
             !update_cache_content(&builder, cache[index], content[index],
                                   &theme, window)) {
-            *error = builder.failed != 0u ? ASTRA_STATUS_LIMIT :
-                                             ASTRA_STATUS_PROTOCOL;
-            return 0u;
+            return compose_failed(
+                &builder, error, failure,
+                builder.failed != 0u ? ASTRA_STATUS_LIMIT :
+                                       ASTRA_STATUS_PROTOCOL);
         }
     }
     region_count = visible_region(state, &theme, damage, 0u, region);
@@ -1411,14 +1396,35 @@ static uint32_t compose(void *storage, uint32_t fence,
                     window_radius(&theme, window), 1,
                     region[at].left, region[at].top,
                     region[at].right, region[at].bottom))
-                return *error = ASTRA_STATUS_LIMIT, 0u;
+                return compose_failed(&builder, error, failure,
+                                      ASTRA_STATUS_LIMIT);
         }
     }
     framebuffer = astra_render_builder_finish(&builder);
     if (framebuffer == 0u)
-        *error = ASTRA_STATUS_LIMIT;
+        return compose_failed(&builder, error, failure,
+                              ASTRA_STATUS_LIMIT);
     return framebuffer;
 }
+
+static void log_builder_failure(uint32_t failure)
+{
+    static const char *const messages[] = {
+        "display render builder failed without a reason",
+        "display render data arena is full",
+        "display render descriptor table is full",
+        "display render command has an invalid destination",
+        "display render command ring or clip is invalid",
+        "display render surface geometry is invalid",
+        "display render glyph table is full",
+    };
+
+    if (failure >= sizeof(messages) / sizeof(messages[0]))
+        failure = ASTRA_RENDER_BUILDER_FAILURE_NONE;
+    (void)astra_log(messages[failure]);
+}
+
+static uint32_t last_builder_failure;
 
 static uint32_t submit_request(uint32_t device, uint32_t irq,
                                const AstraDisplayFrameRequest *request,
@@ -1508,8 +1514,11 @@ static uint32_t render(uint32_t device, uint32_t irq,
 {
     uint32_t buffer = (*next_fence & 1u) != 0u ? 1u : 0u;
     uint32_t compose_status = ASTRA_STATUS_OK;
+
+    last_builder_failure = ASTRA_RENDER_BUILDER_FAILURE_NONE;
     uint32_t bytes = compose((void *)(uintptr_t)framebuffer->virtual_base,
-                             *next_fence, state, &compose_status);
+                             *next_fence, state, &compose_status,
+                             &last_builder_failure);
     uint32_t status = bytes == 0u ? compose_status :
         present(device, irq, framebuffer, bytes, *next_fence, armed);
 
@@ -1524,6 +1533,22 @@ static uint32_t render(uint32_t device, uint32_t irq,
         }
     }
     return status;
+}
+
+static void render_failure(const char *phase, uint32_t status)
+{
+    (void)astra_log(phase);
+    if (last_builder_failure != ASTRA_RENDER_BUILDER_FAILURE_NONE)
+        log_builder_failure(last_builder_failure);
+    else if (status == ASTRA_STATUS_LIMIT)
+        (void)astra_log("display render exhausted its command resources");
+    else if (status == ASTRA_STATUS_PROTOCOL)
+        (void)astra_log("display rejected a window draw list");
+    else if (status == ASTRA_STATUS_INVALID)
+        (void)astra_log("display render had no valid damage or batch");
+    else
+        (void)astra_log("display hardware submission or completion failed");
+    astra_process_exit(DISPLAY_FAIL_COMPLETION);
 }
 
 static int valid_open(const AstraGuiOpenWindow *request, uint32_t size,
@@ -1546,7 +1571,7 @@ static int valid_open(const AstraGuiOpenWindow *request, uint32_t size,
            request->header.operation == ASTRA_GUI_OPEN_WINDOW &&
            request->header.transaction_id != 0u &&
            (request->event_mask & ~ASTRA_WINDOW_SUBSCRIBE_ALL) == 0u &&
-           request->content_format == ASTRA_GUI_CONTENT_DRAW_LIST &&
+           request->content_format == ASTRA_WINDOW_CONTENT_DRAW_LIST &&
            request->type >= ASTRA_WINDOW_STANDARD &&
            request->type <= ASTRA_WINDOW_DESKTOP &&
            (request->flags & ~(ASTRA_WINDOW_RESIZABLE | ASTRA_WINDOW_MODAL |
@@ -1626,12 +1651,9 @@ static void state_reply(AstraGuiWindowState *reply, uint32_t transaction,
                         uint32_t z_order)
 {
     *reply = (AstraGuiWindowState){0};
-    reply->header.total_size = sizeof(*reply);
-    reply->header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
-    reply->header.protocol = ASTRA_GUI_PROTOCOL;
-    reply->header.protocol_version = ASTRA_GUI_VERSION;
-    reply->header.operation = ASTRA_GUI_WINDOW_STATE;
-    reply->header.transaction_id = transaction;
+    astra_message_header_set(&reply->header, sizeof(*reply),
+                             ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
+                             ASTRA_GUI_WINDOW_STATE, transaction);
     reply->status = status;
     reply->window = window->id;
     reply->generation = window->generation;
@@ -2132,12 +2154,9 @@ static uint32_t reply_open(uint32_t handle, uint32_t transaction,
 {
     AstraGuiWindowOpened message = {0};
 
-    message.header.total_size = sizeof(message);
-    message.header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
-    message.header.protocol = ASTRA_GUI_PROTOCOL;
-    message.header.protocol_version = ASTRA_GUI_VERSION;
-    message.header.operation = ASTRA_GUI_WINDOW_OPENED;
-    message.header.transaction_id = transaction;
+    astra_message_header_set(&message.header, sizeof(message),
+                             ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
+                             ASTRA_GUI_WINDOW_OPENED, transaction);
     message.status = status;
     if (status == ASTRA_STATUS_OK) {
         message.window = window->id;
@@ -2262,9 +2281,12 @@ static void receive_open(uint32_t device, uint32_t irq,
         int changed = 0;
 
         (void)apply_command(state, &theme, &close, &failed, &changed);
-        if (changed && render(device, irq, framebuffer, state,
-                              next_fence, armed) != ASTRA_STATUS_OK)
-            astra_process_exit(DISPLAY_FAIL_COMPLETION);
+        if (changed) {
+            status = render(device, irq, framebuffer, state,
+                            next_fence, armed);
+            if (status != ASTRA_STATUS_OK)
+                render_failure("display close render failed", status);
+        }
         close_window(&failed);
     }
     if (control_send != 0u)
@@ -2312,10 +2334,12 @@ static void receive_command(uint32_t device, uint32_t irq,
                            state->windows[window_index].request.height) ?
              apply_command(state, &theme, &command, &closed, &changed) :
              DISPLAY_FAIL_PROTOCOL;
-    if (status == ASTRA_STATUS_OK && changed &&
-        render(device, irq, framebuffer, state,
-               next_fence, armed) != ASTRA_STATUS_OK)
-        astra_process_exit(DISPLAY_FAIL_COMPLETION);
+    if (status == ASTRA_STATUS_OK && changed) {
+        status = render(device, irq, framebuffer, state,
+                        next_fence, armed);
+        if (status != ASTRA_STATUS_OK)
+            render_failure("display window-command render failed", status);
+    }
     if (status == ASTRA_STATUS_OK && changed && closed.id == 0u) {
         uint32_t current = find_id(state, id);
 
@@ -2367,12 +2391,10 @@ static uint32_t connect_input(uint32_t service, uint32_t *receive_out)
                                   &reply_receive, &reply_send);
     if (status != ASTRA_SYSCALL_OK)
         goto done;
-    request.header.total_size = sizeof(request);
-    request.header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
-    request.header.protocol = ASTRA_INPUT_SERVICE_PROTOCOL;
-    request.header.protocol_version = ASTRA_INPUT_SERVICE_VERSION;
-    request.header.operation = ASTRA_INPUT_OPERATION_CONNECT;
-    request.header.transaction_id = 1u;
+    astra_message_header_set(&request.header, sizeof(request),
+                             ASTRA_INPUT_SERVICE_PROTOCOL,
+                             ASTRA_INPUT_SERVICE_VERSION,
+                             ASTRA_INPUT_OPERATION_CONNECT, 1u);
     request.subscriptions = ASTRA_INPUT_SUBSCRIBE_ALL;
     request.flags = ASTRA_INPUT_CONNECT_SEAT_OWNER;
     handles[0] = event_send;
@@ -2524,10 +2546,12 @@ static void serve_windows(uint32_t device, uint32_t irq,
                               1u, 0u,
                               &cursor_fence, &armed) != ASTRA_STATUS_OK)
                 astra_process_exit(DISPLAY_FAIL_COMPLETION);
-            if ((effects & DISPLAY_POINTER_RENDER) != 0u &&
-                render(device, irq, framebuffer, &state,
-                       &next_fence, &armed) != ASTRA_STATUS_OK)
-                astra_process_exit(DISPLAY_FAIL_COMPLETION);
+            if ((effects & DISPLAY_POINTER_RENDER) != 0u) {
+                status = render(device, irq, framebuffer, &state,
+                                &next_fence, &armed);
+                if (status != ASTRA_STATUS_OK)
+                    render_failure("display pointer render failed", status);
+            }
             if ((effects & DISPLAY_POINTER_FRAME) != 0u) {
                 uint32_t index = find_id(&state, frame_window);
 
@@ -2556,10 +2580,13 @@ int astra_main(const AstraStartupInfo *startup)
     if (!astra_startup_validate(startup) ||
         startup->capabilities_address == 0u)
         return ASTRA_STATUS_INVALID;
-    bootstrap = capability(startup, ASTRA_CAPABILITY_SERVICE_READY);
-    device = capability(startup, ASTRA_CAPABILITY_DISPLAY_DEVICE);
-    irq = capability(startup, ASTRA_CAPABILITY_DISPLAY_IRQ);
-    input_service = capability(startup, ASTRA_CAPABILITY_INPUT_SERVICE);
+    bootstrap = astra_startup_capability(startup,
+                                         ASTRA_CAPABILITY_SERVICE_READY);
+    device = astra_startup_capability(startup,
+                                      ASTRA_CAPABILITY_DISPLAY_DEVICE);
+    irq = astra_startup_capability(startup, ASTRA_CAPABILITY_DISPLAY_IRQ);
+    input_service = astra_startup_capability(
+        startup, ASTRA_CAPABILITY_INPUT_SERVICE);
     if (bootstrap == NULL || device == NULL || irq == NULL ||
         input_service == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
@@ -2570,9 +2597,10 @@ int astra_main(const AstraStartupInfo *startup)
         status = astra_rt_port_create(4u, 4u * ASTRA_GUI_OPEN_WINDOW_SIZE,
                                    &gui_receive, &gui_send);
     if (status == ASTRA_SYSCALL_OK)
-        status = ready(bootstrap->handle, ASTRA_STATUS_OK, gui_send);
+        status = astra_service_ready(bootstrap->handle, ASTRA_STATUS_OK,
+                                     &gui_send, 1u);
     else
-        (void)ready(bootstrap->handle, status, 0u);
+        (void)astra_service_ready(bootstrap->handle, status, NULL, 0u);
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_SYSCALL_OK) {
         if (gui_send != 0u)

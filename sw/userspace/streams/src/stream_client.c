@@ -25,14 +25,9 @@
 static void
 fill_header(AstraMessageHeader *header, uint32_t operation, uint32_t size)
 {
-    header->total_size = size;
-    header->header_size = ASTRA_MESSAGE_HEADER_SIZE;
-    header->flags = 0u;
-    header->protocol = ASTRA_STREAM_SERVICE_PROTOCOL;
-    header->protocol_version = ASTRA_STREAM_SERVICE_VERSION;
-    header->reserved = 0u;
-    header->operation = operation;
-    header->transaction_id = astra_activity_current();
+    astra_message_header_set(header, size, ASTRA_STREAM_SERVICE_PROTOCOL,
+                             ASTRA_STREAM_SERVICE_VERSION, operation,
+                             astra_activity_current());
 }
 
 uint32_t
@@ -161,10 +156,11 @@ astra_print_u32(uint32_t handle, uint32_t value)
  * blocking wait are the two things easiest to get subtly wrong twice.
  */
 static uint32_t
-ask(uint32_t handle, uint32_t operation, uint32_t capacity, void *reply,
-    uint32_t reply_size, uint32_t expected_operation)
+exchange_handles(uint32_t handle, const void *request, uint32_t request_size,
+                 void *reply, uint32_t reply_size,
+                 uint32_t expected_operation, uint32_t *reply_handles,
+                 uint32_t reply_handle_capacity, uint32_t *reply_handle_count)
 {
-    AstraStreamRead request;
     uint32_t handles[1];
     uint32_t receive = 0u;
     uint32_t size = 0u;
@@ -175,11 +171,7 @@ ask(uint32_t handle, uint32_t operation, uint32_t capacity, void *reply,
     if (status != ASTRA_SYSCALL_OK) {
         return status;
     }
-    fill_header(&request.header, operation, (uint32_t)sizeof(request));
-    request.capacity = (uint16_t)capacity;
-    request.reserved = 0u;
-    request.activity = astra_activity_current();
-    status = astra_port_send(handle, &request, sizeof(request), handles, 1u);
+    status = astra_port_send(handle, request, request_size, handles, 1u);
     if (status != ASTRA_SYSCALL_OK) {
         /* The send failed, so the handle did not go: both ends are still ours. */
         (void)astra_close(handles[0]);
@@ -187,8 +179,9 @@ ask(uint32_t handle, uint32_t operation, uint32_t capacity, void *reply,
         return status;
     }
     for (;;) {
-        status = astra_port_receive(receive, reply, reply_size, NULL, 0u,
-                                    &size, NULL);
+        status = astra_port_receive(receive, reply, reply_size, reply_handles,
+                                    reply_handle_capacity, &size,
+                                    reply_handle_count);
         if (status == ASTRA_SYSCALL_OK) {
             break;
         }
@@ -213,12 +206,42 @@ ask(uint32_t handle, uint32_t operation, uint32_t capacity, void *reply,
         const AstraMessageHeader *header = reply;
 
         if (size != reply_size ||
+            header->total_size != reply_size ||
+            header->header_size != ASTRA_MESSAGE_HEADER_SIZE ||
+            header->flags != 0u || header->reserved != 0u ||
             header->protocol != ASTRA_STREAM_SERVICE_PROTOCOL ||
+            header->protocol_version != ASTRA_STREAM_SERVICE_VERSION ||
             header->operation != expected_operation) {
+            if (reply_handles != NULL && reply_handle_count != NULL)
+                for (uint32_t index = 0u; index < *reply_handle_count;
+                     ++index)
+                    (void)astra_close(reply_handles[index]);
             return ASTRA_SYSCALL_INVALID_ARGUMENT;
         }
     }
     return ASTRA_SYSCALL_OK;
+}
+
+static uint32_t
+exchange(uint32_t handle, const void *request, uint32_t request_size,
+         void *reply, uint32_t reply_size, uint32_t expected_operation)
+{
+    return exchange_handles(handle, request, request_size, reply, reply_size,
+                            expected_operation, NULL, 0u, NULL);
+}
+
+static uint32_t
+ask(uint32_t handle, uint32_t operation, uint32_t capacity, void *reply,
+    uint32_t reply_size, uint32_t expected_operation)
+{
+    AstraStreamRead request;
+
+    fill_header(&request.header, operation, (uint32_t)sizeof(request));
+    request.capacity = (uint16_t)capacity;
+    request.reserved = 0u;
+    request.activity = astra_activity_current();
+    return exchange(handle, &request, (uint32_t)sizeof(request), reply,
+                    reply_size, expected_operation);
 }
 
 uint32_t
@@ -251,8 +274,8 @@ astra_stream_size(uint32_t handle, uint32_t *columns, uint32_t *rows)
 }
 
 uint32_t
-astra_stream_read(uint32_t source, void *bytes, uint32_t capacity,
-                  uint32_t *length)
+astra_stream_read_ex(uint32_t source, void *bytes, uint32_t capacity,
+                     uint32_t *length, uint32_t *flags)
 {
     static AstraStreamData reply;
     uint8_t *out = bytes;
@@ -262,7 +285,10 @@ astra_stream_read(uint32_t source, void *bytes, uint32_t capacity,
     if (length != NULL) {
         *length = 0u;
     }
-    if (source == 0u || bytes == NULL || length == NULL || capacity == 0u) {
+    if (flags != NULL)
+        *flags = 0u;
+    if (source == 0u || bytes == NULL || length == NULL || flags == NULL ||
+        capacity == 0u) {
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     }
     if (capacity > ASTRA_STREAM_WRITE_MAX) {
@@ -276,6 +302,9 @@ astra_stream_read(uint32_t source, void *bytes, uint32_t capacity,
     if (reply.length > ASTRA_STREAM_WRITE_MAX) {
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     }
+    if ((reply.flags & ~ASTRA_STREAM_DATA_EOF) != 0u ||
+        ((reply.flags & ASTRA_STREAM_DATA_EOF) != 0u && reply.length != 0u))
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
     if (reply.status != ASTRA_SYSCALL_OK) {
         return reply.status;
     }
@@ -284,5 +313,94 @@ astra_stream_read(uint32_t source, void *bytes, uint32_t capacity,
         out[index] = reply.bytes[index];
     }
     *length = give;
+    *flags = reply.flags;
     return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
+astra_stream_read(uint32_t source, void *bytes, uint32_t capacity,
+                  uint32_t *length)
+{
+    uint32_t flags;
+
+    return astra_stream_read_ex(source, bytes, capacity, length, &flags);
+}
+
+uint32_t
+astra_stream_read_wait(uint32_t source, uint32_t *wait_handle,
+                       uint32_t *events)
+{
+    AstraStreamRead request;
+    AstraStreamWaitState reply;
+    uint32_t received = 0u;
+    uint32_t count = 0u;
+    uint32_t status;
+
+    if (wait_handle == NULL || events == NULL || source == 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    *wait_handle = 0u;
+    *events = 0u;
+    fill_header(&request.header, ASTRA_STREAM_OPERATION_READ_WAIT,
+                (uint32_t)sizeof(request));
+    request.capacity = 0u;
+    request.reserved = 0u;
+    request.activity = astra_activity_current();
+    status = exchange_handles(source, &request, (uint32_t)sizeof(request),
+                              &reply, (uint32_t)sizeof(reply),
+                              ASTRA_STREAM_OPERATION_WAIT_STATE, &received,
+                              1u, &count);
+    if (status != ASTRA_SYSCALL_OK)
+        return status;
+    if (reply.status != ASTRA_SYSCALL_OK || count != 1u || received == 0u) {
+        if (received != 0u)
+            (void)astra_close(received);
+        return reply.status != ASTRA_SYSCALL_OK ? reply.status :
+                                                 ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    *wait_handle = received;
+    *events = reply.events;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
+astra_stream_tty_get(uint32_t handle, AstraTtyState *state)
+{
+    AstraTtyReply reply;
+    uint32_t status;
+
+    if (handle == 0u || state == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    status = ask(handle, ASTRA_STREAM_OPERATION_TTY_GET, 0u, &reply,
+                 (uint32_t)sizeof(reply), ASTRA_STREAM_OPERATION_TTY_STATE);
+    if (status != ASTRA_SYSCALL_OK)
+        return status;
+    if (reply.status != ASTRA_SYSCALL_OK)
+        return reply.status;
+    if (reply.state.reserved8 != 0u || reply.state.generation == 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    *state = reply.state;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
+astra_stream_tty_set(uint32_t handle, uint32_t action,
+                     const AstraTtyState *state)
+{
+    AstraTtySet request = {0};
+    AstraTtyReply reply;
+    uint32_t status;
+
+    if (handle == 0u || state == NULL || action > ASTRA_TTY_FLUSH_BOTH)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    fill_header(&request.header, ASTRA_STREAM_OPERATION_TTY_SET,
+                (uint32_t)sizeof(request));
+    request.action = (uint16_t)action;
+    request.state = *state;
+    request.state.reserved8 = 0u;
+    status = exchange(handle, &request, (uint32_t)sizeof(request), &reply,
+                      (uint32_t)sizeof(reply),
+                      ASTRA_STREAM_OPERATION_TTY_STATE);
+    if (status != ASTRA_SYSCALL_OK)
+        return status;
+    return reply.status;
 }

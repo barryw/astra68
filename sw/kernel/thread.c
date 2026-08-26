@@ -1,5 +1,6 @@
 #include "thread.h"
 
+#include <astra/integer.h>
 #include <astra/syscall.h>
 
 #include "bytes.h"
@@ -54,18 +55,6 @@ static uint16_t wait_registration_count;
  * machine could run. Sixty-four bits costs twelve bytes and takes that off.
  */
 
-/*
- * One bit for a slot, without a variable 64-bit shift. The kernel links no
- * libgcc, and `1ull << slot` with a runtime `slot` calls __ashldi3; splitting
- * at the word boundary leaves a constant shift, which the compiler does inline
- * as a word move.
- */
-static uint64_t slot_bit(uint32_t slot)
-{
-    return slot < 32u ? (uint64_t)((uint32_t)1u << slot)
-                      : (uint64_t)((uint32_t)1u << (slot - 32u)) << 32;
-}
-
 static uint64_t reap_pending_bitmap;
 static uint64_t irq_wake_bitmap;
 static uint32_t irq_wake_cycles[KERNEL_THREAD_MAX];
@@ -78,20 +67,20 @@ static void clear_irq_wake(uint16_t slot)
 {
     if (slot >= KERNEL_THREAD_MAX)
         return;
-    irq_wake_bitmap &= ~slot_bit(slot);
+    irq_wake_bitmap &= ~astra_u64_bit(slot);
     irq_wake_cycles[slot] = 0u;
 }
 
 static void mark_reap_pending(KernelThread *thread)
 {
     thread->reap_pending = 1u;
-    reap_pending_bitmap |= slot_bit(thread->slot);
+    reap_pending_bitmap |= astra_u64_bit(thread->slot);
 }
 
 static void clear_reap_pending(KernelThread *thread)
 {
     thread->reap_pending = 0u;
-    reap_pending_bitmap &= ~slot_bit(thread->slot);
+    reap_pending_bitmap &= ~astra_u64_bit(thread->slot);
 }
 
 _Static_assert(offsetof(KernelThread, context) == 0u,
@@ -1155,7 +1144,7 @@ KernelThreadStatus kernel_thread_finish_reap(KernelThread *thread,
 {
     if (!valid_thread(thread) || thread->state != KERNEL_THREAD_DEAD ||
         thread->reap_pending == 0u ||
-        (reap_pending_bitmap & slot_bit(thread->slot)) == 0u ||
+        (reap_pending_bitmap & astra_u64_bit(thread->slot)) == 0u ||
         released == NULL ||
         thread->wait_member_count != 0u || !wait_row_clear(thread->slot) ||
         kernel_thread_wait_queue_count(&thread->death_waiters) != 0u)
@@ -1281,7 +1270,7 @@ KernelThreadStatus take_next_fast(KernelThread **thread)
     if (status != KERNEL_THREAD_OK)
         return status;
     next->state = KERNEL_THREAD_RUNNING;
-    if ((irq_wake_bitmap & slot_bit(slot)) != 0u) {
+    if ((irq_wake_bitmap & astra_u64_bit(slot)) != 0u) {
         uint32_t elapsed = kernel_performance_cycles_low() -
                            irq_wake_cycles[slot];
 
@@ -1580,7 +1569,7 @@ KernelThreadStatus wake_all_fast(KernelThreadWaitQueue *queue,
             return KERNEL_THREAD_CORRUPT;
         if (irq_wake) {
             irq_wake_cycles[waiter->slot] = wake_cycle;
-            irq_wake_bitmap |= slot_bit(waiter->slot);
+            irq_wake_bitmap |= astra_u64_bit(waiter->slot);
         }
         ++woken;
     }
@@ -1755,18 +1744,25 @@ bool kernel_thread_highest_ready_priority(uint8_t *priority)
     return true;
 }
 
-KernelThreadStatus kernel_thread_retire_process(uint16_t process_slot,
-                                                uint32_t terminal_result,
-                                                uint32_t *retired_threads)
+static KernelThreadStatus retire_process_threads(uint16_t process_slot,
+                                                  KernelThread *survivor,
+                                                  uint32_t terminal_result,
+                                                  bool release_stacks,
+                                                  uint32_t *retired_threads)
 {
     uint32_t retired = 0u;
+
+    if (survivor != NULL &&
+        (!valid_thread(survivor) || survivor->process_slot != process_slot ||
+         survivor->state != KERNEL_THREAD_RUNNING))
+        return KERNEL_THREAD_INVALID_ARGUMENT;
 
     for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
         KernelThread *thread = &threads[slot];
 
         if (thread->occupied == 0u ||
             thread->process_slot != process_slot ||
-            thread->state == KERNEL_THREAD_DEAD)
+            thread->state == KERNEL_THREAD_DEAD || thread == survivor)
             continue;
         if (thread->state == KERNEL_THREAD_READY) {
             KernelThreadStatus status = remove_ready(thread);
@@ -1791,19 +1787,38 @@ KernelThreadStatus kernel_thread_retire_process(uint16_t process_slot,
         thread->exit_status = 0u;
         thread->terminal_result = terminal_result;
         thread->state = KERNEL_THREAD_DEAD;
+        if (release_stacks)
+            thread->stack_released = 1u;
         mark_reap_pending(thread);
         if (wake_death_waiters(thread, terminal_result, NULL) !=
             KERNEL_THREAD_OK)
             return KERNEL_THREAD_CORRUPT;
         ++retired;
     }
-    if (retired == 0u || retired > pool_stats.live_threads)
+    if ((retired == 0u && survivor == NULL) ||
+        retired > pool_stats.live_threads)
         return KERNEL_THREAD_CORRUPT;
     pool_stats.live_threads -= retired;
     pool_stats.dead_threads += retired;
     if (retired_threads != NULL)
         *retired_threads = retired;
     return KERNEL_THREAD_OK;
+}
+
+KernelThreadStatus kernel_thread_retire_process(uint16_t process_slot,
+                                                uint32_t terminal_result,
+                                                uint32_t *retired_threads)
+{
+    return retire_process_threads(process_slot, NULL, terminal_result, false,
+                                  retired_threads);
+}
+
+KernelThreadStatus kernel_thread_exec_retire_others(
+    uint16_t process_slot, KernelThread *survivor, uint32_t terminal_result,
+    uint32_t *retired_threads)
+{
+    return retire_process_threads(process_slot, survivor, terminal_result,
+                                  true, retired_threads);
 }
 
 KernelThreadStatus kernel_thread_release_process(uint16_t process_slot)

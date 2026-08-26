@@ -125,7 +125,18 @@ static TestMessage test_message(void)
 static void test_header(void)
 {
     AstraMessageHeader header;
+    AstraMessageHeader wire;
     uint8_t unaligned[sizeof(header) + 1u];
+
+    astra_message_header_set(&wire, sizeof(wire), 11u, 5u, 13u, 17u);
+    assert(wire.total_size == sizeof(wire));
+    assert(wire.header_size == ASTRA_MESSAGE_HEADER_SIZE);
+    assert(wire.flags == 0u);
+    assert(wire.protocol == 11u);
+    assert(wire.protocol_version == 5u);
+    assert(wire.reserved == 0u);
+    assert(wire.operation == 13u);
+    assert(wire.transaction_id == 17u);
 
     assert(astra_message_header_init(
                &header, sizeof(header), 9u, 2u, 3u, 4u) == ASTRA_OK);

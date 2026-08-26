@@ -569,6 +569,89 @@ static void test_repeated_lifecycle_returns_exact_baseline(void)
     assert(ring_stats.created_rings == 1000u);
 }
 
+static void test_clone_safe_kernel_copy_byte_ring(void)
+{
+    AstraBulkRingHeader header;
+    KernelArea *area;
+    KernelRing *ring;
+    KernelRingPoolStats stats;
+    char input[ASTRA_BULK_RING_TRANSFER_MAX];
+    char output[ASTRA_BULK_RING_TRANSFER_MAX];
+    uint32_t copied;
+    uint32_t closed;
+    uint32_t woken;
+    uint32_t written;
+
+    initialize_test();
+    assert(kernel_area_create(90u, 2u * KERNEL_PAGE_SIZE, 0u, &area) ==
+           KERNEL_AREA_OK);
+    assert(kernel_ring_create(90u, area, 0u, 1u, 2048u, &ring) ==
+           KERNEL_RING_INVALID_ARGUMENT);
+    assert(kernel_ring_create_flagged(
+               90u, area, 0u, 1u, 2048u,
+               KERNEL_RING_CREATE_KERNEL_COPY, &ring) == KERNEL_RING_OK);
+    assert(kernel_area_read(area, 0u, &header, sizeof(header)) ==
+           KERNEL_AREA_OK);
+    assert(header.flags == ASTRA_BULK_RING_CREATE_KERNEL_COPY);
+    assert(header.element_size == 1u && header.capacity == 2048u);
+    assert(kernel_ring_handle_retain(
+        ring, (void *)(uintptr_t)KERNEL_RING_ENDPOINT_PRODUCER));
+    assert(kernel_ring_handle_retain(
+        ring, (void *)(uintptr_t)KERNEL_RING_ENDPOINT_CONSUMER));
+
+    assert(kernel_ring_copy_write(ring, "abcdef", 6u, true, &written,
+                                  &woken) == KERNEL_RING_OK);
+    assert(written == 6u);
+    assert(kernel_ring_copy_peek(ring, output, 4u, &copied) ==
+           KERNEL_RING_OK);
+    assert(copied == 4u && memcmp(output, "abcd", 4u) == 0);
+    assert(kernel_ring_copy_consume(ring, copied, &woken) == KERNEL_RING_OK);
+
+    memset(input, 'x', sizeof(input));
+    assert(kernel_ring_copy_write(ring, input, 2048u, true, &written,
+                                  &woken) == KERNEL_RING_WOULD_BLOCK);
+    assert(kernel_ring_copy_write(ring, input, 2048u, false, &written,
+                                  &woken) == KERNEL_RING_OK);
+    assert(written == 2046u);
+    assert(kernel_ring_copy_peek(ring, output, sizeof(output), &copied) ==
+           KERNEL_RING_OK);
+    assert(copied == 2048u && output[0] == 'e' && output[1] == 'f');
+    assert(kernel_ring_copy_consume(ring, copied, &woken) == KERNEL_RING_OK);
+
+    assert(kernel_ring_process_died(90u, &closed, &woken) == KERNEL_RING_OK);
+    assert(closed == 0u);
+    kernel_ring_handle_release(
+        ring, (void *)(uintptr_t)KERNEL_RING_ENDPOINT_PRODUCER);
+    kernel_ring_handle_release(
+        ring, (void *)(uintptr_t)KERNEL_RING_ENDPOINT_PRODUCER);
+    kernel_ring_handle_release(
+        ring, (void *)(uintptr_t)KERNEL_RING_ENDPOINT_CONSUMER);
+    kernel_ring_handle_release(
+        ring, (void *)(uintptr_t)KERNEL_RING_ENDPOINT_CONSUMER);
+    kernel_area_handle_release(area, NULL);
+    assert(kernel_ring_pool_stats(&stats));
+    assert(stats.active_rings == 0u && stats.owner_deaths == 0u);
+    assert(stats.copied_writes == 2u && stats.copied_write_bytes == 2052u);
+    assert(stats.copied_reads == 2u && stats.copied_read_bytes == 2052u);
+    assert(stats.copied_would_blocks == 1u);
+    assert(kernel_ring_pool_valid() && kernel_area_pool_valid());
+}
+
+static void test_kernel_copy_cycle_budget(void)
+{
+    KernelRingPoolStats stats;
+
+    initialize_test();
+    kernel_ring_record_copy_cycles(30400u, 4u);
+    assert(kernel_ring_pool_stats(&stats));
+    assert(stats.copied_max_cycles == 30400u);
+    assert(stats.copied_cycle_overruns == 0u);
+    kernel_ring_record_copy_cycles(30401u, 4u);
+    assert(kernel_ring_pool_stats(&stats));
+    assert(stats.copied_max_cycles == 30401u);
+    assert(stats.copied_cycle_overruns == 1u);
+}
+
 int main(void)
 {
     _Static_assert(sizeof(AstraBulkRingHeader) == 64u,
@@ -583,6 +666,8 @@ int main(void)
     test_validation_no_advance_and_consumer_death();
     test_missed_wakeup_and_wait_multiple();
     test_owner_death_wakes_waiters();
+    test_clone_safe_kernel_copy_byte_ring();
+    test_kernel_copy_cycle_budget();
     test_repeated_lifecycle_returns_exact_baseline();
     puts("ring tests passed");
     return 0;

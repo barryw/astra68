@@ -19,9 +19,13 @@
 #include <astra/ext4_alloc.h>
 #include <astra/ext4_port.h>
 #include <astra/lease_block.h>
+#include <astra/program.h>
 #include <astra/runtime.h>
 
 #include <ext4.h>
+
+ASTRA_PROGRAM("ext4-linkcheck", 1, 0, 0, "Astra68",
+              "Copyright 2026 Astra68 contributors");
 
 static AstraExt4Port port;
 static AstraBlockDevice device;
@@ -41,6 +45,7 @@ static void *volatile const referenced[] = {
     (void *)(uintptr_t)ext4_journal_stop,
     (void *)(uintptr_t)ext4_cache_write_back,
     (void *)(uintptr_t)ext4_fopen,
+    (void *)(uintptr_t)ext4_fopen2_mode,
     (void *)(uintptr_t)ext4_fclose,
     (void *)(uintptr_t)ext4_fread,
     (void *)(uintptr_t)ext4_fwrite,
@@ -49,6 +54,9 @@ static void *volatile const referenced[] = {
     (void *)(uintptr_t)ext4_fremove,
     (void *)(uintptr_t)ext4_frename,
     (void *)(uintptr_t)ext4_dir_mk,
+    (void *)(uintptr_t)ext4_dir_mk_mode,
+    (void *)(uintptr_t)ext4_mode_set,
+    (void *)(uintptr_t)ext4_readlink,
     (void *)(uintptr_t)ext4_dir_rm,
     (void *)(uintptr_t)ext4_dir_open,
     (void *)(uintptr_t)ext4_dir_close,

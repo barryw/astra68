@@ -30,6 +30,7 @@ file_query(void *context, AstraBlockGeometry *geometry)
     geometry->sector_count = file->sector_count;
     geometry->sector_size = file->sector_size;
     geometry->max_transfer_sectors = file->max_transfer_sectors;
+    geometry->queue_depth = 1u;
     geometry->media_generation = file->media_generation;
     geometry->flags = file->flags;
     return ASTRA_BLOCK_OK;

@@ -27,6 +27,7 @@ memory_query(void *context, AstraBlockGeometry *geometry)
     geometry->sector_count = memory->storage_size / memory->sector_size;
     geometry->sector_size = memory->sector_size;
     geometry->max_transfer_sectors = memory->max_transfer_sectors;
+    geometry->queue_depth = 1u;
     geometry->media_generation = memory->media_generation;
     geometry->flags = memory->flags;
     return ASTRA_BLOCK_OK;

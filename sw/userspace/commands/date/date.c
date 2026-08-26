@@ -159,7 +159,7 @@ offset_string(int32_t offset, char *out)
 int
 astra_main(const AstraStartupInfo *startup)
 {
-    const AstraStartupCapability *capabilities;
+    const AstraStartupCapability *capability;
     AstraCivilTime civil;
     AstraTimeZone zone = ASTRA_TIME_ZONE_UTC;
     AstraTimeZone utc = ASTRA_TIME_ZONE_UTC;
@@ -168,32 +168,25 @@ astra_main(const AstraStartupInfo *startup)
     char expanded[OUTPUT_MAX];
     char offset[12];
     uint64_t nanoseconds = 0u;
-    const uint32_t *argv = NULL;
     const char *format = NULL;
     DateForm form = DATE_FORM_DEFAULT;
     int universal = 0;
     uint32_t status;
 
-    if (startup == NULL || startup->capabilities_address == 0u)
+    if (!astra_startup_validate(startup))
         return ASTRA_STATUS_INVALID;
-    capabilities = (const AstraStartupCapability *)(uintptr_t)
-        startup->capabilities_address;
-    for (uint32_t index = 0u; index < startup->capability_count; ++index) {
-        if (astra_capability_name_equal(capabilities[index].name, "STDOUT"))
-            stdout_handle = capabilities[index].handle;
-        else if (astra_capability_name_equal(capabilities[index].name,
-                                             "STDERR"))
-            error_handle = capabilities[index].handle;
-    }
+    capability = astra_startup_capability(startup, "STDOUT");
+    if (capability != NULL)
+        stdout_handle = capability->handle;
+    capability = astra_startup_capability(startup, "STDERR");
+    if (capability != NULL)
+        error_handle = capability->handle;
     if (stdout_handle == 0u)
         return ASTRA_STATUS_ACCESS;
     if (error_handle == 0u)
         error_handle = stdout_handle;
-    if (startup->argc != 0u && startup->argv_address != 0u)
-        argv = (const uint32_t *)(uintptr_t)startup->argv_address;
-    for (uint32_t index = 1u; argv != NULL && index < startup->argc;
-         ++index) {
-        const char *word = (const char *)(uintptr_t)argv[index];
+    for (uint32_t index = 1u; index < startup->argc; ++index) {
+        const char *word = astra_startup_argument(startup, index);
 
         if (word == NULL)
             continue;

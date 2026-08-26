@@ -2,7 +2,7 @@
 # Builds picolibc for Astra's m68030 target.
 #
 # The source is vendored at third_party/picolibc; see its ASTRA_VENDOR.md for
-# what was removed and why nothing is patched. This script builds it out of
+# what was removed and which source differences are retained. This builds out of
 # tree, because the library is a build product and git holds source.
 #
 # Options that are not defaults, and why:

@@ -1,5 +1,6 @@
 #include <astra/application.h>
 #include <astra/bundle.h>
+#include <astra/bytes.h>
 #include <astra/gui.h>
 #include <astra/graphics_kit.h>
 #include <astra/graphics_library.h>
@@ -19,7 +20,8 @@
 #define DESKTOP_TOP 34u
 #define DESKTOP_BOTTOM 678u
 #define DESKTOP_HEIGHT (DESKTOP_BOTTOM - DESKTOP_TOP)
-#define TERMINAL_BUNDLE "APPS:Terminal.app"
+#define TERMINAL_BUNDLE_DIRECTORY "Terminal.app"
+#define TERMINAL_BUNDLE "APPS:" TERMINAL_BUNDLE_DIRECTORY
 #define ICON_BYTES_MAX 8192u
 #define TERMINAL_ICON_LEFT 32
 #define TERMINAL_ICON_TOP 28
@@ -56,52 +58,6 @@ static const AstraInterfaceLibraryV1 *interface_library;
 static char manifest_text[ASTRA_BUNDLE_MANIFEST_MAX + 1u];
 static uint8_t icon_bytes[ICON_BYTES_MAX];
 
-static const AstraStartupCapability *
-capability(const AstraStartupInfo *startup, const char *name)
-{
-    const AstraStartupCapability *entries =
-        (const AstraStartupCapability *)(uintptr_t)
-            startup->capabilities_address;
-
-    for (uint32_t index = 0u; index < startup->capability_count; ++index)
-        if (astra_capability_name_equal(entries[index].name, name))
-            return &entries[index];
-    return NULL;
-}
-
-static void ready(uint32_t bootstrap, uint32_t status)
-{
-    AstraServiceReady message = {0};
-
-    message.header.total_size = sizeof(message);
-    message.header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
-    message.header.protocol = ASTRA_SERVICE_PROTOCOL;
-    message.header.protocol_version = ASTRA_SERVICE_VERSION;
-    message.header.operation = ASTRA_SERVICE_READY;
-    message.status = status;
-    (void)astra_port_send(bootstrap, &message, sizeof(message), NULL, 0u);
-}
-
-static int append(char *path, uint32_t capacity, const char *text)
-{
-    uint32_t at = 0u;
-
-    while (at < capacity && path[at] != '\0') ++at;
-    while (*text != '\0') {
-        if (at + 1u >= capacity) return 0;
-        path[at++] = *text++;
-    }
-    path[at] = '\0';
-    return 1;
-}
-
-static uint32_t text_length(const char *text)
-{
-    uint32_t length = 0u;
-    while (text[length] != '\0') ++length;
-    return length;
-}
-
 static void launch_error(uint32_t gui, AstraResult failure)
 {
     AstraAlertInfo info = ASTRA_ALERT_INFO_INIT;
@@ -117,7 +73,7 @@ static void launch_error(uint32_t gui, AstraResult failure)
     info.title = "Application Error";
     info.title_length = 17u;
     info.message = message;
-    info.message_length = (uint16_t)text_length(message);
+    info.message_length = (uint16_t)strlen(message);
     info.button = "OK";
     info.button_length = 2u;
     (void)interface_library->show_alert(gui, &info);
@@ -204,7 +160,7 @@ static uint32_t paint(AstraSurfaceView *surface)
     AstraBundleManifest manifest;
     AstraAicon icon;
     AstraAiconStrike strike;
-    char icon_path[ASTRA_VFS_PATH_MAX] = TERMINAL_BUNDLE "/";
+    char icon_path[ASTRA_VFS_PATH_MAX];
     uint32_t length = 0u;
     uint32_t line = 0u;
 
@@ -216,8 +172,10 @@ static uint32_t paint(AstraSurfaceView *surface)
         return DESKTOP_FAIL_MANIFEST;
     manifest_text[length] = '\0';
     if (astra_bundle_manifest_parse(manifest_text, length, &manifest, &line) !=
-            ASTRA_BUNDLE_OK || !append(icon_path, sizeof(icon_path),
-                                      manifest.icon))
+            ASTRA_BUNDLE_OK ||
+        process_filesystem.library->qualify(
+            "APPS", TERMINAL_BUNDLE_DIRECTORY, manifest.icon, icon_path,
+            sizeof(icon_path)) != ASTRA_VFS_OK)
         return DESKTOP_FAIL_MANIFEST;
     if (astra_process_read_file(&process_filesystem, icon_path, icon_bytes,
                                 sizeof(icon_bytes), &length) !=
@@ -228,7 +186,7 @@ static uint32_t paint(AstraSurfaceView *surface)
         return DESKTOP_FAIL_ICON;
     if (!draw_strike(surface, &icon, &strike)) return DESKTOP_FAIL_ICON;
     astra_surface_ui_text(surface, 40, 104, manifest.name,
-                          text_length(manifest.name),
+                          (uint32_t)strlen(manifest.name),
                           ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT,
                           astra_surface_rgb565(theme.text_primary.red,
                                                theme.text_primary.green,
@@ -247,9 +205,11 @@ int astra_main(const AstraStartupInfo *startup)
 
     if (!astra_startup_validate(startup) || startup->capabilities_address == 0u)
         return ASTRA_STATUS_INVALID;
-    bootstrap = capability(startup, ASTRA_CAPABILITY_SERVICE_READY);
-    gui = capability(startup, ASTRA_CAPABILITY_GUI);
-    launcher = capability(startup, ASTRA_CAPABILITY_APPLICATION_LAUNCH);
+    bootstrap = astra_startup_capability(startup,
+                                         ASTRA_CAPABILITY_SERVICE_READY);
+    gui = astra_startup_capability(startup, ASTRA_CAPABILITY_GUI);
+    launcher = astra_startup_capability(
+        startup, ASTRA_CAPABILITY_APPLICATION_LAUNCH);
     if (bootstrap == NULL || gui == NULL || launcher == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     status = astra_process_filesystem_open(&process_filesystem, startup);
@@ -304,7 +264,7 @@ int astra_main(const AstraStartupInfo *startup)
         if (result != ASTRA_OK)
             status = DESKTOP_FAIL_WINDOW + (uint32_t)(-result);
     }
-    ready(bootstrap->handle, status);
+    (void)astra_service_ready(bootstrap->handle, status, NULL, 0u);
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_STATUS_OK) return (int)status;
     for (;;) {

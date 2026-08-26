@@ -144,7 +144,9 @@ typedef unsigned long __size_t;
 #define unsigned signed
 typedef __SIZE_TYPE__ __ssize_t;
 #undef unsigned
-#define __SSIZE_MAX__ ((__ssize_t)(__SIZE_MAX__ >> 1))
+/* Limit macros must also be usable by #if; a typedef cast is not a
+ * preprocessor integer constant expression. */
+#define __SSIZE_MAX__ (__SIZE_MAX__ >> 1)
 #else
 #if defined(__INT_MAX__) && __INT_MAX__ == 2147483647
 typedef int __ssize_t;

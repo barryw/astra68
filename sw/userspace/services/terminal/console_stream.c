@@ -14,6 +14,7 @@
 #include <console_stream.h>
 
 #include <astra/runtime.h>
+#include <astra/keymap.h>
 #include <astra/stream.h>
 #include <astra/syscall.h>
 
@@ -30,6 +31,9 @@
 #define CONSOLE_STREAM_SOURCE_MESSAGES 2u
 #define CONSOLE_STREAM_PUMP_BUDGET 4u
 
+_Static_assert(ASTRA_STREAM_READ_SIZE <= ASTRA_TTY_SET_SIZE,
+               "source port sizing must cover every accepted request");
+
 /*
  * How many pumps a drain will spend before giving up. A dead writer cannot
  * refill the sink, so a drain ends on its first empty pass and never reaches
@@ -41,11 +45,15 @@
 
 static AstraStreamSink sink;
 static AstraStreamSource source;
+static AstraTtyState tty;
 static AstraTerminal *sink_terminal;
 static uint32_t sink_send;
 static uint32_t sink_receive;
 static uint32_t source_send;
 static uint32_t source_receive;
+static uint32_t source_area;
+static uint8_t *source_storage;
+static uint32_t source_storage_size;
 static int stream_ready;
 /*
  * The other place STDOUT can point. One port, made the first time something
@@ -73,7 +81,18 @@ render(void *context, const uint8_t *bytes, uint32_t length,
     if (terminal == NULL) {
         return;
     }
-    astra_terminal_write_bytes(terminal, bytes, length);
+    if ((tty.output_flags & ASTRA_TTY_OFLAG_OPOST) == 0u) {
+        astra_terminal_write_bytes(terminal, bytes, length);
+        return;
+    }
+    for (uint32_t index = 0u; index < length; ++index) {
+        uint8_t value = bytes[index];
+
+        if (value == '\n' &&
+            (tty.output_flags & ASTRA_TTY_OFLAG_ONLCR) != 0u)
+            astra_terminal_putc(terminal, '\r');
+        astra_terminal_putc(terminal, value);
+    }
 }
 
 int
@@ -93,7 +112,7 @@ console_stream_start(AstraTerminal *terminal)
     }
     if (astra_rt_port_create(CONSOLE_STREAM_SOURCE_MESSAGES,
                           CONSOLE_STREAM_SOURCE_MESSAGES *
-                              ASTRA_STREAM_READ_SIZE,
+                              ASTRA_TTY_SET_SIZE,
                           &source_receive, &source_send) != ASTRA_SYSCALL_OK) {
         (void)astra_close(sink_send);
         (void)astra_close(sink_receive);
@@ -101,20 +120,150 @@ console_stream_start(AstraTerminal *terminal)
         sink_receive = 0u;
         return 0;
     }
-    sink_terminal = terminal;
-    if (!astra_stream_sink_init(&sink, sink_receive, render, sink_terminal) ||
-        !astra_stream_source_init(&source, source_receive)) {
+    if (astra_rt_area_create_flagged(
+            ASTRA_AREA_SIZE_MAX,
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP,
+            ASTRA_AREA_CREATE_RESERVED, &source_area) != ASTRA_SYSCALL_OK ||
+        astra_rt_area_map(source_area,
+                          ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+                          (void **)&source_storage,
+                          &source_storage_size) != ASTRA_SYSCALL_OK) {
+        if (source_area != 0u)
+            (void)astra_close(source_area);
+        source_area = 0u;
+        (void)astra_close(source_send);
+        (void)astra_close(source_receive);
+        (void)astra_close(sink_send);
+        (void)astra_close(sink_receive);
         return 0;
     }
+    sink_terminal = terminal;
+    if (!astra_stream_sink_init(&sink, sink_receive, render, sink_terminal) ||
+        !astra_stream_source_init_storage(&source, source_receive,
+                                          source_storage,
+                                          source_storage_size)) {
+        (void)astra_rt_area_unmap(source_storage);
+        source_storage = NULL;
+        source_storage_size = 0u;
+        (void)astra_close(source_area);
+        source_area = 0u;
+        (void)astra_close(source_send);
+        (void)astra_close(source_receive);
+        (void)astra_close(sink_send);
+        (void)astra_close(sink_receive);
+        source_send = source_receive = sink_send = sink_receive = 0u;
+        return 0;
+    }
+    astra_stream_tty_state_init(&tty);
+    astra_stream_tty_bind(&sink, &source, &tty);
     /*
      * How big this sink is, for a program that pages. It comes from the
      * terminal rather than a constant, which is the whole reason the question
      * is a message: a program that assumed 80x24 would be wrong on the 90x30
      * plane this machine actually has.
      */
-    astra_stream_sink_size(&sink, terminal->columns, terminal->rows);
+    astra_stream_sink_size(&sink, terminal->columns, terminal->rows, 0u, 0u);
     stream_ready = 1;
     return 1;
+}
+
+void
+console_stream_resize(uint32_t columns, uint32_t rows,
+                      uint32_t pixel_width, uint32_t pixel_height)
+{
+    if (stream_ready)
+        astra_stream_sink_size(&sink, columns, rows,
+                               pixel_width, pixel_height);
+}
+
+void
+console_stream_tty_state(AstraTtyState *state)
+{
+    if (state != NULL)
+        *state = tty;
+}
+
+void
+console_stream_tty_restore(const AstraTtyState *state)
+{
+    if (!stream_ready || state == NULL)
+        return;
+    {
+        uint16_t columns = tty.columns;
+        uint16_t rows = tty.rows;
+        uint16_t pixel_width = tty.pixel_width;
+        uint16_t pixel_height = tty.pixel_height;
+        uint32_t generation = tty.generation + 1u;
+
+        tty = *state;
+        tty.columns = columns;
+        tty.rows = rows;
+        tty.pixel_width = pixel_width;
+        tty.pixel_height = pixel_height;
+        tty.reserved8 = 0u;
+        tty.generation = generation != 0u ? generation : 1u;
+    }
+    source.head = 0u;
+    source.length = 0u;
+    source.committed = 0u;
+    source.eof_pending = 0u;
+}
+
+int
+console_stream_key(uint32_t key)
+{
+    static const uint8_t up[] = "\x1b[A";
+    static const uint8_t down[] = "\x1b[B";
+    static const uint8_t right[] = "\x1b[C";
+    static const uint8_t left[] = "\x1b[D";
+    static const uint8_t home[] = "\x1b[H";
+    static const uint8_t end[] = "\x1b[F";
+    static const uint8_t delete_key[] = "\x1b[3~";
+    const uint8_t *bytes = NULL;
+    uint32_t length = 0u;
+    uint8_t one;
+
+    if (!stream_ready)
+        return 0;
+    if (key != 0u && key < 0x80u) {
+        one = (uint8_t)key;
+        bytes = &one;
+        length = 1u;
+    } else {
+        switch (key) {
+        case ASTRA_KEYMAP_ENTER: one = '\r'; bytes = &one; length = 1u; break;
+        case ASTRA_KEYMAP_BACKSPACE:
+            one = tty.control_characters[ASTRA_TTY_VERASE];
+            bytes = &one;
+            length = 1u;
+            break;
+        case ASTRA_KEYMAP_TAB: one = '\t'; bytes = &one; length = 1u; break;
+        case ASTRA_KEYMAP_ESCAPE: one = 0x1bu; bytes = &one; length = 1u; break;
+        case ASTRA_KEYMAP_UP: bytes = up; length = sizeof(up) - 1u; break;
+        case ASTRA_KEYMAP_DOWN: bytes = down; length = sizeof(down) - 1u; break;
+        case ASTRA_KEYMAP_RIGHT: bytes = right; length = sizeof(right) - 1u; break;
+        case ASTRA_KEYMAP_LEFT: bytes = left; length = sizeof(left) - 1u; break;
+        case ASTRA_KEYMAP_HOME: bytes = home; length = sizeof(home) - 1u; break;
+        case ASTRA_KEYMAP_END: bytes = end; length = sizeof(end) - 1u; break;
+        case ASTRA_KEYMAP_DELETE:
+            bytes = delete_key;
+            length = sizeof(delete_key) - 1u;
+            break;
+        default: return 1;
+        }
+    }
+    if (astra_stream_tty_input(&source, bytes, length) != length)
+        return 0;
+    return 1;
+}
+
+int
+console_stream_terminal_reply(void *context, const uint8_t *bytes,
+                              uint32_t length)
+{
+    (void)context;
+    return stream_ready && length != 0u &&
+           astra_stream_source_offer(&source, bytes, length) == length;
 }
 
 int
@@ -127,6 +276,12 @@ uint32_t
 console_stream_wait_handle(void)
 {
     return stream_ready ? sink_receive : 0u;
+}
+
+uint32_t
+console_stream_input_wait_handle(void)
+{
+    return stream_ready ? source_receive : 0u;
 }
 
 /*
@@ -200,15 +355,6 @@ uint32_t
 console_stream_stdin(void)
 {
     return stream_ready ? source_send : 0u;
-}
-
-uint32_t
-console_stream_offer(const uint8_t *bytes, uint32_t length)
-{
-    if (!stream_ready) {
-        return 0u;
-    }
-    return astra_stream_source_offer(&source, bytes, length);
 }
 
 int

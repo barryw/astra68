@@ -1,7 +1,32 @@
 # Astra terminal, POSIX personality, and zsh direction
 
-Status: design direction; the terminal, PTY, POSIX personality, zsh, and Vim
-described here are not implemented.
+Status: active implementation. Astra has a resizable GUI Terminal, shared cell
+model, command execution, exit status, files, environment, redirection, and a
+POSIX library used by stock Lua and pristine Vim. Its ANSI/VT parser covers the
+core screen, color, cursor, alternate-screen, query, and UTF-8 operations
+advertised by `astra-256color`; PTYs, job control, zsh, and Vim's complete
+interactive/full-screen qualification remain to be completed.
+
+The cell model no longer has a compiled 128-by-64 ceiling. Its caller supplies
+resource-accounted storage, resize preserves content, and the Terminal
+preallocates only the largest grid its physical display can expose. The common
+rounded blitter emits compact corner spans instead of allocating masks the size
+of each window. The integrated QEMU display gate drags the Terminal's southeast
+corner from 840x460 to 940x540, requires a terminal redraw, then continues
+through maximize, restore, input, concurrent launch, close, and relaunch. The
+resize render measured 13,058 cycles against its 250,000-cycle regression
+budget on the retained Beast run.
+
+The stream service now owns one shared line discipline for canonical and raw
+input, echo, erase/kill/EOF, terminal state, geometry, and readable readiness.
+`tcgetattr`, `tcsetattr`, `TIOCGWINSZ`, `read`, `poll`, and `select` use that
+contract. A standard-main target diagnostic verifies a Vim-shaped seven-word
+argument vector and raw cursor input in the complete QEMU terminal gate.
+
+Pinned, unchanged upstream Vim 9.2.1001 compiles and links with no unresolved
+Astra/POSIX symbol. The QEMU gate runs its own option parser with multiple
+option arguments, `--`, and a filename, then verifies the named file changed.
+No Vim-private compatibility path is retained.
 
 ## 1. Goals
 

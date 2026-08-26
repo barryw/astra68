@@ -13,6 +13,7 @@
 
 #include <stddef.h>
 
+#include <astra/bytes.h>
 #include <astra/event_descriptor.h>
 
 #define KIND_ROOT        1u
@@ -61,16 +62,6 @@ static const uint32_t merged_tier[] = {
     ASTRA_EVENT_TIER_DETAIL
 };
 #define MERGED_TIER_COUNT (sizeof(merged_tier) / sizeof(merged_tier[0]))
-
-static int
-equal(const char *left, const char *right)
-{
-    while (*left != '\0' && *left == *right) {
-        ++left;
-        ++right;
-    }
-    return *left == '\0' && *right == '\0';
-}
 
 /* The path with `prefix` removed, or NULL when it does not start with it. */
 static const char *
@@ -322,19 +313,19 @@ describe(const AstraEventsBackend *backend, AstraEventsNode *node,
     node->activity_filter = 0u;
     node->previous_boot = 0u;
 
-    if (equal(path, "/") || equal(path, "")) {
+    if (strcmp(path, "/") == 0 || strcmp(path, "") == 0) {
         node->kind = KIND_ROOT;
         return ASTRA_VFS_OK;
     }
-    if (equal(path, "/boot")) {
+    if (strcmp(path, "/boot") == 0) {
         node->kind = KIND_BOOT;
         return ASTRA_VFS_OK;
     }
-    if (equal(path, "/boot/current")) {
+    if (strcmp(path, "/boot/current") == 0) {
         node->kind = KIND_BOOT_CURRENT;
         return ASTRA_VFS_OK;
     }
-    if (equal(path, "/boot/-1")) {
+    if (strcmp(path, "/boot/-1") == 0) {
         if (backend->previous == NULL) {
             return ASTRA_VFS_ERR_NOT_FOUND;
         }
@@ -342,11 +333,11 @@ describe(const AstraEventsBackend *backend, AstraEventsNode *node,
         node->previous_boot = 1u;
         return ASTRA_VFS_OK;
     }
-    if (equal(path, "/activity")) {
+    if (strcmp(path, "/activity") == 0) {
         node->kind = KIND_ACTIVITY_DIR;
         return ASTRA_VFS_OK;
     }
-    if (equal(path, "/subsystem")) {
+    if (strcmp(path, "/subsystem") == 0) {
         node->kind = KIND_SUBSYSTEM_DIR;
         return ASTRA_VFS_OK;
     }
@@ -357,7 +348,7 @@ describe(const AstraEventsBackend *backend, AstraEventsNode *node,
     }
     if (rest != NULL) {
         for (index = 0u; index < BOOT_LEAF_COUNT; ++index) {
-            if (equal(rest, boot_leaf[index].name)) {
+            if (strcmp(rest, boot_leaf[index].name) == 0) {
                 node->kind = boot_leaf[index].kind;
                 node->level_min = boot_leaf[index].level_min;
                 return ASTRA_VFS_OK;
@@ -399,7 +390,7 @@ describe(const AstraEventsBackend *backend, AstraEventsNode *node,
             }
             ++level;
             for (uint32_t leaf = 0u; leaf < LEVEL_LEAF_COUNT; ++leaf) {
-                if (equal(level, boot_leaf[leaf].name)) {
+                if (strcmp(level, boot_leaf[leaf].name) == 0) {
                     node->kind = KIND_MERGED;
                     node->level_min = boot_leaf[leaf].level_min;
                     return ASTRA_VFS_OK;
@@ -423,14 +414,15 @@ is_directory(uint8_t kind)
 /* ------------------------------------------------------------------- verbs */
 
 static uint32_t
-events_open(void *context, const char *path, uint32_t flags, uintptr_t *node,
-            AstraVfsNodeInfo *info)
+events_open(void *context, const char *path, uint32_t flags,
+            uint16_t create_mode, uintptr_t *node, AstraVfsNodeInfo *info)
 {
     AstraEventsBackend *backend = backend_of(context);
     AstraEventsNode described;
     AstraEventsNode *held;
     uint32_t status;
 
+    (void)create_mode;
     if ((flags & (ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
                   ASTRA_VFS_OPEN_TRUNCATE)) != 0u) {
         return ASTRA_VFS_ERR_ACCESS;
@@ -581,37 +573,6 @@ events_read(void *context, uintptr_t token, uint64_t offset, void *buffer,
 
     *moved = produced;
     return ASTRA_VFS_OK;
-}
-
-static uint32_t
-events_write(void *context, uintptr_t node, uint64_t offset,
-             uint32_t flags, const void *buffer, uint32_t length,
-             uint32_t *moved, uint64_t *position)
-{
-    (void)context;
-    (void)node;
-    (void)offset;
-    (void)flags;
-    (void)buffer;
-    (void)length;
-    *moved = 0u;
-    *position = offset;
-    return ASTRA_VFS_ERR_ACCESS;
-}
-
-static uint32_t events_sync(void *context, uintptr_t node)
-{
-    (void)context;
-    (void)node;
-    return ASTRA_VFS_ERR_ACCESS;
-}
-
-static uint32_t events_truncate(void *context, uintptr_t node, uint64_t size)
-{
-    (void)context;
-    (void)node;
-    (void)size;
-    return ASTRA_VFS_ERR_ACCESS;
 }
 
 static uint32_t
@@ -769,43 +730,20 @@ events_readdir(void *context, const char *path, uint64_t cookie, char *name,
     return ASTRA_VFS_OK;
 }
 
-static uint32_t
-events_mkdir(void *context, const char *path)
-{
-    (void)context;
-    (void)path;
-    return ASTRA_VFS_ERR_ACCESS;
-}
-
-static uint32_t
-events_unlink(void *context, const char *path)
-{
-    (void)context;
-    (void)path;
-    return ASTRA_VFS_ERR_ACCESS;
-}
-
-static uint32_t
-events_rename(void *context, const char *from, const char *to)
-{
-    (void)context;
-    (void)from;
-    (void)to;
-    return ASTRA_VFS_ERR_ACCESS;
-}
-
 static const AstraVfsBackendOps events_ops = {
     events_open,
     events_close,
     events_read,
-    events_write,
-    events_sync,
-    events_truncate,
+    astra_vfs_backend_deny_write,
+    astra_vfs_backend_deny_sync,
+    astra_vfs_backend_deny_truncate,
     events_stat,
     events_readdir,
-    events_mkdir,
-    events_unlink,
-    events_rename
+    astra_vfs_backend_deny_mkdir,
+    astra_vfs_backend_deny_unlink,
+    astra_vfs_backend_deny_rename,
+    astra_vfs_backend_deny_chmod,
+    astra_vfs_backend_no_readlink
 };
 
 int

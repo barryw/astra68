@@ -41,12 +41,13 @@ bool kernel_user_copy_recover_frame(
     const KernelUserCopyFaultSite *sites, uint32_t site_count);
 
 /*
- * Commits user stack pages under `address` for the running thread, and answers
- * whether it had to. Implemented by the process layer, which owns the stack
- * reservations; declared here because the copy path is the one caller that
- * meets an uncommitted stack page without taking a fault the user can see.
+ * Commits grow-on-touch user pages covering the range for the running thread.
+ * Implemented by the process layer, which owns stack and private reservations;
+ * the copy path can meet either before the user takes the fault that would
+ * ordinarily commit it.
  */
-bool kernel_process_commit_user_stack(uint32_t address, uint32_t size);
+bool kernel_process_prepare_user_copy(uint32_t address, uint32_t size,
+                                      bool write);
 
 int kernel_user_copy_from_asm(void *kernel_destination, uint32_t user_source,
                               uint32_t size);

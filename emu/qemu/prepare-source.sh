@@ -15,6 +15,8 @@ PUBLIC_DISPLAY_MAILBOX="$REPOSITORY/sw/include/astra/display_mailbox.h"
 PUBLIC_RENDER_BATCH="$REPOSITORY/sw/include/astra/render_batch.h"
 PUBLIC_RENDER_PROTOCOL="$REPOSITORY/fpga/arty/linux/astra_render_protocol.h"
 PUBLIC_SYSCALL="$REPOSITORY/sw/include/astra/syscall.h"
+PUBLIC_MESSAGE_ABI="$REPOSITORY/sw/include/astra/message_abi.h"
+PUBLIC_LIMITS="$REPOSITORY/sw/include/astra/limits.h"
 
 sha256_file()
 {
@@ -41,6 +43,8 @@ overlay_identity()
         find . -type f -print | LC_ALL=C sort | while IFS= read -r file; do
             printf '%s  %s\n' "$(sha256_file "$file")" "$file"
         done
+        printf '%s  %s\n' "$(sha256_file "$SCRIPT_DIR/prepare-source.sh")" \
+            "emu/qemu/prepare-source.sh"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_INPUT")" \
             "sw/include/astra/input.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_DISPLAY")" \
@@ -53,15 +57,18 @@ overlay_identity()
             "fpga/arty/linux/astra_render_protocol.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_SYSCALL")" \
             "sw/include/astra/syscall.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_MESSAGE_ABI")" \
+            "sw/include/astra/message_abi.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_LIMITS")" \
+            "sw/include/astra/limits.h"
     ) | sha256_stream
 }
 
-if [ -d /mnt/Documents/astra68 ]; then
-    DEFAULT_WORK_ROOT=/mnt/Documents/astra68/work/qemu-9.2.4
+DEFAULT_CACHE_ROOT=${XDG_CACHE_HOME:-$HOME/.cache}/astra68
+DEFAULT_WORK_ROOT=$DEFAULT_CACHE_ROOT/qemu-9.2.4
+if [ -f /mnt/Documents/astra68/vendor/qemu/$QEMU_ARCHIVE ]; then
     DEFAULT_ARCHIVE=/mnt/Documents/astra68/vendor/qemu/$QEMU_ARCHIVE
 else
-    DEFAULT_CACHE_ROOT=${XDG_CACHE_HOME:-$HOME/.cache}/astra68
-    DEFAULT_WORK_ROOT=$DEFAULT_CACHE_ROOT/qemu-9.2.4
     DEFAULT_ARCHIVE=$DEFAULT_CACHE_ROOT/vendor/qemu/$QEMU_ARCHIVE
 fi
 
@@ -131,6 +138,9 @@ cp "$PUBLIC_RENDER_PROTOCOL" \
 mkdir -p "$STAGED_SOURCE/include/astra"
 cp "$PUBLIC_DISPLAY" "$STAGED_SOURCE/include/astra/display.h"
 cp "$PUBLIC_SYSCALL" "$STAGED_SOURCE/include/astra/syscall.h"
+cp "$PUBLIC_MESSAGE_ABI" "$STAGED_SOURCE/include/astra/message_abi.h"
+cp "$PUBLIC_LIMITS" "$STAGED_SOURCE/include/astra/limits.h"
+ln -s include/astra "$STAGED_SOURCE/astra"
 patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/meson.build.patch" >&2
 patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/target-m68k-pmmu030.patch" >&2
 patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/target-m68k-68030-frames.patch" >&2

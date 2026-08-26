@@ -14,9 +14,12 @@ static uint8_t contents[512];
 static uint64_t content_size;
 static uint32_t read_calls;
 static uint32_t write_calls;
+static uint32_t bulk_write_calls;
 static uint32_t made_directory;
 static uint32_t removed_file;
 static uint32_t renamed_file;
+static uint16_t last_create_mode;
+static uint16_t last_chmod_mode;
 static AstraVfsClient *last_open_client;
 static char last_open_path[ASTRA_VFS_PATH_MAX];
 static char last_rename_from[ASTRA_VFS_PATH_MAX];
@@ -45,7 +48,17 @@ uint32_t astra_vfs_open(AstraVfsClient *value, const char *path,
                         uint32_t flags, AstraVfsFile *file, uint64_t *size,
                         uint16_t *kind)
 {
+    return astra_vfs_open_mode(value, path, flags, ASTRA_VFS_MODE_DEFAULT,
+                               file, size, kind);
+}
+
+uint32_t astra_vfs_open_mode(AstraVfsClient *value, const char *path,
+                             uint32_t flags, uint16_t create_mode,
+                             AstraVfsFile *file, uint64_t *size,
+                             uint16_t *kind)
+{
     (void)flags;
+    last_create_mode = create_mode;
     last_open_client = value;
     strcpy(last_open_path, path);
     if (same(path, "/work/note")) {
@@ -120,6 +133,14 @@ uint32_t astra_vfs_write_position(AstraVfsClient *value, AstraVfsFile file,
     if (status == ASTRA_VFS_OK)
         *position = offset + *moved;
     return status;
+}
+
+static uint32_t bulk_write(AstraVfsClient *value, AstraVfsFile file,
+                           uint64_t offset, const void *buffer,
+                           uint32_t length, uint32_t *moved)
+{
+    ++bulk_write_calls;
+    return astra_vfs_write(value, file, offset, buffer, length, moved);
 }
 
 uint32_t astra_vfs_sync(AstraVfsClient *value, AstraVfsFile file)
@@ -208,7 +229,14 @@ uint32_t astra_vfs_readdir_batch(AstraVfsClient *value, const char *path,
 
 uint32_t astra_vfs_mkdir(AstraVfsClient *value, const char *path)
 {
+    return astra_vfs_mkdir_mode(value, path, ASTRA_VFS_MODE_DEFAULT);
+}
+
+uint32_t astra_vfs_mkdir_mode(AstraVfsClient *value, const char *path,
+                              uint16_t create_mode)
+{
     (void)value;
+    last_create_mode = create_mode;
     made_directory = same(path, "/work/new");
     return made_directory != 0u ? ASTRA_VFS_OK : ASTRA_VFS_ERR_INVALID;
 }
@@ -228,6 +256,30 @@ uint32_t astra_vfs_rename(AstraVfsClient *value, const char *from,
     snprintf(last_rename_to, sizeof(last_rename_to), "%s", to);
     renamed_file = same(from, "/work/note") && same(to, "/work/renamed");
     return renamed_file != 0u ? ASTRA_VFS_OK : ASTRA_VFS_ERR_INVALID;
+}
+
+uint32_t astra_vfs_chmod(AstraVfsClient *value, const char *path,
+                         uint16_t mode)
+{
+    (void)value;
+    last_chmod_mode = mode;
+    return same(path, "/work/note") ? ASTRA_VFS_OK :
+                                      ASTRA_VFS_ERR_NOT_FOUND;
+}
+
+uint32_t astra_vfs_readlink(AstraVfsClient *value, const char *path,
+                            void *buffer, uint32_t capacity,
+                            uint32_t *length)
+{
+    static const char target[] = "note";
+
+    if (value != &client || !same(path, "/work/link"))
+        return ASTRA_VFS_ERR_NOT_FOUND;
+    if (capacity < sizeof(target) - 1u)
+        return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
+    memcpy(buffer, target, sizeof(target) - 1u);
+    *length = sizeof(target) - 1u;
+    return ASTRA_VFS_OK;
 }
 
 uint32_t astra_vfs_port_transport(void *context, uint32_t operation,
@@ -283,6 +335,7 @@ int main(void)
     uint32_t moved;
     uint32_t count;
     uint64_t offset;
+    uint32_t length;
 
     assert(library->abi_major == ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR);
     astra_assign_table_init(&assigns);
@@ -293,8 +346,8 @@ int main(void)
                              ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE,
                              "rom") == ASTRA_VFS_OK);
     client.transport = NULL;
-    assert(library->attach(&filesystem, &assigns, client_for,
-                           astra_vfs_port_read_bulk, NULL) ==
+    assert(library->attach_io(&filesystem, &assigns, client_for,
+                              astra_vfs_port_read_bulk, bulk_write, NULL) ==
            ASTRA_VFS_OK);
     assert(library->qualify("WORK", "src", "main.c", path,
                             sizeof(path)) == ASTRA_VFS_OK);
@@ -315,7 +368,8 @@ int main(void)
     for (uint32_t index = 0u; index < sizeof(written); ++index)
         written[index] = (uint8_t)index;
     assert(library->write(&file, written, sizeof(written), &moved) ==
-           ASTRA_VFS_OK && moved == sizeof(written) && write_calls == 2u);
+           ASTRA_VFS_OK && moved == sizeof(written) &&
+           bulk_write_calls == 1u && write_calls == 1u);
     assert(library->seek(&file, 0, ASTRA_FILE_SEEK_BEGIN, &offset) ==
            ASTRA_VFS_OK && offset == 0u);
     assert(library->read(&file, read, sizeof(read), &moved) == ASTRA_VFS_OK &&
@@ -358,6 +412,19 @@ int main(void)
     library->directory_close(&directory);
     assert(library->mkdir(&filesystem, "WORK:new") == ASTRA_VFS_OK &&
            made_directory != 0u);
+    assert(last_create_mode == ASTRA_VFS_MODE_DEFAULT);
+    assert(library->mkdir_mode(&filesystem, "WORK:new", 0700u) ==
+           ASTRA_VFS_OK && last_create_mode == 0700u);
+    assert(library->open_mode(&filesystem, "WORK:tool",
+                              ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE,
+                              0600u, &file) == ASTRA_VFS_OK);
+    assert(last_create_mode == 0600u);
+    assert(library->close(&file) == ASTRA_VFS_OK);
+    assert(library->chmod(&filesystem, "WORK:note", 0640u) == ASTRA_VFS_OK);
+    assert(last_chmod_mode == 0640u);
+    assert(library->readlink(&filesystem, "WORK:link", read, sizeof(read),
+                             &length) == ASTRA_VFS_OK);
+    assert(length == 4u && memcmp(read, "note", length) == 0);
     assert(library->rename(&filesystem, "WORK:note", "WORK:renamed") ==
            ASTRA_VFS_OK);
     assert(renamed_file != 0u && same(last_rename_from, "/work/note") &&

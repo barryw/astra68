@@ -9,16 +9,12 @@ RUNTIME := ../runtime
 STORAGE := ../storage
 ALLOC := ../alloc
 VFS := ../vfs
-STREAMS := ../streams
-SHELL_DIR := ../shell
-TERMINAL_DIR := ../terminal
 NDK := ../../../ndk
 NDK_LIB := $(NDK)/build/m68k/libastra.a
 LWEXT4 := ../../../third_party/lwext4
 CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include \
 	-I$(STORAGE)/include -I../metrics/include -I$(ALLOC)/include \
-	-I$(SHELL_DIR)/include -I$(TERMINAL_DIR)/include -I$(VFS)/include \
-	-I$(STREAMS)/include -I$(NDK)/include
+	-I$(VFS)/include -I$(NDK)/include
 # The volume check speaks lwext4 as well as Astra and links freestanding, so it
 # needs the vendored headers, the build profile, and the libc shims.
 EXT4_CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
@@ -38,24 +34,14 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 	-Wl,--build-id=none -Wl,--gc-sections -T $(RUNTIME)/astra_user.ld
 SOURCES := src/supervisor.c src/main.c src/volume.c src/loader.c \
-	src/loader_manifest.c \
-	src/console_shell.c \
-	src/console_stream.c src/vfs_host.c src/vfs_read.c
-OBJECTS := build/m68k/supervisor.o build/m68k/main.o \
-	build/m68k/loader_manifest.o build/m68k/vfs_host.o \
-	build/m68k/vfs_read.o \
-	build/m68k/loader.o \
-	build/m68k/console_stream.o \
-	build/m68k/volume.o build/m68k/console_shell.o \
-	build/m68k/proc_tree.o
+	src/loader_manifest.c src/vfs_host.c src/vfs_read.c src/proc_tree.c
+OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(SOURCES))
+ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,$(SOURCES))
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 STORAGE_LIB := $(STORAGE)/build/m68k/libastrablock.a
 EXT4_LIB := $(STORAGE)/build/m68k/libastraext4.a
 ALLOC_LIB := $(ALLOC)/build/m68k/libastraalloc.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
-STREAMS_LIB := $(STREAMS)/build/m68k/libastrastreams.a
-SHELL_LIB := $(SHELL_DIR)/build/m68k/libastrashell.a
-TERMINAL_LIB := $(TERMINAL_DIR)/build/m68k/libastraterminal.a
 RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0.o
 TARGET := build/m68k/astra_supervisor.elf
 # What the ROM carries. Identical to TARGET as far as the loader is concerned
@@ -75,47 +61,29 @@ PROC_TREE_ROOT_TEST := build/host/test_proc_tree_root
 # diagnostic channel, so the two cannot be linked apart.
 TEST_SOURCES := src/supervisor.c $(RUNTIME)/src/startup.c \
 	$(RUNTIME)/src/log.c tests/test_supervisor.c
-
-# Two invocations on purpose. Make has no rule here for the libraries the sub-
-# makes build, so it stats them once, before those sub-makes run, and compares
-# the image against that stale stat. A library rebuilt in the same invocation
-# therefore left the previous ELF in place — the stale-object trap wearing a
-# different hat, and it costs an experiment every time it happens. A second
-# invocation stats them afresh.
-all:
-	$(MAKE) libraries
-	$(MAKE) image
+ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(ALLOC) $(STORAGE) $(VFS) \
+	../graphics $(NDK)
+ASTRA_PROGRAM_TARGETS := image
+include ../program.mk
 
 image: $(IMAGE) $(CATALOG) size
-
-libraries:
-	$(MAKE) -C $(RUNTIME) all
-	$(MAKE) -C $(ALLOC) all
-	$(MAKE) -C $(STORAGE) $(STORAGE_LIB:$(STORAGE)/%=%)
-	$(MAKE) -C $(STORAGE) $(EXT4_LIB:$(STORAGE)/%=%)
-	$(MAKE) -C $(VFS) all
-	$(MAKE) -C $(STREAMS) all
-	$(MAKE) -C $(SHELL_DIR) all
-	$(MAKE) -C $(TERMINAL_DIR) all
-	$(MAKE) -C ../graphics all
-	$(MAKE) -C $(NDK) all
 
 # The image is the deliverable, so the link contract is part of the build:
 # astra_user.ld produces exactly the shape kernel_elf_accept() takes. The
 # archives are named as prerequisites so a rebuilt library relinks the image.
 $(TARGET): $(OBJECTS) $(RUNTIME)/astra_user.ld $(RUNTIME_CRT0) $(EXT4_LIB) \
-		$(STORAGE_LIB) $(ALLOC_LIB) $(RUNTIME_LIB) $(SHELL_LIB) \
-		$(TERMINAL_LIB) $(VFS_LIB) $(STREAMS_LIB) $(NDK_LIB)
+		$(STORAGE_LIB) $(ALLOC_LIB) $(RUNTIME_LIB) $(VFS_LIB) $(NDK_LIB)
 	@mkdir -p $(@D)
 	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(RUNTIME_CRT0) $(OBJECTS) \
-		$(STREAMS_LIB) $(VFS_LIB) $(EXT4_LIB) \
-		$(STORAGE_LIB) $(ALLOC_LIB) $(TERMINAL_LIB) $(SHELL_LIB) \
+		$(VFS_LIB) $(EXT4_LIB) \
+		$(STORAGE_LIB) $(ALLOC_LIB) \
 		$(NDK_LIB) $(RUNTIME_LIB) -lgcc
 
 # The catalog section goes the way DWARF does: read out at build time, never
 # carried in the window the firmware compresses into ROM.
 $(IMAGE): $(TARGET)
-	$(OBJCOPY) --strip-all --remove-section=.astra_events $< $@
+	$(OBJCOPY) --strip-all --strip-section-headers \
+		--remove-section=.astra_events $< $@
 
 # --set-section-flags because the section is (INFO) in the linker script and
 # objcopy's binary output emits allocatable sections only; without it this
@@ -170,18 +138,14 @@ sanitize:
 		tests/test_loader_manifest.c -o build/host/test_loader_manifest_sanitize
 	./build/host/test_loader_manifest_sanitize
 
-analyze:
-	@mkdir -p build/analyzer
-	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
-		-c src/supervisor.c -o build/analyzer/supervisor.o
-	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
-		-c src/main.c -o build/analyzer/main.o
-	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
-		-c src/console_stream.c -o build/analyzer/console_stream.o
-	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
-		-c src/loader_manifest.c -o build/analyzer/loader_manifest.o
-	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
-		-c src/loader.c -o build/analyzer/loader.o
+analyze: $(ANALYZER_OBJECTS)
+
+build/analyzer/volume.o: ANALYZER_CPPFLAGS := $(EXT4_CPPFLAGS)
+
+build/analyzer/%.o: src/%.c
+	@mkdir -p $(@D)
+	$(ANALYZER_CC) $(CPPFLAGS) $(ANALYZER_CPPFLAGS) $(COMMON_FLAGS) \
+		$(HOST_FLAGS) -fanalyzer -c $< -o $@
 
 size: $(IMAGE)
 	$(SIZE) $(IMAGE)

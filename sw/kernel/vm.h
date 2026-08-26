@@ -39,6 +39,22 @@
 #define KERNEL_VM_DMA_SLOT_SIZE 0x00200000u
 #define KERNEL_VM_DMA_SLOT_COUNT 4u
 
+/*
+ * Clone-private anonymous memory occupies every whole 4 MiB PMMU root slot
+ * between transfer buffers and user stacks. Reserving a slot consumes no
+ * frame; first touch commits ordinary process-owned pages through the normal
+ * quota. The extent is therefore the address-map boundary, not a heap limit.
+ */
+#define KERNEL_VM_PRIVATE_BASE \
+    (KERNEL_VM_DMA_BASE + KERNEL_VM_DMA_SLOT_SIZE * KERNEL_VM_DMA_SLOT_COUNT)
+#define KERNEL_VM_PRIVATE_END 0x70000000u
+#define KERNEL_VM_PRIVATE_SLOT_SIZE 0x00400000u
+#define KERNEL_VM_PRIVATE_SLOT_COUNT \
+    ((KERNEL_VM_PRIVATE_END - KERNEL_VM_PRIVATE_BASE) / \
+     KERNEL_VM_PRIVATE_SLOT_SIZE)
+#define KERNEL_VM_PRIVATE_BITMAP_WORDS \
+    ((KERNEL_VM_PRIVATE_SLOT_COUNT + 31u) / 32u)
+
 #define KERNEL_VM_READ  (1u << 0)
 #define KERNEL_VM_WRITE (1u << 1)
 #define KERNEL_VM_EXEC  (1u << 2)
@@ -63,10 +79,13 @@ typedef enum KernelVmMapping {
 } KernelVmMapping;
 
 typedef struct KernelAddressSpace {
+    struct KernelAddressSpace *registry_next;
     uint32_t owner;
     uint32_t root_physical;
     uint32_t mapped_pages;
     uint32_t table_pages;
+    uint32_t private_reserved[KERNEL_VM_PRIVATE_BITMAP_WORDS];
+    uint32_t private_writable[KERNEL_VM_PRIVATE_BITMAP_WORDS];
     uint8_t initialized;
     uint8_t reserved[3];
 } KernelAddressSpace;
@@ -104,6 +123,11 @@ KernelVmStatus kernel_vm_enable(void);
 bool kernel_vm_enabled(void);
 KernelVmStatus kernel_vm_create_address_space(uint32_t owner,
                                               KernelAddressSpace *space);
+KernelVmStatus kernel_vm_clone_address_space(
+    KernelAddressSpace *source, uint32_t owner,
+    KernelAddressSpace *destination);
+KernelVmStatus kernel_vm_exchange_address_spaces(KernelAddressSpace *left,
+                                                  KernelAddressSpace *right);
 KernelVmStatus kernel_vm_destroy_address_space(KernelAddressSpace *space);
 KernelVmStatus kernel_vm_map_page(KernelAddressSpace *space,
                                   uint32_t virtual_address,
@@ -114,8 +138,35 @@ KernelVmStatus kernel_vm_map_shared_page(KernelAddressSpace *space,
                                          uint32_t physical_address,
                                          uint32_t frame_owner,
                                          uint32_t permissions);
+KernelVmStatus kernel_vm_map_cow_page(KernelAddressSpace *space,
+                                      uint32_t virtual_address,
+                                      uint32_t physical_address,
+                                      uint32_t frame_owner,
+                                      bool writable);
+KernelVmStatus kernel_vm_promote_page_to_cow(KernelAddressSpace *space,
+                                             uint32_t virtual_address);
+KernelVmStatus kernel_vm_cow_make_private(KernelAddressSpace *space,
+                                          uint32_t virtual_address);
+KernelVmStatus kernel_vm_cow_fault(KernelAddressSpace *space,
+                                   uint32_t virtual_address);
 KernelVmStatus kernel_vm_unmap_page(KernelAddressSpace *space,
                                     uint32_t virtual_address);
+KernelVmStatus kernel_vm_private_reserve(KernelAddressSpace *space,
+                                         uint32_t byte_size,
+                                         uint32_t permissions,
+                                         uint32_t *virtual_base,
+                                         uint32_t *mapped_span);
+KernelVmStatus kernel_vm_private_fault(KernelAddressSpace *space,
+                                       uint32_t virtual_address,
+                                       bool write);
+KernelVmStatus kernel_vm_private_commit_range(KernelAddressSpace *space,
+                                              uint32_t virtual_address,
+                                              uint32_t byte_size,
+                                              bool write);
+KernelVmStatus kernel_vm_private_decommit(KernelAddressSpace *space,
+                                          uint32_t virtual_address,
+                                          uint32_t byte_size,
+                                          uint32_t *released_pages);
 /*
  * Maps a DMA frame the process owns, cache-inhibited: the device writes these
  * pages behind the data cache's back.

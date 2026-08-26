@@ -1015,8 +1015,7 @@ static void add_boot_range(uint32_t base, uint32_t size, uint32_t type,
 /*
  * Decodes a ROM-resident LZ4 image into RAM and checksums the result.
  *
- * The images ship compressed because the ROM is a fixed 256 KiB window decoded
- * in RTL, so bytes there cost a bitstream to buy. Firmware verifies because
+ * The images ship compressed to keep boot I/O and decode time low. Firmware verifies because
  * nothing downstream can: the kernel is handed an address and a length and has
  * no second copy to compare against. The CRC covers the destination, which is
  * what the previous read-back comparison covered.

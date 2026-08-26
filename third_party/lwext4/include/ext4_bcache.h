@@ -135,6 +135,14 @@ struct ext4_bcache {
 	/**@brief   The blockdev binded to this block cache*/
 	struct ext4_blockdev *bdev;
 
+	/**@brief   Short-held cache bookkeeping lock.*/
+	void (*lock)(void);
+	void (*unlock)(void);
+
+	/**@brief   Cache-fill/direct-I/O lane lock.*/
+	void (*fill_lock)(void);
+	void (*fill_unlock)(void);
+
 	/**@brief   The cache should not be shaked */
 	bool dont_shake;
 

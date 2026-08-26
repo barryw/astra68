@@ -5,6 +5,7 @@
 #include <stddef.h>
 
 #include <astra/crc32.h>
+#include <astra/endian.h>
 
 #define SNAPSHOT_MAGIC       0x41455654u /* "AEVT" */
 #define SNAPSHOT_VERSION     1u
@@ -28,35 +29,6 @@ typedef struct SnapshotHeader {
     uint32_t crc;
 } SnapshotHeader;
 
-static uint16_t
-get16(const uint8_t *bytes)
-{
-    return (uint16_t)(((uint16_t)bytes[0] << 8) | bytes[1]);
-}
-
-static uint32_t
-get32(const uint8_t *bytes)
-{
-    return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
-           ((uint32_t)bytes[2] << 8) | bytes[3];
-}
-
-static void
-put16(uint8_t *bytes, uint16_t value)
-{
-    bytes[0] = (uint8_t)(value >> 8);
-    bytes[1] = (uint8_t)value;
-}
-
-static void
-put32(uint8_t *bytes, uint32_t value)
-{
-    bytes[0] = (uint8_t)(value >> 24);
-    bytes[1] = (uint8_t)(value >> 16);
-    bytes[2] = (uint8_t)(value >> 8);
-    bytes[3] = (uint8_t)value;
-}
-
 static uint32_t
 catalog_crc(const AstraEventCatalog *catalog)
 {
@@ -73,33 +45,35 @@ encode_header(const AstraEventStore *store, uint32_t boot,
 {
     uint32_t count = 0u;
 
-    put32(bytes + 0u, SNAPSHOT_MAGIC);
-    put16(bytes + 4u, SNAPSHOT_VERSION);
-    put16(bytes + 6u, SNAPSHOT_HEADER_SIZE);
-    put32(bytes + 8u, boot);
-    put32(bytes + 12u, generation);
+    astra_store_be32(bytes + 0u, SNAPSHOT_MAGIC);
+    astra_store_be16(bytes + 4u, SNAPSHOT_VERSION);
+    astra_store_be16(bytes + 6u, SNAPSHOT_HEADER_SIZE);
+    astra_store_be32(bytes + 8u, boot);
+    astra_store_be32(bytes + 12u, generation);
     for (uint32_t tier = 0u; tier < ASTRA_EVENT_TIER_MAX; ++tier) {
         count += store->tiers[tier].count;
     }
-    put32(bytes + 16u, SNAPSHOT_HEADER_SIZE +
-                         count * (uint32_t)sizeof(AstraEventStored));
+    astra_store_be32(bytes + 16u, SNAPSHOT_HEADER_SIZE +
+                                  count * (uint32_t)sizeof(AstraEventStored));
     for (uint32_t tier = 0u; tier < ASTRA_EVENT_TIER_MAX; ++tier) {
-        put32(bytes + 20u + tier * 4u, store->tiers[tier].count);
+        astra_store_be32(bytes + 20u + tier * 4u,
+                         store->tiers[tier].count);
     }
-    put32(bytes + 36u, catalog_crc(store->catalog));
+    astra_store_be32(bytes + 36u, catalog_crc(store->catalog));
     for (uint32_t tier = 0u; tier < ASTRA_EVENT_TIER_MAX; ++tier) {
-        put32(bytes + 40u + tier * 4u, store->tiers[tier].evicted);
+        astra_store_be32(bytes + 40u + tier * 4u,
+                         store->tiers[tier].evicted);
     }
     for (uint32_t subsystem = 0u;
          subsystem < ASTRA_EVENT_SUBSYSTEM_MAX; ++subsystem) {
-        put32(bytes + 56u + subsystem * 4u,
-              store->evicted_by_subsystem[subsystem]);
+        astra_store_be32(bytes + 56u + subsystem * 4u,
+                         store->evicted_by_subsystem[subsystem]);
     }
-    put32(bytes + 88u, store->evicted_unattributed);
-    put32(bytes + 92u, store->dropped_debug);
-    put32(bytes + 96u, store->lost_in_transport);
-    put32(bytes + 100u, store->stored);
-    put32(bytes + SNAPSHOT_CRC_OFFSET, crc);
+    astra_store_be32(bytes + 88u, store->evicted_unattributed);
+    astra_store_be32(bytes + 92u, store->dropped_debug);
+    astra_store_be32(bytes + 96u, store->lost_in_transport);
+    astra_store_be32(bytes + 100u, store->stored);
+    astra_store_be32(bytes + SNAPSHOT_CRC_OFFSET, crc);
 }
 
 static int
@@ -109,37 +83,38 @@ decode_header(SnapshotHeader *header,
     uint32_t count = 0u;
     uint32_t records;
 
-    if (size < SNAPSHOT_HEADER_SIZE || get32(bytes + 0u) != SNAPSHOT_MAGIC ||
-        get16(bytes + 4u) != SNAPSHOT_VERSION ||
-        get16(bytes + 6u) != SNAPSHOT_HEADER_SIZE ||
-        get32(bytes + 16u) != size ||
+    if (size < SNAPSHOT_HEADER_SIZE ||
+        astra_load_be32(bytes + 0u) != SNAPSHOT_MAGIC ||
+        astra_load_be16(bytes + 4u) != SNAPSHOT_VERSION ||
+        astra_load_be16(bytes + 6u) != SNAPSHOT_HEADER_SIZE ||
+        astra_load_be32(bytes + 16u) != size ||
         (size - SNAPSHOT_HEADER_SIZE) % sizeof(AstraEventStored) != 0u) {
         return 0;
     }
     records = (size - SNAPSHOT_HEADER_SIZE) / sizeof(AstraEventStored);
-    header->boot = get32(bytes + 8u);
-    header->generation = get32(bytes + 12u);
+    header->boot = astra_load_be32(bytes + 8u);
+    header->generation = astra_load_be32(bytes + 12u);
     for (uint32_t tier = 0u; tier < ASTRA_EVENT_TIER_MAX; ++tier) {
-        header->count[tier] = get32(bytes + 20u + tier * 4u);
+        header->count[tier] = astra_load_be32(bytes + 20u + tier * 4u);
         if (header->count[tier] > records - count) {
             return 0;
         }
         count += header->count[tier];
     }
-    header->catalog_crc = get32(bytes + 36u);
+    header->catalog_crc = astra_load_be32(bytes + 36u);
     for (uint32_t tier = 0u; tier < ASTRA_EVENT_TIER_MAX; ++tier) {
-        header->evicted[tier] = get32(bytes + 40u + tier * 4u);
+        header->evicted[tier] = astra_load_be32(bytes + 40u + tier * 4u);
     }
     for (uint32_t subsystem = 0u;
          subsystem < ASTRA_EVENT_SUBSYSTEM_MAX; ++subsystem) {
         header->evicted_by_subsystem[subsystem] =
-            get32(bytes + 56u + subsystem * 4u);
+            astra_load_be32(bytes + 56u + subsystem * 4u);
     }
-    header->evicted_unattributed = get32(bytes + 88u);
-    header->dropped_debug = get32(bytes + 92u);
-    header->lost_in_transport = get32(bytes + 96u);
-    header->stored = get32(bytes + 100u);
-    header->crc = get32(bytes + SNAPSHOT_CRC_OFFSET);
+    header->evicted_unattributed = astra_load_be32(bytes + 88u);
+    header->dropped_debug = astra_load_be32(bytes + 92u);
+    header->lost_in_transport = astra_load_be32(bytes + 96u);
+    header->stored = astra_load_be32(bytes + 100u);
+    header->crc = astra_load_be32(bytes + SNAPSHOT_CRC_OFFSET);
     return count == records && header->boot != 0u &&
            header->generation != 0u;
 }

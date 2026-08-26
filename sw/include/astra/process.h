@@ -7,7 +7,7 @@
 #endif
 
 #define ASTRA_STARTUP_MAGIC 0x41535452u
-#define ASTRA_STARTUP_ABI_VERSION 3u
+#define ASTRA_STARTUP_ABI_VERSION 4u
 #define ASTRA_STARTUP_INFO_SIZE 64u
 #define ASTRA_STARTUP_CAPABILITY_SIZE 92u
 /* The kernel publishes startup state in the machine's one 4 KiB VM page. */
@@ -69,8 +69,16 @@
 _Static_assert(ASTRA_LAUNCH_GRANT_MAX == 12u,
                "the grant ceiling is ABI: a child's capability table and "
                "every array sized by it are laid out from this number");
-#define ASTRA_LAUNCH_ARGUMENT_MAX 8u
-#define ASTRA_LAUNCH_ARGUMENT_BYTES 192u
+/*
+ * Arguments share the startup page with its capability table and environment.
+ * These are physical upper bounds only; the kernel accepts the actual mixture
+ * when its pointer vector and strings fit the page.  One empty argument costs
+ * one byte and one four-byte pointer, so no valid page can exceed this count.
+ */
+#define ASTRA_LAUNCH_ARGUMENT_BYTES ASTRA_STARTUP_BLOCK_SIZE
+#define ASTRA_LAUNCH_ARGUMENT_MAX \
+    ((ASTRA_STARTUP_BLOCK_SIZE - ASTRA_STARTUP_INFO_SIZE - \
+      (2u * ASTRA_STARTUP_CAPABILITY_SIZE)) / 5u)
 #define ASTRA_LAUNCH_FLAG_ESSENTIAL (1u << 0)
 #define ASTRA_LAUNCH_FLAG_MASK ASTRA_LAUNCH_FLAG_ESSENTIAL
 /*
@@ -163,13 +171,33 @@ typedef struct AstraLaunchArguments {
      * Resource authority, not an application preference. Only the trusted
      * initial supervisor may launch an essential child; the kernel refuses
      * this bit from every other launcher.
-     */
+    */
     uint16_t flags;
-    char     bytes[ASTRA_LAUNCH_ARGUMENT_BYTES];
+    uint32_t argument_address;
     uint16_t environment_count;
     uint16_t environment_length;
     uint32_t environment_address;
 } AstraLaunchArguments;
+
+#define ASTRA_LAUNCH_ARGUMENTS_SIZE 20u
+_Static_assert(sizeof(AstraLaunchArguments) == ASTRA_LAUNCH_ARGUMENTS_SIZE,
+               "launch-argument syscall ABI changed");
+
+/*
+ * Atomic image replacement. Arguments use the same packed representation as
+ * launch. `handoff` is deliberately opaque to Axiom: a personality can carry
+ * state which survives an exec without putting POSIX policy in the kernel.
+ */
+typedef struct AstraExecRequest {
+    uint32_t size;
+    AstraLaunchArguments arguments;
+    uint32_t handoff_address;
+    uint32_t handoff_size;
+} AstraExecRequest;
+
+#define ASTRA_EXEC_REQUEST_SIZE 32u
+_Static_assert(sizeof(AstraExecRequest) == ASTRA_EXEC_REQUEST_SIZE,
+               "exec-request syscall ABI changed");
 
 #define ASTRA_CAPABILITY_PROCESS "PROCESS"
 #define ASTRA_CAPABILITY_THREAD  "THREAD"
@@ -193,7 +221,8 @@ typedef struct AstraStartupInfo {
     uint32_t capability_count;
     uint32_t capabilities_address;
     uint32_t launch_source;
-    uint32_t reserved[2];
+    uint32_t handoff_address;
+    uint32_t handoff_size;
 } AstraStartupInfo;
 
 /*

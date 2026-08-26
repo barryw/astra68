@@ -42,6 +42,7 @@ typedef struct MockPort {
 
 /* Handle N names port N, both ends. Port 0 is "no handle". */
 static MockPort ports[MOCK_PORT_MAX];
+static uint32_t event_root[MOCK_PORT_MAX];
 static uint32_t next_port = 1u;
 static uint32_t mock_activity = 0x5A5A5A5Au;
 static uint32_t yields;
@@ -54,16 +55,66 @@ static uint32_t closes;
  */
 static AstraStreamSource *served_source;
 static AstraStreamSink *served_sink;
+static uint32_t mock_open(uint32_t capacity);
 
 static void
 mock_reset(void)
 {
     memset(ports, 0, sizeof(ports));
+    memset(event_root, 0, sizeof(event_root));
     next_port = 1u;
     yields = 0u;
     closes = 0u;
     served_source = NULL;
     served_sink = NULL;
+}
+
+uint32_t
+astra_rt_event_create(uint32_t flags, uint32_t rights, uint32_t *handle)
+{
+    (void)rights;
+    *handle = mock_open(1u);
+    event_root[*handle] = *handle;
+    if ((flags & ASTRA_EVENT_INITIALLY_SIGNALED) != 0u)
+        ports[*handle].count = 1u;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
+astra_rt_handle_duplicate(uint32_t handle, uint32_t rights,
+                          uint32_t *duplicate)
+{
+    uint32_t root;
+
+    (void)rights;
+    if (handle == 0u || handle >= MOCK_PORT_MAX ||
+        event_root[handle] == 0u)
+        return ASTRA_SYSCALL_INVALID_HANDLE;
+    root = event_root[handle];
+    *duplicate = mock_open(1u);
+    event_root[*duplicate] = root;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
+astra_rt_signal(uint32_t handle, uint32_t count, uint32_t *woken)
+{
+    if (handle == 0u || handle >= MOCK_PORT_MAX || count == 0u ||
+        event_root[handle] == 0u)
+        return ASTRA_SYSCALL_INVALID_HANDLE;
+    ports[event_root[handle]].count = 1u;
+    if (woken != NULL)
+        *woken = 0u;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
+astra_rt_event_reset(uint32_t handle)
+{
+    if (handle == 0u || handle >= MOCK_PORT_MAX || event_root[handle] == 0u)
+        return ASTRA_SYSCALL_INVALID_HANDLE;
+    ports[event_root[handle]].count = 0u;
+    return ASTRA_SYSCALL_OK;
 }
 
 static uint32_t
@@ -194,6 +245,9 @@ astra_wait_one(uint32_t handle, uint64_t deadline_ns, uint32_t *detail)
         *detail = 0u;
     }
     assert(handle != 0u && handle < MOCK_PORT_MAX);
+    if (event_root[handle] != 0u)
+        return ports[event_root[handle]].count != 0u ? ASTRA_SYSCALL_OK :
+                                                       ASTRA_SYSCALL_TIMED_OUT;
     if (served_source != NULL) {
         (void)astra_stream_source_pump(served_source, 4u);
     }
@@ -207,11 +261,13 @@ astra_wait_one(uint32_t handle, uint64_t deadline_ns, uint32_t *detail)
 
 /* The sink's other end: the terminal model the shell already owns. */
 static AstraTerminal terminal;
+static uint8_t terminal_storage[
+    ASTRA_TERMINAL_STORAGE_BYTES(128u, 30u)];
 static uint32_t rendered_activity;
 
 static int
-no_render(void *context, uint32_t row, uint32_t column, const uint8_t *cells,
-          uint32_t count)
+no_render(void *context, uint32_t row, uint32_t column,
+          const AstraTerminalCell *cells, uint32_t count)
 {
     (void)context;
     (void)row;
@@ -253,7 +309,8 @@ test_a_write_reaches_the_terminal(void)
     char row[40];
 
     mock_reset();
-    assert(astra_terminal_init(&terminal, 32u, 4u, no_render, NULL) ==
+    assert(astra_terminal_init(&terminal, 32u, 4u, terminal_storage,
+                               sizeof(terminal_storage), no_render, NULL) ==
            ASTRA_TERMINAL_OK);
     handle = mock_open(MOCK_QUEUE_MAX);
     assert(astra_stream_sink_init(&sink, handle, to_terminal, NULL));
@@ -286,7 +343,8 @@ test_a_long_write_is_several_messages_never_a_cut_one(void)
     uint32_t written = 0u;
 
     mock_reset();
-    assert(astra_terminal_init(&terminal, 128u, 8u, no_render, NULL) ==
+    assert(astra_terminal_init(&terminal, 128u, 8u, terminal_storage,
+                               sizeof(terminal_storage), no_render, NULL) ==
            ASTRA_TERMINAL_OK);
     handle = mock_open(MOCK_QUEUE_MAX);
     assert(astra_stream_sink_init(&sink, handle, to_terminal, NULL));
@@ -325,7 +383,8 @@ test_a_full_sink_says_so_and_loses_nothing(void)
     uint32_t again = 0u;
 
     mock_reset();
-    assert(astra_terminal_init(&terminal, 128u, 8u, no_render, NULL) ==
+    assert(astra_terminal_init(&terminal, 128u, 8u, terminal_storage,
+                               sizeof(terminal_storage), no_render, NULL) ==
            ASTRA_TERMINAL_OK);
     /* A port two messages deep, and three messages to put through it. */
     handle = mock_open(2u);
@@ -359,7 +418,8 @@ test_a_print_retries_until_the_text_is_gone(void)
     char row[64];
 
     mock_reset();
-    assert(astra_terminal_init(&terminal, 48u, 4u, no_render, NULL) ==
+    assert(astra_terminal_init(&terminal, 48u, 4u, terminal_storage,
+                               sizeof(terminal_storage), no_render, NULL) ==
            ASTRA_TERMINAL_OK);
     handle = mock_open(1u);
     assert(astra_stream_sink_init(&sink, handle, to_terminal, NULL));
@@ -454,10 +514,10 @@ test_a_read_gets_what_there_is(void)
     assert(length == 3u);
     assert(memcmp(buffer, "typ", 3u) == 0);
 
-    /* A source still holding text takes no more: nothing typed is overwritten. */
+    /* New input queues behind unread input; neither part is overwritten. */
     assert(astra_stream_source_ready(&source));
     assert(astra_stream_source_offer(&source, (const uint8_t *)"more", 4u) ==
-           0u);
+           4u);
 
     /*
      * A second read, which is the one that caught the reply handle being moved
@@ -467,17 +527,9 @@ test_a_read_gets_what_there_is(void)
     length = 0xffffffffu;
     assert(astra_stream_read(handle, buffer, sizeof(buffer), &length) ==
            ASTRA_SYSCALL_OK);
-    assert(length == 2u);
-    assert(memcmp(buffer, "ed", 2u) == 0);
+    assert(length == 6u);
+    assert(memcmp(buffer, "edmore", 6u) == 0);
     assert(!astra_stream_source_ready(&source));
-
-    /*
-     * Now it takes the next line, because the last one was read. A source is
-     * one message deep on purpose: how far behind a reader may fall is the
-     * reader's business, not something a buffer here decides for it.
-     */
-    assert(astra_stream_source_offer(&source, (const uint8_t *)"more", 4u) ==
-           4u);
     served_source = NULL;
 }
 
@@ -538,6 +590,160 @@ test_a_source_with_nothing_answers_with_nothing(void)
 }
 
 static void
+test_read_wait_tracks_the_source_without_consuming(void)
+{
+    AstraStreamSource source;
+    uint32_t source_handle;
+    uint32_t wait_handle = 0u;
+    uint32_t events = 0xffffffffu;
+    uint32_t length = 0u;
+    uint8_t byte = 0u;
+
+    mock_reset();
+    source_handle = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_stream_source_init(&source, source_handle));
+    served_source = &source;
+    assert(astra_stream_read_wait(source_handle, &wait_handle, &events) ==
+           ASTRA_SYSCALL_OK);
+    assert(wait_handle != 0u && events == 0u);
+    assert(astra_wait_one(wait_handle, 0u, NULL) ==
+           ASTRA_SYSCALL_TIMED_OUT);
+
+    assert(astra_stream_source_offer(&source, (const uint8_t *)"x", 1u) ==
+           1u);
+    assert(astra_wait_one(wait_handle, 0u, NULL) == ASTRA_SYSCALL_OK);
+    assert(astra_stream_read(source_handle, &byte, 1u, &length) ==
+           ASTRA_SYSCALL_OK);
+    assert(length == 1u && byte == 'x');
+    assert(astra_wait_one(wait_handle, 0u, NULL) ==
+           ASTRA_SYSCALL_TIMED_OUT);
+    served_source = NULL;
+    (void)astra_close(wait_handle);
+    astra_stream_source_destroy(&source);
+}
+
+static void
+test_terminal_control_is_shared_and_flushes_input(void)
+{
+    AstraStreamSink sink;
+    AstraStreamSource source;
+    AstraTtyState state;
+    AstraTtyState changed;
+    AstraTtyState observed;
+    uint32_t output;
+    uint32_t input;
+    uint32_t generation;
+
+    mock_reset();
+    output = mock_open(MOCK_QUEUE_MAX);
+    input = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_stream_sink_init(&sink, output, to_terminal, NULL));
+    assert(astra_stream_source_init(&source, input));
+    astra_stream_tty_state_init(&state);
+    astra_stream_tty_bind(&sink, &source, &state);
+    astra_stream_sink_size(&sink, 100u, 40u, 800u, 640u);
+
+    served_source = &source;
+    assert(astra_stream_tty_get(input, &observed) == ASTRA_SYSCALL_OK);
+    assert(observed.columns == 100u && observed.rows == 40u);
+    assert(observed.pixel_width == 800u && observed.pixel_height == 640u);
+    assert((observed.local_flags & ASTRA_TTY_LFLAG_ICANON) != 0u);
+    generation = observed.generation;
+
+    assert(astra_stream_source_offer(&source, (const uint8_t *)"pending",
+                                     7u) == 7u);
+    changed = observed;
+    changed.local_flags = 0u;
+    /* A termios update cannot forge the owner-published window geometry. */
+    changed.columns = 1u;
+    changed.rows = 1u;
+    changed.pixel_width = 1u;
+    changed.pixel_height = 1u;
+    assert(astra_stream_write_one(output, "drain", 5u) == ASTRA_SYSCALL_OK);
+    assert(sink.idle && sink.messages == 0u);
+    assert(astra_stream_tty_set(
+               input, ASTRA_TTY_APPLY_DRAIN_FLUSH_INPUT, &changed) ==
+           ASTRA_SYSCALL_OK);
+    assert(sink.idle && sink.messages == 1u && sink.bytes == 5u);
+    assert(!astra_stream_source_ready(&source));
+    assert(state.columns == 100u && state.rows == 40u);
+    assert(state.local_flags == 0u && state.generation != generation);
+
+    generation = state.generation;
+    assert(astra_stream_source_offer(&source, (const uint8_t *)"again",
+                                     5u) == 5u);
+    assert(astra_stream_tty_set(input, ASTRA_TTY_FLUSH_INPUT, &state) ==
+           ASTRA_SYSCALL_OK);
+    assert(!astra_stream_source_ready(&source));
+    assert(state.generation == generation);
+
+    served_source = NULL;
+    served_sink = &sink;
+    assert(astra_stream_tty_get(output, &observed) == ASTRA_SYSCALL_OK);
+    assert(observed.local_flags == 0u && observed.columns == 100u &&
+           observed.rows == 40u && observed.pixel_width == 800u &&
+           observed.pixel_height == 640u);
+    served_sink = NULL;
+}
+
+static void
+test_terminal_line_discipline(void)
+{
+    AstraStreamSink sink;
+    AstraStreamSource source;
+    AstraTtyState state;
+    uint32_t output;
+    uint32_t input;
+    uint32_t length = 0u;
+    uint32_t flags = 0u;
+    uint8_t bytes[8];
+    uint8_t erase;
+    uint8_t eof;
+
+    mock_reset();
+    assert(astra_terminal_init(&terminal, 32u, 4u, terminal_storage,
+                               sizeof(terminal_storage), no_render, NULL) ==
+           ASTRA_TERMINAL_OK);
+    output = mock_open(MOCK_QUEUE_MAX);
+    input = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_stream_sink_init(&sink, output, to_terminal, NULL));
+    assert(astra_stream_source_init(&source, input));
+    astra_stream_tty_state_init(&state);
+    astra_stream_tty_bind(&sink, &source, &state);
+    served_source = &source;
+
+    assert(astra_stream_tty_input(
+               &source, (const uint8_t *)"ab", 2u) == 2u);
+    assert(!astra_stream_source_ready(&source));
+    erase = state.control_characters[ASTRA_TTY_VERASE];
+    assert(astra_stream_tty_input(&source, &erase, 1u) == 1u);
+    assert(astra_stream_tty_input(
+               &source, (const uint8_t *)"c\r", 2u) == 2u);
+    assert(astra_stream_source_ready(&source));
+    assert(astra_stream_read_ex(input, bytes, sizeof(bytes), &length,
+                                &flags) == ASTRA_SYSCALL_OK);
+    assert(length == 3u && flags == 0u && memcmp(bytes, "ac\n", 3u) == 0);
+    assert(!astra_stream_source_ready(&source));
+
+    eof = state.control_characters[ASTRA_TTY_VEOF];
+    assert(astra_stream_tty_input(&source, &eof, 1u) == 1u);
+    assert(astra_stream_read_ex(input, bytes, sizeof(bytes), &length,
+                                &flags) == ASTRA_SYSCALL_OK);
+    assert(length == 0u && flags == ASTRA_STREAM_DATA_EOF);
+    assert(!astra_stream_source_ready(&source));
+
+    state.local_flags &= ~(ASTRA_TTY_LFLAG_ICANON | ASTRA_TTY_LFLAG_ECHO);
+    assert(astra_stream_tty_input(
+               &source, (const uint8_t *)"\x1b[A", 3u) == 3u);
+    assert(astra_stream_read_ex(input, bytes, sizeof(bytes), &length,
+                                &flags) == ASTRA_SYSCALL_OK);
+    assert(length == 3u && flags == 0u && memcmp(bytes, "\x1b[A", 3u) == 0);
+
+    served_source = NULL;
+    astra_stream_source_destroy(&source);
+}
+
+static void
 test_a_message_that_is_not_the_protocol_is_counted_not_rendered(void)
 {
     AstraStreamSink sink;
@@ -547,7 +753,8 @@ test_a_message_that_is_not_the_protocol_is_counted_not_rendered(void)
     char row[40];
 
     mock_reset();
-    assert(astra_terminal_init(&terminal, 32u, 4u, no_render, NULL) ==
+    assert(astra_terminal_init(&terminal, 32u, 4u, terminal_storage,
+                               sizeof(terminal_storage), no_render, NULL) ==
            ASTRA_TERMINAL_OK);
     handle = mock_open(MOCK_QUEUE_MAX);
     assert(astra_stream_sink_init(&sink, handle, to_terminal, NULL));
@@ -614,11 +821,12 @@ test_a_program_can_ask_how_big_the_screen_is(void)
     uint32_t rows = 0xffffffffu;
 
     mock_reset();
-    assert(astra_terminal_init(&terminal, 90u, 30u, no_render, NULL) ==
+    assert(astra_terminal_init(&terminal, 90u, 30u, terminal_storage,
+                               sizeof(terminal_storage), no_render, NULL) ==
            ASTRA_TERMINAL_OK);
     handle = mock_open(MOCK_QUEUE_MAX);
     assert(astra_stream_sink_init(&sink, handle, to_terminal, NULL));
-    astra_stream_sink_size(&sink, terminal.columns, terminal.rows);
+    astra_stream_sink_size(&sink, terminal.columns, terminal.rows, 0u, 0u);
 
     /* The sink answers inside the asker's wait, the way the machine does it. */
     served_sink = &sink;
@@ -657,6 +865,9 @@ main(void)
     test_a_stream_nobody_granted_is_a_handle_nobody_has();
     test_a_read_gets_what_there_is();
     test_a_source_with_nothing_answers_with_nothing();
+    test_read_wait_tracks_the_source_without_consuming();
+    test_terminal_control_is_shared_and_flushes_input();
+    test_terminal_line_discipline();
     test_a_message_that_is_not_the_protocol_is_counted_not_rendered();
     puts("ASTRA STREAMS PASS");
     return 0;

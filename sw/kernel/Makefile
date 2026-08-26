@@ -5,6 +5,7 @@ OBJCOPY = $(CROSS)objcopy
 OBJDUMP = $(CROSS)objdump
 HOST_CC ?= cc
 HOST_EXTRA_FLAGS ?=
+HOST_EXTRA_FLAGS += -I../include
 
 KERNEL_VERSION ?= 0.1.0-dev
 PANIC_SELFTEST ?= 0
@@ -166,14 +167,16 @@ $(BUILD_DIR)/monitor.o: monitor.c monitor.h bytes.h worker.h irq.h irq_latency.h
                          vm.h ../include/vesta.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/allocation.o: allocation.c allocation.h | $(BUILD_DIR)
+$(BUILD_DIR)/allocation.o: allocation.c allocation.h \
+                           ../include/astra/integer.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/object_cache.o: object_cache.c object_cache.h allocation.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/memory.o: memory.c memory.h allocation.h \
-                       ../include/astra/boot.h | $(BUILD_DIR)
+                       ../include/astra/boot.h \
+                       ../include/astra/integer.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/dma.o: dma.c dma.h generation.h memory.h object_cache.h \
@@ -227,12 +230,14 @@ $(BUILD_DIR)/area.o: area.c area.h handle.h memory.h vm.h bytes.h \
                      generation.h ../include/astra/syscall.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/elf.o: elf.c elf.h bytes.h | $(BUILD_DIR)
+$(BUILD_DIR)/elf.o: elf.c elf.h bytes.h ../include/astra/endian.h \
+                    ../include/astra/integer.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/ring.o: ring.c ring.h area.h thread.h bytes.h generation.h \
-                     object_cache.h allocation.h \
-                     vm.h ../include/astra/syscall.h | $(BUILD_DIR)
+			     object_cache.h allocation.h \
+                     vm.h ../include/astra/syscall.h \
+                     ../include/astra/integer.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/process.o: process.c process.h thread.h sync.h port.h area.h ring.h context.h handle.h block.h device.h interrupt.h \
@@ -269,7 +274,7 @@ $(BUILD_DIR)/pmmu.o: pmmu.S pmmu.h | $(BUILD_DIR)
 $(BUILD_DIR)/vm.o: vm.c vm.h pmmu.h memory.h thread.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/exception.o: exception.c exception.h | $(BUILD_DIR)
+$(BUILD_DIR)/exception.o: exception.c exception.h ../include/astra/endian.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/fault.o: fault.c fault.h exception.h platform.h vm.h \
@@ -301,6 +306,10 @@ astra_kernel.bin: astra_kernel.elf
 	$(OBJCOPY) -O binary $< $@
 
 verify: astra_kernel.elf astra_kernel.bin
+	@if $(OBJDUMP) -t $(BUILD_DIR)/irq.o | \
+		grep -q 'astra_u32_increment_saturating'; then \
+		echo "IRQ saturating counter was not inlined"; exit 1; \
+	fi
 	@echo "== kernel sections =="
 	@$(OBJDUMP) -h astra_kernel.elf
 	@echo "== kernel entry and bounds =="
@@ -310,7 +319,8 @@ verify: astra_kernel.elf astra_kernel.bin
 	  printf 'kernel payload: %s bytes\n' "$$bytes"
 
 test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_civil \
-      $(BUILD_DIR)/test_divide $(BUILD_DIR)/test_format \
+      $(BUILD_DIR)/test_divide $(BUILD_DIR)/test_generation \
+      $(BUILD_DIR)/test_format \
       $(BUILD_DIR)/test_allocation \
       $(BUILD_DIR)/test_memory \
       $(BUILD_DIR)/test_mmio $(BUILD_DIR)/test_trace $(BUILD_DIR)/test_irq \
@@ -330,6 +340,7 @@ test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_civil \
 	./$(BUILD_DIR)/test_boot_contract
 	./$(BUILD_DIR)/test_civil
 	./$(BUILD_DIR)/test_divide
+	./$(BUILD_DIR)/test_generation
 	./$(BUILD_DIR)/test_format
 	./$(BUILD_DIR)/test_allocation
 	./$(BUILD_DIR)/test_memory
@@ -373,9 +384,14 @@ $(BUILD_DIR)/test_civil: tests/test_civil.c ../common/civil.c \
 		../common/civil.c ../common/divide.c tests/test_civil.c -o $@
 
 $(BUILD_DIR)/test_divide: tests/test_divide.c ../common/divide.c \
-                          ../include/astra/divide.h | $(BUILD_DIR)
+                          ../include/astra/divide.h \
+                          ../include/astra/integer.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I../include \
 		../common/divide.c tests/test_divide.c -o $@
+
+$(BUILD_DIR)/test_generation: tests/test_generation.c generation.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I. \
+		tests/test_generation.c -o $@
 
 $(BUILD_DIR)/test_format: tests/test_format.c format.c format.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I. \
@@ -491,17 +507,18 @@ $(BUILD_DIR)/test_device: tests/test_device.c device.c device.h bytes.c bytes.h 
 		allocation.c object_cache.c bytes.c device.c tests/test_device.c -o $@
 
 $(BUILD_DIR)/test_vm: tests/test_vm.c vm.c vm.h pmmu.h memory.c memory.h \
-                      allocation.c allocation.h \
+                      allocation.c allocation.h bytes.c bytes.h \
                       ../common/boot_contract.c ../include/astra/boot.h \
                       ../include/ohci.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
-		-DKERNEL_MEMORY_NO_POISON=1 -DKERNEL_VM_HOST_TEST=1 \
-		-I. -I../include ../common/boot_contract.c allocation.c memory.c vm.c \
+		-DKERNEL_VM_HOST_TEST=1 -DKERNEL_MEMORY_HOST_TEST=1 \
+		-I. -I../include ../common/boot_contract.c allocation.c bytes.c memory.c vm.c \
 		tests/test_vm.c -o $@
 
 $(BUILD_DIR)/test_exception: tests/test_exception.c exception.c \
-                                exception.h | $(BUILD_DIR)
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I. \
+                                exception.h ../include/astra/endian.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
+		-I. -I../include \
 		exception.c tests/test_exception.c -o $@
 
 $(BUILD_DIR)/test_fault: tests/test_fault.c fault.c fault.h exception.h \
@@ -512,7 +529,7 @@ $(BUILD_DIR)/test_fault: tests/test_fault.c fault.c fault.h exception.h \
 $(BUILD_DIR)/test_user_copy: tests/test_user_copy.c user_copy.c user_copy.h \
                              exception.c exception.h vm.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
-		-DKERNEL_USER_COPY_HOST_TEST=1 -I. \
+		-DKERNEL_USER_COPY_HOST_TEST=1 -I. -I../include \
 		exception.c user_copy.c tests/test_user_copy.c -o $@
 
 $(BUILD_DIR)/test_handle: tests/test_handle.c handle.c handle.h bytes.c bytes.h \
@@ -521,14 +538,17 @@ $(BUILD_DIR)/test_handle: tests/test_handle.c handle.c handle.h bytes.c bytes.h 
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I. \
 		allocation.c object_cache.c bytes.c handle.c tests/test_handle.c -o $@
 
-$(BUILD_DIR)/test_bytes: tests/test_bytes.c bytes.c bytes.h | $(BUILD_DIR)
+$(BUILD_DIR)/test_bytes: tests/test_bytes.c bytes.c bytes.h \
+                         ../include/astra/endian.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I. \
+		-I../include \
 		bytes.c tests/test_bytes.c -o $@
 
 $(BUILD_DIR)/test_context: tests/test_context.c context.c context.h \
                              bytes.c bytes.h \
                              exception.c exception.h | $(BUILD_DIR)
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I. \
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
+		-I. -I../include \
 		bytes.c exception.c context.c tests/test_context.c -o $@
 
 $(BUILD_DIR)/test_performance: tests/test_performance.c performance.c \
@@ -630,6 +650,7 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
                             block.c block.h device.c device.h dma.c dma.h memory.c memory.h \
                             elf.c elf.h \
                             platform.h ../common/boot_contract.c \
+                            ../common/divide.c ../include/astra/divide.h \
                             ../include/astra/boot.h ../include/ohci.h \
                             ../include/astra/process.h \
                             ../include/astra/syscall.h | $(BUILD_DIR)
@@ -641,7 +662,7 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
 		-DKERNEL_PROCESS_HOST_TEST=1 -DKERNEL_PERFORMANCE_HOST_TEST=1 \
 		-DASTRA_KERNEL_SOAK_SELFTEST=1 \
 		-I. -I../include \
-		../common/boot_contract.c allocation.c object_cache.c memory.c \
+		../common/boot_contract.c ../common/divide.c allocation.c object_cache.c memory.c \
 		dma.c block.c device.c vm.c exception.c \
 		user_copy.c \
 		bytes.c context.c handle.c performance.c thread.c sync.c port.c \

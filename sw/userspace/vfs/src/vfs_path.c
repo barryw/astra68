@@ -7,13 +7,9 @@
 
 #include <astra/vfs_path.h>
 
-#include <stddef.h>
+#include <astra/ascii.h>
 
-static char
-upper(char value)
-{
-    return (value >= 'a' && value <= 'z') ? (char)(value - ('a' - 'A')) : value;
-}
+#include <stddef.h>
 
 uint32_t
 astra_path_split(const char *path, char *name, uint32_t name_capacity,
@@ -30,7 +26,7 @@ astra_path_split(const char *path, char *name, uint32_t name_capacity,
         if (path[index] == '\0' || index + 1u >= name_capacity) {
             return ASTRA_VFS_ERR_INVALID;
         }
-        name[index] = upper(path[index]);
+        name[index] = astra_ascii_upper(path[index]);
         ++index;
     }
     if (index == 0u) {

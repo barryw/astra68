@@ -3,12 +3,15 @@ include ../../../mk/m68k-cross.mk
 CC := $(CROSS)gcc
 READELF := $(CROSS)readelf
 HOST_CC ?= cc
+ANALYZER_CC ?= gcc
 RUNTIME := ../runtime
 GRAPHICS := ../graphics
 NDK := ../../../ndk
 CPPFLAGS := -Iinclude -I$(GRAPHICS)/include -I$(RUNTIME)/include \
-	-I../../include -I$(NDK)/include -I$(NDK)/src
+	-I../../include -I$(NDK)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
+HOST_FLAGS := -O2
+SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 LIBRARY_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections -fPIC -fvisibility=hidden
 LIBRARY_LINK_FLAGS := -nostdlib -shared -Wl,-Bsymbolic \
@@ -16,14 +19,12 @@ LIBRARY_LINK_FLAGS := -nostdlib -shared -Wl,-Bsymbolic \
 	-Wl,--hash-style=sysv -Wl,-z,max-page-size=0x1000 \
 	-T $(RUNTIME)/astra_library.ld
 INTERFACE_TARGET := build/m68k/libraries/interface.library
-INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/surface.o \
-	build/m68k/shared_surface.o build/m68k/window.o build/m68k/port.o \
-	build/m68k/resource.o build/m68k/runtime_syscall.o \
-	build/m68k/runtime_memory.o build/m68k/runtime_syscall_asm.o
+INTERFACE_OBJECTS := build/m68k/interface_library.o
 INPUT_TARGET := build/m68k/libraries/input.library
-INPUT_OBJECTS := build/m68k/input_library.o build/m68k/pointer.o \
-	build/m68k/port.o build/m68k/resource.o \
-	build/m68k/runtime_memory.o build/m68k/runtime_syscall_asm.o
+INPUT_OBJECTS := build/m68k/input_library.o
+GRAPHICS_PIC_LIB := $(GRAPHICS)/build/m68k/libastragraphics-pic.a
+NDK_PIC_LIB := $(NDK)/build/m68k/libastra-pic.a
+RUNTIME_PIC_LIB := $(RUNTIME)/build/m68k/libastrart-pic.a
 INTERFACE_HOST_TEST := build/host/test_interface
 INPUT_HOST_TEST := build/host/test_input_library
 
@@ -43,39 +44,30 @@ build/m68k/input_library.o: src/input_library.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) -c $< -o $@
 
-build/m68k/surface.o: $(GRAPHICS)/src/surface.c \
-		$(GRAPHICS)/build/generated/astra_font8x8.inc \
-		$(GRAPHICS)/build/generated/astra_ui_font.inc \
-		$(GRAPHICS)/build/generated/astra_mono_font.inc
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated $(COMMON_FLAGS) \
-		$(LIBRARY_FLAGS) -c $< -o $@
+$(GRAPHICS_PIC_LIB):
+	$(MAKE) -C $(GRAPHICS) pic
 
-build/m68k/shared_surface.o: $(GRAPHICS)/src/shared_surface.c
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) -c $< -o $@
+$(NDK_PIC_LIB):
+	$(MAKE) -C $(NDK) pic
 
-build/m68k/%.o: $(NDK)/src/%.c
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) -c $< -o $@
+$(RUNTIME_PIC_LIB):
+	$(MAKE) -C $(RUNTIME) pic
 
-build/m68k/runtime_%.o: $(RUNTIME)/src/%.c
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) -c $< -o $@
-
-build/m68k/runtime_syscall_asm.o: $(RUNTIME)/src/m68k/syscall.S
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) -m68030 -msoft-float -fPIC -c $< -o $@
-
-$(INTERFACE_TARGET): $(INTERFACE_OBJECTS) $(RUNTIME)/astra_library.ld
+$(INTERFACE_TARGET): $(INTERFACE_OBJECTS) $(GRAPHICS_PIC_LIB) \
+		$(NDK_PIC_LIB) $(RUNTIME_PIC_LIB) $(RUNTIME)/astra_library.ld
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(LIBRARY_LINK_FLAGS) \
-		-Wl,-soname,interface.library.1 -o $@ $(INTERFACE_OBJECTS) -lgcc
+		-Wl,-soname,interface.library.1 -o $@ $(INTERFACE_OBJECTS) \
+		-Wl,--start-group $(GRAPHICS_PIC_LIB) $(NDK_PIC_LIB) \
+		$(RUNTIME_PIC_LIB) -Wl,--end-group -lgcc
 
-$(INPUT_TARGET): $(INPUT_OBJECTS) $(RUNTIME)/astra_library.ld
+$(INPUT_TARGET): $(INPUT_OBJECTS) $(NDK_PIC_LIB) $(RUNTIME_PIC_LIB) \
+		$(RUNTIME)/astra_library.ld
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(LIBRARY_LINK_FLAGS) \
-		-Wl,-soname,input.library.1 -o $@ $(INPUT_OBJECTS) -lgcc
+		-Wl,-soname,input.library.1 -o $@ $(INPUT_OBJECTS) \
+		-Wl,--start-group $(NDK_PIC_LIB) $(RUNTIME_PIC_LIB) \
+		-Wl,--end-group -lgcc
 
 library-contract: $(INTERFACE_TARGET) $(INPUT_TARGET)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
@@ -89,20 +81,36 @@ library-contract: $(INTERFACE_TARGET) $(INPUT_TARGET)
 
 $(INTERFACE_HOST_TEST): src/interface_library.c tests/test_interface.c
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 -DASTRA_INTERFACE_TEST \
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -DASTRA_INTERFACE_TEST \
 		-DASTRA_NDK_TEST \
 		-ffunction-sections -Wl,--gc-sections $^ -o $@
 
 $(INPUT_HOST_TEST): src/input_library.c tests/test_input_library.c
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 $^ -o $@
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
 test: $(INTERFACE_HOST_TEST) $(INPUT_HOST_TEST)
 	./$(INTERFACE_HOST_TEST)
 	./$(INPUT_HOST_TEST)
 
-sanitize analyze:
-	@true
+sanitize:
+	@mkdir -p build/host
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) -DASTRA_INTERFACE_TEST -DASTRA_NDK_TEST \
+		-ffunction-sections -Wl,--gc-sections src/interface_library.c \
+		tests/test_interface.c -o build/host/test_interface_sanitize
+	./build/host/test_interface_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) src/input_library.c tests/test_input_library.c \
+		-o build/host/test_input_library_sanitize
+	./build/host/test_input_library_sanitize
+
+analyze:
+	@mkdir -p build/analyzer
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/interface_library.c -o build/analyzer/interface_library.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/input_library.c -o build/analyzer/input_library.o
 
 clean:
 	rm -rf build

@@ -1,20 +1,11 @@
 #include <astra/bundle.h>
+#include <astra/endian.h>
 #include <astra/manifest.h>
 
 #include <stddef.h>
 #include <string.h>
 
 #define WORD_MAX 5u
-
-static int same(const char *left, const char *right)
-{
-    while (*left == *right) {
-        if (*left == '\0') return 1;
-        ++left;
-        ++right;
-    }
-    return 0;
-}
 
 static int copy(char *out, uint32_t capacity, const char *text)
 {
@@ -194,36 +185,38 @@ static int parse_line(char *line, AstraBundleManifest *manifest)
     uint32_t count = astra_manifest_words(line, word, WORD_MAX);
     if (count == 0u) return 2;
     if (count > WORD_MAX) return 0;
-    if (same(word[0], "astra-bundle"))
+    if (strcmp(word[0], "astra-bundle") == 0)
         return count == 2u && manifest->format_version == 0u &&
                number(word[1], &manifest->format_version) &&
                manifest->format_version == ASTRA_BUNDLE_MANIFEST_VERSION;
-    if (same(word[0], "kind")) {
+    if (strcmp(word[0], "kind") == 0) {
         if (count != 2u || manifest->kind != 0u) return 0;
-        if (same(word[1], "application")) manifest->kind = ASTRA_BUNDLE_APPLICATION;
-        else if (same(word[1], "kit")) manifest->kind = ASTRA_BUNDLE_KIT;
+        if (strcmp(word[1], "application") == 0)
+            manifest->kind = ASTRA_BUNDLE_APPLICATION;
+        else if (strcmp(word[1], "kit") == 0)
+            manifest->kind = ASTRA_BUNDLE_KIT;
         else return 0;
         return 1;
     }
-    if (same(word[0], "id"))
+    if (strcmp(word[0], "id") == 0)
         return count == 2u && manifest->id[0] == '\0' && identifier(word[1]) &&
                copy(manifest->id, sizeof(manifest->id), word[1]);
-    if (same(word[0], "name"))
+    if (strcmp(word[0], "name") == 0)
         return count == 2u && manifest->name[0] == '\0' &&
                copy(manifest->name, sizeof(manifest->name), word[1]);
-    if (same(word[0], "version"))
+    if (strcmp(word[0], "version") == 0)
         return count == 2u && manifest->version.major == 0u &&
                manifest->version.minor == 0u && manifest->version.patch == 0u &&
                version(word[1], &manifest->version);
-    if (same(word[0], "executable"))
+    if (strcmp(word[0], "executable") == 0)
         return count == 2u && manifest->executable[0] == '\0' &&
                relative_path(word[1]) &&
                copy(manifest->executable, sizeof(manifest->executable), word[1]);
-    if (same(word[0], "icon"))
+    if (strcmp(word[0], "icon") == 0)
         return count == 2u && manifest->icon[0] == '\0' &&
                relative_path(word[1]) &&
                copy(manifest->icon, sizeof(manifest->icon), word[1]);
-    if (same(word[0], "capability")) {
+    if (strcmp(word[0], "capability") == 0) {
         if (count != 2u || manifest->capability_count == ASTRA_BUNDLE_CAPABILITY_MAX)
             return 0;
         if (!copy(manifest->capabilities[manifest->capability_count],
@@ -231,11 +224,12 @@ static int parse_line(char *line, AstraBundleManifest *manifest)
         ++manifest->capability_count;
         return 1;
     }
-    if (same(word[0], "requires") || same(word[0], "provides")) {
+    if (strcmp(word[0], "requires") == 0 ||
+        strcmp(word[0], "provides") == 0) {
         AstraBundleLibrary *entry;
         uint16_t *used;
         if (count != 4u) return 0;
-        if (same(word[0], "requires")) {
+        if (strcmp(word[0], "requires") == 0) {
             entry = manifest->requires;
             used = &manifest->require_count;
         } else {
@@ -287,17 +281,6 @@ uint32_t astra_bundle_manifest_parse(char *text, uint32_t length,
     return ASTRA_BUNDLE_OK;
 }
 
-static uint16_t be16(const uint8_t *bytes)
-{
-    return (uint16_t)(((uint16_t)bytes[0] << 8) | bytes[1]);
-}
-
-static uint32_t be32(const uint8_t *bytes)
-{
-    return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
-           ((uint32_t)bytes[2] << 8) | bytes[3];
-}
-
 uint32_t astra_aicon_open(const void *source, uint32_t length, AstraAicon *icon)
 {
     const uint8_t *bytes = source;
@@ -309,19 +292,22 @@ uint32_t astra_aicon_open(const void *source, uint32_t length, AstraAicon *icon)
     if (icon == NULL) return ASTRA_BUNDLE_INVALID;
     memset(icon, 0, sizeof(*icon));
     if (bytes == NULL || length < ASTRA_AICON_HEADER_SIZE ||
-        be32(bytes) != ASTRA_AICON_MAGIC || be16(bytes + 4u) != ASTRA_AICON_VERSION ||
-        be16(bytes + 6u) != ASTRA_AICON_HEADER_SIZE || be32(bytes + 8u) != length ||
-        be16(bytes + 12u) != ASTRA_AICON_REQUIRED_STRIKES ||
-        be16(bytes + 14u) == 0u || be16(bytes + 14u) > 256u ||
-        be32(bytes + 28u) != 0u)
+        astra_load_be32(bytes) != ASTRA_AICON_MAGIC ||
+        astra_load_be16(bytes + 4u) != ASTRA_AICON_VERSION ||
+        astra_load_be16(bytes + 6u) != ASTRA_AICON_HEADER_SIZE ||
+        astra_load_be32(bytes + 8u) != length ||
+        astra_load_be16(bytes + 12u) != ASTRA_AICON_REQUIRED_STRIKES ||
+        astra_load_be16(bytes + 14u) == 0u ||
+        astra_load_be16(bytes + 14u) > 256u ||
+        astra_load_be32(bytes + 28u) != 0u)
         return ASTRA_BUNDLE_INVALID;
     parsed.bytes = bytes;
     parsed.length = length;
-    parsed.strike_count = be16(bytes + 12u);
-    parsed.palette_count = be16(bytes + 14u);
-    parsed.palette_offset = be32(bytes + 16u);
-    parsed.strike_offset = be32(bytes + 20u);
-    parsed.data_offset = be32(bytes + 24u);
+    parsed.strike_count = astra_load_be16(bytes + 12u);
+    parsed.palette_count = astra_load_be16(bytes + 14u);
+    parsed.palette_offset = astra_load_be32(bytes + 16u);
+    parsed.strike_offset = astra_load_be32(bytes + 20u);
+    parsed.data_offset = astra_load_be32(bytes + 24u);
     palette_bytes = (uint32_t)parsed.palette_count * 4u;
     strike_bytes = (uint32_t)parsed.strike_count * ASTRA_AICON_STRIKE_SIZE;
     if (parsed.palette_offset < ASTRA_AICON_HEADER_SIZE ||
@@ -337,16 +323,17 @@ uint32_t astra_aicon_open(const void *source, uint32_t length, AstraAicon *icon)
     for (uint32_t at = 0u; at < parsed.strike_count; ++at) {
         const uint8_t *record = bytes + parsed.strike_offset +
                                 at * ASTRA_AICON_STRIKE_SIZE;
-        uint16_t width = be16(record);
-        uint16_t height = be16(record + 2u);
-        uint32_t offset = be32(record + 4u);
-        uint32_t count = be32(record + 8u);
+        uint16_t width = astra_load_be16(record);
+        uint16_t height = astra_load_be16(record + 2u);
+        uint32_t offset = astra_load_be32(record + 4u);
+        uint32_t count = astra_load_be32(record + 8u);
         uint32_t bit = width == 16u ? 1u : (width == 32u ? 2u :
                        (width == 64u ? 4u : 0u));
 
         if (bit == 0u || (seen & bit) != 0u || width != height ||
             count != (uint32_t)width * height ||
-            be32(record + 12u) != 0u || offset < parsed.data_offset ||
+            astra_load_be32(record + 12u) != 0u ||
+            offset < parsed.data_offset ||
             offset > length || count > length - offset)
             return ASTRA_BUNDLE_INVALID;
         for (uint32_t pixel = 0u; pixel < count; ++pixel)
@@ -370,10 +357,10 @@ uint32_t astra_aicon_strike(const AstraAicon *icon, uint16_t size,
     for (uint32_t at = 0u; at < icon->strike_count; ++at) {
         const uint8_t *record = icon->bytes + icon->strike_offset +
                                 at * ASTRA_AICON_STRIKE_SIZE;
-        uint16_t width = be16(record);
-        uint16_t height = be16(record + 2u);
-        uint32_t offset = be32(record + 4u);
-        uint32_t count = be32(record + 8u);
+        uint16_t width = astra_load_be16(record);
+        uint16_t height = astra_load_be16(record + 2u);
+        uint32_t offset = astra_load_be32(record + 4u);
+        uint32_t count = astra_load_be32(record + 8u);
         if (width != height || count != (uint32_t)width * height ||
             offset < icon->data_offset || offset > icon->length ||
             count > icon->length - offset) return ASTRA_BUNDLE_INVALID;

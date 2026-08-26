@@ -9,7 +9,6 @@
 #define KERNEL_THREAD_PRIORITY_USER_MIN 1
 #define KERNEL_THREAD_PRIORITY_NORMAL 16
 #define KERNEL_THREAD_PRIORITY_USER_MAX 23
-#define KERNEL_THREAD_WAIT_MEMBER_MAX 16u
 
 #define KERNEL_THREAD_SUPERVISOR_GUARD_SIZE 0x00001000
 #define KERNEL_THREAD_SUPERVISOR_STACK_SIZE 0x00002000
@@ -19,6 +18,8 @@
 
 #include "context.h"
 #include "handle.h"
+
+#define KERNEL_THREAD_WAIT_MEMBER_MAX KERNEL_HANDLE_MAX_ENTRIES
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -302,6 +303,9 @@ bool kernel_thread_highest_ready_priority(uint8_t *priority);
 KernelThreadStatus kernel_thread_retire_process(uint16_t process_slot,
                                                 uint32_t terminal_result,
                                                 uint32_t *retired_threads);
+KernelThreadStatus kernel_thread_exec_retire_others(
+    uint16_t process_slot, KernelThread *survivor, uint32_t terminal_result,
+    uint32_t *retired_threads);
 KernelThreadStatus kernel_thread_release_process(uint16_t process_slot);
 KernelThread *kernel_thread_at(uint16_t slot);
 bool kernel_thread_snapshot(uint32_t slot, KernelThreadSnapshot *snapshot);

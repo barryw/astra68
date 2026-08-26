@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <astra/bytes.h>
 #include <astra/process.h>
 #include <astra/library.h>
 #include <astra/library_loader.h>
@@ -21,6 +22,21 @@ static uint32_t mock_argument3;
 static uint32_t mock_argument4;
 static uint32_t mock_calls;
 static uint32_t mock_status = ASTRA_SYSCALL_OK;
+static uint32_t mock_activity;
+
+static void dummy_signal(int signal_number)
+{
+    (void)signal_number;
+}
+
+static void dummy_thread(uint32_t argument)
+{
+    (void)argument;
+}
+
+void astra_thread_start_trampoline(void)
+{
+}
 
 uint32_t astra_library_test_prepare(
     void *mapping, uint32_t logical_base, uint32_t span,
@@ -62,26 +78,51 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
      */
     if (number != ASTRA_SYSCALL_LOG_WRITE &&
         number != ASTRA_SYSCALL_PROCESS_CREATE &&
+        number != ASTRA_SYSCALL_PROCESS_EXEC &&
+        number != ASTRA_SYSCALL_EVENT_CREATE &&
+        number != ASTRA_SYSCALL_SEMAPHORE_CREATE &&
+        number != ASTRA_SYSCALL_SIGNAL &&
+        number != ASTRA_SYSCALL_THREAD_CREATE &&
         number != ASTRA_SYSCALL_WAIT_ONE &&
         number != ASTRA_SYSCALL_WAIT_MULTIPLE &&
         number != ASTRA_SYSCALL_DISPLAY_SUBMIT &&
         number != ASTRA_SYSCALL_DISPLAY_COLLECT &&
         number != ASTRA_SYSCALL_LIBRARY_MAP &&
-        number != ASTRA_SYSCALL_PROCESS_PRIORITY) {
+        number != ASTRA_SYSCALL_PROCESS_PRIORITY &&
+        number != ASTRA_SYSCALL_SIGNAL_CONFIGURE &&
+        number != ASTRA_SYSCALL_INTERVAL_TIMER &&
+        number != ASTRA_SYSCALL_VM_PRIVATE_RESERVE &&
+        number != ASTRA_SYSCALL_VM_PRIVATE_DECOMMIT &&
+        number != ASTRA_SYSCALL_RING_CREATE &&
+        number != ASTRA_SYSCALL_RING_READ_TRY &&
+        number != ASTRA_SYSCALL_RING_WRITE_TRY) {
         assert(argument1 == 0u);
         assert(argument2 == 0u);
         assert(argument3 == 0u);
     }
-    if (number != ASTRA_SYSCALL_PROCESS_CREATE) {
+    if (number != ASTRA_SYSCALL_PROCESS_CREATE &&
+        number != ASTRA_SYSCALL_RING_CREATE) {
         assert(argument4 == 0u);
     }
     result->status = mock_status;
-    result->value0 = number == ASTRA_SYSCALL_ACTIVITY ?
-        (argument0 == ASTRA_ACTIVITY_NONE ? 0u :
-         (argument0 == 0u ? 0x1234u : argument0)) :
-        ASTRA_SYSCALL_ABI_VERSION;
+    result->value0 = ASTRA_SYSCALL_ABI_VERSION;
     result->value1 = 0x11111111u;
+    if (number == ASTRA_SYSCALL_ACTIVITY) {
+        result->value1 = mock_activity;
+        if (mock_status == ASTRA_SYSCALL_OK) {
+            if (argument0 == ASTRA_ACTIVITY_NONE)
+                mock_activity = 0u;
+            else if (argument0 == 0u)
+                mock_activity = 0x1234u;
+            else if (argument0 != ASTRA_ACTIVITY_CURRENT)
+                mock_activity = argument0;
+            result->value0 = mock_activity;
+        } else {
+            result->value0 = 0u;
+        }
+    }
     result->value2 = 0x22222222u;
+    result->value3 = 0x33333333u;
 }
 
 static AstraStartupInfo
@@ -100,6 +141,7 @@ valid_startup(void)
 static void
 test_startup_contract(void)
 {
+    static const char *arguments[] = {"command", "value"};
     AstraStartupInfo startup = valid_startup();
 
     assert(astra_startup_validate(&startup));
@@ -112,8 +154,10 @@ test_startup_contract(void)
     startup = valid_startup();
     startup.argc = 1u;
     assert(!astra_startup_validate(&startup));
-    startup.argv_address = 0x1000u;
+    startup.argv_address = (uint32_t)(uintptr_t)arguments;
     assert(astra_startup_validate(&startup));
+    assert(astra_startup_argument(&startup, 0u) == arguments[0]);
+    assert(astra_startup_argument(&startup, 1u) == NULL);
     startup.launch_source = ASTRA_LAUNCH_SOURCE_DESKTOP;
     assert(astra_startup_validate(&startup));
     assert(astra_startup_launch_source(&startup) ==
@@ -122,7 +166,7 @@ test_startup_contract(void)
     assert(!astra_startup_validate(&startup));
     startup.launch_source = ASTRA_LAUNCH_SOURCE_SYSTEM;
     assert(astra_startup_argument(&startup, 1u) == NULL);
-    startup.reserved[1] = 1u;
+    startup.handoff_size = 1u;
     assert(!astra_startup_validate(&startup));
 }
 
@@ -280,6 +324,22 @@ test_syscall_wrappers(void)
     uint32_t thread;
     uint32_t calls;
     uint32_t span;
+    uint32_t producer;
+    uint32_t consumer;
+    uint32_t moved;
+    uint32_t released;
+    uint32_t sync_handle;
+    uint32_t thread_id;
+    AstraThreadStart thread_start = {
+        .entry = dummy_thread,
+        .argument = 0x12345678u,
+    };
+    uint32_t pending;
+    uint32_t previous_blocked;
+    uint64_t old_delay;
+    uint64_t old_interval;
+    void *private_address;
+    char ring_bytes[8];
     AstraLibraryReference reference = {
         .size = ASTRA_LIBRARY_REFERENCE_SIZE,
         .name = "filesystem.library",
@@ -292,6 +352,25 @@ test_syscall_wrappers(void)
     assert(astra_close(0x12345678u) == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_CLOSE);
     assert(mock_argument0 == 0x12345678u);
+    assert(astra_rt_semaphore_create(
+               1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,
+               &sync_handle) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_SEMAPHORE_CREATE);
+    assert(mock_argument0 == 1u && mock_argument1 == 1u);
+    assert(mock_argument2 == (ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL));
+    assert(sync_handle == ASTRA_SYSCALL_ABI_VERSION);
+    assert(astra_rt_thread_create(
+               &thread_start, ASTRA_PROCESS_PRIORITY_NORMAL,
+               ASTRA_RIGHT_READ | ASTRA_RIGHT_WAIT, &sync_handle,
+               &thread_id) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_THREAD_CREATE);
+    assert(mock_argument0 ==
+           (uint32_t)(uintptr_t)astra_thread_start_trampoline);
+    assert(mock_argument1 == (uint32_t)(uintptr_t)&thread_start);
+    assert(mock_argument2 == ASTRA_PROCESS_PRIORITY_NORMAL);
+    assert(mock_argument3 == (ASTRA_RIGHT_READ | ASTRA_RIGHT_WAIT));
+    assert(sync_handle == ASTRA_SYSCALL_ABI_VERSION);
+    assert(thread_id == 0x11111111u);
     assert(astra_irq_mask(0x87654321u) == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_IRQ_MASK);
     assert(mock_argument0 == 0x87654321u);
@@ -305,8 +384,74 @@ test_syscall_wrappers(void)
     assert(mock_argument0 == process);
     assert(mock_argument1 == 12u);
     assert(abi == ASTRA_SYSCALL_ABI_VERSION);
+    assert(astra_rt_ring_create(
+               9u, 64u, 1u, 65536u,
+               ASTRA_BULK_RING_CREATE_KERNEL_COPY, &producer, &consumer) ==
+           ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_RING_CREATE);
+    assert(mock_argument0 == 9u && mock_argument1 == 64u &&
+           mock_argument2 == 1u && mock_argument3 == 65536u &&
+           mock_argument4 == ASTRA_BULK_RING_CREATE_KERNEL_COPY);
+    assert(producer == ASTRA_SYSCALL_ABI_VERSION &&
+           consumer == 0x11111111u);
+    assert(astra_rt_ring_read_try(consumer, ring_bytes, sizeof(ring_bytes),
+                                  &moved) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_RING_READ_TRY);
+    assert(mock_argument0 == consumer &&
+           mock_argument1 == (uint32_t)(uintptr_t)ring_bytes &&
+           mock_argument2 == sizeof(ring_bytes));
+    assert(moved == ASTRA_SYSCALL_ABI_VERSION);
+    assert(astra_rt_ring_write_try(
+               producer, ring_bytes, sizeof(ring_bytes),
+               ASTRA_BULK_RING_WRITE_ATOMIC, &moved) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_RING_WRITE_TRY);
+    assert(mock_argument0 == producer &&
+           mock_argument1 == (uint32_t)(uintptr_t)ring_bytes &&
+           mock_argument2 == sizeof(ring_bytes) &&
+           mock_argument3 == ASTRA_BULK_RING_WRITE_ATOMIC);
+    assert(astra_rt_private_reserve(
+               4097u, ASTRA_VM_PRIVATE_READ | ASTRA_VM_PRIVATE_WRITE,
+               &private_address, &span) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_VM_PRIVATE_RESERVE);
+    assert(mock_argument0 == 4097u);
+    assert(mock_argument1 ==
+           (ASTRA_VM_PRIVATE_READ | ASTRA_VM_PRIVATE_WRITE));
+    assert(private_address ==
+           (void *)(uintptr_t)ASTRA_SYSCALL_ABI_VERSION);
+    assert(span == 0x11111111u);
+    assert(astra_rt_private_decommit(private_address, 4096u, &released) ==
+           ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_VM_PRIVATE_DECOMMIT);
+    assert(mock_argument0 == (uint32_t)(uintptr_t)private_address);
+    assert(mock_argument1 == 4096u);
+    assert(released == ASTRA_SYSCALL_ABI_VERSION);
+    assert(astra_rt_signal_configure(dummy_signal, private_address, 0x40u,
+                                     &pending, &previous_blocked) ==
+           ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_SIGNAL_CONFIGURE);
+    assert(mock_argument2 == 0x40u);
+    assert(pending == ASTRA_SYSCALL_ABI_VERSION &&
+           previous_blocked == 0x11111111u);
+    assert(astra_rt_interval_timer(UINT64_C(0x100000002),
+                                   UINT64_C(0x300000004), &old_delay,
+                                   &old_interval) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_INTERVAL_TIMER);
+    assert(mock_argument0 == 1u && mock_argument1 == 2u &&
+           mock_argument2 == 3u && mock_argument3 == 4u);
+    assert(old_delay ==
+           ((uint64_t)ASTRA_SYSCALL_ABI_VERSION << 32 | 0x11111111u));
+    assert(old_interval == UINT64_C(0x2222222233333333));
     assert(astra_activity_begin() == 0x1234u);
     assert(mock_argument0 == 0u);
+    assert(astra_activity_current() == 0x1234u);
+    assert(mock_number == ASTRA_SYSCALL_ACTIVITY);
+    assert(mock_argument0 == ASTRA_ACTIVITY_CURRENT);
+    {
+        uint32_t previous = 0u;
+
+        assert(astra_activity_exchange(0x5678u, &previous) == 0x5678u);
+        assert(previous == 0x1234u);
+    }
     assert(astra_activity_adopt(0u) == 0u);
     assert(mock_argument0 == ASTRA_ACTIVITY_NONE);
     assert(astra_display_submit(3u, &request) == ASTRA_SYSCALL_OK);
@@ -430,15 +575,31 @@ static void test_library_relocation(void)
 static void test_launch(void)
 {
     static const uint8_t image[64] = {0u};
-    static const char *const words[] = {"paint", "WORK:picture.ast"};
+    static const char *const words[] = {
+        "vim", "-R", "+42", "--cmd", "set number", "--",
+        "WORK:notes.txt"
+    };
     static const char *const environment_names[] = {"HOME", "TZ"};
     static const char *const environment_values[] = {"WORK:", "UTC"};
     AstraLaunchGrant grants[2];
     AstraLaunchArguments arguments;
+    char argument_storage[ASTRA_LAUNCH_ARGUMENT_BYTES];
     char environment[64];
     uint32_t handle = 0xdeadbeefu;
     uint32_t id = 0xdeadbeefu;
     uint32_t calls;
+
+    {
+        const char *many[40];
+
+        for (uint32_t index = 0u; index < 40u; ++index)
+            many[index] = "argument";
+        assert(astra_launch_arguments_pack(
+                   &arguments, argument_storage, sizeof(argument_storage),
+                   ASTRA_LAUNCH_SOURCE_SHELL, 40u, many) ==
+               ASTRA_SYSCALL_OK);
+        assert(arguments.count == 40u && arguments.length == 360u);
+    }
 
     {
         static char large_value[1537];
@@ -457,12 +618,24 @@ static void test_launch(void)
 
     memset(grants, 0, sizeof(grants));
     assert(astra_launch_arguments_pack(
-               &arguments, ASTRA_LAUNCH_SOURCE_SHELL, 2u, words) ==
+               &arguments, argument_storage, sizeof(argument_storage),
+               ASTRA_LAUNCH_SOURCE_SHELL,
+               (uint32_t)(sizeof(words) / sizeof(words[0])), words) ==
            ASTRA_SYSCALL_OK);
-    assert(arguments.count == 2u && arguments.source ==
+    assert(arguments.count == sizeof(words) / sizeof(words[0]) &&
+           arguments.source ==
            ASTRA_LAUNCH_SOURCE_SHELL);
-    assert(strcmp(arguments.bytes, words[0]) == 0);
-    assert(strcmp(arguments.bytes + strlen(words[0]) + 1u, words[1]) == 0);
+    {
+        const char *packed = argument_storage;
+
+        for (uint32_t index = 0u; index < arguments.count; ++index) {
+            assert(strcmp(packed, words[index]) == 0);
+            packed += strlen(packed) + 1u;
+        }
+        assert((uint32_t)(packed - argument_storage) == arguments.length);
+    }
+    assert(arguments.argument_address ==
+           (uint32_t)(uintptr_t)argument_storage);
     assert(astra_launch_environment_pack(
                &arguments, environment, sizeof(environment), 2u,
                environment_names, environment_values) == ASTRA_SYSCALL_OK);
@@ -472,13 +645,17 @@ static void test_launch(void)
     assert(strcmp(environment, "HOME=WORK:") == 0);
     assert(strcmp(environment + 11u, "TZ=UTC") == 0);
     assert(astra_launch_arguments_pack(
-               &arguments, ASTRA_LAUNCH_SOURCE_DESKTOP + 1u, 0u, NULL) ==
+               &arguments, argument_storage, sizeof(argument_storage),
+               ASTRA_LAUNCH_SOURCE_DESKTOP + 1u, 0u, NULL) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(astra_launch_arguments_pack(
-               &arguments, ASTRA_LAUNCH_SOURCE_DESKTOP, 1u, NULL) ==
+               &arguments, argument_storage, sizeof(argument_storage),
+               ASTRA_LAUNCH_SOURCE_DESKTOP, 1u, NULL) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(astra_launch_arguments_pack(
-               &arguments, ASTRA_LAUNCH_SOURCE_SHELL, 2u, words) ==
+               &arguments, argument_storage, sizeof(argument_storage),
+               ASTRA_LAUNCH_SOURCE_SHELL,
+               (uint32_t)(sizeof(words) / sizeof(words[0])), words) ==
            ASTRA_SYSCALL_OK);
     assert(astra_launch_environment_pack(
                &arguments, environment, sizeof(environment), 2u,
@@ -527,14 +704,87 @@ static void test_launch(void)
  * this adds is that `exit_status` means the child's status and nothing else --
  * a timed-out wait establishes no status, so it publishes none.
  */
+static void test_exec(void)
+{
+    static char *const argv[] = {
+        "vim", "-R", "+42", "--cmd", "set number", "--",
+        "WORK:notes.txt", NULL
+    };
+    static char *const envp[] = {
+        "HOME=WORK:", "TERM=astra-256color", NULL
+    };
+    static char *const bad_envp[] = { "HOME", NULL };
+    uint8_t image[64] = {0u};
+    char storage[ASTRA_STARTUP_BLOCK_SIZE];
+    AstraExecRequest request;
+    const char *packed;
+    uint32_t calls;
+
+    assert(astra_exec_request_pack(
+               &request, storage, sizeof(storage), ASTRA_LAUNCH_SOURCE_SHELL,
+               argv, envp) == ASTRA_SYSCALL_OK);
+    assert(request.size == ASTRA_EXEC_REQUEST_SIZE);
+    assert(request.arguments.count == 7u);
+    assert(request.arguments.environment_count == 2u);
+    packed = storage;
+    for (uint32_t index = 0u; index < request.arguments.count; ++index) {
+        assert(strcmp(packed, argv[index]) == 0);
+        packed += strlen(packed) + 1u;
+    }
+    assert((uint32_t)(packed - storage) == request.arguments.length);
+    assert(strcmp(packed, envp[0]) == 0);
+    packed += strlen(packed) + 1u;
+    assert(strcmp(packed, envp[1]) == 0);
+    assert(request.arguments.argument_address ==
+           (uint32_t)(uintptr_t)storage);
+    assert(request.arguments.environment_address ==
+           (uint32_t)(uintptr_t)(storage + request.arguments.length));
+
+    assert(astra_exec_request_pack(
+               &request, storage, 8u, ASTRA_LAUNCH_SOURCE_SHELL,
+               argv, envp) == ASTRA_SYSCALL_RESOURCE_LIMIT);
+    assert(astra_exec_request_pack(
+               &request, storage, sizeof(storage), ASTRA_LAUNCH_SOURCE_SHELL,
+               argv, bad_envp) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    assert(astra_exec_request_pack(
+               &request, storage, sizeof(storage), ASTRA_LAUNCH_SOURCE_SHELL,
+               argv, envp) == ASTRA_SYSCALL_OK);
+    request.handoff_address = 0x00102000u;
+    request.handoff_size = 123u;
+    assert(astra_process_exec(image, sizeof(image), &request) ==
+           ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_PROCESS_EXEC);
+    assert(mock_argument0 == (uint32_t)(uintptr_t)image);
+    assert(mock_argument1 == sizeof(image));
+    assert(mock_argument2 == (uint32_t)(uintptr_t)&request);
+    assert(mock_argument3 == 0u && mock_argument4 == 0u);
+
+    calls = mock_calls;
+    assert(astra_process_exec(NULL, sizeof(image), &request) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_process_exec(image, 0u, &request) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_process_exec(image, sizeof(image), NULL) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(mock_calls == calls);
+}
+
 static void test_process_wait(void)
 {
     static const uint64_t forever =
         ((uint64_t)ASTRA_DEADLINE_NONE_HI << 32) | ASTRA_DEADLINE_NONE_LO;
     uint32_t status = 0xdeadbeefu;
+    uint32_t process_handle;
+    uint32_t process_id;
     uint32_t calls;
 
     mock_status = ASTRA_SYSCALL_OK;
+    assert(astra_process_clone(&process_handle, &process_id) ==
+           ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_PROCESS_CLONE);
+    assert(process_handle == ASTRA_SYSCALL_ABI_VERSION);
+    assert(process_id == 0x11111111u);
     assert(astra_process_wait(9u, forever, &status) == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_WAIT_ONE);
     assert(mock_argument0 == 9u);
@@ -661,6 +911,19 @@ static void test_event_channel(void)
     memset(oversized, 'x', sizeof(oversized));
     oversized[sizeof(oversized) - 1u] = '\0';
     assert(astra_log(oversized) == ASTRA_SYSCALL_OK);
+
+    assert(astra_log_failure("storage", 5u) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_LOG_WRITE);
+    assert(mock_argument3 == sizeof("storage:5: failed") - 1u);
+}
+
+static void test_elapsed_time(void)
+{
+    assert(astra_elapsed_microseconds(1000u, 2500u) == 1u);
+    assert(astra_elapsed_microseconds(2500u, 2500u) == 0u);
+    assert(astra_elapsed_microseconds(2500u, 1000u) == 0u);
+    assert(astra_elapsed_microseconds(
+               0u, ((uint64_t)UINT32_MAX + 1u) * 1000u) == UINT32_MAX);
 }
 
 /*
@@ -938,15 +1201,23 @@ static void test_assert_message(void)
 int
 main(void)
 {
+    const uint32_t zero_words[] = {0u, 0u, 0u};
+    const uint32_t nonzero_words[] = {0u, 1u, 0u};
+
+    assert(astra_words_zero(zero_words, 3u));
+    assert(astra_words_zero(zero_words, 0u));
+    assert(!astra_words_zero(nonzero_words, 3u));
     test_startup_contract();
     test_memory_primitives();
     test_qsort();
     test_syscall_wrappers();
     test_library_relocation();
     test_launch();
+    test_exec();
     test_process_wait();
     test_wait_multiple();
     test_event_channel();
+    test_elapsed_time();
     test_event_macro();
     test_event_descriptor_layout();
     test_event_catalog();

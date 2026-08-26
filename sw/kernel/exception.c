@@ -1,30 +1,10 @@
 #include "exception.h"
 
+#include <astra/endian.h>
+
 #include <stddef.h>
 
 #define M68K_SR_SUPERVISOR 0x2000u
-
-static uint16_t read_be16(const uint8_t *bytes, uint32_t offset)
-{
-    return (uint16_t)((uint16_t)bytes[offset] << 8) |
-           bytes[offset + 1u];
-}
-
-static uint32_t read_be32(const uint8_t *bytes, uint32_t offset)
-{
-    return (uint32_t)bytes[offset] << 24 |
-           (uint32_t)bytes[offset + 1u] << 16 |
-           (uint32_t)bytes[offset + 2u] << 8 |
-           bytes[offset + 3u];
-}
-
-static void write_be32(uint8_t *bytes, uint32_t offset, uint32_t value)
-{
-    bytes[offset] = (uint8_t)(value >> 24);
-    bytes[offset + 1u] = (uint8_t)(value >> 16);
-    bytes[offset + 2u] = (uint8_t)(value >> 8);
-    bytes[offset + 3u] = (uint8_t)value;
-}
 
 static void clear_frame(KernelExceptionFrame *frame)
 {
@@ -84,9 +64,9 @@ KernelExceptionStatus kernel_exception_decode(const void *raw_frame,
     if (available < 8u)
         return KERNEL_EXCEPTION_TRUNCATED;
 
-    frame->status_register = read_be16(bytes, 0u);
-    frame->program_counter = read_be32(bytes, 2u);
-    frame->format_vector = read_be16(bytes, 6u);
+    frame->status_register = astra_load_be16(bytes);
+    frame->program_counter = astra_load_be32(bytes + 2u);
+    frame->format_vector = astra_load_be16(bytes + 6u);
     frame->format = (uint8_t)(frame->format_vector >> 12);
     frame->vector_offset = frame->format_vector & 0x0fffu;
     frame->from_user =
@@ -101,15 +81,15 @@ KernelExceptionStatus kernel_exception_decode(const void *raw_frame,
         return KERNEL_EXCEPTION_TRUNCATED;
 
     if (frame->format == 0x2u)
-        frame->instruction_address = read_be32(bytes, 8u);
+        frame->instruction_address = astra_load_be32(bytes + 8u);
     if (frame->format == 0xau || frame->format == 0xbu) {
         frame->access_fault = 1u;
-        frame->special_status = read_be16(bytes, 10u);
-        frame->fault_address = read_be32(bytes, 16u);
-        frame->data_output = read_be32(bytes, 24u);
+        frame->special_status = astra_load_be16(bytes + 10u);
+        frame->fault_address = astra_load_be32(bytes + 16u);
+        frame->data_output = astra_load_be32(bytes + 24u);
     }
     if (frame->format == 0xbu)
-        frame->stage_b_address = read_be32(bytes, 36u);
+        frame->stage_b_address = astra_load_be32(bytes + 36u);
     return KERNEL_EXCEPTION_OK;
 }
 
@@ -124,6 +104,6 @@ KernelExceptionStatus kernel_exception_set_program_counter(
         return status;
     if (frame.format != 0xau && frame.format != 0xbu)
         return KERNEL_EXCEPTION_UNSUPPORTED_FORMAT;
-    write_be32(raw_frame, 2u, program_counter);
+    astra_store_be32((uint8_t *)raw_frame + 2u, program_counter);
     return KERNEL_EXCEPTION_OK;
 }

@@ -157,9 +157,8 @@ snapshot_write(SnapshotFile *snapshot, const void *buffer, uint32_t length)
     while (done < length) {
         uint32_t moved = 0u;
 
-        if (astra_vfs_port_write_bulk(snapshot->file._private_client,
-                snapshot->file._private_file, done, in + done,
-                length - done, &moved) !=
+        if (process_filesystem.library->write_at(
+                &snapshot->file, done, in + done, length - done, &moved) !=
                 ASTRA_VFS_OK || moved == 0u) {
             return 0;
         }
@@ -493,53 +492,20 @@ events_pump(void)
     }
 }
 
-static const AstraStartupCapability *
-capability(const AstraStartupInfo *startup,
-           const AstraStartupCapability *capabilities, const char *name)
-{
-    for (uint32_t index = 0u; index < startup->capability_count; ++index) {
-        if (astra_capability_name_equal(capabilities[index].name, name))
-            return &capabilities[index];
-    }
-    return NULL;
-}
-
-static void ready(uint32_t handle, uint32_t status, uint32_t service_handle,
-                  uint32_t service_control)
-{
-    AstraServiceReady message;
-    uint32_t carried[2];
-
-    (void)memset(&message, 0, sizeof(message));
-    message.header.total_size = sizeof(message);
-    message.header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
-    message.header.protocol = ASTRA_SERVICE_PROTOCOL;
-    message.header.protocol_version = ASTRA_SERVICE_VERSION;
-    message.header.operation = ASTRA_SERVICE_READY;
-    message.status = status;
-    carried[0] = service_handle;
-    carried[1] = service_control;
-    (void)astra_port_send(handle, &message, sizeof(message),
-                          status == ASTRA_STATUS_OK ? carried : NULL,
-                          status == ASTRA_STATUS_OK ? 2u : 0u);
-}
-
 int astra_main(const AstraStartupInfo *startup)
 {
-    const AstraStartupCapability *capabilities;
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *event_target;
+    uint32_t published[2];
     uint32_t status = ASTRA_STATUS_OK;
 
     if (!astra_startup_validate(startup) ||
         startup->capabilities_address == 0u)
         return ASTRA_STATUS_INVALID;
-    capabilities = (const AstraStartupCapability *)(uintptr_t)
-        startup->capabilities_address;
-    bootstrap = capability(startup, capabilities,
-                           ASTRA_CAPABILITY_SERVICE_READY);
-    event_target = capability(startup, capabilities,
-                              ASTRA_CAPABILITY_EVENT_TARGET);
+    bootstrap = astra_startup_capability(startup,
+                                         ASTRA_CAPABILITY_SERVICE_READY);
+    event_target = astra_startup_capability(startup,
+                                            ASTRA_CAPABILITY_EVENT_TARGET);
     if (bootstrap == NULL || event_target == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     event_target_handle = event_target->handle;
@@ -548,9 +514,9 @@ int astra_main(const AstraStartupInfo *startup)
                                                      startup);
     if (status == ASTRA_VFS_OK)
         status = events_start(startup->process_handle);
-    ready(bootstrap->handle, status,
-          status == ASTRA_STATUS_OK ? events_handle : 0u,
-          status == ASTRA_STATUS_OK ? control_handle : 0u);
+    published[0] = events_handle;
+    published[1] = control_handle;
+    (void)astra_service_ready(bootstrap->handle, status, published, 2u);
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_STATUS_OK)
         return (int)status;

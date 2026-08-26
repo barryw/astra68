@@ -182,6 +182,8 @@ static void initialize_test(void)
 
     fill_info(&info);
     astra_boot_info_finalize(&info);
+    kernel_memory_test_bind_physical_memory(physical_memory, 0x02000000u,
+                                            sizeof(physical_memory));
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
     memset(physical_memory, 0xa5, sizeof(physical_memory));
     kernel_vm_test_bind_physical_memory(physical_memory, 0x02000000u,
@@ -196,6 +198,91 @@ static void initialize_test(void)
     cache_invalidation_count = 0u;
     function_code_sets = 0u;
     assert(kernel_vm_init() == KERNEL_VM_OK);
+}
+
+static void test_private_reservation_fault_and_decommit(void)
+{
+    KernelAddressSpace space = {0};
+    KernelMemoryStats before;
+    KernelMemoryStats reserved;
+    KernelMemoryStats committed;
+    KernelMemoryStats decommitted;
+    KernelAllocationStats allocation;
+    uint32_t base;
+    uint32_t span;
+    uint32_t readonly_base;
+    uint32_t readonly_span;
+    uint32_t physical;
+    uint32_t released;
+
+    initialize_test();
+    assert(kernel_vm_enable() == KERNEL_VM_OK);
+    assert(kernel_vm_create_address_space(93u, &space) == KERNEL_VM_OK);
+    assert(kernel_memory_stats(&before));
+    assert(kernel_vm_private_reserve(
+               &space, 1u, KERNEL_VM_READ | KERNEL_VM_WRITE,
+               &base, &span) == KERNEL_VM_OK);
+    assert(base == KERNEL_VM_PRIVATE_BASE);
+    assert(span == KERNEL_VM_PRIVATE_SLOT_SIZE);
+    assert(kernel_vm_private_reserve(
+               &space, KERNEL_VM_PRIVATE_SLOT_SIZE + 1u, KERNEL_VM_READ,
+               &readonly_base, &readonly_span) == KERNEL_VM_OK);
+    assert(readonly_base == base + span);
+    assert(readonly_span == 2u * KERNEL_VM_PRIVATE_SLOT_SIZE);
+    assert(kernel_memory_stats(&reserved));
+    assert(reserved.free_frames == before.free_frames);
+
+    assert(kernel_vm_private_fault(&space, base + 7u, true) == KERNEL_VM_OK);
+    assert(kernel_vm_switch(&space) == KERNEL_VM_OK);
+    assert(kernel_vm_test_translate_current(base + 7u, true, &physical));
+    assert(physical_memory[physical - 0x02000000u] == 0u);
+    assert(kernel_vm_private_fault(&space, base + 7u, false) ==
+           KERNEL_VM_ALREADY_MAPPED);
+    assert(kernel_memory_stats(&committed));
+    assert(committed.free_frames + 2u == reserved.free_frames);
+
+    assert(kernel_vm_private_fault(&space, readonly_base, true) ==
+           KERNEL_VM_NOT_OWNED);
+    assert(kernel_vm_private_fault(&space, readonly_base, false) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_test_translate_current(readonly_base, false, &physical));
+    assert(!kernel_vm_test_translate_current(readonly_base, true, &physical));
+
+    assert(kernel_vm_private_decommit(&space, base + 1u,
+                                      KERNEL_PAGE_SIZE - 1u,
+                                      &released) == KERNEL_VM_OK);
+    assert(released == 0u);
+    assert(kernel_vm_private_decommit(&space, base, KERNEL_PAGE_SIZE,
+                                      &released) == KERNEL_VM_OK);
+    assert(released == 1u);
+    assert(!kernel_vm_test_translate_current(base, false, &physical));
+    assert(kernel_memory_stats(&decommitted));
+    assert(decommitted.free_frames == committed.free_frames);
+
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_PROCESS_PRIVATE_PAGE, 1u);
+    assert(kernel_vm_private_fault(&space, base, true) ==
+           KERNEL_VM_OUT_OF_MEMORY);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_PROCESS_PRIVATE_PAGE, &allocation));
+    assert(allocation.injected_failures == 1u);
+    assert(kernel_vm_private_fault(&space, base, true) == KERNEL_VM_OK);
+    assert(kernel_vm_private_commit_range(
+               &space, base + KERNEL_PAGE_SIZE - 8u, 32u, true) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_test_translate_current(base + KERNEL_PAGE_SIZE,
+                                            true, &physical));
+    assert(kernel_vm_private_commit_range(
+               &space, readonly_base, 1u, true) == KERNEL_VM_NOT_OWNED);
+    assert(kernel_vm_private_decommit(
+               &space, KERNEL_VM_PRIVATE_END, KERNEL_PAGE_SIZE, &released) ==
+           KERNEL_VM_INVALID_ARGUMENT);
+
+    assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
+    assert(kernel_memory_release_owner(93u, NULL) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&decommitted));
+    assert(decommitted.free_frames == before.free_frames + 1u);
 }
 
 static void test_kernel_root_and_enable_sequence(void)
@@ -281,7 +368,7 @@ static void test_kernel_root_and_enable_sequence(void)
     assert(kernel_vm_probe_current(0x10000000u, false, &translated) ==
            KERNEL_VM_MAPPING_UNMAPPED);
     assert(kernel_vm_probe_current(0x10000000u, false, NULL) ==
-           KERNEL_VM_MAPPING_UNKNOWN);
+           KERNEL_VM_MAPPING_UNMAPPED);
 
     assert(kernel_vm_enable() == KERNEL_VM_OK);
     assert(kernel_vm_enabled());
@@ -459,6 +546,102 @@ static void test_destroy_releases_read_only_mapping(void)
     assert(kernel_memory_frame_info(physical, &frame));
     assert(frame.references == 1u);
     assert(kernel_memory_release_owner(77u, NULL) == KERNEL_MEMORY_OK);
+}
+
+static void test_cow_alias_can_change_owner_and_become_private(void)
+{
+    KernelAddressSpace parent = {0};
+    KernelAddressSpace child = {0};
+    KernelFrameInfo frame;
+    uint32_t physical;
+    uint32_t translated;
+
+    initialize_test();
+    assert(kernel_vm_enable() == KERNEL_VM_OK);
+    assert(kernel_vm_create_address_space(101u, &parent) == KERNEL_VM_OK);
+    assert(kernel_vm_create_address_space(102u, &child) == KERNEL_VM_OK);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 101u,
+                               &physical) == KERNEL_MEMORY_OK);
+    assert(kernel_vm_map_page(&parent, 0x18000000u, physical,
+                              KERNEL_VM_READ | KERNEL_VM_WRITE) ==
+           KERNEL_VM_OK);
+    assert(kernel_memory_release(physical, 1u, 101u) == KERNEL_MEMORY_OK);
+    assert(kernel_vm_promote_page_to_cow(&parent, 0x18000000u) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_map_cow_page(&child, 0x18000000u, physical, 101u,
+                                  true) ==
+           KERNEL_VM_OK);
+    assert(kernel_memory_frame_info(physical, &frame));
+    assert(frame.state == KERNEL_FRAME_COW_WRITE && frame.references == 2u);
+    assert(kernel_vm_switch(&child) == KERNEL_VM_OK);
+    assert(kernel_vm_test_translate_current(0x18000000u, false,
+                                            &translated));
+    assert(!kernel_vm_test_translate_current(0x18000000u, true,
+                                             &translated));
+    assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&parent) == KERNEL_VM_OK);
+    assert(kernel_memory_frame_info(physical, &frame));
+    assert(frame.owner == 102u && frame.references == 1u);
+    assert(kernel_vm_cow_make_private(&child, 0x18000000u) == KERNEL_VM_OK);
+    assert(kernel_vm_switch(&child) == KERNEL_VM_OK);
+    assert(kernel_vm_test_translate_current(0x18000000u, true,
+                                            &translated));
+    assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&child) == KERNEL_VM_OK);
+}
+
+static void test_clone_is_lazy_and_write_fault_copies_one_page(void)
+{
+    KernelAddressSpace parent = {0};
+    KernelAddressSpace child = {0};
+    KernelFrameInfo frame;
+    uint32_t source_physical;
+    uint32_t child_physical;
+    uint32_t private_base;
+    uint32_t private_span;
+    uint32_t translated;
+    uint32_t *words;
+
+    initialize_test();
+    assert(kernel_vm_enable() == KERNEL_VM_OK);
+    assert(kernel_vm_create_address_space(201u, &parent) == KERNEL_VM_OK);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 201u,
+                               &source_physical) == KERNEL_MEMORY_OK);
+    words = physical_words(source_physical);
+    words[0] = 0x12345678u;
+    words[1023] = 0xabcdef01u;
+    assert(kernel_vm_map_page(&parent, 0x18000000u, source_physical,
+                              KERNEL_VM_READ | KERNEL_VM_WRITE) ==
+           KERNEL_VM_OK);
+    assert(kernel_memory_release(source_physical, 1u, 201u) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_vm_private_reserve(&parent, KERNEL_VM_PRIVATE_SLOT_SIZE,
+                                     KERNEL_VM_READ | KERNEL_VM_WRITE,
+                                     &private_base, &private_span) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_clone_address_space(&parent, 202u, &child) ==
+           KERNEL_VM_OK);
+    assert(child.private_reserved[0] == parent.private_reserved[0]);
+    assert(child.private_writable[0] == parent.private_writable[0]);
+    assert(kernel_memory_frame_info(source_physical, &frame));
+    assert(frame.state == KERNEL_FRAME_COW_WRITE && frame.references == 2u);
+
+    assert(kernel_vm_cow_fault(&child, 0x18000003u) == KERNEL_VM_OK);
+    assert(kernel_vm_switch(&child) == KERNEL_VM_OK);
+    assert(kernel_vm_test_translate_current(0x18000000u, true,
+                                            &child_physical));
+    assert(child_physical != source_physical);
+    words = physical_words(child_physical);
+    assert(words[0] == 0x12345678u && words[1023] == 0xabcdef01u);
+    words[0] = 0xfeedfaceu;
+    assert(kernel_vm_switch(&parent) == KERNEL_VM_OK);
+    assert(kernel_vm_test_translate_current(0x18000000u, false,
+                                            &translated));
+    assert(translated == source_physical);
+    assert(physical_words(source_physical)[0] == 0x12345678u);
+    assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&parent) == KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&child) == KERNEL_VM_OK);
 }
 
 static void assert_shared_map_baseline(
@@ -778,10 +961,13 @@ int main(void)
     test_page_table_injection_preserves_baseline();
     test_map_switch_unmap_and_stale_guards();
     test_destroy_releases_read_only_mapping();
+    test_cow_alias_can_change_owner_and_become_private();
+    test_clone_is_lazy_and_write_fault_copies_one_page();
     test_shared_map_transaction_rolls_back_every_stage();
     test_shared_map_existing_leaf_rollback_and_alias_guards();
     test_library_code_range_is_shared_and_executable();
     test_device_aperture_above_the_low_region_is_uncached();
+    test_private_reservation_fault_and_decommit();
     puts("KERNEL VM PASS");
     return 0;
 }

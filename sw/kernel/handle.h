@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <astra/limits.h>
+
 #define KERNEL_HANDLE_INVALID 0u
 /*
  * How many objects one process may hold at once.
@@ -33,7 +35,7 @@
  * owner -- generous, not arbitrary, and the assert beside that macro fails at
  * compile time if a new grant outgrows it.
  */
-#define KERNEL_HANDLE_MAX_ENTRIES 128u
+#define KERNEL_HANDLE_MAX_ENTRIES ASTRA_HANDLE_COUNT_MAX
 #define KERNEL_HANDLE_BITMAP_WORDS \
     ((KERNEL_HANDLE_MAX_ENTRIES + 31u) / 32u)
 #define KERNEL_HANDLE_TRANSFER_MAX 8u
@@ -124,6 +126,8 @@ typedef struct KernelHandleTransferStats {
 void kernel_handle_transfer_pool_init(void);
 void kernel_handle_table_init(KernelHandleTable *table);
 bool kernel_handle_table_set_owner(KernelHandleTable *table, uint32_t owner);
+KernelHandleStatus kernel_handle_clone_table(
+    const KernelHandleTable *source, KernelHandleTable *destination);
 KernelHandleStatus kernel_handle_install(KernelHandleTable *table,
                                          KernelObjectType type,
                                          uint32_t rights, void *object,
@@ -159,6 +163,8 @@ KernelHandleStatus kernel_handle_lookup_any(const KernelHandleTable *table,
 KernelHandleStatus kernel_handle_close(KernelHandleTable *table,
                                        KernelHandle handle);
 uint32_t kernel_handle_close_all(KernelHandleTable *table);
+uint32_t kernel_handle_close_type(KernelHandleTable *table,
+                                  KernelObjectType type);
 uint32_t kernel_handle_count(const KernelHandleTable *table);
 uint32_t kernel_handle_available(const KernelHandleTable *table);
 bool kernel_handle_table_valid(const KernelHandleTable *table);

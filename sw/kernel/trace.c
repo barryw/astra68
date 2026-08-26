@@ -1,5 +1,8 @@
 #include "trace.h"
 
+#include <astra/compiler.h>
+#include <astra/integer.h>
+
 #include "bytes.h"
 #include "platform.h"
 
@@ -55,21 +58,10 @@ _Static_assert(sizeof(KernelTraceStagedRecord) == 28u,
 _Static_assert(sizeof(AstraEventDrained) == ASTRA_EVENT_DRAINED_SIZE,
                "the drained event is ABI: userspace indexes it by stride");
 
-static void trace_barrier(void)
-{
-    __asm__ volatile ("" ::: "memory");
-}
-
 static uint32_t next_sequence(uint32_t sequence)
 {
     ++sequence;
     return sequence == 0u ? 1u : sequence;
-}
-
-static void increment_saturating(uint32_t *value)
-{
-    if (*value != UINT32_MAX)
-        ++*value;
 }
 
 static bool header_valid(const KernelTraceHeader *header)
@@ -164,10 +156,10 @@ bool kernel_trace_write_at(KernelTraceEvent event, uint16_t flags,
     sequence = header->next_sequence;
     record = &trace_storage.records[index].record;
     if (header->wrap_count != 0u && record->commit_sequence != 0u)
-        increment_saturating(&header->dropped_count);
+        astra_u32_increment_saturating(&header->dropped_count);
 
     record->commit_sequence = 0u;
-    trace_barrier();
+    astra_compiler_barrier();
     record->timestamp_high = (uint32_t)(timestamp >> 32);
     record->timestamp_low = (uint32_t)timestamp;
     record->event = (uint16_t)event;
@@ -176,15 +168,15 @@ bool kernel_trace_write_at(KernelTraceEvent event, uint16_t flags,
     record->argument[1] = argument1;
     record->argument[2] = argument2;
     record->argument[3] = argument3;
-    trace_barrier();
+    astra_compiler_barrier();
     record->commit_sequence = sequence;
-    trace_barrier();
+    astra_compiler_barrier();
 
     header->next_sequence = next_sequence(sequence);
     ++index;
     if (index == KERNEL_TRACE_CAPACITY) {
         index = 0u;
-        increment_saturating(&header->wrap_count);
+        astra_u32_increment_saturating(&header->wrap_count);
     }
     header->write_index = index;
     kernel_interrupt_restore(saved_status);
@@ -206,7 +198,7 @@ bool kernel_trace_stage_at(KernelTraceEvent event, uint16_t flags,
     write_sequence = staged_write_sequence;
     pending = write_sequence - staged_read_sequence;
     if (pending >= KERNEL_TRACE_STAGE_CAPACITY) {
-        increment_saturating(&staged_dropped);
+        astra_u32_increment_saturating(&staged_dropped);
         return false;
     }
     record = &staged_records[
@@ -219,9 +211,9 @@ bool kernel_trace_stage_at(KernelTraceEvent event, uint16_t flags,
     record->argument[1] = argument1;
     record->argument[2] = argument2;
     record->argument[3] = argument3;
-    trace_barrier();
+    astra_compiler_barrier();
     staged_write_sequence = write_sequence + 1u;
-    increment_saturating(&staged_total);
+    astra_u32_increment_saturating(&staged_total);
     ++pending;
     if (pending > staged_maximum_pending)
         staged_maximum_pending = pending;
@@ -239,7 +231,7 @@ uint32_t kernel_trace_flush_staged(uint32_t batch_limit)
 
         if (read_sequence == staged_write_sequence)
             break;
-        trace_barrier();
+        astra_compiler_barrier();
         source = &staged_records[
             read_sequence % KERNEL_TRACE_STAGE_CAPACITY];
         record.timestamp_high = source->timestamp_high;
@@ -248,7 +240,7 @@ uint32_t kernel_trace_flush_staged(uint32_t batch_limit)
         record.flags = source->flags;
         for (uint32_t index = 0u; index < 4u; ++index)
             record.argument[index] = source->argument[index];
-        trace_barrier();
+        astra_compiler_barrier();
         if (!kernel_trace_write_at(
                 (KernelTraceEvent)record.event, record.flags,
                 ((uint64_t)record.timestamp_high << 32) |
@@ -257,7 +249,7 @@ uint32_t kernel_trace_flush_staged(uint32_t batch_limit)
                 record.argument[2], record.argument[3]))
             break;
         staged_read_sequence = read_sequence + 1u;
-        increment_saturating(&staged_flushed);
+        astra_u32_increment_saturating(&staged_flushed);
         ++flushed;
     }
     return flushed;
@@ -313,7 +305,7 @@ bool kernel_trace_read_slot(uint32_t slot, KernelTraceRecord *record)
     first_commit = source->commit_sequence;
     if (first_commit == 0u)
         return false;
-    trace_barrier();
+    astra_compiler_barrier();
     record->commit_sequence = first_commit;
     record->timestamp_high = source->timestamp_high;
     record->timestamp_low = source->timestamp_low;
@@ -327,7 +319,7 @@ bool kernel_trace_read_slot(uint32_t slot, KernelTraceRecord *record)
         source->commit_sequence = 0u;
     }
 #endif
-    trace_barrier();
+    astra_compiler_barrier();
     second_commit = source->commit_sequence;
     return first_commit == second_commit && second_commit != 0u;
 }
@@ -397,7 +389,7 @@ static void advance_write_index(KernelTraceHeader *header)
 
     if (index == KERNEL_TRACE_CAPACITY) {
         index = 0u;
-        increment_saturating(&header->wrap_count);
+        astra_u32_increment_saturating(&header->wrap_count);
     }
     header->write_index = index;
 }
@@ -408,9 +400,9 @@ static KernelTraceSlot *claim_slot(KernelTraceHeader *header)
     KernelTraceSlot *slot = &trace_storage.records[header->write_index];
 
     if (header->wrap_count != 0u && slot->record.commit_sequence != 0u)
-        increment_saturating(&header->dropped_count);
+        astra_u32_increment_saturating(&header->dropped_count);
     slot->record.commit_sequence = 0u;
-    trace_barrier();
+    astra_compiler_barrier();
     return slot;
 }
 
@@ -459,9 +451,9 @@ bool kernel_trace_write_user(uint32_t message, uint32_t process,
     record->activity = activity;
     record->thread = thread;
     record->payload_length = (uint16_t)payload_length;
-    trace_barrier();
+    astra_compiler_barrier();
     record->commit_sequence = sequence;
-    trace_barrier();
+    astra_compiler_barrier();
     header->next_sequence = next_sequence(sequence);
     advance_write_index(header);
 
@@ -474,9 +466,9 @@ bool kernel_trace_write_user(uint32_t message, uint32_t process,
              ++index)
             arguments->payload[index] =
                 index < payload_length ? bytes[index] : 0u;
-        trace_barrier();
+        astra_compiler_barrier();
         arguments->commit_sequence = sequence;
-        trace_barrier();
+        astra_compiler_barrier();
         header->next_sequence = next_sequence(sequence);
         advance_write_index(header);
     }
@@ -505,7 +497,7 @@ bool kernel_trace_read_user(uint32_t slot, KernelTraceUserRecord *record,
     first_commit = source->commit_sequence;
     if (first_commit == 0u || source->event != KERNEL_TRACE_EVENT_USER)
         return false;
-    trace_barrier();
+    astra_compiler_barrier();
     record->commit_sequence = first_commit;
     record->timestamp_high = source->timestamp_high;
     record->timestamp_low = source->timestamp_low;
@@ -516,7 +508,7 @@ bool kernel_trace_read_user(uint32_t slot, KernelTraceUserRecord *record,
     record->activity = source->activity;
     record->thread = source->thread;
     record->payload_length = source->payload_length;
-    trace_barrier();
+    astra_compiler_barrier();
     second_commit = source->commit_sequence;
     if (first_commit != second_commit || second_commit == 0u)
         return false;
@@ -540,10 +532,10 @@ bool kernel_trace_read_user(uint32_t slot, KernelTraceUserRecord *record,
     if (arguments->commit_sequence != expected ||
         arguments->event != KERNEL_TRACE_EVENT_USER_ARGUMENTS)
         return false;
-    trace_barrier();
+    astra_compiler_barrier();
     for (uint32_t index = 0u; index < length; ++index)
         out[index] = arguments->payload[index];
-    trace_barrier();
+    astra_compiler_barrier();
     if (arguments->commit_sequence != expected)
         return false;
     *payload_length = length;

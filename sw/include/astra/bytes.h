@@ -2,6 +2,7 @@
 #define ASTRA_BYTES_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 /*
  * Freestanding byte and string primitives provided by libastrart.
@@ -22,5 +23,13 @@ size_t strlen(const char *text);
 int strcmp(const char *left, const char *right);
 int strncmp(const char *left, const char *right, size_t count);
 char *strncpy(char *destination, const char *source, size_t count);
+
+static inline int astra_words_zero(const uint32_t *words, size_t count)
+{
+    for (size_t index = 0u; index < count; ++index)
+        if (words[index] != 0u)
+            return 0;
+    return 1;
+}
 
 #endif

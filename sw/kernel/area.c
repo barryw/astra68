@@ -1044,6 +1044,26 @@ KernelAreaStatus kernel_area_process_died(uint32_t process_id,
     return KERNEL_AREA_OK;
 }
 
+KernelAreaStatus kernel_area_unmap_process(uint32_t process_id,
+                                           uint32_t *unmapped)
+{
+    uint32_t count = 0u;
+
+    if (process_id == 0u)
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    for (uint32_t slot = 0u; slot < KERNEL_AREA_MAPPING_MAX; ++slot) {
+        if (mappings[slot].active == 0u ||
+            mappings[slot].process_id != process_id)
+            continue;
+        if (unmap_record(&mappings[slot], false) != KERNEL_AREA_OK)
+            return KERNEL_AREA_CORRUPT;
+        ++count;
+    }
+    if (unmapped != NULL)
+        *unmapped = count;
+    return KERNEL_AREA_OK;
+}
+
 KernelAreaStatus kernel_area_write(KernelArea *area, uint32_t offset,
                                    const void *source, uint32_t size)
 {

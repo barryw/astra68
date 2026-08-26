@@ -45,23 +45,9 @@ supervisor_clock(void *context)
     return astra_clock_monotonic();
 }
 
-static const AstraStartupCapability *
-find_capability(const AstraStartupCapability *capabilities, uint32_t count,
-                const char *name)
-{
-    for (uint32_t index = 0u; index < count; ++index) {
-        if (astra_capability_name_equal(capabilities[index].name, name)) {
-            return &capabilities[index];
-        }
-    }
-    return NULL;
-}
-
 /* Returns 0 when the granted block objects are absent or unusable. */
 static uint32_t
-claim_block_lease(const AstraStartupInfo *startup,
-                  const AstraStartupCapability *capabilities,
-                  uint32_t *irq_handle)
+claim_block_lease(const AstraStartupInfo *startup, uint32_t *irq_handle)
 {
     const AstraStartupCapability *device;
     const AstraStartupCapability *irq;
@@ -72,15 +58,13 @@ claim_block_lease(const AstraStartupInfo *startup,
      * missing capability table stops being a launch error and starts being a
      * null dereference in the block path.
      */
-    if (startup == NULL || capabilities == NULL || irq_handle == NULL) {
+    if (startup == NULL || irq_handle == NULL) {
         return 0u;
     }
     *irq_handle = 0u;
 
-    device = find_capability(capabilities, startup->capability_count,
-                             ASTRA_CAPABILITY_BLOCK_DEVICE);
-    irq = find_capability(capabilities, startup->capability_count,
-                          ASTRA_CAPABILITY_BLOCK_IRQ);
+    device = astra_startup_capability(startup, ASTRA_CAPABILITY_BLOCK_DEVICE);
+    irq = astra_startup_capability(startup, ASTRA_CAPABILITY_BLOCK_IRQ);
     if (device == NULL || irq == NULL || device->handle == 0u ||
         irq->handle == 0u) {
         /* A machine without media boots without a block service. */
@@ -233,7 +217,7 @@ astra_main(const AstraStartupInfo *startup)
     }
     (void)astra_progress(ASTRA_SUPERVISOR_STAGE_SELF_VERIFIED);
 
-    block_device = claim_block_lease(startup, capabilities, &block_irq);
+    block_device = claim_block_lease(startup, &block_irq);
     if (block_device == 0u) {
         /*
          * Not a failure: without media the kernel grants nothing and there is
@@ -248,10 +232,10 @@ astra_main(const AstraStartupInfo *startup)
         return (int)(ASTRA_SUPERVISOR_STATUS_TAG | status);
     }
 
-    status = supervisor_loader_start(startup, capabilities);
+    status = supervisor_loader_start(startup);
     if (status != ASTRA_STATUS_OK)
         return (int)status;
     (void)astra_progress(ASTRA_SUPERVISOR_STAGE_TERMINAL);
 
-    return (int)supervisor_loader_watch(startup, capabilities);
+    return (int)supervisor_loader_watch(startup);
 }

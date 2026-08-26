@@ -2,6 +2,8 @@
 
 #include "bytes.h"
 
+#include <astra/integer.h>
+
 #include <stddef.h>
 #if !defined(__m68k__)
 #include <stdlib.h>
@@ -174,11 +176,6 @@ _Static_assert(sizeof(KernelFrameInfo) == 8u,
 _Static_assert(sizeof(KernelOwnerLedger) == 12u,
                "owner ledger must remain compact");
 
-static bool is_power_of_two(uint32_t value)
-{
-    return value != 0u && (value & (value - 1u)) == 0u;
-}
-
 static bool is_dynamic_state(KernelFrameState state)
 {
     return state >= KERNEL_FRAME_PAGE_TABLE &&
@@ -303,12 +300,6 @@ static void bitmap_set(uint32_t *bitmap, uint32_t index, bool value)
         bitmap[index >> 5] |= mask;
     else
         bitmap[index >> 5] &= ~mask;
-}
-
-static void increment_saturating(uint32_t *value)
-{
-    if (*value != UINT32_MAX)
-        ++*value;
 }
 
 static bool find_owner_slot(uint32_t owner, uint32_t *slot)
@@ -889,7 +880,8 @@ static KernelMemoryStatus allocate_frames(uint32_t frame_count,
 
     if (!initialized || physical_base == NULL || frame_count == 0u ||
         frame_count > stats.total_frames ||
-        !is_power_of_two(alignment_frames) || !is_dynamic_state(state) ||
+        !astra_u32_is_power_of_two(alignment_frames) ||
+        !is_dynamic_state(state) ||
         owner == KERNEL_OWNER_NONE || !allocation_site_valid(site) ||
         emergency_site(site))
         return KERNEL_MEMORY_INVALID_ARGUMENT;
@@ -1323,7 +1315,7 @@ KernelMemoryStatus kernel_memory_release_owner(uint32_t owner,
 
     if (!initialized || owner == KERNEL_OWNER_NONE)
         return KERNEL_MEMORY_INVALID_ARGUMENT;
-    increment_saturating(&stats.owner_release_operations);
+    astra_u32_increment_saturating(&stats.owner_release_operations);
     if (!find_owner_slot(owner, &owner_slot)) {
         if (released_frames != NULL)
             *released_frames = 0u;
@@ -1337,7 +1329,7 @@ KernelMemoryStatus kernel_memory_release_owner(uint32_t owner,
             !bitmap_test(dynamic_bitmap, index) ||
             frames[index].owner != owner)
             return KERNEL_MEMORY_INVALID_MAP;
-        increment_saturating(&stats.owner_release_frame_visits);
+        astra_u32_increment_saturating(&stats.owner_release_frame_visits);
         ++visited;
         if (frames[index].pins != 0u)
             return KERNEL_MEMORY_BUSY;
@@ -1353,13 +1345,72 @@ KernelMemoryStatus kernel_memory_release_owner(uint32_t owner,
             frames[index].owner != owner ||
             !unlink_owner_frame(owner_slot, index))
             return KERNEL_MEMORY_INVALID_MAP;
-        increment_saturating(&stats.owner_release_frame_visits);
+        astra_u32_increment_saturating(&stats.owner_release_frame_visits);
         if (release_final_frame(index) != KERNEL_MEMORY_OK)
             return KERNEL_MEMORY_INVALID_MAP;
         ++released;
     }
     if (released_frames != NULL)
         *released_frames = released;
+    return KERNEL_MEMORY_OK;
+}
+
+KernelMemoryStatus kernel_memory_transfer_owner(uint32_t physical_address,
+                                                uint32_t old_owner,
+                                                uint32_t new_owner)
+{
+    uint32_t index;
+    uint32_t old_slot;
+    uint32_t new_slot;
+    bool reuse_old_slot = false;
+    KernelFrameInfo *frame;
+
+    if (!initialized || old_owner == KERNEL_OWNER_NONE ||
+        new_owner == KERNEL_OWNER_NONE || old_owner == new_owner ||
+        !frame_range(physical_address, 1u, &index))
+        return KERNEL_MEMORY_INVALID_ARGUMENT;
+    frame = &frames[index];
+    if (!bitmap_test(dynamic_bitmap, index) || frame->owner != old_owner ||
+        !is_dynamic_state(frame->state) || frame->references == 0u ||
+        frame->pins != 0u || bitmap_test(emergency_bitmap, index))
+        return KERNEL_MEMORY_NOT_OWNED;
+    if (!find_owner_slot(old_owner, &old_slot))
+        return KERNEL_MEMORY_INVALID_MAP;
+    if (!find_owner_slot(new_owner, &new_slot)) {
+        if (owner_ledgers[old_slot].frame_count == 1u) {
+            reuse_old_slot = true;
+            new_slot = old_slot;
+        } else if (!owner_slot_for_allocation(new_owner, 1u, &new_slot)) {
+            return KERNEL_MEMORY_OUT_OF_MEMORY;
+        }
+    }
+    if (!unlink_owner_frame(old_slot, index))
+        return KERNEL_MEMORY_INVALID_MAP;
+    if (reuse_old_slot && owner_ledgers[new_slot].owner != KERNEL_OWNER_NONE)
+        return KERNEL_MEMORY_INVALID_MAP;
+    link_owner_frame(new_slot, index, new_owner);
+    frame->owner = new_owner;
+    return KERNEL_MEMORY_OK;
+}
+
+KernelMemoryStatus kernel_memory_reclassify(uint32_t physical_address,
+                                            uint32_t owner,
+                                            KernelFrameState old_state,
+                                            KernelFrameState new_state)
+{
+    uint32_t index;
+    KernelFrameInfo *frame;
+
+    if (!initialized || owner == KERNEL_OWNER_NONE ||
+        !frame_range(physical_address, 1u, &index) ||
+        !is_dynamic_state(old_state) || !is_dynamic_state(new_state))
+        return KERNEL_MEMORY_INVALID_ARGUMENT;
+    frame = &frames[index];
+    if (!bitmap_test(dynamic_bitmap, index) || frame->owner != owner ||
+        frame->state != old_state || frame->references == 0u ||
+        frame->pins != 0u || bitmap_test(emergency_bitmap, index))
+        return KERNEL_MEMORY_NOT_OWNED;
+    frame->state = (uint8_t)new_state;
     return KERNEL_MEMORY_OK;
 }
 

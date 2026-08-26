@@ -8,6 +8,8 @@
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_process.h>
 
+#include <astra/endian.h>
+
 #define PROCESS_VFS_CLIENT_MAX 4u
 
 typedef struct OpenLibraryRecord {
@@ -50,7 +52,35 @@ static struct {
     uint8_t connected;
 } clients[PROCESS_VFS_CLIENT_MAX];
 static uint32_t client_count;
+static uint8_t vfs_initialized;
 static OpenLibraryRecord open_libraries[ASTRA_LIBRARY_SLOT_COUNT];
+static AstraVfsClient *client_ready(uint32_t slot);
+
+#define PROCESS_VFS_EXEC_MAGIC 0x56465345u
+#define PROCESS_VFS_EXEC_VERSION 2u
+
+typedef struct ProcessVfsExecHeader {
+    uint32_t magic;
+    uint32_t size;
+    uint32_t client_count;
+    uint32_t version;
+} ProcessVfsExecHeader;
+
+typedef struct ProcessVfsExecClient {
+    uint32_t service;
+    uint32_t session;
+    uint32_t activity;
+    uint32_t port_service;
+    uint32_t port_reply_receive;
+    uint32_t port_reply_source;
+    uint32_t port_reply_send;
+    uint32_t port_area;
+    uint32_t port_area_send;
+    uint32_t port_area_size;
+    uint16_t version;
+    uint8_t port_area_capable;
+    uint8_t reserved;
+} ProcessVfsExecClient;
 
 void astra_process_vfs_close(void)
 {
@@ -61,6 +91,194 @@ void astra_process_vfs_close(void)
         clients[client_count].handle = 0u;
         clients[client_count].connected = 0u;
     }
+    vfs_initialized = 0u;
+}
+
+uint32_t astra_process_vfs_state_size(void)
+{
+    uint32_t connected = 0u;
+
+    for (uint32_t slot = 0u; slot < client_count; ++slot)
+        if (clients[slot].connected != 0u)
+            ++connected;
+    return (uint32_t)sizeof(ProcessVfsExecHeader) +
+           connected * (uint32_t)sizeof(ProcessVfsExecClient);
+}
+
+uint32_t astra_process_vfs_export(void *state, uint32_t capacity,
+                                  uint32_t *used)
+{
+    ProcessVfsExecHeader *header = state;
+    ProcessVfsExecClient *output;
+    uint32_t required = astra_process_vfs_state_size();
+    uint32_t count = 0u;
+
+    if (used == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    *used = required;
+    if (state == NULL || capacity < required)
+        return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
+    memset(state, 0, required);
+    header->magic = PROCESS_VFS_EXEC_MAGIC;
+    header->size = required;
+    header->version = PROCESS_VFS_EXEC_VERSION;
+    output = (ProcessVfsExecClient *)(void *)(header + 1);
+    for (uint32_t slot = 0u; slot < client_count; ++slot) {
+        AstraVfsClient *client = &clients[slot].client;
+
+        if (clients[slot].connected == 0u)
+            continue;
+        output[count].service = clients[slot].handle;
+        output[count].session = client->session;
+        output[count].activity = client->activity;
+        output[count].port_service = client->port_service;
+        output[count].port_reply_receive = client->port_reply_receive;
+        output[count].port_reply_source = client->port_reply_source;
+        output[count].port_reply_send = client->port_reply_send;
+        output[count].port_area = client->port_area;
+        output[count].port_area_send = client->port_area_send;
+        output[count].port_area_size = client->port_area_size;
+        output[count].version = client->version;
+        output[count].port_area_capable = client->port_area_capable;
+        ++count;
+    }
+    header->client_count = count;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_process_vfs_client_handle(const AstraVfsClient *client)
+{
+    for (uint32_t slot = 0u; slot < client_count; ++slot)
+        if (&clients[slot].client == client)
+            return clients[slot].handle;
+    return 0u;
+}
+
+AstraVfsClient *astra_process_vfs_client_handle_lookup(uint32_t handle)
+{
+    for (uint32_t slot = 0u; slot < client_count; ++slot)
+        if (clients[slot].handle == handle)
+            return client_ready(slot);
+    return NULL;
+}
+
+uint32_t astra_process_file_export(const AstraFile *file,
+                                   AstraProcessFileState *state)
+{
+    uint32_t service;
+
+    if (file == NULL || state == NULL || file->_private_client == NULL ||
+        file->_private_file == ASTRA_VFS_FILE_INVALID)
+        return ASTRA_VFS_ERR_INVALID;
+    service = astra_process_vfs_client_handle(file->_private_client);
+    if (service == 0u)
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    *state = (AstraProcessFileState){
+        .offset = file->_private_offset,
+        .size = file->_private_size,
+        .service = service,
+        .file = file->_private_file,
+        .flags = file->_private_flags,
+        .kind = file->_private_kind,
+        .member = file->_private_member,
+    };
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_process_file_import(const AstraProcessFileState *state,
+                                   AstraFile *file)
+{
+    AstraVfsClient *client;
+
+    if (state == NULL || file == NULL || state->service == 0u ||
+        state->file == ASTRA_VFS_FILE_INVALID)
+        return ASTRA_VFS_ERR_INVALID;
+    client = astra_process_vfs_client_handle_lookup(state->service);
+    if (client == NULL)
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    *file = (AstraFile)ASTRA_FILE_INIT;
+    file->_private_client = client;
+    file->_private_read_at = astra_vfs_port_read_bulk;
+    file->_private_write_at = astra_vfs_port_write_bulk;
+    file->_private_file = state->file;
+    file->_private_flags = state->flags;
+    file->_private_offset = state->offset;
+    file->_private_size = state->size;
+    file->_private_kind = state->kind;
+    file->_private_member = state->member;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_process_vfs_import(const AstraStartupInfo *startup,
+                                  const void *state, uint32_t size)
+{
+    const ProcessVfsExecHeader *header = state;
+    const ProcessVfsExecClient *input;
+    uint32_t status;
+
+    if (state == NULL || size < sizeof(*header) ||
+        header->magic != PROCESS_VFS_EXEC_MAGIC ||
+        header->version != PROCESS_VFS_EXEC_VERSION ||
+        header->size != size ||
+        header->client_count > PROCESS_VFS_CLIENT_MAX ||
+        header->client_count >
+            (size - (uint32_t)sizeof(*header)) /
+                (uint32_t)sizeof(ProcessVfsExecClient) ||
+        sizeof(*header) +
+                header->client_count * sizeof(ProcessVfsExecClient) != size)
+        return ASTRA_VFS_ERR_INVALID;
+    status = astra_process_vfs_init(startup);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    input = (const ProcessVfsExecClient *)(const void *)(header + 1);
+    for (uint32_t index = 0u; index < header->client_count; ++index) {
+        uint32_t slot;
+        AstraVfsClient *client;
+
+        for (slot = 0u; slot < client_count; ++slot)
+            if (clients[slot].handle == input[index].service)
+                break;
+        if (slot == client_count || input[index].port_service !=
+                                    input[index].service ||
+            (input[index].port_area == 0u) !=
+                (input[index].port_area_size == 0u) ||
+            (input[index].port_reply_receive == 0u) !=
+                (input[index].port_reply_source == 0u))
+            goto invalid;
+        client = &clients[slot].client;
+        memset(client, 0, sizeof(*client));
+        client->transport = astra_vfs_port_transport;
+        client->context = client;
+        client->session = input[index].session;
+        client->activity = input[index].activity;
+        client->port_service = input[index].port_service;
+        client->port_reply_receive = input[index].port_reply_receive;
+        client->port_reply_source = input[index].port_reply_source;
+        client->port_reply_send = input[index].port_reply_send;
+        client->port_area = input[index].port_area;
+        client->port_area_send = input[index].port_area_send;
+        client->port_area_size = input[index].port_area_size;
+        client->version = input[index].version;
+        client->port_area_capable = input[index].port_area_capable;
+        if (client->port_area != 0u) {
+            void *address = NULL;
+            uint32_t mapped = 0u;
+
+            if (astra_rt_area_map(client->port_area,
+                                  ASTRA_AREA_MAP_READ |
+                                      ASTRA_AREA_MAP_WRITE,
+                                  &address, &mapped) != ASTRA_SYSCALL_OK ||
+                mapped != client->port_area_size)
+                goto invalid;
+            client->port_area_address = address;
+        }
+        clients[slot].connected = 1u;
+    }
+    return ASTRA_VFS_OK;
+
+invalid:
+    astra_process_vfs_close();
+    return ASTRA_VFS_ERR_INVALID;
 }
 
 /*
@@ -79,17 +297,6 @@ static AstraVfsClient *client_ready(uint32_t slot)
         clients[slot].connected = 1u;
     }
     return &clients[slot].client;
-}
-
-static int same(const char *left, const char *right)
-{
-    while (*left == *right) {
-        if (*left == '\0')
-            return 1;
-        ++left;
-        ++right;
-    }
-    return 0;
 }
 
 static int library_name_valid(const char *name)
@@ -337,7 +544,7 @@ static int provider_version(const AstraBundleManifest *manifest,
                                  provider->version.minor,
                                  provider->version.patch};
 
-        if (provider->abi != abi || !same(provider->name, name) ||
+        if (provider->abi != abi || strcmp(provider->name, name) != 0 ||
             (found && !newer(candidate, version))) continue;
         for (uint32_t part = 0u; part < 3u; ++part)
             version[part] = candidate[part];
@@ -431,7 +638,7 @@ static int resolve_cached(const char *name, uint16_t minimum,
         uint16_t candidate[3] = {provider->version[0], provider->version[1],
                                  provider->version[2]};
 
-        if (provider->abi != minimum || !same(provider->name, name) ||
+        if (provider->abi != minimum || strcmp(provider->name, name) != 0 ||
             (found && !newer(candidate, selected))) continue;
         for (uint32_t part = 0u; part < 3u; ++part)
             selected[part] = candidate[part];
@@ -446,17 +653,6 @@ static int resolve_cached(const char *name, uint16_t minimum,
 #define PROVIDER_INDEX_MAGIC 0x41505256u /* "APRV" */
 #define PROVIDER_INDEX_HEADER 24u
 
-static uint16_t index_be16(const uint8_t *bytes)
-{
-    return (uint16_t)(((uint16_t)bytes[0] << 8) | bytes[1]);
-}
-
-static uint32_t index_be32(const uint8_t *bytes)
-{
-    return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
-           ((uint32_t)bytes[2] << 8) | bytes[3];
-}
-
 static int copy_index_path(const uint8_t *bytes, uint32_t length,
                            const char *name, uint16_t abi, char *path,
                            uint32_t capacity,
@@ -467,17 +663,17 @@ static int copy_index_path(const uint8_t *bytes, uint32_t length,
 
     *reference = (AstraLibraryReference){0};
     if (length >= PROVIDER_INDEX_HEADER + 6u &&
-        index_be32(bytes) == PROVIDER_INDEX_MAGIC &&
-        index_be16(bytes + 4u) == 1u &&
-        index_be16(bytes + 6u) == PROVIDER_INDEX_HEADER &&
-        index_be16(bytes + 14u) == abi && index_be16(bytes + 18u) == 0u) {
+        astra_load_be32(bytes) == PROVIDER_INDEX_MAGIC &&
+        astra_load_be16(bytes + 4u) == 1u &&
+        astra_load_be16(bytes + 6u) == PROVIDER_INDEX_HEADER &&
+        astra_load_be16(bytes + 14u) == abi && astra_load_be16(bytes + 18u) == 0u) {
         reference->size = ASTRA_LIBRARY_REFERENCE_SIZE;
-        reference->major = index_be16(bytes + 8u);
-        reference->minor = index_be16(bytes + 10u);
-        reference->patch = index_be16(bytes + 12u);
+        reference->major = astra_load_be16(bytes + 8u);
+        reference->minor = astra_load_be16(bytes + 10u);
+        reference->patch = astra_load_be16(bytes + 12u);
         reference->abi_major = abi;
-        reference->abi_minor = index_be16(bytes + 16u);
-        reference->build_id = index_be32(bytes + 20u);
+        reference->abi_minor = astra_load_be16(bytes + 16u);
+        reference->build_id = astra_load_be32(bytes + 20u);
         (void)memset(reference->name, 0, sizeof(reference->name));
         if (!append(reference->name, sizeof(reference->name), name))
             return 0;
@@ -686,7 +882,8 @@ uint32_t astra_process_vfs_init(const AstraStartupInfo *startup)
         clients[client_count].connected = 0u;
         ++client_count;
     }
-    return client_count != 0u ? ASTRA_VFS_OK : ASTRA_VFS_ERR_NOT_FOUND;
+    vfs_initialized = client_count != 0u;
+    return vfs_initialized ? ASTRA_VFS_OK : ASTRA_VFS_ERR_NOT_FOUND;
 }
 
 AstraAssignTable *astra_process_vfs_assigns(void)
@@ -714,6 +911,51 @@ AstraVfsClient *astra_process_vfs_assign_client(const AstraAssign *assign,
 {
     (void)context;
     return astra_process_vfs_client_for(assign);
+}
+
+void astra_process_vfs_set_activity(uint32_t activity)
+{
+    for (uint32_t index = 0u; index < client_count; ++index)
+        clients[index].client.activity = activity;
+}
+
+uint32_t astra_process_read_file_borrow(const char *path,
+                                        const uint8_t **bytes,
+                                        uint32_t *length)
+{
+    if (path == NULL || bytes == NULL || length == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    *bytes = NULL;
+    *length = 0u;
+    for (uint32_t member = 0u; ; ++member) {
+        const AstraAssign *assign = NULL;
+        AstraVfsClient *client;
+        uint64_t size = 0u;
+        uint32_t moved = 0u;
+        uint32_t status;
+        char wire[ASTRA_VFS_PATH_MAX];
+
+        status = astra_assign_resolve(&assigns, path, ASTRA_RIGHT_READ,
+                                      member, wire, sizeof(wire), &assign);
+        if (status == ASTRA_VFS_ERR_NOT_FOUND)
+            return status;
+        if (status != ASTRA_VFS_OK)
+            continue;
+        client = astra_process_vfs_client_for(assign);
+        if (client == NULL)
+            continue;
+        status = astra_vfs_port_read_path(client, wire, bytes, &moved, &size);
+        if (status == ASTRA_VFS_ERR_NOT_FOUND)
+            continue;
+        if (status != ASTRA_VFS_OK)
+            return status;
+        if (size > UINT32_MAX || moved == 0u || moved != (uint32_t)size) {
+            *bytes = NULL;
+            return ASTRA_VFS_ERR_IO;
+        }
+        *length = moved;
+        return ASTRA_VFS_OK;
+    }
 }
 
 /*
@@ -761,7 +1003,7 @@ open_cached_library(const char *name, uint16_t version, uint32_t *status)
     }
     for (uint32_t index = 0u; index < ASTRA_LIBRARY_SLOT_COUNT; ++index) {
         if (open_libraries[index].used != 0u &&
-            same(open_libraries[index].loaded->identity->name, name) &&
+            strcmp(open_libraries[index].loaded->identity->name, name) == 0 &&
             open_libraries[index].handle.abi_major == version &&
             open_libraries[index].references != UINT32_MAX) {
             ++open_libraries[index].references;
@@ -791,8 +1033,8 @@ static uint32_t open_process_filesystem(
     if (filesystem == NULL || filesystem->handle != NULL ||
         filesystem->library != NULL)
         return ASTRA_VFS_ERR_INVALID;
-    status = filesystem_opens != 0u ? ASTRA_VFS_OK :
-                                      astra_process_vfs_init(startup);
+    status = vfs_initialized ? ASTRA_VFS_OK :
+                               astra_process_vfs_init(startup);
     if (status != ASTRA_VFS_OK)
         return status;
     /*
@@ -815,9 +1057,10 @@ static uint32_t open_process_filesystem(
         astra_process_filesystem_close(filesystem);
         return ASTRA_VFS_ERR_PROTOCOL;
     }
-    status = filesystem->library->attach(
+    status = filesystem->library->attach_io(
         &filesystem->filesystem, astra_process_vfs_assigns(),
-        astra_process_vfs_assign_client, astra_vfs_port_read_bulk, NULL);
+        astra_process_vfs_assign_client, astra_vfs_port_read_bulk,
+        astra_vfs_port_write_bulk, NULL);
     if (status != ASTRA_VFS_OK) {
         astra_process_filesystem_close(filesystem);
         return status;

@@ -1,4 +1,5 @@
 #include <astra/font.h>
+#include <astra/bytes.h>
 
 /* The direct-MMIO NDK has no font service; keep validation ABI-compatible. */
 
@@ -11,17 +12,6 @@
     (ASTRA_TEXT_LAYOUT_WRAP_WORD | ASTRA_TEXT_LAYOUT_WRAP_GRAPHEME | \
      ASTRA_TEXT_LAYOUT_ELLIPSIZE_END | \
      ASTRA_TEXT_LAYOUT_INCLUDE_TRAILING_WHITESPACE)
-
-static int words_are_zero(const uint32_t *words, unsigned count)
-{
-    unsigned index;
-
-    for (index = 0; index < count; ++index) {
-        if (words[index] != 0)
-            return 0;
-    }
-    return 1;
-}
 
 static int font_role_valid(uint32_t role)
 {
@@ -129,7 +119,7 @@ static int font_request_valid(const AstraFontRequest *request)
         (request->style_flags & ~FONT_STYLE_FLAGS) != 0 ||
         (request->style_flags & FONT_STYLE_FLAGS) == FONT_STYLE_FLAGS ||
         (request->match_flags & ~FONT_MATCH_FLAGS) != 0 ||
-        !words_are_zero(request->reserved, 5))
+        !astra_words_zero(request->reserved, 5))
         return 0;
     return 1;
 }
@@ -145,7 +135,7 @@ static int layout_options_valid(const AstraTextLayoutOptions *options)
         options->alignment > ASTRA_TEXT_ALIGNMENT_JUSTIFY ||
         options->direction > ASTRA_TEXT_DIRECTION_RIGHT_TO_LEFT ||
         options->reserved16 != 0 ||
-        !words_are_zero(options->reserved, 5))
+        !astra_words_zero(options->reserved, 5))
         return 0;
     return 1;
 }

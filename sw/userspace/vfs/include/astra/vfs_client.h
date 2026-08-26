@@ -40,6 +40,8 @@ typedef struct AstraVfsClient {
     /* Private state used by astra_vfs_port_connect/transport. */
     uint8_t port_area_capable;
     uint32_t port_service;
+    uint32_t port_reply_receive;
+    uint32_t port_reply_source;
     uint32_t port_reply_send;
     uint32_t port_area;
     uint32_t port_area_send;
@@ -60,6 +62,9 @@ typedef struct AstraVfsClient {
      */
     AstraVfsRequest request;
     AstraVfsReply reply;
+    AstraVfsRequestMessage port_outgoing;
+    AstraVfsReplyMessage port_incoming;
+    AstraVfsRequest port_area_request;
 } AstraVfsClient;
 
 /*
@@ -73,6 +78,10 @@ uint32_t astra_vfs_disconnect(AstraVfsClient *client);
 uint32_t astra_vfs_open(AstraVfsClient *client, const char *path,
                         uint32_t flags, AstraVfsFile *file,
                         uint64_t *size, uint16_t *kind);
+uint32_t astra_vfs_open_mode(AstraVfsClient *client, const char *path,
+                             uint32_t flags, uint16_t create_mode,
+                             AstraVfsFile *file, uint64_t *size,
+                             uint16_t *kind);
 uint32_t astra_vfs_close(AstraVfsClient *client, AstraVfsFile file);
 
 /*
@@ -133,8 +142,15 @@ uint32_t astra_vfs_readdir_batch(AstraVfsClient *client, const char *path,
                                  uint32_t capacity, uint32_t *count,
                                  uint64_t *next);
 uint32_t astra_vfs_mkdir(AstraVfsClient *client, const char *path);
+uint32_t astra_vfs_mkdir_mode(AstraVfsClient *client, const char *path,
+                              uint16_t create_mode);
 uint32_t astra_vfs_unlink(AstraVfsClient *client, const char *path);
 uint32_t astra_vfs_rename(AstraVfsClient *client, const char *from,
                           const char *to);
+uint32_t astra_vfs_chmod(AstraVfsClient *client, const char *path,
+                         uint16_t mode);
+uint32_t astra_vfs_readlink(AstraVfsClient *client, const char *path,
+                            void *buffer, uint32_t capacity,
+                            uint32_t *length);
 
 #endif

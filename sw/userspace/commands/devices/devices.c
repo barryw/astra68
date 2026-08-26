@@ -135,22 +135,18 @@ say_events(uint8_t flags)
 int
 astra_main(const AstraStartupInfo *startup)
 {
-    const AstraStartupCapability *capabilities;
+    const AstraStartupCapability *standard_output;
     AstraIrqEndpointInfo info;
     uint32_t slots = 0u;
     uint32_t status;
     uint32_t shown = 0u;
 
-    if (startup == NULL || startup->capabilities_address == 0u) {
+    if (!astra_startup_validate(startup)) {
         return ASTRA_STATUS_INVALID;
     }
-    capabilities = (const AstraStartupCapability *)(uintptr_t)
-        startup->capabilities_address;
-    for (uint32_t index = 0u; index < startup->capability_count; ++index) {
-        if (astra_capability_name_equal(capabilities[index].name, "STDOUT")) {
-            out = capabilities[index].handle;
-        }
-    }
+    standard_output = astra_startup_capability(startup, "STDOUT");
+    if (standard_output != NULL)
+        out = standard_output->handle;
     if (out == 0u) {
         return ASTRA_STATUS_ACCESS;
     }

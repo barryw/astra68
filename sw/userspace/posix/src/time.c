@@ -56,6 +56,82 @@ split(uint64_t nanoseconds, long *seconds, uint32_t *rest)
     return 0;
 }
 
+static int
+timeval_to_nanoseconds(const struct timeval *value, uint64_t *nanoseconds)
+{
+    uint64_t seconds;
+
+    if (value->tv_sec < 0 || value->tv_usec < 0 ||
+        value->tv_usec >= 1000000) {
+        errno = EINVAL;
+        return -1;
+    }
+    seconds = (uint64_t)value->tv_sec;
+    if (seconds > (UINT64_MAX - (uint64_t)value->tv_usec * 1000u) /
+                      NANOSECONDS_PER_SECOND) {
+        errno = EINVAL;
+        return -1;
+    }
+    *nanoseconds = seconds * NANOSECONDS_PER_SECOND +
+                   (uint64_t)value->tv_usec * 1000u;
+    return 0;
+}
+
+static void
+nanoseconds_to_timeval(uint64_t nanoseconds, struct timeval *value)
+{
+    value->tv_sec = (time_t)(nanoseconds / NANOSECONDS_PER_SECOND);
+    value->tv_usec =
+        (suseconds_t)((nanoseconds % NANOSECONDS_PER_SECOND) / 1000u);
+}
+
+int
+setitimer(int which, const struct itimerval *restrict value,
+          struct itimerval *restrict previous)
+{
+    uint64_t delay;
+    uint64_t interval;
+    uint64_t old_delay;
+    uint64_t old_interval;
+
+    if (which != ITIMER_REAL || value == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (timeval_to_nanoseconds(&value->it_value, &delay) != 0 ||
+        timeval_to_nanoseconds(&value->it_interval, &interval) != 0)
+        return -1;
+    if (astra_rt_interval_timer(delay, interval, &old_delay,
+                                &old_interval) != ASTRA_SYSCALL_OK) {
+        errno = EIO;
+        return -1;
+    }
+    if (previous != NULL) {
+        nanoseconds_to_timeval(old_delay, &previous->it_value);
+        nanoseconds_to_timeval(old_interval, &previous->it_interval);
+    }
+    return 0;
+}
+
+int
+getitimer(int which, struct itimerval *value)
+{
+    uint64_t delay;
+    uint64_t interval;
+
+    if (which != ITIMER_REAL || value == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (astra_rt_interval_timer_get(&delay, &interval) != ASTRA_SYSCALL_OK) {
+        errno = EIO;
+        return -1;
+    }
+    nanoseconds_to_timeval(delay, &value->it_value);
+    nanoseconds_to_timeval(interval, &value->it_interval);
+    return 0;
+}
+
 int
 gettimeofday(struct timeval *value, void *timezone)
 {

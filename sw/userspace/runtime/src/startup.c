@@ -21,7 +21,8 @@ astra_startup_validate(const AstraStartupInfo *startup)
         return 0;
     }
 
-    if ((startup->reserved[0] | startup->reserved[1]) != 0u) {
+    if ((startup->handoff_address == 0u) !=
+        (startup->handoff_size == 0u)) {
         return 0;
     }
     /*
@@ -49,4 +50,19 @@ astra_startup_argument(const AstraStartupInfo *startup, uint32_t index)
         return NULL;
     arguments = (const uint32_t *)(uintptr_t)startup->argv_address;
     return (const char *)(uintptr_t)arguments[index];
+}
+
+const AstraStartupCapability *
+astra_startup_capability(const AstraStartupInfo *startup, const char *name)
+{
+    const AstraStartupCapability *capabilities;
+
+    if (!astra_startup_validate(startup) || name == NULL)
+        return NULL;
+    capabilities = (const AstraStartupCapability *)(uintptr_t)
+        startup->capabilities_address;
+    for (uint32_t index = 0u; index < startup->capability_count; ++index)
+        if (astra_capability_name_equal(capabilities[index].name, name))
+            return &capabilities[index];
+    return NULL;
 }

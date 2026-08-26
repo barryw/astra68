@@ -1,6 +1,8 @@
 #include "exception.h"
 #include "user_copy.h"
 
+#include <astra/endian.h>
+
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -28,29 +30,15 @@ int kernel_user_copy_to_asm(uint32_t destination, const void *source,
     return low_level_status;
 }
 
-static void write_be16(uint8_t *bytes, uint32_t offset, uint16_t value)
-{
-    bytes[offset] = (uint8_t)(value >> 8);
-    bytes[offset + 1u] = (uint8_t)value;
-}
-
-static void write_be32(uint8_t *bytes, uint32_t offset, uint32_t value)
-{
-    bytes[offset] = (uint8_t)(value >> 24);
-    bytes[offset + 1u] = (uint8_t)(value >> 16);
-    bytes[offset + 2u] = (uint8_t)(value >> 8);
-    bytes[offset + 3u] = (uint8_t)value;
-}
-
 static void make_fault(uint8_t *raw, uint32_t pc, uint32_t address,
                        uint16_t ssw)
 {
     memset(raw, 0, KERNEL_EXCEPTION_FRAME_MAX_SIZE);
-    write_be16(raw, 0u, 0x2000u);
-    write_be32(raw, 2u, pc);
-    write_be16(raw, 6u, 0xb008u);
-    write_be16(raw, 10u, ssw);
-    write_be32(raw, 16u, address);
+    astra_store_be16(raw, 0x2000u);
+    astra_store_be32(raw + 2u, pc);
+    astra_store_be16(raw + 6u, 0xb008u);
+    astra_store_be16(raw + 10u, ssw);
+    astra_store_be32(raw + 16u, address);
 }
 
 static void test_checked_wrappers(void)

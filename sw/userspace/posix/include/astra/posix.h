@@ -19,8 +19,9 @@
  * Nothing here invents authority. A program that was not handed STDOUT has no
  * fd 1, and that is the correct answer rather than a missing feature.
  *
- * `astra_posix_start` must run before any stdio call. crt0 does not call it,
- * because a program that never prints should not pay for it.
+ * `astra_posix_start` must run before any stdio call. Programs with Astra's
+ * native `astra_main` entry call it explicitly; ordinary C programs get it
+ * from the POSIX library's `main` adapter when that archive member is needed.
  */
 void astra_posix_start(const AstraStartupInfo *startup);
 

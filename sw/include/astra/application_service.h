@@ -15,9 +15,26 @@
 #define ASTRA_APPLICATION_LAUNCHED 2u
 #define ASTRA_APPLICATION_PATH_MAX 128u
 
+/* Inline application-launch transport.  The syscall itself accepts the full
+ * startup page; this service record is bounded by its existing port budget. */
+#define ASTRA_APPLICATION_ARGUMENT_BYTES 192u
+#define ASTRA_APPLICATION_ARGUMENT_MAX \
+    (ASTRA_APPLICATION_ARGUMENT_BYTES / 2u)
+
+typedef struct AstraApplicationLaunchArguments {
+    uint16_t count;
+    uint16_t length;
+    uint16_t source;
+    uint16_t flags;
+    char bytes[ASTRA_APPLICATION_ARGUMENT_BYTES];
+    uint16_t environment_count;
+    uint16_t environment_length;
+    uint32_t environment_address;
+} AstraApplicationLaunchArguments;
+
 typedef struct AstraApplicationLaunchRequest {
     AstraMessageHeader header;
-    AstraLaunchArguments arguments;
+    AstraApplicationLaunchArguments arguments;
 } AstraApplicationLaunchRequest;
 
 typedef struct AstraApplicationLaunchReply {

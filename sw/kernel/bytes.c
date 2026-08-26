@@ -117,3 +117,14 @@ void kernel_bytes_copy(void *destination, const void *source, uint32_t size)
     while (size-- != 0u)
         *out++ = *in++;
 }
+
+bool kernel_bytes_equal(const void *left, const void *right, uint32_t size)
+{
+    const uint8_t *a = left;
+    const uint8_t *b = right;
+
+    while (size-- != 0u)
+        if (*a++ != *b++)
+            return false;
+    return true;
+}

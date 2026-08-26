@@ -26,8 +26,8 @@ GRAPHICS_FONT_HEADERS := $(GRAPHICS)/build/generated/astra_font8x8.inc \
 HOST_TEST := build/host/test_display
 HOST_TEST_SANITIZE := build/host/test_display_sanitize
 CRT0 := $(RUNTIME)/build/m68k/crt0.o
-
-all: $(IMAGE) size
+ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(GRAPHICS) $(NDK)
+include ../../program.mk
 
 $(TARGET): $(OBJECT) $(CRT0) $(GRAPHICS_LIB) $(NDK_LIB) $(RUNTIME_LIB) \
 	$(RUNTIME)/astra_user.ld
@@ -79,7 +79,9 @@ sanitize: $(HOST_TEST_SANITIZE)
 	./$(HOST_TEST_SANITIZE)
 
 analyze:
-	@true
+	@mkdir -p build/analyzer
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
+		-c main.c -o build/analyzer/main.o
 
 clean:
 	rm -rf build

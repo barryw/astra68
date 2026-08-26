@@ -9,9 +9,11 @@
  */
 
 #include <assert.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include <astra/vfs_local_transport.h>
 #include <astra/vfs_service_core.h>
@@ -24,6 +26,7 @@ typedef struct FakeNode {
     uint8_t bytes[FAKE_BYTES_MAX];
     uint32_t size;
     uint16_t kind;
+    uint16_t mode;
     int used;
     int open_count;
 } FakeNode;
@@ -34,6 +37,31 @@ typedef struct FakeFs {
 } FakeFs;
 
 static FakeFs fake;
+
+typedef struct ConcurrentGate {
+    pthread_mutex_t mutex;
+    pthread_cond_t changed;
+    int enabled;
+    int slow_entered;
+    int release_slow;
+    int fast_finished;
+} ConcurrentGate;
+
+static ConcurrentGate concurrent_gate;
+
+static void
+hold_slow_backend(void)
+{
+    if (!concurrent_gate.enabled)
+        return;
+    assert(pthread_mutex_lock(&concurrent_gate.mutex) == 0);
+    concurrent_gate.slow_entered = 1;
+    assert(pthread_cond_broadcast(&concurrent_gate.changed) == 0);
+    while (!concurrent_gate.release_slow)
+        assert(pthread_cond_wait(&concurrent_gate.changed,
+                                 &concurrent_gate.mutex) == 0);
+    assert(pthread_mutex_unlock(&concurrent_gate.mutex) == 0);
+}
 
 static FakeNode *
 fake_find(const char *path)
@@ -58,6 +86,8 @@ fake_create(const char *path, uint16_t kind)
         if (!fake.nodes[index].used) {
             fake.nodes[index].used = 1;
             fake.nodes[index].kind = kind;
+            fake.nodes[index].mode = kind == ASTRA_VFS_KIND_DIRECTORY ?
+                                         0755u : 0644u;
             fake.nodes[index].size = 0u;
             fake.nodes[index].open_count = 0;
             snprintf(fake.nodes[index].path, sizeof(fake.nodes[index].path),
@@ -69,10 +99,11 @@ fake_create(const char *path, uint16_t kind)
 }
 
 static uint32_t
-fake_open(void *context, const char *path, uint32_t flags, uintptr_t *node,
-          AstraVfsNodeInfo *info)
+fake_open(void *context, const char *path, uint32_t flags,
+          uint16_t create_mode, uintptr_t *node, AstraVfsNodeInfo *info)
 {
     FakeNode *found = fake_find(path);
+    int created = 0;
 
     (void)context;
     if (found != NULL &&
@@ -88,7 +119,10 @@ fake_open(void *context, const char *path, uint32_t flags, uintptr_t *node,
         if (found == NULL) {
             return ASTRA_VFS_ERR_NO_SPACE;
         }
+        created = 1;
     }
+    if (created && create_mode != ASTRA_VFS_MODE_DEFAULT)
+        found->mode = create_mode;
     if ((flags & ASTRA_VFS_OPEN_TRUNCATE) != 0u) {
         found->size = 0u;
     }
@@ -96,6 +130,7 @@ fake_open(void *context, const char *path, uint32_t flags, uintptr_t *node,
     *node = (uintptr_t)found;
     info->size = found->size;
     info->kind = found->kind;
+    info->mode = found->mode;
     return ASTRA_VFS_OK;
 }
 
@@ -120,6 +155,8 @@ fake_read(void *context, uintptr_t node, uint64_t offset, void *buffer,
     uint32_t available;
 
     (void)context;
+    if (found == fake_find("/slow"))
+        hold_slow_backend();
     *moved = 0u;
     if (offset > found->size) {
         return ASTRA_VFS_ERR_INVALID;
@@ -180,11 +217,14 @@ fake_stat(void *context, const char *path, AstraVfsNodeInfo *info)
     FakeNode *found = fake_find(path);
 
     (void)context;
+    if (strcmp(path, "/slow") == 0)
+        hold_slow_backend();
     if (found == NULL) {
         return ASTRA_VFS_ERR_NOT_FOUND;
     }
     info->size = found->size;
     info->kind = found->kind;
+    info->mode = found->mode;
     return ASTRA_VFS_OK;
 }
 
@@ -231,14 +271,20 @@ fake_readdir(void *context, const char *path, uint64_t cookie, char *name,
 }
 
 static uint32_t
-fake_mkdir(void *context, const char *path)
+fake_mkdir(void *context, const char *path, uint16_t create_mode)
 {
+    FakeNode *created;
+
     (void)context;
     if (fake_find(path) != NULL) {
         return ASTRA_VFS_ERR_EXISTS;
     }
-    return fake_create(path, ASTRA_VFS_KIND_DIRECTORY) != NULL ?
-        ASTRA_VFS_OK : ASTRA_VFS_ERR_NO_SPACE;
+    created = fake_create(path, ASTRA_VFS_KIND_DIRECTORY);
+    if (created == NULL)
+        return ASTRA_VFS_ERR_NO_SPACE;
+    if (create_mode != ASTRA_VFS_MODE_DEFAULT)
+        created->mode = create_mode;
+    return ASTRA_VFS_OK;
 }
 
 static uint32_t
@@ -269,9 +315,38 @@ fake_rename(void *context, const char *from, const char *to)
     return ASTRA_VFS_OK;
 }
 
+static uint32_t
+fake_chmod(void *context, const char *path, uint16_t mode)
+{
+    FakeNode *found = fake_find(path);
+
+    (void)context;
+    if (found == NULL)
+        return ASTRA_VFS_ERR_NOT_FOUND;
+    found->mode = mode;
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t
+fake_readlink(void *context, const char *path, void *buffer,
+              uint32_t capacity, uint32_t *length)
+{
+    FakeNode *found = fake_find(path);
+
+    (void)context;
+    if (found == NULL)
+        return ASTRA_VFS_ERR_NOT_FOUND;
+    if (capacity < found->size)
+        return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
+    memcpy(buffer, found->bytes, found->size);
+    *length = found->size;
+    return ASTRA_VFS_OK;
+}
+
 static const AstraVfsBackendOps fake_ops = {
     fake_open, fake_close, fake_read, fake_write, fake_sync, fake_truncate,
-    fake_stat, fake_readdir, fake_mkdir, fake_unlink, fake_rename
+    fake_stat, fake_readdir, fake_mkdir, fake_unlink, fake_rename,
+    fake_chmod, fake_readlink
 };
 
 static AstraVfsService service;
@@ -309,6 +384,171 @@ reset(void)
     assert(astra_vfs_service_init(
         &service, &fake_ops, NULL, service_files,
         (uint32_t)(sizeof(service_files) / sizeof(service_files[0]))));
+}
+
+static int
+test_lock_acquire(void *context)
+{
+    return pthread_mutex_lock(context) == 0;
+}
+
+static void
+test_lock_release(void *context)
+{
+    assert(pthread_mutex_unlock(context) == 0);
+}
+
+typedef struct ConcurrentRequest {
+    uint32_t session;
+    const char *path;
+    AstraVfsReply reply;
+} ConcurrentRequest;
+
+static void *
+run_stat(void *context)
+{
+    ConcurrentRequest *call = context;
+    AstraVfsRequest request;
+
+    begin_request(&request, call->session, call->path);
+    astra_vfs_service_dispatch(&service, ASTRA_VFS_OP_STAT, &request,
+                               &call->reply);
+    if (strcmp(call->path, "/fast") == 0) {
+        assert(pthread_mutex_lock(&concurrent_gate.mutex) == 0);
+        concurrent_gate.fast_finished = 1;
+        assert(pthread_cond_broadcast(&concurrent_gate.changed) == 0);
+        assert(pthread_mutex_unlock(&concurrent_gate.mutex) == 0);
+    }
+    return NULL;
+}
+
+static void
+test_unrelated_session_overtakes_held_backend(void)
+{
+    pthread_mutex_t state_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_t slow_thread;
+    pthread_t fast_thread;
+    ConcurrentRequest slow;
+    ConcurrentRequest fast;
+    struct timespec deadline;
+    int fast_overtook;
+
+    reset();
+    assert(fake_create("/slow", ASTRA_VFS_KIND_FILE) != NULL);
+    assert(fake_create("/fast", ASTRA_VFS_KIND_FILE) != NULL);
+    assert(pthread_mutex_init(&concurrent_gate.mutex, NULL) == 0);
+    assert(pthread_cond_init(&concurrent_gate.changed, NULL) == 0);
+    concurrent_gate.enabled = 1;
+    concurrent_gate.slow_entered = 0;
+    concurrent_gate.release_slow = 0;
+    concurrent_gate.fast_finished = 0;
+    assert(astra_vfs_service_set_state_lock(
+        &service, test_lock_acquire, test_lock_release, &state_mutex));
+    slow.session = open_session();
+    slow.path = "/slow";
+    fast.session = open_session();
+    fast.path = "/fast";
+
+    assert(pthread_create(&slow_thread, NULL, run_stat, &slow) == 0);
+    assert(pthread_mutex_lock(&concurrent_gate.mutex) == 0);
+    while (!concurrent_gate.slow_entered)
+        assert(pthread_cond_wait(&concurrent_gate.changed,
+                                 &concurrent_gate.mutex) == 0);
+    assert(pthread_mutex_unlock(&concurrent_gate.mutex) == 0);
+    assert(pthread_create(&fast_thread, NULL, run_stat, &fast) == 0);
+
+    assert(timespec_get(&deadline, TIME_UTC) == TIME_UTC);
+    ++deadline.tv_sec;
+    assert(pthread_mutex_lock(&concurrent_gate.mutex) == 0);
+    while (!concurrent_gate.fast_finished) {
+        if (pthread_cond_timedwait(&concurrent_gate.changed,
+                                   &concurrent_gate.mutex, &deadline) != 0)
+            break;
+    }
+    fast_overtook = concurrent_gate.fast_finished;
+    concurrent_gate.release_slow = 1;
+    assert(pthread_cond_broadcast(&concurrent_gate.changed) == 0);
+    assert(pthread_mutex_unlock(&concurrent_gate.mutex) == 0);
+
+    assert(pthread_join(fast_thread, NULL) == 0);
+    assert(pthread_join(slow_thread, NULL) == 0);
+    assert(fast_overtook);
+    assert(fast.reply.status == ASTRA_VFS_OK);
+    assert(slow.reply.status == ASTRA_VFS_OK);
+    assert(pthread_cond_destroy(&concurrent_gate.changed) == 0);
+    assert(pthread_mutex_destroy(&concurrent_gate.mutex) == 0);
+    assert(pthread_mutex_destroy(&state_mutex) == 0);
+}
+
+typedef struct ConcurrentRead {
+    uint32_t session;
+    AstraVfsFile file;
+    AstraVfsReply reply;
+} ConcurrentRead;
+
+static void *
+run_read(void *context)
+{
+    ConcurrentRead *call = context;
+    AstraVfsRequest request;
+
+    begin_request(&request, call->session, NULL);
+    request.file = call->file;
+    request.length = 1u;
+    astra_vfs_service_dispatch(&service, ASTRA_VFS_OP_READ, &request,
+                               &call->reply);
+    return NULL;
+}
+
+static void
+test_session_release_waits_for_pinned_file(void)
+{
+    pthread_mutex_t state_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_t thread;
+    ConcurrentRead call;
+    AstraVfsRequest request;
+    AstraVfsReply reply;
+    FakeNode *slow;
+
+    reset();
+    slow = fake_create("/slow", ASTRA_VFS_KIND_FILE);
+    assert(slow != NULL);
+    assert(pthread_mutex_init(&concurrent_gate.mutex, NULL) == 0);
+    assert(pthread_cond_init(&concurrent_gate.changed, NULL) == 0);
+    concurrent_gate.enabled = 0;
+    concurrent_gate.slow_entered = 0;
+    concurrent_gate.release_slow = 0;
+    assert(astra_vfs_service_set_state_lock(
+        &service, test_lock_acquire, test_lock_release, &state_mutex));
+    call.session = open_session();
+    begin_request(&request, call.session, "/slow");
+    request.flags = ASTRA_VFS_OPEN_READ;
+    astra_vfs_service_dispatch(&service, ASTRA_VFS_OP_OPEN, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    call.file = reply.file;
+    concurrent_gate.enabled = 1;
+
+    assert(pthread_create(&thread, NULL, run_read, &call) == 0);
+    assert(pthread_mutex_lock(&concurrent_gate.mutex) == 0);
+    while (!concurrent_gate.slow_entered)
+        assert(pthread_cond_wait(&concurrent_gate.changed,
+                                 &concurrent_gate.mutex) == 0);
+    assert(pthread_mutex_unlock(&concurrent_gate.mutex) == 0);
+    astra_vfs_service_release_session(&service, call.session);
+    assert(fake.closes == 0u);
+
+    assert(pthread_mutex_lock(&concurrent_gate.mutex) == 0);
+    concurrent_gate.release_slow = 1;
+    assert(pthread_cond_broadcast(&concurrent_gate.changed) == 0);
+    assert(pthread_mutex_unlock(&concurrent_gate.mutex) == 0);
+    assert(pthread_join(thread, NULL) == 0);
+    assert(call.reply.status == ASTRA_VFS_OK);
+    assert(fake.closes == 1u);
+    assert(slow->open_count == 0);
+    assert(!astra_vfs_service_session_owned(&service, call.session, 0u));
+    assert(pthread_cond_destroy(&concurrent_gate.changed) == 0);
+    assert(pthread_mutex_destroy(&concurrent_gate.mutex) == 0);
+    assert(pthread_mutex_destroy(&state_mutex) == 0);
 }
 
 /* A session must be agreed before anything else is answered. */
@@ -723,11 +963,13 @@ test_client_through_transport(void)
     assert(client.session != ASTRA_VFS_SESSION_INVALID);
     assert(client.version == ASTRA_VFS_VERSION);
 
-    assert(astra_vfs_mkdir(&client, "/dir") == ASTRA_VFS_OK);
-    assert(astra_vfs_open(&client, "/dir/note.txt",
-                          ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE |
-                              ASTRA_VFS_OPEN_CREATE,
-                          &file, &size, &kind) == ASTRA_VFS_OK);
+    assert(astra_vfs_mkdir_mode(&client, "/dir", 0710u) == ASTRA_VFS_OK);
+    assert(fake_find("/dir")->mode == 0710u);
+    assert(astra_vfs_open_mode(&client, "/dir/note.txt",
+                               ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE |
+                                   ASTRA_VFS_OPEN_CREATE,
+                               0600u, &file, &size, &kind) == ASTRA_VFS_OK);
+    assert(fake_find("/dir/note.txt")->mode == 0600u);
     assert(astra_vfs_write(&client, file, 0u, text, sizeof(text) - 1u,
                            &moved) == ASTRA_VFS_OK);
     assert(moved == sizeof(text) - 1u);
@@ -743,6 +985,34 @@ test_client_through_transport(void)
     assert(moved == 4u);
     assert(memcmp(buffer, text, 4u) == 0);
     assert(astra_vfs_close(&client, file) == ASTRA_VFS_OK);
+    assert(astra_vfs_chmod(&client, "/dir/note.txt", 0640u) ==
+           ASTRA_VFS_OK);
+    assert(fake_find("/dir/note.txt")->mode == 0640u);
+    assert(astra_vfs_chmod(&client, "/dir/note.txt", 010000u) ==
+           ASTRA_VFS_ERR_INVALID);
+
+    {
+        FakeNode *link = fake_create("/note-link", ASTRA_VFS_KIND_FILE);
+        uint32_t length = 0u;
+        static const char target[] = "/dir/note.txt";
+
+        assert(link != NULL);
+        memcpy(link->bytes, target, sizeof(target) - 1u);
+        link->size = sizeof(target) - 1u;
+        memset(buffer, 0, sizeof(buffer));
+        assert(astra_vfs_readlink(&client, "/note-link", buffer,
+                                  sizeof(buffer), &length) == ASTRA_VFS_OK);
+        assert(length == sizeof(target) - 1u);
+        assert(memcmp(buffer, target, length) == 0);
+        client.version = UINT16_C(13);
+        assert(astra_vfs_readlink(&client, "/note-link", buffer,
+                                  sizeof(buffer), &length) ==
+               ASTRA_VFS_ERR_UNSUPPORTED);
+        assert(astra_vfs_mkdir_mode(&client, "/old", 0700u) ==
+               ASTRA_VFS_ERR_UNSUPPORTED);
+        client.version = ASTRA_VFS_VERSION;
+        link->used = 0;
+    }
 
     assert(astra_vfs_open(&client, "/dir/note.txt",
                           ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_APPEND,
@@ -899,6 +1169,8 @@ main(void)
     test_limits();
     test_file_storage_budget();
     test_client_through_transport();
+    test_unrelated_session_overtakes_held_backend();
+    test_session_release_waits_for_pinned_file();
     puts("astra vfs service core: PASS");
     return 0;
 }

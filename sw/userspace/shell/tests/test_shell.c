@@ -273,6 +273,23 @@ static void test_parse_prompt_dispatch(void)
     assert(seen == 2 && result == 7);
 }
 
+static void test_vim_arguments(void)
+{
+    astra_shell_words_t words;
+    static const char *const expected[] = {
+        "vim", "-R", "+42", "--cmd", "set number", "--",
+        "WORK:notes.txt"
+    };
+
+    assert(astra_shell_parse_plain(
+               "vim -R +42 --cmd \"set number\" -- WORK:notes.txt",
+               &words) == ASTRA_SHELL_OK);
+    assert(words.argc == (int)(sizeof(expected) / sizeof(expected[0])));
+    for (int index = 0; index < words.argc; ++index)
+        assert(strcmp(words.argv[index], expected[index]) == 0);
+    assert(words.argv[words.argc] == NULL);
+}
+
 int main(void)
 {
     test_editor();
@@ -282,6 +299,7 @@ int main(void)
     test_variables();
     test_expansion();
     test_assignments();
+    test_vim_arguments();
     puts("astra shell core: PASS");
     return 0;
 }

@@ -28,13 +28,15 @@ HEADERS := include/astra/event_store.h include/astra/event_backend.h \
 	../../include/astra/event.h ../../include/astra/event_descriptor.h
 
 TARGET := build/m68k/libastraevents.a
-TARGET_OBJECTS := build/m68k/event_store.o build/m68k/event_backend.o \
-	build/m68k/event_persist.o build/m68k/crc32.o
+SOURCES := src/event_store.c src/event_backend.c src/event_persist.c
+TARGET_OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(SOURCES)) \
+	build/m68k/crc32.o
+ANALYZER_SOURCES := $(SOURCES) src/events_library.c
+ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,$(ANALYZER_SOURCES)) \
+	build/analyzer/common_crc32.o
 EVENTS_LIBRARY := build/m68k/libraries/events.library
-EVENTS_LIBRARY_OBJECTS := build/m68k/library/events_library.o \
-	build/m68k/library/runtime_log.o \
-	build/m68k/library/runtime_event_catalog.o \
-	build/m68k/library/runtime_syscall_asm.o
+EVENTS_LIBRARY_OBJECTS := build/m68k/library/events_library.o
+RUNTIME_PIC_LIB := $(RUNTIME)/build/m68k/libastrart-pic.a
 STORE_TEST := build/host/test_event_store
 BACKEND_TEST := build/host/test_event_backend
 # The catalog reader comes along because an eviction is attributed by looking a
@@ -61,22 +63,15 @@ build/m68k/library/events_library.o: src/events_library.c \
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
-build/m68k/library/runtime_log.o: $(RUNTIME)/src/log.c
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
+$(RUNTIME_PIC_LIB):
+	$(MAKE) -C $(RUNTIME) pic
 
-build/m68k/library/runtime_event_catalog.o: $(RUNTIME)/src/event_catalog.c
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
-
-build/m68k/library/runtime_syscall_asm.o: $(RUNTIME)/src/m68k/syscall.S
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) -m68030 -msoft-float -fPIC $(DEPFLAGS) -c $< -o $@
-
-$(EVENTS_LIBRARY): $(EVENTS_LIBRARY_OBJECTS) $(RUNTIME)/astra_library.ld
+$(EVENTS_LIBRARY): $(EVENTS_LIBRARY_OBJECTS) $(RUNTIME_PIC_LIB) \
+		$(RUNTIME)/astra_library.ld
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(LIBRARY_LINK_FLAGS) \
-		-Wl,-soname,events.library.1 -o $@ $(EVENTS_LIBRARY_OBJECTS) -lgcc
+		-Wl,-soname,events.library.1 -o $@ $(EVENTS_LIBRARY_OBJECTS) \
+		$(RUNTIME_PIC_LIB) -lgcc
 
 library-contract: $(EVENTS_LIBRARY)
 	@python3 ../../../tools/library_info.py $(EVENTS_LIBRARY) | \
@@ -114,14 +109,17 @@ sanitize:
 		-o build/host/test_event_backend_sanitize
 	./build/host/test_event_backend_sanitize
 
-analyze:
-	@mkdir -p build/analyzer
+analyze: $(ANALYZER_OBJECTS)
+
+build/analyzer/%.o: src/%.c
+	@mkdir -p $(@D)
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
-		-c src/event_store.c -o build/analyzer/event_store.o
+		-c $< -o $@
+
+build/analyzer/common_crc32.o: ../../common/crc32.c
+	@mkdir -p $(@D)
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
-		-c src/event_persist.c -o build/analyzer/event_persist.o
-	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
-		-c src/event_backend.c -o build/analyzer/event_backend.o
+		-c $< -o $@
 
 # Header dependencies: a stale object compiled against an older ABI
 # constant is indistinguishable from a working one until it runs.

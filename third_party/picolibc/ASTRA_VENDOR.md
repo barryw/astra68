@@ -22,18 +22,25 @@ have meant committing to a Linux personality in the kernel.
 
 * `test/` — 47 MB of upstream's test suite. The build only descends into it
   when `-Dtests=true`, and those tests execute m68k binaries, which no host
-  here can do. Everything else is upstream, unmodified.
+  here can do.
 * `.github/`, `.git/` — CI and history, neither of which this repository is the
   right home for.
-* `scripts/cross-m68k-astra.txt` — **added**, the only Astra-specific file.
+* `scripts/cross-m68k-astra.txt` — **added** for the Astra CPU/float ABI.
   Upstream's `cross-m68k-linux-gnu.txt` targets `-march=68020` with the
   toolchain's default float ABI; Astra builds `-m68030 -msoft-float`. A libc
   built for a different float ABI links without a complaint and returns wrong
   answers, so this is a file rather than a flag somebody remembers to pass.
 
-**No upstream source file is patched.** A version bump is a re-vendor, not a
-merge. If that ever stops being true, the patch belongs here in this file with
-the reason it could not go upstream instead.
+* `libc/include/sys/_types.h` — removes the typedef cast from
+  `__SSIZE_MAX__`. The value and C type conversion are unchanged, while the
+  public `SSIZE_MAX` can now be used in a preprocessor `#if`, as portable
+  applications including Vim require.
+* `libc/include/sys/termios.h` — carries the conventional `ws_xpixel` and
+  `ws_ypixel` members in `struct winsize`; terminal applications use the same
+  four-field ioctl ABI as other POSIX systems.
+
+A version bump is a re-vendor, not a merge. Retained source differences are
+listed above so they cannot disappear into an installed sysroot.
 
 ## Building
 

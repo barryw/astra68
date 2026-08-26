@@ -14,11 +14,13 @@ explicitly says otherwise.
 | Start | End | Size | Owner | Access | State |
 |---|---|---:|---|---|---|
 | `0x00000000` | `0x00001FFF` | 8 KiB | Stage 0 reset alias | RO | Active while the reset overlay is selected |
-| `0x00000000` | `0x0003FFFF` | 256 KiB | System ROM low alias | RO | Active after the stage-0 handoff |
+| `0x00000000` | `0x0003FFFF` | 256 KiB | ULX3S system ROM low alias | RO | Active after the stage-0 handoff |
+| `0x00000000` | `0x0007FFFF` | 512 KiB | Arty-hosted system ROM low alias | RO | Implemented in QEMU |
 | `0x01FF8000` | `0x01FFFFFF` | 32 KiB | Bootstrap scratch BRAM | RWX | Implemented |
 | `0x02000000` | `0x03FFFFFF` | 32 MiB | SDRAM CPU aperture, ULX3S profile | RWX | Implemented |
 | `0x02000000` | `0x09FFFFFF` | 128 MiB | SDRAM CPU aperture, Arty-hosted profile | RWX | Implemented in QEMU |
-| `0xFFE00000` | `0xFFE3FFFF` | 256 KiB | System ROM aperture | RX | Alias of reserved SDRAM backing storage |
+| `0xFFE00000` | `0xFFE3FFFF` | 256 KiB | ULX3S system ROM aperture | RX | Alias of reserved SDRAM backing storage |
+| `0xFFE00000` | `0xFFE7FFFF` | 512 KiB | Arty-hosted system ROM aperture | RX | QEMU host memory; no PL or guest-RAM cost |
 | `0xFFF00000` | `0xFFF0FFFF` | 64 KiB | Vesta system and I/O | MMIO | Allocated |
 | `0xFFF10000` | `0xFFF1FFFF` | 64 KiB | Astraea DMA/blitter/copper | MMIO | Allocated |
 | `0xFFF20000` | `0xFFF2FFFF` | 64 KiB | Vega video | MMIO | Allocated |
@@ -31,9 +33,13 @@ The ROM payload occupies SDRAM controller offsets
 `0x03E00000..0x03E3FFFF`. The OS must reserve that backing range while the ROM
 aperture is in use.
 
-## ROM budget
+## ROM budgets
 
-The ROM is a fixed 256 KiB window decoded in RTL — `boot_memory_map.sv` compares
+The active Arty-hosted ROM is a 512 KiB QEMU memory region. It consumes ARM
+host memory, not FPGA BRAM or guest SDRAM, and ends below the Vesta MMIO
+aperture at `0xFFF00000`.
+
+The legacy ULX3S ROM is a fixed 256 KiB window decoded in RTL — `boot_memory_map.sv` compares
 `address[31:18]` for both the low alias and the `0xFFE00000` aperture, and the
 SDRAM backing translation adds an 18-bit offset to `0x01E00000`. Enlarging it is
 a bitstream change and therefore a timing-closure re-qualification, so the

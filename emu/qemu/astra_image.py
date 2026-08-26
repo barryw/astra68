@@ -30,7 +30,7 @@ REPOSITORY = os.path.dirname(
 
 CATALOG_NAME = "astra_events.cat"
 DEFAULT_CATALOG = os.path.join(
-    REPOSITORY, "sw/userspace/supervisor/build/m68k/astra_events.cat")
+    REPOSITORY, "sw/userspace/build/m68k/astra_events.cat")
 
 COMMANDS_DIRECTORY = "commands"
 # The writable member of COMMANDS:, and the reason it exists in this gate: a
@@ -40,6 +40,7 @@ LOCAL_COMMANDS_DIRECTORY = "local/commands"
 DEFAULT_COMMANDS = os.path.join(REPOSITORY, "sw/userspace/commands/build/m68k")
 SERVICES_DIRECTORY = "services"
 LIBS_DIRECTORY = "libs"
+TERMINFO_DIRECTORY = "terminfo"
 APPS_DIRECTORY = "apps"
 STARTUP_DIRECTORY = "startup"
 STARTUP_NAME = "system"
@@ -47,6 +48,9 @@ DEFAULT_SERVICES = os.path.join(
     REPOSITORY, "sw/userspace/services")
 DEFAULT_KITS = os.path.join(REPOSITORY, "sw/userspace/kits/build")
 DEFAULT_APPS = os.path.join(REPOSITORY, "sw/userspace/apps/build")
+DEFAULT_TERMINFO = os.path.join(
+    REPOSITORY,
+    "sw/userspace/terminal/build/terminfo/a/astra-256color")
 KIT_BUNDLES = ("Graphics.kit", "Filesystem.kit", "Interface.kit",
                "Events.kit", "Messaging.kit")
 APPLICATION_BUNDLES = ("Terminal.app",)
@@ -247,7 +251,7 @@ def _install_bundle(volume, source, destination):
 
 
 def install(image, catalog=None, commands=None, services=None, kits=None,
-            apps=None,
+            apps=None, terminfo=None,
             service_names=DISPLAY_SERVICES,
             manifest_text=STARTUP_MANIFEST):
     """Writes this build's catalog and commands into the image's volume.
@@ -268,9 +272,13 @@ def install(image, catalog=None, commands=None, services=None, kits=None,
     services = services or DEFAULT_SERVICES
     kits = kits or DEFAULT_KITS
     apps = apps or DEFAULT_APPS
+    terminfo = terminfo or DEFAULT_TERMINFO
     if not os.path.exists(catalog):
         raise RuntimeError("no catalog at %s -- build the supervisor first" %
                            catalog)
+    if not os.path.isfile(terminfo):
+        raise RuntimeError("no astra-256color terminfo at %s -- build the "
+                           "terminal first" % terminfo)
     built = _commands(commands)
     service_images = _services(services, service_names)
     kit_bundles = _bundles(kits, KIT_BUNDLES)
@@ -310,6 +318,16 @@ def install(image, catalog=None, commands=None, services=None, kits=None,
 
         _mkdir(volume, "/%s" % LIBS_DIRECTORY,
                "the shared Kit directory")
+        terminfo_directory = "/%s/%s" % (LIBS_DIRECTORY,
+                                           TERMINFO_DIRECTORY)
+        _mkdir(volume, terminfo_directory, "the terminfo directory")
+        terminfo_letter = terminfo_directory + "/a"
+        _mkdir(volume, terminfo_letter, "the terminfo letter directory")
+        terminfo_target = terminfo_letter + "/astra-256color"
+        _debugfs(volume, "rm %s" % terminfo_target,
+                 "the old astra-256color terminfo", optional=True)
+        _debugfs(volume, "write %s %s" % (terminfo, terminfo_target),
+                 "the astra-256color terminfo")
         for bundle in kit_bundles:
             _install_bundle(volume, bundle,
                             "/%s/%s" % (LIBS_DIRECTORY,

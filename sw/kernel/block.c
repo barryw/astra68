@@ -103,21 +103,17 @@ static void reset_stats(void)
     block_stats.revoked_requests = 0u;
 }
 
-static KernelBlockHandle make_handle(uint32_t index, uint16_t generation)
-{
-    return ((uint32_t)generation << 16) | (index + 1u);
-}
-
 static KernelBlockSlot *lookup_slot(KernelBlockHandle handle)
 {
-    uint32_t encoded_index = handle & 0xffffu;
-    uint16_t generation = (uint16_t)(handle >> 16);
+    uint32_t index;
+    uint16_t generation;
     KernelBlockSlot *slot;
 
-    if (!initialized || encoded_index == 0u ||
-        encoded_index > KERNEL_BLOCK_MAX_REQUESTS || generation == 0u)
+    if (!initialized ||
+        !kernel_handle16_decode(handle, KERNEL_BLOCK_MAX_REQUESTS,
+                                &index, &generation))
         return NULL;
-    slot = &slots[encoded_index - 1u];
+    slot = &slots[index];
     if (slot->state == KERNEL_BLOCK_REQUEST_FREE ||
         slot->generation != generation)
         return NULL;
@@ -264,7 +260,8 @@ KernelBlockStatus kernel_block_submit(uint32_t owner, uint8_t operation,
 
     slot->generation = (uint16_t)kernel_generation_next_masked(
         slot->generation, UINT16_MAX);
-    handle = make_handle((uint32_t)(slot - slots), slot->generation);
+    handle = kernel_handle16_make((uint32_t)(slot - slots),
+                                  slot->generation);
     clear_token(&token);
     if (has_dma) {
         KernelDmaStatus dma_status = kernel_dma_begin(

@@ -296,6 +296,12 @@ typedef struct KernelSchedulerStats {
     uint32_t ring_consumer_notifications;
     uint32_t ring_wait_wakeups;
     uint32_t ring_peer_closures;
+    uint32_t ring_copy_reads;
+    uint32_t ring_copy_writes;
+    uint32_t ring_copy_read_bytes;
+    uint32_t ring_copy_write_bytes;
+    uint32_t ring_copy_max_cycles;
+    uint32_t ring_copy_cycle_overruns;
     uint32_t irq_wake_to_run_max_cycles;
     uint8_t milestone_complete;
     uint8_t reserved[3];
@@ -435,7 +441,8 @@ KernelProcessStatus kernel_process_launch(
     const KernelHandleTable *source_table,
     const KernelProcessBootstrapCapability *capabilities,
     uint32_t capability_count, const AstraLaunchArguments *arguments,
-    const char *environment, uint32_t *process_id);
+    const char *argument_bytes, const char *environment,
+    uint32_t *process_id);
 /* Names the process loaded from the firmware-supplied image. */
 void kernel_process_register_initial_image(uint32_t process_id);
 KernelProcessStatus kernel_process_create_thread(uint32_t process_id,
@@ -521,7 +528,8 @@ typedef enum KernelProcessFaultKind {
      * never given -- and saying so beats leaving a reader to recognise the
      * range by eye.
      */
-    KERNEL_PROCESS_FAULT_AREA_WINDOW
+    KERNEL_PROCESS_FAULT_AREA_WINDOW,
+    KERNEL_PROCESS_FAULT_PRIVATE_WINDOW
 } KernelProcessFaultKind;
 
 /*

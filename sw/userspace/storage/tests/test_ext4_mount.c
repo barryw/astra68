@@ -19,6 +19,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <stdint.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,6 +45,7 @@
 #define MANY_FILES 200u
 
 static uint8_t *storage;
+static uint8_t *durable_storage;
 static size_t storage_bytes;
 static uint8_t sector_buffer[SECTOR_SIZE];
 
@@ -82,6 +84,148 @@ static AstraMemoryBlock memory;
 static AstraFileBlock file_backing;
 static AstraBlockDevice device;
 static AstraExt4Port port;
+
+typedef struct ControlledBlock {
+    pthread_mutex_t mutex;
+    pthread_cond_t changed;
+    uint64_t reads;
+    int hold_next_read;
+    int read_entered;
+    int release_read;
+} ControlledBlock;
+
+static ControlledBlock controlled = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .changed = PTHREAD_COND_INITIALIZER,
+};
+
+static AstraBlockStatus
+controlled_query(void *context, AstraBlockGeometry *geometry)
+{
+    (void)context;
+    return astra_memory_block_backend.query(&memory, geometry);
+}
+
+static AstraBlockStatus
+controlled_read(void *context, uint64_t lba, uint32_t count, void *buffer,
+                uint64_t deadline)
+{
+    (void)context;
+    if (pthread_mutex_lock(&controlled.mutex) != 0)
+        abort();
+    ++controlled.reads;
+    if (controlled.hold_next_read) {
+        controlled.hold_next_read = 0;
+        controlled.read_entered = 1;
+        (void)pthread_cond_broadcast(&controlled.changed);
+        while (!controlled.release_read)
+            (void)pthread_cond_wait(&controlled.changed, &controlled.mutex);
+    }
+    if (pthread_mutex_unlock(&controlled.mutex) != 0)
+        abort();
+    return astra_memory_block_backend.read(&memory, lba, count, buffer,
+                                           deadline);
+}
+
+static AstraBlockStatus
+controlled_write(void *context, uint64_t lba, uint32_t count,
+                 const void *buffer, uint64_t deadline)
+{
+    (void)context;
+    return astra_memory_block_backend.write(&memory, lba, count, buffer,
+                                            deadline);
+}
+
+static AstraBlockStatus
+controlled_flush(void *context, uint64_t deadline)
+{
+    AstraBlockStatus status;
+
+    (void)context;
+    status = astra_memory_block_backend.flush(&memory, deadline);
+    if (status == ASTRA_BLOCK_OK && durable_storage != NULL) {
+        memcpy(durable_storage, storage, storage_bytes);
+    }
+    return status;
+}
+
+static const AstraBlockBackend controlled_backend = {
+    .query = controlled_query,
+    .read = controlled_read,
+    .write = controlled_write,
+    .flush = controlled_flush,
+};
+
+static pthread_rwlock_t mount_lock = PTHREAD_RWLOCK_INITIALIZER;
+static pthread_mutex_t cache_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t fill_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void
+host_mount_lock(void)
+{
+    if (pthread_rwlock_wrlock(&mount_lock) != 0)
+        abort();
+}
+
+static void
+host_mount_unlock(void)
+{
+    if (pthread_rwlock_unlock(&mount_lock) != 0)
+        abort();
+}
+
+static void
+host_read_lock(void)
+{
+    if (pthread_rwlock_rdlock(&mount_lock) != 0)
+        abort();
+}
+
+static void
+host_read_unlock(void)
+{
+    if (pthread_rwlock_unlock(&mount_lock) != 0)
+        abort();
+}
+
+static void
+host_cache_lock(void)
+{
+    if (pthread_mutex_lock(&cache_lock) != 0)
+        abort();
+}
+
+static void
+host_cache_unlock(void)
+{
+    if (pthread_mutex_unlock(&cache_lock) != 0)
+        abort();
+}
+
+static void
+host_fill_lock(void)
+{
+    if (pthread_mutex_lock(&fill_lock) != 0)
+        abort();
+}
+
+static void
+host_fill_unlock(void)
+{
+    if (pthread_mutex_unlock(&fill_lock) != 0)
+        abort();
+}
+
+static const struct ext4_lock host_mount_locks = {
+    .lock = host_mount_lock,
+    .unlock = host_mount_unlock,
+    .read_lock = host_read_lock,
+    .read_unlock = host_read_unlock,
+    .cache_lock = host_cache_lock,
+    .cache_unlock = host_cache_unlock,
+    .fill_lock = host_fill_lock,
+    .fill_unlock = host_fill_unlock,
+};
 
 /*
  * "on-file" mode keeps the volume on disk instead of in RAM. It exists for one
@@ -189,16 +333,10 @@ load_image(const char *path)
  * understanding Astra's partition layout.
  */
 static int
-store_image(const char *path)
+store_bytes(const char *path, const uint8_t *from, size_t bytes)
 {
     FILE *image = fopen(path, "wb");
-    const uint8_t *from = storage;
-    size_t bytes = storage_bytes;
 
-    if (partitioned) {
-        from = storage + (size_t)volume_first_sector * SECTOR_SIZE;
-        bytes = storage_bytes - (size_t)volume_first_sector * SECTOR_SIZE;
-    }
     if (image == NULL) {
         return fail("fopen image for write", 0);
     }
@@ -210,6 +348,19 @@ store_image(const char *path)
         return fail("fclose image", 0);
     }
     return 0;
+}
+
+static int
+store_image(const char *path)
+{
+    const uint8_t *from = storage;
+    size_t bytes = storage_bytes;
+
+    if (partitioned) {
+        from = storage + (size_t)volume_first_sector * SECTOR_SIZE;
+        bytes = storage_bytes - (size_t)volume_first_sector * SECTOR_SIZE;
+    }
+    return store_bytes(path, from, bytes);
 }
 
 /*
@@ -376,7 +527,7 @@ bring_up(void)
         astra_memory_block_init(&memory, storage, storage_bytes, SECTOR_SIZE,
                                 MAX_TRANSFER_SECTORS,
                                 ASTRA_BLOCK_FLAG_PRESENT);
-        astra_block_device_init(&device, &astra_memory_block_backend, &memory,
+        astra_block_device_init(&device, &controlled_backend, &controlled,
                                 nanoseconds, NULL);
     }
     if (astra_block_query(&device, &geometry) != ASTRA_BLOCK_OK) {
@@ -409,6 +560,10 @@ do_mount(void)
     rc = ext4_mount("astra", MOUNT_POINT, false);
     if (rc != EOK) {
         return fail("ext4_mount", rc);
+    }
+    rc = ext4_mount_setup_locks(MOUNT_POINT, &host_mount_locks);
+    if (rc != EOK) {
+        return fail("ext4_mount_setup_locks", rc);
     }
     rc = ext4_recover(MOUNT_POINT);
     if (rc != EOK && rc != ENOTSUP) {
@@ -447,7 +602,7 @@ static int
 write_file(const char *path, unsigned index, unsigned bytes)
 {
     ext4_file file;
-    static uint8_t chunk[4096];
+    uint8_t chunk[4096];
     size_t written = 0u;
     unsigned offset = 0u;
     int rc = ext4_fopen(&file, path, "wb");
@@ -593,6 +748,57 @@ read_verify(const char *path, unsigned index, unsigned bytes)
     return 0;
 }
 
+static uint64_t
+controlled_read_count(void)
+{
+    uint64_t reads;
+
+    if (pthread_mutex_lock(&controlled.mutex) != 0)
+        abort();
+    reads = controlled.reads;
+    if (pthread_mutex_unlock(&controlled.mutex) != 0)
+        abort();
+    return reads;
+}
+
+static int
+check_coalesced_read_cache(void)
+{
+    enum { RUN_BYTES = 3u * 4096u };
+    static uint8_t bytes[RUN_BYTES];
+    ext4_file file;
+    uint64_t before;
+    uint64_t after_first;
+    size_t moved = 0u;
+    int rc;
+
+    if (do_umount() || do_mount())
+        return 1;
+    rc = ext4_fopen(&file, MOUNT_POINT "dir/nested/big.bin", "rb");
+    if (rc != EOK)
+        return fail("coalesced cache open", rc);
+    before = controlled_read_count();
+    rc = ext4_fread(&file, bytes, sizeof(bytes), &moved);
+    after_first = controlled_read_count();
+    if (rc != EOK || moved != sizeof(bytes) || after_first == before)
+        return fail("coalesced cache cold read", rc);
+    for (uint32_t at = 0u; at < sizeof(bytes); ++at) {
+        if (bytes[at] != pattern_byte(2u, at))
+            return fail("coalesced cache cold bytes", 0);
+    }
+    if (ext4_fseek(&file, 0, SEEK_SET) != EOK)
+        return fail("coalesced cache seek", 0);
+    before = controlled_read_count();
+    moved = 0u;
+    rc = ext4_fread(&file, bytes, sizeof(bytes), &moved);
+    if (rc != EOK || moved != sizeof(bytes) ||
+        controlled_read_count() != before)
+        return fail("coalesced cache warm read issued I/O", rc);
+    (void)ext4_fclose(&file);
+    puts("coalesced cache: warm contiguous read issued no I/O");
+    return 0;
+}
+
 static void
 many_path(char *out, size_t capacity, unsigned index)
 {
@@ -631,6 +837,16 @@ populate(void)
     if (rc != EOK) {
         return fail("ext4_dir_rm remove-me", rc);
     }
+    rc = ext4_dir_mk_mode(MOUNT_POINT "mode-dir", 0710u);
+    if (rc != EOK)
+        return fail("ext4_dir_mk_mode", rc);
+    rc = ext4_fopen2_mode(&exclusive, MOUNT_POINT "mode-file",
+                          O_WRONLY | O_CREAT | O_EXCL, 0600u);
+    if (rc != EOK)
+        return fail("ext4_fopen2_mode", rc);
+    rc = ext4_fclose(&exclusive);
+    if (rc != EOK)
+        return fail("ext4_fclose(mode-file)", rc);
 
     if (write_file(MOUNT_POINT "hello.txt", 1u, 37u)) {
         return 1;
@@ -697,6 +913,17 @@ verify(void)
     unsigned index;
     ext4_file probe;
     int rc;
+
+    {
+        uint32_t mode = 0u;
+
+        rc = ext4_mode_get(MOUNT_POINT "mode-dir", &mode);
+        if (rc != EOK || (mode & 07777u) != 0710u)
+            return fail("creation mode directory", rc);
+        rc = ext4_mode_get(MOUNT_POINT "mode-file", &mode);
+        if (rc != EOK || (mode & 07777u) != 0600u)
+            return fail("creation mode file", rc);
+    }
 
     if (read_verify(MOUNT_POINT "dir/renamed.txt", 1u, 37u)) {
         return 1;
@@ -849,6 +1076,206 @@ verify(void)
     return 0;
 }
 
+typedef struct ReadJob {
+    ext4_file *file;
+    uint8_t byte;
+    size_t moved;
+    int rc;
+    int done;
+} ReadJob;
+
+typedef struct WriteJob {
+    const char *path;
+    unsigned index;
+    unsigned bytes;
+    int failed;
+} WriteJob;
+
+static void *
+write_disjoint(void *argument)
+{
+    WriteJob *job = argument;
+
+    job->failed = write_file(job->path, job->index, job->bytes);
+    return NULL;
+}
+
+static int
+check_concurrent_disjoint_writes(void)
+{
+    WriteJob left = {MOUNT_POINT "concurrent-left.bin", 210u, 8192u, 0};
+    WriteJob right = {MOUNT_POINT "concurrent-right.bin", 211u, 8192u, 0};
+    pthread_t left_thread;
+    pthread_t right_thread;
+
+    if (pthread_create(&left_thread, NULL, write_disjoint, &left) != 0 ||
+        pthread_create(&right_thread, NULL, write_disjoint, &right) != 0)
+        return fail("pthread_create disjoint writers", 0);
+    (void)pthread_join(left_thread, NULL);
+    (void)pthread_join(right_thread, NULL);
+    if (left.failed || right.failed ||
+        read_verify(left.path, left.index, left.bytes) ||
+        read_verify(right.path, right.index, right.bytes))
+        return fail("concurrent disjoint writes", 0);
+    puts("concurrency oracle: disjoint writes survived readback");
+    return 0;
+}
+
+static void *
+read_one(void *argument)
+{
+    ReadJob *job = argument;
+
+    job->rc = ext4_fread(job->file, &job->byte, 1u, &job->moved);
+    if (pthread_mutex_lock(&controlled.mutex) != 0)
+        abort();
+    job->done = 1;
+    (void)pthread_cond_broadcast(&controlled.changed);
+    if (pthread_mutex_unlock(&controlled.mutex) != 0)
+        abort();
+    return NULL;
+}
+
+static struct timespec
+realtime_after_ms(long milliseconds)
+{
+    struct timespec deadline;
+
+    if (clock_gettime(CLOCK_REALTIME, &deadline) != 0)
+        abort();
+    deadline.tv_nsec += milliseconds * 1000000L;
+    deadline.tv_sec += deadline.tv_nsec / 1000000000L;
+    deadline.tv_nsec %= 1000000000L;
+    return deadline;
+}
+
+/*
+ * A is held inside a physical cache fill. B's unrelated byte is warm, so it
+ * must finish without waiting for A and without issuing another device read.
+ */
+static int
+check_concurrent_read_oracle(void)
+{
+    ext4_file a;
+    ext4_file a_second;
+    ext4_file b;
+    ReadJob a_job = {.file = &a};
+    ReadJob a_second_job = {.file = &a_second};
+    ReadJob b_job = {.file = &b};
+    pthread_t a_thread;
+    pthread_t a_second_thread;
+    pthread_t b_thread;
+    struct timespec deadline;
+    uint8_t warm = 0u;
+    size_t moved = 0u;
+    uint64_t reads_at_stall;
+    int rc;
+
+    if (do_umount() || do_mount())
+        return 1;
+    rc = ext4_fopen(&a, MOUNT_POINT "dir/renamed.txt", "rb");
+    if (rc != EOK)
+        return fail("concurrency open A", rc);
+    rc = ext4_fopen(&b, MOUNT_POINT "dir/Case.dat", "rb");
+    if (rc != EOK)
+        return fail("concurrency open B", rc);
+    rc = ext4_fopen(&a_second, MOUNT_POINT "dir/renamed.txt", "rb");
+    if (rc != EOK)
+        return fail("concurrency open second A", rc);
+    rc = ext4_fread(&b, &warm, 1u, &moved);
+    if (rc != EOK || moved != 1u ||
+        warm != pattern_byte(3u, 0u) || ext4_fseek(&b, 0, SEEK_SET) != EOK)
+        return fail("concurrency warm B", rc);
+
+    if (pthread_mutex_lock(&controlled.mutex) != 0)
+        abort();
+    controlled.hold_next_read = 1;
+    controlled.read_entered = 0;
+    controlled.release_read = 0;
+    if (pthread_mutex_unlock(&controlled.mutex) != 0)
+        abort();
+
+    if (pthread_create(&a_thread, NULL, read_one, &a_job) != 0)
+        return fail("pthread_create A", 0);
+    if (pthread_mutex_lock(&controlled.mutex) != 0)
+        abort();
+    deadline = realtime_after_ms(5000L);
+    while (!controlled.read_entered &&
+           pthread_cond_timedwait(&controlled.changed, &controlled.mutex,
+                                  &deadline) == 0) {
+    }
+    if (!controlled.read_entered) {
+        controlled.release_read = 1;
+        (void)pthread_cond_broadcast(&controlled.changed);
+        (void)pthread_mutex_unlock(&controlled.mutex);
+        (void)pthread_join(a_thread, NULL);
+        return fail("A did not reach physical read", 0);
+    }
+    reads_at_stall = controlled.reads;
+    if (pthread_mutex_unlock(&controlled.mutex) != 0)
+        abort();
+
+    if (pthread_create(&b_thread, NULL, read_one, &b_job) != 0)
+        return fail("pthread_create B", 0);
+    if (pthread_mutex_lock(&controlled.mutex) != 0)
+        abort();
+    deadline = realtime_after_ms(5000L);
+    while (!b_job.done &&
+           pthread_cond_timedwait(&controlled.changed, &controlled.mutex,
+                                  &deadline) == 0) {
+    }
+    if (!b_job.done || controlled.reads != reads_at_stall) {
+        controlled.release_read = 1;
+        (void)pthread_cond_broadcast(&controlled.changed);
+        (void)pthread_mutex_unlock(&controlled.mutex);
+        (void)pthread_join(a_thread, NULL);
+        (void)pthread_join(b_thread, NULL);
+        return fail("cached B did not overtake stalled A", 0);
+    }
+    if (pthread_mutex_unlock(&controlled.mutex) != 0)
+        abort();
+
+    if (pthread_create(&a_second_thread, NULL, read_one, &a_second_job) != 0)
+        return fail("pthread_create second A", 0);
+    if (pthread_mutex_lock(&controlled.mutex) != 0)
+        abort();
+    deadline = realtime_after_ms(100L);
+    while (!a_second_job.done &&
+           pthread_cond_timedwait(&controlled.changed, &controlled.mutex,
+                                  &deadline) == 0) {
+    }
+    if (a_second_job.done || controlled.reads != reads_at_stall) {
+        controlled.release_read = 1;
+        (void)pthread_cond_broadcast(&controlled.changed);
+        (void)pthread_mutex_unlock(&controlled.mutex);
+        (void)pthread_join(a_thread, NULL);
+        (void)pthread_join(a_second_thread, NULL);
+        (void)pthread_join(b_thread, NULL);
+        return fail("same-block miss was not coalesced", 0);
+    }
+    controlled.release_read = 1;
+    (void)pthread_cond_broadcast(&controlled.changed);
+    if (pthread_mutex_unlock(&controlled.mutex) != 0)
+        abort();
+    (void)pthread_join(a_thread, NULL);
+    (void)pthread_join(a_second_thread, NULL);
+    (void)pthread_join(b_thread, NULL);
+
+    if (a_job.rc != EOK || a_job.moved != 1u ||
+        a_job.byte != pattern_byte(1u, 0u) || a_second_job.rc != EOK ||
+        a_second_job.moved != 1u ||
+        a_second_job.byte != pattern_byte(1u, 0u) || b_job.rc != EOK ||
+        b_job.moved != 1u || b_job.byte != pattern_byte(3u, 0u))
+        return fail("concurrency oracle bytes", a_job.rc);
+    if (controlled.reads != reads_at_stall + 1u)
+        return fail("same-block miss issued duplicate I/O", 0);
+    (void)ext4_fclose(&a);
+    (void)ext4_fclose(&a_second);
+    (void)ext4_fclose(&b);
+    puts("concurrency oracle: cached B overtook stalled A without I/O");
+    return 0;
+}
+
 static void
 report(void)
 {
@@ -908,18 +1335,22 @@ main(int argc, char **argv)
      */
     int verify_only;
     int full_volume;
+    int powercut_write;
+    int powercut_recover;
 
     setvbuf(stdout, NULL, _IONBF, 0);
 
     if (argc < 2) {
-        printf("usage: %s <image> [verify-only|partitioned|on-file|full]\n",
-               argv[0]);
+        printf("usage: %s <image> [verify-only|partitioned|on-file|full|"
+               "powercut-write|powercut-recover]\n", argv[0]);
         return 2;
     }
     verify_only = argc > 2 && strcmp(argv[2], "verify-only") == 0;
     partitioned = argc > 2 && strcmp(argv[2], "partitioned") == 0;
     on_file = argc > 2 && strcmp(argv[2], "on-file") == 0;
     full_volume = argc > 2 && strcmp(argv[2], "full") == 0;
+    powercut_write = argc > 2 && strcmp(argv[2], "powercut-write") == 0;
+    powercut_recover = argc > 2 && strcmp(argv[2], "powercut-recover") == 0;
 
     if (getenv("ASTRA_EXT4_DEBUG") != NULL) {
         ext4_dmask_set(DEBUG_ALL);
@@ -933,6 +1364,13 @@ main(int argc, char **argv)
     } else if (load_image(argv[1])) {
         return 1;
     }
+    if (powercut_write) {
+        durable_storage = malloc(storage_bytes);
+        if (durable_storage == NULL) {
+            return fail("malloc durable image", 0);
+        }
+        memcpy(durable_storage, storage, storage_bytes);
+    }
     if (partitioned && build_partitioned_layout()) {
         return 1;
     }
@@ -945,12 +1383,31 @@ main(int argc, char **argv)
     if (do_mount()) {
         return 1;
     }
-    if (verify_only) {
-        verify();
+    if (powercut_write) {
+        if (write_file(MOUNT_POINT "powercut.bin", 220u, 16384u) == 0 &&
+            store_bytes(argv[1], durable_storage, storage_bytes) == 0) {
+            puts("power-cut oracle: persisted only device-flushed bytes");
+        }
+        free(durable_storage);
+        free(storage);
+        return failures != 0;
+    }
+    if (powercut_recover) {
+        (void)read_verify(MOUNT_POINT "powercut.bin", 220u, 16384u);
+    } else if (verify_only) {
+        if (verify() == 0) {
+            (void)read_verify(MOUNT_POINT "concurrent-left.bin", 210u,
+                              8192u);
+            (void)read_verify(MOUNT_POINT "concurrent-right.bin", 211u,
+                              8192u);
+        }
     } else if (full_volume) {
         (void)check_full_volume_reports_enospc();
     } else if (populate() == 0) {
-        verify();
+        if (verify() == 0 && !on_file &&
+            check_coalesced_read_cache() == 0 &&
+            check_concurrent_read_oracle() == 0)
+            (void)check_concurrent_disjoint_writes();
     }
     do_umount();
     report();

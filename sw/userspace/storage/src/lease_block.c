@@ -4,8 +4,6 @@
 #include <astra/runtime.h>
 #include <astra/syscall.h>
 
-#define LEASE_BLOCK_DEFAULT_TIMEOUT_NS 2000000000u
-
 /*
  * A bound on the drain loop, not the kernel's record ring depth, which is not
  * part of the syscall ABI. The loop ends when the endpoint reports it has no
@@ -47,6 +45,7 @@ astra_lease_block_geometry(const AstraBlockLeaseInfo *info,
     geometry->sector_count = info->sector_count;
     geometry->sector_size = info->sector_bytes;
     geometry->max_transfer_sectors = info->max_transfer_sectors;
+    geometry->queue_depth = info->queue_depth == 0u ? 1u : info->queue_depth;
     geometry->media_generation = info->media_generation;
     if ((info->state_flags & ASTRA_BLOCK_STATE_MEDIA_PRESENT) != 0u) {
         geometry->flags |= ASTRA_BLOCK_FLAG_PRESENT;
@@ -57,13 +56,6 @@ astra_lease_block_geometry(const AstraBlockLeaseInfo *info,
     }
     /* The transport reports removable media through its media generation. */
     geometry->flags |= ASTRA_BLOCK_FLAG_REMOVABLE;
-}
-
-static uint32_t
-timeout_of(const AstraLeaseBlock *lease)
-{
-    return lease->timeout_ns != 0u ? lease->timeout_ns :
-        LEASE_BLOCK_DEFAULT_TIMEOUT_NS;
 }
 
 /*
@@ -159,11 +151,10 @@ refused(AstraLeaseBlock *lease, AstraLeaseBlockSite site, uint32_t status)
 
 static AstraBlockStatus
 run_request(AstraLeaseBlock *lease, uint32_t operation, uint64_t lba,
-            uint32_t sector_count)
+            uint32_t sector_count, uint64_t deadline)
 {
     AstraBlockRequest request;
     AstraBlockCompletion completion;
-    uint64_t deadline;
     uint32_t block_request = 0u;
     uint32_t status;
 
@@ -203,7 +194,8 @@ run_request(AstraLeaseBlock *lease, uint32_t operation, uint64_t lba,
         return refused(lease, ASTRA_LEASE_BLOCK_SITE_SUBMIT, status);
     }
 
-    deadline = astra_clock_monotonic() + timeout_of(lease);
+    if (deadline == 0u)
+        deadline = ASTRA_DEADLINE_FOREVER;
     for (;;) {
         (void)memset(&completion, 0, sizeof(completion));
         status = astra_block_lease_collect(lease->device, block_request,
@@ -286,7 +278,6 @@ lease_read(void *context, uint64_t lba, uint32_t sector_count, void *buffer,
     AstraLeaseBlock *lease = context;
     AstraBlockStatus status;
 
-    (void)deadline;
     if (lease == NULL || buffer == NULL || sector_count == 0u) {
         return ASTRA_BLOCK_INVALID_ARGUMENT;
     }
@@ -294,7 +285,8 @@ lease_read(void *context, uint64_t lba, uint32_t sector_count, void *buffer,
         sector_count * lease->sector_bytes > lease->buffer_bytes) {
         return ASTRA_BLOCK_TRANSFER_TOO_LARGE;
     }
-    status = run_request(lease, ASTRA_BLOCK_OP_READ, lba, sector_count);
+    status = run_request(lease, ASTRA_BLOCK_OP_READ, lba, sector_count,
+                         deadline);
     if (status != ASTRA_BLOCK_OK) {
         return status;
     }
@@ -310,7 +302,6 @@ lease_write(void *context, uint64_t lba, uint32_t sector_count,
 {
     AstraLeaseBlock *lease = context;
 
-    (void)deadline;
     if (lease == NULL || buffer == NULL || sector_count == 0u) {
         return ASTRA_BLOCK_INVALID_ARGUMENT;
     }
@@ -320,7 +311,8 @@ lease_write(void *context, uint64_t lba, uint32_t sector_count,
     }
     (void)memcpy((void *)(uintptr_t)lease->buffer_base, buffer,
                  sector_count * lease->sector_bytes);
-    return run_request(lease, ASTRA_BLOCK_OP_WRITE, lba, sector_count);
+    return run_request(lease, ASTRA_BLOCK_OP_WRITE, lba, sector_count,
+                       deadline);
 }
 
 static AstraBlockStatus
@@ -328,11 +320,10 @@ lease_flush(void *context, uint64_t deadline)
 {
     AstraLeaseBlock *lease = context;
 
-    (void)deadline;
     if (lease == NULL) {
         return ASTRA_BLOCK_INVALID_ARGUMENT;
     }
-    return run_request(lease, ASTRA_BLOCK_OP_FLUSH, 0u, 0u);
+    return run_request(lease, ASTRA_BLOCK_OP_FLUSH, 0u, 0u, deadline);
 }
 
 static const AstraBlockBackend lease_backend = {

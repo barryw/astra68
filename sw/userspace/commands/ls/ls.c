@@ -54,17 +54,11 @@ copy_bytes(char *out, const char *bytes, size_t length)
 }
 
 static int
-write_all(uint32_t handle, const char *bytes, size_t length)
-{
-    return astra_stream_write_all(handle, bytes, (uint32_t)length) ==
-           ASTRA_SYSCALL_OK;
-}
-
-static int
 flush_output(void)
 {
     if (!output_failed && output_used != 0u &&
-        !write_all(stdout_handle, output_buffer, output_used))
+        astra_stream_write_all(stdout_handle, output_buffer,
+                               (uint32_t)output_used) != ASTRA_SYSCALL_OK)
         output_failed = 1;
     output_used = 0u;
     return !output_failed;
@@ -238,7 +232,8 @@ report_status(const char *path, uint32_t status, uint32_t after)
         at = append_text(output_line, at, " entries");
     }
     output_line[at++] = '\n';
-    return write_all(stderr_handle, output_line, at);
+    return astra_stream_write_all(stderr_handle, output_line, (uint32_t)at) ==
+           ASTRA_SYSCALL_OK;
 }
 
 static int
@@ -302,37 +297,30 @@ list(const char *path, int long_form, int all, const AstraTimeZone *zone)
 int
 astra_main(const AstraStartupInfo *startup)
 {
-    const AstraStartupCapability *capabilities;
+    const AstraStartupCapability *capability;
     AstraTimeZone zone = ASTRA_TIME_ZONE_UTC;
     char typed[ASTRA_VFS_PATH_MAX];
     uint64_t now_ns = 0u;
-    const uint32_t *argv = NULL;
     const char *path = NULL;
     int all = 0;
     int long_form = 0;
     int result;
     uint32_t status;
 
-    if (startup == NULL || startup->capabilities_address == 0u)
+    if (!astra_startup_validate(startup))
         return ASTRA_STATUS_INVALID;
-    capabilities = (const AstraStartupCapability *)(uintptr_t)
-        startup->capabilities_address;
-    for (uint32_t index = 0u; index < startup->capability_count; ++index) {
-        if (astra_capability_name_equal(capabilities[index].name, "STDOUT"))
-            stdout_handle = capabilities[index].handle;
-        else if (astra_capability_name_equal(capabilities[index].name,
-                                             "STDERR"))
-            stderr_handle = capabilities[index].handle;
-    }
+    capability = astra_startup_capability(startup, "STDOUT");
+    if (capability != NULL)
+        stdout_handle = capability->handle;
+    capability = astra_startup_capability(startup, "STDERR");
+    if (capability != NULL)
+        stderr_handle = capability->handle;
     if (stdout_handle == 0u)
         return ASTRA_STATUS_ACCESS;
     if (stderr_handle == 0u)
         stderr_handle = stdout_handle;
-    if (startup->argc != 0u && startup->argv_address != 0u)
-        argv = (const uint32_t *)(uintptr_t)startup->argv_address;
-    for (uint32_t index = 1u; argv != NULL && index < startup->argc;
-         ++index) {
-        const char *word = (const char *)(uintptr_t)argv[index];
+    for (uint32_t index = 1u; index < startup->argc; ++index) {
+        const char *word = astra_startup_argument(startup, index);
 
         if (word == NULL)
             continue;
@@ -346,8 +334,8 @@ astra_main(const AstraStartupInfo *startup)
                     char error[] = "ls: unknown option -?\n";
 
                     error[20] = word[at];
-                    (void)write_all(stderr_handle, error,
-                                    sizeof(error) - 1u);
+                    (void)astra_stream_write_all(stderr_handle, error,
+                                                 sizeof(error) - 1u);
                     return ASTRA_STATUS_INVALID;
                 }
             }

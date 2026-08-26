@@ -1,8 +1,8 @@
 #!/bin/sh
 ### BEGIN INIT INFO
 # Provides:          astra-firstboot
-# Required-Start:    $local_fs
-# Default-Start:     S
+# Required-Start:    $local_fs $network
+# Default-Start:     5
 # Default-Stop:
 # Short-Description: Prepare writable Astra state on a read-only root
 ### END INIT INFO
@@ -44,6 +44,24 @@ fi
 mountpoint -q /etc/ssh 2>/dev/null || mount --bind /data/ssh /etc/ssh
 
 mkdir -p /data/astra/log /data/astra/share
+
+# A power cycle leaves the Zynq at its build-time epoch. Astra reads the host
+# clock directly, so no graphics or guest process may start until NTP has set
+# Linux to a valid wall clock. This is a boot dependency, not a timeout: keep
+# waiting through link, DHCP, DNS, and server outages.
+time_sync=/data/astra/bin/astra-time-sync
+time_log=/data/astra/log/time-sync.log
+while :; do
+    if [ -x "$time_sync" ] &&
+       "$time_sync" "${ASTRA_NTP_SERVER:-pool.ntp.org}" >"$time_log" 2>&1;
+    then
+        epoch=$(date -u +%s 2>/dev/null || echo 0)
+        case "$epoch" in *[!0-9]*) epoch=0 ;; esac
+        [ "$epoch" -ge 1735689600 ] && break
+    fi
+    sleep 1
+done
+echo "[astra-firstboot] NTP synchronized"
 
 hdmi_link=/data/astra/bin/astra-hdmi-link
 hdmi_log=/data/astra/log/hdmi-link.log

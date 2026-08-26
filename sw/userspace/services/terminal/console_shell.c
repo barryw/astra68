@@ -19,8 +19,6 @@
 
 #include <console_shell.h>
 #include <console_stream.h>
-#include <loader.h>
-#include <volume.h>
 
 #include <astra/bytes.h>
 #include <astra/event_control.h>
@@ -29,19 +27,17 @@
 #include <astra/shell.h>
 #include <astra/shell_service.h>
 #include <astra/stream.h>
-#include <astra/supervisor.h>
 #include <astra/syscall.h>
 #include <astra/terminal.h>
 
 #include <astra/event_emit.h>
 #include <astra/vfs_assign.h>
-#include <vfs_host.h>
+#include <astra/vfs_process.h>
 
 /* A path the protocol will refuse to carry is not worth building. */
 #define SHELL_PATH_MAX ASTRA_VFS_PATH_MAX
 #define CONSOLE_INPUT_POLL_NS 10000000ull
 #define CONSOLE_PRESENT_NS 16666667ull
-#define CONSOLE_INPUT_PRESENT_NS 50000000ull
 
 /* The fallback stays small; normal command reads grow a shared transfer area. */
 #define SHELL_LOAD_FALLBACK_MAX (64u * 1024u)
@@ -63,6 +59,7 @@ typedef struct ConsoleShell {
      * carries a "last status" field of its own.
      */
     astra_shell_variables_t variables;
+    char launch_arguments[ASTRA_SHELL_LINE_CAPACITY];
     char launch_environment[ASTRA_LAUNCH_ENVIRONMENT_BYTES];
     const char *launch_environment_names[ASTRA_LAUNCH_ENVIRONMENT_MAX];
     const char *launch_environment_values[ASTRA_LAUNCH_ENVIRONMENT_MAX];
@@ -78,6 +75,8 @@ typedef struct ConsoleShell {
     uint32_t command_receive;
     uint32_t command_send;
     uint32_t launch_streams[3];
+    uint32_t pending_key;
+    uint8_t pending_key_valid;
     uint8_t launch_stream_override;
     uint64_t present_deadline;
     int running;
@@ -85,20 +84,6 @@ typedef struct ConsoleShell {
 
 static ConsoleShell shell;
 static uint8_t load_buffer[SHELL_LOAD_FALLBACK_MAX];
-
-static uint32_t shell_strlen(const char *text)
-{
-    uint32_t length = 0u;
-
-    while (text[length] != '\0')
-        ++length;
-    return length;
-}
-
-static uint32_t elapsed_us(uint64_t from, uint64_t to)
-{
-    return to > from ? (uint32_t)((to - from) / 1000u) : 0u;
-}
 
 /*
  * Every line the shell prints, into the machine's own record.
@@ -117,26 +102,14 @@ static void echo_line(void *context, const char *line, uint32_t length)
     (void)astra_log_debug(line, length);
 }
 
-static int shell_equal(const char *left, const char *right)
-{
-    uint32_t index = 0u;
-
-    while (left[index] != '\0' && right[index] != '\0') {
-        if (left[index] != right[index])
-            return 0;
-        ++index;
-    }
-    return left[index] == right[index];
-}
-
 static AstraFilesystem *filesystem(void)
 {
-    return shell.backend.filesystem;
+    return &shell.backend.process_filesystem->filesystem;
 }
 
 static const AstraFilesystemLibraryV1 *filesystem_library(void)
 {
-    return shell.backend.filesystem_library;
+    return shell.backend.process_filesystem->library;
 }
 
 static void write_line(const char *text)
@@ -288,7 +261,7 @@ static uint32_t command_write(int argc, char *const *argv)
     }
     for (index = 2; index < argc; ++index) {
         const char *word = argv[index];
-        uint32_t length = shell_strlen(word);
+        uint32_t length = (uint32_t)strlen(word);
         status = filesystem_library()->write(&file, word, length, &moved);
         if (status != ASTRA_VFS_OK || moved != length) {
             if (status != ASTRA_VFS_OK)
@@ -323,7 +296,7 @@ finish:
  */
 static uint32_t command_assign(int argc, char *const *argv)
 {
-    const AstraAssignTable *table = supervisor_assigns();
+    const AstraAssignTable *table = astra_process_vfs_assigns();
 
     (void)argc;
     (void)argv;
@@ -395,11 +368,12 @@ static int pump_once(void);
 static uint32_t read_launch_image(const char *path, const uint8_t **image,
                                   uint32_t *length)
 {
-    uint32_t status = supervisor_vfs_read_borrow(path, image, length);
+    uint32_t status = astra_process_read_file_borrow(path, image, length);
 
     if (status != ASTRA_VFS_ERR_LIMIT && status != ASTRA_VFS_ERR_UNSUPPORTED)
         return status;
-    status = supervisor_vfs_read(path, load_buffer, sizeof(load_buffer), length);
+    status = astra_process_read_file(shell.backend.process_filesystem, path,
+                                     load_buffer, sizeof(load_buffer), length);
     if (status == ASTRA_VFS_OK)
         *image = load_buffer;
     return status;
@@ -546,7 +520,7 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
         for (uint32_t member = 0u; ; ++member) {
             const AstraAssign *assign =
                 filesystem_library()->assign_member(
-                    supervisor_assigns(), mount_names[index], member);
+                    astra_process_vfs_assigns(), mount_names[index], member);
             uint32_t namespace_rights;
 
             if (assign == NULL) {
@@ -560,7 +534,7 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
             grants[count].handle = assign->handle;
             grants[count].rights = ASTRA_RIGHT_SIGNAL;
             namespace_rights = assign->rights;
-            if (shell_equal(mount_names[index], "LIBS"))
+            if (strcmp(mount_names[index], "LIBS") == 0)
                 namespace_rights &= ~ASTRA_RIGHT_WRITE;
             grants[count].flags = ASTRA_CAPABILITY_FLAG_NAMESPACE |
                 ((namespace_rights & ASTRA_RIGHT_READ) != 0u ?
@@ -585,7 +559,7 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
      */
     for (uint32_t member = 0u; ; ++member) {
         const AstraAssign *assign = filesystem_library()->assign_member(
-            supervisor_assigns(), shell.assign, member);
+            astra_process_vfs_assigns(), shell.assign, member);
         char root[ASTRA_CAPABILITY_ROOT_MAX];
         uint32_t at = 0u;
         uint32_t namespace_rights;
@@ -636,11 +610,11 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
             dropped = 1;
         }
     }
-    if (supervisor_loader_event_control() != 0u) {
+    if (shell.backend.event_control != 0u) {
         if (count < ASTRA_LAUNCH_GRANT_MAX) {
             astra_capability_name_set(grants[count].name,
                                       ASTRA_CAPABILITY_EVENT_CONTROL);
-            grants[count].handle = supervisor_loader_event_control();
+            grants[count].handle = shell.backend.event_control;
             grants[count].rights = ASTRA_RIGHT_SIGNAL;
             grants[count].flags = 0u;
             ++count;
@@ -691,7 +665,7 @@ static uint32_t pack_launch_environment(AstraLaunchArguments *arguments,
         if (!astra_shell_variable_exportable(name))
             return ASTRA_SYSCALL_INVALID_ARGUMENT;
         for (uint32_t at = 0u; at < count; ++at)
-            if (shell_equal(shell.launch_environment_names[at], name)) {
+            if (strcmp(shell.launch_environment_names[at], name) == 0) {
                 found = at;
                 break;
             }
@@ -720,6 +694,7 @@ static uint32_t command_launch(astra_shell_words_t *words)
     uint32_t exit_status = 0u;
     uint32_t status;
     AstraProcessInfo crash_info = {0};
+    AstraTtyState tty_before;
     int have_crash_info = 0;
     uint32_t parent = shell.child;
     uint64_t started = astra_clock_monotonic();
@@ -745,7 +720,9 @@ static uint32_t command_launch(astra_shell_words_t *words)
         return SHELL_STATUS_NOT_RUN;
     }
     if (astra_launch_arguments_pack(
-            &arguments, ASTRA_LAUNCH_SOURCE_SHELL, (uint32_t)words->argc,
+            &arguments, shell.launch_arguments,
+            (uint32_t)sizeof(shell.launch_arguments),
+            ASTRA_LAUNCH_SOURCE_SHELL, (uint32_t)words->argc,
             (const char *const *)words->argv) != ASTRA_SYSCALL_OK ||
         pack_launch_environment(&arguments, words) != ASTRA_SYSCALL_OK) {
         write_line("too many arguments");
@@ -755,6 +732,7 @@ static uint32_t command_launch(astra_shell_words_t *words)
     ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
                  "launching, %u bytes of image", length);
     (void)memset(grants, 0, sizeof(grants));
+    console_stream_tty_state(&tty_before);
     status = astra_launch(image, length, grants,
                           launch_grants(grants), &arguments, &handle,
                           &child_id);
@@ -795,6 +773,8 @@ static uint32_t command_launch(astra_shell_words_t *words)
      * "exited 13" prints above the line that says what 13 meant.
      */
     (void)console_stream_drain();
+    shell.pending_key_valid = 0u;
+    console_stream_tty_restore(&tty_before);
 
     /*
      * **The status is answered, not narrated.** A shell that printed
@@ -828,8 +808,10 @@ static uint32_t command_launch(astra_shell_words_t *words)
                  "child %u finished with status %u", child_id, exit_status);
     ASTRA_EVENT3(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_NOTICE,
                  "command stages: image %u spawn %u run %u us",
-                 elapsed_us(started, read), elapsed_us(read, spawned),
-                 elapsed_us(spawned, astra_clock_monotonic()));
+                 astra_elapsed_microseconds(started, read),
+                 astra_elapsed_microseconds(read, spawned),
+                 astra_elapsed_microseconds(spawned,
+                                            astra_clock_monotonic()));
     return exit_status;
 }
 
@@ -978,7 +960,7 @@ static const astra_shell_builtin_t *shell_builtin(const char *word)
 {
     for (uint32_t index = 0u;
          index < sizeof(shell_builtins) / sizeof(shell_builtins[0]); ++index) {
-        if (shell_equal(shell_builtins[index].name, word))
+        if (strcmp(shell_builtins[index].name, word) == 0)
             return &shell_builtins[index];
     }
     return NULL;
@@ -1127,7 +1109,7 @@ static uint32_t run_line(const char *line)
      * is then reading one number.
      */
     (void)astra_activity_begin();
-    supervisor_vfs_set_activity(astra_activity_current());
+    astra_process_vfs_set_activity(astra_activity_current());
     ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
                  "command accepted, %u words", (uint32_t)words.argc);
 
@@ -1243,12 +1225,10 @@ shell_execute_reply(uint32_t handle, uint32_t transaction, uint32_t status,
 
     if (handle == 0u)
         return;
-    reply.header.total_size = sizeof(reply);
-    reply.header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
-    reply.header.protocol = ASTRA_SHELL_SERVICE_PROTOCOL;
-    reply.header.protocol_version = ASTRA_SHELL_SERVICE_VERSION;
-    reply.header.operation = ASTRA_SHELL_EXECUTED;
-    reply.header.transaction_id = transaction;
+    astra_message_header_set(&reply.header, sizeof(reply),
+                             ASTRA_SHELL_SERVICE_PROTOCOL,
+                             ASTRA_SHELL_SERVICE_VERSION,
+                             ASTRA_SHELL_EXECUTED, transaction);
     reply.status = status;
     reply.command_status = command_status;
     (void)astra_port_send(handle, &reply, sizeof(reply), NULL, 0u);
@@ -1377,6 +1357,16 @@ static void feed_key(uint32_t code)
     size_t old_length = shell.editor.length;
     size_t erase;
 
+    if (shell.child != 0u) {
+        int accepted = console_stream_key(code);
+
+        if (accepted == 0) {
+            shell.pending_key = code;
+            shell.pending_key_valid = 1u;
+        }
+        return;
+    }
+
     event.character = 0u;
     switch (code) {
     case ASTRA_KEYMAP_ENTER: event.key = ASTRA_SHELL_KEY_ENTER; break;
@@ -1404,37 +1394,6 @@ static void feed_key(uint32_t code)
         /* Show that Enter was accepted before storage or a child can delay us. */
         if (!flush_terminal())
             return;
-        /*
-         * One keyboard, and whoever is in the foreground gets it. A line typed
-         * while a child runs is that child's input, not the shell's next
-         * command -- the alternative is a terminal that runs commands at a
-         * program that thought it was being talked to.
-         *
-         * A source that will not take it keeps the line where it was typed:
-         * the editor is not committed, so the person sees it still there and
-         * presses return again. Nothing typed is lost by a child that is slow
-         * to read.
-         */
-        if (shell.child != 0u) {
-            /*
-             * With the newline the person pressed. Without it an empty line
-             * offers nothing at all, so a child waiting for input would never
-             * see that return was pressed -- and a child reading a line could
-             * not tell where it ended. The newline is the line.
-             */
-            static uint8_t line[ASTRA_STREAM_WRITE_MAX];
-            uint32_t length = shell_strlen(shell.editor.line);
-
-            if (length > ASTRA_STREAM_WRITE_MAX - 1u) {
-                length = ASTRA_STREAM_WRITE_MAX - 1u;
-            }
-            (void)memcpy(line, shell.editor.line, length);
-            line[length++] = '\n';
-            if (console_stream_offer(line, length) == length) {
-                astra_shell_editor_commit(&shell.editor);
-            }
-            return;
-        }
         run_line(shell.editor.line);
         astra_shell_editor_commit(&shell.editor);
         prompt();
@@ -1462,8 +1421,8 @@ static void feed_key(uint32_t code)
      */
     erase = old_length > shell.editor.length ?
         old_length - shell.editor.length : 0u;
-    old_cursor += shell_strlen(shell.assign) +
-                  shell_strlen(shell.directory) + 3u;
+    old_cursor += (uint32_t)strlen(shell.assign) +
+                  (uint32_t)strlen(shell.directory) + 3u;
     for (size_t index = 0u; index < old_cursor; ++index)
         astra_terminal_putc(&shell.terminal, '\b');
     prompt();
@@ -1497,7 +1456,6 @@ static int pump_once(void)
      * program's output arrives here and its input leaves from here, so this
      * call is the whole reason a wait for a child can be a wait at all.
      */
-    supervisor_loader_pump_event_control();
     pump_shell_request();
     rendered = console_stream_pump();
     /*
@@ -1505,7 +1463,17 @@ static int pump_once(void)
      * to it. This used to return here, which meant the flush at the bottom --
      * the only thing that paints -- was reachable only by way of a keystroke.
      */
+    if (shell.pending_key_valid) {
+        int accepted = console_stream_key(shell.pending_key);
+
+        if (accepted > 0) {
+            shell.pending_key_valid = 0u;
+            had_key = 1;
+        }
+    }
     do {
+        if (shell.pending_key_valid)
+            break;
         input_result = shell.backend.next_key != NULL ?
             shell.backend.next_key(shell.backend.context, &key) : 0;
         if (input_result > 0) {
@@ -1518,7 +1486,6 @@ static int pump_once(void)
         return 1;
     }
     if (input_result < 0) {
-        (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
         return 0;
     }
     /*
@@ -1530,25 +1497,26 @@ static int pump_once(void)
         uint64_t now = astra_clock_monotonic();
 
         if (shell.present_deadline == 0u && (rendered != 0u || had_key))
-            shell.present_deadline = now +
-                (had_key ? CONSOLE_INPUT_PRESENT_NS : CONSOLE_PRESENT_NS);
+            shell.present_deadline = now + CONSOLE_PRESENT_NS;
         if (shell.present_deadline == 0u || now >= shell.present_deadline) {
             if (!flush_terminal()) {
-                (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
                 return 0;
             }
             shell.present_deadline = 0u;
         }
     }
     if (!had_key) {
-        uint32_t waits[5];
+        uint32_t waits[6];
         uint32_t wait_count = 0u;
         uint32_t child_index = ASTRA_WAIT_INDEX_NONE;
         uint32_t sink = console_stream_wait_handle();
+        uint32_t source = console_stream_input_wait_handle();
         uint32_t redirected = console_stream_redirect_wait_handle();
 
         if (sink != 0u)
             waits[wait_count++] = sink;
+        if (source != 0u)
+            waits[wait_count++] = source;
         /*
          * And the file's port, while a child is writing into one. STDERR still
          * arrives on the terminal's sink, so this is a second port and not the
@@ -1595,13 +1563,13 @@ static int pump_once(void)
     return 1;
 }
 
-void console_shell_run_backend(const ConsoleShellBackend *backend,
-                               int volume_ready)
+void console_shell_run_backend(const ConsoleShellBackend *backend)
 {
     if (backend == NULL || backend->columns == 0u || backend->rows == 0u ||
-        backend->render == NULL || backend->filesystem == NULL ||
-        backend->filesystem_library == NULL) {
-        (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
+        backend->terminal_storage == NULL ||
+        backend->terminal_storage_size == 0u || backend->render == NULL ||
+        backend->process_filesystem == NULL ||
+        backend->process_filesystem->library == NULL) {
         return;
     }
 
@@ -1614,23 +1582,30 @@ void console_shell_run_backend(const ConsoleShellBackend *backend,
      * person's files are what a terminal is for; SYS: is the fallback on a
      * volume that would not take a work directory.
      */
-    if (filesystem_library()->assign_lookup(supervisor_assigns(), "WORK") !=
+    if (filesystem_library()->assign_lookup(astra_process_vfs_assigns(), "WORK") !=
         NULL) {
         (void)memcpy(shell.assign, "WORK", 5u);
     } else if (filesystem_library()->assign_lookup(
-                   supervisor_assigns(), "SYS") != NULL) {
+                   astra_process_vfs_assigns(), "SYS") != NULL) {
         (void)memcpy(shell.assign, "SYS", 4u);
     }
-    if (astra_terminal_init(&shell.terminal, backend->columns, backend->rows,
-                            backend->render, backend->context) !=
+    if (astra_terminal_init_capacity(
+            &shell.terminal, backend->columns, backend->rows,
+            backend->terminal_capacity_columns != 0u ?
+                backend->terminal_capacity_columns : backend->columns,
+            backend->terminal_capacity_rows != 0u ?
+                backend->terminal_capacity_rows : backend->rows,
+            backend->terminal_storage, backend->terminal_storage_size,
+            backend->render, backend->context) !=
         ASTRA_TERMINAL_OK) {
-        (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
         return;
     }
     astra_terminal_set_scroll(&shell.terminal, backend->scroll);
     astra_terminal_set_echo(&shell.terminal, echo_line, NULL);
     astra_shell_editor_init(&shell.editor);
     astra_shell_variables_init(&shell.variables);
+    (void)astra_shell_variable_set(&shell.variables, "TERM",
+                                   "astra-256color");
     /*
      * `?` exists from the first prompt. A shell whose `$?` was empty until
      * something had run would make `echo $?` a different thing on line one
@@ -1658,23 +1633,25 @@ void console_shell_run_backend(const ConsoleShellBackend *backend,
      * something that writes, and that is worth booting without.
      */
     if (!console_stream_start(&shell.terminal)) {
-        ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
+        ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SHELL,
                      ASTRA_EVENT_LEVEL_WARNING,
                      "console streams unavailable, launched programs "
                      "cannot write");
+    } else {
+        console_stream_resize(backend->columns, backend->rows,
+                              backend->pixel_width, backend->pixel_height);
+        astra_terminal_set_reply(&shell.terminal,
+                                 console_stream_terminal_reply, NULL);
     }
 
     astra_terminal_clear(&shell.terminal);
     write_line("Astra 68");
-    write_line(volume_ready ? "namespace: WORK: writable" :
-                             "volume: not mounted, file commands will fail");
+    write_line("namespace: WORK: writable");
     command_help();
     prompt();
     if (!flush_terminal()) {
-        (void)astra_progress(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
         return;
     }
-    (void)astra_progress(ASTRA_SUPERVISOR_STAGE_TERMINAL);
 
     while (shell.running) {
         if (!pump_once()) {

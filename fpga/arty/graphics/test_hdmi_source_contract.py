@@ -64,6 +64,18 @@ require(
 require(
     "fpga/arty/linux/rootfs-overlay/etc/init.d/astra-firstboot",
     "/data/astra/bin/astra-hdmi-link",
+    "/data/astra/bin/astra-time-sync",
+    "ASTRA_NTP_SERVER:-pool.ntp.org",
+)
+firstboot = (ROOT / "fpga/arty/linux/rootfs-overlay/etc/init.d/astra-firstboot").read_text(
+    encoding="utf-8"
+)
+if firstboot.index("astra-time-sync") > firstboot.index("astra-hdmi-link"):
+    raise SystemExit("astra-firstboot: graphics starts before NTP synchronization")
+require(
+    "fpga/arty/linux/retire_nova_runtime.sh",
+    "/etc/rc5.d/S02astra-firstboot",
+    "/etc/rcS.d/S04astra-firstboot",
 )
 subprocess.run(
     [sys.executable, str(ROOT / "fpga/arty/linux/test-astra-chip-reset.py")],

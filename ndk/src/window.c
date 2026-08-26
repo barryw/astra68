@@ -1,18 +1,11 @@
 #include <astra/window.h>
 
+#include <astra/bytes.h>
 #include <astra/gui.h>
 #include <astra/port.h>
 #include <astra/resource.h>
 
 #include "internal/status.h"
-
-static int words_are_zero(const uint32_t *words, uint32_t count)
-{
-    for (uint32_t index = 0; index < count; ++index)
-        if (words[index] != 0)
-            return 0;
-    return 1;
-}
 
 static int state_valid(uint8_t state)
 {
@@ -105,7 +98,7 @@ static AstraResult command(AstraWindow *window, uint32_t action,
         reply.header.operation != ASTRA_GUI_WINDOW_STATE ||
         reply.header.transaction_id != request.header.transaction_id ||
         reply.window != window->_private_id ||
-        reply.generation == 0u || !words_are_zero(reply.reserved, 2u)) {
+        reply.generation == 0u || !astra_words_zero(reply.reserved, 2u)) {
         result = ASTRA_ERROR_IO;
         goto done;
     }
@@ -297,7 +290,7 @@ done:
 AstraResult astra_window_get_info(AstraWindow *window, AstraWindowInfo *info)
 {
     if (info == 0 || info->size < sizeof(*info) ||
-        !words_are_zero(info->reserved, 4u))
+        !astra_words_zero(info->reserved, 4u))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     return command(window, ASTRA_GUI_WINDOW_QUERY, 0, 0, 0u, 0u, info);
 }

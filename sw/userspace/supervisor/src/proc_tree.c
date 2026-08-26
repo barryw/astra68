@@ -219,14 +219,15 @@ read_snapshot(uint64_t offset, uint8_t *out, uint32_t length, uint32_t *moved)
 }
 
 static uint32_t
-proc_open(void *context, const char *path, uint32_t flags, uintptr_t *node,
-          AstraVfsNodeInfo *info)
+proc_open(void *context, const char *path, uint32_t flags,
+          uint16_t create_mode, uintptr_t *node, AstraVfsNodeInfo *info)
 {
     uint32_t length = 0u;
     int leaf = 0;
     uint32_t index;
 
     (void)context;
+    (void)create_mode;
     if ((flags & ASTRA_VFS_OPEN_WRITE) != 0u ||
         (flags & ASTRA_VFS_OPEN_CREATE) != 0u)
         return ASTRA_VFS_ERR_ACCESS;
@@ -313,47 +314,11 @@ proc_read(void *context, uintptr_t node, uint64_t offset, void *buffer,
 }
 
 static uint32_t
-proc_write(void *context, uintptr_t node, uint64_t offset, uint32_t flags,
-           const void *buffer, uint32_t length, uint32_t *moved,
-           uint64_t *position)
-{
-    (void)context;
-    (void)node;
-    (void)offset;
-    (void)flags;
-    (void)buffer;
-    (void)length;
-    *moved = 0u;
-    *position = offset;
-    /*
-     * Killing is not a write to a control file. It is a process-control
-     * operation needing process-control authority, and routing it through a
-     * mount somebody was granted for reading would hand it to every reader.
-     */
-    return ASTRA_VFS_ERR_ACCESS;
-}
-
-static uint32_t proc_sync(void *context, uintptr_t node)
-{
-    (void)context;
-    (void)node;
-    return ASTRA_VFS_ERR_ACCESS;
-}
-
-static uint32_t proc_truncate(void *context, uintptr_t node, uint64_t size)
-{
-    (void)context;
-    (void)node;
-    (void)size;
-    return ASTRA_VFS_ERR_ACCESS;
-}
-
-static uint32_t
 proc_stat(void *context, const char *path, AstraVfsNodeInfo *info)
 {
     uintptr_t node = 0u;
-    uint32_t status = proc_open(context, path, ASTRA_VFS_OPEN_READ, &node,
-                                info);
+    uint32_t status = proc_open(context, path, ASTRA_VFS_OPEN_READ,
+                                ASTRA_VFS_MODE_DEFAULT, &node, info);
 
     if (status == ASTRA_VFS_OK)
         (void)proc_close(context, node);
@@ -421,43 +386,21 @@ proc_readdir(void *context, const char *path, uint64_t cookie, char *name,
     return ASTRA_VFS_ERR_NOT_FOUND;
 }
 
-static uint32_t
-proc_mkdir(void *context, const char *path)
-{
-    (void)context;
-    (void)path;
-    return ASTRA_VFS_ERR_ACCESS;
-}
-
-static uint32_t
-proc_unlink(void *context, const char *path)
-{
-    (void)context;
-    (void)path;
-    return ASTRA_VFS_ERR_ACCESS;
-}
-
-static uint32_t
-proc_rename(void *context, const char *from, const char *to)
-{
-    (void)context;
-    (void)from;
-    (void)to;
-    return ASTRA_VFS_ERR_ACCESS;
-}
-
+/* Process control needs explicit authority; PROC: is an immutable view. */
 static const AstraVfsBackendOps proc_ops = {
     .open = proc_open,
     .close = proc_close,
     .read = proc_read,
-    .write = proc_write,
-    .sync = proc_sync,
-    .truncate = proc_truncate,
+    .write = astra_vfs_backend_deny_write,
+    .sync = astra_vfs_backend_deny_sync,
+    .truncate = astra_vfs_backend_deny_truncate,
     .stat = proc_stat,
     .readdir = proc_readdir,
-    .mkdir = proc_mkdir,
-    .unlink = proc_unlink,
-    .rename = proc_rename,
+    .mkdir = astra_vfs_backend_deny_mkdir,
+    .unlink = astra_vfs_backend_deny_unlink,
+    .rename = astra_vfs_backend_deny_rename,
+    .chmod = astra_vfs_backend_deny_chmod,
+    .readlink = astra_vfs_backend_no_readlink,
 };
 
 const AstraVfsBackendOps *

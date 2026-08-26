@@ -306,6 +306,8 @@ test_transfer_is_split_not_refused(void)
     }
     assert(blockdev->bdif->bwrite(blockdev, expected, block, count) == EOK);
     assert(port.split_transfers == 1u);
+    assert(blockdev->bdif->flush(blockdev) == EOK);
+    assert(device.metrics.operation[ASTRA_BLOCK_OPERATION_FLUSH].calls == 1u);
 
     memset(transfer, 0xa5, bytes);
     assert(blockdev->bdif->bread(blockdev, transfer, block, count) == EOK);
@@ -351,6 +353,11 @@ test_failures_map_and_are_recorded(void)
     /* A device error mid-run. */
     astra_memory_block_fail_at(&memory, memory.operation_count + 1u);
     assert(blockdev->bdif->bread(blockdev, transfer, 0u, 1u) == EIO);
+    assert(port.last_status == ASTRA_BLOCK_IO_ERROR);
+    astra_memory_block_fail_at(&memory, 0u);
+
+    astra_memory_block_fail_at(&memory, memory.operation_count + 1u);
+    assert(blockdev->bdif->flush(blockdev) == EIO);
     assert(port.last_status == ASTRA_BLOCK_IO_ERROR);
     astra_memory_block_fail_at(&memory, 0u);
 
@@ -485,6 +492,7 @@ test_foreign_blockdev_is_refused(void)
 
     assert(real->bdif->bread(&blockdev, transfer, 0u, 1u) == EINVAL);
     assert(real->bdif->bwrite(&blockdev, transfer, 0u, 1u) == EINVAL);
+    assert(real->bdif->flush(&blockdev) == EINVAL);
     assert(real->bdif->open(&blockdev) == EINVAL);
     assert(real->bdif->close(&blockdev) == EINVAL);
     assert(real->bdif->lock(&blockdev) == EINVAL);

@@ -71,6 +71,26 @@
 			(_m)->os_locks->unlock();                              \
 	} while (0)
 
+#define EXT4_MP_READ_LOCK(_m)                                                  \
+	do {                                                                   \
+		if ((_m)->os_locks) {                                          \
+			if ((_m)->os_locks->read_lock)                           \
+				(_m)->os_locks->read_lock();                        \
+			else                                                       \
+				(_m)->os_locks->lock();                             \
+		}                                                              \
+	} while (0)
+
+#define EXT4_MP_READ_UNLOCK(_m)                                                \
+	do {                                                                   \
+		if ((_m)->os_locks) {                                          \
+			if ((_m)->os_locks->read_unlock)                         \
+				(_m)->os_locks->read_unlock();                      \
+			else                                                       \
+				(_m)->os_locks->unlock();                           \
+		}                                                              \
+	} while (0)
+
 /**@brief   Mount point descriptor.*/
 struct ext4_mountpoint {
 
@@ -748,8 +768,18 @@ int ext4_mount_setup_locks(const char *mount_point,
 	}
 	if (!mp)
 		return ENOENT;
+	if (!locks || !locks->lock || !locks->unlock ||
+	    (!!locks->read_lock != !!locks->read_unlock) ||
+	    (!!locks->cache_lock != !!locks->cache_unlock) ||
+	    (!!locks->fill_lock != !!locks->fill_unlock) ||
+	    (locks->read_lock && (!locks->cache_lock || !locks->fill_lock)))
+		return EINVAL;
 
 	mp->os_locks = locks;
+	mp->bc.lock = locks->cache_lock;
+	mp->bc.unlock = locks->cache_unlock;
+	mp->bc.fill_lock = locks->fill_lock;
+	mp->bc.fill_unlock = locks->fill_unlock;
 	return EOK;
 }
 
@@ -924,9 +954,9 @@ static int ext4_trunc_dir(struct ext4_mountpoint *mp,
  * NOTICE: if filetype is equal to EXT4_DIRENTRY_UNKNOWN,
  * any filetype of the target dir entry will be accepted.
  */
-static int ext4_generic_open2(ext4_file *f, const char *path, int flags,
-			      int ftype, uint32_t *parent_inode,
-			      uint32_t *name_off)
+static int ext4_generic_open2_mode(ext4_file *f, const char *path, int flags,
+				   int ftype, uint32_t *parent_inode,
+				   uint32_t *name_off, uint32_t create_mode)
 {
 	bool is_goal = false;
 	bool created_goal = false;
@@ -1000,6 +1030,14 @@ static int ext4_generic_open2(ext4_file *f, const char *path, int flags,
 				break;
 
 			ext4_fs_inode_blocks_init(fs, &child_ref);
+			if (is_goal && create_mode != UINT32_MAX) {
+				uint32_t mode = ext4_inode_get_mode(sb,
+								 child_ref.inode);
+
+				mode = (mode & ~0xFFFu) | (create_mode & 0xFFFu);
+				ext4_inode_set_mode(sb, child_ref.inode, mode);
+				child_ref.dirty = true;
+			}
 
 			/*Link with root dir.*/
 			r = ext4_link(mp, &ref, &child_ref, path, len, false);
@@ -1103,11 +1141,20 @@ static int ext4_generic_open2(ext4_file *f, const char *path, int flags,
 	return ext4_fs_put_inode_ref(&ref);
 }
 
+static int ext4_generic_open2(ext4_file *f, const char *path, int flags,
+			      int ftype, uint32_t *parent_inode,
+			      uint32_t *name_off)
+{
+	return ext4_generic_open2_mode(f, path, flags, ftype, parent_inode,
+				       name_off, UINT32_MAX);
+}
+
 /****************************************************************************/
 
-static int ext4_generic_open(ext4_file *f, const char *path, const char *flags,
-			     bool file_expect, uint32_t *parent_inode,
-			     uint32_t *name_off)
+static int ext4_generic_open_mode(ext4_file *f, const char *path,
+				  const char *flags, bool file_expect,
+				  uint32_t *parent_inode, uint32_t *name_off,
+				  uint32_t create_mode)
 {
 	uint32_t iflags;
 	int filetype;
@@ -1125,8 +1172,8 @@ static int ext4_generic_open(ext4_file *f, const char *path, const char *flags,
 	if (iflags & O_CREAT)
 		ext4_trans_start(mp);
 
-	r = ext4_generic_open2(f, path, iflags, filetype, parent_inode,
-				name_off);
+	r = ext4_generic_open2_mode(f, path, iflags, filetype, parent_inode,
+				     name_off, create_mode);
 
 	if (iflags & O_CREAT) {
 		if (r == EOK)
@@ -1136,6 +1183,14 @@ static int ext4_generic_open(ext4_file *f, const char *path, const char *flags,
 	}
 
 	return r;
+}
+
+static int ext4_generic_open(ext4_file *f, const char *path, const char *flags,
+			     bool file_expect, uint32_t *parent_inode,
+			     uint32_t *name_off)
+{
+	return ext4_generic_open_mode(f, path, flags, file_expect, parent_inode,
+				      name_off, UINT32_MAX);
 }
 
 static int ext4_create_hardlink(const char *path,
@@ -1567,6 +1622,12 @@ int ext4_fopen(ext4_file *file, const char *path, const char *flags)
 
 int ext4_fopen2(ext4_file *file, const char *path, int flags)
 {
+	return ext4_fopen2_mode(file, path, flags, UINT32_MAX);
+}
+
+int ext4_fopen2_mode(ext4_file *file, const char *path, int flags,
+		     uint32_t mode)
+{
 	struct ext4_mountpoint *mp = ext4_get_mount(path);
 	int r;
 	int filetype;
@@ -1582,7 +1643,8 @@ int ext4_fopen2(ext4_file *file, const char *path, int flags)
 	if (flags & O_CREAT)
 		ext4_trans_start(mp);
 
-	r = ext4_generic_open2(file, path, flags, filetype, NULL, NULL);
+	r = ext4_generic_open2_mode(file, path, flags, filetype, NULL, NULL,
+				    mode);
 
 	if (flags & O_CREAT) {
 		if (r == EOK)
@@ -1714,7 +1776,7 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
 	if (!size)
 		return EOK;
 
-	EXT4_MP_LOCK(file->mp);
+	EXT4_MP_READ_LOCK(file->mp);
 
 	struct ext4_fs *const fs = &file->mp->fs;
 	struct ext4_sblock *const sb = &file->mp->fs.sb;
@@ -1724,7 +1786,7 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
 
 	r = ext4_fs_get_inode_ref(fs, file->inode, &ref);
 	if (r != EOK) {
-		EXT4_MP_UNLOCK(file->mp);
+		EXT4_MP_READ_UNLOCK(file->mp);
 		return r;
 	}
 
@@ -1837,18 +1899,9 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
 		if (run_count == 1) {
 			r = ext4_fread_block(file->mp->fs.bdev, run_start, 0,
 					     u8_buf, block_size);
-		} else {
-			uint32_t at;
-
-			for (at = 0; at < run_count; at++) {
-				r = ext4_block_flush_lba(file->mp->fs.bdev,
-							 run_start + at);
-				if (r != EOK)
-					goto Finish;
-			}
-			r = ext4_blocks_get_direct(file->mp->fs.bdev, u8_buf,
-						   run_start, run_count);
-		}
+		} else
+			r = ext4_blocks_get_cached(file->mp->fs.bdev, u8_buf,
+						  run_start, run_count);
 		if (r != EOK)
 			goto Finish;
 
@@ -1878,7 +1931,7 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
 
 Finish:
 	ext4_fs_put_inode_ref(&ref);
-	EXT4_MP_UNLOCK(file->mp);
+	EXT4_MP_READ_UNLOCK(file->mp);
 	return r;
 }
 
@@ -3312,6 +3365,11 @@ int ext4_dir_mv(const char *path, const char *new_path)
 
 int ext4_dir_mk(const char *path)
 {
+	return ext4_dir_mk_mode(path, UINT32_MAX);
+}
+
+int ext4_dir_mk_mode(const char *path, uint32_t mode)
+{
 	int r;
 	ext4_file f;
 	struct ext4_mountpoint *mp = ext4_get_mount(path);
@@ -3330,7 +3388,7 @@ int ext4_dir_mk(const char *path)
 		goto Finish;
 
 	/*Create new directory.*/
-	r = ext4_generic_open(&f, path, "w", false, 0, 0);
+	r = ext4_generic_open_mode(&f, path, "w", false, 0, 0, mode);
 
 Finish:
 	EXT4_MP_UNLOCK(mp);

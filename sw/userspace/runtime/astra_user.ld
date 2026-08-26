@@ -22,7 +22,8 @@ ASTRA_PAGE_SIZE = 0x1000;
 ASTRA_TEXT_BASE = 0x00100000;
 /* astra/event_descriptor.h's ASTRA_EVENT_CATALOG_BASE, which a linker script
  * cannot include. The two must agree; the runtime test checks that they do. */
-ASTRA_EVENT_CATALOG_BASE = 0xE0000000;
+ASTRA_EVENT_CATALOG_BASE = DEFINED(ASTRA_EVENT_IMAGE_CATALOG_BASE) ?
+    ASTRA_EVENT_IMAGE_CATALOG_BASE : 0xE0000000;
 /* astra/program.h's ASTRA_PROGRAM_SIZE, for the same reason. A disagreement
  * here refuses every image at link time, which is as loud as a mistake gets. */
 ASTRA_PROGRAM_SIZE = 120;

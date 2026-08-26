@@ -86,7 +86,8 @@ read_all(const char *path, char *out, uint32_t capacity)
     uintptr_t node = 0u;
     uint32_t total = 0u;
 
-    assert(ops->open(&backend, path, ASTRA_VFS_OPEN_READ, &node, &info) ==
+    assert(ops->open(&backend, path, ASTRA_VFS_OPEN_READ,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
            ASTRA_VFS_OK);
     assert(info.kind == ASTRA_VFS_KIND_FILE);
     /* A leaf has no size before it is read; the contract allows exactly that. */
@@ -141,7 +142,8 @@ static void test_a_leaf_renders_its_events(void)
         uint32_t moved = 0u;
 
         assert(ops->open(&backend, "/boot/current/all", ASTRA_VFS_OPEN_READ,
-                         &node, &info) == ASTRA_VFS_OK);
+                         ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
+               ASTRA_VFS_OK);
         assert(ops->read(&backend, node, 0u, first, sizeof(first), &moved) ==
                ASTRA_VFS_OK);
         assert(moved == sizeof(first));
@@ -180,7 +182,8 @@ static void test_every_page_size_reads_the_same_file(void)
         uint32_t total = 0u;
 
         assert(ops->open(&backend, "/boot/current/all", ASTRA_VFS_OPEN_READ,
-                         &node, &info) == ASTRA_VFS_OK);
+                         ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
+               ASTRA_VFS_OK);
         for (;;) {
             uint32_t moved = 0u;
 
@@ -242,17 +245,22 @@ static void test_a_path_is_the_filter(void)
         uintptr_t node = 0u;
 
         assert(ops->open(&backend, "/activity/nope", ASTRA_VFS_OPEN_READ,
-                         &node, &info) == ASTRA_VFS_ERR_NOT_FOUND);
+                         ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
+               ASTRA_VFS_ERR_NOT_FOUND);
         assert(ops->open(&backend, "/subsystem/nothing", ASTRA_VFS_OPEN_READ,
-                         &node, &info) == ASTRA_VFS_ERR_NOT_FOUND);
+                         ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
+               ASTRA_VFS_ERR_NOT_FOUND);
         /* A level nothing defines, under a subsystem that exists. */
         assert(ops->open(&backend, "/subsystem/shell/loud", ASTRA_VFS_OPEN_READ,
-                         &node, &info) == ASTRA_VFS_ERR_NOT_FOUND);
+                         ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
+               ASTRA_VFS_ERR_NOT_FOUND);
         /* A name that merely starts like one of ours is not one of ours. */
         assert(ops->open(&backend, "/subsystem/shellish", ASTRA_VFS_OPEN_READ,
-                         &node, &info) == ASTRA_VFS_ERR_NOT_FOUND);
-        assert(ops->open(&backend, "/boot/-1/all", ASTRA_VFS_OPEN_READ, &node,
-                         &info) == ASTRA_VFS_ERR_NOT_FOUND);
+                         ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
+               ASTRA_VFS_ERR_NOT_FOUND);
+        assert(ops->open(&backend, "/boot/-1/all", ASTRA_VFS_OPEN_READ,
+                         ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
+               ASTRA_VFS_ERR_NOT_FOUND);
     }
 }
 
@@ -347,17 +355,28 @@ static void test_every_write_verb_is_refused(void)
     AstraVfsNodeInfo info;
     uintptr_t node = 0u;
     uint32_t moved = 7u;
+    uint32_t length = 0u;
 
     reset();
-    assert(ops->mkdir(&backend, "/anything") == ASTRA_VFS_ERR_ACCESS);
-    assert(ops->unlink(&backend, "/boot/current/all") == ASTRA_VFS_ERR_ACCESS);
-    assert(ops->open(&backend, "/boot/current/all",
-                     ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE, &node,
-                     &info) == ASTRA_VFS_ERR_ACCESS);
-    assert(ops->open(&backend, "/new", ASTRA_VFS_OPEN_CREATE, &node, &info) ==
+    assert(ops->mkdir(&backend, "/anything", ASTRA_VFS_MODE_DEFAULT) ==
            ASTRA_VFS_ERR_ACCESS);
-    assert(ops->open(&backend, "/boot/current/all", ASTRA_VFS_OPEN_READ, &node,
-                     &info) == ASTRA_VFS_OK);
+    assert(ops->unlink(&backend, "/boot/current/all") == ASTRA_VFS_ERR_ACCESS);
+    assert(ops->sync(&backend, 0u) == ASTRA_VFS_ERR_ACCESS);
+    assert(ops->truncate(&backend, 0u, 0u) == ASTRA_VFS_ERR_ACCESS);
+    assert(ops->rename(&backend, "/from", "/to") == ASTRA_VFS_ERR_ACCESS);
+    assert(ops->chmod(&backend, "/boot/current/all", 0600u) ==
+           ASTRA_VFS_ERR_ACCESS);
+    assert(ops->readlink(&backend, "/boot/current/all", NULL, 0u,
+                         &length) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(ops->open(&backend, "/boot/current/all",
+                     ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
+           ASTRA_VFS_ERR_ACCESS);
+    assert(ops->open(&backend, "/new", ASTRA_VFS_OPEN_CREATE,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
+           ASTRA_VFS_ERR_ACCESS);
+    assert(ops->open(&backend, "/boot/current/all", ASTRA_VFS_OPEN_READ,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) == ASTRA_VFS_OK);
     {
         uint64_t position = 0u;
 

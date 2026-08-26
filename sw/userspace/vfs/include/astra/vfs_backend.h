@@ -18,9 +18,9 @@
  * because errno sets differ between implementations and leaking one would
  * announce which backend is behind the protocol.
  *
- * A backend is called from one thread at a time. The core does not serialise
- * for it, because the core cannot know what the backend's own locking costs;
- * a backend that needs exclusion takes it itself.
+ * Backend operations may be called concurrently. A backend owns the locking
+ * required by its filesystem, must not rely on the VFS service state lock,
+ * and must not retain pointers into a request after returning.
  *
  * `node` is whatever the backend wants it to be -- an inode number, a pointer,
  * an index. The core stores it, checks nothing about it, and hands it back.
@@ -58,7 +58,8 @@ typedef struct AstraVfsBackendOps {
      * backend never has to guess what the caller meant by a path.
      */
     uint32_t (*open)(void *context, const char *path, uint32_t flags,
-                     uintptr_t *node, AstraVfsNodeInfo *info);
+                     uint16_t create_mode, uintptr_t *node,
+                     AstraVfsNodeInfo *info);
     uint32_t (*close)(void *context, uintptr_t node);
     uint32_t (*read)(void *context, uintptr_t node, uint64_t offset,
                      void *buffer, uint32_t length, uint32_t *moved);
@@ -86,14 +87,99 @@ typedef struct AstraVfsBackendOps {
     uint32_t (*readdir)(void *context, const char *path, uint64_t cookie,
                         char *name, uint32_t name_capacity,
                         AstraVfsNodeInfo *info, uint64_t *next);
-    uint32_t (*mkdir)(void *context, const char *path);
+    uint32_t (*mkdir)(void *context, const char *path, uint16_t create_mode);
     uint32_t (*unlink)(void *context, const char *path);
     uint32_t (*rename)(void *context, const char *from, const char *to);
+    uint32_t (*chmod)(void *context, const char *path, uint16_t mode);
+    uint32_t (*readlink)(void *context, const char *path, void *buffer,
+                         uint32_t capacity, uint32_t *length);
 } AstraVfsBackendOps;
 
 struct AstraVfsBackend {
     const AstraVfsBackendOps *ops;
     void *context;
 };
+
+/* Shared operation table entries for immutable synthetic filesystems. */
+static inline uint32_t
+astra_vfs_backend_deny_write(void *context, uintptr_t node, uint64_t offset,
+                             uint32_t flags, const void *buffer,
+                             uint32_t length, uint32_t *moved,
+                             uint64_t *position)
+{
+    (void)context;
+    (void)node;
+    (void)flags;
+    (void)buffer;
+    (void)length;
+    *moved = 0u;
+    *position = offset;
+    return ASTRA_VFS_ERR_ACCESS;
+}
+
+static inline uint32_t
+astra_vfs_backend_deny_sync(void *context, uintptr_t node)
+{
+    (void)context;
+    (void)node;
+    return ASTRA_VFS_ERR_ACCESS;
+}
+
+static inline uint32_t
+astra_vfs_backend_deny_truncate(void *context, uintptr_t node, uint64_t size)
+{
+    (void)context;
+    (void)node;
+    (void)size;
+    return ASTRA_VFS_ERR_ACCESS;
+}
+
+static inline uint32_t
+astra_vfs_backend_deny_mkdir(void *context, const char *path,
+                             uint16_t create_mode)
+{
+    (void)context;
+    (void)path;
+    (void)create_mode;
+    return ASTRA_VFS_ERR_ACCESS;
+}
+
+static inline uint32_t
+astra_vfs_backend_deny_unlink(void *context, const char *path)
+{
+    (void)context;
+    (void)path;
+    return ASTRA_VFS_ERR_ACCESS;
+}
+
+static inline uint32_t
+astra_vfs_backend_deny_rename(void *context, const char *from, const char *to)
+{
+    (void)context;
+    (void)from;
+    (void)to;
+    return ASTRA_VFS_ERR_ACCESS;
+}
+
+static inline uint32_t
+astra_vfs_backend_deny_chmod(void *context, const char *path, uint16_t mode)
+{
+    (void)context;
+    (void)path;
+    (void)mode;
+    return ASTRA_VFS_ERR_ACCESS;
+}
+
+static inline uint32_t
+astra_vfs_backend_no_readlink(void *context, const char *path, void *buffer,
+                              uint32_t capacity, uint32_t *length)
+{
+    (void)context;
+    (void)path;
+    (void)buffer;
+    (void)capacity;
+    (void)length;
+    return ASTRA_VFS_ERR_NOT_FOUND;
+}
 
 #endif

@@ -3,6 +3,7 @@
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/stream.h>
+#include <astra/vfs_path.h>
 #include <astra/vfs_process.h>
 #include <astra/vfs_union.h>
 
@@ -16,49 +17,10 @@ static void say(const char *text)
     (void)astra_print(out, text);
 }
 
-static void say_number(uint32_t value)
-{
-    char digits[12];
-    char text[13];
-    uint32_t count = 0u;
-    uint32_t at = 0u;
-
-    if (value == 0u)
-        digits[count++] = '0';
-    while (value != 0u && count < sizeof(digits)) {
-        digits[count++] = (char)('0' + (value % 10u));
-        value /= 10u;
-    }
-    while (count != 0u)
-        text[at++] = digits[--count];
-    text[at] = '\0';
-    say(text);
-}
-
-static uint32_t command_path(const char *name, char *path, uint32_t capacity)
-{
-    static const char prefix[] = "COMMANDS:";
-    uint32_t at = 0u;
-
-    while (prefix[at] != '\0') {
-        if (at + 1u >= capacity)
-            return ASTRA_STATUS_INVALID;
-        path[at] = prefix[at];
-        ++at;
-    }
-    for (uint32_t index = 0u; name[index] != '\0'; ++index) {
-        if (at + 1u >= capacity)
-            return ASTRA_STATUS_INVALID;
-        path[at++] = name[index];
-    }
-    path[at] = '\0';
-    return ASTRA_STATUS_OK;
-}
-
 int astra_main(const AstraStartupInfo *startup)
 {
-    const AstraStartupCapability *capabilities;
-    const uint32_t *argv = NULL;
+    const AstraStartupCapability *standard_output;
+    const char *name;
     AstraVfsClient *client = NULL;
     AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
     uint64_t size = 0u;
@@ -68,24 +30,20 @@ int astra_main(const AstraStartupInfo *startup)
     uint32_t member = 0u;
     uint32_t status;
 
-    if (startup == NULL || startup->capabilities_address == 0u)
+    if (!astra_startup_validate(startup))
         return ASTRA_STATUS_INVALID;
-    capabilities = (const AstraStartupCapability *)(uintptr_t)
-        startup->capabilities_address;
-    if (startup->argc != 0u && startup->argv_address != 0u)
-        argv = (const uint32_t *)(uintptr_t)startup->argv_address;
-    for (uint32_t index = 0u; index < startup->capability_count; ++index)
-        if (astra_capability_name_equal(capabilities[index].name, "STDOUT"))
-            out = capabilities[index].handle;
+    standard_output = astra_startup_capability(startup, "STDOUT");
+    if (standard_output != NULL)
+        out = standard_output->handle;
     if (out == 0u)
         return ASTRA_STATUS_ACCESS;
-    if (startup->argc < 2u || argv == NULL) {
+    name = astra_startup_argument(startup, 1u);
+    if (name == NULL) {
         say("which: name it\n");
         return ASTRA_STATUS_INVALID;
     }
-    status = command_path((const char *)(uintptr_t)argv[1], typed,
-                          sizeof(typed));
-    if (status != ASTRA_STATUS_OK) {
+    status = astra_path_qualify("COMMANDS", "", name, typed, sizeof(typed));
+    if (status != ASTRA_VFS_OK) {
         say("which: name too long, refused rather than cut\n");
         return (int)status;
     }
@@ -104,7 +62,7 @@ int astra_main(const AstraStartupInfo *startup)
     }
     say(wire);
     say(" [");
-    say_number(member);
+    (void)astra_print_u32(out, member);
     say("]\n");
     return ASTRA_STATUS_OK;
 }

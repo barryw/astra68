@@ -26,8 +26,8 @@ EXT4_LIB := $(STORAGE)/build/m68k/libastraext4.a
 ALLOC_LIB := $(ALLOC)/build/m68k/libastraalloc.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
 CRT0 := $(RUNTIME)/build/m68k/crt0.o
-
-all: $(IMAGE) size
+ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(STORAGE) $(ALLOC) $(VFS)
+include ../../program.mk
 
 $(TARGET): $(OBJECT) $(CRT0) $(VFS_LIB) $(EXT4_LIB) $(STORAGE_LIB) \
 		$(ALLOC_LIB) $(RUNTIME_LIB) $(RUNTIME)/astra_user.ld
@@ -46,8 +46,13 @@ $(OBJECT): main.c
 size: $(IMAGE)
 	$(SIZE) $(IMAGE)
 
-test sanitize analyze:
+test sanitize:
 	@true
+
+analyze:
+	@mkdir -p build/analyzer
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
+		-c main.c -o build/analyzer/main.o
 
 clean:
 	rm -rf build

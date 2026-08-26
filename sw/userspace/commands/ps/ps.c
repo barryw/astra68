@@ -270,23 +270,20 @@ append_row(uint32_t id, uint32_t generation, const char *state,
 int
 astra_main(const AstraStartupInfo *startup)
 {
-    const AstraStartupCapability *capabilities;
-    AstraProcSnapshot records[ASTRA_WAIT_MULTIPLE_MAX];
+    const AstraStartupCapability *capability;
+    AstraProcSnapshot records[ASTRA_PROCESS_COUNT_MAX] = {0};
     uint32_t listed = 0u;
     uint32_t moved = 0u;
     uint32_t status;
 
-    if (startup == NULL || startup->capabilities_address == 0u)
+    if (!astra_startup_validate(startup))
         return ASTRA_STATUS_INVALID;
-    capabilities = (const AstraStartupCapability *)(uintptr_t)
-        startup->capabilities_address;
-    for (uint32_t index = 0u; index < startup->capability_count; ++index) {
-        if (astra_capability_name_equal(capabilities[index].name, "STDOUT"))
-            stdout_handle = capabilities[index].handle;
-        else if (astra_capability_name_equal(capabilities[index].name,
-                                             "STDERR"))
-            error_handle = capabilities[index].handle;
-    }
+    capability = astra_startup_capability(startup, "STDOUT");
+    if (capability != NULL)
+        stdout_handle = capability->handle;
+    capability = astra_startup_capability(startup, "STDERR");
+    if (capability != NULL)
+        error_handle = capability->handle;
     if (stdout_handle == 0u)
         return ASTRA_STATUS_ACCESS;
     if (error_handle == 0u)

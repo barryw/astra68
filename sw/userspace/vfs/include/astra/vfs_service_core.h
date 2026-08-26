@@ -39,7 +39,15 @@ typedef struct AstraVfsOpenFile {
     uint32_t flags;
     uint16_t generation;
     uint16_t kind;
+    uint8_t state;
 } AstraVfsOpenFile;
+
+enum {
+    ASTRA_VFS_FILE_FREE = 0,
+    ASTRA_VFS_FILE_OPENING,
+    ASTRA_VFS_FILE_OPEN,
+    ASTRA_VFS_FILE_CLOSING
+};
 
 typedef struct AstraVfsSessionSlot {
     uint32_t id;            /* 0 when free */
@@ -49,6 +57,8 @@ typedef struct AstraVfsSessionSlot {
     uint16_t version;       /* the version agreed at HELLO */
     char rename_from[ASTRA_VFS_PATH_MAX];
     uint8_t rename_pending;
+    uint8_t busy;
+    uint8_t closing;
 } AstraVfsSessionSlot;
 
 typedef struct AstraVfsServiceStats {
@@ -68,6 +78,9 @@ typedef struct AstraVfsServiceStats {
     uint32_t peak_sessions;
 } AstraVfsServiceStats;
 
+typedef int (*AstraVfsStateAcquire)(void *context);
+typedef void (*AstraVfsStateRelease)(void *context);
+
 typedef struct AstraVfsService {
     AstraVfsBackend backend;
     AstraVfsSessionSlot sessions[ASTRA_VFS_SESSION_MAX];
@@ -78,12 +91,19 @@ typedef struct AstraVfsService {
     uint32_t next_session;
     uint16_t open_sessions;
     uint32_t open_files;
+    AstraVfsStateAcquire state_acquire;
+    AstraVfsStateRelease state_release;
+    void *state_lock_context;
 } AstraVfsService;
 
 /* Returns 0 when the backend or caller-owned file storage is invalid. */
 int astra_vfs_service_init(AstraVfsService *service,
                            const AstraVfsBackendOps *ops, void *context,
                            AstraVfsOpenFile *files, uint32_t file_capacity);
+int astra_vfs_service_set_state_lock(AstraVfsService *service,
+                                     AstraVfsStateAcquire acquire,
+                                     AstraVfsStateRelease release,
+                                     void *context);
 
 /*
  * One request in, one reply out. Always writes a complete reply, including for
@@ -98,6 +118,8 @@ void astra_vfs_service_dispatch_from(
     const AstraVfsRequest *request, AstraVfsReply *reply);
 int astra_vfs_service_session_owned(const AstraVfsService *service,
                                     uint32_t session, uint32_t owner);
+int astra_vfs_service_session_capacity_reached(
+    const AstraVfsService *service);
 
 /*
  * Open, read whole, close -- as one call. `node_size` is filled even when the

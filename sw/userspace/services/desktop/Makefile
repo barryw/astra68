@@ -24,8 +24,8 @@ GRAPHICS_LIB := $(GRAPHICS)/build/m68k/libastragraphics.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
 NDK_LIB := $(NDK)/build/m68k/libastra.a
 CRT0 := $(RUNTIME)/build/m68k/crt0.o
-
-all: $(IMAGE) size
+ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(GRAPHICS) $(VFS) $(NDK)
+include ../../program.mk
 
 $(TARGET): $(OBJECT) $(CRT0) $(GRAPHICS_LIB) $(VFS_LIB) $(NDK_LIB) $(RUNTIME_LIB) \
 	$(RUNTIME)/astra_user.ld
@@ -49,8 +49,13 @@ $(OBJECT): main.c
 size: $(IMAGE)
 	$(SIZE) $(IMAGE)
 
-test sanitize analyze:
+test sanitize:
 	@true
+
+analyze:
+	@mkdir -p build/analyzer
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
+		-c main.c -o build/analyzer/main.o
 
 clean:
 	rm -rf build

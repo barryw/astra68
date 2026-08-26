@@ -136,6 +136,14 @@ test_qualifying(void)
            ASTRA_VFS_OK);
     assert(strcmp(out, "WORK:main.c") == 0);
 
+    /* Bundle resources use the same rule in services and applications. */
+    assert(astra_path_qualify("APP", "", "icon.aicon", out, sizeof(out)) ==
+           ASTRA_VFS_OK);
+    assert(strcmp(out, "APP:icon.aicon") == 0);
+    assert(astra_path_qualify("APPS", "Terminal.app", "icon.aicon", out,
+                              sizeof(out)) == ASTRA_VFS_OK);
+    assert(strcmp(out, "APPS:Terminal.app/icon.aicon") == 0);
+
     /* No word at all names where the shell is standing. */
     assert(astra_path_qualify("WORK", "src", NULL, out, sizeof(out)) ==
            ASTRA_VFS_OK);

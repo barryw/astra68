@@ -47,6 +47,7 @@ static uint32_t mock_reset_calls;
 static uint32_t mock_arm_calls;
 static uint32_t mock_ack_calls;
 static uint32_t mock_wait_calls;
+static uint64_t mock_wait_deadline;
 static uint32_t mock_submit_calls;
 static uint64_t mock_now_ns;
 static int mock_device_answers;      /* 0 models a device that never replies */
@@ -72,6 +73,7 @@ mock_reset(void)
     mock_arm_calls = 0u;
     mock_ack_calls = 0u;
     mock_wait_calls = 0u;
+    mock_wait_deadline = 0u;
     mock_submit_calls = 0u;
     mock_now_ns = 1000u;
     mock_device_answers = 1;
@@ -87,6 +89,7 @@ fill_lease_info(AstraBlockLeaseInfo *info)
     info->size = ASTRA_BLOCK_LEASE_INFO_SIZE;
     info->sector_bytes = ASTRA_BLOCK_SECTOR_BYTES;
     info->max_transfer_sectors = 8u;
+    info->queue_depth = 1u;
     info->capabilities = ASTRA_BLOCK_CAP_READ | ASTRA_BLOCK_CAP_WRITE |
                          ASTRA_BLOCK_CAP_FLUSH;
     info->state_flags = ASTRA_BLOCK_STATE_LINK_UP |
@@ -261,6 +264,7 @@ astra_wait_one(uint32_t handle, uint64_t deadline_ns, uint32_t *detail)
     assert(deadline_ns > mock_now_ns);
     (void)detail;
     ++mock_wait_calls;
+    mock_wait_deadline = deadline_ns;
     /* A completion cannot be delivered into a masked source. */
     assert(mock_irq_state != MOCK_IRQ_MASKED);
     if (!mock_device_answers) {
@@ -338,6 +342,7 @@ test_request_order(void)
     assert(mock_submitted_operation == ASTRA_BLOCK_OP_FLUSH);
     /* It waited on the endpoint rather than spinning. */
     assert(mock_wait_calls == 1u);
+    assert(mock_wait_deadline == ASTRA_DEADLINE_FOREVER);
     /* Every delivered record was acknowledged. */
     assert(mock_ack_calls == 1u);
     assert(!mock_record_pending);
@@ -461,10 +466,11 @@ test_device_that_never_answers(void)
     mock_device_answers = 0;
 
     /* Bounded: the deadline expires, the device is reset, and it reports. */
-    assert(astra_lease_block_backend()->flush(&lease, 0u) ==
+    assert(astra_lease_block_backend()->flush(&lease, mock_now_ns + 1000u) ==
            ASTRA_BLOCK_TIMED_OUT);
     assert(mock_reset_calls == 1u);
     assert(mock_wait_calls >= 1u);
+    assert(mock_wait_deadline == 2000u);
 }
 
 static void

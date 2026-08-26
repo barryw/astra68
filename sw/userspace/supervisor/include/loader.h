@@ -9,8 +9,8 @@
 #include <astra/vfs_service.h>
 
 #define SUPERVISOR_MANIFEST_ENTRY_MAX 6u
-/* Three watch slots are control ports; the rest can track child processes. */
-#define SUPERVISOR_PROCESS_MAX (ASTRA_WAIT_MULTIPLE_MAX - 3u)
+/* Every process slot can be represented; the wait set has separate room. */
+#define SUPERVISOR_PROCESS_MAX ASTRA_PROCESS_COUNT_MAX
 /* Long enough for "SERVICES:display" and an application bundle name. */
 #define SUPERVISOR_PROCESS_NAME_MAX ASTRA_PROC_NAME_MAX
 /* One reader at a time is the shape of `ps`; a queue of one is enough. */
@@ -47,8 +47,7 @@ int supervisor_manifest_parse(char *text, uint32_t length,
 int supervisor_manifest_grant(char *text, SupervisorManifestGrant *grant);
 
 /* Launches the shipped manifest from the temporary bootstrap mount. */
-uint32_t supervisor_loader_start(const AstraStartupInfo *startup,
-                                 const AstraStartupCapability *capabilities);
+uint32_t supervisor_loader_start(const AstraStartupInfo *startup);
 
 /* The supervisor's local event target and the client capability it publishes. */
 /*
@@ -65,8 +64,6 @@ uint32_t supervisor_loader_event_control(void);
 void supervisor_loader_pump_event_control(void);
 
 /* Keeps supervising after a resident service exits; the kernel's init lives. */
-uint32_t supervisor_loader_watch(
-    const AstraStartupInfo *startup,
-    const AstraStartupCapability *capabilities);
+uint32_t supervisor_loader_watch(const AstraStartupInfo *startup);
 
 #endif

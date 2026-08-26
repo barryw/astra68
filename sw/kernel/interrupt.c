@@ -1,5 +1,8 @@
 #include "interrupt.h"
 
+#include <astra/compiler.h>
+#include <astra/integer.h>
+
 #include "irq.h"
 #include "monitor.h"
 #include "performance.h"
@@ -33,17 +36,6 @@ _Static_assert(sizeof(KernelDeferredInterrupt) == 16u,
 _Static_assert((KERNEL_INTERRUPT_DEFERRED_DEPTH &
                 (KERNEL_INTERRUPT_DEFERRED_DEPTH - 1u)) == 0u,
                "deferred interrupt depth must be a power of two");
-
-static void interrupt_barrier(void)
-{
-    __asm__ volatile ("" ::: "memory");
-}
-
-static void interrupt_increment_saturating(uint32_t *value)
-{
-    if (*value != UINT32_MAX)
-        ++*value;
-}
 
 static void clear_deferred_interrupts(void)
 {
@@ -148,7 +140,7 @@ static KernelWorkerServiceResult service_deferred_interrupts(
 
         if (read_sequence == deferred_write_sequence)
             break;
-        interrupt_barrier();
+        astra_compiler_barrier();
         source_event = &deferred_interrupts[
             read_sequence & (KERNEL_INTERRUPT_DEFERRED_DEPTH - 1u)];
         event = *source_event;
@@ -165,7 +157,7 @@ static KernelWorkerServiceResult service_deferred_interrupts(
                                   woken_threads, timestamp, &trace))
             return KERNEL_WORKER_SERVICE_FATAL;
         deferred_read_sequence = read_sequence + 1u;
-        interrupt_increment_saturating(&deferred_dispatched);
+        astra_u32_increment_saturating(&deferred_dispatched);
         ++completed;
         if (result == KERNEL_INTERRUPT_FATAL)
             return KERNEL_WORKER_SERVICE_FATAL;
@@ -315,7 +307,7 @@ KernelInterruptDispatchResult dispatch_device_interrupt(
     write_sequence = deferred_write_sequence;
     pending = write_sequence - deferred_read_sequence;
     if (pending >= KERNEL_INTERRUPT_DEFERRED_DEPTH) {
-        interrupt_increment_saturating(&deferred_dropped);
+        astra_u32_increment_saturating(&deferred_dropped);
         return KERNEL_INTERRUPT_FATAL;
     }
     event = &deferred_interrupts[
@@ -325,17 +317,17 @@ KernelInterruptDispatchResult dispatch_device_interrupt(
     event->source = source;
     event->vector = vector;
     if (kernel_worker_signal(KERNEL_WORKER_IRQ_DISPATCH) != KERNEL_WORKER_OK) {
-        interrupt_increment_saturating(&deferred_dropped);
+        astra_u32_increment_saturating(&deferred_dropped);
         return KERNEL_INTERRUPT_FATAL;
     }
-    interrupt_barrier();
+    astra_compiler_barrier();
     deferred_write_sequence = write_sequence + 1u;
-    interrupt_increment_saturating(&deferred_queued);
+    astra_u32_increment_saturating(&deferred_queued);
     ++pending;
     if (pending > deferred_maximum_pending)
         deferred_maximum_pending = pending;
     event->elapsed_cycles = kernel_platform_cpu_cycles_low() - timestamp.low;
-    interrupt_barrier();
+    astra_compiler_barrier();
     return KERNEL_INTERRUPT_DEVICE;
 }
 

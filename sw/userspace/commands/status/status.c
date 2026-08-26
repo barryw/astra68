@@ -23,7 +23,6 @@ ASTRA_PROGRAM("status", 1, 0, 0, "Barry Walker",
 int
 astra_main(const AstraStartupInfo *startup)
 {
-    const uint32_t *argv;
     const char *word;
     uint32_t value = 0u;
     uint32_t index = 0u;
@@ -33,12 +32,7 @@ astra_main(const AstraStartupInfo *startup)
      * says. The startup block itself was already validated by crt0, which
      * exits before reaching here if it was not.
      */
-    if (startup == NULL || startup->argc < 2u ||
-        startup->argv_address == 0u) {
-        return 0;
-    }
-    argv = (const uint32_t *)(uintptr_t)startup->argv_address;
-    word = (const char *)(uintptr_t)argv[1];
+    word = astra_startup_argument(startup, 1u);
     if (word == NULL) {
         return 0;
     }

@@ -381,13 +381,8 @@ a protected loader/supervisor service parses ordinary ELF, maps segments,
 constructs arguments, and supplies the initial capabilities. There is no
 native `fork` or implicit inheritance of all parent authority.
 
-`docs/TERMINAL_AND_POSIX.md` identifies copy-on-write process cloning as an
-**OPEN** mechanism that may eventually be needed by a userspace POSIX
-personality for a correct zsh port. That design note does not authorize a
-kernel call. Before implementation, this specification must define and test
-the clone boundary, commit accounting, inherited-handle set, rollback, cache/
-ATC maintenance, and interaction with waits and device ownership. Native Astra
-creation remains explicit spawn regardless of that compatibility decision.
+Native Astra creation remains explicit spawn. The compatibility clone below is
+not a second native creation model.
 
 Bootstrapping is the narrow exception: firmware supplies one immutable initial
 user image and a bounded load description in `BootInfo`. The kernel validates
@@ -404,6 +399,78 @@ is reclaimed with its last handle.
 The kernel validates final entry PC, stack, mapping permissions, and initial
 SR before starting a thread. The loader, not the kernel, owns filesystem paths
 and bundle policy.
+
+### 8.4 POSIX compatibility clone
+
+**DECISION:** A narrow `PROCESS_CLONE` operation may clone the calling process
+for the POSIX personality. It is not used by native launch APIs and does not
+parse executables, paths, arguments, or environments.
+
+The clone copies only the calling thread. It resumes at the syscall return
+boundary with zero in the child and the child identifier in the parent. Other
+thread records, outstanding waits, and saved kernel continuations are not
+copied; their userspace memory remains part of the cloned address space, as
+POSIX requires. Calling while another thread is live is valid only after the
+POSIX runtime's at-fork preparation has made its userspace state consistent.
+
+Handle inheritance is limited to entries whose object installation supplied a
+retain operation and declared clone-safe semantics. Handles retain their exact
+numeric slot and rights so copied userspace state still names the same object.
+The child receives new PROCESS and THREAD self handles in the copied slots;
+device, IRQ, DMA, service-ownership endpoints marked exclusive, and any other
+non-cloneable entry remain absent. Clone fails atomically if a requested handle
+cannot be retained; it never silently widens rights or converts an unsafe
+object into an inherited one.
+
+Private executable data, the calling stack, and clone-private anonymous areas
+have POSIX private-memory semantics. Explicitly shared areas and immutable
+library mappings remain shared. The first correctness oracle may eagerly copy
+private pages, charging every copied frame to the child before publication.
+That oracle is a test and bring-up implementation, not the production release
+path.
+
+The production path uses copy-on-write mappings:
+
+- every writable private mapping is made read-only in parent and child before
+  either process can resume;
+- a write-protection fault allocates one page against the writing process's
+  existing owner quota, copies exactly one
+  page, publishes the writable descriptor, performs the required cache and ATC
+  maintenance, and restarts the faulting instruction;
+- the last alias becomes writable without copying when its original permissions
+  allowed writing;
+- exit, exec, unmap, and decommit release mapping references exactly once and
+  transfer the source frame's charge to a surviving alias when its owner dies;
+- allocation or retain failure before publication rolls back the complete
+  child and restores any parent descriptors changed during preparation.
+
+**IMPLEMENTED:** clone-private anonymous reservations occupy the
+root-slot-aligned window between transfer memory and user stacks. Reservation
+uses per-address-space bitmaps derived from that complete window, commits no
+frame, and first touch allocates a zeroed process page through the existing
+owner quota. User-copy precommits a complete anonymous destination/source
+range before touching it. `PROCESS_CLONE` transactionally clones the complete
+address space, write-protects private mappings, retains only explicitly
+clone-safe handles at their exact numeric values, and publishes one child
+thread. Tests cover child write splitting, byte isolation, waitable exit,
+rollback, last-alias privatization, and automatic owner-death transfer. The
+allocator's protected reserve remains unavailable to ordinary COW faults, so
+an abusive or exhausted process can fail without consuming the kernel's
+survival budget.
+
+Clone-private areas carry per-process page identity after cloning; an area's
+ordinary transferable/shared form does not silently change meaning. A private
+area therefore cannot be transferred until it is explicitly converted or
+copied by a higher layer.
+
+The kernel records clone calls, failures, pages considered, COW aliases,
+reserved frames, first-write faults, avoided copies, copied bytes, rollback
+work, and cycle maxima. On the 12.5 MHz production CPU the automated regression
+budgets are 50,000 fixed cycles plus 600 cycles per mapped page for a COW clone,
+and 12,000 cycles for one first-write fault. These are gates, not promises to
+applications; a measured miss blocks the dependency or revises this section
+with the captured cone and cost. The eager oracle has no production cycle
+budget because it is forbidden from the release image.
 
 ## 9. Scheduling, synchronization, and time
 
@@ -627,6 +694,34 @@ processes with rights no greater than the mapping handle permits. The kernel
 does not infer ownership from mappings. Every service protocol using shared
 memory defines who may mutate each buffer and the state transition that hands
 ownership to another party.
+
+### 11.4 POSIX compatibility byte rings
+
+**DECISION:** POSIX pipes use the existing area-backed ring object and its
+wait queues, but not the SPSC userspace reservation protocol. A ring created in
+kernel-copy byte mode accepts one-byte elements and exposes bounded
+`RING_READ_TRY` and `RING_WRITE_TRY` operations. The kernel serializes each
+operation, copies at most one user-copy page, advances the canonical position
+only after the complete copy succeeds, and wakes the opposite endpoint.
+
+Byte-mode producer and consumer handles are clone-safe and reference counted.
+This permits several post-clone readers or writers without turning the
+ordinary mapped-ring ABI into an unsafe multi-producer protocol. Ordinary bulk
+rings remain mapped, SPSC, and move-only. Closing the last producer lets
+readers drain committed bytes and then observe end of file; closing the last
+consumer makes writers observe peer death. Creator death alone does not
+override surviving byte-mode endpoint references.
+
+Writes through `PIPE_BUF` bytes are all-or-nothing. Larger writes may make a
+short forward-progressing transfer. Capacity is a power of two constrained by
+the charged containing area and unsigned position arithmetic, not by a second
+small pipe quota. No payload storage exists outside that area.
+
+The kernel records byte-ring read/write calls, copied bytes, would-block
+results, peer closures, wakeups, and cycle maxima. On the 12.5 MHz production
+CPU, one operation has a 30,000-cycle fixed budget plus 100 cycles per copied
+byte; the gate evaluates the actual returned byte count rather than treating a
+four-byte and four-kibibyte copy as the same operation.
 
 ## 12. Native syscall ABI
 

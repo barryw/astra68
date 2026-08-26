@@ -1,5 +1,8 @@
 #include "monitor.h"
 
+#include <astra/compiler.h>
+#include <astra/integer.h>
+
 #include "bytes.h"
 #include "handle.h"
 #include "irq_latency.h"
@@ -63,17 +66,6 @@ _Static_assert((KERNEL_MONITOR_INPUT_SIZE &
                KERNEL_MONITOR_INPUT_SIZE <= 256u,
                "monitor input ring must be a byte-indexed power of two");
 
-static void monitor_barrier(void)
-{
-    __asm__ volatile ("" ::: "memory");
-}
-
-static void increment_saturating(uint32_t *value)
-{
-    if (*value != UINT32_MAX)
-        ++*value;
-}
-
 static uint32_t text_length(const char *text)
 {
     uint32_t length = 0u;
@@ -97,13 +89,13 @@ static bool input_push(KernelMonitorChannel *channel, uint8_t value)
                              (KERNEL_MONITOR_INPUT_SIZE - 1u));
 
     if (next == channel->input.head) {
-        increment_saturating(&channel->stats.input_dropped);
+        astra_u32_increment_saturating(&channel->stats.input_dropped);
         return false;
     }
     channel->input.bytes[tail] = value;
-    monitor_barrier();
+    astra_compiler_barrier();
     channel->input.tail = next;
-    increment_saturating(&channel->stats.input_bytes);
+    astra_u32_increment_saturating(&channel->stats.input_bytes);
     return true;
 }
 
@@ -114,7 +106,7 @@ static bool input_pop(KernelMonitorChannel *channel, uint8_t *value)
     if (value == NULL || head == channel->input.tail)
         return false;
     *value = channel->input.bytes[head];
-    monitor_barrier();
+    astra_compiler_barrier();
     channel->input.head = (uint8_t)((head + 1u) &
                                     (KERNEL_MONITOR_INPUT_SIZE - 1u));
     return true;
@@ -535,7 +527,7 @@ static void publish_response(KernelMonitorBuilder *builder)
 
     if (builder->truncated != 0u) {
         channel->response[builder->length++] = '!';
-        increment_saturating(&channel->stats.output_truncations);
+        astra_u32_increment_saturating(&channel->stats.output_truncations);
         KERNEL_TRACE(
             KERNEL_TRACE_LEVEL_WARNING,
             KERNEL_TRACE_EVENT_MONITOR_DROP, channel->transport,
@@ -546,7 +538,7 @@ static void publish_response(KernelMonitorBuilder *builder)
         channel->response[builder->length - 1u] != '\n')
         channel->response[builder->length++] = '\n';
     channel->response_offset = 0u;
-    monitor_barrier();
+    astra_compiler_barrier();
     channel->response_length = builder->length;
 }
 
@@ -571,7 +563,7 @@ static void dispatch_command(KernelMonitorChannel *channel)
     }
     if (command_index == UINT32_MAX) {
         builder_puts(&builder, "ERR unknown command");
-        increment_saturating(&channel->stats.unknown_commands);
+        astra_u32_increment_saturating(&channel->stats.unknown_commands);
     }
     kernel_platform_cpu_cycles(&finished);
     elapsed = finished.low - started.low;
@@ -580,9 +572,9 @@ static void dispatch_command(KernelMonitorChannel *channel)
     if (elapsed > channel->stats.max_command_cycles)
         channel->stats.max_command_cycles = elapsed;
     if (elapsed > KERNEL_MONITOR_COMMAND_BUDGET_CYCLES)
-        increment_saturating(&channel->stats.command_overruns);
+        astra_u32_increment_saturating(&channel->stats.command_overruns);
     kernel_performance_end(performance);
-    increment_saturating(&channel->stats.commands);
+    astra_u32_increment_saturating(&channel->stats.commands);
     /*
      * A person typing at the monitor is a rare thing that explains what was
      * done to a machine, not a per-transfer stream, so it is kept.
@@ -597,13 +589,13 @@ static void dispatch_command(KernelMonitorChannel *channel)
 
 static void complete_line(KernelMonitorChannel *channel)
 {
-    increment_saturating(&channel->stats.completed_lines);
+    astra_u32_increment_saturating(&channel->stats.completed_lines);
     if (channel->line_overflow != 0u) {
         KernelMonitorBuilder builder = {channel, 0u, 0u};
 
         builder_puts(&builder, "ERR line too long");
         publish_response(&builder);
-        increment_saturating(&channel->stats.line_overflows);
+        astra_u32_increment_saturating(&channel->stats.line_overflows);
         KERNEL_TRACE(
             KERNEL_TRACE_LEVEL_WARNING,
             KERNEL_TRACE_EVENT_MONITOR_DROP, channel->transport,
@@ -653,7 +645,7 @@ static bool uart_flush(KernelMonitorChannel *channel,
                 channel->stats.output_dropped = UINT32_MAX;
             else
                 channel->stats.output_dropped += remaining;
-            increment_saturating(&channel->stats.sink_failures);
+            astra_u32_increment_saturating(&channel->stats.sink_failures);
             KERNEL_TRACE(
                 KERNEL_TRACE_LEVEL_WARNING,
                 KERNEL_TRACE_EVENT_MONITOR_DROP, channel->transport,
@@ -665,7 +657,7 @@ static bool uart_flush(KernelMonitorChannel *channel,
         }
         ++channel->response_offset;
         ++*operations;
-        increment_saturating(&channel->stats.output_bytes);
+        astra_u32_increment_saturating(&channel->stats.output_bytes);
     }
     if (channel->response_offset == channel->response_length) {
         channel->response_offset = 0u;
@@ -685,7 +677,7 @@ static bool spi_flush(KernelMonitorChannel *channel,
             return false;
         ++channel->response_offset;
         ++*operations;
-        increment_saturating(&channel->stats.output_bytes);
+        astra_u32_increment_saturating(&channel->stats.output_bytes);
     }
     if (channel->response_offset == channel->response_length) {
         channel->response_offset = 0u;
@@ -847,7 +839,7 @@ bool kernel_monitor_uart_irq_service(uint8_t source, uint64_t timestamp,
     }
     if ((status & UART_RX_FIFO_OVERRUN) != 0u) {
         kernel_platform_diagnostic_ack_overrun();
-        increment_saturating(&channel->stats.input_dropped);
+        astra_u32_increment_saturating(&channel->stats.input_dropped);
         ++dropped;
     }
     if (dropped != 0u)
@@ -889,11 +881,11 @@ bool kernel_monitor_spi_irq_service(uint8_t source, uint64_t timestamp,
     if (errors != 0u) {
         kernel_platform_monitor_spi_ack_errors(errors);
         if ((errors & MONITOR_ERROR_RX_EMPTY) != 0u) {
-            increment_saturating(&channel->stats.input_dropped);
+            astra_u32_increment_saturating(&channel->stats.input_dropped);
             ++dropped;
         }
         if ((errors & MONITOR_ERROR_TX_FULL) != 0u)
-            increment_saturating(&channel->stats.output_dropped);
+            astra_u32_increment_saturating(&channel->stats.output_dropped);
     }
     if (dropped != 0u || errors != 0u)
         (void)kernel_trace_stage_at(

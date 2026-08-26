@@ -1,23 +1,26 @@
 # Axiom kernel and Astra service ABI
 
-Status: provisional ABI contract, revision 0.9 (2026-08-24)
+Status: provisional ABI contract, revision 0.9 (2026-08-25)
 
 The ABI is big-endian, 32-bit, naturally aligned, and independent of kernel C
 layouts. Only the user/kernel ABI and versioned service protocols are stable.
 Kernel-internal structures and function calls may change at any time.
 
-## Process startup ABI 3
+## Process startup ABI 4
 
 `sw/include/astra/process.h` defines the 64-byte `AstraStartupInfo` and
-92-byte `AstraStartupCapability` records (`ASTRA_STARTUP_ABI_VERSION` 3). ABI
-3 adds the conventional null-terminated environment vector. The initial thread
+92-byte `AstraStartupCapability` records (`ASTRA_STARTUP_ABI_VERSION` 4). ABI
+3 added the conventional null-terminated environment vector; ABI 4 replaces
+the final reserved words with an optional read-only personality handoff address
+and size used by atomic image replacement. The initial thread
 enters `_start` with the read-only startup-block logical address in `D2`, its
 process self handle in `D4`, and its thread self handle in `D5`. The block
 carries explicit bounded argument, environment, and initial-capability
 tables. Arguments, environment pointers, strings, and capabilities must fit
 the actual 4 KiB startup page; there is no smaller environment quota. Counts
-are independent of addresses, the capability count is at most 32, and all
-reserved words are zero. `docs/USERSPACE_RUNTIME.md` defines
+are independent of addresses and the capability count is at most 32. A handoff
+is either absent or a complete mapped range; its bytes are opaque to Axiom.
+`docs/USERSPACE_RUNTIME.md` defines
 validation, ownership, and exit.
 
 The boot-supplied supervisor and every later protected loader use this same
@@ -87,7 +90,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 
 | Number | Name | State | Contract |
 |---:|---|---|---|
-| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010016`, `D2=process handle`, `D3=calling-thread handle` |
+| 0 | `QUERY_ABI` | CURRENT | `D1=0x0001001d`, `D2=process handle`, `D3=calling-thread handle` |
 | 1 | `PROGRESS` | K1 TEST ONLY | monotonic test progress, not a product ABI |
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `PROCESS_EXIT` (`EXIT` compatibility alias) | CURRENT | terminates the calling process and all of its threads |
@@ -139,6 +142,15 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 55 | `CLOCK_REALTIME` | CURRENT CANDIDATE | returns the date as nanoseconds since the Unix epoch in `D1:D2` (high:low); `UNSUPPORTED` when the machine's wall clock is not valid, never zero |
 | 56 | `LIBRARY_ATTACH` | CURRENT CANDIDATE | `D1=aligned 44-byte AstraLibraryReference`, `D2:D3=AstraLoadedLibrary output`; maps an exact resident identity, or the newest resident compatible ABI when `LATEST` is requested; returns `WOULD_BLOCK` on a cache miss |
 | 57 | `PROCESS_PRIORITY` | CURRENT CANDIDATE | `D1=process handle with ADMINISTER right`, `D2=priority 1-23`; atomically changes the process default and requeues every live thread, returning the previous priority in `D1` |
+| 58 | `PROCESS_CLONE` | CURRENT CANDIDATE | atomically clones the caller with COW private pages and exact clone-safe handles; parent gets child handle/id in `D1:D2`, child gets zero/zero |
+| 59 | `RING_READ_TRY` | CURRENT CANDIDATE | `D1=kernel-copy consumer`, `D2=user output`, `D3=capacity` (at most 4 KiB); returns copied bytes in `D1` |
+| 60 | `RING_WRITE_TRY` | CURRENT CANDIDATE | `D1=kernel-copy producer`, `D2=user input`, `D3=length` (at most 4 KiB), `D4=flags`; returns copied bytes in `D1` |
+| 61 | `VM_PRIVATE_RESERVE` | CURRENT CANDIDATE | `D1=requested bytes`, `D2=R/RW permissions`; reserves clone-private anonymous root slots without committing frames and returns base/span in `D1:D2` |
+| 62 | `VM_PRIVATE_DECOMMIT` | CURRENT CANDIDATE | `D1=address`, `D2=length`; releases whole committed pages inside the anonymous reservation and returns the page count in `D1` |
+| 63 | `SIGNAL_CONFIGURE` | CURRENT CANDIDATE | registers the calling process's POSIX signal trampoline, dedicated writable stack, and blocked mask; returns pending and previous blocked masks |
+| 64 | `INTERVAL_TIMER` | CURRENT CANDIDATE | arms `ITIMER_REAL` from relative delay/interval nanoseconds in `D1:D2`/`D3:D4`, returning the previous remaining/interval values |
+| 65 | `SIGNAL_RETURN` | CURRENT CANDIDATE | restores the kernel-held context saved by the active signal upcall |
+| 66 | `PROCESS_EXEC` | CURRENT CANDIDATE | `D1=image`, `D2=image bytes`, `D3=32-byte AstraExecRequest`; atomically replaces the caller's image, startup vectors, private VM, and threads while preserving process identity and eligible handles; success resumes at the new entry and does not return |
 
 Areas are at most 4 MiB. This is one complete 1,024-entry MC68030 page table,
 not an application-size policy; larger shared mappings require a multi-table
@@ -146,7 +158,7 @@ transaction or a streaming protocol. VFS bulk transfers use this same bound
 instead of imposing a smaller protocol limit.
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
-not panic. `QUERY_ABI` reports revision `0x00010016`; a later revision may add
+not panic. `QUERY_ABI` reports revision `0x0001001d`; a later revision may add
 feature bits before additional calls freeze.
 
 Ordinary process priorities are 1 through 23, with 16 as normal; larger values
@@ -340,6 +352,12 @@ Every mapping requires `read` and `map`; a writable mapping also requires
 The producer carries `write`, `signal`, `wait`, and `transfer`; the consumer
 carries `read`, `signal`, `wait`, and `transfer`.
 
+Kernel-copy byte-ring endpoints are the deliberate exception to move-only
+retention: they are clone-safe and reference counted so post-clone readers and
+writers share one byte stream. They are never mapped into userspace and reject
+`RING_NOTIFY`; all position changes pass through `RING_READ_TRY` or
+`RING_WRITE_TRY` under kernel serialization.
+
 ## Versioned structures
 
 Every public input/output object begins with this 8-byte prefix:
@@ -467,6 +485,14 @@ returns both kernel shadow positions, and wakes the peer. The only current flag
 is `ASTRA_BULK_RING_NOTIFY_CORRUPT`, which terminally closes a corrupt ring.
 The exact shared-header layout, fence ordering, quotas, and lifecycle are
 normative in `SHARED_AREAS_AND_BULK_RINGS.md` and the public NDK headers.
+
+`ASTRA_BULK_RING_CREATE_KERNEL_COPY` selects the POSIX compatibility byte
+mode. Its element size is one, its power-of-two capacity is bounded only by the
+charged containing area and unsigned position arithmetic, and its endpoints
+are not user-mappable. Writes through the 4 KiB transfer maximum may request
+atomic publication; larger POSIX writes make a short forward-progressing
+transfer. Peer closure, readiness, wait queues, ownership charges, and backing
+storage remain the common ring mechanisms.
 
 ## Physical input ABI 1.1
 
