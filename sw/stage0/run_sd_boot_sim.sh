@@ -11,11 +11,11 @@ test_bytes="${SDRAM_SIM_TEST_BYTES:-65536}"
 progress="${SD_BOOT_SIM_PROGRESS:-0}"
 reuse_sim="${SD_BOOT_SIM_REUSE:-0}"
 make -C sw/stage0 clean all
-make -C sw/boot clean all \
+make -C sw/boot clean all legacy-rom \
     CPU_CLK_DIV_BIT=0 SDRAM_ENABLE=1 HDMI_ENABLE=0 \
     EXTRA_CFLAGS="-DMEM_BENCH_BYTES=256 -DDMA_BENCH_BYTES=1024"
 python3 sw/stage0/make_fat32_image.py \
-    sw/boot/astra68.rom fpga/soc/sim/sdcard.img
+    sw/boot/build/astra68.rom fpga/soc/sim/sdcard.img
 python3 sw/boot/bin2hex.py \
     sw/stage0/stage0.bin fpga/soc/sim/rom_init.hex
 

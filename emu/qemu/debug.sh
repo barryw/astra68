@@ -15,13 +15,13 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/../.." && pwd)
 
 QEMU=${QEMU:-/tmp/qemu-final-build/qemu-system-m68k}
-ROM=${ROM:-$ROOT/sw/boot/astra_boot.bin}
-KERNEL_ELF=${KERNEL_ELF:-$ROOT/sw/kernel/astra_kernel.elf}
+ROM=${ROM:-$ROOT/sw/boot/build/astra_boot.bin}
+KERNEL_ELF=${KERNEL_ELF:-$ROOT/sw/kernel/build/astra_kernel.elf}
 USER_ELF=${USER_ELF:-$ROOT/sw/userspace/supervisor/build/m68k/astra_supervisor.elf}
 USER_TEXT=${USER_TEXT:-0x00100000}
 # The ROM is where the machine is at reset, so its symbols are the first ones
 # anybody needs.
-BOOT_ELF=${BOOT_ELF:-$ROOT/sw/boot/astra_boot.elf}
+BOOT_ELF=${BOOT_ELF:-$ROOT/sw/boot/build/astra_boot.elf}
 BOOT_TEXT=${BOOT_TEXT:-0xffe00400}
 PORT=${PORT:-1234}
 IMAGE=${IMAGE:-}

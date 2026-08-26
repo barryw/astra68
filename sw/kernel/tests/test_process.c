@@ -3,6 +3,7 @@
 #include "block.h"
 #include "dma.h"
 #include "exception.h"
+#include "elf.h"
 #include "irq.h"
 #include "memory.h"
 #include "platform.h"
@@ -7729,6 +7730,155 @@ static void test_a_program_can_launch_a_program(void)
     }
 }
 
+#define STREAM_FILE_OFFSET (5u * 1024u * 1024u)
+
+static void test_streamed_launch_is_large_and_transactional(void)
+{
+    static const uint8_t parent_image[] = {0x4eu, 0x71u};
+    KernelMemoryStats baseline_memory;
+    KernelMemoryStats after_abort_memory;
+    KernelSchedulerStats baseline_stats;
+    KernelSchedulerStats after_stats;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t user_bytes = KERNEL_PROCESS_STACK_TOP - KERNEL_PAGE_SIZE;
+    uint32_t parent_id = 0u;
+    uint32_t load_handle;
+
+    launch_build_image();
+    launch_put32(52u + 4u, STREAM_FILE_OFFSET);
+    initialize_test();
+    assert(kernel_process_create(parent_image, sizeof(parent_image), 0u, 0u,
+                                 &parent_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(kernel_memory_stats(&baseline_memory));
+    assert(kernel_process_stats(&baseline_stats));
+
+    assert(kernel_user_copy_to_asm(user_bytes, launch_image,
+                                   KERNEL_ELF_HEADER_SIZE) ==
+           KERNEL_USER_COPY_OK);
+    registers[0] = ASTRA_SYSCALL_PROCESS_LOAD_BEGIN;
+    registers[1] = user_bytes;
+    registers[2] = STREAM_FILE_OFFSET + LAUNCH_IMAGE_BYTES;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    load_handle = next->data[1];
+    assert(load_handle != KERNEL_HANDLE_INVALID);
+    assert(next->data[2] == 52u &&
+           next->data[3] == KERNEL_ELF_PHENTSIZE);
+
+    /* Closing an unfinished load is the abort operation. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CLOSE;
+    registers[1] = load_handle;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_memory_stats(&after_abort_memory));
+    assert(after_abort_memory.free_frames == baseline_memory.free_frames);
+    assert(kernel_process_stats(&after_stats));
+    assert(after_stats.live_processes == baseline_stats.live_processes);
+
+    /*
+     * Prepare twice. The first is aborted after its child and segment page
+     * exist; the second commits. Both follow the exact offsets the kernel
+     * returns, and an off-by-one write is refused without advancing them.
+     */
+    for (uint32_t attempt = 0u; attempt < 2u; ++attempt) {
+        assert(kernel_user_copy_to_asm(user_bytes, launch_image,
+                                       KERNEL_ELF_HEADER_SIZE) ==
+               KERNEL_USER_COPY_OK);
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_PROCESS_LOAD_BEGIN;
+        registers[1] = user_bytes;
+        registers[2] = STREAM_FILE_OFFSET + LAUNCH_IMAGE_BYTES;
+        assert(kernel_process_on_syscall(
+                   registers, KERNEL_PROCESS_STACK_TOP - 8u, frame, &next) ==
+               KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        load_handle = next->data[1];
+
+        assert(kernel_user_copy_to_asm(user_bytes, launch_image + 52u,
+                                       KERNEL_ELF_PHENTSIZE) ==
+               KERNEL_USER_COPY_OK);
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_PROCESS_LOAD_WRITE;
+        registers[1] = load_handle;
+        registers[2] = 53u;
+        registers[3] = user_bytes;
+        registers[4] = KERNEL_ELF_PHENTSIZE;
+        assert(kernel_process_on_syscall(
+                   registers, KERNEL_PROCESS_STACK_TOP - 8u, frame, &next) ==
+               KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+        registers[2] = 52u;
+        assert(kernel_process_on_syscall(
+                   registers, KERNEL_PROCESS_STACK_TOP - 8u, frame, &next) ==
+               KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        assert(next->data[1] == 0u && next->data[2] == 0u);
+
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_PROCESS_LOAD_CREATE;
+        registers[1] = load_handle;
+        assert(kernel_process_on_syscall(
+                   registers, KERNEL_PROCESS_STACK_TOP - 8u, frame, &next) ==
+               KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        assert(next->data[1] == STREAM_FILE_OFFSET);
+        assert(next->data[2] == LAUNCH_IMAGE_BYTES);
+
+        assert(kernel_user_copy_to_asm(user_bytes, launch_image,
+                                       LAUNCH_IMAGE_BYTES) ==
+               KERNEL_USER_COPY_OK);
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_PROCESS_LOAD_WRITE;
+        registers[1] = load_handle;
+        registers[2] = STREAM_FILE_OFFSET;
+        registers[3] = user_bytes;
+        registers[4] = LAUNCH_IMAGE_BYTES;
+        assert(kernel_process_on_syscall(
+                   registers, KERNEL_PROCESS_STACK_TOP - 8u, frame, &next) ==
+               KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        assert(next->data[1] == 0u && next->data[2] == 0u);
+
+        if (attempt == 0u) {
+            memset(registers, 0, sizeof(registers));
+            registers[0] = ASTRA_SYSCALL_CLOSE;
+            registers[1] = load_handle;
+            assert(kernel_process_on_syscall(
+                       registers, KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                       &next) == KERNEL_PROCESS_OK);
+            assert(next->data[0] == ASTRA_SYSCALL_OK);
+            assert(kernel_memory_stats(&after_abort_memory));
+            assert(after_abort_memory.free_frames ==
+                   baseline_memory.free_frames);
+            assert(kernel_process_stats(&after_stats));
+            assert(after_stats.live_processes ==
+                   baseline_stats.live_processes);
+            continue;
+        }
+
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_PROCESS_LOAD_COMMIT;
+        registers[1] = load_handle;
+        assert(kernel_process_on_syscall(
+                   registers, KERNEL_PROCESS_STACK_TOP - 8u, frame, &next) ==
+               KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        assert(next->data[1] != KERNEL_HANDLE_INVALID && next->data[2] != 0u);
+    }
+    assert(kernel_process_stats(&after_stats));
+    assert(after_stats.live_processes == baseline_stats.live_processes + 1u);
+}
+
 static uint32_t startup_be32(const uint8_t *bytes);
 
 static void test_exec_replaces_one_image_and_preserves_argv(void)
@@ -8979,6 +9129,7 @@ int main(void)
     test_capability_roots_are_bounded();
     test_an_activity_is_the_threads_own();
     test_a_program_can_launch_a_program();
+    test_streamed_launch_is_large_and_transactional();
     test_exec_replaces_one_image_and_preserves_argv();
     test_reading_the_stream_is_the_privileged_half();
     test_no_debug_surface_closes_the_stream();

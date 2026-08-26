@@ -31,8 +31,8 @@ ADDRESS = re.compile(r"0x[0-9a-fA-F]{4,8}")
 IMAGES = (
     ("user", 0x00100000, 0x00200000,
      "sw/userspace/supervisor/build/m68k/astra_supervisor.elf"),
-    ("kernel", 0x02044000, 0x02100000, "sw/kernel/astra_kernel.elf"),
-    ("rom", 0xFFE00000, 0x100000000, "sw/boot/astra_boot.elf"),
+    ("kernel", 0x02044000, 0x02100000, "sw/kernel/build/astra_kernel.elf"),
+    ("rom", 0xFFE00000, 0x100000000, "sw/boot/build/astra_boot.elf"),
 )
 
 ADDR2LINE = os.environ.get("ADDR2LINE", "m68k-linux-gnu-addr2line")

@@ -7,11 +7,12 @@ source ~/oss-cad-suite/environment 2>/dev/null || true
 
 echo "boot simulation CPU=TG68K030_MMU2"
 make -C sw/boot clean all CPU_CLK_DIV_BIT=0
-python3 sw/boot/bin2hex.py sw/boot/astra_boot.bin sw/boot/rom_boot.hex
+python3 sw/boot/bin2hex.py sw/boot/build/astra_boot.bin \
+    sw/boot/build/rom_boot.hex
 
 cd fpga/soc/sim
 rm -rf obj_dir_boot boot_core.v
-cp ../../../sw/boot/rom_boot.hex rom_init.hex
+cp ../../../sw/boot/build/rom_boot.hex rom_init.hex
 CORE_OUT=boot_core.v bash mkcore.sh
 verilator --binary -j 0 --Mdir obj_dir_boot --top-module tb_boot \
     -Wno-lint -Wno-UNOPTFLAT --timing \

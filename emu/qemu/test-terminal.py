@@ -89,10 +89,8 @@ PROMPT = "WORK:>"
 BANNER = "COMMANDS"
 
 SCRIPT = [
-    # The shell's report of what the child exited with, not the name echoed
-    # back: `mkdir` is a program now and says nothing when it works, so a
-    # needle that matched the typed line would have passed whether the
-    # directory was made or not. `ls` on the next line is what proves it was.
+    # `mkdir` is silent on success. The diagnostic event is the completion
+    # barrier; `ls` below proves the directory was actually created.
     ("mkdir proto", "finished with status 0"),
     ("write hello.txt via the protocol", "hello.txt"),
     ("ls", "proto/"),
@@ -468,9 +466,11 @@ class Machine:
         self.qmp = Qmp(self.qmp_path)
         self.names = trace_decode.kernel_event_names(
             os.path.join(ROOT, "sw/kernel/trace.h"))
-        self.catalog = trace_decode.load_catalogs([os.path.join(
-            ROOT, "sw/userspace", "supervisor", "build", "m68k",
-            "astra_supervisor.elf")])
+        self.catalog = trace_decode.load_catalogs([
+            os.path.join(ROOT, "sw/userspace", "supervisor", "build",
+                         "m68k", "astra_supervisor.elf"),
+            os.path.join(ROOT, "sw/userspace", "services", "terminal",
+                         "build", "m68k", "terminal.elf")])
 
     def _pump(self):
         for line in self.process.stdout:

@@ -233,7 +233,7 @@ python3 emu/qemu/test-input.py "$(./emu/qemu/build.sh host)"
 
 # the terminal end to end: types over QMP, judges the character plane   (beast)
 python3 emu/qemu/test-terminal.py /tmp/qemu-final-build/qemu-system-m68k \
-    sw/boot/astra_boot.bin --image /tmp/part.img
+    sw/boot/build/astra_boot.bin --image /tmp/part.img
 
 # a debugger, with ROM, kernel and user symbols                        (beast)
 QEMU=/tmp/qemu-final-build/qemu-system-m68k ./emu/qemu/debug.sh --image /tmp/part.img

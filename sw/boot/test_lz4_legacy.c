@@ -110,7 +110,7 @@ static void test_checked_in_splash(void)
 {
     uint32_t compressed_size;
     uint8_t *compressed = read_file(
-        "assets/astra_boot_splash.pal8.lz4", &compressed_size);
+        "build/astra_boot_splash.pal8.lz4", &compressed_size);
     uint8_t *output = malloc(SPLASH_RAW_BYTES);
 
     assert(output != NULL);

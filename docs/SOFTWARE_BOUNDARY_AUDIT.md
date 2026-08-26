@@ -70,7 +70,13 @@ coverage:
   ordering or silently links stale archives;
 - lwext4 patch 0013 places its extent-only local under the existing extent
   feature guard, removing the no-extents target warning without adding a new
-  policy or code path.
+  policy or code path;
+- incremental ELF acceptance lives in Axiom, transaction driving lives in the
+  runtime, and borrowed random-access executable files live in VFS. Terminal
+  and Supervisor use those owners and retain no whole-image loader or fallback;
+- product kernel and ROM outputs live only under owner `build/` directories,
+  so source synchronization cannot replace a remote build with a stale local
+  binary or generated splash payload.
 
 The Axiom hot-path changes were checked in generated MC68030 code. The shared
 64-bit bit helper and compiler barrier are inlined, introduce no helper calls,
@@ -103,21 +109,10 @@ link owner archives; the architecture gate distinguishes the two.
 
 These are visible gaps, not silent acceptance:
 
-1. Terminal retains a 64 KiB static executable-read fallback when the normal
-   borrowed shared-area path reports unsupported or unavailable. Normal loads
-   grow to the shared-area ceiling, but this legacy fallback both consumes BSS
-   and reintroduces a small hidden limit. The correct replacement is one
-   streaming executable loader shared by all launchers, not a larger Terminal
-   buffer.
-2. One shared area is currently capped at 4 MiB by the NDK/kernel contract.
-   Vim's stripped file is 2,157,012 bytes (2,211,808 bytes of loaded text,
-   data, and BSS) and passes, but larger applications should not force another
-   arbitrary whole-image ceiling. The streaming loader should map or
-   copy bounded windows while retaining ELF validation and rollback.
-3. Supervisor and Terminal emit compiled event descriptors. Other resident
+1. Supervisor and Terminal emit compiled event descriptors. Other resident
    services currently have analyzer coverage but do not yet contribute their
    own structured event catalogs to the merged system catalog.
-4. Glue-only services and bundle aggregators retain empty `test`/`sanitize`
+2. Glue-only services and bundle aggregators retain empty `test`/`sanitize`
    aliases because their process entry points cannot execute on the host.
    Their production sources are cross-compiled and analyzer-checked, and their
    behavior owners have real host and sanitizer tests. A future test should be
@@ -135,11 +130,14 @@ All target builds ran on Beast from the synchronized workspace:
 - all six services built standalone from clean owner and NDK state: pass;
 - NDK host tests, ASan/UBSan, analyzer, normal archive, and PIC archive: pass;
 - complete Axiom host suite plus MC68030 `all verify`: pass; final kernel
-  payload is 150,604 bytes;
-- firmware LZ4 test, 45 Python payload tests, complete ROM build, and firmware
+  payload is 155,320 bytes;
+- firmware LZ4 test, 46 Python payload/layout tests, complete ROM build, and firmware
   verification: pass;
 - focused storage tests, ASan/UBSan, analyzer, and MC68030 build after lwext4
-  patch 0013: pass with the prior unused-variable warning removed.
+  patch 0013: pass with the prior unused-variable warning removed;
+- transactional streaming rollback, sparse-offset, source-ownership, and VFS
+  reader tests: pass; the complete 73-command QEMU gate passes Lua, POSIX, and
+  the named-file Vim edit.
 
 No NUC, framebuffer capture, FPGA synthesis, flashing, or physical hardware
 claim is part of this software-only audit.

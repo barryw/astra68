@@ -30,7 +30,8 @@ LIBRARY_LINK_FLAGS := -nostdlib -shared -Wl,-Bsymbolic \
 # accident, so the two are compiled with different flags on purpose.
 CORE_SOURCES := src/vfs_service_core.c src/vfs_client.c \
 	src/vfs_local_transport.c src/vfs_port_transport.c src/vfs_assign.c \
-	src/vfs_path.c src/vfs_union.c src/vfs_process.c src/vfs_status.c
+	src/vfs_path.c src/vfs_union.c src/vfs_process.c src/vfs_reader.c \
+	src/vfs_status.c
 EXT4_CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
 	-DCONFIG_USE_DEFAULT_CFG=0 -I$(RUNTIME)/freestanding
 
@@ -38,7 +39,8 @@ HEADERS := include/astra/vfs_service_core.h include/astra/vfs_backend.h \
 	include/astra/vfs_client.h include/astra/vfs_local_transport.h \
 	include/astra/vfs_assign.h include/astra/vfs_path.h \
 	include/astra/vfs_port_transport.h include/astra/vfs_union.h \
-	include/astra/vfs_process.h $(NDK)/include/astra/shared_library.h \
+	include/astra/vfs_process.h include/astra/vfs_reader.h \
+	$(NDK)/include/astra/shared_library.h \
 	../../include/astra/vfs_service.h \
 	../../include/astra/syscall.h
 
@@ -47,7 +49,8 @@ TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/vfs_assign.o build/m68k/vfs_path.o \
 	build/m68k/vfs_local_transport.o build/m68k/vfs_port_transport.o \
 	build/m68k/vfs_ext4_backend.o build/m68k/vfs_union.o \
-	build/m68k/vfs_process.o $(NDK)/build/m68k/bundle.o \
+	build/m68k/vfs_process.o build/m68k/vfs_reader.o \
+	$(NDK)/build/m68k/bundle.o \
 	build/m68k/vfs_status.o
 FILESYSTEM_LIBRARY := build/m68k/libraries/filesystem.library
 FILESYSTEM_LIBRARY_OBJECTS := build/m68k/library/filesystem_library.o \
@@ -76,6 +79,11 @@ build/m68k/vfs_port_transport.o: src/vfs_port_transport.c $(HEADERS)
 		-c $< -o $@
 
 build/m68k/vfs_process.o: src/vfs_process.c $(HEADERS)
+	@mkdir -p $(@D)
+	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
+
+build/m68k/vfs_reader.o: src/vfs_reader.c $(HEADERS)
 	@mkdir -p $(@D)
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
@@ -150,6 +158,7 @@ $(PORT_TEST): src/vfs_port_transport.c src/vfs_service_core.c \
 
 PATH_TEST := build/host/test_vfs_path
 PROCESS_TEST := build/host/test_vfs_process
+READER_TEST := build/host/test_vfs_reader
 FILESYSTEM_LIBRARY_TEST := build/host/test_filesystem_library
 
 $(PATH_TEST): src/vfs_path.c tests/test_vfs_path.c $(HEADERS)
@@ -163,6 +172,12 @@ $(PROCESS_TEST): src/vfs_process.c tests/test_vfs_process.c $(HEADERS)
 		-DASTRA_VFS_PROCESS_TEST -ffunction-sections -Wl,--gc-sections \
 		src/vfs_process.c tests/test_vfs_process.c -o $@
 
+$(READER_TEST): src/vfs_reader.c tests/test_vfs_reader.c $(HEADERS) \
+		include/astra/vfs_reader.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/vfs_reader.c tests/test_vfs_reader.c -o $@
+
 $(FILESYSTEM_LIBRARY_TEST): src/filesystem_library.c src/vfs_union.c \
 		src/vfs_assign.c src/vfs_path.c tests/test_filesystem_library.c \
 		$(HEADERS) include/astra/filesystem_library.h
@@ -172,13 +187,14 @@ $(FILESYSTEM_LIBRARY_TEST): src/filesystem_library.c src/vfs_union.c \
 		src/vfs_path.c tests/test_filesystem_library.c -o $@
 
 test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
-		$(PROCESS_TEST) $(FILESYSTEM_LIBRARY_TEST)
+		$(PROCESS_TEST) $(READER_TEST) $(FILESYSTEM_LIBRARY_TEST)
 	./$(HOST_TEST)
 	./$(ASSIGN_TEST)
 	./$(UNION_TEST)
 	./$(PATH_TEST)
 	./$(PORT_TEST)
 	./$(PROCESS_TEST)
+	./$(READER_TEST)
 	./$(FILESYSTEM_LIBRARY_TEST)
 
 # The path parser is nothing but bounds arithmetic over caller buffers, so it
@@ -209,6 +225,10 @@ sanitize:
 		-o build/host/test_vfs_port_sanitize
 	./build/host/test_vfs_port_sanitize
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) src/vfs_reader.c tests/test_vfs_reader.c \
+		-o build/host/test_vfs_reader_sanitize
+	./build/host/test_vfs_reader_sanitize
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) src/filesystem_library.c src/vfs_union.c \
 		src/vfs_assign.c src/vfs_path.c tests/test_filesystem_library.c \
 		-o build/host/test_filesystem_library_sanitize
@@ -232,6 +252,8 @@ analyze:
 		-c src/vfs_port_transport.c -o build/analyzer/vfs_port_transport.o
 	$(ANALYZER_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/vfs_process.c -o build/analyzer/vfs_process.o
+	$(ANALYZER_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/vfs_reader.c -o build/analyzer/vfs_reader.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/vfs_status.c -o build/analyzer/vfs_status.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(EXT4_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \

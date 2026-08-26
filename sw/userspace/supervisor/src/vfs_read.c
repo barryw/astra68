@@ -4,46 +4,6 @@
 #include <astra/vfs_path.h>
 #include <astra/vfs_port_transport.h>
 
-uint32_t supervisor_vfs_read_borrow(const char *path, const uint8_t **bytes,
-                                    uint32_t *length)
-{
-    if (path == NULL || bytes == NULL || length == NULL)
-        return ASTRA_VFS_ERR_INVALID;
-    *bytes = NULL;
-    *length = 0u;
-    for (uint32_t member = 0u; ; ++member) {
-        const AstraAssign *assign = NULL;
-        AstraVfsClient *client;
-        uint64_t size = 0u;
-        uint32_t moved = 0u;
-        uint32_t status;
-        char wire[ASTRA_VFS_PATH_MAX];
-
-        status = astra_assign_resolve(supervisor_assigns(), path,
-                                      ASTRA_RIGHT_READ, member, wire,
-                                      sizeof(wire), &assign);
-        if (status == ASTRA_VFS_ERR_NOT_FOUND)
-            return status;
-        if (status != ASTRA_VFS_OK)
-            continue;
-        client = supervisor_vfs_client_for(assign);
-        if (client == NULL)
-            continue;
-        status = astra_vfs_port_read_path(client, wire, bytes, &moved,
-                                          &size);
-        if (status == ASTRA_VFS_ERR_NOT_FOUND)
-            continue;
-        if (status != ASTRA_VFS_OK)
-            return status;
-        if (moved == 0u || moved != (uint32_t)size) {
-            *bytes = NULL;
-            return ASTRA_VFS_ERR_IO;
-        }
-        *length = moved;
-        return ASTRA_VFS_OK;
-    }
-}
-
 uint32_t supervisor_vfs_read(const char *path, void *buffer,
                              uint32_t capacity, uint32_t *length)
 {

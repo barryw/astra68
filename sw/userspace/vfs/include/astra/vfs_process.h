@@ -41,9 +41,6 @@ AstraVfsClient *astra_process_vfs_client_for(const AstraAssign *assign);
 AstraVfsClient *astra_process_vfs_assign_client(const AstraAssign *assign,
                                                 void *context);
 void astra_process_vfs_set_activity(uint32_t activity);
-uint32_t astra_process_read_file_borrow(const char *path,
-                                        const uint8_t **bytes,
-                                        uint32_t *length);
 uint32_t astra_process_filesystem_open(AstraProcessFilesystem *filesystem,
                                        const AstraStartupInfo *startup);
 uint32_t astra_process_filesystem_open_bootstrap(

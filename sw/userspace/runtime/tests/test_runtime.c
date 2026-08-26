@@ -23,6 +23,15 @@ static uint32_t mock_argument4;
 static uint32_t mock_calls;
 static uint32_t mock_status = ASTRA_SYSCALL_OK;
 static uint32_t mock_activity;
+static uint32_t mock_stream_begin_calls;
+static uint32_t mock_stream_write_calls;
+static uint32_t mock_stream_create_calls;
+static uint32_t mock_stream_commit_calls;
+static uint32_t mock_stream_closed_handle;
+
+#define MOCK_STREAM_FILE_OFFSET (5u * 1024u * 1024u)
+#define MOCK_STREAM_FILE_BYTES 17u
+#define MOCK_STREAM_LOAD_HANDLE 0x5151u
 
 static void dummy_signal(int signal_number)
 {
@@ -78,6 +87,9 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
      */
     if (number != ASTRA_SYSCALL_LOG_WRITE &&
         number != ASTRA_SYSCALL_PROCESS_CREATE &&
+        number != ASTRA_SYSCALL_PROCESS_LOAD_BEGIN &&
+        number != ASTRA_SYSCALL_PROCESS_LOAD_WRITE &&
+        number != ASTRA_SYSCALL_PROCESS_LOAD_CREATE &&
         number != ASTRA_SYSCALL_PROCESS_EXEC &&
         number != ASTRA_SYSCALL_EVENT_CREATE &&
         number != ASTRA_SYSCALL_SEMAPHORE_CREATE &&
@@ -123,6 +135,24 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
     }
     result->value2 = 0x22222222u;
     result->value3 = 0x33333333u;
+    if (number == ASTRA_SYSCALL_PROCESS_LOAD_BEGIN) {
+        ++mock_stream_begin_calls;
+        result->value0 = MOCK_STREAM_LOAD_HANDLE;
+        result->value1 = 52u;
+        result->value2 = 32u;
+    } else if (number == ASTRA_SYSCALL_PROCESS_LOAD_WRITE) {
+        ++mock_stream_write_calls;
+        result->value0 = 0u;
+        result->value1 = 0u;
+    } else if (number == ASTRA_SYSCALL_PROCESS_LOAD_CREATE) {
+        ++mock_stream_create_calls;
+        result->value0 = MOCK_STREAM_FILE_OFFSET;
+        result->value1 = MOCK_STREAM_FILE_BYTES;
+    } else if (number == ASTRA_SYSCALL_PROCESS_LOAD_COMMIT) {
+        ++mock_stream_commit_calls;
+    } else if (number == ASTRA_SYSCALL_CLOSE) {
+        mock_stream_closed_handle = argument0;
+    }
 }
 
 static AstraStartupInfo
@@ -699,6 +729,100 @@ static void test_launch(void)
     assert(mock_calls == calls);
 }
 
+typedef struct MockLaunchReader {
+    uint32_t offset[3];
+    uint32_t length[3];
+    uint32_t calls;
+    uint32_t fail_call;
+    uint32_t releases;
+    uint32_t fail_release;
+    uint8_t bytes[64];
+} MockLaunchReader;
+
+static uint32_t mock_launch_release(void *context)
+{
+    MockLaunchReader *reader = context;
+
+    ++reader->releases;
+    assert(mock_stream_commit_calls == 0u);
+    return reader->fail_release;
+}
+
+static uint32_t mock_launch_read(void *context, uint32_t offset,
+                                 uint32_t length, const uint8_t **bytes,
+                                 uint32_t *moved)
+{
+    MockLaunchReader *reader = context;
+    uint32_t call = reader->calls++;
+
+    assert(call < 3u);
+    reader->offset[call] = offset;
+    reader->length[call] = length;
+    *bytes = NULL;
+    *moved = 0u;
+    if (reader->fail_call == call + 1u)
+        return 1u;
+    assert(length <= sizeof(reader->bytes));
+    *bytes = reader->bytes;
+    *moved = length;
+    return 0u;
+}
+
+static void test_streamed_launch(void)
+{
+    MockLaunchReader reader = {0};
+    uint32_t handle = 0u;
+    uint32_t id = 0u;
+
+    mock_stream_begin_calls = 0u;
+    mock_stream_write_calls = 0u;
+    mock_stream_create_calls = 0u;
+    mock_stream_commit_calls = 0u;
+    mock_stream_closed_handle = 0u;
+    assert(astra_launch_stream(
+               MOCK_STREAM_FILE_OFFSET + MOCK_STREAM_FILE_BYTES,
+               mock_launch_read, mock_launch_release, &reader, NULL, 0u,
+               NULL, &handle, &id) ==
+           ASTRA_SYSCALL_OK);
+    assert(reader.calls == 3u);
+    assert(reader.releases == 1u);
+    assert(reader.offset[0] == 0u && reader.length[0] == 52u);
+    assert(reader.offset[1] == 52u && reader.length[1] == 32u);
+    assert(reader.offset[2] == MOCK_STREAM_FILE_OFFSET &&
+           reader.length[2] == MOCK_STREAM_FILE_BYTES);
+    assert(mock_stream_begin_calls == 1u);
+    assert(mock_stream_write_calls == 2u);
+    assert(mock_stream_create_calls == 1u);
+    assert(mock_stream_commit_calls == 1u);
+    assert(mock_stream_closed_handle == 0u);
+    assert(handle == ASTRA_SYSCALL_ABI_VERSION && id == 0x11111111u);
+
+    reader = (MockLaunchReader){.fail_call = 3u};
+    handle = 0xdeadbeefu;
+    id = 0xdeadbeefu;
+    mock_stream_commit_calls = 0u;
+    mock_stream_closed_handle = 0u;
+    assert(astra_launch_stream(
+               MOCK_STREAM_FILE_OFFSET + MOCK_STREAM_FILE_BYTES,
+               mock_launch_read, mock_launch_release, &reader, NULL, 0u,
+               NULL, &handle, &id) ==
+           ASTRA_SYSCALL_IO_ERROR);
+    assert(handle == 0u && id == 0u);
+    assert(reader.releases == 1u);
+    assert(mock_stream_closed_handle == MOCK_STREAM_LOAD_HANDLE);
+
+    reader = (MockLaunchReader){.fail_release = 1u};
+    mock_stream_commit_calls = 0u;
+    mock_stream_closed_handle = 0u;
+    assert(astra_launch_stream(
+               MOCK_STREAM_FILE_OFFSET + MOCK_STREAM_FILE_BYTES,
+               mock_launch_read, mock_launch_release, &reader, NULL, 0u,
+               NULL, &handle, &id) == ASTRA_SYSCALL_IO_ERROR);
+    assert(reader.releases == 1u);
+    assert(mock_stream_commit_calls == 0u);
+    assert(mock_stream_closed_handle == MOCK_STREAM_LOAD_HANDLE);
+}
+
 /*
  * Waiting for a child. The wait itself is the one the machine already had; what
  * this adds is that `exit_status` means the child's status and nothing else --
@@ -1213,6 +1337,7 @@ main(void)
     test_syscall_wrappers();
     test_library_relocation();
     test_launch();
+    test_streamed_launch();
     test_exec();
     test_process_wait();
     test_wait_multiple();

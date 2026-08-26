@@ -47,6 +47,9 @@ endif
 
 BUILD_DIR = build
 BUILD_INFO = $(BUILD_DIR)/kernel_build_info.h
+KERNEL_ELF = $(BUILD_DIR)/astra_kernel.elf
+KERNEL_BIN = $(BUILD_DIR)/astra_kernel.bin
+KERNEL_MAP = $(BUILD_DIR)/astra_kernel.map
 
 CPPFLAGS = -I../include -I$(BUILD_DIR) -include $(BUILD_INFO) \
            -DKERNEL_TRACE_BUILD_LEVEL=$(KERNEL_TRACE_BUILD_LEVEL) \
@@ -85,7 +88,7 @@ CFLAGS = -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin \
 # rest safe. A new section that only the hardware or the ROM reaches needs the
 # same treatment or it will be collected.
 LDFLAGS = -T kernel.ld -nostdlib -no-pie -Wl,--gc-sections \
-          -Wl,--build-id=none,-Map=astra_kernel.map
+          -Wl,--build-id=none,-Map=$(KERNEL_MAP)
 
 OBJECTS = $(BUILD_DIR)/entry.o $(BUILD_DIR)/vectors.o \
           $(BUILD_DIR)/kernel.o $(BUILD_DIR)/platform.o \
@@ -114,7 +117,7 @@ OBJECTS = $(BUILD_DIR)/entry.o $(BUILD_DIR)/vectors.o \
           $(BUILD_DIR)/civil.o $(BUILD_DIR)/divide.o \
           $(BUILD_DIR)/format.o
 
-all: astra_kernel.elf astra_kernel.bin
+all: $(KERNEL_ELF) $(KERNEL_BIN)
 
 $(BUILD_DIR):
 	mkdir -p $@
@@ -299,22 +302,22 @@ $(BUILD_DIR)/civil.o: ../common/civil.c ../include/astra/civil.h | $(BUILD_DIR)
 $(BUILD_DIR)/divide.o: ../common/divide.c ../include/astra/divide.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-astra_kernel.elf: $(OBJECTS) kernel.ld
+$(KERNEL_ELF): $(OBJECTS) kernel.ld
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS)
 
-astra_kernel.bin: astra_kernel.elf
+$(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@
 
-verify: astra_kernel.elf astra_kernel.bin
+verify: $(KERNEL_ELF) $(KERNEL_BIN)
 	@if $(OBJDUMP) -t $(BUILD_DIR)/irq.o | \
 		grep -q 'astra_u32_increment_saturating'; then \
 		echo "IRQ saturating counter was not inlined"; exit 1; \
 	fi
 	@echo "== kernel sections =="
-	@$(OBJDUMP) -h astra_kernel.elf
+	@$(OBJDUMP) -h $(KERNEL_ELF)
 	@echo "== kernel entry and bounds =="
-	@$(OBJDUMP) -t astra_kernel.elf | grep -E '_kernel_(entry|image_start|file_end|memory_end|stack_top|worker_stack_(guard|top)|vectors)'
-	@bytes=$$(wc -c < astra_kernel.bin); \
+	@$(OBJDUMP) -t $(KERNEL_ELF) | grep -E '_kernel_(entry|image_start|file_end|memory_end|stack_top|worker_stack_(guard|top)|vectors)'
+	@bytes=$$(wc -c < $(KERNEL_BIN)); \
 	  test $$bytes -le $$((0x80000)); \
 	  printf 'kernel payload: %s bytes\n' "$$bytes"
 
@@ -688,7 +691,8 @@ $(BUILD_DIR)/test_worker: tests/test_worker.c worker.c worker.h process.h \
 		tests/test_worker.c -o $@
 
 clean:
-	rm -rf $(BUILD_DIR) astra_kernel.elf astra_kernel.bin astra_kernel.map
+	rm -rf $(BUILD_DIR)
+	rm -f astra_kernel.elf astra_kernel.bin astra_kernel.map
 	rm -f *.gcov.json.gz
 
 # Line coverage over the host suites. The instrumented build is not the one

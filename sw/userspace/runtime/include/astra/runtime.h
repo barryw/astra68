@@ -180,6 +180,26 @@ uint32_t astra_launch(const void *image, uint32_t length,
                       const AstraLaunchGrant *grants, uint32_t count,
                       const AstraLaunchArguments *arguments,
                       uint32_t *process_handle, uint32_t *process_id);
+/*
+ * Supplies one borrowed file range at a time. The bytes remain valid until
+ * the callback is invoked again; the loader submits them to the kernel before
+ * asking for the next range.
+ *
+ * Once the callbacks and output pointers have been accepted, this function
+ * owns the source and invokes `release` exactly once on every return path,
+ * including an invalid or truncated image. Release happens before the child
+ * is committed, so a source that pins storage or DMA can relinquish it before
+ * the child becomes runnable. A release failure aborts the prepared child.
+ */
+typedef uint32_t (*AstraLaunchReadAt)(void *context, uint32_t offset,
+                                     uint32_t length, const uint8_t **bytes,
+                                     uint32_t *moved);
+typedef uint32_t (*AstraLaunchRelease)(void *context);
+uint32_t astra_launch_stream(uint32_t length, AstraLaunchReadAt read_at,
+                             AstraLaunchRelease release, void *context,
+                             const AstraLaunchGrant *grants, uint32_t count,
+                             const AstraLaunchArguments *arguments,
+                             uint32_t *process_handle, uint32_t *process_id);
 uint32_t astra_launch_arguments_pack(
     AstraLaunchArguments *arguments, char *storage, uint32_t capacity,
     AstraLaunchSource source, uint32_t count, const char *const *values);

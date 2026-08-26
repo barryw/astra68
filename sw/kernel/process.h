@@ -127,7 +127,8 @@ typedef enum KernelProcessStatus {
      * renumbering would silently change what an old capture means.
      */
     KERNEL_PROCESS_ACCESS_DENIED,
-    KERNEL_PROCESS_INVALID_HANDLE
+    KERNEL_PROCESS_INVALID_HANDLE,
+    KERNEL_PROCESS_BAD_ADDRESS
 } KernelProcessStatus;
 
 typedef enum KernelProcessMaintenanceFailure {

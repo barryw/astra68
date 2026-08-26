@@ -81,6 +81,10 @@ _Static_assert(ASTRA_LAUNCH_GRANT_MAX == 12u,
       (2u * ASTRA_STARTUP_CAPABILITY_SIZE)) / 5u)
 #define ASTRA_LAUNCH_FLAG_ESSENTIAL (1u << 0)
 #define ASTRA_LAUNCH_FLAG_MASK ASTRA_LAUNCH_FLAG_ESSENTIAL
+/* Fixed ELF32 header; streaming loaders never need a larger initial window. */
+#define ASTRA_EXECUTABLE_HEADER_SIZE 52u
+/* Largest source range the page-oriented kernel loader will request. */
+#define ASTRA_EXECUTABLE_TRANSFER_MAX 4096u
 /*
  * Environment space is the startup page, not a smaller policy quota. The
  * kernel accepts the combination of capabilities, argv, pointers and strings

@@ -19,8 +19,6 @@ static uint32_t closes;
 static uint32_t connects;
 static uint32_t disconnects;
 static uint32_t fail_connect;
-static uint32_t borrow_enabled;
-static const uint8_t borrowed_file[] = "program";
 
 int astra_startup_validate(const AstraStartupInfo *startup)
 {
@@ -51,14 +49,13 @@ uint32_t astra_assign_resolve(const AstraAssignTable *table,
                               uint32_t rights, uint32_t member, char *wire,
                               uint32_t capacity, const AstraAssign **assign)
 {
-    if (borrow_enabled != 0u && table != NULL && path != NULL &&
-        strcmp(path, "COMMANDS:test") == 0 &&
-        rights == ASTRA_RIGHT_READ && member == 0u && capacity >= 5u &&
-        wire != NULL && assign != NULL) {
-        memcpy(wire, "test", 5u);
-        *assign = &table->entries[0];
-        return ASTRA_VFS_OK;
-    }
+    (void)table;
+    (void)path;
+    (void)rights;
+    (void)member;
+    (void)wire;
+    (void)capacity;
+    (void)assign;
     return ASTRA_VFS_ERR_NOT_FOUND;
 }
 
@@ -66,14 +63,11 @@ uint32_t astra_vfs_port_read_path(AstraVfsClient *client, const char *path,
                                   const uint8_t **bytes, uint32_t *moved,
                                   uint64_t *node_size)
 {
-    if (borrow_enabled != 0u && client != NULL && path != NULL &&
-        strcmp(path, "test") == 0 && bytes != NULL && moved != NULL &&
-        node_size != NULL) {
-        *bytes = borrowed_file;
-        *moved = sizeof(borrowed_file) - 1u;
-        *node_size = sizeof(borrowed_file) - 1u;
-        return ASTRA_VFS_OK;
-    }
+    (void)client;
+    (void)path;
+    (void)bytes;
+    (void)moved;
+    (void)node_size;
     return ASTRA_VFS_ERR_UNSUPPORTED;
 }
 
@@ -234,24 +228,13 @@ int main(void)
         }
         assert(astra_process_vfs_client() != NULL);
         assert(connects == 1u);
-        {
-            const uint8_t *bytes = NULL;
-            uint32_t length = 0u;
-
-            borrow_enabled = 1u;
-            assert(astra_process_read_file_borrow(
-                       "COMMANDS:test", &bytes, &length) == ASTRA_VFS_OK);
-            assert(bytes == borrowed_file &&
-                   length == sizeof(borrowed_file) - 1u);
-            astra_process_vfs_set_activity(0x12345678u);
-            assert(astra_process_vfs_client_for(
-                       &astra_process_vfs_assigns()->entries[0])->activity ==
-                   0x12345678u);
-            assert(astra_process_vfs_client_for(
-                       &astra_process_vfs_assigns()->entries[2])->activity ==
-                   0x12345678u);
-            borrow_enabled = 0u;
-        }
+        astra_process_vfs_set_activity(0x12345678u);
+        assert(astra_process_vfs_client_for(
+                   &astra_process_vfs_assigns()->entries[0])->activity ==
+               0x12345678u);
+        assert(astra_process_vfs_client_for(
+                   &astra_process_vfs_assigns()->entries[2])->activity ==
+               0x12345678u);
         astra_process_vfs_close();
         assert(disconnects == 2u);
 

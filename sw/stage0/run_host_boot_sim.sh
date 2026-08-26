@@ -29,7 +29,8 @@ make -C sw/boot clean all \
     CPU_CLK_DIV_BIT=0 SDRAM_ENABLE=1 HDMI_ENABLE="$hdmi_enable" \
     KERNEL_PANIC_SELFTEST="$kernel_panic_selftest" \
     EXTRA_CFLAGS="-DMEM_BENCH_BYTES=256 -DDMA_BENCH_BYTES=1024"
-python3 sw/boot/package_rom.py sw/boot/astra_boot.bin sw/boot/astra68.rom \
+python3 sw/boot/package_rom.py sw/boot/build/astra_boot.bin \
+    sw/boot/build/astra68.rom \
     --hex-output fpga/soc/sim/astra68_rom.hex
 python3 sw/boot/bin2hex.py \
     sw/stage0/stage0.bin fpga/soc/sim/rom_init.hex

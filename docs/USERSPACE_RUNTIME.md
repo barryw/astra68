@@ -1,6 +1,6 @@
 # Astra userspace runtime
 
-Status: runtime, allocator, metrics, and executable loading implemented; libc pending
+Status: native/POSIX runtime, allocator, metrics, and executable loading implemented
 
 ## Responsibility
 
@@ -163,6 +163,21 @@ cross build even where the symbols resolve.
 
 ## Executable loading
 
+Normal file-backed launch is streaming and transactional. `astra_launch_stream`
+owns the userspace transaction: it borrows exactly the ranges Axiom requests,
+submits each range before borrowing another, releases the source exactly once,
+and releases it before commit. A source-release failure aborts the prepared
+child. `sw/userspace/vfs` owns the reusable random-access file source used by
+Terminal and Supervisor; process glue does not implement file loading.
+
+Axiom's move-only load handle accepts the fixed ELF header, incremental program
+headers, startup metadata, and one segment page at a time. The child remains
+non-runnable until commit. Closing the handle rolls back every prepared
+resource. The parser and page publisher are shared with the in-memory launch
+and atomic POSIX exec paths, so all entry points enforce the same ELF profile.
+The 4 KiB transfer is a VM page contract, not an executable-size ceiling; the
+file format's 32-bit offsets and charged machine resources are the real bounds.
+
 `sw/kernel/elf.c` is the acceptance profile and `kernel_process_create_executable()`
 is the loader. The profile allocates nothing, touches no address space, and
 knows nothing about page tables: it turns an untrusted byte range into a
@@ -244,9 +259,10 @@ acceptance profile. Measured end to end under QEMU: the kernel reports
 `Initial image ....... loaded, 6468 bytes` and then
 `Initial image ....... OK, startup block and ABI verified from user mode`.
 
-## Next implementation boundary
+## Current boundary
 
-Filesystem lookup remains outside Axiom. Firmware supplies the first image;
-the protected supervisor loads later programs through storage/VFS services.
-The next slice is the block admission syscalls in `docs/STORAGE_AND_VFS.md`,
-which is what the supervisor needs before it can start anything else.
+Filesystem lookup remains outside Axiom. Firmware supplies only the embedded
+initial Supervisor image; later programs are opened through storage/VFS and
+fed through the shared runtime transaction. Axiom validates bytes, creates
+address spaces, and commits processes without knowing paths, mounts, or file
+protocols.

@@ -59,6 +59,10 @@ static int volume_window_valid;
  * memory nobody owns any more.
  */
 static int volume_mounted;
+static ext4_file volume_source;
+static uint32_t volume_source_size;
+static int volume_source_open;
+static uint8_t volume_source_bytes[ASTRA_EXECUTABLE_TRANSFER_MAX];
 static uint8_t volume_sector[ASTRA_BLOCK_SECTOR_BYTES];
 static uint8_t volume_pattern[VOLUME_CHECK_BYTES];
 
@@ -188,9 +192,67 @@ supervisor_volume_read(const char *path, void *buffer, uint32_t capacity,
 }
 
 uint32_t
+supervisor_volume_source_open(const char *path, uint32_t *length)
+{
+    uint64_t size;
+
+    if (!volume_mounted || volume_source_open || path == NULL || length == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    *length = 0u;
+    if (ext4_fopen(&volume_source, path, "rb") != EOK)
+        return ASTRA_VFS_ERR_NOT_FOUND;
+    size = ext4_fsize(&volume_source);
+    if (size > UINT32_MAX) {
+        (void)ext4_fclose(&volume_source);
+        return ASTRA_VFS_ERR_LIMIT;
+    }
+    volume_source_size = (uint32_t)size;
+    volume_source_open = 1;
+    *length = volume_source_size;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t
+supervisor_volume_source_read_at(void *context, uint32_t offset,
+                                 uint32_t length, const uint8_t **bytes,
+                                 uint32_t *moved)
+{
+    size_t read = 0u;
+
+    (void)context;
+    if (!volume_source_open || bytes == NULL || moved == NULL ||
+        length > sizeof(volume_source_bytes) || offset > volume_source_size ||
+        length > volume_source_size - offset)
+        return ASTRA_VFS_ERR_INVALID;
+    *bytes = NULL;
+    *moved = 0u;
+    if (ext4_fseek(&volume_source, offset, SEEK_SET) != EOK ||
+        ext4_fread(&volume_source, volume_source_bytes, length, &read) != EOK ||
+        read != length)
+        return ASTRA_VFS_ERR_IO;
+    *bytes = volume_source_bytes;
+    *moved = (uint32_t)read;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t
+supervisor_volume_source_close(void *context)
+{
+    int status;
+
+    (void)context;
+    if (!volume_source_open)
+        return ASTRA_VFS_OK;
+    volume_source_open = 0;
+    volume_source_size = 0u;
+    status = ext4_fclose(&volume_source);
+    return status == EOK ? ASTRA_VFS_OK : ASTRA_VFS_ERR_IO;
+}
+
+uint32_t
 supervisor_volume_unmount(void)
 {
-    if (!volume_mounted)
+    if (!volume_mounted || volume_source_open)
         return ASTRA_VFS_ERR_INVALID;
     (void)ext4_journal_stop(VOLUME_MOUNT_POINT);
     volume_mounted = 0;

@@ -28,12 +28,46 @@ pass, including Lua and the 2,157,012-byte stripped Vim file.
 
 The complete userspace behavior, sanitizer, analyzer, and MC68030 matrices;
 NDK normal/PIC matrices; Axiom host and target verification; and firmware
-tests/build pass on Beast. The final kernel payload is 150,604 bytes. lwext4
-patch 0013 also removes an extent-only unused local from the no-extents build.
-The audit deliberately leaves visible the next architectural work: replace
-Terminal's 64 KiB legacy load fallback and the 4 MiB whole-area executable
-ceiling with one tested streaming loader, and add structured catalogs for the
-remaining resident services.
+build pass on Beast. The final kernel payload is 155,320 bytes. lwext4 patch
+0013 also removes an extent-only unused local from the no-extents build. The
+remaining ownership-audit work is structured catalogs for resident services
+and real process integration gates for glue-only entry points.
+
+## Transactional streaming executable loading (2026-08-25)
+
+The syscall ABI is `0x00010022`. File-backed launch no longer allocates or maps
+an entire executable. A move-only kernel load handle accepts the ELF header,
+requests exact program-header and segment-page ranges, prepares a non-runnable
+child, and publishes it only on commit. Closing the handle at any earlier stage
+rolls back the child, handles, mappings, and frames. The shared incremental ELF
+parser is also the acceptance oracle for legacy in-memory launch and atomic
+POSIX `execve`, so executable policy is not duplicated.
+
+`libastrart` owns the transaction driver and source-release contract. The VFS
+library owns the borrowed random-access file source. Terminal and Supervisor
+use both owners; neither has a private loader or whole-image buffer. The
+bootstrap source releases its file, unmounts ext4, and returns bootstrap DMA
+before commit. The only transfer buffer is one 4 KiB VM page, matching the
+kernel page contract; executable file size is bounded only by the ELF32
+32-bit file-offset format and available charged resources. Terminal lost its
+64 KiB fallback BSS and Supervisor lost its 4 MiB image BSS.
+
+Rollback tests cover abort before and after child creation, an off-by-one
+range, sparse program headers, a segment at a 5 MiB file offset, source read
+and release failures, exact VFS close ownership, and successful commit. Kernel,
+runtime, VFS, Supervisor, Terminal, sanitizer, analyzer, MC68030, ROM, and
+source-identified QEMU gates pass on Beast. The complete two-boot terminal gate
+passes 73 commands including Lua, POSIX, and the named-file Vim edit; Vim
+completed in 4.23 seconds.
+
+All generated kernel and ROM ELF/BIN/MAP files, the packaged legacy ROM, and
+the generated splash payload now live under owner `build/` directories. The
+mandatory source rsync excludes them, compares source content by checksum, and
+does not preserve source mtimes. Changed source therefore invalidates older
+remote objects while a Mac product cannot overwrite a Beast product. A
+retained proof hashed a clean Beast ROM, performed a full source sync, and
+obtained the identical hash. The layout gate also pins the placeholder-free
+Arty splash source and every primary firmware output to its canonical path.
 
 ## Arty hosted ROM aperture (2026-08-25)
 
@@ -218,7 +252,7 @@ sessions total and 12 per owner. Open-file tables grow lazily in a service-owned
 4 MiB area and give each process an equal share of the actual resulting
 capacity. Repeated HELLOs and multiple sessions cannot bypass either account.
 
-The syscall ABI is `0x0001001d`. Port-message limits now come from one canonical
+At that checkpoint the syscall ABI was `0x0001001d`. Port-message limits came from one canonical
 header in both the kernel and NDK (16 queued messages, 1,024 inline bytes), and
 the NDK's shared-area contract matches the kernel's 4 MiB range. POSIX file and
 directory tables and the VFS/ext4 open tables grow from caller/service-owned
@@ -331,7 +365,7 @@ text, data, and BSS occupy 248,324 bytes at load time (234,538 text, 328 data,
 environment, files, rename, time, and `os.execute`; no Lua-private fast path or
 compatibility layer exists.
 
-The syscall ABI is `0x0001001d`, startup ABI is 4, the complete environment is
+At that checkpoint the syscall ABI was `0x0001001d`, startup ABI was 4, the complete environment was
 packed into the actual 4 KiB startup page, and shared areas/VFS bulk transfers
 are 4 MiB. Four MiB is one complete MC68030 page table and is the largest
 atomic range handled by the current shared-map primitive. Process images are
@@ -648,9 +682,10 @@ and applications; `ls` itself is unchanged.
 - `STOR` v7 returns small `READ_PATH` files inline. `STOR` v8 fuses session
   creation with the first path operation; older services negotiate normally and
   receive the operation in a second exchange.
-- The common Terminal launcher uses the supervisor's existing one-request
-  whole-image read path for every external command. Its permanent trace event
-  is `command stages: image/spawn/run`; there is no command-output cache.
+- At this historical checkpoint the common Terminal launcher used the
+  supervisor's one-request whole-image read path. The current transactional
+  streaming loader above supersedes that transport; there is still no
+  command-output cache.
 
 On `astra-arty`, the stock warm `filesystem.library` open was 794 ms. Cached
 identity attachment reduced the best warm sample to 149 ms; the v8 fused first
@@ -3974,10 +4009,11 @@ font/rendering implementation. The terminal records semantic mono-text draw
 commands and no longer links a private glyph bank: its text image fell from
 99,813 to 27,331 bytes. The display service owns the one complete glyph bank.
 
-The supervisor no longer has a second, arbitrary 80 KiB executable ceiling.
-Its service cache reuses the kernel's established 256 KiB
-`ASTRA_USER_IMAGE_MAX_SIZE` acceptance policy. This admits the 89,858-byte
-display service while retaining the same kernel ELF validation boundary.
+At this historical checkpoint the supervisor removed a private 80 KiB ceiling
+by reusing the then-current initial-image reservation. The transactional
+streaming loader above now supersedes that whole-image service cache; the
+firmware `ASTRA_USER_IMAGE_MAX_SIZE` reservation applies only to the embedded
+initial Supervisor image.
 
 On the physical board a typed-cell update fell from 78 commands, 113.1 ms of
 render preparation/hardware work, and 16.2 ms present time to alternating

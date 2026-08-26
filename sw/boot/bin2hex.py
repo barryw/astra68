@@ -3,8 +3,8 @@
 # One 8-hex-digit word per line, MSB-first. Usage: bin2hex.py in.bin out.hex
 import sys
 
-src = sys.argv[1] if len(sys.argv) > 1 else "astra_boot.bin"
-dst = sys.argv[2] if len(sys.argv) > 2 else "rom_init.hex"
+src = sys.argv[1] if len(sys.argv) > 1 else "build/astra_boot.bin"
+dst = sys.argv[2] if len(sys.argv) > 2 else "build/rom_init.hex"
 data = open(src, "rb").read()
 data += b"\x00" * ((-len(data)) % 4)  # pad up to a word boundary
 with open(dst, "w") as f:

@@ -119,11 +119,10 @@ itself stays, as a conformance oracle only — see above.
   references, which reads like a missing linker script rather than an
   arithmetic choice.
 - Stale objects are indistinguishable from kernel bugs. Exit status 127 from a
-  user image means a stale object first, not a kernel fault. **`rsync -a`
-  preserves mtimes**, so restoring a file on `beast` can hand `make` a source
-  older than an object built from something else, and it keeps the stale
-  object. `make clean` before believing a result you have gone back and forth
-  on.
+  user image means a stale object first, not a kernel fault. Never source-sync
+  with plain `rsync -a`: use the checksum/non-mtime command in `AGENTS.md` so a
+  changed source arrives newer than its remote object. Generated products stay
+  under excluded `build/` directories and finished artifacts move separately.
 - **Passing gates are not evidence that a new path is taken.** A change can
   leave all five green and still be inert. Perturb the thing deliberately --
   break the value, revert the fix -- and see the failure you expect, or you
@@ -154,7 +153,7 @@ itself stays, as a conformance oracle only — see above.
 - **The qualification kernel is a second ROM**, built with
   `make KERNEL_K1_QUALIFICATION=1` in `sw/boot`, with no debug surface and no
   initial user image. `emu/qemu/test-qualification.py` is its gate. It
-  overwrites `sw/boot/astra_boot.bin`, so rebuild the normal ROM afterwards.
+  overwrites `sw/boot/build/astra_boot.bin`, so rebuild the normal ROM afterwards.
 
 ## Where to read next
 

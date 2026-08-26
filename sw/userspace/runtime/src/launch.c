@@ -47,6 +47,115 @@ astra_launch(const void *image, uint32_t length,
     return result.status;
 }
 
+static uint32_t read_requested(AstraLaunchReadAt read_at, void *context,
+                               uint32_t image_size, uint32_t offset,
+                               uint32_t length, const uint8_t **bytes)
+{
+    uint32_t moved = 0u;
+
+    *bytes = NULL;
+    if (length == 0u || offset > image_size || length > image_size - offset ||
+        read_at(context, offset, length, bytes, &moved) != 0u ||
+        *bytes == NULL || moved != length)
+        return ASTRA_SYSCALL_IO_ERROR;
+    return ASTRA_SYSCALL_OK;
+}
+
+static uint32_t feed_requested(uint32_t load_handle, uint32_t image_size,
+                               AstraLaunchReadAt read_at, void *context,
+                               uint32_t offset, uint32_t length)
+{
+    while (length != 0u) {
+        const uint8_t *bytes;
+        AstraSyscallResult result;
+        uint32_t status = read_requested(read_at, context, image_size, offset,
+                                         length, &bytes);
+
+        if (status != ASTRA_SYSCALL_OK)
+            return status;
+        astra_syscall5(ASTRA_SYSCALL_PROCESS_LOAD_WRITE, load_handle, offset,
+                       (uint32_t)(uintptr_t)bytes, length, 0u, &result);
+        if (result.status != ASTRA_SYSCALL_OK)
+            return result.status;
+        offset = result.value0;
+        length = result.value1;
+    }
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t astra_launch_stream(
+    uint32_t length, AstraLaunchReadAt read_at, AstraLaunchRelease release,
+    void *context,
+    const AstraLaunchGrant *grants, uint32_t count,
+    const AstraLaunchArguments *arguments, uint32_t *process_handle,
+    uint32_t *process_id)
+{
+    const uint8_t *header;
+    AstraSyscallResult result;
+    uint32_t load_handle = 0u;
+    uint32_t status;
+    uint32_t released = 0u;
+
+    if (process_handle != NULL)
+        *process_handle = 0u;
+    if (process_id != NULL)
+        *process_id = 0u;
+    if (read_at == NULL || release == NULL || process_handle == NULL ||
+        process_id == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    if (length < ASTRA_EXECUTABLE_HEADER_SIZE) {
+        (void)release(context);
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    status = read_requested(read_at, context, length, 0u,
+                            ASTRA_EXECUTABLE_HEADER_SIZE, &header);
+    if (status != ASTRA_SYSCALL_OK)
+        goto failed;
+    astra_syscall5(ASTRA_SYSCALL_PROCESS_LOAD_BEGIN,
+                   (uint32_t)(uintptr_t)header, length, 0u, 0u, 0u, &result);
+    if (result.status != ASTRA_SYSCALL_OK) {
+        status = result.status;
+        goto failed;
+    }
+    load_handle = result.value0;
+    status = feed_requested(load_handle, length, read_at, context,
+                            result.value1, result.value2);
+    if (status != ASTRA_SYSCALL_OK)
+        goto failed;
+    astra_syscall5(ASTRA_SYSCALL_PROCESS_LOAD_CREATE, load_handle,
+                   (uint32_t)(uintptr_t)grants, count,
+                   (uint32_t)(uintptr_t)arguments, 0u, &result);
+    if (result.status != ASTRA_SYSCALL_OK) {
+        status = result.status;
+        goto failed;
+    }
+    status = feed_requested(load_handle, length, read_at, context,
+                            result.value0, result.value1);
+    if (status != ASTRA_SYSCALL_OK)
+        goto failed;
+    released = 1u;
+    if (release(context) != 0u) {
+        status = ASTRA_SYSCALL_IO_ERROR;
+        goto failed;
+    }
+    astra_syscall5(ASTRA_SYSCALL_PROCESS_LOAD_COMMIT, load_handle, 0u, 0u,
+                   0u, 0u, &result);
+    if (result.status != ASTRA_SYSCALL_OK) {
+        status = result.status;
+        goto failed;
+    }
+    *process_handle = result.value0;
+    *process_id = result.value1;
+    return ASTRA_SYSCALL_OK;
+
+failed:
+    if (released == 0u)
+        (void)release(context);
+    if (load_handle != 0u)
+        (void)astra_close(load_handle);
+    return status;
+}
+
 uint32_t
 astra_process_clone(uint32_t *process_handle, uint32_t *process_id)
 {

@@ -53,20 +53,12 @@ file on storage: filesystem stacks beyond the boot volume, terminal, shell,
 fonts, desktop, applications, and diagnostics beyond POST.
 
 lwext4 is the load-bearing example. It is 64–74 KiB of MC68030 text
-(`docs/STORAGE_AND_VFS.md`) and it does **not** belong in ROM: `sw/stage0` reads
-FAT in a 2,020-byte image, so the boot volume is reachable without it and the
-full filesystem stack can be loaded as an ordinary file.
-
-That reasoning is sound but it is not what actually stops it, and the
-difference matters when planning. Measured on hardware: a supervisor with
-lwext4 linked in is 98,732 bytes raw and 57,350 compressed, and the resulting
-ROM is 243,304 of 262,144 — **it fits here**. Firmware rejects it anyway with
-`POST FAIL: user image exceeds its reservation`, because the initial user image
-is capped at `ASTRA_USER_IMAGE_MAX_SIZE` = 48 KiB by the RAM hole between
-`ASTRA_USER_IMAGE_ADDRESS` (`0x02004000`) and `ASTRA_KERNEL_LOAD_ADDRESS`
-(`0x02010000`), not by this budget. Raising it is a boot ABI change that moves
-the kernel. The ROM budget is therefore not the reason to load the filesystem
-from a file; the user image reservation is.
+(`docs/STORAGE_AND_VFS.md`) and currently lives in the embedded Supervisor only
+long enough to mount the boot volume and launch the storage service. The
+initial-image reservation is 256 KiB at `0x02004000..0x02043fff`; firmware
+reserves only the pages the image actually occupies and returns the rest to the
+allocator. Later programs are files and use the transactional streaming loader,
+so this firmware-only reservation is not an application-size ceiling.
 
 The current Arty/QEMU software image is close to this same fixed ceiling. The
 2026-08-08 event-durability checkpoint is 249,000 of 262,144 bytes, leaving
@@ -111,7 +103,8 @@ kernel.
 | `0x02044000` | `0x020C3FFF` | 512 KiB | Kernel image, BSS, and guarded stacks | Kernel |
 | `0x020C4000` | `0x020D3FFF` | 64 KiB | Retained kernel trace | Kernel diagnostics |
 | `0x020D4000` | `0x02153FFF` | 512 KiB | Frame and ownership metadata for up to 128 MiB | Kernel |
-| `0x02154000` | `0x03DFFFFF` | 28.672 MiB | Usable RAM | Physical-page allocator |
+| `0x02154000` | `0x02353FFF` | 2 MiB | Kernel object and scheduler tables | Kernel |
+| `0x02354000` | `0x03DFFFFF` | 26.672 MiB | Usable RAM | Physical-page allocator |
 | `0x03E00000` | `0x03E3FFFF` | 256 KiB | System-ROM backing | Firmware/ROM mapping |
 | `0x03E40000` | `0x03FFFFFF` | 1.75 MiB | Usable RAM | Physical-page allocator |
 | `0x04000000` | `0x09FFFFFF` | 96 MiB | Hosted-profile extension | Physical-page allocator on the 128 MiB profile only |
@@ -133,8 +126,10 @@ never hand them out. The image is capped at `ASTRA_USER_IMAGE_MAX_SIZE`
 The kernel is linked once for both profiles. Its large per-frame tables live
 after the fixed trace ring, so crash tooling keeps the same address while the
 32 MiB physical profile pays only the static reservation, not a second kernel
-image. Firmware accepts only the exact 32 MiB ULX3S and 128 MiB Arty-hosted
-sizes; arbitrary intermediate layouts are rejected.
+image. Firmware accepts a page-aligned RAM map beginning at the early-log base
+and extending through the fixed bootstrap reservations; Axiom sizes its frame
+tables from the reported map. The qualified production profiles remain 32 MiB
+ULX3S and 128 MiB Arty-hosted.
 
 Addresses not listed above are unallocated. In particular, the current SoC
 does not yet expose general SDRAM at `0x00040000..0x01FF7FFF`; software must use

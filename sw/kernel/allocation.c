@@ -100,6 +100,9 @@ static const KernelAllocationSiteInfo site_info[KERNEL_ALLOCATION_SITE_COUNT] = 
     },
     [KERNEL_ALLOCATION_SITE_PROCESS_PRIVATE_PAGE] = {
         "process-private-page", KERNEL_ALLOCATION_TAG_PROCESS, 0u, 1u, 0u
+    },
+    [KERNEL_ALLOCATION_SITE_PROCESS_LOAD_RECORD] = {
+        "process-load-record", KERNEL_ALLOCATION_TAG_PROCESS, 0u, 1u, 0u
     }
 };
 

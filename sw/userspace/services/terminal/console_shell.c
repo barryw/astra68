@@ -33,14 +33,12 @@
 #include <astra/event_emit.h>
 #include <astra/vfs_assign.h>
 #include <astra/vfs_process.h>
+#include <astra/vfs_reader.h>
 
 /* A path the protocol will refuse to carry is not worth building. */
 #define SHELL_PATH_MAX ASTRA_VFS_PATH_MAX
 #define CONSOLE_INPUT_POLL_NS 10000000ull
 #define CONSOLE_PRESENT_NS 16666667ull
-
-/* The fallback stays small; normal command reads grow a shared transfer area. */
-#define SHELL_LOAD_FALLBACK_MAX (64u * 1024u)
 
 /*
  * The two numbers every shell answers with when it never got as far as the
@@ -83,7 +81,6 @@ typedef struct ConsoleShell {
 } ConsoleShell;
 
 static ConsoleShell shell;
-static uint8_t load_buffer[SHELL_LOAD_FALLBACK_MAX];
 
 /*
  * Every line the shell prints, into the machine's own record.
@@ -365,20 +362,6 @@ static void prompt(void)
 
 static int pump_once(void);
 
-static uint32_t read_launch_image(const char *path, const uint8_t **image,
-                                  uint32_t *length)
-{
-    uint32_t status = astra_process_read_file_borrow(path, image, length);
-
-    if (status != ASTRA_VFS_ERR_LIMIT && status != ASTRA_VFS_ERR_UNSUPPORTED)
-        return status;
-    status = astra_process_read_file(shell.backend.process_filesystem, path,
-                                     load_buffer, sizeof(load_buffer), length);
-    if (status == ASTRA_VFS_OK)
-        *image = load_buffer;
-    return status;
-}
-
 /*
  * Where a bare word is looked for, and the whole of the order.
  *
@@ -389,8 +372,8 @@ static uint32_t read_launch_image(const char *path, const uint8_t **image,
  * where the machine looks -- is an assign, so a word carrying a `:` is taken as
  * the name of one and resolved directly.
  */
-static uint32_t launch_image(const char *word, const uint8_t **image,
-                             uint32_t *length)
+static uint32_t open_launch_source(const char *word,
+                                   AstraVfsReadSource *source)
 {
     static const char *const places[] = {"APPS", "COMMANDS"};
     char typed[SHELL_PATH_MAX];
@@ -398,9 +381,9 @@ static uint32_t launch_image(const char *word, const uint8_t **image,
 
     for (uint32_t index = 0u; word[index] != '\0'; ++index) {
         if (word[index] == ':') {
-            uint32_t status = read_launch_image(word, image, length);
-
-            return status;
+            return astra_vfs_read_source_open(
+                source, astra_process_vfs_assigns(), word,
+                astra_process_vfs_assign_client, NULL);
         }
     }
     for (uint32_t place = 0u; place < 2u; ++place) {
@@ -409,7 +392,9 @@ static uint32_t launch_image(const char *word, const uint8_t **image,
 
         if (status != ASTRA_VFS_OK)
             return status;
-        status = read_launch_image(typed, image, length);
+        status = astra_vfs_read_source_open(
+            source, astra_process_vfs_assigns(), typed,
+            astra_process_vfs_assign_client, NULL);
         if (status != ASTRA_VFS_OK) {
             if (status != ASTRA_VFS_ERR_NOT_FOUND &&
                 worst == ASTRA_VFS_ERR_NOT_FOUND)
@@ -629,10 +614,7 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
     return count;
 }
 
-/*
- * Reads the whole image in, launches it, and serves its terminal streams until
- * it is done. Storage and events run independently in protected processes.
- */
+/* Packs the shell's exported variables into the child's startup block. */
 static uint32_t pack_launch_environment(AstraLaunchArguments *arguments,
                                         astra_shell_words_t *words)
 {
@@ -687,8 +669,7 @@ static uint32_t command_launch(astra_shell_words_t *words)
 {
     AstraLaunchGrant grants[ASTRA_LAUNCH_GRANT_MAX];
     AstraLaunchArguments arguments;
-    const uint8_t *image = NULL;
-    uint32_t length = 0u;
+    AstraVfsReadSource source = ASTRA_VFS_READ_SOURCE_INIT;
     uint32_t handle = 0u;
     uint32_t child_id = 0u;
     uint32_t exit_status = 0u;
@@ -698,11 +679,21 @@ static uint32_t command_launch(astra_shell_words_t *words)
     int have_crash_info = 0;
     uint32_t parent = shell.child;
     uint64_t started = astra_clock_monotonic();
-    uint64_t read;
+    uint64_t opened;
     uint64_t spawned;
 
-    status = launch_image(words->argv[0], &image, &length);
-    read = astra_clock_monotonic();
+    if (astra_launch_arguments_pack(
+            &arguments, shell.launch_arguments,
+            (uint32_t)sizeof(shell.launch_arguments),
+            ASTRA_LAUNCH_SOURCE_SHELL, (uint32_t)words->argc,
+            (const char *const *)words->argv) != ASTRA_SYSCALL_OK ||
+        pack_launch_environment(&arguments, words) != ASTRA_SYSCALL_OK) {
+        write_line("too many arguments");
+        return SHELL_STATUS_NOT_RUN;
+    }
+
+    status = open_launch_source(words->argv[0], &source);
+    opened = astra_clock_monotonic();
     if (status != ASTRA_VFS_OK) {
         /*
          * "Not a command" is what a genuinely absent name says. Anything
@@ -719,23 +710,15 @@ static uint32_t command_launch(astra_shell_words_t *words)
         report_status(words->argv[0], status);
         return SHELL_STATUS_NOT_RUN;
     }
-    if (astra_launch_arguments_pack(
-            &arguments, shell.launch_arguments,
-            (uint32_t)sizeof(shell.launch_arguments),
-            ASTRA_LAUNCH_SOURCE_SHELL, (uint32_t)words->argc,
-            (const char *const *)words->argv) != ASTRA_SYSCALL_OK ||
-        pack_launch_environment(&arguments, words) != ASTRA_SYSCALL_OK) {
-        write_line("too many arguments");
-        return SHELL_STATUS_NOT_RUN;
-    }
 
     ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
-                 "launching, %u bytes of image", length);
+                 "launching, %u bytes of image", source.length);
     (void)memset(grants, 0, sizeof(grants));
     console_stream_tty_state(&tty_before);
-    status = astra_launch(image, length, grants,
-                          launch_grants(grants), &arguments, &handle,
-                          &child_id);
+    status = astra_launch_stream(
+        source.length, astra_vfs_read_source_read_at,
+        astra_vfs_read_source_close, &source, grants,
+        launch_grants(grants), &arguments, &handle, &child_id);
     spawned = astra_clock_monotonic();
     if (status != ASTRA_SYSCALL_OK) {
         astra_terminal_write(&shell.terminal, words->argv[0]);
@@ -807,9 +790,9 @@ static uint32_t command_launch(astra_shell_words_t *words)
     ASTRA_EVENT2(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
                  "child %u finished with status %u", child_id, exit_status);
     ASTRA_EVENT3(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_NOTICE,
-                 "command stages: image %u spawn %u run %u us",
-                 astra_elapsed_microseconds(started, read),
-                 astra_elapsed_microseconds(read, spawned),
+                 "command stages: open %u load %u run %u us",
+                 astra_elapsed_microseconds(started, opened),
+                 astra_elapsed_microseconds(opened, spawned),
                  astra_elapsed_microseconds(spawned,
                                             astra_clock_monotonic()));
     return exit_status;

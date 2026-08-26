@@ -145,7 +145,7 @@ because both use addresses beginning at `0x00100000`.
 
 | Want | Use |
 |---|---|
-| Does the terminal still work end to end | `python3 emu/qemu/test-terminal.py <qemu> sw/boot/astra_boot.bin --image /tmp/part.img` |
+| Does the terminal still work end to end | `python3 emu/qemu/test-terminal.py <qemu> sw/boot/build/astra_boot.bin --image /tmp/part.img` |
 | Where the boot time went | `python3 emu/qemu/time-boot.py ... --budget 1.0` |
 | What the kernel suites actually cover | `cd sw/kernel && make coverage` |
 | Memory errors in userspace, on the host | `cd sw/userspace && make sanitize` |

@@ -40,7 +40,7 @@ Regenerate the checked-in payload from the repository root with:
 python3 sw/boot/pack_boot_splash.py \
   --image sw/boot/assets/astra_boot_splash.png \
   --font fpga/soc/post_fonts.hex \
-  --output sw/boot/assets/astra_boot_splash.pal8.lz4
+  --output sw/boot/build/astra_boot_splash.pal8.lz4
 ```
 
 The payload is one legacy LZ4 block containing, in order:

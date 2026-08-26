@@ -277,3 +277,10 @@ supervisor_vfs_client_for(const AstraAssign *assign)
      */
     return NULL;
 }
+
+AstraVfsClient *
+supervisor_vfs_assign_client(const AstraAssign *assign, void *context)
+{
+    (void)context;
+    return supervisor_vfs_client_for(assign);
+}

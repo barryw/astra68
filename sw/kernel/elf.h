@@ -90,6 +90,39 @@ typedef struct KernelElfImage {
 } KernelElfImage;
 
 /*
+ * Incremental executable acceptance. The fixed ELF header is accepted once,
+ * then each program header is supplied from the exact file offset reported by
+ * kernel_elf_stream_next_header(). No byte outside those small records needs
+ * to be resident while the placement plan is built.
+ */
+typedef struct KernelElfStream {
+    KernelElfImage plan;
+    KernelElfLimits limits;
+    uint32_t image_size;
+    uint32_t entry;
+    uint32_t header_offset;
+    uint32_t header_count;
+    uint32_t header_index;
+    uint32_t total_pages;
+    uint8_t library;
+    uint8_t failed;
+    uint8_t complete;
+    uint8_t reserved;
+} KernelElfStream;
+
+KernelElfStatus kernel_elf_stream_begin(const void *header,
+                                        uint32_t image_size,
+                                        const KernelElfLimits *limits,
+                                        KernelElfStream *stream);
+KernelElfStatus kernel_elf_stream_next_header(const KernelElfStream *stream,
+                                              uint32_t *offset,
+                                              uint32_t *length);
+KernelElfStatus kernel_elf_stream_add_header(KernelElfStream *stream,
+                                             const void *header);
+KernelElfStatus kernel_elf_stream_finish(KernelElfStream *stream,
+                                         KernelElfImage *plan);
+
+/*
  * Validates the whole image before reporting anything. On any failure `plan`
  * is left cleared, so a caller cannot act on a partially accepted image.
  */

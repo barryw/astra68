@@ -150,6 +150,60 @@ static void test_valid_plan(void)
            (KERNEL_ELF_SEGMENT_READ | KERNEL_ELF_SEGMENT_WRITE));
 }
 
+static void test_streamed_program_headers(void)
+{
+    uint8_t headers[PHNUM][KERNEL_ELF_PHENTSIZE];
+    KernelElfStream stream;
+    KernelElfImage plan;
+    uint32_t offset = 0u;
+    uint32_t length = 0u;
+
+    build_valid();
+    memcpy(headers, image + PHOFF, sizeof(headers));
+    put32(28u, 8u * PAGE);
+    image_size = 10u * PAGE;
+
+    assert(kernel_elf_stream_begin(image, image_size, &limits, &stream) ==
+           KERNEL_ELF_OK);
+    for (uint32_t index = 0u; index < PHNUM; ++index) {
+        assert(kernel_elf_stream_next_header(&stream, &offset, &length) ==
+               KERNEL_ELF_OK);
+        assert(offset == 8u * PAGE + index * KERNEL_ELF_PHENTSIZE);
+        assert(length == KERNEL_ELF_PHENTSIZE);
+        assert(kernel_elf_stream_add_header(&stream, headers[index]) ==
+               KERNEL_ELF_OK);
+    }
+    assert(kernel_elf_stream_next_header(&stream, &offset, &length) ==
+           KERNEL_ELF_OK);
+    assert(offset == 0u && length == 0u);
+    assert(kernel_elf_stream_finish(&stream, &plan) == KERNEL_ELF_OK);
+    assert(plan.segment_count == 2u);
+    assert(plan.total_pages == 3u);
+    assert(plan.entry == TEXT_VADDR + 0x10u);
+}
+
+static void test_streamed_image_has_no_whole_file_ceiling(void)
+{
+    enum { SEGMENT_OFFSET = 5u * 1024u * 1024u };
+    uint8_t header[KERNEL_ELF_PHENTSIZE];
+    KernelElfStream stream;
+    KernelElfImage plan;
+
+    build_valid();
+    memcpy(header, image + PHOFF, sizeof(header));
+    astra_store_be32(header + 4u, SEGMENT_OFFSET);
+    astra_store_be32(image + 28u, PHOFF);
+    astra_store_be16(image + 44u, 1u);
+
+    assert(kernel_elf_stream_begin(image, SEGMENT_OFFSET + PAGE, &limits,
+                                   &stream) == KERNEL_ELF_OK);
+    assert(kernel_elf_stream_add_header(&stream, header) == KERNEL_ELF_OK);
+    assert(kernel_elf_stream_finish(&stream, &plan) == KERNEL_ELF_OK);
+    assert(plan.segment_count == 1u);
+    assert(plan.segment[0].file_offset == SEGMENT_OFFSET);
+    assert(plan.segment[0].file_size == PAGE);
+}
+
 static void test_arguments(void)
 {
     KernelElfImage plan;
@@ -617,6 +671,8 @@ static void test_real_image(void)
 int main(void)
 {
     test_valid_plan();
+    test_streamed_program_headers();
+    test_streamed_image_has_no_whole_file_ceiling();
     test_arguments();
     test_identity_rejections();
     test_header_rejections();

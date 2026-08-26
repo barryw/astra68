@@ -4,7 +4,7 @@
 	.balign 16
 	.globl  _splash_blob_start
 _splash_blob_start:
-	.incbin "assets/astra_boot_splash.pal8.lz4"
+	.incbin "build/astra_boot_splash.pal8.lz4"
 	.globl  _splash_blob_end
 _splash_blob_end:
 

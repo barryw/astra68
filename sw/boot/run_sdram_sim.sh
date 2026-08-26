@@ -42,9 +42,9 @@ make -C sw/boot clean all \
     KERNEL_SOAK_SELFTEST="$kernel_soak_selftest" \
     KERNEL_VERSION="$kernel_version" \
     EXTRA_CFLAGS="-DMEM_BENCH_BYTES=$mem_bench_bytes -DDMA_BENCH_BYTES=$dma_bench_bytes $extra_cflags"
-python3 sw/boot/bin2hex.py sw/boot/astra_boot.bin fpga/soc/sim/rom_init.hex
+python3 sw/boot/bin2hex.py sw/boot/build/astra_boot.bin fpga/soc/sim/rom_init.hex
 if [[ "$kernel_panic_selftest" == "2" ]]; then
-    guard_address=$(m68k-linux-gnu-nm -n sw/kernel/astra_kernel.elf |
+    guard_address=$(m68k-linux-gnu-nm -n sw/kernel/build/astra_kernel.elf |
         awk '$3 == "_kernel_stack_guard" { print $1 }')
     if [[ ! "$guard_address" =~ ^[0-9a-fA-F]{8}$ ]]; then
         echo "unable to resolve supervisor stack guard address" >&2

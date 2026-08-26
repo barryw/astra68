@@ -35,11 +35,17 @@ USER_PAYLOAD = build/astra_supervisor.lz4
 SPLASH_SOURCE = assets/astra_boot_splash.png
 SPLASH_FONT = ../../fpga/soc/post_fonts.hex
 SPLASH_PACKER = pack_boot_splash.py
-SPLASH_PAYLOAD = assets/astra_boot_splash.pal8.lz4
+SPLASH_PAYLOAD = build/astra_boot_splash.pal8.lz4
 KERNEL_DIR = ../kernel
-KERNEL_BIN = $(KERNEL_DIR)/astra_kernel.bin
+KERNEL_ELF = $(KERNEL_DIR)/build/astra_kernel.elf
+KERNEL_BIN = $(KERNEL_DIR)/build/astra_kernel.bin
 USER_IMAGE_DIR = ../userspace/supervisor
 USER_IMAGE = $(USER_IMAGE_DIR)/build/m68k/astra_supervisor.image.elf
+BOOT_ELF = build/astra_boot.elf
+BOOT_BIN = build/astra_boot.bin
+BOOT_MAP = build/astra_boot.map
+LEGACY_ROM = build/astra68.rom
+LZ4_TEST = build/test_lz4_legacy
 KERNEL_VERSION ?= 0.1.0-dev
 KERNEL_PANIC_SELFTEST ?= 0
 KERNEL_SCHED_TRACE ?= 0
@@ -55,7 +61,7 @@ CFLAGS  = -m68030 -msoft-float -Os -ffreestanding -fno-builtin -nostdlib \
           -Wa,--noexecstack -Wall -Wextra \
           -I../include -I../../ndk/include -Ibuild $(EXTRA_CFLAGS)
 LD      = astra_st.ld
-LDFLAGS = -T $(LD) -nostdlib -Wl,--build-id=none,-Map=astra_boot.map
+LDFLAGS = -T $(LD) -nostdlib -Wl,--build-id=none,-Map=$(BOOT_MAP)
 
 SOC_ID_SRCS = ../../fpga/soc/astra_soc.sv ../../fpga/soc/astra_soc.lpf \
               ../../fpga/soc/uart_tx.sv ../../fpga/soc/uart_rx.sv \
@@ -152,11 +158,12 @@ ID_SRCS = Makefile ../../mk/m68k-cross.mk gen_build_info.py pack_payload.py \
 
 # Arty loads this image into QEMU host memory. The SDRAM-backed ULX3S package
 # remains explicit because its independent stage-0 contract is still 256 KiB.
-all: astra_boot.bin
+all: $(BOOT_BIN)
 
-legacy-rom: astra68.rom
+legacy-rom: $(LEGACY_ROM)
 
 $(SPLASH_PAYLOAD): $(SPLASH_SOURCE) $(SPLASH_FONT) $(SPLASH_PACKER)
+	@mkdir -p $(dir $@)
 	python3 $(SPLASH_PACKER) --image $(SPLASH_SOURCE) \
 		--font $(SPLASH_FONT) --output $@
 
@@ -186,42 +193,44 @@ $(ROM_PAYLOADS) $(KERNEL_PAYLOAD) $(USER_PAYLOAD) &: pack_payload.py \
 		--payload USER=$(USER_IMAGE)=$(USER_PAYLOAD) \
 		--header $(ROM_PAYLOADS)
 
-astra_boot.elf: crt0.S kernel_blob.S user_blob.S splash_blob.S splash.c \
+$(BOOT_ELF): crt0.S kernel_blob.S user_blob.S splash_blob.S splash.c \
                 splash.h lz4_legacy.c lz4_legacy.h \
                 $(SPLASH_PAYLOAD) boot.c \
                 ../common/boot_contract.c ../../ndk/src/front_panel.c \
                 ../include/ohci.h \
                 $(LD) $(BUILD_INFO) $(ROM_PAYLOADS) \
                 $(KERNEL_PAYLOAD) $(USER_PAYLOAD)
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ crt0.S kernel_blob.S user_blob.S \
 		splash_blob.S splash.c lz4_legacy.c boot.c \
 		../common/boot_contract.c ../common/crc32.c \
 		../../ndk/src/front_panel.c
 
-astra_boot.bin: astra_boot.elf
+$(BOOT_BIN): $(BOOT_ELF)
 	$(OBJCOPY) -O binary $< $@
 
-astra68.rom: astra_boot.bin package_rom.py
+$(LEGACY_ROM): $(BOOT_BIN) package_rom.py
 	python3 package_rom.py $< $@
 
-verify: astra_boot.elf
+verify: $(BOOT_ELF)
 	@echo "== sections =="; $(OBJDUMP) -h $< | grep -E 'Idx|vectors|text|data|bss'
 	@echo "== reset vectors (SP @ +0, PC @ +4) =="; $(OBJDUMP) -s -j .vectors $< | sed -n '3,4p'
 	@echo "== symbols =="; $(OBJDUMP) -t $< | grep -E '_start|kmain|_stack_top|_kernel_blob|_splash_blob|boot_kernel_handoff' | head
-	@echo "== embedded kernel =="; $(OBJDUMP) -h $(KERNEL_DIR)/astra_kernel.elf | \
+	@echo "== embedded kernel =="; $(OBJDUMP) -h $(KERNEL_ELF) | \
 		grep -E 'Idx|text.entry|vectors|text|data|bss|kernel_stack'
 	@bytes=$$(wc -c < $(KERNEL_BIN)); \
 	  test $$bytes -le $$((0x80000)); \
 	  printf 'kernel payload: %s bytes\n' "$$bytes"
 
-test_lz4_legacy: test_lz4_legacy.c lz4_legacy.c lz4_legacy.h \
+$(LZ4_TEST): test_lz4_legacy.c lz4_legacy.c lz4_legacy.h \
                  ../common/crc32.c ../include/astra/crc32.h \
                  $(SPLASH_PAYLOAD)
+	@mkdir -p $(dir $@)
 	$(HOST_CC) -std=c11 -O2 -Wall -Wextra -Werror -o $@ \
 		-I../include test_lz4_legacy.c lz4_legacy.c ../common/crc32.c
 
-test: test_lz4_legacy
-	./test_lz4_legacy
+test: $(LZ4_TEST)
+	./$(LZ4_TEST)
 	PYTHONPATH=../.. python3 -m pytest tests -q
 
 id:
@@ -232,8 +241,9 @@ config:
 	@printf '%s\n' '$(BUILD_CONFIG)'
 
 clean:
-	rm -f *.elf *.bin *.map *.rom test_lz4_legacy $(SPLASH_PAYLOAD)
 	rm -rf build
+	rm -f astra_boot.elf astra_boot.bin astra_boot.map astra68.rom \
+		test_lz4_legacy assets/astra_boot_splash.pal8.lz4
 	$(MAKE) -C $(KERNEL_DIR) clean
 
 FORCE:

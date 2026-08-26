@@ -6,7 +6,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x0001001e
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010022
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -181,6 +181,24 @@
 #define ASTRA_SYSCALL_SIGNAL_RETURN 65
 /* Atomically replaces the calling process image; success never returns. */
 #define ASTRA_SYSCALL_PROCESS_EXEC 66
+/*
+ * Transactional executable loading from a userspace file reader.
+ *
+ * BEGIN consumes only the fixed ELF header and the complete file size, then
+ * returns a load handle plus the exact next file range in data[2:3]. WRITE
+ * accepts only that range and returns the next one. Once all program headers
+ * are accepted, CREATE snapshots grants and arguments and builds a private,
+ * non-runnable child. Further WRITE calls fill its validated segment pages.
+ * COMMIT publishes the initial thread and returns the child handle and id.
+ *
+ * Closing the load handle at any point aborts the transaction and releases
+ * every partial process resource. The kernel never opens a file or interprets
+ * a VFS protocol; userspace supplies only the bytes the kernel requests.
+ */
+#define ASTRA_SYSCALL_PROCESS_LOAD_BEGIN  67
+#define ASTRA_SYSCALL_PROCESS_LOAD_WRITE  68
+#define ASTRA_SYSCALL_PROCESS_LOAD_CREATE 69
+#define ASTRA_SYSCALL_PROCESS_LOAD_COMMIT 70
 
 #define ASTRA_VM_PRIVATE_READ  (1u << 0)
 #define ASTRA_VM_PRIVATE_WRITE (1u << 1)

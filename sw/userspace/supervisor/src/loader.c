@@ -15,6 +15,7 @@
 #include <astra/status.h>
 #include <astra/vfs_path.h>
 #include <astra/vfs_port_transport.h>
+#include <astra/vfs_reader.h>
 #include <astra/vfs_service_core.h>
 
 #define MANIFEST_PATH "/vol/startup/system"
@@ -26,7 +27,6 @@
 
 static char manifest_text[LOADER_MANIFEST_MAX];
 static char bundle_text[ASTRA_BUNDLE_MANIFEST_MAX + 1u];
-static uint8_t image[ASTRA_USER_IMAGE_MAX_SIZE];
 static uint32_t process_handles[SUPERVISOR_PROCESS_MAX];
 /*
  * What each process was launched from, so PROC: can name it. A pid
@@ -444,8 +444,8 @@ static uint32_t launch_number(char *out, uint32_t at, uint32_t capacity,
     return at;
 }
 
-static void launch_report(const char *path, uint32_t bytes, uint32_t read_us,
-                          uint32_t spawn_us, uint32_t ready_us)
+static void launch_report(const char *path, uint32_t bytes, uint32_t open_us,
+                          uint32_t load_us, uint32_t ready_us)
 {
     char line[120];
     uint32_t at = 0u;
@@ -454,25 +454,48 @@ static void launch_report(const char *path, uint32_t bytes, uint32_t read_us,
     at = launch_text(line, at, sizeof(line), path);
     at = launch_text(line, at, sizeof(line), " bytes=");
     at = launch_number(line, at, sizeof(line), bytes);
-    at = launch_text(line, at, sizeof(line), " read=");
-    at = launch_number(line, at, sizeof(line), read_us);
-    at = launch_text(line, at, sizeof(line), " spawn=");
-    at = launch_number(line, at, sizeof(line), spawn_us);
+    at = launch_text(line, at, sizeof(line), " open=");
+    at = launch_number(line, at, sizeof(line), open_us);
+    at = launch_text(line, at, sizeof(line), " load=");
+    at = launch_number(line, at, sizeof(line), load_us);
     at = launch_text(line, at, sizeof(line), " ready=");
     at = launch_number(line, at, sizeof(line), ready_us);
     (void)launch_text(line, at, sizeof(line), "us");
     (void)astra_log(line);
 }
 
-/* Set by whichever call site read the image; consumed by the next launch. */
-static uint32_t launch_read_us;
+static uint32_t launch_open_status(uint32_t status)
+{
+    if (status == ASTRA_VFS_ERR_NOT_FOUND)
+        return ASTRA_STATUS_NOT_FOUND;
+    if (status == ASTRA_VFS_ERR_LIMIT)
+        return ASTRA_STATUS_LIMIT;
+    if (status == ASTRA_VFS_ERR_IO)
+        return ASTRA_STATUS_IO;
+    return ASTRA_STATUS_INVALID;
+}
+
+static uint32_t release_bootstrap_source(void *context)
+{
+    uint32_t status = supervisor_volume_source_close(context);
+
+    if (status != ASTRA_VFS_OK)
+        return status;
+    status = supervisor_volume_unmount();
+    if (status != ASTRA_VFS_OK)
+        return status;
+    supervisor_bootstrap_block_release();
+    return ASTRA_VFS_OK;
+}
 
 static uint32_t launch_entry(const AstraStartupInfo *startup,
                              const SupervisorManifestEntry *entry,
                              const char *bundle_root,
                              const AstraLaunchArguments *arguments,
-                             const uint8_t *image_bytes,
-                             uint32_t image_length,
+                             uint32_t image_length, uint32_t open_us,
+                             AstraLaunchReadAt read_at,
+                             AstraLaunchRelease release,
+                             void *source,
                              uint32_t *process_id)
 {
     AstraLaunchArguments essential_arguments = {0};
@@ -495,31 +518,38 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
         launch_arguments = &essential_arguments;
     }
 
-    if (process_count == SUPERVISOR_PROCESS_MAX)
+    if (process_count == SUPERVISOR_PROCESS_MAX) {
+        (void)release(source);
         return ASTRA_STATUS_LIMIT;
+    }
     if (astra_rt_port_create(1u, sizeof(AstraServiceReady), &receive, &send) !=
-        ASTRA_SYSCALL_OK)
+        ASTRA_SYSCALL_OK) {
+        (void)release(source);
         return ASTRA_STATUS_LIMIT;
+    }
     status = build_grants(startup, entry, bundle_root, send, grants,
                           &grant_count);
-    uint64_t spawn_start = astra_clock_monotonic();
-    uint32_t spawn_us;
+    uint64_t load_start = astra_clock_monotonic();
+    uint32_t load_us;
     uint64_t ready_start;
 
     if (status == ASTRA_STATUS_OK) {
-        uint32_t launch_status = astra_launch(
-            image_bytes, image_length, grants, grant_count, launch_arguments,
-            &child, &child_id);
+        uint32_t launch_status = astra_launch_stream(
+            image_length, read_at, release, source, grants, grant_count,
+            launch_arguments, &child, &child_id);
 
         if (launch_status == ASTRA_SYSCALL_OK)
             status = ASTRA_STATUS_OK;
         else {
-            (void)astra_log_failure("astra_launch", launch_status);
-            status = ASTRA_STATUS_INVALID;
+            (void)astra_log_failure("astra_launch_stream", launch_status);
+            status = launch_status == ASTRA_SYSCALL_IO_ERROR ?
+                         ASTRA_STATUS_IO : ASTRA_STATUS_INVALID;
         }
+    } else {
+        (void)release(source);
     }
-    spawn_us = astra_elapsed_microseconds(spawn_start,
-                                          astra_clock_monotonic());
+    load_us = astra_elapsed_microseconds(load_start,
+                                         astra_clock_monotonic());
     (void)astra_close(send);
     if (status != ASTRA_STATUS_OK) {
         (void)astra_close(receive);
@@ -527,7 +557,7 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
     }
     ready_start = astra_clock_monotonic();
     status = receive_ready(receive, child, expected_handles, published);
-    launch_report(entry->path, image_length, launch_read_us, spawn_us,
+    launch_report(entry->path, image_length, open_us, load_us,
                   astra_elapsed_microseconds(ready_start,
                                              astra_clock_monotonic()));
     (void)astra_close(receive);
@@ -645,9 +675,9 @@ static void pump_launch(const AstraStartupInfo *startup)
     uint32_t reply_send = 0u;
     uint32_t size = 0u;
     uint32_t handles = 0u;
-    const uint8_t *image_bytes = image;
-    uint32_t image_length = 0u;
+    AstraVfsReadSource source = ASTRA_VFS_READ_SOURCE_INIT;
     uint32_t process_id = 0u;
+    uint32_t open_us = 0u;
     uint32_t status;
     char entry_path[ASTRA_VFS_PATH_MAX];
     char bundle_root[ASTRA_VFS_PATH_MAX];
@@ -750,14 +780,10 @@ static void pump_launch(const AstraStartupInfo *startup)
         {
             uint64_t read_start = astra_clock_monotonic();
 
-            status = supervisor_vfs_read_borrow(entry_path, &image_bytes,
-                                                &image_length);
-            if (status != ASTRA_VFS_OK) {
-                image_bytes = image;
-                status = supervisor_vfs_read(entry_path, image, sizeof(image),
-                                             &image_length);
-            }
-            launch_read_us = astra_elapsed_microseconds(
+            status = astra_vfs_read_source_open(
+                &source, supervisor_assigns(), entry_path,
+                supervisor_vfs_assign_client, NULL);
+            open_us = astra_elapsed_microseconds(
                 read_start, astra_clock_monotonic());
         }
         if (status == ASTRA_VFS_OK) {
@@ -767,11 +793,12 @@ static void pump_launch(const AstraStartupInfo *startup)
             launch_arguments.argument_address =
                 (uint32_t)(uintptr_t)request.arguments.bytes;
             status = launch_entry(startup, &entry, bundle_root,
-                                  &launch_arguments, image_bytes,
-                                  image_length, &process_id);
+                                  &launch_arguments, source.length, open_us,
+                                  astra_vfs_read_source_read_at,
+                                  astra_vfs_read_source_close, &source,
+                                  &process_id);
         } else {
-            status = status == ASTRA_VFS_ERR_LIMIT ? ASTRA_STATUS_LIMIT :
-                                                     ASTRA_STATUS_NOT_FOUND;
+            status = launch_open_status(status);
         }
     }
     if (status != ASTRA_STATUS_OK)
@@ -783,9 +810,9 @@ static void pump_launch(const AstraStartupInfo *startup)
 uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
 {
     SupervisorManifest manifest;
-    const uint8_t *boot_bytes = image;
     uint32_t manifest_length = 0u;
     uint32_t image_length = 0u;
+    uint32_t open_us = 0u;
     uint32_t status;
 
     supervisor_process_handle = startup->process_handle;
@@ -807,17 +834,21 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
                              &launch_receive, &launch_send) !=
         ASTRA_SYSCALL_OK)
         return ASTRA_STATUS_LIMIT;
-    status = supervisor_volume_read(STORAGE_IMAGE_PATH, image, sizeof(image),
-                                    &image_length);
+    {
+        uint64_t open_start = astra_clock_monotonic();
+
+        status = supervisor_volume_source_open(STORAGE_IMAGE_PATH,
+                                               &image_length);
+        open_us = astra_elapsed_microseconds(open_start,
+                                             astra_clock_monotonic());
+    }
     if (status != ASTRA_VFS_OK)
-        return status == ASTRA_VFS_ERR_LIMIT ? ASTRA_STATUS_LIMIT :
-                                              ASTRA_STATUS_NOT_FOUND;
-    if (supervisor_volume_unmount() != ASTRA_VFS_OK)
-        return ASTRA_STATUS_IO;
-    supervisor_bootstrap_block_release();
+        return launch_open_status(status);
 
     status = launch_entry(startup, &manifest.entries[0], NULL,
-                          NULL, image, image_length, NULL);
+                          NULL, image_length, open_us,
+                          supervisor_volume_source_read_at,
+                          release_bootstrap_source, NULL, NULL);
     if (status != ASTRA_STATUS_OK)
         return status;
     supervisor_bootstrap_block_close();
@@ -829,26 +860,26 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
         status = resolve_entry_image(entry, entry_path, sizeof(entry_path),
                                      bundle_root, sizeof(bundle_root), NULL);
         if (status == ASTRA_STATUS_OK) {
+            AstraVfsReadSource source = ASTRA_VFS_READ_SOURCE_INIT;
+
             {
                 uint64_t read_start = astra_clock_monotonic();
 
-                status = supervisor_vfs_read_borrow(entry_path, &boot_bytes,
-                                                    &image_length);
-                if (status != ASTRA_VFS_OK) {
-                    boot_bytes = image;
-                    status = supervisor_vfs_read(entry_path, image,
-                                                 sizeof(image), &image_length);
-                }
-                launch_read_us = astra_elapsed_microseconds(
+                status = astra_vfs_read_source_open(
+                    &source, supervisor_assigns(), entry_path,
+                    supervisor_vfs_assign_client, NULL);
+                open_us = astra_elapsed_microseconds(
                     read_start, astra_clock_monotonic());
             }
             if (status == ASTRA_VFS_OK)
                 status = launch_entry(startup, entry,
-                                      bundle_root, NULL, boot_bytes,
-                                      image_length, NULL);
+                                      bundle_root, NULL, source.length,
+                                      open_us,
+                                      astra_vfs_read_source_read_at,
+                                      astra_vfs_read_source_close, &source,
+                                      NULL);
             else
-                status = status == ASTRA_VFS_ERR_LIMIT ? ASTRA_STATUS_LIMIT :
-                                                         ASTRA_STATUS_NOT_FOUND;
+                status = launch_open_status(status);
         }
         if (status != ASTRA_STATUS_OK && entry->required)
             return status;

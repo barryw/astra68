@@ -39,6 +39,13 @@ int supervisor_volume_is_mounted(void);
 uint32_t supervisor_volume_read(const char *path, void *buffer,
                                 uint32_t capacity, uint32_t *length);
 
+/* One bootstrap file streamed through the runtime executable loader. */
+uint32_t supervisor_volume_source_open(const char *path, uint32_t *length);
+uint32_t supervisor_volume_source_read_at(
+    void *context, uint32_t offset, uint32_t length,
+    const uint8_t **bytes, uint32_t *moved);
+uint32_t supervisor_volume_source_close(void *context);
+
 /* Releases the temporary bootstrap mount before the storage service starts. */
 uint32_t supervisor_volume_unmount(void);
 

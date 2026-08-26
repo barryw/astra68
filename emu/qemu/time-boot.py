@@ -11,7 +11,7 @@ when someone measured the interval between two specific events.
 This measures the interval between stages, read off the serial stream itself.
 
 If every stage comes back MISSED, suspect the ROM before the harness. A stale
-`sw/boot/astra_boot.bin` boots as far as POST PASS and stops, which reads
+`sw/boot/build/astra_boot.bin` boots as far as POST PASS and stops, which reads
 exactly like a broken measurement and is not one -- `make` in sw/boot replaces
 it. That trap is written down in docs/HANDOVER-userspace-bringup.md and it
 still caught the author of this file.
