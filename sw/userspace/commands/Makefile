@@ -25,6 +25,7 @@ NDK := ../../../ndk
 LUA := ../../../third_party/lua/src
 VIM_SOURCE ?= $(HOME)/vim-astra-v9.2.1001/src
 VIM_TERMINFO ?= $(HOME)/ncurses-astra
+VIM_TERMINFO_BUILD ?= $(HOME)/ncurses-astra-build
 VIM_IMAGE := $(VIM_SOURCE)/vim
 # picolibc, built out of tree: see third_party/picolibc/ASTRA_VENDOR.md.
 PICOLIBC ?= $(HOME)/picolibc-astra
@@ -115,6 +116,13 @@ $(VIM_PROGRAM): $(POSIX)/kit/program.c Makefile
 		-DASTRA_POSIX_PROGRAM_AUTHOR='"Vim contributors"' \
 		-DASTRA_POSIX_PROGRAM_COPYRIGHT='"Copyright Vim contributors"' \
 		-c $< -o $@
+
+# Ncurses' generated dependencies do not include installed system headers.
+# Rebuild its archive when the public terminal ABI changes; otherwise an old
+# four-byte winsize object accepts an eight-byte TIOCGWINSZ write.
+$(VIM_TERMINFO)/lib/libtinfow.a: $(PICOLIBC)/include/sys/termios.h \
+		$(PICOLIBC)/include/sys/ioctl.h
+	$(MAKE) -B -C $(VIM_TERMINFO_BUILD) install.libs
 
 # Vim's generated Makefile does not name external static archives as target
 # prerequisites. Relink its unchanged objects whenever Astra's shared POSIX

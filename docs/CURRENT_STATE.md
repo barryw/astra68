@@ -33,6 +33,22 @@ build pass on Beast. The final kernel payload is 155,320 bytes. lwext4 patch
 remaining ownership-audit work is structured catalogs for resident services
 and real process integration gates for glue-only entry points.
 
+## Interactive Vim and Lua gate (2026-08-26)
+
+The terminal gate now drives stock Vim through its full-screen interface,
+creates `WORK:vim-created.lua`, writes `print(6*7)`, exits Vim cleanly, and runs
+the file with stock Lua, requiring exact output `42`. The focused gate and the
+complete 68-command two-boot terminal gate pass on Beast.
+
+The first full-screen launch exposed a stale ncurses object built for the old
+four-byte `struct winsize`; `TIOCGWINSZ` correctly wrote the current eight-byte
+ABI and overwrote ncurses' return address. The Vim build now rebuilds ncurses
+when the installed terminal ABI headers change, the shared POSIX layer asserts
+the ABI size, and the POSIX target test compares all four fields. A second
+failure exposed Terminal dropping key-only Escape events; the shared dispatcher
+now forwards Escape while Enter and Tab continue through their text events, so
+they are not duplicated.
+
 ## Brokered IPv4/IPv6 networking (2026-08-26)
 
 The complete contract and evidence are in `docs/NETWORKING.md`. Axiom now owns

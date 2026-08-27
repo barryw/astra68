@@ -536,6 +536,7 @@ static int window_next_key(void *context, uint32_t *key)
                                       ASTRA_INPUT_MOD_GUI)) != 0u;
 
             if (translated == ASTRA_KEYMAP_BACKSPACE ||
+                translated == ASTRA_KEYMAP_ESCAPE ||
                 translated == ASTRA_KEYMAP_DELETE ||
                 translated == ASTRA_KEYMAP_LEFT ||
                 translated == ASTRA_KEYMAP_RIGHT ||

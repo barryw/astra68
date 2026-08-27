@@ -13,6 +13,8 @@
 
 _Static_assert(NCCS == ASTRA_TTY_CONTROL_CHARACTERS,
                "picolibc and Astra terminal control arrays differ");
+_Static_assert(sizeof(struct winsize) == 4u * sizeof(unsigned short),
+               "picolibc and Astra window-size ABIs differ");
 _Static_assert(ICRNL == ASTRA_TTY_IFLAG_ICRNL &&
                OPOST == ASTRA_TTY_OFLAG_OPOST &&
                ONLCR == ASTRA_TTY_OFLAG_ONLCR &&

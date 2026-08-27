@@ -291,14 +291,7 @@ SCRIPT = [
     ("A=1 pwd", "cannot be redirected or given an environment"),
 ]
 
-VIM_SCRIPT = [
-    ("write vim-args.txt before", "vim-args.txt"),
-    ("vim -Nu NONE -n -es -c \"call setline(1,'after')\" -c wq -- "
-     "WORK:vim-args.txt", "finished with status 0"),
-    ("echo $?", "0"),
-    ("cat vim-args.txt", "after"),
-    ("rm vim-args.txt", "rm vim-args.txt"),
-]
+VIM_LUA_FILE = "vim-created.lua"
 
 # What a person waits for: Enter, to the answer on the screen.
 #
@@ -549,6 +542,16 @@ class Machine:
     def sequence(self):
         return self.said()[1]
 
+    def recent_faults(self):
+        reply = self.qmp.monitor('pmemsave 0x%08x %d "%s"'
+                                 % (RING_ADDRESS, RING_SIZE, self.ring_path))
+        if reply and reply.strip():
+            raise RuntimeError("ring unavailable: %s" % reply.strip())
+        with open(self.ring_path, "rb") as handle:
+            _, rendered = trace_decode.decode(handle.read(), self.catalog,
+                                               self.names)
+        return [line for line in rendered if "fault" in line.lower()][-8:]
+
     def wait_for_text(self, text, deadline, after=0, exact=False):
         """Waits until every needle has been printed since `after`.
 
@@ -617,6 +620,118 @@ def open_terminal(machine, boot_deadline, command_deadline):
         return False
     return machine.settle()
 
+
+def vim_creates_and_runs_lua(machine, command_deadline, verbose=False):
+    """Create a Lua program through Vim's full-screen terminal interface."""
+    machine.settle()
+    vim_before = machine.sequence()
+    machine.qmp.type_line(
+        "vim -Nu NONE -n -c \"call setline(1,'')\" -c write -- WORK:" +
+        VIM_LUA_FILE)
+
+    # Vim owns the first terminal now. Open a second one to observe the ready
+    # file written by Vim's post-startup command, then move it aside and return
+    # focus to the editor. This is a readiness handshake, not a guessed sleep.
+    before = machine.sequence()
+    machine.qmp.double_click(*TERMINAL_ICON)
+    if machine.wait_for_text(BANNER, command_deadline, before)[0] is None:
+        print("FAIL: no observer terminal opened while Vim was running")
+        return False
+    end = time.monotonic() + command_deadline
+    while time.monotonic() < end:
+        machine.settle()
+        startup_lines = machine.said(vim_before)[0]
+        if any("vim: crashed" in line for line in startup_lines):
+            print("FAIL: Vim crashed during startup")
+            for line in startup_lines:
+                print("    %s" % line)
+            for line in machine.recent_faults():
+                print("    %s" % line)
+            return False
+        before = machine.sequence()
+        machine.qmp.type_line("ls")
+        machine.settle()
+        if any(VIM_LUA_FILE in line for line in machine.said(before)[0]):
+            break
+    else:
+        print("FAIL: Vim never completed startup")
+        for line in machine.said(vim_before)[0]:
+            print("    %s" % line)
+        before = machine.sequence()
+        machine.qmp.type_line("ps")
+        machine.settle()
+        for line in machine.said(before)[0]:
+            print("    %s" % line)
+        return False
+
+    machine.qmp.point(500, 105)
+    machine.qmp.button(True)
+    machine.qmp.point(700, 155)
+    machine.qmp.button(False)
+    interaction_before = machine.sequence()
+    machine.qmp.point(200, 140)
+    machine.qmp.button(True)
+    machine.qmp.button(False)
+    machine.settle()
+
+    machine.qmp.key("esc")
+    machine.qmp.key("i")
+    machine.qmp.type_text("print(6*7)")
+    machine.qmp.key("esc")
+    machine.qmp.type_line(":write")
+
+    # Read the file from the observer before allowing Vim to exit. This proves
+    # that the keys reached the editor and that Vim, rather than the shell or
+    # the test harness, wrote the program.
+    machine.qmp.point(1100, 200)
+    machine.qmp.button(True)
+    machine.qmp.button(False)
+    machine.settle()
+    before = machine.sequence()
+    machine.qmp.type_line("cat " + VIM_LUA_FILE)
+    if machine.wait_for_text("print(6*7)", command_deadline, before,
+                             exact=True)[0] is None:
+        print("FAIL: Vim did not write the Lua program")
+        for line in machine.said(interaction_before)[0][-80:]:
+            print("    |%s|" % line)
+        return False
+
+    machine.qmp.point(200, 140)
+    machine.qmp.button(True)
+    machine.qmp.button(False)
+    machine.settle()
+    before = machine.sequence()
+    machine.qmp.type_line(":q")
+    if machine.wait_for_text("finished with status 0", command_deadline,
+                             before)[0] is None:
+        print("FAIL: Vim did not exit cleanly after writing the Lua program")
+        return False
+
+    machine.qmp.point(1100, 200)
+    machine.qmp.button(True)
+    machine.qmp.button(False)
+    machine.settle()
+    before = machine.sequence()
+    machine.qmp.type_line("lua " + VIM_LUA_FILE)
+    if machine.wait_for_text("42", command_deadline, before,
+                             exact=True)[0] is None:
+        print("FAIL: Lua did not execute the program created in Vim")
+        for line in machine.said(before)[0][-80:]:
+            print("    |%s|" % line)
+        return False
+    if verbose:
+        print("ok: Vim created %s and Lua returned 42" % VIM_LUA_FILE)
+
+    machine.settle()
+    before = machine.sequence()
+    machine.qmp.type_line("rm " + VIM_LUA_FILE)
+    if machine.wait_for_text("rm " + VIM_LUA_FILE, command_deadline,
+                             before)[0] is None:
+        print("FAIL: the Vim-created Lua fixture was not removed")
+        return False
+    return True
+
+
 def warm_the_store(qemu, rom, image, temporary, boot_deadline,
                    command_deadline):
     """Boots once and does something, so there is a boot to read back.
@@ -648,7 +763,7 @@ def warm_the_store(qemu, rom, image, temporary, boot_deadline,
 
 def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         report_timings, prepared_image, performance_only, vim_gate,
-        network_only):
+        network_only, vim_only):
     timings = []
     with tempfile.TemporaryDirectory(prefix="astra-terminal-") as temporary:
         scratch = os.path.join(temporary, "card.img")
@@ -656,7 +771,8 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         # Into the copy, so the image this gate was pointed at is untouched.
         if not prepared_image:
             astra_image.install(scratch, catalog)
-        if not performance_only and not network_only and not warm_the_store(
+        needs_warm_store = not (performance_only or network_only or vim_only)
+        if needs_warm_store and not warm_the_store(
                 qemu, rom, scratch, temporary, boot_deadline,
                 command_deadline):
             return 1
@@ -666,9 +782,9 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         try:
             if not open_terminal(machine, boot_deadline, command_deadline):
                 return 1
-            script = ([(POSIX_COMMAND, "POSIX RAW PASS")] if network_only else
-                      PERFORMANCE_SCRIPT if performance_only else
-                      SCRIPT + VIM_SCRIPT if vim_gate else SCRIPT)
+            script = ([] if vim_only else
+                      [(POSIX_COMMAND, "POSIX RAW PASS")] if network_only else
+                      PERFORMANCE_SCRIPT if performance_only else SCRIPT)
             for line, expected in script:
                 machine.settle()
                 before = machine.sequence()
@@ -696,6 +812,12 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                 timings.append((line, elapsed))
                 if verbose:
                     print("ok: %-38s %6.2fs  %s" % (line, elapsed, expected))
+            if (vim_gate or vim_only) and not vim_creates_and_runs_lua(
+                    machine, command_deadline, verbose):
+                return 1
+            if vim_only:
+                print("ASTRA VIM LUA PASS")
+                return 0
             if performance_only:
                 failed = False
                 for line, elapsed in timings:
@@ -803,7 +925,9 @@ def main():
     parser.add_argument("--performance-only", action="store_true",
                         help="run the command-latency budget gate")
     parser.add_argument("--vim-gate", action="store_true",
-                        help="also run the installed Vim argument gate")
+                        help="also run the interactive Vim-to-Lua gate")
+    parser.add_argument("--vim-only", action="store_true",
+                        help="run only the interactive Vim-to-Lua gate")
     parser.add_argument("--network-only", action="store_true",
                         help="run only the POSIX networking integration gate")
     arguments = parser.parse_args()
@@ -814,7 +938,7 @@ def main():
                arguments.command_deadline, arguments.verbose,
                arguments.report_timings, arguments.prepared_image,
                arguments.performance_only, arguments.vim_gate,
-               arguments.network_only)
+               arguments.network_only, arguments.vim_only)
 
 
 if __name__ == "__main__":

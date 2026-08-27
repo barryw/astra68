@@ -258,7 +258,9 @@ main(int argc, char **argv)
             ioctl(STDOUT_FILENO, TIOCGWINSZ, &by_ioctl) != 0 ||
             by_function.ws_col == 0u || by_function.ws_row == 0u ||
             by_function.ws_col != by_ioctl.ws_col ||
-            by_function.ws_row != by_ioctl.ws_row)
+            by_function.ws_row != by_ioctl.ws_row ||
+            by_function.ws_xpixel != by_ioctl.ws_xpixel ||
+            by_function.ws_ypixel != by_ioctl.ws_ypixel)
             return complain(FAIL_TIOCGWINSZ, "terminal window size");
         raw = original;
         raw.c_iflag &= (tcflag_t)~(ICRNL | IXON);

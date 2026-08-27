@@ -44,6 +44,7 @@ static void test_digits_and_symbols(void)
 static void test_editing_keys(void)
 {
     assert(astra_keymap_translate(0x28u, 0u) == ASTRA_KEYMAP_ENTER);
+    assert(astra_keymap_translate(0x29u, 0u) == ASTRA_KEYMAP_ESCAPE);
     assert(astra_keymap_translate(0x2au, 0u) == ASTRA_KEYMAP_BACKSPACE);
     assert(astra_keymap_translate(0x2bu, 0u) == ASTRA_KEYMAP_TAB);
     assert(astra_keymap_translate(0x4fu, 0u) == ASTRA_KEYMAP_RIGHT);
